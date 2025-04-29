@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"github.com/cogentcore/webgpu/wgpu"
+	"github.com/cogentcore/webgpu/wgpuglfw"
 	"github.com/go-gl/glfw/v3.3/glfw"
 )
 
@@ -42,38 +43,43 @@ func (mod ClientModule) Install(app *App, cmd *Commands) {
 	}
 
 	// https://github.com/cogentcore/webgpu
-	instance := wgpu.CreateInstance(nil)   // CreateInstance(): the root wgpu object.
-	surface := instance.CreateSurface(win) // CreateSurface(): wraps GLFW window into a wgpu surface.
+	instance := wgpu.CreateInstance(nil)                                  // CreateInstance(): the root wgpu object.
+	surface := instance.CreateSurface(wgpuglfw.GetSurfaceDescriptor(win)) // CreateSurface(): wraps GLFW window into a wgpu surface.
 
-	adapter := instance.RequestAdapter(&wgpu.RequestAdapterOptions{ // RequestAdapter(): finds a suitable GPU (discrete GPU preferred).
+	adapter, err := instance.RequestAdapter(&wgpu.RequestAdapterOptions{ // RequestAdapter(): finds a suitable GPU (discrete GPU preferred).
 		CompatibleSurface: surface,
 		PowerPreference:   wgpu.PowerPreferenceHighPerformance,
 	})
+	if err != nil {
+		panic(err)
+	}
 
 	device, queue := adapter.RequestDevice(&wgpu.DeviceDescriptor{ // RequestDevice(): allocates the device and command queue.
 		Label:            "Main Device",
 		RequiredFeatures: nil,
 		RequiredLimits:   nil,
 	})
+	_ = queue
+
+	caps := surface.GetCapabilities(adapter)
 
 	surfaceConfig := wgpu.SurfaceConfiguration{ // Configure(surface): defines how the swapchain behaves (size, format, vsync).
 		Usage:       wgpu.TextureUsageRenderAttachment,
-		Format:      surface.GetPreferredFormat(adapter),
+		Format:      caps.Formats[0],
 		Width:       uint32(mod.WindowWidth),
 		Height:      uint32(mod.WindowHeight),
 		PresentMode: wgpu.PresentModeFifo, // vsync
+		AlphaMode:   caps.AlphaModes[0],
 	}
-	surface.Configure(device, &surfaceConfig)
+	surface.Configure(adapter, device, &surfaceConfig)
 
 	for !win.ShouldClose() {
-		win.PollEvents()
+		glfw.PollEvents()
 
 		// --- Drawing code will come later ---
 	}
 
 	win.Destroy()
-
-	_ := queue
 
 	cmd.AddResources(&clientState{
 		windowGlfw:   win,
