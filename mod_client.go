@@ -73,13 +73,19 @@ func (mod ClientModule) Install(app *App, cmd *Commands) {
 	}
 	surface.Configure(adapter, device, &surfaceConfig)
 
-	for !win.ShouldClose() {
-		glfw.PollEvents()
+	// for !win.ShouldClose() {
+	// 	glfw.PollEvents()
 
-		// --- Drawing code will come later ---
-	}
+	// 	// --- Drawing code will come later ---
+	// }
 
-	win.Destroy()
+	//win.Destroy()
+
+	app.UseSystem(
+		System(windowEventsSystem).
+			InStage(PreUpdate).
+			RunAlways(),
+	)
 
 	cmd.AddResources(&clientState{
 		windowGlfw:   win,
@@ -87,4 +93,10 @@ func (mod ClientModule) Install(app *App, cmd *Commands) {
 		windowHeight: mod.WindowHeight,
 		windowTitle:  mod.WindowTitle,
 	})
+}
+
+func windowEventsSystem(state *clientState) {
+	if !state.windowGlfw.ShouldClose() {
+		glfw.PollEvents()
+	}
 }

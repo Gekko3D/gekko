@@ -17,9 +17,9 @@ type MockModule2 struct {
 func (m *MockModule2) Install(app *App, commands *Commands) {
 	m.installed = true
 }
-func TestAppBuilder_Stateless(t *testing.T) {
-	builder := NewAppBuilder()
-	app := builder.Build()
+func TestAppBuilding_Stateless(t *testing.T) {
+	app := NewApp()
+	app.build()
 
 	if app.stateful != false {
 		t.Errorf("Expected stateful to be false, got %v", app.stateful)
@@ -32,11 +32,9 @@ func TestAppBuilder_Stateless(t *testing.T) {
 	}
 }
 
-func TestAppBuilder_UseStates(t *testing.T) {
-	builder := NewAppBuilder()
-	builder.UseStates(1, 10)
-
-	app := builder.Build()
+func TestAppBuilding_UseStates(t *testing.T) {
+	app := NewApp().UseStates(1, 10)
+	app.build()
 
 	if app.stateful != true {
 		t.Errorf("Expected stateful to be true, got %v", app.stateful)
@@ -49,48 +47,45 @@ func TestAppBuilder_UseStates(t *testing.T) {
 	}
 }
 
-func TestAppBuilder_UseModule(t *testing.T) {
-	builder := NewAppBuilder()
-	mockModule := &MockModule{}
-	builder.UseModule(mockModule)
+func TestAppBuilding_UseModule(t *testing.T) {
+	app := NewApp().UseModules(&MockModule{})
 
-	if len(builder.modules) != 1 {
-		t.Errorf("Expected modules to contain 1 module, got %v", len(builder.modules))
+	if len(app.modules) != 1 {
+		t.Errorf("Expected modules to contain 1 module, got %v", len(app.modules))
 	}
 }
-func TestAppBuilder_Build_WithModules(t *testing.T) {
-	builder := NewAppBuilder()
+func TestAppBuilding_Build_WithModules(t *testing.T) {
 	module := &MockModule{}
-	builder.UseModule(module)
-
-	builder.Build()
+	app := NewApp().UseModules(module)
+	app.build()
 
 	// Ensure Install() method of the module is called (you can use mocking frameworks like `testify` to track this)
-	if len(builder.modules) != 1 {
-		t.Errorf("Expected modules to contain 1 module, got %v", len(builder.modules))
+	if len(app.modules) != 1 {
+		t.Errorf("Expected modules to contain 1 module, got %v", len(app.modules))
 	}
 	if !module.installed {
 		t.Errorf("Expected Install to be called on the module, but it was not")
 	}
 }
 
-func TestAppBuilder_Build_WithMultipleModules(t *testing.T) {
+func TestAppBuilding_Build_WithMultipleModules(t *testing.T) {
 	module1 := &MockModule{}
 	module2 := &MockModule{}
+	module3 := &MockModule{}
 
-	builder := NewAppBuilder()
-	builder.UseModule(module1)
-	builder.UseModule(module2)
+	app := NewApp().UseModules(module1, module2).UseModules(module3)
+	app.build()
 
-	builder.Build()
-
-	if len(builder.modules) != 2 {
-		t.Errorf("Expected 2 modules, got %v", len(builder.modules))
+	if 3 != len(app.modules) {
+		t.Errorf("Expected 3 modules, got %v", len(app.modules))
 	}
 	if !module1.installed {
 		t.Errorf("Expected Install to be called on the module 1, but it was not")
 	}
 	if !module2.installed {
 		t.Errorf("Expected Install to be called on the module 2, but it was not")
+	}
+	if !module3.installed {
+		t.Errorf("Expected Install to be called on the module 3, but it was not")
 	}
 }

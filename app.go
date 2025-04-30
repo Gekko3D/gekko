@@ -7,26 +7,21 @@ import (
 	"time"
 )
 
-type State int
-type System any
+type systemFn any
 
 type App struct {
-	stateful            bool
-	stateMachineStarted bool
-	stateTransitioning  bool
-	initialState        State
-	finalState          State
-	nextState           State
-	state               State
-	scheduledSystems    map[State]map[stateSchedule][]System
-	resources           map[reflect.Type]any
-	ecs                 *Ecs
-}
-
-const STATELESS_STATE State = 0
-
-type Module interface {
-	Install(app *App, commands *Commands)
+	stateful           bool
+	stateTransitioning bool
+	initialState       State
+	finalState         State
+	nextState          State
+	state              State
+	modules            []Module
+	stages             []Stage
+	systems            map[string]map[State]map[statePhase][]systemFn
+	systemsStateless   map[string][]systemFn
+	resources          map[reflect.Type]any
+	ecs                *Ecs
 }
 
 func (app *App) Commands() *Commands {
@@ -36,39 +31,55 @@ func (app *App) Commands() *Commands {
 }
 
 func (app *App) Run() {
+	app.build()
+
 	if app.stateful {
-		app.runStateful()
+		fmt.Println("Running in stateful mode...")
+
+		app.state = app.initialState
+		app.callSystems(app.state, enter)
 	} else {
-		app.runStateless()
+		fmt.Println("Running in stateless mode...")
 	}
-}
-
-func (app *App) runStateful() {
-	fmt.Println("Running in stateful mode...")
-
-	app.executeChangeState(app.initialState)
 
 	for {
 		app.callSystems(app.state, execute)
 
-		if app.stateTransitioning {
-			app.stateTransitioning = false
-			app.executeChangeState(app.nextState)
-		}
+		if app.stateful {
+			if app.stateTransitioning {
+				app.stateTransitioning = false
+				app.executeChangeState(app.nextState)
+			}
 
-		if app.state == app.finalState {
-			break
+			if app.state == app.finalState {
+				app.callSystems(app.state, exit)
+				break
+			}
 		}
 	}
-
-	app.callSystems(app.state, exit)
 }
 
-func (app *App) runStateless() {
-	fmt.Println("Running in stateless mode...")
+func (app *App) callSystems(state State, phase statePhase) {
+	for _, stage := range app.stages {
+		// On execute, call stateless/always run systems first
+		if execute == phase {
+			for _, system := range app.systemsStateless[stage.Name] {
+				app.callSystem(system)
+			}
+		}
 
-	for {
-		app.callSystems(STATELESS_STATE, execute)
+		// Call stateful systems, if required
+		if app.stateful {
+			if systemsInStage, ok := app.systems[stage.Name]; ok {
+				if systemsInState, ok := systemsInStage[state]; ok {
+					if systemsInPhase, ok := systemsInState[phase]; ok {
+						for _, system := range systemsInPhase {
+							app.callSystem(system)
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -78,16 +89,9 @@ func (app *App) changeState(newState State) {
 }
 
 func (app *App) executeChangeState(newState State) {
-	if !app.stateMachineStarted {
-		app.stateMachineStarted = true
-
-		app.state = newState
-		app.callSystems(app.state, enter)
-	} else {
-		app.callSystems(app.state, exit)
-		app.state = newState
-		app.callSystems(app.state, enter)
-	}
+	app.callSystems(app.state, exit)
+	app.state = newState
+	app.callSystems(app.state, enter)
 }
 
 func (app *App) addResources(resources ...any) *App {
@@ -102,13 +106,7 @@ func (app *App) addResources(resources ...any) *App {
 	return app
 }
 
-func (app *App) callSystems(state State, schedule stateSchedule) {
-	for _, system := range app.scheduledSystems[state][schedule] {
-		app.callSystem(system)
-	}
-}
-
-func (app *App) callSystem(system System) {
+func (app *App) callSystem(system systemFn) {
 	start := time.Now()
 
 	app.callSystemInternal(system)
@@ -124,7 +122,7 @@ func (app *App) callSystem(system System) {
 
 var typeOfCommands = reflect.TypeOf(Commands{})
 
-func (app *App) callSystemInternal(system System) {
+func (app *App) callSystemInternal(system systemFn) {
 	systemType := reflect.TypeOf(system)
 	systemValue := reflect.ValueOf(system)
 

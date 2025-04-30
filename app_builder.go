@@ -4,42 +4,48 @@ import (
 	"reflect"
 )
 
-type AppBuilder struct {
-	app     *App
-	modules []Module
-}
-
-func NewAppBuilder() *AppBuilder {
+func NewApp() *App {
 	ecs := MakeEcs()
-	return &AppBuilder{app: &App{
+	return &App{
 		resources:        make(map[reflect.Type]any),
-		scheduledSystems: make(map[State]map[stateSchedule][]System),
 		stateful:         false,
+		systems:          make(map[string]map[State]map[statePhase][]systemFn),
+		systemsStateless: make(map[string][]systemFn),
 		ecs:              &ecs,
-	}}
-}
-
-func (b *AppBuilder) UseStates(initialState State, finalState State) *AppBuilder {
-	b.app.stateful = true
-	b.app.initialState = initialState
-	b.app.finalState = finalState
-
-	return b
-}
-
-func (b *AppBuilder) UseModule(modules ...Module) *AppBuilder {
-	b.modules = append(b.modules, modules...)
-
-	return b
-}
-
-func (b *AppBuilder) Build() *App {
-	app := b.app
-	commands := &Commands{app: app}
-
-	for _, module := range b.modules {
-		module.Install(app, commands)
+		modules:          make([]Module, 0),
 	}
+}
+
+func (app *App) UseStates(initialState State, finalState State) *App {
+	app.stateful = true
+	app.initialState = initialState
+	app.finalState = finalState
 
 	return app
+}
+
+func (app *App) UseModules(modules ...Module) *App {
+	app.modules = append(app.modules, modules...)
+
+	return app
+}
+
+func (app *App) build() {
+	app.stages = append(app.stages, Prelude)
+	app.stages = append(app.stages, PreUpdate)
+	app.stages = append(app.stages, Update)
+	app.stages = append(app.stages, PostUpdate)
+	app.stages = append(app.stages, PreRender)
+	app.stages = append(app.stages, Render)
+	app.stages = append(app.stages, PostRender)
+	app.stages = append(app.stages, Finale)
+	for _, stage := range app.stages {
+		app.initStatefulStage(stage)
+	}
+
+	commands := &Commands{app: app}
+
+	for _, module := range app.modules {
+		module.Install(app, commands)
+	}
 }

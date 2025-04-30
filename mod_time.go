@@ -13,11 +13,16 @@ type TimeModule struct {
 }
 
 func (mod TimeModule) Install(app *App, cmd *Commands) {
+	app.UseSystem(
+		System(timeSystem).
+			InStage(Prelude).
+			RunAlways(),
+	)
+
 	cmd.AddResources(&Time{
 		Time: time.Now(),
 		Dt:   0,
 	})
-	cmd.UseSystem(timeSystem)
 }
 
 func timeSystem(timeResource *Time) {
