@@ -28,130 +28,243 @@ func MakeQuery4[A, B, C, D any](cmd *Commands) Query4[A, B, C, D] {
 	return Query4[A, B, C, D]{ecs: cmd.app.ecs}
 }
 
-func (q Query1[A]) Map1(m func(EntityId, *A) bool) {
+func (q Query1[A]) Map1(m func(EntityId, *A) bool, optionals ...any) {
 	id1 := identifyComponents1[A](q.ecs)
+	opt := identifyOptionals(q.ecs, optionals...)
 
 	for _, arch := range q.ecs.archetypes {
 		// Check required components
 		var comps1 []A
+		no_a := false
 		if arg1CompData, ok := arch.componentData[id1]; ok {
 			comps1 = arg1CompData.([]A)
+		} else if _, ok := opt[id1]; ok {
+			no_a = true
 		} else {
 			continue
 		}
 
 		// Return entities
 		for entityId, row := range arch.entities {
-			if !m(entityId, &comps1[row]) {
+			var a *A
+			if no_a {
+				a = nil
+			} else {
+				a = &comps1[row]
+			}
+
+			if !m(entityId, a) {
 				return
 			}
 		}
 	}
 }
 
-func (q Query2[A, B]) Map2(m func(EntityId, *A, *B) bool) {
+func (q Query2[A, B]) Map2(m func(EntityId, *A, *B) bool, optionals ...any) {
 	id1, id2 := identifyComponents2[A, B](q.ecs)
+	opt := identifyOptionals(q.ecs, optionals...)
 
 	for _, arch := range q.ecs.archetypes {
 		// Check required components
 		var comps1 []A
+		no_a := false
 		if arg1CompData, ok := arch.componentData[id1]; ok {
 			comps1 = arg1CompData.([]A)
+		} else if _, ok := opt[id1]; ok {
+			no_a = true
 		} else {
 			continue
 		}
 
 		var comps2 []B
+		no_b := false
 		if arg2CompData, ok := arch.componentData[id2]; ok {
 			comps2 = arg2CompData.([]B)
+		} else if _, ok := opt[id2]; ok {
+			no_b = true
 		} else {
 			continue
 		}
 
 		// Return entities
 		for entityId, row := range arch.entities {
-			if !m(entityId, &comps1[row], &comps2[row]) {
+			var a *A
+			if no_a {
+				a = nil
+			} else {
+				a = &comps1[row]
+			}
+
+			var b *B
+			if no_b {
+				b = nil
+			} else {
+				b = &comps2[row]
+			}
+
+			if !m(entityId, a, b) {
 				return
 			}
 		}
 	}
 }
 
-func (q Query3[A, B, C]) Map3(m func(EntityId, *A, *B, *C) bool) {
+func (q Query3[A, B, C]) Map3(m func(EntityId, *A, *B, *C) bool, optionals ...any) {
 	id1, id2, id3 := identifyComponents3[A, B, C](q.ecs)
+	opt := identifyOptionals(q.ecs, optionals...)
 
 	for _, arch := range q.ecs.archetypes {
 		// Check required components
 		var comps1 []A
+		no_a := false
 		if arg1CompData, ok := arch.componentData[id1]; ok {
 			comps1 = arg1CompData.([]A)
+		} else if _, ok := opt[id1]; ok {
+			no_a = true
 		} else {
 			continue
 		}
 
 		var comps2 []B
+		no_b := false
 		if arg2CompData, ok := arch.componentData[id2]; ok {
 			comps2 = arg2CompData.([]B)
+		} else if _, ok := opt[id2]; ok {
+			no_b = true
 		} else {
 			continue
 		}
 
 		var comps3 []C
+		no_c := false
 		if arg3CompData, ok := arch.componentData[id3]; ok {
 			comps3 = arg3CompData.([]C)
+		} else if _, ok := opt[id3]; ok {
+			no_c = true
 		} else {
 			continue
 		}
 
 		// Return entities
 		for entityId, row := range arch.entities {
-			if !m(entityId, &comps1[row], &comps2[row], &comps3[row]) {
+			var a *A
+			if no_a {
+				a = nil
+			} else {
+				a = &comps1[row]
+			}
+
+			var b *B
+			if no_b {
+				b = nil
+			} else {
+				b = &comps2[row]
+			}
+
+			var c *C
+			if no_c {
+				c = nil
+			} else {
+				c = &comps3[row]
+			}
+
+			if !m(entityId, a, b, c) {
 				return
 			}
 		}
 	}
 }
 
-func (q Query4[A, B, C, D]) Map4(m func(EntityId, *A, *B, *C, *D) bool) {
+func (q Query4[A, B, C, D]) Map4(m func(EntityId, *A, *B, *C, *D) bool, optionals ...any) {
 	id1, id2, id3, id4 := identifyComponents4[A, B, C, D](q.ecs)
+	opt := identifyOptionals(q.ecs, optionals...)
 
 	for _, arch := range q.ecs.archetypes {
 		// Check required components
 		var comps1 []A
+		no_a := false
 		if arg1CompData, ok := arch.componentData[id1]; ok {
 			comps1 = arg1CompData.([]A)
+		} else if _, ok := opt[id1]; ok {
+			no_a = true
 		} else {
 			continue
 		}
 
 		var comps2 []B
+		no_b := false
 		if arg2CompData, ok := arch.componentData[id2]; ok {
 			comps2 = arg2CompData.([]B)
+		} else if _, ok := opt[id2]; ok {
+			no_b = true
 		} else {
 			continue
 		}
 
 		var comps3 []C
+		no_c := false
 		if arg3CompData, ok := arch.componentData[id3]; ok {
 			comps3 = arg3CompData.([]C)
+		} else if _, ok := opt[id3]; ok {
+			no_c = true
 		} else {
 			continue
 		}
 
 		var comps4 []D
+		no_d := false
 		if arg4CompData, ok := arch.componentData[id4]; ok {
 			comps4 = arg4CompData.([]D)
+		} else if _, ok := opt[id4]; ok {
+			no_d = true
 		} else {
 			continue
 		}
 
 		// Return entities
 		for entityId, row := range arch.entities {
-			if !m(entityId, &comps1[row], &comps2[row], &comps3[row], &comps4[row]) {
+			var a *A
+			if no_a {
+				a = nil
+			} else {
+				a = &comps1[row]
+			}
+
+			var b *B
+			if no_b {
+				b = nil
+			} else {
+				b = &comps2[row]
+			}
+
+			var c *C
+			if no_c {
+				c = nil
+			} else {
+				c = &comps3[row]
+			}
+
+			var d *D
+			if no_d {
+				d = nil
+			} else {
+				d = &comps4[row]
+			}
+
+			if !m(entityId, a, b, c, d) {
 				return
 			}
 		}
 	}
+}
+
+func identifyOptionals(ecs *Ecs, components ...any) set[componentId] {
+	res := make(set[componentId])
+	for _, c := range components {
+		res[ecs.getComponentId(reflect.TypeOf(c))] = struct{}{}
+	}
+
+	return res
 }
 
 func identifyComponents1[A any](ecs *Ecs) componentId {
