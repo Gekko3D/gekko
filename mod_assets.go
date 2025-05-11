@@ -1,7 +1,9 @@
 package gekko
 
 import (
+	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
+	"os"
 )
 
 type AssetId string
@@ -16,29 +18,30 @@ type AssetServerModule struct{}
 type Mesh struct {
 	assetId AssetId
 }
+
 type Material struct {
 	assetId AssetId
 }
 
-type Vec3 struct{ X, Y, Z float32 }
 type MeshAsset struct {
 	version  uint
-	vertices []Vec3
+	vertices []mgl32.Vec3
+	indexes  []int
 }
 
 type MaterialAsset struct {
 	version       uint
-	color         Vec3
+	shaderName    string
 	shaderListing string
 }
 
-func (server AssetServer) LoadMesh(filename string) Mesh {
+func (server AssetServer) LoadMesh(vertices []mgl32.Vec3, indexes []int) Mesh {
 	id := makeAssetId()
 
 	server.meshes[id] = MeshAsset{
-		/*...*/
-		version:  0,
-		vertices: make([]Vec3, 0),
+		0,
+		vertices,
+		indexes,
 	}
 
 	return Mesh{
@@ -46,30 +49,18 @@ func (server AssetServer) LoadMesh(filename string) Mesh {
 	}
 }
 
-func (server AssetServer) LoadMaterial(shaderFilename string, color Vec3) Material {
+func (server AssetServer) LoadMaterial(filename string) Material {
+	shaderData, err := os.ReadFile(filename)
+	if err != nil {
+		panic(err)
+	}
+
 	id := makeAssetId()
 
 	server.materials[id] = MaterialAsset{
-		version: 0,
-		color:   color,
-		shaderListing: `
-			struct Uniforms {
-				mvp: mat4x4<f32>,
-			};
-			@group(0) @binding(0)
-			var<uniform> uniforms: Uniforms;
-
-			@vertex
-			fn vs_main(@location(0) position: vec2<f32>, @location(1) color: vec3<f32>)
-				-> @builtin(position) vec4<f32> {
-				let pos = vec4<f32>(position, 0.0, 1.0);
-				return uniforms.mvp * pos;
-			}
-
-			@fragment
-			fn fs_main(@location(0) color: vec3<f32>) -> @location(0) vec4<f32> {
-				return vec4<f32>(color, 1.0);
-			}`,
+		version:       0,
+		shaderName:    filename,
+		shaderListing: string(shaderData),
 	}
 
 	return Material{

@@ -13,6 +13,8 @@ type Query1[A any] struct{ ecs *Ecs }
 type Query2[A, B any] struct{ ecs *Ecs }
 type Query3[A, B, C any] struct{ ecs *Ecs }
 type Query4[A, B, C, D any] struct{ ecs *Ecs }
+type Query5[A, B, C, D, E any] struct{ ecs *Ecs }
+type Query6[A, B, C, D, E, F any] struct{ ecs *Ecs }
 
 /*
 type Query5[A, B, C, D, E any] struct{ ecs *Ecs }
