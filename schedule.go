@@ -102,7 +102,7 @@ func (sched systemScheduleBuilder) RunAlways() systemScheduleBuilder {
 	}
 }
 
-func (sched systemScheduleBuilder) Stateless() systemScheduleBuilder {
+func (sched systemScheduleBuilder) InAnyState() systemScheduleBuilder {
 	return sched.RunAlways()
 }
 
