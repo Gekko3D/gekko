@@ -17,3 +17,7 @@ func (cmd *Commands) AddResources(resources ...any) *Commands {
 func (cmd *Commands) AddEntity(components ...any) EntityId {
 	return cmd.app.ecs.addEntity(components...)
 }
+
+func (cmd *Commands) AddComponents(entityId EntityId, components ...any) {
+	cmd.app.ecs.addComponents(entityId, components...)
+}
