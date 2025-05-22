@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
 	"os"
 )
@@ -25,7 +24,7 @@ type Material struct {
 
 type MeshAsset struct {
 	version  uint
-	vertices []mgl32.Vec3
+	vertices AnySlice
 	indexes  []uint16
 }
 
@@ -33,9 +32,10 @@ type MaterialAsset struct {
 	version       uint
 	shaderName    string
 	shaderListing string
+	vertexType    any
 }
 
-func (server AssetServer) LoadMesh(vertices []mgl32.Vec3, indexes []uint16) Mesh {
+func (server AssetServer) LoadMesh(vertices AnySlice, indexes []uint16) Mesh {
 	id := makeAssetId()
 
 	server.meshes[id] = MeshAsset{
@@ -49,7 +49,7 @@ func (server AssetServer) LoadMesh(vertices []mgl32.Vec3, indexes []uint16) Mesh
 	}
 }
 
-func (server AssetServer) LoadMaterial(filename string) Material {
+func (server AssetServer) LoadMaterial(filename string, vertexType any) Material {
 	shaderData, err := os.ReadFile(filename)
 	if err != nil {
 		panic(err)
@@ -61,6 +61,7 @@ func (server AssetServer) LoadMaterial(filename string) Material {
 		version:       0,
 		shaderName:    filename,
 		shaderListing: string(shaderData),
+		vertexType:    vertexType,
 	}
 
 	return Material{

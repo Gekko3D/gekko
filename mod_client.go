@@ -1,7 +1,9 @@
 package gekko
 
 import (
+	"reflect"
 	"runtime"
+	"strconv"
 	"unsafe"
 
 	"github.com/cogentcore/webgpu/wgpu"
@@ -9,6 +11,11 @@ import (
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/go-gl/mathgl/mgl32"
 )
+
+type Float2 = mgl32.Vec2
+type Float3 = mgl32.Vec3
+type Float4 = mgl32.Vec4
+type Float4x4 = mgl32.Mat4
 
 type ClientModule struct {
 	WindowWidth  int
@@ -142,7 +149,7 @@ func (mod ClientModule) Install(app *App, cmd *Commands) {
 		})
 }
 
-func loadGpuResources(cmd *Commands, assets *AssetServer, state *gpuState) {
+func loadGpuResources(cmd *Commands, assets *AssetServer, s *gpuState) {
 	MakeQuery4[Mesh, Material, wgpuMesh, wgpuMaterial](cmd).Map4(
 		func(entityId EntityId, mesh *Mesh, material *Material,
 			gpuMesh *wgpuMesh, gpuMaterial *wgpuMaterial) bool {
@@ -151,9 +158,9 @@ func loadGpuResources(cmd *Commands, assets *AssetServer, state *gpuState) {
 			var pipeline *wgpu.RenderPipeline
 			if nil == gpuMaterial {
 				// WGPU material doesn't exist - needs creating
-				pipeline = createRenderPipeline(materialAsset, state.device, state.surfaceConfig)
+				pipeline = createRenderPipeline(materialAsset, s.device, s.surfaceConfig)
 				mvpMatrix := mgl32.Mat4{}
-				uniformBuf, err := state.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
+				uniformBuf, err := s.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 					Label:    "Uniform Buffer",
 					Contents: wgpu.ToBytes(mvpMatrix[:]),
 					Usage:    wgpu.BufferUsageUniform | wgpu.BufferUsageCopyDst,
@@ -161,15 +168,25 @@ func loadGpuResources(cmd *Commands, assets *AssetServer, state *gpuState) {
 				if err != nil {
 					panic(err)
 				}
+
+				textureView := loadTestTexture(s)
+				defer textureView.Release()
+
 				bindGroupLayout := pipeline.GetBindGroupLayout(0)
 				defer bindGroupLayout.Release()
-				bindGroup, err := state.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+
+				bindGroup, err := s.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 					Layout: bindGroupLayout,
 					Entries: []wgpu.BindGroupEntry{
 						{
 							Binding: 0,
 							Buffer:  uniformBuf,
 							Size:    wgpu.WholeSize,
+						},
+						{
+							Binding:     1,
+							TextureView: textureView,
+							Size:        wgpu.WholeSize,
 						},
 					},
 				})
@@ -193,7 +210,7 @@ func loadGpuResources(cmd *Commands, assets *AssetServer, state *gpuState) {
 			meshAsset := assets.meshes[mesh.assetId]
 			if nil == gpuMesh {
 				// WGPU mesh doesn't exist - needs creating
-				vertexBuf, indexBuf := createBuffers(meshAsset, state.device, state.surfaceConfig)
+				vertexBuf, indexBuf := createBuffers(meshAsset, s.device, s.surfaceConfig)
 				cmd.AddComponents(entityId, wgpuMesh{
 					id:           mesh.assetId,
 					version:      0,
@@ -210,6 +227,64 @@ func loadGpuResources(cmd *Commands, assets *AssetServer, state *gpuState) {
 		wgpuMesh{}, wgpuMaterial{})
 }
 
+// TODO load this by user
+const texelsSize = 256
+
+func createTexels() (texels [texelsSize * texelsSize]uint8) {
+	for id := 0; id < (texelsSize * texelsSize); id++ {
+		cx := 3.0*float32(id%texelsSize)/float32(texelsSize-1) - 2.0
+		cy := 2.0*float32(id/texelsSize)/float32(texelsSize-1) - 1.0
+		x, y, count := float32(cx), float32(cy), uint8(0)
+		for count < 0xFF && x*x+y*y < 4.0 {
+			oldX := x
+			x = x*x - y*y + cx
+			y = 2.0*oldX*y + cy
+			count += 1
+		}
+		texels[id] = count
+	}
+
+	return texels
+}
+
+func loadTestTexture(s *gpuState) *wgpu.TextureView {
+	texels := createTexels()
+	textureExtent := wgpu.Extent3D{
+		Width:              texelsSize,
+		Height:             texelsSize,
+		DepthOrArrayLayers: 1,
+	}
+	texture, err := s.device.CreateTexture(&wgpu.TextureDescriptor{
+		Size:          textureExtent,
+		MipLevelCount: 1,
+		SampleCount:   1,
+		Dimension:     wgpu.TextureDimension2D,
+		Format:        wgpu.TextureFormatR8Uint,
+		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer texture.Release()
+
+	textureView, err := texture.CreateView(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	s.queue.WriteTexture(
+		texture.AsImageCopy(),
+		wgpu.ToBytes(texels[:]),
+		&wgpu.TextureDataLayout{
+			Offset:       0,
+			BytesPerRow:  texelsSize,
+			RowsPerImage: wgpu.CopyStrideUndefined,
+		},
+		&textureExtent,
+	)
+	return textureView
+}
+
 func createRenderPipeline(material MaterialAsset, device *wgpu.Device, config *wgpu.SurfaceConfiguration) *wgpu.RenderPipeline {
 	//TODO cache shader
 	shader, err := device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
@@ -221,18 +296,7 @@ func createRenderPipeline(material MaterialAsset, device *wgpu.Device, config *w
 	}
 	defer shader.Release()
 
-	//TODO let the user define this via MaterialAsset
-	vertexBufferLayout := wgpu.VertexBufferLayout{
-		ArrayStride: uint64(unsafe.Sizeof(mgl32.Vec3{})),
-		StepMode:    wgpu.VertexStepModeVertex,
-		Attributes: []wgpu.VertexAttribute{
-			{
-				Format:         wgpu.VertexFormatFloat32x4,
-				Offset:         0,
-				ShaderLocation: 0,
-			},
-		},
-	}
+	vertexBufferLayout := createVertexBufferLayout(material.vertexType)
 
 	pipeline, err := device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
 		Vertex: wgpu.VertexState{
@@ -269,10 +333,69 @@ func createRenderPipeline(material MaterialAsset, device *wgpu.Device, config *w
 	return pipeline
 }
 
+func createVertexBufferLayout(vertexType any) wgpu.VertexBufferLayout {
+	t := reflect.TypeOf(vertexType)
+	if t.Kind() != reflect.Struct {
+		panic("Vertex must be a struct")
+	}
+
+	var attributes []wgpu.VertexAttribute
+	var offset uint64 = 0
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+
+		if "layout" == field.Tag.Get("gekko") {
+			format := parseFormat(field.Tag.Get("format"))
+			location, err := strconv.Atoi(field.Tag.Get("location"))
+			if nil != err {
+				panic(err)
+			}
+
+			attributes = append(attributes, wgpu.VertexAttribute{
+				ShaderLocation: uint32(location),
+				Offset:         offset,
+				Format:         format,
+			})
+		}
+
+		// Add size of field to offset
+		offset += uint64(field.Type.Size())
+	}
+
+	return wgpu.VertexBufferLayout{
+		ArrayStride: offset,
+		StepMode:    wgpu.VertexStepModeVertex,
+		Attributes:  attributes,
+	}
+}
+
+func parseFormat(name string) wgpu.VertexFormat {
+	switch name {
+	case "float2":
+		return wgpu.VertexFormatFloat32x2
+	case "float3":
+		return wgpu.VertexFormatFloat32x3
+	case "float4":
+		return wgpu.VertexFormatFloat32x4
+	default:
+		panic("unsupported vertex layout format: " + name)
+	}
+}
+
+func untypedSliceToWgpuBytes(src AnySlice) []byte {
+	l := src.Len()
+	if l == 0 {
+		return nil
+	}
+
+	return unsafe.Slice((*byte)(src.DataPointer()), l*src.ElementSize())
+}
+
 func createBuffers(mesh MeshAsset, device *wgpu.Device, config *wgpu.SurfaceConfiguration) (vertexBuf *wgpu.Buffer, indexBuf *wgpu.Buffer) {
 	vertexBuf, err := device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "Vertex Buffer",
-		Contents: wgpu.ToBytes(mesh.vertices[:]),
+		Contents: untypedSliceToWgpuBytes(mesh.vertices),
 		Usage:    wgpu.BufferUsageVertex,
 	})
 	if err != nil {
@@ -280,7 +403,7 @@ func createBuffers(mesh MeshAsset, device *wgpu.Device, config *wgpu.SurfaceConf
 	}
 	indexBuf, err = device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "Index Buffer",
-		Contents: wgpu.ToBytes(mesh.indexes[:]),
+		Contents: wgpu.ToBytes(mesh.indexes),
 		Usage:    wgpu.BufferUsageIndex,
 	})
 	if err != nil {
