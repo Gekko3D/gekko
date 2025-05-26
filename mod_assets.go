@@ -10,6 +10,7 @@ type AssetId string
 type AssetServer struct {
 	meshes    map[AssetId]MeshAsset
 	materials map[AssetId]MaterialAsset
+	textures  map[AssetId]TextureAsset
 }
 
 type AssetServerModule struct{}
@@ -25,7 +26,7 @@ type Material struct {
 type MeshAsset struct {
 	version  uint
 	vertices AnySlice
-	indexes  []uint16
+	indices  []uint16
 }
 
 type MaterialAsset struct {
@@ -33,6 +34,13 @@ type MaterialAsset struct {
 	shaderName    string
 	shaderListing string
 	vertexType    any
+}
+
+type TextureAsset struct {
+	version uint
+	texels  []uint8
+	width   uint32
+	height  uint32
 }
 
 func (server AssetServer) LoadMesh(vertices AnySlice, indexes []uint16) Mesh {
@@ -69,10 +77,24 @@ func (server AssetServer) LoadMaterial(filename string, vertexType any) Material
 	}
 }
 
+func (server AssetServer) LoadTexture(texels []uint8, texWidth uint32, texHeight uint32) AssetId {
+	id := makeAssetId()
+
+	server.textures[id] = TextureAsset{
+		version: 0,
+		texels:  texels,
+		width:   texWidth,
+		height:  texHeight,
+	}
+
+	return id
+}
+
 func (AssetServerModule) Install(app *App, cmd *Commands) {
 	app.addResources(&AssetServer{
 		meshes:    make(map[AssetId]MeshAsset),
 		materials: make(map[AssetId]MaterialAsset),
+		textures:  make(map[AssetId]TextureAsset),
 	})
 }
 

@@ -26,17 +26,36 @@ type ClientModule struct {
 type wgpuMesh struct {
 	id           AssetId
 	version      uint
-	VertexBuffer *wgpu.Buffer
-	IndexBuffer  *wgpu.Buffer
-	VertexCount  uint32
+	vertexBuffer *wgpu.Buffer
+	indexBuffer  *wgpu.Buffer
+	vertexCount  uint32
 }
 
 type wgpuMaterial struct {
 	id            AssetId
 	version       uint
-	Pipeline      *wgpu.RenderPipeline
-	BindGroup     *wgpu.BindGroup
-	UniformBuffer *wgpu.Buffer // MVP matrix
+	pipeline      *wgpu.RenderPipeline
+	bindGroups    map[uint32]*wgpu.BindGroup
+	uniformBuffer *wgpu.Buffer // MVP matrix
+}
+
+type wgpuTextureSet struct {
+	textures map[AssetId]wgpuTexture
+}
+
+type wgpuTexture struct {
+	id          AssetId
+	version     uint
+	group       uint32
+	binding     uint32
+	textureView *wgpu.TextureView
+}
+
+type textureComponent struct {
+	version      uint
+	group        uint32
+	binding      uint32
+	textureAsset *TextureAsset
 }
 
 type TransformComponent struct {
@@ -123,7 +142,22 @@ func (mod ClientModule) Install(app *App, cmd *Commands) {
 	surface.Configure(adapter, device, &surfaceConfig)
 
 	app.UseSystem(
-		System(loadGpuResources).
+		System(loadMaterials).
+			InStage(PreRender).
+			RunAlways(),
+	)
+	app.UseSystem(
+		System(loadMeshes).
+			InStage(PreRender).
+			RunAlways(),
+	)
+	app.UseSystem(
+		System(loadTextures).
+			InStage(PreRender).
+			RunAlways(),
+	)
+	app.UseSystem(
+		System(loadBindGroups).
 			InStage(PreRender).
 			RunAlways(),
 	)
@@ -149,16 +183,15 @@ func (mod ClientModule) Install(app *App, cmd *Commands) {
 		})
 }
 
-func loadGpuResources(cmd *Commands, assets *AssetServer, s *gpuState) {
-	MakeQuery4[Mesh, Material, wgpuMesh, wgpuMaterial](cmd).Map4(
-		func(entityId EntityId, mesh *Mesh, material *Material,
-			gpuMesh *wgpuMesh, gpuMaterial *wgpuMaterial) bool {
-
+func loadMaterials(cmd *Commands, assets *AssetServer, s *gpuState) {
+	MakeQuery2[Material, wgpuMaterial](cmd).Map2(
+		func(entityId EntityId, material *Material, gpuMaterial *wgpuMaterial) bool {
 			materialAsset := assets.materials[material.assetId]
 			var pipeline *wgpu.RenderPipeline
 			if nil == gpuMaterial {
 				// WGPU material doesn't exist - needs creating
 				pipeline = createRenderPipeline(materialAsset, s.device, s.surfaceConfig)
+				//TODO DEFINE UNIFORMS BY USER
 				mvpMatrix := mgl32.Mat4{}
 				uniformBuf, err := s.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 					Label:    "Uniform Buffer",
@@ -169,54 +202,34 @@ func loadGpuResources(cmd *Commands, assets *AssetServer, s *gpuState) {
 					panic(err)
 				}
 
-				textureView := loadTestTexture(s)
-				defer textureView.Release()
-
-				bindGroupLayout := pipeline.GetBindGroupLayout(0)
-				defer bindGroupLayout.Release()
-
-				bindGroup, err := s.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-					Layout: bindGroupLayout,
-					Entries: []wgpu.BindGroupEntry{
-						{
-							Binding: 0,
-							Buffer:  uniformBuf,
-							Size:    wgpu.WholeSize,
-						},
-						{
-							Binding:     1,
-							TextureView: textureView,
-							Size:        wgpu.WholeSize,
-						},
-					},
-				})
-				if err != nil {
-					panic(err)
-				}
-
 				cmd.AddComponents(entityId, wgpuMaterial{
 					id:            material.assetId,
-					version:       0,
-					Pipeline:      pipeline,
-					BindGroup:     bindGroup,
-					UniformBuffer: uniformBuf,
+					version:       materialAsset.version,
+					pipeline:      pipeline,
+					uniformBuffer: uniformBuf,
 				})
 			} else if materialAsset.version > gpuMaterial.version {
 				// WGPU material is out of date - needs updating
 				// TODO implement
-				pipeline = gpuMaterial.Pipeline
+				pipeline = gpuMaterial.pipeline
 			}
+			return true
+		}, wgpuMaterial{})
+}
 
+func loadMeshes(cmd *Commands, assets *AssetServer, s *gpuState) {
+	MakeQuery2[Mesh, wgpuMesh](cmd).Map2(
+		func(entityId EntityId, mesh *Mesh, gpuMesh *wgpuMesh) bool {
 			meshAsset := assets.meshes[mesh.assetId]
 			if nil == gpuMesh {
 				// WGPU mesh doesn't exist - needs creating
-				vertexBuf, indexBuf := createBuffers(meshAsset, s.device, s.surfaceConfig)
+				vertexBuf, indexBuf := createBuffers(meshAsset, s.device)
 				cmd.AddComponents(entityId, wgpuMesh{
 					id:           mesh.assetId,
-					version:      0,
-					VertexBuffer: vertexBuf,
-					IndexBuffer:  indexBuf,
-					VertexCount:  uint32(len(meshAsset.indexes)),
+					version:      meshAsset.version,
+					vertexBuffer: vertexBuf,
+					indexBuffer:  indexBuf,
+					vertexCount:  uint32(len(meshAsset.indices)),
 				})
 			} else if meshAsset.version > gpuMesh.version {
 				// WGPU mesh is out of date - needs updating
@@ -224,34 +237,85 @@ func loadGpuResources(cmd *Commands, assets *AssetServer, s *gpuState) {
 			}
 			return true
 		},
-		wgpuMesh{}, wgpuMaterial{})
+		wgpuMesh{})
 }
 
-// TODO load this by user
-const texelsSize = 256
+func loadTextures(cmd *Commands, assets *AssetServer, s *gpuState) {
+	MakeQuery1[wgpuTextureSet](cmd).Map1(
+		func(entityId EntityId, gpuTextureSet *wgpuTextureSet) bool {
+			textureComponents := findTextureComponents(entityId, cmd, assets)
+			if nil == gpuTextureSet {
+				// WGPU texture doesn't exist - needs creating
+				txs := map[AssetId]wgpuTexture{}
+				for id, txComp := range textureComponents {
+					txView := loadTexture(txComp.textureAsset, s)
+					txs[id] = wgpuTexture{
+						id:          id,
+						version:     txComp.version,
+						group:       txComp.group,
+						binding:     txComp.binding,
+						textureView: txView,
+					}
+				}
+				cmd.AddComponents(entityId, wgpuTextureSet{
+					textures: txs,
+				})
+			} else {
+				// compare each textureComponent with the same texture inside gpuTextureSet
+				// update texture inside the set if it is outdated
+				// TODO implement
+			}
 
-func createTexels() (texels [texelsSize * texelsSize]uint8) {
-	for id := 0; id < (texelsSize * texelsSize); id++ {
-		cx := 3.0*float32(id%texelsSize)/float32(texelsSize-1) - 2.0
-		cy := 2.0*float32(id/texelsSize)/float32(texelsSize-1) - 1.0
-		x, y, count := float32(cx), float32(cy), uint8(0)
-		for count < 0xFF && x*x+y*y < 4.0 {
-			oldX := x
-			x = x*x - y*y + cx
-			y = 2.0*oldX*y + cy
-			count += 1
+			return true
+		},
+		wgpuTextureSet{})
+}
+
+func findTextureComponents(entityId EntityId, cmd *Commands, assets *AssetServer) map[AssetId]textureComponent {
+	textures := map[AssetId]textureComponent{}
+	assetIdType := reflect.TypeOf(AssetId(""))
+	allComponents := cmd.GetAllComponents(entityId)
+	for _, c := range allComponents {
+		val := reflect.ValueOf(c)
+		if val.Kind() == reflect.Ptr {
+			val = val.Elem()
 		}
-		texels[id] = count
+		t := val.Type()
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			if "texture" == field.Tag.Get("gekko") {
+				if field.Type != assetIdType {
+					panic("Texture field must be type of AssetId")
+				}
+				group, err := strconv.Atoi(field.Tag.Get("group"))
+				if nil != err {
+					panic(err)
+				}
+				binding, err := strconv.Atoi(field.Tag.Get("binding"))
+				if nil != err {
+					panic(err)
+				}
+				fieldVal := val.Field(i)
+				assetId := AssetId(fieldVal.String())
+				textureAsset := assets.textures[assetId]
+
+				textures[assetId] = textureComponent{
+					version:      textureAsset.version,
+					group:        uint32(group),
+					binding:      uint32(binding),
+					textureAsset: &textureAsset,
+				}
+			}
+		}
 	}
 
-	return texels
+	return textures
 }
 
-func loadTestTexture(s *gpuState) *wgpu.TextureView {
-	texels := createTexels()
+func loadTexture(txAsset *TextureAsset, s *gpuState) *wgpu.TextureView {
 	textureExtent := wgpu.Extent3D{
-		Width:              texelsSize,
-		Height:             texelsSize,
+		Width:              txAsset.width,
+		Height:             txAsset.height,
 		DepthOrArrayLayers: 1,
 	}
 	texture, err := s.device.CreateTexture(&wgpu.TextureDescriptor{
@@ -272,21 +336,79 @@ func loadTestTexture(s *gpuState) *wgpu.TextureView {
 		panic(err)
 	}
 
-	s.queue.WriteTexture(
+	err = s.queue.WriteTexture(
 		texture.AsImageCopy(),
-		wgpu.ToBytes(texels[:]),
+		wgpu.ToBytes(txAsset.texels),
 		&wgpu.TextureDataLayout{
 			Offset:       0,
-			BytesPerRow:  texelsSize,
+			BytesPerRow:  txAsset.height,
 			RowsPerImage: wgpu.CopyStrideUndefined,
 		},
 		&textureExtent,
 	)
+	if err != nil {
+		panic(err)
+	}
+
 	return textureView
 }
 
+func loadBindGroups(cmd *Commands, s *gpuState) {
+	MakeQuery2[wgpuMaterial, wgpuTextureSet](cmd).Map2(
+		func(entityId EntityId, gpuMaterial *wgpuMaterial, gpuTxSet *wgpuTextureSet) bool {
+			if nil == gpuMaterial.bindGroups {
+				bindGroups := map[uint32]*wgpu.BindGroup{}
+				//TODO add uniforms here
+				groupedTxs := groupTextureBindings(gpuTxSet.textures)
+				for groupId, txs := range groupedTxs {
+					bindGroupLayout := gpuMaterial.pipeline.GetBindGroupLayout(groupId)
+					defer bindGroupLayout.Release()
+					var bindings []wgpu.BindGroupEntry
+					//TODO remove hardcoded uniforms
+					if groupId == 0 {
+						bindings = append(bindings,
+							wgpu.BindGroupEntry{
+								Binding: 0,
+								Buffer:  gpuMaterial.uniformBuffer,
+								Size:    wgpu.WholeSize,
+							})
+					}
+					for _, tx := range txs {
+						bindings = append(bindings, wgpu.BindGroupEntry{
+							Binding:     tx.binding,
+							TextureView: tx.textureView,
+							Size:        wgpu.WholeSize,
+						})
+					}
+					bindGroup, err := s.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+						Layout:  bindGroupLayout,
+						Entries: bindings,
+					})
+					if err != nil {
+						panic(err)
+					}
+
+					bindGroups[groupId] = bindGroup
+				}
+				gpuMaterial.bindGroups = bindGroups
+			}
+			return true
+		})
+}
+
+func groupTextureBindings(textures map[AssetId]wgpuTexture) map[uint32][]wgpuTexture {
+	groupedBindings := map[uint32][]wgpuTexture{}
+	for _, tx := range textures {
+		bindings, ok := groupedBindings[tx.group]
+		if !ok {
+			groupedBindings[tx.group] = []wgpuTexture{}
+		}
+		groupedBindings[tx.group] = append(bindings, tx)
+	}
+	return groupedBindings
+}
+
 func createRenderPipeline(material MaterialAsset, device *wgpu.Device, config *wgpu.SurfaceConfiguration) *wgpu.RenderPipeline {
-	//TODO cache shader
 	shader, err := device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label:          material.shaderName,
 		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: material.shaderListing},
@@ -392,7 +514,7 @@ func untypedSliceToWgpuBytes(src AnySlice) []byte {
 	return unsafe.Slice((*byte)(src.DataPointer()), l*src.ElementSize())
 }
 
-func createBuffers(mesh MeshAsset, device *wgpu.Device, config *wgpu.SurfaceConfiguration) (vertexBuf *wgpu.Buffer, indexBuf *wgpu.Buffer) {
+func createBuffers(mesh MeshAsset, device *wgpu.Device) (vertexBuf *wgpu.Buffer, indexBuf *wgpu.Buffer) {
 	vertexBuf, err := device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "Vertex Buffer",
 		Contents: untypedSliceToWgpuBytes(mesh.vertices),
@@ -403,7 +525,7 @@ func createBuffers(mesh MeshAsset, device *wgpu.Device, config *wgpu.SurfaceConf
 	}
 	indexBuf, err = device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "Index Buffer",
-		Contents: wgpu.ToBytes(mesh.indexes),
+		Contents: wgpu.ToBytes(mesh.indices),
 		Usage:    wgpu.BufferUsageIndex,
 	})
 	if err != nil {
@@ -481,19 +603,22 @@ func rendering(cmd *Commands, s *gpuState) {
 		},
 	})
 
+	//material + mesh + bindGroup (uniform + texture)
 	for materialId, mashes := range materialsWithMashes {
 		material := materials[materialId]
 		for _, mesh := range mashes {
 			mvp := mashesWithMvps[mesh.id]
-			err = s.queue.WriteBuffer(material.UniformBuffer, 0, wgpu.ToBytes(mvp[:]))
+			err = s.queue.WriteBuffer(material.uniformBuffer, 0, wgpu.ToBytes(mvp[:]))
 			if err != nil {
 				panic(err)
 			}
-			renderPass.SetPipeline(material.Pipeline)
-			renderPass.SetBindGroup(0, material.BindGroup, nil)
-			renderPass.SetIndexBuffer(mesh.IndexBuffer, wgpu.IndexFormatUint16, 0, wgpu.WholeSize)
-			renderPass.SetVertexBuffer(0, mesh.VertexBuffer, 0, wgpu.WholeSize)
-			renderPass.DrawIndexed(mesh.VertexCount, 1, 0, 0, 0)
+			renderPass.SetPipeline(material.pipeline)
+			for groupId, bindGroup := range material.bindGroups {
+				renderPass.SetBindGroup(groupId, bindGroup, nil)
+			}
+			renderPass.SetIndexBuffer(mesh.indexBuffer, wgpu.IndexFormatUint16, 0, wgpu.WholeSize)
+			renderPass.SetVertexBuffer(0, mesh.vertexBuffer, 0, wgpu.WholeSize)
+			renderPass.DrawIndexed(mesh.vertexCount, 1, 0, 0, 0)
 		}
 	}
 	err = renderPass.End()
