@@ -1,8 +1,11 @@
 package gekko
 
 import (
-	"github.com/google/uuid"
+	"image"
+	"image/png"
 	"os"
+
+	"github.com/google/uuid"
 )
 
 type AssetId string
@@ -77,7 +80,7 @@ func (server AssetServer) LoadMaterial(filename string, vertexType any) Material
 	}
 }
 
-func (server AssetServer) LoadTexture(texels []uint8, texWidth uint32, texHeight uint32) AssetId {
+func (server AssetServer) CreateTexture(texels []uint8, texWidth uint32, texHeight uint32) AssetId {
 	id := makeAssetId()
 
 	server.textures[id] = TextureAsset{
@@ -85,6 +88,45 @@ func (server AssetServer) LoadTexture(texels []uint8, texWidth uint32, texHeight
 		texels:  texels,
 		width:   texWidth,
 		height:  texHeight,
+	}
+
+	return id
+}
+
+func (server AssetServer) LoadTexture(filename string) AssetId {
+	id := makeAssetId()
+
+	file, err := os.Open(filename)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	// Decode the image
+	img, err := png.Decode(file)
+	if err != nil {
+		panic(err)
+	}
+
+	bounds := img.Bounds()
+
+	// Convert to RGBA if needed
+	rgbaImg, ok := img.(*image.RGBA)
+	if !ok {
+		// Convert to RGBA format
+		rgbaImg = image.NewRGBA(bounds)
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				rgbaImg.Set(x, y, img.At(x, y))
+			}
+		}
+	}
+
+	server.textures[id] = TextureAsset{
+		version: 0,
+		texels:  rgbaImg.Pix,
+		width:   uint32(bounds.Max.X - bounds.Min.X),
+		height:  uint32(bounds.Max.Y - bounds.Min.Y),
 	}
 
 	return id
