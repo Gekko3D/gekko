@@ -10,10 +10,19 @@ import (
 
 type AssetId string
 
+type TextureFormat uint32
+
+const (
+	TextureFormatR8Uint     TextureFormat = 0x00000003
+	TextureFormatRGBA8Unorm TextureFormat = 0x00000012
+	TextureFormatRGBA8Uint  TextureFormat = 0x00000015
+)
+
 type AssetServer struct {
 	meshes    map[AssetId]MeshAsset
 	materials map[AssetId]MaterialAsset
 	textures  map[AssetId]TextureAsset
+	samplers  map[AssetId]SamplerAsset
 }
 
 type AssetServerModule struct{}
@@ -44,6 +53,12 @@ type TextureAsset struct {
 	texels  []uint8
 	width   uint32
 	height  uint32
+	format  TextureFormat
+}
+
+type SamplerAsset struct {
+	version uint
+	assetId AssetId
 }
 
 func (server AssetServer) LoadMesh(vertices AnySlice, indexes []uint16) Mesh {
@@ -80,7 +95,7 @@ func (server AssetServer) LoadMaterial(filename string, vertexType any) Material
 	}
 }
 
-func (server AssetServer) CreateTexture(texels []uint8, texWidth uint32, texHeight uint32) AssetId {
+func (server AssetServer) CreateTexture(texels []uint8, texWidth uint32, texHeight uint32, format TextureFormat) AssetId {
 	id := makeAssetId()
 
 	server.textures[id] = TextureAsset{
@@ -88,6 +103,7 @@ func (server AssetServer) CreateTexture(texels []uint8, texWidth uint32, texHeig
 		texels:  texels,
 		width:   texWidth,
 		height:  texHeight,
+		format:  format,
 	}
 
 	return id
@@ -127,6 +143,18 @@ func (server AssetServer) LoadTexture(filename string) AssetId {
 		texels:  rgbaImg.Pix,
 		width:   uint32(bounds.Max.X - bounds.Min.X),
 		height:  uint32(bounds.Max.Y - bounds.Min.Y),
+		format:  TextureFormatRGBA8Unorm,
+	}
+
+	return id
+}
+
+func (server AssetServer) CreateSampler() AssetId {
+	id := makeAssetId()
+
+	server.samplers[id] = SamplerAsset{
+		version: 0,
+		assetId: id,
 	}
 
 	return id
@@ -137,6 +165,7 @@ func (AssetServerModule) Install(app *App, cmd *Commands) {
 		meshes:    make(map[AssetId]MeshAsset),
 		materials: make(map[AssetId]MaterialAsset),
 		textures:  make(map[AssetId]TextureAsset),
+		samplers:  make(map[AssetId]SamplerAsset),
 	})
 }
 
