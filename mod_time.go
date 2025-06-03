@@ -5,8 +5,9 @@ import (
 )
 
 type Time struct {
-	Time time.Time
-	Dt   time.Duration
+	Time     time.Time
+	Duration time.Duration
+	Dt       float64
 }
 
 type TimeModule struct {
@@ -28,6 +29,7 @@ func (mod TimeModule) Install(app *App, cmd *Commands) {
 func timeSystem(timeResource *Time) {
 	now := time.Now()
 
-	timeResource.Dt = now.Sub(timeResource.Time)
+	timeResource.Duration = now.Sub(timeResource.Time)
+	timeResource.Dt = timeResource.Duration.Seconds()
 	timeResource.Time = now
 }
