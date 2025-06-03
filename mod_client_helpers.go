@@ -230,10 +230,11 @@ func findBufferDescriptors(entityId EntityId, cmd *Commands) map[bufferId]buffer
 		if val.Kind() == reflect.Ptr {
 			val = val.Elem()
 		}
+
 		t := val.Type()
 		for i := 0; i < t.NumField(); i++ {
 			fieldDecl := t.Field(i)
-			if "buffer" == fieldDecl.Tag.Get("gekko") {
+			if "uniforms" == fieldDecl.Tag.Get("gekko") {
 				group, err := strconv.Atoi(fieldDecl.Tag.Get("group"))
 				if nil != err {
 					panic(err)
@@ -254,23 +255,7 @@ func findBufferDescriptors(entityId EntityId, cmd *Commands) map[bufferId]buffer
 				}
 
 				buf := new(bytes.Buffer)
-				switch field.Kind() {
-				case reflect.Slice:
-					for i := 0; i < field.Len(); i++ {
-						elem := field.Index(i)
-						if elem.Kind() == reflect.Ptr {
-							elem = elem.Elem()
-						}
-						if err := binary.Write(buf, binary.LittleEndian, elem.Interface()); err != nil {
-							panic(fmt.Errorf("failed to write slice element: %w", err))
-						}
-					}
-
-				default:
-					if err := binary.Write(buf, binary.LittleEndian, field.Interface()); err != nil {
-						panic(fmt.Errorf("failed to write scalar field: %w", err))
-					}
-				}
+				readUniformsBytes(field, buf)
 
 				id := bufferId{
 					group:   uint32(group),
@@ -285,6 +270,36 @@ func findBufferDescriptors(entityId EntityId, cmd *Commands) map[bufferId]buffer
 		}
 	}
 	return descriptors
+}
+
+func readUniformsBytes(field reflect.Value, buf *bytes.Buffer) {
+	switch field.Kind() {
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < field.Len(); i++ {
+			elem := field.Index(i)
+			if elem.Kind() == reflect.Ptr {
+				elem = elem.Elem()
+			}
+			if err := binary.Write(buf, binary.LittleEndian, elem.Interface()); err != nil {
+				panic(fmt.Errorf("failed to write slice element: %w", err))
+			}
+		}
+
+	case reflect.Struct:
+		for i := 0; i < field.NumField(); i++ {
+			readUniformsBytes(field.Field(i), buf)
+		}
+
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32,
+		reflect.Int8, reflect.Int16, reflect.Int32,
+		reflect.Float32:
+		if err := binary.Write(buf, binary.LittleEndian, field.Interface()); err != nil {
+			panic(fmt.Errorf("failed to write scalar field: %w", err))
+		}
+
+	default:
+		panic(fmt.Errorf("unsupported uniform type: %v", field))
+	}
 }
 
 func wgpuBytesPerPixel(format wgpu.TextureFormat) uint {
