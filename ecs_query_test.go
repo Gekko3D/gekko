@@ -23,7 +23,7 @@ func TestQuery_Map(t *testing.T) {
 	expectedComponentsB := []Comp2{{b: 1.37}, {b: 4.20}}
 	numResults := 0
 
-	query.Map2(func(entityId EntityId, comp1 *Comp1, comp2 *Comp2) bool {
+	query.Map(func(entityId EntityId, comp1 *Comp1, comp2 *Comp2) bool {
 		if entityId != expectedEntityIds[numResults] {
 			t.Errorf("Unexpected EntityId for row %v, expected %v got %v", numResults, expectedEntityIds[numResults], entityId)
 		}

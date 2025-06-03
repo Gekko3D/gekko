@@ -1,13 +1,7 @@
 package gekko
 
 import (
-	"bytes"
-	"encoding/binary"
-	"fmt"
-	"reflect"
 	"runtime"
-	"strconv"
-	"unsafe"
 
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/cogentcore/webgpu/wgpuglfw"
@@ -50,6 +44,18 @@ type wgpuTexture struct {
 	group       uint32
 	binding     uint32
 	textureView *wgpu.TextureView
+}
+
+type wgpuSampler struct {
+	version uint
+	id      AssetId
+	group   uint32
+	binding uint32
+	sampler *wgpu.Sampler
+}
+
+type wgpuSamplerSet struct {
+	samplers map[AssetId]wgpuSampler
 }
 
 type wgpuBindGroupSet struct {
@@ -230,7 +236,7 @@ func (mod ClientModule) Install(app *App, cmd *Commands) {
 }
 
 func loadMaterials(cmd *Commands, assets *AssetServer, s *gpuState) {
-	MakeQuery2[Material, wgpuMaterial](cmd).Map2(
+	MakeQuery2[Material, wgpuMaterial](cmd).Map(
 		func(entityId EntityId, material *Material, gpuMaterial *wgpuMaterial) bool {
 			materialAsset := assets.materials[material.assetId]
 			pipeline, contains := s.materialPipelines[material.assetId]
@@ -300,58 +306,8 @@ func createRenderPipeline(material MaterialAsset, device *wgpu.Device, config *w
 	return pipeline
 }
 
-func createVertexBufferLayout(vertexType any) wgpu.VertexBufferLayout {
-	t := reflect.TypeOf(vertexType)
-	if t.Kind() != reflect.Struct {
-		panic("Vertex must be a struct")
-	}
-
-	var attributes []wgpu.VertexAttribute
-	var offset uint64 = 0
-
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-
-		if "layout" == field.Tag.Get("gekko") {
-			format := parseFormat(field.Tag.Get("format"))
-			location, err := strconv.Atoi(field.Tag.Get("location"))
-			if nil != err {
-				panic(err)
-			}
-
-			attributes = append(attributes, wgpu.VertexAttribute{
-				ShaderLocation: uint32(location),
-				Offset:         offset,
-				Format:         format,
-			})
-		}
-
-		// Add size of field to offset
-		offset += uint64(field.Type.Size())
-	}
-
-	return wgpu.VertexBufferLayout{
-		ArrayStride: offset,
-		StepMode:    wgpu.VertexStepModeVertex,
-		Attributes:  attributes,
-	}
-}
-
-func parseFormat(name string) wgpu.VertexFormat {
-	switch name {
-	case "float2":
-		return wgpu.VertexFormatFloat32x2
-	case "float3":
-		return wgpu.VertexFormatFloat32x3
-	case "float4":
-		return wgpu.VertexFormatFloat32x4
-	default:
-		panic("unsupported vertex layout format: " + name)
-	}
-}
-
 func loadMeshes(cmd *Commands, assets *AssetServer, s *gpuState) {
-	MakeQuery2[Mesh, wgpuMesh](cmd).Map2(
+	MakeQuery2[Mesh, wgpuMesh](cmd).Map(
 		func(entityId EntityId, mesh *Mesh, gpuMesh *wgpuMesh) bool {
 			meshAsset := assets.meshes[mesh.assetId]
 			if nil == gpuMesh {
@@ -392,17 +348,9 @@ func createVertexIndexBuffers(mesh MeshAsset, device *wgpu.Device) (vertexBuf *w
 	return vertexBuf, indexBuf
 }
 
-func untypedSliceToWgpuBytes(src AnySlice) []byte {
-	l := src.Len()
-	if l == 0 {
-		return nil
-	}
-	return unsafe.Slice((*byte)(src.DataPointer()), l*src.ElementSize())
-}
-
 func loadTextures(cmd *Commands, assets *AssetServer, s *gpuState) {
-	MakeQuery1[wgpuTextureSet](cmd).Map1(
-		func(entityId EntityId, gpuTextureSet *wgpuTextureSet) bool {
+	MakeQuery2[wgpuTextureSet, wgpuSamplerSet](cmd).Map(
+		func(entityId EntityId, gpuTextureSet *wgpuTextureSet, gpuSamplerSet *wgpuSamplerSet) bool {
 			descriptors := findTextureDescriptors(entityId, cmd, assets)
 			if nil == gpuTextureSet {
 				txs := map[AssetId]wgpuTexture{}
@@ -425,49 +373,50 @@ func loadTextures(cmd *Commands, assets *AssetServer, s *gpuState) {
 				// TODO implement
 			}
 
+			if nil == gpuSamplerSet {
+				samplers := map[AssetId]wgpuSampler{}
+				for _, samplerDesc := range tryFindSamplers(cmd, entityId) {
+					wrap := wgpuWrapMode(samplerDesc.wrapMode)
+					filter := wgpuFilterMode(samplerDesc.filter)
+					sampler, err := s.device.CreateSampler(&wgpu.SamplerDescriptor{
+						Label:         "",
+						AddressModeU:  wrap,
+						AddressModeV:  wrap,
+						AddressModeW:  wrap,
+						MagFilter:     filter,
+						MinFilter:     filter,
+						MipmapFilter:  wgpu.MipmapFilterModeLinear,
+						LodMinClamp:   0.,
+						LodMaxClamp:   32.,
+						Compare:       wgpu.CompareFunctionUndefined,
+						MaxAnisotropy: 1,
+					})
+					if err != nil {
+						panic(err)
+					}
+
+					samplers[samplerDesc.assetId] = wgpuSampler{
+						version: 0,
+						id:      samplerDesc.assetId,
+						group:   samplerDesc.group,
+						binding: samplerDesc.binding,
+						sampler: sampler,
+					}
+				}
+
+				cmd.AddComponents(entityId, wgpuSamplerSet{
+					samplers: samplers,
+				})
+			} else {
+				// TODO implement sampler update
+				// (not possible currently due to samplers being hardocded in the tags - will change with shader editor tool)
+			}
+
 			return true
 		},
-		wgpuTextureSet{})
-}
-
-func findTextureDescriptors(entityId EntityId, cmd *Commands, assets *AssetServer) map[AssetId]textureDescriptor {
-	descriptors := map[AssetId]textureDescriptor{}
-	assetIdType := reflect.TypeOf(AssetId(""))
-	allComponents := cmd.GetAllComponents(entityId)
-	for _, c := range allComponents {
-		val := reflect.ValueOf(c)
-		if val.Kind() == reflect.Ptr {
-			val = val.Elem()
-		}
-		t := val.Type()
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if "texture" == field.Tag.Get("gekko") {
-				if field.Type != assetIdType {
-					panic("Texture field must be type of AssetId")
-				}
-				group, err := strconv.Atoi(field.Tag.Get("group"))
-				if nil != err {
-					panic(err)
-				}
-				binding, err := strconv.Atoi(field.Tag.Get("binding"))
-				if nil != err {
-					panic(err)
-				}
-				fieldVal := val.Field(i)
-				assetId := AssetId(fieldVal.String())
-				textureAsset := assets.textures[assetId]
-
-				descriptors[assetId] = textureDescriptor{
-					version:      textureAsset.version,
-					group:        uint32(group),
-					binding:      uint32(binding),
-					textureAsset: &textureAsset,
-				}
-			}
-		}
-	}
-	return descriptors
+		wgpuTextureSet{},
+		wgpuSamplerSet{},
+	)
 }
 
 func loadTexture(txAsset *TextureAsset, s *gpuState) *wgpu.TextureView {
@@ -481,7 +430,7 @@ func loadTexture(txAsset *TextureAsset, s *gpuState) *wgpu.TextureView {
 		MipLevelCount: 1,
 		SampleCount:   1,
 		Dimension:     wgpu.TextureDimension2D,
-		Format:        wgpu.TextureFormatR8Uint,
+		Format:        wgpu.TextureFormat(txAsset.format),
 		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
 	})
 	if err != nil {
@@ -499,7 +448,7 @@ func loadTexture(txAsset *TextureAsset, s *gpuState) *wgpu.TextureView {
 		wgpu.ToBytes(txAsset.texels),
 		&wgpu.TextureDataLayout{
 			Offset:       0,
-			BytesPerRow:  txAsset.height,
+			BytesPerRow:  txAsset.width * uint32(wgpuBytesPerPixel(wgpu.TextureFormat(txAsset.format))),
 			RowsPerImage: wgpu.CopyStrideUndefined,
 		},
 		&textureExtent,
@@ -511,7 +460,7 @@ func loadTexture(txAsset *TextureAsset, s *gpuState) *wgpu.TextureView {
 }
 
 func loadBuffers(cmd *Commands, s *gpuState) {
-	MakeQuery1[wgpuBufferSet](cmd).Map1(
+	MakeQuery1[wgpuBufferSet](cmd).Map(
 		func(entityId EntityId, gpuBufferSet *wgpuBufferSet) bool {
 			descriptors := findBufferDescriptors(entityId, cmd)
 			if nil == gpuBufferSet {
@@ -536,71 +485,6 @@ func loadBuffers(cmd *Commands, s *gpuState) {
 		wgpuBufferSet{})
 }
 
-func findBufferDescriptors(entityId EntityId, cmd *Commands) map[bufferId]bufferDescriptor {
-	descriptors := map[bufferId]bufferDescriptor{}
-	allComponents := cmd.GetAllComponents(entityId)
-	for _, c := range allComponents {
-		val := reflect.ValueOf(c)
-		if val.Kind() == reflect.Ptr {
-			val = val.Elem()
-		}
-		t := val.Type()
-		for i := 0; i < t.NumField(); i++ {
-			fieldDecl := t.Field(i)
-			if "buffer" == fieldDecl.Tag.Get("gekko") {
-				group, err := strconv.Atoi(fieldDecl.Tag.Get("group"))
-				if nil != err {
-					panic(err)
-				}
-				binding, err := strconv.Atoi(fieldDecl.Tag.Get("binding"))
-				if nil != err {
-					panic(err)
-				}
-
-				//TODO un-hardcode
-				//bufferUsages := parseBufferUsages()
-				field := val.Field(i)
-				if field.Kind() == reflect.Ptr {
-					if field.IsNil() {
-						panic("nil ptr")
-					}
-					field = field.Elem()
-				}
-
-				buf := new(bytes.Buffer)
-				switch field.Kind() {
-				case reflect.Slice:
-					for i := 0; i < field.Len(); i++ {
-						elem := field.Index(i)
-						if elem.Kind() == reflect.Ptr {
-							elem = elem.Elem()
-						}
-						if err := binary.Write(buf, binary.LittleEndian, elem.Interface()); err != nil {
-							panic(fmt.Errorf("failed to write slice element: %w", err))
-						}
-					}
-
-				default:
-					if err := binary.Write(buf, binary.LittleEndian, field.Interface()); err != nil {
-						panic(fmt.Errorf("failed to write scalar field: %w", err))
-					}
-				}
-
-				id := bufferId{
-					group:   uint32(group),
-					binding: uint32(binding),
-				}
-				descriptors[id] = bufferDescriptor{
-					group:   uint32(group),
-					binding: uint32(binding),
-					data:    buf.Bytes(),
-				}
-			}
-		}
-	}
-	return descriptors
-}
-
 func loadBuffer(descriptor bufferDescriptor, s *gpuState) *wgpu.Buffer {
 	buffer, err := s.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "Buffer",
@@ -615,8 +499,8 @@ func loadBuffer(descriptor bufferDescriptor, s *gpuState) *wgpu.Buffer {
 }
 
 func loadBindGroups(cmd *Commands, s *gpuState) {
-	MakeQuery4[wgpuMaterial, wgpuTextureSet, wgpuBufferSet, wgpuBindGroupSet](cmd).Map4(
-		func(entityId EntityId, material *wgpuMaterial, txSet *wgpuTextureSet, buffSet *wgpuBufferSet, bindGrSet *wgpuBindGroupSet) bool {
+	MakeQuery5[wgpuMaterial, wgpuTextureSet, wgpuSamplerSet, wgpuBufferSet, wgpuBindGroupSet](cmd).Map(
+		func(entityId EntityId, material *wgpuMaterial, txSet *wgpuTextureSet, samplers *wgpuSamplerSet, buffSet *wgpuBufferSet, bindGrSet *wgpuBindGroupSet) bool {
 			if nil == bindGrSet {
 				groupedBindings := map[uint32][]wgpu.BindGroupEntry{}
 				//buffer bindings
@@ -634,6 +518,7 @@ func loadBindGroups(cmd *Commands, s *gpuState) {
 						groupedBindings[buffDesc.group] = append(bindings, binding)
 					}
 				}
+
 				//texture bindings
 				for _, tx := range txSet.textures {
 					binding := wgpu.BindGroupEntry{
@@ -641,11 +526,26 @@ func loadBindGroups(cmd *Commands, s *gpuState) {
 						TextureView: tx.textureView,
 						Size:        wgpu.WholeSize,
 					}
-					bindings, contains := groupedBindings[tx.group]
-					if !contains {
+
+					if bindings, ok := groupedBindings[tx.group]; !ok {
 						groupedBindings[tx.group] = []wgpu.BindGroupEntry{binding}
 					} else {
 						groupedBindings[tx.group] = append(bindings, binding)
+					}
+				}
+
+				// sampler bindings
+				for _, sampler := range samplers.samplers {
+					binding := wgpu.BindGroupEntry{
+						Binding: sampler.binding,
+						Sampler: sampler.sampler,
+						Size:    wgpu.WholeSize,
+					}
+
+					if bindings, ok := groupedBindings[sampler.group]; !ok {
+						groupedBindings[sampler.group] = []wgpu.BindGroupEntry{binding}
+					} else {
+						groupedBindings[sampler.group] = append(bindings, binding)
 					}
 				}
 
@@ -677,7 +577,7 @@ func buildRenderGroups(cmd *Commands, s *gpuState) {
 		materialsMeshes := map[AssetId]map[AssetId]*wgpuMesh{}
 		materialsBuffSets := map[AssetId][]*wgpuBufferSet{}
 		materialsMeshesBindGroups := map[AssetId]map[AssetId][]*wgpuBindGroupSet{}
-		MakeQuery4[wgpuMaterial, wgpuMesh, wgpuBufferSet, wgpuBindGroupSet](cmd).Map4(
+		MakeQuery4[wgpuMaterial, wgpuMesh, wgpuBufferSet, wgpuBindGroupSet](cmd).Map(
 			func(entityId EntityId, material *wgpuMaterial, mesh *wgpuMesh, buffSet *wgpuBufferSet, groupSet *wgpuBindGroupSet) bool {
 				materials[material.id] = material
 				matMeshes, contains := materialsMeshes[material.id]
