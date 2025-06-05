@@ -306,7 +306,9 @@ func wgpuBytesPerPixel(format wgpu.TextureFormat) uint {
 	switch format {
 	// the below is 1 byte per pixel
 	case wgpu.TextureFormatR8Unorm:
+		return 1
 	case wgpu.TextureFormatR8Snorm:
+		return 1
 	case wgpu.TextureFormatR8Uint:
 		return 1
 	case wgpu.TextureFormatR8Sint:
@@ -314,11 +316,17 @@ func wgpuBytesPerPixel(format wgpu.TextureFormat) uint {
 
 		// the below is 2 bytes per pixel
 	case wgpu.TextureFormatR16Uint:
+		return 2
 	case wgpu.TextureFormatR16Sint:
+		return 2
 	case wgpu.TextureFormatR16Float:
+		return 2
 	case wgpu.TextureFormatRG8Unorm:
+		return 2
 	case wgpu.TextureFormatRG8Snorm:
+		return 2
 	case wgpu.TextureFormatRG8Uint:
+		return 2
 	case wgpu.TextureFormatRG8Sint:
 		return 2
 
