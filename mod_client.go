@@ -423,13 +423,13 @@ func loadTexture(txAsset *TextureAsset, s *gpuState) *wgpu.TextureView {
 	textureExtent := wgpu.Extent3D{
 		Width:              txAsset.width,
 		Height:             txAsset.height,
-		DepthOrArrayLayers: 1,
+		DepthOrArrayLayers: txAsset.depth,
 	}
 	texture, err := s.device.CreateTexture(&wgpu.TextureDescriptor{
 		Size:          textureExtent,
 		MipLevelCount: 1,
 		SampleCount:   1,
-		Dimension:     wgpu.TextureDimension2D,
+		Dimension:     wgpu.TextureDimension(txAsset.dimension),
 		Format:        wgpu.TextureFormat(txAsset.format),
 		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
 	})
@@ -449,7 +449,7 @@ func loadTexture(txAsset *TextureAsset, s *gpuState) *wgpu.TextureView {
 		&wgpu.TextureDataLayout{
 			Offset:       0,
 			BytesPerRow:  txAsset.width * uint32(wgpuBytesPerPixel(wgpu.TextureFormat(txAsset.format))),
-			RowsPerImage: wgpu.CopyStrideUndefined,
+			RowsPerImage: txAsset.height,
 		},
 		&textureExtent,
 	)
