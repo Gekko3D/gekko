@@ -14,8 +14,18 @@ type TextureFormat uint32
 
 const (
 	TextureFormatR8Uint     TextureFormat = 0x00000003
+	TextureFormatR8Unorm    TextureFormat = 0x00000001
 	TextureFormatRGBA8Unorm TextureFormat = 0x00000012
 	TextureFormatRGBA8Uint  TextureFormat = 0x00000015
+	TextureFormatR16Float   TextureFormat = 0x00000007
+)
+
+type TextureDimension uint32
+
+const (
+	TextureDimension1D TextureDimension = 0x00000000
+	TextureDimension2D TextureDimension = 0x00000001
+	TextureDimension3D TextureDimension = 0x00000002
 )
 
 type AssetServer struct {
@@ -49,11 +59,13 @@ type MaterialAsset struct {
 }
 
 type TextureAsset struct {
-	version uint
-	texels  []uint8
-	width   uint32
-	height  uint32
-	format  TextureFormat
+	version   uint
+	texels    []uint8
+	width     uint32
+	height    uint32
+	depth     uint32
+	dimension TextureDimension
+	format    TextureFormat
 }
 
 type SamplerAsset struct {
@@ -95,15 +107,17 @@ func (server AssetServer) LoadMaterial(filename string, vertexType any) Material
 	}
 }
 
-func (server AssetServer) CreateTexture(texels []uint8, texWidth uint32, texHeight uint32, format TextureFormat) AssetId {
+func (server AssetServer) CreateTexture(texels []uint8, texWidth uint32, texHeight uint32, texDepth uint32, dimension TextureDimension, format TextureFormat) AssetId {
 	id := makeAssetId()
 
 	server.textures[id] = TextureAsset{
-		version: 0,
-		texels:  texels,
-		width:   texWidth,
-		height:  texHeight,
-		format:  format,
+		version:   0,
+		texels:    texels,
+		width:     texWidth,
+		height:    texHeight,
+		depth:     texDepth,
+		dimension: dimension,
+		format:    format,
 	}
 
 	return id
@@ -139,14 +153,34 @@ func (server AssetServer) LoadTexture(filename string) AssetId {
 	}
 
 	server.textures[id] = TextureAsset{
-		version: 0,
-		texels:  rgbaImg.Pix,
-		width:   uint32(bounds.Max.X - bounds.Min.X),
-		height:  uint32(bounds.Max.Y - bounds.Min.Y),
-		format:  TextureFormatRGBA8Unorm,
+		version:   0,
+		texels:    rgbaImg.Pix,
+		width:     uint32(bounds.Max.X - bounds.Min.X),
+		height:    uint32(bounds.Max.Y - bounds.Min.Y),
+		depth:     1,
+		dimension: TextureDimension2D,
+		format:    TextureFormatRGBA8Unorm,
 	}
 
 	return id
+}
+
+func createVolumeTexels(voxModel *VoxModel, palette *VoxPalette) []uint8 {
+	volume := make([]uint8, voxModel.SizeX*voxModel.SizeY*voxModel.SizeZ*4)
+	for _, v := range voxModel.Voxels {
+		idx := (int32(v.Z)*int32(voxModel.SizeY*voxModel.SizeX) + int32(v.Y)*int32(voxModel.SizeX) + int32(v.X)) * 4
+		color := palette[v.ColorIndex]
+		volume[idx+0] = color[0]
+		volume[idx+1] = color[1]
+		volume[idx+2] = color[2]
+		volume[idx+3] = 255
+	}
+	return volume
+}
+
+func (server AssetServer) LoadVoxelBasedTexture(voxModel *VoxModel, palette *VoxPalette) AssetId {
+	volumeTexels := createVolumeTexels(voxModel, palette)
+	return server.CreateTexture(volumeTexels[:], uint32(voxModel.SizeX), uint32(voxModel.SizeY), uint32(voxModel.SizeZ), TextureDimension3D, TextureFormatRGBA8Unorm)
 }
 
 func (server AssetServer) CreateSampler() AssetId {
