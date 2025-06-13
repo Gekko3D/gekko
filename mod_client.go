@@ -93,6 +93,7 @@ type bufferDescriptor struct {
 	//bufferUsages        []wgpu.BufferUsage
 	group   uint32
 	binding uint32
+	usage   wgpu.BufferUsage
 	data    []byte
 }
 
@@ -489,8 +490,7 @@ func loadBuffer(descriptor bufferDescriptor, s *gpuState) *wgpu.Buffer {
 	buffer, err := s.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "Buffer",
 		Contents: descriptor.data,
-		//TODO use from descriptor
-		Usage: wgpu.BufferUsageUniform | wgpu.BufferUsageCopyDst,
+		Usage:    descriptor.usage,
 	})
 	if err != nil {
 		panic(err)

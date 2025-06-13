@@ -234,7 +234,7 @@ func findBufferDescriptors(entityId EntityId, cmd *Commands) map[bufferId]buffer
 		t := val.Type()
 		for i := 0; i < t.NumField(); i++ {
 			fieldDecl := t.Field(i)
-			if "uniforms" == fieldDecl.Tag.Get("gekko") {
+			if "buffer" == fieldDecl.Tag.Get("gekko") {
 				group, err := strconv.Atoi(fieldDecl.Tag.Get("group"))
 				if nil != err {
 					panic(err)
@@ -243,9 +243,8 @@ func findBufferDescriptors(entityId EntityId, cmd *Commands) map[bufferId]buffer
 				if nil != err {
 					panic(err)
 				}
+				bufferUsages := parseBufferUsages(fieldDecl.Tag.Get("usage"))
 
-				//TODO un-hardcode
-				//bufferUsages := parseBufferUsages()
 				field := val.Field(i)
 				if field.Kind() == reflect.Ptr {
 					if field.IsNil() {
@@ -264,12 +263,40 @@ func findBufferDescriptors(entityId EntityId, cmd *Commands) map[bufferId]buffer
 				descriptors[id] = bufferDescriptor{
 					group:   uint32(group),
 					binding: uint32(binding),
+					usage:   bufferUsages,
 					data:    buf.Bytes(),
 				}
 			}
 		}
 	}
 	return descriptors
+}
+
+func parseBufferUsages(usages string) wgpu.BufferUsage {
+	usageMap := map[string]wgpu.BufferUsage{
+		"mapread":    wgpu.BufferUsageMapRead,
+		"mapwrite":   wgpu.BufferUsageMapWrite,
+		"copy_src":   wgpu.BufferUsageCopySrc,
+		"copy_dst":   wgpu.BufferUsageCopyDst,
+		"index":      wgpu.BufferUsageIndex,
+		"vertex":     wgpu.BufferUsageVertex,
+		"uniform":    wgpu.BufferUsageUniform,
+		"storage":    wgpu.BufferUsageStorage,
+		"indirect":   wgpu.BufferUsageIndirect,
+		"queryreset": wgpu.BufferUsageQueryResolve,
+	}
+
+	var result wgpu.BufferUsage
+	parts := strings.Split(strings.ToLower(usages), ",")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if usage, ok := usageMap[part]; ok {
+			result |= usage
+		}
+	}
+
+	return result
 }
 
 func readUniformsBytes(field reflect.Value, buf *bytes.Buffer) {
@@ -280,8 +307,12 @@ func readUniformsBytes(field reflect.Value, buf *bytes.Buffer) {
 			if elem.Kind() == reflect.Ptr {
 				elem = elem.Elem()
 			}
-			if err := binary.Write(buf, binary.LittleEndian, elem.Interface()); err != nil {
-				panic(fmt.Errorf("failed to write slice element: %w", err))
+			if elem.Kind() == reflect.Struct {
+				readUniformsBytes(elem, buf)
+			} else {
+				if err := binary.Write(buf, binary.LittleEndian, elem.Interface()); err != nil {
+					panic(fmt.Errorf("failed to write slice element: %w", err))
+				}
 			}
 		}
 
