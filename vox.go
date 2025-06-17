@@ -146,7 +146,20 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 		}
 	}
 
+	printDebugInfo(voxFile)
+
 	return voxFile, nil
+}
+
+func printDebugInfo(voxFile *VoxFile) {
+	fmt.Printf("VOX File Version: %d\n", voxFile.Version)
+	fmt.Printf("Number of Models: %d\n", len(voxFile.Models))
+
+	if len(voxFile.Models) > 0 {
+		model := voxFile.Models[0]
+		fmt.Printf("First Model Size: %dx%dx%d\n", model.SizeX, model.SizeY, model.SizeZ)
+		fmt.Printf("Number of Voxels: %d\n", len(model.Voxels))
+	}
 }
 
 func parseMaterial(data []byte) (VoxMaterial, error) {

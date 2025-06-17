@@ -29,10 +29,12 @@ const (
 )
 
 type AssetServer struct {
-	meshes    map[AssetId]MeshAsset
-	materials map[AssetId]MaterialAsset
-	textures  map[AssetId]TextureAsset
-	samplers  map[AssetId]SamplerAsset
+	meshes      map[AssetId]MeshAsset
+	materials   map[AssetId]MaterialAsset
+	textures    map[AssetId]TextureAsset
+	samplers    map[AssetId]SamplerAsset
+	voxModels   map[AssetId]VoxelModelAsset
+	voxPalettes map[AssetId]VoxelPaletteAsset
 }
 
 type AssetServerModule struct{}
@@ -73,7 +75,15 @@ type SamplerAsset struct {
 	assetId AssetId
 }
 
-func (server AssetServer) LoadMesh(vertices AnySlice, indexes []uint16) Mesh {
+type VoxelModelAsset struct {
+	VoxModel VoxModel
+}
+
+type VoxelPaletteAsset struct {
+	VoxPalette VoxPalette
+}
+
+func (server AssetServer) CreateMesh(vertices AnySlice, indexes []uint16) Mesh {
 	id := makeAssetId()
 
 	server.meshes[id] = MeshAsset{
@@ -87,7 +97,7 @@ func (server AssetServer) LoadMesh(vertices AnySlice, indexes []uint16) Mesh {
 	}
 }
 
-func (server AssetServer) LoadMaterial(filename string, vertexType any) Material {
+func (server AssetServer) CreateMaterial(filename string, vertexType any) Material {
 	shaderData, err := os.ReadFile(filename)
 	if err != nil {
 		panic(err)
@@ -107,7 +117,7 @@ func (server AssetServer) LoadMaterial(filename string, vertexType any) Material
 	}
 }
 
-func (server AssetServer) CreateTexture(texels []uint8, texWidth uint32, texHeight uint32, texDepth uint32, dimension TextureDimension, format TextureFormat) AssetId {
+func (server AssetServer) CreateTextureFromTexels(texels []uint8, texWidth uint32, texHeight uint32, texDepth uint32, dimension TextureDimension, format TextureFormat) AssetId {
 	id := makeAssetId()
 
 	server.textures[id] = TextureAsset{
@@ -123,7 +133,7 @@ func (server AssetServer) CreateTexture(texels []uint8, texWidth uint32, texHeig
 	return id
 }
 
-func (server AssetServer) LoadTexture(filename string) AssetId {
+func (server AssetServer) CreateTexture(filename string) AssetId {
 	id := makeAssetId()
 
 	file, err := os.Open(filename)
@@ -178,9 +188,25 @@ func createVolumeTexels(voxModel *VoxModel, palette *VoxPalette) []uint8 {
 	return volume
 }
 
-func (server AssetServer) LoadVoxelBasedTexture(voxModel *VoxModel, palette *VoxPalette) AssetId {
+func (server AssetServer) CreateVoxelBasedTexture(voxModel *VoxModel, palette *VoxPalette) AssetId {
 	volumeTexels := createVolumeTexels(voxModel, palette)
-	return server.CreateTexture(volumeTexels[:], uint32(voxModel.SizeX), uint32(voxModel.SizeY), uint32(voxModel.SizeZ), TextureDimension3D, TextureFormatRGBA8Unorm)
+	return server.CreateTextureFromTexels(volumeTexels[:], voxModel.SizeX, voxModel.SizeY, voxModel.SizeZ, TextureDimension3D, TextureFormatRGBA8Unorm)
+}
+
+func (server AssetServer) CreateVoxelModel(model VoxModel) AssetId {
+	id := makeAssetId()
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: model,
+	}
+	return id
+}
+
+func (server AssetServer) CreateVoxelPalette(palette VoxPalette) AssetId {
+	id := makeAssetId()
+	server.voxPalettes[id] = VoxelPaletteAsset{
+		VoxPalette: palette,
+	}
+	return id
 }
 
 func (server AssetServer) CreateSampler() AssetId {
@@ -196,10 +222,12 @@ func (server AssetServer) CreateSampler() AssetId {
 
 func (AssetServerModule) Install(app *App, cmd *Commands) {
 	app.addResources(&AssetServer{
-		meshes:    make(map[AssetId]MeshAsset),
-		materials: make(map[AssetId]MaterialAsset),
-		textures:  make(map[AssetId]TextureAsset),
-		samplers:  make(map[AssetId]SamplerAsset),
+		meshes:      make(map[AssetId]MeshAsset),
+		materials:   make(map[AssetId]MaterialAsset),
+		textures:    make(map[AssetId]TextureAsset),
+		samplers:    make(map[AssetId]SamplerAsset),
+		voxModels:   make(map[AssetId]VoxelModelAsset),
+		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
 	})
 }
 
