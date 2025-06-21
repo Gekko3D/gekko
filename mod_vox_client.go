@@ -35,6 +35,7 @@ type voxelRenderState struct {
 	voxelPoolUniform   []voxelUniform
 	entityModels       map[EntityId]AssetId
 	paletteIndexes     map[AssetId]uint32
+	isVoxelPoolUpdated bool
 }
 
 type voxelCameraUniform struct {
@@ -49,17 +50,18 @@ type voxelCameraUniform struct {
 type voxelModelUniform struct {
 	ModelMx         mgl32.Mat4
 	InvModelMx      mgl32.Mat4
-	Size            [3]uint32 // Size of the volume in world units
-	Padding1        uint32
-	Resolution      [3]uint32 // Voxel grid resolution (e.g., 256x256x256)
-	Padding2        uint32
-	PaletteIndex    uint32
-	VoxelPoolOffset uint32
-	Padding3        [8]byte
+	Size            mgl32.Vec3 // Size of the volume in world units
+	Padding1        float32
+	Resolution      mgl32.Vec3 // Voxel grid resolution (e.g., 256x256x256)
+	Padding2        float32
+	PaletteIndex    float32
+	Padding3        float32
+	VoxelPoolOffset float32
+	Padding4        float32
 }
 
 type voxelUniform struct {
-	ColorIndex uint32
+	ColorIndex float32
 	Alpha      float32
 }
 
@@ -115,7 +117,7 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 	}
 	screenQuadIndices := []uint16{0, 2, 1, 1, 2, 3}
 
-	shaderData, err := os.ReadFile("D:\\IT\\Golang\\gekko3d\\gekko\\shaders\\raycasting.wgsl")
+	shaderData, err := os.ReadFile("/Users/ddevidch/code/golang/gekko3d/gekko/shaders/raycasting.wgsl")
 	if err != nil {
 		panic(err)
 	}
@@ -161,20 +163,21 @@ func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRender
 						ModelMx:    modelMx,
 						InvModelMx: modelMx.Inv(),
 						//TODO user-defined size
-						Size: [3]uint32{
-							model.VoxModel.SizeX,
-							model.VoxModel.SizeY,
-							model.VoxModel.SizeZ,
+						Size: [3]float32{
+							float32(model.VoxModel.SizeX),
+							float32(model.VoxModel.SizeY),
+							float32(model.VoxModel.SizeZ),
 						},
-						Resolution: [3]uint32{
-							model.VoxModel.SizeX,
-							model.VoxModel.SizeY,
-							model.VoxModel.SizeZ,
+						Resolution: [3]float32{
+							float32(model.VoxModel.SizeX),
+							float32(model.VoxModel.SizeY),
+							float32(model.VoxModel.SizeZ),
 						},
-						PaletteIndex:    pIndex,
-						VoxelPoolOffset: voxelPoolOffset,
+						PaletteIndex:    float32(pIndex),
+						VoxelPoolOffset: float32(voxelPoolOffset),
 					}
 					rState.entityModels[entityId] = voxModelId
+					rState.isVoxelPoolUpdated = true
 				}
 			}
 			return true
@@ -187,7 +190,7 @@ func pushVoxelsIntoPool(model *VoxelModelAsset, rState *voxelRenderState) uint32
 	for _, v := range model.VoxModel.Voxels {
 		idx := offset + getFlatVoxelArrayIndex(&model.VoxModel, uint32(v.X), uint32(v.Y), uint32(v.Z))
 		rState.voxelPoolUniform[idx] = voxelUniform{
-			ColorIndex: uint32(v.ColorIndex),
+			ColorIndex: float32(v.ColorIndex),
 			Alpha:      1.0, //solid by default
 		}
 	}
@@ -227,7 +230,7 @@ func makeVoxelPalette(asset *VoxelPaletteAsset) [256]mgl32.Vec4 {
 // TODO run only once?
 func createBuffers(gpuState *GpuState, rState *voxelRenderState) {
 	//we need to create buffers only once
-	if nil == rState.cameraBuffer && len(rState.modelsUniform) > 0 {
+	if nil == rState.cameraBuffer && len(rState.voxelPoolUniform) > 0 {
 		rState.cameraBuffer = createBuffer("camera", rState.cameraUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageCopyDst)
 		rState.modelsBuffer = createBuffer("models", getMapValues(rState.modelsUniform), gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
 		rState.voxelPoolBuffer = createBuffer("voxelPool", rState.voxelPoolUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
@@ -238,7 +241,7 @@ func createBuffers(gpuState *GpuState, rState *voxelRenderState) {
 // TODO run only once?
 func createBindGroup(gpuState *GpuState, rState *voxelRenderState) {
 	//we need to create bind group only once
-	if nil == rState.voxelBindGroup && nil != rState.modelsBuffer {
+	if nil == rState.voxelBindGroup && nil != rState.voxelPoolBuffer {
 		bindGroupLayout := rState.rayCastPipeline.GetBindGroupLayout(0)
 		defer bindGroupLayout.Release()
 		bindGroup, err := gpuState.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
@@ -275,7 +278,7 @@ func createBindGroup(gpuState *GpuState, rState *voxelRenderState) {
 
 // renders single frame
 func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
-	if len(rs.modelsUniform) == 0 {
+	if len(rs.voxelPoolUniform) == 0 {
 		//nothing to render
 		return
 	}
@@ -308,8 +311,11 @@ func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
 
 	err = gpuState.queue.WriteBuffer(rs.cameraBuffer, 0, toBufferBytes(rs.cameraUniform))
 	err = gpuState.queue.WriteBuffer(rs.modelsBuffer, 0, toBufferBytes(getMapValues(rs.modelsUniform)))
-	err = gpuState.queue.WriteBuffer(rs.voxelPoolBuffer, 0, toBufferBytes(rs.voxelPoolUniform))
-	err = gpuState.queue.WriteBuffer(rs.palettesBuffer, 0, toBufferBytes(rs.palettesUniform))
+	if rs.isVoxelPoolUpdated {
+		err = gpuState.queue.WriteBuffer(rs.voxelPoolBuffer, 0, toBufferBytes(rs.voxelPoolUniform))
+		err = gpuState.queue.WriteBuffer(rs.palettesBuffer, 0, toBufferBytes(rs.palettesUniform))
+		rs.isVoxelPoolUpdated = false
+	}
 	if err != nil {
 		panic(err)
 	}

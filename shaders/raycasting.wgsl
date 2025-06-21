@@ -11,24 +11,30 @@ struct Camera {
     height: f32,
 };
 
-struct VoxModel {
+struct VoxelModel {
     modelMatrix: mat4x4f,
     invModelMatrix: mat4x4f,
-    size: vec3u,          // Size of the volume in world units
-    resolution: vec3u,    // Voxel grid resolution (e.g., 256x256x256)
-    paletteIndex: u32,
-    voxelPoolOffset: u32,
+    size: vec3f,          // Size of the volume in world units
+    resolution: vec3f,    // Voxel grid resolution (e.g., 256x256x256)
+    paletteIndex: f32,
+    voxelPoolOffset: f32,
 };
 
 struct Voxel {
-    colorIndex: u32,
+    colorIndex: f32,
     alpha: f32,
 };
+
+struct AabbRayHit {
+    isHit: bool,
+    tMin: f32,
+    tMax: f32,
+}
 
 @group(0) @binding(0)
 var<uniform> camera: Camera;
 @group(0) @binding(1)
-var<storage> voxelModels: array<VoxModel>;
+var<storage> voxelModels: array<VoxelModel>;
 @group(0) @binding(2)
 var<storage, read> voxelPool: array<Voxel>;
 @group(0) @binding(3)
@@ -57,50 +63,65 @@ fn fs_main(vertex: VertexOutput) -> @location(0) vec4f {
     // Transform ray to world space
     let rayWorld  = normalize(world.xyz - camera.position);
 
+    let numOfModels = arrayLength(&voxelModels);
+
+    // First pass: Find all intersecting volumes and their tMin distances
+    var intersectingVoxModels: array<u32, 32>; // Adjust size as needed
+    var voxModelCount = 0u;
+    var voxModelDistances: array<f32, 32>;
+
+    // Find all intersecting volumes
+    for (var i = 0u; i < numOfModels; i++) {
+        let voxelModel = voxelModels[i];
+        let rayOrigin = (voxelModel.invModelMatrix * vec4f(camera.position, 1.0)).xyz;
+        let rayDir = normalize((voxelModel.invModelMatrix * vec4f(rayWorld, 0.0)).xyz);
+
+        // AABB intersection test
+        let rayHit = aabbRayIntersection(rayOrigin, rayDir, voxelModel);
+
+        if (rayHit.isHit) {
+            // Store volume index and distance
+            intersectingVoxModels[voxModelCount] = i;
+            voxModelDistances[voxModelCount] = rayHit.tMin;
+            voxModelCount++;
+        }
+    }
+
+    // Sort volumes by distance (back to front)
+    for (var i = 0u; i < voxModelCount; i++) {
+        for (var j = i + 1u; j < voxModelCount; j++) {
+            if (voxModelDistances[i] > voxModelDistances[j]) {
+                // Swap distances
+                let tempDist = voxModelDistances[i];
+                voxModelDistances[i] = voxModelDistances[j];
+                voxModelDistances[j] = tempDist;
+
+                // Swap volume indices
+                let tempVol = intersectingVoxModels[i];
+                intersectingVoxModels[i] = intersectingVoxModels[j];
+                intersectingVoxModels[j] = tempVol;
+            }
+        }
+    }
+
     var finalColor = vec4f(0.0);
     var accumulatedAlpha = 0.0;
-
-    let numOfModels = arrayLength(&voxelModels);
     // Process each volume instance
-    for (var volumeIndex = 0u; volumeIndex < numOfModels; volumeIndex++) {
+    for (var i = 0u; i < voxModelCount; i++) {
         if (accumulatedAlpha >= 0.99) {
             break;
         }
 
-        let volume = voxelModels[volumeIndex];
-        let rayOrigin = (volume.invModelMatrix * vec4f(camera.position, 1.0)).xyz;
-        let rayDir = normalize((volume.invModelMatrix * vec4f(rayWorld, 0.0)).xyz);
+        let voxelModel = voxelModels[intersectingVoxModels[i]];
+        let rayOrigin = (voxelModel.invModelMatrix * vec4f(camera.position, 1.0)).xyz;
+        let rayDir = normalize((voxelModel.invModelMatrix * vec4f(rayWorld, 0.0)).xyz);
 
         // AABB intersection
-        let aabbMin = vec3f(0.0);
-        let aabbMax = vec3f(volume.size);
-        var tMin: f32 = 0.0;
-        var tMax: f32 = 1000.0;
-
-        for (var i = 0; i < 3; i++) {
-            if (abs(rayDir[i]) < 0.0001) {
-                if (rayOrigin[i] < aabbMin[i] || rayOrigin[i] > aabbMax[i]) {
-                    continue;
-                }
-            } else {
-                let invDir = 1.0 / rayDir[i];
-                var t1 = (aabbMin[i] - rayOrigin[i]) * invDir;
-                var t2 = (aabbMax[i] - rayOrigin[i]) * invDir;
-
-                if (t1 > t2) { let temp = t1; t1 = t2; t2 = temp; }
-
-                tMin = max(tMin, t1);
-                tMax = min(tMax, t2);
-
-                if (tMin > tMax) {
-                    continue;
-                }
-            }
-        }
+        let rayHit = aabbRayIntersection(rayOrigin, rayDir, voxelModel);
 
         // DDA setup
-        var rayPos = rayOrigin + rayDir * tMin;
-        let voxelSize = vec3f(volume.size) / vec3f(volume.resolution);
+        var rayPos = rayOrigin + rayDir * rayHit.tMin;
+        let voxelSize = voxelModel.size / voxelModel.resolution;
         var voxel = vec3i(floor(rayPos / voxelSize));
         let step = vec3i(sign(rayDir));
         let delta = voxelSize / abs(rayDir);
@@ -109,22 +130,19 @@ fn fs_main(vertex: VertexOutput) -> @location(0) vec4f {
         var tMaxXYZ = (next - rayPos) / rayDir;
 
         // Volume-specific traversal
-        var t = tMin;
-        while (accumulatedAlpha < 0.99 && t < tMax) {
-            if (all(voxel >= vec3i(0)) && all(voxel < vec3i(volume.resolution))) {
+        var t = rayHit.tMin;
+        while (accumulatedAlpha < 0.99 && t < rayHit.tMax) {
+            if (all(voxel >= vec3i(0)) && all(voxel < vec3i(voxelModel.resolution))) {
                 // Calculate buffer index with volume offset
-                let voxelIndex = volume.voxelPoolOffset +
-                                 u32(voxel.x + voxel.y * i32(volume.resolution.x) +
-                                     voxel.z * i32(volume.resolution.x) * i32(volume.resolution.y));
-
+                let voxelIndex = getVoxelPoolIndex(voxelModel, voxel);
                 let voxelData = voxelPool[voxelIndex];
 
                 if (voxelData.alpha > 0.0) {
                     // Get color from palette
-                    let baseColor = voxPalettes[volume.paletteIndex][voxelData.colorIndex];
+                    let baseColor = voxPalettes[u32(voxelModel.paletteIndex)][u32(voxelData.colorIndex)];
 
                     // Compute normal and shade
-                    let normal = computeNormal(voxel, vec3i(volume.resolution), volume.voxelPoolOffset);
+                    let normal = computeNormal(voxel, vec3i(voxelModel.resolution), u32(voxelModel.voxelPoolOffset));
                     var shadedColor = shadeVoxel(baseColor, normal, rayDir);
                     shadedColor.a *= voxelData.alpha;
 
@@ -156,6 +174,55 @@ fn fs_main(vertex: VertexOutput) -> @location(0) vec4f {
     }
 
     return vec4f(finalColor.rgb, accumulatedAlpha);
+}
+
+fn aabbRayIntersection(rayOrigin: vec3f, rayDir: vec3f, voxelModel: VoxelModel) -> AabbRayHit {
+    // AABB is from (0,0,0) to volume.size in model space
+    let aabbMin = vec3f(0.0);
+    let aabbMax = voxelModel.size;
+
+    // Compute intersection with volume AABB (slab method)
+    var hit: AabbRayHit;
+    hit.isHit = false;
+    hit.tMin = 0.0;
+    hit.tMax = 1000.0; // Large value for far plane
+
+    for (var i = 0; i < 3; i++) {
+        if (abs(rayDir[i]) < 0.0001) {
+            // Ray is parallel to slab
+            if (rayOrigin[i] < aabbMin[i] || rayOrigin[i] > aabbMax[i]) {
+                // No intersection
+                break;
+            }
+        } else {
+            let invDir = 1.0 / rayDir[i];
+            var t1 = (aabbMin[i] - rayOrigin[i]) * invDir;
+            var t2 = (aabbMax[i] - rayOrigin[i]) * invDir;
+
+            if (t1 > t2) {
+                let temp = t1;
+                t1 = t2;
+                t2 = temp;
+            }
+
+            hit.tMin = max(hit.tMin, t1);
+            hit.tMax = min(hit.tMax, t2);
+
+            if (hit.tMin > hit.tMax) {
+                // No intersection
+                break;
+            } else {
+                hit.isHit = true;
+            }
+        }
+    }
+    return hit;
+}
+
+fn getVoxelPoolIndex(voxelModel: VoxelModel, voxel: vec3i) -> u32 {
+    return u32(voxelModel.voxelPoolOffset) +
+            u32(voxel.x + voxel.y * i32(voxelModel.resolution.x) +
+                voxel.z * i32(voxelModel.resolution.x) * i32(voxelModel.resolution.y));
 }
 
 fn computeNormal(voxel: vec3i, resolution: vec3i, voxelPoolOffset: u32) -> vec3f {
