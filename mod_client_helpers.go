@@ -12,43 +12,6 @@ import (
 	"github.com/cogentcore/webgpu/wgpu"
 )
 
-func createVertexBufferLayout(vertexType any) wgpu.VertexBufferLayout {
-	t := reflect.TypeOf(vertexType)
-	if t.Kind() != reflect.Struct {
-		panic("Vertex must be a struct")
-	}
-
-	var attributes []wgpu.VertexAttribute
-	var offset uint64 = 0
-
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-
-		if "layout" == field.Tag.Get("gekko") {
-			format := parseFormat(field.Tag.Get("format"))
-			location, err := strconv.Atoi(field.Tag.Get("location"))
-			if nil != err {
-				panic(err)
-			}
-
-			attributes = append(attributes, wgpu.VertexAttribute{
-				ShaderLocation: uint32(location),
-				Offset:         offset,
-				Format:         format,
-			})
-		}
-
-		// Add size of field to offset
-		offset += uint64(field.Type.Size())
-	}
-
-	return wgpu.VertexBufferLayout{
-		ArrayStride: offset,
-		StepMode:    wgpu.VertexStepModeVertex,
-		Attributes:  attributes,
-	}
-}
-
 func parseFormat(name string) wgpu.VertexFormat {
 	switch name {
 	case "float2":
@@ -220,6 +183,41 @@ func tryParseSamplerTags(comp any) (ok bool, assetId AssetId, group uint32, bind
 	}
 	ok = false
 	return
+}
+
+func findVoxelModelAsset(entityId EntityId, cmd *Commands, server *AssetServer) (voxModel *VoxelModelAsset, paletteId AssetId, palette *VoxelPaletteAsset) {
+	assetIdType := reflect.TypeOf(AssetId(""))
+	allComponents := cmd.GetAllComponents(entityId)
+	for _, c := range allComponents {
+		val := reflect.ValueOf(c)
+		if val.Kind() == reflect.Ptr {
+			val = val.Elem()
+		}
+		t := val.Type()
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			if "voxel" == field.Tag.Get("gekko") {
+				if field.Type != assetIdType {
+					panic("Voxel field must be type of AssetId")
+				}
+				fieldVal := val.Field(i)
+				assetId := AssetId(fieldVal.String())
+				if "model" == field.Tag.Get("usage") {
+					model, ok := server.voxModels[assetId]
+					if ok {
+						voxModel = &model
+					}
+				} else if "palette" == field.Tag.Get("usage") {
+					p, ok := server.voxPalettes[assetId]
+					if ok {
+						palette = &p
+						paletteId = assetId
+					}
+				}
+			}
+		}
+	}
+	return voxModel, paletteId, palette
 }
 
 func findBufferDescriptors(entityId EntityId, cmd *Commands) map[bufferId]bufferDescriptor {
