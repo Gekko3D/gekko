@@ -76,7 +76,8 @@ type SamplerAsset struct {
 }
 
 type VoxelModelAsset struct {
-	VoxModel VoxModel
+	VoxModel  VoxModel
+	BrickSize [3]uint32
 }
 
 type VoxelPaletteAsset struct {
@@ -197,6 +198,8 @@ func (server AssetServer) CreateVoxelModel(model VoxModel) AssetId {
 	id := makeAssetId()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: model,
+		//TODO calculate brick size based on model
+		BrickSize: [3]uint32{8, 8, 8},
 	}
 	return id
 }
