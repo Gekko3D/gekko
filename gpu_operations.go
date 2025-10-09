@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"bytes"
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/cogentcore/webgpu/wgpuglfw"
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -224,13 +223,6 @@ func createBuffer(name string, data any, gpuState *GpuState, usage wgpu.BufferUs
 		panic(err)
 	}
 	return buffer
-}
-
-func toBufferBytes(data any) []byte {
-	val := reflect.ValueOf(data)
-	buf := new(bytes.Buffer)
-	readUniformsBytes(val, buf)
-	return buf.Bytes()
 }
 
 func createVertexBufferLayout(vertexType any) wgpu.VertexBufferLayout {

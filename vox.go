@@ -17,7 +17,7 @@ type Voxel struct {
 }
 
 type VoxModel struct {
-	SizeX, SizeY, SizeZ uint32 // Changed from byte to uint32
+	SizeX, SizeY, SizeZ uint32
 	Voxels              []Voxel
 }
 

@@ -297,6 +297,13 @@ func parseBufferUsages(usages string) wgpu.BufferUsage {
 	return result
 }
 
+func toBufferBytes(data any) []byte {
+	val := reflect.ValueOf(data)
+	buf := new(bytes.Buffer)
+	readUniformsBytes(val, buf)
+	return buf.Bytes()
+}
+
 func readUniformsBytes(field reflect.Value, buf *bytes.Buffer) {
 	switch field.Kind() {
 	case reflect.Slice, reflect.Array:

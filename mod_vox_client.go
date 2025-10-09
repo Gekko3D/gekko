@@ -1,10 +1,15 @@
 package gekko
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/go-gl/mathgl/mgl32"
-	"os"
 )
+
+const EmptyBrickValue uint32 = 0xFFFFFFFF
+const DirectColorFlag uint32 = 0x80000000
 
 type VoxelModule struct {
 	WindowWidth  int
@@ -18,8 +23,9 @@ type sqVertex struct {
 }
 
 type renderParametersUniform struct {
-	WindowWidth  uint32
-	WindowHeight uint32
+	WindowWidth     uint32
+	WindowHeight    uint32
+	EmptyBlockValue uint32
 }
 
 type voxelCameraUniform struct {
@@ -33,11 +39,22 @@ type transformsUniform struct {
 	InvModelMx mgl32.Mat4
 }
 
-type voxelModelUniform struct {
-	Size            mgl32.Vec4
-	PaletteId       uint32
-	VoxelPoolOffset uint32
-	Padding         [8]byte
+type voxelInstanceUniform struct {
+	Size      [3]uint32 // Size in voxels
+	PaletteId uint32
+	MacroGrid macroGridUniform
+}
+
+type macroGridUniform struct {
+	Size       [3]uint32 // Dimensions in macro blocks
+	Pad0       uint32    // Align to 16 bytes for next vec3u
+	BrickSize  [3]uint32 // Voxels per brick (e.g., 8,8,8)
+	DataOffset uint32    // Offset in macroIndex
+}
+
+type brickUniform struct {
+	Position   [3]uint32 // Position in macro grid
+	DataOffset uint32    // Offset in voxel pool
 }
 
 type voxelUniform struct {
@@ -56,16 +73,20 @@ type voxelRenderState struct {
 	renderParametersBuffer  *wgpu.Buffer
 	cameraBuffer            *wgpu.Buffer
 	transformsBuffer        *wgpu.Buffer
-	voxelModelsBuffer       *wgpu.Buffer
+	voxelInstancesBuffer    *wgpu.Buffer
+	macroIndexPoolBuffer    *wgpu.Buffer
+	brickPoolBuffer         *wgpu.Buffer
 	voxelPoolBuffer         *wgpu.Buffer
 	palettesBuffer          *wgpu.Buffer
 	renderParametersUniform renderParametersUniform
 	cameraUniform           voxelCameraUniform
-	transformsUniforms      []transformsUniform //per vox-model transforms
-	voxelModelsUniform      []voxelModelUniform
+	transformsUniforms      []transformsUniform //per vox-instance transforms
+	voxelInstancesUniform   []voxelInstanceUniform
+	macroIndexPoolUniform   []uint32 // 3D grid of brick indices
+	brickPoolUniform        []brickUniform
 	voxelPoolUniform        []voxelUniform
 	palettesUniform         [][256]mgl32.Vec4
-	entityVoxModelIds       map[EntityId]int   //entity -> vox-model id
+	entityVoxInstanceIds    map[EntityId]int   //entity -> vox-model id
 	paletteIds              map[AssetId]uint32 //palette-asset -> palette id
 	isVoxelPoolUpdated      bool
 }
@@ -122,7 +143,7 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 	}
 	screenQuadIndices := []uint16{0, 2, 1, 1, 2, 3}
 
-	shaderData, err := os.ReadFile("/Users/ddevidch/code/golang/gekko3d/gekko/shaders/raycasting.wgsl")
+	shaderData, err := os.ReadFile("D:\\IT\\Golang\\gekko3d\\gekko\\shaders\\raycasting.wgsl")
 	if err != nil {
 		panic(err)
 	}
@@ -145,12 +166,13 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 		vertexCount:        uint32(len(screenQuadIndices)),
 		rayCastPipeline:    rayCastPipeline,
 		renderParametersUniform: renderParametersUniform{
-			WindowWidth:  uint32(windowState.WindowWidth),
-			WindowHeight: uint32(windowState.WindowHeight),
+			WindowWidth:     uint32(windowState.WindowWidth),
+			WindowHeight:    uint32(windowState.WindowHeight),
+			EmptyBlockValue: EmptyBrickValue,
 		},
-		cameraUniform:     cameraUniform,
-		entityVoxModelIds: map[EntityId]int{},
-		paletteIds:        map[AssetId]uint32{},
+		cameraUniform:        cameraUniform,
+		entityVoxInstanceIds: map[EntityId]int{},
+		paletteIds:           map[AssetId]uint32{},
 	}
 }
 
@@ -158,33 +180,34 @@ func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRender
 	//creates model and palette uniforms for new voxel entities
 	MakeQuery1[TransformComponent](cmd).Map(
 		func(entityId EntityId, transform *TransformComponent) bool {
-			if _, ok := rState.entityVoxModelIds[entityId]; !ok {
-				//model is not loaded yet, loading
-				voxAsset, paletteId, paletteAsset := findVoxelModelAsset(entityId, cmd, server)
+			if _, ok := rState.entityVoxInstanceIds[entityId]; !ok {
+				//vox instance is not loaded yet, loading
+				voxAsset, paletteAssetId, paletteAsset := findVoxelModelAsset(entityId, cmd, server)
 				if nil != voxAsset {
-					voxModelId := len(rState.transformsUniforms)
+					//new vox instance goes to the last index
+					voxInstanceId := len(rState.transformsUniforms)
 					modelMx := buildModelMatrix(transform)
 					rState.transformsUniforms = append(rState.transformsUniforms, transformsUniform{
 						ModelMx:    modelMx,
 						InvModelMx: modelMx.Inv(),
 					})
 					//creates or gets palette id
-					pId := createOrGetPaletteIndex(paletteId, paletteAsset, rState)
+					paletteId := createOrGetPaletteIndex(paletteAssetId, paletteAsset, rState)
 					//pushes model voxels into voxels pool
-					voxelPoolOffset := pushVoxelsIntoPool(voxAsset, rState)
-					rState.voxelModelsUniform = append(rState.voxelModelsUniform, voxelModelUniform{
-						Size: mgl32.Vec4{
-							float32(voxAsset.VoxModel.SizeX),
-							float32(voxAsset.VoxModel.SizeY),
-							float32(voxAsset.VoxModel.SizeZ),
-							0.0,
+					macroGrid := createMacroGrid(voxAsset, rState)
+
+					rState.voxelInstancesUniform = append(rState.voxelInstancesUniform, voxelInstanceUniform{
+						Size: [3]uint32{
+							voxAsset.VoxModel.SizeX,
+							voxAsset.VoxModel.SizeY,
+							voxAsset.VoxModel.SizeZ,
 						},
-						PaletteId:       pId,
-						VoxelPoolOffset: voxelPoolOffset,
+						PaletteId: paletteId,
+						MacroGrid: macroGrid,
 					})
 
-					rState.entityVoxModelIds[entityId] = voxModelId
-					rState.paletteIds[paletteId] = pId
+					rState.entityVoxInstanceIds[entityId] = voxInstanceId
+					rState.paletteIds[paletteAssetId] = paletteId
 
 					rState.isVoxelPoolUpdated = true
 				}
@@ -193,28 +216,126 @@ func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRender
 		})
 }
 
-func pushVoxelsIntoPool(model *VoxelModelAsset, rState *voxelRenderState) uint32 {
-	offset := uint32(len(rState.voxelPoolUniform))
-	initModelSpace(&model.VoxModel, rState)
-	for _, v := range model.VoxModel.Voxels {
-		idx := offset + getFlatVoxelArrayIndex(&model.VoxModel, uint32(v.X), uint32(v.Y), uint32(v.Z))
-		rState.voxelPoolUniform[idx] = voxelUniform{
-			ColorIndex: uint32(v.ColorIndex),
-			Alpha:      1.0, //solid by default
+// macroGrid - grid of voxel bricks.
+// each non-empty macroGrid element points to bricks array element
+// each brick points to voxel pool offset
+func createMacroGrid(voxModelAsset *VoxelModelAsset, rState *voxelRenderState) macroGridUniform {
+	// Calculate macro grid dimensions
+	brickSizeX := voxModelAsset.BrickSize[0]
+	brickSizeY := voxModelAsset.BrickSize[1]
+	brickSizeZ := voxModelAsset.BrickSize[2]
+	// ceil-div without float to avoid integer truncation bugs
+	macroSizeX := (voxModelAsset.VoxModel.SizeX + brickSizeX - 1) / brickSizeX
+	macroSizeY := (voxModelAsset.VoxModel.SizeY + brickSizeY - 1) / brickSizeY
+	macroSizeZ := (voxModelAsset.VoxModel.SizeZ + brickSizeZ - 1) / brickSizeZ
+	fmt.Printf("MacroGrid Size: %dx%dx%d\n", macroSizeX, macroSizeY, macroSizeZ)
+	// Group voxels by their position in brick, group bricks by their position in macroGrid
+	// [brick pos] -> [voxle pos] -> voxel
+	marcoGridBricks := map[[3]uint32]map[[3]uint32]Voxel{}
+	for _, voxel := range voxModelAsset.VoxModel.Voxels {
+		// Brick position in mackroGrid
+		brickX := uint32(voxel.X) / brickSizeX
+		brickY := uint32(voxel.Y) / brickSizeY
+		brickZ := uint32(voxel.Z) / brickSizeZ
+		brickPos := [3]uint32{brickX, brickY, brickZ}
+		if _, ok := marcoGridBricks[brickPos]; !ok {
+			marcoGridBricks[brickPos] = map[[3]uint32]Voxel{}
+		}
+		// Voxel position in brick
+		voxelX := uint32(voxel.X) % brickSizeX
+		voxelY := uint32(voxel.Y) % brickSizeY
+		voxelZ := uint32(voxel.Z) % brickSizeZ
+		voxelPos := [3]uint32{voxelX, voxelY, voxelZ}
+		marcoGridBricks[brickPos][voxelPos] = voxel
+	}
+	// Current macroGrid offset
+	currentMacroIndexOffset := uint32(len(rState.macroIndexPoolUniform))
+	// Add new macroGrid to the pool, init it with empty bricks
+	for mcId := uint32(0); mcId < macroSizeX*macroSizeY*macroSizeZ; mcId++ {
+		rState.macroIndexPoolUniform = append(rState.macroIndexPoolUniform, EmptyBrickValue)
+	}
+	// Process each potential brick in the macroGrid
+	for x := uint32(0); x < macroSizeX; x++ {
+		for y := uint32(0); y < macroSizeY; y++ {
+			for z := uint32(0); z < macroSizeZ; z++ {
+				brickPos := [3]uint32{x, y, z}
+				// For each non-empty brick create brick uniforms
+				if brickVoxels, ok := marcoGridBricks[brickPos]; ok {
+					// Calculate macroGrid index for this cell
+					macroGridId := currentMacroIndexOffset + getFlatArrayIndex(x, y, z, macroSizeX, macroSizeY)
+
+					// Detect solid-color brick: fully filled and all voxels have same color
+					totalVox := brickSizeX * brickSizeY * brickSizeZ
+					isSolid := false
+					var solidColor uint32 = 0
+					if uint32(len(brickVoxels)) == totalVox {
+						first := true
+						for _, v := range brickVoxels {
+							if first {
+								solidColor = uint32(v.ColorIndex)
+								first = false
+							} else if uint32(v.ColorIndex) != solidColor {
+								solidColor = 0
+								isSolid = false
+								break
+							}
+							isSolid = true
+						}
+					}
+
+					if isSolid {
+						// Encode direct color reference: high bit set + palette color index
+						rState.macroIndexPoolUniform[macroGridId] = DirectColorFlag | (solidColor & 0x7FFFFFFF)
+						continue
+					}
+
+					// Non-solid brick: allocate brick and voxels
+					currentBrickVoxPoolOffset := uint32(len(rState.voxelPoolUniform))
+					brick := brickUniform{
+						Position:   [3]uint32{x, y, z},
+						DataOffset: currentBrickVoxPoolOffset,
+					}
+					brickId := uint32(len(rState.brickPoolUniform))
+					rState.brickPoolUniform = append(rState.brickPoolUniform, brick)
+					// Init brick voxels in voxel pool
+					for voxPoolId := uint32(0); voxPoolId < totalVox; voxPoolId++ {
+						rState.voxelPoolUniform = append(rState.voxelPoolUniform, voxelUniform{
+							ColorIndex: 0, // Empty voxel
+							Alpha:      0.0,
+						})
+					}
+					// Set non-empty voxels in voxel pool
+					for vx := uint32(0); vx < brickSizeX; vx++ {
+						for vy := uint32(0); vy < brickSizeY; vy++ {
+							for vz := uint32(0); vz < brickSizeZ; vz++ {
+								voxelPos := [3]uint32{vx, vy, vz}
+								if voxel, ok := brickVoxels[voxelPos]; ok {
+									voxelId := currentBrickVoxPoolOffset + getFlatArrayIndex(vx, vy, vz, brickSizeX, brickSizeY)
+									//TODO pass alpha from voxel
+									rState.voxelPoolUniform[voxelId] = voxelUniform{
+										ColorIndex: uint32(voxel.ColorIndex),
+										Alpha:      1.0,
+									}
+								}
+							}
+						}
+					}
+					// Put new brick pointer to macroGrid
+					rState.macroIndexPoolUniform[macroGridId] = brickId
+				}
+			}
 		}
 	}
-	return offset
-}
 
-// adding empty voxels for the new model into the pool
-func initModelSpace(model *VoxModel, rState *voxelRenderState) {
-	for range model.SizeX * model.SizeY * model.SizeZ {
-		rState.voxelPoolUniform = append(rState.voxelPoolUniform, voxelUniform{})
+	return macroGridUniform{
+		Size:       [3]uint32{macroSizeX, macroSizeY, macroSizeZ},
+		BrickSize:  voxModelAsset.BrickSize,
+		DataOffset: currentMacroIndexOffset, // Offset in macroIndex where this model's data starts
 	}
 }
 
-func getFlatVoxelArrayIndex(model *VoxModel, x, y, z uint32) uint32 {
-	return z*model.SizeX*model.SizeY + y*model.SizeX + x
+func getFlatArrayIndex(x, y, z, sizeX, sizeY uint32) uint32 {
+	return z*sizeX*sizeY + y*sizeX + x
 }
 
 func createOrGetPaletteIndex(assetId AssetId, asset *VoxelPaletteAsset, rState *voxelRenderState) uint32 {
@@ -239,11 +360,17 @@ func makeVoxelPalette(asset *VoxelPaletteAsset) [256]mgl32.Vec4 {
 // TODO run only once?
 func createBuffers(gpuState *GpuState, rState *voxelRenderState) {
 	//we need to create buffers only once
-	if nil == rState.cameraBuffer && len(rState.voxelPoolUniform) > 0 {
-		rState.cameraBuffer = createBuffer("camera", rState.cameraUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageCopyDst)
+	if nil == rState.cameraBuffer && len(rState.voxelInstancesUniform) > 0 {
+		// Ensure voxelPool has at least one element so buffer creation/bindings are valid
+		if len(rState.voxelPoolUniform) == 0 {
+			rState.voxelPoolUniform = append(rState.voxelPoolUniform, voxelUniform{ColorIndex: 0, Alpha: 0.0})
+		}
 		rState.renderParametersBuffer = createBuffer("renderParameters", rState.renderParametersUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageCopyDst)
+		rState.cameraBuffer = createBuffer("camera", rState.cameraUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageCopyDst)
 		rState.transformsBuffer = createBuffer("transforms", rState.transformsUniforms, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
-		rState.voxelModelsBuffer = createBuffer("voxModels", rState.voxelModelsUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+		rState.voxelInstancesBuffer = createBuffer("voxelInstances", rState.voxelInstancesUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+		rState.macroIndexPoolBuffer = createBuffer("macroIndexPool", rState.macroIndexPoolUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+		rState.brickPoolBuffer = createBuffer("brickPool", rState.brickPoolUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
 		rState.voxelPoolBuffer = createBuffer("voxelPool", rState.voxelPoolUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
 		rState.palettesBuffer = createBuffer("palettes", rState.palettesUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
 	}
@@ -275,16 +402,26 @@ func createBindGroup(gpuState *GpuState, rState *voxelRenderState) {
 				},
 				{
 					Binding: 3,
-					Buffer:  rState.voxelModelsBuffer,
+					Buffer:  rState.voxelInstancesBuffer,
 					Size:    wgpu.WholeSize,
 				},
 				{
 					Binding: 4,
-					Buffer:  rState.voxelPoolBuffer,
+					Buffer:  rState.macroIndexPoolBuffer,
 					Size:    wgpu.WholeSize,
 				},
 				{
 					Binding: 5,
+					Buffer:  rState.brickPoolBuffer,
+					Size:    wgpu.WholeSize,
+				},
+				{
+					Binding: 6,
+					Buffer:  rState.voxelPoolBuffer,
+					Size:    wgpu.WholeSize,
+				},
+				{
+					Binding: 7,
 					Buffer:  rState.palettesBuffer,
 					Size:    wgpu.WholeSize,
 				},
@@ -299,7 +436,7 @@ func createBindGroup(gpuState *GpuState, rState *voxelRenderState) {
 
 // renders single frame
 func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
-	if len(rs.voxelPoolUniform) == 0 {
+	if len(rs.voxelInstancesUniform) == 0 {
 		//nothing to render
 		return
 	}
@@ -335,7 +472,9 @@ func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
 	err = gpuState.queue.WriteBuffer(rs.transformsBuffer, 0, toBufferBytes(rs.transformsUniforms))
 
 	if rs.isVoxelPoolUpdated {
-		err = gpuState.queue.WriteBuffer(rs.voxelModelsBuffer, 0, toBufferBytes(rs.voxelModelsUniform))
+		err = gpuState.queue.WriteBuffer(rs.voxelInstancesBuffer, 0, toBufferBytes(rs.voxelInstancesUniform))
+		err = gpuState.queue.WriteBuffer(rs.macroIndexPoolBuffer, 0, toBufferBytes(rs.macroIndexPoolUniform))
+		err = gpuState.queue.WriteBuffer(rs.brickPoolBuffer, 0, toBufferBytes(rs.brickPoolUniform))
 		err = gpuState.queue.WriteBuffer(rs.voxelPoolBuffer, 0, toBufferBytes(rs.voxelPoolUniform))
 		err = gpuState.queue.WriteBuffer(rs.palettesBuffer, 0, toBufferBytes(rs.palettesUniform))
 		rs.isVoxelPoolUpdated = false
@@ -368,7 +507,7 @@ func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
 func updateModelUniforms(cmd *Commands, rState *voxelRenderState) {
 	MakeQuery1[TransformComponent](cmd).Map(
 		func(entityId EntityId, transform *TransformComponent) bool {
-			if voxModelId, ok := rState.entityVoxModelIds[entityId]; ok {
+			if voxModelId, ok := rState.entityVoxInstanceIds[entityId]; ok {
 				uniform := rState.transformsUniforms[voxModelId]
 				modelMx := buildModelMatrix(transform)
 				uniform.ModelMx = modelMx
