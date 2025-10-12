@@ -26,6 +26,7 @@ type renderParametersUniform struct {
 	WindowWidth     uint32
 	WindowHeight    uint32
 	EmptyBlockValue uint32
+	Pad0            uint32
 }
 
 type voxelCameraUniform struct {
@@ -68,8 +69,14 @@ type voxelRenderState struct {
 	vertexBuffer            *wgpu.Buffer
 	indexBuffer             *wgpu.Buffer
 	vertexCount             uint32
-	rayCastPipeline         *wgpu.RenderPipeline
-	voxelBindGroup          *wgpu.BindGroup
+	blitPipeline            *wgpu.RenderPipeline
+	computePipeline         *wgpu.ComputePipeline
+	voxelComputeBindGroup   *wgpu.BindGroup
+	renderBindGroup0        *wgpu.BindGroup
+	blitBindGroup           *wgpu.BindGroup
+	outputTexture           *wgpu.Texture
+	outputTextureView       *wgpu.TextureView
+	outputSampler           *wgpu.Sampler
 	renderParametersBuffer  *wgpu.Buffer
 	cameraBuffer            *wgpu.Buffer
 	transformsBuffer        *wgpu.Buffer
@@ -143,11 +150,69 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 	}
 	screenQuadIndices := []uint16{0, 2, 1, 1, 2, 3}
 
-	shaderData, err := os.ReadFile("D:\\IT\\Golang\\gekko3d\\gekko\\shaders\\raycasting.wgsl")
+	shaderData, err := os.ReadFile("/Users/ddevidch/code/golang/gekko3d/gekko/shaders/raycasting.wgsl")
 	if err != nil {
 		panic(err)
 	}
-	rayCastPipeline := createRenderPipeline("voxel", string(shaderData), sqVertex{}, gpuState)
+	blitPipeline := createRenderPipeline("voxel", string(shaderData), sqVertex{}, gpuState)
+
+	// Create compute pipeline from the same WGSL (entry: cs_main)
+	computeShader, err := gpuState.device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "voxel_compute",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: string(shaderData)},
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer computeShader.Release()
+
+	computePipeline, err := gpuState.device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     computeShader,
+			EntryPoint: "cs_main",
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Create output texture for compute (storage + sample)
+	outputTexture, err := gpuState.device.CreateTexture(&wgpu.TextureDescriptor{
+		Size: wgpu.Extent3D{
+			Width:              uint32(windowState.WindowWidth),
+			Height:             uint32(windowState.WindowHeight),
+			DepthOrArrayLayers: 1,
+		},
+		MipLevelCount: 1,
+		SampleCount:   1,
+		Dimension:     wgpu.TextureDimension2D,
+		Format:        wgpu.TextureFormatRGBA8Unorm,
+		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageStorageBinding,
+	})
+	if err != nil {
+		panic(err)
+	}
+	outputTextureView, err := outputTexture.CreateView(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	// Sampler for blitting
+	outputSampler, err := gpuState.device.CreateSampler(&wgpu.SamplerDescriptor{
+		AddressModeU:  wgpu.AddressModeClampToEdge,
+		AddressModeV:  wgpu.AddressModeClampToEdge,
+		AddressModeW:  wgpu.AddressModeClampToEdge,
+		MagFilter:     wgpu.FilterModeLinear,
+		MinFilter:     wgpu.FilterModeLinear,
+		MipmapFilter:  wgpu.MipmapFilterModeLinear,
+		LodMinClamp:   0.,
+		LodMaxClamp:   1.,
+		Compare:       wgpu.CompareFunctionUndefined,
+		MaxAnisotropy: 1,
+	})
+	if err != nil {
+		panic(err)
+	}
 
 	vertexBuffer, indexBuffer := createVertexIndexBuffers(MakeAnySlice(screenQuadVertices), screenQuadIndices, gpuState.device)
 
@@ -164,7 +229,11 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 		vertexBuffer:       vertexBuffer,
 		indexBuffer:        indexBuffer,
 		vertexCount:        uint32(len(screenQuadIndices)),
-		rayCastPipeline:    rayCastPipeline,
+		blitPipeline:       blitPipeline,
+		computePipeline:    computePipeline,
+		outputTexture:      outputTexture,
+		outputTextureView:  outputTextureView,
+		outputSampler:      outputSampler,
 		renderParametersUniform: renderParametersUniform{
 			WindowWidth:     uint32(windowState.WindowWidth),
 			WindowHeight:    uint32(windowState.WindowHeight),
@@ -378,59 +447,48 @@ func createBuffers(gpuState *GpuState, rState *voxelRenderState) {
 
 // TODO run only once?
 func createBindGroup(gpuState *GpuState, rState *voxelRenderState) {
-	//we need to create bind group only once
-	if nil == rState.voxelBindGroup && nil != rState.voxelPoolBuffer {
-		bindGroupLayout := rState.rayCastPipeline.GetBindGroupLayout(0)
-		defer bindGroupLayout.Release()
-		bindGroup, err := gpuState.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-			Layout: bindGroupLayout,
+	// Create compute bind group (group 0) once buffers and compute pipeline are available
+	if rState.voxelComputeBindGroup == nil && rState.voxelPoolBuffer != nil && rState.computePipeline != nil && rState.outputTextureView != nil {
+		fmt.Println("Creating compute bind group...")
+		compLayout := rState.computePipeline.GetBindGroupLayout(0)
+		defer compLayout.Release()
+		compGroup, err := gpuState.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+			Layout: compLayout,
 			Entries: []wgpu.BindGroupEntry{
-				{
-					Binding: 0,
-					Buffer:  rState.renderParametersBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 1,
-					Buffer:  rState.cameraBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 2,
-					Buffer:  rState.transformsBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 3,
-					Buffer:  rState.voxelInstancesBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 4,
-					Buffer:  rState.macroIndexPoolBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 5,
-					Buffer:  rState.brickPoolBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 6,
-					Buffer:  rState.voxelPoolBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 7,
-					Buffer:  rState.palettesBuffer,
-					Size:    wgpu.WholeSize,
-				},
+				{Binding: 0, Buffer: rState.renderParametersBuffer, Size: wgpu.WholeSize},
+				{Binding: 1, Buffer: rState.cameraBuffer, Size: wgpu.WholeSize},
+				{Binding: 2, Buffer: rState.transformsBuffer, Size: wgpu.WholeSize},
+				{Binding: 3, Buffer: rState.voxelInstancesBuffer, Size: wgpu.WholeSize},
+				{Binding: 4, Buffer: rState.macroIndexPoolBuffer, Size: wgpu.WholeSize},
+				{Binding: 5, Buffer: rState.brickPoolBuffer, Size: wgpu.WholeSize},
+				{Binding: 6, Buffer: rState.voxelPoolBuffer, Size: wgpu.WholeSize},
+				{Binding: 7, Buffer: rState.palettesBuffer, Size: wgpu.WholeSize},
+				{Binding: 8, TextureView: rState.outputTextureView},
 			},
 		})
 		if err != nil {
 			panic(err)
 		}
-		rState.voxelBindGroup = bindGroup
+		rState.voxelComputeBindGroup = compGroup
+		fmt.Println("Compute bind group created.")
+	}
+
+	// Create render bind group for group 0 (blit: textureLoad from compute output @binding(9))
+	if rState.blitBindGroup == nil && rState.blitPipeline != nil && rState.outputTextureView != nil {
+		fmt.Println("Creating blit bind group (render group 0)...")
+		renderLayout0 := rState.blitPipeline.GetBindGroupLayout(0)
+		defer renderLayout0.Release()
+		blitGroup, err := gpuState.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+			Layout: renderLayout0,
+			Entries: []wgpu.BindGroupEntry{
+				{Binding: 9, TextureView: rState.outputTextureView},
+			},
+		})
+		if err != nil {
+			panic(err)
+		}
+		rState.blitBindGroup = blitGroup
+		fmt.Println("Blit bind group created.")
 	}
 }
 
@@ -455,18 +513,7 @@ func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
 	}
 	defer encoder.Release()
 
-	renderPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
-		ColorAttachments: []wgpu.RenderPassColorAttachment{
-			{
-				View:       view,
-				LoadOp:     wgpu.LoadOpClear,
-				StoreOp:    wgpu.StoreOpStore,
-				ClearValue: wgpu.Color{R: 0.1, G: 0.2, B: 0.3, A: 1.0},
-			},
-		},
-	})
-	defer renderPass.Release()
-
+	// Update GPU buffers before compute and render
 	err = gpuState.queue.WriteBuffer(rs.renderParametersBuffer, 0, toBufferBytes(rs.renderParametersUniform))
 	err = gpuState.queue.WriteBuffer(rs.cameraBuffer, 0, toBufferBytes(rs.cameraUniform))
 	err = gpuState.queue.WriteBuffer(rs.transformsBuffer, 0, toBufferBytes(rs.transformsUniforms))
@@ -483,10 +530,39 @@ func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
 		panic(err)
 	}
 
-	renderPass.SetPipeline(rs.rayCastPipeline)
+	// Compute raycasting into output texture before render pass
+	if rs.computePipeline != nil && rs.voxelComputeBindGroup != nil {
+		computePass := encoder.BeginComputePass(nil)
+		computePass.SetPipeline(rs.computePipeline)
+		computePass.SetBindGroup(0, rs.voxelComputeBindGroup, nil)
+		wgX := (rs.renderParametersUniform.WindowWidth + uint32(7)) / uint32(8)
+		wgY := (rs.renderParametersUniform.WindowHeight + uint32(7)) / uint32(8)
+		computePass.DispatchWorkgroups(wgX, wgY, 1)
+		err = computePass.End()
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	renderPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+		ColorAttachments: []wgpu.RenderPassColorAttachment{
+			{
+				View:       view,
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{R: 0.1, G: 0.2, B: 0.3, A: 1.0},
+			},
+		},
+	})
+	defer renderPass.Release()
+
+	renderPass.SetPipeline(rs.blitPipeline)
 	renderPass.SetIndexBuffer(rs.indexBuffer, wgpu.IndexFormatUint16, 0, wgpu.WholeSize)
 	renderPass.SetVertexBuffer(0, rs.vertexBuffer, 0, wgpu.WholeSize)
-	renderPass.SetBindGroup(0, rs.voxelBindGroup, nil)
+	// Bind group(0) for render pass; fs_main uses @group(0), @binding(9)
+	if rs.blitBindGroup != nil {
+		renderPass.SetBindGroup(0, rs.blitBindGroup, nil)
+	}
 	renderPass.DrawIndexed(rs.vertexCount, 1, 0, 0, 0)
 
 	err = renderPass.End()

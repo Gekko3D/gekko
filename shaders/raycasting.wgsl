@@ -67,6 +67,7 @@ struct RayResult {
     depth: f32,
 };
 
+// Group 0: compute pipeline resources
 @group(0) @binding(0)
 var<uniform> renderParams: RenderParameters;
 @group(0) @binding(1)
@@ -83,6 +84,14 @@ var<storage, read> brickPool: array<Brick>;
 var<storage, read> voxelPool: array<Voxel>;
 @group(0) @binding(7)
 var<storage, read> palettes: array<array<vec4f, 256>>;
+// Output storage texture for compute
+@group(0) @binding(8)
+var outputTex: texture_storage_2d<rgba8unorm, write>;
+
+/* Render (blit) pipeline resources: use group(0) with a distinct binding to avoid conflicts with compute.
+   Compute uses group(0) bindings [0..8]. We'll use binding 9 for the blit texture. */
+@group(0) @binding(9)
+var blitTex: texture_2d<f32>;
 
 const EMPTY_BRICK: u32 = 0xffffffffu;
 const DIRECT_COLOR_FLAG: u32 = 0x80000000u;
@@ -203,6 +212,7 @@ fn samplePalette(paletteId: u32, colorId: u32) -> vec4<f32> {
     let idx = min(colorId, 255u);
     return palettes[paletteId][idx];
 }
+
 
 fn blendFrontToBack(accum: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
     let a = accum.a;
@@ -329,7 +339,6 @@ fn traceTwoLevelDDA(rayOrigin: vec3<f32>, rayDir: vec3<f32>, inst: VoxelInstance
 
 // Generate ray for current pixel
 fn generateRay(coord: vec2f) -> vec3f {
-
     let res = vec2f(f32(renderParams.width), f32(renderParams.height));
     let uv = (coord / res) * 2.0 - 1.0;
     var clip = vec4f(uv, 1.0, 1.0);
@@ -337,7 +346,6 @@ fn generateRay(coord: vec2f) -> vec3f {
     world /= world.w;
     // Transform ray to world space
     let rayWorld = normalize(world.xyz - camera.position.xyz);
-
     return rayWorld;
 }
 
@@ -394,7 +402,7 @@ fn traceScene(rayOrigin: vec3f, rayDir: vec3f) -> RayResult {
         }
     }
 
-    // Default background = sky (optional)
+    // Default background
     if (accum.a == 0.0) {
         return RayResult(vec4<f32>(0.0), INF);
     }
@@ -408,17 +416,26 @@ fn vs_main(
     @location(1) uv: vec2f,
 ) -> VertexOutput {
     var result: VertexOutput;
-
     result.position = position;
     result.uv = uv;
     return result;
 }
 
+// Fragment now only blits the compute output texture
 @fragment
 fn fs_main(vertex: VertexOutput) -> @location(0) vec4f {
-    let rayWorld = generateRay(vertex.position.xy);
-    //TODO pass amount of instances as uniform
-    let rayResult = traceScene(camera.position.xyz, rayWorld);
+    let px = i32(floor(vertex.position.x));
+    let py = i32(floor(vertex.position.y));
+    return textureLoad(blitTex, vec2i(px, py), 0);
+}
 
-    return rayResult.color;
+// Compute entry: raycast per pixel into storage texture
+@compute @workgroup_size(8, 8, 1)
+fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= renderParams.width || gid.y >= renderParams.height) {
+        return;
+    }
+    let rayWorld = generateRay(vec2f(f32(gid.x), f32(gid.y)));
+    let rayResult = traceScene(camera.position.xyz, rayWorld);
+    textureStore(outputTex, vec2u(gid.xy), rayResult.color);
 }
