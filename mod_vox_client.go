@@ -63,39 +63,57 @@ type voxelUniform struct {
 	Alpha      float32
 }
 
+type aabbUniform struct {
+	Min mgl32.Vec4
+	Max mgl32.Vec4
+}
+
+type visibleListParametersUniform struct {
+	Count uint32
+	Pad0  uint32
+	Pad1  uint32
+	Pad2  uint32
+}
+
 type voxelRenderState struct {
-	screenQuadVertices      []sqVertex
-	screenQuadIndices       []uint16
-	vertexBuffer            *wgpu.Buffer
-	indexBuffer             *wgpu.Buffer
-	vertexCount             uint32
-	blitPipeline            *wgpu.RenderPipeline
-	computePipeline         *wgpu.ComputePipeline
-	voxelComputeBindGroup   *wgpu.BindGroup
-	renderBindGroup0        *wgpu.BindGroup
-	blitBindGroup           *wgpu.BindGroup
-	outputTexture           *wgpu.Texture
-	outputTextureView       *wgpu.TextureView
-	outputSampler           *wgpu.Sampler
-	renderParametersBuffer  *wgpu.Buffer
-	cameraBuffer            *wgpu.Buffer
-	transformsBuffer        *wgpu.Buffer
-	voxelInstancesBuffer    *wgpu.Buffer
-	macroIndexPoolBuffer    *wgpu.Buffer
-	brickPoolBuffer         *wgpu.Buffer
-	voxelPoolBuffer         *wgpu.Buffer
-	palettesBuffer          *wgpu.Buffer
-	renderParametersUniform renderParametersUniform
-	cameraUniform           voxelCameraUniform
-	transformsUniforms      []transformsUniform //per vox-instance transforms
-	voxelInstancesUniform   []voxelInstanceUniform
-	macroIndexPoolUniform   []uint32 // 3D grid of brick indices
-	brickPoolUniform        []brickUniform
-	voxelPoolUniform        []voxelUniform
-	palettesUniform         [][256]mgl32.Vec4
-	entityVoxInstanceIds    map[EntityId]int   //entity -> vox-model id
-	paletteIds              map[AssetId]uint32 //palette-asset -> palette id
-	isVoxelPoolUpdated      bool
+	screenQuadVertices           []sqVertex
+	screenQuadIndices            []uint16
+	vertexBuffer                 *wgpu.Buffer
+	indexBuffer                  *wgpu.Buffer
+	vertexCount                  uint32
+	blitPipeline                 *wgpu.RenderPipeline
+	computePipeline              *wgpu.ComputePipeline
+	voxelComputeBindGroup        *wgpu.BindGroup
+	renderBindGroup0             *wgpu.BindGroup
+	blitBindGroup                *wgpu.BindGroup
+	outputTexture                *wgpu.Texture
+	outputTextureView            *wgpu.TextureView
+	outputSampler                *wgpu.Sampler
+	renderParametersBuffer       *wgpu.Buffer
+	cameraBuffer                 *wgpu.Buffer
+	transformsBuffer             *wgpu.Buffer
+	voxelInstancesBuffer         *wgpu.Buffer
+	macroIndexPoolBuffer         *wgpu.Buffer
+	brickPoolBuffer              *wgpu.Buffer
+	voxelPoolBuffer              *wgpu.Buffer
+	palettesBuffer               *wgpu.Buffer
+	instanceAABBsBuffer          *wgpu.Buffer
+	visibleInstanceIndicesBuffer *wgpu.Buffer
+	visibleListParametersBuffer  *wgpu.Buffer
+	renderParametersUniform      renderParametersUniform
+	cameraUniform                voxelCameraUniform
+	visibleListParametersUniform visibleListParametersUniform
+	transformsUniforms           []transformsUniform //per vox-instance transforms
+	voxelInstancesUniform        []voxelInstanceUniform
+	instanceAABBsUniform         []aabbUniform
+	visibleInstanceIndices       []uint32
+	macroIndexPoolUniform        []uint32 // 3D grid of brick indices
+	brickPoolUniform             []brickUniform
+	voxelPoolUniform             []voxelUniform
+	palettesUniform              [][256]mgl32.Vec4
+	entityVoxInstanceIds         map[EntityId]int   //entity -> vox-model id
+	paletteIds                   map[AssetId]uint32 //palette-asset -> palette id
+	isVoxelPoolUpdated           bool
 }
 
 func (mod VoxelModule) Install(app *App, cmd *Commands) {
@@ -239,9 +257,10 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 			WindowHeight:    uint32(windowState.WindowHeight),
 			EmptyBlockValue: EmptyBrickValue,
 		},
-		cameraUniform:        cameraUniform,
-		entityVoxInstanceIds: map[EntityId]int{},
-		paletteIds:           map[AssetId]uint32{},
+		cameraUniform:                cameraUniform,
+		visibleListParametersUniform: visibleListParametersUniform{Count: 0},
+		entityVoxInstanceIds:         map[EntityId]int{},
+		paletteIds:                   map[AssetId]uint32{},
 	}
 }
 
@@ -273,6 +292,18 @@ func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRender
 						},
 						PaletteId: paletteId,
 						MacroGrid: macroGrid,
+					})
+					// compute and store world-space AABB for this instance (matches macro grid bounds)
+					localMin := mgl32.Vec3{0, 0, 0}
+					localMax := mgl32.Vec3{
+						float32(macroGrid.Size[0] * macroGrid.BrickSize[0]),
+						float32(macroGrid.Size[1] * macroGrid.BrickSize[1]),
+						float32(macroGrid.Size[2] * macroGrid.BrickSize[2]),
+					}
+					minV, maxV := computeWorldAABB(modelMx, localMin, localMax)
+					rState.instanceAABBsUniform = append(rState.instanceAABBsUniform, aabbUniform{
+						Min: mgl32.Vec4{minV.X(), minV.Y(), minV.Z(), 0},
+						Max: mgl32.Vec4{maxV.X(), maxV.Y(), maxV.Z(), 0},
 					})
 
 					rState.entityVoxInstanceIds[entityId] = voxInstanceId
@@ -442,6 +473,17 @@ func createBuffers(gpuState *GpuState, rState *voxelRenderState) {
 		rState.brickPoolBuffer = createBuffer("brickPool", rState.brickPoolUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
 		rState.voxelPoolBuffer = createBuffer("voxelPool", rState.voxelPoolUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
 		rState.palettesBuffer = createBuffer("palettes", rState.palettesUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+		rState.instanceAABBsBuffer = createBuffer("instanceAABBs", rState.instanceAABBsUniform, gpuState, wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+
+		// Visible instances list (CPU culling)
+		// allocate buffer large enough to hold all instance indices
+		rState.visibleInstanceIndices = make([]uint32, len(rState.transformsUniforms))
+		if len(rState.visibleInstanceIndices) == 0 {
+			// keep at least 1 element to avoid zero-sized buffer
+			rState.visibleInstanceIndices = []uint32{0}
+		}
+		rState.visibleInstanceIndicesBuffer = createBuffer("visibleInstanceIndices", rState.visibleInstanceIndices, gpuState, wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+		rState.visibleListParametersBuffer = createBuffer("visibleListParams", rState.visibleListParametersUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageCopyDst)
 	}
 }
 
@@ -464,6 +506,9 @@ func createBindGroup(gpuState *GpuState, rState *voxelRenderState) {
 				{Binding: 6, Buffer: rState.voxelPoolBuffer, Size: wgpu.WholeSize},
 				{Binding: 7, Buffer: rState.palettesBuffer, Size: wgpu.WholeSize},
 				{Binding: 8, TextureView: rState.outputTextureView},
+				{Binding: 10, Buffer: rState.instanceAABBsBuffer, Size: wgpu.WholeSize},
+				{Binding: 11, Buffer: rState.visibleInstanceIndicesBuffer, Size: wgpu.WholeSize},
+				{Binding: 12, Buffer: rState.visibleListParametersBuffer, Size: wgpu.WholeSize},
 			},
 		})
 		if err != nil {
@@ -513,10 +558,29 @@ func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
 	}
 	defer encoder.Release()
 
+	// Build visible-instance index list via CPU frustum culling
+	{
+		// We use clip-space plane-out test against the camera ViewProjection matrix
+		vp := rs.cameraUniform.ViewProjMx
+		visible := make([]uint32, 0, len(rs.instanceAABBsUniform))
+		for i := range rs.instanceAABBsUniform {
+			if aabbIntersectsFrustumClip(vp, rs.instanceAABBsUniform[i]) {
+				visible = append(visible, uint32(i))
+			}
+		}
+		// Update visible list parameters and buffers
+		rs.visibleListParametersUniform.Count = uint32(len(visible))
+		_ = gpuState.queue.WriteBuffer(rs.visibleListParametersBuffer, 0, toBufferBytes(rs.visibleListParametersUniform))
+		if len(visible) > 0 {
+			_ = gpuState.queue.WriteBuffer(rs.visibleInstanceIndicesBuffer, 0, toBufferBytes(visible))
+		}
+	}
+
 	// Update GPU buffers before compute and render
 	err = gpuState.queue.WriteBuffer(rs.renderParametersBuffer, 0, toBufferBytes(rs.renderParametersUniform))
 	err = gpuState.queue.WriteBuffer(rs.cameraBuffer, 0, toBufferBytes(rs.cameraUniform))
 	err = gpuState.queue.WriteBuffer(rs.transformsBuffer, 0, toBufferBytes(rs.transformsUniforms))
+	err = gpuState.queue.WriteBuffer(rs.instanceAABBsBuffer, 0, toBufferBytes(rs.instanceAABBsUniform))
 
 	if rs.isVoxelPoolUpdated {
 		err = gpuState.queue.WriteBuffer(rs.voxelInstancesBuffer, 0, toBufferBytes(rs.voxelInstancesUniform))
@@ -589,6 +653,19 @@ func updateModelUniforms(cmd *Commands, rState *voxelRenderState) {
 				uniform.ModelMx = modelMx
 				uniform.InvModelMx = modelMx.Inv()
 				rState.transformsUniforms[voxModelId] = uniform
+
+				// recompute world-space AABB for this instance
+				mg := rState.voxelInstancesUniform[voxModelId].MacroGrid
+				localMax := mgl32.Vec3{
+					float32(mg.Size[0] * mg.BrickSize[0]),
+					float32(mg.Size[1] * mg.BrickSize[1]),
+					float32(mg.Size[2] * mg.BrickSize[2]),
+				}
+				minV, maxV := computeWorldAABB(modelMx, mgl32.Vec3{0, 0, 0}, localMax)
+				rState.instanceAABBsUniform[voxModelId] = aabbUniform{
+					Min: mgl32.Vec4{minV.X(), minV.Y(), minV.Z(), 0},
+					Max: mgl32.Vec4{maxV.X(), maxV.Y(), maxV.Z(), 0},
+				}
 			}
 			return true
 		})
@@ -625,4 +702,132 @@ func buildCameraMatrix(c *CameraComponent) mgl32.Mat4 {
 		c.Far,
 	)
 	return projection.Mul4(view)
+}
+
+// compute axis-aligned world-space AABB by transforming 8 corners of a local box
+func computeWorldAABB(model mgl32.Mat4, localMin, localMax mgl32.Vec3) (mgl32.Vec3, mgl32.Vec3) {
+	corners := [8]mgl32.Vec3{
+		{localMin.X(), localMin.Y(), localMin.Z()},
+		{localMax.X(), localMin.Y(), localMin.Z()},
+		{localMin.X(), localMax.Y(), localMin.Z()},
+		{localMin.X(), localMin.Y(), localMax.Z()},
+		{localMax.X(), localMax.Y(), localMin.Z()},
+		{localMax.X(), localMin.Y(), localMax.Z()},
+		{localMin.X(), localMax.Y(), localMax.Z()},
+		{localMax.X(), localMax.Y(), localMax.Z()},
+	}
+	p0 := model.Mul4x1(mgl32.Vec4{corners[0].X(), corners[0].Y(), corners[0].Z(), 1})
+	minV := p0.Vec3()
+	maxV := p0.Vec3()
+	for i := 1; i < 8; i++ {
+		p := model.Mul4x1(mgl32.Vec4{corners[i].X(), corners[i].Y(), corners[i].Z(), 1})
+		v := p.Vec3()
+		if v[0] < minV[0] {
+			minV[0] = v[0]
+		}
+		if v[1] < minV[1] {
+			minV[1] = v[1]
+		}
+		if v[2] < minV[2] {
+			minV[2] = v[2]
+		}
+		if v[0] > maxV[0] {
+			maxV[0] = v[0]
+		}
+		if v[1] > maxV[1] {
+			maxV[1] = v[1]
+		}
+		if v[2] > maxV[2] {
+			maxV[2] = v[2]
+		}
+	}
+	return minV, maxV
+}
+
+// Return true if the AABB intersects the camera frustum defined by ViewProjection matrix.
+// We do a conservative clip-space plane-out test: if all 8 corners are outside any clip plane, it's culled.
+func aabbIntersectsFrustumClip(viewProj mgl32.Mat4, aabb aabbUniform) bool {
+	min := aabb.Min.Vec3()
+	max := aabb.Max.Vec3()
+	corners := [8]mgl32.Vec4{
+		{min.X(), min.Y(), min.Z(), 1},
+		{max.X(), min.Y(), min.Z(), 1},
+		{min.X(), max.Y(), min.Z(), 1},
+		{min.X(), min.Y(), max.Z(), 1},
+		{max.X(), max.Y(), min.Z(), 1},
+		{max.X(), min.Y(), max.Z(), 1},
+		{min.X(), max.Y(), max.Z(), 1},
+		{max.X(), max.Y(), max.Z(), 1},
+	}
+	clip := [8]mgl32.Vec4{}
+	for i := 0; i < 8; i++ {
+		clip[i] = viewProj.Mul4x1(corners[i])
+	}
+	// Left: x < -w
+	allOutside := true
+	for i := 0; i < 8; i++ {
+		if clip[i][0] >= -clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Right: x > w
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][0] <= clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Bottom: y < -w
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][1] >= -clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Top: y > w
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][1] <= clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Near: z < -w (OpenGL-style)
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][2] >= -clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Far: z > w
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][2] <= clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	return true
 }
