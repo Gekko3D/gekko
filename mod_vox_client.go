@@ -112,6 +112,7 @@ type voxelRenderState struct {
 	voxelPoolUniform             []voxelUniform
 	palettesUniform              [][256]mgl32.Vec4
 	entityVoxInstanceIds         map[EntityId]int   //entity -> vox-model id
+	instanceIdToEntity           map[int]EntityId   //vox-model id -> entity
 	paletteIds                   map[AssetId]uint32 //palette-asset -> palette id
 	isVoxelPoolUpdated           bool
 }
@@ -260,14 +261,17 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 		cameraUniform:                cameraUniform,
 		visibleListParametersUniform: visibleListParametersUniform{Count: 0},
 		entityVoxInstanceIds:         map[EntityId]int{},
+		instanceIdToEntity:           map[int]EntityId{},
 		paletteIds:                   map[AssetId]uint32{},
 	}
 }
 
 func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRenderState) {
 	//creates model and palette uniforms for new voxel entities
+	seen := map[EntityId]bool{}
 	MakeQuery1[TransformComponent](cmd).Map(
 		func(entityId EntityId, transform *TransformComponent) bool {
+			seen[entityId] = true
 			if _, ok := rState.entityVoxInstanceIds[entityId]; !ok {
 				//vox instance is not loaded yet, loading
 				voxAsset, paletteAssetId, paletteAsset := findVoxelModelAsset(entityId, cmd, server)
@@ -307,6 +311,7 @@ func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRender
 					})
 
 					rState.entityVoxInstanceIds[entityId] = voxInstanceId
+					rState.instanceIdToEntity[voxInstanceId] = entityId
 					rState.paletteIds[paletteAssetId] = paletteId
 
 					rState.isVoxelPoolUpdated = true
@@ -314,11 +319,62 @@ func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRender
 			}
 			return true
 		})
+	// Remove instances for entities no longer present
+	var toRemove []EntityId
+	for e := range rState.entityVoxInstanceIds {
+		if !seen[e] {
+			toRemove = append(toRemove, e)
+		}
+	}
+	for _, e := range toRemove {
+		instId := rState.entityVoxInstanceIds[e]
+		removeVoxelInstance(e, instId, rState)
+	}
 }
 
 // macroGrid - grid of voxel bricks.
 // each non-empty macroGrid element points to bricks array element
 // each brick points to voxel pool offset
+/*
+	removeVoxelInstance removes a voxel instance by swapping with the last element to keep
+	related arrays dense and updates entity/index mappings accordingly. It also marks
+	voxel instance data dirty so GPU buffers get updated next frame.
+*/
+func removeVoxelInstance(entityId EntityId, instId int, rState *voxelRenderState) {
+	last := len(rState.transformsUniforms) - 1
+	if instId < 0 || instId > last {
+		return
+	}
+
+	if instId != last {
+		// move last into instId position
+		rState.transformsUniforms[instId] = rState.transformsUniforms[last]
+		rState.voxelInstancesUniform[instId] = rState.voxelInstancesUniform[last]
+		rState.instanceAABBsUniform[instId] = rState.instanceAABBsUniform[last]
+
+		// remap swapped entity index
+		if lastEntity, ok := rState.instanceIdToEntity[last]; ok {
+			rState.entityVoxInstanceIds[lastEntity] = instId
+			rState.instanceIdToEntity[instId] = lastEntity
+			delete(rState.instanceIdToEntity, last)
+		}
+	} else {
+		// removing last element, just drop reverse mapping
+		delete(rState.instanceIdToEntity, last)
+	}
+
+	// shrink slices
+	rState.transformsUniforms = rState.transformsUniforms[:last]
+	rState.voxelInstancesUniform = rState.voxelInstancesUniform[:last]
+	rState.instanceAABBsUniform = rState.instanceAABBsUniform[:last]
+
+	// drop mapping for removed entity
+	delete(rState.entityVoxInstanceIds, entityId)
+
+	// ensure GPU instance buffer is updated (due to swap/removal)
+	rState.isVoxelPoolUpdated = true
+}
+
 func createMacroGrid(voxModelAsset *VoxelModelAsset, rState *voxelRenderState) macroGridUniform {
 	// Calculate macro grid dimensions
 	brickSizeX := voxModelAsset.BrickSize[0]
