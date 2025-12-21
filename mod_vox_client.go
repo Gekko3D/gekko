@@ -169,7 +169,7 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 	}
 	screenQuadIndices := []uint16{0, 2, 1, 1, 2, 3}
 
-	shaderData, err := os.ReadFile("/Users/ddevidch/code/golang/gekko3d/gekko/shaders/raycasting.wgsl")
+	shaderData, err := os.ReadFile("gekko/shaders/raycasting.wgsl")
 	if err != nil {
 		panic(err)
 	}
