@@ -26,6 +26,7 @@ type renderParametersUniform struct {
 	WindowWidth     uint32
 	WindowHeight    uint32
 	EmptyBlockValue uint32
+	Pad0            uint32
 }
 
 type voxelCameraUniform struct {
@@ -62,33 +63,58 @@ type voxelUniform struct {
 	Alpha      float32
 }
 
+type aabbUniform struct {
+	Min mgl32.Vec4
+	Max mgl32.Vec4
+}
+
+type visibleListParametersUniform struct {
+	Count uint32
+	Pad0  uint32
+	Pad1  uint32
+	Pad2  uint32
+}
+
 type voxelRenderState struct {
-	screenQuadVertices      []sqVertex
-	screenQuadIndices       []uint16
-	vertexBuffer            *wgpu.Buffer
-	indexBuffer             *wgpu.Buffer
-	vertexCount             uint32
-	rayCastPipeline         *wgpu.RenderPipeline
-	voxelBindGroup          *wgpu.BindGroup
-	renderParametersBuffer  *wgpu.Buffer
-	cameraBuffer            *wgpu.Buffer
-	transformsBuffer        *wgpu.Buffer
-	voxelInstancesBuffer    *wgpu.Buffer
-	macroIndexPoolBuffer    *wgpu.Buffer
-	brickPoolBuffer         *wgpu.Buffer
-	voxelPoolBuffer         *wgpu.Buffer
-	palettesBuffer          *wgpu.Buffer
-	renderParametersUniform renderParametersUniform
-	cameraUniform           voxelCameraUniform
-	transformsUniforms      []transformsUniform //per vox-instance transforms
-	voxelInstancesUniform   []voxelInstanceUniform
-	macroIndexPoolUniform   []uint32 // 3D grid of brick indices
-	brickPoolUniform        []brickUniform
-	voxelPoolUniform        []voxelUniform
-	palettesUniform         [][256]mgl32.Vec4
-	entityVoxInstanceIds    map[EntityId]int   //entity -> vox-model id
-	paletteIds              map[AssetId]uint32 //palette-asset -> palette id
-	isVoxelPoolUpdated      bool
+	screenQuadVertices           []sqVertex
+	screenQuadIndices            []uint16
+	vertexBuffer                 *wgpu.Buffer
+	indexBuffer                  *wgpu.Buffer
+	vertexCount                  uint32
+	blitPipeline                 *wgpu.RenderPipeline
+	computePipeline              *wgpu.ComputePipeline
+	voxelComputeBindGroup        *wgpu.BindGroup
+	renderBindGroup0             *wgpu.BindGroup
+	blitBindGroup                *wgpu.BindGroup
+	outputTexture                *wgpu.Texture
+	outputTextureView            *wgpu.TextureView
+	outputSampler                *wgpu.Sampler
+	renderParametersBuffer       *wgpu.Buffer
+	cameraBuffer                 *wgpu.Buffer
+	transformsBuffer             *wgpu.Buffer
+	voxelInstancesBuffer         *wgpu.Buffer
+	macroIndexPoolBuffer         *wgpu.Buffer
+	brickPoolBuffer              *wgpu.Buffer
+	voxelPoolBuffer              *wgpu.Buffer
+	palettesBuffer               *wgpu.Buffer
+	instanceAABBsBuffer          *wgpu.Buffer
+	visibleInstanceIndicesBuffer *wgpu.Buffer
+	visibleListParametersBuffer  *wgpu.Buffer
+	renderParametersUniform      renderParametersUniform
+	cameraUniform                voxelCameraUniform
+	visibleListParametersUniform visibleListParametersUniform
+	transformsUniforms           []transformsUniform //per vox-instance transforms
+	voxelInstancesUniform        []voxelInstanceUniform
+	instanceAABBsUniform         []aabbUniform
+	visibleInstanceIndices       []uint32
+	macroIndexPoolUniform        []uint32 // 3D grid of brick indices
+	brickPoolUniform             []brickUniform
+	voxelPoolUniform             []voxelUniform
+	palettesUniform              [][256]mgl32.Vec4
+	entityVoxInstanceIds         map[EntityId]int   //entity -> vox-model id
+	instanceIdToEntity           map[int]EntityId   //vox-model id -> entity
+	paletteIds                   map[AssetId]uint32 //palette-asset -> palette id
+	isVoxelPoolUpdated           bool
 }
 
 func (mod VoxelModule) Install(app *App, cmd *Commands) {
@@ -143,11 +169,69 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 	}
 	screenQuadIndices := []uint16{0, 2, 1, 1, 2, 3}
 
-	shaderData, err := os.ReadFile("D:\\IT\\Golang\\gekko3d\\gekko\\shaders\\raycasting.wgsl")
+	shaderData, err := os.ReadFile("gekko/shaders/raycasting.wgsl")
 	if err != nil {
 		panic(err)
 	}
-	rayCastPipeline := createRenderPipeline("voxel", string(shaderData), sqVertex{}, gpuState)
+	blitPipeline := createRenderPipeline("voxel", string(shaderData), sqVertex{}, gpuState)
+
+	// Create compute pipeline from the same WGSL (entry: cs_main)
+	computeShader, err := gpuState.device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "voxel_compute",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: string(shaderData)},
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer computeShader.Release()
+
+	computePipeline, err := gpuState.device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     computeShader,
+			EntryPoint: "cs_main",
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Create output texture for compute (storage + sample)
+	outputTexture, err := gpuState.device.CreateTexture(&wgpu.TextureDescriptor{
+		Size: wgpu.Extent3D{
+			Width:              uint32(windowState.WindowWidth),
+			Height:             uint32(windowState.WindowHeight),
+			DepthOrArrayLayers: 1,
+		},
+		MipLevelCount: 1,
+		SampleCount:   1,
+		Dimension:     wgpu.TextureDimension2D,
+		Format:        wgpu.TextureFormatRGBA8Unorm,
+		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageStorageBinding,
+	})
+	if err != nil {
+		panic(err)
+	}
+	outputTextureView, err := outputTexture.CreateView(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	// Sampler for blitting
+	outputSampler, err := gpuState.device.CreateSampler(&wgpu.SamplerDescriptor{
+		AddressModeU:  wgpu.AddressModeClampToEdge,
+		AddressModeV:  wgpu.AddressModeClampToEdge,
+		AddressModeW:  wgpu.AddressModeClampToEdge,
+		MagFilter:     wgpu.FilterModeLinear,
+		MinFilter:     wgpu.FilterModeLinear,
+		MipmapFilter:  wgpu.MipmapFilterModeLinear,
+		LodMinClamp:   0.,
+		LodMaxClamp:   1.,
+		Compare:       wgpu.CompareFunctionUndefined,
+		MaxAnisotropy: 1,
+	})
+	if err != nil {
+		panic(err)
+	}
 
 	vertexBuffer, indexBuffer := createVertexIndexBuffers(MakeAnySlice(screenQuadVertices), screenQuadIndices, gpuState.device)
 
@@ -164,22 +248,30 @@ func createVoxelRenderState(windowState *WindowState, gpuState *GpuState) *voxel
 		vertexBuffer:       vertexBuffer,
 		indexBuffer:        indexBuffer,
 		vertexCount:        uint32(len(screenQuadIndices)),
-		rayCastPipeline:    rayCastPipeline,
+		blitPipeline:       blitPipeline,
+		computePipeline:    computePipeline,
+		outputTexture:      outputTexture,
+		outputTextureView:  outputTextureView,
+		outputSampler:      outputSampler,
 		renderParametersUniform: renderParametersUniform{
 			WindowWidth:     uint32(windowState.WindowWidth),
 			WindowHeight:    uint32(windowState.WindowHeight),
 			EmptyBlockValue: EmptyBrickValue,
 		},
-		cameraUniform:        cameraUniform,
-		entityVoxInstanceIds: map[EntityId]int{},
-		paletteIds:           map[AssetId]uint32{},
+		cameraUniform:                cameraUniform,
+		visibleListParametersUniform: visibleListParametersUniform{Count: 0},
+		entityVoxInstanceIds:         map[EntityId]int{},
+		instanceIdToEntity:           map[int]EntityId{},
+		paletteIds:                   map[AssetId]uint32{},
 	}
 }
 
 func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRenderState) {
 	//creates model and palette uniforms for new voxel entities
+	seen := map[EntityId]bool{}
 	MakeQuery1[TransformComponent](cmd).Map(
 		func(entityId EntityId, transform *TransformComponent) bool {
+			seen[entityId] = true
 			if _, ok := rState.entityVoxInstanceIds[entityId]; !ok {
 				//vox instance is not loaded yet, loading
 				voxAsset, paletteAssetId, paletteAsset := findVoxelModelAsset(entityId, cmd, server)
@@ -205,8 +297,21 @@ func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRender
 						PaletteId: paletteId,
 						MacroGrid: macroGrid,
 					})
+					// compute and store world-space AABB for this instance (matches macro grid bounds)
+					localMin := mgl32.Vec3{0, 0, 0}
+					localMax := mgl32.Vec3{
+						float32(macroGrid.Size[0] * macroGrid.BrickSize[0]),
+						float32(macroGrid.Size[1] * macroGrid.BrickSize[1]),
+						float32(macroGrid.Size[2] * macroGrid.BrickSize[2]),
+					}
+					minV, maxV := computeWorldAABB(modelMx, localMin, localMax)
+					rState.instanceAABBsUniform = append(rState.instanceAABBsUniform, aabbUniform{
+						Min: mgl32.Vec4{minV.X(), minV.Y(), minV.Z(), 0},
+						Max: mgl32.Vec4{maxV.X(), maxV.Y(), maxV.Z(), 0},
+					})
 
 					rState.entityVoxInstanceIds[entityId] = voxInstanceId
+					rState.instanceIdToEntity[voxInstanceId] = entityId
 					rState.paletteIds[paletteAssetId] = paletteId
 
 					rState.isVoxelPoolUpdated = true
@@ -214,11 +319,62 @@ func createVoxelUniforms(cmd *Commands, server *AssetServer, rState *voxelRender
 			}
 			return true
 		})
+	// Remove instances for entities no longer present
+	var toRemove []EntityId
+	for e := range rState.entityVoxInstanceIds {
+		if !seen[e] {
+			toRemove = append(toRemove, e)
+		}
+	}
+	for _, e := range toRemove {
+		instId := rState.entityVoxInstanceIds[e]
+		removeVoxelInstance(e, instId, rState)
+	}
 }
 
 // macroGrid - grid of voxel bricks.
 // each non-empty macroGrid element points to bricks array element
 // each brick points to voxel pool offset
+/*
+	removeVoxelInstance removes a voxel instance by swapping with the last element to keep
+	related arrays dense and updates entity/index mappings accordingly. It also marks
+	voxel instance data dirty so GPU buffers get updated next frame.
+*/
+func removeVoxelInstance(entityId EntityId, instId int, rState *voxelRenderState) {
+	last := len(rState.transformsUniforms) - 1
+	if instId < 0 || instId > last {
+		return
+	}
+
+	if instId != last {
+		// move last into instId position
+		rState.transformsUniforms[instId] = rState.transformsUniforms[last]
+		rState.voxelInstancesUniform[instId] = rState.voxelInstancesUniform[last]
+		rState.instanceAABBsUniform[instId] = rState.instanceAABBsUniform[last]
+
+		// remap swapped entity index
+		if lastEntity, ok := rState.instanceIdToEntity[last]; ok {
+			rState.entityVoxInstanceIds[lastEntity] = instId
+			rState.instanceIdToEntity[instId] = lastEntity
+			delete(rState.instanceIdToEntity, last)
+		}
+	} else {
+		// removing last element, just drop reverse mapping
+		delete(rState.instanceIdToEntity, last)
+	}
+
+	// shrink slices
+	rState.transformsUniforms = rState.transformsUniforms[:last]
+	rState.voxelInstancesUniform = rState.voxelInstancesUniform[:last]
+	rState.instanceAABBsUniform = rState.instanceAABBsUniform[:last]
+
+	// drop mapping for removed entity
+	delete(rState.entityVoxInstanceIds, entityId)
+
+	// ensure GPU instance buffer is updated (due to swap/removal)
+	rState.isVoxelPoolUpdated = true
+}
+
 func createMacroGrid(voxModelAsset *VoxelModelAsset, rState *voxelRenderState) macroGridUniform {
 	// Calculate macro grid dimensions
 	brickSizeX := voxModelAsset.BrickSize[0]
@@ -373,64 +529,67 @@ func createBuffers(gpuState *GpuState, rState *voxelRenderState) {
 		rState.brickPoolBuffer = createBuffer("brickPool", rState.brickPoolUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
 		rState.voxelPoolBuffer = createBuffer("voxelPool", rState.voxelPoolUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
 		rState.palettesBuffer = createBuffer("palettes", rState.palettesUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+		rState.instanceAABBsBuffer = createBuffer("instanceAABBs", rState.instanceAABBsUniform, gpuState, wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+
+		// Visible instances list (CPU culling)
+		// allocate buffer large enough to hold all instance indices
+		rState.visibleInstanceIndices = make([]uint32, len(rState.transformsUniforms))
+		if len(rState.visibleInstanceIndices) == 0 {
+			// keep at least 1 element to avoid zero-sized buffer
+			rState.visibleInstanceIndices = []uint32{0}
+		}
+		rState.visibleInstanceIndicesBuffer = createBuffer("visibleInstanceIndices", rState.visibleInstanceIndices, gpuState, wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+		rState.visibleListParametersBuffer = createBuffer("visibleListParams", rState.visibleListParametersUniform, gpuState, wgpu.BufferUsageUniform|wgpu.BufferUsageCopyDst)
 	}
 }
 
 // TODO run only once?
 func createBindGroup(gpuState *GpuState, rState *voxelRenderState) {
-	//we need to create bind group only once
-	if nil == rState.voxelBindGroup && nil != rState.voxelPoolBuffer {
-		bindGroupLayout := rState.rayCastPipeline.GetBindGroupLayout(0)
-		defer bindGroupLayout.Release()
-		bindGroup, err := gpuState.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-			Layout: bindGroupLayout,
+	// Create compute bind group (group 0) once buffers and compute pipeline are available
+	if rState.voxelComputeBindGroup == nil && rState.voxelPoolBuffer != nil && rState.computePipeline != nil && rState.outputTextureView != nil {
+		fmt.Println("Creating compute bind group...")
+		compLayout := rState.computePipeline.GetBindGroupLayout(0)
+		defer compLayout.Release()
+		compGroup, err := gpuState.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+			Layout: compLayout,
 			Entries: []wgpu.BindGroupEntry{
-				{
-					Binding: 0,
-					Buffer:  rState.renderParametersBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 1,
-					Buffer:  rState.cameraBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 2,
-					Buffer:  rState.transformsBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 3,
-					Buffer:  rState.voxelInstancesBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 4,
-					Buffer:  rState.macroIndexPoolBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 5,
-					Buffer:  rState.brickPoolBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 6,
-					Buffer:  rState.voxelPoolBuffer,
-					Size:    wgpu.WholeSize,
-				},
-				{
-					Binding: 7,
-					Buffer:  rState.palettesBuffer,
-					Size:    wgpu.WholeSize,
-				},
+				{Binding: 0, Buffer: rState.renderParametersBuffer, Size: wgpu.WholeSize},
+				{Binding: 1, Buffer: rState.cameraBuffer, Size: wgpu.WholeSize},
+				{Binding: 2, Buffer: rState.transformsBuffer, Size: wgpu.WholeSize},
+				{Binding: 3, Buffer: rState.voxelInstancesBuffer, Size: wgpu.WholeSize},
+				{Binding: 4, Buffer: rState.macroIndexPoolBuffer, Size: wgpu.WholeSize},
+				{Binding: 5, Buffer: rState.brickPoolBuffer, Size: wgpu.WholeSize},
+				{Binding: 6, Buffer: rState.voxelPoolBuffer, Size: wgpu.WholeSize},
+				{Binding: 7, Buffer: rState.palettesBuffer, Size: wgpu.WholeSize},
+				{Binding: 8, TextureView: rState.outputTextureView},
+				{Binding: 10, Buffer: rState.instanceAABBsBuffer, Size: wgpu.WholeSize},
+				{Binding: 11, Buffer: rState.visibleInstanceIndicesBuffer, Size: wgpu.WholeSize},
+				{Binding: 12, Buffer: rState.visibleListParametersBuffer, Size: wgpu.WholeSize},
 			},
 		})
 		if err != nil {
 			panic(err)
 		}
-		rState.voxelBindGroup = bindGroup
+		rState.voxelComputeBindGroup = compGroup
+		fmt.Println("Compute bind group created.")
+	}
+
+	// Create render bind group for group 0 (blit: textureLoad from compute output @binding(9))
+	if rState.blitBindGroup == nil && rState.blitPipeline != nil && rState.outputTextureView != nil {
+		fmt.Println("Creating blit bind group (render group 0)...")
+		renderLayout0 := rState.blitPipeline.GetBindGroupLayout(0)
+		defer renderLayout0.Release()
+		blitGroup, err := gpuState.device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+			Layout: renderLayout0,
+			Entries: []wgpu.BindGroupEntry{
+				{Binding: 9, TextureView: rState.outputTextureView},
+			},
+		})
+		if err != nil {
+			panic(err)
+		}
+		rState.blitBindGroup = blitGroup
+		fmt.Println("Blit bind group created.")
 	}
 }
 
@@ -455,21 +614,29 @@ func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
 	}
 	defer encoder.Release()
 
-	renderPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
-		ColorAttachments: []wgpu.RenderPassColorAttachment{
-			{
-				View:       view,
-				LoadOp:     wgpu.LoadOpClear,
-				StoreOp:    wgpu.StoreOpStore,
-				ClearValue: wgpu.Color{R: 0.1, G: 0.2, B: 0.3, A: 1.0},
-			},
-		},
-	})
-	defer renderPass.Release()
+	// Build visible-instance index list via CPU frustum culling
+	{
+		// We use clip-space plane-out test against the camera ViewProjection matrix
+		vp := rs.cameraUniform.ViewProjMx
+		visible := make([]uint32, 0, len(rs.instanceAABBsUniform))
+		for i := range rs.instanceAABBsUniform {
+			if aabbIntersectsFrustumClip(vp, rs.instanceAABBsUniform[i]) {
+				visible = append(visible, uint32(i))
+			}
+		}
+		// Update visible list parameters and buffers
+		rs.visibleListParametersUniform.Count = uint32(len(visible))
+		_ = gpuState.queue.WriteBuffer(rs.visibleListParametersBuffer, 0, toBufferBytes(rs.visibleListParametersUniform))
+		if len(visible) > 0 {
+			_ = gpuState.queue.WriteBuffer(rs.visibleInstanceIndicesBuffer, 0, toBufferBytes(visible))
+		}
+	}
 
+	// Update GPU buffers before compute and render
 	err = gpuState.queue.WriteBuffer(rs.renderParametersBuffer, 0, toBufferBytes(rs.renderParametersUniform))
 	err = gpuState.queue.WriteBuffer(rs.cameraBuffer, 0, toBufferBytes(rs.cameraUniform))
 	err = gpuState.queue.WriteBuffer(rs.transformsBuffer, 0, toBufferBytes(rs.transformsUniforms))
+	err = gpuState.queue.WriteBuffer(rs.instanceAABBsBuffer, 0, toBufferBytes(rs.instanceAABBsUniform))
 
 	if rs.isVoxelPoolUpdated {
 		err = gpuState.queue.WriteBuffer(rs.voxelInstancesBuffer, 0, toBufferBytes(rs.voxelInstancesUniform))
@@ -483,10 +650,39 @@ func voxelRendering(rs *voxelRenderState, gpuState *GpuState) {
 		panic(err)
 	}
 
-	renderPass.SetPipeline(rs.rayCastPipeline)
+	// Compute raycasting into output texture before render pass
+	if rs.computePipeline != nil && rs.voxelComputeBindGroup != nil {
+		computePass := encoder.BeginComputePass(nil)
+		computePass.SetPipeline(rs.computePipeline)
+		computePass.SetBindGroup(0, rs.voxelComputeBindGroup, nil)
+		wgX := (rs.renderParametersUniform.WindowWidth + uint32(7)) / uint32(8)
+		wgY := (rs.renderParametersUniform.WindowHeight + uint32(7)) / uint32(8)
+		computePass.DispatchWorkgroups(wgX, wgY, 1)
+		err = computePass.End()
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	renderPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+		ColorAttachments: []wgpu.RenderPassColorAttachment{
+			{
+				View:       view,
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{R: 0.1, G: 0.2, B: 0.3, A: 1.0},
+			},
+		},
+	})
+	defer renderPass.Release()
+
+	renderPass.SetPipeline(rs.blitPipeline)
 	renderPass.SetIndexBuffer(rs.indexBuffer, wgpu.IndexFormatUint16, 0, wgpu.WholeSize)
 	renderPass.SetVertexBuffer(0, rs.vertexBuffer, 0, wgpu.WholeSize)
-	renderPass.SetBindGroup(0, rs.voxelBindGroup, nil)
+	// Bind group(0) for render pass; fs_main uses @group(0), @binding(9)
+	if rs.blitBindGroup != nil {
+		renderPass.SetBindGroup(0, rs.blitBindGroup, nil)
+	}
 	renderPass.DrawIndexed(rs.vertexCount, 1, 0, 0, 0)
 
 	err = renderPass.End()
@@ -513,6 +709,19 @@ func updateModelUniforms(cmd *Commands, rState *voxelRenderState) {
 				uniform.ModelMx = modelMx
 				uniform.InvModelMx = modelMx.Inv()
 				rState.transformsUniforms[voxModelId] = uniform
+
+				// recompute world-space AABB for this instance
+				mg := rState.voxelInstancesUniform[voxModelId].MacroGrid
+				localMax := mgl32.Vec3{
+					float32(mg.Size[0] * mg.BrickSize[0]),
+					float32(mg.Size[1] * mg.BrickSize[1]),
+					float32(mg.Size[2] * mg.BrickSize[2]),
+				}
+				minV, maxV := computeWorldAABB(modelMx, mgl32.Vec3{0, 0, 0}, localMax)
+				rState.instanceAABBsUniform[voxModelId] = aabbUniform{
+					Min: mgl32.Vec4{minV.X(), minV.Y(), minV.Z(), 0},
+					Max: mgl32.Vec4{maxV.X(), maxV.Y(), maxV.Z(), 0},
+				}
 			}
 			return true
 		})
@@ -549,4 +758,132 @@ func buildCameraMatrix(c *CameraComponent) mgl32.Mat4 {
 		c.Far,
 	)
 	return projection.Mul4(view)
+}
+
+// compute axis-aligned world-space AABB by transforming 8 corners of a local box
+func computeWorldAABB(model mgl32.Mat4, localMin, localMax mgl32.Vec3) (mgl32.Vec3, mgl32.Vec3) {
+	corners := [8]mgl32.Vec3{
+		{localMin.X(), localMin.Y(), localMin.Z()},
+		{localMax.X(), localMin.Y(), localMin.Z()},
+		{localMin.X(), localMax.Y(), localMin.Z()},
+		{localMin.X(), localMin.Y(), localMax.Z()},
+		{localMax.X(), localMax.Y(), localMin.Z()},
+		{localMax.X(), localMin.Y(), localMax.Z()},
+		{localMin.X(), localMax.Y(), localMax.Z()},
+		{localMax.X(), localMax.Y(), localMax.Z()},
+	}
+	p0 := model.Mul4x1(mgl32.Vec4{corners[0].X(), corners[0].Y(), corners[0].Z(), 1})
+	minV := p0.Vec3()
+	maxV := p0.Vec3()
+	for i := 1; i < 8; i++ {
+		p := model.Mul4x1(mgl32.Vec4{corners[i].X(), corners[i].Y(), corners[i].Z(), 1})
+		v := p.Vec3()
+		if v[0] < minV[0] {
+			minV[0] = v[0]
+		}
+		if v[1] < minV[1] {
+			minV[1] = v[1]
+		}
+		if v[2] < minV[2] {
+			minV[2] = v[2]
+		}
+		if v[0] > maxV[0] {
+			maxV[0] = v[0]
+		}
+		if v[1] > maxV[1] {
+			maxV[1] = v[1]
+		}
+		if v[2] > maxV[2] {
+			maxV[2] = v[2]
+		}
+	}
+	return minV, maxV
+}
+
+// Return true if the AABB intersects the camera frustum defined by ViewProjection matrix.
+// We do a conservative clip-space plane-out test: if all 8 corners are outside any clip plane, it's culled.
+func aabbIntersectsFrustumClip(viewProj mgl32.Mat4, aabb aabbUniform) bool {
+	min := aabb.Min.Vec3()
+	max := aabb.Max.Vec3()
+	corners := [8]mgl32.Vec4{
+		{min.X(), min.Y(), min.Z(), 1},
+		{max.X(), min.Y(), min.Z(), 1},
+		{min.X(), max.Y(), min.Z(), 1},
+		{min.X(), min.Y(), max.Z(), 1},
+		{max.X(), max.Y(), min.Z(), 1},
+		{max.X(), min.Y(), max.Z(), 1},
+		{min.X(), max.Y(), max.Z(), 1},
+		{max.X(), max.Y(), max.Z(), 1},
+	}
+	clip := [8]mgl32.Vec4{}
+	for i := 0; i < 8; i++ {
+		clip[i] = viewProj.Mul4x1(corners[i])
+	}
+	// Left: x < -w
+	allOutside := true
+	for i := 0; i < 8; i++ {
+		if clip[i][0] >= -clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Right: x > w
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][0] <= clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Bottom: y < -w
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][1] >= -clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Top: y > w
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][1] <= clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Near: z < -w (OpenGL-style)
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][2] >= -clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	// Far: z > w
+	allOutside = true
+	for i := 0; i < 8; i++ {
+		if clip[i][2] <= clip[i][3] {
+			allOutside = false
+			break
+		}
+	}
+	if allOutside {
+		return false
+	}
+	return true
 }

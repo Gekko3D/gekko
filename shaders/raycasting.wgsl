@@ -42,10 +42,27 @@ struct Voxel {
     alpha: f32
 };
 
+struct AABB {
+    min: vec4f,
+    max: vec4f
+};
+
+struct VisibleListParameters {
+    count: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+};
+
 struct VoxInstanceHit {
     instanceId: u32,
     entryDist: f32,
     exitDist: f32
+};
+
+struct Candidate {
+    idx: u32,
+    tEntry: f32,
 };
 
 struct DDA3DState {
@@ -67,6 +84,7 @@ struct RayResult {
     depth: f32,
 };
 
+// Group 0: compute pipeline resources
 @group(0) @binding(0)
 var<uniform> renderParams: RenderParameters;
 @group(0) @binding(1)
@@ -83,11 +101,28 @@ var<storage, read> brickPool: array<Brick>;
 var<storage, read> voxelPool: array<Voxel>;
 @group(0) @binding(7)
 var<storage, read> palettes: array<array<vec4f, 256>>;
+// Output storage texture for compute
+@group(0) @binding(8)
+var outputTex: texture_storage_2d<rgba8unorm, write>;
+
+// Per-instance world-space AABBs to cheaply cull instances per pixel
+@group(0) @binding(10)
+var<storage, read> instanceAABBs: array<AABB>;
+@group(0) @binding(11)
+var<storage, read> visibleInstanceIndices: array<u32>;
+@group(0) @binding(12)
+var<uniform> visibleListParams: VisibleListParameters;
+
+/* Render (blit) pipeline resources: use group(0) with a distinct binding to avoid conflicts with compute.
+   Compute uses group(0) bindings [0..8]. We'll use binding 9 for the blit texture. */
+@group(0) @binding(9)
+var blitTex: texture_2d<f32>;
 
 const EMPTY_BRICK: u32 = 0xffffffffu;
 const DIRECT_COLOR_FLAG: u32 = 0x80000000u;
 const COLOR_MASK: u32 = 0x7fffffffu;
 const MAX_INSTANCES: u32 = 64u;
+const MAX_CANDIDATES: u32 = 12u;
 const INF: f32 = 1e9;
 const OPAQUE_THRESHOLD: f32 = 0.995;
 const T_EPS: f32 = 1e-4;
@@ -203,6 +238,7 @@ fn samplePalette(paletteId: u32, colorId: u32) -> vec4<f32> {
     let idx = min(colorId, 255u);
     return palettes[paletteId][idx];
 }
+
 
 fn blendFrontToBack(accum: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
     let a = accum.a;
@@ -329,7 +365,6 @@ fn traceTwoLevelDDA(rayOrigin: vec3<f32>, rayDir: vec3<f32>, inst: VoxelInstance
 
 // Generate ray for current pixel
 fn generateRay(coord: vec2f) -> vec3f {
-
     let res = vec2f(f32(renderParams.width), f32(renderParams.height));
     let uv = (coord / res) * 2.0 - 1.0;
     var clip = vec4f(uv, 1.0, 1.0);
@@ -337,68 +372,112 @@ fn generateRay(coord: vec2f) -> vec3f {
     world /= world.w;
     // Transform ray to world space
     let rayWorld = normalize(world.xyz - camera.position.xyz);
-
     return rayWorld;
 }
 
 // Main raytracing function that tests all instances
 fn traceScene(rayOrigin: vec3f, rayDir: vec3f) -> RayResult {
     var accum = vec4<f32>(0.0);
-    var hits: array<RayHit, MAX_INSTANCES>;
-    var hitCount: u32 = 0u;
     var minDepth: f32 = INF;
 
-    // --- Collect hits from all instances ---
-    for (var i = 0u; i < arrayLength(&voxInstances) && i < MAX_INSTANCES; i = i + 1u) {
-        let hit = traceTwoLevelDDA(rayOrigin, rayDir, voxInstances[i], instanceTransforms[i]);
-        if (hit.t < INF) {
-            hits[hitCount] = RayHit(hit.color, hit.t, true);
-            hitCount = hitCount + 1u;
+    // Build K-nearest candidates by AABB entry distance from the CPU-visible list
+    var candidates: array<Candidate, MAX_CANDIDATES>;
+    var candCount: u32 = 0u;
+    let total = min(visibleListParams.count, MAX_INSTANCES);
+
+    for (var i = 0u; i < total; i = i + 1u) {
+        let instIdx = visibleInstanceIndices[i];
+        let aabb = instanceAABBs[instIdx];
+        let tbox = intersectAABB(rayOrigin, rayDir, aabb.min.xyz, aabb.max.xyz);
+        if (tbox.x > tbox.y) {
+            continue;
+        }
+        let tEntry = max(0.0, tbox.x);
+
+        // insertion into sorted small array
+        var insertPos: u32 = 0u;
+        loop {
+            if (insertPos >= candCount) { break; }
+            if (tEntry < candidates[insertPos].tEntry) { break; }
+            insertPos = insertPos + 1u;
+        }
+
+        if (candCount < MAX_CANDIDATES) {
+            // shift right [insertPos, candCount-1]
+            var j: i32 = i32(candCount);
+            loop {
+                if (j <= i32(insertPos)) { break; }
+                candidates[u32(j)] = candidates[u32(j - 1)];
+                j = j - 1;
+            }
+            candidates[insertPos] = Candidate(instIdx, tEntry);
+            candCount = candCount + 1u;
+        } else {
+            if (insertPos < MAX_CANDIDATES) {
+                // shift right [insertPos, MAX_CANDIDATES-2]
+                var j2: i32 = i32(MAX_CANDIDATES - 1u);
+                loop {
+                    if (j2 <= i32(insertPos)) { break; }
+                    candidates[u32(j2)] = candidates[u32(j2 - 1)];
+                    j2 = j2 - 1;
+                }
+                candidates[insertPos] = Candidate(instIdx, tEntry);
+            }
         }
     }
 
-    // --- Blend hits front-to-back by distance ---
-    loop {
-        var closestIdx: u32 = 0xffffffffu;
-        var closestT: f32 = INF;
-
-        // find nearest remaining hit (epsilon-aware, prefer higher opacity on ties)
-        for (var i = 0u; i < hitCount; i = i + 1u) {
-            if (hits[i].valid) {
-                let ti = hits[i].t;
-                if (closestIdx == 0xffffffffu ||
-                    ti + T_EPS < closestT ||
-                    (abs(ti - closestT) <= T_EPS && hits[i].color.a > hits[closestIdx].color.a)) {
-                    closestT = ti;
-                    closestIdx = i;
+    // Trace candidates: gather exact hits and keep them sorted by world-space distance (t)
+    var hits: array<RayHit, MAX_CANDIDATES>;
+    var hitCount: u32 = 0u;
+    for (var k = 0u; k < candCount; k = k + 1u) {
+        let instIdx = candidates[k].idx;
+        let h = traceTwoLevelDDA(rayOrigin, rayDir, voxInstances[instIdx], instanceTransforms[instIdx]);
+        if (h.t < INF) {
+            // insertion sort by h.t (ascending)
+            var insertPos: u32 = 0u;
+            loop {
+                if (insertPos >= hitCount) { break; }
+                if (h.t < hits[insertPos].t) { break; }
+                insertPos = insertPos + 1u;
+            }
+            if (hitCount < MAX_CANDIDATES) {
+                var j: i32 = i32(hitCount);
+                loop {
+                    if (j <= i32(insertPos)) { break; }
+                    hits[u32(j)] = hits[u32(j - 1)];
+                    j = j - 1;
+                }
+                hits[insertPos] = h;
+                hitCount = hitCount + 1u;
+            } else {
+                if (insertPos < MAX_CANDIDATES) {
+                    var j2: i32 = i32(MAX_CANDIDATES - 1u);
+                    loop {
+                        if (j2 <= i32(insertPos)) { break; }
+                        hits[u32(j2)] = hits[u32(j2 - 1)];
+                        j2 = j2 - 1;
+                    }
+                    hits[insertPos] = h;
                 }
             }
         }
+    }
 
-        if (closestIdx == 0xffffffffu) {
-            break;
-        }
-
-        let h = hits[closestIdx];
+    // Blend sorted hits front-to-back; early-out when sufficiently opaque
+    for (var i = 0u; i < hitCount; i = i + 1u) {
+        let h = hits[i];
         accum = blendFrontToBack(accum, h.color);
-
-        // record nearest visible surface
         if (accum.a > 0.0 && h.t < minDepth) {
             minDepth = h.t;
         }
-
-        hits[closestIdx].valid = false;
-
         if (accum.a >= OPAQUE_THRESHOLD) {
             break;
         }
     }
 
-    // Default background = sky (optional)
     if (accum.a == 0.0) {
         return RayResult(vec4<f32>(0.0), INF);
     }
-
     return RayResult(accum, minDepth);
 }
 
@@ -408,17 +487,26 @@ fn vs_main(
     @location(1) uv: vec2f,
 ) -> VertexOutput {
     var result: VertexOutput;
-
     result.position = position;
     result.uv = uv;
     return result;
 }
 
+// Fragment now only blits the compute output texture
 @fragment
 fn fs_main(vertex: VertexOutput) -> @location(0) vec4f {
-    let rayWorld = generateRay(vertex.position.xy);
-    //TODO pass amount of instances as uniform
-    let rayResult = traceScene(camera.position.xyz, rayWorld);
+    let px = i32(floor(vertex.position.x));
+    let py = i32(floor(vertex.position.y));
+    return textureLoad(blitTex, vec2i(px, py), 0);
+}
 
-    return rayResult.color;
+// Compute entry: raycast per pixel into storage texture
+@compute @workgroup_size(8, 8, 1)
+fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= renderParams.width || gid.y >= renderParams.height) {
+        return;
+    }
+    let rayWorld = generateRay(vec2f(f32(gid.x), f32(gid.y)));
+    let rayResult = traceScene(camera.position.xyz, rayWorld);
+    textureStore(outputTex, vec2u(gid.xy), rayResult.color);
 }
