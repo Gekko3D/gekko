@@ -3,6 +3,7 @@ package gekko
 import (
 	"image"
 	"image/png"
+	"math"
 	"os"
 
 	"github.com/google/uuid"
@@ -200,7 +201,10 @@ func (server AssetServer) CreateVoxelBasedTexture(voxModel *VoxModel, palette *V
 	return server.CreateTextureFromTexels(volumeTexels[:], voxModel.SizeX, voxModel.SizeY, voxModel.SizeZ, TextureDimension3D, TextureFormatRGBA8Unorm)
 }
 
-func (server AssetServer) CreateVoxelModel(model VoxModel) AssetId {
+func (server AssetServer) CreateVoxelModel(model VoxModel, resolution float32) AssetId {
+	if resolution != 1.0 && resolution > 0 {
+		model = ScaleVoxModel(model, resolution)
+	}
 	id := makeAssetId()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: model,
@@ -208,6 +212,95 @@ func (server AssetServer) CreateVoxelModel(model VoxModel) AssetId {
 		BrickSize: [3]uint32{8, 8, 8},
 	}
 	return id
+}
+
+func ScaleVoxModel(model VoxModel, scale float32) VoxModel {
+	if scale <= 0 || scale == 1.0 {
+		return model
+	}
+	newSizeX := uint32(math.Round(float64(float32(model.SizeX) * scale)))
+	newSizeY := uint32(math.Round(float64(float32(model.SizeY) * scale)))
+	newSizeZ := uint32(math.Round(float64(float32(model.SizeZ) * scale)))
+
+	if newSizeX == 0 {
+		newSizeX = 1
+	}
+	if newSizeY == 0 {
+		newSizeY = 1
+	}
+	if newSizeZ == 0 {
+		newSizeZ = 1
+	}
+
+	newVoxels := make([]Voxel, 0)
+
+	if scale > 1.0 {
+		// Upscaling
+		for _, v := range model.Voxels {
+			startX := uint32(float32(v.X) * scale)
+			startY := uint32(float32(v.Y) * scale)
+			startZ := uint32(float32(v.Z) * scale)
+			endX := uint32(float32(v.X+1) * scale)
+			endY := uint32(float32(v.Y+1) * scale)
+			endZ := uint32(float32(v.Z+1) * scale)
+
+			for x := startX; x < endX; x++ {
+				for y := startY; y < endY; y++ {
+					for z := startZ; z < endZ; z++ {
+						if x < newSizeX && y < newSizeY && z < newSizeZ {
+							newVoxels = append(newVoxels, Voxel{
+								X: x, Y: y, Z: z,
+								ColorIndex: v.ColorIndex,
+							})
+						}
+					}
+				}
+			}
+		}
+	} else {
+		// Downscaling with voting approximation
+		type coord struct{ x, y, z uint32 }
+		groups := make(map[coord]map[byte]int)
+		for _, v := range model.Voxels {
+			nx := uint32(float32(v.X) * scale)
+			ny := uint32(float32(v.Y) * scale)
+			nz := uint32(float32(v.Z) * scale)
+			if nx >= newSizeX {
+				nx = newSizeX - 1
+			}
+			if ny >= newSizeY {
+				ny = newSizeY - 1
+			}
+			if nz >= newSizeZ {
+				nz = newSizeZ - 1
+			}
+			c := coord{nx, ny, nz}
+			if groups[c] == nil {
+				groups[c] = make(map[byte]int)
+			}
+			groups[c][v.ColorIndex]++
+		}
+
+		for c, counts := range groups {
+			maxCount := 0
+			var bestColor byte
+			for idx, count := range counts {
+				if count > maxCount {
+					maxCount = count
+					bestColor = idx
+				}
+			}
+			newVoxels = append(newVoxels, Voxel{
+				X: c.x, Y: c.y, Z: c.z,
+				ColorIndex: bestColor,
+			})
+		}
+	}
+
+	return VoxModel{
+		SizeX: newSizeX, SizeY: newSizeY, SizeZ: newSizeZ,
+		Voxels: newVoxels,
+	}
 }
 
 func (server AssetServer) CreateVoxelPalette(palette VoxPalette, materials []VoxMaterial) AssetId {
@@ -251,12 +344,13 @@ func (server AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness, 
 	return id
 }
 
-func (server AssetServer) CreateSphereModel(radius float32) AssetId {
+func (server AssetServer) CreateSphereModel(radius float32, resolution float32) AssetId {
 	id := makeAssetId()
-	r := int(radius)
+	scaledRadius := radius * resolution
+	r := int(scaledRadius)
 	size := uint32(r*2 + 1)
 	voxels := []Voxel{}
-	r2 := radius * radius
+	r2 := scaledRadius * scaledRadius
 
 	for x := -r; x <= r; x++ {
 		for y := -r; y <= r; y++ {
@@ -264,9 +358,9 @@ func (server AssetServer) CreateSphereModel(radius float32) AssetId {
 				fx, fy, fz := float32(x), float32(y), float32(z)
 				if fx*fx+fy*fy+fz*fz <= r2 {
 					voxels = append(voxels, Voxel{
-						X:          uint8(x + r),
-						Y:          uint8(y + r),
-						Z:          uint8(z + r),
+						X:          uint32(x + r),
+						Y:          uint32(y + r),
+						Z:          uint32(z + r),
 						ColorIndex: 1,
 					})
 				}
@@ -284,16 +378,16 @@ func (server AssetServer) CreateSphereModel(radius float32) AssetId {
 	return id
 }
 
-func (server AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32) AssetId {
+func (server AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resolution float32) AssetId {
 	id := makeAssetId()
-	sx, sy, sz := int(sizeX), int(sizeY), int(sizeZ)
+	sx, sy, sz := int(sizeX*resolution), int(sizeY*resolution), int(sizeZ*resolution)
 	voxels := []Voxel{}
 
 	for x := 0; x < sx; x++ {
 		for y := 0; y < sy; y++ {
 			for z := 0; z < sz; z++ {
 				voxels = append(voxels, Voxel{
-					X: uint8(x), Y: uint8(y), Z: uint8(z),
+					X: uint32(x), Y: uint32(y), Z: uint32(z),
 					ColorIndex: 1,
 				})
 			}
@@ -310,21 +404,23 @@ func (server AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32) AssetId {
 	return id
 }
 
-func (server AssetServer) CreateConeModel(radius, height float32) AssetId {
+func (server AssetServer) CreateConeModel(radius, height float32, resolution float32) AssetId {
 	id := makeAssetId()
-	r := int(radius)
-	h := int(height)
+	scaledRadius := radius * resolution
+	scaledHeight := height * resolution
+	r := int(scaledRadius)
+	h := int(scaledHeight)
 	voxels := []Voxel{}
 
-	for y := 0; y < h; y++ {
-		currR := radius * (1.0 - float32(y)/height)
+	for z := 0; z < h; z++ {
+		currR := scaledRadius * (1.0 - float32(z)/scaledHeight)
 		currR2 := currR * currR
 		for x := -r; x <= r; x++ {
-			for z := -r; z <= r; z++ {
-				fx, fz := float32(x), float32(z)
-				if fx*fx+fz*fz <= currR2 {
+			for y := -r; y <= r; y++ {
+				fx, fy := float32(x), float32(y)
+				if fx*fx+fy*fy <= currR2 {
 					voxels = append(voxels, Voxel{
-						X: uint8(x + r), Y: uint8(y), Z: uint8(z + r),
+						X: uint32(x + r), Y: uint32(y + r), Z: uint32(z),
 						ColorIndex: 1,
 					})
 				}
@@ -334,7 +430,7 @@ func (server AssetServer) CreateConeModel(radius, height float32) AssetId {
 
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
-			SizeX: uint32(r*2 + 1), SizeY: uint32(height), SizeZ: uint32(r*2 + 1),
+			SizeX: uint32(r*2 + 1), SizeY: uint32(r*2 + 1), SizeZ: uint32(h),
 			Voxels: voxels,
 		},
 		BrickSize: [3]uint32{8, 8, 8},
@@ -342,19 +438,21 @@ func (server AssetServer) CreateConeModel(radius, height float32) AssetId {
 	return id
 }
 
-func (server AssetServer) CreatePyramidModel(size, height float32) AssetId {
+func (server AssetServer) CreatePyramidModel(size, height float32, resolution float32) AssetId {
 	id := makeAssetId()
-	h := int(height)
+	scaledSize := size * resolution
+	scaledHeight := height * resolution
+	h := int(scaledHeight)
 	voxels := []Voxel{}
-	halfS := size * 0.5
+	halfS := scaledSize * 0.5
 
-	for y := 0; y < h; y++ {
-		scale := 1.0 - float32(y)/height
+	for z := 0; z < h; z++ {
+		scale := 1.0 - float32(z)/scaledHeight
 		limit := halfS * scale
 		for x := int(-limit); x <= int(limit); x++ {
-			for z := int(-limit); z <= int(limit); z++ {
+			for y := int(-limit); y <= int(limit); y++ {
 				voxels = append(voxels, Voxel{
-					X: uint8(float32(x) + halfS), Y: uint8(y), Z: uint8(float32(z) + halfS),
+					X: uint32(float32(x) + halfS), Y: uint32(float32(y) + halfS), Z: uint32(z),
 					ColorIndex: 1,
 				})
 			}
@@ -363,7 +461,7 @@ func (server AssetServer) CreatePyramidModel(size, height float32) AssetId {
 
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
-			SizeX: uint32(size), SizeY: uint32(height), SizeZ: uint32(size),
+			SizeX: uint32(scaledSize), SizeY: uint32(scaledSize), SizeZ: uint32(scaledHeight),
 			Voxels: voxels,
 		},
 		BrickSize: [3]uint32{8, 8, 8},

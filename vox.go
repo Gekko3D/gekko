@@ -13,7 +13,8 @@ const (
 )
 
 type Voxel struct {
-	X, Y, Z, ColorIndex byte
+	X, Y, Z    uint32
+	ColorIndex byte
 }
 
 type VoxModel struct {
@@ -115,9 +116,9 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 					return nil, errors.New("XYZI chunk data overflow")
 				}
 				model.Voxels[i] = Voxel{
-					X:          chunkData[offset],
-					Y:          chunkData[offset+1],
-					Z:          chunkData[offset+2],
+					X:          uint32(chunkData[offset]),
+					Y:          uint32(chunkData[offset+1]),
+					Z:          uint32(chunkData[offset+2]),
 					ColorIndex: chunkData[offset+3],
 				}
 			}
