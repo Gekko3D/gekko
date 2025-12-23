@@ -63,6 +63,9 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 	state.rtApp.ClearText()
 
+	// Begin batching updates for this frame
+	state.rtApp.BufferManager.BeginBatch()
+
 	// Sync instances
 	currentEntities := make(map[EntityId]bool)
 
@@ -219,6 +222,9 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 		state.rtApp.Scene.Lights = append(state.rtApp.Scene.Lights, gpuLight)
 		return true
 	})
+
+	// End batching and process all accumulated updates
+	state.rtApp.BufferManager.EndBatch()
 
 	state.rtApp.Update()
 }

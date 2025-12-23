@@ -77,8 +77,8 @@ func editorSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 	}
 
 	// Handle mouse clicks for editing
-	leftClick := input.JustPressed[MouseButtonLeft]
-	rightClick := input.JustPressed[MouseButtonRight]
+	leftClick := input.JustPressed[MouseButtonLeft] || input.Pressed[MouseButtonLeft]
+	rightClick := input.JustPressed[MouseButtonRight] || input.Pressed[MouseButtonRight]
 
 	if !leftClick && !rightClick {
 		return

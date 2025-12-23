@@ -36,13 +36,19 @@ type GpuBufferManager struct {
 
 	MapOffsets    map[*volume.XBrickMap][3]uint32 // sectorBase, brickBase, payloadBase
 	AllocatedMaps map[*volume.XBrickMap]bool      // Track which maps have been fully uploaded
+
+	// Batch update tracking
+	BatchMode      bool                       // Enable batching of updates within a frame
+	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
 }
 
 func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	return &GpuBufferManager{
-		Device:        device,
-		MapOffsets:    make(map[*volume.XBrickMap][3]uint32),
-		AllocatedMaps: make(map[*volume.XBrickMap]bool),
+		Device:         device,
+		MapOffsets:     make(map[*volume.XBrickMap][3]uint32),
+		AllocatedMaps:  make(map[*volume.XBrickMap]bool),
+		PendingUpdates: make(map[*volume.XBrickMap]bool),
+		BatchMode:      false,
 	}
 }
 
@@ -145,6 +151,52 @@ func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj [16]float32
 		}
 	}
 	m.Device.GetQueue().WriteBuffer(m.CameraBuf, 0, buf)
+}
+
+// BeginBatch starts accumulating updates without immediate GPU writes
+func (m *GpuBufferManager) BeginBatch() {
+	m.BatchMode = true
+	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
+}
+
+// EndBatch processes all accumulated updates in one operation
+func (m *GpuBufferManager) EndBatch() {
+	if !m.BatchMode {
+		return
+	}
+
+	// Process all pending updates
+	for xbm := range m.PendingUpdates {
+		// Process dirty bricks
+		for bKey := range xbm.DirtyBricks {
+			sKey := [3]int{bKey[0], bKey[1], bKey[2]}
+			sector, ok := xbm.Sectors[sKey]
+			if !ok {
+				continue
+			}
+
+			bx, by, bz := bKey[3], bKey[4], bKey[5]
+			brick := sector.GetBrick(bx, by, bz)
+			if brick != nil {
+				m.UpdateBrickPayload(xbm, bKey, brick)
+				m.UpdateBrickRecord(xbm, bKey, brick)
+			}
+		}
+
+		// Process dirty sectors
+		for sKey := range xbm.DirtySectors {
+			sector, ok := xbm.Sectors[sKey]
+			if ok {
+				m.UpdateSectorRecord(xbm, sKey, sector)
+			}
+		}
+
+		// Clear dirty flags
+		xbm.ClearDirty()
+	}
+
+	m.BatchMode = false
+	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
 }
 
 func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
@@ -263,6 +315,12 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 			xbm := obj.XBrickMap
 			if len(xbm.DirtyBricks) > 0 || len(xbm.DirtySectors) > 0 {
 				hasDirty = true
+
+				// If in batch mode, just mark as pending and skip immediate update
+				if m.BatchMode {
+					m.PendingUpdates[xbm] = true
+					continue
+				}
 
 				// Update dirty bricks
 				for bKey := range xbm.DirtyBricks {
