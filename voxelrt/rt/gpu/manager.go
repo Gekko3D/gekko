@@ -34,13 +34,15 @@ type GpuBufferManager struct {
 	DebugBindGroup0 *wgpu.BindGroup
 	BindGroup2      *wgpu.BindGroup
 
-	MapOffsets map[*volume.XBrickMap][3]uint32 // sectorBase, brickBase, payloadBase
+	MapOffsets    map[*volume.XBrickMap][3]uint32 // sectorBase, brickBase, payloadBase
+	AllocatedMaps map[*volume.XBrickMap]bool      // Track which maps have been fully uploaded
 }
 
 func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	return &GpuBufferManager{
-		Device:     device,
-		MapOffsets: make(map[*volume.XBrickMap][3]uint32),
+		Device:        device,
+		MapOffsets:    make(map[*volume.XBrickMap][3]uint32),
+		AllocatedMaps: make(map[*volume.XBrickMap]bool),
 	}
 }
 
@@ -243,6 +245,60 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 
 func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 	recreated := false
+
+	// Check if we can do sparse updates
+	canDoSparseUpdate := true
+	for _, obj := range scene.Objects {
+		xbm := obj.XBrickMap
+		if _, allocated := m.AllocatedMaps[xbm]; !allocated {
+			canDoSparseUpdate = false
+			break
+		}
+	}
+
+	// Attempt sparse update if possible
+	if canDoSparseUpdate && m.VoxelPayloadBuf != nil && m.BrickTableBuf != nil && m.SectorTableBuf != nil {
+		hasDirty := false
+		for _, obj := range scene.Objects {
+			xbm := obj.XBrickMap
+			if len(xbm.DirtyBricks) > 0 || len(xbm.DirtySectors) > 0 {
+				hasDirty = true
+
+				// Update dirty bricks
+				for bKey := range xbm.DirtyBricks {
+					sKey := [3]int{bKey[0], bKey[1], bKey[2]}
+					sector, ok := xbm.Sectors[sKey]
+					if !ok {
+						continue
+					}
+
+					bx, by, bz := bKey[3], bKey[4], bKey[5]
+					brick := sector.GetBrick(bx, by, bz)
+					if brick != nil {
+						m.UpdateBrickPayload(xbm, bKey, brick)
+						m.UpdateBrickRecord(xbm, bKey, brick)
+					}
+				}
+
+				// Update dirty sectors
+				for sKey := range xbm.DirtySectors {
+					sector, ok := xbm.Sectors[sKey]
+					if ok {
+						m.UpdateSectorRecord(xbm, sKey, sector)
+					}
+				}
+
+				// Clear dirty flags
+				xbm.ClearDirty()
+			}
+		}
+
+		if hasDirty {
+			return false // No recreation needed, just updates
+		}
+	}
+
+	// Full rebuild path (initial upload or major changes)
 	materials := []byte{}
 	sectors := []byte{}
 	bricks := []byte{}
@@ -416,6 +472,9 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 		binary.LittleEndian.PutUint32(pBuf[20:24], math.Float32bits(obj.LODThreshold))
 		binary.LittleEndian.PutUint32(pBuf[24:28], sectorCount)
 		objParams = append(objParams, pBuf...)
+
+		// Mark map as allocated for future sparse updates
+		m.AllocatedMaps[xbm] = true
 	}
 
 	// WebGPU requires non-zero size for buffers
@@ -459,6 +518,157 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 	}
 
 	return recreated
+}
+
+// UpdateBrickPayload updates a single brick's payload in the GPU buffer
+func (m *GpuBufferManager) UpdateBrickPayload(xbm *volume.XBrickMap, brickKey [6]int, brick *volume.Brick) {
+	if m.VoxelPayloadBuf == nil {
+		return // Buffer not yet allocated
+	}
+
+	offsets, ok := m.MapOffsets[xbm]
+	if !ok {
+		return // Map not yet uploaded
+	}
+
+	// Check if brick is solid (no payload to upload)
+	if brick.Flags&volume.BrickFlagSolid != 0 {
+		return
+	}
+
+	// Calculate byte offset in payload buffer
+	payloadBase := offsets[2]
+	atlasOffset := brick.AtlasOffset
+	byteOffset := payloadBase + atlasOffset
+
+	// Serialize brick payload (512 bytes)
+	payload := make([]byte, 512)
+	idx := 0
+	for z := 0; z < 8; z++ {
+		for y := 0; y < 8; y++ {
+			for x := 0; x < 8; x++ {
+				payload[idx] = brick.Payload[x][y][z]
+				idx++
+			}
+		}
+	}
+
+	// Write directly to GPU buffer
+	m.Device.GetQueue().WriteBuffer(m.VoxelPayloadBuf, uint64(byteOffset), payload)
+}
+
+// UpdateBrickRecord updates a single brick's metadata in the brick table
+func (m *GpuBufferManager) UpdateBrickRecord(xbm *volume.XBrickMap, brickKey [6]int, brick *volume.Brick) {
+	if m.BrickTableBuf == nil {
+		return
+	}
+
+	offsets, ok := m.MapOffsets[xbm]
+	if !ok {
+		return
+	}
+
+	// Find brick index in the sector
+	sx, sy, sz := brickKey[0], brickKey[1], brickKey[2]
+	bx, by, bz := brickKey[3], brickKey[4], brickKey[5]
+	sKey := [3]int{sx, sy, sz}
+
+	sector, ok := xbm.Sectors[sKey]
+	if !ok {
+		return
+	}
+
+	flatIdx := bx + by*4 + bz*16
+	if (sector.BrickMask64 & (1 << flatIdx)) == 0 {
+		return // Brick doesn't exist
+	}
+
+	packedIdx := sector.GetPackedIndex(flatIdx)
+	brickBase := offsets[1]
+
+	// Calculate brick record offset (16 bytes per brick)
+	// Need to count all bricks in all previous sectors of this map
+	brickCount := uint32(0)
+	for sk, s := range xbm.Sectors {
+		if sk == sKey {
+			brickCount += uint32(packedIdx)
+			break
+		}
+		brickCount += uint32(len(s.PackedBricks))
+	}
+
+	recordOffset := (brickBase + brickCount) * 16
+
+	// Prepare brick record (16 bytes)
+	var gpuAtlasOffset uint32
+	if brick.Flags&volume.BrickFlagSolid != 0 {
+		gpuAtlasOffset = brick.AtlasOffset
+	} else {
+		gpuAtlasOffset = brick.AtlasOffset
+	}
+
+	buf := make([]byte, 16)
+	binary.LittleEndian.PutUint32(buf[0:4], gpuAtlasOffset)
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(brick.OccupancyMask64))
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(brick.OccupancyMask64>>32))
+	binary.LittleEndian.PutUint32(buf[12:16], brick.Flags)
+
+	m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(recordOffset), buf)
+}
+
+// UpdateSectorRecord updates a single sector's metadata in the sector table
+func (m *GpuBufferManager) UpdateSectorRecord(xbm *volume.XBrickMap, sectorKey [3]int, sector *volume.Sector) {
+	if m.SectorTableBuf == nil {
+		return
+	}
+
+	offsets, ok := m.MapOffsets[xbm]
+	if !ok {
+		return
+	}
+
+	// Find sector index
+	sectorBase := offsets[0]
+	sectorCount := uint32(0)
+	found := false
+	for sk := range xbm.Sectors {
+		if sk == sectorKey {
+			found = true
+			break
+		}
+		sectorCount++
+	}
+
+	if !found {
+		return
+	}
+
+	recordOffset := (sectorBase + sectorCount) * 32
+
+	// Calculate first brick index for this sector
+	firstBrickIdx := uint32(0)
+	for sk, s := range xbm.Sectors {
+		if sk == sectorKey {
+			break
+		}
+		firstBrickIdx += uint32(len(s.PackedBricks))
+	}
+
+	// Prepare sector record (32 bytes)
+	ox, oy, oz := int32(sectorKey[0]*32), int32(sectorKey[1]*32), int32(sectorKey[2]*32)
+	buf := make([]byte, 32)
+
+	// Origin (16 bytes)
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(ox))
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(oy))
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(oz))
+
+	// ID, lo, hi (16 bytes)
+	binary.LittleEndian.PutUint32(buf[16:20], firstBrickIdx)
+	binary.LittleEndian.PutUint32(buf[20:24], uint32(sector.BrickMask64))
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(sector.BrickMask64>>32))
+
+	m.Device.GetQueue().WriteBuffer(m.SectorTableBuf, uint64(recordOffset), buf)
 }
 
 func (m *GpuBufferManager) CreateBindGroups(pipeline *wgpu.ComputePipeline) {
