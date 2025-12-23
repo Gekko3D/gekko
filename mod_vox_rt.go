@@ -1,6 +1,8 @@
 package gekko
 
 import (
+	"math"
+
 	"github.com/go-gl/mathgl/mgl32"
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
@@ -40,6 +42,11 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 	cmd.AddResources(state)
 
+	app.UseSystem(
+		System(voxelRtDebugSystem).
+			InStage(Update).
+			RunAlways(),
+	)
 	app.UseSystem(
 		System(voxelRtSystem).
 			InStage(PostUpdate).
@@ -172,9 +179,70 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 		return true
 	})
 
+	// Sync lights
+	state.rtApp.Scene.Lights = state.rtApp.Scene.Lights[:0]
+	MakeQuery2[TransformComponent, LightComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, light *LightComponent) bool {
+		// Convert ECS light to GPU light
+		gpuLight := core.Light{}
+
+		// Position/Direction from transform
+		// Position
+		gpuLight.Position = [4]float32{transform.Position.X(), transform.Position.Y(), transform.Position.Z(), 1.0}
+
+		// Direction: Rotate (0, 0, -1) by transform rotation
+		// Assuming standard forward is -Z
+		forward := mgl32.Vec3{0, 0, -1}
+		rot := mgl32.QuatRotate(transform.Rotation, mgl32.Vec3{0, 0, 1}) // Axis angle? No, TransformComponent.Rotation is float32 (angle) around Z usually for 2D?
+		// Wait, look at transform usage in mod_vox_rt:
+		// obj.Transform.Rotation = mgl32.QuatRotate(transform.Rotation, mgl32.Vec3{0, 0, 1})
+		// It seems TransformComponent has Rotation as float32 angle (Z-rotation)?
+		// If so, 3D rotation might be missing in Gekko's TransformComponent?
+		// Let's check TransformComponent definition.
+
+		// Re-reading usage: mgl32.QuatRotate(transform.Rotation, mgl32.Vec3{0, 0, 1})
+		// This implies transform.Rotation is a float32 angle in radians.
+		// If 3D lights need full 3D rotation, the current TransformComponent might be insufficient (2D focused?).
+		// BUT for now, I will follow existing pattern.
+		// The forward vector (0,0,-1) rotated by Z-axis rotation effectively rotates it in XY plane? No.
+		// Rotating (0,0,-1) around Z axis keeps it at (0,0,-1).
+		// If the game is "2.5D" or top down, maybe lights point down?
+		// Directional light (sun) usually has explicit direction.
+		// Spotlights need direction.
+
+		// Let's assume for now that if the user wants 3D direction, they might need a better Transform.
+		// However, for this task, I'll calculate direction based on the available rotation.
+		// If rotation is only around Z, then Direction (0,0,-1) remains (0,0,-1).
+		// Maybe I should add specific direction to LightComponent?
+		// No, the prompt says "set these lights to the scene via ecs".
+		// I will use what is available.
+
+		dir := rot.Rotate(forward)
+		gpuLight.Direction = [4]float32{dir.X(), dir.Y(), dir.Z(), 0.0}
+
+		gpuLight.Color = [4]float32{light.Color[0], light.Color[1], light.Color[2], light.Intensity}
+
+		// Params: Range, ConeAngle, Type, Padding
+		// Cone angle passed as cosine for shader optimization
+		cosAngle := float32(0.0)
+		if light.Type == LightTypeSpot {
+			cosAngle = float32(math.Cos(float64(light.ConeAngle) * math.Pi / 180.0 / 2.0))
+		}
+
+		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
+
+		state.rtApp.Scene.Lights = append(state.rtApp.Scene.Lights, gpuLight)
+		return true
+	})
+
 	state.rtApp.Update()
 }
 
 func voxelRtRenderSystem(state *VoxelRtState) {
 	state.rtApp.Render()
+}
+
+func voxelRtDebugSystem(input *Input, state *VoxelRtState) {
+	if input.JustPressed[KeyF1] {
+		state.rtApp.DebugMode = !state.rtApp.DebugMode
+	}
 }

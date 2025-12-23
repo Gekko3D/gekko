@@ -83,6 +83,7 @@ func max(a, b float32) float32 {
 type Scene struct {
 	Objects       []*VoxelObject
 	BVHNodesBytes []byte // Linearized BVH nodes
+	Lights        []Light
 	// Builder TODO
 }
 

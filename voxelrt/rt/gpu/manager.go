@@ -21,6 +21,7 @@ type GpuBufferManager struct {
 	CameraBuf    *wgpu.Buffer
 	InstancesBuf *wgpu.Buffer
 	BVHNodesBuf  *wgpu.Buffer
+	LightsBuf    *wgpu.Buffer
 
 	MaterialBuf     *wgpu.Buffer
 	SectorTableBuf  *wgpu.Buffer
@@ -201,7 +202,39 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 		recreated = true
 	}
 
-	// 3. XBrickMap
+	// 3. Lights
+	lightsData := []byte{}
+	// Light header: count (u32), pad (12 bytes)
+	// Actually typical structure for array<Light> is just data, but we need to know count.
+	// We can put count in CameraData or a separate uniform?
+	// Or use a storage buffer with a header?
+	// Let's use storage buffer `array<Light>` and pass count in Camera structure or ObjectParams?
+	// Camera structure has padding. Let's use `pad0` in CameraData for light count.
+	// Wait, CameraData is Uniform buffer.
+	// In the plan I said "Add lights storage buffer binding (Group 0, Binding 3)".
+	// Shader usually needs to know length. `arrayLength` works for runtime sized arrays in storage buffers.
+	// So we just dump lights.
+
+	for _, l := range scene.Lights {
+		// Pos (16)
+		lightsData = append(lightsData, vec4ToBytes(l.Position)...)
+		// Dir (16)
+		lightsData = append(lightsData, vec4ToBytes(l.Direction)...)
+		// Color (16)
+		lightsData = append(lightsData, vec4ToBytes(l.Color)...)
+		// Params (16)
+		lightsData = append(lightsData, vec4ToBytes(l.Params)...)
+	}
+
+	if len(lightsData) == 0 {
+		lightsData = make([]byte, 64) // dummy
+	}
+
+	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+
+	// 4. XBrickMap
 	if m.updateXBrickMap(scene) {
 		recreated = true
 	}
@@ -434,6 +467,7 @@ func (m *GpuBufferManager) CreateBindGroups(pipeline *wgpu.ComputePipeline) {
 		{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
 		{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
 		{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
+		{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
 	}
 	desc0 := &wgpu.BindGroupDescriptor{
 		Layout:  pipeline.GetBindGroupLayout(0),
@@ -470,6 +504,7 @@ func (m *GpuBufferManager) CreateDebugBindGroups(pipeline *wgpu.ComputePipeline)
 		{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
 		{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
 		{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
+		{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
 	}
 	desc0 := &wgpu.BindGroupDescriptor{
 		Layout:  pipeline.GetBindGroupLayout(0),
@@ -520,5 +555,14 @@ func float32ToBytes(ff float32) []byte {
 	bits := math.Float32bits(ff)
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, bits)
+	return buf
+}
+
+func vec4ToBytes(v [4]float32) []byte {
+	buf := make([]byte, 16)
+	binary.LittleEndian.PutUint32(buf[0:4], math.Float32bits(v[0]))
+	binary.LittleEndian.PutUint32(buf[4:8], math.Float32bits(v[1]))
+	binary.LittleEndian.PutUint32(buf[8:12], math.Float32bits(v[2]))
+	binary.LittleEndian.PutUint32(buf[12:16], math.Float32bits(v[3]))
 	return buf
 }

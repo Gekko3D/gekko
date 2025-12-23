@@ -42,11 +42,19 @@ struct Ray {
     inv_dir: vec3<f32>,
 };
 
+struct Light {
+    position: vec4<f32>,
+    direction: vec4<f32>,
+    color: vec4<f32>,
+    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
+};
+
 // ============== BIND GROUPS ==============
 
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(2) var<storage, read> nodes: array<BVHNode>;
+@group(0) @binding(3) var<storage, read> lights: array<Light>;
 
 @group(1) @binding(0) var out_tex: texture_storage_2d<rgba8unorm, write>;
 
@@ -91,52 +99,37 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let uv = vec2<f32>(f32(global_id.x) / f32(dims.x), f32(global_id.y) / f32(dims.y));
     let ray = get_ray(uv);
 
-    // Initial color should stay unchanged if we don't hit any debug lines.
-    // However, write-only storage textures don't allow reading.
-    // In a separate pass without blending, we can't easily avoid overwriting.
-    // UNLESS we only write if we hit something? NO, even then it writes to that pixel.
-    
-    // To solve this in compute without read_write:
-    // This shader MUST be responsible for both or we use a separate composite pass.
-    // BUT the user asked for a separate pass.
-    
-    // If we want a separate pass to overlay, we should use a Graphics Pass with Blending.
-    // Or we use a temporary texture?
-    
-    // Let's assume for now we want to keep it simple and just move the code.
-    // If I move the code but can't read the background, the background will be lost.
-    
-    // Let's reconsider. If I move it to a graphics pass that draws lines, it's perfect.
-    // But then I need to feed it bvh nodes as vertex data? bit overkill for now.
-    
-    // Let's try to see if Cogentcore webgpu supports read_write.
-    // Or I just use a more advanced shader path.
-    
-    // Actually, I can just use a separate debug shader that IS the core raytrace but with debug logic?
-    // No, that's not what was asked.
-    
-    // Let's try to use a graphics pass for debug overlay.
-    // It will render over the quad.
-    
-    // Wait, let's look at `raytrace.wgsl` again. It writes the sky/hit color at the end.
-    // If I move the debug logic out, I can't overlay it in compute easily without read access.
-    
-    // I will propose using a graphics pass for the debug drawing.
-    // This involves:
-    // 1. A simple vertex shader that takes BVH nodes/AABBs as instances.
-    // 2. A fragment shader that outputs the color.
-    // This is MUCH more efficient too.
-    
-    // But I'll need to prepare the lines.
-    
-    // Easiest "Separate Path" in compute:
-    // Use TWO textures. `raytrace` -> `texA`. `debug` -> `texB` (reading `texA`).
-    // Then `fullscreen` shows `texB`.
-    
-    // Let's do that.
-    
     var debug_color = vec4<f32>(0.0);
     var hit_debug = false;
+    var closest_t_debug = 1e9;
+
+    // Render lights as spheres
+    let num_lights = arrayLength(&lights);
+    for (var i = 0u; i < num_lights; i = i + 1u) {
+        let light = lights[i];
+        let light_type = u32(light.params.z);
+        if (light_type == 1u) { continue; } // Skip Directional
+
+        let l_pos = light.position.xyz;
+        let radius: f32 = 0.5;
+        let m = ray.origin - l_pos;
+        let b = dot(m, ray.dir);
+        let c = dot(m, m) - radius * radius;
+        let discr = b * b - c;
+
+        if (discr >= 0.0) {
+            let t = -b - sqrt(discr);
+            if (t > 0.0 && t < closest_t_debug) {
+                closest_t_debug = t;
+                debug_color = vec4<f32>(light.color.xyz, 1.0);
+                // Make spot lights look different? Maybe a crosshair?
+                if (light_type == 2u) {
+                    debug_color = vec4<f32>(light.color.xyz * 1.5, 1.0);
+                }
+                hit_debug = true;
+            }
+        }
+    }
 
     var stack_debug: array<i32, 64>;
     var sp_debug = 0;
@@ -149,7 +142,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let node = nodes[node_idx];
 
         let t_vals = intersect_aabb(ray, node.aabb_min.xyz, node.aabb_max.xyz);
-        if (t_vals.x <= t_vals.y && t_vals.y > 0.0) {
+        if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < closest_t_debug) {
             var is_leaf = node.leaf_count > 0;
             var node_color = vec4<f32>(1.0, 0.6, 0.0, 1.0); // Orange-Yellow for internal
             if (is_leaf) {
@@ -169,6 +162,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             
             if (edge_count >= 2) {
                 debug_color = node_color;
+                closest_t_debug = t_vals.x;
                 hit_debug = true;
             }
 
@@ -178,7 +172,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 // Cyan Inst
                 let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
-                if (t_inst.x <= t_inst.y && t_inst.y > 0.0) {
+                if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < closest_t_debug) {
                     let hit_p_inst = ray.origin + ray.dir * t_inst.x;
                     let ed_i = abs(hit_p_inst - inst.aabb_min.xyz);
                     let ed2_i = abs(hit_p_inst - inst.aabb_max.xyz);
@@ -189,13 +183,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     if (em_i.z < 0.03) { ec_i = ec_i + 1; }
                     if (ec_i >= 2) {
                         debug_color = vec4<f32>(0.0, 0.8, 1.0, 1.0);
+                        closest_t_debug = t_inst.x;
                         hit_debug = true;
                     }
                 }
 
                 // OBB Magenta
                 let t_obb = intersect_aabb(ray_ws_obj, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
-                if (t_obb.x <= t_obb.y && t_obb.y > 0.0) {
+                if (t_obb.x <= t_obb.y && t_obb.y > 0.0 && t_obb.x < closest_t_debug) {
                     let hit_p_os = ray_ws_obj.origin + ray_ws_obj.dir * t_obb.x;
                     let ed_o = abs(hit_p_os - inst.local_aabb_min.xyz);
                     let ed2_o = abs(hit_p_os - inst.local_aabb_max.xyz);
@@ -206,6 +201,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     if (em_o.z < 0.05) { ec_o = ec_o + 1; }
                     if (ec_o >= 2) {
                         debug_color = vec4<f32>(1.0, 0.0, 1.0, 1.0);
+                        closest_t_debug = t_obb.x;
                         hit_debug = true;
                     }
                 }

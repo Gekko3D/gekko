@@ -284,15 +284,14 @@ func (server AssetServer) CreateSphereModel(radius float32) AssetId {
 	return id
 }
 
-func (server AssetServer) CreateCubeModel(size float32) AssetId {
+func (server AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32) AssetId {
 	id := makeAssetId()
-	s := int(size)
-	dim := uint32(s)
+	sx, sy, sz := int(sizeX), int(sizeY), int(sizeZ)
 	voxels := []Voxel{}
 
-	for x := 0; x < s; x++ {
-		for y := 0; y < s; y++ {
-			for z := 0; z < s; z++ {
+	for x := 0; x < sx; x++ {
+		for y := 0; y < sy; y++ {
+			for z := 0; z < sz; z++ {
 				voxels = append(voxels, Voxel{
 					X: uint8(x), Y: uint8(y), Z: uint8(z),
 					ColorIndex: 1,
@@ -303,7 +302,7 @@ func (server AssetServer) CreateCubeModel(size float32) AssetId {
 
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
-			SizeX: dim, SizeY: dim, SizeZ: dim,
+			SizeX: uint32(sx), SizeY: uint32(sy), SizeZ: uint32(sz),
 			Voxels: voxels,
 		},
 		BrickSize: [3]uint32{8, 8, 8},

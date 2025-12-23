@@ -91,12 +91,97 @@ struct ObjectParams {
     padding: u32,
 };
 
+struct Light {
+    position: vec4<f32>,
+    direction: vec4<f32>,
+    color: vec4<f32>,
+    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
+};
+
 // ============== BIND GROUPS ==============
 
 // Group 0: Scene
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(2) var<storage, read> nodes: array<BVHNode>;
+@group(0) @binding(3) var<storage, read> lights: array<Light>;
+
+// PBR-lite lighting calculation
+fn calculate_lighting(
+    hit_pos: vec3<f32>, 
+    normal: vec3<f32>, 
+    view_dir: vec3<f32>,
+    base_color: vec3<f32>,
+    emissive: vec3<f32>,
+    roughness: f32,
+    metalness: f32
+) -> vec3<f32> {
+    let diffuse_color = base_color * (1.0 - metalness);
+    let ambient = camera.ambient_color.xyz * base_color;
+    var result = ambient + emissive;
+
+    let num_lights = arrayLength(&lights);
+    for (var i = 0u; i < num_lights; i++) {
+        let light = lights[i];
+        var L = vec3<f32>(0.0);
+        var dist_to_light = 1e9;
+        var attenuation = 1.0;
+        
+        let light_type = u32(light.params.z);
+        
+        if (light_type == 1u) { // Directional
+            L = -normalize(light.direction.xyz);
+            attenuation = 1.0;
+        } else {
+            let L_vec = light.position.xyz - hit_pos;
+            dist_to_light = length(L_vec);
+            L = normalize(L_vec);
+            
+            let range = light.params.x;
+            if (dist_to_light > range) {
+                attenuation = 0.0;
+            } else {
+                let dist_sq = dist_to_light * dist_to_light;
+                let factor = dist_sq / (range * range);
+                let smooth_factor = max(0.0, 1.0 - factor * factor);
+                let inv_sq = 1.0 / (dist_sq + 1.0);
+                attenuation = inv_sq * smooth_factor * smooth_factor * light.color.w * 50.0;
+                
+                if (light_type == 2u) { // Spot
+                    let spot_dir = normalize(light.direction.xyz);
+                    let cos_cur = dot(-L, spot_dir);
+                    let cos_cone = light.params.y;
+                    
+                    if (cos_cur < cos_cone) {
+                        attenuation = 0.0;
+                    } else {
+                        let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
+                        attenuation = attenuation * spot_att;
+                    }
+                }
+            }
+        }
+        
+        if (attenuation > 0.0) {
+            let light_dir = L;
+            let half_dir = normalize(light_dir + view_dir);
+            
+            let NdotL = max(dot(normal, light_dir), 0.0);
+            let NdotH = max(dot(normal, half_dir), 0.0);
+            
+            // Diffuse
+            let diffuse = diffuse_color * NdotL;
+            
+            // Specular
+            let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
+            let F0 = mix(vec3(0.04), base_color, metalness);
+            let specular = pow(NdotH, spec_power) * F0;
+            
+            result += (diffuse + specular) * light.color.xyz * attenuation;
+        }
+    }
+    return result;
+}
 
 // Group 1: Output
 @group(1) @binding(0) var out_tex: texture_storage_2d<rgba8unorm, write>;
@@ -715,28 +800,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         // Shading
                         let hit_pos_ws = voxel_hit.shading_pos;
                         let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
-                        let L = camera.light_pos.xyz - hit_pos_ws;
-                        let dist_to_light = length(L);
-                        let light_dir = normalize(L);
-                        let half_dir = normalize(light_dir + view_dir);
                         
-                        let NdotL = max(dot(voxel_hit.normal, light_dir), 0.0);
-                        let NdotH = max(dot(voxel_hit.normal, half_dir), 0.0);
-                        
-                        // PBR-lite: Diffuse
-                        let diffuse_color = base_color * (1.0 - metalness);
-                        let diffuse = diffuse_color * NdotL;
-                        
-                        // PBR-lite: Specular
-                        let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
-                        let F0 = mix(vec3(0.04), base_color, metalness);
-                        let specular = pow(NdotH, spec_power) * F0;
-                        
-                        // Lighting
-                        let attenuation = 2500.0 / (dist_to_light * dist_to_light + 1.0);
-                        let ambient = camera.ambient_color.xyz * base_color;
-                        
-                        hit_color = ambient + (diffuse + specular) * attenuation + emissive;
+                        hit_color = calculate_lighting(
+                            hit_pos_ws,
+                            voxel_hit.normal,
+                            view_dir,
+                            base_color,
+                            emissive,
+                            roughness,
+                            metalness
+                        );
 
                         hit_found = true;
                     }
