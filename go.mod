@@ -3,7 +3,7 @@ module github.com/gekko3d/gekko
 go 1.24
 
 require (
-	github.com/cogentcore/webgpu v0.0.0-20250407222942-151b7afd296c
+	github.com/cogentcore/webgpu v0.23.0
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20250301202403-da16c1255728
 	github.com/stretchr/testify v1.10.0
 )

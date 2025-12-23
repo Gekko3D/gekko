@@ -177,26 +177,41 @@ func parseMaterial(data []byte) (VoxMaterial, error) {
 
 	// Material properties
 	for len(data) > 0 {
+		if len(data) < 4 {
+			break
+		}
 		keyLen := int(binary.LittleEndian.Uint32(data[:4]))
 		data = data[4:]
+		if len(data) < keyLen {
+			break
+		}
 		key := string(data[:keyLen])
 		data = data[keyLen:]
 
+		if len(data) < 4 {
+			break
+		}
 		valueLen := int(binary.LittleEndian.Uint32(data[:4]))
 		data = data[4:]
+		if len(data) < valueLen {
+			break
+		}
 		value := string(data[:valueLen])
 		data = data[valueLen:]
 
 		// Convert to appropriate type based on key
 		switch key {
-		case "_weight":
-			var weight float32
-			// This is a simplified approach - actual parsing would need to handle the float string
-			_, err := fmt.Sscanf(value, "%f", &weight)
-			if err != nil {
-				return mat, err
+		case "_weight", "_rough", "_metal", "_emit", "_ior", "_trans", "_flux":
+			var val float32
+			_, err := fmt.Sscanf(value, "%f", &val)
+			if err == nil {
+				mat.Property[key] = val
+				if key == "_weight" {
+					mat.Weight = val
+				}
+			} else {
+				mat.Property[key] = value
 			}
-			mat.Weight = weight
 		default:
 			mat.Property[key] = value
 		}

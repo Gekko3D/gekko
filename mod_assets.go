@@ -82,6 +82,12 @@ type VoxelModelAsset struct {
 
 type VoxelPaletteAsset struct {
 	VoxPalette VoxPalette
+	Materials  []VoxMaterial
+	IsPBR      bool
+	Roughness  float32
+	Metalness  float32
+	Emission   float32
+	IOR        float32
 }
 
 func (server AssetServer) CreateMesh(vertices AnySlice, indexes []uint16) Mesh {
@@ -204,10 +210,164 @@ func (server AssetServer) CreateVoxelModel(model VoxModel) AssetId {
 	return id
 }
 
-func (server AssetServer) CreateVoxelPalette(palette VoxPalette) AssetId {
+func (server AssetServer) CreateVoxelPalette(palette VoxPalette, materials []VoxMaterial) AssetId {
 	id := makeAssetId()
 	server.voxPalettes[id] = VoxelPaletteAsset{
 		VoxPalette: palette,
+		Materials:  materials,
+	}
+	return id
+}
+
+func (server AssetServer) CreateSimplePalette(rgba [4]uint8) AssetId {
+	var p VoxPalette
+	for i := range p {
+		p[i] = rgba
+	}
+	return server.CreateVoxelPalette(p, nil)
+}
+
+func (server AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness, emission, ior float32) AssetId {
+	id := makeAssetId()
+	var p VoxPalette
+	for i := range p {
+		p[i] = rgba
+	}
+
+	// This is a bit tricky because the Palette asset doesn't store PBR properties.
+	// The VoxelModelAsset holds the model, but the palette is just colors.
+	// HOWEVER, the VoxelRtModule's conversion logic can be extended to look for
+	// "pseudo-materials" or we can add a new asset type.
+	// For now, I'll store the PBR properties in a new VoxelPaletteAsset field.
+
+	server.voxPalettes[id] = VoxelPaletteAsset{
+		VoxPalette: p,
+		IsPBR:      true,
+		Roughness:  roughness,
+		Metalness:  metalness,
+		Emission:   emission,
+		IOR:        ior,
+	}
+	return id
+}
+
+func (server AssetServer) CreateSphereModel(radius float32) AssetId {
+	id := makeAssetId()
+	r := int(radius)
+	size := uint32(r*2 + 1)
+	voxels := []Voxel{}
+	r2 := radius * radius
+
+	for x := -r; x <= r; x++ {
+		for y := -r; y <= r; y++ {
+			for z := -r; z <= r; z++ {
+				fx, fy, fz := float32(x), float32(y), float32(z)
+				if fx*fx+fy*fy+fz*fz <= r2 {
+					voxels = append(voxels, Voxel{
+						X:          uint8(x + r),
+						Y:          uint8(y + r),
+						Z:          uint8(z + r),
+						ColorIndex: 1,
+					})
+				}
+			}
+		}
+	}
+
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: size, SizeY: size, SizeZ: size,
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
+	}
+	return id
+}
+
+func (server AssetServer) CreateCubeModel(size float32) AssetId {
+	id := makeAssetId()
+	s := int(size)
+	dim := uint32(s)
+	voxels := []Voxel{}
+
+	for x := 0; x < s; x++ {
+		for y := 0; y < s; y++ {
+			for z := 0; z < s; z++ {
+				voxels = append(voxels, Voxel{
+					X: uint8(x), Y: uint8(y), Z: uint8(z),
+					ColorIndex: 1,
+				})
+			}
+		}
+	}
+
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: dim, SizeY: dim, SizeZ: dim,
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
+	}
+	return id
+}
+
+func (server AssetServer) CreateConeModel(radius, height float32) AssetId {
+	id := makeAssetId()
+	r := int(radius)
+	h := int(height)
+	voxels := []Voxel{}
+
+	for y := 0; y < h; y++ {
+		currR := radius * (1.0 - float32(y)/height)
+		currR2 := currR * currR
+		for x := -r; x <= r; x++ {
+			for z := -r; z <= r; z++ {
+				fx, fz := float32(x), float32(z)
+				if fx*fx+fz*fz <= currR2 {
+					voxels = append(voxels, Voxel{
+						X: uint8(x + r), Y: uint8(y), Z: uint8(z + r),
+						ColorIndex: 1,
+					})
+				}
+			}
+		}
+	}
+
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: uint32(r*2 + 1), SizeY: uint32(height), SizeZ: uint32(r*2 + 1),
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
+	}
+	return id
+}
+
+func (server AssetServer) CreatePyramidModel(size, height float32) AssetId {
+	id := makeAssetId()
+	h := int(height)
+	voxels := []Voxel{}
+	halfS := size * 0.5
+
+	for y := 0; y < h; y++ {
+		scale := 1.0 - float32(y)/height
+		limit := halfS * scale
+		for x := int(-limit); x <= int(limit); x++ {
+			for z := int(-limit); z <= int(limit); z++ {
+				voxels = append(voxels, Voxel{
+					X: uint8(float32(x) + halfS), Y: uint8(y), Z: uint8(float32(z) + halfS),
+					ColorIndex: 1,
+				})
+			}
+		}
+	}
+
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: uint32(size), SizeY: uint32(height), SizeZ: uint32(size),
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
 	}
 	return id
 }
