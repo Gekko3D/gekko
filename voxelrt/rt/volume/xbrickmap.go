@@ -13,6 +13,8 @@ const (
 	MicroSize    = 2
 	SectorBricks = 4
 	SectorSize   = SectorBricks * BrickSize // 32
+
+	BrickFlagSolid = 1
 )
 
 type Brick struct {
@@ -66,6 +68,40 @@ func (b *Brick) SetVoxel(bx, by, bz int, val uint8) {
 			b.OccupancyMask64 &^= (1 << bitIdx)
 		}
 	}
+}
+
+func (b *Brick) Expand(paletteIdx uint8) {
+	b.Flags &^= BrickFlagSolid
+	b.OccupancyMask64 = 0xFFFFFFFFFFFFFFFF
+	for z := 0; z < BrickSize; z++ {
+		for y := 0; y < BrickSize; y++ {
+			for x := 0; x < BrickSize; x++ {
+				b.Payload[x][y][z] = paletteIdx
+			}
+		}
+	}
+}
+
+func (b *Brick) TryCompress() bool {
+	if b.IsEmpty() {
+		return false
+	}
+	firstVal := b.Payload[0][0][0]
+	if firstVal == 0 {
+		return false
+	}
+	for z := 0; z < BrickSize; z++ {
+		for y := 0; y < BrickSize; y++ {
+			for x := 0; x < BrickSize; x++ {
+				if b.Payload[x][y][z] != firstVal {
+					return false
+				}
+			}
+		}
+	}
+	b.Flags |= BrickFlagSolid
+	b.AtlasOffset = uint32(firstVal)
+	return true
 }
 
 func (b *Brick) IsEmpty() bool {
@@ -221,6 +257,13 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		if sector, ok := x.Sectors[sKey]; ok {
 			brick := sector.GetBrick(bx, by, bz)
 			if brick != nil {
+				if brick.Flags&BrickFlagSolid != 0 {
+					brick.Expand(uint8(brick.AtlasOffset))
+					// Reset atlas offset because it now needs a real slot
+					offset := x.AllocateAtlasSlot(bKey)
+					brick.AtlasOffset = offset
+				}
+
 				brick.SetVoxel(vx, vy, vz, 0)
 				x.DirtySectors[sKey] = true
 				x.DirtyBricks[bKey] = true
@@ -232,6 +275,9 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 					delete(x.Sectors, sKey)
 				} else if brick.IsEmpty() {
 					x.FreeAtlasSlot(bKey)
+				} else {
+					// Try to re-compress? Or leave as sparse until full rebuild?
+					// For simple editing, leave sparse.
 				}
 			}
 		}
@@ -246,14 +292,30 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		if isNew {
 			offset := x.AllocateAtlasSlot(bKey)
 			brick.AtlasOffset = offset
-		} else if _, has := x.BrickAtlasMap[bKey]; has {
-			brick.AtlasOffset = x.BrickAtlasMap[bKey]
+		} else {
+			if brick.Flags&BrickFlagSolid != 0 {
+				if brick.AtlasOffset == uint32(val) {
+					return // Already solid with this value
+				}
+				brick.Expand(uint8(brick.AtlasOffset))
+				// Now needs a real slot
+				offset := x.AllocateAtlasSlot(bKey)
+				brick.AtlasOffset = offset
+			} else if _, has := x.BrickAtlasMap[bKey]; has {
+				brick.AtlasOffset = x.BrickAtlasMap[bKey]
+			}
 		}
 
 		brick.SetVoxel(vx, vy, vz, val)
 		x.DirtySectors[sKey] = true
 		x.DirtyBricks[bKey] = true
 		x.AABBDirty = true
+
+		// Optional: Compress if full
+		brick.TryCompress()
+		if brick.Flags&BrickFlagSolid != 0 {
+			x.FreeAtlasSlot(bKey)
+		}
 	}
 }
 
@@ -361,6 +423,15 @@ func (x *XBrickMap) ComputeAABB() (mgl32.Vec3, mgl32.Vec3) {
 				brickOx := ox + float32(bx*BrickSize)
 				brickOy := oy + float32(by*BrickSize)
 				brickOz := oz + float32(bz*BrickSize)
+
+				if brick.Flags&BrickFlagSolid != 0 {
+					vMin := mgl32.Vec3{brickOx, brickOy, brickOz}
+					vMax := vMin.Add(mgl32.Vec3{float32(BrickSize), float32(BrickSize), float32(BrickSize)})
+					minB = mgl32.Vec3{min(minB.X(), vMin.X()), min(minB.Y(), vMin.Y()), min(minB.Z(), vMin.Z())}
+					maxB = mgl32.Vec3{max(maxB.X(), vMax.X()), max(maxB.Y(), vMax.Y()), max(maxB.Z(), vMax.Z())}
+					found = true
+					continue
+				}
 
 				// Iterate voxels for precision
 				for vx := 0; vx < BrickSize; vx++ {

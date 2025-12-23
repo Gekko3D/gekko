@@ -372,25 +372,25 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 						// In Go port, we are rebuilding the buffer every time (for now).
 						// So we append payload linearly and update atlas offset.
 
-						relPayloadOffset := uint32(len(payload)) - offsets[2]
+						// Prepare Atlas Offset / Palette Index
+						var gpuAtlasOffset uint32
+						if brick.Flags&volume.BrickFlagSolid != 0 {
+							gpuAtlasOffset = brick.AtlasOffset
+						} else {
+							gpuAtlasOffset = uint32(len(payload)) - offsets[2]
 
-						// If we want to support partial updates later, we need to respect existing atlas map?
-						// For now, full rebuild is safer.
-
-						// Serialize payload (512 bytes)
-						for z := 0; z < 8; z++ {
-							for y := 0; y < 8; y++ {
-								for x := 0; x < 8; x++ {
-									payload = append(payload, brick.Payload[x][y][z])
+							// Serialize payload (512 bytes)
+							for z := 0; z < 8; z++ {
+								for y := 0; y < 8; y++ {
+									for x := 0; x < 8; x++ {
+										payload = append(payload, brick.Payload[x][y][z])
+									}
 								}
 							}
 						}
-						// Pad payload? It's u8s. shader `voxel_payload` is u32 array.
-						// `load_u8` handles byte access.
-						// So 512 bytes is fine.
 
 						buf := make([]byte, 16)
-						binary.LittleEndian.PutUint32(buf[0:4], relPayloadOffset)
+						binary.LittleEndian.PutUint32(buf[0:4], gpuAtlasOffset)
 						binary.LittleEndian.PutUint32(buf[4:8], uint32(brick.OccupancyMask64))
 						binary.LittleEndian.PutUint32(buf[8:12], uint32(brick.OccupancyMask64>>32))
 						binary.LittleEndian.PutUint32(buf[12:16], brick.Flags)

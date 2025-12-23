@@ -317,16 +317,18 @@ fn get_axis_normal(axis_idx: i32, dir: vec3<f32>) -> vec3<f32> {
 // ============== VOXEL SAMPLING ==============
 
 fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
-    
-    let sx = v.x / 32;
-    let sy = v.y / 32;
-    let sz = v.z / 32;
+    let sx = v.x >> 5u;
+    let sy = v.y >> 5u;
+    let sz = v.z >> 5u;
     
     let sector_idx = find_sector_cached(sx, sy, sz, params);
     if (sector_idx < 0) { return 0.0; }
     
     let sector = sectors[sector_idx];
-    let bvid = vec3<u32>(v / 8) % 4u;
+    let bx = (v.x >> 3u) & 3;
+    let by = (v.y >> 3u) & 3;
+    let bz = (v.z >> 3u) & 3;
+    let bvid = vec3<u32>(u32(bx), u32(by), u32(bz));
     let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
     
     if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) { return 0.0; }
@@ -335,18 +337,27 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
     let brick = bricks[packed_idx];
     
     if (brick.flags == 0u) {
-        let mvid = vec3<u32>(v / 2) % 4u;
+        let mx = (v.x >> 1u) & 3;
+        let my = (v.y >> 1u) & 3;
+        let mz = (v.z >> 1u) & 3;
+        let mvid = vec3<u32>(u32(mx), u32(my), u32(mz));
         let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
         
         if (!bit_test64(brick.occupancy_mask_lo, brick.occupancy_mask_hi, micro_idx)) { return 0.0; }
         
-        let v_idx_local = vec3<u32>(v) % 8u;
-        let voxel_idx = v_idx_local.x + v_idx_local.y * 8u + v_idx_local.z * 64u;
+        let vx = v.x & 7;
+        let vy = v.y & 7;
+        let vz = v.z & 7;
+        let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
+        let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
         let palette_idx = load_u8(params.payload_base + brick.atlas_offset + voxel_idx);
         
         return select(0.0, 1.0, palette_idx != EMPTY_VOXEL);
     }
-    return 1.0; // Assume solid for complex bricks
+    if (brick.flags == 1u) { // BRICK_FLAG_SOLID
+        return 1.0;
+    }
+    return 1.0; // Fallback
 }
 
 fn get_density(v: vec3<i32>, params: ObjectParams) -> f32 {
@@ -481,6 +492,25 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                            // DDA for Voxels (size 1.0)
                            // Assuming flags==0 (uncompressed/simple). If not 0, fallback or skip?
                            // User prompt implies we check single voxels.
+                           if (brick.flags == 1u) { // BRICK_FLAG_SOLID
+                                result.hit = true;
+                                result.t = t_brick;
+                                result.palette_idx = brick.atlas_offset;
+                                result.material_base = params.material_table_base;
+                                
+                                // Identify hit voxel within the solid brick for consistent shading
+                                let p_hit_os = ray.origin + dir * (t_brick + 0.01);
+                                let voxel_center_os = floor(p_hit_os) + 0.5;
+                                
+                                var final_n = estimate_normal(voxel_center_os, params);
+                                if (length(final_n) < 0.01) {
+                                    final_n = vec3<f32>(0.0, 1.0, 0.0);
+                                }
+                                result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
+                                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                return result;
+                           }
+
                            if (brick.flags == 0u) {
                                let p_in_brick = p_micro_start - brick_origin;
                                var voxel_pos = vec3<i32>(floor(p_in_brick)); // size 1.0

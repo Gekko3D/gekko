@@ -172,12 +172,12 @@ func TestAABB(t *testing.T) {
 	minB, maxB := xbm.ComputeAABB()
 	t.Logf("AABB 1: %v -> %v", minB, maxB)
 
-	// AABB is computed at brick level (8x8x8 granularity), so should be [0,0,0] -> [8,8,8]
+	// AABB is computed at voxel level for sparse bricks
 	if minB[0] != 0 || minB[1] != 0 || minB[2] != 0 {
 		t.Errorf("Expected min [0,0,0], got %v", minB)
 	}
-	if maxB[0] != 8 || maxB[1] != 8 || maxB[2] != 8 {
-		t.Errorf("Expected max [8,8,8] (brick granularity), got %v", maxB)
+	if maxB[0] != 1 || maxB[1] != 1 || maxB[2] != 1 {
+		t.Errorf("Expected max [1,1,1] (voxel precision), got %v", maxB)
 	}
 
 	// Add distant voxel
@@ -189,9 +189,56 @@ func TestAABB(t *testing.T) {
 	if minB[0] > 0 || minB[1] > 0 || minB[2] > 0 {
 		t.Errorf("Min bound wrong: %v", minB)
 	}
-	// Voxel at (100,50,20) will be in brick starting at (96,48,16) with size 8
-	// So max should be at least (104, 56, 24)
-	if maxB[0] < 104 || maxB[1] < 56 || maxB[2] < 24 {
-		t.Errorf("Max bound wrong: %v (expected at least [104,56,24])", maxB)
+	// Voxel at (100,50,20)
+	if maxB[0] < 101 || maxB[1] < 51 || maxB[2] < 21 {
+		t.Errorf("Max bound wrong: %v (expected at least [101,51,21])", maxB)
+	}
+}
+
+func TestSolidCompression(t *testing.T) {
+	xbm := NewXBrickMap()
+
+	// Fill a whole brick (8x8x8)
+	for x := 0; x < 8; x++ {
+		for y := 0; y < 8; y++ {
+			for z := 0; z < 8; z++ {
+				xbm.SetVoxel(x, y, z, 7)
+			}
+		}
+	}
+
+	// Check if brick is solid
+	sector := xbm.Sectors[[3]int{0, 0, 0}]
+	brick := sector.GetBrick(0, 0, 0)
+	if brick.Flags&BrickFlagSolid == 0 {
+		t.Error("Brick should be solid after full fill")
+	}
+	if brick.AtlasOffset != 7 {
+		t.Errorf("Solid brick should store material 7 in AtlasOffset, got %d", brick.AtlasOffset)
+	}
+
+	// Check AABB - should be full brick now
+	minB, maxB := xbm.ComputeAABB()
+	if maxB[0] != 8 || maxB[1] != 8 || maxB[2] != 8 {
+		t.Errorf("Solid brick AABB should be [8,8,8], got %v", maxB)
+	}
+
+	// Edit one voxel -> should decompress
+	xbm.SetVoxel(0, 0, 0, 0)
+	if brick.Flags&BrickFlagSolid != 0 {
+		t.Error("Brick should be sparse after editing away from solid")
+	}
+	if brick.Payload[1][1][1] != 7 {
+		t.Error("Decompressed brick should preserve original material")
+	}
+
+	// Check AABB again after decompression
+	minB, maxB = xbm.ComputeAABB()
+	// (0,0,0) is now empty. Smallest voxel is (1,0,0) etc.
+	// Actually min should be (0,0,0) if we only cleared (0,0,0)?
+	// Wait, if (0,0,0) is 0, minX should be 0 because (0,1,0) etc are still 7?
+	// Yes. But if we clear a whole face...
+	if minB[0] != 0 {
+		t.Errorf("AABB min should still be 0, got %f", minB[0])
 	}
 }
