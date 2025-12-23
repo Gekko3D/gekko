@@ -242,13 +242,16 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 		// XBrickMap
 		xbm := obj.XBrickMap
 		var offsets [3]uint32
+		var sectorCount uint32
 
 		if off, found := m.MapOffsets[xbm]; found {
 			offsets = off
+			sectorCount = uint32(len(xbm.Sectors))
 		} else {
 			offsets[0] = uint32(len(sectors) / 32) // Sector Base (indices)
 			offsets[1] = uint32(len(bricks) / 16)  // Brick Base (indices)
-			offsets[2] = uint32(len(payload) / 4)  // Payload Base (U32 INDICES! Python used byte offset but shader uses u32 array)
+			offsets[2] = uint32(len(payload))      // Payload Base (bytes)
+			sectorCount = uint32(len(xbm.Sectors))
 			// Wait, python shader used `voxel_payload: array<u32>`.
 			// `load_u8` did `voxel_payload[word_idx]`.
 			// `params.payload_base` in Python was byte offset?
@@ -370,7 +373,7 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 		tree64Base := ^uint32(0) // -1
 
 		// ObjectParams (32 bytes)
-		// s_base, b_base, p_base, mat_base, tree_base, lod, pad
+		// s_base, b_base, p_base, mat_base, tree_base, lod, sector_count, pad
 		pBuf := make([]byte, 32)
 		binary.LittleEndian.PutUint32(pBuf[0:4], offsets[0])
 		binary.LittleEndian.PutUint32(pBuf[4:8], offsets[1])
@@ -378,6 +381,7 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 		binary.LittleEndian.PutUint32(pBuf[12:16], matBase)
 		binary.LittleEndian.PutUint32(pBuf[16:20], tree64Base)
 		binary.LittleEndian.PutUint32(pBuf[20:24], math.Float32bits(obj.LODThreshold))
+		binary.LittleEndian.PutUint32(pBuf[24:28], sectorCount)
 		objParams = append(objParams, pBuf...)
 	}
 

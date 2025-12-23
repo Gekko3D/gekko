@@ -87,7 +87,8 @@ struct ObjectParams {
     material_table_base: u32,
     tree64_base: u32,
     lod_threshold: f32,
-    padding: array<u32, 2>,
+    sector_count: u32,
+    padding: u32,
 };
 
 // ============== BIND GROUPS ==============
@@ -188,11 +189,28 @@ fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
 
 // ============== SECTOR LOOKUP ==============
 
-fn find_sector(sx: i32, sy: i32, sz: i32, sector_base: u32) -> i32 {
-    let num_sectors = arrayLength(&sectors);
-    for (var i = sector_base; i < num_sectors; i = i + 1u) {
+var<private> g_cached_sector_id: i32 = -1;
+var<private> g_cached_sector_coords: vec3<i32> = vec3<i32>(-999, -999, -999);
+var<private> g_cached_sector_base: u32 = 0xFFFFFFFFu;
+
+fn find_sector_cached(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
+    if (sx == g_cached_sector_coords.x && sy == g_cached_sector_coords.y && sz == g_cached_sector_coords.z && 
+        params.sector_table_base == g_cached_sector_base && g_cached_sector_id != -1) {
+        return g_cached_sector_id;
+    }
+    
+    let sid = find_sector(sx, sy, sz, params);
+    g_cached_sector_id = sid;
+    g_cached_sector_coords = vec3<i32>(sx, sy, sz);
+    g_cached_sector_base = params.sector_table_base;
+    return sid;
+}
+
+fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
+    let limit = params.sector_table_base + params.sector_count;
+    let expected_origin = vec4<i32>(sx, sy, sz, 0) * 32;
+    for (var i = params.sector_table_base; i < limit; i = i + 1u) {
         let s = sectors[i];
-        let expected_origin = vec3<i32>(sx, sy, sz) * 32;
         if (s.origin_vox.x == expected_origin.x && 
             s.origin_vox.y == expected_origin.y && 
             s.origin_vox.z == expected_origin.z) {
@@ -220,7 +238,7 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
     let sy = v.y / 32;
     let sz = v.z / 32;
     
-    let sector_idx = find_sector(sx, sy, sz, params.sector_table_base);
+    let sector_idx = find_sector_cached(sx, sy, sz, params);
     if (sector_idx < 0) { return 0.0; }
     
     let sector = sectors[sector_idx];
@@ -261,9 +279,11 @@ fn get_density(v: vec3<i32>, params: ObjectParams) -> f32 {
 
 fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
     let vi = vec3<i32>(floor(p));
-    let dx = get_density(vi + vec3<i32>(1, 0, 0), params) - get_density(vi + vec3<i32>(-1, 0, 0), params);
-    let dy = get_density(vi + vec3<i32>(0, 1, 0), params) - get_density(vi + vec3<i32>(0, -1, 0), params);
-    let dz = get_density(vi + vec3<i32>(0, 0, 1), params) - get_density(vi + vec3<i32>(0, 0, -1), params);
+    
+    // 6-tap central difference gradient on occupancy
+    let dx = sample_occupancy(vi + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
+    let dy = sample_occupancy(vi + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
+    let dz = sample_occupancy(vi + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
     
     let grad = vec3<f32>(dx, dy, dz);
     if (length(grad) < 0.01) { return vec3<f32>(0.0); }
@@ -328,7 +348,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
         iter_sectors += 1;
 
         // Check sector validity
-        let sector_idx = find_sector(sector_pos.x, sector_pos.y, sector_pos.z, params.sector_table_base);
+        let sector_idx = find_sector_cached(sector_pos.x, sector_pos.y, sector_pos.z, params);
             
         if (sector_idx >= 0) {
             // SECTOR HIT -> Traverse Bricks
