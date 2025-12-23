@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"fmt"
 	"github.com/go-gl/glfw/v3.3/glfw"
 )
 
@@ -74,6 +73,10 @@ type Input struct {
 
 	JustPressed  [256]bool
 	JustReleased [256]bool
+
+	MouseX, MouseY           float64
+	MouseDeltaX, MouseDeltaY float64
+	MouseCaptured            bool
 }
 
 func (mod InputModule) Install(app *App, cmd *Commands) {
@@ -88,6 +91,7 @@ func (mod InputModule) Install(app *App, cmd *Commands) {
 func inputSystem(s *WindowState, input *Input) {
 	glfw.PollEvents()
 
+	// Update Keyboard
 	for key, glfwKey := range keyToGlfw {
 		action := s.windowGlfw.GetKey(glfwKey)
 
@@ -95,7 +99,6 @@ func inputSystem(s *WindowState, input *Input) {
 		input.JustReleased[key] = false
 
 		if glfw.Press == action {
-			fmt.Println("catch pressed")
 			if !input.Pressed[key] {
 				input.JustPressed[key] = true
 			}
@@ -106,6 +109,24 @@ func inputSystem(s *WindowState, input *Input) {
 			}
 			input.Pressed[key] = false
 		}
+	}
+
+	// Update Mouse
+	mx, my := s.windowGlfw.GetCursorPos()
+	if input.MouseCaptured {
+		input.MouseDeltaX = mx - input.MouseX
+		input.MouseDeltaY = my - input.MouseY
+	} else {
+		input.MouseDeltaX = 0
+		input.MouseDeltaY = 0
+	}
+	input.MouseX = mx
+	input.MouseY = my
+
+	if input.MouseCaptured {
+		s.windowGlfw.SetInputMode(glfw.CursorMode, glfw.CursorDisabled)
+	} else {
+		s.windowGlfw.SetInputMode(glfw.CursorMode, glfw.CursorNormal)
 	}
 }
 

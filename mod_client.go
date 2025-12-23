@@ -94,7 +94,7 @@ type bufferDescriptor struct {
 
 type TransformComponent struct {
 	Position mgl32.Vec3
-	Rotation float32
+	Rotation mgl32.Quat
 	Scale    mgl32.Vec3
 }
 
@@ -102,6 +102,8 @@ type CameraComponent struct {
 	Position mgl32.Vec3
 	LookAt   mgl32.Vec3
 	Up       mgl32.Vec3
+	Yaw      float32
+	Pitch    float32
 	Fov      float32
 	Aspect   float32
 	Near     float32

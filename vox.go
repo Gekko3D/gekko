@@ -13,7 +13,8 @@ const (
 )
 
 type Voxel struct {
-	X, Y, Z, ColorIndex byte
+	X, Y, Z    uint32
+	ColorIndex byte
 }
 
 type VoxModel struct {
@@ -115,9 +116,9 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 					return nil, errors.New("XYZI chunk data overflow")
 				}
 				model.Voxels[i] = Voxel{
-					X:          chunkData[offset],
-					Y:          chunkData[offset+1],
-					Z:          chunkData[offset+2],
+					X:          uint32(chunkData[offset]),
+					Y:          uint32(chunkData[offset+1]),
+					Z:          uint32(chunkData[offset+2]),
 					ColorIndex: chunkData[offset+3],
 				}
 			}
@@ -177,26 +178,41 @@ func parseMaterial(data []byte) (VoxMaterial, error) {
 
 	// Material properties
 	for len(data) > 0 {
+		if len(data) < 4 {
+			break
+		}
 		keyLen := int(binary.LittleEndian.Uint32(data[:4]))
 		data = data[4:]
+		if len(data) < keyLen {
+			break
+		}
 		key := string(data[:keyLen])
 		data = data[keyLen:]
 
+		if len(data) < 4 {
+			break
+		}
 		valueLen := int(binary.LittleEndian.Uint32(data[:4]))
 		data = data[4:]
+		if len(data) < valueLen {
+			break
+		}
 		value := string(data[:valueLen])
 		data = data[valueLen:]
 
 		// Convert to appropriate type based on key
 		switch key {
-		case "_weight":
-			var weight float32
-			// This is a simplified approach - actual parsing would need to handle the float string
-			_, err := fmt.Sscanf(value, "%f", &weight)
-			if err != nil {
-				return mat, err
+		case "_weight", "_rough", "_metal", "_emit", "_ior", "_trans", "_flux":
+			var val float32
+			_, err := fmt.Sscanf(value, "%f", &val)
+			if err == nil {
+				mat.Property[key] = val
+				if key == "_weight" {
+					mat.Weight = val
+				}
+			} else {
+				mat.Property[key] = value
 			}
-			mat.Weight = weight
 		default:
 			mat.Property[key] = value
 		}

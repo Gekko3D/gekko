@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
-	"time"
 )
 
 type systemFn any
@@ -107,17 +106,17 @@ func (app *App) addResources(resources ...any) *App {
 }
 
 func (app *App) callSystem(system systemFn) {
-	start := time.Now()
+	// start := time.Now()
 
 	app.callSystemInternal(system)
 
-	fmt.Println(
-		"system ",
-		runtime.FuncForPC(reflect.ValueOf(system).Pointer()).Name(),
-		": ",
-		time.Since(start).Milliseconds(),
-		"ms",
-	)
+	// fmt.Println(
+	// 	"system ",
+	// 	runtime.FuncForPC(reflect.ValueOf(system).Pointer()).Name(),
+	// 	": ",
+	// 	time.Since(start).Milliseconds(),
+	// 	"ms",
+	// )
 }
 
 var typeOfCommands = reflect.TypeOf(Commands{})
