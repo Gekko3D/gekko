@@ -729,7 +729,7 @@ func updateModelUniforms(cmd *Commands, rState *voxelRenderState) {
 
 func buildModelMatrix(t *TransformComponent) mgl32.Mat4 {
 	return mgl32.Translate3D(t.Position.X(), t.Position.Y(), t.Position.Z()).
-		Mul4(mgl32.HomogRotate3DZ(t.Rotation)).
+		Mul4(t.Rotation.Mat4()).
 		Mul4(mgl32.Scale3D(t.Scale.X(), t.Scale.Y(), t.Scale.Z()))
 }
 

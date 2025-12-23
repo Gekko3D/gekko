@@ -153,7 +153,7 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 		}
 
 		obj.Transform.Position = transform.Position
-		obj.Transform.Rotation = mgl32.QuatRotate(transform.Rotation, mgl32.Vec3{0, 0, 1})
+		obj.Transform.Rotation = transform.Rotation
 		obj.Transform.Scale = transform.Scale
 		obj.Transform.Dirty = true
 
@@ -189,34 +189,20 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 		// Position
 		gpuLight.Position = [4]float32{transform.Position.X(), transform.Position.Y(), transform.Position.Z(), 1.0}
 
-		// Direction: Rotate (0, 0, -1) by transform rotation
-		// Assuming standard forward is -Z
-		forward := mgl32.Vec3{0, 0, -1}
-		rot := mgl32.QuatRotate(transform.Rotation, mgl32.Vec3{0, 0, 1}) // Axis angle? No, TransformComponent.Rotation is float32 (angle) around Z usually for 2D?
-		// Wait, look at transform usage in mod_vox_rt:
-		// obj.Transform.Rotation = mgl32.QuatRotate(transform.Rotation, mgl32.Vec3{0, 0, 1})
-		// It seems TransformComponent has Rotation as float32 angle (Z-rotation)?
-		// If so, 3D rotation might be missing in Gekko's TransformComponent?
-		// Let's check TransformComponent definition.
+		// Direction: Rotate base direction by transform rotation
+		// Point lights don't care about direction.
+		// Directional and Spotlights do.
 
-		// Re-reading usage: mgl32.QuatRotate(transform.Rotation, mgl32.Vec3{0, 0, 1})
-		// This implies transform.Rotation is a float32 angle in radians.
-		// If 3D lights need full 3D rotation, the current TransformComponent might be insufficient (2D focused?).
-		// BUT for now, I will follow existing pattern.
-		// The forward vector (0,0,-1) rotated by Z-axis rotation effectively rotates it in XY plane? No.
-		// Rotating (0,0,-1) around Z axis keeps it at (0,0,-1).
-		// If the game is "2.5D" or top down, maybe lights point down?
-		// Directional light (sun) usually has explicit direction.
-		// Spotlights need direction.
+		baseForward := mgl32.Vec3{0, 0, -1}
+		if light.Type == LightTypeDirectional {
+			// For directional sunlight, use a slanted base so Z-rotation makes it orbit
+			baseForward = mgl32.Vec3{1, -1, 0}.Normalize()
+		} else if light.Type == LightTypeSpot {
+			// For spot lights, pointing -Y (Down) allows Z-rotation to steer them in a cone or circle
+			baseForward = mgl32.Vec3{0, -1, 0}
+		}
 
-		// Let's assume for now that if the user wants 3D direction, they might need a better Transform.
-		// However, for this task, I'll calculate direction based on the available rotation.
-		// If rotation is only around Z, then Direction (0,0,-1) remains (0,0,-1).
-		// Maybe I should add specific direction to LightComponent?
-		// No, the prompt says "set these lights to the scene via ecs".
-		// I will use what is available.
-
-		dir := rot.Rotate(forward)
+		dir := transform.Rotation.Rotate(baseForward)
 		gpuLight.Direction = [4]float32{dir.X(), dir.Y(), dir.Z(), 0.0}
 
 		gpuLight.Color = [4]float32{light.Color[0], light.Color[1], light.Color[2], light.Intensity}
