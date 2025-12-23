@@ -77,7 +77,7 @@ struct HitResult {
     palette_idx: u32,
     material_base: u32,
     normal: vec3<f32>,
-    shading_pos: vec3<f32>,
+    voxel_center_ws: vec3<f32>,
 };
 
 struct ObjectParams {
@@ -527,6 +527,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             }
                                             
                                             result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
+                                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                             return result;
                                        }
                                    }
@@ -683,6 +684,8 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                     final_n = vec3<f32>(0.0, 1.0, 0.0);
                 }
                 result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
+                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                return result;
             }
             t = t + step_to_next_cell(p, ray.dir, ray.inv_dir, 8.0);
         } else {
@@ -853,14 +856,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             base_color = hash_color(final_hit.palette_idx);
         }
 
-        let hit_pos_ws = ray.origin + ray.dir * final_hit.t;
+        let hit_pos_ws = final_hit.voxel_center_ws;
         let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
         
         let ambient = camera.ambient_color.xyz * base_color;
         var accumulated_light = ambient + emissive;
         
-        // Shadow Bias
-        let bias_origin = hit_pos_ws + final_hit.normal * 0.1;
+        // Shadow Bias: start outside the voxel
+        let bias_origin = hit_pos_ws + final_hit.normal * 0.6;
         
         let num_lights = arrayLength(&lights);
         for (var i = 0u; i < num_lights; i++) {
