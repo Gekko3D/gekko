@@ -114,73 +114,72 @@ fn calculate_lighting(
     base_color: vec3<f32>,
     emissive: vec3<f32>,
     roughness: f32,
-    metalness: f32
+    metalness: f32,
+    visibility: f32, // Simplified: one visibility per light or we pass it in the loop
+    light_idx: u32
 ) -> vec3<f32> {
     let diffuse_color = base_color * (1.0 - metalness);
-    let ambient = camera.ambient_color.xyz * base_color;
-    var result = ambient + emissive;
-
-    let num_lights = arrayLength(&lights);
-    for (var i = 0u; i < num_lights; i++) {
-        let light = lights[i];
-        var L = vec3<f32>(0.0);
-        var dist_to_light = 1e9;
-        var attenuation = 1.0;
+    
+    let light = lights[light_idx];
+    var L = vec3<f32>(0.0);
+    var dist_to_light = 1e9;
+    var attenuation = 1.0;
+    
+    let light_type = u32(light.params.z);
+    
+    if (light_type == 1u) { // Directional
+        L = -normalize(light.direction.xyz);
+        attenuation = 1.0;
+    } else {
+        let L_vec = light.position.xyz - hit_pos;
+        dist_to_light = length(L_vec);
+        L = normalize(L_vec);
         
-        let light_type = u32(light.params.z);
-        
-        if (light_type == 1u) { // Directional
-            L = -normalize(light.direction.xyz);
-            attenuation = 1.0;
+        let range = light.params.x;
+        if (dist_to_light > range) {
+            attenuation = 0.0;
         } else {
-            let L_vec = light.position.xyz - hit_pos;
-            dist_to_light = length(L_vec);
-            L = normalize(L_vec);
+            let dist_sq = dist_to_light * dist_to_light;
+            let factor = dist_sq / (range * range);
+            let smooth_factor = max(0.0, 1.0 - factor * factor);
+            let inv_sq = 1.0 / (dist_sq + 1.0);
+            attenuation = inv_sq * smooth_factor * smooth_factor * light.color.w * 50.0;
             
-            let range = light.params.x;
-            if (dist_to_light > range) {
-                attenuation = 0.0;
-            } else {
-                let dist_sq = dist_to_light * dist_to_light;
-                let factor = dist_sq / (range * range);
-                let smooth_factor = max(0.0, 1.0 - factor * factor);
-                let inv_sq = 1.0 / (dist_sq + 1.0);
-                attenuation = inv_sq * smooth_factor * smooth_factor * light.color.w * 50.0;
+            if (light_type == 2u) { // Spot
+                let spot_dir = normalize(light.direction.xyz);
+                let cos_cur = dot(-L, spot_dir);
+                let cos_cone = light.params.y;
                 
-                if (light_type == 2u) { // Spot
-                    let spot_dir = normalize(light.direction.xyz);
-                    let cos_cur = dot(-L, spot_dir);
-                    let cos_cone = light.params.y;
-                    
-                    if (cos_cur < cos_cone) {
-                        attenuation = 0.0;
-                    } else {
-                        let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
-                        attenuation = attenuation * spot_att;
-                    }
+                if (cos_cur < cos_cone) {
+                    attenuation = 0.0;
+                } else {
+                    let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
+                    attenuation = attenuation * spot_att;
                 }
             }
         }
-        
-        if (attenuation > 0.0) {
-            let light_dir = L;
-            let half_dir = normalize(light_dir + view_dir);
-            
-            let NdotL = max(dot(normal, light_dir), 0.0);
-            let NdotH = max(dot(normal, half_dir), 0.0);
-            
-            // Diffuse
-            let diffuse = diffuse_color * NdotL;
-            
-            // Specular
-            let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
-            let F0 = mix(vec3(0.04), base_color, metalness);
-            let specular = pow(NdotH, spec_power) * F0;
-            
-            result += (diffuse + specular) * light.color.xyz * attenuation;
-        }
     }
-    return result;
+    
+    attenuation = attenuation * visibility;
+    
+    if (attenuation > 0.0) {
+        let light_dir = L;
+        let half_dir = normalize(light_dir + view_dir);
+        
+        let NdotL = max(dot(normal, light_dir), 0.0);
+        let NdotH = max(dot(normal, half_dir), 0.0);
+        
+        // Diffuse
+        let diffuse = diffuse_color * NdotL;
+        
+        // Specular
+        let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
+        let F0 = mix(vec3(0.04), base_color, metalness);
+        let specular = pow(NdotH, spec_power) * F0;
+        
+        return (diffuse + specular) * light.color.xyz * attenuation * light.color.w;
+    }
+    return vec3<f32>(0.0);
 }
 
 // Group 1: Output
@@ -521,8 +520,6 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             
                                             // Normal
                                             let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
-                                            let p_shading_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                                            
                                             let smooth_n = estimate_normal(voxel_center_os, params);
                                             var final_n = smooth_n;
                                             if (length(smooth_n) < 0.01) {
@@ -530,8 +527,6 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             }
                                             
                                             result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
-                                            result.shading_pos = p_shading_ws;
-                                            
                                             return result;
                                        }
                                    }
@@ -682,17 +677,12 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                 result.material_base = params.material_table_base;
                 
                 let voxel_center_os = floor(p / 8.0) * 8.0 + 4.0;
-                let p_shading_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-
                 let smooth_n = estimate_normal(voxel_center_os, params);
                 var final_n = smooth_n;
                 if (length(smooth_n) < 0.01) {
                     final_n = vec3<f32>(0.0, 1.0, 0.0);
                 }
-                
-                result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz); 
-                result.shading_pos = p_shading_ws;
-                return result;
+                result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
             }
             t = t + step_to_next_cell(p, ray.dir, ray.inv_dir, 8.0);
         } else {
@@ -703,7 +693,53 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
     return result;
 }
 
+fn check_visibility(ray: Ray, max_dist: f32) -> bool {
+    var stack: array<i32, 64>;
+    var stack_ptr = 0;
+    stack[stack_ptr] = 0;
+    stack_ptr += 1;
 
+    var iterations = 0;
+    while (stack_ptr > 0 && iterations < 64) {
+        iterations++;
+        stack_ptr--;
+        let node_idx = stack[stack_ptr];
+        let node = nodes[node_idx];
+
+        let t_vals = intersect_aabb(ray, node.aabb_min.xyz, node.aabb_max.xyz);
+        if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < max_dist) {
+            if (node.leaf_count > 0) {
+                let inst = instances[node.leaf_first];
+                let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
+                if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < max_dist) {
+                    let params = object_params[inst.object_id];
+                    let dist_cam = distance(camera.cam_pos.xyz, inst.aabb_min.xyz);
+                    
+                    var voxel_hit: HitResult;
+                    if (dist_cam > params.lod_threshold && params.tree64_base != 0xFFFFFFFFu) {
+                        voxel_hit = traverse_tree64(ray, inst, t_inst.x, t_inst.y, inst.object_id);
+                    } else {
+                        voxel_hit = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
+                    }
+                    
+                    if (voxel_hit.hit && voxel_hit.t < max_dist) {
+                        return false; 
+                    }
+                }
+            } else {
+                if (node.left != -1) {
+                    stack[stack_ptr] = node.left;
+                    stack_ptr++;
+                }
+                if (node.right != -1 && stack_ptr < 64) {
+                    stack[stack_ptr] = node.right;
+                    stack_ptr++;
+                }
+            }
+        }
+    }
+    return true;
+}
 
 // ============== COLOR HELPERS ==============
 
@@ -730,8 +766,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ray = get_ray(uv);
 
     var closest_t = 1e20f;
-    var hit_color = vec3<f32>(0.0);
+    var final_hit: HitResult;
     var hit_found = false;
+    var hit_inst_id: u32 = 0u;
 
     // TLAS Traversal
     var stack: array<i32, 64>;
@@ -766,10 +803,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
                 if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < closest_t) {
                     let params = object_params[inst.object_id];
-                    let dist = distance(camera.cam_pos.xyz, inst.aabb_min.xyz); // Coarse distance
+                    let dist_cam = distance(camera.cam_pos.xyz, inst.aabb_min.xyz);
                     
                     var voxel_hit: HitResult;
-                    if (dist > params.lod_threshold && params.tree64_base != 0xFFFFFFFFu) {
+                    if (dist_cam > params.lod_threshold && params.tree64_base != 0xFFFFFFFFu) {
                         voxel_hit = traverse_tree64(ray, inst, t_inst.x, t_inst.y, inst.object_id);
                     } else {
                         voxel_hit = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
@@ -777,41 +814,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     
                     if (voxel_hit.hit && voxel_hit.t < closest_t) {
                         closest_t = voxel_hit.t;
-                        
-                        var base_color = vec3<f32>(0.0);
-                        var emissive = vec3<f32>(0.0);
-                        var roughness = 1.0;
-                        var metalness = 0.0;
-                        
-                        let mat_idx = voxel_hit.material_base + voxel_hit.palette_idx * 4u;
-                        let n_mats = arrayLength(&materials);
-
-                        if (mat_idx + 3u < n_mats) {
-                            base_color = materials[mat_idx].xyz;
-                            emissive = materials[mat_idx + 1u].xyz;
-                            let pbr_params = materials[mat_idx + 2u];
-                            roughness = clamp(pbr_params.x, 0.0, 1.0);
-                            metalness = clamp(pbr_params.y, 0.0, 1.0);
-                        } else {
-                            // Falling back to hash color for debug
-                            base_color = hash_color(voxel_hit.palette_idx);
-                        }
-                        
-                        // Shading
-                        let hit_pos_ws = voxel_hit.shading_pos;
-                        let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
-                        
-                        hit_color = calculate_lighting(
-                            hit_pos_ws,
-                            voxel_hit.normal,
-                            view_dir,
-                            base_color,
-                            emissive,
-                            roughness,
-                            metalness
-                        );
-
+                        final_hit = voxel_hit;
                         hit_found = true;
+                        hit_inst_id = inst.object_id;
                     }
                 }
             } else {
@@ -830,9 +835,69 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var final_color = vec4<f32>(uv.x * 0.3, uv.y * 0.3, 0.4, 1.0); // Sky gradient
     
     if (hit_found) {
-        final_color = vec4<f32>(hit_color, 1.0);
-    }
+        var base_color = vec3<f32>(0.0);
+        var emissive = vec3<f32>(0.0);
+        var roughness = 1.0;
+        var metalness = 0.0;
+        
+        let mat_idx = final_hit.material_base + final_hit.palette_idx * 4u;
+        let n_mats = arrayLength(&materials);
 
+        if (mat_idx + 3u < n_mats) {
+            base_color = materials[mat_idx].xyz;
+            emissive = materials[mat_idx + 1u].xyz;
+            let pbr_params = materials[mat_idx + 2u];
+            roughness = clamp(pbr_params.x, 0.0, 1.0);
+            metalness = clamp(pbr_params.y, 0.0, 1.0);
+        } else {
+            base_color = hash_color(final_hit.palette_idx);
+        }
+
+        let hit_pos_ws = ray.origin + ray.dir * final_hit.t;
+        let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
+        
+        let ambient = camera.ambient_color.xyz * base_color;
+        var accumulated_light = ambient + emissive;
+        
+        // Shadow Bias
+        let bias_origin = hit_pos_ws + final_hit.normal * 0.1;
+        
+        let num_lights = arrayLength(&lights);
+        for (var i = 0u; i < num_lights; i++) {
+            let light = lights[i];
+            var L_dir = vec3<f32>(0.0);
+            var max_dist = 1e9f;
+            
+            let light_type = u32(light.params.z);
+            if (light_type == 1u) { // Directional
+                L_dir = -normalize(light.direction.xyz);
+                max_dist = 1000.0; // Infinite-ish
+            } else {
+                let L_vec = light.position.xyz - hit_pos_ws;
+                max_dist = length(L_vec);
+                L_dir = normalize(L_vec);
+            }
+            
+            let shadow_ray = Ray(bias_origin, L_dir, 1.0 / L_dir);
+            let visible = check_visibility(shadow_ray, max_dist);
+            
+            let visibility_factor = select(0.0, 1.0, visible);
+            
+            accumulated_light += calculate_lighting(
+                hit_pos_ws,
+                final_hit.normal,
+                view_dir,
+                base_color,
+                emissive,
+                roughness,
+                metalness,
+                visibility_factor,
+                i
+            );
+        }
+        
+        final_color = vec4<f32>(accumulated_light, 1.0);
+    }
 
     textureStore(out_tex, vec2<i32>(global_id.xy), final_color);
 }
