@@ -8,6 +8,8 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/shaders"
 
+	"unsafe"
+
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/cogentcore/webgpu/wgpuglfw"
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -41,10 +43,23 @@ type App struct {
 	Camera        *core.CameraState
 	Editor        *editor.Editor
 
-	AmbientLight  [3]float32
-	LastTime      float64
-	MouseCaptured bool
-	DebugMode     bool
+	TextRenderer     *core.TextRenderer
+	TextPipeline     *wgpu.RenderPipeline
+	TextAtlasView    *wgpu.TextureView
+	TextBindGroup    *wgpu.BindGroup
+	TextVertexBuffer *wgpu.Buffer
+	TextItems        []core.TextItem
+	TextVertexCount  uint32
+
+	AmbientLight   [3]float32
+	LastTime       float64
+	LastRenderTime float64
+	MouseCaptured  bool
+	DebugMode      bool
+
+	FrameCount int
+	FPS        float64
+	FPSTime    float64
 }
 
 func NewApp(window *glfw.Window) *App {
@@ -172,6 +187,15 @@ func (a *App) Init() error {
 		panic(samplerErr)
 	}
 
+	// Text Rendering Setup
+	fontPath := "/Users/ddevidch/code/go/gekko3d/actiongame/assets/Roboto-Medium.ttf"
+	a.TextRenderer, err = core.NewTextRenderer(fontPath, 32)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to initialize text renderer: %v\n", err)
+	} else {
+		a.setupTextResources()
+	}
+
 	a.setupTextures(width, height)
 
 	// Default Camera Setup
@@ -272,10 +296,9 @@ func (a *App) Resize(w, h int) {
 }
 
 func (a *App) Update() {
-	// Sync time
-	now := glfw.GetTime()
-	// dt := float32(now - a.LastTime) // Unused now
-	a.LastTime = now
+	if a.DebugMode {
+		a.DrawText(fmt.Sprintf("Renderer FPS: %.1f", a.FPS), 10, 10, 1.0, [4]float32{1, 1, 0, 1})
+	}
 
 	// We assume a default light position or sync it if needed.
 	// For now, fixed light at high altitude.
@@ -307,6 +330,40 @@ func (a *App) Update() {
 
 	// Update Camera Uniforms
 	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.AmbientLight, a.DebugMode)
+
+	// Update Text Buffers if needed
+	if len(a.TextItems) > 0 && a.TextRenderer != nil {
+		vertices := a.TextRenderer.BuildVertices(a.TextItems, int(a.Config.Width), int(a.Config.Height))
+		if len(vertices) > 0 {
+			vSize := uint64(len(vertices) * int(unsafe.Sizeof(core.TextVertex{})))
+			if a.TextVertexBuffer == nil || a.TextVertexBuffer.GetSize() < vSize {
+				if a.TextVertexBuffer != nil {
+					a.TextVertexBuffer.Release()
+				}
+				a.TextVertexBuffer, _ = a.Device.CreateBuffer(&wgpu.BufferDescriptor{
+					Label: "Text VB",
+					Size:  vSize,
+					Usage: wgpu.BufferUsageVertex | wgpu.BufferUsageCopyDst,
+				})
+			}
+			a.Queue.WriteBuffer(a.TextVertexBuffer, 0, unsafe.Slice((*byte)(unsafe.Pointer(&vertices[0])), vSize))
+			a.TextVertexCount = uint32(len(vertices))
+		}
+	}
+}
+
+func (a *App) ClearText() {
+	a.TextItems = a.TextItems[:0]
+	a.TextVertexCount = 0
+}
+
+func (a *App) DrawText(text string, x, y float32, scale float32, color [4]float32) {
+	a.TextItems = append(a.TextItems, core.TextItem{
+		Text:     text,
+		Position: [2]float32{x, y},
+		Scale:    scale,
+		Color:    color,
+	})
 }
 
 func (a *App) Render() {
@@ -371,6 +428,15 @@ func (a *App) Render() {
 	rPass.SetPipeline(a.RenderPipeline)
 	rPass.SetBindGroup(0, a.RenderBG, nil)
 	rPass.Draw(3, 1, 0, 0)
+
+	// Text Pass
+	if len(a.TextItems) > 0 && a.TextVertexBuffer != nil && a.TextPipeline != nil {
+		rPass.SetPipeline(a.TextPipeline)
+		rPass.SetBindGroup(0, a.TextBindGroup, nil)
+		rPass.SetVertexBuffer(0, a.TextVertexBuffer, 0, a.TextVertexBuffer.GetSize())
+		rPass.Draw(a.TextVertexCount, 1, 0, 0)
+	}
+
 	err = rPass.End()
 	if err != nil {
 		fmt.Printf("ERROR: Render pass End failed: %v\n", err)
@@ -383,6 +449,19 @@ func (a *App) Render() {
 	}
 	a.Queue.Submit(cmd)
 	a.Surface.Present()
+
+	// Update FPS
+	now := glfw.GetTime()
+	if a.LastRenderTime > 0 {
+		a.FrameCount++
+		a.FPSTime += now - a.LastRenderTime
+		if a.FPSTime >= 1.0 {
+			a.FPS = float64(a.FrameCount) / a.FPSTime
+			a.FrameCount = 0
+			a.FPSTime = 0
+		}
+	}
+	a.LastRenderTime = now
 }
 
 func (a *App) HandleClick(button int, action int) {
@@ -427,4 +506,99 @@ func (a *App) HandleClick(button int, action int) {
 
 func GetSurfaceDescriptor(w *glfw.Window) *wgpu.SurfaceDescriptor {
 	return wgpuglfw.GetSurfaceDescriptor(w)
+}
+
+func (a *App) setupTextResources() {
+	// Texture
+	tr := a.TextRenderer
+	w, h := tr.AtlasImage.Bounds().Dx(), tr.AtlasImage.Bounds().Dy()
+	tex, err := a.Device.CreateTexture(&wgpu.TextureDescriptor{
+		Label:         "Text Atlas",
+		Size:          wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1},
+		Format:        wgpu.TextureFormatR8Unorm,
+		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
+		Dimension:     wgpu.TextureDimension2D,
+		MipLevelCount: 1,
+		SampleCount:   1,
+	})
+	if err != nil {
+		panic(err)
+	}
+	a.Queue.WriteTexture(tex.AsImageCopy(), tr.AtlasImage.Pix, &wgpu.TextureDataLayout{
+		Offset:       0,
+		BytesPerRow:  uint32(w),
+		RowsPerImage: uint32(h),
+	}, &wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1})
+
+	a.TextAtlasView, _ = tex.CreateView(nil)
+
+	// Pipeline
+	textMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Text Shader",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.TextWGSL},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create text shader module: %v\n", err)
+		return
+	}
+
+	a.TextPipeline, err = a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+		Label: "Text Pipeline",
+		Vertex: wgpu.VertexState{
+			Module:     textMod,
+			EntryPoint: "vs_main",
+			Buffers: []wgpu.VertexBufferLayout{{
+				ArrayStride: uint64(unsafe.Sizeof(core.TextVertex{})),
+				StepMode:    wgpu.VertexStepModeVertex,
+				Attributes: []wgpu.VertexAttribute{
+					{Format: wgpu.VertexFormatFloat32x2, Offset: 0, ShaderLocation: 0},
+					{Format: wgpu.VertexFormatFloat32x2, Offset: 8, ShaderLocation: 1},
+					{Format: wgpu.VertexFormatFloat32x4, Offset: 16, ShaderLocation: 2},
+				},
+			}},
+		},
+		Fragment: &wgpu.FragmentState{
+			Module:     textMod,
+			EntryPoint: "fs_main",
+			Targets: []wgpu.ColorTargetState{{
+				Format: a.Config.Format,
+				Blend: &wgpu.BlendState{
+					Color: wgpu.BlendComponent{
+						SrcFactor: wgpu.BlendFactorSrcAlpha,
+						DstFactor: wgpu.BlendFactorOneMinusSrcAlpha,
+						Operation: wgpu.BlendOperationAdd,
+					},
+					Alpha: wgpu.BlendComponent{
+						SrcFactor: wgpu.BlendFactorOne,
+						DstFactor: wgpu.BlendFactorOne,
+						Operation: wgpu.BlendOperationAdd,
+					},
+				},
+				WriteMask: wgpu.ColorWriteMaskAll,
+			}},
+		},
+		Primitive: wgpu.PrimitiveState{
+			Topology: wgpu.PrimitiveTopologyTriangleList,
+		},
+		Multisample: wgpu.MultisampleState{
+			Count: 1,
+			Mask:  0xFFFFFFFF,
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create text render pipeline: %v\n", err)
+		return
+	}
+
+	a.TextBindGroup, err = a.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: a.TextPipeline.GetBindGroupLayout(0),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, TextureView: a.TextAtlasView},
+			{Binding: 1, Sampler: a.Sampler},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create text bind group: %v\n", err)
+		return
+	}
 }

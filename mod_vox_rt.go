@@ -54,6 +54,8 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 }
 
 func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
+	state.rtApp.ClearText()
+
 	// Sync instances
 	currentEntities := make(map[EntityId]bool)
 
@@ -72,18 +74,13 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 
 				xbm := volume.NewXBrickMap()
 				for _, v := range gekkoModel.VoxModel.Voxels {
-					// MagicaVoxel: X=right, Y=forward, Z=up
-					// Gekko: X=right, Y=up, Z=depth
-					// Map MV.Z to Y (Height) and MV.Y to Z (Depth)
 					xbm.SetVoxel(int(v.X), int(v.Z), int(v.Y), v.ColorIndex)
 				}
 
 				modelTemplate = core.NewVoxelObject()
 				modelTemplate.XBrickMap = xbm
-				// Convert palette and materials
 				modelTemplate.MaterialTable = make([]core.Material, 256)
 
-				// Create a lookup for materials by ID (palette index)
 				matMap := make(map[int]VoxMaterial)
 				for _, m := range gekkoPalette.Materials {
 					matMap[m.ID] = m
@@ -93,7 +90,6 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 					mat := core.DefaultMaterial()
 					mat.BaseColor = color
 
-					// Check if we have MATL overrides
 					if vMat, ok := matMap[i]; ok {
 						if r, ok := vMat.Property["_rough"].(float32); ok {
 							mat.Roughness = r
@@ -108,8 +104,6 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 							mat.Transparency = trans
 						}
 						if emit, ok := vMat.Property["_emit"].(float32); ok {
-							// For emissive, we scale the base color or use a separate emissive color prompt?
-							// MV usually uses emission weight on the material color.
 							flux := float32(1.0)
 							if f, ok := vMat.Property["_flux"].(float32); ok {
 								flux = f
@@ -124,7 +118,6 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 						}
 					}
 
-					// Apply PBR overrides from asset if it's a procedural PBR palette
 					if gekkoPalette.IsPBR {
 						mat.Roughness = gekkoPalette.Roughness
 						mat.Metalness = gekkoPalette.Metalness
@@ -145,7 +138,6 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 				state.loadedModels[vox.VoxelModel] = modelTemplate
 			}
 
-			// Instantiate
 			obj = core.NewVoxelObject()
 			obj.XBrickMap = modelTemplate.XBrickMap
 			obj.MaterialTable = modelTemplate.MaterialTable
@@ -153,7 +145,6 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 			state.instanceMap[entityId] = obj
 		}
 
-		// Update Transform
 		obj.Transform.Position = transform.Position
 		obj.Transform.Rotation = mgl32.QuatRotate(transform.Rotation, mgl32.Vec3{0, 0, 1})
 		obj.Transform.Scale = transform.Scale
@@ -162,7 +153,6 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 		return true
 	})
 
-	// Remove old entities
 	for eid, obj := range state.instanceMap {
 		if !currentEntities[eid] {
 			state.rtApp.Scene.RemoveObject(obj)
@@ -170,12 +160,16 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 		}
 	}
 
-	// Sync camera
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
 		state.rtApp.Camera.Position = camera.Position
 		state.rtApp.Camera.Yaw = camera.Yaw
 		state.rtApp.Camera.Pitch = camera.Pitch
-		return false // Only one camera for now
+		return false
+	})
+	// Sync text
+	MakeQuery1[TextComponent](cmd).Map(func(entityId EntityId, text *TextComponent) bool {
+		state.rtApp.DrawText(text.Text, text.Position[0], text.Position[1], text.Scale, text.Color)
+		return true
 	})
 
 	state.rtApp.Update()
