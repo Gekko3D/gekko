@@ -3,6 +3,7 @@ package gpu
 import (
 	"encoding/binary"
 	"math"
+	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -23,12 +24,14 @@ type GpuBufferManager struct {
 	BVHNodesBuf  *wgpu.Buffer
 	LightsBuf    *wgpu.Buffer
 
-	MaterialBuf     *wgpu.Buffer
-	SectorTableBuf  *wgpu.Buffer
-	BrickTableBuf   *wgpu.Buffer
-	VoxelPayloadBuf *wgpu.Buffer
-	ObjectParamsBuf *wgpu.Buffer
-	Tree64Buf       *wgpu.Buffer
+	MaterialBuf         *wgpu.Buffer
+	SectorTableBuf      *wgpu.Buffer
+	BrickTableBuf       *wgpu.Buffer
+	VoxelPayloadBuf     *wgpu.Buffer
+	ObjectParamsBuf     *wgpu.Buffer
+	Tree64Buf           *wgpu.Buffer
+	SectorGridBuf       *wgpu.Buffer
+	SectorGridParamsBuf *wgpu.Buffer
 
 	BindGroup0      *wgpu.BindGroup
 	DebugBindGroup0 *wgpu.BindGroup
@@ -40,15 +43,70 @@ type GpuBufferManager struct {
 	// Batch update tracking
 	BatchMode      bool                       // Enable batching of updates within a frame
 	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
+
+	// GPU voxel editing
+	EditCommandBuf   *wgpu.Buffer
+	EditParamsBuf    *wgpu.Buffer
+	EditPipeline     *wgpu.ComputePipeline
+	EditBindGroup0   *wgpu.BindGroup
+	EditBindGroup1   *wgpu.BindGroup
+	EditBindGroup2   *wgpu.BindGroup
+	PendingEdits     []EditCommand
+	MaxEditsPerFrame int
+
+	// Brick pool for GPU allocation
+	BrickPoolParamsBuf  *wgpu.Buffer
+	BrickPoolBuf        *wgpu.Buffer
+	BrickPoolPayloadBuf *wgpu.Buffer
+	SectorExpansionBuf  *wgpu.Buffer
+	ExpansionCounterBuf *wgpu.Buffer
+
+	// Pool configuration
+	BrickPoolSize uint32
+	BrickPoolUsed uint32
+
+	// Compression pipeline
+	CompressionPipeline   *wgpu.ComputePipeline
+	CompressionParamsBuf  *wgpu.Buffer
+	PayloadFreeQueueBuf   *wgpu.Buffer
+	FreeQueueCounterBuf   *wgpu.Buffer
+	CompressionBindGroup0 *wgpu.BindGroup
+	CompressionBindGroup1 *wgpu.BindGroup
+	CompressionBindGroup2 *wgpu.BindGroup
+
+	// Payload free list
+	PayloadFreeList   []uint32
+	DirtyBrickIndices []uint32 // Track which bricks were edited
+
+	// Cached Sector indices for deterministic updates
+	SectorIndices map[*volume.Sector]SectorGpuInfo
+}
+
+type SectorGpuInfo struct {
+	SectorIndex     uint32
+	FirstBrickIndex uint32
+}
+
+// EditCommand represents a single voxel edit operation
+type EditCommand struct {
+	Position [3]int32
+	Value    uint32
 }
 
 func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	return &GpuBufferManager{
-		Device:         device,
-		MapOffsets:     make(map[*volume.XBrickMap][3]uint32),
-		AllocatedMaps:  make(map[*volume.XBrickMap]bool),
-		PendingUpdates: make(map[*volume.XBrickMap]bool),
-		BatchMode:      false,
+		Device:            device,
+		MapOffsets:        make(map[*volume.XBrickMap][3]uint32),
+		AllocatedMaps:     make(map[*volume.XBrickMap]bool),
+		PendingUpdates:    make(map[*volume.XBrickMap]bool),
+		BatchMode:         false,
+		PendingEdits:      make([]EditCommand, 0, 16384),
+		MaxEditsPerFrame:  16384,
+		BrickPoolSize:     65536,
+		BrickPoolUsed:     0,
+		PayloadFreeList:   make([]uint32, 0, 1024),
+		DirtyBrickIndices: make([]uint32, 0, 256),
+		SectorIndices:     make(map[*volume.Sector]SectorGpuInfo),
 	}
 }
 
@@ -306,15 +364,17 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 			canDoSparseUpdate = false
 			break
 		}
+		if xbm.StructureDirty {
+			canDoSparseUpdate = false
+			break
+		}
 	}
 
 	// Attempt sparse update if possible
 	if canDoSparseUpdate && m.VoxelPayloadBuf != nil && m.BrickTableBuf != nil && m.SectorTableBuf != nil {
-		hasDirty := false
 		for _, obj := range scene.Objects {
 			xbm := obj.XBrickMap
 			if len(xbm.DirtyBricks) > 0 || len(xbm.DirtySectors) > 0 {
-				hasDirty = true
 
 				// If in batch mode, just mark as pending and skip immediate update
 				if m.BatchMode {
@@ -351,9 +411,7 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 			}
 		}
 
-		if hasDirty {
-			return false // No recreation needed, just updates
-		}
+		return false // No recreation needed
 	}
 
 	// Full rebuild path (initial upload or major changes)
@@ -365,6 +423,7 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 	tree64 := []byte{}
 
 	m.MapOffsets = make(map[*volume.XBrickMap][3]uint32)
+	m.SectorIndices = make(map[*volume.Sector]SectorGpuInfo)
 
 	// Deduplicate logic
 	// But wait, Python code just overwrote map_offsets every time update_xbrickmap was called.
@@ -423,33 +482,41 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 			// So we need to reserve space first?
 			// No, we append linearly.
 
-			for sKey, sector := range xbm.Sectors {
-				// We need current Sector index?
-				// No, the sector table is just a list. Shader linearly scans sector table?
-				// Shader: `find_sector` loops from `sector_base` to end?
-				// `for (var i = sector_base; i < num_sectors; i++)`
-				// Wait! If we have multiple objects, we only scan THIS object's sectors.
-				// But we don't know "num_sectors" for this object easily unless we check `sector_id`?
-				// No, loop `i` goes from `sector_base`.
-				// Where does it stop?
-				// Shader: `i < num_sectors`. This means it checks ALL sectors after base.
-				// If we have Object A then Object B.
-				// Object A check will check Object B's sectors too if they follow?
-				// Yes, unless we break. But `find_sector` just looks for coords.
-				// If coords match, it returns.
-				// Sectors are unique per object usually (different coordinate spaces).
-				// So it finds the first match.
-				// It works as long as sectors don't collide between objects, or we don't care.
-				// Collision: Object A has sector (0,0,0). Object B has sector (0,0,0).
-				// Object A base=0. Object B base=10.
-				// Scanning for A (base 0) might find B's sector (0,0,0) at index 10?
-				// Yes. This seems to be a flaw or simplification in the shader reference.
-				// `find_sector` doesn't know "count" of sectors.
-				// But `find_sector` usually returns correct index.
-				// Ideally we should limit the search scope. The shader doesn't have `sector_count` in ObjectParams.
-				// I'll stick to the reference logic.
+			// Pack sectors
+			// Sort sectors by coordinate for deterministic layout
+			type sectorEntry struct {
+				Key    [3]int
+				Sector *volume.Sector
+			}
+			sortedSectors := make([]sectorEntry, 0, len(xbm.Sectors))
+			for k, v := range xbm.Sectors {
+				sortedSectors = append(sortedSectors, sectorEntry{k, v})
+			}
+			sort.Slice(sortedSectors, func(i, j int) bool {
+				a, b := sortedSectors[i].Key, sortedSectors[j].Key
+				if a[2] != b[2] {
+					return a[2] < b[2]
+				}
+				if a[1] != b[1] {
+					return a[1] < b[1]
+				}
+				return a[0] < b[0]
+			})
 
-				firstBrickIdx := uint32(len(bricks)/16) - offsets[1] // Relative to brick base
+			for i, entry := range sortedSectors {
+				sKey := entry.Key
+				sector := entry.Sector
+
+				// Calculate absolute indices for cache
+				absSectorIndex := offsets[0] + uint32(i)
+				absBrickIndex := uint32(len(bricks) / 16)
+
+				m.SectorIndices[sector] = SectorGpuInfo{
+					SectorIndex:     absSectorIndex,
+					FirstBrickIndex: absBrickIndex,
+				}
+
+				firstBrickIdx := absBrickIndex - offsets[1] // Relative to brick base
 
 				// Sector Record (32 bytes)
 				// origin (16), id (4), lo (4), hi (4), pad (4)
@@ -533,6 +600,7 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 
 		// Mark map as allocated for future sparse updates
 		m.AllocatedMaps[xbm] = true
+		xbm.StructureDirty = false
 	}
 
 	// WebGPU requires non-zero size for buffers
@@ -572,6 +640,96 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 		recreated = true
 	}
 	if m.ensureBuffer("Tree64Buf", &m.Tree64Buf, tree64, wgpu.BufferUsageStorage, HeadroomTables) {
+		recreated = true
+	}
+
+	// 5. Sector Hash Grid
+	if m.updateSectorGrid(scene) {
+		recreated = true
+	}
+
+	return recreated
+}
+
+func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
+	// Count total sectors
+	totalSectors := 0
+	for _, obj := range scene.Objects {
+		totalSectors += len(obj.XBrickMap.Sectors)
+	}
+
+	// Always ensure buffers exist even if empty to avoid bind group panics
+	if totalSectors == 0 {
+		recreated := false
+		if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0) {
+			recreated = true
+		}
+		if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, make([]byte, 16), wgpu.BufferUsageStorage, 0) {
+			recreated = true
+		}
+		return recreated
+	}
+
+	// Hash grid size: next power of 2, 2x occupancy
+	gridSize := 1
+	for gridSize < totalSectors*2 {
+		gridSize <<= 1
+	}
+	if gridSize < 1024 {
+		gridSize = 1024
+	}
+
+	// Grid entry: [sx, sy, sz, base_idx, sector_idx, pad, pad, pad] (8x i32 = 32 bytes)
+	// We'll use a simple open-addressing scheme.
+	// Empty slot: sector_idx = -1
+	gridData := make([]byte, gridSize*32)
+	for i := 0; i < gridSize; i++ {
+		binary.LittleEndian.PutUint32(gridData[i*32+16:], 0xFFFFFFFF) // sector_idx = -1
+	}
+
+	hash := func(x, y, z int32, base uint32) uint32 {
+		h := uint32(x)*73856093 ^ uint32(y)*19349663 ^ uint32(z)*83492791 ^ base*99999989
+		return h % uint32(gridSize)
+	}
+
+	for _, obj := range scene.Objects {
+		xbm := obj.XBrickMap
+		baseIdx := m.MapOffsets[xbm][0]
+
+		for sKey, sector := range xbm.Sectors {
+			sx, sy, sz := int32(sKey[0]), int32(sKey[1]), int32(sKey[2])
+			info, ok := m.SectorIndices[sector]
+			if !ok {
+				continue
+			}
+
+			h := hash(sx, sy, sz, baseIdx)
+			for {
+				sectorIdx := binary.LittleEndian.Uint32(gridData[h*32+16:])
+				if sectorIdx == 0xFFFFFFFF {
+					// Found empty slot
+					binary.LittleEndian.PutUint32(gridData[h*32+0:], uint32(sx))
+					binary.LittleEndian.PutUint32(gridData[h*32+4:], uint32(sy))
+					binary.LittleEndian.PutUint32(gridData[h*32+8:], uint32(sz))
+					binary.LittleEndian.PutUint32(gridData[h*32+12:], baseIdx)
+					binary.LittleEndian.PutUint32(gridData[h*32+16:], info.SectorIndex)
+					break
+				}
+				h = (h + 1) % uint32(gridSize)
+			}
+		}
+	}
+
+	recreated := false
+	if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, gridData, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+
+	paramsData := make([]byte, 16)
+	binary.LittleEndian.PutUint32(paramsData[0:4], uint32(gridSize))
+	binary.LittleEndian.PutUint32(paramsData[4:8], uint32(gridSize-1)) // mask if we used power of 2, but we use modulo just in case. Wait, h % gridSize is fine.
+
+	if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, paramsData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 
@@ -621,7 +779,7 @@ func (m *GpuBufferManager) UpdateBrickRecord(xbm *volume.XBrickMap, brickKey [6]
 		return
 	}
 
-	offsets, ok := m.MapOffsets[xbm]
+	_, ok := m.MapOffsets[xbm]
 	if !ok {
 		return
 	}
@@ -642,20 +800,13 @@ func (m *GpuBufferManager) UpdateBrickRecord(xbm *volume.XBrickMap, brickKey [6]
 	}
 
 	packedIdx := sector.GetPackedIndex(flatIdx)
-	brickBase := offsets[1]
-
-	// Calculate brick record offset (16 bytes per brick)
-	// Need to count all bricks in all previous sectors of this map
-	brickCount := uint32(0)
-	for sk, s := range xbm.Sectors {
-		if sk == sKey {
-			brickCount += uint32(packedIdx)
-			break
-		}
-		brickCount += uint32(len(s.PackedBricks))
+	// Use cached indices for O(1) deterministic access
+	sectorInfo, cached := m.SectorIndices[sector]
+	if !cached {
+		return // Sector not implicitly allocated in current buffer
 	}
 
-	recordOffset := (brickBase + brickCount) * 16
+	recordOffset := (sectorInfo.FirstBrickIndex + uint32(packedIdx)) * 16
 
 	// Prepare brick record (16 bytes)
 	var gpuAtlasOffset uint32
@@ -685,32 +836,14 @@ func (m *GpuBufferManager) UpdateSectorRecord(xbm *volume.XBrickMap, sectorKey [
 		return
 	}
 
-	// Find sector index
-	sectorBase := offsets[0]
-	sectorCount := uint32(0)
-	found := false
-	for sk := range xbm.Sectors {
-		if sk == sectorKey {
-			found = true
-			break
-		}
-		sectorCount++
-	}
-
-	if !found {
+	// Use cached indices for O(1) deterministic access
+	sectorInfo, cached := m.SectorIndices[sector]
+	if !cached {
 		return
 	}
 
-	recordOffset := (sectorBase + sectorCount) * 32
-
-	// Calculate first brick index for this sector
-	firstBrickIdx := uint32(0)
-	for sk, s := range xbm.Sectors {
-		if sk == sectorKey {
-			break
-		}
-		firstBrickIdx += uint32(len(s.PackedBricks))
-	}
+	recordOffset := sectorInfo.SectorIndex * 32
+	firstBrickIdx := sectorInfo.FirstBrickIndex - offsets[1] // Relative to brick base of this map
 
 	// Prepare sector record (32 bytes)
 	ox, oy, oz := int32(sectorKey[0]*32), int32(sectorKey[1]*32), int32(sectorKey[2]*32)
@@ -747,6 +880,32 @@ func (m *GpuBufferManager) CreateBindGroups(pipeline *wgpu.ComputePipeline) {
 		panic(err)
 	}
 
+	// Ensure voxel scene buffers for Group 2
+	if m.SectorTableBuf == nil {
+		m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
+	}
+	if m.BrickTableBuf == nil {
+		m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
+	}
+	if m.VoxelPayloadBuf == nil {
+		m.ensureBuffer("VoxelPayloadBuf", &m.VoxelPayloadBuf, make([]byte, 512), wgpu.BufferUsageStorage, 0)
+	}
+	if m.MaterialBuf == nil {
+		m.ensureBuffer("MaterialBuf", &m.MaterialBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
+	}
+	if m.ObjectParamsBuf == nil {
+		m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
+	}
+	if m.Tree64Buf == nil {
+		m.ensureBuffer("Tree64Buf", &m.Tree64Buf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
+	}
+	if m.SectorGridBuf == nil {
+		m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
+	}
+	if m.SectorGridParamsBuf == nil {
+		m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, make([]byte, 16), wgpu.BufferUsageStorage, 0)
+	}
+
 	// Group 2
 	entries2 := []wgpu.BindGroupEntry{
 		{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
@@ -754,7 +913,9 @@ func (m *GpuBufferManager) CreateBindGroups(pipeline *wgpu.ComputePipeline) {
 		{Binding: 2, Buffer: m.VoxelPayloadBuf, Size: wgpu.WholeSize},
 		{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
 		{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
-		{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize}, // Empty but bound
+		{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
+		{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
+		{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
 	}
 	desc2 := &wgpu.BindGroupDescriptor{
 		Layout:  pipeline.GetBindGroupLayout(2),

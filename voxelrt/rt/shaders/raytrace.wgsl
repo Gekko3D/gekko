@@ -91,6 +91,20 @@ struct ObjectParams {
     padding: u32,
 };
 
+struct SectorGridEntry {
+    coords: vec3<i32>,
+    base_idx: u32,
+    sector_idx: i32,
+    paddings: array<u32, 3>,
+};
+
+struct SectorGridParams {
+    grid_size: u32,
+    grid_mask: u32,
+    padding0: u32,
+    padding1: u32,
+};
+
 struct Light {
     position: vec4<f32>,
     direction: vec4<f32>,
@@ -192,6 +206,8 @@ fn calculate_lighting(
 @group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
 @group(2) @binding(4) var<storage, read> object_params: array<ObjectParams>;
 @group(2) @binding(5) var<storage, read> tree64_nodes: array<Tree64Node>;
+@group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
+@group(2) @binding(7) var<storage, read> sector_grid_params: SectorGridParams;
 
 // ============== 64-BIT MASK HELPERS ==============
 
@@ -291,14 +307,18 @@ fn find_sector_cached(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
 }
 
 fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
-    let limit = params.sector_table_base + params.sector_count;
-    let expected_origin = vec4<i32>(sx, sy, sz, 0) * 32;
-    for (var i = params.sector_table_base; i < limit; i = i + 1u) {
-        let s = sectors[i];
-        if (s.origin_vox.x == expected_origin.x && 
-            s.origin_vox.y == expected_origin.y && 
-            s.origin_vox.z == expected_origin.z) {
-            return i32(i);
+    let size = sector_grid_params.grid_size;
+    if (size == 0u) { return -1; }
+    
+    let h = (u32(sx) * 73856093u ^ u32(sy) * 19349663u ^ u32(sz) * 83492791u ^ params.sector_table_base * 99999989u) % size;
+    
+    // Open addressing probe
+    for (var i = 0u; i < 32u; i++) {
+        let idx = (h + i) % size;
+        let entry = sector_grid[idx];
+        if (entry.sector_idx == -1) { return -1; }
+        if (entry.coords.x == sx && entry.coords.y == sy && entry.coords.z == sz && entry.base_idx == params.sector_table_base) {
+            return entry.sector_idx;
         }
     }
     return -1;

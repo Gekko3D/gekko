@@ -213,6 +213,45 @@ func (a *App) Init() error {
 	a.BufferManager.CreateBindGroups(a.ComputePipeline)
 	a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
 
+	// Create GPU voxel edit pipeline
+	err = a.BufferManager.CreateEditPipeline(shaders.VoxelEditWGSL)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to create edit pipeline: %v\n", err)
+	} else {
+		err = a.BufferManager.CreateEditBindGroups()
+		if err != nil {
+			fmt.Printf("WARNING: Failed to create edit bind groups: %v\n", err)
+		}
+
+		// Initialize brick pool for GPU allocation
+		err = a.BufferManager.InitializeBrickPool()
+		if err != nil {
+			fmt.Printf("WARNING: Failed to initialize brick pool: %v\n", err)
+		} else {
+			// Recreate bind groups to include brick pool
+			err = a.BufferManager.CreateEditBindGroups()
+			if err != nil {
+				fmt.Printf("WARNING: Failed to recreate edit bind groups with brick pool: %v\n", err)
+			}
+
+			// Initialize compression system
+			err = a.BufferManager.CreateCompressionPipeline(shaders.CompressionWGSL)
+			if err != nil {
+				fmt.Printf("WARNING: Failed to create compression pipeline: %v\n", err)
+			} else {
+				err = a.BufferManager.InitializeCompressionBuffers()
+				if err != nil {
+					fmt.Printf("WARNING: Failed to initialize compression buffers: %v\n", err)
+				} else {
+					err = a.BufferManager.CreateCompressionBindGroups()
+					if err != nil {
+						fmt.Printf("WARNING: Failed to create compression bind groups: %v\n", err)
+					}
+				}
+			}
+		}
+	}
+
 	// Initialize time
 	a.LastTime = glfw.GetTime()
 
@@ -367,6 +406,19 @@ func (a *App) DrawText(text string, x, y float32, scale float32, color [4]float3
 }
 
 func (a *App) Render() {
+	// Flush pending voxel edits FIRST, before any rendering
+	// This ensures GPU buffers are updated before we start encoding commands
+	if len(a.BufferManager.PendingEdits) > 0 {
+		a.BufferManager.FlushEdits(0) // Object ID 0 for now
+		// Wait for GPU to finish edit operations before rendering
+		// This is implicit in WebGPU's queue submission ordering
+	}
+
+	// Periodically run compression pass (every 10 frames)
+	if a.FrameCount%10 == 0 && len(a.BufferManager.DirtyBrickIndices) > 0 {
+		a.BufferManager.FlushCompression()
+	}
+
 	nextTexture, err := a.Surface.GetCurrentTexture()
 	if err != nil {
 		fmt.Printf("ERROR: GetCurrentTexture failed: %v\n", err)
@@ -496,11 +548,11 @@ func (a *App) HandleClick(button int, action int) {
 		a.Editor.ApplyBrush(hit.Object, hit.Coord, hit.Normal)
 		a.Editor.BrushValue = oldVal
 
-		// Sync
+		// Mark scene as dirty - Update() will handle buffer sync
 		a.Scene.Commit()
-		a.BufferManager.UpdateScene(a.Scene)
-		a.BufferManager.CreateBindGroups(a.ComputePipeline)
-		a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
+		// DO NOT call UpdateScene or CreateBindGroups here!
+		// This causes race condition with the render loop.
+		// The Update() method will handle it on the next frame.
 	}
 }
 

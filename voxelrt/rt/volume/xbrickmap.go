@@ -191,18 +191,24 @@ type XBrickMap struct {
 	FreeSlots       []uint32
 	BrickAtlasMap   map[[6]int]uint32
 
-	AABBDirty bool
-	CachedMin mgl32.Vec3
-	CachedMax mgl32.Vec3
+	AABBDirty      bool
+	StructureDirty bool // True if bricks were added or removed
+	CachedMin      mgl32.Vec3
+	CachedMax      mgl32.Vec3
+
+	// GPU editing
+	GPUEditMode bool
+	gpuManager  interface{} // *gpu.GpuBufferManager (avoid circular import)
 }
 
 func NewXBrickMap() *XBrickMap {
 	return &XBrickMap{
-		Sectors:       make(map[[3]int]*Sector),
-		DirtySectors:  make(map[[3]int]bool),
-		DirtyBricks:   make(map[[6]int]bool),
-		BrickAtlasMap: make(map[[6]int]uint32),
-		AABBDirty:     true,
+		Sectors:        make(map[[3]int]*Sector),
+		DirtySectors:   make(map[[3]int]bool),
+		DirtyBricks:    make(map[[6]int]bool),
+		BrickAtlasMap:  make(map[[6]int]uint32),
+		AABBDirty:      true,
+		StructureDirty: true, // Initial state needs build
 	}
 }
 
@@ -229,9 +235,22 @@ func (x *XBrickMap) FreeAtlasSlot(brickKey [6]int) {
 func (x *XBrickMap) ClearDirty() {
 	x.DirtySectors = make(map[[3]int]bool)
 	x.DirtyBricks = make(map[[6]int]bool)
+	x.StructureDirty = false
 }
 
 func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
+	// GPU-first mode: queue edit on GPU instead of CPU update
+	if x.GPUEditMode && x.gpuManager != nil {
+		type EditQueuer interface {
+			QueueEdit(x, y, z int, val uint8)
+		}
+		if mgr, ok := x.gpuManager.(EditQueuer); ok {
+			mgr.QueueEdit(gx, gy, gz, val)
+			// Continue to CPU update
+		}
+	}
+
+	// CPU update path (original logic)
 	sx, sy, sz := gx/SectorSize, gy/SectorSize, gz/SectorSize
 	slx, sly, slz := gx%SectorSize, gy%SectorSize, gz%SectorSize
 	if slx < 0 {
@@ -265,16 +284,20 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 				}
 
 				brick.SetVoxel(vx, vy, vz, 0)
-				x.DirtySectors[sKey] = true
-				x.DirtyBricks[bKey] = true
+				if !x.GPUEditMode {
+					x.DirtySectors[sKey] = true
+					x.DirtyBricks[bKey] = true
+				}
 				x.AABBDirty = true
 
 				sector.RemoveBrickIfEmpty(bx, by, bz)
 				if sector.IsEmpty() {
 					x.FreeAtlasSlot(bKey)
 					delete(x.Sectors, sKey)
+					x.StructureDirty = true
 				} else if brick.IsEmpty() {
 					x.FreeAtlasSlot(bKey)
+					x.StructureDirty = true
 				} else {
 					// Try to re-compress? Or leave as sparse until full rebuild?
 					// For simple editing, leave sparse.
@@ -286,12 +309,14 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		if !ok {
 			sector = NewSector(sx, sy, sz)
 			x.Sectors[sKey] = sector
+			x.StructureDirty = true
 		}
 
 		brick, isNew := sector.GetOrCreateBrick(bx, by, bz)
 		if isNew {
 			offset := x.AllocateAtlasSlot(bKey)
 			brick.AtlasOffset = offset
+			x.StructureDirty = true
 		} else {
 			if brick.Flags&BrickFlagSolid != 0 {
 				if brick.AtlasOffset == uint32(val) {
@@ -307,8 +332,10 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		}
 
 		brick.SetVoxel(vx, vy, vz, val)
-		x.DirtySectors[sKey] = true
-		x.DirtyBricks[bKey] = true
+		if !x.GPUEditMode {
+			x.DirtySectors[sKey] = true
+			x.DirtyBricks[bKey] = true
+		}
 		x.AABBDirty = true
 
 		// Optional: Compress if full
@@ -317,6 +344,12 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 			x.FreeAtlasSlot(bKey)
 		}
 	}
+}
+
+// EnableGPUEditing enables GPU-accelerated voxel editing
+func (x *XBrickMap) EnableGPUEditing(mgr interface{}) {
+	x.GPUEditMode = true
+	x.gpuManager = mgr
 }
 
 // GetVoxel returns (found, value) for a voxel at global coordinates
@@ -410,13 +443,16 @@ func (x *XBrickMap) ComputeAABB() (mgl32.Vec3, mgl32.Vec3) {
 	found := false
 
 	for sKey, sector := range x.Sectors {
+		if sector.IsEmpty() {
+			continue
+		}
 		ox, oy, oz := float32(sKey[0]*SectorSize), float32(sKey[1]*SectorSize), float32(sKey[2]*SectorSize)
 
 		for i := 0; i < 64; i++ {
 			if (sector.BrickMask64 & (1 << i)) != 0 {
 				bx, by, bz := i%4, (i/4)%4, i/16
 				brick := sector.GetBrick(bx, by, bz)
-				if brick == nil {
+				if brick == nil || brick.IsEmpty() {
 					continue
 				}
 
@@ -433,17 +469,28 @@ func (x *XBrickMap) ComputeAABB() (mgl32.Vec3, mgl32.Vec3) {
 					continue
 				}
 
-				// Iterate voxels for precision
-				for vx := 0; vx < BrickSize; vx++ {
-					for vy := 0; vy < BrickSize; vy++ {
-						for vz := 0; vz < BrickSize; vz++ {
-							if brick.Payload[vx][vy][vz] != 0 {
-								vMin := mgl32.Vec3{brickOx + float32(vx), brickOy + float32(vy), brickOz + float32(vz)}
-								vMax := vMin.Add(mgl32.Vec3{1, 1, 1})
+				// Iterate microblocks (2x2x2) using mask
+				for m := 0; m < 64; m++ {
+					if (brick.OccupancyMask64 & (1 << m)) != 0 {
+						mx, my, mz := m%4, (m/4)%4, m/16
+						ms := MicroSize
+						startVx, startVy, startVz := mx*ms, my*ms, mz*ms
+						for vx := 0; vx < ms; vx++ {
+							for vy := 0; vy < ms; vy++ {
+								for vz := 0; vz < ms; vz++ {
+									if brick.Payload[startVx+vx][startVy+vy][startVz+vz] != 0 {
+										vMin := mgl32.Vec3{
+											brickOx + float32(startVx+vx),
+											brickOy + float32(startVy+vy),
+											brickOz + float32(startVz+vz),
+										}
+										vMax := vMin.Add(mgl32.Vec3{1, 1, 1})
 
-								minB = mgl32.Vec3{min(minB.X(), vMin.X()), min(minB.Y(), vMin.Y()), min(minB.Z(), vMin.Z())}
-								maxB = mgl32.Vec3{max(maxB.X(), vMax.X()), max(maxB.Y(), vMax.Y()), max(maxB.Z(), vMax.Z())}
-								found = true
+										minB = mgl32.Vec3{min(minB.X(), vMin.X()), min(minB.Y(), vMin.Y()), min(minB.Z(), vMin.Z())}
+										maxB = mgl32.Vec3{max(maxB.X(), vMax.X()), max(maxB.Y(), vMax.Y()), max(maxB.Z(), vMax.Z())}
+										found = true
+									}
+								}
 							}
 						}
 					}
