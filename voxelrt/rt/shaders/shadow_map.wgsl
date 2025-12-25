@@ -211,10 +211,19 @@ fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
     return -1;
 }
 
+fn make_safe_dir(d: vec3<f32>) -> vec3<f32> {
+    let eps = 1e-6;
+    let sx = select(d.x, (select(1.0, -1.0, d.x < 0.0)) * eps, abs(d.x) < eps);
+    let sy = select(d.y, (select(1.0, -1.0, d.y < 0.0)) * eps, abs(d.y) < eps);
+    let sz = select(d.z, (select(1.0, -1.0, d.z < 0.0)) * eps, abs(d.z) < eps);
+    return vec3<f32>(sx, sy, sz);
+}
+
 fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
     let new_origin = (mat * vec4<f32>(ray.origin, 1.0)).xyz;
     let new_dir = (mat * vec4<f32>(ray.dir, 0.0)).xyz;
-    return Ray(new_origin, new_dir, 1.0 / new_dir);
+    let safe_dir = make_safe_dir(new_dir);
+    return Ray(new_origin, new_dir, 1.0 / safe_dir);
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
@@ -225,13 +234,14 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
     var t_start = max(t_obj.x, 0.0) + EPS;
     let t_end = t_obj.y;
     if (t_start >= t_end) { return result; }
-    let dir = ray.dir + vec3<f32>(1e-5) * vec3<f32>(ray.dir == vec3<f32>(0.0));
-    let inv_dir = 1.0 / dir;
+    let dir = ray.dir;
+    let inv_dir = ray.inv_dir;
     let step = vec3<i32>(sign(dir));
     let t_delta_sector = abs(SECTOR_SIZE * inv_dir);
     let t_delta_brick = abs(BRICK_SIZE * inv_dir);
     var t_curr = t_start;
-    var sector_pos = vec3<i32>(floor((ray.origin + dir * t_curr) / SECTOR_SIZE));
+    let sector_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+    var sector_pos = vec3<i32>(floor(((ray.origin + dir * t_curr) - sector_bias) / SECTOR_SIZE));
     var t_max_sector = (vec3<f32>(sector_pos) * SECTOR_SIZE + select(vec3<f32>(0.0), vec3<f32>(SECTOR_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
     var iter_sectors = 0;
     while (t_curr < t_end && iter_sectors < 64) {
@@ -242,7 +252,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
             let sector_origin = vec3<f32>(sector.origin_vox.xyz);
             var t_sector_exit = min(min(min(t_max_sector.x, t_max_sector.y), t_max_sector.z), t_end);
             var t_brick = t_curr;
-            var brick_pos = vec3<i32>(floor(((ray.origin + dir * t_brick) - sector_origin) / BRICK_SIZE));
+            let brick_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+            var brick_pos = vec3<i32>(floor((((ray.origin + dir * t_brick) - sector_origin) - brick_bias) / BRICK_SIZE));
             brick_pos = clamp(brick_pos, vec3<i32>(0), vec3<i32>(3));
             var t_max_brick = (sector_origin + vec3<f32>(brick_pos) * BRICK_SIZE + select(vec3<f32>(0.0), vec3<f32>(BRICK_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
             var iter_bricks = 0;
@@ -267,7 +278,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                         if (b_flags == 0u) {
                             var t_micro = t_brick;
                             let brick_origin = sector_origin + vec3<f32>(bvid) * BRICK_SIZE;
-                            var voxel_pos = vec3<i32>(floor((ray.origin + dir * t_micro) - brick_origin));
+                            let voxel_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+                            var voxel_pos = vec3<i32>(floor(((ray.origin + dir * t_micro) - brick_origin) - voxel_bias));
                             voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
                             var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray.origin) * inv_dir;
                             let t_delta_1 = abs(1.0 * inv_dir);
@@ -377,14 +389,18 @@ fn traverse_scene(ray: Ray) -> HitResult {
         let t_vals = intersect_aabb(ray, node.aabb_min.xyz, node.aabb_max.xyz);
         if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < hit_res.t) {
             if (node.leaf_count > 0) {
-                let inst = instances[node.leaf_first];
-                let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
-                if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
-                    let params = object_params[inst.object_id];
-                    var res: HitResult;
-                    // Force full traversal (no LOD) for shadow map to avoid blinking/flickering
-                    res = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
-                    if (res.hit && res.t < hit_res.t) { hit_res = res; }
+                var li: i32 = 0;
+                loop {
+                    if (li >= node.leaf_count) { break; }
+                    let inst = instances[node.leaf_first + li];
+                    let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
+                    if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
+                        var res: HitResult;
+                        // Force full traversal (no LOD) for shadow map to avoid blinking/flickering
+                        res = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
+                        if (res.hit && res.t < hit_res.t) { hit_res = res; }
+                    }
+                    li = li + 1;
                 }
             } else {
                 if (node.left != -1) { stack[stack_ptr] = node.left; stack_ptr++; }
@@ -419,7 +435,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let p_target = p_far.xyz / p_far.w;
     let dir = normalize(p_target - origin);
     
-    var ray = Ray(origin, dir, 1.0 / dir);
+    let safe_dir = make_safe_dir(dir);
+    var ray = Ray(origin, dir, 1.0 / safe_dir);
     
     // Perform traversal
     var hit_res = traverse_scene(ray);
@@ -432,9 +449,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Write out normalized depth from light perspective (using voxel center for blocky shadows)
     if (hit_res.hit) {
         let pos_ls = light.view_proj * vec4<f32>(hit_res.voxel_center_ws, 1.0);
-        let depth = pos_ls.z / pos_ls.w;
-        textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth, 0.0, 0.0, 0.0));
+        let light_type = u32(light.params.z);
+        if (light_type == 2u) {
+            // Spot light: store linear distance from light position (meters)
+            let depth_m = distance(light.position.xyz, hit_res.voxel_center_ws);
+            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth_m, 0.0, 0.0, 0.0));
+        } else {
+            // Directional/others: store NDC depth
+            let depth_ndc = clamp(pos_ls.z / pos_ls.w, -1.0, 1.0);
+            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth_ndc, 0.0, 0.0, 0.0));
+        }
     } else {
-        textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(1.0, 0.0, 0.0, 0.0));
+        let light_type = u32(light.params.z);
+        if (light_type == 2u) {
+            // For spot, no hit -> treat as far range in meters
+            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(light.params.x, 0.0, 0.0, 0.0));
+        } else {
+            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(1.0, 0.0, 0.0, 0.0));
+        }
     }
 }

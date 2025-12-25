@@ -439,6 +439,8 @@ func (a *App) Resize(w, h int) {
 		a.BufferManager.CreateGBufferTextures(uint32(w), uint32(h))
 		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
 		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
+		// Ensure shadow bind groups remain valid after any resource changes
+		a.BufferManager.CreateShadowBindGroups()
 	}
 }
 
@@ -480,6 +482,10 @@ func (a *App) Update() {
 		// Also update G-Buffer and Lighting Bind Groups
 		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
 		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
+
+		// Shadow pass also depends on storage buffers (instances/nodes/sectors/bricks/etc),
+		// so we must rebind shadow bind groups when buffers are recreated.
+		a.BufferManager.CreateShadowBindGroups()
 	}
 
 	// Update Camera Uniforms
