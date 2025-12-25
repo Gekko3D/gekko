@@ -64,9 +64,7 @@ type GpuBufferManager struct {
 	ShadowBindGroup1 *wgpu.BindGroup
 	ShadowBindGroup2 *wgpu.BindGroup
 
-	BindGroup0      *wgpu.BindGroup
 	DebugBindGroup0 *wgpu.BindGroup
-	BindGroup2      *wgpu.BindGroup
 
 	MapOffsets    map[*volume.XBrickMap][3]uint32 // sectorBase, brickBase, payloadBase
 	AllocatedMaps map[*volume.XBrickMap]bool      // Track which maps have been fully uploaded
@@ -898,71 +896,6 @@ func (m *GpuBufferManager) UpdateSectorRecord(xbm *volume.XBrickMap, sectorKey [
 	m.Device.GetQueue().WriteBuffer(m.SectorTableBuf, uint64(recordOffset), buf)
 }
 
-func (m *GpuBufferManager) CreateBindGroups(pipeline *wgpu.ComputePipeline) {
-	// Group 0
-	entries0 := []wgpu.BindGroupEntry{
-		{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
-		{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
-		{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
-		{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
-	}
-	desc0 := &wgpu.BindGroupDescriptor{
-		Layout:  pipeline.GetBindGroupLayout(0),
-		Entries: entries0,
-	}
-	var err error
-	m.BindGroup0, err = m.Device.CreateBindGroup(desc0)
-	if err != nil {
-		panic(err)
-	}
-
-	// Ensure voxel scene buffers for Group 2
-	if m.SectorTableBuf == nil {
-		m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
-	}
-	if m.BrickTableBuf == nil {
-		m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
-	}
-	if m.VoxelPayloadBuf == nil {
-		m.ensureBuffer("VoxelPayloadBuf", &m.VoxelPayloadBuf, make([]byte, 512), wgpu.BufferUsageStorage, 0)
-	}
-	if m.MaterialBuf == nil {
-		m.ensureBuffer("MaterialBuf", &m.MaterialBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
-	}
-	if m.ObjectParamsBuf == nil {
-		m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
-	}
-	if m.Tree64Buf == nil {
-		m.ensureBuffer("Tree64Buf", &m.Tree64Buf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
-	}
-	if m.SectorGridBuf == nil {
-		m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0)
-	}
-	if m.SectorGridParamsBuf == nil {
-		m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, make([]byte, 16), wgpu.BufferUsageStorage, 0)
-	}
-
-	// Group 2
-	entries2 := []wgpu.BindGroupEntry{
-		{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
-		{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
-		{Binding: 2, Buffer: m.VoxelPayloadBuf, Size: wgpu.WholeSize},
-		{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
-		{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
-		{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
-		{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
-		{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
-	}
-	desc2 := &wgpu.BindGroupDescriptor{
-		Layout:  pipeline.GetBindGroupLayout(2),
-		Entries: entries2,
-	}
-	m.BindGroup2, err = m.Device.CreateBindGroup(desc2)
-	if err != nil {
-		panic(err)
-	}
-}
-
 func (m *GpuBufferManager) CreateDebugBindGroups(pipeline *wgpu.ComputePipeline) {
 	entries0 := []wgpu.BindGroupEntry{
 		{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
@@ -1009,10 +942,10 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 		}
 	}
 
-	setupTexture(&m.GBufferDepth, &m.DepthView, "GBuffer Depth", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
+	setupTexture(&m.GBufferDepth, &m.DepthView, "GBuffer Depth", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.GBufferNormal, &m.NormalView, "GBuffer Normal", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
-	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
-	setupTexture(&m.GBufferPosition, &m.PositionView, "GBuffer Position", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
+	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
+	setupTexture(&m.GBufferPosition, &m.PositionView, "GBuffer Position", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 
 	m.CreateShadowMapTextures(1024, 1024, 16) // Default 1024x1024 for 16 lights
 }
@@ -1032,7 +965,7 @@ func (m *GpuBufferManager) CreateShadowMapTextures(w, h, count uint32) {
 		},
 		MipLevelCount: 1,
 		Dimension:     wgpu.TextureDimension2D,
-		Format:        wgpu.TextureFormatRGBA16Float,
+		Format:        wgpu.TextureFormatRGBA32Float,
 		Usage:         wgpu.TextureUsageStorageBinding | wgpu.TextureUsageTextureBinding,
 		SampleCount:   1,
 	})
@@ -1042,7 +975,7 @@ func (m *GpuBufferManager) CreateShadowMapTextures(w, h, count uint32) {
 
 	m.ShadowMapView, err = m.ShadowMapArray.CreateView(&wgpu.TextureViewDescriptor{
 		Label:           "Shadow Map View",
-		Format:          wgpu.TextureFormatRGBA16Float,
+		Format:          wgpu.TextureFormatRGBA32Float,
 		Dimension:       wgpu.TextureViewDimension2DArray,
 		BaseMipLevel:    0,
 		MipLevelCount:   1,

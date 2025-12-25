@@ -118,7 +118,7 @@ struct SectorGridParams {
 @group(0) @binding(3) var<storage, read> lights: array<Light>;
 
 // Group 1: Shadow Map Output
-@group(1) @binding(0) var out_shadow_map: texture_storage_2d_array<rgba16float, write>;
+@group(1) @binding(0) var out_shadow_map: texture_storage_2d_array<rgba32float, write>;
 
 // Group 2: Voxel Data
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;

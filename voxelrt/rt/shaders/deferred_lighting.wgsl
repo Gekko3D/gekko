@@ -202,5 +202,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, emissive, roughness, metalness, i);
     }
     
-    textureStore(out_color, global_id.xy, vec4<f32>(final_color, 1.0));
+    // DEBUG: Visualize Base Color (no lighting)
+    //final_color = base_color;
+    // DEBUG: Visualize Depth
+    //let depth_vis = clamp(depth / 500.0, 0.0, 1.0);
+    //final_color = vec3<f32>(depth_vis);
+        textureStore(out_color, global_id.xy, vec4<f32>(final_color, 1.0));
 }

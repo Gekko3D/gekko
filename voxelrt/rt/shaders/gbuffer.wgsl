@@ -113,10 +113,10 @@ struct SectorGridParams {
 @group(0) @binding(2) var<storage, read> nodes: array<BVHNode>;
 
 // Group 1: G-Buffer Output
-@group(1) @binding(0) var out_depth: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(0) var out_depth: texture_storage_2d<rgba32float, write>;
 @group(1) @binding(1) var out_normal: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(2) var out_material: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(3) var out_position: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(2) var out_material: texture_storage_2d<rgba32float, write>;
+@group(1) @binding(3) var out_position: texture_storage_2d<rgba32float, write>;
 
 // Group 2: Voxel Data
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
