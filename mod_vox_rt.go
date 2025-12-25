@@ -149,7 +149,7 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 			}
 
 			obj = core.NewVoxelObject()
-			obj.XBrickMap = modelTemplate.XBrickMap
+			obj.XBrickMap = modelTemplate.XBrickMap.Copy()
 			obj.MaterialTable = modelTemplate.MaterialTable
 			state.rtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj

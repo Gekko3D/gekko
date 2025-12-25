@@ -509,14 +509,20 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 			payloadByteOffset := uint32(len(payload))
 			offsets[2] = payloadByteOffset // Keep as bytes for consistent arithmetic
 
-			// Pack sectors
-			// Sort sectors by coordinate? No, map order is random.
-			// Need a stable order? Python iteration order.
-			// Just iterate.
+			// Pre-allocate space for this map's payload chunk
+			// Use NextAtlasOffset as the size required for this map
+			// Note: NextAtlasOffset is in bytes.
+			currentMapPayloadSize := xbm.NextAtlasOffset
+			// Ensure we have enough space (sometimes NextAtlasOffset might be lagging if slots were freed?)
+			// Actually, FreeAtlasSlot doesn't reduce NextAtlasOffset.
+			// But if we just loaded from VOX, NextAtlasOffset might be 0 if we didn't update it?
+			// The VOX loader uses SetVoxel which allocates slots, so NextAtlasOffset should be correct.
+			// Wait, NewXBrickMap initializes NextAtlasOffset to 0.
+			// AllocateAtlasSlot increments it.
 
-			// Sector table relies on `sector_id` referring to first brick index absolute.
-			// So we need to reserve space first?
-			// No, we append linearly.
+			// Pad payload with zeros for this map
+			zeros := make([]byte, currentMapPayloadSize)
+			payload = append(payload, zeros...)
 
 			// Pack sectors
 			// Sort sectors by coordinate for deterministic layout
@@ -566,9 +572,6 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 				sectors = append(sectors, buf...)
 
 				// Bricks
-				// We need to iterate bricks in bit order to match `popcnt` logic?
-				// Standard `popcnt` implies packed bricks are in bit order.
-
 				for i := 0; i < 64; i++ {
 					if (sector.BrickMask64 & (1 << i)) != 0 {
 						bx, by, bz := i%4, (i/4)%4, i/16
@@ -576,31 +579,28 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 						// Brick Record (16 bytes)
 						// atlas (4), lo (4), hi (4), flags (4)
 
-						// Important: Brick Payload
-						// We need to sync atlas.
-						// If key in `BrickAtlasMap`, use offset (relative to payload base? or absolute?).
-						// Python: `brick.atlas_offset` (relative to payload_base of THE map?)
-						// Python logic: `payload_offset = len(payload_data) - payload_base`.
-						// Then stores `brick.atlas_offset = payload_offset`.
-						// In shader: `actual = payload_base + brick.atlas_offset`.
-						// So `brick.atlas_offset` is relative to that map's start.
-
-						// But where is the payload data?
-						// In Go port, we are rebuilding the buffer every time (for now).
-						// So we append payload linearly and update atlas offset.
-
-						// Prepare Atlas Offset / Palette Index
+						// Calculate Atlas Offset / Palette Index
 						var gpuAtlasOffset uint32
 						if brick.Flags&volume.BrickFlagSolid != 0 {
 							gpuAtlasOffset = brick.AtlasOffset
 						} else {
-							gpuAtlasOffset = uint32(len(payload)) - offsets[2]
+							// Non-solid brick: Use the assigned AtlasOffset
+							// This offset is relative to the start of this map's payload chunk.
+							gpuAtlasOffset = brick.AtlasOffset
+
+							// Write payload to the pre-allocated buffer
+							// The absolute position is offsets[2] + gpuAtlasOffset
+							// We appended `zeros` to payload, so payload[offsets[2]:] is the chunk for this map.
+							baseIdx := int(offsets[2] + gpuAtlasOffset)
 
 							// Serialize payload (512 bytes)
+							// Direct write into slice
+							localIdx := 0
 							for z := 0; z < 8; z++ {
 								for y := 0; y < 8; y++ {
 									for x := 0; x < 8; x++ {
-										payload = append(payload, brick.Payload[x][y][z])
+										payload[baseIdx+localIdx] = brick.Payload[x][y][z]
+										localIdx++
 									}
 								}
 							}
