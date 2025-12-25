@@ -25,16 +25,18 @@ type App struct {
 	Surface  *wgpu.Surface
 	Config   *wgpu.SurfaceConfiguration
 
-	ComputePipeline      *wgpu.ComputePipeline
 	DebugComputePipeline *wgpu.ComputePipeline
 
 	RenderPipeline *wgpu.RenderPipeline
+
+	// Deferred Rendering Pipelines
+	GBufferPipeline  *wgpu.ComputePipeline
+	LightingPipeline *wgpu.ComputePipeline
 
 	StorageTexture *wgpu.Texture
 	StorageView    *wgpu.TextureView
 	Sampler        *wgpu.Sampler
 
-	BindGroup1      *wgpu.BindGroup // Output texture
 	BindGroup1Debug *wgpu.BindGroup // Output texture for debug
 	RenderBG        *wgpu.BindGroup // Blit
 
@@ -56,6 +58,7 @@ type App struct {
 	LastRenderTime float64
 	MouseCaptured  bool
 	DebugMode      bool
+	RenderMode     uint32
 
 	FrameCount int
 	FPS        float64
@@ -109,28 +112,10 @@ func (a *App) Init() error {
 	surface.Configure(adapter, a.Device, a.Config)
 
 	// Shaders
-	csModule, _ := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
-		Label:          "Raytrace CS",
-		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.RaytraceWGSL},
-	})
-
 	fsModule, _ := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label:          "Fullscreen VS/FS",
 		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.FullscreenWGSL},
 	})
-
-	// Compute Pipeline
-	// Layout auto
-	a.ComputePipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
-		Label: "Raytrace Pipeline",
-		Compute: wgpu.ProgrammableStageDescriptor{
-			Module:     csModule,
-			EntryPoint: "main",
-		},
-	})
-	if err != nil {
-		return err
-	}
 
 	// Debug Compute Pipeline
 	debugModule, _ := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
@@ -141,6 +126,163 @@ func (a *App) Init() error {
 		Label: "Debug Pipeline",
 		Compute: wgpu.ProgrammableStageDescriptor{
 			Module:     debugModule,
+			EntryPoint: "main",
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// G-Buffer Pipeline
+	gbMod, _ := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "GBuffer CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.GBufferWGSL},
+	})
+	a.GBufferPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label: "GBuffer Pipeline",
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     gbMod,
+			EntryPoint: "main",
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Deferred Lighting Pipeline
+	// Deferred Lighting Pipeline
+	lightMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Lighting CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.DeferredLightingWGSL},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Group 0: Camera + Lights
+	lightBGL0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Lighting BGL0",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeUniform,
+					MinBindingSize:   256, // CameraData size
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0, // Runtime array
+					HasDynamicOffset: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Group 1: G-Buffer Input + Output + Shadow
+	lightBGL1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Lighting BGL1",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			// Depth (RGBA32Float - Sampled texture)
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			// Normal (RGBA16Float - Sampled texture)
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			// Material (RGBA32Float - Sampled texture)
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			// Position (RGBA32Float - Sampled texture)
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			// Output Color
+			{
+				Binding:    4,
+				Visibility: wgpu.ShaderStageCompute,
+				StorageTexture: wgpu.StorageTextureBindingLayout{
+					Access:        wgpu.StorageTextureAccessWriteOnly,
+					Format:        wgpu.TextureFormatRGBA8Unorm,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			// Shadow Maps (RGBA32Float Array)
+			{
+				Binding:    5,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2DArray,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Group 2: Materials
+	lightBGL2, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Lighting BGL2",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    3, // Matches mod_vox_rt binding
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	lightPipelineLayout, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		BindGroupLayouts: []*wgpu.BindGroupLayout{lightBGL0, lightBGL1, lightBGL2},
+	})
+	if err != nil {
+		return err
+	}
+
+	a.LightingPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label:  "Lighting Pipeline",
+		Layout: lightPipelineLayout,
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     lightMod,
 			EntryPoint: "main",
 		},
 	})
@@ -203,15 +345,26 @@ func (a *App) Init() error {
 	proj := mgl32.Ident4()
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
-	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.AmbientLight, a.DebugMode)
+	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode)
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene)
 
 	// Bind groups creation
 	a.setupBindGroups()
-	a.BufferManager.CreateBindGroups(a.ComputePipeline)
 	a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
+
+	// Shadow Pipeline
+	err = a.BufferManager.CreateShadowPipeline(shaders.ShadowMapWGSL)
+	if err != nil {
+		return err
+	}
+
+	// G-Buffer resources
+	a.BufferManager.CreateGBufferTextures(uint32(width), uint32(height))
+	a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
+	a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
+	a.BufferManager.CreateShadowBindGroups()
 
 	// Initialize time
 	a.LastTime = glfw.GetTime()
@@ -250,17 +403,6 @@ func (a *App) setupTextures(w, h int) {
 func (a *App) setupBindGroups() {
 	var err error
 
-	// Bind Group 1 (Output) for compute shader
-	a.BindGroup1, err = a.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-		Layout: a.ComputePipeline.GetBindGroupLayout(1),
-		Entries: []wgpu.BindGroupEntry{
-			{Binding: 0, TextureView: a.StorageView},
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
-
 	// Bind Group 1 Debug
 	a.BindGroup1Debug, err = a.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: a.DebugComputePipeline.GetBindGroupLayout(1),
@@ -292,6 +434,13 @@ func (a *App) Resize(w, h int) {
 		a.Surface.Configure(a.Adapter, a.Device, a.Config)
 		a.setupTextures(w, h)
 		a.setupBindGroups()
+
+		// Resize G-Buffer
+		a.BufferManager.CreateGBufferTextures(uint32(w), uint32(h))
+		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
+		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
+		// Ensure shadow bind groups remain valid after any resource changes
+		a.BufferManager.CreateShadowBindGroups()
 	}
 }
 
@@ -301,8 +450,12 @@ func (a *App) Update() {
 	}
 
 	// We assume a default light position or sync it if needed.
-	// For now, fixed light at high altitude.
-	lightPos := mgl32.Vec3{100, 200, 100}
+	// Sync with scene light 0 if available
+	lightPos := mgl32.Vec3{500, 1000, 500}
+	if len(a.Scene.Lights) > 0 {
+		lp := a.Scene.Lights[0].Position
+		lightPos = mgl32.Vec3{lp[0], lp[1], lp[2]}
+	}
 
 	// Matrices
 	view := a.Camera.GetViewMatrix()
@@ -324,12 +477,19 @@ func (a *App) Update() {
 	recreated := a.BufferManager.UpdateScene(a.Scene)
 	if recreated {
 		// New buffers mean we need new bind groups
-		a.BufferManager.CreateBindGroups(a.ComputePipeline)
 		a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
+
+		// Also update G-Buffer and Lighting Bind Groups
+		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
+		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
+
+		// Shadow pass also depends on storage buffers (instances/nodes/sectors/bricks/etc),
+		// so we must rebind shadow bind groups when buffers are recreated.
+		a.BufferManager.CreateShadowBindGroups()
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.AmbientLight, a.DebugMode)
+	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode)
 
 	// Update Text Buffers if needed
 	if len(a.TextItems) > 0 && a.TextRenderer != nil {
@@ -389,10 +549,10 @@ func (a *App) Render() {
 
 	// Compute Pass
 	cPass := encoder.BeginComputePass(nil)
-	cPass.SetPipeline(a.ComputePipeline)
-	cPass.SetBindGroup(0, a.BufferManager.BindGroup0, nil)
-	cPass.SetBindGroup(1, a.BindGroup1, nil)
-	cPass.SetBindGroup(2, a.BufferManager.BindGroup2, nil)
+	cPass.SetPipeline(a.GBufferPipeline)
+	cPass.SetBindGroup(0, a.BufferManager.GBufferBindGroup0, nil)
+	cPass.SetBindGroup(1, a.BufferManager.GBufferBindGroup, nil)
+	cPass.SetBindGroup(2, a.BufferManager.GBufferBindGroup2, nil)
 
 	// Dispatch
 	wgX := (a.Config.Width + 7) / 8
@@ -400,7 +560,22 @@ func (a *App) Render() {
 	cPass.DispatchWorkgroups(wgX, wgY, 1)
 	err = cPass.End()
 	if err != nil {
-		fmt.Printf("ERROR: Compute pass End failed: %v\n", err)
+		fmt.Printf("ERROR: G-Buffer pass End failed: %v\n", err)
+	}
+
+	// Shadow Pass
+	a.BufferManager.DispatchShadowPass(encoder, uint32(len(a.Scene.Lights)))
+
+	// Lighting Pass
+	lPass := encoder.BeginComputePass(nil)
+	lPass.SetPipeline(a.LightingPipeline)
+	lPass.SetBindGroup(0, a.BufferManager.LightingBindGroup, nil)
+	lPass.SetBindGroup(1, a.BufferManager.LightingBindGroup2, nil)
+	lPass.SetBindGroup(2, a.BufferManager.LightingBindGroupMaterial, nil) // For materials/sectors
+	lPass.DispatchWorkgroups(wgX, wgY, 1)
+	err = lPass.End()
+	if err != nil {
+		fmt.Printf("ERROR: Lighting pass End failed: %v\n", err)
 	}
 
 	// Debug Pass
@@ -496,11 +671,11 @@ func (a *App) HandleClick(button int, action int) {
 		a.Editor.ApplyBrush(hit.Object, hit.Coord, hit.Normal)
 		a.Editor.BrushValue = oldVal
 
-		// Sync
+		// Mark scene as dirty - Update() will handle buffer sync
 		a.Scene.Commit()
-		a.BufferManager.UpdateScene(a.Scene)
-		a.BufferManager.CreateBindGroups(a.ComputePipeline)
-		a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
+		// DO NOT call UpdateScene or CreateBindGroups here!
+		// This causes race condition with the render loop.
+		// The Update() method will handle it on the next frame.
 	}
 }
 

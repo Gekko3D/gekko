@@ -131,6 +131,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
+    // Dummy usage to prevent optimization of binding 3
+    if (camera.debug_mode == 9999u) {
+        debug_color = debug_color + lights[0].position;
+    }
+
+    // Initial color should stay unchanged if we don't hit any debug lines.
+
     var stack_debug: array<i32, 64>;
     var sp_debug = 0;
     stack_debug[sp_debug] = 0;

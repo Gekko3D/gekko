@@ -64,6 +64,13 @@ const (
 	KeyF10
 	KeyF11
 	KeyF12
+	KeyMinus
+	KeyEqual
+	KeyKPPlus
+	KeyKPMinus
+	MouseButtonLeft
+	MouseButtonRight
+	MouseButtonMiddle
 )
 
 type InputModule struct{}
@@ -77,6 +84,8 @@ type Input struct {
 	MouseX, MouseY           float64
 	MouseDeltaX, MouseDeltaY float64
 	MouseCaptured            bool
+
+	WindowWidth, WindowHeight int
 }
 
 func (mod InputModule) Install(app *App, cmd *Commands) {
@@ -122,6 +131,38 @@ func inputSystem(s *WindowState, input *Input) {
 	}
 	input.MouseX = mx
 	input.MouseY = my
+
+	// Update window dimensions
+	input.WindowWidth, input.WindowHeight = s.windowGlfw.GetSize()
+
+	// Update mouse buttons
+	for btn := MouseButtonLeft; btn <= MouseButtonMiddle; btn++ {
+		var glfwBtn glfw.MouseButton
+		switch btn {
+		case MouseButtonLeft:
+			glfwBtn = glfw.MouseButtonLeft
+		case MouseButtonRight:
+			glfwBtn = glfw.MouseButtonRight
+		case MouseButtonMiddle:
+			glfwBtn = glfw.MouseButtonMiddle
+		}
+
+		action := s.windowGlfw.GetMouseButton(glfwBtn)
+		input.JustPressed[btn] = false
+		input.JustReleased[btn] = false
+
+		if glfw.Press == action {
+			if !input.Pressed[btn] {
+				input.JustPressed[btn] = true
+			}
+			input.Pressed[btn] = true
+		} else if glfw.Release == action {
+			if input.Pressed[btn] {
+				input.JustReleased[btn] = true
+			}
+			input.Pressed[btn] = false
+		}
+	}
 
 	if input.MouseCaptured {
 		s.windowGlfw.SetInputMode(glfw.CursorMode, glfw.CursorDisabled)
@@ -190,4 +231,8 @@ var keyToGlfw = map[int]glfw.Key{
 	KeyF10:       glfw.KeyF10,
 	KeyF11:       glfw.KeyF11,
 	KeyF12:       glfw.KeyF12,
+	KeyMinus:     glfw.KeyMinus,
+	KeyEqual:     glfw.KeyEqual,
+	KeyKPPlus:    glfw.KeyKPAdd,
+	KeyKPMinus:   glfw.KeyKPSubtract,
 }

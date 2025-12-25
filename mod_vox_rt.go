@@ -10,12 +10,22 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
+type RenderMode uint32
+
+const (
+	RenderModeLit RenderMode = iota
+	RenderModeAlbedo
+	RenderModeNormals
+	RenderModeGBuffer
+)
+
 type VoxelRtModule struct {
 	WindowWidth  int
 	WindowHeight int
 	WindowTitle  string
 	AmbientLight mgl32.Vec3
 	DebugMode    bool
+	RenderMode   RenderMode
 }
 
 type VoxelRtState struct {
@@ -31,6 +41,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	rtApp := app_rt.NewApp(windowState.windowGlfw)
 	rtApp.AmbientLight = [3]float32{mod.AmbientLight.X(), mod.AmbientLight.Y(), mod.AmbientLight.Z()}
 	rtApp.DebugMode = mod.DebugMode
+	rtApp.RenderMode = uint32(mod.RenderMode)
 	if err := rtApp.Init(); err != nil {
 		panic(err)
 	}
@@ -62,6 +73,9 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 
 func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 	state.rtApp.ClearText()
+
+	// Begin batching updates for this frame
+	state.rtApp.BufferManager.BeginBatch()
 
 	// Sync instances
 	currentEntities := make(map[EntityId]bool)
@@ -146,7 +160,7 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 			}
 
 			obj = core.NewVoxelObject()
-			obj.XBrickMap = modelTemplate.XBrickMap
+			obj.XBrickMap = modelTemplate.XBrickMap.Copy()
 			obj.MaterialTable = modelTemplate.MaterialTable
 			state.rtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
@@ -220,6 +234,9 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 		return true
 	})
 
+	// End batching and process all accumulated updates
+	state.rtApp.BufferManager.EndBatch()
+
 	state.rtApp.Update()
 }
 
@@ -227,8 +244,15 @@ func voxelRtRenderSystem(state *VoxelRtState) {
 	state.rtApp.Render()
 }
 
+func (s *VoxelRtState) CycleRenderMode() {
+	if s != nil && s.rtApp != nil {
+		s.rtApp.RenderMode = (s.rtApp.RenderMode + 1) % 4
+	}
+}
+
 func voxelRtDebugSystem(input *Input, state *VoxelRtState) {
-	if input.JustPressed[KeyF1] {
-		state.rtApp.DebugMode = !state.rtApp.DebugMode
+	if input.JustPressed[KeyF2] {
+		mode := state.rtApp.Camera.DebugMode
+		state.rtApp.Camera.DebugMode = (mode + 1) % 3
 	}
 }
