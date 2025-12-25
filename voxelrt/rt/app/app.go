@@ -7,7 +7,6 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/editor"
 	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/shaders"
-	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 
 	"unsafe"
 
@@ -340,38 +339,6 @@ func (a *App) Init() error {
 	}
 
 	a.setupTextures(width, height)
-
-	// Demo scene: minimal voxel object and a directional light
-	{
-		obj := core.NewVoxelObject()
-		// Materials: index 0 reserved empty, index 1 = warm albedo
-		obj.MaterialTable = []core.Material{
-			core.DefaultMaterial(),
-			core.NewMaterial([4]uint8{200, 180, 160, 255}, [4]uint8{0, 0, 0, 0}),
-		}
-		xbm := obj.XBrickMap
-		// Populate a single 8x8x8 brick at the origin using XBrickMap API (sets masks/atlas offsets)
-		for z := 0; z < volume.BrickSize; z++ {
-			for y := 0; y < volume.BrickSize; y++ {
-				for x := 0; x < volume.BrickSize; x++ {
-					xbm.SetVoxel(x, y, z, 1)
-				}
-			}
-		}
-		// Update AABB and add to scene
-		obj.UpdateWorldAABB()
-		a.Scene.AddObject(obj)
-
-		// Add one directional light
-		a.Scene.Lights = append(a.Scene.Lights, core.Light{
-			Position:  [4]float32{50, 80, 50, 0},
-			Direction: [4]float32{-0.5, -1.0, -0.3, 0},
-			Color:     [4]float32{1.0, 1.0, 1.0, 1.5},
-			Params:    [4]float32{500.0, 0.9, 1.0, 0.0},
-		})
-		// Build BVH before first GPU upload
-		a.Scene.Commit()
-	}
 
 	// Default Camera Setup
 	view := mgl32.Ident4()

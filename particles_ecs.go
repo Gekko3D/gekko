@@ -191,5 +191,8 @@ func particlesCollect(state *VoxelRtState, t *Time, cmd *Commands) []core.Partic
 		return true
 	})
 
+	// Bridge CA volumes to particles (cheap volumetric look). Cap to avoid spikes.
+	_ = bridgeCellsToParticles(cmd, &instances, 2000)
+
 	return instances
 }

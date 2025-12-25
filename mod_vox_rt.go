@@ -59,6 +59,12 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 			InStage(Update).
 			RunAlways(),
 	)
+	// Cellular automaton step system (low Hz via TickRate in component)
+	app.UseSystem(
+		System(caStepSystem).
+			InStage(Update).
+			RunAlways(),
+	)
 	app.UseSystem(
 		System(voxelRtSystem).
 			InStage(PostUpdate).
