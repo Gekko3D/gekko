@@ -37,6 +37,7 @@ struct VSOut {
     @location(0) color: vec4<f32>,
     @location(1) world_pos: vec3<f32>,
     @location(2) quad_uv: vec2<f32>, // 0..1 inside the quad
+    @location(3) world_center: vec3<f32>,
 };
 
 // Compute camera right/up from inv_view (world-space)
@@ -75,6 +76,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     out.color = inst.color;
     out.world_pos = world_pos;
     out.quad_uv = corner + vec2<f32>(0.5, 0.5);
+    out.world_center = inst.pos;
     return out;
 }
 
@@ -94,16 +96,21 @@ fn ray_dir_from_screen(pos: vec4<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     // Manual depth test against GBuffer depth stored as ray distance t
-    let pix = vec2<i32>(i32(in.position.x), i32(in.position.y));
+    let dim = textureDimensions(gbuf_depth);
+    let w = i32(dim.x);
+    let h = i32(dim.y);
+    let px = clamp(i32(floor(in.position.x)), 0, w - 1);
+    let py = clamp(i32(floor(in.position.y)), 0, h - 1);
+    let pix = vec2<i32>(px, py);
     let scene = textureLoad(gbuf_depth, pix, 0);
     let t_scene = scene.x;
 
-    // Particle "t" along the camera ray for this pixel
-    let dir = ray_dir_from_screen(in.position);
-    let t_particle = dot(in.world_pos - camera.cam_pos.xyz, dir);
+    // Particle "t" along the camera ray for this pixel (use clamped pixel coords and instance center)
+    let dir = ray_dir_from_screen(vec4<f32>(f32(px), f32(py), in.position.z, in.position.w));
+    let t_particle = dot(in.world_center - camera.cam_pos.xyz, dir);
 
     // Discard if particle is behind scene geometry (epsilon)
-    if (t_particle > t_scene - 1e-3) {
+    if (t_particle > t_scene - 3e-3) {
         discard;
     }
 

@@ -4,6 +4,24 @@
 
 VoxelRT is a GPU-accelerated voxel rendering engine written in Go and WGSL (WebGPU). It uses a sparse voxel octree/grid hybrid approach to efficiently store and render large fully-volumetric scenes with real-time editing capabilities.
 
+## Documentation Index
+
+- Renderer overview: [rt/RENDERER.md](rt/RENDERER.md)
+- Editor (interactive voxel editing): [rt/EDITOR.md](rt/EDITOR.md)
+- Particles system: [rt/PARTICLES.md](rt/PARTICLES.md)
+- Shader docs:
+  - G-Buffer: [rt/shaders/GBUFFER.md](rt/shaders/GBUFFER.md)
+  - Deferred Lighting: [rt/shaders/DEFERRED_LIGHTING.md](rt/shaders/DEFERRED_LIGHTING.md)
+  - Shadow Map: [rt/shaders/SHADOW_MAP.md](rt/shaders/SHADOW_MAP.md)
+  - Particles Billboard: [rt/shaders/PARTICLES_BILLBOARD.md](rt/shaders/PARTICLES_BILLBOARD.md)
+  - Fullscreen Blit: [rt/shaders/FULLSCREEN.md](rt/shaders/FULLSCREEN.md)
+  - Debug: [rt/shaders/DEBUG.md](rt/shaders/DEBUG.md)
+  - Text: [rt/shaders/TEXT.md](rt/shaders/TEXT.md)
+- Additional:
+  - Performance notes: [PERFORMANCE.md](PERFORMANCE.md)
+  - Optimization roadmap: [VOXELRT_OPTIMIZATION_ROADMAP.md](VOXELRT_OPTIMIZATION_ROADMAP.md)
+  - Shader guide: [SHADER_GUIDE.md](SHADER_GUIDE.md)
+
 ## Architecture
 
 The system consists of two main parts:

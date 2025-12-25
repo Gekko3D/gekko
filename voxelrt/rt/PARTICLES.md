@@ -273,10 +273,51 @@ cmd.AddEntity(
 
 - The earlier hardcoded cube in app.Init was removed to keep ECS-only scenes. All content is now spawned from ECS (e.g., via actiongame playing module). If you need a debug primitive again, use an ECS entity instead of hardcoding in the renderer.
 
-## Roadmap (Optional)
+## Future Improvements
 
-- Size/color over lifetime curves.
-- Ground collision/bounce for sparks.
-- Sand/water CA rules.
-- Frustum culling per emitter and CA volume.
-- Optional low-res emissive voxel volume render for volumetrics.
+Visual quality
+- Size/color over lifetime curves (minimizes manual tuning; supports smoke fade-in/out).
+- Velocity-aligned/stretch billboards (streaks) with per-particle rotation.
+- Soft particles using depth-aware fade width (reduce wall intersections).
+- Animated sprite sheets / texture atlas for varied particle looks.
+- Approximate lighting for particles (e.g., half-Lambert with single key light).
+- Simple shadows or shadowing heuristics (e.g., downfade in shadowed regions).
+- Trails/ribbons (polyline ribbons generated per emitter).
+- Dithering/fade based on distance for smoother LOD transitions.
+
+Simulation and behavior
+- Ground/geometry collision: heightfield/plane tests first; later voxel grid queries.
+- Force fields/turbulence: curl noise, wind zones, vortex, turbulence volumes.
+- Event/burst system: timed bursts, impact-triggered spawns, curve-driven emission rates.
+- Per-emitter local space simulation toggle (move emitter without popping).
+- Sub-steps for high-speed particles to reduce tunneling at low frame rates.
+- CA extensions: sand settling, water flow; CA feeds emitter bursts instead of direct bridging.
+
+Performance and scalability
+- Jobify particle integration (goroutines) and SoA vectorization (SIMD via math intrinsics).
+- Global instance buffer pooling across emitters to reduce reallocations.
+- CPU frustum culling per emitter and per CA volume; distance-based LOD for spawn rate/size.
+- DrawIndirect with a GPU-visible counter to avoid CPU-side instance count stalls.
+- Persistent-mapped or staging buffers for particle uploads to reduce overhead.
+- Bind group caching/reuse between frames to minimize bind group churn.
+
+Rendering pipeline
+- Weighted blended OIT (WBOIT) variant for better additive/alpha mix without sorting.
+- Per-particle normal approximation (e.g., velocity or curl) for anisotropic shading hints.
+- Depth mip usage for soft particles (fade width proportional to thickness).
+- Indirect multi-draw (MDI) for grouping emitters with different materials/looks.
+
+Authoring and tooling
+- Editor gizmos for emitters: cone/box/sphere shapes, preview of spawn volume and rates.
+- Curve editors for lifetime properties (size/color/alpha over lifetime).
+- Debug overlays: particle count per emitter, culling stats, CPU time per system.
+- Preset library (sparks, smoke, dust, fireflies, embers, snowfall).
+
+CA integration
+- Two-way coupling: particles inject heat/smoke into CA; CA spawns particle bursts on thresholds.
+- CA-to-voxel emissive writeback for cheap volumetric glows alongside particles.
+- Multi-volume compositing and domain bounds visualization.
+
+Notes
+- Keep the “cheap” path available: each feature should be optional and degrade gracefully.
+- Start with soft particles, lifetime curves, and culling—they offer the most benefit per effort.
