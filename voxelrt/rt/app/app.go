@@ -58,6 +58,7 @@ type App struct {
 	LastRenderTime float64
 	MouseCaptured  bool
 	DebugMode      bool
+	RenderMode     uint32
 
 	FrameCount int
 	FPS        float64
@@ -344,7 +345,7 @@ func (a *App) Init() error {
 	proj := mgl32.Ident4()
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
-	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.AmbientLight, a.Camera.DebugMode)
+	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode)
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene)
@@ -482,7 +483,7 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.AmbientLight, a.Camera.DebugMode)
+	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode)
 
 	// Update Text Buffers if needed
 	if len(a.TextItems) > 0 && a.TextRenderer != nil {

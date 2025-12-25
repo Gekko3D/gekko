@@ -10,7 +10,7 @@ struct CameraData {
     light_pos: vec4<f32>,
     ambient_color: vec4<f32>,
     debug_mode: u32,
-    pad0: u32,
+    render_mode: u32,
     pad1: u32,
     pad2: u32,
 };
@@ -202,10 +202,41 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, emissive, roughness, metalness, i);
     }
     
-    // DEBUG: Visualize Base Color (no lighting)
-    //final_color = base_color;
-    // DEBUG: Visualize Depth
-    //let depth_vis = clamp(depth / 500.0, 0.0, 1.0);
-    //final_color = vec3<f32>(depth_vis);
+    // Render modes
+    if (camera.render_mode == 1u) {
+        // Albedo only
+        textureStore(out_color, global_id.xy, vec4<f32>(base_color, 1.0));
+        return;
+    }
+    if (camera.render_mode == 2u) {
+        // Normals visualization
+        let nvis = normal * 0.5 + 0.5;
+        textureStore(out_color, global_id.xy, vec4<f32>(nvis, 1.0));
+        return;
+    }
+    if (camera.render_mode == 3u) {
+        // G-Buffer visualization in 2x2 tiles
+        var dbg = vec3<f32>(0.0);
+        if (uv.y < 0.5) {
+            if (uv.x < 0.5) {
+                // Top-left: normals
+                dbg = normal * 0.5 + 0.5;
+            } else {
+                // Top-right: depth
+                let depth_vis = clamp(depth / 1000.0, 0.0, 1.0);
+                dbg = vec3<f32>(depth_vis);
+            }
+        } else {
+            if (uv.x < 0.5) {
+                // Bottom-left: position (remapped)
+                dbg = clamp(hit_pos_ws * 0.01 + vec3<f32>(0.5), vec3<f32>(0.0), vec3<f32>(1.0));
+            } else {
+                // Bottom-right: albedo
+                dbg = base_color;
+            }
+        }
+        textureStore(out_color, global_id.xy, vec4<f32>(dbg, 1.0));
+        return;
+    }
         textureStore(out_color, global_id.xy, vec4<f32>(final_color, 1.0));
 }

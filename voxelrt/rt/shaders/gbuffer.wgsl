@@ -17,7 +17,7 @@ struct CameraData {
     light_pos: vec4<f32>,
     ambient_color: vec4<f32>,
     debug_mode: u32,
-    pad0: u32,
+    render_mode: u32,
     pad1: u32,
     pad2: u32,
 };
@@ -178,6 +178,14 @@ fn load_u8(byte_offset: u32) -> u32 {
     return (word >> (byte_idx * 8u)) & 0xFFu;
 }
 
+fn make_safe_dir(d: vec3<f32>) -> vec3<f32> {
+    let eps = 1e-6;
+    let sx = select(d.x, (select(1.0, -1.0, d.x < 0.0)) * eps, abs(d.x) < eps);
+    let sy = select(d.y, (select(1.0, -1.0, d.y < 0.0)) * eps, abs(d.y) < eps);
+    let sz = select(d.z, (select(1.0, -1.0, d.z < 0.0)) * eps, abs(d.z) < eps);
+    return vec3<f32>(sx, sy, sz);
+}
+
 // ============== REUSE TRAVERSAL LOGIC FROM RAYTRACE.WGSL ==============
 
 // Note: In a real implementation we would use imports if WGSL supported them well, 
@@ -266,7 +274,8 @@ fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
 fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
     let new_origin = (mat * vec4<f32>(ray.origin, 1.0)).xyz;
     let new_dir = (mat * vec4<f32>(ray.dir, 0.0)).xyz;
-    return Ray(new_origin, new_dir, 1.0 / new_dir);
+    let safe_dir = make_safe_dir(new_dir);
+    return Ray(new_origin, new_dir, 1.0 / safe_dir);
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
@@ -283,7 +292,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
     let t_delta_sector = abs(SECTOR_SIZE * inv_dir);
     let t_delta_brick = abs(BRICK_SIZE * inv_dir);
     var t_curr = t_start;
-    var sector_pos = vec3<i32>(floor((ray.origin + dir * t_curr) / SECTOR_SIZE));
+    let sector_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+    var sector_pos = vec3<i32>(floor(((ray.origin + dir * t_curr) - sector_bias) / SECTOR_SIZE));
     var t_max_sector = (vec3<f32>(sector_pos) * SECTOR_SIZE + select(vec3<f32>(0.0), vec3<f32>(SECTOR_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
     var iter_sectors = 0;
     while (t_curr < t_end && iter_sectors < 64) {
@@ -294,7 +304,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
             let sector_origin = vec3<f32>(sector.origin_vox.xyz);
             var t_sector_exit = min(min(min(t_max_sector.x, t_max_sector.y), t_max_sector.z), t_end);
             var t_brick = t_curr;
-            var brick_pos = vec3<i32>(floor(((ray.origin + dir * t_brick) - sector_origin) / BRICK_SIZE));
+            let brick_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+            var brick_pos = vec3<i32>(floor((((ray.origin + dir * t_brick) - sector_origin) - brick_bias) / BRICK_SIZE));
             brick_pos = clamp(brick_pos, vec3<i32>(0), vec3<i32>(3));
             var t_max_brick = (sector_origin + vec3<f32>(brick_pos) * BRICK_SIZE + select(vec3<f32>(0.0), vec3<f32>(BRICK_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
             var iter_bricks = 0;
@@ -311,7 +322,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                         var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
                         if (b_flags == 1u) {
                             result.hit = true; result.t = t_brick; result.palette_idx = b_atlas; result.material_idx = params.material_table_base;
-                            let p_hit_os = ray.origin + dir * (t_brick + 0.01);
+                            let p_hit_os = ray.origin + dir * (t_brick + EPS);
                             let voxel_center_os = floor(p_hit_os) + 0.5;
                             var final_n = estimate_normal(voxel_center_os, params);
                             if (length(final_n) < 0.01) { final_n = vec3<f32>(0.0, 1.0, 0.0); }
@@ -322,10 +333,13 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                         if (b_flags == 0u) {
                             var t_micro = t_brick;
                             let brick_origin = sector_origin + vec3<f32>(bvid) * BRICK_SIZE;
-                            var voxel_pos = vec3<i32>(floor((ray.origin + dir * t_micro) - brick_origin));
+                            let voxel_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+                            var voxel_pos = vec3<i32>(floor(((ray.origin + dir * t_micro) - brick_origin) - voxel_bias));
                             voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
                             var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray.origin) * inv_dir;
                             let t_delta_1 = abs(1.0 * inv_dir);
+                            let b_mask_lo = atomicLoad(&bricks[packed_idx].occupancy_mask_lo);
+                            let b_mask_hi = atomicLoad(&bricks[packed_idx].occupancy_mask_hi);
                             var iter_micro = 0;
                             while (t_micro < t_brick_exit && iter_micro < 32) {
                                 iter_micro += 1;
@@ -334,8 +348,6 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let mvid = vvid / 2u;
                                 let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
                                 
-                                let b_mask_lo = atomicLoad(&bricks[packed_idx].occupancy_mask_lo);
-                                let b_mask_hi = atomicLoad(&bricks[packed_idx].occupancy_mask_hi);
                                 if (bit_test64(b_mask_lo, b_mask_hi, micro_idx)) {
                                     let actual_atlas_offset = params.payload_base + b_atlas + voxel_idx;
                                     let palette_idx = load_u8(actual_atlas_offset);
@@ -356,6 +368,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                     if (t_max_micro.y < t_max_micro.z) { voxel_pos.y += step.y; t_micro = t_max_micro.y; t_max_micro.y += t_delta_1.y; }
                                     else { voxel_pos.z += step.z; t_micro = t_max_micro.z; t_max_micro.z += t_delta_1.z; }
                                 }
+                                t_micro += EPS;
                             }
                         }
                     }
@@ -394,21 +407,50 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
     while (t < t_max_obj && iterations < 64) {
         iterations++;
         let p = ray.origin + ray.dir * t;
-        let lx = u32(floor(p.x / 32.0)) % 4u; let ly = u32(floor(p.y / 32.0)) % 4u; let lz = u32(floor(p.z / 32.0)) % 4u;
+        let step_local = vec3<i32>(sign(ray.dir));
+        let bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step_local < vec3<i32>(0));
+        let pb = p - bias;
+        let lx = u32(floor(pb.x / 32.0)) % 4u; let ly = u32(floor(pb.y / 32.0)) % 4u; let lz = u32(floor(pb.z / 32.0)) % 4u;
         let bit = lx + ly*4u + lz*16u;
         if (bit_test64(root.mask_lo, root.mask_hi, bit)) {
             let l1_idx = params.tree64_base + root.child_ptr + popcnt64_lower(root.mask_lo, root.mask_hi, bit);
             let l1_node = tree64_nodes[l1_idx];
-            let bx = u32(floor(p.x / 8.0)) % 4u; let by = u32(floor(p.y / 8.0)) % 4u; let bz = u32(floor(p.z / 8.0)) % 4u;
+            let bx = u32(floor(pb.x / 8.0)) % 4u; let by = u32(floor(pb.y / 8.0)) % 4u; let bz = u32(floor(pb.z / 8.0)) % 4u;
             let b_bit = bx + by*4u + bz*16u;
             if (bit_test64(l1_node.mask_lo, l1_node.mask_hi, b_bit)) {
-                result.hit = true; result.t = t; result.palette_idx = l1_node.data; result.material_idx = params.material_table_base;
-                let voxel_center_os = floor(p / 8.0) * 8.0 + 4.0;
-                var final_n = estimate_normal(voxel_center_os, params);
-                if (length(final_n) < 0.01) { final_n = vec3<f32>(0.0, 1.0, 0.0); }
-                result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
-                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                return result;
+                // Refine inside the 8x8x8 block to avoid false hits on empty borders.
+                let step_local2 = vec3<i32>(sign(ray.dir));
+                let bias2 = select(vec3<f32>(0.0), vec3<f32>(EPS), step_local2 < vec3<i32>(0));
+                let block_min = floor((p - bias2) / 8.0) * 8.0;
+                let block_max = block_min + 8.0;
+                let t_block = intersect_aabb(ray, block_min, block_max);
+                var t_micro = max(t, t_block.x);
+                var voxel_pos2 = vec3<i32>(floor((ray.origin + ray.dir * t_micro) - bias2));
+                var t_max_micro2 = (vec3<f32>(voxel_pos2) + select(vec3<f32>(0.0), vec3<f32>(1.0), step_local2 > vec3<i32>(0)) - ray.origin) * ray.inv_dir;
+                let t_delta_1_2 = abs(1.0 * ray.inv_dir);
+                let t_exit_block = min(t_block.y, t_max_obj);
+                var iter_ref = 0;
+                while (t_micro < t_exit_block && iter_ref < 32) {
+                    iter_ref++;
+                    let vi2 = voxel_pos2;
+                    if (sample_occupancy(vi2, params) > 0.5) {
+                        result.hit = true; result.t = t_micro; result.palette_idx = l1_node.data; result.material_idx = params.material_table_base;
+                        let voxel_center_os = vec3<f32>(vi2) + 0.5;
+                        var final_n = estimate_normal(voxel_center_os, params);
+                        if (length(final_n) < 0.01) { final_n = vec3<f32>(0.0, 1.0, 0.0); }
+                        result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
+                        result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                        return result;
+                    }
+                    if (t_max_micro2.x < t_max_micro2.y) {
+                        if (t_max_micro2.x < t_max_micro2.z) { voxel_pos2.x += step_local2.x; t_micro = t_max_micro2.x; t_max_micro2.x += t_delta_1_2.x; }
+                        else { voxel_pos2.z += step_local2.z; t_micro = t_max_micro2.z; t_max_micro2.z += t_delta_1_2.z; }
+                    } else {
+                        if (t_max_micro2.y < t_max_micro2.z) { voxel_pos2.y += step_local2.y; t_micro = t_max_micro2.y; t_max_micro2.y += t_delta_1_2.y; }
+                        else { voxel_pos2.z += step_local2.z; t_micro = t_max_micro2.z; t_max_micro2.z += t_delta_1_2.z; }
+                    }
+                    t_micro += EPS;
+                }
             }
             t += step_to_next_cell(p, ray.dir, ray.inv_dir, 8.0);
         } else { t += step_to_next_cell(p, ray.dir, ray.inv_dir, 32.0); }
@@ -423,7 +465,8 @@ fn get_ray(uv: vec2<f32>) -> Ray {
     let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
     let origin = camera.cam_pos.xyz;
     let dir = normalize(world_target - origin);
-    return Ray(origin, dir, 1.0 / dir);
+    let safe_dir = make_safe_dir(dir);
+    return Ray(origin, dir, 1.0 / safe_dir);
 }
 
 // ============== MAIN G-BUFFER PASS ==============

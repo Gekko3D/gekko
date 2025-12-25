@@ -129,21 +129,22 @@ func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []b
 	}
 }
 
-func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj [16]float32, camPos, lightPos, ambientColor [3]float32, debugMode uint32) {
+func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, debugMode uint32, renderMode uint32) {
 	// Struct CameraData {
-	//   view_proj: mat4x4<f32>; -- 64
-	//   inv_view: mat4x4<f32>;  -- 128
-	//   inv_proj: mat4x4<f32>;  -- 192
-	//   cam_pos: vec4<f32>;     -- 208
-	//   light_pos: vec4<f32>;   -- 224
+	//   view_proj: mat4x4<f32>;   --  64
+	//   inv_view: mat4x4<f32>;    -- 128
+	//   inv_proj: mat4x4<f32>;    -- 192
+	//   cam_pos: vec4<f32>;       -- 208
+	//   light_pos: vec4<f32>;     -- 224
 	//   ambient_color: vec4<f32>; -- 240
-	//   debug_mode: u32;        -- 244
+	//   debug_mode: u32;          -- 244 (offset 240)
+	//   render_mode: u32;         -- 248 (offset 244)
 	// } -> 256 bytes (padded)
 
 	buf := make([]byte, 256)
 
 	// Helper to write matrix
-	writeMat := func(offset int, mat [16]float32) {
+	writeMat := func(offset int, mat mgl32.Mat4) {
 		for i, v := range mat {
 			binary.LittleEndian.PutUint32(buf[offset+i*4:], math.Float32bits(v))
 		}
@@ -171,8 +172,9 @@ func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj [16]float32
 	binary.LittleEndian.PutUint32(buf[232:], math.Float32bits(ambientColor[2]))
 	binary.LittleEndian.PutUint32(buf[236:], 0)
 
-	// Debug Mode
+	// Debug + Render Mode
 	binary.LittleEndian.PutUint32(buf[240:], debugMode)
+	binary.LittleEndian.PutUint32(buf[244:], renderMode)
 
 	// ensureBuffer handles creation if nil
 	if m.CameraBuf == nil {

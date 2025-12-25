@@ -10,12 +10,22 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
+type RenderMode uint32
+
+const (
+	RenderModeLit RenderMode = iota
+	RenderModeAlbedo
+	RenderModeNormals
+	RenderModeGBuffer
+)
+
 type VoxelRtModule struct {
 	WindowWidth  int
 	WindowHeight int
 	WindowTitle  string
 	AmbientLight mgl32.Vec3
 	DebugMode    bool
+	RenderMode   RenderMode
 }
 
 type VoxelRtState struct {
@@ -31,6 +41,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	rtApp := app_rt.NewApp(windowState.windowGlfw)
 	rtApp.AmbientLight = [3]float32{mod.AmbientLight.X(), mod.AmbientLight.Y(), mod.AmbientLight.Z()}
 	rtApp.DebugMode = mod.DebugMode
+	rtApp.RenderMode = uint32(mod.RenderMode)
 	if err := rtApp.Init(); err != nil {
 		panic(err)
 	}
@@ -233,8 +244,14 @@ func voxelRtRenderSystem(state *VoxelRtState) {
 	state.rtApp.Render()
 }
 
+func (s *VoxelRtState) CycleRenderMode() {
+	if s != nil && s.rtApp != nil {
+		s.rtApp.RenderMode = (s.rtApp.RenderMode + 1) % 4
+	}
+}
+
 func voxelRtDebugSystem(input *Input, state *VoxelRtState) {
-	if input.JustPressed[KeyF1] {
+	if input.JustPressed[KeyF2] {
 		mode := state.rtApp.Camera.DebugMode
 		state.rtApp.Camera.DebugMode = (mode + 1) % 3
 	}
