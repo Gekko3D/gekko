@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sort"
+	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -65,6 +66,12 @@ type GpuBufferManager struct {
 	ShadowBindGroup2 *wgpu.BindGroup
 
 	DebugBindGroup0 *wgpu.BindGroup
+
+	// Particles (rendered after lighting)
+	ParticleInstancesBuf *wgpu.Buffer
+	ParticlesBindGroup0  *wgpu.BindGroup // camera + instances
+	ParticlesBindGroup1  *wgpu.BindGroup // gbuffer depth
+	ParticleCount        uint32
 
 	MapOffsets    map[*volume.XBrickMap][3]uint32 // sectorBase, brickBase, payloadBase
 	AllocatedMaps map[*volume.XBrickMap]bool      // Track which maps have been fully uploaded
@@ -592,6 +599,12 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 							// The absolute position is offsets[2] + gpuAtlasOffset
 							// We appended `zeros` to payload, so payload[offsets[2]:] is the chunk for this map.
 							baseIdx := int(offsets[2] + gpuAtlasOffset)
+							// Safety: if NextAtlasOffset underestimates required space (or is zero for fresh maps),
+							// grow the payload slice to fit this brick's 512-byte payload.
+							required := baseIdx + 512
+							if required > len(payload) {
+								payload = append(payload, make([]byte, required-len(payload))...)
+							}
 
 							// Serialize payload (512 bytes)
 							// Direct write into slice
@@ -914,8 +927,8 @@ func (m *GpuBufferManager) CreateDebugBindGroups(pipeline *wgpu.ComputePipeline)
 	if err != nil {
 		panic(err)
 	}
-}
 
+}
 func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	if w == 0 || h == 0 {
 		return
@@ -1061,10 +1074,70 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 		panic(err)
 	}
 
+	// Create materials bind group (group 2)
 	m.LightingBindGroupMaterial, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: lightPipeline.GetBindGroupLayout(2),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+}
+
+// UpdateParticles uploads particle instances into a storage buffer (read in VS)
+func (m *GpuBufferManager) UpdateParticles(instances []core.ParticleInstance) {
+	// Ensure non-zero buffer size for bind group validity
+	minSize := uint64(32)
+	size := uint64(len(instances)) * 32
+	if size == 0 {
+		size = minSize
+	}
+	// Create/resize buffer if needed
+	if m.ParticleInstancesBuf == nil || m.ParticleInstancesBuf.GetSize() < size {
+		if m.ParticleInstancesBuf != nil {
+			m.ParticleInstancesBuf.Release()
+		}
+		buf, err := m.Device.CreateBuffer(&wgpu.BufferDescriptor{
+			Label: "ParticleInstances",
+			Size:  size,
+			Usage: wgpu.BufferUsageStorage | wgpu.BufferUsageCopyDst,
+		})
+		if err != nil {
+			panic(err)
+		}
+		m.ParticleInstancesBuf = buf
+	}
+	// Upload if we have any instances
+	if len(instances) > 0 {
+		vSize := uint64(len(instances)) * 32
+		bytes := unsafe.Slice((*byte)(unsafe.Pointer(&instances[0])), vSize)
+		m.Device.GetQueue().WriteBuffer(m.ParticleInstancesBuf, 0, bytes)
+	}
+	m.ParticleCount = uint32(len(instances))
+}
+
+// CreateParticlesBindGroups wires camera + instances (group 0) and gbuffer depth (group 1)
+func (m *GpuBufferManager) CreateParticlesBindGroups(pipeline *wgpu.RenderPipeline) {
+	if pipeline == nil {
+		return
+	}
+	var err error
+	m.ParticlesBindGroup0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: pipeline.GetBindGroupLayout(0),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.ParticleInstancesBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	m.ParticlesBindGroup1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: pipeline.GetBindGroupLayout(1),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, TextureView: m.DepthView},
 		},
 	})
 	if err != nil {

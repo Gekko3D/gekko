@@ -29,9 +29,10 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	rtApp        *app_rt.App
-	loadedModels map[AssetId]*core.VoxelObject
-	instanceMap  map[EntityId]*core.VoxelObject
+	rtApp         *app_rt.App
+	loadedModels  map[AssetId]*core.VoxelObject
+	instanceMap   map[EntityId]*core.VoxelObject
+	particlePools map[EntityId]*particlePool
 }
 
 func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
@@ -71,7 +72,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	)
 }
 
-func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
+func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Commands) {
 	state.rtApp.ClearText()
 
 	// Begin batching updates for this frame
@@ -236,6 +237,10 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
 
 	// End batching and process all accumulated updates
 	state.rtApp.BufferManager.EndBatch()
+
+	// CPU-simulate and upload particle instances
+	instances := particlesCollect(state, time, cmd)
+	state.rtApp.BufferManager.UpdateParticles(instances)
 
 	state.rtApp.Update()
 }

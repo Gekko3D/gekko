@@ -21,3 +21,6 @@ var DeferredLightingWGSL string
 
 //go:embed shadow_map.wgsl
 var ShadowMapWGSL string
+
+//go:embed particles_billboard.wgsl
+var ParticlesBillboardWGSL string
