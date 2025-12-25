@@ -117,7 +117,12 @@ fn calculate_lighting(
     
     if (attenuation > 0.0) {
         // Shadowing
-        let pos_ls = light.view_proj * vec4<f32>(hit_pos, 1.0);
+        var pos_ws = hit_pos;
+        if (light_type == 1u) {
+            let receiver_offset = 0.25;
+            pos_ws = hit_pos + normal * receiver_offset;
+        }
+        let pos_ls = light.view_proj * vec4<f32>(pos_ws, 1.0);
         let proj_pos = pos_ls.xyz / pos_ls.w;
         let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
 
