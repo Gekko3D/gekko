@@ -219,7 +219,7 @@ fn locate_voxel(gx: i32, gy: i32, gz: i32, params: ObjectParams) -> VoxelLocatio
 
 // ============== ATOMIC VOXEL WRITE ==============
 
-fn write_voxel_atomic(loc: VoxelLocation, value: u8) {
+fn write_voxel_atomic(loc: VoxelLocation, value: u32) {
     // Calculate word and byte index
     let word_idx = loc.voxel_offset / 4u;
     let byte_idx = loc.voxel_offset % 4u;
@@ -282,7 +282,7 @@ fn allocate_brick() -> u32 {
     return idx;
 }
 
-fn initialize_brick(pool_idx: u32, palette_value: u8) {
+fn initialize_brick(pool_idx: u32, palette_value: u32) {
     // Initialize brick record in pool
     brick_pool[pool_idx].occupancy_mask_lo = 0u;
     brick_pool[pool_idx].occupancy_mask_hi = 0u;
@@ -305,14 +305,14 @@ fn queue_sector_expansion(sx: i32, sy: i32, sz: i32, brick_idx: u32) {
     }
 }
 
-fn decompress_solid_brick(brick_idx: i32, new_value: u8) -> bool {
+fn decompress_solid_brick(brick_idx: i32, new_value: u32) -> bool {
     let brick = bricks[brick_idx];
     
     if ((brick.flags & 1u) == 0u) {
         return false; // Not solid
     }
     
-    let solid_value = u8(brick.atlas_offset);
+    let solid_value = brick.atlas_offset & 0xFFu;
     if (solid_value == new_value) {
         return false; // No change needed
     }
@@ -341,7 +341,7 @@ fn decompress_solid_brick(brick_idx: i32, new_value: u8) -> bool {
 }
 
 // Helper for direct payload write to pool
-fn write_voxel_to_pool(pool_idx: u32, voxel_idx: u32, value: u8) {
+fn write_voxel_to_pool(pool_idx: u32, voxel_idx: u32, value: u32) {
     let offset = pool_idx * 512u + voxel_idx;
     let word_idx = offset / 4u;
     let byte_idx = offset % 4u;
@@ -397,7 +397,7 @@ fn edit_voxels(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         
         // Initialize brick
-        initialize_brick(pool_idx, u8(cmd.value));
+        initialize_brick(pool_idx, cmd.value);
         
         // Queue sector expansion for CPU to process
         queue_sector_expansion(sx, sy, sz, pool_idx);
@@ -415,7 +415,7 @@ fn edit_voxels(@builtin(global_invocation_id) id: vec3<u32>) {
         let voxel_idx = u32(local_x + local_y * 8 + local_z * 64);
         
         // Write the voxel value to pool
-        write_voxel_to_pool(pool_idx, voxel_idx, u8(cmd.value));
+        write_voxel_to_pool(pool_idx, voxel_idx, cmd.value);
         
         // Update occupancy mask in pool
         let mx = local_x / MICRO_SIZE;
@@ -439,7 +439,7 @@ fn edit_voxels(@builtin(global_invocation_id) id: vec3<u32>) {
     
     if ((brick.flags & 1u) != 0u) {
         // Solid brick - decompress first
-        if (!decompress_solid_brick(loc.brick_idx, u8(cmd.value))) {
+        if (!decompress_solid_brick(loc.brick_idx, cmd.value)) {
             return; // Decompression failed
         }
         // Re-locate voxel after decompression
@@ -450,7 +450,7 @@ fn edit_voxels(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     
     // Write new voxel value atomically
-    write_voxel_atomic(loc, u8(cmd.value));
+    write_voxel_atomic(loc, cmd.value);
     
     // Update occupancy mask
     let occupied = cmd.value != EMPTY_VOXEL;

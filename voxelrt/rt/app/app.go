@@ -30,6 +30,10 @@ type App struct {
 
 	RenderPipeline *wgpu.RenderPipeline
 
+	// Deferred Rendering Pipelines
+	GBufferPipeline  *wgpu.ComputePipeline
+	LightingPipeline *wgpu.ComputePipeline
+
 	StorageTexture *wgpu.Texture
 	StorageView    *wgpu.TextureView
 	Sampler        *wgpu.Sampler
@@ -148,6 +152,38 @@ func (a *App) Init() error {
 		return err
 	}
 
+	// G-Buffer Pipeline
+	gbMod, _ := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "GBuffer CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.GBufferWGSL},
+	})
+	a.GBufferPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label: "GBuffer Pipeline",
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     gbMod,
+			EntryPoint: "main",
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Deferred Lighting Pipeline
+	lightMod, _ := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Lighting CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.DeferredLightingWGSL},
+	})
+	a.LightingPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label: "Lighting Pipeline",
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     lightMod,
+			EntryPoint: "main",
+		},
+	})
+	if err != nil {
+		return err
+	}
+
 	// Render Pipeline
 	a.RenderPipeline, err = a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
 		Label: "Blit Pipeline",
@@ -212,6 +248,11 @@ func (a *App) Init() error {
 	a.setupBindGroups()
 	a.BufferManager.CreateBindGroups(a.ComputePipeline)
 	a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
+
+	// G-Buffer resources
+	a.BufferManager.CreateGBufferTextures(uint32(width), uint32(height))
+	a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
+	a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
 
 	// Create GPU voxel edit pipeline
 	err = a.BufferManager.CreateEditPipeline(shaders.VoxelEditWGSL)
@@ -331,6 +372,11 @@ func (a *App) Resize(w, h int) {
 		a.Surface.Configure(a.Adapter, a.Device, a.Config)
 		a.setupTextures(w, h)
 		a.setupBindGroups()
+
+		// Resize G-Buffer
+		a.BufferManager.CreateGBufferTextures(uint32(w), uint32(h))
+		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
+		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
 	}
 }
 
@@ -365,6 +411,10 @@ func (a *App) Update() {
 		// New buffers mean we need new bind groups
 		a.BufferManager.CreateBindGroups(a.ComputePipeline)
 		a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
+
+		// Also update G-Buffer and Lighting Bind Groups
+		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
+		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
 	}
 
 	// Update Camera Uniforms
@@ -441,10 +491,10 @@ func (a *App) Render() {
 
 	// Compute Pass
 	cPass := encoder.BeginComputePass(nil)
-	cPass.SetPipeline(a.ComputePipeline)
-	cPass.SetBindGroup(0, a.BufferManager.BindGroup0, nil)
-	cPass.SetBindGroup(1, a.BindGroup1, nil)
-	cPass.SetBindGroup(2, a.BufferManager.BindGroup2, nil)
+	cPass.SetPipeline(a.GBufferPipeline)
+	cPass.SetBindGroup(0, a.BufferManager.GBufferBindGroup0, nil)
+	cPass.SetBindGroup(1, a.BufferManager.GBufferBindGroup, nil)
+	cPass.SetBindGroup(2, a.BufferManager.GBufferBindGroup2, nil)
 
 	// Dispatch
 	wgX := (a.Config.Width + 7) / 8
@@ -452,7 +502,19 @@ func (a *App) Render() {
 	cPass.DispatchWorkgroups(wgX, wgY, 1)
 	err = cPass.End()
 	if err != nil {
-		fmt.Printf("ERROR: Compute pass End failed: %v\n", err)
+		fmt.Printf("ERROR: G-Buffer pass End failed: %v\n", err)
+	}
+
+	// Lighting Pass
+	lPass := encoder.BeginComputePass(nil)
+	lPass.SetPipeline(a.LightingPipeline)
+	lPass.SetBindGroup(0, a.BufferManager.LightingBindGroup, nil)
+	lPass.SetBindGroup(1, a.BufferManager.LightingBindGroup2, nil)
+	lPass.SetBindGroup(2, a.BufferManager.LightingBindGroupMaterial, nil) // For materials/sectors
+	lPass.DispatchWorkgroups(wgX, wgY, 1)
+	err = lPass.End()
+	if err != nil {
+		fmt.Printf("ERROR: Lighting pass End failed: %v\n", err)
 	}
 
 	// Debug Pass

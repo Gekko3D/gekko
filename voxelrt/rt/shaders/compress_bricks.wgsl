@@ -41,7 +41,7 @@ struct PayloadFreeEntry {
 
 // ============== COMPRESSION LOGIC ==============
 
-fn is_brick_solid(brick_idx: u32, brick: BrickRecord) -> (bool, u8) {
+fn is_brick_solid(brick_idx: u32, brick: BrickRecord) -> (bool, u32) {
     // Skip if already solid
     if ((brick.flags & 1u) != 0u) {
         return (false, 0u);
@@ -51,7 +51,7 @@ fn is_brick_solid(brick_idx: u32, brick: BrickRecord) -> (bool, u8) {
     
     // Read first voxel (first byte of first word)
     let first_word = brick_pool_payload[payload_start];
-    let first_val = u8(first_word & 0xFFu);
+    let first_val = first_word & 0xFFu;
     
     // Don't compress empty bricks
     if (first_val == 0u) {
@@ -72,7 +72,7 @@ fn is_brick_solid(brick_idx: u32, brick: BrickRecord) -> (bool, u8) {
     return (true, first_val); // Solid with this value
 }
 
-fn compress_brick(brick_idx: u32, brick: BrickRecord, solid_value: u8) {
+fn compress_brick(brick_idx: u32, brick: BrickRecord, solid_value: u32) {
     let old_offset = brick.atlas_offset;
     
     // Set solid flag (bit 0)

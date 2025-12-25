@@ -21,3 +21,9 @@ var DebugWGSL string
 
 //go:embed text.wgsl
 var TextWGSL string
+
+//go:embed gbuffer.wgsl
+var GBufferWGSL string
+
+//go:embed deferred_lighting.wgsl
+var DeferredLightingWGSL string

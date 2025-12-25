@@ -1,0 +1,168 @@
+// voxelrt/shaders/deferred_lighting.wgsl
+
+// ============== STRUCTS ==============
+
+struct CameraData {
+    view_proj: mat4x4<f32>,
+    inv_view: mat4x4<f32>,
+    inv_proj: mat4x4<f32>,
+    cam_pos: vec4<f32>,
+    light_pos: vec4<f32>,
+    ambient_color: vec4<f32>,
+    debug_mode: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+};
+
+struct Light {
+    position: vec4<f32>,
+    direction: vec4<f32>,
+    color: vec4<f32>,
+    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
+};
+
+struct Ray {
+    origin: vec3<f32>,
+    dir: vec3<f32>,
+    inv_dir: vec3<f32>,
+};
+
+// ============== BIND GROUPS ==============
+
+// Group 0: Scene
+@group(0) @binding(0) var<uniform> camera: CameraData;
+@group(0) @binding(1) var<storage, read> lights: array<Light>;
+
+// Group 1: G-Buffer Input
+@group(1) @binding(0) var in_depth: texture_2d<f32>;
+@group(1) @binding(1) var in_normal: texture_2d<f32>;
+@group(1) @binding(2) var in_material: texture_2d<f32>;
+@group(1) @binding(3) var in_position: texture_2d<f32>;
+
+// Output: Final Color
+@group(1) @binding(4) var out_color: texture_storage_2d<rgba8unorm, write>;
+
+// Group 2: Voxel Data (reuse)
+@group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
+
+// ============== LIGHTING CALCULATION ==============
+
+fn calculate_lighting(
+    hit_pos: vec3<f32>, 
+    normal: vec3<f32>, 
+    view_dir: vec3<f32>,
+    base_color: vec3<f32>,
+    emissive: vec3<f32>,
+    roughness: f32,
+    metalness: f32,
+    light_idx: u32
+) -> vec3<f32> {
+    let diffuse_color = base_color * (1.0 - metalness);
+    let light = lights[light_idx];
+    var L = vec3<f32>(0.0);
+    var attenuation = 1.0;
+    let light_type = u32(light.params.z);
+    
+    if (light_type == 1u) { // Directional
+        L = -normalize(light.direction.xyz);
+    } else {
+        let L_vec = light.position.xyz - hit_pos;
+        let dist_to_light = length(L_vec);
+        L = normalize(L_vec);
+        let range = light.params.x;
+        if (dist_to_light > range) {
+            attenuation = 0.0;
+        } else {
+            let dist_sq = dist_to_light * dist_to_light;
+            let factor = dist_sq / (range * range);
+            let smooth_factor = max(0.0, 1.0 - factor * factor);
+            let inv_sq = 1.0 / (dist_sq + 1.0);
+            attenuation = inv_sq * smooth_factor * smooth_factor * light.color.w * 50.0;
+            if (light_type == 2u) { // Spot
+                let spot_dir = normalize(light.direction.xyz);
+                let cos_cur = dot(-L, spot_dir);
+                let cos_cone = light.params.y;
+                if (cos_cur < cos_cone) {
+                    attenuation = 0.0;
+                } else {
+                    let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
+                    attenuation *= spot_att;
+                }
+            }
+        }
+    }
+    
+    if (attenuation > 0.0) {
+        let half_dir = normalize(L + view_dir);
+        let NdotL = max(dot(normal, L), 0.0);
+        let NdotH = max(dot(normal, half_dir), 0.0);
+        let diffuse = diffuse_color * NdotL;
+        let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
+        let F0 = mix(vec3(0.04), base_color, metalness);
+        let specular = pow(NdotH, spec_power) * F0;
+        return (diffuse + specular) * light.color.xyz * attenuation * light.color.w;
+    }
+    return vec3<f32>(0.0);
+}
+
+// ============== MAIN DEFERRED LIGHTING PASS ==============
+
+fn get_ray(uv: vec2<f32>) -> Ray {
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let clip = vec4<f32>(ndc, 1.0, 1.0);
+    var view = camera.inv_proj * clip; view = view / view.w;
+    let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
+    let origin = camera.cam_pos.xyz;
+    let dir = normalize(world_target - origin);
+    return Ray(origin, dir, 1.0 / dir);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let size = textureDimensions(in_depth);
+    if (global_id.x >= size.x || global_id.y >= size.y) { return; }
+    
+    let uv = (vec2<f32>(global_id.xy) + 0.5) / vec2<f32>(size);
+    let sky_color = vec4<f32>(uv.x * 0.3, uv.y * 0.3, 0.4, 1.0);
+
+    let depth = textureLoad(in_depth, global_id.xy, 0).r;
+    if (depth >= 50000.0) {
+        textureStore(out_color, global_id.xy, sky_color);
+        return;
+    }
+    
+    let normal = textureLoad(in_normal, global_id.xy, 0).xyz;
+    let mat_data = textureLoad(in_material, global_id.xy, 0);
+    
+    let palette_idx = u32(mat_data.x + 0.5);
+    let material_base = u32(mat_data.w + 0.5);
+    
+    let mat_idx = material_base + palette_idx * 4u;
+    let mat_packed = materials[mat_idx];
+    let base_color = mat_packed.xyz;
+    let emissive = materials[mat_idx + 1u].xyz;
+    let pbr_params = materials[mat_idx + 2u];
+    let roughness = clamp(pbr_params.x, 0.0, 1.0);
+    let metalness = clamp(pbr_params.y, 0.0, 1.0);
+    
+    // Reconstruct world position from depth for maximum precision
+    // We get the ray direction for this specific pixel
+    let ray = get_ray(uv);
+    let hit_pos_ws = ray.origin + ray.dir * depth;
+    
+    let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
+    
+    var final_color = base_color * camera.ambient_color.xyz + emissive;
+    
+    // Force use of lights and position texture to prevent stripping
+    let dummy = lights[0].color.x + textureLoad(in_position, vec2<i32>(0,0), 0).x;
+    
+    // Loop through all lights
+    let num_lights = arrayLength(&lights);
+    for (var i = 0u; i < num_lights; i++) {
+        final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, emissive, roughness, metalness, i);
+    }
+    
+    textureStore(out_color, global_id.xy, vec4<f32>(final_color, 1.0));
+}
