@@ -12,6 +12,7 @@ type CameraState struct {
 	Pitch       float32
 	Speed       float32
 	Sensitivity float32
+	DebugMode   uint32
 }
 
 func NewCameraState() *CameraState {

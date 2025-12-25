@@ -1,10 +1,10 @@
-// voxelrt/shaders/gbuffer.wgsl
+// voxelrt/shaders/shadow_map.wgsl
 
 // ============== CONSTANTS ==============
 const SECTOR_SIZE: f32 = 32.0;
 const BRICK_SIZE: f32 = 8.0;
 const MICRO_SIZE: f32 = 2.0;
-const EPS: f32 = 1e-5;
+const EPS: f32 = 1e-4;
 const EMPTY_VOXEL: u32 = 0u;
 
 // ============== STRUCTS ==============
@@ -20,6 +20,15 @@ struct CameraData {
     pad0: u32,
     pad1: u32,
     pad2: u32,
+};
+
+struct Light {
+    position: vec4<f32>,
+    direction: vec4<f32>,
+    color: vec4<f32>,
+    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
+    view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
 };
 
 struct Instance {
@@ -74,9 +83,6 @@ struct Ray {
 struct HitResult {
     hit: bool,
     t: f32,
-    palette_idx: u32,
-    material_idx: u32,
-    normal: vec3<f32>,
     voxel_center_ws: vec3<f32>,
 };
 
@@ -107,16 +113,12 @@ struct SectorGridParams {
 
 // ============== BIND GROUPS ==============
 
-// Group 0: Scene
-@group(0) @binding(0) var<uniform> camera: CameraData;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(2) var<storage, read> nodes: array<BVHNode>;
+@group(0) @binding(3) var<storage, read> lights: array<Light>;
 
-// Group 1: G-Buffer Output
-@group(1) @binding(0) var out_depth: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(1) var out_normal: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(2) var out_material: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(3) var out_position: texture_storage_2d<rgba16float, write>;
+// Group 1: Shadow Map Output
+@group(1) @binding(0) var out_shadow_map: texture_storage_2d_array<rgba16float, write>;
 
 // Group 2: Voxel Data
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
@@ -127,7 +129,7 @@ struct SectorGridParams {
 @group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(7) var<storage, read> sector_grid_params: SectorGridParams;
 
-// ============== HELPERS ==============
+// ============== TRAVERSAL LOGIC ==============
 
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
     if (idx < 32u) {
@@ -178,11 +180,6 @@ fn load_u8(byte_offset: u32) -> u32 {
     return (word >> (byte_idx * 8u)) & 0xFFu;
 }
 
-// ============== REUSE TRAVERSAL LOGIC FROM RAYTRACE.WGSL ==============
-
-// Note: In a real implementation we would use imports if WGSL supported them well, 
-// or common include files. For now we duplicate the necessary traversal functions.
-
 var<private> g_cached_sector_id: i32 = -1;
 var<private> g_cached_sector_coords: vec3<i32> = vec3<i32>(-999, -999, -999);
 var<private> g_cached_sector_base: u32 = 0xFFFFFFFFu;
@@ -214,55 +211,6 @@ fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
     return -1;
 }
 
-fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
-    let sx = v.x >> 5u;
-    let sy = v.y >> 5u;
-    let sz = v.z >> 5u;
-    let sector_idx = find_sector_cached(sx, sy, sz, params);
-    if (sector_idx < 0) { return 0.0; }
-    let sector = sectors[sector_idx];
-    let bx = (v.x >> 3u) & 3;
-    let by = (v.y >> 3u) & 3;
-    let bz = (v.z >> 3u) & 3;
-    let bvid = vec3<u32>(u32(bx), u32(by), u32(bz));
-    let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
-    if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) { return 0.0; }
-    let packed_idx = params.brick_table_base + sector.sector_id + popcnt64_lower(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local);
-    
-    let b_flags = atomicLoad(&bricks[packed_idx].flags);
-    if (b_flags == 0u) {
-        let mx = (v.x >> 1u) & 3;
-        let my = (v.y >> 1u) & 3;
-        let mz = (v.z >> 1u) & 3;
-        let mvid = vec3<u32>(u32(mx), u32(my), u32(mz));
-        let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
-        
-        let b_mask_lo = atomicLoad(&bricks[packed_idx].occupancy_mask_lo);
-        let b_mask_hi = atomicLoad(&bricks[packed_idx].occupancy_mask_hi);
-        if (!bit_test64(b_mask_lo, b_mask_hi, micro_idx)) { return 0.0; }
-        
-        let vx = v.x & 7;
-        let vy = v.y & 7;
-        let vz = v.z & 7;
-        let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
-        let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-        let b_atlas = atomicLoad(&bricks[packed_idx].atlas_offset);
-        let palette_idx = load_u8(params.payload_base + b_atlas + voxel_idx);
-        return select(0.0, 1.0, palette_idx != EMPTY_VOXEL);
-    }
-    return 1.0;
-}
-
-fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
-    let vi = vec3<i32>(floor(p));
-    let dx = sample_occupancy(vi + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
-    let dy = sample_occupancy(vi + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
-    let dz = sample_occupancy(vi + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
-    let grad = vec3<f32>(dx, dy, dz);
-    if (length(grad) < 0.01) { return vec3<f32>(0.0); }
-    return -normalize(grad);
-}
-
 fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
     let new_origin = (mat * vec4<f32>(ray.origin, 1.0)).xyz;
     let new_dir = (mat * vec4<f32>(ray.dir, 0.0)).xyz;
@@ -270,7 +218,7 @@ fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0));
+    var result = HitResult(false, 60000.0, vec3<f32>(0.0));
     let params = object_params[object_id];
     let ray = transform_ray(ray_ws, inst.world_to_object);
     let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
@@ -310,12 +258,9 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                         
                         var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
                         if (b_flags == 1u) {
-                            result.hit = true; result.t = t_brick; result.palette_idx = b_atlas; result.material_idx = params.material_table_base;
+                            result.hit = true; result.t = t_brick;
                             let p_hit_os = ray.origin + dir * (t_brick + 0.01);
                             let voxel_center_os = floor(p_hit_os) + 0.5;
-                            var final_n = estimate_normal(voxel_center_os, params);
-                            if (length(final_n) < 0.01) { final_n = vec3<f32>(0.0, 1.0, 0.0); }
-                            result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                             return result;
                         }
@@ -340,11 +285,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                     let actual_atlas_offset = params.payload_base + b_atlas + voxel_idx;
                                     let palette_idx = load_u8(actual_atlas_offset);
                                     if (palette_idx != EMPTY_VOXEL) {
-                                        result.hit = true; result.t = t_micro; result.palette_idx = palette_idx; result.material_idx = params.material_table_base;
+                                        result.hit = true; result.t = t_micro;
                                         let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
-                                        var final_n = estimate_normal(voxel_center_os, params);
-                                        if (length(final_n) < 0.01) { final_n = vec3<f32>(0.0, 1.0, 0.0); }
-                                        result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
                                         result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                         return result;
                                     }
@@ -381,7 +323,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
 }
 
 fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0));
+    var result = HitResult(false, 60000.0, vec3<f32>(0.0));
     let params = object_params[object_id];
     if (params.tree64_base == 0xFFFFFFFFu) { return result; }
     let ray = transform_ray(ray_ws, inst.world_to_object);
@@ -402,11 +344,8 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
             let bx = u32(floor(p.x / 8.0)) % 4u; let by = u32(floor(p.y / 8.0)) % 4u; let bz = u32(floor(p.z / 8.0)) % 4u;
             let b_bit = bx + by*4u + bz*16u;
             if (bit_test64(l1_node.mask_lo, l1_node.mask_hi, b_bit)) {
-                result.hit = true; result.t = t; result.palette_idx = l1_node.data; result.material_idx = params.material_table_base;
+                result.hit = true; result.t = t;
                 let voxel_center_os = floor(p / 8.0) * 8.0 + 4.0;
-                var final_n = estimate_normal(voxel_center_os, params);
-                if (length(final_n) < 0.01) { final_n = vec3<f32>(0.0, 1.0, 0.0); }
-                result.normal = normalize((inst.object_to_world * vec4<f32>(final_n, 0.0)).xyz);
                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                 return result;
             }
@@ -416,29 +355,8 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
     return result;
 }
 
-fn get_ray(uv: vec2<f32>) -> Ray {
-    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    let clip = vec4<f32>(ndc, 1.0, 1.0);
-    var view = camera.inv_proj * clip; view = view / view.w;
-    let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
-    let origin = camera.cam_pos.xyz;
-    let dir = normalize(world_target - origin);
-    return Ray(origin, dir, 1.0 / dir);
-}
-
-// ============== MAIN G-BUFFER PASS ==============
-
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let size = textureDimensions(out_depth);
-    if (global_id.x >= size.x || global_id.y >= size.y) { return; }
-    
-    let uv = (vec2<f32>(f32(global_id.x), f32(global_id.y)) + 0.5) / vec2<f32>(f32(size.x), f32(size.y));
-    let ray = get_ray(uv);
-    
-    // Trace scene via BVH
-    var hit_res = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0));
-    
+fn traverse_scene(ray: Ray) -> HitResult {
+    var hit_res = HitResult(false, 60000.0, vec3<f32>(0.0));
     var stack: array<i32, 64>;
     var stack_ptr = 0;
     
@@ -449,7 +367,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     var iterations = 0;
-    while (stack_ptr > 0 && iterations < 128) { // Increased limit
+    while (stack_ptr > 0 && iterations < 128) {
         iterations++;
         stack_ptr--;
         let node_idx = stack[stack_ptr];
@@ -463,13 +381,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
                 if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
                     let params = object_params[inst.object_id];
-                    let dist_cam = distance(camera.cam_pos.xyz, inst.aabb_min.xyz);
                     var res: HitResult;
-                    if (dist_cam > params.lod_threshold && params.tree64_base != 0xFFFFFFFFu) {
-                        res = traverse_tree64(ray, inst, t_inst.x, t_inst.y, inst.object_id);
-                    } else {
-                        res = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
-                    }
+                    // Force full traversal (no LOD) for shadow map to avoid blinking/flickering
+                    res = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
                     if (res.hit && res.t < hit_res.t) { hit_res = res; }
                 }
             } else {
@@ -478,19 +392,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
         }
     }
+    return hit_res;
+}
+
+// ============== MAIN SHADOW PASS ==============
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let tex_dim = textureDimensions(out_shadow_map);
+    if (global_id.x >= tex_dim.x || global_id.y >= tex_dim.y) { return; }
     
-    // Write outputs
+    let light_idx = global_id.z;
+    let num_lights = arrayLength(&lights);
+    if (light_idx >= num_lights) { return; }
+    
+    let light = lights[light_idx];
+    
+    let uv = (vec2<f32>(f32(global_id.x), f32(global_id.y)) + 0.5) / vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    
+    // Generate ray for this pixel of the shadow map
+    let p_near = light.inv_view_proj * vec4<f32>(ndc, -1.0, 1.0);
+    let p_far = light.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    
+    let origin = p_near.xyz / p_near.w;
+    let p_target = p_far.xyz / p_far.w;
+    let dir = normalize(p_target - origin);
+    
+    var ray = Ray(origin, dir, 1.0 / dir);
+    
+    // Perform traversal
+    var hit_res = traverse_scene(ray);
+    
+    // Force usage of tree64_nodes (Binding 5) to prevent layout mismatch
+    // (We disabled traverse_tree64 so the compiler stripped the binding)
+    let dummy = tree64_nodes[0].mask_lo;
+    if (dummy > 0xFFFF0000u) { hit_res.t += 0.00001; } // Unlikely condition, effectively no-op
+    
+    // Write out normalized depth from light perspective (using voxel center for blocky shadows)
     if (hit_res.hit) {
-        textureStore(out_depth, global_id.xy, vec4<f32>(hit_res.t, 0.0, 0.0, 0.0));
-        textureStore(out_normal, global_id.xy, vec4<f32>(hit_res.normal, 0.0));
-        
-        // Store raw palette_idx and material_idx (others fetched in lighting pass)
-        textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), 0.0, 0.0, f32(hit_res.material_idx)));
-        textureStore(out_position, global_id.xy, vec4<f32>(hit_res.voxel_center_ws, 1.0));
+        let pos_ls = light.view_proj * vec4<f32>(hit_res.voxel_center_ws, 1.0);
+        let depth = pos_ls.z / pos_ls.w;
+        textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth, 0.0, 0.0, 0.0));
     } else {
-        textureStore(out_depth, global_id.xy, vec4<f32>(60000.0, 0.0, 0.0, 0.0));
-        textureStore(out_normal, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
-        textureStore(out_material, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
-        textureStore(out_position, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(1.0, 0.0, 0.0, 0.0));
     }
 }

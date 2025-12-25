@@ -239,7 +239,7 @@ func (a *App) Init() error {
 	proj := mgl32.Ident4()
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
-	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.AmbientLight, a.DebugMode)
+	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.AmbientLight, a.Camera.DebugMode)
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene)
@@ -249,49 +249,17 @@ func (a *App) Init() error {
 	a.BufferManager.CreateBindGroups(a.ComputePipeline)
 	a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
 
+	// Shadow Pipeline
+	err = a.BufferManager.CreateShadowPipeline(shaders.ShadowMapWGSL)
+	if err != nil {
+		return err
+	}
+
 	// G-Buffer resources
 	a.BufferManager.CreateGBufferTextures(uint32(width), uint32(height))
 	a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
 	a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
-
-	// Create GPU voxel edit pipeline
-	err = a.BufferManager.CreateEditPipeline(shaders.VoxelEditWGSL)
-	if err != nil {
-		fmt.Printf("WARNING: Failed to create edit pipeline: %v\n", err)
-	} else {
-		err = a.BufferManager.CreateEditBindGroups()
-		if err != nil {
-			fmt.Printf("WARNING: Failed to create edit bind groups: %v\n", err)
-		}
-
-		// Initialize brick pool for GPU allocation
-		err = a.BufferManager.InitializeBrickPool()
-		if err != nil {
-			fmt.Printf("WARNING: Failed to initialize brick pool: %v\n", err)
-		} else {
-			// Recreate bind groups to include brick pool
-			err = a.BufferManager.CreateEditBindGroups()
-			if err != nil {
-				fmt.Printf("WARNING: Failed to recreate edit bind groups with brick pool: %v\n", err)
-			}
-
-			// Initialize compression system
-			err = a.BufferManager.CreateCompressionPipeline(shaders.CompressionWGSL)
-			if err != nil {
-				fmt.Printf("WARNING: Failed to create compression pipeline: %v\n", err)
-			} else {
-				err = a.BufferManager.InitializeCompressionBuffers()
-				if err != nil {
-					fmt.Printf("WARNING: Failed to initialize compression buffers: %v\n", err)
-				} else {
-					err = a.BufferManager.CreateCompressionBindGroups()
-					if err != nil {
-						fmt.Printf("WARNING: Failed to create compression bind groups: %v\n", err)
-					}
-				}
-			}
-		}
-	}
+	a.BufferManager.CreateShadowBindGroups()
 
 	// Initialize time
 	a.LastTime = glfw.GetTime()
@@ -386,8 +354,12 @@ func (a *App) Update() {
 	}
 
 	// We assume a default light position or sync it if needed.
-	// For now, fixed light at high altitude.
-	lightPos := mgl32.Vec3{100, 200, 100}
+	// Sync with scene light 0 if available
+	lightPos := mgl32.Vec3{500, 1000, 500}
+	if len(a.Scene.Lights) > 0 {
+		lp := a.Scene.Lights[0].Position
+		lightPos = mgl32.Vec3{lp[0], lp[1], lp[2]}
+	}
 
 	// Matrices
 	view := a.Camera.GetViewMatrix()
@@ -418,7 +390,7 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.AmbientLight, a.DebugMode)
+	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.AmbientLight, a.Camera.DebugMode)
 
 	// Update Text Buffers if needed
 	if len(a.TextItems) > 0 && a.TextRenderer != nil {
@@ -456,19 +428,6 @@ func (a *App) DrawText(text string, x, y float32, scale float32, color [4]float3
 }
 
 func (a *App) Render() {
-	// Flush pending voxel edits FIRST, before any rendering
-	// This ensures GPU buffers are updated before we start encoding commands
-	if len(a.BufferManager.PendingEdits) > 0 {
-		a.BufferManager.FlushEdits(0) // Object ID 0 for now
-		// Wait for GPU to finish edit operations before rendering
-		// This is implicit in WebGPU's queue submission ordering
-	}
-
-	// Periodically run compression pass (every 10 frames)
-	if a.FrameCount%10 == 0 && len(a.BufferManager.DirtyBrickIndices) > 0 {
-		a.BufferManager.FlushCompression()
-	}
-
 	nextTexture, err := a.Surface.GetCurrentTexture()
 	if err != nil {
 		fmt.Printf("ERROR: GetCurrentTexture failed: %v\n", err)
@@ -504,6 +463,9 @@ func (a *App) Render() {
 	if err != nil {
 		fmt.Printf("ERROR: G-Buffer pass End failed: %v\n", err)
 	}
+
+	// Shadow Pass
+	a.BufferManager.DispatchShadowPass(encoder, uint32(len(a.Scene.Lights)))
 
 	// Lighting Pass
 	lPass := encoder.BeginComputePass(nil)

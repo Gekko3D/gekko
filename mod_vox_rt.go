@@ -235,6 +235,7 @@ func voxelRtRenderSystem(state *VoxelRtState) {
 
 func voxelRtDebugSystem(input *Input, state *VoxelRtState) {
 	if input.JustPressed[KeyF1] {
-		state.rtApp.DebugMode = !state.rtApp.DebugMode
+		mode := state.rtApp.Camera.DebugMode
+		state.rtApp.Camera.DebugMode = (mode + 1) % 3
 	}
 }

@@ -52,10 +52,10 @@ struct SectorRecord {
 };
 
 struct BrickRecord {
-    atlas_offset: u32,
-    occupancy_mask_lo: u32,
-    occupancy_mask_hi: u32,
-    flags: u32,
+    atlas_offset: atomic<u32>,
+    occupancy_mask_lo: atomic<u32>,
+    occupancy_mask_hi: atomic<u32>,
+    flags: atomic<u32>,
 };
 
 struct Tree64Node {
@@ -202,7 +202,7 @@ fn calculate_lighting(
 // Group 2: Voxel Data
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
 @group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;
-@group(2) @binding(2) var<storage, read> voxel_payload: array<u32>;
+@group(2) @binding(2) var<storage, read> voxel_payload: array<atomic<u32>>;
 @group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
 @group(2) @binding(4) var<storage, read> object_params: array<ObjectParams>;
 @group(2) @binding(5) var<storage, read> tree64_nodes: array<Tree64Node>;
@@ -264,7 +264,7 @@ fn step_to_next_cell(p: vec3<f32>, dir: vec3<f32>, inv_dir: vec3<f32>, cell_size
 fn load_u8(byte_offset: u32) -> u32 {
     let word_idx = byte_offset / 4u;
     let byte_idx = byte_offset % 4u;
-    let word = voxel_payload[word_idx];
+    let word = atomicLoad(&voxel_payload[word_idx]);
     return (word >> (byte_idx * 8u)) & 0xFFu;
 }
 
@@ -354,27 +354,30 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
     if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) { return 0.0; }
     
     let packed_idx = params.brick_table_base + sector.sector_id + popcnt64_lower(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local);
-    let brick = bricks[packed_idx];
+    let b_flags = atomicLoad(&bricks[packed_idx].flags);
     
-    if (brick.flags == 0u) {
+    if (b_flags == 0u) {
         let mx = (v.x >> 1u) & 3;
         let my = (v.y >> 1u) & 3;
         let mz = (v.z >> 1u) & 3;
         let mvid = vec3<u32>(u32(mx), u32(my), u32(mz));
         let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
         
-        if (!bit_test64(brick.occupancy_mask_lo, brick.occupancy_mask_hi, micro_idx)) { return 0.0; }
+        let m_lo = atomicLoad(&bricks[packed_idx].occupancy_mask_lo);
+        let m_hi = atomicLoad(&bricks[packed_idx].occupancy_mask_hi);
+        if (!bit_test64(m_lo, m_hi, micro_idx)) { return 0.0; }
         
         let vx = v.x & 7;
         let vy = v.y & 7;
         let vz = v.z & 7;
         let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
         let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-        let palette_idx = load_u8(params.payload_base + brick.atlas_offset + voxel_idx);
+        let b_atlas = atomicLoad(&bricks[packed_idx].atlas_offset);
+        let palette_idx = load_u8(params.payload_base + b_atlas + voxel_idx);
         
         return select(0.0, 1.0, palette_idx != EMPTY_VOXEL);
     }
-    if (brick.flags == 1u) { // BRICK_FLAG_SOLID
+    if (b_flags == 1u) { // BRICK_FLAG_SOLID
         return 1.0;
     }
     return 1.0; // Fallback
@@ -499,7 +502,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                        if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
                            // BRICK HIT -> Traverse Micros/Voxels
                            let packed_idx = params.brick_table_base + sector.sector_id + popcnt64_lower(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local);
-                           let brick = bricks[packed_idx];
+                           let b_flags = atomicLoad(&bricks[packed_idx].flags);
+                           let b_atlas = atomicLoad(&bricks[packed_idx].atlas_offset);
                            
                            // Determine t_exit for brick
                            var t_brick_exit = min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z);
@@ -512,10 +516,10 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                            // DDA for Voxels (size 1.0)
                            // Assuming flags==0 (uncompressed/simple). If not 0, fallback or skip?
                            // User prompt implies we check single voxels.
-                           if (brick.flags == 1u) { // BRICK_FLAG_SOLID
+                           if (b_flags == 1u) { // BRICK_FLAG_SOLID
                                 result.hit = true;
                                 result.t = t_brick;
-                                result.palette_idx = brick.atlas_offset;
+                                result.palette_idx = b_atlas;
                                 result.material_base = params.material_table_base;
                                 
                                 // Identify hit voxel within the solid brick for consistent shading
@@ -531,7 +535,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 return result;
                            }
 
-                           if (brick.flags == 0u) {
+                           if (b_flags == 0u) {
                                let p_in_brick = p_micro_start - brick_origin;
                                var voxel_pos = vec3<i32>(floor(p_in_brick)); // size 1.0
                                voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
@@ -558,8 +562,10 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                    // Yes. If micro mask bit is 0, we can skip 2.0 units?
                                    // For simplicity, just check bit.
                                    
-                                   if (bit_test64(brick.occupancy_mask_lo, brick.occupancy_mask_hi, micro_idx)) {
-                                       let actual_atlas_offset = params.payload_base + brick.atlas_offset + voxel_idx;
+                                   let m_lo = atomicLoad(&bricks[packed_idx].occupancy_mask_lo);
+                                   let m_hi = atomicLoad(&bricks[packed_idx].occupancy_mask_hi);
+                                   if (bit_test64(m_lo, m_hi, micro_idx)) {
+                                       let actual_atlas_offset = params.payload_base + b_atlas + voxel_idx;
                                        let palette_idx = load_u8(actual_atlas_offset);
                                        
                                        if (palette_idx != EMPTY_VOXEL) {

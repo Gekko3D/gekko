@@ -20,6 +20,8 @@ struct Light {
     direction: vec4<f32>,
     color: vec4<f32>,
     params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
+    view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
 };
 
 struct Ray {
@@ -42,6 +44,9 @@ struct Ray {
 
 // Output: Final Color
 @group(1) @binding(4) var out_color: texture_storage_2d<rgba8unorm, write>;
+
+// Shadow Maps
+@group(1) @binding(5) var in_shadow_maps: texture_2d_array<f32>;
 
 // Group 2: Voxel Data (reuse)
 @group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
@@ -94,6 +99,33 @@ fn calculate_lighting(
     }
     
     if (attenuation > 0.0) {
+        // Shadowing
+        let pos_ls = light.view_proj * vec4<f32>(hit_pos, 1.0);
+        let proj_pos = pos_ls.xyz / pos_ls.w;
+        let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
+        
+        if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
+            let tex_dim = textureDimensions(in_shadow_maps);
+            let shadow_pixel = vec2<i32>(clamp(shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y)), vec2<f32>(0.0), vec2<f32>(f32(tex_dim.x - 1u), f32(tex_dim.y - 1u))));
+            let shadow_dist = textureLoad(in_shadow_maps, shadow_pixel, i32(light_idx), 0).r;
+            
+            let my_depth = pos_ls.z / pos_ls.w;
+            
+            // Increased bias and clamped depth for comparison
+            if (shadow_dist < my_depth - 0.0005) {
+                attenuation = 0.0; // Black shadows
+            }
+
+            if (camera.debug_mode == 2u) {
+                // Return shadow distance for first light as colored output
+                if (light_idx == 0u) {
+                     // Visualize shadow map depth (closer = brighter/white, far = black)
+                     let val = 1.0 - clamp(shadow_dist * 0.5 + 0.5, 0.0, 1.0);
+                     return vec3<f32>(val, 0.0, 0.0);
+                }
+            }
+        }
+
         let half_dir = normalize(L + view_dir);
         let NdotL = max(dot(normal, L), 0.0);
         let NdotH = max(dot(normal, half_dir), 0.0);
@@ -105,6 +137,14 @@ fn calculate_lighting(
     }
     return vec3<f32>(0.0);
 }
+
+fn ndc_for_shadow(uv: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+}
+
+// NOTE: We need inverse() in deferred_lighting too if we use this logic.
+// Or we just store world-space distance in shadow map.
+// Actually, shadow_dist IS world-space distance from light's "near plane".
 
 // ============== MAIN DEFERRED LIGHTING PASS ==============
 
@@ -123,7 +163,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let size = textureDimensions(in_depth);
     if (global_id.x >= size.x || global_id.y >= size.y) { return; }
     
-    let uv = (vec2<f32>(global_id.xy) + 0.5) / vec2<f32>(size);
+    let uv = (vec2<f32>(f32(global_id.x), f32(global_id.y)) + 0.5) / vec2<f32>(f32(size.x), f32(size.y));
     let sky_color = vec4<f32>(uv.x * 0.3, uv.y * 0.3, 0.4, 1.0);
 
     let depth = textureLoad(in_depth, global_id.xy, 0).r;
@@ -146,10 +186,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let roughness = clamp(pbr_params.x, 0.0, 1.0);
     let metalness = clamp(pbr_params.y, 0.0, 1.0);
     
-    // Reconstruct world position from depth for maximum precision
-    // We get the ray direction for this specific pixel
-    let ray = get_ray(uv);
-    let hit_pos_ws = ray.origin + ray.dir * depth;
+    // Use stored voxel center from G-Buffer to ensure uniform lighting per voxel (blocky look)
+    let hit_pos_ws = textureLoad(in_position, global_id.xy, 0).xyz;
     
     let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
     

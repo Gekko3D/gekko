@@ -7,6 +7,7 @@ import (
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"github.com/go-gl/mathgl/mgl32"
 
 	"github.com/cogentcore/webgpu/wgpu"
 )
@@ -45,6 +46,10 @@ type GpuBufferManager struct {
 	MaterialView *wgpu.TextureView
 	PositionView *wgpu.TextureView
 
+	// Shadow Map Resources
+	ShadowMapArray *wgpu.Texture
+	ShadowMapView  *wgpu.TextureView
+
 	// Bind Groups for new passes
 	GBufferBindGroup          *wgpu.BindGroup
 	GBufferBindGroup0         *wgpu.BindGroup
@@ -52,6 +57,12 @@ type GpuBufferManager struct {
 	LightingBindGroup         *wgpu.BindGroup
 	LightingBindGroup2        *wgpu.BindGroup // For G-Buffer inputs and output
 	LightingBindGroupMaterial *wgpu.BindGroup // For Group 2 voxel data
+
+	// Shadow Map Bind Groups
+	ShadowPipeline   *wgpu.ComputePipeline
+	ShadowBindGroup0 *wgpu.BindGroup
+	ShadowBindGroup1 *wgpu.BindGroup
+	ShadowBindGroup2 *wgpu.BindGroup
 
 	BindGroup0      *wgpu.BindGroup
 	DebugBindGroup0 *wgpu.BindGroup
@@ -64,40 +75,6 @@ type GpuBufferManager struct {
 	BatchMode      bool                       // Enable batching of updates within a frame
 	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
 
-	// GPU voxel editing
-	EditCommandBuf   *wgpu.Buffer
-	EditParamsBuf    *wgpu.Buffer
-	EditPipeline     *wgpu.ComputePipeline
-	EditBindGroup0   *wgpu.BindGroup
-	EditBindGroup1   *wgpu.BindGroup
-	EditBindGroup2   *wgpu.BindGroup
-	PendingEdits     []EditCommand
-	MaxEditsPerFrame int
-
-	// Brick pool for GPU allocation
-	BrickPoolParamsBuf  *wgpu.Buffer
-	BrickPoolBuf        *wgpu.Buffer
-	BrickPoolPayloadBuf *wgpu.Buffer
-	SectorExpansionBuf  *wgpu.Buffer
-	ExpansionCounterBuf *wgpu.Buffer
-
-	// Pool configuration
-	BrickPoolSize uint32
-	BrickPoolUsed uint32
-
-	// Compression pipeline
-	CompressionPipeline   *wgpu.ComputePipeline
-	CompressionParamsBuf  *wgpu.Buffer
-	PayloadFreeQueueBuf   *wgpu.Buffer
-	FreeQueueCounterBuf   *wgpu.Buffer
-	CompressionBindGroup0 *wgpu.BindGroup
-	CompressionBindGroup1 *wgpu.BindGroup
-	CompressionBindGroup2 *wgpu.BindGroup
-
-	// Payload free list
-	PayloadFreeList   []uint32
-	DirtyBrickIndices []uint32 // Track which bricks were edited
-
 	// Cached Sector indices for deterministic updates
 	SectorIndices map[*volume.Sector]SectorGpuInfo
 }
@@ -107,26 +84,14 @@ type SectorGpuInfo struct {
 	FirstBrickIndex uint32
 }
 
-// EditCommand represents a single voxel edit operation
-type EditCommand struct {
-	Position [3]int32
-	Value    uint32
-}
-
 func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	return &GpuBufferManager{
-		Device:            device,
-		MapOffsets:        make(map[*volume.XBrickMap][3]uint32),
-		AllocatedMaps:     make(map[*volume.XBrickMap]bool),
-		PendingUpdates:    make(map[*volume.XBrickMap]bool),
-		BatchMode:         false,
-		PendingEdits:      make([]EditCommand, 0, 16384),
-		MaxEditsPerFrame:  16384,
-		BrickPoolSize:     65536,
-		BrickPoolUsed:     0,
-		PayloadFreeList:   make([]uint32, 0, 1024),
-		DirtyBrickIndices: make([]uint32, 0, 256),
-		SectorIndices:     make(map[*volume.Sector]SectorGpuInfo),
+		Device:         device,
+		MapOffsets:     make(map[*volume.XBrickMap][3]uint32),
+		AllocatedMaps:  make(map[*volume.XBrickMap]bool),
+		PendingUpdates: make(map[*volume.XBrickMap]bool),
+		BatchMode:      false,
+		SectorIndices:  make(map[*volume.Sector]SectorGpuInfo),
 	}
 }
 
@@ -166,7 +131,7 @@ func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []b
 	}
 }
 
-func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj [16]float32, camPos, lightPos, ambientColor [3]float32, debugMode bool) {
+func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj [16]float32, camPos, lightPos, ambientColor [3]float32, debugMode uint32) {
 	// Struct CameraData {
 	//   view_proj: mat4x4<f32>; -- 64
 	//   inv_view: mat4x4<f32>;  -- 128
@@ -209,11 +174,7 @@ func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj [16]float32
 	binary.LittleEndian.PutUint32(buf[236:], 0)
 
 	// Debug Mode
-	debugVal := uint32(0)
-	if debugMode {
-		debugVal = 1
-	}
-	binary.LittleEndian.PutUint32(buf[240:], debugVal)
+	binary.LittleEndian.PutUint32(buf[240:], debugMode)
 
 	// ensureBuffer handles creation if nil
 	if m.CameraBuf == nil {
@@ -335,6 +296,7 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 	}
 
 	// 3. Lights
+	m.UpdateLights(scene)
 	lightsData := []byte{}
 	// Light header: count (u32), pad (12 bytes)
 	// Actually typical structure for array<Light> is just data, but we need to know count.
@@ -348,6 +310,10 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 	// So we just dump lights.
 
 	for _, l := range scene.Lights {
+		// Calculate ViewProj if it's not already set or needs refresh
+		// In a real engine this might be done in a separate system,
+		// but here we can ensure it's up to date.
+
 		// Pos (16)
 		lightsData = append(lightsData, vec4ToBytes(l.Position)...)
 		// Dir (16)
@@ -356,10 +322,14 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 		lightsData = append(lightsData, vec4ToBytes(l.Color)...)
 		// Params (16)
 		lightsData = append(lightsData, vec4ToBytes(l.Params)...)
+		// ViewProj (64)
+		lightsData = append(lightsData, mat4ToBytes(l.ViewProj)...)
+		// InvViewProj (64)
+		lightsData = append(lightsData, mat4ToBytes(l.InvViewProj)...)
 	}
 
 	if len(lightsData) == 0 {
-		lightsData = make([]byte, 64) // dummy
+		lightsData = make([]byte, 192) // dummy (one full light struct)
 	}
 
 	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
@@ -371,6 +341,52 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 		recreated = true
 	}
 	return recreated
+}
+
+func (m *GpuBufferManager) UpdateLights(scene *core.Scene) {
+	for i := range scene.Lights {
+		l := &scene.Lights[i]
+		lightType := uint32(l.Params[2])
+
+		pos := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
+		dir := mgl32.Vec3{l.Direction[0], l.Direction[1], l.Direction[2]}
+
+		var view, proj mgl32.Mat4
+
+		up := mgl32.Vec3{0, 1, 0}
+		if math.Abs(float64(dir.Y())) > 0.99 {
+			up = mgl32.Vec3{1, 0, 0}
+		}
+
+		if lightType == 1 { // Directional
+			// Directional light needs an ortho projection
+			// We center the ortho projection around the scene or a reasonable area.
+			// For now, let's use a conservative fixed box.
+			// For now, fixed large size to cover typical demo scene
+			size := float32(500.0)
+			proj = mgl32.Ortho(-size, size, -size, size, 0.1, 2000.0)
+
+			// View matrix: look from light position in light direction
+			target := pos.Add(dir)
+			view = mgl32.LookAtV(pos, target, up)
+		} else if lightType == 2 { // Spot
+			// Spot light needs a perspective projection
+			fov := math.Acos(float64(l.Params[1])) * 2.0 // Params[1] is cos(cone_angle)
+			proj = mgl32.Perspective(float32(fov), 1.0, 0.1, l.Params[0])
+
+			target := pos.Add(dir)
+			view = mgl32.LookAtV(pos, target, up)
+		} else { // Point (Type 0)
+			// Point lights are tricky with 2D shadow maps.
+			// For now, use a default perspective looking forward.
+			proj = mgl32.Perspective(mgl32.DegToRad(90), 1.0, 0.1, l.Params[0])
+			view = mgl32.LookAtV(pos, pos.Add(mgl32.Vec3{0, 0, 1}), up)
+		}
+
+		vp := proj.Mul4(view)
+		l.ViewProj = [16]float32(vp)
+		l.InvViewProj = [16]float32(vp.Inv())
+	}
 }
 
 func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
@@ -997,6 +1013,45 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	setupTexture(&m.GBufferNormal, &m.NormalView, "GBuffer Normal", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.GBufferPosition, &m.PositionView, "GBuffer Position", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
+
+	m.CreateShadowMapTextures(1024, 1024, 16) // Default 1024x1024 for 16 lights
+}
+
+func (m *GpuBufferManager) CreateShadowMapTextures(w, h, count uint32) {
+	if m.ShadowMapArray != nil {
+		m.ShadowMapArray.Release()
+	}
+
+	var err error
+	m.ShadowMapArray, err = m.Device.CreateTexture(&wgpu.TextureDescriptor{
+		Label: "Shadow Map Array",
+		Size: wgpu.Extent3D{
+			Width:              w,
+			Height:             h,
+			DepthOrArrayLayers: count,
+		},
+		MipLevelCount: 1,
+		Dimension:     wgpu.TextureDimension2D,
+		Format:        wgpu.TextureFormatRGBA16Float,
+		Usage:         wgpu.TextureUsageStorageBinding | wgpu.TextureUsageTextureBinding,
+		SampleCount:   1,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	m.ShadowMapView, err = m.ShadowMapArray.CreateView(&wgpu.TextureViewDescriptor{
+		Label:           "Shadow Map View",
+		Format:          wgpu.TextureFormatRGBA16Float,
+		Dimension:       wgpu.TextureViewDimension2DArray,
+		BaseMipLevel:    0,
+		MipLevelCount:   1,
+		BaseArrayLayer:  0,
+		ArrayLayerCount: count,
+	})
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wgpu.ComputePipeline) {
@@ -1064,6 +1119,7 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 			{Binding: 2, TextureView: m.MaterialView},
 			{Binding: 3, TextureView: m.PositionView},
 			{Binding: 4, TextureView: outputView},
+			{Binding: 5, TextureView: m.ShadowMapView},
 		},
 	})
 	if err != nil {
@@ -1079,6 +1135,89 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (m *GpuBufferManager) CreateShadowPipeline(code string) error {
+	mod, err := m.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Shadow Map CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: code},
+	})
+	if err != nil {
+		return err
+	}
+	defer mod.Release()
+
+	m.ShadowPipeline, err = m.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label: "Shadow Pipeline",
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     mod,
+			EntryPoint: "main",
+		},
+	})
+	return err
+}
+
+func (m *GpuBufferManager) CreateShadowBindGroups() {
+	var err error
+
+	// Group 0: Scene + Lights
+	m.ShadowBindGroup0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: m.ShadowPipeline.GetBindGroupLayout(0),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
+			{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Group 1: Output Shadow Maps
+	m.ShadowBindGroup1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: m.ShadowPipeline.GetBindGroupLayout(1),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, TextureView: m.ShadowMapView},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Group 2: Voxel Data
+	m.ShadowBindGroup2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: m.ShadowPipeline.GetBindGroupLayout(2),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.VoxelPayloadBuf, Size: wgpu.WholeSize},
+			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
+			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
+			{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (m *GpuBufferManager) DispatchShadowPass(encoder *wgpu.CommandEncoder, numLights uint32) {
+	if m.ShadowPipeline == nil || m.ShadowBindGroup0 == nil {
+		return
+	}
+
+	cPass := encoder.BeginComputePass(nil)
+	cPass.SetPipeline(m.ShadowPipeline)
+	cPass.SetBindGroup(0, m.ShadowBindGroup0, nil)
+	cPass.SetBindGroup(1, m.ShadowBindGroup1, nil)
+	cPass.SetBindGroup(2, m.ShadowBindGroup2, nil)
+
+	// Dispatch for 1024x1024 shadow maps
+	wgX := (1024 + 7) / 8
+	wgY := (1024 + 7) / 8
+	cPass.DispatchWorkgroups(uint32(wgX), uint32(wgY), numLights)
+	cPass.End()
 }
 
 // Helpers
