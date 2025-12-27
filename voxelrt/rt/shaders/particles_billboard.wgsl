@@ -93,14 +93,19 @@ fn ray_dir_from_screen(pos: vec4<f32>) -> vec3<f32> {
     return dir;
 }
 
+struct FSOut {
+    @location(0) accum: vec4<f32>, // rgb = color * a * w, a = a * w
+    @location(1) weight: f32,      // = a * w
+};
+
 @fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VSOut) -> FSOut {
     // Manual depth test against GBuffer depth stored as ray distance t
     let dim = textureDimensions(gbuf_depth);
-    let w = i32(dim.x);
-    let h = i32(dim.y);
-    let px = clamp(i32(floor(in.position.x)), 0, w - 1);
-    let py = clamp(i32(floor(in.position.y)), 0, h - 1);
+    let screenW = i32(dim.x);
+    let screenH = i32(dim.y);
+    let px = clamp(i32(floor(in.position.x)), 0, screenW - 1);
+    let py = clamp(i32(floor(in.position.y)), 0, screenH - 1);
     let pix = vec2<i32>(px, py);
     let scene = textureLoad(gbuf_depth, pix, 0);
     let t_scene = scene.x;
@@ -118,9 +123,17 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let d = length(in.quad_uv - vec2<f32>(0.5, 0.5)) * 2.0;
     let mask = clamp(1.0 - smoothstep(0.8, 1.0, d), 0.0, 1.0);
 
-    // Compute alpha from instance color and circular mask; standard alpha blending in pipeline
+    // Premultiplied contribution with depth-weighted WBOIT
     let alpha = clamp(in.color.a * mask, 0.0, 1.0);
     let rgb = in.color.rgb * mask;
 
-    return vec4<f32>(rgb, alpha);
+    // Normalize particle depth within opaque limit for this pixel
+    let z = clamp(t_particle / max(t_scene, 1e-4), 0.0, 1.0);
+    let k: f32 = 8.0;
+    let w = max(1e-3, alpha) * pow(1.0 - z, k);
+
+    let wsum = alpha * w;
+    let contrib = rgb * alpha * w;
+
+    return FSOut(vec4<f32>(contrib, wsum), wsum);
 }

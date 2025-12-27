@@ -447,8 +447,13 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VSOut {
   return out;
 }
 
+struct FSOut {
+  @location(0) accum: vec4<f32>,  // rgb = color * a * w, a = a * w
+  @location(1) weight: f32,       // = a * w
+};
+
 @fragment
-fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> FSOut {
   // Determine opaque limit (ray t from GBuffer depth)
   let dims = textureDimensions(in_depth);
   let ipos = vec2<i32>( clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
@@ -560,7 +565,14 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       }
     }
 
-    return vec4<f32>(color, alpha);
+    // Depth-weighted WBOIT contribution
+    let k: f32 = 8.0;
+    let z = clamp(hit.t / max(t_limit, 1e-4), 0.0, 1.0);
+    let w = max(1e-3, alpha) * pow(1.0 - z, k);
+    let contrib = color * alpha * w;
+    let wsum = alpha * w;
+
+    return FSOut(vec4<f32>(contrib, wsum), wsum);
   }
-  return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+  return FSOut(vec4<f32>(0.0), 0.0);
 }

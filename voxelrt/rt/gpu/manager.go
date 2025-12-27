@@ -41,11 +41,19 @@ type GpuBufferManager struct {
 	GBufferMaterial *wgpu.Texture
 	GBufferPosition *wgpu.Texture
 
+	// Transparent Accumulation Targets (WBOIT)
+	TransparentAccumTex  *wgpu.Texture // RGBA16Float, accum premultiplied color
+	TransparentWeightTex *wgpu.Texture // R16Float, accum weight
+
 	// G-Buffer Views
 	DepthView    *wgpu.TextureView
 	NormalView   *wgpu.TextureView
 	MaterialView *wgpu.TextureView
 	PositionView *wgpu.TextureView
+
+	// Transparent Accumulation Views
+	TransparentAccumView  *wgpu.TextureView
+	TransparentWeightView *wgpu.TextureView
 
 	// Shadow Map Resources
 	ShadowMapArray *wgpu.Texture
@@ -1021,6 +1029,10 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	setupTexture(&m.GBufferNormal, &m.NormalView, "GBuffer Normal", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.GBufferPosition, &m.PositionView, "GBuffer Position", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
+
+	// Transparent accumulation targets for WBOIT
+	setupTexture(&m.TransparentAccumTex, &m.TransparentAccumView, "Transparent Accum", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
+	setupTexture(&m.TransparentWeightTex, &m.TransparentWeightView, "Transparent Weight", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
 
 	m.CreateShadowMapTextures(1024, 1024, 16) // Default 1024x1024 for 16 lights
 }
