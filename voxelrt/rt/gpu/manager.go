@@ -183,6 +183,11 @@ func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []b
 	current := *buf
 	if current == nil || current.GetSize() < neededSize {
 		if current != nil {
+			// Geometric growth: grow by 1.5x to avoid frequent reallocations
+			growthSize := uint64(float64(current.GetSize()) * 1.5)
+			if growthSize > neededSize {
+				neededSize = growthSize
+			}
 			current.Release()
 		}
 
@@ -1194,33 +1199,20 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 
 // UpdateParticles uploads particle instances into a storage buffer (read in VS)
 func (m *GpuBufferManager) UpdateParticles(instances []core.ParticleInstance) {
-	// Ensure non-zero buffer size for bind group validity
-	minSize := uint64(32)
-	size := uint64(len(instances)) * 32
-	if size == 0 {
-		size = minSize
-	}
-	// Create/resize buffer if needed
-	if m.ParticleInstancesBuf == nil || m.ParticleInstancesBuf.GetSize() < size {
-		if m.ParticleInstancesBuf != nil {
-			m.ParticleInstancesBuf.Release()
-		}
-		buf, err := m.Device.CreateBuffer(&wgpu.BufferDescriptor{
-			Label: "ParticleInstances",
-			Size:  size,
-			Usage: wgpu.BufferUsageStorage | wgpu.BufferUsageCopyDst,
-		})
-		if err != nil {
-			panic(err)
-		}
-		m.ParticleInstancesBuf = buf
-	}
-	// Upload if we have any instances
+	// Create byte slice from instances
+	var bytes []byte
 	if len(instances) > 0 {
-		vSize := uint64(len(instances)) * 32
-		bytes := unsafe.Slice((*byte)(unsafe.Pointer(&instances[0])), vSize)
-		m.Device.GetQueue().WriteBuffer(m.ParticleInstancesBuf, 0, bytes)
+		vSize := len(instances) * 32
+		bytes = unsafe.Slice((*byte)(unsafe.Pointer(&instances[0])), vSize)
+	} else {
+		bytes = make([]byte, 0)
 	}
+
+	// Use ensureBuffer with headroom for ~1024 particles (32KB)
+	// This ensures we have space to grow without immediate reallocation
+	// and benefits from the geometric growth logic in ensureBuffer.
+	headroom := 1024 * 32
+	m.ensureBuffer("ParticleInstancesBuf", &m.ParticleInstancesBuf, bytes, wgpu.BufferUsageStorage, headroom)
 	m.ParticleCount = uint32(len(instances))
 }
 
