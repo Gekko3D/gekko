@@ -87,6 +87,7 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 	state.rtApp.BufferManager.BeginBatch()
 
 	// Sync instances
+	state.rtApp.Profiler.BeginScope("Sync Instances")
 	currentEntities := make(map[EntityId]bool)
 
 	// Collect instances from models
@@ -198,8 +199,10 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 			delete(state.instanceMap, eid)
 		}
 	}
+	state.rtApp.Profiler.EndScope("Sync Instances")
 
 	// CA voxel bridging (render CA density as voxels; runs at CA tick rate via _dirty flag)
+	state.rtApp.Profiler.BeginScope("Sync CA")
 	currentCA := make(map[EntityId]bool)
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
 		if cv == nil || !cv.BridgeToVoxels || cv._density == nil {
@@ -320,7 +323,9 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 			delete(state.caVolumeMap, eid)
 		}
 	}
+	state.rtApp.Profiler.EndScope("Sync CA")
 
+	state.rtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
 		state.rtApp.Camera.Position = camera.Position
 		state.rtApp.Camera.Yaw = camera.Yaw
@@ -373,15 +378,20 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 		state.rtApp.Scene.Lights = append(state.rtApp.Scene.Lights, gpuLight)
 		return true
 	})
+	state.rtApp.Profiler.EndScope("Sync Lights")
 
+	state.rtApp.Profiler.BeginScope("GPU Batch")
 	// End batching and process all accumulated updates
 	state.rtApp.BufferManager.EndBatch()
+	state.rtApp.Profiler.EndScope("GPU Batch")
 
 	// CPU-simulate and upload particle instances
 	instances := particlesCollect(state, time, cmd)
 	state.rtApp.BufferManager.UpdateParticles(instances)
 
+	state.rtApp.Profiler.BeginScope("RT Update")
 	state.rtApp.Update()
+	state.rtApp.Profiler.EndScope("RT Update")
 }
 
 func voxelRtRenderSystem(state *VoxelRtState) {

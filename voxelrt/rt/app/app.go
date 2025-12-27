@@ -503,10 +503,15 @@ func (a *App) Update() {
 	invProj := proj.Inv()
 
 	// Commit scene changes from ECS sync
+	a.Profiler.BeginScope("Scene Commit")
 	a.Scene.Commit()
+	a.Profiler.EndScope("Scene Commit")
 
 	// Update Buffers
+	a.Profiler.BeginScope("Buffer Update")
 	recreated := a.BufferManager.UpdateScene(a.Scene)
+	a.Profiler.EndScope("Buffer Update")
+
 	if recreated {
 		// New buffers mean we need new bind groups
 		a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
