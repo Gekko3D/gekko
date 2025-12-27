@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"sort"
 	"unsafe"
@@ -16,6 +17,9 @@ import (
 const (
 	HeadroomPayload = 4 * 1024 * 1024
 	HeadroomTables  = 64 * 1024
+
+	MaxUpdatesPerFrame  = 1024              // Cap voxel/sector updates per frame
+	SafeBufferSizeLimit = 512 * 1024 * 1024 // 512MB Warning Limit
 )
 
 type GpuBufferManager struct {
@@ -95,6 +99,8 @@ type GpuBufferManager struct {
 
 	// Cached Sector indices for deterministic updates
 	SectorIndices map[*volume.Sector]SectorGpuInfo
+
+	UpdatesThisFrame int
 }
 
 // CreateTransparentOverlayBindGroups wires the overlay pass bind groups:
@@ -178,6 +184,10 @@ func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []b
 	if current == nil || current.GetSize() < neededSize {
 		if current != nil {
 			current.Release()
+		}
+
+		if neededSize > SafeBufferSizeLimit {
+			fmt.Printf("WARNING: Buffer %s allocation size %d exceeds safety limit %d\n", name, neededSize, SafeBufferSizeLimit)
 		}
 
 		desc := &wgpu.BufferDescriptor{
@@ -282,10 +292,15 @@ func (m *GpuBufferManager) EndBatch() {
 	// Process all pending updates
 	for xbm := range m.PendingUpdates {
 		// Process dirty bricks
+		// Process dirty bricks
 		for bKey := range xbm.DirtyBricks {
+			if m.UpdatesThisFrame >= MaxUpdatesPerFrame {
+				break
+			}
 			sKey := [3]int{bKey[0], bKey[1], bKey[2]}
 			sector, ok := xbm.Sectors[sKey]
 			if !ok {
+				delete(xbm.DirtyBricks, bKey) // Invalid, just remove
 				continue
 			}
 
@@ -295,18 +310,25 @@ func (m *GpuBufferManager) EndBatch() {
 				m.UpdateBrickPayload(xbm, bKey, brick)
 				m.UpdateBrickRecord(xbm, bKey, brick)
 			}
+			delete(xbm.DirtyBricks, bKey)
+			m.UpdatesThisFrame++
 		}
 
 		// Process dirty sectors
 		for sKey := range xbm.DirtySectors {
+			if m.UpdatesThisFrame >= MaxUpdatesPerFrame {
+				break
+			}
 			sector, ok := xbm.Sectors[sKey]
 			if ok {
 				m.UpdateSectorRecord(xbm, sKey, sector)
 			}
+			delete(xbm.DirtySectors, sKey)
+			m.UpdatesThisFrame++
 		}
 
-		// Clear dirty flags
-		xbm.ClearDirty()
+		// If we cleared everything, we can conceptually "clear dirty", but we managed it manually
+		// xbm.ClearDirty() -> Do NOT call this as we might have leftover items
 	}
 
 	m.BatchMode = false
@@ -314,6 +336,7 @@ func (m *GpuBufferManager) EndBatch() {
 }
 
 func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
+	m.UpdatesThisFrame = 0
 	recreated := false
 	// 1. Instances
 	instData := []byte{}
@@ -495,9 +518,13 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 
 				// Update dirty bricks
 				for bKey := range xbm.DirtyBricks {
+					if m.UpdatesThisFrame >= MaxUpdatesPerFrame {
+						break
+					}
 					sKey := [3]int{bKey[0], bKey[1], bKey[2]}
 					sector, ok := xbm.Sectors[sKey]
 					if !ok {
+						delete(xbm.DirtyBricks, bKey)
 						continue
 					}
 
@@ -507,18 +534,24 @@ func (m *GpuBufferManager) updateXBrickMap(scene *core.Scene) bool {
 						m.UpdateBrickPayload(xbm, bKey, brick)
 						m.UpdateBrickRecord(xbm, bKey, brick)
 					}
+					delete(xbm.DirtyBricks, bKey)
+					m.UpdatesThisFrame++
 				}
 
 				// Update dirty sectors
 				for sKey := range xbm.DirtySectors {
+					if m.UpdatesThisFrame >= MaxUpdatesPerFrame {
+						break
+					}
 					sector, ok := xbm.Sectors[sKey]
 					if ok {
 						m.UpdateSectorRecord(xbm, sKey, sector)
 					}
+					delete(xbm.DirtySectors, sKey)
+					m.UpdatesThisFrame++
 				}
 
-				// Clear dirty flags
-				xbm.ClearDirty()
+				// xbm.ClearDirty() -> replaced by manual deletions
 			}
 		}
 
