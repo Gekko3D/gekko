@@ -106,6 +106,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
 			{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
+			{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {

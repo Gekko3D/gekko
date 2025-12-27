@@ -804,7 +804,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 		return
 	}
 
-	// Group 0: camera (uniform) + instances (storage) + BVH nodes (storage)
+	// Group 0: camera (uniform) + instances (storage) + BVH nodes (storage) + lights (storage)
 	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "TransparentOverlay BGL0",
 		Entries: []wgpu.BindGroupLayoutEntry{
@@ -828,6 +828,15 @@ func (a *App) setupTransparentOverlayPipeline() {
 			},
 			{
 				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    3,
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeReadOnlyStorage,

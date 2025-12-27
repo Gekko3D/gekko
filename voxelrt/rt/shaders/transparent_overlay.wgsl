@@ -65,6 +65,15 @@ struct Tree64Node {
   data: u32,
 };
 
+struct Light {
+  position: vec4<f32>,
+  direction: vec4<f32>,
+  color: vec4<f32>,
+  params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
+  view_proj: mat4x4<f32>,
+  inv_view_proj: mat4x4<f32>,
+};
+
 struct ObjectParams {
   sector_table_base: u32,
   brick_table_base: u32,
@@ -101,6 +110,10 @@ struct TransparentHit {
   t: f32,
   color: vec3<f32>,
   alpha: f32,
+  normal: vec3<f32>,
+  pos_ws: vec3<f32>,
+  palette_idx: u32,
+  material_base: u32,
 };
 
 // ============== BIND GROUPS ==============
@@ -109,6 +122,7 @@ struct TransparentHit {
 @group(0) @binding(0) var<uniform> uCamera : CameraData;
 @group(0) @binding(1) var<storage, read> instances : array<Instance>;
 @group(0) @binding(2) var<storage, read> nodes     : array<BVHNode>;
+@group(0) @binding(3) var<storage, read> lights    : array<Light>;
 
 // Group 1: Voxel data and materials
 @group(1) @binding(0) var<storage, read> sectors              : array<SectorRecord>;
@@ -271,7 +285,7 @@ fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
 
 // ============== Traversal for first transparent hit (micro grid path only) ==============
 fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, t_limit: f32) -> TransparentHit {
-  var outHit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0);
+  var outHit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u);
   let params = object_params[inst.object_id];
 
   // Transform into object space
@@ -322,20 +336,19 @@ fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_ex
             var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
 
             if (b_flags == 1u) {
-              // Solid brick: palette index is stored in atlas (as used by gbuffer fast path)
               let palette_idx = b_atlas;
               let mat_base = params.material_table_base;
               let mat_idx = mat_base + palette_idx * 4u;
               let pbr = materials[mat_idx + 2u]; // x=roughness, y=metalness, z=ior, w=transparency
               let alpha = clamp(pbr.w, 0.0, 1.0);
               if (alpha > 0.001) {
-                // We hit a transparent solid surface at t_brick
+                // Transparent solid; compute hit data
                 let t_hit = t_brick;
-                // Shade as simple tinted color (base + emissive)
-                let base_col = materials[mat_idx].xyz;
-                let emissive = materials[mat_idx + 1u].xyz;
-                let color = clamp(base_col + emissive, vec3<f32>(0.0), vec3<f32>(10.0));
-                outHit = TransparentHit(true, t_hit, color, alpha);
+                let p_hit_os = ray.origin + dir * (t_brick + EPS);
+                let n_os = estimate_normal(p_hit_os, params);
+                let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+                let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
+                outHit = TransparentHit(true, t_hit, vec3<f32>(0.0), alpha, n_ws, pos_ws, palette_idx, mat_base);
                 return outHit;
               }
             } else {
@@ -367,10 +380,11 @@ fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_ex
                     let alpha = clamp(pbr.w, 0.0, 1.0);
                     if (alpha > 0.001) {
                       let t_hit = t_micro;
-                      let base_col = materials[mat_idx].xyz;
-                      let emissive = materials[mat_idx + 1u].xyz;
-                      let color = clamp(base_col + emissive, vec3<f32>(0.0), vec3<f32>(10.0));
-                      outHit = TransparentHit(true, t_hit, color, alpha);
+                      let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
+                      let n_os = estimate_normal(voxel_center_os, params);
+                      let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+                      let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                      outHit = TransparentHit(true, t_hit, vec3<f32>(0.0), alpha, n_ws, pos_ws, palette_idx, mat_base);
                       return outHit;
                     }
                   }
@@ -448,7 +462,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let ray = get_ray_from_uv(uv_screen);
 
   // Traverse BVH to find nearest transparent hit before t_limit
-  var hit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0);
+  var hit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u);
 
   var stack: array<i32, 64>;
   var sp = 0;
@@ -484,8 +498,69 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   }
 
   if (hit.hit) {
-    // Output color with alpha; blending configured as srcAlpha/oneMinusSrcAlpha
-    return vec4<f32>(hit.color, clamp(hit.alpha, 0.0, 1.0));
+    // Shade transparent surface: simple direct lighting (no shadows) + emissive
+    let mat_base = hit.material_base;
+    let palette_idx = hit.palette_idx;
+    let mat_idx = mat_base + palette_idx * 4u;
+    let base_col = materials[mat_idx].xyz;
+    let emissive = materials[mat_idx + 1u].xyz;
+    let pbr = materials[mat_idx + 2u];
+    let roughness = clamp(pbr.x, 0.0, 1.0);
+    let metalness = clamp(pbr.y, 0.0, 1.0);
+    let alpha = clamp(pbr.w, 0.0, 1.0);
+
+    var color = base_col * uCamera.ambient_color.xyz + emissive;
+    let V = normalize(uCamera.cam_pos.xyz - hit.pos_ws);
+    let num_lights = arrayLength(&lights);
+    for (var i = 0u; i < num_lights; i = i + 1u) {
+      let light = lights[i];
+      let light_type = u32(light.params.z);
+      var L = vec3<f32>(0.0);
+      var attenuation = 1.0;
+      if (light_type == 1u) { // Directional
+        L = -normalize(light.direction.xyz);
+        attenuation = light.color.w;
+      } else {
+        let toL = light.position.xyz - hit.pos_ws;
+        let dist = length(toL);
+        L = toL / max(dist, 1e-4);
+        let range = light.params.x;
+        if (dist > range) {
+          attenuation = 0.0;
+        } else {
+          let inv_sq = 1.0 / (dist * dist + 1.0);
+          attenuation = inv_sq * light.color.w * 50.0;
+          if (light_type == 2u) { // Spot
+            let spot_dir = normalize(light.direction.xyz);
+            let cos_cur = dot(-L, spot_dir);
+            let cos_cone = light.params.y;
+            if (cos_cur < cos_cone) {
+              attenuation = 0.0;
+            } else {
+              let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
+              attenuation *= spot_att;
+            }
+          }
+        }
+      }
+
+      if (attenuation > 0.0) {
+        let N = normalize(hit.normal);
+        let NdotL = max(dot(N, L), 0.0);
+        let diffuse_col = base_col * (1.0 - metalness);
+        let diffuse = diffuse_col * NdotL;
+
+        let H = normalize(L + V);
+        let NdotH = max(dot(N, H), 0.0);
+        let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
+        let F0 = mix(vec3<f32>(0.04), base_col, metalness);
+        let specular = pow(NdotH, spec_power) * F0;
+
+        color += (diffuse + specular) * light.color.xyz * attenuation;
+      }
+    }
+
+    return vec4<f32>(color, alpha);
   }
   return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }
