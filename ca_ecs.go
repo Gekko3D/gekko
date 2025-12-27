@@ -32,11 +32,23 @@ type CellularVolumeComponent struct {
 
 	BridgeToParticles bool // When true, particlesCollect will spawn billboards at active cells
 
+	// Voxel bridge (render CA as transient voxel volume)
+	BridgeToVoxels    bool    // When true, creates/updates a VoxelObject from CA density
+	VoxelThreshold    float32 // Density threshold for voxelization (default ~0.10 if <= 0)
+	VoxelStride       int     // Downsampling stride across the CA grid (default 1 if <= 0)
+	VoxelsCastShadows bool    // If true, CA voxels cast shadows (defaults to false to keep cost down)
+
 	// Internal state
 	_density []float32
 	_temp    []float32
 	_accum   float32
 	_inited  bool
+	_dirty   bool // set true whenever a simulation step occurs
+
+	// CA→Voxels delta state
+	_prevMask      []byte
+	_prevStride    int
+	_prevThreshold float32
 }
 
 func (cv *CellularVolumeComponent) ensureGrid() {
@@ -204,6 +216,8 @@ func caStepSystem(t *Time, cmd *Commands) {
 		case CellularWater:
 			// TODO: basic water flow (not implemented in MVP)
 		}
+		// Mark density changed for bridges (particles/voxels) after a simulation step
+		cv._dirty = true
 		return true
 	})
 }
