@@ -122,6 +122,7 @@ struct SectorGridParams {
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
 @group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;
 @group(2) @binding(2) var<storage, read> voxel_payload: array<atomic<u32>>;
+@group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
 @group(2) @binding(4) var<storage, read> object_params: array<ObjectParams>;
 @group(2) @binding(5) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
@@ -321,32 +322,40 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                         
                         var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
                         if (b_flags == 1u) {
-                            result.hit = true; result.t = t_brick; result.palette_idx = b_atlas; result.material_idx = params.material_table_base;
-                            let p_hit_os = ray.origin + dir * (t_brick + EPS);
-                            let voxel_center_os = floor(p_hit_os) + 0.5;
-                            let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
-                            let vi_hit = vec3<i32>(floor(voxel_center_os));
-                            let grad = vec3<f32>(
-                                sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
-                                sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
-                                sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
-                            );
-                            let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
-                            var n_os = vec3<f32>(0.0);
-                            if (max(ax, max(ay, az)) > 0.05) {
-                                if (ax >= ay && ax >= az) { n_os = vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
-                                else if (ay >= ax && ay >= az) { n_os = vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
-                                else { n_os = vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0)); }
+                            // Solid brick: check transparency via material table
+                            let mat_idx_s = params.material_table_base + b_atlas * 4u;
+                            let pbr_s = materials[mat_idx_s + 2u]; // x=roughness, y=metalness, z=ior, w=transparency
+                            if (pbr_s.w > 0.001) {
+                                // Transparent solid: skip this brick, advance to its exit and continue tracing
+                                t_brick = t_brick_exit;
                             } else {
-                                let dir_c = voxel_center_os - aabb_center_os;
-                                let adx = abs(dir_c.x); let ady = abs(dir_c.y); let adz = abs(dir_c.z);
-                                if (adx >= ady && adx >= adz) { n_os = vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
-                                else if (ady >= adx && ady >= adz) { n_os = vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
-                                else { n_os = vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0)); }
+                                result.hit = true; result.t = t_brick; result.palette_idx = b_atlas; result.material_idx = params.material_table_base;
+                                let p_hit_os = ray.origin + dir * (t_brick + EPS);
+                                let voxel_center_os = floor(p_hit_os) + 0.5;
+                                let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
+                                let vi_hit = vec3<i32>(floor(voxel_center_os));
+                                let grad = vec3<f32>(
+                                    sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
+                                    sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
+                                    sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
+                                );
+                                let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
+                                var n_os = vec3<f32>(0.0);
+                                if (max(ax, max(ay, az)) > 0.05) {
+                                    if (ax >= ay && ax >= az) { n_os = vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
+                                    else if (ay >= ax && ay >= az) { n_os = vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
+                                    else { n_os = vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0)); }
+                                } else {
+                                    let dir_c = voxel_center_os - aabb_center_os;
+                                    let adx = abs(dir_c.x); let ady = abs(dir_c.y); let adz = abs(dir_c.z);
+                                    if (adx >= ady && adx >= adz) { n_os = vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
+                                    else if (ady >= adx && ady >= adz) { n_os = vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
+                                    else { n_os = vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0)); }
+                                }
+                                result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+                                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                return result;
                             }
-                            result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
-                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                            return result;
                         }
                         if (b_flags == 0u) {
                             var t_micro = t_brick;
@@ -370,31 +379,38 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                     let actual_atlas_offset = params.payload_base + b_atlas + voxel_idx;
                                     let palette_idx = load_u8(actual_atlas_offset);
                                     if (palette_idx != EMPTY_VOXEL) {
-                                        result.hit = true; result.t = t_micro; result.palette_idx = palette_idx; result.material_idx = params.material_table_base;
-                                        let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
-                                        let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
-                                        let vi_hit = vec3<i32>(floor(voxel_center_os));
-                                        let grad = vec3<f32>(
-                                            sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
-                                            sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
-                                            sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
-                                        );
-                                        let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
-                                        var n_os = vec3<f32>(0.0);
-                                        if (max(ax, max(ay, az)) > 0.05) {
-                                            if (ax >= ay && ax >= az) { n_os = vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
-                                            else if (ay >= ax && ay >= az) { n_os = vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
-                                            else { n_os = vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0)); }
+                                        // Check transparency per-voxel
+                                        let mat_idx_v = params.material_table_base + palette_idx * 4u;
+                                        let pbr_v = materials[mat_idx_v + 2u];
+                                        if (pbr_v.w > 0.001) {
+                                            // Transparent voxel: skip and continue marching
                                         } else {
-                                            let dir_c = voxel_center_os - aabb_center_os;
-                                            let adx = abs(dir_c.x); let ady = abs(dir_c.y); let adz = abs(dir_c.z);
-                                            if (adx >= ady && adx >= adz) { n_os = vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
-                                            else if (ady >= adx && ady >= adz) { n_os = vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
-                                            else { n_os = vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0)); }
+                                            result.hit = true; result.t = t_micro; result.palette_idx = palette_idx; result.material_idx = params.material_table_base;
+                                            let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
+                                            let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
+                                            let vi_hit = vec3<i32>(floor(voxel_center_os));
+                                            let grad = vec3<f32>(
+                                                sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
+                                                sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
+                                                sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
+                                            );
+                                            let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
+                                            var n_os = vec3<f32>(0.0);
+                                            if (max(ax, max(ay, az)) > 0.05) {
+                                                if (ax >= ay && ax >= az) { n_os = vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
+                                                else if (ay >= ax && ay >= az) { n_os = vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
+                                                else { n_os = vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0)); }
+                                            } else {
+                                                let dir_c = voxel_center_os - aabb_center_os;
+                                                let adx = abs(dir_c.x); let ady = abs(dir_c.y); let adz = abs(dir_c.z);
+                                                if (adx >= ady && adx >= adz) { n_os = vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
+                                                else if (ady >= adx && ady >= adz) { n_os = vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
+                                                else { n_os = vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0)); }
+                                            }
+                                            result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+                                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                            return result;
                                         }
-                                        result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
-                                        result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                                        return result;
                                     }
                                 }
                                 if (t_max_micro.x < t_max_micro.y) {
@@ -470,31 +486,39 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                     iter_ref++;
                     let vi2 = voxel_pos2;
                     if (sample_occupancy(vi2, params) > 0.5) {
-                        result.hit = true; result.t = t_micro; result.palette_idx = l1_node.data; result.material_idx = params.material_table_base;
-                        let voxel_center_os = vec3<f32>(vi2) + 0.5;
-                        let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
-                        let vi_hit = vec3<i32>(floor(voxel_center_os));
-                        let grad = vec3<f32>(
-                            sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
-                            sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
-                            sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
-                        );
-                        let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
-                        var n_os = vec3<f32>(0.0);
-                        if (max(ax, max(ay, az)) > 0.05) {
-                            if (ax >= ay && ax >= az) { n_os = vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
-                            else if (ay >= ax && ay >= az) { n_os = vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
-                            else { n_os = vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0)); }
+                        // Tree64 palette/material is stored in node.data; skip transparent and continue
+                        let palette_idx2 = l1_node.data;
+                        let mat_idx2 = params.material_table_base + palette_idx2 * 4u;
+                        let pbr2 = materials[mat_idx2 + 2u]; // w = transparency
+                        if (pbr2.w > 0.001) {
+                            // Transparent: do not return, keep marching within the block
                         } else {
-                            let dir_c = voxel_center_os - aabb_center_os;
-                            let adx = abs(dir_c.x); let ady = abs(dir_c.y); let adz = abs(dir_c.z);
-                            if (adx >= ady && adx >= adz) { n_os = vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
-                            else if (ady >= adx && ady >= adz) { n_os = vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
-                            else { n_os = vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0)); }
+                            result.hit = true; result.t = t_micro; result.palette_idx = palette_idx2; result.material_idx = params.material_table_base;
+                            let voxel_center_os = vec3<f32>(vi2) + 0.5;
+                            let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
+                            let vi_hit = vec3<i32>(floor(voxel_center_os));
+                            let grad = vec3<f32>(
+                                sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
+                                sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
+                                sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
+                            );
+                            let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
+                            var n_os = vec3<f32>(0.0);
+                            if (max(ax, max(ay, az)) > 0.05) {
+                                if (ax >= ay && ax >= az) { n_os = vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
+                                else if (ay >= ax && ay >= az) { n_os = vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
+                                else { n_os = vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0)); }
+                            } else {
+                                let dir_c = voxel_center_os - aabb_center_os;
+                                let adx = abs(dir_c.x); let ady = abs(dir_c.y); let adz = abs(dir_c.z);
+                                if (adx >= ady && adx >= adz) { n_os = vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
+                                else if (ady >= adx && ady >= adz) { n_os = vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
+                                else { n_os = vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0)); }
+                            }
+                            result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                            return result;
                         }
-                        result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
-                        result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                        return result;
                     }
                     if (t_max_micro2.x < t_max_micro2.y) {
                         if (t_max_micro2.x < t_max_micro2.z) { voxel_pos2.x += step_local2.x; t_micro = t_max_micro2.x; t_max_micro2.x += t_delta_1_2.x; }
@@ -556,18 +580,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let t_vals = intersect_aabb(ray, node.aabb_min.xyz, node.aabb_max.xyz);
         if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < hit_res.t) {
             if (node.leaf_count > 0) {
-                let inst = instances[node.leaf_first];
-                let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
-                if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
-                    let params = object_params[inst.object_id];
-                    let dist_cam = distance(camera.cam_pos.xyz, inst.aabb_min.xyz);
-                    var res: HitResult;
-                    if (dist_cam > params.lod_threshold && params.tree64_base != 0xFFFFFFFFu) {
-                        res = traverse_tree64(ray, inst, t_inst.x, t_inst.y, inst.object_id);
-                    } else {
-                        res = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
+                for (var li = 0; li < node.leaf_count; li = li + 1) {
+                    let inst = instances[u32(node.leaf_first + li)];
+                    let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
+                    if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
+                        let params = object_params[inst.object_id];
+                        let dist_cam = distance(camera.cam_pos.xyz, inst.aabb_min.xyz);
+                        var res: HitResult;
+                        if (dist_cam > params.lod_threshold && params.tree64_base != 0xFFFFFFFFu) {
+                            res = traverse_tree64(ray, inst, t_inst.x, t_inst.y, inst.object_id);
+                        } else {
+                            res = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
+                        }
+                        if (res.hit && res.t < hit_res.t) { hit_res = res; }
                     }
-                    if (res.hit && res.t < hit_res.t) { hit_res = res; }
                 }
             } else {
                 if (node.left != -1) { stack[stack_ptr] = node.left; stack_ptr++; }
@@ -578,6 +604,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Write outputs
     if (hit_res.hit) {
+        // Skip opaque G-Buffer write for transparent materials (let overlay pass composite)
+        let palette_idx = hit_res.palette_idx;
+        let mat_base = hit_res.material_idx;
+        let mat_idx = mat_base + palette_idx * 4u;
+        let pbr = materials[mat_idx + 2u]; // x=roughness, y=metalness, z=ior, w=transparency
+        if (pbr.w > 0.001) {
+            textureStore(out_depth, global_id.xy, vec4<f32>(60000.0, 0.0, 0.0, 0.0));
+            textureStore(out_normal, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+            textureStore(out_material, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+            textureStore(out_position, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+            return;
+        }
+
         textureStore(out_depth, global_id.xy, vec4<f32>(hit_res.t, 0.0, 0.0, 0.0));
         textureStore(out_normal, global_id.xy, vec4<f32>(hit_res.normal, 0.0));
         

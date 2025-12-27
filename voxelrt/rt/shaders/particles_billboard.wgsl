@@ -1,5 +1,5 @@
-// particles_billboard.wgsl
-// Additive billboard particles rendered after deferred lighting.
+ // particles_billboard.wgsl
+// Alpha-blended billboard particles rendered after deferred lighting.
 // Implements manual depth test against GBuffer depth and circular mask.
 
 // Shared CameraData layout (matches gbuffer.wgsl)
@@ -118,10 +118,9 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let d = length(in.quad_uv - vec2<f32>(0.5, 0.5)) * 2.0;
     let mask = clamp(1.0 - smoothstep(0.8, 1.0, d), 0.0, 1.0);
 
-    // Premultiply color by mask and alpha; additive blend expects color contribution
-    let alpha = in.color.a * mask;
-    let rgb = in.color.rgb * alpha;
+    // Compute alpha from instance color and circular mask; standard alpha blending in pipeline
+    let alpha = clamp(in.color.a * mask, 0.0, 1.0);
+    let rgb = in.color.rgb * mask;
 
-    // Return with zero alpha; color blend will add rgb (pipeline uses additive blending)
-    return vec4<f32>(rgb, 0.0);
+    return vec4<f32>(rgb, alpha);
 }
