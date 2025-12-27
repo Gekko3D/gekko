@@ -5,7 +5,7 @@ This document describes the current particle system implemented in VoxelRT, incl
 The goal is a “cheap” and ECS-first solution:
 - CPU-only simulation (no GPU compute).
 - No per-particle ECS entities; gameplay manipulates only emitter/volume components.
-- One instanced draw after deferred lighting with additive blending.
+- One instanced draw in the transparency accumulation pass with weighted blended OIT (WBOIT).
 - Optional CA simulation that feeds particles (for smoke/fire-like volumetric behavior).
 
 ## Overview
@@ -16,8 +16,8 @@ The goal is a “cheap” and ECS-first solution:
   - Emission in a cone aligned with emitter rotation.
 - GPU render:
   - Instanced camera-facing billboards.
-  - Manual depth testing against GBuffer depth.
-  - Additive blending after deferred lighting blit.
+  - Manual depth testing against G-Buffer depth “t”.
+  - Writes depth-weighted contributions into WBOIT accum/weight targets; final composition happens in a dedicated resolve pass.
 - Optional CA:
   - Small 3D grid (e.g. 32–64) updated at low Hz.
   - Emits “puffs” via the same billboard rendering path.
@@ -30,8 +30,10 @@ The goal is a “cheap” and ECS-first solution:
   - gekko/mod_vox_rt.go (wires systems and uploads to the renderer)
 - Renderer:
   - gekko/voxelrt/rt/app/app.go (pipeline creation, pass ordering)
-  - gekko/voxelrt/rt/gpu/manager.go (GPU upload of particle instances)
+  - gekko/voxelrt/rt/gpu/manager.go (GPU upload of particle instances and accumulation targets)
   - gekko/voxelrt/rt/shaders/particles_billboard.wgsl (VS/FS for particles)
+  - gekko/voxelrt/rt/shaders/resolve_transparency.wgsl (final composite)
+  - gekko/voxelrt/rt/shaders/transparent_overlay.wgsl (voxel single-layer transparency)
 - Demo scene (example usage):
   - actiongame/src/modules/playing/playing.go
 
@@ -149,24 +151,25 @@ Location: gekko/voxelrt/rt/gpu/manager.go
 
 Location: gekko/voxelrt/rt/app/app.go
 
-- setupParticlesPipeline:
-  - Creates shader module for particles_billboard.wgsl.
-  - Explicit bind group layouts:
-    - BGL0: camera uniform (binding 0, VS/FS visibility), instances storage (binding 1, VS).
-    - BGL1: depth texture (binding 0, FS) with SampleType = UnfilterableFloat (matches RGBA32Float GBuffer depth).
-  - Render pipeline:
-    - Triangle list, additive blend (src=one, dst=one), writes only color.
-
-- Render order in Render():
-  1) GBuffer compute pass
+- Overall order in Render():
+  1) G-Buffer compute pass
   2) Shadow pass
-  3) Deferred lighting pass → out_color (screen)
+  3) Deferred lighting pass → opaque color in StorageTexture (RGBA8)
   4) Debug pass (optional)
-  5) Fullscreen blit to swapchain
-  6) Particles pass (additive, uses GBuffer depth for manual test)
+  5) Accumulation pass (two render targets; WBOIT):
+     - Transparent Overlay (fullscreen voxel raycast)
+     - Particles (billboards)
+  6) Resolve pass → composites opaque + accum/weight onto the swapchain
   7) Text pass
 
-The particles pass binds Groups 0 and 1 each frame and draws 6 vertices per instance (two triangles per quad).
+- Particles accumulation targets and blending:
+  - RT[0]: RGBA16Float accum; rgb accumulates color * alpha * w, alpha accumulates alpha * w
+  - RT[1]: R16Float weight; accumulates alpha * w
+  - Both targets use additive blending (src=one, dst=one).
+
+- Group layouts (Particles):
+  - BGL0: camera uniform (binding 0, VS/FS), instances storage (binding 1, VS)
+  - BGL1: depth texture (binding 0, FS) with SampleType = UnfilterableFloat (matches RGBA32F GBuffer depth)
 
 ## Shader
 
@@ -174,19 +177,21 @@ Location: gekko/voxelrt/rt/shaders/particles_billboard.wgsl
 
 - Vertex:
   - Takes instance i, expands a camera-facing quad in world-space using camera.inv_view to compute right/up.
-  - Outputs color, world_pos, and quad_uv.
+  - Outputs color, world_pos, world_center, and quad_uv.
 
 - Fragment:
   - Reconstructs camera ray direction from pixel position and camera matrices.
-  - Computes t_particle via dot(world_pos - cam_pos, dir).
-  - Loads scene t from GBuffer depth (RGBA32Float) and compares.
-  - Discards if particle is behind scene geometry (t_particle > t_scene - epsilon).
-  - Uses circular mask and soft edge (smoothstep) to shape the billboard.
-  - Emits rgb premultiplied for additive blending; alpha is 0.
+  - Computes t_particle via dot(world_center - cam_pos, dir).
+  - Loads scene t from GBuffer depth (RGBA32Float) and compares (manual depth test).
+  - Emits two RTs with weighted contributions (WBOIT):
+    - z = clamp(t_particle / max(t_scene, eps), 0..1)
+    - w = max(1e-3, alpha) * pow(1.0 - z, k) with k≈8
+    - accum.rgb += color.rgb * alpha * w; weight += alpha * w
 
 Tuning:
 - Edge softness: adjust smoothstep thresholds in FS.
 - Depth epsilon: increase slightly if particles disappear at grazing angles.
+- Weight exponent k: larger k biases toward front-most contributions.
 
 ## CA → Particles Bridge
 
@@ -241,9 +246,12 @@ cmd.AddEntity(
 
 - Particles not visible at some camera angles:
   - Increase depth epsilon in the FS shader (discard test margin).
-  - Ensure particles are drawn after deferred lighting and blit.
-  - Increase billboard size or edge softness (smoothstep) to avoid thin silhouettes.
-  - Verify BGL1 for particles uses SampleType = UnfilterableFloat to sample RGBA32Float depth.
+  - Ensure particles are drawn in the accumulation pass and the resolve pass runs after.
+  - Verify BGL1 for particles uses SampleType = UnfilterableFloat to sample RGBA32F depth.
+
+- Particles don’t appear after refactor:
+  - Ensure TransparentAccum/Weight textures are created and bound.
+  - Confirm ResolveBG binds opaque/accum/weight/sampler and is re-created on resize.
 
 - Overdraw too heavy:
   - Reduce emitter SpawnRate, MaxParticles.
@@ -252,7 +260,7 @@ cmd.AddEntity(
 
 - Visual artifacts (hard edges, halo):
   - Adjust the circular mask and smoothstep range in the fragment shader.
-  - Slightly premultiply color differently, e.g. clamp color values < 1.0 for smoke.
+  - Consider soft particles (depth-aware fade based on |t_scene - t_particle|).
 
 ## Performance Notes
 
@@ -260,12 +268,12 @@ cmd.AddEntity(
   - SoA pool per emitter, O(N) per frame, minimal branching.
   - CA steps at low Hz (TickRate) and uses a small grid.
 - GPU:
-  - One instanced draw for all particles; additive blend is simple.
-  - No per-particle shadows/lighting.
+  - One instanced draw for all particles; additive blending into accumulation targets.
+  - Resolve is a fullscreen pass with 3 texture reads per pixel.
 
 ## Current Limitations
 
-- Additive-only transparency (no sorting).
+- Weighted blended OIT is an approximation (no true sorting).
 - Manual depth test; tune epsilon per-scene scale.
 - CA currently implements smoke/fire rules; sand/water are placeholders.
 
@@ -283,7 +291,6 @@ Visual quality
 - Approximate lighting for particles (e.g., half-Lambert with single key light).
 - Simple shadows or shadowing heuristics (e.g., downfade in shadowed regions).
 - Trails/ribbons (polyline ribbons generated per emitter).
-- Dithering/fade based on distance for smoother LOD transitions.
 
 Simulation and behavior
 - Ground/geometry collision: heightfield/plane tests first; later voxel grid queries.
@@ -302,7 +309,7 @@ Performance and scalability
 - Bind group caching/reuse between frames to minimize bind group churn.
 
 Rendering pipeline
-- Weighted blended OIT (WBOIT) variant for better additive/alpha mix without sorting.
+- Continue tuning WBOIT (k exponent and alpha scaling) for scene scale and desired look.
 - Per-particle normal approximation (e.g., velocity or curl) for anisotropic shading hints.
 - Depth mip usage for soft particles (fade width proportional to thickness).
 - Indirect multi-draw (MDI) for grouping emitters with different materials/looks.

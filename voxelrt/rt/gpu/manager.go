@@ -41,11 +41,19 @@ type GpuBufferManager struct {
 	GBufferMaterial *wgpu.Texture
 	GBufferPosition *wgpu.Texture
 
+	// Transparent Accumulation Targets (WBOIT)
+	TransparentAccumTex  *wgpu.Texture // RGBA16Float, accum premultiplied color
+	TransparentWeightTex *wgpu.Texture // R16Float, accum weight
+
 	// G-Buffer Views
 	DepthView    *wgpu.TextureView
 	NormalView   *wgpu.TextureView
 	MaterialView *wgpu.TextureView
 	PositionView *wgpu.TextureView
+
+	// Transparent Accumulation Views
+	TransparentAccumView  *wgpu.TextureView
+	TransparentWeightView *wgpu.TextureView
 
 	// Shadow Map Resources
 	ShadowMapArray *wgpu.Texture
@@ -73,6 +81,11 @@ type GpuBufferManager struct {
 	ParticlesBindGroup1  *wgpu.BindGroup // gbuffer depth
 	ParticleCount        uint32
 
+	// Transparent overlay (single-layer transparency over lit image)
+	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
+	TransparentBG1 *wgpu.BindGroup // voxel data buffers
+	TransparentBG2 *wgpu.BindGroup // gbuffer depth
+
 	MapOffsets    map[*volume.XBrickMap][3]uint32 // sectorBase, brickBase, payloadBase
 	AllocatedMaps map[*volume.XBrickMap]bool      // Track which maps have been fully uploaded
 
@@ -82,6 +95,61 @@ type GpuBufferManager struct {
 
 	// Cached Sector indices for deterministic updates
 	SectorIndices map[*volume.Sector]SectorGpuInfo
+}
+
+// CreateTransparentOverlayBindGroups wires the overlay pass bind groups:
+// Group 0: camera (uniform) + instances (storage) + BVH nodes (storage)
+// Group 1: voxel data buffers (sector, brick, payload, object params, tree64, sector grid, sector grid params)
+// Group 2: gbuffer depth (RGBA32F)
+func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.RenderPipeline) {
+	if pipeline == nil {
+		return
+	}
+	var err error
+
+	// Group 0
+	m.TransparentBG0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: pipeline.GetBindGroupLayout(0),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
+			{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Group 1
+	m.TransparentBG1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: pipeline.GetBindGroupLayout(1),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.VoxelPayloadBuf, Size: wgpu.WholeSize},
+			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
+			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
+			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
+			{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Group 2
+	m.TransparentBG2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: pipeline.GetBindGroupLayout(2),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, TextureView: m.DepthView},
+			{Binding: 1, TextureView: m.MaterialView},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
 }
 
 type SectorGpuInfo struct {
@@ -962,6 +1030,10 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.GBufferPosition, &m.PositionView, "GBuffer Position", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 
+	// Transparent accumulation targets for WBOIT
+	setupTexture(&m.TransparentAccumTex, &m.TransparentAccumView, "Transparent Accum", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
+	setupTexture(&m.TransparentWeightTex, &m.TransparentWeightView, "Transparent Weight", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
+
 	m.CreateShadowMapTextures(1024, 1024, 16) // Default 1024x1024 for 16 lights
 }
 
@@ -1046,6 +1118,7 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
 			{Binding: 2, Buffer: m.VoxelPayloadBuf, Size: wgpu.WholeSize},
+			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
 			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},

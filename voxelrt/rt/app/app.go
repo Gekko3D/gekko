@@ -27,8 +27,12 @@ type App struct {
 
 	DebugComputePipeline *wgpu.ComputePipeline
 
-	RenderPipeline    *wgpu.RenderPipeline
-	ParticlesPipeline *wgpu.RenderPipeline
+	RenderPipeline      *wgpu.RenderPipeline
+	ParticlesPipeline   *wgpu.RenderPipeline
+	TransparentPipeline *wgpu.RenderPipeline
+	ResolvePipeline     *wgpu.RenderPipeline
+
+	ResolveBG *wgpu.BindGroup
 
 	// Deferred Rendering Pipelines
 	GBufferPipeline  *wgpu.ComputePipeline
@@ -368,8 +372,12 @@ func (a *App) Init() error {
 
 	// Initialize particle instance buffer with a minimal allocation
 	a.BufferManager.UpdateParticles([]core.ParticleInstance{})
-	// Create particle render pipeline (depends on swapchain format)
+	// Create particle render pipeline (accumulates into WBOIT targets)
 	a.setupParticlesPipeline()
+	// Create transparent overlay pipeline (accumulate into WBOIT targets)
+	a.setupTransparentOverlayPipeline()
+	// Create resolve pipeline to composite opaque + transparent accum onto swapchain
+	a.setupResolvePipeline()
 
 	// Initialize time
 	a.LastTime = glfw.GetTime()
@@ -449,6 +457,8 @@ func (a *App) Resize(w, h int) {
 
 		// Recreate particle pipeline for new swapchain format
 		a.setupParticlesPipeline()
+		// Recreate resolve pipeline/bind group (depends on textures/swapchain)
+		a.setupResolvePipeline()
 	}
 }
 
@@ -599,7 +609,50 @@ func (a *App) Render() {
 		}
 	}
 
-	// Render Pass (Blit)
+	// Accumulation Pass (Transparent overlay + Particles) -> WBOIT targets
+	accPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+		ColorAttachments: []wgpu.RenderPassColorAttachment{
+			{
+				View:       a.BufferManager.TransparentAccumView,
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{0, 0, 0, 0},
+			},
+			{
+				View:       a.BufferManager.TransparentWeightView,
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{0, 0, 0, 0},
+			},
+		},
+	})
+	if a.TransparentPipeline != nil {
+		accPass.SetPipeline(a.TransparentPipeline)
+		// Create/update bind groups (camera+instances+BVH, voxel data, depth)
+		a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
+		if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil {
+			accPass.SetBindGroup(0, a.BufferManager.TransparentBG0, nil)
+			accPass.SetBindGroup(1, a.BufferManager.TransparentBG1, nil)
+			accPass.SetBindGroup(2, a.BufferManager.TransparentBG2, nil)
+			accPass.Draw(3, 1, 0, 0)
+		}
+	}
+	// Particles accumulate into same WBOIT targets
+	if a.ParticlesPipeline != nil && a.BufferManager.ParticleCount > 0 {
+		accPass.SetPipeline(a.ParticlesPipeline)
+		a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
+		if a.BufferManager.ParticlesBindGroup0 != nil && a.BufferManager.ParticlesBindGroup1 != nil {
+			accPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
+			accPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
+			accPass.Draw(6, a.BufferManager.ParticleCount, 0, 0)
+		}
+	}
+	err = accPass.End()
+	if err != nil {
+		fmt.Printf("ERROR: Accumulation pass End failed: %v\n", err)
+	}
+
+	// Resolve Pass -> Swapchain (composite opaque + accum/weight)
 	rPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments: []wgpu.RenderPassColorAttachment{{
 			View:       view,
@@ -608,23 +661,13 @@ func (a *App) Render() {
 			ClearValue: wgpu.Color{0, 0, 0, 1},
 		}},
 	})
-	rPass.SetPipeline(a.RenderPipeline)
-	rPass.SetBindGroup(0, a.RenderBG, nil)
-	rPass.Draw(3, 1, 0, 0)
-
-	// Particles Pass (additive, drawn on swapchain after lighting blit)
-	if a.ParticlesPipeline != nil && a.BufferManager.ParticleCount > 0 {
-		rPass.SetPipeline(a.ParticlesPipeline)
-		// Recreate particle bind groups each frame to handle buffer reallocation
-		a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
-		if a.BufferManager.ParticlesBindGroup0 != nil && a.BufferManager.ParticlesBindGroup1 != nil {
-			rPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
-			rPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
-			rPass.Draw(6, a.BufferManager.ParticleCount, 0, 0)
-		}
+	if a.ResolvePipeline != nil && a.ResolveBG != nil {
+		rPass.SetPipeline(a.ResolvePipeline)
+		rPass.SetBindGroup(0, a.ResolveBG, nil)
+		rPass.Draw(3, 1, 0, 0)
 	}
 
-	// Text Pass
+	// Text Pass (over resolved image)
 	if len(a.TextItems) > 0 && a.TextVertexBuffer != nil && a.TextPipeline != nil {
 		rPass.SetPipeline(a.TextPipeline)
 		rPass.SetBindGroup(0, a.TextBindGroup, nil)
@@ -661,7 +704,8 @@ func (a *App) Render() {
 
 /*
 *
-setupParticlesPipeline creates the additive billboard particle pipeline targeting the swapchain format.
+
+	setupParticlesPipeline creates the additive billboard particle pipeline targeting the swapchain format.
 */
 func (a *App) setupParticlesPipeline() {
 	// Build shader module
@@ -743,22 +787,40 @@ func (a *App) setupParticlesPipeline() {
 		Fragment: &wgpu.FragmentState{
 			Module:     partMod,
 			EntryPoint: "fs_main",
-			Targets: []wgpu.ColorTargetState{{
-				Format: a.Config.Format,
-				Blend: &wgpu.BlendState{
-					Color: wgpu.BlendComponent{
-						SrcFactor: wgpu.BlendFactorOne,
-						DstFactor: wgpu.BlendFactorOne,
-						Operation: wgpu.BlendOperationAdd,
+			Targets: []wgpu.ColorTargetState{
+				{
+					Format: wgpu.TextureFormatRGBA16Float,
+					Blend: &wgpu.BlendState{
+						Color: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+						Alpha: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
 					},
-					Alpha: wgpu.BlendComponent{
-						SrcFactor: wgpu.BlendFactorOne,
-						DstFactor: wgpu.BlendFactorOne,
-						Operation: wgpu.BlendOperationAdd,
-					},
+					WriteMask: wgpu.ColorWriteMaskAll,
 				},
-				WriteMask: wgpu.ColorWriteMaskAll,
-			}},
+				{
+					Format: wgpu.TextureFormatR16Float,
+					Blend: &wgpu.BlendState{
+						Color: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+						Alpha: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+					},
+					WriteMask: wgpu.ColorWriteMaskAll,
+				},
+			},
 		},
 		Primitive: wgpu.PrimitiveState{
 			Topology: wgpu.PrimitiveTopologyTriangleList,
@@ -773,6 +835,349 @@ func (a *App) setupParticlesPipeline() {
 		return
 	}
 	a.ParticlesPipeline = pipeline
+}
+
+// setupTransparentOverlayPipeline creates a fullscreen render pipeline to alpha-blend
+// a single transparent voxel surface per pixel over the lit image.
+func (a *App) setupTransparentOverlayPipeline() {
+	overlayMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Transparent Overlay",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.TransparentOverlayWGSL},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create transparent overlay shader module: %v\n", err)
+		return
+	}
+
+	// Group 0: camera (uniform) + instances (storage) + BVH nodes (storage) + lights (storage)
+	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "TransparentOverlay BGL0",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeUniform,
+					MinBindingSize:   256,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create overlay BGL0: %v\n", err)
+		return
+	}
+
+	// Group 1: voxel data (sector, brick, payload, object params, tree, sector grid)
+	bgl1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "TransparentOverlay BGL1",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{ // SectorTable
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // BrickTable
+				Binding:    1,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // VoxelPayload
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // Materials (packed vec4 table; transparency in pbr_params.w)
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // ObjectParams
+				Binding:    4,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // Tree64
+				Binding:    5,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // SectorGrid
+				Binding:    6,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // SectorGridParams
+				Binding:    7,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create overlay BGL1: %v\n", err)
+		return
+	}
+
+	// Group 2: GBuffer inputs (Depth RGBA32F, Material RGBA32F)
+	bgl2, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "TransparentOverlay BGL2",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create overlay BGL2: %v\n", err)
+		return
+	}
+
+	pl, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1, bgl2},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create overlay pipeline layout: %v\n", err)
+		return
+	}
+
+	pipeline, err := a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+		Label:  "Transparent Overlay Pipeline",
+		Layout: pl,
+		Vertex: wgpu.VertexState{
+			Module:     overlayMod,
+			EntryPoint: "vs_main",
+			Buffers:    nil, // fullscreen triangle from vertex_id
+		},
+		Fragment: &wgpu.FragmentState{
+			Module:     overlayMod,
+			EntryPoint: "fs_main",
+			Targets: []wgpu.ColorTargetState{
+				{
+					Format: wgpu.TextureFormatRGBA16Float,
+					Blend: &wgpu.BlendState{
+						Color: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+						Alpha: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+					},
+					WriteMask: wgpu.ColorWriteMaskAll,
+				},
+				{
+					Format: wgpu.TextureFormatR16Float,
+					Blend: &wgpu.BlendState{
+						Color: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+						Alpha: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+					},
+					WriteMask: wgpu.ColorWriteMaskAll,
+				},
+			},
+		},
+		Primitive: wgpu.PrimitiveState{
+			Topology: wgpu.PrimitiveTopologyTriangleList,
+		},
+		Multisample: wgpu.MultisampleState{
+			Count: 1,
+			Mask:  0xFFFFFFFF,
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create transparent overlay pipeline: %v\n", err)
+		return
+	}
+	a.TransparentPipeline = pipeline
+}
+
+// setupResolvePipeline creates a fullscreen resolve pass that composites the opaque lit
+// color (StorageTexture) with the accumulated transparent color/weight textures onto the swapchain.
+func (a *App) setupResolvePipeline() {
+	// Build shader module
+	resMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Resolve Transparency",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.ResolveTransparencyWGSL},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create resolve shader module: %v\n", err)
+		return
+	}
+
+	// Group 0: opaque lit color, accum color, weight, sampler
+	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Resolve BGL0",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeFloat, // RGBA8Unorm
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat, // RGBA16Float
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat, // R16Float
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Sampler: wgpu.SamplerBindingLayout{
+					Type: wgpu.SamplerBindingTypeFiltering,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create resolve BGL0: %v\n", err)
+		return
+	}
+
+	pl, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create resolve pipeline layout: %v\n", err)
+		return
+	}
+
+	// Render pipeline to swapchain
+	pipeline, err := a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+		Label:  "Resolve Pipeline",
+		Layout: pl,
+		Vertex: wgpu.VertexState{
+			Module:     resMod,
+			EntryPoint: "vs_main",
+		},
+		Fragment: &wgpu.FragmentState{
+			Module:     resMod,
+			EntryPoint: "fs_main",
+			Targets: []wgpu.ColorTargetState{{
+				Format:    a.Config.Format,
+				WriteMask: wgpu.ColorWriteMaskAll,
+			}},
+		},
+		Primitive: wgpu.PrimitiveState{
+			Topology: wgpu.PrimitiveTopologyTriangleList,
+		},
+		Multisample: wgpu.MultisampleState{
+			Count: 1,
+			Mask:  0xFFFFFFFF,
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create resolve render pipeline: %v\n", err)
+		return
+	}
+	a.ResolvePipeline = pipeline
+
+	// Create resolve bind group (opaque lit + accum + weight + sampler)
+	if a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil {
+		// Views not ready yet (e.g., during early init/resize), skip creating BG
+		return
+	}
+	a.ResolveBG, err = a.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: bgl0,
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, TextureView: a.StorageView},
+			{Binding: 1, TextureView: a.BufferManager.TransparentAccumView},
+			{Binding: 2, TextureView: a.BufferManager.TransparentWeightView},
+			{Binding: 3, Sampler: a.Sampler},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create resolve bind group: %v\n", err)
+		return
+	}
 }
 
 func (a *App) HandleClick(button int, action int) {

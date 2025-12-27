@@ -163,6 +163,15 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 						}
 					}
 
+					// Infer transparency from palette alpha channel if not explicitly provided
+					if color[3] < 255 {
+						a := float32(color[3]) / 255.0
+						t := float32(1.0) - a
+						if t > mat.Transparency {
+							mat.Transparency = t
+						}
+					}
+
 					modelTemplate.MaterialTable[i] = mat
 				}
 				state.loadedModels[vox.VoxelModel] = modelTemplate
@@ -206,9 +215,10 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 			for i := range mats {
 				mats[i] = core.DefaultMaterial()
 			}
-			// Smoke
+			// Smoke (semi-transparent)
 			mats[1] = core.NewMaterial([4]uint8{180, 180, 180, 255}, [4]uint8{0, 0, 0, 0})
 			mats[1].Roughness = 0.8
+			mats[1].Transparency = 0.5
 			mats[1].Metalness = 0.0
 			// Fire (emissive)
 			mats[2] = core.NewMaterial([4]uint8{255, 180, 80, 255}, [4]uint8{255, 120, 40, 255})

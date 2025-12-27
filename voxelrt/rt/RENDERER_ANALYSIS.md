@@ -26,14 +26,16 @@ Typical stressors
 ## 2. Current Renderer Snapshot (Summary)
 
 See RENDERER.md for details. Briefly:
-- Pass graph: G-Buffer (compute) → Shadows (compute) → Deferred Lighting (compute) → Blit (render) → Particles (render) → Text (render).
+- Pass graph: G-Buffer (compute) → Shadows (compute) → Deferred Lighting (compute) → Accumulation (render: Transparent Overlay + Particles) → Resolve (render) → Text (render).
 - G-Buffer surfaces include depth as ray-distance “t” (RGBA32F.x), world normals, material, position.
-- Lighting samples G-Buffer + shadow maps + lights; writes to RGBA8 storage texture.
-- Particles are additive billboards with manual depth via G-Buffer “t”.
+- Lighting samples G-Buffer + shadow maps + lights; writes to RGBA8 storage texture (opaque lit color).
+- Transparent Overlay raycasts first transparent voxel surface per pixel up to the opaque t-limit and contributes to WBOIT accumulation targets.
+- Particles contribute depth-weighted, additive billboards into the same WBOIT accumulation targets; a Resolve pass composites opaque + transparency.
 - Scene/Camera/BufferManager handle resource creation and updates.
 
 Strengths
 - Clean, modular pass ordering; WGSL compute-heavy (flexible, portable).
+- WBOIT transparency path avoids sorting and provides stable order-independent composition for overlays and particles.
 - ECS-first data sync; particles integrated with minimal pipeline overhead.
 - Editor integrated with safe COW and deferred GPU sync.
 
@@ -48,8 +50,10 @@ Strengths
   - Multiple RGBA32F targets (depth/material/position) + RGBA16F normals → high bandwidth.
 - Visibility/culling
   - No CPU frustum culling per object/sector; compute runs across full screen regardless of content.
+- Transparency approximation
+  - WBOIT is an approximation; complex overlapping translucent stacks can deviate from ground truth. Transparent Overlay currently finds the first transparent hit before the opaque t-limit and contributes via WBOIT.
 - Particles quality
-  - Manual depth compare with “t”; no soft particles; popping at grazing angles was mitigated but not fully solved for all cases.
+  - Manual depth compare with “t”; soft particles not yet implemented; popping at grazing angles mitigated but not fully solved for all cases.
 - Asynchrony/pipelining
   - Minimal CPU–GPU overlap; serialization and buffer rebuilds impact frame where edits occur.
 - Streaming/world scale
@@ -65,7 +69,7 @@ Target: 1080p/60–120 FPS on mid-range GPU; sustained performance under destruc
 
 Phase 0 — Profiling and stability (Immediate)
 - Add timers/counters:
-  - Per-pass GPU/CPU time (G-Buffer, Shadows, Lighting, Blit, Particles).
+  - Per-pass GPU/CPU time (G-Buffer, Shadows, Lighting, Accumulation, Resolve, Text; optionally split Transparent Overlay vs Particles).
   - Frame stats: #objects, #visible objects, #sectors serialized, #lights (shadowed), #particles, edit deltas.
 - Cap edit throughput:
   - Budget voxel changes per frame; queue the rest.
@@ -149,6 +153,7 @@ Per-preset toggles
 - Shadows: resolution (512/1024/2048), PCF kernel (0/2/4 taps), update rate (every N frames).
 - Lighting: clustered on/off; max lights per tile/cluster.
 - G-Buffer: formats (Depth R32F vs RGBA32F.x; normals RG16F vs RGBA16F).
+- Transparency: WBOIT k exponent, alpha scaling for overlays/particles.
 - Particles: cap count, soft particles on/off, flipbook on/off.
 - TAA/DRS: on/off and scale limits.
 - Streaming: region radius.
@@ -159,6 +164,8 @@ Per-preset toggles
   - Pools, dirty-chunk uploads, background serialization, and geometric growth.
 - Many shadowed lights → heavy GPU cost:
   - Clustered lighting + shadow tiers + caching + variable update frequency.
+- Transparency approximation limits:
+  - WBOIT handles many cases well but is not exact for deep stacks; expose k and alpha scaling; consider special-casing thick volumes if needed.
 - Particles overdraw and popping:
   - Soft particles and LOD; tune epsilon; atlas animations for variety at lower counts.
 - Large worlds:
@@ -167,6 +174,7 @@ Per-preset toggles
 ## 7. Short-Term Action List (Next Steps)
 
 - Instrumentation: timers and counters; basic in-game overlay.
+  - Measure: G-Buffer, Shadows, Lighting, Accumulation (Overlay + Particles), Resolve, Text.
 - Dirty uploads: implement per-object dirty tracking and partial GPU updates.
 - Particle stability: soft-particles (simple depth-delta fade) and flipbook support.
 - Shadow tiers: add per-light tiering and update cadence control.

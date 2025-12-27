@@ -3,12 +3,14 @@
 This document explains how the real-time voxel renderer is structured, how it executes each frame, how resources are organized and bound, and how the various GPU passes and shaders interact.
 
 Related docs
-- PARTICLES.md — particle system, CPU sim + billboard pass
+- PARTICLES.md — particle system, CPU sim + billboard pass (WBOIT accumulation)
 - SHADER DOCS (one file per shader):
   - shaders/GBUFFER.md
   - shaders/DEFERRED_LIGHTING.md
   - shaders/SHADOW_MAP.md
   - shaders/PARTICLES_BILLBOARD.md
+  - shaders/TRANSPARENT_OVERLAY.md
+  - shaders/RESOLVE_TRANSPARENCY.md
   - shaders/FULLSCREEN.md
   - shaders/DEBUG.md
   - shaders/TEXT.md
@@ -24,7 +26,14 @@ These per-shader docs describe uniforms, bindings, algorithms, and tuning notes 
   - Kicks rtApp.Update() followed by rtApp.Render() per frame.
 - The renderer (rt/app/app.go) manages:
   - WebGPU device/swapchain, pipelines, textures, and bind groups.
-  - G-Buffer compute pass → Shadow pass → Deferred Lighting compute → Blit → Particles → Text.
+  - Frame graph (current):
+    - Compute G-Buffer
+    - Compute Shadows
+    - Compute Deferred Lighting (produces opaque lit color in a StorageTexture RGBA8)
+    - Optional Compute Debug
+    - Render Accumulation (Transparent Overlay + Particles) into WBOIT accum/weight targets
+    - Render Resolve Transparency (composite opaque + accum/weight) to swapchain
+    - Render Text overlay
   - FPS tracking and debug compute pass (optional).
 
 ## Core Types and Responsibilities
@@ -32,14 +41,15 @@ These per-shader docs describe uniforms, bindings, algorithms, and tuning notes 
 - App (rt/app/app.go)
   - Owns Device/Queue/Surface/Config.
   - Creates pipelines:
-    - Compute: GBuffer, Deferred Lighting, Shadow, Debug (optional).
-    - Render: Blit (fullscreen), Particles (billboards), Text.
+    - Compute: G-Buffer, Deferred Lighting, Shadow, Debug (optional).
+    - Render: Transparent Overlay (fullscreen), Particles (billboards), Resolve Transparency (fullscreen), Text.
   - Manages storage/GB textures and bind groups.
   - Orchestrates render passes per frame.
 
 - BufferManager (rt/gpu/manager.go)
   - Allocates and updates GPU buffers for scene (camera, instances, materials, lights, voxels).
   - Owns creation of G-Buffer, Lighting, Shadow bind groups.
+  - Creates and manages WBOIT accumulation targets (RGBA16F accum, R16F weight).
   - Handles particle instance buffer upload and bind groups per frame.
 
 - Scene and Camera (rt/core/*.go)
@@ -62,38 +72,46 @@ Flow (voxelRtSystem in gekko/mod_vox_rt.go):
 2) rtApp.Update() (rt/app/app.go)
    - Computes matrices (view, proj, inv) and writes camera uniforms.
    - Commits scene changes and updates buffers; may recreate bind groups if buffers reallocated.
-   - Ensures G-Buffer, Lighting, Shadow, Particles group bindings are valid.
+   - Ensures G-Buffer, Lighting, Shadow, Particles, Transparent Overlay group bindings are valid.
 
 3) rtApp.Render()
-   - Compute Pass: GBuffer (gbuffer.wgsl)
+   - Compute Pass: G-Buffer (gbuffer.wgsl)
      - Computes and writes per-pixel G-Buffer targets (depth t, normal, material, position).
      - Dispatch: wgX=(Width+7)/8, wgY=(Height+7)/8.
    - Shadow Pass: (shadow_map.wgsl)
      - Generates or updates shadow maps (2D array). Number of lights affects work.
    - Compute Pass: Deferred Lighting (deferred_lighting.wgsl)
-     - Samples G-Buffer + lights + shadow maps and writes final color to a storage texture (RGBA8).
+     - Samples G-Buffer + lights + shadow maps and writes final opaque color to a storage texture (RGBA8).
    - Compute Pass: Debug (debug.wgsl, optional)
      - Can visualize intermediate buffers to the storage texture.
-   - Render Pass: Fullscreen Blit (fullscreen.wgsl)
-     - Copies/blits the storage texture to the swapchain color target.
-   - Render Pass: Particles (particles_billboard.wgsl)
-     - Additive billboards, manual depth test against G-Buffer depth, drawn on the swapchain.
+   - Render Pass: Accumulation (WBOIT)
+     - Transparent Overlay (transparent_overlay.wgsl): fullscreen raycast shading of nearest transparent voxel surface before opaque t; outputs accum/weight.
+     - Particles (particles_billboard.wgsl): additive billboards contributing accum/weight with depth weighting.
+     - Color attachments:
+       - [0] Transparent Accum RGBA16Float (premultiplied color × weight)
+       - [1] Transparent Weight R16Float (alpha × weight)
+   - Render Pass: Resolve Transparency (resolve_transparency.wgsl)
+     - Composites opaque StorageTexture (RGBA8) + accum/weight to the swapchain.
    - Render Pass: Text (text.wgsl)
      - Overlay text rendering using an atlas.
 
 ## Render Targets and Formats
 
-- Storage output (intermediate): RGBA8 (write-only storage texture).
-  - Deferred Lighting writes the final shaded image here.
+- Storage output (opaque lit, intermediate): RGBA8 (write-only storage texture).
+  - Deferred Lighting writes the final opaque image here.
 - G-Buffer (created by BufferManager):
   - Depth: RGBA32Float (sampled as UnfilterableFloat). X stores ray distance “t” from camera.
   - Normal: RGBA16Float (sampled as Float). Encodes world normal and possibly packing extras.
   - Material: RGBA32Float (sampled as UnfilterableFloat). PBR properties (base color/metal/roughness/etc.).
   - Position: RGBA32Float (sampled as UnfilterableFloat). World-space position (or compressed).
-- Shadow maps: 2D array (format depends on shadow pipeline), bound as sampled textures for lighting.
+- Transparency (WBOIT accumulation targets; created by BufferManager):
+  - Accum: RGBA16Float (render attachment + sampled, unfilterable float when read)
+  - Weight: R16Float (render attachment + sampled, unfilterable float when read)
+- Shadow maps: 2D array (RGBA32Float currently), bound as sampled textures for lighting.
 
 Notes
 - Exact packing/semantics are defined by the corresponding shader code; see the per-shader docs.
+- The previous fullscreen “blit” of the StorageTexture is superseded by the Resolve Transparency pass.
 
 ## Bind Group Layouts (key ones)
 
@@ -111,6 +129,18 @@ Notes
   - BGL2 (materials/sectors):
     - binding(3): Materials/sector buffer (read-only storage)
 
+- Transparent Overlay (rt/app/app.go::setupTransparentOverlayPipeline)
+  - BGL0 (fragment):
+    - binding(0): CameraData (uniform)
+    - binding(1): Instances buffer (read-only storage)
+    - binding(2): BVH nodes (read-only storage)
+    - binding(3): Lights buffer (read-only storage)
+  - BGL1 (fragment, voxel data):
+    - binding(0..7): SectorTable, BrickTable, VoxelPayload, Materials, ObjectParams, Tree64, SectorGrid, SectorGridParams (all read-only storage)
+  - BGL2 (fragment):
+    - binding(0): GBuffer Depth (RGBA32F, sampled unfilterable)
+    - binding(1): GBuffer Material (RGBA32F, sampled unfilterable)
+
 - Particles (rt/app/app.go::setupParticlesPipeline)
   - BGL0:
     - binding(0): CameraData (uniform, VS/FS visibility)
@@ -118,28 +148,35 @@ Notes
   - BGL1:
     - binding(0): GBuffer depth (RGBA32F, sampled unfilterable)
 
+- Resolve Transparency (rt/app/app.go::setupResolvePipeline)
+  - BGL0:
+    - binding(0): Opaque lit color (StorageTexture view sampled as float RGBA8)
+    - binding(1): Transparent accum (RGBA16F, unfilterable float)
+    - binding(2): Transparent weight (R16F, unfilterable float)
+    - binding(3): Sampler
+
 ## Pass Ordering and Rationale
 
 - Compute G-Buffer first: decouples voxel shading from lighting, produces reusable data.
-- Shadow pass before lighting: provides per-light shadow textures for deferred lighting.
-- Deferred Lighting: writes final shading into a storage texture (off-screen).
-- Blit: copies storage texture to swapchain (allows compute pipelines irrespective of swapchain format).
-- Particles: additively blended in screen space, sampling G-Buffer depth to emulate depth test.
+- Shadows before lighting: provides per-light shadow textures for deferred lighting.
+- Deferred Lighting: writes opaque shading into a storage texture (off-screen RGBA8).
+- Accumulation (WBOIT): Transparent Overlay and Particles write depth-weighted contributions into accum/weight targets. No sorting needed.
+- Resolve: composites opaque + transparent accumulations into the swapchain.
 - Text: drawn last as UI overlay.
 
 This yields:
 - Flexibility to visualize intermediate buffers (debug compute pass).
-- Stable composition order (deferred → scene-space particles → text).
+- Order-independent, stable transparency composition via WBOIT approximation.
 
 ## Particles and Depth
 
 See PARTICLES.md for details. Highlights:
-- Billboard particles perform a manual depth test by comparing per-pixel ray distance “t” against G-Buffer depth.
-- Stability pass (implemented):
-  - Use clamped pixel coords to sample G-Buffer depth.
-  - Use instance center for computing t_particle.
-  - Slightly larger epsilon to reduce grazing-angle popping.
-- Additive blending; alpha is zero, RGB is premultiplied by mask.
+- Billboard particles perform a manual depth test by comparing per-pixel ray distance “t” against G-Buffer depth (t_scene).
+- WBOIT weighting (in particles and transparent overlay):
+  - z = clamp(t_particle / max(t_scene, eps), 0..1)
+  - w = max(1e-3, alpha) × pow(1 − z, k) with k≈8
+  - accum.rgb += color.rgb × alpha × w; weight += alpha × w
+- Resolve pass reconstructs transparent color as accum.rgb / max(weight, eps), then adds to opaque.
 
 ## Thread Group Size and Dispatch
 
@@ -170,9 +207,10 @@ See PARTICLES.md for details. Highlights:
   - Verify bind group sample types match texture formats (e.g., depth as UnfilterableFloat).
 - Black screen after changes:
   - Check that G-Buffer and Lighting bind groups were re-created after buffer/texture changes.
-- Particles not visible:
-  - Verify render order is after blit.
-  - Confirm G-Buffer depth binding for particles and epsilon in FS.
+- Transparency not visible:
+  - Verify TransparentAccum/Weight textures and their views exist.
+  - Check accumulation pass has both color attachments bound and pipelines/bind groups set.
+  - Ensure Resolve pipeline’s bind group (opaque/accum/weight/sampler) is valid after resize.
 - Tile artifacts:
   - Validate workgroup size and boundary conditions in compute shaders.
 
@@ -187,10 +225,10 @@ See PARTICLES.md for details. Highlights:
 ## Current Renderer Analysis
 
 Strengths
-- Clear pass graph: G-Buffer → Shadows → Deferred Lighting → Blit → Particles → Text.
+- Clear pass graph: G-Buffer → Shadows → Deferred Lighting → Accumulation (Transparent Overlay + Particles) → Resolve → Text.
 - ECS-first integration: scene sync and particle upload are cleanly separated.
 - Compute-based G-Buffer and lighting simplify platform constraints and allow flexible buffers/bindings.
-- Particles after blit with manual depth compare enable cheap, good-looking additive effects.
+- WBOIT transparency path avoids sorting and composes effects robustly.
 
 Key constraints and bottlenecks
 - Scene buffer churn:
@@ -201,8 +239,8 @@ Key constraints and bottlenecks
   - Shadow maps are computed per light; without caching/LOD, they can dominate cost.
 - G-Buffer bandwidth:
   - Depth as RGBA32F and multiple RGBA32F targets drive bandwidth and cache pressure.
-- Particles visibility:
-  - Manual depth test depends on the “t” buffer; precision/epsilon need care. No soft particles yet.
+- Transparency approximation:
+  - WBOIT is an approximation; complex overlapping translucent stacks may deviate from ground truth.
 - Culling:
   - No explicit CPU-side frustum culling per object/sector; compute pass covers entire screen regardless of content.
 - Asynchrony:
@@ -219,7 +257,7 @@ Key constraints and bottlenecks
 Target: robust, destructible voxel shooter (Teardown-like), 60–120 FPS at 1080p with tens of dynamic lights, heavy particles/debris, and frequent edits.
 
 Phase 0 — Baseline stability and profiling
-- Add scoped GPU/CPU timers and frame captures per pass (G-Buffer, Shadows, Lighting, Blit, Particles).
+- Add scoped GPU/CPU timers and frame captures per pass (G-Buffer, Shadows, Lighting, Accum, Resolve, Particles).
 - Per-frame counters: number of objects, sectors, bricks, edits, particle count, lights, shadowed lights.
 - Crash-proof edits: cap edit throughput per frame; defer large edits to background job queue.
 
@@ -229,7 +267,7 @@ Phase 1 — Data flow, memory, and uploads
   - Maintain stable buffer pools and allocate from slabs; avoid wholesale reallocation.
 - Bind-group stability:
   - Keep bind group layouts static; manage buffers via sized pools and offsets.
-  - Cache/reuse particle bind groups; prefer fixed-capacity instance buffers that grow in steps (1.5x).
+  - Cache/reuse particle/overlay bind groups; prefer fixed-capacity instance buffers that grow in steps (1.5x).
 - Background build:
   - Move brick/sectors serialization to worker goroutines; stage into staging buffers; copy on next frame.
 - Streaming/paging:
@@ -302,5 +340,5 @@ Milestone goals (example)
 - M3: Large levels with streaming, robust editing tools, stable multiplayer-compatible deterministic edits (if applicable).
 
 References in this repo
-- See PARTICLES.md for particle tuning/soft-particles ideas.
+- See PARTICLES.md for particle tuning/soft-particles ideas (updated for WBOIT).
 - See SHADOW_MAP.md for shadow tiering and bias/PCF notes.
