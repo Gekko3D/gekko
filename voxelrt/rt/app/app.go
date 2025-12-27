@@ -27,7 +27,8 @@ type App struct {
 
 	DebugComputePipeline *wgpu.ComputePipeline
 
-	RenderPipeline *wgpu.RenderPipeline
+	RenderPipeline    *wgpu.RenderPipeline
+	ParticlesPipeline *wgpu.RenderPipeline
 
 	// Deferred Rendering Pipelines
 	GBufferPipeline  *wgpu.ComputePipeline
@@ -149,7 +150,6 @@ func (a *App) Init() error {
 		return err
 	}
 
-	// Deferred Lighting Pipeline
 	// Deferred Lighting Pipeline
 	lightMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label:          "Lighting CS",
@@ -366,6 +366,11 @@ func (a *App) Init() error {
 	a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
 	a.BufferManager.CreateShadowBindGroups()
 
+	// Initialize particle instance buffer with a minimal allocation
+	a.BufferManager.UpdateParticles([]core.ParticleInstance{})
+	// Create particle render pipeline (depends on swapchain format)
+	a.setupParticlesPipeline()
+
 	// Initialize time
 	a.LastTime = glfw.GetTime()
 
@@ -441,6 +446,9 @@ func (a *App) Resize(w, h int) {
 		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
 		// Ensure shadow bind groups remain valid after any resource changes
 		a.BufferManager.CreateShadowBindGroups()
+
+		// Recreate particle pipeline for new swapchain format
+		a.setupParticlesPipeline()
 	}
 }
 
@@ -604,6 +612,18 @@ func (a *App) Render() {
 	rPass.SetBindGroup(0, a.RenderBG, nil)
 	rPass.Draw(3, 1, 0, 0)
 
+	// Particles Pass (additive, drawn on swapchain after lighting blit)
+	if a.ParticlesPipeline != nil && a.BufferManager.ParticleCount > 0 {
+		rPass.SetPipeline(a.ParticlesPipeline)
+		// Recreate particle bind groups each frame to handle buffer reallocation
+		a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
+		if a.BufferManager.ParticlesBindGroup0 != nil && a.BufferManager.ParticlesBindGroup1 != nil {
+			rPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
+			rPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
+			rPass.Draw(6, a.BufferManager.ParticleCount, 0, 0)
+		}
+	}
+
 	// Text Pass
 	if len(a.TextItems) > 0 && a.TextVertexBuffer != nil && a.TextPipeline != nil {
 		rPass.SetPipeline(a.TextPipeline)
@@ -637,6 +657,122 @@ func (a *App) Render() {
 		}
 	}
 	a.LastRenderTime = now
+}
+
+/*
+*
+setupParticlesPipeline creates the additive billboard particle pipeline targeting the swapchain format.
+*/
+func (a *App) setupParticlesPipeline() {
+	// Build shader module
+	partMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Particles Billboard",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.ParticlesBillboardWGSL},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create particle shader module: %v\n", err)
+		return
+	}
+
+	// Explicit bind group layouts to allow sampling unfilterable float (RGBA32Float) GBuffer depth
+	// Group 0: camera (uniform) + instances (storage read)
+	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Particles BGL0",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageVertex | wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeUniform,
+					MinBindingSize:   256, // CameraData size
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageVertex,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create particles BGL0: %v\n", err)
+		return
+	}
+
+	// Group 1: GBuffer depth (RGBA32Float), must be sampled as UnfilterableFloat
+	bgl1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Particles BGL1",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create particles BGL1: %v\n", err)
+		return
+	}
+
+	pl, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create particles pipeline layout: %v\n", err)
+		return
+	}
+
+	// Create render pipeline
+	pipeline, err := a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+		Label:  "Particles Pipeline",
+		Layout: pl,
+		Vertex: wgpu.VertexState{
+			Module:     partMod,
+			EntryPoint: "vs_main",
+			Buffers:    nil, // no vertex buffers; VS expands a unit quad per-instance
+		},
+		Fragment: &wgpu.FragmentState{
+			Module:     partMod,
+			EntryPoint: "fs_main",
+			Targets: []wgpu.ColorTargetState{{
+				Format: a.Config.Format,
+				Blend: &wgpu.BlendState{
+					Color: wgpu.BlendComponent{
+						SrcFactor: wgpu.BlendFactorOne,
+						DstFactor: wgpu.BlendFactorOne,
+						Operation: wgpu.BlendOperationAdd,
+					},
+					Alpha: wgpu.BlendComponent{
+						SrcFactor: wgpu.BlendFactorOne,
+						DstFactor: wgpu.BlendFactorOne,
+						Operation: wgpu.BlendOperationAdd,
+					},
+				},
+				WriteMask: wgpu.ColorWriteMaskAll,
+			}},
+		},
+		Primitive: wgpu.PrimitiveState{
+			Topology: wgpu.PrimitiveTopologyTriangleList,
+		},
+		Multisample: wgpu.MultisampleState{
+			Count: 1,
+			Mask:  0xFFFFFFFF,
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create particle render pipeline: %v\n", err)
+		return
+	}
+	a.ParticlesPipeline = pipeline
 }
 
 func (a *App) HandleClick(button int, action int) {
