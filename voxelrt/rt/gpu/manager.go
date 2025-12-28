@@ -63,6 +63,18 @@ type GpuBufferManager struct {
 	ShadowMapArray *wgpu.Texture
 	ShadowMapView  *wgpu.TextureView
 
+	// Hi-Z Occlusion
+	HiZTexture     *wgpu.Texture
+	HiZViews       []*wgpu.TextureView // Mip views
+	ReadbackBuffer *wgpu.Buffer
+	HiZPipeline    *wgpu.ComputePipeline
+	HiZBindGroups  []*wgpu.BindGroup // One per mip transition
+
+	HiZReadbackLevel  uint32
+	HiZReadbackWidth  uint32
+	HiZReadbackHeight uint32
+	HiZMapped         bool
+
 	// Bind Groups for new passes
 	GBufferBindGroup          *wgpu.BindGroup
 	GBufferBindGroup0         *wgpu.BindGroup

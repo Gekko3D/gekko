@@ -59,6 +59,7 @@ type App struct {
 	TextVertexCount  uint32
 
 	AmbientLight   [3]float32
+	LastViewProj   mgl32.Mat4
 	LastTime       float64
 	LastRenderTime float64
 	MouseCaptured  bool
@@ -502,10 +503,13 @@ func (a *App) Update() {
 	invView := view.Inv()
 	invProj := proj.Inv()
 
+	// Readback Hi-Z from previous frame (cheap latency)
+	hizData, hizW, hizH := a.BufferManager.ReadbackHiZ()
+
 	// Commit scene changes from ECS sync
 	a.Profiler.BeginScope("Scene Commit")
 	planes := a.Camera.ExtractFrustum(viewProj)
-	a.Scene.Commit(planes)
+	a.Scene.Commit(planes, hizData, hizW, hizH, a.LastViewProj)
 	a.Profiler.EndScope("Scene Commit")
 
 	// Update Buffers
@@ -1243,7 +1247,7 @@ func (a *App) HandleClick(button int, action int) {
 		a.Editor.BrushValue = oldVal
 
 		// Mark scene as dirty - Update() will handle buffer sync
-		a.Scene.Commit([6]mgl32.Vec4{})
+		a.Scene.Commit([6]mgl32.Vec4{}, nil, 0, 0, mgl32.Ident4())
 		// DO NOT call UpdateScene or CreateBindGroups here!
 		// This causes race condition with the render loop.
 		// The Update() method will handle it on the next frame.

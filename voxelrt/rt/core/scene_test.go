@@ -21,7 +21,7 @@ func TestTLASSeparation(t *testing.T) {
 
 	scene.AddObject(obj1)
 	scene.AddObject(obj2)
-	scene.Commit([6]mgl32.Vec4{})
+	scene.Commit([6]mgl32.Vec4{}, nil, 0, 0, mgl32.Ident4())
 
 	// Verify AABBs are separate
 	if obj1.WorldAABB == nil || obj2.WorldAABB == nil {
@@ -107,7 +107,7 @@ func TestSceneCommit(t *testing.T) {
 		scene.AddObject(obj)
 	}
 
-	scene.Commit([6]mgl32.Vec4{})
+	scene.Commit([6]mgl32.Vec4{}, nil, 0, 0, mgl32.Ident4())
 
 	// Should have BVH data
 	if len(scene.BVHNodesBytes) == 0 {
@@ -142,7 +142,7 @@ func TestSharedXBrickMap(t *testing.T) {
 	scene := NewScene()
 	scene.AddObject(obj1)
 	scene.AddObject(obj2)
-	scene.Commit([6]mgl32.Vec4{})
+	scene.Commit([6]mgl32.Vec4{}, nil, 0, 0, mgl32.Ident4())
 
 	// Both should have different world AABBs despite sharing geometry
 	if obj1.WorldAABB == nil || obj2.WorldAABB == nil {
