@@ -523,6 +523,11 @@ func (a *App) Update() {
 		// Shadow pass also depends on storage buffers (instances/nodes/sectors/bricks/etc),
 		// so we must rebind shadow bind groups when buffers are recreated.
 		a.BufferManager.CreateShadowBindGroups()
+
+		// Transparent pass too
+		if a.TransparentPipeline != nil {
+			a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
+		}
 	}
 
 	// Update Camera Uniforms
@@ -654,8 +659,6 @@ func (a *App) Render() {
 	})
 	if a.TransparentPipeline != nil {
 		accPass.SetPipeline(a.TransparentPipeline)
-		// Create/update bind groups (camera+instances+BVH, voxel data, depth)
-		a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
 		if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil {
 			accPass.SetBindGroup(0, a.BufferManager.TransparentBG0, nil)
 			accPass.SetBindGroup(1, a.BufferManager.TransparentBG1, nil)
@@ -663,10 +666,8 @@ func (a *App) Render() {
 			accPass.Draw(3, 1, 0, 0)
 		}
 	}
-	// Particles accumulate into same WBOIT targets
 	if a.ParticlesPipeline != nil && a.BufferManager.ParticleCount > 0 {
 		accPass.SetPipeline(a.ParticlesPipeline)
-		a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
 		if a.BufferManager.ParticlesBindGroup0 != nil && a.BufferManager.ParticlesBindGroup1 != nil {
 			accPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
 			accPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)

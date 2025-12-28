@@ -60,9 +60,8 @@ func (cv *CellularVolumeComponent) ensureGrid() {
 	total := nx * ny * nz
 	if cv._density == nil || len(cv._density) != total {
 		cv._density = make([]float32, total)
-	}
-	if cv._temp == nil || len(cv._temp) != total {
 		cv._temp = make([]float32, total)
+		cv.seed() // Seed initial density
 	}
 	cv._inited = true
 }
@@ -178,9 +177,7 @@ func caStepSystem(t *Time, cmd *Commands) {
 			return true
 		}
 		cv.ensureGrid()
-		if !cv._inited {
-			cv.seed()
-		}
+		// (seed is now inside ensureGrid)
 		// accumulate time and step at TickRate
 		target := float32(1.0)
 		if cv.TickRate > 0 {

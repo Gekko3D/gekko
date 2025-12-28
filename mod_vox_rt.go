@@ -218,10 +218,10 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 			for i := range mats {
 				mats[i] = core.DefaultMaterial()
 			}
-			// Smoke (semi-transparent)
-			mats[1] = core.NewMaterial([4]uint8{180, 180, 180, 255}, [4]uint8{0, 0, 0, 0})
+			// Smoke (debug: opaque red)
+			mats[1] = core.NewMaterial([4]uint8{255, 50, 50, 255}, [4]uint8{0, 0, 0, 0})
 			mats[1].Roughness = 0.8
-			mats[1].Transparency = 0.5
+			mats[1].Transparency = 0.0 // Opaque for testing
 			mats[1].Metalness = 0.0
 			// Fire (emissive)
 			mats[2] = core.NewMaterial([4]uint8{255, 180, 80, 255}, [4]uint8{255, 120, 40, 255})
@@ -259,14 +259,19 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 				fullRebuild = true
 			}
 
-			// Ensure XBrickMap exists (core.NewVoxelObject creates one by default, but be safe)
+			// Ensure XBrickMap exists
 			if obj.XBrickMap == nil {
 				obj.XBrickMap = volume.NewXBrickMap()
 			}
 
 			if fullRebuild {
-				// Clear by re-creating the map for simplicity on config change
-				obj.XBrickMap = volume.NewXBrickMap()
+				// Clear existing map instead of creating new one to keep GPU allocation stable
+				obj.XBrickMap.ClearDirty()
+				obj.XBrickMap.Sectors = make(map[[3]int]*volume.Sector)
+				obj.XBrickMap.BrickAtlasMap = make(map[[6]int]uint32)
+				obj.XBrickMap.NextAtlasOffset = 0
+				obj.XBrickMap.StructureDirty = true
+
 				for z := 0; z < nz; z += stride {
 					for y := 0; y < ny; y += stride {
 						for x := 0; x < nx; x += stride {
@@ -387,7 +392,10 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 
 	// CPU-simulate and upload particle instances
 	instances := particlesCollect(state, time, cmd)
-	state.rtApp.BufferManager.UpdateParticles(instances)
+	pRecreated := state.rtApp.BufferManager.UpdateParticles(instances)
+	if pRecreated || state.rtApp.BufferManager.ParticlesBindGroup0 == nil {
+		state.rtApp.BufferManager.CreateParticlesBindGroups(state.rtApp.ParticlesPipeline)
+	}
 
 	state.rtApp.Profiler.BeginScope("RT Update")
 	state.rtApp.Update()
