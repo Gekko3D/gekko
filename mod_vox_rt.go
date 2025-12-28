@@ -218,10 +218,10 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 			for i := range mats {
 				mats[i] = core.DefaultMaterial()
 			}
-			// Smoke (debug: opaque red)
-			mats[1] = core.NewMaterial([4]uint8{255, 50, 50, 255}, [4]uint8{0, 0, 0, 0})
+			// Smoke (semi-transparent)
+			mats[1] = core.NewMaterial([4]uint8{180, 180, 180, 255}, [4]uint8{0, 0, 0, 0})
 			mats[1].Roughness = 0.8
-			mats[1].Transparency = 0.0 // Opaque for testing
+			mats[1].Transparency = 0.5
 			mats[1].Metalness = 0.0
 			// Fire (emissive)
 			mats[2] = core.NewMaterial([4]uint8{255, 180, 80, 255}, [4]uint8{255, 120, 40, 255})
@@ -252,10 +252,11 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 
 			// Ensure previous mask storage matches current configuration
 			fullRebuild := false
-			if cv._prevMask == nil || len(cv._prevMask) != total || cv._prevStride != stride || cv._prevThreshold != thr {
+			if cv._prevMask == nil || len(cv._prevMask) != total || cv._prevStride != stride || cv._prevThreshold != thr || cv.Type != cv._prevType {
 				cv._prevMask = make([]byte, total)
 				cv._prevStride = stride
 				cv._prevThreshold = thr
+				cv._prevType = cv.Type
 				fullRebuild = true
 			}
 
