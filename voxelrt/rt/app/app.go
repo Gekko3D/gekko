@@ -68,14 +68,17 @@ type App struct {
 	FrameCount int
 	FPS        float64
 	FPSTime    float64
+
+	Profiler *Profiler
 }
 
 func NewApp(window *glfw.Window) *App {
 	return &App{
-		Window: window,
-		Camera: core.NewCameraState(),
-		Scene:  core.NewScene(),
-		Editor: editor.NewEditor(),
+		Window:   window,
+		Camera:   core.NewCameraState(),
+		Scene:    core.NewScene(),
+		Editor:   editor.NewEditor(),
+		Profiler: NewProfiler(),
 	}
 }
 
@@ -463,9 +466,20 @@ func (a *App) Resize(w, h int) {
 }
 
 func (a *App) Update() {
+	// Gather stats
+	a.Profiler.SetCount("Objects", len(a.Scene.Objects))
+	a.Profiler.SetCount("Lights", len(a.Scene.Lights))
+	a.Profiler.SetCount("Particles", int(a.BufferManager.ParticleCount))
+
 	if a.DebugMode {
-		a.DrawText(fmt.Sprintf("Renderer FPS: %.1f", a.FPS), 10, 10, 1.0, [4]float32{1, 1, 0, 1})
+		stats := fmt.Sprintf("FPS: %.1f\n%s", a.FPS, a.Profiler.GetStatsString())
+		// Position at top-right (approx 260px width for text block)
+		x := float32(a.Config.Width) - 260
+		a.DrawText(stats, x, 10, 0.6, [4]float32{1, 1, 0, 1})
 	}
+
+	// Reset profiler timestamps for the upcoming render passes
+	a.Profiler.Reset()
 
 	// We assume a default light position or sync it if needed.
 	// Sync with scene light 0 if available
@@ -489,10 +503,15 @@ func (a *App) Update() {
 	invProj := proj.Inv()
 
 	// Commit scene changes from ECS sync
+	a.Profiler.BeginScope("Scene Commit")
 	a.Scene.Commit()
+	a.Profiler.EndScope("Scene Commit")
 
 	// Update Buffers
+	a.Profiler.BeginScope("Buffer Update")
 	recreated := a.BufferManager.UpdateScene(a.Scene)
+	a.Profiler.EndScope("Buffer Update")
+
 	if recreated {
 		// New buffers mean we need new bind groups
 		a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
@@ -504,6 +523,11 @@ func (a *App) Update() {
 		// Shadow pass also depends on storage buffers (instances/nodes/sectors/bricks/etc),
 		// so we must rebind shadow bind groups when buffers are recreated.
 		a.BufferManager.CreateShadowBindGroups()
+
+		// Transparent pass too
+		if a.TransparentPipeline != nil {
+			a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
+		}
 	}
 
 	// Update Camera Uniforms
@@ -566,6 +590,7 @@ func (a *App) Render() {
 	}
 
 	// Compute Pass
+	a.Profiler.BeginScope("G-Buffer")
 	cPass := encoder.BeginComputePass(nil)
 	cPass.SetPipeline(a.GBufferPipeline)
 	cPass.SetBindGroup(0, a.BufferManager.GBufferBindGroup0, nil)
@@ -580,11 +605,15 @@ func (a *App) Render() {
 	if err != nil {
 		fmt.Printf("ERROR: G-Buffer pass End failed: %v\n", err)
 	}
+	a.Profiler.EndScope("G-Buffer")
 
 	// Shadow Pass
+	a.Profiler.BeginScope("Shadows")
 	a.BufferManager.DispatchShadowPass(encoder, uint32(len(a.Scene.Lights)))
+	a.Profiler.EndScope("Shadows")
 
 	// Lighting Pass
+	a.Profiler.BeginScope("Lighting")
 	lPass := encoder.BeginComputePass(nil)
 	lPass.SetPipeline(a.LightingPipeline)
 	lPass.SetBindGroup(0, a.BufferManager.LightingBindGroup, nil)
@@ -595,6 +624,7 @@ func (a *App) Render() {
 	if err != nil {
 		fmt.Printf("ERROR: Lighting pass End failed: %v\n", err)
 	}
+	a.Profiler.EndScope("Lighting")
 
 	// Debug Pass
 	if a.DebugMode {
@@ -610,6 +640,7 @@ func (a *App) Render() {
 	}
 
 	// Accumulation Pass (Transparent overlay + Particles) -> WBOIT targets
+	a.Profiler.BeginScope("Accumulation")
 	accPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments: []wgpu.RenderPassColorAttachment{
 			{
@@ -628,8 +659,6 @@ func (a *App) Render() {
 	})
 	if a.TransparentPipeline != nil {
 		accPass.SetPipeline(a.TransparentPipeline)
-		// Create/update bind groups (camera+instances+BVH, voxel data, depth)
-		a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
 		if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil {
 			accPass.SetBindGroup(0, a.BufferManager.TransparentBG0, nil)
 			accPass.SetBindGroup(1, a.BufferManager.TransparentBG1, nil)
@@ -637,10 +666,8 @@ func (a *App) Render() {
 			accPass.Draw(3, 1, 0, 0)
 		}
 	}
-	// Particles accumulate into same WBOIT targets
 	if a.ParticlesPipeline != nil && a.BufferManager.ParticleCount > 0 {
 		accPass.SetPipeline(a.ParticlesPipeline)
-		a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
 		if a.BufferManager.ParticlesBindGroup0 != nil && a.BufferManager.ParticlesBindGroup1 != nil {
 			accPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
 			accPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
@@ -651,8 +678,10 @@ func (a *App) Render() {
 	if err != nil {
 		fmt.Printf("ERROR: Accumulation pass End failed: %v\n", err)
 	}
+	a.Profiler.EndScope("Accumulation")
 
 	// Resolve Pass -> Swapchain (composite opaque + accum/weight)
+	a.Profiler.BeginScope("Resolve")
 	rPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments: []wgpu.RenderPassColorAttachment{{
 			View:       view,
@@ -666,7 +695,6 @@ func (a *App) Render() {
 		rPass.SetBindGroup(0, a.ResolveBG, nil)
 		rPass.Draw(3, 1, 0, 0)
 	}
-
 	// Text Pass (over resolved image)
 	if len(a.TextItems) > 0 && a.TextVertexBuffer != nil && a.TextPipeline != nil {
 		rPass.SetPipeline(a.TextPipeline)
@@ -679,6 +707,7 @@ func (a *App) Render() {
 	if err != nil {
 		fmt.Printf("ERROR: Render pass End failed: %v\n", err)
 	}
+	a.Profiler.EndScope("Resolve")
 
 	cmd, err := encoder.Finish(nil)
 	if err != nil {

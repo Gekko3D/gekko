@@ -111,7 +111,9 @@ func editorSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 	}
 
 	// Apply brush to hit object
+	state.rtApp.Profiler.BeginScope("Editor Apply")
 	editorComp.editor.ApplyBrush(hit.Object, hit.Coord, hit.Normal)
+	state.rtApp.Profiler.EndScope("Editor Apply")
 }
 
 // InstallEditorSystem registers the editor system with the app

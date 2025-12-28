@@ -49,6 +49,9 @@ type CellularVolumeComponent struct {
 	_prevMask      []byte
 	_prevStride    int
 	_prevThreshold float32
+	_prevType      CellularType
+
+	_nextDensity []float32
 }
 
 func (cv *CellularVolumeComponent) ensureGrid() {
@@ -60,9 +63,9 @@ func (cv *CellularVolumeComponent) ensureGrid() {
 	total := nx * ny * nz
 	if cv._density == nil || len(cv._density) != total {
 		cv._density = make([]float32, total)
-	}
-	if cv._temp == nil || len(cv._temp) != total {
+		cv._nextDensity = make([]float32, total)
 		cv._temp = make([]float32, total)
+		cv.seed() // Seed initial density
 	}
 	cv._inited = true
 }
@@ -98,9 +101,15 @@ func (cv *CellularVolumeComponent) seed() {
 
 func (cv *CellularVolumeComponent) stepSmoke(dt float32) {
 	nx, ny, nz := cv.Resolution[0], cv.Resolution[1], cv.Resolution[2]
-	// Shallow copy into a temp buffer to avoid allocations: we can do in-place two passes cheaply.
-	// Here, create temp once and reuse by swapping.
-	next := make([]float32, len(cv._density))
+	// Reuse next buffer and clear it
+	next := cv._nextDensity
+	if len(next) != len(cv._density) {
+		next = make([]float32, len(cv._density))
+		cv._nextDensity = next
+	}
+	for i := range next {
+		next[i] = 0
+	}
 
 	// Simple diffusion (6-neighborhood) and buoyancy (upward advection)
 	dif := cv.Diffusion
@@ -118,13 +127,22 @@ func (cv *CellularVolumeComponent) stepSmoke(dt float32) {
 		decay = 1
 	}
 	buoy := cv.Buoyancy
+	// Clamp buoyancy to prevent negative shares
+	if buoy < -1 {
+		buoy = -1
+	}
+	if buoy > 1 {
+		buoy = 1
+	}
+
+	const densityCutoff = 0.001
 
 	for z := 0; z < nz; z++ {
 		for y := 0; y < ny; y++ {
 			for x := 0; x < nx; x++ {
 				i := idx3(x, y, z, nx, ny, nz)
 				d := cv._density[i] * decay
-				if d <= 0 {
+				if d <= densityCutoff {
 					continue
 				}
 				share := d * dif * 0.16666667 // 1/6 to neighbors
@@ -164,7 +182,8 @@ func (cv *CellularVolumeComponent) stepSmoke(dt float32) {
 			}
 		}
 	}
-	cv._density = next
+	// Swap buffers
+	cv._density, cv._nextDensity = cv._nextDensity, cv._density
 }
 
 func caStepSystem(t *Time, cmd *Commands) {
@@ -178,9 +197,7 @@ func caStepSystem(t *Time, cmd *Commands) {
 			return true
 		}
 		cv.ensureGrid()
-		if !cv._inited {
-			cv.seed()
-		}
+		// (seed is now inside ensureGrid)
 		// accumulate time and step at TickRate
 		target := float32(1.0)
 		if cv.TickRate > 0 {
@@ -263,7 +280,8 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 					i := idx3(x, y, z, nx, ny, nz)
 					d := cv._density[i]
 					if d > threshold {
-						wp := tr.Position.Add(mgl32.Vec3{float32(x)*cellSize + j(), float32(y)*cellSize + j(), float32(z)*cellSize + j()})
+						localPos := mgl32.Vec3{float32(x)*cellSize + j(), float32(y)*cellSize + j(), float32(z)*cellSize + j()}
+						wp := tr.Position.Add(tr.Rotation.Rotate(localPos))
 						// bright additive colors for visibility
 						// col := [4]float32{1.2, 1.2, 1.2, 1.0} // smoke
 						// if cv.Type == CellularFire {
