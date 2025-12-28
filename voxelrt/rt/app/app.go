@@ -504,7 +504,8 @@ func (a *App) Update() {
 
 	// Commit scene changes from ECS sync
 	a.Profiler.BeginScope("Scene Commit")
-	a.Scene.Commit()
+	planes := a.Camera.ExtractFrustum(viewProj)
+	a.Scene.Commit(planes)
 	a.Profiler.EndScope("Scene Commit")
 
 	// Update Buffers
@@ -1242,7 +1243,7 @@ func (a *App) HandleClick(button int, action int) {
 		a.Editor.BrushValue = oldVal
 
 		// Mark scene as dirty - Update() will handle buffer sync
-		a.Scene.Commit()
+		a.Scene.Commit([6]mgl32.Vec4{})
 		// DO NOT call UpdateScene or CreateBindGroups here!
 		// This causes race condition with the render loop.
 		// The Update() method will handle it on the next frame.

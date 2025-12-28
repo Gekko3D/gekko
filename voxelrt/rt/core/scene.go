@@ -81,9 +81,10 @@ func max(a, b float32) float32 {
 }
 
 type Scene struct {
-	Objects       []*VoxelObject
-	BVHNodesBytes []byte // Linearized BVH nodes
-	Lights        []Light
+	Objects        []*VoxelObject
+	VisibleObjects []*VoxelObject
+	BVHNodesBytes  []byte // Linearized BVH nodes
+	Lights         []Light
 	// Builder TODO
 }
 
@@ -106,7 +107,7 @@ func (s *Scene) RemoveObject(obj *VoxelObject) {
 	}
 }
 
-func (s *Scene) Commit() {
+func (s *Scene) Commit(planes [6]mgl32.Vec4) {
 	// Recompute AABBs
 	anyChanged := false
 	for _, obj := range s.Objects {
@@ -115,18 +116,25 @@ func (s *Scene) Commit() {
 		}
 	}
 
+	// Culling: Populate VisibleObjects
+	s.VisibleObjects = s.VisibleObjects[:0] // Clear but keep capacity
+	for _, obj := range s.Objects {
+		if obj.WorldAABB != nil && AABBInFrustum(*obj.WorldAABB, planes) {
+			s.VisibleObjects = append(s.VisibleObjects, obj)
+		}
+	}
+
 	if !anyChanged && len(s.BVHNodesBytes) > 0 {
 		return
 	}
 
-	// Build BVH from object AABBs
-	if len(s.Objects) > 0 {
-		aabbs := make([][2]mgl32.Vec3, len(s.Objects))
-		for i, obj := range s.Objects {
+	// Build BVH from Visible Objects AABBs
+	if len(s.VisibleObjects) > 0 {
+		aabbs := make([][2]mgl32.Vec3, len(s.VisibleObjects))
+		for i, obj := range s.VisibleObjects {
 			if obj.WorldAABB != nil {
 				aabbs[i] = *obj.WorldAABB
 			} else {
-				// Empty AABB if not set
 				aabbs[i] = [2]mgl32.Vec3{{0, 0, 0}, {0, 0, 0}}
 			}
 		}
@@ -137,4 +145,43 @@ func (s *Scene) Commit() {
 	} else {
 		s.BVHNodesBytes = make([]byte, 64) // Empty BVH
 	}
+}
+
+// AABBInFrustum checks if an AABB is visible within the frustum defined by 6 planes.
+// Planes are expected to be in Ax+By+Cz+D=0 form, with the normal pointing INSIDE.
+func AABBInFrustum(aabb [2]mgl32.Vec3, planes [6]mgl32.Vec4) bool {
+	for i := 0; i < 6; i++ {
+		plane := planes[i]
+		// Find negative vertex (furthest in direction of normal)
+		// If negative vertex is outside (dist < 0), then box is fully outside.
+
+		// Actually, convention:
+		// Normal points INSIDE.
+		// We want to check if the box is fully BEHIND the plane (outside).
+		// That corresponds to finding the point with HIGHEST signed distance (most inside).
+		// If that point is still < 0, then ALL points are < 0.
+
+		var p mgl32.Vec3
+		if plane[0] > 0 {
+			p[0] = aabb[1][0] // Max
+		} else {
+			p[0] = aabb[0][0] // Min
+		}
+		if plane[1] > 0 {
+			p[1] = aabb[1][1] // Max
+		} else {
+			p[1] = aabb[0][1] // Min
+		}
+		if plane[2] > 0 {
+			p[2] = aabb[1][2] // Max
+		} else {
+			p[2] = aabb[0][2] // Min
+		}
+
+		dist := plane[0]*p[0] + plane[1]*p[1] + plane[2]*p[2] + plane[3]
+		if dist < 0 {
+			return false
+		}
+	}
+	return true
 }
