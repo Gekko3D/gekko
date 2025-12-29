@@ -17,10 +17,12 @@ VoxelRT is a GPU-accelerated voxel rendering engine written in Go and WGSL (WebG
   - Fullscreen Blit: [rt/shaders/FULLSCREEN.md](rt/shaders/FULLSCREEN.md)
   - Debug: [rt/shaders/DEBUG.md](rt/shaders/DEBUG.md)
   - Text: [rt/shaders/TEXT.md](rt/shaders/TEXT.md)
+  - Hi-Z (Hierarchical Z-Buffer): [rt/shaders/HIZ.md](rt/shaders/HIZ.md)
 - Additional:
   - Performance notes: [PERFORMANCE.md](PERFORMANCE.md)
   - Optimization roadmap: [VOXELRT_OPTIMIZATION_ROADMAP.md](VOXELRT_OPTIMIZATION_ROADMAP.md)
   - Shader guide: [SHADER_GUIDE.md](SHADER_GUIDE.md)
+
 
 ## Architecture
 
@@ -122,3 +124,6 @@ Shading is performed in the compute shader (`raytrace.wgsl`).
 2.  **Bitmask Culling**: Fast rejection of empty 2³ micro-blocks.
 3.  **Solid Brick Compression**: Massive memory saving for uniform volumes; skips memory bandwidth for payload.
 4.  **Cached Traversal**: Shader caches the last accessed Sector ID to avoid frequent hash/linear searches during stepping.
+5.  **CPU Frustum Culling**: Objects outside the camera frustum are skipped before GPU work. Uses Gribb-Hartmann plane extraction.
+6.  **Hi-Z Occlusion Culling**: Objects hidden behind geometry are skipped using a hierarchical Z-buffer with 1-frame latency async readback.
+

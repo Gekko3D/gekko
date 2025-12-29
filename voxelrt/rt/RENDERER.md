@@ -184,6 +184,79 @@ See PARTICLES.md for details. Highlights:
   - dispatch ( (W+7)/8, (H+7)/8, 1 ).
 - This is a common tile size; alter if profiling shows better occupancy with different sizes.
 
+## Visibility and Culling
+
+VoxelRT implements a two-stage visibility culling system to reduce GPU workload by filtering out objects that are not visible to the camera.
+
+### CPU Frustum Culling
+
+Location: rt/core/camera.go, rt/core/scene.go
+
+The first stage performs frustum culling on the CPU before any GPU work:
+
+1. **Frustum Extraction**: `CameraState.ExtractFrustum(viewProj)` extracts 6 planes (Left, Right, Bottom, Top, Near, Far) from the view-projection matrix using the Gribb-Hartmann method.
+
+2. **AABB Test**: `AABBInFrustum(aabb, planes)` tests each object's world-space AABB against all 6 planes:
+   - For each plane, finds the "positive vertex" (corner furthest in the direction of the normal).
+   - If this vertex is behind any plane, the AABB is fully outside the frustum.
+
+3. **Integration**: `Scene.Commit()` now accepts frustum planes and filters `Objects` into `VisibleObjects`.
+
+### GPU Hi-Z Occlusion Culling
+
+Location: rt/gpu/manager_hiz.go, rt/shaders/hiz.wgsl
+
+The second stage uses a Hierarchical Z-Buffer (Hi-Z) to cull objects hidden behind other geometry:
+
+1. **Hi-Z Generation**: After the G-Buffer pass, a compute shader builds a mip chain from the depth buffer:
+   - Each mip level stores the MAX depth (furthest distance) of a 2×2 region from the previous level.
+   - Uses R32Float format; stores linear ray distance (same as G-Buffer depth).
+
+2. **CPU Readback**: A low-resolution mip (~64 pixels wide) is read back to CPU with 1-frame latency:
+   - Uses async buffer mapping to avoid stalls.
+   - State machine manages copy → map → read cycle.
+
+3. **Occlusion Test**: `IsOccluded(aabb, hizData, w, h, lastViewProj)` on CPU:
+   - Projects AABB corners to screen space using the PREVIOUS frame's view-projection (temporal latency).
+   - Finds the nearest depth of the AABB (using clip.W as conservative approximation).
+   - Samples the Hi-Z buffer to find the maximum occluder depth in that screen region.
+   - If `minObjectDepth > maxOccluderDepth`, the object is fully hidden.
+
+### Data Flow
+
+```
+Scene.Commit(planes, hizData, hizW, hizH, lastViewProj)
+   │
+   ├─ Frustum Culling (per object)
+   │     └─ AABBInFrustum(worldAABB, planes)
+   │
+   └─ Hi-Z Occlusion Culling (per surviving object)
+         └─ IsOccluded(worldAABB, hizData, w, h, lastViewProj)
+                │
+                └─ VisibleObjects[] (used by BufferManager)
+```
+
+### Key Files
+
+- **rt/core/camera.go**: `ExtractFrustum()` - frustum plane extraction
+- **rt/core/scene.go**: `AABBInFrustum()`, `IsOccluded()`, `Scene.Commit()` with culling
+- **rt/gpu/manager_hiz.go**: Hi-Z texture setup, mip generation dispatch, async readback
+- **rt/shaders/hiz.wgsl**: 2×2 MAX reduction compute shader
+- **rt/core/culling_test.go**: Unit tests for frustum and occlusion culling
+
+### Performance Notes
+
+- Frustum culling is O(objects × 6 planes), very cheap on CPU.
+- Hi-Z culling uses 1-frame-old data (temporal lag) but avoids GPU sync stalls.
+- Hi-Z readback targets ~64px width for minimal bandwidth while maintaining culling accuracy.
+- Objects that touch the near plane are conservatively marked visible.
+
+### Limitations
+
+- Hi-Z uses previous frame's depth: fast-moving objects or rapid camera turns may have false negatives (visible objects culled for 1 frame).
+- No per-sector culling yet; culling is at object granularity.
+- Readback latency means Hi-Z culling is most effective for static or slow-moving content.
+
 ## Synchronization and Buffer Re-creation
 
 - Scene.Commit() marks/assembles changes for GPU.
@@ -242,7 +315,9 @@ Key constraints and bottlenecks
 - Transparency approximation:
   - WBOIT is an approximation; complex overlapping translucent stacks may deviate from ground truth.
 - Culling:
-  - No explicit CPU-side frustum culling per object/sector; compute pass covers entire screen regardless of content.
+  - ✅ CPU frustum culling per object is now implemented.
+  - ✅ Hi-Z occlusion culling per object is now implemented.
+  - Per-sector culling within objects is not yet implemented.
 - Asynchrony:
   - Passes run in sequence; little overlap of CPU jobs (edits, rebuilds) with GPU work.
 - Temporal stability:
@@ -274,10 +349,15 @@ Phase 1 — Data flow, memory, and uploads
   - Optional world paging: per-Region activation based on player proximity; background load and eviction.
 
 Phase 2 — Visibility and culling
-- CPU frustum culling per object and per sector:
-  - Build visible set (object-level). Within object, cull sectors by camera frustum.
+- ✅ CPU frustum culling per object:
+  - Implemented in `Scene.Commit()` using `AABBInFrustum()`. Filters `Objects` into `VisibleObjects`.
+- ✅ Hi-Z occlusion culling:
+  - Implemented via `manager_hiz.go` and `hiz.wgsl`. Uses 1-frame latency async readback.
+  - `IsOccluded()` tests AABB against previous frame's Hi-Z buffer.
+- Per-sector culling (within object):
+  - TODO: Cull sectors by camera frustum within each visible object.
 - Screen-space tiling:
-  - Optionally skip G-Buffer tiles with no geometry by prepass raster (coarse depth tiles) or hierarchical Z from instances (advanced).
+  - Optionally skip G-Buffer tiles with no geometry by prepass raster (coarse depth tiles).
 - LOD policy:
   - Per-object and per-sector LOD (brick decimation, Tree64) for distant content with stable transitions.
 

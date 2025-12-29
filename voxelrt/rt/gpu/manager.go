@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -62,6 +63,21 @@ type GpuBufferManager struct {
 	// Shadow Map Resources
 	ShadowMapArray *wgpu.Texture
 	ShadowMapView  *wgpu.TextureView
+
+	// Hi-Z Occlusion
+	HiZTexture     *wgpu.Texture
+	HiZViews       []*wgpu.TextureView // Mip views
+	ReadbackBuffer *wgpu.Buffer
+	HiZPipeline    *wgpu.ComputePipeline
+	HiZBindGroups  []*wgpu.BindGroup // One per mip transition
+
+	HiZReadbackLevel   uint32
+	HiZReadbackWidth   uint32
+	HiZReadbackHeight  uint32
+	HiZState           int // 0: Idle, 1: Copy (GPU), 2: Mapping (Wait GPU), 3: Mapped (Read CPU)
+	StateMu            sync.Mutex
+	LastHiZData        []float32
+	LastHiZW, LastHiZH uint32
 
 	// Bind Groups for new passes
 	GBufferBindGroup          *wgpu.BindGroup
@@ -412,7 +428,7 @@ func (m *GpuBufferManager) updateXBrickMapPaged(scene *core.Scene) bool {
 
 	// Separate pass to build ObjectParams to keep code clean and get indices correct
 	objParams := []byte{}
-	for _, obj := range scene.Objects {
+	for _, obj := range scene.VisibleObjects {
 		alloc := m.Allocations[obj.XBrickMap] // Must exist now
 
 		pBuf := make([]byte, 32)
@@ -602,7 +618,7 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 
 	// 1. Instances
 	instData := []byte{}
-	for i, obj := range scene.Objects {
+	for i, obj := range scene.VisibleObjects {
 		o2w := obj.Transform.ObjectToWorld()
 		w2o := obj.Transform.WorldToObject()
 
@@ -743,7 +759,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		return h % uint32(gridSize)
 	}
 
-	for _, obj := range scene.Objects {
+	for _, obj := range scene.VisibleObjects {
 		xbm := obj.XBrickMap
 		baseIdx := m.Allocations[xbm].SectorOffset
 

@@ -32,3 +32,6 @@ var TransparentOverlayWGSL string
 
 //go:embed resolve_transparency.wgsl
 var ResolveTransparencyWGSL string
+
+//go:embed hiz.wgsl
+var HiZWGSL string

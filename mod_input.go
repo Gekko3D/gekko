@@ -68,6 +68,7 @@ const (
 	KeyEqual
 	KeyKPPlus
 	KeyKPMinus
+	KeyShift
 	MouseButtonLeft
 	MouseButtonRight
 	MouseButtonMiddle
@@ -235,4 +236,5 @@ var keyToGlfw = map[int]glfw.Key{
 	KeyEqual:     glfw.KeyEqual,
 	KeyKPPlus:    glfw.KeyKPAdd,
 	KeyKPMinus:   glfw.KeyKPSubtract,
+	KeyShift:     glfw.KeyLeftShift,
 }

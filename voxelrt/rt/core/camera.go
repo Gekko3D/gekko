@@ -48,3 +48,63 @@ func (c *CameraState) GetViewMatrix() mgl32.Mat4 {
 	up := mgl32.Vec3{0, 1, 0} // Approximate up is fine for LookAt
 	return mgl32.LookAtV(eye, target, up)
 }
+
+// ExtractFrustum extracts the 6 planes of the frustum from the view-projection matrix.
+// Returns planes in order: Left, Right, Bottom, Top, Near, Far.
+// Plane is Ax + By + Cz + D = 0.
+func (c *CameraState) ExtractFrustum(vp mgl32.Mat4) [6]mgl32.Vec4 {
+	var planes [6]mgl32.Vec4
+
+	// Left plane: Row 3 + Row 0
+	planes[0] = mgl32.Vec4{
+		vp.At(3, 0) + vp.At(0, 0),
+		vp.At(3, 1) + vp.At(0, 1),
+		vp.At(3, 2) + vp.At(0, 2),
+		vp.At(3, 3) + vp.At(0, 3),
+	}
+	// Right plane: Row 3 - Row 0
+	planes[1] = mgl32.Vec4{
+		vp.At(3, 0) - vp.At(0, 0),
+		vp.At(3, 1) - vp.At(0, 1),
+		vp.At(3, 2) - vp.At(0, 2),
+		vp.At(3, 3) - vp.At(0, 3),
+	}
+	// Bottom plane: Row 3 + Row 1
+	planes[2] = mgl32.Vec4{
+		vp.At(3, 0) + vp.At(1, 0),
+		vp.At(3, 1) + vp.At(1, 1),
+		vp.At(3, 2) + vp.At(1, 2),
+		vp.At(3, 3) + vp.At(1, 3),
+	}
+	// Top plane: Row 3 - Row 1
+	planes[3] = mgl32.Vec4{
+		vp.At(3, 0) - vp.At(1, 0),
+		vp.At(3, 1) - vp.At(1, 1),
+		vp.At(3, 2) - vp.At(1, 2),
+		vp.At(3, 3) - vp.At(1, 3),
+	}
+	// Near plane: Row 3 + Row 2 (OpenGL-style -1..1)
+	planes[4] = mgl32.Vec4{
+		vp.At(3, 0) + vp.At(2, 0),
+		vp.At(3, 1) + vp.At(2, 1),
+		vp.At(3, 2) + vp.At(2, 2),
+		vp.At(3, 3) + vp.At(2, 3),
+	}
+	// Far plane: Row 3 - Row 2
+	planes[5] = mgl32.Vec4{
+		vp.At(3, 0) - vp.At(2, 0),
+		vp.At(3, 1) - vp.At(2, 1),
+		vp.At(3, 2) - vp.At(2, 2),
+		vp.At(3, 3) - vp.At(2, 3),
+	}
+
+	// Normalize planes
+	for i := 0; i < 6; i++ {
+		length := float32(math.Sqrt(float64(planes[i][0]*planes[i][0] + planes[i][1]*planes[i][1] + planes[i][2]*planes[i][2])))
+		if length > 0 {
+			planes[i] = planes[i].Mul(1.0 / length)
+		}
+	}
+
+	return planes
+}
