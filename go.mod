@@ -17,3 +17,5 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/cogentcore/webgpu => github.com/ddevidchenko/webgpu v0.0.0-20251229132442-94b855119696

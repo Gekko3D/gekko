@@ -106,10 +106,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let sx = srcBase.x;
     let sy = srcBase.y;
     
-    var val00 = 1.0; if (sx < srcSize.x && sy < srcSize.y) { val00 = textureLoad(sourceTexture, vec2<u32>(sx, sy), 0).x; }
-    var val10 = 1.0; if (sx + 1u < srcSize.x && sy < srcSize.y) { val10 = textureLoad(sourceTexture, vec2<u32>(sx + 1u, sy), 0).x; }
-    var val01 = 1.0; if (sx < srcSize.x && sy + 1u < srcSize.y) { val01 = textureLoad(sourceTexture, vec2<u32>(sx, sy + 1u), 0).x; }
-    var val11 = 1.0; if (sx + 1u < srcSize.x && sy + 1u < srcSize.y) { val11 = textureLoad(sourceTexture, vec2<u32>(sx + 1u, sy + 1u), 0).x; }
+    var val00 = 60000.0; if (sx < srcSize.x && sy < srcSize.y) { val00 = textureLoad(sourceTexture, vec2<u32>(sx, sy), 0).x; }
+    var val10 = 60000.0; if (sx + 1u < srcSize.x && sy < srcSize.y) { val10 = textureLoad(sourceTexture, vec2<u32>(sx + 1u, sy), 0).x; }
+    var val01 = 60000.0; if (sx < srcSize.x && sy + 1u < srcSize.y) { val01 = textureLoad(sourceTexture, vec2<u32>(sx, sy + 1u), 0).x; }
+    var val11 = 60000.0; if (sx + 1u < srcSize.x && sy + 1u < srcSize.y) { val11 = textureLoad(sourceTexture, vec2<u32>(sx + 1u, sy + 1u), 0).x; }
     
     // For Standard Depth (0=Near, 1=Far):
     // Reduction is MAX.

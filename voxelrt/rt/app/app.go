@@ -383,7 +383,20 @@ func (a *App) Init() error {
 	// Create resolve pipeline to composite opaque + transparent accum onto swapchain
 	a.setupResolvePipeline()
 
-	// Initialize time
+	// Initialize Hi-Z Occlusion
+	hizMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label: "Hi-Z Shader",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{
+			Code: shaders.HiZWGSL,
+		},
+	})
+	if err == nil {
+		a.BufferManager.SetupHiZ(a.Config.Width, a.Config.Height, hizMod)
+	} else {
+		fmt.Printf("ERROR: Failed to create Hi-Z shader module: %v\n", err)
+	}
+
+	a.LastViewProj = mgl32.Ident4()
 	a.LastTime = glfw.GetTime()
 
 	return nil
@@ -469,6 +482,7 @@ func (a *App) Resize(w, h int) {
 func (a *App) Update() {
 	// Gather stats
 	a.Profiler.SetCount("Objects", len(a.Scene.Objects))
+	a.Profiler.SetCount("Visible", len(a.Scene.VisibleObjects))
 	a.Profiler.SetCount("Lights", len(a.Scene.Lights))
 	a.Profiler.SetCount("Particles", int(a.BufferManager.ParticleCount))
 
@@ -511,6 +525,9 @@ func (a *App) Update() {
 	planes := a.Camera.ExtractFrustum(viewProj)
 	a.Scene.Commit(planes, hizData, hizW, hizH, a.LastViewProj)
 	a.Profiler.EndScope("Scene Commit")
+
+	// Store current view-proj for next frame's Hi-Z reprojection
+	a.LastViewProj = viewProj
 
 	// Update Buffers
 	a.Profiler.BeginScope("Buffer Update")
@@ -611,6 +628,11 @@ func (a *App) Render() {
 		fmt.Printf("ERROR: G-Buffer pass End failed: %v\n", err)
 	}
 	a.Profiler.EndScope("G-Buffer")
+
+	// Hi-Z Pass
+	a.Profiler.BeginScope("Hi-Z Generation")
+	a.BufferManager.DispatchHiZ(encoder, a.BufferManager.DepthView)
+	a.Profiler.EndScope("Hi-Z Generation")
 
 	// Shadow Pass
 	a.Profiler.BeginScope("Shadows")
@@ -720,7 +742,9 @@ func (a *App) Render() {
 		return
 	}
 	a.Queue.Submit(cmd)
+	a.BufferManager.ResolveHiZReadback()
 	a.Surface.Present()
+	a.Device.Poll(false, nil)
 
 	// Update FPS
 	now := glfw.GetTime()

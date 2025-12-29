@@ -182,7 +182,7 @@ func IsOccluded(aabb [2]mgl32.Vec3, hizData []float32, w, h uint32, viewProj mgl
 		{aabb[1].X(), aabb[1].Y(), aabb[1].Z()},
 	}
 
-	minZ := float32(1.0) // Nearest depth
+	minZ := float32(1e20) // Nearest depth
 
 	for _, c := range corners {
 		// Transform to Clip Space

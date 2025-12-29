@@ -22,11 +22,24 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 	m.HiZViews = nil
 	m.HiZBindGroups = nil
 
-	// Compute mips count.
+	// The Hi-Z hierarchy starts at half the G-Buffer resolution.
+	// G-Buffer: 1920x1080
+	// Hi-Z Mip 0: 960x540
+	// Hi-Z Mip 1: 480x270
+	// ...
+	hizW := width / 2
+	hizH := height / 2
+	if hizW < 1 {
+		hizW = 1
+	}
+	if hizH < 1 {
+		hizH = 1
+	}
+
 	mips := 0
-	dim := width
-	if height > dim {
-		dim = height
+	dim := hizW
+	if hizH > dim {
+		dim = hizH
 	}
 	for dim > 0 {
 		mips++
@@ -37,7 +50,7 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 	var err error
 	m.HiZTexture, err = m.Device.CreateTexture(&wgpu.TextureDescriptor{
 		Label:         "Hi-Z Texture",
-		Size:          wgpu.Extent3D{Width: width, Height: height, DepthOrArrayLayers: 1},
+		Size:          wgpu.Extent3D{Width: hizW, Height: hizH, DepthOrArrayLayers: 1},
 		MipLevelCount: uint32(mips),
 		SampleCount:   1,
 		Dimension:     wgpu.TextureDimension2D,
@@ -65,11 +78,10 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 		}
 	}
 
-	// Create Readback Buffer
-	// We want a mip level roughly 64 wide for CPU culling.
+	// Create Readback Buffer (target ~64 wide)
 	targetW := uint32(64)
 	readbackLevel := 0
-	currW, currH := width, height
+	currW, currH := hizW, hizH
 	for readbackLevel < mips-1 && currW > targetW {
 		readbackLevel++
 		currW >>= 1
@@ -86,8 +98,6 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 	m.HiZReadbackWidth = currW
 	m.HiZReadbackHeight = currH
 
-	// Size: Width * Height * 4 bytes (R32F)
-	// Aligned to 256 bytes per row for CopyTextureToBuffer
 	bytesPerRow := (currW*4 + 255) & ^uint32(255)
 	size := uint64(bytesPerRow * currH)
 
@@ -100,10 +110,45 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 		panic(err)
 	}
 
-	// Create Pipeline if needed
+	m.StateMu.Lock()
+	m.HiZState = 0
+	m.StateMu.Unlock()
+
+	// Create BindGroupLayout explicitly
+	bgl, err := m.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Hi-Z BGL",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageCompute,
+				StorageTexture: wgpu.StorageTextureBindingLayout{
+					Access:        wgpu.StorageTextureAccessWriteOnly,
+					Format:        wgpu.TextureFormatR32Float,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Create Pipeline
 	if m.HiZPipeline == nil {
+		layout, _ := m.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+			BindGroupLayouts: []*wgpu.BindGroupLayout{bgl},
+		})
 		m.HiZPipeline, err = m.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
-			Label: "Hi-Z Pipeline",
+			Label:  "Hi-Z Pipeline",
+			Layout: layout,
 			Compute: wgpu.ProgrammableStageDescriptor{
 				Module:     hizModule,
 				EntryPoint: "main",
@@ -112,6 +157,22 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 		if err != nil {
 			panic(err)
 		}
+	}
+
+	// Cache Bind Groups
+	m.HiZBindGroups = make([]*wgpu.BindGroup, mips)
+	// We'll populate Pass 0 (source is external) dynamically,
+	// but passes 1..N (internal) can be cached.
+	for i := 0; i < mips-1; i++ {
+		bg, _ := m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+			Label:  fmt.Sprintf("HiZ Pass %d (Internal)", i+1),
+			Layout: bgl,
+			Entries: []wgpu.BindGroupEntry{
+				{Binding: 0, TextureView: m.HiZViews[i]},   // Source
+				{Binding: 1, TextureView: m.HiZViews[i+1]}, // Dest
+			},
+		})
+		m.HiZBindGroups[i+1] = bg
 	}
 }
 
@@ -124,14 +185,25 @@ func (m *GpuBufferManager) DispatchHiZ(encoder *wgpu.CommandEncoder, sourceDepth
 	pass := encoder.BeginComputePass(nil)
 	pass.SetPipeline(m.HiZPipeline)
 
-	width := m.HiZTexture.GetWidth()
-	height := m.HiZTexture.GetHeight()
+	hizW := m.HiZTexture.GetWidth()
+	hizH := m.HiZTexture.GetHeight()
 	mips := len(m.HiZViews)
 
 	bgl := m.HiZPipeline.GetBindGroupLayout(0)
+	if bgl == nil {
+		fmt.Printf("HiZ Error: Failed to get BindGroupLayout from pipeline\n")
+		pass.End()
+		return
+	}
 
-	// Pass 0
-	bg0, _ := m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+	// Pass 0: G-Buffer Depth -> HiZ Mip 0 (Downsample)
+	if sourceDepthView == nil || m.HiZViews[0] == nil {
+		fmt.Printf("HiZ Error: sourceDepthView=%v, Mip0View=%v\n", sourceDepthView, m.HiZViews[0])
+		pass.End()
+		return
+	}
+
+	bg0, err := m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Label:  "HiZ Pass 0",
 		Layout: bgl,
 		Entries: []wgpu.BindGroupEntry{
@@ -139,33 +211,43 @@ func (m *GpuBufferManager) DispatchHiZ(encoder *wgpu.CommandEncoder, sourceDepth
 			{Binding: 1, TextureView: m.HiZViews[0]},
 		},
 	})
+	if err != nil || bg0 == nil {
+		fmt.Printf("HiZ Error: Failed to create Pass 0 BindGroup: %v\n", err)
+		pass.End()
+		return
+	}
 	pass.SetBindGroup(0, bg0, nil)
-	pass.DispatchWorkgroups((width+7)/8, (height+7)/8, 1)
+	pass.DispatchWorkgroups((hizW+7)/8, (hizH+7)/8, 1)
 
-	// Subsequent passes
-	prevW, prevH := width, height
+	// Subsequent passes: Mip K -> Mip K+1
+	prevW, prevH := hizW, hizH
 	for i := 0; i < mips-1; i++ {
-		src := m.HiZViews[i]   // MIP i
-		dst := m.HiZViews[i+1] // MIP i+1
-
-		// Downsample target size
 		w := prevW >> 1
 		h := prevH >> 1
-		if w == 0 {
+		if w < 1 {
 			w = 1
 		}
-		if h == 0 {
+		if h < 1 {
 			h = 1
 		}
 
-		bg, _ := m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-			Label:  fmt.Sprintf("HiZ Pass %d", i+1),
-			Layout: bgl,
-			Entries: []wgpu.BindGroupEntry{
-				{Binding: 0, TextureView: src},
-				{Binding: 1, TextureView: dst},
-			},
-		})
+		bg := m.HiZBindGroups[i+1]
+		if bg == nil {
+			// Safety if cache failed
+			bg, _ = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+				Label:  fmt.Sprintf("HiZ Pass %d", i+1),
+				Layout: bgl,
+				Entries: []wgpu.BindGroupEntry{
+					{Binding: 0, TextureView: m.HiZViews[i]},
+					{Binding: 1, TextureView: m.HiZViews[i+1]},
+				},
+			})
+			m.HiZBindGroups[i+1] = bg
+		}
+		if bg == nil {
+			fmt.Printf("HiZ Error: Nil BindGroup for pass %d\n", i+1)
+			continue
+		}
 		pass.SetBindGroup(0, bg, nil)
 		pass.DispatchWorkgroups((w+7)/8, (h+7)/8, 1)
 
@@ -173,7 +255,19 @@ func (m *GpuBufferManager) DispatchHiZ(encoder *wgpu.CommandEncoder, sourceDepth
 	}
 	pass.End()
 
-	// Issue Copy to Readback
+	m.StateMu.Lock()
+	state := m.HiZState
+	m.StateMu.Unlock()
+
+	// Issue Copy to Readback ONLY if buffer is idle
+	if state != 0 {
+		return
+	}
+
+	m.StateMu.Lock()
+	m.HiZState = 1 // 1: Copy (GPU)
+	m.StateMu.Unlock()
+
 	level := m.HiZReadbackLevel
 	w := m.HiZReadbackWidth
 	h := m.HiZReadbackHeight
@@ -195,39 +289,54 @@ func (m *GpuBufferManager) DispatchHiZ(encoder *wgpu.CommandEncoder, sourceDepth
 		},
 		&wgpu.Extent3D{Width: w, Height: h, DepthOrArrayLayers: 1},
 	)
+	m.HiZState = 1 // 1: Copy (GPU)
 }
+
+// ResolveHiZReadback is kept for compatibility but logic is now handled in ReadbackHiZ state machine
+func (m *GpuBufferManager) ResolveHiZReadback() {}
 
 func (m *GpuBufferManager) ReadbackHiZ() ([]float32, uint32, uint32) {
 	if m.ReadbackBuffer == nil {
 		return nil, 0, 0
 	}
 
-	if !m.HiZMapped {
-		// MapAsync expects uint64
+	m.StateMu.Lock()
+	state := m.HiZState
+
+	// If the GPU copy finished in a previous frame, start mapping now
+	if state == 1 {
+		m.HiZState = 2 // Transition to Mapping
 		m.ReadbackBuffer.MapAsync(wgpu.MapModeRead, 0, m.ReadbackBuffer.GetSize(), func(status wgpu.BufferMapAsyncStatus) {
+			m.StateMu.Lock()
+			defer m.StateMu.Unlock()
 			if status == wgpu.BufferMapAsyncStatusSuccess {
-				m.HiZMapped = true
+				m.HiZState = 3 // Mapped
 			} else {
-				fmt.Printf("HiZ MapAsync failed: %d\n", status)
+				m.HiZState = 0 // Error, back to idle
 			}
 		})
 	}
+	m.StateMu.Unlock()
 
-	m.Device.Poll(false, nil)
-
-	if m.HiZMapped {
+	// Check if any mapping completed
+	// m.Device.Poll(false, nil)
+	m.StateMu.Lock()
+	if m.HiZState == 3 {
 		size := m.ReadbackBuffer.GetSize()
-		// GetMappedRange expects uint (based on error logs)
-		// Or maybe offset is uint64 and size is uint?
-		// "cannot use size (uint64) as uint" implies standard casting fixes it.
 		data := m.ReadbackBuffer.GetMappedRange(0, uint(size))
 
-		// Copy data out because Unmap invalidates it
 		w := m.HiZReadbackWidth
 		h := m.HiZReadbackHeight
 		bytesPerRow := (w*4 + 255) & ^uint32(255)
 
-		result := make([]float32, w*h)
+		if len(m.LastHiZData) != int(w*h) {
+			m.LastHiZData = make([]float32, w*h)
+			for i := range m.LastHiZData {
+				m.LastHiZData[i] = 60000.0 // Default to far
+			}
+		}
+		m.LastHiZW = w
+		m.LastHiZH = h
 
 		// Unpack rows
 		for y := uint32(0); y < h; y++ {
@@ -235,14 +344,26 @@ func (m *GpuBufferManager) ReadbackHiZ() ([]float32, uint32, uint32) {
 			for x := uint32(0); x < w; x++ {
 				if uint64(rowOffset+x*4+4) <= size {
 					valBits := binary.LittleEndian.Uint32(data[rowOffset+x*4 : rowOffset+x*4+4])
-					result[y*w+x] = math.Float32frombits(valBits)
+					m.LastHiZData[y*w+x] = math.Float32frombits(valBits)
 				}
 			}
 		}
 
 		m.ReadbackBuffer.Unmap()
-		m.HiZMapped = false
-		return result, w, h
+		m.HiZState = 0 // Transition to Idle
 	}
-	return nil, 0, 0
+	m.StateMu.Unlock()
+
+	// Provide default "Far" data if none available yet
+	if len(m.LastHiZData) == 0 && m.HiZReadbackWidth > 0 && m.HiZReadbackHeight > 0 {
+		w, h := m.HiZReadbackWidth, m.HiZReadbackHeight
+		m.LastHiZData = make([]float32, w*h)
+		for i := range m.LastHiZData {
+			m.LastHiZData[i] = 60000.0
+		}
+		m.LastHiZW = w
+		m.LastHiZH = h
+	}
+
+	return m.LastHiZData, m.LastHiZW, m.LastHiZH
 }

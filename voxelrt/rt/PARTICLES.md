@@ -70,11 +70,16 @@ Fields:
 
 Internals:
 - _density []float32: density per cell
+- _nextDensity []float32: double-buffer for diffusion (avoids allocation per step)
 - _temp []float32: temperature (for fire)
 - _accum float32: time accumulator
 - _inited bool: initialized guard
+- _prevMask []byte: cached particle mask for change detection
+- _prevStride int: cached stride value
+- _prevThreshold float32: cached threshold value
+- _prevType CellularType: cached type for recomputation
 
-The CA is stepped at low Hz by caStepSystem. If BridgeToParticles is true, “active” cells are sampled and appended into the same ParticleInstance array used by emitters.
+The CA is stepped at low Hz by caStepSystem. If BridgeToParticles is true, active cells are sampled and appended into the same ParticleInstance array used by emitters.
 
 ## Systems
 
@@ -87,7 +92,11 @@ Location: gekko/ca_ecs.go
 - Current rules:
   - Smoke/Fire: 6-neighbor diffusion with buoyancy, plus dissipation; fire optionally cools over time.
   - Sand/Water: placeholders for future work.
-- A small seed plume is injected periodically to keep smoke/fire alive in demos.
+- Optimizations:
+  - Double-buffering with buffer swap (no per-step allocation).
+  - Density cutoff (0.001) skips negligible cells.
+  - Buoyancy clamped to [-1, 1] to prevent negative shares.
+  - Seeding now happens inside ensureGrid() for consistent initialization.
 
 ### particlesCollect
 
@@ -193,18 +202,20 @@ Tuning:
 - Depth epsilon: increase slightly if particles disappear at grazing angles.
 - Weight exponent k: larger k biases toward front-most contributions.
 
-## CA → Particles Bridge
+## CA to Particles Bridge
 
 Location: gekko/ca_ecs.go (bridgeCellsToParticles)
 
 - For each enabled CA volume:
   - Samples grid cells based on a density threshold and a stride (downsampling).
-  - Computes world position from Transform (unit cell size × max scale component).
+  - Computes world position from Transform:
+    - Local position = cell index x cell size (with jitter).
+    - World position = Transform.Position + Transform.Rotation.Rotate(localPos).
   - Appends ParticleInstance with a chosen size and color (smoke/fire presets).
 - Controls:
   - threshold: density threshold to consider a cell active.
   - stride: sub-sampling step across the grid.
-  - cap: maximum appended per-frame to prevent spikes.
+  - cap: maximum appended per-frame to prevent spikes (default 2000).
 
 ## Example ECS Usage
 

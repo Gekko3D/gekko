@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -70,10 +71,13 @@ type GpuBufferManager struct {
 	HiZPipeline    *wgpu.ComputePipeline
 	HiZBindGroups  []*wgpu.BindGroup // One per mip transition
 
-	HiZReadbackLevel  uint32
-	HiZReadbackWidth  uint32
-	HiZReadbackHeight uint32
-	HiZMapped         bool
+	HiZReadbackLevel   uint32
+	HiZReadbackWidth   uint32
+	HiZReadbackHeight  uint32
+	HiZState           int // 0: Idle, 1: Copy (GPU), 2: Mapping (Wait GPU), 3: Mapped (Read CPU)
+	StateMu            sync.Mutex
+	LastHiZData        []float32
+	LastHiZW, LastHiZH uint32
 
 	// Bind Groups for new passes
 	GBufferBindGroup          *wgpu.BindGroup
