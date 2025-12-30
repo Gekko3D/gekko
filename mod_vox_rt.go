@@ -35,6 +35,7 @@ type VoxelRtState struct {
 	instanceMap   map[EntityId]*core.VoxelObject
 	particlePools map[EntityId]*particlePool
 	caVolumeMap   map[EntityId]*core.VoxelObject
+	worldMap      map[EntityId]*core.VoxelObject
 }
 
 func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
@@ -55,6 +56,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		loadedModels: make(map[AssetId]*core.VoxelObject),
 		instanceMap:  make(map[EntityId]*core.VoxelObject),
 		caVolumeMap:  make(map[EntityId]*core.VoxelObject),
+		worldMap:     make(map[EntityId]*core.VoxelObject),
 	}
 	cmd.AddResources(state)
 
@@ -66,6 +68,11 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	// Cellular automaton step system (low Hz via TickRate in component)
 	app.UseSystem(
 		System(caStepSystem).
+			InStage(Update).
+			RunAlways(),
+	)
+	app.UseSystem(
+		System(WorldStreamingSystem).
 			InStage(Update).
 			RunAlways(),
 	)
@@ -332,6 +339,46 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 		}
 	}
 	state.rtApp.Profiler.EndScope("Sync CA")
+
+	state.rtApp.Profiler.BeginScope("Sync World")
+	currentWorlds := make(map[EntityId]bool)
+	MakeQuery1[WorldComponent](cmd).Map(func(eid EntityId, world *WorldComponent) bool {
+		currentWorlds[eid] = true
+		obj, exists := state.worldMap[eid]
+		if !exists {
+			obj = core.NewVoxelObject()
+			// Default material table for world
+			mats := make([]core.Material, 256)
+			for i := range mats {
+				mats[i] = core.DefaultMaterial()
+				mats[i].BaseColor = [4]uint8{120, 120, 120, 255}
+			}
+			// Ground color (index 1)
+			mats[1].BaseColor = [4]uint8{100, 255, 100, 255}
+
+			obj.MaterialTable = mats
+			state.rtApp.Scene.AddObject(obj)
+			state.worldMap[eid] = obj
+		}
+
+		// Use the XBM from the world component
+		obj.XBrickMap = world.GetXBrickMap()
+
+		// World is usually stationary at origin
+		obj.Transform.Position = mgl32.Vec3{0, 0, 0}
+		obj.Transform.Rotation = mgl32.QuatIdent()
+		obj.Transform.Scale = mgl32.Vec3{1, 1, 1}
+		obj.Transform.Dirty = true
+
+		return true
+	})
+	for eid, obj := range state.worldMap {
+		if !currentWorlds[eid] {
+			state.rtApp.Scene.RemoveObject(obj)
+			delete(state.worldMap, eid)
+		}
+	}
+	state.rtApp.Profiler.EndScope("Sync World")
 
 	state.rtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
