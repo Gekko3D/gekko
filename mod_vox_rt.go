@@ -26,6 +26,7 @@ type VoxelRtModule struct {
 	AmbientLight mgl32.Vec3
 	DebugMode    bool
 	RenderMode   RenderMode
+	FontPath     string
 }
 
 type VoxelRtState struct {
@@ -44,6 +45,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	rtApp.AmbientLight = [3]float32{mod.AmbientLight.X(), mod.AmbientLight.Y(), mod.AmbientLight.Z()}
 	rtApp.DebugMode = mod.DebugMode
 	rtApp.RenderMode = uint32(mod.RenderMode)
+	rtApp.FontPath = mod.FontPath
 	if err := rtApp.Init(); err != nil {
 		panic(err)
 	}
