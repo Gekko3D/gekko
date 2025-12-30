@@ -26,10 +26,11 @@ const (
 type GpuBufferManager struct {
 	Device *wgpu.Device
 
-	CameraBuf    *wgpu.Buffer
-	InstancesBuf *wgpu.Buffer
-	BVHNodesBuf  *wgpu.Buffer
-	LightsBuf    *wgpu.Buffer
+	CameraBuf        *wgpu.Buffer
+	InstancesBuf     *wgpu.Buffer
+	BVHNodesBuf      *wgpu.Buffer
+	LightsBuf        *wgpu.Buffer
+	ShadowIndicesBuf *wgpu.Buffer
 
 	MaterialBuf         *wgpu.Buffer
 	SectorTableBuf      *wgpu.Buffer
@@ -1179,10 +1180,14 @@ func (m *GpuBufferManager) CreateShadowPipeline(code string) error {
 func (m *GpuBufferManager) CreateShadowBindGroups() {
 	var err error
 
-	// Group 0: Scene + Lights
+	// Ensure indices buffer exists
+	m.ensureBuffer("ShadowIndicesBuf", &m.ShadowIndicesBuf, make([]byte, 16), wgpu.BufferUsageStorage, 0)
+
+	// Group 0: Scene + Lights + Update Indices
 	m.ShadowBindGroup0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: m.ShadowPipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.ShadowIndicesBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
 			{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
 			{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
@@ -1221,10 +1226,36 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 	}
 }
 
-func (m *GpuBufferManager) DispatchShadowPass(encoder *wgpu.CommandEncoder, numLights uint32) {
+func (m *GpuBufferManager) DispatchShadowPass(encoder *wgpu.CommandEncoder, indices []uint32) {
 	if m.ShadowPipeline == nil || m.ShadowBindGroup0 == nil {
 		return
 	}
+
+	if len(indices) == 0 {
+		return
+	}
+
+	// Upload indices
+	idxBytes := make([]byte, len(indices)*4)
+	for i, v := range indices {
+		binary.LittleEndian.PutUint32(idxBytes[i*4:], v)
+	}
+
+	// Ensure buffer size
+	if m.ensureBuffer("ShadowIndicesBuf", &m.ShadowIndicesBuf, idxBytes, wgpu.BufferUsageStorage, 1024) {
+		// If recreated, we must recreate the bind group immediately for it to take effect
+		// This might be expensive if done every frame, but ensureBuffer only recreates on growth.
+		m.CreateShadowBindGroups()
+	} else {
+		// Just write if not recreated (ensureBuffer writes data if buffer acts as update)
+		// Actually ensureBuffer does write data.
+		// If buffer wasn't recreated, we still need to write if we want to update content?
+		// modify ensureBuffer behavior?
+		// ensureBuffer writes data if passed.
+	}
+	// Wait, ensureBuffer implementation:
+	// if len(data) > 0 { m.Device.GetQueue().WriteBuffer(*buf, 0, data) }
+	// So data IS written.
 
 	cPass := encoder.BeginComputePass(nil)
 	cPass.SetPipeline(m.ShadowPipeline)
@@ -1235,7 +1266,7 @@ func (m *GpuBufferManager) DispatchShadowPass(encoder *wgpu.CommandEncoder, numL
 	// Dispatch for 1024x1024 shadow maps
 	wgX := (1024 + 7) / 8
 	wgY := (1024 + 7) / 8
-	cPass.DispatchWorkgroups(uint32(wgX), uint32(wgY), numLights)
+	cPass.DispatchWorkgroups(uint32(wgX), uint32(wgY), uint32(len(indices)))
 	cPass.End()
 }
 

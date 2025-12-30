@@ -113,6 +113,7 @@ struct SectorGridParams {
 
 // ============== BIND GROUPS ==============
 
+@group(0) @binding(0) var<storage, read> update_indices: array<u32>;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(2) var<storage, read> nodes: array<BVHNode>;
 @group(0) @binding(3) var<storage, read> lights: array<Light>;
@@ -418,9 +419,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let tex_dim = textureDimensions(out_shadow_map);
     if (global_id.x >= tex_dim.x || global_id.y >= tex_dim.y) { return; }
     
-    let light_idx = global_id.z;
-    let num_lights = arrayLength(&lights);
-    if (light_idx >= num_lights) { return; }
+    let update_idx = global_id.z;
+    let num_updates = arrayLength(&update_indices);
+    if (update_idx >= num_updates) { return; }
+    
+    let light_idx = update_indices[update_idx];
     
     let light = lights[light_idx];
     
