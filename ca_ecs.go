@@ -295,9 +295,11 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 						}
 						size := 1.0 * cellSize
 						*instances = append(*instances, core.ParticleInstance{
-							Pos:   [3]float32{wp.X(), wp.Y(), wp.Z()},
-							Size:  size,
-							Color: col,
+							Pos:      [3]float32{wp.X(), wp.Y(), wp.Z()},
+							Size:     size,
+							Color:    col,
+							Velocity: [3]float32{0, 0, 0}, // Default (camera aligned)
+							LifePct:  0.0,                 // Default
 						})
 						added++
 					}
