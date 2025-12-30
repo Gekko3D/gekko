@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/editor"
@@ -68,9 +69,10 @@ type App struct {
 	RenderMode     uint32
 	FontPath       string
 
-	FrameCount int
-	FPS        float64
-	FPSTime    float64
+	FrameCount         int
+	FPS                float64
+	FPSTime            float64
+	ShadowUpdateOffset int
 
 	Profiler *Profiler
 }
@@ -657,7 +659,53 @@ func (a *App) Render() {
 
 	// Shadow Pass
 	a.Profiler.BeginScope("Shadows")
-	a.BufferManager.DispatchShadowPass(encoder, uint32(len(a.Scene.Lights)))
+
+	var shadowIndices []uint32
+	if len(a.Scene.Lights) > 0 {
+		type lightInfo struct {
+			Index int
+			Dist  float32
+		}
+
+		sortedLights := make([]lightInfo, 0, len(a.Scene.Lights))
+		camPos := a.Camera.Position
+
+		shadowIndices = append(shadowIndices, 0) // Light 0 (Sun) always
+
+		for i := 1; i < len(a.Scene.Lights); i++ {
+			l := a.Scene.Lights[i]
+			d := float32(0.0)
+			if l.Params[2] != 1.0 { // Not directional
+				p := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
+				d = p.Sub(camPos).Len()
+			}
+			sortedLights = append(sortedLights, lightInfo{i, d})
+		}
+
+		sort.Slice(sortedLights, func(i, j int) bool {
+			return sortedLights[i].Dist < sortedLights[j].Dist
+		})
+
+		numPrioritized := 4
+		updatesPerFrame := 2
+
+		for i := 0; i < len(sortedLights) && i < numPrioritized; i++ {
+			shadowIndices = append(shadowIndices, uint32(sortedLights[i].Index))
+		}
+
+		remainingStart := numPrioritized
+		if remainingStart < len(sortedLights) {
+			remainingCount := len(sortedLights) - remainingStart
+			for i := 0; i < updatesPerFrame; i++ {
+				offset := (a.ShadowUpdateOffset + i) % remainingCount
+				idx := sortedLights[remainingStart+offset].Index
+				shadowIndices = append(shadowIndices, uint32(idx))
+			}
+			a.ShadowUpdateOffset = (a.ShadowUpdateOffset + updatesPerFrame) % remainingCount
+		}
+	}
+
+	a.BufferManager.DispatchShadowPass(encoder, shadowIndices)
 	a.Profiler.EndScope("Shadows")
 
 	// Lighting Pass
