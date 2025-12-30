@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/editor"
@@ -65,6 +66,7 @@ type App struct {
 	MouseCaptured  bool
 	DebugMode      bool
 	RenderMode     uint32
+	FontPath       string
 
 	FrameCount int
 	FPS        float64
@@ -338,7 +340,26 @@ func (a *App) Init() error {
 	}
 
 	// Text Rendering Setup
-	fontPath := "/Users/ddevidch/code/go/gekko3d/actiongame/assets/Roboto-Medium.ttf"
+	fontPath := a.FontPath
+	if fontPath == "" {
+		// Try multiple potential locations relative to working directory
+		candidates := []string{
+			"gekko/voxelrt/rt/fonts/Roboto-Medium.ttf",    // Root
+			"../gekko/voxelrt/rt/fonts/Roboto-Medium.ttf", // From subfolders like actiongame
+			"assets/Roboto-Medium.ttf",                    // Local assets
+		}
+
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				fontPath = c
+				break
+			}
+		}
+
+		if fontPath == "" {
+			fontPath = "Roboto-Medium.ttf" // Final fallback
+		}
+	}
 	a.TextRenderer, err = core.NewTextRenderer(fontPath, 32)
 	if err != nil {
 		fmt.Printf("WARNING: Failed to initialize text renderer: %v\n", err)
