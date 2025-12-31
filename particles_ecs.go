@@ -122,8 +122,18 @@ func particlesCollect(state *VoxelRtState, t *Time, cmd *Commands) []core.Partic
 		}
 		pl := ensurePool(state, eid, em.MaxParticles)
 
+		// LOD: Reduce spawn rate based on distance
+		camPos := state.rtApp.Camera.Position
+		distSq := tr.Position.Sub(camPos).LenSqr()
+		lodFactor := float32(1.0)
+		if distSq > 100*100 { // > 100m
+			lodFactor = 0.1
+		} else if distSq > 50*50 { // > 50m
+			lodFactor = 0.5
+		}
+
 		// Spawn
-		pl.spawnAcc += em.SpawnRate * dt
+		pl.spawnAcc += em.SpawnRate * dt * lodFactor
 		spawnCount := int(pl.spawnAcc)
 		if spawnCount > 0 {
 			pl.spawnAcc -= float32(spawnCount)
@@ -182,10 +192,17 @@ func particlesCollect(state *VoxelRtState, t *Time, cmd *Commands) []core.Partic
 		// Note: We could frustum-cull per emitter later.
 		for i = 0; i < pl.alive; i++ {
 			p := pl.pos[i]
+			life := pl.life[i]
+			if life <= 0 {
+				life = 1.0
+			}
+			vel := pl.vel[i]
 			instances = append(instances, core.ParticleInstance{
-				Pos:   [3]float32{p.X(), p.Y(), p.Z()},
-				Size:  pl.size[i],
-				Color: pl.color[i],
+				Pos:      [3]float32{p.X(), p.Y(), p.Z()},
+				Size:     pl.size[i],
+				Color:    pl.color[i],
+				Velocity: [3]float32{vel.X(), vel.Y(), vel.Z()},
+				LifePct:  pl.age[i] / life,
 			})
 		}
 		return true

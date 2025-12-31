@@ -1115,7 +1115,7 @@ func (m *GpuBufferManager) UpdateParticles(instances []core.ParticleInstance) bo
 	// Create byte slice from instances
 	var bytes []byte
 	if len(instances) > 0 {
-		vSize := len(instances) * 32
+		vSize := len(instances) * int(unsafe.Sizeof(core.ParticleInstance{}))
 		bytes = unsafe.Slice((*byte)(unsafe.Pointer(&instances[0])), vSize)
 	} else {
 		bytes = []byte{}

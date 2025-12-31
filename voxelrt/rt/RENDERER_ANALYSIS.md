@@ -111,9 +111,9 @@ Phase 4 — Destruction, debris, and particles (Medium/High)
 - Debris path:
   - Emit coarse rigid chunks + particles; cap count; fade/LOD (lifetime + distance).
 - Particles quality:
-  - Soft particles (fade with |t_scene − t_particle|).
-  - Velocity-aligned/stretched billboards for sparks; flipbook atlases for smoke/fire.
-  - Distance/importance-based spawn LOD.
+  - [DONE] Soft particles (fade with |t_scene − t_particle|).
+  - [DONE] Velocity-aligned/stretched billboards for sparks; flipbook atlases for smoke/fire (Hooks added).
+  - [DONE] Distance/importance-based spawn LOD.
 - Optional GPU particles:
   - Keep CPU emitters for gameplay; consider compute integration for high-density effects.
 
