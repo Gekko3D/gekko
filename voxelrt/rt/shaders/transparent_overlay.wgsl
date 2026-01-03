@@ -110,6 +110,7 @@ struct TransparentHit {
   t: f32,
   color: vec3<f32>,
   alpha: f32,
+  thickness: f32,
   normal: vec3<f32>,
   pos_ws: vec3<f32>,
   palette_idx: u32,
@@ -283,9 +284,32 @@ fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
   return -normalize(grad);
 }
 
+// Estimate thickness in WORLD SPACE along the ray inside occupied voxels, starting just after the hit.
+// Marches per-voxel using DDA until leaving occupancy or reaching t_max_obj.
+// World-space length is accumulated using the mapped direction magnitude.
+fn estimate_thickness_ws(start_t: f32, ray: Ray, t_max_obj: f32, params: ObjectParams, obj_to_world: mat4x4<f32>) -> f32 {
+  var t = start_t + EPS;
+  var pos = ray.origin + ray.dir * t;
+  var thickness_ws: f32 = 0.0;
+  let dir_ws = (obj_to_world * vec4<f32>(ray.dir, 0.0)).xyz;
+  let d_ws_scale = length(dir_ws);
+  var steps: i32 = 0;
+  loop {
+    if (t >= t_max_obj || steps >= 256) { break; }
+    let occ = sample_occupancy(vec3<i32>(floor(pos)), params);
+    if (occ < 0.5) { break; }
+    let dt = step_to_next_cell(pos, ray.dir, ray.inv_dir, 1.0);
+    thickness_ws += dt * d_ws_scale;
+    t += dt;
+    pos = pos + ray.dir * dt;
+    steps += 1;
+  }
+  return max(thickness_ws, 0.0);
+}
+
 // ============== Traversal for first transparent hit (micro grid path only) ==============
 fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, t_limit: f32) -> TransparentHit {
-  var outHit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u);
+  var outHit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0, 0.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u);
   let params = object_params[inst.object_id];
 
   // Transform into object space
@@ -348,7 +372,8 @@ fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_ex
                 let n_os = estimate_normal(p_hit_os, params);
                 let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                 let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
-                outHit = TransparentHit(true, t_hit, vec3<f32>(0.0), alpha, n_ws, pos_ws, palette_idx, mat_base);
+                let thick = estimate_thickness_ws(t_hit, ray, t_max_obj, params, inst.object_to_world);
+                outHit = TransparentHit(true, t_hit, vec3<f32>(0.0), alpha, thick, n_ws, pos_ws, palette_idx, mat_base);
                 return outHit;
               }
             } else {
@@ -384,7 +409,8 @@ fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_ex
                       let n_os = estimate_normal(voxel_center_os, params);
                       let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                       let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                      outHit = TransparentHit(true, t_hit, vec3<f32>(0.0), alpha, n_ws, pos_ws, palette_idx, mat_base);
+                      let thick = estimate_thickness_ws(t_hit, ray, t_max_obj, params, inst.object_to_world);
+                      outHit = TransparentHit(true, t_hit, vec3<f32>(0.0), alpha, thick, n_ws, pos_ws, palette_idx, mat_base);
                       return outHit;
                     }
                   }
@@ -467,7 +493,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let ray = get_ray_from_uv(uv_screen);
 
   // Traverse BVH to find nearest transparent hit before t_limit
-  var hit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u);
+  var hit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0, 0.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u);
 
   var stack: array<i32, 64>;
   var sp = 0;
@@ -565,14 +591,18 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       }
     }
 
-    // Depth-weighted WBOIT contribution
-    let k: f32 = 8.0;
+    // Depth-weighted WBOIT contribution with thickness-based Beer–Lambert alpha (amplified)
+    let density_sigma: f32 = 0.2; // world-space absorption per unit length (tune 0.1..0.5)
+    let k: f32 = 4.0;             // lower front-weight exponent to accumulate more weight
     let z = clamp(hit.t / max(t_limit, 1e-4), 0.0, 1.0);
-    let w = max(1e-3, alpha) * pow(1.0 - z, k);
-    let contrib = color * alpha * w;
-    let wsum = alpha * w;
+    let eps_a: f32 = 1e-4;
+    let alpha_eff = 1.0 - pow(max(1.0 - alpha, eps_a), clamp(hit.thickness * density_sigma, 0.0, 256.0));
+    let w = max(1e-3, alpha_eff) * pow(1.0 - z, k);
+    let contrib = color * alpha_eff * w;
+    let wsum = alpha_eff * w;
 
-    return FSOut(vec4<f32>(contrib, wsum), wsum);
+    // Write unweighted alpha to accum.a (for revealage), keep weight = alpha_eff * w
+    return FSOut(vec4<f32>(contrib, alpha_eff), wsum);
   }
   return FSOut(vec4<f32>(0.0), 0.0);
 }

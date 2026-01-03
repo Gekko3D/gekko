@@ -32,6 +32,7 @@ struct VSOut {
     @location(1) quad_uv: vec2<f32>,
     @location(2) world_pos: vec3<f32>,
     @location(3) life_pct: f32,
+    @location(4) psize: f32,
 };
 
 fn get_camera_right() -> vec3<f32> {
@@ -78,6 +79,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     out.quad_uv = corner + vec2<f32>(0.5, 0.5);
     out.world_pos = world_pos;
     out.life_pct = inst.life_pct;
+    out.psize = inst.size;
     return out;
 }
 
@@ -109,24 +111,24 @@ fn fs_main(in: VSOut) -> FSOut {
     let mask = 1.0 - smoothstep(0.8, 1.0, d);
     let life_fade = smoothstep(0.0, 0.1, in.life_pct) * (1.0 - smoothstep(0.9, 1.0, in.life_pct));
     
-    // Soft particle falloff (smooth clipping)
-    let soft_falloff = 1.0; 
+    // Soft particle falloff (size-aware)
     let depth_diff = (t_scene + bias) - t_pixel;
-    let soft_factor = clamp(depth_diff / soft_falloff, 0.0, 1.0);
+    let soft_range = max(0.5, in.psize * 1.5);
+    let soft_factor = clamp(depth_diff / soft_range, 0.0, 1.0);
 
     let alpha = clamp(in.color.a * mask * life_fade * soft_factor, 0.0, 1.0);
     if (alpha < 0.001) {
         discard;
     }
 
-    // WBOIT Weighting (Stable variant)
-    // We use a simpler weighting to avoid distance-based flickering
-    let z = t_pixel;
-    let weight = alpha * max(0.01, 100.0 / (0.01 + pow(z / 10.0, 3.0)));
+    // WBOIT weighting normalized by opaque limit (matches transparent overlay)
+    let z_norm = clamp(t_pixel / max(t_scene, 1e-4), 0.0, 1.0);
+    let k: f32 = 8.0;
+    let weight = max(1e-3, alpha) * pow(1.0 - z_norm, k);
 
     var out: FSOut;
-    // Accumulate premultiplied: (color.rgb * alpha * weight, alpha * weight)
-    out.accum = vec4<f32>(in.color.rgb * alpha * weight, alpha * weight);
+    // Accumulate premultiplied color with weighted alpha, but store unweighted alpha in accum.a (for revealage)
+    out.accum = vec4<f32>(in.color.rgb * alpha * weight, alpha);
     out.weight = alpha * weight;
     return out;
 }

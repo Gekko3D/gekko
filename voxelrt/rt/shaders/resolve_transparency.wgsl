@@ -33,18 +33,25 @@ fn saturate(v: vec3<f32>) -> vec3<f32> {
 }
 
 @fragment
-fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   // Fetch all inputs via textureLoad with integer pixel coords (no filtering)
   let dims = textureDimensions(tAccum);
   let ipos = vec2<i32>(
-    clamp(i32(floor(uv.x * f32(dims.x))), 0, i32(dims.x) - 1),
-    clamp(i32(floor(uv.y * f32(dims.y))), 0, i32(dims.y) - 1)
+    clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
+    clamp(i32(frag_pos.y), 0, i32(dims.y) - 1)
   );
   let copq = textureLoad(tOpaque,  ipos, 0).rgb;
-  let acc  = textureLoad(tAccum,   ipos, 0).rgb;
+  let acc4 = textureLoad(tAccum,   ipos, 0);
+  let acc  = acc4.rgb;
+  let accA = acc4.a;
   let w    = textureLoad(tWeight,  ipos, 0).r;
 
+  // Use unweighted accumulated alpha (from accum.a) for revealage to reduce distance dependence
+  let a_unweighted = clamp(accA, 0.0, 50.0);
+  let w_scale: f32 = 2.0; // density control for revealage (tune 1.5..3.0)
+  let T = exp(-w_scale * a_unweighted);
   let transp = acc / max(w, 1e-5);
-  let col = saturate(copq + transp);
+  // Composite: attenuate background by T, add normalized transparent contribution
+  let col = saturate(copq * T + transp);
   return vec4<f32>(col, 1.0);
 }

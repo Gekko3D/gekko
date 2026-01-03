@@ -243,6 +243,14 @@ func caStepSystem(t *Time, cmd *Commands) {
 // It returns the number appended (with a cap).
 func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, maxAppend int) int {
 	added := 0
+	// Capture camera position once for adaptive LOD
+	camPos := mgl32.Vec3{}
+	MakeQuery1[CameraComponent](cmd).Map(func(eid EntityId, cam *CameraComponent) bool {
+		if cam != nil {
+			camPos = cam.Position
+		}
+		return false
+	})
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
 		if cv == nil || !cv.BridgeToParticles || cv._density == nil {
 			return true
@@ -266,12 +274,18 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 		}
 		cellSize *= smax
 
-		// Sample every other cell to keep counts under control; threshold density
-		// threshold := float32(0.05)
+		// Adaptive sampling based on camera distance
+		dist := tr.Position.Sub(camPos).Len()
 		threshold := float32(0.01)
 		stride := 1
+		if dist > 80.0 {
+			stride = 4
+			threshold = 0.07
+		} else if dist > 30.0 {
+			stride = 2
+			threshold = 0.03
+		}
 		// small jitter to avoid grid look
-		// j := func() float32 { return (rand.Float32() - 0.5) * 0.6 * cellSize }
 		j := func() float32 { return (rand.Float32() - 0.5) * 0.8 * cellSize }
 
 		for z := 0; z < nz && added < maxAppend; z += stride {
@@ -288,18 +302,33 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 						// 	col = [4]float32{2.0, 0.8, 0.2, 1.0} // hotter fire
 						// }
 						// size := 1.5 * cellSize
-						// gray for smoke, orange tint for fire
-						col := [4]float32{0.7, 0.7, 0.7, 1.0}
-						if cv.Type == CellularFire {
-							col = [4]float32{1.0, 0.4, 0.1, 1.0}
+						// Density mapping for alpha/size and life
+						dv := float32(0.0)
+						if d > threshold {
+							dv = (d - threshold) / (1.0 - threshold)
+							if dv < 0 {
+								dv = 0
+							} else if dv > 1 {
+								dv = 1
+							}
 						}
-						size := 1.0 * cellSize
+						// Color and alpha from density
+						colA := 0.15 + 0.6*dv // 0.15..0.75
+						col := [4]float32{0.7, 0.7, 0.7, colA}
+						if cv.Type == CellularFire {
+							col = [4]float32{1.0, 0.35 + 0.4*dv, 0.05, colA}
+						}
+						// Size variation by density
+						base := 1.0 * cellSize
+						size := base * (0.8 + 0.6*dv)
+						// Life mid-range to ensure fade-in/out
+						lp := 0.3 + 0.4*rand.Float32()
 						*instances = append(*instances, core.ParticleInstance{
 							Pos:      [3]float32{wp.X(), wp.Y(), wp.Z()},
 							Size:     size,
 							Color:    col,
 							Velocity: [3]float32{0, 0, 0}, // Default (camera aligned)
-							LifePct:  0.0,                 // Default
+							LifePct:  lp,
 						})
 						added++
 					}
