@@ -38,10 +38,56 @@ type VoxelRtState struct {
 	worldMap      map[EntityId]*core.VoxelObject
 }
 
+func (s *VoxelRtState) WindowSize() (int, int) {
+	if s == nil || s.rtApp == nil {
+		return 0, 0
+	}
+	return int(s.rtApp.Config.Width), int(s.rtApp.Config.Height)
+}
+
+func (s *VoxelRtState) FPS() float64 {
+	if s == nil || s.rtApp == nil {
+		return 0
+	}
+	return s.rtApp.FPS
+}
+
+func (s *VoxelRtState) ProfilerStats() string {
+	if s == nil || s.rtApp == nil {
+		return ""
+	}
+	return s.rtApp.Profiler.GetStatsString()
+}
+
+func (s *VoxelRtState) IsDebug() bool {
+	if s == nil || s.rtApp == nil {
+		return false
+	}
+	return s.rtApp.DebugMode
+}
+
+func (s *VoxelRtState) DrawText(text string, x, y float32, scale float32, color [4]float32) {
+	if s != nil && s.rtApp != nil {
+		s.rtApp.DrawText(text, x, y, scale, color)
+	}
+}
+
+func (s *VoxelRtState) Counter(name string) int {
+	if s == nil || s.rtApp == nil {
+		return 0
+	}
+	return s.rtApp.Profiler.Counts[name]
+}
+
+func (s *VoxelRtState) SetDebugMode(enabled bool) {
+	if s != nil && s.rtApp != nil {
+		s.rtApp.DebugMode = enabled
+	}
+}
+
 func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	windowState := createWindowState(mod.WindowWidth, mod.WindowHeight, mod.WindowTitle)
 	cmd.AddResources(windowState)
-
 	rtApp := app_rt.NewApp(windowState.windowGlfw)
 	rtApp.AmbientLight = [3]float32{mod.AmbientLight.X(), mod.AmbientLight.Y(), mod.AmbientLight.Z()}
 	rtApp.DebugMode = mod.DebugMode
@@ -383,8 +429,8 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 	state.rtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
 		state.rtApp.Camera.Position = camera.Position
-		state.rtApp.Camera.Yaw = camera.Yaw
-		state.rtApp.Camera.Pitch = camera.Pitch
+		state.rtApp.Camera.Yaw = mgl32.DegToRad(camera.Yaw)
+		state.rtApp.Camera.Pitch = mgl32.DegToRad(camera.Pitch)
 		return false
 	})
 	// Sync text
