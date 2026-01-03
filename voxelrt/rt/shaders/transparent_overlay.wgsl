@@ -18,8 +18,8 @@ struct CameraData {
   ambient_color: vec4<f32>,
   debug_mode: u32,
   render_mode: u32,
+  num_lights: u32,
   pad1: u32,
-  pad2: u32,
 };
 
 struct Instance {
@@ -542,7 +542,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
 
     var color = base_col * uCamera.ambient_color.xyz + emissive;
     let V = normalize(uCamera.cam_pos.xyz - hit.pos_ws);
-    let num_lights = arrayLength(&lights);
+    let num_lights = uCamera.num_lights;
     for (var i = 0u; i < num_lights; i = i + 1u) {
       let light = lights[i];
       let light_type = u32(light.params.z);

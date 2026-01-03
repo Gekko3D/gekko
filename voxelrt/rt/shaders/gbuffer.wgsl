@@ -18,8 +18,8 @@ struct CameraData {
     ambient_color: vec4<f32>,
     debug_mode: u32,
     render_mode: u32,
+    num_lights: u32,
     pad1: u32,
-    pad2: u32,
 };
 
 struct Instance {

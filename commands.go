@@ -15,15 +15,23 @@ func (cmd *Commands) AddResources(resources ...any) *Commands {
 }
 
 func (cmd *Commands) AddEntity(components ...any) EntityId {
-	return cmd.app.ecs.addEntity(components...)
+	eid := cmd.app.ecs.nextEntityId()
+	cmd.app.pendingAdditions = append(cmd.app.pendingAdditions, pendingAdd{
+		eid:        eid,
+		components: components,
+	})
+	return eid
 }
 
 func (cmd *Commands) AddComponents(entityId EntityId, components ...any) {
-	cmd.app.ecs.addComponents(entityId, components...)
+	cmd.app.pendingCompAdds = append(cmd.app.pendingCompAdds, pendingCompAdd{
+		eid:        entityId,
+		components: components,
+	})
 }
 
 func (cmd *Commands) RemoveEntity(entityId EntityId) {
-	cmd.app.ecs.removeEntity(entityId)
+	cmd.app.pendingRemovals = append(cmd.app.pendingRemovals, entityId)
 }
 
 func (cmd *Commands) GetAllComponents(entityId EntityId) []any {

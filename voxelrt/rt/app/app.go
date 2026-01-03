@@ -376,7 +376,7 @@ func (a *App) Init() error {
 	proj := mgl32.Ident4()
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
-	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode)
+	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)))
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene)
@@ -576,7 +576,7 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode)
+	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)))
 
 	// Update Text Buffers if needed
 	if len(a.TextItems) > 0 && a.TextRenderer != nil {

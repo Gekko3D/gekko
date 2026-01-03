@@ -21,6 +21,21 @@ type App struct {
 	systemsStateless   map[string][]systemFn
 	resources          map[reflect.Type]any
 	ecs                *Ecs
+
+	// Command Buffering
+	pendingAdditions []pendingAdd
+	pendingRemovals  []EntityId
+	pendingCompAdds  []pendingCompAdd
+}
+
+type pendingAdd struct {
+	eid        EntityId
+	components []any
+}
+
+type pendingCompAdd struct {
+	eid        EntityId
+	components []any
 }
 
 func (app *App) Commands() *Commands {
@@ -79,6 +94,7 @@ func (app *App) callSystems(state State, phase statePhase) {
 				}
 			}
 		}
+		app.FlushCommands()
 	}
 }
 
@@ -152,4 +168,30 @@ func (app *App) callSystemInternal(system systemFn) {
 		}
 	}
 	systemValue.Call(args)
+}
+
+func (app *App) FlushCommands() {
+	if len(app.pendingAdditions) == 0 && len(app.pendingRemovals) == 0 && len(app.pendingCompAdds) == 0 {
+		return
+	}
+
+	// 1. Process Removals first (so we don't add to dead entities)
+	for _, eid := range app.pendingRemovals {
+		fmt.Printf("FLUSH: Removing entity %v\n", eid)
+		app.ecs.removeEntity(eid)
+	}
+	app.pendingRemovals = app.pendingRemovals[:0]
+
+	// 2. Process Additions
+	for _, add := range app.pendingAdditions {
+		// fmt.Printf("FLUSH: Adding entity %v\n", add.eid)
+		app.ecs.insertEntity(add.eid, add.components...)
+	}
+	app.pendingAdditions = app.pendingAdditions[:0]
+
+	// 3. Process Component Additions
+	for _, add := range app.pendingCompAdds {
+		app.ecs.addComponents(add.eid, add.components...)
+	}
+	app.pendingCompAdds = app.pendingCompAdds[:0]
 }

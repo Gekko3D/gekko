@@ -53,7 +53,10 @@ type archetype struct {
 
 func (ecs *Ecs) addEntity(components ...any) EntityId {
 	entityId := ecs.nextEntityId()
+	return ecs.insertEntity(entityId, components...)
+}
 
+func (ecs *Ecs) insertEntity(entityId EntityId, components ...any) EntityId {
 	archId, _, arch := ecs.archetypeFromComponents(components...)
 
 	row := ecs.archetypeReserveRow(arch)
