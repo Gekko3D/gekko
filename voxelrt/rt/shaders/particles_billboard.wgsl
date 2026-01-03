@@ -127,8 +127,8 @@ fn fs_main(in: VSOut) -> FSOut {
     let weight = max(1e-3, alpha) * pow(1.0 - z_norm, k);
 
     var out: FSOut;
-    // Accumulate premultiplied: (color.rgb * alpha * weight, alpha * weight)
-    out.accum = vec4<f32>(in.color.rgb * alpha * weight, alpha * weight);
+    // Accumulate premultiplied color with weighted alpha, but store unweighted alpha in accum.a (for revealage)
+    out.accum = vec4<f32>(in.color.rgb * alpha * weight, alpha);
     out.weight = alpha * weight;
     return out;
 }
