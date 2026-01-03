@@ -10,6 +10,21 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
+type RaycastHit struct {
+	Hit    bool
+	T      float32
+	Pos    [3]int
+	Normal mgl32.Vec3
+	Entity EntityId
+}
+
+type DebugRay struct {
+	Origin   mgl32.Vec3
+	Dir      mgl32.Vec3
+	Color    [4]float32
+	Duration float32
+}
+
 type RenderMode uint32
 
 const (
@@ -36,6 +51,9 @@ type VoxelRtState struct {
 	particlePools map[EntityId]*particlePool
 	caVolumeMap   map[EntityId]*core.VoxelObject
 	worldMap      map[EntityId]*core.VoxelObject
+
+	// Debug rays
+	debugRays []DebugRay
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -83,6 +101,158 @@ func (s *VoxelRtState) SetDebugMode(enabled bool) {
 	if s != nil && s.rtApp != nil {
 		s.rtApp.DebugMode = enabled
 	}
+}
+
+func (s *VoxelRtState) getVoxelObject(eid EntityId) *core.VoxelObject {
+	if obj, ok := s.instanceMap[eid]; ok {
+		return obj
+	}
+	if obj, ok := s.worldMap[eid]; ok {
+		return obj
+	}
+	if obj, ok := s.caVolumeMap[eid]; ok {
+		return obj
+	}
+	return nil
+}
+
+func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, radius float32, val uint8) {
+	if s == nil {
+		return
+	}
+	obj := s.getVoxelObject(eid)
+	if obj == nil || obj.XBrickMap == nil {
+		return
+	}
+
+	// Transform center to local space
+	w2o := obj.Transform.WorldToObject()
+	localCenter := w2o.Mul4x1(worldCenter.Vec4(1.0)).Vec3()
+
+	// Scale radius by object scale (approximate by avg scale)
+	scale := obj.Transform.Scale
+	avgScale := (scale.X() + scale.Y() + scale.Z()) / 3.0
+	if avgScale == 0 {
+		avgScale = 1.0
+	}
+	localRadius := radius / avgScale
+
+	volume.Sphere(obj.XBrickMap, localCenter, localRadius, val)
+}
+
+func (s *VoxelRtState) DrawDebugRay(origin, dir mgl32.Vec3, color [4]float32, duration float32) {
+	if s == nil {
+		return
+	}
+	s.debugRays = append(s.debugRays, DebugRay{
+		Origin:   origin,
+		Dir:      dir,
+		Color:    color,
+		Duration: duration,
+	})
+}
+
+func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
+	if s == nil || s.rtApp == nil {
+		return 0, 0, false
+	}
+	// Use current camera to build projection
+	view := s.rtApp.Camera.GetViewMatrix()
+	aspect := float32(s.rtApp.Config.Width) / float32(s.rtApp.Config.Height)
+	if aspect == 0 {
+		aspect = 1.0
+	}
+
+	// GET ACTUAL FOV FROM CAMERA COMPONENT
+	fov := float32(45.0) // Default
+	// We need a way to get the true FOV. For now matching playing.go
+	proj := mgl32.Perspective(mgl32.DegToRad(fov), aspect, 0.1, 1000.0)
+	vp := proj.Mul4(view)
+
+	clip := vp.Mul4x1(pos.Vec4(1.0))
+
+	// Clip points behind far or too close to near plane
+	if clip.W() < 0.1 {
+		return 0, 0, false
+	}
+
+	ndc := clip.Vec3().Mul(1.0 / clip.W())
+
+	// NDC to Screen (USE PIXEL DIMENSIONS)
+	w, h := float32(s.rtApp.Config.Width), float32(s.rtApp.Config.Height)
+	x := (ndc.X()*0.5 + 0.5) * w
+	y := (1.0 - (ndc.Y()*0.5 + 0.5)) * h
+
+	// Final bounds check
+	if x < 0 || x > w || y < 0 || y > h {
+		return x, y, false
+	}
+
+	return x, y, true
+}
+
+func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit {
+	if s == nil || s.rtApp == nil {
+		return RaycastHit{}
+	}
+
+	bestHit := RaycastHit{T: tMax + 1.0}
+
+	// 1. Check all instances (models, CA, etc.)
+	checkMap := func(m map[EntityId]*core.VoxelObject) {
+		for eid, obj := range m {
+			if obj.XBrickMap == nil {
+				continue
+			}
+
+			// Transform ray to object space
+			w2o := obj.Transform.WorldToObject()
+			localOrigin := w2o.Mul4x1(origin.Vec4(1.0)).Vec3()
+
+			// Direction transformation is trickier due to scale.
+			// We want to transform the direction vector itself.
+			// For a direction vector d, its object space representation is d' = inv(M) * d (with w=0).
+			// However, if there is non-uniform scale, the length changes.
+			// RayMarch handles its own normalization/stepping logic, so we just need a consistent direction.
+			localDir := w2o.Mul4x1(dir.Vec4(0.0)).Vec3().Normalize()
+
+			hit, t, pos, normal := obj.XBrickMap.RayMarch(localOrigin, localDir, 0, tMax)
+			if hit {
+				// We need to convert t back to world space distance.
+				// World distance = t * |ObjDir| where ObjDir is the untransformed local direction.
+				// Since we normalized localDir, we need the original scale factor.
+
+				// Actually, a better way: hitPointWorld = o2w * hitPointLocal.
+				// tWorld = |hitPointWorld - origin|
+
+				o2w := obj.Transform.ObjectToWorld()
+				localHitPos := localOrigin.Add(localDir.Mul(t))
+				worldHitPos := o2w.Mul4x1(localHitPos.Vec4(1.0)).Vec3()
+				worldT := worldHitPos.Sub(origin).Len()
+
+				if worldT < bestHit.T {
+					bestHit.Hit = true
+					bestHit.T = worldT
+					bestHit.Pos = pos
+
+					// Transform normal to world space
+					// Normal transform: transpose(inverse(M))
+					worldNormal := o2w.Mul4x1(normal.Vec4(0.0)).Vec3().Normalize()
+					bestHit.Normal = worldNormal
+					bestHit.Entity = eid
+				}
+			}
+		}
+	}
+
+	checkMap(s.instanceMap)
+	checkMap(s.caVolumeMap)
+	checkMap(s.worldMap)
+
+	if bestHit.Hit {
+		return bestHit
+	}
+	return RaycastHit{}
 }
 
 func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
@@ -175,6 +345,9 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 				for i, color := range gekkoPalette.VoxPalette {
 					mat := core.DefaultMaterial()
 					mat.BaseColor = color
+					if i == 0 {
+						mat.Transparency = 1.0 // Air is transparent!
+					}
 
 					if vMat, ok := matMap[i]; ok {
 						if r, ok := vMat.Property["_rough"].(float32); ok {
@@ -398,6 +571,9 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 			for i := range mats {
 				mats[i] = core.DefaultMaterial()
 				mats[i].BaseColor = [4]uint8{120, 120, 120, 255}
+				if i == 0 {
+					mats[i].Transparency = 1.0 // Air is transparent!
+				}
 			}
 			// Ground color (index 1)
 			mats[1].BaseColor = [4]uint8{100, 255, 100, 255}
@@ -494,7 +670,47 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 	}
 
 	state.rtApp.Profiler.BeginScope("RT Update")
+
+	// Process debug rays BEFORE Update() so DrawText is captured
+	dt := float32(time.Dt)
+	if dt <= 0 {
+		dt = 1.0 / 60.0
+	}
+	remainingRays := state.debugRays[:0]
+	for _, ray := range state.debugRays {
+		// Calculate hit point for visualization
+		hit := state.Raycast(ray.Origin.Add(ray.Dir.Mul(0.1)), ray.Dir, 1000.0)
+		dist := float32(100.0)
+		if hit.Hit {
+			dist = hit.T + 0.1
+			// Draw marker at hit
+			if x, y, ok := state.Project(ray.Origin.Add(ray.Dir.Mul(dist))); ok {
+				state.rtApp.DrawText("*", x-8, y-16, 2.0, ray.Color)
+			}
+		}
+
+		// Draw path
+		steps := 50
+		for i := 1; i <= steps; i++ {
+			t := (dist / float32(steps)) * float32(i)
+			if x, y, ok := state.Project(ray.Origin.Add(ray.Dir.Mul(t))); ok {
+				// Fade alpha based on distance for cooler look
+				alpha := 1.0 - (t/dist)*0.8
+				color := ray.Color
+				color[3] *= alpha
+				state.rtApp.DrawText(".", x-6, y-12, 1.4, color)
+			}
+		}
+
+		ray.Duration -= dt
+		if ray.Duration > 0 {
+			remainingRays = append(remainingRays, ray)
+		}
+	}
+	state.debugRays = remainingRays
+
 	state.rtApp.Update()
+
 	state.rtApp.Profiler.EndScope("RT Update")
 }
 

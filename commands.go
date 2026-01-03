@@ -22,6 +22,10 @@ func (cmd *Commands) AddComponents(entityId EntityId, components ...any) {
 	cmd.app.ecs.addComponents(entityId, components...)
 }
 
+func (cmd *Commands) RemoveEntity(entityId EntityId) {
+	cmd.app.ecs.removeEntity(entityId)
+}
+
 func (cmd *Commands) GetAllComponents(entityId EntityId) []any {
 	ecs := cmd.app.ecs
 	archId := ecs.entityIndex[entityId]

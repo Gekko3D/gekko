@@ -18,7 +18,7 @@ type WorldComponent struct {
 	// Internal state
 	loadedRegions  map[[3]int]*Region
 	pendingSectors map[[3]int]*volume.Sector
-	mainXBM        *volume.XBrickMap
+	MainXBM        *volume.XBrickMap
 	mu             sync.Mutex
 }
 
@@ -35,13 +35,13 @@ func NewWorldComponent(path string, radius float32) *WorldComponent {
 		WorldPath:      path,
 		loadedRegions:  make(map[[3]int]*Region),
 		pendingSectors: make(map[[3]int]*volume.Sector),
-		mainXBM:        volume.NewXBrickMap(),
+		MainXBM:        volume.NewXBrickMap(),
 	}
 }
 
 // GetXBrickMap returns the active xbrickmap for rendering.
 func (w *WorldComponent) GetXBrickMap() *volume.XBrickMap {
-	return w.mainXBM
+	return w.MainXBM
 }
 
 // WorldStreamingSystem handles the lifecycle of voxel regions.
@@ -66,10 +66,10 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState) {
 		if len(world.pendingSectors) > 0 {
 			fmt.Printf("STREAM: Applying %d pending sectors to main XBM\n", len(world.pendingSectors))
 			for k, s := range world.pendingSectors {
-				world.mainXBM.Sectors[k] = s
+				world.MainXBM.Sectors[k] = s
 			}
-			world.mainXBM.StructureDirty = true
-			world.mainXBM.AABBDirty = true
+			world.MainXBM.StructureDirty = true
+			world.MainXBM.AABBDirty = true
 			world.pendingSectors = make(map[[3]int]*volume.Sector)
 		}
 		world.mu.Unlock()
@@ -126,10 +126,10 @@ func updateWorldStreaming(world *WorldComponent, camPos mgl32.Vec3, state *Voxel
 		if !shouldBeLoaded[coords] {
 			// Remove sectors from main XBM (Main thread)
 			for sKey := range reg.Sectors {
-				delete(world.mainXBM.Sectors, sKey)
+				delete(world.MainXBM.Sectors, sKey)
 			}
-			world.mainXBM.StructureDirty = true
-			world.mainXBM.AABBDirty = true
+			world.MainXBM.StructureDirty = true
+			world.MainXBM.AABBDirty = true
 			delete(world.loadedRegions, coords)
 		}
 	}
