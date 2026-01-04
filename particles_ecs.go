@@ -254,7 +254,7 @@ func particlesCollect(state *VoxelRtState, t *Time, cmd *Commands) []core.Partic
 	}
 
 	// Snapshot camera position once
-	camPos := state.rtApp.Camera.Position
+	camPos := state.RtApp.Camera.Position
 
 	// Phase 1: collect jobs and ensure pools on the main goroutine (avoid map races)
 	jobs := make([]emitterJob, 0, 32)

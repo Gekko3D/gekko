@@ -101,19 +101,19 @@ func editorSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 	ray := editorComp.editor.GetPickRay(float64(mouseX), float64(mouseY), width, height, camState)
 
 	// Pick voxel from scene
-	if state.rtApp == nil || state.rtApp.Scene == nil {
+	if state.RtApp == nil || state.RtApp.Scene == nil {
 		return
 	}
 
-	hit := editorComp.editor.Pick(state.rtApp.Scene, ray)
+	hit := editorComp.editor.Pick(state.RtApp.Scene, ray)
 	if hit == nil {
 		return
 	}
 
 	// Apply brush to hit object
-	state.rtApp.Profiler.BeginScope("Editor Apply")
+	state.RtApp.Profiler.BeginScope("Editor Apply")
 	editorComp.editor.ApplyBrush(hit.Object, hit.Coord, hit.Normal)
-	state.rtApp.Profiler.EndScope("Editor Apply")
+	state.RtApp.Profiler.EndScope("Editor Apply")
 }
 
 // InstallEditorSystem registers the editor system with the app

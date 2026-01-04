@@ -5,7 +5,7 @@
 // ============== CONSTANTS ==============
 const SECTOR_SIZE: f32 = 32.0;
 const BRICK_SIZE: f32 = 8.0;
-const EPS: f32 = 1e-4;
+const EPS: f32 = 1e-3;
 const FAR_T: f32 = 60000.0;
 
 // ============== STRUCTS (match gbuffer/deferred) ==============
@@ -45,17 +45,17 @@ struct BVHNode {
 
 struct SectorRecord {
   origin_vox: vec4<i32>,
-  sector_id: u32,       // first_brick_index
+  brick_table_index: u32,
   brick_mask_lo: u32,
   brick_mask_hi: u32,
   padding: u32,
 };
 
 struct BrickRecord {
-  atlas_offset: atomic<u32>,
-  occupancy_mask_lo: atomic<u32>,
-  occupancy_mask_hi: atomic<u32>,
-  flags: atomic<u32>,
+  atlas_offset: u32,
+  occupancy_mask_lo: u32,
+  occupancy_mask_hi: u32,
+  flags: u32,
 };
 
 struct Tree64Node {
@@ -128,7 +128,7 @@ struct TransparentHit {
 // Group 1: Voxel data and materials
 @group(1) @binding(0) var<storage, read> sectors              : array<SectorRecord>;
 @group(1) @binding(1) var<storage, read> bricks               : array<BrickRecord>;
-@group(1) @binding(2) var<storage, read> voxel_payload        : array<atomic<u32>>;
+@group(1) @binding(2) var<storage, read> voxel_payload        : array<u32>;
 @group(1) @binding(3) var<storage, read> materials            : array<vec4<f32>>;
 @group(1) @binding(4) var<storage, read> object_params        : array<ObjectParams>;
 @group(1) @binding(5) var<storage, read> tree64_nodes         : array<Tree64Node>;
@@ -193,7 +193,7 @@ fn step_to_next_cell(p: vec3<f32>, dir: vec3<f32>, inv_dir: vec3<f32>, cell_size
 fn load_u8(byte_offset: u32) -> u32 {
   let word_idx = byte_offset / 4u;
   let byte_idx = byte_offset % 4u;
-  let word = atomicLoad(&voxel_payload[word_idx]);
+  let word = voxel_payload[word_idx];
   return (word >> (byte_idx * 8u)) & 0xFFu;
 }
 
@@ -257,16 +257,15 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
   let bz = (v.z >> 3u) & 3;
   let bvid = vec3<u32>(u32(bx), u32(by), u32(bz));
   let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
-  if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) { return 0.0; }
-  let packed_idx = params.brick_table_base + sector.sector_id + popcnt64_lower(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local);
-  let b_flags = atomicLoad(&bricks[packed_idx].flags);
+  let packed_idx = sector.brick_table_index + brick_idx_local;
+  let b_flags = bricks[packed_idx].flags;
   if (b_flags == 0u) {
     let vx = v.x & 7;
     let vy = v.y & 7;
     let vz = v.z & 7;
     let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
     let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-    let b_atlas = atomicLoad(&bricks[packed_idx].atlas_offset);
+    let b_atlas = bricks[packed_idx].atlas_offset;
     let palette_idx = load_u8(params.payload_base + b_atlas + voxel_idx);
     return select(0.0, 1.0, palette_idx != 0u);
   }
@@ -354,9 +353,9 @@ fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_ex
           let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
 
           if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
-            let packed_idx = params.brick_table_base + sector.sector_id + popcnt64_lower(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local);
-            let b_flags = atomicLoad(&bricks[packed_idx].flags);
-            let b_atlas = atomicLoad(&bricks[packed_idx].atlas_offset);
+            let packed_idx = sector.brick_table_index + brick_idx_local;
+            let b_flags = bricks[packed_idx].flags;
+            let b_atlas = bricks[packed_idx].atlas_offset;
             var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
 
             if (b_flags == 1u) {
@@ -385,8 +384,8 @@ fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_ex
               voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
               var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray.origin) * inv_dir;
               let t_delta_1 = abs(1.0 * inv_dir);
-              let b_mask_lo = atomicLoad(&bricks[packed_idx].occupancy_mask_lo);
-              let b_mask_hi = atomicLoad(&bricks[packed_idx].occupancy_mask_hi);
+              let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
+              let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
 
               var it_micro = 0;
               while (t_micro < t_brick_exit && it_micro < 32) {

@@ -46,7 +46,7 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	rtApp         *app_rt.App
+	RtApp         *app_rt.App
 	loadedModels  map[AssetId]*core.VoxelObject
 	instanceMap   map[EntityId]*core.VoxelObject
 	particlePools map[EntityId]*particlePool
@@ -58,49 +58,49 @@ type VoxelRtState struct {
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
-	if s == nil || s.rtApp == nil {
+	if s == nil || s.RtApp == nil {
 		return 0, 0
 	}
-	return int(s.rtApp.Config.Width), int(s.rtApp.Config.Height)
+	return int(s.RtApp.Config.Width), int(s.RtApp.Config.Height)
 }
 
 func (s *VoxelRtState) FPS() float64 {
-	if s == nil || s.rtApp == nil {
+	if s == nil || s.RtApp == nil {
 		return 0
 	}
-	return s.rtApp.FPS
+	return s.RtApp.FPS
 }
 
 func (s *VoxelRtState) ProfilerStats() string {
-	if s == nil || s.rtApp == nil {
+	if s == nil || s.RtApp == nil {
 		return ""
 	}
-	return s.rtApp.Profiler.GetStatsString()
+	return s.RtApp.Profiler.GetStatsString()
 }
 
 func (s *VoxelRtState) IsDebug() bool {
-	if s == nil || s.rtApp == nil {
+	if s == nil || s.RtApp == nil {
 		return false
 	}
-	return s.rtApp.DebugMode
+	return s.RtApp.DebugMode
 }
 
 func (s *VoxelRtState) DrawText(text string, x, y float32, scale float32, color [4]float32) {
-	if s != nil && s.rtApp != nil {
-		s.rtApp.DrawText(text, x, y, scale, color)
+	if s != nil && s.RtApp != nil {
+		s.RtApp.DrawText(text, x, y, scale, color)
 	}
 }
 
 func (s *VoxelRtState) Counter(name string) int {
-	if s == nil || s.rtApp == nil {
+	if s == nil || s.RtApp == nil {
 		return 0
 	}
-	return s.rtApp.Profiler.Counts[name]
+	return s.RtApp.Profiler.Counts[name]
 }
 
 func (s *VoxelRtState) SetDebugMode(enabled bool) {
-	if s != nil && s.rtApp != nil {
-		s.rtApp.DebugMode = enabled
+	if s != nil && s.RtApp != nil {
+		s.RtApp.DebugMode = enabled
 	}
 }
 
@@ -154,12 +154,12 @@ func (s *VoxelRtState) DrawDebugRay(origin, dir mgl32.Vec3, color [4]float32, du
 }
 
 func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
-	if s == nil || s.rtApp == nil {
+	if s == nil || s.RtApp == nil {
 		return 0, 0, false
 	}
 	// Use current camera to build projection
-	view := s.rtApp.Camera.GetViewMatrix()
-	aspect := float32(s.rtApp.Config.Width) / float32(s.rtApp.Config.Height)
+	view := s.RtApp.Camera.GetViewMatrix()
+	aspect := float32(s.RtApp.Config.Width) / float32(s.RtApp.Config.Height)
 	if aspect == 0 {
 		aspect = 1.0
 	}
@@ -180,7 +180,7 @@ func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
 	ndc := clip.Vec3().Mul(1.0 / clip.W())
 
 	// NDC to Screen (USE PIXEL DIMENSIONS)
-	w, h := float32(s.rtApp.Config.Width), float32(s.rtApp.Config.Height)
+	w, h := float32(s.RtApp.Config.Width), float32(s.RtApp.Config.Height)
 	x := (ndc.X()*0.5 + 0.5) * w
 	y := (1.0 - (ndc.Y()*0.5 + 0.5)) * h
 
@@ -263,17 +263,17 @@ func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit 
 func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	windowState := createWindowState(mod.WindowWidth, mod.WindowHeight, mod.WindowTitle)
 	cmd.AddResources(windowState)
-	rtApp := app_rt.NewApp(windowState.windowGlfw)
-	rtApp.AmbientLight = [3]float32{mod.AmbientLight.X(), mod.AmbientLight.Y(), mod.AmbientLight.Z()}
-	rtApp.DebugMode = mod.DebugMode
-	rtApp.RenderMode = uint32(mod.RenderMode)
-	rtApp.FontPath = mod.FontPath
-	if err := rtApp.Init(); err != nil {
+	RtApp := app_rt.NewApp(windowState.windowGlfw)
+	RtApp.AmbientLight = [3]float32{mod.AmbientLight.X(), mod.AmbientLight.Y(), mod.AmbientLight.Z()}
+	RtApp.DebugMode = mod.DebugMode
+	RtApp.RenderMode = uint32(mod.RenderMode)
+	RtApp.FontPath = mod.FontPath
+	if err := RtApp.Init(); err != nil {
 		panic(err)
 	}
 
 	state := &VoxelRtState{
-		rtApp:        rtApp,
+		RtApp:        RtApp,
 		loadedModels: make(map[AssetId]*core.VoxelObject),
 		instanceMap:  make(map[EntityId]*core.VoxelObject),
 		caVolumeMap:  make(map[EntityId]*core.VoxelObject),
@@ -311,28 +311,28 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 }
 
 func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time *Time, cmd *Commands) {
-	state.rtApp.MouseX = input.MouseX
-	state.rtApp.MouseY = input.MouseY
-	state.rtApp.MouseCaptured = input.MouseCaptured
+	state.RtApp.MouseX = input.MouseX
+	state.RtApp.MouseY = input.MouseY
+	state.RtApp.MouseCaptured = input.MouseCaptured
 
 	if input.JustPressed[MouseButtonRight] {
-		state.rtApp.HandleClick(int(glfw.MouseButtonRight), int(glfw.Press))
+		state.RtApp.HandleClick(int(glfw.MouseButtonRight), int(glfw.Press))
 	}
 
 	if input.Pressed[KeyEqual] || input.Pressed[KeyKPPlus] {
-		state.rtApp.Editor.ScaleSelected(state.rtApp.Scene, 1.05, glfw.GetTime())
+		state.RtApp.Editor.ScaleSelected(state.RtApp.Scene, 1.05, glfw.GetTime())
 	}
 	if input.Pressed[KeyMinus] || input.Pressed[KeyKPMinus] {
-		state.rtApp.Editor.ScaleSelected(state.rtApp.Scene, 0.95, glfw.GetTime())
+		state.RtApp.Editor.ScaleSelected(state.RtApp.Scene, 0.95, glfw.GetTime())
 	}
 
-	state.rtApp.ClearText()
+	state.RtApp.ClearText()
 
 	// Begin batching updates for this frame
-	state.rtApp.BufferManager.BeginBatch()
+	state.RtApp.BufferManager.BeginBatch()
 
 	// Sync instances
-	state.rtApp.Profiler.BeginScope("Sync Instances")
+	state.RtApp.Profiler.BeginScope("Sync Instances")
 	currentEntities := make(map[EntityId]bool)
 
 	// Collect instances from models
@@ -429,13 +429,13 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			obj = core.NewVoxelObject()
 			obj.XBrickMap = modelTemplate.XBrickMap.Copy()
 			obj.MaterialTable = modelTemplate.MaterialTable
-			state.rtApp.Scene.AddObject(obj)
+			state.RtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
 		}
 
 		// Persistent scaling: we don't want to sync scale from ECS if we are using metric scaling.
 		// However, we MUST sync Position back if it changed in the renderer.
-		if state.rtApp.Editor.SelectedObject == obj {
+		if state.RtApp.Editor.SelectedObject == obj {
 			// This is the active object.
 			// If its position in renderer differs from ECS, it means RescaleObject shifted it.
 			if obj.Transform.Position.Sub(transform.Position).Len() > 0.001 {
@@ -449,7 +449,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 		// Metric system: Renderer Scale is ALWAYS TargetVoxelSize.
 		// Physical dimension is controlled by Voxel resolution (Resampling).
-		vSize := state.rtApp.Scene.TargetVoxelSize
+		vSize := state.RtApp.Scene.TargetVoxelSize
 		if vSize == 0 {
 			vSize = 0.1
 		}
@@ -461,14 +461,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 	for eid, obj := range state.instanceMap {
 		if !currentEntities[eid] {
-			state.rtApp.Scene.RemoveObject(obj)
+			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
 		}
 	}
-	state.rtApp.Profiler.EndScope("Sync Instances")
+	state.RtApp.Profiler.EndScope("Sync Instances")
 
 	// CA voxel bridging (render CA density as voxels; runs at CA tick rate via _dirty flag)
-	state.rtApp.Profiler.BeginScope("Sync CA")
+	state.RtApp.Profiler.BeginScope("Sync CA")
 	currentCA := make(map[EntityId]bool)
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
 		if cv == nil || !cv.BridgeToVoxels || cv._density == nil {
@@ -495,7 +495,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			mats[2].Metalness = 0.0
 
 			obj.MaterialTable = mats
-			state.rtApp.Scene.AddObject(obj)
+			state.RtApp.Scene.AddObject(obj)
 			state.caVolumeMap[eid] = obj
 		}
 
@@ -591,13 +591,13 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	// Cleanup CA voxel objects for entities no longer present or with bridging disabled
 	for eid, obj := range state.caVolumeMap {
 		if !currentCA[eid] {
-			state.rtApp.Scene.RemoveObject(obj)
+			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.caVolumeMap, eid)
 		}
 	}
-	state.rtApp.Profiler.EndScope("Sync CA")
+	state.RtApp.Profiler.EndScope("Sync CA")
 
-	state.rtApp.Profiler.BeginScope("Sync World")
+	state.RtApp.Profiler.BeginScope("Sync World")
 	currentWorlds := make(map[EntityId]bool)
 	MakeQuery1[WorldComponent](cmd).Map(func(eid EntityId, world *WorldComponent) bool {
 		currentWorlds[eid] = true
@@ -617,44 +617,48 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			mats[1].BaseColor = [4]uint8{100, 255, 100, 255}
 
 			obj.MaterialTable = mats
-			state.rtApp.Scene.AddObject(obj)
+			state.RtApp.Scene.AddObject(obj)
 			state.worldMap[eid] = obj
 		}
 
 		// Use the XBM from the world component
 		obj.XBrickMap = world.GetXBrickMap()
 
-		// World is usually stationary at origin
+		// World usually stays at origin but needs to match the scene's voxel scaling
+		vSize := state.RtApp.Scene.TargetVoxelSize
+		if vSize == 0 {
+			vSize = 0.1
+		}
 		obj.Transform.Position = mgl32.Vec3{0, 0, 0}
 		obj.Transform.Rotation = mgl32.QuatIdent()
-		obj.Transform.Scale = mgl32.Vec3{1, 1, 1}
+		obj.Transform.Scale = mgl32.Vec3{vSize, vSize, vSize}
 		obj.Transform.Dirty = true
 
 		return true
 	})
 	for eid, obj := range state.worldMap {
 		if !currentWorlds[eid] {
-			state.rtApp.Scene.RemoveObject(obj)
+			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.worldMap, eid)
 		}
 	}
-	state.rtApp.Profiler.EndScope("Sync World")
+	state.RtApp.Profiler.EndScope("Sync World")
 
-	state.rtApp.Profiler.BeginScope("Sync Lights")
+	state.RtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
-		state.rtApp.Camera.Position = camera.Position
-		state.rtApp.Camera.Yaw = mgl32.DegToRad(camera.Yaw)
-		state.rtApp.Camera.Pitch = mgl32.DegToRad(camera.Pitch)
+		state.RtApp.Camera.Position = camera.Position
+		state.RtApp.Camera.Yaw = mgl32.DegToRad(camera.Yaw)
+		state.RtApp.Camera.Pitch = mgl32.DegToRad(camera.Pitch)
 		return false
 	})
 	// Sync text
 	MakeQuery1[TextComponent](cmd).Map(func(entityId EntityId, text *TextComponent) bool {
-		state.rtApp.DrawText(text.Text, text.Position[0], text.Position[1], text.Scale, text.Color)
+		state.RtApp.DrawText(text.Text, text.Position[0], text.Position[1], text.Scale, text.Color)
 		return true
 	})
 
 	// Sync lights
-	state.rtApp.Scene.Lights = state.rtApp.Scene.Lights[:0]
+	state.RtApp.Scene.Lights = state.RtApp.Scene.Lights[:0]
 	MakeQuery2[TransformComponent, LightComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, light *LightComponent) bool {
 		// Convert ECS light to GPU light
 		gpuLight := core.Light{}
@@ -690,24 +694,24 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
 
-		state.rtApp.Scene.Lights = append(state.rtApp.Scene.Lights, gpuLight)
+		state.RtApp.Scene.Lights = append(state.RtApp.Scene.Lights, gpuLight)
 		return true
 	})
-	state.rtApp.Profiler.EndScope("Sync Lights")
+	state.RtApp.Profiler.EndScope("Sync Lights")
 
-	state.rtApp.Profiler.BeginScope("GPU Batch")
+	state.RtApp.Profiler.BeginScope("GPU Batch")
 	// End batching and process all accumulated updates
-	state.rtApp.BufferManager.EndBatch()
-	state.rtApp.Profiler.EndScope("GPU Batch")
+	state.RtApp.BufferManager.EndBatch()
+	state.RtApp.Profiler.EndScope("GPU Batch")
 
 	// CPU-simulate and upload particle instances
 	instances := particlesCollect(state, time, cmd)
-	pRecreated := state.rtApp.BufferManager.UpdateParticles(instances)
-	if pRecreated || state.rtApp.BufferManager.ParticlesBindGroup0 == nil {
-		state.rtApp.BufferManager.CreateParticlesBindGroups(state.rtApp.ParticlesPipeline)
+	pRecreated := state.RtApp.BufferManager.UpdateParticles(instances)
+	if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil {
+		state.RtApp.BufferManager.CreateParticlesBindGroups(state.RtApp.ParticlesPipeline)
 	}
 
-	state.rtApp.Profiler.BeginScope("RT Update")
+	state.RtApp.Profiler.BeginScope("RT Update")
 
 	// Process debug rays BEFORE Update() so DrawText is captured
 	dt := float32(time.Dt)
@@ -723,7 +727,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			dist = hit.T + 0.1
 			// Draw marker at hit
 			if x, y, ok := state.Project(ray.Origin.Add(ray.Dir.Mul(dist))); ok {
-				state.rtApp.DrawText("*", x-8, y-16, 2.0, ray.Color)
+				state.RtApp.DrawText("*", x-8, y-16, 2.0, ray.Color)
 			}
 		}
 
@@ -736,7 +740,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 				alpha := 1.0 - (t/dist)*0.8
 				color := ray.Color
 				color[3] *= alpha
-				state.rtApp.DrawText(".", x-6, y-12, 1.4, color)
+				state.RtApp.DrawText(".", x-6, y-12, 1.4, color)
 			}
 		}
 
@@ -747,24 +751,24 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	}
 	state.debugRays = remainingRays
 
-	state.rtApp.Update()
+	state.RtApp.Update()
 
-	state.rtApp.Profiler.EndScope("RT Update")
+	state.RtApp.Profiler.EndScope("RT Update")
 }
 
 func voxelRtRenderSystem(state *VoxelRtState) {
-	state.rtApp.Render()
+	state.RtApp.Render()
 }
 
 func (s *VoxelRtState) CycleRenderMode() {
-	if s != nil && s.rtApp != nil {
-		s.rtApp.RenderMode = (s.rtApp.RenderMode + 1) % 4
+	if s != nil && s.RtApp != nil {
+		s.RtApp.RenderMode = (s.RtApp.RenderMode + 1) % 4
 	}
 }
 
 func voxelRtDebugSystem(input *Input, state *VoxelRtState) {
 	if input.JustPressed[KeyF2] {
-		mode := state.rtApp.Camera.DebugMode
-		state.rtApp.Camera.DebugMode = (mode + 1) % 3
+		mode := state.RtApp.Camera.DebugMode
+		state.RtApp.Camera.DebugMode = (mode + 1) % 3
 	}
 }

@@ -74,10 +74,10 @@ func main() {
 		// Scaling
 		if action == glfw.Press || action == glfw.Repeat {
 			if key == glfw.KeyEqual || key == glfw.KeyKPAdd {
-				application.Editor.ScaleSelected(application.Scene, 1.1)
+				application.Editor.ScaleSelected(application.Scene, 1.1, 0)
 			}
 			if key == glfw.KeyMinus || key == glfw.KeyKPSubtract {
-				application.Editor.ScaleSelected(application.Scene, 0.909) // 1/1.1 approx
+				application.Editor.ScaleSelected(application.Scene, 0.909, 0) // 1/1.1 approx
 			}
 		}
 	})

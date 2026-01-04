@@ -80,14 +80,20 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState) {
 }
 
 func updateWorldStreaming(world *WorldComponent, camPos mgl32.Vec3, state *VoxelRtState) {
+	vSize := state.RtApp.Scene.TargetVoxelSize
+	if vSize <= 0 {
+		vSize = 0.1
+	}
+
 	// Calculate current region coords (Floor division for negative support)
-	regSizeVox := float64(world.RegionSize * volume.SectorSize)
-	rx := int(math.Floor(float64(camPos.X()) / regSizeVox))
-	ry := int(math.Floor(float64(camPos.Y()) / regSizeVox))
-	rz := int(math.Floor(float64(camPos.Z()) / regSizeVox))
+	// Region size in world units = (sectors per region) * (voxels per sector) * (meters per voxel)
+	regSizeUnits := float64(world.RegionSize*volume.SectorSize) * float64(vSize)
+	rx := int(math.Floor(float64(camPos.X()) / regSizeUnits))
+	ry := int(math.Floor(float64(camPos.Y()) / regSizeUnits))
+	rz := int(math.Floor(float64(camPos.Z()) / regSizeUnits))
 
 	// Radius in regions
-	regRad := int(math.Ceil(float64(world.RegionRadius) / regSizeVox))
+	regRad := int(math.Ceil(float64(world.RegionRadius) / regSizeUnits))
 	if regRad < 1 {
 		regRad = 1
 	}
@@ -136,7 +142,7 @@ func updateWorldStreaming(world *WorldComponent, camPos mgl32.Vec3, state *Voxel
 }
 
 func loadRegion(world *WorldComponent, reg *Region) {
-	fmt.Printf("STREAM: Loading region %v\n", reg.Coords)
+	// fmt.Printf("STREAM: Loading region %v\n", reg.Coords)
 	// Simulate disk I/O or generation
 	// In a real implementation, we would scan the WorldPath for sectors in this region.
 	// For now, let's just generate some dummy terrain if no file exists.

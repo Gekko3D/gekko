@@ -29,7 +29,14 @@ func (mod TimeModule) Install(app *App, cmd *Commands) {
 func timeSystem(timeResource *Time) {
 	now := time.Now()
 
-	timeResource.Duration = now.Sub(timeResource.Time)
-	timeResource.Dt = timeResource.Duration.Seconds()
+	dur := now.Sub(timeResource.Time)
+	dt := dur.Seconds()
+	// Clamp dt to 10fps minimum to prevent physics from exploding during hitches/startup
+	if dt > 0.1 {
+		dt = 0.1
+	}
+
+	timeResource.Duration = dur
+	timeResource.Dt = dt
 	timeResource.Time = now
 }
