@@ -453,7 +453,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 		if vSize == 0 {
 			vSize = 0.1
 		}
-		obj.Transform.Scale = mgl32.Vec3{vSize, vSize, vSize}
+		obj.Transform.Scale = mgl32.Vec3{vSize * transform.Scale.X(), vSize * transform.Scale.Y(), vSize * transform.Scale.Z()}
 		obj.Transform.Dirty = true
 
 		return true
@@ -471,6 +471,11 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	state.RtApp.Profiler.BeginScope("Sync CA")
 	currentCA := make(map[EntityId]bool)
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
+		vSize := state.RtApp.Scene.TargetVoxelSize
+		if vSize == 0 {
+			vSize = 0.1
+		}
+
 		if cv == nil || !cv.BridgeToVoxels || cv._density == nil {
 			return true
 		}
@@ -583,7 +588,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 		// Transform sync
 		obj.Transform.Position = tr.Position
 		obj.Transform.Rotation = tr.Rotation
-		obj.Transform.Scale = tr.Scale
+		obj.Transform.Scale = mgl32.Vec3{vSize * tr.Scale.X(), vSize * tr.Scale.Y(), vSize * tr.Scale.Z()}
 		obj.Transform.Dirty = true
 
 		return true
