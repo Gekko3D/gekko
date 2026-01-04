@@ -192,7 +192,7 @@ func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
 }
 
 func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit {
-	if s == nil || s.rtApp == nil {
+	if s == nil {
 		return RaycastHit{}
 	}
 
@@ -209,14 +209,18 @@ func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit 
 			w2o := obj.Transform.WorldToObject()
 			localOrigin := w2o.Mul4x1(origin.Vec4(1.0)).Vec3()
 
-			// Direction transformation is trickier due to scale.
-			// We want to transform the direction vector itself.
-			// For a direction vector d, its object space representation is d' = inv(M) * d (with w=0).
-			// However, if there is non-uniform scale, the length changes.
-			// RayMarch handles its own normalization/stepping logic, so we just need a consistent direction.
-			localDir := w2o.Mul4x1(dir.Vec4(0.0)).Vec3().Normalize()
+			// Direction transformation
+			localDirUnnorm := w2o.Mul4x1(dir.Vec4(0.0)).Vec3()
+			scaleFactor := localDirUnnorm.Len()
+			// Avoid division by zero
+			if scaleFactor < 1e-6 {
+				continue
+			}
+			localDir := localDirUnnorm.Mul(1.0 / scaleFactor)
 
-			hit, t, pos, normal := obj.XBrickMap.RayMarch(localOrigin, localDir, 0, tMax)
+			localTMax := tMax * scaleFactor
+
+			hit, t, pos, normal := obj.XBrickMap.RayMarch(localOrigin, localDir, 0, localTMax)
 			if hit {
 				// We need to convert t back to world space distance.
 				// World distance = t * |ObjDir| where ObjDir is the untransformed local direction.

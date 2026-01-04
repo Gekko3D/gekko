@@ -512,14 +512,47 @@ func (x *XBrickMap) ComputeAABB() (mgl32.Vec3, mgl32.Vec3) {
 
 func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (bool, float32, [3]int, mgl32.Vec3) {
 	t := tMin
-	invDir := mgl32.Vec3{1.0 / (rayDir.X() + 1e-8), 1.0 / (rayDir.Y() + 1e-8), 1.0 / (rayDir.Z() + 1e-8)}
+	// Protect against very small or zero direction components
+	safeX := rayDir.X()
+	if math.Abs(float64(safeX)) < 1e-7 {
+		if safeX >= 0 {
+			safeX = 1e-7
+		} else {
+			safeX = -1e-7
+		}
+	}
+	safeY := rayDir.Y()
+	if math.Abs(float64(safeY)) < 1e-7 {
+		if safeY >= 0 {
+			safeY = 1e-7
+		} else {
+			safeY = -1e-7
+		}
+	}
+	safeZ := rayDir.Z()
+	if math.Abs(float64(safeZ)) < 1e-7 {
+		if safeZ >= 0 {
+			safeZ = 1e-7
+		} else {
+			safeZ = -1e-7
+		}
+	}
+
+	invDir := mgl32.Vec3{1.0 / safeX, 1.0 / safeY, 1.0 / safeZ}
 
 	iterations := 0
-	const maxIterations = 2000
+	const maxIterations = 10000 // Increased from 2000
 
 	for t < tMax && iterations < maxIterations {
 		iterations++
-		p := rayOrigin.Add(rayDir.Mul(t + 0.001)) // Tiny offset to enter next voxel
+
+		// Use a dynamic offset for higher stability at large t
+		tBias := 0.001
+		if t > 100 {
+			tBias = 0.005
+		}
+
+		p := rayOrigin.Add(rayDir.Mul(t + float32(tBias)))
 
 		sx, sy, sz := int(math.Floor(float64(p.X()/SectorSize))), int(math.Floor(float64(p.Y()/SectorSize))), int(math.Floor(float64(p.Z()/SectorSize)))
 
@@ -533,15 +566,16 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		}
 
 		// Inside a sector, check bricks
-		slx := int(math.Floor(float64(p.X()))) % SectorSize
+		flX, flY, flZ := math.Floor(float64(p.X())), math.Floor(float64(p.Y())), math.Floor(float64(p.Z()))
+		slx := int(flX) % SectorSize
 		if slx < 0 {
 			slx += SectorSize
 		}
-		sly := int(math.Floor(float64(p.Y()))) % SectorSize
+		sly := int(flY) % SectorSize
 		if sly < 0 {
 			sly += SectorSize
 		}
-		slz := int(math.Floor(float64(p.Z()))) % SectorSize
+		slz := int(flZ) % SectorSize
 		if slz < 0 {
 			slz += SectorSize
 		}
@@ -572,7 +606,6 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		paletteIdx := brick.Payload[vx][vy][vz]
 		if paletteIdx != 0 {
 			// Hit!
-			// Compute normal
 			vMin := mgl32.Vec3{
 				float32(sx*SectorSize + bx*BrickSize + vx),
 				float32(sy*SectorSize + by*BrickSize + vy),
@@ -605,7 +638,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 				}
 			}
 
-			return true, t, [3]int{int(math.Floor(float64(p.X()))), int(math.Floor(float64(p.Y()))), int(math.Floor(float64(p.Z())))}, normal
+			return true, t, [3]int{int(flX), int(flY), int(flZ)}, normal
 		}
 
 		res := x.stepToNext(p, rayDir, invDir, 1.0)
@@ -620,21 +653,29 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 }
 
 func (x *XBrickMap) stepToNext(p, dir, invDir mgl32.Vec3, size float32) float32 {
-	v := mgl32.Vec3{}
-	for i := 0; i < 3; i++ {
-		if dir[i] > 0 {
-			v[i] = (float32(math.Floor(float64(p[i]/size)))+1)*size - p[i]
-		} else {
-			v[i] = (float32(math.Floor(float64(p[i]/size))))*size - p[i]
-		}
-	}
-
-	tVals := mgl32.Vec3{v.X() * invDir.X(), v.Y() * invDir.Y(), v.Z() * invDir.Z()}
 	res := float32(1e10)
 	for i := 0; i < 3; i++ {
-		if tVals[i] > 0 && tVals[i] < res {
-			res = tVals[i]
+		if dir[i] == 0 {
+			continue
 		}
+
+		var dist float32
+		if dir[i] > 0 {
+			// Distance to next whole size boundary
+			dist = (float32(math.Floor(float64(p[i]/size+1e-6)))+1)*size - p[i]
+		} else {
+			// Distance to previous whole size boundary
+			dist = (float32(math.Floor(float64(p[i]/size-1e-6))))*size - p[i]
+		}
+
+		tVal := dist * invDir[i]
+		if tVal > 1e-6 && tVal < res {
+			res = tVal
+		}
+	}
+	// Add a tiny extra bit to ensure we actually cross the boundary in the next iteration
+	if res < 1e10 {
+		return res + 1e-4
 	}
 	return res
 }
