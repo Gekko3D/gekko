@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"fmt"
 	"math"
 	"sync"
 
@@ -61,16 +60,23 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState) {
 
 	// Update worlds
 	MakeQuery1[WorldComponent](cmd).Map(func(eid EntityId, world *WorldComponent) bool {
-		// Apply pending sectors from workers
+		// Apply pending sectors from workers with throttling
 		world.mu.Lock()
 		if len(world.pendingSectors) > 0 {
-			fmt.Printf("STREAM: Applying %d pending sectors to main XBM\n", len(world.pendingSectors))
+			count := 0
+			// Batch size: process up to 64 sectors per frame to avoid CPU spikes
 			for k, s := range world.pendingSectors {
 				world.MainXBM.Sectors[k] = s
+				delete(world.pendingSectors, k)
+				count++
+				if count >= 64 {
+					break
+				}
 			}
-			world.MainXBM.StructureDirty = true
-			world.MainXBM.AABBDirty = true
-			world.pendingSectors = make(map[[3]int]*volume.Sector)
+			if count > 0 {
+				world.MainXBM.StructureDirty = true
+				world.MainXBM.AABBDirty = true
+			}
 		}
 		world.mu.Unlock()
 

@@ -122,6 +122,11 @@ type GpuBufferManager struct {
 	MaterialTail uint32
 
 	Allocations map[*volume.XBrickMap]*ObjectGpuAllocation
+
+	// Smooth streaming state
+	SectorsPerFrame  uint32
+	lastTotalSectors int
+	gridDataPool     []byte
 }
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
@@ -158,12 +163,13 @@ func (a *SlotAllocator) FreeSlot(idx uint32) {
 
 func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	return &GpuBufferManager{
-		Device:         device,
-		Allocations:    make(map[*volume.XBrickMap]*ObjectGpuAllocation),
-		PendingUpdates: make(map[*volume.XBrickMap]bool),
-		BatchMode:      false,
-		SectorToInfo:   make(map[*volume.Sector]SectorGpuInfo),
-		BrickToSlot:    make(map[*volume.Brick]uint32),
+		Device:          device,
+		Allocations:     make(map[*volume.XBrickMap]*ObjectGpuAllocation),
+		PendingUpdates:  make(map[*volume.XBrickMap]bool),
+		BatchMode:       false,
+		SectorToInfo:    make(map[*volume.Sector]SectorGpuInfo),
+		BrickToSlot:     make(map[*volume.Brick]uint32),
+		SectorsPerFrame: 64,
 	}
 }
 
@@ -372,14 +378,15 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 
 	// Ensure all global buffers exist (even if empty) to avoid bind group panics.
 	// We use the calculated requirements if needsScan was true, otherwise current tail.
-	if m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, nil, wgpu.BufferUsageStorage, int(requiredSectors+256)*32) {
+	// Headroom: Reduced frequency of full-buffer reallocations by using larger buffers initially and geometric growth.
+	if m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, nil, wgpu.BufferUsageStorage, int(requiredSectors+512)*32) {
 		recreated = true
 	}
-	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+1024)*16) {
+	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*16) {
 		recreated = true
 	}
 	// Payload is harder to predict, use healthy headroom
-	if m.ensureBuffer("VoxelPayloadBuf", &m.VoxelPayloadBuf, nil, wgpu.BufferUsageStorage, int(m.PayloadAlloc.Tail+2048)*512) {
+	if m.ensureBuffer("VoxelPayloadBuf", &m.VoxelPayloadBuf, nil, wgpu.BufferUsageStorage, int(m.PayloadAlloc.Tail+4096)*512) {
 		recreated = true
 	}
 	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialTail+1024)*64) {
@@ -483,13 +490,19 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			}
 			xbm.StructureDirty = false
 		}
-		// Upload dirty sectors
+		// Upload dirty sectors with budgeting
+		sectorsInFrame := uint32(0)
 		for sKey, isDirty := range xbm.DirtySectors {
 			if !isDirty {
+				delete(xbm.DirtySectors, sKey)
 				continue
+			}
+			if sectorsInFrame >= m.SectorsPerFrame {
+				break
 			}
 			sector, ok := xbm.Sectors[sKey]
 			if !ok {
+				delete(xbm.DirtySectors, sKey)
 				continue
 			}
 			info := m.SectorToInfo[sector]
@@ -506,17 +519,26 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(i))*16), make([]byte, 16))
 				}
 			}
+			delete(xbm.DirtySectors, sKey)
+			sectorsInFrame++
 		}
 
 		// Upload individual dirty bricks (e.g. from small edits)
+		maxBricks := m.SectorsPerFrame * 4 // Loose budget for individual bricks
+		bricksInFrame := uint32(0)
 		for bKey, isDirty := range xbm.DirtyBricks {
 			if !isDirty {
+				delete(xbm.DirtyBricks, bKey)
 				continue
+			}
+			if bricksInFrame >= maxBricks {
+				break
 			}
 			sx, sy, sz := bKey[0], bKey[1], bKey[2]
 			bx, by, bz := bKey[3], bKey[4], bKey[5]
 			sector, ok := xbm.Sectors[[3]int{sx, sy, sz}]
 			if !ok {
+				delete(xbm.DirtyBricks, bKey)
 				continue
 			}
 			info := m.SectorToInfo[sector]
@@ -524,9 +546,13 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			if brick != nil {
 				m.uploadBrick(brick, info.BrickTableIndex+uint32(bx+by*4+bz*16))
 			}
+			delete(xbm.DirtyBricks, bKey)
+			bricksInFrame++
 		}
 
-		xbm.ClearDirty()
+		if len(xbm.DirtySectors) == 0 && len(xbm.DirtyBricks) == 0 {
+			xbm.AABBDirty = false
+		}
 
 		// Materials: For now, re-upload if new.
 		// Need MaterialTail... I'll add m.MaterialTail back but keep it as a pool for objects.
@@ -788,9 +814,21 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene) {
 func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	// Count total sectors
 	totalSectors := 0
+	anyDirty := false
 	for _, obj := range scene.Objects {
-		totalSectors += len(obj.XBrickMap.Sectors)
+		if xbm := obj.XBrickMap; xbm != nil {
+			totalSectors += len(xbm.Sectors)
+			if xbm.StructureDirty {
+				anyDirty = true
+			}
+		}
 	}
+
+	// Optimization: Skip rebuild if nothing structurally changed and count is the same
+	if totalSectors == m.lastTotalSectors && !anyDirty && m.SectorGridBuf != nil {
+		return false
+	}
+	m.lastTotalSectors = totalSectors
 
 	// Always ensure buffers exist even if empty to avoid bind group panics
 	if totalSectors == 0 {
@@ -813,12 +851,23 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		gridSize = 1024
 	}
 
+	// Re-use or resize pull to avoid GC pressure
+	neededSize := gridSize * 32
+	if cap(m.gridDataPool) < neededSize {
+		m.gridDataPool = make([]byte, neededSize)
+	} else {
+		m.gridDataPool = m.gridDataPool[:neededSize]
+		// Fast clear
+		for i := range m.gridDataPool {
+			m.gridDataPool[i] = 0
+		}
+	}
+
 	// Grid entry: [sx, sy, sz, base_idx, sector_idx, pad, pad, pad] (8x i32 = 32 bytes)
 	// We'll use a simple open-addressing scheme.
 	// Empty slot: sector_idx = -1
-	gridData := make([]byte, gridSize*32)
 	for i := 0; i < gridSize; i++ {
-		binary.LittleEndian.PutUint32(gridData[i*32+16:], 0xFFFFFFFF) // sector_idx = -1
+		binary.LittleEndian.PutUint32(m.gridDataPool[i*32+16:], 0xFFFFFFFF) // sector_idx = -1
 	}
 
 	hash := func(x, y, z int32, base uint32) uint32 {
@@ -844,14 +893,14 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 			inserted := false
 			for i := 0; i < 128; i++ {
 				probeIdx := (h + uint32(i)) % uint32(gridSize)
-				sectorIdx := binary.LittleEndian.Uint32(gridData[probeIdx*32+16:])
+				sectorIdx := binary.LittleEndian.Uint32(m.gridDataPool[probeIdx*32+16:])
 				if sectorIdx == 0xFFFFFFFF {
 					// Found empty slot
-					binary.LittleEndian.PutUint32(gridData[probeIdx*32+0:], uint32(sx))
-					binary.LittleEndian.PutUint32(gridData[probeIdx*32+4:], uint32(sy))
-					binary.LittleEndian.PutUint32(gridData[probeIdx*32+8:], uint32(sz))
-					binary.LittleEndian.PutUint32(gridData[probeIdx*32+12:], baseIdx)
-					binary.LittleEndian.PutUint32(gridData[probeIdx*32+16:], info.SlotIndex)
+					binary.LittleEndian.PutUint32(m.gridDataPool[probeIdx*32+0:], uint32(sx))
+					binary.LittleEndian.PutUint32(m.gridDataPool[probeIdx*32+4:], uint32(sy))
+					binary.LittleEndian.PutUint32(m.gridDataPool[probeIdx*32+8:], uint32(sz))
+					binary.LittleEndian.PutUint32(m.gridDataPool[probeIdx*32+12:], baseIdx)
+					binary.LittleEndian.PutUint32(m.gridDataPool[probeIdx*32+16:], info.SlotIndex)
 					inserted = true
 					break
 				}
@@ -864,7 +913,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	}
 
 	recreated := false
-	if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, gridData, wgpu.BufferUsageStorage, 0) {
+	if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, m.gridDataPool, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 
