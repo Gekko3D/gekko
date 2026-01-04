@@ -201,7 +201,7 @@ fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
     let size = sector_grid_params.grid_size;
     if (size == 0u) { return -1; }
     let h = (u32(sx) * 73856093u ^ u32(sy) * 19349663u ^ u32(sz) * 83492791u ^ params.sector_table_base * 99999989u) % size;
-    for (var i = 0u; i < 32u; i++) {
+    for (var i = 0u; i < 128u; i++) {
         let idx = (h + i) % size;
         let entry = sector_grid[idx];
         if (entry.sector_idx == -1) { return -1; }

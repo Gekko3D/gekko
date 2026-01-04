@@ -2,6 +2,7 @@ package editor
 
 import (
 	"math"
+
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -13,14 +14,54 @@ type Ray struct {
 }
 
 type Editor struct {
-	BrushRadius float32
-	BrushValue  uint8
+	BrushRadius    float32
+	BrushValue     uint8
+	SelectedObject *core.VoxelObject
+
+	// Debounced Scaling
+	PendingScaleFactor  float32
+	LastScaleInputTime  float64
+	LastScaleUpdateTime float64
 }
 
 func NewEditor() *Editor {
 	return &Editor{
-		BrushRadius: 2.0,
-		BrushValue:  1,
+		BrushRadius:        2.0,
+		BrushValue:         1,
+		PendingScaleFactor: 1.0,
+	}
+}
+
+func (e *Editor) Select(scene *core.Scene, ray Ray) {
+	hit := e.Pick(scene, ray)
+	if hit != nil {
+		e.SelectedObject = hit.Object
+	} else {
+		e.SelectedObject = nil
+	}
+}
+
+func (e *Editor) ScaleSelected(scene *core.Scene, factor float32, now float64) {
+	if e.SelectedObject == nil {
+		return
+	}
+	e.PendingScaleFactor *= factor
+	e.LastScaleInputTime = now
+}
+
+func (e *Editor) Update(scene *core.Scene, now float64) {
+	if e.SelectedObject == nil || e.PendingScaleFactor == 1.0 {
+		return
+	}
+
+	// Apply if 200ms of silence OR if we haven't updated in 100ms
+	idle := (now - e.LastScaleInputTime) > 0.2
+	periodic := (now - e.LastScaleUpdateTime) > 0.1
+
+	if idle || periodic {
+		scene.RescaleObject(e.SelectedObject, e.PendingScaleFactor)
+		e.PendingScaleFactor = 1.0
+		e.LastScaleUpdateTime = now
 	}
 }
 

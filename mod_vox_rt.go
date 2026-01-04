@@ -3,6 +3,7 @@ package gekko
 import (
 	"math"
 
+	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/go-gl/mathgl/mgl32"
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
@@ -309,7 +310,22 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	)
 }
 
-func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Commands) {
+func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time *Time, cmd *Commands) {
+	state.rtApp.MouseX = input.MouseX
+	state.rtApp.MouseY = input.MouseY
+	state.rtApp.MouseCaptured = input.MouseCaptured
+
+	if input.JustPressed[MouseButtonRight] {
+		state.rtApp.HandleClick(int(glfw.MouseButtonRight), int(glfw.Press))
+	}
+
+	if input.Pressed[KeyEqual] || input.Pressed[KeyKPPlus] {
+		state.rtApp.Editor.ScaleSelected(state.rtApp.Scene, 1.05, glfw.GetTime())
+	}
+	if input.Pressed[KeyMinus] || input.Pressed[KeyKPMinus] {
+		state.rtApp.Editor.ScaleSelected(state.rtApp.Scene, 0.95, glfw.GetTime())
+	}
+
 	state.rtApp.ClearText()
 
 	// Begin batching updates for this frame
@@ -417,9 +433,27 @@ func voxelRtSystem(state *VoxelRtState, server *AssetServer, time *Time, cmd *Co
 			state.instanceMap[entityId] = obj
 		}
 
-		obj.Transform.Position = transform.Position
+		// Persistent scaling: we don't want to sync scale from ECS if we are using metric scaling.
+		// However, we MUST sync Position back if it changed in the renderer.
+		if state.rtApp.Editor.SelectedObject == obj {
+			// This is the active object.
+			// If its position in renderer differs from ECS, it means RescaleObject shifted it.
+			if obj.Transform.Position.Sub(transform.Position).Len() > 0.001 {
+				transform.Position = obj.Transform.Position
+			}
+		} else {
+			obj.Transform.Position = transform.Position
+		}
+
 		obj.Transform.Rotation = transform.Rotation
-		obj.Transform.Scale = transform.Scale
+
+		// Metric system: Renderer Scale is ALWAYS TargetVoxelSize.
+		// Physical dimension is controlled by Voxel resolution (Resampling).
+		vSize := state.rtApp.Scene.TargetVoxelSize
+		if vSize == 0 {
+			vSize = 0.1
+		}
+		obj.Transform.Scale = mgl32.Vec3{vSize, vSize, vSize}
 		obj.Transform.Dirty = true
 
 		return true

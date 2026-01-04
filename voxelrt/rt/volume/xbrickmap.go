@@ -679,3 +679,66 @@ func (x *XBrickMap) stepToNext(p, dir, invDir mgl32.Vec3, size float32) float32 
 	}
 	return res
 }
+
+func (x *XBrickMap) Resample(scale float32) *XBrickMap {
+	newMap := NewXBrickMap()
+	if len(x.Sectors) == 0 {
+		return newMap
+	}
+
+	minB, maxB := x.ComputeAABB()
+	fmt.Printf("Resampling Map: Min=%v Max=%v Scale=%f\n", minB, maxB, scale)
+
+	// Calculate new bounds relative to (0,0,0) for now, but we want to stay stable.
+	// Actually, the most predictable behavior is scaling relative to minB.
+
+	// Shifted old coordinates: p' = (p - minB) * scale + minB?
+	// No, let's keep it simple: newGridPos = oldGridPos * scale.
+	// This mirrors world space: WorldPos = GridPos * 0.1.
+	// If we want WorldPos to be same, we keep same mapping.
+
+	newMin := minB.Mul(scale)
+	newMax := maxB.Mul(scale)
+
+	// Iterate over the new bounding box
+	minX, minY, minZ := int(math.Floor(float64(newMin.X()))), int(math.Floor(float64(newMin.Y()))), int(math.Floor(float64(newMin.Z())))
+	maxX, maxY, maxZ := int(math.Ceil(float64(newMax.X()))), int(math.Ceil(float64(newMax.Y()))), int(math.Ceil(float64(newMax.Z())))
+
+	// Safety: Check total iterations
+	iterationsX := maxX - minX + 1
+	iterationsY := maxY - minY + 1
+	iterationsZ := maxZ - minZ + 1
+	totalIters := int64(iterationsX) * int64(iterationsY) * int64(iterationsZ)
+
+	if totalIters > 100*100*100*100 { // 100M iterations limit
+		fmt.Printf("REJECTED: Rescale too large (%d voxels grid volume)\n", totalIters)
+		return x // Return original
+	}
+
+	fmt.Printf("Iterating range: [%d %d %d] to [%d %d %d]\n", minX, minY, minZ, maxX, maxY, maxZ)
+	voxelCount := 0
+
+	invScale := 1.0 / scale
+
+	for gx := minX; gx <= maxX; gx++ {
+		for gy := minY; gy <= maxY; gy++ {
+			for gz := minZ; gz <= maxZ; gz++ {
+				// Nearest neighbor sampling with center alignment
+				// We project the center of the new voxel (gx+0.5) back to old space
+				oldX := int(math.Floor((float64(gx) + 0.5) * float64(invScale)))
+				oldY := int(math.Floor((float64(gy) + 0.5) * float64(invScale)))
+				oldZ := int(math.Floor((float64(gz) + 0.5) * float64(invScale)))
+
+				found, val := x.GetVoxel(oldX, oldY, oldZ)
+				if found {
+					newMap.SetVoxel(gx, gy, gz, val)
+					voxelCount++
+				}
+			}
+		}
+	}
+
+	newMap.ComputeAABB()
+	fmt.Printf("Resample Done: Generated %d voxels. New AABB: %v - %v\n", voxelCount, newMap.CachedMin, newMap.CachedMax)
+	return newMap
+}

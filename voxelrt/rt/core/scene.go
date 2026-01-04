@@ -1,6 +1,8 @@
 package core
 
 import (
+	"fmt"
+
 	"github.com/gekko3d/gekko/voxelrt/rt/bvh"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 
@@ -81,17 +83,46 @@ func max(a, b float32) float32 {
 }
 
 type Scene struct {
-	Objects        []*VoxelObject
-	VisibleObjects []*VoxelObject
-	BVHNodesBytes  []byte // Linearized BVH nodes
-	Lights         []Light
-	// Builder TODO
+	Objects          []*VoxelObject
+	VisibleObjects   []*VoxelObject
+	BVHNodesBytes    []byte // Linearized BVH nodes
+	Lights           []Light
+	TargetVoxelSize  float32
+	lastVisibleCount int
 }
 
 func NewScene() *Scene {
 	return &Scene{
-		Objects: []*VoxelObject{},
+		Objects:         []*VoxelObject{},
+		TargetVoxelSize: 0.1, // 10cm default
 	}
+}
+
+func (s *Scene) RescaleObject(obj *VoxelObject, factor float32) {
+	// Enforce voxel size standard
+	if obj.XBrickMap == nil {
+		return
+	}
+
+	minB, _ := obj.XBrickMap.ComputeAABB()
+
+	// Calculate shift to keep object stable in world space
+	// Position_new = Position_old + minB * Scale * (1 - factor)
+	vSize := s.TargetVoxelSize
+	shift := minB.Mul(vSize * (1.0 - factor))
+	obj.Transform.Position = obj.Transform.Position.Add(shift)
+	obj.Transform.Dirty = true
+
+	fmt.Printf("Rescaling Object. Factor=%f Shift=%v\n", factor, shift)
+
+	newMap := obj.XBrickMap.Resample(factor)
+	obj.XBrickMap = newMap
+
+	// Enforce the standard scale
+	obj.Transform.Scale = mgl32.Vec3{vSize, vSize, vSize}
+
+	obj.XBrickMap.AABBDirty = true
+	obj.UpdateWorldAABB()
 }
 
 func (s *Scene) AddObject(obj *VoxelObject) {
@@ -109,11 +140,8 @@ func (s *Scene) RemoveObject(obj *VoxelObject) {
 
 func (s *Scene) Commit(planes [6]mgl32.Vec4, hizData []float32, hizW, hizH uint32, lastViewProj mgl32.Mat4) {
 	// Recompute AABBs
-	anyChanged := false
 	for _, obj := range s.Objects {
-		if obj.UpdateWorldAABB() {
-			anyChanged = true
-		}
+		obj.UpdateWorldAABB()
 	}
 
 	// Culling: Populate VisibleObjects
@@ -141,11 +169,8 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, hizData []float32, hizW, hizH uint3
 		s.VisibleObjects = append(s.VisibleObjects, obj)
 	}
 
-	if !anyChanged && len(s.BVHNodesBytes) > 0 {
-		return
-	}
-
 	// Build BVH from Visible Objects AABBs
+	// We always rebuild if any objects are visible, as identity/order can change even if count stays the same.
 	if len(s.VisibleObjects) > 0 {
 		aabbs := make([][2]mgl32.Vec3, len(s.VisibleObjects))
 		for i, obj := range s.VisibleObjects {
