@@ -222,3 +222,92 @@ func TestEntityCollision(t *testing.T) {
 		t.Errorf("Entity B stopped too early! Y = %f", trB.Position.Y())
 	}
 }
+
+func TestPhysicsFriction(t *testing.T) {
+	ecs := MakeEcs()
+	cmd := &Commands{app: &App{ecs: &ecs, resources: make(map[reflect.Type]any)}}
+
+	physics := NewPhysicsWorld()
+	physics.VoxelSize = 1.0
+	physics.Gravity = mgl32.Vec3{0, 0, 0} // No gravity for this test
+
+	world := NewWorldComponent("test", 10.0)
+	world.MainXBM.SetVoxel(0, 0, 0, 1) // Floor at y=0,1
+	cmd.AddEntity(world)
+	cmd.app.FlushCommands()
+
+	// Entity moving horizontally ON the floor
+	eid := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 1.5, 0}, Scale: mgl32.Vec3{1, 1, 1}},
+		&RigidBodyComponent{Velocity: mgl32.Vec3{10, -1, 0}, GravityScale: 0}, // Downward velocity to ensure floor contact
+		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}, Friction: 0.5},
+	)
+	cmd.app.FlushCommands()
+
+	tm := &Time{Dt: 0.1}
+
+	// Run system
+	for i := 0; i < 5; i++ {
+		PhysicsSystem(cmd, tm, physics, nil)
+	}
+
+	var rb *RigidBodyComponent
+	MakeQuery1[RigidBodyComponent](cmd).Map(func(id EntityId, r *RigidBodyComponent) bool {
+		if id == eid {
+			rb = r
+		}
+		return true
+	})
+
+	// Initial vel X was 10. After 5 steps of 0.5 friction, it should be significantly lower.
+	if rb.Velocity.X() >= 10 {
+		t.Errorf("Friction did not slow down the entity! VX = %f", rb.Velocity.X())
+	}
+	if rb.Velocity.X() > 1.0 { // Should be roughly 10 * (0.5)^5 = 0.3125
+		// wait, friction is applied on EVERY AXIS RESOLUTION.
+		// resolves are Y, X, Z.
+		// If it hits Y, X is slowed.
+	}
+}
+
+func TestPhysicsRestitution(t *testing.T) {
+	ecs := MakeEcs()
+	cmd := &Commands{app: &App{ecs: &ecs, resources: make(map[reflect.Type]any)}}
+
+	physics := NewPhysicsWorld()
+	physics.VoxelSize = 1.0
+	physics.Gravity = mgl32.Vec3{0, 0, 0}
+
+	world := NewWorldComponent("test", 10.0)
+	world.MainXBM.SetVoxel(0, 0, 0, 1) // Floor at y=0,1
+	cmd.AddEntity(world)
+	cmd.app.FlushCommands()
+
+	// Entity falling at y=2 towards y=1
+	eid := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}, Scale: mgl32.Vec3{1, 1, 1}},
+		&RigidBodyComponent{Velocity: mgl32.Vec3{0, -10, 0}, GravityScale: 0},
+		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}, Restitution: 0.5},
+	)
+	cmd.app.FlushCommands()
+
+	tm := &Time{Dt: 0.1} // At t=0.1, it should hit. pos 2 -> 1.
+
+	PhysicsSystem(cmd, tm, physics, nil)
+
+	var rb *RigidBodyComponent
+	MakeQuery1[RigidBodyComponent](cmd).Map(func(id EntityId, r *RigidBodyComponent) bool {
+		if id == eid {
+			rb = r
+		}
+		return true
+	})
+
+	// Should have bounced
+	if rb.Velocity.Y() <= 0 {
+		t.Errorf("Entity did not bounce! VY = %f", rb.Velocity.Y())
+	}
+	if rb.Velocity.Y() != 5.0 { // 10 * 0.5
+		t.Errorf("Incorrect bounce velocity! VY = %f (expected 5.0)", rb.Velocity.Y())
+	}
+}

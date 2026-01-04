@@ -11,6 +11,11 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
+type VoxelSeparationResult struct {
+	Entity    EntityId
+	XBrickMap *volume.XBrickMap
+}
+
 type RaycastHit struct {
 	Hit    bool
 	T      float32
@@ -139,6 +144,130 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 	localRadius := radius / avgScale
 
 	volume.Sphere(obj.XBrickMap, localCenter, localRadius, val)
+}
+
+func (s *VoxelRtState) SplitDisconnectedComponents(cmd *Commands, eid EntityId) []VoxelSeparationResult {
+	if s == nil {
+		return nil
+	}
+	obj := s.getVoxelObject(eid)
+	if obj == nil || obj.XBrickMap == nil {
+		return nil
+	}
+
+	var results []VoxelSeparationResult
+	// Check for disconnected components
+	components := obj.XBrickMap.SplitDisconnectedComponents()
+	if len(components) > 1 {
+		// Find largest component
+		largestIdx := 0
+		maxVoxels := 0
+		for i, comp := range components {
+			if comp.VoxelCount > maxVoxels {
+				maxVoxels = comp.VoxelCount
+				largestIdx = i
+			}
+		}
+
+		// Keep largest in original object
+		obj.XBrickMap = components[largestIdx].Map
+		// Need to mark structure as dirty to push to GPU
+		obj.XBrickMap.StructureDirty = true
+		obj.XBrickMap.AABBDirty = true
+		obj.UpdateWorldAABB()
+
+		// SYNC BACK TO ECS: Update the parent's VoxelModelComponent
+		if cmd != nil {
+			allComps := cmd.GetAllComponents(eid)
+			for _, c := range allComps {
+				if vm, ok := c.(VoxelModelComponent); ok {
+					vm.CustomMap = obj.XBrickMap
+					cmd.AddComponents(eid, vm)
+					break
+				}
+			}
+		}
+
+		// Return others as separated parts
+		for i, comp := range components {
+			if i == largestIdx {
+				continue
+			}
+			results = append(results, VoxelSeparationResult{
+				Entity:    eid,
+				XBrickMap: comp.Map,
+			})
+		}
+	}
+
+	return results
+}
+
+func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult) {
+	if s == nil || s.RtApp == nil || cmd == nil {
+		return
+	}
+
+	// Need parent components
+	var parentTr TransformComponent
+	var parentVm VoxelModelComponent
+	foundTr, foundVm := false, false
+
+	allComps := cmd.GetAllComponents(res.Entity)
+	for _, c := range allComps {
+		switch comp := c.(type) {
+		case TransformComponent:
+			parentTr = comp
+			foundTr = true
+		case VoxelModelComponent:
+			parentVm = comp
+			foundVm = true
+		}
+	}
+
+	if !foundTr || !foundVm {
+		return
+	}
+
+	// 1. Center the map
+	shiftedMap, localCenter := res.XBrickMap.Center()
+
+	// 2. Calculate world position
+	vSize := s.RtApp.Scene.TargetVoxelSize
+	if vSize == 0 {
+		vSize = 0.1
+	}
+
+	// World offset is local center rotated and scaled by parent
+	worldOffset := parentTr.Rotation.Rotate(localCenter.Mul(vSize))
+	worldOffset = mgl32.Vec3{
+		worldOffset.X() * parentTr.Scale.X(),
+		worldOffset.Y() * parentTr.Scale.Y(),
+		worldOffset.Z() * parentTr.Scale.Z(),
+	}
+	newPos := parentTr.Position.Add(worldOffset)
+
+	// 3. Half extents for collider
+	minB, maxB := res.XBrickMap.ComputeAABB()
+	halfExtents := maxB.Sub(minB).Mul(0.5)
+
+	// 4. Create new entity
+	cmd.AddEntity(
+		&TransformComponent{
+			Position: newPos,
+			Rotation: parentTr.Rotation,
+			Scale:    parentTr.Scale,
+		},
+		&VoxelModelComponent{
+			VoxelModel:   parentVm.VoxelModel,
+			VoxelPalette: parentVm.VoxelPalette,
+			CustomMap:    shiftedMap,
+		},
+		&RigidBodyComponent{Mass: 1.0, GravityScale: 1.0},
+		&ColliderComponent{
+			AABBHalfExtents: halfExtents.Mul(vSize),
+		},
+	)
 }
 
 func (s *VoxelRtState) DrawDebugRay(origin, dir mgl32.Vec3, color [4]float32, duration float32) {
@@ -355,80 +484,21 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 				modelTemplate = core.NewVoxelObject()
 				modelTemplate.XBrickMap = xbm
-				modelTemplate.MaterialTable = make([]core.Material, 256)
-
-				matMap := make(map[int]VoxMaterial)
-				for _, m := range gekkoPalette.Materials {
-					matMap[m.ID] = m
-				}
-
-				for i, color := range gekkoPalette.VoxPalette {
-					mat := core.DefaultMaterial()
-					mat.BaseColor = color
-					if i == 0 {
-						mat.Transparency = 1.0 // Air is transparent!
-					}
-
-					if vMat, ok := matMap[i]; ok {
-						if r, ok := vMat.Property["_rough"].(float32); ok {
-							mat.Roughness = r
-						}
-						if m, ok := vMat.Property["_metal"].(float32); ok {
-							mat.Metalness = m
-						}
-						if ior, ok := vMat.Property["_ior"].(float32); ok {
-							mat.IOR = ior
-						}
-						if trans, ok := vMat.Property["_trans"].(float32); ok {
-							mat.Transparency = trans
-						}
-						if emit, ok := vMat.Property["_emit"].(float32); ok {
-							flux := float32(1.0)
-							if f, ok := vMat.Property["_flux"].(float32); ok {
-								flux = f
-							}
-							power := emit * flux
-							mat.Emissive = [4]uint8{
-								uint8(min(255, float32(color[0])*power)),
-								uint8(min(255, float32(color[1])*power)),
-								uint8(min(255, float32(color[2])*power)),
-								255,
-							}
-						}
-					}
-
-					if gekkoPalette.IsPBR {
-						mat.Roughness = gekkoPalette.Roughness
-						mat.Metalness = gekkoPalette.Metalness
-						mat.IOR = gekkoPalette.IOR
-						if gekkoPalette.Emission > 0 {
-							power := gekkoPalette.Emission
-							mat.Emissive = [4]uint8{
-								uint8(min(255, float32(color[0])*power)),
-								uint8(min(255, float32(color[1])*power)),
-								uint8(min(255, float32(color[2])*power)),
-								255,
-							}
-						}
-					}
-
-					// Infer transparency from palette alpha channel if not explicitly provided
-					if color[3] < 255 {
-						a := float32(color[3]) / 255.0
-						t := float32(1.0) - a
-						if t > mat.Transparency {
-							mat.Transparency = t
-						}
-					}
-
-					modelTemplate.MaterialTable[i] = mat
-				}
+				modelTemplate.MaterialTable = state.buildMaterialTable(&gekkoPalette)
 				state.loadedModels[vox.VoxelModel] = modelTemplate
 			}
 
 			obj = core.NewVoxelObject()
-			obj.XBrickMap = modelTemplate.XBrickMap.Copy()
-			obj.MaterialTable = modelTemplate.MaterialTable
+
+			if vox.CustomMap != nil {
+				obj.XBrickMap = vox.CustomMap.Copy()
+				gekkoPalette := server.voxPalettes[vox.VoxelPalette]
+				obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
+			} else {
+				obj.XBrickMap = modelTemplate.XBrickMap.Copy()
+				obj.MaterialTable = modelTemplate.MaterialTable
+			}
+
 			state.RtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
 		}
@@ -769,6 +839,78 @@ func (s *VoxelRtState) CycleRenderMode() {
 	if s != nil && s.RtApp != nil {
 		s.RtApp.RenderMode = (s.RtApp.RenderMode + 1) % 4
 	}
+}
+
+func (s *VoxelRtState) buildMaterialTable(gekkoPalette *VoxelPaletteAsset) []core.Material {
+	materialTable := make([]core.Material, 256)
+
+	matMap := make(map[int]VoxMaterial)
+	for _, m := range gekkoPalette.Materials {
+		matMap[m.ID] = m
+	}
+
+	for i, color := range gekkoPalette.VoxPalette {
+		mat := core.DefaultMaterial()
+		mat.BaseColor = color
+		if i == 0 {
+			mat.Transparency = 1.0 // Air is transparent!
+		}
+
+		if vMat, ok := matMap[i]; ok {
+			if r, ok := vMat.Property["_rough"].(float32); ok {
+				mat.Roughness = r
+			}
+			if m, ok := vMat.Property["_metal"].(float32); ok {
+				mat.Metalness = m
+			}
+			if ior, ok := vMat.Property["_ior"].(float32); ok {
+				mat.IOR = ior
+			}
+			if trans, ok := vMat.Property["_trans"].(float32); ok {
+				mat.Transparency = trans
+			}
+			if emit, ok := vMat.Property["_emit"].(float32); ok {
+				flux := float32(1.0)
+				if f, ok := vMat.Property["_flux"].(float32); ok {
+					flux = f
+				}
+				power := emit * flux
+				mat.Emissive = [4]uint8{
+					uint8(min(255, float32(color[0])*power)),
+					uint8(min(255, float32(color[1])*power)),
+					uint8(min(255, float32(color[2])*power)),
+					255,
+				}
+			}
+		}
+
+		if gekkoPalette.IsPBR {
+			mat.Roughness = gekkoPalette.Roughness
+			mat.Metalness = gekkoPalette.Metalness
+			mat.IOR = gekkoPalette.IOR
+			if gekkoPalette.Emission > 0 {
+				power := gekkoPalette.Emission
+				mat.Emissive = [4]uint8{
+					uint8(min(255, float32(color[0])*power)),
+					uint8(min(255, float32(color[1])*power)),
+					uint8(min(255, float32(color[2])*power)),
+					255,
+				}
+			}
+		}
+
+		// Infer transparency from palette alpha channel if not explicitly provided
+		if color[3] < 255 {
+			a := float32(color[3]) / 255.0
+			t := float32(1.0) - a
+			if t > mat.Transparency {
+				mat.Transparency = t
+			}
+		}
+
+		materialTable[i] = mat
+	}
+	return materialTable
 }
 
 func voxelRtDebugSystem(input *Input, state *VoxelRtState) {

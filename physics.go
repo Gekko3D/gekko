@@ -147,14 +147,17 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 		// Resolve collisions axis by axis for stability
 		startPos := b.Tr.Position
 
+		friction := b.Col.Friction
+		restitution := b.Col.Restitution
+
 		// Y Axis
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 1, physics.VoxelSize)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 1, physics.VoxelSize, friction, restitution)
 
 		// X & Z
 		displacement = b.Rb.Velocity.Mul(dt)
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 0, physics.VoxelSize)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 0, physics.VoxelSize, friction, restitution)
 		displacement = b.Rb.Velocity.Mul(dt)
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 2, physics.VoxelSize)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 2, physics.VoxelSize, friction, restitution)
 
 		// 4. Wake neighbors if we moved
 		moveDist := b.Tr.Position.Sub(startPos).Len()
@@ -190,7 +193,7 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 	}
 }
 
-func PhysicsResolveAxis(world *WorldComponent, bodies []BodyInfo, self *BodyInfo, pos, vel, displacement mgl32.Vec3, axis int, vSize float32) (mgl32.Vec3, mgl32.Vec3) {
+func PhysicsResolveAxis(world *WorldComponent, bodies []BodyInfo, self *BodyInfo, pos, vel, displacement mgl32.Vec3, axis int, vSize, friction, restitution float32) (mgl32.Vec3, mgl32.Vec3) {
 	newPos := pos
 	dist := displacement[axis]
 	if math.Abs(float64(dist)) < 0.0001 {
@@ -219,7 +222,21 @@ func PhysicsResolveAxis(world *WorldComponent, bodies []BodyInfo, self *BodyInfo
 		testPos[axis] += move
 
 		if PhysicsCheckCollision(world, bodies, self, testPos, self.ScaledExtents, vSize) {
-			vel[axis] = 0
+			// Apply restitution
+			vel[axis] = -vel[axis] * restitution
+			if math.Abs(float64(vel[axis])) < 0.1 {
+				vel[axis] = 0
+			}
+
+			// Apply friction to tangential axes
+			for a := 0; a < 3; a++ {
+				if a != axis {
+					vel[a] *= (1.0 - friction)
+					if math.Abs(float64(vel[a])) < 0.01 {
+						vel[a] = 0
+					}
+				}
+			}
 			break
 		}
 		newPos = testPos
