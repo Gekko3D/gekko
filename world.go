@@ -166,17 +166,17 @@ func loadRegion(world *WorldComponent, reg *Region) {
 				// Try load from disk
 				sector := diskLoadSector(world.WorldPath, sKey)
 				if sector == nil {
-					// Generate something simple (e.g. flat floor at y=0)
-					if sy == 0 {
+					// Generate something simple (e.g. flat floor at z=0)
+					if sz == 0 {
 						sector = volume.NewSector(sx, sy, sz)
 						// Fill bottom layers
 						for bx := 0; bx < volume.SectorBricks; bx++ {
-							for bz := 0; bz < volume.SectorBricks; bz++ {
-								brick, _ := sector.GetOrCreateBrick(bx, 0, bz)
+							for by := 0; by < volume.SectorBricks; by++ {
+								brick, _ := sector.GetOrCreateBrick(bx, by, 0)
 								for vx := 0; vx < volume.BrickSize; vx++ {
-									for vz := 0; vz < volume.BrickSize; vz++ {
-										brick.SetVoxel(vx, 0, vz, 1) // Layer 0
-										brick.SetVoxel(vx, 1, vz, 1) // Layer 1
+									for vy := 0; vy < volume.BrickSize; vy++ {
+										brick.SetVoxel(vx, vy, 0, 1) // Layer 0
+										brick.SetVoxel(vx, vy, 1, 1) // Layer 1
 									}
 								}
 							}
