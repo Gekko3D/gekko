@@ -618,7 +618,8 @@ func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId i
 
 		if len(node.Frames) > 0 {
 			f := node.Frames[0]
-			pos = mgl32.Vec3{float32(f.LocalTrans[0]), float32(f.LocalTrans[1]), float32(f.LocalTrans[2])}.Mul(voxelScale)
+			const VoxelUnitSize = 0.1
+			pos = mgl32.Vec3{float32(f.LocalTrans[0]), float32(f.LocalTrans[1]), float32(f.LocalTrans[2])}.Mul(voxelScale * VoxelUnitSize)
 			rot = decodeVoxRotation(f.Rotation)
 		}
 
@@ -637,7 +638,8 @@ func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId i
 					float32(model.SizeZ) * -0.5,
 				}
 				// Scale to world units
-				centerOffset = centerOffset.Mul(voxelScale)
+				const VoxelUnitSize = 0.1
+				centerOffset = centerOffset.Mul(voxelScale * VoxelUnitSize)
 				// Rotate offset by the node's rotation to align with parent space translation
 				rotatedOffset := rot.Rotate(centerOffset)
 				// Apply to position
@@ -674,7 +676,7 @@ func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId i
 		// For each model in the shape, we create a VoxelModelComponent
 		// In MagicaVoxel, usually there is only one model per shape if it's simple.
 		for _, m := range node.Models {
-			modelAssetId := server.CreateVoxelModel(voxFile.Models[m.ModelID], 1.0)
+			modelAssetId := server.CreateVoxelModel(voxFile.Models[m.ModelID], voxelScale)
 			cmd.AddComponents(parentEntity, &VoxelModelComponent{
 				VoxelModel:   modelAssetId,
 				VoxelPalette: paletteId,
