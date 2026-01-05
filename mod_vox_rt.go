@@ -427,6 +427,11 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 			RunAlways(),
 	)
 	app.UseSystem(
+		System(TransformHierarchySystem).
+			InStage(Update).
+			RunAlways(),
+	)
+	app.UseSystem(
 		System(voxelRtSystem).
 			InStage(PostUpdate).
 			RunAlways(),
@@ -437,6 +442,63 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 			InStage(Render).
 			RunAlways(),
 	)
+}
+
+func TransformHierarchySystem(cmd *Commands) {
+	// Root objects
+	MakeQuery2[LocalTransform, WorldTransform](cmd).Map(func(eid EntityId, local *LocalTransform, world *WorldTransform) bool {
+		// Manual "Without(Parent{})" check
+		allComps := cmd.GetAllComponents(eid)
+		for _, c := range allComps {
+			if _, ok := c.(Parent); ok {
+				return true
+			}
+		}
+
+		world.Position = local.Position
+		world.Rotation = local.Rotation
+		world.Scale = local.Scale
+		return true
+	})
+
+	// Children (recursively or iteratively - for now iterative simplest for ECS)
+	// In a real engine we might need to handle depths, but let's try a few passes or a topological approach.
+	// Since we are likely only one level deep for a skeleton, let's just run it.
+	// We can repeat mapping for several passes to propagate deeper if needed.
+	for pass := 0; pass < 4; pass++ {
+		MakeQuery3[LocalTransform, Parent, WorldTransform](cmd).Map(func(eid EntityId, local *LocalTransform, parent *Parent, world *WorldTransform) bool {
+			// Get parent's world transform
+			allComps := cmd.GetAllComponents(parent.Entity)
+			var parentWorld *WorldTransform
+			for _, c := range allComps {
+				if pw, ok := c.(WorldTransform); ok {
+					parentWorld = &pw
+					break
+				}
+			}
+
+			if parentWorld != nil {
+				// World = Parent.World * Local
+				pMat := parentWorld.ObjectToWorld()
+				lMat := local.ToMat4()
+				wMat := pMat.Mul4(lMat)
+
+				// Extract P, R, S from wMat
+				world.Position = wMat.Col(3).Vec3()
+				// Approximate rotation and scale extraction if needed, or just store Mat4 in WorldTransform.
+				// Given the request, let's keep it simple for now as rigid bones usually just need P+R.
+				// For real skeletal animation we'd use matrices.
+				// Let's stick to P+R+S for now.
+				world.Rotation = mgl32.Mat4ToQuat(wMat)
+				// Scale is trickier to extract accurately from a general matrix, but let's assume no skewing.
+				sx := wMat.Col(0).Vec3().Len()
+				sy := wMat.Col(1).Vec3().Len()
+				sz := wMat.Col(2).Vec3().Len()
+				world.Scale = mgl32.Vec3{sx, sy, sz}
+			}
+			return true
+		})
+	}
 }
 
 func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time *Time, cmd *Commands) {
@@ -503,19 +565,34 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			state.instanceMap[entityId] = obj
 		}
 
-		// Persistent scaling: we don't want to sync scale from ECS if we are using metric scaling.
-		// However, we MUST sync Position back if it changed in the renderer.
-		if state.RtApp.Editor.SelectedObject == obj {
-			// This is the active object.
-			// If its position in renderer differs from ECS, it means RescaleObject shifted it.
-			if obj.Transform.Position.Sub(transform.Position).Len() > 0.001 {
-				transform.Position = obj.Transform.Position
+		// Prefer WorldTransform if present (M2a)
+		allComps := cmd.GetAllComponents(entityId)
+		var wt *WorldTransform
+		for _, c := range allComps {
+			if w, ok := c.(WorldTransform); ok {
+				wt = &w
+				break
 			}
-		} else {
-			obj.Transform.Position = transform.Position
 		}
 
-		obj.Transform.Rotation = transform.Rotation
+		if wt != nil {
+			obj.Transform.Position = wt.Position
+			obj.Transform.Rotation = wt.Rotation
+			// Scale is handled below with TargetVoxelSize
+		} else {
+			// Persistent scaling: we don't want to sync scale from ECS if we are using metric scaling.
+			// However, we MUST sync Position back if it changed in the renderer.
+			if state.RtApp.Editor.SelectedObject == obj {
+				// This is the active object.
+				// If its position in renderer differs from ECS, it means RescaleObject shifted it.
+				if obj.Transform.Position.Sub(transform.Position).Len() > 0.001 {
+					transform.Position = obj.Transform.Position
+				}
+			} else {
+				obj.Transform.Position = transform.Position
+			}
+			obj.Transform.Rotation = transform.Rotation
+		}
 
 		// Metric system: Renderer Scale is ALWAYS TargetVoxelSize.
 		// Physical dimension is controlled by Voxel resolution (Resampling).
@@ -523,7 +600,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 		if vSize == 0 {
 			vSize = 0.1
 		}
-		obj.Transform.Scale = mgl32.Vec3{vSize * transform.Scale.X(), vSize * transform.Scale.Y(), vSize * transform.Scale.Z()}
+
+		scale := transform.Scale
+		if wt != nil {
+			scale = wt.Scale
+		}
+		obj.Transform.Scale = mgl32.Vec3{vSize * scale.X(), vSize * scale.Y(), vSize * scale.Z()}
 		obj.Transform.Dirty = true
 
 		return true

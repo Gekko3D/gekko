@@ -29,6 +29,44 @@ type VoxFile struct {
 	Models       []VoxModel
 	Palette      VoxPalette
 	VoxMaterials []VoxMaterial
+	Nodes        map[int]VoxNode
+}
+
+type VoxNodeType int
+
+const (
+	VoxNodeTransform VoxNodeType = iota
+	VoxNodeGroup
+	VoxNodeShape
+)
+
+type VoxNode struct {
+	ID         int
+	Type       VoxNodeType
+	Attributes map[string]string
+
+	// Transform Node
+	ChildID    int
+	ReservedID int
+	LayerID    int
+	Frames     []VoxTransformFrame
+
+	// Group Node
+	ChildrenIDs []int
+
+	// Shape Node
+	Models []VoxShapeModel
+}
+
+type VoxTransformFrame struct {
+	Rotation   byte // index in rotation enum? MagicaVoxel uses a bitmask or similar for orientation
+	LocalTrans [3]int32
+	Attributes map[string]string
+}
+
+type VoxShapeModel struct {
+	ModelID    int
+	Attributes map[string]string
 }
 
 type VoxMaterial struct {
@@ -62,10 +100,14 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 
 	voxFile := &VoxFile{
 		Version: int(version),
+		Nodes:   make(map[int]VoxNode),
 	}
 
 	// Default palette
 	voxFile.Palette = defaultPalette()
+
+	// Track current model index
+	currentModelIndex := -1
 
 	// Main chunk reading loop
 	for {
@@ -95,10 +137,11 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 			// MAIN chunk contains other chunks
 			continue
 		case "SIZE":
-			if len(voxFile.Models) == 0 {
+			currentModelIndex++
+			if currentModelIndex >= len(voxFile.Models) {
 				voxFile.Models = append(voxFile.Models, VoxModel{})
 			}
-			model := &voxFile.Models[len(voxFile.Models)-1]
+			model := &voxFile.Models[currentModelIndex]
 			if len(chunkData) >= 12 {
 				model.SizeX = binary.LittleEndian.Uint32(chunkData[0:4])
 				model.SizeY = binary.LittleEndian.Uint32(chunkData[4:8])
@@ -107,7 +150,10 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 				return nil, errors.New("SIZE chunk too small")
 			}
 		case "XYZI":
-			model := &voxFile.Models[len(voxFile.Models)-1]
+			if currentModelIndex < 0 || currentModelIndex >= len(voxFile.Models) {
+				return nil, errors.New("XYZI chunk without preceding SIZE or invalid index")
+			}
+			model := &voxFile.Models[currentModelIndex]
 			numVoxels := binary.LittleEndian.Uint32(chunkData[:4])
 			model.Voxels = make([]Voxel, numVoxels)
 			for i := 0; i < int(numVoxels); i++ {
@@ -144,6 +190,24 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 			if numModels > 0 {
 				voxFile.Models = make([]VoxModel, numModels)
 			}
+		case "nTRN":
+			node, err := parseTransformNode(chunkData)
+			if err != nil {
+				return nil, err
+			}
+			voxFile.Nodes[node.ID] = node
+		case "nGRP":
+			node, err := parseGroupNode(chunkData)
+			if err != nil {
+				return nil, err
+			}
+			voxFile.Nodes[node.ID] = node
+		case "nSHP":
+			node, err := parseShapeNode(chunkData)
+			if err != nil {
+				return nil, err
+			}
+			voxFile.Nodes[node.ID] = node
 		}
 	}
 
@@ -155,6 +219,7 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 func printDebugInfo(voxFile *VoxFile) {
 	fmt.Printf("VOX File Version: %d\n", voxFile.Version)
 	fmt.Printf("Number of Models: %d\n", len(voxFile.Models))
+	fmt.Printf("Number of Nodes: %d\n", len(voxFile.Nodes))
 
 	if len(voxFile.Models) > 0 {
 		model := voxFile.Models[0]
@@ -227,4 +292,103 @@ func defaultPalette() VoxPalette {
 		palette[i] = [4]uint8{255, 255, 255, 255} // white as fallback
 	}
 	return palette
+}
+
+func parseTransformNode(data []byte) (VoxNode, error) {
+	node := VoxNode{Type: VoxNodeTransform, Attributes: make(map[string]string)}
+	node.ID = int(binary.LittleEndian.Uint32(data[0:4]))
+	data = data[4:]
+
+	attr, nextData := parseDICT(data)
+	node.Attributes = attr
+	data = nextData
+
+	node.ChildID = int(binary.LittleEndian.Uint32(data[0:4]))
+	node.ReservedID = int(binary.LittleEndian.Uint32(data[4:8]))
+	node.LayerID = int(binary.LittleEndian.Uint32(data[8:12]))
+	numFrames := int(binary.LittleEndian.Uint32(data[12:16]))
+	data = data[16:]
+
+	for i := 0; i < numFrames; i++ {
+		frameAttr, nextData := parseDICT(data)
+		data = nextData
+		frame := VoxTransformFrame{Attributes: frameAttr}
+		if val, ok := frameAttr["_t"]; ok {
+			fmt.Sscanf(val, "%d %d %d", &frame.LocalTrans[0], &frame.LocalTrans[1], &frame.LocalTrans[2])
+		}
+		if val, ok := frameAttr["_r"]; ok {
+			var r int
+			fmt.Sscanf(val, "%d", &r)
+			frame.Rotation = byte(r)
+		}
+		node.Frames = append(node.Frames, frame)
+	}
+
+	return node, nil
+}
+
+func parseGroupNode(data []byte) (VoxNode, error) {
+	node := VoxNode{Type: VoxNodeGroup, Attributes: make(map[string]string)}
+	node.ID = int(binary.LittleEndian.Uint32(data[0:4]))
+	data = data[4:]
+
+	attr, nextData := parseDICT(data)
+	node.Attributes = attr
+	data = nextData
+
+	numChildren := int(binary.LittleEndian.Uint32(data[0:4]))
+	data = data[4:]
+
+	for i := 0; i < numChildren; i++ {
+		childID := int(binary.LittleEndian.Uint32(data[:4]))
+		data = data[4:]
+		node.ChildrenIDs = append(node.ChildrenIDs, childID)
+	}
+
+	return node, nil
+}
+
+func parseShapeNode(data []byte) (VoxNode, error) {
+	node := VoxNode{Type: VoxNodeShape, Attributes: make(map[string]string)}
+	node.ID = int(binary.LittleEndian.Uint32(data[0:4]))
+	data = data[4:]
+
+	attr, nextData := parseDICT(data)
+	node.Attributes = attr
+	data = nextData
+
+	numModels := int(binary.LittleEndian.Uint32(data[0:4]))
+	data = data[4:]
+
+	for i := 0; i < numModels; i++ {
+		modelID := int(binary.LittleEndian.Uint32(data[:4]))
+		data = data[4:]
+		modelAttr, nextData := parseDICT(data)
+		data = nextData
+		model := VoxShapeModel{ModelID: modelID, Attributes: modelAttr}
+		node.Models = append(node.Models, model)
+	}
+
+	return node, nil
+}
+
+func parseDICT(data []byte) (map[string]string, []byte) {
+	res := make(map[string]string)
+	numElems := int(binary.LittleEndian.Uint32(data[:4]))
+	data = data[4:]
+
+	for i := 0; i < numElems; i++ {
+		keyLen := int(binary.LittleEndian.Uint32(data[:4]))
+		data = data[4:]
+		key := string(data[:keyLen])
+		data = data[keyLen:]
+
+		valLen := int(binary.LittleEndian.Uint32(data[:4]))
+		data = data[4:]
+		val := string(data[:valLen])
+		data = data[valLen:]
+
+		res[key] = val
+	}
+	return res, data
 }

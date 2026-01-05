@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
 )
 
@@ -36,6 +37,11 @@ type AssetServer struct {
 	samplers    map[AssetId]SamplerAsset
 	voxModels   map[AssetId]VoxelModelAsset
 	voxPalettes map[AssetId]VoxelPaletteAsset
+	voxFiles    map[AssetId]*VoxFile
+}
+
+type VoxelFileAsset struct {
+	VoxFile *VoxFile
 }
 
 type AssetServerModule struct{}
@@ -211,6 +217,14 @@ func (server AssetServer) CreateVoxelModel(model VoxModel, resolution float32) A
 		//TODO calculate brick size based on model
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	return id
+}
+
+func (server AssetServer) CreateVoxelFile(voxFile *VoxFile) AssetId {
+	id := makeAssetId()
+	server.voxFiles[id] = voxFile
+	// Automatically register all models in the file
+	// (Note: some models might not be referenced by nodes, but we store them anyway)
 	return id
 }
 
@@ -488,9 +502,188 @@ func (AssetServerModule) Install(app *App, cmd *Commands) {
 		samplers:    make(map[AssetId]SamplerAsset),
 		voxModels:   make(map[AssetId]VoxelModelAsset),
 		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
+		voxFiles:    make(map[AssetId]*VoxFile),
 	})
 }
 
 func makeAssetId() AssetId {
 	return AssetId(uuid.NewString())
+}
+
+func (server AssetServer) SpawnHierarchicalVoxelModel(cmd *Commands, voxId AssetId, rootTransform TransformComponent, voxelScale float32) EntityId {
+	voxFile, ok := server.voxFiles[voxId]
+	if !ok {
+		panic("Voxel file asset not found")
+	}
+
+	paletteId := server.CreateVoxelPalette(voxFile.Palette, voxFile.VoxMaterials)
+
+	// Create a root entity to hold the global transform
+	// Fix 1: Rotate -90 degrees around X axis to convert Z-up (MagicaVoxel) to Y-up (Engine)
+	correctionRot := mgl32.QuatRotate(mgl32.DegToRad(-90), mgl32.Vec3{1, 0, 0})
+	rootTransform.Rotation = rootTransform.Rotation.Mul(correctionRot)
+
+	rootEntity := cmd.AddEntity(
+		&rootTransform,
+		&LocalTransform{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
+		&WorldTransform{},
+		&TransformComponent{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
+	)
+
+	// We need a map to keep track of spawned entities by node ID to link children to parents
+	nodeEntities := make(map[int]EntityId)
+
+	// Node 0 is always the root transform in MagicaVoxel
+	server.spawnVoxNode(cmd, voxFile, 0, rootEntity, nodeEntities, paletteId, voxelScale)
+
+	return rootEntity
+}
+
+// Decode MagicaVoxel rotation byte to Quaternion
+func decodeVoxRotation(r byte) mgl32.Quat {
+	// row indices
+	row0 := int(r & 3)
+	row1 := int((r >> 2) & 3)
+	// row2 is determined by elimination: 0+1+2 = 3
+	row2 := 3 - row0 - row1
+
+	// signs
+	sign0 := float32(1.0)
+	if (r & 16) != 0 {
+		sign0 = -1.0
+	}
+	sign1 := float32(1.0)
+	if (r & 32) != 0 {
+		sign1 = -1.0
+	}
+	sign2 := float32(1.0)
+	if (r & 64) != 0 {
+		sign2 = -1.0
+	}
+
+	// Construct generic matrix (column-major storage for mgl32)
+	// MagicaVoxel stores rows.
+	// R[0] has non-zero at index row0 with value sign0
+	// R[1] has non-zero at index row1 with value sign1
+	// R[2] has non-zero at index row2 with value sign2
+
+	var m mgl32.Mat3
+
+	// Col 0
+	if row0 == 0 {
+		m[0] = sign0
+	}
+	if row1 == 0 {
+		m[1] = sign1
+	}
+	if row2 == 0 {
+		m[2] = sign2
+	}
+
+	// Col 1
+	if row0 == 1 {
+		m[3] = sign0
+	}
+	if row1 == 1 {
+		m[4] = sign1
+	}
+	if row2 == 1 {
+		m[5] = sign2
+	}
+
+	// Col 2
+	if row0 == 2 {
+		m[6] = sign0
+	}
+	if row1 == 2 {
+		m[7] = sign1
+	}
+	if row2 == 2 {
+		m[8] = sign2
+	}
+
+	return mgl32.Mat4ToQuat(m.Mat4())
+}
+
+func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId int, parentEntity EntityId, nodeEntities map[int]EntityId, paletteId AssetId, voxelScale float32) {
+	node, ok := voxFile.Nodes[nodeId]
+	if !ok {
+		return
+	}
+
+	var currentEntity EntityId
+
+	switch node.Type {
+	case VoxNodeTransform:
+		// Create a transform entity
+		var pos mgl32.Vec3
+		var rot mgl32.Quat = mgl32.QuatIdent()
+		var scale mgl32.Vec3 = mgl32.Vec3{1, 1, 1}
+
+		if len(node.Frames) > 0 {
+			f := node.Frames[0]
+			pos = mgl32.Vec3{float32(f.LocalTrans[0]), float32(f.LocalTrans[1]), float32(f.LocalTrans[2])}.Mul(voxelScale)
+			rot = decodeVoxRotation(f.Rotation)
+		}
+
+		// Fix 2: Check if child is a Shape and apply centering offset
+		// MagicaVoxel models inherently pivot at their center, but the engine renders from the corner.
+		// We need to shift the position by (-Size/2) in local rotated space.
+		childNode, childExists := voxFile.Nodes[node.ChildID]
+		if childExists && childNode.Type == VoxNodeShape && len(childNode.Models) > 0 {
+			modelID := childNode.Models[0].ModelID
+			if modelID < len(voxFile.Models) {
+				model := voxFile.Models[modelID]
+				// Calculate geometric center offset in voxel units
+				centerOffset := mgl32.Vec3{
+					float32(model.SizeX) * -0.5,
+					float32(model.SizeY) * -0.5,
+					float32(model.SizeZ) * -0.5,
+				}
+				// Scale to world units
+				centerOffset = centerOffset.Mul(voxelScale)
+				// Rotate offset by the node's rotation to align with parent space translation
+				rotatedOffset := rot.Rotate(centerOffset)
+				// Apply to position
+				pos = pos.Add(rotatedOffset)
+			}
+		}
+
+		currentEntity = cmd.AddEntity(
+			&LocalTransform{Position: pos, Rotation: rot, Scale: scale},
+			&TransformComponent{Position: pos, Rotation: rot, Scale: scale}, // Added for compatibility with query
+			&Parent{Entity: parentEntity},
+			&WorldTransform{},
+		)
+		nodeEntities[node.ID] = currentEntity
+
+		// Transform nodes have one child
+		server.spawnVoxNode(cmd, voxFile, node.ChildID, currentEntity, nodeEntities, paletteId, voxelScale)
+
+	case VoxNodeGroup:
+		// Group nodes just collect children
+		currentEntity = cmd.AddEntity(
+			&LocalTransform{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+			&Parent{Entity: parentEntity},
+			&WorldTransform{},
+		)
+		nodeEntities[node.ID] = currentEntity
+
+		for _, childID := range node.ChildrenIDs {
+			server.spawnVoxNode(cmd, voxFile, childID, currentEntity, nodeEntities, paletteId, voxelScale)
+		}
+
+	case VoxNodeShape:
+		// Shape nodes hold model references
+		// For each model in the shape, we create a VoxelModelComponent
+		// In MagicaVoxel, usually there is only one model per shape if it's simple.
+		for _, m := range node.Models {
+			modelAssetId := server.CreateVoxelModel(voxFile.Models[m.ModelID], 1.0)
+			cmd.AddComponents(parentEntity, &VoxelModelComponent{
+				VoxelModel:   modelAssetId,
+				VoxelPalette: paletteId,
+			})
+		}
+		// Shape nodes are leaves in the scene graph for purposes of hierarchy (they attach to their parent nTRN)
+	}
 }
