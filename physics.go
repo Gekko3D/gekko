@@ -80,9 +80,10 @@ type BodyInfo struct {
 	Rb            *RigidBodyComponent
 	Col           *ColliderComponent
 	ScaledExtents mgl32.Vec3
+	Model         *VoxModel
 }
 
-func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelRtState) {
+func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelRtState, assets *AssetServer) {
 	dt := float32(time.Dt)
 	if dt <= 0 || dt > 1.0 { // Safety cap for dt
 		return
@@ -102,7 +103,7 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 
 	// 2. Collect all active colliders for inter-entity collision
 	var bodies []BodyInfo
-	MakeQuery3[TransformComponent, RigidBodyComponent, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent) bool {
+	MakeQuery4[TransformComponent, RigidBodyComponent, ColliderComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, vmc *VoxelModelComponent) bool {
 		scaledHalfExtents := mgl32.Vec3{
 			col.AABBHalfExtents.X() * tr.Scale.X(),
 			col.AABBHalfExtents.Y() * tr.Scale.Y(),
@@ -119,9 +120,16 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 			scaledHalfExtents[2] = 0.001
 		}
 
-		bodies = append(bodies, BodyInfo{eid, tr, rb, col, scaledHalfExtents})
+		var model *VoxModel
+		if vmc != nil && assets != nil {
+			if vmAsset, ok := assets.voxModels[vmc.VoxelModel]; ok {
+				model = &vmAsset.VoxModel
+			}
+		}
+
+		bodies = append(bodies, BodyInfo{eid, tr, rb, col, scaledHalfExtents, model})
 		return true
-	})
+	}, VoxelModelComponent{})
 
 	// 3. Update Rigid Bodies
 	for i := range bodies {
@@ -260,17 +268,105 @@ func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyI
 		min := pos.Sub(halfExtents)
 		max := pos.Add(halfExtents)
 
-		// Sample points on the bounding box
-		// Limit sampling density to avoid hangs if extents are large
-		stepX := float32(math.Max(float64(halfExtents.X()), 0.1))
-		stepY := float32(math.Max(float64(halfExtents.Y()), 0.1))
-		stepZ := float32(math.Max(float64(halfExtents.Z()), 0.1))
+		// Integer bounds for grid iteration
+		minX, minY, minZ := int(math.Floor(float64(min.X()/vSize))), int(math.Floor(float64(min.Y()/vSize))), int(math.Floor(float64(min.Z()/vSize)))
+		maxX, maxY, maxZ := int(math.Floor(float64(max.X()/vSize))), int(math.Floor(float64(max.Y()/vSize))), int(math.Floor(float64(max.Z()/vSize)))
 
-		for x := min.X(); x <= max.X()+0.01; x += stepX {
-			for y := min.Y(); y <= max.Y()+0.01; y += stepY {
-				for z := min.Z(); z <= max.Z()+0.01; z += stepZ {
-					gx, gy, gz := int(math.Floor(float64(x/vSize))), int(math.Floor(float64(y/vSize))), int(math.Floor(float64(z/vSize)))
+		// Iterate over all potential world voxels intersecting the AABB
+		// Iterate over all potential world voxels intersecting the AABB
+		for gx := minX; gx <= maxX; gx++ {
+			for gy := minY; gy <= maxY; gy++ {
+				for gz := minZ; gz <= maxZ; gz++ {
+					// Check if there is a voxel at this world position
 					if hit, _ := world.MainXBM.GetVoxel(gx, gy, gz); hit {
+						// World voxel exists. Check collision with Entity.
+
+						// If entity has precise model, check if the world voxel VOLUMETRICALLY overlaps any solid model voxel.
+						if self != nil && self.Model != nil {
+							// Determine World Voxel AABB corners
+							wvMin := mgl32.Vec3{float32(gx) * vSize, float32(gy) * vSize, float32(gz) * vSize}
+							wvMax := wvMin.Add(mgl32.Vec3{vSize, vSize, vSize})
+
+							corners := [8]mgl32.Vec3{
+								{wvMin.X(), wvMin.Y(), wvMin.Z()},
+								{wvMin.X(), wvMin.Y(), wvMax.Z()},
+								{wvMin.X(), wvMax.Y(), wvMin.Z()},
+								{wvMin.X(), wvMax.Y(), wvMax.Z()},
+								{wvMax.X(), wvMin.Y(), wvMin.Z()},
+								{wvMax.X(), wvMin.Y(), wvMax.Z()},
+								{wvMax.X(), wvMax.Y(), wvMin.Z()},
+								{wvMax.X(), wvMax.Y(), wvMax.Z()},
+							}
+
+							// Transform corners to Local Space to find Local AABB of the World Voxel
+							var lMin, lMax mgl32.Vec3
+							first := true
+
+							invRot := self.Tr.Rotation.Conjugate()
+							pos := self.Tr.Position
+
+							const VoxelUnitSize = 0.1
+							sx := self.Tr.Scale.X()
+							if sx < 0.001 {
+								sx = 1
+							}
+							sy := self.Tr.Scale.Y()
+							if sy < 0.001 {
+								sy = 1
+							}
+							sz := self.Tr.Scale.Z()
+							if sz < 0.001 {
+								sz = 1
+							}
+
+							offX := float32(self.Model.SizeX) / 2.0
+							offY := float32(self.Model.SizeY) / 2.0
+							offZ := float32(self.Model.SizeZ) / 2.0
+
+							for _, c := range corners {
+								rel := c.Sub(pos)
+								loc := invRot.Rotate(rel)
+
+								// Convert to "Voxel Index Space" coordinates
+								vx := (loc.X() / (VoxelUnitSize * sx)) + offX
+								vy := (loc.Y() / (VoxelUnitSize * sy)) + offY
+								vz := (loc.Z() / (VoxelUnitSize * sz)) + offZ
+
+								if first {
+									lMin = mgl32.Vec3{vx, vy, vz}
+									lMax = mgl32.Vec3{vx, vy, vz}
+									first = false
+								} else {
+									lMin = mgl32.Vec3{float32(math.Min(float64(lMin.X()), float64(vx))), float32(math.Min(float64(lMin.Y()), float64(vy))), float32(math.Min(float64(lMin.Z()), float64(vz)))}
+									lMax = mgl32.Vec3{float32(math.Max(float64(lMax.X()), float64(vx))), float32(math.Max(float64(lMax.Y()), float64(vy))), float32(math.Max(float64(lMax.Z()), float64(vz)))}
+								}
+							}
+
+							// Check if any Model Voxel overlaps this Local AABB.
+							// Optimization: We check if the Model Voxel grid coordinates fall within [floor(lMin), floor(lMax)].
+							// Loose check: If a model voxel connects to this AABB.
+							hitModel := false
+
+							// Ideally iterate only relevant voxels if we had a grid.
+							// Since we iterate all voxels:
+							for _, v := range self.Model.Voxels {
+								ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
+
+								// Check overlap of Voxel Cube [I, I+1] with Interval [LMin, LMax].
+								// Overlap condition: Max > I && Min < I+1.
+								if lMax.X() > ix && lMin.X() < ix+1 &&
+									lMax.Y() > iy && lMin.Y() < iy+1 &&
+									lMax.Z() > iz && lMin.Z() < iz+1 {
+									hitModel = true
+									break
+								}
+							}
+
+							if !hitModel {
+								continue // Miss
+							}
+							// Hit!
+						}
 						return true
 					}
 				}

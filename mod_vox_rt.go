@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -162,12 +163,17 @@ func (s *VoxelRtState) SplitDisconnectedComponents(cmd *Commands, eid EntityId) 
 		// Find largest component
 		largestIdx := 0
 		maxVoxels := 0
+
+		// Debug logging
+		fmt.Printf("Voxel Split: Found %d components. Sizes: ", len(components))
 		for i, comp := range components {
+			fmt.Printf("%d ", comp.VoxelCount)
 			if comp.VoxelCount > maxVoxels {
 				maxVoxels = comp.VoxelCount
 				largestIdx = i
 			}
 		}
+		fmt.Printf("\nKeeping largest (Index %d) in original entity %d\n", largestIdx, eid)
 
 		// Keep largest in original object
 		obj.XBrickMap = components[largestIdx].Map
@@ -203,6 +209,18 @@ func (s *VoxelRtState) SplitDisconnectedComponents(cmd *Commands, eid EntityId) 
 	return results
 }
 
+func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {
+	if s == nil {
+		return true
+	}
+	obj := s.getVoxelObject(eid)
+	if obj == nil || obj.XBrickMap == nil {
+		return true
+	}
+	// Check internal counters or compute
+	return obj.XBrickMap.GetVoxelCount() == 0
+}
+
 func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult) {
 	if s == nil || s.RtApp == nil || cmd == nil {
 		return
@@ -229,6 +247,17 @@ func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult)
 		return
 	}
 
+	// Check for optional physics components on parent
+	var hasRb, hasCol bool
+	for _, c := range allComps {
+		if _, ok := c.(RigidBodyComponent); ok {
+			hasRb = true
+		}
+		if _, ok := c.(ColliderComponent); ok {
+			hasCol = true
+		}
+	}
+
 	// 1. Center the map
 	shiftedMap, localCenter := res.XBrickMap.Center()
 
@@ -252,7 +281,7 @@ func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult)
 	halfExtents := maxB.Sub(minB).Mul(0.5)
 
 	// 4. Create new entity
-	cmd.AddEntity(
+	newComps := []any{
 		&TransformComponent{
 			Position: newPos,
 			Rotation: parentTr.Rotation,
@@ -263,11 +292,19 @@ func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult)
 			VoxelPalette: parentVm.VoxelPalette,
 			CustomMap:    shiftedMap,
 		},
-		&RigidBodyComponent{Mass: 1.0, GravityScale: 1.0},
-		&ColliderComponent{
+	}
+
+	if hasCol {
+		newComps = append(newComps, &ColliderComponent{
 			AABBHalfExtents: halfExtents.Mul(vSize),
-		},
-	)
+		})
+	}
+
+	if hasRb {
+		newComps = append(newComps, &RigidBodyComponent{Mass: 1.0, GravityScale: 1.0})
+	}
+
+	cmd.AddEntity(newComps...)
 }
 
 func (s *VoxelRtState) DrawDebugRay(origin, dir mgl32.Vec3, color [4]float32, duration float32) {
