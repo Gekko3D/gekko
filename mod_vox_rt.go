@@ -426,6 +426,82 @@ func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit 
 	return RaycastHit{}
 }
 
+func (s *VoxelRtState) RaycastSubstepped(origin, dir mgl32.Vec3, distance float32, substeps int) RaycastHit {
+	if substeps <= 1 {
+		return s.Raycast(origin, dir, distance)
+	}
+
+	subDt := distance / float32(substeps)
+	for i := 0; i < substeps; i++ {
+		subOrigin := origin.Add(dir.Mul(float32(i) * subDt))
+		hit := s.Raycast(subOrigin, dir, subDt)
+		if hit.Hit {
+			// Offset T by the distance already traveled
+			hit.T += float32(i) * subDt
+			return hit
+		}
+	}
+	return RaycastHit{}
+}
+
+func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *VoxelRtState) {
+	if editQueue == nil || state == nil {
+		return
+	}
+
+	if len(editQueue.Spheres) == 0 && len(editQueue.Edits) == 0 {
+		return
+	}
+
+	// 1. Process Spheres
+	affectedEntities := make(map[EntityId]bool)
+	count := 0
+	budget := editQueue.BudgetPerFrame
+	if budget <= 0 {
+		budget = 1024 // Default budget
+	}
+
+	// Drain spheres
+	for len(editQueue.Spheres) > 0 && count < budget {
+		sphere := editQueue.Spheres[0]
+		editQueue.Spheres = editQueue.Spheres[1:]
+
+		state.VoxelSphereEdit(sphere.Entity, sphere.Center, sphere.Radius, sphere.Value)
+		if sphere.Value == 0 {
+			affectedEntities[sphere.Entity] = true
+		}
+		count++
+	}
+
+	// Drain point edits
+	for len(editQueue.Edits) > 0 && count < budget {
+		edit := editQueue.Edits[0]
+		editQueue.Edits = editQueue.Edits[1:]
+
+		// We need a SetVoxel on VoxelRtState or similar
+		// For now let's just use Sphere with 0 radius or implement SetVoxel
+		// Let's add SetVoxel to VoxelRtState later if needed, for now just skip or use sphere
+		state.VoxelSphereEdit(edit.Entity, mgl32.Vec3{float32(edit.Pos[0]), float32(edit.Pos[1]), float32(edit.Pos[2])}, 0.1, edit.Val)
+		if edit.Val == 0 {
+			affectedEntities[edit.Entity] = true
+		}
+		count++
+	}
+
+	// 2. Process Separations (once per affected entity)
+	// This might be expensive, so we only do it if we have budget left or amortize it
+	for eid := range affectedEntities {
+		results := state.SplitDisconnectedComponents(cmd, eid)
+		for _, res := range results {
+			state.ApplySeparation(cmd, res)
+		}
+
+		if state.IsEntityEmpty(eid) {
+			cmd.RemoveEntity(eid)
+		}
+	}
+}
+
 func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	windowState := createWindowState(mod.WindowWidth, mod.WindowHeight, mod.WindowTitle)
 	cmd.AddResources(windowState)
@@ -450,6 +526,12 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
 		System(voxelRtDebugSystem).
 			InStage(Update).
+			RunAlways(),
+	)
+	// Voxel edit application system (M3)
+	app.UseSystem(
+		System(VoxelAppliedEditSystem).
+			InStage(PostUpdate).
 			RunAlways(),
 	)
 	// Cellular automaton step system (low Hz via TickRate in component)
