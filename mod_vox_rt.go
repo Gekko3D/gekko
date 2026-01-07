@@ -515,23 +515,25 @@ func TransformHierarchySystem(cmd *Commands) {
 			}
 
 			if parentWorld != nil {
-				// World = Parent.World * Local
-				pMat := parentWorld.ObjectToWorld()
-				lMat := local.ToMat4()
-				wMat := pMat.Mul4(lMat)
+				// Propagate components directly to preserve scale signs (reflections) and avoid Mat4ToQuat decomposition errors.
+				// WorldPos = ParentPos + ParentRot * (ParentScale * LocalPos)
+				scaledLocalPos := mgl32.Vec3{
+					local.Position.X() * parentWorld.Scale.X(),
+					local.Position.Y() * parentWorld.Scale.Y(),
+					local.Position.Z() * parentWorld.Scale.Z(),
+				}
+				world.Position = parentWorld.Position.Add(parentWorld.Rotation.Rotate(scaledLocalPos))
 
-				// Extract P, R, S from wMat
-				world.Position = wMat.Col(3).Vec3()
-				// Approximate rotation and scale extraction if needed, or just store Mat4 in WorldTransform.
-				// Given the request, let's keep it simple for now as rigid bones usually just need P+R.
-				// For real skeletal animation we'd use matrices.
-				// Let's stick to P+R+S for now.
-				world.Rotation = mgl32.Mat4ToQuat(wMat)
-				// Scale is trickier to extract accurately from a general matrix, but let's assume no skewing.
-				sx := wMat.Col(0).Vec3().Len()
-				sy := wMat.Col(1).Vec3().Len()
-				sz := wMat.Col(2).Vec3().Len()
-				world.Scale = mgl32.Vec3{sx, sy, sz}
+				// WorldRot = ParentRot * LocalRot
+				// Note: Reflections are handled by the Scale component.
+				world.Rotation = parentWorld.Rotation.Mul(local.Rotation).Normalize()
+
+				// WorldScale = ParentScale * LocalScale
+				world.Scale = mgl32.Vec3{
+					parentWorld.Scale.X() * local.Scale.X(),
+					parentWorld.Scale.Y() * local.Scale.Y(),
+					parentWorld.Scale.Z() * local.Scale.Z(),
+				}
 			}
 			return true
 		})

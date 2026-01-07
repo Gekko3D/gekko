@@ -60,7 +60,7 @@ type VoxNode struct {
 
 type VoxTransformFrame struct {
 	Rotation   byte // index in rotation enum? MagicaVoxel uses a bitmask or similar for orientation
-	LocalTrans [3]int32
+	LocalTrans [3]float32
 	Attributes map[string]string
 }
 
@@ -314,7 +314,7 @@ func parseTransformNode(data []byte) (VoxNode, error) {
 		data = nextData
 		frame := VoxTransformFrame{Attributes: frameAttr}
 		if val, ok := frameAttr["_t"]; ok {
-			fmt.Sscanf(val, "%d %d %d", &frame.LocalTrans[0], &frame.LocalTrans[1], &frame.LocalTrans[2])
+			fmt.Sscanf(val, "%f %f %f", &frame.LocalTrans[0], &frame.LocalTrans[1], &frame.LocalTrans[2])
 		}
 		if val, ok := frameAttr["_r"]; ok {
 			var r int
