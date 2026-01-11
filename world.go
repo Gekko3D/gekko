@@ -3,6 +3,7 @@ package gekko
 import (
 	"math"
 	"sync"
+	"time"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
@@ -53,7 +54,11 @@ func (w *WorldComponent) GetRegionThreadSafe(coords [3]int) (*Region, bool) {
 }
 
 // WorldStreamingSystem handles the lifecycle of voxel regions.
-func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState, navSys *NavigationSystem) {
+func WorldStreamingSystem(cmd *Commands, timeRes *Time, state *VoxelRtState, navSys *NavigationSystem, prof *Profiler) {
+	if prof != nil {
+		start := time.Now()
+		defer func() { prof.StreamingTime += time.Since(start) }()
+	}
 	// Find the player/camera position
 	var camPos mgl32.Vec3
 	foundCam := false
@@ -72,7 +77,7 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState, navSys
 		// Apply pending sectors from workers with throttling
 		world.mu.Lock()
 		if len(world.pendingSectors) > 0 {
-			worldBudget := 1024 // Increased budget
+			worldBudget := 128 // Balanced budget to finish streaming faster
 			count := 0
 			// Batch size: process up to 64 sectors per frame to avoid CPU spikes
 			for k, s := range world.pendingSectors {
@@ -97,6 +102,27 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState, navSys
 					navSys.MarkDirtySector([3]int{rx, ry, rz}, [2]int{slx, sly})
 				}
 
+				// Incremental AABB expansion
+				if !world.MainXBM.AABBDirty {
+					sMin := mgl32.Vec3{float32(k[0] * volume.SectorSize), float32(k[1] * volume.SectorSize), float32(k[2] * volume.SectorSize)}
+					sMax := sMin.Add(mgl32.Vec3{float32(volume.SectorSize), float32(volume.SectorSize), float32(volume.SectorSize)})
+					if len(world.MainXBM.Sectors) == 1 {
+						world.MainXBM.CachedMin = sMin
+						world.MainXBM.CachedMax = sMax
+					} else {
+						world.MainXBM.CachedMin = mgl32.Vec3{
+							float32(math.Min(float64(world.MainXBM.CachedMin.X()), float64(sMin.X()))),
+							float32(math.Min(float64(world.MainXBM.CachedMin.Y()), float64(sMin.Y()))),
+							float32(math.Min(float64(world.MainXBM.CachedMin.Z()), float64(sMin.Z()))),
+						}
+						world.MainXBM.CachedMax = mgl32.Vec3{
+							float32(math.Max(float64(world.MainXBM.CachedMax.X()), float64(sMax.X()))),
+							float32(math.Max(float64(world.MainXBM.CachedMax.Y()), float64(sMax.Y()))),
+							float32(math.Max(float64(world.MainXBM.CachedMax.Z()), float64(sMax.Z()))),
+						}
+					}
+				}
+
 				delete(world.pendingSectors, k)
 				count++
 				if count >= worldBudget { // Use the new budget
@@ -105,7 +131,7 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState, navSys
 			}
 			if count > 0 {
 				world.MainXBM.StructureDirty = true
-				world.MainXBM.AABBDirty = true
+				// AABB is updated incrementally during sector addition; if it was already dirty, it stays dirty.
 			}
 		}
 		world.mu.Unlock()

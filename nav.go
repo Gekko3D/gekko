@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"math"
+	"time"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
@@ -142,7 +143,8 @@ func (ns *NavigationSystem) Update(cmd *Commands, vrs *VoxelRtState) {
 	}
 
 	// Process dirty queue
-	sectorBudget := 4 // Drastically reduced budget to prevent stutter
+	start := time.Now()
+	maxDuration := 2 * time.Millisecond // 2ms budget
 	sectorsBaked := 0
 
 	// We iterate over our internal dirty map
@@ -165,7 +167,7 @@ func (ns *NavigationSystem) Update(cmd *Commands, vrs *VoxelRtState) {
 			delete(sectors, sKey)
 			sectorsBaked++
 
-			if sectorsBaked >= sectorBudget {
+			if time.Since(start) >= maxDuration {
 				break
 			}
 		}
@@ -175,7 +177,7 @@ func (ns *NavigationSystem) Update(cmd *Commands, vrs *VoxelRtState) {
 		}
 		world.mu.Unlock()
 
-		if sectorsBaked >= sectorBudget {
+		if time.Since(start) >= maxDuration {
 			break
 		}
 	}
@@ -183,7 +185,11 @@ func (ns *NavigationSystem) Update(cmd *Commands, vrs *VoxelRtState) {
 
 // Legacy system function wrapper to maintain ECS signature if needed,
 // strictly speaking we should just register a method call in module.
-func IncrementalNavBakeSystem(cmd *Commands, vrs *VoxelRtState, ns *NavigationSystem) {
+func IncrementalNavBakeSystem(cmd *Commands, vrs *VoxelRtState, ns *NavigationSystem, prof *Profiler) {
+	if prof != nil {
+		start := time.Now()
+		defer func() { prof.NavBakeTime += time.Since(start) }()
+	}
 	if ns != nil {
 		ns.Update(cmd, vrs)
 	}
@@ -245,6 +251,26 @@ func bakeSectorNav(reg *Region, sKey [2]int, xbm *volume.XBrickMap, vSize float3
 		}
 	}
 
+	getVoxelVertical := func(gz, lvx, lvy int) bool {
+		relZ := gz - minGlobalSZ*volume.SectorSize
+		if relZ < 0 || relZ >= sectorsPerRegion*volume.SectorSize {
+			return false
+		}
+		sIdx := relZ / volume.SectorSize
+		sect := verticalSectors[sIdx]
+		if sect == nil {
+			return false
+		}
+		lsz := relZ % volume.SectorSize
+		bx, by, bz := lvx/volume.BrickSize, lvy/volume.BrickSize, lsz/volume.BrickSize
+		brick := sect.GetBrick(bx, by, bz)
+		if brick == nil {
+			return false
+		}
+		lx, ly, lz := lvx%volume.BrickSize, lvy%volume.BrickSize, lsz%volume.BrickSize
+		return brick.Payload[lx][ly][lz] != 0
+	}
+
 	for gy := minGY; gy < maxGY; gy++ {
 		for gx := minGX; gx < maxGX; gx++ {
 			node := &grid.Nodes[gy*regSize+gx]
@@ -253,67 +279,62 @@ func bakeSectorNav(reg *Region, sKey [2]int, xbm *volume.XBrickMap, vSize float3
 			vx := gx % volume.SectorSize
 			vy := gy % volume.SectorSize
 
+			// Local brick coordinates (2D)
+			lbx, lby := vx/volume.BrickSize, vy/volume.BrickSize
+			// Local microcell coordinates (2D) within brick
+			lmx, lmy := (vx%volume.BrickSize)/volume.MicroSize, (vy%volume.BrickSize)/volume.MicroSize
+
 			found := false
 
 			// Scan Z downwards through sectors
-			// We start from top sector (last in array)
 			for i := sectorsPerRegion - 1; i >= 0; i-- {
 				sect := verticalSectors[i]
 				if sect == nil || sect.BrickMask64 == 0 {
 					continue
 				}
 
-				// Scan voxels in this sector
-				// Global Z of this sector start
-				secOriginVZ := (minGlobalSZ + i) * volume.SectorSize
-
-				// From top of sector to bottom
-				for vz := volume.SectorSize - 1; vz >= 0; vz-- {
-					// Check voxel strictly without map lookup
-					// We need GetVoxel equivalent on Sector
-
-					// Optimized GetVoxel on Sector:
-					bx, by, bz := vx/volume.BrickSize, vy/volume.BrickSize, vz/volume.BrickSize
-					brick := sect.GetBrick(bx, by, bz)
-					occupied := false
-					if brick != nil {
-						// Check local payload
-						lx, ly, lz := vx%volume.BrickSize, vy%volume.BrickSize, vz%volume.BrickSize
-						if brick.Payload[lx][ly][lz] != 0 {
-							occupied = true
-						}
+				// Scan bricks in this sector column
+				for bz := 3; bz >= 0; bz-- {
+					flatBIdx := lbx + lby*4 + bz*16
+					if (sect.BrickMask64 & (1 << flatBIdx)) == 0 {
+						continue
 					}
 
-					if occupied {
-						// Found surface
-						globalZ := secOriginVZ + vz
-						node.Height = float32(globalZ+1) * vSize
-						node.Walkable = true
+					brick := sect.GetBrick(lbx, lby, bz)
+					if brick == nil || brick.IsEmpty() {
+						continue
+					}
 
-						// Headroom check: Z+1 and Z+2
-						// We must check if Z+1 / Z+2 are occupied.
-						// This might cross sector boundaries upward.
-						// Use generic xbm.GetVoxel for headroom as it's just 2 lookups once per walking surface found.
-						// Doing manual boundary crossing logic here is complex and error prone.
-						// Optimization gain is minimal compared to the scan.
-
-						// Using global coordinates for headroom check
-						originVX := reg.Coords[0] * regSize
-						originVY := reg.Coords[1] * regSize
-						gVX := originVX + gx
-						gVY := originVY + gy
-
-						// NOTE: xbm.GetVoxel needs exact global coords
-						// gVZ := globalZ
-
-						h1, _ := xbm.GetVoxel(gVX, gVY, globalZ+1)
-						h2, _ := xbm.GetVoxel(gVX, gVY, globalZ+2)
-						if h1 || h2 {
-							node.Walkable = false
+					// Scan microcells in this brick column
+					for mz := 3; mz >= 0; mz-- {
+						microIdx := lmx + lmy*4 + mz*16
+						if (brick.OccupancyMask64 & (1 << microIdx)) == 0 {
+							continue
 						}
 
-						found = true
-						goto NodeDone
+						// Scan voxels in this microcell
+						secOriginVZ := (minGlobalSZ + i) * volume.SectorSize
+						baseVZ := bz*volume.BrickSize + mz*volume.MicroSize
+
+						for lvz := volume.MicroSize - 1; lvz >= 0; lvz-- {
+							vz := baseVZ + lvz
+							lx, ly, lz := vx%volume.BrickSize, vy%volume.BrickSize, vz%volume.BrickSize
+
+							if brick.Payload[lx][ly][lz] != 0 {
+								// Found surface
+								globalZ := secOriginVZ + vz
+								node.Height = float32(globalZ+1) * vSize
+								node.Walkable = true
+
+								// Headroom check: Z+1 and Z+2
+								if getVoxelVertical(globalZ+1, vx, vy) || getVoxelVertical(globalZ+2, vx, vy) {
+									node.Walkable = false
+								}
+
+								found = true
+								goto NodeDone
+							}
+						}
 					}
 				}
 			}

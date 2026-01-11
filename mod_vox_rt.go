@@ -3,6 +3,7 @@ package gekko
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/go-gl/mathgl/mgl32"
@@ -15,6 +16,8 @@ import (
 type VoxelSeparationResult struct {
 	Entity    EntityId
 	XBrickMap *volume.XBrickMap
+	Min       mgl32.Vec3
+	Max       mgl32.Vec3
 }
 
 type RaycastHit struct {
@@ -61,6 +64,9 @@ type VoxelRtState struct {
 
 	// Debug rays
 	debugRays []DebugRay
+
+	// Splitting queue
+	splitQueue map[EntityId]bool
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -202,6 +208,8 @@ func (s *VoxelRtState) SplitDisconnectedComponents(cmd *Commands, eid EntityId) 
 			results = append(results, VoxelSeparationResult{
 				Entity:    eid,
 				XBrickMap: comp.Map,
+				Min:       comp.Min,
+				Max:       comp.Max,
 			})
 		}
 	}
@@ -221,7 +229,7 @@ func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {
 	return obj.XBrickMap.GetVoxelCount() == 0
 }
 
-func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult) {
+func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult, prof *Profiler) {
 	if s == nil || s.RtApp == nil || cmd == nil {
 		return
 	}
@@ -277,7 +285,7 @@ func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult)
 	newPos := parentTr.Position.Add(worldOffset)
 
 	// 3. Half extents for collider
-	minB, maxB := res.XBrickMap.ComputeAABB()
+	minB, maxB := res.Min, res.Max
 	halfExtents := maxB.Sub(minB).Mul(0.5)
 
 	// 4. Create new entity
@@ -444,7 +452,27 @@ func (s *VoxelRtState) RaycastSubstepped(origin, dir mgl32.Vec3, distance float3
 	return RaycastHit{}
 }
 
-func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *VoxelRtState, navSys *NavigationSystem) {
+type Profiler struct {
+	NavBakeTime   time.Duration
+	EditTime      time.Duration
+	StreamingTime time.Duration
+	AABBTime      time.Duration
+	RenderTime    time.Duration
+}
+
+func (p *Profiler) Reset() {
+	p.NavBakeTime = 0
+	p.EditTime = 0
+	p.StreamingTime = 0
+	p.AABBTime = 0
+	p.RenderTime = 0
+}
+
+func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *VoxelRtState, navSys *NavigationSystem, prof *Profiler) {
+	if prof != nil {
+		start := time.Now()
+		defer func() { prof.EditTime += time.Since(start) }()
+	}
 	if editQueue == nil || state == nil {
 		return
 	}
@@ -454,7 +482,10 @@ func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *Vox
 	}
 
 	// 1. Process Spheres
-	affectedEntities := make(map[EntityId]bool)
+	if state.splitQueue == nil {
+		state.splitQueue = make(map[EntityId]bool)
+	}
+
 	count := 0
 	budget := editQueue.BudgetPerFrame
 	if budget <= 0 {
@@ -479,7 +510,7 @@ func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *Vox
 			navSys.MarkDirtyArea(min, max, vSize, 8) // Hardcoded region size 8 for now
 		}
 		if sphere.Value == 0 {
-			affectedEntities[sphere.Entity] = true
+			state.splitQueue[sphere.Entity] = true
 		}
 		count++
 	}
@@ -506,22 +537,32 @@ func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *Vox
 		}
 
 		if edit.Val == 0 {
-			affectedEntities[edit.Entity] = true
+			state.splitQueue[edit.Entity] = true
 		}
 		count++
 	}
 
-	// 2. Process Separations (once per affected entity)
-	// This might be expensive, so we only do it if we have budget left or amortize it
-	for eid := range affectedEntities {
+	// 2. Process Separations (Amortized: only one entity per frame)
+	for eid := range state.splitQueue {
+		delete(state.splitQueue, eid)
+
+		// Optimization: The large-scale world should not be checked for splits
+		// as it would be extremely expensive and technically impossible for the terrain.
+		if _, isWorld := state.worldMap[eid]; isWorld {
+			continue
+		}
+
 		results := state.SplitDisconnectedComponents(cmd, eid)
 		for _, res := range results {
-			state.ApplySeparation(cmd, res)
+			state.ApplySeparation(cmd, res, prof)
 		}
 
 		if state.IsEntityEmpty(eid) {
 			cmd.RemoveEntity(eid)
 		}
+
+		// Only one per frame to avoid stutters
+		break
 	}
 }
 
@@ -546,6 +587,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 	cmd.AddResources(state)
 	cmd.AddResources(NewNavigationSystem())
+	cmd.AddResources(&Profiler{})
 
 	app.UseSystem(
 		System(voxelRtDebugSystem).
@@ -1057,7 +1099,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	state.RtApp.Profiler.EndScope("RT Update")
 }
 
-func voxelRtRenderSystem(state *VoxelRtState) {
+func voxelRtRenderSystem(cmd *Commands, state *VoxelRtState, prof *Profiler) {
+	if prof != nil {
+		start := time.Now()
+		defer func() { prof.RenderTime += time.Since(start) }()
+	}
+	if state == nil || state.RtApp == nil {
+		return
+	}
 	state.RtApp.Render()
 }
 

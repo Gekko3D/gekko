@@ -288,7 +288,15 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 					x.DirtySectors[sKey] = true
 					x.DirtyBricks[bKey] = true
 				}
-				x.AABBDirty = true
+
+				// Incremental AABB: Only mark dirty if removing a boundary voxel
+				if !x.AABBDirty {
+					if float32(gx) == x.CachedMin.X() || float32(gx) == x.CachedMax.X()-1 ||
+						float32(gy) == x.CachedMin.Y() || float32(gy) == x.CachedMax.Y()-1 ||
+						float32(gz) == x.CachedMin.Z() || float32(gz) == x.CachedMax.Z()-1 {
+						x.AABBDirty = true
+					}
+				}
 
 				sector.RemoveBrickIfEmpty(bx, by, bz)
 				if sector.IsEmpty() {
@@ -336,7 +344,25 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 			x.DirtySectors[sKey] = true
 			x.DirtyBricks[bKey] = true
 		}
-		x.AABBDirty = true
+
+		// Incremental AABB: Expand existing bounds or mark dirty if already dirty
+		if !x.AABBDirty {
+			if len(x.Sectors) == 1 && isNew { // First voxel (roughly)
+				x.CachedMin = mgl32.Vec3{float32(gx), float32(gy), float32(gz)}
+				x.CachedMax = mgl32.Vec3{float32(gx + 1), float32(gy + 1), float32(gz + 1)}
+			} else {
+				x.CachedMin = mgl32.Vec3{
+					min(x.CachedMin.X(), float32(gx)),
+					min(x.CachedMin.Y(), float32(gy)),
+					min(x.CachedMin.Z(), float32(gz)),
+				}
+				x.CachedMax = mgl32.Vec3{
+					max(x.CachedMax.X(), float32(gx+1)),
+					max(x.CachedMax.Y(), float32(gy+1)),
+					max(x.CachedMax.Z(), float32(gz+1)),
+				}
+			}
+		}
 
 		// Optional: Compress if full
 		brick.TryCompress()
@@ -749,6 +775,8 @@ type voxelCoord [3]int
 type ComponentInfo struct {
 	Map        *XBrickMap
 	VoxelCount int
+	Min        mgl32.Vec3
+	Max        mgl32.Vec3
 }
 
 // SplitDisconnectedComponents identifies disconnected voxel parts and returns them as separate XBrickMaps.
@@ -851,6 +879,9 @@ func (x *XBrickMap) SplitDisconnectedComponents() []ComponentInfo {
 		newMap.SetVoxel(vx, vy, vz, values[idx])
 		compVoxelCount := 1
 
+		cMin := mgl32.Vec3{float32(vx), float32(vy), float32(vz)}
+		cMax := mgl32.Vec3{float32(vx + 1), float32(vy + 1), float32(vz + 1)}
+
 		for len(q) > 0 {
 			vIdx := q[0]
 			q = q[1:]
@@ -858,6 +889,14 @@ func (x *XBrickMap) SplitDisconnectedComponents() []ComponentInfo {
 			cx := minX + (vIdx % sx)
 			cy := minY + ((vIdx / sx) % sy)
 			cz := minZ + (vIdx / (sx * sy))
+
+			// Update bounds
+			cMin[0] = min(cMin[0], float32(cx))
+			cMin[1] = min(cMin[1], float32(cy))
+			cMin[2] = min(cMin[2], float32(cz))
+			cMax[0] = max(cMax[0], float32(cx+1))
+			cMax[1] = max(cMax[1], float32(cy+1))
+			cMax[2] = max(cMax[2], float32(cz+1))
 
 			// Neighbors (6-connectivity) in flat space
 			for axis := 0; axis < 3; axis++ {
@@ -887,7 +926,16 @@ func (x *XBrickMap) SplitDisconnectedComponents() []ComponentInfo {
 				}
 			}
 		}
-		components = append(components, ComponentInfo{Map: newMap, VoxelCount: compVoxelCount})
+		newMap.CachedMin = cMin
+		newMap.CachedMax = cMax
+		newMap.AABBDirty = false
+
+		components = append(components, ComponentInfo{
+			Map:        newMap,
+			VoxelCount: compVoxelCount,
+			Min:        cMin,
+			Max:        cMax,
+		})
 
 		if compVoxelCount == totalVoxels {
 			return nil // Optimization: only 1 component
