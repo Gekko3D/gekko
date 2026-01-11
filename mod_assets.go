@@ -520,10 +520,9 @@ func (server AssetServer) SpawnHierarchicalVoxelModel(cmd *Commands, voxId Asset
 
 	// Create a root entity to hold the global transform
 	rootEntity := cmd.AddEntity(
-		&rootTransform,
+		&TransformComponent{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
 		&LocalTransform{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
 		&WorldTransform{},
-		&TransformComponent{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
 	)
 
 	// We need a map to keep track of spawned entities by node ID to link children to parents

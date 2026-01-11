@@ -444,7 +444,7 @@ func (s *VoxelRtState) RaycastSubstepped(origin, dir mgl32.Vec3, distance float3
 	return RaycastHit{}
 }
 
-func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *VoxelRtState) {
+func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *VoxelRtState, navSys *NavigationSystem) {
 	if editQueue == nil || state == nil {
 		return
 	}
@@ -467,6 +467,17 @@ func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *Vox
 		editQueue.Spheres = editQueue.Spheres[1:]
 
 		state.VoxelSphereEdit(sphere.Entity, sphere.Center, sphere.Radius, sphere.Value)
+		if navSys != nil {
+			// Notify navigation system of dirty area
+			// Assume standard voxel size if not available
+			vSize := float32(0.1)
+			if state.RtApp != nil && state.RtApp.Scene != nil {
+				vSize = state.RtApp.Scene.TargetVoxelSize
+			}
+			min := sphere.Center.Sub(mgl32.Vec3{sphere.Radius, sphere.Radius, sphere.Radius})
+			max := sphere.Center.Add(mgl32.Vec3{sphere.Radius, sphere.Radius, sphere.Radius})
+			navSys.MarkDirtyArea(min, max, vSize, 8) // Hardcoded region size 8 for now
+		}
 		if sphere.Value == 0 {
 			affectedEntities[sphere.Entity] = true
 		}
@@ -482,6 +493,18 @@ func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *Vox
 		// For now let's just use Sphere with 0 radius or implement SetVoxel
 		// Let's add SetVoxel to VoxelRtState later if needed, for now just skip or use sphere
 		state.VoxelSphereEdit(edit.Entity, mgl32.Vec3{float32(edit.Pos[0]), float32(edit.Pos[1]), float32(edit.Pos[2])}, 0.1, edit.Val)
+
+		if navSys != nil {
+			vSize := float32(0.1)
+			if state.RtApp != nil && state.RtApp.Scene != nil {
+				vSize = state.RtApp.Scene.TargetVoxelSize
+			}
+			pos := mgl32.Vec3{float32(edit.Pos[0]), float32(edit.Pos[1]), float32(edit.Pos[2])}
+			min := pos.Sub(mgl32.Vec3{0.1, 0.1, 0.1})
+			max := pos.Add(mgl32.Vec3{0.1, 0.1, 0.1})
+			navSys.MarkDirtyArea(min, max, vSize, 8)
+		}
+
 		if edit.Val == 0 {
 			affectedEntities[edit.Entity] = true
 		}
@@ -522,6 +545,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		worldMap:     make(map[EntityId]*core.VoxelObject),
 	}
 	cmd.AddResources(state)
+	cmd.AddResources(NewNavigationSystem())
 
 	app.UseSystem(
 		System(voxelRtDebugSystem).
@@ -555,6 +579,11 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 			InStage(PostUpdate).
 			RunAlways(),
 	)
+	app.UseSystem(
+		System(IncrementalNavBakeSystem).
+			InStage(PostUpdate).
+			RunAlways(),
+	)
 
 	app.UseSystem(
 		System(voxelRtRenderSystem).
@@ -565,7 +594,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 
 func TransformHierarchySystem(cmd *Commands) {
 	// Root objects
-	MakeQuery2[LocalTransform, WorldTransform](cmd).Map(func(eid EntityId, local *LocalTransform, world *WorldTransform) bool {
+	MakeQuery3[LocalTransform, WorldTransform, TransformComponent](cmd).Map(func(eid EntityId, local *LocalTransform, world *WorldTransform, tr *TransformComponent) bool {
 		// Manual "Without(Parent{})" check
 		allComps := cmd.GetAllComponents(eid)
 		for _, c := range allComps {
@@ -574,11 +603,19 @@ func TransformHierarchySystem(cmd *Commands) {
 			}
 		}
 
+		// Physics/Gameplay Sync: If this is a root with a TransformComponent,
+		// they might be updated by systems that don't know about the hierarchy.
+		if tr != nil {
+			local.Position = tr.Position
+			local.Rotation = tr.Rotation
+			local.Scale = tr.Scale
+		}
+
 		world.Position = local.Position
 		world.Rotation = local.Rotation
 		world.Scale = local.Scale
 		return true
-	})
+	}, TransformComponent{})
 
 	// Children (recursively or iteratively - for now iterative simplest for ECS)
 	// In a real engine we might need to handle depths, but let's try a few passes or a topological approach.
@@ -648,7 +685,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	currentEntities := make(map[EntityId]bool)
 
 	// Collect instances from models
-	MakeQuery2[TransformComponent, VoxelModelComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent) bool {
+	MakeQuery3[TransformComponent, VoxelModelComponent, WorldTransform](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent, wt *WorldTransform) bool {
 		currentEntities[entityId] = true
 
 		obj, exists := state.instanceMap[entityId]
@@ -686,26 +723,13 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			state.instanceMap[entityId] = obj
 		}
 
-		// Prefer WorldTransform if present (M2a)
-		allComps := cmd.GetAllComponents(entityId)
-		var wt *WorldTransform
-		for _, c := range allComps {
-			if w, ok := c.(WorldTransform); ok {
-				wt = &w
-				break
-			}
-		}
-
 		if wt != nil {
 			obj.Transform.Position = wt.Position
 			obj.Transform.Rotation = wt.Rotation
-			// Scale is handled below with TargetVoxelSize
 		} else {
 			// Persistent scaling: we don't want to sync scale from ECS if we are using metric scaling.
 			// However, we MUST sync Position back if it changed in the renderer.
 			if state.RtApp.Editor.SelectedObject == obj {
-				// This is the active object.
-				// If its position in renderer differs from ECS, it means RescaleObject shifted it.
 				if obj.Transform.Position.Sub(transform.Position).Len() > 0.001 {
 					transform.Position = obj.Transform.Position
 				}
@@ -716,7 +740,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 		}
 
 		// Metric system: Renderer Scale is ALWAYS TargetVoxelSize.
-		// Physical dimension is controlled by Voxel resolution (Resampling).
 		vSize := state.RtApp.Scene.TargetVoxelSize
 		if vSize == 0 {
 			vSize = 0.1
@@ -730,7 +753,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 		obj.Transform.Dirty = true
 
 		return true
-	})
+	}, WorldTransform{})
 
 	for eid, obj := range state.instanceMap {
 		if !currentEntities[eid] {

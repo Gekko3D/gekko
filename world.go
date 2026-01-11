@@ -25,12 +25,13 @@ type WorldComponent struct {
 type Region struct {
 	Coords  [3]int
 	Sectors map[[3]int]*volume.Sector
+	NavGrid *NavGrid
 }
 
 func NewWorldComponent(path string, radius float32) *WorldComponent {
 	return &WorldComponent{
 		RegionRadius:   radius,
-		RegionSize:     8, // Default 8x8x8 sectors = 256x256x256 voxels
+		RegionSize:     8, // 8x8x8 sectors = 256x256x256 voxels
 		WorldPath:      path,
 		loadedRegions:  make(map[[3]int]*Region),
 		pendingSectors: make(map[[3]int]*volume.Sector),
@@ -43,8 +44,16 @@ func (w *WorldComponent) GetXBrickMap() *volume.XBrickMap {
 	return w.MainXBM
 }
 
+// GetRegionThreadSafe returns a region by its coordinates in a thread-safe manner.
+func (w *WorldComponent) GetRegionThreadSafe(coords [3]int) (*Region, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	reg, ok := w.loadedRegions[coords]
+	return reg, ok
+}
+
 // WorldStreamingSystem handles the lifecycle of voxel regions.
-func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState) {
+func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState, navSys *NavigationSystem) {
 	// Find the player/camera position
 	var camPos mgl32.Vec3
 	foundCam := false
@@ -63,13 +72,34 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState) {
 		// Apply pending sectors from workers with throttling
 		world.mu.Lock()
 		if len(world.pendingSectors) > 0 {
+			worldBudget := 1024 // Increased budget
 			count := 0
 			// Batch size: process up to 64 sectors per frame to avoid CPU spikes
 			for k, s := range world.pendingSectors {
 				world.MainXBM.Sectors[k] = s
+
+				// Notify NavigationSystem
+				if navSys != nil {
+					// k = [sx, sy, sz]
+					rx := int(math.Floor(float64(k[0]) / float64(world.RegionSize)))
+					ry := int(math.Floor(float64(k[1]) / float64(world.RegionSize)))
+					rz := int(math.Floor(float64(k[2]) / float64(world.RegionSize)))
+
+					slx := k[0] % world.RegionSize
+					if slx < 0 {
+						slx += world.RegionSize
+					}
+					sly := k[1] % world.RegionSize
+					if sly < 0 {
+						sly += world.RegionSize
+					}
+
+					navSys.MarkDirtySector([3]int{rx, ry, rz}, [2]int{slx, sly})
+				}
+
 				delete(world.pendingSectors, k)
 				count++
-				if count >= 64 {
+				if count >= worldBudget { // Use the new budget
 					break
 				}
 			}
@@ -172,11 +202,18 @@ func loadRegion(world *WorldComponent, reg *Region) {
 						// Fill bottom layers
 						for bx := 0; bx < volume.SectorBricks; bx++ {
 							for by := 0; by < volume.SectorBricks; by++ {
-								brick, _ := sector.GetOrCreateBrick(bx, by, 0)
-								for vx := 0; vx < volume.BrickSize; vx++ {
-									for vy := 0; vy < volume.BrickSize; vy++ {
-										brick.SetVoxel(vx, vy, 0, 1) // Layer 0
-										brick.SetVoxel(vx, vy, 1, 1) // Layer 1
+								for bz := 0; bz < 1; bz++ { // 1 brick thick
+									brick, _ := sector.GetOrCreateBrick(bx, by, bz)
+									for vx := 0; vx < volume.BrickSize; vx++ {
+										for vy := 0; vy < volume.BrickSize; vy++ {
+											for vz := 0; vz < volume.BrickSize; vz++ {
+												brick.SetVoxel(vx, vy, vz, 1)
+												// Add print for any voxel found in region [0,0,0]
+												if reg.Coords[0] == 0 && reg.Coords[1] == 0 && reg.Coords[2] == 0 {
+													// fmt.Printf("DEBUG: Voxel found in region [0,0,0] at sector %v, brick %v,%v,%v, voxel %v,%v,%v\n", sKey, bx, by, bz, vx, vy, vz)
+												}
+											}
+										}
 									}
 								}
 							}
@@ -185,10 +222,20 @@ func loadRegion(world *WorldComponent, reg *Region) {
 				}
 
 				if sector != nil {
-					world.mu.Lock()
-					reg.Sectors[sKey] = sector
-					world.pendingSectors[sKey] = sector
-					world.mu.Unlock()
+					if sector != nil { // Redundant check added as per instruction
+						world.mu.Lock()
+						reg.Sectors[sKey] = sector
+						world.pendingSectors[sKey] = sector
+
+						// Trigger initial nav bake by marking this sector as dirty
+						world.MainXBM.DirtySectors[sKey] = true
+						// Mark a brick in this sector as dirty to trigger the systems
+						// bKey = {sx, sy, sz, bx, by, bz}
+						bKey := [6]int{sx, sy, sz, 0, 0, 0}
+						world.MainXBM.DirtyBricks[bKey] = true
+
+						world.mu.Unlock()
+					}
 				}
 			}
 		}
