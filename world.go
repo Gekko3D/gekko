@@ -1,9 +1,9 @@
 package gekko
 
 import (
-	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
@@ -18,7 +18,7 @@ type WorldComponent struct {
 	// Internal state
 	loadedRegions  map[[3]int]*Region
 	pendingSectors map[[3]int]*volume.Sector
-	mainXBM        *volume.XBrickMap
+	MainXBM        *volume.XBrickMap
 	mu             sync.Mutex
 }
 
@@ -26,26 +26,39 @@ type WorldComponent struct {
 type Region struct {
 	Coords  [3]int
 	Sectors map[[3]int]*volume.Sector
+	NavGrid *NavGrid
 }
 
 func NewWorldComponent(path string, radius float32) *WorldComponent {
 	return &WorldComponent{
 		RegionRadius:   radius,
-		RegionSize:     8, // Default 8x8x8 sectors = 256x256x256 voxels
+		RegionSize:     8, // 8x8x8 sectors = 256x256x256 voxels
 		WorldPath:      path,
 		loadedRegions:  make(map[[3]int]*Region),
 		pendingSectors: make(map[[3]int]*volume.Sector),
-		mainXBM:        volume.NewXBrickMap(),
+		MainXBM:        volume.NewXBrickMap(),
 	}
 }
 
 // GetXBrickMap returns the active xbrickmap for rendering.
 func (w *WorldComponent) GetXBrickMap() *volume.XBrickMap {
-	return w.mainXBM
+	return w.MainXBM
+}
+
+// GetRegionThreadSafe returns a region by its coordinates in a thread-safe manner.
+func (w *WorldComponent) GetRegionThreadSafe(coords [3]int) (*Region, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	reg, ok := w.loadedRegions[coords]
+	return reg, ok
 }
 
 // WorldStreamingSystem handles the lifecycle of voxel regions.
-func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState) {
+func WorldStreamingSystem(cmd *Commands, timeRes *Time, state *VoxelRtState, navSys *NavigationSystem, prof *Profiler) {
+	if prof != nil {
+		start := time.Now()
+		defer func() { prof.StreamingTime += time.Since(start) }()
+	}
 	// Find the player/camera position
 	var camPos mgl32.Vec3
 	foundCam := false
@@ -61,16 +74,65 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState) {
 
 	// Update worlds
 	MakeQuery1[WorldComponent](cmd).Map(func(eid EntityId, world *WorldComponent) bool {
-		// Apply pending sectors from workers
+		// Apply pending sectors from workers with throttling
 		world.mu.Lock()
 		if len(world.pendingSectors) > 0 {
-			fmt.Printf("STREAM: Applying %d pending sectors to main XBM\n", len(world.pendingSectors))
+			worldBudget := 128 // Balanced budget to finish streaming faster
+			count := 0
+			// Batch size: process up to 64 sectors per frame to avoid CPU spikes
 			for k, s := range world.pendingSectors {
-				world.mainXBM.Sectors[k] = s
+				world.MainXBM.Sectors[k] = s
+
+				// Notify NavigationSystem
+				if navSys != nil {
+					// k = [sx, sy, sz]
+					rx := int(math.Floor(float64(k[0]) / float64(world.RegionSize)))
+					ry := int(math.Floor(float64(k[1]) / float64(world.RegionSize)))
+					rz := int(math.Floor(float64(k[2]) / float64(world.RegionSize)))
+
+					slx := k[0] % world.RegionSize
+					if slx < 0 {
+						slx += world.RegionSize
+					}
+					sly := k[1] % world.RegionSize
+					if sly < 0 {
+						sly += world.RegionSize
+					}
+
+					navSys.MarkDirtySector([3]int{rx, ry, rz}, [2]int{slx, sly})
+				}
+
+				// Incremental AABB expansion
+				if !world.MainXBM.AABBDirty {
+					sMin := mgl32.Vec3{float32(k[0] * volume.SectorSize), float32(k[1] * volume.SectorSize), float32(k[2] * volume.SectorSize)}
+					sMax := sMin.Add(mgl32.Vec3{float32(volume.SectorSize), float32(volume.SectorSize), float32(volume.SectorSize)})
+					if len(world.MainXBM.Sectors) == 1 {
+						world.MainXBM.CachedMin = sMin
+						world.MainXBM.CachedMax = sMax
+					} else {
+						world.MainXBM.CachedMin = mgl32.Vec3{
+							float32(math.Min(float64(world.MainXBM.CachedMin.X()), float64(sMin.X()))),
+							float32(math.Min(float64(world.MainXBM.CachedMin.Y()), float64(sMin.Y()))),
+							float32(math.Min(float64(world.MainXBM.CachedMin.Z()), float64(sMin.Z()))),
+						}
+						world.MainXBM.CachedMax = mgl32.Vec3{
+							float32(math.Max(float64(world.MainXBM.CachedMax.X()), float64(sMax.X()))),
+							float32(math.Max(float64(world.MainXBM.CachedMax.Y()), float64(sMax.Y()))),
+							float32(math.Max(float64(world.MainXBM.CachedMax.Z()), float64(sMax.Z()))),
+						}
+					}
+				}
+
+				delete(world.pendingSectors, k)
+				count++
+				if count >= worldBudget { // Use the new budget
+					break
+				}
 			}
-			world.mainXBM.StructureDirty = true
-			world.mainXBM.AABBDirty = true
-			world.pendingSectors = make(map[[3]int]*volume.Sector)
+			if count > 0 {
+				world.MainXBM.StructureDirty = true
+				// AABB is updated incrementally during sector addition; if it was already dirty, it stays dirty.
+			}
 		}
 		world.mu.Unlock()
 
@@ -80,14 +142,20 @@ func WorldStreamingSystem(cmd *Commands, time *Time, state *VoxelRtState) {
 }
 
 func updateWorldStreaming(world *WorldComponent, camPos mgl32.Vec3, state *VoxelRtState) {
+	vSize := state.RtApp.Scene.TargetVoxelSize
+	if vSize <= 0 {
+		vSize = 0.1
+	}
+
 	// Calculate current region coords (Floor division for negative support)
-	regSizeVox := float64(world.RegionSize * volume.SectorSize)
-	rx := int(math.Floor(float64(camPos.X()) / regSizeVox))
-	ry := int(math.Floor(float64(camPos.Y()) / regSizeVox))
-	rz := int(math.Floor(float64(camPos.Z()) / regSizeVox))
+	// Region size in world units = (sectors per region) * (voxels per sector) * (meters per voxel)
+	regSizeUnits := float64(world.RegionSize*volume.SectorSize) * float64(vSize)
+	rx := int(math.Floor(float64(camPos.X()) / regSizeUnits))
+	ry := int(math.Floor(float64(camPos.Y()) / regSizeUnits))
+	rz := int(math.Floor(float64(camPos.Z()) / regSizeUnits))
 
 	// Radius in regions
-	regRad := int(math.Ceil(float64(world.RegionRadius) / regSizeVox))
+	regRad := int(math.Ceil(float64(world.RegionRadius) / regSizeUnits))
 	if regRad < 1 {
 		regRad = 1
 	}
@@ -126,17 +194,17 @@ func updateWorldStreaming(world *WorldComponent, camPos mgl32.Vec3, state *Voxel
 		if !shouldBeLoaded[coords] {
 			// Remove sectors from main XBM (Main thread)
 			for sKey := range reg.Sectors {
-				delete(world.mainXBM.Sectors, sKey)
+				delete(world.MainXBM.Sectors, sKey)
 			}
-			world.mainXBM.StructureDirty = true
-			world.mainXBM.AABBDirty = true
+			world.MainXBM.StructureDirty = true
+			world.MainXBM.AABBDirty = true
 			delete(world.loadedRegions, coords)
 		}
 	}
 }
 
 func loadRegion(world *WorldComponent, reg *Region) {
-	fmt.Printf("STREAM: Loading region %v\n", reg.Coords)
+	// fmt.Printf("STREAM: Loading region %v\n", reg.Coords)
 	// Simulate disk I/O or generation
 	// In a real implementation, we would scan the WorldPath for sectors in this region.
 	// For now, let's just generate some dummy terrain if no file exists.
@@ -154,17 +222,24 @@ func loadRegion(world *WorldComponent, reg *Region) {
 				// Try load from disk
 				sector := diskLoadSector(world.WorldPath, sKey)
 				if sector == nil {
-					// Generate something simple (e.g. flat floor at y=0)
-					if sy == 0 {
+					// Generate something simple (e.g. flat floor at z=0)
+					if sz == 0 {
 						sector = volume.NewSector(sx, sy, sz)
 						// Fill bottom layers
 						for bx := 0; bx < volume.SectorBricks; bx++ {
-							for bz := 0; bz < volume.SectorBricks; bz++ {
-								brick, _ := sector.GetOrCreateBrick(bx, 0, bz)
-								for vx := 0; vx < volume.BrickSize; vx++ {
-									for vz := 0; vz < volume.BrickSize; vz++ {
-										brick.SetVoxel(vx, 0, vz, 1) // Layer 0
-										brick.SetVoxel(vx, 1, vz, 1) // Layer 1
+							for by := 0; by < volume.SectorBricks; by++ {
+								for bz := 0; bz < 1; bz++ { // 1 brick thick
+									brick, _ := sector.GetOrCreateBrick(bx, by, bz)
+									for vx := 0; vx < volume.BrickSize; vx++ {
+										for vy := 0; vy < volume.BrickSize; vy++ {
+											for vz := 0; vz < volume.BrickSize; vz++ {
+												brick.SetVoxel(vx, vy, vz, 1)
+												// Add print for any voxel found in region [0,0,0]
+												if reg.Coords[0] == 0 && reg.Coords[1] == 0 && reg.Coords[2] == 0 {
+													// fmt.Printf("DEBUG: Voxel found in region [0,0,0] at sector %v, brick %v,%v,%v, voxel %v,%v,%v\n", sKey, bx, by, bz, vx, vy, vz)
+												}
+											}
+										}
 									}
 								}
 							}
@@ -173,10 +248,20 @@ func loadRegion(world *WorldComponent, reg *Region) {
 				}
 
 				if sector != nil {
-					world.mu.Lock()
-					reg.Sectors[sKey] = sector
-					world.pendingSectors[sKey] = sector
-					world.mu.Unlock()
+					if sector != nil { // Redundant check added as per instruction
+						world.mu.Lock()
+						reg.Sectors[sKey] = sector
+						world.pendingSectors[sKey] = sector
+
+						// Trigger initial nav bake by marking this sector as dirty
+						world.MainXBM.DirtySectors[sKey] = true
+						// Mark a brick in this sector as dirty to trigger the systems
+						// bKey = {sx, sy, sz, bx, by, bz}
+						bKey := [6]int{sx, sy, sz, 0, 0, 0}
+						world.MainXBM.DirtyBricks[bKey] = true
+
+						world.mu.Unlock()
+					}
 				}
 			}
 		}

@@ -3,6 +3,7 @@ package gekko
 import (
 	"sync/atomic"
 
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -43,6 +44,7 @@ func (c *VoxelRtSnapshotContainer) Get() *VoxelRtSnapshot {
 }
 
 type VoxelModelComponent struct {
-	VoxelModel   AssetId `gekko:"voxel" usage:"model"`
-	VoxelPalette AssetId `gekko:"voxel" usage:"palette"`
+	VoxelModel   AssetId           `gekko:"voxel" usage:"model"`
+	VoxelPalette AssetId           `gekko:"voxel" usage:"palette"`
+	CustomMap    *volume.XBrickMap // If set, use this instead of loading from VoxelModel asset
 }

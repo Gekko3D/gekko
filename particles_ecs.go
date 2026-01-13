@@ -75,9 +75,9 @@ func lerp(a, b, t float32) float32 { return a + (b-a)*t }
 // Sample a direction in a cone around the emitter's up axis (0,1,0), then rotate by emitter rotation.
 // Uniform distribution over the cone.
 func sampleDirection(rot mgl32.Quat, coneDeg float32) mgl32.Vec3 {
-	axis := mgl32.Vec3{0, 1, 0} // emitter up axis
+	// emitter up axis = Z
 	if coneDeg <= 0.0 {
-		return rot.Rotate(axis).Normalize()
+		return rot.Rotate(mgl32.Vec3{0, 0, 1}).Normalize()
 	}
 	thetaMax := float32(math.Pi) * (coneDeg / 180.0)
 	u := rand.Float32()
@@ -86,22 +86,20 @@ func sampleDirection(rot mgl32.Quat, coneDeg float32) mgl32.Vec3 {
 	sinTheta := float32(math.Sqrt(float64(1.0 - cosTheta*cosTheta)))
 	phi := 2.0 * float32(math.Pi) * v
 
-	// Local basis where Y is axis
+	// Local basis where Z is axis
 	local := mgl32.Vec3{
 		float32(math.Cos(float64(phi))) * sinTheta,
-		cosTheta,
 		float32(math.Sin(float64(phi))) * sinTheta,
+		cosTheta,
 	}
-	// Rotate local basis Y to world axis via quaternion that maps Y->axis (approx using rot to orient)
-	// Simplest: interpret local in emitter local space where up=Y, then rotate by emitter rotation.
+	// Rotate by emitter rotation
 	return rot.Rotate(local).Normalize()
 }
 
 // RNG-backed variant (no global rand contention)
 func sampleDirectionRng(rot mgl32.Quat, coneDeg float32, rng *rand.Rand) mgl32.Vec3 {
-	axis := mgl32.Vec3{0, 1, 0}
 	if coneDeg <= 0.0 {
-		return rot.Rotate(axis).Normalize()
+		return rot.Rotate(mgl32.Vec3{0, 0, 1}).Normalize()
 	}
 	thetaMax := float32(math.Pi) * (coneDeg / 180.0)
 	u := rng.Float32()
@@ -109,10 +107,12 @@ func sampleDirectionRng(rot mgl32.Quat, coneDeg float32, rng *rand.Rand) mgl32.V
 	cosTheta := lerp(float32(math.Cos(float64(thetaMax))), 1.0, u)
 	sinTheta := float32(math.Sqrt(float64(1.0 - cosTheta*cosTheta)))
 	phi := 2.0 * float32(math.Pi) * v
+
+	// Local basis Z-up
 	local := mgl32.Vec3{
 		float32(math.Cos(float64(phi))) * sinTheta,
-		cosTheta,
 		float32(math.Sin(float64(phi))) * sinTheta,
+		cosTheta,
 	}
 	return rot.Rotate(local).Normalize()
 }
@@ -198,8 +198,8 @@ func simulateEmitter(job emitterJob, dt float32, camPos mgl32.Vec3, rng *rand.Ra
 	i := 0
 	for i < pl.alive {
 		v := pl.vel[i]
-		// gravity downward (negative Y axis)
-		v = v.Add(mgl32.Vec3{0, -grav * dt, 0})
+		// gravity downward (negative Z axis)
+		v = v.Add(mgl32.Vec3{0, 0, -grav * dt})
 		v = v.Mul(drag)
 		p := pl.pos[i].Add(v.Mul(dt))
 
@@ -254,7 +254,7 @@ func particlesCollect(state *VoxelRtState, t *Time, cmd *Commands) []core.Partic
 	}
 
 	// Snapshot camera position once
-	camPos := state.rtApp.Camera.Position
+	camPos := state.RtApp.Camera.Position
 
 	// Phase 1: collect jobs and ensure pools on the main goroutine (avoid map races)
 	jobs := make([]emitterJob, 0, 32)

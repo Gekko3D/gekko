@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"runtime"
+
 	"github.com/gekko3d/gekko/voxelrt/rt/app"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -40,6 +41,9 @@ func main() {
 
 	// Input callbacks
 	window.SetCursorPosCallback(func(w *glfw.Window, xpos, ypos float64) {
+		application.MouseX = xpos
+		application.MouseY = ypos
+
 		if application.MouseCaptured {
 			dx := float32(xpos - 640) // Center
 			dy := float32(ypos - 360)
@@ -65,6 +69,16 @@ func main() {
 		}
 		if key == glfw.KeyEscape && action == glfw.Press {
 			w.SetShouldClose(true)
+		}
+
+		// Scaling
+		if action == glfw.Press || action == glfw.Repeat {
+			if key == glfw.KeyEqual || key == glfw.KeyKPAdd {
+				application.Editor.ScaleSelected(application.Scene, 1.1, 0)
+			}
+			if key == glfw.KeyMinus || key == glfw.KeyKPSubtract {
+				application.Editor.ScaleSelected(application.Scene, 0.909, 0) // 1/1.1 approx
+			}
 		}
 	})
 

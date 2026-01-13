@@ -10,9 +10,9 @@ struct CameraData {
     light_pos: vec4<f32>,
     ambient_color: vec4<f32>,
     debug_mode: u32,
-    pad0: u32,
+    render_mode: u32,
+    num_lights: u32,
     pad1: u32,
-    pad2: u32,
 };
 
 struct Instance {
@@ -104,7 +104,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var closest_t_debug = 1e9;
 
     // Render lights as spheres
-    let num_lights = arrayLength(&lights);
+    let num_lights = camera.num_lights;
     for (var i = 0u; i < num_lights; i = i + 1u) {
         let light = lights[i];
         let light_type = u32(light.params.z);

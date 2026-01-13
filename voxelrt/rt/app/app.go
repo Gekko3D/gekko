@@ -65,6 +65,7 @@ type App struct {
 	LastTime       float64
 	LastRenderTime float64
 	MouseCaptured  bool
+	MouseX, MouseY float64
 	DebugMode      bool
 	RenderMode     uint32
 	FontPath       string
@@ -376,7 +377,7 @@ func (a *App) Init() error {
 	proj := mgl32.Ident4()
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
-	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode)
+	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)))
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene)
@@ -535,7 +536,10 @@ func (a *App) Update() {
 	}
 	proj := mgl32.Perspective(mgl32.DegToRad(60), aspect, 0.1, 1000.0)
 
-	// Combine
+	// Update Editor (Batched scaling)
+	a.Editor.Update(a.Scene, glfw.GetTime())
+
+	// Combined
 	viewProj := proj.Mul4(view)
 	invView := view.Inv()
 	invProj := proj.Inv()
@@ -576,7 +580,7 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode)
+	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, mgl32.Vec3(a.AmbientLight), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)))
 
 	// Update Text Buffers if needed
 	if len(a.TextItems) > 0 && a.TextRenderer != nil {
@@ -1308,6 +1312,24 @@ func (a *App) setupResolvePipeline() {
 }
 
 func (a *App) HandleClick(button int, action int) {
+	if action == int(glfw.Press) && button == int(glfw.MouseButtonRight) {
+		fmt.Printf("Right Click Detected. MouseCaptured: %v\n", a.MouseCaptured)
+		if !a.MouseCaptured {
+			// Try to select object
+			fmt.Printf("Attempting Selection at %f, %f\n", a.MouseX, a.MouseY)
+			w, h := a.Window.GetSize()
+			ray := a.Editor.GetPickRay(a.MouseX, a.MouseY, w, h, a.Camera)
+			fmt.Printf("Ray: Origin=%v Dir=%v\n", ray.Origin, ray.Direction)
+			a.Editor.Select(a.Scene, ray)
+			if a.Editor.SelectedObject != nil {
+				fmt.Printf("Selected Object: %v\n", a.Editor.SelectedObject)
+			} else {
+				fmt.Println("Selection Missed")
+			}
+			return
+		}
+	}
+
 	if a.MouseCaptured || action != int(glfw.Press) {
 		return
 	}

@@ -11,8 +11,8 @@ struct CameraData {
     ambient_color: vec4<f32>,
     debug_mode: u32,
     render_mode: u32,
+    num_lights: u32,
     pad1: u32,
-    pad2: u32,
 };
 
 struct Light {
@@ -255,7 +255,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dummy = lights[0].color.x + textureLoad(in_position, vec2<i32>(0,0), 0).x;
     
     // Loop through all lights
-    let num_lights = arrayLength(&lights);
+    let num_lights = camera.num_lights;
     for (var i = 0u; i < num_lights; i++) {
         final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, emissive, roughness, metalness, i);
     }

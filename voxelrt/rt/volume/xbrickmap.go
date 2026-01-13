@@ -288,7 +288,15 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 					x.DirtySectors[sKey] = true
 					x.DirtyBricks[bKey] = true
 				}
-				x.AABBDirty = true
+
+				// Incremental AABB: Only mark dirty if removing a boundary voxel
+				if !x.AABBDirty {
+					if float32(gx) == x.CachedMin.X() || float32(gx) == x.CachedMax.X()-1 ||
+						float32(gy) == x.CachedMin.Y() || float32(gy) == x.CachedMax.Y()-1 ||
+						float32(gz) == x.CachedMin.Z() || float32(gz) == x.CachedMax.Z()-1 {
+						x.AABBDirty = true
+					}
+				}
 
 				sector.RemoveBrickIfEmpty(bx, by, bz)
 				if sector.IsEmpty() {
@@ -336,7 +344,25 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 			x.DirtySectors[sKey] = true
 			x.DirtyBricks[bKey] = true
 		}
-		x.AABBDirty = true
+
+		// Incremental AABB: Expand existing bounds or mark dirty if already dirty
+		if !x.AABBDirty {
+			if len(x.Sectors) == 1 && isNew { // First voxel (roughly)
+				x.CachedMin = mgl32.Vec3{float32(gx), float32(gy), float32(gz)}
+				x.CachedMax = mgl32.Vec3{float32(gx + 1), float32(gy + 1), float32(gz + 1)}
+			} else {
+				x.CachedMin = mgl32.Vec3{
+					min(x.CachedMin.X(), float32(gx)),
+					min(x.CachedMin.Y(), float32(gy)),
+					min(x.CachedMin.Z(), float32(gz)),
+				}
+				x.CachedMax = mgl32.Vec3{
+					max(x.CachedMax.X(), float32(gx+1)),
+					max(x.CachedMax.Y(), float32(gy+1)),
+					max(x.CachedMax.Z(), float32(gz+1)),
+				}
+			}
+		}
 
 		// Optional: Compress if full
 		brick.TryCompress()
@@ -512,14 +538,47 @@ func (x *XBrickMap) ComputeAABB() (mgl32.Vec3, mgl32.Vec3) {
 
 func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (bool, float32, [3]int, mgl32.Vec3) {
 	t := tMin
-	invDir := mgl32.Vec3{1.0 / (rayDir.X() + 1e-8), 1.0 / (rayDir.Y() + 1e-8), 1.0 / (rayDir.Z() + 1e-8)}
+	// Protect against very small or zero direction components
+	safeX := rayDir.X()
+	if math.Abs(float64(safeX)) < 1e-7 {
+		if safeX >= 0 {
+			safeX = 1e-7
+		} else {
+			safeX = -1e-7
+		}
+	}
+	safeY := rayDir.Y()
+	if math.Abs(float64(safeY)) < 1e-7 {
+		if safeY >= 0 {
+			safeY = 1e-7
+		} else {
+			safeY = -1e-7
+		}
+	}
+	safeZ := rayDir.Z()
+	if math.Abs(float64(safeZ)) < 1e-7 {
+		if safeZ >= 0 {
+			safeZ = 1e-7
+		} else {
+			safeZ = -1e-7
+		}
+	}
+
+	invDir := mgl32.Vec3{1.0 / safeX, 1.0 / safeY, 1.0 / safeZ}
 
 	iterations := 0
-	const maxIterations = 2000
+	const maxIterations = 10000 // Increased from 2000
 
 	for t < tMax && iterations < maxIterations {
 		iterations++
-		p := rayOrigin.Add(rayDir.Mul(t + 0.001)) // Tiny offset to enter next voxel
+
+		// Use a dynamic offset for higher stability at large t
+		tBias := 0.001
+		if t > 100 {
+			tBias = 0.005
+		}
+
+		p := rayOrigin.Add(rayDir.Mul(t + float32(tBias)))
 
 		sx, sy, sz := int(math.Floor(float64(p.X()/SectorSize))), int(math.Floor(float64(p.Y()/SectorSize))), int(math.Floor(float64(p.Z()/SectorSize)))
 
@@ -533,15 +592,16 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		}
 
 		// Inside a sector, check bricks
-		slx := int(math.Floor(float64(p.X()))) % SectorSize
+		flX, flY, flZ := math.Floor(float64(p.X())), math.Floor(float64(p.Y())), math.Floor(float64(p.Z()))
+		slx := int(flX) % SectorSize
 		if slx < 0 {
 			slx += SectorSize
 		}
-		sly := int(math.Floor(float64(p.Y()))) % SectorSize
+		sly := int(flY) % SectorSize
 		if sly < 0 {
 			sly += SectorSize
 		}
-		slz := int(math.Floor(float64(p.Z()))) % SectorSize
+		slz := int(flZ) % SectorSize
 		if slz < 0 {
 			slz += SectorSize
 		}
@@ -572,7 +632,6 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		paletteIdx := brick.Payload[vx][vy][vz]
 		if paletteIdx != 0 {
 			// Hit!
-			// Compute normal
 			vMin := mgl32.Vec3{
 				float32(sx*SectorSize + bx*BrickSize + vx),
 				float32(sy*SectorSize + by*BrickSize + vy),
@@ -605,7 +664,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 				}
 			}
 
-			return true, t, [3]int{int(math.Floor(float64(p.X()))), int(math.Floor(float64(p.Y()))), int(math.Floor(float64(p.Z())))}, normal
+			return true, t, [3]int{int(flX), int(flY), int(flZ)}, normal
 		}
 
 		res := x.stepToNext(p, rayDir, invDir, 1.0)
@@ -620,21 +679,355 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 }
 
 func (x *XBrickMap) stepToNext(p, dir, invDir mgl32.Vec3, size float32) float32 {
-	v := mgl32.Vec3{}
+	res := float32(1e10)
 	for i := 0; i < 3; i++ {
+		if dir[i] == 0 {
+			continue
+		}
+
+		var dist float32
 		if dir[i] > 0 {
-			v[i] = (float32(math.Floor(float64(p[i]/size)))+1)*size - p[i]
+			// Distance to next whole size boundary
+			dist = (float32(math.Floor(float64(p[i]/size+1e-6)))+1)*size - p[i]
 		} else {
-			v[i] = (float32(math.Floor(float64(p[i]/size))))*size - p[i]
+			// Distance to previous whole size boundary
+			dist = (float32(math.Floor(float64(p[i]/size-1e-6))))*size - p[i]
+		}
+
+		tVal := dist * invDir[i]
+		if tVal > 1e-6 && tVal < res {
+			res = tVal
+		}
+	}
+	// Add a tiny extra bit to ensure we actually cross the boundary in the next iteration
+	if res < 1e10 {
+		return res + 1e-4
+	}
+	return res
+}
+
+func (x *XBrickMap) Resample(scale float32) *XBrickMap {
+	newMap := NewXBrickMap()
+	if len(x.Sectors) == 0 {
+		return newMap
+	}
+
+	minB, maxB := x.ComputeAABB()
+	fmt.Printf("Resampling Map: Min=%v Max=%v Scale=%f\n", minB, maxB, scale)
+
+	// Calculate new bounds relative to (0,0,0) for now, but we want to stay stable.
+	// Actually, the most predictable behavior is scaling relative to minB.
+
+	// Shifted old coordinates: p' = (p - minB) * scale + minB?
+	// No, let's keep it simple: newGridPos = oldGridPos * scale.
+	// This mirrors world space: WorldPos = GridPos * 0.1.
+	// If we want WorldPos to be same, we keep same mapping.
+
+	newMin := minB.Mul(scale)
+	newMax := maxB.Mul(scale)
+
+	// Iterate over the new bounding box
+	minX, minY, minZ := int(math.Floor(float64(newMin.X()))), int(math.Floor(float64(newMin.Y()))), int(math.Floor(float64(newMin.Z())))
+	maxX, maxY, maxZ := int(math.Ceil(float64(newMax.X()))), int(math.Ceil(float64(newMax.Y()))), int(math.Ceil(float64(newMax.Z())))
+
+	// Safety: Check total iterations
+	iterationsX := maxX - minX + 1
+	iterationsY := maxY - minY + 1
+	iterationsZ := maxZ - minZ + 1
+	totalIters := int64(iterationsX) * int64(iterationsY) * int64(iterationsZ)
+
+	if totalIters > 100*100*100*100 { // 100M iterations limit
+		fmt.Printf("REJECTED: Rescale too large (%d voxels grid volume)\n", totalIters)
+		return x // Return original
+	}
+
+	fmt.Printf("Iterating range: [%d %d %d] to [%d %d %d]\n", minX, minY, minZ, maxX, maxY, maxZ)
+	voxelCount := 0
+
+	invScale := 1.0 / scale
+
+	for gx := minX; gx <= maxX; gx++ {
+		for gy := minY; gy <= maxY; gy++ {
+			for gz := minZ; gz <= maxZ; gz++ {
+				// Nearest neighbor sampling with center alignment
+				// We project the center of the new voxel (gx+0.5) back to old space
+				oldX := int(math.Floor((float64(gx) + 0.5) * float64(invScale)))
+				oldY := int(math.Floor((float64(gy) + 0.5) * float64(invScale)))
+				oldZ := int(math.Floor((float64(gz) + 0.5) * float64(invScale)))
+
+				found, val := x.GetVoxel(oldX, oldY, oldZ)
+				if found {
+					newMap.SetVoxel(gx, gy, gz, val)
+					voxelCount++
+				}
+			}
 		}
 	}
 
-	tVals := mgl32.Vec3{v.X() * invDir.X(), v.Y() * invDir.Y(), v.Z() * invDir.Z()}
-	res := float32(1e10)
-	for i := 0; i < 3; i++ {
-		if tVals[i] > 0 && tVals[i] < res {
-			res = tVals[i]
+	newMap.ComputeAABB()
+	fmt.Printf("Resample Done: Generated %d voxels. New AABB: %v - %v\n", voxelCount, newMap.CachedMin, newMap.CachedMax)
+	return newMap
+}
+
+type voxelCoord [3]int
+
+// ComponentInfo holds a separated voxel part and its voxel count.
+type ComponentInfo struct {
+	Map        *XBrickMap
+	VoxelCount int
+	Min        mgl32.Vec3
+	Max        mgl32.Vec3
+}
+
+// SplitDisconnectedComponents identifies disconnected voxel parts and returns them as separate XBrickMaps.
+// The voxels in the returned maps are in the SAME local coordinate space as the original.
+func (x *XBrickMap) SplitDisconnectedComponents() []ComponentInfo {
+	if len(x.Sectors) == 0 {
+		return nil
+	}
+
+	minB, maxB := x.ComputeAABB()
+	minX, minY, minZ := int(math.Round(float64(minB[0]))), int(math.Round(float64(minB[1]))), int(math.Round(float64(minB[2])))
+	maxX, maxY, maxZ := int(math.Round(float64(maxB[0]))), int(math.Round(float64(maxB[1]))), int(math.Round(float64(maxB[2])))
+
+	sx := maxX - minX + 1
+	sy := maxY - minY + 1
+	sz := maxZ - minZ + 1
+	volumeTotal := sx * sy * sz
+
+	// Limit volume to avoid huge allocations (e.g. 2M voxels ~ 250KB bitset)
+	if volumeTotal > 4000000 || volumeTotal <= 0 {
+		return nil
+	}
+
+	// 1. Bitsets for connectivity
+	// exists: 1 if voxel exists
+	// visited: 1 if voxel has been processed
+	exists := make([]uint64, (volumeTotal+63)/64)
+	visited := make([]uint64, (volumeTotal+63)/64)
+	values := make(map[int]uint8) // flatIndex -> value (sparse for colors)
+
+	flatIdx := func(vx, vy, vz int) int {
+		lx, ly, lz := vx-minX, vy-minY, vz-minZ
+		return lz*sx*sy + ly*sx + lx
+	}
+
+	totalVoxels := 0
+	for sKey, sector := range x.Sectors {
+		ox, oy, oz := sKey[0]*SectorSize, sKey[1]*SectorSize, sKey[2]*SectorSize
+		for i := 0; i < 64; i++ {
+			if (sector.BrickMask64 & (1 << i)) != 0 {
+				bx, by, bz := i%4, (i/4)%4, i/16
+				brick := sector.GetBrick(bx, by, bz)
+				if brick == nil || brick.IsEmpty() {
+					continue
+				}
+				brickOx, brickOy, brickOz := ox+bx*BrickSize, oy+by*BrickSize, oz+bz*BrickSize
+				if brick.Flags&BrickFlagSolid != 0 {
+					val := uint8(brick.AtlasOffset)
+					for vz := 0; vz < BrickSize; vz++ {
+						for vy := 0; vy < BrickSize; vy++ {
+							for vx := 0; vx < BrickSize; vx++ {
+								idx := flatIdx(brickOx+vx, brickOy+vy, brickOz+vz)
+								exists[idx/64] |= (1 << (idx % 64))
+								values[idx] = val
+								totalVoxels++
+							}
+						}
+					}
+					continue
+				}
+				for vz := 0; vz < BrickSize; vz++ {
+					for vy := 0; vy < BrickSize; vy++ {
+						for vx := 0; vx < BrickSize; vx++ {
+							val := brick.Payload[vx][vy][vz]
+							if val != 0 {
+								idx := flatIdx(brickOx+vx, brickOy+vy, brickOz+vz)
+								exists[idx/64] |= (1 << (idx % 64))
+								values[idx] = val
+								totalVoxels++
+							}
+						}
+					}
+				}
+			}
 		}
 	}
-	return res
+
+	if totalVoxels == 0 {
+		return nil
+	}
+
+	var components []ComponentInfo
+
+	// 2. BFS using bitsets
+	for idx := 0; idx < volumeTotal; idx++ {
+		isSet := (exists[idx/64] & (1 << (idx % 64))) != 0
+		isVis := (visited[idx/64] & (1 << (idx % 64))) != 0
+		if !isSet || isVis {
+			continue
+		}
+
+		// New component found
+		newMap := NewXBrickMap()
+		q := []int{idx}
+		visited[idx/64] |= (1 << (idx % 64))
+
+		vx := minX + (idx % sx)
+		vy := minY + ((idx / sx) % sy)
+		vz := minZ + (idx / (sx * sy))
+		newMap.SetVoxel(vx, vy, vz, values[idx])
+		compVoxelCount := 1
+
+		cMin := mgl32.Vec3{float32(vx), float32(vy), float32(vz)}
+		cMax := mgl32.Vec3{float32(vx + 1), float32(vy + 1), float32(vz + 1)}
+
+		for len(q) > 0 {
+			vIdx := q[0]
+			q = q[1:]
+
+			cx := minX + (vIdx % sx)
+			cy := minY + ((vIdx / sx) % sy)
+			cz := minZ + (vIdx / (sx * sy))
+
+			// Update bounds
+			cMin[0] = min(cMin[0], float32(cx))
+			cMin[1] = min(cMin[1], float32(cy))
+			cMin[2] = min(cMin[2], float32(cz))
+			cMax[0] = max(cMax[0], float32(cx+1))
+			cMax[1] = max(cMax[1], float32(cy+1))
+			cMax[2] = max(cMax[2], float32(cz+1))
+
+			// Neighbors (6-connectivity) in flat space
+			for axis := 0; axis < 3; axis++ {
+				for dir := -1; dir <= 1; dir += 2 {
+					nx, ny, nz := cx, cy, cz
+					if axis == 0 {
+						nx += dir
+					} else if axis == 1 {
+						ny += dir
+					} else {
+						nz += dir
+					}
+
+					if nx < minX || nx > maxX || ny < minY || ny > maxY || nz < minZ || nz > maxZ {
+						continue
+					}
+
+					ni := flatIdx(nx, ny, nz)
+					nSet := (exists[ni/64] & (1 << (ni % 64))) != 0
+					nVis := (visited[ni/64] & (1 << (ni % 64))) != 0
+					if nSet && !nVis {
+						visited[ni/64] |= (1 << (ni % 64))
+						newMap.SetVoxel(nx, ny, nz, values[ni])
+						q = append(q, ni)
+						compVoxelCount++
+					}
+				}
+			}
+		}
+		newMap.CachedMin = cMin
+		newMap.CachedMax = cMax
+		newMap.AABBDirty = false
+
+		components = append(components, ComponentInfo{
+			Map:        newMap,
+			VoxelCount: compVoxelCount,
+			Min:        cMin,
+			Max:        cMax,
+		})
+
+		if compVoxelCount == totalVoxels {
+			return nil // Optimization: only 1 component
+		}
+	}
+
+	if len(components) <= 1 {
+		return nil
+	}
+
+	return components
+}
+
+// Shift returns a new XBrickMap with all voxels shifted by (dx, dy, dz).
+func (x *XBrickMap) Shift(dx, dy, dz int) *XBrickMap {
+	newMap := NewXBrickMap()
+	for sKey, sector := range x.Sectors {
+		ox, oy, oz := sKey[0]*SectorSize, sKey[1]*SectorSize, sKey[2]*SectorSize
+		for i := 0; i < 64; i++ {
+			if (sector.BrickMask64 & (1 << i)) != 0 {
+				bx, by, bz := i%4, (i/4)%4, i/16
+				brick := sector.GetBrick(bx, by, bz)
+				if brick == nil || brick.IsEmpty() {
+					continue
+				}
+				brickOx, brickOy, brickOz := ox+bx*BrickSize, oy+by*BrickSize, oz+bz*BrickSize
+				if brick.Flags&BrickFlagSolid != 0 {
+					val := uint8(brick.AtlasOffset)
+					for vz := 0; vz < BrickSize; vz++ {
+						for vy := 0; vy < BrickSize; vy++ {
+							for vx := 0; vx < BrickSize; vx++ {
+								newMap.SetVoxel(brickOx+vx+dx, brickOy+vy+dy, brickOz+vz+dz, val)
+							}
+						}
+					}
+					continue
+				}
+				for vz := 0; vz < BrickSize; vz++ {
+					for vy := 0; vy < BrickSize; vy++ {
+						for vx := 0; vx < BrickSize; vx++ {
+							val := brick.Payload[vx][vy][vz]
+							if val != 0 {
+								newMap.SetVoxel(brickOx+vx+dx, brickOy+vy+dy, brickOz+vz+dz, val)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return newMap
+}
+
+// Center calculates the AABB and returns a new XBrickMap shifted such that its center is at (0,0,0).
+// Also returns the local center in the original coordinate space.
+func (x *XBrickMap) Center() (*XBrickMap, mgl32.Vec3) {
+	minB, maxB := x.ComputeAABB()
+	localCenter := minB.Add(maxB).Mul(0.5)
+
+	shiftX := int(-math.Round(float64(localCenter.X())))
+	shiftY := int(-math.Round(float64(localCenter.Y())))
+	shiftZ := int(-math.Round(float64(localCenter.Z())))
+
+	shiftedMap := x.Shift(shiftX, shiftY, shiftZ)
+	return shiftedMap, localCenter
+}
+
+func (x *XBrickMap) GetVoxelCount() int {
+	count := 0
+	for _, sector := range x.Sectors {
+		for i := 0; i < 64; i++ {
+			if (sector.BrickMask64 & (1 << i)) != 0 {
+				bx, by, bz := i%4, (i/4)%4, i/16
+				brick := sector.GetBrick(bx, by, bz)
+				if brick == nil {
+					continue
+				}
+				if brick.Flags&BrickFlagSolid != 0 {
+					count += BrickSize * BrickSize * BrickSize
+					continue
+				}
+				for vz := 0; vz < BrickSize; vz++ {
+					for vy := 0; vy < BrickSize; vy++ {
+						for vx := 0; vx < BrickSize; vx++ {
+							if brick.Payload[vx][vy][vz] != 0 {
+								count++
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return count
 }
