@@ -44,7 +44,8 @@ func (c *VoxelRtSnapshotContainer) Get() *VoxelRtSnapshot {
 }
 
 type VoxelModelComponent struct {
-	VoxelModel   AssetId           `gekko:"voxel" usage:"model"`
-	VoxelPalette AssetId           `gekko:"voxel" usage:"palette"`
-	CustomMap    *volume.XBrickMap // If set, use this instead of loading from VoxelModel asset
+	VoxelModel        AssetId           `gekko:"voxel" usage:"model"`
+	VoxelPalette      AssetId           `gekko:"voxel" usage:"palette"`
+	CustomMap         *volume.XBrickMap // If set, use this instead of loading from VoxelModel asset
+	CustomPhysicsData *VoxPhysicsData   // Acceleration data for CustomMap
 }

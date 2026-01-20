@@ -194,6 +194,8 @@ func (s *VoxelRtState) SplitDisconnectedComponents(cmd *Commands, eid EntityId) 
 			for _, c := range allComps {
 				if vm, ok := c.(VoxelModelComponent); ok {
 					vm.CustomMap = obj.XBrickMap
+					// Update physics data for the modified original object
+					vm.CustomPhysicsData = AnalyzePhysicsFromMap(obj.XBrickMap)
 					cmd.AddComponents(eid, vm)
 					break
 				}
@@ -211,6 +213,22 @@ func (s *VoxelRtState) SplitDisconnectedComponents(cmd *Commands, eid EntityId) 
 				Min:       comp.Min,
 				Max:       comp.Max,
 			})
+		}
+	} else {
+		// Only one component found (no split), but the object was modified.
+		// We still need to update the physics data if it's destructible.
+		// The XBrickMap is already modified in place by VoxelSphereEdit.
+		// We just need to sync the new PhysicsData to ECS.
+		if cmd != nil {
+			allComps := cmd.GetAllComponents(eid)
+			for _, c := range allComps {
+				if vm, ok := c.(VoxelModelComponent); ok {
+					// Recalculate physics data
+					vm.CustomPhysicsData = AnalyzePhysicsFromMap(obj.XBrickMap)
+					cmd.AddComponents(eid, vm)
+					break
+				}
+			}
 		}
 	}
 
@@ -296,9 +314,10 @@ func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult,
 			Scale:    parentTr.Scale,
 		},
 		&VoxelModelComponent{
-			VoxelModel:   parentVm.VoxelModel,
-			VoxelPalette: parentVm.VoxelPalette,
-			CustomMap:    shiftedMap,
+			VoxelModel:        parentVm.VoxelModel,
+			VoxelPalette:      parentVm.VoxelPalette,
+			CustomMap:         shiftedMap,
+			CustomPhysicsData: AnalyzePhysicsFromMap(shiftedMap),
 		},
 	}
 

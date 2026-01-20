@@ -81,6 +81,7 @@ type BodyInfo struct {
 	Col           *ColliderComponent
 	ScaledExtents mgl32.Vec3
 	Model         *VoxModel
+	PhysicsData   *VoxPhysicsData
 }
 
 func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelRtState, assets *AssetServer) {
@@ -121,13 +122,24 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 		}
 
 		var model *VoxModel
+		var physicsData *VoxPhysicsData
+
 		if vmc != nil && assets != nil {
-			if vmAsset, ok := assets.voxModels[vmc.VoxelModel]; ok {
+			// Check for dynamic custom physics data FIRST
+			if vmc.CustomPhysicsData != nil {
+				physicsData = vmc.CustomPhysicsData
+				// We still might have a base model for size etc, but PhysicsData is overridden
+				if vmAsset, ok := assets.voxModels[vmc.VoxelModel]; ok {
+					model = &vmAsset.VoxModel
+				}
+			} else if vmAsset, ok := assets.voxModels[vmc.VoxelModel]; ok {
+				// Fallback to static asset data
 				model = &vmAsset.VoxModel
+				physicsData = model.PhysicsData
 			}
 		}
 
-		bodies = append(bodies, BodyInfo{eid, tr, rb, col, scaledHalfExtents, model})
+		bodies = append(bodies, BodyInfo{eid, tr, rb, col, scaledHalfExtents, model, physicsData})
 		return true
 	}, VoxelModelComponent{})
 
@@ -347,18 +359,44 @@ func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyI
 							// Loose check: If a model voxel connects to this AABB.
 							hitModel := false
 
-							// Ideally iterate only relevant voxels if we had a grid.
-							// Since we iterate all voxels:
-							for _, v := range self.Model.Voxels {
-								ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
+							// Use acceleration datastructure: prioritize Corners and Edges
+							if self.PhysicsData != nil {
+								// Check Corners first (highest priority)
+								for _, v := range self.PhysicsData.Corners {
+									ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
+									if lMax.X() > ix && lMin.X() < ix+1 &&
+										lMax.Y() > iy && lMin.Y() < iy+1 &&
+										lMax.Z() > iz && lMin.Z() < iz+1 {
+										hitModel = true
+										break
+									}
+								}
 
-								// Check overlap of Voxel Cube [I, I+1] with Interval [LMin, LMax].
-								// Overlap condition: Max > I && Min < I+1.
-								if lMax.X() > ix && lMin.X() < ix+1 &&
-									lMax.Y() > iy && lMin.Y() < iy+1 &&
-									lMax.Z() > iz && lMin.Z() < iz+1 {
-									hitModel = true
-									break
+								if !hitModel {
+									// Check Edges next
+									for _, v := range self.PhysicsData.Edges {
+										ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
+										if lMax.X() > ix && lMin.X() < ix+1 &&
+											lMax.Y() > iy && lMin.Y() < iy+1 &&
+											lMax.Z() > iz && lMin.Z() < iz+1 {
+											hitModel = true
+											break
+										}
+									}
+								}
+
+								// Optionally check Faces if stability is an issue, but Teardown suggests Corners and Edges are enough for most constraints.
+								// We'll skip Inside and Faces for now to optimize as requested.
+							} else if self.Model != nil {
+								// Fallback: iterate all voxels if PhysicsData is missing but Model exists
+								for _, v := range self.Model.Voxels {
+									ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
+									if lMax.X() > ix && lMin.X() < ix+1 &&
+										lMax.Y() > iy && lMin.Y() < iy+1 &&
+										lMax.Z() > iz && lMin.Z() < iz+1 {
+										hitModel = true
+										break
+									}
 								}
 							}
 

@@ -8,6 +8,8 @@ import (
 	"os"
 
 	"github.com/go-gl/mathgl/mgl32"
+
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
 const (
@@ -19,9 +21,17 @@ type Voxel struct {
 	ColorIndex byte
 }
 
+type VoxPhysicsData struct {
+	Corners []Voxel
+	Edges   []Voxel
+	Faces   []Voxel
+	Inside  []Voxel
+}
+
 type VoxModel struct {
 	SizeX, SizeY, SizeZ uint32
 	Voxels              []Voxel
+	PhysicsData         *VoxPhysicsData
 }
 
 type VoxelEdit struct {
@@ -235,7 +245,141 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 
 	printDebugInfo(voxFile)
 
+	for i := range voxFile.Models {
+		voxFile.Models[i].AnalyzePhysics()
+	}
+
 	return voxFile, nil
+}
+
+// AnalyzePhysicsFromMap creates acceleration data from a sparse XBrickMap
+func AnalyzePhysicsFromMap(xbm *volume.XBrickMap) *VoxPhysicsData {
+	if xbm == nil || xbm.GetVoxelCount() == 0 {
+		return nil
+	}
+
+	// 1. Collect all active voxels
+	var voxels []Voxel
+	// Pre-allocate assuming some density, though exact count is available
+	// But GetVoxelCount is cached in XBrickMap? Yes.
+	voxels = make([]Voxel, 0, xbm.GetVoxelCount())
+
+	for sCoord, sector := range xbm.Sectors {
+		sx, sy, sz := sCoord[0], sCoord[1], sCoord[2]
+
+		// Iterate 4x4x4 bricks in sector
+		for bx := 0; bx < volume.SectorBricks; bx++ {
+			for by := 0; by < volume.SectorBricks; by++ {
+				for bz := 0; bz < volume.SectorBricks; bz++ {
+					brick := sector.GetBrick(bx, by, bz)
+					if brick == nil || brick.IsEmpty() {
+						continue
+					}
+
+					// Iterate voxels in brick (8x8x8)
+					for vx := 0; vx < volume.BrickSize; vx++ {
+						for vy := 0; vy < volume.BrickSize; vy++ {
+							for vz := 0; vz < volume.BrickSize; vz++ {
+								val := brick.Payload[vx][vy][vz]
+								if val != 0 {
+									gx := sx*volume.SectorSize + bx*volume.BrickSize + vx
+									gy := sy*volume.SectorSize + by*volume.BrickSize + vy
+									gz := sz*volume.SectorSize + bz*volume.BrickSize + vz
+									voxels = append(voxels, Voxel{uint32(gx), uint32(gy), uint32(gz), val})
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	data := &VoxPhysicsData{}
+
+	// 2. Build fast lookup grid
+	grid := make(map[[3]uint32]bool)
+	for _, v := range voxels {
+		grid[[3]uint32{v.X, v.Y, v.Z}] = true
+	}
+
+	delta := [6][3]int{
+		{1, 0, 0}, {-1, 0, 0},
+		{0, 1, 0}, {0, -1, 0},
+		{0, 0, 1}, {0, 0, -1},
+	}
+
+	// 3. Categorize
+	for _, v := range voxels {
+		emptyNeighbors := 0
+		for _, d := range delta {
+			nx, ny, nz := int(v.X)+d[0], int(v.Y)+d[1], int(v.Z)+d[2]
+			// We only care about neighbors within the object.
+			// Bounds check is implicit: if it's not in the grid, it's empty space relative to object.
+			if !grid[[3]uint32{uint32(nx), uint32(ny), uint32(nz)}] {
+				emptyNeighbors++
+			}
+		}
+
+		switch emptyNeighbors {
+		case 0:
+			data.Inside = append(data.Inside, v)
+		case 1:
+			data.Faces = append(data.Faces, v)
+		case 2:
+			data.Edges = append(data.Edges, v)
+		default:
+			data.Corners = append(data.Corners, v)
+		}
+	}
+
+	return data
+}
+
+func (m *VoxModel) AnalyzePhysics() {
+	if len(m.Voxels) == 0 {
+		return
+	}
+
+	// Create a 3D grid for fast lookup
+	grid := make(map[[3]uint32]bool)
+	for _, v := range m.Voxels {
+		grid[[3]uint32{v.X, v.Y, v.Z}] = true
+	}
+
+	m.PhysicsData = &VoxPhysicsData{}
+
+	delta := [6][3]int{
+		{1, 0, 0}, {-1, 0, 0},
+		{0, 1, 0}, {0, -1, 0},
+		{0, 0, 1}, {0, 0, -1},
+	}
+
+	for _, v := range m.Voxels {
+		emptyNeighbors := 0
+		for _, d := range delta {
+			nx, ny, nz := int(v.X)+d[0], int(v.Y)+d[1], int(v.Z)+d[2]
+			if nx < 0 || ny < 0 || nz < 0 || uint32(nx) >= m.SizeX || uint32(ny) >= m.SizeY || uint32(nz) >= m.SizeZ {
+				emptyNeighbors++
+				continue
+			}
+			if !grid[[3]uint32{uint32(nx), uint32(ny), uint32(nz)}] {
+				emptyNeighbors++
+			}
+		}
+
+		switch emptyNeighbors {
+		case 0:
+			m.PhysicsData.Inside = append(m.PhysicsData.Inside, v)
+		case 1:
+			m.PhysicsData.Faces = append(m.PhysicsData.Faces, v)
+		case 2:
+			m.PhysicsData.Edges = append(m.PhysicsData.Edges, v)
+		default:
+			// 3 or more empty neighbors
+			m.PhysicsData.Corners = append(m.PhysicsData.Corners, v)
+		}
+	}
 }
 
 func printDebugInfo(voxFile *VoxFile) {

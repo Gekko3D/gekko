@@ -75,7 +75,11 @@ func (ecs *Ecs) removeEntity(entityId EntityId) {
 }
 
 func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
-	srcArchId := ecs.entityIndex[entityId]
+	srcArchId, ok := ecs.entityIndex[entityId]
+	if !ok {
+		// Entity might have been removed in the same frame
+		return
+	}
 	srcArch := ecs.archetypes[srcArchId]
 	srcRow := srcArch.entities[entityId]
 
@@ -126,7 +130,10 @@ func (ecs *Ecs) writeComponent(dstArch *archetype, dstRow row, component any) {
 }
 
 func (ecs *Ecs) recycleEntity(entityId EntityId) {
-	archId := ecs.entityIndex[entityId]
+	archId, ok := ecs.entityIndex[entityId]
+	if !ok {
+		return
+	}
 	arch := ecs.archetypes[archId]
 
 	row := arch.entities[entityId]
