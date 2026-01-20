@@ -26,20 +26,18 @@ func NewCameraState() *CameraState {
 }
 
 func (c *CameraState) GetForward() mgl32.Vec3 {
-	// Z-up: Forward in XY plane, Z for pitch
 	return mgl32.Vec3{
-		float32(math.Cos(float64(c.Pitch)) * math.Sin(float64(c.Yaw))),
-		float32(-math.Cos(float64(c.Pitch)) * math.Cos(float64(c.Yaw))),
+		float32(math.Sin(float64(c.Yaw)) * math.Cos(float64(c.Pitch))),
 		float32(math.Sin(float64(c.Pitch))),
+		float32(-math.Cos(float64(c.Yaw)) * math.Cos(float64(c.Pitch))),
 	}
 }
 
 func (c *CameraState) GetRight() mgl32.Vec3 {
-	// Z-up: Right in XY plane
 	return mgl32.Vec3{
-		float32(-math.Sin(float64(c.Yaw))),
 		float32(math.Cos(float64(c.Yaw))),
 		0,
+		float32(math.Sin(float64(c.Yaw))),
 	}
 }
 
@@ -47,7 +45,7 @@ func (c *CameraState) GetViewMatrix() mgl32.Mat4 {
 	forward := c.GetForward()
 	eye := c.Position
 	target := eye.Add(forward)
-	up := mgl32.Vec3{0, 0, 1} // Z-up
+	up := mgl32.Vec3{0, 1, 0} // Approximate up is fine for LookAt
 	return mgl32.LookAtV(eye, target, up)
 }
 

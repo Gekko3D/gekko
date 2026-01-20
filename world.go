@@ -222,24 +222,17 @@ func loadRegion(world *WorldComponent, reg *Region) {
 				// Try load from disk
 				sector := diskLoadSector(world.WorldPath, sKey)
 				if sector == nil {
-					// Generate something simple (e.g. flat floor at z=0)
-					if sz == 0 {
+					// Generate something simple (e.g. flat floor at y=0)
+					if sy == 0 {
 						sector = volume.NewSector(sx, sy, sz)
 						// Fill bottom layers
 						for bx := 0; bx < volume.SectorBricks; bx++ {
-							for by := 0; by < volume.SectorBricks; by++ {
-								for bz := 0; bz < 1; bz++ { // 1 brick thick
-									brick, _ := sector.GetOrCreateBrick(bx, by, bz)
-									for vx := 0; vx < volume.BrickSize; vx++ {
-										for vy := 0; vy < volume.BrickSize; vy++ {
-											for vz := 0; vz < volume.BrickSize; vz++ {
-												brick.SetVoxel(vx, vy, vz, 1)
-												// Add print for any voxel found in region [0,0,0]
-												if reg.Coords[0] == 0 && reg.Coords[1] == 0 && reg.Coords[2] == 0 {
-													// fmt.Printf("DEBUG: Voxel found in region [0,0,0] at sector %v, brick %v,%v,%v, voxel %v,%v,%v\n", sKey, bx, by, bz, vx, vy, vz)
-												}
-											}
-										}
+							for bz := 0; bz < volume.SectorBricks; bz++ {
+								brick, _ := sector.GetOrCreateBrick(bx, 0, bz)
+								for vx := 0; vx < volume.BrickSize; vx++ {
+									for vz := 0; vz < volume.BrickSize; vz++ {
+										brick.SetVoxel(vx, 0, vz, 1) // Layer 0
+										brick.SetVoxel(vx, 1, vz, 1) // Layer 1
 									}
 								}
 							}
