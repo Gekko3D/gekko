@@ -212,6 +212,7 @@ func (server AssetServer) CreateVoxelModel(model VoxModel, resolution float32) A
 		model = ScaleVoxModel(model, resolution)
 	}
 	id := makeAssetId()
+	model.AnalyzePhysics()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: model,
 		//TODO calculate brick size based on model
@@ -382,11 +383,14 @@ func (server AssetServer) CreateSphereModel(radius float32, resolution float32) 
 		}
 	}
 
+	model := VoxModel{
+		SizeX: size, SizeY: size, SizeZ: size,
+		Voxels: voxels,
+	}
+	model.AnalyzePhysics()
+
 	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: size, SizeY: size, SizeZ: size,
-			Voxels: voxels,
-		},
+		VoxModel:  model,
 		BrickSize: [3]uint32{8, 8, 8},
 	}
 	return id
@@ -408,11 +412,14 @@ func (server AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resolutio
 		}
 	}
 
+	model := VoxModel{
+		SizeX: uint32(sx), SizeY: uint32(sy), SizeZ: uint32(sz),
+		Voxels: voxels,
+	}
+	model.AnalyzePhysics()
+
 	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: uint32(sx), SizeY: uint32(sy), SizeZ: uint32(sz),
-			Voxels: voxels,
-		},
+		VoxModel:  model,
 		BrickSize: [3]uint32{8, 8, 8},
 	}
 	return id
@@ -442,11 +449,14 @@ func (server AssetServer) CreateConeModel(radius, height float32, resolution flo
 		}
 	}
 
+	model := VoxModel{
+		SizeX: uint32(r*2 + 1), SizeY: uint32(r*2 + 1), SizeZ: uint32(h),
+		Voxels: voxels,
+	}
+	model.AnalyzePhysics()
+
 	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: uint32(r*2 + 1), SizeY: uint32(r*2 + 1), SizeZ: uint32(h),
-			Voxels: voxels,
-		},
+		VoxModel:  model,
 		BrickSize: [3]uint32{8, 8, 8},
 	}
 	return id
@@ -473,11 +483,14 @@ func (server AssetServer) CreatePyramidModel(size, height float32, resolution fl
 		}
 	}
 
+	model := VoxModel{
+		SizeX: uint32(scaledSize), SizeY: uint32(scaledSize), SizeZ: uint32(scaledHeight),
+		Voxels: voxels,
+	}
+	model.AnalyzePhysics()
+
 	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: uint32(scaledSize), SizeY: uint32(scaledSize), SizeZ: uint32(scaledHeight),
-			Voxels: voxels,
-		},
+		VoxModel:  model,
 		BrickSize: [3]uint32{8, 8, 8},
 	}
 	return id

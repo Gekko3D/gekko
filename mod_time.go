@@ -5,9 +5,10 @@ import (
 )
 
 type Time struct {
-	Time     time.Time
-	Duration time.Duration
-	Dt       float64
+	Time       time.Time
+	Duration   time.Duration
+	Dt         float64
+	FrameCount uint64
 }
 
 type TimeModule struct {
@@ -39,4 +40,5 @@ func timeSystem(timeResource *Time) {
 	timeResource.Duration = dur
 	timeResource.Dt = dt
 	timeResource.Time = now
+	timeResource.FrameCount++
 }

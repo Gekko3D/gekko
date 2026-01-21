@@ -22,10 +22,13 @@ type Voxel struct {
 }
 
 type VoxPhysicsData struct {
-	Corners []Voxel
-	Edges   []Voxel
-	Faces   []Voxel
-	Inside  []Voxel
+	Corners       []Voxel
+	Edges         []Voxel
+	Faces         []Voxel
+	Inside        []Voxel
+	Mass          float32
+	CenterOfMass  mgl32.Vec3
+	InertiaTensor mgl32.Mat3
 }
 
 type VoxModel struct {
@@ -296,6 +299,57 @@ func AnalyzePhysicsFromMap(xbm *volume.XBrickMap) *VoxPhysicsData {
 	}
 
 	data := &VoxPhysicsData{}
+	// Calculate mass properties
+	totalMass := float32(0.0)
+	weightedPos := mgl32.Vec3{0, 0, 0}
+	voxelMass := float32(1.0)     // Assume uniform density for now
+	voxelUnitSize := float32(0.1) // 10cm voxels
+
+	for _, v := range voxels {
+		// Use VoxelUnitSize scale
+		pos := mgl32.Vec3{float32(v.X) * voxelUnitSize, float32(v.Y) * voxelUnitSize, float32(v.Z) * voxelUnitSize}
+		totalMass += voxelMass
+		weightedPos = weightedPos.Add(pos.Mul(voxelMass))
+	}
+
+	if totalMass > 0 {
+		data.Mass = totalMass
+		data.CenterOfMass = weightedPos.Mul(1.0 / totalMass)
+
+		// Calculate Inertia Tensor
+		// I = sum( m * ( ||r||^2 * I - r * rT ) ) + I_voxel
+		// For a cube, I_voxel = m * s^2 / 6 * Identity
+		var Ixx, Iyy, Izz, Ixy, Ixz, Iyz float32
+
+		// Voxel inertia (point mass approximation usually not enough for close packing, but let's use point mass + sphere/cube term)
+		// For a cube of side 's' and mass 'm', moment of inertia is m*s^2/6
+		// s = voxelUnitSize
+		voxelI := voxelMass * (voxelUnitSize * voxelUnitSize) / 6.0
+
+		for _, v := range voxels {
+			pos := mgl32.Vec3{float32(v.X) * voxelUnitSize, float32(v.Y) * voxelUnitSize, float32(v.Z) * voxelUnitSize}
+			r := pos.Sub(data.CenterOfMass)
+
+			Ixx += voxelMass * (r.Y()*r.Y() + r.Z()*r.Z())
+			Iyy += voxelMass * (r.X()*r.X() + r.Z()*r.Z())
+			Izz += voxelMass * (r.X()*r.X() + r.Y()*r.Y())
+
+			Ixy -= voxelMass * r.X() * r.Y()
+			Ixz -= voxelMass * r.X() * r.Z()
+			Iyz -= voxelMass * r.Y() * r.Z()
+		}
+
+		// Add voxel intrinsic inertia
+		Ixx += float32(len(voxels)) * voxelI
+		Iyy += float32(len(voxels)) * voxelI
+		Izz += float32(len(voxels)) * voxelI
+
+		data.InertiaTensor = mgl32.Mat3{
+			Ixx, Ixy, Ixz,
+			Ixy, Iyy, Iyz,
+			Ixz, Iyz, Izz,
+		}
+	}
 
 	// 2. Build fast lookup grid
 	grid := make(map[[3]uint32]bool)
@@ -341,13 +395,59 @@ func (m *VoxModel) AnalyzePhysics() {
 		return
 	}
 
+	m.PhysicsData = &VoxPhysicsData{}
+
+	// Calculate mass properties
+	totalMass := float32(0.0)
+	weightedPos := mgl32.Vec3{0, 0, 0}
+	voxelMass := float32(1.0)     // Assume uniform density for now
+	voxelUnitSize := float32(0.1) // 10cm voxels
+
 	// Create a 3D grid for fast lookup
 	grid := make(map[[3]uint32]bool)
 	for _, v := range m.Voxels {
 		grid[[3]uint32{v.X, v.Y, v.Z}] = true
+
+		// Use VoxelUnitSize scale
+		pos := mgl32.Vec3{float32(v.X) * voxelUnitSize, float32(v.Y) * voxelUnitSize, float32(v.Z) * voxelUnitSize}
+		totalMass += voxelMass
+		weightedPos = weightedPos.Add(pos.Mul(voxelMass))
 	}
 
-	m.PhysicsData = &VoxPhysicsData{}
+	if totalMass > 0 {
+		m.PhysicsData.Mass = totalMass
+		m.PhysicsData.CenterOfMass = weightedPos.Mul(1.0 / totalMass)
+
+		// Calculate Inertia Tensor
+		var Ixx, Iyy, Izz, Ixy, Ixz, Iyz float32
+
+		// Voxel inertia (cube)
+		voxelI := voxelMass * (voxelUnitSize * voxelUnitSize) / 6.0
+
+		for _, v := range m.Voxels {
+			pos := mgl32.Vec3{float32(v.X) * voxelUnitSize, float32(v.Y) * voxelUnitSize, float32(v.Z) * voxelUnitSize}
+			r := pos.Sub(m.PhysicsData.CenterOfMass)
+
+			Ixx += voxelMass * (r.Y()*r.Y() + r.Z()*r.Z())
+			Iyy += voxelMass * (r.X()*r.X() + r.Z()*r.Z())
+			Izz += voxelMass * (r.X()*r.X() + r.Y()*r.Y())
+
+			Ixy -= voxelMass * r.X() * r.Y()
+			Ixz -= voxelMass * r.X() * r.Z()
+			Iyz -= voxelMass * r.Y() * r.Z()
+		}
+
+		// Add voxel intrinsic inertia
+		Ixx += float32(len(m.Voxels)) * voxelI
+		Iyy += float32(len(m.Voxels)) * voxelI
+		Izz += float32(len(m.Voxels)) * voxelI
+
+		m.PhysicsData.InertiaTensor = mgl32.Mat3{
+			Ixx, Ixy, Ixz,
+			Ixy, Iyy, Iyz,
+			Ixz, Iyz, Izz,
+		}
+	}
 
 	delta := [6][3]int{
 		{1, 0, 0}, {-1, 0, 0},

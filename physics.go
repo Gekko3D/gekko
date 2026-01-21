@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -21,6 +22,12 @@ type RigidBodyComponent struct {
 	IsStatic        bool
 	Sleeping        bool
 	IdleTime        float32
+
+	// Physics Properties
+	CoM         mgl32.Vec3 // Local Center of Mass offset from Transform
+	Inertia     mgl32.Mat3 // Local Inertia Tensor
+	InvInertia  mgl32.Mat3 // Local Inverse Inertia Tensor
+	Initialized bool
 }
 
 func (rb *RigidBodyComponent) Wake() {
@@ -28,13 +35,38 @@ func (rb *RigidBodyComponent) Wake() {
 	rb.IdleTime = 0
 }
 
-func (rb *RigidBodyComponent) ApplyImpulse(impulse mgl32.Vec3) {
+func (rb *RigidBodyComponent) ApplyLinearImpulse(impulse mgl32.Vec3) {
 	rb.Wake()
+	if rb.IsStatic {
+		return
+	}
 	if rb.Mass > 0 {
 		rb.Velocity = rb.Velocity.Add(impulse.Mul(1.0 / rb.Mass))
 	} else {
 		rb.Velocity = rb.Velocity.Add(impulse)
 	}
+}
+
+func (rb *RigidBodyComponent) ApplyImpulse(impulse mgl32.Vec3, point mgl32.Vec3, worldCoM mgl32.Vec3, rotation mgl32.Quat) {
+	rb.Wake()
+	if rb.IsStatic {
+		return
+	}
+
+	// Linear Impulse
+	rb.ApplyLinearImpulse(impulse)
+
+	// Angular Impulse: L = r x J
+	r := point.Sub(worldCoM)
+	torque := r.Cross(impulse)
+
+	// Transform local InvInertia to world space
+	// I_world^-1 = R * I_local^-1 * R^T
+	R := QuatToMat3(rotation)
+	worldInvInertia := R.Mul3(rb.InvInertia).Mul3(R.Transpose())
+
+	dOmega := worldInvInertia.Mul3x1(torque)
+	rb.AngularVelocity = rb.AngularVelocity.Add(dOmega)
 }
 
 type ColliderComponent struct {
@@ -57,7 +89,7 @@ func NewPhysicsWorld() *PhysicsWorld {
 	return &PhysicsWorld{
 		Gravity:        mgl32.Vec3{0, -9.81, 0},
 		VoxelSize:      0.1,
-		SleepThreshold: 0.05,
+		SleepThreshold: -1.0, // Disable sleeping for debugging
 		SleepTime:      1.0,
 	}
 }
@@ -82,11 +114,41 @@ type BodyInfo struct {
 	ScaledExtents mgl32.Vec3
 	Model         *VoxModel
 	PhysicsData   *VoxPhysicsData
+
+	// Derived World State
+	WorldCoM        mgl32.Vec3
+	WorldInvInertia mgl32.Mat3
+}
+
+type Contact struct {
+	BodyA  *BodyInfo
+	BodyB  *BodyInfo // Can be nil for World Collision
+	Point  mgl32.Vec3
+	Normal mgl32.Vec3 // Points from B to A (or World to A)
+	Depth  float32
+}
+
+func GetComponent[T any](cmd *Commands, eid EntityId) *T {
+	comps := cmd.GetAllComponents(eid)
+	for _, c := range comps {
+		if t, ok := c.(T); ok {
+			copy := t
+			return &copy
+		}
+		if t, ok := c.(*T); ok {
+			return t
+		}
+	}
+	return nil
+}
+
+func GetVoxelModelComponent(cmd *Commands, eid EntityId) *VoxelModelComponent {
+	return GetComponent[VoxelModelComponent](cmd, eid)
 }
 
 func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelRtState, assets *AssetServer) {
 	dt := float32(time.Dt)
-	if dt <= 0 || dt > 1.0 { // Safety cap for dt
+	if dt <= 0 || dt > 0.5 { // Safety cap for dt
 		return
 	}
 
@@ -102,9 +164,21 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 		return false
 	})
 
-	// 2. Collect all active colliders for inter-entity collision
+	// 2. Collection
 	var bodies []BodyInfo
-	MakeQuery4[TransformComponent, RigidBodyComponent, ColliderComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, vmc *VoxelModelComponent) bool {
+	dynamicCount := 0
+	// We query for Transform and Collider. RigidBody is optional.
+	MakeQuery3[TransformComponent, RigidBodyComponent, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent) bool {
+		// If no RigidBody component (CollisionOnly), create a virtual static one for the solver
+		if rb == nil {
+			rb = &RigidBodyComponent{
+				IsStatic:    true,
+				Initialized: false,
+				Mass:        1.0,
+			}
+		} else if !rb.IsStatic {
+			dynamicCount++
+		}
 		scaledHalfExtents := mgl32.Vec3{
 			col.AABBHalfExtents.X() * tr.Scale.X(),
 			col.AABBHalfExtents.Y() * tr.Scale.Y(),
@@ -124,92 +198,528 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 		var model *VoxModel
 		var physicsData *VoxPhysicsData
 
+		// Try to find VoxelModel if it exists
+		vmc := GetVoxelModelComponent(cmd, eid)
+
 		if vmc != nil && assets != nil {
-			// Check for dynamic custom physics data FIRST
 			if vmc.CustomPhysicsData != nil {
 				physicsData = vmc.CustomPhysicsData
-				// We still might have a base model for size etc, but PhysicsData is overridden
 				if vmAsset, ok := assets.voxModels[vmc.VoxelModel]; ok {
 					model = &vmAsset.VoxModel
 				}
 			} else if vmAsset, ok := assets.voxModels[vmc.VoxelModel]; ok {
-				// Fallback to static asset data
 				model = &vmAsset.VoxModel
 				physicsData = model.PhysicsData
 			}
 		}
 
-		bodies = append(bodies, BodyInfo{eid, tr, rb, col, scaledHalfExtents, model, physicsData})
-		return true
-	}, VoxelModelComponent{})
+		// Initialize Physics Properties if needed
+		if !rb.Initialized {
+			if rb.Mass < 0.0001 {
+				rb.Mass = 1.0
+			}
 
-	// 3. Update Rigid Bodies
+			if physicsData != nil && model != nil {
+				// CoM Offset: PhysicsData.CoM is in 0..Size space. Transform is at Center (Size/2).
+				size := mgl32.Vec3{float32(model.SizeX), float32(model.SizeY), float32(model.SizeZ)}.Mul(physics.VoxelSize)
+				rb.CoM = physicsData.CenterOfMass.Sub(size.Mul(0.5))
+
+				rb.Inertia = physicsData.InertiaTensor
+				// Avoid singular matrix
+				if rb.Inertia.Det() < 0.0001 {
+					// Fallback to box inertia
+					width, height, depth := size.X(), size.Y(), size.Z()
+					m := rb.Mass
+					ix := (1.0 / 12.0) * m * (height*height + depth*depth)
+					iy := (1.0 / 12.0) * m * (width*width + depth*depth)
+					iz := (1.0 / 12.0) * m * (width*width + height*height)
+					rb.Inertia = mgl32.Mat3{ix, 0, 0, 0, iy, 0, 0, 0, iz}
+				}
+			} else {
+				// Fallback box properties
+				he := col.AABBHalfExtents
+				width, height, depth := he.X()*2, he.Y()*2, he.Z()*2
+				m := rb.Mass
+				ix := (1.0 / 12.0) * m * (height*height + depth*depth)
+				iy := (1.0 / 12.0) * m * (width*width + depth*depth)
+				iz := (1.0 / 12.0) * m * (width*width + height*height)
+				rb.Inertia = mgl32.Mat3{ix, 0, 0, 0, iy, 0, 0, 0, iz}
+				rb.CoM = mgl32.Vec3{0, 0, 0}
+			}
+			rb.InvInertia = rb.Inertia.Inv()
+			rb.Initialized = true
+		}
+
+		// Calculate World State for initial body structure
+		rot := tr.Rotation
+		scale := tr.Scale.X() // Assume uniform scale for inertia
+
+		// Scaled CoM and World CoM
+		worldCoM := tr.Position.Add(rot.Rotate(rb.CoM.Mul(scale)))
+
+		// Local InvInertia scales by 1/s^2 when radius scales by s
+		localInvInertia := rb.InvInertia.Mul(1.0 / (scale * scale))
+
+		R := QuatToMat3(rot)
+		worldInvInertia := R.Mul3(localInvInertia).Mul3(R.Transpose())
+
+		bodies = append(bodies, BodyInfo{
+			Eid:             eid,
+			Tr:              tr,
+			Rb:              rb,
+			Col:             col,
+			ScaledExtents:   scaledHalfExtents,
+			Model:           model,
+			PhysicsData:     physicsData,
+			WorldCoM:        worldCoM,
+			WorldInvInertia: worldInvInertia,
+		})
+		return true
+	}, RigidBodyComponent{})
+
+	if dynamicCount > 0 && time.FrameCount%60 == 0 {
+		var sleepCount int
+		for i := range bodies {
+			if !bodies[i].Rb.IsStatic && bodies[i].Rb.Sleeping {
+				sleepCount++
+			}
+		}
+		fmt.Printf("DEBUG: Physics - Total: %d, Dyn: %d, Sleep: %d\n", len(bodies), dynamicCount, sleepCount)
+		count := 0
+		for i := range bodies {
+			if !bodies[i].Rb.IsStatic {
+				if count < 4 { // Log first few dynamic bodies
+					fmt.Printf("  Body[%d] Eid:%d Pos:%.2f %.2f %.2f Vel:%.2f\n",
+						i, bodies[i].Eid, bodies[i].Tr.Position.X(), bodies[i].Tr.Position.Y(), bodies[i].Tr.Position.Z(), bodies[i].Rb.Velocity.Len())
+				}
+				count++
+			}
+		}
+	}
+
+	// 3. Solver & Integration with Sub-stepping
+	const subSteps = 4
+	dtSub := dt / float32(subSteps)
+
+	for s := 0; s < subSteps; s++ {
+		// Calculate World State for this sub-step
+		for i := range bodies {
+			b := &bodies[i]
+			if b.Rb.IsStatic {
+				continue
+			}
+
+			// Damping (scaled per sub-step)
+			damp := float32(math.Pow(0.98, float64(1.0/float32(subSteps))))
+			b.Rb.Velocity = b.Rb.Velocity.Mul(damp)
+			b.Rb.AngularVelocity = b.Rb.AngularVelocity.Mul(damp)
+
+			// World CoM and InvInertia (Update per sub-step as body moves)
+			rot := b.Tr.Rotation
+			scale := b.Tr.Scale.X()
+
+			b.WorldCoM = b.Tr.Position.Add(rot.Rotate(b.Rb.CoM.Mul(scale)))
+
+			localInvInertia := b.Rb.InvInertia.Mul(1.0 / (scale * scale))
+			R := QuatToMat3(rot)
+			b.WorldInvInertia = R.Mul3(localInvInertia).Mul3(R.Transpose())
+
+			// Apply Gravity
+			if !b.Rb.Sleeping && b.Rb.GravityScale != 0 {
+				b.Rb.Velocity = b.Rb.Velocity.Add(physics.Gravity.Mul(b.Rb.GravityScale * dtSub))
+			}
+		}
+
+		// Collision Detection
+		var contacts []Contact
+		contacts = append(contacts, FindWorldContacts(world, bodies, physics.VoxelSize)...)
+		contacts = append(contacts, FindBodyContacts(bodies)...)
+
+		// Solve Constraints
+		for iter := 0; iter < 4; iter++ {
+			for _, c := range contacts {
+				ResolveContact(c, dtSub)
+			}
+		}
+
+		// Integrate
+		for i := range bodies {
+			b := &bodies[i]
+			if b.Rb.IsStatic || b.Rb.Sleeping {
+				continue
+			}
+
+			// Integrate Position
+			b.Tr.Position = b.Tr.Position.Add(b.Rb.Velocity.Mul(dtSub))
+
+			// Integrate Rotation
+			omega := b.Rb.AngularVelocity
+			if omega.Len() > 0.001 {
+				angle := omega.Len() * dtSub
+				axis := omega.Normalize()
+				rotChange := mgl32.QuatRotate(angle, axis)
+				b.Tr.Rotation = rotChange.Mul(b.Tr.Rotation).Normalize()
+			}
+		}
+	}
+
+	// 4. Sleeping Check (Post-step)
+	for i := range bodies {
+		b := &bodies[i]
+		if b.Rb.IsStatic {
+			continue
+		}
+		if b.Rb.Velocity.Len() < physics.SleepThreshold && b.Rb.AngularVelocity.Len() < physics.SleepThreshold {
+			b.Rb.IdleTime += dt
+			if b.Rb.IdleTime > physics.SleepTime {
+				b.Rb.Sleeping = true
+				b.Rb.Velocity = mgl32.Vec3{}
+				b.Rb.AngularVelocity = mgl32.Vec3{}
+			}
+		} else {
+			b.Rb.IdleTime = 0
+			b.Rb.Sleeping = false
+		}
+	}
+}
+
+func FindWorldContacts(world *WorldComponent, bodies []BodyInfo, vSize float32) []Contact {
+	var contacts []Contact
+	if world == nil {
+		return contacts
+	}
+
 	for i := range bodies {
 		b := &bodies[i]
 		if b.Rb.IsStatic || b.Rb.Sleeping {
 			continue
 		}
 
-		// Apply Gravity
-		if b.Rb.GravityScale != 0 {
-			b.Rb.Velocity = b.Rb.Velocity.Add(physics.Gravity.Mul(b.Rb.GravityScale * dt))
-		}
+		// Check World Collision
+		if b.PhysicsData != nil && len(b.PhysicsData.Corners) > 0 {
+			// Complex Voxel-to-Voxel collision
+			sizeOffset := mgl32.Vec3{float32(b.Model.SizeX), float32(b.Model.SizeY), float32(b.Model.SizeZ)}.Mul(vSize * 0.5)
 
-		// Integrate Position
-		displacement := b.Rb.Velocity.Mul(dt)
+			for _, v := range b.PhysicsData.Corners {
+				localPos := mgl32.Vec3{float32(v.X), float32(v.Y), float32(v.Z)}.Mul(vSize).Sub(sizeOffset)
+				localPos = mgl32.Vec3{localPos.X() * b.Tr.Scale.X(), localPos.Y() * b.Tr.Scale.Y(), localPos.Z() * b.Tr.Scale.Z()}
+				worldPos := b.Tr.Position.Add(b.Tr.Rotation.Rotate(localPos))
 
-		// NaN/Inf check
-		if math.IsNaN(float64(displacement.Len())) || math.IsInf(float64(displacement.Len()), 0) {
-			b.Rb.Velocity = mgl32.Vec3{0, 0, 0}
-			continue
-		}
+				imX, imY, imZ := int(math.Floor(float64(worldPos.X()/vSize))), int(math.Floor(float64(worldPos.Y()/vSize))), int(math.Floor(float64(worldPos.Z()/vSize)))
+				if hit, _ := world.MainXBM.GetVoxel(imX, imY, imZ); hit {
+					contacts = append(contacts, generateWorldContact(world, b, worldPos, imX, imY, imZ, vSize, 0.1))
+				}
+			}
+		} else {
+			// Simple AABB-to-Voxel collision
+			min := b.Tr.Position.Sub(b.ScaledExtents)
+			max := b.Tr.Position.Add(b.ScaledExtents)
 
-		// Resolve collisions axis by axis for stability
-		startPos := b.Tr.Position
+			minX, minY, minZ := int(math.Floor(float64(min.X()/vSize))), int(math.Floor(float64(min.Y()/vSize))), int(math.Floor(float64(min.Z()/vSize)))
+			maxX, maxY, maxZ := int(math.Floor(float64(max.X()/vSize))), int(math.Floor(float64(max.Y()/vSize))), int(math.Floor(float64(max.Z()/vSize)))
 
-		friction := b.Col.Friction
-		restitution := b.Col.Restitution
+			for gx := minX; gx <= maxX; gx++ {
+				for gy := minY; gy <= maxY; gy++ {
+					for gz := minZ; gz <= maxZ; gz++ {
+						if hit, _ := world.MainXBM.GetVoxel(gx, gy, gz); hit {
+							// Determine a contact point (closest point on world voxel to entity center?)
+							wvMin := mgl32.Vec3{float32(gx) * vSize, float32(gy) * vSize, float32(gz) * vSize}
+							wvMax := wvMin.Add(mgl32.Vec3{vSize, vSize, vSize})
 
-		// Y Axis
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 1, physics.VoxelSize, friction, restitution)
+							cp := mgl32.Vec3{
+								clamp(b.Tr.Position.X(), wvMin.X(), wvMax.X()),
+								clamp(b.Tr.Position.Y(), wvMin.Y(), wvMax.Y()),
+								clamp(b.Tr.Position.Z(), wvMin.Z(), wvMax.Z()),
+							}
 
-		// X & Z
-		displacement = b.Rb.Velocity.Mul(dt)
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 0, physics.VoxelSize, friction, restitution)
-		displacement = b.Rb.Velocity.Mul(dt)
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 2, physics.VoxelSize, friction, restitution)
+							// Penetration depth check
+							// Use distance from voxel center to object AABB face
+							distY := math.Abs(float64(b.Tr.Position.Y() - cp.Y()))
+							depth := b.ScaledExtents.Y() - float32(distY) + vSize*0.5
+							if depth < 0 {
+								continue
+							}
+							if depth > vSize {
+								depth = vSize
+							}
 
-		// 4. Wake neighbors if we moved
-		moveDist := b.Tr.Position.Sub(startPos).Len()
-		if moveDist > 0.001 {
-			for j := range bodies {
-				other := &bodies[j]
-				if other.Rb.Sleeping && other.Eid != b.Eid {
-					// Check if 'other' is touching 'b' (with some margin)
-					margin := float32(0.05)
-
-					// AABB collision with margin
-					if math.Abs(float64(other.Tr.Position.X()-b.Tr.Position.X())) < float64(other.ScaledExtents.X()+b.ScaledExtents.X()+margin) &&
-						math.Abs(float64(other.Tr.Position.Y()-b.Tr.Position.Y())) < float64(other.ScaledExtents.Y()+b.ScaledExtents.Y()+margin) &&
-						math.Abs(float64(other.Tr.Position.Z()-b.Tr.Position.Z())) < float64(other.ScaledExtents.Z()+b.ScaledExtents.Z()+margin) {
-
-						other.Rb.Wake()
+							contacts = append(contacts, generateWorldContact(world, b, cp, gx, gy, gz, vSize, depth))
+						}
 					}
 				}
 			}
 		}
 
-		// 5. Sleeping Logic
-		velLen := b.Rb.Velocity.Len()
-		if velLen < physics.SleepThreshold {
-			b.Rb.IdleTime += dt
-			if b.Rb.IdleTime > physics.SleepTime {
-				b.Rb.Sleeping = true
-				b.Rb.Velocity = mgl32.Vec3{0, 0, 0}
-			}
-		} else {
-			b.Rb.IdleTime = 0
+		if len(contacts) > 100 {
+			break
 		}
+	}
+	return contacts
+}
+
+func generateWorldContact(world *WorldComponent, b *BodyInfo, p mgl32.Vec3, gx, gy, gz int, vSize float32, depth float32) Contact {
+	normal := mgl32.Vec3{0, 1, 0} // Default up
+	var accumNormal mgl32.Vec3
+	cnt := 0
+	neighbors := [][3]int{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}
+	for _, n := range neighbors {
+		if h, _ := world.MainXBM.GetVoxel(gx+n[0], gy+n[1], gz+n[2]); !h {
+			accumNormal = accumNormal.Add(mgl32.Vec3{float32(n[0]), float32(n[1]), float32(n[2])})
+			cnt++
+		}
+	}
+	if cnt > 0 && accumNormal.Len() > 0.001 {
+		normal = accumNormal.Normalize()
+	} else if b.Rb.Velocity.Len() > 0.001 {
+		normal = b.Rb.Velocity.Normalize().Mul(-1)
+	}
+
+	return Contact{
+		BodyA:  b,
+		BodyB:  nil,
+		Point:  p,
+		Normal: normal,
+		Depth:  depth,
+	}
+}
+
+func clamp(v, min, max float32) float32 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+func FindBodyContacts(bodies []BodyInfo) []Contact {
+	var contacts []Contact
+	for i := 0; i < len(bodies); i++ {
+		for j := i + 1; j < len(bodies); j++ {
+			bA := &bodies[i]
+			bB := &bodies[j]
+
+			if bA.Rb.IsStatic && bB.Rb.IsStatic {
+				continue
+			}
+			if bA.Rb.Sleeping && bB.Rb.Sleeping {
+				continue
+			}
+
+			// AABB Check
+			posA := bA.Tr.Position
+			posB := bB.Tr.Position
+			extA := bA.ScaledExtents
+			extB := bB.ScaledExtents
+
+			diff := posA.Sub(posB)
+			overlapX := float64(extA.X()+extB.X()) - math.Abs(float64(diff.X()))
+			overlapY := float64(extA.Y()+extB.Y()) - math.Abs(float64(diff.Y()))
+			overlapZ := float64(extA.Z()+extB.Z()) - math.Abs(float64(diff.Z()))
+
+			if overlapX > 0 && overlapY > 0 && overlapZ > 0 {
+				// Collision! Find normal (axis of least penetration)
+				normal := mgl32.Vec3{0, 1, 0}
+				depth := float32(overlapY)
+
+				if overlapX < overlapY && overlapX < overlapZ {
+					depth = float32(overlapX)
+					if diff.X() > 0 {
+						normal = mgl32.Vec3{1, 0, 0}
+					} else {
+						normal = mgl32.Vec3{-1, 0, 0}
+					}
+				} else if overlapZ < overlapX && overlapZ < overlapY {
+					depth = float32(overlapZ)
+					if diff.Z() > 0 {
+						normal = mgl32.Vec3{0, 0, 1}
+					} else {
+						normal = mgl32.Vec3{0, 0, -1}
+					}
+				} else {
+					if diff.Y() > 0 {
+						normal = mgl32.Vec3{0, 1, 0}
+					} else {
+						normal = mgl32.Vec3{0, -1, 0}
+					}
+				}
+
+				// Point: Find closer point on the overlap surface
+				point := posA.Add(posB).Mul(0.5)
+				// Offset point towards the surface along the normal
+				point = point.Add(normal.Mul(depth * 0.5))
+
+				contacts = append(contacts, Contact{
+					BodyA:  bA,
+					BodyB:  bB,
+					Point:  point,
+					Normal: normal,
+					Depth:  depth,
+				})
+			}
+		}
+	}
+	return contacts
+}
+
+func ResolveContact(c Contact, dt float32) {
+	bA := c.BodyA
+	bB := c.BodyB // Can be nil
+
+	restitution := float32(0.2)
+	friction := float32(0.5)
+
+	if bA.Col != nil {
+		restitution = bA.Col.Restitution
+		friction = bA.Col.Friction
+	}
+
+	nA := c.Normal
+
+	// R vectors
+	rA := c.Point.Sub(bA.WorldCoM) // Vector from CoM to contact
+	var rB mgl32.Vec3
+	if bB != nil {
+		rB = c.Point.Sub(bB.WorldCoM)
+	}
+
+	// Velocities at contact point
+	// v = v_cm + w x r
+	vA := bA.Rb.Velocity.Add(bA.Rb.AngularVelocity.Cross(rA))
+	var vB mgl32.Vec3
+	if bB != nil {
+		vB = bB.Rb.Velocity.Add(bB.Rb.AngularVelocity.Cross(rB))
+	}
+
+	// Relative velocity
+	vRel := vA.Sub(vB)
+
+	// Check if separating
+	velAlongNormal := vRel.Dot(nA)
+	if velAlongNormal > 0 {
+		return
+	}
+
+	// Compute Impulse Scalar j
+	// j = -(1+e) * vRel.n / (invM_A + invM_B + (I_A^-1 (rA x n) x rA + ...).n)
+
+	invMassA := float32(0.0)
+	if !bA.Rb.IsStatic {
+		invMassA = 1.0 / bA.Rb.Mass
+	}
+	invMassB := float32(0.0)
+	if bB != nil && !bB.Rb.IsStatic {
+		invMassB = 1.0 / bB.Rb.Mass
+	}
+
+	// Angular part A
+	var angA float32 = 0
+	if !bA.Rb.IsStatic {
+		// (I^-1 * (r x n)) x r
+		raxn := rA.Cross(nA)
+		ia_raxn := bA.WorldInvInertia.Mul3x1(raxn)
+		term := ia_raxn.Cross(rA)
+		angA = term.Dot(nA)
+	}
+
+	// Angular part B
+	var angB float32 = 0
+	if bB != nil && !bB.Rb.IsStatic {
+		rbxnB := rB.Cross(nA)
+		ib_rbxn := bB.WorldInvInertia.Mul3x1(rbxnB)
+		term := ib_rbxn.Cross(rB)
+		angB = term.Dot(nA)
+	}
+
+	denominator := invMassA + invMassB + angA + angB
+	if denominator == 0 {
+		return
+	}
+
+	j := -(1.0 + restitution) * velAlongNormal / denominator
+
+	// Baumgarte Stabilization
+	beta := float32(0.02) // Further reduced to prevent high-frequency jitter in sub-stepping
+	slop := float32(0.01)
+	bias := (beta / dt) * float32(math.Max(0, float64(c.Depth-slop)))
+	j += bias / denominator
+
+	// Apply Impulse
+	impulse := nA.Mul(j)
+
+	if !bA.Rb.IsStatic {
+		bA.Rb.Velocity = bA.Rb.Velocity.Add(impulse.Mul(invMassA))
+		// w += I^-1 (r x P)
+		rxp := rA.Cross(impulse)
+		bA.Rb.AngularVelocity = bA.Rb.AngularVelocity.Add(bA.WorldInvInertia.Mul3x1(rxp))
+		bA.Rb.Wake()
+	}
+
+	if bB != nil && !bB.Rb.IsStatic {
+		impulseB := impulse.Mul(-1)
+		bB.Rb.Velocity = bB.Rb.Velocity.Add(impulseB.Mul(invMassB))
+		rxp := rB.Cross(impulseB)
+		bB.Rb.AngularVelocity = bB.Rb.AngularVelocity.Add(bB.WorldInvInertia.Mul3x1(rxp))
+		bB.Rb.Wake()
+	}
+
+	// Friction (Tangential Impulse)
+	// Tangent direction
+	tangent := vRel.Sub(nA.Mul(velAlongNormal))
+	if tangent.Len() > 0.001 {
+		tangent = tangent.Normalize()
+
+		// Solve for jt
+		// Same denominator except different directions
+		// For approximation, re-use denominator? No, angular part changes.
+
+		// Ang A Tangent
+		var angAT float32 = 0
+		if !bA.Rb.IsStatic {
+			raxt := rA.Cross(tangent)
+			ia_raxt := bA.WorldInvInertia.Mul3x1(raxt)
+			angAT = ia_raxt.Cross(rA).Dot(tangent)
+		}
+		var angBT float32 = 0
+		if bB != nil && !bB.Rb.IsStatic {
+			rbxt := rB.Cross(tangent)
+			ib_rbxt := bB.WorldInvInertia.Mul3x1(rbxt)
+			angBT = ib_rbxt.Cross(rB).Dot(tangent)
+		}
+
+		denomT := invMassA + invMassB + angAT + angBT
+		if denomT > 0 {
+			jt := -vRel.Dot(tangent) / denomT
+
+			// Coulomb limit
+			if math.Abs(float64(jt)) > float64(j*friction) {
+				jt = j * friction * float32(math.Copysign(1, float64(jt)))
+			}
+
+			impulseT := tangent.Mul(jt)
+
+			if !bA.Rb.IsStatic {
+				bA.Rb.Velocity = bA.Rb.Velocity.Add(impulseT.Mul(invMassA))
+				rxp := rA.Cross(impulseT)
+				bA.Rb.AngularVelocity = bA.Rb.AngularVelocity.Add(bA.WorldInvInertia.Mul3x1(rxp))
+			}
+			if bB != nil && !bB.Rb.IsStatic {
+				impulseTB := impulseT.Mul(-1)
+				bB.Rb.Velocity = bB.Rb.Velocity.Add(impulseTB.Mul(invMassB))
+				rxp := rB.Cross(impulseTB)
+				bB.Rb.AngularVelocity = bB.Rb.AngularVelocity.Add(bB.WorldInvInertia.Mul3x1(rxp))
+			}
+		}
+	}
+}
+
+func QuatToMat3(q mgl32.Quat) mgl32.Mat3 {
+	m4 := q.Mat4()
+	return mgl32.Mat3{
+		m4[0], m4[1], m4[2],
+		m4[4], m4[5], m4[6],
+		m4[8], m4[9], m4[10],
 	}
 }
 
@@ -285,7 +795,6 @@ func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyI
 		maxX, maxY, maxZ := int(math.Floor(float64(max.X()/vSize))), int(math.Floor(float64(max.Y()/vSize))), int(math.Floor(float64(max.Z()/vSize)))
 
 		// Iterate over all potential world voxels intersecting the AABB
-		// Iterate over all potential world voxels intersecting the AABB
 		for gx := minX; gx <= maxX; gx++ {
 			for gy := minY; gy <= maxY; gy++ {
 				for gz := minZ; gz <= maxZ; gz++ {
@@ -294,7 +803,7 @@ func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyI
 						// World voxel exists. Check collision with Entity.
 
 						// If entity has precise model, check if the world voxel VOLUMETRICALLY overlaps any solid model voxel.
-						if self != nil && self.Model != nil {
+						if self != nil && self.Tr != nil && self.Model != nil {
 							// Determine World Voxel AABB corners
 							wvMin := mgl32.Vec3{float32(gx) * vSize, float32(gy) * vSize, float32(gz) * vSize}
 							wvMax := wvMin.Add(mgl32.Vec3{vSize, vSize, vSize})
@@ -355,13 +864,9 @@ func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyI
 							}
 
 							// Check if any Model Voxel overlaps this Local AABB.
-							// Optimization: We check if the Model Voxel grid coordinates fall within [floor(lMin), floor(lMax)].
-							// Loose check: If a model voxel connects to this AABB.
 							hitModel := false
 
-							// Use acceleration datastructure: prioritize Corners and Edges
 							if self.PhysicsData != nil {
-								// Check Corners first (highest priority)
 								for _, v := range self.PhysicsData.Corners {
 									ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
 									if lMax.X() > ix && lMin.X() < ix+1 &&
@@ -371,9 +876,7 @@ func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyI
 										break
 									}
 								}
-
 								if !hitModel {
-									// Check Edges next
 									for _, v := range self.PhysicsData.Edges {
 										ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
 										if lMax.X() > ix && lMin.X() < ix+1 &&
@@ -384,11 +887,7 @@ func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyI
 										}
 									}
 								}
-
-								// Optionally check Faces if stability is an issue, but Teardown suggests Corners and Edges are enough for most constraints.
-								// We'll skip Inside and Faces for now to optimize as requested.
 							} else if self.Model != nil {
-								// Fallback: iterate all voxels if PhysicsData is missing but Model exists
 								for _, v := range self.Model.Voxels {
 									ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
 									if lMax.X() > ix && lMin.X() < ix+1 &&
@@ -403,7 +902,6 @@ func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyI
 							if !hitModel {
 								continue // Miss
 							}
-							// Hit!
 						}
 						return true
 					}

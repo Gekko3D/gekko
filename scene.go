@@ -42,12 +42,13 @@ type PBRDef struct {
 }
 
 type PhysicsDef struct {
-	Mass         float32
-	GravityScale float32
-	Friction     float32
-	Restitution  float32
-	IsStatic     bool
-	HalfExtents  mgl32.Vec3
+	Mass          float32
+	GravityScale  float32
+	Friction      float32
+	Restitution   float32
+	IsStatic      bool
+	CollisionOnly bool
+	HalfExtents   mgl32.Vec3
 }
 
 // LightDef defines a light instantiation.
@@ -152,11 +153,28 @@ func spawnVoxelObject(cmd *Commands, assets *AssetServer, def VoxelObjectDef) {
 			palette = assets.CreateVoxelPalette(voxFile.Palette, voxFile.VoxMaterials)
 		} else {
 			combineFileAsset := assets.CreateVoxelFile(voxFile)
-			assets.SpawnHierarchicalVoxelModel(cmd, combineFileAsset, TransformComponent{
+			rootEid := assets.SpawnHierarchicalVoxelModel(cmd, combineFileAsset, TransformComponent{
 				Position: def.Position,
 				Rotation: def.Rotation,
 				Scale:    def.Scale,
 			}, def.ModelScale)
+
+			if def.HasPhysics {
+				var physicsComps []any
+				if !def.Physics.CollisionOnly {
+					physicsComps = append(physicsComps, &RigidBodyComponent{
+						Mass:         def.Physics.Mass,
+						GravityScale: def.Physics.GravityScale,
+						IsStatic:     def.Physics.IsStatic,
+					})
+				}
+				physicsComps = append(physicsComps, &ColliderComponent{
+					AABBHalfExtents: def.Physics.HalfExtents,
+					Friction:        def.Physics.Friction,
+					Restitution:     def.Physics.Restitution,
+				})
+				cmd.AddComponents(rootEid, physicsComps...)
+			}
 			return
 		}
 	}
@@ -175,11 +193,13 @@ func spawnVoxelObject(cmd *Commands, assets *AssetServer, def VoxelObjectDef) {
 	}
 
 	if def.HasPhysics {
-		comps = append(comps, &RigidBodyComponent{
-			Mass:         def.Physics.Mass,
-			GravityScale: def.Physics.GravityScale,
-			IsStatic:     def.Physics.IsStatic,
-		})
+		if !def.Physics.CollisionOnly {
+			comps = append(comps, &RigidBodyComponent{
+				Mass:         def.Physics.Mass,
+				GravityScale: def.Physics.GravityScale,
+				IsStatic:     def.Physics.IsStatic,
+			})
+		}
 		comps = append(comps, &ColliderComponent{
 			AABBHalfExtents: def.Physics.HalfExtents,
 			Friction:        def.Physics.Friction,
