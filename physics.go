@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -284,13 +283,12 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 				sleepCount++
 			}
 		}
-		fmt.Printf("DEBUG: Physics - Total: %d, Dyn: %d, Sleep: %d\n", len(bodies), dynamicCount, sleepCount)
+		cmd.app.Logger().Debugf("Physics - Total: %d, Dyn: %d, Sleep: %d", len(bodies), dynamicCount, sleepCount)
 		count := 0
 		for i := range bodies {
 			if !bodies[i].Rb.IsStatic {
 				if count < 4 { // Log first few dynamic bodies
-					fmt.Printf("  Body[%d] Eid:%d Pos:%.2f %.2f %.2f Vel:%.2f\n",
-						i, bodies[i].Eid, bodies[i].Tr.Position.X(), bodies[i].Tr.Position.Y(), bodies[i].Tr.Position.Z(), bodies[i].Rb.Velocity.Len())
+					cmd.app.Logger().Debugf("  Body[%d] Eid:%d Pos:%.2f %.2f %.2f Vel:%.2f", i, bodies[i].Eid, bodies[i].Tr.Position.X(), bodies[i].Tr.Position.Y(), bodies[i].Tr.Position.Z(), bodies[i].Rb.Velocity.Len())
 				}
 				count++
 			}

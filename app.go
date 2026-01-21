@@ -48,12 +48,12 @@ func (app *App) Run() {
 	app.build()
 
 	if app.stateful {
-		fmt.Println("Running in stateful mode...")
+		app.Logger().Infof("Running in stateful mode...")
 
 		app.state = app.initialState
 		app.callSystems(app.state, enter)
 	} else {
-		fmt.Println("Running in stateless mode...")
+		app.Logger().Infof("Running in stateless mode...")
 	}
 
 	for {
@@ -112,11 +112,17 @@ func (app *App) executeChangeState(newState State) {
 func (app *App) addResources(resources ...any) *App {
 	for _, resource := range resources {
 		resourceType := reflect.TypeOf(resource)
-		if _, ok := app.resources[resourceType.Elem()]; ok {
-			panic(fmt.Sprintf("%s is already in resources", resourceType))
+		if resourceType == nil {
+			panic("cannot add nil resource")
 		}
-
-		app.resources[resourceType.Elem()] = resource
+		if resourceType.Kind() != reflect.Ptr {
+			panic(fmt.Sprintf("resources must be pointers; got %s", resourceType))
+		}
+		elem := resourceType.Elem()
+		if _, ok := app.resources[elem]; ok {
+			panic(fmt.Sprintf("%s is already in resources", elem))
+		}
+		app.resources[elem] = resource
 	}
 	return app
 }
@@ -163,7 +169,7 @@ func (app *App) callSystemInternal(system systemFn) {
 				fmt.Sprint(systemType),
 				fmt.Sprint(argType),
 			)
-			println(msg)
+			app.Logger().Errorf("%s", msg)
 			panic(msg)
 		}
 	}
@@ -177,7 +183,7 @@ func (app *App) FlushCommands() {
 
 	// 1. Process Removals first (so we don't add to dead entities)
 	for _, eid := range app.pendingRemovals {
-		fmt.Printf("FLUSH: Removing entity %v\n", eid)
+		app.Logger().Debugf("FLUSH: Removing entity %v", eid)
 		app.ecs.removeEntity(eid)
 	}
 	app.pendingRemovals = app.pendingRemovals[:0]

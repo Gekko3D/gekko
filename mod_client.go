@@ -3,6 +3,7 @@ package gekko
 import (
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/go-gl/mathgl/mgl32"
+	"reflect"
 )
 
 type Float2 = mgl32.Vec2
@@ -154,7 +155,14 @@ type renderState struct {
 }
 
 func (mod ClientModule) Install(app *App, cmd *Commands) {
-	windowState := createWindowState(mod.WindowWidth, mod.WindowHeight, mod.WindowTitle)
+	ensureSingleRenderer(app, "wgpu")
+	var windowState *WindowState
+	t := reflect.TypeOf((*WindowState)(nil)).Elem()
+	res, ok := app.resources[t]
+	if !ok {
+		panic("Renderer 'wgpu' requires a WindowState. Install PlatformWindowModule first, e.g., app.UseModules(NewPlatformWindow(1280, 720, \"Gekko\"))")
+	}
+	windowState = res.(*WindowState)
 	gpuState := createGpuState(windowState)
 	rState := createRenderState()
 
@@ -195,7 +203,6 @@ func (mod ClientModule) Install(app *App, cmd *Commands) {
 	)
 
 	cmd.AddResources(
-		windowState,
 		gpuState,
 		rState)
 }
