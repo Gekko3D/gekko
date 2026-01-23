@@ -741,7 +741,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 				xbm := volume.NewXBrickMap()
 				for _, v := range gekkoModel.VoxModel.Voxels {
-					xbm.SetVoxel(int(v.X), int(v.Y), int(v.Z), v.ColorIndex)
+					xbm.SetVoxel(int(v.X), int(v.Z), int(v.Y), v.ColorIndex)
 				}
 
 				modelTemplate = core.NewVoxelObject()

@@ -55,7 +55,7 @@ type PhysicsWorld struct {
 
 func NewPhysicsWorld() *PhysicsWorld {
 	return &PhysicsWorld{
-		Gravity:        mgl32.Vec3{0, 0, -9.81},
+		Gravity:        mgl32.Vec3{0, -9.81, 0},
 		VoxelSize:      0.1,
 		SleepThreshold: 0.05,
 		SleepTime:      1.0,

@@ -479,7 +479,6 @@ struct FSOut {
 
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> FSOut {
-  // Determine opaque limit (ray t from GBuffer depth)
   let dims = textureDimensions(in_depth);
   let ipos = vec2<i32>( clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
                         clamp(i32(frag_pos.y), 0, i32(dims.y) - 1) );
@@ -487,12 +486,12 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   var t_limit = t_opaque;
   if (t_limit >= FAR_T) { t_limit = FAR_T; }
 
-  // Build camera ray for this pixel
   let uv_screen = (vec2<f32>(f32(ipos.x), f32(ipos.y)) + 0.5) / vec2<f32>(f32(dims.x), f32(dims.y));
   let ray = get_ray_from_uv(uv_screen);
 
-  // Traverse BVH to find nearest transparent hit before t_limit
-  var hit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0, 0.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u);
+  var accum_rgb = vec3<f32>(0.0);
+  var accum_a = 0.0;
+  var accum_w = 0.0;
 
   var stack: array<i32, 64>;
   var sp = 0;
@@ -508,15 +507,182 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
 
     let node = nodes[idx];
     let t_vals = intersect_aabb(ray, node.aabb_min.xyz, node.aabb_max.xyz);
-    if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < min(hit.t, t_limit)) {
+    if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < t_limit) {
       if (node.leaf_count > 0) {
         for (var li = 0; li < node.leaf_count; li = li + 1) {
           let inst = instances[u32(node.leaf_first + li)];
           let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
-          if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < min(hit.t, t_limit)) {
-            let local = first_transparent_in_instance(ray, inst, t_inst.x, t_inst.y, t_limit);
-            if (local.hit && local.t < hit.t) {
-              hit = local;
+          if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < t_limit) {
+            let params = object_params[inst.object_id];
+            let ray_os = transform_ray(ray, inst.world_to_object);
+            let t_obj = intersect_aabb(ray_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
+            var t_curr = max(max(t_obj.x, t_inst.x), 0.0) + EPS;
+            let t_max_obj = min(min(t_obj.y, t_inst.y), t_limit);
+            if (t_curr >= t_max_obj) { continue; }
+
+            let dir = ray_os.dir;
+            let inv_dir = ray_os.inv_dir;
+            let step = vec3<i32>(sign(dir));
+            let t_delta_sector = abs(SECTOR_SIZE * inv_dir);
+            let sector_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+            var sector_pos = vec3<i32>(floor(((ray_os.origin + dir * t_curr) - sector_bias) / SECTOR_SIZE));
+            var t_max_sector = (vec3<f32>(sector_pos) * SECTOR_SIZE + select(vec3<f32>(0.0), vec3<f32>(SECTOR_SIZE), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
+
+            let dir_ws = (inst.object_to_world * vec4<f32>(ray_os.dir, 0.0)).xyz;
+            let d_ws_scale = length(dir_ws);
+            let density_sigma: f32 = 0.2;
+            let k: f32 = 4.0;
+
+            var it_sect = 0;
+            while (t_curr < t_max_obj && it_sect < 64) {
+              it_sect += 1;
+              let sector_idx = find_sector_cached(sector_pos.x, sector_pos.y, sector_pos.z, params);
+              let t_sector_exit = min(min(min(t_max_sector.x, t_max_sector.y), t_max_sector.z), t_max_obj);
+
+              if (sector_idx >= 0) {
+                let sector = sectors[sector_idx];
+                let sector_origin = vec3<f32>(sector.origin_vox.xyz);
+
+                var t_brick = t_curr;
+                let brick_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+                var brick_pos = vec3<i32>(floor((((ray_os.origin + dir * t_brick) - sector_origin) - brick_bias) / BRICK_SIZE));
+                brick_pos = clamp(brick_pos, vec3<i32>(0), vec3<i32>(3));
+                var t_max_brick = (sector_origin + vec3<f32>(brick_pos) * BRICK_SIZE + select(vec3<f32>(0.0), vec3<f32>(BRICK_SIZE), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
+                let t_delta_brick = abs(BRICK_SIZE * inv_dir);
+
+                var it_brick = 0;
+                while (t_brick < t_sector_exit && it_brick < 64) {
+                  it_brick += 1;
+                  if (all(brick_pos >= vec3<i32>(0)) && all(brick_pos < vec3<i32>(4))) {
+                    let bvid = vec3<u32>(u32(brick_pos.x), u32(brick_pos.y), u32(brick_pos.z));
+                    let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
+
+                    if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
+                      let packed_idx = sector.brick_table_index + brick_idx_local;
+                      let b_flags = bricks[packed_idx].flags;
+                      let b_atlas = bricks[packed_idx].atlas_offset;
+                      var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
+
+                      if (b_flags == 1u) {
+                        let palette_idx = b_atlas;
+                        let mat_base = params.material_table_base;
+                        let mat_idx = mat_base + palette_idx * 4u;
+                        let base_col = materials[mat_idx].xyz;
+                        let emissive = materials[mat_idx + 1u].xyz;
+                        let pbr = materials[mat_idx + 2u];
+                        let trans = clamp(pbr.w, 0.0, 1.0);
+                        if (trans > 0.001) {
+                          var t_micro = t_brick;
+                          let brick_origin = sector_origin + vec3<f32>(bvid) * BRICK_SIZE;
+                          let voxel_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+                          var voxel_pos = vec3<i32>(floor(((ray_os.origin + dir * t_micro) - brick_origin) - voxel_bias));
+                          voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
+                          var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
+                          let t_delta_1 = abs(1.0 * inv_dir);
+                          var it_micro = 0;
+                          while (t_micro < t_brick_exit && it_micro < 32) {
+                            it_micro += 1;
+                            let t_next = min(t_max_micro.x, min(t_max_micro.y, t_max_micro.z));
+                            let dt = max(0.0, t_next - t_micro);
+                            if (dt > 0.0) {
+                              let dt_ws = dt * d_ws_scale;
+                              let a0 = clamp(1.0 - trans, 0.0, 1.0);
+                              let alpha_step = 1.0 - exp(-density_sigma * a0 * dt_ws);
+                              let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
+                              let color = base_col * uCamera.ambient_color.xyz + emissive;
+                              let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
+                              accum_rgb += color * alpha_step * w;
+                              accum_a += alpha_step;
+                              accum_w += alpha_step * w;
+                            }
+                            if (t_max_micro.x < t_max_micro.y) {
+                              if (t_max_micro.x < t_max_micro.z) { voxel_pos.x += step.x; t_micro = t_max_micro.x; t_max_micro.x += t_delta_1.x; }
+                              else { voxel_pos.z += step.z; t_micro = t_max_micro.z; t_max_micro.z += t_delta_1.z; }
+                            } else {
+                              if (t_max_micro.y < t_max_micro.z) { voxel_pos.y += step.y; t_micro = t_max_micro.y; t_max_micro.y += t_delta_1.y; }
+                              else { voxel_pos.z += step.z; t_micro = t_max_micro.z; t_max_micro.z += t_delta_1.z; }
+                            }
+                            t_micro += EPS;
+                            if (t_micro >= t_limit) { break; }
+                          }
+                        }
+                      } else {
+                        var t_micro = t_brick;
+                        let brick_origin = sector_origin + vec3<f32>(bvid) * BRICK_SIZE;
+                        let voxel_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
+                        var voxel_pos = vec3<i32>(floor(((ray_os.origin + dir * t_micro) - brick_origin) - voxel_bias));
+                        voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
+                        var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
+                        let t_delta_1 = abs(1.0 * inv_dir);
+                        let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
+                        let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
+                        var it_micro = 0;
+                        while (t_micro < t_brick_exit && it_micro < 32) {
+                          it_micro += 1;
+                          let vvid = vec3<u32>(u32(voxel_pos.x), u32(voxel_pos.y), u32(voxel_pos.z));
+                          let mvid = vvid / 2u;
+                          let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
+                          let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx);
+                          if (process) {
+                            let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
+                            let palette_idx = load_u8(params.payload_base + b_atlas + voxel_idx);
+                            if (palette_idx != 0u) {
+                              let mat_base = params.material_table_base;
+                              let mat_idx = mat_base + palette_idx * 4u;
+                              let base_col = materials[mat_idx].xyz;
+                              let emissive = materials[mat_idx + 1u].xyz;
+                              let pbr = materials[mat_idx + 2u];
+                              let trans = clamp(pbr.w, 0.0, 1.0);
+                              if (trans > 0.001) {
+                                let t_next = min(t_max_micro.x, min(t_max_micro.y, t_max_micro.z));
+                                let dt = max(0.0, t_next - t_micro);
+                                if (dt > 0.0) {
+                                  let dt_ws = dt * d_ws_scale;
+                                  let a0 = clamp(1.0 - trans, 0.0, 1.0);
+                                  let alpha_step = 1.0 - exp(-density_sigma * a0 * dt_ws);
+                                  let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
+                                  let color = base_col * uCamera.ambient_color.xyz + emissive;
+                                  let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
+                                  accum_rgb += color * alpha_step * w;
+                                  accum_a += alpha_step;
+                                  accum_w += alpha_step * w;
+                                }
+                              }
+                            }
+                          }
+                          if (t_max_micro.x < t_max_micro.y) {
+                            if (t_max_micro.x < t_max_micro.z) { voxel_pos.x += step.x; t_micro = t_max_micro.x; t_max_micro.x += t_delta_1.x; }
+                            else { voxel_pos.z += step.z; t_micro = t_max_micro.z; t_max_micro.z += t_delta_1.z; }
+                          } else {
+                            if (t_max_micro.y < t_max_micro.z) { voxel_pos.y += step.y; t_micro = t_max_micro.y; t_max_micro.y += t_delta_1.y; }
+                            else { voxel_pos.z += step.z; t_micro = t_max_micro.z; t_max_micro.z += t_delta_1.z; }
+                          }
+                          t_micro += EPS;
+                          if (t_micro >= t_limit) { break; }
+                        }
+                      }
+                    }
+                  }
+
+                  if (t_max_brick.x < t_max_brick.y) {
+                    if (t_max_brick.x < t_max_brick.z) { brick_pos.x += step.x; t_brick = t_max_brick.x; t_max_brick.x += t_delta_brick.x; }
+                    else { brick_pos.z += step.z; t_brick = t_max_brick.z; t_max_brick.z += t_delta_brick.z; }
+                  } else {
+                    if (t_max_brick.y < t_max_brick.z) { brick_pos.y += step.y; t_brick = t_max_brick.y; t_max_brick.y += t_delta_brick.y; }
+                    else { brick_pos.z += step.z; t_brick = t_max_brick.z; t_max_brick.z += t_delta_brick.z; }
+                  }
+
+                  if (t_brick >= t_limit) { break; }
+                }
+              }
+
+              if (t_max_sector.x < t_max_sector.y) {
+                if (t_max_sector.x < t_max_sector.z) { sector_pos.x += step.x; t_curr = t_max_sector.x; t_max_sector.x += t_delta_sector.x; }
+                else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
+              } else {
+                if (t_max_sector.y < t_max_sector.z) { sector_pos.y += step.y; t_curr = t_max_sector.y; t_max_sector.y += t_delta_sector.y; }
+                else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
+              }
             }
           }
         }
@@ -527,81 +693,5 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     }
   }
 
-  if (hit.hit) {
-    // Shade transparent surface: simple direct lighting (no shadows) + emissive
-    let mat_base = hit.material_base;
-    let palette_idx = hit.palette_idx;
-    let mat_idx = mat_base + palette_idx * 4u;
-    let base_col = materials[mat_idx].xyz;
-    let emissive = materials[mat_idx + 1u].xyz;
-    let pbr = materials[mat_idx + 2u];
-    let roughness = clamp(pbr.x, 0.0, 1.0);
-    let metalness = clamp(pbr.y, 0.0, 1.0);
-    let alpha = clamp(pbr.w, 0.0, 1.0);
-
-    var color = base_col * uCamera.ambient_color.xyz + emissive;
-    let V = normalize(uCamera.cam_pos.xyz - hit.pos_ws);
-    let num_lights = uCamera.num_lights;
-    for (var i = 0u; i < num_lights; i = i + 1u) {
-      let light = lights[i];
-      let light_type = u32(light.params.z);
-      var L = vec3<f32>(0.0);
-      var attenuation = 1.0;
-      if (light_type == 1u) { // Directional
-        L = -normalize(light.direction.xyz);
-        attenuation = light.color.w;
-      } else {
-        let toL = light.position.xyz - hit.pos_ws;
-        let dist = length(toL);
-        L = toL / max(dist, 1e-4);
-        let range = light.params.x;
-        if (dist > range) {
-          attenuation = 0.0;
-        } else {
-          let inv_sq = 1.0 / (dist * dist + 1.0);
-          attenuation = inv_sq * light.color.w * 50.0;
-          if (light_type == 2u) { // Spot
-            let spot_dir = normalize(light.direction.xyz);
-            let cos_cur = dot(-L, spot_dir);
-            let cos_cone = light.params.y;
-            if (cos_cur < cos_cone) {
-              attenuation = 0.0;
-            } else {
-              let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
-              attenuation *= spot_att;
-            }
-          }
-        }
-      }
-
-      if (attenuation > 0.0) {
-        let N = normalize(hit.normal);
-        let NdotL = max(dot(N, L), 0.0);
-        let diffuse_col = base_col * (1.0 - metalness);
-        let diffuse = diffuse_col * NdotL;
-
-        let H = normalize(L + V);
-        let NdotH = max(dot(N, H), 0.0);
-        let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
-        let F0 = mix(vec3<f32>(0.04), base_col, metalness);
-        let specular = pow(NdotH, spec_power) * F0;
-
-        color += (diffuse + specular) * light.color.xyz * attenuation;
-      }
-    }
-
-    // Depth-weighted WBOIT contribution with thickness-based Beer–Lambert alpha (amplified)
-    let density_sigma: f32 = 0.2; // world-space absorption per unit length (tune 0.1..0.5)
-    let k: f32 = 4.0;             // lower front-weight exponent to accumulate more weight
-    let z = clamp(hit.t / max(t_limit, 1e-4), 0.0, 1.0);
-    let eps_a: f32 = 1e-4;
-    let alpha_eff = 1.0 - pow(max(1.0 - alpha, eps_a), clamp(hit.thickness * density_sigma, 0.0, 256.0));
-    let w = max(1e-3, alpha_eff) * pow(1.0 - z, k);
-    let contrib = color * alpha_eff * w;
-    let wsum = alpha_eff * w;
-
-    // Write unweighted alpha to accum.a (for revealage), keep weight = alpha_eff * w
-    return FSOut(vec4<f32>(contrib, alpha_eff), wsum);
-  }
-  return FSOut(vec4<f32>(0.0), 0.0);
+  return FSOut(vec4<f32>(accum_rgb, accum_a), accum_w);
 }
