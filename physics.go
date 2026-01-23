@@ -83,7 +83,7 @@ type BodyInfo struct {
 	Model         *VoxModel
 }
 
-func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelRtState, assets *AssetServer) {
+func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelRtState, assets *AssetServer, grid *SpatialHashGrid) {
 	dt := float32(time.Dt)
 	if dt <= 0 || dt > 1.0 { // Safety cap for dt
 		return
@@ -94,8 +94,15 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 		physics.VoxelSize = vrs.RtApp.Scene.TargetVoxelSize
 	}
 
-	// 2. Collect all active colliders for inter-entity collision
-	var bodies []BodyInfo
+	// 2. Collect all active colliders for inter-entity collision details
+	// We still need a map or lookup to get Component Data from EntityID returned by Grid
+	// The Grid gives us IDs. We need to access RB/Col/Tr for those IDs.
+	// ECS currently doesn't support Random Access by ID efficiently without a map or query.
+	// But `bodies` slice built here is basically that map (indexable by loop, but lookup by ID is O(N)).
+	// Let's build a map for quick lookup:  EntityId -> *BodyInfo
+	bodyMap := make(map[EntityId]*BodyInfo)
+	var bodies []BodyInfo // Keep slice for iteration over active bodies
+
 	MakeQuery4[TransformComponent, RigidBodyComponent, ColliderComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, vmc *VoxelModelComponent) bool {
 		scaledHalfExtents := mgl32.Vec3{
 			col.AABBHalfExtents.X() * tr.Scale.X(),
@@ -120,9 +127,28 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 			}
 		}
 
-		bodies = append(bodies, BodyInfo{eid, tr, rb, col, scaledHalfExtents, model})
+		info := BodyInfo{eid, tr, rb, col, scaledHalfExtents, model}
+		bodies = append(bodies, info)
+		// We insert pointer to the slice element? No, slice reallocates.
+		// We can't store pointer to slice element if we append.
+		// So we loop AGAIN to build map? Or just store by value in map?
+		// Map of pointers is better if we want to mutate?
+		// Actually, we are mutating `tr.Position` and `rb.Velocity`.
+		// Identify: BodyInfo contains POINTERS to components. So copying BodyInfo is fine.
+		// The components themselves are pointers in ECS Query (usually).
+		// Let's verify ECS Map signature: `func(eid, *T, *U...)`. Yes, pointers to component data.
+		// So `info` contains pointers `tr`, `rb`, `col`.
+		// Safe to copy `info` struct.
+		// bodyMap[eid] = &info // Warning: Taking address of loop variable or local...
+		// We need to append to slice first, then take address from slice?
+		// Actually, we can just use the map primarily? Or just iterate the slice.
 		return true
 	}, VoxelModelComponent{})
+
+	// Rebuild map from slice to be safe
+	for i := range bodies {
+		bodyMap[bodies[i].Eid] = &bodies[i]
+	}
 
 	// 3. Update Rigid Bodies
 	for i := range bodies {
@@ -151,20 +177,60 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 		friction := b.Col.Friction
 		restitution := b.Col.Restitution
 
+		// Broadphase Query using SpatialGrid
+		// We need potential colliders for THIS entity.
+		// Construct AABB for the query (include displacement to catch fast objects involved?)
+		// For now, query AABB at current position + expanded by displacement/velocity?
+		// Or just Current AABB?
+		// Simple approach: Current AABB extended by displacement.
+		// Let's just use the larger of current vs current+disp?
+		// Safe bet: Query around current pos with slightly larger radius/aabb.
+		// Let's use `SpatialHashGrid`'s Inserted AABBs (which are frame-start AABBs).
+		// We use `b.Col.AABBHalfExtents` (scaled).
+
+		queryAABB := AABBComponent{
+			Min: b.Tr.Position.Sub(b.ScaledExtents).Sub(mgl32.Vec3{0.5, 0.5, 0.5}), // Margin
+			Max: b.Tr.Position.Add(b.ScaledExtents).Add(mgl32.Vec3{0.5, 0.5, 0.5}),
+		}
+		// Only if we have a Grid
+		var candidateIds []EntityId
+		if grid != nil {
+			candidateIds = grid.QueryAABB(queryAABB)
+		} else {
+			// Fallback if no grid (shouldn't happen if module installed)
+			// But strictly following signature...
+		}
+
+		// Filter candidates to BodyInfo list
+		var candidates []*BodyInfo
+		if grid != nil {
+			for _, cid := range candidateIds {
+				if other, ok := bodyMap[cid]; ok {
+					candidates = append(candidates, other)
+				}
+			}
+		} else {
+			// Fallback: All bodies
+			for k := range bodies {
+				candidates = append(candidates, &bodies[k])
+			}
+		}
+
 		// Y Axis
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 1, physics.VoxelSize, friction, restitution)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(candidates, b, b.Tr.Position, b.Rb.Velocity, displacement, 1, physics.VoxelSize, friction, restitution)
 
 		// X & Z
 		displacement = b.Rb.Velocity.Mul(dt)
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 0, physics.VoxelSize, friction, restitution)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(candidates, b, b.Tr.Position, b.Rb.Velocity, displacement, 0, physics.VoxelSize, friction, restitution)
 		displacement = b.Rb.Velocity.Mul(dt)
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 2, physics.VoxelSize, friction, restitution)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(candidates, b, b.Tr.Position, b.Rb.Velocity, displacement, 2, physics.VoxelSize, friction, restitution)
 
 		// 4. Wake neighbors if we moved
 		moveDist := b.Tr.Position.Sub(startPos).Len()
 		if moveDist > 0.001 {
-			for j := range bodies {
-				other := &bodies[j]
+			// We can use the same candidates for waking up?
+			// Yes, neighbors are likely in the same grid cells.
+			for _, other := range candidates {
 				if other.Rb.Sleeping && other.Eid != b.Eid {
 					// Check if 'other' is touching 'b' (with some margin)
 					margin := float32(0.05)
@@ -194,7 +260,7 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 	}
 }
 
-func PhysicsResolveAxis(bodies []BodyInfo, self *BodyInfo, pos, vel, displacement mgl32.Vec3, axis int, vSize, friction, restitution float32) (mgl32.Vec3, mgl32.Vec3) {
+func PhysicsResolveAxis(bodies []*BodyInfo, self *BodyInfo, pos, vel, displacement mgl32.Vec3, axis int, vSize, friction, restitution float32) (mgl32.Vec3, mgl32.Vec3) {
 	newPos := pos
 	dist := displacement[axis]
 	if math.Abs(float64(dist)) < 0.0001 {
@@ -247,7 +313,7 @@ func PhysicsResolveAxis(bodies []BodyInfo, self *BodyInfo, pos, vel, displacemen
 	return newPos, vel
 }
 
-func PhysicsCheckCollision(bodies []BodyInfo, self *BodyInfo, pos mgl32.Vec3, halfExtents mgl32.Vec3, vSize float32) bool {
+func PhysicsCheckCollision(bodies []*BodyInfo, self *BodyInfo, pos mgl32.Vec3, halfExtents mgl32.Vec3, vSize float32) bool {
 	if halfExtents.X() < 0.001 || halfExtents.Y() < 0.001 || halfExtents.Z() < 0.001 {
 		return false
 	}

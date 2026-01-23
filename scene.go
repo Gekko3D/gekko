@@ -185,6 +185,9 @@ func spawnVoxelObject(cmd *Commands, assets *AssetServer, def VoxelObjectDef) {
 			Friction:        def.Physics.Friction,
 			Restitution:     def.Physics.Restitution,
 		})
+		// Initial AABB (will be updated by System, but good to have initial value)
+		// We can just add zero-ed one, the system updates it first thing in PreUpdate
+		comps = append(comps, &AABBComponent{})
 	}
 
 	cmd.AddEntity(comps...)
