@@ -94,13 +94,6 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 		physics.VoxelSize = vrs.RtApp.Scene.TargetVoxelSize
 	}
 
-	// Find world component for collision
-	var world *WorldComponent
-	MakeQuery1[WorldComponent](cmd).Map(func(eid EntityId, w *WorldComponent) bool {
-		world = w
-		return false
-	})
-
 	// 2. Collect all active colliders for inter-entity collision
 	var bodies []BodyInfo
 	MakeQuery4[TransformComponent, RigidBodyComponent, ColliderComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, vmc *VoxelModelComponent) bool {
@@ -159,13 +152,13 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 		restitution := b.Col.Restitution
 
 		// Y Axis
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 1, physics.VoxelSize, friction, restitution)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 1, physics.VoxelSize, friction, restitution)
 
 		// X & Z
 		displacement = b.Rb.Velocity.Mul(dt)
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 0, physics.VoxelSize, friction, restitution)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 0, physics.VoxelSize, friction, restitution)
 		displacement = b.Rb.Velocity.Mul(dt)
-		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(world, bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 2, physics.VoxelSize, friction, restitution)
+		b.Tr.Position, b.Rb.Velocity = PhysicsResolveAxis(bodies, b, b.Tr.Position, b.Rb.Velocity, displacement, 2, physics.VoxelSize, friction, restitution)
 
 		// 4. Wake neighbors if we moved
 		moveDist := b.Tr.Position.Sub(startPos).Len()
@@ -201,7 +194,7 @@ func PhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, vrs *VoxelR
 	}
 }
 
-func PhysicsResolveAxis(world *WorldComponent, bodies []BodyInfo, self *BodyInfo, pos, vel, displacement mgl32.Vec3, axis int, vSize, friction, restitution float32) (mgl32.Vec3, mgl32.Vec3) {
+func PhysicsResolveAxis(bodies []BodyInfo, self *BodyInfo, pos, vel, displacement mgl32.Vec3, axis int, vSize, friction, restitution float32) (mgl32.Vec3, mgl32.Vec3) {
 	newPos := pos
 	dist := displacement[axis]
 	if math.Abs(float64(dist)) < 0.0001 {
@@ -229,7 +222,7 @@ func PhysicsResolveAxis(world *WorldComponent, bodies []BodyInfo, self *BodyInfo
 		testPos := newPos
 		testPos[axis] += move
 
-		if PhysicsCheckCollision(world, bodies, self, testPos, self.ScaledExtents, vSize) {
+		if PhysicsCheckCollision(bodies, self, testPos, self.ScaledExtents, vSize) {
 			// Apply restitution
 			vel[axis] = -vel[axis] * restitution
 			if math.Abs(float64(vel[axis])) < 0.1 {
@@ -254,125 +247,12 @@ func PhysicsResolveAxis(world *WorldComponent, bodies []BodyInfo, self *BodyInfo
 	return newPos, vel
 }
 
-func PhysicsCheckCollision(world *WorldComponent, bodies []BodyInfo, self *BodyInfo, pos mgl32.Vec3, halfExtents mgl32.Vec3, vSize float32) bool {
+func PhysicsCheckCollision(bodies []BodyInfo, self *BodyInfo, pos mgl32.Vec3, halfExtents mgl32.Vec3, vSize float32) bool {
 	if halfExtents.X() < 0.001 || halfExtents.Y() < 0.001 || halfExtents.Z() < 0.001 {
 		return false
 	}
 
-	// 1. World Voxel Collision
-	if world != nil {
-		if vSize <= 0 {
-			vSize = 0.1
-		}
-
-		min := pos.Sub(halfExtents)
-		max := pos.Add(halfExtents)
-
-		// Integer bounds for grid iteration
-		minX, minY, minZ := int(math.Floor(float64(min.X()/vSize))), int(math.Floor(float64(min.Y()/vSize))), int(math.Floor(float64(min.Z()/vSize)))
-		maxX, maxY, maxZ := int(math.Floor(float64(max.X()/vSize))), int(math.Floor(float64(max.Y()/vSize))), int(math.Floor(float64(max.Z()/vSize)))
-
-		// Iterate over all potential world voxels intersecting the AABB
-		// Iterate over all potential world voxels intersecting the AABB
-		for gx := minX; gx <= maxX; gx++ {
-			for gy := minY; gy <= maxY; gy++ {
-				for gz := minZ; gz <= maxZ; gz++ {
-					// Check if there is a voxel at this world position
-					if hit, _ := world.MainXBM.GetVoxel(gx, gy, gz); hit {
-						// World voxel exists. Check collision with Entity.
-
-						// If entity has precise model, check if the world voxel VOLUMETRICALLY overlaps any solid model voxel.
-						if self != nil && self.Model != nil {
-							// Determine World Voxel AABB corners
-							wvMin := mgl32.Vec3{float32(gx) * vSize, float32(gy) * vSize, float32(gz) * vSize}
-							wvMax := wvMin.Add(mgl32.Vec3{vSize, vSize, vSize})
-
-							corners := [8]mgl32.Vec3{
-								{wvMin.X(), wvMin.Y(), wvMin.Z()},
-								{wvMin.X(), wvMin.Y(), wvMax.Z()},
-								{wvMin.X(), wvMax.Y(), wvMin.Z()},
-								{wvMin.X(), wvMax.Y(), wvMax.Z()},
-								{wvMax.X(), wvMin.Y(), wvMin.Z()},
-								{wvMax.X(), wvMin.Y(), wvMax.Z()},
-								{wvMax.X(), wvMax.Y(), wvMin.Z()},
-								{wvMax.X(), wvMax.Y(), wvMax.Z()},
-							}
-
-							// Transform corners to Local Space to find Local AABB of the World Voxel
-							var lMin, lMax mgl32.Vec3
-							first := true
-
-							invRot := self.Tr.Rotation.Conjugate()
-							pos := self.Tr.Position
-
-							const VoxelUnitSize = 0.1
-							sx := self.Tr.Scale.X()
-							if sx < 0.001 {
-								sx = 1
-							}
-							sy := self.Tr.Scale.Y()
-							if sy < 0.001 {
-								sy = 1
-							}
-							sz := self.Tr.Scale.Z()
-							if sz < 0.001 {
-								sz = 1
-							}
-
-							offX := float32(self.Model.SizeX) / 2.0
-							offY := float32(self.Model.SizeY) / 2.0
-							offZ := float32(self.Model.SizeZ) / 2.0
-
-							for _, c := range corners {
-								rel := c.Sub(pos)
-								loc := invRot.Rotate(rel)
-
-								// Convert to "Voxel Index Space" coordinates
-								vx := (loc.X() / (VoxelUnitSize * sx)) + offX
-								vy := (loc.Y() / (VoxelUnitSize * sy)) + offY
-								vz := (loc.Z() / (VoxelUnitSize * sz)) + offZ
-
-								if first {
-									lMin = mgl32.Vec3{vx, vy, vz}
-									lMax = mgl32.Vec3{vx, vy, vz}
-									first = false
-								} else {
-									lMin = mgl32.Vec3{float32(math.Min(float64(lMin.X()), float64(vx))), float32(math.Min(float64(lMin.Y()), float64(vy))), float32(math.Min(float64(lMin.Z()), float64(vz)))}
-									lMax = mgl32.Vec3{float32(math.Max(float64(lMax.X()), float64(vx))), float32(math.Max(float64(lMax.Y()), float64(vy))), float32(math.Max(float64(lMax.Z()), float64(vz)))}
-								}
-							}
-
-							// Check if any Model Voxel overlaps this Local AABB.
-							// Optimization: We check if the Model Voxel grid coordinates fall within [floor(lMin), floor(lMax)].
-							// Loose check: If a model voxel connects to this AABB.
-							hitModel := false
-
-							// Ideally iterate only relevant voxels if we had a grid.
-							// Since we iterate all voxels:
-							for _, v := range self.Model.Voxels {
-								ix, iy, iz := float32(v.X), float32(v.Y), float32(v.Z)
-
-								// Check overlap of Voxel Cube [I, I+1] with Interval [LMin, LMax].
-								// Overlap condition: Max > I && Min < I+1.
-								if lMax.X() > ix && lMin.X() < ix+1 &&
-									lMax.Y() > iy && lMin.Y() < iy+1 &&
-									lMax.Z() > iz && lMin.Z() < iz+1 {
-									hitModel = true
-									break
-								}
-							}
-
-							if !hitModel {
-								continue // Miss
-							}
-							// Hit!
-						}
-						return true
-					}
-				}
-			}
-		}
-	}
+	// 1. World Voxel Collision removed (WorldComponent deleted)
 
 	// 2. Entity-vs-Entity AABB Collision
 	for _, other := range bodies {

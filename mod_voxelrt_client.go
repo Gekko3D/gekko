@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"fmt"
 	"math"
 	"time"
 
@@ -13,26 +12,12 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
-type VoxelSeparationResult struct {
-	Entity    EntityId
-	XBrickMap *volume.XBrickMap
-	Min       mgl32.Vec3
-	Max       mgl32.Vec3
-}
-
 type RaycastHit struct {
 	Hit    bool
 	T      float32
 	Pos    [3]int
 	Normal mgl32.Vec3
 	Entity EntityId
-}
-
-type DebugRay struct {
-	Origin   mgl32.Vec3
-	Dir      mgl32.Vec3
-	Color    [4]float32
-	Duration float32
 }
 
 type RenderMode uint32
@@ -60,13 +45,6 @@ type VoxelRtState struct {
 	instanceMap   map[EntityId]*core.VoxelObject
 	particlePools map[EntityId]*particlePool
 	caVolumeMap   map[EntityId]*core.VoxelObject
-	worldMap      map[EntityId]*core.VoxelObject
-
-	// Debug rays
-	debugRays []DebugRay
-
-	// Splitting queue
-	splitQueue map[EntityId]bool
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -116,13 +94,11 @@ func (s *VoxelRtState) SetDebugMode(enabled bool) {
 	}
 }
 
-func (s *VoxelRtState) getVoxelObject(eid EntityId) *core.VoxelObject {
+func (s *VoxelRtState) GetVoxelObject(eid EntityId) *core.VoxelObject {
 	if obj, ok := s.instanceMap[eid]; ok {
 		return obj
 	}
-	if obj, ok := s.worldMap[eid]; ok {
-		return obj
-	}
+
 	if obj, ok := s.caVolumeMap[eid]; ok {
 		return obj
 	}
@@ -133,7 +109,7 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 	if s == nil {
 		return
 	}
-	obj := s.getVoxelObject(eid)
+	obj := s.GetVoxelObject(eid)
 	if obj == nil || obj.XBrickMap == nil {
 		return
 	}
@@ -153,178 +129,16 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 	volume.Sphere(obj.XBrickMap, localCenter, localRadius, val)
 }
 
-func (s *VoxelRtState) SplitDisconnectedComponents(cmd *Commands, eid EntityId) []VoxelSeparationResult {
-	if s == nil {
-		return nil
-	}
-	obj := s.getVoxelObject(eid)
-	if obj == nil || obj.XBrickMap == nil {
-		return nil
-	}
-
-	var results []VoxelSeparationResult
-	// Check for disconnected components
-	components := obj.XBrickMap.SplitDisconnectedComponents()
-	if len(components) > 1 {
-		// Find largest component
-		largestIdx := 0
-		maxVoxels := 0
-
-		// Debug logging
-		fmt.Printf("Voxel Split: Found %d components. Sizes: ", len(components))
-		for i, comp := range components {
-			fmt.Printf("%d ", comp.VoxelCount)
-			if comp.VoxelCount > maxVoxels {
-				maxVoxels = comp.VoxelCount
-				largestIdx = i
-			}
-		}
-		fmt.Printf("\nKeeping largest (Index %d) in original entity %d\n", largestIdx, eid)
-
-		// Keep largest in original object
-		obj.XBrickMap = components[largestIdx].Map
-		// Need to mark structure as dirty to push to GPU
-		obj.XBrickMap.StructureDirty = true
-		obj.XBrickMap.AABBDirty = true
-		obj.UpdateWorldAABB()
-
-		// SYNC BACK TO ECS: Update the parent's VoxelModelComponent
-		if cmd != nil {
-			allComps := cmd.GetAllComponents(eid)
-			for _, c := range allComps {
-				if vm, ok := c.(VoxelModelComponent); ok {
-					vm.CustomMap = obj.XBrickMap
-					cmd.AddComponents(eid, vm)
-					break
-				}
-			}
-		}
-
-		// Return others as separated parts
-		for i, comp := range components {
-			if i == largestIdx {
-				continue
-			}
-			results = append(results, VoxelSeparationResult{
-				Entity:    eid,
-				XBrickMap: comp.Map,
-				Min:       comp.Min,
-				Max:       comp.Max,
-			})
-		}
-	}
-
-	return results
-}
-
 func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {
 	if s == nil {
 		return true
 	}
-	obj := s.getVoxelObject(eid)
+	obj := s.GetVoxelObject(eid)
 	if obj == nil || obj.XBrickMap == nil {
 		return true
 	}
 	// Check internal counters or compute
 	return obj.XBrickMap.GetVoxelCount() == 0
-}
-
-func (s *VoxelRtState) ApplySeparation(cmd *Commands, res VoxelSeparationResult, prof *Profiler) {
-	if s == nil || s.RtApp == nil || cmd == nil {
-		return
-	}
-
-	// Need parent components
-	var parentTr TransformComponent
-	var parentVm VoxelModelComponent
-	foundTr, foundVm := false, false
-
-	allComps := cmd.GetAllComponents(res.Entity)
-	for _, c := range allComps {
-		switch comp := c.(type) {
-		case TransformComponent:
-			parentTr = comp
-			foundTr = true
-		case VoxelModelComponent:
-			parentVm = comp
-			foundVm = true
-		}
-	}
-
-	if !foundTr || !foundVm {
-		return
-	}
-
-	// Check for optional physics components on parent
-	var hasRb, hasCol bool
-	for _, c := range allComps {
-		if _, ok := c.(RigidBodyComponent); ok {
-			hasRb = true
-		}
-		if _, ok := c.(ColliderComponent); ok {
-			hasCol = true
-		}
-	}
-
-	// 1. Center the map
-	shiftedMap, localCenter := res.XBrickMap.Center()
-
-	// 2. Calculate world position
-	vSize := s.RtApp.Scene.TargetVoxelSize
-	if vSize == 0 {
-		vSize = 0.1
-	}
-
-	// World offset is local center rotated and scaled by parent
-	worldOffset := parentTr.Rotation.Rotate(localCenter.Mul(vSize))
-	worldOffset = mgl32.Vec3{
-		worldOffset.X() * parentTr.Scale.X(),
-		worldOffset.Y() * parentTr.Scale.Y(),
-		worldOffset.Z() * parentTr.Scale.Z(),
-	}
-	newPos := parentTr.Position.Add(worldOffset)
-
-	// 3. Half extents for collider
-	minB, maxB := res.Min, res.Max
-	halfExtents := maxB.Sub(minB).Mul(0.5)
-
-	// 4. Create new entity
-	newComps := []any{
-		&TransformComponent{
-			Position: newPos,
-			Rotation: parentTr.Rotation,
-			Scale:    parentTr.Scale,
-		},
-		&VoxelModelComponent{
-			VoxelModel:   parentVm.VoxelModel,
-			VoxelPalette: parentVm.VoxelPalette,
-			CustomMap:    shiftedMap,
-		},
-	}
-
-	if hasCol {
-		newComps = append(newComps, &ColliderComponent{
-			AABBHalfExtents: halfExtents.Mul(vSize),
-		})
-	}
-
-	if hasRb {
-		newComps = append(newComps, &RigidBodyComponent{Mass: 1.0, GravityScale: 1.0})
-	}
-
-	cmd.AddEntity(newComps...)
-}
-
-func (s *VoxelRtState) DrawDebugRay(origin, dir mgl32.Vec3, color [4]float32, duration float32) {
-	if s == nil {
-		return
-	}
-	s.debugRays = append(s.debugRays, DebugRay{
-		Origin:   origin,
-		Dir:      dir,
-		Color:    color,
-		Duration: duration,
-	})
 }
 
 func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
@@ -426,7 +240,6 @@ func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit 
 
 	checkMap(s.instanceMap)
 	checkMap(s.caVolumeMap)
-	checkMap(s.worldMap)
 
 	if bestHit.Hit {
 		return bestHit
@@ -468,104 +281,6 @@ func (p *Profiler) Reset() {
 	p.RenderTime = 0
 }
 
-func VoxelAppliedEditSystem(cmd *Commands, editQueue *VoxelEditQueue, state *VoxelRtState, navSys *NavigationSystem, prof *Profiler) {
-	if prof != nil {
-		start := time.Now()
-		defer func() { prof.EditTime += time.Since(start) }()
-	}
-	if editQueue == nil || state == nil {
-		return
-	}
-
-	if len(editQueue.Spheres) == 0 && len(editQueue.Edits) == 0 {
-		return
-	}
-
-	// 1. Process Spheres
-	if state.splitQueue == nil {
-		state.splitQueue = make(map[EntityId]bool)
-	}
-
-	count := 0
-	budget := editQueue.BudgetPerFrame
-	if budget <= 0 {
-		budget = 1024 // Default budget
-	}
-
-	// Drain spheres
-	for len(editQueue.Spheres) > 0 && count < budget {
-		sphere := editQueue.Spheres[0]
-		editQueue.Spheres = editQueue.Spheres[1:]
-
-		state.VoxelSphereEdit(sphere.Entity, sphere.Center, sphere.Radius, sphere.Value)
-		if navSys != nil {
-			// Notify navigation system of dirty area
-			// Assume standard voxel size if not available
-			vSize := float32(0.1)
-			if state.RtApp != nil && state.RtApp.Scene != nil {
-				vSize = state.RtApp.Scene.TargetVoxelSize
-			}
-			min := sphere.Center.Sub(mgl32.Vec3{sphere.Radius, sphere.Radius, sphere.Radius})
-			max := sphere.Center.Add(mgl32.Vec3{sphere.Radius, sphere.Radius, sphere.Radius})
-			navSys.MarkDirtyArea(min, max, vSize, 8) // Hardcoded region size 8 for now
-		}
-		if sphere.Value == 0 {
-			state.splitQueue[sphere.Entity] = true
-		}
-		count++
-	}
-
-	// Drain point edits
-	for len(editQueue.Edits) > 0 && count < budget {
-		edit := editQueue.Edits[0]
-		editQueue.Edits = editQueue.Edits[1:]
-
-		// We need a SetVoxel on VoxelRtState or similar
-		// For now let's just use Sphere with 0 radius or implement SetVoxel
-		// Let's add SetVoxel to VoxelRtState later if needed, for now just skip or use sphere
-		state.VoxelSphereEdit(edit.Entity, mgl32.Vec3{float32(edit.Pos[0]), float32(edit.Pos[1]), float32(edit.Pos[2])}, 0.1, edit.Val)
-
-		if navSys != nil {
-			vSize := float32(0.1)
-			if state.RtApp != nil && state.RtApp.Scene != nil {
-				vSize = state.RtApp.Scene.TargetVoxelSize
-			}
-			pos := mgl32.Vec3{float32(edit.Pos[0]), float32(edit.Pos[1]), float32(edit.Pos[2])}
-			min := pos.Sub(mgl32.Vec3{0.1, 0.1, 0.1})
-			max := pos.Add(mgl32.Vec3{0.1, 0.1, 0.1})
-			navSys.MarkDirtyArea(min, max, vSize, 8)
-		}
-
-		if edit.Val == 0 {
-			state.splitQueue[edit.Entity] = true
-		}
-		count++
-	}
-
-	// 2. Process Separations (Amortized: only one entity per frame)
-	for eid := range state.splitQueue {
-		delete(state.splitQueue, eid)
-
-		// Optimization: The large-scale world should not be checked for splits
-		// as it would be extremely expensive and technically impossible for the terrain.
-		if _, isWorld := state.worldMap[eid]; isWorld {
-			continue
-		}
-
-		results := state.SplitDisconnectedComponents(cmd, eid)
-		for _, res := range results {
-			state.ApplySeparation(cmd, res, prof)
-		}
-
-		if state.IsEntityEmpty(eid) {
-			cmd.RemoveEntity(eid)
-		}
-
-		// Only one per frame to avoid stutters
-		break
-	}
-}
-
 func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	windowState := createWindowState(mod.WindowWidth, mod.WindowHeight, mod.WindowTitle)
 	cmd.AddResources(windowState)
@@ -583,10 +298,9 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		loadedModels: make(map[AssetId]*core.VoxelObject),
 		instanceMap:  make(map[EntityId]*core.VoxelObject),
 		caVolumeMap:  make(map[EntityId]*core.VoxelObject),
-		worldMap:     make(map[EntityId]*core.VoxelObject),
 	}
 	cmd.AddResources(state)
-	cmd.AddResources(NewNavigationSystem())
+
 	cmd.AddResources(&Profiler{})
 
 	app.UseSystem(
@@ -594,23 +308,15 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 			InStage(Update).
 			RunAlways(),
 	)
-	// Voxel edit application system (M3)
-	app.UseSystem(
-		System(VoxelAppliedEditSystem).
-			InStage(PostUpdate).
-			RunAlways(),
-	)
+	// Voxel edit application system (M3) REMOVED - moved to client
+
 	// Cellular automaton step system (low Hz via TickRate in component)
 	app.UseSystem(
 		System(caStepSystem).
 			InStage(Update).
 			RunAlways(),
 	)
-	app.UseSystem(
-		System(WorldStreamingSystem).
-			InStage(Update).
-			RunAlways(),
-	)
+
 	app.UseSystem(
 		System(TransformHierarchySystem).
 			InStage(Update).
@@ -618,11 +324,6 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	)
 	app.UseSystem(
 		System(voxelRtSystem).
-			InStage(PostUpdate).
-			RunAlways(),
-	)
-	app.UseSystem(
-		System(IncrementalNavBakeSystem).
 			InStage(PostUpdate).
 			RunAlways(),
 	)
@@ -940,52 +641,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	}
 	state.RtApp.Profiler.EndScope("Sync CA")
 
-	state.RtApp.Profiler.BeginScope("Sync World")
-	currentWorlds := make(map[EntityId]bool)
-	MakeQuery1[WorldComponent](cmd).Map(func(eid EntityId, world *WorldComponent) bool {
-		currentWorlds[eid] = true
-		obj, exists := state.worldMap[eid]
-		if !exists {
-			obj = core.NewVoxelObject()
-			// Default material table for world
-			mats := make([]core.Material, 256)
-			for i := range mats {
-				mats[i] = core.DefaultMaterial()
-				mats[i].BaseColor = [4]uint8{120, 120, 120, 255}
-				if i == 0 {
-					mats[i].Transparency = 1.0 // Air is transparent!
-				}
-			}
-			// Ground color (index 1)
-			mats[1].BaseColor = [4]uint8{100, 255, 100, 255}
-
-			obj.MaterialTable = mats
-			state.RtApp.Scene.AddObject(obj)
-			state.worldMap[eid] = obj
-		}
-
-		// Use the XBM from the world component
-		obj.XBrickMap = world.GetXBrickMap()
-
-		// World usually stays at origin but needs to match the scene's voxel scaling
-		vSize := state.RtApp.Scene.TargetVoxelSize
-		if vSize == 0 {
-			vSize = 0.1
-		}
-		obj.Transform.Position = mgl32.Vec3{0, 0, 0}
-		obj.Transform.Rotation = mgl32.QuatIdent()
-		obj.Transform.Scale = mgl32.Vec3{vSize, vSize, vSize}
-		obj.Transform.Dirty = true
-
-		return true
-	})
-	for eid, obj := range state.worldMap {
-		if !currentWorlds[eid] {
-			state.RtApp.Scene.RemoveObject(obj)
-			delete(state.worldMap, eid)
-		}
-	}
-	state.RtApp.Profiler.EndScope("Sync World")
+	state.RtApp.Profiler.EndScope("Sync CA")
 
 	state.RtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
@@ -1055,44 +711,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	}
 
 	state.RtApp.Profiler.BeginScope("RT Update")
-
-	// Process debug rays BEFORE Update() so DrawText is captured
-	dt := float32(time.Dt)
-	if dt <= 0 {
-		dt = 1.0 / 60.0
-	}
-	remainingRays := state.debugRays[:0]
-	for _, ray := range state.debugRays {
-		// Calculate hit point for visualization
-		hit := state.Raycast(ray.Origin.Add(ray.Dir.Mul(0.1)), ray.Dir, 1000.0)
-		dist := float32(100.0)
-		if hit.Hit {
-			dist = hit.T + 0.1
-			// Draw marker at hit
-			if x, y, ok := state.Project(ray.Origin.Add(ray.Dir.Mul(dist))); ok {
-				state.RtApp.DrawText("*", x-8, y-16, 2.0, ray.Color)
-			}
-		}
-
-		// Draw path
-		steps := 50
-		for i := 1; i <= steps; i++ {
-			t := (dist / float32(steps)) * float32(i)
-			if x, y, ok := state.Project(ray.Origin.Add(ray.Dir.Mul(t))); ok {
-				// Fade alpha based on distance for cooler look
-				alpha := 1.0 - (t/dist)*0.8
-				color := ray.Color
-				color[3] *= alpha
-				state.RtApp.DrawText(".", x-6, y-12, 1.4, color)
-			}
-		}
-
-		ray.Duration -= dt
-		if ray.Duration > 0 {
-			remainingRays = append(remainingRays, ray)
-		}
-	}
-	state.debugRays = remainingRays
 
 	state.RtApp.Update()
 
