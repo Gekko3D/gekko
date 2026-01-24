@@ -12,7 +12,6 @@ func TestRaycastScaling(t *testing.T) {
 	// Setup VoxelRtState with necessary maps
 	state := &VoxelRtState{
 		instanceMap: make(map[EntityId]*core.VoxelObject),
-		worldMap:    make(map[EntityId]*core.VoxelObject),
 		caVolumeMap: make(map[EntityId]*core.VoxelObject),
 	}
 

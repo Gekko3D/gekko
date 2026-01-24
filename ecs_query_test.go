@@ -18,20 +18,23 @@ func TestQuery_Map(t *testing.T) {
 
 	query := Query2[Comp1, Comp2]{ecs: &ecs}
 
-	expectedEntityIds := []EntityId{id2, id3}
-	expectedComponentsA := []Comp1{{a: 2}, {a: 3}}
-	expectedComponentsB := []Comp2{{b: 1.37}, {b: 4.20}}
+	expectedA := map[EntityId]Comp1{id2: {a: 2}, id3: {a: 3}}
+	expectedB := map[EntityId]Comp2{id2: {b: 1.37}, id3: {b: 4.20}}
 	numResults := 0
 
 	query.Map(func(entityId EntityId, comp1 *Comp1, comp2 *Comp2) bool {
-		if entityId != expectedEntityIds[numResults] {
-			t.Errorf("Unexpected EntityId for row %v, expected %v got %v", numResults, expectedEntityIds[numResults], entityId)
+		expA, okA := expectedA[entityId]
+		if !okA {
+			t.Errorf("Unexpected EntityId: %v", entityId)
+		} else if *comp1 != expA {
+			t.Errorf("Unexpected A for %v, expected %v got %v", entityId, expA, *comp1)
 		}
-		if *comp1 != expectedComponentsA[numResults] {
-			t.Errorf("Unexpected A for row %v, expected %v got %v", numResults, expectedComponentsA[numResults], *comp1)
-		}
-		if *comp2 != expectedComponentsB[numResults] {
-			t.Errorf("Unexpected A for row %v, expected %v got %v", numResults, expectedComponentsB[numResults], *comp2)
+
+		expB, okB := expectedB[entityId]
+		if !okB {
+			t.Errorf("Unexpected EntityId: %v", entityId)
+		} else if *comp2 != expB {
+			t.Errorf("Unexpected B for %v, expected %v got %v", entityId, expB, *comp2)
 		}
 
 		numResults += 1

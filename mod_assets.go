@@ -519,10 +519,6 @@ func (server AssetServer) SpawnHierarchicalVoxelModel(cmd *Commands, voxId Asset
 	paletteId := server.CreateVoxelPalette(voxFile.Palette, voxFile.VoxMaterials)
 
 	// Create a root entity to hold the global transform
-	// Fix 1: Rotate -90 degrees around X axis to convert Z-up (MagicaVoxel) to Y-up (Engine)
-	correctionRot := mgl32.QuatRotate(mgl32.DegToRad(-90), mgl32.Vec3{1, 0, 0})
-	rootTransform.Rotation = rootTransform.Rotation.Mul(correctionRot)
-
 	rootEntity := cmd.AddEntity(
 		&TransformComponent{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
 		&LocalTransform{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
