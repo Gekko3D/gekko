@@ -223,7 +223,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				body.idleTime = es.IdleTime
 				body.gravityScale = es.GravityScale
 				// Store boxes
-				body.boxes = es.Model.Boxes
+				body.boxes = make([]InternalBox, len(es.Model.Boxes))
+				for i, box := range es.Model.Boxes {
+					body.boxes[i].Box = box
+				}
 			}
 			// Cleanup dead entities
 			snapMap := make(map[EntityId]bool)
@@ -247,6 +250,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		// Simulate
 		var bodies []*internalBody
 		for _, b := range internalBodies {
+			b.updateAABB()
 			bodies = append(bodies, b)
 		}
 
@@ -273,6 +277,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				angVelQuat := mgl32.Quat{W: 0, V: b.angVel.Mul(0.5 * dt)}
 				b.rot = b.rot.Add(angVelQuat.Mul(b.rot))
 				b.rot = b.rot.Normalize()
+				b.updateAABB()
 			}
 
 			// Check and resolve collisions
@@ -281,9 +286,23 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					continue
 				}
 
+				// Broad-phase: Body-Body AABB
+				if b.aabbMin.X() > other.aabbMax.X() || b.aabbMax.X() < other.aabbMin.X() ||
+					b.aabbMin.Y() > other.aabbMax.Y() || b.aabbMax.Y() < other.aabbMin.Y() ||
+					b.aabbMin.Z() > other.aabbMax.Z() || b.aabbMax.Z() < other.aabbMin.Z() {
+					continue
+				}
+
 				for _, boxA := range b.boxes {
 					for _, boxB := range other.boxes {
-						if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA, other.pos, other.rot, boxB); collision {
+						// Box-Box AABB check using pre-calculated bounds
+						if boxA.Min.X() > boxB.Max.X() || boxA.Max.X() < boxB.Min.X() ||
+							boxA.Min.Y() > boxB.Max.Y() || boxA.Max.Y() < boxB.Min.Y() ||
+							boxA.Min.Z() > boxB.Max.Z() || boxA.Max.Z() < boxB.Min.Z() {
+							continue
+						}
+
+						if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box); collision {
 							// Static resolution: push out of collision
 							// Use a small slop to avoid jittering
 							slop := float32(0.02)
@@ -412,6 +431,11 @@ func (b *internalBody) Wake() {
 	b.idleTime = 0
 }
 
+type InternalBox struct {
+	Box      CollisionBox
+	Min, Max mgl32.Vec3
+}
+
 type internalBody struct {
 	Eid          EntityId
 	pos          mgl32.Vec3
@@ -421,12 +445,52 @@ type internalBody struct {
 	isStatic     bool
 	mass         float32
 	model        PhysicsModel
-	boxes        []CollisionBox
+	boxes        []InternalBox
 	sleeping     bool
 	idleTime     float32
 	friction     float32
 	restitution  float32
 	gravityScale float32
+	aabbMin      mgl32.Vec3
+	aabbMax      mgl32.Vec3
+}
+
+func (b *internalBody) updateAABB() {
+	if len(b.boxes) == 0 {
+		b.aabbMin = b.pos
+		b.aabbMax = b.pos
+		return
+	}
+
+	minP := mgl32.Vec3{1e9, 1e9, 1e9}
+	maxP := mgl32.Vec3{-1e9, -1e9, -1e9}
+
+	rotMat := b.rot.Mat4()
+	axes := [3]mgl32.Vec3{rotMat.Col(0).Vec3(), rotMat.Col(1).Vec3(), rotMat.Col(2).Vec3()}
+
+	for i := range b.boxes {
+		box := &b.boxes[i]
+		worldBoxPos := b.pos.Add(b.rot.Rotate(box.Box.LocalOffset))
+
+		// Calculate world-space AABB of this OBB
+		extents := mgl32.Vec3{0, 0, 0}
+		for i := 0; i < 3; i++ {
+			for j := 0; j < 3; j++ {
+				extents[i] += float32(math.Abs(float64(axes[j][i]))) * box.Box.HalfExtents[j]
+			}
+		}
+
+		box.Min = worldBoxPos.Sub(extents)
+		box.Max = worldBoxPos.Add(extents)
+
+		for i := 0; i < 3; i++ {
+			minP[i] = float32(math.Min(float64(minP[i]), float64(box.Min[i])))
+			maxP[i] = float32(math.Max(float64(maxP[i]), float64(box.Max[i])))
+		}
+	}
+
+	b.aabbMin = minP
+	b.aabbMax = maxP
 }
 
 func calculateInertia(b *internalBody) float32 {
@@ -443,20 +507,19 @@ func calculateInertia(b *internalBody) float32 {
 	// Calculate mass distribution assuming uniform density
 	totalVolume := float32(0)
 	for _, box := range b.boxes {
-		totalVolume += box.HalfExtents.X() * box.HalfExtents.Y() * box.HalfExtents.Z() * 8.0
+		totalVolume += box.Box.HalfExtents.X() * box.Box.HalfExtents.Y() * box.Box.HalfExtents.Z() * 8.0
 	}
 
 	for _, box := range b.boxes {
-		volume := box.HalfExtents.X() * box.HalfExtents.Y() * box.HalfExtents.Z() * 8.0
+		volume := box.Box.HalfExtents.X() * box.Box.HalfExtents.Y() * box.Box.HalfExtents.Z() * 8.0
 		boxMass := (volume / totalVolume) * totalMass
 
 		// Inertia of this box about its own center
-		// I = (1/12) * m * (w^2 + h^2) - but we use a scalar simplification
-		sizeSq := box.HalfExtents.LenSqr() * 4.0
+		sizeSq := box.Box.HalfExtents.LenSqr() * 4.0
 		boxInertia := (1.0 / 6.0) * boxMass * sizeSq
 
-		// Parallel Axis Theorem: I_total += I_center + mass * dist^2
-		distSq := box.LocalOffset.LenSqr()
+		// Parallel Axis Theorem
+		distSq := box.Box.LocalOffset.LenSqr()
 		totalInertia += boxInertia + boxMass*distSq
 	}
 
