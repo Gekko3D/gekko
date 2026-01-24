@@ -238,13 +238,13 @@ func (a *App) Init() error {
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
-			// Output Color
+			// Output Color (HDR)
 			{
 				Binding:    4,
 				Visibility: wgpu.ShaderStageCompute,
 				StorageTexture: wgpu.StorageTextureBindingLayout{
 					Access:        wgpu.StorageTextureAccessWriteOnly,
-					Format:        wgpu.TextureFormatRGBA8Unorm,
+					Format:        wgpu.TextureFormatRGBA16Float,
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
@@ -255,6 +255,23 @@ func (a *App) Init() error {
 				Texture: wgpu.TextureBindingLayout{
 					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
 					ViewDimension: wgpu.TextureViewDimension2DArray,
+				},
+			},
+			// Skybox Texture (RGBA8Unorm)
+			{
+				Binding:    6,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			// Skybox Sampler
+			{
+				Binding:    7,
+				Visibility: wgpu.ShaderStageCompute,
+				Sampler: wgpu.SamplerBindingLayout{
+					Type: wgpu.SamplerBindingTypeFiltering,
 				},
 			},
 		},
@@ -390,6 +407,9 @@ func (a *App) Init() error {
 		return err
 	}
 
+	// Skybox Generation Pipeline
+	a.BufferManager.CreateSkyboxGenPipeline(shaders.SkyboxWGSL)
+
 	// G-Buffer resources
 	a.BufferManager.CreateGBufferTextures(uint32(width), uint32(height))
 	a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
@@ -461,7 +481,7 @@ func (a *App) setupTextures(w, h int) {
 		Size:          wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1},
 		MipLevelCount: 1,
 		Dimension:     wgpu.TextureDimension2D,
-		Format:        wgpu.TextureFormatRGBA8Unorm,
+		Format:        wgpu.TextureFormatRGBA16Float,
 		Usage:         wgpu.TextureUsageStorageBinding | wgpu.TextureUsageTextureBinding,
 		SampleCount:   1,
 	})
