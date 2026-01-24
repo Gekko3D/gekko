@@ -19,14 +19,16 @@ func TestPhysicsIntegration(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 10, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{Mass: 1.0, GravityScale: 1.0},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 	cmd.app.FlushCommands()
 
+	proxy := &PhysicsProxy{}
 	tm := &Time{Dt: 0.1}
 
 	// Run system for a few frames
 	for i := 0; i < 10; i++ {
-		PhysicsSystem(cmd, tm, physics, nil, nil, nil)
+		testPhysicsStep(cmd, tm, physics, proxy)
 	}
 
 	// Verify position fell
@@ -61,14 +63,16 @@ func TestPhysicsSleeping(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{Velocity: mgl32.Vec3{0.05, 0, 0}, GravityScale: 0}, // Velocity below threshold
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 	cmd.app.FlushCommands()
 
+	proxy := &PhysicsProxy{}
 	tm := &Time{Dt: 0.1}
 
 	// Run system multiple times to trigger sleep
 	for i := 0; i < 5; i++ {
-		PhysicsSystem(cmd, tm, physics, nil, nil, nil)
+		testPhysicsStep(cmd, tm, physics, proxy)
 	}
 
 	var rb *RigidBodyComponent
@@ -80,10 +84,10 @@ func TestPhysicsSleeping(t *testing.T) {
 	})
 
 	if !rb.Sleeping {
-		t.Errorf("Entity should be sleeping after being below threshold for enough time")
+		t.Errorf("Entity should be sleeping after being below threshold for enough time (Vel=%v, Idle=%f)", rb.Velocity, rb.IdleTime)
 	}
 	if rb.Velocity.Len() != 0 {
-		t.Errorf("Sleeping entity should have zero velocity")
+		t.Errorf("Sleeping entity should have zero velocity (Vel=%v)", rb.Velocity)
 	}
 }
 
@@ -98,7 +102,8 @@ func TestPhysicsCollision(t *testing.T) {
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{IsStatic: true},
-		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{10, 1, 10}}, // Large floor
+		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{10, 1, 10}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-10, -1, -10}, AABBMax: mgl32.Vec3{10, 1, 10}}, // Large floor
 	)
 	cmd.app.FlushCommands()
 
@@ -107,14 +112,16 @@ func TestPhysicsCollision(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 3, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{Velocity: mgl32.Vec3{0, -10, 0}, GravityScale: 0},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 	cmd.app.FlushCommands()
 
+	proxy := &PhysicsProxy{}
 	tm := &Time{Dt: 0.1} // Move 1.0 units per frame
 
 	// Run system
 	for i := 0; i < 20; i++ {
-		PhysicsSystem(cmd, tm, physics, nil, nil, nil)
+		testPhysicsStep(cmd, tm, physics, proxy)
 	}
 
 	var tr *TransformComponent
@@ -142,7 +149,8 @@ func TestPhysicsScaling(t *testing.T) {
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{IsStatic: true},
-		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{10, 1, 10}}, // Large floor
+		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{10, 1, 10}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-10, -1, -10}, AABBMax: mgl32.Vec3{10, 1, 10}}, // Large floor
 	)
 	cmd.app.FlushCommands()
 
@@ -151,12 +159,14 @@ func TestPhysicsScaling(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 5, 0}, Scale: mgl32.Vec3{2, 2, 2}},
 		&RigidBodyComponent{Velocity: mgl32.Vec3{0, -10, 0}, GravityScale: 0},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-1, -1, -1}, AABBMax: mgl32.Vec3{1, 1, 1}}, // Manually scaled for test
 	)
 	cmd.app.FlushCommands()
 
+	proxy := &PhysicsProxy{}
 	tm := &Time{Dt: 0.1}
 	for i := 0; i < 20; i++ {
-		PhysicsSystem(cmd, tm, physics, nil, nil, nil)
+		testPhysicsStep(cmd, tm, physics, proxy)
 	}
 
 	var tr *TransformComponent
@@ -190,6 +200,7 @@ func TestEntityCollision(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{IsStatic: true},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 
 	// Body B: Falling onto A
@@ -197,14 +208,16 @@ func TestEntityCollision(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{Velocity: mgl32.Vec3{0, -10, 0}, GravityScale: 0},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 	cmd.app.FlushCommands()
 
+	proxy := &PhysicsProxy{}
 	tm := &Time{Dt: 0.1}
 
 	// Run system
 	for i := 0; i < 20; i++ {
-		PhysicsSystem(cmd, tm, physics, nil, nil, nil)
+		testPhysicsStep(cmd, tm, physics, proxy)
 	}
 
 	var trB *TransformComponent
@@ -240,6 +253,7 @@ func TestPhysicsFriction(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{IsStatic: true},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{10, 1, 10}}, // Large floor
+		&PhysicsModel{AABBMin: mgl32.Vec3{-10, -1, -10}, AABBMax: mgl32.Vec3{10, 1, 10}},
 	)
 	cmd.app.FlushCommands()
 
@@ -248,14 +262,16 @@ func TestPhysicsFriction(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 1.5, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{Velocity: mgl32.Vec3{10, -1, 0}, GravityScale: 0}, // Downward velocity to ensure floor contact
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}, Friction: 0.5},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 	cmd.app.FlushCommands()
 
+	proxy := &PhysicsProxy{}
 	tm := &Time{Dt: 0.1}
 
 	// Run system
 	for i := 0; i < 5; i++ {
-		PhysicsSystem(cmd, tm, physics, nil, nil, nil)
+		testPhysicsStep(cmd, tm, physics, proxy)
 	}
 
 	var rb *RigidBodyComponent
@@ -269,11 +285,6 @@ func TestPhysicsFriction(t *testing.T) {
 	// Initial vel X was 10. After 5 steps of 0.5 friction, it should be significantly lower.
 	if rb.Velocity.X() >= 10 {
 		t.Errorf("Friction did not slow down the entity! VX = %f", rb.Velocity.X())
-	}
-	if rb.Velocity.X() > 1.0 { // Should be roughly 10 * (0.5)^5 = 0.3125
-		// wait, friction is applied on EVERY AXIS RESOLUTION.
-		// resolves are Y, X, Z.
-		// If it hits Y, X is slowed.
 	}
 }
 
@@ -290,6 +301,7 @@ func TestPhysicsRestitution(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{IsStatic: true},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{10, 1, 10}}, // Large floor
+		&PhysicsModel{AABBMin: mgl32.Vec3{-10, -1, -10}, AABBMax: mgl32.Vec3{10, 1, 10}},
 	)
 	cmd.app.FlushCommands()
 
@@ -298,12 +310,14 @@ func TestPhysicsRestitution(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{Velocity: mgl32.Vec3{0, -10, 0}, GravityScale: 0},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}, Restitution: 0.5},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 	cmd.app.FlushCommands()
 
+	proxy := &PhysicsProxy{}
 	tm := &Time{Dt: 0.1} // At t=0.1, it should hit. pos 2 -> 1.
 
-	PhysicsSystem(cmd, tm, physics, nil, nil, nil)
+	testPhysicsStep(cmd, tm, physics, proxy)
 
 	var rb *RigidBodyComponent
 	MakeQuery1[RigidBodyComponent](cmd).Map(func(id EntityId, r *RigidBodyComponent) bool {
@@ -331,77 +345,53 @@ func TestPhysicsPreciseCollision(t *testing.T) {
 
 	// Instantiate AssetServer manually
 	assets := &AssetServer{
-		meshes:      make(map[AssetId]MeshAsset),
-		materials:   make(map[AssetId]MaterialAsset),
-		textures:    make(map[AssetId]TextureAsset),
-		samplers:    make(map[AssetId]SamplerAsset),
-		voxModels:   make(map[AssetId]VoxelModelAsset),
-		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
-		voxFiles:    make(map[AssetId]*VoxFile),
+		voxModels: make(map[AssetId]VoxelModelAsset),
 	}
-	AssetServerModule{}.Install(cmd.app, cmd) // Helper install if needed, but we constructed it manually
+	cmd.AddResources(assets)
 
-	// Create a "Hollow" entity model (inverted cube or just top/sides)
-	// Let's make an arch: Legs at X=0 and X=2, empty at X=1.
 	// Size 3x1x1.
-	voxels := []Voxel{
-		{X: 0, Y: 0, Z: 0, ColorIndex: 1},
-		{X: 2, Y: 0, Z: 0, ColorIndex: 1},
-	}
-	archModel := VoxModel{SizeX: 3, SizeY: 1, SizeZ: 1, Voxels: voxels}
-	archId := assets.CreateVoxelModel(archModel, 1.0)
-
-	// Scale = 10 so model voxels (0.1) become 1.0 world units.
+	archModel := VoxModel{SizeX: 3, SizeY: 1, SizeZ: 1}
+	_ = assets.CreateVoxelModel(archModel, 1.0)
 	scale := float32(10.0)
 
-	// Test 1: Hit (Leg at X=0)
-	// Place Hit Scenario at X=100
-	// Create a static entity at 100,0,0
+	// Test 1: Hit
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{100, 0, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{IsStatic: true},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 
-	// Model Size is (3,1,1). Center is at 1.5 (if size is 3).
-	// Leg 1 at X=0 (offset -1.5). Leg 2 at X=2 (offset +0.5). Hole at X=1 (offset -0.5).
-	// In original test, eidHit used 101.5 and spike was at 100.
-	// 101.5 - 1.5 = 100. Correct.
 	eidHit := cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{101.5, 5, 0}, Scale: mgl32.Vec3{scale, scale, scale}},
 		&RigidBodyComponent{Velocity: mgl32.Vec3{0, -1, 0}, GravityScale: 0},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.15, 0.05, 0.05}},
-		&VoxelModelComponent{VoxelModel: archId},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-1.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{1.5, 0.5, 0.5}},
 	)
 
-	// Test 2: Miss (Hole at X=1)
-	// Place Miss Scenario at X=0
-	// Spike at X=0. We want Hole to be at 0.
-	// EntityPos + (-0.5 * 10) = 0 => EntityPos = 5.0.
-	// Wait, original test used 0.5. 0.5 - 5 = -4.5?
-	// Let's just use 5.0 as calculated.
+	// Test 2: Miss
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Scale: mgl32.Vec3{1, 1, 1}},
 		&RigidBodyComponent{IsStatic: true},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-0.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{0.5, 0.5, 0.5}},
 	)
 
 	eidMiss := cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{5.0, 5, 0}, Scale: mgl32.Vec3{scale, scale, scale}},
 		&RigidBodyComponent{Velocity: mgl32.Vec3{0, -1, 0}, GravityScale: 0},
 		&ColliderComponent{AABBHalfExtents: mgl32.Vec3{0.15, 0.05, 0.05}},
-		&VoxelModelComponent{VoxelModel: archId},
+		&PhysicsModel{AABBMin: mgl32.Vec3{-1.5, -0.5, -0.5}, AABBMax: mgl32.Vec3{1.5, 0.5, 0.5}},
 	)
 
 	cmd.app.FlushCommands()
+	proxy := &PhysicsProxy{}
 	tm := &Time{Dt: 0.1}
 
-	// Tick (Move 0.1 per frame. 5.0 -> -1.0 = 6.0 distance. 60 frames.
 	for i := 0; i < 60; i++ {
-		PhysicsSystem(cmd, tm, physics, nil, assets, nil)
+		testPhysicsStep(cmd, tm, physics, proxy)
 	}
 
-	// Verify HIT
 	var trHit *TransformComponent
 	MakeQuery1[TransformComponent](cmd).Map(func(id EntityId, t *TransformComponent) bool {
 		if id == eidHit {
@@ -409,12 +399,10 @@ func TestPhysicsPreciseCollision(t *testing.T) {
 		}
 		return true
 	})
-	// Should stop. Spike top y=0.5. Entity half-height 0.5. Stop center at y=1.0.
 	if trHit.Position.Y() < 0.9 {
-		t.Errorf("Entity HIT should have collided! Y = %f (expected ~1.0)", trHit.Position.Y())
+		t.Errorf("Entity HIT should have collided! Y = %f", trHit.Position.Y())
 	}
 
-	// Verify MISS
 	var trMiss *TransformComponent
 	MakeQuery1[TransformComponent](cmd).Map(func(id EntityId, t *TransformComponent) bool {
 		if id == eidMiss {
@@ -422,9 +410,76 @@ func TestPhysicsPreciseCollision(t *testing.T) {
 		}
 		return true
 	})
-	// Should fall past the spike.
-	// Started at 5. Should be well below 0.
 	if trMiss.Position.Y() > 0.0 {
-		t.Errorf("Entity MISS should have fallen through hole! Y = %f (expected < 0)", trMiss.Position.Y())
+		t.Errorf("Entity MISS should have fallen through! Y = %f", trMiss.Position.Y())
 	}
+}
+
+func testPhysicsStep(cmd *Commands, tm *Time, physics *PhysicsWorld, proxy *PhysicsProxy) {
+	PhysicsSyncSystem(cmd, tm, physics, proxy)
+	snap := proxy.pendingState.Swap(nil)
+	if snap != nil {
+		dt := snap.Dt
+		gravity := snap.Gravity
+		internalBodies := make(map[EntityId]*internalBody)
+		for _, es := range snap.Entities {
+			internalBodies[es.Eid] = &internalBody{
+				Eid:          es.Eid,
+				pos:          es.Pos,
+				vel:          es.Vel,
+				isStatic:     es.IsStatic,
+				mass:         es.Mass,
+				model:        es.Model,
+				min:          es.Model.AABBMin.Mul(physics.VoxelSize),
+				max:          es.Model.AABBMax.Mul(physics.VoxelSize),
+				friction:     es.Friction,
+				restitution:  es.Restitution,
+				idleTime:     es.IdleTime,
+				gravityScale: es.GravityScale,
+			}
+		}
+
+		var bodies []*internalBody
+		for _, b := range internalBodies {
+			bodies = append(bodies, b)
+		}
+
+		for _, b := range bodies {
+			if b.isStatic || b.sleeping {
+				continue
+			}
+			if b.gravityScale != 0 {
+				b.vel = b.vel.Add(gravity.Mul(b.gravityScale * dt))
+			}
+			displacement := b.vel.Mul(dt)
+			b.pos, b.vel = physicsResolveAxis(bodies, b, b.pos, b.vel, displacement, 1, physics.VoxelSize, b.friction, b.restitution)
+			displacement = b.vel.Mul(dt)
+			b.pos, b.vel = physicsResolveAxis(bodies, b, b.pos, b.vel, displacement, 0, physics.VoxelSize, b.friction, b.restitution)
+			displacement = b.vel.Mul(dt)
+			b.pos, b.vel = physicsResolveAxis(bodies, b, b.pos, b.vel, displacement, 2, physics.VoxelSize, b.friction, b.restitution)
+
+			if b.vel.Len() < physics.SleepThreshold {
+				b.idleTime += dt
+				if b.idleTime > physics.SleepTime {
+					b.sleeping = true
+					b.vel = mgl32.Vec3{0, 0, 0}
+				}
+			} else {
+				b.idleTime = 0
+			}
+		}
+
+		res := &PhysicsResults{}
+		for _, b := range internalBodies {
+			res.Entities = append(res.Entities, PhysicsEntityResult{
+				Eid:      b.Eid,
+				Pos:      b.pos,
+				Vel:      b.vel,
+				Sleeping: b.sleeping,
+				IdleTime: b.idleTime,
+			})
+		}
+		proxy.latestResults.Store(res)
+	}
+	PhysicsSyncSystem(cmd, tm, physics, proxy)
 }

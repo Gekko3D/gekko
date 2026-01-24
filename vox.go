@@ -166,8 +166,8 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 			model := &voxFile.Models[currentModelIndex]
 			if len(chunkData) >= 12 {
 				model.SizeX = binary.LittleEndian.Uint32(chunkData[0:4])
-				model.SizeY = binary.LittleEndian.Uint32(chunkData[4:8])
-				model.SizeZ = binary.LittleEndian.Uint32(chunkData[8:12])
+				model.SizeY = binary.LittleEndian.Uint32(chunkData[8:12]) // Engine Y is Vox Z
+				model.SizeZ = binary.LittleEndian.Uint32(chunkData[4:8])  // Engine Z is Vox Y
 			} else {
 				return nil, errors.New("SIZE chunk too small")
 			}
@@ -185,8 +185,8 @@ func LoadVoxFile(filename string) (*VoxFile, error) {
 				}
 				model.Voxels[i] = Voxel{
 					X:          uint32(chunkData[offset]),
-					Y:          uint32(chunkData[offset+1]),
-					Z:          uint32(chunkData[offset+2]),
+					Y:          uint32(chunkData[offset+2]), // Engine Y is Vox Z
+					Z:          uint32(chunkData[offset+1]), // Engine Z is Vox Y
 					ColorIndex: chunkData[offset+3],
 				}
 			}
@@ -336,7 +336,11 @@ func parseTransformNode(data []byte) (VoxNode, error) {
 		data = nextData
 		frame := VoxTransformFrame{Attributes: frameAttr}
 		if val, ok := frameAttr["_t"]; ok {
-			fmt.Sscanf(val, "%f %f %f", &frame.LocalTrans[0], &frame.LocalTrans[1], &frame.LocalTrans[2])
+			var vx, vy, vz float32
+			fmt.Sscanf(val, "%f %f %f", &vx, &vy, &vz)
+			frame.LocalTrans[0] = vx
+			frame.LocalTrans[1] = vz // Engine Y is Vox Z
+			frame.LocalTrans[2] = vy // Engine Z is Vox Y
 		}
 		if val, ok := frameAttr["_r"]; ok {
 			var r int
