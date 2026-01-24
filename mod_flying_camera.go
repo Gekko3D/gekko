@@ -10,7 +10,12 @@ type FlyingCameraModule struct{}
 
 func (m FlyingCameraModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
-		System(FlyingCameraSystem).
+		System(FlyingCameraInputSystem).
+			InStage(Update).
+			RunAlways(),
+	)
+	app.UseSystem(
+		System(FlyingCameraControlSystem).
 			InStage(Update).
 			RunAlways(),
 	)
@@ -19,11 +24,49 @@ func (m FlyingCameraModule) Install(app *App, cmd *Commands) {
 type FlyingCameraComponent struct {
 	Speed       float32
 	Sensitivity float32
-	Yaw         float32
-	Pitch       float32
+	Move        mgl32.Vec3
+	Look        mgl32.Vec2
 }
 
-func FlyingCameraSystem(cmd *Commands, input *Input, time *Time) {
+func FlyingCameraInputSystem(input *Input, cmd *Commands) {
+	if input.JustPressed[KeyTab] {
+		input.MouseCaptured = !input.MouseCaptured
+	}
+
+	MakeQuery1[FlyingCameraComponent](cmd).Map(func(eid EntityId, fly *FlyingCameraComponent) bool {
+		fly.Move = mgl32.Vec3{0, 0, 0}
+		if input.Pressed[KeyW] {
+			fly.Move[2] += 1
+		}
+		if input.Pressed[KeyS] {
+			fly.Move[2] -= 1
+		}
+		if input.Pressed[KeyA] {
+			fly.Move[0] -= 1
+		}
+		if input.Pressed[KeyD] {
+			fly.Move[0] += 1
+		}
+		if input.Pressed[KeySpace] {
+			fly.Move[1] += 1
+		}
+		if input.Pressed[KeyControl] {
+			fly.Move[1] -= 1
+		}
+
+		if input.MouseCaptured {
+			fly.Look[0] = float32(input.MouseDeltaX)
+			fly.Look[1] = float32(input.MouseDeltaY)
+		} else {
+			fly.Look[0] = 0
+			fly.Look[1] = 0
+		}
+
+		return true
+	})
+}
+
+func FlyingCameraControlSystem(cmd *Commands, time *Time) {
 	dt := float32(time.Dt)
 	if dt <= 0 {
 		return
@@ -35,21 +78,19 @@ func FlyingCameraSystem(cmd *Commands, input *Input, time *Time) {
 			fly.Sensitivity = 0.1
 		}
 
-		if input.MouseCaptured {
-			fly.Yaw += float32(input.MouseDeltaX) * fly.Sensitivity
-			fly.Pitch -= float32(input.MouseDeltaY) * fly.Sensitivity
-		}
+		cam.Yaw += fly.Look[0] * fly.Sensitivity
+		cam.Pitch -= fly.Look[1] * fly.Sensitivity
 
 		// Clamp pitch
-		if fly.Pitch > 89.0 {
-			fly.Pitch = 89.0
+		if cam.Pitch > 89.0 {
+			cam.Pitch = 89.0
 		}
-		if fly.Pitch < -89.0 {
-			fly.Pitch = -89.0
+		if cam.Pitch < -89.0 {
+			cam.Pitch = -89.0
 		}
 
-		yawRad := mgl32.DegToRad(fly.Yaw)
-		pitchRad := mgl32.DegToRad(fly.Pitch)
+		yawRad := mgl32.DegToRad(cam.Yaw)
+		pitchRad := mgl32.DegToRad(cam.Pitch)
 
 		// Forward Vector
 		forward := mgl32.Vec3{
@@ -60,35 +101,20 @@ func FlyingCameraSystem(cmd *Commands, input *Input, time *Time) {
 
 		// Right Vector
 		right := forward.Cross(mgl32.Vec3{0, 1, 0}).Normalize()
-		up := right.Cross(forward).Normalize()
+		up := mgl32.Vec3{0, 1, 0}
 
 		// 2. Movement
 		if fly.Speed == 0 {
 			fly.Speed = 5.0
 		}
 
-		move := mgl32.Vec3{0, 0, 0}
-		if input.Pressed[KeyW] {
-			move = move.Add(forward)
-		}
-		if input.Pressed[KeyS] {
-			move = move.Sub(forward)
-		}
-		if input.Pressed[KeyA] {
-			move = move.Sub(right)
-		}
-		if input.Pressed[KeyD] {
-			move = move.Add(right)
-		}
-		if input.Pressed[KeyE] {
-			move = move.Add(up)
-		}
-		if input.Pressed[KeyQ] {
-			move = move.Sub(up)
-		}
+		moveDir := mgl32.Vec3{0, 0, 0}
+		moveDir = moveDir.Add(right.Mul(fly.Move[0]))
+		moveDir = moveDir.Add(up.Mul(fly.Move[1]))
+		moveDir = moveDir.Add(forward.Mul(fly.Move[2]))
 
-		if move.Len() > 0 {
-			cam.Position = cam.Position.Add(move.Normalize().Mul(fly.Speed * dt))
+		if moveDir.Len() > 0 {
+			cam.Position = cam.Position.Add(moveDir.Normalize().Mul(fly.Speed * dt))
 		}
 
 		// 3. LookAt Sync
