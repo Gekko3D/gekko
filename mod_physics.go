@@ -279,7 +279,11 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 				if collision, normal, penetration, contactPoint := checkOBBCollision(b, other); collision {
 					// Static resolution: push out of collision
-					b.pos = b.pos.Add(normal.Mul(penetration))
+					// Use a small slop to avoid jittering
+					slop := float32(0.01)
+					if penetration > slop {
+						b.pos = b.pos.Add(normal.Mul(penetration - slop))
+					}
 
 					// Relative velocity at contact point
 					rA := contactPoint.Sub(b.pos)
@@ -300,6 +304,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					}
 
 					restitution := (b.restitution + other.restitution) * 0.5
+					// If velocity is low, disable restitution to help settling
+					if velAlongNormal > -0.5 {
+						restitution = 0
+					}
 
 					// Calculating impulse scalar j
 					// j = -(1 + e) * v_rel . n / (1/mA + 1/mB + (rA x n)^2 / IA + (rB x n)^2 / IB)
@@ -350,6 +358,14 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						fImpulse := tangent.Mul(jt)
 						b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
 						b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
+					}
+
+					// Stabilization: if velocity is very low after resolution, zero it
+					if b.vel.Len() < 0.05 {
+						b.vel = mgl32.Vec3{0, 0, 0}
+					}
+					if b.angVel.Len() < 0.05 {
+						b.angVel = mgl32.Vec3{0, 0, 0}
 					}
 
 					b.Wake()
