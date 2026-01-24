@@ -51,8 +51,9 @@ type ColliderComponent struct {
 // PhysicsModel is a generic component that describes the object's physics model.
 // It is agnostic of the renderer.
 type PhysicsModel struct {
-	AABBMin mgl32.Vec3
-	AABBMax mgl32.Vec3
+	AABBMin      mgl32.Vec3
+	AABBMax      mgl32.Vec3
+	CenterOffset mgl32.Vec3 // Offset from transform position to center of collision box
 	// KeyPoints will contain corner and edge key-points in future phases.
 	KeyPoints []mgl32.Vec3
 }
@@ -108,7 +109,9 @@ type PhysicsSnapshot struct {
 type PhysicsEntityState struct {
 	Eid          EntityId
 	Pos          mgl32.Vec3
+	Rot          mgl32.Quat
 	Vel          mgl32.Vec3
+	AngVel       mgl32.Vec3
 	IsStatic     bool
 	Mass         float32
 	Model        PhysicsModel
@@ -125,7 +128,9 @@ type PhysicsResults struct {
 type PhysicsEntityResult struct {
 	Eid      EntityId
 	Pos      mgl32.Vec3
+	Rot      mgl32.Quat
 	Vel      mgl32.Vec3
+	AngVel   mgl32.Vec3
 	Sleeping bool
 	IdleTime float32
 }
@@ -139,10 +144,14 @@ func PhysicsSyncSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 			resMap[res.Eid] = res
 		}
 
-		MakeQuery2[TransformComponent, RigidBodyComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent) bool {
+		MakeQuery3[TransformComponent, RigidBodyComponent, PhysicsModel](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel) bool {
 			if res, ok := resMap[eid]; ok {
-				tr.Position = res.Pos
+				// tr.Position = res.Pos - res.Rot * pm.CenterOffset
+				rotatedOffset := res.Rot.Rotate(pm.CenterOffset)
+				tr.Position = res.Pos.Sub(rotatedOffset)
+				tr.Rotation = res.Rot
 				rb.Velocity = res.Vel
+				rb.AngularVelocity = res.AngVel
 				rb.Sleeping = res.Sleeping
 				rb.IdleTime = res.IdleTime
 			}
@@ -157,10 +166,14 @@ func PhysicsSyncSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 	}
 
 	MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent) bool {
+		// physicsCenter = tr.Position + tr.Rotation * pm.CenterOffset
+		rotatedOffset := tr.Rotation.Rotate(pm.CenterOffset)
 		snap.Entities = append(snap.Entities, PhysicsEntityState{
 			Eid:          eid,
-			Pos:          tr.Position,
+			Pos:          tr.Position.Add(rotatedOffset),
+			Rot:          tr.Rotation,
 			Vel:          rb.Velocity,
+			AngVel:       rb.AngularVelocity,
 			IsStatic:     rb.IsStatic,
 			Mass:         rb.Mass,
 			Model:        *pm,
@@ -195,7 +208,9 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					internalBodies[es.Eid] = body
 				}
 				body.pos = es.Pos
+				body.rot = es.Rot
 				body.vel = es.Vel
+				body.angVel = es.AngVel
 				body.isStatic = es.IsStatic
 				body.mass = es.Mass
 				body.model = es.Model
@@ -203,10 +218,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				body.restitution = es.Restitution
 				body.idleTime = es.IdleTime
 				body.gravityScale = es.GravityScale
-				body.gravityScale = es.GravityScale
 				// Store bounds in world units relative to position
-				body.min = es.Model.AABBMin.Mul(world.VoxelSize)
-				body.max = es.Model.AABBMax.Mul(world.VoxelSize)
+				body.halfExtents = es.Model.AABBMax.Sub(es.Model.AABBMin).Mul(0.5 * world.VoxelSize)
 			}
 			// Cleanup dead entities
 			snapMap := make(map[EntityId]bool)
@@ -243,27 +256,119 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				b.vel = b.vel.Add(gravity.Mul(b.gravityScale * dt))
 			}
 
-			// Integrate
-			displacement := b.vel.Mul(dt)
+			// Apply Damping
+			b.vel = b.vel.Mul(0.99)
+			b.angVel = b.angVel.Mul(0.98)
 
-			// Resolve collisions axis by axis
-			// (Using the same logic as before, but adapted to internalBody)
-			b.pos, b.vel = physicsResolveAxis(bodies, b, b.pos, b.vel, displacement, 1, world.VoxelSize, b.friction, b.restitution)
-			displacement = b.vel.Mul(dt)
-			b.pos, b.vel = physicsResolveAxis(bodies, b, b.pos, b.vel, displacement, 0, world.VoxelSize, b.friction, b.restitution)
-			displacement = b.vel.Mul(dt)
-			b.pos, b.vel = physicsResolveAxis(bodies, b, b.pos, b.vel, displacement, 2, world.VoxelSize, b.friction, b.restitution)
+			// Integrate linear
+			oldPos := b.pos
+			b.pos = b.pos.Add(b.vel.Mul(dt))
 
-			// Sleeping logic simplified for now
-			if b.vel.Len() < world.SleepThreshold {
+			// Integrate angular
+			if b.angVel.Len() > 0 {
+				angVelQuat := mgl32.Quat{W: 0, V: b.angVel.Mul(0.5 * dt)}
+				b.rot = b.rot.Add(angVelQuat.Mul(b.rot))
+				b.rot = b.rot.Normalize()
+			}
+
+			// Check and resolve collisions
+			for _, other := range bodies {
+				if b.Eid == other.Eid {
+					continue
+				}
+
+				if collision, normal, penetration, contactPoint := checkOBBCollision(b, other); collision {
+					// Static resolution: push out of collision
+					b.pos = b.pos.Add(normal.Mul(penetration))
+
+					// Relative velocity at contact point
+					rA := contactPoint.Sub(b.pos)
+					rB := contactPoint.Sub(other.pos)
+
+					vA := b.vel.Add(b.angVel.Cross(rA))
+					vB := other.vel
+					if !other.isStatic {
+						vB = other.vel.Add(other.angVel.Cross(rB))
+					}
+
+					relativeVel := vA.Sub(vB)
+					velAlongNormal := relativeVel.Dot(normal)
+
+					// Do not resolve if velocities are separating
+					if velAlongNormal > 0 {
+						continue
+					}
+
+					restitution := (b.restitution + other.restitution) * 0.5
+
+					// Calculating impulse scalar j
+					// j = -(1 + e) * v_rel . n / (1/mA + 1/mB + (rA x n)^2 / IA + (rB x n)^2 / IB)
+
+					// Simplified Moment of Inertia for a cube: I = (1/6) * mass * size^2
+					// size is approx 2 * average half extent
+					avgSizeA := (b.halfExtents.X() + b.halfExtents.Y() + b.halfExtents.Z()) / 3.0 * 2.0
+					inertiaA := (1.0 / 6.0) * b.mass * avgSizeA * avgSizeA
+
+					denom := 1.0 / b.mass
+					rAn := rA.Cross(normal)
+					denom += rAn.Dot(rAn) / inertiaA
+
+					if !other.isStatic && other.mass > 0 {
+						avgSizeB := (other.halfExtents.X() + other.halfExtents.Y() + other.halfExtents.Z()) / 3.0 * 2.0
+						inertiaB := (1.0 / 6.0) * other.mass * avgSizeB * avgSizeB
+						denom += 1.0 / other.mass
+						rBn := rB.Cross(normal)
+						denom += rBn.Dot(rBn) / inertiaB
+					}
+
+					j := -(1 + restitution) * velAlongNormal
+					j /= denom
+
+					impulse := normal.Mul(j)
+
+					// Apply linear impulse
+					b.vel = b.vel.Add(impulse.Mul(1.0 / b.mass))
+
+					// Apply angular impulse
+					b.angVel = b.angVel.Add(rA.Cross(impulse).Mul(1.0 / inertiaA))
+
+					if !other.isStatic && other.mass > 0 {
+						avgSizeB := (other.halfExtents.X() + other.halfExtents.Y() + other.halfExtents.Z()) / 3.0 * 2.0
+						inertiaB := (1.0 / 6.0) * other.mass * avgSizeB * avgSizeB
+						other.vel = other.vel.Sub(impulse.Mul(1.0 / other.mass))
+						other.angVel = other.angVel.Sub(rB.Cross(impulse).Mul(1.0 / inertiaB))
+					}
+
+					// Friction
+					friction := (b.friction + other.friction) * 0.5
+					tangent := relativeVel.Sub(normal.Mul(relativeVel.Dot(normal)))
+					if tangent.Len() > 0.0001 {
+						tangent = tangent.Normalize()
+						jt := -relativeVel.Dot(tangent) * friction
+						jt /= denom // Approximate denominator for friction
+
+						fImpulse := tangent.Mul(jt)
+						b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
+						b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
+					}
+
+					b.Wake()
+				}
+			}
+
+			// Sleeping logic
+			if b.vel.Len() < world.SleepThreshold && b.angVel.Len() < world.SleepThreshold {
 				b.idleTime += dt
 				if b.idleTime > world.SleepTime {
 					b.sleeping = true
 					b.vel = mgl32.Vec3{0, 0, 0}
+					b.angVel = mgl32.Vec3{0, 0, 0}
 				}
 			} else {
 				b.idleTime = 0
 			}
+
+			_ = oldPos // To prevent unused variable error if I don't use it elsewhere
 		}
 
 		// Push results
@@ -272,7 +377,9 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			res.Entities = append(res.Entities, PhysicsEntityResult{
 				Eid:      b.Eid,
 				Pos:      b.pos,
+				Rot:      b.rot,
 				Vel:      b.vel,
+				AngVel:   b.angVel,
 				Sleeping: b.sleeping,
 				IdleTime: b.idleTime,
 			})
@@ -281,14 +388,21 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 	}
 }
 
+func (b *internalBody) Wake() {
+	b.sleeping = false
+	b.idleTime = 0
+}
+
 type internalBody struct {
 	Eid          EntityId
 	pos          mgl32.Vec3
+	rot          mgl32.Quat
 	vel          mgl32.Vec3
+	angVel       mgl32.Vec3
 	isStatic     bool
 	mass         float32
 	model        PhysicsModel
-	min, max     mgl32.Vec3 // Bounds relative to position, in world units
+	halfExtents  mgl32.Vec3 // Half extents of the box in world units
 	sleeping     bool
 	idleTime     float32
 	friction     float32
@@ -296,75 +410,152 @@ type internalBody struct {
 	gravityScale float32
 }
 
-func physicsResolveAxis(bodies []*internalBody, self *internalBody, pos, vel, displacement mgl32.Vec3, axis int, vSize, friction, restitution float32) (mgl32.Vec3, mgl32.Vec3) {
-	newPos := pos
-	dist := displacement[axis]
-	if math.Abs(float64(dist)) < 0.0001 {
-		return pos, vel
+func checkOBBCollision(a, b *internalBody) (bool, mgl32.Vec3, float32, mgl32.Vec3) {
+	// AABB pre-check for performance
+	posA := a.pos
+	posB := b.pos
+
+	rotA := a.rot.Mat4()
+	rotB := b.rot.Mat4()
+
+	axesA := [3]mgl32.Vec3{
+		rotA.Col(0).Vec3(),
+		rotA.Col(1).Vec3(),
+		rotA.Col(2).Vec3(),
+	}
+	axesB := [3]mgl32.Vec3{
+		rotB.Col(0).Vec3(),
+		rotB.Col(1).Vec3(),
+		rotB.Col(2).Vec3(),
 	}
 
-	stepSize := float32(0.1)
-	if dist < 0 {
-		stepSize = -0.1
+	L := posB.Sub(posA)
+
+	minOverlap := float32(math.MaxFloat32)
+	var collisionNormal mgl32.Vec3
+
+	// SAT axes to check
+	var testAxes []mgl32.Vec3
+	for i := 0; i < 3; i++ {
+		testAxes = append(testAxes, axesA[i])
+		testAxes = append(testAxes, axesB[i])
 	}
-
-	remaining := float32(math.Abs(float64(dist)))
-	iterations := 0
-	for remaining > 0 && iterations < 100 {
-		iterations++
-		move := stepSize
-		if remaining < float32(math.Abs(float64(stepSize))) {
-			move = dist / float32(math.Abs(float64(dist))) * remaining
-		}
-
-		testPos := newPos
-		testPos[axis] += move
-
-		if physicsCheckCollision(bodies, self, testPos) {
-			// Apply restitution
-			vel[axis] = -vel[axis] * restitution
-			if math.Abs(float64(vel[axis])) < 0.1 {
-				vel[axis] = 0
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			cross := axesA[i].Cross(axesB[j])
+			if cross.LenSqr() > 0.0001 {
+				testAxes = append(testAxes, cross.Normalize())
 			}
-
-			// Apply friction to tangential axes
-			for a := 0; a < 3; a++ {
-				if a != axis {
-					vel[a] *= (1.0 - friction)
-					if math.Abs(float64(vel[a])) < 0.01 {
-						vel[a] = 0
-					}
-				}
-			}
-			break
 		}
-		newPos = testPos
-		remaining -= float32(math.Abs(float64(move)))
 	}
 
-	return newPos, vel
+	for _, axis := range testAxes {
+		overlap, collision := getOverlap(a, b, axesA, axesB, axis, L)
+		if !collision {
+			return false, mgl32.Vec3{}, 0, mgl32.Vec3{}
+		}
+		if overlap < minOverlap {
+			minOverlap = overlap
+			collisionNormal = axis
+		}
+	}
+
+	// Ensure normal points from B to A (so we push A away)
+	if L.Dot(collisionNormal) > 0 {
+		collisionNormal = collisionNormal.Mul(-1)
+	}
+
+	// Contact point calculation
+	contactPoint := findContactPoint(a, b, axesA, axesB)
+
+	return true, collisionNormal, minOverlap, contactPoint
 }
 
-func physicsCheckCollision(bodies []*internalBody, self *internalBody, pos mgl32.Vec3) bool {
-	selfMin := pos.Add(self.min)
-	selfMax := pos.Add(self.max)
+func findContactPoint(a, b *internalBody, axesA, axesB [3]mgl32.Vec3) mgl32.Vec3 {
+	// Simple approach: test corners of a against b and vice versa
+	cornersA := getCorners(a.pos, axesA, a.halfExtents)
+	cornersB := getCorners(b.pos, axesB, b.halfExtents)
 
-	for _, other := range bodies {
-		if other.Eid == self.Eid {
-			continue
-		}
-
-		// AABB Check
-		otherMin := other.pos.Add(other.min)
-		otherMax := other.pos.Add(other.max)
-
-		if selfMin.X() < otherMax.X() && selfMax.X() > otherMin.X() &&
-			selfMin.Y() < otherMax.Y() && selfMax.Y() > otherMin.Y() &&
-			selfMin.Z() < otherMax.Z() && selfMax.Z() > otherMin.Z() {
-			return true
+	var contactPoints []mgl32.Vec3
+	for _, p := range cornersA {
+		if isPointInOBB(p, b.pos, axesB, b.halfExtents) {
+			contactPoints = append(contactPoints, p)
 		}
 	}
-	return false
+	for _, p := range cornersB {
+		if isPointInOBB(p, a.pos, axesA, a.halfExtents) {
+			contactPoints = append(contactPoints, p)
+		}
+	}
+
+	if len(contactPoints) == 0 {
+		// Fallback: average of positions
+		return a.pos.Add(b.pos).Mul(0.5)
+	}
+
+	// Average of all points found
+	avg := mgl32.Vec3{0, 0, 0}
+	for _, p := range contactPoints {
+		avg = avg.Add(p)
+	}
+	return avg.Mul(1.0 / float32(len(contactPoints)))
 }
 
-// physicsResolveAxis and physicsCheckCollision are already implemented above.
+func getCorners(pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3) []mgl32.Vec3 {
+	var corners []mgl32.Vec3
+	for i := 0; i < 8; i++ {
+		p := pos
+		if i&1 != 0 {
+			p = p.Add(axes[0].Mul(halfExtents.X()))
+		} else {
+			p = p.Sub(axes[0].Mul(halfExtents.X()))
+		}
+		if i&2 != 0 {
+			p = p.Add(axes[1].Mul(halfExtents.Y()))
+		} else {
+			p = p.Sub(axes[1].Mul(halfExtents.Y()))
+		}
+		if i&4 != 0 {
+			p = p.Add(axes[2].Mul(halfExtents.Z()))
+		} else {
+			p = p.Sub(axes[2].Mul(halfExtents.Z()))
+		}
+		corners = append(corners, p)
+	}
+	return corners
+}
+
+func isPointInOBB(p, pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3) bool {
+	d := p.Sub(pos)
+	for i := 0; i < 3; i++ {
+		dist := float32(math.Abs(float64(d.Dot(axes[i]))))
+		if dist > halfExtents[i]+0.01 { // Small epsilon
+			return false
+		}
+	}
+	return true
+}
+
+func getOverlap(a, b *internalBody, axesA, axesB [3]mgl32.Vec3, axis mgl32.Vec3, L mgl32.Vec3) (float32, bool) {
+	projectionA := float32(0)
+	for i := 0; i < 3; i++ {
+		projectionA += float32(math.Abs(float64(axesA[i].Dot(axis)))) * a.halfExtents[i]
+	}
+
+	projectionB := float32(0)
+	for i := 0; i < 3; i++ {
+		projectionB += float32(math.Abs(float64(axesB[i].Dot(axis)))) * b.halfExtents[i]
+	}
+
+	distance := float32(math.Abs(float64(L.Dot(axis))))
+
+	overlap := projectionA + projectionB - distance
+	return overlap, overlap > 0
+}
+
+func (rb *RigidBodyComponent) ApplyTorque(torque mgl32.Vec3) {
+	rb.Wake()
+	// Simplified: no moment of inertia calculation for now, just apply directly
+	// In a real engine, we'd scale by inverse inertia tensor.
+	rb.AngularVelocity = rb.AngularVelocity.Add(torque.Mul(1.0 / rb.Mass))
+}

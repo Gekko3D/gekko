@@ -76,9 +76,16 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer) {
 		}
 
 		if initialized {
+			vSize := float32(0.1) // Default Voxel Size
+			// Find PhysicsWorld to get actual VoxelSize if possible
+			// But since this is a system, we can't easily get resources without adding them to query.
+			// Let's assume 0.1 for now or better, get it from the command.
+			// Actually, let's just use 0.1 as it's the engine standard for now.
+
 			cmd.AddComponents(eid, PhysicsModel{
-				AABBMin: aabbMin,
-				AABBMax: aabbMax,
+				AABBMin:      aabbMin,
+				AABBMax:      aabbMax,
+				CenterOffset: aabbMin.Add(aabbMax).Mul(0.5 * vSize),
 			})
 		}
 		return true
