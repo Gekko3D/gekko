@@ -15,6 +15,20 @@ const (
 	ShapeSphere
 )
 
+type VoxelCategory int
+
+const (
+	VoxelCategoryInternal VoxelCategory = iota
+	VoxelCategoryFace
+	VoxelCategoryEdge
+	VoxelCategoryCorner
+)
+
+type VoxelData struct {
+	RelativePos mgl32.Vec3
+	Category    VoxelCategory
+}
+
 type RigidBodyComponent struct {
 	Velocity        mgl32.Vec3
 	AngularVelocity mgl32.Vec3
@@ -60,7 +74,16 @@ type PhysicsModel struct {
 	CenterOffset mgl32.Vec3 // Global offset for the whole model (e.g. for AABB pre-calc)
 	// KeyPoints will contain corner and edge key-points in future phases.
 	KeyPoints []mgl32.Vec3
+	Voxels    []VoxelData
+	GridSize  [3]uint32
 }
+
+type CollisionMode int
+
+const (
+	CollisionModeOBB CollisionMode = iota
+	CollisionModeVoxel
+)
 
 type PhysicsWorld struct {
 	Gravity         mgl32.Vec3
@@ -68,6 +91,7 @@ type PhysicsWorld struct {
 	SleepThreshold  float32
 	SleepTime       float32
 	UpdateFrequency float32 // Hz
+	CollisionMode   CollisionMode
 }
 
 func NewPhysicsWorld() *PhysicsWorld {
@@ -77,6 +101,7 @@ func NewPhysicsWorld() *PhysicsWorld {
 		SleepThreshold:  0.05,
 		SleepTime:       1.0,
 		UpdateFrequency: 60.0,
+		CollisionMode:   CollisionModeOBB, // Default to OBB for backward compatibility
 	}
 }
 
@@ -227,6 +252,20 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				for i, box := range es.Model.Boxes {
 					body.boxes[i].Box = box
 				}
+				// Store voxels and build lookup
+				body.voxels = es.Model.Voxels
+				body.gridLookup = make(map[[3]int32]bool)
+				for _, v := range body.voxels {
+					// Extract grid coordinates from relative position
+					// RelativePos = (coord + 0.5) * VoxelSize - CenterOffset
+					// So coord = (RelativePos + CenterOffset) / VoxelSize - 0.5
+					// But we can just store the original coordinates if we update PhysicsModel.
+					// For now, let's reverse it accurately.
+					coordX := int32(math.Round(float64((v.RelativePos.X()+es.Model.CenterOffset.X())/world.VoxelSize - 0.5)))
+					coordY := int32(math.Round(float64((v.RelativePos.Y()+es.Model.CenterOffset.Y())/world.VoxelSize - 0.5)))
+					coordZ := int32(math.Round(float64((v.RelativePos.Z()+es.Model.CenterOffset.Z())/world.VoxelSize - 0.5)))
+					body.gridLookup[[3]int32{coordX, coordY, coordZ}] = true
+				}
 			}
 			// Cleanup dead entities
 			snapMap := make(map[EntityId]bool)
@@ -293,101 +332,22 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					continue
 				}
 
-				for _, boxA := range b.boxes {
-					for _, boxB := range other.boxes {
-						// Box-Box AABB check using pre-calculated bounds
-						if boxA.Min.X() > boxB.Max.X() || boxA.Max.X() < boxB.Min.X() ||
-							boxA.Min.Y() > boxB.Max.Y() || boxA.Max.Y() < boxB.Min.Y() ||
-							boxA.Min.Z() > boxB.Max.Z() || boxA.Max.Z() < boxB.Min.Z() {
-							continue
-						}
-
-						if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box); collision {
-							// Static resolution: push out of collision
-							// Use a small slop to avoid jittering
-							slop := float32(0.02)
-							if penetration > slop {
-								b.pos = b.pos.Add(normal.Mul(penetration - slop))
-							}
-
-							// Relative velocity at contact point
-							rA := contactPoint.Sub(b.pos)
-							rB := contactPoint.Sub(other.pos)
-
-							vA := b.vel.Add(b.angVel.Cross(rA))
-							vB := other.vel
-							if !other.isStatic {
-								vB = other.vel.Add(other.angVel.Cross(rB))
-							}
-
-							relativeVel := vA.Sub(vB)
-							velAlongNormal := relativeVel.Dot(normal)
-
-							// Do not resolve if velocities are separating
-							if velAlongNormal > 0 {
+				if world.CollisionMode == CollisionModeVoxel {
+					if collision, normal, penetration, contactPoint := checkVoxelCollision(b, other, world); collision {
+						resolveCollision(b, other, normal, penetration, contactPoint)
+					}
+				} else {
+					for _, boxA := range b.boxes {
+						for _, boxB := range other.boxes {
+							// Box-Box AABB check using pre-calculated bounds
+							if boxA.Min.X() > boxB.Max.X() || boxA.Max.X() < boxB.Min.X() ||
+								boxA.Min.Y() > boxB.Max.Y() || boxA.Max.Y() < boxB.Min.Y() ||
+								boxA.Min.Z() > boxB.Max.Z() || boxA.Max.Z() < boxB.Min.Z() {
 								continue
 							}
 
-							restitution := (b.restitution + other.restitution) * 0.5
-							// If velocity is low, disable restitution to help settling
-							if velAlongNormal > -0.5 {
-								restitution = 0
-							}
-
-							inertiaA := calculateInertia(b)
-
-							denom := 1.0 / b.mass
-							rAn := rA.Cross(normal)
-							denom += rAn.Dot(rAn) / inertiaA
-
-							if !other.isStatic && other.mass > 0 {
-								inertiaB := calculateInertia(other)
-								denom += 1.0 / other.mass
-								rBn := rB.Cross(normal)
-								denom += rBn.Dot(rBn) / inertiaB
-							}
-
-							j := -(1 + restitution) * velAlongNormal
-							j /= denom
-
-							impulse := normal.Mul(j)
-
-							// Apply linear impulse
-							b.vel = b.vel.Add(impulse.Mul(1.0 / b.mass))
-
-							// Apply angular impulse
-							b.angVel = b.angVel.Add(rA.Cross(impulse).Mul(1.0 / inertiaA))
-
-							if !other.isStatic && other.mass > 0 {
-								inertiaB := calculateInertia(other)
-								other.vel = other.vel.Sub(impulse.Mul(1.0 / other.mass))
-								other.angVel = other.angVel.Sub(rB.Cross(impulse).Mul(1.0 / inertiaB))
-							}
-
-							// Friction
-							friction := (b.friction + other.friction) * 0.5
-							tangent := relativeVel.Sub(normal.Mul(relativeVel.Dot(normal)))
-							if tangent.Len() > 0.0001 {
-								tangent = tangent.Normalize()
-								jt := -relativeVel.Dot(tangent) * friction
-								jt /= denom // Approximate denominator for friction
-
-								fImpulse := tangent.Mul(jt)
-								b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
-								b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
-							}
-
-							// Stabilization: if velocity is very low after resolution, zero it
-							if b.vel.Len() < 0.01 {
-								b.vel = mgl32.Vec3{0, 0, 0}
-							}
-							if b.angVel.Len() < 0.01 {
-								b.angVel = mgl32.Vec3{0, 0, 0}
-							}
-
-							// Only wake if we have significant relative velocity
-							if math.Abs(float64(velAlongNormal)) > 0.1 {
-								b.Wake()
+							if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box); collision {
+								resolveCollision(b, other, normal, penetration, contactPoint)
 							}
 						}
 					}
@@ -453,6 +413,340 @@ type internalBody struct {
 	gravityScale float32
 	aabbMin      mgl32.Vec3
 	aabbMax      mgl32.Vec3
+	voxels       []VoxelData
+	gridLookup   map[[3]int32]bool
+}
+
+func resolveCollision(b, other *internalBody, normal mgl32.Vec3, penetration float32, contactPoint mgl32.Vec3) {
+	// Static resolution: push out of collision
+	// Use a small slop to avoid jittering
+	slop := float32(0.02)
+	if penetration > slop {
+		b.pos = b.pos.Add(normal.Mul(penetration - slop))
+	}
+
+	// Relative velocity at contact point
+	rA := contactPoint.Sub(b.pos)
+	rB := contactPoint.Sub(other.pos)
+
+	vA := b.vel.Add(b.angVel.Cross(rA))
+	vB := other.vel
+	if !other.isStatic {
+		vB = other.vel.Add(other.angVel.Cross(rB))
+	}
+
+	relativeVel := vA.Sub(vB)
+	velAlongNormal := relativeVel.Dot(normal)
+
+	// Do not resolve if velocities are separating
+	if velAlongNormal > 0 {
+		return
+	}
+
+	restitution := (b.restitution + other.restitution) * 0.5
+	// If velocity is low, disable restitution to help settling
+	if velAlongNormal > -0.5 {
+		restitution = 0
+	}
+
+	inertiaA := calculateInertia(b)
+
+	denom := 1.0 / b.mass
+	rAn := rA.Cross(normal)
+	denom += rAn.Dot(rAn) / inertiaA
+
+	if !other.isStatic && other.mass > 0 {
+		inertiaB := calculateInertia(other)
+		denom += 1.0 / other.mass
+		rBn := rB.Cross(normal)
+		denom += rBn.Dot(rBn) / inertiaB
+	}
+
+	j := -(1 + restitution) * velAlongNormal
+	j /= denom
+
+	impulse := normal.Mul(j)
+
+	// Apply linear impulse
+	b.vel = b.vel.Add(impulse.Mul(1.0 / b.mass))
+
+	// Apply angular impulse
+	b.angVel = b.angVel.Add(rA.Cross(impulse).Mul(1.0 / inertiaA))
+
+	if !other.isStatic && other.mass > 0 {
+		inertiaB := calculateInertia(other)
+		other.vel = other.vel.Sub(impulse.Mul(1.0 / other.mass))
+		other.angVel = other.angVel.Sub(rB.Cross(impulse).Mul(1.0 / inertiaB))
+	}
+
+	// Friction
+	friction := (b.friction + other.friction) * 0.5
+	tangent := relativeVel.Sub(normal.Mul(relativeVel.Dot(normal)))
+	if tangent.Len() > 0.0001 {
+		tangent = tangent.Normalize()
+		jt := -relativeVel.Dot(tangent) * friction
+		jt /= denom // Approximate denominator for friction
+
+		fImpulse := tangent.Mul(jt)
+		b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
+		b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
+	}
+
+	// Stabilization: if velocity is very low after resolution, zero it
+	if b.vel.Len() < 0.01 {
+		b.vel = mgl32.Vec3{0, 0, 0}
+	}
+	if b.angVel.Len() < 0.01 {
+		b.angVel = mgl32.Vec3{0, 0, 0}
+	}
+
+	// Only wake if we have significant relative velocity
+	if math.Abs(float64(velAlongNormal)) > 0.1 {
+		b.Wake()
+	}
+}
+
+func checkVoxelCollision(b1, b2 *internalBody, world *PhysicsWorld) (bool, mgl32.Vec3, float32, mgl32.Vec3) {
+	// 1. Broad-phase AABB sub-volume
+	minV := mgl32.Vec3{
+		float32(math.Max(float64(b1.aabbMin.X()), float64(b2.aabbMin.X()))),
+		float32(math.Max(float64(b1.aabbMin.Y()), float64(b2.aabbMin.Y()))),
+		float32(math.Max(float64(b1.aabbMin.Z()), float64(b2.aabbMin.Z()))),
+	}
+	maxV := mgl32.Vec3{
+		float32(math.Min(float64(b1.aabbMax.X()), float64(b2.aabbMax.X()))),
+		float32(math.Min(float64(b1.aabbMax.Y()), float64(b2.aabbMax.Y()))),
+		float32(math.Min(float64(b1.aabbMax.Z()), float64(b2.aabbMax.Z()))),
+	}
+
+	// Expand sub-volume slightly
+	padding := world.VoxelSize * 0.5
+	minV = minV.Sub(mgl32.Vec3{padding, padding, padding})
+	maxV = maxV.Add(mgl32.Vec3{padding, padding, padding})
+
+	if minV.X() > maxV.X() || minV.Y() > maxV.Y() || minV.Z() > maxV.Z() {
+		return false, mgl32.Vec3{}, 0, mgl32.Vec3{}
+	}
+
+	var collisionPoints []mgl32.Vec3
+	var collisionNormals []mgl32.Vec3
+	var penetrations []float32
+
+	type deepContact struct {
+		cp         mgl32.Vec3
+		norm       mgl32.Vec3
+		pen        float32
+		flipNormal bool
+	}
+	var potentialDeepContacts []deepContact
+
+	invRot1 := b1.rot.Conjugate()
+	invRot2 := b2.rot.Conjugate()
+
+	halfVoxel := world.VoxelSize / 2.0
+
+	// Helper for checking neighbors in body's local space
+	checkNeighbors := func(v1Index int, sourceBody, targetBody *internalBody, invRotTarget mgl32.Quat, flipNormal bool) bool {
+		v1 := sourceBody.voxels[v1Index]
+		worldPoint := sourceBody.pos.Add(sourceBody.rot.Rotate(v1.RelativePos))
+		localPoint := invRotTarget.Rotate(worldPoint.Sub(targetBody.pos))
+
+		// Convert to grid coordinates in target body
+		fx := (localPoint.X()+targetBody.model.CenterOffset.X())/world.VoxelSize - 0.5
+		fy := (localPoint.Y()+targetBody.model.CenterOffset.Y())/world.VoxelSize - 0.5
+		fz := (localPoint.Z()+targetBody.model.CenterOffset.Z())/world.VoxelSize - 0.5
+
+		ix, iy, iz := int32(math.Floor(float64(fx))), int32(math.Floor(float64(fy))), int32(math.Floor(float64(fz)))
+
+		found := false
+
+		// Define the source box for SAT
+		box1 := CollisionBox{
+			HalfExtents: mgl32.Vec3{halfVoxel, halfVoxel, halfVoxel},
+			LocalOffset: v1.RelativePos,
+		}
+
+		// Check 2x2x2 neighborhood
+		for dx := int32(0); dx <= 1; dx++ {
+			for dy := int32(0); dy <= 1; dy++ {
+				for dz := int32(0); dz <= 1; dz++ {
+					tx, ty, tz := ix+dx, iy+dy, iz+dz
+					if targetBody.gridLookup[[3]int32{tx, ty, tz}] {
+						// Voxel center in target's local space
+						targetRelPos := mgl32.Vec3{
+							(float32(tx)+0.5)*world.VoxelSize - targetBody.model.CenterOffset.X(),
+							(float32(ty)+0.5)*world.VoxelSize - targetBody.model.CenterOffset.Y(),
+							(float32(tz)+0.5)*world.VoxelSize - targetBody.model.CenterOffset.Z(),
+						}
+
+						box2 := CollisionBox{
+							HalfExtents: mgl32.Vec3{halfVoxel, halfVoxel, halfVoxel},
+							LocalOffset: targetRelPos,
+						}
+
+						if hit, norm, pen, cp := checkSingleOBBCollision(sourceBody.pos, sourceBody.rot, box1, targetBody.pos, targetBody.rot, box2); hit {
+							// Stability Fix: Only accept normals that point towards an open face of the target voxel.
+							// norm points from Target -> Source (CollisionBox2 -> CollisionBox1).
+							// Transform normal to target's local space to check grid alignment.
+							localNorm := invRotTarget.Rotate(norm)
+
+							// Find dominant axis in LOCAL space to pick neighbor direction
+							absX := math.Abs(float64(localNorm.X()))
+							absY := math.Abs(float64(localNorm.Y()))
+							absZ := math.Abs(float64(localNorm.Z()))
+
+							validNormal := true
+
+							// Check if the neighbor in the direction of the normal is also occupied
+							if absX > absY && absX > absZ {
+								neighborX := tx
+								if localNorm.X() > 0 {
+									neighborX++
+								} else {
+									neighborX--
+								}
+								if targetBody.gridLookup[[3]int32{neighborX, ty, tz}] {
+									validNormal = false
+								}
+							} else if absY > absX && absY > absZ {
+								neighborY := ty
+								if localNorm.Y() > 0 {
+									neighborY++
+								} else {
+									neighborY--
+								}
+								if targetBody.gridLookup[[3]int32{tx, neighborY, tz}] {
+									validNormal = false
+								}
+							} else {
+								neighborZ := tz
+								if localNorm.Z() > 0 {
+									neighborZ++
+								} else {
+									neighborZ--
+								}
+								if targetBody.gridLookup[[3]int32{tx, ty, neighborZ}] {
+									validNormal = false
+								}
+							}
+
+							// Extra Stability Check: If objects are roughly aligned (flat stacking),
+							// we should prefer normals that align with the global Up axis (Y) to prevent sliding.
+							// This is a heuristic for voxel games where gravity is -Y.
+							if validNormal && norm.Y() > 0.9 {
+								// Keep this strong Up normal
+							} else if validNormal {
+								// If we have a valid local normal, but it's skewed (e.g. corner collision),
+								// and we are simply stacking, this might cause sliding.
+								// However, for generic physics we shouldn't force it too much.
+								// Let's trust the SAT but maybe filter out very small penetrations that are just noise on the sides.
+								if pen < 0.005 {
+									// Ignore tiny side touches if we are finding better contacts elsewhere
+									// But for now, let's keep it simple.
+								}
+							}
+
+							if validNormal {
+								collisionPoints = append(collisionPoints, cp)
+								if flipNormal {
+									collisionNormals = append(collisionNormals, norm.Mul(-1))
+								} else {
+									collisionNormals = append(collisionNormals, norm)
+								}
+								penetrations = append(penetrations, pen)
+								found = true
+							}
+						}
+					}
+				}
+			}
+		}
+		return found
+	}
+
+	// 2. Sample categorized voxels from B1 against B2 grid
+	for i, v1 := range b1.voxels {
+		if v1.Category != VoxelCategoryCorner && v1.Category != VoxelCategoryEdge {
+			continue
+		}
+		// checkSingleOBBCollision returns normal pointing towards Source (b1).
+		// We want normal pointing towards b1. So flip=false.
+		checkNeighbors(i, b1, b2, invRot2, false)
+	}
+
+	// 3. Sample categorized voxels from B2 against B1 grid
+	for i, v2 := range b2.voxels {
+		if v2.Category != VoxelCategoryCorner && v2.Category != VoxelCategoryEdge {
+			continue
+		}
+		// checkSingleOBBCollision returns normal pointing towards Source (b2).
+		// We want normal pointing towards b1. So flip=true.
+		checkNeighbors(i, b2, b1, invRot1, true)
+	}
+
+	if len(collisionPoints) == 0 {
+		// Fallback: If no "valid" open-face collisions, but we have deep contacts, use them.
+		if len(potentialDeepContacts) > 0 {
+			for _, dc := range potentialDeepContacts {
+				collisionPoints = append(collisionPoints, dc.cp)
+				if dc.flipNormal {
+					collisionNormals = append(collisionNormals, dc.norm.Mul(-1))
+				} else {
+					collisionNormals = append(collisionNormals, dc.norm)
+				}
+				penetrations = append(penetrations, dc.pen)
+			}
+		} else {
+			return false, mgl32.Vec3{}, 0, mgl32.Vec3{}
+		}
+	}
+
+	// 5. Manifold Reduction: Prioritize Deepest Contacts
+	// Averaging everything causes jitter when many shallow contacts fight with few deep ones.
+	// New strategy:
+	// 1. Find max penetration
+	// 2. Average only contacts within a threshold of max penetration (e.g. 10%)
+
+	maxPen := float32(-1.0)
+	for _, p := range penetrations {
+		if p > maxPen {
+			maxPen = p
+		}
+	}
+
+	// Threshold: keep contacts that are within a small absolute distance of the deepest penetration.
+	// Using a percentage (90%) works for deep collisions but can be too strict or loose for shallow ones.
+	// A fixed small tolerance (e.g. 1mm) is better for stability.
+	threshold := maxPen - 0.01 // 1 cm tolerance
+	if threshold < 0 {
+		threshold = 0
+	}
+
+	avgPos := mgl32.Vec3{0, 0, 0}
+	avgNormal := mgl32.Vec3{0, 0, 0}
+	count := float32(0)
+
+	for i := range collisionPoints {
+		if penetrations[i] >= threshold {
+			avgPos = avgPos.Add(collisionPoints[i])
+			avgNormal = avgNormal.Add(collisionNormals[i])
+			count++
+		}
+	}
+
+	if count > 0 {
+		avgPos = avgPos.Mul(1.0 / count)
+		if avgNormal.LenSqr() > 1e-6 {
+			avgNormal = avgNormal.Normalize()
+		} else {
+			avgNormal = mgl32.Vec3{0, 1, 0} // Fallback
+		}
+	} else {
+		// Should not happen if logic is correct, but safe fallback
+		return false, mgl32.Vec3{}, 0, mgl32.Vec3{}
+	}
+
+	return true, avgNormal, maxPen, avgPos
 }
 
 func (b *internalBody) updateAABB() {

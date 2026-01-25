@@ -14,6 +14,55 @@ func (m VoxPhysicsModule) Install(app *App, cmd *Commands) {
 	)
 }
 
+func classifyVoxels(model VoxModel) []VoxelData {
+	if len(model.Voxels) == 0 {
+		return nil
+	}
+
+	occupied := make(map[[3]uint32]bool)
+	for _, v := range model.Voxels {
+		occupied[[3]uint32{v.X, v.Y, v.Z}] = true
+	}
+
+	const vSize = 0.1
+	var voxels []VoxelData
+
+	for _, v := range model.Voxels {
+		x, y, z := v.X, v.Y, v.Z
+		surroundedCount := 0
+
+		// Check X axis
+		if x > 0 && occupied[[3]uint32{x - 1, y, z}] && occupied[[3]uint32{x + 1, y, z}] {
+			surroundedCount++
+		}
+		// Check Y axis
+		if y > 0 && occupied[[3]uint32{x, y - 1, z}] && occupied[[3]uint32{x, y + 1, z}] {
+			surroundedCount++
+		}
+		// Check Z axis
+		if z > 0 && occupied[[3]uint32{x, y, z - 1}] && occupied[[3]uint32{x, y, z + 1}] {
+			surroundedCount++
+		}
+
+		category := VoxelCategoryCorner
+		switch surroundedCount {
+		case 1:
+			category = VoxelCategoryEdge
+		case 2:
+			category = VoxelCategoryFace
+		case 3:
+			category = VoxelCategoryInternal
+		}
+
+		voxels = append(voxels, VoxelData{
+			RelativePos: mgl32.Vec3{float32(x) + 0.5, float32(y) + 0.5, float32(z) + 0.5}.Mul(vSize),
+			Category:    category,
+		})
+	}
+
+	return voxels
+}
+
 func DecomposeVoxModel(model VoxModel) []CollisionBox {
 	if len(model.Voxels) == 0 {
 		return nil
@@ -124,6 +173,8 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer) {
 		}
 
 		var boxes []CollisionBox
+		var voxels []VoxelData
+		var gridSize [3]uint32
 		initialized := false
 
 		if vmc.CustomMap != nil {
@@ -136,6 +187,8 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer) {
 		} else {
 			if asset, ok := server.voxModels[vmc.VoxelModel]; ok {
 				boxes = DecomposeVoxModel(asset.VoxModel)
+				voxels = classifyVoxels(asset.VoxModel)
+				gridSize = [3]uint32{asset.VoxModel.SizeX, asset.VoxModel.SizeY, asset.VoxModel.SizeZ}
 				initialized = len(boxes) > 0
 			}
 		}
@@ -158,11 +211,18 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer) {
 				for i := range boxes {
 					boxes[i].LocalOffset = boxes[i].LocalOffset.Sub(weightedCenter)
 				}
+
+				// Shift all voxels to be relative to the weighted center
+				for i := range voxels {
+					voxels[i].RelativePos = voxels[i].RelativePos.Sub(weightedCenter)
+				}
 			}
 
 			cmd.AddComponents(eid, PhysicsModel{
 				Boxes:        boxes,
 				CenterOffset: weightedCenter,
+				Voxels:       voxels,
+				GridSize:     gridSize,
 			})
 		}
 		return true
