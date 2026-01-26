@@ -33,7 +33,6 @@ type VoxelRtModule struct {
 	WindowWidth  int
 	WindowHeight int
 	WindowTitle  string
-	AmbientLight mgl32.Vec3
 	DebugMode    bool
 	RenderMode   RenderMode
 	FontPath     string
@@ -285,7 +284,6 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	windowState := createWindowState(mod.WindowWidth, mod.WindowHeight, mod.WindowTitle)
 	cmd.AddResources(windowState)
 	RtApp := app_rt.NewApp(windowState.windowGlfw)
-	RtApp.AmbientLight = [3]float32{mod.AmbientLight.X(), mod.AmbientLight.Y(), mod.AmbientLight.Z()}
 	RtApp.DebugMode = mod.DebugMode
 	RtApp.RenderMode = uint32(mod.RenderMode)
 	RtApp.FontPath = mod.FontPath
@@ -300,6 +298,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		caVolumeMap:  make(map[EntityId]*core.VoxelObject),
 	}
 	cmd.AddResources(state)
+	cmd.AddResources(&VoxelEditQueue{BudgetPerFrame: 5000})
 
 	cmd.AddResources(&Profiler{})
 
@@ -579,8 +578,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 				// Clear existing map instead of creating new one to keep GPU allocation stable
 				obj.XBrickMap.ClearDirty()
 				obj.XBrickMap.Sectors = make(map[[3]int]*volume.Sector)
-				obj.XBrickMap.BrickAtlasMap = make(map[[6]int]uint32)
-				obj.XBrickMap.NextAtlasOffset = 0
 				obj.XBrickMap.StructureDirty = true
 
 				for z := 0; z < nz; z += stride {
@@ -658,44 +655,76 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 	// Sync lights
 	state.RtApp.Scene.Lights = state.RtApp.Scene.Lights[:0]
-	MakeQuery2[TransformComponent, LightComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, light *LightComponent) bool {
+	ambientAccum := mgl32.Vec3{0, 0, 0}
+	ambientFound := false
+	pointCount := 0
+
+	MakeQuery1[LightComponent](cmd).Map(func(entityId EntityId, light *LightComponent) bool {
+		if light.Type == LightTypeAmbient {
+			ambientAccum = ambientAccum.Add(mgl32.Vec3(light.Color).Mul(light.Intensity))
+			ambientFound = true
+			return true
+		}
+
+		// Positional lights (Point, Directional, Spot)
+		var pos mgl32.Vec3
+		var rot mgl32.Quat = mgl32.QuatIdent()
+		found := false
+
+		// Exhaustive check for spatial data (Value/Pointer x World/Local)
+		for _, c := range cmd.GetAllComponents(entityId) {
+			switch t := c.(type) {
+			case WorldTransform:
+				pos, rot, found = t.Position, t.Rotation, true
+				break
+			case *WorldTransform:
+				pos, rot, found = t.Position, t.Rotation, true
+				break
+			case TransformComponent:
+				if !found {
+					pos, rot, found = t.Position, t.Rotation, true
+				}
+			case *TransformComponent:
+				if !found {
+					pos, rot, found = t.Position, t.Rotation, true
+				}
+			}
+		}
+
+		if !found {
+			return true
+		}
+
 		// Convert ECS light to GPU light
 		gpuLight := core.Light{}
-
-		// Position/Direction from transform
-		// Position
-		gpuLight.Position = [4]float32{transform.Position.X(), transform.Position.Y(), transform.Position.Z(), 1.0}
-
-		// Direction: Rotate base direction by transform rotation
-		// Point lights don't care about direction.
-		// Directional and Spotlights do.
+		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), 1.0}
 
 		baseForward := mgl32.Vec3{0, 0, -1}
 		if light.Type == LightTypeDirectional {
-			// For directional sunlight, use a slanted base so Z-rotation makes it orbit
 			baseForward = mgl32.Vec3{1, -1, 0}.Normalize()
 		} else if light.Type == LightTypeSpot {
-			// For spot lights, pointing -Y (Down) allows Z-rotation to steer them in a cone or circle
 			baseForward = mgl32.Vec3{0, -1, 0}
 		}
 
-		dir := transform.Rotation.Rotate(baseForward)
+		dir := rot.Rotate(baseForward)
 		gpuLight.Direction = [4]float32{dir.X(), dir.Y(), dir.Z(), 0.0}
-
 		gpuLight.Color = [4]float32{light.Color[0], light.Color[1], light.Color[2], light.Intensity}
 
-		// Params: Range, ConeAngle, Type, Padding
-		// Cone angle passed as cosine for shader optimization
 		cosAngle := float32(0.0)
 		if light.Type == LightTypeSpot {
 			cosAngle = float32(math.Cos(float64(light.ConeAngle) * math.Pi / 180.0 / 2.0))
 		}
 
 		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
-
 		state.RtApp.Scene.Lights = append(state.RtApp.Scene.Lights, gpuLight)
+		pointCount++
 		return true
 	})
+
+	if ambientFound {
+		state.RtApp.Scene.AmbientLight = ambientAccum
+	}
+
 	state.RtApp.Profiler.EndScope("Sync Lights")
 
 	state.RtApp.Profiler.BeginScope("GPU Batch")

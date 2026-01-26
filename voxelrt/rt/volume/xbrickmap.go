@@ -182,14 +182,13 @@ func (s *Sector) IsEmpty() bool {
 	return s.BrickMask64 == 0
 }
 
+var NextMapID uint32 = 1
+
 type XBrickMap struct {
+	ID           uint32
 	Sectors      map[[3]int]*Sector
 	DirtySectors map[[3]int]bool
 	DirtyBricks  map[[6]int]bool
-
-	NextAtlasOffset uint32
-	FreeSlots       []uint32
-	BrickAtlasMap   map[[6]int]uint32
 
 	AABBDirty      bool
 	StructureDirty bool // True if bricks were added or removed
@@ -202,33 +201,15 @@ type XBrickMap struct {
 }
 
 func NewXBrickMap() *XBrickMap {
+	id := NextMapID
+	NextMapID++
 	return &XBrickMap{
+		ID:             id,
 		Sectors:        make(map[[3]int]*Sector),
 		DirtySectors:   make(map[[3]int]bool),
 		DirtyBricks:    make(map[[6]int]bool),
-		BrickAtlasMap:  make(map[[6]int]uint32),
 		AABBDirty:      true,
 		StructureDirty: true, // Initial state needs build
-	}
-}
-
-func (x *XBrickMap) AllocateAtlasSlot(brickKey [6]int) uint32 {
-	var offset uint32
-	if len(x.FreeSlots) > 0 {
-		offset = x.FreeSlots[len(x.FreeSlots)-1]
-		x.FreeSlots = x.FreeSlots[:len(x.FreeSlots)-1]
-	} else {
-		offset = x.NextAtlasOffset
-		x.NextAtlasOffset += 512
-	}
-	x.BrickAtlasMap[brickKey] = offset
-	return offset
-}
-
-func (x *XBrickMap) FreeAtlasSlot(brickKey [6]int) {
-	if offset, ok := x.BrickAtlasMap[brickKey]; ok {
-		delete(x.BrickAtlasMap, brickKey)
-		x.FreeSlots = append(x.FreeSlots, offset)
 	}
 }
 
@@ -278,9 +259,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 			if brick != nil {
 				if brick.Flags&BrickFlagSolid != 0 {
 					brick.Expand(uint8(brick.AtlasOffset))
-					// Reset atlas offset because it now needs a real slot
-					offset := x.AllocateAtlasSlot(bKey)
-					brick.AtlasOffset = offset
 				}
 
 				brick.SetVoxel(vx, vy, vz, 0)
@@ -300,11 +278,9 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 
 				sector.RemoveBrickIfEmpty(bx, by, bz)
 				if sector.IsEmpty() {
-					x.FreeAtlasSlot(bKey)
 					delete(x.Sectors, sKey)
 					x.StructureDirty = true
 				} else if brick.IsEmpty() {
-					x.FreeAtlasSlot(bKey)
 					x.StructureDirty = true
 				} else {
 					// Try to re-compress? Or leave as sparse until full rebuild?
@@ -322,8 +298,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 
 		brick, isNew := sector.GetOrCreateBrick(bx, by, bz)
 		if isNew {
-			offset := x.AllocateAtlasSlot(bKey)
-			brick.AtlasOffset = offset
 			x.StructureDirty = true
 		} else {
 			if brick.Flags&BrickFlagSolid != 0 {
@@ -331,11 +305,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 					return // Already solid with this value
 				}
 				brick.Expand(uint8(brick.AtlasOffset))
-				// Now needs a real slot
-				offset := x.AllocateAtlasSlot(bKey)
-				brick.AtlasOffset = offset
-			} else if _, has := x.BrickAtlasMap[bKey]; has {
-				brick.AtlasOffset = x.BrickAtlasMap[bKey]
 			}
 		}
 
@@ -366,9 +335,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 
 		// Optional: Compress if full
 		brick.TryCompress()
-		if brick.Flags&BrickFlagSolid != 0 {
-			x.FreeAtlasSlot(bKey)
-		}
 	}
 }
 
@@ -416,38 +382,11 @@ func (x *XBrickMap) GetVoxel(gx, gy, gz int) (bool, uint8) {
 
 func (x *XBrickMap) Copy() *XBrickMap {
 	newMap := NewXBrickMap()
-	newMap.NextAtlasOffset = x.NextAtlasOffset // Usually we'd start fresh but for simple copy we might persist
 
 	// Copy sectors
 	for k, v := range x.Sectors {
 		newMap.Sectors[k] = v.Copy()
 	}
-
-	// Rebuild atlas map in new map usually, but for simple clone:
-	// If we want FULL independence, we should probably re-allocate offsets?
-	// But if we want simple COW semantics where existing data is shared until modified,
-	// we would need more complex memory management (shared atlas buffers).
-	// For now, let's just deep copy logic as per Python reference which seemed to imply a logical copy.
-	// In the python code: `xbm.copy()` creates new Sectors and Bricks.
-	// `brick.atlas_offset` is copied.
-	// So they essentially point to the same "slots" in the buffer?
-	// Wait, if they point to the same slots, modifying one would modify the other if they share the GPU buffer.
-	// But `GpuBufferManager` uploads based on `xbm` object identity.
-	// If we create a NEW `xbm`, the `GpuBufferManager` treats it as a new map.
-	// It will upload it to new slots.
-	// So `AtlasOffset` stored in the Brick is purely relative to THAT map's payload base.
-	// So it is safe to copy `AtlasOffset` numerical value, as long as `GpuBufferManager`
-	// assigns a fresh `payload_base` for this new map.
-	// Wait, `AtlasOffset` is the offset *within* the payload buffer chunk for this map.
-	// So yes, copying it preserves the internal structure.
-
-	for k, v := range x.BrickAtlasMap {
-		newMap.BrickAtlasMap[k] = v
-	}
-
-	// Free slots
-	newMap.FreeSlots = make([]uint32, len(x.FreeSlots))
-	copy(newMap.FreeSlots, x.FreeSlots)
 
 	return newMap
 }

@@ -6,6 +6,7 @@ const (
 	LightTypePoint       LightType = 0
 	LightTypeDirectional LightType = 1
 	LightTypeSpot        LightType = 2
+	LightTypeAmbient     LightType = 3
 )
 
 // LightComponent is the ECS component for lights

@@ -87,6 +87,7 @@ type Scene struct {
 	VisibleObjects   []*VoxelObject
 	BVHNodesBytes    []byte // Linearized BVH nodes
 	Lights           []Light
+	AmbientLight     mgl32.Vec3
 	TargetVoxelSize  float32
 	lastVisibleCount int
 }
@@ -94,6 +95,7 @@ type Scene struct {
 func NewScene() *Scene {
 	return &Scene{
 		Objects:         []*VoxelObject{},
+		AmbientLight:    mgl32.Vec3{0.2, 0.2, 0.2},
 		TargetVoxelSize: 0.1, // 10cm default
 	}
 }
