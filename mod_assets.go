@@ -628,7 +628,20 @@ func decodeVoxRotation(r byte) (mgl32.Quat, mgl32.Vec3) {
 		return mgl32.QuatIdent(), si
 	}
 
-	return quats[mapping[flip]], scales[flip]
+	// Returned rotation/scales from dot_vox are in MagicaVoxel basis (Z-up).
+	// Engine uses Y-up and we remap axes as: X := X, Y := Z_vox, Z := Y_vox.
+	// To convert rotation, swap Y and Z components of quaternion's vector part.
+	// To convert scale flips, also swap Y and Z components.
+	rotVox := quats[mapping[flip]]
+	scaleVox := scales[flip]
+
+	rotEng := mgl32.Quat{
+		W: rotVox.W,
+		V: mgl32.Vec3{rotVox.V.X(), rotVox.V.Z(), rotVox.V.Y()},
+	}
+	scaleEng := mgl32.Vec3{scaleVox.X(), scaleVox.Z(), scaleVox.Y()}
+
+	return rotEng, scaleEng
 }
 
 func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId int, parentEntity EntityId, nodeEntities map[int]EntityId, paletteId AssetId, voxelScale float32) {
