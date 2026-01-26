@@ -20,6 +20,10 @@ const (
 
 	MaxUpdatesPerFrame  = 1024               // Cap voxel/sector updates per frame
 	SafeBufferSizeLimit = 1024 * 1024 * 1024 // 1GB Warning/Compaction Limit
+
+	// Texture Atlas Constants
+	AtlasBricksPerSide = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
+	AtlasSize          = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
 )
 
 type GpuBufferManager struct {
@@ -34,7 +38,8 @@ type GpuBufferManager struct {
 	MaterialBuf         *wgpu.Buffer
 	SectorTableBuf      *wgpu.Buffer
 	BrickTableBuf       *wgpu.Buffer
-	VoxelPayloadBuf     *wgpu.Buffer
+	VoxelPayloadTex     *wgpu.Texture
+	VoxelPayloadView    *wgpu.TextureView
 	ObjectParamsBuf     *wgpu.Buffer
 	Tree64Buf           *wgpu.Buffer
 	SectorGridBuf       *wgpu.Buffer
@@ -203,7 +208,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
-			{Binding: 2, Buffer: m.VoxelPayloadBuf, Size: wgpu.WholeSize},
+			{Binding: 2, TextureView: m.VoxelPayloadView},
 			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
 			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
@@ -300,11 +305,13 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 	if m.updateSectorGrid(scene) {
 		recreated = true
 	}
+	_ = recreated
 	return recreated
 }
 
 func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	recreated := false
+	var err error
 
 	// Cleanup orphan allocations
 	activeMaps := make(map[*volume.XBrickMap]bool)
@@ -385,8 +392,29 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*16) {
 		recreated = true
 	}
-	// Payload is harder to predict, use healthy headroom
-	if m.ensureBuffer("VoxelPayloadBuf", &m.VoxelPayloadBuf, nil, wgpu.BufferUsageStorage, int(m.PayloadAlloc.Tail+4096)*512) {
+	// Payload is now a 3D Texture
+	if m.VoxelPayloadTex == nil {
+		fmt.Printf("Initializing Voxel Atlas Texture: %dx%dx%d\n", AtlasSize, AtlasSize, AtlasSize)
+		m.VoxelPayloadTex, err = m.Device.CreateTexture(&wgpu.TextureDescriptor{
+			Label: "VoxelPayloadAtlas",
+			Size: wgpu.Extent3D{
+				Width:              AtlasSize,
+				Height:             AtlasSize,
+				DepthOrArrayLayers: AtlasSize,
+			},
+			MipLevelCount: 1,
+			SampleCount:   1,
+			Dimension:     wgpu.TextureDimension3D,
+			Format:        wgpu.TextureFormatR8Uint,
+			Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
+		})
+		if err != nil {
+			panic(err)
+		}
+		m.VoxelPayloadView, err = m.VoxelPayloadTex.CreateView(nil)
+		if err != nil {
+			panic(err)
+		}
 		recreated = true
 	}
 	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialTail+1024)*64) {
@@ -616,11 +644,20 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 		pSlot, exists := m.BrickToSlot[brick]
 		if !exists {
 			pSlot = m.PayloadAlloc.Alloc()
+			if pSlot >= AtlasBricksPerSide*AtlasBricksPerSide*AtlasBricksPerSide {
+				panic("Voxel payload atlas full!")
+			}
 			m.BrickToSlot[brick] = pSlot
 		}
-		gpuAtlasOffset = pSlot * 512
 
-		// Upload payload
+		// Calculate 3D coordinates in the atlas
+		ax := (pSlot % AtlasBricksPerSide) * volume.BrickSize
+		ay := ((pSlot / AtlasBricksPerSide) % AtlasBricksPerSide) * volume.BrickSize
+		az := (pSlot / (AtlasBricksPerSide * AtlasBricksPerSide)) * volume.BrickSize
+
+		gpuAtlasOffset = (ax << 20) | (ay << 10) | az // Pack coords for shader
+
+		// Upload payload via WriteTexture
 		payload := make([]byte, 512)
 		idx := 0
 		for z := 0; z < 8; z++ {
@@ -631,7 +668,26 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 				}
 			}
 		}
-		m.Device.GetQueue().WriteBuffer(m.VoxelPayloadBuf, uint64(pSlot*512), payload)
+
+		m.Device.GetQueue().WriteTexture(
+			&wgpu.ImageCopyTexture{
+				Texture:  m.VoxelPayloadTex,
+				MipLevel: 0,
+				Origin:   wgpu.Origin3D{X: uint32(ax), Y: uint32(ay), Z: uint32(az)},
+				Aspect:   wgpu.TextureAspectAll,
+			},
+			payload,
+			&wgpu.TextureDataLayout{
+				Offset:       0,
+				BytesPerRow:  8,
+				RowsPerImage: 8,
+			},
+			&wgpu.Extent3D{
+				Width:              8,
+				Height:             8,
+				DepthOrArrayLayers: 8,
+			},
+		)
 	}
 
 	bbuf := make([]byte, 16)
@@ -1067,7 +1123,7 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
-			{Binding: 2, Buffer: m.VoxelPayloadBuf, Size: wgpu.WholeSize},
+			{Binding: 2, TextureView: m.VoxelPayloadView},
 			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
 			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
@@ -1213,7 +1269,7 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
-			{Binding: 2, Buffer: m.VoxelPayloadBuf, Size: wgpu.WholeSize},
+			{Binding: 2, TextureView: m.VoxelPayloadView},
 			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},

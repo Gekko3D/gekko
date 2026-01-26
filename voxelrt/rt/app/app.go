@@ -1050,9 +1050,9 @@ func (a *App) setupTransparentOverlayPipeline() {
 			{ // VoxelPayload
 				Binding:    2,
 				Visibility: wgpu.ShaderStageFragment,
-				Buffer: wgpu.BufferBindingLayout{
-					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
-					MinBindingSize: 0,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUint,
+					ViewDimension: wgpu.TextureViewDimension3D,
 				},
 			},
 			{ // Materials (packed vec4 table; transparency in pbr_params.w)

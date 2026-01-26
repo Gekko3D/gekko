@@ -124,7 +124,7 @@ struct SectorGridParams {
 // Group 2: Voxel Data
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
 @group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;
-@group(2) @binding(2) var<storage, read> voxel_payload: array<u32>;
+@group(2) @binding(2) var voxel_payload: texture_3d<u32>;
 @group(2) @binding(4) var<storage, read> object_params: array<ObjectParams>;
 @group(2) @binding(5) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
@@ -174,11 +174,17 @@ fn step_to_next_cell(p: vec3<f32>, dir: vec3<f32>, inv_dir: vec3<f32>, cell_size
     return t_min + EPS;
 }
 
-fn load_u8(byte_offset: u32) -> u32 {
-    let word_idx = byte_offset / 4u;
-    let byte_idx = byte_offset % 4u;
-    let word = voxel_payload[word_idx];
-    return (word >> (byte_idx * 8u)) & 0xFFu;
+fn load_u8(packed_offset: u32, voxel_idx: u32) -> u32 {
+    let ax = (packed_offset >> 20u) & 0x3FFu;
+    let ay = (packed_offset >> 10u) & 0x3FFu;
+    let az = packed_offset & 0x3FFu;
+
+    let vx = voxel_idx % 8u;
+    let vy = (voxel_idx / 8u) % 8u;
+    let vz = voxel_idx / 64u;
+
+    let coords = vec3<u32>(ax + vx, ay + vy, az + vz);
+    return textureLoad(voxel_payload, vec3<i32>(coords), 0).r;
 }
 
 var<private> g_cached_sector_id: i32 = -1;
@@ -295,8 +301,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
                                 let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
                                 if (bit_test64(b_mask_lo, b_mask_hi, micro_idx)) {
-                                    let actual_atlas_offset = params.payload_base + b_atlas + voxel_idx;
-                                    let palette_idx = load_u8(actual_atlas_offset);
+                                    let palette_idx = load_u8(b_atlas, voxel_idx);
                                     if (palette_idx != EMPTY_VOXEL) {
                                         result.hit = true; result.t = t_micro;
                                         let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;

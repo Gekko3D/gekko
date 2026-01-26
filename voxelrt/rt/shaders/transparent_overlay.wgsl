@@ -128,7 +128,7 @@ struct TransparentHit {
 // Group 1: Voxel data and materials
 @group(1) @binding(0) var<storage, read> sectors              : array<SectorRecord>;
 @group(1) @binding(1) var<storage, read> bricks               : array<BrickRecord>;
-@group(1) @binding(2) var<storage, read> voxel_payload        : array<u32>;
+@group(1) @binding(2) var voxel_payload: texture_3d<u32>;
 @group(1) @binding(3) var<storage, read> materials            : array<vec4<f32>>;
 @group(1) @binding(4) var<storage, read> object_params        : array<ObjectParams>;
 @group(1) @binding(5) var<storage, read> tree64_nodes         : array<Tree64Node>;
@@ -190,11 +190,17 @@ fn step_to_next_cell(p: vec3<f32>, dir: vec3<f32>, inv_dir: vec3<f32>, cell_size
   return t_min + EPS;
 }
 
-fn load_u8(byte_offset: u32) -> u32 {
-  let word_idx = byte_offset / 4u;
-  let byte_idx = byte_offset % 4u;
-  let word = voxel_payload[word_idx];
-  return (word >> (byte_idx * 8u)) & 0xFFu;
+fn load_u8(packed_offset: u32, voxel_idx: u32) -> u32 {
+  let ax = (packed_offset >> 20u) & 0x3FFu;
+  let ay = (packed_offset >> 10u) & 0x3FFu;
+  let az = packed_offset & 0x3FFu;
+
+  let vx = voxel_idx % 8u;
+  let vy = (voxel_idx / 8u) % 8u;
+  let vz = voxel_idx / 64u;
+
+  let coords = vec3<u32>(ax + vx, ay + vy, az + vz);
+  return textureLoad(voxel_payload, vec3<i32>(coords), 0).r;
 }
 
 fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
@@ -266,7 +272,7 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
     let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
     let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
     let b_atlas = bricks[packed_idx].atlas_offset;
-    let palette_idx = load_u8(params.payload_base + b_atlas + voxel_idx);
+    let palette_idx = load_u8(b_atlas, voxel_idx);
     return select(0.0, 1.0, palette_idx != 0u);
   }
   return 1.0;
@@ -396,7 +402,7 @@ fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_ex
                 let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
 
                 if (bit_test64(b_mask_lo, b_mask_hi, micro_idx)) {
-                  let palette_idx = load_u8(params.payload_base + b_atlas + voxel_idx);
+                  let palette_idx = load_u8(b_atlas, voxel_idx);
                   if (palette_idx != 0u) {
                     let mat_base = params.material_table_base;
                     let mat_idx = mat_base + palette_idx * 4u;
@@ -625,7 +631,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                           let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx);
                           if (process) {
                             let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-                            let palette_idx = load_u8(params.payload_base + b_atlas + voxel_idx);
+                            let palette_idx = load_u8(b_atlas, voxel_idx);
                             if (palette_idx != 0u) {
                               let mat_base = params.material_table_base;
                               let mat_idx = mat_base + palette_idx * 4u;
