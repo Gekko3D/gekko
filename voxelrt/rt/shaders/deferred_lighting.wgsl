@@ -69,23 +69,6 @@ fn calculate_lighting(
     var attenuation = 1.0;
     let light_type = u32(light.params.z);
 
-    // Early debug overlay: show directional (sun) shadow center sample regardless of attenuation
-    if (camera.debug_mode == 2u && light_type == 1u) {
-        let pos_ls = light.view_proj * vec4<f32>(hit_pos, 1.0);
-        let proj_pos = pos_ls.xyz / pos_ls.w;
-        let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
-        let tex_dim = textureDimensions(in_shadow_maps);
-        let base_px_f = shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
-        let base_px = vec2<i32>(
-            i32(clamp(base_px_f.x, 0.0, f32(tex_dim.x - 1u))),
-            i32(clamp(base_px_f.y, 0.0, f32(tex_dim.y - 1u)))
-        );
-        let layer = i32(light_idx);
-        let center_depth = textureLoad(in_shadow_maps, base_px, layer, 0).r;
-        let val = 1.0 - clamp(center_depth * 0.5 + 0.5, 0.0, 1.0);
-        return vec3<f32>(val, 0.0, 0.0);
-    }
-    
     if (light_type == 1u) { // Directional
         L = -normalize(light.direction.xyz);
     } else {
@@ -97,10 +80,10 @@ fn calculate_lighting(
             attenuation = 0.0;
         } else {
             let dist_sq = dist_to_light * dist_to_light;
-            let factor = dist_sq / (range * range);
+            let factor = dist_to_light / range;
             let smooth_factor = max(0.0, 1.0 - factor * factor);
             let inv_sq = 1.0 / (dist_sq + 1.0);
-            attenuation = inv_sq * smooth_factor * smooth_factor * light.color.w * 50.0;
+            attenuation = inv_sq * smooth_factor * smooth_factor * 50.0;
             if (light_type == 2u) { // Spot
                 let spot_dir = normalize(light.direction.xyz);
                 let cos_cur = dot(-L, spot_dir);
@@ -138,24 +121,20 @@ fn calculate_lighting(
             var my_depth_n = clamp(proj_pos.z, -1.0, 1.0);
             var my_depth_m = 0.0;
             if (light_type == 2u) {
-                // For spot lights, compare in linear distance space (meters), offset along normal to reduce self-shadow flicker
                 let receiver_offset = 0.25;
                 let pos_off = hit_pos + normal * receiver_offset;
                 my_depth_m = distance(light.position.xyz, pos_off);
             }
 
-            // Slope-scaled depth bias with resolution scaling; stronger for spot lights
             var baseBias = 1.5 / f32(tex_dim.x);
             var slopeBias = 0.002;
-            if (light_type == 2u) { // Spot light
+            if (light_type == 2u) {
                 baseBias = 3.0 / f32(tex_dim.x);
                 slopeBias = 0.01;
             }
             let NdL = max(dot(normal, L), 0.0);
             let bias = baseBias + slopeBias * (1.0 - NdL);
 
-
-            // PCF with radius dependent on light type (spot uses 5x5, others 3x3)
             let max_px = vec2<i32>(i32(tex_dim.x) - 1, i32(tex_dim.y) - 1);
             var visibility = 0.0;
             var radius: i32 = 1;
@@ -168,13 +147,11 @@ fn calculate_lighting(
                     let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
                     var sd = textureLoad(in_shadow_maps, clamped_off, layer, 0).r;
                     if (light_type == 2u) {
-                        // Linear distance comparison for spot lights (meters)
                         let baseBiasM = 0.05;
                         let slopeBiasM = 0.1;
                         let biasM = baseBiasM + slopeBiasM * (1.0 - NdL);
                         visibility += select(0.0, 1.0, sd >= my_depth_m - biasM);
                     } else {
-                        // NDC comparison for directional/others
                         sd = clamp(sd, -1.0, 1.0);
                         visibility += select(0.0, 1.0, sd >= my_depth_n - bias);
                     }
