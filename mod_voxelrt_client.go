@@ -580,8 +580,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 				// Clear existing map instead of creating new one to keep GPU allocation stable
 				obj.XBrickMap.ClearDirty()
 				obj.XBrickMap.Sectors = make(map[[3]int]*volume.Sector)
-				obj.XBrickMap.BrickAtlasMap = make(map[[6]int]uint32)
-				obj.XBrickMap.NextAtlasOffset = 0
 				obj.XBrickMap.StructureDirty = true
 
 				for z := 0; z < nz; z += stride {

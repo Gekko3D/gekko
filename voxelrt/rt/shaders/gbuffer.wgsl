@@ -92,10 +92,10 @@ struct ObjectParams {
 };
 
 struct SectorGridEntry {
-    coords: vec3<i32>,
+    coords: vec4<i32>, // sx, sy, sz, 0
     base_idx: u32,
     sector_idx: i32,
-    paddings: array<u32, 3>,
+    padding: vec2<u32>,
 };
 
 struct SectorGridParams {
