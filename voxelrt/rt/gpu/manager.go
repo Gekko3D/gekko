@@ -573,6 +573,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			brick := sector.GetBrick(bx, by, bz)
 			if brick != nil {
 				m.uploadBrick(brick, info.BrickTableIndex+uint32(bx+by*4+bz*16))
+			} else {
+				// Clear brick record in GPU to 0
+				m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(bx+by*4+bz*16))*16), make([]byte, 16))
 			}
 			delete(xbm.DirtyBricks, bKey)
 			bricksInFrame++

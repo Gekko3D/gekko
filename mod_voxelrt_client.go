@@ -300,6 +300,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		caVolumeMap:  make(map[EntityId]*core.VoxelObject),
 	}
 	cmd.AddResources(state)
+	cmd.AddResources(&VoxelEditQueue{BudgetPerFrame: 5000})
 
 	cmd.AddResources(&Profiler{})
 
