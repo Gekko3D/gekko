@@ -124,9 +124,8 @@ type GpuBufferManager struct {
 	SectorToInfo map[*volume.Sector]SectorGpuInfo
 	BrickToSlot  map[*volume.Brick]uint32
 
-	MaterialTail uint32
-
-	Allocations map[*volume.XBrickMap]*ObjectGpuAllocation
+	MaterialAlloc SlotAllocator // Allocates blocks of 256 materials (16KB each)
+	Allocations   map[*volume.XBrickMap]*ObjectGpuAllocation
 
 	// Smooth streaming state
 	SectorsPerFrame  uint32
@@ -177,6 +176,19 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
 	m.SectorToInfo = make(map[*volume.Sector]SectorGpuInfo)
 	m.BrickToSlot = make(map[*volume.Brick]uint32)
+
+	// Pre-allocate minimal buffers to avoid bind group validation errors at startup
+	m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("CameraBuf", &m.CameraBuf, nil, wgpu.BufferUsageUniform, 1024)
+	m.ensureBuffer("InstancesBuf", &m.InstancesBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("BVHNodesBuf", &m.BVHNodesBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("LightsBuf", &m.LightsBuf, nil, wgpu.BufferUsageStorage, 1024)
 
 	return m
 }
@@ -321,10 +333,10 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	for _, obj := range scene.Objects {
 		activeMaps[obj.XBrickMap] = true
 	}
-	for xbm := range m.Allocations {
+	for xbm, alloc := range m.Allocations {
 		if !activeMaps[xbm] {
 			// Free slots
-			for sKey, sector := range xbm.Sectors {
+			for _, sector := range xbm.Sectors {
 				if info, ok := m.SectorToInfo[sector]; ok {
 					m.SectorAlloc.FreeSlot(info.SlotIndex)
 					m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
@@ -341,8 +353,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 						}
 					}
 				}
-				_ = sKey
 			}
+			// Free material block
+			m.MaterialAlloc.FreeSlot(alloc.MaterialOffset / 256)
 			delete(m.Allocations, xbm)
 		}
 	}
@@ -420,7 +433,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		}
 		recreated = true
 	}
-	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialTail+1024)*64) {
+	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialAlloc.Tail*256*64)) {
 		recreated = true
 	}
 	if m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 64) {
@@ -453,16 +466,26 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			materials = make([]byte, 256*64)
 		}
 		mCount := uint32(len(materials) / 64)
-		if mCount > alloc.MaterialCapacity {
-			alloc.MaterialOffset = m.MaterialTail
-			alloc.MaterialCapacity = mCount + 64 // Add some headroom
-			m.MaterialTail += alloc.MaterialCapacity
-			if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialTail*64)) {
+		if !exists || mCount > alloc.MaterialCapacity {
+			if exists && alloc.MaterialCapacity > 0 {
+				m.MaterialAlloc.FreeSlot(alloc.MaterialOffset / 256)
+			}
+			pSlot := m.MaterialAlloc.Alloc()
+			alloc.MaterialOffset = pSlot * 256
+			alloc.MaterialCapacity = 256 // Fixed size blocks for simplicity
+			if mCount > 256 {
+				// Special case: if object needs more than 256 materials, we'd need a multi-block allocator.
+				// For now, we cap at 256 as it's the standard for this engine.
+				materials = materials[:256*64]
+				fmt.Printf("WARNING: Object has %d materials, capping to 256\n", mCount)
+			}
+
+			if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialAlloc.Tail*256*64)) {
 				recreated = true
 			}
 			m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(alloc.MaterialOffset*64), materials)
 		} else {
-			// Just upload if modified (in a real system we'd check mat dirty flags)
+			// Just upload if modified
 			m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(alloc.MaterialOffset*64), materials)
 		}
 
@@ -607,7 +630,6 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		}
 
 		// Materials: For now, re-upload if new.
-		// Need MaterialTail... I'll add m.MaterialTail back but keep it as a pool for objects.
 	}
 
 	// Update ObjectParams for visible objects
@@ -734,8 +756,11 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 
 func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []byte, usage wgpu.BufferUsage, headroom int) bool {
 	neededSize := uint64(len(data) + headroom)
-	if neededSize%4 != 0 {
-		neededSize += 4 - (neededSize % 4)
+	if neededSize < 256 {
+		neededSize = 256
+	}
+	if neededSize%256 != 0 {
+		neededSize += 256 - (neededSize % 256)
 	}
 
 	current := *buf
