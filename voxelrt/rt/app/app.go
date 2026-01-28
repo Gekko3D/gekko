@@ -60,6 +60,8 @@ type App struct {
 	TextItems        []core.TextItem
 	TextVertexCount  uint32
 
+	GizmoPass *gpu.GizmoRenderPass
+
 	LastViewProj   mgl32.Mat4
 	LastTime       float64
 	LastRenderTime float64
@@ -406,6 +408,28 @@ func (a *App) Init() error {
 	// Create resolve pipeline to composite opaque + transparent accum onto swapchain
 	a.setupResolvePipeline()
 
+	// Gizmo Pipeline
+	var gizmoErr error
+	a.GizmoPass, gizmoErr = gpu.NewGizmoRenderPass(a.Device, format)
+	if gizmoErr != nil {
+		fmt.Printf("ERROR: Failed to create Gizmo pass: %v\n", gizmoErr)
+	} else {
+		// Create specific BindGroup for Gizmos
+		// We need to access CameraBuf from BufferManager
+		if a.BufferManager != nil {
+			var gErr error
+			a.GizmoPass.BindGroup, gErr = a.GizmoPass.CreateBindGroup(a.BufferManager.CameraBuf)
+			if gErr != nil {
+				fmt.Printf("ERROR: Failed to create Gizmo BindGroup: %v\n", gErr)
+			}
+			// Create Depth BindGroup
+			a.GizmoPass.DepthBindGroup, gErr = a.GizmoPass.CreateDepthBindGroup(a.BufferManager.DepthView)
+			if gErr != nil {
+				fmt.Printf("ERROR: Failed to create Gizmo Depth BindGroup: %v\n", gErr)
+			}
+		}
+	}
+
 	// Initialize Hi-Z Occlusion
 	hizMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label: "Hi-Z Shader",
@@ -576,6 +600,20 @@ func (a *App) Update() {
 		if a.TransparentPipeline != nil {
 			a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
 		}
+
+		// Gizmo BindGroup
+		if a.GizmoPass != nil && a.BufferManager.CameraBuf != nil {
+			var gErr error
+			a.GizmoPass.BindGroup, gErr = a.GizmoPass.CreateBindGroup(a.BufferManager.CameraBuf)
+			if gErr != nil {
+				fmt.Printf("ERROR: Failed to recreate Gizmo BindGroup: %v\n", gErr)
+			}
+			// Recreate Depth BindGroup
+			a.GizmoPass.DepthBindGroup, gErr = a.GizmoPass.CreateDepthBindGroup(a.BufferManager.DepthView)
+			if gErr != nil {
+				fmt.Printf("ERROR: Failed to recreate Gizmo Depth BindGroup: %v\n", gErr)
+			}
+		}
 	}
 
 	// Update Camera Uniforms
@@ -599,6 +637,11 @@ func (a *App) Update() {
 			a.Queue.WriteBuffer(a.TextVertexBuffer, 0, unsafe.Slice((*byte)(unsafe.Pointer(&vertices[0])), vSize))
 			a.TextVertexCount = uint32(len(vertices))
 		}
+	}
+
+	// Update Gizmos
+	if a.GizmoPass != nil {
+		a.GizmoPass.Update(a.Queue, a.Scene.Gizmos)
 	}
 }
 
@@ -794,7 +837,7 @@ func (a *App) Render() {
 		rPass.SetBindGroup(0, a.ResolveBG, nil)
 		rPass.Draw(3, 1, 0, 0)
 	}
-	// Text Pass (over resolved image)
+	// Text Pass
 	if len(a.TextItems) > 0 && a.TextVertexBuffer != nil && a.TextPipeline != nil {
 		rPass.SetPipeline(a.TextPipeline)
 		rPass.SetBindGroup(0, a.TextBindGroup, nil)
@@ -802,9 +845,14 @@ func (a *App) Render() {
 		rPass.Draw(a.TextVertexCount, 1, 0, 0)
 	}
 
+	// Draw Gizmos
+	if a.GizmoPass != nil && a.GizmoPass.BindGroup != nil {
+		a.GizmoPass.Draw(rPass, a.GizmoPass.BindGroup, a.GizmoPass.DepthBindGroup)
+	}
+
 	err = rPass.End()
 	if err != nil {
-		fmt.Printf("ERROR: Render pass End failed: %v\n", err)
+		fmt.Printf("ERROR: Resolve/Gizmo pass End failed: %v\n", err)
 	}
 	a.Profiler.EndScope("Resolve")
 

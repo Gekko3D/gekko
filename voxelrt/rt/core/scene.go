@@ -87,6 +87,7 @@ type Scene struct {
 	VisibleObjects   []*VoxelObject
 	BVHNodesBytes    []byte // Linearized BVH nodes
 	Lights           []Light
+	Gizmos           []Gizmo
 	AmbientLight     mgl32.Vec3
 	TargetVoxelSize  float32
 	lastVisibleCount int
