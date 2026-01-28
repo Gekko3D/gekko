@@ -483,6 +483,472 @@ func (server AssetServer) CreatePyramidModel(size, height float32, resolution fl
 	return id
 }
 
+// CreateLineModel creates a thin voxel line between two points
+func (server AssetServer) CreateLineModel(start, end mgl32.Vec3, thickness float32) AssetId {
+	id := makeAssetId()
+
+	// Calculate direction and length
+	dir := end.Sub(start)
+	length := dir.Len()
+	dir = dir.Normalize()
+
+	// Determine voxel resolution
+	resolution := float32(10.0) // voxels per unit
+	numSteps := int(length * resolution)
+	if numSteps < 2 {
+		numSteps = 2
+	}
+
+	thickVoxels := int(thickness * resolution)
+	if thickVoxels < 1 {
+		thickVoxels = 1
+	}
+
+	// Build voxels along the line
+	var voxels []Voxel
+	voxelSet := make(map[[3]int]bool)
+
+	for i := 0; i <= numSteps; i++ {
+		t := float32(i) / float32(numSteps)
+		pos := start.Add(dir.Mul(length * t))
+
+		// Add thickness by creating a small cube at each point
+		for dx := -thickVoxels; dx <= thickVoxels; dx++ {
+			for dy := -thickVoxels; dy <= thickVoxels; dy++ {
+				for dz := -thickVoxels; dz <= thickVoxels; dz++ {
+					vx := int(pos.X()*resolution) + dx
+					vy := int(pos.Y()*resolution) + dy
+					vz := int(pos.Z()*resolution) + dz
+
+					key := [3]int{vx, vy, vz}
+					if !voxelSet[key] {
+						voxelSet[key] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Find bounds
+	minX, minY, minZ := int(1e9), int(1e9), int(1e9)
+	maxX, maxY, maxZ := int(-1e9), int(-1e9), int(-1e9)
+	for key := range voxelSet {
+		if key[0] < minX {
+			minX = key[0]
+		}
+		if key[0] > maxX {
+			maxX = key[0]
+		}
+		if key[1] < minY {
+			minY = key[1]
+		}
+		if key[1] > maxY {
+			maxY = key[1]
+		}
+		if key[2] < minZ {
+			minZ = key[2]
+		}
+		if key[2] > maxZ {
+			maxZ = key[2]
+		}
+	}
+
+	// Convert to voxels with offset
+	for key := range voxelSet {
+		voxels = append(voxels, Voxel{
+			X:          uint32(key[0] - minX),
+			Y:          uint32(key[1] - minY),
+			Z:          uint32(key[2] - minZ),
+			ColorIndex: 1,
+		})
+	}
+
+	sizeX := uint32(maxX - minX + 1)
+	sizeY := uint32(maxY - minY + 1)
+	sizeZ := uint32(maxZ - minZ + 1)
+
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: sizeX, SizeY: sizeY, SizeZ: sizeZ,
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
+	}
+	return id
+}
+
+// CreateArrowModel creates a line with an arrow head
+func (server AssetServer) CreateArrowModel(start, end mgl32.Vec3, thickness, headSize float32) AssetId {
+	id := makeAssetId()
+
+	dir := end.Sub(start)
+	length := dir.Len()
+	dir = dir.Normalize()
+
+	resolution := float32(10.0)
+	numSteps := int(length * resolution)
+	if numSteps < 2 {
+		numSteps = 2
+	}
+
+	thickVoxels := int(thickness * resolution)
+	if thickVoxels < 1 {
+		thickVoxels = 1
+	}
+
+	headVoxels := int(headSize * resolution)
+	if headVoxels < 2 {
+		headVoxels = 2
+	}
+
+	var voxels []Voxel
+	voxelSet := make(map[[3]int]bool)
+
+	// Line shaft (80% of length)
+	shaftSteps := int(float32(numSteps) * 0.8)
+	for i := 0; i <= shaftSteps; i++ {
+		t := float32(i) / float32(numSteps)
+		pos := start.Add(dir.Mul(length * t))
+
+		for dx := -thickVoxels; dx <= thickVoxels; dx++ {
+			for dy := -thickVoxels; dy <= thickVoxels; dy++ {
+				for dz := -thickVoxels; dz <= thickVoxels; dz++ {
+					vx := int(pos.X()*resolution) + dx
+					vy := int(pos.Y()*resolution) + dy
+					vz := int(pos.Z()*resolution) + dz
+					voxelSet[[3]int{vx, vy, vz}] = true
+				}
+			}
+		}
+	}
+
+	// Arrow head (last 20%)
+	for i := shaftSteps; i <= numSteps; i++ {
+		t := float32(i) / float32(numSteps)
+		pos := start.Add(dir.Mul(length * t))
+
+		// Taper from headSize to point
+		progress := float32(i-shaftSteps) / float32(numSteps-shaftSteps)
+		currentSize := int(float32(headVoxels) * (1.0 - progress))
+		if currentSize < thickVoxels {
+			currentSize = thickVoxels
+		}
+
+		for dx := -currentSize; dx <= currentSize; dx++ {
+			for dy := -currentSize; dy <= currentSize; dy++ {
+				for dz := -currentSize; dz <= currentSize; dz++ {
+					vx := int(pos.X()*resolution) + dx
+					vy := int(pos.Y()*resolution) + dy
+					vz := int(pos.Z()*resolution) + dz
+					voxelSet[[3]int{vx, vy, vz}] = true
+				}
+			}
+		}
+	}
+
+	// Find bounds and convert to voxels
+	minX, minY, minZ := int(1e9), int(1e9), int(1e9)
+	maxX, maxY, maxZ := int(-1e9), int(-1e9), int(-1e9)
+	for key := range voxelSet {
+		if key[0] < minX {
+			minX = key[0]
+		}
+		if key[0] > maxX {
+			maxX = key[0]
+		}
+		if key[1] < minY {
+			minY = key[1]
+		}
+		if key[1] > maxY {
+			maxY = key[1]
+		}
+		if key[2] < minZ {
+			minZ = key[2]
+		}
+		if key[2] > maxZ {
+			maxZ = key[2]
+		}
+	}
+
+	for key := range voxelSet {
+		voxels = append(voxels, Voxel{
+			X:          uint32(key[0] - minX),
+			Y:          uint32(key[1] - minY),
+			Z:          uint32(key[2] - minZ),
+			ColorIndex: 1,
+		})
+	}
+
+	sizeX := uint32(maxX - minX + 1)
+	sizeY := uint32(maxY - minY + 1)
+	sizeZ := uint32(maxZ - minZ + 1)
+
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: sizeX, SizeY: sizeY, SizeZ: sizeZ,
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
+	}
+	return id
+}
+
+// CreateWireframeBoxModel creates a hollow box with only edges
+func (server AssetServer) CreateWireframeBoxModel(size mgl32.Vec3, thickness float32) AssetId {
+	id := makeAssetId()
+
+	resolution := float32(10.0)
+	sx := int(size.X() * resolution)
+	sy := int(size.Y() * resolution)
+	sz := int(size.Z() * resolution)
+
+	thickVoxels := int(thickness * resolution)
+	if thickVoxels < 1 {
+		thickVoxels = 1
+	}
+
+	var voxels []Voxel
+	voxelSet := make(map[[3]int]bool)
+
+	// 12 edges of a box
+	edges := [][2][3]int{
+		// Bottom face
+		{{0, 0, 0}, {sx, 0, 0}},
+		{{sx, 0, 0}, {sx, sy, 0}},
+		{{sx, sy, 0}, {0, sy, 0}},
+		{{0, sy, 0}, {0, 0, 0}},
+		// Top face
+		{{0, 0, sz}, {sx, 0, sz}},
+		{{sx, 0, sz}, {sx, sy, sz}},
+		{{sx, sy, sz}, {0, sy, sz}},
+		{{0, sy, sz}, {0, 0, sz}},
+		// Vertical edges
+		{{0, 0, 0}, {0, 0, sz}},
+		{{sx, 0, 0}, {sx, 0, sz}},
+		{{sx, sy, 0}, {sx, sy, sz}},
+		{{0, sy, 0}, {0, sy, sz}},
+	}
+
+	for _, edge := range edges {
+		start := edge[0]
+		end := edge[1]
+
+		// Interpolate along edge
+		dx := end[0] - start[0]
+		dy := end[1] - start[1]
+		dz := end[2] - start[2]
+
+		// Use absolute values to find the longest dimension
+		absDx := dx
+		if absDx < 0 {
+			absDx = -absDx
+		}
+		absDy := dy
+		if absDy < 0 {
+			absDy = -absDy
+		}
+		absDz := dz
+		if absDz < 0 {
+			absDz = -absDz
+		}
+
+		maxDist := absDx
+		if absDy > maxDist {
+			maxDist = absDy
+		}
+		if absDz > maxDist {
+			maxDist = absDz
+		}
+		if maxDist < 1 {
+			maxDist = 1
+		}
+
+		for i := 0; i <= maxDist; i++ {
+			t := float32(i) / float32(maxDist)
+			x := start[0] + int(float32(dx)*t)
+			y := start[1] + int(float32(dy)*t)
+			z := start[2] + int(float32(dz)*t)
+
+			// Add thickness
+			for dtx := -thickVoxels; dtx <= thickVoxels; dtx++ {
+				for dty := -thickVoxels; dty <= thickVoxels; dty++ {
+					for dtz := -thickVoxels; dtz <= thickVoxels; dtz++ {
+						voxelSet[[3]int{x + dtx, y + dty, z + dtz}] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Convert to voxels
+	for key := range voxelSet {
+		voxels = append(voxels, Voxel{
+			X:          uint32(key[0]),
+			Y:          uint32(key[1]),
+			Z:          uint32(key[2]),
+			ColorIndex: 1,
+		})
+	}
+
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: uint32(sx + thickVoxels*2), SizeY: uint32(sy + thickVoxels*2), SizeZ: uint32(sz + thickVoxels*2),
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
+	}
+	return id
+}
+
+// CreateWireframeSphereModel creates a sphere with only the outline
+func (server AssetServer) CreateWireframeSphereModel(radius, thickness float32) AssetId {
+	id := makeAssetId()
+
+	resolution := float32(10.0)
+	r := int(radius * resolution)
+	thickVoxels := int(thickness * resolution)
+	if thickVoxels < 1 {
+		thickVoxels = 1
+	}
+
+	var voxels []Voxel
+	voxelSet := make(map[[3]int]bool)
+
+	// Create 3 perpendicular circles (XY, XZ, YZ planes)
+	numSegments := 32
+
+	// XY plane circle
+	for i := 0; i < numSegments; i++ {
+		angle := float32(i) * 2.0 * math.Pi / float32(numSegments)
+		x := int(float32(r) * float32(math.Cos(float64(angle))))
+		y := int(float32(r) * float32(math.Sin(float64(angle))))
+		z := 0
+
+		for dtx := -thickVoxels; dtx <= thickVoxels; dtx++ {
+			for dty := -thickVoxels; dty <= thickVoxels; dty++ {
+				for dtz := -thickVoxels; dtz <= thickVoxels; dtz++ {
+					voxelSet[[3]int{x + dtx + r, y + dty + r, z + dtz + r}] = true
+				}
+			}
+		}
+	}
+
+	// XZ plane circle
+	for i := 0; i < numSegments; i++ {
+		angle := float32(i) * 2.0 * math.Pi / float32(numSegments)
+		x := int(float32(r) * float32(math.Cos(float64(angle))))
+		z := int(float32(r) * float32(math.Sin(float64(angle))))
+		y := 0
+
+		for dtx := -thickVoxels; dtx <= thickVoxels; dtx++ {
+			for dty := -thickVoxels; dty <= thickVoxels; dty++ {
+				for dtz := -thickVoxels; dtz <= thickVoxels; dtz++ {
+					voxelSet[[3]int{x + dtx + r, y + dty + r, z + dtz + r}] = true
+				}
+			}
+		}
+	}
+
+	// YZ plane circle
+	for i := 0; i < numSegments; i++ {
+		angle := float32(i) * 2.0 * math.Pi / float32(numSegments)
+		y := int(float32(r) * float32(math.Cos(float64(angle))))
+		z := int(float32(r) * float32(math.Sin(float64(angle))))
+		x := 0
+
+		for dtx := -thickVoxels; dtx <= thickVoxels; dtx++ {
+			for dty := -thickVoxels; dty <= thickVoxels; dty++ {
+				for dtz := -thickVoxels; dtz <= thickVoxels; dtz++ {
+					voxelSet[[3]int{x + dtx + r, y + dty + r, z + dtz + r}] = true
+				}
+			}
+		}
+	}
+
+	// Convert to voxels
+	for key := range voxelSet {
+		voxels = append(voxels, Voxel{
+			X:          uint32(key[0]),
+			Y:          uint32(key[1]),
+			Z:          uint32(key[2]),
+			ColorIndex: 1,
+		})
+	}
+
+	size := uint32(r*2 + thickVoxels*2)
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: size, SizeY: size, SizeZ: size,
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
+	}
+	return id
+}
+
+// CreateCrossModel creates a 3D cross/axes marker
+func (server AssetServer) CreateCrossModel(size, thickness float32) AssetId {
+	id := makeAssetId()
+
+	resolution := float32(10.0)
+	s := int(size * resolution)
+	thickVoxels := int(thickness * resolution)
+	if thickVoxels < 1 {
+		thickVoxels = 1
+	}
+
+	var voxels []Voxel
+	voxelSet := make(map[[3]int]bool)
+
+	center := s / 2
+
+	// X axis
+	for x := 0; x < s; x++ {
+		for dt := -thickVoxels; dt <= thickVoxels; dt++ {
+			for dt2 := -thickVoxels; dt2 <= thickVoxels; dt2++ {
+				voxelSet[[3]int{x, center + dt, center + dt2}] = true
+			}
+		}
+	}
+
+	// Y axis
+	for y := 0; y < s; y++ {
+		for dt := -thickVoxels; dt <= thickVoxels; dt++ {
+			for dt2 := -thickVoxels; dt2 <= thickVoxels; dt2++ {
+				voxelSet[[3]int{center + dt, y, center + dt2}] = true
+			}
+		}
+	}
+
+	// Z axis
+	for z := 0; z < s; z++ {
+		for dt := -thickVoxels; dt <= thickVoxels; dt++ {
+			for dt2 := -thickVoxels; dt2 <= thickVoxels; dt2++ {
+				voxelSet[[3]int{center + dt, center + dt2, z}] = true
+			}
+		}
+	}
+
+	// Convert to voxels
+	for key := range voxelSet {
+		voxels = append(voxels, Voxel{
+			X:          uint32(key[0]),
+			Y:          uint32(key[1]),
+			Z:          uint32(key[2]),
+			ColorIndex: 1,
+		})
+	}
+
+	server.voxModels[id] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: uint32(s), SizeY: uint32(s), SizeZ: uint32(s),
+			Voxels: voxels,
+		},
+		BrickSize: [3]uint32{8, 8, 8},
+	}
+	return id
+}
+
 func (server AssetServer) CreateSampler() AssetId {
 	id := makeAssetId()
 
