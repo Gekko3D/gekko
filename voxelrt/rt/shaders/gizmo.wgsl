@@ -18,20 +18,36 @@ struct CameraUniform {
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 
+// Group 1: Depth Texture for occlusion
+@group(1) @binding(0) var depth_tex: texture_2d<f32>;
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) dist: f32,
 }
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.position = camera.view_proj * vec4<f32>(in.position, 1.0);
+    let world_pos = vec4<f32>(in.position, 1.0);
+    out.position = camera.view_proj * world_pos;
     out.color = in.color;
+    // Calculate distance from camera for depth testing
+    out.dist = distance(camera.cam_pos.xyz, in.position);
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Manual depth test against G-Buffer
+    // in.position.xy are screen coordinates (pixels)
+    let depth_val = textureLoad(depth_tex, vec2<i32>(in.position.xy), 0).r;
+    
+    // If the G-Buffer has a hit (depth < 60000) and it's closer than us, discard
+    if (depth_val < 50000.0 && depth_val < in.dist - 0.1) {
+        discard;
+    }
+
     return in.color;
 }

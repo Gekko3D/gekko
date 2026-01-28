@@ -417,9 +417,15 @@ func (a *App) Init() error {
 		// Create specific BindGroup for Gizmos
 		// We need to access CameraBuf from BufferManager
 		if a.BufferManager != nil {
-			a.GizmoPass.BindGroup, err = a.GizmoPass.CreateBindGroup(a.BufferManager.CameraBuf)
-			if err != nil {
-				fmt.Printf("ERROR: Failed to create Gizmo BindGroup: %v\n", err)
+			var gErr error
+			a.GizmoPass.BindGroup, gErr = a.GizmoPass.CreateBindGroup(a.BufferManager.CameraBuf)
+			if gErr != nil {
+				fmt.Printf("ERROR: Failed to create Gizmo BindGroup: %v\n", gErr)
+			}
+			// Create Depth BindGroup
+			a.GizmoPass.DepthBindGroup, gErr = a.GizmoPass.CreateDepthBindGroup(a.BufferManager.DepthView)
+			if gErr != nil {
+				fmt.Printf("ERROR: Failed to create Gizmo Depth BindGroup: %v\n", gErr)
 			}
 		}
 	}
@@ -601,6 +607,11 @@ func (a *App) Update() {
 			a.GizmoPass.BindGroup, gErr = a.GizmoPass.CreateBindGroup(a.BufferManager.CameraBuf)
 			if gErr != nil {
 				fmt.Printf("ERROR: Failed to recreate Gizmo BindGroup: %v\n", gErr)
+			}
+			// Recreate Depth BindGroup
+			a.GizmoPass.DepthBindGroup, gErr = a.GizmoPass.CreateDepthBindGroup(a.BufferManager.DepthView)
+			if gErr != nil {
+				fmt.Printf("ERROR: Failed to recreate Gizmo Depth BindGroup: %v\n", gErr)
 			}
 		}
 	}
@@ -836,7 +847,7 @@ func (a *App) Render() {
 
 	// Draw Gizmos
 	if a.GizmoPass != nil && a.GizmoPass.BindGroup != nil {
-		a.GizmoPass.Draw(rPass, a.GizmoPass.BindGroup)
+		a.GizmoPass.Draw(rPass, a.GizmoPass.BindGroup, a.GizmoPass.DepthBindGroup)
 	}
 
 	err = rPass.End()

@@ -19,6 +19,7 @@ type GizmoVertex struct {
 type GizmoRenderPass struct {
 	Pipeline        *wgpu.RenderPipeline
 	BindGroup       *wgpu.BindGroup
+	DepthBindGroup  *wgpu.BindGroup
 	VertexBuffer    *wgpu.Buffer
 	VertexBufferCap uint64
 	VertexCount     uint32
@@ -53,9 +54,29 @@ func NewGizmoRenderPass(device *wgpu.Device, format wgpu.TextureFormat) (*GizmoR
 		return nil, err
 	}
 
+	// Create Bind Group Layout for Depth Texture (Group 1)
+	depthBgl, err := device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "GizmoDepthBGL",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+					Multisampled:  false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	pipelineLayout, err := device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
 		BindGroupLayouts: []*wgpu.BindGroupLayout{
 			bgl,
+			depthBgl,
 		},
 	})
 	if err != nil {
@@ -252,13 +273,16 @@ func (p *GizmoRenderPass) Update(queue *wgpu.Queue, gizmos []core.Gizmo) {
 	queue.WriteBuffer(p.VertexBuffer, 0, unsafe.Slice((*byte)(unsafe.Pointer(&vertices[0])), sizeBytes))
 }
 
-func (p *GizmoRenderPass) Draw(pass *wgpu.RenderPassEncoder, cameraBindGroup *wgpu.BindGroup) {
+func (p *GizmoRenderPass) Draw(pass *wgpu.RenderPassEncoder, cameraBindGroup *wgpu.BindGroup, depthBindGroup *wgpu.BindGroup) {
 	if p.VertexCount == 0 || p.VertexBuffer == nil {
 		return
 	}
 
 	pass.SetPipeline(p.Pipeline)
-	pass.SetBindGroup(0, cameraBindGroup, nil) // Reuse Camera BG (Has ViewProj)
+	pass.SetBindGroup(0, cameraBindGroup, nil)
+	if depthBindGroup != nil {
+		pass.SetBindGroup(1, depthBindGroup, nil)
+	}
 
 	// Calculate size of vertex data to bind
 	sizeBytes := uint64(p.VertexCount) * uint64(unsafe.Sizeof(GizmoVertex{}))
@@ -276,6 +300,20 @@ func (p *GizmoRenderPass) CreateBindGroup(cameraBuffer *wgpu.Buffer) (*wgpu.Bind
 				Binding: 0,
 				Buffer:  cameraBuffer,
 				Size:    256, // Must match MinBindingSize
+			},
+		},
+	})
+}
+
+// Add a helper to create the depth bind group
+func (p *GizmoRenderPass) CreateDepthBindGroup(depthView *wgpu.TextureView) (*wgpu.BindGroup, error) {
+	return p.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "GizmoDepthBG",
+		Layout: p.Pipeline.GetBindGroupLayout(1),
+		Entries: []wgpu.BindGroupEntry{
+			{
+				Binding:     0,
+				TextureView: depthView,
 			},
 		},
 	})
