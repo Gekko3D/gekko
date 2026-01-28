@@ -1,6 +1,13 @@
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) color: vec4<f32>,
+    // @location(1) color: vec4<f32>, // No longer used per-vertex
+
+    // Instance attributes (Grouped for mat4 reconstruction)
+    @location(2) inst_mat_col0: vec4<f32>,
+    @location(3) inst_mat_col1: vec4<f32>,
+    @location(4) inst_mat_col2: vec4<f32>,
+    @location(5) inst_mat_col3: vec4<f32>,
+    @location(6) inst_color: vec4<f32>,
 }
 
 struct CameraUniform {
@@ -29,12 +36,19 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
+    let instance_matrix = mat4x4<f32>(
+        in.inst_mat_col0,
+        in.inst_mat_col1,
+        in.inst_mat_col2,
+        in.inst_mat_col3
+    );
+
     var out: VertexOutput;
-    let world_pos = vec4<f32>(in.position, 1.0);
+    let world_pos = instance_matrix * vec4<f32>(in.position, 1.0);
     out.position = camera.view_proj * world_pos;
-    out.color = in.color;
+    out.color = in.inst_color;
     // Calculate distance from camera for depth testing
-    out.dist = distance(camera.cam_pos.xyz, in.position);
+    out.dist = distance(camera.cam_pos.xyz, world_pos.xyz);
     return out;
 }
 
