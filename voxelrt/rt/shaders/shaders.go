@@ -35,3 +35,6 @@ var ResolveTransparencyWGSL string
 
 //go:embed hiz.wgsl
 var HiZWGSL string
+
+//go:embed gizmo.wgsl
+var GizmoWGSL string
