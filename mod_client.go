@@ -98,13 +98,13 @@ type TransformComponent struct {
 	Scale    mgl32.Vec3
 }
 
-type LocalTransform struct {
+type LocalTransformComponent struct {
 	Position mgl32.Vec3
 	Rotation mgl32.Quat
 	Scale    mgl32.Vec3
 }
 
-func (t LocalTransform) ToMat4() mgl32.Mat4 {
+func (t LocalTransformComponent) ToMat4() mgl32.Mat4 {
 	translate := mgl32.Translate3D(t.Position.X(), t.Position.Y(), t.Position.Z())
 	rotate := t.Rotation.Mat4()
 	scale := mgl32.Scale3D(t.Scale.X(), t.Scale.Y(), t.Scale.Z())
@@ -113,27 +113,6 @@ func (t LocalTransform) ToMat4() mgl32.Mat4 {
 
 type Parent struct {
 	Entity EntityId
-}
-
-type WorldTransform struct {
-	Position mgl32.Vec3
-	Rotation mgl32.Quat
-	Scale    mgl32.Vec3
-}
-
-func (t WorldTransform) ObjectToWorld() mgl32.Mat4 {
-	translate := mgl32.Translate3D(t.Position.X(), t.Position.Y(), t.Position.Z())
-	rotate := t.Rotation.Mat4()
-	scale := mgl32.Scale3D(t.Scale.X(), t.Scale.Y(), t.Scale.Z())
-	return translate.Mul4(rotate).Mul4(scale)
-}
-
-func (t WorldTransform) WorldToObject() mgl32.Mat4 {
-	// inv(M) = inv(S) * inv(R) * inv(T)
-	invScale := mgl32.Scale3D(1.0/t.Scale.X(), 1.0/t.Scale.Y(), 1.0/t.Scale.Z())
-	invRotate := t.Rotation.Conjugate().Mat4()
-	invTranslate := mgl32.Translate3D(-t.Position.X(), -t.Position.Y(), -t.Position.Z())
-	return invScale.Mul4(invRotate).Mul4(invTranslate)
 }
 
 type CameraComponent struct {

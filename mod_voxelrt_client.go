@@ -317,11 +317,6 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	)
 
 	app.UseSystem(
-		System(TransformHierarchySystem).
-			InStage(Update).
-			RunAlways(),
-	)
-	app.UseSystem(
 		System(voxelRtSystem).
 			InStage(PostUpdate).
 			RunAlways(),
@@ -332,73 +327,6 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 			InStage(Render).
 			RunAlways(),
 	)
-}
-
-func TransformHierarchySystem(cmd *Commands) {
-	// Root objects
-	MakeQuery3[LocalTransform, WorldTransform, TransformComponent](cmd).Map(func(eid EntityId, local *LocalTransform, world *WorldTransform, tr *TransformComponent) bool {
-		// Manual "Without(Parent{})" check
-		allComps := cmd.GetAllComponents(eid)
-		for _, c := range allComps {
-			if _, ok := c.(Parent); ok {
-				return true
-			}
-		}
-
-		// Physics/Gameplay Sync: If this is a root with a TransformComponent,
-		// they might be updated by systems that don't know about the hierarchy.
-		if tr != nil {
-			local.Position = tr.Position
-			local.Rotation = tr.Rotation
-			local.Scale = tr.Scale
-		}
-
-		world.Position = local.Position
-		world.Rotation = local.Rotation
-		world.Scale = local.Scale
-		return true
-	}, TransformComponent{})
-
-	// Children (recursively or iteratively - for now iterative simplest for ECS)
-	// In a real engine we might need to handle depths, but let's try a few passes or a topological approach.
-	// Since we are likely only one level deep for a skeleton, let's just run it.
-	// We can repeat mapping for several passes to propagate deeper if needed.
-	for pass := 0; pass < 4; pass++ {
-		MakeQuery3[LocalTransform, Parent, WorldTransform](cmd).Map(func(eid EntityId, local *LocalTransform, parent *Parent, world *WorldTransform) bool {
-			// Get parent's world transform
-			allComps := cmd.GetAllComponents(parent.Entity)
-			var parentWorld *WorldTransform
-			for _, c := range allComps {
-				if pw, ok := c.(WorldTransform); ok {
-					parentWorld = &pw
-					break
-				}
-			}
-
-			if parentWorld != nil {
-				// Propagate components directly to preserve scale signs (reflections) and avoid Mat4ToQuat decomposition errors.
-				// WorldPos = ParentPos + ParentRot * (ParentScale * LocalPos)
-				scaledLocalPos := mgl32.Vec3{
-					local.Position.X() * parentWorld.Scale.X(),
-					local.Position.Y() * parentWorld.Scale.Y(),
-					local.Position.Z() * parentWorld.Scale.Z(),
-				}
-				world.Position = parentWorld.Position.Add(parentWorld.Rotation.Rotate(scaledLocalPos))
-
-				// WorldRot = ParentRot * LocalRot
-				// Note: Reflections are handled by the Scale component.
-				world.Rotation = parentWorld.Rotation.Mul(local.Rotation).Normalize()
-
-				// WorldScale = ParentScale * LocalScale
-				world.Scale = mgl32.Vec3{
-					parentWorld.Scale.X() * local.Scale.X(),
-					parentWorld.Scale.Y() * local.Scale.Y(),
-					parentWorld.Scale.Z() * local.Scale.Z(),
-				}
-			}
-			return true
-		})
-	}
 }
 
 func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time *Time, cmd *Commands) {
@@ -427,7 +355,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	currentEntities := make(map[EntityId]bool)
 
 	// Collect instances from models
-	MakeQuery3[TransformComponent, VoxelModelComponent, WorldTransform](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent, wt *WorldTransform) bool {
+	MakeQuery2[TransformComponent, VoxelModelComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent) bool {
 		currentEntities[entityId] = true
 
 		obj, exists := state.instanceMap[entityId]
@@ -465,21 +393,16 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			state.instanceMap[entityId] = obj
 		}
 
-		if wt != nil {
-			obj.Transform.Position = wt.Position
-			obj.Transform.Rotation = wt.Rotation
-		} else {
-			// Persistent scaling: we don't want to sync scale from ECS if we are using metric scaling.
-			// However, we MUST sync Position back if it changed in the renderer.
-			if state.RtApp.Editor.SelectedObject == obj {
-				if obj.Transform.Position.Sub(transform.Position).Len() > 0.001 {
-					transform.Position = obj.Transform.Position
-				}
-			} else {
-				obj.Transform.Position = transform.Position
+		// Persistent scaling: we don't want to sync scale from ECS if we are using metric scaling.
+		// However, we MUST sync Position back if it changed in the renderer.
+		if state.RtApp.Editor.SelectedObject == obj {
+			if obj.Transform.Position.Sub(transform.Position).Len() > 0.001 {
+				transform.Position = obj.Transform.Position
 			}
-			obj.Transform.Rotation = transform.Rotation
+		} else {
+			obj.Transform.Position = transform.Position
 		}
+		obj.Transform.Rotation = transform.Rotation
 
 		// Metric system: Renderer Scale is ALWAYS TargetVoxelSize.
 		vSize := state.RtApp.Scene.TargetVoxelSize
@@ -488,14 +411,11 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 		}
 
 		scale := transform.Scale
-		if wt != nil {
-			scale = wt.Scale
-		}
 		obj.Transform.Scale = mgl32.Vec3{vSize * scale.X(), vSize * scale.Y(), vSize * scale.Z()}
 		obj.Transform.Dirty = true
 
 		return true
-	}, WorldTransform{})
+	})
 
 	for eid, obj := range state.instanceMap {
 		if !currentEntities[eid] {
@@ -674,12 +594,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 		// Exhaustive check for spatial data (Value/Pointer x World/Local)
 		for _, c := range cmd.GetAllComponents(entityId) {
 			switch t := c.(type) {
-			case WorldTransform:
-				pos, rot, found = t.Position, t.Rotation, true
-				break
-			case *WorldTransform:
-				pos, rot, found = t.Position, t.Rotation, true
-				break
 			case TransformComponent:
 				if !found {
 					pos, rot, found = t.Position, t.Rotation, true

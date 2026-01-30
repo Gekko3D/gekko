@@ -987,8 +987,7 @@ func (server AssetServer) SpawnHierarchicalVoxelModel(cmd *Commands, voxId Asset
 	// Create a root entity to hold the global transform
 	rootEntity := cmd.AddEntity(
 		&TransformComponent{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
-		&LocalTransform{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
-		&WorldTransform{},
+		&LocalTransformComponent{Position: rootTransform.Position, Rotation: rootTransform.Rotation, Scale: rootTransform.Scale},
 	)
 
 	// We need a map to keep track of spawned entities by node ID to link children to parents
@@ -1141,10 +1140,9 @@ func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId i
 		// The Shape node will spawn a child entity offset by -Size/2 to center the mesh on this pivot.
 
 		currentEntity = cmd.AddEntity(
-			&LocalTransform{Position: pos, Rotation: rot, Scale: scale},
+			&LocalTransformComponent{Position: pos, Rotation: rot, Scale: scale},
 			&TransformComponent{Position: pos, Rotation: rot, Scale: scale}, // Added for compatibility with query
 			&Parent{Entity: parentEntity},
-			&WorldTransform{},
 		)
 		nodeEntities[node.ID] = currentEntity
 
@@ -1154,9 +1152,8 @@ func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId i
 	case VoxNodeGroup:
 		// Group nodes just collect children
 		currentEntity = cmd.AddEntity(
-			&LocalTransform{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+			&LocalTransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
 			&Parent{Entity: parentEntity},
-			&WorldTransform{},
 		)
 		nodeEntities[node.ID] = currentEntity
 
@@ -1196,10 +1193,9 @@ func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId i
 			// This might be what we want to keep the mesh inside the reflection?
 
 			cmd.AddEntity(
-				&LocalTransform{Position: centerOffset, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+				&LocalTransformComponent{Position: centerOffset, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
 				&TransformComponent{Position: centerOffset, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
 				&Parent{Entity: parentEntity}, // Attached to the TransformNode (Pivot)
-				&WorldTransform{},
 				&VoxelModelComponent{
 					VoxelModel:   modelAssetId,
 					VoxelPalette: paletteId,
