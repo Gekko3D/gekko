@@ -18,46 +18,32 @@ type GizmoComponent struct {
 	Type  GizmoType
 	Color [4]float32
 
-	// Common Transform (used if Entity doesn't have TransformComponent, or as local modifier)
-	// For Cube, Sphere, Rect, Circle: Position is center. Scale dimensions.
-	// For Line: Position is Start.
-	Position mgl32.Vec3
-	Rotation mgl32.Quat
-	Scale    mgl32.Vec3 // Default {1,1,1}
-
 	// Specifics
-	LineEnd mgl32.Vec3 // For GizmoLine, defines the end point in World space (if no parent) or Local space.
+	LineEnd mgl32.Vec3 // For GizmoLine, defines the end point in Local space.
 	Radius  float32    // For Sphere/Circle. If Scale is used, Radius is a multiplier.
 }
 
 func NewGizmoLine(start, end mgl32.Vec3, color [4]float32) GizmoComponent {
 	return GizmoComponent{
-		Type:     GizmoLine,
-		Position: start,
-		LineEnd:  end,
-		Color:    color,
-		Scale:    mgl32.Vec3{1, 1, 1},
-		Rotation: mgl32.QuatIdent(),
+		Type:    GizmoLine,
+		LineEnd: end, // For GizmoLine, start is implicit (0,0,0) in local space, but we keep LineEnd as a local vector
+		// Actually, let's keep it flexible. If we have a Line, P1=Position, P2=LineEnd.
+		// If we use TransformComponent, Position is the start.
+		Color: color,
 	}
 }
 
-func NewGizmoCube(center mgl32.Vec3, size mgl32.Vec3, color [4]float32) GizmoComponent {
+func NewGizmoCube(color [4]float32) GizmoComponent {
 	return GizmoComponent{
-		Type:     GizmoCube,
-		Position: center,
-		Scale:    size,
-		Color:    color,
-		Rotation: mgl32.QuatIdent(),
+		Type:  GizmoCube,
+		Color: color,
 	}
 }
 
-func NewGizmoSphere(center mgl32.Vec3, radius float32, color [4]float32) GizmoComponent {
+func NewGizmoSphere(radius float32, color [4]float32) GizmoComponent {
 	return GizmoComponent{
-		Type:     GizmoSphere,
-		Position: center,
-		Radius:   radius,
-		Scale:    mgl32.Vec3{1, 1, 1},
-		Color:    color,
-		Rotation: mgl32.QuatIdent(),
+		Type:   GizmoSphere,
+		Radius: radius,
+		Color:  color,
 	}
 }

@@ -643,55 +643,40 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 	state.RtApp.Profiler.BeginScope("Sync Gizmos")
 	state.RtApp.Scene.Gizmos = state.RtApp.Scene.Gizmos[:0]
-	MakeQuery1[GizmoComponent](cmd).Map(func(eid EntityId, g *GizmoComponent) bool {
+	MakeQuery2[GizmoComponent, TransformComponent](cmd).Map(func(eid EntityId, g *GizmoComponent, tr *TransformComponent) bool {
 		// core.Gizmo match
 		rtGizmo := core.Gizmo{
-			Type:  core.GizmoType(g.Type), // Assuming enum matches integer-wise or we map it
+			Type:  core.GizmoType(g.Type),
 			Color: g.Color,
 		}
 
-		// Check for WorldTransform to apply to the gizmo
-		// If entity has a transform, we use it as base.
-		// NOTE: cmd.GetAllComponents is expensive inside a loop if many entities.
-		// Better to use MakeQuery2 if we want optional. But for now this is fine for debug.
-
-		var worldPos mgl32.Vec3 = g.Position
-		var worldRot mgl32.Quat = g.Rotation
-		var worldScale mgl32.Vec3 = g.Scale
-		if worldScale.X() == 0 && worldScale.Y() == 0 && worldScale.Z() == 0 {
-			worldScale = mgl32.Vec3{1, 1, 1}
-		}
-
-		// Try to find WorldTransform on the entity
-		// We can't easily query specific component by ID without generic query helper in this Map.
-		// But we can just use the provided transform if we ran a Query2.
-		// Let's do a Query2? No, Gizmo might be standalone.
-		// Let's revert to checking if it exists manually or just assume GizmoComponent is authoritative if we don't have a specific system.
-		// Actually, standard pattern:
-		// If user puts Gizmo on a moving object, they expect it to follow.
-		// So we should try to get WorldTransform.
-		// For now, let's just use the GizmoComponent's fields. Users can update GizmoComponent in a system if they want it to move.
-		// Or, better, let's try to grab WorldTransform if possible.
-		// Given the `cmd` access, we can try.
-
-		// For Line, we pass P1, P2.
 		if g.Type == GizmoLine {
-			rtGizmo.P1 = g.Position
-			rtGizmo.P2 = g.LineEnd
-			rtGizmo.ModelMatrix = mgl32.Ident4() // Line uses world points P1, P2 directly
-		} else {
-			// Construct Model Matrix
-			// T * R * S
-			t := mgl32.Translate3D(worldPos.X(), worldPos.Y(), worldPos.Z())
-			r := worldRot.Mat4()
-			s := mgl32.Scale3D(worldScale.X(), worldScale.Y(), worldScale.Z())
+			// For Line, tr.Position is Start. g.LineEnd is Local End.
+			// However, the renderer expects P1, P2 and then applies ModelMatrix.
+			// If we set ModelMatrix to Identity, then P1=tr.Position, P2=tr.Position + tr.Rotation * g.LineEnd
+			// But the core/gpu logic for lines (gizmo_pass.go:283) already DOES:
+			// wp1 := g.ModelMatrix.Mul4x1(g.P1.Vec4(1.0)).Vec3()
+			// wp2 := g.ModelMatrix.Mul4x1(g.P2.Vec4(1.0)).Vec3()
+			// So we can set P1={0,0,0}, P2=g.LineEnd and pass the full transform matrix!
 
-			if g.Type == GizmoSphere || g.Type == GizmoCircle {
-				// Apply Radius as Uniform Scale if Scale is 1,1,1, or multiply?
-				// Usage: Radius 1.0 => Scale 1.0.
-				if g.Radius > 0 {
-					s = s.Mul4(mgl32.Scale3D(g.Radius, g.Radius, g.Radius))
-				}
+			rtGizmo.P1 = mgl32.Vec3{0, 0, 0}
+			rtGizmo.P2 = g.LineEnd
+
+			// Construct Model Matrix: T * R (Scale doesn't usually apply to line length unless we want it to,
+			// but gizmo_pass.go:300 applies its own Scale3D(1, 1, dist) anyway).
+			// Let's use the full transform matrix.
+			t := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
+			r := tr.Rotation.Mat4()
+			s := mgl32.Scale3D(tr.Scale.X(), tr.Scale.Y(), tr.Scale.Z())
+			rtGizmo.ModelMatrix = t.Mul4(r).Mul4(s)
+		} else {
+			// Construct Model Matrix from TransformComponent
+			t := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
+			r := tr.Rotation.Mat4()
+			s := mgl32.Scale3D(tr.Scale.X(), tr.Scale.Y(), tr.Scale.Z())
+
+			if (g.Type == GizmoSphere || g.Type == GizmoCircle) && g.Radius > 0 {
+				s = s.Mul4(mgl32.Scale3D(g.Radius, g.Radius, g.Radius))
 			}
 
 			rtGizmo.ModelMatrix = t.Mul4(r).Mul4(s)
