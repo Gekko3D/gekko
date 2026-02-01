@@ -23,9 +23,10 @@ type App struct {
 	ecs                *Ecs
 
 	// Command Buffering
-	pendingAdditions []pendingAdd
-	pendingRemovals  []EntityId
-	pendingCompAdds  []pendingCompAdd
+	pendingAdditions    []pendingAdd
+	pendingRemovals     []EntityId
+	pendingCompAdds     []pendingCompAdd
+	pendingCompRemovals []pendingCompRemoval
 }
 
 type pendingAdd struct {
@@ -34,6 +35,10 @@ type pendingAdd struct {
 }
 
 type pendingCompAdd struct {
+	eid        EntityId
+	components []any
+}
+type pendingCompRemoval struct {
 	eid        EntityId
 	components []any
 }
@@ -171,7 +176,7 @@ func (app *App) callSystemInternal(system systemFn) {
 }
 
 func (app *App) FlushCommands() {
-	if len(app.pendingAdditions) == 0 && len(app.pendingRemovals) == 0 && len(app.pendingCompAdds) == 0 {
+	if len(app.pendingAdditions) == 0 && len(app.pendingRemovals) == 0 && len(app.pendingCompAdds) == 0 && len(app.pendingCompRemovals) == 0 {
 		return
 	}
 
@@ -189,7 +194,13 @@ func (app *App) FlushCommands() {
 	}
 	app.pendingAdditions = app.pendingAdditions[:0]
 
-	// 3. Process Component Additions
+	// 3. Process Component Removals first (so re-adding in same frame works)
+	for _, rem := range app.pendingCompRemovals {
+		app.ecs.removeComponents(rem.eid, rem.components...)
+	}
+	app.pendingCompRemovals = app.pendingCompRemovals[:0]
+
+	// 4. Process Component Additions
 	for _, add := range app.pendingCompAdds {
 		app.ecs.addComponents(add.eid, add.components...)
 	}

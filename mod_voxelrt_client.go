@@ -151,9 +151,8 @@ func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
 		aspect = 1.0
 	}
 
-	// GET ACTUAL FOV FROM CAMERA COMPONENT
-	fov := float32(45.0) // Default
-	// We need a way to get the true FOV. For now matching playing.go
+	// Renderer uses hardcoded 60 FOV
+	fov := float32(60.0) // Matches app.go
 	proj := mgl32.Perspective(mgl32.DegToRad(fov), aspect, 0.1, 1000.0)
 	vp := proj.Mul4(view)
 
@@ -177,6 +176,46 @@ func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
 	}
 
 	return x, y, true
+}
+
+func (s *VoxelRtState) ScreenToWorldRay(mouseX, mouseY float64, camera *CameraComponent) (mgl32.Vec3, mgl32.Vec3) {
+	if s == nil || s.RtApp == nil || s.RtApp.Window == nil || camera == nil {
+		return mgl32.Vec3{}, mgl32.Vec3{}
+	}
+
+	w_int, h_int := s.RtApp.Window.GetSize()
+	w, h := float32(w_int), float32(h_int)
+	if w == 0 || h == 0 {
+		return camera.Position, mgl32.Vec3{0, 0, -1}
+	}
+
+	nx := (2.0*float32(mouseX))/w - 1.0
+	ny := 1.0 - (2.0*float32(mouseY))/h
+
+	yawRad := mgl32.DegToRad(camera.Yaw)
+	pitchRad := mgl32.DegToRad(camera.Pitch)
+
+	forward := mgl32.Vec3{
+		float32(math.Sin(float64(yawRad)) * math.Cos(float64(pitchRad))),
+		float32(math.Sin(float64(pitchRad))),
+		float32(-math.Cos(float64(yawRad)) * math.Cos(float64(pitchRad))),
+	}.Normalize()
+
+	right := mgl32.Vec3{
+		float32(math.Cos(float64(yawRad))),
+		0,
+		float32(math.Sin(float64(yawRad))),
+	}.Normalize()
+
+	up := right.Cross(forward).Normalize()
+
+	aspect := w / h
+	// Renderer uses hardcoded 60 FOV
+	fov := float32(60.0)
+	tanHalfFov := float32(math.Tan(float64(mgl32.DegToRad(fov) / 2.0)))
+
+	dir := forward.Add(right.Mul(nx * aspect * tanHalfFov)).Add(up.Mul(ny * tanHalfFov)).Normalize()
+	return camera.Position, dir
 }
 
 func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit {
