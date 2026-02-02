@@ -154,3 +154,47 @@ func (tr *TextRenderer) BuildVertices(items []TextItem, screenW, screenH int) []
 
 	return vertices
 }
+
+func (tr *TextRenderer) MeasureText(text string, scale float32) (float32, float32) {
+	if tr == nil {
+		return 0, 0
+	}
+
+	metrics := tr.Face.Metrics()
+	lineHeight := float32(metrics.Height.Ceil())
+
+	maxW := float32(0)
+	currentW := float32(0)
+	lines := 1
+
+	for _, r := range text {
+		if r == '\n' {
+			if currentW > maxW {
+				maxW = currentW
+			}
+			currentW = 0
+			lines++
+			continue
+		}
+
+		g, ok := tr.Glyphs[r]
+		if !ok {
+			continue
+		}
+		currentW += g.Adv * scale
+	}
+
+	if currentW > maxW {
+		maxW = currentW
+	}
+
+	return maxW, lineHeight * scale * float32(lines)
+}
+
+func (tr *TextRenderer) GetLineHeight(scale float32) float32 {
+	if tr == nil {
+		return 0
+	}
+	metrics := tr.Face.Metrics()
+	return float32(metrics.Height.Ceil()) * scale
+}

@@ -80,6 +80,20 @@ func (s *VoxelRtState) DrawText(text string, x, y float32, scale float32, color 
 	}
 }
 
+func (s *VoxelRtState) MeasureText(text string, scale float32) (float32, float32) {
+	if s == nil || s.RtApp == nil {
+		return 0, 0
+	}
+	return s.RtApp.MeasureText(text, scale)
+}
+
+func (s *VoxelRtState) GetLineHeight(scale float32) float32 {
+	if s == nil || s.RtApp == nil {
+		return 0
+	}
+	return s.RtApp.GetLineHeight(scale)
+}
+
 func (s *VoxelRtState) Counter(name string) int {
 	if s == nil || s.RtApp == nil {
 		return 0
@@ -358,6 +372,12 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
 		System(voxelRtSystem).
 			InStage(PostUpdate).
+			RunAlways(),
+	)
+
+	app.UseSystem(
+		System(voxelRtUpdateSystem).
+			InStage(PreRender).
 			RunAlways(),
 	)
 
@@ -737,11 +757,15 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil {
 		state.RtApp.BufferManager.CreateParticlesBindGroups(state.RtApp.ParticlesPipeline)
 	}
+}
+
+func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
 
 	state.RtApp.Profiler.BeginScope("RT Update")
-
 	state.RtApp.Update()
-
 	state.RtApp.Profiler.EndScope("RT Update")
 }
 
