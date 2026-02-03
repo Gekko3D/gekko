@@ -89,6 +89,7 @@ type Input struct {
 	MouseCaptured            bool
 
 	WindowWidth, WindowHeight int
+	CharBuffer                []rune
 }
 
 func (mod InputModule) Install(app *App, cmd *Commands) {
@@ -101,6 +102,13 @@ func (mod InputModule) Install(app *App, cmd *Commands) {
 }
 
 func inputSystem(s *WindowState, input *Input) {
+	input.CharBuffer = nil // Clear buffer at start of frame
+
+	// Register character callback if not already set
+	s.windowGlfw.SetCharCallback(func(w *glfw.Window, char rune) {
+		input.CharBuffer = append(input.CharBuffer, char)
+	})
+
 	glfw.PollEvents()
 
 	// Update Keyboard

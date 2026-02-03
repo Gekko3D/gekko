@@ -36,6 +36,16 @@ type UiList struct {
 	Scale    float32 // Optional scale multiplier (default 1.0)
 }
 
+type UiTextBox struct {
+	Label    string
+	Text     string
+	Position [2]float32
+	Width    float32
+	Scale    float32
+	Focused  bool
+	OnSubmit func(string)
+}
+
 func (UiModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(System(uiInputSystem).InStage(PreUpdate).RunAlways())
 	app.UseSystem(System(uiRenderSystem).InStage(PostUpdate).RunAlways())
@@ -58,6 +68,7 @@ func uiInputSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 		pixelRatio = 1.0
 	}
 
+	// Handle Buttons
 	MakeQuery1[UiButton](cmd).Map(func(eid EntityId, btn *UiButton) bool {
 		btn.Clicked = false
 
@@ -92,6 +103,59 @@ func uiInputSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 
 		return true
 	})
+
+	// Handle TextBoxes
+	MakeQuery1[UiTextBox](cmd).Map(func(eid EntityId, tb *UiTextBox) bool {
+		scale := tb.Scale
+		if scale <= 0 {
+			scale = 1.0
+		}
+
+		displayLabel := tb.Label
+		if tb.Text != "" {
+			displayLabel = tb.Text
+		}
+		physTw, physTh := state.MeasureText(displayLabel, scale)
+		tw := physTw / pixelRatio
+
+		w := tb.Width
+		if w == 0 {
+			w = tw + uiButtonPaddingX*2.0*scale
+		}
+		h := 3.0 * (physTh / pixelRatio)
+
+		// Focus handling
+		if isLMB {
+			if mx >= float64(tb.Position[0]) && mx <= float64(tb.Position[0]+w) &&
+				my >= float64(tb.Position[1]) && my <= float64(tb.Position[1]+h) {
+				tb.Focused = true
+			} else {
+				tb.Focused = false
+			}
+		}
+
+		// Text input handling
+		if tb.Focused {
+			// Character input
+			for _, char := range input.CharBuffer {
+				tb.Text += string(char)
+			}
+
+			// Special keys
+			if input.JustPressed[KeyBackspace] && len(tb.Text) > 0 {
+				tb.Text = tb.Text[:len(tb.Text)-1]
+			}
+
+			if input.JustPressed[KeyEnter] {
+				if tb.OnSubmit != nil {
+					tb.OnSubmit(tb.Text)
+				}
+				tb.Focused = false
+			}
+		}
+
+		return true
+	})
 }
 
 func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
@@ -108,6 +172,7 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 	normalColor := [4]float32{1, 1, 1, 1}
 	highlightColor := [4]float32{1, 1, 0, 1}
 	textColor := [4]float32{1, 1, 1, 1}
+	dimColor := [4]float32{0.5, 0.5, 0.5, 1}
 
 	// Precise horizontal line by drawing corners and filling with dashes
 	drawBoxHLine := func(x, y, w, scale float32, color [4]float32) {
@@ -161,11 +226,71 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 		y += lineH
 
 		// 2. Middle (Text and Vertical Bars)
-		// Left Bar
 		state.DrawText("|", drawX, y, scale, color)
-		// Centered Text
 		state.DrawText(btn.Label, drawX+(w-tw)/2.0, y, scale, textColor)
-		// Right Bar
+		state.DrawText("|", drawX+w-pipeW, y, scale, color)
+		y += lineH
+
+		// 3. Bottom Border
+		drawBoxHLine(drawX, y, w, scale, color)
+
+		return true
+	})
+
+	// Render TextBoxes
+	MakeQuery1[UiTextBox](cmd).Map(func(eid EntityId, tb *UiTextBox) bool {
+		color := normalColor
+		if tb.Focused {
+			color = highlightColor
+		}
+
+		scale := tb.Scale
+		if scale <= 0 {
+			scale = 1.0
+		}
+
+		drawX := tb.Position[0] * pixelRatio
+		drawY := tb.Position[1] * pixelRatio
+
+		lineH := state.GetLineHeight(scale)
+		if lineH < 35*scale {
+			lineH = 35 * scale
+		}
+		pipeW, _ := state.MeasureText("|", scale)
+
+		displayLabel := tb.Label
+		isPlaceholder := false
+		if tb.Text == "" {
+			displayLabel = tb.Label
+			isPlaceholder = true
+		} else {
+			displayLabel = tb.Text
+		}
+
+		if tb.Focused {
+			displayLabel += "_"
+		}
+
+		tw, _ := state.MeasureText(displayLabel, scale)
+		w := tb.Width * pixelRatio
+		if w == 0 {
+			w = tw + uiButtonPaddingX*2.0*pixelRatio*scale
+		}
+
+		y := drawY
+		// 1. Top Border
+		drawBoxHLine(drawX, y, w, scale, color)
+		y += lineH
+
+		// 2. Middle (Text and Vertical Bars)
+		state.DrawText("|", drawX, y, scale, color)
+
+		drawColor := textColor
+		if isPlaceholder && !tb.Focused {
+			drawColor = dimColor
+		}
+
+		state.DrawText(displayLabel, drawX+uiButtonPaddingX*pixelRatio*scale, y, scale, drawColor)
 		state.DrawText("|", drawX+w-pipeW, y, scale, color)
 		y += lineH
 
