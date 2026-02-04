@@ -6,8 +6,11 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/go-gl/mathgl/mgl32"
+
+	"github.com/gekko3d/gekko/voxelrt/rt/editor"
 )
 
 // EditorSelectedComponent marks an entity as selected by the object editor
@@ -51,6 +54,13 @@ type ObjectEditorComponent struct {
 	PresetFilename string
 	SaveRequested  bool
 	LoadRequested  bool
+
+	// Voxel Editing state
+	VoxelEditMode bool
+	BrushRadius   float32
+	BrushValue    uint8  // Material index to place (0 = erase)
+	EditMode      string // "add" or "remove"
+	voxelEditor   *editor.Editor
 }
 
 type ObjectEditorModule struct{}
@@ -89,6 +99,15 @@ func EditorSelectionSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 		return false
 	})
 	if camera == nil {
+		return
+	}
+
+	var editorComp *ObjectEditorComponent
+	MakeQuery1[ObjectEditorComponent](cmd).Map(func(eid EntityId, ec *ObjectEditorComponent) bool {
+		editorComp = ec
+		return false
+	})
+	if editorComp != nil && editorComp.VoxelEditMode {
 		return
 	}
 
@@ -363,6 +382,65 @@ func EditorInteractionSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 		float32(math.Sin(float64(pitchRad))),
 		float32(-math.Cos(float64(yawRad)) * math.Cos(float64(pitchRad))),
 	}.Normalize()
+
+	// Initialize voxel editor if needed
+	if editorComp.voxelEditor == nil {
+		editorComp.voxelEditor = editor.NewEditor()
+		editorComp.BrushRadius = 2.0
+		editorComp.BrushValue = 1
+		editorComp.EditMode = "add"
+	}
+
+	// Handle brush size controls
+	if input.JustPressed[KeyEqual] || input.JustPressed[KeyKPPlus] {
+		editorComp.BrushRadius += 1.0
+		if editorComp.BrushRadius > 10.0 {
+			editorComp.BrushRadius = 10.0
+		}
+	}
+	if input.JustPressed[KeyMinus] || input.JustPressed[KeyKPMinus] {
+		editorComp.BrushRadius -= 1.0
+		if editorComp.BrushRadius < 1.0 {
+			editorComp.BrushRadius = 1.0
+		}
+	}
+
+	// VOXEL EDITING MODE
+	if editorComp.VoxelEditMode {
+		leftClick := input.JustPressed[MouseButtonLeft] || input.Pressed[MouseButtonLeft]
+		rightClick := input.JustPressed[MouseButtonRight] || input.Pressed[MouseButtonRight]
+
+		if leftClick || rightClick {
+			// Update editor settings
+			val := editorComp.BrushValue
+			if rightClick {
+				val = 0 // Erase
+			}
+
+			// Use engine's raycasting for consistency
+			origin, dir := state.ScreenToWorldRay(float64(input.MouseX), float64(input.MouseY), camera)
+			hit := state.Raycast(origin, dir, 1000.0)
+
+			if hit.Hit {
+				state.RtApp.Profiler.BeginScope("Editor Apply")
+
+				// Calculate world-space center for the brush
+				worldHitCenter := origin.Add(dir.Mul(hit.T))
+
+				// If adding, shift slightly outward to avoid z-fighting/stuck voxels
+				if val != 0 {
+					// We can use the hit normal to shift by half a voxel or so
+					// to make sure we are mostly in the "next" empty space
+					shift := hit.Normal.Mul(0.1) // Small shift
+					worldHitCenter = worldHitCenter.Add(shift)
+				}
+
+				state.VoxelSphereEdit(hit.Entity, worldHitCenter, editorComp.BrushRadius, val)
+				state.RtApp.Profiler.EndScope("Editor Apply")
+			}
+		}
+		return // Don't perform object-level selection/dragging in voxel edit mode
+	}
 
 	// MOUSE DOWN: Capture Start State
 	if input.JustPressed[MouseButtonLeft] {
@@ -668,6 +746,18 @@ func EditorUiSystem(cmd *Commands, server *AssetServer, state *VoxelRtState) {
 				btn.Label = "SET PARENT"
 				btn.Highlighted = false
 			}
+		} else if tag.Type == "vox_edit" {
+			if editorComp.VoxelEditMode {
+				btn.Label = "> VOXEL EDIT <"
+				btn.Highlighted = true
+			} else {
+				btn.Label = "VOXEL EDIT"
+				btn.Highlighted = false
+			}
+		} else if tag.Type == "vox_edit_controls" {
+			if btn.Label == "BRUSH +" || strings.HasPrefix(btn.Label, "BRUSH +") {
+				btn.Label = fmt.Sprintf("BRUSH + (%.1f)", editorComp.BrushRadius)
+			}
 		}
 		return true
 	})
@@ -757,10 +847,52 @@ func createEditorUi(cmd *Commands, editorComp *ObjectEditorComponent) {
 	)
 
 	cmd.AddEntity(
+		&EditorUiTag{Type: "vox_edit"},
+		&UiButton{
+			Label:    "VOXEL EDIT",
+			Position: [2]float32{baseX, baseY + 320},
+			Width:    300,
+			OnClick: func() {
+				editorComp.VoxelEditMode = !editorComp.VoxelEditMode
+			},
+		},
+	)
+
+	// Brush Size Controls
+	cmd.AddEntity(
+		&EditorUiTag{Type: "vox_edit_controls"},
+		&UiButton{
+			Label:    "BRUSH +",
+			Position: [2]float32{baseX, baseY + 400},
+			Width:    145,
+			OnClick: func() {
+				editorComp.BrushRadius += 1.0
+				if editorComp.BrushRadius > 10.0 {
+					editorComp.BrushRadius = 10.0
+				}
+			},
+		},
+	)
+	cmd.AddEntity(
+		&EditorUiTag{Type: "vox_edit_controls"},
+		&UiButton{
+			Label:    "BRUSH -",
+			Position: [2]float32{baseX + 155, baseY + 400},
+			Width:    145,
+			OnClick: func() {
+				editorComp.BrushRadius -= 1.0
+				if editorComp.BrushRadius < 1.0 {
+					editorComp.BrushRadius = 1.0
+				}
+			},
+		},
+	)
+
+	cmd.AddEntity(
 		&EditorUiTag{Type: "hierarchy"},
 		&UiList{
 			Title:    "SCENE HIERARCHY",
-			Position: [2]float32{baseX, baseY + 320},
+			Position: [2]float32{baseX, baseY + 480},
 			Scale:    0.8,
 		},
 	)
