@@ -1,7 +1,11 @@
 package gekko
 
 import (
+	"fmt"
 	"math"
+	"os"
+	"reflect"
+	"slices"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -14,6 +18,11 @@ type EditorGizmoTag struct {
 	Axis  mgl32.Vec3
 	Type  GizmoInteractionType
 	Scale float32
+}
+
+// EditorUiTag marks an entity as part of the editor UI
+type EditorUiTag struct {
+	Type string
 }
 
 type GizmoInteractionType int
@@ -36,6 +45,12 @@ type ObjectEditorComponent struct {
 	dragPlanePoint             mgl32.Vec3
 	dragEntityInitialTransform TransformComponent
 	dragPivotPoint             mgl32.Vec3 // The center of the object (AABB center) at start
+
+	// Hierarchy and Preset state
+	ParentingMode  bool
+	PresetFilename string
+	SaveRequested  bool
+	LoadRequested  bool
 }
 
 type ObjectEditorModule struct{}
@@ -54,6 +69,11 @@ func (m ObjectEditorModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
 		System(EditorInteractionSystem).
 			InStage(PreUpdate).
+			RunAlways(),
+	)
+	app.UseSystem(
+		System(EditorUiSystem).
+			InStage(Update).
 			RunAlways(),
 	)
 }
@@ -346,6 +366,28 @@ func EditorInteractionSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 
 	// MOUSE DOWN: Capture Start State
 	if input.JustPressed[MouseButtonLeft] {
+		if editorComp.ParentingMode {
+			hit := state.Raycast(origin, dir, 1000.0)
+			if hit.Hit {
+				selectedEid := findSelectedAncestor(cmd, 0) // Helper to get currently selected
+				MakeQuery1[EditorSelectedComponent](cmd).Map(func(eid EntityId, s *EditorSelectedComponent) bool {
+					selectedEid = eid
+					return false
+				})
+
+				if selectedEid != 0 && selectedEid != hit.Entity {
+					// Set hit.Entity as parent of selectedEid
+					setParent(cmd, state, selectedEid, hit.Entity)
+					fmt.Printf("Set Entity %d as parent of Entity %d\n", hit.Entity, selectedEid)
+					editorComp.ParentingMode = false
+				}
+			} else {
+				// Clicked empty space, cancel parenting mode
+				editorComp.ParentingMode = false
+			}
+			return
+		}
+
 		gid := hitGizmo(cmd, origin, dir)
 		if gid != 0 {
 			editorComp.activeGizmo = gid
@@ -553,4 +595,251 @@ func updateTransform(cmd *Commands, eid EntityId, worldTransform *TransformCompo
 		worldTransform.Position = newPos
 		worldTransform.Rotation = newRot
 	}
+}
+
+func setParent(cmd *Commands, state *VoxelRtState, child, parent EntityId) {
+	var childWorld TransformComponent
+	foundChild := false
+	MakeQuery1[TransformComponent](cmd).Map(func(eid EntityId, tr *TransformComponent) bool {
+		if eid == child {
+			childWorld = *tr
+			foundChild = true
+		}
+		return true
+	})
+
+	var parentWorld TransformComponent
+	foundParent := false
+	MakeQuery1[TransformComponent](cmd).Map(func(eid EntityId, tr *TransformComponent) bool {
+		if eid == parent {
+			parentWorld = *tr
+			foundParent = true
+		}
+		return true
+	})
+
+	if foundChild && foundParent {
+		// Calculate local transform
+		diff := childWorld.Position.Sub(parentWorld.Position)
+		localPos := parentWorld.Rotation.Conjugate().Rotate(diff)
+		localPos = mgl32.Vec3{
+			localPos.X() / (parentWorld.Scale.X() + 1e-6),
+			localPos.Y() / (parentWorld.Scale.Y() + 1e-6),
+			localPos.Z() / (parentWorld.Scale.Z() + 1e-6),
+		}
+		localRot := parentWorld.Rotation.Conjugate().Mul(childWorld.Rotation).Normalize()
+
+		cmd.AddComponents(child, &Parent{Entity: parent}, &LocalTransformComponent{
+			Position: localPos,
+			Rotation: localRot,
+			Scale:    mgl32.Vec3{childWorld.Scale.X() / (parentWorld.Scale.X() + 1e-6), childWorld.Scale.Y() / (parentWorld.Scale.Y() + 1e-6), childWorld.Scale.Z() / (parentWorld.Scale.Z() + 1e-6)},
+		})
+	}
+}
+
+func EditorUiSystem(cmd *Commands, server *AssetServer, state *VoxelRtState) {
+	var editorComp *ObjectEditorComponent
+	MakeQuery1[ObjectEditorComponent](cmd).Map(func(eid EntityId, ec *ObjectEditorComponent) bool {
+		editorComp = ec
+		return false
+	})
+	if editorComp == nil || !editorComp.Enabled {
+		return
+	}
+
+	// 1. Ensure UI entities exist
+	uiExists := false
+	MakeQuery1[EditorUiTag](cmd).Map(func(eid EntityId, tag *EditorUiTag) bool {
+		uiExists = true
+		return false
+	})
+
+	if !uiExists {
+		createEditorUi(cmd, editorComp)
+	}
+
+	// 2. Update UI state
+	MakeQuery2[EditorUiTag, UiButton](cmd).Map(func(eid EntityId, tag *EditorUiTag, btn *UiButton) bool {
+		if tag.Type == "parent" {
+			if editorComp.ParentingMode {
+				btn.Label = "> PICK PARENT <"
+				btn.Highlighted = true
+			} else {
+				btn.Label = "SET PARENT"
+				btn.Highlighted = false
+			}
+		}
+		return true
+	})
+
+	// 3. Update Hierarchy List
+	MakeQuery2[EditorUiTag, UiList](cmd).Map(func(eid EntityId, tag *EditorUiTag, list *UiList) bool {
+		if tag.Type == "hierarchy" {
+			list.Items = buildHierarchyList(cmd)
+		}
+		return true
+	})
+
+	// 4. Execute Save/Load if requested
+	if editorComp.SaveRequested {
+		filename := "presets/" + editorComp.PresetFilename + ".json"
+		os.MkdirAll("presets", 0755)
+		if err := SavePreset(cmd, server, filename); err != nil {
+			fmt.Printf("Error saving preset: %v\n", err)
+		} else {
+			fmt.Printf("Preset saved to %s\n", filename)
+		}
+		editorComp.SaveRequested = false
+	}
+
+	if editorComp.LoadRequested {
+		filename := "presets/" + editorComp.PresetFilename + ".json"
+		if _, err := LoadPreset(cmd, server, filename); err != nil {
+			fmt.Printf("Error loading preset: %v\n", err)
+		} else {
+			fmt.Printf("Preset loaded from %s\n", filename)
+		}
+		editorComp.LoadRequested = false
+	}
+}
+
+func createEditorUi(cmd *Commands, editorComp *ObjectEditorComponent) {
+	baseX := float32(1000)
+	baseY := float32(50)
+
+	cmd.AddEntity(
+		&EditorUiTag{Type: "filename"},
+		&UiTextBox{
+			Label:    "Preset Name:",
+			Text:     "my_preset",
+			Position: [2]float32{baseX, baseY},
+			Width:    300,
+			OnSubmit: func(text string) {
+				editorComp.PresetFilename = text
+			},
+		},
+	)
+
+	cmd.AddEntity(
+		&EditorUiTag{Type: "save"},
+		&UiButton{
+			Label:    "SAVE PRESET",
+			Position: [2]float32{baseX, baseY + 80},
+			Width:    300,
+			OnClick: func() {
+				editorComp.SaveRequested = true
+			},
+		},
+	)
+
+	cmd.AddEntity(
+		&EditorUiTag{Type: "load"},
+		&UiButton{
+			Label:    "LOAD PRESET",
+			Position: [2]float32{baseX, baseY + 160},
+			Width:    300,
+			OnClick: func() {
+				editorComp.LoadRequested = true
+			},
+		},
+	)
+
+	cmd.AddEntity(
+		&EditorUiTag{Type: "parent"},
+		&UiButton{
+			Label:    "SET PARENT",
+			Position: [2]float32{baseX, baseY + 240},
+			Width:    300,
+			OnClick: func() {
+				editorComp.ParentingMode = !editorComp.ParentingMode
+			},
+		},
+	)
+
+	cmd.AddEntity(
+		&EditorUiTag{Type: "hierarchy"},
+		&UiList{
+			Title:    "SCENE HIERARCHY",
+			Position: [2]float32{baseX, baseY + 320},
+			Scale:    0.8,
+		},
+	)
+}
+
+func buildHierarchyList(cmd *Commands) []UiListItem {
+	var roots []EntityId
+
+	MakeQuery1[TransformComponent](cmd).Map(func(eid EntityId, tr *TransformComponent) bool {
+		allComps := cmd.GetAllComponents(eid)
+		isInternal := false
+		hasParent := false
+
+		for _, c := range allComps {
+			switch c.(type) {
+			case EditorGizmoTag, *EditorGizmoTag, EditorUiTag, *EditorUiTag:
+				isInternal = true
+			case Parent, *Parent:
+				hasParent = true
+			}
+		}
+
+		if !isInternal && !hasParent {
+			roots = append(roots, eid)
+		}
+		return true
+	})
+
+	// Sort roots for deterministic display
+	slices.Sort(roots)
+
+	var items []UiListItem
+	visited := make(map[EntityId]bool)
+	for _, eid := range roots {
+		items = append(items, buildUiListItem(cmd, eid, visited))
+	}
+	return items
+}
+
+func buildUiListItem(cmd *Commands, eid EntityId, visited map[EntityId]bool) UiListItem {
+	if visited[eid] {
+		return UiListItem{Label: fmt.Sprintf("Entity %d (Cycle!)", eid)}
+	}
+	visited[eid] = true
+
+	allComps := cmd.GetAllComponents(eid)
+	isSelected := false
+	for _, c := range allComps {
+		// Use reflect for selection check to be safer with pointers vs values
+		t := reflect.TypeOf(c)
+		if t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		if t.Name() == "EditorSelectedComponent" {
+			isSelected = true
+		}
+	}
+
+	label := fmt.Sprintf("Entity %d", eid)
+	if isSelected {
+		label = "[*] " + label
+	}
+
+	item := UiListItem{Label: label}
+
+	// Find children efficiently
+	var children []EntityId
+	MakeQuery1[Parent](cmd).Map(func(ceid EntityId, p *Parent) bool {
+		if p.Entity == eid {
+			children = append(children, ceid)
+		}
+		return true
+	})
+
+	// Sort children for deterministic display
+	slices.Sort(children)
+
+	for _, childId := range children {
+		item.Children = append(item.Children, buildUiListItem(cmd, childId, visited))
+	}
+	return item
 }

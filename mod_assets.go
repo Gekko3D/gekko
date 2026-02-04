@@ -83,8 +83,9 @@ type SamplerAsset struct {
 }
 
 type VoxelModelAsset struct {
-	VoxModel  VoxModel
-	BrickSize [3]uint32
+	VoxModel   VoxModel
+	BrickSize  [3]uint32
+	SourcePath string
 }
 
 type VoxelPaletteAsset struct {
@@ -95,6 +96,7 @@ type VoxelPaletteAsset struct {
 	Metalness  float32
 	Emission   float32
 	IOR        float32
+	SourcePath string
 }
 
 func (server AssetServer) CreateMesh(vertices AnySlice, indexes []uint16) Mesh {
@@ -208,14 +210,18 @@ func (server AssetServer) CreateVoxelBasedTexture(voxModel *VoxModel, palette *V
 }
 
 func (server AssetServer) CreateVoxelModel(model VoxModel, resolution float32) AssetId {
+	return server.CreateVoxelModelFromSource(model, resolution, "")
+}
+
+func (server AssetServer) CreateVoxelModelFromSource(model VoxModel, resolution float32, sourcePath string) AssetId {
 	if resolution != 1.0 && resolution > 0 {
 		model = ScaleVoxModel(model, resolution)
 	}
 	id := makeAssetId()
 	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: model,
-		//TODO calculate brick size based on model
-		BrickSize: [3]uint32{8, 8, 8},
+		VoxModel:   model,
+		BrickSize:  [3]uint32{8, 8, 8},
+		SourcePath: sourcePath,
 	}
 	return id
 }
@@ -318,10 +324,15 @@ func ScaleVoxModel(model VoxModel, scale float32) VoxModel {
 }
 
 func (server AssetServer) CreateVoxelPalette(palette VoxPalette, materials []VoxMaterial) AssetId {
+	return server.CreateVoxelPaletteFromSource(palette, materials, "")
+}
+
+func (server AssetServer) CreateVoxelPaletteFromSource(palette VoxPalette, materials []VoxMaterial, sourcePath string) AssetId {
 	id := makeAssetId()
 	server.voxPalettes[id] = VoxelPaletteAsset{
 		VoxPalette: palette,
 		Materials:  materials,
+		SourcePath: sourcePath,
 	}
 	return id
 }
