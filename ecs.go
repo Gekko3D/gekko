@@ -93,6 +93,38 @@ func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
 	ecs.entityIndex[entityId] = dstArchId
 }
 
+func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
+	srcArchId := ecs.entityIndex[entityId]
+	srcArch := ecs.archetypes[srcArchId]
+	srcRow := srcArch.entities[entityId]
+
+	// Find the subset of components to keep
+	removeSet := make(set[componentId])
+	for _, c := range components {
+		cType := reflect.TypeOf(c)
+		if cType.Kind() == reflect.Pointer {
+			cType = cType.Elem()
+		}
+		removeSet[ecs.getComponentId(cType)] = struct{}{}
+	}
+
+	var dstKey archetypeKey
+	for _, compId := range srcArch.key {
+		if _, shouldRemove := removeSet[compId]; !shouldRemove {
+			dstKey = append(dstKey, compId)
+		}
+	}
+
+	dstArchId, dstArch := ecs.getOrMakeArchetype(dstKey)
+	dstRow := ecs.archetypeReserveRow(dstArch)
+
+	ecs.moveComponents(srcArch, srcRow, dstArch, dstRow)
+	ecs.recycleEntity(entityId)
+
+	dstArch.entities[entityId] = dstRow
+	ecs.entityIndex[entityId] = dstArchId
+}
+
 func (ecs *Ecs) moveComponents(srcArch *archetype, srcRow row, dstArch *archetype, dstRow row) {
 	// We should make sure to always copy only the smallest subset of the components
 	// E.g when removing component(s) we only want to move those that can fit into the destination Archetype

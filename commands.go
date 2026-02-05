@@ -30,6 +30,13 @@ func (cmd *Commands) AddComponents(entityId EntityId, components ...any) {
 	})
 }
 
+func (cmd *Commands) RemoveComponents(entityId EntityId, components ...any) {
+	cmd.app.pendingCompRemovals = append(cmd.app.pendingCompRemovals, pendingCompRemoval{
+		eid:        entityId,
+		components: components,
+	})
+}
+
 func (cmd *Commands) RemoveEntity(entityId EntityId) {
 	cmd.app.pendingRemovals = append(cmd.app.pendingRemovals, entityId)
 }

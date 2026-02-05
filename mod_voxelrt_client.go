@@ -80,6 +80,20 @@ func (s *VoxelRtState) DrawText(text string, x, y float32, scale float32, color 
 	}
 }
 
+func (s *VoxelRtState) MeasureText(text string, scale float32) (float32, float32) {
+	if s == nil || s.RtApp == nil {
+		return 0, 0
+	}
+	return s.RtApp.MeasureText(text, scale)
+}
+
+func (s *VoxelRtState) GetLineHeight(scale float32) float32 {
+	if s == nil || s.RtApp == nil {
+		return 0
+	}
+	return s.RtApp.GetLineHeight(scale)
+}
+
 func (s *VoxelRtState) Counter(name string) int {
 	if s == nil || s.RtApp == nil {
 		return 0
@@ -151,9 +165,8 @@ func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
 		aspect = 1.0
 	}
 
-	// GET ACTUAL FOV FROM CAMERA COMPONENT
-	fov := float32(45.0) // Default
-	// We need a way to get the true FOV. For now matching playing.go
+	// Renderer uses hardcoded 60 FOV
+	fov := float32(60.0) // Matches app.go
 	proj := mgl32.Perspective(mgl32.DegToRad(fov), aspect, 0.1, 1000.0)
 	vp := proj.Mul4(view)
 
@@ -177,6 +190,46 @@ func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
 	}
 
 	return x, y, true
+}
+
+func (s *VoxelRtState) ScreenToWorldRay(mouseX, mouseY float64, camera *CameraComponent) (mgl32.Vec3, mgl32.Vec3) {
+	if s == nil || s.RtApp == nil || s.RtApp.Window == nil || camera == nil {
+		return mgl32.Vec3{}, mgl32.Vec3{}
+	}
+
+	w_int, h_int := s.RtApp.Window.GetSize()
+	w, h := float32(w_int), float32(h_int)
+	if w == 0 || h == 0 {
+		return camera.Position, mgl32.Vec3{0, 0, -1}
+	}
+
+	nx := (2.0*float32(mouseX))/w - 1.0
+	ny := 1.0 - (2.0*float32(mouseY))/h
+
+	yawRad := mgl32.DegToRad(camera.Yaw)
+	pitchRad := mgl32.DegToRad(camera.Pitch)
+
+	forward := mgl32.Vec3{
+		float32(math.Sin(float64(yawRad)) * math.Cos(float64(pitchRad))),
+		float32(math.Sin(float64(pitchRad))),
+		float32(-math.Cos(float64(yawRad)) * math.Cos(float64(pitchRad))),
+	}.Normalize()
+
+	right := mgl32.Vec3{
+		float32(math.Cos(float64(yawRad))),
+		0,
+		float32(math.Sin(float64(yawRad))),
+	}.Normalize()
+
+	up := right.Cross(forward).Normalize()
+
+	aspect := w / h
+	// Renderer uses hardcoded 60 FOV
+	fov := float32(60.0)
+	tanHalfFov := float32(math.Tan(float64(mgl32.DegToRad(fov) / 2.0)))
+
+	dir := forward.Add(right.Mul(nx * aspect * tanHalfFov)).Add(up.Mul(ny * tanHalfFov)).Normalize()
+	return camera.Position, dir
 }
 
 func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit {
@@ -319,6 +372,12 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
 		System(voxelRtSystem).
 			InStage(PostUpdate).
+			RunAlways(),
+	)
+
+	app.UseSystem(
+		System(voxelRtUpdateSystem).
+			InStage(PreRender).
 			RunAlways(),
 	)
 
@@ -643,55 +702,40 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 	state.RtApp.Profiler.BeginScope("Sync Gizmos")
 	state.RtApp.Scene.Gizmos = state.RtApp.Scene.Gizmos[:0]
-	MakeQuery1[GizmoComponent](cmd).Map(func(eid EntityId, g *GizmoComponent) bool {
+	MakeQuery2[GizmoComponent, TransformComponent](cmd).Map(func(eid EntityId, g *GizmoComponent, tr *TransformComponent) bool {
 		// core.Gizmo match
 		rtGizmo := core.Gizmo{
-			Type:  core.GizmoType(g.Type), // Assuming enum matches integer-wise or we map it
+			Type:  core.GizmoType(g.Type),
 			Color: g.Color,
 		}
 
-		// Check for WorldTransform to apply to the gizmo
-		// If entity has a transform, we use it as base.
-		// NOTE: cmd.GetAllComponents is expensive inside a loop if many entities.
-		// Better to use MakeQuery2 if we want optional. But for now this is fine for debug.
-
-		var worldPos mgl32.Vec3 = g.Position
-		var worldRot mgl32.Quat = g.Rotation
-		var worldScale mgl32.Vec3 = g.Scale
-		if worldScale.X() == 0 && worldScale.Y() == 0 && worldScale.Z() == 0 {
-			worldScale = mgl32.Vec3{1, 1, 1}
-		}
-
-		// Try to find WorldTransform on the entity
-		// We can't easily query specific component by ID without generic query helper in this Map.
-		// But we can just use the provided transform if we ran a Query2.
-		// Let's do a Query2? No, Gizmo might be standalone.
-		// Let's revert to checking if it exists manually or just assume GizmoComponent is authoritative if we don't have a specific system.
-		// Actually, standard pattern:
-		// If user puts Gizmo on a moving object, they expect it to follow.
-		// So we should try to get WorldTransform.
-		// For now, let's just use the GizmoComponent's fields. Users can update GizmoComponent in a system if they want it to move.
-		// Or, better, let's try to grab WorldTransform if possible.
-		// Given the `cmd` access, we can try.
-
-		// For Line, we pass P1, P2.
 		if g.Type == GizmoLine {
-			rtGizmo.P1 = g.Position
-			rtGizmo.P2 = g.LineEnd
-			rtGizmo.ModelMatrix = mgl32.Ident4() // Line uses world points P1, P2 directly
-		} else {
-			// Construct Model Matrix
-			// T * R * S
-			t := mgl32.Translate3D(worldPos.X(), worldPos.Y(), worldPos.Z())
-			r := worldRot.Mat4()
-			s := mgl32.Scale3D(worldScale.X(), worldScale.Y(), worldScale.Z())
+			// For Line, tr.Position is Start. g.LineEnd is Local End.
+			// However, the renderer expects P1, P2 and then applies ModelMatrix.
+			// If we set ModelMatrix to Identity, then P1=tr.Position, P2=tr.Position + tr.Rotation * g.LineEnd
+			// But the core/gpu logic for lines (gizmo_pass.go:283) already DOES:
+			// wp1 := g.ModelMatrix.Mul4x1(g.P1.Vec4(1.0)).Vec3()
+			// wp2 := g.ModelMatrix.Mul4x1(g.P2.Vec4(1.0)).Vec3()
+			// So we can set P1={0,0,0}, P2=g.LineEnd and pass the full transform matrix!
 
-			if g.Type == GizmoSphere || g.Type == GizmoCircle {
-				// Apply Radius as Uniform Scale if Scale is 1,1,1, or multiply?
-				// Usage: Radius 1.0 => Scale 1.0.
-				if g.Radius > 0 {
-					s = s.Mul4(mgl32.Scale3D(g.Radius, g.Radius, g.Radius))
-				}
+			rtGizmo.P1 = mgl32.Vec3{0, 0, 0}
+			rtGizmo.P2 = g.LineEnd
+
+			// Construct Model Matrix: T * R (Scale doesn't usually apply to line length unless we want it to,
+			// but gizmo_pass.go:300 applies its own Scale3D(1, 1, dist) anyway).
+			// Let's use the full transform matrix.
+			t := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
+			r := tr.Rotation.Mat4()
+			s := mgl32.Scale3D(tr.Scale.X(), tr.Scale.Y(), tr.Scale.Z())
+			rtGizmo.ModelMatrix = t.Mul4(r).Mul4(s)
+		} else {
+			// Construct Model Matrix from TransformComponent
+			t := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
+			r := tr.Rotation.Mat4()
+			s := mgl32.Scale3D(tr.Scale.X(), tr.Scale.Y(), tr.Scale.Z())
+
+			if (g.Type == GizmoSphere || g.Type == GizmoCircle) && g.Radius > 0 {
+				s = s.Mul4(mgl32.Scale3D(g.Radius, g.Radius, g.Radius))
 			}
 
 			rtGizmo.ModelMatrix = t.Mul4(r).Mul4(s)
@@ -713,11 +757,15 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil {
 		state.RtApp.BufferManager.CreateParticlesBindGroups(state.RtApp.ParticlesPipeline)
 	}
+}
+
+func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
 
 	state.RtApp.Profiler.BeginScope("RT Update")
-
 	state.RtApp.Update()
-
 	state.RtApp.Profiler.EndScope("RT Update")
 }
 

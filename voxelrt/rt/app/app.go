@@ -659,6 +659,20 @@ func (a *App) DrawText(text string, x, y float32, scale float32, color [4]float3
 	})
 }
 
+func (a *App) MeasureText(text string, scale float32) (float32, float32) {
+	if a.TextRenderer == nil {
+		return 0, 0
+	}
+	return a.TextRenderer.MeasureText(text, scale)
+}
+
+func (a *App) GetLineHeight(scale float32) float32 {
+	if a.TextRenderer == nil {
+		return 0
+	}
+	return a.TextRenderer.GetLineHeight(scale)
+}
+
 func (a *App) Render() {
 	nextTexture, err := a.Surface.GetCurrentTexture()
 	if err != nil {
