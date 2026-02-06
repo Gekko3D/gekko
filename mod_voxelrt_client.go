@@ -709,37 +709,53 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			Color: g.Color,
 		}
 
-		if g.Type == GizmoLine {
-			// For Line, tr.Position is Start. g.LineEnd is Local End.
-			// However, the renderer expects P1, P2 and then applies ModelMatrix.
-			// If we set ModelMatrix to Identity, then P1=tr.Position, P2=tr.Position + tr.Rotation * g.LineEnd
-			// But the core/gpu logic for lines (gizmo_pass.go:283) already DOES:
-			// wp1 := g.ModelMatrix.Mul4x1(g.P1.Vec4(1.0)).Vec3()
-			// wp2 := g.ModelMatrix.Mul4x1(g.P2.Vec4(1.0)).Vec3()
-			// So we can set P1={0,0,0}, P2=g.LineEnd and pass the full transform matrix!
-
-			rtGizmo.P1 = mgl32.Vec3{0, 0, 0}
-			rtGizmo.P2 = g.LineEnd
-
-			// Construct Model Matrix: T * R (Scale doesn't usually apply to line length unless we want it to,
-			// but gizmo_pass.go:300 applies its own Scale3D(1, 1, dist) anyway).
-			// Let's use the full transform matrix.
-			t := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
-			r := tr.Rotation.Mat4()
-			s := mgl32.Scale3D(tr.Scale.X(), tr.Scale.Y(), tr.Scale.Z())
-			rtGizmo.ModelMatrix = t.Mul4(r).Mul4(s)
-		} else {
-			// Construct Model Matrix from TransformComponent
-			t := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
-			r := tr.Rotation.Mat4()
-			s := mgl32.Scale3D(tr.Scale.X(), tr.Scale.Y(), tr.Scale.Z())
-
-			if (g.Type == GizmoSphere || g.Type == GizmoCircle) && g.Radius > 0 {
-				s = s.Mul4(mgl32.Scale3D(g.Radius, g.Radius, g.Radius))
+		if g.Type == GizmoGrid {
+			// A grid is special: we expand it into multiple lines centered at tr.Position
+			// tr.Rotation applies to the whole grid.
+			steps := g.Steps
+			if steps <= 0 {
+				steps = 10
 			}
+			stepSize := g.Size / float32(steps)
+			halfSize := g.Size * 0.5
 
-			rtGizmo.ModelMatrix = t.Mul4(r).Mul4(s)
+			tBase := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
+			rBase := tr.Rotation.Mat4()
+
+			for i := 0; i <= steps; i++ {
+				offset := float32(i)*stepSize - halfSize
+
+				// Line along Z (moving along X)
+				lx := mgl32.Translate3D(offset, 0, -halfSize)
+				sz := mgl32.Scale3D(1, 1, g.Size)
+				rtLineZ := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
+				rtLineZ.ModelMatrix = tBase.Mul4(rBase).Mul4(lx).Mul4(sz)
+				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineZ)
+
+				// Line along X (moving along Z)
+				lz := mgl32.Translate3D(-halfSize, 0, offset)
+				rx := mgl32.QuatRotate(mgl32.DegToRad(90), mgl32.Vec3{0, 1, 0}).Mat4()
+				rtLineX := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
+				rtLineX.ModelMatrix = tBase.Mul4(rBase).Mul4(lz).Mul4(rx).Mul4(sz)
+				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineX)
+			}
+			return true
 		}
+
+		// Construct Model Matrix from TransformComponent
+		t := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
+		r := tr.Rotation.Mat4()
+		s := mgl32.Scale3D(tr.Scale.X(), tr.Scale.Y(), tr.Scale.Z())
+
+		if g.Type == GizmoLine {
+			// Unit line is (0,0,0) to (0,0,1). Scale Z by Size.
+			s = s.Mul4(mgl32.Scale3D(1, 1, g.Size))
+		} else if g.Size > 0 {
+			// For Sphere, Cube, Circle, Rect, Size acts as a uniform multiplier.
+			s = s.Mul4(mgl32.Scale3D(g.Size, g.Size, g.Size))
+		}
+
+		rtGizmo.ModelMatrix = t.Mul4(r).Mul4(s)
 
 		state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtGizmo)
 		return true

@@ -280,28 +280,7 @@ func (p *GizmoRenderPass) Update(queue *wgpu.Queue, gizmos []core.Gizmo) {
 			Color: g.Color,
 		}
 
-		if g.Type == core.GizmoLine {
-			// Transform P1, P2 by ModelMatrix to get world points
-			wp1 := g.ModelMatrix.Mul4x1(g.P1.Vec4(1.0)).Vec3()
-			wp2 := g.ModelMatrix.Mul4x1(g.P2.Vec4(1.0)).Vec3()
-
-			diff := wp2.Sub(wp1)
-			dist := diff.Len()
-			if dist < 0.0001 {
-				continue
-			}
-
-			dir := diff.Normalize()
-			// Rotation that maps Z+ (unit line axis) to dir
-			rot := mgl32.QuatBetweenVectors(mgl32.Vec3{0, 0, 1}, dir)
-
-			inst.ModelMat = mgl32.Translate3D(wp1.X(), wp1.Y(), wp1.Z()).
-				Mul4(rot.Mat4()).
-				Mul4(mgl32.Scale3D(1, 1, dist))
-		} else {
-			inst.ModelMat = g.ModelMatrix
-		}
-
+		inst.ModelMat = g.ModelMatrix
 		p.GizmosByShape[g.Type] = append(p.GizmosByShape[g.Type], inst)
 	}
 

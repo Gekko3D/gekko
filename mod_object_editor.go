@@ -295,20 +295,31 @@ func EditorGizmoSyncSystem(cmd *Commands, state *VoxelRtState) {
 
 func createGizmos(cmd *Commands, pos mgl32.Vec3, rot mgl32.Quat, scale float32) {
 	// Translation gizmos (aligned with model axis)
+	// Red (X) - Rotate Z to X
 	cmd.AddEntity(
-		&TransformComponent{Position: pos, Rotation: rot, Scale: mgl32.Vec3{scale, scale, scale}},
+		&TransformComponent{
+			Position: pos,
+			Rotation: rot.Mul(mgl32.QuatRotate(mgl32.DegToRad(90), mgl32.Vec3{0, 1, 0})),
+			Scale:    mgl32.Vec3{scale, scale, scale},
+		},
 		&EditorGizmoTag{Axis: mgl32.Vec3{1, 0, 0}, Type: GizmoTranslate, Scale: scale},
-		NewGizmoLine(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{2, 0, 0}, [4]float32{1, 0, 0, 1}),
+		NewGizmoLine(2.0, [4]float32{1, 0, 0, 1}),
 	)
+	// Green (Y) - Rotate Z to Y
 	cmd.AddEntity(
-		&TransformComponent{Position: pos, Rotation: rot, Scale: mgl32.Vec3{scale, scale, scale}},
+		&TransformComponent{
+			Position: pos,
+			Rotation: rot.Mul(mgl32.QuatRotate(mgl32.DegToRad(-90), mgl32.Vec3{1, 0, 0})),
+			Scale:    mgl32.Vec3{scale, scale, scale},
+		},
 		&EditorGizmoTag{Axis: mgl32.Vec3{0, 1, 0}, Type: GizmoTranslate, Scale: scale},
-		NewGizmoLine(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 2, 0}, [4]float32{0, 1, 0, 1}),
+		NewGizmoLine(2.0, [4]float32{0, 1, 0, 1}),
 	)
+	// Blue (Z) - No rotation needed for unit Z line
 	cmd.AddEntity(
 		&TransformComponent{Position: pos, Rotation: rot, Scale: mgl32.Vec3{scale, scale, scale}},
 		&EditorGizmoTag{Axis: mgl32.Vec3{0, 0, 1}, Type: GizmoTranslate, Scale: scale},
-		NewGizmoLine(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 0, 2}, [4]float32{0, 0, 1, 1}),
+		NewGizmoLine(2.0, [4]float32{0, 0, 1, 1}),
 	)
 
 	// Rotation gizmos (circles aligned with model planes)
@@ -325,7 +336,7 @@ func createGizmos(cmd *Commands, pos mgl32.Vec3, rot mgl32.Quat, scale float32) 
 			Scale:    mgl32.Vec3{scale, scale, scale},
 		},
 		&EditorGizmoTag{Axis: mgl32.Vec3{0, 1, 0}, Type: GizmoRotate, Scale: scale},
-		GizmoComponent{Type: GizmoCircle, Radius: 2.0, Color: [4]float32{0, 1, 0, 1}},
+		GizmoComponent{Type: GizmoCircle, Size: 2.0, Color: [4]float32{0, 1, 0, 1}},
 	)
 	// Red (X)
 	cmd.AddEntity(
@@ -335,7 +346,7 @@ func createGizmos(cmd *Commands, pos mgl32.Vec3, rot mgl32.Quat, scale float32) 
 			Scale:    mgl32.Vec3{scale, scale, scale},
 		},
 		&EditorGizmoTag{Axis: mgl32.Vec3{1, 0, 0}, Type: GizmoRotate, Scale: scale},
-		GizmoComponent{Type: GizmoCircle, Radius: 2.0, Color: [4]float32{1, 0, 0, 1}},
+		GizmoComponent{Type: GizmoCircle, Size: 2.0, Color: [4]float32{1, 0, 0, 1}},
 	)
 	// Blue (Z)
 	cmd.AddEntity(
@@ -345,7 +356,7 @@ func createGizmos(cmd *Commands, pos mgl32.Vec3, rot mgl32.Quat, scale float32) 
 			Scale:    mgl32.Vec3{scale, scale, scale},
 		},
 		&EditorGizmoTag{Axis: mgl32.Vec3{0, 0, 1}, Type: GizmoRotate, Scale: scale},
-		GizmoComponent{Type: GizmoCircle, Radius: 2.0, Color: [4]float32{0, 0, 1, 1}},
+		GizmoComponent{Type: GizmoCircle, Size: 2.0, Color: [4]float32{0, 0, 1, 1}},
 	)
 }
 
