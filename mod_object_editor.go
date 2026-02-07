@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"github.com/go-gl/mathgl/mgl32"
-
-	"github.com/gekko3d/gekko/voxelrt/rt/editor"
 )
 
 // EditorSelectedComponent marks an entity as selected by the object editor
@@ -60,7 +58,6 @@ type ObjectEditorComponent struct {
 	BrushRadius   float32
 	BrushValue    uint8  // Material index to place (0 = erase)
 	EditMode      string // "add" or "remove"
-	voxelEditor   *editor.Editor
 }
 
 type ObjectEditorModule struct{}
@@ -384,23 +381,14 @@ func EditorInteractionSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 	}
 
 	origin, dir := state.ScreenToWorldRay(float64(input.MouseX), float64(input.MouseY), camera)
-
-	// Calculate camera forward for plane dragging
 	yawRad := mgl32.DegToRad(camera.Yaw)
 	pitchRad := mgl32.DegToRad(camera.Pitch)
+
 	forward := mgl32.Vec3{
 		float32(math.Sin(float64(yawRad)) * math.Cos(float64(pitchRad))),
 		float32(math.Sin(float64(pitchRad))),
 		float32(-math.Cos(float64(yawRad)) * math.Cos(float64(pitchRad))),
 	}.Normalize()
-
-	// Initialize voxel editor if needed
-	if editorComp.voxelEditor == nil {
-		editorComp.voxelEditor = editor.NewEditor()
-		editorComp.BrushRadius = 2.0
-		editorComp.BrushValue = 1
-		editorComp.EditMode = "add"
-	}
 
 	// Handle brush size controls
 	if input.JustPressed[KeyEqual] || input.JustPressed[KeyKPPlus] {
@@ -418,6 +406,7 @@ func EditorInteractionSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 
 	// VOXEL EDITING MODE
 	if editorComp.VoxelEditMode {
+		// ... (voxel editing logic remains)
 		leftClick := input.JustPressed[MouseButtonLeft] || input.Pressed[MouseButtonLeft]
 		rightClick := input.JustPressed[MouseButtonRight] || input.Pressed[MouseButtonRight]
 
@@ -451,6 +440,34 @@ func EditorInteractionSystem(cmd *Commands, input *Input, state *VoxelRtState) {
 			}
 		}
 		return // Don't perform object-level selection/dragging in voxel edit mode
+	}
+
+	// SELECTION: Right Click
+	if input.JustPressed[MouseButtonRight] {
+		origin, dir := state.ScreenToWorldRay(float64(input.MouseX), float64(input.MouseY), camera)
+		hit := state.Raycast(origin, dir, 1000.0)
+
+		if hit.Hit {
+			// Find selected entity and toggle selection
+			targetEid := hit.Entity
+
+			// Clear previous selection
+			MakeQuery1[EditorSelectedComponent](cmd).Map(func(eid EntityId, s *EditorSelectedComponent) bool {
+				cmd.RemoveComponents(eid, (*EditorSelectedComponent)(nil))
+				return true
+			})
+
+			// Add selection to new entity
+			cmd.AddComponents(targetEid, &EditorSelectedComponent{})
+			fmt.Printf("Selected Entity: %d\n", targetEid)
+		} else {
+			// Clicked empty space, clear selection
+			MakeQuery1[EditorSelectedComponent](cmd).Map(func(eid EntityId, s *EditorSelectedComponent) bool {
+				cmd.RemoveComponents(eid, (*EditorSelectedComponent)(nil))
+				return true
+			})
+			fmt.Println("Selection Cleared")
+		}
 	}
 
 	// MOUSE DOWN: Capture Start State

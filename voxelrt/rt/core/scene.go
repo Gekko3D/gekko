@@ -2,12 +2,25 @@ package core
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/bvh"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
+
+type Ray struct {
+	Origin    mgl32.Vec3
+	Direction mgl32.Vec3
+}
+
+type HitResult struct {
+	Object *VoxelObject
+	Coord  [3]int
+	T      float32
+	Normal mgl32.Vec3
+}
 
 type VoxelObject struct {
 	Transform     *Transform
@@ -130,6 +143,81 @@ func (s *Scene) RescaleObject(obj *VoxelObject, factor float32) {
 
 func (s *Scene) AddObject(obj *VoxelObject) {
 	s.Objects = append(s.Objects, obj)
+}
+
+func (s *Scene) Raycast(ray Ray, tMax float32) *HitResult {
+	closestT := tMax
+	var bestHit *HitResult
+
+	for _, obj := range s.Objects {
+		// 1. Broad phase: World AABB
+		if obj.WorldAABB == nil {
+			continue
+		}
+		tMin, tMaxAABB := intersectAABB(ray, obj.WorldAABB[0], obj.WorldAABB[1])
+		if tMin > tMaxAABB || tMaxAABB < 0 || tMin > closestT {
+			continue
+		}
+
+		// 2. Narrow phase: Object Space Ray March
+		o2w := obj.Transform.ObjectToWorld()
+		w2o := o2w.Inv()
+
+		// Transform ray to object space
+		ro4 := w2o.Mul4x1(ray.Origin.Vec4(1.0))
+		rd4 := w2o.Mul4x1(ray.Direction.Vec4(0.0))
+		ro := ro4.Vec3()
+		rdUnnorm := rd4.Vec3()
+
+		scaleFactor := rdUnnorm.Len()
+		if scaleFactor < 1e-6 {
+			continue
+		}
+		rd := rdUnnorm.Mul(1.0 / scaleFactor)
+		localTMax := closestT * scaleFactor
+
+		hit, tObj, coord, normal := obj.XBrickMap.RayMarch(ro, rd, 0, localTMax)
+
+		if hit {
+			// Compute world hit point and distance
+			pHitOs := ro.Add(rd.Mul(tObj))
+			pHitWs4 := o2w.Mul4x1(pHitOs.Vec4(1.0))
+			pHitWs := pHitWs4.Vec3()
+			tWorld := pHitWs.Sub(ray.Origin).Len()
+
+			if tWorld < closestT {
+				closestT = tWorld
+				// Transform normal to world space
+				nWs4 := o2w.Mul4x1(normal.Vec4(0.0))
+				nWs := nWs4.Vec3().Normalize()
+
+				bestHit = &HitResult{
+					Object: obj,
+					Coord:  coord,
+					T:      tWorld,
+					Normal: nWs,
+				}
+			}
+		}
+	}
+
+	return bestHit
+}
+
+func intersectAABB(ray Ray, minB, maxB mgl32.Vec3) (float32, float32) {
+	invDir := mgl32.Vec3{1.0 / (ray.Direction.X() + 1e-8), 1.0 / (ray.Direction.Y() + 1e-8), 1.0 / (ray.Direction.Z() + 1e-8)}
+	t1 := minB.Sub(ray.Origin)
+	t1 = mgl32.Vec3{t1.X() * invDir.X(), t1.Y() * invDir.Y(), t1.Z() * invDir.Z()}
+	t2 := maxB.Sub(ray.Origin)
+	t2 = mgl32.Vec3{t2.X() * invDir.X(), t2.Y() * invDir.Y(), t2.Z() * invDir.Z()}
+
+	tMinV := mgl32.Vec3{float32(math.Min(float64(t1.X()), float64(t2.X()))), float32(math.Min(float64(t1.Y()), float64(t2.Y()))), float32(math.Min(float64(t1.Z()), float64(t2.Z())))}
+	tMaxV := mgl32.Vec3{float32(math.Max(float64(t1.X()), float64(t2.X()))), float32(math.Max(float64(t1.Y()), float64(t2.Y()))), float32(math.Max(float64(t1.Z()), float64(t2.Z())))}
+
+	realMin := float32(math.Max(0, math.Max(float64(tMinV.X()), math.Max(float64(tMinV.Y()), float64(tMinV.Z())))))
+	realMax := float32(math.Min(math.MaxFloat32, math.Min(float64(tMaxV.X()), math.Min(float64(tMaxV.Y()), float64(tMaxV.Z())))))
+
+	return realMin, realMax
 }
 
 func (s *Scene) RemoveObject(obj *VoxelObject) {

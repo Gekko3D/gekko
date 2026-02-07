@@ -6,7 +6,6 @@ import (
 	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
-	"github.com/gekko3d/gekko/voxelrt/rt/editor"
 	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/shaders"
 
@@ -50,7 +49,6 @@ type App struct {
 	BufferManager *gpu.GpuBufferManager
 	Scene         *core.Scene
 	Camera        *core.CameraState
-	Editor        *editor.Editor
 
 	TextRenderer     *core.TextRenderer
 	TextPipeline     *wgpu.RenderPipeline
@@ -84,7 +82,6 @@ func NewApp(window *glfw.Window) *App {
 		Window:   window,
 		Camera:   core.NewCameraState(),
 		Scene:    core.NewScene(),
-		Editor:   editor.NewEditor(),
 		Profiler: NewProfiler(),
 	}
 }
@@ -558,9 +555,6 @@ func (a *App) Update() {
 		aspect = 1.0
 	}
 	proj := mgl32.Perspective(mgl32.DegToRad(60), aspect, 0.1, 1000.0)
-
-	// Update Editor (Batched scaling)
-	a.Editor.Update(a.Scene, glfw.GetTime())
 
 	// Combined
 	viewProj := proj.Mul4(view)
@@ -1369,64 +1363,6 @@ func (a *App) setupResolvePipeline() {
 	if err != nil {
 		fmt.Printf("ERROR: Failed to create resolve bind group: %v\n", err)
 		return
-	}
-}
-
-func (a *App) HandleClick(button int, action int) {
-	if action == int(glfw.Press) && button == int(glfw.MouseButtonRight) {
-		fmt.Printf("Right Click Detected. MouseCaptured: %v\n", a.MouseCaptured)
-		if !a.MouseCaptured {
-			// Try to select object
-			fmt.Printf("Attempting Selection at %f, %f\n", a.MouseX, a.MouseY)
-			w, h := a.Window.GetSize()
-			ray := a.Editor.GetPickRay(a.MouseX, a.MouseY, w, h, a.Camera)
-			fmt.Printf("Ray: Origin=%v Dir=%v\n", ray.Origin, ray.Direction)
-			a.Editor.Select(a.Scene, ray)
-			if a.Editor.SelectedObject != nil {
-				fmt.Printf("Selected Object: %v\n", a.Editor.SelectedObject)
-			} else {
-				fmt.Println("Selection Missed")
-			}
-			return
-		}
-	}
-
-	if a.MouseCaptured || action != int(glfw.Press) {
-		return
-	}
-
-	x, y := a.Window.GetCursorPos()
-	w, h := a.Window.GetSize()
-
-	ray := a.Editor.GetPickRay(x, y, w, h, a.Camera)
-	hit := a.Editor.Pick(a.Scene, ray)
-
-	if hit != nil {
-		// COW
-		sharingCount := 0
-		for _, obj := range a.Scene.Objects {
-			if obj.XBrickMap == hit.Object.XBrickMap {
-				sharingCount++
-			}
-		}
-
-		if sharingCount > 1 {
-			hit.Object.XBrickMap = hit.Object.XBrickMap.Copy()
-		}
-
-		// Apply brush
-		oldVal := a.Editor.BrushValue
-		if button == int(glfw.MouseButtonRight) {
-			a.Editor.BrushValue = 0
-		}
-		a.Editor.ApplyBrush(hit.Object, hit.Coord, hit.Normal)
-		a.Editor.BrushValue = oldVal
-
-		// Mark scene as dirty - Update() will handle buffer sync
-		a.Scene.Commit([6]mgl32.Vec4{}, nil, 0, 0, mgl32.Ident4())
-		// DO NOT call UpdateScene or CreateBindGroups here!
-		// This causes race condition with the render loop.
-		// The Update() method will handle it on the next frame.
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/go-gl/mathgl/mgl32"
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
@@ -197,105 +196,56 @@ func (s *VoxelRtState) ScreenToWorldRay(mouseX, mouseY float64, camera *CameraCo
 		return mgl32.Vec3{}, mgl32.Vec3{}
 	}
 
-	w_int, h_int := s.RtApp.Window.GetSize()
-	w, h := float32(w_int), float32(h_int)
-	if w == 0 || h == 0 {
+	sw, sh := s.RtApp.Window.GetSize()
+	if sw == 0 || sh == 0 {
 		return camera.Position, mgl32.Vec3{0, 0, -1}
 	}
 
-	nx := (2.0*float32(mouseX))/w - 1.0
-	ny := 1.0 - (2.0*float32(mouseY))/h
+	// Use App's CameraState for the projection logic but copy ECS camera params
+	camState := s.RtApp.Camera
+	camState.Position = camera.Position
+	camState.Yaw = mgl32.DegToRad(camera.Yaw)
+	camState.Pitch = mgl32.DegToRad(camera.Pitch)
 
-	yawRad := mgl32.DegToRad(camera.Yaw)
-	pitchRad := mgl32.DegToRad(camera.Pitch)
-
-	forward := mgl32.Vec3{
-		float32(math.Sin(float64(yawRad)) * math.Cos(float64(pitchRad))),
-		float32(math.Sin(float64(pitchRad))),
-		float32(-math.Cos(float64(yawRad)) * math.Cos(float64(pitchRad))),
-	}.Normalize()
-
-	right := mgl32.Vec3{
-		float32(math.Cos(float64(yawRad))),
-		0,
-		float32(math.Sin(float64(yawRad))),
-	}.Normalize()
-
-	up := right.Cross(forward).Normalize()
-
-	aspect := w / h
-	// Renderer uses hardcoded 60 FOV
-	fov := float32(60.0)
-	tanHalfFov := float32(math.Tan(float64(mgl32.DegToRad(fov) / 2.0)))
-
-	dir := forward.Add(right.Mul(nx * aspect * tanHalfFov)).Add(up.Mul(ny * tanHalfFov)).Normalize()
-	return camera.Position, dir
+	ray := camState.ScreenToWorldRay(mouseX, mouseY, sw, sh)
+	return ray.Origin, ray.Direction
 }
 
 func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit {
-	if s == nil {
+	if s == nil || s.RtApp == nil {
 		return RaycastHit{}
 	}
 
-	bestHit := RaycastHit{T: tMax + 1.0}
+	ray := core.Ray{Origin: origin, Direction: dir}
+	res := s.RtApp.Scene.Raycast(ray, tMax)
 
-	// 1. Check all instances (models, CA, etc.)
-	checkMap := func(m map[EntityId]*core.VoxelObject) {
-		for eid, obj := range m {
-			if obj.XBrickMap == nil {
-				continue
+	if res != nil {
+		// Find EntityId for this object
+		var hitEid EntityId = 0
+		for eid, obj := range s.instanceMap {
+			if obj == res.Object {
+				hitEid = eid
+				break
 			}
-
-			// Transform ray to object space
-			w2o := obj.Transform.WorldToObject()
-			localOrigin := w2o.Mul4x1(origin.Vec4(1.0)).Vec3()
-
-			// Direction transformation
-			localDirUnnorm := w2o.Mul4x1(dir.Vec4(0.0)).Vec3()
-			scaleFactor := localDirUnnorm.Len()
-			// Avoid division by zero
-			if scaleFactor < 1e-6 {
-				continue
-			}
-			localDir := localDirUnnorm.Mul(1.0 / scaleFactor)
-
-			localTMax := tMax * scaleFactor
-
-			hit, t, pos, normal := obj.XBrickMap.RayMarch(localOrigin, localDir, 0, localTMax)
-			if hit {
-				// We need to convert t back to world space distance.
-				// World distance = t * |ObjDir| where ObjDir is the untransformed local direction.
-				// Since we normalized localDir, we need the original scale factor.
-
-				// Actually, a better way: hitPointWorld = o2w * hitPointLocal.
-				// tWorld = |hitPointWorld - origin|
-
-				o2w := obj.Transform.ObjectToWorld()
-				localHitPos := localOrigin.Add(localDir.Mul(t))
-				worldHitPos := o2w.Mul4x1(localHitPos.Vec4(1.0)).Vec3()
-				worldT := worldHitPos.Sub(origin).Len()
-
-				if worldT < bestHit.T {
-					bestHit.Hit = true
-					bestHit.T = worldT
-					bestHit.Pos = pos
-
-					// Transform normal to world space
-					// Normal transform: transpose(inverse(M))
-					worldNormal := o2w.Mul4x1(normal.Vec4(0.0)).Vec3().Normalize()
-					bestHit.Normal = worldNormal
-					bestHit.Entity = eid
+		}
+		if hitEid == 0 {
+			for eid, obj := range s.caVolumeMap {
+				if obj == res.Object {
+					hitEid = eid
+					break
 				}
 			}
 		}
+
+		return RaycastHit{
+			Hit:    true,
+			T:      res.T,
+			Pos:    res.Coord,
+			Normal: res.Normal,
+			Entity: hitEid,
+		}
 	}
 
-	checkMap(s.instanceMap)
-	checkMap(s.caVolumeMap)
-
-	if bestHit.Hit {
-		return bestHit
-	}
 	return RaycastHit{}
 }
 
@@ -393,17 +343,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	state.RtApp.MouseY = input.MouseY
 	state.RtApp.MouseCaptured = input.MouseCaptured
 
-	if input.JustPressed[MouseButtonRight] {
-		state.RtApp.HandleClick(int(glfw.MouseButtonRight), int(glfw.Press))
-	}
-
-	if input.Pressed[KeyEqual] || input.Pressed[KeyKPPlus] {
-		state.RtApp.Editor.ScaleSelected(state.RtApp.Scene, 1.05, glfw.GetTime())
-	}
-	if input.Pressed[KeyMinus] || input.Pressed[KeyKPMinus] {
-		state.RtApp.Editor.ScaleSelected(state.RtApp.Scene, 0.95, glfw.GetTime())
-	}
-
 	state.RtApp.ClearText()
 
 	// Begin batching updates for this frame
@@ -452,15 +391,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 			state.instanceMap[entityId] = obj
 		}
 
-		// Persistent scaling: we don't want to sync scale from ECS if we are using metric scaling.
-		// However, we MUST sync Position back if it changed in the renderer.
-		if state.RtApp.Editor.SelectedObject == obj {
-			if obj.Transform.Position.Sub(transform.Position).Len() > 0.001 {
-				transform.Position = obj.Transform.Position
-			}
-		} else {
-			obj.Transform.Position = transform.Position
-		}
+		// Sync Transform to Renderer
+		obj.Transform.Position = transform.Position
 		obj.Transform.Rotation = transform.Rotation
 
 		// Metric system: Renderer Scale is ALWAYS TargetVoxelSize.

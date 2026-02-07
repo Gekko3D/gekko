@@ -41,6 +41,27 @@ func (c *CameraState) GetRight() mgl32.Vec3 {
 	}
 }
 
+func (c *CameraState) ScreenToWorldRay(mouseX, mouseY float64, width, height int) Ray {
+	// Normalized Device Coordinates
+	nx := (2.0*float32(mouseX))/float32(width) - 1.0
+	ny := 1.0 - (2.0*float32(mouseY))/float32(height) // Flip Y for NDC
+
+	forward := c.GetForward()
+	right := c.GetRight()
+	up := right.Cross(forward).Normalize()
+
+	// Aspect ratio and FOV
+	aspect := float32(width) / float32(height)
+	fovRad := mgl32.DegToRad(60.0) // Matches app.go
+	tanHalfFov := float32(math.Tan(float64(fovRad / 2.0)))
+
+	// Ray direction in world space
+	dir := forward.Add(right.Mul(nx * aspect * tanHalfFov)).Add(up.Mul(ny * tanHalfFov))
+	dir = dir.Normalize()
+
+	return Ray{c.Position, dir}
+}
+
 func (c *CameraState) GetViewMatrix() mgl32.Mat4 {
 	forward := c.GetForward()
 	eye := c.Position
