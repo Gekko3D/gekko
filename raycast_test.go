@@ -3,6 +3,7 @@ package gekko
 import (
 	"testing"
 
+	"github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
@@ -11,6 +12,9 @@ import (
 func TestRaycastScaling(t *testing.T) {
 	// Setup VoxelRtState with necessary maps
 	state := &VoxelRtState{
+		RtApp: &app.App{
+			Scene: core.NewScene(),
+		},
 		instanceMap: make(map[EntityId]*core.VoxelObject),
 		caVolumeMap: make(map[EntityId]*core.VoxelObject),
 	}
@@ -45,12 +49,14 @@ func TestRaycastScaling(t *testing.T) {
 
 	eid := EntityId(1)
 	state.instanceMap[eid] = obj
+	state.RtApp.Scene.AddObject(obj)
 
 	// CONTROL TEST: Unscaled object
 	// Move object close and unscale
 	obj.Transform.Scale = mgl32.Vec3{1, 1, 1}
 	obj.Transform.Position = mgl32.Vec3{0, 0, 10}
 	obj.Transform.Dirty = true
+	obj.UpdateWorldAABB()
 
 	// Local Pos of surface: (0,0,0)
 	// World Pos of surface: (0,0,10)
@@ -66,6 +72,7 @@ func TestRaycastScaling(t *testing.T) {
 	obj.Transform.Scale = mgl32.Vec3{0.1, 0.1, 0.1}
 	obj.Transform.Position = mgl32.Vec3{0, 0, 150}
 	obj.Transform.Dirty = true
+	obj.UpdateWorldAABB()
 
 	hit := state.Raycast(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 0, 1}, 200.0)
 

@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/cogentcore/webgpu/wgpu"
+	"github.com/google/uuid"
 )
 
 func parseFormat(name string) wgpu.VertexFormat {
@@ -59,7 +60,7 @@ func wgpuFilterMode(mode string) wgpu.FilterMode {
 
 func findTextureDescriptors(entityId EntityId, cmd *Commands, assets *AssetServer) map[AssetId]textureDescriptor {
 	descriptors := map[AssetId]textureDescriptor{}
-	assetIdType := reflect.TypeOf(AssetId(""))
+	assetIdType := reflect.TypeOf(AssetId{})
 	allComponents := cmd.GetAllComponents(entityId)
 	for _, c := range allComponents {
 		val := reflect.ValueOf(c)
@@ -82,7 +83,11 @@ func findTextureDescriptors(entityId EntityId, cmd *Commands, assets *AssetServe
 					panic(err)
 				}
 				fieldVal := val.Field(i)
-				assetId := AssetId(fieldVal.String())
+				u, err := uuid.Parse(fieldVal.String())
+				if err != nil {
+					panic(err)
+				}
+				assetId := AssetId{u}
 				textureAsset := assets.textures[assetId]
 
 				descriptors[assetId] = textureDescriptor{
@@ -186,7 +191,7 @@ func tryParseSamplerTags(comp any) (ok bool, assetId AssetId, group uint32, bind
 }
 
 func findVoxelModelAsset(entityId EntityId, cmd *Commands, server *AssetServer) (voxModel *VoxelModelAsset, paletteId AssetId, palette *VoxelPaletteAsset) {
-	assetIdType := reflect.TypeOf(AssetId(""))
+	assetIdType := reflect.TypeOf(AssetId{})
 	allComponents := cmd.GetAllComponents(entityId)
 	for _, c := range allComponents {
 		val := reflect.ValueOf(c)
@@ -201,7 +206,11 @@ func findVoxelModelAsset(entityId EntityId, cmd *Commands, server *AssetServer) 
 					panic("Voxel field must be type of AssetId")
 				}
 				fieldVal := val.Field(i)
-				assetId := AssetId(fieldVal.String())
+				u, err := uuid.Parse(fieldVal.String())
+				if err != nil {
+					panic(err)
+				}
+				assetId := AssetId{u}
 				if "model" == field.Tag.Get("usage") {
 					model, ok := server.voxModels[assetId]
 					if ok {
