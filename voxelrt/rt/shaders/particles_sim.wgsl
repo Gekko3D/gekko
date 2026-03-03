@@ -42,6 +42,10 @@ struct SimulationParams {
     seed: u32,
     max_particles: u32,
     emitter_count: u32,
+    inv_vsize: f32,
+    pad1: f32,
+    pad2: f32,
+    pad3: f32,
 };
 
 struct Counters {
@@ -70,6 +74,106 @@ struct SpawnRequest {
 @group(0) @binding(5) var<storage, read_write> draw_args: DrawIndirectArgs;
 @group(1) @binding(0) var<storage, read> emitters: array<EmitterParams>;
 @group(1) @binding(1) var<storage, read> spawn_requests: array<SpawnRequest>;
+
+// Group 2: Voxel Data (Shared with Renderer)
+struct SectorRecord { origin_vox: vec4<i32>, brick_table_index: u32, brick_mask_lo: u32, brick_mask_hi: u32, padding: u32 };
+struct BrickRecord { atlas_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, flags: u32 };
+struct SectorGridEntry { coords: vec4<i32>, base_idx: u32, sector_idx: i32, padding: vec2<u32> };
+struct SectorGridParams { grid_size: u32, grid_mask: u32, padding0: u32, padding1: u32 };
+struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, padding: u32 };
+
+@group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
+@group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;
+@group(2) @binding(2) var voxel_payload: texture_3d<u32>;
+@group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
+@group(2) @binding(4) var<storage, read> object_params: array<ObjectParams>;
+struct Instance {
+    object_to_world: mat4x4<f32>,
+    world_to_object: mat4x4<f32>,
+    aabb_min: vec4<f32>,
+    aabb_max: vec4<f32>,
+    local_aabb_min: vec4<f32>,
+    local_aabb_max: vec4<f32>,
+    object_id: u32,
+    padding: array<u32, 3>,
+};
+@group(2) @binding(5) var<storage, read> instances: array<Instance>;
+@group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
+@group(2) @binding(7) var<storage, read> sector_grid_params: SectorGridParams;
+
+fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
+    if (idx < 32u) { return (mask_lo & (1u << idx)) != 0u; }
+    else { return (mask_hi & (1u << (idx - 32u))) != 0u; }
+}
+
+fn find_sector(sx: i32, sy: i32, sz: i32, base_idx: u32) -> i32 {
+    let size = sector_grid_params.grid_size;
+    if (size == 0u) { return -1; }
+    let h = (u32(sx) * 73856093u ^ u32(sy) * 19349663u ^ u32(sz) * 83492791u ^ base_idx * 99999989u) % size;
+    for (var i = 0u; i < 128u; i++) {
+        let idx = (h + i) % size;
+        let entry = sector_grid[idx];
+        if (entry.sector_idx == -1) { return -1; }
+        if (entry.coords.x == sx && entry.coords.y == sy && entry.coords.z == sz && entry.base_idx == base_idx) {
+            return entry.sector_idx;
+        }
+    }
+    return -1;
+}
+
+fn check_voxel_occupancy(pos: vec3<f32>, op: ObjectParams) -> bool {
+    // In object space, coordinates are directly in voxel units (1 unit = 1 voxel)
+    let vox_pos = vec3<i32>(floor(pos));
+    
+    let sx = vox_pos.x >> 5; let sy = vox_pos.y >> 5; let sz = vox_pos.z >> 5;
+    let s_idx = find_sector(sx, sy, sz, op.sector_table_base);
+    if (s_idx < 0) { return false; }
+    
+    let sector = sectors[s_idx];
+    let bx = (vox_pos.x >> 3) & 3; let by = (vox_pos.y >> 3) & 3; let bz = (vox_pos.z >> 3) & 3;
+    let b_idx = u32(bx + by*4 + bz*16);
+    
+    if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, b_idx)) {
+        let brick = bricks[sector.brick_table_index + b_idx];
+        if (brick.flags == 1u) { return true; } // Solid brick
+        
+        let mx = (vox_pos.x >> 1) & 3; let my = (vox_pos.y >> 1) & 3; let mz = (vox_pos.z >> 1) & 3;
+        let m_idx = u32(mx + my*4 + mz*16);
+        return bit_test64(brick.occupancy_mask_lo, brick.occupancy_mask_hi, m_idx);
+    }
+    return false;
+}
+
+fn get_voxel_normal(pos: vec3<f32>, op: ObjectParams) -> vec3<f32> {
+    // Check 6 neighbors to find the gradient/normal
+    let dx = f32(check_voxel_occupancy(pos + vec3<f32>(0.2, 0.0, 0.0), op)) - f32(check_voxel_occupancy(pos - vec3<f32>(0.2, 0.0, 0.0), op));
+    let dy = f32(check_voxel_occupancy(pos + vec3<f32>(0.0, 0.2, 0.0), op)) - f32(check_voxel_occupancy(pos - vec3<f32>(0.0, 0.2, 0.0), op));
+    let dz = f32(check_voxel_occupancy(pos + vec3<f32>(0.0, 0.0, 0.2), op)) - f32(check_voxel_occupancy(pos - vec3<f32>(0.0, 0.0, 0.2), op));
+    
+    let n = -vec3<f32>(dx, dy, dz);
+    if (length(n) < 0.01) { return vec3<f32>(0.0, 1.0, 0.0); } // Default to Up if inside a solid block
+    return normalize(n);
+}
+
+fn get_occupancy_info(pos: vec3<f32>, out_normal: ptr<function, vec3<f32>>) -> bool {
+    let num_instances = arrayLength(&instances);
+    for (var i = 0u; i < num_instances; i++) {
+        let inst = instances[i];
+        if (pos.x < inst.aabb_min.x || pos.y < inst.aabb_min.y || pos.z < inst.aabb_min.z ||
+            pos.x > inst.aabb_max.x || pos.y > inst.aabb_max.y || pos.z > inst.aabb_max.z) {
+            continue;
+        }
+
+        let obj_pos = (inst.world_to_object * vec4<f32>(pos, 1.0)).xyz;
+        let op = object_params[inst.object_id];
+        if (check_voxel_occupancy(obj_pos, op)) {
+            let n_os = get_voxel_normal(obj_pos, op);
+            *out_normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+            return true;
+        }
+    }
+    return false;
+}
 
 // PCG hash for random numbers
 fn pcg_hash(input: u32) -> u32 {
@@ -102,7 +206,20 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
         
         p.velocity.y -= gravity * params.dt;
         p.velocity *= drag;
-        p.pos += p.velocity * params.dt;
+        
+        // Physics-based Collision
+        let next_pos = p.pos + p.velocity * params.dt;
+        var normal: vec3<f32>;
+        if (get_occupancy_info(next_pos, &normal)) {
+            // Reflect! Standard physics bounce
+            p.velocity = reflect(p.velocity, normal) * 0.4;
+            // Stop if energy is too low
+            if (length(p.velocity) < 0.2) { p.velocity = vec3<f32>(0.0); }
+            // Push slightly out of surface
+            p.pos += normal * 0.05;
+        } else {
+            p.pos = next_pos;
+        }
         p.life += params.dt;
         
         if (p.life >= p.max_life) {

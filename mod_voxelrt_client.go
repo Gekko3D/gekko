@@ -719,8 +719,13 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	// Sync GPU emitters and spawn requests
 	spawnReqs, emitters, emitterCount := particlesSync(state, t, cmd)
+	vSize := state.RtApp.Scene.TargetVoxelSize
+	if vSize == 0 {
+		vSize = 0.1
+	}
+	invVsize := 1.0 / vSize
 	state.RtApp.ParticleSpawnCount = uint32(len(spawnReqs))
-	state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), uint32(time.Now().UnixNano()), emitterCount)
+	state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), float32(invVsize), uint32(time.Now().UnixNano()), emitterCount)
 	pRecreated := state.RtApp.BufferManager.UpdateParticles(1000000, emitters) // Pass max count
 	state.RtApp.BufferManager.UpdateSpawnRequests(spawnReqs)
 	if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil || state.RtApp.BufferManager.ParticleSimBG0 == nil {

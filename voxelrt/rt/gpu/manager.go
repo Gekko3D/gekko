@@ -145,6 +145,7 @@ type GpuBufferManager struct {
 	ParticleSimPipeline  *wgpu.ComputePipeline
 	ParticleSimBG0       *wgpu.BindGroup
 	ParticleSimBG1       *wgpu.BindGroup
+	ParticleSimBG2       *wgpu.BindGroup
 	ParticlesBindGroup0  *wgpu.BindGroup // camera + pool + alive_list
 	ParticlesBindGroup1  *wgpu.BindGroup // gbuffer depth
 	ParticleCount        uint32
@@ -1380,16 +1381,35 @@ func (m *GpuBufferManager) CreateParticleSimBindGroups() {
 	if err != nil {
 		panic(err)
 	}
+
+	m.ParticleSimBG2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: m.ParticleSimPipeline.GetBindGroupLayout(2),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
+			{Binding: 2, TextureView: m.VoxelPayloadView},
+			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
+			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 5, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
+			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
+			{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
 }
 
-func (m *GpuBufferManager) UpdateParticleParams(dt float32, seed uint32, emitterCount uint32) {
-	data := make([]uint32, 4)
+func (m *GpuBufferManager) UpdateParticleParams(dt, invVsize float32, seed uint32, emitterCount uint32) {
+	data := make([]uint32, 8)
 	data[0] = math.Float32bits(dt)
 	data[1] = seed
 	data[2] = m.MaxParticleCount
 	data[3] = emitterCount
+	data[4] = math.Float32bits(invVsize)
+	// padding 4,5,6,7 remains 0
 
-	bytes := unsafe.Slice((*byte)(unsafe.Pointer(&data[0])), 16)
+	bytes := unsafe.Slice((*byte)(unsafe.Pointer(&data[0])), 32)
 	m.Device.GetQueue().WriteBuffer(m.ParticleParamsBuf, 0, bytes)
 }
 
@@ -1403,6 +1423,9 @@ func (m *GpuBufferManager) DispatchParticleSim(encoder *wgpu.CommandEncoder, ini
 	pass.SetPipeline(initPipe)
 	pass.SetBindGroup(0, m.ParticleSimBG0, nil)
 	pass.SetBindGroup(1, m.ParticleSimBG1, nil)
+	if m.ParticleSimBG2 != nil {
+		pass.SetBindGroup(2, m.ParticleSimBG2, nil)
+	}
 	pass.DispatchWorkgroups(1, 1, 1) // EntryPoint: init_draw_args
 	pass.End()
 
@@ -1411,6 +1434,9 @@ func (m *GpuBufferManager) DispatchParticleSim(encoder *wgpu.CommandEncoder, ini
 	pass.SetPipeline(simPipe)
 	pass.SetBindGroup(0, m.ParticleSimBG0, nil)
 	pass.SetBindGroup(1, m.ParticleSimBG1, nil)
+	if m.ParticleSimBG2 != nil {
+		pass.SetBindGroup(2, m.ParticleSimBG2, nil)
+	}
 	wgCount := (m.MaxParticleCount + 63) / 64
 	pass.DispatchWorkgroups(wgCount, 1, 1) // EntryPoint: simulate
 	pass.End()
@@ -1426,6 +1452,9 @@ func (m *GpuBufferManager) DispatchParticleSpawn(encoder *wgpu.CommandEncoder, s
 		pass.SetPipeline(spawnPipe)
 		pass.SetBindGroup(0, m.ParticleSimBG0, nil)
 		pass.SetBindGroup(1, m.ParticleSimBG1, nil)
+		if m.ParticleSimBG2 != nil {
+			pass.SetBindGroup(2, m.ParticleSimBG2, nil)
+		}
 		wgCount := (spawnCount + 63) / 64
 		pass.DispatchWorkgroups(wgCount, 1, 1) // EntryPoint: spawn
 		pass.End()
@@ -1436,6 +1465,9 @@ func (m *GpuBufferManager) DispatchParticleSpawn(encoder *wgpu.CommandEncoder, s
 	pass.SetPipeline(finalizePipe)
 	pass.SetBindGroup(0, m.ParticleSimBG0, nil)
 	pass.SetBindGroup(1, m.ParticleSimBG1, nil)
+	if m.ParticleSimBG2 != nil {
+		pass.SetBindGroup(2, m.ParticleSimBG2, nil)
+	}
 	pass.DispatchWorkgroups(1, 1, 1) // EntryPoint: finalize_draw_args
 	pass.End()
 }

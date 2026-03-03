@@ -649,6 +649,7 @@ func (a *App) Update() {
 				fmt.Printf("ERROR: Failed to recreate Gizmo Depth BindGroup: %v\n", gErr)
 			}
 		}
+		a.BufferManager.CreateParticleSimBindGroups()
 	}
 
 	// Update Camera Uniforms
@@ -1548,9 +1549,25 @@ func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
 		panic(err)
 	}
 
+	// BG2: Voxel Data (Shared with Shadow/GBuffer)
+	bg2Entries := []wgpu.BindGroupLayoutEntry{
+		{Binding: 0, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Sectors
+		{Binding: 1, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Bricks
+		{Binding: 2, Visibility: wgpu.ShaderStageCompute, Texture: wgpu.TextureBindingLayout{SampleType: wgpu.TextureSampleTypeUint, ViewDimension: wgpu.TextureViewDimension3D}}, // Payload
+		{Binding: 3, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Materials
+		{Binding: 4, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // ObjectParams
+		{Binding: 5, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Instances
+		{Binding: 6, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Grid
+		{Binding: 7, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // GridParams
+	}
+	simBGL2, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{Label: "Particle Sim BGL2", Entries: bg2Entries})
+	if err != nil {
+		panic(err)
+	}
+
 	simLayout, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
 		Label:            "Particle Sim Layout",
-		BindGroupLayouts: []*wgpu.BindGroupLayout{simBGL0, simBGL1},
+		BindGroupLayouts: []*wgpu.BindGroupLayout{simBGL0, simBGL1, simBGL2},
 	})
 	if err != nil {
 		panic(err)
