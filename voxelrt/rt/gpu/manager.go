@@ -142,6 +142,9 @@ type GpuBufferManager struct {
 	ParticleEmittersBuf  *wgpu.Buffer
 	ParticleSpawnBuf     *wgpu.Buffer // SpawnRequests
 	ParticleParamsBuf    *wgpu.Buffer
+	ParticleAtlasTex     *wgpu.Texture
+	ParticleAtlasView    *wgpu.TextureView
+	ParticleAtlasSampler *wgpu.Sampler
 	ParticleSimPipeline  *wgpu.ComputePipeline
 	ParticleSimBG0       *wgpu.BindGroup
 	ParticleSimBG1       *wgpu.BindGroup
@@ -1278,7 +1281,7 @@ func (m *GpuBufferManager) UpdateParticles(maxCount uint32, emitters []byte) boo
 	if m.MaxParticleCount != maxCount {
 		m.MaxParticleCount = maxCount
 		// Reallocate all buffers
-		m.ensureBuffer("ParticlePoolBuf", &m.ParticlePoolBuf, nil, wgpu.BufferUsageStorage, int(maxCount)*64)
+		m.ensureBuffer("ParticlePoolBuf", &m.ParticlePoolBuf, nil, wgpu.BufferUsageStorage, int(maxCount)*80)
 		m.ensureBuffer("ParticleDeadPoolBuf", &m.ParticleDeadPoolBuf, nil, wgpu.BufferUsageStorage, int(maxCount)*4)
 		m.ensureBuffer("ParticleAliveListBuf", &m.ParticleAliveListBuf, nil, wgpu.BufferUsageStorage, int(maxCount)*4)
 		m.ensureBuffer("ParticleCountersBuf", &m.ParticleCountersBuf, nil, wgpu.BufferUsageStorage, 64)
@@ -1336,6 +1339,8 @@ func (m *GpuBufferManager) CreateParticlesBindGroups(pipeline *wgpu.RenderPipeli
 			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.ParticlePoolBuf, Size: wgpu.WholeSize},
 			{Binding: 2, Buffer: m.ParticleAliveListBuf, Size: wgpu.WholeSize},
+			{Binding: 3, TextureView: m.ParticleAtlasView},
+			{Binding: 4, Sampler: m.ParticleAtlasSampler},
 		},
 	})
 	if err != nil {

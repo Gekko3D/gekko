@@ -41,15 +41,16 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	RtApp         *app_rt.App
-	loadedModels  map[AssetId]*core.VoxelObject
-	instanceMap   map[EntityId]*core.VoxelObject
-	particlePools map[EntityId]*particlePool
-	caVolumeMap   map[EntityId]*core.VoxelObject
-	skyboxLayers  map[EntityId]SkyboxLayerComponent // Stored values to detect changes
-	lastSkyboxVer int64                             // To track if any layer changed
-	SunDirection  mgl32.Vec3
-	SunIntensity  float32
+	RtApp             *app_rt.App
+	loadedModels      map[AssetId]*core.VoxelObject
+	instanceMap       map[EntityId]*core.VoxelObject
+	particlePools     map[EntityId]*particlePool
+	caVolumeMap       map[EntityId]*core.VoxelObject
+	skyboxLayers      map[EntityId]SkyboxLayerComponent // Stored values to detect changes
+	lastSkyboxVer     int64                             // To track if any layer changed
+	SunDirection      mgl32.Vec3
+	SunIntensity      float32
+	lastParticleAtlas AssetId
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -98,6 +99,12 @@ func (s *VoxelRtState) GetLineHeight(scale float32) float32 {
 		return 0
 	}
 	return s.RtApp.GetLineHeight(scale)
+}
+
+func (s *VoxelRtState) SetParticleAtlas(data []byte, w, h uint32) {
+	if s != nil && s.RtApp != nil {
+		s.RtApp.SetParticleAtlas(data, w, h)
+	}
 }
 
 func (s *VoxelRtState) Counter(name string) int {
@@ -718,7 +725,16 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	state.RtApp.Profiler.EndScope("GPU Batch")
 
 	// Sync GPU emitters and spawn requests
-	spawnReqs, emitters, emitterCount := particlesSync(state, t, cmd)
+	spawnReqs, emitters, emitterCount, atlasId := particlesSync(state, t, cmd)
+
+	// Update Particle Atlas if provided by user code and changed
+	if atlasId != (AssetId{}) && atlasId != state.lastParticleAtlas {
+		if texAsset, ok := server.textures[atlasId]; ok {
+			state.RtApp.SetParticleAtlas(texAsset.texels, texAsset.width, texAsset.height)
+			state.lastParticleAtlas = atlasId
+		}
+	}
+
 	vSize := state.RtApp.Scene.TargetVoxelSize
 	if vSize == 0 {
 		vSize = 0.1

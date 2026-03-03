@@ -11,6 +11,8 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/shaders"
 
+	_ "image/png"
+
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/cogentcore/webgpu/wgpuglfw"
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -83,6 +85,7 @@ type App struct {
 	Profiler *Profiler
 
 	ParticleSpawnCount uint32
+	ParticleAtlasData  []byte // If set before Init, uses this instead of embedded
 }
 
 func NewApp(window *glfw.Window) *App {
@@ -984,6 +987,21 @@ func (a *App) setupParticlesPipeline() {
 					HasDynamicOffset: false,
 				},
 			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    4,
+				Visibility: wgpu.ShaderStageFragment,
+				Sampler: wgpu.SamplerBindingLayout{
+					Type: wgpu.SamplerBindingTypeFiltering,
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -1624,4 +1642,49 @@ func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
 	// Also update BufferManager with one of them to get bind group layouts
 	a.BufferManager.ParticleSimPipeline = a.ParticleSimPipeline
 	a.BufferManager.CreateParticleSimBindGroups()
+}
+
+func (a *App) SetParticleAtlas(texels []byte, w, h uint32) {
+	if texels == nil || w == 0 || h == 0 {
+		return
+	}
+
+	tex, err := a.Device.CreateTexture(&wgpu.TextureDescriptor{
+		Label: "Particle Atlas",
+		Usage: wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
+		Size: wgpu.Extent3D{
+			Width:              w,
+			Height:             h,
+			DepthOrArrayLayers: 1,
+		},
+		Format:        wgpu.TextureFormatRGBA8Unorm,
+		MipLevelCount: 1,
+		SampleCount:   1,
+		Dimension:     wgpu.TextureDimension2D,
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create particle atlas texture: %v\n", err)
+		return
+	}
+
+	a.Queue.WriteTexture(tex.AsImageCopy(), texels, &wgpu.TextureDataLayout{
+		BytesPerRow:  w * 4,
+		RowsPerImage: h,
+	}, &wgpu.Extent3D{Width: w, Height: h, DepthOrArrayLayers: 1})
+
+	a.BufferManager.ParticleAtlasTex = tex
+	a.BufferManager.ParticleAtlasView, _ = tex.CreateView(nil)
+	a.BufferManager.ParticleAtlasSampler, _ = a.Device.CreateSampler(&wgpu.SamplerDescriptor{
+		MagFilter:     wgpu.FilterModeLinear,
+		MinFilter:     wgpu.FilterModeLinear,
+		MipmapFilter:  wgpu.MipmapFilterModeLinear,
+		AddressModeU:  wgpu.AddressModeClampToEdge,
+		AddressModeV:  wgpu.AddressModeClampToEdge,
+		LodMinClamp:   0,
+		LodMaxClamp:   0,
+		MaxAnisotropy: 1,
+	})
+
+	// Recreate particle bind groups to include the new texture
+	a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
 }

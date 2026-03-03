@@ -23,12 +23,19 @@ struct ParticleInstance {
     max_life: f32,
     gravity: f32,
     drag: f32,
-    pad3: f32,
+    sprite_index: u32,
+    atlas_cols: u32,
+    atlas_rows: u32,
+    pad1: u32,
+    pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(0) @binding(1) var<storage, read> pool: array<ParticleInstance>;
 @group(0) @binding(2) var<storage, read> alive_list: array<u32>;
+@group(0) @binding(3) var atlas_tex: texture_2d<f32>;
+@group(0) @binding(4) var atlas_sampler: sampler;
+
 @group(1) @binding(0) var gbuf_depth: texture_2d<f32>;
 
 struct VSOut {
@@ -38,6 +45,9 @@ struct VSOut {
     @location(2) world_pos: vec3<f32>,
     @location(3) life_pct: f32,
     @location(4) psize: f32,
+    @location(5) @interpolate(flat) sprite_index: u32,
+    @location(6) @interpolate(flat) atlas_cols: u32,
+    @location(7) @interpolate(flat) atlas_rows: u32,
 };
 
 fn get_camera_right() -> vec3<f32> {
@@ -89,6 +99,9 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     out.world_pos = world_pos;
     out.life_pct = life_pct;
     out.psize = inst.size;
+    out.sprite_index = inst.sprite_index;
+    out.atlas_cols = max(1u, inst.atlas_cols);
+    out.atlas_rows = max(1u, inst.atlas_rows);
     return out;
 }
 
@@ -116,8 +129,18 @@ fn fs_main(in: VSOut) -> FSOut {
     }
 
     // Alpha components
-    let d = length(in.quad_uv - vec2<f32>(0.5, 0.5)) * 2.0;
-    let mask = 1.0 - smoothstep(0.8, 1.0, d);
+    // Sprite Atlas Mapping (dynamic grid) with inset padding to avoid edge bleeding
+    let col_w = 1.0 / f32(in.atlas_cols);
+    let row_h = 1.0 / f32(in.atlas_rows);
+    let sprite_x = f32(in.sprite_index % in.atlas_cols) * col_w;
+    let sprite_y = f32(in.sprite_index / in.atlas_cols) * row_h;
+    
+    // Inset UVs by a tiny amount based on resolution fraction to prevent bleeding
+    let padded_uv = in.quad_uv * 0.98 + 0.01;
+    let sprite_uv = vec2<f32>(sprite_x, sprite_y) + padded_uv * vec2<f32>(col_w, row_h);
+    let atlas_color = textureSample(atlas_tex, atlas_sampler, sprite_uv);
+    let mask = atlas_color.r; // Assume grayscale alpha mask
+
     let life_fade = smoothstep(0.0, 0.1, in.life_pct) * (1.0 - smoothstep(0.9, 1.0, in.life_pct));
     
     // Soft particle falloff (size-aware)

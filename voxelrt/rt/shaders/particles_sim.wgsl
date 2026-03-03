@@ -9,7 +9,11 @@ struct Particle {
     max_life: f32,
     gravity: f32,
     drag: f32,
-    pad3: f32,
+    sprite_index: u32,
+    atlas_cols: u32,
+    atlas_rows: u32,
+    pad1: u32,
+    pad2: u32,
 };
 
 struct EmitterParams {
@@ -32,9 +36,9 @@ struct EmitterParams {
     color_max: vec4<f32>,
 
     cone_angle: f32,
-    pad1: f32,
-    pad2: f32,
-    pad3: f32,
+    sprite_index: u32,
+    atlas_cols: u32,
+    atlas_rows: u32,
 };
 
 struct SimulationParams {
@@ -280,6 +284,9 @@ fn spawn(@builtin(global_invocation_id) id: vec3<u32>) {
     p.color = mix(em.color_min, em.color_max, rand_f32(&state));
     p.gravity = em.gravity;
     p.drag = em.drag;
+    p.sprite_index = em.sprite_index;
+    p.atlas_cols = em.atlas_cols;
+    p.atlas_rows = em.atlas_rows;
     
     particles[p_idx] = p;
     let alive_idx = atomicAdd(&counters.alive_count, 1u);
