@@ -328,7 +328,8 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 							Size:     size,
 							Color:    col,
 							Velocity: [3]float32{0, 0, 0}, // Default (camera aligned)
-							LifePct:  lp,
+							Life:     lp,
+							MaxLife:  1.0,
 						})
 						added++
 					}

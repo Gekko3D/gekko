@@ -346,7 +346,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	)
 }
 
-func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time *Time, cmd *Commands) {
+func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands) {
 	state.RtApp.MouseX = input.MouseX
 	state.RtApp.MouseY = input.MouseY
 	state.RtApp.MouseCaptured = input.MouseCaptured
@@ -717,10 +717,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	state.RtApp.BufferManager.EndBatch()
 	state.RtApp.Profiler.EndScope("GPU Batch")
 
-	// CPU-simulate and upload particle instances
-	instances := particlesCollect(state, time, cmd)
-	pRecreated := state.RtApp.BufferManager.UpdateParticles(instances)
-	if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil {
+	// Sync GPU emitters and spawn requests
+	spawnReqs, emitters, emitterCount := particlesSync(state, t, cmd)
+	state.RtApp.ParticleSpawnCount = uint32(len(spawnReqs))
+	state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), uint32(time.Now().UnixNano()), emitterCount)
+	pRecreated := state.RtApp.BufferManager.UpdateParticles(1000000, emitters) // Pass max count
+	state.RtApp.BufferManager.UpdateSpawnRequests(spawnReqs)
+	if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil || state.RtApp.BufferManager.ParticleSimBG0 == nil {
+		state.RtApp.BufferManager.CreateParticleSimBindGroups()
 		state.RtApp.BufferManager.CreateParticlesBindGroups(state.RtApp.ParticlesPipeline)
 	}
 }

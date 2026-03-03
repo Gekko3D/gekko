@@ -25,6 +25,9 @@ var ShadowMapWGSL string
 //go:embed particles_billboard.wgsl
 var ParticlesBillboardWGSL string
 
+//go:embed particles_sim.wgsl
+var ParticlesSimWGSL string
+
 /**
  */
 //go:embed transparent_overlay.wgsl

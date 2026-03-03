@@ -19,11 +19,16 @@ struct ParticleInstance {
     size: f32,
     color: vec4<f32>,
     velocity: vec3<f32>,
-    life_pct: f32,
+    life: f32,
+    max_life: f32,
+    gravity: f32,
+    drag: f32,
+    pad3: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraData;
-@group(0) @binding(1) var<storage, read> instances: array<ParticleInstance>;
+@group(0) @binding(1) var<storage, read> pool: array<ParticleInstance>;
+@group(0) @binding(2) var<storage, read> alive_list: array<u32>;
 @group(1) @binding(0) var gbuf_depth: texture_2d<f32>;
 
 struct VSOut {
@@ -36,16 +41,20 @@ struct VSOut {
 };
 
 fn get_camera_right() -> vec3<f32> {
-    return vec3<f32>(camera.inv_view[0].x, camera.inv_view[1].x, camera.inv_view[2].x);
+    return normalize(camera.inv_view[0].xyz);
 }
 
 fn get_camera_up() -> vec3<f32> {
-    return vec3<f32>(camera.inv_view[0].y, camera.inv_view[1].y, camera.inv_view[2].y);
+    return normalize(camera.inv_view[1].xyz);
 }
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VSOut {
-    let inst = instances[iid];
+    let p_idx = alive_list[iid];
+    let inst = pool[p_idx];
+    
+    var life_pct = inst.life / max(inst.max_life, 0.001);
+    
     var corner: vec2<f32>;
     switch (vid % 6u) {
         case 0u: { corner = vec2<f32>(-0.5, -0.5); }
@@ -78,7 +87,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     out.color = inst.color;
     out.quad_uv = corner + vec2<f32>(0.5, 0.5);
     out.world_pos = world_pos;
-    out.life_pct = inst.life_pct;
+    out.life_pct = life_pct;
     out.psize = inst.size;
     return out;
 }
