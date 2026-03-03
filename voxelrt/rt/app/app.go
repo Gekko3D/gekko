@@ -5,11 +5,13 @@ import (
 	"os"
 	"sort"
 
+	"unsafe"
+
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/shaders"
 
-	"unsafe"
+	_ "image/png"
 
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/cogentcore/webgpu/wgpuglfw"
@@ -38,6 +40,12 @@ type App struct {
 	// Deferred Rendering Pipelines
 	GBufferPipeline  *wgpu.ComputePipeline
 	LightingPipeline *wgpu.ComputePipeline
+
+	// Particle Sim Pipelines
+	ParticleSimPipeline      *wgpu.ComputePipeline
+	ParticleSpawnPipeline    *wgpu.ComputePipeline
+	ParticleInitPipeline     *wgpu.ComputePipeline
+	ParticleFinalizePipeline *wgpu.ComputePipeline
 
 	StorageTexture *wgpu.Texture
 	StorageView    *wgpu.TextureView
@@ -75,6 +83,9 @@ type App struct {
 	ShadowUpdateOffset int
 
 	Profiler *Profiler
+
+	ParticleSpawnCount uint32
+	ParticleAtlasData  []byte // If set before Init, uses this instead of embedded
 }
 
 func NewApp(window *glfw.Window) *App {
@@ -107,6 +118,7 @@ func (a *App) Init() error {
 		return err
 	}
 	a.Queue = a.Device.GetQueue()
+	a.BufferManager = gpu.NewGpuBufferManager(a.Device)
 
 	// Config
 	width, height := a.Window.GetFramebufferSize()
@@ -407,6 +419,20 @@ func (a *App) Init() error {
 		return err
 	}
 
+	// Particle Simulation Pipelines
+	simMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Particle Sim CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.ParticlesSimWGSL},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Initialize particle instance buffer with a large allocation before creating simulation pipelines/bindgroups
+	a.BufferManager.UpdateParticles(1000000, nil)
+
+	a.createParticleSimPipelines(simMod)
+
 	// Skybox Generation Pipeline
 	a.BufferManager.CreateSkyboxGenPipeline(shaders.SkyboxWGSL)
 
@@ -416,8 +442,6 @@ func (a *App) Init() error {
 	a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
 	a.BufferManager.CreateShadowBindGroups()
 
-	// Initialize particle instance buffer with a minimal allocation
-	a.BufferManager.UpdateParticles([]core.ParticleInstance{})
 	// Create particle render pipeline (accumulates into WBOIT targets)
 	a.setupParticlesPipeline()
 	// Create transparent overlay pipeline (accumulate into WBOIT targets)
@@ -628,6 +652,7 @@ func (a *App) Update() {
 				fmt.Printf("ERROR: Failed to recreate Gizmo Depth BindGroup: %v\n", gErr)
 			}
 		}
+		a.BufferManager.CreateParticleSimBindGroups()
 	}
 
 	// Update Camera Uniforms
@@ -707,6 +732,12 @@ func (a *App) Render() {
 		fmt.Printf("ERROR: CreateCommandEncoder failed: %v\n", err)
 		return
 	}
+
+	// Particle Simulation
+	a.Profiler.BeginScope("Particles Sim")
+	a.BufferManager.DispatchParticleSim(encoder, a.ParticleInitPipeline, a.ParticleSimPipeline)
+	a.BufferManager.DispatchParticleSpawn(encoder, a.ParticleSpawnPipeline, a.ParticleFinalizePipeline, a.ParticleSpawnCount)
+	a.Profiler.EndScope("Particles Sim")
 
 	// Compute Pass
 	a.Profiler.BeginScope("G-Buffer")
@@ -836,12 +867,12 @@ func (a *App) Render() {
 			accPass.Draw(3, 1, 0, 0)
 		}
 	}
-	if a.ParticlesPipeline != nil && a.BufferManager.ParticleCount > 0 {
+	if a.ParticlesPipeline != nil {
 		accPass.SetPipeline(a.ParticlesPipeline)
 		if a.BufferManager.ParticlesBindGroup0 != nil && a.BufferManager.ParticlesBindGroup1 != nil {
 			accPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
 			accPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
-			accPass.Draw(6, a.BufferManager.ParticleCount, 0, 0)
+			accPass.DrawIndirect(a.BufferManager.ParticleIndirectBuf, 0)
 		}
 	}
 	err = accPass.End()
@@ -945,6 +976,30 @@ func (a *App) setupParticlesPipeline() {
 					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
 					MinBindingSize:   0,
 					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageVertex,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    4,
+				Visibility: wgpu.ShaderStageFragment,
+				Sampler: wgpu.SamplerBindingLayout{
+					Type: wgpu.SamplerBindingTypeFiltering,
 				},
 			},
 		},
@@ -1483,4 +1538,153 @@ func (a *App) setupTextResources() {
 		fmt.Printf("ERROR: Failed to create text bind group: %v\n", err)
 		return
 	}
+}
+
+func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
+	var err error
+
+	// BG0: Simulation State
+	bg0Entries := []wgpu.BindGroupLayoutEntry{
+		{Binding: 0, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform}},
+		{Binding: 1, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeStorage}},
+		{Binding: 2, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeStorage}},
+		{Binding: 3, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeStorage}},
+		{Binding: 4, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeStorage}},
+		{Binding: 5, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeStorage}},
+	}
+	simBGL0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{Label: "Particle Sim BGL0", Entries: bg0Entries})
+	if err != nil {
+		panic(err)
+	}
+
+	// BG1: Emitters & Spawn Requests
+	bg1Entries := []wgpu.BindGroupLayoutEntry{
+		{Binding: 0, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}}, // Emitters
+		{Binding: 1, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}}, // Requests
+	}
+	simBGL1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{Label: "Particle Sim BGL1", Entries: bg1Entries})
+	if err != nil {
+		panic(err)
+	}
+
+	// BG2: Voxel Data (Shared with Shadow/GBuffer)
+	bg2Entries := []wgpu.BindGroupLayoutEntry{
+		{Binding: 0, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Sectors
+		{Binding: 1, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Bricks
+		{Binding: 2, Visibility: wgpu.ShaderStageCompute, Texture: wgpu.TextureBindingLayout{SampleType: wgpu.TextureSampleTypeUint, ViewDimension: wgpu.TextureViewDimension3D}}, // Payload
+		{Binding: 3, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Materials
+		{Binding: 4, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // ObjectParams
+		{Binding: 5, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Instances
+		{Binding: 6, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // Grid
+		{Binding: 7, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},                                          // GridParams
+	}
+	simBGL2, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{Label: "Particle Sim BGL2", Entries: bg2Entries})
+	if err != nil {
+		panic(err)
+	}
+
+	simLayout, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		Label:            "Particle Sim Layout",
+		BindGroupLayouts: []*wgpu.BindGroupLayout{simBGL0, simBGL1, simBGL2},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	a.ParticleInitPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label:  "Particle Init Pipeline",
+		Layout: simLayout,
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     mod,
+			EntryPoint: "init_draw_args",
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	a.ParticleSimPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label:  "Particle Sim Pipeline",
+		Layout: simLayout,
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     mod,
+			EntryPoint: "simulate",
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	a.ParticleSpawnPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label:  "Particle Spawn Pipeline",
+		Layout: simLayout,
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     mod,
+			EntryPoint: "spawn",
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	a.ParticleFinalizePipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label:  "Particle Finalize Pipeline",
+		Layout: simLayout,
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     mod,
+			EntryPoint: "finalize_draw_args",
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Also update BufferManager with one of them to get bind group layouts
+	a.BufferManager.ParticleSimPipeline = a.ParticleSimPipeline
+	a.BufferManager.CreateParticleSimBindGroups()
+}
+
+func (a *App) SetParticleAtlas(texels []byte, w, h uint32) {
+	if texels == nil || w == 0 || h == 0 {
+		return
+	}
+
+	tex, err := a.Device.CreateTexture(&wgpu.TextureDescriptor{
+		Label: "Particle Atlas",
+		Usage: wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
+		Size: wgpu.Extent3D{
+			Width:              w,
+			Height:             h,
+			DepthOrArrayLayers: 1,
+		},
+		Format:        wgpu.TextureFormatRGBA8Unorm,
+		MipLevelCount: 1,
+		SampleCount:   1,
+		Dimension:     wgpu.TextureDimension2D,
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create particle atlas texture: %v\n", err)
+		return
+	}
+
+	a.Queue.WriteTexture(tex.AsImageCopy(), texels, &wgpu.TextureDataLayout{
+		BytesPerRow:  w * 4,
+		RowsPerImage: h,
+	}, &wgpu.Extent3D{Width: w, Height: h, DepthOrArrayLayers: 1})
+
+	a.BufferManager.ParticleAtlasTex = tex
+	a.BufferManager.ParticleAtlasView, _ = tex.CreateView(nil)
+	a.BufferManager.ParticleAtlasSampler, _ = a.Device.CreateSampler(&wgpu.SamplerDescriptor{
+		MagFilter:     wgpu.FilterModeLinear,
+		MinFilter:     wgpu.FilterModeLinear,
+		MipmapFilter:  wgpu.MipmapFilterModeLinear,
+		AddressModeU:  wgpu.AddressModeClampToEdge,
+		AddressModeV:  wgpu.AddressModeClampToEdge,
+		LodMinClamp:   0,
+		LodMaxClamp:   0,
+		MaxAnisotropy: 1,
+	})
+
+	// Recreate particle bind groups to include the new texture
+	a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
 }

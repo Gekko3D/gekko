@@ -134,10 +134,25 @@ type GpuBufferManager struct {
 	DebugBindGroup0 *wgpu.BindGroup
 
 	// Particles (rendered after lighting)
-	ParticleInstancesBuf *wgpu.Buffer
-	ParticlesBindGroup0  *wgpu.BindGroup // camera + instances
+	ParticlePoolBuf      *wgpu.Buffer
+	ParticleDeadPoolBuf  *wgpu.Buffer
+	ParticleAliveListBuf *wgpu.Buffer
+	ParticleCountersBuf  *wgpu.Buffer
+	ParticleIndirectBuf  *wgpu.Buffer
+	ParticleEmittersBuf  *wgpu.Buffer
+	ParticleSpawnBuf     *wgpu.Buffer // SpawnRequests
+	ParticleParamsBuf    *wgpu.Buffer
+	ParticleAtlasTex     *wgpu.Texture
+	ParticleAtlasView    *wgpu.TextureView
+	ParticleAtlasSampler *wgpu.Sampler
+	ParticleSimPipeline  *wgpu.ComputePipeline
+	ParticleSimBG0       *wgpu.BindGroup
+	ParticleSimBG1       *wgpu.BindGroup
+	ParticleSimBG2       *wgpu.BindGroup
+	ParticlesBindGroup0  *wgpu.BindGroup // camera + pool + alive_list
 	ParticlesBindGroup1  *wgpu.BindGroup // gbuffer depth
 	ParticleCount        uint32
+	MaxParticleCount     uint32
 
 	// Transparent overlay (single-layer transparency over lit image)
 	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
@@ -1254,27 +1269,65 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 	}
 }
 
-// UpdateParticles uploads particle instances into a storage buffer (read in VS)
-func (m *GpuBufferManager) UpdateParticles(instances []core.ParticleInstance) bool {
-	// Create byte slice from instances
-	var bytes []byte
-	if len(instances) > 0 {
-		vSize := len(instances) * int(unsafe.Sizeof(core.ParticleInstance{}))
-		bytes = unsafe.Slice((*byte)(unsafe.Pointer(&instances[0])), vSize)
-	} else {
-		bytes = []byte{}
+// UpdateParticles manages GPU particle buffers and state.
+// If isGpuSim is true, it initializes/resizes buffers for GPU simulation.
+func (m *GpuBufferManager) UpdateParticles(maxCount uint32, emitters []byte) bool {
+	recreated := false
+
+	if maxCount == 0 {
+		maxCount = 1024
 	}
 
-	// Use ensureBuffer with headroom for ~1024 particles (32KB)
-	// This ensures we have space to grow without immediate reallocation
-	// and benefits from the geometric growth logic in ensureBuffer.
-	headroom := 1024 * 32
-	recreated := m.ensureBuffer("ParticleInstancesBuf", &m.ParticleInstancesBuf, bytes, wgpu.BufferUsageStorage, headroom)
-	m.ParticleCount = uint32(len(instances))
+	if m.MaxParticleCount != maxCount {
+		m.MaxParticleCount = maxCount
+		// Reallocate all buffers
+		m.ensureBuffer("ParticlePoolBuf", &m.ParticlePoolBuf, nil, wgpu.BufferUsageStorage, int(maxCount)*80)
+		m.ensureBuffer("ParticleDeadPoolBuf", &m.ParticleDeadPoolBuf, nil, wgpu.BufferUsageStorage, int(maxCount)*4)
+		m.ensureBuffer("ParticleAliveListBuf", &m.ParticleAliveListBuf, nil, wgpu.BufferUsageStorage, int(maxCount)*4)
+		m.ensureBuffer("ParticleCountersBuf", &m.ParticleCountersBuf, nil, wgpu.BufferUsageStorage, 64)
+		m.ensureBuffer("ParticleIndirectBuf", &m.ParticleIndirectBuf, nil, wgpu.BufferUsageStorage|wgpu.BufferUsageIndirect, 64)
+		m.ensureBuffer("ParticleParamsBuf", &m.ParticleParamsBuf, nil, wgpu.BufferUsageUniform, 64)
+		m.ensureBuffer("ParticleSpawnBuf", &m.ParticleSpawnBuf, nil, wgpu.BufferUsageStorage, int(maxCount)*8) // Space for spawn requests
+
+		// Initialize DeadPool with all indices
+		deadIndices := make([]uint32, maxCount)
+		for i := uint32(0); i < maxCount; i++ {
+			deadIndices[i] = i
+		}
+		deadBytes := unsafe.Slice((*byte)(unsafe.Pointer(&deadIndices[0])), maxCount*4)
+		m.Device.GetQueue().WriteBuffer(m.ParticleDeadPoolBuf, 0, deadBytes)
+
+		// Initialize Counters
+		counters := make([]uint32, 4)
+		counters[0] = maxCount // dead_count = max
+		counters[1] = 0        // alive_count = 0
+		countersBytes := unsafe.Slice((*byte)(unsafe.Pointer(&counters[0])), 16)
+		m.Device.GetQueue().WriteBuffer(m.ParticleCountersBuf, 0, countersBytes)
+
+		// Initialize Indirect Args
+		indirectArgs := []uint32{6, 0, 0, 0} // vertex_count=6, instance_count=0
+		indirectBytes := unsafe.Slice((*byte)(unsafe.Pointer(&indirectArgs[0])), 16)
+		m.Device.GetQueue().WriteBuffer(m.ParticleIndirectBuf, 0, indirectBytes)
+
+		recreated = true
+	}
+
+	// Update Emitters
+	if len(emitters) > 0 {
+		if m.ensureBuffer("ParticleEmittersBuf", &m.ParticleEmittersBuf, emitters, wgpu.BufferUsageStorage, 0) {
+			recreated = true
+		}
+	} else {
+		// Ensure it exists
+		if m.ensureBuffer("ParticleEmittersBuf", &m.ParticleEmittersBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0) {
+			recreated = true
+		}
+	}
+
 	return recreated
 }
 
-// CreateParticlesBindGroups wires camera + instances (group 0) and gbuffer depth (group 1)
+// CreateParticlesBindGroups wires camera + pool + alive_list (group 0) and gbuffer depth (group 1)
 func (m *GpuBufferManager) CreateParticlesBindGroups(pipeline *wgpu.RenderPipeline) {
 	if pipeline == nil {
 		return
@@ -1284,7 +1337,10 @@ func (m *GpuBufferManager) CreateParticlesBindGroups(pipeline *wgpu.RenderPipeli
 		Layout: pipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
-			{Binding: 1, Buffer: m.ParticleInstancesBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.ParticlePoolBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.ParticleAliveListBuf, Size: wgpu.WholeSize},
+			{Binding: 3, TextureView: m.ParticleAtlasView},
+			{Binding: 4, Sampler: m.ParticleAtlasSampler},
 		},
 	})
 	if err != nil {
@@ -1299,6 +1355,142 @@ func (m *GpuBufferManager) CreateParticlesBindGroups(pipeline *wgpu.RenderPipeli
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (m *GpuBufferManager) CreateParticleSimBindGroups() {
+	if m.ParticleSimPipeline == nil {
+		return
+	}
+	var err error
+	m.ParticleSimBG0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: m.ParticleSimPipeline.GetBindGroupLayout(0),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.ParticleParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.ParticlePoolBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.ParticleDeadPoolBuf, Size: wgpu.WholeSize},
+			{Binding: 3, Buffer: m.ParticleAliveListBuf, Size: wgpu.WholeSize},
+			{Binding: 4, Buffer: m.ParticleCountersBuf, Size: wgpu.WholeSize},
+			{Binding: 5, Buffer: m.ParticleIndirectBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	m.ParticleSimBG1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: m.ParticleSimPipeline.GetBindGroupLayout(1),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.ParticleEmittersBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.ParticleSpawnBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	m.ParticleSimBG2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: m.ParticleSimPipeline.GetBindGroupLayout(2),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
+			{Binding: 2, TextureView: m.VoxelPayloadView},
+			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
+			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 5, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
+			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
+			{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (m *GpuBufferManager) UpdateParticleParams(dt, invVsize float32, seed uint32, emitterCount uint32) {
+	data := make([]uint32, 8)
+	data[0] = math.Float32bits(dt)
+	data[1] = seed
+	data[2] = m.MaxParticleCount
+	data[3] = emitterCount
+	data[4] = math.Float32bits(invVsize)
+	// padding 4,5,6,7 remains 0
+
+	bytes := unsafe.Slice((*byte)(unsafe.Pointer(&data[0])), 32)
+	m.Device.GetQueue().WriteBuffer(m.ParticleParamsBuf, 0, bytes)
+}
+
+func (m *GpuBufferManager) DispatchParticleSim(encoder *wgpu.CommandEncoder, initPipe, simPipe *wgpu.ComputePipeline) {
+	if initPipe == nil || simPipe == nil || m.ParticleSimBG0 == nil {
+		return
+	}
+
+	// 1. Reset counters (alive count)
+	pass := encoder.BeginComputePass(&wgpu.ComputePassDescriptor{Label: "Particle Init"})
+	pass.SetPipeline(initPipe)
+	pass.SetBindGroup(0, m.ParticleSimBG0, nil)
+	pass.SetBindGroup(1, m.ParticleSimBG1, nil)
+	if m.ParticleSimBG2 != nil {
+		pass.SetBindGroup(2, m.ParticleSimBG2, nil)
+	}
+	pass.DispatchWorkgroups(1, 1, 1) // EntryPoint: init_draw_args
+	pass.End()
+
+	// 2. Simulate
+	pass = encoder.BeginComputePass(&wgpu.ComputePassDescriptor{Label: "Particle Sim"})
+	pass.SetPipeline(simPipe)
+	pass.SetBindGroup(0, m.ParticleSimBG0, nil)
+	pass.SetBindGroup(1, m.ParticleSimBG1, nil)
+	if m.ParticleSimBG2 != nil {
+		pass.SetBindGroup(2, m.ParticleSimBG2, nil)
+	}
+	wgCount := (m.MaxParticleCount + 63) / 64
+	pass.DispatchWorkgroups(wgCount, 1, 1) // EntryPoint: simulate
+	pass.End()
+}
+
+func (m *GpuBufferManager) DispatchParticleSpawn(encoder *wgpu.CommandEncoder, spawnPipe, finalizePipe *wgpu.ComputePipeline, spawnCount uint32) {
+	if spawnPipe == nil || finalizePipe == nil || m.ParticleSimBG0 == nil {
+		return
+	}
+
+	if spawnCount > 0 {
+		pass := encoder.BeginComputePass(&wgpu.ComputePassDescriptor{Label: "Particle Spawn"})
+		pass.SetPipeline(spawnPipe)
+		pass.SetBindGroup(0, m.ParticleSimBG0, nil)
+		pass.SetBindGroup(1, m.ParticleSimBG1, nil)
+		if m.ParticleSimBG2 != nil {
+			pass.SetBindGroup(2, m.ParticleSimBG2, nil)
+		}
+		wgCount := (spawnCount + 63) / 64
+		pass.DispatchWorkgroups(wgCount, 1, 1) // EntryPoint: spawn
+		pass.End()
+	}
+
+	// Finalize draw args
+	pass := encoder.BeginComputePass(&wgpu.ComputePassDescriptor{Label: "Particle Finalize"})
+	pass.SetPipeline(finalizePipe)
+	pass.SetBindGroup(0, m.ParticleSimBG0, nil)
+	pass.SetBindGroup(1, m.ParticleSimBG1, nil)
+	if m.ParticleSimBG2 != nil {
+		pass.SetBindGroup(2, m.ParticleSimBG2, nil)
+	}
+	pass.DispatchWorkgroups(1, 1, 1) // EntryPoint: finalize_draw_args
+	pass.End()
+}
+
+func (m *GpuBufferManager) UpdateSpawnRequests(requests []uint32) {
+	if len(requests) == 0 {
+		// Zero the spawn_request_count in hardware counters
+		zero := uint32(0)
+		m.Device.GetQueue().WriteBuffer(m.ParticleCountersBuf, 8, unsafe.Slice((*byte)(unsafe.Pointer(&zero)), 4))
+		return
+	}
+
+	count := uint32(len(requests))
+	bytes := unsafe.Slice((*byte)(unsafe.Pointer(&requests[0])), count*4)
+	m.Device.GetQueue().WriteBuffer(m.ParticleSpawnBuf, 0, bytes)
+
+	// Update spawn_request_count in counters (offset 8)
+	m.Device.GetQueue().WriteBuffer(m.ParticleCountersBuf, 8, unsafe.Slice((*byte)(unsafe.Pointer(&count)), 4))
 }
 
 func (m *GpuBufferManager) CreateShadowPipeline(code string) error {
