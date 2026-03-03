@@ -128,9 +128,10 @@ type GpuBufferManager struct {
 	Allocations   map[*volume.XBrickMap]*ObjectGpuAllocation
 
 	// Smooth streaming state
-	SectorsPerFrame  uint32
-	lastTotalSectors int
-	gridDataPool     []byte
+	SectorsPerFrame   uint32
+	lastTotalSectors  int
+	lastSceneRevision uint64
+	gridDataPool      []byte
 }
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
@@ -335,21 +336,19 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	}
 	for xbm, alloc := range m.Allocations {
 		if !activeMaps[xbm] {
-			// Free slots
-			for _, sector := range xbm.Sectors {
+			// Free slots based on what was ACTUALLY allocated to the GPU,
+			// not the current CPU state (which could have been cleared)
+			for sKey, sector := range alloc.Sectors {
 				if info, ok := m.SectorToInfo[sector]; ok {
 					m.SectorAlloc.FreeSlot(info.SlotIndex)
 					m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
 					delete(m.SectorToInfo, sector)
 				}
 				// Free bricks payloads
-				for i := 0; i < 64; i++ {
-					if (sector.BrickMask64 & (1 << i)) != 0 {
-						bx, by, bz := i%4, (i/4)%4, i/16
-						brick := sector.GetBrick(bx, by, bz)
-						if slot, ok := m.BrickToSlot[brick]; ok {
-							m.PayloadAlloc.FreeSlot(slot)
-							delete(m.BrickToSlot, brick)
+				if bPtrs, has := alloc.Bricks[sKey]; has {
+					for i := 0; i < 64; i++ {
+						if brick := bPtrs[i]; brick != nil {
+							m.releaseBrickSlot(brick)
 						}
 					}
 				}
@@ -923,24 +922,21 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene) {
 }
 
 func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
-	// Count total sectors
 	totalSectors := 0
-	anyDirty := false
 	for _, obj := range scene.Objects {
 		if xbm := obj.XBrickMap; xbm != nil {
 			totalSectors += len(xbm.Sectors)
-			if xbm.StructureDirty {
-				anyDirty = true
-			}
 		}
 	}
 
 	// Optimization: Skip rebuild if nothing structurally changed and count is the same
-	if totalSectors == m.lastTotalSectors && !anyDirty && m.SectorGridBuf != nil {
+	// We use the new Scene.StructureRevision to detect any Add/Remove object operations,
+	// even if the exact number of sectors happens to exactly offset between despawn & spawn.
+	if totalSectors == m.lastTotalSectors && uint64(scene.StructureRevision) == m.lastSceneRevision && m.SectorGridBuf != nil {
 		return false
 	}
 	m.lastTotalSectors = totalSectors
-
+	m.lastSceneRevision = uint64(scene.StructureRevision)
 	// Always ensure buffers exist even if empty to avoid bind group panics
 	if totalSectors == 0 {
 		recreated := false

@@ -182,14 +182,12 @@ func (app *App) FlushCommands() {
 
 	// 1. Process Removals first (so we don't add to dead entities)
 	for _, eid := range app.pendingRemovals {
-		fmt.Printf("FLUSH: Removing entity %v\n", eid)
 		app.ecs.removeEntity(eid)
 	}
 	app.pendingRemovals = app.pendingRemovals[:0]
 
 	// 2. Process Additions
 	for _, add := range app.pendingAdditions {
-		// fmt.Printf("FLUSH: Adding entity %v\n", add.eid)
 		app.ecs.insertEntity(add.eid, add.components...)
 	}
 	app.pendingAdditions = app.pendingAdditions[:0]

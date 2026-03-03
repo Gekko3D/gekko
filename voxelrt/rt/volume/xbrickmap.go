@@ -388,6 +388,10 @@ func (x *XBrickMap) Copy() *XBrickMap {
 		newMap.Sectors[k] = v.Copy()
 	}
 
+	newMap.CachedMin = x.CachedMin
+	newMap.CachedMax = x.CachedMax
+	newMap.AABBDirty = x.AABBDirty
+
 	return newMap
 }
 

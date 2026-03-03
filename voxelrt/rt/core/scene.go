@@ -96,14 +96,15 @@ func max(a, b float32) float32 {
 }
 
 type Scene struct {
-	Objects          []*VoxelObject
-	VisibleObjects   []*VoxelObject
-	BVHNodesBytes    []byte // Linearized BVH nodes
-	Lights           []Light
-	Gizmos           []Gizmo
-	AmbientLight     mgl32.Vec3
-	TargetVoxelSize  float32
-	lastVisibleCount int
+	Objects           []*VoxelObject
+	VisibleObjects    []*VoxelObject
+	BVHNodesBytes     []byte // Linearized BVH nodes
+	Lights            []Light
+	Gizmos            []Gizmo
+	AmbientLight      mgl32.Vec3
+	TargetVoxelSize   float32
+	lastVisibleCount  int
+	StructureRevision uint64
 }
 
 func NewScene() *Scene {
@@ -143,6 +144,7 @@ func (s *Scene) RescaleObject(obj *VoxelObject, factor float32) {
 
 func (s *Scene) AddObject(obj *VoxelObject) {
 	s.Objects = append(s.Objects, obj)
+	s.StructureRevision++
 }
 
 func (s *Scene) Raycast(ray Ray, tMax float32) *HitResult {
@@ -224,6 +226,7 @@ func (s *Scene) RemoveObject(obj *VoxelObject) {
 	for i, o := range s.Objects {
 		if o == obj {
 			s.Objects = append(s.Objects[:i], s.Objects[i+1:]...)
+			s.StructureRevision++
 			return
 		}
 	}

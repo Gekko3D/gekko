@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -384,7 +385,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 				obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
 			} else {
 				obj.XBrickMap = modelTemplate.XBrickMap.Copy()
-				obj.MaterialTable = modelTemplate.MaterialTable
+				gekkoPalette := server.voxPalettes[vox.VoxelPalette]
+				obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
 			}
 
 			state.RtApp.Scene.AddObject(obj)
@@ -397,6 +399,11 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 		// Metric system: Renderer Scale is ALWAYS TargetVoxelSize.
 		vSize := state.RtApp.Scene.TargetVoxelSize
+		if !exists {
+			if _, ok := server.voxPalettes[vox.VoxelPalette]; !ok {
+				fmt.Printf("PALETTE NOT FOUND! %v\n", vox.VoxelPalette)
+			}
+		}
 		if vSize == 0 {
 			vSize = 0.1
 		}
