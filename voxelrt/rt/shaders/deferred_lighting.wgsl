@@ -42,11 +42,15 @@ struct Ray {
 @group(1) @binding(2) var in_material: texture_2d<f32>;
 @group(1) @binding(3) var in_position: texture_2d<f32>;
 
-// Output: Final Color
-@group(1) @binding(4) var out_color: texture_storage_2d<rgba8unorm, write>;
+// Output: Final Color (HDR)
+@group(1) @binding(4) var out_color: texture_storage_2d<rgba16float, write>;
 
 // Shadow Maps
 @group(1) @binding(5) var in_shadow_maps: texture_2d_array<f32>;
+
+// Skybox
+@group(1) @binding(6) var in_skybox: texture_2d<f32>;
+@group(1) @binding(7) var skybox_sampler: sampler;
 
 // Group 2: Voxel Data (reuse)
 @group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
@@ -181,6 +185,13 @@ fn ndc_for_shadow(uv: vec2<f32>) -> vec2<f32> {
 // Or we just store world-space distance in shadow map.
 // Actually, shadow_dist IS world-space distance from light's "near plane".
 
+fn dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
+    let PI = 3.14159265359;
+    let u = 0.5 + atan2(dir.z, dir.x) / (2.0 * PI);
+    let v = 0.5 - asin(dir.y) / PI;
+    return vec2<f32>(u, v);
+}
+
 // ============== MAIN DEFERRED LIGHTING PASS ==============
 
 fn get_ray(uv: vec2<f32>) -> Ray {
@@ -203,7 +214,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let depth = textureLoad(in_depth, global_id.xy, 0).r;
     if (depth >= 50000.0) {
-        textureStore(out_color, global_id.xy, sky_color);
+        let ray = get_ray(uv);
+        let sky_uv = dir_to_uv(ray.dir);
+        let sky_sample = textureSampleLevel(in_skybox, skybox_sampler, sky_uv, 0.0);
+        textureStore(out_color, global_id.xy, sky_sample);
         return;
     }
     

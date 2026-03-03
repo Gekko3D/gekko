@@ -3,12 +3,14 @@ package gekko
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
+	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
@@ -44,6 +46,10 @@ type VoxelRtState struct {
 	instanceMap   map[EntityId]*core.VoxelObject
 	particlePools map[EntityId]*particlePool
 	caVolumeMap   map[EntityId]*core.VoxelObject
+	skyboxLayers  map[EntityId]SkyboxLayerComponent // Stored values to detect changes
+	lastSkyboxVer int64                             // To track if any layer changed
+	SunDirection  mgl32.Vec3
+	SunIntensity  float32
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -300,6 +306,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		loadedModels: make(map[AssetId]*core.VoxelObject),
 		instanceMap:  make(map[EntityId]*core.VoxelObject),
 		caVolumeMap:  make(map[EntityId]*core.VoxelObject),
+		skyboxLayers: make(map[EntityId]SkyboxLayerComponent),
 	}
 	cmd.AddResources(state)
 	cmd.AddResources(&VoxelEditQueue{BudgetPerFrame: 5000})
@@ -620,6 +627,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 
 		dir := rot.Rotate(baseForward)
 		gpuLight.Direction = [4]float32{dir.X(), dir.Y(), dir.Z(), 0.0}
+		if light.Type == LightTypeDirectional {
+			state.SunDirection = dir
+			state.SunIntensity = light.Intensity
+		}
 		gpuLight.Color = [4]float32{light.Color[0], light.Color[1], light.Color[2], light.Intensity}
 
 		cosAngle := float32(0.0)
@@ -714,7 +725,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, time 
 	}
 }
 
-func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler) {
+func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *Commands) {
 	if state == nil || state.RtApp == nil {
 		return
 	}
@@ -722,6 +733,117 @@ func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler) {
 	state.RtApp.Profiler.BeginScope("RT Update")
 	state.RtApp.Update()
 	state.RtApp.Profiler.EndScope("RT Update")
+
+	// Skybox Sync & Generation
+	state.syncSkybox(cmd, time)
+}
+
+func (s *VoxelRtState) syncSkybox(cmd *Commands, time *Time) {
+	s.RtApp.Profiler.BeginScope("Sync Skybox")
+	defer s.RtApp.Profiler.EndScope("Sync Skybox")
+
+	layersChanged := false
+	currentLayers := make(map[EntityId]SkyboxLayerComponent)
+
+	dt := float32(time.Dt)
+
+	MakeQuery1[SkyboxLayerComponent](cmd).Map(func(eid EntityId, layer *SkyboxLayerComponent) bool {
+		// Update animation offset
+		if layer.WindSpeed.LenSqr() > 0 {
+			layer.Offset = layer.Offset.Add(layer.WindSpeed.Mul(dt))
+			// Always trigger rebuild for animated layers
+			layersChanged = true
+		}
+
+		prev, exists := s.skyboxLayers[eid]
+		if !exists || prev != *layer || layer._dirty {
+			layersChanged = true
+			layer._dirty = false
+		}
+		currentLayers[eid] = *layer
+		return true
+	})
+
+	// Detect deletions
+	if len(currentLayers) != len(s.skyboxLayers) {
+		layersChanged = true
+	}
+
+	// Always rebuild if sun changed or any layer changed
+	if layersChanged {
+		s.skyboxLayers = currentLayers
+		s.rebuildSkybox()
+	}
+}
+
+func (s *VoxelRtState) rebuildSkybox() {
+	// Sort layers by priority
+	type layerInfo struct {
+		eid   EntityId
+		layer SkyboxLayerComponent
+	}
+	sorted := make([]layerInfo, 0, len(s.skyboxLayers))
+	for eid, l := range s.skyboxLayers {
+		sorted = append(sorted, layerInfo{eid, l})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].layer.Priority < sorted[j].layer.Priority
+	})
+
+	if len(sorted) == 0 {
+		return
+	}
+
+	width, height := 1024, 512
+	for _, li := range sorted {
+		if li.layer.Resolution[0] > 0 && li.layer.Resolution[1] > 0 {
+			width, height = li.layer.Resolution[0], li.layer.Resolution[1]
+			break
+		}
+	}
+
+	gpuLayers := make([]gpu.GpuSkyboxLayer, 0, len(sorted))
+	for _, li := range sorted {
+		l := li.layer
+
+		invert := uint32(0)
+		if l.Invert {
+			invert = 1
+		}
+
+		gpuLayers = append(gpuLayers, gpu.GpuSkyboxLayer{
+			ColorA:      [4]float32{l.ColorA.X(), l.ColorA.Y(), l.ColorA.Z(), l.Threshold},
+			ColorB:      [4]float32{l.ColorB.X(), l.ColorB.Y(), l.ColorB.Z(), l.Opacity},
+			Offset:      [4]float32{l.Offset.X(), l.Offset.Y(), l.Offset.Z(), l.Scale},
+			Persistence: l.Persistence,
+			Lacunarity:  l.Lacunarity,
+			Seed:        int32(l.Seed),
+			Octaves:     int32(l.Octaves),
+			BlendMode:   uint32(l.BlendMode),
+			Invert:      invert,
+		})
+	}
+
+	smooth := true
+	for _, li := range sorted {
+		if !li.layer.Smooth {
+			smooth = false
+			break
+		}
+	}
+
+	sunDir := [4]float32{s.SunDirection.X(), s.SunDirection.Y(), s.SunDirection.Z(), s.SunIntensity}
+	s.RtApp.BufferManager.UpdateSkyboxGPU(uint32(width), uint32(height), gpuLayers, sunDir, smooth, s.RtApp.LightingPipeline, s.RtApp.StorageView)
+}
+
+func clampF(v, min, max float32) float32 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func voxelRtRenderSystem(cmd *Commands, state *VoxelRtState, prof *Profiler) {

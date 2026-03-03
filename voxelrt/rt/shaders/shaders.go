@@ -38,3 +38,6 @@ var HiZWGSL string
 
 //go:embed gizmo.wgsl
 var GizmoWGSL string
+
+//go:embed skybox.wgsl
+var SkyboxWGSL string
