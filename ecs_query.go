@@ -2,6 +2,8 @@ package gekko
 
 import (
 	"reflect"
+
+	rooteecs "github.com/gekko3d/gekko/ecs"
 )
 
 // TO get more queries:
@@ -30,360 +32,105 @@ func MakeQuery5[A, B, C, D, E any](cmd *Commands) Query5[A, B, C, D, E] {
 	return Query5[A, B, C, D, E]{ecs: cmd.app.ecs}
 }
 
+type rootArchetypeView struct{ arch *archetype }
+
+func (v rootArchetypeView) GetComponent(id uint32) (any, bool) {
+	data, ok := v.arch.componentData[componentId(id)]
+	return data, ok
+}
+
+func (v rootArchetypeView) EachEntity(fn func(rooteecs.EntityID, int) bool) {
+	for entityID, r := range v.arch.entities {
+		if !fn(rooteecs.EntityID(entityID), int(r)) {
+			return
+		}
+	}
+}
+
+func toOptionalIDs(opt set[componentId]) map[uint32]struct{} {
+	res := make(map[uint32]struct{}, len(opt))
+	for id := range opt {
+		res[uint32(id)] = struct{}{}
+	}
+	return res
+}
+
 func (q Query1[A]) Map(m func(EntityId, *A) bool, optionals ...any) {
 	id1 := identifyComponents1[A](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-
-	for _, arch := range q.ecs.archetypes {
-		// Check required components
-		var comps1 []A
-		no_a := false
-		if arg1CompData, ok := arch.componentData[id1]; ok {
-			comps1 = arg1CompData.([]A)
-		} else if _, ok := opt[id1]; ok {
-			no_a = true
-		} else {
-			continue
-		}
-
-		// Return entities
-		for entityId, row := range arch.entities {
-			var a *A
-			if no_a {
-				a = nil
-			} else {
-				a = &comps1[row]
-			}
-
-			if !m(entityId, a) {
-				return
-			}
-		}
-	}
+	rooteecs.Map1(q.ecs.archetypeViews(), uint32(id1), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A) bool {
+		return m(EntityId(id), a)
+	})
 }
 
 func (q Query2[A, B]) Map(m func(EntityId, *A, *B) bool, optionals ...any) {
 	id1, id2 := identifyComponents2[A, B](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-
-	for _, arch := range q.ecs.archetypes {
-		// Check required components
-		var comps1 []A
-		no_a := false
-		if arg1CompData, ok := arch.componentData[id1]; ok {
-			comps1 = arg1CompData.([]A)
-		} else if _, ok := opt[id1]; ok {
-			no_a = true
-		} else {
-			continue
-		}
-
-		var comps2 []B
-		no_b := false
-		if arg2CompData, ok := arch.componentData[id2]; ok {
-			comps2 = arg2CompData.([]B)
-		} else if _, ok := opt[id2]; ok {
-			no_b = true
-		} else {
-			continue
-		}
-
-		// Return entities
-		for entityId, row := range arch.entities {
-			var a *A
-			if no_a {
-				a = nil
-			} else {
-				a = &comps1[row]
-			}
-
-			var b *B
-			if no_b {
-				b = nil
-			} else {
-				b = &comps2[row]
-			}
-
-			if !m(entityId, a, b) {
-				return
-			}
-		}
-	}
+	rooteecs.Map2(q.ecs.archetypeViews(), uint32(id1), uint32(id2), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B) bool {
+		return m(EntityId(id), a, b)
+	})
 }
 
 func (q Query3[A, B, C]) Map(m func(EntityId, *A, *B, *C) bool, optionals ...any) {
 	id1, id2, id3 := identifyComponents3[A, B, C](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-
-	for _, arch := range q.ecs.archetypes {
-		// Check required components
-		var comps1 []A
-		no_a := false
-		if arg1CompData, ok := arch.componentData[id1]; ok {
-			comps1 = arg1CompData.([]A)
-		} else if _, ok := opt[id1]; ok {
-			no_a = true
-		} else {
-			continue
-		}
-
-		var comps2 []B
-		no_b := false
-		if arg2CompData, ok := arch.componentData[id2]; ok {
-			comps2 = arg2CompData.([]B)
-		} else if _, ok := opt[id2]; ok {
-			no_b = true
-		} else {
-			continue
-		}
-
-		var comps3 []C
-		no_c := false
-		if arg3CompData, ok := arch.componentData[id3]; ok {
-			comps3 = arg3CompData.([]C)
-		} else if _, ok := opt[id3]; ok {
-			no_c = true
-		} else {
-			continue
-		}
-
-		// Return entities
-		for entityId, row := range arch.entities {
-			var a *A
-			if no_a {
-				a = nil
-			} else {
-				a = &comps1[row]
-			}
-
-			var b *B
-			if no_b {
-				b = nil
-			} else {
-				b = &comps2[row]
-			}
-
-			var c *C
-			if no_c {
-				c = nil
-			} else {
-				c = &comps3[row]
-			}
-
-			if !m(entityId, a, b, c) {
-				return
-			}
-		}
-	}
+	rooteecs.Map3(q.ecs.archetypeViews(), uint32(id1), uint32(id2), uint32(id3), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C) bool {
+		return m(EntityId(id), a, b, c)
+	})
 }
 
 func (q Query4[A, B, C, D]) Map(m func(EntityId, *A, *B, *C, *D) bool, optionals ...any) {
 	id1, id2, id3, id4 := identifyComponents4[A, B, C, D](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-
-	for _, arch := range q.ecs.archetypes {
-		// Check required components
-		var comps1 []A
-		no_a := false
-		if arg1CompData, ok := arch.componentData[id1]; ok {
-			comps1 = arg1CompData.([]A)
-		} else if _, ok := opt[id1]; ok {
-			no_a = true
-		} else {
-			continue
-		}
-
-		var comps2 []B
-		no_b := false
-		if arg2CompData, ok := arch.componentData[id2]; ok {
-			comps2 = arg2CompData.([]B)
-		} else if _, ok := opt[id2]; ok {
-			no_b = true
-		} else {
-			continue
-		}
-
-		var comps3 []C
-		no_c := false
-		if arg3CompData, ok := arch.componentData[id3]; ok {
-			comps3 = arg3CompData.([]C)
-		} else if _, ok := opt[id3]; ok {
-			no_c = true
-		} else {
-			continue
-		}
-
-		var comps4 []D
-		no_d := false
-		if arg4CompData, ok := arch.componentData[id4]; ok {
-			comps4 = arg4CompData.([]D)
-		} else if _, ok := opt[id4]; ok {
-			no_d = true
-		} else {
-			continue
-		}
-
-		// Return entities
-		for entityId, row := range arch.entities {
-			var a *A
-			if no_a {
-				a = nil
-			} else {
-				a = &comps1[row]
-			}
-
-			var b *B
-			if no_b {
-				b = nil
-			} else {
-				b = &comps2[row]
-			}
-
-			var c *C
-			if no_c {
-				c = nil
-			} else {
-				c = &comps3[row]
-			}
-
-			var d *D
-			if no_d {
-				d = nil
-			} else {
-				d = &comps4[row]
-			}
-
-			if !m(entityId, a, b, c, d) {
-				return
-			}
-		}
-	}
+	rooteecs.Map4(q.ecs.archetypeViews(), uint32(id1), uint32(id2), uint32(id3), uint32(id4), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C, d *D) bool {
+		return m(EntityId(id), a, b, c, d)
+	})
 }
 
 func (q Query5[A, B, C, D, E]) Map(m func(EntityId, *A, *B, *C, *D, *E) bool, optionals ...any) {
 	id1, id2, id3, id4, id5 := identifyComponents5[A, B, C, D, E](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-
-	for _, arch := range q.ecs.archetypes {
-		// Check required components
-		var comps1 []A
-		no_a := false
-		if arg1CompData, ok := arch.componentData[id1]; ok {
-			comps1 = arg1CompData.([]A)
-		} else if _, ok := opt[id1]; ok {
-			no_a = true
-		} else {
-			continue
-		}
-
-		var comps2 []B
-		no_b := false
-		if arg2CompData, ok := arch.componentData[id2]; ok {
-			comps2 = arg2CompData.([]B)
-		} else if _, ok := opt[id2]; ok {
-			no_b = true
-		} else {
-			continue
-		}
-
-		var comps3 []C
-		no_c := false
-		if arg3CompData, ok := arch.componentData[id3]; ok {
-			comps3 = arg3CompData.([]C)
-		} else if _, ok := opt[id3]; ok {
-			no_c = true
-		} else {
-			continue
-		}
-
-		var comps4 []D
-		no_d := false
-		if arg4CompData, ok := arch.componentData[id4]; ok {
-			comps4 = arg4CompData.([]D)
-		} else if _, ok := opt[id4]; ok {
-			no_d = true
-		} else {
-			continue
-		}
-
-		var comps5 []E
-		no_e := false
-		if arg5CompData, ok := arch.componentData[id5]; ok {
-			comps5 = arg5CompData.([]E)
-		} else if _, ok := opt[id5]; ok {
-			no_e = true
-		} else {
-			continue
-		}
-
-		// Return entities
-		for entityId, row := range arch.entities {
-			var a *A
-			if no_a {
-				a = nil
-			} else {
-				a = &comps1[row]
-			}
-
-			var b *B
-			if no_b {
-				b = nil
-			} else {
-				b = &comps2[row]
-			}
-
-			var c *C
-			if no_c {
-				c = nil
-			} else {
-				c = &comps3[row]
-			}
-
-			var d *D
-			if no_d {
-				d = nil
-			} else {
-				d = &comps4[row]
-			}
-
-			var e *E
-			if no_e {
-				e = nil
-			} else {
-				e = &comps5[row]
-			}
-
-			if !m(entityId, a, b, c, d, e) {
-				return
-			}
-		}
-	}
+	rooteecs.Map5(q.ecs.archetypeViews(), uint32(id1), uint32(id2), uint32(id3), uint32(id4), uint32(id5), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C, d *D, e *E) bool {
+		return m(EntityId(id), a, b, c, d, e)
+	})
 }
-func identifyOptionals(ecs *Ecs, components ...any) set[componentId] {
-	res := make(set[componentId])
-	for _, c := range components {
-		res[ecs.getComponentId(reflect.TypeOf(c))] = struct{}{}
-	}
 
+func identifyOptionals(ecs *Ecs, components ...any) set[componentId] {
+	raw := rooteecs.IdentifyOptionals(func(t reflect.Type) uint32 {
+		return uint32(ecs.getComponentId(t))
+	}, components...)
+	res := make(set[componentId], len(raw))
+	for id := range raw {
+		res[componentId(id)] = struct{}{}
+	}
 	return res
 }
 
 func identifyComponents1[A any](ecs *Ecs) componentId {
 	var a A
-	return ecs.getComponentId(reflect.TypeOf(a))
+	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
+		return uint32(ecs.getComponentId(t))
+	}, reflect.TypeOf(a))
+	return componentId(ids[0])
 }
 
 func identifyComponents2[A, B any](ecs *Ecs) (componentId, componentId) {
 	var a A
 	var b B
-	return ecs.getComponentId(reflect.TypeOf(a)), ecs.getComponentId(reflect.TypeOf(b))
+	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
+		return uint32(ecs.getComponentId(t))
+	}, reflect.TypeOf(a), reflect.TypeOf(b))
+	return componentId(ids[0]), componentId(ids[1])
 }
 
 func identifyComponents3[A, B, C any](ecs *Ecs) (componentId, componentId, componentId) {
 	var a A
 	var b B
 	var c C
-	return ecs.getComponentId(reflect.TypeOf(a)), ecs.getComponentId(reflect.TypeOf(b)), ecs.getComponentId(reflect.TypeOf(c))
+	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
+		return uint32(ecs.getComponentId(t))
+	}, reflect.TypeOf(a), reflect.TypeOf(b), reflect.TypeOf(c))
+	return componentId(ids[0]), componentId(ids[1]), componentId(ids[2])
 }
 
 func identifyComponents4[A, B, C, D any](ecs *Ecs) (componentId, componentId, componentId, componentId) {
@@ -391,7 +138,10 @@ func identifyComponents4[A, B, C, D any](ecs *Ecs) (componentId, componentId, co
 	var b B
 	var c C
 	var d D
-	return ecs.getComponentId(reflect.TypeOf(a)), ecs.getComponentId(reflect.TypeOf(b)), ecs.getComponentId(reflect.TypeOf(c)), ecs.getComponentId(reflect.TypeOf(d))
+	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
+		return uint32(ecs.getComponentId(t))
+	}, reflect.TypeOf(a), reflect.TypeOf(b), reflect.TypeOf(c), reflect.TypeOf(d))
+	return componentId(ids[0]), componentId(ids[1]), componentId(ids[2]), componentId(ids[3])
 }
 
 func identifyComponents5[A, B, C, D, E any](ecs *Ecs) (componentId, componentId, componentId, componentId, componentId) {
@@ -400,7 +150,10 @@ func identifyComponents5[A, B, C, D, E any](ecs *Ecs) (componentId, componentId,
 	var c C
 	var d D
 	var e E
-	return ecs.getComponentId(reflect.TypeOf(a)), ecs.getComponentId(reflect.TypeOf(b)), ecs.getComponentId(reflect.TypeOf(c)), ecs.getComponentId(reflect.TypeOf(d)), ecs.getComponentId(reflect.TypeOf(e))
+	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
+		return uint32(ecs.getComponentId(t))
+	}, reflect.TypeOf(a), reflect.TypeOf(b), reflect.TypeOf(c), reflect.TypeOf(d), reflect.TypeOf(e))
+	return componentId(ids[0]), componentId(ids[1]), componentId(ids[2]), componentId(ids[3]), componentId(ids[4])
 }
 
 /*

@@ -87,11 +87,11 @@ func findTextureDescriptors(entityId EntityId, cmd *Commands, assets *AssetServe
 				if err != nil {
 					panic(err)
 				}
-				assetId := AssetId{u}
+				assetId := AssetId{UUID: u}
 				textureAsset := assets.textures[assetId]
 
 				descriptors[assetId] = textureDescriptor{
-					version:      textureAsset.version,
+					version:      textureAsset.Version,
 					group:        uint32(group),
 					binding:      uint32(binding),
 					textureAsset: &textureAsset,
@@ -210,7 +210,7 @@ func findVoxelModelAsset(entityId EntityId, cmd *Commands, server *AssetServer) 
 				if err != nil {
 					panic(err)
 				}
-				assetId := AssetId{u}
+				assetId := AssetId{UUID: u}
 				if "model" == field.Tag.Get("usage") {
 					model, ok := server.voxModels[assetId]
 					if ok {

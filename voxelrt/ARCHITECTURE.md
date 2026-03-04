@@ -76,8 +76,35 @@ Editing is performed on the CPU references and then synchronized to the GPU.
     *   Iterates over the scene objects.
     *   Serializes `Sectors` to `SectorTableBuf`.
     *   Serializes `Bricks` to `BrickTableBuf`.
-    *   Serializes `Payload` to `VoxelPayloadBuf` (linear implementation).
+    *   Uploads brick payload data into a 3D voxel payload atlas texture (`VoxelPayloadTex`).
     *   Updates `ObjectParams` with new offsets.
+
+## Code Organization (Current)
+
+Recent refactors split large files by responsibility while keeping runtime behavior unchanged.
+
+- App orchestration:
+  - `rt/app/app.go`
+  - `rt/app/app_frame.go`
+  - `rt/app/app_pipelines.go`
+  - `rt/app/app_surface_text.go`
+  - `rt/app/app_particles.go`
+- GPU buffer manager:
+  - `rt/gpu/manager.go`
+  - `rt/gpu/manager_scene.go`
+  - `rt/gpu/manager_voxel.go`
+  - `rt/gpu/manager_render_setup.go`
+  - `rt/gpu/manager_particles.go`
+  - `rt/gpu/manager_shadow.go`
+  - `rt/gpu/manager_skybox.go`
+  - `rt/gpu/manager_hiz.go`
+  - `rt/gpu/manager_alloc.go`
+  - `rt/gpu/manager_bytes.go`
+- Voxel storage:
+  - `rt/volume/xbrickmap.go`
+  - `rt/volume/xbrickmap_edit.go`
+  - `rt/volume/xbrickmap_trace.go`
+  - `rt/volume/xbrickmap_components.go`
 
 ## Lighting System
 
@@ -126,4 +153,3 @@ Shading is performed in the compute shader (`raytrace.wgsl`).
 4.  **Cached Traversal**: Shader caches the last accessed Sector ID to avoid frequent hash/linear searches during stepping.
 5.  **CPU Frustum Culling**: Objects outside the camera frustum are skipped before GPU work. Uses Gribb-Hartmann plane extraction.
 6.  **Hi-Z Occlusion Culling**: Objects hidden behind geometry are skipped using a hierarchical Z-buffer with 1-frame latency async readback.
-

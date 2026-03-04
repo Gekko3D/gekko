@@ -1,35 +1,49 @@
 package gekko
 
 import (
-	"github.com/google/uuid"
+	rootassets "github.com/gekko3d/gekko/assets"
 )
 
-type AssetId struct {
-	uuid.UUID
-}
-
-type TextureFormat uint32
+type AssetId = rootassets.AssetID
+type TextureFormat = rootassets.TextureFormat
 
 const (
-	TextureFormatRGBA8Unorm TextureFormat = iota
-	TextureFormatRGBA8UnormSrgb
+	TextureFormatRGBA8Unorm     = rootassets.TextureFormatRGBA8Unorm
+	TextureFormatRGBA8UnormSrgb = rootassets.TextureFormatRGBA8UnormSrgb
 )
 
-type TextureDimension uint32
+type TextureDimension = rootassets.TextureDimension
 
 const (
-	TextureDimension1D TextureDimension = iota
-	TextureDimension2D
-	TextureDimension3D
+	TextureDimension1D = rootassets.TextureDimension1D
+	TextureDimension2D = rootassets.TextureDimension2D
+	TextureDimension3D = rootassets.TextureDimension3D
 )
 
-type Mesh struct {
-	assetId AssetId
-}
+type Mesh = rootassets.Mesh
+type Material = rootassets.Material
+type Voxel = rootassets.Voxel
+type VoxModel = rootassets.VoxModel
+type VoxPalette = rootassets.VoxPalette
+type VoxFile = rootassets.VoxFile
+type VoxNodeType = rootassets.VoxNodeType
+type VoxNode = rootassets.VoxNode
+type VoxTransformFrame = rootassets.VoxTransformFrame
+type VoxShapeModel = rootassets.VoxShapeModel
+type VoxMaterial = rootassets.VoxMaterial
+type VoxelFileAsset = rootassets.VoxelFileAsset
+type VoxelModelAsset = rootassets.VoxelModelAsset
+type VoxelPaletteAsset = rootassets.VoxelPaletteAsset
+type MeshAsset = rootassets.MeshAsset
+type MaterialAsset = rootassets.MaterialAsset
+type TextureAsset = rootassets.TextureAsset
+type SamplerAsset = rootassets.SamplerAsset
 
-type Material struct {
-	assetId AssetId
-}
+const (
+	VoxNodeTransform = rootassets.VoxNodeTransform
+	VoxNodeGroup     = rootassets.VoxNodeGroup
+	VoxNodeShape     = rootassets.VoxNodeShape
+)
 
 type AssetServer struct {
 	meshes      map[AssetId]MeshAsset
@@ -57,5 +71,5 @@ func (AssetServerModule) Install(app *App, cmd *Commands) {
 }
 
 func makeAssetId() AssetId {
-	return AssetId{uuid.New()}
+	return rootassets.NewID()
 }

@@ -20,11 +20,11 @@ These per-shader docs describe uniforms, bindings, algorithms, and tuning notes 
 ## High-level Overview
 
 - ECS (gekko package) builds the scene (voxel objects, lights, camera, text, particles data).
-- The VoxelRtModule (gekko/mod_vox_rt.go) bridges ECS → renderer:
+- The VoxelRtModule bridge (`gekko/mod_voxelrt_client*.go`) bridges ECS -> renderer:
   - Syncs ECS components into rtApp.Scene and rtApp.Camera.
   - Collects CPU-simulated billboard particles then uploads instances.
   - Kicks rtApp.Update() followed by rtApp.Render() per frame.
-- The renderer (rt/app/app.go) manages:
+- The renderer (`rt/app/*.go`) manages:
   - WebGPU device/swapchain, pipelines, textures, and bind groups.
   - Frame graph (current):
     - Compute G-Buffer
@@ -38,7 +38,7 @@ These per-shader docs describe uniforms, bindings, algorithms, and tuning notes 
 
 ## Core Types and Responsibilities
 
-- App (rt/app/app.go)
+- App (`rt/app/app.go`, `rt/app/app_frame.go`, `rt/app/app_pipelines.go`, `rt/app/app_particles.go`, `rt/app/app_surface_text.go`)
   - Owns Device/Queue/Surface/Config.
   - Creates pipelines:
     - Compute: G-Buffer, Deferred Lighting, Shadow, Debug (optional).
@@ -46,7 +46,7 @@ These per-shader docs describe uniforms, bindings, algorithms, and tuning notes 
   - Manages storage/GB textures and bind groups.
   - Orchestrates render passes per frame.
 
-- BufferManager (rt/gpu/manager.go)
+- GpuBufferManager (`rt/gpu/manager*.go`)
   - Allocates and updates GPU buffers for scene (camera, instances, materials, lights, voxels).
   - Owns creation of G-Buffer, Lighting, Shadow bind groups.
   - Creates and manages WBOIT accumulation targets (RGBA16F accum, R16F weight).
@@ -56,20 +56,20 @@ These per-shader docs describe uniforms, bindings, algorithms, and tuning notes 
   - Scene: voxel objects, materials, lights; supports Commit() to (re)build GPU representations.
   - CameraState: view/projection matrices and debug mode.
 
-- Editor (rt/editor/editor.go)
-  - Handles picking and editing operations (brush, applying voxel edits).
-  - Not involved in render pipeline logic; used by App for events/picking.
+- Picking/edit integration (`mod_voxelrt_client.go`, `rt/core/scene.go`)
+  - `VoxelRtState` provides screen-ray, raycast, and voxel sphere edit helpers.
+  - `Scene.Raycast` performs renderer-side object/voxel hit tests.
 
 ## Frame Lifecycle
 
-Flow (voxelRtSystem in gekko/mod_vox_rt.go):
+Flow (`voxelRtSystem` in `gekko/mod_voxelrt_client_systems.go`):
 1) ECS sync:
    - Add/remove/transform voxel objects → rtApp.Scene.
    - Update Camera from CameraComponent.
    - Gather Text items (HUD/debug).
    - CPU-simulate particles and CA-bridge and upload instances via BufferManager.UpdateParticles.
 
-2) rtApp.Update() (rt/app/app.go)
+2) rtApp.Update() (`rt/app/app_frame.go`)
    - Computes matrices (view, proj, inv) and writes camera uniforms.
    - Commits scene changes and updates buffers; may recreate bind groups if buffers reallocated.
    - Ensures G-Buffer, Lighting, Shadow, Particles, Transparent Overlay group bindings are valid.
@@ -115,7 +115,7 @@ Notes
 
 ## Bind Group Layouts (key ones)
 
-- Deferred Lighting (rt/app/app.go)
+- Deferred Lighting (`rt/app/app_pipelines.go`)
   - BGL0 (camera+lights):
     - binding(0): CameraData (uniform)
     - binding(1): Lights buffer (read-only storage)
@@ -129,7 +129,7 @@ Notes
   - BGL2 (materials/sectors):
     - binding(3): Materials/sector buffer (read-only storage)
 
-- Transparent Overlay (rt/app/app.go::setupTransparentOverlayPipeline)
+- Transparent Overlay (`rt/app/app_pipelines.go::setupTransparentOverlayPipeline`)
   - BGL0 (fragment):
     - binding(0): CameraData (uniform)
     - binding(1): Instances buffer (read-only storage)
@@ -141,14 +141,14 @@ Notes
     - binding(0): GBuffer Depth (RGBA32F, sampled unfilterable)
     - binding(1): GBuffer Material (RGBA32F, sampled unfilterable)
 
-- Particles (rt/app/app.go::setupParticlesPipeline)
+- Particles (`rt/app/app_pipelines.go::setupParticlesPipeline`)
   - BGL0:
     - binding(0): CameraData (uniform, VS/FS visibility)
     - binding(1): Instances buffer (read-only storage, VS)
   - BGL1:
     - binding(0): GBuffer depth (RGBA32F, sampled unfilterable)
 
-- Resolve Transparency (rt/app/app.go::setupResolvePipeline)
+- Resolve Transparency (`rt/app/app_pipelines.go::setupResolvePipeline`)
   - BGL0:
     - binding(0): Opaque lit color (StorageTexture view sampled as float RGBA8)
     - binding(1): Transparent accum (RGBA16F, unfilterable float)

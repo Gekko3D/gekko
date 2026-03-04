@@ -4,27 +4,6 @@ import (
 	"math"
 )
 
-type VoxelFileAsset struct {
-	VoxFile *VoxFile
-}
-
-type VoxelModelAsset struct {
-	VoxModel   VoxModel
-	BrickSize  [3]uint32
-	SourcePath string
-}
-
-type VoxelPaletteAsset struct {
-	VoxPalette VoxPalette
-	Materials  []VoxMaterial
-	IsPBR      bool
-	Roughness  float32
-	Metalness  float32
-	Emission   float32
-	IOR        float32
-	SourcePath string
-}
-
 func createVolumeTexels(voxModel *VoxModel, palette *VoxPalette) []uint8 {
 	volume := make([]uint8, voxModel.SizeX*voxModel.SizeY*voxModel.SizeZ*4)
 	for _, v := range voxModel.Voxels {

@@ -1,15 +1,14 @@
 package gekko
 
 import (
-	"encoding/binary"
 	"fmt"
-	"hash/fnv"
 	"reflect"
-	"slices"
 	"sync"
+
+	rooteecs "github.com/gekko3d/gekko/ecs"
 )
 
-type EntityId uint64
+type EntityId = rooteecs.EntityID
 type archetypeId uint64
 type archetypeKey []componentId
 type componentId uint32
@@ -17,7 +16,15 @@ type typedStorage any
 type row int
 type set[T comparable] = map[T]struct{}
 
+type ecsStorage struct {
+	archetypes  map[archetypeId]*archetype
+	entityIndex map[EntityId]archetypeId
+}
+
 type Ecs struct {
+	storage *ecsStorage
+
+	// Compatibility mirrors (same underlying maps as storage).
 	archetypes  map[archetypeId]*archetype
 	entityIndex map[EntityId]archetypeId
 
@@ -31,9 +38,17 @@ type Ecs struct {
 }
 
 func MakeEcs() Ecs {
-	return Ecs{
+	storage := &ecsStorage{
 		archetypes:  make(map[archetypeId]*archetype),
 		entityIndex: make(map[EntityId]archetypeId),
+	}
+
+	return Ecs{
+		storage: storage,
+
+		// Compatibility mirrors
+		archetypes:  storage.archetypes,
+		entityIndex: storage.entityIndex,
 		//idGeneratorLock: make(sync.Mutex),
 		entityIdCounter: EntityId(0),
 		//componentIdCounterLock: make(sync.Mutex),
@@ -65,7 +80,7 @@ func (ecs *Ecs) insertEntity(entityId EntityId, components ...any) EntityId {
 		ecs.writeComponent(arch, row, component)
 	}
 
-	ecs.entityIndex[entityId] = archId
+	ecs.storage.entityIndex[entityId] = archId
 
 	return entityId
 }
@@ -75,8 +90,8 @@ func (ecs *Ecs) removeEntity(entityId EntityId) {
 }
 
 func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
-	srcArchId := ecs.entityIndex[entityId]
-	srcArch := ecs.archetypes[srcArchId]
+	srcArchId := ecs.storage.entityIndex[entityId]
+	srcArch := ecs.storage.archetypes[srcArchId]
 	srcRow := srcArch.entities[entityId]
 
 	dstArchId, _, dstArch := ecs.archetypeFromExtraComponents(srcArch, components...)
@@ -90,12 +105,12 @@ func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
 	ecs.recycleEntity(entityId)
 
 	dstArch.entities[entityId] = dstRow
-	ecs.entityIndex[entityId] = dstArchId
+	ecs.storage.entityIndex[entityId] = dstArchId
 }
 
 func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
-	srcArchId := ecs.entityIndex[entityId]
-	srcArch := ecs.archetypes[srcArchId]
+	srcArchId := ecs.storage.entityIndex[entityId]
+	srcArch := ecs.storage.archetypes[srcArchId]
 	srcRow := srcArch.entities[entityId]
 
 	// Find the subset of components to keep
@@ -122,7 +137,7 @@ func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
 	ecs.recycleEntity(entityId)
 
 	dstArch.entities[entityId] = dstRow
-	ecs.entityIndex[entityId] = dstArchId
+	ecs.storage.entityIndex[entityId] = dstArchId
 }
 
 func (ecs *Ecs) moveComponents(srcArch *archetype, srcRow row, dstArch *archetype, dstRow row) {
@@ -158,14 +173,14 @@ func (ecs *Ecs) writeComponent(dstArch *archetype, dstRow row, component any) {
 }
 
 func (ecs *Ecs) recycleEntity(entityId EntityId) {
-	archId := ecs.entityIndex[entityId]
-	arch := ecs.archetypes[archId]
+	archId := ecs.storage.entityIndex[entityId]
+	arch := ecs.storage.archetypes[archId]
 
 	row := arch.entities[entityId]
 	arch.recycled = append(arch.recycled, row)
 
 	delete(arch.entities, entityId)
-	delete(ecs.entityIndex, entityId)
+	delete(ecs.storage.entityIndex, entityId)
 }
 
 func (ecs *Ecs) archetypeFromComponents(components ...any) (archetypeId, archetypeKey, *archetype) {
@@ -187,7 +202,7 @@ func (ecs *Ecs) archetypeFromExtraComponents(srcArch *archetype, components ...a
 func (ecs *Ecs) getOrMakeArchetype(key archetypeKey) (archetypeId, *archetype) {
 	id := getArchetypeId(key)
 
-	if arch, ok := ecs.archetypes[id]; ok {
+	if arch, ok := ecs.storage.archetypes[id]; ok {
 		return id, arch
 	}
 
@@ -204,7 +219,7 @@ func (ecs *Ecs) getOrMakeArchetype(key archetypeKey) (archetypeId, *archetype) {
 		)
 	}
 
-	ecs.archetypes[id] = arch
+	ecs.storage.archetypes[id] = arch
 	return id, arch
 }
 
@@ -248,33 +263,41 @@ func (ecs *Ecs) getArchetypeKey(components ...any) archetypeKey {
 }
 
 func combineArchetypeKeys(a archetypeKey, b archetypeKey) archetypeKey {
-	return dedupAndSortArchetypeKey(append(a, b...))
+	aa := make([]uint32, len(a))
+	for i, v := range a {
+		aa[i] = uint32(v)
+	}
+	bb := make([]uint32, len(b))
+	for i, v := range b {
+		bb[i] = uint32(v)
+	}
+	cc := rooteecs.CombineKeys(aa, bb)
+	res := make(archetypeKey, len(cc))
+	for i, v := range cc {
+		res[i] = componentId(v)
+	}
+	return res
 }
 
 func dedupAndSortArchetypeKey(key archetypeKey) archetypeKey {
-	dedup := make(set[componentId])
-
-	for _, v := range key {
-		dedup[v] = struct{}{}
+	kk := make([]uint32, len(key))
+	for i, v := range key {
+		kk[i] = uint32(v)
 	}
-
-	res := make(archetypeKey, 0, len(dedup))
-	for k, _ := range dedup {
-		res = append(res, k)
+	canonical := rooteecs.CanonicalizeKey(kk)
+	res := make(archetypeKey, len(canonical))
+	for i, v := range canonical {
+		res[i] = componentId(v)
 	}
-
-	slices.Sort(res)
 	return res
 }
 
 func getArchetypeId(key archetypeKey) archetypeId {
-	hash := fnv.New64a()
-	for _, componentId := range key {
-		b := make([]byte, 8)
-		binary.LittleEndian.PutUint64(b, uint64(componentId))
-		hash.Write(b)
+	kk := make([]uint32, len(key))
+	for i, v := range key {
+		kk[i] = uint32(v)
 	}
-	return archetypeId(hash.Sum64())
+	return archetypeId(rooteecs.ArchetypeID(kk))
 }
 
 func (ecs *Ecs) nextEntityId() EntityId {
@@ -309,4 +332,25 @@ func (ecs *Ecs) getComponentType(componentId componentId) reflect.Type {
 		return t
 	}
 	panic("ComponentID not registered")
+}
+
+func (ecs *Ecs) getAllComponents(entityId EntityId) []any {
+	archID := ecs.storage.entityIndex[entityId]
+	arch := ecs.storage.archetypes[archID]
+	r := arch.entities[entityId]
+
+	res := make([]any, 0, len(arch.componentData))
+	for _, componentsSlice := range arch.componentData {
+		val := reflectSliceGet(componentsSlice, int(r))
+		res = append(res, val.Interface())
+	}
+	return res
+}
+
+func (ecs *Ecs) archetypeViews() []rooteecs.ArchetypeView {
+	res := make([]rooteecs.ArchetypeView, 0, len(ecs.storage.archetypes))
+	for _, arch := range ecs.storage.archetypes {
+		res = append(res, rootArchetypeView{arch: arch})
+	}
+	return res
 }

@@ -42,16 +42,5 @@ func (cmd *Commands) RemoveEntity(entityId EntityId) {
 }
 
 func (cmd *Commands) GetAllComponents(entityId EntityId) []any {
-	ecs := cmd.app.ecs
-	archId := ecs.entityIndex[entityId]
-	arch := ecs.archetypes[archId]
-
-	row := arch.entities[entityId]
-
-	var res []any
-	for _, componentsSlice := range arch.componentData {
-		val := reflectSliceGet(componentsSlice, int(row))
-		res = append(res, val.Interface())
-	}
-	return res
+	return cmd.app.ecs.getAllComponents(entityId)
 }

@@ -6,45 +6,17 @@ import (
 	"os"
 )
 
-type MeshAsset struct {
-	version  uint
-	vertices AnySlice
-	indices  []uint16
-}
-
-type MaterialAsset struct {
-	version       uint
-	shaderName    string
-	shaderListing string
-	vertexType    any
-}
-
-type TextureAsset struct {
-	version   uint
-	texels    []uint8
-	width     uint32
-	height    uint32
-	depth     uint32
-	dimension TextureDimension
-	format    TextureFormat
-}
-
-type SamplerAsset struct {
-	version uint
-	assetId AssetId
-}
-
 func (server AssetServer) CreateMesh(vertices AnySlice, indexes []uint16) Mesh {
 	id := makeAssetId()
 
 	server.meshes[id] = MeshAsset{
-		0,
-		vertices,
-		indexes,
+		Version:  0,
+		Vertices: vertices,
+		Indices:  indexes,
 	}
 
 	return Mesh{
-		assetId: id,
+		ID: id,
 	}
 }
 
@@ -57,14 +29,14 @@ func (server AssetServer) CreateMaterial(filename string, vertexType any) Materi
 	id := makeAssetId()
 
 	server.materials[id] = MaterialAsset{
-		version:       0,
-		shaderName:    filename,
-		shaderListing: string(shaderData),
-		vertexType:    vertexType,
+		Version:       0,
+		ShaderName:    filename,
+		ShaderListing: string(shaderData),
+		VertexType:    vertexType,
 	}
 
 	return Material{
-		assetId: id,
+		ID: id,
 	}
 }
 
@@ -72,13 +44,13 @@ func (server AssetServer) CreateTextureFromTexels(texels []uint8, texWidth uint3
 	id := makeAssetId()
 
 	server.textures[id] = TextureAsset{
-		version:   0,
-		texels:    texels,
-		width:     texWidth,
-		height:    texHeight,
-		depth:     texDepth,
-		dimension: dimension,
-		format:    format,
+		Version:   0,
+		Texels:    texels,
+		Width:     texWidth,
+		Height:    texHeight,
+		Depth:     texDepth,
+		Dimension: dimension,
+		Format:    format,
 	}
 
 	return id
@@ -114,13 +86,13 @@ func (server AssetServer) CreateTexture(filename string) AssetId {
 	}
 
 	server.textures[id] = TextureAsset{
-		version:   0,
-		texels:    rgbaImg.Pix,
-		width:     uint32(bounds.Max.X - bounds.Min.X),
-		height:    uint32(bounds.Max.Y - bounds.Min.Y),
-		depth:     1,
-		dimension: TextureDimension2D,
-		format:    TextureFormatRGBA8Unorm,
+		Version:   0,
+		Texels:    rgbaImg.Pix,
+		Width:     uint32(bounds.Max.X - bounds.Min.X),
+		Height:    uint32(bounds.Max.Y - bounds.Min.Y),
+		Depth:     1,
+		Dimension: TextureDimension2D,
+		Format:    TextureFormatRGBA8Unorm,
 	}
 
 	return id
@@ -130,8 +102,8 @@ func (server AssetServer) CreateSampler() AssetId {
 	id := makeAssetId()
 
 	server.samplers[id] = SamplerAsset{
-		version: 0,
-		assetId: id,
+		Version: 0,
+		AssetID: id,
 	}
 
 	return id

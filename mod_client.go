@@ -189,20 +189,20 @@ func createRenderState() *renderState {
 func loadMaterials(cmd *Commands, assets *AssetServer, rState *renderState, gpuState *GpuState) {
 	MakeQuery2[Material, wgpuMaterial](cmd).Map(
 		func(entityId EntityId, material *Material, gpuMaterial *wgpuMaterial) bool {
-			asset := assets.materials[material.assetId]
-			pipeline, contains := rState.materialPipelines[material.assetId]
+			asset := assets.materials[material.ID]
+			pipeline, contains := rState.materialPipelines[material.ID]
 			if !contains {
-				pipeline = createRenderPipeline(asset.shaderName, asset.shaderListing, asset.vertexType, gpuState)
-				rState.materialPipelines[material.assetId] = pipeline
+				pipeline = createRenderPipeline(asset.ShaderName, asset.ShaderListing, asset.VertexType, gpuState)
+				rState.materialPipelines[material.ID] = pipeline
 			}
 			if nil == gpuMaterial {
 				mt := wgpuMaterial{
-					id:       material.assetId,
-					version:  asset.version,
+					id:       material.ID,
+					version:  asset.Version,
 					pipeline: pipeline,
 				}
 				cmd.AddComponents(entityId, mt)
-			} else if asset.version > gpuMaterial.version {
+			} else if asset.Version > gpuMaterial.version {
 				// WGPU material is out of date - needs updating
 				// TODO implement
 			}
@@ -213,17 +213,17 @@ func loadMaterials(cmd *Commands, assets *AssetServer, rState *renderState, gpuS
 func loadMeshes(cmd *Commands, assets *AssetServer, gpuState *GpuState) {
 	MakeQuery2[Mesh, wgpuMesh](cmd).Map(
 		func(entityId EntityId, mesh *Mesh, gpuMesh *wgpuMesh) bool {
-			asset := assets.meshes[mesh.assetId]
+			asset := assets.meshes[mesh.ID]
 			if nil == gpuMesh {
-				vertexBuf, indexBuf := createVertexIndexBuffers(asset.vertices, asset.indices, gpuState.device)
+				vertexBuf, indexBuf := createVertexIndexBuffers(asset.Vertices, asset.Indices, gpuState.device)
 				cmd.AddComponents(entityId, wgpuMesh{
-					id:           mesh.assetId,
-					version:      asset.version,
+					id:           mesh.ID,
+					version:      asset.Version,
 					vertexBuffer: vertexBuf,
 					indexBuffer:  indexBuf,
-					vertexCount:  uint32(len(asset.indices)),
+					vertexCount:  uint32(len(asset.Indices)),
 				})
-			} else if asset.version > gpuMesh.version {
+			} else if asset.Version > gpuMesh.version {
 				// WGPU mesh is out of date - needs updating
 				// TODO implement
 			}

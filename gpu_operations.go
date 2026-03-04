@@ -162,16 +162,16 @@ func createVertexIndexBuffers(vertices AnySlice, indices []uint16, device *wgpu.
 
 func createTextureFromAsset(txAsset *TextureAsset, gpuState *GpuState) *wgpu.TextureView {
 	textureExtent := wgpu.Extent3D{
-		Width:              txAsset.width,
-		Height:             txAsset.height,
-		DepthOrArrayLayers: txAsset.depth,
+		Width:              txAsset.Width,
+		Height:             txAsset.Height,
+		DepthOrArrayLayers: txAsset.Depth,
 	}
 	texture, err := gpuState.device.CreateTexture(&wgpu.TextureDescriptor{
 		Size:          textureExtent,
 		MipLevelCount: 1,
 		SampleCount:   1,
-		Dimension:     wgpu.TextureDimension(txAsset.dimension),
-		Format:        wgpu.TextureFormat(txAsset.format),
+		Dimension:     wgpu.TextureDimension(txAsset.Dimension),
+		Format:        wgpu.TextureFormat(txAsset.Format),
 		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
 	})
 	if err != nil {
@@ -186,11 +186,11 @@ func createTextureFromAsset(txAsset *TextureAsset, gpuState *GpuState) *wgpu.Tex
 
 	err = gpuState.queue.WriteTexture(
 		texture.AsImageCopy(),
-		wgpu.ToBytes(txAsset.texels),
+		wgpu.ToBytes(txAsset.Texels),
 		&wgpu.TextureDataLayout{
 			Offset:       0,
-			BytesPerRow:  txAsset.width * uint32(wgpuBytesPerPixel(wgpu.TextureFormat(txAsset.format))),
-			RowsPerImage: txAsset.height,
+			BytesPerRow:  txAsset.Width * uint32(wgpuBytesPerPixel(wgpu.TextureFormat(txAsset.Format))),
+			RowsPerImage: txAsset.Height,
 		},
 		&textureExtent,
 	)

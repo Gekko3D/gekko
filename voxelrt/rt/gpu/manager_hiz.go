@@ -277,7 +277,7 @@ func (m *GpuBufferManager) DispatchHiZ(encoder *wgpu.CommandEncoder, sourceDepth
 		&wgpu.ImageCopyTexture{
 			Texture:  m.HiZTexture,
 			MipLevel: level,
-			Origin:   wgpu.Origin3D{0, 0, 0},
+			Origin:   wgpu.Origin3D{X: 0, Y: 0, Z: 0},
 		},
 		&wgpu.ImageCopyBuffer{
 			Buffer: m.ReadbackBuffer,
