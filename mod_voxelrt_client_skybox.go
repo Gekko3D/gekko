@@ -89,6 +89,7 @@ func (s *VoxelRtState) rebuildSkybox() {
 			Octaves:     int32(l.Octaves),
 			BlendMode:   uint32(l.BlendMode),
 			Invert:      invert,
+			LayerType:   uint32(l.LayerType),
 		})
 	}
 

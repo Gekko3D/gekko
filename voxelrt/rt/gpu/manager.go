@@ -30,7 +30,7 @@ type GpuSkyboxLayer struct {
 	Octaves     int32
 	BlendMode   uint32
 	Invert      uint32
-	Pad1        uint32
+	LayerType   uint32
 	Pad2        uint32
 }
 

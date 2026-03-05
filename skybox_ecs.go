@@ -12,6 +12,13 @@ const (
 )
 
 type SkyboxBlendMode uint32
+type SkyboxLayerType uint32
+
+const (
+	SkyboxLayerNoise SkyboxLayerType = iota
+	SkyboxLayerStars
+	SkyboxLayerNebula
+)
 
 const (
 	SkyboxBlendAlpha SkyboxBlendMode = iota
@@ -20,6 +27,9 @@ const (
 )
 
 type SkyboxLayerComponent struct {
+	// Layer type
+	LayerType SkyboxLayerType
+
 	// Noise type
 	NoiseType SkyboxNoiseType
 
