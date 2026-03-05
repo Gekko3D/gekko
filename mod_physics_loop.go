@@ -2,6 +2,8 @@ package gekko
 
 import (
 	"math"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -59,182 +61,260 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			}
 		}
 
-		if len(internalBodies) == 0 {
-			continue
+		// Prepare parallel workers
+		numWorkers := world.Threads
+		if numWorkers <= 0 {
+			numWorkers = runtime.NumCPU()
 		}
 
-		dt := float32(1.0 / world.UpdateFrequency) // Fixed DT for stability
+		// Convert map to slice for parallel processing
+		bodiesList := make([]*internalBody, 0, len(internalBodies))
+		for _, b := range internalBodies {
+			bodiesList = append(bodiesList, b)
+		}
+
+		dt := float32(1.0 / world.UpdateFrequency)
 		gravity := world.Gravity
 
-		// Simulate
-		var bodies []*internalBody
-		for _, b := range internalBodies {
-			b.updateAABB()
-			bodies = append(bodies, b)
+		// 1. Parallel Integration
+		var wg sync.WaitGroup
+		chunkSize := (len(bodiesList) + numWorkers - 1) / numWorkers
+		for i := 0; i < numWorkers; i++ {
+			start := i * chunkSize
+			end := start + chunkSize
+			if start >= len(bodiesList) {
+				break
+			}
+			if end > len(bodiesList) {
+				end = len(bodiesList)
+			}
+
+			wg.Add(1)
+			go func(bodies []*internalBody) {
+				defer wg.Done()
+				for _, b := range bodies {
+					if b.isStatic || b.sleeping {
+						continue
+					}
+
+					// Apply Gravity
+					if b.gravityScale != 0 {
+						b.vel = b.vel.Add(gravity.Mul(b.gravityScale * dt))
+					}
+
+					// Damping
+					lDamp := float32(0.999)
+					if b.linearDamping > 0 {
+						lDamp = b.linearDamping
+					}
+					aDamp := float32(0.99)
+					if b.angularDamping > 0 {
+						aDamp = b.angularDamping
+					}
+					b.vel = b.vel.Mul(lDamp)
+					b.angVel = b.angVel.Mul(aDamp)
+
+					// Integrate
+					b.pos = b.pos.Add(b.vel.Mul(dt))
+					if b.angVel.Len() > 0 {
+						angVelQuat := mgl32.Quat{W: 0, V: b.angVel.Mul(0.5 * dt)}
+						b.rot = b.rot.Add(angVelQuat.Mul(b.rot))
+						b.rot = b.rot.Normalize()
+					}
+					b.updateAABB()
+				}
+			}(bodiesList[start:end])
 		}
+		wg.Wait()
 
-		for _, b := range bodies {
-			if b.isStatic || b.sleeping {
-				continue
-			}
-
-			// Apply Gravity
-			if b.gravityScale != 0 {
-				b.vel = b.vel.Add(gravity.Mul(b.gravityScale * dt))
-			}
-
-			// Apply Damping (per-body or light default)
-			lDamp := float32(0.999)
-			if b.linearDamping > 0 {
-				lDamp = b.linearDamping
-			}
-			aDamp := float32(0.99)
-			if b.angularDamping > 0 {
-				aDamp = b.angularDamping
-			}
-
-			b.vel = b.vel.Mul(lDamp)
-			b.angVel = b.angVel.Mul(aDamp)
-
-			// Integrate linear
-			oldPos := b.pos
-			b.pos = b.pos.Add(b.vel.Mul(dt))
-
-			// Integrate angular
-			if b.angVel.Len() > 0 {
-				angVelQuat := mgl32.Quat{W: 0, V: b.angVel.Mul(0.5 * dt)}
-				b.rot = b.rot.Add(angVelQuat.Mul(b.rot))
-				b.rot = b.rot.Normalize()
+		// Broad-phase: Update spatial grid AFTER integration
+		grid := NewSpatialHashGrid(10.0) // 10 units cell size
+		for _, b := range bodiesList {
+			// updateAABB was already called in integration for dynamic bodies,
+			// but static bodies need it called once or preserved.
+			if b.isStatic {
 				b.updateAABB()
 			}
+			grid.Insert(b.Eid, AABBComponent{Min: b.aabbMin, Max: b.aabbMax})
+		}
 
-			// Check and resolve collisions
-			for _, other := range bodies {
-				if b.Eid == other.Eid {
-					continue
-				}
+		// 2. Parallel Collision Detection (Narrow-phase)
+		type collisionManifold struct {
+			bodyA, bodyB *internalBody
+			normal       mgl32.Vec3
+			penetration  float32
+			point        mgl32.Vec3
+		}
+		var manifolds []collisionManifold
+		var manifoldMu sync.Mutex
 
-				// Broad-phase: Body-Body AABB
-				if b.aabbMin.X() > other.aabbMax.X() || b.aabbMax.X() < other.aabbMin.X() ||
-					b.aabbMin.Y() > other.aabbMax.Y() || b.aabbMax.Y() < other.aabbMin.Y() ||
-					b.aabbMin.Z() > other.aabbMax.Z() || b.aabbMax.Z() < other.aabbMin.Z() {
-					continue
-				}
+		for i := 0; i < numWorkers; i++ {
+			start := i * chunkSize
+			end := start + chunkSize
+			if start >= len(bodiesList) {
+				break
+			}
+			if end > len(bodiesList) {
+				end = len(bodiesList)
+			}
 
-				for _, boxA := range b.boxes {
-					for _, boxB := range other.boxes {
-						// Box-Box AABB check using pre-calculated bounds
-						if boxA.Min.X() > boxB.Max.X() || boxA.Max.X() < boxB.Min.X() ||
-							boxA.Min.Y() > boxB.Max.Y() || boxA.Max.Y() < boxB.Min.Y() ||
-							boxA.Min.Z() > boxB.Max.Z() || boxA.Max.Z() < boxB.Min.Z() {
+			wg.Add(1)
+			go func(bodies []*internalBody) {
+				defer wg.Done()
+				for _, b := range bodies {
+					// Only dynamic bodies initiate collision checks
+					if b.isStatic || b.sleeping {
+						continue
+					}
+
+					// Query spatial grid for candidates
+					candidates := grid.QueryAABB(AABBComponent{Min: b.aabbMin, Max: b.aabbMax})
+					for _, otherEid := range candidates {
+						if otherEid == b.Eid {
 							continue
 						}
 
-						if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box); collision {
-							// Static resolution: push out of collision
-							// Use a small slop to avoid jittering
-							slop := float32(0.02)
-							if penetration > slop {
-								b.pos = b.pos.Add(normal.Mul(penetration - slop))
-							}
+						other := internalBodies[otherEid]
+						if other == nil {
+							continue
+						}
 
-							// Relative velocity at contact point
-							rA := contactPoint.Sub(b.pos)
-							rB := contactPoint.Sub(other.pos)
+						// Ensure we only check each pair once.
+						// If both are dynamic, only process if b.Eid < other.Eid.
+						// If other is static, always process (since static won't initiate checks).
+						if !other.isStatic && b.Eid > other.Eid {
+							continue
+						}
 
-							vA := b.vel.Add(b.angVel.Cross(rA))
-							vB := other.vel
-							if !other.isStatic {
-								vB = other.vel.Add(other.angVel.Cross(rB))
-							}
-
-							relativeVel := vA.Sub(vB)
-							velAlongNormal := relativeVel.Dot(normal)
-
-							// Do not resolve if velocities are separating
-							if velAlongNormal > 0 {
-								continue
-							}
-
-							restitution := (b.restitution + other.restitution) * 0.5
-							// If velocity is low, disable restitution to help settling
-							if velAlongNormal > -0.5 {
-								restitution = 0
-							}
-
-							inertiaA := calculateInertia(b)
-
-							denom := 1.0 / b.mass
-							rAn := rA.Cross(normal)
-							denom += rAn.Dot(rAn) / inertiaA
-
-							if !other.isStatic && other.mass > 0 {
-								inertiaB := calculateInertia(other)
-								denom += 1.0 / other.mass
-								rBn := rB.Cross(normal)
-								denom += rBn.Dot(rBn) / inertiaB
-							}
-
-							j := -(1 + restitution) * velAlongNormal
-							j /= denom
-
-							impulse := normal.Mul(j)
-
-							// Apply linear impulse
-							b.vel = b.vel.Add(impulse.Mul(1.0 / b.mass))
-
-							// Apply angular impulse
-							b.angVel = b.angVel.Add(rA.Cross(impulse).Mul(1.0 / inertiaA))
-
-							if !other.isStatic && other.mass > 0 {
-								inertiaB := calculateInertia(other)
-								other.vel = other.vel.Sub(impulse.Mul(1.0 / other.mass))
-								other.angVel = other.angVel.Sub(rB.Cross(impulse).Mul(1.0 / inertiaB))
-							}
-
-							// Friction
-							friction := (b.friction + other.friction) * 0.5
-							tangent := relativeVel.Sub(normal.Mul(relativeVel.Dot(normal)))
-							if tangent.Len() > 0.0001 {
-								tangent = tangent.Normalize()
-								jt := -relativeVel.Dot(tangent) * friction
-								jt /= denom // Approximate denominator for friction
-
-								fImpulse := tangent.Mul(jt)
-								b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
-								b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
-							}
-
-							// Stabilization: if velocity is very low after resolution, zero it
-							if b.vel.Len() < 0.01 {
-								b.vel = mgl32.Vec3{0, 0, 0}
-							}
-							if b.angVel.Len() < 0.01 {
-								b.angVel = mgl32.Vec3{0, 0, 0}
-							}
-
-							// Only wake if we have significant relative velocity
-							if math.Abs(float64(velAlongNormal)) > 0.1 {
-								b.Wake()
+						// Narrow-phase
+						for _, boxA := range b.boxes {
+							for _, boxB := range other.boxes {
+								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box); collision {
+									manifoldMu.Lock()
+									manifolds = append(manifolds, collisionManifold{
+										bodyA:       b,
+										bodyB:       other,
+										normal:      normal,
+										penetration: penetration,
+										point:       contactPoint,
+									})
+									manifoldMu.Unlock()
+								}
 							}
 						}
 					}
 				}
-			}
+			}(bodiesList[start:end])
+		}
+		wg.Wait()
 
-			// Sleeping logic
-			if b.vel.Len() < world.SleepThreshold && b.angVel.Len() < world.SleepThreshold {
-				b.idleTime += dt
-				if b.idleTime > world.SleepTime {
-					b.sleeping = true
-					b.vel = mgl32.Vec3{0, 0, 0}
-					b.angVel = mgl32.Vec3{0, 0, 0}
+		// 3. Sequential Resolution
+		for _, m := range manifolds {
+			b := m.bodyA
+			other := m.bodyB
+
+			slop := float32(0.02)
+			if m.penetration > slop {
+				// Push out (simple)
+				if !b.isStatic {
+					b.pos = b.pos.Add(m.normal.Mul(m.penetration - slop))
 				}
-			} else {
-				b.idleTime = 0
 			}
 
-			_ = oldPos // To prevent unused variable error if I don't use it elsewhere
+			rA := m.point.Sub(b.pos)
+			rB := m.point.Sub(other.pos)
+
+			vA := b.vel.Add(b.angVel.Cross(rA))
+			vB := other.vel
+			if !other.isStatic {
+				vB = other.vel.Add(other.angVel.Cross(rB))
+			}
+
+			relativeVel := vA.Sub(vB)
+			velAlongNormal := relativeVel.Dot(m.normal)
+
+			// Do not resolve if velocities are separating
+			if velAlongNormal > 0 {
+				continue
+			}
+
+			restitution := (b.restitution + other.restitution) * 0.5
+			// If velocity is low, disable restitution to help settling
+			if velAlongNormal > -0.5 {
+				restitution = 0
+			}
+
+			inertiaA := calculateInertia(b)
+
+			denom := 1.0 / b.mass
+			rAn := rA.Cross(m.normal)
+			denom += rAn.Dot(rAn) / inertiaA
+
+			if !other.isStatic && other.mass > 0 {
+				inertiaB := calculateInertia(other)
+				denom += 1.0 / other.mass
+				rBn := rB.Cross(m.normal)
+				denom += rBn.Dot(rBn) / inertiaB
+			}
+
+			j := -(1 + restitution) * velAlongNormal
+			j /= denom
+
+			impulse := m.normal.Mul(j)
+
+			// Apply linear impulse
+			b.vel = b.vel.Add(impulse.Mul(1.0 / b.mass))
+
+			// Apply angular impulse
+			b.angVel = b.angVel.Add(rA.Cross(impulse).Mul(1.0 / inertiaA))
+
+			if !other.isStatic && other.mass > 0 {
+				inertiaB := calculateInertia(other)
+				other.vel = other.vel.Sub(impulse.Mul(1.0 / other.mass))
+				other.angVel = other.angVel.Sub(rB.Cross(impulse).Mul(1.0 / inertiaB))
+			}
+
+			// Friction
+			friction := (b.friction + other.friction) * 0.5
+			tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
+			if tangent.Len() > 0.0001 {
+				tangent = tangent.Normalize()
+				jt := -relativeVel.Dot(tangent) * friction
+				jt /= denom // Approximate denominator for friction
+
+				fImpulse := tangent.Mul(jt)
+				b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
+				b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
+			}
+
+			// Stabilization: if velocity is very low after resolution, zero it
+			if b.vel.Len() < 0.01 {
+				b.vel = mgl32.Vec3{0, 0, 0}
+			}
+			if b.angVel.Len() < 0.01 {
+				b.angVel = mgl32.Vec3{0, 0, 0}
+			}
+
+			// Only wake if we have significant relative velocity
+			if math.Abs(float64(velAlongNormal)) > 0.1 {
+				b.Wake()
+			}
+		}
+
+		// 4. Sleeping and Results
+		for _, b := range internalBodies {
+			if !b.isStatic && !b.sleeping {
+				if b.vel.Len() < world.SleepThreshold && b.angVel.Len() < world.SleepThreshold {
+					b.idleTime += dt
+					if b.idleTime > world.SleepTime {
+						b.sleeping = true
+						b.vel = mgl32.Vec3{0, 0, 0}
+						b.angVel = mgl32.Vec3{0, 0, 0}
+					}
+				} else {
+					b.idleTime = 0
+				}
+			}
 		}
 
 		// Push results

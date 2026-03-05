@@ -7,6 +7,7 @@ type PhysicsWorld struct {
 	VoxelSize       float32
 	SleepThreshold  float32
 	SleepTime       float32
+	Threads         int
 	UpdateFrequency float32 // Hz
 }
 

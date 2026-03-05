@@ -109,7 +109,7 @@ func DecomposeVoxModel(model VoxModel) []CollisionBox {
 }
 
 func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer) {
-	MakeQuery2[VoxelModelComponent, RigidBodyComponent](cmd).Map(func(eid EntityId, vmc *VoxelModelComponent, rb *RigidBodyComponent) bool {
+	MakeQuery3[VoxelModelComponent, RigidBodyComponent, TransformComponent](cmd).Map(func(eid EntityId, vmc *VoxelModelComponent, rb *RigidBodyComponent, tr *TransformComponent) bool {
 		// Check if PhysicsModel already exists
 		found := false
 		allComps := cmd.GetAllComponents(eid)
@@ -129,13 +129,23 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer) {
 		if vmc.CustomMap != nil {
 			// Fallback for custom maps
 			boxes = []CollisionBox{{
-				HalfExtents: mgl32.Vec3{0.5, 0.5, 0.5},
-				LocalOffset: mgl32.Vec3{0.5, 0.5, 0.5},
+				HalfExtents: mgl32.Vec3{0.5, 0.5, 0.5}.Mul(tr.Scale.X()),
+				LocalOffset: mgl32.Vec3{0.5, 0.5, 0.5}.Mul(tr.Scale.X()),
 			}}
 			initialized = true
 		} else {
-			if asset, ok := server.voxModels[vmc.VoxelModel]; ok {
+			server.mu.RLock()
+			asset, ok := server.voxModels[vmc.VoxelModel]
+			server.mu.RUnlock()
+
+			if ok {
 				boxes = DecomposeVoxModel(asset.VoxModel)
+				// Apply scale from transform
+				scale := tr.Scale.X()
+				for i := range boxes {
+					boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
+					boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
+				}
 				initialized = len(boxes) > 0
 			}
 		}

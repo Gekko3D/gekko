@@ -9,12 +9,16 @@ import (
 
 type PhysicsModule struct {
 	UpdateFrequency float32
+	Threads         int
 }
 
 func (m PhysicsModule) Install(app *App, cmd *Commands) {
 	world := NewPhysicsWorld()
 	if m.UpdateFrequency > 0 {
 		world.UpdateFrequency = m.UpdateFrequency
+	}
+	if m.Threads > 0 {
+		world.Threads = m.Threads
 	}
 	cmd.AddResources(world)
 
