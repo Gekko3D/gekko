@@ -26,8 +26,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					body = &internalBody{Eid: es.Eid}
 					internalBodies[es.Eid] = body
 				}
-				body.pos = es.Pos
-				body.rot = es.Rot
+				if es.Teleport {
+					body.pos = es.Pos
+					body.rot = es.Rot
+				}
 				body.vel = es.Vel
 				body.angVel = es.AngVel
 				body.isStatic = es.IsStatic
@@ -35,8 +37,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				body.model = es.Model
 				body.friction = es.Friction
 				body.restitution = es.Restitution
-				body.idleTime = es.IdleTime
 				body.gravityScale = es.GravityScale
+				body.sleeping = es.Sleeping
+				body.linearDamping = es.LinearDamping
+				body.angularDamping = es.AngularDamping
 				// Store boxes
 				body.boxes = make([]InternalBox, len(es.Model.Boxes))
 				for i, box := range es.Model.Boxes {
@@ -79,9 +83,18 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				b.vel = b.vel.Add(gravity.Mul(b.gravityScale * dt))
 			}
 
-			// Apply Damping (more aggressive to reduce jitter)
-			b.vel = b.vel.Mul(0.98)
-			b.angVel = b.angVel.Mul(0.95)
+			// Apply Damping (per-body or light default)
+			lDamp := float32(0.999)
+			if b.linearDamping > 0 {
+				lDamp = b.linearDamping
+			}
+			aDamp := float32(0.99)
+			if b.angularDamping > 0 {
+				aDamp = b.angularDamping
+			}
+
+			b.vel = b.vel.Mul(lDamp)
+			b.angVel = b.angVel.Mul(aDamp)
 
 			// Integrate linear
 			oldPos := b.pos
@@ -252,22 +265,24 @@ type InternalBox struct {
 }
 
 type internalBody struct {
-	Eid          EntityId
-	pos          mgl32.Vec3
-	rot          mgl32.Quat
-	vel          mgl32.Vec3
-	angVel       mgl32.Vec3
-	isStatic     bool
-	mass         float32
-	model        PhysicsModel
-	boxes        []InternalBox
-	sleeping     bool
-	idleTime     float32
-	friction     float32
-	restitution  float32
-	gravityScale float32
-	aabbMin      mgl32.Vec3
-	aabbMax      mgl32.Vec3
+	Eid            EntityId
+	pos            mgl32.Vec3
+	rot            mgl32.Quat
+	vel            mgl32.Vec3
+	angVel         mgl32.Vec3
+	isStatic       bool
+	mass           float32
+	model          PhysicsModel
+	boxes          []InternalBox
+	sleeping       bool
+	idleTime       float32
+	friction       float32
+	restitution    float32
+	gravityScale   float32
+	linearDamping  float32
+	angularDamping float32
+	aabbMin        mgl32.Vec3
+	aabbMax        mgl32.Vec3
 }
 
 func (b *internalBody) updateAABB() {

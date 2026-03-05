@@ -11,11 +11,60 @@ import (
 //  2. Uncomment identifyComponentsN
 //  3. Copy MapN-1() and implement according to other Map() functions
 //  4. Implement Command's MakeQuery to make it available in the user code
-type Query1[A any] struct{ ecs *Ecs }
-type Query2[A, B any] struct{ ecs *Ecs }
-type Query3[A, B, C any] struct{ ecs *Ecs }
-type Query4[A, B, C, D any] struct{ ecs *Ecs }
-type Query5[A, B, C, D, E any] struct{ ecs *Ecs }
+type Query1[A any] struct {
+	ecs      *Ecs
+	excludes []any
+}
+
+func (q Query1[A]) Without(excludes ...any) Query1[A] {
+	q.excludes = append(q.excludes, excludes...)
+	return q
+}
+
+type Query2[A, B any] struct {
+	ecs      *Ecs
+	excludes []any
+}
+
+func (q Query2[A, B]) Without(excludes ...any) Query2[A, B] {
+	q.excludes = append(q.excludes, excludes...)
+	return q
+}
+
+type Query3[A, B, C any] struct {
+	ecs      *Ecs
+	excludes []any
+}
+
+func (q Query3[A, B, C]) Without(excludes ...any) Query3[A, B, C] {
+	q.excludes = append(q.excludes, excludes...)
+	return q
+}
+
+type Query4[A, B, C, D any] struct {
+	ecs      *Ecs
+	excludes []any
+}
+
+func (q Query4[A, B, C, D]) Without(excludes ...any) Query4[A, B, C, D] {
+	q.excludes = append(q.excludes, excludes...)
+	return q
+}
+
+type Query5[A, B, C, D, E any] struct {
+	ecs      *Ecs
+	excludes []any
+}
+
+func (q Query5[A, B, C, D, E]) Without(excludes ...any) Query5[A, B, C, D, E] {
+	q.excludes = append(q.excludes, excludes...)
+	return q
+}
+
+func Type[T any]() any {
+	var t T
+	return t
+}
 
 /*type Query6[A, B, C, D, E, F any] struct{ ecs *Ecs }
 type Query7[A, B, C, D, E, F, G any] struct{ ecs *Ecs }
@@ -55,10 +104,33 @@ func toOptionalIDs(opt set[componentId]) map[uint32]struct{} {
 	return res
 }
 
+func filterViewsForExcludes(views []rooteecs.ArchetypeView, ecs *Ecs, excludes []any) []rooteecs.ArchetypeView {
+	if len(excludes) == 0 {
+		return views
+	}
+	excIDs := identifyOptionals(ecs, excludes...)
+	filtered := make([]rooteecs.ArchetypeView, 0, len(views))
+	for _, v := range views {
+		archView := v.(rootArchetypeView)
+		excluded := false
+		for excID := range excIDs {
+			if _, ok := archView.arch.componentData[excID]; ok {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			filtered = append(filtered, v)
+		}
+	}
+	return filtered
+}
+
 func (q Query1[A]) Map(m func(EntityId, *A) bool, optionals ...any) {
 	id1 := identifyComponents1[A](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-	rooteecs.Map1(q.ecs.archetypeViews(), uint32(id1), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A) bool {
+	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
+	rooteecs.Map1(views, uint32(id1), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A) bool {
 		return m(EntityId(id), a)
 	})
 }
@@ -66,7 +138,8 @@ func (q Query1[A]) Map(m func(EntityId, *A) bool, optionals ...any) {
 func (q Query2[A, B]) Map(m func(EntityId, *A, *B) bool, optionals ...any) {
 	id1, id2 := identifyComponents2[A, B](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-	rooteecs.Map2(q.ecs.archetypeViews(), uint32(id1), uint32(id2), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B) bool {
+	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
+	rooteecs.Map2(views, uint32(id1), uint32(id2), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B) bool {
 		return m(EntityId(id), a, b)
 	})
 }
@@ -74,7 +147,8 @@ func (q Query2[A, B]) Map(m func(EntityId, *A, *B) bool, optionals ...any) {
 func (q Query3[A, B, C]) Map(m func(EntityId, *A, *B, *C) bool, optionals ...any) {
 	id1, id2, id3 := identifyComponents3[A, B, C](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-	rooteecs.Map3(q.ecs.archetypeViews(), uint32(id1), uint32(id2), uint32(id3), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C) bool {
+	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
+	rooteecs.Map3(views, uint32(id1), uint32(id2), uint32(id3), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C) bool {
 		return m(EntityId(id), a, b, c)
 	})
 }
@@ -82,7 +156,8 @@ func (q Query3[A, B, C]) Map(m func(EntityId, *A, *B, *C) bool, optionals ...any
 func (q Query4[A, B, C, D]) Map(m func(EntityId, *A, *B, *C, *D) bool, optionals ...any) {
 	id1, id2, id3, id4 := identifyComponents4[A, B, C, D](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-	rooteecs.Map4(q.ecs.archetypeViews(), uint32(id1), uint32(id2), uint32(id3), uint32(id4), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C, d *D) bool {
+	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
+	rooteecs.Map4(views, uint32(id1), uint32(id2), uint32(id3), uint32(id4), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C, d *D) bool {
 		return m(EntityId(id), a, b, c, d)
 	})
 }
@@ -90,7 +165,8 @@ func (q Query4[A, B, C, D]) Map(m func(EntityId, *A, *B, *C, *D) bool, optionals
 func (q Query5[A, B, C, D, E]) Map(m func(EntityId, *A, *B, *C, *D, *E) bool, optionals ...any) {
 	id1, id2, id3, id4, id5 := identifyComponents5[A, B, C, D, E](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
-	rooteecs.Map5(q.ecs.archetypeViews(), uint32(id1), uint32(id2), uint32(id3), uint32(id4), uint32(id5), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C, d *D, e *E) bool {
+	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
+	rooteecs.Map5(views, uint32(id1), uint32(id2), uint32(id3), uint32(id4), uint32(id5), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C, d *D, e *E) bool {
 		return m(EntityId(id), a, b, c, d, e)
 	})
 }

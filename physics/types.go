@@ -10,13 +10,19 @@ const (
 )
 
 type RigidBodyComponent struct {
-	Velocity        mgl32.Vec3
-	AngularVelocity mgl32.Vec3
-	Mass            float32
-	GravityScale    float32
-	IsStatic        bool
-	Sleeping        bool
-	IdleTime        float32
+	Velocity           mgl32.Vec3
+	AngularVelocity    mgl32.Vec3
+	Mass               float32
+	GravityScale       float32
+	LinearDamping      float32
+	AngularDamping     float32
+	IsStatic           bool
+	Sleeping           bool
+	IdleTime           float32
+	LastPulledPos      mgl32.Vec3
+	LastPulledRot      mgl32.Quat
+	AccumulatedImpulse mgl32.Vec3
+	AccumulatedTorque  mgl32.Vec3
 }
 
 func (rb *RigidBodyComponent) Wake() {
@@ -26,18 +32,12 @@ func (rb *RigidBodyComponent) Wake() {
 
 func (rb *RigidBodyComponent) ApplyImpulse(impulse mgl32.Vec3) {
 	rb.Wake()
-	if rb.Mass > 0 {
-		rb.Velocity = rb.Velocity.Add(impulse.Mul(1.0 / rb.Mass))
-	} else {
-		rb.Velocity = rb.Velocity.Add(impulse)
-	}
+	rb.AccumulatedImpulse = rb.AccumulatedImpulse.Add(impulse)
 }
 
 func (rb *RigidBodyComponent) ApplyTorque(torque mgl32.Vec3) {
 	rb.Wake()
-	// Simplified: no moment of inertia calculation for now, just apply directly
-	// In a real engine, we'd scale by inverse inertia tensor.
-	rb.AngularVelocity = rb.AngularVelocity.Add(torque.Mul(1.0 / rb.Mass))
+	rb.AccumulatedTorque = rb.AccumulatedTorque.Add(torque)
 }
 
 type CollisionBox struct {

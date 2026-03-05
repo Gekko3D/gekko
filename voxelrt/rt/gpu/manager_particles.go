@@ -228,3 +228,38 @@ func (m *GpuBufferManager) UpdateSpawnRequests(requests []uint32) {
 	// Update spawn_request_count in counters (offset 8)
 	m.Device.GetQueue().WriteBuffer(m.ParticleCountersBuf, 8, unsafe.Slice((*byte)(unsafe.Pointer(&count)), 4))
 }
+
+func (m *GpuBufferManager) CreateDefaultParticleAtlas() {
+	tex, err := m.Device.CreateTexture(&wgpu.TextureDescriptor{
+		Label: "Default Particle Atlas",
+		Usage: wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
+		Size: wgpu.Extent3D{
+			Width:              1,
+			Height:             1,
+			DepthOrArrayLayers: 1,
+		},
+		Format:        wgpu.TextureFormatRGBA8Unorm,
+		MipLevelCount: 1,
+		SampleCount:   1,
+		Dimension:     wgpu.TextureDimension2D,
+	})
+	if err == nil {
+		m.Device.GetQueue().WriteTexture(tex.AsImageCopy(), []byte{255, 255, 255, 255}, &wgpu.TextureDataLayout{
+			BytesPerRow:  4,
+			RowsPerImage: 1,
+		}, &wgpu.Extent3D{Width: 1, Height: 1, DepthOrArrayLayers: 1})
+
+		m.ParticleAtlasTex = tex
+		m.ParticleAtlasView, _ = tex.CreateView(nil)
+		m.ParticleAtlasSampler, _ = m.Device.CreateSampler(&wgpu.SamplerDescriptor{
+			MagFilter:     wgpu.FilterModeLinear,
+			MinFilter:     wgpu.FilterModeLinear,
+			MipmapFilter:  wgpu.MipmapFilterModeLinear,
+			AddressModeU:  wgpu.AddressModeClampToEdge,
+			AddressModeV:  wgpu.AddressModeClampToEdge,
+			LodMinClamp:   0,
+			LodMaxClamp:   0,
+			MaxAnisotropy: 1,
+		})
+	}
+}

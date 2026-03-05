@@ -424,8 +424,8 @@ func (a *App) Init() error {
 		return err
 	}
 
-	// Initialize particle instance buffer with a large allocation before creating simulation pipelines/bindgroups
 	a.BufferManager.UpdateParticles(1000000, nil)
+	a.BufferManager.CreateDefaultParticleAtlas()
 
 	a.createParticleSimPipelines(simMod)
 
