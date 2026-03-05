@@ -1,6 +1,8 @@
 package gekko
 
 import (
+	"sync"
+
 	rootassets "github.com/gekko3d/gekko/assets"
 )
 
@@ -46,6 +48,7 @@ const (
 )
 
 type AssetServer struct {
+	mu          sync.RWMutex
 	meshes      map[AssetId]MeshAsset
 	materials   map[AssetId]MaterialAsset
 	textures    map[AssetId]TextureAsset

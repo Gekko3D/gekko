@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"sync"
 )
 
 type systemFn any
@@ -23,6 +24,7 @@ type App struct {
 	ecs                *Ecs
 
 	// Command Buffering
+	cmdMutex            sync.Mutex
 	pendingAdditions    []pendingAdd
 	pendingRemovals     []EntityId
 	pendingCompAdds     []pendingCompAdd
@@ -99,7 +101,9 @@ func (app *App) callSystems(state State, phase statePhase) {
 				}
 			}
 		}
+		app.cmdMutex.Lock()
 		app.FlushCommands()
+		app.cmdMutex.Unlock()
 	}
 }
 
@@ -157,19 +161,25 @@ func (app *App) callSystemInternal(system systemFn) {
 			//} else if isQueryArgument(underlyingType) {
 			//	queryPtr := this.generateQueryObject(underlyingType)
 			//	args[i] = queryPtr
-		} else if resource, argIsResource := app.resources[underlyingType]; argIsResource {
-			resourceVal := reflect.ValueOf(resource)
-			typedResourceVal := reflect.NewAt(underlyingType, resourceVal.UnsafePointer())
-
-			args[i] = typedResourceVal
 		} else {
-			msg := fmt.Sprintf("Unable to resolve System dependency.\nSystem: %s\nSystem type: %s\nDependency: %s",
-				runtime.FuncForPC(systemValue.Pointer()).Name(),
-				fmt.Sprint(systemType),
-				fmt.Sprint(argType),
-			)
-			println(msg)
-			panic(msg)
+			app.cmdMutex.Lock()
+			resource, argIsResource := app.resources[underlyingType]
+			app.cmdMutex.Unlock()
+
+			if argIsResource {
+				resourceVal := reflect.ValueOf(resource)
+				typedResourceVal := reflect.NewAt(underlyingType, resourceVal.UnsafePointer())
+
+				args[i] = typedResourceVal
+			} else {
+				msg := fmt.Sprintf("Unable to resolve System dependency.\nSystem: %s\nSystem type: %s\nDependency: %s",
+					runtime.FuncForPC(systemValue.Pointer()).Name(),
+					fmt.Sprint(systemType),
+					fmt.Sprint(argType),
+				)
+				println(msg)
+				panic(msg)
+			}
 		}
 	}
 	systemValue.Call(args)

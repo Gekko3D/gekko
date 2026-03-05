@@ -1,6 +1,6 @@
 package gekko
 
-func (server AssetServer) CreateSphereModel(radius float32, resolution float32) AssetId {
+func (server *AssetServer) CreateSphereModel(radius float32, resolution float32) AssetId {
 	id := makeAssetId()
 	scaledRadius := radius * resolution
 	r := int(scaledRadius)
@@ -24,6 +24,7 @@ func (server AssetServer) CreateSphereModel(radius float32, resolution float32) 
 		}
 	}
 
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: size, SizeY: size, SizeZ: size,
@@ -31,10 +32,11 @@ func (server AssetServer) CreateSphereModel(radius float32, resolution float32) 
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }
 
-func (server AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resolution float32) AssetId {
+func (server *AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resolution float32) AssetId {
 	id := makeAssetId()
 	sx, sy, sz := int(sizeX*resolution), int(sizeY*resolution), int(sizeZ*resolution)
 	voxels := []Voxel{}
@@ -50,6 +52,7 @@ func (server AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resolutio
 		}
 	}
 
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: uint32(sx), SizeY: uint32(sy), SizeZ: uint32(sz),
@@ -57,10 +60,11 @@ func (server AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resolutio
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }
 
-func (server AssetServer) CreateConeModel(radius, height float32, resolution float32) AssetId {
+func (server *AssetServer) CreateConeModel(radius, height float32, resolution float32) AssetId {
 	id := makeAssetId()
 	scaledRadius := radius * resolution
 	scaledHeight := height * resolution
@@ -84,6 +88,7 @@ func (server AssetServer) CreateConeModel(radius, height float32, resolution flo
 		}
 	}
 
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: uint32(r*2 + 1), SizeY: uint32(r*2 + 1), SizeZ: uint32(h),
@@ -91,10 +96,11 @@ func (server AssetServer) CreateConeModel(radius, height float32, resolution flo
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }
 
-func (server AssetServer) CreatePyramidModel(size, height float32, resolution float32) AssetId {
+func (server *AssetServer) CreatePyramidModel(size, height float32, resolution float32) AssetId {
 	id := makeAssetId()
 	scaledSize := size * resolution
 	scaledHeight := height * resolution
@@ -115,6 +121,7 @@ func (server AssetServer) CreatePyramidModel(size, height float32, resolution fl
 		}
 	}
 
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: uint32(scaledSize), SizeY: uint32(scaledSize), SizeZ: uint32(scaledHeight),
@@ -122,5 +129,6 @@ func (server AssetServer) CreatePyramidModel(size, height float32, resolution fl
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }

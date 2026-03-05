@@ -4,8 +4,10 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-func (server AssetServer) SpawnHierarchicalVoxelModel(cmd *Commands, voxId AssetId, rootTransform TransformComponent, voxelScale float32) EntityId {
+func (server *AssetServer) SpawnHierarchicalVoxelModel(cmd *Commands, voxId AssetId, rootTransform TransformComponent, voxelScale float32) EntityId {
+	server.mu.RLock()
 	voxFile, ok := server.voxFiles[voxId]
+	server.mu.RUnlock()
 	if !ok {
 		panic("Voxel file asset not found")
 	}
@@ -137,7 +139,7 @@ func decodeVoxRotation(r byte) (mgl32.Quat, mgl32.Vec3) {
 	return rotEng, scaleEng
 }
 
-func (server AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId int, parentEntity EntityId, nodeEntities map[int]EntityId, paletteId AssetId, voxelScale float32) {
+func (server *AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId int, parentEntity EntityId, nodeEntities map[int]EntityId, paletteId AssetId, voxelScale float32) {
 	node, ok := voxFile.Nodes[nodeId]
 	if !ok {
 		return

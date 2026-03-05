@@ -6,7 +6,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-func (server AssetServer) CreateWireframeBoxModel(size mgl32.Vec3, thickness float32) AssetId {
+func (server *AssetServer) CreateWireframeBoxModel(size mgl32.Vec3, thickness float32) AssetId {
 	id := makeAssetId()
 
 	resolution := float32(10.0)
@@ -94,6 +94,7 @@ func (server AssetServer) CreateWireframeBoxModel(size mgl32.Vec3, thickness flo
 		})
 	}
 
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: uint32(sx + thickVoxels*2), SizeY: uint32(sy + thickVoxels*2), SizeZ: uint32(sz + thickVoxels*2),
@@ -101,10 +102,11 @@ func (server AssetServer) CreateWireframeBoxModel(size mgl32.Vec3, thickness flo
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }
 
-func (server AssetServer) CreateWireframeSphereModel(radius, thickness float32) AssetId {
+func (server *AssetServer) CreateWireframeSphereModel(radius, thickness float32) AssetId {
 	id := makeAssetId()
 
 	resolution := float32(10.0)
@@ -170,6 +172,7 @@ func (server AssetServer) CreateWireframeSphereModel(radius, thickness float32) 
 	}
 
 	size := uint32(r*2 + thickVoxels*2)
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: size, SizeY: size, SizeZ: size,
@@ -177,10 +180,11 @@ func (server AssetServer) CreateWireframeSphereModel(radius, thickness float32) 
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }
 
-func (server AssetServer) CreateCrossModel(size, thickness float32) AssetId {
+func (server *AssetServer) CreateCrossModel(size, thickness float32) AssetId {
 	id := makeAssetId()
 	resolution := float32(10.0)
 	s := int(size * resolution)
@@ -223,6 +227,7 @@ func (server AssetServer) CreateCrossModel(size, thickness float32) AssetId {
 		})
 	}
 
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: uint32(s), SizeY: uint32(s), SizeZ: uint32(s),
@@ -230,5 +235,6 @@ func (server AssetServer) CreateCrossModel(size, thickness float32) AssetId {
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }

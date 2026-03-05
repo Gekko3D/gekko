@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 
+	"sync"
+
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -74,6 +76,9 @@ type ChunkObserverComponent struct {
 	LastCenter   ChunkCoord
 	Initialized  bool
 
+	IsAsync         bool
+	LoadingChunks   map[ChunkCoord]struct{}
+	mu              sync.Mutex
 	OnChunkLoaded   ChunkObserverCallback
 	OnChunkUnloaded ChunkObserverCallback
 	ShouldLoad      func(coord ChunkCoord) bool
@@ -88,10 +93,11 @@ func NewChunkObserver(radius int, chunkSize float32) *ChunkObserverComponent {
 	}
 
 	return &ChunkObserverComponent{
-		Radius:       radius,
-		ChunkSize:    chunkSize,
-		LoadedChunks: make(map[ChunkCoord]struct{}),
-		lastRadius:   -1,
+		Radius:        radius,
+		ChunkSize:     chunkSize,
+		LoadedChunks:  make(map[ChunkCoord]struct{}),
+		LoadingChunks: make(map[ChunkCoord]struct{}),
+		lastRadius:    -1,
 	}
 }
 
@@ -116,13 +122,24 @@ func (c *ChunkObserverComponent) WithFilter(filter func(coord ChunkCoord) bool) 
 	return c
 }
 
+func (c *ChunkObserverComponent) WithAsync(isAsync bool) *ChunkObserverComponent {
+	if c == nil {
+		return c
+	}
+	c.IsAsync = isAsync
+	return c
+}
+
 // Reset clears the observer's cached state and marks it uninitialized.
 func (c *ChunkObserverComponent) Reset() {
 	if c == nil {
 		return
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.LoadedChunks = make(map[ChunkCoord]struct{})
+	c.LoadingChunks = make(map[ChunkCoord]struct{})
 	c.Initialized = false
 	c.lastRadius = -1
 }
@@ -181,6 +198,7 @@ func UpdateChunkObserversSystem(cmd *Commands, tracker *ChunkTrackerResource) {
 		}
 
 		// Unload stale chunks.
+		observer.mu.Lock()
 		for coord := range observer.LoadedChunks {
 			if _, ok := desired[coord]; ok {
 				continue
@@ -193,17 +211,53 @@ func UpdateChunkObserversSystem(cmd *Commands, tracker *ChunkTrackerResource) {
 			delete(observer.LoadedChunks, coord)
 		}
 
+		// Also remove from loading if it's no longer desired
+		for coord := range observer.LoadingChunks {
+			if _, ok := desired[coord]; !ok {
+				delete(observer.LoadingChunks, coord)
+			}
+		}
+		observer.mu.Unlock()
+
 		// Load new chunks.
 		for coord := range desired {
-			if _, ok := observer.LoadedChunks[coord]; ok {
+			observer.mu.Lock()
+			_, isLoaded := observer.LoadedChunks[coord]
+			_, isLoading := observer.LoadingChunks[coord]
+			observer.mu.Unlock()
+
+			if isLoaded || isLoading {
 				continue
 			}
 
 			if observer.OnChunkLoaded != nil {
-				observer.OnChunkLoaded(cmd, id, coord)
-			}
+				if observer.IsAsync {
+					observer.mu.Lock()
+					observer.LoadingChunks[coord] = struct{}{}
+					observer.mu.Unlock()
 
-			observer.LoadedChunks[coord] = struct{}{}
+					go func(coord ChunkCoord, id EntityId) {
+						observer.OnChunkLoaded(cmd, id, coord)
+
+						observer.mu.Lock()
+						// Check if still loading (might have been canceled via removal from desired)
+						if _, ok := observer.LoadingChunks[coord]; ok {
+							delete(observer.LoadingChunks, coord)
+							observer.LoadedChunks[coord] = struct{}{}
+						}
+						observer.mu.Unlock()
+					}(coord, id)
+				} else {
+					observer.OnChunkLoaded(cmd, id, coord)
+					observer.mu.Lock()
+					observer.LoadedChunks[coord] = struct{}{}
+					observer.mu.Unlock()
+				}
+			} else {
+				observer.mu.Lock()
+				observer.LoadedChunks[coord] = struct{}{}
+				observer.mu.Unlock()
+			}
 		}
 
 		observer.LastCenter = currentCenter

@@ -6,21 +6,23 @@ import (
 	"os"
 )
 
-func (server AssetServer) CreateMesh(vertices AnySlice, indexes []uint16) Mesh {
+func (server *AssetServer) CreateMesh(vertices AnySlice, indexes []uint16) Mesh {
 	id := makeAssetId()
 
+	server.mu.Lock()
 	server.meshes[id] = MeshAsset{
 		Version:  0,
 		Vertices: vertices,
 		Indices:  indexes,
 	}
+	server.mu.Unlock()
 
 	return Mesh{
 		ID: id,
 	}
 }
 
-func (server AssetServer) CreateMaterial(filename string, vertexType any) Material {
+func (server *AssetServer) CreateMaterial(filename string, vertexType any) Material {
 	shaderData, err := os.ReadFile(filename)
 	if err != nil {
 		panic(err)
@@ -28,21 +30,24 @@ func (server AssetServer) CreateMaterial(filename string, vertexType any) Materi
 
 	id := makeAssetId()
 
+	server.mu.Lock()
 	server.materials[id] = MaterialAsset{
 		Version:       0,
 		ShaderName:    filename,
 		ShaderListing: string(shaderData),
 		VertexType:    vertexType,
 	}
+	server.mu.Unlock()
 
 	return Material{
 		ID: id,
 	}
 }
 
-func (server AssetServer) CreateTextureFromTexels(texels []uint8, texWidth uint32, texHeight uint32, texDepth uint32, dimension TextureDimension, format TextureFormat) AssetId {
+func (server *AssetServer) CreateTextureFromTexels(texels []uint8, texWidth uint32, texHeight uint32, texDepth uint32, dimension TextureDimension, format TextureFormat) AssetId {
 	id := makeAssetId()
 
+	server.mu.Lock()
 	server.textures[id] = TextureAsset{
 		Version:   0,
 		Texels:    texels,
@@ -52,11 +57,12 @@ func (server AssetServer) CreateTextureFromTexels(texels []uint8, texWidth uint3
 		Dimension: dimension,
 		Format:    format,
 	}
+	server.mu.Unlock()
 
 	return id
 }
 
-func (server AssetServer) CreateTexture(filename string) AssetId {
+func (server *AssetServer) CreateTexture(filename string) AssetId {
 	id := makeAssetId()
 
 	file, err := os.Open(filename)
@@ -85,6 +91,7 @@ func (server AssetServer) CreateTexture(filename string) AssetId {
 		}
 	}
 
+	server.mu.Lock()
 	server.textures[id] = TextureAsset{
 		Version:   0,
 		Texels:    rgbaImg.Pix,
@@ -94,17 +101,20 @@ func (server AssetServer) CreateTexture(filename string) AssetId {
 		Dimension: TextureDimension2D,
 		Format:    TextureFormatRGBA8Unorm,
 	}
+	server.mu.Unlock()
 
 	return id
 }
 
-func (server AssetServer) CreateSampler() AssetId {
+func (server *AssetServer) CreateSampler() AssetId {
 	id := makeAssetId()
 
+	server.mu.Lock()
 	server.samplers[id] = SamplerAsset{
 		Version: 0,
 		AssetID: id,
 	}
+	server.mu.Unlock()
 
 	return id
 }

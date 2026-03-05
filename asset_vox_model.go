@@ -17,31 +17,35 @@ func createVolumeTexels(voxModel *VoxModel, palette *VoxPalette) []uint8 {
 	return volume
 }
 
-func (server AssetServer) CreateVoxelBasedTexture(voxModel *VoxModel, palette *VoxPalette) AssetId {
+func (server *AssetServer) CreateVoxelBasedTexture(voxModel *VoxModel, palette *VoxPalette) AssetId {
 	volumeTexels := createVolumeTexels(voxModel, palette)
 	return server.CreateTextureFromTexels(volumeTexels[:], voxModel.SizeX, voxModel.SizeY, voxModel.SizeZ, TextureDimension3D, TextureFormatRGBA8Unorm)
 }
 
-func (server AssetServer) CreateVoxelModel(model VoxModel, resolution float32) AssetId {
+func (server *AssetServer) CreateVoxelModel(model VoxModel, resolution float32) AssetId {
 	return server.CreateVoxelModelFromSource(model, resolution, "")
 }
 
-func (server AssetServer) CreateVoxelModelFromSource(model VoxModel, resolution float32, sourcePath string) AssetId {
+func (server *AssetServer) CreateVoxelModelFromSource(model VoxModel, resolution float32, sourcePath string) AssetId {
 	if resolution != 1.0 && resolution > 0 {
 		model = ScaleVoxModel(model, resolution)
 	}
 	id := makeAssetId()
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel:   model,
 		BrickSize:  [3]uint32{8, 8, 8},
 		SourcePath: sourcePath,
 	}
+	server.mu.Unlock()
 	return id
 }
 
-func (server AssetServer) CreateVoxelFile(voxFile *VoxFile) AssetId {
+func (server *AssetServer) CreateVoxelFile(voxFile *VoxFile) AssetId {
 	id := makeAssetId()
+	server.mu.Lock()
 	server.voxFiles[id] = voxFile
+	server.mu.Unlock()
 	// Automatically register all models in the file
 	// (Note: some models might not be referenced by nodes, but we store them anyway)
 	return id
@@ -136,21 +140,23 @@ func ScaleVoxModel(model VoxModel, scale float32) VoxModel {
 	}
 }
 
-func (server AssetServer) CreateVoxelPalette(palette VoxPalette, materials []VoxMaterial) AssetId {
+func (server *AssetServer) CreateVoxelPalette(palette VoxPalette, materials []VoxMaterial) AssetId {
 	return server.CreateVoxelPaletteFromSource(palette, materials, "")
 }
 
-func (server AssetServer) CreateVoxelPaletteFromSource(palette VoxPalette, materials []VoxMaterial, sourcePath string) AssetId {
+func (server *AssetServer) CreateVoxelPaletteFromSource(palette VoxPalette, materials []VoxMaterial, sourcePath string) AssetId {
 	id := makeAssetId()
+	server.mu.Lock()
 	server.voxPalettes[id] = VoxelPaletteAsset{
 		VoxPalette: palette,
 		Materials:  materials,
 		SourcePath: sourcePath,
 	}
+	server.mu.Unlock()
 	return id
 }
 
-func (server AssetServer) CreateSimplePalette(rgba [4]uint8) AssetId {
+func (server *AssetServer) CreateSimplePalette(rgba [4]uint8) AssetId {
 	var p VoxPalette
 	for i := range p {
 		p[i] = rgba
@@ -158,7 +164,7 @@ func (server AssetServer) CreateSimplePalette(rgba [4]uint8) AssetId {
 	return server.CreateVoxelPalette(p, nil)
 }
 
-func (server AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness, emission, ior float32) AssetId {
+func (server *AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness, emission, ior float32) AssetId {
 	id := makeAssetId()
 	var p VoxPalette
 	for i := range p {
@@ -171,6 +177,7 @@ func (server AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness, 
 	// "pseudo-materials" or we can add a new asset type.
 	// For now, I'll store the PBR properties in a new VoxelPaletteAsset field.
 
+	server.mu.Lock()
 	server.voxPalettes[id] = VoxelPaletteAsset{
 		VoxPalette: p,
 		IsPBR:      true,
@@ -179,5 +186,6 @@ func (server AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness, 
 		Emission:   emission,
 		IOR:        ior,
 	}
+	server.mu.Unlock()
 	return id
 }

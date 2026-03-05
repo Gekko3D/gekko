@@ -4,7 +4,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-func (server AssetServer) CreateLineModel(start, end mgl32.Vec3, thickness float32) AssetId {
+func (server *AssetServer) CreateLineModel(start, end mgl32.Vec3, thickness float32) AssetId {
 	id := makeAssetId()
 
 	dir := end.Sub(start)
@@ -81,6 +81,7 @@ func (server AssetServer) CreateLineModel(start, end mgl32.Vec3, thickness float
 	sizeY := uint32(maxY - minY + 1)
 	sizeZ := uint32(maxZ - minZ + 1)
 
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: sizeX, SizeY: sizeY, SizeZ: sizeZ,
@@ -88,10 +89,11 @@ func (server AssetServer) CreateLineModel(start, end mgl32.Vec3, thickness float
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }
 
-func (server AssetServer) CreateArrowModel(start, end mgl32.Vec3, thickness, headSize float32) AssetId {
+func (server *AssetServer) CreateArrowModel(start, end mgl32.Vec3, thickness, headSize float32) AssetId {
 	id := makeAssetId()
 
 	dir := end.Sub(start)
@@ -192,6 +194,7 @@ func (server AssetServer) CreateArrowModel(start, end mgl32.Vec3, thickness, hea
 	sizeY := uint32(maxY - minY + 1)
 	sizeZ := uint32(maxZ - minZ + 1)
 
+	server.mu.Lock()
 	server.voxModels[id] = VoxelModelAsset{
 		VoxModel: VoxModel{
 			SizeX: sizeX, SizeY: sizeY, SizeZ: sizeZ,
@@ -199,5 +202,6 @@ func (server AssetServer) CreateArrowModel(start, end mgl32.Vec3, thickness, hea
 		},
 		BrickSize: [3]uint32{8, 8, 8},
 	}
+	server.mu.Unlock()
 	return id
 }
