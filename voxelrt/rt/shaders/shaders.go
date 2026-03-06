@@ -44,3 +44,6 @@ var GizmoWGSL string
 
 //go:embed skybox.wgsl
 var SkyboxWGSL string
+
+//go:embed sprites.wgsl
+var SpritesWGSL string

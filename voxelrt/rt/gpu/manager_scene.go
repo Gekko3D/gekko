@@ -88,8 +88,8 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 	return recreated
 }
 
-func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, debugMode uint32, renderMode uint32, numLights uint32) {
-	buf := make([]byte, 256)
+func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32) {
+	buf := make([]byte, 272)
 
 	writeMat := func(offset int, mat mgl32.Mat4) {
 		for i, v := range mat {
@@ -119,11 +119,17 @@ func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj mgl32.Mat4,
 	binary.LittleEndian.PutUint32(buf[240:], debugMode)
 	binary.LittleEndian.PutUint32(buf[244:], renderMode)
 	binary.LittleEndian.PutUint32(buf[248:], numLights)
+	binary.LittleEndian.PutUint32(buf[252:], 0) // pad1
+
+	binary.LittleEndian.PutUint32(buf[256:], math.Float32bits(float32(screenW)))
+	binary.LittleEndian.PutUint32(buf[260:], math.Float32bits(float32(screenH)))
+	binary.LittleEndian.PutUint32(buf[264:], 0) // pad2.x
+	binary.LittleEndian.PutUint32(buf[268:], 0) // pad2.y
 
 	if m.CameraBuf == nil {
 		desc := &wgpu.BufferDescriptor{
 			Label: "CameraUB",
-			Size:  256,
+			Size:  272,
 			Usage: wgpu.BufferUsageUniform | wgpu.BufferUsageCopyDst,
 		}
 		var err error

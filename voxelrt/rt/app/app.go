@@ -28,6 +28,7 @@ type App struct {
 
 	RenderPipeline      *wgpu.RenderPipeline
 	ParticlesPipeline   *wgpu.RenderPipeline
+	SpritesPipeline     *wgpu.RenderPipeline
 	TransparentPipeline *wgpu.RenderPipeline
 	ResolvePipeline     *wgpu.RenderPipeline
 
@@ -187,7 +188,7 @@ func (a *App) Init() error {
 				Visibility: wgpu.ShaderStageCompute,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   256, // CameraData size
+					MinBindingSize:   272, // CameraData size
 					HasDynamicOffset: false,
 				},
 			},
@@ -400,7 +401,7 @@ func (a *App) Init() error {
 	proj := mgl32.Ident4()
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
-	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)))
+	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), uint32(width), uint32(height))
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene)
@@ -440,6 +441,8 @@ func (a *App) Init() error {
 
 	// Create particle render pipeline (accumulates into WBOIT targets)
 	a.setupParticlesPipeline()
+	// Create sprite render pipeline
+	a.setupSpritesPipeline()
 	// Create transparent overlay pipeline (accumulate into WBOIT targets)
 	a.setupTransparentOverlayPipeline()
 	// Create resolve pipeline to composite opaque + transparent accum onto swapchain
@@ -484,4 +487,10 @@ func (a *App) Init() error {
 	a.LastTime = glfw.GetTime()
 
 	return nil
+}
+
+func (a *App) SetSpriteAtlas(data []byte, w, h uint32) {
+	if a.BufferManager != nil {
+		a.BufferManager.SetSpriteAtlas(data, w, h)
+	}
 }

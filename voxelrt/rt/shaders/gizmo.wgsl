@@ -21,6 +21,8 @@ struct CameraUniform {
     render_mode: u32,
     num_lights: u32,
     pad1: u32,
+    screen_size: vec2<f32>,
+    pad2: vec2<u32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;

@@ -47,6 +47,7 @@ type VoxelRtState struct {
 	SunDirection      mgl32.Vec3
 	SunIntensity      float32
 	lastParticleAtlas AssetId
+	lastSpriteAtlas   AssetId
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {

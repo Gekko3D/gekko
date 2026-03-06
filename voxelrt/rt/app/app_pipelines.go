@@ -29,7 +29,7 @@ func (a *App) setupParticlesPipeline() {
 				Visibility: wgpu.ShaderStageVertex | wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   256, // CameraData size
+					MinBindingSize:   272, // CameraData size
 					HasDynamicOffset: false,
 				},
 			},
@@ -162,6 +162,143 @@ func (a *App) setupParticlesPipeline() {
 	a.ParticlesPipeline = pipeline
 }
 
+func (a *App) setupSpritesPipeline() {
+	spriteMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Sprites Billboard",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.SpritesWGSL},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create sprite shader module: %v\n", err)
+		return
+	}
+
+	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Sprites BGL0",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageVertex | wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeUniform,
+					MinBindingSize: 272,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageVertex,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Sampler: wgpu.SamplerBindingLayout{
+					Type: wgpu.SamplerBindingTypeFiltering,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create sprites BGL0: %v\n", err)
+		return
+	}
+
+	bgl1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Sprites BGL1",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create sprites BGL1: %v\n", err)
+		return
+	}
+
+	pl, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create sprites pipeline layout: %v\n", err)
+		return
+	}
+
+	pipeline, err := a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+		Label:  "Sprites Pipeline",
+		Layout: pl,
+		Vertex: wgpu.VertexState{
+			Module:     spriteMod,
+			EntryPoint: "vs_main",
+		},
+		Fragment: &wgpu.FragmentState{
+			Module:     spriteMod,
+			EntryPoint: "fs_main",
+			Targets: []wgpu.ColorTargetState{
+				{
+					Format: wgpu.TextureFormatRGBA16Float,
+					Blend: &wgpu.BlendState{
+						Color: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+						Alpha: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+					},
+					WriteMask: wgpu.ColorWriteMaskAll,
+				},
+				{
+					Format: wgpu.TextureFormatR16Float,
+					Blend: &wgpu.BlendState{
+						Color: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+						Alpha: wgpu.BlendComponent{
+							SrcFactor: wgpu.BlendFactorOne,
+							DstFactor: wgpu.BlendFactorOne,
+							Operation: wgpu.BlendOperationAdd,
+						},
+					},
+					WriteMask: wgpu.ColorWriteMaskAll,
+				},
+			},
+		},
+		Primitive: wgpu.PrimitiveState{
+			Topology: wgpu.PrimitiveTopologyTriangleList,
+		},
+		Multisample: wgpu.MultisampleState{
+			Count: 1,
+			Mask:  0xFFFFFFFF,
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create sprite render pipeline: %v\n", err)
+		return
+	}
+	a.SpritesPipeline = pipeline
+}
+
 // setupTransparentOverlayPipeline creates a fullscreen render pipeline to alpha-blend
 // a single transparent voxel surface per pixel over the lit image.
 func (a *App) setupTransparentOverlayPipeline() {
@@ -183,7 +320,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   256,
+					MinBindingSize:   272,
 					HasDynamicOffset: false,
 				},
 			},

@@ -148,6 +148,16 @@ type GpuBufferManager struct {
 	ParticleCount        uint32
 	MaxParticleCount     uint32
 
+	// Sprites (billboards, UI or world)
+	SpriteBuf          *wgpu.Buffer
+	SpriteCount        uint32
+	SpriteAtlasTex     *wgpu.Texture
+	SpriteAtlasView    *wgpu.TextureView
+	SpriteAtlasSampler *wgpu.Sampler
+	SpritesBindGroup0  *wgpu.BindGroup // camera + sprites + atlas
+	SpritesBindGroup1  *wgpu.BindGroup // gbuffer depth
+	SpriteAtlasDirty   bool
+
 	// Transparent overlay (single-layer transparency over lit image)
 	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
 	TransparentBG1 *wgpu.BindGroup // voxel data buffers
@@ -232,6 +242,7 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	m.ensureBuffer("InstancesBuf", &m.InstancesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("BVHNodesBuf", &m.BVHNodesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("LightsBuf", &m.LightsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("SpriteBuf", &m.SpriteBuf, nil, wgpu.BufferUsageStorage, 1024)
 
 	return m
 }

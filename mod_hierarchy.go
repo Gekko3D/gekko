@@ -16,24 +16,13 @@ func (HierarchyModule) Install(app *App, cmd *Commands) {
 
 func TransformHierarchySystem(cmd *Commands) {
 	// Root objects: have TransformComponent but NO Parent
-	// We ensure they are synchronized if they have both components.
-	MakeQuery2[LocalTransformComponent, TransformComponent](cmd).Map(func(eid EntityId, local *LocalTransformComponent, tr *TransformComponent) bool {
-		// Manual "Without(Parent{})" check
-		allComps := cmd.GetAllComponents(eid)
-		for _, c := range allComps {
-			if _, ok := c.(Parent); ok {
-				return true
-			}
-		}
-
-		// If it's a root and has LocalTransformComponent, it might be the source of truth
-		// or they should be kept in sync. Usually for roots, TransformComponent (World) is authoritative
-		// or they are identical.
+	MakeQuery2[LocalTransformComponent, TransformComponent](cmd).Without(Parent{}).Map(func(eid EntityId, local *LocalTransformComponent, tr *TransformComponent) bool {
+		// Roots use world transform as authoritative source
 		local.Position = tr.Position
 		local.Rotation = tr.Rotation
 		local.Scale = tr.Scale
 		return true
-	}, Parent{}) // This might not work as "Without" in this ECS implementation if not supported by query.
+	})
 	// Looking at ca_ecs.go and ecs_query.go, MakeQuery doesn't seem to have "Without".
 	// The manual check inside Map is correct.
 
@@ -47,8 +36,13 @@ PassLoop:
 			allComps := cmd.GetAllComponents(parent.Entity)
 			var parentWorld *TransformComponent
 			for _, c := range allComps {
+				if pw, ok := c.(*TransformComponent); ok {
+					parentWorld = pw
+					break
+				}
 				if pw, ok := c.(TransformComponent); ok {
-					parentWorld = &pw
+					tmp := pw
+					parentWorld = &tmp
 					break
 				}
 			}

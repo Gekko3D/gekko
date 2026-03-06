@@ -50,8 +50,14 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	)
 
 	app.UseSystem(
+		System(voxelRtPreludeSystem).
+			InStage(Prelude).
+			RunAlways(),
+	)
+
+	app.UseSystem(
 		System(voxelRtSystem).
-			InStage(PostUpdate).
+			InStage(PreRender).
 			RunAlways(),
 	)
 
@@ -68,7 +74,10 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	)
 }
 
-func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands) {
+func voxelRtPreludeSystem(input *Input, state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
 	state.RtApp.MouseX = input.MouseX
 	state.RtApp.MouseY = input.MouseY
 	state.RtApp.MouseCaptured = input.MouseCaptured
@@ -77,7 +86,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	// Begin batching updates for this frame
 	state.RtApp.BufferManager.BeginBatch()
+}
 
+func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
 	// Sync instances
 	state.RtApp.Profiler.BeginScope("Sync Instances")
 	currentEntities := make(map[EntityId]bool)
@@ -285,8 +299,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync CA")
 
-	state.RtApp.Profiler.EndScope("Sync CA")
-
 	state.RtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
 		state.RtApp.Camera.Position = camera.Position
@@ -462,6 +474,20 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil || state.RtApp.BufferManager.ParticleSimBG0 == nil {
 		state.RtApp.BufferManager.CreateParticleSimBindGroups()
 		state.RtApp.BufferManager.CreateParticlesBindGroups(state.RtApp.ParticlesPipeline)
+	}
+
+	// Sync GPU sprites
+	spriteBytes, spriteCount, spriteAtlasId := spritesSync(state, cmd)
+	if spriteAtlasId != (AssetId{}) && spriteAtlasId != state.lastSpriteAtlas {
+		if texAsset, ok := server.textures[spriteAtlasId]; ok {
+			state.RtApp.SetSpriteAtlas(texAsset.Texels, texAsset.Width, texAsset.Height)
+			state.lastSpriteAtlas = spriteAtlasId
+		}
+	}
+	sRecreated := state.RtApp.BufferManager.UpdateSprites(spriteBytes, spriteCount)
+	if sRecreated || state.RtApp.BufferManager.SpriteAtlasDirty || state.RtApp.BufferManager.SpritesBindGroup0 == nil {
+		state.RtApp.BufferManager.CreateSpritesBindGroups(state.RtApp.SpritesPipeline)
+		state.RtApp.BufferManager.SpriteAtlasDirty = false
 	}
 }
 

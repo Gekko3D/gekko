@@ -28,7 +28,7 @@ func (a *App) setupTextures(w, h int) {
 		MipLevelCount: 1,
 		Dimension:     wgpu.TextureDimension2D,
 		Format:        wgpu.TextureFormatRGBA16Float,
-		Usage:         wgpu.TextureUsageStorageBinding | wgpu.TextureUsageTextureBinding,
+		Usage:         wgpu.TextureUsageStorageBinding | wgpu.TextureUsageTextureBinding | wgpu.TextureUsageRenderAttachment,
 		SampleCount:   1,
 	})
 	if err != nil {
@@ -84,6 +84,7 @@ func (a *App) Resize(w, h int) {
 
 		// Recreate particle pipeline for new swapchain format
 		a.setupParticlesPipeline()
+		a.setupSpritesPipeline()
 		// Recreate resolve pipeline/bind group (depends on textures/swapchain)
 		a.setupResolvePipeline()
 	}
@@ -178,7 +179,7 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)))
+	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height)
 
 	// Update Text Buffers if needed
 	if len(a.TextItems) > 0 && a.TextRenderer != nil {
@@ -395,6 +396,14 @@ func (a *App) Render() {
 			accPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
 			accPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
 			accPass.DrawIndirect(a.BufferManager.ParticleIndirectBuf, 0)
+		}
+	}
+	if a.SpritesPipeline != nil && a.BufferManager.SpriteCount > 0 {
+		accPass.SetPipeline(a.SpritesPipeline)
+		if a.BufferManager.SpritesBindGroup0 != nil && a.BufferManager.SpritesBindGroup1 != nil {
+			accPass.SetBindGroup(0, a.BufferManager.SpritesBindGroup0, nil)
+			accPass.SetBindGroup(1, a.BufferManager.SpritesBindGroup1, nil)
+			accPass.Draw(6, a.BufferManager.SpriteCount, 0, 0)
 		}
 	}
 	err = accPass.End()

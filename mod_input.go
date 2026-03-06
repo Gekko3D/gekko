@@ -86,9 +86,10 @@ type Input struct {
 	JustPressed  [256]bool
 	JustReleased [256]bool
 
-	MouseX, MouseY           float64
-	MouseDeltaX, MouseDeltaY float64
-	MouseCaptured            bool
+	MouseX, MouseY             float64
+	MouseDeltaX, MouseDeltaY   float64
+	MouseScrollX, MouseScrollY float64
+	MouseCaptured              bool
 
 	WindowWidth, WindowHeight int
 	CharBuffer                []rune
@@ -105,10 +106,17 @@ func (mod InputModule) Install(app *App, cmd *Commands) {
 
 func inputSystem(s *WindowState, input *Input) {
 	input.CharBuffer = nil // Clear buffer at start of frame
+	input.MouseScrollX = 0
+	input.MouseScrollY = 0
 
 	// Register character callback if not already set
 	s.windowGlfw.SetCharCallback(func(w *glfw.Window, char rune) {
 		input.CharBuffer = append(input.CharBuffer, char)
+	})
+
+	s.windowGlfw.SetScrollCallback(func(w *glfw.Window, xoff, yoff float64) {
+		input.MouseScrollX += xoff
+		input.MouseScrollY += yoff
 	})
 
 	glfw.PollEvents()
