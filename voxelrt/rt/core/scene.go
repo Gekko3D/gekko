@@ -111,7 +111,7 @@ func NewScene() *Scene {
 	return &Scene{
 		Objects:         []*VoxelObject{},
 		AmbientLight:    mgl32.Vec3{0.2, 0.2, 0.2},
-		TargetVoxelSize: 0.1, // 10cm default
+		TargetVoxelSize: 0.1, // matches gekko.VoxelSize
 	}
 }
 

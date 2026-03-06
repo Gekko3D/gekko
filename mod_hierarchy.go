@@ -35,26 +35,46 @@ PassLoop:
 			// Get parent's world transform
 			allComps := cmd.GetAllComponents(parent.Entity)
 			var parentWorld *TransformComponent
+			var isVoxel bool
 			for _, c := range allComps {
 				if pw, ok := c.(*TransformComponent); ok {
 					parentWorld = pw
-					break
 				}
 				if pw, ok := c.(TransformComponent); ok {
 					tmp := pw
 					parentWorld = &tmp
-					break
+				}
+				if _, ok := c.(*VoxelModelComponent); ok {
+					isVoxel = true
+				}
+				if _, ok := c.(VoxelModelComponent); ok {
+					isVoxel = true
 				}
 			}
 
 			if parentWorld != nil {
-				// Propagate components directly to preserve scale signs (reflections)
-				// WorldPos = ParentPos + ParentRot * (ParentScale * LocalPos)
-				scaledLocalPos := mgl32.Vec3{
-					local.Position.X() * parentWorld.Scale.X(),
-					local.Position.Y() * parentWorld.Scale.Y(),
-					local.Position.Z() * parentWorld.Scale.Z(),
+				// We need to apply the parent's pivot before rotating, just like the rendering pipeline!
+				// If parent is a VoxelModel, its Pivot is in unscaled voxel units, so we must scale it to world units.
+				// VoxelSize is in world units (e.g. 0.1)
+				vSize := float32(1.0)
+				if isVoxel {
+					vSize = VoxelSize
 				}
+
+				scaledPivot := mgl32.Vec3{
+					parentWorld.Pivot.X() * vSize,
+					parentWorld.Pivot.Y() * vSize,
+					parentWorld.Pivot.Z() * vSize,
+				}
+
+				diff := local.Position.Sub(scaledPivot)
+
+				scaledLocalPos := mgl32.Vec3{
+					diff.X() * parentWorld.Scale.X(),
+					diff.Y() * parentWorld.Scale.Y(),
+					diff.Z() * parentWorld.Scale.Z(),
+				}
+
 				newPos := parentWorld.Position.Add(parentWorld.Rotation.Rotate(scaledLocalPos))
 
 				// WorldRot = ParentRot * LocalRot

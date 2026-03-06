@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"fmt"
 	"math"
 	"time"
 
@@ -140,19 +139,28 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.Transform.Position = transform.Position
 		obj.Transform.Rotation = transform.Rotation
 
-		// Metric system: Renderer Scale is ALWAYS TargetVoxelSize.
-		vSize := state.RtApp.Scene.TargetVoxelSize
-		if !exists {
-			if _, ok := server.voxPalettes[vox.VoxelPalette]; !ok {
-				fmt.Printf("PALETTE NOT FOUND! %v\n", vox.VoxelPalette)
-			}
-		}
-		if vSize == 0 {
-			vSize = 0.1
-		}
+		vSize := VoxelSize
 
 		scale := transform.Scale
 		obj.Transform.Scale = mgl32.Vec3{vSize * scale.X(), vSize * scale.Y(), vSize * scale.Z()}
+
+		// Compute and apply Pivot
+		switch vox.PivotMode {
+		case PivotModeCenter:
+			if obj.XBrickMap != nil {
+				minB, maxB := obj.XBrickMap.ComputeAABB()
+				transform.Pivot = minB.Add(maxB).Mul(0.5)
+			}
+		case PivotModeCustom:
+			transform.Pivot = vox.CustomPivot
+		case PivotModeCorner:
+			fallthrough
+		default:
+			transform.Pivot = mgl32.Vec3{0, 0, 0}
+		}
+
+		obj.Transform.Pivot = transform.Pivot
+
 		obj.Transform.Dirty = true
 
 		return true
@@ -170,10 +178,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	state.RtApp.Profiler.BeginScope("Sync CA")
 	currentCA := make(map[EntityId]bool)
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
-		vSize := state.RtApp.Scene.TargetVoxelSize
-		if vSize == 0 {
-			vSize = 0.1
-		}
+		vSize := VoxelSize
 
 		if cv == nil || !cv.BridgeToVoxels || cv._density == nil {
 			return true
@@ -403,9 +408,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			stepSize := g.Size / float32(steps)
 			halfSize := g.Size * 0.5
 
-			tBase := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
-			rBase := tr.Rotation.Mat4()
-
 			for i := 0; i <= steps; i++ {
 				offset := float32(i)*stepSize - halfSize
 
@@ -413,14 +415,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 				lx := mgl32.Translate3D(offset, 0, -halfSize)
 				sz := mgl32.Scale3D(1, 1, g.Size)
 				rtLineZ := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
-				rtLineZ.ModelMatrix = tBase.Mul4(rBase).Mul4(lx).Mul4(sz)
+				rtLineZ.ModelMatrix = tr.ObjectToWorld().Mul4(lx).Mul4(sz)
 				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineZ)
 
 				// Line along X (moving along Z)
 				lz := mgl32.Translate3D(-halfSize, 0, offset)
 				rx := mgl32.QuatRotate(mgl32.DegToRad(90), mgl32.Vec3{0, 1, 0}).Mat4()
 				rtLineX := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
-				rtLineX.ModelMatrix = tBase.Mul4(rBase).Mul4(lz).Mul4(rx).Mul4(sz)
+				rtLineX.ModelMatrix = tr.ObjectToWorld().Mul4(lz).Mul4(rx).Mul4(sz)
 				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineX)
 			}
 			return true
@@ -462,10 +464,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 	}
 
-	vSize := state.RtApp.Scene.TargetVoxelSize
-	if vSize == 0 {
-		vSize = 0.1
-	}
+	vSize := VoxelSize
 	invVsize := 1.0 / vSize
 	state.RtApp.ParticleSpawnCount = uint32(len(spawnReqs))
 	state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), float32(invVsize), uint32(time.Now().UnixNano()), emitterCount)

@@ -14,7 +14,7 @@ func (m VoxPhysicsModule) Install(app *App, cmd *Commands) {
 	)
 }
 
-func DecomposeVoxModel(model VoxModel) []CollisionBox {
+func DecomposeVoxModel(model VoxModel, vSize float32) []CollisionBox {
 	if len(model.Voxels) == 0 {
 		return nil
 	}
@@ -30,7 +30,6 @@ func DecomposeVoxModel(model VoxModel) []CollisionBox {
 	}
 
 	var boxes []CollisionBox
-	const vSize = 0.1
 
 	for z := uint32(0); z < model.SizeZ; z++ {
 		for y := uint32(0); y < model.SizeY; y++ {
@@ -139,7 +138,8 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer) {
 			server.mu.RUnlock()
 
 			if ok {
-				boxes = DecomposeVoxModel(asset.VoxModel)
+				vSize := VoxelSize
+				boxes = DecomposeVoxModel(asset.VoxModel, vSize)
 				// Apply scale from transform
 				scale := tr.Scale.X()
 				for i := range boxes {

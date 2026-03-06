@@ -14,6 +14,8 @@ type PhysicsModule struct {
 
 func (m PhysicsModule) Install(app *App, cmd *Commands) {
 	world := NewPhysicsWorld()
+	// world.VoxelScale = 0.1 // Default scale - removed as NewPhysicsWorld already sets it
+
 	if m.UpdateFrequency > 0 {
 		world.UpdateFrequency = m.UpdateFrequency
 	}
@@ -84,9 +86,9 @@ type PhysicsEntityResult struct {
 	IdleTime float32
 }
 
-func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy) {
+func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy, physics *PhysicsWorld) {
 	// Pull latest results from simulation
-	results := proxy.latestResults.Swap(nil)
+	results := proxy.latestResults.Load()
 	if results != nil {
 		resMap := make(map[EntityId]PhysicsEntityResult)
 		for _, res := range results.Entities {
@@ -96,7 +98,18 @@ func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy) {
 		MakeQuery3[TransformComponent, RigidBodyComponent, PhysicsModel](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel) bool {
 			if res, ok := resMap[eid]; ok {
 				// Update components from physics result
-				rotatedOffset := res.Rot.Rotate(pm.CenterOffset)
+				// Render point = pos + rot * (scale * (localPos - pivot)).
+				// Physics sets res.Pos at localPos = pm.CenterOffset_unscaled.
+				// pm.CenterOffset is ALREADY scaled by tr.Scale.X() from pre-calc system!
+				// Pivot is unscaled. So scaled_pivot = tr.Scale * tr.Pivot.
+				vSize := VoxelSize
+				scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
+				// Center offset in PhysicsModel is scaled, but Transform's scale is applied AFTER rotation? NO!
+				// Translate * Rotate * Scale * Translate(-Pivot). Rotate happens AFTER Scale.
+				// So offset vector to subtract from res.Pos is Rotate( pm.CenterOffset - scaledPivot )
+				diff := pm.CenterOffset.Sub(scaledPivot)
+				rotatedOffset := res.Rot.Rotate(diff)
+
 				tr.Position = res.Pos.Sub(rotatedOffset)
 				tr.Rotation = res.Rot
 				rb.Velocity = res.Vel
@@ -119,7 +132,11 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 	}
 
 	MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent) bool {
-		rotatedOffset := tr.Rotation.Rotate(pm.CenterOffset)
+		// Calculate the physics position from visual transform
+		vSize := VoxelSize
+		scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
+		diff := pm.CenterOffset.Sub(scaledPivot)
+		rotatedOffset := tr.Rotation.Rotate(diff)
 		physicsPos := tr.Position.Add(rotatedOffset)
 
 		// Apply accumulated forces to the velocity we send to physics

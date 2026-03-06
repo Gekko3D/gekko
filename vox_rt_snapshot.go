@@ -43,8 +43,18 @@ func (c *VoxelRtSnapshotContainer) Get() *VoxelRtSnapshot {
 	return c.latest.Load()
 }
 
+type VoxelPivotMode uint32
+
+const (
+	PivotModeCenter VoxelPivotMode = iota // Default: automatically center the pivot
+	PivotModeCorner                       // Legacy behavior: pivot at (0,0,0) corner
+	PivotModeCustom                       // Use CustomPivot value
+)
+
 type VoxelModelComponent struct {
 	VoxelModel   AssetId           `gekko:"voxel" usage:"model"`
 	VoxelPalette AssetId           `gekko:"voxel" usage:"palette"`
+	PivotMode    VoxelPivotMode    // How to determine the rotation pivot
+	CustomPivot  mgl32.Vec3        // Used if PivotMode == PivotModeCustom
 	CustomMap    *volume.XBrickMap // If set, use this instead of loading from VoxelModel asset
 }

@@ -157,8 +157,8 @@ func (server *AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId 
 		// Decode Rotation and Scale using dot_vox logic
 		if len(node.Frames) > 0 {
 			f := node.Frames[0]
-			const VoxelUnitSize = 0.1
-			pos = mgl32.Vec3{f.LocalTrans[0], f.LocalTrans[1], f.LocalTrans[2]}.Mul(VoxelUnitSize * voxelScale)
+			vSize := VoxelSize
+			pos = mgl32.Vec3{f.LocalTrans[0], f.LocalTrans[1], f.LocalTrans[2]}.Mul(vSize * voxelScale)
 			rot, scale = decodeVoxRotation(f.Rotation)
 		} else {
 			rot = mgl32.QuatIdent()
@@ -208,9 +208,9 @@ func (server *AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId 
 				float32(model.SizeZ) * -0.5,
 			}
 
-			// Scale the offset to world units (using the same VoxelUnitSize as translation)
-			const VoxelUnitSize = 0.1
-			centerOffset = centerOffset.Mul(VoxelUnitSize * voxelScale)
+			// Scale the offset to world units (using the same VoxelSize as translation)
+			vSize := VoxelSize
+			centerOffset = centerOffset.Mul(vSize * voxelScale)
 
 			// Create a child entity for the mesh.
 			// Rotation is Identity because the rotation is handled by the Parent TransformNode.

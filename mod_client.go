@@ -10,6 +10,8 @@ type Float3 = mgl32.Vec3
 type Float4 = mgl32.Vec4
 type Float4x4 = mgl32.Mat4
 
+const VoxelSize float32 = 0.1
+
 type ClientModule struct {
 	WindowWidth  int
 	WindowHeight int
@@ -96,6 +98,16 @@ type TransformComponent struct {
 	Position mgl32.Vec3
 	Rotation mgl32.Quat
 	Scale    mgl32.Vec3
+	Pivot    mgl32.Vec3
+}
+
+func (t TransformComponent) ObjectToWorld() mgl32.Mat4 {
+	// Matrix = T * R * S * P_inv
+	translate := mgl32.Translate3D(t.Position.X(), t.Position.Y(), t.Position.Z())
+	rotate := t.Rotation.Mat4()
+	scale := mgl32.Scale3D(t.Scale.X(), t.Scale.Y(), t.Scale.Z())
+	pivotTranslate := mgl32.Translate3D(-t.Pivot.X(), -t.Pivot.Y(), -t.Pivot.Z())
+	return translate.Mul4(rotate).Mul4(scale).Mul4(pivotTranslate)
 }
 
 type LocalTransformComponent struct {
