@@ -25,7 +25,7 @@ struct SpriteInstance {
     sprite_index: u32,
     atlas_cols: u32,
     atlas_rows: u32,
-    pad2: u32,
+    billboard_mode: u32,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraData;
@@ -83,8 +83,21 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
         out.position = vec4<f32>(ndc_pos.x, -ndc_pos.y, 0.0, 1.0);
     } else {
         // World Space
-        let r = normalize(get_camera_right());
-        let u = normalize(get_camera_up());
+        var r: vec3<f32>;
+        var u: vec3<f32>;
+        
+        if (inst.billboard_mode == 1u) { // Cylindrical (Y-aligned)
+            let to_cam = normalize(camera.cam_pos.xyz - inst.pos);
+            r = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), to_cam));
+            u = vec3<f32>(0.0, 1.0, 0.0);
+        } else if (inst.billboard_mode == 2u) { // Fixed
+            r = vec3<f32>(1.0, 0.0, 0.0);
+            u = vec3<f32>(0.0, 1.0, 0.0);
+        } else { // Spherical
+            r = normalize(get_camera_right());
+            u = normalize(get_camera_up());
+        }
+
         let world_pos = inst.pos + (r * corner.x * inst.size.x + u * corner.y * inst.size.y);
         out.position = camera.view_proj * vec4<f32>(world_pos, 1.0);
         out.world_pos = world_pos;
@@ -130,8 +143,18 @@ fn fs_main(in: VSOut) -> FSOut {
     // WBOIT weighting
     let weight = max(1e-3, alpha); 
 
+    var final_rgb = in.color.rgb * atlas_color.rgb;
+    
+    // Simple Lighting for world sprites
+    if (in.is_ui == 0u) {
+        let L = normalize(camera.light_pos.xyz - in.world_pos);
+        let N = normalize(camera.cam_pos.xyz - in.world_pos); // Assume facing camera
+        let diff = max(0.0, dot(N, L));
+        final_rgb = final_rgb * (camera.ambient_color.rgb + diff);
+    }
+
     var out: FSOut;
-    out.accum = vec4<f32>(in.color.rgb * atlas_color.rgb * alpha * weight, alpha);
+    out.accum = vec4<f32>(final_rgb * alpha * weight, alpha);
     out.weight = alpha * weight;
     return out;
 }

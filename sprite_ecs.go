@@ -6,6 +6,14 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+type BillboardMode uint32
+
+const (
+	BillboardSpherical   BillboardMode = 0
+	BillboardCylindrical BillboardMode = 1 // Y-aligned
+	BillboardFixed       BillboardMode = 2
+)
+
 // SpriteComponent represents a 2D billboard in the world or on the screen.
 type SpriteComponent struct {
 	Enabled bool
@@ -19,8 +27,9 @@ type SpriteComponent struct {
 	AtlasCols   uint32
 	AtlasRows   uint32
 
-	Texture AssetId
-	IsUI    bool // If true, Position is screen-space pixels and Size is pixels
+	Texture       AssetId
+	IsUI          bool // If true, Position is screen-space pixels and Size is pixels
+	BillboardMode BillboardMode
 }
 
 // SpriteInstance matches WGSL layout in sprites.wgsl
@@ -34,10 +43,10 @@ type SpriteInstance struct {
 
 	Color [4]float32 // 16 bytes
 
-	SpriteIndex uint32
-	AtlasCols   uint32
-	AtlasRows   uint32
-	Padding2    uint32 // 16 bytes
+	SpriteIndex   uint32
+	AtlasCols     uint32
+	AtlasRows     uint32
+	BillboardMode BillboardMode // 16 bytes
 }
 
 // spritesSync collects sprite data for the GPU.
@@ -70,13 +79,14 @@ func spritesSync(state *VoxelRtState, cmd *Commands) ([]byte, uint32, AssetId) {
 
 		// Pack Params
 		inst := SpriteInstance{
-			Pos:         [3]float32{sp.Position.X(), sp.Position.Y(), sp.Position.Z()},
-			IsUI:        isUIVal,
-			Size:        sp.Size,
-			Color:       sp.Color,
-			SpriteIndex: sp.SpriteIndex,
-			AtlasCols:   cols,
-			AtlasRows:   rows,
+			Pos:           [3]float32{sp.Position.X(), sp.Position.Y(), sp.Position.Z()},
+			IsUI:          isUIVal,
+			Size:          sp.Size,
+			Color:         sp.Color,
+			SpriteIndex:   sp.SpriteIndex,
+			AtlasCols:     cols,
+			AtlasRows:     rows,
+			BillboardMode: sp.BillboardMode,
 		}
 		spriteInstances = append(spriteInstances, inst)
 
