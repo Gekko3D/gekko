@@ -20,7 +20,8 @@ struct SpriteInstance {
     pos: vec3<f32>,
     is_ui: u32,
     size: vec2<f32>,
-    pad1: vec2<f32>,
+    is_unlit: u32,
+    pad1: u32,
     color: vec4<f32>,
     sprite_index: u32,
     atlas_cols: u32,
@@ -44,6 +45,7 @@ struct VSOut {
     @location(4) @interpolate(flat) atlas_cols: u32,
     @location(5) @interpolate(flat) atlas_rows: u32,
     @location(6) @interpolate(flat) is_ui: u32,
+    @location(7) @interpolate(flat) is_unlit: u32,
 };
 
 fn get_camera_right() -> vec3<f32> {
@@ -75,6 +77,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     out.atlas_cols = max(1u, inst.atlas_cols);
     out.atlas_rows = max(1u, inst.atlas_rows);
     out.is_ui = inst.is_ui;
+    out.is_unlit = inst.is_unlit;
 
     if (inst.is_ui != 0u) {
         // UI Space: inst.pos.xy is screen pixels, inst.size is pixels
@@ -146,7 +149,7 @@ fn fs_main(in: VSOut) -> FSOut {
     var final_rgb = in.color.rgb * atlas_color.rgb;
     
     // Simple Lighting for world sprites
-    if (in.is_ui == 0u) {
+    if (in.is_ui == 0u && in.is_unlit == 0u) {
         let L = normalize(camera.light_pos.xyz - in.world_pos);
         let N = normalize(camera.cam_pos.xyz - in.world_pos); // Assume facing camera
         let diff = max(0.0, dot(N, L));

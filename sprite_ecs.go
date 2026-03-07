@@ -30,6 +30,7 @@ type SpriteComponent struct {
 	Texture       AssetId
 	IsUI          bool // If true, Position is screen-space pixels and Size is pixels
 	BillboardMode BillboardMode
+	Unlit         bool
 }
 
 // SpriteInstance matches WGSL layout in sprites.wgsl
@@ -38,8 +39,9 @@ type SpriteInstance struct {
 	Pos  [3]float32
 	IsUI uint32 // 16 bytes total
 
-	Size     [2]float32
-	Padding1 [2]float32 // 16 bytes
+	Size    [2]float32
+	IsUnlit uint32
+	Pad1    uint32 // 16 bytes
 
 	Color [4]float32 // 16 bytes
 
@@ -87,6 +89,9 @@ func spritesSync(state *VoxelRtState, cmd *Commands) ([]byte, uint32, AssetId) {
 			AtlasCols:     cols,
 			AtlasRows:     rows,
 			BillboardMode: sp.BillboardMode,
+		}
+		if sp.Unlit {
+			inst.IsUnlit = 1
 		}
 		spriteInstances = append(spriteInstances, inst)
 
