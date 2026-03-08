@@ -217,9 +217,25 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 			slop := float32(0.02)
 			if m.penetration > slop {
-				// Push out (simple)
-				if !b.isStatic {
-					b.pos = b.pos.Add(m.normal.Mul(m.penetration - slop))
+				depth := m.penetration - slop
+				invMassA := float32(0)
+				invMassB := float32(0)
+				if !b.isStatic && b.mass > 0 {
+					invMassA = 1.0 / b.mass
+				}
+				if !other.isStatic && other.mass > 0 {
+					invMassB = 1.0 / other.mass
+				}
+
+				totalInvMass := invMassA + invMassB
+				if totalInvMass > 0 {
+					correction := m.normal.Mul(depth / totalInvMass)
+					if invMassA > 0 {
+						b.pos = b.pos.Add(correction.Mul(invMassA))
+					}
+					if invMassB > 0 {
+						other.pos = other.pos.Sub(correction.Mul(invMassB))
+					}
 				}
 			}
 
@@ -287,6 +303,12 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				fImpulse := tangent.Mul(jt)
 				b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
 				b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
+
+				if !other.isStatic && other.mass > 0 {
+					inertiaB := calculateInertia(other)
+					other.vel = other.vel.Sub(fImpulse.Mul(1.0 / other.mass))
+					other.angVel = other.angVel.Sub(rB.Cross(fImpulse).Mul(1.0 / inertiaB))
+				}
 			}
 
 			// Stabilization: if velocity is very low after resolution, zero it
