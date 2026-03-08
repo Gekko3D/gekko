@@ -8,6 +8,7 @@ import (
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
+	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
@@ -476,18 +477,34 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 
 	// Sync GPU sprites
-	spriteBytes, spriteCount, spriteAtlasId := spritesSync(state, cmd)
-	if spriteAtlasId != (AssetId{}) && spriteAtlasId != state.lastSpriteAtlas {
-		if texAsset, ok := server.textures[spriteAtlasId]; ok {
-			state.RtApp.SetSpriteAtlas(texAsset.Texels, texAsset.Width, texAsset.Height)
-			state.lastSpriteAtlas = spriteAtlasId
+	spriteBytes, spriteCount, spriteBatches := spritesSync(state, cmd)
+	seenSpriteAtlases := make(map[string]struct{}, len(spriteBatches))
+	for _, batch := range spriteBatches {
+		if batch.AtlasKey == "" {
+			continue
+		}
+		if _, seen := seenSpriteAtlases[batch.AtlasKey]; seen {
+			continue
+		}
+		seenSpriteAtlases[batch.AtlasKey] = struct{}{}
+		for atlasID, texAsset := range server.textures {
+			if spriteAtlasKey(atlasID) != batch.AtlasKey {
+				continue
+			}
+			state.RtApp.BufferManager.SetSpriteAtlas(batch.AtlasKey, texAsset.Texels, texAsset.Width, texAsset.Height, texAsset.Version)
+			break
 		}
 	}
-	sRecreated := state.RtApp.BufferManager.UpdateSprites(spriteBytes, spriteCount)
-	if sRecreated || state.RtApp.BufferManager.SpriteAtlasDirty || state.RtApp.BufferManager.SpritesBindGroup0 == nil {
-		state.RtApp.BufferManager.CreateSpritesBindGroups(state.RtApp.SpritesPipeline)
-		state.RtApp.BufferManager.SpriteAtlasDirty = false
+	state.RtApp.BufferManager.UpdateSprites(spriteBytes, spriteCount)
+	gpuSpriteBatches := make([]gpu_rt.SpriteBatchDesc, 0, len(spriteBatches))
+	for _, batch := range spriteBatches {
+		gpuSpriteBatches = append(gpuSpriteBatches, gpu_rt.SpriteBatchDesc{
+			AtlasKey:      batch.AtlasKey,
+			FirstInstance: batch.FirstInstance,
+			InstanceCount: batch.InstanceCount,
+		})
 	}
+	state.RtApp.BufferManager.SyncSpriteBatches(state.RtApp.SpritesPipeline, gpuSpriteBatches)
 }
 
 func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *Commands) {

@@ -11,29 +11,28 @@ type AABBComponent struct {
 	Max mgl32.Vec3
 }
 
+const maxFreeSpatialBuckets = 4096
+
 type SpatialHashGrid struct {
-	cellSize float32
-	// Map from cell hash to list of entities
-	cells map[uint64][]EntityId
+	cellSize    float32
+	cells       map[uint64][]EntityId
+	freeBuckets [][]EntityId
 }
 
 func NewSpatialHashGrid(cellSize float32) *SpatialHashGrid {
 	return &SpatialHashGrid{
-		cellSize: cellSize,
-		cells:    make(map[uint64][]EntityId),
+		cellSize:    cellSize,
+		cells:       make(map[uint64][]EntityId),
+		freeBuckets: make([][]EntityId, 0, 64),
 	}
 }
 
 func (grid *SpatialHashGrid) Clear() {
-	// Optimization: Reuse the map if possible or just make new one
-	// For now, simple make new one to ensure no stale data
-	// Or loop and shrink slices? making new map is safer/easier for GC sometimes
-	// but let's try to clear map for performance if we knew how to do it efficiently in Go without realloc
-	// Go 1.21 has clear(map), but we might be on older version? Assuming modern Go.
-	// Actually `clear(grid.cells)` is valid in Go 1.21+.
-	// If not, we re-make.
-	for k := range grid.cells {
-		delete(grid.cells, k)
+	for key, bucket := range grid.cells {
+		if cap(bucket) > 0 && len(grid.freeBuckets) < maxFreeSpatialBuckets {
+			grid.freeBuckets = append(grid.freeBuckets, bucket[:0])
+		}
+		delete(grid.cells, key)
 	}
 }
 
@@ -46,29 +45,41 @@ func (grid *SpatialHashGrid) Insert(id EntityId, aabb AABBComponent) {
 		for y := minY; y <= maxY; y++ {
 			for z := minZ; z <= maxZ; z++ {
 				key := grid.hashKey(x, y, z)
-				grid.cells[key] = append(grid.cells[key], id)
+				bucket, ok := grid.cells[key]
+				if !ok && len(grid.freeBuckets) > 0 {
+					last := len(grid.freeBuckets) - 1
+					bucket = grid.freeBuckets[last]
+					grid.freeBuckets = grid.freeBuckets[:last]
+				}
+				bucket = append(bucket, id)
+				grid.cells[key] = bucket
 			}
 		}
 	}
 }
 
 func (grid *SpatialHashGrid) QueryAABB(aabb AABBComponent) []EntityId {
+	return grid.QueryAABBInto(aabb, make(map[EntityId]struct{}), nil)
+}
+
+func (grid *SpatialHashGrid) QueryAABBInto(aabb AABBComponent, unique map[EntityId]struct{}, results []EntityId) []EntityId {
 	minX, maxX := grid.getCellIndex(aabb.Min.X()), grid.getCellIndex(aabb.Max.X())
 	minY, maxY := grid.getCellIndex(aabb.Min.Y()), grid.getCellIndex(aabb.Max.Y())
 	minZ, maxZ := grid.getCellIndex(aabb.Min.Z()), grid.getCellIndex(aabb.Max.Z())
 
-	unique := make(map[EntityId]struct{})
-	var results []EntityId
+	clear(unique)
+	results = results[:0]
 
 	for x := minX; x <= maxX; x++ {
 		for y := minY; y <= maxY; y++ {
 			for z := minZ; z <= maxZ; z++ {
 				key := grid.hashKey(x, y, z)
 				for _, id := range grid.cells[key] {
-					if _, ok := unique[id]; !ok {
-						unique[id] = struct{}{}
-						results = append(results, id)
+					if _, ok := unique[id]; ok {
+						continue
 					}
+					unique[id] = struct{}{}
+					results = append(results, id)
 				}
 			}
 		}
@@ -129,9 +140,9 @@ func UpdateAABBsSystem(cmd *Commands) {
 
 		scale := tr.Scale
 		// Abs scale just in case
-		scaleX := float32(math.Abs(float64(scale.X())))
-		scaleY := float32(math.Abs(float64(scale.Y())))
-		scaleZ := float32(math.Abs(float64(scale.Z())))
+		scaleX := absf(scale.X())
+		scaleY := absf(scale.Y())
+		scaleZ := absf(scale.Z())
 
 		halfExtents := mgl32.Vec3{
 			col.AABBHalfExtents.X() * scaleX,

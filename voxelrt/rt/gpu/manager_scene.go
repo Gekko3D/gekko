@@ -163,7 +163,7 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene) {
 		dir := mgl32.Vec3{l.Direction[0], l.Direction[1], l.Direction[2]}
 		var view, proj mgl32.Mat4
 		up := mgl32.Vec3{0, 1, 0}
-		if math.Abs(float64(dir.Y())) > 0.99 {
+		if float64(absf(dir.Y())) > 0.99 {
 			up = mgl32.Vec3{1, 0, 0}
 		}
 

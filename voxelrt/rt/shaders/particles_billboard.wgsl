@@ -28,8 +28,8 @@ struct ParticleInstance {
     sprite_index: u32,
     atlas_cols: u32,
     atlas_rows: u32,
+    alpha_mode: u32,
     pad1: u32,
-    pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraData;
@@ -50,6 +50,7 @@ struct VSOut {
     @location(5) @interpolate(flat) sprite_index: u32,
     @location(6) @interpolate(flat) atlas_cols: u32,
     @location(7) @interpolate(flat) atlas_rows: u32,
+    @location(8) @interpolate(flat) alpha_mode: u32,
 };
 
 fn get_camera_right() -> vec3<f32> {
@@ -104,6 +105,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     out.sprite_index = inst.sprite_index;
     out.atlas_cols = max(1u, inst.atlas_cols);
     out.atlas_rows = max(1u, inst.atlas_rows);
+    out.alpha_mode = inst.alpha_mode;
     return out;
 }
 
@@ -141,7 +143,10 @@ fn fs_main(in: VSOut) -> FSOut {
     let padded_uv = in.quad_uv * 0.98 + 0.01;
     let sprite_uv = vec2<f32>(sprite_x, sprite_y) + padded_uv * vec2<f32>(col_w, row_h);
     let atlas_color = textureSample(atlas_tex, atlas_sampler, sprite_uv);
-    let mask = atlas_color.r; // Assume grayscale alpha mask
+    var mask = atlas_color.a;
+    if (in.alpha_mode == 1u) {
+        mask = max(atlas_color.r, max(atlas_color.g, atlas_color.b));
+    }
 
     let life_fade = smoothstep(0.0, 0.1, in.life_pct) * (1.0 - smoothstep(0.9, 1.0, in.life_pct));
     

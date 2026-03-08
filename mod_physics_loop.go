@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"math"
 	"runtime"
 	"sync"
 	"time"
@@ -9,14 +8,36 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+type collisionManifold struct {
+	bodyA, bodyB  *internalBody
+	normal        mgl32.Vec3
+	penetration   float32
+	point         mgl32.Vec3
+	normalImpulse float32
+	relativeSpeed float32
+}
+
+type collisionPair struct {
+	A EntityId
+	B EntityId
+}
+
 func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 	ticker := time.NewTicker(time.Duration(1000.0/world.UpdateFrequency) * time.Millisecond)
 	defer ticker.Stop()
 
 	// Internal state
 	internalBodies := make(map[EntityId]*internalBody)
+	bodiesByID := make(map[EntityId]*internalBody)
+	staticContactBodies := make(map[EntityId]bool)
+	grid := NewSpatialHashGrid(world.SpatialGridCellSize)
+	manifolds := make([]collisionManifold, 0, 256)
+	previousPairs := make(map[collisionPair]PhysicsCollisionEvent)
+	currentPairs := make(map[collisionPair]PhysicsCollisionEvent)
+	var tick uint64
 
 	for range ticker.C {
+		tick++
 		// Pick up new snapshot
 		snap := proxy.pendingState.Swap(nil)
 		if snap != nil {
@@ -35,6 +56,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				body.vel = es.Vel
 				body.angVel = es.AngVel
 				body.isStatic = es.IsStatic
+				massChanged := body.mass != es.Mass
+				modelChanged := !sameCollisionBoxes(body.boxes, es.Model.Boxes)
 				body.mass = es.Mass
 				body.model = es.Model
 				body.friction = es.Friction
@@ -43,10 +66,18 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				body.sleeping = es.Sleeping
 				body.linearDamping = es.LinearDamping
 				body.angularDamping = es.AngularDamping
-				// Store boxes
-				body.boxes = make([]InternalBox, len(es.Model.Boxes))
-				for i, box := range es.Model.Boxes {
-					body.boxes[i].Box = box
+				if modelChanged {
+					if cap(body.boxes) < len(es.Model.Boxes) {
+						body.boxes = make([]InternalBox, len(es.Model.Boxes))
+					} else {
+						body.boxes = body.boxes[:len(es.Model.Boxes)]
+					}
+					for i, box := range es.Model.Boxes {
+						body.boxes[i].Box = box
+					}
+				}
+				if massChanged || modelChanged {
+					body.invInertiaLocal = calculateInverseInertiaLocal(body)
 				}
 			}
 			// Cleanup dead entities
@@ -67,10 +98,12 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			numWorkers = runtime.NumCPU()
 		}
 
-		// Convert map to slice for parallel processing
+		// Convert map to per-tick immutable views for parallel processing
 		bodiesList := make([]*internalBody, 0, len(internalBodies))
-		for _, b := range internalBodies {
+		clear(bodiesByID)
+		for eid, b := range internalBodies {
 			bodiesList = append(bodiesList, b)
+			bodiesByID[eid] = b
 		}
 
 		dt := float32(1.0 / world.UpdateFrequency)
@@ -102,7 +135,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						b.vel = b.vel.Add(gravity.Mul(b.gravityScale * dt))
 					}
 
-					// Damping
+					// Damping (scaled to preserve current 60 Hz tuning across physics rates)
 					lDamp := float32(0.999)
 					if b.linearDamping > 0 {
 						lDamp = b.linearDamping
@@ -111,16 +144,13 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					if b.angularDamping > 0 {
 						aDamp = b.angularDamping
 					}
-					b.vel = b.vel.Mul(lDamp)
-					b.angVel = b.angVel.Mul(aDamp)
+					const dampingReferenceHz = float32(60.0)
+					b.vel = b.vel.Mul(powf(lDamp, dt*dampingReferenceHz))
+					b.angVel = b.angVel.Mul(powf(aDamp, dt*dampingReferenceHz))
 
 					// Integrate
 					b.pos = b.pos.Add(b.vel.Mul(dt))
-					if b.angVel.Len() > 0 {
-						angVelQuat := mgl32.Quat{W: 0, V: b.angVel.Mul(0.5 * dt)}
-						b.rot = b.rot.Add(angVelQuat.Mul(b.rot))
-						b.rot = b.rot.Normalize()
-					}
+					b.rot = integrateAngularVelocity(b.rot, b.angVel, dt)
 					b.updateAABB()
 				}
 			}(bodiesList[start:end])
@@ -128,7 +158,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		wg.Wait()
 
 		// Broad-phase: Update spatial grid AFTER integration
-		grid := NewSpatialHashGrid(10.0) // 10 units cell size
+		grid.Clear() // 10 units cell size
 		for _, b := range bodiesList {
 			// updateAABB was already called in integration for dynamic bodies,
 			// but static bodies need it called once or preserved.
@@ -139,13 +169,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		}
 
 		// 2. Parallel Collision Detection (Narrow-phase)
-		type collisionManifold struct {
-			bodyA, bodyB *internalBody
-			normal       mgl32.Vec3
-			penetration  float32
-			point        mgl32.Vec3
-		}
-		var manifolds []collisionManifold
+		manifolds = manifolds[:0]
 		var manifoldMu sync.Mutex
 
 		for i := 0; i < numWorkers; i++ {
@@ -161,6 +185,9 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			wg.Add(1)
 			go func(bodies []*internalBody) {
 				defer wg.Done()
+				queryUnique := make(map[EntityId]struct{})
+				var candidates []EntityId
+				localManifolds := make([]collisionManifold, 0, 32)
 				for _, b := range bodies {
 					// Only dynamic bodies initiate collision checks
 					if b.isStatic || b.sleeping {
@@ -168,13 +195,13 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					}
 
 					// Query spatial grid for candidates
-					candidates := grid.QueryAABB(AABBComponent{Min: b.aabbMin, Max: b.aabbMax})
+					candidates = grid.QueryAABBInto(AABBComponent{Min: b.aabbMin, Max: b.aabbMax}, queryUnique, candidates)
 					for _, otherEid := range candidates {
 						if otherEid == b.Eid {
 							continue
 						}
 
-						other := internalBodies[otherEid]
+						other := bodiesByID[otherEid]
 						if other == nil {
 							continue
 						}
@@ -189,20 +216,23 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						// Narrow-phase
 						for _, boxA := range b.boxes {
 							for _, boxB := range other.boxes {
-								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box); collision {
-									manifoldMu.Lock()
-									manifolds = append(manifolds, collisionManifold{
+								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
+									localManifolds = append(localManifolds, collisionManifold{
 										bodyA:       b,
 										bodyB:       other,
 										normal:      normal,
 										penetration: penetration,
 										point:       contactPoint,
 									})
-									manifoldMu.Unlock()
 								}
 							}
 						}
 					}
+				}
+				if len(localManifolds) > 0 {
+					manifoldMu.Lock()
+					manifolds = append(manifolds, localManifolds...)
+					manifoldMu.Unlock()
 				}
 			}(bodiesList[start:end])
 		}
@@ -213,100 +243,185 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			b := m.bodyA
 			other := m.bodyB
 
-			slop := float32(0.02)
+			slop := world.CollisionSlop
+			positionCorrectionPercent := world.PositionCorrection
 			if m.penetration > slop {
-				// Push out (simple)
-				if !b.isStatic {
-					b.pos = b.pos.Add(m.normal.Mul(m.penetration - slop))
+				depth := (m.penetration - slop) * positionCorrectionPercent
+				invMassA := float32(0)
+				invMassB := float32(0)
+				if !b.isStatic && b.mass > 0 {
+					invMassA = 1.0 / b.mass
+				}
+				if !other.isStatic && other.mass > 0 {
+					invMassB = 1.0 / other.mass
+				}
+
+				totalInvMass := invMassA + invMassB
+				if totalInvMass > 0 {
+					correction := m.normal.Mul(depth / totalInvMass)
+					if invMassA > 0 {
+						b.pos = b.pos.Add(correction.Mul(invMassA))
+					}
+					if invMassB > 0 {
+						other.pos = other.pos.Sub(correction.Mul(invMassB))
+					}
 				}
 			}
+		}
 
-			rA := m.point.Sub(b.pos)
-			rB := m.point.Sub(other.pos)
+		clear(staticContactBodies)
+		for _, m := range manifolds {
+			if !m.bodyA.isStatic && m.bodyB.isStatic {
+				staticContactBodies[m.bodyA.Eid] = true
+			}
+			if !m.bodyB.isStatic && m.bodyA.isStatic {
+				staticContactBodies[m.bodyB.Eid] = true
+			}
+		}
 
-			vA := b.vel.Add(b.angVel.Cross(rA))
-			vB := other.vel
-			if !other.isStatic {
-				vB = other.vel.Add(other.angVel.Cross(rB))
+		for iter := 0; iter < world.SolverIterations; iter++ {
+			for i := range manifolds {
+				m := &manifolds[i]
+				b := m.bodyA
+				other := m.bodyB
+
+				rA := m.point.Sub(b.pos)
+				rB := m.point.Sub(other.pos)
+
+				vA := b.vel.Add(b.angVel.Cross(rA))
+				vB := other.vel
+				if !other.isStatic {
+					vB = other.vel.Add(other.angVel.Cross(rB))
+				}
+
+				relativeVel := vA.Sub(vB)
+				velAlongNormal := relativeVel.Dot(m.normal)
+				impactSpeed := absf(velAlongNormal)
+				if impactSpeed > m.relativeSpeed {
+					m.relativeSpeed = impactSpeed
+				}
+
+				if velAlongNormal > 0 {
+					continue
+				}
+
+				restitution := (b.restitution + other.restitution) * 0.5
+				if velAlongNormal > world.RestitutionThreshold {
+					restitution = 0
+				}
+
+				invMassA := inverseMass(b)
+				invMassB := inverseMass(other)
+				denom := invMassA + invMassB + angularConstraintDenominator(b, rA, m.normal) + angularConstraintDenominator(other, rB, m.normal)
+				if denom <= 0 {
+					continue
+				}
+
+				j := -(1 + restitution) * velAlongNormal
+				j /= denom
+
+				impulse := m.normal.Mul(j)
+				if absf(j) > m.normalImpulse {
+					m.normalImpulse = absf(j)
+				}
+
+				if invMassA > 0 {
+					b.vel = b.vel.Add(impulse.Mul(invMassA))
+					b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(impulse)))
+				}
+				if invMassB > 0 {
+					other.vel = other.vel.Sub(impulse.Mul(invMassB))
+					other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(impulse)))
+				}
+
+				impactWakeThreshold := world.WakeThreshold
+				if absf(velAlongNormal) > impactWakeThreshold || m.penetration > world.CollisionSlop {
+					if !b.isStatic {
+						b.Wake()
+					}
+					if !other.isStatic {
+						other.Wake()
+					}
+				}
+
+				friction := (b.friction + other.friction) * 0.5
+				tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
+				if tangent.Len() > 0.0001 {
+					tangent = tangent.Normalize()
+					tangentDenom := invMassA + invMassB + angularConstraintDenominator(b, rA, tangent) + angularConstraintDenominator(other, rB, tangent)
+					if tangentDenom > 0 {
+						jt := -relativeVel.Dot(tangent)
+						jt /= tangentDenom
+						maxFriction := friction * absf(j)
+						if jt > maxFriction {
+							jt = maxFriction
+						}
+						if jt < -maxFriction {
+							jt = -maxFriction
+						}
+
+						fImpulse := tangent.Mul(jt)
+						if invMassA > 0 {
+							b.vel = b.vel.Add(fImpulse.Mul(invMassA))
+							b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(fImpulse)))
+						}
+						if invMassB > 0 {
+							other.vel = other.vel.Sub(fImpulse.Mul(invMassB))
+							other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(fImpulse)))
+						}
+					}
+				}
+
+			}
+		}
+
+		for pair := range currentPairs {
+			delete(currentPairs, pair)
+		}
+		for _, manifold := range manifolds {
+			pair := orderedCollisionPair(manifold.bodyA.Eid, manifold.bodyB.Eid)
+			event := PhysicsCollisionEvent{
+				A:             pair.A,
+				B:             pair.B,
+				Point:         manifold.point,
+				Normal:        manifold.normal,
+				Penetration:   manifold.penetration,
+				NormalImpulse: manifold.normalImpulse,
+				RelativeSpeed: manifold.relativeSpeed,
+				Tick:          tick,
 			}
 
-			relativeVel := vA.Sub(vB)
-			velAlongNormal := relativeVel.Dot(m.normal)
-
-			// Do not resolve if velocities are separating
-			if velAlongNormal > 0 {
-				continue
-			}
-
-			restitution := (b.restitution + other.restitution) * 0.5
-			// If velocity is low, disable restitution to help settling
-			if velAlongNormal > -0.5 {
-				restitution = 0
-			}
-
-			inertiaA := calculateInertia(b)
-
-			denom := 1.0 / b.mass
-			rAn := rA.Cross(m.normal)
-			denom += rAn.Dot(rAn) / inertiaA
-
-			if !other.isStatic && other.mass > 0 {
-				inertiaB := calculateInertia(other)
-				denom += 1.0 / other.mass
-				rBn := rB.Cross(m.normal)
-				denom += rBn.Dot(rBn) / inertiaB
-			}
-
-			j := -(1 + restitution) * velAlongNormal
-			j /= denom
-
-			impulse := m.normal.Mul(j)
-
-			// Apply linear impulse
-			b.vel = b.vel.Add(impulse.Mul(1.0 / b.mass))
-
-			// Apply angular impulse
-			b.angVel = b.angVel.Add(rA.Cross(impulse).Mul(1.0 / inertiaA))
-
-			if !other.isStatic && other.mass > 0 {
-				inertiaB := calculateInertia(other)
-				other.vel = other.vel.Sub(impulse.Mul(1.0 / other.mass))
-				other.angVel = other.angVel.Sub(rB.Cross(impulse).Mul(1.0 / inertiaB))
-			}
-
-			// Friction
-			friction := (b.friction + other.friction) * 0.5
-			tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
-			if tangent.Len() > 0.0001 {
-				tangent = tangent.Normalize()
-				jt := -relativeVel.Dot(tangent) * friction
-				jt /= denom // Approximate denominator for friction
-
-				fImpulse := tangent.Mul(jt)
-				b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
-				b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
-			}
-
-			// Stabilization: if velocity is very low after resolution, zero it
-			if b.vel.Len() < 0.01 {
-				b.vel = mgl32.Vec3{0, 0, 0}
-			}
-			if b.angVel.Len() < 0.01 {
-				b.angVel = mgl32.Vec3{0, 0, 0}
-			}
-
-			// Only wake if we have significant relative velocity
-			if math.Abs(float64(velAlongNormal)) > 0.1 {
-				b.Wake()
+			if existing, ok := currentPairs[pair]; ok {
+				currentPairs[pair] = mergeCollisionEvent(existing, event)
+			} else {
+				currentPairs[pair] = event
 			}
 		}
 
 		// 4. Sleeping and Results
+		groundedSleepThreshold := maxf(world.SleepThreshold, gravity.Len()*dt*2.0)
+		groundedAngularThreshold := maxf(world.SleepThreshold, world.GroundedAngularThreshold)
+		groundedSleepTime := minf(world.SleepTime, world.GroundedSleepTime)
 		for _, b := range internalBodies {
 			if !b.isStatic && !b.sleeping {
-				if b.vel.Len() < world.SleepThreshold && b.angVel.Len() < world.SleepThreshold {
+				if b.vel.Len() < world.VelocityZeroThreshold {
+					b.vel = mgl32.Vec3{}
+				}
+				if b.angVel.Len() < world.VelocityZeroThreshold {
+					b.angVel = mgl32.Vec3{}
+				}
+
+				sleepThreshold := world.SleepThreshold
+				angularThreshold := world.SleepThreshold
+				sleepTime := world.SleepTime
+				if staticContactBodies[b.Eid] {
+					sleepThreshold = groundedSleepThreshold
+					angularThreshold = groundedAngularThreshold
+					sleepTime = groundedSleepTime
+				}
+				if b.vel.Len() < sleepThreshold && b.angVel.Len() < angularThreshold {
 					b.idleTime += dt
-					if b.idleTime > world.SleepTime {
+					if b.idleTime > sleepTime {
 						b.sleeping = true
 						b.vel = mgl32.Vec3{0, 0, 0}
 						b.angVel = mgl32.Vec3{0, 0, 0}
@@ -318,7 +433,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		}
 
 		// Push results
-		res := &PhysicsResults{}
+		res := &PhysicsResults{Tick: tick, Generated: time.Now()}
 		for _, b := range internalBodies {
 			res.Entities = append(res.Entities, PhysicsEntityResult{
 				Eid:      b.Eid,
@@ -330,8 +445,53 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				IdleTime: b.idleTime,
 			})
 		}
+		for pair, event := range currentPairs {
+			if _, ok := previousPairs[pair]; ok {
+				event.Type = CollisionEventStay
+			} else {
+				event.Type = CollisionEventEnter
+			}
+			res.Collisions = append(res.Collisions, event)
+		}
+		for pair, previous := range previousPairs {
+			if _, ok := currentPairs[pair]; ok {
+				continue
+			}
+			previous.Type = CollisionEventExit
+			previous.Penetration = 0
+			previous.NormalImpulse = 0
+			previous.RelativeSpeed = 0
+			previous.Tick = tick
+			res.Collisions = append(res.Collisions, previous)
+		}
+		previousPairs, currentPairs = currentPairs, previousPairs
 		proxy.latestResults.Store(res)
 	}
+}
+
+func orderedCollisionPair(a, b EntityId) collisionPair {
+	if a <= b {
+		return collisionPair{A: a, B: b}
+	}
+	return collisionPair{A: b, B: a}
+}
+
+func mergeCollisionEvent(current, candidate PhysicsCollisionEvent) PhysicsCollisionEvent {
+	if candidate.Penetration > current.Penetration {
+		current.Point = candidate.Point
+		current.Normal = candidate.Normal
+		current.Penetration = candidate.Penetration
+	}
+	if candidate.NormalImpulse > current.NormalImpulse {
+		current.NormalImpulse = candidate.NormalImpulse
+	}
+	if candidate.RelativeSpeed > current.RelativeSpeed {
+		current.RelativeSpeed = candidate.RelativeSpeed
+	}
+	if candidate.Tick > current.Tick {
+		current.Tick = candidate.Tick
+	}
+	return current
 }
 
 func (b *internalBody) Wake() {
@@ -345,24 +505,37 @@ type InternalBox struct {
 }
 
 type internalBody struct {
-	Eid            EntityId
-	pos            mgl32.Vec3
-	rot            mgl32.Quat
-	vel            mgl32.Vec3
-	angVel         mgl32.Vec3
-	isStatic       bool
-	mass           float32
-	model          PhysicsModel
-	boxes          []InternalBox
-	sleeping       bool
-	idleTime       float32
-	friction       float32
-	restitution    float32
-	gravityScale   float32
-	linearDamping  float32
-	angularDamping float32
-	aabbMin        mgl32.Vec3
-	aabbMax        mgl32.Vec3
+	Eid             EntityId
+	pos             mgl32.Vec3
+	rot             mgl32.Quat
+	vel             mgl32.Vec3
+	angVel          mgl32.Vec3
+	isStatic        bool
+	mass            float32
+	model           PhysicsModel
+	boxes           []InternalBox
+	sleeping        bool
+	idleTime        float32
+	friction        float32
+	restitution     float32
+	gravityScale    float32
+	linearDamping   float32
+	angularDamping  float32
+	invInertiaLocal mgl32.Mat3
+	aabbMin         mgl32.Vec3
+	aabbMax         mgl32.Vec3
+}
+
+func integrateAngularVelocity(rot mgl32.Quat, angVel mgl32.Vec3, dt float32) mgl32.Quat {
+	omegaMag := angVel.Len()
+	if omegaMag <= 1e-6 || dt <= 0 {
+		return rot
+	}
+
+	angle := omegaMag * dt
+	axis := angVel.Mul(1.0 / omegaMag)
+	delta := mgl32.QuatRotate(angle, axis)
+	return delta.Mul(rot).Normalize()
 }
 
 func (b *internalBody) updateAABB() {
@@ -386,7 +559,7 @@ func (b *internalBody) updateAABB() {
 		extents := mgl32.Vec3{0, 0, 0}
 		for i := 0; i < 3; i++ {
 			for j := 0; j < 3; j++ {
-				extents[i] += float32(math.Abs(float64(axes[j][i]))) * box.Box.HalfExtents[j]
+				extents[i] += absf(axes[j][i]) * box.Box.HalfExtents[j]
 			}
 		}
 
@@ -394,8 +567,8 @@ func (b *internalBody) updateAABB() {
 		box.Max = worldBoxPos.Add(extents)
 
 		for i := 0; i < 3; i++ {
-			minP[i] = float32(math.Min(float64(minP[i]), float64(box.Min[i])))
-			maxP[i] = float32(math.Max(float64(maxP[i]), float64(box.Max[i])))
+			minP[i] = minf(minP[i], box.Min[i])
+			maxP[i] = maxf(maxP[i], box.Max[i])
 		}
 	}
 
@@ -403,35 +576,95 @@ func (b *internalBody) updateAABB() {
 	b.aabbMax = maxP
 }
 
-func calculateInertia(b *internalBody) float32 {
-	if len(b.boxes) == 0 {
-		return 1.0
+func sameCollisionBoxes(boxes []InternalBox, modelBoxes []CollisionBox) bool {
+	if len(boxes) != len(modelBoxes) {
+		return false
+	}
+	for i, modelBox := range modelBoxes {
+		if boxes[i].Box != modelBox {
+			return false
+		}
+	}
+	return true
+}
+
+func inverseMass(b *internalBody) float32 {
+	if b == nil || b.isStatic || b.mass <= 0 {
+		return 0
+	}
+	return 1.0 / b.mass
+}
+
+func angularConstraintDenominator(b *internalBody, r mgl32.Vec3, axis mgl32.Vec3) float32 {
+	if b == nil || b.isStatic || b.mass <= 0 {
+		return 0
+	}
+	rCrossAxis := r.Cross(axis)
+	invInertiaTerm := applyInverseInertiaWorld(b, rCrossAxis)
+	return axis.Dot(invInertiaTerm.Cross(r))
+}
+
+func applyInverseInertiaWorld(b *internalBody, angularImpulse mgl32.Vec3) mgl32.Vec3 {
+	if b == nil || b.isStatic || b.mass <= 0 {
+		return mgl32.Vec3{}
+	}
+	rotMat := rotationMat3(b.rot)
+	invInertiaWorld := rotMat.Mul3(b.invInertiaLocal).Mul3(rotMat.Transpose())
+	return invInertiaWorld.Mul3x1(angularImpulse)
+}
+
+func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
+	localInertia := calculateLocalInertiaTensor(b)
+	if absf(localInertia.Det()) <= 1e-6 {
+		return mgl32.Ident3()
+	}
+	return localInertia.Inv()
+}
+
+func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
+	if len(b.boxes) == 0 || b.mass <= 0 {
+		return mgl32.Ident3()
 	}
 
-	totalInertia := float32(0)
-	totalMass := b.mass
-	if totalMass <= 0 {
-		return 1.0
-	}
-
-	// Calculate mass distribution assuming uniform density
 	totalVolume := float32(0)
 	for _, box := range b.boxes {
 		totalVolume += box.Box.HalfExtents.X() * box.Box.HalfExtents.Y() * box.Box.HalfExtents.Z() * 8.0
 	}
+	if totalVolume <= 0 {
+		return mgl32.Ident3()
+	}
 
+	totalInertia := mgl32.Mat3{}
 	for _, box := range b.boxes {
-		volume := box.Box.HalfExtents.X() * box.Box.HalfExtents.Y() * box.Box.HalfExtents.Z() * 8.0
-		boxMass := (volume / totalVolume) * totalMass
+		half := box.Box.HalfExtents
+		volume := half.X() * half.Y() * half.Z() * 8.0
+		boxMass := (volume / totalVolume) * b.mass
 
-		// Inertia of this box about its own center
-		sizeSq := box.Box.HalfExtents.LenSqr() * 4.0
-		boxInertia := (1.0 / 6.0) * boxMass * sizeSq
+		ix := (1.0 / 3.0) * boxMass * (half.Y()*half.Y() + half.Z()*half.Z())
+		iy := (1.0 / 3.0) * boxMass * (half.X()*half.X() + half.Z()*half.Z())
+		iz := (1.0 / 3.0) * boxMass * (half.X()*half.X() + half.Y()*half.Y())
+		boxTensor := mgl32.Mat3FromRows(
+			mgl32.Vec3{ix, 0, 0},
+			mgl32.Vec3{0, iy, 0},
+			mgl32.Vec3{0, 0, iz},
+		)
 
-		// Parallel Axis Theorem
-		distSq := box.Box.LocalOffset.LenSqr()
-		totalInertia += boxInertia + boxMass*distSq
+		offset := box.Box.LocalOffset
+		offsetSq := offset.LenSqr()
+		outer := mgl32.Mat3FromRows(
+			mgl32.Vec3{offset.X() * offset.X(), offset.X() * offset.Y(), offset.X() * offset.Z()},
+			mgl32.Vec3{offset.Y() * offset.X(), offset.Y() * offset.Y(), offset.Y() * offset.Z()},
+			mgl32.Vec3{offset.Z() * offset.X(), offset.Z() * offset.Y(), offset.Z() * offset.Z()},
+		)
+		parallelAxis := mgl32.Ident3().Mul(offsetSq).Sub(outer).Mul(boxMass)
+
+		totalInertia = totalInertia.Add(boxTensor).Add(parallelAxis)
 	}
 
 	return totalInertia
+}
+
+func rotationMat3(q mgl32.Quat) mgl32.Mat3 {
+	rot := q.Mat4()
+	return mgl32.Mat3FromCols(rot.Col(0).Vec3(), rot.Col(1).Vec3(), rot.Col(2).Vec3())
 }

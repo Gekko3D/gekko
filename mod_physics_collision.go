@@ -6,7 +6,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox, posB mgl32.Vec3, rotB mgl32.Quat, boxB CollisionBox) (bool, mgl32.Vec3, float32, mgl32.Vec3) {
+func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox, posB mgl32.Vec3, rotB mgl32.Quat, boxB CollisionBox, pointInOBBEpsilon float32) (bool, mgl32.Vec3, float32, mgl32.Vec3) {
 	worldPosA := posA.Add(rotA.Rotate(boxA.LocalOffset))
 	worldPosB := posB.Add(rotB.Rotate(boxB.LocalOffset))
 
@@ -20,29 +20,34 @@ func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox
 	minOverlap := float32(math.MaxFloat32)
 	var collisionNormal mgl32.Vec3
 
-	var testAxes []mgl32.Vec3
+	var testAxes [15]mgl32.Vec3
+	axisCount := 0
 	for i := 0; i < 3; i++ {
-		testAxes = append(testAxes, axesA[i], axesB[i])
+		testAxes[axisCount] = axesA[i]
+		axisCount++
+		testAxes[axisCount] = axesB[i]
+		axisCount++
 	}
 	for i := 0; i < 3; i++ {
 		for j := 0; j < 3; j++ {
 			cross := axesA[i].Cross(axesB[j])
 			if cross.LenSqr() > 1e-4 {
-				testAxes = append(testAxes, cross.Normalize())
+				testAxes[axisCount] = cross.Normalize()
+				axisCount++
 			}
 		}
 	}
 
-	for _, axis := range testAxes {
+	for _, axis := range testAxes[:axisCount] {
 		projectionA := float32(0)
 		for i := 0; i < 3; i++ {
-			projectionA += float32(math.Abs(float64(axesA[i].Dot(axis)))) * boxA.HalfExtents[i]
+			projectionA += absf(axesA[i].Dot(axis)) * boxA.HalfExtents[i]
 		}
 		projectionB := float32(0)
 		for i := 0; i < 3; i++ {
-			projectionB += float32(math.Abs(float64(axesB[i].Dot(axis)))) * boxB.HalfExtents[i]
+			projectionB += absf(axesB[i].Dot(axis)) * boxB.HalfExtents[i]
 		}
-		distance := float32(math.Abs(float64(L.Dot(axis))))
+		distance := absf(L.Dot(axis))
 		overlap := projectionA + projectionB - distance
 		if overlap <= 0 {
 			return false, mgl32.Vec3{}, 0, mgl32.Vec3{}
@@ -60,33 +65,36 @@ func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox
 	// Contact point
 	cornersA := getCorners(worldPosA, axesA, boxA.HalfExtents)
 	cornersB := getCorners(worldPosB, axesB, boxB.HalfExtents)
-	var contactPoints []mgl32.Vec3
+	var contactPoints [16]mgl32.Vec3
+	contactCount := 0
 	for _, p := range cornersA {
-		if isPointInOBB(p, worldPosB, axesB, boxB.HalfExtents) {
-			contactPoints = append(contactPoints, p)
+		if isPointInOBB(p, worldPosB, axesB, boxB.HalfExtents, pointInOBBEpsilon) {
+			contactPoints[contactCount] = p
+			contactCount++
 		}
 	}
 	for _, p := range cornersB {
-		if isPointInOBB(p, worldPosA, axesA, boxA.HalfExtents) {
-			contactPoints = append(contactPoints, p)
+		if isPointInOBB(p, worldPosA, axesA, boxA.HalfExtents, pointInOBBEpsilon) {
+			contactPoints[contactCount] = p
+			contactCount++
 		}
 	}
 
 	var cp mgl32.Vec3
-	if len(contactPoints) == 0 {
+	if contactCount == 0 {
 		cp = worldPosA.Add(worldPosB).Mul(0.5)
 	} else {
-		for _, p := range contactPoints {
+		for _, p := range contactPoints[:contactCount] {
 			cp = cp.Add(p)
 		}
-		cp = cp.Mul(1.0 / float32(len(contactPoints)))
+		cp = cp.Mul(1.0 / float32(contactCount))
 	}
 
 	return true, collisionNormal, minOverlap, cp
 }
 
-func getCorners(pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3) []mgl32.Vec3 {
-	var corners []mgl32.Vec3
+func getCorners(pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3) [8]mgl32.Vec3 {
+	var corners [8]mgl32.Vec3
 	for i := 0; i < 8; i++ {
 		p := pos
 		if i&1 != 0 {
@@ -104,16 +112,16 @@ func getCorners(pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3) []mg
 		} else {
 			p = p.Sub(axes[2].Mul(halfExtents.Z()))
 		}
-		corners = append(corners, p)
+		corners[i] = p
 	}
 	return corners
 }
 
-func isPointInOBB(p, pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3) bool {
+func isPointInOBB(p, pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3, epsilon float32) bool {
 	d := p.Sub(pos)
 	for i := 0; i < 3; i++ {
-		dist := float32(math.Abs(float64(d.Dot(axes[i]))))
-		if dist > halfExtents[i]+0.01 { // Small epsilon
+		dist := absf(d.Dot(axes[i]))
+		if dist > halfExtents[i]+epsilon {
 			return false
 		}
 	}

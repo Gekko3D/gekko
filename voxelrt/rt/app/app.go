@@ -491,6 +491,6 @@ func (a *App) Init() error {
 
 func (a *App) SetSpriteAtlas(data []byte, w, h uint32) {
 	if a.BufferManager != nil {
-		a.BufferManager.SetSpriteAtlas(data, w, h)
+		a.BufferManager.SetSpriteAtlas("", data, w, h, 0)
 	}
 }

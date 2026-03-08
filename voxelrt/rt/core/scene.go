@@ -213,11 +213,11 @@ func intersectAABB(ray Ray, minB, maxB mgl32.Vec3) (float32, float32) {
 	t2 := maxB.Sub(ray.Origin)
 	t2 = mgl32.Vec3{t2.X() * invDir.X(), t2.Y() * invDir.Y(), t2.Z() * invDir.Z()}
 
-	tMinV := mgl32.Vec3{float32(math.Min(float64(t1.X()), float64(t2.X()))), float32(math.Min(float64(t1.Y()), float64(t2.Y()))), float32(math.Min(float64(t1.Z()), float64(t2.Z())))}
-	tMaxV := mgl32.Vec3{float32(math.Max(float64(t1.X()), float64(t2.X()))), float32(math.Max(float64(t1.Y()), float64(t2.Y()))), float32(math.Max(float64(t1.Z()), float64(t2.Z())))}
+	tMinV := mgl32.Vec3{min(t1.X(), t2.X()), min(t1.Y(), t2.Y()), min(t1.Z(), t2.Z())}
+	tMaxV := mgl32.Vec3{max(t1.X(), t2.X()), max(t1.Y(), t2.Y()), max(t1.Z(), t2.Z())}
 
-	realMin := float32(math.Max(0, math.Max(float64(tMinV.X()), math.Max(float64(tMinV.Y()), float64(tMinV.Z())))))
-	realMax := float32(math.Min(math.MaxFloat32, math.Min(float64(tMaxV.X()), math.Min(float64(tMaxV.Y()), float64(tMaxV.Z())))))
+	realMin := max(float32(0), max(tMinV.X(), max(tMinV.Y(), tMinV.Z())))
+	realMax := min(float32(math.MaxFloat32), min(tMaxV.X(), min(tMaxV.Y(), tMaxV.Z())))
 
 	return realMin, realMax
 }
