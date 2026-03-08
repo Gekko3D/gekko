@@ -67,7 +67,7 @@ func Cone(xbm *XBrickMap, base, tip mgl32.Vec3, radius float32, paletteIdx uint8
 	axis := heightVec.Normalize()
 
 	// Broad bounding box
-	maxDim := float32(math.Max(float64(radius), float64(height)))
+	maxDim := max(radius, height)
 	center := base.Add(tip).Mul(0.5)
 	minB := [3]int{
 		int(math.Floor(float64(center.X() - maxDim))),
@@ -111,13 +111,13 @@ func Pyramid(xbm *XBrickMap, base, tip mgl32.Vec3, size float32, paletteIdx uint
 
 	// Standard orientation helper
 	up := mgl32.Vec3{0, 1, 0}
-	if math.Abs(float64(axis.Dot(up))) > 0.99 {
+	if float64(absf(axis.Dot(up))) > 0.99 {
 		up = mgl32.Vec3{1, 0, 0}
 	}
 	right := axis.Cross(up).Normalize()
 	forward := right.Cross(axis).Normalize()
 
-	maxDim := float32(math.Max(float64(size), float64(height)))
+	maxDim := max(size, height)
 	center := base.Add(tip).Mul(0.5)
 	minB := [3]int{
 		int(math.Floor(float64(center.X() - maxDim))),
@@ -148,7 +148,7 @@ func Pyramid(xbm *XBrickMap, base, tip mgl32.Vec3, size float32, paletteIdx uint
 				dx := v.Dot(right)
 				dz := v.Dot(forward)
 
-				if math.Abs(float64(dx)) <= float64(s) && math.Abs(float64(dz)) <= float64(s) {
+				if absf(dx) <= s && absf(dz) <= s {
 					xbm.SetVoxel(x, y, z, paletteIdx)
 				}
 			}

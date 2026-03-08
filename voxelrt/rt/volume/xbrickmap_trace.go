@@ -11,7 +11,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 	t := tMin
 	// Protect against very small or zero direction components
 	safeX := rayDir.X()
-	if math.Abs(float64(safeX)) < 1e-7 {
+	if float64(absf(safeX)) < 1e-7 {
 		if safeX >= 0 {
 			safeX = 1e-7
 		} else {
@@ -19,7 +19,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		}
 	}
 	safeY := rayDir.Y()
-	if math.Abs(float64(safeY)) < 1e-7 {
+	if float64(absf(safeY)) < 1e-7 {
 		if safeY >= 0 {
 			safeY = 1e-7
 		} else {
@@ -27,7 +27,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		}
 	}
 	safeZ := rayDir.Z()
-	if math.Abs(float64(safeZ)) < 1e-7 {
+	if float64(absf(safeZ)) < 1e-7 {
 		if safeZ >= 0 {
 			safeZ = 1e-7
 		} else {
@@ -58,7 +58,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		if !ok {
 			// Step to next sector
 			res := x.stepToNext(p, rayDir, invDir, float32(SectorSize))
-			t += float32(math.Max(float64(res), 0.001))
+			t += max(res, 0.001)
 			continue
 		}
 
@@ -81,7 +81,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		brick := sector.GetBrick(bx, by, bz)
 		if brick == nil {
 			res := x.stepToNext(p, rayDir, invDir, float32(BrickSize))
-			t += float32(math.Max(float64(res), 0.001))
+			t += max(res, 0.001)
 			continue
 		}
 
@@ -94,7 +94,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		microIdx := mx + my*4 + mz*16
 		if (brick.OccupancyMask64 & (1 << microIdx)) == 0 {
 			res := x.stepToNext(p, rayDir, invDir, float32(MicroSize))
-			t += float32(math.Max(float64(res), 0.001))
+			t += max(res, 0.001)
 			continue
 		}
 
@@ -111,8 +111,8 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 			vCenter := vMin.Add(mgl32.Vec3{0.5, 0.5, 0.5})
 			pHit := rayOrigin.Add(rayDir.Mul(t))
 			localP := pHit.Sub(vCenter)
-			absP := mgl32.Vec3{float32(math.Abs(float64(localP.X()))), float32(math.Abs(float64(localP.Y()))), float32(math.Abs(float64(localP.Z())))}
-			maxC := float32(math.Max(float64(absP.X()), math.Max(float64(absP.Y()), float64(absP.Z()))))
+			absP := mgl32.Vec3{absf(localP.X()), absf(localP.Y()), absf(localP.Z())}
+			maxC := max(absP.X(), max(absP.Y(), absP.Z()))
 
 			normal := mgl32.Vec3{0, 0, 0}
 			if absP.X() >= maxC-0.01 {
@@ -139,7 +139,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 		}
 
 		res := x.stepToNext(p, rayDir, invDir, 1.0)
-		t += float32(math.Max(float64(res), 0.001))
+		t += max(res, 0.001)
 	}
 
 	if iterations >= maxIterations {

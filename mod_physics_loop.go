@@ -1,7 +1,6 @@
 package gekko
 
 import (
-	"math"
 	"runtime"
 	"sync"
 	"time"
@@ -9,12 +8,22 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+type collisionManifold struct {
+	bodyA, bodyB *internalBody
+	normal       mgl32.Vec3
+	penetration  float32
+	point        mgl32.Vec3
+}
+
 func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 	ticker := time.NewTicker(time.Duration(1000.0/world.UpdateFrequency) * time.Millisecond)
 	defer ticker.Stop()
 
 	// Internal state
 	internalBodies := make(map[EntityId]*internalBody)
+	bodiesByID := make(map[EntityId]*internalBody)
+	grid := NewSpatialHashGrid(10.0)
+	manifolds := make([]collisionManifold, 0, 256)
 	var tick uint64
 
 	for range ticker.C {
@@ -37,6 +46,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				body.vel = es.Vel
 				body.angVel = es.AngVel
 				body.isStatic = es.IsStatic
+				massChanged := body.mass != es.Mass
+				modelChanged := !sameCollisionBoxes(body.boxes, es.Model.Boxes)
 				body.mass = es.Mass
 				body.model = es.Model
 				body.friction = es.Friction
@@ -45,12 +56,19 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				body.sleeping = es.Sleeping
 				body.linearDamping = es.LinearDamping
 				body.angularDamping = es.AngularDamping
-				// Store boxes
-				body.boxes = make([]InternalBox, len(es.Model.Boxes))
-				for i, box := range es.Model.Boxes {
-					body.boxes[i].Box = box
+				if modelChanged {
+					if cap(body.boxes) < len(es.Model.Boxes) {
+						body.boxes = make([]InternalBox, len(es.Model.Boxes))
+					} else {
+						body.boxes = body.boxes[:len(es.Model.Boxes)]
+					}
+					for i, box := range es.Model.Boxes {
+						body.boxes[i].Box = box
+					}
 				}
-				body.invInertiaLocal = calculateInverseInertiaLocal(body)
+				if massChanged || modelChanged {
+					body.invInertiaLocal = calculateInverseInertiaLocal(body)
+				}
 			}
 			// Cleanup dead entities
 			snapMap := make(map[EntityId]bool)
@@ -70,10 +88,12 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			numWorkers = runtime.NumCPU()
 		}
 
-		// Convert map to slice for parallel processing
+		// Convert map to per-tick immutable views for parallel processing
 		bodiesList := make([]*internalBody, 0, len(internalBodies))
-		for _, b := range internalBodies {
+		clear(bodiesByID)
+		for eid, b := range internalBodies {
 			bodiesList = append(bodiesList, b)
+			bodiesByID[eid] = b
 		}
 
 		dt := float32(1.0 / world.UpdateFrequency)
@@ -127,7 +147,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		wg.Wait()
 
 		// Broad-phase: Update spatial grid AFTER integration
-		grid := NewSpatialHashGrid(10.0) // 10 units cell size
+		grid.Clear() // 10 units cell size
 		for _, b := range bodiesList {
 			// updateAABB was already called in integration for dynamic bodies,
 			// but static bodies need it called once or preserved.
@@ -138,13 +158,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		}
 
 		// 2. Parallel Collision Detection (Narrow-phase)
-		type collisionManifold struct {
-			bodyA, bodyB *internalBody
-			normal       mgl32.Vec3
-			penetration  float32
-			point        mgl32.Vec3
-		}
-		var manifolds []collisionManifold
+		manifolds = manifolds[:0]
 		var manifoldMu sync.Mutex
 
 		for i := 0; i < numWorkers; i++ {
@@ -160,6 +174,9 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			wg.Add(1)
 			go func(bodies []*internalBody) {
 				defer wg.Done()
+				queryUnique := make(map[EntityId]struct{})
+				var candidates []EntityId
+				localManifolds := make([]collisionManifold, 0, 32)
 				for _, b := range bodies {
 					// Only dynamic bodies initiate collision checks
 					if b.isStatic || b.sleeping {
@@ -167,13 +184,13 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					}
 
 					// Query spatial grid for candidates
-					candidates := grid.QueryAABB(AABBComponent{Min: b.aabbMin, Max: b.aabbMax})
+					candidates = grid.QueryAABBInto(AABBComponent{Min: b.aabbMin, Max: b.aabbMax}, queryUnique, candidates)
 					for _, otherEid := range candidates {
 						if otherEid == b.Eid {
 							continue
 						}
 
-						other := internalBodies[otherEid]
+						other := bodiesByID[otherEid]
 						if other == nil {
 							continue
 						}
@@ -189,19 +206,22 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						for _, boxA := range b.boxes {
 							for _, boxB := range other.boxes {
 								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box); collision {
-									manifoldMu.Lock()
-									manifolds = append(manifolds, collisionManifold{
+									localManifolds = append(localManifolds, collisionManifold{
 										bodyA:       b,
 										bodyB:       other,
 										normal:      normal,
 										penetration: penetration,
 										point:       contactPoint,
 									})
-									manifoldMu.Unlock()
 								}
 							}
 						}
 					}
+				}
+				if len(localManifolds) > 0 {
+					manifoldMu.Lock()
+					manifolds = append(manifolds, localManifolds...)
+					manifoldMu.Unlock()
 				}
 			}(bodiesList[start:end])
 		}
@@ -213,8 +233,9 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			other := m.bodyB
 
 			slop := float32(0.02)
+			positionCorrectionPercent := float32(0.2)
 			if m.penetration > slop {
-				depth := m.penetration - slop
+				depth := (m.penetration - slop) * positionCorrectionPercent
 				invMassA := float32(0)
 				invMassB := float32(0)
 				if !b.isStatic && b.mass > 0 {
@@ -289,7 +310,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				if tangentDenom > 0 {
 					jt := -relativeVel.Dot(tangent)
 					jt /= tangentDenom
-					maxFriction := friction * float32(math.Abs(float64(j)))
+					maxFriction := friction * absf(j)
 					if jt > maxFriction {
 						jt = maxFriction
 					}
@@ -318,7 +339,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			}
 
 			// Only wake if we have significant relative velocity
-			if math.Abs(float64(velAlongNormal)) > 0.1 {
+			if float64(absf(velAlongNormal)) > 0.1 {
 				b.Wake()
 			}
 		}
@@ -421,7 +442,7 @@ func (b *internalBody) updateAABB() {
 		extents := mgl32.Vec3{0, 0, 0}
 		for i := 0; i < 3; i++ {
 			for j := 0; j < 3; j++ {
-				extents[i] += float32(math.Abs(float64(axes[j][i]))) * box.Box.HalfExtents[j]
+				extents[i] += absf(axes[j][i]) * box.Box.HalfExtents[j]
 			}
 		}
 
@@ -429,13 +450,25 @@ func (b *internalBody) updateAABB() {
 		box.Max = worldBoxPos.Add(extents)
 
 		for i := 0; i < 3; i++ {
-			minP[i] = float32(math.Min(float64(minP[i]), float64(box.Min[i])))
-			maxP[i] = float32(math.Max(float64(maxP[i]), float64(box.Max[i])))
+			minP[i] = minf(minP[i], box.Min[i])
+			maxP[i] = maxf(maxP[i], box.Max[i])
 		}
 	}
 
 	b.aabbMin = minP
 	b.aabbMax = maxP
+}
+
+func sameCollisionBoxes(boxes []InternalBox, modelBoxes []CollisionBox) bool {
+	if len(boxes) != len(modelBoxes) {
+		return false
+	}
+	for i, modelBox := range modelBoxes {
+		if boxes[i].Box != modelBox {
+			return false
+		}
+	}
+	return true
 }
 
 func inverseMass(b *internalBody) float32 {
@@ -465,7 +498,7 @@ func applyInverseInertiaWorld(b *internalBody, angularImpulse mgl32.Vec3) mgl32.
 
 func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
 	localInertia := calculateLocalInertiaTensor(b)
-	if math.Abs(float64(localInertia.Det())) <= 1e-6 {
+	if absf(localInertia.Det()) <= 1e-6 {
 		return mgl32.Ident3()
 	}
 	return localInertia.Inv()
