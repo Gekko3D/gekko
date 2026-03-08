@@ -6,7 +6,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox, posB mgl32.Vec3, rotB mgl32.Quat, boxB CollisionBox) (bool, mgl32.Vec3, float32, mgl32.Vec3) {
+func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox, posB mgl32.Vec3, rotB mgl32.Quat, boxB CollisionBox, pointInOBBEpsilon float32) (bool, mgl32.Vec3, float32, mgl32.Vec3) {
 	worldPosA := posA.Add(rotA.Rotate(boxA.LocalOffset))
 	worldPosB := posB.Add(rotB.Rotate(boxB.LocalOffset))
 
@@ -68,13 +68,13 @@ func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox
 	var contactPoints [16]mgl32.Vec3
 	contactCount := 0
 	for _, p := range cornersA {
-		if isPointInOBB(p, worldPosB, axesB, boxB.HalfExtents) {
+		if isPointInOBB(p, worldPosB, axesB, boxB.HalfExtents, pointInOBBEpsilon) {
 			contactPoints[contactCount] = p
 			contactCount++
 		}
 	}
 	for _, p := range cornersB {
-		if isPointInOBB(p, worldPosA, axesA, boxA.HalfExtents) {
+		if isPointInOBB(p, worldPosA, axesA, boxA.HalfExtents, pointInOBBEpsilon) {
 			contactPoints[contactCount] = p
 			contactCount++
 		}
@@ -117,11 +117,11 @@ func getCorners(pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3) [8]m
 	return corners
 }
 
-func isPointInOBB(p, pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3) bool {
+func isPointInOBB(p, pos mgl32.Vec3, axes [3]mgl32.Vec3, halfExtents mgl32.Vec3, epsilon float32) bool {
 	d := p.Sub(pos)
 	for i := 0; i < 3; i++ {
 		dist := absf(d.Dot(axes[i]))
-		if dist > halfExtents[i]+0.01 { // Small epsilon
+		if dist > halfExtents[i]+epsilon {
 			return false
 		}
 	}

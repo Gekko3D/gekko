@@ -30,7 +30,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 	internalBodies := make(map[EntityId]*internalBody)
 	bodiesByID := make(map[EntityId]*internalBody)
 	staticContactBodies := make(map[EntityId]bool)
-	grid := NewSpatialHashGrid(10.0)
+	grid := NewSpatialHashGrid(world.SpatialGridCellSize)
 	manifolds := make([]collisionManifold, 0, 256)
 	previousPairs := make(map[collisionPair]PhysicsCollisionEvent)
 	currentPairs := make(map[collisionPair]PhysicsCollisionEvent)
@@ -216,7 +216,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						// Narrow-phase
 						for _, boxA := range b.boxes {
 							for _, boxB := range other.boxes {
-								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box); collision {
+								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
 									localManifolds = append(localManifolds, collisionManifold{
 										bodyA:       b,
 										bodyB:       other,
@@ -243,8 +243,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			b := m.bodyA
 			other := m.bodyB
 
-			slop := float32(0.02)
-			positionCorrectionPercent := float32(0.2)
+			slop := world.CollisionSlop
+			positionCorrectionPercent := world.PositionCorrection
 			if m.penetration > slop {
 				depth := (m.penetration - slop) * positionCorrectionPercent
 				invMassA := float32(0)
@@ -279,8 +279,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			}
 		}
 
-		const solverIterations = 8
-		for iter := 0; iter < solverIterations; iter++ {
+		for iter := 0; iter < world.SolverIterations; iter++ {
 			for i := range manifolds {
 				m := &manifolds[i]
 				b := m.bodyA
@@ -307,7 +306,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				}
 
 				restitution := (b.restitution + other.restitution) * 0.5
-				if velAlongNormal > -0.5 {
+				if velAlongNormal > world.RestitutionThreshold {
 					restitution = 0
 				}
 
@@ -335,8 +334,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(impulse)))
 				}
 
-				impactWakeThreshold := float32(0.1)
-				if absf(velAlongNormal) > impactWakeThreshold || m.penetration > 0.02 {
+				impactWakeThreshold := world.WakeThreshold
+				if absf(velAlongNormal) > impactWakeThreshold || m.penetration > world.CollisionSlop {
 					if !b.isStatic {
 						b.Wake()
 					}
@@ -401,10 +400,17 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 		// 4. Sleeping and Results
 		groundedSleepThreshold := maxf(world.SleepThreshold, gravity.Len()*dt*2.0)
-		groundedAngularThreshold := maxf(world.SleepThreshold, 0.1)
-		groundedSleepTime := minf(world.SleepTime, 0.25)
+		groundedAngularThreshold := maxf(world.SleepThreshold, world.GroundedAngularThreshold)
+		groundedSleepTime := minf(world.SleepTime, world.GroundedSleepTime)
 		for _, b := range internalBodies {
 			if !b.isStatic && !b.sleeping {
+				if b.vel.Len() < world.VelocityZeroThreshold {
+					b.vel = mgl32.Vec3{}
+				}
+				if b.angVel.Len() < world.VelocityZeroThreshold {
+					b.angVel = mgl32.Vec3{}
+				}
+
 				sleepThreshold := world.SleepThreshold
 				angularThreshold := world.SleepThreshold
 				sleepTime := world.SleepTime
