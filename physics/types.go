@@ -21,6 +21,11 @@ type RigidBodyComponent struct {
 	IdleTime           float32
 	LastPulledPos      mgl32.Vec3
 	LastPulledRot      mgl32.Quat
+	PreviousPhysicsPos mgl32.Vec3
+	PreviousPhysicsRot mgl32.Quat
+	CurrentPhysicsPos  mgl32.Vec3
+	CurrentPhysicsRot  mgl32.Quat
+	LastPhysicsTick    uint64
 	AccumulatedImpulse mgl32.Vec3
 	AccumulatedTorque  mgl32.Vec3
 }

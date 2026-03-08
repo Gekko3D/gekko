@@ -3,6 +3,7 @@ package gekko
 import (
 	"math"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -73,7 +74,9 @@ type PhysicsEntityState struct {
 }
 
 type PhysicsResults struct {
-	Entities []PhysicsEntityResult
+	Tick      uint64
+	Generated time.Time
+	Entities  []PhysicsEntityResult
 }
 
 type PhysicsEntityResult struct {
@@ -90,6 +93,7 @@ func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy, physics *PhysicsWorld
 	// Pull latest results from simulation
 	results := proxy.latestResults.Load()
 	if results != nil {
+		alpha := physicsInterpolationAlpha(results.Generated, physics.UpdateFrequency)
 		resMap := make(map[EntityId]PhysicsEntityResult)
 		for _, res := range results.Entities {
 			resMap[res.Eid] = res
@@ -97,27 +101,36 @@ func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy, physics *PhysicsWorld
 
 		MakeQuery3[TransformComponent, RigidBodyComponent, PhysicsModel](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel) bool {
 			if res, ok := resMap[eid]; ok {
-				// Update components from physics result
-				// Render point = pos + rot * (scale * (localPos - pivot)).
-				// Physics sets res.Pos at localPos = pm.CenterOffset_unscaled.
-				// pm.CenterOffset is ALREADY scaled by tr.Scale.X() from pre-calc system!
-				// Pivot is unscaled. So scaled_pivot = tr.Scale * tr.Pivot.
-				vSize := VoxelSize
-				scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
-				// Center offset in PhysicsModel is scaled, but Transform's scale is applied AFTER rotation? NO!
-				// Translate * Rotate * Scale * Translate(-Pivot). Rotate happens AFTER Scale.
-				// So offset vector to subtract from res.Pos is Rotate( pm.CenterOffset - scaledPivot )
-				diff := pm.CenterOffset.Sub(scaledPivot)
-				rotatedOffset := res.Rot.Rotate(diff)
+				if rb.LastPhysicsTick != results.Tick {
+					if rb.LastPhysicsTick == 0 {
+						rb.PreviousPhysicsPos = res.Pos
+						rb.PreviousPhysicsRot = res.Rot
+					} else {
+						rb.PreviousPhysicsPos = rb.CurrentPhysicsPos
+						rb.PreviousPhysicsRot = rb.CurrentPhysicsRot
+					}
+					rb.CurrentPhysicsPos = res.Pos
+					rb.CurrentPhysicsRot = res.Rot
+					rb.LastPhysicsTick = results.Tick
+					rb.AccumulatedImpulse = mgl32.Vec3{}
+					rb.AccumulatedTorque = mgl32.Vec3{}
+				}
 
-				tr.Position = res.Pos.Sub(rotatedOffset)
-				tr.Rotation = res.Rot
+				interpPos := rb.CurrentPhysicsPos
+				interpRot := rb.CurrentPhysicsRot
+				if rb.LastPhysicsTick > 0 {
+					interpPos = rb.PreviousPhysicsPos.Add(rb.CurrentPhysicsPos.Sub(rb.PreviousPhysicsPos).Mul(alpha))
+					interpRot = mgl32.QuatNlerp(rb.PreviousPhysicsRot, rb.CurrentPhysicsRot, alpha)
+				}
+
+				tr.Position = physicsToRenderPosition(interpPos, interpRot, tr, pm)
+				tr.Rotation = interpRot
 				rb.Velocity = res.Vel
 				rb.AngularVelocity = res.AngVel
 				rb.Sleeping = res.Sleeping
 				rb.IdleTime = res.IdleTime
-				rb.LastPulledPos = tr.Position
-				rb.LastPulledRot = tr.Rotation
+				rb.LastPulledPos = physicsToRenderPosition(rb.CurrentPhysicsPos, rb.CurrentPhysicsRot, tr, pm)
+				rb.LastPulledRot = rb.CurrentPhysicsRot
 			}
 			return true
 		})
@@ -146,10 +159,6 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 		}
 		vel := rb.Velocity.Add(rb.AccumulatedImpulse.Mul(invMass))
 		angVel := rb.AngularVelocity.Add(rb.AccumulatedTorque.Mul(invMass))
-
-		// Clear accumulators
-		rb.AccumulatedImpulse = mgl32.Vec3{0, 0, 0}
-		rb.AccumulatedTorque = mgl32.Vec3{0, 0, 0}
 
 		// Detect manual move or rotate (teleport)
 		isTeleport := false
@@ -184,4 +193,30 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 	})
 
 	proxy.pendingState.Store(snap)
+}
+
+func physicsToRenderPosition(physicsPos mgl32.Vec3, rot mgl32.Quat, tr *TransformComponent, pm *PhysicsModel) mgl32.Vec3 {
+	vSize := VoxelSize
+	scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
+	diff := pm.CenterOffset.Sub(scaledPivot)
+	rotatedOffset := rot.Rotate(diff)
+	return physicsPos.Sub(rotatedOffset)
+}
+
+func physicsInterpolationAlpha(generated time.Time, updateFrequency float32) float32 {
+	if generated.IsZero() || updateFrequency <= 0 {
+		return 1.0
+	}
+	step := time.Duration(float64(time.Second) / float64(updateFrequency))
+	if step <= 0 {
+		return 1.0
+	}
+	alpha := float32(time.Since(generated)) / float32(step)
+	if alpha < 0 {
+		return 0
+	}
+	if alpha > 1 {
+		return 1
+	}
+	return alpha
 }

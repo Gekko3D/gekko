@@ -15,8 +15,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 	// Internal state
 	internalBodies := make(map[EntityId]*internalBody)
+	var tick uint64
 
 	for range ticker.C {
+		tick++
 		// Pick up new snapshot
 		snap := proxy.pendingState.Swap(nil)
 		if snap != nil {
@@ -318,7 +320,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		}
 
 		// Push results
-		res := &PhysicsResults{}
+		res := &PhysicsResults{Tick: tick, Generated: time.Now()}
 		for _, b := range internalBodies {
 			res.Entities = append(res.Entities, PhysicsEntityResult{
 				Eid:      b.Eid,
