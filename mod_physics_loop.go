@@ -318,6 +318,16 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(impulse)))
 				}
 
+				impactWakeThreshold := float32(0.1)
+				if absf(velAlongNormal) > impactWakeThreshold || m.penetration > 0.02 {
+					if !b.isStatic {
+						b.Wake()
+					}
+					if !other.isStatic {
+						other.Wake()
+					}
+				}
+
 				friction := (b.friction + other.friction) * 0.5
 				tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
 				if tangent.Len() > 0.0001 {
