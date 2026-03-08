@@ -297,8 +297,15 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
 			if tangent.Len() > 0.0001 {
 				tangent = tangent.Normalize()
-				jt := -relativeVel.Dot(tangent) * friction
+				jt := -relativeVel.Dot(tangent)
 				jt /= denom // Approximate denominator for friction
+				maxFriction := friction * float32(math.Abs(float64(j)))
+				if jt > maxFriction {
+					jt = maxFriction
+				}
+				if jt < -maxFriction {
+					jt = -maxFriction
+				}
 
 				fImpulse := tangent.Mul(jt)
 				b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
