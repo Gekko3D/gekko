@@ -21,9 +21,10 @@ type ParticleEmitterComponent struct {
 	Drag             float32    // per-second linear drag (0..inf)
 	ConeAngleDegrees float32    // 0=along emitter up axis; larger spreads
 	SpriteIndex      uint32
-	AtlasCols        uint32  // Number of columns in the atlas
-	AtlasRows        uint32  // Number of rows in the atlas
-	Texture          AssetId // Asset ID of the texture atlas
+	AtlasCols        uint32          // Number of columns in the atlas
+	AtlasRows        uint32          // Number of rows in the atlas
+	Texture          AssetId         // Asset ID of the texture atlas
+	AlphaMode        SpriteAlphaMode // How to derive transparency from the atlas
 }
 
 // EmitterParams matches WGSL layout in particles_sim.wgsl
@@ -51,6 +52,11 @@ type EmitterParams struct {
 	SpriteIndex uint32
 	AtlasCols   uint32
 	AtlasRows   uint32 // 16 bytes
+
+	AlphaMode uint32
+	Pad1      uint32
+	Pad2      uint32
+	Pad3      uint32 // 16 bytes
 }
 
 type particlePool struct {
@@ -141,6 +147,7 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []byt
 			SpriteIndex: em.SpriteIndex,
 			AtlasCols:   cols,
 			AtlasRows:   rows,
+			AlphaMode:   uint32(em.AlphaMode),
 		}
 		emitterParams = append(emitterParams, p)
 

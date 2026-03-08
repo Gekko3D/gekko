@@ -9,10 +9,17 @@ import (
 )
 
 type collisionManifold struct {
-	bodyA, bodyB *internalBody
-	normal       mgl32.Vec3
-	penetration  float32
-	point        mgl32.Vec3
+	bodyA, bodyB  *internalBody
+	normal        mgl32.Vec3
+	penetration   float32
+	point         mgl32.Vec3
+	normalImpulse float32
+	relativeSpeed float32
+}
+
+type collisionPair struct {
+	A EntityId
+	B EntityId
 }
 
 func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
@@ -25,6 +32,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 	staticContactBodies := make(map[EntityId]bool)
 	grid := NewSpatialHashGrid(10.0)
 	manifolds := make([]collisionManifold, 0, 256)
+	previousPairs := make(map[collisionPair]PhysicsCollisionEvent)
+	currentPairs := make(map[collisionPair]PhysicsCollisionEvent)
 	var tick uint64
 
 	for range ticker.C {
@@ -272,7 +281,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 		const solverIterations = 8
 		for iter := 0; iter < solverIterations; iter++ {
-			for _, m := range manifolds {
+			for i := range manifolds {
+				m := &manifolds[i]
 				b := m.bodyA
 				other := m.bodyB
 
@@ -287,6 +297,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 				relativeVel := vA.Sub(vB)
 				velAlongNormal := relativeVel.Dot(m.normal)
+				impactSpeed := absf(velAlongNormal)
+				if impactSpeed > m.relativeSpeed {
+					m.relativeSpeed = impactSpeed
+				}
 
 				if velAlongNormal > 0 {
 					continue
@@ -308,6 +322,9 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				j /= denom
 
 				impulse := m.normal.Mul(j)
+				if absf(j) > m.normalImpulse {
+					m.normalImpulse = absf(j)
+				}
 
 				if invMassA > 0 {
 					b.vel = b.vel.Add(impulse.Mul(invMassA))
@@ -359,6 +376,29 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			}
 		}
 
+		for pair := range currentPairs {
+			delete(currentPairs, pair)
+		}
+		for _, manifold := range manifolds {
+			pair := orderedCollisionPair(manifold.bodyA.Eid, manifold.bodyB.Eid)
+			event := PhysicsCollisionEvent{
+				A:             pair.A,
+				B:             pair.B,
+				Point:         manifold.point,
+				Normal:        manifold.normal,
+				Penetration:   manifold.penetration,
+				NormalImpulse: manifold.normalImpulse,
+				RelativeSpeed: manifold.relativeSpeed,
+				Tick:          tick,
+			}
+
+			if existing, ok := currentPairs[pair]; ok {
+				currentPairs[pair] = mergeCollisionEvent(existing, event)
+			} else {
+				currentPairs[pair] = event
+			}
+		}
+
 		// 4. Sleeping and Results
 		groundedSleepThreshold := maxf(world.SleepThreshold, gravity.Len()*dt*2.0)
 		groundedAngularThreshold := maxf(world.SleepThreshold, 0.1)
@@ -399,8 +439,53 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				IdleTime: b.idleTime,
 			})
 		}
+		for pair, event := range currentPairs {
+			if _, ok := previousPairs[pair]; ok {
+				event.Type = CollisionEventStay
+			} else {
+				event.Type = CollisionEventEnter
+			}
+			res.Collisions = append(res.Collisions, event)
+		}
+		for pair, previous := range previousPairs {
+			if _, ok := currentPairs[pair]; ok {
+				continue
+			}
+			previous.Type = CollisionEventExit
+			previous.Penetration = 0
+			previous.NormalImpulse = 0
+			previous.RelativeSpeed = 0
+			previous.Tick = tick
+			res.Collisions = append(res.Collisions, previous)
+		}
+		previousPairs, currentPairs = currentPairs, previousPairs
 		proxy.latestResults.Store(res)
 	}
+}
+
+func orderedCollisionPair(a, b EntityId) collisionPair {
+	if a <= b {
+		return collisionPair{A: a, B: b}
+	}
+	return collisionPair{A: b, B: a}
+}
+
+func mergeCollisionEvent(current, candidate PhysicsCollisionEvent) PhysicsCollisionEvent {
+	if candidate.Penetration > current.Penetration {
+		current.Point = candidate.Point
+		current.Normal = candidate.Normal
+		current.Penetration = candidate.Penetration
+	}
+	if candidate.NormalImpulse > current.NormalImpulse {
+		current.NormalImpulse = candidate.NormalImpulse
+	}
+	if candidate.RelativeSpeed > current.RelativeSpeed {
+		current.RelativeSpeed = candidate.RelativeSpeed
+	}
+	if candidate.Tick > current.Tick {
+		current.Tick = candidate.Tick
+	}
+	return current
 }
 
 func (b *internalBody) Wake() {

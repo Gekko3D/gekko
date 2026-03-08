@@ -12,8 +12,8 @@ struct Particle {
     sprite_index: u32,
     atlas_cols: u32,
     atlas_rows: u32,
+    alpha_mode: u32,
     pad1: u32,
-    pad2: u32,
 };
 
 struct EmitterParams {
@@ -39,6 +39,11 @@ struct EmitterParams {
     sprite_index: u32,
     atlas_cols: u32,
     atlas_rows: u32,
+
+    alpha_mode: u32,
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
 };
 
 struct SimulationParams {
@@ -287,6 +292,7 @@ fn spawn(@builtin(global_invocation_id) id: vec3<u32>) {
     p.sprite_index = em.sprite_index;
     p.atlas_cols = em.atlas_cols;
     p.atlas_rows = em.atlas_rows;
+    p.alpha_mode = em.alpha_mode;
     
     particles[p_idx] = p;
     let alive_idx = atomicAdd(&counters.alive_count, 1u);

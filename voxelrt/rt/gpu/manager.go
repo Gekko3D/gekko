@@ -42,6 +42,18 @@ type GpuSkyboxUniforms struct {
 	SunDir     [4]float32 // xyz: dir, w: intensity
 }
 
+type SpriteAtlasResource struct {
+	Texture *wgpu.Texture
+	View    *wgpu.TextureView
+	Version uint
+}
+
+type SpriteRenderBatch struct {
+	FirstInstance uint32
+	InstanceCount uint32
+	BindGroup0    *wgpu.BindGroup
+}
+
 type GpuBufferManager struct {
 	Device *wgpu.Device
 
@@ -151,12 +163,10 @@ type GpuBufferManager struct {
 	// Sprites (billboards, UI or world)
 	SpriteBuf          *wgpu.Buffer
 	SpriteCount        uint32
-	SpriteAtlasTex     *wgpu.Texture
-	SpriteAtlasView    *wgpu.TextureView
 	SpriteAtlasSampler *wgpu.Sampler
-	SpritesBindGroup0  *wgpu.BindGroup // camera + sprites + atlas
+	SpriteAtlases      map[string]*SpriteAtlasResource
+	SpriteBatches      []SpriteRenderBatch
 	SpritesBindGroup1  *wgpu.BindGroup // gbuffer depth
-	SpriteAtlasDirty   bool
 
 	// Transparent overlay (single-layer transparency over lit image)
 	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
@@ -229,6 +239,7 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
 	m.SectorToInfo = make(map[*volume.Sector]SectorGpuInfo)
 	m.BrickToSlot = make(map[*volume.Brick]uint32)
+	m.SpriteAtlases = make(map[string]*SpriteAtlasResource)
 
 	// Pre-allocate minimal buffers to avoid bind group validation errors at startup
 	m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, nil, wgpu.BufferUsageStorage, 1024)

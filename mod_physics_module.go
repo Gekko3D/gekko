@@ -1,11 +1,45 @@
 package gekko
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
+
+type CollisionEventType uint8
+
+const (
+	CollisionEventEnter CollisionEventType = iota
+	CollisionEventStay
+	CollisionEventExit
+)
+
+func (t CollisionEventType) String() string {
+	switch t {
+	case CollisionEventEnter:
+		return "enter"
+	case CollisionEventStay:
+		return "stay"
+	case CollisionEventExit:
+		return "exit"
+	default:
+		return "unknown"
+	}
+}
+
+type PhysicsCollisionEvent struct {
+	Type          CollisionEventType
+	A             EntityId
+	B             EntityId
+	Point         mgl32.Vec3
+	Normal        mgl32.Vec3
+	Penetration   float32
+	NormalImpulse float32
+	RelativeSpeed float32
+	Tick          uint64
+}
 
 type PhysicsModule struct {
 	UpdateFrequency float32
@@ -45,6 +79,10 @@ func (m PhysicsModule) Install(app *App, cmd *Commands) {
 type PhysicsProxy struct {
 	latestResults atomic.Pointer[PhysicsResults]
 	pendingState  atomic.Pointer[PhysicsSnapshot]
+
+	collisionMu       sync.Mutex
+	collisionBuffer   []PhysicsCollisionEvent
+	lastCollisionTick uint64
 }
 
 type PhysicsSnapshot struct {
@@ -73,9 +111,10 @@ type PhysicsEntityState struct {
 }
 
 type PhysicsResults struct {
-	Tick      uint64
-	Generated time.Time
-	Entities  []PhysicsEntityResult
+	Tick       uint64
+	Generated  time.Time
+	Entities   []PhysicsEntityResult
+	Collisions []PhysicsCollisionEvent
 }
 
 type PhysicsEntityResult struct {
@@ -92,6 +131,8 @@ func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy, physics *PhysicsWorld
 	// Pull latest results from simulation
 	results := proxy.latestResults.Load()
 	if results != nil {
+		proxy.captureCollisionResults(results)
+
 		alpha := physicsInterpolationAlpha(results.Generated, physics.UpdateFrequency)
 		resMap := make(map[EntityId]PhysicsEntityResult)
 		for _, res := range results.Entities {
@@ -134,6 +175,41 @@ func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy, physics *PhysicsWorld
 			return true
 		})
 	}
+}
+
+func (p *PhysicsProxy) captureCollisionResults(results *PhysicsResults) {
+	if p == nil || results == nil {
+		return
+	}
+
+	p.collisionMu.Lock()
+	defer p.collisionMu.Unlock()
+
+	if results.Tick == p.lastCollisionTick {
+		return
+	}
+	p.lastCollisionTick = results.Tick
+	if len(results.Collisions) == 0 {
+		return
+	}
+	p.collisionBuffer = append(p.collisionBuffer, results.Collisions...)
+}
+
+func (p *PhysicsProxy) DrainCollisionEvents() []PhysicsCollisionEvent {
+	if p == nil {
+		return nil
+	}
+
+	p.collisionMu.Lock()
+	defer p.collisionMu.Unlock()
+
+	if len(p.collisionBuffer) == 0 {
+		return nil
+	}
+
+	events := append([]PhysicsCollisionEvent(nil), p.collisionBuffer...)
+	p.collisionBuffer = p.collisionBuffer[:0]
+	return events
 }
 
 func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *PhysicsProxy) {

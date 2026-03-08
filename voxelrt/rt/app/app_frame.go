@@ -400,10 +400,15 @@ func (a *App) Render() {
 	}
 	if a.SpritesPipeline != nil && a.BufferManager.SpriteCount > 0 {
 		accPass.SetPipeline(a.SpritesPipeline)
-		if a.BufferManager.SpritesBindGroup0 != nil && a.BufferManager.SpritesBindGroup1 != nil {
-			accPass.SetBindGroup(0, a.BufferManager.SpritesBindGroup0, nil)
+		if a.BufferManager.SpritesBindGroup1 != nil {
 			accPass.SetBindGroup(1, a.BufferManager.SpritesBindGroup1, nil)
-			accPass.Draw(6, a.BufferManager.SpriteCount, 0, 0)
+			for _, batch := range a.BufferManager.SpriteBatches {
+				if batch.BindGroup0 == nil || batch.InstanceCount == 0 {
+					continue
+				}
+				accPass.SetBindGroup(0, batch.BindGroup0, nil)
+				accPass.Draw(6, batch.InstanceCount, 0, batch.FirstInstance)
+			}
 		}
 	}
 	err = accPass.End()

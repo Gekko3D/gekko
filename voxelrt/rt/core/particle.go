@@ -15,8 +15,8 @@ type Particle struct {
 	SpriteIndex uint32
 	AtlasCols   uint32
 	AtlasRows   uint32
-	Pad1        uint32 // To align to 16-bytes (WGSL 80 bytes total padding)
-	Pad2        uint32
+	AlphaMode   uint32
+	Pad1        uint32
 }
 
 // ParticleInstance is used for rendering if we want a separate compact struct,

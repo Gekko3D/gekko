@@ -6,6 +6,14 @@ import (
 	"github.com/cogentcore/webgpu/wgpu"
 )
 
+const defaultSpriteAtlasKey = ""
+
+type SpriteBatchDesc struct {
+	AtlasKey      string
+	FirstInstance uint32
+	InstanceCount uint32
+}
+
 // UpdateSprites uploads sprite instance data to a GPU buffer.
 func (m *GpuBufferManager) UpdateSprites(data []byte, count uint32) bool {
 	m.SpriteCount = count
@@ -17,33 +25,58 @@ func (m *GpuBufferManager) UpdateSprites(data []byte, count uint32) bool {
 	return recreated
 }
 
-// CreateSpritesBindGroups creates the bind groups for the sprite rendering pipeline.
-func (m *GpuBufferManager) CreateSpritesBindGroups(pipeline *wgpu.RenderPipeline) {
-	if pipeline == nil {
+// SyncSpriteBatches refreshes per-atlas bind groups for the current sprite list.
+func (m *GpuBufferManager) SyncSpriteBatches(pipeline *wgpu.RenderPipeline, batches []SpriteBatchDesc) {
+	for i := range m.SpriteBatches {
+		if m.SpriteBatches[i].BindGroup0 != nil {
+			m.SpriteBatches[i].BindGroup0.Release()
+		}
+	}
+	m.SpriteBatches = m.SpriteBatches[:0]
+
+	if pipeline == nil || m.SpriteCount == 0 || len(batches) == 0 {
 		return
 	}
 
-	if m.SpriteAtlasView == nil {
+	if _, ok := m.SpriteAtlases[defaultSpriteAtlasKey]; !ok {
 		m.CreateDefaultSpriteAtlas()
+	}
+	m.ensureSpriteAtlasSampler()
+	m.ensureSpritesDepthBindGroup(pipeline)
+
+	for _, batch := range batches {
+		atlasView := m.spriteAtlasView(batch.AtlasKey)
+		bindGroup0, err := m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+			Label:  "Sprites BindGroup 0",
+			Layout: pipeline.GetBindGroupLayout(0),
+			Entries: []wgpu.BindGroupEntry{
+				{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
+				{Binding: 1, Buffer: m.SpriteBuf, Size: wgpu.WholeSize},
+				{Binding: 2, TextureView: atlasView},
+				{Binding: 3, Sampler: m.SpriteAtlasSampler},
+			},
+		})
+		if err != nil {
+			panic(fmt.Errorf("failed to create sprites bind group 0: %v", err))
+		}
+		m.SpriteBatches = append(m.SpriteBatches, SpriteRenderBatch{
+			FirstInstance: batch.FirstInstance,
+			InstanceCount: batch.InstanceCount,
+			BindGroup0:    bindGroup0,
+		})
+	}
+}
+
+func (m *GpuBufferManager) ensureSpritesDepthBindGroup(pipeline *wgpu.RenderPipeline) {
+	if pipeline == nil {
+		return
+	}
+	if m.SpritesBindGroup1 != nil {
+		m.SpritesBindGroup1.Release()
+		m.SpritesBindGroup1 = nil
 	}
 
 	var err error
-	// Group 0: Camera + Sprites + Atlas
-	m.SpritesBindGroup0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-		Label:  "Sprites BindGroup 0",
-		Layout: pipeline.GetBindGroupLayout(0),
-		Entries: []wgpu.BindGroupEntry{
-			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
-			{Binding: 1, Buffer: m.SpriteBuf, Size: wgpu.WholeSize},
-			{Binding: 2, TextureView: m.SpriteAtlasView},
-			{Binding: 3, Sampler: m.SpriteAtlasSampler},
-		},
-	})
-	if err != nil {
-		panic(fmt.Errorf("failed to create sprites bind group 0: %v", err))
-	}
-
-	// Group 1: G-Buffer Depth
 	m.SpritesBindGroup1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Label:  "Sprites BindGroup 1",
 		Layout: pipeline.GetBindGroupLayout(1),
@@ -57,18 +90,24 @@ func (m *GpuBufferManager) CreateSpritesBindGroups(pipeline *wgpu.RenderPipeline
 }
 
 func (m *GpuBufferManager) CreateDefaultSpriteAtlas() {
-	// Reuse particle atlas logic or create a simple 1x1 white texture
 	width, height := uint32(1), uint32(1)
 	pixels := []byte{255, 255, 255, 255}
-	m.SetSpriteAtlas(pixels, width, height)
+	m.SetSpriteAtlas(defaultSpriteAtlasKey, pixels, width, height, 1)
 }
 
-func (m *GpuBufferManager) SetSpriteAtlas(data []byte, w, h uint32) {
-	if m.SpriteAtlasTex != nil {
-		m.SpriteAtlasTex.Release()
+func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, version uint) {
+	if version != 0 {
+		if existing, ok := m.SpriteAtlases[key]; ok && existing != nil && existing.Version == version {
+			return
+		}
 	}
-	if m.SpriteAtlasView != nil {
-		m.SpriteAtlasView.Release()
+	if existing, ok := m.SpriteAtlases[key]; ok && existing != nil {
+		if existing.View != nil {
+			existing.View.Release()
+		}
+		if existing.Texture != nil {
+			existing.Texture.Release()
+		}
 	}
 
 	size := wgpu.Extent3D{Width: w, Height: h, DepthOrArrayLayers: 1}
@@ -84,23 +123,13 @@ func (m *GpuBufferManager) SetSpriteAtlas(data []byte, w, h uint32) {
 	if err != nil {
 		panic(err)
 	}
-	m.SpriteAtlasTex = tex
-	m.SpriteAtlasView, _ = tex.CreateView(nil)
-
-	if m.SpriteAtlasSampler == nil {
-		m.SpriteAtlasSampler, _ = m.Device.CreateSampler(&wgpu.SamplerDescriptor{
-			AddressModeU:  wgpu.AddressModeClampToEdge,
-			AddressModeV:  wgpu.AddressModeClampToEdge,
-			AddressModeW:  wgpu.AddressModeClampToEdge,
-			MagFilter:     wgpu.FilterModeLinear,
-			MinFilter:     wgpu.FilterModeLinear,
-			MipmapFilter:  wgpu.MipmapFilterModeLinear,
-			LodMinClamp:   0,
-			LodMaxClamp:   32,
-			MaxAnisotropy: 1,
-		})
+	view, err := tex.CreateView(nil)
+	if err != nil {
+		tex.Release()
+		panic(err)
 	}
 
+	m.ensureSpriteAtlasSampler()
 	m.Device.GetQueue().WriteTexture(
 		&wgpu.ImageCopyTexture{Texture: tex},
 		data,
@@ -111,5 +140,32 @@ func (m *GpuBufferManager) SetSpriteAtlas(data []byte, w, h uint32) {
 		},
 		&size,
 	)
-	m.SpriteAtlasDirty = true
+	m.SpriteAtlases[key] = &SpriteAtlasResource{Texture: tex, View: view, Version: version}
+}
+
+func (m *GpuBufferManager) ensureSpriteAtlasSampler() {
+	if m.SpriteAtlasSampler != nil {
+		return
+	}
+	m.SpriteAtlasSampler, _ = m.Device.CreateSampler(&wgpu.SamplerDescriptor{
+		AddressModeU:  wgpu.AddressModeClampToEdge,
+		AddressModeV:  wgpu.AddressModeClampToEdge,
+		AddressModeW:  wgpu.AddressModeClampToEdge,
+		MagFilter:     wgpu.FilterModeLinear,
+		MinFilter:     wgpu.FilterModeLinear,
+		MipmapFilter:  wgpu.MipmapFilterModeLinear,
+		LodMinClamp:   0,
+		LodMaxClamp:   32,
+		MaxAnisotropy: 1,
+	})
+}
+
+func (m *GpuBufferManager) spriteAtlasView(key string) *wgpu.TextureView {
+	if entry, ok := m.SpriteAtlases[key]; ok && entry != nil && entry.View != nil {
+		return entry.View
+	}
+	if entry, ok := m.SpriteAtlases[defaultSpriteAtlasKey]; ok && entry != nil {
+		return entry.View
+	}
+	return nil
 }

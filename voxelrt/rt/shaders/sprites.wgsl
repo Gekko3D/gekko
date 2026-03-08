@@ -21,7 +21,7 @@ struct SpriteInstance {
     is_ui: u32,
     size: vec2<f32>,
     is_unlit: u32,
-    pad1: u32,
+    alpha_mode: u32,
     color: vec4<f32>,
     sprite_index: u32,
     atlas_cols: u32,
@@ -46,6 +46,7 @@ struct VSOut {
     @location(5) @interpolate(flat) atlas_rows: u32,
     @location(6) @interpolate(flat) is_ui: u32,
     @location(7) @interpolate(flat) is_unlit: u32,
+    @location(8) @interpolate(flat) alpha_mode: u32,
 };
 
 fn get_camera_right() -> vec3<f32> {
@@ -78,6 +79,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     out.atlas_rows = max(1u, inst.atlas_rows);
     out.is_ui = inst.is_ui;
     out.is_unlit = inst.is_unlit;
+    out.alpha_mode = inst.alpha_mode;
 
     if (inst.is_ui != 0u) {
         // UI Space: inst.pos.xy is screen pixels, inst.size is pixels
@@ -124,8 +126,11 @@ fn fs_main(in: VSOut) -> FSOut {
     
     let sprite_uv = vec2<f32>(sprite_x, sprite_y) + in.quad_uv * vec2<f32>(col_w, row_h);
     let atlas_color = textureSample(atlas_tex, atlas_sampler, sprite_uv);
-    
-    let alpha = in.color.a * atlas_color.a;
+
+    var alpha = in.color.a * atlas_color.a;
+    if (in.alpha_mode == 1u) {
+        alpha = in.color.a * max(atlas_color.r, max(atlas_color.g, atlas_color.b));
+    }
     if (alpha < 0.01) {
         discard;
     }
