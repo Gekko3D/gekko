@@ -50,6 +50,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				for i, box := range es.Model.Boxes {
 					body.boxes[i].Box = box
 				}
+				body.invInertiaLocal = calculateInverseInertiaLocal(body)
 			}
 			// Cleanup dead entities
 			snapMap := make(map[EntityId]bool)
@@ -118,11 +119,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 					// Integrate
 					b.pos = b.pos.Add(b.vel.Mul(dt))
-					if b.angVel.Len() > 0 {
-						angVelQuat := mgl32.Quat{W: 0, V: b.angVel.Mul(0.5 * dt)}
-						b.rot = b.rot.Add(angVelQuat.Mul(b.rot))
-						b.rot = b.rot.Normalize()
-					}
+					b.rot = integrateAngularVelocity(b.rot, b.angVel, dt)
 					b.updateAABB()
 				}
 			}(bodiesList[start:end])
@@ -262,17 +259,11 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				restitution = 0
 			}
 
-			inertiaA := calculateInertia(b)
-
-			denom := 1.0 / b.mass
-			rAn := rA.Cross(m.normal)
-			denom += rAn.Dot(rAn) / inertiaA
-
-			if !other.isStatic && other.mass > 0 {
-				inertiaB := calculateInertia(other)
-				denom += 1.0 / other.mass
-				rBn := rB.Cross(m.normal)
-				denom += rBn.Dot(rBn) / inertiaB
+			invMassA := inverseMass(b)
+			invMassB := inverseMass(other)
+			denom := invMassA + invMassB + angularConstraintDenominator(b, rA, m.normal) + angularConstraintDenominator(other, rB, m.normal)
+			if denom <= 0 {
+				continue
 			}
 
 			j := -(1 + restitution) * velAlongNormal
@@ -280,16 +271,13 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 			impulse := m.normal.Mul(j)
 
-			// Apply linear impulse
-			b.vel = b.vel.Add(impulse.Mul(1.0 / b.mass))
-
-			// Apply angular impulse
-			b.angVel = b.angVel.Add(rA.Cross(impulse).Mul(1.0 / inertiaA))
-
-			if !other.isStatic && other.mass > 0 {
-				inertiaB := calculateInertia(other)
-				other.vel = other.vel.Sub(impulse.Mul(1.0 / other.mass))
-				other.angVel = other.angVel.Sub(rB.Cross(impulse).Mul(1.0 / inertiaB))
+			if invMassA > 0 {
+				b.vel = b.vel.Add(impulse.Mul(invMassA))
+				b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(impulse)))
+			}
+			if invMassB > 0 {
+				other.vel = other.vel.Sub(impulse.Mul(invMassB))
+				other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(impulse)))
 			}
 
 			// Friction
@@ -297,24 +285,27 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
 			if tangent.Len() > 0.0001 {
 				tangent = tangent.Normalize()
-				jt := -relativeVel.Dot(tangent)
-				jt /= denom // Approximate denominator for friction
-				maxFriction := friction * float32(math.Abs(float64(j)))
-				if jt > maxFriction {
-					jt = maxFriction
-				}
-				if jt < -maxFriction {
-					jt = -maxFriction
-				}
+				tangentDenom := invMassA + invMassB + angularConstraintDenominator(b, rA, tangent) + angularConstraintDenominator(other, rB, tangent)
+				if tangentDenom > 0 {
+					jt := -relativeVel.Dot(tangent)
+					jt /= tangentDenom
+					maxFriction := friction * float32(math.Abs(float64(j)))
+					if jt > maxFriction {
+						jt = maxFriction
+					}
+					if jt < -maxFriction {
+						jt = -maxFriction
+					}
 
-				fImpulse := tangent.Mul(jt)
-				b.vel = b.vel.Add(fImpulse.Mul(1.0 / b.mass))
-				b.angVel = b.angVel.Add(rA.Cross(fImpulse).Mul(1.0 / inertiaA))
-
-				if !other.isStatic && other.mass > 0 {
-					inertiaB := calculateInertia(other)
-					other.vel = other.vel.Sub(fImpulse.Mul(1.0 / other.mass))
-					other.angVel = other.angVel.Sub(rB.Cross(fImpulse).Mul(1.0 / inertiaB))
+					fImpulse := tangent.Mul(jt)
+					if invMassA > 0 {
+						b.vel = b.vel.Add(fImpulse.Mul(invMassA))
+						b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(fImpulse)))
+					}
+					if invMassB > 0 {
+						other.vel = other.vel.Sub(fImpulse.Mul(invMassB))
+						other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(fImpulse)))
+					}
 				}
 			}
 
@@ -376,24 +367,37 @@ type InternalBox struct {
 }
 
 type internalBody struct {
-	Eid            EntityId
-	pos            mgl32.Vec3
-	rot            mgl32.Quat
-	vel            mgl32.Vec3
-	angVel         mgl32.Vec3
-	isStatic       bool
-	mass           float32
-	model          PhysicsModel
-	boxes          []InternalBox
-	sleeping       bool
-	idleTime       float32
-	friction       float32
-	restitution    float32
-	gravityScale   float32
-	linearDamping  float32
-	angularDamping float32
-	aabbMin        mgl32.Vec3
-	aabbMax        mgl32.Vec3
+	Eid             EntityId
+	pos             mgl32.Vec3
+	rot             mgl32.Quat
+	vel             mgl32.Vec3
+	angVel          mgl32.Vec3
+	isStatic        bool
+	mass            float32
+	model           PhysicsModel
+	boxes           []InternalBox
+	sleeping        bool
+	idleTime        float32
+	friction        float32
+	restitution     float32
+	gravityScale    float32
+	linearDamping   float32
+	angularDamping  float32
+	invInertiaLocal mgl32.Mat3
+	aabbMin         mgl32.Vec3
+	aabbMax         mgl32.Vec3
+}
+
+func integrateAngularVelocity(rot mgl32.Quat, angVel mgl32.Vec3, dt float32) mgl32.Quat {
+	omegaMag := angVel.Len()
+	if omegaMag <= 1e-6 || dt <= 0 {
+		return rot
+	}
+
+	angle := omegaMag * dt
+	axis := angVel.Mul(1.0 / omegaMag)
+	delta := mgl32.QuatRotate(angle, axis)
+	return delta.Mul(rot).Normalize()
 }
 
 func (b *internalBody) updateAABB() {
@@ -434,35 +438,83 @@ func (b *internalBody) updateAABB() {
 	b.aabbMax = maxP
 }
 
-func calculateInertia(b *internalBody) float32 {
-	if len(b.boxes) == 0 {
-		return 1.0
+func inverseMass(b *internalBody) float32 {
+	if b == nil || b.isStatic || b.mass <= 0 {
+		return 0
+	}
+	return 1.0 / b.mass
+}
+
+func angularConstraintDenominator(b *internalBody, r mgl32.Vec3, axis mgl32.Vec3) float32 {
+	if b == nil || b.isStatic || b.mass <= 0 {
+		return 0
+	}
+	rCrossAxis := r.Cross(axis)
+	invInertiaTerm := applyInverseInertiaWorld(b, rCrossAxis)
+	return axis.Dot(invInertiaTerm.Cross(r))
+}
+
+func applyInverseInertiaWorld(b *internalBody, angularImpulse mgl32.Vec3) mgl32.Vec3 {
+	if b == nil || b.isStatic || b.mass <= 0 {
+		return mgl32.Vec3{}
+	}
+	rotMat := rotationMat3(b.rot)
+	invInertiaWorld := rotMat.Mul3(b.invInertiaLocal).Mul3(rotMat.Transpose())
+	return invInertiaWorld.Mul3x1(angularImpulse)
+}
+
+func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
+	localInertia := calculateLocalInertiaTensor(b)
+	if math.Abs(float64(localInertia.Det())) <= 1e-6 {
+		return mgl32.Ident3()
+	}
+	return localInertia.Inv()
+}
+
+func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
+	if len(b.boxes) == 0 || b.mass <= 0 {
+		return mgl32.Ident3()
 	}
 
-	totalInertia := float32(0)
-	totalMass := b.mass
-	if totalMass <= 0 {
-		return 1.0
-	}
-
-	// Calculate mass distribution assuming uniform density
 	totalVolume := float32(0)
 	for _, box := range b.boxes {
 		totalVolume += box.Box.HalfExtents.X() * box.Box.HalfExtents.Y() * box.Box.HalfExtents.Z() * 8.0
 	}
+	if totalVolume <= 0 {
+		return mgl32.Ident3()
+	}
 
+	totalInertia := mgl32.Mat3{}
 	for _, box := range b.boxes {
-		volume := box.Box.HalfExtents.X() * box.Box.HalfExtents.Y() * box.Box.HalfExtents.Z() * 8.0
-		boxMass := (volume / totalVolume) * totalMass
+		half := box.Box.HalfExtents
+		volume := half.X() * half.Y() * half.Z() * 8.0
+		boxMass := (volume / totalVolume) * b.mass
 
-		// Inertia of this box about its own center
-		sizeSq := box.Box.HalfExtents.LenSqr() * 4.0
-		boxInertia := (1.0 / 6.0) * boxMass * sizeSq
+		ix := (1.0 / 3.0) * boxMass * (half.Y()*half.Y() + half.Z()*half.Z())
+		iy := (1.0 / 3.0) * boxMass * (half.X()*half.X() + half.Z()*half.Z())
+		iz := (1.0 / 3.0) * boxMass * (half.X()*half.X() + half.Y()*half.Y())
+		boxTensor := mgl32.Mat3FromRows(
+			mgl32.Vec3{ix, 0, 0},
+			mgl32.Vec3{0, iy, 0},
+			mgl32.Vec3{0, 0, iz},
+		)
 
-		// Parallel Axis Theorem
-		distSq := box.Box.LocalOffset.LenSqr()
-		totalInertia += boxInertia + boxMass*distSq
+		offset := box.Box.LocalOffset
+		offsetSq := offset.LenSqr()
+		outer := mgl32.Mat3FromRows(
+			mgl32.Vec3{offset.X() * offset.X(), offset.X() * offset.Y(), offset.X() * offset.Z()},
+			mgl32.Vec3{offset.Y() * offset.X(), offset.Y() * offset.Y(), offset.Y() * offset.Z()},
+			mgl32.Vec3{offset.Z() * offset.X(), offset.Z() * offset.Y(), offset.Z() * offset.Z()},
+		)
+		parallelAxis := mgl32.Ident3().Mul(offsetSq).Sub(outer).Mul(boxMass)
+
+		totalInertia = totalInertia.Add(boxTensor).Add(parallelAxis)
 	}
 
 	return totalInertia
+}
+
+func rotationMat3(q mgl32.Quat) mgl32.Mat3 {
+	rot := q.Mat4()
+	return mgl32.Mat3FromCols(rot.Col(0).Vec3(), rot.Col(1).Vec3(), rot.Col(2).Vec3())
 }
