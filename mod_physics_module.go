@@ -128,8 +128,8 @@ func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy, physics *PhysicsWorld
 				rb.AngularVelocity = res.AngVel
 				rb.Sleeping = res.Sleeping
 				rb.IdleTime = res.IdleTime
-				rb.LastPulledPos = physicsToRenderPosition(rb.CurrentPhysicsPos, rb.CurrentPhysicsRot, tr, pm)
-				rb.LastPulledRot = rb.CurrentPhysicsRot
+				rb.LastPulledPos = tr.Position
+				rb.LastPulledRot = tr.Rotation
 			}
 			return true
 		})

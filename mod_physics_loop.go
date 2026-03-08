@@ -22,6 +22,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 	// Internal state
 	internalBodies := make(map[EntityId]*internalBody)
 	bodiesByID := make(map[EntityId]*internalBody)
+	staticContactBodies := make(map[EntityId]bool)
 	grid := NewSpatialHashGrid(10.0)
 	manifolds := make([]collisionManifold, 0, 256)
 	var tick uint64
@@ -256,100 +257,114 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					}
 				}
 			}
+		}
 
-			rA := m.point.Sub(b.pos)
-			rB := m.point.Sub(other.pos)
-
-			vA := b.vel.Add(b.angVel.Cross(rA))
-			vB := other.vel
-			if !other.isStatic {
-				vB = other.vel.Add(other.angVel.Cross(rB))
+		clear(staticContactBodies)
+		for _, m := range manifolds {
+			if !m.bodyA.isStatic && m.bodyB.isStatic {
+				staticContactBodies[m.bodyA.Eid] = true
 			}
-
-			relativeVel := vA.Sub(vB)
-			velAlongNormal := relativeVel.Dot(m.normal)
-
-			// Do not resolve if velocities are separating
-			if velAlongNormal > 0 {
-				continue
+			if !m.bodyB.isStatic && m.bodyA.isStatic {
+				staticContactBodies[m.bodyB.Eid] = true
 			}
+		}
 
-			restitution := (b.restitution + other.restitution) * 0.5
-			// If velocity is low, disable restitution to help settling
-			if velAlongNormal > -0.5 {
-				restitution = 0
-			}
+		const solverIterations = 8
+		for iter := 0; iter < solverIterations; iter++ {
+			for _, m := range manifolds {
+				b := m.bodyA
+				other := m.bodyB
 
-			invMassA := inverseMass(b)
-			invMassB := inverseMass(other)
-			denom := invMassA + invMassB + angularConstraintDenominator(b, rA, m.normal) + angularConstraintDenominator(other, rB, m.normal)
-			if denom <= 0 {
-				continue
-			}
+				rA := m.point.Sub(b.pos)
+				rB := m.point.Sub(other.pos)
 
-			j := -(1 + restitution) * velAlongNormal
-			j /= denom
+				vA := b.vel.Add(b.angVel.Cross(rA))
+				vB := other.vel
+				if !other.isStatic {
+					vB = other.vel.Add(other.angVel.Cross(rB))
+				}
 
-			impulse := m.normal.Mul(j)
+				relativeVel := vA.Sub(vB)
+				velAlongNormal := relativeVel.Dot(m.normal)
 
-			if invMassA > 0 {
-				b.vel = b.vel.Add(impulse.Mul(invMassA))
-				b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(impulse)))
-			}
-			if invMassB > 0 {
-				other.vel = other.vel.Sub(impulse.Mul(invMassB))
-				other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(impulse)))
-			}
+				if velAlongNormal > 0 {
+					continue
+				}
 
-			// Friction
-			friction := (b.friction + other.friction) * 0.5
-			tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
-			if tangent.Len() > 0.0001 {
-				tangent = tangent.Normalize()
-				tangentDenom := invMassA + invMassB + angularConstraintDenominator(b, rA, tangent) + angularConstraintDenominator(other, rB, tangent)
-				if tangentDenom > 0 {
-					jt := -relativeVel.Dot(tangent)
-					jt /= tangentDenom
-					maxFriction := friction * absf(j)
-					if jt > maxFriction {
-						jt = maxFriction
-					}
-					if jt < -maxFriction {
-						jt = -maxFriction
-					}
+				restitution := (b.restitution + other.restitution) * 0.5
+				if velAlongNormal > -0.5 {
+					restitution = 0
+				}
 
-					fImpulse := tangent.Mul(jt)
-					if invMassA > 0 {
-						b.vel = b.vel.Add(fImpulse.Mul(invMassA))
-						b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(fImpulse)))
-					}
-					if invMassB > 0 {
-						other.vel = other.vel.Sub(fImpulse.Mul(invMassB))
-						other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(fImpulse)))
+				invMassA := inverseMass(b)
+				invMassB := inverseMass(other)
+				denom := invMassA + invMassB + angularConstraintDenominator(b, rA, m.normal) + angularConstraintDenominator(other, rB, m.normal)
+				if denom <= 0 {
+					continue
+				}
+
+				j := -(1 + restitution) * velAlongNormal
+				j /= denom
+
+				impulse := m.normal.Mul(j)
+
+				if invMassA > 0 {
+					b.vel = b.vel.Add(impulse.Mul(invMassA))
+					b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(impulse)))
+				}
+				if invMassB > 0 {
+					other.vel = other.vel.Sub(impulse.Mul(invMassB))
+					other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(impulse)))
+				}
+
+				friction := (b.friction + other.friction) * 0.5
+				tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
+				if tangent.Len() > 0.0001 {
+					tangent = tangent.Normalize()
+					tangentDenom := invMassA + invMassB + angularConstraintDenominator(b, rA, tangent) + angularConstraintDenominator(other, rB, tangent)
+					if tangentDenom > 0 {
+						jt := -relativeVel.Dot(tangent)
+						jt /= tangentDenom
+						maxFriction := friction * absf(j)
+						if jt > maxFriction {
+							jt = maxFriction
+						}
+						if jt < -maxFriction {
+							jt = -maxFriction
+						}
+
+						fImpulse := tangent.Mul(jt)
+						if invMassA > 0 {
+							b.vel = b.vel.Add(fImpulse.Mul(invMassA))
+							b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(fImpulse)))
+						}
+						if invMassB > 0 {
+							other.vel = other.vel.Sub(fImpulse.Mul(invMassB))
+							other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(fImpulse)))
+						}
 					}
 				}
-			}
 
-			// Stabilization: if velocity is very low after resolution, zero it
-			if b.vel.Len() < 0.01 {
-				b.vel = mgl32.Vec3{0, 0, 0}
-			}
-			if b.angVel.Len() < 0.01 {
-				b.angVel = mgl32.Vec3{0, 0, 0}
-			}
-
-			// Only wake if we have significant relative velocity
-			if float64(absf(velAlongNormal)) > 0.1 {
-				b.Wake()
 			}
 		}
 
 		// 4. Sleeping and Results
+		groundedSleepThreshold := maxf(world.SleepThreshold, gravity.Len()*dt*2.0)
+		groundedAngularThreshold := maxf(world.SleepThreshold, 0.1)
+		groundedSleepTime := minf(world.SleepTime, 0.25)
 		for _, b := range internalBodies {
 			if !b.isStatic && !b.sleeping {
-				if b.vel.Len() < world.SleepThreshold && b.angVel.Len() < world.SleepThreshold {
+				sleepThreshold := world.SleepThreshold
+				angularThreshold := world.SleepThreshold
+				sleepTime := world.SleepTime
+				if staticContactBodies[b.Eid] {
+					sleepThreshold = groundedSleepThreshold
+					angularThreshold = groundedAngularThreshold
+					sleepTime = groundedSleepTime
+				}
+				if b.vel.Len() < sleepThreshold && b.angVel.Len() < angularThreshold {
 					b.idleTime += dt
-					if b.idleTime > world.SleepTime {
+					if b.idleTime > sleepTime {
 						b.sleeping = true
 						b.vel = mgl32.Vec3{0, 0, 0}
 						b.angVel = mgl32.Vec3{0, 0, 0}
