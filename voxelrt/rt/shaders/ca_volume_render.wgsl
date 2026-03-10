@@ -101,6 +101,11 @@ struct VSOut {
   @location(0) uv: vec2<f32>,
 };
 
+fn hash13(p: vec3<f32>) -> f32 {
+  let h = dot(p, vec3<f32>(127.1, 311.7, 74.7));
+  return fract(sin(h) * 43758.5453);
+}
+
 struct FSOut {
   @location(0) accum: vec4<f32>,
   @location(1) weight: f32,
@@ -432,36 +437,49 @@ fn plume_envelope(pos_os: vec3<f32>, info: VolumeRecord) -> f32 {
     let jet_round = 1.0 - smoothstep(mix(0.68, 0.22, h), mix(0.94, 0.38, h), length(p));
     shape = max(max(core, flare), max(diamond_a, diamond_b)) * jet_round;
   } else if (preset == 4u) {
-    let phase = fract(t / 3.6);
-    let burst_time = phase * 3.6;
-    let expand = smoothstep(0.0, 0.24, burst_time);
-    let after = smoothstep(0.18, 0.72, burst_time);
-    let rise = smoothstep(0.18, 1.1, burst_time);
-    let ball_center = vec3<f32>(0.5, mix(0.16, 0.48, rise), 0.5);
-    let q = vec3<f32>(
-      (uvw.x - ball_center.x) / mix(0.14, 0.28, expand),
-      (uvw.y - ball_center.y) / mix(0.1, 0.2, expand),
-      (uvw.z - ball_center.z) / mix(0.14, 0.28, expand),
+    let cycle_period = 5.4;
+    let phase = fract(t / cycle_period);
+    let burst_time = phase * cycle_period;
+    let expand = smoothstep(0.0, 0.48, burst_time);
+    let after = smoothstep(0.32, 1.4, burst_time);
+    let rise = smoothstep(0.24, 3.2, burst_time);
+    let fade = 1.0 - smoothstep(4.0, 5.4, burst_time);
+    let ball_center = vec3<f32>(0.5, mix(0.14, 0.78, rise), 0.5);
+    let q = (uvw - ball_center) / vec3<f32>(
+      mix(0.16, 0.44, expand),
+      mix(0.12, 0.36, expand),
+      mix(0.16, 0.44, expand)
     );
     let fireball = max(0.0, 1.0 - length(q));
     let drift = vec2<f32>(
       sin(t * 0.68 + h * 4.0 + info.grid.w * 0.03),
-      cos(t * 0.56 + h * 3.2 + info.grid.w * 0.05),
+      cos(t * 0.56 + h * 3.2 + info.grid.w * 0.05)
     ) * mix(0.06, 0.22, h);
-    let crown = lobe_shape(p, drift * 0.24, mix(0.14, 0.52, after), vec2<f32>(0.82, 0.7));
-    let shoulder_a = lobe_shape(p, vec2<f32>(-0.24, 0.02) + drift, mix(0.1, 0.3, after), vec2<f32>(0.44, 0.66));
-    let shoulder_b = lobe_shape(p, vec2<f32>(0.22, -0.04) - drift * 0.8, mix(0.1, 0.28, after), vec2<f32>(0.42, 0.68));
+    
+    // Toroidal cap (vortex ring)
+    let ring_radius = mix(0.12, 0.42, after);
+    let tube_radius = mix(0.08, 0.22, after);
+    let p_xz = length(p - drift * 0.2);
+    let ring_d = length(vec2<f32>(p_xz - ring_radius, (h - ball_center.y) * 2.2));
+    let crown = max(0.0, 1.0 - ring_d / tube_radius);
+
+    let shoulder_a = lobe_shape(p, vec2<f32>(-0.3, 0.05) + drift, mix(0.12, 0.4, after), vec2<f32>(0.48, 0.64));
+    let shoulder_b = lobe_shape(p, vec2<f32>(0.28, -0.05) - drift * 0.8, mix(0.12, 0.38, after), vec2<f32>(0.46, 0.66));
     let stem = lobe_shape(
       p,
       vec2<f32>(sin(t * 0.8 + h * 5.2) * 0.04, 0.0),
-      mix(0.08, 0.16, rise),
-      vec2<f32>(mix(0.28, 0.1, h), mix(0.42, 0.16, h)),
-    ) * smoothstep(0.08, 0.86, h);
-    let lower_hole = (1.0 - smoothstep(0.08, 0.24, length(p))) * (1.0 - smoothstep(0.04, 0.24, h));
-    let detached_base = smoothstep(0.02, 0.14, h);
-    let plume = max(crown, max(shoulder_a, max(shoulder_b, stem * 0.84))) * (1.0 - lower_hole * 0.54) * detached_base;
-    let taper = 1.0 - smoothstep(mix(0.86, 0.28, h), mix(1.0, 0.42, h), length(p));
-    shape = max(fireball * mix(1.0, 0.2, after) * taper, plume);
+      mix(0.14, 0.24, rise),
+      vec2<f32>(mix(0.38, 0.16, h), mix(0.52, 0.2, h))
+    ) * smoothstep(0.04, 0.88, h);
+
+    let lower_hole = (1.0 - smoothstep(0.1, 0.3, length(p))) * (1.0 - smoothstep(0.04, 0.28, h));
+    let detached_base = smoothstep(0.01, 0.1, h);
+    let plume = max(crown, max(shoulder_a, max(shoulder_b, stem * 0.92))) * (1.0 - lower_hole * 0.62) * detached_base;
+    
+    // Aggressive mushroom taper: narrower base, wider cap.
+    let profile = mix(0.18, 0.94, smoothstep(0.08, 0.68, h));
+    let taper = 1.0 - smoothstep(profile - 0.2, profile + 0.1, length(p));
+    shape = max(fireball * mix(1.1, 0.15, after), plume) * taper * fade;
   } else if (volume_type == 1u) {
     let c0 = vec2<f32>(-0.22, -0.08) + wobble;
     let c1 = vec2<f32>(0.17, 0.12) + wobble * 0.8;
@@ -916,7 +934,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
               let blast_shell = 1.0 - smoothstep(mix(0.84, 0.22, flash), mix(0.98, 0.38, flash), flame_radial);
               let center_core = (1.0 - smoothstep(0.1, 0.38, flame_h)) * (1.0 - smoothstep(0.12, 0.42, flame_radial));
               let lift_fade = 1.0 - smoothstep(0.48, 0.9, flame_h);
-              let fireball = mix(2.18, 0.7, after) * mix(1.36, 0.54, flame_h);
+              let fireball_noise = 0.82 + 0.36 * hash13(pos_os * 1.8 + t * 0.45);
+              let fireball = mix(1.6, 0.5, after) * mix(1.36, 0.54, flame_h) * fireball_noise;
               flame_term *= blast_shell * fireball * max(center_core * 1.28, lift_fade * 0.62);
             }
             if (preset == 3u) {
@@ -931,9 +950,9 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
           flame_term * p_data.sigma_t_fire;
         var alpha_step = 1.0 - exp(-sigma_t * segment_len);
         if (preset == 4u) {
-          let heat_alpha = clamp(apparent_heat * 1.3, 0.0, 1.0);
-          let smoke_alpha = smoothstep(0.02, 0.22, smoke_density);
-          alpha_step = clamp(alpha_step * mix(1.0 + smoke_alpha * 0.4, 1.56, heat_alpha), 0.0, 0.98);
+          let heat_alpha = clamp(apparent_heat * 1.15, 0.0, 1.0);
+          let smoke_alpha = smoothstep(0.02, 0.28, smoke_density);
+          alpha_step = clamp(alpha_step * mix(1.0 + smoke_alpha * 0.45, 1.48, heat_alpha), 0.0, 0.98);
         } else if (volume_type == 0u) {
           alpha_step = clamp(alpha_step * mix(1.35, 1.85, smoothstep(0.02, 0.2, smoke_density)), 0.0, 0.98);
         } else if (volume_type == 1u) {
