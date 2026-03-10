@@ -85,6 +85,7 @@ func (a *App) Resize(w, h int) {
 		// Recreate particle pipeline for new swapchain format
 		a.setupParticlesPipeline()
 		a.setupSpritesPipeline()
+		a.setupCAVolumePipeline()
 		// Recreate resolve pipeline/bind group (depends on textures/swapchain)
 		a.setupResolvePipeline()
 	}
@@ -161,6 +162,15 @@ func (a *App) Update() {
 		if a.TransparentPipeline != nil {
 			a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
 		}
+		if a.CAVolumePipeline != nil {
+			a.BufferManager.CreateCAVolumeRenderBindGroups(a.CAVolumePipeline)
+		}
+		if a.CAVolumeSimPipeline != nil {
+			a.BufferManager.CreateCAVolumeSimBindGroups()
+		}
+		if a.CAVolumeBoundsPipeline != nil {
+			a.BufferManager.CreateCAVolumeBoundsBindGroups()
+		}
 
 		// Gizmo BindGroup
 		if a.GizmoPass != nil && a.BufferManager.CameraBuf != nil {
@@ -180,6 +190,15 @@ func (a *App) Update() {
 
 	// Update Camera Uniforms
 	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height)
+	if a.BufferManager.CAVolumeBindingsDirty {
+		a.BufferManager.CreateCAVolumeSimBindGroups()
+		if a.CAVolumeBoundsPipeline != nil {
+			a.BufferManager.CreateCAVolumeBoundsBindGroups()
+		}
+		if a.CAVolumePipeline != nil {
+			a.BufferManager.CreateCAVolumeRenderBindGroups(a.CAVolumePipeline)
+		}
+	}
 
 	// Update Text Buffers if needed
 	if len(a.TextItems) > 0 && a.TextRenderer != nil {
@@ -261,6 +280,11 @@ func (a *App) Render() {
 	a.BufferManager.DispatchParticleSim(encoder, a.ParticleInitPipeline, a.ParticleSimPipeline)
 	a.BufferManager.DispatchParticleSpawn(encoder, a.ParticleSpawnPipeline, a.ParticleFinalizePipeline, a.ParticleSpawnCount)
 	a.Profiler.EndScope("Particles Sim")
+
+	a.Profiler.BeginScope("CA Sim")
+	a.BufferManager.DispatchCAVolumeSim(encoder, a.CAVolumeSimPipeline)
+	a.BufferManager.DispatchCAVolumeBounds(encoder, a.CAVolumeBoundsPipeline)
+	a.Profiler.EndScope("CA Sim")
 
 	// Compute Pass
 	a.Profiler.BeginScope("G-Buffer")
@@ -381,6 +405,15 @@ func (a *App) Render() {
 			},
 		},
 	})
+	if a.CAVolumePipeline != nil {
+		accPass.SetPipeline(a.CAVolumePipeline)
+		if a.BufferManager.CAVolumeRenderBG0 != nil && a.BufferManager.CurrentCAVolumeRenderBG1() != nil && a.BufferManager.CAVolumeRenderBG2 != nil {
+			accPass.SetBindGroup(0, a.BufferManager.CAVolumeRenderBG0, nil)
+			accPass.SetBindGroup(1, a.BufferManager.CurrentCAVolumeRenderBG1(), nil)
+			accPass.SetBindGroup(2, a.BufferManager.CAVolumeRenderBG2, nil)
+			accPass.Draw(3, 1, 0, 0)
+		}
+	}
 	if a.TransparentPipeline != nil {
 		accPass.SetPipeline(a.TransparentPipeline)
 		if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil {

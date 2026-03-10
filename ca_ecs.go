@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"math"
 	"math/rand"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -17,18 +18,54 @@ const (
 	CellularWater
 )
 
+type CAVolumePreset uint32
+
+const (
+	CAVolumePresetDefault CAVolumePreset = iota
+	CAVolumePresetTorch
+	CAVolumePresetCampfire
+	CAVolumePresetJetFlame
+	CAVolumePresetExplosion
+)
+
+type CAVolumeAnchorMode uint32
+
+const (
+	CAVolumeAnchorCenter CAVolumeAnchorMode = iota // Default: Transform position is the volume center
+	CAVolumeAnchorCorner                           // Legacy behavior: Transform position is the volume corner
+	CAVolumeAnchorCustom                           // Transform position is a custom local anchor
+)
+
 // CellularVolumeComponent holds a small 3D grid and rule params.
 // The grid is in local space of the entity's TransformComponent.
 type CellularVolumeComponent struct {
-	Resolution [3]int // e.g., [32, 48, 32]
-	Type       CellularType
-	TickRate   float32 // Hz (10-20 is fine)
+	Resolution   [3]int // e.g., [32, 48, 32]
+	Type         CellularType
+	Preset       CAVolumePreset
+	Disabled     bool
+	AnchorMode   CAVolumeAnchorMode
+	CustomAnchor mgl32.Vec3
+	UseIntensity bool
+	Intensity    float32
+	FadeInRate   float32 // intensity units per second; <= 0 snaps to target
+	FadeOutRate  float32 // intensity units per second; <= 0 snaps to target
+	TickRate     float32 // Hz (10-20 is fine)
 
 	// Rule parameters (interpreted per Type)
 	Diffusion   float32 // 0..1
 	Buoyancy    float32 // upward bias for smoke/fire
 	Cooling     float32 // reduces temp per tick (fire)
 	Dissipation float32 // reduces density per tick (all)
+
+	// Optional render overrides for GPU volumetric CA. When disabled, preset defaults are used.
+	UseAppearanceOverride bool
+	ScatterColor          [3]float32
+	Extinction            float32
+	Emission              float32
+	UseShadowTintOverride bool
+	ShadowTint            [3]float32
+	UseAbsorptionOverride bool
+	AbsorptionColor       [3]float32
 
 	BridgeToParticles bool // When true, particlesCollect will spawn billboards at active cells
 
@@ -45,13 +82,102 @@ type CellularVolumeComponent struct {
 	_inited  bool
 	_dirty   bool // set true whenever a simulation step occurs
 
-	// CA→Voxels delta state
-	_prevMask      []byte
-	_prevStride    int
-	_prevThreshold float32
-	_prevType      CellularType
+	_nextDensity      []float32
+	_gpuStepsPending  uint32
+	_currentIntensity float32
+	_intensityInited  bool
+}
 
-	_nextDensity []float32
+func clamp01(v float32) float32 {
+	return float32(math.Max(0.0, math.Min(1.0, float64(v))))
+}
+
+func (cv *CellularVolumeComponent) targetIntensity() float32 {
+	if cv == nil || cv.Disabled {
+		return 0
+	}
+	if !cv.UseIntensity {
+		return 1
+	}
+	return clamp01(cv.Intensity)
+}
+
+func (cv *CellularVolumeComponent) CurrentIntensity() float32 {
+	if cv == nil {
+		return 0
+	}
+	if !cv._intensityInited {
+		return cv.targetIntensity()
+	}
+	return clamp01(cv._currentIntensity)
+}
+
+func (cv *CellularVolumeComponent) advanceIntensity(dt float32) {
+	if cv == nil {
+		return
+	}
+	target := cv.targetIntensity()
+	if !cv._intensityInited {
+		cv._currentIntensity = target
+		cv._intensityInited = true
+		return
+	}
+	if dt <= 0 {
+		dt = 1.0 / 60.0
+	}
+	if target > cv._currentIntensity {
+		if cv.FadeInRate <= 0 {
+			cv._currentIntensity = target
+		} else {
+			cv._currentIntensity = min(target, cv._currentIntensity+cv.FadeInRate*dt)
+		}
+	} else if target < cv._currentIntensity {
+		if cv.FadeOutRate <= 0 {
+			cv._currentIntensity = target
+		} else {
+			cv._currentIntensity = max(target, cv._currentIntensity-cv.FadeOutRate*dt)
+		}
+	}
+	cv._currentIntensity = clamp01(cv._currentIntensity)
+}
+
+func (cv *CellularVolumeComponent) AnchorLocal() mgl32.Vec3 {
+	if cv == nil {
+		return mgl32.Vec3{}
+	}
+	switch cv.AnchorMode {
+	case CAVolumeAnchorCenter:
+		return mgl32.Vec3{
+			float32(max(0, cv.Resolution[0])) * 0.5,
+			float32(max(0, cv.Resolution[1])) * 0.5,
+			float32(max(0, cv.Resolution[2])) * 0.5,
+		}
+	case CAVolumeAnchorCustom:
+		return cv.CustomAnchor
+	case CAVolumeAnchorCorner:
+		fallthrough
+	default:
+		return mgl32.Vec3{}
+	}
+}
+
+func (cv *CellularVolumeComponent) AnchorWorld(tr *TransformComponent) mgl32.Vec3 {
+	if cv == nil || tr == nil {
+		return mgl32.Vec3{}
+	}
+	anchor := cv.AnchorLocal()
+	return mgl32.Vec3{
+		anchor.X() * tr.Scale.X() * VoxelSize,
+		anchor.Y() * tr.Scale.Y() * VoxelSize,
+		anchor.Z() * tr.Scale.Z() * VoxelSize,
+	}
+}
+
+func (cv *CellularVolumeComponent) VolumeOrigin(tr *TransformComponent) mgl32.Vec3 {
+	if cv == nil || tr == nil {
+		return mgl32.Vec3{}
+	}
+	return tr.Position.Sub(tr.Rotation.Rotate(cv.AnchorWorld(tr)))
 }
 
 func (cv *CellularVolumeComponent) ensureGrid() {
@@ -59,6 +185,10 @@ func (cv *CellularVolumeComponent) ensureGrid() {
 	if nx <= 0 || ny <= 0 || nz <= 0 {
 		cv.Resolution = [3]int{32, 32, 32}
 		nx, ny, nz = 32, 32, 32
+	}
+	if cv.UsesGPUVolume() {
+		cv._inited = true
+		return
 	}
 	total := nx * ny * nz
 	if cv._density == nil || len(cv._density) != total {
@@ -68,6 +198,13 @@ func (cv *CellularVolumeComponent) ensureGrid() {
 		cv.seed() // Seed initial density
 	}
 	cv._inited = true
+}
+
+func (cv *CellularVolumeComponent) UsesGPUVolume() bool {
+	if cv == nil || (cv.Type != CellularSmoke && cv.Type != CellularFire) {
+		return false
+	}
+	return cv.targetIntensity() > 0.001 || cv.CurrentIntensity() > 0.001
 }
 
 func idx3(x, y, z, nx, ny, nz int) int {
@@ -167,17 +304,14 @@ func (cv *CellularVolumeComponent) stepSmoke(dt float32) {
 					next[j] += share
 				}
 				// Vertical neighbors with buoyancy bias
+				// Note: upShare + downShare = share * 2, so mass is conserved.
 				upShare := share * (1.0 + buoy)
 				downShare := share * (1.0 - buoy)
 				if j := idx3(x, y+1, z, nx, ny, nz); j >= 0 {
 					next[j] += upShare
-				} else {
-					next[i] += upShare // hit ceiling -> keep
 				}
 				if j := idx3(x, y-1, z, nx, ny, nz); j >= 0 {
 					next[j] += downShare
-				} else {
-					next[i] += downShare // hit floor -> keep
 				}
 			}
 		}
@@ -194,6 +328,33 @@ func caStepSystem(t *Time, cmd *Commands) {
 
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
 		if cv == nil {
+			return true
+		}
+		cv.advanceIntensity(dt)
+		if cv.Type == CellularSmoke || cv.Type == CellularFire {
+			if !cv.UsesGPUVolume() {
+				return true
+			}
+			cv.ensureGrid()
+			target := float32(1.0)
+			if cv.TickRate > 0 {
+				target = 1.0 / cv.TickRate
+			} else {
+				cv.TickRate = 15.0
+				target = 1.0 / 15.0
+			}
+			cv._accum += dt
+			if cv._accum < target {
+				return true
+			}
+			cv._accum = 0
+			if cv._gpuStepsPending < 4 {
+				cv._gpuStepsPending++
+			}
+			cv._dirty = true
+			return true
+		}
+		if cv.Disabled {
 			return true
 		}
 		cv.ensureGrid()
@@ -255,24 +416,21 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 		if cv == nil || !cv.BridgeToParticles || cv._density == nil {
 			return true
 		}
+		intensity := cv.CurrentIntensity()
+		if intensity <= 0.001 {
+			return true
+		}
 		nx, ny, nz := cv.Resolution[0], cv.Resolution[1], cv.Resolution[2]
 		if nx <= 0 || ny <= 0 || nz <= 0 {
 			return true
 		}
 
-		// World placement: map local [0..nx,0..ny,0..nz] to world with Transform scale+position.
-		// Use a unit cell of 1.0 and scale with Transform.Scale's max component.
-		cellSize := float32(1.0)
-		scale := tr.Scale
-		// choose largest component to keep cubic-ish
-		smax := scale.X()
-		if scale.Y() > smax {
-			smax = scale.Y()
+		cellSize := mgl32.Vec3{
+			tr.Scale.X() * VoxelSize,
+			tr.Scale.Y() * VoxelSize,
+			tr.Scale.Z() * VoxelSize,
 		}
-		if scale.Z() > smax {
-			smax = scale.Z()
-		}
-		cellSize *= smax
+		anchorWorld := cv.AnchorWorld(tr)
 
 		// Adaptive sampling based on camera distance
 		dist := tr.Position.Sub(camPos).Len()
@@ -286,7 +444,9 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 			threshold = 0.03
 		}
 		// small jitter to avoid grid look
-		j := func() float32 { return (rand.Float32() - 0.5) * 0.8 * cellSize }
+		jx := func() float32 { return (rand.Float32() - 0.5) * 0.8 * cellSize.X() }
+		jy := func() float32 { return (rand.Float32() - 0.5) * 0.8 * cellSize.Y() }
+		jz := func() float32 { return (rand.Float32() - 0.5) * 0.8 * cellSize.Z() }
 
 		for z := 0; z < nz && added < maxAppend; z += stride {
 			for y := 0; y < ny && added < maxAppend; y += stride {
@@ -294,8 +454,12 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 					i := idx3(x, y, z, nx, ny, nz)
 					d := cv._density[i]
 					if d > threshold {
-						localPos := mgl32.Vec3{float32(x)*cellSize + j(), float32(y)*cellSize + j(), float32(z)*cellSize + j()}
-						wp := tr.Position.Add(tr.Rotation.Rotate(localPos))
+						localPos := mgl32.Vec3{
+							float32(x)*cellSize.X() + jx(),
+							float32(y)*cellSize.Y() + jy(),
+							float32(z)*cellSize.Z() + jz(),
+						}
+						wp := tr.Position.Add(tr.Rotation.Rotate(localPos.Sub(anchorWorld)))
 						// bright additive colors for visibility
 						// col := [4]float32{1.2, 1.2, 1.2, 1.0} // smoke
 						// if cv.Type == CellularFire {
@@ -318,8 +482,9 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 						if cv.Type == CellularFire {
 							col = [4]float32{1.0, 0.35 + 0.4*dv, 0.05, colA}
 						}
+						col[3] *= intensity
 						// Size variation by density
-						base := 1.0 * cellSize
+						base := cellSize.Len() / 3.0
 						size := base * (0.8 + 0.6*dv)
 						// Life mid-range to ensure fade-in/out
 						lp := 0.3 + 0.4*rand.Float32()
@@ -339,13 +504,4 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 		return true
 	})
 	return added
-}
-
-// Extend particlesCollect to bridge CA volumes to particles billboards.
-// This function is called from voxelRtSystem after voxel updates.
-// NOTE: this file lives in gekko package, so we can call bridgeCellsToParticles from there.
-func init() {
-	// Wrap original implementation by replacing the function pointer if needed.
-	// Here we simply rely on particlesCollect calling this helper explicitly from its implementation file.
-	// (No-op placeholder: documentation note.)
 }

@@ -30,6 +30,7 @@ type App struct {
 	ParticlesPipeline   *wgpu.RenderPipeline
 	SpritesPipeline     *wgpu.RenderPipeline
 	TransparentPipeline *wgpu.RenderPipeline
+	CAVolumePipeline    *wgpu.RenderPipeline
 	ResolvePipeline     *wgpu.RenderPipeline
 
 	ResolveBG *wgpu.BindGroup
@@ -43,6 +44,8 @@ type App struct {
 	ParticleSpawnPipeline    *wgpu.ComputePipeline
 	ParticleInitPipeline     *wgpu.ComputePipeline
 	ParticleFinalizePipeline *wgpu.ComputePipeline
+	CAVolumeSimPipeline      *wgpu.ComputePipeline
+	CAVolumeBoundsPipeline   *wgpu.ComputePipeline
 
 	StorageTexture *wgpu.Texture
 	StorageView    *wgpu.TextureView
@@ -429,6 +432,14 @@ func (a *App) Init() error {
 	a.BufferManager.CreateDefaultParticleAtlas()
 
 	a.createParticleSimPipelines(simMod)
+	if err := a.createCAVolumeSimPipeline(); err != nil {
+		return err
+	}
+	if err := a.createCAVolumeBoundsPipeline(); err != nil {
+		return err
+	}
+	a.BufferManager.UpdateCAVolumes(nil)
+	a.BufferManager.UpdateCAParams(0)
 
 	// Skybox Generation Pipeline
 	a.BufferManager.CreateSkyboxGenPipeline(shaders.SkyboxWGSL)
@@ -445,6 +456,8 @@ func (a *App) Init() error {
 	a.setupSpritesPipeline()
 	// Create transparent overlay pipeline (accumulate into WBOIT targets)
 	a.setupTransparentOverlayPipeline()
+	// Create volumetric smoke/fire pipeline (accumulate into WBOIT targets)
+	a.setupCAVolumePipeline()
 	// Create resolve pipeline to composite opaque + transparent accum onto swapchain
 	a.setupResolvePipeline()
 

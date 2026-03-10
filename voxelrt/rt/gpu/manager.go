@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"github.com/go-gl/mathgl/mgl32"
 
 	"github.com/cogentcore/webgpu/wgpu"
 )
@@ -52,6 +53,51 @@ type SpriteRenderBatch struct {
 	FirstInstance uint32
 	InstanceCount uint32
 	BindGroup0    *wgpu.BindGroup
+}
+
+type CAVolumeHost struct {
+	EntityID        uint32
+	Type            uint32
+	Preset          uint32
+	Resolution      [3]uint32
+	Position        mgl32.Vec3
+	Rotation        mgl32.Quat
+	VoxelScale      mgl32.Vec3
+	Intensity       float32
+	Diffusion       float32
+	Buoyancy        float32
+	Cooling         float32
+	Dissipation     float32
+	Extinction      float32
+	Emission        float32
+	StepsPending    float32
+	StepDt          float32
+	ScatterColor    [3]float32
+	ShadowTint      [3]float32
+	AbsorptionColor [3]float32
+}
+
+type CAPresetData struct {
+	SmokeSeed        float32
+	FireSeed         float32
+	SmokeInject      float32
+	FireInject       float32
+	Diffusion        float32
+	Buoyancy         float32
+	Cooling          float32
+	Dissipation      float32
+	SmokeDensityCut  float32
+	FireHeatCut      float32
+	SigmaTSmoke      float32
+	SigmaTFire       float32
+	AlphaScaleSmoke  float32
+	AlphaScaleFire   float32
+	AbsorptionScale  float32
+	ScatterScale     float32
+	EmberTint        [4]float32
+	FireCoreTint     [4]float32
+	Flags            uint32
+	Pad1, Pad2, Pad3 uint32
 }
 
 type GpuBufferManager struct {
@@ -173,6 +219,36 @@ type GpuBufferManager struct {
 	TransparentBG1 *wgpu.BindGroup // voxel data buffers
 	TransparentBG2 *wgpu.BindGroup // gbuffer depth
 
+	// GPU cellular automata + volumetric rendering
+	CAVolumeBuf            *wgpu.Buffer
+	CABoundsBuf            *wgpu.Buffer
+	CAParamsBuf            *wgpu.Buffer
+	CAPresetBuf            *wgpu.Buffer
+	CAFieldTexA            *wgpu.Texture
+	CAFieldTexB            *wgpu.Texture
+	CAFieldViewA           *wgpu.TextureView
+	CAFieldViewB           *wgpu.TextureView
+	CAVolumeSimPipeline    *wgpu.ComputePipeline
+	CAVolumeBoundsPipeline *wgpu.ComputePipeline
+	CAVolumeSimBG0         *wgpu.BindGroup
+	CAVolumeSimBG1A        *wgpu.BindGroup
+	CAVolumeSimBG1B        *wgpu.BindGroup
+	CAVolumeBoundsBG0      *wgpu.BindGroup
+	CAVolumeBoundsBG1A     *wgpu.BindGroup
+	CAVolumeBoundsBG1B     *wgpu.BindGroup
+	CAVolumeRenderBG0      *wgpu.BindGroup
+	CAVolumeRenderBG1A     *wgpu.BindGroup
+	CAVolumeRenderBG1B     *wgpu.BindGroup
+	CAVolumeRenderBG2      *wgpu.BindGroup
+	CAVolumeCount          uint32
+	CAAtlasWidth           uint32
+	CAAtlasHeight          uint32
+	CAAtlasDepth           uint32
+	CAFieldIndex           int
+	CAElapsedTime          float32
+	CAVolumeBindingsDirty  bool
+	caLayout               []caVolumeLayout
+
 	// Batch update tracking
 	BatchMode      bool                       // Enable batching of updates within a frame
 	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
@@ -194,6 +270,12 @@ type GpuBufferManager struct {
 	lastTotalSectors  int
 	lastSceneRevision uint64
 	gridDataPool      []byte
+}
+
+type caVolumeLayout struct {
+	EntityID   uint32
+	Type       uint32
+	Resolution [3]uint32
 }
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
@@ -253,6 +335,8 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	m.ensureBuffer("InstancesBuf", &m.InstancesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("BVHNodesBuf", &m.BVHNodesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("LightsBuf", &m.LightsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("CABoundsBuf", &m.CABoundsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, nil, wgpu.BufferUsageStorage, 4096)
 	m.ensureBuffer("SpriteBuf", &m.SpriteBuf, nil, wgpu.BufferUsageStorage, 1024)
 
 	return m
