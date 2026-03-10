@@ -94,12 +94,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let uv = vec2<f32>(global_id.xy) / vec2<f32>(size);
     let PI = 3.14159265359;
     
-    // Equirectangular to Direction
-    let phi = uv.x * 2.0 * PI;
-    let theta = uv.y * PI;
-    let dx = sin(theta) * cos(phi);
-    let dy = cos(theta);
-    let dz = sin(theta) * sin(phi);
+    // Equirectangular to Direction (aligned with dir_to_uv)
+    let phi = (uv.x - 0.5) * 2.0 * PI;
+    let theta = (0.5 - uv.y) * PI;
+    
+    let dy = sin(theta);
+    let dx = cos(theta) * cos(phi);
+    let dz = cos(theta) * sin(phi);
     let dir = vec3<f32>(dx, dy, dz);
 
     var final_color = vec3<f32>(0.0);
@@ -135,7 +136,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 layer_c = mix(l.color_a.xyz, l.color_b.xyz, n);
                 layer_alpha = n * l.color_b.w;
             }
-        } else { // Standard Noise
+        } else if (l.layer_type == 0u) { // Standard Noise
             n = fbm(p, l.octaves, l.persistence, l.lacunarity);
             if (l.invert != 0u) { n = 1.0 - n; }
             let threshold = l.color_a.w;
@@ -146,6 +147,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             layer_c = mix(l.color_a.xyz, l.color_b.xyz, n);
             layer_alpha = n * l.color_b.w;
+        } else if (l.layer_type == 3u) { // Gradient
+            // Simple vertical gradient based on dir.y
+            // Maps [-1, 1] to [0, 1]
+            let gradient = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+            layer_c = mix(l.color_a.xyz, l.color_b.xyz, gradient);
+            layer_alpha = l.color_b.w; // Use Opacity
         }
 
         // Blend Modes

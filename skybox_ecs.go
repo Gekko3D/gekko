@@ -18,6 +18,7 @@ const (
 	SkyboxLayerNoise SkyboxLayerType = iota
 	SkyboxLayerStars
 	SkyboxLayerNebula
+	SkyboxLayerGradient
 )
 
 const (

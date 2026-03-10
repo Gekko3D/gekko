@@ -7,6 +7,7 @@ const SECTOR_SIZE: f32 = 32.0;
 const BRICK_SIZE: f32 = 8.0;
 const EPS: f32 = 1e-3;
 const FAR_T: f32 = 60000.0;
+const PI: f32 = 3.14159265359;
 
 // ============== STRUCTS (match gbuffer/deferred) ==============
 struct CameraData {
@@ -316,12 +317,12 @@ fn estimate_thickness_ws(start_t: f32, ray: Ray, t_max_obj: f32, params: ObjectP
 
 // ============== Traversal (WBOIT accumulation) ==============
 
-fn calculate_lighting(p: vec3<f32>, n: vec3<f32>, base_color: vec3<f32>, roughness: f32, metalness: f32, emissive: vec3<f32>, v_pos: vec3<f32>) -> vec3<f32> {
+fn calculate_lighting(p: vec3<f32>, n: vec3<f32>, base_color: vec3<f32>, roughness: f32, metalness: f32, emissive: vec3<f32>) -> vec3<f32> {
   let V = normalize(uCamera.cam_pos.xyz - p);
   let NdotV = max(dot(n, V), 1e-4);
   
   let F0 = mix(vec3<f32>(0.04), base_color, metalness);
-  let fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+  let fresnel = F0 + (1.0 - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
   
   var total_light = uCamera.ambient_color.xyz * mix(base_color, F0, metalness) + emissive;
   
@@ -349,12 +350,14 @@ fn calculate_lighting(p: vec3<f32>, n: vec3<f32>, base_color: vec3<f32>, roughne
     let H = normalize(V + L);
     let NdotH = max(dot(n, H), 0.0);
     
-    // Simplified Blinn-Phong Specular
-    let spec_power = pow(2.0, (1.0 - roughness) * 10.0);
-    let specular = pow(NdotH, spec_power) * ((spec_power + 2.0) / 8.0);
+    let diffuse = base_color * (1.0 - fresnel) * (1.0 - metalness) * NdotL / PI;
     
-    let diffuse = base_color * (1.0 - fresnel) * (1.0 - metalness);
-    total_light += (diffuse / 3.14159 + specular * fresnel) * light.color.xyz * NdotL * attenuation;
+    // Specular (normalized Blinn-Phong)
+    let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
+    let normalization = (spec_power + 2.0) / (8.0 * PI);
+    let specular = fresnel * pow(NdotH, spec_power) * normalization;
+    
+    total_light += (diffuse + specular) * light.color.xyz * attenuation * light.color.w;
   }
   
   return total_light;
@@ -498,7 +501,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                               let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
                               let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive, uCamera.cam_pos.xyz);
+                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive);
                               let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
                               accum_rgb += color * alpha_step * w;
                               accum_a += alpha_step;
@@ -556,7 +559,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                    let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                                    let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
                                    let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                                   let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive, uCamera.cam_pos.xyz);
+                                   let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive);
                                    let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
                                    accum_rgb += color * alpha_step * w;
                                    accum_a += alpha_step;

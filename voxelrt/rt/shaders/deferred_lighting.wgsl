@@ -171,18 +171,18 @@ fn calculate_lighting(
         let half_dir = normalize(L + view_dir);
         let NdotL = max(dot(normal, L), 0.0);
         let NdotH = max(dot(normal, half_dir), 0.0);
-        let VdotH = max(dot(view_dir, half_dir), 0.0);
-
-        // Fresnel Schlick
+        
         let F0 = mix(vec3(0.04), base_color, metalness);
-        let F = F0 + (1.0 - F0) * pow(clamp(1.0 - VdotH, 0.0, 1.0), 5.0);
+        // Fresnel Schlick (using NdotV for uniform per-voxel brightness)
+        let NdotV = max(dot(normal, view_dir), 0.0);
+        let F = F0 + (1.0 - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
 
         // Blinn-Phong Specular with normalization for energy conservation
         let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
         let normalization = (spec_power + 2.0) / (8.0 * PI);
         let specular = F * pow(NdotH, spec_power) * normalization;
 
-        let diffuse = diffuse_color * NdotL;
+        let diffuse = base_color * (1.0 - F) * (1.0 - metalness) * NdotL / PI;
         return (diffuse + specular) * light.color.xyz * attenuation * light.color.w;
     }
     return vec3<f32>(0.0);
