@@ -28,8 +28,13 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VSOut {
 @group(0) @binding(2) var tWeight : texture_2d<f32>;
 @group(0) @binding(3) var samp    : sampler;
 
-fn saturate(v: vec3<f32>) -> vec3<f32> {
-  return clamp(v, vec3<f32>(0.0), vec3<f32>(1.0));
+fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
+  let a = 2.51;
+  let b = 0.03;
+  let c = 2.43;
+  let d = 0.59;
+  let e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 @fragment
@@ -52,6 +57,13 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let T = exp(-w_scale * a_unweighted);
   let transp = acc / max(w, 1e-5);
   // Composite: attenuate background by T, add normalized transparent contribution
-  let col = saturate(copq * T + transp);
+  var col = copq * T + transp;
+  
+  // Tone mapping
+  col = aces_tonemap(col);
+  
+  // Gamma correction
+  col = pow(col, vec3<f32>(1.0 / 2.2));
+  
   return vec4<f32>(col, 1.0);
 }

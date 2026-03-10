@@ -21,7 +21,7 @@ struct CameraData {
   num_lights: u32,
   pad1: u32,
   screen_size: vec2<f32>,
-  pad2: vec2<u32>,
+  pad2: vec2<f32>,
 };
 
 struct Instance {
@@ -314,154 +314,50 @@ fn estimate_thickness_ws(start_t: f32, ray: Ray, t_max_obj: f32, params: ObjectP
   return max(thickness_ws, 0.0);
 }
 
-// ============== Traversal for first transparent hit (micro grid path only) ==============
-fn first_transparent_in_instance(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, t_limit: f32) -> TransparentHit {
-  var outHit = TransparentHit(false, FAR_T, vec3<f32>(0.0), 0.0, 0.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u);
-  let params = object_params[inst.object_id];
+// ============== Traversal (WBOIT accumulation) ==============
 
-  // Transform into object space
-  let ray = transform_ray(ray_ws, inst.world_to_object);
-  let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
-  var t_curr = max(t_obj.x, 0.0) + EPS;
-  let t_max_obj = min(t_obj.y, t_limit);
-  if (t_curr >= t_max_obj) { return outHit; }
-
-  // Sector stepping
-  let dir = ray.dir;
-  let inv_dir = ray.inv_dir;
-  let step = vec3<i32>(sign(dir));
-  let t_delta_sector = abs(SECTOR_SIZE * inv_dir);
-  let sector_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
-  var sector_pos = vec3<i32>(floor(((ray.origin + dir * t_curr) - sector_bias) / SECTOR_SIZE));
-  var t_max_sector = (vec3<f32>(sector_pos) * SECTOR_SIZE + select(vec3<f32>(0.0), vec3<f32>(SECTOR_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
-
-  var it_sect = 0;
-  while (t_curr < t_max_obj && it_sect < 64) {
-    it_sect += 1;
-    let sector_idx = find_sector_cached(sector_pos.x, sector_pos.y, sector_pos.z, params);
-    let t_sector_exit = min(min(min(t_max_sector.x, t_max_sector.y), t_max_sector.z), t_max_obj);
-
-    if (sector_idx >= 0) {
-      let sector = sectors[sector_idx];
-      let sector_origin = vec3<f32>(sector.origin_vox.xyz);
-
-      // Brick stepping within sector
-      var t_brick = t_curr;
-      let brick_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
-      var brick_pos = vec3<i32>(floor((((ray.origin + dir * t_brick) - sector_origin) - brick_bias) / BRICK_SIZE));
-      brick_pos = clamp(brick_pos, vec3<i32>(0), vec3<i32>(3));
-      var t_max_brick = (sector_origin + vec3<f32>(brick_pos) * BRICK_SIZE + select(vec3<f32>(0.0), vec3<f32>(BRICK_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
-      let t_delta_brick = abs(BRICK_SIZE * inv_dir);
-
-      var it_brick = 0;
-      while (t_brick < t_sector_exit && it_brick < 64) {
-        it_brick += 1;
-        if (all(brick_pos >= vec3<i32>(0)) && all(brick_pos < vec3<i32>(4))) {
-          let bvid = vec3<u32>(u32(brick_pos.x), u32(brick_pos.y), u32(brick_pos.z));
-          let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
-
-          if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
-            let packed_idx = sector.brick_table_index + brick_idx_local;
-            let b_flags = bricks[packed_idx].flags;
-            let b_atlas = bricks[packed_idx].atlas_offset;
-            var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
-
-            if (b_flags == 1u) {
-              let palette_idx = b_atlas;
-              let mat_base = params.material_table_base;
-              let mat_idx = mat_base + palette_idx * 4u;
-              let pbr = materials[mat_idx + 2u]; // x=roughness, y=metalness, z=ior, w=transparency
-              let alpha = clamp(pbr.w, 0.0, 1.0);
-              if (alpha > 0.001) {
-                // Transparent solid; compute hit data
-                let t_hit = t_brick;
-                let p_hit_os = ray.origin + dir * (t_brick + EPS);
-                let n_os = estimate_normal(p_hit_os, params);
-                let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
-                let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
-                let thick = estimate_thickness_ws(t_hit, ray, t_max_obj, params, inst.object_to_world);
-                outHit = TransparentHit(true, t_hit, vec3<f32>(0.0), alpha, thick, n_ws, pos_ws, palette_idx, mat_base);
-                return outHit;
-              }
-            } else {
-              // Micro brick: step voxels and check per-voxel palette
-              var t_micro = t_brick;
-              let brick_origin = sector_origin + vec3<f32>(bvid) * BRICK_SIZE;
-              let voxel_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
-              var voxel_pos = vec3<i32>(floor(((ray.origin + dir * t_micro) - brick_origin) - voxel_bias));
-              voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
-              var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray.origin) * inv_dir;
-              let t_delta_1 = abs(1.0 * inv_dir);
-              let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
-              let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
-
-              var it_micro = 0;
-              while (t_micro < t_brick_exit && it_micro < 32) {
-                it_micro += 1;
-                let vvid = vec3<u32>(u32(voxel_pos.x), u32(voxel_pos.y), u32(voxel_pos.z));
-                let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-                let mvid = vvid / 2u;
-                let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
-
-                if (bit_test64(b_mask_lo, b_mask_hi, micro_idx)) {
-                  let palette_idx = load_u8(b_atlas, voxel_idx);
-                  if (palette_idx != 0u) {
-                    let mat_base = params.material_table_base;
-                    let mat_idx = mat_base + palette_idx * 4u;
-                    let pbr = materials[mat_idx + 2u];
-                    let alpha = clamp(pbr.w, 0.0, 1.0);
-                    if (alpha > 0.001) {
-                      let t_hit = t_micro;
-                      let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
-                      let n_os = estimate_normal(voxel_center_os, params);
-                      let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
-                      let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                      let thick = estimate_thickness_ws(t_hit, ray, t_max_obj, params, inst.object_to_world);
-                      outHit = TransparentHit(true, t_hit, vec3<f32>(0.0), alpha, thick, n_ws, pos_ws, palette_idx, mat_base);
-                      return outHit;
-                    }
-                  }
-                }
-
-                // Advance to next voxel cell
-                if (t_max_micro.x < t_max_micro.y) {
-                  if (t_max_micro.x < t_max_micro.z) { voxel_pos.x += step.x; t_micro = t_max_micro.x; t_max_micro.x += t_delta_1.x; }
-                  else { voxel_pos.z += step.z; t_micro = t_max_micro.z; t_max_micro.z += t_delta_1.z; }
-                } else {
-                  if (t_max_micro.y < t_max_micro.z) { voxel_pos.y += step.y; t_micro = t_max_micro.y; t_max_micro.y += t_delta_1.y; }
-                  else { voxel_pos.z += step.z; t_micro = t_max_micro.z; t_max_micro.z += t_delta_1.z; }
-                }
-                t_micro += EPS;
-                if (t_micro >= t_limit) { break; }
-              }
-            }
-          }
-        }
-
-        // Advance brick
-        if (t_max_brick.x < t_max_brick.y) {
-          if (t_max_brick.x < t_max_brick.z) { brick_pos.x += step.x; t_brick = t_max_brick.x; t_max_brick.x += t_delta_brick.x; }
-          else { brick_pos.z += step.z; t_brick = t_max_brick.z; t_max_brick.z += t_delta_brick.z; }
-        } else {
-          if (t_max_brick.y < t_max_brick.z) { brick_pos.y += step.y; t_brick = t_max_brick.y; t_max_brick.y += t_delta_brick.y; }
-          else { brick_pos.z += step.z; t_brick = t_max_brick.z; t_max_brick.z += t_delta_brick.z; }
-        }
-
-        if (t_brick >= t_limit) { break; }
+fn calculate_lighting(p: vec3<f32>, n: vec3<f32>, base_color: vec3<f32>, roughness: f32, metalness: f32, emissive: vec3<f32>, v_pos: vec3<f32>) -> vec3<f32> {
+  let V = normalize(uCamera.cam_pos.xyz - p);
+  let NdotV = max(dot(n, V), 1e-4);
+  
+  let F0 = mix(vec3<f32>(0.04), base_color, metalness);
+  let fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+  
+  var total_light = uCamera.ambient_color.xyz * mix(base_color, F0, metalness) + emissive;
+  
+  for (var i = 0u; i < uCamera.num_lights; i++) {
+    let light = lights[i];
+    var L = vec3<f32>(0.0);
+    var attenuation = 1.0;
+    
+    if (light.params.z == 1.0) { // Directional
+      L = normalize(-light.direction.xyz);
+    } else { // Point/Spot
+      let dist_vec = light.position.xyz - p;
+      let dist = length(dist_vec);
+      L = normalize(dist_vec);
+      attenuation = 1.0 / (dist * dist + 1.0);
+      
+      if (light.params.z == 2.0) { // Spot
+        let theta = dot(L, normalize(-light.direction.xyz));
+        let epsilon = light.params.y - (light.params.y * 0.9);
+        attenuation *= clamp((theta - light.params.y) / epsilon, 0.0, 1.0);
       }
     }
-
-    // Advance sector
-    if (t_max_sector.x < t_max_sector.y) {
-      if (t_max_sector.x < t_max_sector.z) { sector_pos.x += step.x; t_curr = t_max_sector.x; t_max_sector.x += t_delta_sector.x; }
-      else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
-    } else {
-      if (t_max_sector.y < t_max_sector.z) { sector_pos.y += step.y; t_curr = t_max_sector.y; t_max_sector.y += t_delta_sector.y; }
-      else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
-    }
+    
+    let NdotL = max(dot(n, L), 0.0);
+    let H = normalize(V + L);
+    let NdotH = max(dot(n, H), 0.0);
+    
+    // Simplified Blinn-Phong Specular
+    let spec_power = pow(2.0, (1.0 - roughness) * 10.0);
+    let specular = pow(NdotH, spec_power) * ((spec_power + 2.0) / 8.0);
+    
+    let diffuse = base_color * (1.0 - fresnel) * (1.0 - metalness);
+    total_light += (diffuse / 3.14159 + specular * fresnel) * light.color.xyz * NdotL * attenuation;
   }
-
-  return outHit;
+  
+  return total_light;
 }
 
 // ============== VS/FS ==============
@@ -538,8 +434,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
 
             let dir_ws = (inst.object_to_world * vec4<f32>(ray_os.dir, 0.0)).xyz;
             let d_ws_scale = length(dir_ws);
-            let density_sigma: f32 = 0.2;
-            let k: f32 = 4.0;
+            let density_sigma: f32 = 1.0;
+            let k: f32 = 8.0;
 
             var it_sect = 0;
             while (t_curr < t_max_obj && it_sect < 64) {
@@ -596,12 +492,18 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let dt_ws = dt * d_ws_scale;
                               let a0 = clamp(1.0 - trans, 0.0, 1.0);
                               let alpha_step = 1.0 - exp(-density_sigma * a0 * dt_ws);
+                              let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
+                              let voxel_center_os = floor(p_hit_os) + 0.5;
+                              let n_os = estimate_normal(voxel_center_os, params);
+                              let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+                              let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
                               let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                              let color = base_col * uCamera.ambient_color.xyz + emissive;
+                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive, uCamera.cam_pos.xyz);
                               let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
                               accum_rgb += color * alpha_step * w;
                               accum_a += alpha_step;
                               accum_w += alpha_step * w;
+                              if (accum_a > 4.0) { break; }
                             }
                             if (t_max_micro.x < t_max_micro.y) {
                               if (t_max_micro.x < t_max_micro.z) { voxel_pos.x += step.x; t_micro = t_max_micro.x; t_max_micro.x += t_delta_1.x; }
@@ -648,12 +550,18 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let dt_ws = dt * d_ws_scale;
                                   let a0 = clamp(1.0 - trans, 0.0, 1.0);
                                   let alpha_step = 1.0 - exp(-density_sigma * a0 * dt_ws);
-                                  let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                                  let color = base_col * uCamera.ambient_color.xyz + emissive;
-                                  let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
-                                  accum_rgb += color * alpha_step * w;
-                                  accum_a += alpha_step;
-                                  accum_w += alpha_step * w;
+                                   let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
+                                   let voxel_center_os = floor(p_hit_os) + 0.5;
+                                   let n_os = estimate_normal(voxel_center_os, params);
+                                   let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+                                   let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
+                                   let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
+                                   let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive, uCamera.cam_pos.xyz);
+                                   let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
+                                   accum_rgb += color * alpha_step * w;
+                                   accum_a += alpha_step;
+                                   accum_w += alpha_step * w;
+                                   if (accum_a > 4.0) { break; }
                                 }
                               }
                             }
