@@ -167,13 +167,22 @@ fn calculate_lighting(
             attenuation *= visibility;
         }
 
+        let PI = 3.14159265359;
         let half_dir = normalize(L + view_dir);
         let NdotL = max(dot(normal, L), 0.0);
         let NdotH = max(dot(normal, half_dir), 0.0);
-        let diffuse = diffuse_color * NdotL;
-        let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
+        let VdotH = max(dot(view_dir, half_dir), 0.0);
+
+        // Fresnel Schlick
         let F0 = mix(vec3(0.04), base_color, metalness);
-        let specular = pow(NdotH, spec_power) * F0;
+        let F = F0 + (1.0 - F0) * pow(clamp(1.0 - VdotH, 0.0, 1.0), 5.0);
+
+        // Blinn-Phong Specular with normalization for energy conservation
+        let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
+        let normalization = (spec_power + 2.0) / (8.0 * PI);
+        let specular = F * pow(NdotH, spec_power) * normalization;
+
+        let diffuse = diffuse_color * NdotL;
         return (diffuse + specular) * light.color.xyz * attenuation * light.color.w;
     }
     return vec3<f32>(0.0);
@@ -242,10 +251,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
     
-    var final_color = base_color * camera.ambient_color.xyz + emissive;
+    let F0 = mix(vec3(0.04), base_color, metalness);
+    var final_color = mix(base_color, F0, metalness) * camera.ambient_color.xyz + emissive;
     
-    // Force use of lights and position texture to prevent stripping
-    let dummy = lights[0].color.x + textureLoad(in_position, vec2<i32>(0,0), 0).x;
     
     // Loop through all lights
     let num_lights = camera.num_lights;
