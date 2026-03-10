@@ -136,20 +136,23 @@ fn fs_main(in: VSOut) -> FSOut {
     }
 
     // Depth test only for world sprites
+    var t_scene = 1.0;
+    var t_pixel = 0.0;
     if (in.is_ui == 0u) {
-        let pix = vec2<i32>(in.position.xy);
-        let t_scene = textureLoad(gbuf_depth, pix, 0).x;
+        let dim = textureDimensions(gbuf_depth);
+        let pix = vec2<i32>(
+            clamp(i32(in.position.x), 0, i32(dim.x) - 1),
+            clamp(i32(in.position.y), 0, i32(dim.y) - 1),
+        );
+        t_scene = textureLoad(gbuf_depth, pix, 0).x;
         
         let view_ray = in.world_pos - camera.cam_pos.xyz;
-        let t_pixel = length(view_ray);
+        t_pixel = length(view_ray);
 
         if (t_pixel > t_scene + 0.05) {
             discard;
         }
     }
-
-    // WBOIT weighting
-    let weight = max(1e-3, alpha); 
 
     var final_rgb = in.color.rgb * atlas_color.rgb;
     
@@ -159,6 +162,13 @@ fn fs_main(in: VSOut) -> FSOut {
         let N = normalize(camera.cam_pos.xyz - in.world_pos); // Assume facing camera
         let diff = max(0.0, dot(N, L));
         final_rgb = final_rgb * (camera.ambient_color.rgb + diff);
+    }
+
+    var weight = max(1e-3, alpha);
+    if (in.is_ui == 0u) {
+        let z_norm = clamp(t_pixel / max(t_scene, 1e-4), 0.0, 1.0);
+        let k: f32 = 8.0;
+        weight = max(1e-3, alpha) * pow(1.0 - z_norm, k);
     }
 
     var out: FSOut;

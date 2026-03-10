@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"math"
+	"sort"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -175,134 +176,67 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync Instances")
 
-	// CA voxel bridging (render CA density as voxels; runs at CA tick rate via _dirty flag)
+	// CA volumetrics: smoke/fire are simulated on GPU and rendered as raymarched volumes.
 	state.RtApp.Profiler.BeginScope("Sync CA")
 	currentCA := make(map[EntityId]bool)
+	gpuVolumes := make([]gpu_rt.CAVolumeHost, 0, 8)
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
-		vSize := VoxelSize
-
-		if cv == nil || !cv.BridgeToVoxels || cv._density == nil {
+		if cv == nil || !cv.UsesGPUVolume() {
 			return true
 		}
 		currentCA[eid] = true
 
-		obj, exists := state.caVolumeMap[eid]
-		if !exists {
-			obj = core.NewVoxelObject()
-			// Initialize a small material table with defaults; indices 1=smoke, 2=fire
-			mats := make([]core.Material, 256)
-			for i := range mats {
-				mats[i] = core.DefaultMaterial()
-			}
-			// Smoke (semi-transparent)
-			mats[1] = core.NewMaterial([4]uint8{180, 180, 180, 255}, [4]uint8{0, 0, 0, 0})
-			mats[1].Roughness = 0.8
-			mats[1].Transparency = 0.5
-			mats[1].Metalness = 0.0
-			// Fire (emissive)
-			mats[2] = core.NewMaterial([4]uint8{255, 180, 80, 255}, [4]uint8{255, 120, 40, 255})
-			mats[2].Roughness = 0.3
-			mats[2].Metalness = 0.0
-
-			obj.MaterialTable = mats
-			state.RtApp.Scene.AddObject(obj)
-			state.caVolumeMap[eid] = obj
+		if obj, exists := state.caVolumeMap[eid]; exists {
+			state.RtApp.Scene.RemoveObject(obj)
+			delete(state.caVolumeMap, eid)
 		}
 
-		// Rebuild or delta-update CA voxel volume when CA step marked dirty
-		if cv._dirty {
-			nx, ny, nz := cv.Resolution[0], cv.Resolution[1], cv.Resolution[2]
-			thr := cv.VoxelThreshold
-			if thr <= 0 {
-				thr = 0.10
-			}
-			stride := cv.VoxelStride
-			if stride <= 0 {
-				stride = 1
-			}
-			var pal uint8 = 1
-			if cv.Type == CellularFire {
-				pal = 2
-			}
-			total := nx * ny * nz
-
-			// Ensure previous mask storage matches current configuration
-			fullRebuild := false
-			if cv._prevMask == nil || len(cv._prevMask) != total || cv._prevStride != stride || cv._prevThreshold != thr || cv.Type != cv._prevType {
-				cv._prevMask = make([]byte, total)
-				cv._prevStride = stride
-				cv._prevThreshold = thr
-				cv._prevType = cv.Type
-				fullRebuild = true
-			}
-
-			// Ensure XBrickMap exists
-			if obj.XBrickMap == nil {
-				obj.XBrickMap = volume.NewXBrickMap()
-			}
-
-			if fullRebuild {
-				// Clear existing map instead of creating new one to keep GPU allocation stable
-				obj.XBrickMap.ClearDirty()
-				obj.XBrickMap.Sectors = make(map[[3]int]*volume.Sector)
-				obj.XBrickMap.StructureDirty = true
-
-				for z := 0; z < nz; z += stride {
-					for y := 0; y < ny; y += stride {
-						for x := 0; x < nx; x += stride {
-							i := idx3(x, y, z, nx, ny, nz)
-							if i >= 0 && cv._density[i] >= thr {
-								obj.XBrickMap.SetVoxel(x, y, z, pal)
-								cv._prevMask[i] = 1
-							} else if i >= 0 {
-								cv._prevMask[i] = 0
-							}
-						}
-					}
-				}
-			} else {
-				// Delta update: only change voxels that flipped state
-				for z := 0; z < nz; z += stride {
-					for y := 0; y < ny; y += stride {
-						for x := 0; x < nx; x += stride {
-							i := idx3(x, y, z, nx, ny, nz)
-							if i < 0 {
-								continue
-							}
-							active := cv._density[i] >= thr
-							prev := cv._prevMask[i] != 0
-							if active != prev {
-								if active {
-									obj.XBrickMap.SetVoxel(x, y, z, pal)
-									cv._prevMask[i] = 1
-								} else {
-									obj.XBrickMap.SetVoxel(x, y, z, 0)
-									cv._prevMask[i] = 0
-								}
-							}
-						}
-					}
-				}
-			}
-
-			cv._dirty = false
+		scatterColor := [3]float32{0.72, 0.72, 0.72}
+		extinction := float32(1.35)
+		emission := float32(0.0)
+		if cv.Type == CellularFire {
+			scatterColor = [3]float32{1.0, 0.48, 0.1}
+			extinction = 0.5
+			emission = 5.5
 		}
 
-		// Transform sync
-		obj.Transform.Position = tr.Position
-		obj.Transform.Rotation = tr.Rotation
-		obj.Transform.Scale = mgl32.Vec3{vSize * tr.Scale.X(), vSize * tr.Scale.Y(), vSize * tr.Scale.Z()}
-		obj.Transform.Dirty = true
+		gpuVolumes = append(gpuVolumes, gpu_rt.CAVolumeHost{
+			EntityID: uint32(eid),
+			Type:     uint32(cv.Type),
+			Resolution: [3]uint32{
+				uint32(max(1, cv.Resolution[0])),
+				uint32(max(1, cv.Resolution[1])),
+				uint32(max(1, cv.Resolution[2])),
+			},
+			Position:     tr.Position,
+			Rotation:     tr.Rotation,
+			VoxelScale:   mgl32.Vec3{VoxelSize * tr.Scale.X(), VoxelSize * tr.Scale.Y(), VoxelSize * tr.Scale.Z()},
+			Diffusion:    cv.Diffusion,
+			Buoyancy:     cv.Buoyancy,
+			Cooling:      cv.Cooling,
+			Dissipation:  cv.Dissipation,
+			Extinction:   extinction,
+			Emission:     emission,
+			StepsPending: float32(cv._gpuStepsPending),
+			StepDt:       1.0 / max(cv.TickRate, 1.0),
+			ScatterColor: scatterColor,
+		})
+		cv._gpuStepsPending = 0
+		cv._dirty = false
 
 		return true
 	})
-	// Cleanup CA voxel objects for entities no longer present or with bridging disabled
 	for eid, obj := range state.caVolumeMap {
 		if !currentCA[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.caVolumeMap, eid)
 		}
 	}
+	sort.Slice(gpuVolumes, func(i, j int) bool {
+		return gpuVolumes[i].EntityID < gpuVolumes[j].EntityID
+	})
+	state.RtApp.BufferManager.UpdateCAVolumes(gpuVolumes)
+	state.RtApp.BufferManager.UpdateCAParams(float32(t.Dt))
 	state.RtApp.Profiler.EndScope("Sync CA")
 
 	state.RtApp.Profiler.BeginScope("Sync Lights")
@@ -322,7 +256,13 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	state.RtApp.Scene.Lights = state.RtApp.Scene.Lights[:0]
 	ambientAccum := mgl32.Vec3{0, 0, 0}
 	ambientFound := false
-	pointCount := 0
+	type pendingLight struct {
+		entityID  EntityId
+		lightType LightType
+		intensity float32
+		gpu       core.Light
+	}
+	pendingLights := make([]pendingLight, 0, 8)
 
 	MakeQuery1[LightComponent](cmd).Map(func(entityId EntityId, light *LightComponent) bool {
 		if light.Type == LightTypeAmbient {
@@ -379,10 +319,44 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 
 		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
-		state.RtApp.Scene.Lights = append(state.RtApp.Scene.Lights, gpuLight)
-		pointCount++
+		pendingLights = append(pendingLights, pendingLight{
+			entityID:  entityId,
+			lightType: light.Type,
+			intensity: light.Intensity,
+			gpu:       gpuLight,
+		})
 		return true
 	})
+
+	sort.Slice(pendingLights, func(i, j int) bool {
+		li := pendingLights[i]
+		lj := pendingLights[j]
+
+		ranki := 2
+		rankj := 2
+		if li.lightType == LightTypeDirectional {
+			ranki = 0
+		} else if li.lightType == LightTypeSpot {
+			ranki = 1
+		}
+		if lj.lightType == LightTypeDirectional {
+			rankj = 0
+		} else if lj.lightType == LightTypeSpot {
+			rankj = 1
+		}
+
+		if ranki != rankj {
+			return ranki < rankj
+		}
+		if li.lightType == lj.lightType && li.intensity != lj.intensity {
+			return li.intensity > lj.intensity
+		}
+		return li.entityID < lj.entityID
+	})
+
+	for _, pl := range pendingLights {
+		state.RtApp.Scene.Lights = append(state.RtApp.Scene.Lights, pl.gpu)
+	}
 
 	if ambientFound {
 		state.RtApp.Scene.AmbientLight = ambientAccum

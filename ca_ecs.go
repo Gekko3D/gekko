@@ -51,7 +51,8 @@ type CellularVolumeComponent struct {
 	_prevThreshold float32
 	_prevType      CellularType
 
-	_nextDensity []float32
+	_nextDensity     []float32
+	_gpuStepsPending uint32
 }
 
 func (cv *CellularVolumeComponent) ensureGrid() {
@@ -59,6 +60,10 @@ func (cv *CellularVolumeComponent) ensureGrid() {
 	if nx <= 0 || ny <= 0 || nz <= 0 {
 		cv.Resolution = [3]int{32, 32, 32}
 		nx, ny, nz = 32, 32, 32
+	}
+	if cv.UsesGPUVolume() {
+		cv._inited = true
+		return
 	}
 	total := nx * ny * nz
 	if cv._density == nil || len(cv._density) != total {
@@ -68,6 +73,10 @@ func (cv *CellularVolumeComponent) ensureGrid() {
 		cv.seed() // Seed initial density
 	}
 	cv._inited = true
+}
+
+func (cv *CellularVolumeComponent) UsesGPUVolume() bool {
+	return cv != nil && (cv.Type == CellularSmoke || cv.Type == CellularFire)
 }
 
 func idx3(x, y, z, nx, ny, nz int) int {
@@ -197,6 +206,25 @@ func caStepSystem(t *Time, cmd *Commands) {
 			return true
 		}
 		cv.ensureGrid()
+		if cv.UsesGPUVolume() {
+			target := float32(1.0)
+			if cv.TickRate > 0 {
+				target = 1.0 / cv.TickRate
+			} else {
+				cv.TickRate = 15.0
+				target = 1.0 / 15.0
+			}
+			cv._accum += dt
+			if cv._accum < target {
+				return true
+			}
+			cv._accum = 0
+			if cv._gpuStepsPending < 4 {
+				cv._gpuStepsPending++
+			}
+			cv._dirty = true
+			return true
+		}
 		// (seed is now inside ensureGrid)
 		// accumulate time and step at TickRate
 		target := float32(1.0)

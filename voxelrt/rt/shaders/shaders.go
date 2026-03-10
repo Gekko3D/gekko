@@ -28,6 +28,12 @@ var ParticlesBillboardWGSL string
 //go:embed particles_sim.wgsl
 var ParticlesSimWGSL string
 
+//go:embed ca_volume_sim.wgsl
+var CAVolumeSimWGSL string
+
+//go:embed ca_volume_render.wgsl
+var CAVolumeRenderWGSL string
+
 /**
  */
 //go:embed transparent_overlay.wgsl
