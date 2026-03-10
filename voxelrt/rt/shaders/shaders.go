@@ -31,6 +31,9 @@ var ParticlesSimWGSL string
 //go:embed ca_volume_sim.wgsl
 var CAVolumeSimWGSL string
 
+//go:embed ca_volume_bounds.wgsl
+var CAVolumeBoundsWGSL string
+
 //go:embed ca_volume_render.wgsl
 var CAVolumeRenderWGSL string
 

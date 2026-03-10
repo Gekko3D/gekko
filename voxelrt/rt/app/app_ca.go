@@ -22,6 +22,7 @@ func (a *App) createCAVolumeSimPipeline() error {
 		Entries: []wgpu.BindGroupLayoutEntry{
 			{Binding: 0, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 48}},
 			{Binding: 1, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},
+			{Binding: 2, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},
 		},
 	})
 	if err != nil {
@@ -44,7 +45,7 @@ func (a *App) createCAVolumeSimPipeline() error {
 				Visibility: wgpu.ShaderStageCompute,
 				StorageTexture: wgpu.StorageTextureBindingLayout{
 					Access:        wgpu.StorageTextureAccessWriteOnly,
-					Format:        wgpu.TextureFormatRGBA32Float,
+					Format:        wgpu.TextureFormatRGBA16Float,
 					ViewDimension: wgpu.TextureViewDimension3D,
 				},
 			},
@@ -75,6 +76,68 @@ func (a *App) createCAVolumeSimPipeline() error {
 	}
 	a.BufferManager.CAVolumeSimPipeline = a.CAVolumeSimPipeline
 	a.BufferManager.CreateCAVolumeSimBindGroups()
+	return nil
+}
+
+func (a *App) createCAVolumeBoundsPipeline() error {
+	mod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "CA Volume Bounds CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.CAVolumeBoundsWGSL},
+	})
+	if err != nil {
+		return err
+	}
+
+	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "CA Volume Bounds BGL0",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{Binding: 0, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 48}},
+			{Binding: 1, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},
+			{Binding: 2, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeStorage}},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	bgl1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "CA Volume Bounds BGL1",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension3D,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	layout, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		Label:            "CA Volume Bounds Layout",
+		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1},
+	})
+	if err != nil {
+		return err
+	}
+
+	a.CAVolumeBoundsPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label:  "CA Volume Bounds Pipeline",
+		Layout: layout,
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     mod,
+			EntryPoint: "compute_bounds",
+		},
+	})
+	if err != nil {
+		return err
+	}
+	a.BufferManager.CAVolumeBoundsPipeline = a.CAVolumeBoundsPipeline
+	a.BufferManager.CreateCAVolumeBoundsBindGroups()
 	return nil
 }
 
@@ -128,6 +191,16 @@ func (a *App) setupCAVolumePipeline() {
 					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
 					ViewDimension: wgpu.TextureViewDimension3D,
 				},
+			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
+			},
+			{
+				Binding:    4,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
 			},
 		},
 	})

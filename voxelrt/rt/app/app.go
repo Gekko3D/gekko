@@ -45,6 +45,7 @@ type App struct {
 	ParticleInitPipeline     *wgpu.ComputePipeline
 	ParticleFinalizePipeline *wgpu.ComputePipeline
 	CAVolumeSimPipeline      *wgpu.ComputePipeline
+	CAVolumeBoundsPipeline   *wgpu.ComputePipeline
 
 	StorageTexture *wgpu.Texture
 	StorageView    *wgpu.TextureView
@@ -432,6 +433,9 @@ func (a *App) Init() error {
 
 	a.createParticleSimPipelines(simMod)
 	if err := a.createCAVolumeSimPipeline(); err != nil {
+		return err
+	}
+	if err := a.createCAVolumeBoundsPipeline(); err != nil {
 		return err
 	}
 	a.BufferManager.UpdateCAVolumes(nil)

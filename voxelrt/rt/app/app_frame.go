@@ -168,6 +168,9 @@ func (a *App) Update() {
 		if a.CAVolumeSimPipeline != nil {
 			a.BufferManager.CreateCAVolumeSimBindGroups()
 		}
+		if a.CAVolumeBoundsPipeline != nil {
+			a.BufferManager.CreateCAVolumeBoundsBindGroups()
+		}
 
 		// Gizmo BindGroup
 		if a.GizmoPass != nil && a.BufferManager.CameraBuf != nil {
@@ -189,6 +192,9 @@ func (a *App) Update() {
 	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height)
 	if a.BufferManager.CAVolumeBindingsDirty {
 		a.BufferManager.CreateCAVolumeSimBindGroups()
+		if a.CAVolumeBoundsPipeline != nil {
+			a.BufferManager.CreateCAVolumeBoundsBindGroups()
+		}
 		if a.CAVolumePipeline != nil {
 			a.BufferManager.CreateCAVolumeRenderBindGroups(a.CAVolumePipeline)
 		}
@@ -277,6 +283,7 @@ func (a *App) Render() {
 
 	a.Profiler.BeginScope("CA Sim")
 	a.BufferManager.DispatchCAVolumeSim(encoder, a.CAVolumeSimPipeline)
+	a.BufferManager.DispatchCAVolumeBounds(encoder, a.CAVolumeBoundsPipeline)
 	a.Profiler.EndScope("CA Sim")
 
 	// Compute Pass

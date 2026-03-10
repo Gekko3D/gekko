@@ -176,6 +176,9 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync Instances")
 
+	// Init CA presets
+	state.RtApp.BufferManager.UpdateCAPresets()
+
 	// CA volumetrics: smoke/fire are simulated on GPU and rendered as raymarched volumes.
 	state.RtApp.Profiler.BeginScope("Sync CA")
 	currentCA := make(map[EntityId]bool)
@@ -192,34 +195,86 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 
 		scatterColor := [3]float32{0.72, 0.72, 0.72}
+		shadowTint := [3]float32{0.45, 0.45, 0.46}
+		absorptionColor := [3]float32{0.28, 0.29, 0.31}
 		extinction := float32(1.35)
 		emission := float32(0.0)
 		if cv.Type == CellularFire {
 			scatterColor = [3]float32{1.0, 0.48, 0.1}
+			shadowTint = [3]float32{0.62, 0.18, 0.04}
+			absorptionColor = [3]float32{0.54, 0.12, 0.03}
 			extinction = 0.5
 			emission = 5.5
+		}
+		switch cv.Preset {
+		case CAVolumePresetTorch:
+			scatterColor = [3]float32{0.78, 0.38, 0.12}
+			shadowTint = [3]float32{0.42, 0.12, 0.04}
+			absorptionColor = [3]float32{0.34, 0.08, 0.02}
+			extinction = 0.3
+			emission = 10.5
+		case CAVolumePresetCampfire:
+			if cv.Type == CellularFire {
+				scatterColor = [3]float32{1.0, 0.42, 0.1}
+				shadowTint = [3]float32{0.54, 0.14, 0.04}
+				absorptionColor = [3]float32{0.42, 0.1, 0.03}
+				extinction = 0.42
+				emission = 7.2
+			} else {
+				scatterColor = [3]float32{0.34, 0.35, 0.38}
+				shadowTint = [3]float32{0.2, 0.18, 0.16}
+				absorptionColor = [3]float32{0.14, 0.11, 0.09}
+				extinction = 0.72
+			}
+		case CAVolumePresetJetFlame:
+			scatterColor = [3]float32{0.16, 0.22, 0.34}
+			shadowTint = [3]float32{0.08, 0.12, 0.2}
+			absorptionColor = [3]float32{0.05, 0.08, 0.16}
+			extinction = 0.12
+			emission = 10.8
+		case CAVolumePresetExplosion:
+			scatterColor = [3]float32{0.58, 0.52, 0.46}
+			shadowTint = [3]float32{0.24, 0.18, 0.14}
+			absorptionColor = [3]float32{0.1, 0.08, 0.06}
+			extinction = 0.82
+			emission = 24.0
+		}
+		if cv.UseAppearanceOverride {
+			scatterColor = cv.ScatterColor
+			extinction = cv.Extinction
+			emission = cv.Emission
+		}
+		if cv.UseShadowTintOverride {
+			shadowTint = cv.ShadowTint
+		}
+		if cv.UseAbsorptionOverride {
+			absorptionColor = cv.AbsorptionColor
 		}
 
 		gpuVolumes = append(gpuVolumes, gpu_rt.CAVolumeHost{
 			EntityID: uint32(eid),
 			Type:     uint32(cv.Type),
+			Preset:   uint32(cv.Preset),
 			Resolution: [3]uint32{
 				uint32(max(1, cv.Resolution[0])),
 				uint32(max(1, cv.Resolution[1])),
 				uint32(max(1, cv.Resolution[2])),
 			},
-			Position:     tr.Position,
-			Rotation:     tr.Rotation,
-			VoxelScale:   mgl32.Vec3{VoxelSize * tr.Scale.X(), VoxelSize * tr.Scale.Y(), VoxelSize * tr.Scale.Z()},
-			Diffusion:    cv.Diffusion,
-			Buoyancy:     cv.Buoyancy,
-			Cooling:      cv.Cooling,
-			Dissipation:  cv.Dissipation,
-			Extinction:   extinction,
-			Emission:     emission,
-			StepsPending: float32(cv._gpuStepsPending),
-			StepDt:       1.0 / max(cv.TickRate, 1.0),
-			ScatterColor: scatterColor,
+			Position:        cv.VolumeOrigin(tr),
+			Rotation:        tr.Rotation,
+			VoxelScale:      mgl32.Vec3{VoxelSize * tr.Scale.X(), VoxelSize * tr.Scale.Y(), VoxelSize * tr.Scale.Z()},
+			Intensity:       cv.CurrentIntensity(),
+			Diffusion:       cv.Diffusion,
+			Buoyancy:        cv.Buoyancy,
+			Cooling:         cv.Cooling,
+			Dissipation:     cv.Dissipation,
+			Extinction:      extinction,
+			Emission:        emission,
+			StepsPending:    float32(cv._gpuStepsPending),
+			StepDt:          1.0 / max(cv.TickRate, 1.0),
+			ScatterColor:    scatterColor,
+			ShadowTint:      shadowTint,
+			AbsorptionColor: absorptionColor,
 		})
 		cv._gpuStepsPending = 0
 		cv._dirty = false
