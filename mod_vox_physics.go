@@ -284,7 +284,7 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 
 		// 3. Determine if we need to (re)build
 		needsBuild := !found
-		if xbm != nil && (xbm.StructureDirty || len(xbm.DirtySectors) > 0) {
+		if xbm != nil && xbm.StructureDirty {
 			needsBuild = true
 		}
 
@@ -356,6 +356,12 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			cmd.AddComponents(eid, PhysicsModel{
 				Boxes:        boxes,
 				CenterOffset: weightedCenter,
+			})
+		} else {
+			// No boxes (empty object), but we were asked to rebuild.
+			// Set an empty physics model to clear any previous state.
+			cmd.AddComponents(eid, PhysicsModel{
+				Boxes: nil,
 			})
 		}
 		return true

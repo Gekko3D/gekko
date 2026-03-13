@@ -357,13 +357,6 @@ func IsOccluded(aabb [2]mgl32.Vec3, hizData []float32, w, h uint32, viewProj mgl
 		maxP[0] = max(maxP[0], u)
 		maxP[1] = max(maxP[1], v)
 
-	}
-	// Bounds check
-	for _, c := range corners {
-		clip := viewProj.Mul4x1(c.Vec4(1.0))
-		if clip.W() <= 0 {
-			return false
-		}
 		if clip.W() < minZ {
 			minZ = clip.W()
 		}
