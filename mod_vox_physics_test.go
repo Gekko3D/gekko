@@ -116,4 +116,49 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	if len(pm2.Boxes) != 0 {
 		t.Errorf("Expected 0 boxes after final carve, got %d", len(pm2.Boxes))
 	}
+
+	// 7. Sub-brick edit (Remove one voxel from a 3-voxel line)
+	// Reset state: 3 voxels in a row (0,0,0), (1,0,0), (2,0,0)
+	xbm.ClearDirty()
+	xbm.SetVoxel(0, 0, 0, 1)
+	xbm.SetVoxel(1, 0, 0, 1)
+	xbm.SetVoxel(2, 0, 0, 1)
+	// Rebuild to get clean state
+	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	app.FlushCommands()
+
+	comps = cmd.GetAllComponents(eid)
+	for _, c := range comps {
+		if p, ok := c.(PhysicsModel); ok {
+			pm2 = p
+		}
+	}
+	if len(pm2.Boxes) != 1 {
+		t.Fatalf("Expected 1 box for 3-voxel line, got %d", len(pm2.Boxes))
+	}
+
+	// Remove middle voxel (1,0,0)
+	// This should leave (0,0,0) and (2,0,0) -> 2 separate boxes
+	// StructureDirty should be FALSE (because brick still has voxels)
+	// But DirtyBricks should be non-empty
+	xbm.SetVoxel(1, 0, 0, 0)
+	if xbm.StructureDirty {
+		t.Error("XBrickMap should NOT have StructureDirty=true for sub-brick edit")
+	}
+	if len(xbm.DirtyBricks) == 0 {
+		t.Error("XBrickMap should have DirtyBricks non-empty")
+	}
+
+	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	app.FlushCommands()
+
+	comps = cmd.GetAllComponents(eid)
+	for _, c := range comps {
+		if p, ok := c.(PhysicsModel); ok {
+			pm2 = p
+		}
+	}
+	if len(pm2.Boxes) != 2 {
+		t.Errorf("Expected 2 boxes after removing middle voxel, got %d", len(pm2.Boxes))
+	}
 }
