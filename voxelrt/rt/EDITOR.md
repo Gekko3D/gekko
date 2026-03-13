@@ -38,5 +38,4 @@ There is no separate `rt/editor` package anymore. Editing utilities are provided
 ## Notes
 
 - CA volume voxel bridging is handled in `mod_voxelrt_client_systems.go`.
-- Edit queues/resources are module-level (`VoxelEditQueue`) and applied through bridge systems.
 - GPU buffer reallocation and bind-group rebuilds are handled by `GpuBufferManager` during update; editing helpers do not directly force render-pass rebuilds.

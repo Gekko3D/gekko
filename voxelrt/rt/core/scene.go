@@ -360,21 +360,6 @@ func IsOccluded(aabb [2]mgl32.Vec3, hizData []float32, w, h uint32, viewProj mgl
 		if clip.W() < minZ {
 			minZ = clip.W()
 		}
-		// Actually init minZ with huge?
-		if clip.W() < minZ || minZ == 1.0 { // fix logic
-		}
-	}
-	// Re-init minZ properly
-	minZ = 1e20
-	// Bounds check
-	for _, c := range corners {
-		clip := viewProj.Mul4x1(c.Vec4(1.0))
-		if clip.W() <= 0 {
-			return false
-		}
-		if clip.W() < minZ {
-			minZ = clip.W()
-		}
 	}
 
 	// Clamp UV to 0..1

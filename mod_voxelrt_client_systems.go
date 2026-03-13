@@ -25,14 +25,14 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 
 	state := &VoxelRtState{
-		RtApp:        RtApp,
-		loadedModels: make(map[AssetId]*core.VoxelObject),
-		instanceMap:  make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:  make(map[EntityId]*core.VoxelObject),
-		skyboxLayers: make(map[EntityId]SkyboxLayerComponent),
+		RtApp:          RtApp,
+		loadedModels:   make(map[AssetId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 	}
 	cmd.AddResources(state)
-	cmd.AddResources(&VoxelEditQueue{BudgetPerFrame: 5000})
 
 	cmd.AddResources(&Profiler{})
 
@@ -86,7 +86,9 @@ func voxelRtPreludeSystem(input *Input, state *VoxelRtState) {
 	state.RtApp.ClearText()
 
 	// Begin batching updates for this frame
-	state.RtApp.BufferManager.BeginBatch()
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.BeginBatch()
+	}
 }
 
 func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands) {
@@ -135,11 +137,19 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 			state.RtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
+			state.objectToEntity[obj] = entityId
 		}
 
 		// Sync Transform to Renderer
 		obj.Transform.Position = transform.Position
 		obj.Transform.Rotation = transform.Rotation
+
+		// SYNC MAP if CustomMap changed in ECS
+		if vox.CustomMap != nil && vox.CustomMap != obj.XBrickMap {
+			obj.XBrickMap = vox.CustomMap
+			obj.XBrickMap.StructureDirty = true
+			state.RtApp.Scene.StructureRevision++ // Force hash grid rebuild
+		}
 
 		vSize := VoxelSize
 
@@ -172,12 +182,15 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if !currentEntities[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
+			delete(state.objectToEntity, obj)
 		}
 	}
 	state.RtApp.Profiler.EndScope("Sync Instances")
 
 	// Init CA presets
-	state.RtApp.BufferManager.UpdateCAPresets()
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateCAPresets()
+	}
 
 	// CA volumetrics: smoke/fire are simulated on GPU and rendered as raymarched volumes.
 	state.RtApp.Profiler.BeginScope("Sync CA")
@@ -192,6 +205,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if obj, exists := state.caVolumeMap[eid]; exists {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.caVolumeMap, eid)
+			delete(state.objectToEntity, obj)
 		}
 
 		scatterColor := [3]float32{0.72, 0.72, 0.72}
@@ -285,13 +299,16 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if !currentCA[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.caVolumeMap, eid)
+			delete(state.objectToEntity, obj)
 		}
 	}
 	sort.Slice(gpuVolumes, func(i, j int) bool {
 		return gpuVolumes[i].EntityID < gpuVolumes[j].EntityID
 	})
-	state.RtApp.BufferManager.UpdateCAVolumes(gpuVolumes)
-	state.RtApp.BufferManager.UpdateCAParams(float32(t.Dt))
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateCAVolumes(gpuVolumes)
+		state.RtApp.BufferManager.UpdateCAParams(float32(t.Dt))
+	}
 	state.RtApp.Profiler.EndScope("Sync CA")
 
 	state.RtApp.Profiler.BeginScope("Sync Lights")
@@ -480,7 +497,9 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	state.RtApp.Profiler.BeginScope("GPU Batch")
 	// End batching and process all accumulated updates
-	state.RtApp.BufferManager.EndBatch()
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.EndBatch()
+	}
 	state.RtApp.Profiler.EndScope("GPU Batch")
 
 	// Sync GPU emitters and spawn requests
@@ -497,12 +516,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	vSize := VoxelSize
 	invVsize := 1.0 / vSize
 	state.RtApp.ParticleSpawnCount = uint32(len(spawnReqs))
-	state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), float32(invVsize), uint32(time.Now().UnixNano()), emitterCount)
-	pRecreated := state.RtApp.BufferManager.UpdateParticles(1000000, emitters) // Pass max count
-	state.RtApp.BufferManager.UpdateSpawnRequests(spawnReqs)
-	if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil || state.RtApp.BufferManager.ParticleSimBG0 == nil {
-		state.RtApp.BufferManager.CreateParticleSimBindGroups()
-		state.RtApp.BufferManager.CreateParticlesBindGroups(state.RtApp.ParticlesPipeline)
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), float32(invVsize), uint32(time.Now().UnixNano()), emitterCount)
+		pRecreated := state.RtApp.BufferManager.UpdateParticles(1000000, emitters) // Pass max count
+		state.RtApp.BufferManager.UpdateSpawnRequests(spawnReqs)
+		if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil || state.RtApp.BufferManager.ParticleSimBG0 == nil {
+			state.RtApp.BufferManager.CreateParticleSimBindGroups()
+			state.RtApp.BufferManager.CreateParticlesBindGroups(state.RtApp.ParticlesPipeline)
+		}
 	}
 
 	// Sync GPU sprites
@@ -520,11 +541,15 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			if spriteAtlasKey(atlasID) != batch.AtlasKey {
 				continue
 			}
-			state.RtApp.BufferManager.SetSpriteAtlas(batch.AtlasKey, texAsset.Texels, texAsset.Width, texAsset.Height, texAsset.Version)
+			if state.RtApp.BufferManager != nil {
+				state.RtApp.BufferManager.SetSpriteAtlas(batch.AtlasKey, texAsset.Texels, texAsset.Width, texAsset.Height, texAsset.Version)
+			}
 			break
 		}
 	}
-	state.RtApp.BufferManager.UpdateSprites(spriteBytes, spriteCount)
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateSprites(spriteBytes, spriteCount)
+	}
 	gpuSpriteBatches := make([]gpu_rt.SpriteBatchDesc, 0, len(spriteBatches))
 	for _, batch := range spriteBatches {
 		gpuSpriteBatches = append(gpuSpriteBatches, gpu_rt.SpriteBatchDesc{
@@ -533,7 +558,9 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			InstanceCount: batch.InstanceCount,
 		})
 	}
-	state.RtApp.BufferManager.SyncSpriteBatches(state.RtApp.SpritesPipeline, gpuSpriteBatches)
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.SyncSpriteBatches(state.RtApp.SpritesPipeline, gpuSpriteBatches)
+	}
 }
 
 func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *Commands) {
