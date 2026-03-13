@@ -42,6 +42,7 @@ type VoxelRtState struct {
 	instanceMap       map[EntityId]*core.VoxelObject
 	particlePools     map[EntityId]*particlePool
 	caVolumeMap       map[EntityId]*core.VoxelObject
+	objectToEntity    map[*core.VoxelObject]EntityId
 	skyboxLayers      map[EntityId]SkyboxLayerComponent // Stored values to detect changes
 	lastSkyboxVer     int64                             // To track if any layer changed
 	SunDirection      mgl32.Vec3
@@ -237,17 +238,22 @@ func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit 
 	if res != nil {
 		// Find EntityId for this object
 		var hitEid EntityId = 0
-		for eid, obj := range s.instanceMap {
-			if obj == res.Object {
-				hitEid = eid
-				break
-			}
-		}
-		if hitEid == 0 {
-			for eid, obj := range s.caVolumeMap {
+		if eid, ok := s.objectToEntity[res.Object]; ok {
+			hitEid = eid
+		} else {
+			// Fallback: search instanceMap and caVolumeMap (defensive)
+			for eid, obj := range s.instanceMap {
 				if obj == res.Object {
 					hitEid = eid
 					break
+				}
+			}
+			if hitEid == 0 {
+				for eid, obj := range s.caVolumeMap {
+					if obj == res.Object {
+						hitEid = eid
+						break
+					}
 				}
 			}
 		}

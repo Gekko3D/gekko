@@ -16,7 +16,8 @@ func TestDestructionSystem_Split(t *testing.T) {
 
 	// 1. Setup VoxelRtState manually for testing
 	state := &VoxelRtState{
-		instanceMap: make(map[EntityId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 
 	// 2. Create an entity with a VoxelObject containing two disconnected islands
@@ -82,7 +83,8 @@ func TestDestructionSystem_SpawnDebris(t *testing.T) {
 	cmd := app.Commands()
 
 	state := &VoxelRtState{
-		instanceMap: make(map[EntityId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 
 	xbm := volume.NewXBrickMap()
@@ -164,9 +166,10 @@ func TestDestructionSystem_SpawnDebris(t *testing.T) {
 }
 
 func TestVoxelSphereEdit_Carve(t *testing.T) {
-	// This test verifies the fix for world-to-voxel coordinate conversion
+	// 1. This test verifies the fix for world-to-voxel coordinate conversion
 	state := &VoxelRtState{
-		instanceMap: make(map[EntityId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 
 	// 1. Create a 10x10x10 voxel block
@@ -233,8 +236,9 @@ func TestVoxelRtSystem_MapSync(t *testing.T) {
 
 	// Mocking what we need for VoxelRtState
 	state := &VoxelRtState{
-		instanceMap:  make(map[EntityId]*core.VoxelObject),
-		loadedModels: make(map[AssetId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
+		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
 			Profiler: app_rt.NewProfiler(),
@@ -305,8 +309,9 @@ func TestDestruction_TotalAnnihilation(t *testing.T) {
 	cmd := &Commands{app: app}
 
 	state := &VoxelRtState{
-		instanceMap:  make(map[EntityId]*core.VoxelObject),
-		loadedModels: make(map[AssetId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
+		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
 			Profiler: app_rt.NewProfiler(),

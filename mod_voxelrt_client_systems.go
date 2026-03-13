@@ -25,14 +25,14 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 
 	state := &VoxelRtState{
-		RtApp:        RtApp,
-		loadedModels: make(map[AssetId]*core.VoxelObject),
-		instanceMap:  make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:  make(map[EntityId]*core.VoxelObject),
-		skyboxLayers: make(map[EntityId]SkyboxLayerComponent),
+		RtApp:          RtApp,
+		loadedModels:   make(map[AssetId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 	}
 	cmd.AddResources(state)
-	cmd.AddResources(&VoxelEditQueue{BudgetPerFrame: 5000})
 
 	cmd.AddResources(&Profiler{})
 
@@ -137,6 +137,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 			state.RtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
+			state.objectToEntity[obj] = entityId
 		}
 
 		// Sync Transform to Renderer
@@ -181,6 +182,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if !currentEntities[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
+			delete(state.objectToEntity, obj)
 		}
 	}
 	state.RtApp.Profiler.EndScope("Sync Instances")
@@ -203,6 +205,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if obj, exists := state.caVolumeMap[eid]; exists {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.caVolumeMap, eid)
+			delete(state.objectToEntity, obj)
 		}
 
 		scatterColor := [3]float32{0.72, 0.72, 0.72}
@@ -296,6 +299,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if !currentCA[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.caVolumeMap, eid)
+			delete(state.objectToEntity, obj)
 		}
 	}
 	sort.Slice(gpuVolumes, func(i, j int) bool {

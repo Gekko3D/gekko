@@ -23,7 +23,8 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
 	}
 	rtState := &VoxelRtState{
-		instanceMap: make(map[EntityId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 
 	aid := rootassets.NewID()

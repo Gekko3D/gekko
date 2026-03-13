@@ -15,8 +15,9 @@ func TestRaycastScaling(t *testing.T) {
 		RtApp: &app.App{
 			Scene: core.NewScene(),
 		},
-		instanceMap: make(map[EntityId]*core.VoxelObject),
-		caVolumeMap: make(map[EntityId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 
 	// Create a test object
