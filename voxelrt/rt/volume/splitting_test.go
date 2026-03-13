@@ -194,15 +194,54 @@ func TestSplitDisconnectedComponents_LargeGap(t *testing.T) {
 
 func TestSplitDisconnectedComponents_Limit(t *testing.T) {
 	xbm := NewXBrickMap()
-	// Create AABB > 4M voxels.
-	// 200 * 200 * 100 = 4,000,000.
-	// Let's go slightly larger. 200 * 200 * 101 = 4,040,000.
+	// Old limit was 4M. New limit is 100M voxels.
+	// 200 * 200 * 100 = 4,000,000 voxels.
 	xbm.SetVoxel(0, 0, 0, 1)
-	xbm.SetVoxel(199, 199, 100, 1)
+	xbm.SetVoxel(199, 199, 99, 1) // 200*200*100 volume
 
 	comps := xbm.SplitDisconnectedComponents()
+	if len(comps) != 2 {
+		t.Errorf("Expected 2 components for 4M volume, but got %d (nil? %v)", len(comps), comps == nil)
+	}
+
+	// Now try exceeding 100M. 
+	// We'll use solid bricks to avoid huge memory usage.
+	// Each 8x8x8 solid brick = 512 voxels.
+	// 100,000,000 / 512 = 195,312 bricks.
+	// We'll place them in a way that creates 2 components.
+	
+	xbmLarge := NewXBrickMap()
+	// Comp 1: many solid bricks
+	for i := 0; i < 100000; i++ {
+		// Place at (i*8, 0, 0)
+		xbmLarge.SetVoxel(i*8, 0, 0, 1)
+		// SetVoxel creates sparse brick. We need to compress it to save memory.
+		sx, sy, sz := (i*8)/SectorSize, 0, 0
+		lx := (i*8)%SectorSize
+		bx := lx/BrickSize
+		sector := xbmLarge.Sectors[[3]int{sx, sy, sz}]
+		brick := sector.GetBrick(bx, 0, 0)
+		brick.Expand(1)
+		brick.TryCompress()
+	}
+	// That's 100,000 * 512 = 51,200,000 voxels.
+	
+	// Add another 100,000 bricks for Comp 2.
+	for i := 0; i < 100000; i++ {
+		xbmLarge.SetVoxel(i*8, 100, 0, 1)
+		sx, sy, sz := (i*8)/SectorSize, 100/SectorSize, 0
+		lx, ly := (i*8)%SectorSize, 100%SectorSize
+		bx, by := lx/BrickSize, ly/BrickSize
+		sector := xbmLarge.Sectors[[3]int{sx, sy, sz}]
+		brick := sector.GetBrick(bx, by, 0)
+		brick.Expand(1)
+		brick.TryCompress()
+	}
+	// Total: 200,000 * 512 = 102,400,000 voxels.
+	
+	comps = xbmLarge.SplitDisconnectedComponents()
 	if comps != nil {
-		t.Errorf("Expected nil due to volume limit > 4M, got components")
+		t.Errorf("Expected nil for >100M voxels, but got %d components", len(comps))
 	}
 }
 
@@ -241,5 +280,74 @@ func TestGetVoxelCount(t *testing.T) {
 	xbm.SetVoxel(0, 0, 0, 0)
 	if xbm.GetVoxelCount() != 0 {
 		t.Errorf("Expected 0 voxels after clearing, got %d", xbm.GetVoxelCount())
+	}
+}
+func TestSplitDisconnectedComponents_ComplexHierarchy(t *testing.T) {
+	xbm := NewXBrickMap()
+
+	// Nested spheres/boxes
+	// Outer shell (30x30x30)
+	Cube(xbm, mgl32.Vec3{0, 0, 0}, mgl32.Vec3{30, 30, 30}, 1)
+	// Carve a large hollow inside
+	Cube(xbm, mgl32.Vec3{5, 5, 5}, mgl32.Vec3{25, 25, 25}, 0)
+
+	// Inner disconnected object
+	Cube(xbm, mgl32.Vec3{10, 10, 10}, mgl32.Vec3{20, 20, 20}, 2)
+
+	// Should be 2 components: the hollow shell and the floating inner box
+	comps := xbm.SplitDisconnectedComponents()
+	if len(comps) != 2 {
+		t.Errorf("Expected 2 components for nested hierarchy, got %d", len(comps))
+	}
+}
+
+func TestSplitDisconnectedComponents_ThinWalls(t *testing.T) {
+	xbm := NewXBrickMap()
+
+	// Two large 10x10x10 blocks connected by a single voxel at a corner
+	Cube(xbm, mgl32.Vec3{0, 0, 0}, mgl32.Vec3{10, 10, 10}, 1)
+	Cube(xbm, mgl32.Vec3{11, 11, 11}, mgl32.Vec3{21, 21, 21}, 1)
+
+	// Bridge only via (10, 10, 10)? 
+	// Diagonal connection (10,10,10) is NOT enough for 6-way.
+	xbm.SetVoxel(10, 10, 11, 1) // One side
+	xbm.SetVoxel(10, 11, 11, 1) // Connection
+
+	// (9,9,9) -- (10,10,11) -- (10,11,11) -- (11,11,11)
+	// That's a chain.
+	xbm.SetVoxel(10, 10, 10, 1)
+	xbm.SetVoxel(10, 10, 9, 1)
+	// Now (9,9,9) is connected to block 1. (11,11,11) is block 2.
+	
+	comps := xbm.SplitDisconnectedComponents()
+	if comps != nil && len(comps) != 1 {
+		t.Errorf("Expected 1 component with thin bridge, got %d", len(comps))
+	}
+
+	// Break the bridge
+	xbm.SetVoxel(10, 11, 11, 0)
+	comps = xbm.SplitDisconnectedComponents()
+	if len(comps) != 2 {
+		t.Errorf("Expected 2 components after breaking thin bridge, got %d", len(comps))
+	}
+}
+
+func TestSplitDisconnectedComponents_HollowShell(t *testing.T) {
+	xbm := NewXBrickMap()
+	// Large sphere
+	Sphere(xbm, mgl32.Vec3{20, 20, 20}, 15, 1)
+	
+	// Slice it with many planes of air to create many small shards
+	for x := 10; x < 35; x += 3 {
+		for y := 0; y < 40; y++ {
+			for z := 0; z < 40; z++ {
+				xbm.SetVoxel(x, y, z, 0)
+			}
+		}
+	}
+	
+	comps := xbm.SplitDisconnectedComponents()
+	if len(comps) < 5 {
+		t.Errorf("Expected many shards (>5) after slicing sphere, got %d", len(comps))
 	}
 }
