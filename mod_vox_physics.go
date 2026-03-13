@@ -257,8 +257,18 @@ func DecomposeXBrickMap(xbm *volume.XBrickMap, vSize float32) []CollisionBox {
 	return boxes
 }
 
+func applyScaleToBoxes(boxes []CollisionBox, scale float32) {
+	if scale == 1.0 {
+		return
+	}
+	for i := range boxes {
+		boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
+		boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
+	}
+}
+
 func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelRtState) {
-	MakeQuery3[VoxelModelComponent, RigidBodyComponent, TransformComponent](cmd).Map(func(eid EntityId, vmc *VoxelModelComponent, rb *RigidBodyComponent, tr *TransformComponent) bool {
+	MakeQuery4[VoxelModelComponent, RigidBodyComponent, TransformComponent, PhysicsModel](cmd).Map(func(eid EntityId, vmc *VoxelModelComponent, rb *RigidBodyComponent, tr *TransformComponent, pm *PhysicsModel) bool {
 		// 1. Try to get runtime XBrickMap
 		var xbm *volume.XBrickMap
 		if rtState != nil {
@@ -267,17 +277,8 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			}
 		}
 
-		// 2. Check if PhysicsModel already exists
-		found := false
-		allComps := cmd.GetAllComponents(eid)
-		for _, c := range allComps {
-			if _, ok := c.(PhysicsModel); ok {
-				found = true
-				break
-			}
-		}
-
-		// 3. Determine if we need to (re)build
+		// 2. Determine if we need to (re)build
+		found := pm != nil
 		needsBuild := !found
 		if xbm != nil && (xbm.StructureDirty || len(xbm.DirtyBricks) > 0 || len(xbm.DirtySectors) > 0) {
 			needsBuild = true
@@ -298,21 +299,13 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			boxes = DecomposeXBrickMap(xbm, vSize)
 			xbm.ClearDirty()
 			// Apply scale from transform
-			scale := tr.Scale.X()
-			for i := range boxes {
-				boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
-				boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
-			}
+			applyScaleToBoxes(boxes, tr.Scale.X())
 			initialized = len(boxes) > 0
 		} else if vmc.CustomMap != nil {
 			vSize := VoxelSize
 			boxes = DecomposeXBrickMap(vmc.CustomMap, vSize)
 			vmc.CustomMap.ClearDirty()
-			scale := tr.Scale.X()
-			for i := range boxes {
-				boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
-				boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
-			}
+			applyScaleToBoxes(boxes, tr.Scale.X())
 			initialized = len(boxes) > 0
 		} else {
 			server.mu.RLock()
@@ -323,11 +316,7 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 				vSize := VoxelSize
 				boxes = DecomposeVoxModel(asset.VoxModel, vSize)
 				// Apply scale from transform
-				scale := tr.Scale.X()
-				for i := range boxes {
-					boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
-					boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
-				}
+				applyScaleToBoxes(boxes, tr.Scale.X())
 				initialized = len(boxes) > 0
 			}
 		}
@@ -364,5 +353,5 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			})
 		}
 		return true
-	})
+	}, PhysicsModel{})
 }

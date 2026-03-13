@@ -347,6 +347,17 @@ func (ecs *Ecs) getAllComponents(entityId EntityId) []any {
 	return res
 }
 
+func (ecs *Ecs) hasComponent(entityId EntityId, componentType reflect.Type) bool {
+	archID, ok := ecs.storage.entityIndex[entityId]
+	if !ok {
+		return false
+	}
+	arch := ecs.storage.archetypes[archID]
+	compId := ecs.getComponentId(componentType)
+	_, has := arch.componentData[compId]
+	return has
+}
+
 func (ecs *Ecs) archetypeViews() []rooteecs.ArchetypeView {
 	res := make([]rooteecs.ArchetypeView, 0, len(ecs.storage.archetypes))
 	for _, arch := range ecs.storage.archetypes {
