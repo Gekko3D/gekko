@@ -155,6 +155,11 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 				Friction:    0.5,
 				Restitution: 0.3,
 			},
+			&DebrisComponent{
+				Age:        0,
+				MaxAge:     15.0 + float32(event.Entity%50)/10.0, // 15-20s lifetime
+				VoxelCount: comp.VoxelCount,
+			},
 		)
 	}
 }
