@@ -20,11 +20,6 @@ func DecomposeVoxModel(model VoxModel, vSize float32) []CollisionBox {
 		return nil
 	}
 
-	occupied := make(map[[3]uint32]bool)
-	for _, v := range model.Voxels {
-		occupied[[3]uint32{v.X, v.Y, v.Z}] = true
-	}
-
 	voxels := make(map[[3]uint32]bool)
 	for _, v := range model.Voxels {
 		voxels[[3]uint32{v.X, v.Y, v.Z}] = true
