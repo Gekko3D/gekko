@@ -102,14 +102,17 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 	}
 
 	// Keep largest in original, inherit original ID for rendering stability
-	oldID := voxObj.XBrickMap.ID
-	voxObj.XBrickMap = components[largestIdx].Map
-	voxObj.XBrickMap.ID = oldID
-	voxObj.XBrickMap.StructureDirty = true // Ensure physics rebuilds
+	newMap := components[largestIdx].Map
+	newMap.ID = voxObj.XBrickMap.ID
 
-	// Update the ECS component to match the new state
-	originalVMC.CustomMap = voxObj.XBrickMap
-	cmd.AddComponents(event.Entity, originalVMC)
+	// Update the ECS component to match the new state.
+	// CRITICAL: We avoid direct mutation of voxObj.XBrickMap here. 
+	// Instead, we update the ECS component's CustomMap and let the 
+	// sync system in mod_voxelrt_client_systems.go detect the change.
+	// This ensures StructureRevision is incremented and avoids a race
+	// condition where GPU flags might be cleared prematurely.
+	originalVMC.CustomMap = newMap
+	cmd.AddComponents(event.Entity, &originalVMC)
 
 	// Spawn new entities for smaller components
 	for i, comp := range components {

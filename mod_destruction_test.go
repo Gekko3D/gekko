@@ -16,8 +16,16 @@ func TestDestructionSystem_Split(t *testing.T) {
 
 	// 1. Setup VoxelRtState manually for testing
 	state := &VoxelRtState{
+		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
+		RtApp: &app_rt.App{
+			Scene:    core.NewScene(),
+			Profiler: app_rt.NewProfiler(),
+			Camera:   &core.CameraState{},
+		},
 	}
 
 	// 2. Create an entity with a VoxelObject containing two disconnected islands
@@ -62,19 +70,32 @@ func TestDestructionSystem_Split(t *testing.T) {
 	}
 
 	// 4. Run the system
-	destructionSystem(state, queue, cmd, nil)
+	paletteId := AssetId{}
+	server := &AssetServer{
+		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
+	}
+	server.voxPalettes[paletteId] = VoxelPaletteAsset{}
+
+	destructionSystem(state, queue, cmd, server)
 	app.FlushCommands()
 
-	// 5. Verify results
+	// 5. Sync ECS to internal state
+	voxelRtSystem(nil, state, server, &Time{}, cmd)
+
+	// 6. Verify results
 	// The original entity should still exist (it had the largest component)
 	// it should now only have the 8 voxels of Island 1
 	if obj.XBrickMap.GetVoxelCount() != 8 {
 		t.Errorf("Original entity should have 8 voxels, got %d", obj.XBrickMap.GetVoxelCount())
 	}
 
-	// A new entity should have been created for Island 2 (if it was >= 8 voxels, wait)
-	// Actually Island 2 was 1 voxel. My system has a threshold of 8.
-	// Let's make Island 2 also 8 voxels to see it spawn.
+	// 7. A new entity should have been created for Island 2 (if it was >= 8 voxels)
+	// Island 1 was 8, Island 2 was 1. Threshold is 8.
+	// So only 1 entity should exist.
+	entities := app.ecs.storage.entityIndex
+	if len(entities) != 1 {
+		t.Errorf("Expected 1 entity after split (Island 2 below threshold), got %d", len(entities))
+	}
 }
 
 func TestDestructionSystem_SpawnDebris(t *testing.T) {
@@ -83,8 +104,16 @@ func TestDestructionSystem_SpawnDebris(t *testing.T) {
 	cmd := app.Commands()
 
 	state := &VoxelRtState{
+		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
+		RtApp: &app_rt.App{
+			Scene:    core.NewScene(),
+			Profiler: app_rt.NewProfiler(),
+			Camera:   &core.CameraState{},
+		},
 	}
 
 	xbm := volume.NewXBrickMap()
@@ -132,8 +161,17 @@ func TestDestructionSystem_SpawnDebris(t *testing.T) {
 	}
 
 	// Run system
-	destructionSystem(state, queue, cmd, nil)
+	paletteId := AssetId{}
+	server := &AssetServer{
+		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
+	}
+	server.voxPalettes[paletteId] = VoxelPaletteAsset{}
+
+	destructionSystem(state, queue, cmd, server)
 	app.FlushCommands()
+
+	// Sync ECS to internal state
+	voxelRtSystem(nil, state, server, &Time{}, cmd)
 
 	// Island 1 was kept in original (they are both 8, so it picks one)
 	// Island 2 should be spawned as a new entity.
