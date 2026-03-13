@@ -284,7 +284,7 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 
 		// 3. Determine if we need to (re)build
 		needsBuild := !found
-		if xbm != nil && xbm.StructureDirty {
+		if (xbm != nil && xbm.StructureDirty) || (vmc.CustomMap != nil && vmc.CustomMap.StructureDirty) {
 			needsBuild = true
 		}
 
@@ -299,6 +299,7 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			// Prefer runtime edited map
 			vSize := VoxelSize
 			boxes = DecomposeXBrickMap(xbm, vSize)
+			xbm.StructureDirty = false
 			// Apply scale from transform
 			scale := tr.Scale.X()
 			for i := range boxes {
@@ -309,6 +310,7 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 		} else if vmc.CustomMap != nil {
 			vSize := VoxelSize
 			boxes = DecomposeXBrickMap(vmc.CustomMap, vSize)
+			vmc.CustomMap.StructureDirty = false
 			scale := tr.Scale.X()
 			for i := range boxes {
 				boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
