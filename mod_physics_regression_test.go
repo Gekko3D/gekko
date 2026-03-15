@@ -45,6 +45,20 @@ func (g testSolidGrid) VoxelScale() mgl32.Vec3 {
 	return mgl32.Vec3{g.vSize, g.vSize, g.vSize}
 }
 
+func (g testSolidGrid) ForEachPrimitiveInRange(minX, minY, minZ, maxX, maxY, maxZ int, fn func(localCenter, halfExtents mgl32.Vec3) bool) bool {
+	rangeMinX := max(minX, 0)
+	rangeMinY := max(minY, 0)
+	rangeMinZ := max(minZ, 0)
+	rangeMaxX := min(maxX, g.size[0])
+	rangeMaxY := min(maxY, g.size[1])
+	rangeMaxZ := min(maxZ, g.size[2])
+	if rangeMinX >= rangeMaxX || rangeMinY >= rangeMaxY || rangeMinZ >= rangeMaxZ {
+		return true
+	}
+
+	return emitVoxelPrimitiveRange(rangeMinX, rangeMinY, rangeMinZ, rangeMaxX, rangeMaxY, rangeMaxZ, g.VoxelScale(), fn)
+}
+
 func waitForPhysicsTick(t *testing.T, proxy *PhysicsProxy, minTick uint64, timeout time.Duration) *PhysicsResults {
 	t.Helper()
 

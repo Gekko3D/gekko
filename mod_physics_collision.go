@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 
+	rootphysics "github.com/gekko3d/gekko/physics"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -11,6 +12,10 @@ type voxelCollisionContact struct {
 	normal      mgl32.Vec3
 	penetration float32
 	point       mgl32.Vec3
+}
+
+type voxelPrimitiveRangeIterator interface {
+	ForEachPrimitiveInRange(minX, minY, minZ, maxX, maxY, maxZ int, fn func(localCenter, halfExtents mgl32.Vec3) bool) bool
 }
 
 func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox, posB mgl32.Vec3, rotB mgl32.Quat, boxB CollisionBox, pointInOBBEpsilon float32) (bool, mgl32.Vec3, float32, mgl32.Vec3) {
@@ -142,16 +147,9 @@ func checkVoxelCollision(bodyA *internalBody, bodyB *internalBody, pointInOBBEps
 	minX, minY, minZ := int(math.Floor(float64(lMin.X()))), int(math.Floor(float64(lMin.Y()))), int(math.Floor(float64(lMin.Z())))
 	maxX, maxY, maxZ := int(math.Ceil(float64(lMax.X()))), int(math.Ceil(float64(lMax.Y()))), int(math.Ceil(float64(lMax.Z())))
 
-	// Safety bound: if the overlap region is too large, fall back to
-	// the OBB-OBB path.
-	if (maxX-minX) > 32 || (maxY-minY) > 32 || (maxZ-minZ) > 32 {
-		return nil, false
-	}
-
 	gridA := bodyA.model.Grid
 	invRotA := bodyA.rot.Inverse()
 	centerA := bodyA.model.CenterOffset
-	voxelHalfExtentsInALocal := transformedCubeHalfExtentsInLocal(invRotA, bodyB.rot, voxelScaleB.Mul(0.5))
 	contacts := make([]voxelCollisionContact, 0, 16)
 
 	boxesA := bodyA.boxes
@@ -162,75 +160,73 @@ func checkVoxelCollision(bodyA *internalBody, bodyB *internalBody, pointInOBBEps
 		}
 	}
 
-	for vz := minZ; vz < maxZ; vz++ {
-		for vy := minY; vy < maxY; vy++ {
-			for vx := minX; vx < maxX; vx++ {
-				if found, _ := gridB.GetVoxel(vx, vy, vz); !found {
-					continue
-				}
+	handled := forEachVoxelPrimitiveInRange(gridB, minX, minY, minZ, maxX, maxY, maxZ, func(localCenterB, halfExtentsB mgl32.Vec3) bool {
+		worldPosB := bodyB.rot.Rotate(localCenterB.Sub(centerB)).Add(bodyB.pos)
+		voxelBoxB.HalfExtents = halfExtentsB
 
-				gridPosB := vec3MulComponents(mgl32.Vec3{float32(vx) + 0.5, float32(vy) + 0.5, float32(vz) + 0.5}, voxelScaleB)
-				worldPosB := bodyB.rot.Rotate(gridPosB.Sub(centerB)).Add(bodyB.pos)
+		if gridA != nil {
+			voxelScaleA := gridA.VoxelScale()
+			voxelBoxA := CollisionBox{
+				HalfExtents: voxelScaleA.Mul(0.5),
+			}
+			halfExtentsInALocal := transformedCubeHalfExtentsInLocal(invRotA, bodyB.rot, halfExtentsB)
+			localA := vec3DivComponents(invRotA.Rotate(worldPosB.Sub(bodyA.pos)).Add(centerA), voxelScaleA)
+			voxelHalfExtentsInAGrid := vec3DivComponents(halfExtentsInALocal, voxelScaleA)
+			minAX := int(math.Floor(float64(localA.X() - voxelHalfExtentsInAGrid.X())))
+			minAY := int(math.Floor(float64(localA.Y() - voxelHalfExtentsInAGrid.Y())))
+			minAZ := int(math.Floor(float64(localA.Z() - voxelHalfExtentsInAGrid.Z())))
+			maxAX := int(math.Ceil(float64(localA.X() + voxelHalfExtentsInAGrid.X())))
+			maxAY := int(math.Ceil(float64(localA.Y() + voxelHalfExtentsInAGrid.Y())))
+			maxAZ := int(math.Ceil(float64(localA.Z() + voxelHalfExtentsInAGrid.Z())))
+			for az := minAZ; az < maxAZ; az++ {
+				for ay := minAY; ay < maxAY; ay++ {
+					for ax := minAX; ax < maxAX; ax++ {
+						if foundA, _ := gridA.GetVoxel(ax, ay, az); !foundA {
+							continue
+						}
 
-				if gridA != nil {
-					voxelScaleA := gridA.VoxelScale()
-					voxelBoxA := CollisionBox{
-						HalfExtents: voxelScaleA.Mul(0.5),
-					}
-					localA := vec3DivComponents(invRotA.Rotate(worldPosB.Sub(bodyA.pos)).Add(centerA), voxelScaleA)
-					voxelHalfExtentsInAGrid := vec3DivComponents(voxelHalfExtentsInALocal, voxelScaleA)
-					minAX := int(math.Floor(float64(localA.X() - voxelHalfExtentsInAGrid.X())))
-					minAY := int(math.Floor(float64(localA.Y() - voxelHalfExtentsInAGrid.Y())))
-					minAZ := int(math.Floor(float64(localA.Z() - voxelHalfExtentsInAGrid.Z())))
-					maxAX := int(math.Ceil(float64(localA.X() + voxelHalfExtentsInAGrid.X())))
-					maxAY := int(math.Ceil(float64(localA.Y() + voxelHalfExtentsInAGrid.Y())))
-					maxAZ := int(math.Ceil(float64(localA.Z() + voxelHalfExtentsInAGrid.Z())))
-					for az := minAZ; az < maxAZ; az++ {
-						for ay := minAY; ay < maxAY; ay++ {
-							for ax := minAX; ax < maxAX; ax++ {
-								if foundA, _ := gridA.GetVoxel(ax, ay, az); !foundA {
-									continue
-								}
-
-								gridPosA := vec3MulComponents(mgl32.Vec3{float32(ax) + 0.5, float32(ay) + 0.5, float32(az) + 0.5}, voxelScaleA)
-								worldPosA := bodyA.rot.Rotate(gridPosA.Sub(centerA)).Add(bodyA.pos)
-								if collision, normal, penetration, point := checkSingleOBBCollision(worldPosA, bodyA.rot, voxelBoxA, worldPosB, bodyB.rot, voxelBoxB, pointInOBBEpsilon); collision {
-									if swapped {
-										normal = normal.Mul(-1)
-									}
-									contacts = append(contacts, voxelCollisionContact{
-										normal:      normal,
-										penetration: penetration,
-										point:       point,
-									})
-								}
+						gridPosA := vec3MulComponents(mgl32.Vec3{float32(ax) + 0.5, float32(ay) + 0.5, float32(az) + 0.5}, voxelScaleA)
+						worldPosA := bodyA.rot.Rotate(gridPosA.Sub(centerA)).Add(bodyA.pos)
+						if collision, normal, penetration, point := checkSingleOBBCollision(worldPosA, bodyA.rot, voxelBoxA, worldPosB, bodyB.rot, voxelBoxB, pointInOBBEpsilon); collision {
+							if swapped {
+								normal = normal.Mul(-1)
 							}
+							contacts = append(contacts, voxelCollisionContact{
+								normal:      normal,
+								penetration: penetration,
+								point:       point,
+							})
 						}
-					}
-					continue
-				}
-
-				for _, boxA := range boxesA {
-					localA := invRotA.Rotate(worldPosB.Sub(bodyA.pos))
-					relA := localA.Sub(boxA.Box.LocalOffset)
-					if absf(relA.X()) > boxA.Box.HalfExtents.X()+voxelHalfExtentsInALocal.X() ||
-						absf(relA.Y()) > boxA.Box.HalfExtents.Y()+voxelHalfExtentsInALocal.Y() ||
-						absf(relA.Z()) > boxA.Box.HalfExtents.Z()+voxelHalfExtentsInALocal.Z() {
-						continue
-					}
-					if collision, normal, penetration, point := checkSingleOBBCollision(bodyA.pos, bodyA.rot, boxA.Box, worldPosB, bodyB.rot, voxelBoxB, pointInOBBEpsilon); collision {
-						if swapped {
-							normal = normal.Mul(-1)
-						}
-						contacts = append(contacts, voxelCollisionContact{
-							normal:      normal,
-							penetration: penetration,
-							point:       point,
-						})
 					}
 				}
 			}
+			return true
 		}
+
+		halfExtentsInALocal := transformedCubeHalfExtentsInLocal(invRotA, bodyB.rot, halfExtentsB)
+		for _, boxA := range boxesA {
+			localA := invRotA.Rotate(worldPosB.Sub(bodyA.pos))
+			relA := localA.Sub(boxA.Box.LocalOffset)
+			if absf(relA.X()) > boxA.Box.HalfExtents.X()+halfExtentsInALocal.X() ||
+				absf(relA.Y()) > boxA.Box.HalfExtents.Y()+halfExtentsInALocal.Y() ||
+				absf(relA.Z()) > boxA.Box.HalfExtents.Z()+halfExtentsInALocal.Z() {
+				continue
+			}
+			if collision, normal, penetration, point := checkSingleOBBCollision(bodyA.pos, bodyA.rot, boxA.Box, worldPosB, bodyB.rot, voxelBoxB, pointInOBBEpsilon); collision {
+				if swapped {
+					normal = normal.Mul(-1)
+				}
+				contacts = append(contacts, voxelCollisionContact{
+					normal:      normal,
+					penetration: penetration,
+					point:       point,
+				})
+			}
+		}
+		return true
+	})
+	if !handled {
+		return nil, false
 	}
 
 	if len(contacts) == 0 {
@@ -238,6 +234,54 @@ func checkVoxelCollision(bodyA *internalBody, bodyB *internalBody, pointInOBBEps
 	}
 
 	return reduceVoxelContacts(contacts, 6), true
+}
+
+func forEachVoxelPrimitiveInRange(grid rootphysics.VoxelGrid, minX, minY, minZ, maxX, maxY, maxZ int, fn func(localCenter, halfExtents mgl32.Vec3) bool) bool {
+	if iterator, ok := grid.(voxelPrimitiveRangeIterator); ok {
+		return iterator.ForEachPrimitiveInRange(minX, minY, minZ, maxX, maxY, maxZ, fn)
+	}
+
+	if (maxX-minX) > 32 || (maxY-minY) > 32 || (maxZ-minZ) > 32 {
+		return false
+	}
+
+	voxelScale := grid.VoxelScale()
+	voxelHalfExtents := voxelScale.Mul(0.5)
+	for vz := minZ; vz < maxZ; vz++ {
+		for vy := minY; vy < maxY; vy++ {
+			for vx := minX; vx < maxX; vx++ {
+				if found, _ := grid.GetVoxel(vx, vy, vz); !found {
+					continue
+				}
+				localCenter := vec3MulComponents(mgl32.Vec3{float32(vx) + 0.5, float32(vy) + 0.5, float32(vz) + 0.5}, voxelScale)
+				if !fn(localCenter, voxelHalfExtents) {
+					return true
+				}
+			}
+		}
+	}
+
+	return true
+}
+
+func emitVoxelPrimitiveRange(minX, minY, minZ, maxX, maxY, maxZ int, voxelScale mgl32.Vec3, fn func(localCenter, halfExtents mgl32.Vec3) bool) bool {
+	if minX >= maxX || minY >= maxY || minZ >= maxZ {
+		return true
+	}
+
+	sizeInCells := mgl32.Vec3{
+		float32(maxX - minX),
+		float32(maxY - minY),
+		float32(maxZ - minZ),
+	}
+	localCenter := vec3MulComponents(mgl32.Vec3{
+		float32(minX) + sizeInCells.X()*0.5,
+		float32(minY) + sizeInCells.Y()*0.5,
+		float32(minZ) + sizeInCells.Z()*0.5,
+	}, voxelScale)
+	halfExtents := vec3MulComponents(sizeInCells, voxelScale).Mul(0.5)
+
+	return fn(localCenter, halfExtents)
 }
 
 func transformedOverlapBounds(overlapMin, overlapMax, bodyPos mgl32.Vec3, invRot mgl32.Quat, center mgl32.Vec3, voxelScale mgl32.Vec3) (mgl32.Vec3, mgl32.Vec3) {

@@ -74,6 +74,81 @@ func (v *voxelGridSnapshot) VoxelScale() mgl32.Vec3 {
 	return mgl32.Vec3{v.vSize, v.vSize, v.vSize}
 }
 
+func (v *voxelGridSnapshot) ForEachPrimitiveInRange(minX, minY, minZ, maxX, maxY, maxZ int, fn func(localCenter, halfExtents mgl32.Vec3) bool) bool {
+	if v == nil || v.xbm == nil {
+		return true
+	}
+
+	voxelScale := v.VoxelScale()
+	for sKey, sector := range v.xbm.Sectors {
+		sectorMinX := sKey[0] * volume.SectorSize
+		sectorMinY := sKey[1] * volume.SectorSize
+		sectorMinZ := sKey[2] * volume.SectorSize
+		sectorMaxX := sectorMinX + volume.SectorSize
+		sectorMaxY := sectorMinY + volume.SectorSize
+		sectorMaxZ := sectorMinZ + volume.SectorSize
+		if sectorMaxX <= minX || sectorMinX >= maxX ||
+			sectorMaxY <= minY || sectorMinY >= maxY ||
+			sectorMaxZ <= minZ || sectorMinZ >= maxZ {
+			continue
+		}
+
+		for brickIdx := 0; brickIdx < 64; brickIdx++ {
+			if (sector.BrickMask64 & (1 << brickIdx)) == 0 {
+				continue
+			}
+
+			bx, by, bz := brickIdx%4, (brickIdx/4)%4, brickIdx/16
+			brickMinX := sectorMinX + bx*volume.BrickSize
+			brickMinY := sectorMinY + by*volume.BrickSize
+			brickMinZ := sectorMinZ + bz*volume.BrickSize
+			brickMaxX := brickMinX + volume.BrickSize
+			brickMaxY := brickMinY + volume.BrickSize
+			brickMaxZ := brickMinZ + volume.BrickSize
+
+			rangeMinX := max(minX, brickMinX)
+			rangeMinY := max(minY, brickMinY)
+			rangeMinZ := max(minZ, brickMinZ)
+			rangeMaxX := min(maxX, brickMaxX)
+			rangeMaxY := min(maxY, brickMaxY)
+			rangeMaxZ := min(maxZ, brickMaxZ)
+			if rangeMinX >= rangeMaxX || rangeMinY >= rangeMaxY || rangeMinZ >= rangeMaxZ {
+				continue
+			}
+
+			brick := sector.GetBrick(bx, by, bz)
+			if brick == nil {
+				continue
+			}
+
+			if brick.Flags&volume.BrickFlagSolid != 0 {
+				if !emitVoxelPrimitiveRange(rangeMinX, rangeMinY, rangeMinZ, rangeMaxX, rangeMaxY, rangeMaxZ, voxelScale, fn) {
+					return true
+				}
+				continue
+			}
+
+			for gz := rangeMinZ; gz < rangeMaxZ; gz++ {
+				localZ := gz - brickMinZ
+				for gy := rangeMinY; gy < rangeMaxY; gy++ {
+					localY := gy - brickMinY
+					for gx := rangeMinX; gx < rangeMaxX; gx++ {
+						localX := gx - brickMinX
+						if brick.Payload[localX][localY][localZ] == 0 {
+							continue
+						}
+						if !emitVoxelPrimitiveRange(gx, gy, gz, gx+1, gy+1, gz+1, voxelScale, fn) {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return true
+}
+
 type VoxelGridCache struct {
 	Snapshots   map[EntityId]*voxelGridSnapshot
 	AssetGrids  map[AssetId]*voxelGridAssetCache

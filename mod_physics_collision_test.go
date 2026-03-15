@@ -145,3 +145,62 @@ func TestVoxelCollisionHonorsNonUniformVoxelScale(t *testing.T) {
 		t.Fatal("expected collision that depends on stretched X voxel scale to be detected")
 	}
 }
+
+func TestVoxelCollisionHandlesLargeOverlapWithoutFallback(t *testing.T) {
+	voxelScale := mgl32.Vec3{VoxelSize, VoxelSize, VoxelSize}
+	grid := testSolidGrid{
+		size:   [3]int{40, 2, 40},
+		vScale: voxelScale,
+	}
+	center := mgl32.Vec3{
+		float32(grid.size[0]) * voxelScale.X() * 0.5,
+		float32(grid.size[1]) * voxelScale.Y() * 0.5,
+		float32(grid.size[2]) * voxelScale.Z() * 0.5,
+	}
+
+	bodyA := &internalBody{
+		Eid: 1,
+		pos: center,
+		rot: mgl32.QuatIdent(),
+		model: PhysicsModel{
+			CenterOffset: center,
+			Boxes: []CollisionBox{{
+				HalfExtents: center,
+			}},
+			Grid: grid,
+		},
+		boxes: []InternalBox{{
+			Box: CollisionBox{
+				HalfExtents: center,
+			},
+		}},
+	}
+	bodyB := &internalBody{
+		Eid: 2,
+		pos: center.Add(mgl32.Vec3{0, voxelScale.Y() * 0.25, 0}),
+		rot: mgl32.QuatIdent(),
+		model: PhysicsModel{
+			CenterOffset: center,
+			Boxes: []CollisionBox{{
+				HalfExtents: center,
+			}},
+			Grid: grid,
+		},
+		boxes: []InternalBox{{
+			Box: CollisionBox{
+				HalfExtents: center,
+			},
+		}},
+	}
+
+	bodyA.updateAABB()
+	bodyB.updateAABB()
+
+	contacts, handled := checkVoxelCollision(bodyA, bodyB, 0.01)
+	if !handled {
+		t.Fatal("expected large voxel overlap to stay on voxel path instead of falling back")
+	}
+	if len(contacts) == 0 {
+		t.Fatal("expected large voxel overlap to produce contacts")
+	}
+}
