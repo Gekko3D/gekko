@@ -136,20 +136,8 @@ func checkVoxelCollision(bodyA *internalBody, bodyB *internalBody, pointInOBBEps
 		HalfExtents: mgl32.Vec3{vSizeB * 0.5, vSizeB * 0.5, vSizeB * 0.5},
 	}
 
-	// Transform overlap corners to B's voxel grid coordinates.
-	localCorner1 := invRotB.Rotate(overlapMin.Sub(bodyB.pos)).Add(centerB).Mul(1.0 / vSizeB)
-	localCorner2 := invRotB.Rotate(overlapMax.Sub(bodyB.pos)).Add(centerB).Mul(1.0 / vSizeB)
-
-	lMin := mgl32.Vec3{
-		minf(localCorner1.X(), localCorner2.X()),
-		minf(localCorner1.Y(), localCorner2.Y()),
-		minf(localCorner1.Z(), localCorner2.Z()),
-	}
-	lMax := mgl32.Vec3{
-		maxf(localCorner1.X(), localCorner2.X()),
-		maxf(localCorner1.Y(), localCorner2.Y()),
-		maxf(localCorner1.Z(), localCorner2.Z()),
-	}
+	// Transform the full overlap box into B's voxel grid coordinates.
+	lMin, lMax := transformedOverlapBounds(overlapMin, overlapMax, bodyB.pos, invRotB, centerB, 1.0/vSizeB)
 
 	minX, minY, minZ := int(math.Floor(float64(lMin.X()))), int(math.Floor(float64(lMin.Y()))), int(math.Floor(float64(lMin.Z())))
 	maxX, maxY, maxZ := int(math.Ceil(float64(lMax.X()))), int(math.Ceil(float64(lMax.Y()))), int(math.Ceil(float64(lMax.Z())))
@@ -250,6 +238,36 @@ func checkVoxelCollision(bodyA *internalBody, bodyB *internalBody, pointInOBBEps
 	}
 
 	return reduceVoxelContacts(contacts, 6), true
+}
+
+func transformedOverlapBounds(overlapMin, overlapMax, bodyPos mgl32.Vec3, invRot mgl32.Quat, center mgl32.Vec3, invVoxelSize float32) (mgl32.Vec3, mgl32.Vec3) {
+	lMin := mgl32.Vec3{float32(math.MaxFloat32), float32(math.MaxFloat32), float32(math.MaxFloat32)}
+	lMax := mgl32.Vec3{-float32(math.MaxFloat32), -float32(math.MaxFloat32), -float32(math.MaxFloat32)}
+
+	for mask := 0; mask < 8; mask++ {
+		corner := mgl32.Vec3{
+			overlapMin.X(),
+			overlapMin.Y(),
+			overlapMin.Z(),
+		}
+		if mask&1 != 0 {
+			corner[0] = overlapMax.X()
+		}
+		if mask&2 != 0 {
+			corner[1] = overlapMax.Y()
+		}
+		if mask&4 != 0 {
+			corner[2] = overlapMax.Z()
+		}
+
+		local := invRot.Rotate(corner.Sub(bodyPos)).Add(center).Mul(invVoxelSize)
+		for axis := 0; axis < 3; axis++ {
+			lMin[axis] = minf(lMin[axis], local[axis])
+			lMax[axis] = maxf(lMax[axis], local[axis])
+		}
+	}
+
+	return lMin, lMax
 }
 
 func transformedCubeHalfExtentsInLocal(targetInvRot mgl32.Quat, sourceRot mgl32.Quat, halfSize float32) mgl32.Vec3 {

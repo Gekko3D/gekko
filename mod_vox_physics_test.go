@@ -1,13 +1,13 @@
 package gekko
 
 import (
-	"testing"
 	"reflect"
+	"testing"
 
-	"github.com/go-gl/mathgl/mgl32"
-	"github.com/gekko3d/gekko/voxelrt/rt/volume"
-	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	rootassets "github.com/gekko3d/gekko/assets"
+	"github.com/gekko3d/gekko/voxelrt/rt/core"
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
@@ -26,7 +26,11 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
-	cache := &VoxelGridCache{Snapshots: make(map[EntityId]*voxelGridSnapshot), AssetGrids: make(map[AssetId]*voxelGridSnapshot)}
+	cache := &VoxelGridCache{
+		Snapshots:   make(map[EntityId]*voxelGridSnapshot),
+		AssetGrids:  make(map[AssetId]*voxelGridAssetCache),
+		BuildStamps: make(map[EntityId]voxelPhysicsBuildStamp),
+	}
 
 	aid := rootassets.NewID()
 
@@ -43,7 +47,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	// Create two voxels in different bricks (within one sector)
 	xbm.SetVoxel(0, 0, 0, 1) // Brick (0,0,0)
 	xbm.SetVoxel(8, 0, 0, 1) // Brick (1,0,0)
-	xbm.ClearDirty() // Clear initial dirty state
+	xbm.ClearDirty()         // Clear initial dirty state
 
 	obj := core.NewVoxelObject()
 	obj.XBrickMap = xbm

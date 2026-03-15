@@ -1,10 +1,12 @@
 package gekko
 
 import (
+	"reflect"
 	"runtime"
 	"sync"
 	"time"
 
+	rootphysics "github.com/gekko3d/gekko/physics"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -49,36 +51,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					body = &internalBody{Eid: es.Eid}
 					internalBodies[es.Eid] = body
 				}
-				if es.Teleport || !ok {
-					body.pos = es.Pos
-					body.rot = es.Rot
-				}
-				body.vel = es.Vel
-				body.angVel = es.AngVel
-				body.isStatic = es.IsStatic
-				massChanged := body.mass != es.Mass
-				modelChanged := !sameCollisionBoxes(body.boxes, es.Model.Boxes)
-				body.mass = es.Mass
-				body.model = es.Model
-				body.friction = es.Friction
-				body.restitution = es.Restitution
-				body.gravityScale = es.GravityScale
-				body.sleeping = es.Sleeping
-				body.linearDamping = es.LinearDamping
-				body.angularDamping = es.AngularDamping
-				if modelChanged {
-					if cap(body.boxes) < len(es.Model.Boxes) {
-						body.boxes = make([]InternalBox, len(es.Model.Boxes))
-					} else {
-						body.boxes = body.boxes[:len(es.Model.Boxes)]
-					}
-					for i, box := range es.Model.Boxes {
-						body.boxes[i].Box = box
-					}
-				}
-				if massChanged || modelChanged {
-					body.invInertiaLocal = calculateInverseInertiaLocal(body)
-				}
+				syncInternalBody(body, es, !ok)
 			}
 			// Cleanup dead entities
 			snapMap := make(map[EntityId]bool)
@@ -488,6 +461,44 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 	}
 }
 
+func syncInternalBody(body *internalBody, es PhysicsEntityState, isNew bool) {
+	if es.Teleport || isNew {
+		body.pos = es.Pos
+		body.rot = es.Rot
+	}
+
+	body.vel = es.Vel
+	body.angVel = es.AngVel
+	body.isStatic = es.IsStatic
+
+	massChanged := body.mass != es.Mass
+	modelChanged := physicsModelChanged(body, es.Model)
+
+	body.mass = es.Mass
+	body.model = es.Model
+	body.friction = es.Friction
+	body.restitution = es.Restitution
+	body.gravityScale = es.GravityScale
+	body.sleeping = es.Sleeping
+	body.linearDamping = es.LinearDamping
+	body.angularDamping = es.AngularDamping
+
+	if modelChanged {
+		if cap(body.boxes) < len(es.Model.Boxes) {
+			body.boxes = make([]InternalBox, len(es.Model.Boxes))
+		} else {
+			body.boxes = body.boxes[:len(es.Model.Boxes)]
+		}
+		for i, box := range es.Model.Boxes {
+			body.boxes[i].Box = box
+		}
+	}
+
+	if massChanged || modelChanged {
+		body.invInertiaLocal = calculateInverseInertiaLocal(body)
+	}
+}
+
 func orderedCollisionPair(a, b EntityId) collisionPair {
 	if a <= b {
 		return collisionPair{A: a, B: b}
@@ -605,6 +616,30 @@ func sameCollisionBoxes(boxes []InternalBox, modelBoxes []CollisionBox) bool {
 		}
 	}
 	return true
+}
+
+func sameVoxelGrid(a, b rootphysics.VoxelGrid) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	ta := reflect.TypeOf(a)
+	tb := reflect.TypeOf(b)
+	if ta != tb || !ta.Comparable() {
+		return false
+	}
+
+	return reflect.ValueOf(a).Interface() == reflect.ValueOf(b).Interface()
+}
+
+func physicsModelChanged(body *internalBody, model PhysicsModel) bool {
+	if body == nil {
+		return true
+	}
+
+	return body.model.CenterOffset != model.CenterOffset ||
+		!sameCollisionBoxes(body.boxes, model.Boxes) ||
+		!sameVoxelGrid(body.model.Grid, model.Grid)
 }
 
 func inverseMass(b *internalBody) float32 {
