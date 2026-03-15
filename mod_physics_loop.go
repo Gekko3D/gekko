@@ -49,7 +49,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					body = &internalBody{Eid: es.Eid}
 					internalBodies[es.Eid] = body
 				}
-				if es.Teleport {
+				if es.Teleport || !ok {
 					body.pos = es.Pos
 					body.rot = es.Rot
 				}
@@ -214,16 +214,35 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						}
 
 						// Narrow-phase
-						for _, boxA := range b.boxes {
-							for _, boxB := range other.boxes {
-								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
+						voxelHandled := false
+						if b.model.Grid != nil || other.model.Grid != nil {
+							contacts, wasHandled := checkVoxelCollision(b, other, world.PointInOBBEpsilon)
+							if wasHandled {
+								voxelHandled = true
+								for _, contact := range contacts {
 									localManifolds = append(localManifolds, collisionManifold{
 										bodyA:       b,
 										bodyB:       other,
-										normal:      normal,
-										penetration: penetration,
-										point:       contactPoint,
+										normal:      contact.normal,
+										penetration: contact.penetration,
+										point:       contact.point,
 									})
+								}
+							}
+						}
+
+						if !voxelHandled {
+							for _, boxA := range b.boxes {
+								for _, boxB := range other.boxes {
+									if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
+										localManifolds = append(localManifolds, collisionManifold{
+											bodyA:       b,
+											bodyB:       other,
+											normal:      normal,
+											penetration: penetration,
+											point:       contactPoint,
+										})
+									}
 								}
 							}
 						}
@@ -622,7 +641,77 @@ func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
 }
 
 func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
-	if len(b.boxes) == 0 || b.mass <= 0 {
+	if b.mass <= 0 {
+		return mgl32.Ident3()
+	}
+
+	if b.model.Grid != nil {
+		grid := b.model.Grid
+		vSize := grid.VoxelSize()
+		minV := grid.GetAABBMin()
+		maxV := grid.GetAABBMax()
+
+		// Determine visual scale applied to the model
+		scale := float32(1.0)
+		if len(b.model.Boxes) > 0 {
+			dx := maxV.X() - minV.X()
+			if dx > 0 {
+				scale = (b.model.Boxes[0].HalfExtents.X() * 2.0) / (dx * vSize)
+			}
+		}
+		vScale := vSize * scale
+
+		// First pass: count voxels
+		var count int
+		for vz := int(minV.Z()); vz < int(maxV.Z()); vz++ {
+			for vy := int(minV.Y()); vy < int(maxV.Y()); vy++ {
+				for vx := int(minV.X()); vx < int(maxV.X()); vx++ {
+					if found, _ := grid.GetVoxel(vx, vy, vz); found {
+						count++
+					}
+				}
+			}
+		}
+
+		if count == 0 {
+			return mgl32.Ident3()
+		}
+
+		m := b.mass / float32(count)
+		com := b.model.CenterOffset
+
+		// Single pass: compute inertia tensor directly without storing positions
+		var ixx, iyy, izz, ixy, ixz, iyz float32
+		for vz := int(minV.Z()); vz < int(maxV.Z()); vz++ {
+			for vy := int(minV.Y()); vy < int(maxV.Y()); vy++ {
+				for vx := int(minV.X()); vx < int(maxV.X()); vx++ {
+					if found, _ := grid.GetVoxel(vx, vy, vz); found {
+						pos := mgl32.Vec3{float32(vx) + 0.5, float32(vy) + 0.5, float32(vz) + 0.5}.Mul(vScale)
+						d := pos.Sub(com)
+						ixx += m * (d.Y()*d.Y() + d.Z()*d.Z())
+						iyy += m * (d.X()*d.X() + d.Z()*d.Z())
+						izz += m * (d.X()*d.X() + d.Y()*d.Y())
+						ixy -= m * d.X() * d.Y()
+						ixz -= m * d.X() * d.Z()
+						iyz -= m * d.Y() * d.Z()
+					}
+				}
+			}
+		}
+
+		res := mgl32.Mat3FromRows(
+			mgl32.Vec3{ixx, ixy, ixz},
+			mgl32.Vec3{ixy, iyy, iyz},
+			mgl32.Vec3{ixz, iyz, izz},
+		)
+
+		if absf(res.Det()) < 1e-7 {
+			return mgl32.Ident3()
+		}
+		return res
+	}
+
+	if len(b.boxes) == 0 {
 		return mgl32.Ident3()
 	}
 

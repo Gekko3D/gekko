@@ -26,6 +26,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
+	cache := &VoxelGridCache{Snapshots: make(map[EntityId]*voxelGridSnapshot), AssetGrids: make(map[AssetId]*voxelGridSnapshot)}
 
 	aid := rootassets.NewID()
 
@@ -49,7 +50,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	rtState.instanceMap[eid] = obj
 
 	// 3. Run the system for the first time (Initial build)
-	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
 	app.FlushCommands()
 
 	// Verify PhysicsModel was added
@@ -66,8 +67,11 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	if !found {
 		t.Fatal("PhysicsModel not created on first run")
 	}
-	if len(pm.Boxes) != 2 {
-		t.Errorf("Expected 2 boxes for two-brick object, got %d", len(pm.Boxes))
+	if len(pm.Boxes) != 1 {
+		t.Errorf("Expected 1 box (AABB) for two-brick object, got %d", len(pm.Boxes))
+	}
+	if pm.Grid == nil {
+		t.Error("Grid should be populated in PhysicsModel")
 	}
 
 	// 4. Edit the XBrickMap (Carve one brick completely)
@@ -78,7 +82,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	}
 
 	// 5. Run the system again (Should rebuild)
-	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
 	app.FlushCommands()
 
 	// Verify PhysicsModel was updated
@@ -102,7 +106,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 
 	// 6. Remove the LAST brick completely
 	xbm.SetVoxel(0, 0, 0, 0)
-	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
 	app.FlushCommands()
 
 	// Verify PhysicsModel was updated
@@ -124,7 +128,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	xbm.SetVoxel(1, 0, 0, 1)
 	xbm.SetVoxel(2, 0, 0, 1)
 	// Rebuild to get clean state
-	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
 	app.FlushCommands()
 
 	comps = cmd.GetAllComponents(eid)
@@ -149,7 +153,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 		t.Error("XBrickMap should have DirtyBricks non-empty")
 	}
 
-	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
 	app.FlushCommands()
 
 	comps = cmd.GetAllComponents(eid)
@@ -158,7 +162,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 			pm2 = p
 		}
 	}
-	if len(pm2.Boxes) != 2 {
-		t.Errorf("Expected 2 boxes after removing middle voxel, got %d", len(pm2.Boxes))
+	if len(pm2.Boxes) != 1 {
+		t.Errorf("Expected 1 box (AABB) after removing middle voxel, got %d", len(pm2.Boxes))
 	}
 }

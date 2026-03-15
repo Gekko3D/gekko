@@ -9,6 +9,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+
 func TestDestructionSystem_Split(t *testing.T) {
 	app := NewApp()
 	app.UseModules(DestructionModule{})
@@ -398,3 +399,141 @@ func TestDestruction_TotalAnnihilation(t *testing.T) {
 		t.Error("Entity with 0 voxels was not removed from ECS")
 	}
 }
+
+func TestDestructionSystem_MomentumInheritance(t *testing.T) {
+	app := NewApp()
+	app.UseModules(DestructionModule{})
+	cmd := app.Commands()
+
+	state := &VoxelRtState{
+		loadedModels:   make(map[AssetId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
+		RtApp: &app_rt.App{
+			Scene:    core.NewScene(),
+			Profiler: app_rt.NewProfiler(),
+			Camera:   &core.CameraState{},
+		},
+	}
+
+	xbm := volume.NewXBrickMap()
+	// Island 1 (8 voxels) at (0,0,0) - stays at origin
+	for x := 0; x < 2; x++ {
+		for y := 0; y < 2; y++ {
+			for z := 0; z < 2; z++ {
+				xbm.SetVoxel(x, y, z, 1)
+			}
+		}
+	}
+	// Island 2 (8 voxels) at (10,0,0) - centered at (10.5, 0.5, 0.5)
+	// After centering, shard origin will be (10.5, 0.5, 0.5) world offset
+	for x := 10; x < 12; x++ {
+		for y := 0; y < 2; y++ {
+			for z := 0; z < 2; z++ {
+				xbm.SetVoxel(x, y, z, 2)
+			}
+		}
+	}
+
+	parentPos := mgl32.Vec3{100, 100, 100}
+	parentVel := mgl32.Vec3{10, 0, 0}
+	parentAngVel := mgl32.Vec3{0, 10, 0} // Rotation around Y axis
+
+	entity := cmd.AddEntity(
+		&TransformComponent{
+			Position: parentPos,
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			VoxelPalette: AssetId{},
+		},
+		&RigidBodyComponent{
+			Velocity:        parentVel,
+			AngularVelocity: parentAngVel,
+			Mass:            10.0,
+		},
+	)
+	app.FlushCommands()
+
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = xbm
+	obj.Transform.Position = parentPos
+	obj.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	obj.Transform.Rotation = mgl32.QuatIdent()
+	state.instanceMap[entity] = obj
+
+	queue := &DestructionQueue{
+		Events: []DestructionEvent{
+			{
+				Entity: entity,
+				Center: parentPos.Add(mgl32.Vec3{0.5, 0, 0}), // Triggers split (point between islands)
+				Radius: 0.05, // Small radius to avoid carving the islands themselves
+			},
+
+		},
+	}
+
+
+	// Run system
+	server := &AssetServer{
+		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
+	}
+	server.voxPalettes[AssetId{}] = VoxelPaletteAsset{}
+
+	destructionSystem(state, queue, cmd, server)
+	app.FlushCommands()
+
+	// Island 2 should be a new entity with inherited momentum
+	foundDebris := false
+	for eid := range app.ecs.storage.entityIndex {
+		comps := cmd.GetAllComponents(eid)
+		var rb *RigidBodyComponent
+		for _, c := range comps {
+			if v, ok := c.(*RigidBodyComponent); ok {
+				rb = v
+			} else if v, ok := c.(RigidBodyComponent); ok {
+				rb = &v
+			}
+		}
+
+		if eid == entity {
+			// Check parent mass update
+			if rb != nil {
+				expectedMass := float32(8) * 0.1
+				if rb.Mass != expectedMass {
+					t.Errorf("Parent mass should be %v, got %v", expectedMass, rb.Mass)
+				}
+			}
+			continue
+		}
+
+		if rb != nil {
+			foundDebris = true
+			// V_shard = V_parent + Omega_parent x worldOffset
+			
+			// Island 2 voxels are [10,11]x[0,1]x[0,1]. Local center is (11, 1, 1).
+			// Scale is 1.0, VoxelSize is 0.1.
+			// worldOffset = rotation * (localCenter * vSize * scale)
+			localCenter := mgl32.Vec3{11, 1, 1}
+			worldOffset := mgl32.QuatIdent().Rotate(localCenter.Mul(0.1))
+			expectedVel := parentVel.Add(parentAngVel.Cross(worldOffset))
+
+
+			if rb.Velocity.Sub(expectedVel).Len() > 0.01 {
+				t.Errorf("Debris velocity should be approx %v, got %v", expectedVel, rb.Velocity)
+			}
+			if rb.AngularVelocity.Sub(parentAngVel).Len() > 0.01 {
+				t.Errorf("Debris angular velocity should be %v, got %v", parentAngVel, rb.AngularVelocity)
+			}
+		}
+	}
+
+	if !foundDebris {
+		t.Errorf("No debris found with RigidBodyComponent")
+	}
+}
+
+
