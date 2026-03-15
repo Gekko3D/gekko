@@ -93,3 +93,51 @@ func TestSyncInternalBodyRecalculatesInertiaWhenVoxelGridChanges(t *testing.T) {
 		t.Fatalf("expected syncInternalBody to recalculate inertia after voxel edit, max diff from sentinel was %.6f", diff)
 	}
 }
+
+func TestWakeBodyForContact_DoesNotResetAwakeRestingBody(t *testing.T) {
+	body := &internalBody{
+		sleeping: false,
+		idleTime: 0.75,
+	}
+
+	wakeBodyForContact(body, false, true)
+
+	if body.sleeping {
+		t.Fatal("expected awake resting body to stay awake")
+	}
+	if body.idleTime != 0.75 {
+		t.Fatalf("expected resting contact not to reset idle time, got %.2f", body.idleTime)
+	}
+}
+
+func TestWakeBodyForContact_WakesSleepingBodyOnDeepPenetration(t *testing.T) {
+	body := &internalBody{
+		sleeping: true,
+		idleTime: 0.75,
+	}
+
+	wakeBodyForContact(body, false, true)
+
+	if body.sleeping {
+		t.Fatal("expected deep penetration to wake a sleeping body")
+	}
+	if body.idleTime != 0 {
+		t.Fatalf("expected wake to reset idle time, got %.2f", body.idleTime)
+	}
+}
+
+func TestWakeBodyForContact_ResetsIdleTimeOnHighImpact(t *testing.T) {
+	body := &internalBody{
+		sleeping: false,
+		idleTime: 0.75,
+	}
+
+	wakeBodyForContact(body, true, false)
+
+	if body.sleeping {
+		t.Fatal("expected high-impact wake on an awake body to keep it awake")
+	}
+	if body.idleTime != 0 {
+		t.Fatalf("expected high-impact wake to reset idle time, got %.2f", body.idleTime)
+	}
+}

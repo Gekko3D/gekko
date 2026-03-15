@@ -327,14 +327,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				}
 
 				impactWakeThreshold := world.WakeThreshold
-				if absf(velAlongNormal) > impactWakeThreshold || m.penetration > world.CollisionSlop {
-					if !b.isStatic {
-						b.Wake()
-					}
-					if !other.isStatic {
-						other.Wake()
-					}
-				}
+				highImpact := absf(velAlongNormal) > impactWakeThreshold
+				deepPenetration := m.penetration > world.CollisionSlop
+				wakeBodyForContact(b, highImpact, deepPenetration)
+				wakeBodyForContact(other, highImpact, deepPenetration)
 
 				friction := (b.friction + other.friction) * 0.5
 				tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
@@ -522,6 +518,19 @@ func mergeCollisionEvent(current, candidate PhysicsCollisionEvent) PhysicsCollis
 		current.Tick = candidate.Tick
 	}
 	return current
+}
+
+func wakeBodyForContact(body *internalBody, highImpact bool, deepPenetration bool) {
+	if body == nil || body.isStatic {
+		return
+	}
+
+	// Resting contacts can sit slightly above slop for several ticks while the
+	// position solver settles. Only reset awake bodies on real impacts; otherwise
+	// they never accumulate enough idle time to go to sleep and appear to jitter.
+	if highImpact || (body.sleeping && deepPenetration) {
+		body.Wake()
+	}
 }
 
 func (b *internalBody) Wake() {
