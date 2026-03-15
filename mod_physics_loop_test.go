@@ -142,3 +142,144 @@ func TestWakeBodyForContact_ResetsIdleTimeOnHighImpact(t *testing.T) {
 		t.Fatalf("expected high-impact wake to reset idle time, got %.2f", body.idleTime)
 	}
 }
+
+func TestSeedManifoldImpulsesRestoresNearestCachedImpulse(t *testing.T) {
+	manifolds := []collisionManifold{
+		{
+			bodyA:  &internalBody{Eid: 1},
+			bodyB:  &internalBody{Eid: 2},
+			point:  mgl32.Vec3{1.00, 2.00, 3.00},
+			normal: mgl32.Vec3{0, 1, 0},
+		},
+		{
+			bodyA:  &internalBody{Eid: 1},
+			bodyB:  &internalBody{Eid: 2},
+			point:  mgl32.Vec3{1.22, 2.00, 3.00},
+			normal: mgl32.Vec3{0, 1, 0},
+		},
+	}
+
+	pair := orderedCollisionPair(1, 2)
+	cache := map[collisionPair][]cachedContactImpulse{
+		pair: {
+			{
+				point:         mgl32.Vec3{1.01, 2.00, 3.00},
+				localPointA:   mgl32.Vec3{1.01, 2.00, 3.00},
+				localPointB:   mgl32.Vec3{1.01, 2.00, 3.00},
+				normal:        mgl32.Vec3{0, 1, 0},
+				normalImpulse: 1.75,
+			},
+			{
+				point:         mgl32.Vec3{1.20, 2.00, 3.00},
+				localPointA:   mgl32.Vec3{1.20, 2.00, 3.00},
+				localPointB:   mgl32.Vec3{1.20, 2.00, 3.00},
+				normal:        mgl32.Vec3{0, 1, 0},
+				normalImpulse: 0.75,
+			},
+			{
+				point:         mgl32.Vec3{1.00, 2.00, 3.00},
+				localPointA:   mgl32.Vec3{1.00, 2.00, 3.00},
+				localPointB:   mgl32.Vec3{1.00, 2.00, 3.00},
+				normal:        mgl32.Vec3{0, -1, 0},
+				normalImpulse: 5.00,
+			},
+		},
+	}
+
+	seedManifoldImpulses(manifolds, cache, 0.08, 0.75)
+
+	if manifolds[0].accumulatedNormalImpulse != 1.75 {
+		t.Fatalf("expected first cached normal impulse 1.75, got %.2f", manifolds[0].accumulatedNormalImpulse)
+	}
+	if manifolds[1].accumulatedNormalImpulse != 0.75 {
+		t.Fatalf("expected second cached normal impulse 0.75, got %.2f", manifolds[1].accumulatedNormalImpulse)
+	}
+	if manifolds[0].accumulatedTangentImpulse != (mgl32.Vec3{}) || manifolds[1].accumulatedTangentImpulse != (mgl32.Vec3{}) {
+		t.Fatalf("expected cached tangent impulse to remain zero across frames, got %v and %v", manifolds[0].accumulatedTangentImpulse, manifolds[1].accumulatedTangentImpulse)
+	}
+}
+
+func TestWarmStartManifoldAppliesCachedImpulse(t *testing.T) {
+	bodyA := &internalBody{
+		Eid:             1,
+		mass:            2,
+		invInertiaLocal: mgl32.Ident3(),
+	}
+	bodyB := &internalBody{
+		Eid:      2,
+		isStatic: true,
+	}
+	manifold := collisionManifold{
+		bodyA:                    bodyA,
+		bodyB:                    bodyB,
+		point:                    mgl32.Vec3{0, 0, 0},
+		normal:                   mgl32.Vec3{0, 1, 0},
+		accumulatedNormalImpulse: 4,
+	}
+
+	warmStartManifold(&manifold)
+
+	wantVel := mgl32.Vec3{0, 2, 0}
+	if bodyA.vel != wantVel {
+		t.Fatalf("expected warm-started velocity %v, got %v", wantVel, bodyA.vel)
+	}
+	if bodyB.vel != (mgl32.Vec3{}) {
+		t.Fatalf("expected static body velocity to stay zero, got %v", bodyB.vel)
+	}
+}
+
+func TestStoreCachedManifoldImpulseKeepsLargestImpulsePerContactCluster(t *testing.T) {
+	cache := make(map[collisionPair][]cachedContactImpulse)
+
+	storeCachedManifoldImpulse(cache, &collisionManifold{
+		bodyA:                    &internalBody{Eid: 1},
+		bodyB:                    &internalBody{Eid: 2},
+		point:                    mgl32.Vec3{1.00, 2.00, 3.00},
+		normal:                   mgl32.Vec3{0, 1, 0},
+		accumulatedNormalImpulse: 1.5,
+	}, 0.05, 0.75)
+	storeCachedManifoldImpulse(cache, &collisionManifold{
+		bodyA:                    &internalBody{Eid: 1},
+		bodyB:                    &internalBody{Eid: 2},
+		point:                    mgl32.Vec3{1.02, 2.00, 3.00},
+		normal:                   mgl32.Vec3{0, 1, 0},
+		accumulatedNormalImpulse: 0.5,
+	}, 0.05, 0.75)
+	storeCachedManifoldImpulse(cache, &collisionManifold{
+		bodyA:                    &internalBody{Eid: 1},
+		bodyB:                    &internalBody{Eid: 2},
+		point:                    mgl32.Vec3{1.20, 2.00, 3.00},
+		normal:                   mgl32.Vec3{0, 1, 0},
+		accumulatedNormalImpulse: 0.75,
+	}, 0.05, 0.75)
+
+	pair := orderedCollisionPair(1, 2)
+	cached := cache[pair]
+	if len(cached) != 2 {
+		t.Fatalf("expected two cached contact clusters, got %d", len(cached))
+	}
+
+	var foundMerged bool
+	var foundSeparate bool
+	for _, impulse := range cached {
+		switch {
+		case impulse.point.Sub(mgl32.Vec3{1.02, 2.00, 3.00}).Len() < 1e-4:
+			foundMerged = true
+			if impulse.normalImpulse != 1.5 {
+				t.Fatalf("expected strongest merged normal impulse 1.5, got %.2f", impulse.normalImpulse)
+			}
+		case impulse.point.Sub(mgl32.Vec3{1.20, 2.00, 3.00}).Len() < 1e-4:
+			foundSeparate = true
+			if impulse.normalImpulse != 0.75 {
+				t.Fatalf("expected separate normal impulse 0.75, got %.2f", impulse.normalImpulse)
+			}
+		}
+	}
+
+	if !foundMerged {
+		t.Fatal("expected merged cached contact cluster to keep the latest nearby contact point")
+	}
+	if !foundSeparate {
+		t.Fatal("expected distant contact to remain cached separately")
+	}
+}
