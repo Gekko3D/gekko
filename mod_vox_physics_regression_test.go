@@ -103,11 +103,11 @@ func TestVoxPhysicsPreCalcSystem_AssetGridUsesPerEntityScale(t *testing.T) {
 		t.Fatal("expected both asset-backed entities to receive voxel grids")
 	}
 
-	if got, want := modelA.Grid.VoxelSize(), VoxelSize; got != want {
-		t.Fatalf("expected first entity voxel size %.3f, got %.3f", want, got)
+	if got, want := modelA.Grid.VoxelScale(), (mgl32.Vec3{VoxelSize, VoxelSize, VoxelSize}); got != want {
+		t.Fatalf("expected first entity voxel scale %v, got %v", want, got)
 	}
-	if got, want := modelB.Grid.VoxelSize(), VoxelSize*2; got != want {
-		t.Fatalf("expected second entity voxel size %.3f, got %.3f", want, got)
+	if got, want := modelB.Grid.VoxelScale(), (mgl32.Vec3{VoxelSize * 2, VoxelSize * 2, VoxelSize * 2}); got != want {
+		t.Fatalf("expected second entity voxel scale %v, got %v", want, got)
 	}
 	if len(cache.AssetGrids) != 1 {
 		t.Fatalf("expected one shared asset-geometry cache entry, got %d", len(cache.AssetGrids))
@@ -158,8 +158,8 @@ func TestVoxPhysicsPreCalcSystem_RebuildsWhenScaleChanges(t *testing.T) {
 	if rebuilt.Grid == nil {
 		t.Fatal("expected rebuilt PhysicsModel to keep voxel grid")
 	}
-	if rebuilt.Grid.VoxelSize() != VoxelSize*2 {
-		t.Fatalf("expected rebuilt voxel size %.3f, got %.3f", VoxelSize*2, rebuilt.Grid.VoxelSize())
+	if rebuilt.Grid.VoxelScale() != (mgl32.Vec3{VoxelSize * 2, VoxelSize * 2, VoxelSize * 2}) {
+		t.Fatalf("expected rebuilt voxel scale %v, got %v", mgl32.Vec3{VoxelSize * 2, VoxelSize * 2, VoxelSize * 2}, rebuilt.Grid.VoxelScale())
 	}
 	if rebuilt.CenterOffset != initial.CenterOffset.Mul(2) {
 		t.Fatalf("expected center offset to rescale from %v to %v, got %v", initial.CenterOffset, initial.CenterOffset.Mul(2), rebuilt.CenterOffset)
@@ -239,5 +239,61 @@ func TestVoxPhysicsPreCalcSystem_RebuildsWhenAssetChanges(t *testing.T) {
 	}
 	if rebuilt.Grid == initial.Grid {
 		t.Fatal("expected asset change to rebuild the voxel grid snapshot")
+	}
+}
+
+func TestVoxPhysicsPreCalcSystem_TracksNonUniformScalePerAxis(t *testing.T) {
+	cmd, server, cache := newVoxelPhysicsPrecalcTestHarness()
+
+	assetID := rootassets.NewID()
+	server.voxModels[assetID] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: 2,
+			SizeY: 3,
+			SizeZ: 4,
+			Voxels: []Voxel{{
+				X:          1,
+				Y:          2,
+				Z:          3,
+				ColorIndex: 1,
+			}},
+		},
+	}
+
+	scale := mgl32.Vec3{2, 3, 4}
+	eid := cmd.AddEntity(
+		VoxelModelComponent{VoxelModel: assetID},
+		RigidBodyComponent{Mass: 1},
+		TransformComponent{Scale: scale},
+	)
+	cmd.app.FlushCommands()
+
+	VoxPhysicsPreCalcSystem(cmd, server, nil, cache)
+	cmd.app.FlushCommands()
+	model := mustPhysicsModel(t, cmd, eid)
+
+	wantVoxelScale := mgl32.Vec3{VoxelSize * scale.X(), VoxelSize * scale.Y(), VoxelSize * scale.Z()}
+	if model.Grid == nil {
+		t.Fatal("expected non-uniformly scaled asset to have a voxel grid")
+	}
+	if model.Grid.VoxelScale() != wantVoxelScale {
+		t.Fatalf("expected voxel scale %v, got %v", wantVoxelScale, model.Grid.VoxelScale())
+	}
+
+	wantCenter := mgl32.Vec3{
+		float32(2) * wantVoxelScale.X() * 0.5,
+		float32(3) * wantVoxelScale.Y() * 0.5,
+		float32(4) * wantVoxelScale.Z() * 0.5,
+	}
+	if model.CenterOffset != wantCenter {
+		t.Fatalf("expected center offset %v, got %v", wantCenter, model.CenterOffset)
+	}
+
+	wantHalfExtents := wantCenter
+	if len(model.Boxes) != 1 {
+		t.Fatalf("expected one collision box, got %d", len(model.Boxes))
+	}
+	if model.Boxes[0].HalfExtents != wantHalfExtents {
+		t.Fatalf("expected half extents %v, got %v", wantHalfExtents, model.Boxes[0].HalfExtents)
 	}
 }

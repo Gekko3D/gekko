@@ -8,8 +8,9 @@ import (
 )
 
 type testSolidGrid struct {
-	size  [3]int
-	vSize float32
+	size   [3]int
+	vSize  float32
+	vScale mgl32.Vec3
 }
 
 func (g testSolidGrid) GetVoxel(gx, gy, gz int) (bool, uint8) {
@@ -31,7 +32,17 @@ func (g testSolidGrid) GetAABBMax() mgl32.Vec3 {
 }
 
 func (g testSolidGrid) VoxelSize() float32 {
+	if g.vScale != (mgl32.Vec3{}) {
+		return g.vScale.X()
+	}
 	return g.vSize
+}
+
+func (g testSolidGrid) VoxelScale() mgl32.Vec3 {
+	if g.vScale != (mgl32.Vec3{}) {
+		return g.vScale
+	}
+	return mgl32.Vec3{g.vSize, g.vSize, g.vSize}
 }
 
 func waitForPhysicsTick(t *testing.T, proxy *PhysicsProxy, minTick uint64, timeout time.Duration) *PhysicsResults {

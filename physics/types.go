@@ -64,6 +64,7 @@ type VoxelGrid interface {
 	GetAABBMin() mgl32.Vec3
 	GetAABBMax() mgl32.Vec3
 	VoxelSize() float32
+	VoxelScale() mgl32.Vec3
 }
 
 // PhysicsModel is a generic component that describes the object's physics model.

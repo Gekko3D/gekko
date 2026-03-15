@@ -21,10 +21,11 @@ func (m VoxPhysicsModule) Install(app *App, cmd *Commands) {
 }
 
 type voxelGridSnapshot struct {
-	xbm       *volume.XBrickMap
-	vSize     float32
-	cachedMin mgl32.Vec3
-	cachedMax mgl32.Vec3
+	xbm        *volume.XBrickMap
+	vSize      float32
+	voxelScale mgl32.Vec3
+	cachedMin  mgl32.Vec3
+	cachedMax  mgl32.Vec3
 }
 
 type voxelGridAssetCache struct {
@@ -33,16 +34,17 @@ type voxelGridAssetCache struct {
 	cachedMax mgl32.Vec3
 }
 
-func (v *voxelGridAssetCache) Snapshot(vSize float32) *voxelGridSnapshot {
+func (v *voxelGridAssetCache) Snapshot(voxelScale mgl32.Vec3) *voxelGridSnapshot {
 	if v == nil {
 		return nil
 	}
 
 	return &voxelGridSnapshot{
-		xbm:       v.xbm,
-		vSize:     vSize,
-		cachedMin: v.cachedMin,
-		cachedMax: v.cachedMax,
+		xbm:        v.xbm,
+		vSize:      voxelScale.X(),
+		voxelScale: voxelScale,
+		cachedMin:  v.cachedMin,
+		cachedMax:  v.cachedMax,
 	}
 }
 
@@ -59,7 +61,17 @@ func (v *voxelGridSnapshot) GetAABBMax() mgl32.Vec3 {
 }
 
 func (v *voxelGridSnapshot) VoxelSize() float32 {
+	if v.voxelScale != (mgl32.Vec3{}) {
+		return v.voxelScale.X()
+	}
 	return v.vSize
+}
+
+func (v *voxelGridSnapshot) VoxelScale() mgl32.Vec3 {
+	if v.voxelScale != (mgl32.Vec3{}) {
+		return v.voxelScale
+	}
+	return mgl32.Vec3{v.vSize, v.vSize, v.vSize}
 }
 
 type VoxelGridCache struct {
@@ -101,6 +113,14 @@ func currentVoxelPhysicsBuildStamp(vmc *VoxelModelComponent, tr *TransformCompon
 	}
 
 	return stamp
+}
+
+func scaledVoxelScale(tr *TransformComponent) mgl32.Vec3 {
+	return mgl32.Vec3{
+		VoxelSize * tr.Scale.X(),
+		VoxelSize * tr.Scale.Y(),
+		VoxelSize * tr.Scale.Z(),
+	}
 }
 
 // Deprecated: DecomposeVoxModel uses greedy meshing to produce multiple boxes.
@@ -413,15 +433,15 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 		var box *CollisionBox
 		var center mgl32.Vec3
 		var grid *voxelGridSnapshot
+		voxelScale := scaledVoxelScale(tr)
 
 		if xbm != nil {
 			vMin, vMax := xbm.ComputeAABB()
 			xbm.ClearDirty()
 
 			if vMin != vMax {
-				vSize := VoxelSize * tr.Scale.X()
-				minW := vMin.Mul(vSize)
-				maxW := vMax.Mul(vSize)
+				minW := vec3MulComponents(vMin, voxelScale)
+				maxW := vec3MulComponents(vMax, voxelScale)
 				center = minW.Add(maxW).Mul(0.5)
 				half := maxW.Sub(minW).Mul(0.5)
 
@@ -432,19 +452,19 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			}
 
 			grid = &voxelGridSnapshot{
-				xbm:       xbm.Copy(),
-				vSize:     VoxelSize * tr.Scale.X(),
-				cachedMin: xbm.GetAABBMin(),
-				cachedMax: xbm.GetAABBMax(),
+				xbm:        xbm.Copy(),
+				vSize:      voxelScale.X(),
+				voxelScale: voxelScale,
+				cachedMin:  xbm.GetAABBMin(),
+				cachedMax:  xbm.GetAABBMax(),
 			}
 		} else if vmc.CustomMap != nil {
 			vMin, vMax := vmc.CustomMap.ComputeAABB()
 			vmc.CustomMap.ClearDirty()
 
 			if vMin != vMax {
-				vSize := VoxelSize * tr.Scale.X()
-				minW := vMin.Mul(vSize)
-				maxW := vMax.Mul(vSize)
+				minW := vec3MulComponents(vMin, voxelScale)
+				maxW := vec3MulComponents(vMax, voxelScale)
 				center = minW.Add(maxW).Mul(0.5)
 				half := maxW.Sub(minW).Mul(0.5)
 
@@ -455,10 +475,11 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			}
 
 			grid = &voxelGridSnapshot{
-				xbm:       vmc.CustomMap.Copy(),
-				vSize:     VoxelSize * tr.Scale.X(),
-				cachedMin: vmc.CustomMap.GetAABBMin(),
-				cachedMax: vmc.CustomMap.GetAABBMax(),
+				xbm:        vmc.CustomMap.Copy(),
+				vSize:      voxelScale.X(),
+				voxelScale: voxelScale,
+				cachedMin:  vmc.CustomMap.GetAABBMin(),
+				cachedMax:  vmc.CustomMap.GetAABBMax(),
 			}
 		} else {
 			// Asset path
@@ -467,9 +488,8 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			server.mu.RUnlock()
 
 			if ok {
-				vSize := VoxelSize * tr.Scale.X()
 				minW := mgl32.Vec3{0, 0, 0}
-				maxW := mgl32.Vec3{float32(asset.VoxModel.SizeX), float32(asset.VoxModel.SizeY), float32(asset.VoxModel.SizeZ)}.Mul(vSize)
+				maxW := vec3MulComponents(mgl32.Vec3{float32(asset.VoxModel.SizeX), float32(asset.VoxModel.SizeY), float32(asset.VoxModel.SizeZ)}, voxelScale)
 				center = minW.Add(maxW).Mul(0.5)
 				half := maxW.Sub(minW).Mul(0.5)
 
@@ -494,7 +514,7 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 					}
 					cache.AssetGrids[vmc.VoxelModel] = assetGrid
 				}
-				grid = assetGrid.Snapshot(vSize)
+				grid = assetGrid.Snapshot(voxelScale)
 			}
 		}
 

@@ -691,19 +691,9 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 
 	if b.model.Grid != nil {
 		grid := b.model.Grid
-		vSize := grid.VoxelSize()
+		voxelScale := grid.VoxelScale()
 		minV := grid.GetAABBMin()
 		maxV := grid.GetAABBMax()
-
-		// Determine visual scale applied to the model
-		scale := float32(1.0)
-		if len(b.model.Boxes) > 0 {
-			dx := maxV.X() - minV.X()
-			if dx > 0 {
-				scale = (b.model.Boxes[0].HalfExtents.X() * 2.0) / (dx * vSize)
-			}
-		}
-		vScale := vSize * scale
 
 		// First pass: count voxels
 		var count int
@@ -730,7 +720,7 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 			for vy := int(minV.Y()); vy < int(maxV.Y()); vy++ {
 				for vx := int(minV.X()); vx < int(maxV.X()); vx++ {
 					if found, _ := grid.GetVoxel(vx, vy, vz); found {
-						pos := mgl32.Vec3{float32(vx) + 0.5, float32(vy) + 0.5, float32(vz) + 0.5}.Mul(vScale)
+						pos := vec3MulComponents(mgl32.Vec3{float32(vx) + 0.5, float32(vy) + 0.5, float32(vz) + 0.5}, voxelScale)
 						d := pos.Sub(com)
 						ixx += m * (d.Y()*d.Y() + d.Z()*d.Z())
 						iyy += m * (d.X()*d.X() + d.Z()*d.Z())

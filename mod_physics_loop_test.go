@@ -14,16 +14,17 @@ func makeVoxelGridSnapshot(coords [][3]int, vSize float32) *voxelGridSnapshot {
 	}
 	min, max := xbm.ComputeAABB()
 	return &voxelGridSnapshot{
-		xbm:       xbm,
-		vSize:     vSize,
-		cachedMin: min,
-		cachedMax: max,
+		xbm:        xbm,
+		vSize:      vSize,
+		voxelScale: mgl32.Vec3{vSize, vSize, vSize},
+		cachedMin:  min,
+		cachedMax:  max,
 	}
 }
 
 func makeGridState(grid *voxelGridSnapshot) PhysicsEntityState {
-	min := grid.GetAABBMin().Mul(grid.VoxelSize())
-	max := grid.GetAABBMax().Mul(grid.VoxelSize())
+	min := vec3MulComponents(grid.GetAABBMin(), grid.VoxelScale())
+	max := vec3MulComponents(grid.GetAABBMax(), grid.VoxelScale())
 	center := min.Add(max).Mul(0.5)
 	return PhysicsEntityState{
 		Eid:  42,
