@@ -192,9 +192,9 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						}
 
 						// Ensure we only check each pair once.
-						// If both are dynamic, only process if b.Eid < other.Eid.
-						// If other is static, always process (since static won't initiate checks).
-						if !other.isStatic && b.Eid > other.Eid {
+						// If both are dynamic and awake, only initiate once.
+						// If other is static or sleeping, we MUST check it now because it won't run its own initiation.
+						if !other.isStatic && !other.sleeping && b.Eid > other.Eid {
 							continue
 						}
 

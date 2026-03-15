@@ -242,7 +242,7 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 		// For rotation, check dot product (1.0 means same orientation)
 		rotDiff := 1.0 - float64(absf(tr.Rotation.Dot(rb.LastPulledRot)))
 
-		if posDiff > 0.001 || rotDiff > 0.001 {
+		if posDiff > 0.05 || rotDiff > 0.05 {
 			isTeleport = true
 		}
 
