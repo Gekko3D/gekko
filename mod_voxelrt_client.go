@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"math"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -169,19 +170,38 @@ func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {
 	return obj.XBrickMap.GetVoxelCount() == 0
 }
 
-func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
-	if s == nil || s.RtApp == nil {
+func (s *VoxelRtState) Project(pos mgl32.Vec3, camera *CameraComponent) (float32, float32, bool) {
+	if s == nil || s.RtApp == nil || camera == nil {
 		return 0, 0, false
 	}
-	// Use current camera to build projection
-	view := s.RtApp.Camera.GetViewMatrix()
-	aspect := float32(s.RtApp.Config.Width) / float32(s.RtApp.Config.Height)
+
+	// Build view matrix from camera component
+	yawRad := mgl32.DegToRad(camera.Yaw)
+	pitchRad := mgl32.DegToRad(camera.Pitch)
+	forward := mgl32.Vec3{
+		float32(math.Sin(float64(yawRad)) * math.Cos(float64(pitchRad))),
+		float32(math.Sin(float64(pitchRad))),
+		float32(-math.Cos(float64(yawRad)) * math.Cos(float64(pitchRad))),
+	}
+	eye := camera.Position
+	target := eye.Add(forward)
+	up := mgl32.Vec3{0, 1, 0}
+	view := mgl32.LookAtV(eye, target, up)
+
+	sw, sh := 1280, 720
+	if s.RtApp.Window != nil {
+		sw, sh = s.RtApp.Window.GetSize()
+	}
+	w, h := float32(sw), float32(sh)
+	aspect := w / h
 	if aspect == 0 {
 		aspect = 1.0
 	}
 
-	// Renderer uses hardcoded 60 FOV
-	fov := float32(60.0) // Matches app.go
+	fov := camera.Fov
+	if fov == 0 {
+		fov = 60.0
+	}
 	proj := mgl32.Perspective(mgl32.DegToRad(fov), aspect, 0.1, 1000.0)
 	vp := proj.Mul4(view)
 
@@ -194,8 +214,7 @@ func (s *VoxelRtState) Project(pos mgl32.Vec3) (float32, float32, bool) {
 
 	ndc := clip.Vec3().Mul(1.0 / clip.W())
 
-	// NDC to Screen (USE PIXEL DIMENSIONS)
-	w, h := float32(s.RtApp.Config.Width), float32(s.RtApp.Config.Height)
+	// NDC to Screen
 	x := (ndc.X()*0.5 + 0.5) * w
 	y := (1.0 - (ndc.Y()*0.5 + 0.5)) * h
 
@@ -217,14 +236,34 @@ func (s *VoxelRtState) ScreenToWorldRay(mouseX, mouseY float64, camera *CameraCo
 		return camera.Position, mgl32.Vec3{0, 0, -1}
 	}
 
-	// Use App's CameraState for the projection logic but copy ECS camera params
-	camState := s.RtApp.Camera
-	camState.Position = camera.Position
-	camState.Yaw = mgl32.DegToRad(camera.Yaw)
-	camState.Pitch = mgl32.DegToRad(camera.Pitch)
+	// Use a temporary camera state to avoid mutating global state prematurely
+	camState := core.CameraState{
+		Position: camera.Position,
+		Yaw:      mgl32.DegToRad(camera.Yaw),
+		Pitch:    mgl32.DegToRad(camera.Pitch),
+	}
 
-	ray := camState.ScreenToWorldRay(mouseX, mouseY, sw, sh)
-	return ray.Origin, ray.Direction
+	fov := camera.Fov
+	if fov == 0 {
+		fov = 60.0
+	}
+
+	// We need a ScreenToWorldRay that accepts FOV. 
+	// camera.go currently has hardcoded 60 FOV.
+	// For now, let's implement it here to be sure.
+	nx := (2.0*float32(mouseX))/float32(sw) - 1.0
+	ny := 1.0 - (2.0*float32(mouseY))/float32(sh)
+
+	forward := camState.GetForward()
+	right := camState.GetRight()
+	up := right.Cross(forward).Normalize()
+
+	aspect := float32(sw) / float32(sh)
+	fovRad := mgl32.DegToRad(fov)
+	tanHalfFov := float32(math.Tan(float64(fovRad / 2.0)))
+
+	dir := forward.Add(right.Mul(nx * aspect * tanHalfFov)).Add(up.Mul(ny * tanHalfFov)).Normalize()
+	return camera.Position, dir
 }
 
 func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit {

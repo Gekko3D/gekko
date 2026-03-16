@@ -73,6 +73,13 @@ func (AssetServerModule) Install(app *App, cmd *Commands) {
 	cmd.AddResources(server)
 }
 
+func (server *AssetServer) GetVoxelModel(id AssetId) (VoxelModelAsset, bool) {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	m, ok := server.voxModels[id]
+	return m, ok
+}
+
 func makeAssetId() AssetId {
 	return rootassets.NewID()
 }

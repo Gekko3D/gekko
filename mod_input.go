@@ -90,6 +90,7 @@ type Input struct {
 	MouseDeltaX, MouseDeltaY   float64
 	MouseScrollX, MouseScrollY float64
 	MouseCaptured              bool
+	GuiCaptured                bool // Set by UI system if mouse is over UI
 
 	WindowWidth, WindowHeight int
 	CharBuffer                []rune
@@ -108,6 +109,7 @@ func inputSystem(s *WindowState, input *Input) {
 	input.CharBuffer = nil // Clear buffer at start of frame
 	input.MouseScrollX = 0
 	input.MouseScrollY = 0
+	input.GuiCaptured = false
 
 	// Register character callback if not already set
 	s.windowGlfw.SetCharCallback(func(w *glfw.Window, char rune) {

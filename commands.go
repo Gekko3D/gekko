@@ -1,5 +1,7 @@
 package gekko
 
+import "reflect"
+
 type Commands struct {
 	app *App
 }
@@ -53,4 +55,8 @@ func (cmd *Commands) RemoveEntity(entityId EntityId) {
 
 func (cmd *Commands) GetAllComponents(entityId EntityId) []any {
 	return cmd.app.ecs.getAllComponents(entityId)
+}
+
+func (cmd *Commands) GetComponent(entityId EntityId, componentType reflect.Type) any {
+	return cmd.app.ecs.getComponent(entityId, componentType)
 }

@@ -475,20 +475,18 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			return true
 		}
 
-		// Construct Model Matrix from TransformComponent
-		t := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z())
-		r := tr.Rotation.Mat4()
-		s := mgl32.Scale3D(tr.Scale.X(), tr.Scale.Y(), tr.Scale.Z())
+		// Construct Model Matrix from TransformComponent using ObjectToWorld (respects pivot)
+		modelMat := tr.ObjectToWorld()
 
 		if g.Type == GizmoLine {
 			// Unit line is (0,0,0) to (0,0,1). Scale Z by Size.
-			s = s.Mul4(mgl32.Scale3D(1, 1, g.Size))
+			modelMat = modelMat.Mul4(mgl32.Scale3D(1, 1, g.Size))
 		} else if g.Size > 0 {
 			// For Sphere, Cube, Circle, Rect, Size acts as a uniform multiplier.
-			s = s.Mul4(mgl32.Scale3D(g.Size, g.Size, g.Size))
+			modelMat = modelMat.Mul4(mgl32.Scale3D(g.Size, g.Size, g.Size))
 		}
 
-		rtGizmo.ModelMatrix = t.Mul4(r).Mul4(s)
+		rtGizmo.ModelMatrix = modelMat
 
 		state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtGizmo)
 		return true

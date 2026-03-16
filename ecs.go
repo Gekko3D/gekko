@@ -358,6 +358,32 @@ func (ecs *Ecs) getAllComponents(entityId EntityId) []any {
 	return res
 }
 
+func (ecs *Ecs) getComponent(entityId EntityId, componentType reflect.Type) any {
+	archID, ok := ecs.storage.entityIndex[entityId]
+	if !ok {
+		return nil
+	}
+
+	arch, ok := ecs.storage.archetypes[archID]
+	if !ok || arch == nil {
+		return nil
+	}
+
+	r, ok := arch.entities[entityId]
+	if !ok {
+		return nil
+	}
+
+	compId := ecs.getComponentId(componentType)
+	data, ok := arch.componentData[compId]
+	if !ok {
+		return nil
+	}
+
+	val := reflectSliceGet(data, int(r))
+	return val.Addr().Interface()
+}
+
 func (ecs *Ecs) hasComponent(entityId EntityId, componentType reflect.Type) bool {
 	archID, ok := ecs.storage.entityIndex[entityId]
 	if !ok {

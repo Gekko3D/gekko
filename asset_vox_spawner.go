@@ -236,3 +236,121 @@ func (server *AssetServer) spawnVoxNode(cmd *Commands, voxFile *VoxFile, nodeId 
 		// Shape nodes are leaves in the scene graph for purposes of hierarchy (they attach to their parent nTRN)
 	}
 }
+
+type VoxModelInstance struct {
+	ModelIndex int
+	Transform  TransformComponent
+}
+
+// ExtractVoxHierarchy traverses the VOX scene graph and calculates the global transform for each shape node.
+func ExtractVoxHierarchy(voxFile *VoxFile, voxelScale float32) []VoxModelInstance {
+	instances := make([]VoxModelInstance, 0)
+	if voxFile == nil {
+		return instances
+	}
+
+	if len(voxFile.Nodes) == 0 {
+		// Fallback for flat structure
+		rot := mgl32.QuatIdent()
+		scale := mgl32.Vec3{1, 1, 1}
+		for i, m := range voxFile.Models {
+			vSize := VoxelSize
+			centerOffset := mgl32.Vec3{
+				float32(m.SizeX) * -0.5,
+				float32(m.SizeY) * -0.5,
+				float32(m.SizeZ) * -0.5,
+			}.Mul(vSize * voxelScale)
+
+			instances = append(instances, VoxModelInstance{
+				ModelIndex: i,
+				Transform: TransformComponent{
+					Position: centerOffset,
+					Rotation: rot,
+					Scale:    scale,
+				},
+			})
+		}
+		return instances
+	}
+
+	rootNodes := make([]int, 0)
+	isChild := make(map[int]bool)
+	for _, n := range voxFile.Nodes {
+		for _, childH := range n.ChildrenIDs {
+			isChild[childH] = true
+		}
+		if n.Type == VoxNodeTransform && n.ChildID != 0 {
+			isChild[n.ChildID] = true
+		}
+	}
+	for id := range voxFile.Nodes {
+		if !isChild[id] && (voxFile.Nodes[id].Type == VoxNodeTransform || voxFile.Nodes[id].Type == VoxNodeGroup) {
+			rootNodes = append(rootNodes, id)
+		}
+	}
+
+	if len(rootNodes) == 0 {
+		rootNodes = append(rootNodes, 0) // Try node 0 if no clear roots
+	}
+
+	var traverse func(nodeID int, parentPos mgl32.Vec3, parentRot mgl32.Quat, parentScale mgl32.Vec3)
+	traverse = func(nodeID int, parentPos mgl32.Vec3, parentRot mgl32.Quat, parentScale mgl32.Vec3) {
+		node, ok := voxFile.Nodes[nodeID]
+		if !ok {
+			return
+		}
+
+		currentPos := parentPos
+		currentRot := parentRot
+		currentScale := parentScale
+
+		switch node.Type {
+		case VoxNodeTransform:
+			if len(node.Frames) > 0 {
+				f := node.Frames[0]
+				vSize := VoxelSize
+				localPos := mgl32.Vec3{f.LocalTrans[0], f.LocalTrans[1], f.LocalTrans[2]}.Mul(vSize * voxelScale)
+				localRot, localScale := decodeVoxRotation(f.Rotation)
+
+				// Transform local position by parent state
+				// This is equivalent to applying parent scale (which scales offset), parent rot, then adding parent pos
+				scaledLocal := mgl32.Vec3{
+					localPos.X() * parentScale.X(),
+					localPos.Y() * parentScale.Y(),
+					localPos.Z() * parentScale.Z(),
+				}
+				rotatedLocal := parentRot.Rotate(scaledLocal)
+
+				currentPos = parentPos.Add(rotatedLocal)
+				currentRot = parentRot.Mul(localRot)
+				currentScale = mgl32.Vec3{
+					parentScale.X() * localScale.X(),
+					parentScale.Y() * localScale.Y(),
+					parentScale.Z() * localScale.Z(),
+				}
+			}
+			traverse(node.ChildID, currentPos, currentRot, currentScale)
+		case VoxNodeGroup:
+			for _, cid := range node.ChildrenIDs {
+				traverse(cid, currentPos, currentRot, currentScale)
+			}
+		case VoxNodeShape:
+			for _, m := range node.Models {
+				instances = append(instances, VoxModelInstance{
+					ModelIndex: m.ModelID,
+					Transform: TransformComponent{
+						Position: currentPos,
+						Rotation: currentRot,
+						Scale:    currentScale,
+					},
+				})
+			}
+		}
+	}
+
+	for _, id := range rootNodes {
+		traverse(id, mgl32.Vec3{0, 0, 0}, mgl32.QuatIdent(), mgl32.Vec3{1, 1, 1})
+	}
+
+	return instances
+}

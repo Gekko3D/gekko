@@ -4,35 +4,54 @@ import (
 	"strings"
 )
 
+const uiButtonPaddingX = 20.0
+
+type UiAnchor int
+
+const (
+	UiAnchorTopLeft UiAnchor = iota
+	UiAnchorTopRight
+	UiAnchorBottomLeft
+	UiAnchorBottomRight
+	UiAnchorTopCenter
+	UiAnchorBottomCenter
+	UiAnchorCenter
+)
+
 type UiModule struct{}
 
 type UiButton struct {
 	Label       string
-	Position    [2]float32 // Screen pixels, top-left
-	Width       float32    // Optional fixed width. If 0, auto-size.
-	Scale       float32    // Optional scale multiplier (default 1.0)
+	Position    [2]float32 // Screen pixels/offset
+	Anchor      UiAnchor
+	Width       float32 // Optional fixed width. If 0, auto-size.
+	Scale       float32 // Optional scale multiplier (default 1.0)
 	Clicked     bool
 	Highlighted bool
 	OnClick     func()
 }
 
 type UiTable struct {
-	Headers  []string
-	Rows     [][]string
-	Position [2]float32
-	Width    float32 // Optional fixed total width.
-	Scale    float32 // Optional scale multiplier (default 1.0)
+	Headers     []string
+	Rows        [][]string
+	Position    [2]float32
+	Anchor      UiAnchor
+	Width       float32 // Optional fixed total width.
+	Scale       float32 // Optional scale multiplier (default 1.0)
+	OnCellClick func(row, col int)
 }
 
 type UiListItem struct {
 	Label    string
 	Children []UiListItem
+	OnClick  func()
 }
 
 type UiList struct {
 	Title    string
 	Items    []UiListItem
 	Position [2]float32
+	Anchor   UiAnchor
 	Scale    float32 // Optional scale multiplier (default 1.0)
 }
 
@@ -40,6 +59,7 @@ type UiTextBox struct {
 	Label    string
 	Text     string
 	Position [2]float32
+	Anchor   UiAnchor
 	Width    float32
 	Scale    float32
 	Focused  bool
@@ -51,9 +71,28 @@ func (UiModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(System(uiRenderSystem).InStage(PostUpdate).RunAlways())
 }
 
-const (
-	uiButtonPaddingX = 20.0
-)
+func resolveUiPosition(anchor UiAnchor, offset [2]float32, width, height float32, winW, winH int) (float32, float32) {
+	var x, y float32
+	w, h := float32(winW), float32(winH)
+
+	switch anchor {
+	case UiAnchorTopLeft:
+		x, y = offset[0], offset[1]
+	case UiAnchorTopRight:
+		x, y = w-width-offset[0], offset[1]
+	case UiAnchorBottomLeft:
+		x, y = offset[0], h-height-offset[1]
+	case UiAnchorBottomRight:
+		x, y = w-width-offset[0], h-height-offset[1]
+	case UiAnchorTopCenter:
+		x, y = (w-width)/2+offset[0], offset[1]
+	case UiAnchorBottomCenter:
+		x, y = (w-width)/2+offset[0], h-height-offset[1]
+	case UiAnchorCenter:
+		x, y = (w-width)/2+offset[0], (h-height)/2+offset[1]
+	}
+	return x, y
+}
 
 func uiInputSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 	if state == nil || input.WindowWidth == 0 {
@@ -71,25 +110,21 @@ func uiInputSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 	// Handle Buttons
 	MakeQuery1[UiButton](cmd).Map(func(eid EntityId, btn *UiButton) bool {
 		btn.Clicked = false
-
 		scale := btn.Scale
 		if scale <= 0 {
 			scale = 1.0
 		}
-
 		physTw, physTh := state.MeasureText(btn.Label, scale)
 		tw := physTw / pixelRatio
-
 		w := btn.Width
 		if w == 0 {
 			w = tw + uiButtonPaddingX*2.0*scale
 		}
-
-		// Button is 3 lines high
 		h := 3.0 * (physTh / pixelRatio)
-
-		if mx >= float64(btn.Position[0]) && mx <= float64(btn.Position[0]+w) &&
-			my >= float64(btn.Position[1]) && my <= float64(btn.Position[1]+h) {
+		posX, posY := resolveUiPosition(btn.Anchor, btn.Position, w, h, input.WindowWidth, input.WindowHeight)
+		if mx >= float64(posX) && mx <= float64(posX+w) &&
+			my >= float64(posY) && my <= float64(posY+h) {
+			input.GuiCaptured = true
 			btn.Highlighted = true
 			if isLMB {
 				btn.Clicked = true
@@ -100,7 +135,6 @@ func uiInputSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 		} else {
 			btn.Highlighted = false
 		}
-
 		return true
 	})
 
@@ -110,42 +144,34 @@ func uiInputSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 		if scale <= 0 {
 			scale = 1.0
 		}
-
 		displayLabel := tb.Label
 		if tb.Text != "" {
 			displayLabel = tb.Text
 		}
 		physTw, physTh := state.MeasureText(displayLabel, scale)
 		tw := physTw / pixelRatio
-
 		w := tb.Width
 		if w == 0 {
 			w = tw + uiButtonPaddingX*2.0*scale
 		}
 		h := 3.0 * (physTh / pixelRatio)
-
-		// Focus handling
-		if isLMB {
-			if mx >= float64(tb.Position[0]) && mx <= float64(tb.Position[0]+w) &&
-				my >= float64(tb.Position[1]) && my <= float64(tb.Position[1]+h) {
+		posX, posY := resolveUiPosition(tb.Anchor, tb.Position, w, h, input.WindowWidth, input.WindowHeight)
+		if mx >= float64(posX) && mx <= float64(posX+w) &&
+			my >= float64(posY) && my <= float64(posY+h) {
+			input.GuiCaptured = true
+			if isLMB {
 				tb.Focused = true
-			} else {
-				tb.Focused = false
 			}
+		} else if isLMB {
+			tb.Focused = false
 		}
-
-		// Text input handling
 		if tb.Focused {
-			// Character input
 			for _, char := range input.CharBuffer {
 				tb.Text += string(char)
 			}
-
-			// Special keys
 			if input.JustPressed[KeyBackspace] && len(tb.Text) > 0 {
 				tb.Text = tb.Text[:len(tb.Text)-1]
 			}
-
 			if input.JustPressed[KeyEnter] {
 				if tb.OnSubmit != nil {
 					tb.OnSubmit(tb.Text)
@@ -153,7 +179,135 @@ func uiInputSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 				tb.Focused = false
 			}
 		}
+		return true
+	})
 
+	// Handle Lists
+	MakeQuery1[UiList](cmd).Map(func(eid EntityId, list *UiList) bool {
+		scale := list.Scale
+		if scale <= 0 {
+			scale = 1.0
+		}
+		lineH := state.GetLineHeight(scale)
+		if lineH < 35*scale {
+			lineH = 35 * scale
+		}
+		var countItems func(items []UiListItem) int
+		countItems = func(items []UiListItem) int {
+			total := len(items)
+			for _, item := range items {
+				if len(item.Children) > 0 {
+					total += countItems(item.Children)
+				}
+			}
+			return total
+		}
+		totalItemCount := countItems(list.Items)
+		estW := float32(200) * scale // Width is already in logical units
+		estH := float32(totalItemCount) * lineH / pixelRatio
+		if list.Title != "" {
+			estH += lineH * 1.2 / pixelRatio
+		}
+		posX, posY := resolveUiPosition(list.Anchor, list.Position, estW, estH, input.WindowWidth, input.WindowHeight)
+		if mx >= float64(posX) && mx <= float64(posX+estW) &&
+			my >= float64(posY) && my <= float64(posY+estH) {
+			input.GuiCaptured = true
+		}
+		currY := posY
+		if list.Title != "" {
+			currY += lineH * 1.2 / pixelRatio
+		}
+		var processItems func(items []UiListItem)
+		processItems = func(items []UiListItem) {
+			for i := range items {
+				item := &items[i]
+				itemH := lineH / pixelRatio
+				if isLMB && mx >= float64(posX) && mx <= float64(posX+estW) &&
+					my >= float64(currY) && my <= float64(currY+itemH) {
+					if item.OnClick != nil {
+						item.OnClick()
+					}
+				}
+				currY += itemH
+				if len(item.Children) > 0 {
+					processItems(item.Children)
+				}
+			}
+		}
+		processItems(list.Items)
+		return true
+	})
+
+	// Handle Tables
+	MakeQuery1[UiTable](cmd).Map(func(eid EntityId, table *UiTable) bool {
+		if len(table.Headers) == 0 {
+			return true
+		}
+		scale := table.Scale
+		if scale <= 0 {
+			scale = 1.0
+		}
+		lineH := state.GetLineHeight(scale)
+		if lineH < 35*scale {
+			lineH = 35 * scale
+		}
+		pipeWPhys, _ := state.MeasureText("|", scale)
+		pipeW := pipeWPhys / pixelRatio
+		colWidths := make([]float32, len(table.Headers))
+		padding := 20.0 * scale
+		for i, h := range table.Headers {
+			twPhys, _ := state.MeasureText(h, scale)
+			colWidths[i] = twPhys/pixelRatio + padding
+		}
+		for _, row := range table.Rows {
+			for i, cell := range row {
+				if i < len(colWidths) {
+					twPhys, _ := state.MeasureText(cell, scale)
+					if twPhys/pixelRatio+padding > colWidths[i] {
+						colWidths[i] = twPhys/pixelRatio + padding
+					}
+				}
+			}
+		}
+		if table.Width > 0 {
+			sum := float32(0)
+			for _, cw := range colWidths {
+				sum += cw
+			}
+			extra := table.Width - sum - float32(len(table.Headers)+1)*pipeW
+			if extra > 0 {
+				added := extra / float32(len(table.Headers))
+				for i := range colWidths {
+					colWidths[i] += added
+				}
+			}
+		}
+		totalW := pipeW
+		for _, cw := range colWidths {
+			totalW += cw + pipeW
+		}
+		h := float32(len(table.Rows)+3) * lineH / pixelRatio
+		posX, posY := resolveUiPosition(table.Anchor, table.Position, totalW, h, input.WindowWidth, input.WindowHeight)
+		if mx >= float64(posX) && mx <= float64(posX+totalW) &&
+			my >= float64(posY) && my <= float64(posY+h) {
+			input.GuiCaptured = true
+			if isLMB {
+				relativeY := (float32(my) - posY) / (lineH / pixelRatio)
+				rowIdx := int(relativeY) - 3
+				if rowIdx >= 0 && rowIdx < len(table.Rows) {
+					currX := posX + pipeW
+					for colIdx, cw := range colWidths {
+						if mx >= float64(currX) && mx <= float64(currX+cw) {
+							if table.OnCellClick != nil {
+								table.OnCellClick(rowIdx, colIdx)
+							}
+							break
+						}
+						currX += cw + pipeW
+					}
+				}
+			}
+		}
 		return true
 	})
 }
@@ -205,9 +359,6 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 			scale = 1.0
 		}
 
-		drawX := btn.Position[0] * pixelRatio
-		drawY := btn.Position[1] * pixelRatio
-
 		tw, _ := state.MeasureText(btn.Label, scale)
 		w := btn.Width * pixelRatio
 		if w == 0 {
@@ -218,7 +369,13 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 		if lineH < 35*scale {
 			lineH = 35 * scale
 		}
+		h := 3.0 * lineH
 		pipeW, _ := state.MeasureText("|", scale)
+
+		// Resolve position in window units, then convert to pixel ratio for rendering
+		posX, posY := resolveUiPosition(btn.Anchor, btn.Position, w/pixelRatio, h/pixelRatio, input.WindowWidth, input.WindowHeight)
+		drawX := posX * pixelRatio
+		drawY := posY * pixelRatio
 
 		y := drawY
 		// 1. Top Border
@@ -249,13 +406,11 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 			scale = 1.0
 		}
 
-		drawX := tb.Position[0] * pixelRatio
-		drawY := tb.Position[1] * pixelRatio
-
 		lineH := state.GetLineHeight(scale)
 		if lineH < 35*scale {
 			lineH = 35 * scale
 		}
+		h := 3.0 * lineH
 		pipeW, _ := state.MeasureText("|", scale)
 
 		displayLabel := tb.Label
@@ -276,6 +431,10 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 		if w == 0 {
 			w = tw + uiButtonPaddingX*2.0*pixelRatio*scale
 		}
+
+		posX, posY := resolveUiPosition(tb.Anchor, tb.Position, w/pixelRatio, h/pixelRatio, input.WindowWidth, input.WindowHeight)
+		drawX := posX * pixelRatio
+		drawY := posY * pixelRatio
 
 		y := drawY
 		// 1. Top Border
@@ -310,9 +469,6 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 		if scale <= 0 {
 			scale = 1.0
 		}
-
-		drawX := table.Position[0] * pixelRatio
-		drawY := table.Position[1] * pixelRatio
 
 		lineH := state.GetLineHeight(scale)
 		if lineH < 35*scale {
@@ -362,6 +518,12 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 		for _, cw := range colWidths {
 			totalW += cw + pipeW
 		}
+
+		h := float32(len(table.Rows)+3) * lineH // Headers + separator + footer
+
+		posX, posY := resolveUiPosition(table.Anchor, table.Position, totalW/pixelRatio, h/pixelRatio, input.WindowWidth, input.WindowHeight)
+		drawX := posX * pixelRatio
+		drawY := posY * pixelRatio
 
 		y := drawY
 
@@ -416,13 +578,21 @@ func uiRenderSystem(state *VoxelRtState, input *Input, cmd *Commands) {
 			scale = 1.0
 		}
 
-		drawX := list.Position[0] * pixelRatio
-		drawY := list.Position[1] * pixelRatio
-
 		lineH := state.GetLineHeight(scale)
 		if lineH < 35*scale {
 			lineH = 35 * scale
 		}
+
+		// Estimate list size for anchoring
+		estW := float32(200) * scale * pixelRatio // Fallback width
+		estH := float32(len(list.Items)) * lineH
+		if list.Title != "" {
+			estH += lineH * 1.2
+		}
+
+		posX, posY := resolveUiPosition(list.Anchor, list.Position, estW/pixelRatio, estH/pixelRatio, input.WindowWidth, input.WindowHeight)
+		drawX := posX * pixelRatio
+		drawY := posY * pixelRatio
 
 		y := drawY
 		if list.Title != "" {
