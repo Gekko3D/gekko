@@ -1,13 +1,13 @@
 package gekko
 
 import (
-	"testing"
 	"reflect"
+	"testing"
 
-	"github.com/go-gl/mathgl/mgl32"
-	"github.com/gekko3d/gekko/voxelrt/rt/volume"
-	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	rootassets "github.com/gekko3d/gekko/assets"
+	"github.com/gekko3d/gekko/voxelrt/rt/core"
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
@@ -26,6 +26,11 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
+	cache := &VoxelGridCache{
+		Snapshots:   make(map[EntityId]*voxelGridSnapshot),
+		AssetGrids:  make(map[AssetId]*voxelGridAssetCache),
+		BuildStamps: make(map[EntityId]voxelPhysicsBuildStamp),
+	}
 
 	aid := rootassets.NewID()
 
@@ -42,14 +47,14 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	// Create two voxels in different bricks (within one sector)
 	xbm.SetVoxel(0, 0, 0, 1) // Brick (0,0,0)
 	xbm.SetVoxel(8, 0, 0, 1) // Brick (1,0,0)
-	xbm.ClearDirty() // Clear initial dirty state
+	xbm.ClearDirty()         // Clear initial dirty state
 
 	obj := core.NewVoxelObject()
 	obj.XBrickMap = xbm
 	rtState.instanceMap[eid] = obj
 
 	// 3. Run the system for the first time (Initial build)
-	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
 	app.FlushCommands()
 
 	// Verify PhysicsModel was added
@@ -66,8 +71,11 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	if !found {
 		t.Fatal("PhysicsModel not created on first run")
 	}
-	if len(pm.Boxes) != 2 {
-		t.Errorf("Expected 2 boxes for two-brick object, got %d", len(pm.Boxes))
+	if len(pm.Boxes) != 1 {
+		t.Errorf("Expected 1 box (AABB) for two-brick object, got %d", len(pm.Boxes))
+	}
+	if pm.Grid == nil {
+		t.Error("Grid should be populated in PhysicsModel")
 	}
 
 	// 4. Edit the XBrickMap (Carve one brick completely)
@@ -78,7 +86,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	}
 
 	// 5. Run the system again (Should rebuild)
-	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
 	app.FlushCommands()
 
 	// Verify PhysicsModel was updated
@@ -102,7 +110,7 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 
 	// 6. Remove the LAST brick completely
 	xbm.SetVoxel(0, 0, 0, 0)
-	VoxPhysicsPreCalcSystem(cmd, server, rtState)
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
 	app.FlushCommands()
 
 	// Verify PhysicsModel was updated
@@ -115,5 +123,50 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 
 	if len(pm2.Boxes) != 0 {
 		t.Errorf("Expected 0 boxes after final carve, got %d", len(pm2.Boxes))
+	}
+
+	// 7. Sub-brick edit (Remove one voxel from a 3-voxel line)
+	// Reset state: 3 voxels in a row (0,0,0), (1,0,0), (2,0,0)
+	xbm.ClearDirty()
+	xbm.SetVoxel(0, 0, 0, 1)
+	xbm.SetVoxel(1, 0, 0, 1)
+	xbm.SetVoxel(2, 0, 0, 1)
+	// Rebuild to get clean state
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
+	app.FlushCommands()
+
+	comps = cmd.GetAllComponents(eid)
+	for _, c := range comps {
+		if p, ok := c.(PhysicsModel); ok {
+			pm2 = p
+		}
+	}
+	if len(pm2.Boxes) != 1 {
+		t.Fatalf("Expected 1 box for 3-voxel line, got %d", len(pm2.Boxes))
+	}
+
+	// Remove middle voxel (1,0,0)
+	// This should leave (0,0,0) and (2,0,0) -> 2 separate boxes
+	// StructureDirty should be FALSE (because brick still has voxels)
+	// But DirtyBricks should be non-empty
+	xbm.SetVoxel(1, 0, 0, 0)
+	if xbm.StructureDirty {
+		t.Error("XBrickMap should NOT have StructureDirty=true for sub-brick edit")
+	}
+	if len(xbm.DirtyBricks) == 0 {
+		t.Error("XBrickMap should have DirtyBricks non-empty")
+	}
+
+	VoxPhysicsPreCalcSystem(cmd, server, rtState, cache)
+	app.FlushCommands()
+
+	comps = cmd.GetAllComponents(eid)
+	for _, c := range comps {
+		if p, ok := c.(PhysicsModel); ok {
+			pm2 = p
+		}
+	}
+	if len(pm2.Boxes) != 1 {
+		t.Errorf("Expected 1 box (AABB) after removing middle voxel, got %d", len(pm2.Boxes))
 	}
 }

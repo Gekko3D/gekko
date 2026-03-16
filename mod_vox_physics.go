@@ -1,13 +1,18 @@
 package gekko
 
 import (
-	"github.com/go-gl/mathgl/mgl32"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 type VoxPhysicsModule struct{}
 
 func (m VoxPhysicsModule) Install(app *App, cmd *Commands) {
+	cmd.AddResources(&VoxelGridCache{
+		Snapshots:   make(map[EntityId]*voxelGridSnapshot),
+		AssetGrids:  make(map[AssetId]*voxelGridAssetCache),
+		BuildStamps: make(map[EntityId]voxelPhysicsBuildStamp),
+	})
 	app.UseSystem(
 		System(VoxPhysicsPreCalcSystem).
 			InStage(Update).
@@ -15,14 +20,189 @@ func (m VoxPhysicsModule) Install(app *App, cmd *Commands) {
 	)
 }
 
-func DecomposeVoxModel(model VoxModel, vSize float32) []CollisionBox {
-	if len(model.Voxels) == 0 {
+type voxelGridSnapshot struct {
+	xbm        *volume.XBrickMap
+	vSize      float32
+	voxelScale mgl32.Vec3
+	cachedMin  mgl32.Vec3
+	cachedMax  mgl32.Vec3
+}
+
+type voxelGridAssetCache struct {
+	xbm       *volume.XBrickMap
+	cachedMin mgl32.Vec3
+	cachedMax mgl32.Vec3
+}
+
+func (v *voxelGridAssetCache) Snapshot(voxelScale mgl32.Vec3) *voxelGridSnapshot {
+	if v == nil {
 		return nil
 	}
 
-	occupied := make(map[[3]uint32]bool)
-	for _, v := range model.Voxels {
-		occupied[[3]uint32{v.X, v.Y, v.Z}] = true
+	return &voxelGridSnapshot{
+		xbm:        v.xbm,
+		vSize:      voxelScale.X(),
+		voxelScale: voxelScale,
+		cachedMin:  v.cachedMin,
+		cachedMax:  v.cachedMax,
+	}
+}
+
+func (v *voxelGridSnapshot) GetVoxel(gx, gy, gz int) (bool, uint8) {
+	return v.xbm.GetVoxel(gx, gy, gz)
+}
+
+func (v *voxelGridSnapshot) GetAABBMin() mgl32.Vec3 {
+	return v.cachedMin
+}
+
+func (v *voxelGridSnapshot) GetAABBMax() mgl32.Vec3 {
+	return v.cachedMax
+}
+
+func (v *voxelGridSnapshot) VoxelSize() float32 {
+	if v.voxelScale != (mgl32.Vec3{}) {
+		return v.voxelScale.X()
+	}
+	return v.vSize
+}
+
+func (v *voxelGridSnapshot) VoxelScale() mgl32.Vec3 {
+	if v.voxelScale != (mgl32.Vec3{}) {
+		return v.voxelScale
+	}
+	return mgl32.Vec3{v.vSize, v.vSize, v.vSize}
+}
+
+func (v *voxelGridSnapshot) ForEachPrimitiveInRange(minX, minY, minZ, maxX, maxY, maxZ int, fn func(localCenter, halfExtents mgl32.Vec3) bool) bool {
+	if v == nil || v.xbm == nil {
+		return true
+	}
+
+	voxelScale := v.VoxelScale()
+	for sKey, sector := range v.xbm.Sectors {
+		sectorMinX := sKey[0] * volume.SectorSize
+		sectorMinY := sKey[1] * volume.SectorSize
+		sectorMinZ := sKey[2] * volume.SectorSize
+		sectorMaxX := sectorMinX + volume.SectorSize
+		sectorMaxY := sectorMinY + volume.SectorSize
+		sectorMaxZ := sectorMinZ + volume.SectorSize
+		if sectorMaxX <= minX || sectorMinX >= maxX ||
+			sectorMaxY <= minY || sectorMinY >= maxY ||
+			sectorMaxZ <= minZ || sectorMinZ >= maxZ {
+			continue
+		}
+
+		for brickIdx := 0; brickIdx < 64; brickIdx++ {
+			if (sector.BrickMask64 & (1 << brickIdx)) == 0 {
+				continue
+			}
+
+			bx, by, bz := brickIdx%4, (brickIdx/4)%4, brickIdx/16
+			brickMinX := sectorMinX + bx*volume.BrickSize
+			brickMinY := sectorMinY + by*volume.BrickSize
+			brickMinZ := sectorMinZ + bz*volume.BrickSize
+			brickMaxX := brickMinX + volume.BrickSize
+			brickMaxY := brickMinY + volume.BrickSize
+			brickMaxZ := brickMinZ + volume.BrickSize
+
+			rangeMinX := max(minX, brickMinX)
+			rangeMinY := max(minY, brickMinY)
+			rangeMinZ := max(minZ, brickMinZ)
+			rangeMaxX := min(maxX, brickMaxX)
+			rangeMaxY := min(maxY, brickMaxY)
+			rangeMaxZ := min(maxZ, brickMaxZ)
+			if rangeMinX >= rangeMaxX || rangeMinY >= rangeMaxY || rangeMinZ >= rangeMaxZ {
+				continue
+			}
+
+			brick := sector.GetBrick(bx, by, bz)
+			if brick == nil {
+				continue
+			}
+
+			if brick.Flags&volume.BrickFlagSolid != 0 {
+				if !emitVoxelPrimitiveRange(rangeMinX, rangeMinY, rangeMinZ, rangeMaxX, rangeMaxY, rangeMaxZ, voxelScale, fn) {
+					return true
+				}
+				continue
+			}
+
+			for gz := rangeMinZ; gz < rangeMaxZ; gz++ {
+				localZ := gz - brickMinZ
+				for gy := rangeMinY; gy < rangeMaxY; gy++ {
+					localY := gy - brickMinY
+					for gx := rangeMinX; gx < rangeMaxX; gx++ {
+						localX := gx - brickMinX
+						if brick.Payload[localX][localY][localZ] == 0 {
+							continue
+						}
+						if !emitVoxelPrimitiveRange(gx, gy, gz, gx+1, gy+1, gz+1, voxelScale, fn) {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return true
+}
+
+type VoxelGridCache struct {
+	Snapshots   map[EntityId]*voxelGridSnapshot
+	AssetGrids  map[AssetId]*voxelGridAssetCache
+	BuildStamps map[EntityId]voxelPhysicsBuildStamp
+}
+
+type voxelPhysicsSourceKind uint8
+
+const (
+	voxelPhysicsSourceAsset voxelPhysicsSourceKind = iota
+	voxelPhysicsSourceRuntime
+	voxelPhysicsSourceCustom
+)
+
+type voxelPhysicsBuildStamp struct {
+	Source voxelPhysicsSourceKind
+	Asset  AssetId
+	Scale  mgl32.Vec3
+	MapPtr *volume.XBrickMap
+}
+
+func currentVoxelPhysicsBuildStamp(vmc *VoxelModelComponent, tr *TransformComponent, runtimeMap *volume.XBrickMap) voxelPhysicsBuildStamp {
+	stamp := voxelPhysicsBuildStamp{
+		Scale: tr.Scale,
+	}
+
+	switch {
+	case runtimeMap != nil:
+		stamp.Source = voxelPhysicsSourceRuntime
+		stamp.MapPtr = runtimeMap
+	case vmc.CustomMap != nil:
+		stamp.Source = voxelPhysicsSourceCustom
+		stamp.MapPtr = vmc.CustomMap
+	default:
+		stamp.Source = voxelPhysicsSourceAsset
+		stamp.Asset = vmc.VoxelModel
+	}
+
+	return stamp
+}
+
+func scaledVoxelScale(tr *TransformComponent) mgl32.Vec3 {
+	return mgl32.Vec3{
+		VoxelSize * tr.Scale.X(),
+		VoxelSize * tr.Scale.Y(),
+		VoxelSize * tr.Scale.Z(),
+	}
+}
+
+// Deprecated: DecomposeVoxModel uses greedy meshing to produce multiple boxes.
+// Use AABB-based approach and VoxelGrid collision instead.
+func DecomposeVoxModel(model VoxModel, vSize float32) []CollisionBox {
+	if len(model.Voxels) == 0 {
+		return nil
 	}
 
 	voxels := make(map[[3]uint32]bool)
@@ -108,12 +288,16 @@ func DecomposeVoxModel(model VoxModel, vSize float32) []CollisionBox {
 	return boxes
 }
 
+// Deprecated: DecomposeXBrickMap uses greedy meshing to produce multiple boxes.
+// Use AABB-based approach and VoxelGrid collision instead.
 func DecomposeXBrickMap(xbm *volume.XBrickMap, vSize float32) []CollisionBox {
 	if xbm == nil {
 		return nil
 	}
 
-	// voxels map to track what's left to process
+	// Flatten all voxels into a single map for global greedy meshing.
+	// This produces the fewest possible collision boxes, which is critical
+	// because the narrow-phase collision detection is O(boxesA × boxesB).
 	voxels := make(map[[3]int]bool)
 	for sKey, sector := range xbm.Sectors {
 		if sector.IsEmpty() {
@@ -262,8 +446,27 @@ func DecomposeXBrickMap(xbm *volume.XBrickMap, vSize float32) []CollisionBox {
 	return boxes
 }
 
-func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelRtState) {
-	MakeQuery3[VoxelModelComponent, RigidBodyComponent, TransformComponent](cmd).Map(func(eid EntityId, vmc *VoxelModelComponent, rb *RigidBodyComponent, tr *TransformComponent) bool {
+// Deprecated: applyScaleToBoxes is no longer needed with single-AABB approach.
+func applyScaleToBoxes(boxes []CollisionBox, scale float32) {
+	if scale == 1.0 {
+		return
+	}
+	for i := range boxes {
+		boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
+		boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
+	}
+}
+
+func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelRtState, cache *VoxelGridCache) {
+	// Cleanup snapshots for destroyed entities to prevent memory leaks
+	for eid := range cache.Snapshots {
+		if comps := cmd.GetAllComponents(eid); len(comps) == 0 {
+			delete(cache.Snapshots, eid)
+			delete(cache.BuildStamps, eid)
+		}
+	}
+
+	MakeQuery4[VoxelModelComponent, RigidBodyComponent, TransformComponent, PhysicsModel](cmd).Map(func(eid EntityId, vmc *VoxelModelComponent, rb *RigidBodyComponent, tr *TransformComponent, pm *PhysicsModel) bool {
 		// 1. Try to get runtime XBrickMap
 		var xbm *volume.XBrickMap
 		if rtState != nil {
@@ -272,98 +475,143 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			}
 		}
 
-		// 2. Check if PhysicsModel already exists
-		found := false
-		allComps := cmd.GetAllComponents(eid)
-		for _, c := range allComps {
-			if _, ok := c.(PhysicsModel); ok {
-				found = true
-				break
-			}
-		}
+		// 2. Determine if we need to (re)build
+		found := pm != nil
+		stamp := currentVoxelPhysicsBuildStamp(vmc, tr, xbm)
+		previousStamp, hasStamp := cache.BuildStamps[eid]
+		needsBuild := !found || !hasStamp || previousStamp != stamp
 
-		// 3. Determine if we need to (re)build
-		needsBuild := !found
-		if xbm != nil && xbm.StructureDirty {
+		// Structural dirty check
+		if xbm != nil && (xbm.StructureDirty || len(xbm.DirtyBricks) > 0 || len(xbm.DirtySectors) > 0) {
 			needsBuild = true
+		} else if vmc.CustomMap != nil && (vmc.CustomMap.StructureDirty || len(vmc.CustomMap.DirtyBricks) > 0 || len(vmc.CustomMap.DirtySectors) > 0) {
+			needsBuild = true
+		}
+		if found && pm.Grid == nil {
+			switch {
+			case xbm != nil, vmc.CustomMap != nil:
+				needsBuild = true
+			default:
+				server.mu.RLock()
+				_, ok := server.voxModels[vmc.VoxelModel]
+				server.mu.RUnlock()
+				if ok {
+					needsBuild = true
+				}
+			}
 		}
 
 		if !needsBuild {
 			return true
 		}
 
-		var boxes []CollisionBox
-		initialized := false
+		var box *CollisionBox
+		var center mgl32.Vec3
+		var grid *voxelGridSnapshot
+		voxelScale := scaledVoxelScale(tr)
 
 		if xbm != nil {
-			// Prefer runtime edited map
-			vSize := VoxelSize
-			boxes = DecomposeXBrickMap(xbm, vSize)
-			// Apply scale from transform
-			scale := tr.Scale.X()
-			for i := range boxes {
-				boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
-				boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
+			vMin, vMax := xbm.ComputeAABB()
+			xbm.ClearDirty()
+
+			if vMin != vMax {
+				minW := vec3MulComponents(vMin, voxelScale)
+				maxW := vec3MulComponents(vMax, voxelScale)
+				center = minW.Add(maxW).Mul(0.5)
+				half := maxW.Sub(minW).Mul(0.5)
+
+				box = &CollisionBox{
+					HalfExtents: half,
+					LocalOffset: mgl32.Vec3{0, 0, 0}, // Relative to center
+				}
 			}
-			initialized = len(boxes) > 0
+
+			grid = &voxelGridSnapshot{
+				xbm:        xbm.Copy(),
+				vSize:      voxelScale.X(),
+				voxelScale: voxelScale,
+				cachedMin:  xbm.GetAABBMin(),
+				cachedMax:  xbm.GetAABBMax(),
+			}
 		} else if vmc.CustomMap != nil {
-			vSize := VoxelSize
-			boxes = DecomposeXBrickMap(vmc.CustomMap, vSize)
-			scale := tr.Scale.X()
-			for i := range boxes {
-				boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
-				boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
+			vMin, vMax := vmc.CustomMap.ComputeAABB()
+			vmc.CustomMap.ClearDirty()
+
+			if vMin != vMax {
+				minW := vec3MulComponents(vMin, voxelScale)
+				maxW := vec3MulComponents(vMax, voxelScale)
+				center = minW.Add(maxW).Mul(0.5)
+				half := maxW.Sub(minW).Mul(0.5)
+
+				box = &CollisionBox{
+					HalfExtents: half,
+					LocalOffset: mgl32.Vec3{0, 0, 0},
+				}
 			}
-			initialized = len(boxes) > 0
+
+			grid = &voxelGridSnapshot{
+				xbm:        vmc.CustomMap.Copy(),
+				vSize:      voxelScale.X(),
+				voxelScale: voxelScale,
+				cachedMin:  vmc.CustomMap.GetAABBMin(),
+				cachedMax:  vmc.CustomMap.GetAABBMax(),
+			}
 		} else {
+			// Asset path
 			server.mu.RLock()
 			asset, ok := server.voxModels[vmc.VoxelModel]
 			server.mu.RUnlock()
 
 			if ok {
-				vSize := VoxelSize
-				boxes = DecomposeVoxModel(asset.VoxModel, vSize)
-				// Apply scale from transform
-				scale := tr.Scale.X()
-				for i := range boxes {
-					boxes[i].HalfExtents = boxes[i].HalfExtents.Mul(scale)
-					boxes[i].LocalOffset = boxes[i].LocalOffset.Mul(scale)
+				minW := mgl32.Vec3{0, 0, 0}
+				maxW := vec3MulComponents(mgl32.Vec3{float32(asset.VoxModel.SizeX), float32(asset.VoxModel.SizeY), float32(asset.VoxModel.SizeZ)}, voxelScale)
+				center = minW.Add(maxW).Mul(0.5)
+				half := maxW.Sub(minW).Mul(0.5)
+
+				box = &CollisionBox{
+					HalfExtents: half,
+					LocalOffset: mgl32.Vec3{0, 0, 0},
 				}
-				initialized = len(boxes) > 0
+
+				// Cache grid for asset to avoid expensive XBrickMap conversion
+				assetGrid := cache.AssetGrids[vmc.VoxelModel]
+				if assetGrid == nil {
+					// Build XBrickMap from asset voxels
+					xbm := volume.NewXBrickMap()
+					for _, v := range asset.VoxModel.Voxels {
+						xbm.SetVoxel(int(v.X), int(v.Y), int(v.Z), v.ColorIndex)
+					}
+					gMin, gMax := xbm.ComputeAABB()
+					assetGrid = &voxelGridAssetCache{
+						xbm:       xbm,
+						cachedMin: gMin,
+						cachedMax: gMax,
+					}
+					cache.AssetGrids[vmc.VoxelModel] = assetGrid
+				}
+				grid = assetGrid.Snapshot(voxelScale)
 			}
 		}
 
-		if initialized {
-			// Calculate volume-weighted geometric center of all boxes
-			weightedCenter := mgl32.Vec3{0, 0, 0}
-			totalVolume := float32(0)
-			if len(boxes) > 0 {
-				for _, b := range boxes {
-					volume := b.HalfExtents.X() * b.HalfExtents.Y() * b.HalfExtents.Z() * 8.0
-					weightedCenter = weightedCenter.Add(b.LocalOffset.Mul(volume))
-					totalVolume += volume
-				}
-				if totalVolume > 0 {
-					weightedCenter = weightedCenter.Mul(1.0 / totalVolume)
-				}
-
-				// Shift all boxes to be relative to the new weighted center
-				for i := range boxes {
-					boxes[i].LocalOffset = boxes[i].LocalOffset.Sub(weightedCenter)
-				}
-			}
-
-			cmd.AddComponents(eid, PhysicsModel{
-				Boxes:        boxes,
-				CenterOffset: weightedCenter,
-			})
+		newPM := PhysicsModel{
+			CenterOffset: center,
+		}
+		if box != nil {
+			newPM.Boxes = []CollisionBox{*box}
+		}
+		if grid != nil {
+			newPM.Grid = grid
+			cache.Snapshots[eid] = grid
 		} else {
-			// No boxes (empty object), but we were asked to rebuild.
-			// Set an empty physics model to clear any previous state.
-			cmd.AddComponents(eid, PhysicsModel{
-				Boxes: nil,
-			})
+			delete(cache.Snapshots, eid)
 		}
+		cache.BuildStamps[eid] = stamp
+
+		// Only update if something actually changed to avoid component update noise
+		if !found || pm.CenterOffset != newPM.CenterOffset || len(pm.Boxes) != len(newPM.Boxes) || pm.Grid != newPM.Grid {
+			cmd.AddComponents(eid, newPM)
+		}
+
 		return true
-	})
+	}, PhysicsModel{})
 }

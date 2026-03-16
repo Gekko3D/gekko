@@ -81,6 +81,11 @@ func MakeQuery5[A, B, C, D, E any](cmd *Commands) Query5[A, B, C, D, E] {
 	return Query5[A, B, C, D, E]{ecs: cmd.app.ecs}
 }
 
+func HasComponent[T any](cmd *Commands, eid EntityId) bool {
+	var t T
+	return cmd.app.ecs.hasComponent(eid, reflect.TypeOf(t))
+}
+
 type rootArchetypeView struct{ arch *archetype }
 
 func (v rootArchetypeView) GetComponent(id uint32) (any, bool) {

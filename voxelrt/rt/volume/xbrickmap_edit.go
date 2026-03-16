@@ -261,3 +261,13 @@ func (x *XBrickMap) ComputeAABB() (mgl32.Vec3, mgl32.Vec3) {
 	x.AABBDirty = false
 	return x.CachedMin, x.CachedMax
 }
+
+func (x *XBrickMap) GetAABBMin() mgl32.Vec3 {
+	x.ComputeAABB()
+	return x.CachedMin
+}
+
+func (x *XBrickMap) GetAABBMax() mgl32.Vec3 {
+	x.ComputeAABB()
+	return x.CachedMax
+}

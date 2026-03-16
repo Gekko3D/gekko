@@ -35,6 +35,6 @@ func NewPhysicsWorld() *PhysicsWorld {
 		PositionCorrection:       0.2,
 		GroundedAngularThreshold: 0.1,
 		GroundedSleepTime:        0.25,
-		SolverIterations:         8,
+		SolverIterations:         12,
 	}
 }

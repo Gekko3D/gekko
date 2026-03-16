@@ -59,11 +59,20 @@ type ColliderComponent struct {
 	AABBHalfExtents mgl32.Vec3 // Cached or calculated total half extents
 }
 
+type VoxelGrid interface {
+	GetVoxel(gx, gy, gz int) (bool, uint8)
+	GetAABBMin() mgl32.Vec3
+	GetAABBMax() mgl32.Vec3
+	VoxelSize() float32
+	VoxelScale() mgl32.Vec3
+}
+
 // PhysicsModel is a generic component that describes the object's physics model.
 // It is agnostic of the renderer.
 type PhysicsModel struct {
 	Boxes        []CollisionBox
 	CenterOffset mgl32.Vec3 // Global offset for the whole model (e.g. for AABB pre-calc)
+	Grid         VoxelGrid  // Voxel grid for narrow-phase collision
 	// KeyPoints will contain corner and edge key-points in future phases.
 	KeyPoints []mgl32.Vec3
 }

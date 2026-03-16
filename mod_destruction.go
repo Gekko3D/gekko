@@ -4,6 +4,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+
 type DestructionEvent struct {
 	Entity EntityId
 	Center mgl32.Vec3 // World-space center of destruction
@@ -73,6 +74,9 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 	var originalModel AssetId
 	var originalTransform TransformComponent
 	var originalVMC VoxelModelComponent
+	var originalRB *RigidBodyComponent
+	var originalCollider *ColliderComponent
+
 	foundTransform := false
 	foundVMC := false
 
@@ -94,6 +98,14 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 		case TransformComponent:
 			originalTransform = t
 			foundTransform = true
+		case *RigidBodyComponent:
+			originalRB = t
+		case RigidBodyComponent:
+			originalRB = &t
+		case *ColliderComponent:
+			originalCollider = t
+		case ColliderComponent:
+			originalCollider = &t
 		}
 	}
 
@@ -109,10 +121,21 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 	// CRITICAL: We avoid direct mutation of voxObj.XBrickMap here. 
 	// Instead, we update the ECS component's CustomMap and let the 
 	// sync system in mod_voxelrt_client_systems.go detect the change.
-	// This ensures StructureRevision is incremented and avoids a race
-	// condition where GPU flags might be cleared prematurely.
 	originalVMC.CustomMap = newMap
 	cmd.AddComponents(event.Entity, &originalVMC)
+
+	// Update original entity's mass
+	if originalRB != nil {
+		originalRB.Mass = float32(components[largestIdx].VoxelCount) * 0.1
+		cmd.AddComponents(event.Entity, originalRB)
+	}
+
+	friction := float32(0.5)
+	restitution := float32(0.3)
+	if originalCollider != nil {
+		friction = originalCollider.Friction
+		restitution = originalCollider.Restitution
+	}
 
 	// Spawn new entities for smaller components
 	for i, comp := range components {
@@ -137,6 +160,14 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 		worldOffset := originalTransform.Rotation.Rotate(scaledLocalCenter)
 		newWorldPos := originalTransform.Position.Add(worldOffset)
 
+		// Inherit velocity from parent (V_shard = V_parent + Omega_parent x WorldOffset)
+		vel := mgl32.Vec3{0, 0, 0}
+		angVel := mgl32.Vec3{0, 0, 0}
+		if originalRB != nil {
+			vel = originalRB.Velocity.Add(originalRB.AngularVelocity.Cross(worldOffset))
+			angVel = originalRB.AngularVelocity
+		}
+
 		// Create new entity
 		cmd.AddEntity(
 			&TransformComponent{
@@ -151,12 +182,14 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 				PivotMode:    PivotModeCenter,
 			},
 			&RigidBodyComponent{
-				Mass:         float32(comp.VoxelCount) * 0.1, // Simple mass proportional to voxel count
-				GravityScale: 1,
+				Velocity:        vel,
+				AngularVelocity: angVel,
+				Mass:            float32(comp.VoxelCount) * 0.1,
+				GravityScale:    1,
 			},
 			&ColliderComponent{
-				Friction:    0.5,
-				Restitution: 0.3,
+				Friction:    friction,
+				Restitution: restitution,
 			},
 			&DebrisComponent{
 				Age:        0,
@@ -165,4 +198,5 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 			},
 		)
 	}
+
 }

@@ -1,25 +1,38 @@
 package gekko
 
 import (
+	"math"
+	"reflect"
 	"runtime"
 	"sync"
 	"time"
 
+	rootphysics "github.com/gekko3d/gekko/physics"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
 type collisionManifold struct {
-	bodyA, bodyB  *internalBody
-	normal        mgl32.Vec3
-	penetration   float32
-	point         mgl32.Vec3
-	normalImpulse float32
-	relativeSpeed float32
+	bodyA, bodyB              *internalBody
+	normal                    mgl32.Vec3
+	penetration               float32
+	point                     mgl32.Vec3
+	normalImpulse             float32
+	relativeSpeed             float32
+	accumulatedNormalImpulse  float32
+	accumulatedTangentImpulse mgl32.Vec3
 }
 
 type collisionPair struct {
 	A EntityId
 	B EntityId
+}
+
+type cachedContactImpulse struct {
+	point         mgl32.Vec3
+	localPointA   mgl32.Vec3
+	localPointB   mgl32.Vec3
+	normal        mgl32.Vec3
+	normalImpulse float32
 }
 
 func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
@@ -34,6 +47,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 	manifolds := make([]collisionManifold, 0, 256)
 	previousPairs := make(map[collisionPair]PhysicsCollisionEvent)
 	currentPairs := make(map[collisionPair]PhysicsCollisionEvent)
+	previousContactImpulses := make(map[collisionPair][]cachedContactImpulse)
+	currentContactImpulses := make(map[collisionPair][]cachedContactImpulse)
 	var tick uint64
 
 	for range ticker.C {
@@ -49,36 +64,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					body = &internalBody{Eid: es.Eid}
 					internalBodies[es.Eid] = body
 				}
-				if es.Teleport {
-					body.pos = es.Pos
-					body.rot = es.Rot
-				}
-				body.vel = es.Vel
-				body.angVel = es.AngVel
-				body.isStatic = es.IsStatic
-				massChanged := body.mass != es.Mass
-				modelChanged := !sameCollisionBoxes(body.boxes, es.Model.Boxes)
-				body.mass = es.Mass
-				body.model = es.Model
-				body.friction = es.Friction
-				body.restitution = es.Restitution
-				body.gravityScale = es.GravityScale
-				body.sleeping = es.Sleeping
-				body.linearDamping = es.LinearDamping
-				body.angularDamping = es.AngularDamping
-				if modelChanged {
-					if cap(body.boxes) < len(es.Model.Boxes) {
-						body.boxes = make([]InternalBox, len(es.Model.Boxes))
-					} else {
-						body.boxes = body.boxes[:len(es.Model.Boxes)]
-					}
-					for i, box := range es.Model.Boxes {
-						body.boxes[i].Box = box
-					}
-				}
-				if massChanged || modelChanged {
-					body.invInertiaLocal = calculateInverseInertiaLocal(body)
-				}
+				syncInternalBody(body, es, !ok)
 			}
 			// Cleanup dead entities
 			snapMap := make(map[EntityId]bool)
@@ -207,23 +193,42 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						}
 
 						// Ensure we only check each pair once.
-						// If both are dynamic, only process if b.Eid < other.Eid.
-						// If other is static, always process (since static won't initiate checks).
-						if !other.isStatic && b.Eid > other.Eid {
+						// If both are dynamic and awake, only initiate once.
+						// If other is static or sleeping, we MUST check it now because it won't run its own initiation.
+						if !other.isStatic && !other.sleeping && b.Eid > other.Eid {
 							continue
 						}
 
 						// Narrow-phase
-						for _, boxA := range b.boxes {
-							for _, boxB := range other.boxes {
-								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
+						voxelHandled := false
+						if b.model.Grid != nil || other.model.Grid != nil {
+							contacts, wasHandled := checkVoxelCollision(b, other, world.PointInOBBEpsilon)
+							if wasHandled {
+								voxelHandled = true
+								for _, contact := range contacts {
 									localManifolds = append(localManifolds, collisionManifold{
 										bodyA:       b,
 										bodyB:       other,
-										normal:      normal,
-										penetration: penetration,
-										point:       contactPoint,
+										normal:      contact.normal,
+										penetration: contact.penetration,
+										point:       contact.point,
 									})
+								}
+							}
+						}
+
+						if !voxelHandled {
+							for _, boxA := range b.boxes {
+								for _, boxB := range other.boxes {
+									if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
+										localManifolds = append(localManifolds, collisionManifold{
+											bodyA:       b,
+											bodyB:       other,
+											normal:      normal,
+											penetration: penetration,
+											point:       contactPoint,
+										})
+									}
 								}
 							}
 						}
@@ -237,6 +242,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			}(bodiesList[start:end])
 		}
 		wg.Wait()
+
+		cachePointThreshold := maxf(world.CollisionSlop*2.0, 0.06)
+		const cacheNormalThreshold = float32(0.9)
+		seedManifoldImpulses(manifolds, previousContactImpulses, cachePointThreshold, cacheNormalThreshold)
 
 		// 3. Sequential Resolution
 		for _, m := range manifolds {
@@ -279,6 +288,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			}
 		}
 
+		for i := range manifolds {
+			warmStartManifold(&manifolds[i])
+		}
+
 		for iter := 0; iter < world.SolverIterations; iter++ {
 			for i := range manifolds {
 				m := &manifolds[i]
@@ -301,12 +314,12 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					m.relativeSpeed = impactSpeed
 				}
 
-				if velAlongNormal > 0 {
+				if velAlongNormal > 0 && m.accumulatedNormalImpulse <= 0 {
 					continue
 				}
 
 				restitution := (b.restitution + other.restitution) * 0.5
-				if velAlongNormal > world.RestitutionThreshold {
+				if velAlongNormal > world.RestitutionThreshold || m.accumulatedNormalImpulse > 0 {
 					restitution = 0
 				}
 
@@ -319,32 +332,30 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 				j := -(1 + restitution) * velAlongNormal
 				j /= denom
-
+				oldNormalImpulse := m.accumulatedNormalImpulse
+				m.accumulatedNormalImpulse = maxf(oldNormalImpulse+j, 0)
+				j = m.accumulatedNormalImpulse - oldNormalImpulse
 				impulse := m.normal.Mul(j)
-				if absf(j) > m.normalImpulse {
-					m.normalImpulse = absf(j)
+				if m.accumulatedNormalImpulse > m.normalImpulse {
+					m.normalImpulse = m.accumulatedNormalImpulse
 				}
 
-				if invMassA > 0 {
-					b.vel = b.vel.Add(impulse.Mul(invMassA))
-					b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(impulse)))
-				}
-				if invMassB > 0 {
-					other.vel = other.vel.Sub(impulse.Mul(invMassB))
-					other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(impulse)))
-				}
+				applyWorldImpulse(b, rA, impulse, 1)
+				applyWorldImpulse(other, rB, impulse, -1)
 
 				impactWakeThreshold := world.WakeThreshold
-				if absf(velAlongNormal) > impactWakeThreshold || m.penetration > world.CollisionSlop {
-					if !b.isStatic {
-						b.Wake()
-					}
-					if !other.isStatic {
-						other.Wake()
-					}
-				}
+				highImpact := absf(velAlongNormal) > impactWakeThreshold
+				deepPenetration := m.penetration > world.CollisionSlop
+				wakeBodyForContact(b, highImpact, deepPenetration)
+				wakeBodyForContact(other, highImpact, deepPenetration)
 
 				friction := (b.friction + other.friction) * 0.5
+				vA = b.vel.Add(b.angVel.Cross(rA))
+				vB = other.vel
+				if !other.isStatic {
+					vB = other.vel.Add(other.angVel.Cross(rB))
+				}
+				relativeVel = vA.Sub(vB)
 				tangent := relativeVel.Sub(m.normal.Mul(relativeVel.Dot(m.normal)))
 				if tangent.Len() > 0.0001 {
 					tangent = tangent.Normalize()
@@ -352,28 +363,25 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					if tangentDenom > 0 {
 						jt := -relativeVel.Dot(tangent)
 						jt /= tangentDenom
-						maxFriction := friction * absf(j)
-						if jt > maxFriction {
-							jt = maxFriction
-						}
-						if jt < -maxFriction {
-							jt = -maxFriction
+						oldTangentImpulse := m.accumulatedTangentImpulse
+						candidateTangentImpulse := oldTangentImpulse.Add(tangent.Mul(jt))
+						maxFriction := friction * m.accumulatedNormalImpulse
+						if candidateLen := candidateTangentImpulse.Len(); candidateLen > maxFriction && candidateLen > 1e-6 {
+							candidateTangentImpulse = candidateTangentImpulse.Mul(maxFriction / candidateLen)
 						}
 
-						fImpulse := tangent.Mul(jt)
-						if invMassA > 0 {
-							b.vel = b.vel.Add(fImpulse.Mul(invMassA))
-							b.angVel = b.angVel.Add(applyInverseInertiaWorld(b, rA.Cross(fImpulse)))
-						}
-						if invMassB > 0 {
-							other.vel = other.vel.Sub(fImpulse.Mul(invMassB))
-							other.angVel = other.angVel.Sub(applyInverseInertiaWorld(other, rB.Cross(fImpulse)))
-						}
+						fImpulse := candidateTangentImpulse.Sub(oldTangentImpulse)
+						m.accumulatedTangentImpulse = candidateTangentImpulse
+						applyWorldImpulse(b, rA, fImpulse, 1)
+						applyWorldImpulse(other, rB, fImpulse, -1)
 					}
 				}
 
 			}
 		}
+
+		clearCollisionImpulseMap(currentContactImpulses)
+		storeCachedManifoldImpulses(currentContactImpulses, manifolds, cachePointThreshold, cacheNormalThreshold)
 
 		for pair := range currentPairs {
 			delete(currentPairs, pair)
@@ -465,7 +473,46 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			res.Collisions = append(res.Collisions, previous)
 		}
 		previousPairs, currentPairs = currentPairs, previousPairs
+		previousContactImpulses, currentContactImpulses = currentContactImpulses, previousContactImpulses
 		proxy.latestResults.Store(res)
+	}
+}
+
+func syncInternalBody(body *internalBody, es PhysicsEntityState, isNew bool) {
+	if es.Teleport || isNew {
+		body.pos = es.Pos
+		body.rot = es.Rot
+	}
+
+	body.vel = es.Vel
+	body.angVel = es.AngVel
+	body.isStatic = es.IsStatic
+
+	massChanged := body.mass != es.Mass
+	modelChanged := physicsModelChanged(body, es.Model)
+
+	body.mass = es.Mass
+	body.model = es.Model
+	body.friction = es.Friction
+	body.restitution = es.Restitution
+	body.gravityScale = es.GravityScale
+	body.sleeping = es.Sleeping
+	body.linearDamping = es.LinearDamping
+	body.angularDamping = es.AngularDamping
+
+	if modelChanged {
+		if cap(body.boxes) < len(es.Model.Boxes) {
+			body.boxes = make([]InternalBox, len(es.Model.Boxes))
+		} else {
+			body.boxes = body.boxes[:len(es.Model.Boxes)]
+		}
+		for i, box := range es.Model.Boxes {
+			body.boxes[i].Box = box
+		}
+	}
+
+	if massChanged || modelChanged {
+		body.invInertiaLocal = calculateInverseInertiaLocal(body)
 	}
 }
 
@@ -474,6 +521,232 @@ func orderedCollisionPair(a, b EntityId) collisionPair {
 		return collisionPair{A: a, B: b}
 	}
 	return collisionPair{A: b, B: a}
+}
+
+func seedManifoldImpulses(manifolds []collisionManifold, cache map[collisionPair][]cachedContactImpulse, pointThreshold float32, normalThreshold float32) {
+	if len(manifolds) == 0 || len(cache) == 0 {
+		return
+	}
+	if pointThreshold <= 0 {
+		pointThreshold = 0.05
+	}
+	pointThresholdSq := pointThreshold * pointThreshold
+	if normalThreshold <= 0 {
+		normalThreshold = 0.75
+	}
+
+	manifoldIndexesByPair := make(map[collisionPair][]int, len(manifolds))
+	for i := range manifolds {
+		pair := orderedCollisionPair(manifolds[i].bodyA.Eid, manifolds[i].bodyB.Eid)
+		manifoldIndexesByPair[pair] = append(manifoldIndexesByPair[pair], i)
+	}
+
+	for pair, manifoldIndexes := range manifoldIndexesByPair {
+		cachedContacts := cache[pair]
+		if len(cachedContacts) == 0 {
+			continue
+		}
+
+		usedManifolds := make([]bool, len(manifoldIndexes))
+		usedCachedContacts := make([]bool, len(cachedContacts))
+		for {
+			bestManifold := -1
+			bestCachedContact := -1
+			bestDistanceSq := float32(0)
+			bestImpulse := float32(0)
+
+			for localManifoldIndex, manifoldIndex := range manifoldIndexes {
+				if usedManifolds[localManifoldIndex] {
+					continue
+				}
+
+				manifold := &manifolds[manifoldIndex]
+				localPointA := worldPointToLocal(manifold.bodyA, manifold.point)
+				localPointB := worldPointToLocal(manifold.bodyB, manifold.point)
+				for cachedIndex, cached := range cachedContacts {
+					if usedCachedContacts[cachedIndex] || cached.normalImpulse <= 0 {
+						continue
+					}
+					if manifold.normal.Dot(cached.normal) < normalThreshold {
+						continue
+					}
+
+					distanceASq := localPointA.Sub(cached.localPointA).LenSqr()
+					if distanceASq > pointThresholdSq {
+						continue
+					}
+					distanceBSq := localPointB.Sub(cached.localPointB).LenSqr()
+					if distanceBSq > pointThresholdSq {
+						continue
+					}
+					distanceSq := distanceASq + distanceBSq
+
+					if bestManifold == -1 || distanceSq < bestDistanceSq || (distanceSq == bestDistanceSq && cached.normalImpulse > bestImpulse) {
+						bestManifold = localManifoldIndex
+						bestCachedContact = cachedIndex
+						bestDistanceSq = distanceSq
+						bestImpulse = cached.normalImpulse
+					}
+				}
+			}
+
+			if bestManifold == -1 || bestCachedContact == -1 {
+				break
+			}
+
+			manifold := &manifolds[manifoldIndexes[bestManifold]]
+			cached := cachedContacts[bestCachedContact]
+			manifold.accumulatedNormalImpulse = cached.normalImpulse
+			manifold.normalImpulse = maxf(manifold.normalImpulse, cached.normalImpulse)
+			usedManifolds[bestManifold] = true
+			usedCachedContacts[bestCachedContact] = true
+		}
+	}
+}
+
+func warmStartManifold(manifold *collisionManifold) {
+	if manifold == nil {
+		return
+	}
+	if manifold.accumulatedNormalImpulse <= 0 {
+		return
+	}
+
+	rA := manifold.point.Sub(manifold.bodyA.pos)
+	rB := manifold.point.Sub(manifold.bodyB.pos)
+	impulse := manifold.normal.Mul(manifold.accumulatedNormalImpulse)
+	applyWorldImpulse(manifold.bodyA, rA, impulse, 1)
+	applyWorldImpulse(manifold.bodyB, rB, impulse, -1)
+}
+
+func applyWorldImpulse(body *internalBody, r, impulse mgl32.Vec3, direction float32) {
+	invMass := inverseMass(body)
+	if invMass <= 0 {
+		return
+	}
+
+	signedImpulse := impulse.Mul(direction)
+	body.vel = body.vel.Add(signedImpulse.Mul(invMass))
+	body.angVel = body.angVel.Add(applyInverseInertiaWorld(body, r.Cross(signedImpulse)))
+}
+
+func clearCollisionImpulseMap(cache map[collisionPair][]cachedContactImpulse) {
+	for key := range cache {
+		delete(cache, key)
+	}
+}
+
+func storeCachedManifoldImpulses(cache map[collisionPair][]cachedContactImpulse, manifolds []collisionManifold, pointThreshold float32, normalThreshold float32) {
+	if len(manifolds) == 0 {
+		return
+	}
+
+	manifoldIndexesByPair := make(map[collisionPair][]int, len(manifolds))
+	for i := range manifolds {
+		if manifolds[i].accumulatedNormalImpulse <= 0 {
+			continue
+		}
+		pair := orderedCollisionPair(manifolds[i].bodyA.Eid, manifolds[i].bodyB.Eid)
+		manifoldIndexesByPair[pair] = append(manifoldIndexesByPair[pair], i)
+	}
+
+	const dominantNormalThreshold = float32(0.9)
+	const maxCachedContactsPerPair = 4
+	for _, manifoldIndexes := range manifoldIndexesByPair {
+		dominantNormal := manifolds[manifoldIndexes[0]].normal
+		dominantImpulse := manifolds[manifoldIndexes[0]].accumulatedNormalImpulse
+		for _, manifoldIndex := range manifoldIndexes[1:] {
+			if manifolds[manifoldIndex].accumulatedNormalImpulse > dominantImpulse {
+				dominantImpulse = manifolds[manifoldIndex].accumulatedNormalImpulse
+				dominantNormal = manifolds[manifoldIndex].normal
+			}
+		}
+
+		used := make([]bool, len(manifoldIndexes))
+		cachedCount := 0
+		for cachedCount < maxCachedContactsPerPair {
+			bestLocalIndex := -1
+			bestImpulse := float32(0)
+			bestPenetration := float32(0)
+
+			for localIndex, manifoldIndex := range manifoldIndexes {
+				if used[localIndex] {
+					continue
+				}
+
+				manifold := &manifolds[manifoldIndex]
+				if manifold.normal.Dot(dominantNormal) < dominantNormalThreshold {
+					continue
+				}
+
+				if bestLocalIndex == -1 ||
+					manifold.accumulatedNormalImpulse > bestImpulse ||
+					(manifold.accumulatedNormalImpulse == bestImpulse && manifold.penetration > bestPenetration) {
+					bestLocalIndex = localIndex
+					bestImpulse = manifold.accumulatedNormalImpulse
+					bestPenetration = manifold.penetration
+				}
+			}
+
+			if bestLocalIndex == -1 {
+				break
+			}
+
+			used[bestLocalIndex] = true
+			storeCachedManifoldImpulse(cache, &manifolds[manifoldIndexes[bestLocalIndex]], pointThreshold, normalThreshold)
+			cachedCount++
+		}
+	}
+}
+
+func storeCachedManifoldImpulse(cache map[collisionPair][]cachedContactImpulse, manifold *collisionManifold, pointThreshold float32, normalThreshold float32) {
+	if manifold == nil || manifold.accumulatedNormalImpulse <= 0 {
+		return
+	}
+	if pointThreshold <= 0 {
+		pointThreshold = 0.05
+	}
+	pointThresholdSq := pointThreshold * pointThreshold
+	if normalThreshold <= 0 {
+		normalThreshold = 0.75
+	}
+
+	pair := orderedCollisionPair(manifold.bodyA.Eid, manifold.bodyB.Eid)
+	candidate := cachedContactImpulse{
+		point:         manifold.point,
+		localPointA:   worldPointToLocal(manifold.bodyA, manifold.point),
+		localPointB:   worldPointToLocal(manifold.bodyB, manifold.point),
+		normal:        manifold.normal,
+		normalImpulse: manifold.accumulatedNormalImpulse,
+	}
+
+	for i, existing := range cache[pair] {
+		if manifold.normal.Dot(existing.normal) < normalThreshold {
+			continue
+		}
+		if candidate.localPointA.Sub(existing.localPointA).LenSqr() > pointThresholdSq {
+			continue
+		}
+		if candidate.localPointB.Sub(existing.localPointB).LenSqr() > pointThresholdSq {
+			continue
+		}
+
+		merged := candidate
+		if existing.normalImpulse > merged.normalImpulse {
+			merged.normalImpulse = existing.normalImpulse
+		}
+		cache[pair][i] = merged
+		return
+	}
+
+	cache[pair] = append(cache[pair], candidate)
+}
+
+func worldPointToLocal(body *internalBody, point mgl32.Vec3) mgl32.Vec3 {
+	if body == nil {
+		return point
+	}
+	return body.rot.Conjugate().Rotate(point.Sub(body.pos))
 }
 
 func mergeCollisionEvent(current, candidate PhysicsCollisionEvent) PhysicsCollisionEvent {
@@ -492,6 +765,19 @@ func mergeCollisionEvent(current, candidate PhysicsCollisionEvent) PhysicsCollis
 		current.Tick = candidate.Tick
 	}
 	return current
+}
+
+func wakeBodyForContact(body *internalBody, highImpact bool, deepPenetration bool) {
+	if body == nil || body.isStatic {
+		return
+	}
+
+	// Resting contacts can sit slightly above slop for several ticks while the
+	// position solver settles. Only reset awake bodies on real impacts; otherwise
+	// they never accumulate enough idle time to go to sleep and appear to jitter.
+	if highImpact || (body.sleeping && deepPenetration) {
+		body.Wake()
+	}
 }
 
 func (b *internalBody) Wake() {
@@ -588,6 +874,30 @@ func sameCollisionBoxes(boxes []InternalBox, modelBoxes []CollisionBox) bool {
 	return true
 }
 
+func sameVoxelGrid(a, b rootphysics.VoxelGrid) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	ta := reflect.TypeOf(a)
+	tb := reflect.TypeOf(b)
+	if ta != tb || !ta.Comparable() {
+		return false
+	}
+
+	return reflect.ValueOf(a).Interface() == reflect.ValueOf(b).Interface()
+}
+
+func physicsModelChanged(body *internalBody, model PhysicsModel) bool {
+	if body == nil {
+		return true
+	}
+
+	return body.model.CenterOffset != model.CenterOffset ||
+		!sameCollisionBoxes(body.boxes, model.Boxes) ||
+		!sameVoxelGrid(body.model.Grid, model.Grid)
+}
+
 func inverseMass(b *internalBody) float32 {
 	if b == nil || b.isStatic || b.mass <= 0 {
 		return 0
@@ -615,6 +925,12 @@ func applyInverseInertiaWorld(b *internalBody, angularImpulse mgl32.Vec3) mgl32.
 
 func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
 	localInertia := calculateLocalInertiaTensor(b)
+	if absf(localInertia.Det()) > 1e-6 {
+		return localInertia.Inv()
+	}
+	if inverse, ok := invertSymmetricInertiaTensor(localInertia); ok {
+		return inverse
+	}
 	if absf(localInertia.Det()) <= 1e-6 {
 		return mgl32.Ident3()
 	}
@@ -622,13 +938,74 @@ func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
 }
 
 func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
-	if len(b.boxes) == 0 || b.mass <= 0 {
+	if b.mass <= 0 {
+		return mgl32.Ident3()
+	}
+
+	if b.model.Grid != nil {
+		grid := b.model.Grid
+		voxelScale := grid.VoxelScale()
+		voxelHalfExtents := voxelScale.Mul(0.5)
+		minV := grid.GetAABBMin()
+		maxV := grid.GetAABBMax()
+
+		// First pass: count voxels
+		var count int
+		for vz := int(minV.Z()); vz < int(maxV.Z()); vz++ {
+			for vy := int(minV.Y()); vy < int(maxV.Y()); vy++ {
+				for vx := int(minV.X()); vx < int(maxV.X()); vx++ {
+					if found, _ := grid.GetVoxel(vx, vy, vz); found {
+						count++
+					}
+				}
+			}
+		}
+
+		if count == 0 {
+			return mgl32.Ident3()
+		}
+
+		m := b.mass / float32(count)
+		com := b.model.CenterOffset
+		voxelIxx := (1.0 / 3.0) * m * (voxelHalfExtents.Y()*voxelHalfExtents.Y() + voxelHalfExtents.Z()*voxelHalfExtents.Z())
+		voxelIyy := (1.0 / 3.0) * m * (voxelHalfExtents.X()*voxelHalfExtents.X() + voxelHalfExtents.Z()*voxelHalfExtents.Z())
+		voxelIzz := (1.0 / 3.0) * m * (voxelHalfExtents.X()*voxelHalfExtents.X() + voxelHalfExtents.Y()*voxelHalfExtents.Y())
+
+		// Single pass: compute inertia tensor directly without storing positions
+		var ixx, iyy, izz, ixy, ixz, iyz float32
+		for vz := int(minV.Z()); vz < int(maxV.Z()); vz++ {
+			for vy := int(minV.Y()); vy < int(maxV.Y()); vy++ {
+				for vx := int(minV.X()); vx < int(maxV.X()); vx++ {
+					if found, _ := grid.GetVoxel(vx, vy, vz); found {
+						pos := vec3MulComponents(mgl32.Vec3{float32(vx) + 0.5, float32(vy) + 0.5, float32(vz) + 0.5}, voxelScale)
+						d := pos.Sub(com)
+						ixx += voxelIxx + m*(d.Y()*d.Y()+d.Z()*d.Z())
+						iyy += voxelIyy + m*(d.X()*d.X()+d.Z()*d.Z())
+						izz += voxelIzz + m*(d.X()*d.X()+d.Y()*d.Y())
+						ixy -= m * d.X() * d.Y()
+						ixz -= m * d.X() * d.Z()
+						iyz -= m * d.Y() * d.Z()
+					}
+				}
+			}
+		}
+
+		res := mgl32.Mat3FromRows(
+			mgl32.Vec3{ixx, ixy, ixz},
+			mgl32.Vec3{ixy, iyy, iyz},
+			mgl32.Vec3{ixz, iyz, izz},
+		)
+
+		return res
+	}
+
+	if len(b.boxes) == 0 {
 		return mgl32.Ident3()
 	}
 
 	totalVolume := float32(0)
 	for _, box := range b.boxes {
-		totalVolume += box.Box.HalfExtents.X() * box.Box.HalfExtents.Y() * box.Box.HalfExtents.Z() * 8.0
+		totalVolume += effectiveCollisionBoxVolume(box.Box.HalfExtents)
 	}
 	if totalVolume <= 0 {
 		return mgl32.Ident3()
@@ -637,7 +1014,7 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 	totalInertia := mgl32.Mat3{}
 	for _, box := range b.boxes {
 		half := box.Box.HalfExtents
-		volume := half.X() * half.Y() * half.Z() * 8.0
+		volume := effectiveCollisionBoxVolume(half)
 		boxMass := (volume / totalVolume) * b.mass
 
 		ix := (1.0 / 3.0) * boxMass * (half.Y()*half.Y() + half.Z()*half.Z())
@@ -667,4 +1044,139 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 func rotationMat3(q mgl32.Quat) mgl32.Mat3 {
 	rot := q.Mat4()
 	return mgl32.Mat3FromCols(rot.Col(0).Vec3(), rot.Col(1).Vec3(), rot.Col(2).Vec3())
+}
+
+func effectiveCollisionBoxVolume(halfExtents mgl32.Vec3) float32 {
+	volume := halfExtents.X() * halfExtents.Y() * halfExtents.Z() * 8.0
+	if volume > 0 {
+		return volume
+	}
+
+	maxHalfExtent := maxf(halfExtents.X(), maxf(halfExtents.Y(), halfExtents.Z()))
+	if maxHalfExtent <= 0 {
+		return 0
+	}
+
+	extentFloor := maxf(maxHalfExtent*1e-3, 1e-4)
+	effectiveHalfExtents := mgl32.Vec3{
+		maxf(halfExtents.X(), extentFloor),
+		maxf(halfExtents.Y(), extentFloor),
+		maxf(halfExtents.Z(), extentFloor),
+	}
+	return effectiveHalfExtents.X() * effectiveHalfExtents.Y() * effectiveHalfExtents.Z() * 8.0
+}
+
+func invertSymmetricInertiaTensor(m mgl32.Mat3) (mgl32.Mat3, bool) {
+	a := [3][3]float64{
+		{float64(m[0]), float64(m[3]), float64(m[6])},
+		{float64(m[1]), float64(m[4]), float64(m[7])},
+		{float64(m[2]), float64(m[5]), float64(m[8])},
+	}
+	for row := 0; row < 3; row++ {
+		for col := row + 1; col < 3; col++ {
+			symmetric := 0.5 * (a[row][col] + a[col][row])
+			a[row][col] = symmetric
+			a[col][row] = symmetric
+		}
+	}
+
+	maxEntry := 0.0
+	for row := 0; row < 3; row++ {
+		for col := 0; col < 3; col++ {
+			maxEntry = math.Max(maxEntry, math.Abs(a[row][col]))
+		}
+	}
+	if maxEntry <= 1e-12 {
+		return mgl32.Mat3{}, false
+	}
+
+	v := [3][3]float64{
+		{1, 0, 0},
+		{0, 1, 0},
+		{0, 0, 1},
+	}
+	epsilon := maxEntry * 1e-10
+	for sweep := 0; sweep < 8; sweep++ {
+		rotated := false
+		rotated = jacobiRotateSymmetric3(&a, &v, 0, 1, epsilon) || rotated
+		rotated = jacobiRotateSymmetric3(&a, &v, 0, 2, epsilon) || rotated
+		rotated = jacobiRotateSymmetric3(&a, &v, 1, 2, epsilon) || rotated
+		if !rotated {
+			break
+		}
+	}
+
+	maxPrincipalMoment := 0.0
+	for axis := 0; axis < 3; axis++ {
+		maxPrincipalMoment = math.Max(maxPrincipalMoment, a[axis][axis])
+	}
+	if maxPrincipalMoment <= 1e-12 {
+		return mgl32.Mat3{}, false
+	}
+
+	// Bound anisotropy so extremely thin or degenerate bodies keep their axis
+	// preference without producing explosive angular response.
+	principalMomentFloor := math.Max(maxPrincipalMoment*1e-2, 1e-9)
+	var inverse [3][3]float64
+	for axis := 0; axis < 3; axis++ {
+		principalMoment := a[axis][axis]
+		if principalMoment < principalMomentFloor {
+			principalMoment = principalMomentFloor
+		}
+		invPrincipalMoment := 1.0 / principalMoment
+		for row := 0; row < 3; row++ {
+			for col := 0; col < 3; col++ {
+				inverse[row][col] += v[row][axis] * invPrincipalMoment * v[col][axis]
+			}
+		}
+	}
+
+	return mgl32.Mat3FromRows(
+		mgl32.Vec3{float32(inverse[0][0]), float32(inverse[0][1]), float32(inverse[0][2])},
+		mgl32.Vec3{float32(inverse[1][0]), float32(inverse[1][1]), float32(inverse[1][2])},
+		mgl32.Vec3{float32(inverse[2][0]), float32(inverse[2][1]), float32(inverse[2][2])},
+	), true
+}
+
+func jacobiRotateSymmetric3(a *[3][3]float64, v *[3][3]float64, p int, q int, epsilon float64) bool {
+	if math.Abs(a[p][q]) <= epsilon {
+		return false
+	}
+
+	tau := (a[q][q] - a[p][p]) / (2.0 * a[p][q])
+	t := 1.0 / (math.Abs(tau) + math.Sqrt(1.0+tau*tau))
+	if tau < 0 {
+		t = -t
+	}
+	c := 1.0 / math.Sqrt(1.0+t*t)
+	s := t * c
+
+	app := a[p][p]
+	aqq := a[q][q]
+	apq := a[p][q]
+	a[p][p] = app - t*apq
+	a[q][q] = aqq + t*apq
+	a[p][q] = 0
+	a[q][p] = 0
+
+	for r := 0; r < 3; r++ {
+		if r == p || r == q {
+			continue
+		}
+		arp := a[r][p]
+		arq := a[r][q]
+		a[r][p] = c*arp - s*arq
+		a[p][r] = a[r][p]
+		a[r][q] = c*arq + s*arp
+		a[q][r] = a[r][q]
+	}
+
+	for r := 0; r < 3; r++ {
+		vrp := v[r][p]
+		vrq := v[r][q]
+		v[r][p] = c*vrp - s*vrq
+		v[r][q] = c*vrq + s*vrp
+	}
+
+	return true
 }
