@@ -297,3 +297,57 @@ func TestVoxPhysicsPreCalcSystem_TracksNonUniformScalePerAxis(t *testing.T) {
 		t.Fatalf("expected half extents %v, got %v", wantHalfExtents, model.Boxes[0].HalfExtents)
 	}
 }
+
+func TestVoxPhysicsPreCalcSystem_CleansDestroyedEntityCacheWithoutPanicking(t *testing.T) {
+	cmd, server, cache := newVoxelPhysicsPrecalcTestHarness()
+
+	assetID := rootassets.NewID()
+	server.voxModels[assetID] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: 1,
+			SizeY: 1,
+			SizeZ: 1,
+			Voxels: []Voxel{{
+				X:          0,
+				Y:          0,
+				Z:          0,
+				ColorIndex: 1,
+			}},
+		},
+	}
+
+	eid := cmd.AddEntity(
+		VoxelModelComponent{VoxelModel: assetID},
+		RigidBodyComponent{Mass: 1},
+		TransformComponent{Scale: mgl32.Vec3{1, 1, 1}},
+	)
+	cmd.app.FlushCommands()
+
+	VoxPhysicsPreCalcSystem(cmd, server, nil, cache)
+	cmd.app.FlushCommands()
+	if _, ok := cache.Snapshots[eid]; !ok {
+		t.Fatal("expected precalc to create a cached snapshot before entity removal")
+	}
+
+	cmd.RemoveEntity(eid)
+	cmd.app.FlushCommands()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("expected destroyed-entity cache cleanup not to panic, got %v", r)
+		}
+	}()
+
+	VoxPhysicsPreCalcSystem(cmd, server, nil, cache)
+	cmd.app.FlushCommands()
+
+	if _, ok := cache.Snapshots[eid]; ok {
+		t.Fatal("expected destroyed entity snapshot to be cleaned up")
+	}
+	if _, ok := cache.BuildStamps[eid]; ok {
+		t.Fatal("expected destroyed entity build stamp to be cleaned up")
+	}
+	if comps := cmd.GetAllComponents(eid); len(comps) != 0 {
+		t.Fatalf("expected removed entity to return no components, got %d", len(comps))
+	}
+}

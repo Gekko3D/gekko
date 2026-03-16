@@ -335,9 +335,20 @@ func (ecs *Ecs) getComponentType(componentId componentId) reflect.Type {
 }
 
 func (ecs *Ecs) getAllComponents(entityId EntityId) []any {
-	archID := ecs.storage.entityIndex[entityId]
-	arch := ecs.storage.archetypes[archID]
-	r := arch.entities[entityId]
+	archID, ok := ecs.storage.entityIndex[entityId]
+	if !ok {
+		return nil
+	}
+
+	arch, ok := ecs.storage.archetypes[archID]
+	if !ok || arch == nil {
+		return nil
+	}
+
+	r, ok := arch.entities[entityId]
+	if !ok {
+		return nil
+	}
 
 	res := make([]any, 0, len(arch.componentData))
 	for _, componentsSlice := range arch.componentData {
