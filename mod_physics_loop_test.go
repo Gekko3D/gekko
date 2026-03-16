@@ -52,6 +52,10 @@ func mat3MaxDiff(a, b mgl32.Mat3) float32 {
 	return maxDiff
 }
 
+func mat3Diagonal(m mgl32.Mat3) mgl32.Vec3 {
+	return mgl32.Vec3{m[0], m[4], m[8]}
+}
+
 func TestSyncInternalBodyRecalculatesInertiaWhenVoxelGridChanges(t *testing.T) {
 	initialGrid := makeVoxelGridSnapshot([][3]int{
 		{0, 0, 0},
@@ -92,6 +96,49 @@ func TestSyncInternalBodyRecalculatesInertiaWhenVoxelGridChanges(t *testing.T) {
 	syncInternalBody(body, editedState, false)
 	if diff := mat3MaxDiff(sentinel, body.invInertiaLocal); diff <= 1e-4 {
 		t.Fatalf("expected syncInternalBody to recalculate inertia after voxel edit, max diff from sentinel was %.6f", diff)
+	}
+}
+
+func TestCalculateLocalInertiaTensorSingleVoxelIncludesVoxelExtents(t *testing.T) {
+	body := &internalBody{
+		mass: 2,
+		model: PhysicsModel{
+			CenterOffset: mgl32.Vec3{VoxelSize * 0.5, VoxelSize * 0.5, VoxelSize * 0.5},
+			Grid:         testSolidGrid{size: [3]int{1, 1, 1}, vSize: VoxelSize},
+		},
+	}
+
+	inertia := calculateLocalInertiaTensor(body)
+	diag := mat3Diagonal(inertia)
+	want := body.mass * VoxelSize * VoxelSize / 6.0
+	if absf(diag.X()-want) > 1e-5 || absf(diag.Y()-want) > 1e-5 || absf(diag.Z()-want) > 1e-5 {
+		t.Fatalf("expected single voxel inertia diagonal near %.6f, got %v", want, diag)
+	}
+	if absf(inertia.Det()) <= 1e-8 {
+		t.Fatalf("expected single voxel inertia tensor to be non-degenerate, got determinant %.8f", inertia.Det())
+	}
+}
+
+func TestCalculateInverseInertiaLocalUsesBoundedPseudoInverseForThinRod(t *testing.T) {
+	body := &internalBody{
+		mass: 3,
+		boxes: []InternalBox{{
+			Box: CollisionBox{
+				HalfExtents: mgl32.Vec3{2, 0, 0},
+			},
+		}},
+	}
+
+	invInertia := calculateInverseInertiaLocal(body)
+	diag := mat3Diagonal(invInertia)
+	if absf(diag.Y()-0.25) > 1e-4 || absf(diag.Z()-0.25) > 1e-4 {
+		t.Fatalf("expected rod inverse inertia around 0.25 on transverse axes, got %v", diag)
+	}
+	if diag.X() <= diag.Y()*10 {
+		t.Fatalf("expected rod inverse inertia to keep strong axis preference, got %v", diag)
+	}
+	if absf(diag.X()-1) < 1e-4 && absf(diag.Y()-1) < 1e-4 && absf(diag.Z()-1) < 1e-4 {
+		t.Fatalf("expected thin rod inverse inertia not to fall back to identity, got %v", diag)
 	}
 }
 

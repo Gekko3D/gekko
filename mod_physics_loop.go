@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"math"
 	"reflect"
 	"runtime"
 	"sync"
@@ -924,6 +925,12 @@ func applyInverseInertiaWorld(b *internalBody, angularImpulse mgl32.Vec3) mgl32.
 
 func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
 	localInertia := calculateLocalInertiaTensor(b)
+	if absf(localInertia.Det()) > 1e-6 {
+		return localInertia.Inv()
+	}
+	if inverse, ok := invertSymmetricInertiaTensor(localInertia); ok {
+		return inverse
+	}
 	if absf(localInertia.Det()) <= 1e-6 {
 		return mgl32.Ident3()
 	}
@@ -938,6 +945,7 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 	if b.model.Grid != nil {
 		grid := b.model.Grid
 		voxelScale := grid.VoxelScale()
+		voxelHalfExtents := voxelScale.Mul(0.5)
 		minV := grid.GetAABBMin()
 		maxV := grid.GetAABBMax()
 
@@ -959,6 +967,9 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 
 		m := b.mass / float32(count)
 		com := b.model.CenterOffset
+		voxelIxx := (1.0 / 3.0) * m * (voxelHalfExtents.Y()*voxelHalfExtents.Y() + voxelHalfExtents.Z()*voxelHalfExtents.Z())
+		voxelIyy := (1.0 / 3.0) * m * (voxelHalfExtents.X()*voxelHalfExtents.X() + voxelHalfExtents.Z()*voxelHalfExtents.Z())
+		voxelIzz := (1.0 / 3.0) * m * (voxelHalfExtents.X()*voxelHalfExtents.X() + voxelHalfExtents.Y()*voxelHalfExtents.Y())
 
 		// Single pass: compute inertia tensor directly without storing positions
 		var ixx, iyy, izz, ixy, ixz, iyz float32
@@ -968,9 +979,9 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 					if found, _ := grid.GetVoxel(vx, vy, vz); found {
 						pos := vec3MulComponents(mgl32.Vec3{float32(vx) + 0.5, float32(vy) + 0.5, float32(vz) + 0.5}, voxelScale)
 						d := pos.Sub(com)
-						ixx += m * (d.Y()*d.Y() + d.Z()*d.Z())
-						iyy += m * (d.X()*d.X() + d.Z()*d.Z())
-						izz += m * (d.X()*d.X() + d.Y()*d.Y())
+						ixx += voxelIxx + m*(d.Y()*d.Y()+d.Z()*d.Z())
+						iyy += voxelIyy + m*(d.X()*d.X()+d.Z()*d.Z())
+						izz += voxelIzz + m*(d.X()*d.X()+d.Y()*d.Y())
 						ixy -= m * d.X() * d.Y()
 						ixz -= m * d.X() * d.Z()
 						iyz -= m * d.Y() * d.Z()
@@ -985,9 +996,6 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 			mgl32.Vec3{ixz, iyz, izz},
 		)
 
-		if absf(res.Det()) < 1e-7 {
-			return mgl32.Ident3()
-		}
 		return res
 	}
 
@@ -997,7 +1005,7 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 
 	totalVolume := float32(0)
 	for _, box := range b.boxes {
-		totalVolume += box.Box.HalfExtents.X() * box.Box.HalfExtents.Y() * box.Box.HalfExtents.Z() * 8.0
+		totalVolume += effectiveCollisionBoxVolume(box.Box.HalfExtents)
 	}
 	if totalVolume <= 0 {
 		return mgl32.Ident3()
@@ -1006,7 +1014,7 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 	totalInertia := mgl32.Mat3{}
 	for _, box := range b.boxes {
 		half := box.Box.HalfExtents
-		volume := half.X() * half.Y() * half.Z() * 8.0
+		volume := effectiveCollisionBoxVolume(half)
 		boxMass := (volume / totalVolume) * b.mass
 
 		ix := (1.0 / 3.0) * boxMass * (half.Y()*half.Y() + half.Z()*half.Z())
@@ -1036,4 +1044,139 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 func rotationMat3(q mgl32.Quat) mgl32.Mat3 {
 	rot := q.Mat4()
 	return mgl32.Mat3FromCols(rot.Col(0).Vec3(), rot.Col(1).Vec3(), rot.Col(2).Vec3())
+}
+
+func effectiveCollisionBoxVolume(halfExtents mgl32.Vec3) float32 {
+	volume := halfExtents.X() * halfExtents.Y() * halfExtents.Z() * 8.0
+	if volume > 0 {
+		return volume
+	}
+
+	maxHalfExtent := maxf(halfExtents.X(), maxf(halfExtents.Y(), halfExtents.Z()))
+	if maxHalfExtent <= 0 {
+		return 0
+	}
+
+	extentFloor := maxf(maxHalfExtent*1e-3, 1e-4)
+	effectiveHalfExtents := mgl32.Vec3{
+		maxf(halfExtents.X(), extentFloor),
+		maxf(halfExtents.Y(), extentFloor),
+		maxf(halfExtents.Z(), extentFloor),
+	}
+	return effectiveHalfExtents.X() * effectiveHalfExtents.Y() * effectiveHalfExtents.Z() * 8.0
+}
+
+func invertSymmetricInertiaTensor(m mgl32.Mat3) (mgl32.Mat3, bool) {
+	a := [3][3]float64{
+		{float64(m[0]), float64(m[3]), float64(m[6])},
+		{float64(m[1]), float64(m[4]), float64(m[7])},
+		{float64(m[2]), float64(m[5]), float64(m[8])},
+	}
+	for row := 0; row < 3; row++ {
+		for col := row + 1; col < 3; col++ {
+			symmetric := 0.5 * (a[row][col] + a[col][row])
+			a[row][col] = symmetric
+			a[col][row] = symmetric
+		}
+	}
+
+	maxEntry := 0.0
+	for row := 0; row < 3; row++ {
+		for col := 0; col < 3; col++ {
+			maxEntry = math.Max(maxEntry, math.Abs(a[row][col]))
+		}
+	}
+	if maxEntry <= 1e-12 {
+		return mgl32.Mat3{}, false
+	}
+
+	v := [3][3]float64{
+		{1, 0, 0},
+		{0, 1, 0},
+		{0, 0, 1},
+	}
+	epsilon := maxEntry * 1e-10
+	for sweep := 0; sweep < 8; sweep++ {
+		rotated := false
+		rotated = jacobiRotateSymmetric3(&a, &v, 0, 1, epsilon) || rotated
+		rotated = jacobiRotateSymmetric3(&a, &v, 0, 2, epsilon) || rotated
+		rotated = jacobiRotateSymmetric3(&a, &v, 1, 2, epsilon) || rotated
+		if !rotated {
+			break
+		}
+	}
+
+	maxPrincipalMoment := 0.0
+	for axis := 0; axis < 3; axis++ {
+		maxPrincipalMoment = math.Max(maxPrincipalMoment, a[axis][axis])
+	}
+	if maxPrincipalMoment <= 1e-12 {
+		return mgl32.Mat3{}, false
+	}
+
+	// Bound anisotropy so extremely thin or degenerate bodies keep their axis
+	// preference without producing explosive angular response.
+	principalMomentFloor := math.Max(maxPrincipalMoment*1e-2, 1e-9)
+	var inverse [3][3]float64
+	for axis := 0; axis < 3; axis++ {
+		principalMoment := a[axis][axis]
+		if principalMoment < principalMomentFloor {
+			principalMoment = principalMomentFloor
+		}
+		invPrincipalMoment := 1.0 / principalMoment
+		for row := 0; row < 3; row++ {
+			for col := 0; col < 3; col++ {
+				inverse[row][col] += v[row][axis] * invPrincipalMoment * v[col][axis]
+			}
+		}
+	}
+
+	return mgl32.Mat3FromRows(
+		mgl32.Vec3{float32(inverse[0][0]), float32(inverse[0][1]), float32(inverse[0][2])},
+		mgl32.Vec3{float32(inverse[1][0]), float32(inverse[1][1]), float32(inverse[1][2])},
+		mgl32.Vec3{float32(inverse[2][0]), float32(inverse[2][1]), float32(inverse[2][2])},
+	), true
+}
+
+func jacobiRotateSymmetric3(a *[3][3]float64, v *[3][3]float64, p int, q int, epsilon float64) bool {
+	if math.Abs(a[p][q]) <= epsilon {
+		return false
+	}
+
+	tau := (a[q][q] - a[p][p]) / (2.0 * a[p][q])
+	t := 1.0 / (math.Abs(tau) + math.Sqrt(1.0+tau*tau))
+	if tau < 0 {
+		t = -t
+	}
+	c := 1.0 / math.Sqrt(1.0+t*t)
+	s := t * c
+
+	app := a[p][p]
+	aqq := a[q][q]
+	apq := a[p][q]
+	a[p][p] = app - t*apq
+	a[q][q] = aqq + t*apq
+	a[p][q] = 0
+	a[q][p] = 0
+
+	for r := 0; r < 3; r++ {
+		if r == p || r == q {
+			continue
+		}
+		arp := a[r][p]
+		arq := a[r][q]
+		a[r][p] = c*arp - s*arq
+		a[p][r] = a[r][p]
+		a[r][q] = c*arq + s*arp
+		a[q][r] = a[r][q]
+	}
+
+	for r := 0; r < 3; r++ {
+		vrp := v[r][p]
+		vrq := v[r][q]
+		v[r][p] = c*vrp - s*vrq
+		v[r][q] = c*vrq + s*vrp
+	}
+
+	return true
 }
