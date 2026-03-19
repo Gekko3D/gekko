@@ -6,6 +6,7 @@ const CurrentAssetSchemaVersion = 1
 
 type Vec3 [3]float32
 type Vec4 [4]float32
+type Vec2 [2]float32
 type Quat [4]float32
 type Range2 [2]float32
 

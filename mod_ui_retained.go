@@ -7,11 +7,11 @@ import (
 )
 
 const (
-	uiPanelPadding   = float32(16)
-	uiPanelSpacing   = float32(10)
-	uiPanelLabelGap  = float32(12)
-	uiFieldPaddingX  = float32(16)
-	uiFieldPaddingY  = float32(10)
+	uiPanelPadding   = float32(10)
+	uiPanelSpacing   = float32(6)
+	uiPanelLabelGap  = float32(8)
+	uiFieldPaddingX  = float32(10)
+	uiFieldPaddingY  = float32(7)
 	uiPanelMinHeight = float32(12)
 )
 
@@ -853,11 +853,15 @@ func uiRenderLayout(root *uiLayoutNode, layout *uiLayoutNode, eid EntityId, ctx 
 
 func uiRenderPanel(layout *uiLayoutNode, ctx uiLayoutContext, panel *UiPanel) {
 	scale := uiNodeScale(panel.Scale)
+	padding := panel.Padding
+	if padding <= 0 {
+		padding = uiPanelPadding
+	}
 	color := [4]float32{0.9, 0.9, 0.9, 1}
 	uiDrawBox(ctx, layout.x, layout.y, layout.w, layout.h, color, scale)
 	if panel.Title != "" {
-		uiDrawText(ctx, panel.Title, layout.x+uiPanelPadding, layout.y+uiPanelPadding, scale, [4]float32{1, 1, 0, 1})
-		uiDrawText(ctx, strings.Repeat("-", intMax(8, len(panel.Title)+2)), layout.x+uiPanelPadding, layout.y+uiPanelPadding+uiTextHeight(ctx, scale)*0.9, 0.45, [4]float32{0.65, 0.65, 0.65, 1})
+		uiDrawText(ctx, panel.Title, layout.x+padding, layout.y+padding, scale, [4]float32{1, 1, 0, 1})
+		uiDrawText(ctx, strings.Repeat("-", intMax(8, len(panel.Title)+2)), layout.x+padding, layout.y+padding+uiTextHeight(ctx, scale)*0.9, 0.45, [4]float32{0.65, 0.65, 0.65, 1})
 	}
 	if layout.scrollMax > 0 {
 		uiDrawScrollbar(ctx, layout)

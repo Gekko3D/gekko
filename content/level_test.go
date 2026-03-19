@@ -15,7 +15,7 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 		StreamingRadius: 6,
 		Tags:            []string{"space"},
 		Terrain: &LevelTerrainDef{
-			Kind:       "heightfield",
+			Kind:       TerrainKindHeightfield,
 			SourcePath: "terrain/height.png",
 		},
 		Environment: &LevelEnvironmentDef{
@@ -58,6 +58,26 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	if err := os.WriteFile(assetPath, []byte("{}"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	terrainSourcePath := filepath.Join(tmpDir, "assets", "terrain", "station.gkterrain")
+	if err := os.MkdirAll(filepath.Dir(terrainSourcePath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveTerrainSource(terrainSourcePath, &TerrainSourceDef{
+		ID:              "terrain-1",
+		SchemaVersion:   CurrentTerrainSchemaVersion,
+		Name:            "station_terrain",
+		Kind:            TerrainKindHeightfield,
+		SampleWidth:     2,
+		SampleHeight:    2,
+		HeightSamples:   []uint16{0, 1, 2, 3},
+		WorldSize:       Vec2{32, 32},
+		HeightScale:     16,
+		VoxelResolution: 1,
+		ChunkSize:       16,
+	}); err != nil {
+		t.Fatalf("SaveTerrainSource failed: %v", err)
+	}
+	level.Terrain.SourcePath = filepath.Join("terrain", "station.gkterrain")
 
 	path := filepath.Join(tmpDir, "assets", "station.gklevel")
 	if err := SaveLevel(path, level); err != nil {
@@ -150,6 +170,21 @@ func TestValidateLevelRejectsInvalidPlacements(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "empty_asset_path")
 	assertHasLevelValidationCode(t, result, "invalid_placement_mode")
 	assertHasLevelValidationCode(t, result, "missing_asset_file")
+}
+
+func TestValidateLevelRejectsBrokenTerrainReference(t *testing.T) {
+	tmpDir := t.TempDir()
+	def := NewLevelDef("terrain")
+	def.Terrain = &LevelTerrainDef{
+		Kind:       TerrainKindHeightfield,
+		SourcePath: "missing.gkterrain",
+	}
+
+	result := ValidateLevel(def, LevelValidationOptions{DocumentPath: filepath.Join(tmpDir, "assets", "level.gklevel")})
+	if !result.HasErrors() {
+		t.Fatal("expected terrain validation errors")
+	}
+	assertHasLevelValidationCode(t, result, "missing_terrain_source_file")
 }
 
 func assertHasLevelValidationCode(t *testing.T, result LevelValidationResult, want string) {

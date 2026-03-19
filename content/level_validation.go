@@ -3,6 +3,7 @@ package content
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -84,6 +85,8 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		}
 	}
 
+	validateLevelTerrain(&result, def.Terrain, opts)
+
 	return result
 }
 
@@ -127,5 +130,39 @@ func validatePlacementAssetPath(result *LevelValidationResult, placement LevelPl
 	resolvedPath := ResolveDocumentPath(placement.AssetPath, opts.DocumentPath)
 	if _, err := os.Stat(resolvedPath); err != nil {
 		result.addError("missing_asset_file", fmt.Sprintf("missing asset file %s", placement.AssetPath), placement.ID, placement.AssetPath, "")
+	}
+}
+
+func validateLevelTerrain(result *LevelValidationResult, terrain *LevelTerrainDef, opts LevelValidationOptions) {
+	if terrain == nil {
+		return
+	}
+	if terrain.Kind != TerrainKindHeightfield {
+		result.addError("invalid_terrain_kind", fmt.Sprintf("unsupported terrain kind %q", terrain.Kind), "", "", "")
+	}
+	if strings.TrimSpace(terrain.SourcePath) == "" {
+		result.addError("empty_terrain_source_path", "terrain source_path is required", "", "", "")
+		return
+	}
+
+	resolvedPath := ResolveDocumentPath(terrain.SourcePath, opts.DocumentPath)
+	if strings.ToLower(filepath.Ext(resolvedPath)) != ".gkterrain" {
+		result.addError("invalid_terrain_source_path", fmt.Sprintf("terrain source_path must point to a .gkterrain: %s", terrain.SourcePath), "", "", "")
+		return
+	}
+
+	if _, err := os.Stat(resolvedPath); err != nil {
+		result.addError("missing_terrain_source_file", fmt.Sprintf("missing terrain source file %s", terrain.SourcePath), "", "", "")
+		return
+	}
+
+	terrainDef, err := LoadTerrainSource(resolvedPath)
+	if err != nil {
+		result.addError("invalid_terrain_source", fmt.Sprintf("failed to load terrain source %s: %v", terrain.SourcePath, err), "", "", "")
+		return
+	}
+	terrainValidation := ValidateTerrainSource(terrainDef, TerrainValidationOptions{DocumentPath: resolvedPath})
+	for _, issue := range terrainValidation.Issues {
+		result.addError("invalid_terrain_source", issue.Message, "", "", "")
 	}
 }

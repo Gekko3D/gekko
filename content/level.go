@@ -38,9 +38,9 @@ type LevelTransformDef struct {
 }
 
 type LevelTerrainDef struct {
-	Kind         string `json:"kind,omitempty"`
-	SourcePath   string `json:"source_path,omitempty"`
-	ManifestPath string `json:"manifest_path,omitempty"`
+	Kind         TerrainKind `json:"kind,omitempty"`
+	SourcePath   string      `json:"source_path,omitempty"`
+	ManifestPath string      `json:"manifest_path,omitempty"`
 }
 
 type LevelEnvironmentDef struct {

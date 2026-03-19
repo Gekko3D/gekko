@@ -21,3 +21,20 @@ func ResolveDocumentPath(authoredPath string, documentPath string) string {
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(documentPath), authoredPath))
 }
+
+// AuthorDocumentPath prefers storing authored references relative to the
+// document that contains them when one is known.
+func AuthorDocumentPath(targetPath string, documentPath string) string {
+	targetPath = strings.TrimSpace(targetPath)
+	if targetPath == "" {
+		return ""
+	}
+	if strings.TrimSpace(documentPath) == "" || filepath.IsAbs(targetPath) {
+		return filepath.Clean(targetPath)
+	}
+	rel, err := filepath.Rel(filepath.Dir(documentPath), targetPath)
+	if err != nil {
+		return filepath.Clean(targetPath)
+	}
+	return filepath.Clean(rel)
+}
