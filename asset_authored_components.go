@@ -35,6 +35,15 @@ type AuthoredLevelPlacementRefComponent struct {
 	VolumeID    string
 }
 
+type AuthoredLevelItemRefComponent struct {
+	LevelID     string
+	PlacementID string
+	ItemID      string
+	AssetID     string
+	AssetPath   string
+	VolumeID    string
+}
+
 type AuthoredTerrainChunkRefComponent struct {
 	LevelID    string
 	TerrainID  string
@@ -129,4 +138,19 @@ func AuthoredTerrainChunkRefForEntity(cmd *Commands, eid EntityId) (AuthoredTerr
 		}
 	}
 	return AuthoredTerrainChunkRefComponent{}, false
+}
+
+func AuthoredLevelItemRefForEntity(cmd *Commands, eid EntityId) (AuthoredLevelItemRefComponent, bool) {
+	if cmd == nil {
+		return AuthoredLevelItemRefComponent{}, false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if ref, ok := comp.(*AuthoredLevelItemRefComponent); ok {
+			return *ref, true
+		}
+		if ref, ok := comp.(AuthoredLevelItemRefComponent); ok {
+			return ref, true
+		}
+	}
+	return AuthoredLevelItemRefComponent{}, false
 }

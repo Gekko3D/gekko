@@ -27,6 +27,20 @@ type AuthoredLevelSpawnResult struct {
 	ExpandedVolumeInstances []content.PlacementVolumePreviewInstance
 }
 
+type AuthoredPlacementSpawnDef struct {
+	PlacementID string
+	VolumeID    string
+	AssetPath   string
+	Transform   content.LevelTransformDef
+}
+
+type AuthoredTerrainSpawnDef struct {
+	LevelID        string
+	TerrainID      string
+	TerrainGroupID uint32
+	Chunk          *content.TerrainChunkDef
+}
+
 func LoadAndSpawnAuthoredLevel(path string, cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, opts AuthoredLevelSpawnOptions) (AuthoredLevelSpawnResult, error) {
 	if strings.TrimSpace(path) == "" {
 		return AuthoredLevelSpawnResult{}, fmt.Errorf("level path is empty")
@@ -77,36 +91,16 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		&AuthoredLevelRootComponent{LevelID: def.ID},
 	)
 
-	spawnPlacement := func(placementID string, volumeID string, assetPath string, transform content.LevelTransformDef) error {
-		resolvedAssetPath := content.ResolveDocumentPath(assetPath, opts.LevelPath)
-		assetDef, err := loader.LoadAsset(resolvedAssetPath)
-		if err != nil {
-			return fmt.Errorf("load asset %s: %w", assetPath, err)
-		}
-		spawnResult, err := SpawnAuthoredAssetWithOptions(cmd, assets, assetDef, levelTransformToComponent(transform), AuthoredAssetSpawnOptions{
-			DocumentPath: resolvedAssetPath,
+	for _, placement := range def.Placements {
+		placementResult, err := spawnAuthoredLevelPlacement(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, AuthoredPlacementSpawnDef{
+			PlacementID: placement.ID,
+			AssetPath:   placement.AssetPath,
+			Transform:   placement.Transform,
 		})
 		if err != nil {
-			return fmt.Errorf("spawn asset %s for placement %s: %w", assetPath, placementID, err)
-		}
-		cmd.AddComponents(
-			spawnResult.RootEntity,
-			&Parent{Entity: result.RootEntity},
-			&AuthoredLevelPlacementRefComponent{
-				LevelID:     def.ID,
-				PlacementID: placementID,
-				AssetPath:   filepath.Clean(assetPath),
-				VolumeID:    volumeID,
-			},
-		)
-		result.PlacementRootEntities[placementID] = spawnResult.RootEntity
-		return nil
-	}
-
-	for _, placement := range def.Placements {
-		if err := spawnPlacement(placement.ID, "", placement.AssetPath, placement.Transform); err != nil {
 			return result, err
 		}
+		result.PlacementRootEntities[placement.ID] = placementResult.RootEntity
 	}
 
 	maxVolumeInstances := opts.MaxVolumeInstances
@@ -125,9 +119,16 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		for index, instance := range expanded.Instances {
 			placementID := fmt.Sprintf("%s:%d", volumeDef.ID, index)
 			assetPath := authoredPathForLevel(instance.AssetPath, opts.LevelPath)
-			if err := spawnPlacement(placementID, volumeDef.ID, assetPath, instance.Transform); err != nil {
+			placementResult, err := spawnAuthoredLevelPlacement(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, AuthoredPlacementSpawnDef{
+				PlacementID: placementID,
+				VolumeID:    volumeDef.ID,
+				AssetPath:   assetPath,
+				Transform:   instance.Transform,
+			})
+			if err != nil {
 				return result, err
 			}
+			result.PlacementRootEntities[placementID] = placementResult.RootEntity
 		}
 	}
 
@@ -172,38 +173,85 @@ func spawnAuthoredTerrain(cmd *Commands, assets *AssetServer, loader *RuntimeCon
 			continue
 		}
 
-		chunkMap := terrainChunkToXBrickMap(chunk)
-		entity := cmd.AddEntity(
-			&TransformComponent{
-				Position: terrainChunkPosition(chunk),
-				Rotation: mgl32.QuatIdent(),
-				Scale:    mgl32.Vec3{chunk.VoxelResolution, chunk.VoxelResolution, chunk.VoxelResolution},
-			},
-			&LocalTransformComponent{
-				Position: terrainChunkPosition(chunk),
-				Rotation: mgl32.QuatIdent(),
-				Scale:    mgl32.Vec3{chunk.VoxelResolution, chunk.VoxelResolution, chunk.VoxelResolution},
-			},
-			&Parent{Entity: rootEntity},
-			&VoxelModelComponent{
-				VoxelPalette:      palette,
-				PivotMode:         PivotModeCorner,
-				CustomMap:         chunkMap,
-				IsTerrainChunk:    true,
-				TerrainGroupID:    terrainGroupID,
-				TerrainChunkCoord: [3]int{chunk.Coord.X, chunk.Coord.Y, chunk.Coord.Z},
-				TerrainChunkSize:  chunk.ChunkSize,
-			},
-			&AuthoredTerrainChunkRefComponent{
-				LevelID:    def.ID,
-				TerrainID:  manifest.TerrainID,
-				ChunkCoord: [3]int{chunk.Coord.X, chunk.Coord.Y, chunk.Coord.Z},
-			},
-		)
+		entity := spawnAuthoredTerrainChunkEntity(cmd, rootEntity, palette, AuthoredTerrainSpawnDef{
+			LevelID:        def.ID,
+			TerrainID:      manifest.TerrainID,
+			TerrainGroupID: terrainGroupID,
+			Chunk:          chunk,
+		})
 		result.TerrainChunkEntities[content.TerrainChunkKey(chunk.Coord)] = entity
 	}
 
 	return nil
+}
+
+func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef) (AuthoredAssetSpawnResult, error) {
+	if loader == nil {
+		loader = NewRuntimeContentLoader()
+	}
+	resolvedAssetPath := content.ResolveDocumentPath(placement.AssetPath, levelPath)
+	assetDef, err := loader.LoadAsset(resolvedAssetPath)
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, fmt.Errorf("load asset %s: %w", placement.AssetPath, err)
+	}
+	spawnResult, err := SpawnAuthoredAssetWithOptions(cmd, assets, assetDef, levelTransformToComponent(placement.Transform), AuthoredAssetSpawnOptions{
+		DocumentPath: resolvedAssetPath,
+	})
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, fmt.Errorf("spawn asset %s for placement %s: %w", placement.AssetPath, placement.PlacementID, err)
+	}
+	cmd.AddComponents(
+		spawnResult.RootEntity,
+		&Parent{Entity: parent},
+		&AuthoredLevelPlacementRefComponent{
+			LevelID:     levelID,
+			PlacementID: placement.PlacementID,
+			AssetPath:   filepath.Clean(placement.AssetPath),
+			VolumeID:    placement.VolumeID,
+		},
+	)
+	for itemID, eid := range spawnResult.EntitiesByAssetID {
+		cmd.AddComponents(eid, &AuthoredLevelItemRefComponent{
+			LevelID:     levelID,
+			PlacementID: placement.PlacementID,
+			ItemID:      itemID,
+			AssetID:     spawnResult.AssetID,
+			AssetPath:   filepath.Clean(placement.AssetPath),
+			VolumeID:    placement.VolumeID,
+		})
+	}
+	return spawnResult, nil
+}
+
+func spawnAuthoredTerrainChunkEntity(cmd *Commands, parent EntityId, palette AssetId, terrain AuthoredTerrainSpawnDef) EntityId {
+	chunkMap := terrainChunkToXBrickMap(terrain.Chunk)
+	return cmd.AddEntity(
+		&TransformComponent{
+			Position: terrainChunkPosition(terrain.Chunk),
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{terrain.Chunk.VoxelResolution, terrain.Chunk.VoxelResolution, terrain.Chunk.VoxelResolution},
+		},
+		&LocalTransformComponent{
+			Position: terrainChunkPosition(terrain.Chunk),
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{terrain.Chunk.VoxelResolution, terrain.Chunk.VoxelResolution, terrain.Chunk.VoxelResolution},
+		},
+		&Parent{Entity: parent},
+		&VoxelModelComponent{
+			VoxelPalette:      palette,
+			PivotMode:         PivotModeCorner,
+			CustomMap:         chunkMap,
+			IsTerrainChunk:    true,
+			TerrainGroupID:    terrain.TerrainGroupID,
+			TerrainChunkCoord: [3]int{terrain.Chunk.Coord.X, terrain.Chunk.Coord.Y, terrain.Chunk.Coord.Z},
+			TerrainChunkSize:  terrain.Chunk.ChunkSize,
+		},
+		&AuthoredTerrainChunkRefComponent{
+			LevelID:    terrain.LevelID,
+			TerrainID:  terrain.TerrainID,
+			ChunkCoord: [3]int{terrain.Chunk.Coord.X, terrain.Chunk.Coord.Y, terrain.Chunk.Coord.Z},
+		},
+	)
 }
 
 func terrainChunkToXBrickMap(chunk *content.TerrainChunkDef) *volume.XBrickMap {
