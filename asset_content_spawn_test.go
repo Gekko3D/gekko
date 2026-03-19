@@ -14,8 +14,9 @@ func TestSpawnAuthoredAssetResolvesChildBeforeParent(t *testing.T) {
 
 	def := content.NewAssetDef("ordered")
 	parent := content.AssetPartDef{
-		ID:   "parent",
-		Name: "parent",
+		ID:     "parent",
+		Name:   "parent",
+		Source: testProceduralPartSource(),
 		Transform: content.AssetTransformDef{
 			Position: content.Vec3{5, 0, 0},
 			Rotation: content.Quat{0, 0, 0, 1},
@@ -26,6 +27,7 @@ func TestSpawnAuthoredAssetResolvesChildBeforeParent(t *testing.T) {
 		ID:       "child",
 		Name:     "child",
 		ParentID: "parent",
+		Source:   testProceduralPartSource(),
 		Transform: content.AssetTransformDef{
 			Position: content.Vec3{0, 2, 0},
 			Rotation: content.Quat{0, 0, 0, 1},
@@ -71,6 +73,7 @@ func TestSpawnAuthoredAssetRejectsMissingParent(t *testing.T) {
 		ID:       "child",
 		Name:     "child",
 		ParentID: "missing",
+		Source:   testProceduralPartSource(),
 		Transform: content.AssetTransformDef{
 			Rotation: content.Quat{0, 0, 0, 1},
 			Scale:    content.Vec3{1, 1, 1},
@@ -85,11 +88,33 @@ func TestSpawnAuthoredAssetRejectsMissingParent(t *testing.T) {
 func TestSpawnAuthoredAssetRejectsCycle(t *testing.T) {
 	def := content.NewAssetDef("cycle")
 	def.Parts = []content.AssetPartDef{
-		{ID: "a", Name: "a", ParentID: "b"},
-		{ID: "b", Name: "b", ParentID: "a"},
+		{ID: "a", Name: "a", ParentID: "b", Source: testProceduralPartSource()},
+		{ID: "b", Name: "b", ParentID: "a", Source: testProceduralPartSource()},
 	}
 	if err := ValidateAssetHierarchy(def); err == nil {
 		t.Fatal("expected cycle to be rejected")
+	}
+}
+
+func TestSpawnAuthoredAssetRejectsInvalidSourcePayload(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	def := content.NewAssetDef("invalid-source")
+	def.Parts = []content.AssetPartDef{{
+		ID:   "part",
+		Name: "part",
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxModel,
+		},
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+
+	if _, err := SpawnAuthoredAsset(cmd, nil, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}}); err == nil {
+		t.Fatal("expected invalid source payload to be rejected")
 	}
 }
 
@@ -195,8 +220,9 @@ func representativeAuthoredAssetForTest() *content.AssetDef {
 	def := content.NewAssetDef("parity")
 	def.Parts = []content.AssetPartDef{
 		{
-			ID:   "root-part",
-			Name: "root-part",
+			ID:     "root-part",
+			Name:   "root-part",
+			Source: testProceduralPartSource(),
 			Transform: content.AssetTransformDef{
 				Position: content.Vec3{1, 0, 0},
 				Rotation: content.Quat{0, 0, 0, 1},
@@ -207,6 +233,7 @@ func representativeAuthoredAssetForTest() *content.AssetDef {
 			ID:       "child-part",
 			Name:     "child-part",
 			ParentID: "root-part",
+			Source:   testProceduralPartSource(),
 			Transform: content.AssetTransformDef{
 				Position: content.Vec3{0, 2, 0},
 				Rotation: content.Quat{0, 0, 0, 1},
@@ -354,4 +381,16 @@ func withTempAssetFile(t *testing.T, def *content.AssetDef, fn func(path string,
 		t.Fatalf("SaveAsset failed: %v", err)
 	}
 	fn(path, def)
+}
+
+func testProceduralPartSource() content.AssetSourceDef {
+	return content.AssetSourceDef{
+		Kind:      content.AssetSourceKindProceduralPrimitive,
+		Primitive: "cube",
+		Params: map[string]float32{
+			"sx": 1,
+			"sy": 1,
+			"sz": 1,
+		},
+	}
 }

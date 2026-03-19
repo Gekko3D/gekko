@@ -181,6 +181,43 @@ func TestLoadAssetRejectsUnknownSchemaVersion(t *testing.T) {
 	}
 }
 
+func TestLoadAssetParsesWithoutRunningValidation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content_asset_invalid_but_parseable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	path := filepath.Join(tmpDir, "invalid.gkasset")
+	def := &AssetDef{
+		Name: "invalid",
+		Parts: []AssetPartDef{{
+			ID:   "part",
+			Name: "part",
+			Source: AssetSourceDef{
+				Kind: AssetSourceKindVoxModel,
+			},
+			Transform: AssetTransformDef{
+				Rotation: Quat{0, 0, 0, 1},
+				Scale:    Vec3{1, 1, 1},
+			},
+		}},
+	}
+	if err := SaveAsset(path, def); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+
+	loaded, err := LoadAsset(path)
+	if err != nil {
+		t.Fatalf("LoadAsset failed: %v", err)
+	}
+
+	validation := ValidateAsset(loaded, AssetValidationOptions{DocumentPath: path})
+	if !validation.HasErrors() {
+		t.Fatal("expected validation to fail for parseable invalid asset")
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return len(needle) == 0 || (len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0)
 }

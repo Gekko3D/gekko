@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/gekko3d/gekko/content"
@@ -25,6 +26,9 @@ func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDe
 		return result, fmt.Errorf("asset definition is nil")
 	}
 	result.AssetID = def.ID
+	if validation := content.ValidateAsset(def, content.AssetValidationOptions{}); validation.HasErrors() {
+		return result, fmt.Errorf("asset validation failed: %s", validation.Error())
+	}
 	if err := ValidateAssetHierarchy(def); err != nil {
 		return result, err
 	}
@@ -126,80 +130,11 @@ func LoadAndSpawnAuthoredAsset(path string, cmd *Commands, assets *AssetServer, 
 }
 
 func ValidateAssetHierarchy(def *content.AssetDef) error {
-	if def == nil {
-		return fmt.Errorf("asset definition is nil")
-	}
-
-	partIDs := make(map[string]struct{}, len(def.Parts))
-	for _, part := range def.Parts {
-		partIDs[part.ID] = struct{}{}
-	}
-
-	for _, part := range def.Parts {
-		if part.ParentID == "" {
-			continue
-		}
-		if part.ParentID == part.ID {
-			return fmt.Errorf("part %s cannot parent itself", part.ID)
-		}
-		if _, ok := partIDs[part.ParentID]; !ok {
-			return fmt.Errorf("part %s has unsupported or missing parent %s", part.ID, part.ParentID)
-		}
-	}
-	for _, light := range def.Lights {
-		if light.ParentID == "" {
-			continue
-		}
-		if _, ok := partIDs[light.ParentID]; !ok {
-			return fmt.Errorf("light %s has unsupported or missing parent %s", light.ID, light.ParentID)
-		}
-	}
-	for _, emitter := range def.Emitters {
-		if emitter.ParentID == "" {
-			continue
-		}
-		if _, ok := partIDs[emitter.ParentID]; !ok {
-			return fmt.Errorf("emitter %s has unsupported or missing parent %s", emitter.ID, emitter.ParentID)
-		}
-	}
-	for _, marker := range def.Markers {
-		if marker.ParentID == "" {
-			continue
-		}
-		if _, ok := partIDs[marker.ParentID]; !ok {
-			return fmt.Errorf("marker %s has unsupported or missing parent %s", marker.ID, marker.ParentID)
-		}
-	}
-
-	visiting := make(map[string]bool, len(def.Parts))
-	visited := make(map[string]bool, len(def.Parts))
-	partByID := make(map[string]content.AssetPartDef, len(def.Parts))
-	for _, part := range def.Parts {
-		partByID[part.ID] = part
-	}
-
-	var visit func(string) error
-	visit = func(id string) error {
-		if id == "" || visited[id] {
-			return nil
-		}
-		if visiting[id] {
-			return fmt.Errorf("hierarchy cycle detected at %s", id)
-		}
-		visiting[id] = true
-		if parentID := partByID[id].ParentID; parentID != "" {
-			if err := visit(parentID); err != nil {
-				return err
-			}
-		}
-		visiting[id] = false
-		visited[id] = true
-		return nil
-	}
-
-	for _, part := range def.Parts {
-		if err := visit(part.ID); err != nil {
-			return err
+	validation := content.ValidateAsset(def, content.AssetValidationOptions{})
+	for _, issue := range validation.Issues {
+		switch issue.Code {
+		case "broken_parent_reference", "unsupported_parent_target", "hierarchy_cycle":
+			return errors.New(issue.Message)
 		}
 	}
 	return nil
