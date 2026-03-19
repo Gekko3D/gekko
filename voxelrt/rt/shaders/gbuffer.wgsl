@@ -80,6 +80,8 @@ struct HitResult {
     material_idx: u32,
     normal: vec3<f32>,
     voxel_center_ws: vec3<f32>,
+    shadow_group_id: u32,
+    shadow_seam_epsilon: f32,
 };
 
 struct ObjectParams {
@@ -91,6 +93,11 @@ struct ObjectParams {
     lod_threshold: f32,
     sector_count: u32,
     padding: u32,
+    shadow_group_id: u32,
+    shadow_seam_epsilon: f32,
+    is_terrain_chunk: u32,
+    terrain_group_id: u32,
+    terrain_chunk: vec4<i32>, // xyz: chunk coord, w: chunk size in voxels
 };
 
 struct SectorGridEntry {
@@ -105,6 +112,13 @@ struct SectorGridParams {
     grid_mask: u32,
     padding0: u32,
     padding1: u32,
+};
+
+struct TerrainChunkLookupEntry {
+    coords: vec4<i32>,
+    terrain_group_id: u32,
+    object_id: i32,
+    padding: vec2<u32>,
 };
 
 // ============== BIND GROUPS ==============
@@ -129,6 +143,7 @@ struct SectorGridParams {
 @group(2) @binding(5) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(7) var<storage, read> sector_grid_params: SectorGridParams;
+@group(2) @binding(8) var<storage, read> terrain_chunk_lookup: array<TerrainChunkLookupEntry>;
 
 // ============== HELPERS ==============
 
@@ -231,7 +246,7 @@ fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
     return -1;
 }
 
-fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
+fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
     let sx = v.x >> 5u;
     let sy = v.y >> 5u;
     let sz = v.z >> 5u;
@@ -269,11 +284,82 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
     return 1.0;
 }
 
+fn floor_div_i32(a: i32, b: i32) -> i32 {
+    var q = a / b;
+    let r = a % b;
+    if (r != 0 && ((r < 0) != (b < 0))) {
+        q = q - 1;
+    }
+    return q;
+}
+
+fn positive_mod_i32(a: i32, b: i32) -> i32 {
+    var r = a % b;
+    if (r < 0) {
+        r = r + abs(b);
+    }
+    return r;
+}
+
+fn find_terrain_chunk_object_id(chunk_coord: vec3<i32>, terrain_group_id: u32) -> i32 {
+    let lookup_header = terrain_chunk_lookup[0];
+    let size = u32(lookup_header.coords.x);
+    if (size == 0u) { return -1; }
+    let mask = u32(lookup_header.coords.y);
+    let h = (u32(chunk_coord.x) * 73856093u ^
+             u32(chunk_coord.y) * 19349663u ^
+             u32(chunk_coord.z) * 83492791u ^
+             terrain_group_id * 1640531513u) & mask;
+    for (var i = 0u; i < size; i++) {
+        let idx = ((h + i) & mask) + 1u;
+        let entry = terrain_chunk_lookup[idx];
+        if (entry.object_id == -1) { return -1; }
+        if (entry.terrain_group_id == terrain_group_id &&
+            entry.coords.x == chunk_coord.x &&
+            entry.coords.y == chunk_coord.y &&
+            entry.coords.z == chunk_coord.z) {
+            return entry.object_id;
+        }
+    }
+    return -1;
+}
+
+fn sample_occupancy_for_normal(v: vec3<i32>, params: ObjectParams) -> f32 {
+    if (params.is_terrain_chunk == 0u || params.terrain_group_id == 0u || params.terrain_chunk.w <= 0) {
+        return sample_occupancy_local(v, params);
+    }
+
+    let chunk_size = params.terrain_chunk.w;
+    if (v.x >= 0 && v.x < chunk_size && v.z >= 0 && v.z < chunk_size) {
+        return sample_occupancy_local(v, params);
+    }
+
+    let chunk_offset_x = floor_div_i32(v.x, chunk_size);
+    let chunk_offset_z = floor_div_i32(v.z, chunk_size);
+    let neighbor_chunk = vec3<i32>(
+        params.terrain_chunk.x + chunk_offset_x,
+        params.terrain_chunk.y,
+        params.terrain_chunk.z + chunk_offset_z,
+    );
+    let neighbor_object_id = find_terrain_chunk_object_id(neighbor_chunk, params.terrain_group_id);
+    if (neighbor_object_id < 0) {
+        return 0.0;
+    }
+
+    let neighbor_params = object_params[u32(neighbor_object_id)];
+    let neighbor_voxel = vec3<i32>(
+        positive_mod_i32(v.x, chunk_size),
+        v.y,
+        positive_mod_i32(v.z, chunk_size),
+    );
+    return sample_occupancy_local(neighbor_voxel, neighbor_params);
+}
+
 fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
     let vi = vec3<i32>(floor(p));
-    let dx = sample_occupancy(vi + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
-    let dy = sample_occupancy(vi + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
-    let dz = sample_occupancy(vi + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
+    let dx = sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), params) - sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), params);
+    let dy = sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), params) - sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), params);
+    let dz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), params) - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), params);
     let grad = vec3<f32>(dx, dy, dz);
     if (length(grad) < 0.01) { return vec3<f32>(0.0); }
     return -normalize(grad);
@@ -287,7 +373,7 @@ fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0));
+    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0.0);
     let params = object_params[object_id];
     let ray = transform_ray(ray_ws, inst.world_to_object);
     let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
@@ -342,9 +428,9 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
                                 let vi_hit = vec3<i32>(floor(voxel_center_os));
                                 let grad = vec3<f32>(
-                                    sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
-                                    sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
-                                    sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
+                                    sample_occupancy_for_normal(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(-1, 0, 0), params),
+                                    sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(0, -1, 0), params),
+                                    sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 0, -1), params)
                                 );
                                 let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
                                 var n_os = vec3<f32>(0.0);
@@ -361,6 +447,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 }
                                 result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                result.shadow_group_id = params.shadow_group_id;
+                                result.shadow_seam_epsilon = params.shadow_seam_epsilon;
                                 return result;
                             }
                         }
@@ -396,9 +484,9 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
                                             let vi_hit = vec3<i32>(floor(voxel_center_os));
                                             let grad = vec3<f32>(
-                                                sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
-                                                sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
-                                                sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
+                                                sample_occupancy_for_normal(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(-1, 0, 0), params),
+                                                sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(0, -1, 0), params),
+                                                sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 0, -1), params)
                                             );
                                             let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
                                             var n_os = vec3<f32>(0.0);
@@ -415,6 +503,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             }
                                             result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                            result.shadow_group_id = params.shadow_group_id;
+                                            result.shadow_seam_epsilon = params.shadow_seam_epsilon;
                                             return result;
                                         }
                                     }
@@ -452,7 +542,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
 }
 
 fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0));
+    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0.0);
     let params = object_params[object_id];
     if (params.tree64_base == 0xFFFFFFFFu) { return result; }
     let ray = transform_ray(ray_ws, inst.world_to_object);
@@ -491,7 +581,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                 while (t_micro < t_exit_block && iter_ref < 32) {
                     iter_ref++;
                     let vi2 = voxel_pos2;
-                    if (sample_occupancy(vi2, params) > 0.5) {
+                    if (sample_occupancy_local(vi2, params) > 0.5) {
                         // Tree64 palette/material is stored in node.data; skip transparent and continue
                         let palette_idx2 = l1_node.data;
                         let mat_idx2 = params.material_table_base + palette_idx2 * 4u;
@@ -504,9 +594,9 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                             let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
                             let vi_hit = vec3<i32>(floor(voxel_center_os));
                             let grad = vec3<f32>(
-                                sample_occupancy(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi_hit + vec3<i32>(-1, 0, 0), params),
-                                sample_occupancy(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi_hit + vec3<i32>(0, -1, 0), params),
-                                sample_occupancy(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi_hit + vec3<i32>(0, 0, -1), params)
+                                sample_occupancy_for_normal(vi_hit + vec3<i32>(1, 0, 0), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(-1, 0, 0), params),
+                                sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 1, 0), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(0, -1, 0), params),
+                                sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 0, 1), params) - sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 0, -1), params)
                             );
                             let ax = abs(grad.x); let ay = abs(grad.y); let az = abs(grad.z);
                             var n_os = vec3<f32>(0.0);
@@ -523,6 +613,8 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                             }
                             result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                            result.shadow_group_id = params.shadow_group_id;
+                            result.shadow_seam_epsilon = params.shadow_seam_epsilon;
                             return result;
                         }
                     }
@@ -564,7 +656,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ray = get_ray(uv);
     
     // Trace scene via BVH
-    var hit_res = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0));
+    var hit_res = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0.0);
     
     var stack: array<i32, 64>;
     var stack_ptr = 0;
@@ -627,7 +719,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         textureStore(out_normal, global_id.xy, vec4<f32>(hit_res.normal, 0.0));
         
         // Store raw palette_idx and material_idx (others fetched in lighting pass)
-        textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), 0.0, 0.0, f32(hit_res.material_idx)));
+        textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), f32(hit_res.shadow_group_id), hit_res.shadow_seam_epsilon, f32(hit_res.material_idx)));
         textureStore(out_position, global_id.xy, vec4<f32>(hit_res.voxel_center_ws, 1.0));
     } else {
         textureStore(out_depth, global_id.xy, vec4<f32>(60000.0, 0.0, 0.0, 0.0));

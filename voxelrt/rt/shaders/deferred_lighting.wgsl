@@ -67,6 +67,8 @@ fn calculate_lighting(
     emissive: vec3<f32>,
     roughness: f32,
     metalness: f32,
+    receiver_shadow_group_id: u32,
+    receiver_shadow_seam_epsilon: f32,
     light_idx: u32
 ) -> vec3<f32> {
     let diffuse_color = base_color * (1.0 - metalness);
@@ -151,15 +153,27 @@ fn calculate_lighting(
                 for (var dx: i32 = -radius; dx <= radius; dx = dx + 1) {
                     let off = base_px + vec2<i32>(dx, dy);
                     let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
-                    var sd = textureLoad(in_shadow_maps, clamped_off, layer, 0).r;
+                    let shadow_sample = textureLoad(in_shadow_maps, clamped_off, layer, 0);
+                    let sampled_depth = shadow_sample.r;
+                    let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
+                    let same_shadow_group =
+                        receiver_shadow_group_id != 0u &&
+                        sampled_shadow_group_id == receiver_shadow_group_id;
                     if (light_type == 2u) {
                         let baseBiasM = 0.05;
                         let slopeBiasM = 0.1;
                         let biasM = baseBiasM + slopeBiasM * (1.0 - NdL);
-                        visibility += select(0.0, 1.0, sd >= my_depth_m - biasM);
+                        let receiver_minus_occluder = my_depth_m - sampled_depth;
+                        let seam_lit = same_shadow_group && receiver_minus_occluder <= receiver_shadow_seam_epsilon;
+                        visibility += select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
                     } else {
-                        sd = clamp(sd, -1.0, 1.0);
-                        visibility += select(0.0, 1.0, sd >= my_depth_n - bias);
+                        let sampled_depth_n = clamp(sampled_depth, -1.0, 1.0);
+                        let seam_pos_ls = light.view_proj * vec4<f32>(pos_ws - L * receiver_shadow_seam_epsilon, 1.0);
+                        let seam_depth_n = clamp(seam_pos_ls.z / seam_pos_ls.w, -1.0, 1.0);
+                        let seam_epsilon_n = abs(seam_depth_n - my_depth_n);
+                        let receiver_minus_occluder = my_depth_n - sampled_depth_n;
+                        let seam_lit = same_shadow_group && receiver_minus_occluder <= seam_epsilon_n;
+                        visibility += select(0.0, 1.0, seam_lit || sampled_depth_n >= my_depth_n - bias);
                     }
                 }
             }
@@ -236,6 +250,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mat_data = textureLoad(in_material, global_id.xy, 0);
     
     let palette_idx = u32(mat_data.x + 0.5);
+    let receiver_shadow_group_id = u32(mat_data.y + 0.5);
+    let receiver_shadow_seam_epsilon = max(mat_data.z, 0.0);
     let material_base = u32(mat_data.w + 0.5);
     
     let mat_idx = material_base + palette_idx * 4u;
@@ -258,7 +274,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Loop through all lights
     let num_lights = camera.num_lights;
     for (var i = 0u; i < num_lights; i++) {
-        final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, emissive, roughness, metalness, i);
+        final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, emissive, roughness, metalness, receiver_shadow_group_id, receiver_shadow_seam_epsilon, i);
     }
     
     // Render modes

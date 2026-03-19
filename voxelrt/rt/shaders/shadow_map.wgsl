@@ -86,6 +86,7 @@ struct HitResult {
     hit: bool,
     t: f32,
     voxel_center_ws: vec3<f32>,
+    shadow_group_id: u32,
 };
 
 struct ObjectParams {
@@ -97,6 +98,11 @@ struct ObjectParams {
     lod_threshold: f32,
     sector_count: u32,
     padding: u32,
+    shadow_group_id: u32,
+    shadow_seam_epsilon: f32,
+    is_terrain_chunk: u32,
+    terrain_group_id: u32,
+    terrain_chunk: vec4<i32>,
 };
 
 struct SectorGridEntry {
@@ -236,7 +242,7 @@ fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, vec3<f32>(0.0));
+    var result = HitResult(false, 60000.0, vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
     let ray = transform_ray(ray_ws, inst.world_to_object);
     let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
@@ -282,6 +288,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                             let p_hit_os = ray.origin + dir * (t_brick + 0.01);
                             let voxel_center_os = floor(p_hit_os) + 0.5;
                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                            result.shadow_group_id = params.shadow_group_id;
                             return result;
                         }
                         if (b_flags == 0u) {
@@ -308,6 +315,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                         result.hit = true; result.t = t_micro;
                                         let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
                                         result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                        result.shadow_group_id = params.shadow_group_id;
                                         return result;
                                     }
                                 }
@@ -343,7 +351,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
 }
 
 fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, vec3<f32>(0.0));
+    var result = HitResult(false, 60000.0, vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
     if (params.tree64_base == 0xFFFFFFFFu) { return result; }
     let ray = transform_ray(ray_ws, inst.world_to_object);
@@ -367,6 +375,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                 result.hit = true; result.t = t;
                 let voxel_center_os = floor(p / 8.0) * 8.0 + 4.0;
                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                result.shadow_group_id = params.shadow_group_id;
                 return result;
             }
             t += step_to_next_cell(p, ray.dir, ray.inv_dir, 8.0);
@@ -376,7 +385,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
 }
 
 fn traverse_scene(ray: Ray) -> HitResult {
-    var hit_res = HitResult(false, 60000.0, vec3<f32>(0.0));
+    var hit_res = HitResult(false, 60000.0, vec3<f32>(0.0), 0u);
     var stack: array<i32, 64>;
     var stack_ptr = 0;
     
@@ -463,11 +472,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (light_type == 2u) {
             // Spot light: store linear distance from light position (meters)
             let depth_m = distance(light.position.xyz, hit_res.voxel_center_ws);
-            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth_m, 0.0, 0.0, 0.0));
+            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
         } else {
-            // Directional/others: store NDC depth
+            // Directional/others: store NDC depth for stable generic shadowing.
             let depth_ndc = clamp(pos_ls.z / pos_ls.w, -1.0, 1.0);
-            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth_ndc, 0.0, 0.0, 0.0));
+            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth_ndc, f32(hit_res.shadow_group_id), 0.0, 0.0));
         }
     } else {
         let light_type = u32(light.params.z);

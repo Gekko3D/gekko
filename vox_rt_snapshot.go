@@ -52,9 +52,15 @@ const (
 )
 
 type VoxelModelComponent struct {
-	VoxelModel   AssetId           `gekko:"voxel" usage:"model"`
-	VoxelPalette AssetId           `gekko:"voxel" usage:"palette"`
-	PivotMode    VoxelPivotMode    // How to determine the rotation pivot
-	CustomPivot  mgl32.Vec3        // Used if PivotMode == PivotModeCustom
-	CustomMap    *volume.XBrickMap // If set, use this instead of loading from VoxelModel asset
+	VoxelModel             AssetId           `gekko:"voxel" usage:"model"`
+	VoxelPalette           AssetId           `gekko:"voxel" usage:"palette"`
+	PivotMode              VoxelPivotMode    // How to determine the rotation pivot
+	CustomPivot            mgl32.Vec3        // Used if PivotMode == PivotModeCustom
+	CustomMap              *volume.XBrickMap // If set, use this instead of loading from VoxelModel asset
+	ShadowGroupID          uint32
+	ShadowSeamWorldEpsilon float32
+	IsTerrainChunk         bool
+	TerrainGroupID         uint32
+	TerrainChunkCoord      [3]int
+	TerrainChunkSize       int
 }

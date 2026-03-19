@@ -84,6 +84,9 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 	if m.updateSectorGrid(scene) {
 		recreated = true
 	}
+	if m.updateTerrainChunkLookup(scene) {
+		recreated = true
+	}
 	_ = recreated
 	return recreated
 }

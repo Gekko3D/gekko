@@ -16,7 +16,7 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 		Tags:            []string{"space"},
 		Terrain: &LevelTerrainDef{
 			Kind:       TerrainKindHeightfield,
-			SourcePath: "terrain/height.png",
+			SourcePath: "assets/heightmap.png",
 		},
 		Environment: &LevelEnvironmentDef{
 			Preset: "orbit",

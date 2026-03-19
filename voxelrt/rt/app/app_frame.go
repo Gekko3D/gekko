@@ -97,6 +97,21 @@ func (a *App) Update() {
 	a.Profiler.SetCount("Visible", len(a.Scene.VisibleObjects))
 	a.Profiler.SetCount("Lights", len(a.Scene.Lights))
 	a.Profiler.SetCount("Particles", int(a.BufferManager.ParticleCount))
+	shadowGroupedVisible := 0
+	visibleTerrainChunks := 0
+	for _, obj := range a.Scene.VisibleObjects {
+		if obj == nil {
+			continue
+		}
+		if obj.ShadowGroupID != 0 {
+			shadowGroupedVisible++
+		}
+		if obj.IsTerrainChunk {
+			visibleTerrainChunks++
+		}
+	}
+	a.Profiler.SetCount("ShadowGrouped", shadowGroupedVisible)
+	a.Profiler.SetCount("TerrainChunks", visibleTerrainChunks)
 
 	if a.DebugMode {
 		stats := fmt.Sprintf("FPS: %.1f\n%s", a.FPS, a.Profiler.GetStatsString())

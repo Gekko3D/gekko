@@ -109,15 +109,16 @@ type GpuBufferManager struct {
 	LightsBuf        *wgpu.Buffer
 	ShadowIndicesBuf *wgpu.Buffer
 
-	MaterialBuf         *wgpu.Buffer
-	SectorTableBuf      *wgpu.Buffer
-	BrickTableBuf       *wgpu.Buffer
-	VoxelPayloadTex     *wgpu.Texture
-	VoxelPayloadView    *wgpu.TextureView
-	ObjectParamsBuf     *wgpu.Buffer
-	Tree64Buf           *wgpu.Buffer
-	SectorGridBuf       *wgpu.Buffer
-	SectorGridParamsBuf *wgpu.Buffer
+	MaterialBuf           *wgpu.Buffer
+	SectorTableBuf        *wgpu.Buffer
+	BrickTableBuf         *wgpu.Buffer
+	VoxelPayloadTex       *wgpu.Texture
+	VoxelPayloadView      *wgpu.TextureView
+	ObjectParamsBuf       *wgpu.Buffer
+	Tree64Buf             *wgpu.Buffer
+	SectorGridBuf         *wgpu.Buffer
+	SectorGridParamsBuf   *wgpu.Buffer
+	TerrainChunkLookupBuf *wgpu.Buffer
 
 	// G-Buffer Textures
 	GBufferDepth    *wgpu.Texture
@@ -331,6 +332,7 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("TerrainChunkLookupBuf", &m.TerrainChunkLookupBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("CameraBuf", &m.CameraBuf, nil, wgpu.BufferUsageUniform, 1024)
 	m.ensureBuffer("InstancesBuf", &m.InstancesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("BVHNodesBuf", &m.BVHNodesBuf, nil, wgpu.BufferUsageStorage, 1024)

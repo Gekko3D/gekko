@@ -321,23 +321,11 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	objParams := []byte{}
 	for _, obj := range scene.VisibleObjects {
 		alloc := m.Allocations[obj.XBrickMap]
-		// Need MaterialOffset!
-		pBuf := make([]byte, 32)
-		binary.LittleEndian.PutUint32(pBuf[0:4], 0) // sector_table_base is not used as index anymore, but for ID
-		// Wait, the shader uses params.sector_table_base as ID for hash.
-		// We can just use the memory address of xbm as a unique ID.
-		binary.LittleEndian.PutUint32(pBuf[0:4], obj.XBrickMap.ID)
-		binary.LittleEndian.PutUint32(pBuf[4:8], 0)  // brick_table_base - now internal to sector
-		binary.LittleEndian.PutUint32(pBuf[8:12], 0) // payload_base - now internal to brick
-		binary.LittleEndian.PutUint32(pBuf[12:16], alloc.MaterialOffset*4)
-		binary.LittleEndian.PutUint32(pBuf[16:20], ^uint32(0))
-		binary.LittleEndian.PutUint32(pBuf[20:24], math.Float32bits(obj.LODThreshold))
-		binary.LittleEndian.PutUint32(pBuf[24:28], uint32(len(obj.XBrickMap.Sectors)))
-		objParams = append(objParams, pBuf...)
+		objParams = append(objParams, buildObjectParamsBytes(obj, alloc)...)
 	}
 
 	if len(objParams) == 0 {
-		objParams = make([]byte, 32)
+		objParams = make([]byte, objectParamsSizeBytes)
 	}
 
 	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, objParams, wgpu.BufferUsageStorage, 0) {
@@ -345,6 +333,34 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	}
 
 	return recreated
+}
+
+const objectParamsSizeBytes = 64
+
+func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation) []byte {
+	pBuf := make([]byte, objectParamsSizeBytes)
+	if obj == nil || obj.XBrickMap == nil || alloc == nil {
+		return pBuf
+	}
+	// sector_table_base is used as the stable map ID for hash lookup.
+	binary.LittleEndian.PutUint32(pBuf[0:4], obj.XBrickMap.ID)
+	binary.LittleEndian.PutUint32(pBuf[4:8], 0) // brick_table_base - now internal to sector
+	binary.LittleEndian.PutUint32(pBuf[8:12], 0)
+	binary.LittleEndian.PutUint32(pBuf[12:16], alloc.MaterialOffset*4)
+	binary.LittleEndian.PutUint32(pBuf[16:20], ^uint32(0))
+	binary.LittleEndian.PutUint32(pBuf[20:24], math.Float32bits(obj.LODThreshold))
+	binary.LittleEndian.PutUint32(pBuf[24:28], uint32(len(obj.XBrickMap.Sectors)))
+	binary.LittleEndian.PutUint32(pBuf[32:36], obj.ShadowGroupID)
+	binary.LittleEndian.PutUint32(pBuf[36:40], math.Float32bits(obj.ShadowSeamWorldEpsilon))
+	if obj.IsTerrainChunk {
+		binary.LittleEndian.PutUint32(pBuf[40:44], 1)
+	}
+	binary.LittleEndian.PutUint32(pBuf[44:48], obj.TerrainGroupID)
+	binary.LittleEndian.PutUint32(pBuf[48:52], uint32(obj.TerrainChunkCoord[0]))
+	binary.LittleEndian.PutUint32(pBuf[52:56], uint32(obj.TerrainChunkCoord[1]))
+	binary.LittleEndian.PutUint32(pBuf[56:60], uint32(obj.TerrainChunkCoord[2]))
+	binary.LittleEndian.PutUint32(pBuf[60:64], uint32(obj.TerrainChunkSize))
+	return pBuf
 }
 
 func (m *GpuBufferManager) releaseBrickSlot(brick *volume.Brick) {

@@ -86,6 +86,11 @@ struct ObjectParams {
   lod_threshold: f32,
   sector_count: u32,
   padding: u32,
+  shadow_group_id: u32,
+  shadow_seam_epsilon: f32,
+  is_terrain_chunk: u32,
+  terrain_group_id: u32,
+  terrain_chunk: vec4<i32>,
 };
 
 struct SectorGridEntry {

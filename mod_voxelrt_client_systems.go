@@ -172,6 +172,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 
 		obj.Transform.Pivot = transform.Pivot
+		obj.ShadowGroupID = vox.ShadowGroupID
+		obj.ShadowSeamWorldEpsilon = vox.ShadowSeamWorldEpsilon
+		obj.IsTerrainChunk = vox.IsTerrainChunk
+		obj.TerrainGroupID = vox.TerrainGroupID
+		obj.TerrainChunkCoord = vox.TerrainChunkCoord
+		obj.TerrainChunkSize = vox.TerrainChunkSize
 
 		obj.Transform.Dirty = true
 

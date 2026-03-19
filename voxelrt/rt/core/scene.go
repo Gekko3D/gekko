@@ -23,12 +23,18 @@ type HitResult struct {
 }
 
 type VoxelObject struct {
-	Transform     *Transform
-	XBrickMap     *volume.XBrickMap
-	MaterialTable []Material
-	WorldAABB     *[2]mgl32.Vec3 // Min, Max
-	Tree64LOD     []byte
-	LODThreshold  float32
+	Transform              *Transform
+	XBrickMap              *volume.XBrickMap
+	MaterialTable          []Material
+	WorldAABB              *[2]mgl32.Vec3 // Min, Max
+	Tree64LOD              []byte
+	LODThreshold           float32
+	ShadowGroupID          uint32
+	ShadowSeamWorldEpsilon float32
+	IsTerrainChunk         bool
+	TerrainGroupID         uint32
+	TerrainChunkCoord      [3]int
+	TerrainChunkSize       int
 }
 
 func NewVoxelObject() *VoxelObject {

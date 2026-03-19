@@ -110,6 +110,7 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 8, Buffer: m.TerrainChunkLookupBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {
