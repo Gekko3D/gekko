@@ -3,6 +3,7 @@ package gekko
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -192,6 +193,43 @@ func FindVoxSceneModelIndexByName(voxFile *VoxFile, nodeName string) (int, bool)
 		}
 	}
 	return 0, false
+}
+
+func ResolveVoxSceneNodeModel(inspection VoxSceneInspection, nodeName string, modelIndex int) (VoxSceneModelEntry, error) {
+	nodeName = strings.TrimSpace(nodeName)
+	if nodeName == "" {
+		return VoxSceneModelEntry{}, fmt.Errorf("vox_scene_node source requires node_name")
+	}
+
+	matchingNodes := make([]VoxSceneNodeInfo, 0, 1)
+	for _, node := range inspection.Nodes {
+		if node.Name == nodeName {
+			matchingNodes = append(matchingNodes, node)
+		}
+	}
+	if len(matchingNodes) == 0 {
+		return VoxSceneModelEntry{}, fmt.Errorf("vox_scene_node node_name %q not found", nodeName)
+	}
+	if len(matchingNodes) > 1 {
+		return VoxSceneModelEntry{}, fmt.Errorf("vox_scene_node node_name %q is ambiguous", nodeName)
+	}
+
+	matches := FilterVoxSceneSubtreeEntries(inspection, matchingNodes[0].NodeID)
+	if len(matches) == 0 {
+		return VoxSceneModelEntry{}, fmt.Errorf("vox_scene_node node_name %q has no models in its subtree", nodeName)
+	}
+	if modelIndex >= 0 {
+		for _, entry := range matches {
+			if entry.ModelIndex == modelIndex {
+				return entry, nil
+			}
+		}
+		return VoxSceneModelEntry{}, fmt.Errorf("vox_scene_node node_name %q does not contain model_index %d", nodeName, modelIndex)
+	}
+	if len(matches) != 1 {
+		return VoxSceneModelEntry{}, fmt.Errorf("vox_scene_node node_name %q resolves to %d models; model_index is required", nodeName, len(matches))
+	}
+	return matches[0], nil
 }
 
 func ExtractVoxHierarchy(voxFile *VoxFile, voxelScale float32) []VoxModelInstance {

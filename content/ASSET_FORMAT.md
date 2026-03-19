@@ -24,7 +24,10 @@
 - `vox_model`
   - file-backed VOX model reference with `path` and `model_index`
 - `vox_scene_node`
-  - schema-supported VOX scene-node reference with `path` and `node_name`
+  - VOX scene-node reference with `path` and `node_name`
+  - `node_name` must resolve to exactly one named VOX scene node/subtree
+  - `model_index`, when present, disambiguates which model inside that named subtree is used
+  - if `model_index` is omitted, the named subtree must contain exactly one model
 - `procedural_primitive`
   - authored primitive with `primitive` and flat numeric `params`
 
@@ -38,7 +41,7 @@ To add a new source kind later:
 ## Current limitations
 
 - Only parts may be authored parents.
-- `vox_scene_node` is part of the schema and editor-authored data, but runtime/editor support remains intentionally limited to the behavior added in earlier prompts.
+- `vox_scene_node` requires unique scene-node names in the source `.vox`; duplicate names are rejected instead of guessed.
 - Markers are authored, spawned, and metadata-bearing, but richer gameplay/rendering semantics remain future work.
 - Editor-only convenience flags such as `hide`, `lock`, and `solo` are not serialized into `.gkasset`.
 - Old prototype JSON compatibility is intentionally out of scope.

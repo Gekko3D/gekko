@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -72,6 +73,52 @@ func TestExtractVoxHierarchyPreservesWorldTransformsForSceneTraversal(t *testing
 	}
 }
 
+func TestResolveVoxSceneNodeModelResolvesSingleModelNodeWithoutModelIndex(t *testing.T) {
+	inspection := InspectVoxScene(namedHierarchyVoxForTest(), 1.0)
+
+	entry, err := ResolveVoxSceneNodeModel(inspection, "arm", -1)
+	if err != nil {
+		t.Fatalf("ResolveVoxSceneNodeModel returned error: %v", err)
+	}
+	if entry.ModelIndex != 1 {
+		t.Fatalf("expected arm to resolve model 1, got %+v", entry)
+	}
+}
+
+func TestResolveVoxSceneNodeModelResolvesSubtreeModelByIndex(t *testing.T) {
+	inspection := InspectVoxScene(namedHierarchyVoxForTest(), 1.0)
+
+	entry, err := ResolveVoxSceneNodeModel(inspection, "body", 1)
+	if err != nil {
+		t.Fatalf("ResolveVoxSceneNodeModel returned error: %v", err)
+	}
+	if entry.ModelIndex != 1 {
+		t.Fatalf("expected body subtree to resolve model 1, got %+v", entry)
+	}
+}
+
+func TestResolveVoxSceneNodeModelRejectsAmbiguousOrInvalidReferences(t *testing.T) {
+	inspection := InspectVoxScene(namedHierarchyVoxForTest(), 1.0)
+
+	if _, err := ResolveVoxSceneNodeModel(inspection, "", -1); err == nil || !strings.Contains(err.Error(), "requires node_name") {
+		t.Fatalf("expected missing node_name error, got %v", err)
+	}
+	if _, err := ResolveVoxSceneNodeModel(inspection, "missing", -1); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected missing node_name resolution error, got %v", err)
+	}
+	if _, err := ResolveVoxSceneNodeModel(inspection, "body", -1); err == nil || !strings.Contains(err.Error(), "model_index is required") {
+		t.Fatalf("expected ambiguous subtree error, got %v", err)
+	}
+	if _, err := ResolveVoxSceneNodeModel(inspection, "arm", 0); err == nil || !strings.Contains(err.Error(), "does not contain model_index 0") {
+		t.Fatalf("expected subtree/model mismatch error, got %v", err)
+	}
+
+	dupInspection := InspectVoxScene(duplicateNamedHierarchyVoxForSceneTest(), 1.0)
+	if _, err := ResolveVoxSceneNodeModel(dupInspection, "arm", -1); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected duplicate-name ambiguity error, got %v", err)
+	}
+}
+
 func namedHierarchyVoxForTest() *VoxFile {
 	return &VoxFile{
 		Models: []VoxModel{
@@ -114,6 +161,34 @@ func namedHierarchyVoxForTest() *VoxFile {
 				Type:   VoxNodeShape,
 				Models: []VoxShapeModel{{ModelID: 1}},
 			},
+		},
+	}
+}
+
+func duplicateNamedHierarchyVoxForSceneTest() *VoxFile {
+	return &VoxFile{
+		Models: []VoxModel{
+			{SizeX: 2, SizeY: 2, SizeZ: 2},
+			{SizeX: 2, SizeY: 2, SizeZ: 2},
+		},
+		Nodes: map[int]VoxNode{
+			0: {ID: 0, Type: VoxNodeGroup, ChildrenIDs: []int{1, 3}},
+			1: {
+				ID:         1,
+				Type:       VoxNodeTransform,
+				Attributes: map[string]string{"_name": "arm"},
+				ChildID:    2,
+				Frames:     []VoxTransformFrame{{Rotation: 0}},
+			},
+			2: {ID: 2, Type: VoxNodeShape, Models: []VoxShapeModel{{ModelID: 0}}},
+			3: {
+				ID:         3,
+				Type:       VoxNodeTransform,
+				Attributes: map[string]string{"_name": "arm"},
+				ChildID:    4,
+				Frames:     []VoxTransformFrame{{Rotation: 0}},
+			},
+			4: {ID: 4, Type: VoxNodeShape, Models: []VoxShapeModel{{ModelID: 1}}},
 		},
 	}
 }

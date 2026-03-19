@@ -256,11 +256,14 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef, d
 		if err != nil {
 			return AssetId{}, AssetId{}, err
 		}
-		modelIndex := part.Source.ModelIndex
-		if modelIndex < 0 || modelIndex >= len(voxFile.Models) {
-			return AssetId{}, AssetId{}, nil
+		resolved, err := ResolveVoxSceneNodeModel(InspectVoxScene(voxFile, 1.0), part.Source.NodeName, part.Source.ModelIndex)
+		if err != nil {
+			return AssetId{}, AssetId{}, fmt.Errorf("%s (%s): %w", part.Name, part.Source.Path, err)
 		}
-		model := assets.CreateVoxelModelFromSource(voxFile.Models[modelIndex], part.ModelScale, sourcePath)
+		if resolved.ModelIndex < 0 || resolved.ModelIndex >= len(voxFile.Models) {
+			return AssetId{}, AssetId{}, fmt.Errorf("%s (%s): resolved model index %d out of range", part.Name, part.Source.Path, resolved.ModelIndex)
+		}
+		model := assets.CreateVoxelModelFromSource(voxFile.Models[resolved.ModelIndex], part.ModelScale, sourcePath)
 		palette := assets.CreateVoxelPaletteFromSource(voxFile.Palette, voxFile.VoxMaterials, sourcePath)
 		return model, palette, nil
 	default:

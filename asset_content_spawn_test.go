@@ -1,9 +1,13 @@
 package gekko
 
 import (
+	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gekko3d/gekko/content"
@@ -263,6 +267,103 @@ func TestLoadAndSpawnAuthoredAssetResolvesSourcePathsRelativeToAssetDocument(t *
 	}
 	if _, ok := voxelModelForSpawnTest(cmd, entity); !ok {
 		t.Fatal("expected relative vox source to load into preview/runtime model component")
+	}
+}
+
+func TestSpawnAuthoredAssetWithOptionsResolvesVoxSceneNodeSingleModelNode(t *testing.T) {
+	assetPath, assets, result, cmd, err := spawnSceneNodeAssetForTest(t, content.AssetSourceDef{
+		Kind:       content.AssetSourceKindVoxSceneNode,
+		Path:       "scene.vox",
+		NodeName:   "arm",
+		ModelIndex: -1,
+	})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAssetWithOptions failed for %s: %v", assetPath, err)
+	}
+
+	model := mustSpawnedVoxelAssetForTest(t, cmd, assets, result, "part")
+	if model.VoxModel.SizeX != 4 || model.VoxModel.SizeY != 2 || model.VoxModel.SizeZ != 2 {
+		t.Fatalf("expected arm model dimensions 4x2x2, got %+v", model.VoxModel)
+	}
+}
+
+func TestSpawnAuthoredAssetWithOptionsResolvesVoxSceneNodeSubtreeModelIndex(t *testing.T) {
+	_, assets, result, cmd, err := spawnSceneNodeAssetForTest(t, content.AssetSourceDef{
+		Kind:       content.AssetSourceKindVoxSceneNode,
+		Path:       "scene.vox",
+		NodeName:   "body",
+		ModelIndex: 1,
+	})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAssetWithOptions failed: %v", err)
+	}
+
+	model := mustSpawnedVoxelAssetForTest(t, cmd, assets, result, "part")
+	if model.VoxModel.SizeX != 4 || model.VoxModel.SizeY != 2 || model.VoxModel.SizeZ != 2 {
+		t.Fatalf("expected body subtree model_index 1 to resolve arm model, got %+v", model.VoxModel)
+	}
+}
+
+func TestSpawnAuthoredAssetWithOptionsRejectsInvalidVoxSceneNodeResolution(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    content.AssetSourceDef
+		writeVox  func(t *testing.T, path string)
+		wantError string
+	}{
+		{
+			name: "missing node name",
+			source: content.AssetSourceDef{
+				Kind:       content.AssetSourceKindVoxSceneNode,
+				Path:       "scene.vox",
+				NodeName:   "missing",
+				ModelIndex: -1,
+			},
+			writeVox:  writeNamedSceneVoxFixture,
+			wantError: `node_name "missing" not found`,
+		},
+		{
+			name: "duplicate node name",
+			source: content.AssetSourceDef{
+				Kind:       content.AssetSourceKindVoxSceneNode,
+				Path:       "scene.vox",
+				NodeName:   "arm",
+				ModelIndex: -1,
+			},
+			writeVox:  writeDuplicateNameSceneVoxFixture,
+			wantError: `node_name "arm" is ambiguous`,
+		},
+		{
+			name: "model outside subtree",
+			source: content.AssetSourceDef{
+				Kind:       content.AssetSourceKindVoxSceneNode,
+				Path:       "scene.vox",
+				NodeName:   "arm",
+				ModelIndex: 0,
+			},
+			writeVox:  writeNamedSceneVoxFixture,
+			wantError: `does not contain model_index 0`,
+		},
+		{
+			name: "ambiguous subtree needs model index",
+			source: content.AssetSourceDef{
+				Kind:       content.AssetSourceKindVoxSceneNode,
+				Path:       "scene.vox",
+				NodeName:   "body",
+				ModelIndex: -1,
+			},
+			writeVox:  writeNamedSceneVoxFixture,
+			wantError: `model_index is required`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, _, err := spawnSceneNodeAssetForTestWithWriter(t, tc.source, tc.writeVox)
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantError, err)
+			}
+		})
 	}
 }
 
@@ -578,4 +679,249 @@ func mustWorldTransformForSpawnTest(t *testing.T, cmd *Commands, eid EntityId) T
 	}
 	t.Fatalf("missing world transform for entity %d", eid)
 	return TransformComponent{}
+}
+
+func spawnSceneNodeAssetForTest(t *testing.T, source content.AssetSourceDef) (string, *AssetServer, AuthoredAssetSpawnResult, *Commands, error) {
+	t.Helper()
+	return spawnSceneNodeAssetForTestWithWriter(t, source, writeNamedSceneVoxFixture)
+}
+
+func spawnSceneNodeAssetForTestWithWriter(t *testing.T, source content.AssetSourceDef, writeVox func(t *testing.T, path string)) (string, *AssetServer, AuthoredAssetSpawnResult, *Commands, error) {
+	t.Helper()
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "scene_asset.gkasset")
+	voxPath := filepath.Join(root, "assets", "scene.vox")
+	writeVox(t, voxPath)
+
+	def := content.NewAssetDef("scene-source")
+	def.Parts = []content.AssetPartDef{{
+		ID:     "part",
+		Name:   "part",
+		Source: source,
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+	content.EnsureAssetIDs(def)
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := content.SaveAsset(assetPath, def); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+	result, err := SpawnAuthoredAssetWithOptions(cmd, assets, def, TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}, AuthoredAssetSpawnOptions{DocumentPath: assetPath})
+	if err == nil {
+		app.FlushCommands()
+	}
+	return assetPath, assets, result, cmd, err
+}
+
+func mustSpawnedVoxelAssetForTest(t *testing.T, cmd *Commands, assets *AssetServer, result AuthoredAssetSpawnResult, assetID string) VoxelModelAsset {
+	t.Helper()
+	entity := result.EntitiesByAssetID[assetID]
+	if entity == 0 {
+		t.Fatalf("expected spawned entity for %s", assetID)
+	}
+	modelComp, ok := voxelModelForSpawnTest(cmd, entity)
+	if !ok {
+		t.Fatalf("expected voxel model component for %s", assetID)
+	}
+	model, ok := assets.GetVoxelModel(modelComp.VoxelModel)
+	if !ok {
+		t.Fatalf("expected voxel model asset for %s", assetID)
+	}
+	return model
+}
+
+func writeNamedSceneVoxFixture(t *testing.T, path string) {
+	t.Helper()
+	writeSyntheticVoxFixture(t, path, syntheticNamedSceneNodes())
+}
+
+func writeDuplicateNameSceneVoxFixture(t *testing.T, path string) {
+	t.Helper()
+	writeSyntheticVoxFixture(t, path, syntheticDuplicateNameSceneNodes())
+}
+
+func writeSyntheticVoxFixture(t *testing.T, path string, nodes []syntheticVoxNodeChunk) {
+	t.Helper()
+	models := []VoxModel{
+		{
+			SizeX: 2,
+			SizeY: 2,
+			SizeZ: 2,
+			Voxels: []Voxel{{
+				X: 0, Y: 0, Z: 0, ColorIndex: 1,
+			}},
+		},
+		{
+			SizeX: 4,
+			SizeY: 2,
+			SizeZ: 2,
+			Voxels: []Voxel{{
+				X: 0, Y: 0, Z: 0, ColorIndex: 2,
+			}},
+		},
+	}
+
+	var file bytes.Buffer
+	file.WriteString(VOXMagicNumber)
+	writeInt32ForVoxFixture(t, &file, 150)
+	writeChunkForVoxFixture(t, &file, "MAIN", nil, 0)
+	writeChunkForVoxFixture(t, &file, "PACK", synthPackChunkData(len(models)), 0)
+	for _, model := range models {
+		writeChunkForVoxFixture(t, &file, "SIZE", synthSizeChunkData(model), 0)
+		writeChunkForVoxFixture(t, &file, "XYZI", synthXYZIChunkData(model), 0)
+	}
+	for _, node := range nodes {
+		writeChunkForVoxFixture(t, &file, node.id, node.data, 0)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(path, file.Bytes(), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+}
+
+type syntheticVoxNodeChunk struct {
+	id   string
+	data []byte
+}
+
+func syntheticNamedSceneNodes() []syntheticVoxNodeChunk {
+	return []syntheticVoxNodeChunk{
+		{id: "nTRN", data: synthTransformNodeData(0, map[string]string{"_name": "body"}, 1, 0, 0, 0)},
+		{id: "nGRP", data: synthGroupNodeData(1, nil, []int{2, 4})},
+		{id: "nSHP", data: synthShapeNodeData(2, nil, []int{0})},
+		{id: "nTRN", data: synthTransformNodeData(4, map[string]string{"_name": "arm"}, 5, 0, 2, 0)},
+		{id: "nSHP", data: synthShapeNodeData(5, nil, []int{1})},
+	}
+}
+
+func syntheticDuplicateNameSceneNodes() []syntheticVoxNodeChunk {
+	return []syntheticVoxNodeChunk{
+		{id: "nGRP", data: synthGroupNodeData(0, nil, []int{1, 3})},
+		{id: "nTRN", data: synthTransformNodeData(1, map[string]string{"_name": "arm"}, 2, 0, 0, 0)},
+		{id: "nSHP", data: synthShapeNodeData(2, nil, []int{0})},
+		{id: "nTRN", data: synthTransformNodeData(3, map[string]string{"_name": "arm"}, 4, 0, 0, 0)},
+		{id: "nSHP", data: synthShapeNodeData(4, nil, []int{1})},
+	}
+}
+
+func synthPackChunkData(numModels int) []byte {
+	var buf bytes.Buffer
+	writeUint32ForVoxFixture(&buf, uint32(numModels))
+	return buf.Bytes()
+}
+
+func synthSizeChunkData(model VoxModel) []byte {
+	var buf bytes.Buffer
+	writeUint32ForVoxFixture(&buf, model.SizeX)
+	writeUint32ForVoxFixture(&buf, model.SizeZ)
+	writeUint32ForVoxFixture(&buf, model.SizeY)
+	return buf.Bytes()
+}
+
+func synthXYZIChunkData(model VoxModel) []byte {
+	var buf bytes.Buffer
+	writeUint32ForVoxFixture(&buf, uint32(len(model.Voxels)))
+	for _, voxel := range model.Voxels {
+		buf.WriteByte(byte(voxel.X))
+		buf.WriteByte(byte(voxel.Z))
+		buf.WriteByte(byte(voxel.Y))
+		buf.WriteByte(voxel.ColorIndex)
+	}
+	return buf.Bytes()
+}
+
+func synthTransformNodeData(id int, attrs map[string]string, childID int, tx int32, ty int32, tz int32) []byte {
+	var buf bytes.Buffer
+	writeUint32ForVoxFixture(&buf, uint32(id))
+	buf.Write(synthDICTData(attrs))
+	writeUint32ForVoxFixture(&buf, uint32(childID))
+	writeUint32ForVoxFixture(&buf, 0)
+	writeUint32ForVoxFixture(&buf, 0)
+	writeUint32ForVoxFixture(&buf, 1)
+	frameAttrs := map[string]string{"_r": "0"}
+	if tx != 0 || ty != 0 || tz != 0 {
+		frameAttrs["_t"] = strings.TrimSpace(
+			strconv.FormatInt(int64(tx), 10) + " " +
+				strconv.FormatInt(int64(tz), 10) + " " +
+				strconv.FormatInt(int64(ty), 10),
+		)
+	}
+	buf.Write(synthDICTData(frameAttrs))
+	return buf.Bytes()
+}
+
+func synthGroupNodeData(id int, attrs map[string]string, childIDs []int) []byte {
+	var buf bytes.Buffer
+	writeUint32ForVoxFixture(&buf, uint32(id))
+	buf.Write(synthDICTData(attrs))
+	writeUint32ForVoxFixture(&buf, uint32(len(childIDs)))
+	for _, childID := range childIDs {
+		writeUint32ForVoxFixture(&buf, uint32(childID))
+	}
+	return buf.Bytes()
+}
+
+func synthShapeNodeData(id int, attrs map[string]string, modelIDs []int) []byte {
+	var buf bytes.Buffer
+	writeUint32ForVoxFixture(&buf, uint32(id))
+	buf.Write(synthDICTData(attrs))
+	writeUint32ForVoxFixture(&buf, uint32(len(modelIDs)))
+	for _, modelID := range modelIDs {
+		writeUint32ForVoxFixture(&buf, uint32(modelID))
+		buf.Write(synthDICTData(nil))
+	}
+	return buf.Bytes()
+}
+
+func synthDICTData(values map[string]string) []byte {
+	var buf bytes.Buffer
+	writeUint32ForVoxFixture(&buf, uint32(len(values)))
+	for key, value := range values {
+		writeStringForVoxFixture(&buf, key)
+		writeStringForVoxFixture(&buf, value)
+	}
+	return buf.Bytes()
+}
+
+func writeChunkForVoxFixture(t *testing.T, buf *bytes.Buffer, chunkID string, chunkData []byte, childrenSize int32) {
+	t.Helper()
+	if len(chunkID) != 4 {
+		t.Fatalf("chunk id must be 4 bytes, got %q", chunkID)
+	}
+	buf.WriteString(chunkID)
+	writeInt32ForVoxFixture(t, buf, int32(len(chunkData)))
+	writeInt32ForVoxFixture(t, buf, childrenSize)
+	if len(chunkData) > 0 {
+		buf.Write(chunkData)
+	}
+}
+
+func writeStringForVoxFixture(buf *bytes.Buffer, value string) {
+	writeUint32ForVoxFixture(buf, uint32(len(value)))
+	buf.WriteString(value)
+}
+
+func writeUint32ForVoxFixture(buf *bytes.Buffer, value uint32) {
+	_ = binary.Write(buf, binary.LittleEndian, value)
+}
+
+func writeInt32ForVoxFixture(t *testing.T, buf *bytes.Buffer, value int32) {
+	t.Helper()
+	if err := binary.Write(buf, binary.LittleEndian, value); err != nil {
+		t.Fatalf("binary.Write failed: %v", err)
+	}
 }
