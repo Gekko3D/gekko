@@ -242,7 +242,17 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef) (
 		palette := assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1)
 		return model, palette, nil
 	case content.AssetSourceKindVoxSceneNode:
-		return AssetId{}, AssetId{}, fmt.Errorf("vox_scene_node spawn not implemented yet")
+		voxFile, err := LoadVoxFile(part.Source.Path)
+		if err != nil {
+			return AssetId{}, AssetId{}, err
+		}
+		modelIndex := part.Source.ModelIndex
+		if modelIndex < 0 || modelIndex >= len(voxFile.Models) {
+			return AssetId{}, AssetId{}, nil
+		}
+		model := assets.CreateVoxelModelFromSource(voxFile.Models[modelIndex], part.ModelScale, part.Source.Path)
+		palette := assets.CreateVoxelPaletteFromSource(voxFile.Palette, voxFile.VoxMaterials, part.Source.Path)
+		return model, palette, nil
 	default:
 		return AssetId{}, AssetId{}, fmt.Errorf("unsupported asset source kind %q", part.Source.Kind)
 	}
