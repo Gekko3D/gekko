@@ -8,19 +8,23 @@ import (
 )
 
 type AuthoredAssetSpawnResult struct {
-	RootEntity        EntityId
-	EntitiesByAssetID map[string]EntityId
-	PartIDs           map[string]struct{}
+	RootEntity         EntityId
+	AssetID            string
+	EntitiesByAssetID  map[string]EntityId
+	ItemKindsByAssetID map[string]AuthoredItemKind
+	PartIDs            map[string]struct{}
 }
 
 func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
 	result := AuthoredAssetSpawnResult{
-		EntitiesByAssetID: make(map[string]EntityId),
-		PartIDs:           make(map[string]struct{}),
+		EntitiesByAssetID:  make(map[string]EntityId),
+		ItemKindsByAssetID: make(map[string]AuthoredItemKind),
+		PartIDs:            make(map[string]struct{}),
 	}
 	if def == nil {
 		return result, fmt.Errorf("asset definition is nil")
 	}
+	result.AssetID = def.ID
 	if err := ValidateAssetHierarchy(def); err != nil {
 		return result, err
 	}
@@ -32,29 +36,41 @@ func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDe
 			Rotation: rootTransform.Rotation,
 			Scale:    rootTransform.Scale,
 		},
+		&AuthoredAssetRootComponent{AssetID: def.ID},
 	)
 
 	for _, part := range def.Parts {
-		eid, err := spawnAuthoredPart(cmd, assets, part)
+		eid, err := spawnAuthoredPart(cmd, assets, def.ID, part)
 		if err != nil {
 			return result, err
 		}
 		result.EntitiesByAssetID[part.ID] = eid
+		result.ItemKindsByAssetID[part.ID] = AuthoredItemKindPart
 		result.PartIDs[part.ID] = struct{}{}
 	}
 	for _, light := range def.Lights {
-		eid, err := spawnAuthoredLight(cmd, light)
+		eid, err := spawnAuthoredLight(cmd, def.ID, light)
 		if err != nil {
 			return result, err
 		}
 		result.EntitiesByAssetID[light.ID] = eid
+		result.ItemKindsByAssetID[light.ID] = AuthoredItemKindLight
 	}
 	for _, emitter := range def.Emitters {
-		eid, err := spawnAuthoredEmitter(cmd, assets, emitter)
+		eid, err := spawnAuthoredEmitter(cmd, assets, def.ID, emitter)
 		if err != nil {
 			return result, err
 		}
 		result.EntitiesByAssetID[emitter.ID] = eid
+		result.ItemKindsByAssetID[emitter.ID] = AuthoredItemKindEmitter
+	}
+	for _, marker := range def.Markers {
+		eid, err := spawnAuthoredMarker(cmd, def.ID, marker)
+		if err != nil {
+			return result, err
+		}
+		result.EntitiesByAssetID[marker.ID] = eid
+		result.ItemKindsByAssetID[marker.ID] = AuthoredItemKindMarker
 	}
 	cmd.app.FlushCommands()
 
@@ -63,12 +79,13 @@ func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDe
 		if !ok {
 			return fmt.Errorf("spawned entity missing for asset id %s", itemID)
 		}
-		if parentID == "" {
-			return nil
-		}
-		parentEntity, exists := result.EntitiesByAssetID[parentID]
-		if !exists {
-			return fmt.Errorf("missing parent %s for %s", parentID, itemID)
+		parentEntity := result.RootEntity
+		if parentID != "" {
+			var exists bool
+			parentEntity, exists = result.EntitiesByAssetID[parentID]
+			if !exists {
+				return fmt.Errorf("missing parent %s for %s", parentID, itemID)
+			}
 		}
 		cmd.AddComponents(eid, &Parent{Entity: parentEntity})
 		return nil
@@ -89,10 +106,23 @@ func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDe
 			return result, err
 		}
 	}
+	for _, marker := range def.Markers {
+		if err := attachToParent(marker.ID, marker.ParentID); err != nil {
+			return result, err
+		}
+	}
 	cmd.app.FlushCommands()
 
 	TransformHierarchySystem(cmd)
 	return result, nil
+}
+
+func LoadAndSpawnAuthoredAsset(path string, cmd *Commands, assets *AssetServer, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
+	def, err := content.LoadAsset(path)
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	return SpawnAuthoredAsset(cmd, assets, def, rootTransform)
 }
 
 func ValidateAssetHierarchy(def *content.AssetDef) error {
@@ -132,6 +162,14 @@ func ValidateAssetHierarchy(def *content.AssetDef) error {
 			return fmt.Errorf("emitter %s has unsupported or missing parent %s", emitter.ID, emitter.ParentID)
 		}
 	}
+	for _, marker := range def.Markers {
+		if marker.ParentID == "" {
+			continue
+		}
+		if _, ok := partIDs[marker.ParentID]; !ok {
+			return fmt.Errorf("marker %s has unsupported or missing parent %s", marker.ID, marker.ParentID)
+		}
+	}
 
 	visiting := make(map[string]bool, len(def.Parts))
 	visited := make(map[string]bool, len(def.Parts))
@@ -167,10 +205,14 @@ func ValidateAssetHierarchy(def *content.AssetDef) error {
 	return nil
 }
 
-func spawnAuthoredPart(cmd *Commands, assets *AssetServer, part content.AssetPartDef) (EntityId, error) {
+func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part content.AssetPartDef) (EntityId, error) {
 	tr := AssetTransformFromDef(part.Transform)
 	local := AssetLocalTransformFromDef(part.Transform)
-	comps := []any{&tr, &local}
+	comps := []any{
+		&tr,
+		&local,
+		&AuthoredAssetRefComponent{AssetID: assetID, ItemID: part.ID, Kind: AuthoredItemKindPart},
+	}
 
 	model, palette, err := modelAndPaletteFromSource(assets, part)
 	if err != nil {
@@ -183,7 +225,7 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, part content.AssetPar
 	return cmd.AddEntity(comps...), nil
 }
 
-func spawnAuthoredLight(cmd *Commands, light content.AssetLightDef) (EntityId, error) {
+func spawnAuthoredLight(cmd *Commands, assetID string, light content.AssetLightDef) (EntityId, error) {
 	tr := AssetTransformFromDef(light.Transform)
 	local := AssetLocalTransformFromDef(light.Transform)
 	lightType, err := AssetLightTypeToEngine(light.Type)
@@ -193,6 +235,7 @@ func spawnAuthoredLight(cmd *Commands, light content.AssetLightDef) (EntityId, e
 	return cmd.AddEntity(
 		&tr,
 		&local,
+		&AuthoredAssetRefComponent{AssetID: assetID, ItemID: light.ID, Kind: AuthoredItemKindLight},
 		&LightComponent{
 			Type:      lightType,
 			Color:     light.Color,
@@ -203,14 +246,30 @@ func spawnAuthoredLight(cmd *Commands, light content.AssetLightDef) (EntityId, e
 	), nil
 }
 
-func spawnAuthoredEmitter(cmd *Commands, assets *AssetServer, emitter content.AssetEmitterDef) (EntityId, error) {
+func spawnAuthoredEmitter(cmd *Commands, assets *AssetServer, assetID string, emitter content.AssetEmitterDef) (EntityId, error) {
 	tr := AssetTransformFromDef(emitter.Transform)
 	local := AssetLocalTransformFromDef(emitter.Transform)
 	emitterComp, err := ParticleEmitterFromContent(emitter.Emitter, assets)
 	if err != nil {
 		return 0, err
 	}
-	return cmd.AddEntity(&tr, &local, &emitterComp), nil
+	return cmd.AddEntity(
+		&tr,
+		&local,
+		&AuthoredAssetRefComponent{AssetID: assetID, ItemID: emitter.ID, Kind: AuthoredItemKindEmitter},
+		&emitterComp,
+	), nil
+}
+
+func spawnAuthoredMarker(cmd *Commands, assetID string, marker content.AssetMarkerDef) (EntityId, error) {
+	tr := AssetTransformFromDef(marker.Transform)
+	local := AssetLocalTransformFromDef(marker.Transform)
+	return cmd.AddEntity(
+		&tr,
+		&local,
+		&AuthoredAssetRefComponent{AssetID: assetID, ItemID: marker.ID, Kind: AuthoredItemKindMarker},
+		&AuthoredMarkerComponent{Kind: marker.Kind, Tags: append([]string(nil), marker.Tags...)},
+	), nil
 }
 
 func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef) (AssetId, AssetId, error) {
