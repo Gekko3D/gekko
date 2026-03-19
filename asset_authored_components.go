@@ -24,6 +24,23 @@ type AuthoredMarkerComponent struct {
 	Tags []string
 }
 
+type AuthoredLevelRootComponent struct {
+	LevelID string
+}
+
+type AuthoredLevelPlacementRefComponent struct {
+	LevelID     string
+	PlacementID string
+	AssetPath   string
+	VolumeID    string
+}
+
+type AuthoredTerrainChunkRefComponent struct {
+	LevelID    string
+	TerrainID  string
+	ChunkCoord [3]int
+}
+
 func IsAuthoredAssetRootEntity(cmd *Commands, eid EntityId) bool {
 	if cmd == nil {
 		return false
@@ -67,4 +84,49 @@ func AuthoredMarkerForEntity(cmd *Commands, eid EntityId) (AuthoredMarkerCompone
 		}
 	}
 	return AuthoredMarkerComponent{}, false
+}
+
+func IsAuthoredLevelRootEntity(cmd *Commands, eid EntityId) bool {
+	if cmd == nil {
+		return false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if _, ok := comp.(*AuthoredLevelRootComponent); ok {
+			return true
+		}
+		if _, ok := comp.(AuthoredLevelRootComponent); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func AuthoredLevelPlacementRefForEntity(cmd *Commands, eid EntityId) (AuthoredLevelPlacementRefComponent, bool) {
+	if cmd == nil {
+		return AuthoredLevelPlacementRefComponent{}, false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if ref, ok := comp.(*AuthoredLevelPlacementRefComponent); ok {
+			return *ref, true
+		}
+		if ref, ok := comp.(AuthoredLevelPlacementRefComponent); ok {
+			return ref, true
+		}
+	}
+	return AuthoredLevelPlacementRefComponent{}, false
+}
+
+func AuthoredTerrainChunkRefForEntity(cmd *Commands, eid EntityId) (AuthoredTerrainChunkRefComponent, bool) {
+	if cmd == nil {
+		return AuthoredTerrainChunkRefComponent{}, false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if ref, ok := comp.(*AuthoredTerrainChunkRefComponent); ok {
+			return *ref, true
+		}
+		if ref, ok := comp.(AuthoredTerrainChunkRefComponent); ok {
+			return ref, true
+		}
+	}
+	return AuthoredTerrainChunkRefComponent{}, false
 }
