@@ -33,6 +33,25 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 				},
 			},
 		},
+		PlacementVolumes: []PlacementVolumeDef{
+			{
+				ID:        "volume-1",
+				Kind:      PlacementVolumeKindSphere,
+				AssetPath: "assets/station.gkasset",
+				Transform: LevelTransformDef{
+					Position: Vec3{4, 5, 6},
+					Rotation: Quat{0, 0, 0, 1},
+					Scale:    Vec3{1, 1, 1},
+				},
+				Radius: 12,
+				Rule: PlacementVolumeRuleDef{
+					Mode:  PlacementVolumeRuleModeCount,
+					Count: 24,
+				},
+				RandomSeed: 99,
+				Tags:       []string{"asteroids"},
+			},
+		},
 		Markers: []LevelMarkerDef{
 			{
 				Name: "spawn",
@@ -94,6 +113,9 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	}
 	if loaded.ID == "" || loaded.Placements[0].ID == "" || loaded.Markers[0].ID == "" {
 		t.Fatal("expected IDs to be assigned")
+	}
+	if len(loaded.PlacementVolumes) != 1 || loaded.PlacementVolumes[0].ID != "volume-1" {
+		t.Fatalf("expected placement volume to round-trip, got %+v", loaded.PlacementVolumes)
 	}
 	if loaded.Placements[0].PlacementMode != LevelPlacementModePlaneSnap {
 		t.Fatalf("expected plane snap mode, got %q", loaded.Placements[0].PlacementMode)
@@ -170,6 +192,44 @@ func TestValidateLevelRejectsInvalidPlacements(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "empty_asset_path")
 	assertHasLevelValidationCode(t, result, "invalid_placement_mode")
 	assertHasLevelValidationCode(t, result, "missing_asset_file")
+}
+
+func TestValidateLevelRejectsInvalidPlacementVolumeAndAssetSet(t *testing.T) {
+	tmpDir := t.TempDir()
+	assetsDir := filepath.Join(tmpDir, "assets")
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveAssetSet(filepath.Join(assetsDir, "bad.gkset"), &AssetSetDef{
+		Name: "bad",
+		Entries: []AssetSetEntryDef{
+			{AssetPath: "missing.gkasset", Weight: 0},
+		},
+	}); err != nil {
+		t.Fatalf("SaveAssetSet failed: %v", err)
+	}
+
+	def := NewLevelDef("volumes")
+	def.PlacementVolumes = []PlacementVolumeDef{
+		{
+			ID:           "volume-1",
+			Kind:         PlacementVolumeKindSphere,
+			AssetPath:    "missing.gkasset",
+			AssetSetPath: "bad.gkset",
+			Radius:       0,
+			Rule: PlacementVolumeRuleDef{
+				Mode: PlacementVolumeRuleModeDensity,
+			},
+		},
+	}
+
+	result := ValidateLevel(def, LevelValidationOptions{DocumentPath: filepath.Join(assetsDir, "level.gklevel")})
+	if !result.HasErrors() {
+		t.Fatal("expected validation errors")
+	}
+	assertHasLevelValidationCode(t, result, "invalid_volume_radius")
+	assertHasLevelValidationCode(t, result, "invalid_volume_density")
+	assertHasLevelValidationCode(t, result, "invalid_volume_source")
 }
 
 func TestValidateLevelRejectsBrokenTerrainReference(t *testing.T) {

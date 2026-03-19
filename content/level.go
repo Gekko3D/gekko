@@ -10,17 +10,32 @@ const (
 	LevelPlacementModeFree3D      LevelPlacementMode = "free_3d"
 )
 
+type PlacementVolumeKind string
+
+const (
+	PlacementVolumeKindSphere PlacementVolumeKind = "sphere"
+	PlacementVolumeKindBox    PlacementVolumeKind = "box"
+)
+
+type PlacementVolumeRuleMode string
+
+const (
+	PlacementVolumeRuleModeCount   PlacementVolumeRuleMode = "count"
+	PlacementVolumeRuleModeDensity PlacementVolumeRuleMode = "density"
+)
+
 type LevelDef struct {
-	ID              string               `json:"id"`
-	SchemaVersion   int                  `json:"schema_version"`
-	Name            string               `json:"name"`
-	Tags            []string             `json:"tags,omitempty"`
-	ChunkSize       int                  `json:"chunk_size,omitempty"`
-	StreamingRadius int                  `json:"streaming_radius,omitempty"`
-	Terrain         *LevelTerrainDef     `json:"terrain,omitempty"`
-	Placements      []LevelPlacementDef  `json:"placements,omitempty"`
-	Environment     *LevelEnvironmentDef `json:"environment,omitempty"`
-	Markers         []LevelMarkerDef     `json:"markers,omitempty"`
+	ID               string               `json:"id"`
+	SchemaVersion    int                  `json:"schema_version"`
+	Name             string               `json:"name"`
+	Tags             []string             `json:"tags,omitempty"`
+	ChunkSize        int                  `json:"chunk_size,omitempty"`
+	StreamingRadius  int                  `json:"streaming_radius,omitempty"`
+	Terrain          *LevelTerrainDef     `json:"terrain,omitempty"`
+	Placements       []LevelPlacementDef  `json:"placements,omitempty"`
+	PlacementVolumes []PlacementVolumeDef `json:"placement_volumes,omitempty"`
+	Environment      *LevelEnvironmentDef `json:"environment,omitempty"`
+	Markers          []LevelMarkerDef     `json:"markers,omitempty"`
 }
 
 type LevelPlacementDef struct {
@@ -29,6 +44,25 @@ type LevelPlacementDef struct {
 	Transform     LevelTransformDef  `json:"transform"`
 	PlacementMode LevelPlacementMode `json:"placement_mode,omitempty"`
 	Tags          []string           `json:"tags,omitempty"`
+}
+
+type PlacementVolumeRuleDef struct {
+	Mode                 PlacementVolumeRuleMode `json:"mode,omitempty"`
+	Count                int                     `json:"count,omitempty"`
+	DensityPer1000Volume float32                 `json:"density_per_1000_volume,omitempty"`
+}
+
+type PlacementVolumeDef struct {
+	ID           string                 `json:"id"`
+	Kind         PlacementVolumeKind    `json:"kind"`
+	AssetPath    string                 `json:"asset_path,omitempty"`
+	AssetSetPath string                 `json:"asset_set_path,omitempty"`
+	Transform    LevelTransformDef      `json:"transform"`
+	Radius       float32                `json:"radius,omitempty"`
+	Extents      Vec3                   `json:"extents,omitempty"`
+	Rule         PlacementVolumeRuleDef `json:"rule"`
+	RandomSeed   int64                  `json:"random_seed,omitempty"`
+	Tags         []string               `json:"tags,omitempty"`
 }
 
 type LevelTransformDef struct {
@@ -68,6 +102,24 @@ func NewLevelDef(name string) *LevelDef {
 	return def
 }
 
+func NewPlacementVolumeDef(kind PlacementVolumeKind) PlacementVolumeDef {
+	return PlacementVolumeDef{
+		ID:   newID(),
+		Kind: kind,
+		Transform: LevelTransformDef{
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+		Radius:  8,
+		Extents: Vec3{8, 8, 8},
+		Rule: PlacementVolumeRuleDef{
+			Mode:  PlacementVolumeRuleModeCount,
+			Count: 16,
+		},
+		RandomSeed: 1,
+	}
+}
+
 func EnsureLevelIDs(def *LevelDef) {
 	if def == nil {
 		return
@@ -84,6 +136,11 @@ func EnsureLevelIDs(def *LevelDef) {
 		}
 		if def.Placements[i].PlacementMode == "" {
 			def.Placements[i].PlacementMode = LevelPlacementModePlaneSnap
+		}
+	}
+	for i := range def.PlacementVolumes {
+		if def.PlacementVolumes[i].ID == "" {
+			def.PlacementVolumes[i].ID = newID()
 		}
 	}
 	for i := range def.Markers {
