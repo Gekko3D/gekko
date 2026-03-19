@@ -250,18 +250,12 @@ func validateSourceFile(result *AssetValidationResult, itemID string, itemName s
 	if strings.TrimSpace(sourcePath) == "" {
 		return
 	}
-	if pathExists(sourcePath) {
+	if pathExists(ResolveDocumentPath(sourcePath, opts.DocumentPath)) {
 		return
 	}
 	if filepath.IsAbs(sourcePath) {
 		result.addError("missing_source_file", fmt.Sprintf("missing source file %s", sourcePath), itemID, itemName, itemKind)
 		return
-	}
-	if opts.DocumentPath != "" {
-		resolved := filepath.Join(filepath.Dir(opts.DocumentPath), sourcePath)
-		if pathExists(resolved) {
-			return
-		}
 	}
 	result.addError("missing_source_file", fmt.Sprintf("missing source file %s", sourcePath), itemID, itemName, itemKind)
 }

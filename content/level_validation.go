@@ -3,7 +3,6 @@ package content
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -125,20 +124,8 @@ func validatePlacementAssetPath(result *LevelValidationResult, placement LevelPl
 		return
 	}
 
-	assetPath := placement.AssetPath
-	if filepath.IsAbs(assetPath) {
-		if _, err := os.Stat(assetPath); err != nil {
-			result.addError("missing_asset_file", fmt.Sprintf("missing asset file %s", placement.AssetPath), placement.ID, placement.AssetPath, "")
-		}
-		return
-	}
-
-	if _, err := os.Stat(assetPath); err == nil {
-		return
-	}
-
-	docRelative := filepath.Join(filepath.Dir(opts.DocumentPath), assetPath)
-	if _, err := os.Stat(docRelative); err != nil {
+	resolvedPath := ResolveDocumentPath(placement.AssetPath, opts.DocumentPath)
+	if _, err := os.Stat(resolvedPath); err != nil {
 		result.addError("missing_asset_file", fmt.Sprintf("missing asset file %s", placement.AssetPath), placement.ID, placement.AssetPath, "")
 	}
 }

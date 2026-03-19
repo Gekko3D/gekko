@@ -16,7 +16,15 @@ type AuthoredAssetSpawnResult struct {
 	PartIDs            map[string]struct{}
 }
 
+type AuthoredAssetSpawnOptions struct {
+	DocumentPath string
+}
+
 func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
+	return SpawnAuthoredAssetWithOptions(cmd, assets, def, rootTransform, AuthoredAssetSpawnOptions{})
+}
+
+func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions) (AuthoredAssetSpawnResult, error) {
 	result := AuthoredAssetSpawnResult{
 		EntitiesByAssetID:  make(map[string]EntityId),
 		ItemKindsByAssetID: make(map[string]AuthoredItemKind),
@@ -26,7 +34,7 @@ func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDe
 		return result, fmt.Errorf("asset definition is nil")
 	}
 	result.AssetID = def.ID
-	if validation := content.ValidateAsset(def, content.AssetValidationOptions{}); validation.HasErrors() {
+	if validation := content.ValidateAsset(def, content.AssetValidationOptions{DocumentPath: opts.DocumentPath}); validation.HasErrors() {
 		return result, fmt.Errorf("asset validation failed: %s", validation.Error())
 	}
 	if err := ValidateAssetHierarchy(def); err != nil {
@@ -44,7 +52,7 @@ func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDe
 	)
 
 	for _, part := range def.Parts {
-		eid, err := spawnAuthoredPart(cmd, assets, def.ID, part)
+		eid, err := spawnAuthoredPart(cmd, assets, def.ID, part, opts.DocumentPath)
 		if err != nil {
 			return result, err
 		}
@@ -126,7 +134,7 @@ func LoadAndSpawnAuthoredAsset(path string, cmd *Commands, assets *AssetServer, 
 	if err != nil {
 		return AuthoredAssetSpawnResult{}, err
 	}
-	return SpawnAuthoredAsset(cmd, assets, def, rootTransform)
+	return SpawnAuthoredAssetWithOptions(cmd, assets, def, rootTransform, AuthoredAssetSpawnOptions{DocumentPath: path})
 }
 
 func ValidateAssetHierarchy(def *content.AssetDef) error {
@@ -140,7 +148,7 @@ func ValidateAssetHierarchy(def *content.AssetDef) error {
 	return nil
 }
 
-func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part content.AssetPartDef) (EntityId, error) {
+func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part content.AssetPartDef, documentPath string) (EntityId, error) {
 	tr := AssetTransformFromDef(part.Transform)
 	local := AssetLocalTransformFromDef(part.Transform)
 	comps := []any{
@@ -149,7 +157,7 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part 
 		&AuthoredAssetRefComponent{AssetID: assetID, ItemID: part.ID, Kind: AuthoredItemKindPart},
 	}
 
-	model, palette, err := modelAndPaletteFromSource(assets, part)
+	model, palette, err := modelAndPaletteFromSource(assets, part, documentPath)
 	if err != nil {
 		return 0, err
 	}
@@ -207,22 +215,24 @@ func spawnAuthoredMarker(cmd *Commands, assetID string, marker content.AssetMark
 	), nil
 }
 
-func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef) (AssetId, AssetId, error) {
+func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef, documentPath string) (AssetId, AssetId, error) {
 	if assets == nil {
 		return AssetId{}, AssetId{}, nil
 	}
 
+	sourcePath := content.ResolveDocumentPath(part.Source.Path, documentPath)
+
 	switch part.Source.Kind {
 	case content.AssetSourceKindVoxModel:
-		voxFile, err := LoadVoxFile(part.Source.Path)
+		voxFile, err := LoadVoxFile(sourcePath)
 		if err != nil {
 			return AssetId{}, AssetId{}, err
 		}
 		if part.Source.ModelIndex < 0 || part.Source.ModelIndex >= len(voxFile.Models) {
 			return AssetId{}, AssetId{}, fmt.Errorf("model index %d out of range for %s", part.Source.ModelIndex, part.Source.Path)
 		}
-		model := assets.CreateVoxelModelFromSource(voxFile.Models[part.Source.ModelIndex], part.ModelScale, part.Source.Path)
-		palette := assets.CreateVoxelPaletteFromSource(voxFile.Palette, voxFile.VoxMaterials, part.Source.Path)
+		model := assets.CreateVoxelModelFromSource(voxFile.Models[part.Source.ModelIndex], part.ModelScale, sourcePath)
+		palette := assets.CreateVoxelPaletteFromSource(voxFile.Palette, voxFile.VoxMaterials, sourcePath)
 		return model, palette, nil
 	case content.AssetSourceKindProceduralPrimitive:
 		model := AssetId{}
@@ -242,7 +252,7 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef) (
 		palette := assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1)
 		return model, palette, nil
 	case content.AssetSourceKindVoxSceneNode:
-		voxFile, err := LoadVoxFile(part.Source.Path)
+		voxFile, err := LoadVoxFile(sourcePath)
 		if err != nil {
 			return AssetId{}, AssetId{}, err
 		}
@@ -250,8 +260,8 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef) (
 		if modelIndex < 0 || modelIndex >= len(voxFile.Models) {
 			return AssetId{}, AssetId{}, nil
 		}
-		model := assets.CreateVoxelModelFromSource(voxFile.Models[modelIndex], part.ModelScale, part.Source.Path)
-		palette := assets.CreateVoxelPaletteFromSource(voxFile.Palette, voxFile.VoxMaterials, part.Source.Path)
+		model := assets.CreateVoxelModelFromSource(voxFile.Models[modelIndex], part.ModelScale, sourcePath)
+		palette := assets.CreateVoxelPaletteFromSource(voxFile.Palette, voxFile.VoxMaterials, sourcePath)
 		return model, palette, nil
 	default:
 		return AssetId{}, AssetId{}, fmt.Errorf("unsupported asset source kind %q", part.Source.Kind)

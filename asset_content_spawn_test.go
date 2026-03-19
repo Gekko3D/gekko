@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -215,6 +216,54 @@ func TestLoadAndSpawnAuthoredAssetMatchesDirectSpawn(t *testing.T) {
 
 		assertSpawnStructuresMatch(t, directCmd, directResult, loadedCmd, loadedResult)
 	})
+}
+
+func TestLoadAndSpawnAuthoredAssetResolvesSourcePathsRelativeToAssetDocument(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "library", "assets", "relative_source.gkasset")
+	voxPath := filepath.Join(root, "library", "models", "human.vox")
+	copySpawnTestVoxFixture(t, voxPath)
+
+	def := content.NewAssetDef("relative-source")
+	def.Parts = []content.AssetPartDef{{
+		ID:   "part",
+		Name: "part",
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxModel,
+			Path: filepath.Join("..", "models", "human.vox"),
+		},
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+	content.EnsureAssetIDs(def)
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := content.SaveAsset(assetPath, def); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+	result, err := LoadAndSpawnAuthoredAsset(assetPath, cmd, assets, TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredAsset failed: %v", err)
+	}
+	app.FlushCommands()
+
+	entity := result.EntitiesByAssetID["part"]
+	if entity == 0 {
+		t.Fatal("expected spawned entity for part")
+	}
+	if _, ok := voxelModelForSpawnTest(cmd, entity); !ok {
+		t.Fatal("expected relative vox source to load into preview/runtime model component")
+	}
 }
 
 func TestSpawnAuthoredAssetCompositeGoldenResolvesChildBeforeParent(t *testing.T) {
@@ -472,6 +521,49 @@ func goldenAssetPathForSpawnTest(t *testing.T, fileName string) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Join(filepath.Dir(currentFile), "content", "testdata", fileName)
+}
+
+func copySpawnTestVoxFixture(t *testing.T, dst string) {
+	t.Helper()
+	src := filepath.Join(repoRootForSpawnTest(t), "gekko-editor", "assets", "human.vox")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) failed: %v", src, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		t.Fatalf("MkdirAll(%s) failed: %v", dst, err)
+	}
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		t.Fatalf("WriteFile(%s) failed: %v", dst, err)
+	}
+}
+
+func repoRootForSpawnTest(t *testing.T) string {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Dir(filepath.Dir(currentFile))
+}
+
+func newSpawnTestAssetServer() *AssetServer {
+	return &AssetServer{
+		voxModels:   make(map[AssetId]VoxelModelAsset),
+		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
+	}
+}
+
+func voxelModelForSpawnTest(cmd *Commands, eid EntityId) (VoxelModelComponent, bool) {
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if model, ok := comp.(VoxelModelComponent); ok {
+			return model, true
+		}
+		if model, ok := comp.(*VoxelModelComponent); ok {
+			return *model, true
+		}
+	}
+	return VoxelModelComponent{}, false
 }
 
 func mustWorldTransformForSpawnTest(t *testing.T, cmd *Commands, eid EntityId) TransformComponent {
