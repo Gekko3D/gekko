@@ -33,6 +33,13 @@ const (
 	AssetAlphaModeLuminance AssetAlphaMode = "luminance"
 )
 
+const (
+	AssetMarkerKindMuzzle       = "muzzle"
+	AssetMarkerKindHandMount    = "hand_mount"
+	AssetMarkerKindEffectAnchor = "effect_anchor"
+	AssetMarkerKindSpawnAnchor  = "spawn_anchor"
+)
+
 type AssetDef struct {
 	ID            string            `json:"id"`
 	SchemaVersion int               `json:"schema_version"`
