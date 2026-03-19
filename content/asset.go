@@ -13,6 +13,7 @@ type Range2 [2]float32
 type AssetSourceKind string
 
 const (
+	AssetSourceKindGroup               AssetSourceKind = "group"
 	AssetSourceKindVoxModel            AssetSourceKind = "vox_model"
 	AssetSourceKindVoxSceneNode        AssetSourceKind = "vox_scene_node"
 	AssetSourceKindProceduralPrimitive AssetSourceKind = "procedural_primitive"

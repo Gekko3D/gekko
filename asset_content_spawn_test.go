@@ -304,6 +304,26 @@ func TestSpawnAuthoredAssetWithOptionsResolvesVoxSceneNodeSubtreeModelIndex(t *t
 	}
 }
 
+func TestSpawnAuthoredAssetWithOptionsSupportsGroupPartWithoutGeometry(t *testing.T) {
+	_, _, result, cmd, err := spawnSceneNodeAssetForTest(t, content.AssetSourceDef{
+		Kind: content.AssetSourceKindGroup,
+	})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAssetWithOptions failed: %v", err)
+	}
+
+	entity := result.EntitiesByAssetID["part"]
+	if entity == 0 {
+		t.Fatal("expected spawned entity for group part")
+	}
+	if _, ok := voxelModelForSpawnTest(cmd, entity); ok {
+		t.Fatal("expected group part to spawn without voxel model geometry")
+	}
+	if mustWorldTransformForSpawnTest(t, cmd, entity).Scale != (mgl32.Vec3{1, 1, 1}) {
+		t.Fatal("expected group part to retain authored transform")
+	}
+}
+
 func TestSpawnAuthoredAssetWithOptionsRejectsInvalidVoxSceneNodeResolution(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -201,6 +201,8 @@ func validatePartParent(result *AssetValidationResult, partIDs map[string]struct
 
 func validateSource(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef, opts AssetValidationOptions) {
 	switch source.Kind {
+	case AssetSourceKindGroup:
+		return
 	case AssetSourceKindVoxModel:
 		if strings.TrimSpace(source.Path) == "" {
 			result.addError("invalid_source_payload", "vox_model source requires path", itemID, itemName, itemKind)

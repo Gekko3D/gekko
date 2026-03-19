@@ -95,6 +95,23 @@ func TestValidateAssetValidatesVoxAndSceneNodePayloads(t *testing.T) {
 	assertHasValidationCode(t, result, "invalid_source_payload")
 }
 
+func TestValidateAssetAcceptsGroupPartSource(t *testing.T) {
+	def := NewAssetDef("group")
+	def.Parts = []AssetPartDef{{
+		ID:   "group",
+		Name: "group",
+		Source: AssetSourceDef{
+			Kind: AssetSourceKindGroup,
+		},
+		Transform: identityTransform(),
+	}}
+
+	result := ValidateAsset(def, AssetValidationOptions{})
+	if result.HasErrors() {
+		t.Fatalf("expected group source to validate, got %+v", result.Issues)
+	}
+}
+
 func TestValidateAssetValidatesProceduralPrimitivePayload(t *testing.T) {
 	def := NewAssetDef("procedural")
 	def.Parts = []AssetPartDef{

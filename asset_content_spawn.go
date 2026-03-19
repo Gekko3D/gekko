@@ -223,6 +223,8 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef, d
 	sourcePath := content.ResolveDocumentPath(part.Source.Path, documentPath)
 
 	switch part.Source.Kind {
+	case content.AssetSourceKindGroup:
+		return AssetId{}, AssetId{}, nil
 	case content.AssetSourceKindVoxModel:
 		voxFile, err := LoadVoxFile(sourcePath)
 		if err != nil {

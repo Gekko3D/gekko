@@ -23,6 +23,9 @@
 
 - `vox_model`
   - file-backed VOX model reference with `path` and `model_index`
+- `group`
+  - transform-only authored node with no render source
+  - useful for imported hierarchy parents and future empty pivots
 - `vox_scene_node`
   - VOX scene-node reference with `path` and `node_name`
   - `node_name` must resolve to exactly one named VOX scene node/subtree
