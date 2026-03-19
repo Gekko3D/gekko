@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gekko3d/gekko/content"
@@ -216,6 +217,66 @@ func TestLoadAndSpawnAuthoredAssetMatchesDirectSpawn(t *testing.T) {
 	})
 }
 
+func TestSpawnAuthoredAssetCompositeGoldenResolvesChildBeforeParent(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	def := loadGoldenAssetForSpawnTest(t, "composite_authored_asset.gkasset")
+	result, err := SpawnAuthoredAsset(cmd, nil, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAsset returned error: %v", err)
+	}
+	app.FlushCommands()
+
+	if result.AssetID != "asset-composite" {
+		t.Fatalf("expected asset-composite id, got %q", result.AssetID)
+	}
+	if result.ItemKindsByAssetID["marker-child"] != AuthoredItemKindMarker {
+		t.Fatalf("expected marker kind mapping for golden asset, got %+v", result.ItemKindsByAssetID)
+	}
+
+	childWorld := mustWorldTransformForSpawnTest(t, cmd, result.EntitiesByAssetID["part-child"])
+	if got := childWorld.Position; got.Sub(mgl32.Vec3{10, 2, 0}).Len() > 1e-5 {
+		t.Fatalf("expected child world position [10 2 0], got %v", got)
+	}
+
+	marker, ok := AuthoredMarkerForEntity(cmd, result.EntitiesByAssetID["marker-child"])
+	if !ok {
+		t.Fatal("expected marker metadata on spawned golden asset")
+	}
+	if marker.Kind != content.AssetMarkerKindMuzzle {
+		t.Fatalf("expected muzzle marker kind, got %q", marker.Kind)
+	}
+}
+
+func TestLoadAndSpawnAuthoredAssetCompositeGoldenMatchesDirectSpawn(t *testing.T) {
+	def := loadGoldenAssetForSpawnTest(t, "composite_authored_asset.gkasset")
+	path := goldenAssetPathForSpawnTest(t, "composite_authored_asset.gkasset")
+	rootTransform := TransformComponent{
+		Position: mgl32.Vec3{4, 5, 6},
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+
+	directApp := NewApp()
+	directCmd := directApp.Commands()
+	directResult, err := SpawnAuthoredAsset(directCmd, nil, def, rootTransform)
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAsset failed: %v", err)
+	}
+	directApp.FlushCommands()
+
+	loadedApp := NewApp()
+	loadedCmd := loadedApp.Commands()
+	loadedResult, err := LoadAndSpawnAuthoredAsset(path, loadedCmd, nil, rootTransform)
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredAsset failed: %v", err)
+	}
+	loadedApp.FlushCommands()
+
+	assertSpawnStructuresMatch(t, directCmd, directResult, loadedCmd, loadedResult)
+}
+
 func representativeAuthoredAssetForTest() *content.AssetDef {
 	def := content.NewAssetDef("parity")
 	def.Parts = []content.AssetPartDef{
@@ -393,4 +454,36 @@ func testProceduralPartSource() content.AssetSourceDef {
 			"sz": 1,
 		},
 	}
+}
+
+func loadGoldenAssetForSpawnTest(t *testing.T, fileName string) *content.AssetDef {
+	t.Helper()
+	def, err := content.LoadAsset(goldenAssetPathForSpawnTest(t, fileName))
+	if err != nil {
+		t.Fatalf("LoadAsset(%s) failed: %v", fileName, err)
+	}
+	return def
+}
+
+func goldenAssetPathForSpawnTest(t *testing.T, fileName string) string {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(currentFile), "content", "testdata", fileName)
+}
+
+func mustWorldTransformForSpawnTest(t *testing.T, cmd *Commands, eid EntityId) TransformComponent {
+	t.Helper()
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if tr, ok := comp.(TransformComponent); ok {
+			return tr
+		}
+		if tr, ok := comp.(*TransformComponent); ok {
+			return *tr
+		}
+	}
+	t.Fatalf("missing world transform for entity %d", eid)
+	return TransformComponent{}
 }

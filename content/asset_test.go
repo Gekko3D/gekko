@@ -1,9 +1,13 @@
 package content
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -218,15 +222,95 @@ func TestLoadAssetParsesWithoutRunningValidation(t *testing.T) {
 	}
 }
 
-func contains(haystack, needle string) bool {
-	return len(needle) == 0 || (len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0)
+func TestGoldenSimpleAssetParsesValidatesAndRoundTrips(t *testing.T) {
+	assertGoldenAssetRoundTrip(t, "simple_single_part.gkasset")
 }
 
-func indexOf(s, sep string) int {
-	for i := 0; i+len(sep) <= len(s); i++ {
-		if s[i:i+len(sep)] == sep {
-			return i
-		}
+func TestGoldenCompositeAssetParsesValidatesAndRoundTrips(t *testing.T) {
+	def := assertGoldenAssetRoundTrip(t, "composite_authored_asset.gkasset")
+
+	if len(def.Markers) != 1 {
+		t.Fatalf("expected composite golden asset marker to survive round-trip, got %+v", def.Markers)
 	}
-	return -1
+	if def.Markers[0].Kind != AssetMarkerKindMuzzle {
+		t.Fatalf("expected muzzle marker kind, got %q", def.Markers[0].Kind)
+	}
+	if !reflect.DeepEqual(def.Markers[0].Tags, []string{"fx", "socket"}) {
+		t.Fatalf("unexpected marker tags %+v", def.Markers[0].Tags)
+	}
+}
+
+func TestGoldenCompositeAssetPreservesChildBeforeParentOrder(t *testing.T) {
+	def, err := LoadAsset(goldenAssetPathForTest(t, "composite_authored_asset.gkasset"))
+	if err != nil {
+		t.Fatalf("LoadAsset failed: %v", err)
+	}
+
+	if len(def.Parts) != 2 {
+		t.Fatalf("expected 2 parts, got %+v", def.Parts)
+	}
+	if def.Parts[0].ID != "part-child" || def.Parts[1].ID != "part-root" {
+		t.Fatalf("expected child-before-parent file order to remain intact, got %+v", def.Parts)
+	}
+
+	validation := ValidateAsset(def, AssetValidationOptions{DocumentPath: goldenAssetPathForTest(t, "composite_authored_asset.gkasset")})
+	if validation.HasErrors() {
+		t.Fatalf("expected child-before-parent golden asset to validate cleanly, got %+v", validation.Issues)
+	}
+}
+
+func assertGoldenAssetRoundTrip(t *testing.T, fileName string) *AssetDef {
+	t.Helper()
+
+	path := goldenAssetPathForTest(t, fileName)
+	def, err := LoadAsset(path)
+	if err != nil {
+		t.Fatalf("LoadAsset(%s) failed: %v", fileName, err)
+	}
+
+	validation := ValidateAsset(def, AssetValidationOptions{DocumentPath: path})
+	if validation.HasErrors() {
+		t.Fatalf("expected golden asset %s to validate cleanly, got %+v", fileName, validation.Issues)
+	}
+
+	tmpDir := t.TempDir()
+	savedPath := filepath.Join(tmpDir, fileName)
+	if err := SaveAsset(savedPath, def); err != nil {
+		t.Fatalf("SaveAsset(%s) failed: %v", fileName, err)
+	}
+
+	fixtureBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) failed: %v", path, err)
+	}
+	savedBytes, err := os.ReadFile(savedPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) failed: %v", savedPath, err)
+	}
+	if !bytes.Equal(bytes.TrimSpace(savedBytes), bytes.TrimSpace(fixtureBytes)) {
+		t.Fatalf("expected saved golden asset %s to match fixture\nfixture:\n%s\nsaved:\n%s", fileName, fixtureBytes, savedBytes)
+	}
+
+	reloaded, err := LoadAsset(savedPath)
+	if err != nil {
+		t.Fatalf("reloaded LoadAsset(%s) failed: %v", fileName, err)
+	}
+	if !reflect.DeepEqual(reloaded, def) {
+		t.Fatalf("expected reloaded golden asset %s to match original\nwant: %+v\ngot: %+v", fileName, def, reloaded)
+	}
+
+	return def
+}
+
+func goldenAssetPathForTest(t *testing.T, fileName string) string {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(currentFile), "testdata", fileName)
+}
+
+func contains(haystack, needle string) bool {
+	return len(needle) == 0 || strings.Contains(haystack, needle)
 }

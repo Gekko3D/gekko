@@ -1,0 +1,52 @@
+{
+  "id": "asset-simple",
+  "schema_version": 1,
+  "name": "simple_single_part",
+  "tags": [
+    "golden",
+    "simple"
+  ],
+  "parts": [
+    {
+      "id": "part-root",
+      "name": "root_part",
+      "source": {
+        "kind": "procedural_primitive",
+        "primitive": "cube",
+        "params": {
+          "sx": 1,
+          "sy": 2,
+          "sz": 3
+        }
+      },
+      "transform": {
+        "position": [
+          1,
+          2,
+          3
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "pivot": [
+          0.5,
+          0,
+          -0.5
+        ]
+      },
+      "model_scale": 1,
+      "tags": [
+        "root",
+        "simple"
+      ]
+    }
+  ]
+}

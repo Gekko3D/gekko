@@ -1,0 +1,231 @@
+{
+  "id": "asset-composite",
+  "schema_version": 1,
+  "name": "composite_authored_asset",
+  "tags": [
+    "golden",
+    "composite"
+  ],
+  "parts": [
+    {
+      "id": "part-child",
+      "name": "child_part",
+      "parent_id": "part-root",
+      "source": {
+        "kind": "procedural_primitive",
+        "primitive": "sphere",
+        "params": {
+          "radius": 1.25
+        }
+      },
+      "transform": {
+        "position": [
+          0,
+          2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ],
+        "pivot": [
+          0,
+          0.25,
+          0
+        ]
+      },
+      "model_scale": 1,
+      "tags": [
+        "child"
+      ]
+    },
+    {
+      "id": "part-root",
+      "name": "root_part",
+      "source": {
+        "kind": "procedural_primitive",
+        "primitive": "cube",
+        "params": {
+          "sx": 2,
+          "sy": 4,
+          "sz": 2
+        }
+      },
+      "transform": {
+        "position": [
+          10,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "pivot": [
+          0,
+          0,
+          0
+        ]
+      },
+      "model_scale": 1,
+      "tags": [
+        "root",
+        "composite"
+      ]
+    }
+  ],
+  "lights": [
+    {
+      "id": "light-child",
+      "name": "child_light",
+      "parent_id": "part-child",
+      "transform": {
+        "position": [
+          0,
+          3,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "pivot": [
+          0,
+          0,
+          0
+        ]
+      },
+      "type": "spot",
+      "color": [
+        1,
+        0.8,
+        0.6
+      ],
+      "intensity": 8,
+      "range": 16,
+      "cone_angle": 35
+    }
+  ],
+  "emitters": [
+    {
+      "id": "emitter-child",
+      "name": "child_emitter",
+      "parent_id": "part-child",
+      "transform": {
+        "position": [
+          1,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "pivot": [
+          0,
+          0,
+          0
+        ]
+      },
+      "emitter": {
+        "enabled": true,
+        "max_particles": 64,
+        "spawn_rate": 12,
+        "lifetime_range": [
+          0.5,
+          1.5
+        ],
+        "start_speed_range": [
+          1,
+          2
+        ],
+        "start_size_range": [
+          0.1,
+          0.3
+        ],
+        "start_color_min": [
+          1,
+          0.4,
+          0.2,
+          1
+        ],
+        "start_color_max": [
+          1,
+          1,
+          0.6,
+          1
+        ],
+        "drag": 0.1,
+        "cone_angle_degrees": 20,
+        "sprite_index": 1,
+        "atlas_cols": 4,
+        "atlas_rows": 4,
+        "texture_path": "assets/particles.png",
+        "alpha_mode": "texture"
+      }
+    }
+  ],
+  "markers": [
+    {
+      "id": "marker-child",
+      "name": "muzzle_socket",
+      "parent_id": "part-child",
+      "transform": {
+        "position": [
+          0,
+          0,
+          1
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "pivot": [
+          0,
+          0,
+          0.25
+        ]
+      },
+      "kind": "muzzle",
+      "tags": [
+        "fx",
+        "socket"
+      ]
+    }
+  ]
+}
