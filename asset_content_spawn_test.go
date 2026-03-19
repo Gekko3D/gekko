@@ -140,4 +140,28 @@ func TestSpawnAuthoredAssetSpawnsPartLightAndEmitterHierarchy(t *testing.T) {
 	if result.EntitiesByAssetID["light"] == 0 || result.EntitiesByAssetID["emitter"] == 0 {
 		t.Fatal("expected light and emitter entity mappings")
 	}
+
+	rootPartEntity := result.EntitiesByAssetID["root-part"]
+	if rootPartEntity == 0 {
+		t.Fatal("expected root-part entity mapping")
+	}
+
+	if hasParentComponentForTest(cmd, rootPartEntity) {
+		t.Fatal("expected root part to remain parentless")
+	}
+	if !hasParentComponentForTest(cmd, result.EntitiesByAssetID["light"]) || !hasParentComponentForTest(cmd, result.EntitiesByAssetID["emitter"]) {
+		t.Fatal("expected child light and emitter to have parent components")
+	}
+}
+
+func hasParentComponentForTest(cmd *Commands, eid EntityId) bool {
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if _, ok := comp.(*Parent); ok {
+			return true
+		}
+		if _, ok := comp.(Parent); ok {
+			return true
+		}
+	}
+	return false
 }

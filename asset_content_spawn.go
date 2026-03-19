@@ -63,13 +63,12 @@ func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDe
 		if !ok {
 			return fmt.Errorf("spawned entity missing for asset id %s", itemID)
 		}
-		parentEntity := result.RootEntity
-		if parentID != "" {
-			var exists bool
-			parentEntity, exists = result.EntitiesByAssetID[parentID]
-			if !exists {
-				return fmt.Errorf("missing parent %s for %s", parentID, itemID)
-			}
+		if parentID == "" {
+			return nil
+		}
+		parentEntity, exists := result.EntitiesByAssetID[parentID]
+		if !exists {
+			return fmt.Errorf("missing parent %s for %s", parentID, itemID)
 		}
 		cmd.AddComponents(eid, &Parent{Entity: parentEntity})
 		return nil
@@ -170,7 +169,7 @@ func ValidateAssetHierarchy(def *content.AssetDef) error {
 
 func spawnAuthoredPart(cmd *Commands, assets *AssetServer, part content.AssetPartDef) (EntityId, error) {
 	tr := AssetTransformFromDef(part.Transform)
-	local := LocalTransformComponent{Position: tr.Position, Rotation: tr.Rotation, Scale: tr.Scale}
+	local := AssetLocalTransformFromDef(part.Transform)
 	comps := []any{&tr, &local}
 
 	model, palette, err := modelAndPaletteFromSource(assets, part)
@@ -186,7 +185,7 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, part content.AssetPar
 
 func spawnAuthoredLight(cmd *Commands, light content.AssetLightDef) (EntityId, error) {
 	tr := AssetTransformFromDef(light.Transform)
-	local := LocalTransformComponent{Position: tr.Position, Rotation: tr.Rotation, Scale: tr.Scale}
+	local := AssetLocalTransformFromDef(light.Transform)
 	lightType, err := AssetLightTypeToEngine(light.Type)
 	if err != nil {
 		return 0, err
@@ -206,7 +205,7 @@ func spawnAuthoredLight(cmd *Commands, light content.AssetLightDef) (EntityId, e
 
 func spawnAuthoredEmitter(cmd *Commands, assets *AssetServer, emitter content.AssetEmitterDef) (EntityId, error) {
 	tr := AssetTransformFromDef(emitter.Transform)
-	local := LocalTransformComponent{Position: tr.Position, Rotation: tr.Rotation, Scale: tr.Scale}
+	local := AssetLocalTransformFromDef(emitter.Transform)
 	emitterComp, err := ParticleEmitterFromContent(emitter.Emitter, assets)
 	if err != nil {
 		return 0, err

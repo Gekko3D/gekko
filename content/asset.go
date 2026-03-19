@@ -83,6 +83,9 @@ type AssetMarkerDef struct {
 	Tags      []string          `json:"tags,omitempty"`
 }
 
+// AssetTransformDef is authored relative to the asset root for root items and
+// relative to the parent item for child items. Pivot is stored in that same
+// authored space and must round-trip without recomputing from world state.
 type AssetTransformDef struct {
 	Position Vec3 `json:"position,omitempty"`
 	Rotation Quat `json:"rotation,omitempty"`

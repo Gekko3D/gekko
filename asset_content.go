@@ -16,6 +16,14 @@ func AssetTransformFromDef(def content.AssetTransformDef) TransformComponent {
 	}
 }
 
+func AssetLocalTransformFromDef(def content.AssetTransformDef) LocalTransformComponent {
+	return LocalTransformComponent{
+		Position: mgl32.Vec3{def.Position[0], def.Position[1], def.Position[2]},
+		Rotation: mgl32.Quat{W: def.Rotation[3], V: mgl32.Vec3{def.Rotation[0], def.Rotation[1], def.Rotation[2]}},
+		Scale:    mgl32.Vec3{def.Scale[0], def.Scale[1], def.Scale[2]},
+	}
+}
+
 func AssetTransformDefFromComponent(tr TransformComponent) content.AssetTransformDef {
 	return content.AssetTransformDef{
 		Position: content.Vec3{tr.Position.X(), tr.Position.Y(), tr.Position.Z()},
