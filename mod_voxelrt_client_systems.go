@@ -332,6 +332,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	// Sync lights
 	state.RtApp.Scene.Lights = state.RtApp.Scene.Lights[:0]
+	defaultAmbient := mgl32.Vec3{0.2, 0.2, 0.2}
 	ambientAccum := mgl32.Vec3{0, 0, 0}
 	ambientFound := false
 	type pendingLight struct {
@@ -438,6 +439,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	if ambientFound {
 		state.RtApp.Scene.AmbientLight = ambientAccum
+	} else {
+		state.RtApp.Scene.AmbientLight = defaultAmbient
 	}
 
 	state.RtApp.Profiler.EndScope("Sync Lights")

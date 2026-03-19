@@ -7,6 +7,12 @@ import (
 )
 
 func (m *GpuBufferManager) CreateShadowMapTextures(w, h, count uint32) {
+	if count == 0 {
+		count = 1
+	}
+	if m.ShadowMapView != nil {
+		m.ShadowMapView.Release()
+	}
 	if m.ShadowMapArray != nil {
 		m.ShadowMapArray.Release()
 	}
@@ -41,6 +47,29 @@ func (m *GpuBufferManager) CreateShadowMapTextures(w, h, count uint32) {
 	if err != nil {
 		panic(err)
 	}
+	m.ShadowMapLayers = count
+}
+
+func nextPow2U32(v uint32) uint32 {
+	if v <= 1 {
+		return 1
+	}
+	v--
+	v |= v >> 1
+	v |= v >> 2
+	v |= v >> 4
+	v |= v >> 8
+	v |= v >> 16
+	return v + 1
+}
+
+func (m *GpuBufferManager) EnsureShadowMapCapacity(numLights uint32) bool {
+	required := nextPow2U32(numLights)
+	if m.ShadowMapView != nil && required <= m.ShadowMapLayers {
+		return false
+	}
+	m.CreateShadowMapTextures(1024, 1024, required)
+	return true
 }
 
 func (m *GpuBufferManager) CreateShadowPipeline(code string) error {
@@ -101,6 +130,7 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
 			{Binding: 2, TextureView: m.VoxelPayloadView},
+			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
 			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},

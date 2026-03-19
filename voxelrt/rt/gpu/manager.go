@@ -141,8 +141,9 @@ type GpuBufferManager struct {
 	TransparentWeightView *wgpu.TextureView
 
 	// Shadow Map Resources
-	ShadowMapArray *wgpu.Texture
-	ShadowMapView  *wgpu.TextureView
+	ShadowMapArray  *wgpu.Texture
+	ShadowMapView   *wgpu.TextureView
+	ShadowMapLayers uint32
 
 	// Skybox Resources
 	SkyboxTex            *wgpu.Texture
@@ -218,7 +219,7 @@ type GpuBufferManager struct {
 	// Transparent overlay (single-layer transparency over lit image)
 	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
 	TransparentBG1 *wgpu.BindGroup // voxel data buffers
-	TransparentBG2 *wgpu.BindGroup // gbuffer depth
+	TransparentBG2 *wgpu.BindGroup // gbuffer depth/material/shadows
 
 	// GPU cellular automata + volumetric rendering
 	CAVolumeBuf            *wgpu.Buffer
@@ -347,7 +348,7 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 // CreateTransparentOverlayBindGroups wires the overlay pass bind groups:
 // Group 0: camera (uniform) + instances (storage) + BVH nodes (storage)
 // Group 1: voxel data buffers (sector, brick, payload, object params, tree64, sector grid, sector grid params)
-// Group 2: gbuffer depth (RGBA32F)
+// Group 2: gbuffer depth/material + shadow maps
 func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.RenderPipeline) {
 	if pipeline == nil {
 		return
@@ -392,6 +393,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, TextureView: m.DepthView},
 			{Binding: 1, TextureView: m.MaterialView},
+			{Binding: 2, TextureView: m.ShadowMapView},
 		},
 	})
 	if err != nil {

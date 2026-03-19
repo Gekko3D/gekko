@@ -108,77 +108,79 @@ fn calculate_lighting(
     
     if (attenuation > 0.0) {
         // Shadowing
-        var pos_ws = hit_pos;
-        if (light_type == 1u) {
-            let receiver_offset = 0.25;
-            pos_ws = hit_pos + normal * receiver_offset;
-        }
-        let pos_ls = light.view_proj * vec4<f32>(pos_ws, 1.0);
-        let proj_pos = pos_ls.xyz / pos_ls.w;
-        let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
-
-        if (pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
-            let tex_dim = textureDimensions(in_shadow_maps);
-            let base_px_f = shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
-            let base_px = vec2<i32>(
-                i32(clamp(base_px_f.x, 0.0, f32(tex_dim.x - 1u))),
-                i32(clamp(base_px_f.y, 0.0, f32(tex_dim.y - 1u)))
-            );
-            let layer = i32(light_idx);
-
-            var my_depth_n = clamp(proj_pos.z, -1.0, 1.0);
-            var my_depth_m = 0.0;
-            if (light_type == 2u) {
+        if (light_type != 0u) {
+            var pos_ws = hit_pos;
+            if (light_type == 1u) {
                 let receiver_offset = 0.25;
-                let pos_off = hit_pos + normal * receiver_offset;
-                my_depth_m = distance(light.position.xyz, pos_off);
+                pos_ws = hit_pos + normal * receiver_offset;
             }
+            let pos_ls = light.view_proj * vec4<f32>(pos_ws, 1.0);
+            let proj_pos = pos_ls.xyz / pos_ls.w;
+            let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
 
-            var baseBias = 1.5 / f32(tex_dim.x);
-            var slopeBias = 0.002;
-            if (light_type == 2u) {
-                baseBias = 3.0 / f32(tex_dim.x);
-                slopeBias = 0.01;
-            }
-            let NdL = max(dot(normal, L), 0.0);
-            let bias = baseBias + slopeBias * (1.0 - NdL);
+            if (pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
+                let tex_dim = textureDimensions(in_shadow_maps);
+                let base_px_f = shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
+                let base_px = vec2<i32>(
+                    i32(clamp(base_px_f.x, 0.0, f32(tex_dim.x - 1u))),
+                    i32(clamp(base_px_f.y, 0.0, f32(tex_dim.y - 1u)))
+                );
+                let layer = i32(light_idx);
 
-            let max_px = vec2<i32>(i32(tex_dim.x) - 1, i32(tex_dim.y) - 1);
-            var visibility = 0.0;
-            var radius: i32 = 1;
-            if (light_type == 2u) { radius = 2; }
-            let kernel = (radius * 2 + 1);
-            let sample_count = f32(kernel * kernel);
-            for (var dy: i32 = -radius; dy <= radius; dy = dy + 1) {
-                for (var dx: i32 = -radius; dx <= radius; dx = dx + 1) {
-                    let off = base_px + vec2<i32>(dx, dy);
-                    let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
-                    let shadow_sample = textureLoad(in_shadow_maps, clamped_off, layer, 0);
-                    let sampled_depth = shadow_sample.r;
-                    let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
-                    let same_shadow_group =
-                        receiver_shadow_group_id != 0u &&
-                        sampled_shadow_group_id == receiver_shadow_group_id;
-                    if (light_type == 2u) {
-                        let baseBiasM = 0.05;
-                        let slopeBiasM = 0.1;
-                        let biasM = baseBiasM + slopeBiasM * (1.0 - NdL);
-                        let receiver_minus_occluder = my_depth_m - sampled_depth;
-                        let seam_lit = same_shadow_group && receiver_minus_occluder <= receiver_shadow_seam_epsilon;
-                        visibility += select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
-                    } else {
-                        let sampled_depth_n = clamp(sampled_depth, -1.0, 1.0);
-                        let seam_pos_ls = light.view_proj * vec4<f32>(pos_ws - L * receiver_shadow_seam_epsilon, 1.0);
-                        let seam_depth_n = clamp(seam_pos_ls.z / seam_pos_ls.w, -1.0, 1.0);
-                        let seam_epsilon_n = abs(seam_depth_n - my_depth_n);
-                        let receiver_minus_occluder = my_depth_n - sampled_depth_n;
-                        let seam_lit = same_shadow_group && receiver_minus_occluder <= seam_epsilon_n;
-                        visibility += select(0.0, 1.0, seam_lit || sampled_depth_n >= my_depth_n - bias);
+                var my_depth_n = clamp(proj_pos.z, -1.0, 1.0);
+                var my_depth_m = 0.0;
+                if (light_type == 2u) {
+                    let receiver_offset = 0.25;
+                    let pos_off = hit_pos + normal * receiver_offset;
+                    my_depth_m = distance(light.position.xyz, pos_off);
+                }
+
+                var baseBias = 1.5 / f32(tex_dim.x);
+                var slopeBias = 0.002;
+                if (light_type == 2u) {
+                    baseBias = 3.0 / f32(tex_dim.x);
+                    slopeBias = 0.01;
+                }
+                let NdL = max(dot(normal, L), 0.0);
+                let bias = baseBias + slopeBias * (1.0 - NdL);
+
+                let max_px = vec2<i32>(i32(tex_dim.x) - 1, i32(tex_dim.y) - 1);
+                var visibility = 0.0;
+                var radius: i32 = 1;
+                if (light_type == 2u) { radius = 2; }
+                let kernel = (radius * 2 + 1);
+                let sample_count = f32(kernel * kernel);
+                for (var dy: i32 = -radius; dy <= radius; dy = dy + 1) {
+                    for (var dx: i32 = -radius; dx <= radius; dx = dx + 1) {
+                        let off = base_px + vec2<i32>(dx, dy);
+                        let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
+                        let shadow_sample = textureLoad(in_shadow_maps, clamped_off, layer, 0);
+                        let sampled_depth = shadow_sample.r;
+                        let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
+                        let same_shadow_group =
+                            receiver_shadow_group_id != 0u &&
+                            sampled_shadow_group_id == receiver_shadow_group_id;
+                        if (light_type == 2u) {
+                            let baseBiasM = 0.05;
+                            let slopeBiasM = 0.1;
+                            let biasM = baseBiasM + slopeBiasM * (1.0 - NdL);
+                            let receiver_minus_occluder = my_depth_m - sampled_depth;
+                            let seam_lit = same_shadow_group && receiver_minus_occluder <= receiver_shadow_seam_epsilon;
+                            visibility += select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
+                        } else {
+                            let sampled_depth_n = clamp(sampled_depth, -1.0, 1.0);
+                            let seam_pos_ls = light.view_proj * vec4<f32>(pos_ws - L * receiver_shadow_seam_epsilon, 1.0);
+                            let seam_depth_n = clamp(seam_pos_ls.z / seam_pos_ls.w, -1.0, 1.0);
+                            let seam_epsilon_n = abs(seam_depth_n - my_depth_n);
+                            let receiver_minus_occluder = my_depth_n - sampled_depth_n;
+                            let seam_lit = same_shadow_group && receiver_minus_occluder <= seam_epsilon_n;
+                            visibility += select(0.0, 1.0, seam_lit || sampled_depth_n >= my_depth_n - bias);
+                        }
                     }
                 }
+                visibility = visibility / sample_count;
+                attenuation *= visibility;
             }
-            visibility = visibility / sample_count;
-            attenuation *= visibility;
         }
 
         let PI = 3.14159265359;

@@ -74,6 +74,9 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
+	if m.EnsureShadowMapCapacity(uint32(len(scene.Lights))) {
+		recreated = true
+	}
 
 	// 4. Voxel Data (Incremental / Paged)
 	if m.UpdateVoxelData(scene) {

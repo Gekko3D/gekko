@@ -133,6 +133,7 @@ struct SectorGridParams {
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
 @group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;
 @group(2) @binding(2) var voxel_payload: texture_3d<u32>;
+@group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
 @group(2) @binding(4) var<storage, read> object_params: array<ObjectParams>;
 @group(2) @binding(5) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
@@ -284,12 +285,18 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                         
                         var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
                         if (b_flags == 1u) {
-                            result.hit = true; result.t = t_brick;
-                            let p_hit_os = ray.origin + dir * (t_brick + 0.01);
-                            let voxel_center_os = floor(p_hit_os) + 0.5;
-                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                            result.shadow_group_id = params.shadow_group_id;
-                            return result;
+                            let mat_idx_s = params.material_table_base + b_atlas * 4u;
+                            let pbr_s = materials[mat_idx_s + 2u];
+                            if (pbr_s.w > 0.001) {
+                                t_brick = t_brick_exit;
+                            } else {
+                                result.hit = true; result.t = t_brick;
+                                let p_hit_os = ray.origin + dir * (t_brick + 0.01);
+                                let voxel_center_os = floor(p_hit_os) + 0.5;
+                                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                result.shadow_group_id = params.shadow_group_id;
+                                return result;
+                            }
                         }
                         if (b_flags == 0u) {
                             var t_micro = t_brick;
@@ -312,11 +319,15 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 if (bit_test64(b_mask_lo, b_mask_hi, micro_idx)) {
                                     let palette_idx = load_u8(b_atlas, voxel_idx);
                                     if (palette_idx != EMPTY_VOXEL) {
-                                        result.hit = true; result.t = t_micro;
-                                        let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
-                                        result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                                        result.shadow_group_id = params.shadow_group_id;
-                                        return result;
+                                        let mat_idx_v = params.material_table_base + palette_idx * 4u;
+                                        let pbr_v = materials[mat_idx_v + 2u];
+                                        if (pbr_v.w <= 0.001) {
+                                            result.hit = true; result.t = t_micro;
+                                            let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
+                                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                            result.shadow_group_id = params.shadow_group_id;
+                                            return result;
+                                        }
                                     }
                                 }
                                 if (t_max_micro.x < t_max_micro.y) {

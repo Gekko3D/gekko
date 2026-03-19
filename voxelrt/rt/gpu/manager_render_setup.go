@@ -57,7 +57,7 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	setupTexture(&m.TransparentAccumTex, &m.TransparentAccumView, "Transparent Accum", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.TransparentWeightTex, &m.TransparentWeightView, "Transparent Weight", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
 
-	m.CreateShadowMapTextures(1024, 1024, 16) // Default 1024x1024 for 16 lights
+	m.CreateShadowMapTextures(1024, 1024, 1)
 }
 
 func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wgpu.ComputePipeline) {

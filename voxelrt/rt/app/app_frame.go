@@ -334,20 +334,27 @@ func (a *App) Render() {
 			Dist  float32
 		}
 
+		directionalLights := make([]uint32, 0, len(a.Scene.Lights))
 		sortedLights := make([]lightInfo, 0, len(a.Scene.Lights))
 		camPos := a.Camera.Position
 
-		shadowIndices = append(shadowIndices, 0) // Light 0 (Sun) always
-
-		for i := 1; i < len(a.Scene.Lights); i++ {
+		for i := 0; i < len(a.Scene.Lights); i++ {
 			l := a.Scene.Lights[i]
-			d := float32(0.0)
-			if l.Params[2] != 1.0 { // Not directional
-				p := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
-				d = p.Sub(camPos).Len()
+			lightType := uint32(l.Params[2])
+			if lightType == 1 {
+				directionalLights = append(directionalLights, uint32(i))
+				continue
 			}
+			if lightType != 2 {
+				continue
+			}
+			d := float32(0.0)
+			p := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
+			d = p.Sub(camPos).Len()
 			sortedLights = append(sortedLights, lightInfo{i, d})
 		}
+
+		shadowIndices = append(shadowIndices, directionalLights...)
 
 		sort.Slice(sortedLights, func(i, j int) bool {
 			return sortedLights[i].Dist < sortedLights[j].Dist
@@ -363,12 +370,16 @@ func (a *App) Render() {
 		remainingStart := numPrioritized
 		if remainingStart < len(sortedLights) {
 			remainingCount := len(sortedLights) - remainingStart
-			for i := 0; i < updatesPerFrame; i++ {
+			updates := updatesPerFrame
+			if updates > remainingCount {
+				updates = remainingCount
+			}
+			for i := 0; i < updates; i++ {
 				offset := (a.ShadowUpdateOffset + i) % remainingCount
 				idx := sortedLights[remainingStart+offset].Index
 				shadowIndices = append(shadowIndices, uint32(idx))
 			}
-			a.ShadowUpdateOffset = (a.ShadowUpdateOffset + updatesPerFrame) % remainingCount
+			a.ShadowUpdateOffset = (a.ShadowUpdateOffset + updates) % remainingCount
 		}
 	}
 

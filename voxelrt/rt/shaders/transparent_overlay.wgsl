@@ -146,6 +146,7 @@ struct TransparentHit {
 // Group 2: GBuffer inputs
 @group(2) @binding(0) var in_depth    : texture_2d<f32>;      // stores ray t in .r
 @group(2) @binding(1) var in_material : texture_2d<f32>;      // not strictly needed for this pass but reserved
+@group(2) @binding(2) var in_shadow_maps : texture_2d_array<f32>;
 
 // ============== HELPERS (copied/trimmed from gbuffer) ==============
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
@@ -286,15 +287,28 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
   return 1.0;
 }
 
-// Estimate normal via occupancy gradient
-fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
-  let vi = vec3<i32>(floor(p));
+fn blocky_normal_os(voxel_center_os: vec3<f32>, aabb_center_os: vec3<f32>, params: ObjectParams) -> vec3<f32> {
+  let vi = vec3<i32>(floor(voxel_center_os));
   let dx = sample_occupancy(vi + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
   let dy = sample_occupancy(vi + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
   let dz = sample_occupancy(vi + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
   let grad = vec3<f32>(dx, dy, dz);
-  if (length(grad) < 0.01) { return vec3<f32>(0.0); }
-  return -normalize(grad);
+  let ax = abs(grad.x);
+  let ay = abs(grad.y);
+  let az = abs(grad.z);
+  if (max(ax, max(ay, az)) > 0.05) {
+    if (ax >= ay && ax >= az) { return vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
+    if (ay >= ax && ay >= az) { return vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
+    return vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0));
+  }
+
+  let dir_c = voxel_center_os - aabb_center_os;
+  let adx = abs(dir_c.x);
+  let ady = abs(dir_c.y);
+  let adz = abs(dir_c.z);
+  if (adx >= ady && adx >= adz) { return vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
+  if (ady >= adx && ady >= adz) { return vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
+  return vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0));
 }
 
 // Estimate thickness in WORLD SPACE along the ray inside occupied voxels, starting just after the hit.
@@ -322,38 +336,142 @@ fn estimate_thickness_ws(start_t: f32, ray: Ray, t_max_obj: f32, params: ObjectP
 
 // ============== Traversal (WBOIT accumulation) ==============
 
-fn calculate_lighting(p: vec3<f32>, n: vec3<f32>, base_color: vec3<f32>, roughness: f32, metalness: f32, emissive: vec3<f32>) -> vec3<f32> {
+fn calculate_lighting(
+  p: vec3<f32>,
+  n: vec3<f32>,
+  base_color: vec3<f32>,
+  roughness: f32,
+  metalness: f32,
+  emissive: vec3<f32>,
+  receiver_shadow_group_id: u32,
+  receiver_shadow_seam_epsilon: f32
+) -> vec3<f32> {
   let V = normalize(uCamera.cam_pos.xyz - p);
-  let NdotV = max(dot(n, V), 1e-4);
-  
   let F0 = mix(vec3<f32>(0.04), base_color, metalness);
-  let fresnel = F0 + (1.0 - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
-  
   var total_light = uCamera.ambient_color.xyz * mix(base_color, F0, metalness) + emissive;
   
   for (var i = 0u; i < uCamera.num_lights; i++) {
     let light = lights[i];
+    let light_type = u32(light.params.z);
     var L = vec3<f32>(0.0);
     var attenuation = 1.0;
     
-    if (light.params.z == 1.0) { // Directional
+    if (light_type == 1u) {
       L = normalize(-light.direction.xyz);
-    } else { // Point/Spot
+    } else {
       let dist_vec = light.position.xyz - p;
       let dist = length(dist_vec);
+      let range = light.params.x;
       L = normalize(dist_vec);
-      attenuation = 1.0 / (dist * dist + 1.0);
-      
-      if (light.params.z == 2.0) { // Spot
-        let theta = dot(L, normalize(-light.direction.xyz));
-        let epsilon = light.params.y - (light.params.y * 0.9);
-        attenuation *= clamp((theta - light.params.y) / epsilon, 0.0, 1.0);
+      if (dist > range) {
+        attenuation = 0.0;
+      } else {
+        let dist_sq = dist * dist;
+        let factor = dist / range;
+        let smooth_factor = max(0.0, 1.0 - factor * factor);
+        let inv_sq = 1.0 / (dist_sq + 1.0);
+        attenuation = inv_sq * smooth_factor * smooth_factor * 50.0;
+        if (light_type == 2u) {
+          let spot_dir = normalize(light.direction.xyz);
+          let cos_cur = dot(-L, spot_dir);
+          let cos_cone = light.params.y;
+          if (cos_cur < cos_cone) {
+            attenuation = 0.0;
+          } else {
+            let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
+            attenuation *= spot_att;
+          }
+        }
+      }
+    }
+
+    if (attenuation <= 0.0) {
+      continue;
+    }
+
+    if (light_type != 0u) {
+      var pos_ws = p;
+      if (light_type == 1u) {
+        let receiver_offset = 0.25;
+        pos_ws = p + n * receiver_offset;
+      }
+      let pos_ls = light.view_proj * vec4<f32>(pos_ws, 1.0);
+      let proj_pos = pos_ls.xyz / pos_ls.w;
+      let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
+
+      if (pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
+        let tex_dim = textureDimensions(in_shadow_maps);
+        let base_px_f = shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
+        let base_px = vec2<i32>(
+          i32(clamp(base_px_f.x, 0.0, f32(tex_dim.x - 1u))),
+          i32(clamp(base_px_f.y, 0.0, f32(tex_dim.y - 1u)))
+        );
+        let layer = i32(i);
+
+        var my_depth_n = clamp(proj_pos.z, -1.0, 1.0);
+        var my_depth_m = 0.0;
+        if (light_type == 2u) {
+          let receiver_offset = 0.25;
+          let pos_off = p + n * receiver_offset;
+          my_depth_m = distance(light.position.xyz, pos_off);
+        }
+
+        var baseBias = 1.5 / f32(tex_dim.x);
+        var slopeBias = 0.002;
+        if (light_type == 2u) {
+          baseBias = 3.0 / f32(tex_dim.x);
+          slopeBias = 0.01;
+        }
+        let NdL_shadow = max(dot(n, L), 0.0);
+        let bias = baseBias + slopeBias * (1.0 - NdL_shadow);
+
+        let max_px = vec2<i32>(i32(tex_dim.x) - 1, i32(tex_dim.y) - 1);
+        var visibility = 0.0;
+        var radius: i32 = 1;
+        if (light_type == 2u) { radius = 2; }
+        let kernel = radius * 2 + 1;
+        let sample_count = f32(kernel * kernel);
+        for (var dy: i32 = -radius; dy <= radius; dy = dy + 1) {
+          for (var dx: i32 = -radius; dx <= radius; dx = dx + 1) {
+            let off = base_px + vec2<i32>(dx, dy);
+            let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
+            let shadow_sample = textureLoad(in_shadow_maps, clamped_off, layer, 0);
+            let sampled_depth = shadow_sample.r;
+            let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
+            let same_shadow_group =
+              receiver_shadow_group_id != 0u &&
+              sampled_shadow_group_id == receiver_shadow_group_id;
+            if (light_type == 2u) {
+              let baseBiasM = 0.05;
+              let slopeBiasM = 0.1;
+              let biasM = baseBiasM + slopeBiasM * (1.0 - NdL_shadow);
+              let receiver_minus_occluder = my_depth_m - sampled_depth;
+              let seam_lit = same_shadow_group && receiver_minus_occluder <= receiver_shadow_seam_epsilon;
+              visibility += select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
+            } else {
+              let sampled_depth_n = clamp(sampled_depth, -1.0, 1.0);
+              let seam_pos_ls = light.view_proj * vec4<f32>(pos_ws - L * receiver_shadow_seam_epsilon, 1.0);
+              let seam_depth_n = clamp(seam_pos_ls.z / seam_pos_ls.w, -1.0, 1.0);
+              let seam_epsilon_n = abs(seam_depth_n - my_depth_n);
+              let receiver_minus_occluder = my_depth_n - sampled_depth_n;
+              let seam_lit = same_shadow_group && receiver_minus_occluder <= seam_epsilon_n;
+              visibility += select(0.0, 1.0, seam_lit || sampled_depth_n >= my_depth_n - bias);
+            }
+          }
+        }
+        attenuation *= visibility / sample_count;
       }
     }
     
+    if (attenuation <= 0.0) {
+      continue;
+    }
+
     let NdotL = max(dot(n, L), 0.0);
     let H = normalize(V + L);
     let NdotH = max(dot(n, H), 0.0);
+    let NdotV = max(dot(n, V), 0.0);
+    let fresnel = F0 + (1.0 - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
     
     let diffuse = base_color * (1.0 - fresnel) * (1.0 - metalness) * NdotL / PI;
     
@@ -502,11 +620,12 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let alpha_step = 1.0 - exp(-density_sigma * a0 * dt_ws);
                               let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                               let voxel_center_os = floor(p_hit_os) + 0.5;
-                              let n_os = estimate_normal(voxel_center_os, params);
+                              let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
+                              let n_os = blocky_normal_os(voxel_center_os, aabb_center_os, params);
                               let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
-                              let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
+                              let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                               let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive);
+                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
                               let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
                               accum_rgb += color * alpha_step * w;
                               accum_a += alpha_step;
@@ -560,11 +679,12 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let alpha_step = 1.0 - exp(-density_sigma * a0 * dt_ws);
                                    let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                                    let voxel_center_os = floor(p_hit_os) + 0.5;
-                                   let n_os = estimate_normal(voxel_center_os, params);
+                                   let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
+                                   let n_os = blocky_normal_os(voxel_center_os, aabb_center_os, params);
                                    let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
-                                   let pos_ws = (inst.object_to_world * vec4<f32>(p_hit_os, 1.0)).xyz;
+                                   let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                    let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                                   let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive);
+                                   let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
                                    let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
                                    accum_rgb += color * alpha_step * w;
                                    accum_a += alpha_step;
