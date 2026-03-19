@@ -130,3 +130,66 @@ func TestRuntimeContentLoaderCachesTerrainManifestAndChunkByPath(t *testing.T) {
 		t.Fatal("expected terrain chunk loads to reuse cached pointer")
 	}
 }
+
+func TestRuntimeContentLoaderCachesImportedWorldManifestAndChunkByPath(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "worlds", "demo.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "demo_chunks", "0_0_0.gkchunk")
+
+	if err := os.MkdirAll(filepath.Dir(chunkPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	chunkDef := &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 1, Y: 2, Z: 3, Value: 4}},
+		NonEmptyVoxelCount: 1,
+	}
+	if err := content.SaveImportedWorldChunk(chunkPath, chunkDef); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+
+	manifestDef := &content.ImportedWorldDef{
+		WorldID:         "world-a",
+		Kind:            content.ImportedWorldKindVoxelWorld,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Entries: []content.ImportedWorldChunkEntryDef{{
+			Coord:              chunkDef.Coord,
+			ChunkPath:          content.AuthorDocumentPath(chunkPath, manifestPath),
+			NonEmptyVoxelCount: chunkDef.NonEmptyVoxelCount,
+		}},
+	}
+	if err := content.SaveImportedWorld(manifestPath, manifestDef); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+
+	loader := NewRuntimeContentLoader()
+	firstManifest, err := loader.LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld failed: %v", err)
+	}
+	secondManifest, err := loader.LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld failed: %v", err)
+	}
+	if firstManifest != secondManifest {
+		t.Fatal("expected imported world loads to reuse cached pointer")
+	}
+
+	resolvedChunkPath := content.ResolveImportedWorldChunkPath(firstManifest.Entries[0], manifestPath)
+	firstChunk, err := loader.LoadImportedWorldChunk(resolvedChunkPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk failed: %v", err)
+	}
+	secondChunk, err := loader.LoadImportedWorldChunk(resolvedChunkPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk failed: %v", err)
+	}
+	if firstChunk != secondChunk {
+		t.Fatal("expected imported world chunk loads to reuse cached pointer")
+	}
+}

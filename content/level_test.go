@@ -22,6 +22,13 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 			Preset: "orbit",
 			Tags:   []string{"placeholder"},
 		},
+		BaseWorld: &LevelBaseWorldDef{
+			Kind:              ImportedWorldKindVoxelWorld,
+			ManifestPath:      "worlds/station.gkworld",
+			ReadOnlyByDefault: true,
+			CollisionEnabled:  true,
+			Tags:              []string{"imported"},
+		},
 		Placements: []LevelPlacementDef{
 			{
 				AssetPath:     "assets/station.gkasset",
@@ -123,6 +130,9 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	if loaded.Environment == nil || loaded.Environment.Preset != "orbit" {
 		t.Fatalf("expected placeholder environment to round-trip, got %+v", loaded.Environment)
 	}
+	if loaded.BaseWorld == nil || loaded.BaseWorld.Kind != ImportedWorldKindVoxelWorld || loaded.BaseWorld.ManifestPath != "worlds/station.gkworld" {
+		t.Fatalf("expected base world to round-trip, got %+v", loaded.BaseWorld)
+	}
 }
 
 func TestLevelJSONUsesStringPlacementModes(t *testing.T) {
@@ -192,6 +202,58 @@ func TestValidateLevelRejectsInvalidPlacements(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "empty_asset_path")
 	assertHasLevelValidationCode(t, result, "invalid_placement_mode")
 	assertHasLevelValidationCode(t, result, "missing_asset_file")
+}
+
+func TestValidateLevelRejectsInvalidBaseWorld(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "demo.gklevel")
+	worldPath := filepath.Join(root, "worlds", "demo.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "demo_chunks", "0_0_0.gkchunk")
+
+	if err := SaveImportedWorldChunk(chunkPath, &ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             []ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+		NonEmptyVoxelCount: 1,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+	if err := SaveImportedWorld(worldPath, &ImportedWorldDef{
+		WorldID:         "world-a",
+		Kind:            ImportedWorldKindVoxelWorld,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Entries: []ImportedWorldChunkEntryDef{{
+			Coord:              TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkPath:          AuthorDocumentPath(chunkPath, worldPath),
+			NonEmptyVoxelCount: 1,
+		}},
+	}); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+
+	def := NewLevelDef("baseworld")
+	def.ChunkSize = 4
+	def.BaseWorld = &LevelBaseWorldDef{
+		Kind:         ImportedWorldKindVoxelWorld,
+		ManifestPath: filepath.Join("..", "worlds", "demo.gkworld"),
+	}
+
+	result := ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
+	if !result.HasErrors() {
+		t.Fatal("expected base world validation error")
+	}
+	assertHasLevelValidationCode(t, result, "base_world_chunk_size_mismatch")
+
+	def.BaseWorld = &LevelBaseWorldDef{
+		Kind:         ImportedWorldKind("bad"),
+		ManifestPath: "missing.txt",
+	}
+	result = ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
+	assertHasLevelValidationCode(t, result, "invalid_base_world_kind")
+	assertHasLevelValidationCode(t, result, "invalid_base_world_manifest_path")
 }
 
 func TestValidateLevelRejectsInvalidPlacementVolumeAndAssetSet(t *testing.T) {

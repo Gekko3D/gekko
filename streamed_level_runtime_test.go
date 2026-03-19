@@ -3,6 +3,7 @@ package gekko
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -383,6 +384,130 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 	}
 }
 
+func TestStreamedRuntimeLoadsImportedBaseWorldChunkWithCollision(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "baseworld.gklevel")
+	worldPath := filepath.Join(root, "worlds", "baseworld.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "baseworld_chunks", "0_0_0.gkchunk")
+
+	writeImportedWorldChunkForStreamedTest(t, chunkPath, &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          160,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 1, Y: 2, Z: 3, Value: 4}},
+		NonEmptyVoxelCount: 1,
+	})
+	writeImportedWorldManifestForStreamedTest(t, worldPath, "world-a", []content.ImportedWorldChunkEntryDef{{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkPath:          content.AuthorDocumentPath(chunkPath, worldPath),
+		NonEmptyVoxelCount: 1,
+	}})
+
+	level := content.NewLevelDef("baseworld")
+	level.ChunkSize = 16
+	level.StreamingRadius = 0
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:             content.ImportedWorldKindVoxelWorld,
+		ManifestPath:     content.AuthorDocumentPath(worldPath, levelPath),
+		CollisionEnabled: true,
+	}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app, cmd, _ := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&StreamedLevelObserverComponent{Radius: 0},
+	)
+	app.FlushCommands()
+
+	driveStreamedRuntimeUntil(t, app, func() bool {
+		return importedWorldChunkEntityByCoordForStreamedTest(cmd, [3]int{0, 0, 0}) != 0
+	})
+
+	entity := importedWorldChunkEntityByCoordForStreamedTest(cmd, [3]int{0, 0, 0})
+	if entity == 0 {
+		t.Fatal("expected imported world chunk entity")
+	}
+	ref, ok := AuthoredImportedWorldChunkRefForEntity(cmd, entity)
+	if !ok || ref.WorldID != "world-a" {
+		t.Fatalf("expected imported world metadata, got %+v ok=%v", ref, ok)
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	if vmc.CustomMap == nil || vmc.CustomMap.GetVoxelCount() != 1 {
+		t.Fatalf("expected imported world custom map with one voxel, got %+v", vmc.CustomMap)
+	}
+	if !hasComponentOfType[RigidBodyComponent](cmd, entity) || !hasComponentOfType[ColliderComponent](cmd, entity) || !hasComponentOfType[AABBComponent](cmd, entity) {
+		t.Fatal("expected static collision components on imported world chunk")
+	}
+}
+
+func TestStreamedRuntimeSkipsImportedBaseWorldCollisionWhenDisabled(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "baseworld_nocollision.gklevel")
+	worldPath := filepath.Join(root, "worlds", "baseworld_nocollision.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "baseworld_nocollision_chunks", "0_0_0.gkchunk")
+
+	writeImportedWorldChunkForStreamedTest(t, chunkPath, &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          160,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+		NonEmptyVoxelCount: 1,
+	})
+	writeImportedWorldManifestForStreamedTest(t, worldPath, "world-a", []content.ImportedWorldChunkEntryDef{{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkPath:          content.AuthorDocumentPath(chunkPath, worldPath),
+		NonEmptyVoxelCount: 1,
+	}})
+
+	level := content.NewLevelDef("baseworld_nocollision")
+	level.ChunkSize = 16
+	level.StreamingRadius = 0
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:             content.ImportedWorldKindVoxelWorld,
+		ManifestPath:     content.AuthorDocumentPath(worldPath, levelPath),
+		CollisionEnabled: false,
+	}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app, cmd, _ := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&StreamedLevelObserverComponent{Radius: 0},
+	)
+	app.FlushCommands()
+
+	driveStreamedRuntimeUntil(t, app, func() bool {
+		return importedWorldChunkEntityByCoordForStreamedTest(cmd, [3]int{0, 0, 0}) != 0
+	})
+
+	entity := importedWorldChunkEntityByCoordForStreamedTest(cmd, [3]int{0, 0, 0})
+	if entity == 0 {
+		t.Fatal("expected imported world chunk entity")
+	}
+	if hasComponentOfType[RigidBodyComponent](cmd, entity) || hasComponentOfType[ColliderComponent](cmd, entity) || hasComponentOfType[AABBComponent](cmd, entity) {
+		t.Fatal("did not expect static collision components when collision is disabled")
+	}
+}
+
 func newStreamedRuntimeHarness(t *testing.T) (*App, *Commands, *StreamedLevelRuntimeState) {
 	t.Helper()
 	app := NewApp()
@@ -441,6 +566,18 @@ func terrainChunkEntityByCoordForStreamedTest(cmd *Commands, coord [3]int) Entit
 	return found
 }
 
+func importedWorldChunkEntityByCoordForStreamedTest(cmd *Commands, coord [3]int) EntityId {
+	var found EntityId
+	MakeQuery1[AuthoredImportedWorldChunkRefComponent](cmd).Map(func(eid EntityId, ref *AuthoredImportedWorldChunkRefComponent) bool {
+		if ref.ChunkCoord == coord {
+			found = eid
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 func writeTerrainChunkForStreamedTest(t *testing.T, path string, chunk *content.TerrainChunkDef) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -464,6 +601,47 @@ func writeTerrainManifestForStreamedTest(t *testing.T, path string, terrainID st
 	}); err != nil {
 		t.Fatalf("SaveTerrainChunkManifest failed: %v", err)
 	}
+}
+
+func writeImportedWorldChunkForStreamedTest(t *testing.T, path string, chunk *content.ImportedWorldChunkDef) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveImportedWorldChunk(path, chunk); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+}
+
+func writeImportedWorldManifestForStreamedTest(t *testing.T, path string, worldID string, entries []content.ImportedWorldChunkEntryDef) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveImportedWorld(path, &content.ImportedWorldDef{
+		WorldID:         worldID,
+		Kind:            content.ImportedWorldKindVoxelWorld,
+		ChunkSize:       160,
+		VoxelResolution: 1,
+		Entries:         entries,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+}
+
+func hasComponentOfType[T any](cmd *Commands, eid EntityId) bool {
+	wantValue := reflect.TypeOf((*T)(nil)).Elem()
+	wantPtr := reflect.PointerTo(wantValue)
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if comp == nil {
+			continue
+		}
+		got := reflect.TypeOf(comp)
+		if got == wantValue || got == wantPtr {
+			return true
+		}
+	}
+	return false
 }
 
 func writeTerrainSourceForStreamedTest(t *testing.T, path string) {

@@ -50,6 +50,12 @@ type AuthoredTerrainChunkRefComponent struct {
 	ChunkCoord [3]int
 }
 
+type AuthoredImportedWorldChunkRefComponent struct {
+	LevelID    string
+	WorldID    string
+	ChunkCoord [3]int
+}
+
 func IsAuthoredAssetRootEntity(cmd *Commands, eid EntityId) bool {
 	if cmd == nil {
 		return false
@@ -138,6 +144,21 @@ func AuthoredTerrainChunkRefForEntity(cmd *Commands, eid EntityId) (AuthoredTerr
 		}
 	}
 	return AuthoredTerrainChunkRefComponent{}, false
+}
+
+func AuthoredImportedWorldChunkRefForEntity(cmd *Commands, eid EntityId) (AuthoredImportedWorldChunkRefComponent, bool) {
+	if cmd == nil {
+		return AuthoredImportedWorldChunkRefComponent{}, false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if ref, ok := comp.(*AuthoredImportedWorldChunkRefComponent); ok {
+			return *ref, true
+		}
+		if ref, ok := comp.(AuthoredImportedWorldChunkRefComponent); ok {
+			return ref, true
+		}
+	}
+	return AuthoredImportedWorldChunkRefComponent{}, false
 }
 
 func AuthoredLevelItemRefForEntity(cmd *Commands, eid EntityId) (AuthoredLevelItemRefComponent, bool) {

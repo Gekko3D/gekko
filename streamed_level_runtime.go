@@ -52,25 +52,29 @@ type StreamedLevelRuntimeState struct {
 	Initialized bool
 	InitErr     error
 
-	Config          StreamedLevelRuntimeConfig
-	Loader          *RuntimeContentLoader
-	Level           *content.LevelDef
-	LevelID         string
-	LevelPath       string
-	LevelRoot       EntityId
-	ChunkSize       float32
-	StreamingRadius int
-	TerrainID       string
-	TerrainPalette  AssetId
+	Config                    StreamedLevelRuntimeConfig
+	Loader                    *RuntimeContentLoader
+	Level                     *content.LevelDef
+	LevelID                   string
+	LevelPath                 string
+	LevelRoot                 EntityId
+	ChunkSize                 float32
+	StreamingRadius           int
+	TerrainID                 string
+	TerrainPalette            AssetId
+	BaseWorldID               string
+	BaseWorldPalette          AssetId
+	BaseWorldCollisionEnabled bool
 
-	DesiredChunks     map[ChunkCoord]struct{}
-	PendingLoads      map[ChunkCoord]struct{}
-	PreparedLoads     chan streamedPreparedChunk
-	LoadedChunks      map[ChunkCoord]*streamedLoadedChunk
-	PlacementsByChunk map[ChunkCoord][]streamedPlacementInstance
-	PlacementChunk    map[string]ChunkCoord
-	ObjectChunk       map[string]ChunkCoord
-	TerrainEntries    map[ChunkCoord]content.TerrainChunkEntryDef
+	DesiredChunks        map[ChunkCoord]struct{}
+	PendingLoads         map[ChunkCoord]struct{}
+	PreparedLoads        chan streamedPreparedChunk
+	LoadedChunks         map[ChunkCoord]*streamedLoadedChunk
+	PlacementsByChunk    map[ChunkCoord][]streamedPlacementInstance
+	PlacementChunk       map[string]ChunkCoord
+	ObjectChunk          map[string]ChunkCoord
+	TerrainEntries       map[ChunkCoord]content.TerrainChunkEntryDef
+	ImportedWorldEntries map[ChunkCoord]content.ImportedWorldChunkEntryDef
 
 	WorldDeltaPath string
 	WorldDataDir   string
@@ -90,30 +94,34 @@ type streamedPlacementInstance struct {
 }
 
 type streamedLoadedChunk struct {
-	TerrainEntities map[EntityId]struct{}
-	PlacementRoots  map[string]EntityId
-	OwnedEntities   map[EntityId]struct{}
-	ObjectEntities  map[string]EntityId
+	TerrainEntities       map[EntityId]struct{}
+	ImportedWorldEntities map[EntityId]struct{}
+	PlacementRoots        map[string]EntityId
+	OwnedEntities         map[EntityId]struct{}
+	ObjectEntities        map[string]EntityId
 }
 
 type streamedPreparedChunk struct {
-	Coord           ChunkCoord
-	TerrainChunk    *content.TerrainChunkDef
-	PlacementItems  []streamedPlacementInstance
-	ObjectSnapshots map[string]*content.VoxelObjectSnapshotDef
-	Err             error
+	Coord              ChunkCoord
+	TerrainChunk       *content.TerrainChunkDef
+	ImportedWorldChunk *content.ImportedWorldChunkDef
+	PlacementItems     []streamedPlacementInstance
+	ObjectSnapshots    map[string]*content.VoxelObjectSnapshotDef
+	Err                error
 }
 
 type streamedChunkLoadJob struct {
-	Coord               ChunkCoord
-	LevelPath           string
-	Loader              *RuntimeContentLoader
-	TerrainManifestPath string
-	TerrainEntry        *content.TerrainChunkEntryDef
-	TerrainOverride     *content.TerrainChunkOverrideDef
-	Placements          []streamedPlacementInstance
-	VoxelOverrides      map[string]content.VoxelObjectOverrideDef
-	WorldDeltaPath      string
+	Coord                     ChunkCoord
+	LevelPath                 string
+	Loader                    *RuntimeContentLoader
+	TerrainManifestPath       string
+	TerrainEntry              *content.TerrainChunkEntryDef
+	TerrainOverride           *content.TerrainChunkOverrideDef
+	ImportedWorldManifestPath string
+	ImportedWorldEntry        *content.ImportedWorldChunkEntryDef
+	Placements                []streamedPlacementInstance
+	VoxelOverrides            map[string]content.VoxelObjectOverrideDef
+	WorldDeltaPath            string
 }
 
 func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
@@ -126,6 +134,7 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		PlacementChunk:       make(map[string]ChunkCoord),
 		ObjectChunk:          make(map[string]ChunkCoord),
 		TerrainEntries:       make(map[ChunkCoord]content.TerrainChunkEntryDef),
+		ImportedWorldEntries: make(map[ChunkCoord]content.ImportedWorldChunkEntryDef),
 		placementOverrideMap: make(map[string]content.LevelTransformDef),
 		deletedPlacementIDs:  make(map[string]struct{}),
 		terrainOverrideMap:   make(map[string]content.TerrainChunkOverrideDef),
@@ -215,6 +224,11 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.WorldDeltaPath = worldDeltaPath
 	state.WorldDataDir = content.DefaultWorldDeltaDataDir(worldDeltaPath)
 	state.WorldDelta = worldDelta
+	state.TerrainID = ""
+	state.TerrainPalette = AssetId{}
+	state.BaseWorldID = ""
+	state.BaseWorldPalette = AssetId{}
+	state.BaseWorldCollisionEnabled = false
 	state.DesiredChunks = make(map[ChunkCoord]struct{})
 	state.PendingLoads = make(map[ChunkCoord]struct{})
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
@@ -222,6 +236,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.PlacementChunk = make(map[string]ChunkCoord)
 	state.ObjectChunk = make(map[string]ChunkCoord)
 	state.TerrainEntries = make(map[ChunkCoord]content.TerrainChunkEntryDef)
+	state.ImportedWorldEntries = make(map[ChunkCoord]content.ImportedWorldChunkEntryDef)
 	state.placementOverrideMap = make(map[string]content.LevelTransformDef)
 	state.deletedPlacementIDs = make(map[string]struct{})
 	state.terrainOverrideMap = make(map[string]content.TerrainChunkOverrideDef)
@@ -259,6 +274,28 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		}
 		if assets != nil {
 			state.TerrainPalette = assets.CreateSimplePalette([4]uint8{120, 120, 120, 255})
+		}
+	}
+	if level.BaseWorld != nil && level.BaseWorld.ManifestPath != "" {
+		manifestPath := content.ResolveDocumentPath(level.BaseWorld.ManifestPath, cfg.LevelPath)
+		manifest, err := loader.LoadImportedWorld(manifestPath)
+		if err != nil {
+			state.InitErr = err
+			return err
+		}
+		chunkWorldSize := float32(manifest.ChunkSize) * manifest.VoxelResolution * VoxelSize
+		if absf(chunkWorldSize-chunkSize) > 1e-4 {
+			err = fmt.Errorf("base world chunk world size %.4f does not match level chunk size %.4f", chunkWorldSize, chunkSize)
+			state.InitErr = err
+			return err
+		}
+		state.BaseWorldID = manifest.WorldID
+		state.BaseWorldCollisionEnabled = level.BaseWorld.CollisionEnabled
+		for _, entry := range manifest.Entries {
+			state.ImportedWorldEntries[chunkCoordFromTerrain(entry.Coord)] = entry
+		}
+		if assets != nil {
+			state.BaseWorldPalette = assets.CreateSimplePalette([4]uint8{160, 160, 160, 255})
 		}
 	}
 
@@ -411,6 +448,10 @@ func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoor
 		job.TerrainEntry = &entry
 		job.TerrainManifestPath = content.ResolveDocumentPath(state.Level.Terrain.ManifestPath, state.LevelPath)
 	}
+	if entry, ok := state.ImportedWorldEntries[coord]; ok {
+		job.ImportedWorldEntry = &entry
+		job.ImportedWorldManifestPath = content.ResolveDocumentPath(state.Level.BaseWorld.ManifestPath, state.LevelPath)
+	}
 	if override, ok := state.terrainOverrideMap[terrainChunkRuntimeKey(state.TerrainID, terrainCoordFromChunk(coord))]; ok {
 		overrideCopy := override
 		job.TerrainOverride = &overrideCopy
@@ -449,6 +490,15 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) streamedPreparedChunk {
 		}
 		result.TerrainChunk = chunk
 	}
+	if job.ImportedWorldEntry != nil && job.ImportedWorldEntry.NonEmptyVoxelCount > 0 {
+		chunkPath := content.ResolveImportedWorldChunkPath(*job.ImportedWorldEntry, job.ImportedWorldManifestPath)
+		chunk, err := job.Loader.LoadImportedWorldChunk(chunkPath)
+		if err != nil {
+			result.Err = err
+			return result
+		}
+		result.ImportedWorldChunk = chunk
+	}
 	for key, override := range job.VoxelOverrides {
 		snapshotPath := content.ResolveDocumentPath(override.SnapshotPath, job.WorldDeltaPath)
 		snapshot, err := content.LoadVoxelObjectSnapshot(snapshotPath)
@@ -463,10 +513,11 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) streamedPreparedChunk {
 
 func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedChunk) error {
 	chunk := &streamedLoadedChunk{
-		TerrainEntities: make(map[EntityId]struct{}),
-		PlacementRoots:  make(map[string]EntityId),
-		OwnedEntities:   make(map[EntityId]struct{}),
-		ObjectEntities:  make(map[string]EntityId),
+		TerrainEntities:       make(map[EntityId]struct{}),
+		ImportedWorldEntities: make(map[EntityId]struct{}),
+		PlacementRoots:        make(map[string]EntityId),
+		OwnedEntities:         make(map[EntityId]struct{}),
+		ObjectEntities:        make(map[string]EntityId),
 	}
 
 	if prepared.TerrainChunk != nil && prepared.TerrainChunk.NonEmptyVoxelCount > 0 {
@@ -488,6 +539,19 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 				RootEntity: entity,
 			})
 		}
+	}
+
+	if prepared.ImportedWorldChunk != nil && prepared.ImportedWorldChunk.NonEmptyVoxelCount > 0 {
+		entity := spawnAuthoredImportedWorldChunkEntity(cmd, state.LevelRoot, state.BaseWorldPalette, AuthoredImportedWorldSpawnDef{
+			LevelID:          state.LevelID,
+			WorldID:          importedWorldIDForPreparedChunk(state, prepared.ImportedWorldChunk),
+			Chunk:            prepared.ImportedWorldChunk,
+			CollisionEnabled: state.BaseWorldCollisionEnabled,
+		})
+		cmd.app.FlushCommands()
+		clearEntityVoxelDirty(cmd, entity)
+		chunk.ImportedWorldEntities[entity] = struct{}{}
+		chunk.OwnedEntities[entity] = struct{}{}
 	}
 
 	for _, placement := range prepared.PlacementItems {
@@ -685,6 +749,13 @@ func terrainIDForPreparedChunk(state *StreamedLevelRuntimeState, chunk *content.
 		return chunk.TerrainID
 	}
 	return state.TerrainID
+}
+
+func importedWorldIDForPreparedChunk(state *StreamedLevelRuntimeState, chunk *content.ImportedWorldChunkDef) string {
+	if chunk != nil && chunk.WorldID != "" {
+		return chunk.WorldID
+	}
+	return state.BaseWorldID
 }
 
 func terrainGroupIDForStreamedState(state *StreamedLevelRuntimeState) uint32 {

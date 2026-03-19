@@ -13,6 +13,8 @@ type RuntimeContentLoader struct {
 	levels           map[string]*content.LevelDef
 	terrainManifests map[string]*content.TerrainChunkManifestDef
 	terrainChunks    map[string]*content.TerrainChunkDef
+	importedWorlds   map[string]*content.ImportedWorldDef
+	importedChunks   map[string]*content.ImportedWorldChunkDef
 }
 
 func NewRuntimeContentLoader() *RuntimeContentLoader {
@@ -21,6 +23,8 @@ func NewRuntimeContentLoader() *RuntimeContentLoader {
 		levels:           make(map[string]*content.LevelDef),
 		terrainManifests: make(map[string]*content.TerrainChunkManifestDef),
 		terrainChunks:    make(map[string]*content.TerrainChunkDef),
+		importedWorlds:   make(map[string]*content.ImportedWorldDef),
+		importedChunks:   make(map[string]*content.ImportedWorldChunkDef),
 	}
 }
 
@@ -66,6 +70,28 @@ func (l *RuntimeContentLoader) LoadTerrainChunk(path string) (*content.TerrainCh
 		return def, nil
 	}
 	return loadRuntimeContentCached(&l.mu, path, l.terrainChunks, content.LoadTerrainChunk)
+}
+
+func (l *RuntimeContentLoader) LoadImportedWorld(path string) (*content.ImportedWorldDef, error) {
+	if l == nil {
+		def, err := content.LoadImportedWorld(path)
+		if err != nil {
+			return nil, err
+		}
+		return def, nil
+	}
+	return loadRuntimeContentCached(&l.mu, path, l.importedWorlds, content.LoadImportedWorld)
+}
+
+func (l *RuntimeContentLoader) LoadImportedWorldChunk(path string) (*content.ImportedWorldChunkDef, error) {
+	if l == nil {
+		def, err := content.LoadImportedWorldChunk(path)
+		if err != nil {
+			return nil, err
+		}
+		return def, nil
+	}
+	return loadRuntimeContentCached(&l.mu, path, l.importedChunks, content.LoadImportedWorldChunk)
 }
 
 func loadRuntimeContentCached[T any](mu *sync.RWMutex, path string, cache map[string]*T, load func(string) (*T, error)) (*T, error) {

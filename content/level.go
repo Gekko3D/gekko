@@ -32,6 +32,7 @@ type LevelDef struct {
 	ChunkSize        int                  `json:"chunk_size,omitempty"`
 	StreamingRadius  int                  `json:"streaming_radius,omitempty"`
 	Terrain          *LevelTerrainDef     `json:"terrain,omitempty"`
+	BaseWorld        *LevelBaseWorldDef   `json:"base_world,omitempty"`
 	Placements       []LevelPlacementDef  `json:"placements,omitempty"`
 	PlacementVolumes []PlacementVolumeDef `json:"placement_volumes,omitempty"`
 	Environment      *LevelEnvironmentDef `json:"environment,omitempty"`
@@ -75,6 +76,14 @@ type LevelTerrainDef struct {
 	Kind         TerrainKind `json:"kind,omitempty"`
 	SourcePath   string      `json:"source_path,omitempty"`
 	ManifestPath string      `json:"manifest_path,omitempty"`
+}
+
+type LevelBaseWorldDef struct {
+	Kind              ImportedWorldKind `json:"kind,omitempty"`
+	ManifestPath      string            `json:"manifest_path,omitempty"`
+	ReadOnlyByDefault bool              `json:"read_only_by_default,omitempty"`
+	CollisionEnabled  bool              `json:"collision_enabled,omitempty"`
+	Tags              []string          `json:"tags,omitempty"`
 }
 
 type LevelEnvironmentDef struct {
