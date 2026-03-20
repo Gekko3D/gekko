@@ -26,6 +26,7 @@ type ImportedWorldBakeConfig struct {
 	WorldID               string
 	ChunkSize             int
 	VoxelResolution       float32
+	ScaleMultiplier       float32
 	SourceBuildVersion    string
 	NormalizeToOrigin     bool
 	ChunkDirectoryName    string
@@ -49,6 +50,16 @@ type ImportedWorldBakeResult struct {
 	BoundsMax       [3]int
 }
 
+type ImportedWorldBakeProgress struct {
+	Phase     string
+	Message   string
+	Completed int
+	Total     int
+	Fraction  float32
+}
+
+type ImportedWorldBakeProgressFunc func(ImportedWorldBakeProgress)
+
 type importedBakeVoxel struct {
 	X     int
 	Y     int
@@ -71,10 +82,16 @@ type importedWorldBakeChunkLog struct {
 }
 
 func BakeImportedWorldFromVoxFile(path string, cfg ImportedWorldBakeConfig) (ImportedWorldBakeResult, error) {
+	return BakeImportedWorldFromVoxFileWithProgress(path, cfg, nil)
+}
+
+func BakeImportedWorldFromVoxFileWithProgress(path string, cfg ImportedWorldBakeConfig, progress ImportedWorldBakeProgressFunc) (ImportedWorldBakeResult, error) {
+	emitImportedWorldBakeProgress(progress, "load", "Loading source .vox", 0, 1, 0)
 	voxFile, err := LoadVoxFile(path)
 	if err != nil {
 		return ImportedWorldBakeResult{}, err
 	}
+	emitImportedWorldBakeProgress(progress, "load", "Loaded source .vox", 1, 1, 0.05)
 	if cfg.WorldID == "" {
 		cfg.WorldID = trimImportedWorldID(filepath.Base(path))
 	}
@@ -83,7 +100,7 @@ func BakeImportedWorldFromVoxFile(path string, cfg ImportedWorldBakeConfig) (Imp
 	}
 	if hash, err := importedWorldSourceHash(path); err == nil && hash != "" {
 		cfg.SourceBuildVersion = strings.TrimSpace(cfg.SourceBuildVersion)
-		result, bakeErr := BakeImportedWorldFromVox(voxFile, cfg)
+		result, bakeErr := BakeImportedWorldFromVoxWithProgress(voxFile, cfg, progress)
 		if bakeErr != nil {
 			return ImportedWorldBakeResult{}, bakeErr
 		}
@@ -92,16 +109,20 @@ func BakeImportedWorldFromVoxFile(path string, cfg ImportedWorldBakeConfig) (Imp
 		}
 		return result, nil
 	}
-	return BakeImportedWorldFromVox(voxFile, cfg)
+	return BakeImportedWorldFromVoxWithProgress(voxFile, cfg, progress)
 }
 
 func BakeImportedWorldFromVox(voxFile *VoxFile, cfg ImportedWorldBakeConfig) (ImportedWorldBakeResult, error) {
+	return BakeImportedWorldFromVoxWithProgress(voxFile, cfg, nil)
+}
+
+func BakeImportedWorldFromVoxWithProgress(voxFile *VoxFile, cfg ImportedWorldBakeConfig, progress ImportedWorldBakeProgressFunc) (ImportedWorldBakeResult, error) {
 	cfg = normalizeImportedWorldBakeConfig(cfg)
 	if voxFile == nil {
 		return ImportedWorldBakeResult{}, fmt.Errorf("vox file is nil")
 	}
 
-	worldVoxels, warnings, err := flattenImportedWorldBakeVoxels(voxFile)
+	worldVoxels, warnings, err := flattenImportedWorldBakeVoxelsWithProgress(voxFile, cfg, progress)
 	if err != nil {
 		return ImportedWorldBakeResult{}, err
 	}
@@ -110,13 +131,15 @@ func BakeImportedWorldFromVox(voxFile *VoxFile, cfg ImportedWorldBakeConfig) (Im
 	}
 
 	if cfg.NormalizeToOrigin {
+		emitImportedWorldBakeProgress(progress, "normalize", "Normalizing world origin", 0, 1, 0.46)
 		shiftImportedBakeVoxelsToOrigin(worldVoxels)
 	}
+	emitImportedWorldBakeProgress(progress, "sort", "Sorting baked voxels", 0, 1, 0.5)
 	sortImportedBakeVoxels(worldVoxels)
 
-	chunks, boundsMin, boundsMax := buildImportedWorldChunks(worldVoxels, cfg)
-	warnings = append(warnings, buildImportedWorldChunkWarnings(chunks, cfg)...)
-	warnings = append(warnings, buildImportedWorldTopologyWarnings(worldVoxels, cfg)...)
+	chunks, boundsMin, boundsMax := buildImportedWorldChunksWithProgress(worldVoxels, cfg, progress)
+	warnings = append(warnings, buildImportedWorldChunkWarningsWithProgress(chunks, cfg, progress)...)
+	warnings = append(warnings, buildImportedWorldTopologyWarningsWithProgress(worldVoxels, cfg, progress)...)
 
 	entries := make([]content.ImportedWorldChunkEntryDef, 0, len(chunks))
 	chunkCoords := make([]ChunkCoord, 0, len(chunks))
@@ -134,6 +157,7 @@ func BakeImportedWorldFromVox(voxFile *VoxFile, cfg ImportedWorldBakeConfig) (Im
 	})
 
 	chunkDir := cfg.ChunkDirectoryName
+	emitImportedWorldBakeProgress(progress, "manifest", "Building manifest entries", 0, len(chunkCoords), 0.98)
 	for _, coord := range chunkCoords {
 		chunk := chunks[coord]
 		entries = append(entries, content.ImportedWorldChunkEntryDef{
@@ -144,6 +168,7 @@ func BakeImportedWorldFromVox(voxFile *VoxFile, cfg ImportedWorldBakeConfig) (Im
 			)),
 			NonEmptyVoxelCount: chunk.NonEmptyVoxelCount,
 		})
+		emitImportedWorldBakeProgress(progress, "manifest", "Building manifest entries", len(entries), len(chunkCoords), 0.98+0.01*progressFraction(len(entries), len(chunkCoords)))
 	}
 
 	result := ImportedWorldBakeResult{
@@ -163,10 +188,15 @@ func BakeImportedWorldFromVox(voxFile *VoxFile, cfg ImportedWorldBakeConfig) (Im
 		BoundsMin:       boundsMin,
 		BoundsMax:       boundsMax,
 	}
+	emitImportedWorldBakeProgress(progress, "complete", "Bake data prepared", 1, 1, 1)
 	return result, nil
 }
 
 func SaveImportedWorldBake(manifestPath string, bake ImportedWorldBakeResult) error {
+	return SaveImportedWorldBakeWithProgress(manifestPath, bake, nil)
+}
+
+func SaveImportedWorldBakeWithProgress(manifestPath string, bake ImportedWorldBakeResult, progress ImportedWorldBakeProgressFunc) error {
 	if bake.Manifest == nil {
 		return fmt.Errorf("bake manifest is nil")
 	}
@@ -182,17 +212,37 @@ func SaveImportedWorldBake(manifestPath string, bake ImportedWorldBakeResult) er
 	for _, entry := range bake.Manifest.Entries {
 		entriesByCoord[ChunkCoord{X: entry.Coord.X, Y: entry.Coord.Y, Z: entry.Coord.Z}] = entry
 	}
-	for coord, chunk := range bake.Chunks {
+	coords := make([]ChunkCoord, 0, len(bake.Chunks))
+	for coord := range bake.Chunks {
+		coords = append(coords, coord)
+	}
+	sort.Slice(coords, func(i, j int) bool {
+		if coords[i].X != coords[j].X {
+			return coords[i].X < coords[j].X
+		}
+		if coords[i].Y != coords[j].Y {
+			return coords[i].Y < coords[j].Y
+		}
+		return coords[i].Z < coords[j].Z
+	})
+	for i, coord := range coords {
+		chunk := bake.Chunks[coord]
 		entry, ok := entriesByCoord[coord]
 		if !ok {
 			return fmt.Errorf("missing manifest entry for chunk %s", coord.String())
 		}
 		chunkPath := content.ResolveDocumentPath(entry.ChunkPath, manifestPath)
+		emitImportedWorldBakeProgress(progress, "save_chunks", fmt.Sprintf("Saving chunk %d of %d", i+1, len(coords)), i, len(coords), progressFraction(i, len(coords)))
 		if err := content.SaveImportedWorldChunk(chunkPath, chunk); err != nil {
 			return err
 		}
 	}
-	return content.SaveImportedWorld(manifestPath, bake.Manifest)
+	emitImportedWorldBakeProgress(progress, "save_manifest", "Saving world manifest", len(coords), len(coords)+1, progressFraction(len(coords), len(coords)+1))
+	if err := content.SaveImportedWorld(manifestPath, bake.Manifest); err != nil {
+		return err
+	}
+	emitImportedWorldBakeProgress(progress, "save_complete", "Saved manifest and chunks", 1, 1, 1)
+	return nil
 }
 
 func BuildImportedWorldBakeReport(bake ImportedWorldBakeResult) importedWorldBakeReport {
@@ -253,6 +303,9 @@ func normalizeImportedWorldBakeConfig(cfg ImportedWorldBakeConfig) ImportedWorld
 	if cfg.VoxelResolution <= 0 {
 		cfg.VoxelResolution = DefaultImportedWorldBakeVoxelResolution
 	}
+	if cfg.ScaleMultiplier <= 0 {
+		cfg.ScaleMultiplier = 1
+	}
 	if strings.TrimSpace(cfg.SourceBuildVersion) == "" {
 		cfg.SourceBuildVersion = DefaultImportedWorldBakeBuildVersion
 	}
@@ -275,35 +328,64 @@ func normalizeImportedWorldBakeConfig(cfg ImportedWorldBakeConfig) ImportedWorld
 }
 
 func flattenImportedWorldBakeVoxels(voxFile *VoxFile) ([]importedBakeVoxel, []ImportedWorldBakeWarning, error) {
+	return flattenImportedWorldBakeVoxelsWithProgress(voxFile, ImportedWorldBakeConfig{}, nil)
+}
+
+func flattenImportedWorldBakeVoxelsWithProgress(voxFile *VoxFile, cfg ImportedWorldBakeConfig, progress ImportedWorldBakeProgressFunc) ([]importedBakeVoxel, []ImportedWorldBakeWarning, error) {
 	voxels := make(map[[3]int]uint8)
 	warnings := []ImportedWorldBakeWarning{}
+	scaleMultiplier := cfg.ScaleMultiplier
+	if scaleMultiplier <= 0 {
+		scaleMultiplier = 1
+	}
+	scaledFile := scaleImportedWorldBakeVoxFile(voxFile, scaleMultiplier)
 
-	if len(voxFile.Nodes) == 0 {
-		for _, model := range voxFile.Models {
+	if len(scaledFile.Nodes) == 0 {
+		total := 0
+		for _, model := range scaledFile.Models {
+			total += len(model.Voxels)
+		}
+		processed := 0
+		for _, model := range scaledFile.Models {
 			for _, voxel := range model.Voxels {
 				key := [3]int{int(voxel.X), int(voxel.Y), int(voxel.Z)}
 				voxels[key] = voxel.ColorIndex
+				processed++
+				maybeEmitImportedWorldBakeProgress(progress, "flatten", "Flattening source voxels", processed, total, 0.05, 0.45)
 			}
 		}
-		if len(voxFile.Models) > 1 {
+		if len(scaledFile.Models) > 1 {
 			warnings = append(warnings, ImportedWorldBakeWarning{
 				Code:    "multi_model_overlay",
-				Message: fmt.Sprintf("VOX source contains %d root models without scene nodes; models were overlaid at the origin", len(voxFile.Models)),
+				Message: fmt.Sprintf("VOX source contains %d root models without scene nodes; models were overlaid at the origin", len(scaledFile.Models)),
 			})
 		}
 		return importedBakeVoxelsFromMap(voxels), warnings, nil
 	}
 
-	inspection := ExtractVoxHierarchy(voxFile, 1.0)
+	inspection := ExtractVoxHierarchy(scaledFile, 1.0)
+	total := 0
 	for _, instance := range inspection {
-		if instance.ModelIndex < 0 || instance.ModelIndex >= len(voxFile.Models) {
+		if instance.ModelIndex < 0 || instance.ModelIndex >= len(scaledFile.Models) {
 			continue
 		}
-		model := voxFile.Models[instance.ModelIndex]
+		total += len(scaledFile.Models[instance.ModelIndex].Voxels)
+	}
+	processed := 0
+	for _, instance := range inspection {
+		if instance.ModelIndex < 0 || instance.ModelIndex >= len(scaledFile.Models) {
+			continue
+		}
+		model := scaledFile.Models[instance.ModelIndex]
+		if scaleMultiplier != 1 {
+			instance.Transform.Position = instance.Transform.Position.Mul(scaleMultiplier)
+		}
 		mx := instance.Transform.ObjectToWorld()
 		for _, voxel := range model.Voxels {
 			pos := transformImportedBakeVoxel(mx, int(voxel.X), int(voxel.Y), int(voxel.Z))
 			voxels[[3]int{pos[0], pos[1], pos[2]}] = voxel.ColorIndex
+			processed++
+			maybeEmitImportedWorldBakeProgress(progress, "flatten", "Flattening source voxels", processed, total, 0.05, 0.45)
 		}
 	}
 	return importedBakeVoxelsFromMap(voxels), warnings, nil
@@ -344,6 +426,20 @@ func importedWorldPaletteFromVox(voxFile *VoxFile) []content.ImportedWorldPalett
 		palette[i] = content.ImportedWorldPaletteColor{color[0], color[1], color[2], color[3]}
 	}
 	return palette
+}
+
+func scaleImportedWorldBakeVoxFile(voxFile *VoxFile, scale float32) *VoxFile {
+	if voxFile == nil || scale <= 0 || scale == 1 {
+		return voxFile
+	}
+	scaled := *voxFile
+	if len(voxFile.Models) > 0 {
+		scaled.Models = make([]VoxModel, len(voxFile.Models))
+		for i, model := range voxFile.Models {
+			scaled.Models[i] = ScaleVoxModel(model, scale)
+		}
+	}
+	return &scaled
 }
 
 func importedBakeVoxelsFromMap(src map[[3]int]uint8) []importedBakeVoxel {
@@ -399,11 +495,15 @@ func sortImportedBakeVoxels(voxels []importedBakeVoxel) {
 }
 
 func buildImportedWorldChunks(voxels []importedBakeVoxel, cfg ImportedWorldBakeConfig) (map[ChunkCoord]*content.ImportedWorldChunkDef, [3]int, [3]int) {
+	return buildImportedWorldChunksWithProgress(voxels, cfg, nil)
+}
+
+func buildImportedWorldChunksWithProgress(voxels []importedBakeVoxel, cfg ImportedWorldBakeConfig, progress ImportedWorldBakeProgressFunc) (map[ChunkCoord]*content.ImportedWorldChunkDef, [3]int, [3]int) {
 	chunks := make(map[ChunkCoord]*content.ImportedWorldChunkDef)
 	boundsMin := [3]int{0, 0, 0}
 	boundsMax := [3]int{0, 0, 0}
 	first := true
-	for _, voxel := range voxels {
+	for i, voxel := range voxels {
 		if first {
 			boundsMin = [3]int{voxel.X, voxel.Y, voxel.Z}
 			boundsMax = [3]int{voxel.X, voxel.Y, voxel.Z}
@@ -439,6 +539,7 @@ func buildImportedWorldChunks(voxels []importedBakeVoxel, cfg ImportedWorldBakeC
 			Z:     voxel.Z - coord.Z*cfg.ChunkSize,
 			Value: voxel.Value,
 		})
+		maybeEmitImportedWorldBakeProgress(progress, "chunk", "Partitioning voxels into chunks", i+1, len(voxels), 0.5, 0.78)
 	}
 
 	for _, chunk := range chunks {
@@ -460,6 +561,10 @@ func buildImportedWorldChunks(voxels []importedBakeVoxel, cfg ImportedWorldBakeC
 }
 
 func buildImportedWorldChunkWarnings(chunks map[ChunkCoord]*content.ImportedWorldChunkDef, cfg ImportedWorldBakeConfig) []ImportedWorldBakeWarning {
+	return buildImportedWorldChunkWarningsWithProgress(chunks, cfg, nil)
+}
+
+func buildImportedWorldChunkWarningsWithProgress(chunks map[ChunkCoord]*content.ImportedWorldChunkDef, cfg ImportedWorldBakeConfig, progress ImportedWorldBakeProgressFunc) []ImportedWorldBakeWarning {
 	warnings := []ImportedWorldBakeWarning{}
 	coords := make([]ChunkCoord, 0, len(chunks))
 	for coord := range chunks {
@@ -474,7 +579,7 @@ func buildImportedWorldChunkWarnings(chunks map[ChunkCoord]*content.ImportedWorl
 		}
 		return coords[i].Z < coords[j].Z
 	})
-	for _, coord := range coords {
+	for i, coord := range coords {
 		chunk := chunks[coord]
 		if chunk == nil {
 			continue
@@ -511,11 +616,16 @@ func buildImportedWorldChunkWarnings(chunks map[ChunkCoord]*content.ImportedWorl
 				Message: fmt.Sprintf("chunk %s contains %d enclosed empty cells; these spaces may be inaccessible for traversal or nav baking", coord.String(), enclosed),
 			})
 		}
+		maybeEmitImportedWorldBakeProgress(progress, "warnings", "Analyzing chunk warnings", i+1, len(coords), 0.78, 0.88)
 	}
 	return warnings
 }
 
 func buildImportedWorldTopologyWarnings(voxels []importedBakeVoxel, cfg ImportedWorldBakeConfig) []ImportedWorldBakeWarning {
+	return buildImportedWorldTopologyWarningsWithProgress(voxels, cfg, nil)
+}
+
+func buildImportedWorldTopologyWarningsWithProgress(voxels []importedBakeVoxel, cfg ImportedWorldBakeConfig, progress ImportedWorldBakeProgressFunc) []ImportedWorldBakeWarning {
 	if len(voxels) == 0 {
 		return nil
 	}
@@ -526,18 +636,27 @@ func buildImportedWorldTopologyWarnings(voxels []importedBakeVoxel, cfg Imported
 
 	visited := make(map[[3]int]struct{}, len(voxels))
 	largestComponent := 0
-	thinFeatureCount := 0
+	componentVisits := 0
 	for _, voxel := range voxels {
 		key := [3]int{voxel.X, voxel.Y, voxel.Z}
 		if _, ok := visited[key]; !ok {
-			size := importedWorldComponentSize(key, occupancy, visited)
+			size := importedWorldComponentSizeWithProgress(key, occupancy, visited, func() {
+				componentVisits++
+				maybeEmitImportedWorldBakeProgress(progress, "topology", "Analyzing connected voxel masses", componentVisits, len(voxels), 0.88, 0.94)
+			})
 			if size > largestComponent {
 				largestComponent = size
 			}
 		}
+	}
+
+	thinFeatureCount := 0
+	for i, voxel := range voxels {
+		key := [3]int{voxel.X, voxel.Y, voxel.Z}
 		if importedWorldVoxelLooksThin(key, occupancy) {
 			thinFeatureCount++
 		}
+		maybeEmitImportedWorldBakeProgress(progress, "topology", "Scanning thin traversal features", i+1, len(voxels), 0.94, 0.98)
 	}
 
 	warnings := []ImportedWorldBakeWarning{}
@@ -557,6 +676,10 @@ func buildImportedWorldTopologyWarnings(voxels []importedBakeVoxel, cfg Imported
 }
 
 func importedWorldComponentSize(start [3]int, occupancy map[[3]int]struct{}, visited map[[3]int]struct{}) int {
+	return importedWorldComponentSizeWithProgress(start, occupancy, visited, nil)
+}
+
+func importedWorldComponentSizeWithProgress(start [3]int, occupancy map[[3]int]struct{}, visited map[[3]int]struct{}, onVisit func()) int {
 	queue := [][3]int{start}
 	visited[start] = struct{}{}
 	size := 0
@@ -564,6 +687,9 @@ func importedWorldComponentSize(start [3]int, occupancy map[[3]int]struct{}, vis
 		curr := queue[0]
 		queue = queue[1:]
 		size++
+		if onVisit != nil {
+			onVisit()
+		}
 		for _, offset := range importedWorldNeighborOffsets {
 			next := [3]int{curr[0] + offset[0], curr[1] + offset[1], curr[2] + offset[2]}
 			if _, ok := occupancy[next]; !ok {
@@ -577,6 +703,48 @@ func importedWorldComponentSize(start [3]int, occupancy map[[3]int]struct{}, vis
 		}
 	}
 	return size
+}
+
+func emitImportedWorldBakeProgress(progress ImportedWorldBakeProgressFunc, phase string, message string, completed int, total int, fraction float32) {
+	if progress == nil {
+		return
+	}
+	progress(ImportedWorldBakeProgress{
+		Phase:     phase,
+		Message:   message,
+		Completed: completed,
+		Total:     total,
+		Fraction:  clampImportedWorldBakeFraction(fraction),
+	})
+}
+
+func maybeEmitImportedWorldBakeProgress(progress ImportedWorldBakeProgressFunc, phase string, message string, completed int, total int, start float32, end float32) {
+	if progress == nil || total <= 0 {
+		return
+	}
+	if completed != total && completed != 1 && completed%8192 != 0 {
+		return
+	}
+	fraction := start + (end-start)*progressFraction(completed, total)
+	emitImportedWorldBakeProgress(progress, phase, message, completed, total, fraction)
+}
+
+func progressFraction(completed int, total int) float32 {
+	if total <= 0 {
+		return 1
+	}
+	value := float32(completed) / float32(total)
+	return clampImportedWorldBakeFraction(value)
+}
+
+func clampImportedWorldBakeFraction(value float32) float32 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 func importedWorldVoxelLooksThin(key [3]int, occupancy map[[3]int]struct{}) bool {

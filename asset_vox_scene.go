@@ -96,7 +96,7 @@ func InspectVoxScene(voxFile *VoxFile, voxelScale float32) VoxSceneInspection {
 		switch node.Type {
 		case VoxNodeTransform:
 			info.LocalTransform = voxTransformNodeLocalTransform(node, voxelScale)
-			info.WorldTransform = LocalTransformToWorld(parentWorld, false, LocalTransformComponent{
+			info.WorldTransform = LocalTransformToWorld(parentWorld, false, 0, LocalTransformComponent{
 				Position: info.LocalTransform.Position,
 				Rotation: info.LocalTransform.Rotation,
 				Scale:    info.LocalTransform.Scale,

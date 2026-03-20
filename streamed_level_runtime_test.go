@@ -25,7 +25,7 @@ func TestStreamedRuntimeLoadsOnlyDesiredChunk(t *testing.T) {
 	writeTerrainChunkForStreamedTest(t, chunk0Path, &content.TerrainChunkDef{
 		TerrainID:          "terrain-a",
 		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		SolidValue:         2,
 		Columns:            []content.TerrainChunkColumnDef{{X: 1, Z: 1, FilledVoxels: 2}},
@@ -34,7 +34,7 @@ func TestStreamedRuntimeLoadsOnlyDesiredChunk(t *testing.T) {
 	writeTerrainChunkForStreamedTest(t, chunk1Path, &content.TerrainChunkDef{
 		TerrainID:          "terrain-a",
 		Coord:              content.TerrainChunkCoordDef{X: 1, Y: 0, Z: 0},
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		SolidValue:         2,
 		Columns:            []content.TerrainChunkColumnDef{{X: 3, Z: 4, FilledVoxels: 2}},
@@ -47,7 +47,6 @@ func TestStreamedRuntimeLoadsOnlyDesiredChunk(t *testing.T) {
 
 	level := content.NewLevelDef("streamed")
 	level.ChunkSize = 16
-	level.StreamingRadius = 0
 	level.Placements = []content.LevelPlacementDef{
 		{
 			ID:        "chunk-0-placement",
@@ -73,7 +72,7 @@ func TestStreamedRuntimeLoadsOnlyDesiredChunk(t *testing.T) {
 	}
 
 	app, cmd, state := newStreamedRuntimeHarness(t)
-	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	observer := cmd.AddEntity(
@@ -155,11 +154,11 @@ func TestStreamedRuntimePlacementVolumesUseStableSyntheticIDs(t *testing.T) {
 	}
 
 	leftApp, leftCmd, leftState := newStreamedRuntimeHarness(t)
-	if err := StartStreamedLevelRuntime(leftCmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+	if err := StartStreamedLevelRuntime(leftCmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	rightApp, rightCmd, rightState := newStreamedRuntimeHarness(t)
-	if err := StartStreamedLevelRuntime(rightCmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+	if err := StartStreamedLevelRuntime(rightCmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	_ = leftApp
@@ -202,7 +201,7 @@ func TestStartStreamedRuntimeRejectsTerrainChunkSizeMismatch(t *testing.T) {
 
 	app, cmd, _ := newStreamedRuntimeHarness(t)
 	_ = app
-	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath}); err == nil {
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err == nil {
 		t.Fatal("expected terrain chunk size mismatch error")
 	}
 }
@@ -216,7 +215,7 @@ func TestStartStreamedRuntimeCanAutoSpawnGroundedPlayerFromMarker(t *testing.T) 
 	if err := content.SaveImportedWorldChunk(chunkPath, &content.ImportedWorldChunkDef{
 		WorldID:            "station",
 		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		NonEmptyVoxelCount: 0,
 	}); err != nil {
@@ -226,7 +225,7 @@ func TestStartStreamedRuntimeCanAutoSpawnGroundedPlayerFromMarker(t *testing.T) 
 	if err := content.SaveImportedWorld(worldPath, &content.ImportedWorldDef{
 		WorldID:         "station",
 		Kind:            content.ImportedWorldKindVoxelWorld,
-		ChunkSize:       160,
+		ChunkSize:       16,
 		VoxelResolution: 1,
 		Entries: []content.ImportedWorldChunkEntryDef{{
 			Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
@@ -263,6 +262,7 @@ func TestStartStreamedRuntimeCanAutoSpawnGroundedPlayerFromMarker(t *testing.T) 
 	app, cmd, state := newStreamedRuntimeHarness(t)
 	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{
 		LevelPath:       levelPath,
+		StreamingRadius: 0,
 		AutoSpawnPlayer: true,
 	}); err != nil {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
@@ -301,7 +301,7 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 	writeTerrainChunkForStreamedTest(t, chunk0Path, &content.TerrainChunkDef{
 		TerrainID:          "terrain-a",
 		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		SolidValue:         2,
 		Columns:            []content.TerrainChunkColumnDef{{X: 1, Z: 1, FilledVoxels: 4}},
@@ -313,7 +313,7 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 	writeTerrainChunkForStreamedTest(t, overrideChunkPath, &content.TerrainChunkDef{
 		TerrainID:          "terrain-a",
 		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		SolidValue:         5,
 		Columns:            []content.TerrainChunkColumnDef{{X: 7, Z: 7, FilledVoxels: 1}},
@@ -327,7 +327,6 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 
 	level := content.NewLevelDef("delta")
 	level.ChunkSize = 16
-	level.StreamingRadius = 0
 	level.Placements = []content.LevelPlacementDef{
 		{
 			ID:        "kept-but-moved",
@@ -378,7 +377,8 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 	var terrainHookCalls int
 	app, cmd, state := newStreamedRuntimeHarness(t)
 	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{
-		LevelPath: levelPath,
+		LevelPath:       levelPath,
+		StreamingRadius: 0,
 		PlacementHooks: []PostSpawnPlacementHook{
 			func(cmd *Commands, ctx PostSpawnPlacementContext) {
 				placementHookCalls++
@@ -471,7 +471,7 @@ func TestStreamedRuntimeLoadsImportedBaseWorldChunkWithCollision(t *testing.T) {
 	writeImportedWorldChunkForStreamedTest(t, chunkPath, &content.ImportedWorldChunkDef{
 		WorldID:            "world-a",
 		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		Voxels:             []content.ImportedWorldVoxelDef{{X: 1, Y: 2, Z: 3, Value: 4}},
 		NonEmptyVoxelCount: 1,
@@ -484,7 +484,6 @@ func TestStreamedRuntimeLoadsImportedBaseWorldChunkWithCollision(t *testing.T) {
 
 	level := content.NewLevelDef("baseworld")
 	level.ChunkSize = 16
-	level.StreamingRadius = 0
 	level.BaseWorld = &content.LevelBaseWorldDef{
 		Kind:             content.ImportedWorldKindVoxelWorld,
 		ManifestPath:     content.AuthorDocumentPath(worldPath, levelPath),
@@ -498,7 +497,7 @@ func TestStreamedRuntimeLoadsImportedBaseWorldChunkWithCollision(t *testing.T) {
 	}
 
 	app, cmd, _ := newStreamedRuntimeHarness(t)
-	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	cmd.AddEntity(
@@ -543,7 +542,7 @@ func TestStreamedRuntimePreservesImportedBaseWorldPalette(t *testing.T) {
 	writeImportedWorldChunkForStreamedTest(t, chunkPath, &content.ImportedWorldChunkDef{
 		WorldID:            "world-palette",
 		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 4}},
 		NonEmptyVoxelCount: 1,
@@ -556,7 +555,7 @@ func TestStreamedRuntimePreservesImportedBaseWorldPalette(t *testing.T) {
 	if err := content.SaveImportedWorld(worldPath, &content.ImportedWorldDef{
 		WorldID:         "world-palette",
 		Kind:            content.ImportedWorldKindVoxelWorld,
-		ChunkSize:       160,
+		ChunkSize:       16,
 		VoxelResolution: 1,
 		Palette:         []content.ImportedWorldPaletteColor{{0, 0, 0, 0}, {0, 0, 0, 255}, {0, 0, 0, 255}, {0, 0, 0, 255}, paletteColor},
 		Entries: []content.ImportedWorldChunkEntryDef{{
@@ -570,7 +569,6 @@ func TestStreamedRuntimePreservesImportedBaseWorldPalette(t *testing.T) {
 
 	level := content.NewLevelDef("baseworld_palette")
 	level.ChunkSize = 16
-	level.StreamingRadius = 0
 	level.BaseWorld = &content.LevelBaseWorldDef{
 		Kind:         content.ImportedWorldKindVoxelWorld,
 		ManifestPath: content.AuthorDocumentPath(worldPath, levelPath),
@@ -584,7 +582,7 @@ func TestStreamedRuntimePreservesImportedBaseWorldPalette(t *testing.T) {
 
 	app, cmd, state := newStreamedRuntimeHarness(t)
 	assets := app.resources[reflect.TypeOf(AssetServer{})].(*AssetServer)
-	if err := StartStreamedLevelRuntime(cmd, assets, StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+	if err := StartStreamedLevelRuntime(cmd, assets, StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	cmd.AddEntity(
@@ -624,7 +622,7 @@ func TestStreamedRuntimeSkipsImportedBaseWorldCollisionWhenDisabled(t *testing.T
 	writeImportedWorldChunkForStreamedTest(t, chunkPath, &content.ImportedWorldChunkDef{
 		WorldID:            "world-a",
 		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
 		NonEmptyVoxelCount: 1,
@@ -637,7 +635,6 @@ func TestStreamedRuntimeSkipsImportedBaseWorldCollisionWhenDisabled(t *testing.T
 
 	level := content.NewLevelDef("baseworld_nocollision")
 	level.ChunkSize = 16
-	level.StreamingRadius = 0
 	level.BaseWorld = &content.LevelBaseWorldDef{
 		Kind:             content.ImportedWorldKindVoxelWorld,
 		ManifestPath:     content.AuthorDocumentPath(worldPath, levelPath),
@@ -651,7 +648,7 @@ func TestStreamedRuntimeSkipsImportedBaseWorldCollisionWhenDisabled(t *testing.T
 	}
 
 	app, cmd, _ := newStreamedRuntimeHarness(t)
-	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	cmd.AddEntity(
@@ -760,7 +757,7 @@ func writeTerrainManifestForStreamedTest(t *testing.T, path string, terrainID st
 	}
 	if err := content.SaveTerrainChunkManifest(path, &content.TerrainChunkManifestDef{
 		TerrainID:       terrainID,
-		ChunkSize:       160,
+		ChunkSize:       16,
 		VoxelResolution: 1,
 		Entries:         entries,
 	}); err != nil {
@@ -786,7 +783,7 @@ func writeImportedWorldManifestForStreamedTest(t *testing.T, path string, worldI
 	if err := content.SaveImportedWorld(path, &content.ImportedWorldDef{
 		WorldID:         worldID,
 		Kind:            content.ImportedWorldKindVoxelWorld,
-		ChunkSize:       160,
+		ChunkSize:       16,
 		VoxelResolution: 1,
 		Entries:         entries,
 	}); err != nil {
@@ -821,7 +818,7 @@ func writeTerrainSourceForStreamedTest(t *testing.T, path string) {
 	terrain.WorldSize = content.Vec2{16, 16}
 	terrain.HeightScale = 4
 	terrain.VoxelResolution = 1
-	terrain.ChunkSize = 160
+	terrain.ChunkSize = 16
 	if err := content.SaveTerrainSource(path, terrain); err != nil {
 		t.Fatalf("SaveTerrainSource failed: %v", err)
 	}
@@ -830,7 +827,7 @@ func writeTerrainSourceForStreamedTest(t *testing.T, path string) {
 func terrainEntryForStreamedTest(chunkPath string, manifestPath string, coord content.TerrainChunkCoordDef) content.TerrainChunkEntryDef {
 	return content.TerrainChunkEntryDef{
 		Coord:              coord,
-		ChunkSize:          160,
+		ChunkSize:          16,
 		VoxelResolution:    1,
 		TerrainID:          "terrain-a",
 		ChunkPath:          content.AuthorDocumentPath(chunkPath, manifestPath),

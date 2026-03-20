@@ -220,6 +220,8 @@ func TestLoadAndSpawnAuthoredLevelSpawnsTerrainChunksWithMetadata(t *testing.T) 
 	}
 
 	level := content.NewLevelDef("terrain-demo")
+	level.ChunkSize = 8
+	level.VoxelResolution = 2
 	level.Terrain = &content.LevelTerrainDef{
 		Kind:         content.TerrainKindHeightfield,
 		SourcePath:   content.AuthorDocumentPath(terrainPath, levelPath),
@@ -260,12 +262,12 @@ func TestLoadAndSpawnAuthoredLevelSpawnsTerrainChunksWithMetadata(t *testing.T) 
 	}
 
 	transform := mustWorldTransformForSpawnTest(t, cmd, entity)
-	wantPos := mgl32.Vec3{float32(nonEmptyChunk.ChunkSize) * nonEmptyChunk.VoxelResolution * VoxelSize, 0, -float32(nonEmptyChunk.ChunkSize) * nonEmptyChunk.VoxelResolution * VoxelSize}
+	wantPos := mgl32.Vec3{float32(nonEmptyChunk.ChunkSize) * nonEmptyChunk.VoxelResolution, 0, -float32(nonEmptyChunk.ChunkSize) * nonEmptyChunk.VoxelResolution}
 	if transform.Position.Sub(wantPos).Len() > 1e-5 {
 		t.Fatalf("expected terrain position %v, got %v", wantPos, transform.Position)
 	}
-	if got := transform.Scale; got.Sub(mgl32.Vec3{2, 2, 2}).Len() > 1e-5 {
-		t.Fatalf("expected terrain scale [2 2 2], got %v", got)
+	if got := transform.Scale; got.Sub(mgl32.Vec3{20, 20, 20}).Len() > 1e-5 {
+		t.Fatalf("expected terrain scale [20 20 20], got %v", got)
 	}
 
 	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)

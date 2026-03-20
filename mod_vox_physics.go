@@ -190,12 +190,8 @@ func currentVoxelPhysicsBuildStamp(vmc *VoxelModelComponent, tr *TransformCompon
 	return stamp
 }
 
-func scaledVoxelScale(tr *TransformComponent) mgl32.Vec3 {
-	return mgl32.Vec3{
-		VoxelSize * tr.Scale.X(),
-		VoxelSize * tr.Scale.Y(),
-		VoxelSize * tr.Scale.Z(),
-	}
+func scaledVoxelScale(vmc *VoxelModelComponent, tr *TransformComponent) mgl32.Vec3 {
+	return EffectiveVoxelScale(vmc, tr)
 }
 
 // Deprecated: DecomposeVoxModel uses greedy meshing to produce multiple boxes.
@@ -508,7 +504,7 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 		var box *CollisionBox
 		var center mgl32.Vec3
 		var grid *voxelGridSnapshot
-		voxelScale := scaledVoxelScale(tr)
+		voxelScale := scaledVoxelScale(vmc, tr)
 
 		if xbm != nil {
 			vMin, vMax := xbm.ComputeAABB()

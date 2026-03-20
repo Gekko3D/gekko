@@ -58,6 +58,15 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 		return result
 	}
 
+	normalized := *def
+	if len(def.Parts) > 0 {
+		normalized.Parts = append([]AssetPartDef(nil), def.Parts...)
+		for i := range normalized.Parts {
+			normalizeAssetPart(&normalized.Parts[i])
+		}
+	}
+	def = &normalized
+
 	if strings.TrimSpace(def.Name) == "" {
 		result.addError("empty_name", "asset name is required", def.ID, def.Name, "asset")
 	}
@@ -75,6 +84,7 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 		validateUniqueID(&result, seenIDs, part.ID, part.Name, "part")
 		validateName(&result, part.ID, part.Name, "part")
 		validateSource(&result, part.ID, part.Name, "part", part.Source, opts)
+		validatePartScale(&result, part)
 		partIDs[part.ID] = struct{}{}
 		partParentByID[part.ID] = part.ParentID
 		allItemIDs[part.ID] = "part"
@@ -223,6 +233,18 @@ func validateSource(result *AssetValidationResult, itemID string, itemName strin
 		validateProceduralPrimitive(result, itemID, itemName, itemKind, source)
 	default:
 		result.addError("invalid_source_payload", fmt.Sprintf("unsupported source kind %q", source.Kind), itemID, itemName, itemKind)
+	}
+}
+
+func validatePartScale(result *AssetValidationResult, part AssetPartDef) {
+	if !AssetPartUsesVoxelSource(part) {
+		return
+	}
+	if part.VoxelResolution <= 0 {
+		result.addError("invalid_voxel_resolution", "voxel_resolution must be > 0", part.ID, part.Name, "part")
+	}
+	if part.ModelScale <= 0 {
+		result.addError("invalid_model_scale", "model_scale must be > 0", part.ID, part.Name, "part")
 	}
 }
 

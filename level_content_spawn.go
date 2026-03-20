@@ -256,12 +256,12 @@ func spawnAuthoredTerrainChunkEntity(cmd *Commands, parent EntityId, palette Ass
 		&TransformComponent{
 			Position: terrainChunkPosition(terrain.Chunk),
 			Rotation: mgl32.QuatIdent(),
-			Scale:    mgl32.Vec3{terrain.Chunk.VoxelResolution, terrain.Chunk.VoxelResolution, terrain.Chunk.VoxelResolution},
+			Scale:    mgl32.Vec3{terrain.Chunk.VoxelResolution / VoxelSize, terrain.Chunk.VoxelResolution / VoxelSize, terrain.Chunk.VoxelResolution / VoxelSize},
 		},
 		&LocalTransformComponent{
 			Position: terrainChunkPosition(terrain.Chunk),
 			Rotation: mgl32.QuatIdent(),
-			Scale:    mgl32.Vec3{terrain.Chunk.VoxelResolution, terrain.Chunk.VoxelResolution, terrain.Chunk.VoxelResolution},
+			Scale:    mgl32.Vec3{terrain.Chunk.VoxelResolution / VoxelSize, terrain.Chunk.VoxelResolution / VoxelSize, terrain.Chunk.VoxelResolution / VoxelSize},
 		},
 		&Parent{Entity: parent},
 		&VoxelModelComponent{
@@ -298,7 +298,7 @@ func terrainChunkPosition(chunk *content.TerrainChunkDef) mgl32.Vec3 {
 	if chunk == nil {
 		return mgl32.Vec3{}
 	}
-	chunkWorldSize := float32(chunk.ChunkSize) * chunk.VoxelResolution * VoxelSize
+	chunkWorldSize := float32(chunk.ChunkSize) * chunk.VoxelResolution
 	return mgl32.Vec3{
 		float32(chunk.Coord.X) * chunkWorldSize,
 		float32(chunk.Coord.Y) * chunkWorldSize,

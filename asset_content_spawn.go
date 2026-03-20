@@ -162,7 +162,11 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part 
 		return 0, err
 	}
 	if model != (AssetId{}) {
-		comps = append(comps, &VoxelModelComponent{VoxelModel: model, VoxelPalette: palette})
+		comps = append(comps, &VoxelModelComponent{
+			VoxelModel:      model,
+			VoxelPalette:    palette,
+			VoxelResolution: part.VoxelResolution,
+		})
 	}
 
 	return cmd.AddEntity(comps...), nil
@@ -273,10 +277,13 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef, d
 	}
 }
 
-func LocalTransformToWorld(parentWorld TransformComponent, parentIsVoxel bool, local LocalTransformComponent) TransformComponent {
+func LocalTransformToWorld(parentWorld TransformComponent, parentIsVoxel bool, parentVoxelResolution float32, local LocalTransformComponent) TransformComponent {
 	vSize := float32(1.0)
 	if parentIsVoxel {
-		vSize = VoxelSize
+		vSize = parentVoxelResolution
+		if vSize <= 0 {
+			vSize = VoxelSize
+		}
 	}
 	scaledPivot := mgl32.Vec3{
 		parentWorld.Pivot.X() * vSize,

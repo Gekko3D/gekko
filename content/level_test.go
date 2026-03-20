@@ -10,10 +10,9 @@ import (
 
 func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	level := &LevelDef{
-		Name:            "Station",
-		ChunkSize:       48,
-		StreamingRadius: 6,
-		Tags:            []string{"space"},
+		Name:      "Station",
+		ChunkSize: 48,
+		Tags:      []string{"space"},
 		Terrain: &LevelTerrainDef{
 			Kind:       TerrainKindHeightfield,
 			SourcePath: "assets/heightmap.png",
@@ -108,6 +107,13 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	path := filepath.Join(tmpDir, "assets", "station.gklevel")
 	if err := SaveLevel(path, level); err != nil {
 		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	savedBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if strings.Contains(string(savedBytes), `"streaming_radius"`) {
+		t.Fatalf("did not expect streaming_radius in saved level JSON, got %s", string(savedBytes))
 	}
 
 	loaded, err := LoadLevel(path)
@@ -300,7 +306,7 @@ func TestValidateLevelShooterRequiresPlayerSpawnAndClearMarkerPlacement(t *testi
 		Name: "bad-spawn",
 		Kind: LevelMarkerKindAISpawn,
 		Transform: LevelTransformDef{
-			Position: Vec3{1.0 * 0.1, 1.0 * 0.1, 1.0 * 0.1},
+			Position: Vec3{1, 1, 1},
 			Rotation: Quat{0, 0, 0, 1},
 			Scale:    Vec3{1, 1, 1},
 		},

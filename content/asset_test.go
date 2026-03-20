@@ -27,8 +27,9 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 					Rotation: Quat{0, 0, 0, 1},
 					Scale:    Vec3{1, 1, 1},
 				},
-				ModelScale: 1,
-				Tags:       []string{"hero"},
+				VoxelResolution: DefaultAssetVoxelSize,
+				ModelScale:      1,
+				Tags:            []string{"hero"},
 			},
 		},
 		Lights: []AssetLightDef{
@@ -161,7 +162,7 @@ func TestAssetJSONUsesStringEnums(t *testing.T) {
 	}
 
 	jsonText := string(data)
-	for _, want := range []string{`"schema_version":1`, `"kind":"vox_model"`, `"type":"ambient"`, `"alpha_mode":"texture"`} {
+	for _, want := range []string{`"schema_version":2`, `"kind":"vox_model"`, `"type":"ambient"`, `"alpha_mode":"texture"`} {
 		if !contains(jsonText, want) {
 			t.Fatalf("expected JSON to contain %s, got %s", want, jsonText)
 		}
@@ -182,6 +183,45 @@ func TestLoadAssetRejectsUnknownSchemaVersion(t *testing.T) {
 
 	if _, err := LoadAsset(path); err == nil {
 		t.Fatal("expected LoadAsset to reject unsupported schema_version")
+	}
+}
+
+func TestLoadAssetNormalizesLegacyV1SourceScaleDefaults(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content_asset_legacy_v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	path := filepath.Join(tmpDir, "legacy.gkasset")
+	if err := os.WriteFile(path, []byte(`{
+  "id":"legacy-asset",
+  "schema_version":1,
+  "name":"legacy",
+  "parts":[
+    {
+      "id":"part",
+      "name":"part",
+      "source":{"kind":"vox_model","path":"crate.vox","model_index":0},
+      "transform":{"rotation":[0,0,0,1],"scale":[1,1,1]}
+    }
+  ]
+}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadAsset(path)
+	if err != nil {
+		t.Fatalf("LoadAsset failed: %v", err)
+	}
+	if loaded.SchemaVersion != CurrentAssetSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", CurrentAssetSchemaVersion, loaded.SchemaVersion)
+	}
+	if got := loaded.Parts[0].VoxelResolution; got != DefaultAssetVoxelSize {
+		t.Fatalf("expected voxel resolution %.2f, got %.4f", DefaultAssetVoxelSize, got)
+	}
+	if got := loaded.Parts[0].ModelScale; got != 1.0 {
+		t.Fatalf("expected model scale 1.0, got %.4f", got)
 	}
 }
 

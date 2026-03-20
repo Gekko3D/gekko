@@ -38,12 +38,12 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 		&TransformComponent{
 			Position: importedWorldChunkPosition(def.Chunk),
 			Rotation: mgl32.QuatIdent(),
-			Scale:    mgl32.Vec3{def.Chunk.VoxelResolution, def.Chunk.VoxelResolution, def.Chunk.VoxelResolution},
+			Scale:    mgl32.Vec3{def.Chunk.VoxelResolution / VoxelSize, def.Chunk.VoxelResolution / VoxelSize, def.Chunk.VoxelResolution / VoxelSize},
 		},
 		&LocalTransformComponent{
 			Position: importedWorldChunkPosition(def.Chunk),
 			Rotation: mgl32.QuatIdent(),
-			Scale:    mgl32.Vec3{def.Chunk.VoxelResolution, def.Chunk.VoxelResolution, def.Chunk.VoxelResolution},
+			Scale:    mgl32.Vec3{def.Chunk.VoxelResolution / VoxelSize, def.Chunk.VoxelResolution / VoxelSize, def.Chunk.VoxelResolution / VoxelSize},
 		},
 		&Parent{Entity: parent},
 		&VoxelModelComponent{
@@ -73,7 +73,7 @@ func importedWorldChunkPosition(chunk *content.ImportedWorldChunkDef) mgl32.Vec3
 	if chunk == nil {
 		return mgl32.Vec3{}
 	}
-	chunkWorldSize := float32(chunk.ChunkSize) * chunk.VoxelResolution * VoxelSize
+	chunkWorldSize := float32(chunk.ChunkSize) * chunk.VoxelResolution
 	return mgl32.Vec3{
 		float32(chunk.Coord.X) * chunkWorldSize,
 		float32(chunk.Coord.Y) * chunkWorldSize,

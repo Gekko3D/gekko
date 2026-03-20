@@ -10,7 +10,7 @@ func SaveAsset(path string, def *AssetDef) error {
 	if def == nil {
 		return fmt.Errorf("asset definition is nil")
 	}
-	EnsureAssetIDs(def)
+	NormalizeAssetDef(def)
 	if def.SchemaVersion != CurrentAssetSchemaVersion {
 		return fmt.Errorf("unsupported schema version %d", def.SchemaVersion)
 	}
@@ -36,10 +36,10 @@ func LoadAsset(path string) (*AssetDef, error) {
 	if def.SchemaVersion == 0 {
 		def.SchemaVersion = CurrentAssetSchemaVersion
 	}
-	if def.SchemaVersion != CurrentAssetSchemaVersion {
+	if def.SchemaVersion > CurrentAssetSchemaVersion {
 		return nil, fmt.Errorf("unsupported schema version %d", def.SchemaVersion)
 	}
-	EnsureAssetIDs(&def)
+	NormalizeAssetDef(&def)
 
 	return &def, nil
 }

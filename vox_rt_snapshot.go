@@ -52,8 +52,9 @@ const (
 )
 
 type VoxelModelComponent struct {
-	VoxelModel             AssetId           `gekko:"voxel" usage:"model"`
-	VoxelPalette           AssetId           `gekko:"voxel" usage:"palette"`
+	VoxelModel             AssetId `gekko:"voxel" usage:"model"`
+	VoxelPalette           AssetId `gekko:"voxel" usage:"palette"`
+	VoxelResolution        float32
 	PivotMode              VoxelPivotMode    // How to determine the rotation pivot
 	CustomPivot            mgl32.Vec3        // Used if PivotMode == PivotModeCustom
 	CustomMap              *volume.XBrickMap // If set, use this instead of loading from VoxelModel asset
@@ -63,4 +64,24 @@ type VoxelModelComponent struct {
 	TerrainGroupID         uint32
 	TerrainChunkCoord      [3]int
 	TerrainChunkSize       int
+}
+
+func VoxelResolutionOrDefault(vmc *VoxelModelComponent) float32 {
+	if vmc != nil && vmc.VoxelResolution > 0 {
+		return vmc.VoxelResolution
+	}
+	return VoxelSize
+}
+
+func EffectiveVoxelScale(vmc *VoxelModelComponent, tr *TransformComponent) mgl32.Vec3 {
+	resolution := VoxelResolutionOrDefault(vmc)
+	scale := mgl32.Vec3{1, 1, 1}
+	if tr != nil {
+		scale = tr.Scale
+	}
+	return mgl32.Vec3{
+		resolution * scale.X(),
+		resolution * scale.Y(),
+		resolution * scale.Z(),
+	}
 }

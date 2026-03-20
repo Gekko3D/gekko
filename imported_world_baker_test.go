@@ -196,3 +196,40 @@ func TestBakeImportedWorldFromScenePreservesAdjacentVoxelInstances(t *testing.T)
 		t.Fatalf("expected adjacent voxel x positions [0 1], got %+v", chunk.Voxels)
 	}
 }
+
+func TestBakeImportedWorldFromVoxReportsProgress(t *testing.T) {
+	voxFile := &VoxFile{
+		Models: []VoxModel{{
+			SizeX: 2,
+			SizeY: 1,
+			SizeZ: 1,
+			Voxels: []Voxel{
+				{X: 0, Y: 0, Z: 0, ColorIndex: 1},
+				{X: 1, Y: 0, Z: 0, ColorIndex: 2},
+			},
+		}},
+	}
+
+	var progressEvents []ImportedWorldBakeProgress
+	_, err := BakeImportedWorldFromVoxWithProgress(voxFile, ImportedWorldBakeConfig{
+		WorldID:           "progress_test",
+		ChunkSize:         32,
+		VoxelResolution:   1,
+		NormalizeToOrigin: true,
+	}, func(progress ImportedWorldBakeProgress) {
+		progressEvents = append(progressEvents, progress)
+	})
+	if err != nil {
+		t.Fatalf("BakeImportedWorldFromVoxWithProgress failed: %v", err)
+	}
+	if len(progressEvents) == 0 {
+		t.Fatal("expected progress events during bake")
+	}
+	last := progressEvents[len(progressEvents)-1]
+	if last.Fraction < 1 {
+		t.Fatalf("expected final progress fraction to reach completion, got %+v", last)
+	}
+	if last.Message == "" {
+		t.Fatalf("expected final progress message, got %+v", last)
+	}
+}

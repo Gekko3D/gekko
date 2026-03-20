@@ -4,7 +4,6 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-
 type DestructionEvent struct {
 	Entity EntityId
 	Center mgl32.Vec3 // World-space center of destruction
@@ -118,8 +117,8 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 	newMap.ID = voxObj.XBrickMap.ID
 
 	// Update the ECS component to match the new state.
-	// CRITICAL: We avoid direct mutation of voxObj.XBrickMap here. 
-	// Instead, we update the ECS component's CustomMap and let the 
+	// CRITICAL: We avoid direct mutation of voxObj.XBrickMap here.
+	// Instead, we update the ECS component's CustomMap and let the
 	// sync system in mod_voxelrt_client_systems.go detect the change.
 	originalVMC.CustomMap = newMap
 	cmd.AddComponents(event.Entity, &originalVMC)
@@ -152,7 +151,7 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 		centeredMap, localCenter := comp.Map.Center()
 
 		// Calculate world position: original position + (local center transformed to world)
-		vSize := VoxelSize
+		vSize := VoxelResolutionOrDefault(&originalVMC)
 		scaledLocalCenter := localCenter.Mul(vSize)
 		// Apply original entity's scale
 		scaledLocalCenter = scaledLocalCenter.Mul(originalTransform.Scale.X())
@@ -176,10 +175,11 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 				Scale:    originalTransform.Scale,
 			},
 			&VoxelModelComponent{
-				VoxelModel:   originalModel,
-				VoxelPalette: originalPalette,
-				CustomMap:    centeredMap,
-				PivotMode:    PivotModeCenter,
+				VoxelModel:      originalModel,
+				VoxelPalette:    originalPalette,
+				VoxelResolution: originalVMC.VoxelResolution,
+				CustomMap:       centeredMap,
+				PivotMode:       PivotModeCenter,
 			},
 			&RigidBodyComponent{
 				Velocity:        vel,

@@ -42,7 +42,7 @@ type LevelDef struct {
 	Name             string               `json:"name"`
 	Tags             []string             `json:"tags,omitempty"`
 	ChunkSize        int                  `json:"chunk_size,omitempty"`
-	StreamingRadius  int                  `json:"streaming_radius,omitempty"`
+	VoxelResolution  float32              `json:"voxel_resolution,omitempty"`
 	Terrain          *LevelTerrainDef     `json:"terrain,omitempty"`
 	BaseWorld        *LevelBaseWorldDef   `json:"base_world,omitempty"`
 	Placements       []LevelPlacementDef  `json:"placements,omitempty"`
@@ -117,7 +117,7 @@ func NewLevelDef(name string) *LevelDef {
 		SchemaVersion:   CurrentLevelSchemaVersion,
 		Name:            name,
 		ChunkSize:       32,
-		StreamingRadius: 4,
+		VoxelResolution: 1,
 	}
 	EnsureLevelIDs(def)
 	return def
@@ -150,6 +150,12 @@ func EnsureLevelIDs(def *LevelDef) {
 	}
 	if def.SchemaVersion == 0 {
 		def.SchemaVersion = CurrentLevelSchemaVersion
+	}
+	if def.ChunkSize == 0 {
+		def.ChunkSize = 32
+	}
+	if def.VoxelResolution == 0 {
+		def.VoxelResolution = 1
 	}
 	for i := range def.Placements {
 		if def.Placements[i].ID == "" {

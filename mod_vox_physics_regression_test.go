@@ -117,6 +117,43 @@ func TestVoxPhysicsPreCalcSystem_AssetGridUsesPerEntityScale(t *testing.T) {
 	}
 }
 
+func TestVoxPhysicsPreCalcSystem_UsesVoxelResolutionOverride(t *testing.T) {
+	cmd, server, cache := newVoxelPhysicsPrecalcTestHarness()
+
+	assetID := rootassets.NewID()
+	server.voxModels[assetID] = VoxelModelAsset{
+		VoxModel: VoxModel{
+			SizeX: 1,
+			SizeY: 1,
+			SizeZ: 1,
+			Voxels: []Voxel{{
+				X:          0,
+				Y:          0,
+				Z:          0,
+				ColorIndex: 1,
+			}},
+		},
+	}
+
+	eid := cmd.AddEntity(
+		VoxelModelComponent{VoxelModel: assetID, VoxelResolution: 0.25},
+		RigidBodyComponent{Mass: 1},
+		TransformComponent{Scale: mgl32.Vec3{1, 1, 1}},
+	)
+	cmd.app.FlushCommands()
+
+	VoxPhysicsPreCalcSystem(cmd, server, nil, cache)
+	cmd.app.FlushCommands()
+
+	model := mustPhysicsModel(t, cmd, eid)
+	if model.Grid == nil {
+		t.Fatal("expected asset-backed entity to receive voxel grid")
+	}
+	if got, want := model.Grid.VoxelScale(), (mgl32.Vec3{0.25, 0.25, 0.25}); got != want {
+		t.Fatalf("expected override voxel scale %v, got %v", want, got)
+	}
+}
+
 func TestVoxPhysicsPreCalcSystem_RebuildsWhenScaleChanges(t *testing.T) {
 	cmd, server, cache := newVoxelPhysicsPrecalcTestHarness()
 

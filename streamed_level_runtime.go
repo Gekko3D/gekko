@@ -38,6 +38,7 @@ type PostSpawnTerrainHook func(cmd *Commands, ctx PostSpawnTerrainContext)
 type StreamedLevelRuntimeConfig struct {
 	LevelPath          string
 	Loader             *RuntimeContentLoader
+	StreamingRadius    int
 	MaxVolumeInstances int
 	TerrainGroupID     uint32
 	AutoSpawnPlayer    bool
@@ -206,11 +207,11 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		&AuthoredLevelRootComponent{LevelID: level.ID},
 	)
 
-	chunkSize := float32(level.ChunkSize)
+	chunkSize := float32(level.ChunkSize) * level.VoxelResolution
 	if chunkSize <= 0 {
 		chunkSize = 32
 	}
-	streamingRadius := level.StreamingRadius
+	streamingRadius := cfg.StreamingRadius
 	if streamingRadius < 0 {
 		streamingRadius = 0
 	}
@@ -267,9 +268,13 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			state.InitErr = err
 			return err
 		}
-		chunkWorldSize := float32(manifest.ChunkSize) * manifest.VoxelResolution * VoxelSize
-		if absf(chunkWorldSize-chunkSize) > 1e-4 {
-			err = fmt.Errorf("terrain chunk world size %.4f does not match level chunk size %.4f", chunkWorldSize, chunkSize)
+		if manifest.ChunkSize != level.ChunkSize {
+			err = fmt.Errorf("terrain chunk size %d does not match level chunk size %d", manifest.ChunkSize, level.ChunkSize)
+			state.InitErr = err
+			return err
+		}
+		if absf(manifest.VoxelResolution-level.VoxelResolution) > 1e-4 {
+			err = fmt.Errorf("terrain voxel size %.4f does not match level voxel size %.4f", manifest.VoxelResolution, level.VoxelResolution)
 			state.InitErr = err
 			return err
 		}
@@ -288,9 +293,13 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			state.InitErr = err
 			return err
 		}
-		chunkWorldSize := float32(manifest.ChunkSize) * manifest.VoxelResolution * VoxelSize
-		if absf(chunkWorldSize-chunkSize) > 1e-4 {
-			err = fmt.Errorf("base world chunk world size %.4f does not match level chunk size %.4f", chunkWorldSize, chunkSize)
+		if manifest.ChunkSize != level.ChunkSize {
+			err = fmt.Errorf("base world chunk size %d does not match level chunk size %d", manifest.ChunkSize, level.ChunkSize)
+			state.InitErr = err
+			return err
+		}
+		if absf(manifest.VoxelResolution-level.VoxelResolution) > 1e-4 {
+			err = fmt.Errorf("base world voxel size %.4f does not match level voxel size %.4f", manifest.VoxelResolution, level.VoxelResolution)
 			state.InitErr = err
 			return err
 		}
@@ -857,12 +866,20 @@ func isVoxelMapDirty(xbm *volume.XBrickMap) bool {
 }
 
 func voxelResolutionForEntity(cmd *Commands, eid EntityId) float32 {
+	var vmc *VoxelModelComponent
 	for _, comp := range cmd.GetAllComponents(eid) {
+		if typed, ok := comp.(*VoxelModelComponent); ok {
+			vmc = typed
+		}
+		if typed, ok := comp.(VoxelModelComponent); ok {
+			copy := typed
+			vmc = &copy
+		}
 		if tr, ok := comp.(*TransformComponent); ok {
-			return tr.Scale.X()
+			return VoxelResolutionOrDefault(vmc) * tr.Scale.X()
 		}
 		if tr, ok := comp.(TransformComponent); ok {
-			return tr.Scale.X()
+			return VoxelResolutionOrDefault(vmc) * tr.Scale.X()
 		}
 	}
 	return 1

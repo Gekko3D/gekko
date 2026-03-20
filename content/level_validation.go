@@ -99,7 +99,7 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		validatePlacementVolume(&result, volume, opts)
 	}
 
-	validateLevelTerrain(&result, def.Terrain, opts)
+	validateLevelTerrain(&result, def, opts)
 	validateLevelBaseWorld(&result, def, opts)
 	validateShooterLevelRequirements(&result, def, opts)
 
@@ -239,10 +239,11 @@ func validatePlacementVolume(result *LevelValidationResult, volume PlacementVolu
 	}
 }
 
-func validateLevelTerrain(result *LevelValidationResult, terrain *LevelTerrainDef, opts LevelValidationOptions) {
-	if terrain == nil {
+func validateLevelTerrain(result *LevelValidationResult, level *LevelDef, opts LevelValidationOptions) {
+	if level == nil || level.Terrain == nil {
 		return
 	}
+	terrain := level.Terrain
 	if terrain.Kind != TerrainKindHeightfield {
 		result.addError("invalid_terrain_kind", fmt.Sprintf("unsupported terrain kind %q", terrain.Kind), "", "", "", "", "", "")
 	}
@@ -270,6 +271,12 @@ func validateLevelTerrain(result *LevelValidationResult, terrain *LevelTerrainDe
 	terrainValidation := ValidateTerrainSource(terrainDef, TerrainValidationOptions{DocumentPath: resolvedPath})
 	for _, issue := range terrainValidation.Issues {
 		result.addError("invalid_terrain_source", issue.Message, "", "", "", "", "", "")
+	}
+	if level.ChunkSize > 0 && terrainDef.ChunkSize != level.ChunkSize {
+		result.addError("terrain_chunk_size_mismatch", fmt.Sprintf("terrain chunk size %d does not match level chunk size %d", terrainDef.ChunkSize, level.ChunkSize), "", "", "", "", "", "")
+	}
+	if level.VoxelResolution > 0 && absLevelFloat32(terrainDef.VoxelResolution-level.VoxelResolution) > 1e-4 {
+		result.addError("terrain_voxel_resolution_mismatch", fmt.Sprintf("terrain voxel size %.4f does not match level voxel size %.4f", terrainDef.VoxelResolution, level.VoxelResolution), "", "", "", "", "", "")
 	}
 }
 
@@ -303,9 +310,11 @@ func validateLevelBaseWorld(result *LevelValidationResult, def *LevelDef, opts L
 	for _, issue := range validation.Issues {
 		result.addError(issue.Code, issue.Message, "", "", "", "", "", baseWorld.ManifestPath)
 	}
-	chunkWorldSize := float32(importedWorld.ChunkSize) * importedWorld.VoxelResolution * opts.RuntimeVoxelSize
-	if def.ChunkSize > 0 && absLevelFloat32(chunkWorldSize-float32(def.ChunkSize)) > 1e-4 {
-		result.addError("base_world_chunk_size_mismatch", fmt.Sprintf("base world chunk world size %.4f does not match level chunk size %d", chunkWorldSize, def.ChunkSize), "", "", "", "", "", baseWorld.ManifestPath)
+	if def.ChunkSize > 0 && importedWorld.ChunkSize != def.ChunkSize {
+		result.addError("base_world_chunk_size_mismatch", fmt.Sprintf("base world chunk size %d does not match level chunk size %d", importedWorld.ChunkSize, def.ChunkSize), "", "", "", "", "", baseWorld.ManifestPath)
+	}
+	if def.VoxelResolution > 0 && absLevelFloat32(importedWorld.VoxelResolution-def.VoxelResolution) > 1e-4 {
+		result.addError("base_world_voxel_resolution_mismatch", fmt.Sprintf("base world voxel size %.4f does not match level voxel size %.4f", importedWorld.VoxelResolution, def.VoxelResolution), "", "", "", "", "", baseWorld.ManifestPath)
 	}
 }
 
@@ -354,8 +363,8 @@ func validateShooterMarkerPlacement(result *LevelValidationResult, def *LevelDef
 	for _, entry := range manifest.Entries {
 		entries[entry.Coord] = entry
 	}
-	chunkWorldSize := float32(manifest.ChunkSize) * manifest.VoxelResolution * opts.RuntimeVoxelSize
-	voxelWorldSize := manifest.VoxelResolution * opts.RuntimeVoxelSize
+	chunkWorldSize := float32(manifest.ChunkSize) * manifest.VoxelResolution
+	voxelWorldSize := manifest.VoxelResolution
 	if chunkWorldSize <= 0 || voxelWorldSize <= 0 {
 		return
 	}

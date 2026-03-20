@@ -35,7 +35,7 @@ PassLoop:
 			// Get parent's world transform
 			allComps := cmd.GetAllComponents(parent.Entity)
 			var parentWorld *TransformComponent
-			var isVoxel bool
+			var parentVoxel *VoxelModelComponent
 			for _, c := range allComps {
 				if pw, ok := c.(*TransformComponent); ok {
 					parentWorld = pw
@@ -44,11 +44,12 @@ PassLoop:
 					tmp := pw
 					parentWorld = &tmp
 				}
-				if _, ok := c.(*VoxelModelComponent); ok {
-					isVoxel = true
+				if vmc, ok := c.(*VoxelModelComponent); ok {
+					parentVoxel = vmc
 				}
-				if _, ok := c.(VoxelModelComponent); ok {
-					isVoxel = true
+				if vmc, ok := c.(VoxelModelComponent); ok {
+					tmp := vmc
+					parentVoxel = &tmp
 				}
 			}
 
@@ -57,8 +58,8 @@ PassLoop:
 				// If parent is a VoxelModel, its Pivot is in unscaled voxel units, so we must scale it to world units.
 				// VoxelSize is in world units (e.g. 0.1)
 				vSize := float32(1.0)
-				if isVoxel {
-					vSize = VoxelSize
+				if parentVoxel != nil {
+					vSize = VoxelResolutionOrDefault(parentVoxel)
 				}
 
 				scaledPivot := mgl32.Vec3{

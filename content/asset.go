@@ -2,7 +2,10 @@ package content
 
 import "github.com/google/uuid"
 
-const CurrentAssetSchemaVersion = 1
+const (
+	CurrentAssetSchemaVersion = 2
+	DefaultAssetVoxelSize     = 0.1
+)
 
 type Vec3 [3]float32
 type Vec4 [4]float32
@@ -54,13 +57,14 @@ type AssetDef struct {
 }
 
 type AssetPartDef struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	ParentID   string            `json:"parent_id,omitempty"`
-	Source     AssetSourceDef    `json:"source"`
-	Transform  AssetTransformDef `json:"transform"`
-	ModelScale float32           `json:"model_scale,omitempty"`
-	Tags       []string          `json:"tags,omitempty"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	ParentID        string            `json:"parent_id,omitempty"`
+	Source          AssetSourceDef    `json:"source"`
+	Transform       AssetTransformDef `json:"transform"`
+	VoxelResolution float32           `json:"voxel_resolution,omitempty"`
+	ModelScale      float32           `json:"model_scale,omitempty"`
+	Tags            []string          `json:"tags,omitempty"`
 }
 
 type AssetLightDef struct {
@@ -154,6 +158,7 @@ func EnsureAssetIDs(def *AssetDef) {
 		if def.Parts[i].ID == "" {
 			def.Parts[i].ID = newID()
 		}
+		normalizeAssetPart(&def.Parts[i])
 	}
 	for i := range def.Lights {
 		if def.Lights[i].ID == "" {
@@ -169,6 +174,35 @@ func EnsureAssetIDs(def *AssetDef) {
 		if def.Markers[i].ID == "" {
 			def.Markers[i].ID = newID()
 		}
+	}
+}
+
+func NormalizeAssetDef(def *AssetDef) {
+	EnsureAssetIDs(def)
+	if def == nil {
+		return
+	}
+	def.SchemaVersion = CurrentAssetSchemaVersion
+}
+
+func AssetPartUsesVoxelSource(part AssetPartDef) bool {
+	switch part.Source.Kind {
+	case AssetSourceKindVoxModel, AssetSourceKindVoxSceneNode, AssetSourceKindProceduralPrimitive:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeAssetPart(part *AssetPartDef) {
+	if part == nil {
+		return
+	}
+	if part.ModelScale == 0 {
+		part.ModelScale = 1.0
+	}
+	if AssetPartUsesVoxelSource(*part) && part.VoxelResolution == 0 {
+		part.VoxelResolution = DefaultAssetVoxelSize
 	}
 }
 

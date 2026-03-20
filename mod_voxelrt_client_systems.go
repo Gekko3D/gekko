@@ -151,10 +151,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			state.RtApp.Scene.StructureRevision++ // Force hash grid rebuild
 		}
 
-		vSize := VoxelSize
-
-		scale := transform.Scale
-		obj.Transform.Scale = mgl32.Vec3{vSize * scale.X(), vSize * scale.Y(), vSize * scale.Z()}
+		obj.Transform.Scale = EffectiveVoxelScale(vox, transform)
 
 		// Compute and apply Pivot
 		switch vox.PivotMode {
