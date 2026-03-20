@@ -51,13 +51,8 @@ func (s *VoxelRtState) buildMaterialTable(gekkoPalette *VoxelPaletteAsset) []cor
 				if f, ok := vMat.Property["_flux"].(float32); ok {
 					flux = f
 				}
-				power := emit * flux
-				mat.Emissive = [4]uint8{
-					uint8(min(255, float32(color[0])*power)),
-					uint8(min(255, float32(color[1])*power)),
-					uint8(min(255, float32(color[2])*power)),
-					255,
-				}
+				mat.Emissive = [4]uint8{color[0], color[1], color[2], 255}
+				mat.Emission = emit * flux
 			}
 		}
 
@@ -66,13 +61,11 @@ func (s *VoxelRtState) buildMaterialTable(gekkoPalette *VoxelPaletteAsset) []cor
 			mat.Metalness = gekkoPalette.Metalness
 			mat.IOR = gekkoPalette.IOR
 			if gekkoPalette.Emission > 0 {
-				power := gekkoPalette.Emission
-				mat.Emissive = [4]uint8{
-					uint8(min(255, float32(color[0])*power)),
-					uint8(min(255, float32(color[1])*power)),
-					uint8(min(255, float32(color[2])*power)),
-					255,
-				}
+				mat.Emissive = [4]uint8{color[0], color[1], color[2], 255}
+				mat.Emission = gekkoPalette.Emission
+			}
+			if gekkoPalette.Transparency > mat.Transparency {
+				mat.Transparency = gekkoPalette.Transparency
 			}
 		}
 

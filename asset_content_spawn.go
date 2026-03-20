@@ -251,7 +251,7 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef, d
 		default:
 			return AssetId{}, AssetId{}, fmt.Errorf("unsupported procedural primitive %q", part.Source.Primitive)
 		}
-		palette := assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1)
+		palette := assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1.5)
 		return model, palette, nil
 	case content.AssetSourceKindVoxSceneNode:
 		voxFile, err := LoadVoxFile(sourcePath)

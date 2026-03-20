@@ -336,19 +336,81 @@ fn estimate_thickness_ws(start_t: f32, ray: Ray, t_max_obj: f32, params: ObjectP
 
 // ============== Traversal (WBOIT accumulation) ==============
 
+const MIN_ROUGHNESS: f32 = 0.045;
+const PBR_EPSILON: f32 = 1e-4;
+
+fn saturate(v: f32) -> f32 {
+  return clamp(v, 0.0, 1.0);
+}
+
+fn srgb_channel_to_linear(v: f32) -> f32 {
+  if (v <= 0.04045) {
+    return v / 12.92;
+  }
+  return pow((v + 0.055) / 1.055, 2.4);
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+  return vec3<f32>(
+    srgb_channel_to_linear(c.x),
+    srgb_channel_to_linear(c.y),
+    srgb_channel_to_linear(c.z),
+  );
+}
+
+fn dielectric_f0_from_ior(ior_input: f32) -> vec3<f32> {
+  var ior = ior_input;
+  if (ior <= 1.01) {
+    ior = 1.5;
+  }
+  let reflectance = (ior - 1.0) / (ior + 1.0);
+  return vec3<f32>(reflectance * reflectance);
+}
+
+fn fresnel_schlick(cos_theta: f32, F0: vec3<f32>) -> vec3<f32> {
+  return F0 + (1.0 - F0) * pow(saturate(1.0 - cos_theta), 5.0);
+}
+
+fn fresnel_schlick_roughness(cos_theta: f32, F0: vec3<f32>, roughness: f32) -> vec3<f32> {
+  return F0 + (max(vec3<f32>(1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cos_theta), 5.0);
+}
+
+fn distribution_ggx(NdotH: f32, roughness: f32) -> f32 {
+  let a = max(roughness, MIN_ROUGHNESS);
+  let alpha = a * a;
+  let alpha2 = alpha * alpha;
+  let denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
+  return alpha2 / max(PI * denom * denom, PBR_EPSILON);
+}
+
+fn geometry_schlick_ggx(NdotX: f32, roughness: f32) -> f32 {
+  let r = roughness + 1.0;
+  let k = (r * r) * 0.125;
+  return NdotX / max(NdotX * (1.0 - k) + k, PBR_EPSILON);
+}
+
+fn geometry_smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
+  return geometry_schlick_ggx(NdotV, roughness) * geometry_schlick_ggx(NdotL, roughness);
+}
+
 fn calculate_lighting(
   p: vec3<f32>,
   n: vec3<f32>,
   base_color: vec3<f32>,
   roughness: f32,
   metalness: f32,
+  ior: f32,
   emissive: vec3<f32>,
   receiver_shadow_group_id: u32,
   receiver_shadow_seam_epsilon: f32
 ) -> vec3<f32> {
   let V = normalize(uCamera.cam_pos.xyz - p);
-  let F0 = mix(vec3<f32>(0.04), base_color, metalness);
-  var total_light = uCamera.ambient_color.xyz * mix(base_color, F0, metalness) + emissive;
+  let NdotV = max(dot(n, V), 0.0);
+  let dielectric_f0 = dielectric_f0_from_ior(ior);
+  let F0 = mix(dielectric_f0, base_color, metalness);
+  let ambient_fresnel = fresnel_schlick_roughness(NdotV, F0, roughness);
+  let ambient_kd = (vec3<f32>(1.0) - ambient_fresnel) * (1.0 - metalness);
+  var total_light = (ambient_kd * base_color + ambient_fresnel) * uCamera.ambient_color.xyz + emissive;
   
   for (var i = 0u; i < uCamera.num_lights; i++) {
     let light = lights[i];
@@ -468,19 +530,24 @@ fn calculate_lighting(
     }
 
     let NdotL = max(dot(n, L), 0.0);
+    if (NdotL <= 0.0 || NdotV <= 0.0) {
+      continue;
+    }
+
     let H = normalize(V + L);
     let NdotH = max(dot(n, H), 0.0);
-    let NdotV = max(dot(n, V), 0.0);
-    let fresnel = F0 + (1.0 - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
-    
-    let diffuse = base_color * (1.0 - fresnel) * (1.0 - metalness) * NdotL / PI;
-    
-    // Specular (normalized Blinn-Phong)
-    let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
-    let normalization = (spec_power + 2.0) / (8.0 * PI);
-    let specular = fresnel * pow(NdotH, spec_power) * normalization;
-    
-    total_light += (diffuse + specular) * light.color.xyz * attenuation * light.color.w;
+    let HdotV = max(dot(H, V), 0.0);
+    let rough = max(roughness, MIN_ROUGHNESS);
+    let fresnel = fresnel_schlick(HdotV, F0);
+    let D = distribution_ggx(NdotH, rough);
+    let G = geometry_smith(NdotV, NdotL, rough);
+    let specular = (D * G * fresnel) / max(4.0 * NdotV * NdotL, PBR_EPSILON);
+    let kS = fresnel;
+    let kD = (vec3<f32>(1.0) - kS) * (1.0 - metalness);
+    let diffuse = kD * base_color / PI;
+    let radiance = light.color.xyz * attenuation * light.color.w;
+
+    total_light += (diffuse + specular) * radiance * NdotL;
   }
   
   return total_light;
@@ -597,8 +664,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                         let palette_idx = b_atlas;
                         let mat_base = params.material_table_base;
                         let mat_idx = mat_base + palette_idx * 4u;
-                        let base_col = materials[mat_idx].xyz;
-                        let emissive = materials[mat_idx + 1u].xyz;
+                        let base_col = srgb_to_linear(materials[mat_idx].xyz);
+                        let emissive = srgb_to_linear(materials[mat_idx + 1u].xyz) * max(materials[mat_idx + 3u].x, 0.0);
                         let pbr = materials[mat_idx + 2u];
                         let trans = clamp(pbr.w, 0.0, 1.0);
                         if (trans > 0.001) {
@@ -625,7 +692,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                               let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                               let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
+                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
                               let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
                               accum_rgb += color * alpha_step * w;
                               accum_a += alpha_step;
@@ -666,8 +733,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                             if (palette_idx != 0u) {
                               let mat_base = params.material_table_base;
                               let mat_idx = mat_base + palette_idx * 4u;
-                              let base_col = materials[mat_idx].xyz;
-                              let emissive = materials[mat_idx + 1u].xyz;
+                              let base_col = srgb_to_linear(materials[mat_idx].xyz);
+                              let emissive = srgb_to_linear(materials[mat_idx + 1u].xyz) * max(materials[mat_idx + 3u].x, 0.0);
                               let pbr = materials[mat_idx + 2u];
                               let trans = clamp(pbr.w, 0.0, 1.0);
                               if (trans > 0.001) {
@@ -684,7 +751,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                    let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                                    let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                    let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                                   let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
+                                   let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
                                    let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
                                    accum_rgb += color * alpha_step * w;
                                    accum_a += alpha_step;

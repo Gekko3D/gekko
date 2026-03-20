@@ -165,6 +165,10 @@ func (server *AssetServer) CreateSimplePalette(rgba [4]uint8) AssetId {
 }
 
 func (server *AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness, emission, ior float32) AssetId {
+	return server.CreatePBRPaletteWithTransparency(rgba, roughness, metalness, emission, ior, 0.0)
+}
+
+func (server *AssetServer) CreatePBRPaletteWithTransparency(rgba [4]uint8, roughness, metalness, emission, ior, transparency float32) AssetId {
 	id := makeAssetId()
 	var p VoxPalette
 	for i := range p {
@@ -179,12 +183,13 @@ func (server *AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness,
 
 	server.mu.Lock()
 	server.voxPalettes[id] = VoxelPaletteAsset{
-		VoxPalette: p,
-		IsPBR:      true,
-		Roughness:  roughness,
-		Metalness:  metalness,
-		Emission:   emission,
-		IOR:        ior,
+		VoxPalette:   p,
+		IsPBR:        true,
+		Roughness:    roughness,
+		Metalness:    metalness,
+		Emission:     emission,
+		IOR:          ior,
+		Transparency: transparency,
 	}
 	server.mu.Unlock()
 	return id

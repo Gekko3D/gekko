@@ -59,19 +59,76 @@ struct Ray {
 
 // ============== LIGHTING CALCULATION ==============
 
+const PI: f32 = 3.14159265359;
+const MIN_ROUGHNESS: f32 = 0.045;
+const PBR_EPSILON: f32 = 1e-4;
+
+fn saturate(v: f32) -> f32 {
+    return clamp(v, 0.0, 1.0);
+}
+
+fn srgb_channel_to_linear(v: f32) -> f32 {
+    if (v <= 0.04045) {
+        return v / 12.92;
+    }
+    return pow((v + 0.055) / 1.055, 2.4);
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        srgb_channel_to_linear(c.x),
+        srgb_channel_to_linear(c.y),
+        srgb_channel_to_linear(c.z),
+    );
+}
+
+fn dielectric_f0_from_ior(ior_input: f32) -> vec3<f32> {
+    var ior = ior_input;
+    if (ior <= 1.01) {
+        ior = 1.5;
+    }
+    let reflectance = (ior - 1.0) / (ior + 1.0);
+    return vec3<f32>(reflectance * reflectance);
+}
+
+fn fresnel_schlick(cos_theta: f32, F0: vec3<f32>) -> vec3<f32> {
+    return F0 + (1.0 - F0) * pow(saturate(1.0 - cos_theta), 5.0);
+}
+
+fn fresnel_schlick_roughness(cos_theta: f32, F0: vec3<f32>, roughness: f32) -> vec3<f32> {
+    return F0 + (max(vec3<f32>(1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cos_theta), 5.0);
+}
+
+fn distribution_ggx(NdotH: f32, roughness: f32) -> f32 {
+    let a = max(roughness, MIN_ROUGHNESS);
+    let alpha = a * a;
+    let alpha2 = alpha * alpha;
+    let denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
+    return alpha2 / max(PI * denom * denom, PBR_EPSILON);
+}
+
+fn geometry_schlick_ggx(NdotX: f32, roughness: f32) -> f32 {
+    let r = roughness + 1.0;
+    let k = (r * r) * 0.125;
+    return NdotX / max(NdotX * (1.0 - k) + k, PBR_EPSILON);
+}
+
+fn geometry_smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
+    return geometry_schlick_ggx(NdotV, roughness) * geometry_schlick_ggx(NdotL, roughness);
+}
+
 fn calculate_lighting(
     hit_pos: vec3<f32>, 
     normal: vec3<f32>, 
     view_dir: vec3<f32>,
     base_color: vec3<f32>,
-    emissive: vec3<f32>,
     roughness: f32,
     metalness: f32,
+    ior: f32,
     receiver_shadow_group_id: u32,
     receiver_shadow_seam_epsilon: f32,
     light_idx: u32
 ) -> vec3<f32> {
-    let diffuse_color = base_color * (1.0 - metalness);
     let light = lights[light_idx];
     var L = vec3<f32>(0.0);
     var attenuation = 1.0;
@@ -183,23 +240,32 @@ fn calculate_lighting(
             }
         }
 
-        let PI = 3.14159265359;
-        let half_dir = normalize(L + view_dir);
         let NdotL = max(dot(normal, L), 0.0);
-        let NdotH = max(dot(normal, half_dir), 0.0);
-        
-        let F0 = mix(vec3(0.04), base_color, metalness);
-        // Fresnel Schlick (using NdotV for uniform per-voxel brightness)
         let NdotV = max(dot(normal, view_dir), 0.0);
-        let F = F0 + (1.0 - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
+        if (NdotL <= 0.0 || NdotV <= 0.0) {
+            return vec3<f32>(0.0);
+        }
 
-        // Blinn-Phong Specular with normalization for energy conservation
-        let spec_power = pow(2.0, (1.0 - roughness) * 10.0 + 1.0);
-        let normalization = (spec_power + 2.0) / (8.0 * PI);
-        let specular = F * pow(NdotH, spec_power) * normalization;
+        let half_dir = normalize(L + view_dir);
+        let NdotH = max(dot(normal, half_dir), 0.0);
+        let HdotV = max(dot(half_dir, view_dir), 0.0);
+        let rough = max(roughness, MIN_ROUGHNESS);
 
-        let diffuse = base_color * (1.0 - F) * (1.0 - metalness) * NdotL / PI;
-        return (diffuse + specular) * light.color.xyz * attenuation * light.color.w;
+        let dielectric_f0 = dielectric_f0_from_ior(ior);
+        let F0 = mix(dielectric_f0, base_color, metalness);
+        let F = fresnel_schlick(HdotV, F0);
+        let D = distribution_ggx(NdotH, rough);
+        let G = geometry_smith(NdotV, NdotL, rough);
+
+        let numerator = D * G * F;
+        let denominator = max(4.0 * NdotV * NdotL, PBR_EPSILON);
+        let specular = numerator / denominator;
+
+        let kS = F;
+        let kD = (vec3<f32>(1.0) - kS) * (1.0 - metalness);
+        let diffuse = kD * base_color / PI;
+        let radiance = light.color.xyz * attenuation * light.color.w;
+        return (diffuse + specular) * radiance * NdotL;
     }
     return vec3<f32>(0.0);
 }
@@ -258,25 +324,31 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     let mat_idx = material_base + palette_idx * 4u;
     let mat_packed = materials[mat_idx];
-    let base_color = mat_packed.xyz;
-    let emissive = materials[mat_idx + 1u].xyz;
+    let base_color = srgb_to_linear(mat_packed.xyz);
+    let emissive_color = srgb_to_linear(materials[mat_idx + 1u].xyz);
     let pbr_params = materials[mat_idx + 2u];
+    let material_extra = materials[mat_idx + 3u];
     let roughness = clamp(pbr_params.x, 0.0, 1.0);
     let metalness = clamp(pbr_params.y, 0.0, 1.0);
+    let ior = pbr_params.z;
+    let emissive = emissive_color * max(material_extra.x, 0.0);
     
     // Use stored voxel center from G-Buffer to ensure uniform lighting per voxel (blocky look)
     let hit_pos_ws = textureLoad(in_position, global_id.xy, 0).xyz;
     
     let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
-    
-    let F0 = mix(vec3(0.04), base_color, metalness);
-    var final_color = mix(base_color, F0, metalness) * camera.ambient_color.xyz + emissive;
+    let NdotV = max(dot(normal, view_dir), 0.0);
+    let dielectric_f0 = dielectric_f0_from_ior(ior);
+    let F0 = mix(dielectric_f0, base_color, metalness);
+    let ambient_fresnel = fresnel_schlick_roughness(NdotV, F0, roughness);
+    let ambient_kd = (vec3<f32>(1.0) - ambient_fresnel) * (1.0 - metalness);
+    var final_color = (ambient_kd * base_color + ambient_fresnel) * camera.ambient_color.xyz + emissive;
     
     
     // Loop through all lights
     let num_lights = camera.num_lights;
     for (var i = 0u; i < num_lights; i++) {
-        final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, emissive, roughness, metalness, receiver_shadow_group_id, receiver_shadow_seam_epsilon, i);
+        final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, roughness, metalness, ior, receiver_shadow_group_id, receiver_shadow_seam_epsilon, i);
     }
     
     // Render modes

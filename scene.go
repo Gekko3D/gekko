@@ -133,12 +133,13 @@ func spawnVoxelObject(cmd *Commands, assets *AssetServer, def VoxelObjectDef) {
 			model = assets.CreatePyramidModel(b, h, def.ModelScale)
 		}
 
-		palette = assets.CreatePBRPalette(
+		palette = assets.CreatePBRPaletteWithTransparency(
 			def.Procedural.Color,
 			def.Procedural.PBR.Roughness,
 			def.Procedural.PBR.Metallic,
 			def.Procedural.PBR.Emissive,
 			def.Procedural.PBR.IoR,
+			def.Procedural.PBR.Transparency,
 		)
 	} else {
 		// Load from .vox file
