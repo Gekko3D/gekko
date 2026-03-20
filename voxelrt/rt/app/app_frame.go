@@ -79,8 +79,12 @@ func (a *App) Resize(w, h int) {
 		a.BufferManager.CreateGBufferTextures(uint32(w), uint32(h))
 		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
 		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
+		a.BufferManager.StorageView = a.StorageView
 		// Ensure shadow bind groups remain valid after any resource changes
 		a.BufferManager.CreateShadowBindGroups()
+		if a.TransparentPipeline != nil {
+			a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
+		}
 
 		// Recreate particle pipeline for new swapchain format
 		a.setupParticlesPipeline()
@@ -175,6 +179,7 @@ func (a *App) Update() {
 
 		// Transparent pass too
 		if a.TransparentPipeline != nil {
+			a.BufferManager.StorageView = a.StorageView
 			a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
 		}
 		if a.CAVolumePipeline != nil {

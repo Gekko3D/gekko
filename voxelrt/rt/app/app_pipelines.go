@@ -433,7 +433,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 		return
 	}
 
-	// Group 2: GBuffer inputs (Depth RGBA32F, Material RGBA32F) + Shadow Maps
+	// Group 2: GBuffer inputs + shadow maps + lit opaque color for refraction
 	bgl2, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "TransparentOverlay BGL2",
 		Entries: []wgpu.BindGroupLayoutEntry{
@@ -459,6 +459,14 @@ func (a *App) setupTransparentOverlayPipeline() {
 				Texture: wgpu.TextureBindingLayout{
 					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
 					ViewDimension: wgpu.TextureViewDimension2DArray,
+				},
+			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
 		},

@@ -40,6 +40,8 @@ type StreamedLevelRuntimeConfig struct {
 	Loader             *RuntimeContentLoader
 	MaxVolumeInstances int
 	TerrainGroupID     uint32
+	AutoSpawnPlayer    bool
+	PlayerSpawnKind    string
 	PlacementHooks     []PostSpawnPlacementHook
 	TerrainHooks       []PostSpawnTerrainHook
 }
@@ -65,6 +67,7 @@ type StreamedLevelRuntimeState struct {
 	BaseWorldID               string
 	BaseWorldPalette          AssetId
 	BaseWorldCollisionEnabled bool
+	MarkerEntities            map[string]EntityId
 
 	DesiredChunks        map[ChunkCoord]struct{}
 	PendingLoads         map[ChunkCoord]struct{}
@@ -135,6 +138,7 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		ObjectChunk:          make(map[string]ChunkCoord),
 		TerrainEntries:       make(map[ChunkCoord]content.TerrainChunkEntryDef),
 		ImportedWorldEntries: make(map[ChunkCoord]content.ImportedWorldChunkEntryDef),
+		MarkerEntities:       make(map[string]EntityId),
 		placementOverrideMap: make(map[string]content.LevelTransformDef),
 		deletedPlacementIDs:  make(map[string]struct{}),
 		terrainOverrideMap:   make(map[string]content.TerrainChunkOverrideDef),
@@ -229,6 +233,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.BaseWorldID = ""
 	state.BaseWorldPalette = AssetId{}
 	state.BaseWorldCollisionEnabled = false
+	state.MarkerEntities = make(map[string]EntityId)
 	state.DesiredChunks = make(map[ChunkCoord]struct{})
 	state.PendingLoads = make(map[ChunkCoord]struct{})
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
@@ -311,6 +316,18 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	}
 
 	applyLevelEnvironment(cmd, level.Environment)
+	for _, marker := range level.Markers {
+		state.MarkerEntities[marker.ID] = spawnAuthoredLevelMarker(cmd, state.LevelRoot, level.ID, marker)
+	}
+	if cfg.AutoSpawnPlayer {
+		playerMarkerKind := cfg.PlayerSpawnKind
+		if playerMarkerKind == "" {
+			playerMarkerKind = content.LevelMarkerKindPlayerSpawn
+		}
+		if marker, ok := FindFirstLevelMarkerByKind(level, playerMarkerKind); ok {
+			SpawnGroundedPlayerAtMarker(cmd, marker)
+		}
+	}
 	cmd.app.FlushCommands()
 	return nil
 }

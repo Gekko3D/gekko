@@ -2,6 +2,7 @@ package content
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,7 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 
 	validateLevelTerrain(&result, def.Terrain, opts)
 	validateLevelBaseWorld(&result, def, opts)
+	validateShooterLevelRequirements(&result, def, opts)
 
 	return result
 }
@@ -307,9 +309,122 @@ func validateLevelBaseWorld(result *LevelValidationResult, def *LevelDef, opts L
 	}
 }
 
+func validateShooterLevelRequirements(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions) {
+	if def == nil || !levelNeedsShooterValidation(def) {
+		return
+	}
+	if def.BaseWorld == nil || strings.TrimSpace(def.BaseWorld.ManifestPath) == "" {
+		result.addError("missing_shooter_base_world", "shooter level requires an imported base world", "", "", "", "", "", "")
+		return
+	}
+	if _, ok := FindLevelMarkerByKind(def.Markers, LevelMarkerKindPlayerSpawn); !ok {
+		result.addError("missing_player_spawn", "shooter level requires a player_spawn marker", "", "", "", "", "", "")
+	}
+	validateShooterMarkerPlacement(result, def, opts)
+}
+
+func levelNeedsShooterValidation(def *LevelDef) bool {
+	if def == nil {
+		return false
+	}
+	for _, tag := range def.Tags {
+		if strings.EqualFold(strings.TrimSpace(tag), LevelTagShooter) {
+			return true
+		}
+	}
+	for _, marker := range def.Markers {
+		switch marker.Kind {
+		case LevelMarkerKindPlayerSpawn, LevelMarkerKindAISpawn, LevelMarkerKindPatrolPoint, LevelMarkerKindObjective, LevelMarkerKindExtract:
+			return true
+		}
+	}
+	return false
+}
+
+func validateShooterMarkerPlacement(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions) {
+	if def == nil || def.BaseWorld == nil || opts.DocumentPath == "" {
+		return
+	}
+	manifestPath := ResolveDocumentPath(def.BaseWorld.ManifestPath, opts.DocumentPath)
+	manifest, err := LoadImportedWorld(manifestPath)
+	if err != nil {
+		return
+	}
+	entries := make(map[TerrainChunkCoordDef]ImportedWorldChunkEntryDef, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		entries[entry.Coord] = entry
+	}
+	chunkWorldSize := float32(manifest.ChunkSize) * manifest.VoxelResolution * opts.RuntimeVoxelSize
+	voxelWorldSize := manifest.VoxelResolution * opts.RuntimeVoxelSize
+	if chunkWorldSize <= 0 || voxelWorldSize <= 0 {
+		return
+	}
+	chunkCache := make(map[TerrainChunkCoordDef]*ImportedWorldChunkDef)
+	for _, marker := range def.Markers {
+		position := marker.Transform.Position
+		chunkCoord := TerrainChunkCoordDef{
+			X: int(floorLevelFloat32(position[0] / chunkWorldSize)),
+			Y: int(floorLevelFloat32(position[1] / chunkWorldSize)),
+			Z: int(floorLevelFloat32(position[2] / chunkWorldSize)),
+		}
+		entry, ok := entries[chunkCoord]
+		if !ok {
+			result.addError("marker_out_of_bounds", fmt.Sprintf("marker %s sits outside imported base-world bounds", marker.ID), "", "", "", "", marker.ID, def.BaseWorld.ManifestPath)
+			continue
+		}
+		chunk := chunkCache[chunkCoord]
+		if chunk == nil && entry.NonEmptyVoxelCount > 0 {
+			chunkPath := ResolveImportedWorldChunkPath(entry, manifestPath)
+			chunk, err = LoadImportedWorldChunk(chunkPath)
+			if err != nil {
+				continue
+			}
+			chunkCache[chunkCoord] = chunk
+		}
+		if chunk == nil {
+			continue
+		}
+		localX := int(floorLevelFloat32((position[0] - float32(chunkCoord.X)*chunkWorldSize) / voxelWorldSize))
+		localY := int(floorLevelFloat32((position[1] - float32(chunkCoord.Y)*chunkWorldSize) / voxelWorldSize))
+		localZ := int(floorLevelFloat32((position[2] - float32(chunkCoord.Z)*chunkWorldSize) / voxelWorldSize))
+		if localX < 0 || localY < 0 || localZ < 0 || localX >= chunk.ChunkSize || localY >= chunk.ChunkSize || localZ >= chunk.ChunkSize {
+			result.addError("marker_out_of_bounds", fmt.Sprintf("marker %s resolves outside chunk bounds", marker.ID), "", "", "", "", marker.ID, def.BaseWorld.ManifestPath)
+			continue
+		}
+		if importedWorldChunkHasVoxel(chunk, localX, localY, localZ) {
+			result.addError("marker_inside_solid", fmt.Sprintf("marker %s is placed inside solid imported geometry", marker.ID), "", "", "", "", marker.ID, def.BaseWorld.ManifestPath)
+		}
+	}
+}
+
+func importedWorldChunkHasVoxel(chunk *ImportedWorldChunkDef, x, y, z int) bool {
+	if chunk == nil {
+		return false
+	}
+	for _, voxel := range chunk.Voxels {
+		if voxel.Value != 0 && voxel.X == x && voxel.Y == y && voxel.Z == z {
+			return true
+		}
+	}
+	return false
+}
+
+func FindLevelMarkerByKind(markers []LevelMarkerDef, kind string) (LevelMarkerDef, bool) {
+	for _, marker := range markers {
+		if marker.Kind == kind {
+			return marker, true
+		}
+	}
+	return LevelMarkerDef{}, false
+}
+
 func absLevelFloat32(v float32) float32 {
 	if v < 0 {
 		return -v
 	}
 	return v
+}
+
+func floorLevelFloat32(v float32) float32 {
+	return float32(math.Floor(float64(v)))
 }

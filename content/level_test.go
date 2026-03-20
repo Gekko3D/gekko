@@ -256,6 +256,77 @@ func TestValidateLevelRejectsInvalidBaseWorld(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "invalid_base_world_manifest_path")
 }
 
+func TestValidateLevelShooterRequiresPlayerSpawnAndClearMarkerPlacement(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "demo.gklevel")
+	worldPath := filepath.Join(root, "worlds", "demo.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "demo_chunks", "0_0_0.gkchunk")
+
+	if err := SaveImportedWorldChunk(chunkPath, &ImportedWorldChunkDef{
+		WorldID:         "world-a",
+		Coord:           TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Voxels: []ImportedWorldVoxelDef{
+			{X: 1, Y: 1, Z: 1, Value: 1},
+		},
+		NonEmptyVoxelCount: 1,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+	if err := SaveImportedWorld(worldPath, &ImportedWorldDef{
+		WorldID:         "world-a",
+		Kind:            ImportedWorldKindVoxelWorld,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Entries: []ImportedWorldChunkEntryDef{{
+			Coord:              TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkPath:          AuthorDocumentPath(chunkPath, worldPath),
+			NonEmptyVoxelCount: 1,
+		}},
+	}); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+
+	def := NewLevelDef("shooter")
+	def.ChunkSize = 16
+	def.Tags = []string{LevelTagShooter}
+	def.BaseWorld = &LevelBaseWorldDef{
+		Kind:         ImportedWorldKindVoxelWorld,
+		ManifestPath: filepath.Join("..", "worlds", "demo.gkworld"),
+	}
+	def.Markers = []LevelMarkerDef{{
+		ID:   "bad-spawn",
+		Name: "bad-spawn",
+		Kind: LevelMarkerKindAISpawn,
+		Transform: LevelTransformDef{
+			Position: Vec3{1.0 * 0.1, 1.0 * 0.1, 1.0 * 0.1},
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+	}}
+
+	result := ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
+	if !result.HasErrors() {
+		t.Fatal("expected shooter validation errors")
+	}
+	assertHasLevelValidationCode(t, result, "missing_player_spawn")
+	assertHasLevelValidationCode(t, result, "marker_inside_solid")
+
+	def.Markers = append(def.Markers, LevelMarkerDef{
+		ID:   "player-spawn",
+		Name: "player",
+		Kind: LevelMarkerKindPlayerSpawn,
+		Transform: LevelTransformDef{
+			Position: Vec3{0.4, 0.0, 0.4},
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+	})
+	result = ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
+	assertHasLevelValidationCode(t, result, "marker_inside_solid")
+}
+
 func TestValidateLevelRejectsInvalidPlacementVolumeAndAssetSet(t *testing.T) {
 	tmpDir := t.TempDir()
 	assetsDir := filepath.Join(tmpDir, "assets")

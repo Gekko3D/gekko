@@ -4,6 +4,9 @@ type Material struct {
 	BaseColor    [4]uint8 // RGBA
 	Emissive     [4]uint8 // RGBA
 	Emission     float32
+	Transmission float32
+	Density      float32
+	Refraction   float32
 	Roughness    float32
 	Metalness    float32
 	IOR          float32
@@ -19,6 +22,9 @@ func NewMaterial(baseColor [4]uint8, emissive [4]uint8) Material {
 		BaseColor:    baseColor,
 		Emissive:     emissive,
 		Emission:     emission,
+		Transmission: 0.0,
+		Density:      0.0,
+		Refraction:   0.0,
 		Roughness:    1.0,
 		Metalness:    0.0,
 		IOR:          1.5,
@@ -32,6 +38,9 @@ func DefaultMaterial() Material {
 		BaseColor:    [4]uint8{255, 255, 255, 255},
 		Emissive:     [4]uint8{0, 0, 0, 0},
 		Emission:     0.0,
+		Transmission: 0.0,
+		Density:      0.0,
+		Refraction:   0.0,
 		Roughness:    1.0,
 		Metalness:    0.0,
 		IOR:          1.5,

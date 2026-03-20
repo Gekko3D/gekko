@@ -24,6 +24,18 @@ const (
 	PlacementVolumeRuleModeDensity PlacementVolumeRuleMode = "density"
 )
 
+const (
+	LevelTagShooter = "shooter"
+)
+
+const (
+	LevelMarkerKindPlayerSpawn = "player_spawn"
+	LevelMarkerKindAISpawn     = "ai_spawn"
+	LevelMarkerKindPatrolPoint = "patrol_point"
+	LevelMarkerKindObjective   = "objective"
+	LevelMarkerKindExtract     = "extract_point"
+)
+
 type LevelDef struct {
 	ID               string               `json:"id"`
 	SchemaVersion    int                  `json:"schema_version"`

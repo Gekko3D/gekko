@@ -220,6 +220,7 @@ type GpuBufferManager struct {
 	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
 	TransparentBG1 *wgpu.BindGroup // voxel data buffers
 	TransparentBG2 *wgpu.BindGroup // gbuffer depth/material/shadows
+	StorageView    *wgpu.TextureView
 
 	// GPU cellular automata + volumetric rendering
 	CAVolumeBuf            *wgpu.Buffer
@@ -348,7 +349,7 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 // CreateTransparentOverlayBindGroups wires the overlay pass bind groups:
 // Group 0: camera (uniform) + instances (storage) + BVH nodes (storage)
 // Group 1: voxel data buffers (sector, brick, payload, object params, tree64, sector grid, sector grid params)
-// Group 2: gbuffer depth/material + shadow maps
+// Group 2: gbuffer depth/material + shadow maps + lit opaque color
 func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.RenderPipeline) {
 	if pipeline == nil {
 		return
@@ -394,6 +395,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 			{Binding: 0, TextureView: m.DepthView},
 			{Binding: 1, TextureView: m.MaterialView},
 			{Binding: 2, TextureView: m.ShadowMapView},
+			{Binding: 3, TextureView: m.StorageView},
 		},
 	})
 	if err != nil {

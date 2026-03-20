@@ -145,7 +145,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			materials = append(materials, float32ToBytes(mat.Metalness)...)
 			materials = append(materials, float32ToBytes(mat.IOR)...)
 			materials = append(materials, float32ToBytes(mat.Transparency)...)
-			materials = append(materials, vec4ToBytes([4]float32{mat.Emission, 0.0, 0.0, 0.0})...)
+			materials = append(materials, vec4ToBytes([4]float32{mat.Emission, mat.Transmission, mat.Density, mat.Refraction})...)
 		}
 		if len(materials) == 0 {
 			materials = make([]byte, 256*64)

@@ -24,6 +24,7 @@ type AuthoredLevelSpawnResult struct {
 	LevelID                 string
 	PlacementRootEntities   map[string]EntityId
 	TerrainChunkEntities    map[string]EntityId
+	MarkerEntities          map[string]EntityId
 	ExpandedVolumeInstances []content.PlacementVolumePreviewInstance
 }
 
@@ -62,6 +63,7 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 	result := AuthoredLevelSpawnResult{
 		PlacementRootEntities: make(map[string]EntityId),
 		TerrainChunkEntities:  make(map[string]EntityId),
+		MarkerEntities:        make(map[string]EntityId),
 	}
 	if cmd == nil {
 		return result, fmt.Errorf("commands is nil")
@@ -131,6 +133,10 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 			result.PlacementRootEntities[placementID] = placementResult.RootEntity
 		}
 	}
+	for _, marker := range def.Markers {
+		entity := spawnAuthoredLevelMarker(cmd, result.RootEntity, def.ID, marker)
+		result.MarkerEntities[marker.ID] = entity
+	}
 
 	if def.Terrain != nil && strings.TrimSpace(def.Terrain.ManifestPath) != "" {
 		if err := spawnAuthoredTerrain(cmd, assets, loader, result.RootEntity, def, opts, &result); err != nil {
@@ -142,6 +148,27 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 	cmd.app.FlushCommands()
 	TransformHierarchySystem(cmd)
 	return result, nil
+}
+
+func spawnAuthoredLevelMarker(cmd *Commands, parent EntityId, levelID string, marker content.LevelMarkerDef) EntityId {
+	transform := levelTransformToComponent(marker.Transform)
+	transform.Scale = mgl32.Vec3{1, 1, 1}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&AuthoredMarkerComponent{Kind: marker.Kind, Tags: append([]string(nil), marker.Tags...)},
+		&AuthoredLevelMarkerRefComponent{
+			LevelID:  levelID,
+			MarkerID: marker.ID,
+			Name:     marker.Name,
+			Kind:     marker.Kind,
+		},
+	)
 }
 
 func spawnAuthoredTerrain(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, rootEntity EntityId, def *content.LevelDef, opts AuthoredLevelSpawnOptions, result *AuthoredLevelSpawnResult) error {

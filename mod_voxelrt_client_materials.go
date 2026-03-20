@@ -68,10 +68,16 @@ func applyMagicaVoxelMaterial(mat *core.Material, color [4]uint8, vMat VoxMateri
 		ior          float32
 		transparency float32
 		emission     float32
+		transmission float32
+		density      float32
+		refraction   float32
 	}{
-		roughness: 1.0,
-		metalness: 0.0,
-		ior:       1.5,
+		roughness:    1.0,
+		metalness:    0.0,
+		ior:          1.5,
+		transmission: 0.0,
+		density:      0.0,
+		refraction:   0.0,
 	}
 
 	switch voxMaterialKind(vMat) {
@@ -82,6 +88,9 @@ func applyMagicaVoxelMaterial(mat *core.Material, color [4]uint8, vMat VoxMateri
 		typeDefaults.roughness = 0.08
 		typeDefaults.ior = 1.52
 		typeDefaults.transparency = 0.72
+		typeDefaults.transmission = 1.0
+		typeDefaults.density = 1.35
+		typeDefaults.refraction = 0.9
 	case "emit":
 		typeDefaults.roughness = 0.35
 		typeDefaults.emission = 1.0
@@ -89,16 +98,25 @@ func applyMagicaVoxelMaterial(mat *core.Material, color [4]uint8, vMat VoxMateri
 		typeDefaults.roughness = 0.4
 		typeDefaults.ior = 1.33
 		typeDefaults.transparency = 0.4
+		typeDefaults.transmission = 0.7
+		typeDefaults.density = 0.65
+		typeDefaults.refraction = 0.35
 	case "media":
 		// Gekko has no volumetric surface material here, so approximate as a soft translucent dielectric.
 		typeDefaults.roughness = 0.65
 		typeDefaults.ior = 1.1
 		typeDefaults.transparency = 0.55
+		typeDefaults.transmission = 1.0
+		typeDefaults.density = 1.85
+		typeDefaults.refraction = 0.1
 	}
 
 	mat.Roughness = typeDefaults.roughness
 	mat.Metalness = typeDefaults.metalness
 	mat.IOR = typeDefaults.ior
+	mat.Transmission = typeDefaults.transmission
+	mat.Density = typeDefaults.density
+	mat.Refraction = typeDefaults.refraction
 	if typeDefaults.transparency > 0 {
 		mat.Transparency = max(mat.Transparency, typeDefaults.transparency)
 	}
@@ -114,6 +132,18 @@ func applyMagicaVoxelMaterial(mat *core.Material, color [4]uint8, vMat VoxMateri
 	}
 	if trans, ok := voxMaterialFloat(vMat, "_trans"); ok {
 		mat.Transparency = trans
+	}
+	if density, ok := voxMaterialFloat(vMat, "_d"); ok {
+		mat.Density = density
+	}
+	if att, ok := voxMaterialFloat(vMat, "_att"); ok {
+		mat.Density = att
+	}
+	if alpha, ok := voxMaterialFloat(vMat, "_alpha"); ok {
+		mat.Transparency = clampF(1.0-alpha, 0.0, 1.0)
+	}
+	if ri, ok := voxMaterialFloat(vMat, "_ri"); ok {
+		mat.IOR = ri
 	}
 
 	emissionStrength := typeDefaults.emission
@@ -131,9 +161,21 @@ func applyMagicaVoxelMaterial(mat *core.Material, color [4]uint8, vMat VoxMateri
 		mat.Emission = emissionStrength
 	}
 
+	if mat.Transmission > 0 {
+		if mat.Refraction <= 0 {
+			mat.Refraction = clampF((mat.IOR-1.0)*0.6, 0.0, 1.0)
+		}
+		if mat.Density <= 0 {
+			mat.Density = clampF(0.35+(1.0-mat.Transparency)*1.25, 0.15, 3.0)
+		}
+	}
+
 	mat.Roughness = clampF(mat.Roughness, 0.0, 1.0)
 	mat.Metalness = clampF(mat.Metalness, 0.0, 1.0)
 	mat.Transparency = clampF(mat.Transparency, 0.0, 1.0)
+	mat.Transmission = clampF(mat.Transmission, 0.0, 1.0)
+	mat.Density = clampF(mat.Density, 0.0, 8.0)
+	mat.Refraction = clampF(mat.Refraction, 0.0, 2.0)
 	if mat.IOR < 1.0 {
 		mat.IOR = 1.0
 	}
@@ -185,7 +227,16 @@ func (s *VoxelRtState) buildMaterialTable(gekkoPalette *VoxelPaletteAsset) []cor
 				mat.Transparency = t
 			}
 		}
-
+		if mat.Transparency > 0.001 && mat.Transmission <= 0.0 && mat.Metalness < 0.5 {
+			opacity := 1.0 - mat.Transparency
+			mat.Transmission = 1.0
+			if mat.Density <= 0.0 {
+				mat.Density = clampF(0.12+opacity*0.9, 0.08, 1.2)
+			}
+			if mat.Refraction <= 0.0 {
+				mat.Refraction = clampF((mat.IOR-1.0)*(0.24+opacity*0.6), 0.0, 0.65)
+			}
+		}
 		materialTable[i] = mat
 	}
 	return materialTable

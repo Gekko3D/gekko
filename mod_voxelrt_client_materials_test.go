@@ -29,6 +29,12 @@ func TestBuildMaterialTable_MagicaVoxelGlassDefaults(t *testing.T) {
 	if mat.IOR < 1.5 {
 		t.Fatalf("expected glass IoR default, got %f", mat.IOR)
 	}
+	if mat.Transmission < 0.99 {
+		t.Fatalf("expected glass transmission default, got %f", mat.Transmission)
+	}
+	if mat.Refraction <= 0 {
+		t.Fatalf("expected glass refraction default, got %f", mat.Refraction)
+	}
 }
 
 func TestBuildMaterialTable_MagicaVoxelMetalRespectsOverrides(t *testing.T) {
@@ -55,6 +61,9 @@ func TestBuildMaterialTable_MagicaVoxelMetalRespectsOverrides(t *testing.T) {
 	}
 	if mat.Roughness != 0.64 {
 		t.Fatalf("expected explicit roughness override, got %f", mat.Roughness)
+	}
+	if mat.Transmission != 0.0 {
+		t.Fatalf("expected opaque metal to avoid transmission, got %f", mat.Transmission)
 	}
 }
 
@@ -83,5 +92,29 @@ func TestBuildMaterialTable_MagicaVoxelEmitUsesFlux(t *testing.T) {
 	}
 	if mat.Emissive[1] != 255 {
 		t.Fatalf("expected emissive tint to preserve palette color, got %+v", mat.Emissive)
+	}
+}
+
+func TestBuildMaterialTable_PaletteAlphaGetsVolumetricDefaults(t *testing.T) {
+	state := &VoxelRtState{}
+	var palette VoxPalette
+	palette[4] = [4]uint8{200, 220, 255, 204} // 0.8 alpha -> light glassy sphere
+
+	table := state.buildMaterialTable(&VoxelPaletteAsset{
+		VoxPalette: palette,
+	})
+
+	mat := table[4]
+	if mat.Transparency < 0.19 || mat.Transparency > 0.21 {
+		t.Fatalf("expected inferred transparency near 0.2, got %f", mat.Transparency)
+	}
+	if mat.Transmission < 0.99 {
+		t.Fatalf("expected alpha glass to opt into transmission, got %f", mat.Transmission)
+	}
+	if mat.Density < 0.8 {
+		t.Fatalf("expected alpha glass density to support volumetric absorption, got %f", mat.Density)
+	}
+	if mat.Refraction < 0.35 {
+		t.Fatalf("expected alpha glass refraction to be visibly stronger, got %f", mat.Refraction)
 	}
 }

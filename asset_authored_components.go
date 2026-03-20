@@ -56,6 +56,13 @@ type AuthoredImportedWorldChunkRefComponent struct {
 	ChunkCoord [3]int
 }
 
+type AuthoredLevelMarkerRefComponent struct {
+	LevelID  string
+	MarkerID string
+	Name     string
+	Kind     string
+}
+
 func IsAuthoredAssetRootEntity(cmd *Commands, eid EntityId) bool {
 	if cmd == nil {
 		return false
@@ -174,4 +181,19 @@ func AuthoredLevelItemRefForEntity(cmd *Commands, eid EntityId) (AuthoredLevelIt
 		}
 	}
 	return AuthoredLevelItemRefComponent{}, false
+}
+
+func AuthoredLevelMarkerRefForEntity(cmd *Commands, eid EntityId) (AuthoredLevelMarkerRefComponent, bool) {
+	if cmd == nil {
+		return AuthoredLevelMarkerRefComponent{}, false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if ref, ok := comp.(*AuthoredLevelMarkerRefComponent); ok {
+			return *ref, true
+		}
+		if ref, ok := comp.(AuthoredLevelMarkerRefComponent); ok {
+			return ref, true
+		}
+	}
+	return AuthoredLevelMarkerRefComponent{}, false
 }

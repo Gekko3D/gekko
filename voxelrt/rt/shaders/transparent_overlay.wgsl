@@ -147,6 +147,7 @@ struct TransparentHit {
 @group(2) @binding(0) var in_depth    : texture_2d<f32>;      // stores ray t in .r
 @group(2) @binding(1) var in_material : texture_2d<f32>;      // not strictly needed for this pass but reserved
 @group(2) @binding(2) var in_shadow_maps : texture_2d_array<f32>;
+@group(2) @binding(3) var in_opaque_lit : texture_2d<f32>;
 
 // ============== HELPERS (copied/trimmed from gbuffer) ==============
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
@@ -221,6 +222,26 @@ fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
   let dir = normalize(world_target - origin);
   let safe_dir = make_safe_dir(dir);
   return Ray(origin, dir, 1.0 / safe_dir);
+}
+
+fn clamp_uv01(uv: vec2<f32>) -> vec2<f32> {
+  return clamp(uv, vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0));
+}
+
+fn world_to_uv(p_ws: vec3<f32>) -> vec2<f32> {
+  let clip = uCamera.view_proj * vec4<f32>(p_ws, 1.0);
+  let ndc = clip.xy / max(clip.w, 1e-4);
+  return vec2<f32>(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+}
+
+fn sample_opaque_lit(uv: vec2<f32>) -> vec3<f32> {
+  let dims = textureDimensions(in_opaque_lit);
+  let clamped_uv = clamp_uv01(uv);
+  let px = vec2<i32>(
+    clamp(i32(clamped_uv.x * f32(dims.x)), 0, i32(dims.x) - 1),
+    clamp(i32(clamped_uv.y * f32(dims.y)), 0, i32(dims.y) - 1),
+  );
+  return textureLoad(in_opaque_lit, px, 0).xyz;
 }
 
 fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
@@ -391,6 +412,39 @@ fn geometry_schlick_ggx(NdotX: f32, roughness: f32) -> f32 {
 
 fn geometry_smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
   return geometry_schlick_ggx(NdotV, roughness) * geometry_schlick_ggx(NdotL, roughness);
+}
+
+fn absorption_coefficient(base_color: vec3<f32>, transmission: f32, density: f32) -> vec3<f32> {
+  let tint = clamp(base_color, vec3<f32>(0.04), vec3<f32>(0.995));
+  let colored = -log(tint) * max(transmission, 0.1);
+  let neutral = vec3<f32>(0.35 * max(1.0 - transmission, 0.0));
+  return (colored + neutral) * max(density, 0.0);
+}
+
+fn refraction_uv_offset(
+  pos_ws: vec3<f32>,
+  normal_ws: vec3<f32>,
+  view_dir: vec3<f32>,
+  ior: f32,
+  refraction_strength: f32,
+  travel_dist: f32
+) -> vec2<f32> {
+  if (refraction_strength <= 0.0 || ior <= 1.001) {
+    return vec2<f32>(0.0, 0.0);
+  }
+  let incident = normalize(-view_dir);
+  let eta = 1.0 / ior;
+  let refr_dir = refract(incident, normal_ws, eta);
+  if (length(refr_dir) < 1e-4) {
+    return vec2<f32>(0.0, 0.0);
+  }
+  let ior_delta = max(ior - 1.0, 0.0);
+  let optical_dist = clamp(travel_dist, 0.0, 20.0);
+  let sample_dist = max(optical_dist, 0.35) * (0.45 + refraction_strength * 0.9 + ior_delta * 1.2);
+  let straight_uv = world_to_uv(pos_ws + incident * sample_dist);
+  let refr_uv = world_to_uv(pos_ws + refr_dir * sample_dist);
+  let thickness_boost = 0.85 + min(optical_dist, 10.0) * 0.08;
+  return (refr_uv - straight_uv) * refraction_strength * thickness_boost;
 }
 
 fn calculate_lighting(
@@ -586,9 +640,14 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let uv_screen = (vec2<f32>(f32(ipos.x), f32(ipos.y)) + 0.5) / vec2<f32>(f32(dims.x), f32(dims.y));
   let ray = get_ray_from_uv(uv_screen);
 
-  var accum_rgb = vec3<f32>(0.0);
+  var surface_rgb = vec3<f32>(0.0);
   var accum_a = 0.0;
   var accum_w = 0.0;
+  var throughput = vec3<f32>(1.0);
+  var distortion_sum = vec2<f32>(0.0, 0.0);
+  var distortion_weight = 0.0;
+  var front_z = 1.0;
+  var hit_transparent = false;
 
   var stack: array<i32, 64>;
   var sp = 0;
@@ -627,8 +686,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
 
             let dir_ws = (inst.object_to_world * vec4<f32>(ray_os.dir, 0.0)).xyz;
             let d_ws_scale = length(dir_ws);
-            let density_sigma: f32 = 1.0;
             let k: f32 = 8.0;
+            var refractive_path_ws = 0.0;
 
             var it_sect = 0;
             while (t_curr < t_max_obj && it_sect < 64) {
@@ -665,8 +724,12 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                         let mat_base = params.material_table_base;
                         let mat_idx = mat_base + palette_idx * 4u;
                         let base_col = srgb_to_linear(materials[mat_idx].xyz);
-                        let emissive = srgb_to_linear(materials[mat_idx + 1u].xyz) * max(materials[mat_idx + 3u].x, 0.0);
+                        let extra = materials[mat_idx + 3u];
+                        let emissive = srgb_to_linear(materials[mat_idx + 1u].xyz) * max(extra.x, 0.0);
                         let pbr = materials[mat_idx + 2u];
+                        let transmission = clamp(extra.y, 0.0, 1.0);
+                        let density = max(extra.z, 0.0);
+                        let refraction_strength = max(extra.w, 0.0);
                         let trans = clamp(pbr.w, 0.0, 1.0);
                         if (trans > 0.001) {
                           var t_micro = t_brick;
@@ -683,8 +746,6 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                             let dt = max(0.0, t_next - t_micro);
                             if (dt > 0.0) {
                               let dt_ws = dt * d_ws_scale;
-                              let a0 = clamp(1.0 - trans, 0.0, 1.0);
-                              let alpha_step = 1.0 - exp(-density_sigma * a0 * dt_ws);
                               let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                               let voxel_center_os = floor(p_hit_os) + 0.5;
                               let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
@@ -692,12 +753,31 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                               let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                               let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
+                              let view_dir = normalize(uCamera.cam_pos.xyz - pos_ws);
+                              let opacity = clamp(1.0 - trans, 0.0, 1.0);
+                              let is_volumetric = transmission > 0.01 || density > 0.01 || refraction_strength > 0.01;
+                              let medium_density = max(density, 0.02);
+                              refractive_path_ws += dt_ws * (0.85 + min(medium_density, 3.0) * 0.3);
+                              let coverage_sigma = max(0.015, medium_density * mix(0.25, 1.0, opacity));
+                              let coverage_step = 1.0 - exp(-coverage_sigma * dt_ws);
+                              let sigma_a = absorption_coefficient(base_col, transmission, medium_density * 0.75) * mix(0.15, 1.0, opacity);
+                              let trans_step = select(vec3<f32>(1.0 - coverage_step), exp(-sigma_a * dt_ws), is_volumetric);
                               let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
-                              let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
-                              accum_rgb += color * alpha_step * w;
-                              accum_a += alpha_step;
-                              accum_w += alpha_step * w;
-                              if (accum_a > 4.0) { break; }
+                              let refract_off = select(
+                                vec2<f32>(0.0, 0.0),
+                                refraction_uv_offset(pos_ws, n_ws, view_dir, max(pbr.z, 1.001), refraction_strength, refractive_path_ws),
+                                is_volumetric,
+                              );
+                              if (!hit_transparent) {
+                                front_z = z;
+                                hit_transparent = true;
+                              }
+                              distortion_sum += refract_off * coverage_step;
+                              distortion_weight += coverage_step;
+                              surface_rgb += throughput * color * coverage_step;
+                              throughput *= trans_step;
+                              accum_a += coverage_sigma * dt_ws;
+                              if (accum_a > 3.0) { break; }
                             }
                             if (t_max_micro.x < t_max_micro.y) {
                               if (t_max_micro.x < t_max_micro.z) { voxel_pos.x += step.x; t_micro = t_max_micro.x; t_max_micro.x += t_delta_1.x; }
@@ -734,29 +814,50 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let mat_base = params.material_table_base;
                               let mat_idx = mat_base + palette_idx * 4u;
                               let base_col = srgb_to_linear(materials[mat_idx].xyz);
-                              let emissive = srgb_to_linear(materials[mat_idx + 1u].xyz) * max(materials[mat_idx + 3u].x, 0.0);
+                              let extra = materials[mat_idx + 3u];
+                              let emissive = srgb_to_linear(materials[mat_idx + 1u].xyz) * max(extra.x, 0.0);
                               let pbr = materials[mat_idx + 2u];
+                              let transmission = clamp(extra.y, 0.0, 1.0);
+                              let density = max(extra.z, 0.0);
+                              let refraction_strength = max(extra.w, 0.0);
                               let trans = clamp(pbr.w, 0.0, 1.0);
                               if (trans > 0.001) {
                                 let t_next = min(t_max_micro.x, min(t_max_micro.y, t_max_micro.z));
                                 let dt = max(0.0, t_next - t_micro);
                                 if (dt > 0.0) {
                                   let dt_ws = dt * d_ws_scale;
-                                  let a0 = clamp(1.0 - trans, 0.0, 1.0);
-                                  let alpha_step = 1.0 - exp(-density_sigma * a0 * dt_ws);
-                                   let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
-                                   let voxel_center_os = floor(p_hit_os) + 0.5;
-                                   let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
-                                   let n_os = blocky_normal_os(voxel_center_os, aabb_center_os, params);
-                                   let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
-                                   let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                                   let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                                   let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
-                                   let w = max(1e-3, alpha_step) * pow(1.0 - z, k);
-                                   accum_rgb += color * alpha_step * w;
-                                   accum_a += alpha_step;
-                                   accum_w += alpha_step * w;
-                                   if (accum_a > 4.0) { break; }
+                                  let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
+                                  let voxel_center_os = floor(p_hit_os) + 0.5;
+                                  let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
+                                  let n_os = blocky_normal_os(voxel_center_os, aabb_center_os, params);
+                                  let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
+                                  let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                  let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
+                                  let view_dir = normalize(uCamera.cam_pos.xyz - pos_ws);
+                                  let opacity = clamp(1.0 - trans, 0.0, 1.0);
+                                  let is_volumetric = transmission > 0.01 || density > 0.01 || refraction_strength > 0.01;
+                                  let medium_density = max(density, 0.02);
+                                  refractive_path_ws += dt_ws * (0.85 + min(medium_density, 3.0) * 0.3);
+                                  let coverage_sigma = max(0.015, medium_density * mix(0.25, 1.0, opacity));
+                                  let coverage_step = 1.0 - exp(-coverage_sigma * dt_ws);
+                                  let sigma_a = absorption_coefficient(base_col, transmission, medium_density * 0.75) * mix(0.15, 1.0, opacity);
+                                  let trans_step = select(vec3<f32>(1.0 - coverage_step), exp(-sigma_a * dt_ws), is_volumetric);
+                                  let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, params.shadow_seam_epsilon);
+                                  let refract_off = select(
+                                    vec2<f32>(0.0, 0.0),
+                                    refraction_uv_offset(pos_ws, n_ws, view_dir, max(pbr.z, 1.001), refraction_strength, refractive_path_ws),
+                                    is_volumetric,
+                                  );
+                                  if (!hit_transparent) {
+                                    front_z = z;
+                                    hit_transparent = true;
+                                  }
+                                  distortion_sum += refract_off * coverage_step;
+                                  distortion_weight += coverage_step;
+                                  surface_rgb += throughput * color * coverage_step;
+                                  throughput *= trans_step;
+                                  accum_a += coverage_sigma * dt_ws;
+                                  if (accum_a > 3.0) { break; }
                                 }
                               }
                             }
@@ -804,5 +905,22 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     }
   }
 
-  return FSOut(vec4<f32>(accum_rgb, accum_a), accum_w);
+  if (!hit_transparent) {
+    return FSOut(vec4<f32>(0.0, 0.0, 0.0, 0.0), 0.0);
+  }
+
+  let throughput_scalar = clamp(dot(throughput, vec3<f32>(0.33333334, 0.33333334, 0.33333334)), 1e-4, 1.0);
+  let coverage = clamp(1.0 - throughput_scalar, 0.0, 0.98);
+  var refract_uv = uv_screen;
+  if (distortion_weight > 1e-4) {
+    refract_uv += distortion_sum / distortion_weight;
+  }
+  let opaque_bg = sample_opaque_lit(uv_screen);
+  let refracted_bg = sample_opaque_lit(refract_uv);
+  let final_color = surface_rgb + refracted_bg * throughput - opaque_bg * throughput_scalar;
+  let alpha_weight = max(coverage, 1e-3) * pow(1.0 - clamp(front_z, 0.0, 1.0), 8.0);
+  accum_w = alpha_weight;
+  let accum_alpha = -log(throughput_scalar) / 2.0;
+
+  return FSOut(vec4<f32>(final_color * alpha_weight, accum_alpha), accum_w);
 }
