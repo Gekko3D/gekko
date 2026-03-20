@@ -346,8 +346,8 @@ func applyLevelEnvironment(cmd *Commands, env *content.LevelEnvironmentDef) {
 	directionalIntensity := float32(1.5)
 	switch preset {
 	case "orbit":
-		ambientIntensity = 0.12
-		directionalIntensity = 1.65
+		ambientIntensity = 0.26
+		directionalIntensity = 1.55
 	case "space":
 		ambientIntensity = 0.08
 		directionalIntensity = 1.35

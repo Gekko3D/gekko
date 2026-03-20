@@ -300,7 +300,10 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			state.ImportedWorldEntries[chunkCoordFromTerrain(entry.Coord)] = entry
 		}
 		if assets != nil {
-			state.BaseWorldPalette = assets.CreateSimplePalette([4]uint8{160, 160, 160, 255})
+			state.BaseWorldPalette = ImportedWorldPaletteAsset(assets, manifest)
+			if state.BaseWorldPalette == (AssetId{}) {
+				state.BaseWorldPalette = assets.CreateSimplePalette([4]uint8{160, 160, 160, 255})
+			}
 		}
 	}
 
@@ -562,6 +565,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		entity := spawnAuthoredImportedWorldChunkEntity(cmd, state.LevelRoot, state.BaseWorldPalette, AuthoredImportedWorldSpawnDef{
 			LevelID:          state.LevelID,
 			WorldID:          importedWorldIDForPreparedChunk(state, prepared.ImportedWorldChunk),
+			ShadowGroupID:    importedWorldGroupIDForStreamedState(state),
 			Chunk:            prepared.ImportedWorldChunk,
 			CollisionEnabled: state.BaseWorldCollisionEnabled,
 		})
@@ -780,6 +784,13 @@ func terrainGroupIDForStreamedState(state *StreamedLevelRuntimeState) uint32 {
 		return state.Config.TerrainGroupID
 	}
 	return stableTerrainGroupID(state.LevelID, state.TerrainID)
+}
+
+func importedWorldGroupIDForStreamedState(state *StreamedLevelRuntimeState) uint32 {
+	if state == nil {
+		return 0
+	}
+	return stableImportedWorldGroupID(state.LevelID, state.BaseWorldID)
 }
 
 func effectiveLevelTransform(placementID string, authored content.LevelTransformDef, overrides map[string]content.LevelTransformDef) content.LevelTransformDef {

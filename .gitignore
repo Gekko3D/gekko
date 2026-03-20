@@ -1,1 +1,6 @@
 .vscode/
+/.idea/gekko.iml
+/.idea/vcs.xml
+/.idea/modules.xml
+/.idea/misc.xml
+/.idea/.gitignore

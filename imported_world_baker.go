@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -152,6 +153,7 @@ func BakeImportedWorldFromVox(voxFile *VoxFile, cfg ImportedWorldBakeConfig) (Im
 			Kind:               content.ImportedWorldKindVoxelWorld,
 			ChunkSize:          cfg.ChunkSize,
 			VoxelResolution:    cfg.VoxelResolution,
+			Palette:            importedWorldPaletteFromVox(voxFile),
 			SourceBuildVersion: cfg.SourceBuildVersion,
 			Entries:            entries,
 		},
@@ -226,6 +228,20 @@ func BuildImportedWorldBakeReport(bake ImportedWorldBakeResult) importedWorldBak
 	return report
 }
 
+func SaveImportedWorldBakeReport(reportPath string, bake ImportedWorldBakeResult) error {
+	if strings.TrimSpace(reportPath) == "" {
+		return fmt.Errorf("report path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(reportPath), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(BuildImportedWorldBakeReport(bake), "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(reportPath, data, 0644)
+}
+
 func normalizeImportedWorldBakeConfig(cfg ImportedWorldBakeConfig) ImportedWorldBakeConfig {
 	if strings.TrimSpace(cfg.WorldID) == "" {
 		cfg.WorldID = "imported_world"
@@ -294,16 +310,40 @@ func flattenImportedWorldBakeVoxels(voxFile *VoxFile) ([]importedBakeVoxel, []Im
 }
 
 func transformImportedBakeVoxel(mx mgl32.Mat4, x, y, z int) [3]int {
-	world := mx.Mul4x1(mgl32.Vec4{float32(x) * VoxelSize, float32(y) * VoxelSize, float32(z) * VoxelSize, 1})
+	// Sample at voxel centers, then map back to authored cell indices.
+	// Using voxel corners here creates half-voxel rounding drift for scene-pivoted VOX models,
+	// which can turn touching scene pieces into gaps after baking.
+	world := mx.Mul4x1(mgl32.Vec4{
+		(float32(x) + 0.5) * VoxelSize,
+		(float32(y) + 0.5) * VoxelSize,
+		(float32(z) + 0.5) * VoxelSize,
+		1,
+	})
 	return [3]int{
-		importedWorldBakeRound(world.X() / VoxelSize),
-		importedWorldBakeRound(world.Y() / VoxelSize),
-		importedWorldBakeRound(world.Z() / VoxelSize),
+		importedWorldBakeCell(world.X() / VoxelSize),
+		importedWorldBakeCell(world.Y() / VoxelSize),
+		importedWorldBakeCell(world.Z() / VoxelSize),
 	}
 }
 
-func importedWorldBakeRound(v float32) int {
-	return int(math.Round(float64(v)))
+func importedWorldBakeCell(v float32) int {
+	scaled := float64(v)
+	const eps = 1e-4
+	if scaled >= 0 {
+		return int(math.Floor(scaled + eps))
+	}
+	return int(math.Floor(scaled - eps))
+}
+
+func importedWorldPaletteFromVox(voxFile *VoxFile) []content.ImportedWorldPaletteColor {
+	if voxFile == nil {
+		return nil
+	}
+	palette := make([]content.ImportedWorldPaletteColor, len(voxFile.Palette))
+	for i, color := range voxFile.Palette {
+		palette[i] = content.ImportedWorldPaletteColor{color[0], color[1], color[2], color[3]}
+	}
+	return palette
 }
 
 func importedBakeVoxelsFromMap(src map[[3]int]uint8) []importedBakeVoxel {

@@ -21,11 +21,11 @@ type GroundedPlayerControllerComponent struct {
 	StepHeight       float32
 	GroundProbe      float32
 
-	MoveInput         mgl32.Vec2
-	LookInput         mgl32.Vec2
-	JumpQueued        bool
-	VerticalVelocity  float32
-	Grounded          bool
+	MoveInput        mgl32.Vec2
+	LookInput        mgl32.Vec2
+	JumpQueued       bool
+	VerticalVelocity float32
+	Grounded         bool
 }
 
 func (GroundedPlayerControllerModule) Install(app *App, cmd *Commands) {
@@ -36,6 +36,7 @@ func (GroundedPlayerControllerModule) Install(app *App, cmd *Commands) {
 func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) EntityId {
 	transform := levelTransformToComponent(marker.Transform)
 	transform.Scale = mgl32.Vec3{1, 1, 1}
+	transform.Position = transform.Position.Add(mgl32.Vec3{0, 0, 0})
 	forward := forwardFromYawPitch(0, 0)
 	ctrl := GroundedPlayerControllerComponent{
 		Height:           1.8,
@@ -49,7 +50,14 @@ func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) E
 		StepHeight:       0.6,
 		GroundProbe:      0.15,
 	}
+	local := LocalTransformComponent{
+		Position: transform.Position,
+		Rotation: transform.Rotation,
+		Scale:    transform.Scale,
+	}
 	return cmd.AddEntity(
+		&transform,
+		&local,
 		&CameraComponent{
 			Position: transform.Position.Add(mgl32.Vec3{0, ctrl.EyeHeight, 0}),
 			LookAt:   transform.Position.Add(mgl32.Vec3{0, ctrl.EyeHeight, 0}).Add(forward),
@@ -57,10 +65,12 @@ func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) E
 			Yaw:      0,
 			Pitch:    0,
 			Fov:      75,
+			Aspect:   16.0 / 9.0,
 			Near:     0.05,
 			Far:      1000,
 		},
 		&ctrl,
+		&StreamedLevelObserverComponent{Radius: 0},
 	)
 }
 
@@ -103,7 +113,7 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 	if dt <= 0 {
 		return
 	}
-	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(_ EntityId, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent) bool {
+	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(eid EntityId, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent) bool {
 		applyGroundedLook(cam, ctrl)
 		basePos := cam.Position.Sub(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
 
@@ -125,6 +135,16 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 		cam.Position = basePos.Add(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
 		cam.LookAt = cam.Position.Add(forwardFromYawPitch(cam.Yaw, cam.Pitch))
 		cam.Up = mgl32.Vec3{0, 1, 0}
+		if tr, ok := transformForEntity(cmd, eid); ok {
+			tr.Position = basePos
+			tr.Rotation = mgl32.QuatIdent()
+			tr.Scale = mgl32.Vec3{1, 1, 1}
+		}
+		if local, ok := localTransformForEntity(cmd, eid); ok {
+			local.Position = basePos
+			local.Rotation = mgl32.QuatIdent()
+			local.Scale = mgl32.Vec3{1, 1, 1}
+		}
 		return true
 	})
 }
@@ -232,4 +252,28 @@ func defaulted(v, fallback float32) float32 {
 		return fallback
 	}
 	return v
+}
+
+func transformForEntity(cmd *Commands, eid EntityId) (*TransformComponent, bool) {
+	if cmd == nil || eid == 0 {
+		return nil, false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if tr, ok := comp.(*TransformComponent); ok {
+			return tr, true
+		}
+	}
+	return nil, false
+}
+
+func localTransformForEntity(cmd *Commands, eid EntityId) (*LocalTransformComponent, bool) {
+	if cmd == nil || eid == 0 {
+		return nil, false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		if tr, ok := comp.(*LocalTransformComponent); ok {
+			return tr, true
+		}
+	}
+	return nil, false
 }

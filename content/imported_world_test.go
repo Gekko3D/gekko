@@ -27,6 +27,7 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 		Kind:               ImportedWorldKindVoxelWorld,
 		ChunkSize:          16,
 		VoxelResolution:    1,
+		Palette:            []ImportedWorldPaletteColor{{0, 0, 0, 0}, {10, 20, 30, 255}},
 		SourceBuildVersion: "importer-1",
 		SourceHash:         "abc123",
 		Tags:               []string{"hl"},
@@ -50,6 +51,9 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 	}
 	if loaded.WorldID != def.WorldID || loaded.Kind != def.Kind || loaded.SourceHash != def.SourceHash {
 		t.Fatalf("unexpected imported world round-trip %+v", loaded)
+	}
+	if len(loaded.Palette) != len(def.Palette) || loaded.Palette[1] != def.Palette[1] {
+		t.Fatalf("expected imported world palette to round-trip, got %+v", loaded.Palette)
 	}
 	if len(loaded.Entries) != 1 || loaded.Entries[0].ChunkPath != def.Entries[0].ChunkPath {
 		t.Fatalf("expected imported world entries to round-trip, got %+v", loaded.Entries)

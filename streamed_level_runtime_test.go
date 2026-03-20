@@ -523,8 +523,95 @@ func TestStreamedRuntimeLoadsImportedBaseWorldChunkWithCollision(t *testing.T) {
 	if vmc.CustomMap == nil || vmc.CustomMap.GetVoxelCount() != 1 {
 		t.Fatalf("expected imported world custom map with one voxel, got %+v", vmc.CustomMap)
 	}
+	if vmc.ShadowGroupID == 0 {
+		t.Fatal("expected imported world chunk to have a non-zero shadow group")
+	}
+	if vmc.ShadowSeamWorldEpsilon != 1 {
+		t.Fatalf("expected imported world seam epsilon 1, got %v", vmc.ShadowSeamWorldEpsilon)
+	}
 	if !hasComponentOfType[RigidBodyComponent](cmd, entity) || !hasComponentOfType[ColliderComponent](cmd, entity) || !hasComponentOfType[AABBComponent](cmd, entity) {
 		t.Fatal("expected static collision components on imported world chunk")
+	}
+}
+
+func TestStreamedRuntimePreservesImportedBaseWorldPalette(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "baseworld_palette.gklevel")
+	worldPath := filepath.Join(root, "worlds", "baseworld_palette.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "baseworld_palette_chunks", "0_0_0.gkchunk")
+
+	writeImportedWorldChunkForStreamedTest(t, chunkPath, &content.ImportedWorldChunkDef{
+		WorldID:            "world-palette",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          160,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 4}},
+		NonEmptyVoxelCount: 1,
+	})
+
+	paletteColor := content.ImportedWorldPaletteColor{240, 96, 32, 255}
+	if err := os.MkdirAll(filepath.Dir(worldPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveImportedWorld(worldPath, &content.ImportedWorldDef{
+		WorldID:         "world-palette",
+		Kind:            content.ImportedWorldKindVoxelWorld,
+		ChunkSize:       160,
+		VoxelResolution: 1,
+		Palette:         []content.ImportedWorldPaletteColor{{0, 0, 0, 0}, {0, 0, 0, 255}, {0, 0, 0, 255}, {0, 0, 0, 255}, paletteColor},
+		Entries: []content.ImportedWorldChunkEntryDef{{
+			Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkPath:          content.AuthorDocumentPath(chunkPath, worldPath),
+			NonEmptyVoxelCount: 1,
+		}},
+	}); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+
+	level := content.NewLevelDef("baseworld_palette")
+	level.ChunkSize = 16
+	level.StreamingRadius = 0
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:         content.ImportedWorldKindVoxelWorld,
+		ManifestPath: content.AuthorDocumentPath(worldPath, levelPath),
+	}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app, cmd, state := newStreamedRuntimeHarness(t)
+	assets := app.resources[reflect.TypeOf(AssetServer{})].(*AssetServer)
+	if err := StartStreamedLevelRuntime(cmd, assets, StreamedLevelRuntimeConfig{LevelPath: levelPath}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&StreamedLevelObserverComponent{Radius: 0},
+	)
+	app.FlushCommands()
+
+	driveStreamedRuntimeUntil(t, app, func() bool {
+		return importedWorldChunkEntityByCoordForStreamedTest(cmd, [3]int{0, 0, 0}) != 0
+	})
+
+	if state.BaseWorldPalette == (AssetId{}) {
+		t.Fatal("expected streamed runtime to allocate a base-world palette asset")
+	}
+	paletteAsset, ok := assets.voxPalettes[state.BaseWorldPalette]
+	if !ok {
+		t.Fatalf("expected palette asset %v to be registered", state.BaseWorldPalette)
+	}
+	if paletteAsset.VoxPalette[4] != [4]uint8{paletteColor[0], paletteColor[1], paletteColor[2], paletteColor[3]} {
+		t.Fatalf("expected palette index 4 to be %v, got %v", paletteColor, paletteAsset.VoxPalette[4])
+	}
+
+	entity := importedWorldChunkEntityByCoordForStreamedTest(cmd, [3]int{0, 0, 0})
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	if vmc.VoxelPalette != state.BaseWorldPalette {
+		t.Fatalf("expected chunk to use base-world palette %v, got %v", state.BaseWorldPalette, vmc.VoxelPalette)
 	}
 }
 

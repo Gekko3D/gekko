@@ -17,11 +17,14 @@ type ImportedWorldDef struct {
 	Kind               ImportedWorldKind            `json:"kind"`
 	ChunkSize          int                          `json:"chunk_size"`
 	VoxelResolution    float32                      `json:"voxel_resolution"`
+	Palette            []ImportedWorldPaletteColor  `json:"palette,omitempty"`
 	SourceBuildVersion string                       `json:"source_build_version,omitempty"`
 	SourceHash         string                       `json:"source_hash,omitempty"`
 	Tags               []string                     `json:"tags,omitempty"`
 	Entries            []ImportedWorldChunkEntryDef `json:"entries,omitempty"`
 }
+
+type ImportedWorldPaletteColor [4]uint8
 
 type ImportedWorldChunkEntryDef struct {
 	Coord              TerrainChunkCoordDef `json:"coord"`

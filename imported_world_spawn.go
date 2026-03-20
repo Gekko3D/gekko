@@ -1,6 +1,8 @@
 package gekko
 
 import (
+	"hash/fnv"
+
 	"github.com/gekko3d/gekko/content"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
@@ -9,6 +11,7 @@ import (
 type AuthoredImportedWorldSpawnDef struct {
 	LevelID          string
 	WorldID          string
+	ShadowGroupID    uint32
 	Chunk            *content.ImportedWorldChunkDef
 	CollisionEnabled bool
 }
@@ -44,9 +47,11 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 		},
 		&Parent{Entity: parent},
 		&VoxelModelComponent{
-			VoxelPalette: palette,
-			PivotMode:    PivotModeCorner,
-			CustomMap:    ImportedWorldChunkToXBrickMap(def.Chunk),
+			VoxelPalette:           palette,
+			PivotMode:              PivotModeCorner,
+			CustomMap:              ImportedWorldChunkToXBrickMap(def.Chunk),
+			ShadowGroupID:          def.ShadowGroupID,
+			ShadowSeamWorldEpsilon: def.Chunk.VoxelResolution,
 		},
 		&AuthoredImportedWorldChunkRefComponent{
 			LevelID:    def.LevelID,
@@ -74,4 +79,37 @@ func importedWorldChunkPosition(chunk *content.ImportedWorldChunkDef) mgl32.Vec3
 		float32(chunk.Coord.Y) * chunkWorldSize,
 		float32(chunk.Coord.Z) * chunkWorldSize,
 	}
+}
+
+func stableImportedWorldGroupID(levelID string, worldID string) uint32 {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(levelID))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(worldID))
+	value := hasher.Sum32()
+	if value == 0 {
+		return 1
+	}
+	return value
+}
+
+func ImportedWorldPaletteAsset(assets *AssetServer, def *content.ImportedWorldDef) AssetId {
+	if assets == nil || def == nil || len(def.Palette) == 0 {
+		return AssetId{}
+	}
+	var palette VoxPalette
+	nonZero := false
+	for i, color := range def.Palette {
+		if i >= len(palette) {
+			break
+		}
+		palette[i] = [4]uint8{color[0], color[1], color[2], color[3]}
+		if color != (content.ImportedWorldPaletteColor{}) {
+			nonZero = true
+		}
+	}
+	if !nonZero {
+		return AssetId{}
+	}
+	return assets.CreateVoxelPalette(palette, nil)
 }
