@@ -2,6 +2,8 @@
 
 Gekko is a Go game engine with an ECS core and a voxel real-time renderer (`voxelrt`).
 
+For workspace-level orientation, module-specific commands, and agent notes, see [../AGENTS.md](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
+
 ## Repository layout
 
 - `voxelrt/` - renderer implementation and renderer docs

@@ -409,12 +409,12 @@ func transformImportedBakeVoxel(mx mgl32.Mat4, x, y, z int) [3]int {
 }
 
 func importedWorldBakeCell(v float32) int {
-	scaled := float64(v)
-	const eps = 1e-4
-	if scaled >= 0 {
-		return int(math.Floor(scaled + eps))
-	}
-	return int(math.Floor(scaled - eps))
+	// Scene-baked voxel centers should land on the authored half-cell lattice
+	// (integers or x.5) after rotation. Snap back to that lattice before
+	// converting to a corner-based cell index so small floating-point drift does
+	// not push negative coordinates into the previous cell.
+	scaled := math.Round(float64(v)*2) / 2
+	return int(math.Floor(scaled))
 }
 
 func importedWorldPaletteFromVox(voxFile *VoxFile) []content.ImportedWorldPaletteColor {
@@ -427,6 +427,7 @@ func importedWorldPaletteFromVox(voxFile *VoxFile) []content.ImportedWorldPalett
 	}
 	return palette
 }
+
 
 func scaleImportedWorldBakeVoxFile(voxFile *VoxFile, scale float32) *VoxFile {
 	if voxFile == nil || scale <= 0 || scale == 1 {

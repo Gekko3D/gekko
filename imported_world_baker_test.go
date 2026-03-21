@@ -233,3 +233,23 @@ func TestBakeImportedWorldFromVoxReportsProgress(t *testing.T) {
 		t.Fatalf("expected final progress message, got %+v", last)
 	}
 }
+
+func TestImportedWorldBakeCellSnapsNegativeDrift(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float32
+		want  int
+	}{
+		{name: "tiny negative zero drift", value: -0.00000048, want: 0},
+		{name: "tiny negative integer drift", value: -1.00000048, want: -1},
+		{name: "negative half cell", value: -1.5, want: -2},
+		{name: "positive integer drift", value: 1.00000048, want: 1},
+		{name: "positive half cell", value: 1.5, want: 1},
+	}
+
+	for _, tt := range tests {
+		if got := importedWorldBakeCell(tt.value); got != tt.want {
+			t.Fatalf("%s: importedWorldBakeCell(%v) = %d, want %d", tt.name, tt.value, got, tt.want)
+		}
+	}
+}
