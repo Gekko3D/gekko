@@ -319,6 +319,9 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		state.RtApp.Camera.Position = camera.Position
 		state.RtApp.Camera.Yaw = mgl32.DegToRad(camera.Yaw)
 		state.RtApp.Camera.Pitch = mgl32.DegToRad(camera.Pitch)
+		state.RtApp.Camera.Fov = camera.Fov
+		state.RtApp.Camera.Near = camera.Near
+		state.RtApp.Camera.Far = camera.Far
 		return false
 	})
 	// Sync text

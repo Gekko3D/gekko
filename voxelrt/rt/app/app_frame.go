@@ -141,7 +141,7 @@ func (a *App) Update() {
 	if aspect == 0 {
 		aspect = 1.0
 	}
-	proj := mgl32.Perspective(mgl32.DegToRad(60), aspect, 0.1, 1000.0)
+	proj := a.Camera.ProjectionMatrix(aspect)
 
 	// Combined
 	viewProj := proj.Mul4(view)

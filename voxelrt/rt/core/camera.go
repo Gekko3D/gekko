@@ -10,6 +10,9 @@ type CameraState struct {
 	Position    mgl32.Vec3
 	Yaw         float32
 	Pitch       float32
+	Fov         float32
+	Near        float32
+	Far         float32
 	Speed       float32
 	Sensitivity float32
 	DebugMode   uint32
@@ -20,6 +23,9 @@ func NewCameraState() *CameraState {
 		Position:    mgl32.Vec3{0, 2, 20},
 		Yaw:         0,
 		Pitch:       0,
+		Fov:         60,
+		Near:        0.1,
+		Far:         1000.0,
 		Speed:       10.0,
 		Sensitivity: 0.003,
 	}
@@ -52,7 +58,7 @@ func (c *CameraState) ScreenToWorldRay(mouseX, mouseY float64, width, height int
 
 	// Aspect ratio and FOV
 	aspect := float32(width) / float32(height)
-	fovRad := mgl32.DegToRad(60.0) // Matches app.go
+	fovRad := c.FovRadians()
 	tanHalfFov := float32(math.Tan(float64(fovRad / 2.0)))
 
 	// Ray direction in world space
@@ -60,6 +66,36 @@ func (c *CameraState) ScreenToWorldRay(mouseX, mouseY float64, width, height int
 	dir = dir.Normalize()
 
 	return Ray{c.Position, dir}
+}
+
+func (c *CameraState) FovRadians() float32 {
+	fov := c.Fov
+	if fov <= 0 {
+		fov = 60.0
+	}
+	return mgl32.DegToRad(fov)
+}
+
+func (c *CameraState) NearPlane() float32 {
+	if c.Near > 0 {
+		return c.Near
+	}
+	return 0.1
+}
+
+func (c *CameraState) FarPlane() float32 {
+	far := c.Far
+	if far <= c.NearPlane() {
+		return 1000.0
+	}
+	return far
+}
+
+func (c *CameraState) ProjectionMatrix(aspect float32) mgl32.Mat4 {
+	if aspect <= 0 {
+		aspect = 1.0
+	}
+	return mgl32.Perspective(c.FovRadians(), aspect, c.NearPlane(), c.FarPlane())
 }
 
 func (c *CameraState) GetViewMatrix() mgl32.Mat4 {
