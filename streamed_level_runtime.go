@@ -43,6 +43,7 @@ type StreamedLevelRuntimeConfig struct {
 	TerrainGroupID     uint32
 	AutoSpawnPlayer    bool
 	PlayerSpawnKind    string
+	PlayerConfig       *GroundedPlayerControllerConfig
 	PlacementHooks     []PostSpawnPlacementHook
 	TerrainHooks       []PostSpawnTerrainHook
 }
@@ -337,7 +338,15 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			playerMarkerKind = content.LevelMarkerKindPlayerSpawn
 		}
 		if marker, ok := FindFirstLevelMarkerByKind(level, playerMarkerKind); ok {
-			SpawnGroundedPlayerAtMarker(cmd, marker)
+			if err := ensureStreamedChunkLoadedForPosition(cmd, assets, state, marker.Transform.Position); err != nil {
+				state.InitErr = err
+				return err
+			}
+			if cfg.PlayerConfig != nil {
+				SpawnGroundedPlayerAtMarkerWithConfig(cmd, marker, *cfg.PlayerConfig)
+			} else {
+				SpawnGroundedPlayerAtMarker(cmd, marker)
+			}
 		}
 	}
 	cmd.app.FlushCommands()
@@ -494,6 +503,21 @@ func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoor
 		}
 	}
 	return job
+}
+
+func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, position content.Vec3) error {
+	if cmd == nil || state == nil {
+		return nil
+	}
+	coord := ChunkCoordFromPosition(mgl32.Vec3{position[0], position[1], position[2]}, state.ChunkSize)
+	if _, ok := state.LoadedChunks[coord]; ok {
+		return nil
+	}
+	prepared := prepareStreamedChunkLoad(buildStreamedChunkLoadJob(state, coord))
+	if prepared.Err != nil {
+		return prepared.Err
+	}
+	return commitPreparedStreamedChunk(cmd, assets, state, prepared)
 }
 
 func prepareStreamedChunkLoad(job streamedChunkLoadJob) streamedPreparedChunk {

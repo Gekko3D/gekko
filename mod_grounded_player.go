@@ -2,12 +2,32 @@ package gekko
 
 import (
 	"math"
+	"reflect"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-type GroundedPlayerControllerModule struct{}
+type GroundedPlayerControllerConfig struct {
+	Height           float32
+	EyeHeight        float32
+	Radius           float32
+	Speed            float32
+	SprintMultiplier float32
+	Sensitivity      float32
+	JumpSpeed        float32
+	Gravity          float32
+	StepHeight       float32
+	GroundProbe      float32
+}
+
+type GroundedPlayerControllerDefaults struct {
+	Config GroundedPlayerControllerConfig
+}
+
+type GroundedPlayerControllerModule struct {
+	Config GroundedPlayerControllerConfig
+}
 
 type GroundedPlayerControllerComponent struct {
 	Height           float32
@@ -26,19 +46,11 @@ type GroundedPlayerControllerComponent struct {
 	JumpQueued       bool
 	VerticalVelocity float32
 	Grounded         bool
+	NeedsGroundSnap  bool
 }
 
-func (GroundedPlayerControllerModule) Install(app *App, cmd *Commands) {
-	app.UseSystem(System(groundedPlayerInputSystem).InStage(Update).RunAlways())
-	app.UseSystem(System(groundedPlayerControlSystem).InStage(Update).RunAlways())
-}
-
-func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) EntityId {
-	transform := levelTransformToComponent(marker.Transform)
-	transform.Scale = mgl32.Vec3{1, 1, 1}
-	transform.Position = transform.Position.Add(mgl32.Vec3{0, 0, 0})
-	forward := forwardFromYawPitch(0, 0)
-	ctrl := GroundedPlayerControllerComponent{
+func DefaultGroundedPlayerControllerConfig() GroundedPlayerControllerConfig {
+	return GroundedPlayerControllerConfig{
 		Height:           1.8,
 		EyeHeight:        1.7,
 		Radius:           0.35,
@@ -49,6 +61,78 @@ func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) E
 		Gravity:          18.0,
 		StepHeight:       0.6,
 		GroundProbe:      0.15,
+	}
+}
+
+func effectiveGroundedPlayerControllerConfig(cfg GroundedPlayerControllerConfig) GroundedPlayerControllerConfig {
+	defaults := DefaultGroundedPlayerControllerConfig()
+	if cfg.Height != 0 {
+		defaults.Height = cfg.Height
+	}
+	if cfg.EyeHeight != 0 {
+		defaults.EyeHeight = cfg.EyeHeight
+	}
+	if cfg.Radius != 0 {
+		defaults.Radius = cfg.Radius
+	}
+	if cfg.Speed != 0 {
+		defaults.Speed = cfg.Speed
+	}
+	if cfg.SprintMultiplier != 0 {
+		defaults.SprintMultiplier = cfg.SprintMultiplier
+	}
+	if cfg.Sensitivity != 0 {
+		defaults.Sensitivity = cfg.Sensitivity
+	}
+	if cfg.JumpSpeed != 0 {
+		defaults.JumpSpeed = cfg.JumpSpeed
+	}
+	if cfg.Gravity != 0 {
+		defaults.Gravity = cfg.Gravity
+	}
+	if cfg.StepHeight != 0 {
+		defaults.StepHeight = cfg.StepHeight
+	}
+	if cfg.GroundProbe != 0 {
+		defaults.GroundProbe = cfg.GroundProbe
+	}
+	return defaults
+}
+
+func (mod GroundedPlayerControllerModule) Install(app *App, cmd *Commands) {
+	if app != nil {
+		if _, ok := app.resources[reflect.TypeOf(GroundedPlayerControllerDefaults{})]; !ok {
+			cmd.AddResources(&GroundedPlayerControllerDefaults{
+				Config: effectiveGroundedPlayerControllerConfig(mod.Config),
+			})
+		}
+	}
+	app.UseSystem(System(groundedPlayerInputSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(groundedPlayerControlSystem).InStage(Update).RunAlways())
+}
+
+func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) EntityId {
+	return SpawnGroundedPlayerAtMarkerWithConfig(cmd, marker, groundedPlayerConfigFromApp(cmd.app))
+}
+
+func SpawnGroundedPlayerAtMarkerWithConfig(cmd *Commands, marker content.LevelMarkerDef, cfg GroundedPlayerControllerConfig) EntityId {
+	transform := levelTransformToComponent(marker.Transform)
+	transform.Scale = mgl32.Vec3{1, 1, 1}
+	forward := forwardFromYawPitch(0, 0)
+	cfg = effectiveGroundedPlayerControllerConfig(cfg)
+	ctrl := GroundedPlayerControllerComponent{
+		Height:           cfg.Height,
+		EyeHeight:        cfg.EyeHeight,
+		Radius:           cfg.Radius,
+		Speed:            cfg.Speed,
+		SprintMultiplier: cfg.SprintMultiplier,
+		Sensitivity:      cfg.Sensitivity,
+		JumpSpeed:        cfg.JumpSpeed,
+		Gravity:          cfg.Gravity,
+		StepHeight:       cfg.StepHeight,
+		GroundProbe:      cfg.GroundProbe,
+		Grounded:         true,
+		NeedsGroundSnap:  true,
 	}
 	local := LocalTransformComponent{
 		Position: transform.Position,
@@ -72,6 +156,17 @@ func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) E
 		&ctrl,
 		&StreamedLevelObserverComponent{Radius: 0},
 	)
+}
+
+func groundedPlayerConfigFromApp(app *App) GroundedPlayerControllerConfig {
+	if app != nil {
+		if resource, ok := app.resources[reflect.TypeOf(GroundedPlayerControllerDefaults{})]; ok {
+			if defaults, ok := resource.(*GroundedPlayerControllerDefaults); ok && defaults != nil {
+				return defaults.Config
+			}
+		}
+	}
+	return DefaultGroundedPlayerControllerConfig()
 }
 
 func groundedPlayerInputSystem(input *Input, cmd *Commands) {
@@ -189,13 +284,25 @@ func groundedMovementBlocked(voxRt *VoxelRtState, basePos, move mgl32.Vec3, ctrl
 	dir := move.Normalize()
 	dist := move.Len() + defaulted(ctrl.Radius, 0.35)
 	height := defaulted(ctrl.Height, 1.8)
+	radius := defaulted(ctrl.Radius, 0.35)
 	step := defaulted(ctrl.StepHeight, 0.6)
 	samples := []float32{step * 0.5, height * 0.5, maxf(height-0.2, step)}
+	perp := mgl32.Vec3{-dir.Z(), 0, dir.X()}
+	if perp.Len() > 1e-5 {
+		perp = perp.Normalize()
+	}
+	offsets := []mgl32.Vec3{{0, 0, 0}}
+	if perp.Len() > 0 {
+		side := perp.Mul(radius)
+		offsets = append(offsets, side, side.Mul(-1))
+	}
 	for _, sampleY := range samples {
-		origin := basePos.Add(mgl32.Vec3{0, sampleY, 0})
-		hit := voxRt.Raycast(origin, dir, dist)
-		if hit.Hit && hit.T <= dist {
-			return true
+		for _, offset := range offsets {
+			origin := basePos.Add(offset).Add(mgl32.Vec3{0, sampleY, 0})
+			hit := voxRt.Raycast(origin, dir, dist)
+			if hit.Hit && hit.T <= dist {
+				return true
+			}
 		}
 	}
 	return false
@@ -211,6 +318,7 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 
 	if ctrl.Grounded && ctrl.JumpQueued {
 		ctrl.Grounded = false
+		ctrl.NeedsGroundSnap = false
 		ctrl.VerticalVelocity = defaulted(ctrl.JumpSpeed, 5.5)
 	}
 	ctrl.JumpQueued = false
@@ -224,7 +332,18 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 		return
 	}
 	probeOrigin := basePos.Add(mgl32.Vec3{0, height + stepHeight, 0})
-	hit := voxRt.Raycast(probeOrigin, mgl32.Vec3{0, -1, 0}, height+stepHeight+groundProbe+maxf(ctrl.VerticalVelocity*dt, 0))
+	fallDistance := maxf(-ctrl.VerticalVelocity*dt, 0)
+	probeDistance := height + stepHeight + groundProbe + fallDistance + groundProbe
+	hit := voxRt.Raycast(probeOrigin, mgl32.Vec3{0, -1, 0}, probeDistance)
+	if ctrl.NeedsGroundSnap {
+		if hit.Hit && hit.Normal.Y() > 0.35 {
+			basePos[1] = probeOrigin.Y() - hit.T
+			ctrl.VerticalVelocity = 0
+			ctrl.Grounded = true
+			ctrl.NeedsGroundSnap = false
+		}
+		return
+	}
 	if hit.Hit && hit.Normal.Y() > 0.35 {
 		floorY := probeOrigin.Y() - hit.T
 		if ctrl.VerticalVelocity <= 0 && basePos.Y()-floorY <= stepHeight+groundProbe {

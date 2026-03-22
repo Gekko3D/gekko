@@ -344,6 +344,9 @@ func applyLevelEnvironment(cmd *Commands, env *content.LevelEnvironmentDef) {
 
 	ambientIntensity := float32(0.1)
 	directionalIntensity := float32(1.5)
+	ambientColor := [3]float32{1, 1, 1}
+	directionalColor := [3]float32{1, 1, 1}
+	directionalRotation := mgl32.QuatRotate(mgl32.DegToRad(-45), mgl32.Vec3{1, 0, 0})
 	switch preset {
 	case "orbit":
 		ambientIntensity = 0.26
@@ -351,6 +354,13 @@ func applyLevelEnvironment(cmd *Commands, env *content.LevelEnvironmentDef) {
 	case "space":
 		ambientIntensity = 0.08
 		directionalIntensity = 1.35
+	case "daylight":
+		ambientIntensity = 0.22
+		directionalIntensity = 1.85
+		ambientColor = [3]float32{0.78, 0.84, 0.92}
+		directionalColor = [3]float32{1.0, 0.95, 0.86}
+		directionalRotation = mgl32.QuatRotate(mgl32.DegToRad(-50), mgl32.Vec3{1, 0, 0}).
+			Mul(mgl32.QuatRotate(mgl32.DegToRad(20), mgl32.Vec3{0, 1, 0}))
 	case "":
 	default:
 	}
@@ -359,23 +369,74 @@ func applyLevelEnvironment(cmd *Commands, env *content.LevelEnvironmentDef) {
 		&LightComponent{
 			Type:      LightTypeAmbient,
 			Intensity: ambientIntensity,
-			Color:     [3]float32{1, 1, 1},
+			Color:     ambientColor,
 			Range:     40,
 		},
 	)
 	cmd.AddEntity(
 		&TransformComponent{
 			Position: mgl32.Vec3{0, 100, 0},
-			Rotation: mgl32.QuatRotate(mgl32.DegToRad(-45), mgl32.Vec3{1, 0, 0}),
+			Rotation: directionalRotation,
 			Scale:    mgl32.Vec3{1, 1, 1},
 		},
 		&LightComponent{
 			Type:      LightTypeDirectional,
 			Intensity: directionalIntensity,
-			Color:     [3]float32{1, 1, 1},
+			Color:     directionalColor,
 			Range:     1000,
 		},
 	)
+
+	if preset == "daylight" {
+		spawnDaylightSkybox(cmd)
+	}
+}
+
+func spawnDaylightSkybox(cmd *Commands) {
+	cmd.AddEntity(&SkyboxLayerComponent{
+		LayerType:  SkyboxLayerGradient,
+		Resolution: [2]int{1024, 512},
+		ColorA:     mgl32.Vec3{0.96, 0.74, 0.52},
+		ColorB:     mgl32.Vec3{0.19, 0.42, 0.78},
+		Opacity:    1.0,
+		Priority:   0,
+		Smooth:     true,
+		BlendMode:  SkyboxBlendAlpha,
+	})
+
+	cmd.AddEntity(&SkyboxLayerComponent{
+		NoiseType:   SkyboxNoisePerlin,
+		Seed:        42,
+		Scale:       4.5,
+		Octaves:     4,
+		Persistence: 0.5,
+		Lacunarity:  2.0,
+		Resolution:  [2]int{1024, 512},
+		ColorA:      mgl32.Vec3{1.0, 0.98, 0.95},
+		ColorB:      mgl32.Vec3{0.77, 0.82, 0.9},
+		Threshold:   0.52,
+		Opacity:     0.82,
+		Priority:    1,
+		Smooth:      true,
+		BlendMode:   SkyboxBlendAlpha,
+		WindSpeed:   mgl32.Vec3{0.015, 0.008, 0},
+	})
+
+	cmd.AddEntity(&SkyboxLayerComponent{
+		NoiseType:  SkyboxNoisePerlin,
+		Seed:       999,
+		Scale:      11.0,
+		Octaves:    2,
+		Resolution: [2]int{1024, 512},
+		ColorA:     mgl32.Vec3{0.97, 0.97, 1.0},
+		ColorB:     mgl32.Vec3{0.73, 0.78, 0.86},
+		Threshold:  0.6,
+		Opacity:    0.38,
+		Priority:   2,
+		Smooth:     true,
+		BlendMode:  SkyboxBlendAlpha,
+		WindSpeed:  mgl32.Vec3{-0.02, 0.012, 0.006},
+	})
 }
 
 func stableTerrainGroupID(levelID string, terrainID string) uint32 {

@@ -253,3 +253,31 @@ func TestImportedWorldBakeCellSnapsNegativeDrift(t *testing.T) {
 		}
 	}
 }
+
+func TestCountEnclosedVoidCellsDetectsSealedPocket(t *testing.T) {
+	occupancy := make(map[[3]int]struct{})
+	for x := 2; x <= 4; x++ {
+		for y := 2; y <= 4; y++ {
+			for z := 2; z <= 4; z++ {
+				if x == 3 && y == 3 && z == 3 {
+					continue
+				}
+				occupancy[[3]int{x, y, z}] = struct{}{}
+			}
+		}
+	}
+
+	if got := countEnclosedVoidCells(occupancy, 8); got != 1 {
+		t.Fatalf("countEnclosedVoidCells() = %d, want 1", got)
+	}
+}
+
+func TestCountEnclosedVoidCellsIgnoresSparseChunkExterior(t *testing.T) {
+	occupancy := map[[3]int]struct{}{
+		{64, 64, 64}: {},
+	}
+
+	if got := countEnclosedVoidCells(occupancy, 128); got != 0 {
+		t.Fatalf("countEnclosedVoidCells() = %d, want 0", got)
+	}
+}

@@ -77,6 +77,50 @@ func TestLoadAndSpawnAuthoredLevelSpawnsPlacementWithLevelAndAssetMetadata(t *te
 	}
 }
 
+func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	level := content.NewLevelDef("daylight")
+	level.Environment = &content.LevelEnvironmentDef{Preset: "daylight"}
+
+	if _, err := SpawnAuthoredLevel(cmd, nil, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{}); err != nil {
+		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	ambientCount := 0
+	directionalCount := 0
+	MakeQuery1[LightComponent](cmd).Map(func(_ EntityId, light *LightComponent) bool {
+		switch light.Type {
+		case LightTypeAmbient:
+			ambientCount++
+		case LightTypeDirectional:
+			directionalCount++
+		}
+		return true
+	})
+	if ambientCount != 1 {
+		t.Fatalf("expected one ambient light, got %d", ambientCount)
+	}
+	if directionalCount != 1 {
+		t.Fatalf("expected one directional light, got %d", directionalCount)
+	}
+
+	var gradientCount, noiseCount int
+	MakeQuery1[SkyboxLayerComponent](cmd).Map(func(_ EntityId, layer *SkyboxLayerComponent) bool {
+		if layer.LayerType == SkyboxLayerGradient {
+			gradientCount++
+		} else {
+			noiseCount++
+		}
+		return true
+	})
+	if gradientCount != 1 || noiseCount != 2 {
+		t.Fatalf("expected daylight skybox to spawn 1 gradient and 2 noise layers, got gradient=%d noise=%d", gradientCount, noiseCount)
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelExpandsPlacementVolumesDeterministically(t *testing.T) {
 	root := t.TempDir()
 	assetPath := filepath.Join(root, "assets", "asteroid.gkasset")

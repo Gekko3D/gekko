@@ -330,120 +330,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		return true
 	})
 
-	// Sync lights
-	state.RtApp.Scene.Lights = state.RtApp.Scene.Lights[:0]
-	defaultAmbient := mgl32.Vec3{0.2, 0.2, 0.2}
-	ambientAccum := mgl32.Vec3{0, 0, 0}
-	ambientFound := false
-	type pendingLight struct {
-		entityID  EntityId
-		lightType LightType
-		intensity float32
-		gpu       core.Light
-	}
-	pendingLights := make([]pendingLight, 0, 8)
-
-	MakeQuery1[LightComponent](cmd).Map(func(entityId EntityId, light *LightComponent) bool {
-		if light.Type == LightTypeAmbient {
-			ambientAccum = ambientAccum.Add(mgl32.Vec3(light.Color).Mul(light.Intensity))
-			ambientFound = true
-			return true
-		}
-
-		// Positional lights (Point, Directional, Spot)
-		var pos mgl32.Vec3
-		var rot mgl32.Quat = mgl32.QuatIdent()
-		found := false
-
-		// Exhaustive check for spatial data (Value/Pointer x World/Local)
-		for _, c := range cmd.GetAllComponents(entityId) {
-			switch t := c.(type) {
-			case TransformComponent:
-				if !found {
-					pos, rot, found = t.Position, t.Rotation, true
-				}
-			case *TransformComponent:
-				if !found {
-					pos, rot, found = t.Position, t.Rotation, true
-				}
-			}
-		}
-
-		if !found {
-			return true
-		}
-
-		// Convert ECS light to GPU light
-		gpuLight := core.Light{}
-		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), 1.0}
-
-		baseForward := mgl32.Vec3{0, 0, -1}
-		if light.Type == LightTypeDirectional {
-			baseForward = mgl32.Vec3{1, -1, 0}.Normalize()
-		} else if light.Type == LightTypeSpot {
-			baseForward = mgl32.Vec3{0, -1, 0}
-		}
-
-		dir := rot.Rotate(baseForward)
-		gpuLight.Direction = [4]float32{dir.X(), dir.Y(), dir.Z(), 0.0}
-		if light.Type == LightTypeDirectional {
-			state.SunDirection = dir
-			state.SunIntensity = light.Intensity
-		}
-		gpuLight.Color = [4]float32{light.Color[0], light.Color[1], light.Color[2], light.Intensity}
-
-		cosAngle := float32(0.0)
-		if light.Type == LightTypeSpot {
-			cosAngle = float32(math.Cos(float64(light.ConeAngle) * math.Pi / 180.0 / 2.0))
-		}
-
-		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
-		pendingLights = append(pendingLights, pendingLight{
-			entityID:  entityId,
-			lightType: light.Type,
-			intensity: light.Intensity,
-			gpu:       gpuLight,
-		})
-		return true
-	})
-
-	sort.Slice(pendingLights, func(i, j int) bool {
-		li := pendingLights[i]
-		lj := pendingLights[j]
-
-		ranki := 2
-		rankj := 2
-		if li.lightType == LightTypeDirectional {
-			ranki = 0
-		} else if li.lightType == LightTypeSpot {
-			ranki = 1
-		}
-		if lj.lightType == LightTypeDirectional {
-			rankj = 0
-		} else if lj.lightType == LightTypeSpot {
-			rankj = 1
-		}
-
-		if ranki != rankj {
-			return ranki < rankj
-		}
-		if li.lightType == lj.lightType && li.intensity != lj.intensity {
-			return li.intensity > lj.intensity
-		}
-		return li.entityID < lj.entityID
-	})
-
-	for _, pl := range pendingLights {
-		state.RtApp.Scene.Lights = append(state.RtApp.Scene.Lights, pl.gpu)
-	}
-
-	if ambientFound {
-		state.RtApp.Scene.AmbientLight = ambientAccum
-	} else {
-		state.RtApp.Scene.AmbientLight = defaultAmbient
-	}
-
-	state.RtApp.Profiler.EndScope("Sync Lights")
+	syncVoxelRtLights(state, cmd)
 
 	state.RtApp.Profiler.BeginScope("Sync Gizmos")
 	state.RtApp.Scene.Gizmos = state.RtApp.Scene.Gizmos[:0]
@@ -567,6 +454,127 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	if state.RtApp.BufferManager != nil {
 		state.RtApp.BufferManager.SyncSpriteBatches(state.RtApp.SpritesPipeline, gpuSpriteBatches)
+	}
+}
+
+func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil || state.RtApp.Scene == nil || cmd == nil {
+		return
+	}
+
+	state.RtApp.Profiler.BeginScope("Sync Lights")
+	defer state.RtApp.Profiler.EndScope("Sync Lights")
+
+	state.RtApp.Scene.Lights = state.RtApp.Scene.Lights[:0]
+	defaultAmbient := mgl32.Vec3{0.2, 0.2, 0.2}
+	ambientAccum := mgl32.Vec3{0, 0, 0}
+	ambientFound := false
+	state.SunDirection = mgl32.Vec3{}
+	state.SunIntensity = 0
+
+	type pendingLight struct {
+		entityID  EntityId
+		lightType LightType
+		intensity float32
+		gpu       core.Light
+	}
+	pendingLights := make([]pendingLight, 0, 8)
+
+	MakeQuery1[LightComponent](cmd).Map(func(entityId EntityId, light *LightComponent) bool {
+		if light.Type == LightTypeAmbient {
+			ambientAccum = ambientAccum.Add(mgl32.Vec3(light.Color).Mul(light.Intensity))
+			ambientFound = true
+			return true
+		}
+
+		var pos mgl32.Vec3
+		var rot mgl32.Quat = mgl32.QuatIdent()
+		found := false
+
+		for _, c := range cmd.GetAllComponents(entityId) {
+			switch t := c.(type) {
+			case TransformComponent:
+				if !found {
+					pos, rot, found = t.Position, t.Rotation, true
+				}
+			case *TransformComponent:
+				if !found {
+					pos, rot, found = t.Position, t.Rotation, true
+				}
+			}
+		}
+
+		if !found {
+			return true
+		}
+
+		gpuLight := core.Light{}
+		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), 1.0}
+
+		baseForward := mgl32.Vec3{0, 0, -1}
+		if light.Type == LightTypeDirectional {
+			baseForward = mgl32.Vec3{1, -1, 0}.Normalize()
+		} else if light.Type == LightTypeSpot {
+			baseForward = mgl32.Vec3{0, -1, 0}
+		}
+
+		dir := rot.Rotate(baseForward)
+		gpuLight.Direction = [4]float32{dir.X(), dir.Y(), dir.Z(), 0.0}
+		if light.Type == LightTypeDirectional {
+			state.SunDirection = dir
+			state.SunIntensity = light.Intensity
+		}
+		gpuLight.Color = [4]float32{light.Color[0], light.Color[1], light.Color[2], light.Intensity}
+
+		cosAngle := float32(0.0)
+		if light.Type == LightTypeSpot {
+			cosAngle = float32(math.Cos(float64(light.ConeAngle) * math.Pi / 180.0 / 2.0))
+		}
+
+		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
+		pendingLights = append(pendingLights, pendingLight{
+			entityID:  entityId,
+			lightType: light.Type,
+			intensity: light.Intensity,
+			gpu:       gpuLight,
+		})
+		return true
+	})
+
+	sort.Slice(pendingLights, func(i, j int) bool {
+		li := pendingLights[i]
+		lj := pendingLights[j]
+
+		ranki := 2
+		rankj := 2
+		if li.lightType == LightTypeDirectional {
+			ranki = 0
+		} else if li.lightType == LightTypeSpot {
+			ranki = 1
+		}
+		if lj.lightType == LightTypeDirectional {
+			rankj = 0
+		} else if lj.lightType == LightTypeSpot {
+			rankj = 1
+		}
+
+		if ranki != rankj {
+			return ranki < rankj
+		}
+		if li.lightType == lj.lightType && li.intensity != lj.intensity {
+			return li.intensity > lj.intensity
+		}
+		return li.entityID < lj.entityID
+	})
+
+	for _, pl := range pendingLights {
+		state.RtApp.Scene.Lights = append(state.RtApp.Scene.Lights, pl.gpu)
+	}
+
+	if ambientFound {
+		state.RtApp.Scene.AmbientLight = ambientAccum
+	} else {
+		state.RtApp.Scene.AmbientLight = defaultAmbient
 	}
 }
 

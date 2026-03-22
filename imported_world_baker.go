@@ -428,7 +428,6 @@ func importedWorldPaletteFromVox(voxFile *VoxFile) []content.ImportedWorldPalett
 	return palette
 }
 
-
 func scaleImportedWorldBakeVoxFile(voxFile *VoxFile, scale float32) *VoxFile {
 	if voxFile == nil || scale <= 0 || scale == 1 {
 		return voxFile
@@ -776,58 +775,92 @@ var importedWorldNeighborOffsets = [][3]int{
 }
 
 func countEnclosedVoidCells(occupancy map[[3]int]struct{}, chunkSize int) int {
-	if chunkSize <= 0 {
+	if chunkSize <= 0 || len(occupancy) == 0 {
 		return 0
 	}
-	visited := make(map[[3]int]struct{}, chunkSize*chunkSize)
-	queue := make([][3]int, 0, chunkSize*chunkSize)
-	for x := 0; x < chunkSize; x++ {
-		for y := 0; y < chunkSize; y++ {
-			for z := 0; z < chunkSize; z++ {
-				if x != 0 && y != 0 && z != 0 && x != chunkSize-1 && y != chunkSize-1 && z != chunkSize-1 {
+	minX, minY, minZ := chunkSize-1, chunkSize-1, chunkSize-1
+	maxX, maxY, maxZ := 0, 0, 0
+	for key := range occupancy {
+		minX = min(minX, key[0])
+		minY = min(minY, key[1])
+		minZ = min(minZ, key[2])
+		maxX = max(maxX, key[0])
+		maxY = max(maxY, key[1])
+		maxZ = max(maxZ, key[2])
+	}
+
+	searchMinX := max(minX-1, 0)
+	searchMinY := max(minY-1, 0)
+	searchMinZ := max(minZ-1, 0)
+	searchMaxX := min(maxX+1, chunkSize-1)
+	searchMaxY := min(maxY+1, chunkSize-1)
+	searchMaxZ := min(maxZ+1, chunkSize-1)
+
+	sizeX := searchMaxX - searchMinX + 1
+	sizeY := searchMaxY - searchMinY + 1
+	sizeZ := searchMaxZ - searchMinZ + 1
+	if sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 {
+		return 0
+	}
+
+	visited := make([]bool, sizeX*sizeY*sizeZ)
+	indexOf := func(x, y, z int) int {
+		return ((x-searchMinX)*sizeY+(y-searchMinY))*sizeZ + (z - searchMinZ)
+	}
+
+	queue := make([][3]int, 0, sizeX*sizeY+sizeX*sizeZ+sizeY*sizeZ)
+	enqueueIfBoundaryEmpty := func(x, y, z int) {
+		key := [3]int{x, y, z}
+		if _, solid := occupancy[key]; solid {
+			return
+		}
+		idx := indexOf(x, y, z)
+		if visited[idx] {
+			return
+		}
+		visited[idx] = true
+		queue = append(queue, key)
+	}
+
+	for x := searchMinX; x <= searchMaxX; x++ {
+		for y := searchMinY; y <= searchMaxY; y++ {
+			for z := searchMinZ; z <= searchMaxZ; z++ {
+				if x != searchMinX && y != searchMinY && z != searchMinZ && x != searchMaxX && y != searchMaxY && z != searchMaxZ {
 					continue
 				}
-				key := [3]int{x, y, z}
-				if _, solid := occupancy[key]; solid {
-					continue
-				}
-				if _, ok := visited[key]; ok {
-					continue
-				}
-				visited[key] = struct{}{}
-				queue = append(queue, key)
+				enqueueIfBoundaryEmpty(x, y, z)
 			}
 		}
 	}
 
-	for len(queue) > 0 {
-		curr := queue[0]
-		queue = queue[1:]
+	for head := 0; head < len(queue); head++ {
+		curr := queue[head]
 		for _, offset := range importedWorldNeighborOffsets {
 			next := [3]int{curr[0] + offset[0], curr[1] + offset[1], curr[2] + offset[2]}
-			if next[0] < 0 || next[1] < 0 || next[2] < 0 || next[0] >= chunkSize || next[1] >= chunkSize || next[2] >= chunkSize {
+			if next[0] < searchMinX || next[1] < searchMinY || next[2] < searchMinZ || next[0] > searchMaxX || next[1] > searchMaxY || next[2] > searchMaxZ {
 				continue
 			}
 			if _, solid := occupancy[next]; solid {
 				continue
 			}
-			if _, ok := visited[next]; ok {
+			idx := indexOf(next[0], next[1], next[2])
+			if visited[idx] {
 				continue
 			}
-			visited[next] = struct{}{}
+			visited[idx] = true
 			queue = append(queue, next)
 		}
 	}
 
 	enclosed := 0
-	for x := 0; x < chunkSize; x++ {
-		for y := 0; y < chunkSize; y++ {
-			for z := 0; z < chunkSize; z++ {
+	for x := searchMinX; x <= searchMaxX; x++ {
+		for y := searchMinY; y <= searchMaxY; y++ {
+			for z := searchMinZ; z <= searchMaxZ; z++ {
 				key := [3]int{x, y, z}
 				if _, solid := occupancy[key]; solid {
 					continue
 				}
-				if _, reachable := visited[key]; reachable {
+				if visited[indexOf(x, y, z)] {
 					continue
 				}
 				enclosed++
