@@ -8,6 +8,16 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+func testSceneViewProj() mgl32.Mat4 {
+	proj := mgl32.Perspective(mgl32.DegToRad(90), 1.0, 1.0, 100.0)
+	view := mgl32.LookAtV(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 0, -1}, mgl32.Vec3{0, 1, 0})
+	return proj.Mul4(view)
+}
+
+func testSceneFrustumPlanes() [6]mgl32.Vec4 {
+	return (&CameraState{}).ExtractFrustum(testSceneViewProj())
+}
+
 func TestTLASSeparation(t *testing.T) {
 	scene := NewScene()
 
@@ -21,7 +31,7 @@ func TestTLASSeparation(t *testing.T) {
 
 	scene.AddObject(obj1)
 	scene.AddObject(obj2)
-	scene.Commit([6]mgl32.Vec4{}, nil, 0, 0, mgl32.Ident4())
+	scene.Commit([6]mgl32.Vec4{}, SceneCommitOptions{})
 
 	// Verify AABBs are separate
 	if obj1.WorldAABB == nil || obj2.WorldAABB == nil {
@@ -107,7 +117,7 @@ func TestSceneCommit(t *testing.T) {
 		scene.AddObject(obj)
 	}
 
-	scene.Commit([6]mgl32.Vec4{}, nil, 0, 0, mgl32.Ident4())
+	scene.Commit([6]mgl32.Vec4{}, SceneCommitOptions{})
 
 	// Should have BVH data
 	if len(scene.BVHNodesBytes) == 0 {
@@ -142,7 +152,7 @@ func TestSharedXBrickMap(t *testing.T) {
 	scene := NewScene()
 	scene.AddObject(obj1)
 	scene.AddObject(obj2)
-	scene.Commit([6]mgl32.Vec4{}, nil, 0, 0, mgl32.Ident4())
+	scene.Commit([6]mgl32.Vec4{}, SceneCommitOptions{})
 
 	// Both should have different world AABBs despite sharing geometry
 	if obj1.WorldAABB == nil || obj2.WorldAABB == nil {
@@ -155,6 +165,149 @@ func TestSharedXBrickMap(t *testing.T) {
 	// They should not overlap (separated by 100 units in X)
 	if aabb1[1][0] >= aabb2[0][0]-10 { // Some margin
 		t.Error("Instances should have separate AABBs despite shared geometry")
+	}
+}
+
+func TestSceneCommitSkipsHiZWhenObjectDisallowsOcclusion(t *testing.T) {
+	scene := NewScene()
+	obj := NewVoxelObject()
+	obj.AllowOcclusionCulling = false
+	obj.Transform.Position = mgl32.Vec3{0, 0, -20}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	hiz := make([]float32, 16)
+	for i := range hiz {
+		hiz[i] = 1.0
+	}
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		OcclusionMode: OcclusionConservative,
+		HiZData:       hiz,
+		HiZW:          4,
+		HiZH:          4,
+		LastViewProj:  testSceneViewProj(),
+	})
+
+	if len(scene.VisibleObjects) != 1 {
+		t.Fatalf("expected non-occludable object to remain visible, got %d visible objects", len(scene.VisibleObjects))
+	}
+	if scene.OcclusionStats.HiZEligible != 0 {
+		t.Fatalf("expected object to bypass Hi-Z eligibility, got %d eligible objects", scene.OcclusionStats.HiZEligible)
+	}
+}
+
+func TestSceneCommitWarmupKeepsNewObjectVisible(t *testing.T) {
+	scene := NewScene()
+	obj := NewVoxelObject()
+	obj.Transform.Position = mgl32.Vec3{0, 0, -20}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	hiz := make([]float32, 16)
+	for i := range hiz {
+		hiz[i] = 1.0
+	}
+
+	opts := SceneCommitOptions{
+		OcclusionMode: OcclusionConservative,
+		HiZData:       hiz,
+		HiZW:          4,
+		HiZH:          4,
+		LastViewProj:  testSceneViewProj(),
+	}
+
+	for i := 0; i < occlusionWarmupFrames; i++ {
+		scene.Commit(testSceneFrustumPlanes(), opts)
+		if len(scene.VisibleObjects) != 1 {
+			t.Fatalf("expected warmup frame %d to keep object visible", i)
+		}
+	}
+
+	scene.Commit(testSceneFrustumPlanes(), opts)
+	if len(scene.VisibleObjects) != 0 {
+		t.Fatalf("expected object to be culled after warmup expires, got %d visible objects", len(scene.VisibleObjects))
+	}
+}
+
+func TestSceneCommitHysteresisKeepsRecentlyVisibleObject(t *testing.T) {
+	scene := NewScene()
+	obj := NewVoxelObject()
+	obj.Transform.Position = mgl32.Vec3{0, 0, -20}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	visibleHiZ := make([]float32, 16)
+	for i := range visibleHiZ {
+		visibleHiZ[i] = 100.0
+	}
+	occludedHiZ := make([]float32, 16)
+	for i := range occludedHiZ {
+		occludedHiZ[i] = 1.0
+	}
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		OcclusionMode: OcclusionConservative,
+		HiZData:       visibleHiZ,
+		HiZW:          4,
+		HiZH:          4,
+		LastViewProj:  testSceneViewProj(),
+	})
+	if len(scene.VisibleObjects) != 1 {
+		t.Fatal("expected object to be initially visible")
+	}
+
+	for i := 0; i < occlusionHysteresisFrames; i++ {
+		scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+			OcclusionMode: OcclusionConservative,
+			HiZData:       occludedHiZ,
+			HiZW:          4,
+			HiZH:          4,
+			LastViewProj:  testSceneViewProj(),
+		})
+		if len(scene.VisibleObjects) != 1 {
+			t.Fatalf("expected hysteresis frame %d to keep object visible", i)
+		}
+	}
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		OcclusionMode: OcclusionConservative,
+		HiZData:       occludedHiZ,
+		HiZW:          4,
+		HiZH:          4,
+		LastViewProj:  testSceneViewProj(),
+	})
+	if len(scene.VisibleObjects) != 0 {
+		t.Fatalf("expected object to be culled after hysteresis expires, got %d visible objects", len(scene.VisibleObjects))
+	}
+}
+
+func TestSceneCommitDisablesHiZDuringFastCameraMotion(t *testing.T) {
+	scene := NewScene()
+	obj := NewVoxelObject()
+	obj.Transform.Position = mgl32.Vec3{0, 0, -20}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	hiz := make([]float32, 16)
+	for i := range hiz {
+		hiz[i] = 1.0
+	}
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		OcclusionMode:    OcclusionConservative,
+		HiZData:          hiz,
+		HiZW:             4,
+		HiZH:             4,
+		LastViewProj:     testSceneViewProj(),
+		FastCameraMotion: true,
+	})
+
+	if len(scene.VisibleObjects) != 1 {
+		t.Fatalf("expected fast camera motion to bypass Hi-Z culling, got %d visible objects", len(scene.VisibleObjects))
+	}
+	if scene.OcclusionStats.HiZMotionDisabled != 1 {
+		t.Fatalf("expected fast camera motion stat to be recorded, got %d", scene.OcclusionStats.HiZMotionDisabled)
 	}
 }
 

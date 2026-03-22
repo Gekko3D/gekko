@@ -19,6 +19,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	RtApp := app_rt.NewApp(windowState.windowGlfw)
 	RtApp.DebugMode = mod.DebugMode
 	RtApp.RenderMode = uint32(mod.RenderMode)
+	RtApp.OcclusionMode = mod.OcclusionMode
 	RtApp.FontPath = mod.FontPath
 	if err := RtApp.Init(); err != nil {
 		panic(err)
@@ -171,6 +172,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.Transform.Pivot = transform.Pivot
 		obj.ShadowGroupID = vox.ShadowGroupID
 		obj.ShadowSeamWorldEpsilon = vox.ShadowSeamWorldEpsilon
+		obj.AllowOcclusionCulling = voxelObjectAllowsOcclusion(cmd, entityId, vox)
 		obj.IsTerrainChunk = vox.IsTerrainChunk
 		obj.TerrainGroupID = vox.TerrainGroupID
 		obj.TerrainChunkCoord = vox.TerrainChunkCoord
@@ -455,6 +457,22 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	if state.RtApp.BufferManager != nil {
 		state.RtApp.BufferManager.SyncSpriteBatches(state.RtApp.SpritesPipeline, gpuSpriteBatches)
 	}
+}
+
+func voxelObjectAllowsOcclusion(cmd *Commands, entityId EntityId, vox *VoxelModelComponent) bool {
+	if vox == nil {
+		return true
+	}
+	if vox.IsTerrainChunk || vox.ShadowGroupID != 0 {
+		return false
+	}
+	if _, ok := AuthoredTerrainChunkRefForEntity(cmd, entityId); ok {
+		return false
+	}
+	if _, ok := AuthoredImportedWorldChunkRefForEntity(cmd, entityId); ok {
+		return false
+	}
+	return true
 }
 
 func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {

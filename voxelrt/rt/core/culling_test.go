@@ -106,14 +106,14 @@ func TestOcclusion(t *testing.T) {
 	// 1. Object CLOSE (Z=-5). Dist = 5.
 	// 5 < 10. Should NOT be occluded.
 	aabbClose := [2]mgl32.Vec3{{-1, -1, -6}, {1, 1, -4}}
-	if IsOccluded(aabbClose, hiz, w, h, vp) {
+	if IsOccluded(aabbClose, hiz, w, h, vp, 0) {
 		t.Error("Close object (dist 5) should NOT be occluded by wall at dist 10")
 	}
 
 	// 2. Object FAR (Z=-20). Dist = 20.
 	// 20 > 10. Should be occluded.
 	aabbFar := [2]mgl32.Vec3{{-1, -1, -21}, {1, 1, -19}}
-	if !IsOccluded(aabbFar, hiz, w, h, vp) {
+	if !IsOccluded(aabbFar, hiz, w, h, vp, 0) {
 		t.Error("Far object (dist 20) MUST be occluded by wall at dist 10")
 	}
 
@@ -128,7 +128,27 @@ func TestOcclusion(t *testing.T) {
 
 	// Object at Z=-20 is dist 20.
 	// 20 < 100. Should NOT be occluded now because of the hole.
-	if IsOccluded(aabbFar, hiz, w, h, vp) {
+	if IsOccluded(aabbFar, hiz, w, h, vp, 0) {
 		t.Error("Far object should be visible through the hole (depth 100)")
+	}
+}
+
+func TestOcclusionDepthSlack(t *testing.T) {
+	w, h := uint32(4), uint32(4)
+	hiz := make([]float32, w*h)
+	for i := range hiz {
+		hiz[i] = 18.0
+	}
+
+	proj := mgl32.Perspective(mgl32.DegToRad(90), 1.0, 1.0, 100.0)
+	view := mgl32.LookAtV(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 0, -1}, mgl32.Vec3{0, 1, 0})
+	vp := proj.Mul4(view)
+
+	aabb := [2]mgl32.Vec3{{-1, -1, -21}, {1, 1, -19}}
+	if !IsOccluded(aabb, hiz, w, h, vp, 0) {
+		t.Fatal("expected object to be occluded without slack")
+	}
+	if IsOccluded(aabb, hiz, w, h, vp, 2.5) {
+		t.Fatal("expected depth slack to keep the object visible")
 	}
 }

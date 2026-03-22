@@ -28,12 +28,13 @@ const (
 )
 
 type VoxelRtModule struct {
-	WindowWidth  int
-	WindowHeight int
-	WindowTitle  string
-	DebugMode    bool
-	RenderMode   RenderMode
-	FontPath     string
+	WindowWidth   int
+	WindowHeight  int
+	WindowTitle   string
+	DebugMode     bool
+	RenderMode    RenderMode
+	OcclusionMode core.OcclusionMode
+	FontPath      string
 }
 
 type VoxelRtState struct {

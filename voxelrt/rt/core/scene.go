@@ -15,6 +15,37 @@ type Ray struct {
 	Direction mgl32.Vec3
 }
 
+type OcclusionMode uint32
+
+const (
+	OcclusionOff OcclusionMode = iota
+	OcclusionConservative
+)
+
+const (
+	occlusionWarmupFrames      = 3
+	occlusionHysteresisFrames  = 3
+	defaultOcclusionDepthSlack = 0.25
+)
+
+type SceneCommitOptions struct {
+	OcclusionMode    OcclusionMode
+	HiZData          []float32
+	HiZW             uint32
+	HiZH             uint32
+	LastViewProj     mgl32.Mat4
+	FastCameraMotion bool
+	DepthSlack       float32
+}
+
+type OcclusionStats struct {
+	FrustumVisible    int
+	HiZEligible       int
+	HiZCulled         int
+	HiZHysteresisKept int
+	HiZMotionDisabled int
+}
+
 type HitResult struct {
 	Object *VoxelObject
 	Coord  [3]int
@@ -31,6 +62,7 @@ type VoxelObject struct {
 	LODThreshold           float32
 	ShadowGroupID          uint32
 	ShadowSeamWorldEpsilon float32
+	AllowOcclusionCulling  bool
 	IsTerrainChunk         bool
 	TerrainGroupID         uint32
 	TerrainChunkCoord      [3]int
@@ -39,9 +71,10 @@ type VoxelObject struct {
 
 func NewVoxelObject() *VoxelObject {
 	return &VoxelObject{
-		Transform:    NewTransform(),
-		XBrickMap:    volume.NewXBrickMap(),
-		LODThreshold: 50.0,
+		Transform:             NewTransform(),
+		XBrickMap:             volume.NewXBrickMap(),
+		LODThreshold:          50.0,
+		AllowOcclusionCulling: true,
 	}
 }
 
@@ -102,23 +135,39 @@ func max(a, b float32) float32 {
 }
 
 type Scene struct {
-	Objects           []*VoxelObject
-	VisibleObjects    []*VoxelObject
-	BVHNodesBytes     []byte // Linearized BVH nodes
-	Lights            []Light
-	Gizmos            []Gizmo
-	AmbientLight      mgl32.Vec3
-	TargetVoxelSize   float32
-	lastVisibleCount  int
-	StructureRevision uint64
+	Objects            []*VoxelObject
+	VisibleObjects     []*VoxelObject
+	BVHNodesBytes      []byte // Linearized BVH nodes
+	Lights             []Light
+	Gizmos             []Gizmo
+	AmbientLight       mgl32.Vec3
+	TargetVoxelSize    float32
+	lastVisibleCount   int
+	StructureRevision  uint64
+	OcclusionStats     OcclusionStats
+	lastVisibility     map[*VoxelObject]bool
+	occlusionWarmup    map[*VoxelObject]int
+	occlusionGrace     map[*VoxelObject]int
+	lastOcclusionDirty map[*VoxelObject]bool
 }
 
 func NewScene() *Scene {
 	return &Scene{
-		Objects:         []*VoxelObject{},
-		AmbientLight:    mgl32.Vec3{0.2, 0.2, 0.2},
-		TargetVoxelSize: 0.1, // matches gekko.VoxelSize
+		Objects:            []*VoxelObject{},
+		AmbientLight:       mgl32.Vec3{0.2, 0.2, 0.2},
+		TargetVoxelSize:    0.1, // matches gekko.VoxelSize
+		lastVisibility:     make(map[*VoxelObject]bool),
+		occlusionWarmup:    make(map[*VoxelObject]int),
+		occlusionGrace:     make(map[*VoxelObject]int),
+		lastOcclusionDirty: make(map[*VoxelObject]bool),
 	}
+}
+
+func (s *Scene) markOcclusionWarmup(obj *VoxelObject) {
+	if obj == nil {
+		return
+	}
+	s.occlusionWarmup[obj] = occlusionWarmupFrames
 }
 
 func (s *Scene) RescaleObject(obj *VoxelObject, factor float32) {
@@ -151,6 +200,9 @@ func (s *Scene) RescaleObject(obj *VoxelObject, factor float32) {
 func (s *Scene) AddObject(obj *VoxelObject) {
 	s.Objects = append(s.Objects, obj)
 	s.StructureRevision++
+	s.lastVisibility[obj] = false
+	s.lastOcclusionDirty[obj] = true
+	s.markOcclusionWarmup(obj)
 }
 
 func (s *Scene) Raycast(ray Ray, tMax float32) *HitResult {
@@ -233,40 +285,86 @@ func (s *Scene) RemoveObject(obj *VoxelObject) {
 		if o == obj {
 			s.Objects = append(s.Objects[:i], s.Objects[i+1:]...)
 			s.StructureRevision++
+			delete(s.lastVisibility, obj)
+			delete(s.occlusionWarmup, obj)
+			delete(s.occlusionGrace, obj)
+			delete(s.lastOcclusionDirty, obj)
 			return
 		}
 	}
 }
 
-func (s *Scene) Commit(planes [6]mgl32.Vec4, hizData []float32, hizW, hizH uint32, lastViewProj mgl32.Mat4) {
+func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	// Recompute AABBs
 	for _, obj := range s.Objects {
+		if obj == nil || obj.XBrickMap == nil {
+			continue
+		}
+		isDirtyForOcclusion := obj.WorldAABB == nil || obj.Transform.Dirty || obj.XBrickMap.AABBDirty || obj.XBrickMap.StructureDirty || len(obj.XBrickMap.DirtySectors) > 0 || len(obj.XBrickMap.DirtyBricks) > 0
+		if isDirtyForOcclusion && !s.lastOcclusionDirty[obj] {
+			s.markOcclusionWarmup(obj)
+		}
+		s.lastOcclusionDirty[obj] = isDirtyForOcclusion
 		obj.UpdateWorldAABB()
 	}
 
 	// Culling: Populate VisibleObjects
 	s.VisibleObjects = s.VisibleObjects[:0] // Clear but keep capacity
+	s.OcclusionStats = OcclusionStats{}
 
-	useHiZ := len(hizData) > 0 && hizW > 0 && hizH > 0
+	depthSlack := opts.DepthSlack
+	if depthSlack <= 0 {
+		depthSlack = defaultOcclusionDepthSlack
+	}
+	useHiZ := opts.OcclusionMode == OcclusionConservative &&
+		!opts.FastCameraMotion &&
+		len(opts.HiZData) > 0 &&
+		opts.HiZW > 0 &&
+		opts.HiZH > 0
+	if opts.FastCameraMotion && opts.OcclusionMode == OcclusionConservative {
+		s.OcclusionStats.HiZMotionDisabled = 1
+	}
 
 	for _, obj := range s.Objects {
 		if obj.WorldAABB == nil {
+			s.lastVisibility[obj] = false
 			continue
 		}
 
 		// 1. Frustum Culling
 		if !AABBInFrustum(*obj.WorldAABB, planes) {
+			s.lastVisibility[obj] = false
 			continue
 		}
+		s.OcclusionStats.FrustumVisible++
 
 		// 2. Occlusion Culling (Hi-Z)
-		if useHiZ {
-			if IsOccluded(*obj.WorldAABB, hizData, hizW, hizH, lastViewProj) {
+		occluded := false
+		if useHiZ && obj.AllowOcclusionCulling {
+			s.OcclusionStats.HiZEligible++
+			occluded = IsOccluded(*obj.WorldAABB, opts.HiZData, opts.HiZW, opts.HiZH, opts.LastViewProj, depthSlack)
+		}
+
+		if occluded {
+			if warmup := s.occlusionWarmup[obj]; warmup > 0 {
+				s.occlusionWarmup[obj] = warmup - 1
+				s.OcclusionStats.HiZHysteresisKept++
+			} else if grace := s.occlusionGrace[obj]; grace > 0 {
+				s.occlusionGrace[obj] = grace - 1
+				s.OcclusionStats.HiZHysteresisKept++
+			} else {
+				s.OcclusionStats.HiZCulled++
+				s.lastVisibility[obj] = false
 				continue
 			}
 		}
 
 		s.VisibleObjects = append(s.VisibleObjects, obj)
+		s.lastVisibility[obj] = true
+		if !occluded {
+			delete(s.occlusionWarmup, obj)
+			s.occlusionGrace[obj] = occlusionHysteresisFrames
+		}
 	}
 
 	// Build BVH from Visible Objects AABBs
@@ -290,7 +388,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, hizData []float32, hizW, hizH uint3
 }
 
 // IsOccluded checks if the AABB is fully occluded by the Hi-Z buffer.
-func IsOccluded(aabb [2]mgl32.Vec3, hizData []float32, w, h uint32, viewProj mgl32.Mat4) bool {
+func IsOccluded(aabb [2]mgl32.Vec3, hizData []float32, w, h uint32, viewProj mgl32.Mat4, depthSlack float32) bool {
 	// 1. Project AABB to Screen Space of PREVIOUS frame
 	// We need to find the screen-space bounding box of the AABB.
 	minP := mgl32.Vec3{1, 1, 1}
@@ -441,7 +539,7 @@ func IsOccluded(aabb [2]mgl32.Vec3, hizData []float32, w, h uint32, viewProj mgl
 	// Correct.
 
 	// Tolerance?
-	if minZ > maxOccluderDepth {
+	if minZ > maxOccluderDepth+depthSlack {
 		return true
 	}
 

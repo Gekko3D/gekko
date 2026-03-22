@@ -68,14 +68,19 @@ type App struct {
 
 	GizmoPass *gpu.GizmoRenderPass
 
-	LastViewProj   mgl32.Mat4
-	LastTime       float64
-	LastRenderTime float64
-	MouseCaptured  bool
-	MouseX, MouseY float64
-	DebugMode      bool
-	RenderMode     uint32
-	FontPath       string
+	LastViewProj       mgl32.Mat4
+	LastTime           float64
+	LastRenderTime     float64
+	LastCameraPos      mgl32.Vec3
+	LastCameraYaw      float32
+	LastCameraPitch    float32
+	HasLastCameraState bool
+	MouseCaptured      bool
+	MouseX, MouseY     float64
+	DebugMode          bool
+	RenderMode         uint32
+	OcclusionMode      core.OcclusionMode
+	FontPath           string
 
 	FrameCount         int
 	FPS                float64
@@ -90,10 +95,11 @@ type App struct {
 
 func NewApp(window *glfw.Window) *App {
 	return &App{
-		Window:   window,
-		Camera:   core.NewCameraState(),
-		Scene:    core.NewScene(),
-		Profiler: NewProfiler(),
+		Window:        window,
+		Camera:        core.NewCameraState(),
+		Scene:         core.NewScene(),
+		Profiler:      NewProfiler(),
+		OcclusionMode: core.OcclusionOff,
 	}
 }
 

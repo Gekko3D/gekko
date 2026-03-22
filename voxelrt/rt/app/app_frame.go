@@ -12,6 +12,11 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+const (
+	occlusionFastCameraTranslationThreshold = 0.75
+	occlusionFastCameraRotationThreshold    = 0.12
+)
+
 func (a *App) setupTextures(w, h int) {
 	if w == 0 || h == 0 {
 		return
@@ -96,27 +101,6 @@ func (a *App) Resize(w, h int) {
 }
 
 func (a *App) Update() {
-	// Gather stats
-	a.Profiler.SetCount("Objects", len(a.Scene.Objects))
-	a.Profiler.SetCount("Visible", len(a.Scene.VisibleObjects))
-	a.Profiler.SetCount("Lights", len(a.Scene.Lights))
-	a.Profiler.SetCount("Particles", int(a.BufferManager.ParticleCount))
-	shadowGroupedVisible := 0
-	visibleTerrainChunks := 0
-	for _, obj := range a.Scene.VisibleObjects {
-		if obj == nil {
-			continue
-		}
-		if obj.ShadowGroupID != 0 {
-			shadowGroupedVisible++
-		}
-		if obj.IsTerrainChunk {
-			visibleTerrainChunks++
-		}
-	}
-	a.Profiler.SetCount("ShadowGrouped", shadowGroupedVisible)
-	a.Profiler.SetCount("TerrainChunks", visibleTerrainChunks)
-
 	if a.DebugMode {
 		stats := fmt.Sprintf("FPS: %.1f\n%s", a.FPS, a.Profiler.GetStatsString())
 		// Position at top-right (approx 260px width for text block)
@@ -147,6 +131,7 @@ func (a *App) Update() {
 	viewProj := proj.Mul4(view)
 	invView := view.Inv()
 	invProj := proj.Inv()
+	fastCameraMotion := a.hasFastCameraMotion()
 
 	// Readback Hi-Z from previous frame (cheap latency)
 	hizData, hizW, hizH := a.BufferManager.ReadbackHiZ()
@@ -154,11 +139,44 @@ func (a *App) Update() {
 	// Commit scene changes from ECS sync
 	a.Profiler.BeginScope("Scene Commit")
 	planes := a.Camera.ExtractFrustum(viewProj)
-	a.Scene.Commit(planes, hizData, hizW, hizH, a.LastViewProj)
+	a.Scene.Commit(planes, core.SceneCommitOptions{
+		OcclusionMode:    a.OcclusionMode,
+		HiZData:          hizData,
+		HiZW:             hizW,
+		HiZH:             hizH,
+		LastViewProj:     a.LastViewProj,
+		FastCameraMotion: fastCameraMotion,
+	})
 	a.Profiler.EndScope("Scene Commit")
 
 	// Store current view-proj for next frame's Hi-Z reprojection
 	a.LastViewProj = viewProj
+	a.recordCameraState()
+
+	shadowGroupedVisible := 0
+	visibleTerrainChunks := 0
+	for _, obj := range a.Scene.VisibleObjects {
+		if obj == nil {
+			continue
+		}
+		if obj.ShadowGroupID != 0 {
+			shadowGroupedVisible++
+		}
+		if obj.IsTerrainChunk {
+			visibleTerrainChunks++
+		}
+	}
+	a.Profiler.SetCount("Objects", len(a.Scene.Objects))
+	a.Profiler.SetCount("Visible", len(a.Scene.VisibleObjects))
+	a.Profiler.SetCount("FrustumVisible", a.Scene.OcclusionStats.FrustumVisible)
+	a.Profiler.SetCount("HiZEligible", a.Scene.OcclusionStats.HiZEligible)
+	a.Profiler.SetCount("HiZCulled", a.Scene.OcclusionStats.HiZCulled)
+	a.Profiler.SetCount("HiZHysteresis", a.Scene.OcclusionStats.HiZHysteresisKept)
+	a.Profiler.SetCount("HiZMotionDisabled", a.Scene.OcclusionStats.HiZMotionDisabled)
+	a.Profiler.SetCount("Lights", len(a.Scene.Lights))
+	a.Profiler.SetCount("Particles", int(a.BufferManager.ParticleCount))
+	a.Profiler.SetCount("ShadowGrouped", shadowGroupedVisible)
+	a.Profiler.SetCount("TerrainChunks", visibleTerrainChunks)
 
 	// Update Buffers
 	a.Profiler.BeginScope("Buffer Update")
@@ -244,6 +262,42 @@ func (a *App) Update() {
 	if a.GizmoPass != nil {
 		a.GizmoPass.Update(a.Queue, a.Scene.Gizmos)
 	}
+}
+
+func (a *App) hasFastCameraMotion() bool {
+	if a == nil || a.Camera == nil {
+		return false
+	}
+	if !a.HasLastCameraState {
+		return false
+	}
+	if a.Camera.Position.Sub(a.LastCameraPos).Len() > occlusionFastCameraTranslationThreshold {
+		return true
+	}
+	if absf(a.Camera.Yaw-a.LastCameraYaw) > occlusionFastCameraRotationThreshold {
+		return true
+	}
+	if absf(a.Camera.Pitch-a.LastCameraPitch) > occlusionFastCameraRotationThreshold {
+		return true
+	}
+	return false
+}
+
+func (a *App) recordCameraState() {
+	if a == nil || a.Camera == nil {
+		return
+	}
+	a.LastCameraPos = a.Camera.Position
+	a.LastCameraYaw = a.Camera.Yaw
+	a.LastCameraPitch = a.Camera.Pitch
+	a.HasLastCameraState = true
+}
+
+func absf(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func (a *App) ClearText() {
