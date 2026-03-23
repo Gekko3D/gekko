@@ -105,3 +105,66 @@ func TestBuildTerrainChunkLookupIncludesVisibleTerrainChunksOnly(t *testing.T) {
 		t.Fatalf("expected missing terrain chunk lookup to fail, got %d", got)
 	}
 }
+
+func TestComputeVoxelPayloadPageSizeHonorsDeviceLimit(t *testing.T) {
+	if got := computeVoxelPayloadPageSize(0); got != AtlasSize {
+		t.Fatalf("expected default atlas size %d, got %d", AtlasSize, got)
+	}
+	if got := computeVoxelPayloadPageSize(2048); got != AtlasSize {
+		t.Fatalf("expected atlas size capped at %d, got %d", AtlasSize, got)
+	}
+	if got := computeVoxelPayloadPageSize(1023); got != 1016 {
+		t.Fatalf("expected rounded page size 1016, got %d", got)
+	}
+}
+
+func TestAllocPayloadSlotSpillsAcrossPages(t *testing.T) {
+	m := &GpuBufferManager{
+		VoxelPayloadBricks:    1,
+		VoxelPayloadPageCount: 2,
+	}
+
+	slot0, ok := m.allocPayloadSlot()
+	if !ok {
+		t.Fatal("expected first payload slot allocation to succeed")
+	}
+	if slot0.Page != 0 || slot0.Slot != 0 {
+		t.Fatalf("expected first slot on page 0, got %+v", slot0)
+	}
+
+	slot1, ok := m.allocPayloadSlot()
+	if !ok {
+		t.Fatal("expected second payload slot allocation to succeed")
+	}
+	if slot1.Page != 1 || slot1.Slot != 0 {
+		t.Fatalf("expected second slot on page 1, got %+v", slot1)
+	}
+
+	if _, ok := m.allocPayloadSlot(); ok {
+		t.Fatal("expected allocator to report full once all pages are consumed")
+	}
+}
+
+func TestReleaseBrickSlotReturnsCapacityToOwningPage(t *testing.T) {
+	brick := volume.NewBrick()
+	m := &GpuBufferManager{
+		VoxelPayloadBricks:    1,
+		VoxelPayloadPageCount: 2,
+		BrickToSlot:           map[*volume.Brick]PayloadSlot{brick: {Page: 1, Slot: 7}},
+	}
+	m.PayloadAlloc[0].Tail = 1
+	m.PayloadAlloc[1].Tail = 8
+
+	m.releaseBrickSlot(brick)
+
+	if _, exists := m.BrickToSlot[brick]; exists {
+		t.Fatal("expected released brick mapping to be cleared")
+	}
+	slot, ok := m.allocPayloadSlot()
+	if !ok {
+		t.Fatal("expected freed payload slot to be reusable")
+	}
+	if slot.Page != 1 || slot.Slot != 7 {
+		t.Fatalf("expected freed slot to be reused from page 1, got %+v", slot)
+	}
+}

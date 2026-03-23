@@ -121,6 +121,106 @@ func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadAndSpawnAuthoredLevelAppliesFullmoonNightEnvironment(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	level := content.NewLevelDef("fullmoon")
+	level.Environment = &content.LevelEnvironmentDef{Preset: "fullmoonNight"}
+
+	if _, err := SpawnAuthoredLevel(cmd, nil, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{}); err != nil {
+		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	var skySunCount, skyAmbientCount, starLayers int
+	MakeQuery1[SkyboxSunComponent](cmd).Map(func(_ EntityId, _ *SkyboxSunComponent) bool {
+		skySunCount++
+		return true
+	})
+	MakeQuery1[SkyAmbientComponent](cmd).Map(func(_ EntityId, ambient *SkyAmbientComponent) bool {
+		skyAmbientCount++
+		if ambient.SkyMix <= 0 || ambient.SkyMix >= 0.2 {
+			t.Fatalf("expected low fullmoon sky ambient mix, got %f", ambient.SkyMix)
+		}
+		return true
+	})
+	MakeQuery1[SkyboxLayerComponent](cmd).Map(func(_ EntityId, layer *SkyboxLayerComponent) bool {
+		if layer.LayerType == SkyboxLayerStars {
+			starLayers++
+		}
+		return true
+	})
+
+	if skySunCount != 1 {
+		t.Fatalf("expected one sky sun/moon component, got %d", skySunCount)
+	}
+	if skyAmbientCount != 1 {
+		t.Fatalf("expected one sky ambient component, got %d", skyAmbientCount)
+	}
+	if starLayers == 0 {
+		t.Fatal("expected fullmoonNight skybox to include stars")
+	}
+}
+
+func TestLoadAndSpawnAuthoredLevelAppliesFullmoonNightGIEnvironment(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	level := content.NewLevelDef("fullmoon-gi")
+	level.Environment = &content.LevelEnvironmentDef{Preset: "fullmoonnight_gi"}
+
+	if _, err := SpawnAuthoredLevel(cmd, nil, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{}); err != nil {
+		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	var ambientFound, directionalFound bool
+	MakeQuery1[LightComponent](cmd).Map(func(_ EntityId, light *LightComponent) bool {
+		switch light.Type {
+		case LightTypeAmbient:
+			ambientFound = true
+			if light.Intensity != 0.004 {
+				t.Fatalf("expected fullmoonnight_gi ambient intensity 0.004, got %f", light.Intensity)
+			}
+		case LightTypeDirectional:
+			directionalFound = true
+			if light.Intensity != 0.16 {
+				t.Fatalf("expected fullmoonnight_gi directional intensity 0.16, got %f", light.Intensity)
+			}
+		}
+		return true
+	})
+
+	var skyAmbientCount, starLayers int
+	MakeQuery1[SkyAmbientComponent](cmd).Map(func(_ EntityId, ambient *SkyAmbientComponent) bool {
+		skyAmbientCount++
+		if ambient.SkyMix != 0.08 {
+			t.Fatalf("expected fullmoonnight_gi sky mix 0.08, got %f", ambient.SkyMix)
+		}
+		return true
+	})
+	MakeQuery1[SkyboxLayerComponent](cmd).Map(func(_ EntityId, layer *SkyboxLayerComponent) bool {
+		if layer.LayerType == SkyboxLayerStars {
+			starLayers++
+		}
+		return true
+	})
+
+	if !ambientFound {
+		t.Fatal("expected ambient light for fullmoonnight_gi")
+	}
+	if !directionalFound {
+		t.Fatal("expected directional light for fullmoonnight_gi")
+	}
+	if skyAmbientCount != 1 {
+		t.Fatalf("expected one sky ambient component, got %d", skyAmbientCount)
+	}
+	if starLayers == 0 {
+		t.Fatal("expected fullmoonnight_gi skybox to include stars")
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelExpandsPlacementVolumesDeterministically(t *testing.T) {
 	root := t.TempDir()
 	assetPath := filepath.Join(root, "assets", "asteroid.gkasset")

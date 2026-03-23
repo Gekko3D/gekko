@@ -1,34 +1,34 @@
-# VoxelRT Particles: Current Pipeline
+# VoxelRT Particles
 
 This document describes the current hybrid particle path.
 
 ## Overview
 
 - ECS controls emitters through `ParticleEmitterComponent`.
-- CPU builds emitter parameter buffers and spawn requests each frame.
+- CPU code builds emitter parameter buffers and spawn requests each frame.
 - GPU compute simulates per-particle state in global pools.
 - GPU render draws alive particles as billboards into the WBOIT accumulation targets.
-- Resolve composites the opaque lighting output with transparent accumulation.
+- Resolve composites opaque lighting with transparent accumulation.
 
 ## Key Files
 
 - ECS and bridge:
-  - `gekko/particles_ecs.go`
-  - `gekko/mod_voxelrt_client_systems.go`
+  - `particles_ecs.go`
+  - `mod_voxelrt_client_systems.go`
 - Renderer app:
-  - `gekko/voxelrt/rt/app/app.go`
-  - `gekko/voxelrt/rt/app/app_frame.go`
-  - `gekko/voxelrt/rt/app/app_particles.go`
-  - `gekko/voxelrt/rt/app/app_pipelines.go`
+  - `voxelrt/rt/app/app.go`
+  - `voxelrt/rt/app/app_frame.go`
+  - `voxelrt/rt/app/app_particles.go`
+  - `voxelrt/rt/app/app_pipelines.go`
 - GPU manager:
-  - `gekko/voxelrt/rt/gpu/manager.go`
-  - `gekko/voxelrt/rt/gpu/manager_particles.go`
+  - `voxelrt/rt/gpu/manager.go`
+  - `voxelrt/rt/gpu/manager_particles.go`
 - Shaders:
-  - `gekko/voxelrt/rt/shaders/particles_sim.wgsl`
-  - `gekko/voxelrt/rt/shaders/particles_billboard.wgsl`
-  - `gekko/voxelrt/rt/shaders/resolve_transparency.wgsl`
+  - `voxelrt/rt/shaders/particles_sim.wgsl`
+  - `voxelrt/rt/shaders/particles_billboard.wgsl`
+  - `voxelrt/rt/shaders/resolve_transparency.wgsl`
 
-## ECS And Bridge Side
+## ECS and Bridge Side
 
 `particlesSync(...)` in `particles_ecs.go`:
 
@@ -48,9 +48,9 @@ The bridge then:
 
 Current practical constraints:
 
-- emitter distance cull is currently 200 world units
+- emitter distance cull is 200 world units
 - per-emitter spawn burst is capped to 1024 per frame
-- bridge-side pool provisioning currently uses `UpdateParticles(1000000, ...)`
+- bridge-side pool provisioning uses `UpdateParticles(1000000, ...)`
 - the first active emitter atlas wins for the frame
 
 ## GPU Side
@@ -80,22 +80,18 @@ If scene buffers are recreated, particle sim bindings may need to be recreated t
 
 ## Render Integration
 
-Particles run inside the current renderer frame as:
+Particles run inside the renderer frame as:
 
 1. particle sim
 2. CA sim
 3. G-buffer
 4. Hi-Z
 5. shadows
-6. deferred lighting
-7. optional debug
-8. accumulation:
-   - CA volumes
-   - transparent voxel overlay
-   - particles
-   - sprites
-9. resolve
-10. text and gizmos
+6. probe GI bake
+7. deferred lighting
+8. optional debug
+9. accumulation
+10. resolve
 
 Particles write weighted contributions into:
 

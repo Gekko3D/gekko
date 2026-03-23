@@ -19,6 +19,9 @@ var GBufferWGSL string
 //go:embed deferred_lighting.wgsl
 var DeferredLightingWGSL string
 
+//go:embed tiled_light_cull.wgsl
+var TiledLightCullWGSL string
+
 //go:embed shadow_map.wgsl
 var ShadowMapWGSL string
 

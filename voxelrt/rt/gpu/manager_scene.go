@@ -80,10 +80,47 @@ func buildLightsData(lights []core.Light) []byte {
 	return lightsData
 }
 
+func (m *GpuBufferManager) buildLightsDataForGPU(lights []core.Light) []byte {
+	gpuLights := make([]core.Light, len(lights))
+	copy(gpuLights, lights)
+	for i := range gpuLights {
+		light := &gpuLights[i]
+		if uint32(light.Params[2]) != core.LightTypeDirectional || light.ShadowMeta[1] == 0 {
+			continue
+		}
+		baseLayer := light.ShadowMeta[0]
+		for cascadeIdx := uint32(0); cascadeIdx < light.ShadowMeta[2]; cascadeIdx++ {
+			layer := baseLayer + cascadeIdx
+			if int(layer) >= len(m.shadowCacheStates) || int(layer) >= len(m.shadowCachedCascades) {
+				continue
+			}
+			if m.shadowCacheStates[layer].Initialized {
+				light.DirectionalCascades[cascadeIdx] = m.shadowCachedCascades[layer]
+			}
+		}
+	}
+	return buildLightsData(gpuLights)
+}
+
 func totalShadowLayers(lights []core.Light) uint32 {
 	var total uint32
 	for _, light := range lights {
 		total += light.ShadowMeta[1]
+	}
+	return total
+}
+
+func expectedShadowLayers(lights []core.Light, hasCamera bool) uint32 {
+	var total uint32
+	for _, light := range lights {
+		switch uint32(light.Params[2]) {
+		case core.LightTypeDirectional:
+			if hasCamera {
+				total += core.DirectionalShadowCascadeCount
+			}
+		case core.LightTypeSpot:
+			total++
+		}
 	}
 	return total
 }
@@ -126,8 +163,11 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 
 	// 4. Lights
-	lightsData := buildLightsData(scene.Lights)
+	lightsData := m.buildLightsDataForGPU(scene.Lights)
 	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("ShadowLayerParamsBuf", &m.ShadowLayerParamsBuf, buildShadowLayerParamsData(m.ShadowLayerParams), wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 	if m.EnsureShadowMapCapacity(totalShadowLayers(scene.Lights)) {
@@ -157,8 +197,9 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	return recreated
 }
 
-func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32) {
-	buf := make([]byte, 272)
+func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, skyAmbientMix float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) []byte {
+	buf := make([]byte, 288)
+	lightingQuality = lightingQuality.WithDefaults()
 
 	writeMat := func(offset int, mat mgl32.Mat4) {
 		for i, v := range mat {
@@ -166,7 +207,7 @@ func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj mgl32.Mat4,
 		}
 	}
 
-	writeMat(0, view)
+	writeMat(0, viewProj)
 	writeMat(64, invView)
 	writeMat(128, invProj)
 
@@ -183,7 +224,7 @@ func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj mgl32.Mat4,
 	binary.LittleEndian.PutUint32(buf[224:], math.Float32bits(ambientColor[0]))
 	binary.LittleEndian.PutUint32(buf[228:], math.Float32bits(ambientColor[1]))
 	binary.LittleEndian.PutUint32(buf[232:], math.Float32bits(ambientColor[2]))
-	binary.LittleEndian.PutUint32(buf[236:], 0)
+	binary.LittleEndian.PutUint32(buf[236:], math.Float32bits(skyAmbientMix))
 
 	binary.LittleEndian.PutUint32(buf[240:], debugMode)
 	binary.LittleEndian.PutUint32(buf[244:], renderMode)
@@ -194,11 +235,21 @@ func (m *GpuBufferManager) UpdateCamera(view, proj, invView, invProj mgl32.Mat4,
 	binary.LittleEndian.PutUint32(buf[260:], math.Float32bits(float32(screenH)))
 	binary.LittleEndian.PutUint32(buf[264:], 0) // pad2.x
 	binary.LittleEndian.PutUint32(buf[268:], 0) // pad2.y
+	binary.LittleEndian.PutUint32(buf[272:], math.Float32bits(float32(lightingQuality.AmbientOcclusion.SampleCount)))
+	binary.LittleEndian.PutUint32(buf[276:], math.Float32bits(lightingQuality.AmbientOcclusion.Radius))
+	binary.LittleEndian.PutUint32(buf[280:], 0)
+	binary.LittleEndian.PutUint32(buf[284:], 0)
+
+	return buf
+}
+
+func (m *GpuBufferManager) UpdateCamera(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, skyAmbientMix float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) {
+	buf := buildCameraUniformData(viewProj, invView, invProj, camPos, lightPos, ambientColor, skyAmbientMix, debugMode, renderMode, numLights, screenW, screenH, lightingQuality)
 
 	if m.CameraBuf == nil {
 		desc := &wgpu.BufferDescriptor{
 			Label: "CameraUB",
-			Size:  272,
+			Size:  288,
 			Usage: wgpu.BufferUsageUniform | wgpu.BufferUsageCopyDst,
 		}
 		var err error
@@ -227,6 +278,10 @@ func (m *GpuBufferManager) EndBatch() {
 func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraState, aspect float32) {
 	m.shadowDirectionalVolumes = m.shadowDirectionalVolumes[:0]
 	m.shadowSpotVolumes = m.shadowSpotVolumes[:0]
+	m.ensureShadowCacheCapacity(expectedShadowLayers(scene.Lights, camera != nil))
+	lightingQuality := m.LightingQuality.WithDefaults()
+	cascadeDistances := lightingQuality.Shadow.DirectionalCascadeDistances
+	spotBands := lightingQuality.Shadow.SpotShadowDistanceBands
 
 	nextShadowLayer := uint32(0)
 	for i := range scene.Lights {
@@ -254,9 +309,32 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 
 				splitNear := float32(0.0)
 				for cascadeIdx := 0; cascadeIdx < core.DirectionalShadowCascadeCount; cascadeIdx++ {
-					splitFar := directionalCascadeFarDistances[cascadeIdx]
-					cascade, volume := buildDirectionalShadowCascade(camera, aspect, dir, splitNear, splitFar)
+					splitFar := cascadeDistances[cascadeIdx]
+					tier := directionalCascadeTier(uint32(cascadeIdx))
+					effectiveResolution := shadowAtlasLayerResolution
+					cascade, volume := buildDirectionalShadowCascade(camera, aspect, dir, splitNear, splitFar, effectiveResolution)
 					l.DirectionalCascades[cascadeIdx] = cascade
+					layer := nextShadowLayer + uint32(cascadeIdx)
+					m.ShadowLayerParams[layer] = ShadowLayerParams{
+						Layer:               layer,
+						LightIndex:          uint32(i),
+						CascadeIndex:        uint32(cascadeIdx),
+						Kind:                core.ShadowUpdateKindDirectional,
+						Tier:                tier,
+						EffectiveResolution: effectiveResolution,
+						CadenceFrames:       shadowTierCadence(tier),
+						UVScale: [2]float32{
+							float32(effectiveResolution) / float32(shadowAtlasLayerResolution),
+							float32(effectiveResolution) / float32(shadowAtlasLayerResolution),
+						},
+						LightSignature: hashMat4Signature(cascade.ViewProj,
+							math.Float32bits(dir.X()),
+							math.Float32bits(dir.Y()),
+							math.Float32bits(dir.Z()),
+							uint32(cascadeIdx),
+							effectiveResolution,
+						),
+					}
 					if cascadeIdx == core.DirectionalShadowCascadeCount-1 {
 						m.shadowDirectionalVolumes = append(m.shadowDirectionalVolumes, volume)
 					}
@@ -275,10 +353,37 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 			proj := mgl32.Perspective(float32(fov), 1.0, 0.1, l.Params[0])
 			view := mgl32.LookAtV(pos, pos.Add(dir), up)
 			vp := proj.Mul4(view)
+			tier := core.ShadowTierFar
+			if camera != nil {
+				tier = classifySpotShadowTier(camera.Position, pos, spotBands)
+			}
+			effectiveResolution := shadowTierResolution(tier)
 			l.ViewProj = [16]float32(vp)
 			l.InvViewProj = [16]float32(vp.Inv())
 			l.ShadowMeta[0] = nextShadowLayer
 			l.ShadowMeta[1] = 1
+			m.ShadowLayerParams[nextShadowLayer] = ShadowLayerParams{
+				Layer:               nextShadowLayer,
+				LightIndex:          uint32(i),
+				CascadeIndex:        0,
+				Kind:                core.ShadowUpdateKindSpot,
+				Tier:                tier,
+				EffectiveResolution: effectiveResolution,
+				CadenceFrames:       shadowTierCadence(tier),
+				UVScale: [2]float32{
+					float32(effectiveResolution) / float32(shadowAtlasLayerResolution),
+					float32(effectiveResolution) / float32(shadowAtlasLayerResolution),
+				},
+				LightSignature: hashMat4Signature(l.ViewProj,
+					math.Float32bits(pos.X()),
+					math.Float32bits(pos.Y()),
+					math.Float32bits(pos.Z()),
+					math.Float32bits(dir.X()),
+					math.Float32bits(dir.Y()),
+					math.Float32bits(dir.Z()),
+					effectiveResolution,
+				),
+			}
 			nextShadowLayer++
 			m.shadowSpotVolumes = append(m.shadowSpotVolumes, spotShadowCullVolume{
 				Position: pos,

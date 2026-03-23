@@ -28,7 +28,7 @@ func (m *GpuBufferManager) CreateSkyboxGenPipeline(wgsl string) {
 	}
 }
 
-func (m *GpuBufferManager) UpdateSkyboxGPU(width, height uint32, layers []GpuSkyboxLayer, sunDir [4]float32, smooth bool, lightPipeline *wgpu.ComputePipeline, outputView *wgpu.TextureView) {
+func (m *GpuBufferManager) UpdateSkyboxGPU(width, height uint32, layers []GpuSkyboxLayer, sunDir, sunColor, sunParams, diskColor, diskParams [4]float32, smooth bool, lightPipeline *wgpu.ComputePipeline, outputView *wgpu.TextureView) {
 	if m.SkyboxGenPipeline == nil {
 		return
 	}
@@ -74,6 +74,10 @@ func (m *GpuBufferManager) UpdateSkyboxGPU(width, height uint32, layers []GpuSky
 	uniforms := GpuSkyboxUniforms{
 		LayerCount: uint32(len(layers)),
 		SunDir:     sunDir,
+		SunColor:   sunColor,
+		SunParams:  sunParams,
+		DiskColor:  diskColor,
+		DiskParams: diskParams,
 	}
 	if m.ensureBuffer("SkyboxParamsBuf", &m.SkyboxParamsBuf, nil, wgpu.BufferUsageUniform, int(unsafe.Sizeof(uniforms))) {
 		m.SkyboxGenBindGroup = nil
@@ -114,6 +118,7 @@ func (m *GpuBufferManager) UpdateSkyboxGPU(width, height uint32, layers []GpuSky
 		panic(err)
 	}
 	m.Device.GetQueue().Submit(cmd)
+	m.SkyboxRevision++
 
 	if samplerChanged && lightPipeline != nil && outputView != nil {
 		m.CreateLightingBindGroups(lightPipeline, outputView)
@@ -164,6 +169,7 @@ func (m *GpuBufferManager) UpdateSkybox(width, height uint32, data []byte, smoot
 		},
 		&wgpu.Extent3D{Width: width, Height: height, DepthOrArrayLayers: 1},
 	)
+	m.SkyboxRevision++
 
 	if samplerChanged && lightPipeline != nil && outputView != nil {
 		m.CreateLightingBindGroups(lightPipeline, outputView)

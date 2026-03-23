@@ -82,10 +82,13 @@ func cameraSliceCorners(camera *core.CameraState, aspect, nearDist, farDist floa
 	}
 }
 
-func buildDirectionalShadowCascade(camera *core.CameraState, aspect float32, dir mgl32.Vec3, splitNear, splitFar float32) (core.DirectionalShadowCascade, directionalShadowCullVolume) {
+func buildDirectionalShadowCascade(camera *core.CameraState, aspect float32, dir mgl32.Vec3, splitNear, splitFar float32, effectiveResolution uint32) (core.DirectionalShadowCascade, directionalShadowCullVolume) {
 	cascade := core.DirectionalShadowCascade{}
 	if camera == nil {
 		return cascade, directionalShadowCullVolume{}
+	}
+	if effectiveResolution == 0 {
+		effectiveResolution = shadowAtlasLayerResolution
 	}
 
 	nearDist := maxf(camera.NearPlane(), splitNear)
@@ -95,24 +98,26 @@ func buildDirectionalShadowCascade(camera *core.CameraState, aspect float32, dir
 	}
 
 	corners := cameraSliceCorners(camera, aspect, nearDist, farDist)
-	// Anchor cascades at the camera position and size them from a bounding sphere.
-	// This trades some resolution for much better rotational stability because the
-	// directional projection no longer swings around with the view direction.
-	center := camera.Position
-	radius := float32(0.0)
-	for _, corner := range corners {
-		radius = maxf(radius, corner.Sub(center).Len())
-	}
-	if radius < 1.0 {
-		radius = 1.0
-	}
-
 	up := shadowUpVector(dir)
+	center := mgl32.Vec3{}
+	for _, corner := range corners {
+		center = center.Add(corner)
+	}
+	center = center.Mul(1.0 / float32(len(corners)))
 	eye := center.Sub(dir.Mul(directionalShadowDepth * 0.5))
 	view := mgl32.LookAtV(eye, center, up)
-	halfExtent := radius
+
 	centerLS := view.Mul4x1(center.Vec4(1.0)).Vec3()
-	texelWorldSize := (halfExtent * 2.0) / directionalShadowMapSize
+	halfExtent := float32(0.0)
+	for _, corner := range corners {
+		cornerLS := view.Mul4x1(corner.Vec4(1.0)).Vec3()
+		halfExtent = maxf(halfExtent, float32(math.Abs(float64(cornerLS.X()-centerLS.X()))))
+		halfExtent = maxf(halfExtent, float32(math.Abs(float64(cornerLS.Y()-centerLS.Y()))))
+	}
+	if halfExtent < 1.0 {
+		halfExtent = 1.0
+	}
+	texelWorldSize := (halfExtent * 2.0) / float32(effectiveResolution)
 	snappedX := float32(math.Round(float64(centerLS.X()/texelWorldSize))) * texelWorldSize
 	snappedY := float32(math.Round(float64(centerLS.Y()/texelWorldSize))) * texelWorldSize
 	offsetLS := mgl32.Vec3{snappedX - centerLS.X(), snappedY - centerLS.Y(), -(directionalShadowDepth * 0.5) - centerLS.Z()}

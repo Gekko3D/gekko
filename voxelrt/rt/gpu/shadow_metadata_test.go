@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"encoding/binary"
 	"math"
 	"testing"
 
@@ -59,6 +60,18 @@ func TestUpdateLightsAssignsDirectionalCascadesAndShadowLayers(t *testing.T) {
 	if got := totalShadowLayers(scene.Lights); got != 4 {
 		t.Fatalf("expected 4 total shadow layers, got %d", got)
 	}
+	if manager.ShadowLayerParams[0].EffectiveResolution != 1024 {
+		t.Fatalf("expected cascade 0 effective resolution 1024, got %d", manager.ShadowLayerParams[0].EffectiveResolution)
+	}
+	if manager.ShadowLayerParams[1].EffectiveResolution != 1024 {
+		t.Fatalf("expected cascade 1 effective resolution 1024, got %d", manager.ShadowLayerParams[1].EffectiveResolution)
+	}
+	if manager.ShadowLayerParams[2].Tier != core.ShadowTierHero {
+		t.Fatalf("expected first spot tier hero, got %d", manager.ShadowLayerParams[2].Tier)
+	}
+	if manager.ShadowLayerParams[3].Tier != core.ShadowTierNear {
+		t.Fatalf("expected second spot tier near, got %d", manager.ShadowLayerParams[3].Tier)
+	}
 	if len(manager.shadowDirectionalVolumes) != 1 {
 		t.Fatalf("expected 1 directional shadow cull volume, got %d", len(manager.shadowDirectionalVolumes))
 	}
@@ -67,11 +80,68 @@ func TestUpdateLightsAssignsDirectionalCascadesAndShadowLayers(t *testing.T) {
 	}
 }
 
+func TestUpdateLightsUsesConfiguredQualityPreset(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Direction: [4]float32{0, -1, -0.25, 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+			},
+			{
+				Position:  [4]float32{0, 12, 20, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+			},
+			{
+				Position:  [4]float32{0, 12, -5, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+			},
+			{
+				Position:  [4]float32{0, 12, -50, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+			},
+			{
+				Position:  [4]float32{0, 12, -120, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.LightingQuality = core.LightingQualityPresetConfig(core.LightingQualityPresetPerformance)
+	manager.UpdateLights(scene, camera, 16.0/9.0)
+
+	dirLight := scene.Lights[0]
+	if dirLight.DirectionalCascades[0].Params[0] != 36.0 {
+		t.Fatalf("expected performance first cascade far split 36, got %v", dirLight.DirectionalCascades[0].Params[0])
+	}
+	if dirLight.DirectionalCascades[1].Params[0] != 112.0 {
+		t.Fatalf("expected performance second cascade far split 112, got %v", dirLight.DirectionalCascades[1].Params[0])
+	}
+	if manager.ShadowLayerParams[2].Tier != core.ShadowTierHero {
+		t.Fatalf("expected nearest spot to stay hero, got %d", manager.ShadowLayerParams[2].Tier)
+	}
+	if manager.ShadowLayerParams[3].Tier != core.ShadowTierNear {
+		t.Fatalf("expected second spot to use near tier, got %d", manager.ShadowLayerParams[3].Tier)
+	}
+	if manager.ShadowLayerParams[4].Tier != core.ShadowTierMedium {
+		t.Fatalf("expected third spot to use medium tier, got %d", manager.ShadowLayerParams[4].Tier)
+	}
+	if manager.ShadowLayerParams[5].Tier != core.ShadowTierFar {
+		t.Fatalf("expected farthest spot to use far tier, got %d", manager.ShadowLayerParams[5].Tier)
+	}
+}
+
 func TestCollectShadowCastersUsesDirectionalLightSpaceVolumes(t *testing.T) {
 	camera := core.NewCameraState()
 	camera.Position = mgl32.Vec3{0, 2, 20}
 	dir := mgl32.Vec3{0, -1, -0.25}.Normalize()
-	_, volume := buildDirectionalShadowCascade(camera, 1.0, dir, 0, 160)
+	_, volume := buildDirectionalShadowCascade(camera, 1.0, dir, 0, 160, 256)
 
 	inside := testShadowCasterObject(mgl32.Vec3{-2, -1, -35}, mgl32.Vec3{2, 3, -31})
 	outside := testShadowCasterObject(mgl32.Vec3{420, -1, -35}, mgl32.Vec3{424, 3, -31})
@@ -82,6 +152,147 @@ func TestCollectShadowCastersUsesDirectionalLightSpaceVolumes(t *testing.T) {
 	}
 	if shadowObjects[0] != inside {
 		t.Fatal("expected only the light-space-relevant object to remain a shadow caster")
+	}
+}
+
+func TestBuildDirectionalShadowCascadeUsesRequestedResolution(t *testing.T) {
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 2, 20}
+	dir := mgl32.Vec3{0, -1, -0.25}.Normalize()
+
+	hiResCascade, _ := buildDirectionalShadowCascade(camera, 1.0, dir, 0, 48, 512)
+	lowResCascade, _ := buildDirectionalShadowCascade(camera, 1.0, dir, 0, 48, 256)
+	if lowResCascade.Params[1] <= hiResCascade.Params[1] {
+		t.Fatalf("expected lower-resolution cascade texels to cover more world space, got hi=%v low=%v", hiResCascade.Params[1], lowResCascade.Params[1])
+	}
+}
+
+func TestBuildDirectionalShadowCascadeTightensAgainstCameraSphereFit(t *testing.T) {
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 2, 20}
+	dir := mgl32.Vec3{0, -1, -0.25}.Normalize()
+
+	cascade, _ := buildDirectionalShadowCascade(camera, 16.0/9.0, dir, 0, 48, 1024)
+	corners := cameraSliceCorners(camera, 16.0/9.0, maxf(camera.NearPlane(), 0), 48)
+	oldRadius := float32(0.0)
+	for _, corner := range corners {
+		oldRadius = maxf(oldRadius, corner.Sub(camera.Position).Len())
+	}
+	oldTexel := (oldRadius * 2.0) / 1024.0
+	if cascade.Params[1] >= oldTexel {
+		t.Fatalf("expected tighter directional fit to reduce texel world size, got old=%v new=%v", oldTexel, cascade.Params[1])
+	}
+}
+
+func TestBuildShadowUpdatesUsesCadenceAndInvalidation(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+			},
+			{
+				Position:  [4]float32{8, 12, 0, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+
+	initial := manager.BuildShadowUpdates(scene, camera, 0, false)
+	if len(initial) != 3 {
+		t.Fatalf("expected all 3 shadow layers on first frame, got %d", len(initial))
+	}
+	manager.RecordShadowUpdates(initial, 0, scene.StructureRevision)
+
+	next := manager.BuildShadowUpdates(scene, camera, 1, false)
+	if len(next) != 3 {
+		t.Fatalf("expected both directional cascades plus the hero spot at frame 1, got %d", len(next))
+	}
+	directionalCount := 0
+	for _, update := range next {
+		if update.Kind == core.ShadowUpdateKindDirectional {
+			directionalCount++
+		}
+	}
+	if directionalCount != 2 {
+		t.Fatalf("expected both directional cascades to refresh at frame 1, got %d updates", directionalCount)
+	}
+
+	manager.VoxelUploadRevision++
+	invalidated := manager.BuildShadowUpdates(scene, camera, 2, false)
+	if len(invalidated) != 3 {
+		t.Fatalf("expected conservative voxel invalidation to refresh every shadow layer, got %d", len(invalidated))
+	}
+}
+
+func TestBuildShadowUpdatesKeepsDirectionalRefreshWhileCameraMoves(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+			},
+			{
+				Position:  [4]float32{8, 12, 0, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+	manager.RecordShadowUpdates(manager.BuildShadowUpdates(scene, camera, 0, false), 0, scene.StructureRevision)
+
+	moving := manager.BuildShadowUpdates(scene, camera, 1, true)
+	directionalCount := 0
+	for _, update := range moving {
+		if update.Kind == core.ShadowUpdateKindDirectional {
+			directionalCount++
+		}
+	}
+	if directionalCount != 2 {
+		t.Fatalf("expected both directional cascades to refresh while camera is moving, got %d", directionalCount)
+	}
+}
+
+func TestBuildLightsDataForGPUUsesCachedDirectionalCascade(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+	layer := scene.Lights[0].ShadowMeta[0]
+	manager.shadowCacheStates[layer] = shadowCacheState{Initialized: true}
+	cached := scene.Lights[0].DirectionalCascades[0]
+	cached.Params[0] = 123.0
+	manager.shadowCachedCascades[layer] = cached
+
+	data := manager.buildLightsDataForGPU(scene.Lights)
+	if len(data) == 0 {
+		t.Fatal("expected light buffer data")
+	}
+	const firstCascadeParamsOffset = 336
+	gotBits := binary.LittleEndian.Uint32(data[firstCascadeParamsOffset : firstCascadeParamsOffset+4])
+	got := math.Float32frombits(gotBits)
+	if got != 123.0 {
+		t.Fatalf("expected cached directional cascade params to be uploaded, got %v", got)
 	}
 }
 

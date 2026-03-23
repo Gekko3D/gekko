@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"sort"
+	"strings"
 	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -16,6 +16,27 @@ const (
 	occlusionFastCameraTranslationThreshold = 0.75
 	occlusionFastCameraRotationThreshold    = 0.12
 )
+
+func renderModeLabel(mode uint32) string {
+	switch mode {
+	case 0:
+		return "Lit"
+	case 1:
+		return "Albedo"
+	case 2:
+		return "Normals"
+	case 3:
+		return "G-Buffer"
+	case 4:
+		return "Direct"
+	case 5:
+		return "Indirect"
+	case 6:
+		return "Light Density"
+	default:
+		return fmt.Sprintf("Unknown(%d)", mode)
+	}
+}
 
 func (a *App) setupTextures(w, h int) {
 	if w == 0 || h == 0 {
@@ -82,6 +103,8 @@ func (a *App) Resize(w, h int) {
 
 		// Resize G-Buffer
 		a.BufferManager.CreateGBufferTextures(uint32(w), uint32(h))
+		a.BufferManager.UpdateTiledLightingResources(uint32(w), uint32(h))
+		a.BufferManager.CreateTiledLightCullBindGroups(a.TiledLightCullPipeline)
 		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
 		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
 		a.BufferManager.StorageView = a.StorageView
@@ -102,7 +125,15 @@ func (a *App) Resize(w, h int) {
 
 func (a *App) Update() {
 	if a.DebugMode {
-		stats := fmt.Sprintf("FPS: %.1f\n%s", a.FPS, a.Profiler.GetStatsString())
+		stats := fmt.Sprintf(
+			"FPS: %.1f\nRender Mode: %s\n%s",
+			a.FPS,
+			renderModeLabel(a.RenderMode),
+			a.Profiler.GetStatsString(),
+		)
+		if a.ShadowUpdateSummary != "" {
+			stats += fmt.Sprintf("\nShadow Refresh:\n  %s\n", a.ShadowUpdateSummary)
+		}
 		// Position at top-right (approx 260px width for text block)
 		x := float32(a.Config.Width) - 260
 		a.DrawText(stats, x, 10, 0.6, [4]float32{1, 1, 0, 1})
@@ -151,7 +182,6 @@ func (a *App) Update() {
 
 	// Store current view-proj for next frame's Hi-Z reprojection
 	a.LastViewProj = viewProj
-	a.recordCameraState()
 
 	shadowGroupedVisible := 0
 	visibleTerrainChunks := 0
@@ -174,20 +204,36 @@ func (a *App) Update() {
 	a.Profiler.SetCount("HiZHysteresis", a.Scene.OcclusionStats.HiZHysteresisKept)
 	a.Profiler.SetCount("HiZMotionDisabled", a.Scene.OcclusionStats.HiZMotionDisabled)
 	a.Profiler.SetCount("Lights", len(a.Scene.Lights))
+	a.Profiler.SetCount("VisibleLights", len(a.Scene.Lights))
+	a.Profiler.SetCount("LightListEntriesAvg", a.BufferManager.TileLightAvgCount)
+	a.Profiler.SetCount("LightListEntriesMax", a.BufferManager.TileLightMaxCount)
 	a.Profiler.SetCount("Particles", int(a.BufferManager.ParticleCount))
 	a.Profiler.SetCount("ShadowGrouped", shadowGroupedVisible)
 	a.Profiler.SetCount("ShadowCasters", len(a.Scene.ShadowObjects))
 	a.Profiler.SetCount("TerrainChunks", visibleTerrainChunks)
 
 	// Update Buffers
+	lightingQuality := a.EffectiveLightingQuality()
+	a.BufferManager.LightingQuality = lightingQuality
 	a.Profiler.BeginScope("Buffer Update")
-	recreated := a.BufferManager.UpdateScene(a.Scene, a.Camera, aspect)
+	recreated := false
+	if a.BufferManager.UpdateScene(a.Scene, a.Camera, aspect) {
+		recreated = true
+	}
+	if a.BufferManager.UpdateTiledLightingResources(a.Config.Width, a.Config.Height) {
+		recreated = true
+	}
+	a.Profiler.SetCount("VoxelSecUp", a.BufferManager.VoxelSectorsUploaded)
+	a.Profiler.SetCount("VoxelBrkUp", a.BufferManager.VoxelBricksUploaded)
+	a.Profiler.SetCount("VoxelSecPend", a.BufferManager.VoxelDirtySectorsPending)
+	a.Profiler.SetCount("VoxelBrkPend", a.BufferManager.VoxelDirtyBricksPending)
 	a.Profiler.EndScope("Buffer Update")
 	a.Profiler.SetCount("ShadowCasters", len(a.Scene.ShadowObjects))
 
 	if recreated {
 		// New buffers mean we need new bind groups
 		a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
+		a.BufferManager.CreateTiledLightCullBindGroups(a.TiledLightCullPipeline)
 
 		// Also update G-Buffer and Lighting Bind Groups
 		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
@@ -229,7 +275,10 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, proj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height)
+	a.BufferManager.UpdateCamera(viewProj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, a.Scene.SkyAmbientMix, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height, lightingQuality)
+	a.BufferManager.EstimateTiledLightMetrics(a.Scene, viewProj, invView, a.Camera.Position)
+	a.Profiler.SetCount("LightListEntriesAvg", a.BufferManager.TileLightAvgCount)
+	a.Profiler.SetCount("LightListEntriesMax", a.BufferManager.TileLightMaxCount)
 	if a.BufferManager.CAVolumeBindingsDirty {
 		a.BufferManager.CreateCAVolumeSimBindGroups()
 		if a.CAVolumeBoundsPipeline != nil {
@@ -280,6 +329,25 @@ func (a *App) hasFastCameraMotion() bool {
 		return true
 	}
 	if absf(a.Camera.Pitch-a.LastCameraPitch) > occlusionFastCameraRotationThreshold {
+		return true
+	}
+	return false
+}
+
+func (a *App) hasShadowCameraMotion() bool {
+	if a == nil || a.Camera == nil {
+		return false
+	}
+	if !a.HasLastCameraState {
+		return true
+	}
+	if a.Camera.Position.Sub(a.LastCameraPos).Len() > 0.001 {
+		return true
+	}
+	if absf(a.Camera.Yaw-a.LastCameraYaw) > 0.0005 {
+		return true
+	}
+	if absf(a.Camera.Pitch-a.LastCameraPitch) > 0.0005 {
 		return true
 	}
 	return false
@@ -387,94 +455,40 @@ func (a *App) Render() {
 
 	// Shadow Pass
 	a.Profiler.BeginScope("Shadows")
-
-	var shadowUpdates []core.ShadowUpdate
-	if len(a.Scene.Lights) > 0 {
-		type lightInfo struct {
-			Index int
-			Dist  float32
-		}
-
-		directionalUpdates := make([]core.ShadowUpdate, 0, len(a.Scene.Lights)*core.DirectionalShadowCascadeCount)
-		sortedLights := make([]lightInfo, 0, len(a.Scene.Lights))
-		camPos := a.Camera.Position
-
-		for i := 0; i < len(a.Scene.Lights); i++ {
-			l := a.Scene.Lights[i]
-			if l.ShadowMeta[1] == 0 {
-				continue
-			}
-			lightType := uint32(l.Params[2])
-			if lightType == core.LightTypeDirectional {
-				cascadeCount := l.ShadowMeta[2]
-				for cascadeIdx := uint32(0); cascadeIdx < cascadeCount; cascadeIdx++ {
-					directionalUpdates = append(directionalUpdates, core.ShadowUpdate{
-						LightIndex:   uint32(i),
-						ShadowLayer:  l.ShadowMeta[0] + cascadeIdx,
-						CascadeIndex: cascadeIdx,
-						Kind:         core.ShadowUpdateKindDirectional,
-					})
-				}
-				continue
-			}
-			if lightType != core.LightTypeSpot {
-				continue
-			}
-			d := float32(0.0)
-			p := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
-			d = p.Sub(camPos).Len()
-			sortedLights = append(sortedLights, lightInfo{i, d})
-		}
-
-		shadowUpdates = append(shadowUpdates, directionalUpdates...)
-
-		sort.Slice(sortedLights, func(i, j int) bool {
-			return sortedLights[i].Dist < sortedLights[j].Dist
-		})
-
-		numPrioritized := 4
-		updatesPerFrame := 2
-
-		for i := 0; i < len(sortedLights) && i < numPrioritized; i++ {
-			light := a.Scene.Lights[sortedLights[i].Index]
-			shadowUpdates = append(shadowUpdates, core.ShadowUpdate{
-				LightIndex:  uint32(sortedLights[i].Index),
-				ShadowLayer: light.ShadowMeta[0],
-				Kind:        core.ShadowUpdateKindSpot,
-			})
-		}
-
-		remainingStart := numPrioritized
-		if remainingStart < len(sortedLights) {
-			remainingCount := len(sortedLights) - remainingStart
-			updates := updatesPerFrame
-			if updates > remainingCount {
-				updates = remainingCount
-			}
-			for i := 0; i < updates; i++ {
-				offset := (a.ShadowUpdateOffset + i) % remainingCount
-				idx := sortedLights[remainingStart+offset].Index
-				light := a.Scene.Lights[idx]
-				shadowUpdates = append(shadowUpdates, core.ShadowUpdate{
-					LightIndex:  uint32(idx),
-					ShadowLayer: light.ShadowMeta[0],
-					Kind:        core.ShadowUpdateKindSpot,
-				})
-			}
-			a.ShadowUpdateOffset = (a.ShadowUpdateOffset + updates) % remainingCount
-		}
-	}
+	shadowCameraMotion := a.hasShadowCameraMotion()
+	shadowUpdates := a.BufferManager.BuildShadowUpdates(a.Scene, a.Camera, a.RenderFrameIndex, shadowCameraMotion)
+	a.BufferManager.PrepareShadowLights(a.Scene, shadowUpdates)
 
 	a.BufferManager.DispatchShadowPass(encoder, shadowUpdates)
+	a.BufferManager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.StructureRevision)
+	shadowSpotUpdates := 0
+	shadowDirectionalUpdates := 0
+	for _, update := range shadowUpdates {
+		switch update.Kind {
+		case core.ShadowUpdateKindDirectional:
+			shadowDirectionalUpdates++
+		case core.ShadowUpdateKindSpot:
+			shadowSpotUpdates++
+		}
+	}
+	a.Profiler.SetCount("ShadowUpdates", len(shadowUpdates))
+	a.Profiler.SetCount("ShadowSpotUpdates", shadowSpotUpdates)
+	a.Profiler.SetCount("ShadowDirectionalUpdates", shadowDirectionalUpdates)
+	a.ShadowUpdateSummary = formatShadowUpdateSummary(shadowUpdates)
 	a.Profiler.EndScope("Shadows")
 
 	// Lighting Pass
+	a.Profiler.BeginScope("Tile Light Cull")
+	a.BufferManager.DispatchTiledLightCull(encoder, a.TiledLightCullPipeline)
+	a.Profiler.EndScope("Tile Light Cull")
+
 	a.Profiler.BeginScope("Lighting")
 	lPass := encoder.BeginComputePass(nil)
 	lPass.SetPipeline(a.LightingPipeline)
 	lPass.SetBindGroup(0, a.BufferManager.LightingBindGroup, nil)
 	lPass.SetBindGroup(1, a.BufferManager.LightingBindGroup2, nil)
 	lPass.SetBindGroup(2, a.BufferManager.LightingBindGroupMaterial, nil) // For materials/sectors
+	lPass.SetBindGroup(3, a.BufferManager.LightingTileBindGroup, nil)
 	lPass.DispatchWorkgroups(wgX, wgY, 1)
 	err = lPass.End()
 	if err != nil {
@@ -483,7 +497,7 @@ func (a *App) Render() {
 	a.Profiler.EndScope("Lighting")
 
 	// Debug Pass
-	if a.DebugMode {
+	if a.DebugMode && a.Camera != nil && core.DebugMode(a.Camera.DebugMode) == core.DebugModeScene {
 		dPass := encoder.BeginComputePass(nil)
 		dPass.SetPipeline(a.DebugComputePipeline)
 		dPass.SetBindGroup(0, a.BufferManager.DebugBindGroup0, nil)
@@ -524,10 +538,11 @@ func (a *App) Render() {
 	}
 	if a.TransparentPipeline != nil {
 		accPass.SetPipeline(a.TransparentPipeline)
-		if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil {
+		if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil && a.BufferManager.TransparentBG3 != nil {
 			accPass.SetBindGroup(0, a.BufferManager.TransparentBG0, nil)
 			accPass.SetBindGroup(1, a.BufferManager.TransparentBG1, nil)
 			accPass.SetBindGroup(2, a.BufferManager.TransparentBG2, nil)
+			accPass.SetBindGroup(3, a.BufferManager.TransparentBG3, nil)
 			accPass.Draw(3, 1, 0, 0)
 		}
 	}
@@ -614,6 +629,38 @@ func (a *App) Render() {
 		}
 	}
 	a.LastRenderTime = now
+	a.recordCameraState()
+	a.RenderFrameIndex++
+}
+
+func formatShadowUpdateSummary(updates []core.ShadowUpdate) string {
+	if len(updates) == 0 {
+		return "none"
+	}
+
+	const maxEntries = 6
+	capacity := len(updates)
+	if capacity > maxEntries {
+		capacity = maxEntries
+	}
+	parts := make([]string, 0, capacity)
+	for i, update := range updates {
+		if i >= maxEntries {
+			break
+		}
+		switch update.Kind {
+		case core.ShadowUpdateKindDirectional:
+			parts = append(parts, fmt.Sprintf("D%d:%d@%d", update.LightIndex, update.CascadeIndex, update.Resolution))
+		case core.ShadowUpdateKindSpot:
+			parts = append(parts, fmt.Sprintf("S%d@%d", update.LightIndex, update.Resolution))
+		default:
+			parts = append(parts, fmt.Sprintf("U%d", update.LightIndex))
+		}
+	}
+	if len(updates) > maxEntries {
+		parts = append(parts, fmt.Sprintf("+%d more", len(updates)-maxEntries))
+	}
+	return strings.Join(parts, ", ")
 }
 
 /*

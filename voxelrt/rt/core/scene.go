@@ -143,6 +143,7 @@ type Scene struct {
 	Lights              []Light
 	Gizmos              []Gizmo
 	AmbientLight        mgl32.Vec3
+	SkyAmbientMix       float32
 	TargetVoxelSize     float32
 	lastVisibleCount    int
 	StructureRevision   uint64
@@ -157,6 +158,7 @@ func NewScene() *Scene {
 	return &Scene{
 		Objects:            []*VoxelObject{},
 		AmbientLight:       mgl32.Vec3{0.2, 0.2, 0.2},
+		SkyAmbientMix:      0.60,
 		TargetVoxelSize:    0.1, // matches gekko.VoxelSize
 		lastVisibility:     make(map[*VoxelObject]bool),
 		occlusionWarmup:    make(map[*VoxelObject]int),

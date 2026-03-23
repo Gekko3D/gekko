@@ -22,6 +22,7 @@ struct CameraData {
     pad1: u32,
     screen_size: vec2<f32>,
     pad2: vec2<f32>,
+    ao_quality: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -46,6 +47,14 @@ struct ShadowUpdate {
     shadow_layer: u32,
     cascade_index: u32,
     kind: u32,
+    tier: u32,
+    resolution: u32,
+};
+
+struct ShadowLayerParams {
+    viewport_scale: vec2<f32>,
+    effective_resolution: f32,
+    inv_effective_resolution: f32,
 };
 
 struct Instance {
@@ -81,6 +90,7 @@ struct BrickRecord {
     atlas_offset: u32,
     occupancy_mask_lo: u32,
     occupancy_mask_hi: u32,
+    atlas_page: u32,
     flags: u32,
 };
 
@@ -140,6 +150,7 @@ struct SectorGridParams {
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(2) var<storage, read> nodes: array<BVHNode>;
 @group(0) @binding(3) var<storage, read> lights: array<Light>;
+@group(0) @binding(4) var<storage, read> shadow_layer_params: array<ShadowLayerParams>;
 
 // Group 1: Shadow Map Output
 @group(1) @binding(0) var out_shadow_map: texture_storage_2d_array<rgba32float, write>;
@@ -147,12 +158,15 @@ struct SectorGridParams {
 // Group 2: Voxel Data
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
 @group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;
-@group(2) @binding(2) var voxel_payload: texture_3d<u32>;
-@group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
-@group(2) @binding(4) var<storage, read> object_params: array<ObjectParams>;
-@group(2) @binding(5) var<storage, read> tree64_nodes: array<Tree64Node>;
-@group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
-@group(2) @binding(7) var<storage, read> sector_grid_params: SectorGridParams;
+@group(2) @binding(2) var voxel_payload_0: texture_3d<u32>;
+@group(2) @binding(3) var voxel_payload_1: texture_3d<u32>;
+@group(2) @binding(4) var voxel_payload_2: texture_3d<u32>;
+@group(2) @binding(5) var voxel_payload_3: texture_3d<u32>;
+@group(2) @binding(6) var<storage, read> materials: array<vec4<f32>>;
+@group(2) @binding(7) var<storage, read> object_params: array<ObjectParams>;
+@group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
+@group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
+@group(2) @binding(10) var<storage, read> sector_grid_params: SectorGridParams;
 
 // ============== TRAVERSAL LOGIC ==============
 
@@ -198,7 +212,16 @@ fn step_to_next_cell(p: vec3<f32>, dir: vec3<f32>, inv_dir: vec3<f32>, cell_size
     return t_min + EPS;
 }
 
-fn load_u8(packed_offset: u32, voxel_idx: u32) -> u32 {
+fn load_voxel_payload(page: u32, coords: vec3<u32>) -> u32 {
+    switch page {
+        case 0u: { return textureLoad(voxel_payload_0, vec3<i32>(coords), 0).r; }
+        case 1u: { return textureLoad(voxel_payload_1, vec3<i32>(coords), 0).r; }
+        case 2u: { return textureLoad(voxel_payload_2, vec3<i32>(coords), 0).r; }
+        default: { return textureLoad(voxel_payload_3, vec3<i32>(coords), 0).r; }
+    }
+}
+
+fn load_u8(packed_offset: u32, atlas_page: u32, voxel_idx: u32) -> u32 {
     let ax = (packed_offset >> 20u) & 0x3FFu;
     let ay = (packed_offset >> 10u) & 0x3FFu;
     let az = packed_offset & 0x3FFu;
@@ -208,7 +231,7 @@ fn load_u8(packed_offset: u32, voxel_idx: u32) -> u32 {
     let vz = voxel_idx / 64u;
 
     let coords = vec3<u32>(ax + vx, ay + vy, az + vz);
-    return textureLoad(voxel_payload, vec3<i32>(coords), 0).r;
+    return load_voxel_payload(atlas_page, coords);
 }
 
 var<private> g_cached_sector_id: i32 = -1;
@@ -332,7 +355,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
                                 let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
                                 if (bit_test64(b_mask_lo, b_mask_hi, micro_idx)) {
-                                    let palette_idx = load_u8(b_atlas, voxel_idx);
+                                    let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
                                     if (palette_idx != EMPTY_VOXEL) {
                                         let mat_idx_v = params.material_table_base + palette_idx * 4u;
                                         let pbr_v = materials[mat_idx_v + 2u];
@@ -458,14 +481,14 @@ fn traverse_scene(ray: Ray) -> HitResult {
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let tex_dim = textureDimensions(out_shadow_map);
-    if (global_id.x >= tex_dim.x || global_id.y >= tex_dim.y) { return; }
-    
     let update_idx = global_id.z;
     let num_updates = arrayLength(&shadow_updates);
     if (update_idx >= num_updates) { return; }
     
     let update = shadow_updates[update_idx];
+    let layer_params = shadow_layer_params[update.shadow_layer];
+    let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
+    if (global_id.x >= effective_resolution || global_id.y >= effective_resolution) { return; }
     let light_idx = update.light_index;
     
     let light = lights[light_idx];
@@ -481,7 +504,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
-    let uv = (vec2<f32>(f32(global_id.x), f32(global_id.y)) + 0.5) / vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
+    let uv = (vec2<f32>(f32(global_id.x), f32(global_id.y)) + 0.5) / vec2<f32>(f32(effective_resolution), f32(effective_resolution));
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     
     // Generate ray for this pixel of the shadow map

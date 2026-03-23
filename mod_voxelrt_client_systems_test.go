@@ -37,3 +37,23 @@ func TestSyncVoxelRtLightsUsesDaylightDirectionalLightAsSun(t *testing.T) {
 		t.Fatalf("expected non-zero ambient light, got %v", state.RtApp.Scene.AmbientLight)
 	}
 }
+
+func TestVoxelRtDebugSystemCyclesNamedModes(t *testing.T) {
+	input := &Input{}
+	input.JustPressed[KeyF2] = true
+	state := &VoxelRtState{
+		RtApp: &app_rt.App{
+			Camera: core.NewCameraState(),
+		},
+	}
+
+	voxelRtDebugSystem(input, state)
+	if got := state.DebugOverlayMode(); got != VoxelRtDebugModeScene {
+		t.Fatalf("expected first F2 press to switch to scene debug, got %v", got)
+	}
+
+	voxelRtDebugSystem(input, state)
+	if got := state.DebugOverlayMode(); got != VoxelRtDebugModeOff {
+		t.Fatalf("expected second F2 press to wrap to off, got %v", got)
+	}
+}

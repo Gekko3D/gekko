@@ -15,6 +15,7 @@ struct CameraData {
     pad1: u32,
     screen_size: vec2<f32>,
     pad2: vec2<f32>,
+    ao_quality: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -40,10 +41,39 @@ struct DirectionalCascadeSelection {
     blend: f32,
 };
 
+struct ShadowLayerParams {
+    viewport_scale: vec2<f32>,
+    effective_resolution: f32,
+    inv_effective_resolution: f32,
+};
+
+struct TileLightListParams {
+    tile_size: u32,
+    tiles_x: u32,
+    tiles_y: u32,
+    max_lights_per_tile: u32,
+    screen_width: u32,
+    screen_height: u32,
+    num_tiles: u32,
+    pad0: u32,
+};
+
+struct TileLightHeader {
+    offset: u32,
+    count: u32,
+    overflow: u32,
+    pad0: u32,
+};
+
 struct Ray {
     origin: vec3<f32>,
     dir: vec3<f32>,
     inv_dir: vec3<f32>,
+};
+
+struct LightingContribution {
+    color: vec3<f32>,
+    contributes: u32,
 };
 
 // ============== BIND GROUPS ==============
@@ -51,6 +81,7 @@ struct Ray {
 // Group 0: Scene
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(0) @binding(1) var<storage, read> lights: array<Light>;
+@group(0) @binding(2) var<storage, read> shadow_layer_params: array<ShadowLayerParams>;
 
 // Group 1: G-Buffer Input
 @group(1) @binding(0) var in_depth: texture_2d<f32>;
@@ -71,6 +102,11 @@ struct Ray {
 // Group 2: Voxel Data (reuse)
 @group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
 
+// Group 3: Tiled lighting buffers
+@group(3) @binding(0) var<uniform> tile_light_params: TileLightListParams;
+@group(3) @binding(1) var<storage, read> tile_light_headers: array<TileLightHeader>;
+@group(3) @binding(2) var<storage, read> tile_light_indices: array<u32>;
+
 // ============== LIGHTING CALCULATION ==============
 
 const PI: f32 = 3.14159265359;
@@ -79,6 +115,14 @@ const PBR_EPSILON: f32 = 1e-4;
 
 fn saturate(v: f32) -> f32 {
     return clamp(v, 0.0, 1.0);
+}
+
+fn abs_i32(v: i32) -> i32 {
+    return select(v, -v, v < 0);
+}
+
+fn max3f(v: vec3<f32>) -> f32 {
+    return max(v.x, max(v.y, v.z));
 }
 
 fn srgb_channel_to_linear(v: f32) -> f32 {
@@ -190,24 +234,25 @@ fn sample_directional_shadow(
         return 1.0;
     }
 
-    let tex_dim = textureDimensions(in_shadow_maps);
-    let base_px_f = shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
+    let layer = light.shadow_meta.x + cascade_idx;
+    let layer_params = shadow_layer_params[layer];
+    let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
+    let base_px_f = shadow_uv * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
     let base_px = vec2<i32>(
-        i32(clamp(base_px_f.x, 0.0, f32(tex_dim.x - 1u))),
-        i32(clamp(base_px_f.y, 0.0, f32(tex_dim.y - 1u)))
+        i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
+        i32(clamp(base_px_f.y, 0.0, f32(effective_resolution - 1u)))
     );
     let my_depth_n = clamp(proj_pos.z, -1.0, 1.0);
     let NdL = max(dot(normal, L), 0.0);
     let bias = directional_compare_bias + directional_compare_bias * 0.75 * (1.0 - NdL);
-    let layer = i32(light.shadow_meta.x + cascade_idx);
-    let max_px = vec2<i32>(i32(tex_dim.x) - 1, i32(tex_dim.y) - 1);
+    let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
     var visibility = 0.0;
     var sample_weight_sum = 0.0;
     for (var dy: i32 = -1; dy <= 1; dy = dy + 1) {
         for (var dx: i32 = -1; dx <= 1; dx = dx + 1) {
             let off = base_px + vec2<i32>(dx, dy);
             let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
-            let shadow_sample = textureLoad(in_shadow_maps, clamped_off, layer, 0);
+            let shadow_sample = textureLoad(in_shadow_maps, clamped_off, i32(layer), 0);
             let sampled_depth_n = clamp(shadow_sample.r, -1.0, 1.0);
             let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
             let same_shadow_group =
@@ -236,7 +281,7 @@ fn calculate_lighting(
     receiver_shadow_group_id: u32,
     receiver_shadow_seam_epsilon: f32,
     light_idx: u32
-) -> vec3<f32> {
+) -> LightingContribution {
     let light = lights[light_idx];
     var L = vec3<f32>(0.0);
     var attenuation = 1.0;
@@ -286,17 +331,18 @@ fn calculate_lighting(
             } else {
                 var pos_ws = hit_pos;
                 let shadow_view_proj = light.view_proj;
-                let layer = i32(light.shadow_meta.x);
+                let layer = light.shadow_meta.x;
+                let layer_params = shadow_layer_params[layer];
+                let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
                 let pos_ls = shadow_view_proj * vec4<f32>(pos_ws, 1.0);
                 let proj_pos = pos_ls.xyz / pos_ls.w;
                 let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
 
                 if (pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
-                    let tex_dim = textureDimensions(in_shadow_maps);
-                    let base_px_f = shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
+                    let base_px_f = shadow_uv * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
                     let base_px = vec2<i32>(
-                        i32(clamp(base_px_f.x, 0.0, f32(tex_dim.x - 1u))),
-                        i32(clamp(base_px_f.y, 0.0, f32(tex_dim.y - 1u)))
+                        i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
+                        i32(clamp(base_px_f.y, 0.0, f32(effective_resolution - 1u)))
                     );
 
                     var my_depth_m = 0.0;
@@ -305,14 +351,14 @@ fn calculate_lighting(
                     my_depth_m = distance(light.position.xyz, pos_off);
 
                     let NdL = max(dot(normal, L), 0.0);
-                    let max_px = vec2<i32>(i32(tex_dim.x) - 1, i32(tex_dim.y) - 1);
+                    let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
                     var visibility = 0.0;
                     var sample_weight_sum = 0.0;
                     for (var dy: i32 = -2; dy <= 2; dy = dy + 1) {
                         for (var dx: i32 = -2; dx <= 2; dx = dx + 1) {
                             let off = base_px + vec2<i32>(dx, dy);
                             let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
-                            let shadow_sample = textureLoad(in_shadow_maps, clamped_off, layer, 0);
+                            let shadow_sample = textureLoad(in_shadow_maps, clamped_off, i32(layer), 0);
                             let sampled_depth = shadow_sample.r;
                             let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
                             let same_shadow_group =
@@ -335,7 +381,7 @@ fn calculate_lighting(
         let NdotL = max(dot(normal, L), 0.0);
         let NdotV = max(dot(normal, view_dir), 0.0);
         if (NdotL <= 0.0 || NdotV <= 0.0) {
-            return vec3<f32>(0.0);
+            return LightingContribution(vec3<f32>(0.0), 0u);
         }
 
         let half_dir = normalize(L + view_dir);
@@ -357,9 +403,13 @@ fn calculate_lighting(
         let kD = (vec3<f32>(1.0) - kS) * (1.0 - metalness);
         let diffuse = kD * base_color / PI;
         let radiance = light.color.xyz * attenuation * light.color.w;
-        return (diffuse + specular) * radiance * NdotL;
+        let lit = (diffuse + specular) * radiance * NdotL;
+        if (max(lit.x, max(lit.y, lit.z)) > 0.0) {
+            return LightingContribution(lit, 1u);
+        }
+        return LightingContribution(vec3<f32>(0.0), 0u);
     }
-    return vec3<f32>(0.0);
+    return LightingContribution(vec3<f32>(0.0), 0u);
 }
 
 fn ndc_for_shadow(uv: vec2<f32>) -> vec2<f32> {
@@ -377,6 +427,36 @@ fn dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(u, v);
 }
 
+fn light_density_heatmap(count: u32) -> vec3<f32> {
+    if (count == 0u) {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    if (count == 1u) {
+        return vec3<f32>(0.10, 0.35, 1.00);
+    }
+    if (count <= 3u) {
+        return vec3<f32>(0.00, 0.85, 1.00);
+    }
+    if (count <= 7u) {
+        return vec3<f32>(0.95, 0.90, 0.10);
+    }
+    return vec3<f32>(1.00, 0.20, 0.10);
+}
+
+fn sample_directional_sky_ambient(normal: vec3<f32>, ao: f32) -> vec3<f32> {
+    let sky_uv = dir_to_uv(normalize(normal));
+    let sky_sample = textureSampleLevel(in_skybox, skybox_sampler, sky_uv, 0.0).xyz;
+    let upness = saturate(normal.y * 0.5 + 0.5);
+    let horizon = 1.0 - abs(normal.y);
+    let hemi = 0.22 + 0.78 * upness;
+    // AO is a crude proxy for "sky visibility". Use it to suppress sky/ambient in enclosed interiors.
+    let ao_clamped = saturate(ao);
+    let ao2 = ao_clamped * ao_clamped;
+    let sky_mix = camera.ambient_color.w * ao2;
+    let ambient_source = mix(camera.ambient_color.xyz, sky_sample, sky_mix);
+    return ambient_source * (hemi + horizon * 0.12) * ao_clamped;
+}
+
 // ============== MAIN DEFERRED LIGHTING PASS ==============
 
 fn get_ray(uv: vec2<f32>) -> Ray {
@@ -387,6 +467,17 @@ fn get_ray(uv: vec2<f32>) -> Ray {
     let origin = camera.cam_pos.xyz;
     let dir = normalize(world_target - origin);
     return Ray(origin, dir, 1.0 / dir);
+}
+
+fn tile_index_for_pixel(pixel: vec2<u32>) -> u32 {
+    let tile_coord = min(
+        pixel / tile_light_params.tile_size,
+        vec2<u32>(
+            max(tile_light_params.tiles_x, 1u) - 1u,
+            max(tile_light_params.tiles_y, 1u) - 1u,
+        ),
+    );
+    return tile_coord.y * tile_light_params.tiles_x + tile_coord.x;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -406,7 +497,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    let normal = textureLoad(in_normal, global_id.xy, 0).xyz;
+    let normal_data = textureLoad(in_normal, global_id.xy, 0);
+    let normal = normal_data.xyz;
+    let ambient_occlusion = clamp(normal_data.w, 0.0, 1.0);
     let mat_data = textureLoad(in_material, global_id.xy, 0);
     
     let palette_idx = u32(mat_data.x + 0.5);
@@ -417,13 +510,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mat_idx = material_base + palette_idx * 4u;
     let mat_packed = materials[mat_idx];
     let base_color = srgb_to_linear(mat_packed.xyz);
-    let emissive_color = srgb_to_linear(materials[mat_idx + 1u].xyz);
+    let emissive_linear = srgb_to_linear(materials[mat_idx + 1u].xyz);
     let pbr_params = materials[mat_idx + 2u];
     let material_extra = materials[mat_idx + 3u];
     let roughness = clamp(pbr_params.x, 0.0, 1.0);
     let metalness = clamp(pbr_params.y, 0.0, 1.0);
     let ior = pbr_params.z;
-    let emissive = emissive_color * max(material_extra.x, 0.0);
+    let emissive = emissive_linear * max(material_extra.x, 0.0);
     
     // Use stored voxel center from G-Buffer to ensure uniform lighting per voxel (blocky look)
     let hit_pos_ws = textureLoad(in_position, global_id.xy, 0).xyz;
@@ -434,14 +527,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let F0 = mix(dielectric_f0, base_color, metalness);
     let ambient_fresnel = fresnel_schlick_roughness(NdotV, F0, roughness);
     let ambient_kd = (vec3<f32>(1.0) - ambient_fresnel) * (1.0 - metalness);
-    var final_color = (ambient_kd * base_color + ambient_fresnel) * camera.ambient_color.xyz + emissive;
-    
-    
-    // Loop through all lights
-    let num_lights = camera.num_lights;
-    for (var i = 0u; i < num_lights; i++) {
-        final_color += calculate_lighting(hit_pos_ws, normal, view_dir, base_color, roughness, metalness, ior, receiver_shadow_group_id, receiver_shadow_seam_epsilon, i);
+    let ambient_light = sample_directional_sky_ambient(normal, ambient_occlusion);
+    let ambient_term = (ambient_kd * base_color + ambient_fresnel) * ambient_light;
+    let indirect_color = ambient_term * ambient_occlusion;
+    let emissive_term = emissive;
+    var direct_color = vec3<f32>(0.0);
+    let tile_header = tile_light_headers[tile_index_for_pixel(global_id.xy)];
+
+    for (var i = 0u; i < tile_header.count; i++) {
+        let light_idx = tile_light_indices[tile_header.offset + i];
+        let contribution = calculate_lighting(hit_pos_ws, normal, view_dir, base_color, roughness, metalness, ior, receiver_shadow_group_id, receiver_shadow_seam_epsilon, light_idx);
+        direct_color += contribution.color;
     }
+    let final_color = indirect_color + direct_color + emissive_term;
     
     // Render modes
     if (camera.render_mode == 1u) {
@@ -479,5 +577,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         textureStore(out_color, global_id.xy, vec4<f32>(dbg, 1.0));
         return;
     }
-        textureStore(out_color, global_id.xy, vec4<f32>(final_color, 1.0));
+    if (camera.render_mode == 4u) {
+        textureStore(out_color, global_id.xy, vec4<f32>(direct_color, 1.0));
+        return;
+    }
+    if (camera.render_mode == 5u) {
+        textureStore(out_color, global_id.xy, vec4<f32>(indirect_color, 1.0));
+        return;
+    }
+    if (camera.render_mode == 6u) {
+        textureStore(out_color, global_id.xy, vec4<f32>(light_density_heatmap(tile_header.count), 1.0));
+        return;
+    }
+    textureStore(out_color, global_id.xy, vec4<f32>(final_color, 1.0));
 }

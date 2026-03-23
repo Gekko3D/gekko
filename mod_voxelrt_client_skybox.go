@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 func (s *VoxelRtState) syncSkybox(cmd *Commands, time *Time) {
@@ -12,6 +13,19 @@ func (s *VoxelRtState) syncSkybox(cmd *Commands, time *Time) {
 
 	layersChanged := false
 	currentLayers := make(map[EntityId]SkyboxLayerComponent)
+	currentSun := SkyboxSunComponent{
+		Direction:              s.SunDirection,
+		Intensity:              s.SunIntensity,
+		HaloColor:              mgl32.Vec3{1.0, 0.9, 0.7},
+		CoreGlowStrength:       2.0,
+		CoreGlowExponent:       1000.0,
+		AtmosphereExponent:     100.0,
+		AtmosphereGlowStrength: 0.5,
+		DiskColor:              mgl32.Vec3{1.5, 1.4, 1.2},
+		DiskStrength:           1.0,
+		DiskStart:              0.9998,
+		DiskEnd:                0.9999,
+	}
 
 	dt := float32(time.Dt)
 
@@ -32,14 +46,25 @@ func (s *VoxelRtState) syncSkybox(cmd *Commands, time *Time) {
 		return true
 	})
 
+	MakeQuery1[SkyboxSunComponent](cmd).Map(func(_ EntityId, sun *SkyboxSunComponent) bool {
+		if sun != nil {
+			currentSun = *sun
+		}
+		return false
+	})
+
 	// Detect deletions
 	if len(currentLayers) != len(s.skyboxLayers) {
+		layersChanged = true
+	}
+	if s.skyboxSun != currentSun {
 		layersChanged = true
 	}
 
 	// Always rebuild if sun changed or any layer changed
 	if layersChanged {
 		s.skyboxLayers = currentLayers
+		s.skyboxSun = currentSun
 		s.rebuildSkybox()
 	}
 }
@@ -101,6 +126,10 @@ func (s *VoxelRtState) rebuildSkybox() {
 		}
 	}
 
-	sunDir := [4]float32{s.SunDirection.X(), s.SunDirection.Y(), s.SunDirection.Z(), s.SunIntensity}
-	s.RtApp.BufferManager.UpdateSkyboxGPU(uint32(width), uint32(height), gpuLayers, sunDir, smooth, s.RtApp.LightingPipeline, s.RtApp.StorageView)
+	sunDir := [4]float32{s.skyboxSun.Direction.X(), s.skyboxSun.Direction.Y(), s.skyboxSun.Direction.Z(), s.skyboxSun.Intensity}
+	sunColor := [4]float32{s.skyboxSun.HaloColor.X(), s.skyboxSun.HaloColor.Y(), s.skyboxSun.HaloColor.Z(), s.skyboxSun.CoreGlowStrength}
+	sunParams := [4]float32{s.skyboxSun.CoreGlowExponent, s.skyboxSun.AtmosphereExponent, s.skyboxSun.AtmosphereGlowStrength, 0}
+	diskColor := [4]float32{s.skyboxSun.DiskColor.X(), s.skyboxSun.DiskColor.Y(), s.skyboxSun.DiskColor.Z(), s.skyboxSun.DiskStrength}
+	diskParams := [4]float32{s.skyboxSun.DiskStart, s.skyboxSun.DiskEnd, 0, 0}
+	s.RtApp.BufferManager.UpdateSkyboxGPU(uint32(width), uint32(height), gpuLayers, sunDir, sunColor, sunParams, diskColor, diskParams, smooth, s.RtApp.LightingPipeline, s.RtApp.StorageView)
 }

@@ -1,8 +1,6 @@
 package gekko
 
-import (
-	"github.com/go-gl/mathgl/mgl32"
-)
+import "github.com/go-gl/mathgl/mgl32"
 
 type DestructionEvent struct {
 	Entity EntityId
@@ -40,16 +38,15 @@ func destructionSystem(state *VoxelRtState, queue *DestructionQueue, cmd *Comman
 }
 
 func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *Commands, server *AssetServer) {
-	// 1. Carve voxels
-	state.VoxelSphereEdit(event.Entity, event.Center, event.Radius, 0)
-
-	// 2. Get the runtime XBrickMap
 	voxObj := state.GetVoxelObject(event.Entity)
 	if voxObj == nil || voxObj.XBrickMap == nil {
 		return
 	}
 
-	// 3. Detect disconnected components
+	// 1. Carve voxels
+	state.VoxelSphereEdit(event.Entity, event.Center, event.Radius, 0)
+
+	// 2. Detect disconnected components
 	components := voxObj.XBrickMap.SplitDisconnectedComponents()
 	if len(components) <= 1 {
 		// If the entity is empty now, remove it
@@ -59,7 +56,7 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 		return
 	}
 
-	// 4. Handle splitting
+	// 3. Handle splitting
 	// Find the largest component to keep in the original entity
 	largestIdx := 0
 	maxVoxels := -1
@@ -198,5 +195,4 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 			},
 		)
 	}
-
 }

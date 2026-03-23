@@ -23,6 +23,7 @@ struct CameraData {
   pad1: u32,
   screen_size: vec2<f32>,
   pad2: vec2<f32>,
+  ao_quality: vec4<f32>,
 };
 
 struct Instance {
@@ -58,6 +59,7 @@ struct BrickRecord {
   atlas_offset: u32,
   occupancy_mask_lo: u32,
   occupancy_mask_hi: u32,
+  atlas_page: u32,
   flags: u32,
 };
 
@@ -89,6 +91,30 @@ struct DirectionalCascadeSelection {
   primary_index: u32,
   secondary_index: u32,
   blend: f32,
+};
+
+struct ShadowLayerParams {
+  viewport_scale: vec2<f32>,
+  effective_resolution: f32,
+  inv_effective_resolution: f32,
+};
+
+struct TileLightListParams {
+  tile_size: u32,
+  tiles_x: u32,
+  tiles_y: u32,
+  max_lights_per_tile: u32,
+  screen_width: u32,
+  screen_height: u32,
+  num_tiles: u32,
+  pad0: u32,
+};
+
+struct TileLightHeader {
+  offset: u32,
+  count: u32,
+  overflow: u32,
+  pad0: u32,
 };
 
 struct ObjectParams {
@@ -146,22 +172,31 @@ struct TransparentHit {
 @group(0) @binding(1) var<storage, read> instances : array<Instance>;
 @group(0) @binding(2) var<storage, read> nodes     : array<BVHNode>;
 @group(0) @binding(3) var<storage, read> lights    : array<Light>;
+@group(0) @binding(4) var<storage, read> shadow_layer_params : array<ShadowLayerParams>;
 
 // Group 1: Voxel data and materials
 @group(1) @binding(0) var<storage, read> sectors              : array<SectorRecord>;
 @group(1) @binding(1) var<storage, read> bricks               : array<BrickRecord>;
-@group(1) @binding(2) var voxel_payload: texture_3d<u32>;
-@group(1) @binding(3) var<storage, read> materials            : array<vec4<f32>>;
-@group(1) @binding(4) var<storage, read> object_params        : array<ObjectParams>;
-@group(1) @binding(5) var<storage, read> tree64_nodes         : array<Tree64Node>;
-@group(1) @binding(6) var<storage, read> sector_grid          : array<SectorGridEntry>;
-@group(1) @binding(7) var<storage, read> sector_grid_params   : SectorGridParams;
+@group(1) @binding(2) var voxel_payload_0: texture_3d<u32>;
+@group(1) @binding(3) var voxel_payload_1: texture_3d<u32>;
+@group(1) @binding(4) var voxel_payload_2: texture_3d<u32>;
+@group(1) @binding(5) var voxel_payload_3: texture_3d<u32>;
+@group(1) @binding(6) var<storage, read> materials            : array<vec4<f32>>;
+@group(1) @binding(7) var<storage, read> object_params        : array<ObjectParams>;
+@group(1) @binding(8) var<storage, read> tree64_nodes         : array<Tree64Node>;
+@group(1) @binding(9) var<storage, read> sector_grid          : array<SectorGridEntry>;
+@group(1) @binding(10) var<storage, read> sector_grid_params   : SectorGridParams;
 
 // Group 2: GBuffer inputs
 @group(2) @binding(0) var in_depth    : texture_2d<f32>;      // stores ray t in .r
 @group(2) @binding(1) var in_material : texture_2d<f32>;      // not strictly needed for this pass but reserved
 @group(2) @binding(2) var in_shadow_maps : texture_2d_array<f32>;
 @group(2) @binding(3) var in_opaque_lit : texture_2d<f32>;
+
+// Group 3: tiled light lists
+@group(3) @binding(0) var<uniform> tile_light_params : TileLightListParams;
+@group(3) @binding(1) var<storage, read> tile_light_headers : array<TileLightHeader>;
+@group(3) @binding(2) var<storage, read> tile_light_indices : array<u32>;
 
 // ============== HELPERS (copied/trimmed from gbuffer) ==============
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
@@ -214,7 +249,16 @@ fn step_to_next_cell(p: vec3<f32>, dir: vec3<f32>, inv_dir: vec3<f32>, cell_size
   return t_min + EPS;
 }
 
-fn load_u8(packed_offset: u32, voxel_idx: u32) -> u32 {
+fn load_voxel_payload(page: u32, coords: vec3<u32>) -> u32 {
+  switch page {
+    case 0u: { return textureLoad(voxel_payload_0, vec3<i32>(coords), 0).r; }
+    case 1u: { return textureLoad(voxel_payload_1, vec3<i32>(coords), 0).r; }
+    case 2u: { return textureLoad(voxel_payload_2, vec3<i32>(coords), 0).r; }
+    default: { return textureLoad(voxel_payload_3, vec3<i32>(coords), 0).r; }
+  }
+}
+
+fn load_u8(packed_offset: u32, atlas_page: u32, voxel_idx: u32) -> u32 {
   let ax = (packed_offset >> 20u) & 0x3FFu;
   let ay = (packed_offset >> 10u) & 0x3FFu;
   let az = packed_offset & 0x3FFu;
@@ -224,7 +268,7 @@ fn load_u8(packed_offset: u32, voxel_idx: u32) -> u32 {
   let vz = voxel_idx / 64u;
 
   let coords = vec3<u32>(ax + vx, ay + vy, az + vz);
-  return textureLoad(voxel_payload, vec3<i32>(coords), 0).r;
+  return load_voxel_payload(atlas_page, coords);
 }
 
 fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
@@ -316,7 +360,7 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
     let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
     let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
     let b_atlas = bricks[packed_idx].atlas_offset;
-    let palette_idx = load_u8(b_atlas, voxel_idx);
+    let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
     return select(0.0, 1.0, palette_idx != 0u);
   }
   return 1.0;
@@ -440,6 +484,12 @@ fn geometry_smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
   return geometry_schlick_ggx(NdotV, roughness) * geometry_schlick_ggx(NdotL, roughness);
 }
 
+fn directional_ambient_scale(normal: vec3<f32>) -> f32 {
+  let upness = saturate(normal.y * 0.5 + 0.5);
+  let horizon = 1.0 - abs(normal.y);
+  return 0.22 + 0.78 * upness + horizon * 0.12;
+}
+
 fn camera_forward_ws() -> vec3<f32> {
   return normalize((uCamera.inv_view * vec4<f32>(0.0, 0.0, -1.0, 0.0)).xyz);
 }
@@ -499,24 +549,25 @@ fn sample_directional_shadow(
     return 1.0;
   }
 
-  let tex_dim = textureDimensions(in_shadow_maps);
-  let base_px_f = shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
+  let layer = light.shadow_meta.x + cascade_idx;
+  let layer_params = shadow_layer_params[layer];
+  let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
+  let base_px_f = shadow_uv * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
   let base_px = vec2<i32>(
-    i32(clamp(base_px_f.x, 0.0, f32(tex_dim.x - 1u))),
-    i32(clamp(base_px_f.y, 0.0, f32(tex_dim.y - 1u)))
+    i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
+    i32(clamp(base_px_f.y, 0.0, f32(effective_resolution - 1u)))
   );
   let my_depth_n = clamp(proj_pos.z, -1.0, 1.0);
   let NdL_shadow = max(dot(n, L), 0.0);
   let bias = directional_compare_bias + directional_compare_bias * 0.75 * (1.0 - NdL_shadow);
-  let layer = i32(light.shadow_meta.x + cascade_idx);
-  let max_px = vec2<i32>(i32(tex_dim.x) - 1, i32(tex_dim.y) - 1);
+  let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
   var visibility = 0.0;
   var sample_weight_sum = 0.0;
   for (var dy: i32 = -1; dy <= 1; dy = dy + 1) {
     for (var dx: i32 = -1; dx <= 1; dx = dx + 1) {
       let off = base_px + vec2<i32>(dx, dy);
       let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
-      let shadow_sample = textureLoad(in_shadow_maps, clamped_off, layer, 0);
+      let shadow_sample = textureLoad(in_shadow_maps, clamped_off, i32(layer), 0);
       let sampled_depth_n = clamp(shadow_sample.r, -1.0, 1.0);
       let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
       let same_shadow_group =
@@ -567,6 +618,21 @@ fn refraction_uv_offset(
   return (refr_uv - straight_uv) * refraction_strength * thickness_boost;
 }
 
+fn tile_index_for_frag_pos(frag_pos: vec4<f32>) -> u32 {
+  let pixel = vec2<u32>(
+    min(u32(max(frag_pos.x, 0.0)), max(tile_light_params.screen_width, 1u) - 1u),
+    min(u32(max(frag_pos.y, 0.0)), max(tile_light_params.screen_height, 1u) - 1u),
+  );
+  let tile_coord = min(
+    pixel / tile_light_params.tile_size,
+    vec2<u32>(
+      max(tile_light_params.tiles_x, 1u) - 1u,
+      max(tile_light_params.tiles_y, 1u) - 1u,
+    ),
+  );
+  return tile_coord.y * tile_light_params.tiles_x + tile_coord.x;
+}
+
 fn calculate_lighting(
   p: vec3<f32>,
   n: vec3<f32>,
@@ -576,7 +642,8 @@ fn calculate_lighting(
   ior: f32,
   emissive: vec3<f32>,
   receiver_shadow_group_id: u32,
-  receiver_shadow_seam_epsilon: f32
+  receiver_shadow_seam_epsilon: f32,
+  tile_index: u32
 ) -> vec3<f32> {
   let V = normalize(uCamera.cam_pos.xyz - p);
   let NdotV = max(dot(n, V), 0.0);
@@ -584,10 +651,12 @@ fn calculate_lighting(
   let F0 = mix(dielectric_f0, base_color, metalness);
   let ambient_fresnel = fresnel_schlick_roughness(NdotV, F0, roughness);
   let ambient_kd = (vec3<f32>(1.0) - ambient_fresnel) * (1.0 - metalness);
-  var total_light = (ambient_kd * base_color + ambient_fresnel) * uCamera.ambient_color.xyz + emissive;
+  let ambient_light = uCamera.ambient_color.xyz * directional_ambient_scale(n);
+  var total_light = (ambient_kd * base_color + ambient_fresnel) * ambient_light + emissive;
   
-  for (var i = 0u; i < uCamera.num_lights; i++) {
-    let light = lights[i];
+  let tile_header = tile_light_headers[tile_index];
+  for (var i = 0u; i < tile_header.count; i++) {
+    let light = lights[tile_light_indices[tile_header.offset + i]];
     let light_type = u32(light.params.z);
     var L = vec3<f32>(0.0);
     var attenuation = 1.0;
@@ -637,31 +706,32 @@ fn calculate_lighting(
         attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
       } else {
         let shadow_view_proj = light.view_proj;
-        let layer = i32(light.shadow_meta.x);
+        let layer = light.shadow_meta.x;
+        let layer_params = shadow_layer_params[layer];
+        let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
         let pos_ls = shadow_view_proj * vec4<f32>(p, 1.0);
         let proj_pos = pos_ls.xyz / pos_ls.w;
         let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
 
         if (pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
-          let tex_dim = textureDimensions(in_shadow_maps);
-          let base_px_f = shadow_uv * vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
+          let base_px_f = shadow_uv * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
           let base_px = vec2<i32>(
-            i32(clamp(base_px_f.x, 0.0, f32(tex_dim.x - 1u))),
-            i32(clamp(base_px_f.y, 0.0, f32(tex_dim.y - 1u)))
+            i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
+            i32(clamp(base_px_f.y, 0.0, f32(effective_resolution - 1u)))
           );
 
           let receiver_offset = max(receiver_shadow_seam_epsilon * 0.5, 0.05);
           let pos_off = p + n * receiver_offset;
           let my_depth_m = distance(light.position.xyz, pos_off);
           let NdL_shadow = max(dot(n, L), 0.0);
-          let max_px = vec2<i32>(i32(tex_dim.x) - 1, i32(tex_dim.y) - 1);
+          let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
           var visibility = 0.0;
           var sample_weight_sum = 0.0;
           for (var dy: i32 = -2; dy <= 2; dy = dy + 1) {
             for (var dx: i32 = -2; dx <= 2; dx = dx + 1) {
               let off = base_px + vec2<i32>(dx, dy);
               let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
-              let shadow_sample = textureLoad(in_shadow_maps, clamped_off, layer, 0);
+              let shadow_sample = textureLoad(in_shadow_maps, clamped_off, i32(layer), 0);
               let sampled_depth = shadow_sample.r;
               let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
               let same_shadow_group =
@@ -735,6 +805,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let dims = textureDimensions(in_depth);
   let ipos = vec2<i32>( clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
                         clamp(i32(frag_pos.y), 0, i32(dims.y) - 1) );
+  let tile_index = tile_index_for_frag_pos(frag_pos);
   let t_opaque = textureLoad(in_depth, ipos, 0).r;
   var t_limit = t_opaque;
   if (t_limit >= FAR_T) { t_limit = FAR_T; }
@@ -865,7 +936,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let coverage_step = 1.0 - exp(-coverage_sigma * dt_ws);
                               let sigma_a = absorption_coefficient(base_col, transmission, medium_density * 0.75) * mix(0.15, 1.0, opacity);
                               let trans_step = select(vec3<f32>(1.0 - coverage_step), exp(-sigma_a * dt_ws), is_volumetric);
-                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, shadow_seam_epsilon);
+                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, shadow_seam_epsilon, tile_index);
                               let refract_off = select(
                                 vec2<f32>(0.0, 0.0),
                                 refraction_uv_offset(pos_ws, n_ws, view_dir, max(pbr.z, 1.001), refraction_strength, refractive_path_ws),
@@ -912,7 +983,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                           let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx);
                           if (process) {
                             let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-                            let palette_idx = load_u8(b_atlas, voxel_idx);
+                            let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
                             if (palette_idx != 0u) {
                               let mat_base = params.material_table_base;
                               let mat_idx = mat_base + palette_idx * 4u;
@@ -946,7 +1017,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let coverage_step = 1.0 - exp(-coverage_sigma * dt_ws);
                                   let sigma_a = absorption_coefficient(base_col, transmission, medium_density * 0.75) * mix(0.15, 1.0, opacity);
                                   let trans_step = select(vec3<f32>(1.0 - coverage_step), exp(-sigma_a * dt_ws), is_volumetric);
-                                  let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, shadow_seam_epsilon);
+                                  let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, shadow_seam_epsilon, tile_index);
                                   let refract_off = select(
                                     vec2<f32>(0.0, 0.0),
                                     refraction_uv_offset(pos_ws, n_ws, view_dir, max(pbr.z, 1.001), refraction_strength, refractive_path_ws),

@@ -36,8 +36,9 @@ type App struct {
 	ResolveBG *wgpu.BindGroup
 
 	// Deferred Rendering Pipelines
-	GBufferPipeline  *wgpu.ComputePipeline
-	LightingPipeline *wgpu.ComputePipeline
+	GBufferPipeline        *wgpu.ComputePipeline
+	TiledLightCullPipeline *wgpu.ComputePipeline
+	LightingPipeline       *wgpu.ComputePipeline
 
 	// Particle Sim Pipelines
 	ParticleSimPipeline      *wgpu.ComputePipeline
@@ -79,13 +80,17 @@ type App struct {
 	MouseX, MouseY     float64
 	DebugMode          bool
 	RenderMode         uint32
+	QualityPreset      core.LightingQualityPreset
+	LightingQuality    core.LightingQualityConfig
 	OcclusionMode      core.OcclusionMode
 	FontPath           string
 
-	FrameCount         int
-	FPS                float64
-	FPSTime            float64
-	ShadowUpdateOffset int
+	FrameCount          int
+	FPS                 float64
+	FPSTime             float64
+	RenderFrameIndex    uint64
+	ShadowUpdateOffset  int
+	ShadowUpdateSummary string
 
 	Profiler *Profiler
 
@@ -95,12 +100,22 @@ type App struct {
 
 func NewApp(window *glfw.Window) *App {
 	return &App{
-		Window:        window,
-		Camera:        core.NewCameraState(),
-		Scene:         core.NewScene(),
-		Profiler:      NewProfiler(),
-		OcclusionMode: core.OcclusionOff,
+		Window:          window,
+		Camera:          core.NewCameraState(),
+		Scene:           core.NewScene(),
+		Profiler:        NewProfiler(),
+		QualityPreset:   core.LightingQualityPresetBalanced,
+		LightingQuality: core.DefaultLightingQualityConfig(),
+		OcclusionMode:   core.OcclusionOff,
 	}
+}
+
+func (a *App) EffectiveLightingQuality() core.LightingQualityConfig {
+	cfg := a.LightingQuality
+	if a.QualityPreset != "" {
+		cfg.Preset = a.QualityPreset
+	}
+	return cfg.WithDefaults()
 }
 
 func (a *App) Init() error {
@@ -180,6 +195,14 @@ func (a *App) Init() error {
 	}
 
 	// Deferred Lighting Pipeline
+	tiledLightCullMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Tiled Light Cull CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.TiledLightCullWGSL},
+	})
+	if err != nil {
+		return err
+	}
+
 	lightMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label:          "Lighting CS",
 		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.DeferredLightingWGSL},
@@ -197,7 +220,7 @@ func (a *App) Init() error {
 				Visibility: wgpu.ShaderStageCompute,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   272, // CameraData size
+					MinBindingSize:   288, // CameraData size
 					HasDynamicOffset: false,
 				},
 			},
@@ -210,6 +233,97 @@ func (a *App) Init() error {
 					HasDynamicOffset: false,
 				},
 			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	tiledLightCullBGL0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Tiled Light Cull BGL0",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeUniform,
+					MinBindingSize:   288,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	tiledLightCullBGL1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Tiled Light Cull BGL1",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeUniform,
+					MinBindingSize:   32,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	tiledLightCullLayout, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		BindGroupLayouts: []*wgpu.BindGroupLayout{tiledLightCullBGL0, tiledLightCullBGL1},
+	})
+	if err != nil {
+		return err
+	}
+
+	a.TiledLightCullPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label:  "Tiled Light Cull Pipeline",
+		Layout: tiledLightCullLayout,
+		Compute: wgpu.ProgrammableStageDescriptor{
+			Module:     tiledLightCullMod,
+			EntryPoint: "main",
 		},
 	})
 	if err != nil {
@@ -317,8 +431,44 @@ func (a *App) Init() error {
 		return err
 	}
 
+	lightBGL3, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "Lighting BGL3",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeUniform,
+					MinBindingSize:   32,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
 	lightPipelineLayout, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
-		BindGroupLayouts: []*wgpu.BindGroupLayout{lightBGL0, lightBGL1, lightBGL2},
+		BindGroupLayouts: []*wgpu.BindGroupLayout{lightBGL0, lightBGL1, lightBGL2, lightBGL3},
 	})
 	if err != nil {
 		return err
@@ -407,17 +557,19 @@ func (a *App) Init() error {
 
 	// Default Camera Setup
 	view := mgl32.Ident4()
-	proj := mgl32.Ident4()
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
-	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), uint32(width), uint32(height))
+	a.BufferManager.LightingQuality = a.EffectiveLightingQuality()
+	a.BufferManager.UpdateCamera(view, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, a.Scene.SkyAmbientMix, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), uint32(width), uint32(height), a.EffectiveLightingQuality())
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene, a.Camera, float32(width)/float32(height))
+	a.BufferManager.UpdateTiledLightingResources(uint32(width), uint32(height))
 
 	// Bind groups creation
 	a.setupBindGroups()
 	a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
+	a.BufferManager.CreateTiledLightCullBindGroups(a.TiledLightCullPipeline)
 
 	// Shadow Pipeline
 	err = a.BufferManager.CreateShadowPipeline(shaders.ShadowMapWGSL)
@@ -462,6 +614,8 @@ func (a *App) Init() error {
 	a.setupSpritesPipeline()
 	// Create transparent overlay pipeline (accumulate into WBOIT targets)
 	a.setupTransparentOverlayPipeline()
+	a.BufferManager.StorageView = a.StorageView
+	a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
 	// Create volumetric smoke/fire pipeline (accumulate into WBOIT targets)
 	a.setupCAVolumePipeline()
 	// Create resolve pipeline to composite opaque + transparent accum onto swapchain

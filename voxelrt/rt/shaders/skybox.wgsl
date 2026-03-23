@@ -16,7 +16,14 @@ struct SkyboxLayer {
 
 struct SkyboxUniforms {
     layer_count: u32,
-    sun_dir: vec4<f32>, // w = intensity
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
+    sun_dir: vec4<f32>,   // xyz = dir, w = intensity
+    sun_color: vec4<f32>, // xyz = halo color, w = core glow strength
+    sun_params: vec4<f32>, // x = core glow exponent, y = atmosphere exponent, z = atmosphere glow strength
+    disk_color: vec4<f32>, // xyz = disk color, w = disk strength
+    disk_params: vec4<f32>, // x = disk start, y = disk end
 };
 
 @group(0) @binding(0) var<uniform> uniforms: SkyboxUniforms;
@@ -165,23 +172,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    // Improved Sun rendering
+    // Configurable sun/moon disk + halo rendering
     let sun_dot = dot(dir, -uniforms.sun_dir.xyz);
-
     let intensity = uniforms.sun_dir.w;
-    
-    // Core lens/glow
-    let sun_glow = pow(max(0.0, sun_dot), 1000.0) * 2.0;
-    let atmosphere_glow = pow(max(0.0, sun_dot), 100.0) * 0.5;
-    
-    let sun_color = vec3<f32>(1.0, 0.9, 0.7) * intensity;
-    final_color += sun_color * (sun_glow + atmosphere_glow);
-    
-    // Hard sun disk
-    if (sun_dot > 0.9998) {
-        final_color = mix(final_color, vec3<f32>(1.5, 1.4, 1.2) * intensity, smoothstep(0.9998, 0.9999, sun_dot));
+    if (intensity > 0.0) {
+        let core_glow = pow(max(0.0, sun_dot), uniforms.sun_params.x) * uniforms.sun_color.w;
+        let atmosphere_glow = pow(max(0.0, sun_dot), uniforms.sun_params.y) * uniforms.sun_params.z;
+        final_color += uniforms.sun_color.xyz * intensity * (core_glow + atmosphere_glow);
+
+        let disk_alpha = smoothstep(uniforms.disk_params.x, uniforms.disk_params.y, sun_dot);
+        final_color = mix(final_color, uniforms.disk_color.xyz * intensity * uniforms.disk_color.w, disk_alpha);
     }
 
     textureStore(out_tex, global_id.xy, vec4<f32>(final_color, 1.0));
 }
-
