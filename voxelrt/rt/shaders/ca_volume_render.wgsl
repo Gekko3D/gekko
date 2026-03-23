@@ -15,13 +15,21 @@ struct CameraData {
   pad2: vec2<u32>,
 };
 
+struct DirectionalShadowCascade {
+  view_proj: mat4x4<f32>,
+  inv_view_proj: mat4x4<f32>,
+  params: vec4<f32>,
+};
+
 struct Light {
   position: vec4<f32>,
   direction: vec4<f32>,
   color: vec4<f32>,
   params: vec4<f32>,
+  shadow_meta: vec4<u32>,
   view_proj: mat4x4<f32>,
   inv_view_proj: mat4x4<f32>,
+  directional_cascades: array<DirectionalShadowCascade, 2>,
 };
 
 struct CAParams {

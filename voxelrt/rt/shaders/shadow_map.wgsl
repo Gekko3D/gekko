@@ -24,13 +24,28 @@ struct CameraData {
     pad2: vec2<f32>,
 };
 
+struct DirectionalShadowCascade {
+    view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
+    params: vec4<f32>, // x: split_far, y: texel_world_size, z: depth_scale_to_ndc, w: reserved
+};
+
 struct Light {
     position: vec4<f32>,
     direction: vec4<f32>,
     color: vec4<f32>,
     params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
+    shadow_meta: vec4<u32>, // x: first shadow layer, y: layer count, z: cascade count, w: reserved
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
+    directional_cascades: array<DirectionalShadowCascade, 2>,
+};
+
+struct ShadowUpdate {
+    light_index: u32,
+    shadow_layer: u32,
+    cascade_index: u32,
+    kind: u32,
 };
 
 struct Instance {
@@ -121,7 +136,7 @@ struct SectorGridParams {
 
 // ============== BIND GROUPS ==============
 
-@group(0) @binding(0) var<storage, read> update_indices: array<u32>;
+@group(0) @binding(0) var<storage, read> shadow_updates: array<ShadowUpdate>;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(2) var<storage, read> nodes: array<BVHNode>;
 @group(0) @binding(3) var<storage, read> lights: array<Light>;
@@ -447,19 +462,31 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (global_id.x >= tex_dim.x || global_id.y >= tex_dim.y) { return; }
     
     let update_idx = global_id.z;
-    let num_updates = arrayLength(&update_indices);
+    let num_updates = arrayLength(&shadow_updates);
     if (update_idx >= num_updates) { return; }
     
-    let light_idx = update_indices[update_idx];
+    let update = shadow_updates[update_idx];
+    let light_idx = update.light_index;
     
     let light = lights[light_idx];
+    var light_view_proj = light.view_proj;
+    var light_inv_view_proj = light.inv_view_proj;
+    if (update.kind == 1u) {
+        if (update.cascade_index == 0u) {
+            light_view_proj = light.directional_cascades[0].view_proj;
+            light_inv_view_proj = light.directional_cascades[0].inv_view_proj;
+        } else {
+            light_view_proj = light.directional_cascades[1].view_proj;
+            light_inv_view_proj = light.directional_cascades[1].inv_view_proj;
+        }
+    }
     
     let uv = (vec2<f32>(f32(global_id.x), f32(global_id.y)) + 0.5) / vec2<f32>(f32(tex_dim.x), f32(tex_dim.y));
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     
     // Generate ray for this pixel of the shadow map
-    let p_near = light.inv_view_proj * vec4<f32>(ndc, -1.0, 1.0);
-    let p_far = light.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    let p_near = light_inv_view_proj * vec4<f32>(ndc, -1.0, 1.0);
+    let p_far = light_inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
     
     let origin = p_near.xyz / p_near.w;
     let p_target = p_far.xyz / p_far.w;
@@ -478,24 +505,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Write out normalized depth from light perspective (using voxel center for blocky shadows)
     if (hit_res.hit) {
-        let pos_ls = light.view_proj * vec4<f32>(hit_res.voxel_center_ws, 1.0);
+        let pos_ls = light_view_proj * vec4<f32>(hit_res.voxel_center_ws, 1.0);
         let light_type = u32(light.params.z);
         if (light_type == 2u) {
             // Spot light: store linear distance from light position (meters)
             let depth_m = distance(light.position.xyz, hit_res.voxel_center_ws);
-            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
+            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
         } else {
             // Directional/others: store NDC depth for stable generic shadowing.
             let depth_ndc = clamp(pos_ls.z / pos_ls.w, -1.0, 1.0);
-            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(depth_ndc, f32(hit_res.shadow_group_id), 0.0, 0.0));
+            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_ndc, f32(hit_res.shadow_group_id), 0.0, 0.0));
         }
     } else {
         let light_type = u32(light.params.z);
         if (light_type == 2u) {
             // For spot, no hit -> treat as far range in meters
-            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(light.params.x, 0.0, 0.0, 0.0));
+            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(light.params.x, 0.0, 0.0, 0.0));
         } else {
-            textureStore(out_shadow_map, global_id.xy, light_idx, vec4<f32>(1.0, 0.0, 0.0, 0.0));
+            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(1.0, 0.0, 0.0, 0.0));
         }
     }
 }

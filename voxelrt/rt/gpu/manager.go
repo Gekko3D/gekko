@@ -103,11 +103,13 @@ type CAPresetData struct {
 type GpuBufferManager struct {
 	Device *wgpu.Device
 
-	CameraBuf        *wgpu.Buffer
-	InstancesBuf     *wgpu.Buffer
-	BVHNodesBuf      *wgpu.Buffer
-	LightsBuf        *wgpu.Buffer
-	ShadowIndicesBuf *wgpu.Buffer
+	CameraBuf          *wgpu.Buffer
+	InstancesBuf       *wgpu.Buffer
+	BVHNodesBuf        *wgpu.Buffer
+	ShadowInstancesBuf *wgpu.Buffer
+	ShadowBVHNodesBuf  *wgpu.Buffer
+	LightsBuf          *wgpu.Buffer
+	ShadowUpdatesBuf   *wgpu.Buffer
 
 	MaterialBuf           *wgpu.Buffer
 	SectorTableBuf        *wgpu.Buffer
@@ -115,6 +117,7 @@ type GpuBufferManager struct {
 	VoxelPayloadTex       *wgpu.Texture
 	VoxelPayloadView      *wgpu.TextureView
 	ObjectParamsBuf       *wgpu.Buffer
+	ShadowObjectParamsBuf *wgpu.Buffer
 	Tree64Buf             *wgpu.Buffer
 	SectorGridBuf         *wgpu.Buffer
 	SectorGridParamsBuf   *wgpu.Buffer
@@ -141,9 +144,11 @@ type GpuBufferManager struct {
 	TransparentWeightView *wgpu.TextureView
 
 	// Shadow Map Resources
-	ShadowMapArray  *wgpu.Texture
-	ShadowMapView   *wgpu.TextureView
-	ShadowMapLayers uint32
+	ShadowMapArray           *wgpu.Texture
+	ShadowMapView            *wgpu.TextureView
+	ShadowMapLayers          uint32
+	shadowDirectionalVolumes []directionalShadowCullVolume
+	shadowSpotVolumes        []spotShadowCullVolume
 
 	// Skybox Resources
 	SkyboxTex            *wgpu.Texture
@@ -331,6 +336,7 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
@@ -338,7 +344,10 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	m.ensureBuffer("CameraBuf", &m.CameraBuf, nil, wgpu.BufferUsageUniform, 1024)
 	m.ensureBuffer("InstancesBuf", &m.InstancesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("BVHNodesBuf", &m.BVHNodesBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("ShadowInstancesBuf", &m.ShadowInstancesBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("ShadowBVHNodesBuf", &m.ShadowBVHNodesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("LightsBuf", &m.LightsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("ShadowUpdatesBuf", &m.ShadowUpdatesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("CABoundsBuf", &m.CABoundsBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, nil, wgpu.BufferUsageStorage, 4096)
 	m.ensureBuffer("SpriteBuf", &m.SpriteBuf, nil, wgpu.BufferUsageStorage, 1024)

@@ -1,11 +1,39 @@
 package core
 
+const (
+	LightTypePoint uint32 = iota
+	LightTypeDirectional
+	LightTypeSpot
+)
+
+const DirectionalShadowCascadeCount = 2
+
+const (
+	ShadowUpdateKindSpot uint32 = iota
+	ShadowUpdateKindDirectional
+)
+
+type DirectionalShadowCascade struct {
+	ViewProj    [16]float32
+	InvViewProj [16]float32
+	Params      [4]float32 // x: split_far, y: texel_world_size, z: depth_scale_to_ndc, w: reserved
+}
+
 // Light is the GPU representation of a light
 type Light struct {
-	Position    [4]float32  // xyz, pad/type? We need type. Let's pack type in w? Or use separate field.
-	Direction   [4]float32  // xyz, pad
-	Color       [4]float32  // rgb, intensity
-	Params      [4]float32  // range, cone_angle_cos, type, padding
-	ViewProj    [16]float32 // View-Projection matrix for shadow mapping
-	InvViewProj [16]float32 // Inverse View-Projection matrix
+	Position            [4]float32  // xyz, pad
+	Direction           [4]float32  // xyz, pad
+	Color               [4]float32  // rgb, intensity
+	Params              [4]float32  // range, cone_angle_cos, type, padding
+	ShadowMeta          [4]uint32   // x: first shadow layer, y: shadow layer count, z: directional cascade count, w: reserved
+	ViewProj            [16]float32 // Spot light shadow matrix
+	InvViewProj         [16]float32 // Spot light inverse shadow matrix
+	DirectionalCascades [DirectionalShadowCascadeCount]DirectionalShadowCascade
+}
+
+type ShadowUpdate struct {
+	LightIndex   uint32
+	ShadowLayer  uint32
+	CascadeIndex uint32
+	Kind         uint32
 }

@@ -413,7 +413,7 @@ func (a *App) Init() error {
 	a.BufferManager.UpdateCamera(view, proj, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), uint32(width), uint32(height))
 
 	// Ensure scene buffers are created (even if empty) before bind groups
-	a.BufferManager.UpdateScene(a.Scene)
+	a.BufferManager.UpdateScene(a.Scene, a.Camera, float32(width)/float32(height))
 
 	// Bind groups creation
 	a.setupBindGroups()

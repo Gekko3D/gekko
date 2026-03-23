@@ -210,6 +210,18 @@ fn make_safe_dir(d: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(sx, sy, sz);
 }
 
+fn shadow_seam_epsilon_at_hit(voxel_center_os: vec3<f32>, local_aabb_min: vec3<f32>, local_aabb_max: vec3<f32>, seam_epsilon: f32) -> f32 {
+    if (seam_epsilon <= 0.0) {
+        return 0.0;
+    }
+    let dist_to_min = abs(voxel_center_os - local_aabb_min);
+    let dist_to_max = abs(local_aabb_max - voxel_center_os);
+    let near_boundary =
+        dist_to_min.x <= seam_epsilon || dist_to_min.y <= seam_epsilon || dist_to_min.z <= seam_epsilon ||
+        dist_to_max.x <= seam_epsilon || dist_to_max.y <= seam_epsilon || dist_to_max.z <= seam_epsilon;
+    return select(0.0, seam_epsilon, near_boundary);
+}
+
 // ============== REUSE TRAVERSAL LOGIC FROM RAYTRACE.WGSL ==============
 
 // Note: In a real implementation we would use imports if WGSL supported them well, 
@@ -448,7 +460,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                 result.shadow_group_id = params.shadow_group_id;
-                                result.shadow_seam_epsilon = params.shadow_seam_epsilon;
+                                result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
                                 return result;
                             }
                         }
@@ -504,7 +516,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                             result.shadow_group_id = params.shadow_group_id;
-                                            result.shadow_seam_epsilon = params.shadow_seam_epsilon;
+                                            result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
                                             return result;
                                         }
                                     }
@@ -614,7 +626,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                             result.normal = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                             result.shadow_group_id = params.shadow_group_id;
-                            result.shadow_seam_epsilon = params.shadow_seam_epsilon;
+                            result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
                             return result;
                         }
                     }

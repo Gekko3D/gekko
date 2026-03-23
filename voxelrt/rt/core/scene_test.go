@@ -311,6 +311,32 @@ func TestSceneCommitDisablesHiZDuringFastCameraMotion(t *testing.T) {
 	}
 }
 
+func TestSceneCommitKeepsOffFrustumObjectsAsShadowCasters(t *testing.T) {
+	scene := NewScene()
+
+	visible := NewVoxelObject()
+	visible.Transform.Position = mgl32.Vec3{0, 0, -20}
+	visible.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(visible)
+
+	offFrustumCaster := NewVoxelObject()
+	offFrustumCaster.Transform.Position = mgl32.Vec3{200, 0, -20}
+	offFrustumCaster.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(offFrustumCaster)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
+
+	if len(scene.VisibleObjects) != 1 {
+		t.Fatalf("expected only the on-screen object to remain visible, got %d", len(scene.VisibleObjects))
+	}
+	if len(scene.ShadowObjects) != 2 {
+		t.Fatalf("expected both loaded objects to remain shadow casters, got %d", len(scene.ShadowObjects))
+	}
+	if len(scene.ShadowBVHNodesBytes) == 0 {
+		t.Fatal("expected shadow BVH to be built")
+	}
+}
+
 // Helper function
 func closeEnough(a, b, epsilon float32) bool {
 	diff := a - b

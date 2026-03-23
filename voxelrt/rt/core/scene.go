@@ -135,20 +135,22 @@ func max(a, b float32) float32 {
 }
 
 type Scene struct {
-	Objects            []*VoxelObject
-	VisibleObjects     []*VoxelObject
-	BVHNodesBytes      []byte // Linearized BVH nodes
-	Lights             []Light
-	Gizmos             []Gizmo
-	AmbientLight       mgl32.Vec3
-	TargetVoxelSize    float32
-	lastVisibleCount   int
-	StructureRevision  uint64
-	OcclusionStats     OcclusionStats
-	lastVisibility     map[*VoxelObject]bool
-	occlusionWarmup    map[*VoxelObject]int
-	occlusionGrace     map[*VoxelObject]int
-	lastOcclusionDirty map[*VoxelObject]bool
+	Objects             []*VoxelObject
+	VisibleObjects      []*VoxelObject
+	ShadowObjects       []*VoxelObject
+	BVHNodesBytes       []byte // Linearized BVH nodes
+	ShadowBVHNodesBytes []byte
+	Lights              []Light
+	Gizmos              []Gizmo
+	AmbientLight        mgl32.Vec3
+	TargetVoxelSize     float32
+	lastVisibleCount    int
+	StructureRevision   uint64
+	OcclusionStats      OcclusionStats
+	lastVisibility      map[*VoxelObject]bool
+	occlusionWarmup     map[*VoxelObject]int
+	occlusionGrace      map[*VoxelObject]int
+	lastOcclusionDirty  map[*VoxelObject]bool
 }
 
 func NewScene() *Scene {
@@ -384,6 +386,28 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		s.BVHNodesBytes = builder.Build(aabbs)
 	} else {
 		s.BVHNodesBytes = make([]byte, 64) // Empty BVH
+	}
+
+	// Shadow casting intentionally uses a broader object set than the camera-visible one.
+	// Camera frustum/Hi-Z culling can safely skip rasterized work, but it must not make
+	// off-screen geometry stop casting shadows onto visible receivers.
+	s.ShadowObjects = s.ShadowObjects[:0]
+	for _, obj := range s.Objects {
+		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil {
+			continue
+		}
+		s.ShadowObjects = append(s.ShadowObjects, obj)
+	}
+
+	if len(s.ShadowObjects) > 0 {
+		aabbs := make([][2]mgl32.Vec3, len(s.ShadowObjects))
+		for i, obj := range s.ShadowObjects {
+			aabbs[i] = *obj.WorldAABB
+		}
+		builder := &bvh.TLASBuilder{}
+		s.ShadowBVHNodesBytes = builder.Build(aabbs)
+	} else {
+		s.ShadowBVHNodesBytes = make([]byte, 64)
 	}
 }
 

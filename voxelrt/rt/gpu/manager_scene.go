@@ -12,12 +12,11 @@ import (
 	"github.com/cogentcore/webgpu/wgpu"
 )
 
-func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
-	recreated := false
+const lightSizeBytes = 496
 
-	// 1. Instances
+func buildInstanceData(objects []*core.VoxelObject) []byte {
 	instData := []byte{}
-	for i, obj := range scene.VisibleObjects {
+	for i, obj := range objects {
 		o2w := obj.Transform.ObjectToWorld()
 		w2o := obj.Transform.WorldToObject()
 
@@ -42,8 +41,58 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 	}
 
 	if len(instData) == 0 {
-		instData = make([]byte, 208)
+		return make([]byte, 208)
 	}
+	return instData
+}
+
+func buildObjectParamsData(objects []*core.VoxelObject, allocations map[*volume.XBrickMap]*ObjectGpuAllocation) []byte {
+	objParams := []byte{}
+	for _, obj := range objects {
+		alloc := allocations[obj.XBrickMap]
+		objParams = append(objParams, buildObjectParamsBytes(obj, alloc)...)
+	}
+	if len(objParams) == 0 {
+		return make([]byte, objectParamsSizeBytes)
+	}
+	return objParams
+}
+
+func buildLightsData(lights []core.Light) []byte {
+	lightsData := []byte{}
+	for _, l := range lights {
+		lightsData = append(lightsData, vec4ToBytes(l.Position)...)
+		lightsData = append(lightsData, vec4ToBytes(l.Direction)...)
+		lightsData = append(lightsData, vec4ToBytes(l.Color)...)
+		lightsData = append(lightsData, vec4ToBytes(l.Params)...)
+		lightsData = append(lightsData, uvec4ToBytes(l.ShadowMeta)...)
+		lightsData = append(lightsData, mat4ToBytes(l.ViewProj)...)
+		lightsData = append(lightsData, mat4ToBytes(l.InvViewProj)...)
+		for _, cascade := range l.DirectionalCascades {
+			lightsData = append(lightsData, mat4ToBytes(cascade.ViewProj)...)
+			lightsData = append(lightsData, mat4ToBytes(cascade.InvViewProj)...)
+			lightsData = append(lightsData, vec4ToBytes(cascade.Params)...)
+		}
+	}
+	if len(lightsData) == 0 {
+		return make([]byte, lightSizeBytes)
+	}
+	return lightsData
+}
+
+func totalShadowLayers(lights []core.Light) uint32 {
+	var total uint32
+	for _, light := range lights {
+		total += light.ShadowMeta[1]
+	}
+	return total
+}
+
+func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraState, aspect float32) bool {
+	recreated := false
+
+	// 1. Instances
+	instData := buildInstanceData(scene.VisibleObjects)
 	if m.ensureBuffer("InstancesBuf", &m.InstancesBuf, instData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
@@ -57,33 +106,47 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene) bool {
 		recreated = true
 	}
 
-	// 3. Lights
-	m.UpdateLights(scene)
-	lightsData := []byte{}
-	for _, l := range scene.Lights {
-		lightsData = append(lightsData, vec4ToBytes(l.Position)...)
-		lightsData = append(lightsData, vec4ToBytes(l.Direction)...)
-		lightsData = append(lightsData, vec4ToBytes(l.Color)...)
-		lightsData = append(lightsData, vec4ToBytes(l.Params)...)
-		lightsData = append(lightsData, mat4ToBytes(l.ViewProj)...)
-		lightsData = append(lightsData, mat4ToBytes(l.InvViewProj)...)
-	}
-	if len(lightsData) == 0 {
-		lightsData = make([]byte, 192)
-	}
-	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	if m.EnsureShadowMapCapacity(uint32(len(scene.Lights))) {
+	// 3. Light metadata drives shadow-only caster selection.
+	m.UpdateLights(scene, camera, aspect)
+	rebuildShadowCasterScene(scene, collectShadowCasters(scene.Objects, m.shadowDirectionalVolumes, m.shadowSpotVolumes))
+
+	// Shadow scene acceleration uses a broader set than camera-visible geometry, but only
+	// for objects intersecting active shadow volumes.
+	shadowInstData := buildInstanceData(scene.ShadowObjects)
+	if m.ensureBuffer("ShadowInstancesBuf", &m.ShadowInstancesBuf, shadowInstData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 
-	// 4. Voxel Data (Incremental / Paged)
+	shadowBVHData := scene.ShadowBVHNodesBytes
+	if len(shadowBVHData) == 0 {
+		shadowBVHData = make([]byte, 64)
+	}
+	if m.ensureBuffer("ShadowBVHNodesBuf", &m.ShadowBVHNodesBuf, shadowBVHData, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+
+	// 4. Lights
+	lightsData := buildLightsData(scene.Lights)
+	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.EnsureShadowMapCapacity(totalShadowLayers(scene.Lights)) {
+		recreated = true
+	}
+
+	// 5. Voxel Data (Incremental / Paged)
 	if m.UpdateVoxelData(scene) {
 		recreated = true
 	}
 
-	// 5. Sector Hash Grid
+	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations), wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations), wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+
+	// 6. Sector Hash Grid
 	if m.updateSectorGrid(scene) {
 		recreated = true
 	}
@@ -161,33 +224,69 @@ func (m *GpuBufferManager) EndBatch() {
 	// which has the necessary scene context to access all objects.
 }
 
-func (m *GpuBufferManager) UpdateLights(scene *core.Scene) {
+func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraState, aspect float32) {
+	m.shadowDirectionalVolumes = m.shadowDirectionalVolumes[:0]
+	m.shadowSpotVolumes = m.shadowSpotVolumes[:0]
+
+	nextShadowLayer := uint32(0)
 	for i := range scene.Lights {
 		l := &scene.Lights[i]
 		lightType := uint32(l.Params[2])
 		pos := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
 		dir := mgl32.Vec3{l.Direction[0], l.Direction[1], l.Direction[2]}
-		var view, proj mgl32.Mat4
-		up := mgl32.Vec3{0, 1, 0}
-		if float64(absf(dir.Y())) > 0.99 {
-			up = mgl32.Vec3{1, 0, 0}
+		l.ShadowMeta = [4]uint32{}
+		l.ViewProj = [16]float32{}
+		l.InvViewProj = [16]float32{}
+		for c := range l.DirectionalCascades {
+			l.DirectionalCascades[c] = core.DirectionalShadowCascade{}
 		}
 
-		if lightType == 1 { // Directional
-			size := float32(500.0)
-			proj = mgl32.Ortho(-size, size, -size, size, 0.1, 2000.0)
-			view = mgl32.LookAtV(pos, pos.Add(dir), up)
-		} else if lightType == 2 { // Spot
+		if lightType == core.LightTypeDirectional {
+			if dir.Len() < 1e-4 {
+				dir = mgl32.Vec3{0, -1, 0}
+			}
+			dir = dir.Normalize()
+			l.Direction[0], l.Direction[1], l.Direction[2] = dir.X(), dir.Y(), dir.Z()
+			if camera != nil {
+				l.ShadowMeta[0] = nextShadowLayer
+				l.ShadowMeta[1] = core.DirectionalShadowCascadeCount
+				l.ShadowMeta[2] = core.DirectionalShadowCascadeCount
+
+				splitNear := float32(0.0)
+				for cascadeIdx := 0; cascadeIdx < core.DirectionalShadowCascadeCount; cascadeIdx++ {
+					splitFar := directionalCascadeFarDistances[cascadeIdx]
+					cascade, volume := buildDirectionalShadowCascade(camera, aspect, dir, splitNear, splitFar)
+					l.DirectionalCascades[cascadeIdx] = cascade
+					if cascadeIdx == core.DirectionalShadowCascadeCount-1 {
+						m.shadowDirectionalVolumes = append(m.shadowDirectionalVolumes, volume)
+					}
+					splitNear = splitFar
+				}
+				nextShadowLayer += core.DirectionalShadowCascadeCount
+			}
+		} else if lightType == core.LightTypeSpot {
+			up := shadowUpVector(dir)
+			if dir.Len() < 1e-4 {
+				dir = mgl32.Vec3{0, -1, 0}
+			}
+			dir = dir.Normalize()
+			l.Direction[0], l.Direction[1], l.Direction[2] = dir.X(), dir.Y(), dir.Z()
 			fov := math.Acos(float64(l.Params[1])) * 2.0
-			proj = mgl32.Perspective(float32(fov), 1.0, 0.1, l.Params[0])
-			view = mgl32.LookAtV(pos, pos.Add(dir), up)
-		} else { // Point
-			proj = mgl32.Perspective(mgl32.DegToRad(90), 1.0, 0.1, l.Params[0])
-			view = mgl32.LookAtV(pos, pos.Add(mgl32.Vec3{0, 0, 1}), up)
+			proj := mgl32.Perspective(float32(fov), 1.0, 0.1, l.Params[0])
+			view := mgl32.LookAtV(pos, pos.Add(dir), up)
+			vp := proj.Mul4(view)
+			l.ViewProj = [16]float32(vp)
+			l.InvViewProj = [16]float32(vp.Inv())
+			l.ShadowMeta[0] = nextShadowLayer
+			l.ShadowMeta[1] = 1
+			nextShadowLayer++
+			m.shadowSpotVolumes = append(m.shadowSpotVolumes, spotShadowCullVolume{
+				Position: pos,
+				Dir:      dir,
+				Range:    l.Params[0],
+				CosCone:  l.Params[1],
+			})
 		}
-		vp := proj.Mul4(view)
-		l.ViewProj = [16]float32(vp)
-		l.InvViewProj = [16]float32(vp.Inv())
 	}
 }
 

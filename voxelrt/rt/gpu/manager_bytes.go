@@ -53,3 +53,12 @@ func vec4ToBytes(v [4]float32) []byte {
 	binary.LittleEndian.PutUint32(buf[12:16], math.Float32bits(v[3]))
 	return buf
 }
+
+func uvec4ToBytes(v [4]uint32) []byte {
+	buf := make([]byte, 16)
+	binary.LittleEndian.PutUint32(buf[0:4], v[0])
+	binary.LittleEndian.PutUint32(buf[4:8], v[1])
+	binary.LittleEndian.PutUint32(buf[8:12], v[2])
+	binary.LittleEndian.PutUint32(buf[12:16], v[3])
+	return buf
+}

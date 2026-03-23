@@ -176,12 +176,14 @@ func (a *App) Update() {
 	a.Profiler.SetCount("Lights", len(a.Scene.Lights))
 	a.Profiler.SetCount("Particles", int(a.BufferManager.ParticleCount))
 	a.Profiler.SetCount("ShadowGrouped", shadowGroupedVisible)
+	a.Profiler.SetCount("ShadowCasters", len(a.Scene.ShadowObjects))
 	a.Profiler.SetCount("TerrainChunks", visibleTerrainChunks)
 
 	// Update Buffers
 	a.Profiler.BeginScope("Buffer Update")
-	recreated := a.BufferManager.UpdateScene(a.Scene)
+	recreated := a.BufferManager.UpdateScene(a.Scene, a.Camera, aspect)
 	a.Profiler.EndScope("Buffer Update")
+	a.Profiler.SetCount("ShadowCasters", len(a.Scene.ShadowObjects))
 
 	if recreated {
 		// New buffers mean we need new bind groups
@@ -386,25 +388,36 @@ func (a *App) Render() {
 	// Shadow Pass
 	a.Profiler.BeginScope("Shadows")
 
-	var shadowIndices []uint32
+	var shadowUpdates []core.ShadowUpdate
 	if len(a.Scene.Lights) > 0 {
 		type lightInfo struct {
 			Index int
 			Dist  float32
 		}
 
-		directionalLights := make([]uint32, 0, len(a.Scene.Lights))
+		directionalUpdates := make([]core.ShadowUpdate, 0, len(a.Scene.Lights)*core.DirectionalShadowCascadeCount)
 		sortedLights := make([]lightInfo, 0, len(a.Scene.Lights))
 		camPos := a.Camera.Position
 
 		for i := 0; i < len(a.Scene.Lights); i++ {
 			l := a.Scene.Lights[i]
-			lightType := uint32(l.Params[2])
-			if lightType == 1 {
-				directionalLights = append(directionalLights, uint32(i))
+			if l.ShadowMeta[1] == 0 {
 				continue
 			}
-			if lightType != 2 {
+			lightType := uint32(l.Params[2])
+			if lightType == core.LightTypeDirectional {
+				cascadeCount := l.ShadowMeta[2]
+				for cascadeIdx := uint32(0); cascadeIdx < cascadeCount; cascadeIdx++ {
+					directionalUpdates = append(directionalUpdates, core.ShadowUpdate{
+						LightIndex:   uint32(i),
+						ShadowLayer:  l.ShadowMeta[0] + cascadeIdx,
+						CascadeIndex: cascadeIdx,
+						Kind:         core.ShadowUpdateKindDirectional,
+					})
+				}
+				continue
+			}
+			if lightType != core.LightTypeSpot {
 				continue
 			}
 			d := float32(0.0)
@@ -413,7 +426,7 @@ func (a *App) Render() {
 			sortedLights = append(sortedLights, lightInfo{i, d})
 		}
 
-		shadowIndices = append(shadowIndices, directionalLights...)
+		shadowUpdates = append(shadowUpdates, directionalUpdates...)
 
 		sort.Slice(sortedLights, func(i, j int) bool {
 			return sortedLights[i].Dist < sortedLights[j].Dist
@@ -423,7 +436,12 @@ func (a *App) Render() {
 		updatesPerFrame := 2
 
 		for i := 0; i < len(sortedLights) && i < numPrioritized; i++ {
-			shadowIndices = append(shadowIndices, uint32(sortedLights[i].Index))
+			light := a.Scene.Lights[sortedLights[i].Index]
+			shadowUpdates = append(shadowUpdates, core.ShadowUpdate{
+				LightIndex:  uint32(sortedLights[i].Index),
+				ShadowLayer: light.ShadowMeta[0],
+				Kind:        core.ShadowUpdateKindSpot,
+			})
 		}
 
 		remainingStart := numPrioritized
@@ -436,13 +454,18 @@ func (a *App) Render() {
 			for i := 0; i < updates; i++ {
 				offset := (a.ShadowUpdateOffset + i) % remainingCount
 				idx := sortedLights[remainingStart+offset].Index
-				shadowIndices = append(shadowIndices, uint32(idx))
+				light := a.Scene.Lights[idx]
+				shadowUpdates = append(shadowUpdates, core.ShadowUpdate{
+					LightIndex:  uint32(idx),
+					ShadowLayer: light.ShadowMeta[0],
+					Kind:        core.ShadowUpdateKindSpot,
+				})
 			}
 			a.ShadowUpdateOffset = (a.ShadowUpdateOffset + updates) % remainingCount
 		}
 	}
 
-	a.BufferManager.DispatchShadowPass(encoder, shadowIndices)
+	a.BufferManager.DispatchShadowPass(encoder, shadowUpdates)
 	a.Profiler.EndScope("Shadows")
 
 	// Lighting Pass

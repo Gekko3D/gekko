@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/cogentcore/webgpu/wgpu"
+	"github.com/gekko3d/gekko/voxelrt/rt/core"
 )
 
 func (m *GpuBufferManager) CreateShadowMapTextures(w, h, count uint32) {
@@ -63,8 +64,8 @@ func nextPow2U32(v uint32) uint32 {
 	return v + 1
 }
 
-func (m *GpuBufferManager) EnsureShadowMapCapacity(numLights uint32) bool {
-	required := nextPow2U32(numLights)
+func (m *GpuBufferManager) EnsureShadowMapCapacity(numLayers uint32) bool {
+	required := nextPow2U32(numLayers)
 	if m.ShadowMapView != nil && required <= m.ShadowMapLayers {
 		return false
 	}
@@ -95,16 +96,16 @@ func (m *GpuBufferManager) CreateShadowPipeline(code string) error {
 func (m *GpuBufferManager) CreateShadowBindGroups() {
 	var err error
 
-	// Ensure indices buffer exists
-	m.ensureBuffer("ShadowIndicesBuf", &m.ShadowIndicesBuf, make([]byte, 16), wgpu.BufferUsageStorage, 0)
+	// Ensure shadow update buffer exists
+	m.ensureBuffer("ShadowUpdatesBuf", &m.ShadowUpdatesBuf, make([]byte, 16), wgpu.BufferUsageStorage, 0)
 
 	// Group 0: Scene + Lights + Update Indices
 	m.ShadowBindGroup0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: m.ShadowPipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
-			{Binding: 0, Buffer: m.ShadowIndicesBuf, Size: wgpu.WholeSize},
-			{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
-			{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
+			{Binding: 0, Buffer: m.ShadowUpdatesBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.ShadowInstancesBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.ShadowBVHNodesBuf, Size: wgpu.WholeSize},
 			{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
 		},
 	})
@@ -131,7 +132,7 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
 			{Binding: 2, TextureView: m.VoxelPayloadView},
 			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
-			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 4, Buffer: m.ShadowObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
@@ -142,36 +143,31 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 	}
 }
 
-func (m *GpuBufferManager) DispatchShadowPass(encoder *wgpu.CommandEncoder, indices []uint32) {
+func (m *GpuBufferManager) DispatchShadowPass(encoder *wgpu.CommandEncoder, updates []core.ShadowUpdate) {
 	if m.ShadowPipeline == nil || m.ShadowBindGroup0 == nil {
 		return
 	}
 
-	if len(indices) == 0 {
+	if len(updates) == 0 {
 		return
 	}
 
-	// Upload indices
-	idxBytes := make([]byte, len(indices)*4)
-	for i, v := range indices {
-		binary.LittleEndian.PutUint32(idxBytes[i*4:], v)
+	// Upload structured shadow update records.
+	updateBytes := make([]byte, len(updates)*16)
+	for i, update := range updates {
+		offset := i * 16
+		binary.LittleEndian.PutUint32(updateBytes[offset+0:], update.LightIndex)
+		binary.LittleEndian.PutUint32(updateBytes[offset+4:], update.ShadowLayer)
+		binary.LittleEndian.PutUint32(updateBytes[offset+8:], update.CascadeIndex)
+		binary.LittleEndian.PutUint32(updateBytes[offset+12:], update.Kind)
 	}
 
 	// Ensure buffer size
-	if m.ensureBuffer("ShadowIndicesBuf", &m.ShadowIndicesBuf, idxBytes, wgpu.BufferUsageStorage, 1024) {
+	if m.ensureBuffer("ShadowUpdatesBuf", &m.ShadowUpdatesBuf, updateBytes, wgpu.BufferUsageStorage, 1024) {
 		// If recreated, we must recreate the bind group immediately for it to take effect
 		// This might be expensive if done every frame, but ensureBuffer only recreates on growth.
 		m.CreateShadowBindGroups()
-	} else {
-		// Just write if not recreated (ensureBuffer writes data if buffer acts as update)
-		// Actually ensureBuffer does write data.
-		// If buffer wasn't recreated, we still need to write if we want to update content?
-		// modify ensureBuffer behavior?
-		// ensureBuffer writes data if passed.
 	}
-	// Wait, ensureBuffer implementation:
-	// if len(data) > 0 { m.Device.GetQueue().WriteBuffer(*buf, 0, data) }
-	// So data IS written.
 
 	cPass := encoder.BeginComputePass(nil)
 	cPass.SetPipeline(m.ShadowPipeline)
@@ -182,7 +178,7 @@ func (m *GpuBufferManager) DispatchShadowPass(encoder *wgpu.CommandEncoder, indi
 	// Dispatch for 1024x1024 shadow maps
 	wgX := (1024 + 7) / 8
 	wgY := (1024 + 7) / 8
-	cPass.DispatchWorkgroups(uint32(wgX), uint32(wgY), uint32(len(indices)))
+	cPass.DispatchWorkgroups(uint32(wgX), uint32(wgY), uint32(len(updates)))
 	cPass.End()
 }
 

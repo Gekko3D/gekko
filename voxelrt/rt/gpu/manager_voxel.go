@@ -317,21 +317,6 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		// Materials: For now, re-upload if new.
 	}
 
-	// Update ObjectParams for visible objects
-	objParams := []byte{}
-	for _, obj := range scene.VisibleObjects {
-		alloc := m.Allocations[obj.XBrickMap]
-		objParams = append(objParams, buildObjectParamsBytes(obj, alloc)...)
-	}
-
-	if len(objParams) == 0 {
-		objParams = make([]byte, objectParamsSizeBytes)
-	}
-
-	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, objParams, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-
 	return recreated
 }
 
