@@ -1,14 +1,14 @@
 # VoxelRT Particles: Current Pipeline
 
-This document describes the current particle flow after the renderer/module refactor.
+This document describes the current hybrid particle path.
 
 ## Overview
 
-- ECS controls emitters via `ParticleEmitterComponent`.
+- ECS controls emitters through `ParticleEmitterComponent`.
 - CPU builds emitter parameter buffers and spawn requests each frame.
-- GPU compute simulates particle state in global pools.
+- GPU compute simulates per-particle state in global pools.
 - GPU render draws alive particles as billboards into the WBOIT accumulation targets.
-- Resolve pass composites opaque + transparent layers.
+- Resolve composites the opaque lighting output with transparent accumulation.
 
 ## Key Files
 
@@ -18,8 +18,8 @@ This document describes the current particle flow after the renderer/module refa
 - Renderer app:
   - `gekko/voxelrt/rt/app/app.go`
   - `gekko/voxelrt/rt/app/app_frame.go`
-  - `gekko/voxelrt/rt/app/app_pipelines.go`
   - `gekko/voxelrt/rt/app/app_particles.go`
+  - `gekko/voxelrt/rt/app/app_pipelines.go`
 - GPU manager:
   - `gekko/voxelrt/rt/gpu/manager.go`
   - `gekko/voxelrt/rt/gpu/manager_particles.go`
@@ -28,55 +28,74 @@ This document describes the current particle flow after the renderer/module refa
   - `gekko/voxelrt/rt/shaders/particles_billboard.wgsl`
   - `gekko/voxelrt/rt/shaders/resolve_transparency.wgsl`
 
-## ECS Side
+## ECS And Bridge Side
 
 `particlesSync(...)` in `particles_ecs.go`:
 
 - queries `TransformComponent + ParticleEmitterComponent`
 - computes per-emitter spawn counts from `SpawnRate * dt`
-- packs `EmitterParams` into a byte buffer
+- packs `EmitterParams`
 - emits spawn requests as emitter indices
 - returns `(spawnRequests, emitterBytes, emitterCount, atlasAssetId)`
 
-The bridge in `voxelRtSystem(...)` then:
+The bridge then:
 
-- updates particle atlas texture (when changed)
-- writes sim params (`UpdateParticleParams`)
-- ensures particle buffers (`UpdateParticles(maxCount, emitters)`)
-- uploads spawn requests (`UpdateSpawnRequests`)
-- recreates particle bind groups when required
+- updates the particle atlas if the active atlas changes
+- writes sim params
+- ensures particle buffers exist with `UpdateParticles(...)`
+- uploads spawn requests
+- keeps particle bind groups valid across resource changes
+
+Current practical constraints:
+
+- emitter distance cull is currently 200 world units
+- per-emitter spawn burst is capped to 1024 per frame
+- bridge-side pool provisioning currently uses `UpdateParticles(1000000, ...)`
+- the first active emitter atlas wins for the frame
 
 ## GPU Side
 
 `GpuBufferManager` owns:
 
 - particle pools and counters
-- particle indirect draw args
-- spawn request + emitter buffers
-- bind groups for sim and render pipelines
+- indirect draw args
+- emitter and spawn-request buffers
+- sim bind groups
+- render bind groups
 
 Compute dispatch order per frame:
 
-1. init (`init_draw_args`)
-2. simulate (`simulate`)
-3. spawn (`spawn`) if requests exist
-4. finalize (`finalize_draw_args`)
+1. `init_draw_args`
+2. `simulate`
+3. `spawn` when requests exist
+4. `finalize_draw_args`
 
-Then render uses indirect draw from alive particle count.
+Render then uses indirect draw arguments from the current alive-particle state.
+
+## Important Coupling
+
+Particle sim is not isolated from the rest of the renderer. The sim path also binds current scene voxel resources, including sector, brick, payload, material, object-param, instance, and sector-grid data.
+
+If scene buffers are recreated, particle sim bindings may need to be recreated too.
 
 ## Render Integration
 
-Frame order in `App.Render()`:
+Particles run inside the current renderer frame as:
 
-1. G-Buffer
-2. Shadow
-3. Deferred lighting
-4. Optional debug
-5. Transparent accumulation:
+1. particle sim
+2. CA sim
+3. G-buffer
+4. Hi-Z
+5. shadows
+6. deferred lighting
+7. optional debug
+8. accumulation:
+   - CA volumes
    - transparent voxel overlay
-   - particle billboards
-6. Resolve transparency to swapchain
-7. Text overlay
+   - particles
+   - sprites
+9. resolve
+10. text and gizmos
 
 Particles write weighted contributions into:
 
@@ -85,6 +104,6 @@ Particles write weighted contributions into:
 
 ## Notes
 
-- Particle simulation is GPU-driven, not CPU-integrated per particle.
-- `ParticleEmitterComponent.Texture` selects an atlas asset; first active emitter atlas is currently used as the runtime atlas source.
-- `BridgeToParticles` fields in CA components exist, but current production path is emitter-driven GPU simulation.
+- Per-particle simulation is GPU-driven.
+- Atlas selection is currently one-atlas-per-frame through the bridge.
+- `BridgeToParticles` fields in CA components exist, but the production path is emitter-driven GPU simulation.

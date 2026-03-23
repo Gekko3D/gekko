@@ -1,41 +1,62 @@
 # VoxelRT Picking and Editing
 
-This document describes the current picking/editing API exposed by the VoxelRT bridge.
+This document describes the current picking and voxel-editing behavior exposed through the VoxelRT bridge.
 
 ## Overview
 
-There is no separate `rt/editor` package anymore. Editing utilities are provided through:
+There is no separate `rt/editor` package. Editing flows through:
 
-- `gekko/mod_voxelrt_client.go` (`VoxelRtState` helpers)
-- `gekko/mod_voxelrt_client_systems.go` (ECS-to-renderer bridge loop)
-- `gekko/voxelrt/rt/core/scene.go` (raycast implementation)
+- `gekko/mod_voxelrt_client.go`
+- `gekko/mod_voxelrt_client_systems.go`
+- `gekko/voxelrt/rt/core/scene.go`
+- `gekko/voxelrt/rt/volume/xbrickmap_edit.go`
 
 ## Main APIs
 
-`VoxelRtState` helpers:
+`VoxelRtState` exposes the public helpers:
 
-- `ScreenToWorldRay(mouseX, mouseY, camera)` - build world ray from screen coordinates
-- `Raycast(origin, dir, tMax)` - query voxel scene hit (`RaycastHit`)
-- `RaycastSubstepped(...)` - segmented raycast for long distances
-- `VoxelSphereEdit(entityId, worldCenter, radius, value)` - apply sphere voxel edit in object space
-- `GetVoxelObject(entityId)` - fetch object bound to ECS entity
+- `ScreenToWorldRay(mouseX, mouseY, camera)`
+- `Raycast(origin, dir, tMax)`
+- `RaycastSubstepped(...)`
+- `VoxelSphereEdit(entityId, worldCenter, radius, value)`
+- `GetVoxelObject(entityId)`
 
 ## Data Flow
 
-1. Build a ray from input using camera state (`ScreenToWorldRay`).
-2. Call `Raycast` to get entity + voxel coord + normal.
-3. Apply edit (for example `VoxelSphereEdit` or direct `SetVoxel` edits on object map).
-4. Let the normal render loop sync GPU state on `Update()`.
+1. Build a ray from input using `ScreenToWorldRay`.
+2. Call `Raycast` or `RaycastSubstepped`.
+3. Apply an edit against CPU-side voxel data.
+4. Let the normal renderer update path upload the change on the next frame.
+
+Important: editing helpers mutate CPU-side `XBrickMap` data. They do not directly force immediate GPU re-rendering.
 
 ## Raycast Internals
 
-`Scene.Raycast` in `rt/core/scene.go`:
+`Scene.Raycast` currently:
 
-- broad phase: object/world AABB tests
-- narrow phase: object-space traversal against `XBrickMap`
-- returns nearest hit with object pointer, voxel coordinate, distance, and normal
+- scans `Scene.Objects`, not `VisibleObjects`
+- broad-phases against each object's world AABB
+- transforms the ray into object space
+- delegates voxel traversal to `XBrickMap.RayMarch`
+- returns the nearest hit with object pointer, voxel coordinate, world distance, and normal
+
+That means picking remains CPU-authoritative even when the renderer uses GPU culling and GPU BVHs.
+
+## Debug And Overlay Notes
+
+- `App.DebugMode` enables the debug compute pass and profiler HUD.
+- `Camera.DebugMode` is a separate shader-side debug mode.
+- `RenderMode` is another separate output mode.
+
+If a debug change appears ineffective, verify you toggled the right one.
+
+Text and gizmos are also frame-lifetime data:
+
+- text is cleared in `Prelude` and must be resubmitted every frame
+- gizmos are rebuilt from ECS every frame
 
 ## Notes
 
-- CA volume voxel bridging is handled in `mod_voxelrt_client_systems.go`.
-- GPU buffer reallocation and bind-group rebuilds are handled by `GpuBufferManager` during update; editing helpers do not directly force render-pass rebuilds.
+- Long-range picking should prefer `RaycastSubstepped`.
+- CA volume bridging is handled in `mod_voxelrt_client_systems.go`.
+- GPU buffer reallocation and bind-group rebuilds are handled in `App.Update()` and `GpuBufferManager`; edit helpers only change CPU-side scene data.
