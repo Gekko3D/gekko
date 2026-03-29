@@ -71,6 +71,8 @@ type VoxelObject struct {
 	AmbientOcclusionMode   AmbientOcclusionMode
 	ShadowSeamWorldEpsilon float32
 	AllowOcclusionCulling  bool
+	IsStatic               bool
+	ParticipatesInGI       bool
 	IsTerrainChunk         bool
 	TerrainGroupID         uint32
 	TerrainChunkCoord      [3]int
