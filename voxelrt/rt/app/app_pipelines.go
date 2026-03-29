@@ -3,10 +3,25 @@ package app
 import (
 	"fmt"
 
+	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/shaders"
 
 	"github.com/cogentcore/webgpu/wgpu"
 )
+
+func appendVoxelPayloadTextureLayoutEntries(entries []wgpu.BindGroupLayoutEntry, startBinding uint32, visibility wgpu.ShaderStage) []wgpu.BindGroupLayoutEntry {
+	for i := uint32(0); i < gpu_rt.MaxVoxelAtlasPages; i++ {
+		entries = append(entries, wgpu.BindGroupLayoutEntry{
+			Binding:    startBinding + i,
+			Visibility: visibility,
+			Texture: wgpu.TextureBindingLayout{
+				SampleType:    wgpu.TextureSampleTypeUint,
+				ViewDimension: wgpu.TextureViewDimension3D,
+			},
+		})
+	}
+	return entries
+}
 
 func (a *App) setupParticlesPipeline() {
 	// Build shader module
@@ -29,7 +44,7 @@ func (a *App) setupParticlesPipeline() {
 				Visibility: wgpu.ShaderStageVertex | wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   272, // CameraData size
+					MinBindingSize:   288, // CameraData size
 					HasDynamicOffset: false,
 				},
 			},
@@ -180,7 +195,7 @@ func (a *App) setupSpritesPipeline() {
 				Visibility: wgpu.ShaderStageVertex | wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:           wgpu.BufferBindingTypeUniform,
-					MinBindingSize: 272,
+					MinBindingSize: 288,
 				},
 			},
 			{
@@ -320,7 +335,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   272,
+					MinBindingSize:   288,
 					HasDynamicOffset: false,
 				},
 			},
@@ -344,6 +359,15 @@ func (a *App) setupTransparentOverlayPipeline() {
 			},
 			{
 				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize:   0,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    4,
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
@@ -361,7 +385,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 	// Group 1: voxel data (sector, brick, payload, object params, tree, sector grid)
 	bgl1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "TransparentOverlay BGL1",
-		Entries: []wgpu.BindGroupLayoutEntry{
+		Entries: appendVoxelPayloadTextureLayoutEntries([]wgpu.BindGroupLayoutEntry{
 			{ // SectorTable
 				Binding:    0,
 				Visibility: wgpu.ShaderStageFragment,
@@ -378,39 +402,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 					MinBindingSize: 0,
 				},
 			},
-			{ // VoxelPayload
-				Binding:    2,
-				Visibility: wgpu.ShaderStageFragment,
-				Texture: wgpu.TextureBindingLayout{
-					SampleType:    wgpu.TextureSampleTypeUint,
-					ViewDimension: wgpu.TextureViewDimension3D,
-				},
-			},
 			{ // Materials (packed vec4 table; transparency in pbr_params.w)
-				Binding:    3,
-				Visibility: wgpu.ShaderStageFragment,
-				Buffer: wgpu.BufferBindingLayout{
-					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
-					MinBindingSize: 0,
-				},
-			},
-			{ // ObjectParams
-				Binding:    4,
-				Visibility: wgpu.ShaderStageFragment,
-				Buffer: wgpu.BufferBindingLayout{
-					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
-					MinBindingSize: 0,
-				},
-			},
-			{ // Tree64
-				Binding:    5,
-				Visibility: wgpu.ShaderStageFragment,
-				Buffer: wgpu.BufferBindingLayout{
-					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
-					MinBindingSize: 0,
-				},
-			},
-			{ // SectorGrid
 				Binding:    6,
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
@@ -418,7 +410,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 					MinBindingSize: 0,
 				},
 			},
-			{ // SectorGridParams
+			{ // ObjectParams
 				Binding:    7,
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
@@ -426,7 +418,31 @@ func (a *App) setupTransparentOverlayPipeline() {
 					MinBindingSize: 0,
 				},
 			},
-		},
+			{ // Tree64
+				Binding:    8,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // SectorGrid
+				Binding:    9,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // SectorGridParams
+				Binding:    10,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+		}, 2, wgpu.ShaderStageFragment),
 	})
 	if err != nil {
 		fmt.Printf("ERROR: Failed to create overlay BGL1: %v\n", err)
@@ -476,8 +492,42 @@ func (a *App) setupTransparentOverlayPipeline() {
 		return
 	}
 
+	bgl3, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "TransparentOverlay BGL3",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeUniform,
+					MinBindingSize: 32,
+				},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create overlay BGL3: %v\n", err)
+		return
+	}
+
 	pl, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
-		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1, bgl2},
+		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1, bgl2, bgl3},
 	})
 	if err != nil {
 		fmt.Printf("ERROR: Failed to create overlay pipeline layout: %v\n", err)

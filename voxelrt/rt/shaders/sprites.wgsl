@@ -14,6 +14,7 @@ struct CameraData {
     pad1: u32,
     screen_size: vec2<f32>,
     pad2: vec2<u32>,
+    ao_quality: vec4<f32>,
 };
 
 struct SpriteInstance {

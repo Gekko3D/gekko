@@ -13,7 +13,11 @@ import (
 
 func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	recreated := false
-	var err error
+	uploadedAny := false
+	m.VoxelSectorsUploaded = 0
+	m.VoxelBricksUploaded = 0
+	m.VoxelDirtySectorsPending = 0
+	m.VoxelDirtyBricksPending = 0
 
 	// Cleanup orphan allocations
 	activeMaps := make(map[*volume.XBrickMap]bool)
@@ -90,32 +94,10 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	if m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, nil, wgpu.BufferUsageStorage, int(requiredSectors+512)*32) {
 		recreated = true
 	}
-	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*16) {
+	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*BrickRecordSize) {
 		recreated = true
 	}
-	// Payload is now a 3D Texture
-	if m.VoxelPayloadTex == nil {
-		fmt.Printf("Initializing Voxel Atlas Texture: %dx%dx%d\n", AtlasSize, AtlasSize, AtlasSize)
-		m.VoxelPayloadTex, err = m.Device.CreateTexture(&wgpu.TextureDescriptor{
-			Label: "VoxelPayloadAtlas",
-			Size: wgpu.Extent3D{
-				Width:              AtlasSize,
-				Height:             AtlasSize,
-				DepthOrArrayLayers: AtlasSize,
-			},
-			MipLevelCount: 1,
-			SampleCount:   1,
-			Dimension:     wgpu.TextureDimension3D,
-			Format:        wgpu.TextureFormatR8Uint,
-			Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
-		})
-		if err != nil {
-			panic(err)
-		}
-		m.VoxelPayloadView, err = m.VoxelPayloadTex.CreateView(nil)
-		if err != nil {
-			panic(err)
-		}
+	if m.ensureVoxelPayloadPages() {
 		recreated = true
 	}
 	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialAlloc.Tail*256*64)) {
@@ -262,11 +244,13 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 						}
 						bPtrs[i] = nil
 					}
-					m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(i))*16), make([]byte, 16))
+					m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(i))*BrickRecordSize), make([]byte, BrickRecordSize))
 				}
 			}
 			delete(xbm.DirtySectors, sKey)
 			sectorsInFrame++
+			m.VoxelSectorsUploaded++
+			uploadedAny = true
 		}
 
 		// Upload individual dirty bricks (e.g. from small edits)
@@ -308,13 +292,30 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					}
 					bPtrs[bx+by*4+bz*16] = nil
 				}
-				m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(bx+by*4+bz*16))*16), make([]byte, 16))
+				m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(bx+by*4+bz*16))*BrickRecordSize), make([]byte, BrickRecordSize))
 			}
 			delete(xbm.DirtyBricks, bKey)
 			bricksInFrame++
+			m.VoxelBricksUploaded++
+			uploadedAny = true
+		}
+
+		for _, isDirty := range xbm.DirtySectors {
+			if isDirty {
+				m.VoxelDirtySectorsPending++
+			}
+		}
+		for _, isDirty := range xbm.DirtyBricks {
+			if isDirty {
+				m.VoxelDirtyBricksPending++
+			}
 		}
 
 		// Materials: For now, re-upload if new.
+	}
+
+	if uploadedAny {
+		m.VoxelUploadRevision++
 	}
 
 	return recreated
@@ -354,7 +355,10 @@ func (m *GpuBufferManager) releaseBrickSlot(brick *volume.Brick) {
 		return
 	}
 	delete(m.BrickToSlot, brick)
-	m.PayloadAlloc.FreeSlot(slot)
+	if slot.Page >= m.VoxelPayloadPageCount {
+		return
+	}
+	m.PayloadAlloc[slot.Page].FreeSlot(slot.Slot)
 }
 
 func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorGpuInfo) {
@@ -378,26 +382,29 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 		return
 	}
 	var gpuAtlasOffset uint32
+	var gpuAtlasPage uint32
 	if brick.Flags&volume.BrickFlagSolid != 0 {
 		gpuAtlasOffset = brick.AtlasOffset
+		gpuAtlasPage = 0
 		m.releaseBrickSlot(brick)
 	} else {
-		pSlot, exists := m.BrickToSlot[brick]
+		payloadSlot, exists := m.BrickToSlot[brick]
 		if !exists {
-			pSlot = m.PayloadAlloc.Alloc()
-			if pSlot >= AtlasBricksPerSide*AtlasBricksPerSide*AtlasBricksPerSide {
-				panic("Voxel payload atlas full!")
+			var ok bool
+			payloadSlot, ok = m.allocPayloadSlot()
+			if !ok {
+				panic(fmt.Sprintf("voxel payload atlas full: pages=%d bricks_per_page=%d total_capacity=%d", m.VoxelPayloadPageCount, m.voxelPayloadCapacityPerPage(), m.voxelPayloadCapacityPerPage()*m.VoxelPayloadPageCount))
 			}
-			m.BrickToSlot[brick] = pSlot
+			m.BrickToSlot[brick] = payloadSlot
 		}
+		gpuAtlasPage = payloadSlot.Page
 
 		// Calculate 3D coordinates in the atlas
-		ax := (pSlot % AtlasBricksPerSide) * volume.BrickSize
-		ay := ((pSlot / AtlasBricksPerSide) % AtlasBricksPerSide) * volume.BrickSize
-		az := (pSlot / (AtlasBricksPerSide * AtlasBricksPerSide)) * volume.BrickSize
+		ax := (payloadSlot.Slot % m.VoxelPayloadBricks) * volume.BrickSize
+		ay := ((payloadSlot.Slot / m.VoxelPayloadBricks) % m.VoxelPayloadBricks) * volume.BrickSize
+		az := (payloadSlot.Slot / (m.VoxelPayloadBricks * m.VoxelPayloadBricks)) * volume.BrickSize
 
-		// 10 bits per axis for 1024^3 atlas
-		gpuAtlasOffset = (ax << 20) | (ay << 10) | az
+		gpuAtlasOffset = packVoxelAtlasOffset(ax, ay, az)
 
 		// Upload payload via WriteTexture
 		payload := make([]byte, 512)
@@ -413,7 +420,7 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 
 		m.Device.GetQueue().WriteTexture(
 			&wgpu.ImageCopyTexture{
-				Texture:  m.VoxelPayloadTex,
+				Texture:  m.VoxelPayloadTex[gpuAtlasPage],
 				MipLevel: 0,
 				Origin:   wgpu.Origin3D{X: uint32(ax), Y: uint32(ay), Z: uint32(az)},
 				Aspect:   wgpu.TextureAspectAll,
@@ -432,10 +439,64 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 		)
 	}
 
-	bbuf := make([]byte, 16)
+	bbuf := make([]byte, BrickRecordSize)
 	binary.LittleEndian.PutUint32(bbuf[0:4], gpuAtlasOffset)
 	binary.LittleEndian.PutUint32(bbuf[4:8], uint32(brick.OccupancyMask64))
 	binary.LittleEndian.PutUint32(bbuf[8:12], uint32(brick.OccupancyMask64>>32))
-	binary.LittleEndian.PutUint32(bbuf[12:16], brick.Flags)
-	m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(slotIdx*16), bbuf)
+	binary.LittleEndian.PutUint32(bbuf[12:16], gpuAtlasPage)
+	binary.LittleEndian.PutUint32(bbuf[16:20], brick.Flags)
+	m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(slotIdx*BrickRecordSize), bbuf)
+}
+
+func (m *GpuBufferManager) ensureVoxelPayloadPages() bool {
+	recreated := false
+	for i := uint32(0); i < m.VoxelPayloadPageCount; i++ {
+		if m.VoxelPayloadTex[i] != nil {
+			continue
+		}
+		fmt.Printf("Initializing Voxel Atlas Texture Page %d: %dx%dx%d\n", i, m.VoxelPayloadPageSize, m.VoxelPayloadPageSize, m.VoxelPayloadPageSize)
+		tex, err := m.Device.CreateTexture(&wgpu.TextureDescriptor{
+			Label: fmt.Sprintf("VoxelPayloadAtlas%d", i),
+			Size: wgpu.Extent3D{
+				Width:              m.VoxelPayloadPageSize,
+				Height:             m.VoxelPayloadPageSize,
+				DepthOrArrayLayers: m.VoxelPayloadPageSize,
+			},
+			MipLevelCount: 1,
+			SampleCount:   1,
+			Dimension:     wgpu.TextureDimension3D,
+			Format:        wgpu.TextureFormatR8Uint,
+			Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
+		})
+		if err != nil {
+			panic(err)
+		}
+		view, err := tex.CreateView(nil)
+		if err != nil {
+			panic(err)
+		}
+		m.VoxelPayloadTex[i] = tex
+		m.VoxelPayloadView[i] = view
+		recreated = true
+	}
+	return recreated
+}
+
+func (m *GpuBufferManager) voxelPayloadCapacityPerPage() uint32 {
+	return m.VoxelPayloadBricks * m.VoxelPayloadBricks * m.VoxelPayloadBricks
+}
+
+func (m *GpuBufferManager) allocPayloadSlot() (PayloadSlot, bool) {
+	capacity := m.voxelPayloadCapacityPerPage()
+	for page := uint32(0); page < m.VoxelPayloadPageCount; page++ {
+		alloc := &m.PayloadAlloc[page]
+		if len(alloc.Free) > 0 || alloc.Tail < capacity {
+			return PayloadSlot{Page: page, Slot: alloc.Alloc()}, true
+		}
+	}
+	return PayloadSlot{}, false
+}
+
+func packVoxelAtlasOffset(ax, ay, az uint32) uint32 {
+	return (ax << 20) | (ay << 10) | az
 }

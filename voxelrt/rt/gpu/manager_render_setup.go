@@ -58,6 +58,7 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	setupTexture(&m.TransparentWeightTex, &m.TransparentWeightView, "Transparent Weight", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
 
 	m.CreateShadowMapTextures(1024, 1024, 1)
+	m.CreateDirectionalShadowTextures(1)
 }
 
 func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wgpu.ComputePipeline) {
@@ -81,6 +82,7 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.ShadowLayerParamsBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {
@@ -101,17 +103,16 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 
 	m.GBufferBindGroup2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: gbPipeline.GetBindGroupLayout(2),
-		Entries: []wgpu.BindGroupEntry{
+		Entries: m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
-			{Binding: 2, TextureView: m.VoxelPayloadView},
-			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
-			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
-			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
-			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
-			{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
-			{Binding: 8, Buffer: m.TerrainChunkLookupBuf, Size: wgpu.WholeSize},
-		},
+			{Binding: 6, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
+			{Binding: 7, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 8, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
+			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
+			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 11, Buffer: m.TerrainChunkLookupBuf, Size: wgpu.WholeSize},
+		}, 2),
 	})
 	if err != nil {
 		panic(err)
@@ -131,6 +132,18 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 			{Binding: 5, TextureView: m.ShadowMapView},
 			{Binding: 6, TextureView: m.getSkyboxView()},
 			{Binding: 7, Sampler: m.getSkyboxSampler()},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	m.LightingTileBindGroup, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: lightPipeline.GetBindGroupLayout(3),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.TileLightParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.TileLightHeadersBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.TileLightIndicesBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {

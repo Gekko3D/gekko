@@ -8,11 +8,11 @@ Use a temporary Go cache in this sandbox:
 
 `env GOCACHE=/tmp/gekko3d-gocache ...`
 
-## Fastest Targeted Checks
+## Fast Targeted Checks
 
 - Culling, scene, and camera changes:
   - `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/core`
-- GPU manager, upload, bind-group, and shadow/Hi-Z changes:
+- GPU manager, upload, bind-group, and shadow or Hi-Z changes:
   - `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu`
 - Sparse voxel storage, traversal, or edit changes:
   - `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume`
@@ -27,13 +27,16 @@ For ECS bridge changes touching `mod_voxelrt_client*.go`:
 
 That is broader than the renderer-only packages, but it catches bridge regressions that package-local tests will miss.
 
-## When To Run Multiple Commands
+## When To Run More Than One Package
 
 - Pass ordering or bind-group layout change:
   - `./voxelrt/rt/gpu`
   - `./voxelrt/rt/core`
   - then `./...`
-- Probe GI / deferred-lighting change:
+- Voxel atlas page count, voxel payload bindings, or `BrickRecord` layout change:
+  - `./voxelrt/rt/gpu`
+  - then `./...`
+- Probe GI or deferred-lighting change:
   - `./voxelrt/rt/gpu`
   - `./voxelrt/rt/core`
   - then `./...`
@@ -56,10 +59,4 @@ Only use a windowed run when the change needs visual confirmation:
 
 These need a real desktop session.
 
-For probe GI specifically, check:
-
-- indoor spaces brighten without flattening all surfaces equally
-- emissive voxels tint nearby geometry
-- `RenderModeGI` isolates the probe contribution
-- window resize keeps GI sampling stable
-- large voxel edits rebake progressively instead of freezing a frame
+Global illumination verification steps were removed. The renderer currently verifies direct lighting, shadows, voxel edits, particles, CA volumes, gizmos, and overlay paths only.

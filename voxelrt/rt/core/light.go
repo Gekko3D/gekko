@@ -13,6 +13,13 @@ const (
 	ShadowUpdateKindDirectional
 )
 
+const (
+	ShadowTierHero uint32 = iota
+	ShadowTierNear
+	ShadowTierMedium
+	ShadowTierFar
+)
+
 type DirectionalShadowCascade struct {
 	ViewProj    [16]float32
 	InvViewProj [16]float32
@@ -36,4 +43,6 @@ type ShadowUpdate struct {
 	ShadowLayer  uint32
 	CascadeIndex uint32
 	Kind         uint32
+	Tier         uint32
+	Resolution   uint32
 }

@@ -13,6 +13,7 @@ struct CameraData {
   pad1: u32,
   screen_size: vec2<f32>,
   pad2: vec2<u32>,
+  ao_quality: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -621,7 +622,7 @@ fn volume_light_transmittance(pos_os: vec3<f32>, info: VolumeRecord, light_dir_w
 }
 
 fn primary_light_dir(pos_ws: vec3<f32>) -> vec3<f32> {
-  let count = arrayLength(&lights);
+  let count = min(uCamera.num_lights, arrayLength(&lights));
   if (count == 0u) {
     return normalize(vec3<f32>(0.3, 1.0, 0.2));
   }
@@ -633,7 +634,7 @@ fn primary_light_dir(pos_ws: vec3<f32>) -> vec3<f32> {
 }
 
 fn primary_light_color() -> vec3<f32> {
-  let count = arrayLength(&lights);
+  let count = min(uCamera.num_lights, arrayLength(&lights));
   if (count == 0u) {
     return vec3<f32>(1.0);
   }

@@ -65,3 +65,21 @@ type SkyboxLayerComponent struct {
 func (s *SkyboxLayerComponent) SetDirty() {
 	s._dirty = true
 }
+
+type SkyboxSunComponent struct {
+	Direction              mgl32.Vec3
+	Intensity              float32
+	HaloColor              mgl32.Vec3
+	CoreGlowStrength       float32
+	CoreGlowExponent       float32
+	AtmosphereExponent     float32
+	AtmosphereGlowStrength float32
+	DiskColor              mgl32.Vec3
+	DiskStrength           float32
+	DiskStart              float32
+	DiskEnd                float32
+}
+
+type SkyAmbientComponent struct {
+	SkyMix float32
+}

@@ -25,27 +25,69 @@ const (
 	RenderModeAlbedo
 	RenderModeNormals
 	RenderModeGBuffer
+	RenderModeDirect
+	RenderModeIndirect
+	RenderModeLightDensity
+	RenderModeCount
+)
+
+func (m RenderMode) String() string {
+	switch m {
+	case RenderModeLit:
+		return "Lit"
+	case RenderModeAlbedo:
+		return "Albedo"
+	case RenderModeNormals:
+		return "Normals"
+	case RenderModeGBuffer:
+		return "G-Buffer"
+	case RenderModeDirect:
+		return "Direct"
+	case RenderModeIndirect:
+		return "Indirect"
+	case RenderModeLightDensity:
+		return "Light Density"
+	default:
+		return "Unknown"
+	}
+}
+
+type LightingQualityConfig = core.LightingQualityConfig
+type LightingQualityPreset = core.LightingQualityPreset
+type VoxelRtDebugMode = core.DebugMode
+
+const (
+	LightingQualityPerformance = core.LightingQualityPresetPerformance
+	LightingQualityBalanced    = core.LightingQualityPresetBalanced
+	LightingQualityQuality     = core.LightingQualityPresetQuality
+	VoxelRtDebugModeOff        = core.DebugModeOff
+	VoxelRtDebugModeScene      = core.DebugModeScene
 )
 
 type VoxelRtModule struct {
-	WindowWidth   int
-	WindowHeight  int
-	WindowTitle   string
-	DebugMode     bool
-	RenderMode    RenderMode
-	OcclusionMode core.OcclusionMode
-	FontPath      string
+	WindowWidth     int
+	WindowHeight    int
+	WindowTitle     string
+	DebugMode       bool
+	HideDebugGizmos bool
+	RenderMode      RenderMode
+	QualityPreset   LightingQualityPreset
+	LightingQuality LightingQualityConfig
+	OcclusionMode   core.OcclusionMode
+	FontPath        string
 }
 
 type VoxelRtState struct {
 	RtApp             *app_rt.App
+	HideDebugGizmos   bool
 	loadedModels      map[AssetId]*core.VoxelObject
 	instanceMap       map[EntityId]*core.VoxelObject
 	particlePools     map[EntityId]*particlePool
 	caVolumeMap       map[EntityId]*core.VoxelObject
 	objectToEntity    map[*core.VoxelObject]EntityId
 	skyboxLayers      map[EntityId]SkyboxLayerComponent // Stored values to detect changes
-	lastSkyboxVer     int64                             // To track if any layer changed
+	skyboxSun         SkyboxSunComponent
+	lastSkyboxVer     int64 // To track if any layer changed
 	SunDirection      mgl32.Vec3
 	SunIntensity      float32
 	lastParticleAtlas AssetId
@@ -117,6 +159,52 @@ func (s *VoxelRtState) SetDebugMode(enabled bool) {
 	if s != nil && s.RtApp != nil {
 		s.RtApp.DebugMode = enabled
 	}
+}
+
+func (s *VoxelRtState) DebugOverlayMode() VoxelRtDebugMode {
+	if s == nil || s.RtApp == nil {
+		return VoxelRtDebugModeOff
+	}
+	return VoxelRtDebugMode(s.RtApp.Camera.DebugMode)
+}
+
+func (s *VoxelRtState) SetDebugOverlayMode(mode VoxelRtDebugMode) {
+	if s == nil || s.RtApp == nil {
+		return
+	}
+	s.RtApp.Camera.DebugMode = uint32(mode)
+}
+
+func (s *VoxelRtState) CycleDebugOverlayMode() {
+	if s == nil || s.RtApp == nil {
+		return
+	}
+	s.RtApp.Camera.DebugMode = (s.RtApp.Camera.DebugMode + 1) % uint32(core.DebugModeCount)
+}
+
+func (s *VoxelRtState) SetLightingQualityPreset(preset LightingQualityPreset) {
+	if s != nil && s.RtApp != nil {
+		s.RtApp.QualityPreset = preset
+	}
+}
+
+func (s *VoxelRtState) SetLightingQuality(cfg LightingQualityConfig) {
+	if s != nil && s.RtApp != nil {
+		s.RtApp.LightingQuality = cfg
+	}
+}
+
+func (s *VoxelRtState) SetDebugGizmos(enabled bool) {
+	if s != nil {
+		s.HideDebugGizmos = !enabled
+	}
+}
+
+func (s *VoxelRtState) IsDebugGizmosEnabled() bool {
+	if s == nil {
+		return false
+	}
+	return !s.HideDebugGizmos
 }
 
 func (s *VoxelRtState) GetVoxelObject(eid EntityId) *core.VoxelObject {

@@ -2,24 +2,41 @@
 
 Gekko is a Go game engine with an ECS core and a voxel real-time renderer (`voxelrt`).
 
-For workspace-level orientation, module-specific commands, and agent notes, see [AGENTS.md](/Users/ddevidch/code/go/gekko3d/gekko/AGENTS.md).
+Use [`docs/README.md`](docs/README.md) as the engine documentation index. Use [`AGENTS.md`](AGENTS.md) for workspace-level orientation, reliable commands, and contributor workflow notes.
 
-## Repository layout
+## Repository Layout
 
-- `voxelrt/` - renderer implementation and renderer docs
-- `assets/` - shared asset IDs, handles, and voxel asset types
-- `ecs/` - ECS internals extracted from root package (query maps, archetype keys, slice helpers)
-- `physics/` - physics types and world helpers
-- `actiongame/` - playable module/example
+- `docs/`
+  - canonical engine documentation
+- `voxelrt/`
+  - renderer implementation
+- `content/`
+  - authored content formats, validation, and IO
+- `assets/`
+  - shared asset IDs, handles, and voxel asset types
+- `ecs/`
+  - ECS internals extracted from the root package
+- `physics/`
+  - physics types and world helpers
 
-## Renderer docs
+## High-Value Docs
 
-- [voxelrt/ARCHITECTURE.md](voxelrt/ARCHITECTURE.md)
-- [voxelrt/rt/RENDERER.md](voxelrt/rt/RENDERER.md)
-- [voxelrt/rt/PARTICLES.md](voxelrt/rt/PARTICLES.md)
-- [voxelrt/rt/EDITOR.md](voxelrt/rt/EDITOR.md)
+- [`docs/engine/runtime.md`](docs/engine/runtime.md)
+- [`docs/engine/modules.md`](docs/engine/modules.md)
+- [`docs/engine/ecs.md`](docs/engine/ecs.md)
+- [`docs/engine/physics.md`](docs/engine/physics.md)
+- [`docs/engine/verification.md`](docs/engine/verification.md)
+- [`docs/renderer/overview.md`](docs/renderer/overview.md)
+- [`docs/renderer/runtime.md`](docs/renderer/runtime.md)
+- [`docs/renderer/change-guide.md`](docs/renderer/change-guide.md)
+- [`docs/assets/runtime-assets.md`](docs/assets/runtime-assets.md)
+- [`docs/editor/integration.md`](docs/editor/integration.md)
+- [`docs/content/game-assets.md`](docs/content/game-assets.md)
+- [`docs/content/levels.md`](docs/content/levels.md)
+- [`docs/content/streaming-and-worlds.md`](docs/content/streaming-and-worlds.md)
+- [`docs/content/asset-format.md`](docs/content/asset-format.md)
 
-## Bridge entry points
+## Bridge Entry Points
 
 The ECS-to-renderer bridge lives in:
 

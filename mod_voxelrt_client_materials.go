@@ -183,7 +183,7 @@ func applyMagicaVoxelMaterial(mat *core.Material, color [4]uint8, vMat VoxMateri
 
 func (s *VoxelRtState) CycleRenderMode() {
 	if s != nil && s.RtApp != nil {
-		s.RtApp.RenderMode = (s.RtApp.RenderMode + 1) % 4
+		s.RtApp.RenderMode = (s.RtApp.RenderMode + 1) % uint32(RenderModeCount)
 	}
 }
 

@@ -3,6 +3,7 @@ package gpu
 import (
 	"sync"
 
+	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 
@@ -17,8 +18,13 @@ const (
 	SafeBufferSizeLimit = 1024 * 1024 * 1024 // 1GB Warning/Compaction Limit
 
 	// Texture Atlas Constants
+	MaxVoxelAtlasPages = 4
 	AtlasBricksPerSide = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
 	AtlasSize          = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
+	BrickRecordSize    = 20
+
+	TiledLightingTileSize         = 16
+	TiledLightingMaxLightsPerTile = 128
 )
 
 type GpuSkyboxLayer struct {
@@ -41,6 +47,10 @@ type GpuSkyboxUniforms struct {
 	Pad2       uint32
 	Pad3       uint32
 	SunDir     [4]float32 // xyz: dir, w: intensity
+	SunColor   [4]float32 // xyz: halo color, w: core glow strength
+	SunParams  [4]float32 // x: core glow exponent, y: atmosphere exponent, z: atmosphere glow strength
+	DiskColor  [4]float32 // xyz: disk color, w: disk strength
+	DiskParams [4]float32 // x: disk start, y: disk end
 }
 
 type SpriteAtlasResource struct {
@@ -103,19 +113,28 @@ type CAPresetData struct {
 type GpuBufferManager struct {
 	Device *wgpu.Device
 
-	CameraBuf          *wgpu.Buffer
-	InstancesBuf       *wgpu.Buffer
-	BVHNodesBuf        *wgpu.Buffer
-	ShadowInstancesBuf *wgpu.Buffer
-	ShadowBVHNodesBuf  *wgpu.Buffer
-	LightsBuf          *wgpu.Buffer
-	ShadowUpdatesBuf   *wgpu.Buffer
+	LightingQuality core.LightingQualityConfig
+
+	CameraBuf            *wgpu.Buffer
+	InstancesBuf         *wgpu.Buffer
+	BVHNodesBuf          *wgpu.Buffer
+	ShadowInstancesBuf   *wgpu.Buffer
+	ShadowBVHNodesBuf    *wgpu.Buffer
+	LightsBuf            *wgpu.Buffer
+	ShadowUpdatesBuf     *wgpu.Buffer
+	ShadowLayerParamsBuf *wgpu.Buffer
+	TileLightParamsBuf   *wgpu.Buffer
+	TileLightHeadersBuf  *wgpu.Buffer
+	TileLightIndicesBuf  *wgpu.Buffer
 
 	MaterialBuf           *wgpu.Buffer
 	SectorTableBuf        *wgpu.Buffer
 	BrickTableBuf         *wgpu.Buffer
-	VoxelPayloadTex       *wgpu.Texture
-	VoxelPayloadView      *wgpu.TextureView
+	VoxelPayloadTex       [MaxVoxelAtlasPages]*wgpu.Texture
+	VoxelPayloadView      [MaxVoxelAtlasPages]*wgpu.TextureView
+	VoxelPayloadPageSize  uint32
+	VoxelPayloadPageCount uint32
+	VoxelPayloadBricks    uint32
 	ObjectParamsBuf       *wgpu.Buffer
 	ShadowObjectParamsBuf *wgpu.Buffer
 	Tree64Buf             *wgpu.Buffer
@@ -147,6 +166,14 @@ type GpuBufferManager struct {
 	ShadowMapArray           *wgpu.Texture
 	ShadowMapView            *wgpu.TextureView
 	ShadowMapLayers          uint32
+	DirectionalShadowArrays  [core.DirectionalShadowCascadeCount]*wgpu.Texture
+	DirectionalShadowViews   [core.DirectionalShadowCascadeCount]*wgpu.TextureView
+	DirectionalShadowLayers  uint32
+	ShadowLayerParams        []ShadowLayerParams
+	shadowCacheStates        []shadowCacheState
+	shadowCachedCascades     []core.DirectionalShadowCascade
+	shadowTierOffsets        [shadowTierCount]int
+	VoxelUploadRevision      uint64
 	shadowDirectionalVolumes []directionalShadowCullVolume
 	shadowSpotVolumes        []spotShadowCullVolume
 
@@ -160,6 +187,7 @@ type GpuBufferManager struct {
 	SkyboxParamsBuf      *wgpu.Buffer
 	SkyboxGenPipeline    *wgpu.ComputePipeline
 	SkyboxGenBindGroup   *wgpu.BindGroup
+	SkyboxRevision       uint64
 
 	// Hi-Z Occlusion
 	HiZTexture     *wgpu.Texture
@@ -183,6 +211,9 @@ type GpuBufferManager struct {
 	LightingBindGroup         *wgpu.BindGroup
 	LightingBindGroup2        *wgpu.BindGroup // For G-Buffer inputs and output
 	LightingBindGroupMaterial *wgpu.BindGroup // For Group 2 voxel data
+	LightingTileBindGroup     *wgpu.BindGroup // For Group 3 tiled light lists
+	TiledLightCullBindGroup0  *wgpu.BindGroup
+	TiledLightCullBindGroup1  *wgpu.BindGroup
 
 	// Shadow Map Bind Groups
 	ShadowPipeline   *wgpu.ComputePipeline
@@ -225,6 +256,7 @@ type GpuBufferManager struct {
 	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
 	TransparentBG1 *wgpu.BindGroup // voxel data buffers
 	TransparentBG2 *wgpu.BindGroup // gbuffer depth/material/shadows
+	TransparentBG3 *wgpu.BindGroup // tiled light lists
 	StorageView    *wgpu.TextureView
 
 	// GPU cellular automata + volumetric rendering
@@ -263,21 +295,29 @@ type GpuBufferManager struct {
 
 	// Allocators for global pools
 	SectorAlloc  SlotAllocator
-	BrickAlloc   SlotAllocator // Allocates blocks of 64 bricks
-	PayloadAlloc SlotAllocator // Allocates bricks (512 bytes each)
+	BrickAlloc   SlotAllocator                     // Allocates blocks of 64 bricks
+	PayloadAlloc [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
 
 	// Mapping from volume objects to GPU slots
 	SectorToInfo map[*volume.Sector]SectorGpuInfo
-	BrickToSlot  map[*volume.Brick]uint32
+	BrickToSlot  map[*volume.Brick]PayloadSlot
 
 	MaterialAlloc SlotAllocator // Allocates blocks of 256 materials (16KB each)
 	Allocations   map[*volume.XBrickMap]*ObjectGpuAllocation
 
 	// Smooth streaming state
-	SectorsPerFrame   uint32
-	lastTotalSectors  int
-	lastSceneRevision uint64
-	gridDataPool      []byte
+	SectorsPerFrame          uint32
+	lastTotalSectors         int
+	lastSceneRevision        uint64
+	gridDataPool             []byte
+	TileLightTilesX          uint32
+	TileLightTilesY          uint32
+	TileLightAvgCount        int
+	TileLightMaxCount        int
+	VoxelSectorsUploaded     int
+	VoxelBricksUploaded      int
+	VoxelDirtySectorsPending int
+	VoxelDirtyBricksPending  int
 }
 
 type caVolumeLayout struct {
@@ -297,6 +337,11 @@ type ObjectGpuAllocation struct {
 type SectorGpuInfo struct {
 	SlotIndex       uint32
 	BrickTableIndex uint32 // Index into global BrickTableBuf (64 slots per sector)
+}
+
+type PayloadSlot struct {
+	Page uint32
+	Slot uint32
 }
 
 type SlotAllocator struct {
@@ -320,15 +365,20 @@ func (a *SlotAllocator) FreeSlot(idx uint32) {
 }
 
 func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
+	pageSize := computeVoxelPayloadPageSize(device.GetLimits().Limits.MaxTextureDimension3D)
 	m := &GpuBufferManager{
-		Device:          device,
-		BatchMode:       false,
-		SectorsPerFrame: MaxUpdatesPerFrame,
+		Device:                device,
+		LightingQuality:       core.DefaultLightingQualityConfig(),
+		BatchMode:             false,
+		SectorsPerFrame:       MaxUpdatesPerFrame,
+		VoxelPayloadPageSize:  pageSize,
+		VoxelPayloadPageCount: MaxVoxelAtlasPages,
+		VoxelPayloadBricks:    pageSize / volume.BrickSize,
 	}
 	m.Allocations = make(map[*volume.XBrickMap]*ObjectGpuAllocation)
 	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
 	m.SectorToInfo = make(map[*volume.Sector]SectorGpuInfo)
-	m.BrickToSlot = make(map[*volume.Brick]uint32)
+	m.BrickToSlot = make(map[*volume.Brick]PayloadSlot)
 	m.SpriteAtlases = make(map[string]*SpriteAtlasResource)
 
 	// Pre-allocate minimal buffers to avoid bind group validation errors at startup
@@ -348,6 +398,10 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	m.ensureBuffer("ShadowBVHNodesBuf", &m.ShadowBVHNodesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("LightsBuf", &m.LightsBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("ShadowUpdatesBuf", &m.ShadowUpdatesBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("ShadowLayerParamsBuf", &m.ShadowLayerParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("TileLightParamsBuf", &m.TileLightParamsBuf, nil, wgpu.BufferUsageUniform, 256)
+	m.ensureBuffer("TileLightHeadersBuf", &m.TileLightHeadersBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("TileLightIndicesBuf", &m.TileLightIndicesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("CABoundsBuf", &m.CABoundsBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, nil, wgpu.BufferUsageStorage, 4096)
 	m.ensureBuffer("SpriteBuf", &m.SpriteBuf, nil, wgpu.BufferUsageStorage, 1024)
@@ -355,10 +409,33 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 	return m
 }
 
+func computeVoxelPayloadPageSize(maxTextureDimension3D uint32) uint32 {
+	size := uint32(AtlasSize)
+	if maxTextureDimension3D != 0 && maxTextureDimension3D < size {
+		size = maxTextureDimension3D
+	}
+	size -= size % volume.BrickSize
+	if size < volume.BrickSize {
+		panic("maxTextureDimension3D is too small for voxel payload pages")
+	}
+	return size
+}
+
+func (m *GpuBufferManager) appendVoxelPayloadEntries(entries []wgpu.BindGroupEntry, startBinding uint32) []wgpu.BindGroupEntry {
+	for i := uint32(0); i < MaxVoxelAtlasPages; i++ {
+		entries = append(entries, wgpu.BindGroupEntry{
+			Binding:     startBinding + i,
+			TextureView: m.VoxelPayloadView[i],
+		})
+	}
+	return entries
+}
+
 // CreateTransparentOverlayBindGroups wires the overlay pass bind groups:
 // Group 0: camera (uniform) + instances (storage) + BVH nodes (storage)
 // Group 1: voxel data buffers (sector, brick, payload, object params, tree64, sector grid, sector grid params)
 // Group 2: gbuffer depth/material + shadow maps + lit opaque color
+// Group 3: tiled light list buffers
 func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.RenderPipeline) {
 	if pipeline == nil {
 		return
@@ -373,6 +450,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 			{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
 			{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
 			{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
+			{Binding: 4, Buffer: m.ShadowLayerParamsBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {
@@ -382,16 +460,15 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 	// Group 1
 	m.TransparentBG1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: pipeline.GetBindGroupLayout(1),
-		Entries: []wgpu.BindGroupEntry{
+		Entries: m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
-			{Binding: 2, TextureView: m.VoxelPayloadView},
-			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
-			{Binding: 4, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
-			{Binding: 5, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
-			{Binding: 6, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
-			{Binding: 7, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
-		},
+			{Binding: 6, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
+			{Binding: 7, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 8, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
+			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
+			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+		}, 2),
 	})
 	if err != nil {
 		panic(err)
@@ -405,6 +482,18 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 			{Binding: 1, TextureView: m.MaterialView},
 			{Binding: 2, TextureView: m.ShadowMapView},
 			{Binding: 3, TextureView: m.StorageView},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	m.TransparentBG3, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: pipeline.GetBindGroupLayout(3),
+		Entries: []wgpu.BindGroupEntry{
+			{Binding: 0, Buffer: m.TileLightParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.TileLightHeadersBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.TileLightIndicesBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {

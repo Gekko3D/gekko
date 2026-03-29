@@ -19,6 +19,8 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	RtApp := app_rt.NewApp(windowState.windowGlfw)
 	RtApp.DebugMode = mod.DebugMode
 	RtApp.RenderMode = uint32(mod.RenderMode)
+	RtApp.QualityPreset = mod.QualityPreset
+	RtApp.LightingQuality = mod.LightingQuality
 	RtApp.OcclusionMode = mod.OcclusionMode
 	RtApp.FontPath = mod.FontPath
 	if err := RtApp.Init(); err != nil {
@@ -26,12 +28,13 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 
 	state := &VoxelRtState{
-		RtApp:          RtApp,
-		loadedModels:   make(map[AssetId]*core.VoxelObject),
-		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
-		objectToEntity: make(map[*core.VoxelObject]EntityId),
-		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
+		RtApp:           RtApp,
+		HideDebugGizmos: mod.HideDebugGizmos,
+		loadedModels:    make(map[AssetId]*core.VoxelObject),
+		instanceMap:     make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:     make(map[EntityId]*core.VoxelObject),
+		objectToEntity:  make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:    make(map[EntityId]SkyboxLayerComponent),
 	}
 	cmd.AddResources(state)
 
@@ -335,60 +338,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	syncVoxelRtLights(state, cmd)
 
 	state.RtApp.Profiler.BeginScope("Sync Gizmos")
-	state.RtApp.Scene.Gizmos = state.RtApp.Scene.Gizmos[:0]
-	MakeQuery2[GizmoComponent, TransformComponent](cmd).Map(func(eid EntityId, g *GizmoComponent, tr *TransformComponent) bool {
-		// core.Gizmo match
-		rtGizmo := core.Gizmo{
-			Type:  core.GizmoType(g.Type),
-			Color: g.Color,
-		}
-
-		if g.Type == GizmoGrid {
-			// A grid is special: we expand it into multiple lines centered at tr.Position
-			// tr.Rotation applies to the whole grid.
-			steps := g.Steps
-			if steps <= 0 {
-				steps = 10
-			}
-			stepSize := g.Size / float32(steps)
-			halfSize := g.Size * 0.5
-
-			for i := 0; i <= steps; i++ {
-				offset := float32(i)*stepSize - halfSize
-
-				// Line along Z (moving along X)
-				lx := mgl32.Translate3D(offset, 0, -halfSize)
-				sz := mgl32.Scale3D(1, 1, g.Size)
-				rtLineZ := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
-				rtLineZ.ModelMatrix = tr.ObjectToWorld().Mul4(lx).Mul4(sz)
-				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineZ)
-
-				// Line along X (moving along Z)
-				lz := mgl32.Translate3D(-halfSize, 0, offset)
-				rx := mgl32.QuatRotate(mgl32.DegToRad(90), mgl32.Vec3{0, 1, 0}).Mat4()
-				rtLineX := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
-				rtLineX.ModelMatrix = tr.ObjectToWorld().Mul4(lz).Mul4(rx).Mul4(sz)
-				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineX)
-			}
-			return true
-		}
-
-		// Construct Model Matrix from TransformComponent using ObjectToWorld (respects pivot)
-		modelMat := tr.ObjectToWorld()
-
-		if g.Type == GizmoLine {
-			// Unit line is (0,0,0) to (0,0,1). Scale Z by Size.
-			modelMat = modelMat.Mul4(mgl32.Scale3D(1, 1, g.Size))
-		} else if g.Size > 0 {
-			// For Sphere, Cube, Circle, Rect, Size acts as a uniform multiplier.
-			modelMat = modelMat.Mul4(mgl32.Scale3D(g.Size, g.Size, g.Size))
-		}
-
-		rtGizmo.ModelMatrix = modelMat
-
-		state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtGizmo)
-		return true
-	})
+	syncVoxelRtGizmos(state, cmd)
 	state.RtApp.Profiler.EndScope("Sync Gizmos")
 
 	state.RtApp.Profiler.BeginScope("GPU Batch")
@@ -485,10 +435,19 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 
 	state.RtApp.Scene.Lights = state.RtApp.Scene.Lights[:0]
 	defaultAmbient := mgl32.Vec3{0.2, 0.2, 0.2}
+	defaultSkyAmbientMix := float32(0.60)
 	ambientAccum := mgl32.Vec3{0, 0, 0}
 	ambientFound := false
+	skyAmbientMix := defaultSkyAmbientMix
 	state.SunDirection = mgl32.Vec3{}
 	state.SunIntensity = 0
+
+	MakeQuery1[SkyAmbientComponent](cmd).Map(func(_ EntityId, ambient *SkyAmbientComponent) bool {
+		if ambient != nil {
+			skyAmbientMix = ambient.SkyMix
+		}
+		return false
+	})
 
 	type pendingLight struct {
 		entityID  EntityId
@@ -594,6 +553,7 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 	} else {
 		state.RtApp.Scene.AmbientLight = defaultAmbient
 	}
+	state.RtApp.Scene.SkyAmbientMix = skyAmbientMix
 }
 
 func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *Commands) {
@@ -622,7 +582,63 @@ func voxelRtRenderSystem(cmd *Commands, state *VoxelRtState, prof *Profiler) {
 
 func voxelRtDebugSystem(input *Input, state *VoxelRtState) {
 	if input.JustPressed[KeyF2] {
-		mode := state.RtApp.Camera.DebugMode
-		state.RtApp.Camera.DebugMode = (mode + 1) % 3
+		state.CycleDebugOverlayMode()
 	}
+}
+
+func syncVoxelRtGizmos(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil || state.RtApp.Scene == nil {
+		return
+	}
+
+	state.RtApp.Scene.Gizmos = state.RtApp.Scene.Gizmos[:0]
+	if !state.HideDebugGizmos {
+		appendSceneDebugGizmos(state, cmd)
+	}
+}
+
+func appendSceneDebugGizmos(state *VoxelRtState, cmd *Commands) {
+	MakeQuery2[GizmoComponent, TransformComponent](cmd).Map(func(eid EntityId, g *GizmoComponent, tr *TransformComponent) bool {
+		rtGizmo := core.Gizmo{
+			Type:  core.GizmoType(g.Type),
+			Color: g.Color,
+		}
+
+		if g.Type == GizmoGrid {
+			steps := g.Steps
+			if steps <= 0 {
+				steps = 10
+			}
+			stepSize := g.Size / float32(steps)
+			halfSize := g.Size * 0.5
+
+			for i := 0; i <= steps; i++ {
+				offset := float32(i)*stepSize - halfSize
+
+				lx := mgl32.Translate3D(offset, 0, -halfSize)
+				sz := mgl32.Scale3D(1, 1, g.Size)
+				rtLineZ := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
+				rtLineZ.ModelMatrix = tr.ObjectToWorld().Mul4(lx).Mul4(sz)
+				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineZ)
+
+				lz := mgl32.Translate3D(-halfSize, 0, offset)
+				rx := mgl32.QuatRotate(mgl32.DegToRad(90), mgl32.Vec3{0, 1, 0}).Mat4()
+				rtLineX := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
+				rtLineX.ModelMatrix = tr.ObjectToWorld().Mul4(lz).Mul4(rx).Mul4(sz)
+				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineX)
+			}
+			return true
+		}
+
+		modelMat := tr.ObjectToWorld()
+		if g.Type == GizmoLine {
+			modelMat = modelMat.Mul4(mgl32.Scale3D(1, 1, g.Size))
+		} else if g.Size > 0 {
+			modelMat = modelMat.Mul4(mgl32.Scale3D(g.Size, g.Size, g.Size))
+		}
+
+		rtGizmo.ModelMatrix = modelMat
+		state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtGizmo)
+		return true
+	})
 }

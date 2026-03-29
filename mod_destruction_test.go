@@ -9,7 +9,6 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-
 func TestDestructionSystem_Split(t *testing.T) {
 	app := NewApp()
 	app.UseModules(DestructionModule{})
@@ -470,12 +469,10 @@ func TestDestructionSystem_MomentumInheritance(t *testing.T) {
 			{
 				Entity: entity,
 				Center: parentPos.Add(mgl32.Vec3{0.5, 0, 0}), // Triggers split (point between islands)
-				Radius: 0.05, // Small radius to avoid carving the islands themselves
+				Radius: 0.05,                                 // Small radius to avoid carving the islands themselves
 			},
-
 		},
 	}
-
 
 	// Run system
 	server := &AssetServer{
@@ -513,14 +510,13 @@ func TestDestructionSystem_MomentumInheritance(t *testing.T) {
 		if rb != nil {
 			foundDebris = true
 			// V_shard = V_parent + Omega_parent x worldOffset
-			
+
 			// Island 2 voxels are [10,11]x[0,1]x[0,1]. Local center is (11, 1, 1).
 			// Scale is 1.0, VoxelSize is 0.1.
 			// worldOffset = rotation * (localCenter * vSize * scale)
 			localCenter := mgl32.Vec3{11, 1, 1}
 			worldOffset := mgl32.QuatIdent().Rotate(localCenter.Mul(0.1))
 			expectedVel := parentVel.Add(parentAngVel.Cross(worldOffset))
-
 
 			if rb.Velocity.Sub(expectedVel).Len() > 0.01 {
 				t.Errorf("Debris velocity should be approx %v, got %v", expectedVel, rb.Velocity)
@@ -535,5 +531,3 @@ func TestDestructionSystem_MomentumInheritance(t *testing.T) {
 		t.Errorf("No debris found with RigidBodyComponent")
 	}
 }
-
-

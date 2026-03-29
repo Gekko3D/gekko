@@ -157,7 +157,7 @@ func (a *App) setupCAVolumePipeline() {
 			{
 				Binding:    0,
 				Visibility: wgpu.ShaderStageFragment,
-				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 272},
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 288},
 			},
 			{
 				Binding:    1,

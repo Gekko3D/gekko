@@ -86,16 +86,19 @@ struct SpawnRequest {
 
 // Group 2: Voxel Data (Shared with Renderer)
 struct SectorRecord { origin_vox: vec4<i32>, brick_table_index: u32, brick_mask_lo: u32, brick_mask_hi: u32, padding: u32 };
-struct BrickRecord { atlas_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, flags: u32 };
+struct BrickRecord { atlas_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, atlas_page: u32, flags: u32 };
 struct SectorGridEntry { coords: vec4<i32>, base_idx: u32, sector_idx: i32, padding: vec2<u32> };
 struct SectorGridParams { grid_size: u32, grid_mask: u32, padding0: u32, padding1: u32 };
 struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, padding: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32> };
 
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
 @group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;
-@group(2) @binding(2) var voxel_payload: texture_3d<u32>;
-@group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
-@group(2) @binding(4) var<storage, read> object_params: array<ObjectParams>;
+@group(2) @binding(2) var voxel_payload_0: texture_3d<u32>;
+@group(2) @binding(3) var voxel_payload_1: texture_3d<u32>;
+@group(2) @binding(4) var voxel_payload_2: texture_3d<u32>;
+@group(2) @binding(5) var voxel_payload_3: texture_3d<u32>;
+@group(2) @binding(6) var<storage, read> materials: array<vec4<f32>>;
+@group(2) @binding(7) var<storage, read> object_params: array<ObjectParams>;
 struct Instance {
     object_to_world: mat4x4<f32>,
     world_to_object: mat4x4<f32>,
@@ -106,9 +109,9 @@ struct Instance {
     object_id: u32,
     padding: array<u32, 3>,
 };
-@group(2) @binding(5) var<storage, read> instances: array<Instance>;
-@group(2) @binding(6) var<storage, read> sector_grid: array<SectorGridEntry>;
-@group(2) @binding(7) var<storage, read> sector_grid_params: SectorGridParams;
+@group(2) @binding(8) var<storage, read> instances: array<Instance>;
+@group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
+@group(2) @binding(10) var<storage, read> sector_grid_params: SectorGridParams;
 
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
     if (idx < 32u) { return (mask_lo & (1u << idx)) != 0u; }
