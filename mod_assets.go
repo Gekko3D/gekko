@@ -101,6 +101,13 @@ func (server *AssetServer) GetVoxelModel(id AssetId) (VoxelModelAsset, bool) {
 	return server.GetVoxelGeometry(id)
 }
 
+func (server *AssetServer) GetVoxelPalette(id AssetId) (VoxelPaletteAsset, bool) {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	palette, ok := server.voxPalettes[id]
+	return palette, ok
+}
+
 func makeAssetId() AssetId {
 	return rootassets.NewID()
 }

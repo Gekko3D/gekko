@@ -77,6 +77,57 @@ func TestLoadAndSpawnAuthoredLevelSpawnsPlacementWithLevelAndAssetMetadata(t *te
 	}
 }
 
+func TestLoadAndSpawnAuthoredLevelCollapsedAssetKeepsPlacementRefWithoutItemRefs(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "ship_collapsed.gkasset")
+	levelPath := filepath.Join(root, "levels", "demo_collapsed.gklevel")
+
+	writeCollapsedProceduralAssetForLevelTest(t, assetPath, "ship-collapsed")
+
+	level := content.NewLevelDef("demo-collapsed")
+	level.Placements = []content.LevelPlacementDef{{
+		ID:        "placement-1",
+		AssetPath: filepath.Join("..", "assets", "ship_collapsed.gkasset"),
+		Transform: content.LevelTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	rootEntity := result.PlacementRootEntities["placement-1"]
+	if rootEntity == 0 {
+		t.Fatal("expected placement root entity")
+	}
+	if _, ok := AuthoredLevelPlacementRefForEntity(cmd, rootEntity); !ok {
+		t.Fatal("expected placement ref on collapsed placement root")
+	}
+
+	var itemRefs int
+	MakeQuery1[AuthoredLevelItemRefComponent](cmd).Map(func(_ EntityId, ref *AuthoredLevelItemRefComponent) bool {
+		if ref.PlacementID == "placement-1" {
+			itemRefs++
+		}
+		return true
+	})
+	if itemRefs != 0 {
+		t.Fatalf("expected collapsed placement to skip per-item refs, got %d", itemRefs)
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
@@ -441,6 +492,41 @@ func writeProceduralAssetForLevelTest(t *testing.T, path string, assetID string)
 			Scale:    content.Vec3{1, 1, 1},
 		},
 	}}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveAsset(path, def); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+}
+
+func writeCollapsedProceduralAssetForLevelTest(t *testing.T, path string, assetID string) {
+	t.Helper()
+	def := content.NewAssetDef(assetID)
+	def.ID = assetID
+	def.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
+	def.Parts = []content.AssetPartDef{
+		{
+			ID:     assetID + "-part-a",
+			Name:   "part-a",
+			Source: testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{-0.5, 0, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:     assetID + "-part-b",
+			Name:   "part-b",
+			Source: testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{0.5, 0, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}

@@ -14,10 +14,13 @@ type AuthoredAssetSpawnResult struct {
 	EntitiesByAssetID  map[string]EntityId
 	ItemKindsByAssetID map[string]AuthoredItemKind
 	PartIDs            map[string]struct{}
+	Collapsed          bool
+	CollapsedPartIDs   map[string]struct{}
 }
 
 type AuthoredAssetSpawnOptions struct {
-	DocumentPath string
+	DocumentPath       string
+	CollapseVoxelParts VoxelPartCollapseMode
 }
 
 func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
@@ -37,7 +40,11 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	if validation := content.ValidateAsset(def, content.AssetValidationOptions{DocumentPath: opts.DocumentPath}); validation.HasErrors() {
 		return result, fmt.Errorf("asset validation failed: %s", validation.Error())
 	}
+	content.NormalizeAssetDef(def)
 	if err := ValidateAssetHierarchy(def); err != nil {
+		return result, err
+	}
+	if collapsed, err := trySpawnCollapsedAuthoredAsset(cmd, assets, def, rootTransform, opts, &result); collapsed || err != nil {
 		return result, err
 	}
 
