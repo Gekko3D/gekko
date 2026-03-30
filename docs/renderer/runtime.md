@@ -7,6 +7,7 @@ Related docs:
 - [`overview.md`](overview.md)
 - [`change-guide.md`](change-guide.md)
 - [`editing.md`](editing.md)
+- [`gbuffer-compaction-note.md`](gbuffer-compaction-note.md)
 - [`particles.md`](particles.md)
 - [`verification.md`](verification.md)
 
@@ -97,7 +98,8 @@ The legacy fullscreen blit pipeline still exists in setup code, but the resolve 
 - depth: `RGBA32Float`
 - normal: `RGBA16Float`
 - material: `RGBA32Float`
-- position: `RGBA32Float`
+- no dedicated position target
+- deferred lighting reconstructs world hit position from screen UV, camera inverse matrices, and `GBufferDepth.r`
 
 ### Transparency / WBOIT
 

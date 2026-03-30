@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
+	"github.com/google/uuid"
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -27,13 +28,15 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 
 	state := &VoxelRtState{
-		RtApp:           RtApp,
-		HideDebugGizmos: mod.HideDebugGizmos,
-		loadedModels:    make(map[AssetId]*core.VoxelObject),
-		instanceMap:     make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:     make(map[EntityId]*core.VoxelObject),
-		objectToEntity:  make(map[*core.VoxelObject]EntityId),
-		skyboxLayers:    make(map[EntityId]SkyboxLayerComponent),
+		RtApp:              RtApp,
+		HideDebugGizmos:    mod.HideDebugGizmos,
+		loadedModels:       make(map[AssetId]*core.VoxelObject),
+		instanceMap:        make(map[EntityId]*core.VoxelObject),
+		lastMaterialKeys:   make(map[*core.VoxelObject]materialTableCacheKey),
+		materialTableCache: make(map[materialTableCacheKey][]core.Material),
+		caVolumeMap:        make(map[EntityId]*core.VoxelObject),
+		objectToEntity:     make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:       make(map[EntityId]SkyboxLayerComponent),
 	}
 	cmd.AddResources(state)
 
@@ -98,6 +101,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	if state == nil || state.RtApp == nil {
 		return
 	}
+	state.ensureMaterialCaches()
 	// Sync instances
 	state.RtApp.Profiler.BeginScope("Sync Instances")
 	currentEntities := make(map[EntityId]bool)
@@ -112,6 +116,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			return true
 		}
 		gekkoPalette := server.voxPalettes[vox.VoxelPalette]
+		materialKey := state.materialTableKey(vox.VoxelPalette, &gekkoPalette)
 
 		obj, exists := state.instanceMap[entityId]
 		if !exists {
@@ -124,41 +129,63 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 			obj = core.NewVoxelObject()
 			obj.XBrickMap = modelTemplate.XBrickMap
-			obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
+			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 			state.RtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
 			state.objectToEntity[obj] = entityId
+			state.lastMaterialKeys[obj] = materialKey
 		}
-
-		// Sync Transform to Renderer
-		obj.Transform.Position = transform.Position
-		obj.Transform.Rotation = transform.Rotation
 
 		if geometryAsset.XBrickMap != obj.XBrickMap {
 			obj.XBrickMap = geometryAsset.XBrickMap
 			obj.XBrickMap.StructureDirty = true
 			state.RtApp.Scene.StructureRevision++ // Force hash grid rebuild
 		}
-		obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
-
-		obj.Transform.Scale = EffectiveVoxelScale(vox, transform)
+		scale := EffectiveVoxelScale(vox, transform)
 
 		// Compute and apply Pivot
+		pivot := mgl32.Vec3{0, 0, 0}
 		switch vox.PivotMode {
 		case PivotModeCenter:
 			if obj.XBrickMap != nil {
 				minB, maxB := obj.XBrickMap.ComputeAABB()
-				transform.Pivot = minB.Add(maxB).Mul(0.5)
+				pivot = minB.Add(maxB).Mul(0.5)
 			}
 		case PivotModeCustom:
-			transform.Pivot = vox.CustomPivot
+			pivot = vox.CustomPivot
 		case PivotModeCorner:
 			fallthrough
 		default:
-			transform.Pivot = mgl32.Vec3{0, 0, 0}
+			pivot = mgl32.Vec3{0, 0, 0}
+		}
+		transform.Pivot = pivot
+
+		transformChanged := false
+		if obj.Transform.Position != transform.Position {
+			obj.Transform.Position = transform.Position
+			transformChanged = true
+		}
+		if obj.Transform.Rotation != transform.Rotation {
+			obj.Transform.Rotation = transform.Rotation
+			transformChanged = true
+		}
+		if obj.Transform.Scale != scale {
+			obj.Transform.Scale = scale
+			transformChanged = true
+		}
+		if obj.Transform.Pivot != pivot {
+			obj.Transform.Pivot = pivot
+			transformChanged = true
+		}
+		if transformChanged {
+			obj.Transform.Dirty = true
 		}
 
-		obj.Transform.Pivot = transform.Pivot
+		if lastKey, ok := state.lastMaterialKeys[obj]; !ok || lastKey != materialKey {
+			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
+			state.lastMaterialKeys[obj] = materialKey
+		}
+
 		obj.CastsShadows = !vox.DisableShadows
 		obj.ShadowMaxDistance = vox.ShadowMaxDistance
 		obj.ShadowCasterGroupID = vox.ShadowCasterGroupID
@@ -171,8 +198,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.TerrainChunkCoord = vox.TerrainChunkCoord
 		obj.TerrainChunkSize = vox.TerrainChunkSize
 
-		obj.Transform.Dirty = true
-
 		return true
 	})
 
@@ -180,6 +205,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if !currentEntities[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
+			delete(state.lastMaterialKeys, obj)
 			delete(state.objectToEntity, obj)
 		}
 	}
@@ -373,14 +399,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			continue
 		}
 		seenSpriteAtlases[batch.AtlasKey] = struct{}{}
-		for atlasID, texAsset := range server.textures {
-			if spriteAtlasKey(atlasID) != batch.AtlasKey {
-				continue
-			}
-			if state.RtApp.BufferManager != nil {
-				state.RtApp.BufferManager.SetSpriteAtlas(batch.AtlasKey, texAsset.Texels, texAsset.Width, texAsset.Height, texAsset.Version)
-			}
-			break
+		if texAsset, ok := spriteAtlasTexture(server, batch.AtlasKey); ok && state.RtApp.BufferManager != nil {
+			state.RtApp.BufferManager.SetSpriteAtlas(batch.AtlasKey, texAsset.Texels, texAsset.Width, texAsset.Height, texAsset.Version)
 		}
 	}
 	if state.RtApp.BufferManager != nil {
@@ -415,6 +435,18 @@ func voxelObjectAllowsOcclusion(cmd *Commands, entityId EntityId, vox *VoxelMode
 	return true
 }
 
+func spriteAtlasTexture(server *AssetServer, atlasKey string) (TextureAsset, bool) {
+	if server == nil || atlasKey == "" {
+		return TextureAsset{}, false
+	}
+	parsed, err := uuid.Parse(atlasKey)
+	if err != nil {
+		return TextureAsset{}, false
+	}
+	texAsset, ok := server.textures[AssetId{UUID: parsed}]
+	return texAsset, ok
+}
+
 func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 	if state == nil || state.RtApp == nil || state.RtApp.Scene == nil || cmd == nil {
 		return
@@ -447,33 +479,22 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 	}
 	pendingLights := make([]pendingLight, 0, 8)
 
-	MakeQuery1[LightComponent](cmd).Map(func(entityId EntityId, light *LightComponent) bool {
+	MakeQuery1[LightComponent](cmd).Map(func(_ EntityId, light *LightComponent) bool {
+		if light.Type != LightTypeAmbient {
+			return true
+		}
+		ambientAccum = ambientAccum.Add(mgl32.Vec3(light.Color).Mul(light.Intensity))
+		ambientFound = true
+		return true
+	})
+
+	MakeQuery2[LightComponent, TransformComponent](cmd).Map(func(entityId EntityId, light *LightComponent, tr *TransformComponent) bool {
 		if light.Type == LightTypeAmbient {
-			ambientAccum = ambientAccum.Add(mgl32.Vec3(light.Color).Mul(light.Intensity))
-			ambientFound = true
 			return true
 		}
 
-		var pos mgl32.Vec3
-		var rot mgl32.Quat = mgl32.QuatIdent()
-		found := false
-
-		for _, c := range cmd.GetAllComponents(entityId) {
-			switch t := c.(type) {
-			case TransformComponent:
-				if !found {
-					pos, rot, found = t.Position, t.Rotation, true
-				}
-			case *TransformComponent:
-				if !found {
-					pos, rot, found = t.Position, t.Rotation, true
-				}
-			}
-		}
-
-		if !found {
-			return true
-		}
+		pos := tr.Position
+		rot := tr.Rotation
 
 		gpuLight := core.Light{}
 		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), 1.0}

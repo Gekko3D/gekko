@@ -62,6 +62,12 @@ type SpriteAtlasResource struct {
 type SpriteRenderBatch struct {
 	FirstInstance uint32
 	InstanceCount uint32
+	AtlasKey      string
+	AtlasView     *wgpu.TextureView
+	SpriteBuf     *wgpu.Buffer
+	CameraBuf     *wgpu.Buffer
+	Sampler       *wgpu.Sampler
+	Pipeline      *wgpu.RenderPipeline
 	BindGroup0    *wgpu.BindGroup
 }
 
@@ -146,7 +152,6 @@ type GpuBufferManager struct {
 	GBufferDepth    *wgpu.Texture
 	GBufferNormal   *wgpu.Texture
 	GBufferMaterial *wgpu.Texture
-	GBufferPosition *wgpu.Texture
 
 	// Transparent Accumulation Targets (WBOIT)
 	TransparentAccumTex  *wgpu.Texture // RGBA16Float, accum premultiplied color
@@ -156,7 +161,6 @@ type GpuBufferManager struct {
 	DepthView    *wgpu.TextureView
 	NormalView   *wgpu.TextureView
 	MaterialView *wgpu.TextureView
-	PositionView *wgpu.TextureView
 
 	// Transparent Accumulation Views
 	TransparentAccumView  *wgpu.TextureView
@@ -173,6 +177,7 @@ type GpuBufferManager struct {
 	shadowCacheStates        []shadowCacheState
 	shadowCachedCascades     []core.DirectionalShadowCascade
 	shadowTierOffsets        [shadowTierCount]int
+	MaterialBufferGeneration uint64
 	VoxelUploadRevision      uint64
 	shadowDirectionalVolumes []directionalShadowCullVolume
 	shadowSpotVolumes        []spotShadowCullVolume
@@ -194,7 +199,11 @@ type GpuBufferManager struct {
 	HiZViews       []*wgpu.TextureView // Mip views
 	ReadbackBuffer *wgpu.Buffer
 	HiZPipeline    *wgpu.ComputePipeline
+	HiZBindGroup0  *wgpu.BindGroup
 	HiZBindGroups  []*wgpu.BindGroup // One per mip transition
+	hiZPass0Source *wgpu.TextureView
+	hiZPass0Dest   *wgpu.TextureView
+	hiZPass0Pipe   *wgpu.ComputePipeline
 
 	HiZReadbackLevel   uint32
 	HiZReadbackWidth   uint32
@@ -251,6 +260,8 @@ type GpuBufferManager struct {
 	SpriteAtlases      map[string]*SpriteAtlasResource
 	SpriteBatches      []SpriteRenderBatch
 	SpritesBindGroup1  *wgpu.BindGroup // gbuffer depth
+	spritesBG1Depth    *wgpu.TextureView
+	spritesBG1Pipeline *wgpu.RenderPipeline
 
 	// Transparent overlay (single-layer transparency over lit image)
 	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
@@ -336,6 +347,9 @@ type ObjectGpuAllocation struct {
 type MaterialGpuAllocation struct {
 	MaterialOffset   uint32 // In elements (64 bytes each)
 	MaterialCapacity uint32 // In elements
+	MaterialTablePtr uintptr
+	MaterialTableLen int
+	BufferGeneration uint64
 }
 
 type SectorGpuInfo struct {

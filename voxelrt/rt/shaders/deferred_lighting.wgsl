@@ -87,17 +87,16 @@ struct LightingContribution {
 @group(1) @binding(0) var in_depth: texture_2d<f32>;
 @group(1) @binding(1) var in_normal: texture_2d<f32>;
 @group(1) @binding(2) var in_material: texture_2d<f32>;
-@group(1) @binding(3) var in_position: texture_2d<f32>;
 
 // Output: Final Color (HDR)
-@group(1) @binding(4) var out_color: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(3) var out_color: texture_storage_2d<rgba16float, write>;
 
 // Shadow Maps
-@group(1) @binding(5) var in_shadow_maps: texture_2d_array<f32>;
+@group(1) @binding(4) var in_shadow_maps: texture_2d_array<f32>;
 
 // Skybox
-@group(1) @binding(6) var in_skybox: texture_2d<f32>;
-@group(1) @binding(7) var skybox_sampler: sampler;
+@group(1) @binding(5) var in_skybox: texture_2d<f32>;
+@group(1) @binding(6) var skybox_sampler: sampler;
 
 // Group 2: Voxel Data (reuse)
 @group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
@@ -469,6 +468,11 @@ fn get_ray(uv: vec2<f32>) -> Ray {
     return Ray(origin, dir, 1.0 / dir);
 }
 
+fn reconstruct_world_pos(uv: vec2<f32>, depth: f32) -> vec3<f32> {
+    let ray = get_ray(uv);
+    return ray.origin + ray.dir * depth;
+}
+
 fn tile_index_for_pixel(pixel: vec2<u32>) -> u32 {
     let tile_coord = min(
         pixel / tile_light_params.tile_size,
@@ -518,8 +522,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ior = pbr_params.z;
     let emissive = emissive_linear * max(material_extra.x, 0.0);
     
-    // Use stored voxel center from G-Buffer to ensure uniform lighting per voxel (blocky look)
-    let hit_pos_ws = textureLoad(in_position, global_id.xy, 0).xyz;
+    let hit_pos_ws = reconstruct_world_pos(uv, depth);
     
     let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
     let NdotV = max(dot(normal, view_dir), 0.0);

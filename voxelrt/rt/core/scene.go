@@ -147,6 +147,10 @@ type Scene struct {
 	ShadowObjects       []*VoxelObject
 	BVHNodesBytes       []byte // Linearized BVH nodes
 	ShadowBVHNodesBytes []byte
+	lastVisibleBVH      []*VoxelObject
+	lastShadowBVH       []*VoxelObject
+	visibleBVHRevision  uint64
+	shadowBVHRevision   uint64
 	Lights              []Light
 	Gizmos              []Gizmo
 	AmbientLight        mgl32.Vec3
@@ -232,7 +236,7 @@ func (s *Scene) Raycast(ray Ray, tMax float32) *HitResult {
 
 		// 2. Narrow phase: Object Space Ray March
 		o2w := obj.Transform.ObjectToWorld()
-		w2o := o2w.Inv()
+		w2o := obj.Transform.WorldToObject()
 
 		// Transform ray to object space
 		ro4 := w2o.Mul4x1(ray.Origin.Vec4(1.0))
@@ -306,6 +310,8 @@ func (s *Scene) RemoveObject(obj *VoxelObject) {
 }
 
 func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
+	dirtyAABBs := make(map[*VoxelObject]bool, len(s.Objects))
+
 	// Recompute AABBs
 	for _, obj := range s.Objects {
 		if obj == nil || obj.XBrickMap == nil {
@@ -316,7 +322,9 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 			s.markOcclusionWarmup(obj)
 		}
 		s.lastOcclusionDirty[obj] = isDirtyForOcclusion
-		obj.UpdateWorldAABB()
+		if obj.UpdateWorldAABB() {
+			dirtyAABBs[obj] = true
+		}
 	}
 
 	// Culling: Populate VisibleObjects
@@ -378,23 +386,24 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		}
 	}
 
-	// Build BVH from Visible Objects AABBs
-	// We always rebuild if any objects are visible, as identity/order can change even if count stays the same.
-	if len(s.VisibleObjects) > 0 {
-		aabbs := make([][2]mgl32.Vec3, len(s.VisibleObjects))
-		for i, obj := range s.VisibleObjects {
-			if obj.WorldAABB != nil {
-				aabbs[i] = *obj.WorldAABB
-			} else {
-				aabbs[i] = [2]mgl32.Vec3{{0, 0, 0}, {0, 0, 0}}
+	if s.shouldRebuildBVH(s.VisibleObjects, s.lastVisibleBVH, dirtyAABBs, s.BVHNodesBytes) {
+		if len(s.VisibleObjects) > 0 {
+			aabbs := make([][2]mgl32.Vec3, len(s.VisibleObjects))
+			for i, obj := range s.VisibleObjects {
+				if obj.WorldAABB != nil {
+					aabbs[i] = *obj.WorldAABB
+				} else {
+					aabbs[i] = [2]mgl32.Vec3{{0, 0, 0}, {0, 0, 0}}
+				}
 			}
-		}
 
-		// Use BVH builder
-		builder := &bvh.TLASBuilder{}
-		s.BVHNodesBytes = builder.Build(aabbs)
-	} else {
-		s.BVHNodesBytes = make([]byte, 64) // Empty BVH
+			builder := &bvh.TLASBuilder{}
+			s.BVHNodesBytes = builder.Build(aabbs)
+		} else {
+			s.BVHNodesBytes = make([]byte, 64) // Empty BVH
+		}
+		s.visibleBVHRevision++
+		s.lastVisibleBVH = append(s.lastVisibleBVH[:0], s.VisibleObjects...)
 	}
 
 	// Shadow casting intentionally uses a broader object set than the camera-visible one.
@@ -454,16 +463,32 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		}
 	}
 
-	if len(s.ShadowObjects) > 0 {
-		aabbs := make([][2]mgl32.Vec3, len(s.ShadowObjects))
-		for i, obj := range s.ShadowObjects {
-			aabbs[i] = *obj.WorldAABB
+	if s.shouldRebuildBVH(s.ShadowObjects, s.lastShadowBVH, dirtyAABBs, s.ShadowBVHNodesBytes) {
+		if len(s.ShadowObjects) > 0 {
+			aabbs := make([][2]mgl32.Vec3, len(s.ShadowObjects))
+			for i, obj := range s.ShadowObjects {
+				aabbs[i] = *obj.WorldAABB
+			}
+			builder := &bvh.TLASBuilder{}
+			s.ShadowBVHNodesBytes = builder.Build(aabbs)
+		} else {
+			s.ShadowBVHNodesBytes = make([]byte, 64)
 		}
-		builder := &bvh.TLASBuilder{}
-		s.ShadowBVHNodesBytes = builder.Build(aabbs)
-	} else {
-		s.ShadowBVHNodesBytes = make([]byte, 64)
+		s.shadowBVHRevision++
+		s.lastShadowBVH = append(s.lastShadowBVH[:0], s.ShadowObjects...)
 	}
+}
+
+func (s *Scene) shouldRebuildBVH(current, previous []*VoxelObject, dirtyAABBs map[*VoxelObject]bool, nodes []byte) bool {
+	if len(nodes) == 0 || len(current) != len(previous) {
+		return true
+	}
+	for i, obj := range current {
+		if previous[i] != obj || dirtyAABBs[obj] {
+			return true
+		}
+	}
+	return false
 }
 
 func distancePointToAABB(point mgl32.Vec3, aabb [2]mgl32.Vec3) float32 {

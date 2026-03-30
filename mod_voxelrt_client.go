@@ -93,20 +93,22 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	RtApp             *app_rt.App
-	HideDebugGizmos   bool
-	loadedModels      map[AssetId]*core.VoxelObject
-	instanceMap       map[EntityId]*core.VoxelObject
-	particlePools     map[EntityId]*particlePool
-	caVolumeMap       map[EntityId]*core.VoxelObject
-	objectToEntity    map[*core.VoxelObject]EntityId
-	skyboxLayers      map[EntityId]SkyboxLayerComponent // Stored values to detect changes
-	skyboxSun         SkyboxSunComponent
-	lastSkyboxVer     int64 // To track if any layer changed
-	SunDirection      mgl32.Vec3
-	SunIntensity      float32
-	lastParticleAtlas AssetId
-	lastSpriteAtlas   AssetId
+	RtApp              *app_rt.App
+	HideDebugGizmos    bool
+	loadedModels       map[AssetId]*core.VoxelObject
+	instanceMap        map[EntityId]*core.VoxelObject
+	lastMaterialKeys   map[*core.VoxelObject]materialTableCacheKey
+	materialTableCache map[materialTableCacheKey][]core.Material
+	particlePools      map[EntityId]*particlePool
+	caVolumeMap        map[EntityId]*core.VoxelObject
+	objectToEntity     map[*core.VoxelObject]EntityId
+	skyboxLayers       map[EntityId]SkyboxLayerComponent // Stored values to detect changes
+	skyboxSun          SkyboxSunComponent
+	lastSkyboxVer      int64 // To track if any layer changed
+	SunDirection       mgl32.Vec3
+	SunIntensity       float32
+	lastParticleAtlas  AssetId
+	lastSpriteAtlas    AssetId
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {

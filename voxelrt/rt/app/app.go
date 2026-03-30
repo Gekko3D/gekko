@@ -361,18 +361,9 @@ func (a *App) Init() error {
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
-			// Position (RGBA32Float - Sampled texture)
-			{
-				Binding:    3,
-				Visibility: wgpu.ShaderStageCompute,
-				Texture: wgpu.TextureBindingLayout{
-					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
-					ViewDimension: wgpu.TextureViewDimension2D,
-				},
-			},
 			// Output Color (HDR)
 			{
-				Binding:    4,
+				Binding:    3,
 				Visibility: wgpu.ShaderStageCompute,
 				StorageTexture: wgpu.StorageTextureBindingLayout{
 					Access:        wgpu.StorageTextureAccessWriteOnly,
@@ -382,7 +373,7 @@ func (a *App) Init() error {
 			},
 			// Shadow Maps (RGBA32Float Array)
 			{
-				Binding:    5,
+				Binding:    4,
 				Visibility: wgpu.ShaderStageCompute,
 				Texture: wgpu.TextureBindingLayout{
 					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
@@ -391,7 +382,7 @@ func (a *App) Init() error {
 			},
 			// Skybox Texture (RGBA8Unorm)
 			{
-				Binding:    6,
+				Binding:    5,
 				Visibility: wgpu.ShaderStageCompute,
 				Texture: wgpu.TextureBindingLayout{
 					SampleType:    wgpu.TextureSampleTypeFloat,
@@ -400,7 +391,7 @@ func (a *App) Init() error {
 			},
 			// Skybox Sampler
 			{
-				Binding:    7,
+				Binding:    6,
 				Visibility: wgpu.ShaderStageCompute,
 				Sampler: wgpu.SamplerBindingLayout{
 					Type: wgpu.SamplerBindingTypeFiltering,

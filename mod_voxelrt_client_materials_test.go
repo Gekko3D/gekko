@@ -1,13 +1,16 @@
 package gekko
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gekko3d/gekko/voxelrt/rt/core"
+)
 
 func TestBuildMaterialTable_MagicaVoxelGlassDefaults(t *testing.T) {
-	state := &VoxelRtState{}
+	state := &VoxelRtState{materialTableCache: make(map[materialTableCacheKey][]core.Material)}
 	var palette VoxPalette
 	palette[1] = [4]uint8{180, 220, 255, 255}
-
-	table := state.buildMaterialTable(&VoxelPaletteAsset{
+	asset := &VoxelPaletteAsset{
 		VoxPalette: palette,
 		Materials: []VoxMaterial{
 			{
@@ -17,7 +20,8 @@ func TestBuildMaterialTable_MagicaVoxelGlassDefaults(t *testing.T) {
 				},
 			},
 		},
-	})
+	}
+	table := state.buildMaterialTable(state.materialTableKey(AssetId{}, asset), asset)
 
 	mat := table[1]
 	if mat.Transparency < 0.7 {
@@ -38,11 +42,10 @@ func TestBuildMaterialTable_MagicaVoxelGlassDefaults(t *testing.T) {
 }
 
 func TestBuildMaterialTable_MagicaVoxelMetalRespectsOverrides(t *testing.T) {
-	state := &VoxelRtState{}
+	state := &VoxelRtState{materialTableCache: make(map[materialTableCacheKey][]core.Material)}
 	var palette VoxPalette
 	palette[2] = [4]uint8{190, 150, 80, 255}
-
-	table := state.buildMaterialTable(&VoxelPaletteAsset{
+	asset := &VoxelPaletteAsset{
 		VoxPalette: palette,
 		Materials: []VoxMaterial{
 			{
@@ -53,7 +56,8 @@ func TestBuildMaterialTable_MagicaVoxelMetalRespectsOverrides(t *testing.T) {
 				},
 			},
 		},
-	})
+	}
+	table := state.buildMaterialTable(state.materialTableKey(AssetId{}, asset), asset)
 
 	mat := table[2]
 	if mat.Metalness != 1.0 {
@@ -68,11 +72,10 @@ func TestBuildMaterialTable_MagicaVoxelMetalRespectsOverrides(t *testing.T) {
 }
 
 func TestBuildMaterialTable_MagicaVoxelEmitUsesFlux(t *testing.T) {
-	state := &VoxelRtState{}
+	state := &VoxelRtState{materialTableCache: make(map[materialTableCacheKey][]core.Material)}
 	var palette VoxPalette
 	palette[3] = [4]uint8{120, 255, 120, 255}
-
-	table := state.buildMaterialTable(&VoxelPaletteAsset{
+	asset := &VoxelPaletteAsset{
 		VoxPalette: palette,
 		Materials: []VoxMaterial{
 			{
@@ -84,7 +87,8 @@ func TestBuildMaterialTable_MagicaVoxelEmitUsesFlux(t *testing.T) {
 				},
 			},
 		},
-	})
+	}
+	table := state.buildMaterialTable(state.materialTableKey(AssetId{}, asset), asset)
 
 	mat := table[3]
 	if mat.Emission != 1.0 {
@@ -96,13 +100,13 @@ func TestBuildMaterialTable_MagicaVoxelEmitUsesFlux(t *testing.T) {
 }
 
 func TestBuildMaterialTable_PaletteAlphaGetsVolumetricDefaults(t *testing.T) {
-	state := &VoxelRtState{}
+	state := &VoxelRtState{materialTableCache: make(map[materialTableCacheKey][]core.Material)}
 	var palette VoxPalette
 	palette[4] = [4]uint8{200, 220, 255, 204} // 0.8 alpha -> light glassy sphere
-
-	table := state.buildMaterialTable(&VoxelPaletteAsset{
+	asset := &VoxelPaletteAsset{
 		VoxPalette: palette,
-	})
+	}
+	table := state.buildMaterialTable(state.materialTableKey(AssetId{}, asset), asset)
 
 	mat := table[4]
 	if mat.Transparency < 0.19 || mat.Transparency > 0.21 {

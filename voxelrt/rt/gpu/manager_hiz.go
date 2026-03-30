@@ -19,8 +19,20 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 	for _, v := range m.HiZViews {
 		v.Release()
 	}
+	if m.HiZBindGroup0 != nil {
+		m.HiZBindGroup0.Release()
+		m.HiZBindGroup0 = nil
+	}
+	for _, bg := range m.HiZBindGroups {
+		if bg != nil {
+			bg.Release()
+		}
+	}
 	m.HiZViews = nil
 	m.HiZBindGroups = nil
+	m.hiZPass0Source = nil
+	m.hiZPass0Dest = nil
+	m.hiZPass0Pipe = nil
 
 	// The Hi-Z hierarchy starts at half the G-Buffer resolution.
 	// G-Buffer: 1920x1080
@@ -203,20 +215,30 @@ func (m *GpuBufferManager) DispatchHiZ(encoder *wgpu.CommandEncoder, sourceDepth
 		return
 	}
 
-	bg0, err := m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-		Label:  "HiZ Pass 0",
-		Layout: bgl,
-		Entries: []wgpu.BindGroupEntry{
-			{Binding: 0, TextureView: sourceDepthView},
-			{Binding: 1, TextureView: m.HiZViews[0]},
-		},
-	})
-	if err != nil || bg0 == nil {
-		fmt.Printf("HiZ Error: Failed to create Pass 0 BindGroup: %v\n", err)
-		pass.End()
-		return
+	if m.HiZBindGroup0 == nil || m.hiZPass0Source != sourceDepthView || m.hiZPass0Dest != m.HiZViews[0] || m.hiZPass0Pipe != m.HiZPipeline {
+		if m.HiZBindGroup0 != nil {
+			m.HiZBindGroup0.Release()
+			m.HiZBindGroup0 = nil
+		}
+		bg0, err := m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+			Label:  "HiZ Pass 0",
+			Layout: bgl,
+			Entries: []wgpu.BindGroupEntry{
+				{Binding: 0, TextureView: sourceDepthView},
+				{Binding: 1, TextureView: m.HiZViews[0]},
+			},
+		})
+		if err != nil || bg0 == nil {
+			fmt.Printf("HiZ Error: Failed to create Pass 0 BindGroup: %v\n", err)
+			pass.End()
+			return
+		}
+		m.HiZBindGroup0 = bg0
+		m.hiZPass0Source = sourceDepthView
+		m.hiZPass0Dest = m.HiZViews[0]
+		m.hiZPass0Pipe = m.HiZPipeline
 	}
-	pass.SetBindGroup(0, bg0, nil)
+	pass.SetBindGroup(0, m.HiZBindGroup0, nil)
 	pass.DispatchWorkgroups((hizW+7)/8, (hizH+7)/8, 1)
 
 	// Subsequent passes: Mip K -> Mip K+1

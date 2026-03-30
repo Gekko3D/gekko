@@ -14,69 +14,134 @@ import (
 
 const lightSizeBytes = 496
 
+func appendUint32LE(dst []byte, v uint32) []byte {
+	n := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(dst[n:], v)
+	return dst
+}
+
+func appendFloat32LE(dst []byte, v float32) []byte {
+	return appendUint32LE(dst, math.Float32bits(v))
+}
+
+func appendMat4LE(dst []byte, m [16]float32) []byte {
+	for _, v := range m {
+		dst = appendFloat32LE(dst, v)
+	}
+	return dst
+}
+
+func appendVec3PaddedLE(dst []byte, v [3]float32) []byte {
+	dst = appendFloat32LE(dst, v[0])
+	dst = appendFloat32LE(dst, v[1])
+	dst = appendFloat32LE(dst, v[2])
+	return appendUint32LE(dst, 0)
+}
+
+func appendVec4LE(dst []byte, v [4]float32) []byte {
+	dst = appendFloat32LE(dst, v[0])
+	dst = appendFloat32LE(dst, v[1])
+	dst = appendFloat32LE(dst, v[2])
+	return appendFloat32LE(dst, v[3])
+}
+
+func appendUVec4LE(dst []byte, v [4]uint32) []byte {
+	dst = appendUint32LE(dst, v[0])
+	dst = appendUint32LE(dst, v[1])
+	dst = appendUint32LE(dst, v[2])
+	return appendUint32LE(dst, v[3])
+}
+
+func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAllocation, matAlloc *MaterialGpuAllocation) {
+	if len(dst) < objectParamsSizeBytes || obj == nil || obj.XBrickMap == nil || alloc == nil {
+		return
+	}
+	binary.LittleEndian.PutUint32(dst[0:4], obj.XBrickMap.ID)
+	binary.LittleEndian.PutUint32(dst[4:8], 0)
+	binary.LittleEndian.PutUint32(dst[8:12], 0)
+	if matAlloc != nil {
+		binary.LittleEndian.PutUint32(dst[12:16], matAlloc.MaterialOffset*4)
+	}
+	binary.LittleEndian.PutUint32(dst[16:20], ^uint32(0))
+	binary.LittleEndian.PutUint32(dst[20:24], math.Float32bits(obj.LODThreshold))
+	binary.LittleEndian.PutUint32(dst[24:28], uint32(len(obj.XBrickMap.Sectors)))
+	binary.LittleEndian.PutUint32(dst[32:36], obj.ShadowGroupID)
+	binary.LittleEndian.PutUint32(dst[36:40], math.Float32bits(obj.ShadowSeamWorldEpsilon))
+	if obj.IsTerrainChunk {
+		binary.LittleEndian.PutUint32(dst[40:44], 1)
+	}
+	binary.LittleEndian.PutUint32(dst[44:48], obj.TerrainGroupID)
+	binary.LittleEndian.PutUint32(dst[48:52], uint32(obj.TerrainChunkCoord[0]))
+	binary.LittleEndian.PutUint32(dst[52:56], uint32(obj.TerrainChunkCoord[1]))
+	binary.LittleEndian.PutUint32(dst[56:60], uint32(obj.TerrainChunkCoord[2]))
+	binary.LittleEndian.PutUint32(dst[60:64], uint32(obj.TerrainChunkSize))
+}
+
 func buildInstanceData(objects []*core.VoxelObject) []byte {
-	instData := []byte{}
+	if len(objects) == 0 {
+		return make([]byte, 208)
+	}
+
+	instData := make([]byte, 0, len(objects)*208)
 	for i, obj := range objects {
 		o2w := obj.Transform.ObjectToWorld()
 		w2o := obj.Transform.WorldToObject()
 
-		instData = append(instData, mat4ToBytes(o2w)...)
-		instData = append(instData, mat4ToBytes(w2o)...)
+		instData = appendMat4LE(instData, o2w)
+		instData = appendMat4LE(instData, w2o)
 
 		minB, maxB := [3]float32{}, [3]float32{}
 		if obj.WorldAABB != nil {
 			minB = obj.WorldAABB[0]
 			maxB = obj.WorldAABB[1]
 		}
-		instData = append(instData, vec3ToBytesPadded(minB)...)
-		instData = append(instData, vec3ToBytesPadded(maxB)...)
+		instData = appendVec3PaddedLE(instData, minB)
+		instData = appendVec3PaddedLE(instData, maxB)
 
 		lMin, lMax := obj.XBrickMap.ComputeAABB()
-		instData = append(instData, vec3ToBytesPadded([3]float32{lMin.X(), lMin.Y(), lMin.Z()})...)
-		instData = append(instData, vec3ToBytesPadded([3]float32{lMax.X(), lMax.Y(), lMax.Z()})...)
+		instData = appendVec3PaddedLE(instData, [3]float32{lMin.X(), lMin.Y(), lMin.Z()})
+		instData = appendVec3PaddedLE(instData, [3]float32{lMax.X(), lMax.Y(), lMax.Z()})
 
-		idBuf := make([]byte, 16)
-		binary.LittleEndian.PutUint32(idBuf[0:4], uint32(i))
-		instData = append(instData, idBuf...)
-	}
-
-	if len(instData) == 0 {
-		return make([]byte, 208)
+		instData = appendUint32LE(instData, uint32(i))
+		instData = append(instData, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	}
 	return instData
 }
 
 func buildObjectParamsData(objects []*core.VoxelObject, allocations map[*volume.XBrickMap]*ObjectGpuAllocation, materialAllocations map[*core.VoxelObject]*MaterialGpuAllocation) []byte {
-	objParams := []byte{}
-	for _, obj := range objects {
+	if len(objects) == 0 {
+		return make([]byte, objectParamsSizeBytes)
+	}
+
+	objParams := make([]byte, len(objects)*objectParamsSizeBytes)
+	for i, obj := range objects {
 		geomAlloc := allocations[obj.XBrickMap]
 		matAlloc := materialAllocations[obj]
-		objParams = append(objParams, buildObjectParamsBytes(obj, geomAlloc, matAlloc)...)
-	}
-	if len(objParams) == 0 {
-		return make([]byte, objectParamsSizeBytes)
+		writeObjectParamsData(objParams[i*objectParamsSizeBytes:], obj, geomAlloc, matAlloc)
 	}
 	return objParams
 }
 
 func buildLightsData(lights []core.Light) []byte {
-	lightsData := []byte{}
-	for _, l := range lights {
-		lightsData = append(lightsData, vec4ToBytes(l.Position)...)
-		lightsData = append(lightsData, vec4ToBytes(l.Direction)...)
-		lightsData = append(lightsData, vec4ToBytes(l.Color)...)
-		lightsData = append(lightsData, vec4ToBytes(l.Params)...)
-		lightsData = append(lightsData, uvec4ToBytes(l.ShadowMeta)...)
-		lightsData = append(lightsData, mat4ToBytes(l.ViewProj)...)
-		lightsData = append(lightsData, mat4ToBytes(l.InvViewProj)...)
-		for _, cascade := range l.DirectionalCascades {
-			lightsData = append(lightsData, mat4ToBytes(cascade.ViewProj)...)
-			lightsData = append(lightsData, mat4ToBytes(cascade.InvViewProj)...)
-			lightsData = append(lightsData, vec4ToBytes(cascade.Params)...)
-		}
-	}
-	if len(lightsData) == 0 {
+	if len(lights) == 0 {
 		return make([]byte, lightSizeBytes)
+	}
+
+	lightsData := make([]byte, 0, len(lights)*lightSizeBytes)
+	for _, l := range lights {
+		lightsData = appendVec4LE(lightsData, l.Position)
+		lightsData = appendVec4LE(lightsData, l.Direction)
+		lightsData = appendVec4LE(lightsData, l.Color)
+		lightsData = appendVec4LE(lightsData, l.Params)
+		lightsData = appendUVec4LE(lightsData, l.ShadowMeta)
+		lightsData = appendMat4LE(lightsData, l.ViewProj)
+		lightsData = appendMat4LE(lightsData, l.InvViewProj)
+		for _, cascade := range l.DirectionalCascades {
+			lightsData = appendMat4LE(lightsData, cascade.ViewProj)
+			lightsData = appendMat4LE(lightsData, cascade.InvViewProj)
+			lightsData = appendVec4LE(lightsData, cascade.Params)
+		}
 	}
 	return lightsData
 }
