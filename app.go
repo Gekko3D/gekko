@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
+	"time"
 )
 
 type systemFn any
@@ -22,6 +23,8 @@ type App struct {
 	systemsStateless   map[string][]systemFn
 	resources          map[reflect.Type]any
 	ecs                *Ecs
+	targetFPS          int
+	targetFrameTime    time.Duration
 
 	// Command Buffering
 	cmdMutex            sync.Mutex
@@ -64,6 +67,7 @@ func (app *App) Run() {
 	}
 
 	for {
+		frameStart := time.Now()
 		app.callSystems(app.state, execute)
 
 		if app.stateful {
@@ -71,11 +75,13 @@ func (app *App) Run() {
 				app.stateTransitioning = false
 				app.executeChangeState(app.nextState)
 			}
+		}
 
-			if app.state == app.finalState {
-				app.callSystems(app.state, exit)
-				break
-			}
+		app.sleepForFramePacing(time.Since(frameStart))
+
+		if app.stateful && app.state == app.finalState {
+			app.callSystems(app.state, exit)
+			break
 		}
 	}
 }
@@ -213,4 +219,18 @@ func (app *App) FlushCommands() {
 		app.ecs.addComponents(add.eid, add.components...)
 	}
 	app.pendingCompAdds = app.pendingCompAdds[:0]
+}
+
+func (app *App) sleepForFramePacing(frameElapsed time.Duration) {
+	sleepDuration := computeFramePacingSleep(frameElapsed, app.targetFrameTime)
+	if sleepDuration > 0 {
+		time.Sleep(sleepDuration)
+	}
+}
+
+func computeFramePacingSleep(frameElapsed time.Duration, targetFrameTime time.Duration) time.Duration {
+	if targetFrameTime <= 0 || frameElapsed >= targetFrameTime {
+		return 0
+	}
+	return targetFrameTime - frameElapsed
 }

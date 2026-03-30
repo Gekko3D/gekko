@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,4 +72,13 @@ func TestApp_addResources(t *testing.T) {
 
 	// Check that the resource was added
 	assert.Contains(t, app.resources, reflect.TypeOf(resource2).Elem(), "Resource2 should be in resources map.")
+}
+
+func TestComputeFramePacingSleep(t *testing.T) {
+	targetFrameTime := time.Second / 60
+
+	assert.Equal(t, time.Duration(0), computeFramePacingSleep(5*time.Millisecond, 0))
+	assert.Equal(t, time.Duration(0), computeFramePacingSleep(targetFrameTime, targetFrameTime))
+	assert.Equal(t, time.Duration(0), computeFramePacingSleep(20*time.Millisecond, targetFrameTime))
+	assert.Equal(t, targetFrameTime-5*time.Millisecond, computeFramePacingSleep(5*time.Millisecond, targetFrameTime))
 }

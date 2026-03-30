@@ -1,6 +1,9 @@
 package gekko
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 type MockModule struct {
 	installed bool
@@ -87,5 +90,30 @@ func TestAppBuilding_Build_WithMultipleModules(t *testing.T) {
 	}
 	if !module3.installed {
 		t.Errorf("Expected Install to be called on the module 3, but it was not")
+	}
+}
+
+func TestAppBuilding_UseTargetFPS_EnablesFramePacing(t *testing.T) {
+	app := NewApp().UseTargetFPS(60)
+
+	if app.targetFPS != 60 {
+		t.Fatalf("expected targetFPS to be 60, got %d", app.targetFPS)
+	}
+	expected := time.Second / 60
+	if app.targetFrameTime != expected {
+		t.Fatalf("expected targetFrameTime to be %v, got %v", expected, app.targetFrameTime)
+	}
+}
+
+func TestAppBuilding_UseTargetFPS_DisablesFramePacingForZeroOrNegative(t *testing.T) {
+	for _, fps := range []int{0, -30} {
+		app := NewApp().UseTargetFPS(fps)
+
+		if app.targetFPS != fps {
+			t.Fatalf("expected targetFPS to be %d, got %d", fps, app.targetFPS)
+		}
+		if app.targetFrameTime != 0 {
+			t.Fatalf("expected frame pacing to be disabled for fps=%d, got %v", fps, app.targetFrameTime)
+		}
 	}
 }

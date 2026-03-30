@@ -53,6 +53,7 @@ That flush timing is load-bearing. If a system adds or removes entities or compo
 Optional stateful behavior is enabled through:
 
 - `UseStates(initialState, finalState)`
+- `UseTargetFPS(fps)` for optional main-loop frame pacing
 - `OnEnter(state)`
 - `OnExecute(state)`
 - `OnExit(state)`
@@ -66,6 +67,23 @@ In a stateful app:
 - stateless systems still run every frame
 - stateful systems run only for their configured state and phase
 - `Commands.ChangeState(...)` buffers a state change that is applied after the current execute pass
+
+## Frame Pacing
+
+`App.Run()` is uncapped by default.
+
+Optional pacing can be enabled through:
+
+- `UseTargetFPS(fps)`
+
+Behavior:
+
+- `fps <= 0` disables pacing
+- positive values cap the main loop by sleeping after frame work completes when time remains in the frame budget
+- the cap does not guarantee throughput; if one frame takes longer than budget, the app runs below target
+- pacing affects the main app loop only
+- physics still runs on its own fixed ticker
+- if both vsync and target FPS are active, the slower limiter wins in practice
 
 ## System Registration Rules
 
