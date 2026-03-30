@@ -302,8 +302,9 @@ type GpuBufferManager struct {
 	SectorToInfo map[*volume.Sector]SectorGpuInfo
 	BrickToSlot  map[*volume.Brick]PayloadSlot
 
-	MaterialAlloc SlotAllocator // Allocates blocks of 256 materials (16KB each)
-	Allocations   map[*volume.XBrickMap]*ObjectGpuAllocation
+	MaterialAlloc       SlotAllocator // Allocates blocks of 256 materials (16KB each)
+	Allocations         map[*volume.XBrickMap]*ObjectGpuAllocation
+	MaterialAllocations map[*core.VoxelObject]*MaterialGpuAllocation
 
 	// Smooth streaming state
 	SectorsPerFrame          uint32
@@ -328,10 +329,13 @@ type caVolumeLayout struct {
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
 type ObjectGpuAllocation struct {
-	Sectors          map[[3]int]*volume.Sector     // Track which sector is at which coordinate
-	Bricks           map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
-	MaterialOffset   uint32                        // In elements (64 bytes each)
-	MaterialCapacity uint32                        // In elements
+	Sectors map[[3]int]*volume.Sector     // Track which sector is at which coordinate
+	Bricks  map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
+}
+
+type MaterialGpuAllocation struct {
+	MaterialOffset   uint32 // In elements (64 bytes each)
+	MaterialCapacity uint32 // In elements
 }
 
 type SectorGpuInfo struct {
@@ -376,6 +380,7 @@ func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
 		VoxelPayloadBricks:    pageSize / volume.BrickSize,
 	}
 	m.Allocations = make(map[*volume.XBrickMap]*ObjectGpuAllocation)
+	m.MaterialAllocations = make(map[*core.VoxelObject]*MaterialGpuAllocation)
 	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
 	m.SectorToInfo = make(map[*volume.Sector]SectorGpuInfo)
 	m.BrickToSlot = make(map[*volume.Brick]PayloadSlot)

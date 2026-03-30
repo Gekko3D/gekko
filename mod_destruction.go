@@ -43,14 +43,18 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 		return
 	}
 
-	// 1. Carve voxels
-	state.VoxelSphereEdit(event.Entity, event.Center, event.Radius, 0)
+	// 1. Carve voxels on a private geometry clone.
+	_, _, editableMap, err := EnsureEditableVoxelGeometry(cmd, server, event.Entity)
+	if err != nil || editableMap == nil {
+		return
+	}
+	voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
 
 	// 2. Detect disconnected components
-	components := voxObj.XBrickMap.SplitDisconnectedComponents()
+	components := editableMap.SplitDisconnectedComponents()
 	if len(components) <= 1 {
 		// If the entity is empty now, remove it
-		if state.IsEntityEmpty(event.Entity) {
+		if editableMap.GetVoxelCount() == 0 {
 			cmd.RemoveEntity(event.Entity)
 		}
 		return
@@ -81,12 +85,14 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 		case *VoxelModelComponent:
 			originalVMC = *t
 			originalPalette = t.VoxelPalette
-			originalModel = t.VoxelModel
+			originalVMC.NormalizeGeometryRefs()
+			originalModel = t.GeometryAsset()
 			foundVMC = true
 		case VoxelModelComponent:
 			originalVMC = t
 			originalPalette = t.VoxelPalette
-			originalModel = t.VoxelModel
+			originalVMC.NormalizeGeometryRefs()
+			originalModel = t.GeometryAsset()
 			foundVMC = true
 		case *TransformComponent:
 			originalTransform = *t
@@ -111,13 +117,10 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 
 	// Keep largest in original, inherit original ID for rendering stability
 	newMap := components[largestIdx].Map
-	newMap.ID = voxObj.XBrickMap.ID
+	newMap.ID = editableMap.ID
 
-	// Update the ECS component to match the new state.
-	// CRITICAL: We avoid direct mutation of voxObj.XBrickMap here.
-	// Instead, we update the ECS component's CustomMap and let the
-	// sync system in mod_voxelrt_client_systems.go detect the change.
-	originalVMC.CustomMap = newMap
+	// Replace the entity's override geometry with the largest surviving component.
+	originalVMC.OverrideGeometry = server.RegisterSharedVoxelGeometry(newMap, "")
 	cmd.AddComponents(event.Entity, &originalVMC)
 
 	// Update original entity's mass
@@ -172,11 +175,11 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 				Scale:    originalTransform.Scale,
 			},
 			&VoxelModelComponent{
-				VoxelModel:      originalModel,
-				VoxelPalette:    originalPalette,
-				VoxelResolution: originalVMC.VoxelResolution,
-				CustomMap:       centeredMap,
-				PivotMode:       PivotModeCenter,
+				SharedGeometry:   originalModel,
+				OverrideGeometry: server.RegisterSharedVoxelGeometry(centeredMap, ""),
+				VoxelPalette:     originalPalette,
+				VoxelResolution:  originalVMC.VoxelResolution,
+				PivotMode:        PivotModeCenter,
 			},
 			&RigidBodyComponent{
 				Velocity:        vel,

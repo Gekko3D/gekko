@@ -380,7 +380,8 @@ func TestLoadAndSpawnAuthoredLevelSpawnsTerrainChunksWithMetadata(t *testing.T) 
 
 	app := NewApp()
 	cmd := app.Commands()
-	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{
+	assets := newSpawnTestAssetServer()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, assets, NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{
 		TerrainGroupID: 77,
 	})
 	if err != nil {
@@ -421,8 +422,9 @@ func TestLoadAndSpawnAuthoredLevelSpawnsTerrainChunksWithMetadata(t *testing.T) 
 	if vmc.PivotMode != PivotModeCorner {
 		t.Fatalf("expected terrain pivot mode corner, got %v", vmc.PivotMode)
 	}
-	if vmc.CustomMap == nil || vmc.CustomMap.GetVoxelCount() != 4 {
-		t.Fatalf("expected terrain custom map with 4 voxels, got %+v", vmc.CustomMap)
+	geometryMap, ok := ResolveVoxelGeometryMap(assets, &vmc)
+	if !ok || geometryMap.GetVoxelCount() != 4 {
+		t.Fatalf("expected terrain override geometry with 4 voxels, got %+v", geometryMap)
 	}
 }
 

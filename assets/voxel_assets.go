@@ -1,14 +1,25 @@
 package assets
 
+import (
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"github.com/go-gl/mathgl/mgl32"
+)
+
 type VoxelFileAsset struct {
 	VoxFile *VoxFile
 }
 
-type VoxelModelAsset struct {
-	VoxModel   VoxModel
-	BrickSize  [3]uint32
-	SourcePath string
+type VoxelGeometryAsset struct {
+	VoxModel     VoxModel
+	XBrickMap    *volume.XBrickMap
+	LocalMin     mgl32.Vec3
+	LocalMax     mgl32.Vec3
+	BrickSize    [3]uint32
+	SourcePath   string
+	RuntimeOwned bool
 }
+
+type VoxelModelAsset = VoxelGeometryAsset
 
 type VoxelPaletteAsset struct {
 	VoxPalette   VoxPalette

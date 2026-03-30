@@ -72,9 +72,16 @@ func TestDestructionSystem_Split(t *testing.T) {
 	// 4. Run the system
 	paletteId := AssetId{}
 	server := &AssetServer{
+		voxModels:   make(map[AssetId]VoxelGeometryAsset),
 		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
 	}
 	server.voxPalettes[paletteId] = VoxelPaletteAsset{}
+	geometry := server.RegisterSharedVoxelGeometry(xbm, "")
+	cmd.AddComponents(entity, &VoxelModelComponent{
+		SharedGeometry: geometry,
+		VoxelPalette:   paletteId,
+	})
+	app.FlushCommands()
 
 	destructionSystem(state, queue, cmd, server)
 	app.FlushCommands()
@@ -163,9 +170,16 @@ func TestDestructionSystem_SpawnDebris(t *testing.T) {
 	// Run system
 	paletteId := AssetId{}
 	server := &AssetServer{
+		voxModels:   make(map[AssetId]VoxelGeometryAsset),
 		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
 	}
 	server.voxPalettes[paletteId] = VoxelPaletteAsset{}
+	geometry := server.RegisterSharedVoxelGeometry(xbm, "")
+	cmd.AddComponents(entity, &VoxelModelComponent{
+		SharedGeometry: geometry,
+		VoxelPalette:   paletteId,
+	})
+	app.FlushCommands()
 
 	destructionSystem(state, queue, cmd, server)
 	app.FlushCommands()
@@ -268,7 +282,7 @@ func TestVoxelSphereEdit_Carve(t *testing.T) {
 }
 
 func TestVoxelRtSystem_MapSync(t *testing.T) {
-	// This test verifies the fix for syncing CustomMap changes from ECS to internal state
+	// This test verifies syncing geometry override changes from ECS to internal state.
 	app := NewApp()
 	cmd := app.Commands()
 
@@ -295,16 +309,17 @@ func TestVoxelRtSystem_MapSync(t *testing.T) {
 
 	paletteId := AssetId{} // Using empty ID for simplicity
 	server := &AssetServer{
+		voxModels:   make(map[AssetId]VoxelGeometryAsset),
 		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
 	}
 	server.voxPalettes[paletteId] = VoxelPaletteAsset{}
+	geom1 := server.RegisterSharedVoxelGeometry(map1, "")
 
 	entity := cmd.AddEntity(
 		&TransformComponent{},
 		&VoxelModelComponent{
-			VoxelModel:   AssetId{},
-			VoxelPalette: paletteId,
-			CustomMap:    map1,
+			VoxelPalette:     paletteId,
+			OverrideGeometry: geom1,
 		},
 	)
 	app.FlushCommands()
@@ -316,26 +331,27 @@ func TestVoxelRtSystem_MapSync(t *testing.T) {
 	if obj == nil {
 		t.Fatalf("VoxelObject not found in instanceMap")
 	}
-	if obj.XBrickMap != map1 {
-		t.Fatalf("Internal XBrickMap doesn't match initial CustomMap")
+	if obj.XBrickMap == nil || obj.XBrickMap.GetVoxelCount() != map1.GetVoxelCount() {
+		t.Fatalf("Internal XBrickMap doesn't match initial override geometry")
 	}
 
-	// 2. Change CustomMap in ECS
+	// 2. Change override geometry in ECS
 	map2 := volume.NewXBrickMap()
 	map2.SetVoxel(1, 1, 1, 2)
+	geom2 := server.RegisterSharedVoxelGeometry(map2, "")
 
 	cmd.AddComponents(entity, &VoxelModelComponent{
-		VoxelModel: AssetId{},
-		CustomMap:  map2,
+		VoxelPalette:     paletteId,
+		OverrideGeometry: geom2,
 	})
 	app.FlushCommands()
 
 	// Run system again
-	voxelRtSystem(nil, state, nil, &Time{}, cmd)
+	voxelRtSystem(nil, state, server, &Time{}, cmd)
 
 	// Verify it synced
-	if obj.XBrickMap != map2 {
-		t.Errorf("Internal XBrickMap did not sync to map2 after ECS update")
+	if obj.XBrickMap == nil || obj.XBrickMap.GetVoxelCount() != map2.GetVoxelCount() {
+		t.Errorf("Internal XBrickMap did not sync to the new override geometry")
 	}
 	if !obj.XBrickMap.StructureDirty {
 		t.Errorf("XBrickMap should have StructureDirty set after sync")
@@ -366,10 +382,16 @@ func TestDestruction_TotalAnnihilation(t *testing.T) {
 		}
 	}
 
+	server := &AssetServer{
+		voxModels: make(map[AssetId]VoxelGeometryAsset),
+	}
+	overrideGeometry := server.RegisterSharedVoxelGeometry(xbm, "")
+
 	ent := cmd.AddEntity(
 		&TransformComponent{Scale: mgl32.Vec3{1, 1, 1}},
-		&VoxelModelComponent{CustomMap: xbm},
+		&VoxelModelComponent{OverrideGeometry: overrideGeometry},
 	)
+	app.FlushCommands()
 
 	obj := core.NewVoxelObject()
 	obj.XBrickMap = xbm
@@ -383,7 +405,7 @@ func TestDestruction_TotalAnnihilation(t *testing.T) {
 	}
 
 	// 3. Process destruction
-	destructionSystem(state, queue, cmd, nil)
+	destructionSystem(state, queue, cmd, server)
 
 	// 4. Verify ECS removal
 	removed := false
@@ -476,9 +498,16 @@ func TestDestructionSystem_MomentumInheritance(t *testing.T) {
 
 	// Run system
 	server := &AssetServer{
+		voxModels:   make(map[AssetId]VoxelGeometryAsset),
 		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
 	}
 	server.voxPalettes[AssetId{}] = VoxelPaletteAsset{}
+	geometry := server.RegisterSharedVoxelGeometry(xbm, "")
+	cmd.AddComponents(entity, &VoxelModelComponent{
+		SharedGeometry: geometry,
+		VoxelPalette:   AssetId{},
+	})
+	app.FlushCommands()
 
 	destructionSystem(state, queue, cmd, server)
 	app.FlushCommands()

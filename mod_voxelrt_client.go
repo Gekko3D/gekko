@@ -10,6 +10,21 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
+func voxelSphereEditWithTransform(xbm *volume.XBrickMap, tr *core.Transform, worldCenter mgl32.Vec3, radius float32, val uint8) {
+	if xbm == nil || tr == nil {
+		return
+	}
+	w2o := tr.WorldToObject()
+	voxelCenter := w2o.Mul4x1(worldCenter.Vec4(1.0)).Vec3()
+
+	scale := tr.Scale
+	avgScale := (scale.X() + scale.Y() + scale.Z()) / 3.0
+	if avgScale == 0 {
+		avgScale = 1.0
+	}
+	volume.Sphere(xbm, voxelCenter, radius/avgScale, val)
+}
+
 type RaycastHit struct {
 	Hit    bool
 	T      float32
@@ -226,24 +241,7 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 	if obj == nil || obj.XBrickMap == nil {
 		return
 	}
-
-	// Transform center to local space (yields voxel indices because obj.Transform.Scale
-	// already includes VoxelSize=0.1)
-	w2o := obj.Transform.WorldToObject()
-	voxelCenter := w2o.Mul4x1(worldCenter.Vec4(1.0)).Vec3()
-
-	// Scale radius to voxel indices
-	// w2o already handles object scale, but we still need to divide by VoxelSize
-	// Actually, renderer scale already includes VoxelSize.
-	scale := obj.Transform.Scale
-	avgScale := (scale.X() + scale.Y() + scale.Z()) / 3.0
-	if avgScale == 0 {
-		avgScale = 1.0
-	}
-	// radius/avgScale converts world radius to voxel indices
-	localRadiusIndices := radius / avgScale
-
-	volume.Sphere(obj.XBrickMap, voxelCenter, localRadiusIndices, val)
+	voxelSphereEditWithTransform(obj.XBrickMap, obj.Transform, worldCenter, radius, val)
 }
 
 func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {

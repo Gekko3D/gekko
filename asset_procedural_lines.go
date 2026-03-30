@@ -5,8 +5,6 @@ import (
 )
 
 func (server *AssetServer) CreateLineModel(start, end mgl32.Vec3, thickness float32) AssetId {
-	id := makeAssetId()
-
 	dir := end.Sub(start)
 	length := dir.Len()
 	dir = dir.Normalize()
@@ -81,21 +79,13 @@ func (server *AssetServer) CreateLineModel(start, end mgl32.Vec3, thickness floa
 	sizeY := uint32(maxY - minY + 1)
 	sizeZ := uint32(maxZ - minZ + 1)
 
-	server.mu.Lock()
-	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: sizeX, SizeY: sizeY, SizeZ: sizeZ,
-			Voxels: voxels,
-		},
-		BrickSize: [3]uint32{8, 8, 8},
-	}
-	server.mu.Unlock()
-	return id
+	return server.CreateVoxelGeometry(VoxModel{
+		SizeX: sizeX, SizeY: sizeY, SizeZ: sizeZ,
+		Voxels: voxels,
+	}, 1.0)
 }
 
 func (server *AssetServer) CreateArrowModel(start, end mgl32.Vec3, thickness, headSize float32) AssetId {
-	id := makeAssetId()
-
 	dir := end.Sub(start)
 	length := dir.Len()
 	dir = dir.Normalize()
@@ -194,14 +184,8 @@ func (server *AssetServer) CreateArrowModel(start, end mgl32.Vec3, thickness, he
 	sizeY := uint32(maxY - minY + 1)
 	sizeZ := uint32(maxZ - minZ + 1)
 
-	server.mu.Lock()
-	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: sizeX, SizeY: sizeY, SizeZ: sizeZ,
-			Voxels: voxels,
-		},
-		BrickSize: [3]uint32{8, 8, 8},
-	}
-	server.mu.Unlock()
-	return id
+	return server.CreateVoxelGeometry(VoxModel{
+		SizeX: sizeX, SizeY: sizeY, SizeZ: sizeZ,
+		Voxels: voxels,
+	}, 1.0)
 }

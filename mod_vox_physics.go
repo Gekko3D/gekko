@@ -158,9 +158,8 @@ type VoxelGridCache struct {
 type voxelPhysicsSourceKind uint8
 
 const (
-	voxelPhysicsSourceAsset voxelPhysicsSourceKind = iota
+	voxelPhysicsSourceGeometry voxelPhysicsSourceKind = iota
 	voxelPhysicsSourceRuntime
-	voxelPhysicsSourceCustom
 )
 
 type voxelPhysicsBuildStamp struct {
@@ -170,23 +169,17 @@ type voxelPhysicsBuildStamp struct {
 	MapPtr *volume.XBrickMap
 }
 
-func currentVoxelPhysicsBuildStamp(vmc *VoxelModelComponent, tr *TransformComponent, runtimeMap *volume.XBrickMap) voxelPhysicsBuildStamp {
+func currentVoxelPhysicsBuildStamp(tr *TransformComponent, geometry AssetId, runtimeMap *volume.XBrickMap) voxelPhysicsBuildStamp {
 	stamp := voxelPhysicsBuildStamp{
 		Scale: tr.Scale,
 	}
-
-	switch {
-	case runtimeMap != nil:
+	if runtimeMap != nil {
 		stamp.Source = voxelPhysicsSourceRuntime
 		stamp.MapPtr = runtimeMap
-	case vmc.CustomMap != nil:
-		stamp.Source = voxelPhysicsSourceCustom
-		stamp.MapPtr = vmc.CustomMap
-	default:
-		stamp.Source = voxelPhysicsSourceAsset
-		stamp.Asset = vmc.VoxelModel
+		return stamp
 	}
-
+	stamp.Source = voxelPhysicsSourceGeometry
+	stamp.Asset = geometry
 	return stamp
 }
 
@@ -463,37 +456,33 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 	}
 
 	MakeQuery4[VoxelModelComponent, RigidBodyComponent, TransformComponent, PhysicsModel](cmd).Map(func(eid EntityId, vmc *VoxelModelComponent, rb *RigidBodyComponent, tr *TransformComponent, pm *PhysicsModel) bool {
-		// 1. Try to get runtime XBrickMap
-		var xbm *volume.XBrickMap
+		var runtimeMap *volume.XBrickMap
 		if rtState != nil {
 			if obj := rtState.GetVoxelObject(eid); obj != nil {
-				xbm = obj.XBrickMap
+				runtimeMap = obj.XBrickMap
 			}
+		}
+		geometryID, geometryAsset, hasGeometry := ResolveVoxelGeometry(server, vmc)
+		var xbm *volume.XBrickMap
+		if runtimeMap != nil {
+			xbm = runtimeMap
+		} else if hasGeometry && geometryAsset != nil {
+			xbm = geometryAsset.XBrickMap
 		}
 
 		// 2. Determine if we need to (re)build
 		found := pm != nil
-		stamp := currentVoxelPhysicsBuildStamp(vmc, tr, xbm)
+		stamp := currentVoxelPhysicsBuildStamp(tr, geometryID, runtimeMap)
 		previousStamp, hasStamp := cache.BuildStamps[eid]
 		needsBuild := !found || !hasStamp || previousStamp != stamp
 
 		// Structural dirty check
 		if xbm != nil && (xbm.StructureDirty || len(xbm.DirtyBricks) > 0 || len(xbm.DirtySectors) > 0) {
 			needsBuild = true
-		} else if vmc.CustomMap != nil && (vmc.CustomMap.StructureDirty || len(vmc.CustomMap.DirtyBricks) > 0 || len(vmc.CustomMap.DirtySectors) > 0) {
-			needsBuild = true
 		}
 		if found && pm.Grid == nil {
-			switch {
-			case xbm != nil, vmc.CustomMap != nil:
+			if xbm != nil {
 				needsBuild = true
-			default:
-				server.mu.RLock()
-				_, ok := server.voxModels[vmc.VoxelModel]
-				server.mu.RUnlock()
-				if ok {
-					needsBuild = true
-				}
 			}
 		}
 
@@ -506,7 +495,7 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 		var grid *voxelGridSnapshot
 		voxelScale := scaledVoxelScale(vmc, tr)
 
-		if xbm != nil {
+		if runtimeMap != nil && xbm != nil {
 			vMin, vMax := xbm.ComputeAABB()
 			xbm.ClearDirty()
 
@@ -529,64 +518,31 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 				cachedMin:  xbm.GetAABBMin(),
 				cachedMax:  xbm.GetAABBMax(),
 			}
-		} else if vmc.CustomMap != nil {
-			vMin, vMax := vmc.CustomMap.ComputeAABB()
-			vmc.CustomMap.ClearDirty()
+		} else if hasGeometry && geometryAsset != nil {
+			minW := vec3MulComponents(geometryAsset.LocalMin, voxelScale)
+			maxW := vec3MulComponents(geometryAsset.LocalMax, voxelScale)
+			center = minW.Add(maxW).Mul(0.5)
+			half := maxW.Sub(minW).Mul(0.5)
 
-			if vMin != vMax {
-				minW := vec3MulComponents(vMin, voxelScale)
-				maxW := vec3MulComponents(vMax, voxelScale)
-				center = minW.Add(maxW).Mul(0.5)
-				half := maxW.Sub(minW).Mul(0.5)
-
-				box = &CollisionBox{
-					HalfExtents: half,
-					LocalOffset: mgl32.Vec3{0, 0, 0},
-				}
+			box = &CollisionBox{
+				HalfExtents: half,
+				LocalOffset: mgl32.Vec3{0, 0, 0},
 			}
 
-			grid = &voxelGridSnapshot{
-				xbm:        vmc.CustomMap.Copy(),
-				vSize:      voxelScale.X(),
-				voxelScale: voxelScale,
-				cachedMin:  vmc.CustomMap.GetAABBMin(),
-				cachedMax:  vmc.CustomMap.GetAABBMax(),
-			}
-		} else {
-			// Asset path
-			server.mu.RLock()
-			asset, ok := server.voxModels[vmc.VoxelModel]
-			server.mu.RUnlock()
-
-			if ok {
-				minW := mgl32.Vec3{0, 0, 0}
-				maxW := vec3MulComponents(mgl32.Vec3{float32(asset.VoxModel.SizeX), float32(asset.VoxModel.SizeY), float32(asset.VoxModel.SizeZ)}, voxelScale)
-				center = minW.Add(maxW).Mul(0.5)
-				half := maxW.Sub(minW).Mul(0.5)
-
-				box = &CollisionBox{
-					HalfExtents: half,
-					LocalOffset: mgl32.Vec3{0, 0, 0},
+			assetGrid := cache.AssetGrids[geometryID]
+			if assetGrid == nil || (geometryAsset.XBrickMap != nil && (geometryAsset.XBrickMap.StructureDirty || len(geometryAsset.XBrickMap.DirtyBricks) > 0 || len(geometryAsset.XBrickMap.DirtySectors) > 0)) {
+				gMin, gMax := geometryAsset.LocalMin, geometryAsset.LocalMax
+				if geometryAsset.XBrickMap != nil {
+					geometryAsset.XBrickMap.ClearDirty()
 				}
-
-				// Cache grid for asset to avoid expensive XBrickMap conversion
-				assetGrid := cache.AssetGrids[vmc.VoxelModel]
-				if assetGrid == nil {
-					// Build XBrickMap from asset voxels
-					xbm := volume.NewXBrickMap()
-					for _, v := range asset.VoxModel.Voxels {
-						xbm.SetVoxel(int(v.X), int(v.Y), int(v.Z), v.ColorIndex)
-					}
-					gMin, gMax := xbm.ComputeAABB()
-					assetGrid = &voxelGridAssetCache{
-						xbm:       xbm,
-						cachedMin: gMin,
-						cachedMax: gMax,
-					}
-					cache.AssetGrids[vmc.VoxelModel] = assetGrid
+				assetGrid = &voxelGridAssetCache{
+					xbm:       geometryAsset.XBrickMap,
+					cachedMin: gMin,
+					cachedMax: gMax,
 				}
-				grid = assetGrid.Snapshot(voxelScale)
+				cache.AssetGrids[geometryID] = assetGrid
 			}
+			grid = assetGrid.Snapshot(voxelScale)
 		}
 
 		newPM := PhysicsModel{

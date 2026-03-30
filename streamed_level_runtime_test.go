@@ -474,7 +474,8 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 				placementHookCalls++
 				entity := ctx.SpawnResult.EntitiesByAssetID["ship-asset-part"]
 				vmc, ok := voxelModelComponentForEntity(cmd, entity)
-				if !ok || vmc.CustomMap == nil || vmc.CustomMap.GetVoxelCount() != 1 {
+				geometryMap, mapOK := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+				if !ok || !mapOK || geometryMap.GetVoxelCount() != 1 {
 					t.Fatalf("expected placement hook to observe reconciled voxel override, got %+v", vmc)
 				}
 			},
@@ -505,8 +506,9 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 	}
 	terrainEntity := terrainChunkEntityByCoordForStreamedTest(cmd, [3]int{0, 0, 0})
 	vmc := mustVoxelModelComponentForLevelTest(t, cmd, terrainEntity)
-	if vmc.CustomMap == nil || vmc.CustomMap.GetVoxelCount() != 1 {
-		t.Fatalf("expected terrain override to replace authored terrain, got %+v", vmc.CustomMap)
+	terrainMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+	if !ok || terrainMap.GetVoxelCount() != 1 {
+		t.Fatalf("expected terrain override to replace authored terrain, got %+v", terrainMap)
 	}
 	if terrainHookCalls != 1 {
 		t.Fatalf("expected one terrain hook call, got %d", terrainHookCalls)
@@ -524,8 +526,9 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 	}
 	itemEntity := placementItemEntityByIDForStreamedTest(cmd, "kept-but-moved", "ship-asset-part")
 	itemVMC := mustVoxelModelComponentForLevelTest(t, cmd, itemEntity)
-	if itemVMC.CustomMap == nil || itemVMC.CustomMap.GetVoxelCount() != 1 {
-		t.Fatalf("expected voxel override to apply on initial load, got %+v", itemVMC.CustomMap)
+	itemMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &itemVMC)
+	if !ok || itemMap.GetVoxelCount() != 1 {
+		t.Fatalf("expected voxel override to apply on initial load, got %+v", itemMap)
 	}
 	if placementHookCalls != 1 {
 		t.Fatalf("expected one placement hook call, got %d", placementHookCalls)
@@ -544,8 +547,9 @@ func TestStreamedRuntimeAppliesWorldDeltaReconciliationAndHooks(t *testing.T) {
 
 	reloadedItemEntity := placementItemEntityByIDForStreamedTest(cmd, "kept-but-moved", "ship-asset-part")
 	reloadedVMC := mustVoxelModelComponentForLevelTest(t, cmd, reloadedItemEntity)
-	if reloadedVMC.CustomMap == nil || reloadedVMC.CustomMap.GetVoxelCount() != 1 {
-		t.Fatalf("expected voxel override to reapply after reload, got %+v", reloadedVMC.CustomMap)
+	reloadedMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &reloadedVMC)
+	if !ok || reloadedMap.GetVoxelCount() != 1 {
+		t.Fatalf("expected voxel override to reapply after reload, got %+v", reloadedMap)
 	}
 	if state.ObjectChunk[voxelObjectRuntimeKey("kept-but-moved", "ship-asset-part")] != (ChunkCoord{X: 1, Y: 0, Z: 0}) {
 		t.Fatalf("expected object chunk ownership to track overridden chunk, got %+v", state.ObjectChunk)
@@ -609,8 +613,9 @@ func TestStreamedRuntimeLoadsImportedBaseWorldChunkWithCollision(t *testing.T) {
 		t.Fatalf("expected imported world metadata, got %+v ok=%v", ref, ok)
 	}
 	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
-	if vmc.CustomMap == nil || vmc.CustomMap.GetVoxelCount() != 1 {
-		t.Fatalf("expected imported world custom map with one voxel, got %+v", vmc.CustomMap)
+	importedMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+	if !ok || importedMap.GetVoxelCount() != 1 {
+		t.Fatalf("expected imported world override geometry with one voxel, got %+v", importedMap)
 	}
 	if vmc.ShadowGroupID == 0 {
 		t.Fatal("expected imported world chunk to have a non-zero shadow group")

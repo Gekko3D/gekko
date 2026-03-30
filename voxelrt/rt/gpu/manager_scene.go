@@ -46,11 +46,12 @@ func buildInstanceData(objects []*core.VoxelObject) []byte {
 	return instData
 }
 
-func buildObjectParamsData(objects []*core.VoxelObject, allocations map[*volume.XBrickMap]*ObjectGpuAllocation) []byte {
+func buildObjectParamsData(objects []*core.VoxelObject, allocations map[*volume.XBrickMap]*ObjectGpuAllocation, materialAllocations map[*core.VoxelObject]*MaterialGpuAllocation) []byte {
 	objParams := []byte{}
 	for _, obj := range objects {
-		alloc := allocations[obj.XBrickMap]
-		objParams = append(objParams, buildObjectParamsBytes(obj, alloc)...)
+		geomAlloc := allocations[obj.XBrickMap]
+		matAlloc := materialAllocations[obj]
+		objParams = append(objParams, buildObjectParamsBytes(obj, geomAlloc, matAlloc)...)
 	}
 	if len(objParams) == 0 {
 		return make([]byte, objectParamsSizeBytes)
@@ -179,10 +180,10 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 		recreated = true
 	}
 
-	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations), wgpu.BufferUsageStorage, 0) {
+	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
-	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations), wgpu.BufferUsageStorage, 0) {
+	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 

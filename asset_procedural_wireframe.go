@@ -7,8 +7,6 @@ import (
 )
 
 func (server *AssetServer) CreateWireframeBoxModel(size mgl32.Vec3, thickness float32) AssetId {
-	id := makeAssetId()
-
 	resolution := float32(10.0)
 	sx := int(size.X() * resolution)
 	sy := int(size.Y() * resolution)
@@ -94,21 +92,13 @@ func (server *AssetServer) CreateWireframeBoxModel(size mgl32.Vec3, thickness fl
 		})
 	}
 
-	server.mu.Lock()
-	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: uint32(sx + thickVoxels*2), SizeY: uint32(sy + thickVoxels*2), SizeZ: uint32(sz + thickVoxels*2),
-			Voxels: voxels,
-		},
-		BrickSize: [3]uint32{8, 8, 8},
-	}
-	server.mu.Unlock()
-	return id
+	return server.CreateVoxelGeometry(VoxModel{
+		SizeX: uint32(sx + thickVoxels*2), SizeY: uint32(sy + thickVoxels*2), SizeZ: uint32(sz + thickVoxels*2),
+		Voxels: voxels,
+	}, 1.0)
 }
 
 func (server *AssetServer) CreateWireframeSphereModel(radius, thickness float32) AssetId {
-	id := makeAssetId()
-
 	resolution := float32(10.0)
 	r := int(radius * resolution)
 	thickVoxels := int(thickness * resolution)
@@ -172,20 +162,13 @@ func (server *AssetServer) CreateWireframeSphereModel(radius, thickness float32)
 	}
 
 	size := uint32(r*2 + thickVoxels*2)
-	server.mu.Lock()
-	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: size, SizeY: size, SizeZ: size,
-			Voxels: voxels,
-		},
-		BrickSize: [3]uint32{8, 8, 8},
-	}
-	server.mu.Unlock()
-	return id
+	return server.CreateVoxelGeometry(VoxModel{
+		SizeX: size, SizeY: size, SizeZ: size,
+		Voxels: voxels,
+	}, 1.0)
 }
 
 func (server *AssetServer) CreateCrossModel(size, thickness float32) AssetId {
-	id := makeAssetId()
 	resolution := float32(10.0)
 	s := int(size * resolution)
 	thickVoxels := int(thickness * resolution)
@@ -227,14 +210,8 @@ func (server *AssetServer) CreateCrossModel(size, thickness float32) AssetId {
 		})
 	}
 
-	server.mu.Lock()
-	server.voxModels[id] = VoxelModelAsset{
-		VoxModel: VoxModel{
-			SizeX: uint32(s), SizeY: uint32(s), SizeZ: uint32(s),
-			Voxels: voxels,
-		},
-		BrickSize: [3]uint32{8, 8, 8},
-	}
-	server.mu.Unlock()
-	return id
+	return server.CreateVoxelGeometry(VoxModel{
+		SizeX: uint32(s), SizeY: uint32(s), SizeZ: uint32(s),
+		Voxels: voxels,
+	}, 1.0)
 }

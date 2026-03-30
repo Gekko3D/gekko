@@ -670,8 +670,10 @@ func repoRootForSpawnTest(t *testing.T) string {
 
 func newSpawnTestAssetServer() *AssetServer {
 	return &AssetServer{
-		voxModels:   make(map[AssetId]VoxelModelAsset),
-		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
+		voxModels:      make(map[AssetId]VoxelModelAsset),
+		voxModelKeys:   make(map[string]AssetId),
+		voxPalettes:    make(map[AssetId]VoxelPaletteAsset),
+		voxPaletteKeys: make(map[string]AssetId),
 	}
 }
 
@@ -754,11 +756,72 @@ func mustSpawnedVoxelAssetForTest(t *testing.T, cmd *Commands, assets *AssetServ
 	if !ok {
 		t.Fatalf("expected voxel model component for %s", assetID)
 	}
-	model, ok := assets.GetVoxelModel(modelComp.VoxelModel)
+	model, ok := assets.GetVoxelModel(modelComp.GeometryAsset())
 	if !ok {
 		t.Fatalf("expected voxel model asset for %s", assetID)
 	}
 	return model
+}
+
+func TestSpawnAuthoredAssetReusesGeometryAndPaletteAssetsBySource(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "ship.gkasset")
+	voxPath := filepath.Join(root, "assets", "ship.vox")
+	writeNamedSceneVoxFixture(t, voxPath)
+
+	def := content.NewAssetDef("ship")
+	def.Parts = []content.AssetPartDef{{
+		ID:   "part",
+		Name: "part",
+		Source: content.AssetSourceDef{
+			Kind:       content.AssetSourceKindVoxModel,
+			Path:       "ship.vox",
+			ModelIndex: 0,
+		},
+	}}
+	content.EnsureAssetIDs(def)
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := content.SaveAsset(assetPath, def); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	first, err := SpawnAuthoredAssetWithOptions(cmd, assets, def, TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}, AuthoredAssetSpawnOptions{DocumentPath: assetPath})
+	if err != nil {
+		t.Fatalf("first spawn failed: %v", err)
+	}
+	second, err := SpawnAuthoredAssetWithOptions(cmd, assets, def, TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}, AuthoredAssetSpawnOptions{DocumentPath: assetPath})
+	if err != nil {
+		t.Fatalf("second spawn failed: %v", err)
+	}
+	app.FlushCommands()
+
+	firstComp, ok := voxelModelForSpawnTest(cmd, first.EntitiesByAssetID["part"])
+	if !ok {
+		t.Fatal("expected first voxel component")
+	}
+	secondComp, ok := voxelModelForSpawnTest(cmd, second.EntitiesByAssetID["part"])
+	if !ok {
+		t.Fatal("expected second voxel component")
+	}
+
+	if firstComp.GeometryAsset() != secondComp.GeometryAsset() {
+		t.Fatalf("expected repeated spawns to reuse geometry asset, got %v and %v", firstComp.GeometryAsset(), secondComp.GeometryAsset())
+	}
+	if firstComp.VoxelPalette != secondComp.VoxelPalette {
+		t.Fatalf("expected repeated spawns to reuse palette asset, got %v and %v", firstComp.VoxelPalette, secondComp.VoxelPalette)
+	}
 }
 
 func writeNamedSceneVoxFixture(t *testing.T, path string) {

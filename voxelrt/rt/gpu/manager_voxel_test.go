@@ -21,19 +21,18 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	obj.TerrainChunkCoord = [3]int{-2, 0, 3}
 	obj.TerrainChunkSize = 32
 
-	alloc := &ObjectGpuAllocation{
-		MaterialOffset: 7,
-	}
+	alloc := &ObjectGpuAllocation{}
+	matAlloc := &MaterialGpuAllocation{MaterialOffset: 7}
 
-	buf := buildObjectParamsBytes(obj, alloc)
+	buf := buildObjectParamsBytes(obj, alloc, matAlloc)
 	if len(buf) != objectParamsSizeBytes {
 		t.Fatalf("expected %d bytes, got %d", objectParamsSizeBytes, len(buf))
 	}
 	if got := binary.LittleEndian.Uint32(buf[0:4]); got != obj.XBrickMap.ID {
 		t.Fatalf("expected map ID %d, got %d", obj.XBrickMap.ID, got)
 	}
-	if got := binary.LittleEndian.Uint32(buf[12:16]); got != alloc.MaterialOffset*4 {
-		t.Fatalf("expected material base %d, got %d", alloc.MaterialOffset*4, got)
+	if got := binary.LittleEndian.Uint32(buf[12:16]); got != matAlloc.MaterialOffset*4 {
+		t.Fatalf("expected material base %d, got %d", matAlloc.MaterialOffset*4, got)
 	}
 	if got := math.Float32frombits(binary.LittleEndian.Uint32(buf[20:24])); got != obj.LODThreshold {
 		t.Fatalf("expected LOD threshold %v, got %v", obj.LODThreshold, got)

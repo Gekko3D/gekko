@@ -200,7 +200,7 @@ func spawnAuthoredTerrain(cmd *Commands, assets *AssetServer, loader *RuntimeCon
 			continue
 		}
 
-		entity := spawnAuthoredTerrainChunkEntity(cmd, rootEntity, palette, AuthoredTerrainSpawnDef{
+		entity := spawnAuthoredTerrainChunkEntity(cmd, assets, rootEntity, palette, AuthoredTerrainSpawnDef{
 			LevelID:        def.ID,
 			TerrainID:      manifest.TerrainID,
 			TerrainGroupID: terrainGroupID,
@@ -250,8 +250,12 @@ func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *Run
 	return spawnResult, nil
 }
 
-func spawnAuthoredTerrainChunkEntity(cmd *Commands, parent EntityId, palette AssetId, terrain AuthoredTerrainSpawnDef) EntityId {
+func spawnAuthoredTerrainChunkEntity(cmd *Commands, assets *AssetServer, parent EntityId, palette AssetId, terrain AuthoredTerrainSpawnDef) EntityId {
 	chunkMap := terrainChunkToXBrickMap(terrain.Chunk)
+	overrideGeometry := AssetId{}
+	if assets != nil {
+		overrideGeometry = assets.RegisterSharedVoxelGeometry(chunkMap, "")
+	}
 	return cmd.AddEntity(
 		&TransformComponent{
 			Position: terrainChunkPosition(terrain.Chunk),
@@ -267,7 +271,7 @@ func spawnAuthoredTerrainChunkEntity(cmd *Commands, parent EntityId, palette Ass
 		&VoxelModelComponent{
 			VoxelPalette:      palette,
 			PivotMode:         PivotModeCorner,
-			CustomMap:         chunkMap,
+			OverrideGeometry:  overrideGeometry,
 			IsTerrainChunk:    true,
 			TerrainGroupID:    terrain.TerrainGroupID,
 			TerrainChunkCoord: [3]int{terrain.Chunk.Coord.X, terrain.Chunk.Coord.Y, terrain.Chunk.Coord.Z},

@@ -163,7 +163,7 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part 
 	}
 	if model != (AssetId{}) {
 		comps = append(comps, &VoxelModelComponent{
-			VoxelModel:      model,
+			SharedGeometry:  model,
 			VoxelPalette:    palette,
 			VoxelResolution: part.VoxelResolution,
 		})

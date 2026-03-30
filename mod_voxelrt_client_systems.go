@@ -10,7 +10,6 @@ import (
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
-	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
 func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
@@ -106,39 +105,26 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	// Collect instances from models
 	MakeQuery2[TransformComponent, VoxelModelComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent) bool {
 		currentEntities[entityId] = true
+		vox.NormalizeGeometryRefs()
+
+		geometryID, geometryAsset, ok := ResolveVoxelGeometry(server, vox)
+		if !ok || geometryAsset == nil || geometryAsset.XBrickMap == nil {
+			return true
+		}
+		gekkoPalette := server.voxPalettes[vox.VoxelPalette]
 
 		obj, exists := state.instanceMap[entityId]
 		if !exists {
-			// Create new object for this entity
-			modelTemplate, ok := state.loadedModels[vox.VoxelModel]
-			if !ok {
-				// Load model from Gekko assets
-				gekkoModel := server.voxModels[vox.VoxelModel]
-				gekkoPalette := server.voxPalettes[vox.VoxelPalette]
-
-				xbm := volume.NewXBrickMap()
-				for _, v := range gekkoModel.VoxModel.Voxels {
-					xbm.SetVoxel(int(v.X), int(v.Y), int(v.Z), v.ColorIndex)
-				}
-
+			modelTemplate, hasTemplate := state.loadedModels[geometryID]
+			if !hasTemplate {
 				modelTemplate = core.NewVoxelObject()
-				modelTemplate.XBrickMap = xbm
-				modelTemplate.MaterialTable = state.buildMaterialTable(&gekkoPalette)
-				state.loadedModels[vox.VoxelModel] = modelTemplate
+				modelTemplate.XBrickMap = geometryAsset.XBrickMap
+				state.loadedModels[geometryID] = modelTemplate
 			}
 
 			obj = core.NewVoxelObject()
-
-			if vox.CustomMap != nil {
-				obj.XBrickMap = vox.CustomMap.Copy()
-				gekkoPalette := server.voxPalettes[vox.VoxelPalette]
-				obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
-			} else {
-				obj.XBrickMap = modelTemplate.XBrickMap.Copy()
-				gekkoPalette := server.voxPalettes[vox.VoxelPalette]
-				obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
-			}
-
+			obj.XBrickMap = modelTemplate.XBrickMap
+			obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
 			state.RtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
 			state.objectToEntity[obj] = entityId
@@ -148,12 +134,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.Transform.Position = transform.Position
 		obj.Transform.Rotation = transform.Rotation
 
-		// SYNC MAP if CustomMap changed in ECS
-		if vox.CustomMap != nil && vox.CustomMap != obj.XBrickMap {
-			obj.XBrickMap = vox.CustomMap
+		if geometryAsset.XBrickMap != obj.XBrickMap {
+			obj.XBrickMap = geometryAsset.XBrickMap
 			obj.XBrickMap.StructureDirty = true
 			state.RtApp.Scene.StructureRevision++ // Force hash grid rebuild
 		}
+		obj.MaterialTable = state.buildMaterialTable(&gekkoPalette)
 
 		obj.Transform.Scale = EffectiveVoxelScale(vox, transform)
 
