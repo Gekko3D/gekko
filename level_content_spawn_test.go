@@ -128,6 +128,79 @@ func TestLoadAndSpawnAuthoredLevelCollapsedAssetKeepsPlacementRefWithoutItemRefs
 	}
 }
 
+func TestLoadAndSpawnAuthoredLevelPlacementVolumeOverridesShadowSettings(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "asteroid.gkasset")
+	levelPath := filepath.Join(root, "levels", "shadow_volume.gklevel")
+
+	writeProceduralAssetForLevelTest(t, assetPath, "asteroid-asset")
+
+	castsShadows := false
+	level := content.NewLevelDef("shadow-volume")
+	level.PlacementVolumes = []content.PlacementVolumeDef{{
+		ID:                "volume-a",
+		Kind:              content.PlacementVolumeKindSphere,
+		AssetPath:         filepath.Join("..", "assets", "asteroid.gkasset"),
+		CastsShadows:      &castsShadows,
+		ShadowMaxDistance: 33,
+		MaxShadowCasters:  5,
+		Transform: content.LevelTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Radius:     8,
+		RandomSeed: 7,
+		Rule: content.PlacementVolumeRuleDef{
+			Mode:  content.PlacementVolumeRuleModeCount,
+			Count: 1,
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	rootEntity := result.PlacementRootEntities["volume-a:0"]
+	if rootEntity == 0 {
+		t.Fatal("expected placement root entity")
+	}
+	var voxelEntity EntityId
+	MakeQuery1[VoxelModelComponent](cmd).Map(func(eid EntityId, _ *VoxelModelComponent) bool {
+		parent, ok := parentEntityForTest(cmd, eid)
+		if ok && parent == rootEntity {
+			voxelEntity = eid
+			return false
+		}
+		return true
+	})
+	if voxelEntity == 0 {
+		t.Fatal("expected spawned voxel child for placement volume instance")
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, voxelEntity)
+	if !vmc.DisableShadows {
+		t.Fatal("expected placement volume casts_shadows=false override to disable shadows")
+	}
+	if vmc.ShadowMaxDistance != 33 {
+		t.Fatalf("expected placement volume shadow max distance 33, got %v", vmc.ShadowMaxDistance)
+	}
+	if vmc.ShadowCasterGroupID == 0 {
+		t.Fatal("expected placement volume to assign a shadow caster group")
+	}
+	if vmc.ShadowCasterGroupLimit != 5 {
+		t.Fatalf("expected placement volume max shadow casters 5, got %d", vmc.ShadowCasterGroupLimit)
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

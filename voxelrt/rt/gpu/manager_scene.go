@@ -146,7 +146,7 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 
 	// 3. Light metadata drives shadow-only caster selection.
 	m.UpdateLights(scene, camera, aspect)
-	rebuildShadowCasterScene(scene, collectShadowCasters(scene.Objects, m.shadowDirectionalVolumes, m.shadowSpotVolumes))
+	rebuildShadowCasterScene(scene, collectShadowCasters(scene.ShadowObjects, m.shadowDirectionalVolumes, m.shadowSpotVolumes))
 
 	// Shadow scene acceleration uses a broader set than camera-visible geometry, but only
 	// for objects intersecting active shadow volumes.

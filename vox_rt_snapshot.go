@@ -58,6 +58,10 @@ type VoxelModelComponent struct {
 	VoxelResolution        float32
 	PivotMode              VoxelPivotMode // How to determine the rotation pivot
 	CustomPivot            mgl32.Vec3     // Used if PivotMode == PivotModeCustom
+	DisableShadows         bool
+	ShadowMaxDistance      float32
+	ShadowCasterGroupID    uint64
+	ShadowCasterGroupLimit int
 	ShadowGroupID          uint32
 	ShadowSeamWorldEpsilon float32
 	IsTerrainChunk         bool

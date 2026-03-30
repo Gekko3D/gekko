@@ -204,6 +204,12 @@ func validatePlacementVolume(result *LevelValidationResult, volume PlacementVolu
 	if volume.Rule.Mode == PlacementVolumeRuleModeDensity && volume.Rule.DensityPer1000Volume <= 0 {
 		result.addError("invalid_volume_density", "placement volume density_per_1000_volume must be positive", "", "", volume.ID, "", "", "")
 	}
+	if volume.ShadowMaxDistance < 0 {
+		result.addError("invalid_volume_shadow_max_distance", "placement volume shadow_max_distance must be >= 0", "", "", volume.ID, "", "", "")
+	}
+	if volume.MaxShadowCasters < 0 {
+		result.addError("invalid_volume_max_shadow_casters", "placement volume max_shadow_casters must be >= 0", "", "", volume.ID, "", "", "")
+	}
 
 	hasAssetPath := strings.TrimSpace(volume.AssetPath) != ""
 	hasAssetSetPath := strings.TrimSpace(volume.AssetSetPath) != ""

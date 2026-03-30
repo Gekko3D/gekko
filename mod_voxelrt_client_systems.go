@@ -159,6 +159,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 
 		obj.Transform.Pivot = transform.Pivot
+		obj.CastsShadows = !vox.DisableShadows
+		obj.ShadowMaxDistance = vox.ShadowMaxDistance
+		obj.ShadowCasterGroupID = vox.ShadowCasterGroupID
+		obj.ShadowCasterGroupLimit = vox.ShadowCasterGroupLimit
 		obj.ShadowGroupID = vox.ShadowGroupID
 		obj.ShadowSeamWorldEpsilon = vox.ShadowSeamWorldEpsilon
 		obj.AllowOcclusionCulling = voxelObjectAllowsOcclusion(cmd, entityId, vox)

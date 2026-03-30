@@ -176,6 +176,7 @@ func (a *App) Update() {
 		HiZW:             hizW,
 		HiZH:             hizH,
 		LastViewProj:     a.LastViewProj,
+		CameraPosition:   a.Camera.Position,
 		FastCameraMotion: fastCameraMotion,
 	})
 	a.Profiler.EndScope("Scene Commit")

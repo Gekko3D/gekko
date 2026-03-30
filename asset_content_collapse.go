@@ -40,6 +40,13 @@ type collapseVoxelSample struct {
 	value   uint8
 }
 
+type voxelShadowSettings struct {
+	disable          bool
+	maxDistance      float32
+	casterGroupID    uint64
+	casterGroupLimit int
+}
+
 func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions, result *AuthoredAssetSpawnResult) (bool, error) {
 	enabled := def != nil && def.Runtime != nil && def.Runtime.CollapseVoxelParts
 	switch opts.CollapseVoxelParts {
@@ -60,6 +67,7 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 		return false, nil
 	}
 
+	shadowSettings := effectiveAuthoredVoxelShadowSettings(def, opts)
 	result.RootEntity = cmd.AddEntity(
 		&rootTransform,
 		&LocalTransformComponent{
@@ -83,10 +91,14 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 		},
 		&Parent{Entity: result.RootEntity},
 		&VoxelModelComponent{
-			SharedGeometry:  build.geometry,
-			VoxelPalette:    build.palette,
-			VoxelResolution: build.voxelResolution,
-			PivotMode:       PivotModeCorner,
+			SharedGeometry:         build.geometry,
+			VoxelPalette:           build.palette,
+			VoxelResolution:        build.voxelResolution,
+			PivotMode:              PivotModeCorner,
+			DisableShadows:         shadowSettings.disable,
+			ShadowMaxDistance:      shadowSettings.maxDistance,
+			ShadowCasterGroupID:    shadowSettings.casterGroupID,
+			ShadowCasterGroupLimit: shadowSettings.casterGroupLimit,
 		},
 	)
 	cmd.app.FlushCommands()
@@ -133,14 +145,22 @@ func buildCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef
 
 	combined := volume.NewXBrickMap()
 	result.collapsedPartIDs = make(map[string]struct{}, len(resolvedParts))
+	nonEmptyParts := 0
 	for _, part := range resolvedParts {
 		if absf(part.voxelResolution-voxelResolution) > 1e-5 {
 			return collapsedAuthoredVoxelBuild{}, fmt.Errorf("voxel collapse requires matching voxel_resolution")
 		}
+		result.collapsedPartIDs[part.def.ID] = struct{}{}
+		if voxelGeometryIsEmpty(part.geometry) {
+			continue
+		}
 		if err := bakeResolvedPartIntoComposite(combined, part, voxelResolution); err != nil {
 			return collapsedAuthoredVoxelBuild{}, fmt.Errorf("collapse bake failed for part %s: %w", part.def.ID, err)
 		}
-		result.collapsedPartIDs[part.def.ID] = struct{}{}
+		nonEmptyParts++
+	}
+	if nonEmptyParts == 0 {
+		return collapsedAuthoredVoxelBuild{}, fmt.Errorf("voxel collapse requires at least one non-empty voxel part")
 	}
 	combined.ComputeAABB()
 	combined.ClearDirty()
@@ -169,7 +189,7 @@ func resolveAuthoredCollapseParts(assets *AssetServer, def *content.AssetDef, do
 		default:
 			return nil, fmt.Errorf("voxel collapse does not support source kind %q", part.Source.Kind)
 		}
-		eid, err := spawnAuthoredPart(tempCmd, assets, def.ID, part, documentPath)
+		eid, err := spawnAuthoredPart(tempCmd, assets, def.ID, part, documentPath, voxelShadowSettings{})
 		if err != nil {
 			return nil, err
 		}
@@ -376,6 +396,16 @@ func collapseVoxelSamples(geometry VoxelGeometryAsset) []collapseVoxelSample {
 	return samples
 }
 
+func voxelGeometryIsEmpty(geometry VoxelGeometryAsset) bool {
+	if len(geometry.VoxModel.Voxels) > 0 {
+		return false
+	}
+	if geometry.XBrickMap != nil {
+		return geometry.XBrickMap.GetVoxelCount() == 0
+	}
+	return true
+}
+
 func transformedVoxelBounds(localMin, localMax mgl32.Vec3, world TransformComponent, voxelResolution float32) (mgl32.Vec3, mgl32.Vec3) {
 	corners := [8]mgl32.Vec3{
 		{localMin.X(), localMin.Y(), localMin.Z()},
@@ -437,4 +467,33 @@ func sortedCollapsedPartIDs(ids map[string]struct{}) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func effectiveAuthoredVoxelShadowSettings(def *content.AssetDef, opts AuthoredAssetSpawnOptions) voxelShadowSettings {
+	settings := voxelShadowSettings{}
+	if def != nil && def.Runtime != nil {
+		if def.Runtime.CastsShadows != nil {
+			settings.disable = !*def.Runtime.CastsShadows
+		}
+		if def.Runtime.ShadowMaxDistance > 0 {
+			settings.maxDistance = def.Runtime.ShadowMaxDistance
+		}
+	}
+	if opts.OverrideCastShadows != nil {
+		settings.disable = !*opts.OverrideCastShadows
+	}
+	if opts.OverrideShadowMaxDistance != nil {
+		settings.maxDistance = maxf(0, *opts.OverrideShadowMaxDistance)
+	}
+	if opts.OverrideShadowCasterGroupID != 0 {
+		settings.casterGroupID = opts.OverrideShadowCasterGroupID
+	}
+	if opts.OverrideShadowCasterGroupLimit != nil {
+		if *opts.OverrideShadowCasterGroupLimit > 0 {
+			settings.casterGroupLimit = *opts.OverrideShadowCasterGroupLimit
+		} else {
+			settings.casterGroupLimit = 0
+		}
+	}
+	return settings
 }

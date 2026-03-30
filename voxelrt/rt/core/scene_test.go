@@ -337,6 +337,81 @@ func TestSceneCommitKeepsOffFrustumObjectsAsShadowCasters(t *testing.T) {
 	}
 }
 
+func TestSceneCommitRespectsShadowFlagsAndDistance(t *testing.T) {
+	scene := NewScene()
+
+	disabled := NewVoxelObject()
+	disabled.Transform.Position = mgl32.Vec3{0, 0, -10}
+	disabled.XBrickMap.SetVoxel(0, 0, 0, 1)
+	disabled.CastsShadows = false
+	scene.AddObject(disabled)
+
+	near := NewVoxelObject()
+	near.Transform.Position = mgl32.Vec3{0, 0, -12}
+	near.XBrickMap.SetVoxel(0, 0, 0, 1)
+	near.ShadowMaxDistance = 20
+	scene.AddObject(near)
+
+	far := NewVoxelObject()
+	far.Transform.Position = mgl32.Vec3{0, 0, -60}
+	far.XBrickMap.SetVoxel(0, 0, 0, 1)
+	far.ShadowMaxDistance = 20
+	scene.AddObject(far)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		CameraPosition: mgl32.Vec3{0, 0, 0},
+	})
+
+	if len(scene.ShadowObjects) != 1 {
+		t.Fatalf("expected only one shadow caster after filtering, got %d", len(scene.ShadowObjects))
+	}
+	if scene.ShadowObjects[0] != near {
+		t.Fatal("expected only the near shadow-enabled object to remain a shadow caster")
+	}
+}
+
+func TestSceneCommitCapsShadowCastersPerGroupByNearestDistance(t *testing.T) {
+	scene := NewScene()
+
+	near := NewVoxelObject()
+	near.Transform.Position = mgl32.Vec3{0, 0, -8}
+	near.XBrickMap.SetVoxel(0, 0, 0, 1)
+	near.ShadowCasterGroupID = 77
+	near.ShadowCasterGroupLimit = 2
+	scene.AddObject(near)
+
+	mid := NewVoxelObject()
+	mid.Transform.Position = mgl32.Vec3{0, 0, -16}
+	mid.XBrickMap.SetVoxel(0, 0, 0, 1)
+	mid.ShadowCasterGroupID = 77
+	mid.ShadowCasterGroupLimit = 2
+	scene.AddObject(mid)
+
+	far := NewVoxelObject()
+	far.Transform.Position = mgl32.Vec3{0, 0, -32}
+	far.XBrickMap.SetVoxel(0, 0, 0, 1)
+	far.ShadowCasterGroupID = 77
+	far.ShadowCasterGroupLimit = 2
+	scene.AddObject(far)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		CameraPosition: mgl32.Vec3{0, 0, 0},
+	})
+
+	if len(scene.ShadowObjects) != 2 {
+		t.Fatalf("expected 2 capped shadow casters, got %d", len(scene.ShadowObjects))
+	}
+	if scene.ShadowObjects[0] != near && scene.ShadowObjects[1] != near {
+		t.Fatal("expected nearest object to survive capped shadow selection")
+	}
+	if scene.ShadowObjects[0] != mid && scene.ShadowObjects[1] != mid {
+		t.Fatal("expected second-nearest object to survive capped shadow selection")
+	}
+	if scene.ShadowObjects[0] == far || scene.ShadowObjects[1] == far {
+		t.Fatal("expected farthest object to be dropped by capped shadow selection")
+	}
+}
+
 // Helper function
 func closeEnough(a, b, epsilon float32) bool {
 	diff := a - b

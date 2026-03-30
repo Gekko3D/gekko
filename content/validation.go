@@ -70,6 +70,9 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 	if strings.TrimSpace(def.Name) == "" {
 		result.addError("empty_name", "asset name is required", def.ID, def.Name, "asset")
 	}
+	if def.Runtime != nil && def.Runtime.ShadowMaxDistance < 0 {
+		result.addError("invalid_shadow_max_distance", "runtime.shadow_max_distance must be >= 0", def.ID, def.Name, "asset")
+	}
 
 	seenIDs := map[string]struct{}{}
 	allItemIDs := map[string]string{}

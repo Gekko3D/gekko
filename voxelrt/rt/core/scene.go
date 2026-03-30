@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/bvh"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -34,6 +35,7 @@ type SceneCommitOptions struct {
 	HiZW             uint32
 	HiZH             uint32
 	LastViewProj     mgl32.Mat4
+	CameraPosition   mgl32.Vec3
 	FastCameraMotion bool
 	DepthSlack       float32
 }
@@ -60,6 +62,10 @@ type VoxelObject struct {
 	WorldAABB              *[2]mgl32.Vec3 // Min, Max
 	Tree64LOD              []byte
 	LODThreshold           float32
+	CastsShadows           bool
+	ShadowMaxDistance      float32
+	ShadowCasterGroupID    uint64
+	ShadowCasterGroupLimit int
 	ShadowGroupID          uint32
 	ShadowSeamWorldEpsilon float32
 	AllowOcclusionCulling  bool
@@ -74,6 +80,7 @@ func NewVoxelObject() *VoxelObject {
 		Transform:             NewTransform(),
 		XBrickMap:             volume.NewXBrickMap(),
 		LODThreshold:          50.0,
+		CastsShadows:          true,
 		AllowOcclusionCulling: true,
 	}
 }
@@ -394,11 +401,57 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	// Camera frustum/Hi-Z culling can safely skip rasterized work, but it must not make
 	// off-screen geometry stop casting shadows onto visible receivers.
 	s.ShadowObjects = s.ShadowObjects[:0]
+	type groupedShadowCandidate struct {
+		obj      *VoxelObject
+		distance float32
+	}
+	grouped := make(map[uint64][]groupedShadowCandidate)
+	groupLimits := make(map[uint64]int)
 	for _, obj := range s.Objects {
-		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil {
+		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil || !obj.CastsShadows {
+			continue
+		}
+		distance := distancePointToAABB(opts.CameraPosition, *obj.WorldAABB)
+		if obj.ShadowMaxDistance > 0 && distance > obj.ShadowMaxDistance {
+			continue
+		}
+		if obj.ShadowCasterGroupID != 0 && obj.ShadowCasterGroupLimit > 0 {
+			grouped[obj.ShadowCasterGroupID] = append(grouped[obj.ShadowCasterGroupID], groupedShadowCandidate{
+				obj:      obj,
+				distance: distance,
+			})
+			limit := groupLimits[obj.ShadowCasterGroupID]
+			if limit == 0 || obj.ShadowCasterGroupLimit < limit {
+				groupLimits[obj.ShadowCasterGroupID] = obj.ShadowCasterGroupLimit
+			}
 			continue
 		}
 		s.ShadowObjects = append(s.ShadowObjects, obj)
+	}
+	if len(grouped) > 0 {
+		groupIDs := make([]uint64, 0, len(grouped))
+		for groupID := range grouped {
+			groupIDs = append(groupIDs, groupID)
+		}
+		sort.Slice(groupIDs, func(i, j int) bool {
+			return groupIDs[i] < groupIDs[j]
+		})
+		for _, groupID := range groupIDs {
+			candidates := grouped[groupID]
+			sort.Slice(candidates, func(i, j int) bool {
+				if candidates[i].distance == candidates[j].distance {
+					return candidates[i].obj.WorldAABB[0].Z() < candidates[j].obj.WorldAABB[0].Z()
+				}
+				return candidates[i].distance < candidates[j].distance
+			})
+			limit := groupLimits[groupID]
+			if limit <= 0 || limit > len(candidates) {
+				limit = len(candidates)
+			}
+			for i := 0; i < limit; i++ {
+				s.ShadowObjects = append(s.ShadowObjects, candidates[i].obj)
+			}
+		}
 	}
 
 	if len(s.ShadowObjects) > 0 {
@@ -411,6 +464,15 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	} else {
 		s.ShadowBVHNodesBytes = make([]byte, 64)
 	}
+}
+
+func distancePointToAABB(point mgl32.Vec3, aabb [2]mgl32.Vec3) float32 {
+	clamped := mgl32.Vec3{
+		max(aabb[0].X(), min(point.X(), aabb[1].X())),
+		max(aabb[0].Y(), min(point.Y(), aabb[1].Y())),
+		max(aabb[0].Z(), min(point.Z(), aabb[1].Z())),
+	}
+	return point.Sub(clamped).Len()
 }
 
 // IsOccluded checks if the AABB is fully occluded by the Hi-Z buffer.

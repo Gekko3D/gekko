@@ -58,7 +58,9 @@ type AssetDef struct {
 }
 
 type AssetRuntimeDef struct {
-	CollapseVoxelParts bool `json:"collapse_voxel_parts,omitempty"`
+	CollapseVoxelParts bool    `json:"collapse_voxel_parts,omitempty"`
+	CastsShadows       *bool   `json:"casts_shadows,omitempty"`
+	ShadowMaxDistance  float32 `json:"shadow_max_distance,omitempty"`
 }
 
 type AssetPartDef struct {

@@ -315,6 +315,48 @@ func TestSpawnAuthoredAssetCollapseForceRejectsIneligibleAsset(t *testing.T) {
 	}
 }
 
+func TestSpawnAuthoredAssetAppliesRuntimeShadowSettingsToVoxelParts(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+	castsShadows := false
+
+	def := content.NewAssetDef("shadowed")
+	def.Runtime = &content.AssetRuntimeDef{
+		CastsShadows:      &castsShadows,
+		ShadowMaxDistance: 42,
+	}
+	def.Parts = []content.AssetPartDef{{
+		ID:     "part",
+		Name:   "part",
+		Source: testProceduralPartSource(),
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+
+	result, err := SpawnAuthoredAsset(cmd, assets, def, TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAsset returned error: %v", err)
+	}
+	app.FlushCommands()
+
+	vmc, ok := voxelModelForSpawnTest(cmd, result.EntitiesByAssetID["part"])
+	if !ok {
+		t.Fatal("expected voxel model component")
+	}
+	if !vmc.DisableShadows {
+		t.Fatal("expected runtime casts_shadows=false to disable shadows")
+	}
+	if vmc.ShadowMaxDistance != 42 {
+		t.Fatalf("expected shadow max distance 42, got %v", vmc.ShadowMaxDistance)
+	}
+}
+
 func TestLoadAndSpawnAuthoredAssetMatchesDirectSpawn(t *testing.T) {
 	withTempAssetFile(t, representativeAuthoredAssetForTest(), func(path string, def *content.AssetDef) {
 		rootTransform := TransformComponent{
@@ -1040,6 +1082,58 @@ func TestSpawnAuthoredAssetCollapsedSpawnsReuseCompositeGeometryAndPalette(t *te
 	}
 	if firstComp.VoxelPalette != secondComp.VoxelPalette {
 		t.Fatalf("expected collapsed spawns to reuse palette asset, got %v and %v", firstComp.VoxelPalette, secondComp.VoxelPalette)
+	}
+}
+
+func TestSpawnAuthoredAssetCollapseIgnoresEmptyVoxelParts(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	def := content.NewAssetDef("collapsed-empty")
+	def.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
+	def.Parts = []content.AssetPartDef{
+		{
+			ID:     "solid",
+			Name:   "solid",
+			Source: testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:   "empty",
+			Name: "empty",
+			Source: content.AssetSourceDef{
+				Kind:      content.AssetSourceKindProceduralPrimitive,
+				Primitive: "cube",
+				Params: map[string]float32{
+					"sx": 2.6,
+					"sy": 2.6,
+					"sz": 1.6,
+				},
+			},
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{1, 0, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			ModelScale: 0.55,
+		},
+	}
+
+	result, err := SpawnAuthoredAssetWithOptions(cmd, assets, def, TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}, AuthoredAssetSpawnOptions{CollapseVoxelParts: VoxelPartCollapseForce})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAssetWithOptions returned error: %v", err)
+	}
+	app.FlushCommands()
+
+	if !result.Collapsed {
+		t.Fatal("expected asset to collapse even with an empty voxel part")
 	}
 }
 

@@ -19,8 +19,12 @@ type AuthoredAssetSpawnResult struct {
 }
 
 type AuthoredAssetSpawnOptions struct {
-	DocumentPath       string
-	CollapseVoxelParts VoxelPartCollapseMode
+	DocumentPath                   string
+	CollapseVoxelParts             VoxelPartCollapseMode
+	OverrideCastShadows            *bool
+	OverrideShadowMaxDistance      *float32
+	OverrideShadowCasterGroupID    uint64
+	OverrideShadowCasterGroupLimit *int
 }
 
 func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
@@ -47,6 +51,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	if collapsed, err := trySpawnCollapsedAuthoredAsset(cmd, assets, def, rootTransform, opts, &result); collapsed || err != nil {
 		return result, err
 	}
+	shadowSettings := effectiveAuthoredVoxelShadowSettings(def, opts)
 
 	result.RootEntity = cmd.AddEntity(
 		&rootTransform,
@@ -59,7 +64,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	)
 
 	for _, part := range def.Parts {
-		eid, err := spawnAuthoredPart(cmd, assets, def.ID, part, opts.DocumentPath)
+		eid, err := spawnAuthoredPart(cmd, assets, def.ID, part, opts.DocumentPath, shadowSettings)
 		if err != nil {
 			return result, err
 		}
@@ -155,7 +160,7 @@ func ValidateAssetHierarchy(def *content.AssetDef) error {
 	return nil
 }
 
-func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part content.AssetPartDef, documentPath string) (EntityId, error) {
+func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part content.AssetPartDef, documentPath string, shadowSettings voxelShadowSettings) (EntityId, error) {
 	tr := AssetTransformFromDef(part.Transform)
 	local := AssetLocalTransformFromDef(part.Transform)
 	comps := []any{
@@ -170,9 +175,13 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part 
 	}
 	if model != (AssetId{}) {
 		comps = append(comps, &VoxelModelComponent{
-			SharedGeometry:  model,
-			VoxelPalette:    palette,
-			VoxelResolution: part.VoxelResolution,
+			SharedGeometry:         model,
+			VoxelPalette:           palette,
+			VoxelResolution:        part.VoxelResolution,
+			DisableShadows:         shadowSettings.disable,
+			ShadowMaxDistance:      shadowSettings.maxDistance,
+			ShadowCasterGroupID:    shadowSettings.casterGroupID,
+			ShadowCasterGroupLimit: shadowSettings.casterGroupLimit,
 		})
 	}
 
