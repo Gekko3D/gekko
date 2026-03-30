@@ -534,11 +534,11 @@ func applyLevelEnvironment(cmd *Commands, env *content.LevelEnvironmentDef) {
 		return
 	}
 
-	preset := ""
-	if env != nil {
-		preset = env.Preset
+	// Missing or empty environment means authored content owns the sky and lighting.
+	if env == nil || env.Preset == "" {
+		return
 	}
-	cfg := environmentPreset(preset)
+	cfg := environmentPreset(env.Preset)
 
 	cmd.AddEntity(
 		&LightComponent{

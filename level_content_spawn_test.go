@@ -245,6 +245,49 @@ func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadAndSpawnAuthoredLevelWithoutEnvironmentDoesNotInjectLightingOrSkybox(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	level := content.NewLevelDef("no-environment")
+
+	if _, err := SpawnAuthoredLevel(cmd, nil, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{}); err != nil {
+		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	var lightCount, skyAmbientCount, skySunCount, skyboxLayerCount int
+	MakeQuery1[LightComponent](cmd).Map(func(_ EntityId, _ *LightComponent) bool {
+		lightCount++
+		return true
+	})
+	MakeQuery1[SkyAmbientComponent](cmd).Map(func(_ EntityId, _ *SkyAmbientComponent) bool {
+		skyAmbientCount++
+		return true
+	})
+	MakeQuery1[SkyboxSunComponent](cmd).Map(func(_ EntityId, _ *SkyboxSunComponent) bool {
+		skySunCount++
+		return true
+	})
+	MakeQuery1[SkyboxLayerComponent](cmd).Map(func(_ EntityId, _ *SkyboxLayerComponent) bool {
+		skyboxLayerCount++
+		return true
+	})
+
+	if lightCount != 0 {
+		t.Fatalf("expected no injected lights, got %d", lightCount)
+	}
+	if skyAmbientCount != 0 {
+		t.Fatalf("expected no injected sky ambient, got %d", skyAmbientCount)
+	}
+	if skySunCount != 0 {
+		t.Fatalf("expected no injected sky sun, got %d", skySunCount)
+	}
+	if skyboxLayerCount != 0 {
+		t.Fatalf("expected no injected skybox layers, got %d", skyboxLayerCount)
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelAppliesFullmoonNightEnvironment(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
