@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"reflect"
+	"time"
 )
 
 func NewApp() *App {
@@ -26,6 +27,16 @@ func (app *App) UseStates(initialState State, finalState State) *App {
 
 func (app *App) UseModules(modules ...Module) *App {
 	app.modules = append(app.modules, modules...)
+
+	return app
+}
+
+func (app *App) UseTargetFPS(fps int) *App {
+	app.targetFPS = fps
+	app.targetFrameTime = 0
+	if fps > 0 {
+		app.targetFrameTime = time.Second / time.Duration(fps)
+	}
 
 	return app
 }

@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/bvh"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -34,6 +35,7 @@ type SceneCommitOptions struct {
 	HiZW             uint32
 	HiZH             uint32
 	LastViewProj     mgl32.Mat4
+	CameraPosition   mgl32.Vec3
 	FastCameraMotion bool
 	DepthSlack       float32
 }
@@ -60,6 +62,10 @@ type VoxelObject struct {
 	WorldAABB              *[2]mgl32.Vec3 // Min, Max
 	Tree64LOD              []byte
 	LODThreshold           float32
+	CastsShadows           bool
+	ShadowMaxDistance      float32
+	ShadowCasterGroupID    uint64
+	ShadowCasterGroupLimit int
 	ShadowGroupID          uint32
 	ShadowSeamWorldEpsilon float32
 	AllowOcclusionCulling  bool
@@ -74,6 +80,7 @@ func NewVoxelObject() *VoxelObject {
 		Transform:             NewTransform(),
 		XBrickMap:             volume.NewXBrickMap(),
 		LODThreshold:          50.0,
+		CastsShadows:          true,
 		AllowOcclusionCulling: true,
 	}
 }
@@ -140,6 +147,10 @@ type Scene struct {
 	ShadowObjects       []*VoxelObject
 	BVHNodesBytes       []byte // Linearized BVH nodes
 	ShadowBVHNodesBytes []byte
+	lastVisibleBVH      []*VoxelObject
+	lastShadowBVH       []*VoxelObject
+	visibleBVHRevision  uint64
+	shadowBVHRevision   uint64
 	Lights              []Light
 	Gizmos              []Gizmo
 	AmbientLight        mgl32.Vec3
@@ -225,7 +236,7 @@ func (s *Scene) Raycast(ray Ray, tMax float32) *HitResult {
 
 		// 2. Narrow phase: Object Space Ray March
 		o2w := obj.Transform.ObjectToWorld()
-		w2o := o2w.Inv()
+		w2o := obj.Transform.WorldToObject()
 
 		// Transform ray to object space
 		ro4 := w2o.Mul4x1(ray.Origin.Vec4(1.0))
@@ -299,6 +310,8 @@ func (s *Scene) RemoveObject(obj *VoxelObject) {
 }
 
 func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
+	dirtyAABBs := make(map[*VoxelObject]bool, len(s.Objects))
+
 	// Recompute AABBs
 	for _, obj := range s.Objects {
 		if obj == nil || obj.XBrickMap == nil {
@@ -309,7 +322,9 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 			s.markOcclusionWarmup(obj)
 		}
 		s.lastOcclusionDirty[obj] = isDirtyForOcclusion
-		obj.UpdateWorldAABB()
+		if obj.UpdateWorldAABB() {
+			dirtyAABBs[obj] = true
+		}
 	}
 
 	// Culling: Populate VisibleObjects
@@ -371,46 +386,118 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		}
 	}
 
-	// Build BVH from Visible Objects AABBs
-	// We always rebuild if any objects are visible, as identity/order can change even if count stays the same.
-	if len(s.VisibleObjects) > 0 {
-		aabbs := make([][2]mgl32.Vec3, len(s.VisibleObjects))
-		for i, obj := range s.VisibleObjects {
-			if obj.WorldAABB != nil {
-				aabbs[i] = *obj.WorldAABB
-			} else {
-				aabbs[i] = [2]mgl32.Vec3{{0, 0, 0}, {0, 0, 0}}
+	if s.shouldRebuildBVH(s.VisibleObjects, s.lastVisibleBVH, dirtyAABBs, s.BVHNodesBytes) {
+		if len(s.VisibleObjects) > 0 {
+			aabbs := make([][2]mgl32.Vec3, len(s.VisibleObjects))
+			for i, obj := range s.VisibleObjects {
+				if obj.WorldAABB != nil {
+					aabbs[i] = *obj.WorldAABB
+				} else {
+					aabbs[i] = [2]mgl32.Vec3{{0, 0, 0}, {0, 0, 0}}
+				}
 			}
-		}
 
-		// Use BVH builder
-		builder := &bvh.TLASBuilder{}
-		s.BVHNodesBytes = builder.Build(aabbs)
-	} else {
-		s.BVHNodesBytes = make([]byte, 64) // Empty BVH
+			builder := &bvh.TLASBuilder{}
+			s.BVHNodesBytes = builder.Build(aabbs)
+		} else {
+			s.BVHNodesBytes = make([]byte, 64) // Empty BVH
+		}
+		s.visibleBVHRevision++
+		s.lastVisibleBVH = append(s.lastVisibleBVH[:0], s.VisibleObjects...)
 	}
 
 	// Shadow casting intentionally uses a broader object set than the camera-visible one.
 	// Camera frustum/Hi-Z culling can safely skip rasterized work, but it must not make
 	// off-screen geometry stop casting shadows onto visible receivers.
 	s.ShadowObjects = s.ShadowObjects[:0]
+	type groupedShadowCandidate struct {
+		obj      *VoxelObject
+		distance float32
+	}
+	grouped := make(map[uint64][]groupedShadowCandidate)
+	groupLimits := make(map[uint64]int)
 	for _, obj := range s.Objects {
-		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil {
+		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil || !obj.CastsShadows {
+			continue
+		}
+		distance := distancePointToAABB(opts.CameraPosition, *obj.WorldAABB)
+		if obj.ShadowMaxDistance > 0 && distance > obj.ShadowMaxDistance {
+			continue
+		}
+		if obj.ShadowCasterGroupID != 0 && obj.ShadowCasterGroupLimit > 0 {
+			grouped[obj.ShadowCasterGroupID] = append(grouped[obj.ShadowCasterGroupID], groupedShadowCandidate{
+				obj:      obj,
+				distance: distance,
+			})
+			limit := groupLimits[obj.ShadowCasterGroupID]
+			if limit == 0 || obj.ShadowCasterGroupLimit < limit {
+				groupLimits[obj.ShadowCasterGroupID] = obj.ShadowCasterGroupLimit
+			}
 			continue
 		}
 		s.ShadowObjects = append(s.ShadowObjects, obj)
 	}
-
-	if len(s.ShadowObjects) > 0 {
-		aabbs := make([][2]mgl32.Vec3, len(s.ShadowObjects))
-		for i, obj := range s.ShadowObjects {
-			aabbs[i] = *obj.WorldAABB
+	if len(grouped) > 0 {
+		groupIDs := make([]uint64, 0, len(grouped))
+		for groupID := range grouped {
+			groupIDs = append(groupIDs, groupID)
 		}
-		builder := &bvh.TLASBuilder{}
-		s.ShadowBVHNodesBytes = builder.Build(aabbs)
-	} else {
-		s.ShadowBVHNodesBytes = make([]byte, 64)
+		sort.Slice(groupIDs, func(i, j int) bool {
+			return groupIDs[i] < groupIDs[j]
+		})
+		for _, groupID := range groupIDs {
+			candidates := grouped[groupID]
+			sort.Slice(candidates, func(i, j int) bool {
+				if candidates[i].distance == candidates[j].distance {
+					return candidates[i].obj.WorldAABB[0].Z() < candidates[j].obj.WorldAABB[0].Z()
+				}
+				return candidates[i].distance < candidates[j].distance
+			})
+			limit := groupLimits[groupID]
+			if limit <= 0 || limit > len(candidates) {
+				limit = len(candidates)
+			}
+			for i := 0; i < limit; i++ {
+				s.ShadowObjects = append(s.ShadowObjects, candidates[i].obj)
+			}
+		}
 	}
+
+	if s.shouldRebuildBVH(s.ShadowObjects, s.lastShadowBVH, dirtyAABBs, s.ShadowBVHNodesBytes) {
+		if len(s.ShadowObjects) > 0 {
+			aabbs := make([][2]mgl32.Vec3, len(s.ShadowObjects))
+			for i, obj := range s.ShadowObjects {
+				aabbs[i] = *obj.WorldAABB
+			}
+			builder := &bvh.TLASBuilder{}
+			s.ShadowBVHNodesBytes = builder.Build(aabbs)
+		} else {
+			s.ShadowBVHNodesBytes = make([]byte, 64)
+		}
+		s.shadowBVHRevision++
+		s.lastShadowBVH = append(s.lastShadowBVH[:0], s.ShadowObjects...)
+	}
+}
+
+func (s *Scene) shouldRebuildBVH(current, previous []*VoxelObject, dirtyAABBs map[*VoxelObject]bool, nodes []byte) bool {
+	if len(nodes) == 0 || len(current) != len(previous) {
+		return true
+	}
+	for i, obj := range current {
+		if previous[i] != obj || dirtyAABBs[obj] {
+			return true
+		}
+	}
+	return false
+}
+
+func distancePointToAABB(point mgl32.Vec3, aabb [2]mgl32.Vec3) float32 {
+	clamped := mgl32.Vec3{
+		max(aabb[0].X(), min(point.X(), aabb[1].X())),
+		max(aabb[0].Y(), min(point.Y(), aabb[1].Y())),
+		max(aabb[0].Z(), min(point.Z(), aabb[1].Z())),
+	}
+	return point.Sub(clamped).Len()
 }
 
 // IsOccluded checks if the AABB is fully occluded by the Hi-Z buffer.

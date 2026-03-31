@@ -29,10 +29,14 @@ type AuthoredLevelSpawnResult struct {
 }
 
 type AuthoredPlacementSpawnDef struct {
-	PlacementID string
-	VolumeID    string
-	AssetPath   string
-	Transform   content.LevelTransformDef
+	PlacementID                    string
+	VolumeID                       string
+	AssetPath                      string
+	Transform                      content.LevelTransformDef
+	OverrideCastShadows            *bool
+	OverrideShadowMaxDistance      *float32
+	OverrideShadowCasterGroupID    uint64
+	OverrideShadowCasterGroupLimit *int
 }
 
 type AuthoredTerrainSpawnDef struct {
@@ -122,10 +126,14 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 			placementID := fmt.Sprintf("%s:%d", volumeDef.ID, index)
 			assetPath := authoredPathForLevel(instance.AssetPath, opts.LevelPath)
 			placementResult, err := spawnAuthoredLevelPlacement(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, AuthoredPlacementSpawnDef{
-				PlacementID: placementID,
-				VolumeID:    volumeDef.ID,
-				AssetPath:   assetPath,
-				Transform:   instance.Transform,
+				PlacementID:                    placementID,
+				VolumeID:                       volumeDef.ID,
+				AssetPath:                      assetPath,
+				Transform:                      instance.Transform,
+				OverrideCastShadows:            volumeDef.CastsShadows,
+				OverrideShadowMaxDistance:      optionalPositiveFloat32Pointer(volumeDef.ShadowMaxDistance),
+				OverrideShadowCasterGroupID:    stablePlacementVolumeShadowGroupID(def.ID, volumeDef.ID),
+				OverrideShadowCasterGroupLimit: optionalPositiveIntPointer(volumeDef.MaxShadowCasters),
 			})
 			if err != nil {
 				return result, err
@@ -200,7 +208,7 @@ func spawnAuthoredTerrain(cmd *Commands, assets *AssetServer, loader *RuntimeCon
 			continue
 		}
 
-		entity := spawnAuthoredTerrainChunkEntity(cmd, rootEntity, palette, AuthoredTerrainSpawnDef{
+		entity := spawnAuthoredTerrainChunkEntity(cmd, assets, rootEntity, palette, AuthoredTerrainSpawnDef{
 			LevelID:        def.ID,
 			TerrainID:      manifest.TerrainID,
 			TerrainGroupID: terrainGroupID,
@@ -222,7 +230,11 @@ func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *Run
 		return AuthoredAssetSpawnResult{}, fmt.Errorf("load asset %s: %w", placement.AssetPath, err)
 	}
 	spawnResult, err := SpawnAuthoredAssetWithOptions(cmd, assets, assetDef, levelTransformToComponent(placement.Transform), AuthoredAssetSpawnOptions{
-		DocumentPath: resolvedAssetPath,
+		DocumentPath:                   resolvedAssetPath,
+		OverrideCastShadows:            placement.OverrideCastShadows,
+		OverrideShadowMaxDistance:      placement.OverrideShadowMaxDistance,
+		OverrideShadowCasterGroupID:    placement.OverrideShadowCasterGroupID,
+		OverrideShadowCasterGroupLimit: placement.OverrideShadowCasterGroupLimit,
 	})
 	if err != nil {
 		return AuthoredAssetSpawnResult{}, fmt.Errorf("spawn asset %s for placement %s: %w", placement.AssetPath, placement.PlacementID, err)
@@ -250,8 +262,28 @@ func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *Run
 	return spawnResult, nil
 }
 
-func spawnAuthoredTerrainChunkEntity(cmd *Commands, parent EntityId, palette AssetId, terrain AuthoredTerrainSpawnDef) EntityId {
+func optionalPositiveFloat32Pointer(value float32) *float32 {
+	if value <= 0 {
+		return nil
+	}
+	out := value
+	return &out
+}
+
+func optionalPositiveIntPointer(value int) *int {
+	if value <= 0 {
+		return nil
+	}
+	out := value
+	return &out
+}
+
+func spawnAuthoredTerrainChunkEntity(cmd *Commands, assets *AssetServer, parent EntityId, palette AssetId, terrain AuthoredTerrainSpawnDef) EntityId {
 	chunkMap := terrainChunkToXBrickMap(terrain.Chunk)
+	overrideGeometry := AssetId{}
+	if assets != nil {
+		overrideGeometry = assets.RegisterSharedVoxelGeometry(chunkMap, "")
+	}
 	return cmd.AddEntity(
 		&TransformComponent{
 			Position: terrainChunkPosition(terrain.Chunk),
@@ -267,7 +299,7 @@ func spawnAuthoredTerrainChunkEntity(cmd *Commands, parent EntityId, palette Ass
 		&VoxelModelComponent{
 			VoxelPalette:      palette,
 			PivotMode:         PivotModeCorner,
-			CustomMap:         chunkMap,
+			OverrideGeometry:  overrideGeometry,
 			IsTerrainChunk:    true,
 			TerrainGroupID:    terrain.TerrainGroupID,
 			TerrainChunkCoord: [3]int{terrain.Chunk.Coord.X, terrain.Chunk.Coord.Y, terrain.Chunk.Coord.Z},
@@ -502,11 +534,11 @@ func applyLevelEnvironment(cmd *Commands, env *content.LevelEnvironmentDef) {
 		return
 	}
 
-	preset := ""
-	if env != nil {
-		preset = env.Preset
+	// Missing or empty environment means authored content owns the sky and lighting.
+	if env == nil || env.Preset == "" {
+		return
 	}
-	cfg := environmentPreset(preset)
+	cfg := environmentPreset(env.Preset)
 
 	cmd.AddEntity(
 		&LightComponent{
@@ -711,6 +743,18 @@ func stableTerrainGroupID(levelID string, terrainID string) uint32 {
 	_, _ = hasher.Write([]byte{0})
 	_, _ = hasher.Write([]byte(terrainID))
 	value := hasher.Sum32()
+	if value == 0 {
+		return 1
+	}
+	return value
+}
+
+func stablePlacementVolumeShadowGroupID(levelID string, volumeID string) uint64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(levelID))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(volumeID))
+	value := hasher.Sum64()
 	if value == 0 {
 		return 1
 	}

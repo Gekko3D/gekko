@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -11,9 +12,40 @@ import (
 	"github.com/cogentcore/webgpu/wgpu"
 )
 
+const materialBlockCapacity = 256
+
+func materialTableIdentity(table []core.Material) (uintptr, int) {
+	if len(table) == 0 {
+		return 0, 0
+	}
+	return uintptr(unsafe.Pointer(&table[0])), len(table)
+}
+
+func buildMaterialData(table []core.Material) []byte {
+	if len(table) == 0 {
+		return make([]byte, materialBlockCapacity*64)
+	}
+	if len(table) > materialBlockCapacity {
+		table = table[:materialBlockCapacity]
+	}
+
+	materials := make([]byte, 0, len(table)*64)
+	for _, mat := range table {
+		materials = append(materials, rgbaToVec4(mat.BaseColor)...)
+		materials = append(materials, rgbaToVec4(mat.Emissive)...)
+		materials = append(materials, float32ToBytes(mat.Roughness)...)
+		materials = append(materials, float32ToBytes(mat.Metalness)...)
+		materials = append(materials, float32ToBytes(mat.IOR)...)
+		materials = append(materials, float32ToBytes(mat.Transparency)...)
+		materials = append(materials, vec4ToBytes([4]float32{mat.Emission, mat.Transmission, mat.Density, mat.Refraction})...)
+	}
+	return materials
+}
+
 func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	recreated := false
 	uploadedAny := false
+	materialBufRecreated := false
 	m.VoxelSectorsUploaded = 0
 	m.VoxelBricksUploaded = 0
 	m.VoxelDirtySectorsPending = 0
@@ -21,7 +53,12 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 
 	// Cleanup orphan allocations
 	activeMaps := make(map[*volume.XBrickMap]bool)
+	activeObjects := make(map[*core.VoxelObject]bool)
 	for _, obj := range scene.Objects {
+		if obj == nil {
+			continue
+		}
+		activeObjects[obj] = true
 		activeMaps[obj.XBrickMap] = true
 	}
 	for xbm, alloc := range m.Allocations {
@@ -43,9 +80,15 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					}
 				}
 			}
-			// Free material block
-			m.MaterialAlloc.FreeSlot(alloc.MaterialOffset / 256)
 			delete(m.Allocations, xbm)
+		}
+	}
+	for obj, alloc := range m.MaterialAllocations {
+		if !activeObjects[obj] {
+			if alloc != nil && alloc.MaterialCapacity > 0 {
+				m.MaterialAlloc.FreeSlot(alloc.MaterialOffset / 256)
+			}
+			delete(m.MaterialAllocations, obj)
 		}
 	}
 
@@ -100,8 +143,14 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	if m.ensureVoxelPayloadPages() {
 		recreated = true
 	}
-	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialAlloc.Tail*256*64)) {
+	requiredMaterialBlocks := m.MaterialAlloc.Tail
+	if activeCount := uint32(len(activeObjects)); activeCount > requiredMaterialBlocks {
+		requiredMaterialBlocks = activeCount
+	}
+	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(maxMaterialSlots(requiredMaterialBlocks, 1)*materialBlockCapacity*64)) {
 		recreated = true
+		materialBufRecreated = true
+		m.MaterialBufferGeneration++
 	}
 	if m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 64) {
 		recreated = true
@@ -118,42 +167,41 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			m.Allocations[xbm] = alloc
 		}
 
-		// Update Materials
-		materials := []byte{}
-		for _, mat := range obj.MaterialTable {
-			materials = append(materials, rgbaToVec4(mat.BaseColor)...)
-			materials = append(materials, rgbaToVec4(mat.Emissive)...)
-			materials = append(materials, float32ToBytes(mat.Roughness)...)
-			materials = append(materials, float32ToBytes(mat.Metalness)...)
-			materials = append(materials, float32ToBytes(mat.IOR)...)
-			materials = append(materials, float32ToBytes(mat.Transparency)...)
-			materials = append(materials, vec4ToBytes([4]float32{mat.Emission, mat.Transmission, mat.Density, mat.Refraction})...)
+		// Update per-object materials independently from shared geometry.
+		matAlloc, hasMatAlloc := m.MaterialAllocations[obj]
+		if !hasMatAlloc {
+			matAlloc = &MaterialGpuAllocation{}
+			m.MaterialAllocations[obj] = matAlloc
 		}
-		if len(materials) == 0 {
-			materials = make([]byte, 256*64)
+		tablePtr, tableLen := materialTableIdentity(obj.MaterialTable)
+		materialCount := uint32(tableLen)
+		if materialCount == 0 {
+			materialCount = materialBlockCapacity
 		}
-		mCount := uint32(len(materials) / 64)
-		if !exists || mCount > alloc.MaterialCapacity {
-			if exists && alloc.MaterialCapacity > 0 {
-				m.MaterialAlloc.FreeSlot(alloc.MaterialOffset / 256)
+		if !hasMatAlloc || materialCount > matAlloc.MaterialCapacity {
+			if hasMatAlloc && matAlloc.MaterialCapacity > 0 {
+				m.MaterialAlloc.FreeSlot(matAlloc.MaterialOffset / 256)
 			}
 			pSlot := m.MaterialAlloc.Alloc()
-			alloc.MaterialOffset = pSlot * 256
-			alloc.MaterialCapacity = 256 // Fixed size blocks for simplicity
-			if mCount > 256 {
+			matAlloc.MaterialOffset = pSlot * materialBlockCapacity
+			matAlloc.MaterialCapacity = materialBlockCapacity
+			if materialCount > materialBlockCapacity {
 				// Special case: if object needs more than 256 materials, we'd need a multi-block allocator.
 				// For now, we cap at 256 as it's the standard for this engine.
-				materials = materials[:256*64]
-				fmt.Printf("WARNING: Object has %d materials, capping to 256\n", mCount)
+				fmt.Printf("WARNING: Object has %d materials, capping to 256\n", materialCount)
 			}
-
-			if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(m.MaterialAlloc.Tail*256*64)) {
-				recreated = true
-			}
-			m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(alloc.MaterialOffset*64), materials)
-		} else {
-			// Just upload if modified
-			m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(alloc.MaterialOffset*64), materials)
+		}
+		needsMaterialUpload := materialBufRecreated ||
+			!hasMatAlloc ||
+			matAlloc.BufferGeneration != m.MaterialBufferGeneration ||
+			matAlloc.MaterialTablePtr != tablePtr ||
+			matAlloc.MaterialTableLen != tableLen
+		if needsMaterialUpload {
+			materials := buildMaterialData(obj.MaterialTable)
+			m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(matAlloc.MaterialOffset*64), materials)
+			matAlloc.MaterialTablePtr = tablePtr
+			matAlloc.MaterialTableLen = tableLen
+			matAlloc.BufferGeneration = m.MaterialBufferGeneration
 		}
 
 		if xbm.StructureDirty || !exists {
@@ -323,7 +371,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 
 const objectParamsSizeBytes = 64
 
-func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation) []byte {
+func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, matAlloc *MaterialGpuAllocation) []byte {
 	pBuf := make([]byte, objectParamsSizeBytes)
 	if obj == nil || obj.XBrickMap == nil || alloc == nil {
 		return pBuf
@@ -332,7 +380,9 @@ func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation) [
 	binary.LittleEndian.PutUint32(pBuf[0:4], obj.XBrickMap.ID)
 	binary.LittleEndian.PutUint32(pBuf[4:8], 0) // brick_table_base - now internal to sector
 	binary.LittleEndian.PutUint32(pBuf[8:12], 0)
-	binary.LittleEndian.PutUint32(pBuf[12:16], alloc.MaterialOffset*4)
+	if matAlloc != nil {
+		binary.LittleEndian.PutUint32(pBuf[12:16], matAlloc.MaterialOffset*4)
+	}
 	binary.LittleEndian.PutUint32(pBuf[16:20], ^uint32(0))
 	binary.LittleEndian.PutUint32(pBuf[20:24], math.Float32bits(obj.LODThreshold))
 	binary.LittleEndian.PutUint32(pBuf[24:28], uint32(len(obj.XBrickMap.Sectors)))
@@ -347,6 +397,13 @@ func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation) [
 	binary.LittleEndian.PutUint32(pBuf[56:60], uint32(obj.TerrainChunkCoord[2]))
 	binary.LittleEndian.PutUint32(pBuf[60:64], uint32(obj.TerrainChunkSize))
 	return pBuf
+}
+
+func maxMaterialSlots(a, b uint32) uint32 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (m *GpuBufferManager) releaseBrickSlot(brick *volume.Brick) {

@@ -50,10 +50,17 @@ type AssetDef struct {
 	SchemaVersion int               `json:"schema_version"`
 	Name          string            `json:"name"`
 	Tags          []string          `json:"tags,omitempty"`
+	Runtime       *AssetRuntimeDef  `json:"runtime,omitempty"`
 	Parts         []AssetPartDef    `json:"parts,omitempty"`
 	Lights        []AssetLightDef   `json:"lights,omitempty"`
 	Emitters      []AssetEmitterDef `json:"emitters,omitempty"`
 	Markers       []AssetMarkerDef  `json:"markers,omitempty"`
+}
+
+type AssetRuntimeDef struct {
+	CollapseVoxelParts bool    `json:"collapse_voxel_parts,omitempty"`
+	CastsShadows       *bool   `json:"casts_shadows,omitempty"`
+	ShadowMaxDistance  float32 `json:"shadow_max_distance,omitempty"`
 }
 
 type AssetPartDef struct {

@@ -27,14 +27,13 @@ func (m *GpuBufferManager) UpdateSprites(data []byte, count uint32) bool {
 
 // SyncSpriteBatches refreshes per-atlas bind groups for the current sprite list.
 func (m *GpuBufferManager) SyncSpriteBatches(pipeline *wgpu.RenderPipeline, batches []SpriteBatchDesc) {
-	for i := range m.SpriteBatches {
-		if m.SpriteBatches[i].BindGroup0 != nil {
-			m.SpriteBatches[i].BindGroup0.Release()
-		}
-	}
-	m.SpriteBatches = m.SpriteBatches[:0]
-
 	if pipeline == nil || m.SpriteCount == 0 || len(batches) == 0 {
+		for i := range m.SpriteBatches {
+			if m.SpriteBatches[i].BindGroup0 != nil {
+				m.SpriteBatches[i].BindGroup0.Release()
+			}
+		}
+		m.SpriteBatches = m.SpriteBatches[:0]
 		return
 	}
 
@@ -44,8 +43,29 @@ func (m *GpuBufferManager) SyncSpriteBatches(pipeline *wgpu.RenderPipeline, batc
 	m.ensureSpriteAtlasSampler()
 	m.ensureSpritesDepthBindGroup(pipeline)
 
-	for _, batch := range batches {
+	oldBatches := m.SpriteBatches
+	newBatches := make([]SpriteRenderBatch, 0, len(batches))
+	for i, batch := range batches {
 		atlasView := m.spriteAtlasView(batch.AtlasKey)
+		var existing SpriteRenderBatch
+		if i < len(oldBatches) {
+			existing = oldBatches[i]
+		}
+		if existing.BindGroup0 != nil &&
+			existing.AtlasKey == batch.AtlasKey &&
+			existing.FirstInstance == batch.FirstInstance &&
+			existing.InstanceCount == batch.InstanceCount &&
+			existing.AtlasView == atlasView &&
+			existing.SpriteBuf == m.SpriteBuf &&
+			existing.CameraBuf == m.CameraBuf &&
+			existing.Sampler == m.SpriteAtlasSampler &&
+			existing.Pipeline == pipeline {
+			newBatches = append(newBatches, existing)
+			continue
+		}
+		if existing.BindGroup0 != nil {
+			existing.BindGroup0.Release()
+		}
 		bindGroup0, err := m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 			Label:  "Sprites BindGroup 0",
 			Layout: pipeline.GetBindGroupLayout(0),
@@ -59,16 +79,32 @@ func (m *GpuBufferManager) SyncSpriteBatches(pipeline *wgpu.RenderPipeline, batc
 		if err != nil {
 			panic(fmt.Errorf("failed to create sprites bind group 0: %v", err))
 		}
-		m.SpriteBatches = append(m.SpriteBatches, SpriteRenderBatch{
+		newBatches = append(newBatches, SpriteRenderBatch{
 			FirstInstance: batch.FirstInstance,
 			InstanceCount: batch.InstanceCount,
+			AtlasKey:      batch.AtlasKey,
+			AtlasView:     atlasView,
+			SpriteBuf:     m.SpriteBuf,
+			CameraBuf:     m.CameraBuf,
+			Sampler:       m.SpriteAtlasSampler,
+			Pipeline:      pipeline,
 			BindGroup0:    bindGroup0,
 		})
 	}
+
+	for i := len(batches); i < len(oldBatches); i++ {
+		if oldBatches[i].BindGroup0 != nil {
+			oldBatches[i].BindGroup0.Release()
+		}
+	}
+	m.SpriteBatches = newBatches
 }
 
 func (m *GpuBufferManager) ensureSpritesDepthBindGroup(pipeline *wgpu.RenderPipeline) {
 	if pipeline == nil {
+		return
+	}
+	if m.SpritesBindGroup1 != nil && m.spritesBG1Pipeline == pipeline && m.spritesBG1Depth == m.DepthView {
 		return
 	}
 	if m.SpritesBindGroup1 != nil {
@@ -87,6 +123,8 @@ func (m *GpuBufferManager) ensureSpritesDepthBindGroup(pipeline *wgpu.RenderPipe
 	if err != nil {
 		panic(fmt.Errorf("failed to create sprites bind group 1: %v", err))
 	}
+	m.spritesBG1Pipeline = pipeline
+	m.spritesBG1Depth = m.DepthView
 }
 
 func (m *GpuBufferManager) CreateDefaultSpriteAtlas() {

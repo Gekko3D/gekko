@@ -19,6 +19,10 @@ type AuthoredAssetRefComponent struct {
 	Kind    AuthoredItemKind
 }
 
+type CollapsedAuthoredVoxelPartsComponent struct {
+	PartIDs []string
+}
+
 type AuthoredMarkerComponent struct {
 	Kind string
 	Tags []string

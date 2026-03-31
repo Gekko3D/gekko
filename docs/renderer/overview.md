@@ -19,6 +19,8 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 
 - [`runtime.md`](runtime.md)
   - authoritative frame flow, resource ownership, and live renderer behavior
+- [`gbuffer-compaction-note.md`](gbuffer-compaction-note.md)
+  - Task I design note for the current compacted G-buffer layout and position reconstruction path
 - [`change-guide.md`](change-guide.md)
   - ownership boundaries, invalidation rules, and common failure modes when editing renderer code
 - [`editing.md`](editing.md)

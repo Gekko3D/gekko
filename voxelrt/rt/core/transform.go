@@ -10,6 +10,10 @@ type Transform struct {
 	Scale    mgl32.Vec3
 	Pivot    mgl32.Vec3
 	Dirty    bool
+
+	objectToWorld mgl32.Mat4
+	worldToObject mgl32.Mat4
+	matricesValid bool
 }
 
 func NewTransform() *Transform {
@@ -22,7 +26,14 @@ func NewTransform() *Transform {
 	}
 }
 
-func (t *Transform) ObjectToWorld() mgl32.Mat4 {
+func (t *Transform) updateMatrices() {
+	if t == nil {
+		return
+	}
+	if t.matricesValid && !t.Dirty {
+		return
+	}
+
 	// M = T * R * S * PivotTranslate
 	translate := mgl32.Translate3D(t.Position.X(), t.Position.Y(), t.Position.Z())
 	rotate := t.Rotation.Mat4()
@@ -31,23 +42,24 @@ func (t *Transform) ObjectToWorld() mgl32.Mat4 {
 	// The pivot naturally offsets the object within its own local space before it gets oriented/placed.
 	pivotTranslate := mgl32.Translate3D(-t.Pivot.X(), -t.Pivot.Y(), -t.Pivot.Z())
 
-	return translate.Mul4(rotate).Mul4(scale).Mul4(pivotTranslate)
+	// inv(M) = inv(PivotTranslate) * inv(S) * inv(R) * inv(T)
+	// Since we know component matrices, we can invert them cheaply.
+	invPivotTranslate := mgl32.Translate3D(t.Pivot.X(), t.Pivot.Y(), t.Pivot.Z())
+	invScale := mgl32.Scale3D(1.0/t.Scale.X(), 1.0/t.Scale.Y(), 1.0/t.Scale.Z())
+	invRotate := t.Rotation.Conjugate().Mat4()
+	invTranslate := mgl32.Translate3D(-t.Position.X(), -t.Position.Y(), -t.Position.Z())
+
+	t.objectToWorld = translate.Mul4(rotate).Mul4(scale).Mul4(pivotTranslate)
+	t.worldToObject = invPivotTranslate.Mul4(invScale).Mul4(invRotate).Mul4(invTranslate)
+	t.matricesValid = true
+}
+
+func (t *Transform) ObjectToWorld() mgl32.Mat4 {
+	t.updateMatrices()
+	return t.objectToWorld
 }
 
 func (t *Transform) WorldToObject() mgl32.Mat4 {
-	// inv(M) = inv(PivotTranslate) * inv(S) * inv(R) * inv(T)
-	// Since we know component matrices, we can invert them cheaply.
-
-	invPivotTranslate := mgl32.Translate3D(t.Pivot.X(), t.Pivot.Y(), t.Pivot.Z())
-
-	// Inverse Scale
-	invScale := mgl32.Scale3D(1.0/t.Scale.X(), 1.0/t.Scale.Y(), 1.0/t.Scale.Z())
-
-	// Inverse Rotation: Conjugate/Transpose for unit quat
-	invRotate := t.Rotation.Conjugate().Mat4()
-
-	// Inverse Translate
-	invTranslate := mgl32.Translate3D(-t.Position.X(), -t.Position.Y(), -t.Position.Z())
-
-	return invPivotTranslate.Mul4(invScale).Mul4(invRotate).Mul4(invTranslate)
+	t.updateMatrices()
+	return t.worldToObject
 }

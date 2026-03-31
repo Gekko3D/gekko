@@ -85,6 +85,37 @@ func TestTransformComposition(t *testing.T) {
 	}
 }
 
+func TestTransformMatrixCacheInvalidatesOnDirty(t *testing.T) {
+	tr := NewTransform()
+	initialO2W := tr.ObjectToWorld()
+	initialW2O := tr.WorldToObject()
+
+	if !tr.matricesValid {
+		t.Fatal("expected transform matrices to be cached after first use")
+	}
+
+	tr.Dirty = false
+	cachedO2W := tr.ObjectToWorld()
+	cachedW2O := tr.WorldToObject()
+	if cachedO2W != initialO2W {
+		t.Fatalf("expected cached object-to-world matrix to be reused")
+	}
+	if cachedW2O != initialW2O {
+		t.Fatalf("expected cached world-to-object matrix to be reused")
+	}
+
+	tr.Position = mgl32.Vec3{3, 4, 5}
+	tr.Dirty = true
+	updatedO2W := tr.ObjectToWorld()
+	updatedW2O := tr.WorldToObject()
+	if updatedO2W == initialO2W {
+		t.Fatalf("expected dirty transform to recompute object-to-world matrix")
+	}
+	if updatedW2O == initialW2O {
+		t.Fatalf("expected dirty transform to recompute world-to-object matrix")
+	}
+}
+
 func TestVoxelObjectAABBUpdate(t *testing.T) {
 	obj := NewVoxelObject()
 	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
@@ -131,6 +162,51 @@ func TestSceneCommit(t *testing.T) {
 		if obj.WorldAABB == nil {
 			t.Errorf("Object %d should have world AABB", i)
 		}
+	}
+}
+
+func TestSceneCommitSkipsBVHRebuildOnStableFrame(t *testing.T) {
+	scene := NewScene()
+	obj := NewVoxelObject()
+	obj.Transform.Position = mgl32.Vec3{0, 0, -10}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
+	visibleRevision := scene.visibleBVHRevision
+	shadowRevision := scene.shadowBVHRevision
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
+
+	if scene.visibleBVHRevision != visibleRevision {
+		t.Fatalf("expected visible BVH revision to remain %d on stable frame, got %d", visibleRevision, scene.visibleBVHRevision)
+	}
+	if scene.shadowBVHRevision != shadowRevision {
+		t.Fatalf("expected shadow BVH revision to remain %d on stable frame, got %d", shadowRevision, scene.shadowBVHRevision)
+	}
+}
+
+func TestSceneCommitRebuildsBVHWhenVisibleObjectChangesAABB(t *testing.T) {
+	scene := NewScene()
+	obj := NewVoxelObject()
+	obj.Transform.Position = mgl32.Vec3{0, 0, -10}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
+	visibleRevision := scene.visibleBVHRevision
+	shadowRevision := scene.shadowBVHRevision
+
+	obj.Transform.Position = mgl32.Vec3{2, 0, -10}
+	obj.Transform.Dirty = true
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
+
+	if scene.visibleBVHRevision != visibleRevision+1 {
+		t.Fatalf("expected visible BVH revision to increment to %d, got %d", visibleRevision+1, scene.visibleBVHRevision)
+	}
+	if scene.shadowBVHRevision != shadowRevision+1 {
+		t.Fatalf("expected shadow BVH revision to increment to %d, got %d", shadowRevision+1, scene.shadowBVHRevision)
 	}
 }
 
@@ -334,6 +410,104 @@ func TestSceneCommitKeepsOffFrustumObjectsAsShadowCasters(t *testing.T) {
 	}
 	if len(scene.ShadowBVHNodesBytes) == 0 {
 		t.Fatal("expected shadow BVH to be built")
+	}
+}
+
+func TestSceneCommitRespectsShadowFlagsAndDistance(t *testing.T) {
+	scene := NewScene()
+
+	disabled := NewVoxelObject()
+	disabled.Transform.Position = mgl32.Vec3{0, 0, -10}
+	disabled.XBrickMap.SetVoxel(0, 0, 0, 1)
+	disabled.CastsShadows = false
+	scene.AddObject(disabled)
+
+	near := NewVoxelObject()
+	near.Transform.Position = mgl32.Vec3{0, 0, -12}
+	near.XBrickMap.SetVoxel(0, 0, 0, 1)
+	near.ShadowMaxDistance = 20
+	scene.AddObject(near)
+
+	far := NewVoxelObject()
+	far.Transform.Position = mgl32.Vec3{0, 0, -60}
+	far.XBrickMap.SetVoxel(0, 0, 0, 1)
+	far.ShadowMaxDistance = 20
+	scene.AddObject(far)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		CameraPosition: mgl32.Vec3{0, 0, 0},
+	})
+
+	if len(scene.ShadowObjects) != 1 {
+		t.Fatalf("expected only one shadow caster after filtering, got %d", len(scene.ShadowObjects))
+	}
+	if scene.ShadowObjects[0] != near {
+		t.Fatal("expected only the near shadow-enabled object to remain a shadow caster")
+	}
+}
+
+func TestSceneCommitRebuildsShadowBVHWhenShadowCasterSetChanges(t *testing.T) {
+	scene := NewScene()
+	obj := NewVoxelObject()
+	obj.Transform.Position = mgl32.Vec3{0, 0, -10}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
+	visibleRevision := scene.visibleBVHRevision
+	shadowRevision := scene.shadowBVHRevision
+
+	obj.CastsShadows = false
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
+
+	if scene.visibleBVHRevision != visibleRevision {
+		t.Fatalf("expected visible BVH revision to remain %d, got %d", visibleRevision, scene.visibleBVHRevision)
+	}
+	if scene.shadowBVHRevision != shadowRevision+1 {
+		t.Fatalf("expected shadow BVH revision to increment to %d, got %d", shadowRevision+1, scene.shadowBVHRevision)
+	}
+}
+
+func TestSceneCommitCapsShadowCastersPerGroupByNearestDistance(t *testing.T) {
+	scene := NewScene()
+
+	near := NewVoxelObject()
+	near.Transform.Position = mgl32.Vec3{0, 0, -8}
+	near.XBrickMap.SetVoxel(0, 0, 0, 1)
+	near.ShadowCasterGroupID = 77
+	near.ShadowCasterGroupLimit = 2
+	scene.AddObject(near)
+
+	mid := NewVoxelObject()
+	mid.Transform.Position = mgl32.Vec3{0, 0, -16}
+	mid.XBrickMap.SetVoxel(0, 0, 0, 1)
+	mid.ShadowCasterGroupID = 77
+	mid.ShadowCasterGroupLimit = 2
+	scene.AddObject(mid)
+
+	far := NewVoxelObject()
+	far.Transform.Position = mgl32.Vec3{0, 0, -32}
+	far.XBrickMap.SetVoxel(0, 0, 0, 1)
+	far.ShadowCasterGroupID = 77
+	far.ShadowCasterGroupLimit = 2
+	scene.AddObject(far)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		CameraPosition: mgl32.Vec3{0, 0, 0},
+	})
+
+	if len(scene.ShadowObjects) != 2 {
+		t.Fatalf("expected 2 capped shadow casters, got %d", len(scene.ShadowObjects))
+	}
+	if scene.ShadowObjects[0] != near && scene.ShadowObjects[1] != near {
+		t.Fatal("expected nearest object to survive capped shadow selection")
+	}
+	if scene.ShadowObjects[0] != mid && scene.ShadowObjects[1] != mid {
+		t.Fatal("expected second-nearest object to survive capped shadow selection")
+	}
+	if scene.ShadowObjects[0] == far || scene.ShadowObjects[1] == far {
+		t.Fatal("expected farthest object to be dropped by capped shadow selection")
 	}
 }
 

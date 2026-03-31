@@ -135,7 +135,6 @@ struct TerrainChunkLookupEntry {
 @group(1) @binding(0) var out_depth: texture_storage_2d<rgba32float, write>;
 @group(1) @binding(1) var out_normal: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(2) var out_material: texture_storage_2d<rgba32float, write>;
-@group(1) @binding(3) var out_position: texture_storage_2d<rgba32float, write>;
 
 // Group 2: Voxel Data
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
@@ -836,7 +835,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             textureStore(out_depth, global_id.xy, vec4<f32>(60000.0, 0.0, 0.0, 0.0));
             textureStore(out_normal, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
             textureStore(out_material, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
-            textureStore(out_position, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
             return;
         }
 
@@ -845,11 +843,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         // Store raw palette_idx and material_idx (others fetched in lighting pass)
         textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), f32(hit_res.shadow_group_id), hit_res.shadow_seam_epsilon, f32(hit_res.material_idx)));
-        textureStore(out_position, global_id.xy, vec4<f32>(hit_res.voxel_center_ws, 1.0));
     } else {
         textureStore(out_depth, global_id.xy, vec4<f32>(60000.0, 0.0, 0.0, 0.0));
         textureStore(out_normal, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         textureStore(out_material, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
-        textureStore(out_position, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
     }
 }

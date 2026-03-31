@@ -51,7 +51,6 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	setupTexture(&m.GBufferDepth, &m.DepthView, "GBuffer Depth", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.GBufferNormal, &m.NormalView, "GBuffer Normal", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
-	setupTexture(&m.GBufferPosition, &m.PositionView, "GBuffer Position", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
 
 	// Transparent accumulation targets for WBOIT
 	setupTexture(&m.TransparentAccumTex, &m.TransparentAccumView, "Transparent Accum", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
@@ -70,7 +69,6 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 			{Binding: 0, TextureView: m.DepthView},
 			{Binding: 1, TextureView: m.NormalView},
 			{Binding: 2, TextureView: m.MaterialView},
-			{Binding: 3, TextureView: m.PositionView},
 		},
 	})
 	if err != nil {
@@ -127,11 +125,10 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 			{Binding: 0, TextureView: m.DepthView},
 			{Binding: 1, TextureView: m.NormalView},
 			{Binding: 2, TextureView: m.MaterialView},
-			{Binding: 3, TextureView: m.PositionView},
-			{Binding: 4, TextureView: outputView},
-			{Binding: 5, TextureView: m.ShadowMapView},
-			{Binding: 6, TextureView: m.getSkyboxView()},
-			{Binding: 7, Sampler: m.getSkyboxSampler()},
+			{Binding: 3, TextureView: outputView},
+			{Binding: 4, TextureView: m.ShadowMapView},
+			{Binding: 5, TextureView: m.getSkyboxView()},
+			{Binding: 6, Sampler: m.getSkyboxSampler()},
 		},
 	})
 	if err != nil {

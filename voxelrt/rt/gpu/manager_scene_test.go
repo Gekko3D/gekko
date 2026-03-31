@@ -50,3 +50,43 @@ func TestBuildCameraUniformDataPacksExpectedMatrices(t *testing.T) {
 		t.Fatalf("expected render mode 12 at offset 244, got %d", got)
 	}
 }
+
+func TestBuildInstanceDataKeepsBinaryLayout(t *testing.T) {
+	obj := core.NewVoxelObject()
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	obj.WorldAABB = &[2]mgl32.Vec3{{1, 2, 3}, {4, 5, 6}}
+
+	buf := buildInstanceData([]*core.VoxelObject{obj})
+	if len(buf) != 208 {
+		t.Fatalf("expected 208-byte instance record, got %d", len(buf))
+	}
+	if got := floatAt(buf, 128); got != 1 {
+		t.Fatalf("expected world AABB min x at offset 128, got %v", got)
+	}
+	if got := floatAt(buf, 144); got != 4 {
+		t.Fatalf("expected world AABB max x at offset 144, got %v", got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[192:196]); got != 0 {
+		t.Fatalf("expected instance id 0 at offset 192, got %d", got)
+	}
+}
+
+func TestBuildLightsDataUsesStableRecordSize(t *testing.T) {
+	light := core.Light{
+		Position:   [4]float32{1, 2, 3, 4},
+		Direction:  [4]float32{5, 6, 7, 8},
+		Color:      [4]float32{9, 10, 11, 12},
+		Params:     [4]float32{13, 14, 15, 16},
+		ShadowMeta: [4]uint32{17, 18, 19, 20},
+	}
+	buf := buildLightsData([]core.Light{light})
+	if len(buf) != lightSizeBytes {
+		t.Fatalf("expected %d-byte light record, got %d", lightSizeBytes, len(buf))
+	}
+	if got := floatAt(buf, 0); got != 1 {
+		t.Fatalf("expected position x at offset 0, got %v", got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[64:68]); got != 17 {
+		t.Fatalf("expected shadow meta x at offset 64, got %d", got)
+	}
+}

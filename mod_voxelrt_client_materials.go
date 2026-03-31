@@ -1,11 +1,32 @@
 package gekko
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
+	"math"
+	"sort"
 	"strings"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 )
+
+type materialTableCacheKey struct {
+	PaletteID   AssetId
+	Fingerprint uint64
+}
+
+func (s *VoxelRtState) ensureMaterialCaches() {
+	if s == nil {
+		return
+	}
+	if s.lastMaterialKeys == nil {
+		s.lastMaterialKeys = make(map[*core.VoxelObject]materialTableCacheKey)
+	}
+	if s.materialTableCache == nil {
+		s.materialTableCache = make(map[materialTableCacheKey][]core.Material)
+	}
+}
 
 func clampF(v, min, max float32) float32 {
 	if v < min {
@@ -187,7 +208,80 @@ func (s *VoxelRtState) CycleRenderMode() {
 	}
 }
 
-func (s *VoxelRtState) buildMaterialTable(gekkoPalette *VoxelPaletteAsset) []core.Material {
+func materialTableFingerprint(gekkoPalette *VoxelPaletteAsset) uint64 {
+	if gekkoPalette == nil {
+		return 0
+	}
+
+	hasher := fnv.New64a()
+	writeFloat32 := func(v float32) {
+		var buf [4]byte
+		binary.LittleEndian.PutUint32(buf[:], math.Float32bits(v))
+		_, _ = hasher.Write(buf[:])
+	}
+	writeString := func(v string) {
+		var lenBuf [4]byte
+		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(v)))
+		_, _ = hasher.Write(lenBuf[:])
+		_, _ = hasher.Write([]byte(v))
+	}
+
+	for i := range gekkoPalette.VoxPalette {
+		_, _ = hasher.Write(gekkoPalette.VoxPalette[i][:])
+	}
+	if gekkoPalette.IsPBR {
+		_, _ = hasher.Write([]byte{1})
+	} else {
+		_, _ = hasher.Write([]byte{0})
+	}
+	writeFloat32(gekkoPalette.Roughness)
+	writeFloat32(gekkoPalette.Metalness)
+	writeFloat32(gekkoPalette.Emission)
+	writeFloat32(gekkoPalette.IOR)
+	writeFloat32(gekkoPalette.Transparency)
+	writeString(gekkoPalette.SourcePath)
+
+	materials := append([]VoxMaterial(nil), gekkoPalette.Materials...)
+	sort.Slice(materials, func(i, j int) bool {
+		return materials[i].ID < materials[j].ID
+	})
+	for _, material := range materials {
+		var idBuf [4]byte
+		binary.LittleEndian.PutUint32(idBuf[:], uint32(material.ID))
+		_, _ = hasher.Write(idBuf[:])
+		binary.LittleEndian.PutUint32(idBuf[:], uint32(material.Type))
+		_, _ = hasher.Write(idBuf[:])
+		writeFloat32(material.Weight)
+
+		keys := make([]string, 0, len(material.Property))
+		for key := range material.Property {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			writeString(key)
+			writeString(fmt.Sprintf("%T=%v", material.Property[key], material.Property[key]))
+		}
+	}
+
+	return hasher.Sum64()
+}
+
+func (s *VoxelRtState) materialTableKey(paletteID AssetId, gekkoPalette *VoxelPaletteAsset) materialTableCacheKey {
+	return materialTableCacheKey{
+		PaletteID:   paletteID,
+		Fingerprint: materialTableFingerprint(gekkoPalette),
+	}
+}
+
+func (s *VoxelRtState) buildMaterialTable(key materialTableCacheKey, gekkoPalette *VoxelPaletteAsset) []core.Material {
+	if s != nil {
+		s.ensureMaterialCaches()
+		if cached, ok := s.materialTableCache[key]; ok {
+			return cached
+		}
+	}
+
 	materialTable := make([]core.Material, 256)
 
 	matMap := make(map[int]VoxMaterial)
@@ -238,6 +332,10 @@ func (s *VoxelRtState) buildMaterialTable(gekkoPalette *VoxelPaletteAsset) []cor
 			}
 		}
 		materialTable[i] = mat
+	}
+
+	if s != nil {
+		s.materialTableCache[key] = materialTable
 	}
 	return materialTable
 }

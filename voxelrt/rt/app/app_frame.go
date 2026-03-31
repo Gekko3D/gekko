@@ -176,6 +176,7 @@ func (a *App) Update() {
 		HiZW:             hizW,
 		HiZH:             hizH,
 		LastViewProj:     a.LastViewProj,
+		CameraPosition:   a.Camera.Position,
 		FastCameraMotion: fastCameraMotion,
 	})
 	a.Profiler.EndScope("Scene Commit")
@@ -607,8 +608,10 @@ func (a *App) Render() {
 	}
 	a.Profiler.EndScope("Resolve")
 
+	a.Profiler.BeginScope("Submit/Present")
 	cmd, err := encoder.Finish(nil)
 	if err != nil {
+		a.Profiler.EndScope("Submit/Present")
 		fmt.Printf("ERROR: Encoder Finish failed: %v\n", err)
 		return
 	}
@@ -616,6 +619,7 @@ func (a *App) Render() {
 	a.BufferManager.ResolveHiZReadback()
 	a.Surface.Present()
 	a.Device.Poll(false, nil)
+	a.Profiler.EndScope("Submit/Present")
 
 	// Update FPS
 	now := glfw.GetTime()

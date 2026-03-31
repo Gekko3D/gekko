@@ -66,16 +66,19 @@ type PlacementVolumeRuleDef struct {
 }
 
 type PlacementVolumeDef struct {
-	ID           string                 `json:"id"`
-	Kind         PlacementVolumeKind    `json:"kind"`
-	AssetPath    string                 `json:"asset_path,omitempty"`
-	AssetSetPath string                 `json:"asset_set_path,omitempty"`
-	Transform    LevelTransformDef      `json:"transform"`
-	Radius       float32                `json:"radius,omitempty"`
-	Extents      Vec3                   `json:"extents,omitempty"`
-	Rule         PlacementVolumeRuleDef `json:"rule"`
-	RandomSeed   int64                  `json:"random_seed,omitempty"`
-	Tags         []string               `json:"tags,omitempty"`
+	ID                string                 `json:"id"`
+	Kind              PlacementVolumeKind    `json:"kind"`
+	AssetPath         string                 `json:"asset_path,omitempty"`
+	AssetSetPath      string                 `json:"asset_set_path,omitempty"`
+	CastsShadows      *bool                  `json:"casts_shadows,omitempty"`
+	ShadowMaxDistance float32                `json:"shadow_max_distance,omitempty"`
+	MaxShadowCasters  int                    `json:"max_shadow_casters,omitempty"`
+	Transform         LevelTransformDef      `json:"transform"`
+	Radius            float32                `json:"radius,omitempty"`
+	Extents           Vec3                   `json:"extents,omitempty"`
+	Rule              PlacementVolumeRuleDef `json:"rule"`
+	RandomSeed        int64                  `json:"random_seed,omitempty"`
+	Tags              []string               `json:"tags,omitempty"`
 }
 
 type LevelTransformDef struct {

@@ -34,6 +34,10 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 	if cmd == nil || def.Chunk == nil {
 		return 0
 	}
+	overrideGeometry := AssetId{}
+	if assets := assetServerFromApp(cmd.app); assets != nil {
+		overrideGeometry = assets.RegisterSharedVoxelGeometry(ImportedWorldChunkToXBrickMap(def.Chunk), "")
+	}
 	comps := []any{
 		&TransformComponent{
 			Position: importedWorldChunkPosition(def.Chunk),
@@ -49,7 +53,7 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 		&VoxelModelComponent{
 			VoxelPalette:           palette,
 			PivotMode:              PivotModeCorner,
-			CustomMap:              ImportedWorldChunkToXBrickMap(def.Chunk),
+			OverrideGeometry:       overrideGeometry,
 			ShadowGroupID:          def.ShadowGroupID,
 			ShadowSeamWorldEpsilon: def.Chunk.VoxelResolution,
 		},

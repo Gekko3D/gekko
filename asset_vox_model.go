@@ -1,7 +1,11 @@
 package gekko
 
 import (
+	"encoding/json"
 	"math"
+
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 func createVolumeTexels(voxModel *VoxModel, palette *VoxPalette) []uint8 {
@@ -22,23 +26,157 @@ func (server *AssetServer) CreateVoxelBasedTexture(voxModel *VoxModel, palette *
 	return server.CreateTextureFromTexels(volumeTexels[:], voxModel.SizeX, voxModel.SizeY, voxModel.SizeZ, TextureDimension3D, TextureFormatRGBA8Unorm)
 }
 
-func (server *AssetServer) CreateVoxelModel(model VoxModel, resolution float32) AssetId {
-	return server.CreateVoxelModelFromSource(model, resolution, "")
+func xBrickMapFromVoxModel(model VoxModel) *volume.XBrickMap {
+	xbm := volume.NewXBrickMap()
+	for _, v := range model.Voxels {
+		xbm.SetVoxel(int(v.X), int(v.Y), int(v.Z), v.ColorIndex)
+	}
+	xbm.ComputeAABB()
+	xbm.ClearDirty()
+	return xbm
 }
 
-func (server *AssetServer) CreateVoxelModelFromSource(model VoxModel, resolution float32, sourcePath string) AssetId {
+func buildVoxelGeometryAsset(model VoxModel, sourcePath string) VoxelGeometryAsset {
+	xbm := xBrickMapFromVoxModel(model)
+	localMin := xbm.GetAABBMin()
+	localMax := xbm.GetAABBMax()
+	if model.SizeX != 0 || model.SizeY != 0 || model.SizeZ != 0 {
+		localMin = mgl32.Vec3{0, 0, 0}
+		localMax = mgl32.Vec3{float32(model.SizeX), float32(model.SizeY), float32(model.SizeZ)}
+	}
+	return VoxelGeometryAsset{
+		VoxModel:     model,
+		XBrickMap:    xbm,
+		LocalMin:     localMin,
+		LocalMax:     localMax,
+		BrickSize:    [3]uint32{8, 8, 8},
+		SourcePath:   sourcePath,
+		RuntimeOwned: true,
+	}
+}
+
+func voxelGeometryCacheKey(model VoxModel, sourcePath string) string {
+	payload, _ := json.Marshal(struct {
+		Source string
+		Model  VoxModel
+	}{
+		Source: sourcePath,
+		Model:  model,
+	})
+	return string(payload)
+}
+
+func voxelPaletteCacheKey(palette VoxPalette, materials []VoxMaterial, sourcePath string) string {
+	payload, _ := json.Marshal(struct {
+		Source    string
+		Palette   VoxPalette
+		Materials []VoxMaterial
+	}{
+		Source:    sourcePath,
+		Palette:   palette,
+		Materials: materials,
+	})
+	return string(payload)
+}
+
+func voxelPaletteAssetCacheKey(asset VoxelPaletteAsset) string {
+	payload, _ := json.Marshal(struct {
+		Palette      VoxPalette
+		Materials    []VoxMaterial
+		IsPBR        bool
+		Roughness    float32
+		Metalness    float32
+		Emission     float32
+		IOR          float32
+		Transparency float32
+	}{
+		Palette:      asset.VoxPalette,
+		Materials:    asset.Materials,
+		IsPBR:        asset.IsPBR,
+		Roughness:    asset.Roughness,
+		Metalness:    asset.Metalness,
+		Emission:     asset.Emission,
+		IOR:          asset.IOR,
+		Transparency: asset.Transparency,
+	})
+	return string(payload)
+}
+
+func (server *AssetServer) RegisterSharedVoxelGeometry(xbm *volume.XBrickMap, sourcePath string) AssetId {
+	return server.RegisterSharedVoxelGeometryWithCacheKey("", xbm, sourcePath)
+}
+
+func (server *AssetServer) RegisterSharedVoxelGeometryWithCacheKey(cacheKey string, xbm *volume.XBrickMap, sourcePath string) AssetId {
+	if xbm == nil {
+		return AssetId{}
+	}
+	if cacheKey != "" {
+		server.mu.RLock()
+		if id, ok := server.voxModelKeys[cacheKey]; ok {
+			server.mu.RUnlock()
+			return id
+		}
+		server.mu.RUnlock()
+	}
+	copied := xbm.Copy()
+	minB, maxB := copied.ComputeAABB()
+	copied.ClearDirty()
+
+	id := makeAssetId()
+	server.mu.Lock()
+	if cacheKey != "" {
+		if cachedID, ok := server.voxModelKeys[cacheKey]; ok {
+			server.mu.Unlock()
+			return cachedID
+		}
+		server.voxModelKeys[cacheKey] = id
+	}
+	server.voxModels[id] = VoxelGeometryAsset{XBrickMap: copied, LocalMin: minB, LocalMax: maxB, BrickSize: [3]uint32{8, 8, 8}, SourcePath: sourcePath, RuntimeOwned: true}
+	server.mu.Unlock()
+	return id
+}
+
+func (server *AssetServer) CreateVoxelGeometry(model VoxModel, resolution float32) AssetId {
+	return server.CreateVoxelGeometryFromSource(model, resolution, "")
+}
+
+func (server *AssetServer) CreateVoxelGeometryFromSource(model VoxModel, resolution float32, sourcePath string) AssetId {
 	if resolution != 1.0 && resolution > 0 {
 		model = ScaleVoxModel(model, resolution)
 	}
+	cacheKey := voxelGeometryCacheKey(model, sourcePath)
+	server.mu.RLock()
+	if id, ok := server.voxModelKeys[cacheKey]; ok {
+		server.mu.RUnlock()
+		return id
+	}
+	server.mu.RUnlock()
 	id := makeAssetId()
 	server.mu.Lock()
-	server.voxModels[id] = VoxelModelAsset{
-		VoxModel:   model,
-		BrickSize:  [3]uint32{8, 8, 8},
-		SourcePath: sourcePath,
+	if cachedID, ok := server.voxModelKeys[cacheKey]; ok {
+		server.mu.Unlock()
+		return cachedID
 	}
+	server.voxModels[id] = buildVoxelGeometryAsset(model, sourcePath)
+	server.voxModelKeys[cacheKey] = id
 	server.mu.Unlock()
 	return id
+}
+
+func (server *AssetServer) CloneVoxelGeometry(id AssetId) (AssetId, bool) {
+	asset, ok := server.GetVoxelGeometry(id)
+	if !ok || asset.XBrickMap == nil {
+		return AssetId{}, false
+	}
+	return server.RegisterSharedVoxelGeometry(asset.XBrickMap, asset.SourcePath), true
+}
+
+func (server *AssetServer) CreateVoxelModel(model VoxModel, resolution float32) AssetId {
+	return server.CreateVoxelGeometryFromSource(model, resolution, "")
+}
+
+func (server *AssetServer) CreateVoxelModelFromSource(model VoxModel, resolution float32, sourcePath string) AssetId {
+	return server.CreateVoxelGeometryFromSource(model, resolution, sourcePath)
 }
 
 func (server *AssetServer) CreateVoxelFile(voxFile *VoxFile) AssetId {
@@ -145,13 +283,46 @@ func (server *AssetServer) CreateVoxelPalette(palette VoxPalette, materials []Vo
 }
 
 func (server *AssetServer) CreateVoxelPaletteFromSource(palette VoxPalette, materials []VoxMaterial, sourcePath string) AssetId {
+	cacheKey := voxelPaletteCacheKey(palette, materials, sourcePath)
+	server.mu.RLock()
+	if id, ok := server.voxPaletteKeys[cacheKey]; ok {
+		server.mu.RUnlock()
+		return id
+	}
+	server.mu.RUnlock()
 	id := makeAssetId()
 	server.mu.Lock()
+	if cachedID, ok := server.voxPaletteKeys[cacheKey]; ok {
+		server.mu.Unlock()
+		return cachedID
+	}
 	server.voxPalettes[id] = VoxelPaletteAsset{
 		VoxPalette: palette,
 		Materials:  materials,
 		SourcePath: sourcePath,
 	}
+	server.voxPaletteKeys[cacheKey] = id
+	server.mu.Unlock()
+	return id
+}
+
+func (server *AssetServer) CreateVoxelPaletteAsset(asset VoxelPaletteAsset) AssetId {
+	cacheKey := voxelPaletteAssetCacheKey(asset)
+	server.mu.RLock()
+	if id, ok := server.voxPaletteKeys[cacheKey]; ok {
+		server.mu.RUnlock()
+		return id
+	}
+	server.mu.RUnlock()
+
+	id := makeAssetId()
+	server.mu.Lock()
+	if cachedID, ok := server.voxPaletteKeys[cacheKey]; ok {
+		server.mu.Unlock()
+		return cachedID
+	}
+	server.voxPalettes[id] = asset
+	server.voxPaletteKeys[cacheKey] = id
 	server.mu.Unlock()
 	return id
 }
@@ -169,20 +340,11 @@ func (server *AssetServer) CreatePBRPalette(rgba [4]uint8, roughness, metalness,
 }
 
 func (server *AssetServer) CreatePBRPaletteWithTransparency(rgba [4]uint8, roughness, metalness, emission, ior, transparency float32) AssetId {
-	id := makeAssetId()
 	var p VoxPalette
 	for i := range p {
 		p[i] = rgba
 	}
-
-	// This is a bit tricky because the Palette asset doesn't store PBR properties.
-	// The VoxelModelAsset holds the model, but the palette is just colors.
-	// HOWEVER, the VoxelRtModule's conversion logic can be extended to look for
-	// "pseudo-materials" or we can add a new asset type.
-	// For now, I'll store the PBR properties in a new VoxelPaletteAsset field.
-
-	server.mu.Lock()
-	server.voxPalettes[id] = VoxelPaletteAsset{
+	return server.CreateVoxelPaletteAsset(VoxelPaletteAsset{
 		VoxPalette:   p,
 		IsPBR:        true,
 		Roughness:    roughness,
@@ -190,7 +352,5 @@ func (server *AssetServer) CreatePBRPaletteWithTransparency(rgba [4]uint8, rough
 		Emission:     emission,
 		IOR:          ior,
 		Transparency: transparency,
-	}
-	server.mu.Unlock()
-	return id
+	})
 }

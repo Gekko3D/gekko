@@ -77,6 +77,130 @@ func TestLoadAndSpawnAuthoredLevelSpawnsPlacementWithLevelAndAssetMetadata(t *te
 	}
 }
 
+func TestLoadAndSpawnAuthoredLevelCollapsedAssetKeepsPlacementRefWithoutItemRefs(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "ship_collapsed.gkasset")
+	levelPath := filepath.Join(root, "levels", "demo_collapsed.gklevel")
+
+	writeCollapsedProceduralAssetForLevelTest(t, assetPath, "ship-collapsed")
+
+	level := content.NewLevelDef("demo-collapsed")
+	level.Placements = []content.LevelPlacementDef{{
+		ID:        "placement-1",
+		AssetPath: filepath.Join("..", "assets", "ship_collapsed.gkasset"),
+		Transform: content.LevelTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	rootEntity := result.PlacementRootEntities["placement-1"]
+	if rootEntity == 0 {
+		t.Fatal("expected placement root entity")
+	}
+	if _, ok := AuthoredLevelPlacementRefForEntity(cmd, rootEntity); !ok {
+		t.Fatal("expected placement ref on collapsed placement root")
+	}
+
+	var itemRefs int
+	MakeQuery1[AuthoredLevelItemRefComponent](cmd).Map(func(_ EntityId, ref *AuthoredLevelItemRefComponent) bool {
+		if ref.PlacementID == "placement-1" {
+			itemRefs++
+		}
+		return true
+	})
+	if itemRefs != 0 {
+		t.Fatalf("expected collapsed placement to skip per-item refs, got %d", itemRefs)
+	}
+}
+
+func TestLoadAndSpawnAuthoredLevelPlacementVolumeOverridesShadowSettings(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "asteroid.gkasset")
+	levelPath := filepath.Join(root, "levels", "shadow_volume.gklevel")
+
+	writeProceduralAssetForLevelTest(t, assetPath, "asteroid-asset")
+
+	castsShadows := false
+	level := content.NewLevelDef("shadow-volume")
+	level.PlacementVolumes = []content.PlacementVolumeDef{{
+		ID:                "volume-a",
+		Kind:              content.PlacementVolumeKindSphere,
+		AssetPath:         filepath.Join("..", "assets", "asteroid.gkasset"),
+		CastsShadows:      &castsShadows,
+		ShadowMaxDistance: 33,
+		MaxShadowCasters:  5,
+		Transform: content.LevelTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Radius:     8,
+		RandomSeed: 7,
+		Rule: content.PlacementVolumeRuleDef{
+			Mode:  content.PlacementVolumeRuleModeCount,
+			Count: 1,
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	rootEntity := result.PlacementRootEntities["volume-a:0"]
+	if rootEntity == 0 {
+		t.Fatal("expected placement root entity")
+	}
+	var voxelEntity EntityId
+	MakeQuery1[VoxelModelComponent](cmd).Map(func(eid EntityId, _ *VoxelModelComponent) bool {
+		parent, ok := parentEntityForTest(cmd, eid)
+		if ok && parent == rootEntity {
+			voxelEntity = eid
+			return false
+		}
+		return true
+	})
+	if voxelEntity == 0 {
+		t.Fatal("expected spawned voxel child for placement volume instance")
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, voxelEntity)
+	if !vmc.DisableShadows {
+		t.Fatal("expected placement volume casts_shadows=false override to disable shadows")
+	}
+	if vmc.ShadowMaxDistance != 33 {
+		t.Fatalf("expected placement volume shadow max distance 33, got %v", vmc.ShadowMaxDistance)
+	}
+	if vmc.ShadowCasterGroupID == 0 {
+		t.Fatal("expected placement volume to assign a shadow caster group")
+	}
+	if vmc.ShadowCasterGroupLimit != 5 {
+		t.Fatalf("expected placement volume max shadow casters 5, got %d", vmc.ShadowCasterGroupLimit)
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
@@ -118,6 +242,49 @@ func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	})
 	if gradientCount != 1 || noiseCount != 2 {
 		t.Fatalf("expected daylight skybox to spawn 1 gradient and 2 noise layers, got gradient=%d noise=%d", gradientCount, noiseCount)
+	}
+}
+
+func TestLoadAndSpawnAuthoredLevelWithoutEnvironmentDoesNotInjectLightingOrSkybox(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	level := content.NewLevelDef("no-environment")
+
+	if _, err := SpawnAuthoredLevel(cmd, nil, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{}); err != nil {
+		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	var lightCount, skyAmbientCount, skySunCount, skyboxLayerCount int
+	MakeQuery1[LightComponent](cmd).Map(func(_ EntityId, _ *LightComponent) bool {
+		lightCount++
+		return true
+	})
+	MakeQuery1[SkyAmbientComponent](cmd).Map(func(_ EntityId, _ *SkyAmbientComponent) bool {
+		skyAmbientCount++
+		return true
+	})
+	MakeQuery1[SkyboxSunComponent](cmd).Map(func(_ EntityId, _ *SkyboxSunComponent) bool {
+		skySunCount++
+		return true
+	})
+	MakeQuery1[SkyboxLayerComponent](cmd).Map(func(_ EntityId, _ *SkyboxLayerComponent) bool {
+		skyboxLayerCount++
+		return true
+	})
+
+	if lightCount != 0 {
+		t.Fatalf("expected no injected lights, got %d", lightCount)
+	}
+	if skyAmbientCount != 0 {
+		t.Fatalf("expected no injected sky ambient, got %d", skyAmbientCount)
+	}
+	if skySunCount != 0 {
+		t.Fatalf("expected no injected sky sun, got %d", skySunCount)
+	}
+	if skyboxLayerCount != 0 {
+		t.Fatalf("expected no injected skybox layers, got %d", skyboxLayerCount)
 	}
 }
 
@@ -380,7 +547,8 @@ func TestLoadAndSpawnAuthoredLevelSpawnsTerrainChunksWithMetadata(t *testing.T) 
 
 	app := NewApp()
 	cmd := app.Commands()
-	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{
+	assets := newSpawnTestAssetServer()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, assets, NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{
 		TerrainGroupID: 77,
 	})
 	if err != nil {
@@ -421,8 +589,9 @@ func TestLoadAndSpawnAuthoredLevelSpawnsTerrainChunksWithMetadata(t *testing.T) 
 	if vmc.PivotMode != PivotModeCorner {
 		t.Fatalf("expected terrain pivot mode corner, got %v", vmc.PivotMode)
 	}
-	if vmc.CustomMap == nil || vmc.CustomMap.GetVoxelCount() != 4 {
-		t.Fatalf("expected terrain custom map with 4 voxels, got %+v", vmc.CustomMap)
+	geometryMap, ok := ResolveVoxelGeometryMap(assets, &vmc)
+	if !ok || geometryMap.GetVoxelCount() != 4 {
+		t.Fatalf("expected terrain override geometry with 4 voxels, got %+v", geometryMap)
 	}
 }
 
@@ -439,6 +608,41 @@ func writeProceduralAssetForLevelTest(t *testing.T, path string, assetID string)
 			Scale:    content.Vec3{1, 1, 1},
 		},
 	}}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveAsset(path, def); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+}
+
+func writeCollapsedProceduralAssetForLevelTest(t *testing.T, path string, assetID string) {
+	t.Helper()
+	def := content.NewAssetDef(assetID)
+	def.ID = assetID
+	def.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
+	def.Parts = []content.AssetPartDef{
+		{
+			ID:     assetID + "-part-a",
+			Name:   "part-a",
+			Source: testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{-0.5, 0, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:     assetID + "-part-b",
+			Name:   "part-b",
+			Source: testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{0.5, 0, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}

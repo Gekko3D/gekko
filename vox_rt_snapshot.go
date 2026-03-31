@@ -3,7 +3,6 @@ package gekko
 import (
 	"sync/atomic"
 
-	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -52,18 +51,45 @@ const (
 )
 
 type VoxelModelComponent struct {
+	SharedGeometry         AssetId `gekko:"voxel" usage:"geometry"`
+	OverrideGeometry       AssetId
 	VoxelModel             AssetId `gekko:"voxel" usage:"model"`
 	VoxelPalette           AssetId `gekko:"voxel" usage:"palette"`
 	VoxelResolution        float32
-	PivotMode              VoxelPivotMode    // How to determine the rotation pivot
-	CustomPivot            mgl32.Vec3        // Used if PivotMode == PivotModeCustom
-	CustomMap              *volume.XBrickMap // If set, use this instead of loading from VoxelModel asset
+	PivotMode              VoxelPivotMode // How to determine the rotation pivot
+	CustomPivot            mgl32.Vec3     // Used if PivotMode == PivotModeCustom
+	DisableShadows         bool
+	ShadowMaxDistance      float32
+	ShadowCasterGroupID    uint64
+	ShadowCasterGroupLimit int
 	ShadowGroupID          uint32
 	ShadowSeamWorldEpsilon float32
 	IsTerrainChunk         bool
 	TerrainGroupID         uint32
 	TerrainChunkCoord      [3]int
 	TerrainChunkSize       int
+}
+
+func (vmc *VoxelModelComponent) NormalizeGeometryRefs() {
+	if vmc == nil {
+		return
+	}
+	if vmc.SharedGeometry == (AssetId{}) && vmc.VoxelModel != (AssetId{}) {
+		vmc.SharedGeometry = vmc.VoxelModel
+	}
+}
+
+func (vmc *VoxelModelComponent) GeometryAsset() AssetId {
+	if vmc == nil {
+		return AssetId{}
+	}
+	if vmc.OverrideGeometry != (AssetId{}) {
+		return vmc.OverrideGeometry
+	}
+	if vmc.VoxelModel != (AssetId{}) {
+		return vmc.VoxelModel
+	}
+	return vmc.SharedGeometry
 }
 
 func VoxelResolutionOrDefault(vmc *VoxelModelComponent) float32 {

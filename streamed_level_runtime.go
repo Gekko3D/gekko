@@ -574,7 +574,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 	}
 
 	if prepared.TerrainChunk != nil && prepared.TerrainChunk.NonEmptyVoxelCount > 0 {
-		entity := spawnAuthoredTerrainChunkEntity(cmd, state.LevelRoot, state.TerrainPalette, AuthoredTerrainSpawnDef{
+		entity := spawnAuthoredTerrainChunkEntity(cmd, assets, state.LevelRoot, state.TerrainPalette, AuthoredTerrainSpawnDef{
 			LevelID:        state.LevelID,
 			TerrainID:      terrainIDForPreparedChunk(state, prepared.TerrainChunk),
 			TerrainGroupID: terrainGroupIDForStreamedState(state),
@@ -736,7 +736,11 @@ func applyVoxelObjectSnapshotToEntity(cmd *Commands, eid EntityId, snapshot *con
 	if !ok {
 		return nil
 	}
-	vmc.CustomMap = XBrickMapFromVoxelObjectSnapshot(snapshot)
+	assets := assetServerFromApp(cmd.app)
+	if assets == nil {
+		return fmt.Errorf("asset server not available")
+	}
+	vmc.OverrideGeometry = assets.RegisterSharedVoxelGeometry(XBrickMapFromVoxelObjectSnapshot(snapshot), "")
 	cmd.AddComponents(eid, &vmc)
 	return nil
 }
@@ -745,16 +749,34 @@ func currentVoxelMapForEntity(cmd *Commands, eid EntityId) (*volume.XBrickMap, b
 	if len(cmd.GetAllComponents(eid)) == 0 {
 		return nil, true, false
 	}
-	if state := voxelRtStateFromApp(cmd.app); state != nil {
-		if obj := state.GetVoxelObject(eid); obj != nil && obj.XBrickMap != nil {
-			return obj.XBrickMap, isVoxelMapDirty(obj.XBrickMap), true
-		}
-	}
 	vmc, ok := voxelModelComponentForEntity(cmd, eid)
-	if !ok || vmc.CustomMap == nil {
+	if !ok {
+		if state := voxelRtStateFromApp(cmd.app); state != nil {
+			if obj := state.GetVoxelObject(eid); obj != nil && obj.XBrickMap != nil {
+				return obj.XBrickMap, isVoxelMapDirty(obj.XBrickMap), true
+			}
+		}
 		return nil, false, true
 	}
-	return vmc.CustomMap, isVoxelMapDirty(vmc.CustomMap), true
+	assets := assetServerFromApp(cmd.app)
+	if assets == nil {
+		if state := voxelRtStateFromApp(cmd.app); state != nil {
+			if obj := state.GetVoxelObject(eid); obj != nil && obj.XBrickMap != nil {
+				return obj.XBrickMap, isVoxelMapDirty(obj.XBrickMap), true
+			}
+		}
+		return nil, false, true
+	}
+	_, asset, ok := ResolveVoxelGeometry(assets, &vmc)
+	if !ok || asset == nil || asset.XBrickMap == nil {
+		if state := voxelRtStateFromApp(cmd.app); state != nil {
+			if obj := state.GetVoxelObject(eid); obj != nil && obj.XBrickMap != nil {
+				return obj.XBrickMap, isVoxelMapDirty(obj.XBrickMap), true
+			}
+		}
+		return nil, false, true
+	}
+	return asset.XBrickMap, isVoxelMapDirty(asset.XBrickMap), true
 }
 
 func clearEntityVoxelDirty(cmd *Commands, eid EntityId) {
@@ -764,8 +786,12 @@ func clearEntityVoxelDirty(cmd *Commands, eid EntityId) {
 		}
 	}
 	vmc, ok := voxelModelComponentForEntity(cmd, eid)
-	if ok && vmc.CustomMap != nil {
-		vmc.CustomMap.ClearDirty()
+	if ok {
+		if assets := assetServerFromApp(cmd.app); assets != nil {
+			if _, asset, resolved := ResolveVoxelGeometry(assets, &vmc); resolved && asset != nil && asset.XBrickMap != nil {
+				asset.XBrickMap.ClearDirty()
+			}
+		}
 	}
 }
 
