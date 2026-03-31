@@ -195,10 +195,12 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	recreated := false
 
 	// 1. Instances
+	m.Profiler.BeginScope("Scene: Instances")
 	instData := buildInstanceData(scene.VisibleObjects)
 	if m.ensureBuffer("InstancesBuf", &m.InstancesBuf, instData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
+	m.Profiler.EndScope("Scene: Instances")
 
 	// 2. BVH
 	bvhData := scene.BVHNodesBytes
@@ -210,11 +212,11 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 
 	// 3. Light metadata drives shadow-only caster selection.
+	m.Profiler.BeginScope("Scene: Lights")
 	m.UpdateLights(scene, camera, aspect)
-	rebuildShadowCasterScene(scene, collectShadowCasters(scene.ShadowObjects, m.shadowDirectionalVolumes, m.shadowSpotVolumes))
+	m.Profiler.EndScope("Scene: Lights")
 
-	// Shadow scene acceleration uses a broader set than camera-visible geometry, but only
-	// for objects intersecting active shadow volumes.
+	// Update shadow acceleration structures from scene data.
 	shadowInstData := buildInstanceData(scene.ShadowObjects)
 	if m.ensureBuffer("ShadowInstancesBuf", &m.ShadowInstancesBuf, shadowInstData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
@@ -241,24 +243,30 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 
 	// 5. Voxel Data (Incremental / Paged)
+	m.Profiler.BeginScope("Scene: Voxel")
 	if m.UpdateVoxelData(scene) {
 		recreated = true
 	}
+	m.Profiler.EndScope("Scene: Voxel")
 
+	m.Profiler.BeginScope("Scene: Params")
 	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
+	m.Profiler.EndScope("Scene: Params")
 
 	// 6. Sector Hash Grid
+	m.Profiler.BeginScope("Scene: Grid")
 	if m.updateSectorGrid(scene) {
 		recreated = true
 	}
 	if m.updateTerrainChunkLookup(scene) {
 		recreated = true
 	}
+	m.Profiler.EndScope("Scene: Grid")
 	_ = recreated
 	return recreated
 }

@@ -1,4 +1,4 @@
-package app
+package core
 
 import (
 	"fmt"
@@ -54,6 +54,9 @@ func (p *Profiler) EndScope(name string) {
 }
 
 func (p *Profiler) SetCount(name string, count int) {
+	if p == nil {
+		return
+	}
 	p.Counts[name] = count
 }
 

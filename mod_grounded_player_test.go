@@ -52,7 +52,7 @@ func TestGroundedMovementBlockedUsesPlayerRadiusAtDoorway(t *testing.T) {
 	state := &VoxelRtState{
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 		},
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
 		caVolumeMap:    make(map[EntityId]*core.VoxelObject),

@@ -215,9 +215,12 @@ fn sample_directional_shadow(
         cascade_view_proj = light.directional_cascades[1].view_proj;
         cascade_params = light.directional_cascades[1].params;
     }
-    let receiver_normal_offset_world = max(0.08, 0.50 * cascade_params.y);
-    let receiver_light_offset_world = max(0.04, 0.30 * cascade_params.y);
-    let compare_bias_world = max(0.08, 0.90 * cascade_params.y);
+    // Increased offsets for voxel geometry to prevent self-shadowing grid
+    let receiver_normal_offset_world = max(0.15, 0.60 * cascade_params.y);
+    let receiver_light_offset_world = max(0.12, 0.40 * cascade_params.y);
+    let compare_bias_world = max(0.15, 1.0 * cascade_params.y);
+    
+    // Snapping pos_ws slightly toward the normal to avoid boundary jitter
     let pos_ws = hit_pos + normal * receiver_normal_offset_world + L * receiver_light_offset_world;
     let directional_compare_bias = compare_bias_world * cascade_params.z;
     let seam_pos_ls = cascade_view_proj * vec4<f32>(pos_ws - L * receiver_shadow_seam_epsilon, 1.0);

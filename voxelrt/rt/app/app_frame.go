@@ -178,6 +178,7 @@ func (a *App) Update() {
 		LastViewProj:     a.LastViewProj,
 		CameraPosition:   a.Camera.Position,
 		FastCameraMotion: fastCameraMotion,
+		Profiler:         a.Profiler,
 	})
 	a.Profiler.EndScope("Scene Commit")
 
@@ -400,7 +401,9 @@ func (a *App) GetLineHeight(scale float32) float32 {
 }
 
 func (a *App) Render() {
+	a.Profiler.BeginScope("Swapchain Wait")
 	nextTexture, err := a.Surface.GetCurrentTexture()
+	a.Profiler.EndScope("Swapchain Wait")
 	if err != nil {
 		fmt.Printf("ERROR: GetCurrentTexture failed: %v\n", err)
 		return

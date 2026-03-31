@@ -101,6 +101,32 @@ The legacy fullscreen blit pipeline still exists in setup code, but the resolve 
 - no dedicated position target
 - deferred lighting reconstructs world hit position from screen UV, camera inverse matrices, and `GBufferDepth.r`
 
+#### Voxel shading contract
+
+The voxel renderer intentionally keeps a blocky albedo/material look while allowing voxelized shapes to read with volume under lighting.
+
+- A visible voxel keeps one material identity.
+  - Albedo, emissive, and PBR parameters still come from the voxel palette/material lookup. Do not introduce cross-voxel albedo blending to "smooth" the image.
+- A visible voxel uses one lighting normal.
+  - Hits inside the same voxel should resolve to the same normal so the voxel shades as one cell, more like a pixel block than a triangle surface with interpolated normals.
+- The normal should come from local voxel occupancy first.
+  - The intended look is faceless microvoxels with shape volume. The live rule is: estimate a normal from neighboring occupied/empty voxels, then fall back only if that gradient is degenerate.
+- Do not use object-center or radial fallback normals for shading.
+  - Those produce a blobby "inflated" read that is unrelated to the local voxel surface and drift badly on concave or thin shapes.
+- Fallback normals should come from the entered voxel face.
+  - If the occupancy gradient is degenerate, derive the fallback from the hit face / ray entry direction, not from object-level heuristics.
+- Normal transforms must be consistent across traversal paths.
+  - `XBrickMap` microvoxels, solid-brick fast paths, and `tree64` LOD hits must all use the same object-space-to-world-space normal rule. Use the inverse-transpose-style transform, especially when non-uniform scale is possible.
+- Lighting may vary voxel-to-voxel, but color identity should remain voxel-stable.
+  - The renderer can show shape through per-voxel lighting, AO, and shadows, but it should not smear voxel colors into gradients across neighboring voxels.
+
+Current implementation notes:
+
+- The live normal-generation path is in `voxelrt/rt/shaders/gbuffer.wgsl`.
+- Neighbor-derived normals are computed from 6-neighbor occupancy samples, terrain chunks included across chunk boundaries.
+- The fallback path is face-based, not object-center-based.
+- Deferred lighting consumes the stored G-buffer normal directly; the albedo/material lookup stays palette-driven.
+
 ### Transparency / WBOIT
 
 - accumulation: `RGBA16Float`

@@ -19,7 +19,7 @@ func TestSyncVoxelRtLightsUsesDaylightDirectionalLightAsSun(t *testing.T) {
 	state := &VoxelRtState{
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 		},
 	}
 
@@ -198,7 +198,7 @@ func newVoxelRtStateTest() *VoxelRtState {
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
 			Camera:   core.NewCameraState(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 		},
 		loadedModels:       make(map[AssetId]*core.VoxelObject),
 		instanceMap:        make(map[EntityId]*core.VoxelObject),

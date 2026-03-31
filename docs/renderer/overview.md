@@ -10,6 +10,7 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 | --- | --- | --- |
 | Understand renderer ownership and safe edit zones | [`change-guide.md`](change-guide.md) | [`runtime.md`](runtime.md) |
 | Follow the current frame graph | [`runtime.md`](runtime.md) | `voxelrt/rt/app/app_frame.go` |
+| Change voxel normals, voxel lighting style, or shaded voxel look | [`runtime.md`](runtime.md) | [`change-guide.md`](change-guide.md), `voxelrt/rt/shaders/gbuffer.wgsl`, `voxelrt/rt/shaders/deferred_lighting.wgsl` |
 | Change ECS-to-renderer sync or picking/edit APIs | [`editing.md`](editing.md) | `mod_voxelrt_client.go`, `mod_voxelrt_client_systems.go` |
 | Change particles, atlases, or emitter upload | [`particles.md`](particles.md) | `voxelrt/rt/app/app_particles.go`, `voxelrt/rt/gpu/manager_particles.go` |
 | Verify a renderer change | [`verification.md`](verification.md) | package tests under `voxelrt/rt/core`, `voxelrt/rt/gpu`, `voxelrt/rt/volume`, `voxelrt/rt/bvh` |

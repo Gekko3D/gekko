@@ -38,6 +38,7 @@ type SceneCommitOptions struct {
 	CameraPosition   mgl32.Vec3
 	FastCameraMotion bool
 	DepthSlack       float32
+	Profiler         *Profiler
 }
 
 type OcclusionStats struct {
@@ -310,6 +311,7 @@ func (s *Scene) RemoveObject(obj *VoxelObject) {
 }
 
 func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
+	opts.Profiler.BeginScope("Commit: AABBs")
 	dirtyAABBs := make(map[*VoxelObject]bool, len(s.Objects))
 
 	// Recompute AABBs
@@ -326,8 +328,10 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 			dirtyAABBs[obj] = true
 		}
 	}
+	opts.Profiler.EndScope("Commit: AABBs")
 
 	// Culling: Populate VisibleObjects
+	opts.Profiler.BeginScope("Commit: Culling")
 	s.VisibleObjects = s.VisibleObjects[:0] // Clear but keep capacity
 	s.OcclusionStats = OcclusionStats{}
 
@@ -385,7 +389,9 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 			s.occlusionGrace[obj] = occlusionHysteresisFrames
 		}
 	}
+	opts.Profiler.EndScope("Commit: Culling")
 
+	opts.Profiler.BeginScope("Commit: BVH")
 	if s.shouldRebuildBVH(s.VisibleObjects, s.lastVisibleBVH, dirtyAABBs, s.BVHNodesBytes) {
 		if len(s.VisibleObjects) > 0 {
 			aabbs := make([][2]mgl32.Vec3, len(s.VisibleObjects))
@@ -405,6 +411,9 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		s.visibleBVHRevision++
 		s.lastVisibleBVH = append(s.lastVisibleBVH[:0], s.VisibleObjects...)
 	}
+	opts.Profiler.EndScope("Commit: BVH")
+
+	opts.Profiler.BeginScope("Commit: Shadows")
 
 	// Shadow casting intentionally uses a broader object set than the camera-visible one.
 	// Camera frustum/Hi-Z culling can safely skip rasterized work, but it must not make
@@ -477,6 +486,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		s.shadowBVHRevision++
 		s.lastShadowBVH = append(s.lastShadowBVH[:0], s.ShadowObjects...)
 	}
+	opts.Profiler.EndScope("Commit: Shadows")
 }
 
 func (s *Scene) shouldRebuildBVH(current, previous []*VoxelObject, dirtyAABBs map[*VoxelObject]bool, nodes []byte) bool {

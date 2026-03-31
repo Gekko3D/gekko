@@ -366,28 +366,42 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
   return 1.0;
 }
 
-fn blocky_normal_os(voxel_center_os: vec3<f32>, aabb_center_os: vec3<f32>, params: ObjectParams) -> vec3<f32> {
+fn estimate_normal_os(voxel_center_os: vec3<f32>, params: ObjectParams) -> vec3<f32> {
   let vi = vec3<i32>(floor(voxel_center_os));
   let dx = sample_occupancy(vi + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
   let dy = sample_occupancy(vi + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
   let dz = sample_occupancy(vi + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
   let grad = vec3<f32>(dx, dy, dz);
-  let ax = abs(grad.x);
-  let ay = abs(grad.y);
-  let az = abs(grad.z);
-  if (max(ax, max(ay, az)) > 0.05) {
-    if (ax >= ay && ax >= az) { return vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
-    if (ay >= ax && ay >= az) { return vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
-    return vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0));
+  if (length(grad) < 0.01) { return vec3<f32>(0.0); }
+  return -normalize(grad);
+}
+
+fn fallback_face_normal_os(p_hit_os: vec3<f32>, vi_hit: vec3<i32>, ray_dir_os: vec3<f32>) -> vec3<f32> {
+  let p_in_voxel = p_hit_os - (vec3<f32>(vi_hit) + 0.5);
+  let abs_p = abs(p_in_voxel);
+  var n_os = vec3<f32>(0.0);
+
+  if (abs_p.x >= abs_p.y && abs_p.x >= abs_p.z) {
+    var nx = select(1.0, -1.0, p_in_voxel.x < 0.0);
+    if (abs(p_in_voxel.x) < 1e-4) {
+      nx = -select(1.0, -1.0, ray_dir_os.x < 0.0);
+    }
+    n_os.x = nx;
+  } else if (abs_p.y >= abs_p.x && abs_p.y >= abs_p.z) {
+    var ny = select(1.0, -1.0, p_in_voxel.y < 0.0);
+    if (abs(p_in_voxel.y) < 1e-4) {
+      ny = -select(1.0, -1.0, ray_dir_os.y < 0.0);
+    }
+    n_os.y = ny;
+  } else {
+    var nz = select(1.0, -1.0, p_in_voxel.z < 0.0);
+    if (abs(p_in_voxel.z) < 1e-4) {
+      nz = -select(1.0, -1.0, ray_dir_os.z < 0.0);
+    }
+    n_os.z = nz;
   }
 
-  let dir_c = voxel_center_os - aabb_center_os;
-  let adx = abs(dir_c.x);
-  let ady = abs(dir_c.y);
-  let adz = abs(dir_c.z);
-  if (adx >= ady && adx >= adz) { return vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
-  if (ady >= adx && ady >= adz) { return vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
-  return vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0));
+  return n_os;
 }
 
 fn shadow_seam_epsilon_at_hit(voxel_center_os: vec3<f32>, local_aabb_min: vec3<f32>, local_aabb_max: vec3<f32>, seam_epsilon: f32) -> f32 {
@@ -921,8 +935,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let dt_ws = dt * d_ws_scale;
                               let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                               let voxel_center_os = floor(p_hit_os) + 0.5;
-                              let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
-                              let n_os = blocky_normal_os(voxel_center_os, aabb_center_os, params);
+                              let vi_hit = vec3<i32>(floor(voxel_center_os));
+                              var n_os = estimate_normal_os(voxel_center_os, params);
+                              if (length(n_os) < 0.01) {
+                                n_os = fallback_face_normal_os(p_hit_os, vi_hit, dir);
+                              }
                               let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                               let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                               let shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
@@ -1002,8 +1019,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let dt_ws = dt * d_ws_scale;
                                   let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                                   let voxel_center_os = floor(p_hit_os) + 0.5;
-                                  let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
-                                  let n_os = blocky_normal_os(voxel_center_os, aabb_center_os, params);
+                                  let vi_hit = vec3<i32>(floor(voxel_center_os));
+                                  var n_os = estimate_normal_os(voxel_center_os, params);
+                                  if (length(n_os) < 0.01) {
+                                    n_os = fallback_face_normal_os(p_hit_os, vi_hit, dir);
+                                  }
                                   let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                                   let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                   let shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);

@@ -19,7 +19,7 @@ const (
 
 	// Texture Atlas Constants
 	MaxVoxelAtlasPages = 4
-	AtlasBricksPerSide = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
+	AtlasBricksPerSide = 64                                    // 64^3 = 262,144 bricks (128MB at 512 bytes per brick)
 	AtlasSize          = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
 	BrickRecordSize    = 20
 
@@ -117,7 +117,8 @@ type CAPresetData struct {
 }
 
 type GpuBufferManager struct {
-	Device *wgpu.Device
+	Device   *wgpu.Device
+	Profiler *core.Profiler
 
 	LightingQuality core.LightingQualityConfig
 
@@ -382,10 +383,11 @@ func (a *SlotAllocator) FreeSlot(idx uint32) {
 	a.Free = append(a.Free, idx)
 }
 
-func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
+func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBufferManager {
 	pageSize := computeVoxelPayloadPageSize(device.GetLimits().Limits.MaxTextureDimension3D)
 	m := &GpuBufferManager{
 		Device:                device,
+		Profiler:              profiler,
 		LightingQuality:       core.DefaultLightingQualityConfig(),
 		BatchMode:             false,
 		SectorsPerFrame:       MaxUpdatesPerFrame,

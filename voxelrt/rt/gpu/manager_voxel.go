@@ -196,6 +196,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			matAlloc.BufferGeneration != m.MaterialBufferGeneration ||
 			matAlloc.MaterialTablePtr != tablePtr ||
 			matAlloc.MaterialTableLen != tableLen
+
 		if needsMaterialUpload {
 			materials := buildMaterialData(obj.MaterialTable)
 			m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(matAlloc.MaterialOffset*64), materials)
