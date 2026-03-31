@@ -2,17 +2,19 @@ package gekko
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
 
 const (
-	uiPanelPadding   = float32(10)
-	uiPanelSpacing   = float32(6)
-	uiPanelLabelGap  = float32(8)
-	uiFieldPaddingX  = float32(10)
-	uiFieldPaddingY  = float32(7)
+	uiPanelPadding   = float32(8)
+	uiPanelSpacing   = float32(5)
+	uiPanelLabelGap  = float32(6)
+	uiFieldPaddingX  = float32(6)
+	uiFieldPaddingY  = float32(5)
 	uiPanelMinHeight = float32(12)
+	uiMinBoxLineH    = float32(28)
 )
 
 type UiRuntime struct {
@@ -316,9 +318,16 @@ func uiBuildPanelLayout(ctx uiLayoutContext, panel *UiPanel, scrollY float32) *u
 		spacing = uiPanelSpacing
 	}
 
-	contentWidth := panel.Width
-	if contentWidth <= 0 {
-		contentWidth = 280
+	panelW := panel.Width
+	if panelW <= 0 {
+		panelW = 280
+	}
+	borderInsetX := uiPanelBorderWidth(ctx, scale)
+	borderInsetY := uiPanelBorderHeight(ctx, scale)
+
+	availableW := panelW - (borderInsetX+padding)*2
+	if availableW < 0 {
+		availableW = 0
 	}
 
 	var titleH float32
@@ -326,8 +335,8 @@ func uiBuildPanelLayout(ctx uiLayoutContext, panel *UiPanel, scrollY float32) *u
 		titleH = uiTextHeight(ctx, scale)
 	}
 
-	contentX := padding
-	contentY := padding
+	contentX := borderInsetX + padding
+	contentY := borderInsetY + padding
 	if titleH > 0 {
 		contentY += titleH + spacing
 	}
@@ -336,7 +345,7 @@ func uiBuildPanelLayout(ctx uiLayoutContext, panel *UiPanel, scrollY float32) *u
 	currY := contentY
 	maxChildW := float32(0)
 	for idx, child := range panel.Children {
-		childLayout := uiLayoutNodeFor(child, fmt.Sprintf("panel/%d", idx), contentX, currY, contentWidth-padding*2, ctx)
+		childLayout := uiLayoutNodeFor(child, fmt.Sprintf("panel/%d", idx), contentX, currY, availableW, ctx)
 		if childLayout == nil {
 			continue
 		}
@@ -350,18 +359,13 @@ func uiBuildPanelLayout(ctx uiLayoutContext, panel *UiPanel, scrollY float32) *u
 		currY -= spacing
 	}
 
-	panelW := contentWidth
-	if maxChildW+padding*2 > panelW {
-		panelW = maxChildW + padding*2
+	if maxChildW+(borderInsetX+padding)*2 > panelW {
+		panelW = maxChildW + (borderInsetX+padding)*2
 	}
-	panelH := currY + padding
+	panelH := uiSnapBoxHeight(ctx, currY+padding+borderInsetY, panel.MaxHeight, scale)
 	contentHeight := currY - contentY
 	if contentHeight < 0 {
 		contentHeight = 0
-	}
-	maxHeight := panel.MaxHeight
-	if maxHeight > 0 && panelH > maxHeight {
-		panelH = maxHeight
 	}
 	if panelH < uiPanelMinHeight {
 		panelH = uiPanelMinHeight
@@ -377,7 +381,7 @@ func uiBuildPanelLayout(ctx uiLayoutContext, panel *UiPanel, scrollY float32) *u
 		node: panel,
 	}
 	root.contentTop = posY + contentY
-	root.contentBottom = posY + panelH - padding
+	root.contentBottom = posY + panelH - borderInsetY - padding
 	root.contentHeight = contentHeight
 	viewportH := root.contentBottom - root.contentTop
 	if viewportH < 0 {
@@ -857,11 +861,13 @@ func uiRenderPanel(layout *uiLayoutNode, ctx uiLayoutContext, panel *UiPanel) {
 	if padding <= 0 {
 		padding = uiPanelPadding
 	}
+	borderInsetY := uiPanelBorderHeight(ctx, scale)
 	color := [4]float32{0.9, 0.9, 0.9, 1}
 	uiDrawBox(ctx, layout.x, layout.y, layout.w, layout.h, color, scale)
 	if panel.Title != "" {
-		uiDrawText(ctx, panel.Title, layout.x+padding, layout.y+padding, scale, [4]float32{1, 1, 0, 1})
-		uiDrawText(ctx, strings.Repeat("-", intMax(8, len(panel.Title)+2)), layout.x+padding, layout.y+padding+uiTextHeight(ctx, scale)*0.9, 0.45, [4]float32{0.65, 0.65, 0.65, 1})
+		titleY := layout.y + borderInsetY + padding
+		uiDrawText(ctx, panel.Title, layout.x+uiPanelBorderWidth(ctx, scale)+padding, titleY, scale, [4]float32{1, 1, 0, 1})
+		uiDrawText(ctx, strings.Repeat("-", intMax(8, len(panel.Title)+2)), layout.x+uiPanelBorderWidth(ctx, scale)+padding, titleY+uiTextHeight(ctx, scale)*0.9, 0.45, [4]float32{0.65, 0.65, 0.65, 1})
 	}
 	if layout.scrollMax > 0 {
 		uiDrawScrollbar(ctx, layout)
@@ -938,8 +944,8 @@ func uiDrawButtonBox(ctx uiLayoutContext, x, y, w, h, scale float32, color [4]fl
 	uiDrawBox(ctx, x, y, w, h, color, scale)
 
 	lineH := ctx.state.GetLineHeight(scale)
-	if lineH < 35*scale {
-		lineH = 35 * scale
+	if lineH < uiMinBoxLineH*scale {
+		lineH = uiMinBoxLineH * scale
 	}
 
 	textColor := [4]float32{1, 1, 1, 1}
@@ -977,16 +983,13 @@ func uiDrawFieldBox(ctx uiLayoutContext, x, y, w, h, scale float32, color [4]flo
 
 func uiDrawBox(ctx uiLayoutContext, x, y, w, h float32, color [4]float32, scale float32) {
 	lineH := ctx.state.GetLineHeight(scale)
-	if lineH < 35*scale {
-		lineH = 35 * scale
+	if lineH < uiMinBoxLineH*scale {
+		lineH = uiMinBoxLineH * scale
 	}
 	drawX := x * ctx.pixelRatio
 	drawY := y * ctx.pixelRatio
 	drawW := w * ctx.pixelRatio
-	rows := int((h*ctx.pixelRatio)/lineH + 0.5)
-	if rows < 3 {
-		rows = 3
-	}
+	rows := uiBoxRowCount(ctx, h, scale)
 	pipeW, _ := ctx.state.MeasureText("|", scale)
 
 	uiDrawBoxHLine(ctx, drawX, drawY, drawW, scale, color)
@@ -1061,10 +1064,55 @@ func uiDrawScrollbar(ctx uiLayoutContext, layout *uiLayoutNode) {
 	}
 }
 
+func uiPanelBorderWidth(ctx uiLayoutContext, scale float32) float32 {
+	width, _ := uiMeasureText(ctx, "|", scale)
+	if width <= 0 {
+		width = uiFieldPaddingX
+	}
+	return width
+}
+
+func uiPanelBorderHeight(ctx uiLayoutContext, scale float32) float32 {
+	return uiTextHeight(ctx, scale)
+}
+
+func uiBoxRowCount(ctx uiLayoutContext, desired, scale float32) int {
+	rowHeight := uiPanelBorderHeight(ctx, scale)
+	if rowHeight <= 0 {
+		return 3
+	}
+	rows := int(math.Ceil(float64(desired / rowHeight)))
+	if rows < 3 {
+		rows = 3
+	}
+	return rows
+}
+
+func uiSnapBoxHeight(ctx uiLayoutContext, desired, maxHeight, scale float32) float32 {
+	rowHeight := uiPanelBorderHeight(ctx, scale)
+	if rowHeight <= 0 {
+		return desired
+	}
+
+	rows := uiBoxRowCount(ctx, desired, scale)
+
+	if maxHeight > 0 {
+		maxRows := int(math.Floor(float64(maxHeight / rowHeight)))
+		if maxRows < 3 {
+			maxRows = 3
+		}
+		if rows > maxRows {
+			rows = maxRows
+		}
+	}
+
+	return float32(rows) * rowHeight
+}
+
 func uiTextHeight(ctx uiLayoutContext, scale float32) float32 {
 	lineH := ctx.state.GetLineHeight(scale)
-	if lineH < 35*scale {
-		lineH = 35 * scale
+	if lineH < uiMinBoxLineH*scale {
+		lineH = uiMinBoxLineH * scale
 	}
 	return lineH / ctx.pixelRatio
 }
@@ -1079,7 +1127,7 @@ func uiBoxSize(ctx uiLayoutContext, width float32, text string, scale float32) (
 	if width <= 0 {
 		width = tw + uiFieldPaddingX*2.0
 	}
-	return width, uiTextHeight(ctx, scale) * 3.0
+	return width, uiSnapBoxHeight(ctx, uiTextHeight(ctx, scale)*2.4+uiFieldPaddingY*2.0, 0, scale)
 }
 
 func uiNodeScale(scale float32) float32 {

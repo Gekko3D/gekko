@@ -84,6 +84,7 @@ type App struct {
 	LightingQuality    core.LightingQualityConfig
 	OcclusionMode      core.OcclusionMode
 	FontPath           string
+	UIFontSize         float64
 
 	FrameCount          int
 	FPS                 float64
@@ -97,6 +98,8 @@ type App struct {
 	ParticleSpawnCount uint32
 	ParticleAtlasData  []byte // If set before Init, uses this instead of embedded
 }
+
+const DefaultUIFontSize = 26.0
 
 func NewApp(window *glfw.Window) *App {
 	return &App{
@@ -116,6 +119,13 @@ func (a *App) EffectiveLightingQuality() core.LightingQualityConfig {
 		cfg.Preset = a.QualityPreset
 	}
 	return cfg.WithDefaults()
+}
+
+func (a *App) effectiveUIFontSize() float64 {
+	if a.UIFontSize > 0 {
+		return a.UIFontSize
+	}
+	return DefaultUIFontSize
 }
 
 func (a *App) Init() error {
@@ -537,7 +547,7 @@ func (a *App) Init() error {
 			fontPath = "Roboto-Medium.ttf" // Final fallback
 		}
 	}
-	a.TextRenderer, err = core.NewTextRenderer(fontPath, 32)
+	a.TextRenderer, err = core.NewTextRenderer(fontPath, a.effectiveUIFontSize())
 	if err != nil {
 		fmt.Printf("WARNING: Failed to initialize text renderer: %v\n", err)
 	} else {

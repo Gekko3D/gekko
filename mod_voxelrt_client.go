@@ -90,6 +90,7 @@ type VoxelRtModule struct {
 	LightingQuality LightingQualityConfig
 	OcclusionMode   core.OcclusionMode
 	FontPath        string
+	UIFontSize      float64
 }
 
 type VoxelRtState struct {
