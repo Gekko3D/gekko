@@ -376,6 +376,82 @@ fn estimate_normal_os(voxel_center_os: vec3<f32>, params: ObjectParams) -> vec3<
   return -normalize(grad);
 }
 
+fn axis_tiebreak_sign_os(voxel_center_os: vec3<f32>, local_aabb_min: vec3<f32>, local_aabb_max: vec3<f32>, axis: u32) -> f32 {
+  let dist_to_min = voxel_center_os[axis] - local_aabb_min[axis];
+  let dist_to_max = local_aabb_max[axis] - voxel_center_os[axis];
+  if (dist_to_min + 1e-4 < dist_to_max) {
+    return -1.0;
+  }
+  return 1.0;
+}
+
+fn fallback_exposed_voxel_normal_os(
+  voxel_center_os: vec3<f32>,
+  local_aabb_min: vec3<f32>,
+  local_aabb_max: vec3<f32>,
+  params: ObjectParams,
+) -> vec3<f32> {
+  let vi = vec3<i32>(floor(voxel_center_os));
+
+  let occ_px = sample_occupancy(vi + vec3<i32>(1, 0, 0), params);
+  let occ_nx = sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
+  let occ_py = sample_occupancy(vi + vec3<i32>(0, 1, 0), params);
+  let occ_ny = sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
+  let occ_pz = sample_occupancy(vi + vec3<i32>(0, 0, 1), params);
+  let occ_nz = sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
+
+  let empty_px = 1.0 - occ_px;
+  let empty_nx = 1.0 - occ_nx;
+  let empty_py = 1.0 - occ_py;
+  let empty_ny = 1.0 - occ_ny;
+  let empty_pz = 1.0 - occ_pz;
+  let empty_nz = 1.0 - occ_nz;
+
+  let signed_exposure = vec3<f32>(
+    empty_px - empty_nx,
+    empty_py - empty_ny,
+    empty_pz - empty_nz,
+  );
+  if (length(signed_exposure) >= 0.01) {
+    return normalize(signed_exposure);
+  }
+
+  let unsigned_exposure = vec3<f32>(
+    empty_px + empty_nx,
+    empty_py + empty_ny,
+    empty_pz + empty_nz,
+  );
+  var tie_break = vec3<f32>(0.0);
+  if (unsigned_exposure.x > 0.01) {
+    tie_break.x = axis_tiebreak_sign_os(voxel_center_os, local_aabb_min, local_aabb_max, 0u);
+  }
+  if (unsigned_exposure.y > 0.01) {
+    tie_break.y = axis_tiebreak_sign_os(voxel_center_os, local_aabb_min, local_aabb_max, 1u);
+  }
+  if (unsigned_exposure.z > 0.01) {
+    tie_break.z = axis_tiebreak_sign_os(voxel_center_os, local_aabb_min, local_aabb_max, 2u);
+  }
+  if (length(tie_break) >= 0.01) {
+    return normalize(tie_break);
+  }
+
+  return vec3<f32>(0.0);
+}
+
+fn has_two_sided_voxel_exposure_os(voxel_center_os: vec3<f32>, params: ObjectParams) -> bool {
+  let vi = vec3<i32>(floor(voxel_center_os));
+  let empty_px = 1.0 - sample_occupancy(vi + vec3<i32>(1, 0, 0), params);
+  let empty_nx = 1.0 - sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
+  let empty_py = 1.0 - sample_occupancy(vi + vec3<i32>(0, 1, 0), params);
+  let empty_ny = 1.0 - sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
+  let empty_pz = 1.0 - sample_occupancy(vi + vec3<i32>(0, 0, 1), params);
+  let empty_nz = 1.0 - sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
+  return
+    (empty_px > 0.01 && empty_nx > 0.01) ||
+    (empty_py > 0.01 && empty_ny > 0.01) ||
+    (empty_pz > 0.01 && empty_nz > 0.01);
+}
+
 fn fallback_face_normal_os(p_hit_os: vec3<f32>, vi_hit: vec3<i32>, ray_dir_os: vec3<f32>) -> vec3<f32> {
   let p_in_voxel = p_hit_os - (vec3<f32>(vi_hit) + 0.5);
   let abs_p = abs(p_in_voxel);
@@ -666,6 +742,7 @@ fn calculate_lighting(
   metalness: f32,
   ior: f32,
   emissive: vec3<f32>,
+  two_sided_lighting: bool,
   receiver_shadow_group_id: u32,
   receiver_shadow_seam_epsilon: f32,
   tile_index: u32
@@ -722,13 +799,15 @@ fn calculate_lighting(
       continue;
     }
 
+    let shadow_normal = select(n, n * select(-1.0, 1.0, dot(n, L) >= 0.0), two_sided_lighting);
+
     if (light_type != 0u && light.shadow_meta.y > 0u) {
       if (light_type == 1u) {
         let selection = choose_directional_cascade(light, p);
-        let primary_visibility = sample_directional_shadow(light, p, n, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
+        let primary_visibility = sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
         let secondary_visibility = select(
           primary_visibility,
-          sample_directional_shadow(light, p, n, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
+          sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
           selection.secondary_index != selection.primary_index,
         );
         attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
@@ -749,9 +828,9 @@ fn calculate_lighting(
           );
 
           let receiver_offset = max(receiver_shadow_seam_epsilon * 0.5, 0.05);
-          let pos_off = p + n * receiver_offset;
+          let pos_off = p + shadow_normal * receiver_offset;
           let my_depth_m = distance(light.position.xyz, pos_off);
-          let NdL_shadow = max(dot(n, L), 0.0);
+          let NdL_shadow = max(dot(shadow_normal, L), 0.0);
           let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
           let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
           let hard_sampled_depth = hard_shadow_sample.r;
@@ -794,19 +873,20 @@ fn calculate_lighting(
       continue;
     }
 
-    let NdotL = max(dot(n, L), 0.0);
-    if (NdotL <= 0.0 || NdotV <= 0.0) {
+    let NdotL = select(max(dot(n, L), 0.0), abs(dot(n, L)), two_sided_lighting);
+    let NdotV_local = select(NdotV, abs(dot(n, V)), two_sided_lighting);
+    if (NdotL <= 0.0 || NdotV_local <= 0.0) {
       continue;
     }
 
     let H = normalize(V + L);
-    let NdotH = max(dot(n, H), 0.0);
+    let NdotH = select(max(dot(n, H), 0.0), abs(dot(n, H)), two_sided_lighting);
     let HdotV = max(dot(H, V), 0.0);
     let rough = max(roughness, MIN_ROUGHNESS);
     let fresnel = fresnel_schlick(HdotV, F0);
     let D = distribution_ggx(NdotH, rough);
-    let G = geometry_smith(NdotV, NdotL, rough);
-    let specular = (D * G * fresnel) / max(4.0 * NdotV * NdotL, PBR_EPSILON);
+    let G = geometry_smith(NdotV_local, NdotL, rough);
+    let specular = (D * G * fresnel) / max(4.0 * NdotV_local * NdotL, PBR_EPSILON);
     let kS = fresnel;
     let kD = (vec3<f32>(1.0) - kS) * (1.0 - metalness);
     let diffuse = kD * base_color / PI;
@@ -962,6 +1042,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let voxel_center_os = floor(p_hit_os) + 0.5;
                               let vi_hit = vec3<i32>(floor(voxel_center_os));
                               var n_os = estimate_normal_os(voxel_center_os, params);
+                              var two_sided_lighting = false;
+                              if (length(n_os) < 0.01) {
+                                n_os = fallback_exposed_voxel_normal_os(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
+                                two_sided_lighting = has_two_sided_voxel_exposure_os(voxel_center_os, params);
+                              }
                               if (length(n_os) < 0.01) {
                                 n_os = fallback_face_normal_os(p_hit_os, vi_hit, dir);
                               }
@@ -978,7 +1063,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let coverage_step = 1.0 - exp(-coverage_sigma * dt_ws);
                               let sigma_a = absorption_coefficient(base_col, transmission, medium_density * 0.75) * mix(0.15, 1.0, opacity);
                               let trans_step = select(vec3<f32>(1.0 - coverage_step), exp(-sigma_a * dt_ws), is_volumetric);
-                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, shadow_seam_epsilon, tile_index);
+                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, two_sided_lighting, params.shadow_group_id, shadow_seam_epsilon, tile_index);
                               let refract_off = select(
                                 vec2<f32>(0.0, 0.0),
                                 refraction_uv_offset(pos_ws, n_ws, view_dir, max(pbr.z, 1.001), refraction_strength, refractive_path_ws),
@@ -1046,6 +1131,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let voxel_center_os = floor(p_hit_os) + 0.5;
                                   let vi_hit = vec3<i32>(floor(voxel_center_os));
                                   var n_os = estimate_normal_os(voxel_center_os, params);
+                                  var two_sided_lighting = false;
+                                  if (length(n_os) < 0.01) {
+                                    n_os = fallback_exposed_voxel_normal_os(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
+                                    two_sided_lighting = has_two_sided_voxel_exposure_os(voxel_center_os, params);
+                                  }
                                   if (length(n_os) < 0.01) {
                                     n_os = fallback_face_normal_os(p_hit_os, vi_hit, dir);
                                   }
@@ -1062,7 +1152,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let coverage_step = 1.0 - exp(-coverage_sigma * dt_ws);
                                   let sigma_a = absorption_coefficient(base_col, transmission, medium_density * 0.75) * mix(0.15, 1.0, opacity);
                                   let trans_step = select(vec3<f32>(1.0 - coverage_step), exp(-sigma_a * dt_ws), is_volumetric);
-                                  let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, shadow_seam_epsilon, tile_index);
+                                  let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, two_sided_lighting, params.shadow_group_id, shadow_seam_epsilon, tile_index);
                                   let refract_off = select(
                                     vec2<f32>(0.0, 0.0),
                                     refraction_uv_offset(pos_ws, n_ws, view_dir, max(pbr.z, 1.001), refraction_strength, refractive_path_ws),

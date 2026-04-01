@@ -117,8 +117,11 @@ The voxel renderer intentionally keeps a blocky albedo/material look while allow
   - The intended look is faceless microvoxels with shape volume. The live rule is: estimate a normal from neighboring occupied/empty voxels, then fall back only if that gradient is degenerate.
 - Do not use object-center or radial fallback normals for shading.
   - Those produce a blobby "inflated" read that is unrelated to the local voxel surface and drift badly on concave or thin shapes.
-- Fallback normals should come from the entered voxel face.
-  - If the occupancy gradient is degenerate, derive the fallback from the hit face / ray entry direction, not from object-level heuristics.
+- Degenerate gradients should still resolve to one per-voxel normal.
+  - If the occupancy gradient is degenerate, derive a deterministic fallback from the voxel's exposed-face mask so thin symmetric features do not become view-dependent.
+  - Use the hit face / ray entry direction only as a last resort when the occupancy-based fallback is still ambiguous.
+- Single-voxel-thick features need two-sided direct lighting.
+  - When a voxel is exposed on both sides of an axis, keep its normal deterministic, but evaluate direct point and spot lighting as two-sided so planes and rods still react to local lights from either side.
 - Normal transforms must be consistent across traversal paths.
   - `XBrickMap` microvoxels, solid-brick fast paths, and `tree64` LOD hits must all use the same object-space-to-world-space normal rule. Use the inverse-transpose-style transform, especially when non-uniform scale is possible.
 - Lighting may vary voxel-to-voxel, but color identity should remain voxel-stable.
@@ -128,7 +131,8 @@ Current implementation notes:
 
 - The live normal-generation path is in `voxelrt/rt/shaders/gbuffer.wgsl`.
 - Neighbor-derived normals are computed from 6-neighbor occupancy samples, terrain chunks included across chunk boundaries.
-- The fallback path is face-based, not object-center-based.
+- The degenerate fallback path is occupancy-based and deterministic per voxel; face-entry is only a last resort.
+- Degenerate thin voxels carry a two-sided direct-light flag through the G-buffer so deferred and transparent lighting agree on planes and rods.
 - Deferred lighting consumes the stored G-buffer normal directly; the albedo/material lookup stays palette-driven.
 - Opaque deferred point and spot lights evaluate attenuation from the stored voxel center, matching the transparent overlay path.
 - Shadow softness is controlled separately for directional and spot lights through `LightingQualityConfig.Shadow`.

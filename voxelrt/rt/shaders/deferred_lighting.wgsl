@@ -292,6 +292,7 @@ fn calculate_lighting(
     roughness: f32,
     metalness: f32,
     ior: f32,
+    two_sided_lighting: bool,
     receiver_shadow_group_id: u32,
     receiver_shadow_seam_epsilon: f32,
     light_idx: u32
@@ -332,13 +333,15 @@ fn calculate_lighting(
     
     if (attenuation > 0.0) {
         // Shadowing
+        let shadow_normal = select(normal, normal * select(-1.0, 1.0, dot(normal, L) >= 0.0), two_sided_lighting);
+
         if (light_type != 0u && light.shadow_meta.y > 0u) {
             if (light_type == 1u) {
                 let selection = choose_directional_cascade(light, shadow_receiver_pos);
-                let primary_visibility = sample_directional_shadow(light, shadow_receiver_pos, normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
+                let primary_visibility = sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
                 let secondary_visibility = select(
                     primary_visibility,
-                    sample_directional_shadow(light, shadow_receiver_pos, normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
+                    sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
                     selection.secondary_index != selection.primary_index,
                 );
                 attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
@@ -361,10 +364,10 @@ fn calculate_lighting(
 
                     var my_depth_m = 0.0;
                     let receiver_offset = max(receiver_shadow_seam_epsilon * 0.5, 0.05);
-                    let pos_off = shadow_receiver_pos + normal * receiver_offset;
+                    let pos_off = shadow_receiver_pos + shadow_normal * receiver_offset;
                     my_depth_m = distance(light.position.xyz, pos_off);
 
-                    let NdL = max(dot(normal, L), 0.0);
+                    let NdL = max(dot(shadow_normal, L), 0.0);
                     let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
                     let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
                     let hard_sampled_depth = hard_shadow_sample.r;
@@ -403,14 +406,14 @@ fn calculate_lighting(
             }
         }
 
-        let NdotL = max(dot(normal, L), 0.0);
-        let NdotV = max(dot(normal, view_dir), 0.0);
+        let NdotL = select(max(dot(normal, L), 0.0), abs(dot(normal, L)), two_sided_lighting);
+        let NdotV = select(max(dot(normal, view_dir), 0.0), abs(dot(normal, view_dir)), two_sided_lighting);
         if (NdotL <= 0.0 || NdotV <= 0.0) {
             return LightingContribution(vec3<f32>(0.0), 0u);
         }
 
         let half_dir = normalize(L + view_dir);
-        let NdotH = max(dot(normal, half_dir), 0.0);
+        let NdotH = select(max(dot(normal, half_dir), 0.0), abs(dot(normal, half_dir)), two_sided_lighting);
         let HdotV = max(dot(half_dir, view_dir), 0.0);
         let rough = max(roughness, MIN_ROUGHNESS);
 
@@ -548,7 +551,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mat_data = textureLoad(in_material, global_id.xy, 0);
     
     let palette_idx = u32(mat_data.x + 0.5);
-    let receiver_shadow_group_id = u32(mat_data.y + 0.5);
+    let packed_shadow_group = u32(mat_data.y + 0.5);
+    let receiver_shadow_group_id = packed_shadow_group >> 1u;
+    let two_sided_lighting = (packed_shadow_group & 1u) != 0u;
     let receiver_shadow_seam_epsilon = max(mat_data.z, 0.0);
     let material_base = u32(mat_data.w + 0.5);
     
@@ -585,7 +590,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     for (var i = 0u; i < tile_header.count; i++) {
         let light_idx = tile_light_indices[tile_header.offset + i];
-        let contribution = calculate_lighting(lighting_pos_ws, voxel_center_ws, normal, view_dir, base_color, roughness, metalness, ior, receiver_shadow_group_id, receiver_shadow_seam_epsilon, light_idx);
+        let contribution = calculate_lighting(lighting_pos_ws, voxel_center_ws, normal, view_dir, base_color, roughness, metalness, ior, two_sided_lighting, receiver_shadow_group_id, receiver_shadow_seam_epsilon, light_idx);
         direct_color += contribution.color;
     }
     let final_color = indirect_color + direct_color + emissive_term;

@@ -84,6 +84,7 @@ struct HitResult {
     ao: f32,
     voxel_center_ws: vec3<f32>,
     shadow_group_id: u32,
+    two_sided_lighting: u32,
     shadow_seam_epsilon: f32,
 };
 
@@ -408,6 +409,82 @@ fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
     return -normalize(grad);
 }
 
+fn axis_tiebreak_sign(voxel_center_os: vec3<f32>, local_aabb_min: vec3<f32>, local_aabb_max: vec3<f32>, axis: u32) -> f32 {
+    let dist_to_min = voxel_center_os[axis] - local_aabb_min[axis];
+    let dist_to_max = local_aabb_max[axis] - voxel_center_os[axis];
+    if (dist_to_min + 1e-4 < dist_to_max) {
+        return -1.0;
+    }
+    return 1.0;
+}
+
+fn fallback_exposed_voxel_normal(
+    voxel_center_os: vec3<f32>,
+    local_aabb_min: vec3<f32>,
+    local_aabb_max: vec3<f32>,
+    params: ObjectParams,
+) -> vec3<f32> {
+    let vi = vec3<i32>(floor(voxel_center_os));
+
+    let occ_px = sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), params);
+    let occ_nx = sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), params);
+    let occ_py = sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), params);
+    let occ_ny = sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), params);
+    let occ_pz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), params);
+    let occ_nz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), params);
+
+    let empty_px = 1.0 - occ_px;
+    let empty_nx = 1.0 - occ_nx;
+    let empty_py = 1.0 - occ_py;
+    let empty_ny = 1.0 - occ_ny;
+    let empty_pz = 1.0 - occ_pz;
+    let empty_nz = 1.0 - occ_nz;
+
+    let signed_exposure = vec3<f32>(
+        empty_px - empty_nx,
+        empty_py - empty_ny,
+        empty_pz - empty_nz,
+    );
+    if (length(signed_exposure) >= 0.01) {
+        return normalize(signed_exposure);
+    }
+
+    let unsigned_exposure = vec3<f32>(
+        empty_px + empty_nx,
+        empty_py + empty_ny,
+        empty_pz + empty_nz,
+    );
+    var tie_break = vec3<f32>(0.0);
+    if (unsigned_exposure.x > 0.01) {
+        tie_break.x = axis_tiebreak_sign(voxel_center_os, local_aabb_min, local_aabb_max, 0u);
+    }
+    if (unsigned_exposure.y > 0.01) {
+        tie_break.y = axis_tiebreak_sign(voxel_center_os, local_aabb_min, local_aabb_max, 1u);
+    }
+    if (unsigned_exposure.z > 0.01) {
+        tie_break.z = axis_tiebreak_sign(voxel_center_os, local_aabb_min, local_aabb_max, 2u);
+    }
+    if (length(tie_break) >= 0.01) {
+        return normalize(tie_break);
+    }
+
+    return vec3<f32>(0.0);
+}
+
+fn has_two_sided_voxel_exposure(voxel_center_os: vec3<f32>, params: ObjectParams) -> bool {
+    let vi = vec3<i32>(floor(voxel_center_os));
+    let empty_px = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), params);
+    let empty_nx = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), params);
+    let empty_py = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), params);
+    let empty_ny = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), params);
+    let empty_pz = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), params);
+    let empty_nz = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), params);
+    return
+        (empty_px > 0.01 && empty_nx > 0.01) ||
+        (empty_py > 0.01 && empty_ny > 0.01) ||
+        (empty_pz > 0.01 && empty_nz > 0.01);
+}
+
 fn fallback_face_normal(p_hit_os: vec3<f32>, vi_hit: vec3<i32>, ray_dir_os: vec3<f32>) -> vec3<f32> {
     let p_in_voxel = p_hit_os - (vec3<f32>(vi_hit) + 0.5);
     let abs_p = abs(p_in_voxel);
@@ -546,7 +623,7 @@ fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0.0);
+    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
     let params = object_params[object_id];
     let ray = transform_ray(ray_ws, inst.world_to_object);
     let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
@@ -598,16 +675,23 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 result.hit = true; result.t = t_brick; result.palette_idx = b_atlas; result.material_idx = params.material_table_base;
                                 let p_hit_os = ray.origin + dir * (t_brick + (EPS * 0.1));
                                 let vi_hit = vec3<i32>(floor(p_hit_os));
-                                var n_os = estimate_normal(p_hit_os, params);
+                                let voxel_center_os = vec3<f32>(vi_hit) + 0.5;
+                                var n_os = estimate_normal(voxel_center_os, params);
+                                var two_sided_lighting = 0u;
+                                if (length(n_os) < 0.01) {
+                                    n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
+                                    two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, params));
+                                }
                                 if (length(n_os) < 0.01) {
                                     n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
                                 }
 
                                 result.normal = transform_normal_to_world(inst, n_os);
-                                result.ao = compute_voxel_ao(vec3<f32>(vi_hit) + 0.5, n_os, params);
-                                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(vec3<f32>(vi_hit) + 0.5, 1.0)).xyz;
+                                result.ao = compute_voxel_ao(voxel_center_os, n_os, params);
+                                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                 result.shadow_group_id = params.shadow_group_id;
-                                result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(p_hit_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
+                                result.two_sided_lighting = two_sided_lighting;
+                                result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
                                 return result;
                             }
                         }
@@ -643,6 +727,11 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             let vi_hit = vec3<i32>(floor(voxel_center_os));
                                             let p_hit_os = ray.origin + dir * (t_micro + (EPS * 0.1));
                                             var n_os = estimate_normal(voxel_center_os, params);
+                                            var two_sided_lighting = 0u;
+                                            if (length(n_os) < 0.01) {
+                                                n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
+                                                two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, params));
+                                            }
                                             if (length(n_os) < 0.01) {
                                                 n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
                                             }
@@ -650,6 +739,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             result.ao = compute_voxel_ao(voxel_center_os, n_os, params);
                                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                             result.shadow_group_id = params.shadow_group_id;
+                                            result.two_sided_lighting = two_sided_lighting;
                                             result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
                                             return result;
                                         }
@@ -688,7 +778,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
 }
 
 fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0.0);
+    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
     let params = object_params[object_id];
     if (params.tree64_base == 0xFFFFFFFFu) { return result; }
     let ray = transform_ray(ray_ws, inst.world_to_object);
@@ -737,16 +827,23 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                         } else {
                             result.hit = true; result.t = t_micro; result.palette_idx = palette_idx2; result.material_idx = params.material_table_base;
                             let p_hit_os = ray.origin + ray.dir * (t_micro + (EPS * 0.1));
-                            var n_os = estimate_normal(p_hit_os, params);
+                            let voxel_center_os = vec3<f32>(vi2) + 0.5;
+                            var n_os = estimate_normal(voxel_center_os, params);
+                            var two_sided_lighting = 0u;
+                            if (length(n_os) < 0.01) {
+                                n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
+                                two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, params));
+                            }
                             if (length(n_os) < 0.01) {
                                 n_os = fallback_face_normal(p_hit_os, vi2, ray.dir);
                             }
 
                             result.normal = transform_normal_to_world(inst, n_os);
-                            result.ao = compute_voxel_ao(vec3<f32>(vi2) + 0.5, n_os, params);
-                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(vec3<f32>(vi2) + 0.5, 1.0)).xyz;
+                            result.ao = compute_voxel_ao(voxel_center_os, n_os, params);
+                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                             result.shadow_group_id = params.shadow_group_id;
-                            result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(vec3<f32>(vi2) + 0.5, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
+                            result.two_sided_lighting = two_sided_lighting;
+                            result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
                             return result;
                         }
                     }
@@ -788,7 +885,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ray = get_ray(uv);
     
     // Trace scene via BVH
-    var hit_res = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0.0);
+    var hit_res = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
     
     var stack: array<i32, 64>;
     var stack_ptr = 0;
@@ -848,7 +945,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         textureStore(out_depth, global_id.xy, vec4<f32>(hit_res.t, hit_res.voxel_center_ws));
         textureStore(out_normal, global_id.xy, vec4<f32>(hit_res.normal, hit_res.ao));
-        textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), f32(hit_res.shadow_group_id), hit_res.shadow_seam_epsilon, f32(hit_res.material_idx)));
+        let packed_shadow_group = hit_res.shadow_group_id * 2u + hit_res.two_sided_lighting;
+        textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), f32(packed_shadow_group), hit_res.shadow_seam_epsilon, f32(hit_res.material_idx)));
     } else {
         textureStore(out_depth, global_id.xy, vec4<f32>(100000.0, 0.0, 0.0, 0.0));
         textureStore(out_normal, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
