@@ -676,8 +676,11 @@ fn calculate_lighting(
   let F0 = mix(dielectric_f0, base_color, metalness);
   let ambient_fresnel = fresnel_schlick_roughness(NdotV, F0, roughness);
   let ambient_kd = (vec3<f32>(1.0) - ambient_fresnel) * (1.0 - metalness);
-  let ambient_light = uCamera.ambient_color.xyz * directional_ambient_scale(n);
-  var total_light = (ambient_kd * base_color + ambient_fresnel) * ambient_light + emissive;
+  let diffuse_ambient_light = uCamera.ambient_color.xyz * directional_ambient_scale(n);
+  let reflection_dir = reflect(-V, n);
+  let rough_reflection_dir = normalize(mix(reflection_dir, n, saturate(roughness * roughness)));
+  let specular_ambient_light = uCamera.ambient_color.xyz * directional_ambient_scale(rough_reflection_dir);
+  var total_light = ambient_kd * base_color * diffuse_ambient_light + ambient_fresnel * specular_ambient_light + emissive;
   
   let tile_header = tile_light_headers[tile_index];
   for (var i = 0u; i < tile_header.count; i++) {

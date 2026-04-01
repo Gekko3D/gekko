@@ -482,6 +482,20 @@ fn sample_directional_sky_ambient(normal: vec3<f32>, ao: f32) -> vec3<f32> {
     return ambient_source * (hemi + horizon * 0.12) * ao_clamped;
 }
 
+fn sample_specular_sky_ambient(normal: vec3<f32>, view_dir: vec3<f32>, roughness: f32, ao: f32) -> vec3<f32> {
+    let ao_clamped = saturate(ao);
+    let ao2 = ao_clamped * ao_clamped;
+    let reflection_dir = reflect(-view_dir, normal);
+    let rough_reflection_dir = normalize(mix(reflection_dir, normal, saturate(roughness * roughness)));
+    let sky_uv = dir_to_uv(rough_reflection_dir);
+    let sky_sample = textureSampleLevel(in_skybox, skybox_sampler, sky_uv, 0.0).xyz;
+    let sky_mix = camera.ambient_color.w * ao2;
+    let ambient_source = mix(camera.ambient_color.xyz, sky_sample, sky_mix);
+    let horizon = 1.0 - abs(rough_reflection_dir.y);
+    let sky_visibility = 0.34 + horizon * 0.18;
+    return ambient_source * sky_visibility * ao_clamped;
+}
+
 // ============== MAIN DEFERRED LIGHTING PASS ==============
 
 fn get_ray(uv: vec2<f32>) -> Ray {
@@ -558,8 +572,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let F0 = mix(dielectric_f0, base_color, metalness);
     let ambient_fresnel = fresnel_schlick_roughness(NdotV, F0, roughness);
     let ambient_kd = (vec3<f32>(1.0) - ambient_fresnel) * (1.0 - metalness);
-    let ambient_light = sample_directional_sky_ambient(normal, ambient_occlusion);
-    let ambient_term = (ambient_kd * base_color + ambient_fresnel) * ambient_light;
+    let diffuse_ambient_light = sample_directional_sky_ambient(normal, ambient_occlusion);
+    let specular_ambient_light = sample_specular_sky_ambient(normal, view_dir, roughness, ambient_occlusion);
+    let ambient_term = ambient_kd * base_color * diffuse_ambient_light + ambient_fresnel * specular_ambient_light;
     let indirect_color = ambient_term * ambient_occlusion;
     let emissive_term = emissive;
     var direct_color = vec3<f32>(0.0);
