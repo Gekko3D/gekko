@@ -92,6 +92,7 @@ type App struct {
 	RenderFrameIndex    uint64
 	ShadowUpdateOffset  int
 	ShadowUpdateSummary string
+	HadAccumulationPass bool
 
 	Profiler *core.Profiler
 

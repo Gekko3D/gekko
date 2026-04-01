@@ -14,6 +14,15 @@ import (
 
 const materialBlockCapacity = 256
 
+func materialTableHasTransparency(table []core.Material) bool {
+	for _, mat := range table {
+		if mat.Transparency > 0.001 || mat.Transmission > 0.001 {
+			return true
+		}
+	}
+	return false
+}
+
 func materialTableIdentity(table []core.Material) (uintptr, int) {
 	if len(table) == 0 {
 		return 0, 0
@@ -204,6 +213,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			matAlloc.MaterialTableLen = tableLen
 			matAlloc.BufferGeneration = m.MaterialBufferGeneration
 		}
+		matAlloc.HasTransparency = materialTableHasTransparency(obj.MaterialTable)
 
 		if xbm.StructureDirty || !exists {
 			// 1. Detect removed sectors or pointer changes

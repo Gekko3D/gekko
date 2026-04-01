@@ -254,6 +254,7 @@ type GpuBufferManager struct {
 	ParticlesBindGroup1  *wgpu.BindGroup // gbuffer depth
 	ParticleCount        uint32
 	MaxParticleCount     uint32
+	ParticleSystemActive bool
 
 	// Sprites (billboards, UI or world)
 	SpriteBuf          *wgpu.Buffer
@@ -352,6 +353,7 @@ type MaterialGpuAllocation struct {
 	MaterialTablePtr uintptr
 	MaterialTableLen int
 	BufferGeneration uint64
+	HasTransparency  bool
 }
 
 type SectorGpuInfo struct {
