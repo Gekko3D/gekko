@@ -434,7 +434,7 @@ func TestDestructionSystem_MomentumInheritance(t *testing.T) {
 		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 			Camera:   &core.CameraState{},
 		},
 	}

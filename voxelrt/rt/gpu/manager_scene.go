@@ -311,8 +311,8 @@ func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, light
 	binary.LittleEndian.PutUint32(buf[268:], 0) // pad2.y
 	binary.LittleEndian.PutUint32(buf[272:], math.Float32bits(float32(lightingQuality.AmbientOcclusion.SampleCount)))
 	binary.LittleEndian.PutUint32(buf[276:], math.Float32bits(lightingQuality.AmbientOcclusion.Radius))
-	binary.LittleEndian.PutUint32(buf[280:], 0)
-	binary.LittleEndian.PutUint32(buf[284:], 0)
+	binary.LittleEndian.PutUint32(buf[280:], math.Float32bits(lightingQuality.Shadow.DirectionalShadowSoftness))
+	binary.LittleEndian.PutUint32(buf[284:], math.Float32bits(lightingQuality.Shadow.SpotShadowSoftness))
 
 	return buf
 }

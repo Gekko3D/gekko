@@ -830,7 +830,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             return;
         }
 
-        textureStore(out_depth, global_id.xy, vec4<f32>(hit_res.t, 0.0, 0.0, 0.0));
+        textureStore(out_depth, global_id.xy, vec4<f32>(hit_res.t, hit_res.voxel_center_ws));
         textureStore(out_normal, global_id.xy, vec4<f32>(hit_res.normal, hit_res.ao));
         textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), f32(hit_res.shadow_group_id), hit_res.shadow_seam_epsilon, f32(hit_res.material_idx)));
     } else {

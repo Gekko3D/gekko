@@ -110,6 +110,7 @@ struct Ray {
 struct HitResult {
     hit: bool,
     t: f32,
+    hit_pos_ws: vec3<f32>,
     voxel_center_ws: vec3<f32>,
     shadow_group_id: u32,
 };
@@ -281,7 +282,7 @@ fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, vec3<f32>(0.0), 0u);
+    var result = HitResult(false, 60000.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
     let ray = transform_ray(ray_ws, inst.world_to_object);
     let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
@@ -330,7 +331,9 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                             } else {
                                 result.hit = true; result.t = t_brick;
                                 let p_hit_os = ray.origin + dir * (t_brick + 0.01);
+                                let hit_pos_os = ray.origin + dir * t_brick;
                                 let voxel_center_os = floor(p_hit_os) + 0.5;
+                                result.hit_pos_ws = (inst.object_to_world * vec4<f32>(hit_pos_os, 1.0)).xyz;
                                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                 result.shadow_group_id = params.shadow_group_id;
                                 return result;
@@ -361,7 +364,9 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                         let pbr_v = materials[mat_idx_v + 2u];
                                         if (pbr_v.w <= 0.001) {
                                             result.hit = true; result.t = t_micro;
+                                            let hit_pos_os = ray.origin + dir * t_micro;
                                             let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
+                                            result.hit_pos_ws = (inst.object_to_world * vec4<f32>(hit_pos_os, 1.0)).xyz;
                                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                             result.shadow_group_id = params.shadow_group_id;
                                             return result;
@@ -400,7 +405,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
 }
 
 fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, vec3<f32>(0.0), 0u);
+    var result = HitResult(false, 60000.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
     if (params.tree64_base == 0xFFFFFFFFu) { return result; }
     let ray = transform_ray(ray_ws, inst.world_to_object);
@@ -422,6 +427,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
             let b_bit = bx + by*4u + bz*16u;
             if (bit_test64(l1_node.mask_lo, l1_node.mask_hi, b_bit)) {
                 result.hit = true; result.t = t;
+                result.hit_pos_ws = (inst.object_to_world * vec4<f32>(p, 1.0)).xyz;
                 let voxel_center_os = floor(p / 8.0) * 8.0 + 4.0;
                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                 result.shadow_group_id = params.shadow_group_id;
@@ -434,7 +440,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
 }
 
 fn traverse_scene(ray: Ray) -> HitResult {
-    var hit_res = HitResult(false, 60000.0, vec3<f32>(0.0), 0u);
+    var hit_res = HitResult(false, 60000.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     var stack: array<i32, 64>;
     var stack_ptr = 0;
     
@@ -526,13 +532,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dummy = tree64_nodes[0].mask_lo;
     if (dummy > 0xFFFF0000u) { hit_res.t += 0.00001; } // Unlikely condition, effectively no-op
     
-    // Write out normalized depth from light perspective (using voxel center for blocky shadows)
+    // Write occluder depth from the entered surface, while keeping receiver evaluation voxel-stable elsewhere.
     if (hit_res.hit) {
-        let pos_ls = light_view_proj * vec4<f32>(hit_res.voxel_center_ws, 1.0);
+        let pos_ls = light_view_proj * vec4<f32>(hit_res.hit_pos_ws, 1.0);
         let light_type = u32(light.params.z);
         if (light_type == 2u) {
             // Spot light: store linear distance from light position (meters)
-            let depth_m = distance(light.position.xyz, hit_res.voxel_center_ws);
+            let depth_m = distance(light.position.xyz, hit_res.hit_pos_ws);
             textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
         } else {
             // Directional/others: store NDC depth for stable generic shadowing.

@@ -49,6 +49,12 @@ func TestBuildCameraUniformDataPacksExpectedMatrices(t *testing.T) {
 	if got := binary.LittleEndian.Uint32(buf[244:]); got != 12 {
 		t.Fatalf("expected render mode 12 at offset 244, got %d", got)
 	}
+	if got := floatAt(buf, 280); got != 0.65 {
+		t.Fatalf("expected directional shadow softness 0.65 at offset 280, got %v", got)
+	}
+	if got := floatAt(buf, 284); got != 0.4 {
+		t.Fatalf("expected spot shadow softness 0.4 at offset 284, got %v", got)
+	}
 }
 
 func TestBuildInstanceDataKeepsBinaryLayout(t *testing.T) {

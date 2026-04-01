@@ -212,6 +212,39 @@ func (s *VoxelRtState) SetLightingQuality(cfg LightingQualityConfig) {
 	}
 }
 
+func (s *VoxelRtState) LightingQuality() LightingQualityConfig {
+	if s == nil || s.RtApp == nil {
+		return LightingQualityConfig{}
+	}
+	return s.RtApp.EffectiveLightingQuality()
+}
+
+func (s *VoxelRtState) SetDirectionalShadowSoftness(softness float32) {
+	if s == nil || s.RtApp == nil {
+		return
+	}
+	cfg := s.RtApp.LightingQuality
+	cfg.Shadow.DirectionalShadowSoftness = softness
+	s.RtApp.LightingQuality = cfg
+}
+
+func (s *VoxelRtState) SetSpotShadowSoftness(softness float32) {
+	if s == nil || s.RtApp == nil {
+		return
+	}
+	cfg := s.RtApp.LightingQuality
+	cfg.Shadow.SpotShadowSoftness = softness
+	s.RtApp.LightingQuality = cfg
+}
+
+func (s *VoxelRtState) DirectionalShadowSoftness() float32 {
+	return s.LightingQuality().Shadow.DirectionalShadowSoftness
+}
+
+func (s *VoxelRtState) SpotShadowSoftness() float32 {
+	return s.LightingQuality().Shadow.SpotShadowSoftness
+}
+
 func (s *VoxelRtState) SetDebugGizmos(enabled bool) {
 	if s != nil {
 		s.HideDebugGizmos = !enabled

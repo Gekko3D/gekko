@@ -99,7 +99,10 @@ The legacy fullscreen blit pipeline still exists in setup code, but the resolve 
 - normal: `RGBA16Float`
 - material: `RGBA32Float`
 - no dedicated position target
-- deferred lighting reconstructs world hit position from screen UV, camera inverse matrices, and `GBufferDepth.r`
+- `GBufferDepth.r` stores hit distance along the camera ray
+- `GBufferDepth.gba` stores voxel-center world position for voxel-stable shadowing
+- deferred lighting reconstructs the exact visible hit position from screen UV, camera inverse matrices, and `GBufferDepth.r`
+- deferred shadowing uses the stored voxel-center world position so each visible voxel can receive one stable shadow response per light
 
 #### Voxel shading contract
 
@@ -126,6 +129,9 @@ Current implementation notes:
 - Neighbor-derived normals are computed from 6-neighbor occupancy samples, terrain chunks included across chunk boundaries.
 - The fallback path is face-based, not object-center-based.
 - Deferred lighting consumes the stored G-buffer normal directly; the albedo/material lookup stays palette-driven.
+- Shadow softness is controlled separately for directional and spot lights through `LightingQualityConfig.Shadow`.
+  - Lower values push toward harder voxel-block shadows.
+  - Higher values keep more of the filtered penumbra look.
 
 ### Transparency / WBOIT
 
