@@ -56,6 +56,10 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 			OverrideGeometry:       overrideGeometry,
 			ShadowGroupID:          def.ShadowGroupID,
 			ShadowSeamWorldEpsilon: def.Chunk.VoxelResolution,
+			IsTerrainChunk:         true,
+			TerrainGroupID:         def.ShadowGroupID,
+			TerrainChunkCoord:      [3]int{def.Chunk.Coord.X, def.Chunk.Coord.Y, def.Chunk.Coord.Z},
+			TerrainChunkSize:       def.Chunk.ChunkSize,
 		},
 		&AuthoredImportedWorldChunkRefComponent{
 			LevelID:    def.LevelID,

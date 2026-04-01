@@ -368,15 +368,16 @@ fn sample_occupancy_for_normal(v: vec3<i32>, params: ObjectParams) -> f32 {
     }
 
     let chunk_size = params.terrain_chunk.w;
-    if (v.x >= 0 && v.x < chunk_size && v.z >= 0 && v.z < chunk_size) {
+    if (v.x >= 0 && v.x < chunk_size && v.y >= 0 && v.y < chunk_size && v.z >= 0 && v.z < chunk_size) {
         return sample_occupancy_local(v, params);
     }
 
     let chunk_offset_x = floor_div_i32(v.x, chunk_size);
+    let chunk_offset_y = floor_div_i32(v.y, chunk_size);
     let chunk_offset_z = floor_div_i32(v.z, chunk_size);
     let neighbor_chunk = vec3<i32>(
         params.terrain_chunk.x + chunk_offset_x,
-        params.terrain_chunk.y,
+        params.terrain_chunk.y + chunk_offset_y,
         params.terrain_chunk.z + chunk_offset_z,
     );
     let neighbor_object_id = find_terrain_chunk_object_id(neighbor_chunk, params.terrain_group_id);
@@ -387,7 +388,7 @@ fn sample_occupancy_for_normal(v: vec3<i32>, params: ObjectParams) -> f32 {
     let neighbor_params = object_params[u32(neighbor_object_id)];
     let neighbor_voxel = vec3<i32>(
         positive_mod_i32(v.x, chunk_size),
-        v.y,
+        positive_mod_i32(v.y, chunk_size),
         positive_mod_i32(v.z, chunk_size),
     );
     return sample_occupancy_local(neighbor_voxel, neighbor_params);
