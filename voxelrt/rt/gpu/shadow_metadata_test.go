@@ -214,17 +214,34 @@ func TestBuildShadowUpdatesUsesCadenceAndInvalidation(t *testing.T) {
 	manager.RecordShadowUpdates(initial, 0, scene.StructureRevision)
 
 	next := manager.BuildShadowUpdates(scene, camera, 1, false)
-	if len(next) != 3 {
-		t.Fatalf("expected both directional cascades plus the hero spot at frame 1, got %d", len(next))
+	if len(next) != 2 {
+		t.Fatalf("expected the hero directional cascade plus the hero spot at frame 1, got %d", len(next))
 	}
 	directionalCount := 0
+	directionalCascade0 := 0
+	directionalCascade1 := 0
 	for _, update := range next {
 		if update.Kind == core.ShadowUpdateKindDirectional {
 			directionalCount++
+			if update.CascadeIndex == 0 {
+				directionalCascade0++
+			}
+			if update.CascadeIndex == 1 {
+				directionalCascade1++
+			}
 		}
 	}
-	if directionalCount != 2 {
-		t.Fatalf("expected both directional cascades to refresh at frame 1, got %d updates", directionalCount)
+	if directionalCount != 1 {
+		t.Fatalf("expected only one directional cascade refresh at frame 1, got %d updates", directionalCount)
+	}
+	if directionalCascade0 != 1 || directionalCascade1 != 0 {
+		t.Fatalf("expected only directional cascade 0 to refresh at frame 1, got c0=%d c1=%d", directionalCascade0, directionalCascade1)
+	}
+
+	manager.RecordShadowUpdates(next, 1, scene.StructureRevision)
+	third := manager.BuildShadowUpdates(scene, camera, 2, false)
+	if len(third) != 3 {
+		t.Fatalf("expected both directional cascades plus the hero spot at frame 2, got %d", len(third))
 	}
 
 	manager.VoxelUploadRevision++

@@ -131,7 +131,6 @@ func localLightShadowUpdates(light core.Light, params []ShadowLayerParams, cache
 }
 
 func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.CameraState, frameIndex uint64, forceDirectionalRefresh bool) []core.ShadowUpdate {
-	_ = forceDirectionalRefresh
 	updates := make([]core.ShadowUpdate, 0, len(m.ShadowLayerParams))
 	if len(m.ShadowLayerParams) == 0 {
 		return updates
@@ -139,6 +138,10 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 
 	for _, layer := range m.ShadowLayerParams {
 		if layer.Kind != core.ShadowUpdateKindDirectional {
+			continue
+		}
+		invalidated, cadenceDue := m.shadowNeedsRefresh(layer, scene.StructureRevision, frameIndex)
+		if !forceDirectionalRefresh && !invalidated && !cadenceDue {
 			continue
 		}
 		updates = append(updates, core.ShadowUpdate{
