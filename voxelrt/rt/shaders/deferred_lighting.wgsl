@@ -564,9 +564,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let emissive = emissive_linear * max(material_extra.x, 0.0);
     
     let hit_pos_ws = reconstruct_world_pos(uv, depth);
-    let shadow_receiver_pos_ws = depth_data.gba;
-    
-    let view_dir = normalize(camera.cam_pos.xyz - hit_pos_ws);
+    let voxel_center_ws = depth_data.gba;
+
+    // Shade the voxel as one cell by evaluating view- and light-dependent terms
+    // from the stored voxel center instead of the exact ray hit position.
+    let lighting_pos_ws = voxel_center_ws;
+    let view_dir = normalize(camera.cam_pos.xyz - lighting_pos_ws);
     let NdotV = max(dot(normal, view_dir), 0.0);
     let dielectric_f0 = dielectric_f0_from_ior(ior);
     let F0 = mix(dielectric_f0, base_color, metalness);
@@ -582,7 +585,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     for (var i = 0u; i < tile_header.count; i++) {
         let light_idx = tile_light_indices[tile_header.offset + i];
-        let contribution = calculate_lighting(hit_pos_ws, shadow_receiver_pos_ws, normal, view_dir, base_color, roughness, metalness, ior, receiver_shadow_group_id, receiver_shadow_seam_epsilon, light_idx);
+        let contribution = calculate_lighting(lighting_pos_ws, voxel_center_ws, normal, view_dir, base_color, roughness, metalness, ior, receiver_shadow_group_id, receiver_shadow_seam_epsilon, light_idx);
         direct_color += contribution.color;
     }
     let final_color = indirect_color + direct_color + emissive_term;
