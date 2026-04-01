@@ -240,9 +240,12 @@ fn saturate(v: f32) -> f32 {
     return clamp(v, 0.0, 1.0);
 }
 
-fn quantize_ao(ao: f32) -> f32 {
-    let levels = 4.0;
+fn quantize_ao_levels(ao: f32, levels: f32) -> f32 {
     return floor(saturate(ao) * levels + 0.5) / levels;
+}
+
+fn quantize_ao(ao: f32) -> f32 {
+    return quantize_ao_levels(ao, 4.0);
 }
 
 // ============== REUSE TRAVERSAL LOGIC FROM RAYTRACE.WGSL ==============
@@ -436,20 +439,27 @@ fn transform_normal_to_world(inst: Instance, normal_os: vec3<f32>) -> vec3<f32> 
     return normalize((transpose(inst.world_to_object) * vec4<f32>(normal_os, 0.0)).xyz);
 }
 
+fn dominant_axis_normal_i(normal_os: vec3<f32>) -> vec3<i32> {
+    let abs_n = abs(normal_os);
+    if (abs_n.x >= abs_n.y && abs_n.x >= abs_n.z) {
+        return vec3<i32>(select(-1, 1, normal_os.x >= 0.0), 0, 0);
+    }
+    if (abs_n.y >= abs_n.x && abs_n.y >= abs_n.z) {
+        return vec3<i32>(0, select(-1, 1, normal_os.y >= 0.0), 0);
+    }
+    return vec3<i32>(0, 0, select(-1, 1, normal_os.z >= 0.0));
+}
+
 fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: ObjectParams) -> f32 {
     let vi = vec3<i32>(floor(voxel_center_os));
-    let normal_i = vec3<i32>(
-        i32(round(normal_os.x)),
-        i32(round(normal_os.y)),
-        i32(round(normal_os.z)),
-    );
+    let normal_i = dominant_axis_normal_i(normal_os);
 
     var tangent_u = vec3<i32>(1, 0, 0);
     var tangent_v = vec3<i32>(0, 1, 0);
-    if (abs(normal_os.x) > 0.5) {
+    if (abs(normal_i.x) > 0) {
         tangent_u = vec3<i32>(0, 1, 0);
         tangent_v = vec3<i32>(0, 0, 1);
-    } else if (abs(normal_os.y) > 0.5) {
+    } else if (abs(normal_i.y) > 0) {
         tangent_u = vec3<i32>(1, 0, 0);
         tangent_v = vec3<i32>(0, 0, 1);
     } else {
@@ -519,7 +529,12 @@ fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: Ob
     }
 
     occlusion = occlusion / max(total_weight, 1e-4);
-    return max(0.15, quantize_ao(1.0 - saturate(occlusion)));
+    let ao_raw = 1.0 - saturate(occlusion);
+    let axis_strength = max(abs(normal_os.x), max(abs(normal_os.y), abs(normal_os.z)));
+    let curved_factor = saturate((0.9 - axis_strength) / 0.3);
+    let base_ao = quantize_ao(ao_raw);
+    let curved_ao = quantize_ao_levels(mix(ao_raw, 1.0, 0.28), 3.0);
+    return max(0.15, mix(base_ao, curved_ao, curved_factor));
 }
 
 fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
