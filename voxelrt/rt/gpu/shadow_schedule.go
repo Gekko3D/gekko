@@ -13,6 +13,12 @@ type shadowCandidate struct {
 	Invalidated bool
 }
 
+type pointShadowFaceCandidate struct {
+	Update    core.ShadowUpdate
+	State     shadowCacheState
+	Available bool
+}
+
 func shadowTierBudget(tier uint32) int {
 	switch tier {
 	case core.ShadowTierHero:
@@ -52,6 +58,78 @@ func spotLightDistance(light core.Light, camPos mgl32.Vec3) float32 {
 	return lightPos.Sub(camPos).Len()
 }
 
+func localLightShadowUpdates(light core.Light, params []ShadowLayerParams, cacheStates []shadowCacheState) []core.ShadowUpdate {
+	updates := make([]core.ShadowUpdate, 0, light.ShadowMeta[1])
+	baseLayer := light.ShadowMeta[0]
+	lightType := uint32(light.Params[2])
+	if lightType == core.LightTypePoint {
+		faceCandidates := make([]pointShadowFaceCandidate, 0, light.ShadowMeta[1])
+		for layerOffset := uint32(0); layerOffset < light.ShadowMeta[1]; layerOffset++ {
+			layer := baseLayer + layerOffset
+			if int(layer) >= len(params) {
+				continue
+			}
+			layerParams := params[layer]
+			faceCandidate := pointShadowFaceCandidate{
+				Update: core.ShadowUpdate{
+					LightIndex:   layerParams.LightIndex,
+					ShadowLayer:  layerParams.Layer,
+					CascadeIndex: layerParams.CascadeIndex,
+					Kind:         layerParams.Kind,
+					Tier:         layerParams.Tier,
+					Resolution:   layerParams.EffectiveResolution,
+				},
+			}
+			if int(layer) < len(cacheStates) {
+				faceCandidate.State = cacheStates[layer]
+				faceCandidate.Available = true
+			}
+			faceCandidates = append(faceCandidates, faceCandidate)
+		}
+		sort.Slice(faceCandidates, func(i, j int) bool {
+			left := faceCandidates[i]
+			right := faceCandidates[j]
+			if left.Available != right.Available {
+				return left.Available
+			}
+			if left.State.Initialized != right.State.Initialized {
+				return !left.State.Initialized
+			}
+			if left.State.LastUpdatedFrame != right.State.LastUpdatedFrame {
+				return left.State.LastUpdatedFrame < right.State.LastUpdatedFrame
+			}
+			return left.Update.CascadeIndex < right.Update.CascadeIndex
+		})
+		faceBudget := pointShadowFacesPerFrame(params[baseLayer].Tier)
+		if faceBudget > len(faceCandidates) {
+			faceBudget = len(faceCandidates)
+		}
+		for i := 0; i < faceBudget; i++ {
+			updates = append(updates, faceCandidates[i].Update)
+		}
+		sort.Slice(updates, func(i, j int) bool {
+			return updates[i].CascadeIndex < updates[j].CascadeIndex
+		})
+		return updates
+	}
+	for layerOffset := uint32(0); layerOffset < light.ShadowMeta[1]; layerOffset++ {
+		layer := baseLayer + layerOffset
+		if int(layer) >= len(params) {
+			continue
+		}
+		layerParams := params[layer]
+		updates = append(updates, core.ShadowUpdate{
+			LightIndex:   layerParams.LightIndex,
+			ShadowLayer:  layerParams.Layer,
+			CascadeIndex: layerParams.CascadeIndex,
+			Kind:         layerParams.Kind,
+			Tier:         layerParams.Tier,
+			Resolution:   layerParams.EffectiveResolution,
+		})
+	}
+	return updates
+}
+
 func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.CameraState, frameIndex uint64, forceDirectionalRefresh bool) []core.ShadowUpdate {
 	_ = forceDirectionalRefresh
 	updates := make([]core.ShadowUpdate, 0, len(m.ShadowLayerParams))
@@ -79,31 +157,46 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 	}
 	invalidatedByTier := [shadowTierCount][]shadowCandidate{}
 	dueByTier := [shadowTierCount][]shadowCandidate{}
-	for _, layer := range m.ShadowLayerParams {
-		if layer.Kind != core.ShadowUpdateKindSpot {
+	for lightIndex, light := range scene.Lights {
+		lightType := uint32(light.Params[2])
+		if lightType != core.LightTypeSpot && lightType != core.LightTypePoint {
 			continue
 		}
-		invalidated, cadenceDue := m.shadowNeedsRefresh(layer, scene.StructureRevision, frameIndex)
+		layerCount := light.ShadowMeta[1]
+		if layerCount == 0 {
+			continue
+		}
+		baseLayer := light.ShadowMeta[0]
+		if int(baseLayer) >= len(m.ShadowLayerParams) {
+			continue
+		}
+		tier := m.ShadowLayerParams[baseLayer].Tier
+		invalidated := false
+		cadenceDue := false
+		for layerOffset := uint32(0); layerOffset < layerCount; layerOffset++ {
+			layer := baseLayer + layerOffset
+			if int(layer) >= len(m.ShadowLayerParams) {
+				continue
+			}
+			layerInvalidated, layerCadenceDue := m.shadowNeedsRefresh(m.ShadowLayerParams[layer], scene.StructureRevision, frameIndex)
+			invalidated = invalidated || layerInvalidated
+			cadenceDue = cadenceDue || layerCadenceDue
+		}
 		if !invalidated && !cadenceDue {
 			continue
 		}
-		light := scene.Lights[layer.LightIndex]
 		candidate := shadowCandidate{
 			Update: core.ShadowUpdate{
-				LightIndex:   layer.LightIndex,
-				ShadowLayer:  layer.Layer,
-				CascadeIndex: layer.CascadeIndex,
-				Kind:         layer.Kind,
-				Tier:         layer.Tier,
-				Resolution:   layer.EffectiveResolution,
+				LightIndex: uint32(lightIndex),
+				Tier:       tier,
 			},
 			Distance:    spotLightDistance(light, camPos),
 			Invalidated: invalidated,
 		}
 		if invalidated {
-			invalidatedByTier[layer.Tier] = append(invalidatedByTier[layer.Tier], candidate)
+			invalidatedByTier[tier] = append(invalidatedByTier[tier], candidate)
 		} else if cadenceDue {
-			dueByTier[layer.Tier] = append(dueByTier[layer.Tier], candidate)
+			dueByTier[tier] = append(dueByTier[tier], candidate)
 		}
 	}
 
@@ -119,7 +212,8 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 			if budget == 0 {
 				break
 			}
-			updates = append(updates, candidate.Update)
+			light := scene.Lights[candidate.Update.LightIndex]
+			updates = append(updates, localLightShadowUpdates(light, m.ShadowLayerParams, m.shadowCacheStates)...)
 			budget--
 		}
 		if budget == 0 || len(dueByTier[tier]) == 0 {
@@ -132,7 +226,8 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 		selected := 0
 		for selected < budget && selected < len(dueByTier[tier]) {
 			idx := (offset + selected) % len(dueByTier[tier])
-			updates = append(updates, dueByTier[tier][idx].Update)
+			light := scene.Lights[dueByTier[tier][idx].Update.LightIndex]
+			updates = append(updates, localLightShadowUpdates(light, m.ShadowLayerParams, m.shadowCacheStates)...)
 			selected++
 		}
 		m.shadowTierOffsets[tier] = offset + selected

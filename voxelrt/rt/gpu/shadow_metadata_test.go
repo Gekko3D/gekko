@@ -78,6 +78,9 @@ func TestUpdateLightsAssignsDirectionalCascadesAndShadowLayers(t *testing.T) {
 	if len(manager.shadowSpotVolumes) != 2 {
 		t.Fatalf("expected 2 spot shadow cull volumes, got %d", len(manager.shadowSpotVolumes))
 	}
+	if len(manager.shadowPointVolumes) != 0 {
+		t.Fatalf("expected no point shadow cull volumes, got %d", len(manager.shadowPointVolumes))
+	}
 }
 
 func TestUpdateLightsUsesConfiguredQualityPreset(t *testing.T) {
@@ -146,7 +149,7 @@ func TestCollectShadowCastersUsesDirectionalLightSpaceVolumes(t *testing.T) {
 	inside := testShadowCasterObject(mgl32.Vec3{-2, -1, -35}, mgl32.Vec3{2, 3, -31})
 	outside := testShadowCasterObject(mgl32.Vec3{420, -1, -35}, mgl32.Vec3{424, 3, -31})
 
-	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, []directionalShadowCullVolume{volume}, nil)
+	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, []directionalShadowCullVolume{volume}, nil, nil)
 	if len(shadowObjects) != 1 {
 		t.Fatalf("expected exactly one directional shadow caster, got %d", len(shadowObjects))
 	}
@@ -307,11 +310,174 @@ func TestCollectShadowCastersUsesSpotVolumes(t *testing.T) {
 		CosCone:  float32(math.Cos(math.Pi / 8)),
 	}
 
-	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, nil, []spotShadowCullVolume{spot})
+	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, nil, []spotShadowCullVolume{spot}, nil)
 	if len(shadowObjects) != 1 {
 		t.Fatalf("expected exactly one spot shadow caster, got %d", len(shadowObjects))
 	}
 	if shadowObjects[0] != inside {
 		t.Fatal("expected only the object inside the spot shadow volume to remain a shadow caster")
+	}
+}
+
+func TestUpdateLightsAssignsPointShadowFacesAndLayers(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position:     [4]float32{4, 8, -2, 1},
+				Params:       [4]float32{24, 0, float32(core.LightTypePoint), 0},
+				CastsShadows: true,
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+
+	light := scene.Lights[0]
+	if got, want := light.ShadowMeta, [4]uint32{0, core.PointShadowFaceCount, 0, 0}; got != want {
+		t.Fatalf("expected point shadow metadata %v, got %v", want, got)
+	}
+	if got := totalShadowLayers(scene.Lights); got != core.PointShadowFaceCount {
+		t.Fatalf("expected %d total point shadow layers, got %d", core.PointShadowFaceCount, got)
+	}
+	for face := uint32(0); face < core.PointShadowFaceCount; face++ {
+		params := manager.ShadowLayerParams[face]
+		if params.Kind != core.ShadowUpdateKindPoint {
+			t.Fatalf("expected point shadow kind for face %d, got %d", face, params.Kind)
+		}
+		if params.CascadeIndex != face {
+			t.Fatalf("expected point face index %d, got %d", face, params.CascadeIndex)
+		}
+		if params.EffectiveResolution != 256 {
+			t.Fatalf("expected hero point face resolution 256 for face %d, got %d", face, params.EffectiveResolution)
+		}
+	}
+	if len(manager.shadowPointVolumes) != 1 {
+		t.Fatalf("expected 1 point shadow cull volume, got %d", len(manager.shadowPointVolumes))
+	}
+}
+
+func TestBuildShadowUpdatesRotatesPointFacesAcrossFrames(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position:     [4]float32{8, 12, 0, 1},
+				Params:       [4]float32{32, 0, float32(core.LightTypePoint), 0},
+				CastsShadows: true,
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+
+	initial := manager.BuildShadowUpdates(scene, camera, 0, false)
+	if len(initial) != 3 {
+		t.Fatalf("expected 3 point shadow face updates on first hero frame, got %d", len(initial))
+	}
+	for face, update := range initial {
+		if update.Kind != core.ShadowUpdateKindPoint {
+			t.Fatalf("expected point shadow update kind, got %d", update.Kind)
+		}
+		if update.CascadeIndex != uint32(face) {
+			t.Fatalf("expected face update %d, got %d", face, update.CascadeIndex)
+		}
+	}
+	manager.RecordShadowUpdates(initial, 0, scene.StructureRevision)
+
+	next := manager.BuildShadowUpdates(scene, camera, 1, false)
+	if len(next) != 3 {
+		t.Fatalf("expected 3 point shadow face updates on second hero frame, got %d", len(next))
+	}
+	for i, update := range next {
+		wantFace := uint32(i + 3)
+		if update.CascadeIndex != wantFace {
+			t.Fatalf("expected second frame face update %d, got %d", wantFace, update.CascadeIndex)
+		}
+	}
+	manager.RecordShadowUpdates(next, 1, scene.StructureRevision)
+
+	third := manager.BuildShadowUpdates(scene, camera, 2, false)
+	if len(third) != 3 {
+		t.Fatalf("expected 3 point shadow face updates on third hero frame, got %d", len(third))
+	}
+	for face, update := range third {
+		if update.CascadeIndex != uint32(face) {
+			t.Fatalf("expected third frame to rotate back to oldest faces %d, got %d", face, update.CascadeIndex)
+		}
+	}
+}
+
+func TestUpdateLightsLeavesPointLightsUnshadowedByDefault(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position: [4]float32{4, 8, -2, 1},
+				Params:   [4]float32{24, 0, float32(core.LightTypePoint), 0},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+
+	if got := scene.Lights[0].ShadowMeta; got != [4]uint32{} {
+		t.Fatalf("expected point light shadows to stay disabled by default, got %v", got)
+	}
+	if got := totalShadowLayers(scene.Lights); got != 0 {
+		t.Fatalf("expected 0 total shadow layers, got %d", got)
+	}
+}
+
+func TestUpdateLightsUsesReducedPointShadowResolutionByTier(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position:     [4]float32{0, 8, 20, 1},
+				Params:       [4]float32{24, 0, float32(core.LightTypePoint), 0},
+				CastsShadows: true,
+			},
+			{
+				Position:     [4]float32{0, 8, -10, 1},
+				Params:       [4]float32{24, 0, float32(core.LightTypePoint), 0},
+				CastsShadows: true,
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+
+	if got := manager.ShadowLayerParams[0].EffectiveResolution; got != 256 {
+		t.Fatalf("expected near hero point resolution 256, got %d", got)
+	}
+	if got := manager.ShadowLayerParams[6].EffectiveResolution; got != 128 {
+		t.Fatalf("expected farther point resolution 128, got %d", got)
+	}
+}
+
+func TestCollectShadowCastersUsesPointVolumes(t *testing.T) {
+	inside := testShadowCasterObject(mgl32.Vec3{-1, -1, -1}, mgl32.Vec3{1, 1, 1})
+	outside := testShadowCasterObject(mgl32.Vec3{30, -1, -1}, mgl32.Vec3{34, 1, 1})
+
+	point := pointShadowCullVolume{
+		Position: mgl32.Vec3{0, 0, 0},
+		Range:    12,
+	}
+
+	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, nil, nil, []pointShadowCullVolume{point})
+	if len(shadowObjects) != 1 {
+		t.Fatalf("expected exactly one point shadow caster, got %d", len(shadowObjects))
+	}
+	if shadowObjects[0] != inside {
+		t.Fatal("expected only the object inside the point shadow volume to remain a shadow caster")
 	}
 }

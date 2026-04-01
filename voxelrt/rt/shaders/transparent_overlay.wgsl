@@ -93,6 +93,11 @@ struct DirectionalCascadeSelection {
   blend: f32,
 };
 
+struct PointShadowLookup {
+  face: u32,
+  uv: vec2<f32>,
+};
+
 struct ShadowLayerParams {
   viewport_scale: vec2<f32>,
   effective_resolution: f32,
@@ -686,6 +691,67 @@ fn sample_directional_shadow(
   return mix(hard_visibility, pcf_visibility, softness);
 }
 
+fn point_shadow_face_and_uv(dir: vec3<f32>) -> PointShadowLookup {
+  let abs_dir = abs(dir);
+  if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) {
+    if (dir.x >= 0.0) {
+      return PointShadowLookup(0u, vec2<f32>(-dir.z, -dir.y) / max(abs_dir.x, 1e-5) * 0.5 + 0.5);
+    }
+    return PointShadowLookup(1u, vec2<f32>(dir.z, -dir.y) / max(abs_dir.x, 1e-5) * 0.5 + 0.5);
+  }
+  if (abs_dir.y >= abs_dir.z) {
+    if (dir.y >= 0.0) {
+      return PointShadowLookup(2u, vec2<f32>(dir.x, dir.z) / max(abs_dir.y, 1e-5) * 0.5 + 0.5);
+    }
+    return PointShadowLookup(3u, vec2<f32>(dir.x, -dir.z) / max(abs_dir.y, 1e-5) * 0.5 + 0.5);
+  }
+  if (dir.z >= 0.0) {
+    return PointShadowLookup(4u, vec2<f32>(dir.x, -dir.y) / max(abs_dir.z, 1e-5) * 0.5 + 0.5);
+  }
+  return PointShadowLookup(5u, vec2<f32>(-dir.x, -dir.y) / max(abs_dir.z, 1e-5) * 0.5 + 0.5);
+}
+
+fn sample_point_shadow(
+  light: Light,
+  p: vec3<f32>,
+  shadow_normal: vec3<f32>,
+  L: vec3<f32>,
+  receiver_shadow_group_id: u32,
+  receiver_shadow_seam_epsilon: f32
+) -> f32 {
+  let light_to_receiver = p - light.position.xyz;
+  let receiver_depth_m = length(light_to_receiver);
+  if (receiver_depth_m <= 1e-4) {
+    return 1.0;
+  }
+
+  let lookup = point_shadow_face_and_uv(light_to_receiver / receiver_depth_m);
+  let layer = light.shadow_meta.x + lookup.face;
+  let layer_params = shadow_layer_params[layer];
+  let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
+  let texel_depth_m = receiver_depth_m * (2.0 / f32(effective_resolution));
+  let receiver_offset = max(0.05, max(receiver_shadow_seam_epsilon * 0.5, texel_depth_m * 0.75));
+  let pos_off = p + shadow_normal * receiver_offset;
+  let my_depth_m = distance(light.position.xyz, pos_off);
+  let base_px_f = clamp(lookup.uv, vec2<f32>(0.0), vec2<f32>(1.0)) * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
+  let base_px = vec2<i32>(
+    i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
+    i32(clamp(base_px_f.y, 0.0, f32(effective_resolution - 1u)))
+  );
+  let shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
+  let sampled_depth = shadow_sample.r;
+  let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
+  let same_shadow_group =
+    receiver_shadow_group_id != 0u &&
+    sampled_shadow_group_id == receiver_shadow_group_id;
+  let NdL_shadow = max(dot(shadow_normal, L), 0.0);
+  let seam_tolerance_m = max(receiver_shadow_seam_epsilon, texel_depth_m * 1.5);
+  let biasM = max(seam_tolerance_m, 0.05 + texel_depth_m + 0.08 * (1.0 - NdL_shadow));
+  let receiver_minus_occluder = my_depth_m - sampled_depth;
+  let seam_lit = same_shadow_group && receiver_minus_occluder <= seam_tolerance_m;
+  return select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
+}
+
 fn absorption_coefficient(base_color: vec3<f32>, transmission: f32, density: f32) -> vec3<f32> {
   let tint = clamp(base_color, vec3<f32>(0.04), vec3<f32>(0.995));
   let colored = -log(tint) * max(transmission, 0.1);
@@ -801,7 +867,7 @@ fn calculate_lighting(
 
     let shadow_normal = select(n, n * select(-1.0, 1.0, dot(n, L) >= 0.0), two_sided_lighting);
 
-    if (light_type != 0u && light.shadow_meta.y > 0u) {
+    if (light.shadow_meta.y > 0u) {
       if (light_type == 1u) {
         let selection = choose_directional_cascade(light, p);
         let primary_visibility = sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
@@ -811,7 +877,7 @@ fn calculate_lighting(
           selection.secondary_index != selection.primary_index,
         );
         attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
-      } else {
+      } else if (light_type == 2u) {
         let shadow_view_proj = light.view_proj;
         let layer = light.shadow_meta.x;
         let layer_params = shadow_layer_params[layer];
@@ -866,6 +932,8 @@ fn calculate_lighting(
           let softness = saturate(uCamera.ao_quality.w);
           attenuation *= mix(hard_visibility, pcf_visibility, softness);
         }
+      } else {
+        attenuation *= sample_point_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
       }
     }
     

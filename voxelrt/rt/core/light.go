@@ -7,10 +7,12 @@ const (
 )
 
 const DirectionalShadowCascadeCount = 2
+const PointShadowFaceCount = 6
 
 const (
 	ShadowUpdateKindSpot uint32 = iota
 	ShadowUpdateKindDirectional
+	ShadowUpdateKindPoint
 )
 
 const (
@@ -28,10 +30,11 @@ type DirectionalShadowCascade struct {
 
 // Light is the GPU representation of a light
 type Light struct {
-	Position            [4]float32  // xyz, pad
-	Direction           [4]float32  // xyz, pad
-	Color               [4]float32  // rgb, intensity
-	Params              [4]float32  // range, cone_angle_cos, type, padding
+	Position            [4]float32 // xyz, pad
+	Direction           [4]float32 // xyz, pad
+	Color               [4]float32 // rgb, intensity
+	Params              [4]float32 // range, cone_angle_cos, type, padding
+	CastsShadows        bool
 	ShadowMeta          [4]uint32   // x: first shadow layer, y: shadow layer count, z: directional cascade count, w: reserved
 	ViewProj            [16]float32 // Spot light shadow matrix
 	InvViewProj         [16]float32 // Spot light inverse shadow matrix

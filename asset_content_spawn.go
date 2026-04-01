@@ -200,11 +200,12 @@ func spawnAuthoredLight(cmd *Commands, assetID string, light content.AssetLightD
 		&local,
 		&AuthoredAssetRefComponent{AssetID: assetID, ItemID: light.ID, Kind: AuthoredItemKindLight},
 		&LightComponent{
-			Type:      lightType,
-			Color:     light.Color,
-			Intensity: light.Intensity,
-			Range:     light.Range,
-			ConeAngle: light.ConeAngle,
+			Type:         lightType,
+			Color:        light.Color,
+			Intensity:    light.Intensity,
+			Range:        light.Range,
+			ConeAngle:    light.ConeAngle,
+			CastsShadows: light.CastsShadows,
 		},
 	), nil
 }

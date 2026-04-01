@@ -75,15 +75,16 @@ type AssetPartDef struct {
 }
 
 type AssetLightDef struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	ParentID  string            `json:"parent_id,omitempty"`
-	Transform AssetTransformDef `json:"transform"`
-	Type      AssetLightType    `json:"type"`
-	Color     [3]float32        `json:"color,omitempty"`
-	Intensity float32           `json:"intensity,omitempty"`
-	Range     float32           `json:"range,omitempty"`
-	ConeAngle float32           `json:"cone_angle,omitempty"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	ParentID     string            `json:"parent_id,omitempty"`
+	Transform    AssetTransformDef `json:"transform"`
+	Type         AssetLightType    `json:"type"`
+	Color        [3]float32        `json:"color,omitempty"`
+	Intensity    float32           `json:"intensity,omitempty"`
+	Range        float32           `json:"range,omitempty"`
+	ConeAngle    float32           `json:"cone_angle,omitempty"`
+	CastsShadows bool              `json:"casts_shadows,omitempty"`
 }
 
 type AssetEmitterDef struct {

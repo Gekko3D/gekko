@@ -182,6 +182,7 @@ type GpuBufferManager struct {
 	VoxelUploadRevision      uint64
 	shadowDirectionalVolumes []directionalShadowCullVolume
 	shadowSpotVolumes        []spotShadowCullVolume
+	shadowPointVolumes       []pointShadowCullVolume
 
 	// Skybox Resources
 	SkyboxTex            *wgpu.Texture

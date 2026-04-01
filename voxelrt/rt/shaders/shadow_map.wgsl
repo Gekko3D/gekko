@@ -281,6 +281,18 @@ fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
     return Ray(new_origin, new_dir, 1.0 / safe_dir);
 }
 
+fn point_shadow_face_dir(face: u32, uv: vec2<f32>) -> vec3<f32> {
+    let face_uv = uv * 2.0 - 1.0;
+    switch face {
+        case 0u: { return normalize(vec3<f32>(1.0, -face_uv.y, -face_uv.x)); }
+        case 1u: { return normalize(vec3<f32>(-1.0, -face_uv.y, face_uv.x)); }
+        case 2u: { return normalize(vec3<f32>(face_uv.x, 1.0, face_uv.y)); }
+        case 3u: { return normalize(vec3<f32>(face_uv.x, -1.0, -face_uv.y)); }
+        case 4u: { return normalize(vec3<f32>(face_uv.x, -face_uv.y, 1.0)); }
+        default: { return normalize(vec3<f32>(-face_uv.x, -face_uv.y, -1.0)); }
+    }
+}
+
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
     var result = HitResult(false, 60000.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
@@ -511,18 +523,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     let uv = (vec2<f32>(f32(global_id.x), f32(global_id.y)) + 0.5) / vec2<f32>(f32(effective_resolution), f32(effective_resolution));
-    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    
-    // Generate ray for this pixel of the shadow map
-    let p_near = light_inv_view_proj * vec4<f32>(ndc, -1.0, 1.0);
-    let p_far = light_inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
-    
-    let origin = p_near.xyz / p_near.w;
-    let p_target = p_far.xyz / p_far.w;
-    let dir = normalize(p_target - origin);
-    
-    let safe_dir = make_safe_dir(dir);
-    var ray = Ray(origin, dir, 1.0 / safe_dir);
+    let light_type = u32(light.params.z);
+    var ray: Ray;
+    if (update.kind == 2u) {
+        let dir = point_shadow_face_dir(update.cascade_index, uv);
+        let safe_dir = make_safe_dir(dir);
+        ray = Ray(light.position.xyz, dir, 1.0 / safe_dir);
+    } else {
+        let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+        let p_near = light_inv_view_proj * vec4<f32>(ndc, -1.0, 1.0);
+        let p_far = light_inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+        let origin = p_near.xyz / p_near.w;
+        let p_target = p_far.xyz / p_far.w;
+        let dir = normalize(p_target - origin);
+        let safe_dir = make_safe_dir(dir);
+        ray = Ray(origin, dir, 1.0 / safe_dir);
+    }
     
     // Perform traversal
     var hit_res = traverse_scene(ray);
@@ -534,21 +550,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Write occluder depth from the entered surface, while keeping receiver evaluation voxel-stable elsewhere.
     if (hit_res.hit) {
-        let pos_ls = light_view_proj * vec4<f32>(hit_res.hit_pos_ws, 1.0);
-        let light_type = u32(light.params.z);
-        if (light_type == 2u) {
+        if (update.kind == 2u) {
+            // Point lights keep the blocky microvoxel look by shadowing against voxel centers.
+            let depth_m = distance(light.position.xyz, hit_res.voxel_center_ws);
+            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
+        } else if (light_type == 2u) {
             // Spot light: store linear distance from light position (meters)
             let depth_m = distance(light.position.xyz, hit_res.hit_pos_ws);
             textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
         } else {
             // Directional/others: store NDC depth for stable generic shadowing.
+            let pos_ls = light_view_proj * vec4<f32>(hit_res.hit_pos_ws, 1.0);
             let depth_ndc = clamp(pos_ls.z / pos_ls.w, -1.0, 1.0);
             textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_ndc, f32(hit_res.shadow_group_id), 0.0, 0.0));
         }
     } else {
-        let light_type = u32(light.params.z);
-        if (light_type == 2u) {
-            // For spot, no hit -> treat as far range in meters
+        if (light_type == 2u || update.kind == 2u) {
+            // Local lights treat misses as the light range in meters.
             textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(light.params.x, 0.0, 0.0, 0.0));
         } else {
             textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(1.0, 0.0, 0.0, 0.0));

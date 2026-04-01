@@ -465,17 +465,21 @@ func (a *App) Render() {
 
 	a.BufferManager.DispatchShadowPass(encoder, shadowUpdates)
 	a.BufferManager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.StructureRevision)
+	shadowPointUpdates := 0
 	shadowSpotUpdates := 0
 	shadowDirectionalUpdates := 0
 	for _, update := range shadowUpdates {
 		switch update.Kind {
 		case core.ShadowUpdateKindDirectional:
 			shadowDirectionalUpdates++
+		case core.ShadowUpdateKindPoint:
+			shadowPointUpdates++
 		case core.ShadowUpdateKindSpot:
 			shadowSpotUpdates++
 		}
 	}
 	a.Profiler.SetCount("ShadowUpdates", len(shadowUpdates))
+	a.Profiler.SetCount("ShadowPointUpdates", shadowPointUpdates)
 	a.Profiler.SetCount("ShadowSpotUpdates", shadowSpotUpdates)
 	a.Profiler.SetCount("ShadowDirectionalUpdates", shadowDirectionalUpdates)
 	a.ShadowUpdateSummary = formatShadowUpdateSummary(shadowUpdates)
@@ -658,6 +662,8 @@ func formatShadowUpdateSummary(updates []core.ShadowUpdate) string {
 		switch update.Kind {
 		case core.ShadowUpdateKindDirectional:
 			parts = append(parts, fmt.Sprintf("D%d:%d@%d", update.LightIndex, update.CascadeIndex, update.Resolution))
+		case core.ShadowUpdateKindPoint:
+			parts = append(parts, fmt.Sprintf("P%d:%d@%d", update.LightIndex, update.CascadeIndex, update.Resolution))
 		case core.ShadowUpdateKindSpot:
 			parts = append(parts, fmt.Sprintf("S%d@%d", update.LightIndex, update.Resolution))
 		default:

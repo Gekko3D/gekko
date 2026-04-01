@@ -32,6 +32,11 @@ type spotShadowCullVolume struct {
 	CosCone  float32
 }
 
+type pointShadowCullVolume struct {
+	Position mgl32.Vec3
+	Range    float32
+}
+
 func shadowUpVector(dir mgl32.Vec3) mgl32.Vec3 {
 	up := mgl32.Vec3{0, 1, 0}
 	if math.Abs(float64(dir.Y())) > 0.99 {
@@ -206,8 +211,21 @@ func intersectsSpotShadowVolume(aabb [2]mgl32.Vec3, volume spotShadowCullVolume)
 	return dotCenter >= minDot
 }
 
-func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []directionalShadowCullVolume, spotVolumes []spotShadowCullVolume) []*core.VoxelObject {
-	if len(directionalVolumes) == 0 && len(spotVolumes) == 0 {
+func intersectsPointShadowVolume(aabb [2]mgl32.Vec3, volume pointShadowCullVolume) bool {
+	center := aabb[0].Add(aabb[1]).Mul(0.5)
+	halfExtents := aabb[1].Sub(center)
+	delta := center.Sub(volume.Position)
+	clamped := mgl32.Vec3{
+		maxf(-halfExtents.X(), minf(delta.X(), halfExtents.X())),
+		maxf(-halfExtents.Y(), minf(delta.Y(), halfExtents.Y())),
+		maxf(-halfExtents.Z(), minf(delta.Z(), halfExtents.Z())),
+	}
+	closest := center.Add(clamped)
+	return closest.Sub(volume.Position).LenSqr() <= volume.Range*volume.Range
+}
+
+func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []directionalShadowCullVolume, spotVolumes []spotShadowCullVolume, pointVolumes []pointShadowCullVolume) []*core.VoxelObject {
+	if len(directionalVolumes) == 0 && len(spotVolumes) == 0 && len(pointVolumes) == 0 {
 		return nil
 	}
 
@@ -227,6 +245,14 @@ func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []dire
 		if !include {
 			for _, volume := range spotVolumes {
 				if intersectsSpotShadowVolume(*obj.WorldAABB, volume) {
+					include = true
+					break
+				}
+			}
+		}
+		if !include {
+			for _, volume := range pointVolumes {
+				if intersectsPointShadowVolume(*obj.WorldAABB, volume) {
 					include = true
 					break
 				}

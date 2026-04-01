@@ -52,15 +52,16 @@ type PhysicsDef struct {
 
 // LightDef defines a light instantiation.
 type LightDef struct {
-	Type      LightType
-	Position  mgl32.Vec3
-	Color     [3]float32
-	Intensity float32
-	Range     float32
-	ConeAngle float32
-	Rotation  mgl32.Quat
-	Orbit     *Orbiting
-	Rotate    bool
+	Type         LightType
+	Position     mgl32.Vec3
+	Color        [3]float32
+	Intensity    float32
+	Range        float32
+	ConeAngle    float32
+	CastsShadows bool
+	Rotation     mgl32.Quat
+	Orbit        *Orbiting
+	Rotate       bool
 }
 
 // Rotating component for simple rotation behavior
@@ -202,11 +203,12 @@ func spawnLight(cmd *Commands, def LightDef) {
 			Scale:    mgl32.Vec3{1, 1, 1},
 		},
 		&LightComponent{
-			Type:      def.Type,
-			Color:     def.Color,
-			Intensity: def.Intensity,
-			Range:     def.Range,
-			ConeAngle: def.ConeAngle,
+			Type:         def.Type,
+			Color:        def.Color,
+			Intensity:    def.Intensity,
+			Range:        def.Range,
+			ConeAngle:    def.ConeAngle,
+			CastsShadows: def.CastsShadows,
 		},
 	}
 

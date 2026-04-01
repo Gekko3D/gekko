@@ -135,6 +135,8 @@ Current implementation notes:
 - Degenerate thin voxels carry a two-sided direct-light flag through the G-buffer so deferred and transparent lighting agree on planes and rods.
 - Deferred lighting consumes the stored G-buffer normal directly; the albedo/material lookup stays palette-driven.
 - Opaque deferred point and spot lights evaluate attenuation from the stored voxel center, matching the transparent overlay path.
+- Point-light shadows use six cube faces stored in the shadow-map array and are sampled with hard voxel-stable compares.
+  - Keep them discrete per receiving voxel. Do not add per-voxel gradient filtering that turns a microvoxel into a soft-lit surface patch.
 - Shadow softness is controlled separately for directional and spot lights through `LightingQualityConfig.Shadow`.
   - Lower values push toward harder voxel-block shadows.
   - Higher values keep more of the filtered penumbra look.

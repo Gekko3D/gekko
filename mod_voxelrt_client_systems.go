@@ -535,6 +535,7 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 		}
 
 		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
+		gpuLight.CastsShadows = light.Type != LightTypePoint || light.CastsShadows
 		pendingLights = append(pendingLights, pendingLight{
 			entityID:  entityId,
 			lightType: light.Type,
