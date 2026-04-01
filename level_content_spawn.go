@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"path/filepath"
@@ -23,6 +24,7 @@ type AuthoredLevelSpawnResult struct {
 	RootEntity              EntityId
 	LevelID                 string
 	PlacementRootEntities   map[string]EntityId
+	BrushRootEntities       map[string]EntityId
 	TerrainChunkEntities    map[string]EntityId
 	MarkerEntities          map[string]EntityId
 	ExpandedVolumeInstances []content.PlacementVolumePreviewInstance
@@ -66,6 +68,7 @@ func LoadAndSpawnAuthoredLevel(path string, cmd *Commands, assets *AssetServer, 
 func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, def *content.LevelDef, opts AuthoredLevelSpawnOptions) (AuthoredLevelSpawnResult, error) {
 	result := AuthoredLevelSpawnResult{
 		PlacementRootEntities: make(map[string]EntityId),
+		BrushRootEntities:     make(map[string]EntityId),
 		TerrainChunkEntities:  make(map[string]EntityId),
 		MarkerEntities:        make(map[string]EntityId),
 	}
@@ -107,6 +110,16 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 			return result, err
 		}
 		result.PlacementRootEntities[placement.ID] = placementResult.RootEntity
+	}
+	brushes := content.LevelBrushes(def)
+	if len(brushes) > 0 {
+		brushRoot, err := spawnAuthoredLevelBrushes(cmd, assets, result.RootEntity, def)
+		if err != nil {
+			return result, err
+		}
+		for _, brush := range brushes {
+			result.BrushRootEntities[brush.ID] = brushRoot
+		}
 	}
 
 	maxVolumeInstances := opts.MaxVolumeInstances
@@ -260,6 +273,444 @@ func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *Run
 		})
 	}
 	return spawnResult, nil
+}
+
+func spawnAuthoredLevelBrushes(cmd *Commands, assets *AssetServer, parent EntityId, level *content.LevelDef) (EntityId, error) {
+	build, err := buildCollapsedAuthoredLevelBrushes(assets, level)
+	if err != nil {
+		return 0, fmt.Errorf("spawn level brushes: %w", err)
+	}
+	entity := cmd.AddEntity(
+		&TransformComponent{
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&LocalTransformComponent{
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&Parent{Entity: parent},
+	)
+	for _, batch := range build.batches {
+		cmd.AddEntity(
+			&TransformComponent{
+				Rotation: mgl32.QuatIdent(),
+				Scale:    mgl32.Vec3{1, 1, 1},
+			},
+			&LocalTransformComponent{
+				Rotation: mgl32.QuatIdent(),
+				Scale:    mgl32.Vec3{1, 1, 1},
+			},
+			&Parent{Entity: entity},
+			&VoxelModelComponent{
+				OverrideGeometry: batch.geometry,
+				VoxelPalette:     batch.palette,
+				VoxelResolution:  build.voxelResolution,
+				PivotMode:        PivotModeCorner,
+			},
+		)
+	}
+	return entity, nil
+}
+
+type collapsedLevelBrushBuild struct {
+	batches         []authoredLevelBrushBakeBatch
+	palette         AssetId
+	voxelResolution float32
+}
+
+type levelBrushBakeResolveCache struct {
+	models   map[string]AssetId
+	palettes map[string]AssetId
+}
+
+type AuthoredLevelBrushBakeResult struct {
+	Batches         []AuthoredLevelBrushBakeBatch
+	Palette         AssetId
+	VoxelResolution float32
+}
+
+type AuthoredLevelBrushBakeBatch struct {
+	Geometry AssetId
+	Palette  AssetId
+}
+
+func BakeAuthoredLevelBrushes(assets *AssetServer, level *content.LevelDef) (AuthoredLevelBrushBakeResult, error) {
+	build, err := buildCollapsedAuthoredLevelBrushes(assets, level)
+	if err != nil {
+		return AuthoredLevelBrushBakeResult{}, err
+	}
+	return AuthoredLevelBrushBakeResult{
+		Batches:         cloneAuthoredLevelBrushBakeBatches(build.batches),
+		Palette:         build.palette,
+		VoxelResolution: build.voxelResolution,
+	}, nil
+}
+
+func buildCollapsedAuthoredLevelBrushes(assets *AssetServer, level *content.LevelDef) (collapsedLevelBrushBuild, error) {
+	result := collapsedLevelBrushBuild{}
+	if assets == nil {
+		return result, fmt.Errorf("level brush bake requires asset server")
+	}
+	if level == nil {
+		return result, fmt.Errorf("level definition is nil")
+	}
+	content.EnsureLevelIDs(level)
+	brushes := content.LevelBrushes(level)
+	if len(brushes) == 0 {
+		return result, fmt.Errorf("level has no brushes")
+	}
+
+	voxelResolution := level.VoxelResolution
+	if voxelResolution <= 0 {
+		voxelResolution = VoxelSize
+	}
+
+	cache := levelBrushBakeResolveCache{
+		models:   make(map[string]AssetId),
+		palettes: make(map[string]AssetId),
+	}
+	resolved := make([]levelBrushResolvedPart, 0, len(brushes))
+	for _, brush := range brushes {
+		model, err := cachedLevelBrushModelAsset(assets, &cache, brush)
+		if err != nil {
+			return result, fmt.Errorf("brush %s: %w", brush.ID, err)
+		}
+		geometry, ok := assets.GetVoxelGeometry(model)
+		if !ok {
+			return result, fmt.Errorf("brush %s: missing voxel geometry", brush.ID)
+		}
+		paletteID, err := cachedAuthoredLevelBrushPalette(assets, &cache, level, brush)
+		if err != nil {
+			return result, fmt.Errorf("brush %s: %w", brush.ID, err)
+		}
+		palette, ok := assets.GetVoxelPalette(paletteID)
+		if !ok {
+			return result, fmt.Errorf("brush %s: missing voxel palette", brush.ID)
+		}
+		paletteKey, err := authoredLevelBrushPaletteCacheKey(level, brush)
+		if err != nil {
+			return result, fmt.Errorf("brush %s: %w", brush.ID, err)
+		}
+		resolved = append(resolved, levelBrushResolvedPart{
+			brush:    brush,
+			brushKey: paletteKey,
+			part: authoredCollapseResolvedPart{
+				def: content.AssetPartDef{
+					ID:   brush.ID,
+					Name: brush.Name,
+					Source: content.AssetSourceDef{
+						Kind:       content.AssetSourceKindProceduralPrimitive,
+						Primitive:  brush.Primitive,
+						Params:     brush.Params,
+						MaterialID: brush.MaterialID,
+						Operation:  brush.Operation,
+					},
+				},
+				world:           levelTransformToComponent(brush.Transform),
+				geometry:        geometry,
+				paletteAsset:    palette,
+				voxelResolution: voxelResolution,
+			},
+		})
+	}
+
+	batches, err := bakeLevelBrushBatches(assets, level, resolved, voxelResolution)
+	if err != nil {
+		return result, err
+	}
+	if len(batches) == 0 {
+		return result, fmt.Errorf("level brush bake requires at least one non-empty additive brush")
+	}
+	result.batches = batches
+	if len(batches) == 1 {
+		result.palette = batches[0].palette
+	}
+	result.voxelResolution = voxelResolution
+	return result, nil
+}
+
+func cachedLevelBrushModelAsset(assets *AssetServer, cache *levelBrushBakeResolveCache, brush content.LevelBrushDef) (AssetId, error) {
+	key, err := levelBrushModelCacheKey(brush)
+	if err != nil {
+		return AssetId{}, err
+	}
+	if cache != nil && cache.models != nil {
+		if id, ok := cache.models[key]; ok {
+			return id, nil
+		}
+	}
+	id, err := levelBrushModelAsset(assets, brush)
+	if err != nil {
+		return AssetId{}, err
+	}
+	if cache != nil && cache.models != nil {
+		cache.models[key] = id
+	}
+	return id, nil
+}
+
+func cachedAuthoredLevelBrushPalette(assets *AssetServer, cache *levelBrushBakeResolveCache, level *content.LevelDef, brush content.LevelBrushDef) (AssetId, error) {
+	key, err := authoredLevelBrushPaletteCacheKey(level, brush)
+	if err != nil {
+		return AssetId{}, err
+	}
+	if cache != nil && cache.palettes != nil {
+		if id, ok := cache.palettes[key]; ok {
+			return id, nil
+		}
+	}
+	id, err := authoredLevelBrushPalette(assets, level, brush)
+	if err != nil {
+		return AssetId{}, err
+	}
+	if cache != nil && cache.palettes != nil {
+		cache.palettes[key] = id
+	}
+	return id, nil
+}
+
+func levelBrushModelCacheKey(brush content.LevelBrushDef) (string, error) {
+	payload := struct {
+		Primitive string
+		Params    map[string]float32
+	}{
+		Primitive: brush.Primitive,
+		Params:    brush.Params,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func authoredLevelBrushPaletteCacheKey(level *content.LevelDef, brush content.LevelBrushDef) (string, error) {
+	payload := struct {
+		MaterialID string
+		Material   *content.LevelMaterialDef
+	}{
+		MaterialID: brush.MaterialID,
+	}
+	if brush.MaterialID != "" {
+		material, ok := content.FindLevelMaterialByID(level, brush.MaterialID)
+		if !ok {
+			return "", fmt.Errorf("missing material %s", brush.MaterialID)
+		}
+		payload.Material = &material
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func levelBrushModelAsset(assets *AssetServer, brush content.LevelBrushDef) (AssetId, error) {
+	if assets == nil {
+		return AssetId{}, nil
+	}
+	params := brush.Params
+	switch brush.Primitive {
+	case "cube":
+		return assets.CreateCubeModel(params["sx"], params["sy"], params["sz"], 1), nil
+	case "sphere":
+		return assets.CreateSphereModel(params["radius"], 1), nil
+	case "cone":
+		return assets.CreateConeModel(params["radius"], params["height"], 1), nil
+	case "pyramid":
+		return assets.CreatePyramidModel(params["size"], params["height"], 1), nil
+	case "cylinder":
+		return assets.CreateCylinderModel(params["radius"], params["height"], 1), nil
+	case "capsule":
+		return assets.CreateCapsuleModel(params["radius"], params["height"], 1), nil
+	case "ramp":
+		return assets.CreateRampModel(params["sx"], params["sy"], params["sz"], 1), nil
+	default:
+		return AssetId{}, fmt.Errorf("unsupported level brush primitive %q", brush.Primitive)
+	}
+}
+
+func authoredLevelBrushPalette(assets *AssetServer, level *content.LevelDef, brush content.LevelBrushDef) (AssetId, error) {
+	if assets == nil {
+		return AssetId{}, nil
+	}
+	if brush.MaterialID == "" {
+		return assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1.5), nil
+	}
+	material, ok := content.FindLevelMaterialByID(level, brush.MaterialID)
+	if !ok {
+		return AssetId{}, fmt.Errorf("missing material %s", brush.MaterialID)
+	}
+	return assets.CreatePBRPaletteWithTransparency(
+		material.BaseColor,
+		material.Roughness,
+		material.Metallic,
+		material.Emissive,
+		material.IOR,
+		material.Transparency,
+	), nil
+}
+
+func levelBrushCollapseGeometryCacheKey(level *content.LevelDef, voxelResolution float32) (string, error) {
+	payload := struct {
+		Version         string
+		LevelID         string
+		Materials       []content.LevelMaterialDef
+		BrushLayers     []content.LevelBrushLayerDef
+		VoxelResolution float32
+	}{
+		Version:         "collapsed-authored-level-brushes-v3",
+		LevelID:         level.ID,
+		Materials:       level.Materials,
+		BrushLayers:     level.BrushLayers,
+		VoxelResolution: voxelResolution,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+type levelBrushResolvedPart struct {
+	brush    content.LevelBrushDef
+	brushKey string
+	part     authoredCollapseResolvedPart
+}
+
+type authoredLevelBrushBatchBuild struct {
+	key          string
+	palette      AssetId
+	composite    *volume.XBrickMap
+	geometryKey  string
+	brushes      []string
+	firstBrushID string
+}
+
+func bakeLevelBrushBatches(assets *AssetServer, level *content.LevelDef, resolved []levelBrushResolvedPart, voxelResolution float32) ([]authoredLevelBrushBakeBatch, error) {
+	if len(resolved) == 0 {
+		return nil, nil
+	}
+	orderedKeys := make([]string, 0, len(resolved))
+	batchesByKey := map[string]*authoredLevelBrushBatchBuild{}
+	for _, resolvedPart := range resolved {
+		part := resolvedPart.part
+		operation := content.EffectiveAssetSourceOperation(part.def.Source)
+		switch operation {
+		case content.AssetShapeOperationSubtract:
+			for _, key := range orderedKeys {
+				batch := batchesByKey[key]
+				if batch == nil {
+					continue
+				}
+				if err := bakeResolvedPartIntoComposite(batch.composite, part, voxelResolution); err != nil {
+					return nil, fmt.Errorf("brush %s bake failed: %w", part.def.ID, err)
+				}
+			}
+		case content.AssetShapeOperationAdd:
+			if voxelGeometryIsEmpty(part.geometry) {
+				continue
+			}
+			batch := batchesByKey[resolvedPart.brushKey]
+			if batch == nil {
+				geometryKey, err := levelBrushBatchGeometryCacheKey(level, voxelResolution, resolvedPart.brushKey)
+				if err != nil {
+					return nil, err
+				}
+				batch = &authoredLevelBrushBatchBuild{
+					key:          resolvedPart.brushKey,
+					palette:      assets.CreateVoxelPaletteAsset(part.paletteAsset),
+					composite:    volume.NewXBrickMap(),
+					geometryKey:  geometryKey,
+					firstBrushID: part.def.ID,
+				}
+				batchesByKey[resolvedPart.brushKey] = batch
+				orderedKeys = append(orderedKeys, resolvedPart.brushKey)
+			}
+			batch.brushes = append(batch.brushes, part.def.ID)
+			clearingPart := levelBrushResolvedPartAsSubtract(part)
+			for _, key := range orderedKeys {
+				if key == resolvedPart.brushKey {
+					continue
+				}
+				otherBatch := batchesByKey[key]
+				if otherBatch == nil {
+					continue
+				}
+				if err := bakeResolvedPartIntoComposite(otherBatch.composite, clearingPart, voxelResolution); err != nil {
+					return nil, fmt.Errorf("brush %s overwrite clear failed: %w", part.def.ID, err)
+				}
+			}
+			if err := bakeResolvedPartIntoComposite(batch.composite, part, voxelResolution); err != nil {
+				return nil, fmt.Errorf("brush %s bake failed: %w", part.def.ID, err)
+			}
+		default:
+			return nil, fmt.Errorf("brush %s has unsupported operation %q", part.def.ID, part.def.Source.Operation)
+		}
+	}
+	result := make([]authoredLevelBrushBakeBatch, 0, len(orderedKeys))
+	for _, key := range orderedKeys {
+		batch := batchesByKey[key]
+		if batch == nil || batch.composite == nil || batch.composite.GetVoxelCount() == 0 {
+			continue
+		}
+		batch.composite.ComputeAABB()
+		batch.composite.ClearDirty()
+		result = append(result, authoredLevelBrushBakeBatch{
+			geometry: assets.RegisterSharedVoxelGeometryWithCacheKey(batch.geometryKey, batch.composite, batch.geometryKey),
+			palette:  batch.palette,
+		})
+	}
+	return result, nil
+}
+
+func levelBrushBatchGeometryCacheKey(level *content.LevelDef, voxelResolution float32, batchKey string) (string, error) {
+	baseKey, err := levelBrushCollapseGeometryCacheKey(level, voxelResolution)
+	if err != nil {
+		return "", err
+	}
+	payload := struct {
+		Version  string
+		BaseKey  string
+		BatchKey string
+	}{
+		Version:  "collapsed-authored-level-brush-batch-v1",
+		BaseKey:  baseKey,
+		BatchKey: batchKey,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func cloneAuthoredLevelBrushBakeBatches(in []authoredLevelBrushBakeBatch) []AuthoredLevelBrushBakeBatch {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AuthoredLevelBrushBakeBatch, 0, len(in))
+	for _, batch := range in {
+		out = append(out, AuthoredLevelBrushBakeBatch{
+			Geometry: batch.geometry,
+			Palette:  batch.palette,
+		})
+	}
+	return out
+}
+
+func levelBrushResolvedPartAsSubtract(part authoredCollapseResolvedPart) authoredCollapseResolvedPart {
+	clearing := part
+	clearing.def = part.def
+	clearing.def.Source = part.def.Source
+	clearing.def.Source.Operation = content.AssetShapeOperationSubtract
+	return clearing
+}
+
+type authoredLevelBrushBakeBatch struct {
+	geometry AssetId
+	palette  AssetId
 }
 
 func optionalPositiveFloat32Pointer(value float32) *float32 {

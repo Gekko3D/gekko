@@ -132,6 +132,15 @@ func spawnVoxelObject(cmd *Commands, assets *AssetServer, def VoxelObjectDef) {
 			// Params: [base, height]
 			b, h := def.Procedural.Params[0], def.Procedural.Params[1]
 			model = assets.CreatePyramidModel(b, h, def.ModelScale)
+		case "cylinder":
+			r, h := def.Procedural.Params[0], def.Procedural.Params[1]
+			model = assets.CreateCylinderModel(r, h, def.ModelScale)
+		case "capsule":
+			r, h := def.Procedural.Params[0], def.Procedural.Params[1]
+			model = assets.CreateCapsuleModel(r, h, def.ModelScale)
+		case "ramp":
+			w, h, d := def.Procedural.Params[0], def.Procedural.Params[1], def.Procedural.Params[2]
+			model = assets.CreateRampModel(w, h, d, def.ModelScale)
 		}
 
 		palette = assets.CreatePBRPaletteWithTransparency(

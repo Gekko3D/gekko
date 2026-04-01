@@ -90,8 +90,14 @@ func (ecs *Ecs) removeEntity(entityId EntityId) {
 }
 
 func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
-	srcArchId := ecs.storage.entityIndex[entityId]
+	srcArchId, ok := ecs.storage.entityIndex[entityId]
+	if !ok {
+		return
+	}
 	srcArch := ecs.storage.archetypes[srcArchId]
+	if srcArch == nil {
+		return
+	}
 	srcRow := srcArch.entities[entityId]
 
 	dstArchId, _, dstArch := ecs.archetypeFromExtraComponents(srcArch, components...)
@@ -109,8 +115,14 @@ func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
 }
 
 func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
-	srcArchId := ecs.storage.entityIndex[entityId]
+	srcArchId, ok := ecs.storage.entityIndex[entityId]
+	if !ok {
+		return
+	}
 	srcArch := ecs.storage.archetypes[srcArchId]
+	if srcArch == nil {
+		return
+	}
 	srcRow := srcArch.entities[entityId]
 
 	// Find the subset of components to keep
@@ -173,8 +185,15 @@ func (ecs *Ecs) writeComponent(dstArch *archetype, dstRow row, component any) {
 }
 
 func (ecs *Ecs) recycleEntity(entityId EntityId) {
-	archId := ecs.storage.entityIndex[entityId]
+	archId, ok := ecs.storage.entityIndex[entityId]
+	if !ok {
+		return
+	}
 	arch := ecs.storage.archetypes[archId]
+	if arch == nil {
+		delete(ecs.storage.entityIndex, entityId)
+		return
+	}
 
 	row := arch.entities[entityId]
 	arch.recycled = append(arch.recycled, row)

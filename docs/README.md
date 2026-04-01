@@ -29,6 +29,8 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
   - [`assets/runtime-assets.md`](assets/runtime-assets.md)
 - Working across the engine/editor boundary:
   - [`editor/integration.md`](editor/integration.md)
+  - [`editor/user-guide.md`](editor/user-guide.md)
+  - [`editor/workflows.md`](editor/workflows.md)
 - Common agent workflows:
   - [`workflows/agent-task-loop.md`](workflows/agent-task-loop.md)
   - [`workflows/add-module.md`](workflows/add-module.md)
@@ -45,7 +47,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
 - `assets/`
   - runtime asset ownership and creation paths
 - `editor/`
-  - engine/editor integration notes
+  - engine/editor integration notes plus operator-facing editor guides
 - `workflows/`
   - task-oriented playbooks for common agent changes
 - `renderer/`

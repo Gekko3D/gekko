@@ -298,6 +298,103 @@ func TestSpawnAuthoredAssetCollapseFallsBackForMarkerAssets(t *testing.T) {
 	}
 }
 
+func TestSpawnAuthoredAssetCollapsedSubtractOperationCarvesComposite(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	def := content.NewAssetDef("collapsed-subtract")
+	def.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
+	def.Parts = []content.AssetPartDef{
+		{
+			ID:   "solid",
+			Name: "solid",
+			Source: content.AssetSourceDef{
+				Kind:      content.AssetSourceKindProceduralPrimitive,
+				Primitive: "cube",
+				Params:    map[string]float32{"sx": 3, "sy": 3, "sz": 3},
+			},
+			Transform: content.AssetTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:   "cut",
+			Name: "cut",
+			Source: content.AssetSourceDef{
+				Kind:      content.AssetSourceKindProceduralPrimitive,
+				Primitive: "cube",
+				Params:    map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+				Operation: content.AssetShapeOperationSubtract,
+			},
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{0.1, 0.1, 0.1},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+
+	result, err := SpawnAuthoredAssetWithOptions(cmd, assets, def, TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}, AuthoredAssetSpawnOptions{CollapseVoxelParts: VoxelPartCollapseForce})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAsset returned error: %v", err)
+	}
+	app.FlushCommands()
+
+	voxelEntity := onlyVoxelEntityForSpawnTest(t, cmd, result.RootEntity)
+	vmc := mustVoxelModelForSpawnTest(t, cmd, voxelEntity)
+	geometry, ok := assets.GetVoxelGeometry(vmc.GeometryAsset())
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatalf("expected collapsed geometry asset, got %+v ok=%v", geometry, ok)
+	}
+	if geometry.XBrickMap.GetVoxelCount() != 56 {
+		t.Fatalf("expected centered subtractive collapse volume, got %d voxels", geometry.XBrickMap.GetVoxelCount())
+	}
+	if found, _ := geometry.XBrickMap.GetVoxel(0, 0, 0); found {
+		t.Fatal("expected subtractive cut to clear centered voxel at [0 0 0]")
+	}
+	if found, _ := geometry.XBrickMap.GetVoxel(-1, -1, -1); !found {
+		t.Fatal("expected additive volume to preserve surrounding voxels outside the centered cut")
+	}
+}
+
+func TestResolveAuthoredCollapsePartsUsesRuntimeVoxelPivot(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+
+	def := content.NewAssetDef("collapse-pivot")
+	def.Parts = []content.AssetPartDef{{
+		ID:   "cut",
+		Name: "cut",
+		Source: content.AssetSourceDef{
+			Kind:      content.AssetSourceKindProceduralPrimitive,
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 4, "sy": 4, "sz": 4},
+			Operation: content.AssetShapeOperationSubtract,
+		},
+		Transform: content.AssetTransformDef{
+			Position: content.Vec3{0.2, 0.2, 0.2},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		ModelScale: 1,
+	}}
+
+	resolved, err := resolveAuthoredCollapseParts(assets, def, "")
+	if err != nil {
+		t.Fatalf("resolveAuthoredCollapseParts returned error: %v", err)
+	}
+	if len(resolved) != 1 {
+		t.Fatalf("expected one resolved part, got %d", len(resolved))
+	}
+	if resolved[0].world.Pivot != (mgl32.Vec3{2, 2, 2}) {
+		t.Fatalf("expected collapse world pivot to match runtime voxel center, got %v", resolved[0].world.Pivot)
+	}
+}
+
 func TestSpawnAuthoredAssetCollapseForceRejectsIneligibleAsset(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
@@ -1082,6 +1179,113 @@ func TestSpawnAuthoredAssetCollapsedSpawnsReuseCompositeGeometryAndPalette(t *te
 	}
 	if firstComp.VoxelPalette != secondComp.VoxelPalette {
 		t.Fatalf("expected collapsed spawns to reuse palette asset, got %v and %v", firstComp.VoxelPalette, secondComp.VoxelPalette)
+	}
+}
+
+func TestSpawnAuthoredAssetUsesAuthoredProceduralMaterialPalette(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	def := content.NewAssetDef("procedural-material")
+	def.Materials = []content.AssetMaterialDef{{
+		ID:           "mat_glass",
+		Name:         "Glass",
+		BaseColor:    [4]uint8{180, 220, 255, 204},
+		Roughness:    0.08,
+		Metallic:     0.0,
+		Emissive:     0.15,
+		IOR:          1.45,
+		Transparency: 0.35,
+	}}
+	def.Parts = []content.AssetPartDef{{
+		ID:   "part",
+		Name: "part",
+		Source: content.AssetSourceDef{
+			Kind:       content.AssetSourceKindProceduralPrimitive,
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			MaterialID: "mat_glass",
+		},
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+
+	result, err := SpawnAuthoredAsset(cmd, assets, def, TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAsset returned error: %v", err)
+	}
+	app.FlushCommands()
+
+	vmc := mustVoxelModelForSpawnTest(t, cmd, result.EntitiesByAssetID["part"])
+	palette, ok := assets.GetVoxelPalette(vmc.VoxelPalette)
+	if !ok {
+		t.Fatalf("expected palette asset %v", vmc.VoxelPalette)
+	}
+	if palette.VoxPalette[1] != [4]uint8{180, 220, 255, 204} {
+		t.Fatalf("expected authored base color in palette, got %v", palette.VoxPalette[1])
+	}
+	if !palette.IsPBR || palette.Roughness != 0.08 || palette.Emission != 0.15 || palette.IOR != 1.45 || palette.Transparency != 0.35 {
+		t.Fatalf("expected authored PBR palette, got %+v", palette)
+	}
+}
+
+func TestSpawnAuthoredAssetSplitsPaletteCacheForDistinctAuthoredMaterials(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	materialAsset := func(name string, color [4]uint8) *content.AssetDef {
+		def := content.NewAssetDef(name)
+		def.Materials = []content.AssetMaterialDef{{
+			ID:        "mat",
+			Name:      name,
+			BaseColor: color,
+			Roughness: 0.4,
+			IOR:       1.5,
+		}}
+		def.Parts = []content.AssetPartDef{{
+			ID:   "part",
+			Name: "part",
+			Source: content.AssetSourceDef{
+				Kind:       content.AssetSourceKindProceduralPrimitive,
+				Primitive:  "cube",
+				Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+				MaterialID: "mat",
+			},
+			Transform: content.AssetTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		}}
+		return def
+	}
+
+	first, err := SpawnAuthoredAsset(cmd, assets, materialAsset("red", [4]uint8{220, 80, 60, 255}), TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	})
+	if err != nil {
+		t.Fatalf("first spawn failed: %v", err)
+	}
+	second, err := SpawnAuthoredAsset(cmd, assets, materialAsset("green", [4]uint8{80, 220, 120, 255}), TransformComponent{
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	})
+	if err != nil {
+		t.Fatalf("second spawn failed: %v", err)
+	}
+	app.FlushCommands()
+
+	firstComp := mustVoxelModelForSpawnTest(t, cmd, first.EntitiesByAssetID["part"])
+	secondComp := mustVoxelModelForSpawnTest(t, cmd, second.EntitiesByAssetID["part"])
+	if firstComp.VoxelPalette == secondComp.VoxelPalette {
+		t.Fatalf("expected distinct authored materials to split palette cache, got %v", firstComp.VoxelPalette)
 	}
 }
 

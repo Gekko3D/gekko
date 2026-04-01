@@ -201,6 +201,609 @@ func TestLoadAndSpawnAuthoredLevelPlacementVolumeOverridesShadowSettings(t *test
 	}
 }
 
+func TestSpawnAuthoredLevelCollapsesProceduralBrushesAndAppliesSubtract(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	level := content.NewLevelDef("brushes")
+	level.VoxelResolution = 0.1
+	level.Materials = []content.LevelMaterialDef{{
+		ID:           "mat_stone",
+		Name:         "Stone",
+		BaseColor:    [4]uint8{180, 180, 180, 255},
+		Roughness:    0.8,
+		Metallic:     0,
+		Emissive:     0,
+		IOR:          1.4,
+		Transparency: 0,
+	}}
+	level.BrushLayers[0].Brushes = []content.LevelBrushDef{
+		{
+			ID:         "solid",
+			Name:       "solid",
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 3, "sy": 3, "sz": 3},
+			MaterialID: "mat_stone",
+			Transform: content.LevelTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:         "cut",
+			Name:       "cut",
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			MaterialID: "mat_stone",
+			Operation:  content.AssetShapeOperationSubtract,
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{0.1, 0.1, 0.1},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+
+	result, err := SpawnAuthoredLevel(cmd, assets, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	root := result.BrushRootEntities["solid"]
+	if root == 0 {
+		t.Fatalf("expected brush root entity, got %#v", result.BrushRootEntities)
+	}
+	var bakedEntity EntityId
+	MakeQuery1[VoxelModelComponent](cmd).Map(func(eid EntityId, _ *VoxelModelComponent) bool {
+		parent, ok := parentEntityForTest(cmd, eid)
+		if ok && parent == root {
+			bakedEntity = eid
+			return false
+		}
+		return true
+	})
+	if bakedEntity == 0 {
+		t.Fatal("expected baked runtime brush child entity")
+	}
+	vmc := mustVoxelModelForSpawnTest(t, cmd, bakedEntity)
+	geometry, ok := assets.GetVoxelGeometry(vmc.GeometryAsset())
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatalf("expected collapsed brush geometry asset, got %+v ok=%v", geometry, ok)
+	}
+	if geometry.XBrickMap.GetVoxelCount() != 26 {
+		t.Fatalf("expected subtractive brush bake to remove one voxel, got %d", geometry.XBrickMap.GetVoxelCount())
+	}
+	if found, _ := geometry.XBrickMap.GetVoxel(1, 1, 1); found {
+		t.Fatal("expected subtractive brush to clear voxel at [1 1 1]")
+	}
+}
+
+func TestBakeAuthoredLevelBrushesRespectsAuthorOrder(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+
+	levelSubtractFirst := content.NewLevelDef("subtract-first")
+	levelSubtractFirst.VoxelResolution = 0.1
+	levelSubtractFirst.BrushLayers[0].Brushes = []content.LevelBrushDef{
+		{
+			ID:        "cut",
+			Name:      "cut",
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			Operation: content.AssetShapeOperationSubtract,
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{0.1, 0.1, 0.1},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:        "solid",
+			Name:      "solid",
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 3, "sy": 3, "sz": 3},
+			Transform: content.LevelTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+	levelAddFirst := content.NewLevelDef("add-first")
+	levelAddFirst.VoxelResolution = 0.1
+	levelAddFirst.BrushLayers[0].Brushes = []content.LevelBrushDef{
+		levelSubtractFirst.BrushLayers[0].Brushes[1],
+		levelSubtractFirst.BrushLayers[0].Brushes[0],
+	}
+
+	firstBake, err := BakeAuthoredLevelBrushes(assets, levelSubtractFirst)
+	if err != nil {
+		t.Fatalf("BakeAuthoredLevelBrushes subtract-first failed: %v", err)
+	}
+	secondBake, err := BakeAuthoredLevelBrushes(assets, levelAddFirst)
+	if err != nil {
+		t.Fatalf("BakeAuthoredLevelBrushes add-first failed: %v", err)
+	}
+
+	if len(firstBake.Batches) != 1 || len(secondBake.Batches) != 1 {
+		t.Fatalf("expected one baked batch per level, got first=%d second=%d", len(firstBake.Batches), len(secondBake.Batches))
+	}
+	firstGeometry, ok := assets.GetVoxelGeometry(firstBake.Batches[0].Geometry)
+	if !ok || firstGeometry.XBrickMap == nil {
+		t.Fatalf("expected first baked geometry, got %+v ok=%v", firstGeometry, ok)
+	}
+	secondGeometry, ok := assets.GetVoxelGeometry(secondBake.Batches[0].Geometry)
+	if !ok || secondGeometry.XBrickMap == nil {
+		t.Fatalf("expected second baked geometry, got %+v ok=%v", secondGeometry, ok)
+	}
+
+	if firstGeometry.XBrickMap.GetVoxelCount() != 27 {
+		t.Fatalf("expected subtract-first bake to preserve later-empty space, got %d", firstGeometry.XBrickMap.GetVoxelCount())
+	}
+	if found, _ := firstGeometry.XBrickMap.GetVoxel(1, 1, 1); !found {
+		t.Fatal("expected subtract-first bake to leave voxel at [1 1 1]")
+	}
+	if secondGeometry.XBrickMap.GetVoxelCount() != 26 {
+		t.Fatalf("expected add-first bake to remove one voxel, got %d", secondGeometry.XBrickMap.GetVoxelCount())
+	}
+	if found, _ := secondGeometry.XBrickMap.GetVoxel(1, 1, 1); found {
+		t.Fatal("expected add-first bake to clear voxel at [1 1 1]")
+	}
+	if reflect.DeepEqual(
+		VoxelObjectSnapshotFromXBrickMap(firstGeometry.XBrickMap),
+		VoxelObjectSnapshotFromXBrickMap(secondGeometry.XBrickMap),
+	) {
+		t.Fatal("expected authored order changes to produce different geometry")
+	}
+}
+
+func TestBakeAuthoredLevelBrushesPreservesSequentialAuthorOrder(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+
+	level := content.NewLevelDef("sequential-order")
+	level.VoxelResolution = 0.1
+	level.BrushLayers[0].Brushes = []content.LevelBrushDef{
+		{
+			ID:        "solid",
+			Name:      "solid",
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 3, "sy": 3, "sz": 3},
+			Transform: content.LevelTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:        "cut",
+			Name:      "cut",
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			Operation: content.AssetShapeOperationSubtract,
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{0.1, 0.1, 0.1},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:        "detail",
+			Name:      "detail",
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{0.1, 0.1, 0.1},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+
+	bake, err := BakeAuthoredLevelBrushes(assets, level)
+	if err != nil {
+		t.Fatalf("BakeAuthoredLevelBrushes failed: %v", err)
+	}
+	if len(bake.Batches) != 1 {
+		t.Fatalf("expected one batch for sequential order test, got %d", len(bake.Batches))
+	}
+	geometry, ok := assets.GetVoxelGeometry(bake.Batches[0].Geometry)
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatalf("expected baked geometry, got %+v ok=%v", geometry, ok)
+	}
+	if geometry.XBrickMap.GetVoxelCount() != 27 {
+		t.Fatalf("expected later additive brush to refill cut voxel, got %d voxels", geometry.XBrickMap.GetVoxelCount())
+	}
+	if found, _ := geometry.XBrickMap.GetVoxel(1, 1, 1); !found {
+		t.Fatal("expected final additive brush to restore voxel at [1 1 1]")
+	}
+}
+
+func TestBakeAuthoredLevelBrushesSupportsMultipleAdditiveMaterials(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+
+	level := content.NewLevelDef("multi-material")
+	level.VoxelResolution = 0.1
+	level.Materials = []content.LevelMaterialDef{
+		{
+			ID:           "red",
+			Name:         "Red",
+			BaseColor:    [4]uint8{220, 80, 80, 255},
+			Roughness:    0.8,
+			Metallic:     0.05,
+			Emissive:     0,
+			IOR:          1.4,
+			Transparency: 0,
+		},
+		{
+			ID:           "blue",
+			Name:         "Blue",
+			BaseColor:    [4]uint8{80, 120, 220, 255},
+			Roughness:    0.4,
+			Metallic:     0.2,
+			Emissive:     0,
+			IOR:          1.3,
+			Transparency: 0,
+		},
+	}
+	level.BrushLayers[0].Brushes = []content.LevelBrushDef{
+		{
+			ID:         "red-voxel",
+			Name:       "red-voxel",
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			MaterialID: "red",
+			Transform: content.LevelTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:         "blue-voxel",
+			Name:       "blue-voxel",
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			MaterialID: "blue",
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{0.1, 0, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+
+	bake, err := BakeAuthoredLevelBrushes(assets, level)
+	if err != nil {
+		t.Fatalf("BakeAuthoredLevelBrushes failed: %v", err)
+	}
+	if len(bake.Batches) != 2 {
+		t.Fatalf("expected two baked batches for distinct additive materials, got %d", len(bake.Batches))
+	}
+	for i, want := range [][4]uint8{{220, 80, 80, 255}, {80, 120, 220, 255}} {
+		geometry, ok := assets.GetVoxelGeometry(bake.Batches[i].Geometry)
+		if !ok || geometry.XBrickMap == nil {
+			t.Fatalf("expected baked geometry for batch %d, got %+v ok=%v", i, geometry, ok)
+		}
+		if geometry.XBrickMap.GetVoxelCount() != 1 {
+			t.Fatalf("expected one voxel in batch %d, got %d", i, geometry.XBrickMap.GetVoxelCount())
+		}
+		palette, ok := assets.GetVoxelPalette(bake.Batches[i].Palette)
+		if !ok {
+			t.Fatalf("expected palette for batch %d", i)
+		}
+		if palette.VoxPalette[1] != want {
+			t.Fatalf("expected palette color %v for batch %d, got %v", want, i, palette.VoxPalette[1])
+		}
+	}
+}
+
+func TestBakeAuthoredLevelBrushesUsesLastWriterWhenMaterialsOverlap(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+
+	level := content.NewLevelDef("multi-material-overlap")
+	level.VoxelResolution = 0.1
+	level.Materials = []content.LevelMaterialDef{
+		{
+			ID:           "red",
+			Name:         "Red",
+			BaseColor:    [4]uint8{220, 80, 80, 255},
+			Roughness:    0.8,
+			Metallic:     0.05,
+			Emissive:     0,
+			IOR:          1.4,
+			Transparency: 0,
+		},
+		{
+			ID:           "blue",
+			Name:         "Blue",
+			BaseColor:    [4]uint8{80, 120, 220, 255},
+			Roughness:    0.4,
+			Metallic:     0.2,
+			Emissive:     0,
+			IOR:          1.3,
+			Transparency: 0,
+		},
+	}
+	level.BrushLayers[0].Brushes = []content.LevelBrushDef{
+		{
+			ID:         "red-voxel",
+			Name:       "red-voxel",
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			MaterialID: "red",
+			Transform: content.LevelTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:         "blue-voxel",
+			Name:       "blue-voxel",
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			MaterialID: "blue",
+			Transform: content.LevelTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+
+	bake, err := BakeAuthoredLevelBrushes(assets, level)
+	if err != nil {
+		t.Fatalf("BakeAuthoredLevelBrushes failed: %v", err)
+	}
+	if len(bake.Batches) != 1 {
+		t.Fatalf("expected overwritten material batch to be dropped, got %d batches", len(bake.Batches))
+	}
+	geometry, ok := assets.GetVoxelGeometry(bake.Batches[0].Geometry)
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatalf("expected surviving geometry, got %+v ok=%v", geometry, ok)
+	}
+	if geometry.XBrickMap.GetVoxelCount() != 1 {
+		t.Fatalf("expected surviving batch to own the overlapping voxel, got %d voxels", geometry.XBrickMap.GetVoxelCount())
+	}
+	palette, ok := assets.GetVoxelPalette(bake.Batches[0].Palette)
+	if !ok {
+		t.Fatal("expected surviving batch palette")
+	}
+	if palette.VoxPalette[1] != ([4]uint8{80, 120, 220, 255}) {
+		t.Fatalf("expected last writer palette color, got %v", palette.VoxPalette[1])
+	}
+}
+
+func TestBakeAuthoredLevelBrushesMatchesSpawnedRuntimeBrushGeometryAndPalette(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	level := content.NewLevelDef("parity")
+	level.VoxelResolution = 0.1
+	level.Materials = []content.LevelMaterialDef{{
+		ID:           "glass",
+		Name:         "Glass",
+		BaseColor:    [4]uint8{150, 190, 220, 180},
+		Roughness:    0.15,
+		Metallic:     0,
+		Emissive:     0,
+		IOR:          1.45,
+		Transparency: 0.3,
+	}}
+	level.BrushLayers[0].Brushes = []content.LevelBrushDef{
+		{
+			ID:         "wall",
+			Name:       "wall",
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 4, "sy": 4, "sz": 1},
+			MaterialID: "glass",
+			Transform: content.LevelTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:        "cut",
+			Name:      "cut",
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 1, "sy": 2, "sz": 1},
+			Operation: content.AssetShapeOperationSubtract,
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{0.1, 0.1, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+
+	bake, err := BakeAuthoredLevelBrushes(assets, level)
+	if err != nil {
+		t.Fatalf("BakeAuthoredLevelBrushes failed: %v", err)
+	}
+	result, err := SpawnAuthoredLevel(cmd, assets, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	root := result.BrushRootEntities["wall"]
+	if root == 0 {
+		t.Fatalf("expected brush root entity, got %#v", result.BrushRootEntities)
+	}
+	var bakedEntity EntityId
+	MakeQuery1[VoxelModelComponent](cmd).Map(func(eid EntityId, _ *VoxelModelComponent) bool {
+		parent, ok := parentEntityForTest(cmd, eid)
+		if ok && parent == root {
+			bakedEntity = eid
+			return false
+		}
+		return true
+	})
+	if bakedEntity == 0 {
+		t.Fatal("expected baked runtime brush child entity")
+	}
+	vmc := mustVoxelModelForSpawnTest(t, cmd, bakedEntity)
+	runtimeGeometry, ok := assets.GetVoxelGeometry(vmc.GeometryAsset())
+	if !ok || runtimeGeometry.XBrickMap == nil {
+		t.Fatalf("expected runtime geometry asset, got %+v ok=%v", runtimeGeometry, ok)
+	}
+	if len(bake.Batches) != 1 {
+		t.Fatalf("expected single baked batch for parity test, got %d", len(bake.Batches))
+	}
+	bakedGeometry, ok := assets.GetVoxelGeometry(bake.Batches[0].Geometry)
+	if !ok || bakedGeometry.XBrickMap == nil {
+		t.Fatalf("expected baked geometry asset, got %+v ok=%v", bakedGeometry, ok)
+	}
+	if !reflect.DeepEqual(
+		VoxelObjectSnapshotFromXBrickMap(runtimeGeometry.XBrickMap),
+		VoxelObjectSnapshotFromXBrickMap(bakedGeometry.XBrickMap),
+	) {
+		t.Fatal("expected baked brush geometry to match spawned runtime geometry")
+	}
+
+	runtimePalette, ok := assets.GetVoxelPalette(vmc.VoxelPalette)
+	if !ok {
+		t.Fatalf("expected runtime palette asset %v", vmc.VoxelPalette)
+	}
+	bakedPalette, ok := assets.GetVoxelPalette(bake.Batches[0].Palette)
+	if !ok {
+		t.Fatalf("expected baked palette asset %v", bake.Batches[0].Palette)
+	}
+	if !reflect.DeepEqual(runtimePalette, bakedPalette) {
+		t.Fatalf("expected baked/runtime palettes to match, runtime=%+v baked=%+v", runtimePalette, bakedPalette)
+	}
+}
+
+func TestCachedLevelBrushModelAssetReusesRepeatedPrimitiveCombos(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+	cache := &levelBrushBakeResolveCache{
+		models:   make(map[string]AssetId),
+		palettes: make(map[string]AssetId),
+	}
+
+	first, err := cachedLevelBrushModelAsset(assets, cache, content.LevelBrushDef{
+		Primitive: "cube",
+		Params:    map[string]float32{"sx": 4, "sy": 2, "sz": 6},
+	})
+	if err != nil {
+		t.Fatalf("cachedLevelBrushModelAsset first failed: %v", err)
+	}
+	second, err := cachedLevelBrushModelAsset(assets, cache, content.LevelBrushDef{
+		Primitive: "cube",
+		Params:    map[string]float32{"sx": 4, "sy": 2, "sz": 6},
+	})
+	if err != nil {
+		t.Fatalf("cachedLevelBrushModelAsset second failed: %v", err)
+	}
+	third, err := cachedLevelBrushModelAsset(assets, cache, content.LevelBrushDef{
+		Primitive: "cube",
+		Params:    map[string]float32{"sx": 5, "sy": 2, "sz": 6},
+	})
+	if err != nil {
+		t.Fatalf("cachedLevelBrushModelAsset third failed: %v", err)
+	}
+
+	if first != second {
+		t.Fatalf("expected repeated primitive combo to reuse cached model, got %v and %v", first, second)
+	}
+	if third == first {
+		t.Fatalf("expected distinct primitive params to produce distinct model ids, got %v", third)
+	}
+	if len(cache.models) != 2 {
+		t.Fatalf("expected two cached model combos, got %d", len(cache.models))
+	}
+}
+
+func TestCachedLevelBrushPaletteReusesRepeatedMaterialCombos(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+	cache := &levelBrushBakeResolveCache{
+		models:   make(map[string]AssetId),
+		palettes: make(map[string]AssetId),
+	}
+	level := content.NewLevelDef("palette-cache")
+	level.Materials = []content.LevelMaterialDef{
+		{
+			ID:           "stone",
+			Name:         "Stone",
+			BaseColor:    [4]uint8{140, 140, 140, 255},
+			Roughness:    0.8,
+			Metallic:     0,
+			Emissive:     0,
+			IOR:          1.4,
+			Transparency: 0,
+		},
+		{
+			ID:           "glass",
+			Name:         "Glass",
+			BaseColor:    [4]uint8{150, 190, 220, 180},
+			Roughness:    0.15,
+			Metallic:     0,
+			Emissive:     0,
+			IOR:          1.45,
+			Transparency: 0.3,
+		},
+	}
+
+	first, err := cachedAuthoredLevelBrushPalette(assets, cache, level, content.LevelBrushDef{MaterialID: "stone"})
+	if err != nil {
+		t.Fatalf("cachedAuthoredLevelBrushPalette first failed: %v", err)
+	}
+	second, err := cachedAuthoredLevelBrushPalette(assets, cache, level, content.LevelBrushDef{MaterialID: "stone"})
+	if err != nil {
+		t.Fatalf("cachedAuthoredLevelBrushPalette second failed: %v", err)
+	}
+	third, err := cachedAuthoredLevelBrushPalette(assets, cache, level, content.LevelBrushDef{MaterialID: "glass"})
+	if err != nil {
+		t.Fatalf("cachedAuthoredLevelBrushPalette third failed: %v", err)
+	}
+
+	if first != second {
+		t.Fatalf("expected repeated material combo to reuse cached palette, got %v and %v", first, second)
+	}
+	if third == first {
+		t.Fatalf("expected distinct material combo to produce distinct palette ids, got %v", third)
+	}
+	if len(cache.palettes) != 2 {
+		t.Fatalf("expected two cached palette combos, got %d", len(cache.palettes))
+	}
+}
+
+func TestBakeAuthoredLevelBrushesHandlesLargeRepeatedBrushCounts(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+	level := content.NewLevelDef("large-repeated")
+	level.ChunkSize = 16
+	level.VoxelResolution = 1
+	level.BrushLayers[0].Brushes = make([]content.LevelBrushDef, 0, 96)
+	for i := 0; i < 96; i++ {
+		level.BrushLayers[0].Brushes = append(level.BrushLayers[0].Brushes, content.LevelBrushDef{
+			ID:        "brush-" + strconv.Itoa(i),
+			Name:      "pillar",
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 2, "sy": 6, "sz": 2},
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{float32((i % 12) * 3), 0, float32((i / 12) * 3)},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		})
+	}
+
+	bake, err := BakeAuthoredLevelBrushes(assets, level)
+	if err != nil {
+		t.Fatalf("BakeAuthoredLevelBrushes failed for large repeated set: %v", err)
+	}
+	if len(bake.Batches) != 1 {
+		t.Fatalf("expected one baked batch for repeated brush set, got %d", len(bake.Batches))
+	}
+	geometry, ok := assets.GetVoxelGeometry(bake.Batches[0].Geometry)
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatalf("expected baked geometry for repeated brush set, got %+v ok=%v", geometry, ok)
+	}
+	if geometry.XBrickMap.GetVoxelCount() == 0 {
+		t.Fatal("expected non-empty baked geometry for repeated brush set")
+	}
+	if len(assets.voxModels) < 2 {
+		t.Fatalf("expected primitive and baked geometry assets to be registered, got %d", len(assets.voxModels))
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

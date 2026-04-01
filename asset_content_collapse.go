@@ -145,7 +145,7 @@ func buildCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef
 
 	combined := volume.NewXBrickMap()
 	result.collapsedPartIDs = make(map[string]struct{}, len(resolvedParts))
-	nonEmptyParts := 0
+	additiveParts := 0
 	for _, part := range resolvedParts {
 		if absf(part.voxelResolution-voxelResolution) > 1e-5 {
 			return collapsedAuthoredVoxelBuild{}, fmt.Errorf("voxel collapse requires matching voxel_resolution")
@@ -157,10 +157,12 @@ func buildCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef
 		if err := bakeResolvedPartIntoComposite(combined, part, voxelResolution); err != nil {
 			return collapsedAuthoredVoxelBuild{}, fmt.Errorf("collapse bake failed for part %s: %w", part.def.ID, err)
 		}
-		nonEmptyParts++
+		if content.EffectiveAssetSourceOperation(part.def.Source) == content.AssetShapeOperationAdd {
+			additiveParts++
+		}
 	}
-	if nonEmptyParts == 0 {
-		return collapsedAuthoredVoxelBuild{}, fmt.Errorf("voxel collapse requires at least one non-empty voxel part")
+	if additiveParts == 0 {
+		return collapsedAuthoredVoxelBuild{}, fmt.Errorf("voxel collapse requires at least one non-empty additive voxel part")
 	}
 	combined.ComputeAABB()
 	combined.ClearDirty()
@@ -189,7 +191,7 @@ func resolveAuthoredCollapseParts(assets *AssetServer, def *content.AssetDef, do
 		default:
 			return nil, fmt.Errorf("voxel collapse does not support source kind %q", part.Source.Kind)
 		}
-		eid, err := spawnAuthoredPart(tempCmd, assets, def.ID, part, documentPath, voxelShadowSettings{})
+		eid, err := spawnAuthoredPart(tempCmd, assets, def, part, documentPath, voxelShadowSettings{})
 		if err != nil {
 			return nil, err
 		}
@@ -223,27 +225,35 @@ func resolveAuthoredCollapseParts(assets *AssetServer, def *content.AssetDef, do
 		if !ok {
 			return nil, fmt.Errorf("missing palette for part %s", part.ID)
 		}
+		world := worldTransformForAuthoredCollapse(tempCmd, eid)
+		world.Pivot = authoredCollapsePivot(vmc, geometry)
 		resolved = append(resolved, authoredCollapseResolvedPart{
 			def:             partDefsByID[part.ID],
-			world:           worldTransformForAuthoredCollapse(tempCmd, eid),
+			world:           world,
 			geometry:        geometry,
 			paletteAsset:    palette,
 			voxelResolution: VoxelResolutionOrDefault(&vmc),
 		})
 	}
-
-	sort.Slice(resolved, func(i, j int) bool {
-		return resolved[i].def.ID < resolved[j].def.ID
-	})
 	return resolved, nil
 }
 
 func collapsePaletteID(assets *AssetServer, parts []authoredCollapseResolvedPart) (AssetId, error) {
-	if len(parts) == 0 {
+	additiveParts := make([]authoredCollapseResolvedPart, 0, len(parts))
+	for _, part := range parts {
+		if content.EffectiveAssetSourceOperation(part.def.Source) != content.AssetShapeOperationAdd {
+			continue
+		}
+		if voxelGeometryIsEmpty(part.geometry) {
+			continue
+		}
+		additiveParts = append(additiveParts, part)
+	}
+	if len(additiveParts) == 0 {
 		return AssetId{}, fmt.Errorf("no voxel parts to collapse")
 	}
-	first := parts[0].paletteAsset
-	for _, part := range parts[1:] {
+	first := additiveParts[0].paletteAsset
+	for _, part := range additiveParts[1:] {
 		if !paletteAssetsEquivalent(first, part.paletteAsset) {
 			return AssetId{}, fmt.Errorf("voxel collapse requires compatible palettes")
 		}
@@ -275,6 +285,23 @@ func worldTransformForAuthoredCollapse(cmd *Commands, eid EntityId) TransformCom
 	return TransformComponent{}
 }
 
+func authoredCollapsePivot(vmc VoxelModelComponent, geometry VoxelGeometryAsset) mgl32.Vec3 {
+	switch vmc.PivotMode {
+	case PivotModeCustom:
+		return vmc.CustomPivot
+	case PivotModeCenter:
+		if geometry.XBrickMap != nil {
+			minB, maxB := geometry.XBrickMap.ComputeAABB()
+			return minB.Add(maxB).Mul(0.5)
+		}
+		return geometry.LocalMin.Add(geometry.LocalMax).Mul(0.5)
+	case PivotModeCorner:
+		fallthrough
+	default:
+		return mgl32.Vec3{}
+	}
+}
+
 func paletteAssetsEquivalent(left, right VoxelPaletteAsset) bool {
 	return left.IsPBR == right.IsPBR &&
 		left.Roughness == right.Roughness &&
@@ -295,7 +322,7 @@ func collapseGeometryCacheKey(def *content.AssetDef, documentPath string, voxelR
 		Parts           []content.AssetPartDef
 		VoxelResolution float32
 	}{
-		Version:         "collapsed-authored-voxel-v1",
+		Version:         "collapsed-authored-voxel-v2",
 		DocumentPath:    documentPath,
 		AssetID:         def.ID,
 		Runtime:         def.Runtime,
@@ -332,6 +359,7 @@ func bakeResolvedPartIntoComposite(dst *volume.XBrickMap, part authoredCollapseR
 	}
 	invRot := part.world.Rotation.Inverse()
 	epsilon := float32(1e-4)
+	operation := content.EffectiveAssetSourceOperation(part.def.Source)
 
 	for _, voxel := range samples {
 		localMin := mgl32.Vec3{float32(voxel.x), float32(voxel.y), float32(voxel.z)}
@@ -357,6 +385,10 @@ func bakeResolvedPartIntoComposite(dst *volume.XBrickMap, part authoredCollapseR
 					if local.X() < localMin.X()-epsilon || local.X() > localMax.X()+epsilon ||
 						local.Y() < localMin.Y()-epsilon || local.Y() > localMax.Y()+epsilon ||
 						local.Z() < localMin.Z()-epsilon || local.Z() > localMax.Z()+epsilon {
+						continue
+					}
+					if operation == content.AssetShapeOperationSubtract {
+						dst.SetVoxel(gx, gy, gz, 0)
 						continue
 					}
 					dst.SetVoxel(gx, gy, gz, voxel.value)

@@ -38,6 +38,13 @@ const (
 	AssetAlphaModeLuminance AssetAlphaMode = "luminance"
 )
 
+type AssetShapeOperation string
+
+const (
+	AssetShapeOperationAdd      AssetShapeOperation = "add"
+	AssetShapeOperationSubtract AssetShapeOperation = "subtract"
+)
+
 const (
 	AssetMarkerKindMuzzle       = "muzzle"
 	AssetMarkerKindHandMount    = "hand_mount"
@@ -46,15 +53,28 @@ const (
 )
 
 type AssetDef struct {
-	ID            string            `json:"id"`
-	SchemaVersion int               `json:"schema_version"`
-	Name          string            `json:"name"`
-	Tags          []string          `json:"tags,omitempty"`
-	Runtime       *AssetRuntimeDef  `json:"runtime,omitempty"`
-	Parts         []AssetPartDef    `json:"parts,omitempty"`
-	Lights        []AssetLightDef   `json:"lights,omitempty"`
-	Emitters      []AssetEmitterDef `json:"emitters,omitempty"`
-	Markers       []AssetMarkerDef  `json:"markers,omitempty"`
+	ID            string             `json:"id"`
+	SchemaVersion int                `json:"schema_version"`
+	Name          string             `json:"name"`
+	Tags          []string           `json:"tags,omitempty"`
+	Materials     []AssetMaterialDef `json:"materials,omitempty"`
+	Runtime       *AssetRuntimeDef   `json:"runtime,omitempty"`
+	Parts         []AssetPartDef     `json:"parts,omitempty"`
+	Lights        []AssetLightDef    `json:"lights,omitempty"`
+	Emitters      []AssetEmitterDef  `json:"emitters,omitempty"`
+	Markers       []AssetMarkerDef   `json:"markers,omitempty"`
+}
+
+type AssetMaterialDef struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Tags         []string `json:"tags,omitempty"`
+	BaseColor    [4]uint8 `json:"base_color,omitempty"`
+	Roughness    float32  `json:"roughness,omitempty"`
+	Metallic     float32  `json:"metallic,omitempty"`
+	Emissive     float32  `json:"emissive,omitempty"`
+	IOR          float32  `json:"ior,omitempty"`
+	Transparency float32  `json:"transparency,omitempty"`
 }
 
 type AssetRuntimeDef struct {
@@ -115,12 +135,14 @@ type AssetTransformDef struct {
 }
 
 type AssetSourceDef struct {
-	Kind       AssetSourceKind    `json:"kind"`
-	Path       string             `json:"path,omitempty"`
-	ModelIndex int                `json:"model_index,omitempty"`
-	NodeName   string             `json:"node_name,omitempty"`
-	Primitive  string             `json:"primitive,omitempty"`
-	Params     map[string]float32 `json:"params,omitempty"`
+	Kind       AssetSourceKind     `json:"kind"`
+	Path       string              `json:"path,omitempty"`
+	ModelIndex int                 `json:"model_index,omitempty"`
+	NodeName   string              `json:"node_name,omitempty"`
+	Primitive  string              `json:"primitive,omitempty"`
+	Params     map[string]float32  `json:"params,omitempty"`
+	MaterialID string              `json:"material_id,omitempty"`
+	Operation  AssetShapeOperation `json:"operation,omitempty"`
 }
 
 type EmitterDef struct {
@@ -168,6 +190,9 @@ func EnsureAssetIDs(def *AssetDef) {
 		}
 		normalizeAssetPart(&def.Parts[i])
 	}
+	for i := range def.Materials {
+		normalizeAssetMaterial(&def.Materials[i])
+	}
 	for i := range def.Lights {
 		if def.Lights[i].ID == "" {
 			def.Lights[i].ID = newID()
@@ -212,6 +237,40 @@ func normalizeAssetPart(part *AssetPartDef) {
 	if AssetPartUsesVoxelSource(*part) && part.VoxelResolution == 0 {
 		part.VoxelResolution = DefaultAssetVoxelSize
 	}
+}
+
+func normalizeAssetMaterial(material *AssetMaterialDef) {
+	if material == nil {
+		return
+	}
+	if material.BaseColor == [4]uint8{} {
+		material.BaseColor = [4]uint8{255, 255, 255, 255}
+	}
+	if material.Roughness == 0 {
+		material.Roughness = 1.0
+	}
+	if material.IOR == 0 {
+		material.IOR = 1.5
+	}
+}
+
+func FindAssetMaterialByID(def *AssetDef, id string) (AssetMaterialDef, bool) {
+	if def == nil || id == "" {
+		return AssetMaterialDef{}, false
+	}
+	for _, material := range def.Materials {
+		if material.ID == id {
+			return material, true
+		}
+	}
+	return AssetMaterialDef{}, false
+}
+
+func EffectiveAssetSourceOperation(source AssetSourceDef) AssetShapeOperation {
+	if source.Operation == "" {
+		return AssetShapeOperationAdd
+	}
+	return source.Operation
 }
 
 func newID() string {

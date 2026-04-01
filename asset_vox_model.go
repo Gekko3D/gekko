@@ -102,6 +102,29 @@ func voxelPaletteAssetCacheKey(asset VoxelPaletteAsset) string {
 	return string(payload)
 }
 
+func (server *AssetServer) ensureVoxelStorage() {
+	if server == nil {
+		return
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.voxModels == nil {
+		server.voxModels = make(map[AssetId]VoxelGeometryAsset)
+	}
+	if server.voxModelKeys == nil {
+		server.voxModelKeys = make(map[string]AssetId)
+	}
+	if server.voxPalettes == nil {
+		server.voxPalettes = make(map[AssetId]VoxelPaletteAsset)
+	}
+	if server.voxPaletteKeys == nil {
+		server.voxPaletteKeys = make(map[string]AssetId)
+	}
+	if server.voxFiles == nil {
+		server.voxFiles = make(map[AssetId]*VoxFile)
+	}
+}
+
 func (server *AssetServer) RegisterSharedVoxelGeometry(xbm *volume.XBrickMap, sourcePath string) AssetId {
 	return server.RegisterSharedVoxelGeometryWithCacheKey("", xbm, sourcePath)
 }
@@ -110,6 +133,7 @@ func (server *AssetServer) RegisterSharedVoxelGeometryWithCacheKey(cacheKey stri
 	if xbm == nil {
 		return AssetId{}
 	}
+	server.ensureVoxelStorage()
 	if cacheKey != "" {
 		server.mu.RLock()
 		if id, ok := server.voxModelKeys[cacheKey]; ok {
@@ -141,6 +165,7 @@ func (server *AssetServer) CreateVoxelGeometry(model VoxModel, resolution float3
 }
 
 func (server *AssetServer) CreateVoxelGeometryFromSource(model VoxModel, resolution float32, sourcePath string) AssetId {
+	server.ensureVoxelStorage()
 	if resolution != 1.0 && resolution > 0 {
 		model = ScaleVoxModel(model, resolution)
 	}
@@ -180,6 +205,7 @@ func (server *AssetServer) CreateVoxelModelFromSource(model VoxModel, resolution
 }
 
 func (server *AssetServer) CreateVoxelFile(voxFile *VoxFile) AssetId {
+	server.ensureVoxelStorage()
 	id := makeAssetId()
 	server.mu.Lock()
 	server.voxFiles[id] = voxFile
@@ -283,6 +309,7 @@ func (server *AssetServer) CreateVoxelPalette(palette VoxPalette, materials []Vo
 }
 
 func (server *AssetServer) CreateVoxelPaletteFromSource(palette VoxPalette, materials []VoxMaterial, sourcePath string) AssetId {
+	server.ensureVoxelStorage()
 	cacheKey := voxelPaletteCacheKey(palette, materials, sourcePath)
 	server.mu.RLock()
 	if id, ok := server.voxPaletteKeys[cacheKey]; ok {
@@ -307,6 +334,7 @@ func (server *AssetServer) CreateVoxelPaletteFromSource(palette VoxPalette, mate
 }
 
 func (server *AssetServer) CreateVoxelPaletteAsset(asset VoxelPaletteAsset) AssetId {
+	server.ensureVoxelStorage()
 	cacheKey := voxelPaletteAssetCacheKey(asset)
 	server.mu.RLock()
 	if id, ok := server.voxPaletteKeys[cacheKey]; ok {

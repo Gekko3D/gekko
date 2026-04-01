@@ -14,6 +14,16 @@ import (
 func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	asset := &AssetDef{
 		Name: "Test Asset",
+		Materials: []AssetMaterialDef{{
+			ID:           "mat_painted_metal",
+			Name:         "Painted Metal",
+			BaseColor:    [4]uint8{180, 186, 196, 255},
+			Roughness:    0.72,
+			Metallic:     0.68,
+			Emissive:     0.05,
+			IOR:          1.45,
+			Transparency: 0.1,
+		}},
 		Parts: []AssetPartDef{
 			{
 				Name: "Part 1",
@@ -21,6 +31,8 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 					Kind:       AssetSourceKindVoxModel,
 					Path:       "test.vox",
 					ModelIndex: 2,
+					MaterialID: "mat_painted_metal",
+					Operation:  AssetShapeOperationAdd,
 				},
 				Transform: AssetTransformDef{
 					Position: Vec3{1, 2, 3},
@@ -112,8 +124,17 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	if loaded.ID == "" || loaded.Parts[0].ID == "" || loaded.Lights[0].ID == "" || loaded.Emitters[0].ID == "" || loaded.Markers[0].ID == "" {
 		t.Fatal("expected asset and nested items to receive IDs")
 	}
+	if len(loaded.Materials) != 1 || loaded.Materials[0].ID != "mat_painted_metal" {
+		t.Fatalf("expected authored material to round-trip, got %+v", loaded.Materials)
+	}
 	if loaded.Parts[0].Source.Kind != AssetSourceKindVoxModel || loaded.Parts[0].Source.ModelIndex != 2 {
 		t.Fatalf("unexpected part source after round-trip: %+v", loaded.Parts[0].Source)
+	}
+	if loaded.Parts[0].Source.MaterialID != "mat_painted_metal" {
+		t.Fatalf("expected part material ref to round-trip, got %+v", loaded.Parts[0].Source)
+	}
+	if EffectiveAssetSourceOperation(loaded.Parts[0].Source) != AssetShapeOperationAdd {
+		t.Fatalf("expected part operation add, got %+v", loaded.Parts[0].Source)
 	}
 	if loaded.Lights[0].Type != AssetLightTypeSpot {
 		t.Fatalf("expected light type %q, got %q", AssetLightTypeSpot, loaded.Lights[0].Type)
@@ -134,6 +155,8 @@ func TestAssetJSONUsesStringEnums(t *testing.T) {
 			Kind:       AssetSourceKindVoxModel,
 			Path:       "test.vox",
 			ModelIndex: 1,
+			MaterialID: "mat_0",
+			Operation:  AssetShapeOperationSubtract,
 		},
 		Transform: AssetTransformDef{
 			Rotation: Quat{0, 0, 0, 1},
@@ -166,7 +189,7 @@ func TestAssetJSONUsesStringEnums(t *testing.T) {
 	}
 
 	jsonText := string(data)
-	for _, want := range []string{`"schema_version":2`, `"kind":"vox_model"`, `"type":"ambient"`, `"alpha_mode":"texture"`} {
+	for _, want := range []string{`"schema_version":2`, `"kind":"vox_model"`, `"type":"ambient"`, `"alpha_mode":"texture"`, `"material_id":"mat_0"`, `"operation":"subtract"`} {
 		if !contains(jsonText, want) {
 			t.Fatalf("expected JSON to contain %s, got %s", want, jsonText)
 		}

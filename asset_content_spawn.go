@@ -64,7 +64,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	)
 
 	for _, part := range def.Parts {
-		eid, err := spawnAuthoredPart(cmd, assets, def.ID, part, opts.DocumentPath, shadowSettings)
+		eid, err := spawnAuthoredPart(cmd, assets, def, part, opts.DocumentPath, shadowSettings)
 		if err != nil {
 			return result, err
 		}
@@ -160,16 +160,16 @@ func ValidateAssetHierarchy(def *content.AssetDef) error {
 	return nil
 }
 
-func spawnAuthoredPart(cmd *Commands, assets *AssetServer, assetID string, part content.AssetPartDef, documentPath string, shadowSettings voxelShadowSettings) (EntityId, error) {
+func spawnAuthoredPart(cmd *Commands, assets *AssetServer, def *content.AssetDef, part content.AssetPartDef, documentPath string, shadowSettings voxelShadowSettings) (EntityId, error) {
 	tr := AssetTransformFromDef(part.Transform)
 	local := AssetLocalTransformFromDef(part.Transform)
 	comps := []any{
 		&tr,
 		&local,
-		&AuthoredAssetRefComponent{AssetID: assetID, ItemID: part.ID, Kind: AuthoredItemKindPart},
+		&AuthoredAssetRefComponent{AssetID: def.ID, ItemID: part.ID, Kind: AuthoredItemKindPart},
 	}
 
-	model, palette, err := modelAndPaletteFromSource(assets, part, documentPath)
+	model, palette, err := modelAndPaletteFromSource(assets, def, part, documentPath)
 	if err != nil {
 		return 0, err
 	}
@@ -236,7 +236,7 @@ func spawnAuthoredMarker(cmd *Commands, assetID string, marker content.AssetMark
 	), nil
 }
 
-func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef, documentPath string) (AssetId, AssetId, error) {
+func modelAndPaletteFromSource(assets *AssetServer, def *content.AssetDef, part content.AssetPartDef, documentPath string) (AssetId, AssetId, error) {
 	if assets == nil {
 		return AssetId{}, AssetId{}, nil
 	}
@@ -269,10 +269,19 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef, d
 			model = assets.CreateConeModel(params["radius"], params["height"], part.ModelScale)
 		case "pyramid":
 			model = assets.CreatePyramidModel(params["size"], params["height"], part.ModelScale)
+		case "cylinder":
+			model = assets.CreateCylinderModel(params["radius"], params["height"], part.ModelScale)
+		case "capsule":
+			model = assets.CreateCapsuleModel(params["radius"], params["height"], part.ModelScale)
+		case "ramp":
+			model = assets.CreateRampModel(params["sx"], params["sy"], params["sz"], part.ModelScale)
 		default:
 			return AssetId{}, AssetId{}, fmt.Errorf("unsupported procedural primitive %q", part.Source.Primitive)
 		}
-		palette := assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1.5)
+		palette, err := authoredProceduralPalette(assets, def, part)
+		if err != nil {
+			return AssetId{}, AssetId{}, err
+		}
 		return model, palette, nil
 	case content.AssetSourceKindVoxSceneNode:
 		voxFile, err := LoadVoxFile(sourcePath)
@@ -292,6 +301,27 @@ func modelAndPaletteFromSource(assets *AssetServer, part content.AssetPartDef, d
 	default:
 		return AssetId{}, AssetId{}, fmt.Errorf("unsupported asset source kind %q", part.Source.Kind)
 	}
+}
+
+func authoredProceduralPalette(assets *AssetServer, def *content.AssetDef, part content.AssetPartDef) (AssetId, error) {
+	if assets == nil {
+		return AssetId{}, nil
+	}
+	if part.Source.MaterialID == "" {
+		return assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1.5), nil
+	}
+	material, ok := content.FindAssetMaterialByID(def, part.Source.MaterialID)
+	if !ok {
+		return AssetId{}, fmt.Errorf("missing material %s for part %s", part.Source.MaterialID, part.ID)
+	}
+	return assets.CreatePBRPaletteWithTransparency(
+		material.BaseColor,
+		material.Roughness,
+		material.Metallic,
+		material.Emissive,
+		material.IOR,
+		material.Transparency,
+	), nil
 }
 
 func LocalTransformToWorld(parentWorld TransformComponent, parentIsVoxel bool, parentVoxelResolution float32, local LocalTransformComponent) TransformComponent {

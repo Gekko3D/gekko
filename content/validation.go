@@ -76,8 +76,17 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 
 	seenIDs := map[string]struct{}{}
 	allItemIDs := map[string]string{}
+	materialIDs := make(map[string]struct{}, len(def.Materials))
 	if def.ID != "" {
 		seenIDs[def.ID] = struct{}{}
+	}
+
+	for _, material := range def.Materials {
+		validateUniqueID(&result, seenIDs, material.ID, material.Name, "material")
+		validateName(&result, material.ID, material.Name, "material")
+		validateMaterial(&result, material)
+		materialIDs[material.ID] = struct{}{}
+		allItemIDs[material.ID] = "material"
 	}
 
 	partIDs := make(map[string]struct{}, len(def.Parts))
@@ -86,7 +95,7 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 	for _, part := range def.Parts {
 		validateUniqueID(&result, seenIDs, part.ID, part.Name, "part")
 		validateName(&result, part.ID, part.Name, "part")
-		validateSource(&result, part.ID, part.Name, "part", part.Source, opts)
+		validateSource(&result, part.ID, part.Name, "part", part.Source, materialIDs, opts)
 		validatePartScale(&result, part)
 		partIDs[part.ID] = struct{}{}
 		partParentByID[part.ID] = part.ParentID
@@ -212,9 +221,11 @@ func validatePartParent(result *AssetValidationResult, partIDs map[string]struct
 	result.addError("broken_parent_reference", fmt.Sprintf("missing parent %s", parentID), itemID, itemName, itemKind)
 }
 
-func validateSource(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef, opts AssetValidationOptions) {
+func validateSource(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef, materialIDs map[string]struct{}, opts AssetValidationOptions) {
 	switch source.Kind {
 	case AssetSourceKindGroup:
+		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
+		validateShapeOperation(result, itemID, itemName, itemKind, source)
 		return
 	case AssetSourceKindVoxModel:
 		if strings.TrimSpace(source.Path) == "" {
@@ -223,6 +234,8 @@ func validateSource(result *AssetValidationResult, itemID string, itemName strin
 		if source.ModelIndex < 0 {
 			result.addError("invalid_source_payload", "vox_model source requires model_index >= 0", itemID, itemName, itemKind)
 		}
+		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
+		validateShapeOperation(result, itemID, itemName, itemKind, source)
 		validateSourceFile(result, itemID, itemName, itemKind, source.Path, opts)
 	case AssetSourceKindVoxSceneNode:
 		if strings.TrimSpace(source.Path) == "" {
@@ -231,8 +244,12 @@ func validateSource(result *AssetValidationResult, itemID string, itemName strin
 		if strings.TrimSpace(source.NodeName) == "" {
 			result.addError("invalid_source_payload", "vox_scene_node source requires node_name", itemID, itemName, itemKind)
 		}
+		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
+		validateShapeOperation(result, itemID, itemName, itemKind, source)
 		validateSourceFile(result, itemID, itemName, itemKind, source.Path, opts)
 	case AssetSourceKindProceduralPrimitive:
+		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
+		validateShapeOperation(result, itemID, itemName, itemKind, source)
 		validateProceduralPrimitive(result, itemID, itemName, itemKind, source)
 	default:
 		result.addError("invalid_source_payload", fmt.Sprintf("unsupported source kind %q", source.Kind), itemID, itemName, itemKind)
@@ -252,24 +269,57 @@ func validatePartScale(result *AssetValidationResult, part AssetPartDef) {
 }
 
 func validateProceduralPrimitive(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef) {
-	required := []string(nil)
-	switch source.Primitive {
-	case "cube":
-		required = []string{"sx", "sy", "sz"}
-	case "sphere":
-		required = []string{"radius"}
-	case "cone":
-		required = []string{"radius", "height"}
-	case "pyramid":
-		required = []string{"size", "height"}
-	default:
+	spec, ok := ProceduralPrimitiveSpecFor(source.Primitive)
+	if !ok {
 		result.addError("invalid_source_payload", fmt.Sprintf("unsupported procedural primitive %q", source.Primitive), itemID, itemName, itemKind)
 		return
 	}
-	for _, key := range required {
-		if _, ok := source.Params[key]; !ok {
+	for _, key := range spec.Params {
+		value, ok := source.Params[key]
+		if !ok {
 			result.addError("invalid_source_payload", fmt.Sprintf("procedural primitive %q requires param %s", source.Primitive, key), itemID, itemName, itemKind)
+			continue
 		}
+		if value <= 0 {
+			result.addError("invalid_source_payload", fmt.Sprintf("procedural primitive %q param %s must be > 0", source.Primitive, key), itemID, itemName, itemKind)
+		}
+	}
+}
+
+func validateMaterial(result *AssetValidationResult, material AssetMaterialDef) {
+	if material.Roughness < 0 || material.Roughness > 1 {
+		result.addError("invalid_material_payload", "material roughness must be between 0 and 1", material.ID, material.Name, "material")
+	}
+	if material.Metallic < 0 || material.Metallic > 1 {
+		result.addError("invalid_material_payload", "material metallic must be between 0 and 1", material.ID, material.Name, "material")
+	}
+	if material.Emissive < 0 {
+		result.addError("invalid_material_payload", "material emissive must be >= 0", material.ID, material.Name, "material")
+	}
+	if material.IOR <= 0 {
+		result.addError("invalid_material_payload", "material ior must be > 0", material.ID, material.Name, "material")
+	}
+	if material.Transparency < 0 || material.Transparency > 1 {
+		result.addError("invalid_material_payload", "material transparency must be between 0 and 1", material.ID, material.Name, "material")
+	}
+}
+
+func validateMaterialAssignment(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef, materialIDs map[string]struct{}) {
+	if strings.TrimSpace(source.MaterialID) == "" {
+		return
+	}
+	if _, ok := materialIDs[source.MaterialID]; ok {
+		return
+	}
+	result.addError("missing_material_reference", fmt.Sprintf("missing material %s", source.MaterialID), itemID, itemName, itemKind)
+}
+
+func validateShapeOperation(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef) {
+	switch EffectiveAssetSourceOperation(source) {
+	case AssetShapeOperationAdd, AssetShapeOperationSubtract:
+		return
+	default:
+		result.addError("invalid_source_payload", fmt.Sprintf("unsupported shape operation %q", source.Operation), itemID, itemName, itemKind)
 	}
 }
 

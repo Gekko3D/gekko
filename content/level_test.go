@@ -13,6 +13,34 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 		Name:      "Station",
 		ChunkSize: 48,
 		Tags:      []string{"space"},
+		Materials: []LevelMaterialDef{{
+			ID:           "mat_wall",
+			Name:         "Wall",
+			BaseColor:    [4]uint8{180, 190, 210, 255},
+			Roughness:    0.6,
+			Metallic:     0.1,
+			Emissive:     0,
+			IOR:          1.4,
+			Transparency: 0,
+		}},
+		BrushLayers: []LevelBrushLayerDef{{
+			ID:   "layer-1",
+			Name: "Blockout",
+			Brushes: []LevelBrushDef{{
+				ID:         "brush-1",
+				Name:       "solid",
+				Primitive:  "cube",
+				Params:     map[string]float32{"sx": 4, "sy": 2, "sz": 6},
+				MaterialID: "mat_wall",
+				Operation:  AssetShapeOperationAdd,
+				Transform: LevelTransformDef{
+					Position: Vec3{2, 0, 1},
+					Rotation: Quat{0, 0, 0, 1},
+					Scale:    Vec3{1, 1, 1},
+				},
+				Tags: []string{"blockout"},
+			}},
+		}},
 		Terrain: &LevelTerrainDef{
 			Kind:       TerrainKindHeightfield,
 			SourcePath: "assets/heightmap.png",
@@ -115,6 +143,9 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	if strings.Contains(string(savedBytes), `"streaming_radius"`) {
 		t.Fatalf("did not expect streaming_radius in saved level JSON, got %s", string(savedBytes))
 	}
+	if !strings.Contains(string(savedBytes), `"brush_layers"`) {
+		t.Fatalf("expected brush_layers in saved level JSON, got %s", string(savedBytes))
+	}
 
 	loaded, err := LoadLevel(path)
 	if err != nil {
@@ -126,6 +157,16 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	}
 	if loaded.ID == "" || loaded.Placements[0].ID == "" || loaded.Markers[0].ID == "" {
 		t.Fatal("expected IDs to be assigned")
+	}
+	if len(loaded.Materials) != 1 || loaded.Materials[0].ID != "mat_wall" {
+		t.Fatalf("expected level material to round-trip, got %+v", loaded.Materials)
+	}
+	loadedBrushes := LevelBrushes(loaded)
+	if len(loadedBrushes) != 1 || loadedBrushes[0].ID != "brush-1" || loadedBrushes[0].MaterialID != "mat_wall" {
+		t.Fatalf("expected level brush to round-trip, got %+v", loadedBrushes)
+	}
+	if EffectiveLevelBrushOperation(loadedBrushes[0]) != AssetShapeOperationAdd {
+		t.Fatalf("expected brush operation add, got %+v", loadedBrushes[0])
 	}
 	if len(loaded.PlacementVolumes) != 1 || loaded.PlacementVolumes[0].ID != "volume-1" {
 		t.Fatalf("expected placement volume to round-trip, got %+v", loaded.PlacementVolumes)
@@ -151,6 +192,18 @@ func TestLevelJSONUsesStringPlacementModes(t *testing.T) {
 			Scale:    Vec3{1, 1, 1},
 		},
 	}}
+	level.BrushLayers[0].Brushes = []LevelBrushDef{{
+		ID:         "brush-1",
+		Name:       "cut",
+		Primitive:  "cube",
+		Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+		MaterialID: "mat_0",
+		Operation:  AssetShapeOperationSubtract,
+		Transform: LevelTransformDef{
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+	}}
 
 	data, err := json.Marshal(level)
 	if err != nil {
@@ -158,6 +211,9 @@ func TestLevelJSONUsesStringPlacementModes(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"placement_mode":"free_3d"`) {
 		t.Fatalf("expected string placement mode in JSON, got %s", string(data))
+	}
+	if !strings.Contains(string(data), `"operation":"subtract"`) {
+		t.Fatalf("expected brush operation in JSON, got %s", string(data))
 	}
 }
 
@@ -208,6 +264,61 @@ func TestValidateLevelRejectsInvalidPlacements(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "empty_asset_path")
 	assertHasLevelValidationCode(t, result, "invalid_placement_mode")
 	assertHasLevelValidationCode(t, result, "missing_asset_file")
+}
+
+func TestValidateLevelValidatesBrushesAndMaterials(t *testing.T) {
+	def := NewLevelDef("brushes")
+	def.Materials = []LevelMaterialDef{{
+		ID:           "mat_bad",
+		Name:         "Bad",
+		Roughness:    2,
+		Metallic:     -1,
+		Emissive:     -1,
+		IOR:          0,
+		Transparency: 2,
+	}}
+	def.BrushLayers[0].Brushes = []LevelBrushDef{
+		{
+			ID:         "brush-1",
+			Name:       "solid",
+			Primitive:  "cube",
+			Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			MaterialID: "missing",
+			Transform: LevelTransformDef{
+				Rotation: Quat{0, 0, 0, 1},
+				Scale:    Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:        "brush-2",
+			Name:      "bad-op",
+			Primitive: "cube",
+			Params:    map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+			Operation: AssetShapeOperation("replace"),
+			Transform: LevelTransformDef{
+				Rotation: Quat{0, 0, 0, 1},
+				Scale:    Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:        "brush-3",
+			Name:      "bad-primitive",
+			Primitive: "capsule",
+			Params:    map[string]float32{"radius": 2},
+			Transform: LevelTransformDef{
+				Rotation: Quat{0, 0, 0, 1},
+				Scale:    Vec3{1, 1, 1},
+			},
+		},
+	}
+
+	result := ValidateLevel(def, LevelValidationOptions{})
+	if !result.HasErrors() {
+		t.Fatal("expected validation errors")
+	}
+	assertHasLevelValidationCode(t, result, "invalid_material_payload")
+	assertHasLevelValidationCode(t, result, "missing_material_reference")
+	assertHasLevelValidationCode(t, result, "invalid_brush_payload")
 }
 
 func TestValidateLevelRejectsInvalidBaseWorld(t *testing.T) {

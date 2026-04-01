@@ -140,6 +140,72 @@ func TestValidateAssetValidatesProceduralPrimitivePayload(t *testing.T) {
 	assertHasValidationCode(t, result, "invalid_source_payload")
 }
 
+func TestValidateAssetValidatesMaterialLibraryAndReferences(t *testing.T) {
+	def := NewAssetDef("materials")
+	def.Materials = []AssetMaterialDef{
+		{
+			ID:           "mat_good",
+			Name:         "Good",
+			BaseColor:    [4]uint8{120, 130, 140, 255},
+			Roughness:    0.4,
+			Metallic:     0.2,
+			Emissive:     0.1,
+			IOR:          1.3,
+			Transparency: 0.25,
+		},
+		{
+			ID:           "mat_bad",
+			Name:         "Bad",
+			Roughness:    1.5,
+			Metallic:     -0.1,
+			Emissive:     -1,
+			IOR:          0,
+			Transparency: 2,
+		},
+	}
+	def.Parts = []AssetPartDef{
+		{
+			ID:   "good",
+			Name: "good",
+			Source: AssetSourceDef{
+				Kind:       AssetSourceKindProceduralPrimitive,
+				Primitive:  "cube",
+				Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+				MaterialID: "mat_good",
+				Operation:  AssetShapeOperationSubtract,
+			},
+			Transform: identityTransform(),
+		},
+		{
+			ID:   "bad-ref",
+			Name: "bad-ref",
+			Source: AssetSourceDef{
+				Kind:       AssetSourceKindProceduralPrimitive,
+				Primitive:  "cube",
+				Params:     map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+				MaterialID: "missing",
+			},
+			Transform: identityTransform(),
+		},
+		{
+			ID:   "bad-op",
+			Name: "bad-op",
+			Source: AssetSourceDef{
+				Kind:      AssetSourceKindProceduralPrimitive,
+				Primitive: "cube",
+				Params:    map[string]float32{"sx": 1, "sy": 1, "sz": 1},
+				Operation: AssetShapeOperation("replace"),
+			},
+			Transform: identityTransform(),
+		},
+	}
+
+	result := ValidateAsset(def, AssetValidationOptions{})
+	assertHasValidationCode(t, result, "invalid_material_payload")
+	assertHasValidationCode(t, result, "missing_material_reference")
+	assertHasValidationCode(t, result, "invalid_source_payload")
+}
+
 func TestValidateAssetDetectsMissingSourceFilesWithDocumentRelativeFallback(t *testing.T) {
 	root := t.TempDir()
 	assetsDir := filepath.Join(root, "assets")

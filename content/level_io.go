@@ -33,9 +33,6 @@ func LoadLevel(path string) (*LevelDef, error) {
 		return nil, err
 	}
 
-	if def.SchemaVersion == 0 {
-		def.SchemaVersion = CurrentLevelSchemaVersion
-	}
 	if def.SchemaVersion != CurrentLevelSchemaVersion {
 		return nil, fmt.Errorf("unsupported schema version %d", def.SchemaVersion)
 	}
