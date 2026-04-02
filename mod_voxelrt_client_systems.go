@@ -435,18 +435,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 }
 
 func voxelObjectAllowsOcclusion(cmd *Commands, entityId EntityId, vox *VoxelModelComponent) bool {
-	if vox == nil {
-		return true
-	}
-	if vox.IsTerrainChunk || vox.ShadowGroupID != 0 {
-		return false
-	}
-	if _, ok := AuthoredTerrainChunkRefForEntity(cmd, entityId); ok {
-		return false
-	}
-	if _, ok := AuthoredImportedWorldChunkRefForEntity(cmd, entityId); ok {
-		return false
-	}
 	return true
 }
 

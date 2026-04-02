@@ -193,6 +193,28 @@ func TestSpriteAtlasTextureLooksUpTextureByAtlasKey(t *testing.T) {
 	}
 }
 
+func TestVoxelObjectAllowsOcclusionKeepsTerrainAndGroupedChunksEligible(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	terrainEntity := cmd.AddEntity(
+		&VoxelModelComponent{IsTerrainChunk: true, ShadowGroupID: 17},
+		&AuthoredTerrainChunkRefComponent{},
+	)
+	importedEntity := cmd.AddEntity(
+		&VoxelModelComponent{ShadowGroupID: 23},
+		&AuthoredImportedWorldChunkRefComponent{},
+	)
+	app.FlushCommands()
+
+	if !voxelObjectAllowsOcclusion(cmd, terrainEntity, &VoxelModelComponent{IsTerrainChunk: true, ShadowGroupID: 17}) {
+		t.Fatal("expected terrain chunk to remain occlusion-eligible")
+	}
+	if !voxelObjectAllowsOcclusion(cmd, importedEntity, &VoxelModelComponent{ShadowGroupID: 23}) {
+		t.Fatal("expected imported world chunk to remain occlusion-eligible")
+	}
+}
+
 func newVoxelRtStateTest() *VoxelRtState {
 	return &VoxelRtState{
 		RtApp: &app_rt.App{

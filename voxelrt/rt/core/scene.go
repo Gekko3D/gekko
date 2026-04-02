@@ -419,6 +419,18 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	// Camera frustum/Hi-Z culling can safely skip rasterized work, but it must not make
 	// off-screen geometry stop casting shadows onto visible receivers.
 	s.ShadowObjects = s.ShadowObjects[:0]
+	if !sceneHasShadowCastingLights(s.Lights) {
+		if len(s.ShadowBVHNodesBytes) == 0 {
+			s.ShadowBVHNodesBytes = make([]byte, 64)
+		}
+		if len(s.lastShadowBVH) > 0 || len(s.ShadowBVHNodesBytes) != 64 {
+			s.ShadowBVHNodesBytes = make([]byte, 64)
+			s.shadowBVHRevision++
+			s.lastShadowBVH = s.lastShadowBVH[:0]
+		}
+		opts.Profiler.EndScope("Commit: Shadows")
+		return
+	}
 	type groupedShadowCandidate struct {
 		obj      *VoxelObject
 		distance float32
@@ -487,6 +499,15 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		s.lastShadowBVH = append(s.lastShadowBVH[:0], s.ShadowObjects...)
 	}
 	opts.Profiler.EndScope("Commit: Shadows")
+}
+
+func sceneHasShadowCastingLights(lights []Light) bool {
+	for _, light := range lights {
+		if light.CastsShadows {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scene) shouldRebuildBVH(current, previous []*VoxelObject, dirtyAABBs map[*VoxelObject]bool, nodes []byte) bool {
