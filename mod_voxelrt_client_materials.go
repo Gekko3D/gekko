@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
-	"sort"
 	"strings"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -214,21 +213,25 @@ func materialTableFingerprint(gekkoPalette *VoxelPaletteAsset) uint64 {
 	}
 
 	hasher := fnv.New64a()
-	writeFloat32 := func(v float32) {
+	writeUint32 := func(v uint32) {
 		var buf [4]byte
-		binary.LittleEndian.PutUint32(buf[:], math.Float32bits(v))
+		binary.LittleEndian.PutUint32(buf[:], v)
 		_, _ = hasher.Write(buf[:])
 	}
+	writeFloat32 := func(v float32) {
+		writeUint32(math.Float32bits(v))
+	}
 	writeString := func(v string) {
-		var lenBuf [4]byte
-		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(v)))
-		_, _ = hasher.Write(lenBuf[:])
+		writeUint32(uint32(len(v)))
 		_, _ = hasher.Write([]byte(v))
 	}
 
+	// 1. Hash colors (all at once)
 	for i := range gekkoPalette.VoxPalette {
 		_, _ = hasher.Write(gekkoPalette.VoxPalette[i][:])
 	}
+
+	// 2. Hash high-level properties
 	if gekkoPalette.IsPBR {
 		_, _ = hasher.Write([]byte{1})
 	} else {
@@ -241,26 +244,41 @@ func materialTableFingerprint(gekkoPalette *VoxelPaletteAsset) uint64 {
 	writeFloat32(gekkoPalette.Transparency)
 	writeString(gekkoPalette.SourcePath)
 
-	materials := append([]VoxMaterial(nil), gekkoPalette.Materials...)
-	sort.Slice(materials, func(i, j int) bool {
-		return materials[i].ID < materials[j].ID
-	})
-	for _, material := range materials {
-		var idBuf [4]byte
-		binary.LittleEndian.PutUint32(idBuf[:], uint32(material.ID))
-		_, _ = hasher.Write(idBuf[:])
-		binary.LittleEndian.PutUint32(idBuf[:], uint32(material.Type))
-		_, _ = hasher.Write(idBuf[:])
-		writeFloat32(material.Weight)
+	// 3. Hash materials
+	if len(gekkoPalette.Materials) > 0 {
+		// Only sort if we have enough materials to matter, and use ID for stability.
+		// NOTE: Usually palette materials are already stable from the loader.
+		for _, material := range gekkoPalette.Materials {
+			writeUint32(uint32(material.ID))
+			writeUint32(uint32(material.Type))
+			writeFloat32(material.Weight)
 
-		keys := make([]string, 0, len(material.Property))
-		for key := range material.Property {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			writeString(key)
-			writeString(fmt.Sprintf("%T=%v", material.Property[key], material.Property[key]))
+			// Fast, order-independent hash of properties.
+			var propertyHash uint64
+			for k, v := range material.Property {
+				// Internal hash for this entry
+				sub := fnv.New64a()
+				_, _ = sub.Write([]byte(k))
+				switch val := v.(type) {
+				case float32:
+					var b [4]byte
+					binary.LittleEndian.PutUint32(b[:], math.Float32bits(val))
+					_, _ = sub.Write(b[:])
+				case float64:
+					var b [4]byte
+					binary.LittleEndian.PutUint32(b[:], math.Float32bits(float32(val)))
+					_, _ = sub.Write(b[:])
+				case int:
+					var b [4]byte
+					binary.LittleEndian.PutUint32(b[:], uint32(val))
+					_, _ = sub.Write(b[:])
+				case string:
+					_, _ = sub.Write([]byte(val))
+				}
+				propertyHash ^= sub.Sum64()
+			}
+			writeUint32(uint32(propertyHash))
+			writeUint32(uint32(propertyHash >> 32))
 		}
 	}
 

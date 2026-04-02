@@ -23,7 +23,7 @@ struct CameraData {
   pad1: u32,
   screen_size: vec2<f32>,
   pad2: vec2<f32>,
-  ao_quality: vec4<f32>,
+  ao_quality: vec4<f32>, // x: AO sample count, y: AO radius, z: directional shadow softness, w: spot shadow softness
 };
 
 struct Instance {
@@ -91,6 +91,11 @@ struct DirectionalCascadeSelection {
   primary_index: u32,
   secondary_index: u32,
   blend: f32,
+};
+
+struct PointShadowLookup {
+  face: u32,
+  uv: vec2<f32>,
 };
 
 struct ShadowLayerParams {
@@ -366,28 +371,118 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
   return 1.0;
 }
 
-fn blocky_normal_os(voxel_center_os: vec3<f32>, aabb_center_os: vec3<f32>, params: ObjectParams) -> vec3<f32> {
+fn estimate_normal_os(voxel_center_os: vec3<f32>, params: ObjectParams) -> vec3<f32> {
   let vi = vec3<i32>(floor(voxel_center_os));
   let dx = sample_occupancy(vi + vec3<i32>(1, 0, 0), params) - sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
   let dy = sample_occupancy(vi + vec3<i32>(0, 1, 0), params) - sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
   let dz = sample_occupancy(vi + vec3<i32>(0, 0, 1), params) - sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
   let grad = vec3<f32>(dx, dy, dz);
-  let ax = abs(grad.x);
-  let ay = abs(grad.y);
-  let az = abs(grad.z);
-  if (max(ax, max(ay, az)) > 0.05) {
-    if (ax >= ay && ax >= az) { return vec3<f32>(-select(1.0, -1.0, grad.x < 0.0), 0.0, 0.0); }
-    if (ay >= ax && ay >= az) { return vec3<f32>(0.0, -select(1.0, -1.0, grad.y < 0.0), 0.0); }
-    return vec3<f32>(0.0, 0.0, -select(1.0, -1.0, grad.z < 0.0));
+  if (length(grad) < 0.01) { return vec3<f32>(0.0); }
+  return -normalize(grad);
+}
+
+fn axis_tiebreak_sign_os(voxel_center_os: vec3<f32>, local_aabb_min: vec3<f32>, local_aabb_max: vec3<f32>, axis: u32) -> f32 {
+  let dist_to_min = voxel_center_os[axis] - local_aabb_min[axis];
+  let dist_to_max = local_aabb_max[axis] - voxel_center_os[axis];
+  if (dist_to_min + 1e-4 < dist_to_max) {
+    return -1.0;
+  }
+  return 1.0;
+}
+
+fn fallback_exposed_voxel_normal_os(
+  voxel_center_os: vec3<f32>,
+  local_aabb_min: vec3<f32>,
+  local_aabb_max: vec3<f32>,
+  params: ObjectParams,
+) -> vec3<f32> {
+  let vi = vec3<i32>(floor(voxel_center_os));
+
+  let occ_px = sample_occupancy(vi + vec3<i32>(1, 0, 0), params);
+  let occ_nx = sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
+  let occ_py = sample_occupancy(vi + vec3<i32>(0, 1, 0), params);
+  let occ_ny = sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
+  let occ_pz = sample_occupancy(vi + vec3<i32>(0, 0, 1), params);
+  let occ_nz = sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
+
+  let empty_px = 1.0 - occ_px;
+  let empty_nx = 1.0 - occ_nx;
+  let empty_py = 1.0 - occ_py;
+  let empty_ny = 1.0 - occ_ny;
+  let empty_pz = 1.0 - occ_pz;
+  let empty_nz = 1.0 - occ_nz;
+
+  let signed_exposure = vec3<f32>(
+    empty_px - empty_nx,
+    empty_py - empty_ny,
+    empty_pz - empty_nz,
+  );
+  if (length(signed_exposure) >= 0.01) {
+    return normalize(signed_exposure);
   }
 
-  let dir_c = voxel_center_os - aabb_center_os;
-  let adx = abs(dir_c.x);
-  let ady = abs(dir_c.y);
-  let adz = abs(dir_c.z);
-  if (adx >= ady && adx >= adz) { return vec3<f32>(select(1.0, -1.0, dir_c.x < 0.0), 0.0, 0.0); }
-  if (ady >= adx && ady >= adz) { return vec3<f32>(0.0, select(1.0, -1.0, dir_c.y < 0.0), 0.0); }
-  return vec3<f32>(0.0, 0.0, select(1.0, -1.0, dir_c.z < 0.0));
+  let unsigned_exposure = vec3<f32>(
+    empty_px + empty_nx,
+    empty_py + empty_ny,
+    empty_pz + empty_nz,
+  );
+  var tie_break = vec3<f32>(0.0);
+  if (unsigned_exposure.x > 0.01) {
+    tie_break.x = axis_tiebreak_sign_os(voxel_center_os, local_aabb_min, local_aabb_max, 0u);
+  }
+  if (unsigned_exposure.y > 0.01) {
+    tie_break.y = axis_tiebreak_sign_os(voxel_center_os, local_aabb_min, local_aabb_max, 1u);
+  }
+  if (unsigned_exposure.z > 0.01) {
+    tie_break.z = axis_tiebreak_sign_os(voxel_center_os, local_aabb_min, local_aabb_max, 2u);
+  }
+  if (length(tie_break) >= 0.01) {
+    return normalize(tie_break);
+  }
+
+  return vec3<f32>(0.0);
+}
+
+fn has_two_sided_voxel_exposure_os(voxel_center_os: vec3<f32>, params: ObjectParams) -> bool {
+  let vi = vec3<i32>(floor(voxel_center_os));
+  let empty_px = 1.0 - sample_occupancy(vi + vec3<i32>(1, 0, 0), params);
+  let empty_nx = 1.0 - sample_occupancy(vi + vec3<i32>(-1, 0, 0), params);
+  let empty_py = 1.0 - sample_occupancy(vi + vec3<i32>(0, 1, 0), params);
+  let empty_ny = 1.0 - sample_occupancy(vi + vec3<i32>(0, -1, 0), params);
+  let empty_pz = 1.0 - sample_occupancy(vi + vec3<i32>(0, 0, 1), params);
+  let empty_nz = 1.0 - sample_occupancy(vi + vec3<i32>(0, 0, -1), params);
+  return
+    (empty_px > 0.01 && empty_nx > 0.01) ||
+    (empty_py > 0.01 && empty_ny > 0.01) ||
+    (empty_pz > 0.01 && empty_nz > 0.01);
+}
+
+fn fallback_face_normal_os(p_hit_os: vec3<f32>, vi_hit: vec3<i32>, ray_dir_os: vec3<f32>) -> vec3<f32> {
+  let p_in_voxel = p_hit_os - (vec3<f32>(vi_hit) + 0.5);
+  let abs_p = abs(p_in_voxel);
+  var n_os = vec3<f32>(0.0);
+
+  if (abs_p.x >= abs_p.y && abs_p.x >= abs_p.z) {
+    var nx = select(1.0, -1.0, p_in_voxel.x < 0.0);
+    if (abs(p_in_voxel.x) < 1e-4) {
+      nx = -select(1.0, -1.0, ray_dir_os.x < 0.0);
+    }
+    n_os.x = nx;
+  } else if (abs_p.y >= abs_p.x && abs_p.y >= abs_p.z) {
+    var ny = select(1.0, -1.0, p_in_voxel.y < 0.0);
+    if (abs(p_in_voxel.y) < 1e-4) {
+      ny = -select(1.0, -1.0, ray_dir_os.y < 0.0);
+    }
+    n_os.y = ny;
+  } else {
+    var nz = select(1.0, -1.0, p_in_voxel.z < 0.0);
+    if (abs(p_in_voxel.z) < 1e-4) {
+      nz = -select(1.0, -1.0, ray_dir_os.z < 0.0);
+    }
+    n_os.z = nz;
+  }
+
+  return n_os;
 }
 
 fn shadow_seam_epsilon_at_hit(voxel_center_os: vec3<f32>, local_aabb_min: vec3<f32>, local_aabb_max: vec3<f32>, seam_epsilon: f32) -> f32 {
@@ -561,6 +656,15 @@ fn sample_directional_shadow(
   let NdL_shadow = max(dot(n, L), 0.0);
   let bias = directional_compare_bias + directional_compare_bias * 0.75 * (1.0 - NdL_shadow);
   let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
+  let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
+  let hard_sampled_depth_n = clamp(hard_shadow_sample.r, -1.0, 1.0);
+  let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
+  let hard_same_shadow_group =
+    receiver_shadow_group_id != 0u &&
+    hard_sampled_shadow_group_id == receiver_shadow_group_id;
+  let hard_receiver_minus_occluder = my_depth_n - hard_sampled_depth_n;
+  let hard_seam_lit = hard_same_shadow_group && hard_receiver_minus_occluder <= directional_seam_epsilon_n;
+  let hard_visibility = select(0.0, 1.0, hard_seam_lit || hard_sampled_depth_n >= my_depth_n - bias);
   var visibility = 0.0;
   var sample_weight_sum = 0.0;
   for (var dy: i32 = -1; dy <= 1; dy = dy + 1) {
@@ -582,7 +686,70 @@ fn sample_directional_shadow(
       visibility += sample_weight * select(0.0, 1.0, seam_lit || sampled_depth_n >= my_depth_n - bias);
     }
   }
-  return visibility / max(sample_weight_sum, 1.0);
+  let pcf_visibility = visibility / max(sample_weight_sum, 1.0);
+  let softness = saturate(uCamera.ao_quality.z);
+  return mix(hard_visibility, pcf_visibility, softness);
+}
+
+fn point_shadow_face_and_uv(dir: vec3<f32>) -> PointShadowLookup {
+  let abs_dir = abs(dir);
+  if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) {
+    if (dir.x >= 0.0) {
+      return PointShadowLookup(0u, vec2<f32>(-dir.z, -dir.y) / max(abs_dir.x, 1e-5) * 0.5 + 0.5);
+    }
+    return PointShadowLookup(1u, vec2<f32>(dir.z, -dir.y) / max(abs_dir.x, 1e-5) * 0.5 + 0.5);
+  }
+  if (abs_dir.y >= abs_dir.z) {
+    if (dir.y >= 0.0) {
+      return PointShadowLookup(2u, vec2<f32>(dir.x, dir.z) / max(abs_dir.y, 1e-5) * 0.5 + 0.5);
+    }
+    return PointShadowLookup(3u, vec2<f32>(dir.x, -dir.z) / max(abs_dir.y, 1e-5) * 0.5 + 0.5);
+  }
+  if (dir.z >= 0.0) {
+    return PointShadowLookup(4u, vec2<f32>(dir.x, -dir.y) / max(abs_dir.z, 1e-5) * 0.5 + 0.5);
+  }
+  return PointShadowLookup(5u, vec2<f32>(-dir.x, -dir.y) / max(abs_dir.z, 1e-5) * 0.5 + 0.5);
+}
+
+fn sample_point_shadow(
+  light: Light,
+  p: vec3<f32>,
+  shadow_normal: vec3<f32>,
+  L: vec3<f32>,
+  receiver_shadow_group_id: u32,
+  receiver_shadow_seam_epsilon: f32
+) -> f32 {
+  let light_to_receiver = p - light.position.xyz;
+  let receiver_depth_m = length(light_to_receiver);
+  if (receiver_depth_m <= 1e-4) {
+    return 1.0;
+  }
+
+  let lookup = point_shadow_face_and_uv(light_to_receiver / receiver_depth_m);
+  let layer = light.shadow_meta.x + lookup.face;
+  let layer_params = shadow_layer_params[layer];
+  let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
+  let texel_depth_m = receiver_depth_m * (2.0 / f32(effective_resolution));
+  let receiver_offset = max(0.05, max(receiver_shadow_seam_epsilon * 0.5, texel_depth_m * 0.75));
+  let pos_off = p + shadow_normal * receiver_offset;
+  let my_depth_m = distance(light.position.xyz, pos_off);
+  let base_px_f = clamp(lookup.uv, vec2<f32>(0.0), vec2<f32>(1.0)) * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
+  let base_px = vec2<i32>(
+    i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
+    i32(clamp(base_px_f.y, 0.0, f32(effective_resolution - 1u)))
+  );
+  let shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
+  let sampled_depth = shadow_sample.r;
+  let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
+  let same_shadow_group =
+    receiver_shadow_group_id != 0u &&
+    sampled_shadow_group_id == receiver_shadow_group_id;
+  let NdL_shadow = max(dot(shadow_normal, L), 0.0);
+  let seam_tolerance_m = max(receiver_shadow_seam_epsilon, texel_depth_m * 1.5);
+  let biasM = max(seam_tolerance_m, 0.05 + texel_depth_m + 0.08 * (1.0 - NdL_shadow));
+  let receiver_minus_occluder = my_depth_m - sampled_depth;
+  let seam_lit = same_shadow_group && receiver_minus_occluder <= seam_tolerance_m;
+  return select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
 }
 
 fn absorption_coefficient(base_color: vec3<f32>, transmission: f32, density: f32) -> vec3<f32> {
@@ -641,6 +808,7 @@ fn calculate_lighting(
   metalness: f32,
   ior: f32,
   emissive: vec3<f32>,
+  two_sided_lighting: bool,
   receiver_shadow_group_id: u32,
   receiver_shadow_seam_epsilon: f32,
   tile_index: u32
@@ -651,8 +819,11 @@ fn calculate_lighting(
   let F0 = mix(dielectric_f0, base_color, metalness);
   let ambient_fresnel = fresnel_schlick_roughness(NdotV, F0, roughness);
   let ambient_kd = (vec3<f32>(1.0) - ambient_fresnel) * (1.0 - metalness);
-  let ambient_light = uCamera.ambient_color.xyz * directional_ambient_scale(n);
-  var total_light = (ambient_kd * base_color + ambient_fresnel) * ambient_light + emissive;
+  let diffuse_ambient_light = uCamera.ambient_color.xyz * directional_ambient_scale(n);
+  let reflection_dir = reflect(-V, n);
+  let rough_reflection_dir = normalize(mix(reflection_dir, n, saturate(roughness * roughness)));
+  let specular_ambient_light = uCamera.ambient_color.xyz * directional_ambient_scale(rough_reflection_dir);
+  var total_light = ambient_kd * base_color * diffuse_ambient_light + ambient_fresnel * specular_ambient_light + emissive;
   
   let tile_header = tile_light_headers[tile_index];
   for (var i = 0u; i < tile_header.count; i++) {
@@ -694,17 +865,19 @@ fn calculate_lighting(
       continue;
     }
 
-    if (light_type != 0u && light.shadow_meta.y > 0u) {
+    let shadow_normal = select(n, n * select(-1.0, 1.0, dot(n, L) >= 0.0), two_sided_lighting);
+
+    if (light.shadow_meta.y > 0u) {
       if (light_type == 1u) {
         let selection = choose_directional_cascade(light, p);
-        let primary_visibility = sample_directional_shadow(light, p, n, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
+        let primary_visibility = sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
         let secondary_visibility = select(
           primary_visibility,
-          sample_directional_shadow(light, p, n, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
+          sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
           selection.secondary_index != selection.primary_index,
         );
         attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
-      } else {
+      } else if (light_type == 2u) {
         let shadow_view_proj = light.view_proj;
         let layer = light.shadow_meta.x;
         let layer_params = shadow_layer_params[layer];
@@ -721,10 +894,22 @@ fn calculate_lighting(
           );
 
           let receiver_offset = max(receiver_shadow_seam_epsilon * 0.5, 0.05);
-          let pos_off = p + n * receiver_offset;
+          let pos_off = p + shadow_normal * receiver_offset;
           let my_depth_m = distance(light.position.xyz, pos_off);
-          let NdL_shadow = max(dot(n, L), 0.0);
+          let NdL_shadow = max(dot(shadow_normal, L), 0.0);
           let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
+          let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
+          let hard_sampled_depth = hard_shadow_sample.r;
+          let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
+          let hard_same_shadow_group =
+            receiver_shadow_group_id != 0u &&
+            hard_sampled_shadow_group_id == receiver_shadow_group_id;
+          let baseBiasM = 0.05;
+          let slopeBiasM = 0.1;
+          let biasM = baseBiasM + slopeBiasM * (1.0 - NdL_shadow);
+          let hard_receiver_minus_occluder = my_depth_m - hard_sampled_depth;
+          let hard_seam_lit = hard_same_shadow_group && hard_receiver_minus_occluder <= receiver_shadow_seam_epsilon;
+          let hard_visibility = select(0.0, 1.0, hard_seam_lit || hard_sampled_depth >= my_depth_m - biasM);
           var visibility = 0.0;
           var sample_weight_sum = 0.0;
           for (var dy: i32 = -2; dy <= 2; dy = dy + 1) {
@@ -737,17 +922,18 @@ fn calculate_lighting(
               let same_shadow_group =
                 receiver_shadow_group_id != 0u &&
                 sampled_shadow_group_id == receiver_shadow_group_id;
-              let baseBiasM = 0.05;
-              let slopeBiasM = 0.1;
-              let biasM = baseBiasM + slopeBiasM * (1.0 - NdL_shadow);
               let receiver_minus_occluder = my_depth_m - sampled_depth;
               let seam_lit = same_shadow_group && receiver_minus_occluder <= receiver_shadow_seam_epsilon;
               sample_weight_sum += 1.0;
               visibility += select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
             }
           }
-          attenuation *= visibility / max(sample_weight_sum, 1.0);
+          let pcf_visibility = visibility / max(sample_weight_sum, 1.0);
+          let softness = saturate(uCamera.ao_quality.w);
+          attenuation *= mix(hard_visibility, pcf_visibility, softness);
         }
+      } else {
+        attenuation *= sample_point_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
       }
     }
     
@@ -755,19 +941,20 @@ fn calculate_lighting(
       continue;
     }
 
-    let NdotL = max(dot(n, L), 0.0);
-    if (NdotL <= 0.0 || NdotV <= 0.0) {
+    let NdotL = select(max(dot(n, L), 0.0), abs(dot(n, L)), two_sided_lighting);
+    let NdotV_local = select(NdotV, abs(dot(n, V)), two_sided_lighting);
+    if (NdotL <= 0.0 || NdotV_local <= 0.0) {
       continue;
     }
 
     let H = normalize(V + L);
-    let NdotH = max(dot(n, H), 0.0);
+    let NdotH = select(max(dot(n, H), 0.0), abs(dot(n, H)), two_sided_lighting);
     let HdotV = max(dot(H, V), 0.0);
     let rough = max(roughness, MIN_ROUGHNESS);
     let fresnel = fresnel_schlick(HdotV, F0);
     let D = distribution_ggx(NdotH, rough);
-    let G = geometry_smith(NdotV, NdotL, rough);
-    let specular = (D * G * fresnel) / max(4.0 * NdotV * NdotL, PBR_EPSILON);
+    let G = geometry_smith(NdotV_local, NdotL, rough);
+    let specular = (D * G * fresnel) / max(4.0 * NdotV_local * NdotL, PBR_EPSILON);
     let kS = fresnel;
     let kD = (vec3<f32>(1.0) - kS) * (1.0 - metalness);
     let diffuse = kD * base_color / PI;
@@ -921,8 +1108,16 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let dt_ws = dt * d_ws_scale;
                               let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                               let voxel_center_os = floor(p_hit_os) + 0.5;
-                              let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
-                              let n_os = blocky_normal_os(voxel_center_os, aabb_center_os, params);
+                              let vi_hit = vec3<i32>(floor(voxel_center_os));
+                              var n_os = estimate_normal_os(voxel_center_os, params);
+                              var two_sided_lighting = false;
+                              if (length(n_os) < 0.01) {
+                                n_os = fallback_exposed_voxel_normal_os(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
+                                two_sided_lighting = has_two_sided_voxel_exposure_os(voxel_center_os, params);
+                              }
+                              if (length(n_os) < 0.01) {
+                                n_os = fallback_face_normal_os(p_hit_os, vi_hit, dir);
+                              }
                               let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                               let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                               let shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
@@ -936,7 +1131,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let coverage_step = 1.0 - exp(-coverage_sigma * dt_ws);
                               let sigma_a = absorption_coefficient(base_col, transmission, medium_density * 0.75) * mix(0.15, 1.0, opacity);
                               let trans_step = select(vec3<f32>(1.0 - coverage_step), exp(-sigma_a * dt_ws), is_volumetric);
-                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, shadow_seam_epsilon, tile_index);
+                              let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, two_sided_lighting, params.shadow_group_id, shadow_seam_epsilon, tile_index);
                               let refract_off = select(
                                 vec2<f32>(0.0, 0.0),
                                 refraction_uv_offset(pos_ws, n_ws, view_dir, max(pbr.z, 1.001), refraction_strength, refractive_path_ws),
@@ -1002,8 +1197,16 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let dt_ws = dt * d_ws_scale;
                                   let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                                   let voxel_center_os = floor(p_hit_os) + 0.5;
-                                  let aabb_center_os = (inst.local_aabb_min.xyz + inst.local_aabb_max.xyz) * 0.5;
-                                  let n_os = blocky_normal_os(voxel_center_os, aabb_center_os, params);
+                                  let vi_hit = vec3<i32>(floor(voxel_center_os));
+                                  var n_os = estimate_normal_os(voxel_center_os, params);
+                                  var two_sided_lighting = false;
+                                  if (length(n_os) < 0.01) {
+                                    n_os = fallback_exposed_voxel_normal_os(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
+                                    two_sided_lighting = has_two_sided_voxel_exposure_os(voxel_center_os, params);
+                                  }
+                                  if (length(n_os) < 0.01) {
+                                    n_os = fallback_face_normal_os(p_hit_os, vi_hit, dir);
+                                  }
                                   let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
                                   let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                   let shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
@@ -1017,7 +1220,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let coverage_step = 1.0 - exp(-coverage_sigma * dt_ws);
                                   let sigma_a = absorption_coefficient(base_col, transmission, medium_density * 0.75) * mix(0.15, 1.0, opacity);
                                   let trans_step = select(vec3<f32>(1.0 - coverage_step), exp(-sigma_a * dt_ws), is_volumetric);
-                                  let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, params.shadow_group_id, shadow_seam_epsilon, tile_index);
+                                  let color = calculate_lighting(pos_ws, n_ws, base_col, pbr.x, pbr.y, pbr.z, emissive, two_sided_lighting, params.shadow_group_id, shadow_seam_epsilon, tile_index);
                                   let refract_off = select(
                                     vec2<f32>(0.0, 0.0),
                                     refraction_uv_offset(pos_ws, n_ws, view_dir, max(pbr.z, 1.001), refraction_strength, refractive_path_ws),

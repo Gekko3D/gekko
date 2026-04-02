@@ -40,11 +40,12 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 					Rotation: Quat{0, 0, 0, 1},
 					Scale:    Vec3{1, 1, 1},
 				},
-				Type:      AssetLightTypeSpot,
-				Color:     [3]float32{1, 0, 0},
-				Intensity: 1,
-				Range:     12,
-				ConeAngle: 30,
+				Type:         AssetLightTypeSpot,
+				Color:        [3]float32{1, 0, 0},
+				Intensity:    1,
+				Range:        12,
+				ConeAngle:    30,
+				CastsShadows: true,
 			},
 		},
 		Emitters: []AssetEmitterDef{
@@ -116,6 +117,9 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	}
 	if loaded.Lights[0].Type != AssetLightTypeSpot {
 		t.Fatalf("expected light type %q, got %q", AssetLightTypeSpot, loaded.Lights[0].Type)
+	}
+	if !loaded.Lights[0].CastsShadows {
+		t.Fatal("expected light shadow flag to survive round-trip")
 	}
 	if loaded.Emitters[0].Emitter.AlphaMode != AssetAlphaModeLuminance {
 		t.Fatalf("expected alpha mode %q, got %q", AssetAlphaModeLuminance, loaded.Emitters[0].Emitter.AlphaMode)

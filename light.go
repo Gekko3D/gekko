@@ -11,9 +11,10 @@ const (
 
 // LightComponent is the ECS component for lights
 type LightComponent struct {
-	Type      LightType  `gekko:"light" usage:"type"`
-	Color     [3]float32 `gekko:"light" usage:"color"` // RGB
-	Intensity float32    `gekko:"light" usage:"intensity"`
-	Range     float32    `gekko:"light" usage:"range"`      // For point/spot
-	ConeAngle float32    `gekko:"light" usage:"cone_angle"` // Full cone angle in degrees (spot)
+	Type         LightType  `gekko:"light" usage:"type"`
+	Color        [3]float32 `gekko:"light" usage:"color"` // RGB
+	Intensity    float32    `gekko:"light" usage:"intensity"`
+	Range        float32    `gekko:"light" usage:"range"`         // For point/spot
+	ConeAngle    float32    `gekko:"light" usage:"cone_angle"`    // Full cone angle in degrees (spot)
+	CastsShadows bool       `gekko:"light" usage:"casts_shadows"` // Point lights default to unshadowed unless explicitly enabled
 }

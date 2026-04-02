@@ -105,10 +105,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	state.ensureMaterialCaches()
 	// Sync instances
 	state.RtApp.Profiler.BeginScope("Sync Instances")
-	currentEntities := make(map[EntityId]bool)
+	currentEntities := make(map[EntityId]bool, len(state.instanceMap))
+	frameMaterialKeys := make(map[AssetId]materialTableCacheKey)
 
 	// Collect instances from models
 	MakeQuery2[TransformComponent, VoxelModelComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent) bool {
+		if server == nil {
+			return true
+		}
 		currentEntities[entityId] = true
 		vox.NormalizeGeometryRefs()
 
@@ -116,8 +120,13 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if !ok || geometryAsset == nil || geometryAsset.XBrickMap == nil {
 			return true
 		}
-		gekkoPalette := server.voxPalettes[vox.VoxelPalette]
-		materialKey := state.materialTableKey(vox.VoxelPalette, &gekkoPalette)
+
+		materialKey, hasKey := frameMaterialKeys[vox.VoxelPalette]
+		if !hasKey {
+			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
+			materialKey = state.materialTableKey(vox.VoxelPalette, &gekkoPalette)
+			frameMaterialKeys[vox.VoxelPalette] = materialKey
+		}
 
 		obj, exists := state.instanceMap[entityId]
 		if !exists {
@@ -130,6 +139,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 			obj = core.NewVoxelObject()
 			obj.XBrickMap = modelTemplate.XBrickMap
+			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
 			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 			state.RtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
@@ -183,6 +193,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 
 		if lastKey, ok := state.lastMaterialKeys[obj]; !ok || lastKey != materialKey {
+			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
 			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 			state.lastMaterialKeys[obj] = materialKey
 		}
@@ -365,6 +376,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("GPU Batch")
 
+	state.RtApp.Profiler.BeginScope("Sync Particles")
 	// Sync GPU emitters and spawn requests
 	spawnReqs, emitters, emitterCount, atlasId := particlesSync(state, t, cmd)
 
@@ -389,6 +401,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 	}
 
+	state.RtApp.Profiler.BeginScope("Sync Sprites")
 	// Sync GPU sprites
 	spriteBytes, spriteCount, spriteBatches := spritesSync(state, cmd)
 	seenSpriteAtlases := make(map[string]struct{}, len(spriteBatches))
@@ -418,21 +431,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	if state.RtApp.BufferManager != nil {
 		state.RtApp.BufferManager.SyncSpriteBatches(state.RtApp.SpritesPipeline, gpuSpriteBatches)
 	}
+	state.RtApp.Profiler.EndScope("Sync Sprites")
 }
 
 func voxelObjectAllowsOcclusion(cmd *Commands, entityId EntityId, vox *VoxelModelComponent) bool {
-	if vox == nil {
-		return true
-	}
-	if vox.IsTerrainChunk || vox.ShadowGroupID != 0 {
-		return false
-	}
-	if _, ok := AuthoredTerrainChunkRefForEntity(cmd, entityId); ok {
-		return false
-	}
-	if _, ok := AuthoredImportedWorldChunkRefForEntity(cmd, entityId); ok {
-		return false
-	}
 	return true
 }
 
@@ -521,6 +523,7 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 		}
 
 		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
+		gpuLight.CastsShadows = light.Type != LightTypePoint || light.CastsShadows
 		pendingLights = append(pendingLights, pendingLight{
 			entityID:  entityId,
 			lightType: light.Type,

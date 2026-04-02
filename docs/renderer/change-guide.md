@@ -78,6 +78,13 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
   - `gbuffer.wgsl`, `shadow_map.wgsl`, `transparent_overlay.wgsl`, and `particles_sim.wgsl` all expect `voxel_payload_0..3`, and their bind-group builders must match.
 - `BrickRecord` is no longer 16 bytes.
   - The live layout is `atlas_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `atlas_page`, `flags` for 20 bytes total. Any CPU writer or WGSL struct drift here will corrupt voxel reads.
+- Voxel shading style has a deliberate contract.
+  - Keep voxel albedo/material lookup palette-driven and blocky.
+  - Keep one normal per visible voxel cell rather than interpolating mesh-like normals across a voxel.
+  - Prefer local occupancy-gradient normals to recover voxelized shape volume.
+  - If the gradient is degenerate, use a deterministic occupancy-based fallback so the same visible voxel keeps one normal; keep face-entry only as a last resort and do not use object-center or radial fallbacks.
+  - If the degenerate voxel is exposed on both sides of an axis, preserve the deterministic normal but treat direct local lighting as two-sided so 1-voxel-thick planes and rods still react to point and spot lights.
+  - Keep normal transforms consistent across `XBrickMap`, solid-brick, and `tree64` paths; non-uniform scale makes this load-bearing.
 - Text and gizmos are frame-lifetime data.
   - If you stop resubmitting them, they disappear by design.
 - There are multiple debug knobs.

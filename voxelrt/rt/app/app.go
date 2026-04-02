@@ -92,8 +92,9 @@ type App struct {
 	RenderFrameIndex    uint64
 	ShadowUpdateOffset  int
 	ShadowUpdateSummary string
+	HadAccumulationPass bool
 
-	Profiler *Profiler
+	Profiler *core.Profiler
 
 	ParticleSpawnCount uint32
 	ParticleAtlasData  []byte // If set before Init, uses this instead of embedded
@@ -106,7 +107,7 @@ func NewApp(window *glfw.Window) *App {
 		Window:          window,
 		Camera:          core.NewCameraState(),
 		Scene:           core.NewScene(),
-		Profiler:        NewProfiler(),
+		Profiler:        core.NewProfiler(),
 		QualityPreset:   core.LightingQualityPresetBalanced,
 		LightingQuality: core.DefaultLightingQualityConfig(),
 		OcclusionMode:   core.OcclusionOff,
@@ -149,22 +150,39 @@ func (a *App) Init() error {
 		return err
 	}
 	a.Queue = a.Device.GetQueue()
-	a.BufferManager = gpu.NewGpuBufferManager(a.Device)
+	a.BufferManager = gpu.NewGpuBufferManager(a.Device, a.Profiler)
 
 	// Config
 	width, height := a.Window.GetFramebufferSize()
 	caps := surface.GetCapabilities(adapter)
 	format := caps.Formats[0]
 
+	// Try to find a good present mode, default to Fifo
+	presentMode := wgpu.PresentModeFifo
+	for _, m := range caps.PresentModes {
+		if m == wgpu.PresentModeMailbox {
+			presentMode = m
+			break
+		}
+	}
+
+	// Safety: Some drivers report extension modes (e.g. 1000361000) that cause warnings.
+	// Ensure we use a standard enum value.
+	if uint32(presentMode) >= 1000 {
+		presentMode = wgpu.PresentModeFifo
+	}
+
 	a.Config = &wgpu.SurfaceConfiguration{
 		Usage:       wgpu.TextureUsageRenderAttachment,
 		Format:      format,
 		Width:       uint32(width),
 		Height:      uint32(height),
-		PresentMode: wgpu.PresentModeFifo,
+		PresentMode: presentMode,
 		AlphaMode:   caps.AlphaModes[0],
 	}
 	surface.Configure(adapter, a.Device, a.Config)
+
+	a.OcclusionMode = core.OcclusionConservative
 
 	// Shaders
 	fsModule, _ := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
@@ -515,7 +533,7 @@ func (a *App) Init() error {
 	}
 
 	//Resources
-	a.BufferManager = gpu.NewGpuBufferManager(a.Device)
+	a.BufferManager = gpu.NewGpuBufferManager(a.Device, a.Profiler)
 	var samplerErr error
 	a.Sampler, samplerErr = a.Device.CreateSampler(&wgpu.SamplerDescriptor{
 		MinFilter:     wgpu.FilterModeLinear,

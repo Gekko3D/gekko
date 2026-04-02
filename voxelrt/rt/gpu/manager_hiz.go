@@ -341,7 +341,7 @@ func (m *GpuBufferManager) ReadbackHiZ() ([]float32, uint32, uint32) {
 	m.StateMu.Unlock()
 
 	// Check if any mapping completed
-	// m.Device.Poll(false, nil)
+	m.Device.Poll(false, nil)
 	m.StateMu.Lock()
 	if m.HiZState == 3 {
 		size := m.ReadbackBuffer.GetSize()

@@ -99,7 +99,47 @@ The legacy fullscreen blit pipeline still exists in setup code, but the resolve 
 - normal: `RGBA16Float`
 - material: `RGBA32Float`
 - no dedicated position target
-- deferred lighting reconstructs world hit position from screen UV, camera inverse matrices, and `GBufferDepth.r`
+- `GBufferDepth.r` stores hit distance along the camera ray
+- `GBufferDepth.gba` stores voxel-center world position for voxel-stable shadowing
+- deferred lighting can reconstruct the exact visible hit position from screen UV, camera inverse matrices, and `GBufferDepth.r`
+- live opaque shading evaluates view- and direct-light terms from the stored voxel-center world position so each visible voxel shades as one cell
+- deferred shadowing also uses the stored voxel-center world position so each visible voxel can receive one stable shadow response per light
+
+#### Voxel shading contract
+
+The voxel renderer intentionally keeps a blocky albedo/material look while allowing voxelized shapes to read with volume under lighting.
+
+- A visible voxel keeps one material identity.
+  - Albedo, emissive, and PBR parameters still come from the voxel palette/material lookup. Do not introduce cross-voxel albedo blending to "smooth" the image.
+- A visible voxel uses one lighting normal.
+  - Hits inside the same voxel should resolve to the same normal so the voxel shades as one cell, more like a pixel block than a triangle surface with interpolated normals.
+- The normal should come from local voxel occupancy first.
+  - The intended look is faceless microvoxels with shape volume. The live rule is: estimate a normal from neighboring occupied/empty voxels, then fall back only if that gradient is degenerate.
+- Do not use object-center or radial fallback normals for shading.
+  - Those produce a blobby "inflated" read that is unrelated to the local voxel surface and drift badly on concave or thin shapes.
+- Degenerate gradients should still resolve to one per-voxel normal.
+  - If the occupancy gradient is degenerate, derive a deterministic fallback from the voxel's exposed-face mask so thin symmetric features do not become view-dependent.
+  - Use the hit face / ray entry direction only as a last resort when the occupancy-based fallback is still ambiguous.
+- Single-voxel-thick features need two-sided direct lighting.
+  - When a voxel is exposed on both sides of an axis, keep its normal deterministic, but evaluate direct point and spot lighting as two-sided so planes and rods still react to local lights from either side.
+- Normal transforms must be consistent across traversal paths.
+  - `XBrickMap` microvoxels, solid-brick fast paths, and `tree64` LOD hits must all use the same object-space-to-world-space normal rule. Use the inverse-transpose-style transform, especially when non-uniform scale is possible.
+- Lighting may vary voxel-to-voxel, but color identity should remain voxel-stable.
+  - The renderer can show shape through per-voxel lighting, AO, and shadows, but it should not smear voxel colors into gradients across neighboring voxels.
+
+Current implementation notes:
+
+- The live normal-generation path is in `voxelrt/rt/shaders/gbuffer.wgsl`.
+- Neighbor-derived normals are computed from 6-neighbor occupancy samples, terrain chunks included across chunk boundaries.
+- The degenerate fallback path is occupancy-based and deterministic per voxel; face-entry is only a last resort.
+- Degenerate thin voxels carry a two-sided direct-light flag through the G-buffer so deferred and transparent lighting agree on planes and rods.
+- Deferred lighting consumes the stored G-buffer normal directly; the albedo/material lookup stays palette-driven.
+- Opaque deferred point and spot lights evaluate attenuation from the stored voxel center, matching the transparent overlay path.
+- Point-light shadows use six cube faces stored in the shadow-map array and are sampled with hard voxel-stable compares.
+  - Keep them discrete per receiving voxel. Do not add per-voxel gradient filtering that turns a microvoxel into a soft-lit surface patch.
+- Shadow softness is controlled separately for directional and spot lights through `LightingQualityConfig.Shadow`.
+  - Lower values push toward harder voxel-block shadows.
+  - Higher values keep more of the filtered penumbra look.
 
 ### Transparency / WBOIT
 

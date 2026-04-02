@@ -179,11 +179,17 @@ func totalShadowLayers(lights []core.Light) uint32 {
 func expectedShadowLayers(lights []core.Light, hasCamera bool) uint32 {
 	var total uint32
 	for _, light := range lights {
-		switch uint32(light.Params[2]) {
+		lightType := uint32(light.Params[2])
+		if lightType == core.LightTypePoint && !light.CastsShadows {
+			continue
+		}
+		switch lightType {
 		case core.LightTypeDirectional:
 			if hasCamera {
 				total += core.DirectionalShadowCascadeCount
 			}
+		case core.LightTypePoint:
+			total += core.PointShadowFaceCount
 		case core.LightTypeSpot:
 			total++
 		}
@@ -195,10 +201,12 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	recreated := false
 
 	// 1. Instances
+	m.Profiler.BeginScope("Scene: Instances")
 	instData := buildInstanceData(scene.VisibleObjects)
 	if m.ensureBuffer("InstancesBuf", &m.InstancesBuf, instData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
+	m.Profiler.EndScope("Scene: Instances")
 
 	// 2. BVH
 	bvhData := scene.BVHNodesBytes
@@ -210,11 +218,11 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 
 	// 3. Light metadata drives shadow-only caster selection.
+	m.Profiler.BeginScope("Scene: Lights")
 	m.UpdateLights(scene, camera, aspect)
-	rebuildShadowCasterScene(scene, collectShadowCasters(scene.ShadowObjects, m.shadowDirectionalVolumes, m.shadowSpotVolumes))
+	m.Profiler.EndScope("Scene: Lights")
 
-	// Shadow scene acceleration uses a broader set than camera-visible geometry, but only
-	// for objects intersecting active shadow volumes.
+	// Update shadow acceleration structures from scene data.
 	shadowInstData := buildInstanceData(scene.ShadowObjects)
 	if m.ensureBuffer("ShadowInstancesBuf", &m.ShadowInstancesBuf, shadowInstData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
@@ -241,24 +249,30 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 
 	// 5. Voxel Data (Incremental / Paged)
+	m.Profiler.BeginScope("Scene: Voxel")
 	if m.UpdateVoxelData(scene) {
 		recreated = true
 	}
+	m.Profiler.EndScope("Scene: Voxel")
 
+	m.Profiler.BeginScope("Scene: Params")
 	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
+	m.Profiler.EndScope("Scene: Params")
 
 	// 6. Sector Hash Grid
+	m.Profiler.BeginScope("Scene: Grid")
 	if m.updateSectorGrid(scene) {
 		recreated = true
 	}
 	if m.updateTerrainChunkLookup(scene) {
 		recreated = true
 	}
+	m.Profiler.EndScope("Scene: Grid")
 	_ = recreated
 	return recreated
 }
@@ -303,8 +317,8 @@ func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, light
 	binary.LittleEndian.PutUint32(buf[268:], 0) // pad2.y
 	binary.LittleEndian.PutUint32(buf[272:], math.Float32bits(float32(lightingQuality.AmbientOcclusion.SampleCount)))
 	binary.LittleEndian.PutUint32(buf[276:], math.Float32bits(lightingQuality.AmbientOcclusion.Radius))
-	binary.LittleEndian.PutUint32(buf[280:], 0)
-	binary.LittleEndian.PutUint32(buf[284:], 0)
+	binary.LittleEndian.PutUint32(buf[280:], math.Float32bits(lightingQuality.Shadow.DirectionalShadowSoftness))
+	binary.LittleEndian.PutUint32(buf[284:], math.Float32bits(lightingQuality.Shadow.SpotShadowSoftness))
 
 	return buf
 }
@@ -344,6 +358,7 @@ func (m *GpuBufferManager) EndBatch() {
 func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraState, aspect float32) {
 	m.shadowDirectionalVolumes = m.shadowDirectionalVolumes[:0]
 	m.shadowSpotVolumes = m.shadowSpotVolumes[:0]
+	m.shadowPointVolumes = m.shadowPointVolumes[:0]
 	m.ensureShadowCacheCapacity(expectedShadowLayers(scene.Lights, camera != nil))
 	lightingQuality := m.LightingQuality.WithDefaults()
 	cascadeDistances := lightingQuality.Shadow.DirectionalCascadeDistances
@@ -360,6 +375,9 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 		l.InvViewProj = [16]float32{}
 		for c := range l.DirectionalCascades {
 			l.DirectionalCascades[c] = core.DirectionalShadowCascade{}
+		}
+		if lightType == core.LightTypePoint && !l.CastsShadows {
+			continue
 		}
 
 		if lightType == core.LightTypeDirectional {
@@ -456,6 +474,43 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 				Dir:      dir,
 				Range:    l.Params[0],
 				CosCone:  l.Params[1],
+			})
+		} else if lightType == core.LightTypePoint {
+			tier := core.ShadowTierFar
+			if camera != nil {
+				tier = classifySpotShadowTier(camera.Position, pos, spotBands)
+			}
+			effectiveResolution := pointShadowTierResolution(tier)
+			l.ShadowMeta[0] = nextShadowLayer
+			l.ShadowMeta[1] = core.PointShadowFaceCount
+			for face := uint32(0); face < core.PointShadowFaceCount; face++ {
+				layer := nextShadowLayer + face
+				m.ShadowLayerParams[layer] = ShadowLayerParams{
+					Layer:               layer,
+					LightIndex:          uint32(i),
+					CascadeIndex:        face,
+					Kind:                core.ShadowUpdateKindPoint,
+					Tier:                tier,
+					EffectiveResolution: effectiveResolution,
+					CadenceFrames:       shadowTierCadence(tier),
+					UVScale: [2]float32{
+						float32(effectiveResolution) / float32(shadowAtlasLayerResolution),
+						float32(effectiveResolution) / float32(shadowAtlasLayerResolution),
+					},
+					LightSignature: hashShadowSignature(
+						math.Float32bits(pos.X()),
+						math.Float32bits(pos.Y()),
+						math.Float32bits(pos.Z()),
+						math.Float32bits(l.Params[0]),
+						face,
+						effectiveResolution,
+					),
+				}
+			}
+			nextShadowLayer += core.PointShadowFaceCount
+			m.shadowPointVolumes = append(m.shadowPointVolumes, pointShadowCullVolume{
+				Position: pos,
+				Range:    l.Params[0],
 			})
 		}
 	}

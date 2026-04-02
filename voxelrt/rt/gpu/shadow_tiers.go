@@ -66,6 +66,21 @@ func shadowTierResolution(tier uint32) uint32 {
 	}
 }
 
+func pointShadowTierResolution(tier uint32) uint32 {
+	switch tier {
+	case core.ShadowTierHero:
+		return 256
+	case core.ShadowTierNear:
+		return 128
+	case core.ShadowTierMedium:
+		return 128
+	case core.ShadowTierFar:
+		return 128
+	default:
+		return 128
+	}
+}
+
 func shadowTierCadence(tier uint32) uint32 {
 	switch tier {
 	case core.ShadowTierHero:
@@ -76,6 +91,21 @@ func shadowTierCadence(tier uint32) uint32 {
 		return 4
 	case core.ShadowTierFar:
 		return 8
+	default:
+		return 1
+	}
+}
+
+func pointShadowFacesPerFrame(tier uint32) int {
+	switch tier {
+	case core.ShadowTierHero:
+		return 3
+	case core.ShadowTierNear:
+		return 2
+	case core.ShadowTierMedium:
+		return 1
+	case core.ShadowTierFar:
+		return 1
 	default:
 		return 1
 	}

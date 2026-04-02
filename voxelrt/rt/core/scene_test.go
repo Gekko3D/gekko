@@ -18,6 +18,14 @@ func testSceneFrustumPlanes() [6]mgl32.Vec4 {
 	return (&CameraState{}).ExtractFrustum(testSceneViewProj())
 }
 
+func testShadowCastingDirectionalLight() Light {
+	return Light{
+		Direction:    [4]float32{0, -1, 0, 0},
+		Params:       [4]float32{0, 0, float32(LightTypeDirectional), 0},
+		CastsShadows: true,
+	}
+}
+
 func TestTLASSeparation(t *testing.T) {
 	scene := NewScene()
 
@@ -188,6 +196,7 @@ func TestSceneCommitSkipsBVHRebuildOnStableFrame(t *testing.T) {
 
 func TestSceneCommitRebuildsBVHWhenVisibleObjectChangesAABB(t *testing.T) {
 	scene := NewScene()
+	scene.Lights = []Light{testShadowCastingDirectionalLight()}
 	obj := NewVoxelObject()
 	obj.Transform.Position = mgl32.Vec3{0, 0, -10}
 	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
@@ -389,6 +398,7 @@ func TestSceneCommitDisablesHiZDuringFastCameraMotion(t *testing.T) {
 
 func TestSceneCommitKeepsOffFrustumObjectsAsShadowCasters(t *testing.T) {
 	scene := NewScene()
+	scene.Lights = []Light{testShadowCastingDirectionalLight()}
 
 	visible := NewVoxelObject()
 	visible.Transform.Position = mgl32.Vec3{0, 0, -20}
@@ -415,6 +425,7 @@ func TestSceneCommitKeepsOffFrustumObjectsAsShadowCasters(t *testing.T) {
 
 func TestSceneCommitRespectsShadowFlagsAndDistance(t *testing.T) {
 	scene := NewScene()
+	scene.Lights = []Light{testShadowCastingDirectionalLight()}
 
 	disabled := NewVoxelObject()
 	disabled.Transform.Position = mgl32.Vec3{0, 0, -10}
@@ -448,6 +459,7 @@ func TestSceneCommitRespectsShadowFlagsAndDistance(t *testing.T) {
 
 func TestSceneCommitRebuildsShadowBVHWhenShadowCasterSetChanges(t *testing.T) {
 	scene := NewScene()
+	scene.Lights = []Light{testShadowCastingDirectionalLight()}
 	obj := NewVoxelObject()
 	obj.Transform.Position = mgl32.Vec3{0, 0, -10}
 	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
@@ -471,6 +483,7 @@ func TestSceneCommitRebuildsShadowBVHWhenShadowCasterSetChanges(t *testing.T) {
 
 func TestSceneCommitCapsShadowCastersPerGroupByNearestDistance(t *testing.T) {
 	scene := NewScene()
+	scene.Lights = []Light{testShadowCastingDirectionalLight()}
 
 	near := NewVoxelObject()
 	near.Transform.Position = mgl32.Vec3{0, 0, -8}
@@ -508,6 +521,33 @@ func TestSceneCommitCapsShadowCastersPerGroupByNearestDistance(t *testing.T) {
 	}
 	if scene.ShadowObjects[0] == far || scene.ShadowObjects[1] == far {
 		t.Fatal("expected farthest object to be dropped by capped shadow selection")
+	}
+}
+
+func TestSceneCommitSkipsShadowCasterWorkWithoutShadowCastingLights(t *testing.T) {
+	scene := NewScene()
+
+	obj := NewVoxelObject()
+	obj.Transform.Position = mgl32.Vec3{0, 0, -10}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	scene.Lights = []Light{
+		{
+			Params:       [4]float32{12, 0, float32(LightTypePoint), 0},
+			CastsShadows: false,
+		},
+	}
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		CameraPosition: mgl32.Vec3{0, 0, 0},
+	})
+
+	if len(scene.ShadowObjects) != 0 {
+		t.Fatalf("expected no shadow casters when lights do not cast shadows, got %d", len(scene.ShadowObjects))
+	}
+	if len(scene.ShadowBVHNodesBytes) != 64 {
+		t.Fatalf("expected empty shadow BVH payload, got %d bytes", len(scene.ShadowBVHNodesBytes))
 	}
 }
 

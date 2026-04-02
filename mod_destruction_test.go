@@ -23,7 +23,7 @@ func TestDestructionSystem_Split(t *testing.T) {
 		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 			Camera:   &core.CameraState{},
 		},
 	}
@@ -118,7 +118,7 @@ func TestDestructionSystem_SpawnDebris(t *testing.T) {
 		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 			Camera:   &core.CameraState{},
 		},
 	}
@@ -293,7 +293,7 @@ func TestVoxelRtSystem_MapSync(t *testing.T) {
 		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 			Camera:   &core.CameraState{},
 		},
 	}
@@ -368,7 +368,7 @@ func TestDestruction_TotalAnnihilation(t *testing.T) {
 		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 		},
 	}
 
@@ -434,7 +434,7 @@ func TestDestructionSystem_MomentumInheritance(t *testing.T) {
 		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 		RtApp: &app_rt.App{
 			Scene:    core.NewScene(),
-			Profiler: app_rt.NewProfiler(),
+			Profiler: core.NewProfiler(),
 			Camera:   &core.CameraState{},
 		},
 	}

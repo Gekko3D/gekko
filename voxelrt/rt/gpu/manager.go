@@ -19,7 +19,7 @@ const (
 
 	// Texture Atlas Constants
 	MaxVoxelAtlasPages = 4
-	AtlasBricksPerSide = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
+	AtlasBricksPerSide = 64                                    // 64^3 = 262,144 bricks (128MB at 512 bytes per brick)
 	AtlasSize          = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
 	BrickRecordSize    = 20
 
@@ -117,7 +117,8 @@ type CAPresetData struct {
 }
 
 type GpuBufferManager struct {
-	Device *wgpu.Device
+	Device   *wgpu.Device
+	Profiler *core.Profiler
 
 	LightingQuality core.LightingQualityConfig
 
@@ -181,6 +182,7 @@ type GpuBufferManager struct {
 	VoxelUploadRevision      uint64
 	shadowDirectionalVolumes []directionalShadowCullVolume
 	shadowSpotVolumes        []spotShadowCullVolume
+	shadowPointVolumes       []pointShadowCullVolume
 
 	// Skybox Resources
 	SkyboxTex            *wgpu.Texture
@@ -252,6 +254,7 @@ type GpuBufferManager struct {
 	ParticlesBindGroup1  *wgpu.BindGroup // gbuffer depth
 	ParticleCount        uint32
 	MaxParticleCount     uint32
+	ParticleSystemActive bool
 
 	// Sprites (billboards, UI or world)
 	SpriteBuf          *wgpu.Buffer
@@ -350,6 +353,7 @@ type MaterialGpuAllocation struct {
 	MaterialTablePtr uintptr
 	MaterialTableLen int
 	BufferGeneration uint64
+	HasTransparency  bool
 }
 
 type SectorGpuInfo struct {
@@ -382,10 +386,11 @@ func (a *SlotAllocator) FreeSlot(idx uint32) {
 	a.Free = append(a.Free, idx)
 }
 
-func NewGpuBufferManager(device *wgpu.Device) *GpuBufferManager {
+func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBufferManager {
 	pageSize := computeVoxelPayloadPageSize(device.GetLimits().Limits.MaxTextureDimension3D)
 	m := &GpuBufferManager{
 		Device:                device,
+		Profiler:              profiler,
 		LightingQuality:       core.DefaultLightingQualityConfig(),
 		BatchMode:             false,
 		SectorsPerFrame:       MaxUpdatesPerFrame,

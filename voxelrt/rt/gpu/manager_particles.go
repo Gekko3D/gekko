@@ -50,6 +50,7 @@ func (m *GpuBufferManager) UpdateParticles(maxCount uint32, emitters []byte) boo
 
 	// Update Emitters
 	if len(emitters) > 0 {
+		m.ParticleSystemActive = true
 		if m.ensureBuffer("ParticleEmittersBuf", &m.ParticleEmittersBuf, emitters, wgpu.BufferUsageStorage, 0) {
 			recreated = true
 		}
@@ -220,6 +221,7 @@ func (m *GpuBufferManager) UpdateSpawnRequests(requests []uint32) {
 		return
 	}
 
+	m.ParticleSystemActive = true
 	count := uint32(len(requests))
 	bytes := unsafe.Slice((*byte)(unsafe.Pointer(&requests[0])), count*4)
 	m.Device.GetQueue().WriteBuffer(m.ParticleSpawnBuf, 0, bytes)

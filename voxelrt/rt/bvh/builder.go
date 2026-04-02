@@ -80,7 +80,7 @@ func (b *TLASBuilder) Build(aabbs [][2]mgl32.Vec3) []byte {
 	nodes := []BVHNode{}
 	b.recursiveBuild(items, &nodes)
 
-	out := []byte{}
+	out := make([]byte, 0, len(nodes)*64)
 	for _, n := range nodes {
 		out = append(out, n.ToBytes()...)
 	}
@@ -125,8 +125,10 @@ func (b *TLASBuilder) recursiveBuild(items []AABBItem, nodes *[]BVHNode) int32 {
 	})
 
 	mid := len(items) / 2
-	(*nodes)[idx].Left = b.recursiveBuild(items[:mid], nodes)
-	(*nodes)[idx].Right = b.recursiveBuild(items[mid:], nodes)
+	left := b.recursiveBuild(items[:mid], nodes)
+	right := b.recursiveBuild(items[mid:], nodes)
+	(*nodes)[idx].Left = left
+	(*nodes)[idx].Right = right
 
 	return idx
 }

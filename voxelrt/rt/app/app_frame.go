@@ -178,6 +178,7 @@ func (a *App) Update() {
 		LastViewProj:     a.LastViewProj,
 		CameraPosition:   a.Camera.Position,
 		FastCameraMotion: fastCameraMotion,
+		Profiler:         a.Profiler,
 	})
 	a.Profiler.EndScope("Scene Commit")
 
@@ -371,6 +372,13 @@ func absf(v float32) float32 {
 	return v
 }
 
+func boolToCount(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
 func (a *App) ClearText() {
 	a.TextItems = a.TextItems[:0]
 	a.TextVertexCount = 0
@@ -400,7 +408,9 @@ func (a *App) GetLineHeight(scale float32) float32 {
 }
 
 func (a *App) Render() {
+	a.Profiler.BeginScope("Swapchain Wait")
 	nextTexture, err := a.Surface.GetCurrentTexture()
+	a.Profiler.EndScope("Swapchain Wait")
 	if err != nil {
 		fmt.Printf("ERROR: GetCurrentTexture failed: %v\n", err)
 		return
@@ -462,25 +472,41 @@ func (a *App) Render() {
 
 	a.BufferManager.DispatchShadowPass(encoder, shadowUpdates)
 	a.BufferManager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.StructureRevision)
+	shadowPointUpdates := 0
 	shadowSpotUpdates := 0
 	shadowDirectionalUpdates := 0
 	for _, update := range shadowUpdates {
 		switch update.Kind {
 		case core.ShadowUpdateKindDirectional:
 			shadowDirectionalUpdates++
+		case core.ShadowUpdateKindPoint:
+			shadowPointUpdates++
 		case core.ShadowUpdateKindSpot:
 			shadowSpotUpdates++
 		}
 	}
 	a.Profiler.SetCount("ShadowUpdates", len(shadowUpdates))
+	a.Profiler.SetCount("ShadowPointUpdates", shadowPointUpdates)
 	a.Profiler.SetCount("ShadowSpotUpdates", shadowSpotUpdates)
 	a.Profiler.SetCount("ShadowDirectionalUpdates", shadowDirectionalUpdates)
 	a.ShadowUpdateSummary = formatShadowUpdateSummary(shadowUpdates)
 	a.Profiler.EndScope("Shadows")
 
+	hasLocalLights := a.BufferManager.HasLocalLights(a.Scene)
+	hasTransparentOverlay := a.BufferManager.HasVisibleTransparentOverlay(a.Scene)
+	hasParticleContribution := a.BufferManager.HasParticleContribution()
+	hasSpriteContribution := a.BufferManager.HasSpriteContribution()
+	hasCAVolumeContribution := a.BufferManager.HasCAVolumeContribution()
+	needsAccumulation := hasTransparentOverlay || hasParticleContribution || hasSpriteContribution || hasCAVolumeContribution
+	a.Profiler.SetCount("LocalLights", boolToCount(hasLocalLights))
+	a.Profiler.SetCount("TransparentOverlay", boolToCount(hasTransparentOverlay))
+	a.Profiler.SetCount("AccumulationActive", boolToCount(needsAccumulation))
+
 	// Lighting Pass
 	a.Profiler.BeginScope("Tile Light Cull")
-	a.BufferManager.DispatchTiledLightCull(encoder, a.TiledLightCullPipeline)
+	if hasLocalLights {
+		a.BufferManager.DispatchTiledLightCull(encoder, a.TiledLightCullPipeline)
+	}
 	a.Profiler.EndScope("Tile Light Cull")
 
 	a.Profiler.BeginScope("Lighting")
@@ -512,66 +538,65 @@ func (a *App) Render() {
 
 	// Accumulation Pass (Transparent overlay + Particles) -> WBOIT targets
 	a.Profiler.BeginScope("Accumulation")
-	accPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
-		ColorAttachments: []wgpu.RenderPassColorAttachment{
-			{
-				View:       a.BufferManager.TransparentAccumView,
-				LoadOp:     wgpu.LoadOpClear,
-				StoreOp:    wgpu.StoreOpStore,
-				ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 0},
+	if needsAccumulation || a.HadAccumulationPass {
+		accPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+			ColorAttachments: []wgpu.RenderPassColorAttachment{
+				{
+					View:       a.BufferManager.TransparentAccumView,
+					LoadOp:     wgpu.LoadOpClear,
+					StoreOp:    wgpu.StoreOpStore,
+					ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 0},
+				},
+				{
+					View:       a.BufferManager.TransparentWeightView,
+					LoadOp:     wgpu.LoadOpClear,
+					StoreOp:    wgpu.StoreOpStore,
+					ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 0},
+				},
 			},
-			{
-				View:       a.BufferManager.TransparentWeightView,
-				LoadOp:     wgpu.LoadOpClear,
-				StoreOp:    wgpu.StoreOpStore,
-				ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 0},
-			},
-		},
-	})
-	if a.CAVolumePipeline != nil {
-		accPass.SetPipeline(a.CAVolumePipeline)
-		if a.BufferManager.CAVolumeRenderBG0 != nil && a.BufferManager.CurrentCAVolumeRenderBG1() != nil && a.BufferManager.CAVolumeRenderBG2 != nil {
-			accPass.SetBindGroup(0, a.BufferManager.CAVolumeRenderBG0, nil)
-			accPass.SetBindGroup(1, a.BufferManager.CurrentCAVolumeRenderBG1(), nil)
-			accPass.SetBindGroup(2, a.BufferManager.CAVolumeRenderBG2, nil)
-			accPass.Draw(3, 1, 0, 0)
-		}
-	}
-	if a.TransparentPipeline != nil {
-		accPass.SetPipeline(a.TransparentPipeline)
-		if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil && a.BufferManager.TransparentBG3 != nil {
-			accPass.SetBindGroup(0, a.BufferManager.TransparentBG0, nil)
-			accPass.SetBindGroup(1, a.BufferManager.TransparentBG1, nil)
-			accPass.SetBindGroup(2, a.BufferManager.TransparentBG2, nil)
-			accPass.SetBindGroup(3, a.BufferManager.TransparentBG3, nil)
-			accPass.Draw(3, 1, 0, 0)
-		}
-	}
-	if a.ParticlesPipeline != nil {
-		accPass.SetPipeline(a.ParticlesPipeline)
-		if a.BufferManager.ParticlesBindGroup0 != nil && a.BufferManager.ParticlesBindGroup1 != nil {
-			accPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
-			accPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
-			accPass.DrawIndirect(a.BufferManager.ParticleIndirectBuf, 0)
-		}
-	}
-	if a.SpritesPipeline != nil && a.BufferManager.SpriteCount > 0 {
-		accPass.SetPipeline(a.SpritesPipeline)
-		if a.BufferManager.SpritesBindGroup1 != nil {
-			accPass.SetBindGroup(1, a.BufferManager.SpritesBindGroup1, nil)
-			for _, batch := range a.BufferManager.SpriteBatches {
-				if batch.BindGroup0 == nil || batch.InstanceCount == 0 {
-					continue
+		})
+		if needsAccumulation {
+			if a.CAVolumePipeline != nil && hasCAVolumeContribution {
+				accPass.SetPipeline(a.CAVolumePipeline)
+				accPass.SetBindGroup(0, a.BufferManager.CAVolumeRenderBG0, nil)
+				accPass.SetBindGroup(1, a.BufferManager.CurrentCAVolumeRenderBG1(), nil)
+				accPass.SetBindGroup(2, a.BufferManager.CAVolumeRenderBG2, nil)
+				accPass.Draw(3, 1, 0, 0)
+			}
+			if a.TransparentPipeline != nil && hasTransparentOverlay {
+				accPass.SetPipeline(a.TransparentPipeline)
+				if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil && a.BufferManager.TransparentBG3 != nil {
+					accPass.SetBindGroup(0, a.BufferManager.TransparentBG0, nil)
+					accPass.SetBindGroup(1, a.BufferManager.TransparentBG1, nil)
+					accPass.SetBindGroup(2, a.BufferManager.TransparentBG2, nil)
+					accPass.SetBindGroup(3, a.BufferManager.TransparentBG3, nil)
+					accPass.Draw(3, 1, 0, 0)
 				}
-				accPass.SetBindGroup(0, batch.BindGroup0, nil)
-				accPass.Draw(6, batch.InstanceCount, 0, batch.FirstInstance)
+			}
+			if a.ParticlesPipeline != nil && hasParticleContribution {
+				accPass.SetPipeline(a.ParticlesPipeline)
+				accPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
+				accPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
+				accPass.DrawIndirect(a.BufferManager.ParticleIndirectBuf, 0)
+			}
+			if a.SpritesPipeline != nil && hasSpriteContribution {
+				accPass.SetPipeline(a.SpritesPipeline)
+				accPass.SetBindGroup(1, a.BufferManager.SpritesBindGroup1, nil)
+				for _, batch := range a.BufferManager.SpriteBatches {
+					if batch.BindGroup0 == nil || batch.InstanceCount == 0 {
+						continue
+					}
+					accPass.SetBindGroup(0, batch.BindGroup0, nil)
+					accPass.Draw(6, batch.InstanceCount, 0, batch.FirstInstance)
+				}
 			}
 		}
+		err = accPass.End()
+		if err != nil {
+			fmt.Printf("ERROR: Accumulation pass End failed: %v\n", err)
+		}
 	}
-	err = accPass.End()
-	if err != nil {
-		fmt.Printf("ERROR: Accumulation pass End failed: %v\n", err)
-	}
+	a.HadAccumulationPass = needsAccumulation
 	a.Profiler.EndScope("Accumulation")
 
 	// Resolve Pass -> Swapchain (composite opaque + accum/weight)
@@ -655,6 +680,8 @@ func formatShadowUpdateSummary(updates []core.ShadowUpdate) string {
 		switch update.Kind {
 		case core.ShadowUpdateKindDirectional:
 			parts = append(parts, fmt.Sprintf("D%d:%d@%d", update.LightIndex, update.CascadeIndex, update.Resolution))
+		case core.ShadowUpdateKindPoint:
+			parts = append(parts, fmt.Sprintf("P%d:%d@%d", update.LightIndex, update.CascadeIndex, update.Resolution))
 		case core.ShadowUpdateKindSpot:
 			parts = append(parts, fmt.Sprintf("S%d@%d", update.LightIndex, update.Resolution))
 		default:
