@@ -14,6 +14,7 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	obj.XBrickMap = volume.NewXBrickMap()
 	obj.XBrickMap.Sectors[[3]int{0, 0, 0}] = volume.NewSector(0, 0, 0)
 	obj.LODThreshold = 72.5
+	obj.AmbientOcclusionMode = core.AmbientOcclusionModeDisabled
 	obj.ShadowGroupID = 42
 	obj.ShadowSeamWorldEpsilon = 0.75
 	obj.IsTerrainChunk = true
@@ -39,6 +40,9 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(buf[24:28]); got != 1 {
 		t.Fatalf("expected sector count 1, got %d", got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[28:32]); got != uint32(core.AmbientOcclusionModeDisabled) {
+		t.Fatalf("expected AO mode %d, got %d", core.AmbientOcclusionModeDisabled, got)
 	}
 	if got := binary.LittleEndian.Uint32(buf[32:36]); got != obj.ShadowGroupID {
 		t.Fatalf("expected shadow group %d, got %d", obj.ShadowGroupID, got)

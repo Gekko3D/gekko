@@ -206,6 +206,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.ShadowCasterGroupID = vox.ShadowCasterGroupID
 		obj.ShadowCasterGroupLimit = vox.ShadowCasterGroupLimit
 		obj.ShadowGroupID = vox.ShadowGroupID
+		obj.AmbientOcclusionMode = core.AmbientOcclusionMode(vox.AmbientOcclusionMode)
 		obj.ShadowSeamWorldEpsilon = vox.ShadowSeamWorldEpsilon
 		obj.AllowOcclusionCulling = voxelObjectAllowsOcclusion(cmd, entityId, vox)
 		obj.IsTerrainChunk = vox.IsTerrainChunk

@@ -397,6 +397,7 @@ func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, m
 	binary.LittleEndian.PutUint32(pBuf[16:20], ^uint32(0))
 	binary.LittleEndian.PutUint32(pBuf[20:24], math.Float32bits(obj.LODThreshold))
 	binary.LittleEndian.PutUint32(pBuf[24:28], uint32(len(obj.XBrickMap.Sectors)))
+	binary.LittleEndian.PutUint32(pBuf[28:32], uint32(obj.AmbientOcclusionMode))
 	binary.LittleEndian.PutUint32(pBuf[32:36], obj.ShadowGroupID)
 	binary.LittleEndian.PutUint32(pBuf[36:40], math.Float32bits(obj.ShadowSeamWorldEpsilon))
 	if obj.IsTerrainChunk {

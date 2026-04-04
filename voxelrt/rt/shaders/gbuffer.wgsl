@@ -6,6 +6,9 @@ const BRICK_SIZE: f32 = 8.0;
 const MICRO_SIZE: f32 = 2.0;
 const EPS: f32 = 1e-3;
 const EMPTY_VOXEL: u32 = 0u;
+const AO_MODE_DEFAULT: u32 = 0u;
+const AO_MODE_ENABLED: u32 = 1u;
+const AO_MODE_DISABLED: u32 = 2u;
 
 // ============== STRUCTS ==============
 
@@ -96,7 +99,7 @@ struct ObjectParams {
     tree64_base: u32,
     lod_threshold: f32,
     sector_count: u32,
-    padding: u32,
+    ambient_occlusion_mode: u32,
     shadow_group_id: u32,
     shadow_seam_epsilon: f32,
     is_terrain_chunk: u32,
@@ -528,7 +531,7 @@ fn dominant_axis_normal_i(normal_os: vec3<f32>) -> vec3<i32> {
     return vec3<i32>(0, 0, select(-1, 1, normal_os.z >= 0.0));
 }
 
-fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: ObjectParams) -> f32 {
+fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: ObjectParams, sample_budget: u32) -> f32 {
     let vi = vec3<i32>(floor(voxel_center_os));
     let normal_i = dominant_axis_normal_i(normal_os);
 
@@ -545,7 +548,6 @@ fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: Ob
         tangent_v = vec3<i32>(0, 1, 0);
     }
 
-    let sample_budget = clamp(u32(round(max(camera.ao_quality.x, 1.0))), 1u, 13u);
     let sample_radius = max(1, i32(round(max(camera.ao_quality.y, 1.0))));
     let normal_step = normal_i * sample_radius;
     let tangent_u_step = tangent_u * sample_radius;
@@ -613,6 +615,20 @@ fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: Ob
     let base_ao = quantize_ao(ao_raw);
     let curved_ao = quantize_ao_levels(mix(ao_raw, 1.0, 0.28), 3.0);
     return max(0.15, mix(base_ao, curved_ao, curved_factor));
+}
+
+fn resolve_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: ObjectParams) -> f32 {
+    let sample_budget = min(u32(round(max(camera.ao_quality.x, 0.0))), 13u);
+    if (sample_budget == 0u) {
+        return 1.0;
+    }
+    if (params.ambient_occlusion_mode == AO_MODE_DISABLED) {
+        return 1.0;
+    }
+    if (params.ambient_occlusion_mode == AO_MODE_DEFAULT || params.ambient_occlusion_mode == AO_MODE_ENABLED) {
+        return compute_voxel_ao(voxel_center_os, normal_os, params, sample_budget);
+    }
+    return 1.0;
 }
 
 fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
@@ -687,7 +703,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 }
 
                                 result.normal = transform_normal_to_world(inst, n_os);
-                                result.ao = compute_voxel_ao(voxel_center_os, n_os, params);
+                                result.ao = resolve_voxel_ao(voxel_center_os, n_os, params);
                                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                 result.shadow_group_id = params.shadow_group_id;
                                 result.two_sided_lighting = two_sided_lighting;
@@ -736,7 +752,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                                 n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
                                             }
                                             result.normal = transform_normal_to_world(inst, n_os);
-                                            result.ao = compute_voxel_ao(voxel_center_os, n_os, params);
+                                            result.ao = resolve_voxel_ao(voxel_center_os, n_os, params);
                                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                             result.shadow_group_id = params.shadow_group_id;
                                             result.two_sided_lighting = two_sided_lighting;
@@ -839,7 +855,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                             }
 
                             result.normal = transform_normal_to_world(inst, n_os);
-                            result.ao = compute_voxel_ao(voxel_center_os, n_os, params);
+                            result.ao = resolve_voxel_ao(voxel_center_os, n_os, params);
                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                             result.shadow_group_id = params.shadow_group_id;
                             result.two_sided_lighting = two_sided_lighting;

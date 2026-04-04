@@ -66,6 +66,7 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	binary.LittleEndian.PutUint32(dst[16:20], ^uint32(0))
 	binary.LittleEndian.PutUint32(dst[20:24], math.Float32bits(obj.LODThreshold))
 	binary.LittleEndian.PutUint32(dst[24:28], uint32(len(obj.XBrickMap.Sectors)))
+	binary.LittleEndian.PutUint32(dst[28:32], uint32(obj.AmbientOcclusionMode))
 	binary.LittleEndian.PutUint32(dst[32:36], obj.ShadowGroupID)
 	binary.LittleEndian.PutUint32(dst[36:40], math.Float32bits(obj.ShadowSeamWorldEpsilon))
 	if obj.IsTerrainChunk {

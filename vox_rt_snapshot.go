@@ -63,6 +63,7 @@ type VoxelModelComponent struct {
 	ShadowCasterGroupID    uint64
 	ShadowCasterGroupLimit int
 	ShadowGroupID          uint32
+	AmbientOcclusionMode   VoxelAmbientOcclusionMode
 	ShadowSeamWorldEpsilon float32
 	IsTerrainChunk         bool
 	TerrainGroupID         uint32

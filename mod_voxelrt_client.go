@@ -69,6 +69,7 @@ func (m RenderMode) String() string {
 
 type LightingQualityConfig = core.LightingQualityConfig
 type LightingQualityPreset = core.LightingQualityPreset
+type VoxelAmbientOcclusionMode = core.AmbientOcclusionMode
 type VoxelRtDebugMode = core.DebugMode
 type VoxelRtFeatureFlags = app_rt.AppFeatureFlags
 type VoxelRtFeatureConfig = app_rt.AppFeatureConfig
@@ -77,6 +78,9 @@ const (
 	LightingQualityPerformance = core.LightingQualityPresetPerformance
 	LightingQualityBalanced    = core.LightingQualityPresetBalanced
 	LightingQualityQuality     = core.LightingQualityPresetQuality
+	VoxelAOInherited           = core.AmbientOcclusionModeDefault
+	VoxelAOEnabled             = core.AmbientOcclusionModeEnabled
+	VoxelAODisabled            = core.AmbientOcclusionModeDisabled
 	VoxelRtDebugModeOff        = core.DebugModeOff
 	VoxelRtDebugModeScene      = core.DebugModeScene
 )

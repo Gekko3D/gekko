@@ -169,6 +169,87 @@ func TestVoxelRtSystemRebuildsMaterialTableWhenPaletteMutatesInPlace(t *testing.
 	}
 }
 
+func TestVoxelRtSystemCopiesAmbientOcclusionModeToRendererObject(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateVoxelModel(VoxModel{
+		SizeX: 1,
+		SizeY: 1,
+		SizeZ: 1,
+		Voxels: []Voxel{
+			{X: 0, Y: 0, Z: 0, ColorIndex: 1},
+		},
+	}, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{64, 96, 128, 255})
+
+	cmd.AddEntity(
+		&TransformComponent{
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			VoxelModel:           modelID,
+			VoxelPalette:         paletteID,
+			AmbientOcclusionMode: VoxelAODisabled,
+		},
+	)
+	app.FlushCommands()
+
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd)
+
+	if len(state.instanceMap) != 1 {
+		t.Fatalf("expected one synced instance, got %d", len(state.instanceMap))
+	}
+	for _, obj := range state.instanceMap {
+		if obj.AmbientOcclusionMode != core.AmbientOcclusionModeDisabled {
+			t.Fatalf("expected renderer object AO mode %d, got %d", core.AmbientOcclusionModeDisabled, obj.AmbientOcclusionMode)
+		}
+	}
+}
+
+func TestVoxelRtSystemDefaultsAmbientOcclusionModeToInherited(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateVoxelModel(VoxModel{
+		SizeX: 1,
+		SizeY: 1,
+		SizeZ: 1,
+		Voxels: []Voxel{
+			{X: 0, Y: 0, Z: 0, ColorIndex: 1},
+		},
+	}, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{96, 64, 128, 255})
+
+	cmd.AddEntity(
+		&TransformComponent{
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			VoxelModel:   modelID,
+			VoxelPalette: paletteID,
+		},
+	)
+	app.FlushCommands()
+
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd)
+
+	if len(state.instanceMap) != 1 {
+		t.Fatalf("expected one synced instance, got %d", len(state.instanceMap))
+	}
+	for _, obj := range state.instanceMap {
+		if obj.AmbientOcclusionMode != core.AmbientOcclusionModeDefault {
+			t.Fatalf("expected default renderer AO mode %d, got %d", core.AmbientOcclusionModeDefault, obj.AmbientOcclusionMode)
+		}
+	}
+}
+
 func TestSpriteAtlasTextureLooksUpTextureByAtlasKey(t *testing.T) {
 	server := newVoxelRtAssetServerTest(t)
 	atlasID := server.CreateTextureFromTexels(

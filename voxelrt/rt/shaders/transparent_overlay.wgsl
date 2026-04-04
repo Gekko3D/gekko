@@ -130,7 +130,7 @@ struct ObjectParams {
   tree64_base: u32,
   lod_threshold: f32,
   sector_count: u32,
-  padding: u32,
+  ambient_occlusion_mode: u32,
   shadow_group_id: u32,
   shadow_seam_epsilon: f32,
   is_terrain_chunk: u32,
