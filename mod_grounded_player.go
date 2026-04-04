@@ -374,12 +374,16 @@ func defaulted(v, fallback float32) float32 {
 }
 
 func transformForEntity(cmd *Commands, eid EntityId) (*TransformComponent, bool) {
-	if cmd == nil || eid == 0 {
+	if cmd == nil {
 		return nil, false
 	}
 	for _, comp := range cmd.GetAllComponents(eid) {
 		if tr, ok := comp.(*TransformComponent); ok {
 			return tr, true
+		}
+		if tr, ok := comp.(TransformComponent); ok {
+			tmp := tr
+			return &tmp, true
 		}
 	}
 	return nil, false

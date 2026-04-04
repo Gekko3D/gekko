@@ -372,6 +372,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	syncVoxelRtGizmos(state, cmd)
 	state.RtApp.Profiler.EndScope("Sync Gizmos")
 
+	state.RtApp.Profiler.BeginScope("Sync Celestial Bodies")
+	syncVoxelRtCelestialBodies(state, cmd)
+	state.RtApp.Profiler.EndScope("Sync Celestial Bodies")
+
 	state.RtApp.Profiler.BeginScope("GPU Batch")
 	// End batching and process all accumulated updates
 	if state.RtApp.BufferManager != nil {
@@ -613,6 +617,84 @@ func syncVoxelRtGizmos(state *VoxelRtState, cmd *Commands) {
 	if !state.HideDebugGizmos {
 		appendSceneDebugGizmos(state, cmd)
 	}
+}
+
+func syncVoxelRtCelestialBodies(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+
+	type pendingBody struct {
+		entityID EntityId
+		body     app_rt.CelestialBodyRenderData
+	}
+
+	pending := make([]pendingBody, 0, 8)
+	MakeQuery2[TransformComponent, CelestialBodyComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, body *CelestialBodyComponent) bool {
+		if body == nil || body.Radius <= 0 {
+			return true
+		}
+
+		atmosphereRadius := body.AtmosphereRadius
+		if atmosphereRadius <= body.Radius {
+			atmosphereRadius = body.Radius * 1.08
+		}
+		cloudRadius := body.CloudRadius
+		if cloudRadius <= body.Radius {
+			cloudRadius = body.Radius * 1.03
+		}
+		atmosphereDensity := defaultCelestialPositive(body.AtmosphereDensity, 1.0)
+		atmosphereFalloff := defaultCelestialPositive(body.AtmosphereFalloff, 1.35)
+		atmosphereGlow := defaultCelestialPositive(body.AtmosphereGlow, 1.0)
+		cloudOpacity := defaultCelestialPositive(body.CloudOpacity, 0.65)
+		cloudSharpness := defaultCelestialPositive(body.CloudSharpness, 1.0)
+		cloudDriftSpeed := defaultCelestialPositive(body.CloudDriftSpeed, 0.015)
+		cloudBanding := defaultCelestialNonNegative(body.CloudBanding, 0.22)
+		pending = append(pending, pendingBody{
+			entityID: eid,
+			body: app_rt.CelestialBodyRenderData{
+				CenterRadius:    [4]float32{tr.Position.X(), tr.Position.Y(), tr.Position.Z(), body.Radius},
+				SurfaceColor:    [4]float32{body.SurfaceColor[0], body.SurfaceColor[1], body.SurfaceColor[2], 1.0},
+				AtmosphereColor: [4]float32{body.AtmosphereColor[0], body.AtmosphereColor[1], body.AtmosphereColor[2], 1.0},
+				CloudColor:      [4]float32{body.CloudColor[0], body.CloudColor[1], body.CloudColor[2], 1.0},
+				Params:          [4]float32{atmosphereRadius, cloudRadius, body.CloudCoverage, body.Emission},
+				Noise:           [4]float32{body.SurfaceSeed, body.SurfaceNoiseScale, body.CloudSeed, body.CloudNoiseScale},
+				ArtPrimary:      [4]float32{atmosphereDensity, atmosphereFalloff, atmosphereGlow, cloudOpacity},
+				ArtSecondary:    [4]float32{cloudSharpness, cloudDriftSpeed, cloudBanding, 0},
+				Flags:           [4]float32{boolToFloat32(body.DisableSurface), 0, 0, 0},
+			},
+		})
+		return true
+	})
+
+	sort.Slice(pending, func(i, j int) bool {
+		return pending[i].entityID < pending[j].entityID
+	})
+	state.RtApp.CelestialBodies = state.RtApp.CelestialBodies[:0]
+	for _, item := range pending {
+		state.RtApp.CelestialBodies = append(state.RtApp.CelestialBodies, item.body)
+	}
+}
+
+func boolToFloat32(v bool) float32 {
+	if v {
+		return 1.0
+	}
+	return 0.0
+}
+
+func defaultCelestialPositive(v, fallback float32) float32 {
+	if v > 0 {
+		return v
+	}
+	return fallback
+}
+
+func defaultCelestialNonNegative(v, fallback float32) float32 {
+	if v > 0 {
+		return v
+	}
+	return fallback
 }
 
 func appendSceneDebugGizmos(state *VoxelRtState, cmd *Commands) {

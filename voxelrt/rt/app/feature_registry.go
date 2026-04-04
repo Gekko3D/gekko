@@ -73,6 +73,9 @@ func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
 	if flags.Sprites {
 		defaults = append(defaults, &SpriteFeature{})
 	}
+	if flags.CelestialBodies {
+		defaults = append(defaults, &CelestialBodiesFeature{})
+	}
 	defaults = append(defaults, noOpFeature{name: "lifecycle-noop"})
 	return defaults
 }
