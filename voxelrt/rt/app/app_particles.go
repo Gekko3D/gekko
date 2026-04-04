@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/cogentcore/webgpu/wgpu"
+	"github.com/gekko3d/gekko/voxelrt/rt/shaders"
 )
 
 func (a *App) SetParticleAtlas(texels []byte, w, h uint32) {
@@ -49,4 +50,23 @@ func (a *App) SetParticleAtlas(texels []byte, w, h uint32) {
 
 	// Recreate particle bind groups to include the new texture
 	a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
+}
+
+func (a *App) setupParticleSimulationPipelines() error {
+	if a == nil || a.Device == nil || a.BufferManager == nil {
+		return nil
+	}
+
+	simMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "Particle Sim CS",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.ParticlesSimWGSL},
+	})
+	if err != nil {
+		return err
+	}
+
+	a.BufferManager.UpdateParticles(1000000, nil)
+	a.BufferManager.CreateDefaultParticleAtlas()
+	a.createParticleSimPipelines(simMod)
+	return nil
 }

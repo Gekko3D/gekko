@@ -70,6 +70,8 @@ func (m RenderMode) String() string {
 type LightingQualityConfig = core.LightingQualityConfig
 type LightingQualityPreset = core.LightingQualityPreset
 type VoxelRtDebugMode = core.DebugMode
+type VoxelRtFeatureFlags = app_rt.AppFeatureFlags
+type VoxelRtFeatureConfig = app_rt.AppFeatureConfig
 
 const (
 	LightingQualityPerformance = core.LightingQualityPresetPerformance
@@ -78,6 +80,10 @@ const (
 	VoxelRtDebugModeOff        = core.DebugModeOff
 	VoxelRtDebugModeScene      = core.DebugModeScene
 )
+
+func DefaultVoxelRtFeatureConfig() VoxelRtFeatureConfig {
+	return app_rt.DefaultFeatureConfig()
+}
 
 type VoxelRtModule struct {
 	WindowWidth     int
@@ -91,6 +97,7 @@ type VoxelRtModule struct {
 	OcclusionMode   core.OcclusionMode
 	FontPath        string
 	UIFontSize      float64
+	FeatureConfig   *VoxelRtFeatureConfig
 }
 
 type VoxelRtState struct {

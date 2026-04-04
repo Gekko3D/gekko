@@ -24,6 +24,9 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	RtApp.OcclusionMode = mod.OcclusionMode
 	RtApp.FontPath = mod.FontPath
 	RtApp.UIFontSize = mod.UIFontSize
+	if mod.FeatureConfig != nil {
+		RtApp.FeatureConfig = *mod.FeatureConfig
+	}
 	if err := RtApp.Init(); err != nil {
 		panic(err)
 	}

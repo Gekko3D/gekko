@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 	"strings"
-	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 
@@ -110,34 +109,18 @@ func (a *App) Resize(w, h int) {
 		a.BufferManager.StorageView = a.StorageView
 		// Ensure shadow bind groups remain valid after any resource changes
 		a.BufferManager.CreateShadowBindGroups()
-		if a.TransparentPipeline != nil {
-			a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
-		}
 
-		// Recreate particle pipeline for new swapchain format
-		a.setupParticlesPipeline()
-		a.setupSpritesPipeline()
-		a.setupCAVolumePipeline()
 		// Recreate resolve pipeline/bind group (depends on textures/swapchain)
 		a.setupResolvePipeline()
+
+		if err := a.resizeFeatures(uint32(w), uint32(h)); err != nil {
+			fmt.Printf("ERROR: Feature resize failed: %v\n", err)
+		}
 	}
 }
 
 func (a *App) Update() {
-	if a.DebugMode {
-		stats := fmt.Sprintf(
-			"FPS: %.1f\nRender Mode: %s\n%s",
-			a.FPS,
-			renderModeLabel(a.RenderMode),
-			a.Profiler.GetStatsString(),
-		)
-		if a.ShadowUpdateSummary != "" {
-			stats += fmt.Sprintf("\nShadow Refresh:\n  %s\n", a.ShadowUpdateSummary)
-		}
-		// Position at top-right (approx 260px width for text block)
-		x := float32(a.Config.Width) - 260
-		a.DrawText(stats, x, 10, 0.6, [4]float32{1, 1, 0, 1})
-	}
+	a.PreviousProfilerStats = a.Profiler.GetStatsString()
 
 	// Reset profiler timestamps for the upcoming render passes
 	a.Profiler.Reset()
@@ -245,35 +228,9 @@ func (a *App) Update() {
 		// so we must rebind shadow bind groups when buffers are recreated.
 		a.BufferManager.CreateShadowBindGroups()
 
-		// Transparent pass too
-		if a.TransparentPipeline != nil {
-			a.BufferManager.StorageView = a.StorageView
-			a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
+		if err := a.sceneBuffersRecreatedFeatures(); err != nil {
+			fmt.Printf("ERROR: Feature scene-buffer recreation failed: %v\n", err)
 		}
-		if a.CAVolumePipeline != nil {
-			a.BufferManager.CreateCAVolumeRenderBindGroups(a.CAVolumePipeline)
-		}
-		if a.CAVolumeSimPipeline != nil {
-			a.BufferManager.CreateCAVolumeSimBindGroups()
-		}
-		if a.CAVolumeBoundsPipeline != nil {
-			a.BufferManager.CreateCAVolumeBoundsBindGroups()
-		}
-
-		// Gizmo BindGroup
-		if a.GizmoPass != nil && a.BufferManager.CameraBuf != nil {
-			var gErr error
-			a.GizmoPass.BindGroup, gErr = a.GizmoPass.CreateBindGroup(a.BufferManager.CameraBuf)
-			if gErr != nil {
-				fmt.Printf("ERROR: Failed to recreate Gizmo BindGroup: %v\n", gErr)
-			}
-			// Recreate Depth BindGroup
-			a.GizmoPass.DepthBindGroup, gErr = a.GizmoPass.CreateDepthBindGroup(a.BufferManager.DepthView)
-			if gErr != nil {
-				fmt.Printf("ERROR: Failed to recreate Gizmo Depth BindGroup: %v\n", gErr)
-			}
-		}
-		a.BufferManager.CreateParticleSimBindGroups()
 	}
 
 	// Update Camera Uniforms
@@ -281,39 +238,8 @@ func (a *App) Update() {
 	a.BufferManager.EstimateTiledLightMetrics(a.Scene, viewProj, invView, a.Camera.Position)
 	a.Profiler.SetCount("LightListEntriesAvg", a.BufferManager.TileLightAvgCount)
 	a.Profiler.SetCount("LightListEntriesMax", a.BufferManager.TileLightMaxCount)
-	if a.BufferManager.CAVolumeBindingsDirty {
-		a.BufferManager.CreateCAVolumeSimBindGroups()
-		if a.CAVolumeBoundsPipeline != nil {
-			a.BufferManager.CreateCAVolumeBoundsBindGroups()
-		}
-		if a.CAVolumePipeline != nil {
-			a.BufferManager.CreateCAVolumeRenderBindGroups(a.CAVolumePipeline)
-		}
-	}
-
-	// Update Text Buffers if needed
-	if len(a.TextItems) > 0 && a.TextRenderer != nil {
-		vertices := a.TextRenderer.BuildVertices(a.TextItems, int(a.Config.Width), int(a.Config.Height))
-		if len(vertices) > 0 {
-			vSize := uint64(len(vertices) * int(unsafe.Sizeof(core.TextVertex{})))
-			if a.TextVertexBuffer == nil || a.TextVertexBuffer.GetSize() < vSize {
-				if a.TextVertexBuffer != nil {
-					a.TextVertexBuffer.Release()
-				}
-				a.TextVertexBuffer, _ = a.Device.CreateBuffer(&wgpu.BufferDescriptor{
-					Label: "Text VB",
-					Size:  vSize,
-					Usage: wgpu.BufferUsageVertex | wgpu.BufferUsageCopyDst,
-				})
-			}
-			a.Queue.WriteBuffer(a.TextVertexBuffer, 0, unsafe.Slice((*byte)(unsafe.Pointer(&vertices[0])), vSize))
-			a.TextVertexCount = uint32(len(vertices))
-		}
-	}
-
-	// Update Gizmos
-	if a.GizmoPass != nil {
-		a.GizmoPass.Update(a.Queue, a.Scene.Gizmos)
+	if err := a.updateFeatures(); err != nil {
+		fmt.Printf("ERROR: Feature update failed: %v\n", err)
 	}
 }
 
@@ -430,15 +356,17 @@ func (a *App) Render() {
 		return
 	}
 
-	// Particle Simulation
+	// Pre-GBuffer feature dispatch (particles simulation/spawn currently lives here)
 	a.Profiler.BeginScope("Particles Sim")
-	a.BufferManager.DispatchParticleSim(encoder, a.ParticleInitPipeline, a.ParticleSimPipeline)
-	a.BufferManager.DispatchParticleSpawn(encoder, a.ParticleSpawnPipeline, a.ParticleFinalizePipeline, a.ParticleSpawnCount)
+	if err := a.dispatchCommandStage(FeatureCommandStagePreGBuffer, encoder); err != nil {
+		fmt.Printf("ERROR: Feature pre-gbuffer dispatch failed: %v\n", err)
+	}
 	a.Profiler.EndScope("Particles Sim")
 
 	a.Profiler.BeginScope("CA Sim")
-	a.BufferManager.DispatchCAVolumeSim(encoder, a.CAVolumeSimPipeline)
-	a.BufferManager.DispatchCAVolumeBounds(encoder, a.CAVolumeBoundsPipeline)
+	if err := a.dispatchCommandStage(FeatureCommandStagePreGBufferVolumes, encoder); err != nil {
+		fmt.Printf("ERROR: Feature ca pre-gbuffer dispatch failed: %v\n", err)
+	}
 	a.Profiler.EndScope("CA Sim")
 
 	// Compute Pass
@@ -556,39 +484,8 @@ func (a *App) Render() {
 			},
 		})
 		if needsAccumulation {
-			if a.CAVolumePipeline != nil && hasCAVolumeContribution {
-				accPass.SetPipeline(a.CAVolumePipeline)
-				accPass.SetBindGroup(0, a.BufferManager.CAVolumeRenderBG0, nil)
-				accPass.SetBindGroup(1, a.BufferManager.CurrentCAVolumeRenderBG1(), nil)
-				accPass.SetBindGroup(2, a.BufferManager.CAVolumeRenderBG2, nil)
-				accPass.Draw(3, 1, 0, 0)
-			}
-			if a.TransparentPipeline != nil && hasTransparentOverlay {
-				accPass.SetPipeline(a.TransparentPipeline)
-				if a.BufferManager.TransparentBG0 != nil && a.BufferManager.TransparentBG1 != nil && a.BufferManager.TransparentBG2 != nil && a.BufferManager.TransparentBG3 != nil {
-					accPass.SetBindGroup(0, a.BufferManager.TransparentBG0, nil)
-					accPass.SetBindGroup(1, a.BufferManager.TransparentBG1, nil)
-					accPass.SetBindGroup(2, a.BufferManager.TransparentBG2, nil)
-					accPass.SetBindGroup(3, a.BufferManager.TransparentBG3, nil)
-					accPass.Draw(3, 1, 0, 0)
-				}
-			}
-			if a.ParticlesPipeline != nil && hasParticleContribution {
-				accPass.SetPipeline(a.ParticlesPipeline)
-				accPass.SetBindGroup(0, a.BufferManager.ParticlesBindGroup0, nil)
-				accPass.SetBindGroup(1, a.BufferManager.ParticlesBindGroup1, nil)
-				accPass.DrawIndirect(a.BufferManager.ParticleIndirectBuf, 0)
-			}
-			if a.SpritesPipeline != nil && hasSpriteContribution {
-				accPass.SetPipeline(a.SpritesPipeline)
-				accPass.SetBindGroup(1, a.BufferManager.SpritesBindGroup1, nil)
-				for _, batch := range a.BufferManager.SpriteBatches {
-					if batch.BindGroup0 == nil || batch.InstanceCount == 0 {
-						continue
-					}
-					accPass.SetBindGroup(0, batch.BindGroup0, nil)
-					accPass.Draw(6, batch.InstanceCount, 0, batch.FirstInstance)
-				}
+			if err := a.renderPassStage(FeaturePassStageAccumulation, accPass); err != nil {
+				fmt.Printf("ERROR: Feature accumulation render failed: %v\n", err)
 			}
 		}
 		err = accPass.End()
@@ -614,24 +511,18 @@ func (a *App) Render() {
 		rPass.SetBindGroup(0, a.ResolveBG, nil)
 		rPass.Draw(3, 1, 0, 0)
 	}
-	// Text Pass
-	if len(a.TextItems) > 0 && a.TextVertexBuffer != nil && a.TextPipeline != nil {
-		rPass.SetPipeline(a.TextPipeline)
-		rPass.SetBindGroup(0, a.TextBindGroup, nil)
-		rPass.SetVertexBuffer(0, a.TextVertexBuffer, 0, a.TextVertexBuffer.GetSize())
-		rPass.Draw(a.TextVertexCount, 1, 0, 0)
-	}
-
-	// Draw Gizmos
-	if a.GizmoPass != nil && a.GizmoPass.BindGroup != nil {
-		a.GizmoPass.Draw(rPass, a.GizmoPass.BindGroup, a.GizmoPass.DepthBindGroup)
-	}
 
 	err = rPass.End()
 	if err != nil {
-		fmt.Printf("ERROR: Resolve/Gizmo pass End failed: %v\n", err)
+		fmt.Printf("ERROR: Resolve pass End failed: %v\n", err)
 	}
 	a.Profiler.EndScope("Resolve")
+
+	a.Profiler.BeginScope("Features")
+	if err := a.renderScreenStage(FeatureScreenStagePostResolve, encoder, view); err != nil {
+		fmt.Printf("ERROR: Feature render failed: %v\n", err)
+	}
+	a.Profiler.EndScope("Features")
 
 	a.Profiler.BeginScope("Submit/Present")
 	cmd, err := encoder.Finish(nil)

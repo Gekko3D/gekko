@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
@@ -86,24 +85,65 @@ type App struct {
 	FontPath           string
 	UIFontSize         float64
 
-	FrameCount          int
-	FPS                 float64
-	FPSTime             float64
-	RenderFrameIndex    uint64
-	ShadowUpdateOffset  int
-	ShadowUpdateSummary string
-	HadAccumulationPass bool
+	FrameCount            int
+	FPS                   float64
+	FPSTime               float64
+	RenderFrameIndex      uint64
+	ShadowUpdateOffset    int
+	ShadowUpdateSummary   string
+	HadAccumulationPass   bool
+	PreviousProfilerStats string
 
 	Profiler *core.Profiler
 
 	ParticleSpawnCount uint32
 	ParticleAtlasData  []byte // If set before Init, uses this instead of embedded
+	FeatureConfig      AppFeatureConfig
+
+	features                  []Feature
+	defaultFeaturesRegistered bool
 }
 
 const DefaultUIFontSize = 26.0
 
+type AppFeatureFlags struct {
+	Text         bool
+	Gizmos       bool
+	Skybox       bool
+	CAVolumes    bool
+	Transparency bool
+	Particles    bool
+	Sprites      bool
+}
+
+type AppFeatureConfig struct {
+	// AutoRegisterDefaults controls whether built-in optional features are auto-registered.
+	// When false, the app starts with no default features and callers can register their own.
+	AutoRegisterDefaults bool
+	Defaults             AppFeatureFlags
+}
+
+func DefaultFeatureFlags() AppFeatureFlags {
+	return AppFeatureFlags{
+		Text:         true,
+		Gizmos:       true,
+		Skybox:       true,
+		CAVolumes:    true,
+		Transparency: true,
+		Particles:    true,
+		Sprites:      true,
+	}
+}
+
+func DefaultFeatureConfig() AppFeatureConfig {
+	return AppFeatureConfig{
+		AutoRegisterDefaults: true,
+		Defaults:             DefaultFeatureFlags(),
+	}
+}
+
 func NewApp(window *glfw.Window) *App {
-	return &App{
+	app := &App{
 		Window:          window,
 		Camera:          core.NewCameraState(),
 		Scene:           core.NewScene(),
@@ -111,7 +151,9 @@ func NewApp(window *glfw.Window) *App {
 		QualityPreset:   core.LightingQualityPresetBalanced,
 		LightingQuality: core.DefaultLightingQualityConfig(),
 		OcclusionMode:   core.OcclusionOff,
+		FeatureConfig:   DefaultFeatureConfig(),
 	}
+	return app
 }
 
 func (a *App) EffectiveLightingQuality() core.LightingQualityConfig {
@@ -130,6 +172,8 @@ func (a *App) effectiveUIFontSize() float64 {
 }
 
 func (a *App) Init() error {
+	a.ensureDefaultFeatures()
+
 	// WebGPU Init
 	a.Instance = wgpu.CreateInstance(nil)
 
@@ -544,34 +588,6 @@ func (a *App) Init() error {
 		panic(samplerErr)
 	}
 
-	// Text Rendering Setup
-	fontPath := a.FontPath
-	if fontPath == "" {
-		// Try multiple potential locations relative to working directory
-		candidates := []string{
-			"gekko/voxelrt/rt/fonts/Roboto-Medium.ttf",    // Root
-			"../gekko/voxelrt/rt/fonts/Roboto-Medium.ttf", // From subfolders like actiongame
-			"assets/Roboto-Medium.ttf",                    // Local assets
-		}
-
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				fontPath = c
-				break
-			}
-		}
-
-		if fontPath == "" {
-			fontPath = "Roboto-Medium.ttf" // Final fallback
-		}
-	}
-	a.TextRenderer, err = core.NewTextRenderer(fontPath, a.effectiveUIFontSize())
-	if err != nil {
-		fmt.Printf("WARNING: Failed to initialize text renderer: %v\n", err)
-	} else {
-		a.setupTextResources()
-	}
-
 	a.setupTextures(width, height)
 
 	// Default Camera Setup
@@ -596,71 +612,15 @@ func (a *App) Init() error {
 		return err
 	}
 
-	// Particle Simulation Pipelines
-	simMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
-		Label:          "Particle Sim CS",
-		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.ParticlesSimWGSL},
-	})
-	if err != nil {
-		return err
-	}
-
-	a.BufferManager.UpdateParticles(1000000, nil)
-	a.BufferManager.CreateDefaultParticleAtlas()
-
-	a.createParticleSimPipelines(simMod)
-	if err := a.createCAVolumeSimPipeline(); err != nil {
-		return err
-	}
-	if err := a.createCAVolumeBoundsPipeline(); err != nil {
-		return err
-	}
-	a.BufferManager.UpdateCAVolumes(nil)
-	a.BufferManager.UpdateCAParams(0)
-
-	// Skybox Generation Pipeline
-	a.BufferManager.CreateSkyboxGenPipeline(shaders.SkyboxWGSL)
-
 	// G-Buffer resources
 	a.BufferManager.CreateGBufferTextures(uint32(width), uint32(height))
 	a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
 	a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
 	a.BufferManager.CreateShadowBindGroups()
 
-	// Create particle render pipeline (accumulates into WBOIT targets)
-	a.setupParticlesPipeline()
-	// Create sprite render pipeline
-	a.setupSpritesPipeline()
-	// Create transparent overlay pipeline (accumulate into WBOIT targets)
-	a.setupTransparentOverlayPipeline()
 	a.BufferManager.StorageView = a.StorageView
-	a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
-	// Create volumetric smoke/fire pipeline (accumulate into WBOIT targets)
-	a.setupCAVolumePipeline()
 	// Create resolve pipeline to composite opaque + transparent accum onto swapchain
 	a.setupResolvePipeline()
-
-	// Gizmo Pipeline
-	var gizmoErr error
-	a.GizmoPass, gizmoErr = gpu.NewGizmoRenderPass(a.Device, format)
-	if gizmoErr != nil {
-		fmt.Printf("ERROR: Failed to create Gizmo pass: %v\n", gizmoErr)
-	} else {
-		// Create specific BindGroup for Gizmos
-		// We need to access CameraBuf from BufferManager
-		if a.BufferManager != nil {
-			var gErr error
-			a.GizmoPass.BindGroup, gErr = a.GizmoPass.CreateBindGroup(a.BufferManager.CameraBuf)
-			if gErr != nil {
-				fmt.Printf("ERROR: Failed to create Gizmo BindGroup: %v\n", gErr)
-			}
-			// Create Depth BindGroup
-			a.GizmoPass.DepthBindGroup, gErr = a.GizmoPass.CreateDepthBindGroup(a.BufferManager.DepthView)
-			if gErr != nil {
-				fmt.Printf("ERROR: Failed to create Gizmo Depth BindGroup: %v\n", gErr)
-			}
-		}
-	}
 
 	// Initialize Hi-Z Occlusion
 	hizMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
@@ -678,6 +638,10 @@ func (a *App) Init() error {
 	a.LastViewProj = mgl32.Ident4()
 	a.LastTime = glfw.GetTime()
 
+	if err := a.setupFeatures(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -685,4 +649,8 @@ func (a *App) SetSpriteAtlas(data []byte, w, h uint32) {
 	if a.BufferManager != nil {
 		a.BufferManager.SetSpriteAtlas("", data, w, h, 0)
 	}
+}
+
+func (a *App) Shutdown() {
+	a.shutdownFeatures()
 }
