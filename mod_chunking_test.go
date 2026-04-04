@@ -38,7 +38,7 @@ func TestChunkObserverInitialLoad(t *testing.T) {
 	)
 
 	app.build()
-	app.callSystems(0, execute)
+	app.callSystems(0, execute, DynamicUpdate)
 
 	if len(tracker.unloads) != 0 {
 		t.Fatalf("expected no unloads on initial tick, got %d", len(tracker.unloads))
@@ -79,7 +79,7 @@ func TestChunkObserverMovement(t *testing.T) {
 	)
 
 	app.build()
-	app.callSystems(0, execute)
+	app.callSystems(0, execute, DynamicUpdate)
 
 	tracker.reset()
 
@@ -91,7 +91,7 @@ func TestChunkObserverMovement(t *testing.T) {
 		return true
 	})
 
-	app.callSystems(0, execute)
+	app.callSystems(0, execute, DynamicUpdate)
 
 	if len(tracker.loads) != 9 {
 		t.Fatalf("expected 9 loads after moving one chunk, got %d", len(tracker.loads))
@@ -123,10 +123,10 @@ func TestChunkObserverNoDuplicateLoads(t *testing.T) {
 	)
 
 	app.build()
-	app.callSystems(0, execute)
+	app.callSystems(0, execute, DynamicUpdate)
 
 	tracker.reset()
-	app.callSystems(0, execute)
+	app.callSystems(0, execute, DynamicUpdate)
 
 	if len(tracker.loads) != 0 {
 		t.Fatalf("expected no additional loads without movement, got %d", len(tracker.loads))

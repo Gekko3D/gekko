@@ -77,7 +77,7 @@ func TestSpatialGridModule_Systems(t *testing.T) {
 
 	// Run app for one update
 	// app.Update() doesn't exist? Run callSystems manually.
-	app.callSystems(0, execute) // State 0, phase execute
+	app.callSystems(0, execute, DynamicUpdate) // State 0, phase execute
 	// PreUpdate runs before Execute in callSystems?
 	// Let's check callSystems in app.go.
 	// It loops through stages. Prelude, PreUpdate, Update...

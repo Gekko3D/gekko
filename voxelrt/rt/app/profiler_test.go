@@ -4,10 +4,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gekko3d/gekko/voxelrt/rt/core"
 )
 
 func TestProfilerReportsCountsAndCPUTimings(t *testing.T) {
-	profiler := NewProfiler()
+	profiler := core.NewProfiler()
 
 	profiler.SetCount("Visible", 7)
 	profiler.BeginScope("Scene Commit")

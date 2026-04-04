@@ -41,7 +41,13 @@ func (app *App) UseTargetFPS(fps int) *App {
 	return app
 }
 
+func (app *App) UseFixedTimestep(hz int) *App {
+	app.fixedTimestep = time.Second / time.Duration(hz)
+	return app
+}
+
 func (app *App) build() {
+	app.stages = append(app.stages, PhysicsUpdate)
 	app.stages = append(app.stages, Prelude)
 	app.stages = append(app.stages, PreUpdate)
 	app.stages = append(app.stages, Update)

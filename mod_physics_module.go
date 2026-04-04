@@ -44,11 +44,11 @@ type PhysicsCollisionEvent struct {
 type PhysicsModule struct {
 	UpdateFrequency float32
 	Threads         int
+	Synchronous     bool
 }
 
 func (m PhysicsModule) Install(app *App, cmd *Commands) {
 	world := NewPhysicsWorld()
-	// world.VoxelScale = 0.1 // Default scale - removed as NewPhysicsWorld already sets it
 
 	if m.UpdateFrequency > 0 {
 		world.UpdateFrequency = m.UpdateFrequency
@@ -61,19 +61,148 @@ func (m PhysicsModule) Install(app *App, cmd *Commands) {
 	proxy := &PhysicsProxy{}
 	cmd.AddResources(proxy)
 
-	// Start the async physics loop
-	go physicsLoop(world, proxy)
+	if m.Synchronous {
+		simulator := NewPhysicsSimulator(world.SpatialGridCellSize)
+		cmd.AddResources(simulator)
+
+		app.UseSystem(
+			System(SynchronousPhysicsSystem).
+				InStage(PhysicsUpdate).
+				RunAlways(),
+		)
+	} else {
+		// Start the async physics loop
+		go physicsLoop(world, proxy)
+
+		app.UseSystem(
+			System(PhysicsPushSystem).
+				InStage(PostUpdate).
+				RunAlways(),
+		)
+	}
 
 	app.UseSystem(
 		System(PhysicsPullSystem).
 			InStage(PreUpdate).
 			RunAlways(),
 	)
-	app.UseSystem(
-		System(PhysicsPushSystem).
-			InStage(PostUpdate).
-			RunAlways(),
-	)
+}
+
+func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *PhysicsProxy, simulator *PhysicsSimulator) {
+	// 1. Snapshot + Step (We do this as one atomic operation per Entity to be fast)
+	// Actually, we still need a global snapshot for the simulator.
+	snapshot := &PhysicsSnapshot{
+		Gravity: physics.Gravity,
+		Dt:      float32(time.Dt),
+	}
+
+	entities := make(map[EntityId]struct {
+		tr *TransformComponent
+		rb *RigidBodyComponent
+		pm *PhysicsModel
+	})
+
+	MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent) bool {
+		vSize := VoxelSize
+		scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
+		diff := pm.CenterOffset.Sub(scaledPivot)
+
+		// Start with visual state
+		physPos := tr.Position.Add(tr.Rotation.Rotate(diff))
+		physRot := tr.Rotation
+
+		// Detect teleport BEFORE choosing physical state
+		isTeleport := false
+		if rb.LastPhysicsTick > 0 {
+			posDiff := tr.Position.Sub(rb.LastPulledPos).Len()
+			rotDiff := 1.0 - float64(absf(tr.Rotation.Dot(rb.LastPulledRot)))
+			if posDiff > 0.05 || rotDiff > 0.05 {
+				isTeleport = true
+			}
+		}
+
+		// Use the core physical state if no manual teleport occurred
+		// This avoids reading back interpolated values from the last Dynamic frame!
+		if !isTeleport && rb.LastPhysicsTick > 0 {
+			physPos = rb.CurrentPhysicsPos
+			physRot = rb.CurrentPhysicsRot
+		}
+
+		invMass := float32(1.0)
+		if rb.Mass > 0 {
+			invMass = 1.0 / rb.Mass
+		}
+		vel := rb.Velocity.Add(rb.AccumulatedImpulse.Mul(invMass))
+		angVel := rb.AngularVelocity.Add(rb.AccumulatedTorque.Mul(invMass))
+
+		snapshot.Entities = append(snapshot.Entities, PhysicsEntityState{
+			Eid:            eid,
+			Pos:            physPos,
+			Rot:            physRot,
+			Vel:            vel,
+			AngVel:         angVel,
+			IsStatic:       rb.IsStatic,
+			Mass:           rb.Mass,
+			Model:          *pm,
+			Friction:       col.Friction,
+			Restitution:    col.Restitution,
+			IdleTime:       rb.IdleTime,
+			GravityScale:   rb.GravityScale,
+			LinearDamping:  rb.LinearDamping,
+			AngularDamping: rb.AngularDamping,
+			Sleeping:       rb.Sleeping,
+			Teleport:       isTeleport,
+		})
+
+		entities[eid] = struct {
+			tr *TransformComponent
+			rb *RigidBodyComponent
+			pm *PhysicsModel
+		}{tr, rb, pm}
+
+		return true
+	})
+
+	proxy.pendingState.Store(snapshot)
+
+	// 2. Step
+	results := simulator.Step(physics, proxy)
+
+	// 3. Immediately apply results back to components so the next Fixed step sees them
+	for _, res := range results.Entities {
+		if e, ok := entities[res.Eid]; ok {
+			// Update Previous state for interpolation
+			if e.rb.LastPhysicsTick != results.Tick {
+				if e.rb.LastPhysicsTick == 0 {
+					e.rb.PreviousPhysicsPos = res.Pos
+					e.rb.PreviousPhysicsRot = res.Rot
+				} else {
+					e.rb.PreviousPhysicsPos = e.rb.CurrentPhysicsPos
+					e.rb.PreviousPhysicsRot = e.rb.CurrentPhysicsRot
+				}
+				e.rb.CurrentPhysicsPos = res.Pos
+				e.rb.CurrentPhysicsRot = res.Rot
+				e.rb.LastPhysicsTick = results.Tick
+				e.rb.AccumulatedImpulse = mgl32.Vec3{}
+				e.rb.AccumulatedTorque = mgl32.Vec3{}
+			}
+
+			// We update the Transform IMMEDIATELY to avoid the "frozen frame" bug
+			// But note that interpolation will overwrite it in PreUpdate.
+			// This is fine because PreUpdate runs AFTER all fixed steps.
+			e.tr.Rotation = res.Rot
+			e.tr.Position = physicsToRenderPosition(res.Pos, res.Rot, e.tr, e.pm)
+			e.rb.Velocity = res.Vel
+			e.rb.AngularVelocity = res.AngVel
+			e.rb.Sleeping = res.Sleeping
+			e.rb.IdleTime = res.IdleTime
+			e.rb.LastPulledPos = e.tr.Position
+			e.rb.LastPulledRot = e.tr.Rotation
+		}
+	}
+
+	// 4. Publish
+	proxy.latestResults.Store(results)
 }
 
 type PhysicsProxy struct {
@@ -127,13 +256,18 @@ type PhysicsEntityResult struct {
 	IdleTime float32
 }
 
-func PhysicsPullSystem(cmd *Commands, proxy *PhysicsProxy, physics *PhysicsWorld) {
+func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *PhysicsWorld) {
 	// Pull latest results from simulation
 	results := proxy.latestResults.Load()
 	if results != nil {
 		proxy.captureCollisionResults(results)
 
-		alpha := physicsInterpolationAlpha(results.Generated, physics.UpdateFrequency)
+		alpha := time.Alpha
+		if time.Alpha == 0 {
+			// If not using accumulator (async mode), fallback to old alpha
+			alpha = physicsInterpolationAlpha(results.Generated, physics.UpdateFrequency)
+		}
+
 		resMap := make(map[EntityId]PhysicsEntityResult)
 		for _, res := range results.Entities {
 			resMap[res.Eid] = res

@@ -19,7 +19,7 @@ const (
 
 	// Texture Atlas Constants
 	MaxVoxelAtlasPages = 4
-	AtlasBricksPerSide = 64                                    // 64^3 = 262,144 bricks (128MB at 512 bytes per brick)
+	AtlasBricksPerSide = 128                                    // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
 	AtlasSize          = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
 	BrickRecordSize    = 20
 

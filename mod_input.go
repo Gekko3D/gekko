@@ -86,9 +86,10 @@ type Input struct {
 	JustPressed  [256]bool
 	JustReleased [256]bool
 
-	MouseX, MouseY             float64
-	MouseDeltaX, MouseDeltaY   float64
-	MouseScrollX, MouseScrollY float64
+	MouseX, MouseY                                     float64
+	MouseDeltaX, MouseDeltaY                           float64
+	AccumulatedMouseDeltaX, AccumulatedMouseDeltaY     float64
+	MouseScrollX, MouseScrollY                         float64
 	MouseCaptured              bool
 	GuiCaptured                bool // Set by UI system if mouse is over UI
 
@@ -146,8 +147,12 @@ func inputSystem(s *WindowState, input *Input) {
 	// Update Mouse
 	mx, my := s.windowGlfw.GetCursorPos()
 	if input.MouseCaptured {
-		input.MouseDeltaX = mx - input.MouseX
-		input.MouseDeltaY = my - input.MouseY
+		dx := mx - input.MouseX
+		dy := my - input.MouseY
+		input.MouseDeltaX = dx
+		input.MouseDeltaY = dy
+		input.AccumulatedMouseDeltaX += dx
+		input.AccumulatedMouseDeltaY += dy
 	} else {
 		input.MouseDeltaX = 0
 		input.MouseDeltaY = 0

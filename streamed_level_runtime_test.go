@@ -778,7 +778,7 @@ func newStreamedRuntimeHarness(t *testing.T) (*App, *Commands, *StreamedLevelRun
 func driveStreamedRuntimeUntil(t *testing.T, app *App, done func() bool) {
 	t.Helper()
 	for i := 0; i < 80; i++ {
-		app.callSystems(0, execute)
+		app.callSystems(0, execute, DynamicUpdate)
 		if done() {
 			return
 		}

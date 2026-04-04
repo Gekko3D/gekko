@@ -20,14 +20,15 @@ type Stage struct {
 }
 
 var (
-	Prelude    = Stage{Name: "Prelude", UpdateType: DynamicUpdate}
-	PreUpdate  = Stage{Name: "PreUpdate", UpdateType: DynamicUpdate}
-	Update     = Stage{Name: "Update", UpdateType: DynamicUpdate}
-	PostUpdate = Stage{Name: "PostUpdate", UpdateType: DynamicUpdate}
-	PreRender  = Stage{Name: "PreRender", UpdateType: DynamicUpdate}
-	Render     = Stage{Name: "Render", UpdateType: DynamicUpdate}
-	PostRender = Stage{Name: "PostRender", UpdateType: DynamicUpdate}
-	Finale     = Stage{Name: "Finale", UpdateType: DynamicUpdate}
+	PhysicsUpdate = Stage{Name: "PhysicsUpdate", UpdateType: FixedUpdate}
+	Prelude       = Stage{Name: "Prelude", UpdateType: DynamicUpdate}
+	PreUpdate     = Stage{Name: "PreUpdate", UpdateType: DynamicUpdate}
+	Update        = Stage{Name: "Update", UpdateType: DynamicUpdate}
+	PostUpdate    = Stage{Name: "PostUpdate", UpdateType: DynamicUpdate}
+	PreRender     = Stage{Name: "PreRender", UpdateType: DynamicUpdate}
+	Render        = Stage{Name: "Render", UpdateType: DynamicUpdate}
+	PostRender    = Stage{Name: "PostRender", UpdateType: DynamicUpdate}
+	Finale        = Stage{Name: "Finale", UpdateType: DynamicUpdate}
 )
 
 type systemScheduleBuilder struct {

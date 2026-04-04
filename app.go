@@ -25,6 +25,9 @@ type App struct {
 	ecs                *Ecs
 	targetFPS          int
 	targetFrameTime    time.Duration
+	fixedTimestep      time.Duration
+	accumulator        time.Duration
+	lastFrameTime      time.Time
 
 	// Command Buffering
 	cmdMutex            sync.Mutex
@@ -61,14 +64,77 @@ func (app *App) Run() {
 		fmt.Println("Running in stateful mode...")
 
 		app.state = app.initialState
-		app.callSystems(app.state, enter)
+		app.callSystems(app.state, enter, DynamicUpdate)
 	} else {
 		fmt.Println("Running in stateless mode...")
 	}
 
+	app.lastFrameTime = time.Now()
+	if app.fixedTimestep == 0 {
+		app.fixedTimestep = time.Second / 60
+	}
+
 	for {
 		frameStart := time.Now()
-		app.callSystems(app.state, execute)
+		dt := frameStart.Sub(app.lastFrameTime)
+		app.lastFrameTime = frameStart
+
+		// Dynamic Dt clamping for safety
+		dynamicDt := dt.Seconds()
+		if dynamicDt > 0.1 {
+			dynamicDt = 0.1
+		}
+
+		// 1. Update Time Resource for early Dynamic stages
+		if t, ok := app.resources[reflect.TypeOf(Time{})]; ok {
+			timeRes := t.(*Time)
+			timeRes.Dt = dynamicDt
+			timeRes.Duration = dt
+			timeRes.Time = frameStart
+			timeRes.Alpha = 0
+		}
+
+		// 2. Run Prelude (Captures Input)
+		app.callStages(app.state, execute, DynamicUpdate, "Prelude")
+
+		// 3. Fixed Update Loop
+		app.accumulator += dt
+		if app.accumulator > time.Second {
+			app.accumulator = time.Second
+		}
+
+		numSteps := int(app.accumulator.Seconds() / app.fixedTimestep.Seconds())
+		if t, ok := app.resources[reflect.TypeOf(Time{})]; ok {
+			timeRes := t.(*Time)
+			timeRes.FixedStepCount = numSteps
+		}
+
+		for app.accumulator >= app.fixedTimestep {
+			if t, ok := app.resources[reflect.TypeOf(Time{})]; ok {
+				timeRes := t.(*Time)
+				timeRes.Dt = app.fixedTimestep.Seconds()
+			}
+
+			app.callSystems(app.state, execute, FixedUpdate)
+			app.accumulator -= app.fixedTimestep
+		}
+
+		// 4. Update Time Resource for Render/Gameplay
+		if t, ok := app.resources[reflect.TypeOf(Time{})]; ok {
+			timeRes := t.(*Time)
+			timeRes.Dt = dynamicDt
+			timeRes.Alpha = float32(app.accumulator.Seconds() / app.fixedTimestep.Seconds())
+		}
+
+		// 5. Run remaining Dynamic stages
+		app.callStagesExcluding(app.state, execute, DynamicUpdate, "Prelude")
+
+		// 6. Clear Accumulated Mouse Input after all steps
+		if i, ok := app.resources[reflect.TypeOf(Input{})]; ok {
+			input := i.(*Input)
+			input.AccumulatedMouseDeltaX = 0
+			input.AccumulatedMouseDeltaY = 0
+		}
 
 		if app.stateful {
 			if app.stateTransitioning {
@@ -80,14 +146,77 @@ func (app *App) Run() {
 		app.sleepForFramePacing(time.Since(frameStart))
 
 		if app.stateful && app.state == app.finalState {
-			app.callSystems(app.state, exit)
+			app.callSystems(app.state, exit, DynamicUpdate)
 			break
 		}
 	}
 }
 
-func (app *App) callSystems(state State, phase statePhase) {
+func (app *App) callStages(state State, phase statePhase, updateType UpdateType, stageNames ...string) {
+	for _, name := range stageNames {
+		var stage *Stage
+		for i := range app.stages {
+			if app.stages[i].Name == name {
+				stage = &app.stages[i]
+				break
+			}
+		}
+		if stage == nil || stage.UpdateType != updateType {
+			continue
+		}
+		app.callStage(state, phase, *stage)
+	}
+}
+
+func (app *App) callStagesExcluding(state State, phase statePhase, updateType UpdateType, exclude ...string) {
 	for _, stage := range app.stages {
+		if stage.UpdateType != updateType {
+			continue
+		}
+		shouldExclude := false
+		for _, ex := range exclude {
+			if stage.Name == ex {
+				shouldExclude = true
+				break
+			}
+		}
+		if shouldExclude {
+			continue
+		}
+		app.callStage(state, phase, stage)
+	}
+}
+
+func (app *App) callStage(state State, phase statePhase, stage Stage) {
+	// On execute, call stateless/always run systems first
+	if execute == phase {
+		for _, system := range app.systemsStateless[stage.Name] {
+			app.callSystem(system)
+		}
+	}
+
+	if app.stateful {
+		if systemsInStage, ok := app.systems[stage.Name]; ok {
+			if systemsInState, ok := systemsInStage[state]; ok {
+				if systemsInPhase, ok := systemsInState[phase]; ok {
+					for _, system := range systemsInPhase {
+						app.callSystem(system)
+					}
+				}
+			}
+		}
+	}
+	app.cmdMutex.Lock()
+	app.FlushCommands()
+	app.cmdMutex.Unlock()
+}
+
+func (app *App) callSystems(state State, phase statePhase, updateType UpdateType) {
+	for _, stage := range app.stages {
+		if stage.UpdateType != updateType {
+			continue
+		}
+
 		// On execute, call stateless/always run systems first
 		if execute == phase {
 			for _, system := range app.systemsStateless[stage.Name] {
@@ -119,9 +248,9 @@ func (app *App) changeState(newState State) {
 }
 
 func (app *App) executeChangeState(newState State) {
-	app.callSystems(app.state, exit)
+	app.callSystems(app.state, exit, DynamicUpdate)
 	app.state = newState
-	app.callSystems(app.state, enter)
+	app.callSystems(app.state, enter, DynamicUpdate)
 }
 
 func (app *App) addResources(resources ...any) *App {
