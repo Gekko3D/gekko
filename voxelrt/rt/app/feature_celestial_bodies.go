@@ -17,6 +17,7 @@ type CelestialBodyRenderData struct {
 	Noise           [4]float32
 	ArtPrimary      [4]float32
 	ArtSecondary    [4]float32
+	ArtTertiary     [4]float32
 	Flags           [4]float32
 }
 

@@ -278,7 +278,7 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	return recreated
 }
 
-func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, skyAmbientMix float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) []byte {
+func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, sunIntensity, skyAmbientMix float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) []byte {
 	buf := make([]byte, 288)
 	lightingQuality = lightingQuality.WithDefaults()
 
@@ -300,7 +300,7 @@ func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, light
 	binary.LittleEndian.PutUint32(buf[208:], math.Float32bits(lightPos[0]))
 	binary.LittleEndian.PutUint32(buf[212:], math.Float32bits(lightPos[1]))
 	binary.LittleEndian.PutUint32(buf[216:], math.Float32bits(lightPos[2]))
-	binary.LittleEndian.PutUint32(buf[220:], 0)
+	binary.LittleEndian.PutUint32(buf[220:], math.Float32bits(sunIntensity))
 
 	binary.LittleEndian.PutUint32(buf[224:], math.Float32bits(ambientColor[0]))
 	binary.LittleEndian.PutUint32(buf[228:], math.Float32bits(ambientColor[1]))
@@ -324,8 +324,8 @@ func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, light
 	return buf
 }
 
-func (m *GpuBufferManager) UpdateCamera(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, skyAmbientMix float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) {
-	buf := buildCameraUniformData(viewProj, invView, invProj, camPos, lightPos, ambientColor, skyAmbientMix, debugMode, renderMode, numLights, screenW, screenH, lightingQuality)
+func (m *GpuBufferManager) UpdateCamera(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, sunIntensity, skyAmbientMix float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) {
+	buf := buildCameraUniformData(viewProj, invView, invProj, camPos, lightPos, ambientColor, sunIntensity, skyAmbientMix, debugMode, renderMode, numLights, screenW, screenH, lightingQuality)
 
 	if m.CameraBuf == nil {
 		desc := &wgpu.BufferDescriptor{

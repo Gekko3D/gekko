@@ -128,9 +128,14 @@ func (a *App) Update() {
 	// We assume a default light position or sync it if needed.
 	// Sync with scene light 0 if available
 	lightPos := mgl32.Vec3{500, 1000, 500}
+	sunIntensity := float32(1.0)
 	if len(a.Scene.Lights) > 0 {
 		lp := a.Scene.Lights[0].Position
 		lightPos = mgl32.Vec3{lp[0], lp[1], lp[2]}
+		sunIntensity = a.Scene.Lights[0].Color[3]
+		if sunIntensity < 0 {
+			sunIntensity = 0
+		}
 	}
 
 	// Matrices
@@ -234,7 +239,7 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, a.Scene.SkyAmbientMix, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height, lightingQuality)
+	a.BufferManager.UpdateCamera(viewProj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, sunIntensity, a.Scene.SkyAmbientMix, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height, lightingQuality)
 	a.BufferManager.EstimateTiledLightMetrics(a.Scene, viewProj, invView, a.Camera.Position)
 	a.Profiler.SetCount("LightListEntriesAvg", a.BufferManager.TileLightAvgCount)
 	a.Profiler.SetCount("LightListEntriesMax", a.BufferManager.TileLightMaxCount)
@@ -421,18 +426,20 @@ func (a *App) Render() {
 	a.Profiler.EndScope("Shadows")
 
 	hasLocalLights := a.BufferManager.HasLocalLights(a.Scene)
+	hasSceneLights := len(a.Scene.Lights) > 0
 	hasTransparentOverlay := a.BufferManager.HasVisibleTransparentOverlay(a.Scene)
 	hasParticleContribution := a.BufferManager.HasParticleContribution()
 	hasSpriteContribution := a.BufferManager.HasSpriteContribution()
 	hasCAVolumeContribution := a.BufferManager.HasCAVolumeContribution()
 	needsAccumulation := hasTransparentOverlay || hasParticleContribution || hasSpriteContribution || hasCAVolumeContribution
 	a.Profiler.SetCount("LocalLights", boolToCount(hasLocalLights))
+	a.Profiler.SetCount("SceneLights", boolToCount(hasSceneLights))
 	a.Profiler.SetCount("TransparentOverlay", boolToCount(hasTransparentOverlay))
 	a.Profiler.SetCount("AccumulationActive", boolToCount(needsAccumulation))
 
 	// Lighting Pass
 	a.Profiler.BeginScope("Tile Light Cull")
-	if hasLocalLights {
+	if hasSceneLights {
 		a.BufferManager.DispatchTiledLightCull(encoder, a.TiledLightCullPipeline)
 	}
 	a.Profiler.EndScope("Tile Light Cull")

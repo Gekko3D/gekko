@@ -651,6 +651,10 @@ func syncVoxelRtCelestialBodies(state *VoxelRtState, cmd *Commands) {
 		cloudSharpness := defaultCelestialPositive(body.CloudSharpness, 1.0)
 		cloudDriftSpeed := defaultCelestialPositive(body.CloudDriftSpeed, 0.015)
 		cloudBanding := defaultCelestialNonNegative(body.CloudBanding, 0.22)
+		surfaceBiomeMix := body.SurfaceBiomeMix
+		cloudTintWarmth := body.CloudTintWarmth
+		nightSideFill := body.NightSideFill
+		terminatorSoftness := body.TerminatorSoftness
 		pending = append(pending, pendingBody{
 			entityID: eid,
 			body: app_rt.CelestialBodyRenderData{
@@ -662,7 +666,8 @@ func syncVoxelRtCelestialBodies(state *VoxelRtState, cmd *Commands) {
 				Noise:           [4]float32{body.SurfaceSeed, body.SurfaceNoiseScale, body.CloudSeed, body.CloudNoiseScale},
 				ArtPrimary:      [4]float32{atmosphereDensity, atmosphereFalloff, atmosphereGlow, cloudOpacity},
 				ArtSecondary:    [4]float32{cloudSharpness, cloudDriftSpeed, cloudBanding, 0},
-				Flags:           [4]float32{boolToFloat32(body.DisableSurface), 0, 0, 0},
+				ArtTertiary:     [4]float32{surfaceBiomeMix, cloudTintWarmth, nightSideFill, terminatorSoftness},
+				Flags:           [4]float32{boolToFloat32(body.DisableSurface), defaultCelestialNonNegative(body.SurfaceOcclusionBias, 0), 0, 0},
 			},
 		})
 		return true

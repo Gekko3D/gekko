@@ -304,25 +304,29 @@ func TestSyncVoxelRtCelestialBodiesCopiesSortedBodies(t *testing.T) {
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{10, -50, 30}},
 		&CelestialBodyComponent{
-			Radius:            120,
-			AtmosphereRadius:  128,
-			CloudRadius:       124,
-			SurfaceColor:      [3]float32{0.2, 0.3, 0.4},
-			AtmosphereColor:   [3]float32{0.4, 0.6, 0.9},
-			CloudColor:        [3]float32{0.9, 0.9, 0.95},
-			CloudCoverage:     0.65,
-			AtmosphereDensity: 1.2,
-			AtmosphereFalloff: 1.6,
-			AtmosphereGlow:    0.9,
-			CloudOpacity:      0.45,
-			CloudSharpness:    1.3,
-			CloudDriftSpeed:   0.02,
-			CloudBanding:      0.35,
-			Emission:          0.1,
-			SurfaceSeed:       11,
-			SurfaceNoiseScale: 3.5,
-			CloudSeed:         19,
-			CloudNoiseScale:   6.5,
+			Radius:             120,
+			AtmosphereRadius:   128,
+			CloudRadius:        124,
+			SurfaceColor:       [3]float32{0.2, 0.3, 0.4},
+			AtmosphereColor:    [3]float32{0.4, 0.6, 0.9},
+			CloudColor:         [3]float32{0.9, 0.9, 0.95},
+			CloudCoverage:      0.65,
+			AtmosphereDensity:  1.2,
+			AtmosphereFalloff:  1.6,
+			AtmosphereGlow:     0.9,
+			CloudOpacity:       0.45,
+			CloudSharpness:     1.3,
+			CloudDriftSpeed:    0.02,
+			CloudBanding:       0.35,
+			SurfaceBiomeMix:    0.7,
+			CloudTintWarmth:    0.25,
+			NightSideFill:      0.6,
+			TerminatorSoftness: 0.4,
+			Emission:           0.1,
+			SurfaceSeed:        11,
+			SurfaceNoiseScale:  3.5,
+			CloudSeed:          19,
+			CloudNoiseScale:    6.5,
 		},
 	)
 	app.FlushCommands()
@@ -347,6 +351,9 @@ func TestSyncVoxelRtCelestialBodiesCopiesSortedBodies(t *testing.T) {
 	}
 	if body.ArtSecondary != [4]float32{1.3, 0.02, 0.35, 0} {
 		t.Fatalf("unexpected body art secondary %+v", body.ArtSecondary)
+	}
+	if body.ArtTertiary != [4]float32{0.7, 0.25, 0.6, 0.4} {
+		t.Fatalf("unexpected body art tertiary %+v", body.ArtTertiary)
 	}
 	if body.Flags[0] != 0 {
 		t.Fatalf("unexpected body flags %+v", body.Flags)
