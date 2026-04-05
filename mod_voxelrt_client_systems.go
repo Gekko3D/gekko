@@ -350,6 +350,56 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync CA")
 
+	state.RtApp.Profiler.BeginScope("Sync Media")
+	gpuMedia := make([]gpu_rt.AnalyticMediumHost, 0, 4)
+	MakeQuery2[TransformComponent, AnalyticMediumComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, medium *AnalyticMediumComponent) bool {
+		if medium == nil || tr == nil || !medium.Enabled() {
+			return true
+		}
+
+		gpuMedia = append(gpuMedia, gpu_rt.AnalyticMediumHost{
+			EntityID:                  uint32(eid),
+			Shape:                     uint32(medium.NormalizedShape()),
+			Position:                  medium.WorldCenter(tr),
+			Rotation:                  medium.WorldRotation(tr),
+			OuterRadius:               medium.NormalizedOuterRadius(),
+			InnerRadius:               medium.NormalizedInnerRadius(),
+			BoxExtents:                medium.NormalizedBoxExtents(),
+			Density:                   medium.Density,
+			Falloff:                   medium.NormalizedFalloff(),
+			EdgeSoftness:              medium.NormalizedEdgeSoftness(),
+			PhaseG:                    medium.NormalizedPhaseG(),
+			LightStrength:             medium.NormalizedLightStrength(),
+			AmbientStrength:           medium.NormalizedAmbientStrength(),
+			LimbStrength:              medium.NormalizedLimbStrength(),
+			LimbExponent:              medium.NormalizedLimbExponent(),
+			DiskHazeStrength:          medium.NormalizedDiskHazeStrength(),
+			DiskHazeTintMix:           medium.NormalizedDiskHazeTintMix(),
+			OpaqueExtinctionScale:     medium.NormalizedOpaqueExtinctionScale(),
+			BackgroundExtinctionScale: medium.NormalizedBackgroundExtinctionScale(),
+			BoundaryFadeStart:         medium.NormalizedBoundaryFadeStart(),
+			BoundaryFadeEnd:           medium.NormalizedBoundaryFadeEnd(),
+			OpaqueAlphaScale:          medium.NormalizedOpaqueAlphaScale(),
+			BackgroundAlphaScale:      medium.NormalizedBackgroundAlphaScale(),
+			OpaqueRevealScale:         medium.NormalizedOpaqueRevealScale(),
+			BackgroundRevealScale:     medium.NormalizedBackgroundRevealScale(),
+			Color:                     medium.NormalizedColor(),
+			AbsorptionColor:           medium.NormalizedAbsorptionColor(),
+			EmissionColor:             medium.NormalizedEmissionColor(),
+			NoiseScale:                medium.NormalizedNoiseScale(),
+			NoiseStrength:             medium.NormalizedNoiseStrength(),
+			SampleCount:               uint32(medium.NormalizedSampleCount()),
+		})
+		return true
+	})
+	sort.Slice(gpuMedia, func(i, j int) bool {
+		return gpuMedia[i].EntityID < gpuMedia[j].EntityID
+	})
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateAnalyticMedia(gpuMedia)
+	}
+	state.RtApp.Profiler.EndScope("Sync Media")
+
 	state.RtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
 		state.RtApp.Camera.Position = camera.Position

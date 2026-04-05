@@ -19,7 +19,7 @@ const (
 
 	// Texture Atlas Constants
 	MaxVoxelAtlasPages = 4
-	AtlasBricksPerSide = 128                                    // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
+	AtlasBricksPerSide = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
 	AtlasSize          = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
 	BrickRecordSize    = 20
 
@@ -91,6 +91,40 @@ type CAVolumeHost struct {
 	ScatterColor    [3]float32
 	ShadowTint      [3]float32
 	AbsorptionColor [3]float32
+}
+
+type AnalyticMediumHost struct {
+	EntityID                  uint32
+	Shape                     uint32
+	Position                  mgl32.Vec3
+	Rotation                  mgl32.Quat
+	OuterRadius               float32
+	InnerRadius               float32
+	BoxExtents                [3]float32
+	Density                   float32
+	Falloff                   float32
+	EdgeSoftness              float32
+	PhaseG                    float32
+	LightStrength             float32
+	AmbientStrength           float32
+	LimbStrength              float32
+	LimbExponent              float32
+	DiskHazeStrength          float32
+	DiskHazeTintMix           float32
+	OpaqueExtinctionScale     float32
+	BackgroundExtinctionScale float32
+	BoundaryFadeStart         float32
+	BoundaryFadeEnd           float32
+	OpaqueAlphaScale          float32
+	BackgroundAlphaScale      float32
+	OpaqueRevealScale         float32
+	BackgroundRevealScale     float32
+	Color                     [3]float32
+	AbsorptionColor           [3]float32
+	EmissionColor             [3]float32
+	NoiseScale                float32
+	NoiseStrength             float32
+	SampleCount               uint32
 }
 
 type CAPresetData struct {
@@ -274,34 +308,41 @@ type GpuBufferManager struct {
 	StorageView    *wgpu.TextureView
 
 	// GPU cellular automata + volumetric rendering
-	CAVolumeBuf            *wgpu.Buffer
-	CABoundsBuf            *wgpu.Buffer
-	CAParamsBuf            *wgpu.Buffer
-	CAPresetBuf            *wgpu.Buffer
-	CAFieldTexA            *wgpu.Texture
-	CAFieldTexB            *wgpu.Texture
-	CAFieldViewA           *wgpu.TextureView
-	CAFieldViewB           *wgpu.TextureView
-	CAVolumeSimPipeline    *wgpu.ComputePipeline
-	CAVolumeBoundsPipeline *wgpu.ComputePipeline
-	CAVolumeSimBG0         *wgpu.BindGroup
-	CAVolumeSimBG1A        *wgpu.BindGroup
-	CAVolumeSimBG1B        *wgpu.BindGroup
-	CAVolumeBoundsBG0      *wgpu.BindGroup
-	CAVolumeBoundsBG1A     *wgpu.BindGroup
-	CAVolumeBoundsBG1B     *wgpu.BindGroup
-	CAVolumeRenderBG0      *wgpu.BindGroup
-	CAVolumeRenderBG1A     *wgpu.BindGroup
-	CAVolumeRenderBG1B     *wgpu.BindGroup
-	CAVolumeRenderBG2      *wgpu.BindGroup
-	CAVolumeCount          uint32
-	CAAtlasWidth           uint32
-	CAAtlasHeight          uint32
-	CAAtlasDepth           uint32
-	CAFieldIndex           int
-	CAElapsedTime          float32
-	CAVolumeBindingsDirty  bool
-	caLayout               []caVolumeLayout
+	CAVolumeBuf                 *wgpu.Buffer
+	CABoundsBuf                 *wgpu.Buffer
+	CAParamsBuf                 *wgpu.Buffer
+	CAPresetBuf                 *wgpu.Buffer
+	AnalyticMediumBuf           *wgpu.Buffer
+	AnalyticMediumParamsBuf     *wgpu.Buffer
+	CAFieldTexA                 *wgpu.Texture
+	CAFieldTexB                 *wgpu.Texture
+	CAFieldViewA                *wgpu.TextureView
+	CAFieldViewB                *wgpu.TextureView
+	CAVolumeSimPipeline         *wgpu.ComputePipeline
+	CAVolumeBoundsPipeline      *wgpu.ComputePipeline
+	CAVolumeSimBG0              *wgpu.BindGroup
+	CAVolumeSimBG1A             *wgpu.BindGroup
+	CAVolumeSimBG1B             *wgpu.BindGroup
+	CAVolumeBoundsBG0           *wgpu.BindGroup
+	CAVolumeBoundsBG1A          *wgpu.BindGroup
+	CAVolumeBoundsBG1B          *wgpu.BindGroup
+	CAVolumeRenderBG0           *wgpu.BindGroup
+	CAVolumeRenderBG1A          *wgpu.BindGroup
+	CAVolumeRenderBG1B          *wgpu.BindGroup
+	CAVolumeRenderBG2           *wgpu.BindGroup
+	CAVolumeCount               uint32
+	AnalyticMediumBG0           *wgpu.BindGroup
+	AnalyticMediumBG1           *wgpu.BindGroup
+	AnalyticMediumBG2           *wgpu.BindGroup
+	AnalyticMediumCount         uint32
+	CAAtlasWidth                uint32
+	CAAtlasHeight               uint32
+	CAAtlasDepth                uint32
+	CAFieldIndex                int
+	CAElapsedTime               float32
+	CAVolumeBindingsDirty       bool
+	AnalyticMediumBindingsDirty bool
+	caLayout                    []caVolumeLayout
 
 	// Batch update tracking
 	BatchMode      bool                       // Enable batching of updates within a frame
@@ -428,6 +469,8 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("TileLightIndicesBuf", &m.TileLightIndicesBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("CABoundsBuf", &m.CABoundsBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, nil, wgpu.BufferUsageStorage, 4096)
+	m.ensureBuffer("AnalyticMediumBuf", &m.AnalyticMediumBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("AnalyticMediumParamsBuf", &m.AnalyticMediumParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("SpriteBuf", &m.SpriteBuf, nil, wgpu.BufferUsageStorage, 1024)
 
 	return m

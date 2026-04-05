@@ -25,12 +25,13 @@ type App struct {
 
 	DebugComputePipeline *wgpu.ComputePipeline
 
-	RenderPipeline      *wgpu.RenderPipeline
-	ParticlesPipeline   *wgpu.RenderPipeline
-	SpritesPipeline     *wgpu.RenderPipeline
-	TransparentPipeline *wgpu.RenderPipeline
-	CAVolumePipeline    *wgpu.RenderPipeline
-	ResolvePipeline     *wgpu.RenderPipeline
+	RenderPipeline         *wgpu.RenderPipeline
+	ParticlesPipeline      *wgpu.RenderPipeline
+	SpritesPipeline        *wgpu.RenderPipeline
+	TransparentPipeline    *wgpu.RenderPipeline
+	CAVolumePipeline       *wgpu.RenderPipeline
+	AnalyticMediumPipeline *wgpu.RenderPipeline
+	ResolvePipeline        *wgpu.RenderPipeline
 
 	ResolveBG *wgpu.BindGroup
 
@@ -107,13 +108,14 @@ type App struct {
 const DefaultUIFontSize = 26.0
 
 type AppFeatureFlags struct {
-	Text         bool
-	Gizmos       bool
-	Skybox       bool
-	CAVolumes    bool
-	Transparency bool
-	Particles    bool
-	Sprites      bool
+	Text          bool
+	Gizmos        bool
+	Skybox        bool
+	CAVolumes     bool
+	AnalyticMedia bool
+	Transparency  bool
+	Particles     bool
+	Sprites       bool
 }
 
 type AppFeatureConfig struct {
@@ -125,13 +127,14 @@ type AppFeatureConfig struct {
 
 func DefaultFeatureFlags() AppFeatureFlags {
 	return AppFeatureFlags{
-		Text:         true,
-		Gizmos:       true,
-		Skybox:       true,
-		CAVolumes:    true,
-		Transparency: true,
-		Particles:    true,
-		Sprites:      true,
+		Text:          true,
+		Gizmos:        true,
+		Skybox:        true,
+		CAVolumes:     true,
+		AnalyticMedia: true,
+		Transparency:  true,
+		Particles:     true,
+		Sprites:       true,
 	}
 }
 

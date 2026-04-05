@@ -40,6 +40,9 @@ var CAVolumeBoundsWGSL string
 //go:embed ca_volume_render.wgsl
 var CAVolumeRenderWGSL string
 
+//go:embed analytic_medium.wgsl
+var AnalyticMediumWGSL string
+
 /**
  */
 //go:embed transparent_overlay.wgsl

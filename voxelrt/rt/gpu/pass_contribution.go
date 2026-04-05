@@ -53,3 +53,11 @@ func (m *GpuBufferManager) HasCAVolumeContribution() bool {
 		m.CurrentCAVolumeRenderBG1() != nil &&
 		m.CAVolumeRenderBG2 != nil
 }
+
+func (m *GpuBufferManager) HasAnalyticMediumContribution() bool {
+	return m != nil &&
+		m.AnalyticMediumCount > 0 &&
+		m.AnalyticMediumBG0 != nil &&
+		m.AnalyticMediumBG1 != nil &&
+		m.AnalyticMediumBG2 != nil
+}

@@ -64,6 +64,9 @@ func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
 	if flags.CAVolumes {
 		defaults = append(defaults, &CAVolumeFeature{})
 	}
+	if flags.AnalyticMedia {
+		defaults = append(defaults, &AnalyticMediumFeature{})
+	}
 	if flags.Transparency {
 		defaults = append(defaults, &TransparencyFeature{})
 	}

@@ -96,6 +96,9 @@ func TestHasContributionHelpersReflectBoundState(t *testing.T) {
 	if manager.HasCAVolumeContribution() {
 		t.Fatal("expected empty CA volume state to skip accumulation")
 	}
+	if manager.HasAnalyticMediumContribution() {
+		t.Fatal("expected empty analytic medium state to skip accumulation")
+	}
 }
 
 func TestHasParticleContributionRequiresActivatedSystem(t *testing.T) {
