@@ -77,6 +77,18 @@ type VoxelObject struct {
 	TerrainChunkSize       int
 }
 
+func (obj *VoxelObject) HasTransparency() bool {
+	if obj == nil {
+		return false
+	}
+	for _, mat := range obj.MaterialTable {
+		if mat.HasTransparency() {
+			return true
+		}
+	}
+	return false
+}
+
 func NewVoxelObject() *VoxelObject {
 	return &VoxelObject{
 		Transform:             NewTransform(),
@@ -144,27 +156,31 @@ func max(a, b float32) float32 {
 }
 
 type Scene struct {
-	Objects             []*VoxelObject
-	VisibleObjects      []*VoxelObject
-	ShadowObjects       []*VoxelObject
-	BVHNodesBytes       []byte // Linearized BVH nodes
-	ShadowBVHNodesBytes []byte
-	lastVisibleBVH      []*VoxelObject
-	lastShadowBVH       []*VoxelObject
-	visibleBVHRevision  uint64
-	shadowBVHRevision   uint64
-	Lights              []Light
-	Gizmos              []Gizmo
-	AmbientLight        mgl32.Vec3
-	SkyAmbientMix       float32
-	TargetVoxelSize     float32
-	lastVisibleCount    int
-	StructureRevision   uint64
-	OcclusionStats      OcclusionStats
-	lastVisibility      map[*VoxelObject]bool
-	occlusionWarmup     map[*VoxelObject]int
-	occlusionGrace      map[*VoxelObject]int
-	lastOcclusionDirty  map[*VoxelObject]bool
+	Objects                   []*VoxelObject
+	VisibleObjects            []*VoxelObject
+	TransparentVisibleObjects []*VoxelObject
+	ShadowObjects             []*VoxelObject
+	BVHNodesBytes             []byte // Linearized BVH nodes
+	TransparentBVHNodesBytes  []byte
+	ShadowBVHNodesBytes       []byte
+	lastVisibleBVH            []*VoxelObject
+	lastTransparentVisibleBVH []*VoxelObject
+	lastShadowBVH             []*VoxelObject
+	visibleBVHRevision        uint64
+	transparentBVHRevision    uint64
+	shadowBVHRevision         uint64
+	Lights                    []Light
+	Gizmos                    []Gizmo
+	AmbientLight              mgl32.Vec3
+	SkyAmbientMix             float32
+	TargetVoxelSize           float32
+	lastVisibleCount          int
+	StructureRevision         uint64
+	OcclusionStats            OcclusionStats
+	lastVisibility            map[*VoxelObject]bool
+	occlusionWarmup           map[*VoxelObject]int
+	occlusionGrace            map[*VoxelObject]int
+	lastOcclusionDirty        map[*VoxelObject]bool
 }
 
 func NewScene() *Scene {
@@ -334,6 +350,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	// Culling: Populate VisibleObjects
 	opts.Profiler.BeginScope("Commit: Culling")
 	s.VisibleObjects = s.VisibleObjects[:0] // Clear but keep capacity
+	s.TransparentVisibleObjects = s.TransparentVisibleObjects[:0]
 	s.OcclusionStats = OcclusionStats{}
 
 	depthSlack := opts.DepthSlack
@@ -384,6 +401,9 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		}
 
 		s.VisibleObjects = append(s.VisibleObjects, obj)
+		if obj.HasTransparency() {
+			s.TransparentVisibleObjects = append(s.TransparentVisibleObjects, obj)
+		}
 		s.lastVisibility[obj] = true
 		if !occluded {
 			delete(s.occlusionWarmup, obj)
@@ -413,6 +433,26 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		s.lastVisibleBVH = append(s.lastVisibleBVH[:0], s.VisibleObjects...)
 	}
 	opts.Profiler.EndScope("Commit: BVH")
+
+	if s.shouldRebuildBVH(s.TransparentVisibleObjects, s.lastTransparentVisibleBVH, dirtyAABBs, s.TransparentBVHNodesBytes) {
+		if len(s.TransparentVisibleObjects) > 0 {
+			aabbs := make([][2]mgl32.Vec3, len(s.TransparentVisibleObjects))
+			for i, obj := range s.TransparentVisibleObjects {
+				if obj.WorldAABB != nil {
+					aabbs[i] = *obj.WorldAABB
+				} else {
+					aabbs[i] = [2]mgl32.Vec3{{0, 0, 0}, {0, 0, 0}}
+				}
+			}
+
+			builder := &bvh.TLASBuilder{}
+			s.TransparentBVHNodesBytes = builder.Build(aabbs)
+		} else {
+			s.TransparentBVHNodesBytes = make([]byte, 64)
+		}
+		s.transparentBVHRevision++
+		s.lastTransparentVisibleBVH = append(s.lastTransparentVisibleBVH[:0], s.TransparentVisibleObjects...)
+	}
 
 	opts.Profiler.BeginScope("Commit: Shadows")
 

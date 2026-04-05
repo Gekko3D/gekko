@@ -966,6 +966,71 @@ fn calculate_lighting(
   return total_light;
 }
 
+struct SurfaceGlassSample {
+  surface_rgb: vec3<f32>,
+  throughput: vec3<f32>,
+  refract_off: vec2<f32>,
+};
+
+fn evaluate_surface_glass(
+  pos_ws: vec3<f32>,
+  n_ws: vec3<f32>,
+  base_col: vec3<f32>,
+  roughness: f32,
+  metalness: f32,
+  ior: f32,
+  emissive: vec3<f32>,
+  two_sided_lighting: bool,
+  shadow_group_id: u32,
+  shadow_seam_epsilon: f32,
+  tile_index: u32,
+  view_dir: vec3<f32>,
+  opacity: f32,
+  transmission: f32,
+  refraction_strength: f32,
+  travel_dist: f32
+) -> SurfaceGlassSample {
+  let surface_light = calculate_lighting(
+    pos_ws,
+    n_ws,
+    base_col,
+    roughness,
+    metalness,
+    ior,
+    emissive,
+    two_sided_lighting,
+    shadow_group_id,
+    shadow_seam_epsilon,
+    tile_index,
+  );
+  let dielectric_f0 = dielectric_f0_from_ior(max(ior, 1.001));
+  let F0 = mix(dielectric_f0, base_col, metalness);
+  let NdotV = saturate(abs(dot(n_ws, view_dir)));
+  let fresnel = fresnel_schlick(NdotV, F0);
+  let tint = mix(vec3<f32>(1.0), base_col, 0.22 + 0.32 * saturate(transmission));
+  let surface_opacity = clamp(pow(opacity, 0.8) * 0.95 + 0.02, 0.02, 0.97);
+  let optical_thickness = clamp(travel_dist, 0.15, 18.0);
+  let surface_density = 0.08 + surface_opacity * 1.65;
+  let sigma_a = absorption_coefficient(base_col, max(transmission, 0.2), surface_density);
+  let beer = exp(-sigma_a * optical_thickness * 0.32);
+  let throughput = clamp(
+    tint * beer * (vec3<f32>(1.0) - fresnel) * (1.0 - surface_opacity * 0.12),
+    vec3<f32>(0.0),
+    vec3<f32>(0.995),
+  );
+  let extinction = vec3<f32>(1.0) - beer;
+  let reflectivity = clamp(fresnel + extinction * 0.55 + vec3<f32>(surface_opacity * 0.18), vec3<f32>(0.0), vec3<f32>(1.0));
+  let refract_off = refraction_uv_offset(
+    pos_ws,
+    n_ws,
+    view_dir,
+    max(ior, 1.001),
+    max(refraction_strength, 0.05),
+    max(travel_dist, 0.35),
+  );
+  return SurfaceGlassSample(surface_light * reflectivity, throughput, refract_off);
+}
+
 // ============== VS/FS ==============
 struct VSOut {
   @builtin(position) position : vec4<f32>,
@@ -1008,6 +1073,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   var distortion_weight = 0.0;
   var front_z = 1.0;
   var hit_transparent = false;
+  var surface_done = false;
 
   var stack: array<i32, 64>;
   var sp = 0;
@@ -1124,7 +1190,38 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
                               let view_dir = normalize(uCamera.cam_pos.xyz - pos_ws);
                               let opacity = clamp(1.0 - trans, 0.0, 1.0);
-                              let is_volumetric = transmission > 0.01 || density > 0.01 || refraction_strength > 0.01;
+                              let surface_glass = transmission > 0.01 && density <= 0.01;
+                              let is_volumetric = density > 0.01;
+                              if (surface_glass) {
+                                let glass = evaluate_surface_glass(
+                                  pos_ws,
+                                  n_ws,
+                                  base_col,
+                                  pbr.x,
+                                  pbr.y,
+                                  pbr.z,
+                                  emissive,
+                                  two_sided_lighting,
+                                  params.shadow_group_id,
+                                  shadow_seam_epsilon,
+                                  tile_index,
+                                  view_dir,
+                                  opacity,
+                                  transmission,
+                                  refraction_strength,
+                                  max((t_max_obj - t_micro) * d_ws_scale, 0.35),
+                                );
+                                if (!hit_transparent) {
+                                  front_z = z;
+                                  hit_transparent = true;
+                                }
+                                distortion_sum += glass.refract_off;
+                                distortion_weight += 1.0;
+                                surface_rgb += throughput * glass.surface_rgb;
+                                throughput *= glass.throughput;
+                                surface_done = true;
+                                break;
+                              }
                               let medium_density = max(density, 0.02);
                               refractive_path_ws += dt_ws * (0.85 + min(medium_density, 3.0) * 0.3);
                               let coverage_sigma = max(0.015, medium_density * mix(0.25, 1.0, opacity));
@@ -1158,6 +1255,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                             t_micro += EPS;
                             if (t_micro >= t_limit) { break; }
                           }
+                          if (surface_done) { break; }
                         }
                       } else {
                         var t_micro = t_brick;
@@ -1213,7 +1311,38 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
                                   let view_dir = normalize(uCamera.cam_pos.xyz - pos_ws);
                                   let opacity = clamp(1.0 - trans, 0.0, 1.0);
-                                  let is_volumetric = transmission > 0.01 || density > 0.01 || refraction_strength > 0.01;
+                                  let surface_glass = transmission > 0.01 && density <= 0.01;
+                                  let is_volumetric = density > 0.01;
+                                  if (surface_glass) {
+                                    let glass = evaluate_surface_glass(
+                                      pos_ws,
+                                      n_ws,
+                                      base_col,
+                                      pbr.x,
+                                      pbr.y,
+                                      pbr.z,
+                                      emissive,
+                                      two_sided_lighting,
+                                      params.shadow_group_id,
+                                      shadow_seam_epsilon,
+                                      tile_index,
+                                      view_dir,
+                                      opacity,
+                                      transmission,
+                                      refraction_strength,
+                                      max((t_max_obj - t_micro) * d_ws_scale, 0.35),
+                                    );
+                                    if (!hit_transparent) {
+                                      front_z = z;
+                                      hit_transparent = true;
+                                    }
+                                    distortion_sum += glass.refract_off;
+                                    distortion_weight += 1.0;
+                                    surface_rgb += throughput * glass.surface_rgb;
+                                    throughput *= glass.throughput;
+                                    surface_done = true;
+                                    break;
+                                  }
                                   let medium_density = max(density, 0.02);
                                   refractive_path_ws += dt_ws * (0.85 + min(medium_density, 3.0) * 0.3);
                                   let coverage_sigma = max(0.015, medium_density * mix(0.25, 1.0, opacity));
@@ -1250,9 +1379,12 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                           t_micro += EPS;
                           if (t_micro >= t_limit) { break; }
                         }
+                        if (surface_done) { break; }
                       }
                     }
                   }
+
+                  if (surface_done) { break; }
 
                   if (t_max_brick.x < t_max_brick.y) {
                     if (t_max_brick.x < t_max_brick.z) { brick_pos.x += step.x; t_brick = t_max_brick.x; t_max_brick.x += t_delta_brick.x; }
@@ -1266,6 +1398,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                 }
               }
 
+              if (surface_done) { break; }
+
               if (t_max_sector.x < t_max_sector.y) {
                 if (t_max_sector.x < t_max_sector.z) { sector_pos.x += step.x; t_curr = t_max_sector.x; t_max_sector.x += t_delta_sector.x; }
                 else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
@@ -1274,13 +1408,16 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                 else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
               }
             }
+            if (surface_done) { break; }
           }
         }
+        if (surface_done) { break; }
       } else {
         if (node.left != -1 && sp < 64) { stack[sp] = node.left; sp += 1; }
         if (node.right != -1 && sp < 64) { stack[sp] = node.right; sp += 1; }
       }
     }
+    if (surface_done) { break; }
   }
 
   if (!hit_transparent) {

@@ -182,12 +182,16 @@ func TestSceneCommitSkipsBVHRebuildOnStableFrame(t *testing.T) {
 
 	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
 	visibleRevision := scene.visibleBVHRevision
+	transparentRevision := scene.transparentBVHRevision
 	shadowRevision := scene.shadowBVHRevision
 
 	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
 
 	if scene.visibleBVHRevision != visibleRevision {
 		t.Fatalf("expected visible BVH revision to remain %d on stable frame, got %d", visibleRevision, scene.visibleBVHRevision)
+	}
+	if scene.transparentBVHRevision != transparentRevision {
+		t.Fatalf("expected transparent BVH revision to remain %d on stable frame, got %d", transparentRevision, scene.transparentBVHRevision)
 	}
 	if scene.shadowBVHRevision != shadowRevision {
 		t.Fatalf("expected shadow BVH revision to remain %d on stable frame, got %d", shadowRevision, scene.shadowBVHRevision)
@@ -204,6 +208,7 @@ func TestSceneCommitRebuildsBVHWhenVisibleObjectChangesAABB(t *testing.T) {
 
 	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
 	visibleRevision := scene.visibleBVHRevision
+	transparentRevision := scene.transparentBVHRevision
 	shadowRevision := scene.shadowBVHRevision
 
 	obj.Transform.Position = mgl32.Vec3{2, 0, -10}
@@ -214,8 +219,47 @@ func TestSceneCommitRebuildsBVHWhenVisibleObjectChangesAABB(t *testing.T) {
 	if scene.visibleBVHRevision != visibleRevision+1 {
 		t.Fatalf("expected visible BVH revision to increment to %d, got %d", visibleRevision+1, scene.visibleBVHRevision)
 	}
+	if scene.transparentBVHRevision != transparentRevision {
+		t.Fatalf("expected transparent BVH revision to remain %d for opaque-only scene, got %d", transparentRevision, scene.transparentBVHRevision)
+	}
 	if scene.shadowBVHRevision != shadowRevision+1 {
 		t.Fatalf("expected shadow BVH revision to increment to %d, got %d", shadowRevision+1, scene.shadowBVHRevision)
+	}
+}
+
+func TestSceneCommitBuildsTransparentSubsetAndBVH(t *testing.T) {
+	scene := NewScene()
+
+	opaque := NewVoxelObject()
+	opaque.Transform.Position = mgl32.Vec3{0, 0, -10}
+	opaque.XBrickMap.SetVoxel(0, 0, 0, 1)
+	opaque.MaterialTable = []Material{
+		DefaultMaterial(),
+	}
+
+	glass := NewVoxelObject()
+	glass.Transform.Position = mgl32.Vec3{2, 0, -10}
+	glass.XBrickMap.SetVoxel(0, 0, 0, 1)
+	glass.MaterialTable = []Material{
+		DefaultMaterial(),
+		{Transparency: 0.4},
+	}
+
+	scene.AddObject(opaque)
+	scene.AddObject(glass)
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{})
+
+	if got := len(scene.VisibleObjects); got != 2 {
+		t.Fatalf("expected 2 visible objects, got %d", got)
+	}
+	if got := len(scene.TransparentVisibleObjects); got != 1 {
+		t.Fatalf("expected 1 transparent visible object, got %d", got)
+	}
+	if scene.TransparentVisibleObjects[0] != glass {
+		t.Fatalf("expected glass object in transparent subset")
+	}
+	if len(scene.TransparentBVHNodesBytes) == 0 {
+		t.Fatal("expected transparent BVH to be built")
 	}
 }
 

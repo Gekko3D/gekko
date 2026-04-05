@@ -340,11 +340,13 @@ func (s *VoxelRtState) buildMaterialTable(key materialTableCacheKey, gekkoPalett
 			}
 		}
 		if mat.Transparency > 0.001 && mat.Transmission <= 0.0 && mat.Metalness < 0.5 {
+			// Palette alpha usually represents a thin surface such as glass, not a
+			// fully volumetric medium. Keep transmission enabled so the
+			// transparency pass can refract, but leave density at zero so the
+			// shader can take the cheap surface-glass path instead of marching
+			// through the full filled voxel volume.
 			opacity := 1.0 - mat.Transparency
 			mat.Transmission = 1.0
-			if mat.Density <= 0.0 {
-				mat.Density = clampF(0.12+opacity*0.9, 0.08, 1.2)
-			}
 			if mat.Refraction <= 0.0 {
 				mat.Refraction = clampF((mat.IOR-1.0)*(0.24+opacity*0.6), 0.0, 0.65)
 			}

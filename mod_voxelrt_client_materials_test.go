@@ -99,7 +99,7 @@ func TestBuildMaterialTable_MagicaVoxelEmitUsesFlux(t *testing.T) {
 	}
 }
 
-func TestBuildMaterialTable_PaletteAlphaGetsVolumetricDefaults(t *testing.T) {
+func TestBuildMaterialTable_PaletteAlphaGetsSurfaceGlassDefaults(t *testing.T) {
 	state := &VoxelRtState{materialTableCache: make(map[materialTableCacheKey][]core.Material)}
 	var palette VoxPalette
 	palette[4] = [4]uint8{200, 220, 255, 204} // 0.8 alpha -> light glassy sphere
@@ -115,8 +115,8 @@ func TestBuildMaterialTable_PaletteAlphaGetsVolumetricDefaults(t *testing.T) {
 	if mat.Transmission < 0.99 {
 		t.Fatalf("expected alpha glass to opt into transmission, got %f", mat.Transmission)
 	}
-	if mat.Density < 0.8 {
-		t.Fatalf("expected alpha glass density to support volumetric absorption, got %f", mat.Density)
+	if mat.Density != 0.0 {
+		t.Fatalf("expected alpha glass density to stay zero for surface-glass path, got %f", mat.Density)
 	}
 	if mat.Refraction < 0.35 {
 		t.Fatalf("expected alpha glass refraction to be visibly stronger, got %f", mat.Refraction)

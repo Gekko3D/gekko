@@ -19,15 +19,7 @@ func (m *GpuBufferManager) HasVisibleTransparentOverlay(scene *core.Scene) bool 
 	if scene == nil {
 		return false
 	}
-	for _, obj := range scene.VisibleObjects {
-		if obj == nil {
-			continue
-		}
-		if alloc, ok := m.MaterialAllocations[obj]; ok && alloc != nil && alloc.HasTransparency {
-			return true
-		}
-	}
-	return false
+	return len(scene.TransparentVisibleObjects) > 0
 }
 
 func (m *GpuBufferManager) HasSpriteContribution() bool {

@@ -26,6 +26,7 @@ func TestBuildCameraUniformDataPacksExpectedMatrices(t *testing.T) {
 		mgl32.Vec3{4, 5, 6},
 		mgl32.Vec3{0.1, 0.2, 0.3},
 		0.7,
+		0.8,
 		11,
 		12,
 		13,
@@ -43,7 +44,10 @@ func TestBuildCameraUniformDataPacksExpectedMatrices(t *testing.T) {
 	if got := floatAt(buf, 128); got != invProj[0] {
 		t.Fatalf("expected invProj[0] at offset 128, got %v", got)
 	}
-	if got := floatAt(buf, 236); got != 0.7 {
+	if got := floatAt(buf, 220); got != 0.7 {
+		t.Fatalf("expected sun intensity at offset 220, got %v", got)
+	}
+	if got := floatAt(buf, 236); got != 0.8 {
 		t.Fatalf("expected sky ambient mix at offset 236, got %v", got)
 	}
 	if got := binary.LittleEndian.Uint32(buf[244:]); got != 12 {

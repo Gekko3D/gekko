@@ -204,7 +204,11 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	// 1. Instances
 	m.Profiler.BeginScope("Scene: Instances")
 	instData := buildInstanceData(scene.VisibleObjects)
+	transparentInstData := buildInstanceData(scene.TransparentVisibleObjects)
 	if m.ensureBuffer("InstancesBuf", &m.InstancesBuf, instData, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("TransparentInstancesBuf", &m.TransparentInstancesBuf, transparentInstData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 	m.Profiler.EndScope("Scene: Instances")
@@ -214,7 +218,14 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	if len(bvhData) == 0 {
 		bvhData = make([]byte, 64)
 	}
+	transparentBVHData := scene.TransparentBVHNodesBytes
+	if len(transparentBVHData) == 0 {
+		transparentBVHData = make([]byte, 64)
+	}
 	if m.ensureBuffer("BVHNodesBuf", &m.BVHNodesBuf, bvhData, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("TransparentBVHNodesBuf", &m.TransparentBVHNodesBuf, transparentBVHData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 
@@ -258,6 +269,9 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 
 	m.Profiler.BeginScope("Scene: Params")
 	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("TransparentObjectParamsBuf", &m.TransparentObjectParamsBuf, buildObjectParamsData(scene.TransparentVisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {

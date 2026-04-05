@@ -40,31 +40,22 @@ func TestHasLocalLightsDetectsSpotAndPoint(t *testing.T) {
 }
 
 func TestHasVisibleTransparentOverlayUsesVisibleObjects(t *testing.T) {
-	visibleOpaque := core.NewVoxelObject()
-	visibleGlass := core.NewVoxelObject()
-	hiddenGlass := core.NewVoxelObject()
-
-	manager := &GpuBufferManager{
-		MaterialAllocations: map[*core.VoxelObject]*MaterialGpuAllocation{
-			visibleOpaque: {HasTransparency: false},
-			visibleGlass:  {HasTransparency: true},
-			hiddenGlass:   {HasTransparency: true},
-		},
-	}
+	manager := &GpuBufferManager{}
 
 	scene := &core.Scene{
-		VisibleObjects: []*core.VoxelObject{visibleOpaque},
+		VisibleObjects:            []*core.VoxelObject{core.NewVoxelObject()},
+		TransparentVisibleObjects: nil,
 	}
 	if manager.HasVisibleTransparentOverlay(scene) {
 		t.Fatal("expected opaque visible objects to skip transparent overlay")
 	}
 
-	scene.VisibleObjects = []*core.VoxelObject{visibleOpaque, visibleGlass}
+	scene.TransparentVisibleObjects = []*core.VoxelObject{core.NewVoxelObject()}
 	if !manager.HasVisibleTransparentOverlay(scene) {
 		t.Fatal("expected visible transparent object to require transparent overlay")
 	}
 
-	scene.VisibleObjects = []*core.VoxelObject{visibleOpaque, nil}
+	scene.TransparentVisibleObjects = nil
 	if manager.HasVisibleTransparentOverlay(scene) {
 		t.Fatal("expected hidden transparent object to be ignored")
 	}

@@ -156,32 +156,35 @@ type GpuBufferManager struct {
 
 	LightingQuality core.LightingQualityConfig
 
-	CameraBuf            *wgpu.Buffer
-	InstancesBuf         *wgpu.Buffer
-	BVHNodesBuf          *wgpu.Buffer
-	ShadowInstancesBuf   *wgpu.Buffer
-	ShadowBVHNodesBuf    *wgpu.Buffer
-	LightsBuf            *wgpu.Buffer
-	ShadowUpdatesBuf     *wgpu.Buffer
-	ShadowLayerParamsBuf *wgpu.Buffer
-	TileLightParamsBuf   *wgpu.Buffer
-	TileLightHeadersBuf  *wgpu.Buffer
-	TileLightIndicesBuf  *wgpu.Buffer
+	CameraBuf               *wgpu.Buffer
+	InstancesBuf            *wgpu.Buffer
+	BVHNodesBuf             *wgpu.Buffer
+	TransparentInstancesBuf *wgpu.Buffer
+	TransparentBVHNodesBuf  *wgpu.Buffer
+	ShadowInstancesBuf      *wgpu.Buffer
+	ShadowBVHNodesBuf       *wgpu.Buffer
+	LightsBuf               *wgpu.Buffer
+	ShadowUpdatesBuf        *wgpu.Buffer
+	ShadowLayerParamsBuf    *wgpu.Buffer
+	TileLightParamsBuf      *wgpu.Buffer
+	TileLightHeadersBuf     *wgpu.Buffer
+	TileLightIndicesBuf     *wgpu.Buffer
 
-	MaterialBuf           *wgpu.Buffer
-	SectorTableBuf        *wgpu.Buffer
-	BrickTableBuf         *wgpu.Buffer
-	VoxelPayloadTex       [MaxVoxelAtlasPages]*wgpu.Texture
-	VoxelPayloadView      [MaxVoxelAtlasPages]*wgpu.TextureView
-	VoxelPayloadPageSize  uint32
-	VoxelPayloadPageCount uint32
-	VoxelPayloadBricks    uint32
-	ObjectParamsBuf       *wgpu.Buffer
-	ShadowObjectParamsBuf *wgpu.Buffer
-	Tree64Buf             *wgpu.Buffer
-	SectorGridBuf         *wgpu.Buffer
-	SectorGridParamsBuf   *wgpu.Buffer
-	TerrainChunkLookupBuf *wgpu.Buffer
+	MaterialBuf                *wgpu.Buffer
+	SectorTableBuf             *wgpu.Buffer
+	BrickTableBuf              *wgpu.Buffer
+	VoxelPayloadTex            [MaxVoxelAtlasPages]*wgpu.Texture
+	VoxelPayloadView           [MaxVoxelAtlasPages]*wgpu.TextureView
+	VoxelPayloadPageSize       uint32
+	VoxelPayloadPageCount      uint32
+	VoxelPayloadBricks         uint32
+	ObjectParamsBuf            *wgpu.Buffer
+	TransparentObjectParamsBuf *wgpu.Buffer
+	ShadowObjectParamsBuf      *wgpu.Buffer
+	Tree64Buf                  *wgpu.Buffer
+	SectorGridBuf              *wgpu.Buffer
+	SectorGridParamsBuf        *wgpu.Buffer
+	TerrainChunkLookupBuf      *wgpu.Buffer
 
 	// G-Buffer Textures
 	GBufferDepth    *wgpu.Texture
@@ -525,8 +528,8 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 		Layout: pipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
-			{Binding: 1, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
-			{Binding: 2, Buffer: m.BVHNodesBuf, Size: wgpu.WholeSize},
+			{Binding: 1, Buffer: m.TransparentInstancesBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.TransparentBVHNodesBuf, Size: wgpu.WholeSize},
 			{Binding: 3, Buffer: m.LightsBuf, Size: wgpu.WholeSize},
 			{Binding: 4, Buffer: m.ShadowLayerParamsBuf, Size: wgpu.WholeSize},
 		},
@@ -542,7 +545,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
 			{Binding: 6, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
-			{Binding: 7, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 7, Buffer: m.TransparentObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 8, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},

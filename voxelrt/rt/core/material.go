@@ -1,5 +1,15 @@
 package core
 
+func clampUnit(v float32) float32 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
 type Material struct {
 	BaseColor    [4]uint8 // RGBA
 	Emissive     [4]uint8 // RGBA
@@ -11,6 +21,22 @@ type Material struct {
 	Metalness    float32
 	IOR          float32
 	Transparency float32
+}
+
+func (m Material) HasTransparency() bool {
+	return m.Transparency > 0.001 || m.Transmission > 0.001
+}
+
+// ApplyGameplaySeeThrough forces a non-refractive transparency mode suitable
+// for gameplay readability, such as seeing a character through nearby cover.
+func (m *Material) ApplyGameplaySeeThrough(transparency float32) {
+	if m == nil {
+		return
+	}
+	m.Transparency = clampUnit(transparency)
+	m.Transmission = 0.0
+	m.Density = 0.0
+	m.Refraction = 0.0
 }
 
 func NewMaterial(baseColor [4]uint8, emissive [4]uint8) Material {
@@ -46,4 +72,12 @@ func DefaultMaterial() Material {
 		IOR:          1.5,
 		Transparency: 0.0,
 	}
+}
+
+// NewGameplaySeeThroughMaterial returns a transparent but non-refractive
+// material preset for gameplay convenience rendering.
+func NewGameplaySeeThroughMaterial(baseColor [4]uint8, transparency float32) Material {
+	mat := NewMaterial(baseColor, [4]uint8{0, 0, 0, 0})
+	mat.ApplyGameplaySeeThrough(transparency)
+	return mat
 }
