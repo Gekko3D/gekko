@@ -4,6 +4,7 @@ import (
 	"unsafe"
 
 	"github.com/cogentcore/webgpu/wgpu"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 type analyticMediumRecord struct {
@@ -25,6 +26,12 @@ type analyticMediumParamsUniform struct {
 	Pad0        uint32
 	Pad1        uint32
 	Pad2        uint32
+}
+
+type volumetricHistoryParamsUniform struct {
+	PrevViewProj [16]float32
+	PrevCamPos   [4]float32
+	Params0      [4]float32
 }
 
 func (m *GpuBufferManager) UpdateAnalyticMedia(media []AnalyticMediumHost) bool {
@@ -116,7 +123,7 @@ func (m *GpuBufferManager) UpdateAnalyticMedia(media []AnalyticMediumHost) bool 
 }
 
 func (m *GpuBufferManager) CreateAnalyticMediumBindGroups(pipeline *wgpu.RenderPipeline) {
-	if pipeline == nil || m.CameraBuf == nil || m.LightsBuf == nil || m.AnalyticMediumParamsBuf == nil || m.AnalyticMediumBuf == nil || m.DepthView == nil {
+	if pipeline == nil || m.CameraBuf == nil || m.LightsBuf == nil || m.AnalyticMediumParamsBuf == nil || m.AnalyticMediumBuf == nil || m.DepthView == nil || m.VolumetricHistoryParamsBuf == nil {
 		return
 	}
 
@@ -147,6 +154,9 @@ func (m *GpuBufferManager) CreateAnalyticMediumBindGroups(pipeline *wgpu.RenderP
 		Layout: pipeline.GetBindGroupLayout(2),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, TextureView: m.DepthView},
+			{Binding: 1, TextureView: m.PreviousVolumetricView()},
+			{Binding: 2, TextureView: m.PreviousVolumetricDepthView()},
+			{Binding: 3, Buffer: m.VolumetricHistoryParamsBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {
@@ -154,4 +164,70 @@ func (m *GpuBufferManager) CreateAnalyticMediumBindGroups(pipeline *wgpu.RenderP
 	}
 
 	m.AnalyticMediumBindingsDirty = false
+}
+
+func (m *GpuBufferManager) PreviousVolumetricView() *wgpu.TextureView {
+	if m == nil {
+		return nil
+	}
+	return m.VolumetricView[m.VolumetricHistoryIdx]
+}
+
+func (m *GpuBufferManager) PreviousVolumetricDepthView() *wgpu.TextureView {
+	if m == nil {
+		return nil
+	}
+	return m.VolumetricDepthView[m.VolumetricHistoryIdx]
+}
+
+func (m *GpuBufferManager) CurrentVolumetricView() *wgpu.TextureView {
+	if m == nil {
+		return nil
+	}
+	return m.VolumetricView[m.VolumetricRenderIdx]
+}
+
+func (m *GpuBufferManager) CurrentVolumetricDepthView() *wgpu.TextureView {
+	if m == nil {
+		return nil
+	}
+	return m.VolumetricDepthView[m.VolumetricRenderIdx]
+}
+
+func (m *GpuBufferManager) BeginVolumetricFrame() {
+	if m == nil {
+		return
+	}
+	m.VolumetricRenderIdx = 1 - m.VolumetricHistoryIdx
+	m.AnalyticMediumBindingsDirty = true
+}
+
+func (m *GpuBufferManager) CommitVolumetricFrame(rendered bool) {
+	if m == nil {
+		return
+	}
+	m.VolumetricHistoryIdx = m.VolumetricRenderIdx
+	m.VolumetricHistoryValid = rendered
+	m.AnalyticMediumBindingsDirty = true
+}
+
+func (m *GpuBufferManager) UpdateVolumetricHistoryParams(prevViewProj mgl32.Mat4, prevCamPos mgl32.Vec3, blend float32, valid bool) {
+	if m == nil || m.VolumetricHistoryParamsBuf == nil {
+		return
+	}
+	params := volumetricHistoryParamsUniform{
+		PrevViewProj: prevViewProj,
+		PrevCamPos:   [4]float32{prevCamPos.X(), prevCamPos.Y(), prevCamPos.Z(), 0},
+		Params0: [4]float32{
+			float32(m.VolumetricWidth),
+			float32(m.VolumetricHeight),
+			blend,
+			0,
+		},
+	}
+	if valid && m.VolumetricHistoryValid {
+		params.Params0[3] = 1
+	}
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(&params)), int(unsafe.Sizeof(params)))
+	m.Device.GetQueue().WriteBuffer(m.VolumetricHistoryParamsBuf, 0, buf)
 }

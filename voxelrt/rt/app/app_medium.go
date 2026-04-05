@@ -69,6 +69,27 @@ func (a *App) setupAnalyticMediumPipeline() {
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 96},
+			},
 		},
 	})
 	if err != nil {
@@ -94,19 +115,11 @@ func (a *App) setupAnalyticMediumPipeline() {
 			EntryPoint: "fs_main",
 			Targets: []wgpu.ColorTargetState{
 				{
-					Format: wgpu.TextureFormatRGBA16Float,
-					Blend: &wgpu.BlendState{
-						Color: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorOne, Operation: wgpu.BlendOperationAdd},
-						Alpha: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorOne, Operation: wgpu.BlendOperationAdd},
-					},
+					Format:    wgpu.TextureFormatRGBA16Float,
 					WriteMask: wgpu.ColorWriteMaskAll,
 				},
 				{
-					Format: wgpu.TextureFormatR16Float,
-					Blend: &wgpu.BlendState{
-						Color: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorOne, Operation: wgpu.BlendOperationAdd},
-						Alpha: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorOne, Operation: wgpu.BlendOperationAdd},
-					},
+					Format:    wgpu.TextureFormatR16Float,
 					WriteMask: wgpu.ColorWriteMaskAll,
 				},
 			},

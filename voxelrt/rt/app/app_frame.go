@@ -145,6 +145,7 @@ func (a *App) Update() {
 	// Commit scene changes from ECS sync
 	a.Profiler.BeginScope("Scene Commit")
 	planes := a.Camera.ExtractFrustum(viewProj)
+	prevViewProj := a.LastViewProj
 	a.Scene.Commit(planes, core.SceneCommitOptions{
 		OcclusionMode:    a.OcclusionMode,
 		HiZData:          hizData,
@@ -217,9 +218,18 @@ func (a *App) Update() {
 
 	// Update Camera Uniforms
 	a.BufferManager.UpdateCamera(viewProj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, sunIntensity, a.Scene.SkyAmbientMix, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height, lightingQuality)
+	a.BufferManager.BeginVolumetricFrame()
+	historyBlend := float32(0.965)
+	if fastCameraMotion {
+		historyBlend = 0.22
+	}
+	a.BufferManager.UpdateVolumetricHistoryParams(prevViewProj, a.LastCameraPos, historyBlend, a.HasLastCameraState)
 	a.BufferManager.EstimateTiledLightMetrics(a.Scene, viewProj, invView, a.Camera.Position)
 	a.Profiler.SetCount("LightListEntriesAvg", a.BufferManager.TileLightAvgCount)
 	a.Profiler.SetCount("LightListEntriesMax", a.BufferManager.TileLightMaxCount)
+	if a.ResolvePipeline != nil {
+		a.createResolveBindGroup(a.ResolvePipeline.GetBindGroupLayout(0))
+	}
 	if err := a.updateFeatures(); err != nil {
 		fmt.Printf("ERROR: Feature update failed: %v\n", err)
 	}
@@ -522,6 +532,7 @@ func (a *App) Render() {
 		}
 	}
 	a.LastRenderTime = now
+	a.BufferManager.CommitVolumetricFrame(a.BufferManager.AnalyticMediumCount > 0)
 	a.recordCameraState()
 	a.RenderFrameIndex++
 }

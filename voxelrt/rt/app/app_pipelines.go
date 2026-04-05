@@ -608,7 +608,7 @@ func (a *App) setupResolvePipeline() {
 		return
 	}
 
-	// Group 0: opaque lit color, accum color, weight, sampler
+	// Group 0: opaque lit color, accum color, weight, volumetric color, volumetric depth, scene depth
 	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "Resolve BGL0",
 		Entries: []wgpu.BindGroupLayoutEntry{
@@ -639,8 +639,25 @@ func (a *App) setupResolvePipeline() {
 			{
 				Binding:    3,
 				Visibility: wgpu.ShaderStageFragment,
-				Sampler: wgpu.SamplerBindingLayout{
-					Type: wgpu.SamplerBindingTypeFiltering,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    4,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    5,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
 		},
@@ -687,19 +704,27 @@ func (a *App) setupResolvePipeline() {
 		return
 	}
 	a.ResolvePipeline = pipeline
+	a.createResolveBindGroup(bgl0)
+}
 
-	// Create resolve bind group (opaque lit + accum + weight + sampler)
-	if a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil {
+func (a *App) createResolveBindGroup(layout *wgpu.BindGroupLayout) {
+	if a == nil || a.BufferManager == nil || layout == nil {
+		return
+	}
+	if a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil || a.BufferManager.CurrentVolumetricView() == nil || a.BufferManager.CurrentVolumetricDepthView() == nil || a.BufferManager.DepthView == nil {
 		// Views not ready yet (e.g., during early init/resize), skip creating BG
 		return
 	}
+	var err error
 	a.ResolveBG, err = a.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-		Layout: bgl0,
+		Layout: layout,
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, TextureView: a.StorageView},
 			{Binding: 1, TextureView: a.BufferManager.TransparentAccumView},
 			{Binding: 2, TextureView: a.BufferManager.TransparentWeightView},
-			{Binding: 3, Sampler: a.Sampler},
+			{Binding: 3, TextureView: a.BufferManager.CurrentVolumetricView()},
+			{Binding: 4, TextureView: a.BufferManager.CurrentVolumetricDepthView()},
+			{Binding: 5, TextureView: a.BufferManager.DepthView},
 		},
 	})
 	if err != nil {

@@ -55,14 +55,20 @@ struct MediumRecord {
   style2: vec4<f32>,
 };
 
+struct HistoryParams {
+  prev_view_proj: mat4x4<f32>,
+  prev_cam_pos: vec4<f32>,
+  params0: vec4<f32>,
+};
+
 struct VSOut {
   @builtin(position) position: vec4<f32>,
   @location(0) uv: vec2<f32>,
 };
 
 struct FSOut {
-  @location(0) accum: vec4<f32>,
-  @location(1) weight: f32,
+  @location(0) color: vec4<f32>,
+  @location(1) depth: f32,
 };
 
 @group(0) @binding(0) var<uniform> uCamera: CameraData;
@@ -70,6 +76,9 @@ struct FSOut {
 @group(1) @binding(0) var<uniform> medium_params: MediumParams;
 @group(1) @binding(1) var<storage, read> media: array<MediumRecord>;
 @group(2) @binding(0) var in_depth: texture_2d<f32>;
+@group(2) @binding(1) var prev_history: texture_2d<f32>;
+@group(2) @binding(2) var prev_history_depth: texture_2d<f32>;
+@group(2) @binding(3) var<uniform> history_params: HistoryParams;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
@@ -137,6 +146,20 @@ fn get_ray_from_uv(uv: vec2<f32>) -> vec3<f32> {
   view = view / max(view.w, 1e-6);
   let world_target = (uCamera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
   return normalize(world_target - uCamera.cam_pos.xyz);
+}
+
+fn reconstruct_world_pos(uv: vec2<f32>, ray_dir: vec3<f32>, t_depth: f32) -> vec3<f32> {
+  _ = uv;
+  return uCamera.cam_pos.xyz + ray_dir * t_depth;
+}
+
+fn reproject_prev_uv(world_pos: vec3<f32>) -> vec2<f32> {
+  let clip = history_params.prev_view_proj * vec4<f32>(world_pos, 1.0);
+  if (clip.w <= 1e-5) {
+    return vec2<f32>(-1.0, -1.0);
+  }
+  let ndc = clip.xy / clip.w;
+  return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
 fn intersect_sphere(origin: vec3<f32>, dir: vec3<f32>, center: vec3<f32>, radius: f32) -> vec2<f32> {
@@ -314,10 +337,13 @@ fn medium_density(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
 
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> FSOut {
-  let dims = textureDimensions(in_depth);
+  _ = uv;
+  let render_dims = textureDimensions(prev_history);
+  let full_dims = textureDimensions(in_depth);
+  let render_uv = (vec2<f32>(frag_pos.xy) + 0.5) / vec2<f32>(f32(render_dims.x), f32(render_dims.y));
   let ipos = vec2<i32>(
-    clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
-    clamp(i32(frag_pos.y), 0, i32(dims.y) - 1),
+    clamp(i32(render_uv.x * f32(full_dims.x)), 0, i32(full_dims.x) - 1),
+    clamp(i32(render_uv.y * f32(full_dims.y)), 0, i32(full_dims.y) - 1),
   );
   var t_limit = textureLoad(in_depth, ipos, 0).r;
   if (t_limit >= FAR_T || t_limit <= 0.0) {
@@ -325,7 +351,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   }
 
   let ray_origin = uCamera.cam_pos.xyz;
-  let ray_dir = get_ray_from_uv((vec2<f32>(f32(ipos.x), f32(ipos.y)) + 0.5) / vec2<f32>(f32(dims.x), f32(dims.y)));
+  let ray_dir = get_ray_from_uv(render_uv);
   let ambient = uCamera.ambient_color.xyz;
   let light_dir = primary_light_dir(ray_origin);
   let light_color = primary_light_color();
@@ -349,7 +375,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     let path_length = t_end - t_start;
     let coverage = saturate(path_length / characteristic);
     let density_budget = saturate(m.scatter.w * max(m.style1.x, m.style1.y) * characteristic * 0.25);
-    let sample_factor = mix(0.35, 1.0, max(coverage * 0.7, density_budget));
+    let sample_factor = mix(0.18, 1.0, max(coverage * 0.55, density_budget));
     let step_count = clamp(u32(round(max(4.0, f32(base_step_count) * sample_factor))), 4u, base_step_count);
     let segment_len = (t_end - t_start) / f32(step_count);
     if (segment_len <= 1e-5) {
@@ -423,5 +449,39 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     accum_w += alpha_shaped * w;
   }
 
-  return FSOut(vec4<f32>(accum_rgb, accum_a), accum_w);
+  var current_color = vec3<f32>(0.0);
+  var current_trans = 1.0;
+  if (accum_w > 1e-5) {
+    current_color = accum_rgb / accum_w;
+    current_trans = exp(-2.0 * clamp(accum_a, 0.0, 50.0));
+  }
+
+  var out_color = vec4<f32>(current_color, current_trans);
+  if (history_params.params0.w > 0.5 && t_limit < FAR_T * 0.5) {
+    let world_pos = reconstruct_world_pos(render_uv, ray_dir, t_limit);
+    let prev_uv = reproject_prev_uv(world_pos);
+    if (all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0))) {
+      let prev_dims = textureDimensions(prev_history);
+      let prev_ipos = vec2<i32>(
+        clamp(i32(prev_uv.x * f32(prev_dims.x)), 0, i32(prev_dims.x) - 1),
+        clamp(i32(prev_uv.y * f32(prev_dims.y)), 0, i32(prev_dims.y) - 1),
+      );
+      let prev_depth = textureLoad(prev_history_depth, prev_ipos, 0).r;
+      let prev_t = length(world_pos - history_params.prev_cam_pos.xyz);
+      var history_weight = history_params.params0.z;
+      if (prev_depth > 0.0 && prev_depth < FAR_T * 0.5) {
+        let depth_delta = abs(prev_depth - prev_t);
+        let rejection = saturate(1.0 - depth_delta / (0.12 * max(prev_t, 1.0) + 0.6));
+        history_weight *= rejection;
+      } else {
+        history_weight = 0.0;
+      }
+      if (history_weight > 1e-4) {
+        let prev_color = textureLoad(prev_history, prev_ipos, 0);
+        out_color = mix(out_color, prev_color, history_weight);
+      }
+    }
+  }
+
+  return FSOut(out_color, t_limit);
 }

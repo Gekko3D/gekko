@@ -191,6 +191,8 @@ type GpuBufferManager struct {
 	// Transparent Accumulation Targets (WBOIT)
 	TransparentAccumTex  *wgpu.Texture // RGBA16Float, accum premultiplied color
 	TransparentWeightTex *wgpu.Texture // R16Float, accum weight
+	VolumetricTex        [2]*wgpu.Texture
+	VolumetricDepthTex   [2]*wgpu.Texture
 
 	// G-Buffer Views
 	DepthView    *wgpu.TextureView
@@ -198,8 +200,15 @@ type GpuBufferManager struct {
 	MaterialView *wgpu.TextureView
 
 	// Transparent Accumulation Views
-	TransparentAccumView  *wgpu.TextureView
-	TransparentWeightView *wgpu.TextureView
+	TransparentAccumView   *wgpu.TextureView
+	TransparentWeightView  *wgpu.TextureView
+	VolumetricView         [2]*wgpu.TextureView
+	VolumetricDepthView    [2]*wgpu.TextureView
+	VolumetricWidth        uint32
+	VolumetricHeight       uint32
+	VolumetricHistoryIdx   int
+	VolumetricRenderIdx    int
+	VolumetricHistoryValid bool
 
 	// Shadow Map Resources
 	ShadowMapArray           *wgpu.Texture
@@ -314,6 +323,7 @@ type GpuBufferManager struct {
 	CAPresetBuf                 *wgpu.Buffer
 	AnalyticMediumBuf           *wgpu.Buffer
 	AnalyticMediumParamsBuf     *wgpu.Buffer
+	VolumetricHistoryParamsBuf  *wgpu.Buffer
 	CAFieldTexA                 *wgpu.Texture
 	CAFieldTexB                 *wgpu.Texture
 	CAFieldViewA                *wgpu.TextureView
@@ -471,6 +481,7 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, nil, wgpu.BufferUsageStorage, 4096)
 	m.ensureBuffer("AnalyticMediumBuf", &m.AnalyticMediumBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("AnalyticMediumParamsBuf", &m.AnalyticMediumParamsBuf, nil, wgpu.BufferUsageUniform, 256)
+	m.ensureBuffer("VolumetricHistoryParamsBuf", &m.VolumetricHistoryParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("SpriteBuf", &m.SpriteBuf, nil, wgpu.BufferUsageStorage, 1024)
 
 	return m

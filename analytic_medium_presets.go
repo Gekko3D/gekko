@@ -41,7 +41,7 @@ func NewAtmosphereMedium(innerRadius, outerRadius float32, color [3]float32) *An
 		},
 		NoiseScale:    4.5,
 		NoiseStrength: 0.04,
-		SampleCount:   12,
+		SampleCount:   8,
 	}
 }
 
@@ -69,7 +69,7 @@ func NewFogSphereMedium(radius float32, color [3]float32) *AnalyticMediumCompone
 		},
 		NoiseScale:    0.7,
 		NoiseStrength: 0.1,
-		SampleCount:   10,
+		SampleCount:   8,
 	}
 }
 
@@ -101,6 +101,6 @@ func NewFogBoxMedium(halfExtents mgl32.Vec3, color [3]float32) *AnalyticMediumCo
 		},
 		NoiseScale:    0.45,
 		NoiseStrength: 0.08,
-		SampleCount:   10,
+		SampleCount:   8,
 	}
 }

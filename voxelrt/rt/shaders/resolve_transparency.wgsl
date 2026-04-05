@@ -18,15 +18,21 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VSOut {
   return out;
 }
 
-// Group 0: Inputs + sampler
+const FAR_T: f32 = 60000.0;
+
+// Group 0: Inputs
 //  - 0: opaque lit color (RGBA8Unorm)
 //  - 1: accum color (RGBA16Float), premultiplied by alpha and weight
 //  - 2: accum weight (R16Float), sum of alpha*weight
-//  - 3: sampler
+//  - 3: volumetric color history (RGBA16Float, rgb=color, a=transmittance)
+//  - 4: volumetric scene depth history (R16Float)
+//  - 5: full-resolution scene depth
 @group(0) @binding(0) var tOpaque : texture_2d<f32>;
 @group(0) @binding(1) var tAccum  : texture_2d<f32>;
 @group(0) @binding(2) var tWeight : texture_2d<f32>;
-@group(0) @binding(3) var samp    : sampler;
+@group(0) @binding(3) var tVolume : texture_2d<f32>;
+@group(0) @binding(4) var tVolumeDepth : texture_2d<f32>;
+@group(0) @binding(5) var tSceneDepth : texture_2d<f32>;
 
 fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
   let a = 2.51;
@@ -35,6 +41,54 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
   let d = 0.59;
   let e = 0.14;
   return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn depth_weight(current_depth: f32, sample_depth: f32) -> f32 {
+  let current_finite = current_depth > 0.0 && current_depth < FAR_T * 0.5;
+  let sample_finite = sample_depth > 0.0 && sample_depth < FAR_T * 0.5;
+  if (current_finite != sample_finite) {
+    return 0.05;
+  }
+  if (!current_finite && !sample_finite) {
+    return 1.0;
+  }
+  let delta = abs(current_depth - sample_depth);
+  return exp(-delta * 0.04);
+}
+
+fn sample_volume_bilateral(ipos: vec2<i32>, current_depth: f32) -> vec4<f32> {
+  let full_dims = textureDimensions(tOpaque);
+  let vol_dims = textureDimensions(tVolume);
+  let uv = (vec2<f32>(f32(ipos.x), f32(ipos.y)) + 0.5) / vec2<f32>(f32(full_dims.x), f32(full_dims.y));
+  let vol_pos = uv * vec2<f32>(f32(vol_dims.x), f32(vol_dims.y)) - vec2<f32>(0.5, 0.5);
+  let base = vec2<i32>(floor(vol_pos));
+  let frac = fract(vol_pos);
+
+  var accum = vec4<f32>(0.0);
+  var total_w = 0.0;
+  for (var oy = 0; oy < 2; oy = oy + 1) {
+    for (var ox = 0; ox < 2; ox = ox + 1) {
+      let coord = vec2<i32>(
+        clamp(base.x + ox, 0, i32(vol_dims.x) - 1),
+        clamp(base.y + oy, 0, i32(vol_dims.y) - 1)
+      );
+      let spatial_x = mix(1.0 - frac.x, frac.x, f32(ox));
+      let spatial_y = mix(1.0 - frac.y, frac.y, f32(oy));
+      let spatial_w = spatial_x * spatial_y;
+      let sample_depth = textureLoad(tVolumeDepth, coord, 0).r;
+      let w = spatial_w * depth_weight(current_depth, sample_depth);
+      accum += textureLoad(tVolume, coord, 0) * w;
+      total_w += w;
+    }
+  }
+  if (total_w <= 1e-5) {
+    let fallback = vec2<i32>(
+      clamp(i32(round(vol_pos.x)), 0, i32(vol_dims.x) - 1),
+      clamp(i32(round(vol_pos.y)), 0, i32(vol_dims.y) - 1)
+    );
+    return textureLoad(tVolume, fallback, 0);
+  }
+  return accum / total_w;
 }
 
 @fragment
@@ -46,10 +100,13 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     clamp(i32(frag_pos.y), 0, i32(dims.y) - 1)
   );
   let copq = textureLoad(tOpaque,  ipos, 0).rgb;
+  let current_depth = textureLoad(tSceneDepth, ipos, 0).r;
   let acc4 = textureLoad(tAccum,   ipos, 0);
   let acc  = acc4.rgb;
   let accA = acc4.a;
   let w    = textureLoad(tWeight,  ipos, 0).r;
+  let vol = sample_volume_bilateral(ipos, current_depth);
+  let base = copq * vol.a + vol.rgb;
 
   // Use unweighted accumulated alpha (from accum.a) for revealage to reduce distance dependence
   let a_unweighted = clamp(accA, 0.0, 50.0);
@@ -57,7 +114,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let T = exp(-w_scale * a_unweighted);
   let transp = acc / max(w, 1e-5);
   // Composite: attenuate background by T, add normalized transparent contribution
-  var col = copq * T + transp;
+  var col = base * T + transp;
   
   // Tone mapping
   col = aces_tonemap(col);

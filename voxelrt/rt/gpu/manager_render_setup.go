@@ -25,14 +25,14 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 		return
 	}
 
-	setupTexture := func(tex **wgpu.Texture, view **wgpu.TextureView, label string, format wgpu.TextureFormat, usage wgpu.TextureUsage) {
+	setupTexture := func(tex **wgpu.Texture, view **wgpu.TextureView, label string, format wgpu.TextureFormat, usage wgpu.TextureUsage, tw, th uint32) {
 		if *tex != nil {
 			(*tex).Release()
 		}
 		var err error
 		*tex, err = m.Device.CreateTexture(&wgpu.TextureDescriptor{
 			Label:         label,
-			Size:          wgpu.Extent3D{Width: w, Height: h, DepthOrArrayLayers: 1},
+			Size:          wgpu.Extent3D{Width: tw, Height: th, DepthOrArrayLayers: 1},
 			MipLevelCount: 1,
 			Dimension:     wgpu.TextureDimension2D,
 			Format:        format,
@@ -48,13 +48,25 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 		}
 	}
 
-	setupTexture(&m.GBufferDepth, &m.DepthView, "GBuffer Depth", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
-	setupTexture(&m.GBufferNormal, &m.NormalView, "GBuffer Normal", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
-	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding)
+	setupTexture(&m.GBufferDepth, &m.DepthView, "GBuffer Depth", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding, w, h)
+	setupTexture(&m.GBufferNormal, &m.NormalView, "GBuffer Normal", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding, w, h)
+	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding, w, h)
 
 	// Transparent accumulation targets for WBOIT
-	setupTexture(&m.TransparentAccumTex, &m.TransparentAccumView, "Transparent Accum", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
-	setupTexture(&m.TransparentWeightTex, &m.TransparentWeightView, "Transparent Weight", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding)
+	setupTexture(&m.TransparentAccumTex, &m.TransparentAccumView, "Transparent Accum", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, w, h)
+	setupTexture(&m.TransparentWeightTex, &m.TransparentWeightView, "Transparent Weight", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, w, h)
+
+	volW := max(1, (w+1)/2)
+	volH := max(1, (h+1)/2)
+	for i := 0; i < 2; i++ {
+		setupTexture(&m.VolumetricTex[i], &m.VolumetricView[i], "Volumetric Color", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
+		setupTexture(&m.VolumetricDepthTex[i], &m.VolumetricDepthView[i], "Volumetric Depth", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
+	}
+	m.VolumetricWidth = volW
+	m.VolumetricHeight = volH
+	m.VolumetricHistoryIdx = 0
+	m.VolumetricRenderIdx = 1
+	m.VolumetricHistoryValid = false
 
 	m.CreateShadowMapTextures(1024, 1024, 1)
 	m.CreateDirectionalShadowTextures(1)

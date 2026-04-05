@@ -5,6 +5,8 @@ import "github.com/cogentcore/webgpu/wgpu"
 // AnalyticMediumFeature owns the bounded analytic medium accumulation pass.
 type AnalyticMediumFeature struct{}
 
+const volumetricClearDepth = 60000.0
+
 func (f *AnalyticMediumFeature) Name() string {
 	return "analytic-media"
 }
@@ -55,34 +57,73 @@ func (f *AnalyticMediumFeature) Shutdown(a *App) {
 	a.AnalyticMediumPipeline = nil
 }
 
-func (f *AnalyticMediumFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
-	return stage == FeaturePassStageAccumulation &&
+func (f *AnalyticMediumFeature) HasCommandStage(a *App, stage FeatureCommandStage) bool {
+	return stage == FeatureCommandStagePostLighting &&
 		a != nil &&
 		a.BufferManager != nil &&
 		a.AnalyticMediumPipeline != nil &&
-		a.BufferManager.HasAnalyticMediumContribution()
+		a.BufferManager.CurrentVolumetricView() != nil &&
+		a.BufferManager.CurrentVolumetricDepthView() != nil
 }
 
-func (f *AnalyticMediumFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
-	if stage != FeaturePassStageAccumulation {
+func (f *AnalyticMediumFeature) DispatchCommandStage(a *App, stage FeatureCommandStage, encoder *wgpu.CommandEncoder) error {
+	if stage != FeatureCommandStagePostLighting {
 		return nil
 	}
-	if a == nil || pass == nil || a.BufferManager == nil {
+	if a == nil || encoder == nil || a.BufferManager == nil {
 		return nil
 	}
-	if a.AnalyticMediumPipeline == nil || !a.BufferManager.HasAnalyticMediumContribution() {
+	if a.AnalyticMediumPipeline == nil {
 		return nil
 	}
 	if a.BufferManager.AnalyticMediumBG0 == nil || a.BufferManager.AnalyticMediumBG1 == nil || a.BufferManager.AnalyticMediumBG2 == nil {
+		if a.BufferManager.AnalyticMediumCount == 0 {
+			// Still clear the current volumetric targets so stale history is not reused.
+			pass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+				ColorAttachments: []wgpu.RenderPassColorAttachment{
+					{
+						View:       a.BufferManager.CurrentVolumetricView(),
+						LoadOp:     wgpu.LoadOpClear,
+						StoreOp:    wgpu.StoreOpStore,
+						ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 1},
+					},
+					{
+						View:       a.BufferManager.CurrentVolumetricDepthView(),
+						LoadOp:     wgpu.LoadOpClear,
+						StoreOp:    wgpu.StoreOpStore,
+						ClearValue: wgpu.Color{R: volumetricClearDepth, G: 0, B: 0, A: 0},
+					},
+				},
+			})
+			return pass.End()
+		}
 		return nil
 	}
 
+	pass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+		ColorAttachments: []wgpu.RenderPassColorAttachment{
+			{
+				View:       a.BufferManager.CurrentVolumetricView(),
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 1},
+			},
+			{
+				View:       a.BufferManager.CurrentVolumetricDepthView(),
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{R: volumetricClearDepth, G: 0, B: 0, A: 0},
+			},
+		},
+	})
 	pass.SetPipeline(a.AnalyticMediumPipeline)
 	pass.SetBindGroup(0, a.BufferManager.AnalyticMediumBG0, nil)
 	pass.SetBindGroup(1, a.BufferManager.AnalyticMediumBG1, nil)
 	pass.SetBindGroup(2, a.BufferManager.AnalyticMediumBG2, nil)
-	pass.Draw(3, 1, 0, 0)
-	return nil
+	if a.BufferManager.AnalyticMediumCount > 0 {
+		pass.Draw(3, 1, 0, 0)
+	}
+	return pass.End()
 }
 
 func (f *AnalyticMediumFeature) rebuildBindGroups(a *App) {
