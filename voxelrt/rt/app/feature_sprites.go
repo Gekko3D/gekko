@@ -48,6 +48,14 @@ func (f *SpriteFeature) Shutdown(a *App) {
 	a.SpritesPipeline = nil
 }
 
+func (f *SpriteFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
+	return stage == FeaturePassStageAccumulation &&
+		a != nil &&
+		a.BufferManager != nil &&
+		a.SpritesPipeline != nil &&
+		a.BufferManager.HasSpriteContribution()
+}
+
 func (f *SpriteFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
 	if stage != FeaturePassStageAccumulation {
 		return nil

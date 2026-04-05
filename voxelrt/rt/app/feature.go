@@ -24,6 +24,14 @@ const (
 	// FeatureCommandStagePreGBufferVolumes is reserved for volume prepasses that
 	// historically ran as a separate block before G-buffer.
 	FeatureCommandStagePreGBufferVolumes
+	// FeatureCommandStagePostGBuffer runs after the core G-buffer and Hi-Z work.
+	FeatureCommandStagePostGBuffer
+	// FeatureCommandStagePreLighting runs after shadows but before tiled cull/lighting.
+	FeatureCommandStagePreLighting
+	// FeatureCommandStagePostLighting runs after the core lighting pass completes.
+	FeatureCommandStagePostLighting
+	// FeatureCommandStagePreResolve runs after optional accumulation and before resolve.
+	FeatureCommandStagePreResolve
 )
 
 // FeaturePassStage defines in-pass draw points inside renderer-owned render passes.
@@ -50,4 +58,22 @@ type FeatureCommandStageHandler interface {
 // FeaturePassStageHandler is an optional interface for render-pass stages.
 type FeaturePassStageHandler interface {
 	RenderPassStage(*App, FeaturePassStage, *wgpu.RenderPassEncoder) error
+}
+
+// FeatureCommandStageContributor is an optional interface used to indicate that
+// a command stage should be scheduled for the current frame.
+type FeatureCommandStageContributor interface {
+	HasCommandStage(*App, FeatureCommandStage) bool
+}
+
+// FeaturePassStageContributor is an optional interface used to indicate that an
+// in-pass stage should be scheduled for the current frame.
+type FeaturePassStageContributor interface {
+	HasPassStage(*App, FeaturePassStage) bool
+}
+
+// FeatureScreenStageContributor is an optional interface used to indicate that
+// a screen stage should be scheduled for the current frame.
+type FeatureScreenStageContributor interface {
+	HasScreenStage(*App, FeatureScreenStage) bool
 }

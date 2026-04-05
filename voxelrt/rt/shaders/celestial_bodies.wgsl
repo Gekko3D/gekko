@@ -254,9 +254,10 @@ fn sample_clouds(
     let bands = 1.0 - abs(sphere_normal.y);
     let field = saturate(base * 0.62 + detail * 0.23 + wisps * 0.3 + bands * cloud_banding * 0.18);
 
-    let threshold = mix(0.82, 0.34, coverage);
-    let feather = 0.11 / cloud_sharpness;
+    let threshold = mix(0.86, 0.28, coverage);
+    let feather = 0.09 / cloud_sharpness;
     let mask = smoothstep(threshold - feather, threshold + feather, field);
+    let dense_mask = saturate(mask * (0.72 + detail * 0.75 + wisps * 0.42));
 
     let NdotL = saturate(dot(sphere_normal, light_dir));
     let NdotV = saturate(dot(sphere_normal, view_dir));
@@ -264,9 +265,9 @@ fn sample_clouds(
     let self_shadow = mix(0.58, 1.0, smoothstep(0.3, 0.88, detail));
     let softened_light = saturate((dot(sphere_normal, light_dir) + terminator_softness) / (1.0 + terminator_softness));
     let warm_tint = mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(1.14, 0.96, 0.82), cloud_tint_warmth * pow(1.0 - NdotL, 2.0));
-    let lighting = 0.08 + softened_light * 0.84 * sun_intensity + limb * 0.18;
-    let color = body.cloud_color.xyz * warm_tint * lighting * self_shadow;
-    let alpha = mask * cloud_opacity * (0.05 + 0.22 * NdotL + 0.1 * limb);
+    let lighting = 0.18 + softened_light * 0.88 * sun_intensity + limb * 0.26;
+    let color = body.cloud_color.xyz * warm_tint * lighting * mix(0.82, 1.04, dense_mask) * self_shadow;
+    let alpha = saturate(dense_mask * cloud_opacity * (0.34 + 0.38 * NdotL + 0.18 * limb));
     return vec4<f32>(color, alpha);
 }
 
@@ -291,8 +292,8 @@ fn sample_cloud_layer(
     let cloud_pos = ray_origin + ray_dir * cloud_t;
     let cloud_normal = normalize(cloud_pos - center);
     var clouds = sample_clouds(body, cloud_normal, normalize(camera.light_pos.xyz - cloud_pos), normalize(ray_origin - cloud_pos));
-    clouds.a = saturate(clouds.a * 0.8);
-    clouds = vec4<f32>(clouds.xyz * 1.02, clouds.a);
+    clouds.a = saturate(clouds.a * 1.18);
+    clouds = vec4<f32>(clouds.xyz * 1.08, clouds.a);
     return clouds;
 }
 
@@ -333,7 +334,11 @@ fn sample_atmosphere(
     let base_color = body.atmosphere_color.xyz;
     let warm_scatter = vec3<f32>(1.0, 0.52, 0.22) * sunset * 0.26;
     let scatter_color = (base_color * (0.04 + rayleigh * 0.1 + mie * 0.028 + day_side * 0.24 * sun_intensity + edge_glow * 0.46 * atmosphere_glow) + warm_scatter * sun_intensity) * (0.3 + density_soft * 0.46);
-    let alpha = saturate(optical_depth * (density_soft * 0.18 + edge_glow * 0.32 * atmosphere_glow) * (0.08 + 0.14 * day_side * sun_intensity + mie * 0.03));
+    let extinction = optical_depth *
+        (density_soft * 0.34 + edge_glow * 0.52 * atmosphere_glow) *
+        (0.18 + 0.2 * day_side * sun_intensity + mie * 0.06) *
+        (0.8 + atmosphere_density * 0.55);
+    let alpha = saturate(1.0 - exp(-extinction * 2.6));
     return vec4<f32>(scatter_color, alpha);
 }
 

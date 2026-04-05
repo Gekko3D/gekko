@@ -51,6 +51,14 @@ func (f *TransparencyFeature) Shutdown(a *App) {
 	a.TransparentPipeline = nil
 }
 
+func (f *TransparencyFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
+	return stage == FeaturePassStageAccumulation &&
+		a != nil &&
+		a.BufferManager != nil &&
+		a.TransparentPipeline != nil &&
+		a.BufferManager.HasVisibleTransparentOverlay(a.Scene)
+}
+
 func (f *TransparencyFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
 	if stage != FeaturePassStageAccumulation {
 		return nil

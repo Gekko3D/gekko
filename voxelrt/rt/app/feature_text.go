@@ -138,6 +138,15 @@ func (f *TextFeature) Shutdown(a *App) {
 	a.TextVertexCount = 0
 }
 
+func (f *TextFeature) HasScreenStage(a *App, stage FeatureScreenStage) bool {
+	return stage == FeatureScreenStagePostResolve &&
+		a != nil &&
+		a.TextVertexCount > 0 &&
+		a.TextVertexBuffer != nil &&
+		a.TextPipeline != nil &&
+		a.TextBindGroup != nil
+}
+
 func (f *TextFeature) resolveDefaultFontPath() string {
 	candidates := []string{
 		"gekko/voxelrt/rt/fonts/Roboto-Medium.ttf",    // Root

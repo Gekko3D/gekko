@@ -123,6 +123,15 @@ func (f *CelestialBodiesFeature) Shutdown(a *App) {
 	f.bg1 = nil
 }
 
+func (f *CelestialBodiesFeature) HasScreenStage(a *App, stage FeatureScreenStage) bool {
+	return stage == FeatureScreenStagePostResolve &&
+		a != nil &&
+		len(a.CelestialBodies) > 0 &&
+		a.CelestialPipeline != nil &&
+		f.bg0 != nil &&
+		f.bg1 != nil
+}
+
 func (f *CelestialBodiesFeature) ensureBuffers(a *App, count int) error {
 	if count < 1 {
 		count = 1

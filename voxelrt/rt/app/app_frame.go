@@ -97,21 +97,8 @@ func (a *App) Resize(w, h int) {
 		a.Config.Width = uint32(w)
 		a.Config.Height = uint32(h)
 		a.Surface.Configure(a.Adapter, a.Device, a.Config)
-		a.setupTextures(w, h)
-		a.setupBindGroups()
-
-		// Resize G-Buffer
-		a.BufferManager.CreateGBufferTextures(uint32(w), uint32(h))
-		a.BufferManager.UpdateTiledLightingResources(uint32(w), uint32(h))
-		a.BufferManager.CreateTiledLightCullBindGroups(a.TiledLightCullPipeline)
-		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
-		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
-		a.BufferManager.StorageView = a.StorageView
-		// Ensure shadow bind groups remain valid after any resource changes
-		a.BufferManager.CreateShadowBindGroups()
-
-		// Recreate resolve pipeline/bind group (depends on textures/swapchain)
-		a.setupResolvePipeline()
+		a.rebuildCoreSwapchainResources(w, h)
+		a.rebuildCoreSceneBindings()
 
 		if err := a.resizeFeatures(uint32(w), uint32(h)); err != nil {
 			fmt.Printf("ERROR: Feature resize failed: %v\n", err)
@@ -221,17 +208,7 @@ func (a *App) Update() {
 	a.Profiler.SetCount("ShadowCasters", len(a.Scene.ShadowObjects))
 
 	if recreated {
-		// New buffers mean we need new bind groups
-		a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
-		a.BufferManager.CreateTiledLightCullBindGroups(a.TiledLightCullPipeline)
-
-		// Also update G-Buffer and Lighting Bind Groups
-		a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
-		a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
-
-		// Shadow pass also depends on storage buffers (instances/nodes/sectors/bricks/etc),
-		// so we must rebind shadow bind groups when buffers are recreated.
-		a.BufferManager.CreateShadowBindGroups()
+		a.rebuildCoreSceneBindings()
 
 		if err := a.sceneBuffersRecreatedFeatures(); err != nil {
 			fmt.Printf("ERROR: Feature scene-buffer recreation failed: %v\n", err)
@@ -361,18 +338,8 @@ func (a *App) Render() {
 		return
 	}
 
-	// Pre-GBuffer feature dispatch (particles simulation/spawn currently lives here)
-	a.Profiler.BeginScope("Particles Sim")
-	if err := a.dispatchCommandStage(FeatureCommandStagePreGBuffer, encoder); err != nil {
-		fmt.Printf("ERROR: Feature pre-gbuffer dispatch failed: %v\n", err)
-	}
-	a.Profiler.EndScope("Particles Sim")
-
-	a.Profiler.BeginScope("CA Sim")
-	if err := a.dispatchCommandStage(FeatureCommandStagePreGBufferVolumes, encoder); err != nil {
-		fmt.Printf("ERROR: Feature ca pre-gbuffer dispatch failed: %v\n", err)
-	}
-	a.Profiler.EndScope("CA Sim")
+	a.runFeatureCommandStage("Feature Pre-GBuffer", FeatureCommandStagePreGBuffer, encoder)
+	a.runFeatureCommandStage("Feature Pre-GBuffer Volumes", FeatureCommandStagePreGBufferVolumes, encoder)
 
 	// Compute Pass
 	a.Profiler.BeginScope("G-Buffer")
@@ -396,6 +363,8 @@ func (a *App) Render() {
 	a.Profiler.BeginScope("Hi-Z Generation")
 	a.BufferManager.DispatchHiZ(encoder, a.BufferManager.DepthView)
 	a.Profiler.EndScope("Hi-Z Generation")
+
+	a.runFeatureCommandStage("Feature Post-GBuffer", FeatureCommandStagePostGBuffer, encoder)
 
 	// Shadow Pass
 	a.Profiler.BeginScope("Shadows")
@@ -427,15 +396,12 @@ func (a *App) Render() {
 
 	hasLocalLights := a.BufferManager.HasLocalLights(a.Scene)
 	hasSceneLights := len(a.Scene.Lights) > 0
-	hasTransparentOverlay := a.BufferManager.HasVisibleTransparentOverlay(a.Scene)
-	hasParticleContribution := a.BufferManager.HasParticleContribution()
-	hasSpriteContribution := a.BufferManager.HasSpriteContribution()
-	hasCAVolumeContribution := a.BufferManager.HasCAVolumeContribution()
-	needsAccumulation := hasTransparentOverlay || hasParticleContribution || hasSpriteContribution || hasCAVolumeContribution
+	needsAccumulation := a.hasPassStageWork(FeaturePassStageAccumulation)
 	a.Profiler.SetCount("LocalLights", boolToCount(hasLocalLights))
 	a.Profiler.SetCount("SceneLights", boolToCount(hasSceneLights))
-	a.Profiler.SetCount("TransparentOverlay", boolToCount(hasTransparentOverlay))
 	a.Profiler.SetCount("AccumulationActive", boolToCount(needsAccumulation))
+
+	a.runFeatureCommandStage("Feature Pre-Lighting", FeatureCommandStagePreLighting, encoder)
 
 	// Lighting Pass
 	a.Profiler.BeginScope("Tile Light Cull")
@@ -457,6 +423,8 @@ func (a *App) Render() {
 		fmt.Printf("ERROR: Lighting pass End failed: %v\n", err)
 	}
 	a.Profiler.EndScope("Lighting")
+
+	a.runFeatureCommandStage("Feature Post-Lighting", FeatureCommandStagePostLighting, encoder)
 
 	// Debug Pass
 	if a.DebugMode && a.Camera != nil && core.DebugMode(a.Camera.DebugMode) == core.DebugModeScene {
@@ -503,6 +471,8 @@ func (a *App) Render() {
 	a.HadAccumulationPass = needsAccumulation
 	a.Profiler.EndScope("Accumulation")
 
+	a.runFeatureCommandStage("Feature Pre-Resolve", FeatureCommandStagePreResolve, encoder)
+
 	// Resolve Pass -> Swapchain (composite opaque + accum/weight)
 	a.Profiler.BeginScope("Resolve")
 	rPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
@@ -525,11 +495,7 @@ func (a *App) Render() {
 	}
 	a.Profiler.EndScope("Resolve")
 
-	a.Profiler.BeginScope("Features")
-	if err := a.renderScreenStage(FeatureScreenStagePostResolve, encoder, view); err != nil {
-		fmt.Printf("ERROR: Feature render failed: %v\n", err)
-	}
-	a.Profiler.EndScope("Features")
+	a.runFeatureScreenStage("Feature Post-Resolve", FeatureScreenStagePostResolve, encoder, view)
 
 	a.Profiler.BeginScope("Submit/Present")
 	cmd, err := encoder.Finish(nil)
@@ -558,6 +524,28 @@ func (a *App) Render() {
 	a.LastRenderTime = now
 	a.recordCameraState()
 	a.RenderFrameIndex++
+}
+
+func (a *App) runFeatureCommandStage(scope string, stage FeatureCommandStage, encoder *wgpu.CommandEncoder) {
+	if a == nil || encoder == nil || !a.hasCommandStageWork(stage) {
+		return
+	}
+	a.Profiler.BeginScope(scope)
+	if err := a.dispatchCommandStage(stage, encoder); err != nil {
+		fmt.Printf("ERROR: Feature command stage %d failed: %v\n", stage, err)
+	}
+	a.Profiler.EndScope(scope)
+}
+
+func (a *App) runFeatureScreenStage(scope string, stage FeatureScreenStage, encoder *wgpu.CommandEncoder, target *wgpu.TextureView) {
+	if a == nil || encoder == nil || target == nil || !a.hasScreenStageWork(stage) {
+		return
+	}
+	a.Profiler.BeginScope(scope)
+	if err := a.renderScreenStage(stage, encoder, target); err != nil {
+		fmt.Printf("ERROR: Feature screen stage %d failed: %v\n", stage, err)
+	}
+	a.Profiler.EndScope(scope)
 }
 
 func formatShadowUpdateSummary(updates []core.ShadowUpdate) string {

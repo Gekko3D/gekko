@@ -181,6 +181,22 @@ func (a *App) dispatchCommandStage(stage FeatureCommandStage, encoder *wgpu.Comm
 	return nil
 }
 
+func (a *App) hasCommandStageWork(stage FeatureCommandStage) bool {
+	if a == nil {
+		return false
+	}
+	for _, feature := range a.features {
+		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		contributor, ok := feature.(FeatureCommandStageContributor)
+		if ok && contributor.HasCommandStage(a, stage) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) renderPassStage(stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
 	if a == nil {
 		return nil
@@ -200,6 +216,22 @@ func (a *App) renderPassStage(stage FeaturePassStage, pass *wgpu.RenderPassEncod
 	return nil
 }
 
+func (a *App) hasPassStageWork(stage FeaturePassStage) bool {
+	if a == nil {
+		return false
+	}
+	for _, feature := range a.features {
+		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		contributor, ok := feature.(FeaturePassStageContributor)
+		if ok && contributor.HasPassStage(a, stage) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) renderScreenStage(stage FeatureScreenStage, encoder *wgpu.CommandEncoder, target *wgpu.TextureView) error {
 	switch stage {
 	case FeatureScreenStagePostResolve:
@@ -207,6 +239,22 @@ func (a *App) renderScreenStage(stage FeatureScreenStage, encoder *wgpu.CommandE
 	default:
 		return nil
 	}
+}
+
+func (a *App) hasScreenStageWork(stage FeatureScreenStage) bool {
+	if a == nil {
+		return false
+	}
+	for _, feature := range a.features {
+		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		contributor, ok := feature.(FeatureScreenStageContributor)
+		if ok && contributor.HasScreenStage(a, stage) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) shutdownFeatures() {

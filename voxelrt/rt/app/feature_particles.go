@@ -74,6 +74,25 @@ func (f *ParticlesFeature) DispatchCommandStage(a *App, stage FeatureCommandStag
 	return nil
 }
 
+func (f *ParticlesFeature) HasCommandStage(a *App, stage FeatureCommandStage) bool {
+	return stage == FeatureCommandStagePreGBuffer &&
+		a != nil &&
+		a.BufferManager != nil &&
+		a.BufferManager.ParticleSystemActive &&
+		a.ParticleInitPipeline != nil &&
+		a.ParticleSimPipeline != nil &&
+		a.ParticleSpawnPipeline != nil &&
+		a.ParticleFinalizePipeline != nil
+}
+
+func (f *ParticlesFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
+	return stage == FeaturePassStageAccumulation &&
+		a != nil &&
+		a.BufferManager != nil &&
+		a.ParticlesPipeline != nil &&
+		a.BufferManager.HasParticleContribution()
+}
+
 func (f *ParticlesFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
 	if stage != FeaturePassStageAccumulation {
 		return nil

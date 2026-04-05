@@ -79,6 +79,16 @@ func (f *GizmoFeature) Shutdown(a *App) {
 	a.GizmoPass = nil
 }
 
+func (f *GizmoFeature) HasScreenStage(a *App, stage FeatureScreenStage) bool {
+	return stage == FeatureScreenStagePostResolve &&
+		a != nil &&
+		a.GizmoPass != nil &&
+		a.GizmoPass.BindGroup != nil &&
+		a.GizmoPass.DepthBindGroup != nil &&
+		a.Scene != nil &&
+		len(a.Scene.Gizmos) > 0
+}
+
 func (f *GizmoFeature) rebuildBindGroups(a *App, phase string) error {
 	if a == nil || a.GizmoPass == nil || a.BufferManager == nil || a.BufferManager.CameraBuf == nil || a.BufferManager.DepthView == nil {
 		return nil

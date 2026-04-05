@@ -592,8 +592,6 @@ func (a *App) Init() error {
 		panic(samplerErr)
 	}
 
-	a.setupTextures(width, height)
-
 	// Default Camera Setup
 	view := mgl32.Ident4()
 	invView := mgl32.Ident4()
@@ -605,26 +603,14 @@ func (a *App) Init() error {
 	a.BufferManager.UpdateScene(a.Scene, a.Camera, float32(width)/float32(height))
 	a.BufferManager.UpdateTiledLightingResources(uint32(width), uint32(height))
 
-	// Bind groups creation
-	a.setupBindGroups()
-	a.BufferManager.CreateDebugBindGroups(a.DebugComputePipeline)
-	a.BufferManager.CreateTiledLightCullBindGroups(a.TiledLightCullPipeline)
-
 	// Shadow Pipeline
 	err = a.BufferManager.CreateShadowPipeline(shaders.ShadowMapWGSL)
 	if err != nil {
 		return err
 	}
 
-	// G-Buffer resources
-	a.BufferManager.CreateGBufferTextures(uint32(width), uint32(height))
-	a.BufferManager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
-	a.BufferManager.CreateLightingBindGroups(a.LightingPipeline, a.StorageView)
-	a.BufferManager.CreateShadowBindGroups()
-
-	a.BufferManager.StorageView = a.StorageView
-	// Create resolve pipeline to composite opaque + transparent accum onto swapchain
-	a.setupResolvePipeline()
+	a.rebuildCoreSwapchainResources(width, height)
+	a.rebuildCoreSceneBindings()
 
 	// Initialize Hi-Z Occlusion
 	hizMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{

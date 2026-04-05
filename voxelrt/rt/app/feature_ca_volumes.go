@@ -77,6 +77,23 @@ func (f *CAVolumeFeature) DispatchCommandStage(a *App, stage FeatureCommandStage
 	return nil
 }
 
+func (f *CAVolumeFeature) HasCommandStage(a *App, stage FeatureCommandStage) bool {
+	return stage == FeatureCommandStagePreGBufferVolumes &&
+		a != nil &&
+		a.BufferManager != nil &&
+		a.CAVolumeSimPipeline != nil &&
+		a.CAVolumeBoundsPipeline != nil &&
+		a.BufferManager.CAVolumeCount > 0
+}
+
+func (f *CAVolumeFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
+	return stage == FeaturePassStageAccumulation &&
+		a != nil &&
+		a.BufferManager != nil &&
+		a.CAVolumePipeline != nil &&
+		a.BufferManager.HasCAVolumeContribution()
+}
+
 func (f *CAVolumeFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
 	if stage != FeaturePassStageAccumulation {
 		return nil
