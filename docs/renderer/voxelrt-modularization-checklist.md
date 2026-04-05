@@ -370,13 +370,13 @@ Goal:
 
 Recommended feature:
 
-- celestial bodies
+- any optional renderer pass with clear setup/update/render ownership
 
 New files to add later:
 
-- `gekko/voxelrt/rt/app/feature_celestial_bodies.go`
+- one feature implementation file under `gekko/voxelrt/rt/app/`
 - renderer-side GPU helpers as needed
-- ECS component/module files on the engine side
+- engine-side bridge code only if the feature needs ECS data
 
 Tasks:
 
@@ -434,7 +434,7 @@ Recommended sequence:
 11. Phase 11
 12. Phase 12
 
-This order extracts the lowest-risk features first and leaves skybox and future celestial bodies until the feature model is already stable.
+This order extracts the lowest-risk features first and leaves more specialized features until the feature model is already stable.
 
 ## Stop Conditions
 

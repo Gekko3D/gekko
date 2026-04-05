@@ -59,6 +59,3 @@ var SkyboxWGSL string
 
 //go:embed sprites.wgsl
 var SpritesWGSL string
-
-//go:embed celestial_bodies.wgsl
-var CelestialBodiesWGSL string

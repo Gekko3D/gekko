@@ -62,7 +62,6 @@ Examples of feature candidates:
 - CA volumes
 - gizmos
 - text overlay
-- celestial bodies
 
 ## Guiding Principles
 
@@ -202,7 +201,7 @@ Goal:
 
 Recommended first client:
 
-- `CelestialBodiesFeature`
+- a small optional feature with depth-aware composition
 
 Why:
 
@@ -212,8 +211,8 @@ Why:
 
 Acceptance criteria:
 
-- celestial bodies can be added without modifying unrelated features
-- games not using celestial bodies incur effectively zero cost
+- the feature can be added without modifying unrelated features
+- games not using the feature incur effectively zero cost
 
 ## Proposed Core vs Feature Split
 
@@ -281,7 +280,7 @@ Milestone 4:
 
 Milestone 5:
 
-- celestial bodies implemented as the first net-new modular feature
+- one net-new modular feature implemented end-to-end
 
 ## Recommended First Step
 
@@ -294,4 +293,4 @@ Do not begin by extracting all passes at once. First define:
 - how a feature plugs in
 - how resize and scene-buffer invalidation are routed
 
-That gives a stable foundation for all later renderer work, including celestial bodies.
+That gives a stable foundation for all later renderer work.

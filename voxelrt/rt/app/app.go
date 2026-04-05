@@ -30,7 +30,6 @@ type App struct {
 	SpritesPipeline     *wgpu.RenderPipeline
 	TransparentPipeline *wgpu.RenderPipeline
 	CAVolumePipeline    *wgpu.RenderPipeline
-	CelestialPipeline   *wgpu.RenderPipeline
 	ResolvePipeline     *wgpu.RenderPipeline
 
 	ResolveBG *wgpu.BindGroup
@@ -100,7 +99,6 @@ type App struct {
 	ParticleSpawnCount uint32
 	ParticleAtlasData  []byte // If set before Init, uses this instead of embedded
 	FeatureConfig      AppFeatureConfig
-	CelestialBodies    []CelestialBodyRenderData
 
 	features                  []Feature
 	defaultFeaturesRegistered bool
@@ -109,14 +107,13 @@ type App struct {
 const DefaultUIFontSize = 26.0
 
 type AppFeatureFlags struct {
-	Text            bool
-	Gizmos          bool
-	Skybox          bool
-	CAVolumes       bool
-	Transparency    bool
-	Particles       bool
-	Sprites         bool
-	CelestialBodies bool
+	Text         bool
+	Gizmos       bool
+	Skybox       bool
+	CAVolumes    bool
+	Transparency bool
+	Particles    bool
+	Sprites      bool
 }
 
 type AppFeatureConfig struct {
@@ -128,14 +125,13 @@ type AppFeatureConfig struct {
 
 func DefaultFeatureFlags() AppFeatureFlags {
 	return AppFeatureFlags{
-		Text:            true,
-		Gizmos:          true,
-		Skybox:          true,
-		CAVolumes:       true,
-		Transparency:    true,
-		Particles:       true,
-		Sprites:         true,
-		CelestialBodies: true,
+		Text:         true,
+		Gizmos:       true,
+		Skybox:       true,
+		CAVolumes:    true,
+		Transparency: true,
+		Particles:    true,
+		Sprites:      true,
 	}
 }
 
