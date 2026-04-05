@@ -27,12 +27,16 @@ const FAR_T: f32 = 60000.0;
 //  - 3: volumetric color history (RGBA16Float, rgb=color, a=transmittance)
 //  - 4: volumetric scene depth history (R16Float)
 //  - 5: full-resolution scene depth
+//  - 6: half-resolution CA color (rgb=radiance, a=transmittance)
+//  - 7: half-resolution CA front depth
 @group(0) @binding(0) var tOpaque : texture_2d<f32>;
 @group(0) @binding(1) var tAccum  : texture_2d<f32>;
 @group(0) @binding(2) var tWeight : texture_2d<f32>;
 @group(0) @binding(3) var tVolume : texture_2d<f32>;
 @group(0) @binding(4) var tVolumeDepth : texture_2d<f32>;
 @group(0) @binding(5) var tSceneDepth : texture_2d<f32>;
+@group(0) @binding(6) var tCAColor : texture_2d<f32>;
+@group(0) @binding(7) var tCADepth : texture_2d<f32>;
 
 fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
   let a = 2.51;
@@ -56,15 +60,26 @@ fn depth_weight(current_depth: f32, sample_depth: f32) -> f32 {
   return exp(-delta * 0.04);
 }
 
-fn sample_volume_bilateral(ipos: vec2<i32>, current_depth: f32) -> vec4<f32> {
+struct BilateralSample {
+  color: vec4<f32>,
+  depth: f32,
+};
+
+fn sample_halfres_bilateral(
+  ipos: vec2<i32>,
+  current_depth: f32,
+  color_tex: texture_2d<f32>,
+  depth_tex: texture_2d<f32>,
+) -> BilateralSample {
   let full_dims = textureDimensions(tOpaque);
-  let vol_dims = textureDimensions(tVolume);
+  let vol_dims = textureDimensions(color_tex);
   let uv = (vec2<f32>(f32(ipos.x), f32(ipos.y)) + 0.5) / vec2<f32>(f32(full_dims.x), f32(full_dims.y));
   let vol_pos = uv * vec2<f32>(f32(vol_dims.x), f32(vol_dims.y)) - vec2<f32>(0.5, 0.5);
   let base = vec2<i32>(floor(vol_pos));
   let frac = fract(vol_pos);
 
   var accum = vec4<f32>(0.0);
+  var accum_depth = 0.0;
   var total_w = 0.0;
   for (var oy = 0; oy < 2; oy = oy + 1) {
     for (var ox = 0; ox < 2; ox = ox + 1) {
@@ -75,9 +90,10 @@ fn sample_volume_bilateral(ipos: vec2<i32>, current_depth: f32) -> vec4<f32> {
       let spatial_x = mix(1.0 - frac.x, frac.x, f32(ox));
       let spatial_y = mix(1.0 - frac.y, frac.y, f32(oy));
       let spatial_w = spatial_x * spatial_y;
-      let sample_depth = textureLoad(tVolumeDepth, coord, 0).r;
+      let sample_depth = textureLoad(depth_tex, coord, 0).r;
       let w = spatial_w * depth_weight(current_depth, sample_depth);
-      accum += textureLoad(tVolume, coord, 0) * w;
+      accum += textureLoad(color_tex, coord, 0) * w;
+      accum_depth += sample_depth * w;
       total_w += w;
     }
   }
@@ -86,9 +102,13 @@ fn sample_volume_bilateral(ipos: vec2<i32>, current_depth: f32) -> vec4<f32> {
       clamp(i32(round(vol_pos.x)), 0, i32(vol_dims.x) - 1),
       clamp(i32(round(vol_pos.y)), 0, i32(vol_dims.y) - 1)
     );
-    return textureLoad(tVolume, fallback, 0);
+    return BilateralSample(textureLoad(color_tex, fallback, 0), textureLoad(depth_tex, fallback, 0).r);
   }
-  return accum / total_w;
+  return BilateralSample(accum / total_w, accum_depth / total_w);
+}
+
+fn composite_two_layers(base: vec3<f32>, front: vec4<f32>, back: vec4<f32>) -> vec3<f32> {
+  return base * (front.a * back.a) + front.rgb + back.rgb * front.a;
 }
 
 @fragment
@@ -105,8 +125,22 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let acc  = acc4.rgb;
   let accA = acc4.a;
   let w    = textureLoad(tWeight,  ipos, 0).r;
-  let vol = sample_volume_bilateral(ipos, current_depth);
-  let base = copq * vol.a + vol.rgb;
+  let vol = sample_halfres_bilateral(ipos, current_depth, tVolume, tVolumeDepth);
+  let ca = sample_halfres_bilateral(ipos, current_depth, tCAColor, tCADepth);
+  let vol_valid = vol.depth > 0.0 && vol.depth < FAR_T * 0.5;
+  let ca_valid = ca.depth > 0.0 && ca.depth < FAR_T * 0.5;
+  var base = copq;
+  if (vol_valid && ca_valid) {
+    if (ca.depth <= vol.depth) {
+      base = composite_two_layers(copq, ca.color, vol.color);
+    } else {
+      base = composite_two_layers(copq, vol.color, ca.color);
+    }
+  } else if (vol_valid) {
+    base = copq * vol.color.a + vol.color.rgb;
+  } else if (ca_valid) {
+    base = copq * ca.color.a + ca.color.rgb;
+  }
 
   // Use unweighted accumulated alpha (from accum.a) for revealage to reduce distance dependence
   let a_unweighted = clamp(accA, 0.0, 50.0);

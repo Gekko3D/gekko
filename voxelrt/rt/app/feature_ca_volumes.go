@@ -1,6 +1,10 @@
 package app
 
-import "github.com/cogentcore/webgpu/wgpu"
+import (
+	"sort"
+
+	"github.com/cogentcore/webgpu/wgpu"
+)
 
 // CAVolumeFeature owns CA volume simulation, bounds, and accumulation rendering.
 type CAVolumeFeature struct{}
@@ -66,53 +70,97 @@ func (f *CAVolumeFeature) Shutdown(a *App) {
 }
 
 func (f *CAVolumeFeature) DispatchCommandStage(a *App, stage FeatureCommandStage, encoder *wgpu.CommandEncoder) error {
-	if stage != FeatureCommandStagePreGBufferVolumes {
-		return nil
-	}
 	if a == nil || encoder == nil || a.BufferManager == nil {
 		return nil
 	}
-	a.BufferManager.DispatchCAVolumeSim(encoder, a.CAVolumeSimPipeline)
-	a.BufferManager.DispatchCAVolumeBounds(encoder, a.CAVolumeBoundsPipeline)
+	switch stage {
+	case FeatureCommandStagePreGBufferVolumes:
+		a.BufferManager.DispatchCAVolumeSim(encoder, a.CAVolumeSimPipeline)
+		a.BufferManager.DispatchCAVolumeBounds(encoder, a.CAVolumeBoundsPipeline)
+	case FeatureCommandStagePostLighting:
+		if a.BufferManager.CAVolumeColorView == nil || a.BufferManager.CAVolumeDepthView == nil {
+			a.HadCAVolumePass = false
+			return nil
+		}
+		pass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+			ColorAttachments: []wgpu.RenderPassColorAttachment{
+				{
+					View:       a.BufferManager.CAVolumeColorView,
+					LoadOp:     wgpu.LoadOpClear,
+					StoreOp:    wgpu.StoreOpStore,
+					ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 1},
+				},
+				{
+					View:       a.BufferManager.CAVolumeDepthView,
+					LoadOp:     wgpu.LoadOpClear,
+					StoreOp:    wgpu.StoreOpStore,
+					ClearValue: wgpu.Color{R: volumetricClearDepth, G: 0, B: 0, A: 0},
+				},
+			},
+		})
+		defer pass.End()
+		if a.CAVolumePipeline == nil || a.BufferManager.CAVolumeRenderBG0 == nil || a.BufferManager.CAVolumeRenderBG2 == nil || a.BufferManager.CurrentCAVolumeRenderBG1() == nil {
+			a.HadCAVolumePass = false
+			return nil
+		}
+		volumes := a.BufferManager.CurrentCAVolumes()
+		if len(volumes) == 0 {
+			a.HadCAVolumePass = false
+			return nil
+		}
+		order := make([]int, 0, len(volumes))
+		for i := range volumes {
+			order = append(order, i)
+		}
+		sort.Slice(order, func(i, j int) bool {
+			aIdx := order[i]
+			bIdx := order[j]
+			aCenter := caVolumeWorldCenter(volumes[aIdx])
+			bCenter := caVolumeWorldCenter(volumes[bIdx])
+			aDist := aCenter.Sub(a.Camera.Position).LenSqr()
+			bDist := bCenter.Sub(a.Camera.Position).LenSqr()
+			return aDist > bDist
+		})
+
+		pass.SetPipeline(a.CAVolumePipeline)
+		pass.SetBindGroup(0, a.BufferManager.CAVolumeRenderBG0, nil)
+		pass.SetBindGroup(1, a.BufferManager.CurrentCAVolumeRenderBG1(), nil)
+		pass.SetBindGroup(2, a.BufferManager.CAVolumeRenderBG2, nil)
+		for _, idx := range order {
+			pass.Draw(3, 1, 0, uint32(idx))
+		}
+		a.HadCAVolumePass = true
+		return nil
+	}
 	return nil
 }
 
 func (f *CAVolumeFeature) HasCommandStage(a *App, stage FeatureCommandStage) bool {
-	return stage == FeatureCommandStagePreGBufferVolumes &&
-		a != nil &&
-		a.BufferManager != nil &&
-		a.CAVolumeSimPipeline != nil &&
-		a.CAVolumeBoundsPipeline != nil &&
-		a.BufferManager.CAVolumeCount > 0
+	if a == nil || a.BufferManager == nil {
+		return false
+	}
+	switch stage {
+	case FeatureCommandStagePreGBufferVolumes:
+		return a.CAVolumeSimPipeline != nil &&
+			a.CAVolumeBoundsPipeline != nil &&
+			a.BufferManager.CAVolumeCount > 0
+	case FeatureCommandStagePostLighting:
+		return a.BufferManager.CAVolumeColorView != nil &&
+			a.BufferManager.CAVolumeDepthView != nil &&
+			(a.BufferManager.CAVolumeCount > 0 || a.HadCAVolumePass)
+	default:
+		return false
+	}
 }
 
 func (f *CAVolumeFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
-	return stage == FeaturePassStageAccumulation &&
-		a != nil &&
-		a.BufferManager != nil &&
-		a.CAVolumePipeline != nil &&
-		a.BufferManager.HasCAVolumeContribution()
+	return false
 }
 
 func (f *CAVolumeFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
-	if stage != FeaturePassStageAccumulation {
-		return nil
-	}
-	if a == nil || pass == nil || a.BufferManager == nil {
-		return nil
-	}
-	if a.CAVolumePipeline == nil || !a.BufferManager.HasCAVolumeContribution() {
-		return nil
-	}
-	if a.BufferManager.CAVolumeRenderBG0 == nil || a.BufferManager.CAVolumeRenderBG2 == nil || a.BufferManager.CurrentCAVolumeRenderBG1() == nil {
-		return nil
-	}
-
-	pass.SetPipeline(a.CAVolumePipeline)
-	pass.SetBindGroup(0, a.BufferManager.CAVolumeRenderBG0, nil)
-	pass.SetBindGroup(1, a.BufferManager.CurrentCAVolumeRenderBG1(), nil)
-	pass.SetBindGroup(2, a.BufferManager.CAVolumeRenderBG2, nil)
-	pass.Draw(3, 1, 0, 0)
+	_ = a
+	_ = stage
+	_ = pass
 	return nil
 }
 

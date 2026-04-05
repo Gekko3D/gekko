@@ -18,6 +18,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
   - [`renderer/verification.md`](renderer/verification.md)
 - Working on renderer changes:
   - [`renderer/change-guide.md`](renderer/change-guide.md)
+  - [`renderer/media.md`](renderer/media.md)
   - [`renderer/verification.md`](renderer/verification.md)
 - Working on authored content:
   - [`content/game-assets.md`](content/game-assets.md)
@@ -48,7 +49,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
 - `workflows/`
   - task-oriented playbooks for common agent changes
 - `renderer/`
-  - renderer architecture, frame flow, editing/picking behavior, particles, and contributor guidance
+  - renderer architecture, frame flow, analytic media, editing/picking behavior, particles, and contributor guidance
 - `content/`
   - authored content formats, levels, streaming, and world data
 - `reference/`

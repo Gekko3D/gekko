@@ -13,7 +13,7 @@ Use this guide when you are editing renderer code and need to answer three quest
 - App orchestration: `voxelrt/rt/app/`
   - WebGPU lifetime, pipeline creation, resize handling, update scheduling, and render-pass order
 - GPU resource manager: `voxelrt/rt/gpu/`
-  - scene buffers, G-buffer textures, WBOIT targets, shadows, Hi-Z, particles, sprites, CA volumes, and probe GI resources
+  - scene buffers, G-buffer textures, WBOIT targets, half-resolution volumetric targets, shadows, Hi-Z, particles, sprites, analytic media, CA volumes, and probe GI resources
 - Scene and culling: `voxelrt/rt/core/`
   - CPU scene state, frustum and Hi-Z culling, lights, camera, raycast, gizmos, and text primitives
 - Sparse voxel storage: `voxelrt/rt/volume/`
@@ -30,7 +30,7 @@ Use this guide when you are editing renderer code and need to answer three quest
    - clears frame text
    - starts GPU batch accumulation with `BufferManager.BeginBatch()`
 2. `PreRender`
-   - syncs ECS objects, CA volumes, camera, text, lights, gizmos, particles, and sprites into renderer state
+   - syncs ECS objects, analytic media, CA volumes, camera, text, lights, gizmos, particles, and sprites into renderer state
    - runs `RtApp.Update()`
 3. `Render`
    - runs `RtApp.Render()`
@@ -42,6 +42,7 @@ If a change depends on scene upload, particle uploads, or text lifetime, it usua
 | If you need to change... | Start here | Also inspect |
 | --- | --- | --- |
 | ECS sync for voxel objects, lights, text, gizmos, particles, or sprites | `mod_voxelrt_client_systems.go` | `voxelrt/rt/app/app_frame.go`, `voxelrt/rt/gpu/manager*.go` |
+| Atmosphere or bounded fog/media behavior | `analytic_medium_ecs.go`, `analytic_medium_presets.go`, `mod_voxelrt_client_systems.go` | `voxelrt/rt/app/feature_analytic_medium.go`, `voxelrt/rt/app/app_medium.go`, `voxelrt/rt/shaders/analytic_medium.wgsl`, [`media.md`](media.md) |
 | Public picking, projection, or voxel-edit helpers | `mod_voxelrt_client.go` | `voxelrt/rt/core/scene.go`, `voxelrt/rt/volume/xbrickmap_edit.go` |
 | Frame pass ordering or execution timing | `voxelrt/rt/app/app_frame.go` | `voxelrt/rt/app/app.go`, `voxelrt/rt/app/app_pipelines.go` |
 | Pipeline layouts and shader bindings | `voxelrt/rt/app/app_pipelines.go` | relevant `.wgsl` file plus `voxelrt/rt/gpu/Create*BindGroups`; voxel payload bindings are shared across all voxel consumers |
@@ -50,7 +51,7 @@ If a change depends on scene upload, particle uploads, or text lifetime, it usua
 | Culling or interaction regressions | `voxelrt/rt/core/scene.go`, `voxelrt/rt/core/camera.go` | `voxelrt/rt/gpu/manager_hiz.go` |
 | Shadow behavior or update cadence | `voxelrt/rt/gpu/manager_shadow.go`, `voxelrt/rt/app/app_frame.go` | `voxelrt/rt/core/light.go`, `voxelrt/rt/shaders/shadow_map.wgsl` |
 | Particle runtime behavior | `voxelrt/rt/gpu/manager_particles.go`, `voxelrt/rt/app/app_particles.go` | `particles_ecs.go`, [`particles.md`](particles.md) |
-| CA volume behavior | `voxelrt/rt/gpu/manager_ca.go`, `voxelrt/rt/app/app_ca.go` | `voxelrt/rt/app/app_frame.go` |
+| CA volume behavior | `voxelrt/rt/gpu/manager_ca.go`, `voxelrt/rt/app/app_ca.go` | `voxelrt/rt/app/feature_ca_volumes.go`, `voxelrt/rt/app/app_frame.go`, `voxelrt/rt/shaders/resolve_transparency.wgsl` |
 
 ## Resource Rebuild Rules
 
@@ -62,7 +63,7 @@ These rules are load-bearing. Many renderer regressions reduce to stale bind gro
 
 ### `UpdateScene(...) == recreated`
 
-When scene buffers or shadow-map capacity grow, `App.Update()` must rebuild dependent bind groups. The current code handles debug, G-buffer, lighting, shadows, transparent overlay, CA volume render/sim/bounds, and gizmo camera/depth state. New features added on top of scene buffers need the same invalidation handling.
+When scene buffers or shadow-map capacity grow, `App.Update()` must rebuild dependent bind groups. The current code handles debug, G-buffer, lighting, shadows, transparent overlay, analytic media, CA volume render/sim/bounds, resolve, and gizmo camera/depth state. New features added on top of scene buffers need the same invalidation handling.
 
 Voxel atlas resource changes now also fan out more widely. The paged payload atlas is exposed as four fixed `texture_3d<u32>` bindings, so bind-group builders and shader layouts have to stay synchronized across the whole voxel stack.
 
@@ -91,6 +92,10 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
   - `App.DebugMode`, camera debug modes, overlay modes, and render modes are separate controls.
 - Particles are hybrid.
   - Emitter state starts from ECS, but alive-particle state and draw counts are GPU-owned.
+- Analytic media is not transparent voxels.
+  - Bounded fog and atmosphere now use a dedicated half-resolution temporal volumetric path and resolve integration, not the WBOIT accumulation path.
+- Water is still separate.
+  - Do not try to route water surfaces through `AnalyticMediumComponent`.
 
 ## Common Failure Modes
 
@@ -100,6 +105,10 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
   - suspect voxel payload page binding drift, mismatched `BrickRecord` layout, or a bind-group builder that was updated in only one pass
 - Transparent content missing
   - inspect accumulation targets, resolve bindings, and particle or transparent-overlay bind groups
+- Atmosphere or fog missing, stale, or sampling the wrong frame
+  - inspect analytic-media history targets, `feature_analytic_medium.go`, resolve bindings, and previous-frame temporal inputs
+- CA volumes missing, swapping, or clipping after a renderer change
+  - inspect the dedicated CA half-resolution pass, CA resolve bindings, and miss-path behavior in `ca_volume_render.wgsl`
 - Occlusion popping or disappearing objects
   - inspect Hi-Z enable rules, previous-frame snapshot use, and `Scene.Commit(...)`
 - Edits visible to picking but not rendering

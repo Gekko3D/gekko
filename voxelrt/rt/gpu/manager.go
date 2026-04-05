@@ -196,6 +196,8 @@ type GpuBufferManager struct {
 	TransparentWeightTex *wgpu.Texture // R16Float, accum weight
 	VolumetricTex        [2]*wgpu.Texture
 	VolumetricDepthTex   [2]*wgpu.Texture
+	CAVolumeColorTex     *wgpu.Texture
+	CAVolumeDepthTex     *wgpu.Texture
 
 	// G-Buffer Views
 	DepthView    *wgpu.TextureView
@@ -207,6 +209,8 @@ type GpuBufferManager struct {
 	TransparentWeightView  *wgpu.TextureView
 	VolumetricView         [2]*wgpu.TextureView
 	VolumetricDepthView    [2]*wgpu.TextureView
+	CAVolumeColorView      *wgpu.TextureView
+	CAVolumeDepthView      *wgpu.TextureView
 	VolumetricWidth        uint32
 	VolumetricHeight       uint32
 	VolumetricHistoryIdx   int
@@ -356,6 +360,7 @@ type GpuBufferManager struct {
 	CAVolumeBindingsDirty       bool
 	AnalyticMediumBindingsDirty bool
 	caLayout                    []caVolumeLayout
+	caVolumes                   []CAVolumeHost
 
 	// Batch update tracking
 	BatchMode      bool                       // Enable batching of updates within a frame

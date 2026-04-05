@@ -247,17 +247,13 @@ func (a *App) setupCAVolumePipeline() {
 				{
 					Format: wgpu.TextureFormatRGBA16Float,
 					Blend: &wgpu.BlendState{
-						Color: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorOne, Operation: wgpu.BlendOperationAdd},
-						Alpha: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorOne, Operation: wgpu.BlendOperationAdd},
+						Color: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorSrcAlpha, Operation: wgpu.BlendOperationAdd},
+						Alpha: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorZero, DstFactor: wgpu.BlendFactorSrcAlpha, Operation: wgpu.BlendOperationAdd},
 					},
 					WriteMask: wgpu.ColorWriteMaskAll,
 				},
 				{
-					Format: wgpu.TextureFormatR16Float,
-					Blend: &wgpu.BlendState{
-						Color: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorOne, Operation: wgpu.BlendOperationAdd},
-						Alpha: wgpu.BlendComponent{SrcFactor: wgpu.BlendFactorOne, DstFactor: wgpu.BlendFactorOne, Operation: wgpu.BlendOperationAdd},
-					},
+					Format:    wgpu.TextureFormatR16Float,
 					WriteMask: wgpu.ColorWriteMaskAll,
 				},
 			},

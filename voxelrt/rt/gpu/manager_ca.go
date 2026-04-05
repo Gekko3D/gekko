@@ -32,18 +32,18 @@ type caVolumeBoundsRecord struct {
 }
 
 type caParamsUniform struct {
-	Dt          float32
-	Elapsed     float32
-	VolumeCount uint32
-	AtlasWidth  uint32
-	AtlasHeight uint32
-	AtlasDepth  uint32
-	Pad1        uint32
-	Pad2        uint32
-	Pad3        uint32
-	Pad4        uint32
-	Pad5        uint32
-	Pad6        uint32
+	Dt           float32
+	Elapsed      float32
+	VolumeCount  uint32
+	AtlasWidth   uint32
+	AtlasHeight  uint32
+	AtlasDepth   uint32
+	RenderWidth  uint32
+	RenderHeight uint32
+	Pad1         uint32
+	Pad2         uint32
+	Pad3         uint32
+	Pad4         uint32
 }
 
 func (m *GpuBufferManager) UpdateCAVolumes(volumes []CAVolumeHost) bool {
@@ -61,6 +61,7 @@ func (m *GpuBufferManager) UpdateCAVolumes(volumes []CAVolumeHost) bool {
 	atlasW, atlasH, atlasD := uint32(1), uint32(1), uint32(1)
 	layout := make([]caVolumeLayout, len(volumes))
 	records := make([]caVolumeRecord, len(volumes))
+	m.caVolumes = append(m.caVolumes[:0], volumes...)
 	zOffset := uint32(0)
 
 	for i, v := range volumes {
@@ -149,6 +150,13 @@ func (m *GpuBufferManager) UpdateCAVolumes(volumes []CAVolumeHost) bool {
 	m.CAVolumeCount = uint32(len(volumes))
 	m.CAVolumeBindingsDirty = true
 	return recreated
+}
+
+func (m *GpuBufferManager) CurrentCAVolumes() []CAVolumeHost {
+	if m == nil {
+		return nil
+	}
+	return m.caVolumes
 }
 
 func (m *GpuBufferManager) UpdateCAPresets() {
@@ -271,12 +279,14 @@ func (m *GpuBufferManager) UpdateCAParams(dt float32) {
 		m.CAElapsedTime += dt
 	}
 	params := caParamsUniform{
-		Dt:          dt,
-		Elapsed:     m.CAElapsedTime,
-		VolumeCount: m.CAVolumeCount,
-		AtlasWidth:  m.CAAtlasWidth,
-		AtlasHeight: m.CAAtlasHeight,
-		AtlasDepth:  m.CAAtlasDepth,
+		Dt:           dt,
+		Elapsed:      m.CAElapsedTime,
+		VolumeCount:  m.CAVolumeCount,
+		AtlasWidth:   m.CAAtlasWidth,
+		AtlasHeight:  m.CAAtlasHeight,
+		AtlasDepth:   m.CAAtlasDepth,
+		RenderWidth:  m.VolumetricWidth,
+		RenderHeight: m.VolumetricHeight,
 	}
 	if m.ensureBuffer("CAParamsBuf", &m.CAParamsBuf, unsafe.Slice((*byte)(unsafe.Pointer(&params)), int(unsafe.Sizeof(params))), wgpu.BufferUsageUniform, 0) {
 		m.CAVolumeBindingsDirty = true

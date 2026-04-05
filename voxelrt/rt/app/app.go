@@ -93,6 +93,7 @@ type App struct {
 	ShadowUpdateOffset    int
 	ShadowUpdateSummary   string
 	HadAccumulationPass   bool
+	HadCAVolumePass       bool
 	PreviousProfilerStats string
 
 	Profiler *core.Profiler

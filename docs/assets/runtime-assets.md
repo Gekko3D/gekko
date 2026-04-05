@@ -81,6 +81,13 @@ Typical flows:
 - `CreateVoxelFile(...)`
   - registers the raw loaded VOX file
 
+Gameplay/runtime material helpers:
+
+- `GameplaySeeThroughMaterial(baseColor, transparency)`
+  - creates a transparent material for readability helpers without optical glass behavior
+- `ApplyGameplaySeeThroughMaterial(&mat, transparency)`
+  - converts an existing material to non-refractive gameplay transparency in place
+
 Authored asset spawning uses these helpers when resolving:
 
 - `vox_model`
@@ -141,6 +148,9 @@ It is metadata only. It is not a canonical deduplication key.
 - The asset server does not currently behave like a content-addressed cache.
 - Repeated loading of the same authored source can create additional runtime assets unless higher-level code reuses them.
 - The renderer and gameplay systems should treat `AssetID` as opaque.
+- Palette alpha alone is not the right tool for gameplay readability transparency.
+  - Runtime palette-alpha inference currently opts into thin surface-glass behavior with transmission/refraction.
+  - For “see through this wall/object so the player can read the scene,” prefer `GameplaySeeThroughMaterial(...)` or `ApplyGameplaySeeThroughMaterial(...)`.
 
 ## Ownership Boundaries
 

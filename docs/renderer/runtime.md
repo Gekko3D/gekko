@@ -8,17 +8,18 @@ Related docs:
 - [`change-guide.md`](change-guide.md)
 - [`editing.md`](editing.md)
 - [`gbuffer-compaction-note.md`](gbuffer-compaction-note.md)
+- [`media.md`](media.md)
 - [`particles.md`](particles.md)
 - [`verification.md`](verification.md)
 
 ## Ownership Boundaries
 
 - ECS bridge: `mod_voxelrt_client*.go`
-  - creates and synchronizes renderer-side objects, lights, camera state, text, gizmos, particles, sprites, skybox inputs, and CA volumes
+  - creates and synchronizes renderer-side objects, lights, camera state, text, gizmos, particles, sprites, analytic media, skybox inputs, and CA volumes
 - `app.App`: `voxelrt/rt/app/`
   - owns WebGPU device and surface lifetime, render pipelines, resize flow, opaque storage output, and pass scheduling
 - `gpu.GpuBufferManager`: `voxelrt/rt/gpu/`
-  - owns G-buffer textures, WBOIT targets, shadow maps, Hi-Z, scene buffers, voxel atlas resources, and most cached bind groups
+  - owns G-buffer textures, WBOIT targets, half-resolution analytic-media targets, half-resolution CA volume targets, shadow maps, Hi-Z, scene buffers, voxel atlas resources, and most cached bind groups
 - `core.Scene` and friends: `voxelrt/rt/core/`
   - own CPU scene state, camera and light math, culling, raycast, gizmos, and text primitives
 - `volume.XBrickMap`: `voxelrt/rt/volume/`
@@ -51,14 +52,16 @@ That split matters because bridge sync and GPU uploads happen before render-pass
 5. calls `BufferManager.UpdateScene(...)`
 6. rebuilds dependent bind groups if GPU resources were recreated
 7. updates camera uniforms
-8. refreshes text and gizmo buffers
-9. updates probe GI placement, dirty tracking, and bake budget state
+8. updates analytic-media temporal history inputs and current half-resolution volumetric target selection
+9. refreshes text and gizmo buffers
+10. updates probe GI placement, dirty tracking, and bake budget state
 
 Important details:
 
 - Hi-Z uses previous-frame data and is disabled during fast camera motion.
 - `Scene.Commit(...)` produces both `VisibleObjects` and `ShadowObjects`.
 - `UpdateScene(...)` can grow shadow maps or scene buffers, which forces downstream bind-group recreation.
+- analytic media history uses previous-frame camera state and previous half-resolution volumetric buffers, so `Update()` has to prepare those inputs before feature execution
 - Probe GI state is prepared during `Update()` and baked later during `Render()`.
 
 ## `App.Render()`
@@ -72,14 +75,18 @@ The current frame graph is:
 5. shadow pass
 6. probe GI bake compute pass for a capped dirty-probe batch
 7. deferred lighting compute pass
-8. optional debug compute pass
-9. accumulation render pass
-   - CA volumes
+8. analytic media half-resolution render pass
+   - renders bounded atmosphere/fog media into dedicated half-resolution color and front-depth history/render targets
+   - reprojects previous analytic-media history in shader
+9. CA volume half-resolution render pass
+   - renders CA volumes into dedicated half-resolution color and front-depth targets
+10. optional debug compute pass
+11. accumulation render pass
    - transparent voxel overlay
    - particles
    - sprites
-10. resolve render pass
-   - resolve transparency over opaque lighting
+12. resolve render pass
+   - composites opaque lighting, WBOIT transparency, half-resolution analytic media, and half-resolution CA volumes
    - text overlay
    - gizmos
 
@@ -146,6 +153,27 @@ Current implementation notes:
 - accumulation: `RGBA16Float`
 - weight: `R16Float`
 
+Current transparency modes:
+
+- volumetric transparent media
+  - uses transmission plus density and marches through voxel thickness
+  - most expensive path
+- thin surface glass
+  - uses transmission with zero density and resolves from the first surface hit
+  - keeps refraction but avoids marching through the full interior volume
+- gameplay see-through
+  - uses transparency with transmission, density, and refraction forced to zero
+  - intended for readability helpers such as seeing a character or pickup through nearby cover
+  - use `GameplaySeeThroughMaterial(...)` or `ApplyGameplaySeeThroughMaterial(...)` instead of palette alpha when you do not want glass-like optics
+
+### Half-resolution volumetrics
+
+- analytic media history/render targets: `RGBA16Float`
+- analytic media front-depth targets: `R16Float`
+- CA volume color target: `RGBA16Float`
+- CA volume front-depth target: `R16Float`
+- resolve upsamples both analytic media and CA volumes with depth-aware filtering against full-resolution scene depth
+
 ### Other major resources
 
 - shadow maps: 2D array textures managed by `GpuBufferManager`
@@ -181,7 +209,20 @@ Current implementation notes:
 ### CA volumes
 
 - simulation and bounds updates run before the main opaque passes
-- CA volume rendering happens during accumulation
+- CA volume rendering happens after deferred lighting in a dedicated half-resolution pass
+- CA volumes are composited during resolve rather than through the WBOIT accumulation targets
+
+### Analytic media
+
+- authored from `AnalyticMediumComponent`
+- current supported shapes:
+  - sphere
+  - box
+- intended for bounded atmosphere and fog-style media
+- rendering happens after deferred lighting in a dedicated half-resolution temporal pass
+- compositing happens during resolve rather than through the WBOIT accumulation targets
+- reusable presets live in `analytic_medium_presets.go`
+- detailed authoring and subsystem notes are in [`media.md`](media.md)
 
 ### Sprites, text, and gizmos
 
@@ -209,7 +250,7 @@ Current implementation notes:
 - G-buffer, lighting, and shadow bind groups
 - probe GI bake bind groups
 - transparent-overlay bind groups
-- particle, sprite, CA volume, and resolve pipelines
+- particle, sprite, CA volume, analytic-medium, and resolve pipelines
 
 ### Scene-resource growth
 
@@ -223,4 +264,6 @@ Voxel payload uploads follow the same rule. The brick table now uses 20-byte rec
 - forgetting that picking and editing still use CPU-side scene data
 - changing resize-sensitive resources without updating `Resize()`
 - changing scene-buffer layouts without rebuilding dependent bind groups
+- changing half-resolution volumetric or CA resolve inputs without updating resolve bind groups and shader bindings together
+- changing analytic-media history or half-resolution target bindings without updating `feature_analytic_medium.go`, `app_medium.go`, `manager_medium.go`, and `resolve_transparency.wgsl` together
 - changing voxel payload page bindings or `BrickRecord` layout in one pass but not the other voxel consumers

@@ -40,12 +40,12 @@ struct CAParams {
   atlas_width: u32,
   atlas_height: u32,
   atlas_depth: u32,
+  render_width: u32,
+  render_height: u32,
   pad1: u32,
   pad2: u32,
   pad3: u32,
   pad4: u32,
-  pad5: u32,
-  pad6: u32,
 };
 
 struct VolumeRecord {
@@ -108,6 +108,7 @@ struct CADDState {
 struct VSOut {
   @builtin(position) position: vec4<f32>,
   @location(0) uv: vec2<f32>,
+  @location(1) @interpolate(flat) volume_index: u32,
 };
 
 fn hash13(p: vec3<f32>) -> f32 {
@@ -116,8 +117,8 @@ fn hash13(p: vec3<f32>) -> f32 {
 }
 
 struct FSOut {
-  @location(0) accum: vec4<f32>,
-  @location(1) weight: f32,
+  @location(0) color: vec4<f32>,
+  @location(1) depth: f32,
 };
 
 @group(0) @binding(0) var<uniform> uCamera: CameraData;
@@ -764,7 +765,7 @@ fn volume_phase_light(
 }
 
 @vertex
-fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
+fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VSOut {
   var pos = array<vec2<f32>, 3>(
     vec2<f32>(-1.0, -3.0),
     vec2<f32>(-1.0, 1.0),
@@ -774,22 +775,33 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
   var out: VSOut;
   out.position = vec4<f32>(p, 0.0, 1.0);
   out.uv = p * 0.5 + vec2<f32>(0.5, 0.5);
+  out.volume_index = iid;
   return out;
 }
 
 @fragment
-fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> FSOut {
+fn fs_main(
+  @builtin(position) frag_pos: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+  @location(1) @interpolate(flat) volume_index: u32,
+) -> FSOut {
+  _ = uv;
   let dims = textureDimensions(in_depth);
+  let render_dims = vec2<f32>(
+    max(f32(ca_params.render_width), 1.0),
+    max(f32(ca_params.render_height), 1.0),
+  );
+  let render_uv = (vec2<f32>(frag_pos.xy) + 0.5) / render_dims;
   let ipos = vec2<i32>(
-    clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
-    clamp(i32(frag_pos.y), 0, i32(dims.y) - 1),
+    clamp(i32(render_uv.x * f32(dims.x)), 0, i32(dims.x) - 1),
+    clamp(i32(render_uv.y * f32(dims.y)), 0, i32(dims.y) - 1),
   );
   var t_limit = textureLoad(in_depth, ipos, 0).r;
   if (t_limit >= FAR_T || t_limit <= 0.0) {
     t_limit = FAR_T;
   }
 
-  let uv_screen = (vec2<f32>(f32(ipos.x), f32(ipos.y)) + 0.5) / vec2<f32>(f32(dims.x), f32(dims.y));
+  let uv_screen = render_uv;
   let ray_ws = get_ray_from_uv(uv_screen);
   let light_color = primary_light_color();
   let ambient = uCamera.ambient_color.xyz;
@@ -798,131 +810,137 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   var accum_a = 0.0;
   var accum_w = 0.0;
 
-  for (var i = 0u; i < ca_params.volume_count; i = i + 1u) {
-    let info = volumes[i];
-    let volume_type = packed_volume_type(info);
-    let preset = packed_volume_preset(info);
-    let intensity = volume_intensity(info);
-    let bounds_info = volume_bounds[i];
-    let bounds_min = vec3<f32>(bounds_info.min_coord.xyz);
-    let bounds_max = vec3<f32>(bounds_info.max_coord.xyz);
-    if (any(bounds_max <= bounds_min)) {
-      continue;
+  if (volume_index >= ca_params.volume_count) {
+    discard;
+  }
+
+  let i = volume_index;
+  let info = volumes[i];
+  let volume_type = packed_volume_type(info);
+  let preset = packed_volume_preset(info);
+  let intensity = volume_intensity(info);
+  let bounds_info = volume_bounds[i];
+  let bounds_min = vec3<f32>(bounds_info.min_coord.xyz);
+  let bounds_max = vec3<f32>(bounds_info.max_coord.xyz);
+  if (any(bounds_max <= bounds_min)) {
+    discard;
+  }
+  let ray_os = transform_ray(ray_ws, info.world_to_local);
+  let raw_bounds = intersect_aabb(ray_os, bounds_min, bounds_max);
+  let inside_volume = raw_bounds.x < 0.0 && raw_bounds.y > 0.0;
+  var border_shell = bounds_shell_size(info);
+  if (inside_volume && volume_type == 0u) {
+    border_shell = 0.0;
+  }
+  let march_min = max(bounds_min - vec3<f32>(border_shell), vec3<f32>(0.0));
+  let march_max = min(bounds_max + vec3<f32>(border_shell), info.grid.xyz);
+  let bounds = intersect_aabb(ray_os, march_min, march_max);
+  let t_enter_os = max(bounds.x, 0.0);
+  let t_exit_os = bounds.y;
+  if (t_enter_os >= t_exit_os) {
+    discard;
+  }
+
+  let enter_pos_os = ray_os.origin + ray_os.dir * t_enter_os;
+  let exit_pos_os = ray_os.origin + ray_os.dir * t_exit_os;
+  let enter_pos_ws = (info.local_to_world * vec4<f32>(enter_pos_os, 1.0)).xyz;
+  let exit_pos_ws = (info.local_to_world * vec4<f32>(exit_pos_os, 1.0)).xyz;
+  let t_enter = max(0.0, world_distance_along_ray(ray_ws, enter_pos_ws));
+  let t_exit = min(t_limit, world_distance_along_ray(ray_ws, exit_pos_ws));
+  if (t_enter >= t_exit) {
+    discard;
+  }
+
+  let screen_jitter = hash21(vec2<f32>(f32(ipos.x) + f32(i) * 13.0, f32(ipos.y) + f32(i) * 29.0));
+  let anchor_cell = floor(enter_pos_os * 0.75 + vec3<f32>(f32(i) * 1.7, f32(i) * 2.3, f32(i) * 3.1));
+  let world_jitter = hash31(anchor_cell);
+  let ray_jitter = mix(world_jitter, screen_jitter, 0.28);
+  let dda_min = vec3<i32>(
+    max(0, i32(floor(march_min.x))),
+    max(0, i32(floor(march_min.y))),
+    max(0, i32(floor(march_min.z))),
+  );
+  let dda_max = vec3<i32>(
+    min(i32(info.grid.x), i32(ceil(march_max.x))),
+    min(i32(info.grid.y), i32(ceil(march_max.y))),
+    min(i32(info.grid.z), i32(ceil(march_max.z))),
+  );
+  if (dda_max.x <= dda_min.x || dda_max.y <= dda_min.y || dda_max.z <= dda_min.z) {
+    discard;
+  }
+
+  var state = ca_dda_init(ray_os.origin, ray_os.dir, dda_min, dda_max, t_enter, t_exit);
+  var t = t_enter;
+  var trans = 1.0;
+  var premul_rgb = vec3<f32>(0.0);
+  var steps = 0u;
+  var cached_light_trans = 1.0;
+  var has_cached_light_trans = false;
+  let max_steps = u32(max(
+    8,
+    (dda_max.x - dda_min.x) +
+    (dda_max.y - dda_min.y) +
+    (dda_max.z - dda_min.z) +
+    8,
+  ));
+  loop {
+    if (t >= t_exit || trans <= 0.01 || steps >= max_steps || !ca_dda_in_bounds(state)) {
+      break;
     }
-    let ray_os = transform_ray(ray_ws, info.world_to_local);
-    let raw_bounds = intersect_aabb(ray_os, bounds_min, bounds_max);
-    let inside_volume = raw_bounds.x < 0.0 && raw_bounds.y > 0.0;
-    var border_shell = bounds_shell_size(info);
-    if (inside_volume && volume_type == 0u) {
-      border_shell = 0.0;
-    }
-    let march_min = max(bounds_min - vec3<f32>(border_shell), vec3<f32>(0.0));
-    let march_max = min(bounds_max + vec3<f32>(border_shell), info.grid.xyz);
-    let bounds = intersect_aabb(ray_os, march_min, march_max);
-    let t_enter_os = max(bounds.x, 0.0);
-    let t_exit_os = bounds.y;
-    if (t_enter_os >= t_exit_os) {
+    steps += 1u;
+
+    let t_next = min(t_exit, min(state.t_max.x, min(state.t_max.y, state.t_max.z)));
+    if (t_next <= t + 1e-5) {
+      state = ca_dda_advance(state);
+      t = t_next;
       continue;
     }
 
-    let enter_pos_os = ray_os.origin + ray_os.dir * t_enter_os;
-    let exit_pos_os = ray_os.origin + ray_os.dir * t_exit_os;
-    let enter_pos_ws = (info.local_to_world * vec4<f32>(enter_pos_os, 1.0)).xyz;
-    let exit_pos_ws = (info.local_to_world * vec4<f32>(exit_pos_os, 1.0)).xyz;
-    let t_enter = max(0.0, world_distance_along_ray(ray_ws, enter_pos_ws));
-    let t_exit = min(t_limit, world_distance_along_ray(ray_ws, exit_pos_ws));
-    if (t_enter >= t_exit) {
-      continue;
+    let cell_hash = hash31(vec3<f32>(f32(state.cell.x), f32(state.cell.y), f32(state.cell.z)) + vec3<f32>(f32(i) * 0.91, f32(i) * 1.37, f32(i) * 1.79));
+    let sample_phase = mix(0.32, 0.68, mix(ray_jitter, cell_hash, 0.55));
+    let sample_t = mix(t, t_next, sample_phase);
+    let pos_ws = ray_ws.origin + ray_ws.dir * sample_t;
+    let pos_os = ray_os.origin + ray_os.dir * sample_t;
+    let sample_pos = bounds_sample_pos(pos_os, bounds_min, bounds_max);
+    let sample = sample_volume_noisy_border(pos_os, info, bounds_min, bounds_max, ray_jitter + f32(i) * 0.37);
+    let segment_len = max(t_next - t, 1e-4);
+    let env = plume_envelope(sample_pos, info) * bounds_soften(sample_pos, bounds_min, bounds_max);
+    let uvw_local = (sample_pos + vec3<f32>(0.5)) / max(info.grid.xyz, vec3<f32>(1.0));
+    let flame_h = clamp(uvw_local.y, 0.0, 1.0);
+    let flame_radial = length((uvw_local.xz - vec2<f32>(0.5)) * 2.0);
+    let p_data = ca_presets[preset];
+    let raw_density = max(sample.x, 0.0) * env * intensity;
+    let smoke_density = max(raw_density - p_data.smoke_density_cut, 0.0);
+    let heat = max(sample.y, 0.0) * intensity;
+    var apparent_heat = heat;
+    if (preset == 2u && volume_type == 1u) {
+      let top_cool = smoothstep(0.26, 0.98, flame_h);
+      apparent_heat = heat * mix(1.04, 0.48, top_cool);
+    } else if (preset == 3u) {
+      let core_focus = 1.0 - smoothstep(0.12, 0.5, flame_radial);
+      let base_focus = 1.0 - smoothstep(0.18, 0.78, flame_h);
+      let shimmer = 0.88 + 0.28 * sin(ca_params.elapsed * 11.4 + pos_os.x * 0.8 + pos_os.z * 1.1 + flame_h * 18.0);
+      apparent_heat = heat * mix(1.08, 1.42, core_focus) * mix(1.12, 0.82, flame_h) * shimmer + core_focus * base_focus * 0.08;
+    } else if (preset == 4u) {
+      let burst_hot = 1.0 - smoothstep(0.14, 0.74, flame_h);
+      let edge_cool = smoothstep(0.22, 0.86, flame_radial);
+      let core_focus = 1.0 - smoothstep(0.12, 0.34, flame_radial);
+      apparent_heat = heat * mix(1.5, 0.5, smoothstep(0.12, 0.94, flame_h)) * mix(1.0, 0.44, edge_cool) + burst_hot * 0.18 + core_focus * burst_hot * 0.14;
     }
-
-    let screen_jitter = hash21(vec2<f32>(f32(ipos.x) + f32(i) * 13.0, f32(ipos.y) + f32(i) * 29.0));
-    let anchor_cell = floor(enter_pos_os * 0.75 + vec3<f32>(f32(i) * 1.7, f32(i) * 2.3, f32(i) * 3.1));
-    let world_jitter = hash31(anchor_cell);
-    let ray_jitter = mix(world_jitter, screen_jitter, 0.28);
-    let dda_min = vec3<i32>(
-      max(0, i32(floor(march_min.x))),
-      max(0, i32(floor(march_min.y))),
-      max(0, i32(floor(march_min.z))),
+    let visible = select(
+      smoke_density,
+      max(heat - p_data.fire_heat_cut, 0.0) + smoke_density * 0.35,
+      volume_type == 1u || preset == 4u,
     );
-    let dda_max = vec3<i32>(
-      min(i32(info.grid.x), i32(ceil(march_max.x))),
-      min(i32(info.grid.y), i32(ceil(march_max.y))),
-      min(i32(info.grid.z), i32(ceil(march_max.z))),
-    );
-    if (dda_max.x <= dda_min.x || dda_max.y <= dda_min.y || dda_max.z <= dda_min.z) {
-      continue;
-    }
-
-    var state = ca_dda_init(ray_os.origin, ray_os.dir, dda_min, dda_max, t_enter, t_exit);
-    var t = t_enter;
-    var trans = 1.0;
-    var premul_rgb = vec3<f32>(0.0);
-    var steps = 0u;
-    let max_steps = u32(max(
-      8,
-      (dda_max.x - dda_min.x) +
-      (dda_max.y - dda_min.y) +
-      (dda_max.z - dda_min.z) +
-      8,
-    ));
-    loop {
-      if (t >= t_exit || trans <= 0.01 || steps >= max_steps || !ca_dda_in_bounds(state)) {
-        break;
-      }
-      steps += 1u;
-
-      let t_next = min(t_exit, min(state.t_max.x, min(state.t_max.y, state.t_max.z)));
-      if (t_next <= t + 1e-5) {
-        state = ca_dda_advance(state);
-        t = t_next;
-        continue;
-      }
-
-      let cell_hash = hash31(vec3<f32>(f32(state.cell.x), f32(state.cell.y), f32(state.cell.z)) + vec3<f32>(f32(i) * 0.91, f32(i) * 1.37, f32(i) * 1.79));
-      let sample_phase = mix(0.32, 0.68, mix(ray_jitter, cell_hash, 0.55));
-      let sample_t = mix(t, t_next, sample_phase);
-      let pos_ws = ray_ws.origin + ray_ws.dir * sample_t;
-      let pos_os = ray_os.origin + ray_os.dir * sample_t;
-      let sample_pos = bounds_sample_pos(pos_os, bounds_min, bounds_max);
-      let sample = sample_volume_noisy_border(pos_os, info, bounds_min, bounds_max, ray_jitter + f32(i) * 0.37);
-      let segment_len = max(t_next - t, 1e-4);
-      let env = plume_envelope(sample_pos, info) * bounds_soften(sample_pos, bounds_min, bounds_max);
-      let uvw_local = (sample_pos + vec3<f32>(0.5)) / max(info.grid.xyz, vec3<f32>(1.0));
-      let flame_h = clamp(uvw_local.y, 0.0, 1.0);
-      let flame_radial = length((uvw_local.xz - vec2<f32>(0.5)) * 2.0);
-      let p_data = ca_presets[preset];
-      let raw_density = max(sample.x, 0.0) * env * intensity;
-      let smoke_density = max(raw_density - p_data.smoke_density_cut, 0.0);
-      let heat = max(sample.y, 0.0) * intensity;
-      var apparent_heat = heat;
-      if (preset == 2u && volume_type == 1u) {
-        let top_cool = smoothstep(0.26, 0.98, flame_h);
-        apparent_heat = heat * mix(1.04, 0.48, top_cool);
-      } else if (preset == 3u) {
-        let core_focus = 1.0 - smoothstep(0.12, 0.5, flame_radial);
-        let base_focus = 1.0 - smoothstep(0.18, 0.78, flame_h);
-        let shimmer = 0.88 + 0.28 * sin(ca_params.elapsed * 11.4 + pos_os.x * 0.8 + pos_os.z * 1.1 + flame_h * 18.0);
-        apparent_heat = heat * mix(1.08, 1.42, core_focus) * mix(1.12, 0.82, flame_h) * shimmer + core_focus * base_focus * 0.08;
+    if (visible > 0.001) {
+      var smoke_term = pow(smoke_density, p_data.alpha_scale_smoke) * (1.25 + 0.75 * env) * info.render_params.x;
+      if (preset == 2u && volume_type == 0u) {
+        smoke_term = pow(smoke_density, 1.08) * (1.1 + 0.65 * env) * info.render_params.x;
       } else if (preset == 4u) {
-        let burst_hot = 1.0 - smoothstep(0.14, 0.74, flame_h);
-        let edge_cool = smoothstep(0.22, 0.86, flame_radial);
-        let core_focus = 1.0 - smoothstep(0.12, 0.34, flame_radial);
-        apparent_heat = heat * mix(1.5, 0.5, smoothstep(0.12, 0.94, flame_h)) * mix(1.0, 0.44, edge_cool) + burst_hot * 0.18 + core_focus * burst_hot * 0.14;
+        smoke_term = pow(smoke_density, 1.1) * (1.18 + 0.54 * env) * info.render_params.x;
       }
-      let visible = select(
-        smoke_density,
-        max(heat - p_data.fire_heat_cut, 0.0) + smoke_density * 0.35,
-        volume_type == 1u || preset == 4u,
-      );
-      if (visible > 0.001) {
-        var smoke_term = pow(smoke_density, p_data.alpha_scale_smoke) * (1.25 + 0.75 * env) * info.render_params.x;
-        if (preset == 2u && volume_type == 0u) {
-          smoke_term = pow(smoke_density, 1.08) * (1.1 + 0.65 * env) * info.render_params.x;
-        } else if (preset == 4u) {
-          smoke_term = pow(smoke_density, 1.1) * (1.18 + 0.54 * env) * info.render_params.x;
-        }
-        var flame_term = 0.0;
-          if (volume_type == 1u || preset == 4u) {
+      var flame_term = 0.0;
+      if (volume_type == 1u || preset == 4u) {
             let cooled = 1.0 - smoothstep(0.22, 0.9, apparent_heat);
             smoke_term *= mix(select(0.18, 0.32, preset == 4u), 1.0, cooled);
             flame_term = pow(max(apparent_heat - p_data.fire_heat_cut, 0.0), p_data.alpha_scale_fire) * (0.75 + 0.55 * env) * p_data.sigma_t_fire * info.render_params.y;
@@ -954,111 +972,114 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
               flame_term = pow(max(apparent_heat - 0.015, 0.0), 1.02) * (0.9 + 0.66 * env) * mix(1.18, 0.84, flame_h) * mix(0.9, 1.42, core_focus) * max(flicker, 0.35);
               flame_term += core_focus * tail * 0.08;
             }
-          }
-        var sigma_t = smoke_term * max(0.01, info.render_params.x) * p_data.sigma_t_smoke +
-          flame_term * p_data.sigma_t_fire;
-        var alpha_step = 1.0 - exp(-sigma_t * segment_len);
-        if (preset == 4u) {
-          let heat_alpha = clamp(apparent_heat * 1.15, 0.0, 1.0);
-          let smoke_alpha = smoothstep(0.02, 0.28, smoke_density);
-          alpha_step = clamp(alpha_step * mix(1.0 + smoke_alpha * 0.45, 1.48, heat_alpha), 0.0, 0.98);
-        } else if (volume_type == 0u) {
-          alpha_step = clamp(alpha_step * mix(1.35, 1.85, smoothstep(0.02, 0.2, smoke_density)), 0.0, 0.98);
-        } else if (volume_type == 1u) {
-          let heat_alpha = clamp(heat * select(1.2, 1.45, preset == 3u), 0.0, 1.0);
-          alpha_step = clamp(alpha_step * mix(0.08, select(1.35, 1.65, preset == 3u), heat_alpha), 0.0, 0.98);
-        }
-        if (alpha_step > 1e-4) {
-          let ldir = primary_light_dir(pos_ws);
-          let cos_theta = clamp(dot(ldir, -ray_ws.dir), -1.0, 1.0);
-          let light_trans = volume_light_transmittance(pos_os, info, ldir, inside_volume);
-          let light_term = volume_phase_light(
-            select(volume_type, 0u, preset == 4u),
-            preset,
-            env,
-            smoke_density,
-            heat,
-            cos_theta,
-            ambient,
-            light_color,
-            light_trans,
-          );
-          let shadow_mix = clamp(
-            (1.0 - light_trans) * 0.65 +
-            smoothstep(0.04, 0.22, smoke_density) * 0.35 +
-            (1.0 - env) * 0.2,
-            0.0,
-            1.0,
-          );
-          let body_color = mix(info.scatter_color.xyz, info.shadow_tint.xyz, shadow_mix);
-          var absorption_mix = smoothstep(0.06, 0.24, smoke_density) * mix(0.3, 0.82, 1.0 - light_trans);
-          absorption_mix += smoothstep(0.18, 0.7, alpha_step) * 0.25;
-          absorption_mix += (1.0 - env) * 0.12;
-          if (volume_type == 1u) {
-            absorption_mix *= 0.38;
-          }
-          let medium_color = mix(body_color, info.absorption_color.xyz, clamp(absorption_mix, 0.0, 1.0));
-          var scatter = medium_color * light_term * (0.55 + 0.45 * env) * p_data.scatter_scale;
-          if (volume_type == 1u || preset == 4u) {
-            let heat_scatter = clamp(apparent_heat * select(1.1, 1.35, preset == 3u), 0.0, 1.0);
-            scatter *= mix(select(0.08, 0.04, preset == 3u), select(0.34, 0.18, preset == 3u), heat_scatter);
-            if (preset == 4u) {
-              scatter *= mix(0.62, 0.24, heat_scatter);
-            }
-            if (preset == 3u) {
-              scatter *= 0.1;
-            }
-          } else {
-            scatter *= mix(1.2, 1.55, smoothstep(0.03, 0.22, smoke_density));
-          }
-          var source = scatter * select(smoke_term, smoke_term * 0.65, volume_type == 1u);
-          if (preset == 4u) {
-            source = scatter * smoke_term * 0.92;
-          }
-          if (volume_type == 1u || preset == 4u) {
-            let fire_bands = fire_band_strength(heat, env, preset);
-            let base_fire = preset_fire_color(apparent_heat, preset);
-            let ember_tint = p_data.ember_tint.xyz;
-            let ember_term = fire_bands.x * flame_term * mix(0.16, 0.42, 1.0 - light_trans);
-            let body_term = fire_bands.y * flame_term * 0.12;
-            let core_term = fire_bands.z * flame_term * mix(0.1, 0.3, light_trans);
-            let band_tint = clamp(ember_tint * ember_term + p_data.fire_core_tint.xyz * body_term + vec3<f32>(1.0) * core_term, vec3<f32>(0.0), vec3<f32>(0.38));
-            let flame = base_fire * flame_term * max(0.0, info.render_params.y);
-            if (preset == 4u) {
-              source += flame * (1.08 + 0.16 * light_trans) * (0.84 + core_term) + band_tint * flame_term * 0.62;
-            } else {
-              source += flame * (1.34 + 0.28 * light_trans) * (1.0 + core_term) + band_tint * flame_term;
-              if (preset == 3u) {
-                source += flame * (0.16 + 0.12 * core_term);
-              }
-            }
-          }
-          premul_rgb += trans * source * alpha_step * p_data.absorption_scale;
-          trans *= (1.0 - alpha_step);
-        }
       }
-
-      state = ca_dda_advance(state);
-      t = t_next;
+      var sigma_t = smoke_term * max(0.01, info.render_params.x) * p_data.sigma_t_smoke +
+        flame_term * p_data.sigma_t_fire;
+      var alpha_step = 1.0 - exp(-sigma_t * segment_len);
+      if (preset == 4u) {
+        let heat_alpha = clamp(apparent_heat * 1.15, 0.0, 1.0);
+        let smoke_alpha = smoothstep(0.02, 0.28, smoke_density);
+        alpha_step = clamp(alpha_step * mix(1.0 + smoke_alpha * 0.45, 1.48, heat_alpha), 0.0, 0.98);
+      } else if (volume_type == 0u) {
+        alpha_step = clamp(alpha_step * mix(1.35, 1.85, smoothstep(0.02, 0.2, smoke_density)), 0.0, 0.98);
+      } else if (volume_type == 1u) {
+        let heat_alpha = clamp(heat * select(1.2, 1.45, preset == 3u), 0.0, 1.0);
+        alpha_step = clamp(alpha_step * mix(0.08, select(1.35, 1.65, preset == 3u), heat_alpha), 0.0, 0.98);
+      }
+      if (alpha_step > 1e-4) {
+        let ldir = primary_light_dir(pos_ws);
+        let cos_theta = clamp(dot(ldir, -ray_ws.dir), -1.0, 1.0);
+        let refresh_light_trans =
+          !has_cached_light_trans ||
+          (steps & 1u) == 0u ||
+          alpha_step > 0.18 ||
+          smoke_density > 0.12;
+        if (refresh_light_trans) {
+          cached_light_trans = volume_light_transmittance(pos_os, info, ldir, inside_volume);
+          has_cached_light_trans = true;
+        }
+        let light_trans = cached_light_trans;
+        let light_term = volume_phase_light(
+          select(volume_type, 0u, preset == 4u),
+          preset,
+          env,
+          smoke_density,
+          heat,
+          cos_theta,
+          ambient,
+          light_color,
+          light_trans,
+        );
+        let shadow_mix = clamp(
+          (1.0 - light_trans) * 0.65 +
+          smoothstep(0.04, 0.22, smoke_density) * 0.35 +
+          (1.0 - env) * 0.2,
+          0.0,
+          1.0,
+        );
+        let body_color = mix(info.scatter_color.xyz, info.shadow_tint.xyz, shadow_mix);
+        var absorption_mix = smoothstep(0.06, 0.24, smoke_density) * mix(0.3, 0.82, 1.0 - light_trans);
+        absorption_mix += smoothstep(0.18, 0.7, alpha_step) * 0.25;
+        absorption_mix += (1.0 - env) * 0.12;
+        if (volume_type == 1u) {
+          absorption_mix *= 0.38;
+        }
+        let medium_color = mix(body_color, info.absorption_color.xyz, clamp(absorption_mix, 0.0, 1.0));
+        var scatter = medium_color * light_term * (0.55 + 0.45 * env) * p_data.scatter_scale;
+        if (volume_type == 1u || preset == 4u) {
+          let heat_scatter = clamp(apparent_heat * select(1.1, 1.35, preset == 3u), 0.0, 1.0);
+          scatter *= mix(select(0.08, 0.04, preset == 3u), select(0.34, 0.18, preset == 3u), heat_scatter);
+          if (preset == 4u) {
+            scatter *= mix(0.62, 0.24, heat_scatter);
+          }
+          if (preset == 3u) {
+            scatter *= 0.1;
+          }
+        } else {
+          scatter *= mix(1.2, 1.55, smoothstep(0.03, 0.22, smoke_density));
+        }
+        var source = scatter * select(smoke_term, smoke_term * 0.65, volume_type == 1u);
+        if (preset == 4u) {
+          source = scatter * smoke_term * 0.92;
+        }
+        if (volume_type == 1u || preset == 4u) {
+          let fire_bands = fire_band_strength(heat, env, preset);
+          let base_fire = preset_fire_color(apparent_heat, preset);
+          let ember_tint = p_data.ember_tint.xyz;
+          let ember_term = fire_bands.x * flame_term * mix(0.16, 0.42, 1.0 - light_trans);
+          let body_term = fire_bands.y * flame_term * 0.12;
+          let core_term = fire_bands.z * flame_term * mix(0.1, 0.3, light_trans);
+          let band_tint = clamp(ember_tint * ember_term + p_data.fire_core_tint.xyz * body_term + vec3<f32>(1.0) * core_term, vec3<f32>(0.0), vec3<f32>(0.38));
+          let flame = base_fire * flame_term * max(0.0, info.render_params.y);
+          if (preset == 4u) {
+            source += flame * (1.08 + 0.16 * light_trans) * (0.84 + core_term) + band_tint * flame_term * 0.62;
+          } else {
+            source += flame * (1.34 + 0.28 * light_trans) * (1.0 + core_term) + band_tint * flame_term;
+            if (preset == 3u) {
+              source += flame * (0.16 + 0.12 * core_term);
+            }
+          }
+        }
+        premul_rgb += trans * source * alpha_step * p_data.absorption_scale;
+        trans *= (1.0 - alpha_step);
+      }
     }
 
-    let alpha_raw = clamp(1.0 - trans, 0.0, 0.995);
-    let alpha_shaped = 1.0 - pow(1.0 - alpha_raw, 1.8);
-    var alpha_levels = 6.0;
-    if (volume_type == 0u) {
-      alpha_levels = 10.0;
-    }
-    let alpha = clamp(quantize_alpha(alpha_shaped, alpha_levels), 0.0, 0.995);
-    if (alpha > 1e-4) {
-      let color = premul_rgb / max(alpha_raw, 1e-4);
-      let z = clamp(t_enter / max(t_limit, 1e-4), 0.0, 1.0);
-      let w = max(1e-3, alpha) * mix(0.65, 1.0, pow(1.0 - z, 2.5));
-      let reveal_alpha = clamp(alpha * 1.55, 0.0, 1.35);
-      accum_rgb += color * alpha * w;
-      accum_a += reveal_alpha;
-      accum_w += alpha * w;
-    }
+    state = ca_dda_advance(state);
+    t = t_next;
   }
 
-  return FSOut(vec4<f32>(accum_rgb, accum_a), accum_w);
+  let alpha_raw = clamp(1.0 - trans, 0.0, 0.995);
+  let alpha_shaped = 1.0 - pow(1.0 - alpha_raw, 1.8);
+  var alpha_levels = 6.0;
+  if (volume_type == 0u) {
+    alpha_levels = 10.0;
+  }
+  let alpha = clamp(quantize_alpha(alpha_shaped, alpha_levels), 0.0, 0.995);
+  if (alpha <= 1e-4) {
+    discard;
+  }
+
+  let trans_out = clamp(1.0 - alpha, 0.0, 1.0);
+  return FSOut(vec4<f32>(premul_rgb, trans_out), t_enter);
 }
