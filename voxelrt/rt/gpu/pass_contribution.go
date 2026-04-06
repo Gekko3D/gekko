@@ -53,3 +53,11 @@ func (m *GpuBufferManager) HasAnalyticMediumContribution() bool {
 		m.AnalyticMediumBG1 != nil &&
 		m.AnalyticMediumBG2 != nil
 }
+
+func (m *GpuBufferManager) HasWaterContribution() bool {
+	return m != nil &&
+		m.WaterCount > 0 &&
+		m.WaterBG0 != nil &&
+		m.WaterBG1 != nil &&
+		m.WaterBG2 != nil
+}

@@ -296,6 +296,49 @@ func TestVoxelObjectAllowsOcclusionKeepsTerrainAndGroupedChunksEligible(t *testi
 	}
 }
 
+func TestBuildWaterSurfaceHostsNormalizesAndSortsResults(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{4, 3, 2},
+			Scale:    mgl32.Vec3{2, 1, 3},
+		},
+		&WaterSurfaceComponent{
+			HalfExtents:   [2]float32{2, 1},
+			Depth:         2,
+			FlowDirection: [2]float32{0, 3},
+		},
+	)
+	cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{1, 2, 3},
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&WaterSurfaceComponent{
+			Disabled:    true,
+			HalfExtents: [2]float32{3, 3},
+			Depth:       1,
+		},
+	)
+	app.FlushCommands()
+
+	hosts := buildWaterSurfaceHosts(cmd)
+	if len(hosts) != 1 {
+		t.Fatalf("expected one enabled water host, got %d", len(hosts))
+	}
+	if hosts[0].Position != (mgl32.Vec3{4, 3, 2}) {
+		t.Fatalf("unexpected host position: %v", hosts[0].Position)
+	}
+	if hosts[0].HalfExtents != ([2]float32{4, 3}) {
+		t.Fatalf("unexpected host half extents: %v", hosts[0].HalfExtents)
+	}
+	if hosts[0].FlowDirection != ([2]float32{0, 1}) {
+		t.Fatalf("unexpected normalized flow direction: %v", hosts[0].FlowDirection)
+	}
+}
+
 func newVoxelRtStateTest() *VoxelRtState {
 	return &VoxelRtState{
 		RtApp: &app_rt.App{

@@ -132,6 +132,9 @@ There are now three different categories to keep straight:
 - transparent voxel overlay:
   - surface-oriented transparency and see-through materials
   - contributes through WBOIT accumulation
+- dedicated water surfaces:
+  - stylized horizontal water bodies with blocky stepped highlights/refraction
+  - contributes through WBOIT accumulation as its own feature
 - analytic media:
   - bounded volumetric fog/atmosphere
   - half-resolution temporal volumetric path
@@ -139,7 +142,7 @@ There are now three different categories to keep straight:
   - simulated volumetrics
   - separate half-resolution volume path and resolve integration
 
-Do not force all three through the same abstraction. They solve different rendering problems.
+Do not force all four through the same abstraction. They solve different rendering problems.
 
 ## Current Quality Model
 

@@ -165,6 +165,10 @@ Current transparency modes:
   - uses transparency with transmission, density, and refraction forced to zero
   - intended for readability helpers such as seeing a character or pickup through nearby cover
   - use `GameplaySeeThroughMaterial(...)` or `ApplyGameplaySeeThroughMaterial(...)` instead of palette alpha when you do not want glass-like optics
+- dedicated water surfaces
+  - use the water feature and `WaterSurfaceComponent`, not transparent voxel palettes or analytic media
+  - keep a blocky stepped surface read with restrained refraction/tint
+  - accumulate through WBOIT alongside other transparent surface features
 
 ### Half-resolution volumetrics
 
@@ -223,6 +227,13 @@ Current transparency modes:
 - compositing happens during resolve rather than through the WBOIT accumulation targets
 - reusable presets live in `analytic_medium_presets.go`
 - detailed authoring and subsystem notes are in [`media.md`](media.md)
+
+### Water surfaces
+
+- authored from `WaterSurfaceComponent`
+- rendered as dedicated horizontal surface bodies with visible side walls
+- rendered during the accumulation pass instead of the half-resolution volumetric passes
+- intended to stay stylized and voxel-adjacent, with stepped motion and discrete refraction/highlight response
 
 ### Sprites, text, and gizmos
 

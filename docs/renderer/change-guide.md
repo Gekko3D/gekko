@@ -43,6 +43,7 @@ If a change depends on scene upload, particle uploads, or text lifetime, it usua
 | --- | --- | --- |
 | ECS sync for voxel objects, lights, text, gizmos, particles, or sprites | `mod_voxelrt_client_systems.go` | `voxelrt/rt/app/app_frame.go`, `voxelrt/rt/gpu/manager*.go` |
 | Atmosphere or bounded fog/media behavior | `analytic_medium_ecs.go`, `analytic_medium_presets.go`, `mod_voxelrt_client_systems.go` | `voxelrt/rt/app/feature_analytic_medium.go`, `voxelrt/rt/app/app_medium.go`, `voxelrt/rt/shaders/analytic_medium.wgsl`, [`media.md`](media.md) |
+| Stylized water surfaces | `water_surface_ecs.go`, `mod_voxelrt_client_systems.go` | `voxelrt/rt/app/feature_water.go`, `voxelrt/rt/app/app_water.go`, `voxelrt/rt/gpu/manager_water.go`, `voxelrt/rt/shaders/water_surface.wgsl`, [`media.md`](media.md) |
 | Public picking, projection, or voxel-edit helpers | `mod_voxelrt_client.go` | `voxelrt/rt/core/scene.go`, `voxelrt/rt/volume/xbrickmap_edit.go` |
 | Frame pass ordering or execution timing | `voxelrt/rt/app/app_frame.go` | `voxelrt/rt/app/app.go`, `voxelrt/rt/app/app_pipelines.go` |
 | Pipeline layouts and shader bindings | `voxelrt/rt/app/app_pipelines.go` | relevant `.wgsl` file plus `voxelrt/rt/gpu/Create*BindGroups`; voxel payload bindings are shared across all voxel consumers |

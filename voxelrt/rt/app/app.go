@@ -29,6 +29,7 @@ type App struct {
 	ParticlesPipeline      *wgpu.RenderPipeline
 	SpritesPipeline        *wgpu.RenderPipeline
 	TransparentPipeline    *wgpu.RenderPipeline
+	WaterPipeline          *wgpu.RenderPipeline
 	CAVolumePipeline       *wgpu.RenderPipeline
 	AnalyticMediumPipeline *wgpu.RenderPipeline
 	ResolvePipeline        *wgpu.RenderPipeline
@@ -114,6 +115,7 @@ type AppFeatureFlags struct {
 	Skybox        bool
 	CAVolumes     bool
 	AnalyticMedia bool
+	Water         bool
 	Transparency  bool
 	Particles     bool
 	Sprites       bool
@@ -133,6 +135,7 @@ func DefaultFeatureFlags() AppFeatureFlags {
 		Skybox:        true,
 		CAVolumes:     true,
 		AnalyticMedia: true,
+		Water:         true,
 		Transparency:  true,
 		Particles:     true,
 		Sprites:       true,

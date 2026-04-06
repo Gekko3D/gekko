@@ -43,6 +43,9 @@ var CAVolumeRenderWGSL string
 //go:embed analytic_medium.wgsl
 var AnalyticMediumWGSL string
 
+//go:embed water_surface.wgsl
+var WaterSurfaceWGSL string
+
 /**
  */
 //go:embed transparent_overlay.wgsl

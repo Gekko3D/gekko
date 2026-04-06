@@ -127,6 +127,21 @@ type AnalyticMediumHost struct {
 	SampleCount               uint32
 }
 
+type WaterSurfaceHost struct {
+	EntityID        uint32
+	Position        mgl32.Vec3
+	HalfExtents     [2]float32
+	Depth           float32
+	Color           [3]float32
+	AbsorptionColor [3]float32
+	Opacity         float32
+	Roughness       float32
+	Refraction      float32
+	FlowDirection   [2]float32
+	FlowSpeed       float32
+	WaveAmplitude   float32
+}
+
 type CAPresetData struct {
 	SmokeSeed        float32
 	FireSeed         float32
@@ -330,6 +345,8 @@ type GpuBufferManager struct {
 	CAPresetBuf                 *wgpu.Buffer
 	AnalyticMediumBuf           *wgpu.Buffer
 	AnalyticMediumParamsBuf     *wgpu.Buffer
+	WaterSurfaceBuf             *wgpu.Buffer
+	WaterSurfaceParamsBuf       *wgpu.Buffer
 	VolumetricHistoryParamsBuf  *wgpu.Buffer
 	CAFieldTexA                 *wgpu.Texture
 	CAFieldTexB                 *wgpu.Texture
@@ -352,6 +369,11 @@ type GpuBufferManager struct {
 	AnalyticMediumBG1           *wgpu.BindGroup
 	AnalyticMediumBG2           *wgpu.BindGroup
 	AnalyticMediumCount         uint32
+	WaterBG0                    *wgpu.BindGroup
+	WaterBG1                    *wgpu.BindGroup
+	WaterBG2                    *wgpu.BindGroup
+	WaterCount                  uint32
+	WaterElapsedTime            float32
 	CAAtlasWidth                uint32
 	CAAtlasHeight               uint32
 	CAAtlasDepth                uint32
@@ -359,6 +381,7 @@ type GpuBufferManager struct {
 	CAElapsedTime               float32
 	CAVolumeBindingsDirty       bool
 	AnalyticMediumBindingsDirty bool
+	WaterBindingsDirty          bool
 	caLayout                    []caVolumeLayout
 	caVolumes                   []CAVolumeHost
 
@@ -489,6 +512,8 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, nil, wgpu.BufferUsageStorage, 4096)
 	m.ensureBuffer("AnalyticMediumBuf", &m.AnalyticMediumBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("AnalyticMediumParamsBuf", &m.AnalyticMediumParamsBuf, nil, wgpu.BufferUsageUniform, 256)
+	m.ensureBuffer("WaterSurfaceBuf", &m.WaterSurfaceBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("WaterSurfaceParamsBuf", &m.WaterSurfaceParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("VolumetricHistoryParamsBuf", &m.VolumetricHistoryParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("SpriteBuf", &m.SpriteBuf, nil, wgpu.BufferUsageStorage, 1024)
 

@@ -67,6 +67,9 @@ func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
 	if flags.AnalyticMedia {
 		defaults = append(defaults, &AnalyticMediumFeature{})
 	}
+	if flags.Water {
+		defaults = append(defaults, &WaterFeature{})
+	}
 	if flags.Transparency {
 		defaults = append(defaults, &TransparencyFeature{})
 	}

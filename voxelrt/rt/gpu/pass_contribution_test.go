@@ -3,6 +3,7 @@ package gpu
 import (
 	"testing"
 
+	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 )
 
@@ -90,11 +91,28 @@ func TestHasContributionHelpersReflectBoundState(t *testing.T) {
 	if manager.HasAnalyticMediumContribution() {
 		t.Fatal("expected empty analytic medium state to skip accumulation")
 	}
+	if manager.HasWaterContribution() {
+		t.Fatal("expected empty water state to skip accumulation")
+	}
 }
 
 func TestHasParticleContributionRequiresActivatedSystem(t *testing.T) {
 	manager := &GpuBufferManager{ParticleSystemActive: true}
 	if manager.HasParticleContribution() {
 		t.Fatal("expected missing particle bind groups to keep contribution disabled")
+	}
+}
+
+func TestHasWaterContributionRequiresBoundState(t *testing.T) {
+	manager := &GpuBufferManager{WaterCount: 1}
+	if manager.HasWaterContribution() {
+		t.Fatal("expected missing water bind groups to keep contribution disabled")
+	}
+
+	manager.WaterBG0 = &wgpu.BindGroup{}
+	manager.WaterBG1 = &wgpu.BindGroup{}
+	manager.WaterBG2 = &wgpu.BindGroup{}
+	if !manager.HasWaterContribution() {
+		t.Fatal("expected water contribution once all water bind groups are bound")
 	}
 }

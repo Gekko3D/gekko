@@ -87,6 +87,16 @@ func TestEnsureDefaultFeaturesRespectsConfig(t *testing.T) {
 	if len(app.features) == 0 {
 		t.Fatal("expected default features to be registered")
 	}
+	foundWater := false
+	for _, feature := range app.features {
+		if feature != nil && feature.Name() == "water" {
+			foundWater = true
+			break
+		}
+	}
+	if !foundWater {
+		t.Fatal("expected water feature to be registered by default")
+	}
 
 	noDefaults := &App{FeatureConfig: AppFeatureConfig{AutoRegisterDefaults: false}}
 	noDefaults.ensureDefaultFeatures()

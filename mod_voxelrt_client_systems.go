@@ -400,6 +400,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync Media")
 
+	state.RtApp.Profiler.BeginScope("Sync Water")
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateWaterSurfaces(buildWaterSurfaceHosts(cmd), float32(t.Dt))
+	}
+	state.RtApp.Profiler.EndScope("Sync Water")
+
 	state.RtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
 		state.RtApp.Camera.Position = camera.Position
