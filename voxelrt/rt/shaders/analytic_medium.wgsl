@@ -359,6 +359,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   var accum_rgb = vec3<f32>(0.0);
   var accum_a = 0.0;
   var accum_w = 0.0;
+  var nearest_t = FAR_T;
 
   let count = min(medium_params.medium_count, arrayLength(&media));
   for (var i = 0u; i < count; i = i + 1u) {
@@ -369,6 +370,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     if (t_end <= t_start) {
       continue;
     }
+    nearest_t = min(nearest_t, t_start);
 
     let base_step_count = clamp(u32(max(m.noise.z, 4.0)), 4u, 24u);
     let characteristic = medium_characteristic_thickness(m);
@@ -399,19 +401,22 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       let radial_dir = normalize(pos_ws - m.bounds.xyz);
       let tangent = 1.0 - abs(dot(ray_dir, radial_dir));
       let tangent_boost = pow(saturate(tangent), max(m.style0.y, 0.25));
-      let limb_boost = 1.0 + max(m.style0.x, 0.0) * tangent_boost;
+      let limb_scale = max(m.style0.x, 0.0) * select(0.32, 1.0, has_opaque_behind);
+      let limb_boost = 1.0 + limb_scale * tangent_boost;
       let boundary_pos = medium_boundary_pos(m, pos_ws);
       var boundary_fade = 1.0;
       if (m.style1.w > m.style1.z + 1e-4) {
         boundary_fade = 1.0 - smoothstep(m.style1.z, m.style1.w, boundary_pos);
       }
-      let horizon_glow = limb_boost * mix(0.75, 1.0, boundary_fade);
+      let space_edge_soften = select(mix(0.12, 1.0, boundary_fade), 1.0, has_opaque_behind);
+      let horizon_glow = limb_boost * mix(0.75, 1.0, boundary_fade) * space_edge_soften;
       let cos_theta = dot(light_dir, -ray_dir);
       let phase = hg_phase(cos_theta, clamp(m.emission.w, -0.85, 0.85));
       let phase_term = 0.04 + phase * 1.15;
       let ambient_term = ambient * (m.params.w * 0.12) * mix(0.5, 1.0, boundary_fade);
       let direct_term = light_color * (m.params.z * phase_term) * horizon_glow;
-      let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 + m.emission.xyz * (0.02 + tangent_boost * 0.05);
+      let space_scatter_soften = select(mix(0.18, 1.0, boundary_fade), 1.0, has_opaque_behind);
+      let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 * space_scatter_soften + m.emission.xyz * (0.02 + tangent_boost * 0.05);
       let extinction_scale = select(max(m.style1.y, 1e-4), max(m.style1.x, 1e-4), has_opaque_behind);
       let optical = density * segment_len * extinction_scale * mix(0.45, 1.0, tangent_boost);
       integrated_tau += optical;
@@ -483,5 +488,6 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     }
   }
 
-  return FSOut(out_color, t_limit);
+  let out_depth = select(nearest_t, FAR_T, nearest_t >= FAR_T * 0.5);
+  return FSOut(out_color, out_depth);
 }

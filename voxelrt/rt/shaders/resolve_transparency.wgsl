@@ -50,6 +50,10 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
 fn depth_weight(current_depth: f32, sample_depth: f32) -> f32 {
   let current_finite = current_depth > 0.0 && current_depth < FAR_T * 0.5;
   let sample_finite = sample_depth > 0.0 && sample_depth < FAR_T * 0.5;
+  if (!current_finite && sample_finite) {
+    // Atmosphere/fog against open space should still upsample cleanly.
+    return 1.0;
+  }
   if (current_finite != sample_finite) {
     return 0.05;
   }
@@ -127,7 +131,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let w    = textureLoad(tWeight,  ipos, 0).r;
   let vol = sample_halfres_bilateral(ipos, current_depth, tVolume, tVolumeDepth);
   let ca = sample_halfres_bilateral(ipos, current_depth, tCAColor, tCADepth);
-  let vol_valid = vol.depth > 0.0 && vol.depth < FAR_T * 0.5;
+  let vol_valid = any(vol.color.rgb > vec3<f32>(1e-4)) || vol.color.a < 0.999;
   let ca_valid = ca.depth > 0.0 && ca.depth < FAR_T * 0.5;
   var base = copq;
   if (vol_valid && ca_valid) {
