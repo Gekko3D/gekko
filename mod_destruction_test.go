@@ -87,7 +87,7 @@ func TestDestructionSystem_Split(t *testing.T) {
 	app.FlushCommands()
 
 	// 5. Sync ECS to internal state
-	voxelRtSystem(nil, state, server, &Time{}, cmd)
+	voxelRtSystem(nil, state, server, &Time{}, cmd, nil)
 
 	// 6. Verify results
 	// The original entity should still exist (it had the largest component)
@@ -185,7 +185,7 @@ func TestDestructionSystem_SpawnDebris(t *testing.T) {
 	app.FlushCommands()
 
 	// Sync ECS to internal state
-	voxelRtSystem(nil, state, server, &Time{}, cmd)
+	voxelRtSystem(nil, state, server, &Time{}, cmd, nil)
 
 	// Island 1 was kept in original (they are both 8, so it picks one)
 	// Island 2 should be spawned as a new entity.
@@ -325,7 +325,7 @@ func TestVoxelRtSystem_MapSync(t *testing.T) {
 	app.FlushCommands()
 
 	// Run system once to "spawn" the internal object
-	voxelRtSystem(nil, state, server, &Time{}, cmd)
+	voxelRtSystem(nil, state, server, &Time{}, cmd, nil)
 
 	obj := state.instanceMap[entity]
 	if obj == nil {
@@ -347,7 +347,7 @@ func TestVoxelRtSystem_MapSync(t *testing.T) {
 	app.FlushCommands()
 
 	// Run system again
-	voxelRtSystem(nil, state, server, &Time{}, cmd)
+	voxelRtSystem(nil, state, server, &Time{}, cmd, nil)
 
 	// Verify it synced
 	if obj.XBrickMap == nil || obj.XBrickMap.GetVoxelCount() != map2.GetVoxelCount() {

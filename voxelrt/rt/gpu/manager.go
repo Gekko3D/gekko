@@ -142,6 +142,14 @@ type WaterSurfaceHost struct {
 	WaveAmplitude   float32
 }
 
+type WaterRippleHost struct {
+	WaterIndex uint32
+	Position   mgl32.Vec3
+	Strength   float32
+	Age        float32
+	Lifetime   float32
+}
+
 type CAPresetData struct {
 	SmokeSeed        float32
 	FireSeed         float32
@@ -347,6 +355,7 @@ type GpuBufferManager struct {
 	AnalyticMediumParamsBuf     *wgpu.Buffer
 	WaterSurfaceBuf             *wgpu.Buffer
 	WaterSurfaceParamsBuf       *wgpu.Buffer
+	WaterRippleBuf              *wgpu.Buffer
 	VolumetricHistoryParamsBuf  *wgpu.Buffer
 	CAFieldTexA                 *wgpu.Texture
 	CAFieldTexB                 *wgpu.Texture
@@ -373,6 +382,7 @@ type GpuBufferManager struct {
 	WaterBG1                    *wgpu.BindGroup
 	WaterBG2                    *wgpu.BindGroup
 	WaterCount                  uint32
+	WaterRippleCount            uint32
 	WaterElapsedTime            float32
 	CAAtlasWidth                uint32
 	CAAtlasHeight               uint32

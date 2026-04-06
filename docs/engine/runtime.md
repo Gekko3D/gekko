@@ -134,6 +134,7 @@ Common examples:
 - `*Input`
 - `*AssetServer`
 - `*VoxelRtState`
+- `*WaterInteractionState`
 - `*PhysicsWorld`
 - `*PhysicsProxy`
 

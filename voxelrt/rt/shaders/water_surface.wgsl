@@ -27,6 +27,11 @@ struct WaterRecord {
   flow: vec4<f32>,
 };
 
+struct RippleRecord {
+  position_age: vec4<f32>,
+  params: vec4<f32>,
+};
+
 struct VSOut {
   @builtin(position) position: vec4<f32>,
   @location(0) uv: vec2<f32>,
@@ -60,6 +65,7 @@ const PI: f32 = 3.14159265359;
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(1) @binding(0) var<uniform> water_params: WaterParams;
 @group(1) @binding(1) var<storage, read> waters: array<WaterRecord>;
+@group(1) @binding(2) var<storage, read> ripples: array<RippleRecord>;
 @group(2) @binding(0) var scene_depth: texture_2d<f32>;
 @group(2) @binding(1) var opaque_lit: texture_2d<f32>;
 
@@ -110,13 +116,45 @@ fn stepped_wave_height(pos_xz: vec2<f32>, water: WaterRecord) -> f32 {
   return stepped * water.absorption.w;
 }
 
-fn stepped_water_normal(pos: vec3<f32>, water: WaterRecord) -> vec3<f32> {
+fn ripple_height(pos_xz: vec2<f32>, water_index: u32) -> f32 {
+  var total = 0.0;
+  for (var i: u32 = 0u; i < water_params.header.y; i = i + 1u) {
+    let ripple = ripples[i];
+    if (u32(ripple.params.z) != water_index) {
+      continue;
+    }
+    let age = ripple.position_age.w;
+    let lifetime = max(ripple.params.y, 0.01);
+    let strength = ripple.params.x;
+    let life_t = clamp(age / lifetime, 0.0, 1.0);
+    let fade = (1.0 - life_t) * (1.0 - life_t);
+    if (fade <= 1e-3) {
+      continue;
+    }
+    let delta = pos_xz - ripple.position_age.xz;
+    let dist = length(delta);
+    let ring_radius = age * mix(2.2, 5.0, clamp(strength, 0.0, 1.0));
+    let ring_width = mix(0.16, 0.34, clamp(strength, 0.0, 1.0));
+    let band = exp(-pow((dist - ring_radius) / max(ring_width, 1e-3), 2.0));
+    let crest = sin((dist - ring_radius) * 15.0 - age * 10.0);
+    total += band * crest * fade * strength * 0.16;
+  }
+  return total;
+}
+
+fn water_surface_height(pos_xz: vec2<f32>, water: WaterRecord, water_index: u32) -> f32 {
+  let base = stepped_wave_height(pos_xz, water);
+  let ripple = ripple_height(pos_xz, water_index);
+  return base + ripple;
+}
+
+fn stepped_water_normal(pos: vec3<f32>, water: WaterRecord, water_index: u32) -> vec3<f32> {
   let dx = vec2<f32>(VOXEL_SIZE, 0.0);
   let dz = vec2<f32>(0.0, VOXEL_SIZE);
-  let h_l = stepped_wave_height(pos.xz - dx, water);
-  let h_r = stepped_wave_height(pos.xz + dx, water);
-  let h_d = stepped_wave_height(pos.xz - dz, water);
-  let h_u = stepped_wave_height(pos.xz + dz, water);
+  let h_l = water_surface_height(pos.xz - dx, water, water_index);
+  let h_r = water_surface_height(pos.xz + dx, water, water_index);
+  let h_d = water_surface_height(pos.xz - dz, water, water_index);
+  let h_u = water_surface_height(pos.xz + dz, water, water_index);
   return normalize(vec3<f32>(h_l - h_r, VOXEL_SIZE * 2.0, h_d - h_u));
 }
 
@@ -188,8 +226,9 @@ fn fs_main(in: VSOut) -> FSOut {
   let is_top = hit.normal.y > 0.9;
   var normal = hit.normal;
   if (is_top) {
-    normal = stepped_water_normal(hit.pos, water);
+    normal = stepped_water_normal(hit.pos, water, hit.water_index);
   }
+  let ripple = ripple_height(hit.pos.xz, hit.water_index);
   let edge_factor = water_edge_factor(hit.pos, water);
 
   let view_dir = normalize(camera.cam_pos.xyz - hit.pos);
@@ -217,6 +256,9 @@ fn fs_main(in: VSOut) -> FSOut {
   var surface_rgb = water.color.rgb * base_light;
   if (!is_top) {
     surface_rgb *= 0.45;
+  }
+  if (is_top) {
+    surface_rgb += vec3<f32>(0.12, 0.16, 0.2) * clamp(abs(ripple) * 3.0, 0.0, 1.0);
   }
   let edge_highlight = vec3<f32>(0.14, 0.24, 0.34) * edge_factor * select(1.0, 0.35, !is_top);
   let transmitted_bg = mix(opaque_bg, refracted_bg, 0.82) * tint;

@@ -42,6 +42,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		skyboxLayers:       make(map[EntityId]SkyboxLayerComponent),
 	}
 	cmd.AddResources(state)
+	cmd.AddResources(&WaterInteractionState{})
 
 	cmd.AddResources(&Profiler{})
 
@@ -56,6 +57,18 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
 		System(caStepSystem).
 			InStage(Update).
+			RunAlways(),
+	)
+
+	app.UseSystem(
+		System(waterInteractionSystem).
+			InStage(Update).
+			RunAlways(),
+	)
+
+	app.UseSystem(
+		System(waterInteractionCleanupSystem).
+			InStage(PreRender).
 			RunAlways(),
 	)
 
@@ -100,7 +113,7 @@ func voxelRtPreludeSystem(input *Input, state *VoxelRtState) {
 	}
 }
 
-func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands) {
+func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands, waterInteractions *WaterInteractionState) {
 	if state == nil || state.RtApp == nil {
 		return
 	}
@@ -402,7 +415,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	state.RtApp.Profiler.BeginScope("Sync Water")
 	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateWaterSurfaces(buildWaterSurfaceHosts(cmd), float32(t.Dt))
+		waterHosts, rippleHosts := buildWaterSurfaceHosts(cmd, waterInteractions)
+		state.RtApp.BufferManager.UpdateWaterSurfaces(waterHosts, rippleHosts, float32(t.Dt))
 	}
 	state.RtApp.Profiler.EndScope("Sync Water")
 

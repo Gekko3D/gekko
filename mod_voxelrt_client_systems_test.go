@@ -88,7 +88,7 @@ func TestVoxelRtSystemOnlyMarksTransformDirtyOnRealChanges(t *testing.T) {
 	app.FlushCommands()
 	frameTime := &Time{Dt: 1.0 / 60.0}
 
-	voxelRtSystem(nil, state, server, frameTime, cmd)
+	voxelRtSystem(nil, state, server, frameTime, cmd, nil)
 
 	if len(state.instanceMap) != 1 {
 		t.Fatalf("expected one synced instance, got %d", len(state.instanceMap))
@@ -102,14 +102,14 @@ func TestVoxelRtSystemOnlyMarksTransformDirtyOnRealChanges(t *testing.T) {
 	}
 
 	obj.Transform.Dirty = false
-	voxelRtSystem(nil, state, server, frameTime, cmd)
+	voxelRtSystem(nil, state, server, frameTime, cmd, nil)
 	if obj.Transform.Dirty {
 		t.Fatalf("expected steady-state sync to keep transform clean")
 	}
 
 	obj.Transform.Position = mgl32.Vec3{4, 5, 6}
 	obj.Transform.Dirty = false
-	voxelRtSystem(nil, state, server, frameTime, cmd)
+	voxelRtSystem(nil, state, server, frameTime, cmd, nil)
 	if !obj.Transform.Dirty {
 		t.Fatalf("expected transform change to mark renderer transform dirty")
 	}
@@ -143,7 +143,7 @@ func TestVoxelRtSystemRebuildsMaterialTableWhenPaletteMutatesInPlace(t *testing.
 	app.FlushCommands()
 	frameTime := &Time{Dt: 1.0 / 60.0}
 
-	voxelRtSystem(nil, state, server, frameTime, cmd)
+	voxelRtSystem(nil, state, server, frameTime, cmd, nil)
 
 	var obj *core.VoxelObject
 	for _, synced := range state.instanceMap {
@@ -159,7 +159,7 @@ func TestVoxelRtSystemRebuildsMaterialTableWhenPaletteMutatesInPlace(t *testing.
 	unchanged.VoxPalette[1] = [4]uint8{200, 100, 50, 255}
 	server.voxPalettes[paletteID] = unchanged
 
-	voxelRtSystem(nil, state, server, frameTime, cmd)
+	voxelRtSystem(nil, state, server, frameTime, cmd, nil)
 
 	if &obj.MaterialTable[0] == initialMaterialPtr {
 		t.Fatalf("expected material table slice to be replaced after palette mutation")
@@ -198,7 +198,7 @@ func TestVoxelRtSystemCopiesAmbientOcclusionModeToRendererObject(t *testing.T) {
 	)
 	app.FlushCommands()
 
-	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd)
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
 
 	if len(state.instanceMap) != 1 {
 		t.Fatalf("expected one synced instance, got %d", len(state.instanceMap))
@@ -238,7 +238,7 @@ func TestVoxelRtSystemDefaultsAmbientOcclusionModeToInherited(t *testing.T) {
 	)
 	app.FlushCommands()
 
-	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd)
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
 
 	if len(state.instanceMap) != 1 {
 		t.Fatalf("expected one synced instance, got %d", len(state.instanceMap))
@@ -324,9 +324,12 @@ func TestBuildWaterSurfaceHostsNormalizesAndSortsResults(t *testing.T) {
 	)
 	app.FlushCommands()
 
-	hosts := buildWaterSurfaceHosts(cmd)
+	hosts, ripples := buildWaterSurfaceHosts(cmd, nil)
 	if len(hosts) != 1 {
 		t.Fatalf("expected one enabled water host, got %d", len(hosts))
+	}
+	if len(ripples) != 0 {
+		t.Fatalf("expected no ripple hosts, got %d", len(ripples))
 	}
 	if hosts[0].Position != (mgl32.Vec3{4, 3, 2}) {
 		t.Fatalf("unexpected host position: %v", hosts[0].Position)

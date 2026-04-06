@@ -14,12 +14,17 @@ type waterSurfaceRecord struct {
 	Flow       [4]float32
 }
 
+type waterRippleRecord struct {
+	PositionAge [4]float32
+	Params      [4]float32
+}
+
 type waterSurfaceParamsUniform struct {
 	Header  [4]uint32
 	Params0 [4]float32
 }
 
-func (m *GpuBufferManager) UpdateWaterSurfaces(waters []WaterSurfaceHost, dt float32) bool {
+func (m *GpuBufferManager) UpdateWaterSurfaces(waters []WaterSurfaceHost, ripples []WaterRippleHost, dt float32) bool {
 	if dt > 0 {
 		m.WaterElapsedTime += dt
 	}
@@ -58,14 +63,35 @@ func (m *GpuBufferManager) UpdateWaterSurfaces(waters []WaterSurfaceHost, dt flo
 			},
 		}
 	}
+	rippleRecords := make([]waterRippleRecord, max(1, len(ripples)))
+	for i, ripple := range ripples {
+		rippleRecords[i] = waterRippleRecord{
+			PositionAge: [4]float32{
+				ripple.Position.X(),
+				ripple.Position.Y(),
+				ripple.Position.Z(),
+				ripple.Age,
+			},
+			Params: [4]float32{
+				ripple.Strength,
+				ripple.Lifetime,
+				float32(ripple.WaterIndex),
+				0,
+			},
+		}
+	}
 
 	recreated := false
 	recBytes := unsafe.Slice((*byte)(unsafe.Pointer(&records[0])), len(records)*int(unsafe.Sizeof(waterSurfaceRecord{})))
 	if m.ensureBuffer("WaterSurfaceBuf", &m.WaterSurfaceBuf, recBytes, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
+	rippleBytes := unsafe.Slice((*byte)(unsafe.Pointer(&rippleRecords[0])), len(rippleRecords)*int(unsafe.Sizeof(waterRippleRecord{})))
+	if m.ensureBuffer("WaterRippleBuf", &m.WaterRippleBuf, rippleBytes, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
 	params := waterSurfaceParamsUniform{
-		Header:  [4]uint32{uint32(len(waters)), 0, 0, 0},
+		Header:  [4]uint32{uint32(len(waters)), uint32(len(ripples)), 0, 0},
 		Params0: [4]float32{m.WaterElapsedTime, 0, 0, 0},
 	}
 	paramsBytes := unsafe.Slice((*byte)(unsafe.Pointer(&params)), int(unsafe.Sizeof(params)))
@@ -73,12 +99,13 @@ func (m *GpuBufferManager) UpdateWaterSurfaces(waters []WaterSurfaceHost, dt flo
 		recreated = true
 	}
 	m.WaterCount = uint32(len(waters))
+	m.WaterRippleCount = uint32(len(ripples))
 	m.WaterBindingsDirty = true
 	return recreated
 }
 
 func (m *GpuBufferManager) CreateWaterBindGroups(pipeline *wgpu.RenderPipeline) {
-	if pipeline == nil || m.CameraBuf == nil || m.WaterSurfaceParamsBuf == nil || m.WaterSurfaceBuf == nil || m.DepthView == nil || m.StorageView == nil {
+	if pipeline == nil || m.CameraBuf == nil || m.WaterSurfaceParamsBuf == nil || m.WaterSurfaceBuf == nil || m.WaterRippleBuf == nil || m.DepthView == nil || m.StorageView == nil {
 		return
 	}
 
@@ -98,6 +125,7 @@ func (m *GpuBufferManager) CreateWaterBindGroups(pipeline *wgpu.RenderPipeline) 
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.WaterSurfaceParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.WaterSurfaceBuf, Size: wgpu.WholeSize},
+			{Binding: 2, Buffer: m.WaterRippleBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {

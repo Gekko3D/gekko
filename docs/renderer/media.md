@@ -134,6 +134,7 @@ There are now three different categories to keep straight:
   - contributes through WBOIT accumulation
 - dedicated water surfaces:
   - stylized horizontal water bodies with blocky stepped highlights/refraction
+  - engine-side impact ripples are fed through `WaterInteractionState`
   - contributes through WBOIT accumulation as its own feature
 - analytic media:
   - bounded volumetric fog/atmosphere
@@ -177,3 +178,17 @@ When changing analytic media behavior:
 - update `runtime.md` when frame order, targets, or compositing behavior changes
 
 If you only tweak atmosphere appearance, prefer preset changes first.
+
+## Water Interaction Notes
+
+The water renderer now accepts a compact engine-side ripple stream in addition to static `WaterSurfaceComponent` records.
+
+Current path:
+
+1. `waterInteractionSystem` detects rigid-body entry into water volumes.
+2. `WaterInteractionState` stores discrete `WaterImpactEvent` records plus short-lived ripple state.
+3. `buildWaterSurfaceHosts(...)` merges water surfaces with active ripples.
+4. `GpuBufferManager.UpdateWaterSurfaces(...)` uploads both buffers for the water feature.
+5. `water_surface.wgsl` turns those ripple records into expanding surface rings.
+
+This keeps interaction quality reasonably high without introducing a full fluid simulation.

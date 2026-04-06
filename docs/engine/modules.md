@@ -213,16 +213,33 @@ For their data model, see:
 - Resources:
   - `*WindowState`
   - `*VoxelRtState`
+  - `*WaterInteractionState`
   - `*Profiler`
 - Systems:
   - `voxelRtDebugSystem`
   - `caStepSystem`
+  - `waterInteractionSystem`
+  - `waterInteractionCleanupSystem`
   - `voxelRtPreludeSystem`
   - `voxelRtSystem`
   - `voxelRtUpdateSystem`
   - `voxelRtRenderSystem`
 - Owns:
   - the main modern renderer bridge and renderer lifetime
+
+### `WaterEffectsModule`
+
+- Files:
+  - `mod_water_effects.go`
+- Resources:
+  - `*WaterEffectsState`
+- Systems:
+  - `waterSplashEffectsSystem` in `PostUpdate`
+- Owns:
+  - optional presentation-layer reactions to `WaterImpactEvent`
+  - default splash particle spawning for water surfaces
+- Depends on:
+  - `*WaterInteractionState`
 
 Read next:
 
