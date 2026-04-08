@@ -103,6 +103,18 @@ struct BakedPlanetSurfaceSample {
   material_band: f32,
 };
 
+struct PlanetSurfaceMaterial {
+  base_color: vec3<f32>,
+  normal_mix: f32,
+  diffuse_scale: f32,
+  ambient_scale: f32,
+  spec_strength: f32,
+  spec_power: f32,
+  spec_tint_mix: f32,
+  white_spec_mix: f32,
+  rim_scale: f32,
+};
+
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(0) @binding(1) var<storage, read> lights: array<Light>;
 @group(1) @binding(0) var<uniform> planet_params: PlanetParams;
@@ -644,48 +656,143 @@ fn trace_planet_surface(planet: PlanetRecord, ray_origin: vec3<f32>, ray_dir: ve
   return PlanetTraceHit(FAR_T, 0.0, 0.0, 0.0, 0.0);
 }
 
-fn planet_surface_color(planet: PlanetRecord, signed_height: f32, dir_local: vec3<f32>, is_ocean: bool, normal: vec3<f32>, view_dir: vec3<f32>, light_dir: vec3<f32>) -> vec3<f32> {
+fn planet_band_color(planet: PlanetRecord, band: i32) -> vec3<f32> {
+  switch (band) {
+    case 5: {
+      return planet.band5.xyz;
+    }
+    case 4: {
+      return planet.band4.xyz;
+    }
+    case 3: {
+      return planet.band3.xyz;
+    }
+    case 2: {
+      return planet.band2.xyz;
+    }
+    case 1: {
+      return planet.band1.xyz;
+    }
+    default: {
+      return planet.band0.xyz;
+    }
+  }
+}
+
+fn planet_surface_band(planet: PlanetRecord, signed_height: f32, dir_local: vec3<f32>, is_ocean: bool) -> i32 {
   let amp = max(planet.surface.z, 1e-4);
-  let biome_mix = clamp(planet.noise.w, 0.0, 1.0);
   if (is_ocean) {
     let ocean_depth = saturate(-signed_height / amp);
-    let ocean_base = mix(planet.band1.xyz, planet.band0.xyz, ocean_depth);
-    let fresnel = pow(1.0 - saturate(dot(normal, view_dir)), 5.0);
-    let horizon_tint = mix(ocean_base, vec3<f32>(1.0), 0.18);
-    return mix(ocean_base, horizon_tint, fresnel * 0.45);
+    return select(1, 0, ocean_depth > 0.58);
   }
 
   if (baked_planet_surface_available(planet)) {
     let baked_sample = sample_planet_surface_baked_nearest(planet, dir_local);
-    let material_band = clamp(i32(round(baked_sample.material_band)), 0, 5);
-    switch (material_band) {
-      case 5: {
-        return planet.band5.xyz;
-      }
-      case 4: {
-        return planet.band4.xyz;
-      }
-      case 3: {
-        return planet.band3.xyz;
-      }
-      default: {
-        return planet.band2.xyz;
-      }
-    }
+    return clamp(i32(round(baked_sample.material_band)), 0, 5);
   }
 
+  let biome_mix = clamp(planet.noise.w, 0.0, 1.0);
   let snow_line = amp * lerp_scalar(0.9, 0.78, biome_mix);
   let polar_cap_start = lerp_scalar(0.992, 0.962, biome_mix);
   if (planet_polar_cap_metric(planet, signed_height, dir_local) > polar_cap_start || signed_height > snow_line) {
-    return planet.band5.xyz;
+    return 5;
   }
   if (signed_height > amp * lerp_scalar(0.26, 0.14, biome_mix)) {
-    return planet.band4.xyz;
+    return 4;
   }
   if (signed_height > amp * lerp_scalar(0.05, -0.04, biome_mix)) {
-    return planet.band3.xyz;
+    return 3;
   }
-  return planet.band2.xyz;
+  return 2;
+}
+
+fn planet_surface_material(planet: PlanetRecord, signed_height: f32, dir_local: vec3<f32>, is_ocean: bool, normal: vec3<f32>, view_dir: vec3<f32>) -> PlanetSurfaceMaterial {
+  let band = planet_surface_band(planet, signed_height, dir_local, is_ocean);
+  if (is_ocean) {
+    let amp = max(planet.surface.z, 1e-4);
+    let ocean_depth = saturate(-signed_height / amp);
+    let ocean_base = mix(planet.band1.xyz, planet.band0.xyz, ocean_depth);
+    let fresnel = pow(1.0 - saturate(dot(normal, view_dir)), 5.0);
+    let horizon_tint = mix(ocean_base, vec3<f32>(1.0), 0.18 + 0.1 * (1.0 - ocean_depth));
+    let sparkle = mix(0.18, 0.08, ocean_depth);
+    return PlanetSurfaceMaterial(
+      mix(ocean_base, horizon_tint, fresnel * 0.48),
+      mix(0.78, 0.72, ocean_depth),
+      mix(0.82, 0.72, ocean_depth),
+      mix(0.94, 0.88, ocean_depth),
+      mix(1.5, 1.7, ocean_depth),
+      mix(78.0, 110.0, ocean_depth),
+      0.72,
+      0.34 + sparkle,
+      0.3,
+    );
+  }
+
+  if (band <= 1) {
+    let lowland_base = mix(planet.band2.xyz, planet_band_color(planet, band), 0.7);
+    return PlanetSurfaceMaterial(
+      lowland_base,
+      0.38,
+      0.92,
+      0.94,
+      0.2,
+      16.0,
+      0.08,
+      0.02,
+      0.12,
+    );
+  }
+
+  if (band == 2) {
+    return PlanetSurfaceMaterial(
+      planet.band2.xyz,
+      0.34,
+      1.0,
+      1.02,
+      0.38,
+      22.0,
+      0.16,
+      0.04,
+      0.16,
+    );
+  }
+  if (band == 3) {
+    return PlanetSurfaceMaterial(
+      planet.band3.xyz,
+      0.28,
+      0.94,
+      0.98,
+      0.26,
+      18.0,
+      0.12,
+      0.02,
+      0.14,
+    );
+  }
+  if (band == 4) {
+    return PlanetSurfaceMaterial(
+      planet.band4.xyz,
+      0.22,
+      0.9,
+      0.92,
+      0.22,
+      14.0,
+      0.1,
+      0.02,
+      0.12,
+    );
+  }
+  return PlanetSurfaceMaterial(
+    planet.band5.xyz,
+    0.56,
+    1.12,
+    1.2,
+    0.48,
+    30.0,
+    0.28,
+    0.18,
+    0.1,
+  );
 }
 
 @vertex
@@ -752,24 +859,24 @@ fn fs_main(in: VSOut) -> FSOut {
     );
     let block_normal = normalize(quat_rotate(planet.rotation, block_local_normal));
     let is_ocean = surface_hit.is_ocean > 0.5;
-    let terrain_mix = select(mix(0.12, 0.34, detail_settings.near_weight), mix(0.42, 0.72, detail_settings.near_weight), is_ocean);
-    let shading_normal = normalize(mix(block_normal, terrain_normal, terrain_mix));
     let light_dir = primary_light_dir(hit_pos);
     let light_color = primary_light_color();
     let view_dir = normalize(camera.cam_pos.xyz - hit_pos);
-    let base_color = planet_surface_color(planet, surface_hit.signed_height, block_local_normal, is_ocean, shading_normal, view_dir, light_dir);
+    let surface_material = planet_surface_material(planet, surface_hit.signed_height, local_normal, is_ocean, terrain_normal, view_dir);
+    let terrain_mix = clamp(surface_material.normal_mix + detail_settings.near_weight * 0.14, 0.0, 1.0);
+    let shading_normal = normalize(mix(block_normal, terrain_normal, terrain_mix));
+    let base_color = surface_material.base_color;
     let ndotl = max(dot(shading_normal, light_dir), 0.0);
-    let diffuse = planet.style.y * ndotl;
-    let ambient = planet.style.x + dot(camera.ambient_color.xyz, vec3<f32>(0.3333));
-    let spec_power = select(24.0, 92.0, is_ocean);
-    let spec = pow(max(dot(reflect(-light_dir, shading_normal), view_dir), 0.0), spec_power) * planet.style.z;
+    let diffuse = planet.style.y * ndotl * surface_material.diffuse_scale;
+    let hemisphere_light = smoothstep(-0.08, 0.3, dot(world_normal, light_dir));
+    let ambient_shadow = mix(0.08, 1.0, hemisphere_light);
+    let ambient = (planet.style.x + dot(camera.ambient_color.xyz, vec3<f32>(0.3333))) * surface_material.ambient_scale * ambient_shadow;
+    let spec = pow(max(dot(reflect(-light_dir, shading_normal), view_dir), 0.0), surface_material.spec_power) * planet.style.z * surface_material.spec_strength;
     let rim = pow(1.0 - saturate(dot(world_normal, view_dir)), 3.0) * planet.style.w;
     let atmosphere_mix = saturate((planet.surface.y - surface_hit.radius) / max(planet.atmosphere.w, 1.0));
-    let land_spec_tint = mix(base_color, light_color, 0.22);
-    let ocean_spec_tint = mix(light_color, vec3<f32>(1.0), 0.35);
-    let spec_tint = select(land_spec_tint, ocean_spec_tint, is_ocean);
+    let spec_tint = mix(mix(base_color, light_color, surface_material.spec_tint_mix), vec3<f32>(1.0), surface_material.white_spec_mix);
     let rim_tint = mix(base_color, planet.atmosphere.xyz, 0.65);
-    let rim_scale = select(0.18, 0.34, is_ocean);
+    let rim_scale = surface_material.rim_scale;
     let lit = base_color * (ambient + diffuse * light_color) + spec * spec_tint + rim_tint * rim * atmosphere_mix * rim_scale;
 
     best_t = t_hit;

@@ -406,7 +406,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       continue;
     }
 
-    let pixel_jitter = hash13(vec3<f32>(f32(ipos.x), f32(ipos.y), f32(i) * 7.13 + history_params.params0.x * 12.3));
+    let procedural_noise_enabled = m.noise.y > 1e-4 && m.noise.x > 1e-4;
+    let pixel_jitter = select(0.5, hash13(vec3<f32>(f32(ipos.x), f32(ipos.y), f32(i) * 7.13)), procedural_noise_enabled);
     var trans = vec3<f32>(1.0);
     var source = vec3<f32>(0.0);
     var integrated_tau = 0.0;
