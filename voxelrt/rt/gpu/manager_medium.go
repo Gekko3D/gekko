@@ -123,7 +123,7 @@ func (m *GpuBufferManager) UpdateAnalyticMedia(media []AnalyticMediumHost) bool 
 }
 
 func (m *GpuBufferManager) CreateAnalyticMediumBindGroups(pipeline *wgpu.RenderPipeline) {
-	if pipeline == nil || m.CameraBuf == nil || m.LightsBuf == nil || m.AnalyticMediumParamsBuf == nil || m.AnalyticMediumBuf == nil || m.DepthView == nil || m.VolumetricHistoryParamsBuf == nil {
+	if pipeline == nil || m.CameraBuf == nil || m.LightsBuf == nil || m.AnalyticMediumParamsBuf == nil || m.AnalyticMediumBuf == nil || m.DepthView == nil || m.PlanetDepthView == nil || m.VolumetricHistoryParamsBuf == nil {
 		return
 	}
 
@@ -154,9 +154,10 @@ func (m *GpuBufferManager) CreateAnalyticMediumBindGroups(pipeline *wgpu.RenderP
 		Layout: pipeline.GetBindGroupLayout(2),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, TextureView: m.DepthView},
-			{Binding: 1, TextureView: m.PreviousVolumetricView()},
-			{Binding: 2, TextureView: m.PreviousVolumetricDepthView()},
-			{Binding: 3, Buffer: m.VolumetricHistoryParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 1, TextureView: m.PlanetDepthView},
+			{Binding: 2, TextureView: m.PreviousVolumetricView()},
+			{Binding: 3, TextureView: m.PreviousVolumetricDepthView()},
+			{Binding: 4, Buffer: m.VolumetricHistoryParamsBuf, Size: wgpu.WholeSize},
 		},
 	})
 	if err != nil {

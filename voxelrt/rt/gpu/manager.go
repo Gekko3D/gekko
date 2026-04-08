@@ -214,6 +214,7 @@ type GpuBufferManager struct {
 	GBufferDepth    *wgpu.Texture
 	GBufferNormal   *wgpu.Texture
 	GBufferMaterial *wgpu.Texture
+	PlanetDepthTex  *wgpu.Texture
 
 	// Transparent Accumulation Targets (WBOIT)
 	TransparentAccumTex  *wgpu.Texture // RGBA16Float, accum premultiplied color
@@ -224,9 +225,10 @@ type GpuBufferManager struct {
 	CAVolumeDepthTex     *wgpu.Texture
 
 	// G-Buffer Views
-	DepthView    *wgpu.TextureView
-	NormalView   *wgpu.TextureView
-	MaterialView *wgpu.TextureView
+	DepthView       *wgpu.TextureView
+	NormalView      *wgpu.TextureView
+	MaterialView    *wgpu.TextureView
+	PlanetDepthView *wgpu.TextureView
 
 	// Transparent Accumulation Views
 	TransparentAccumView   *wgpu.TextureView
@@ -356,6 +358,7 @@ type GpuBufferManager struct {
 	AnalyticMediumParamsBuf     *wgpu.Buffer
 	PlanetBodyBuf               *wgpu.Buffer
 	PlanetBodyParamsBuf         *wgpu.Buffer
+	PlanetBodySurfaceBuf        *wgpu.Buffer
 	WaterSurfaceBuf             *wgpu.Buffer
 	WaterSurfaceParamsBuf       *wgpu.Buffer
 	WaterRippleBuf              *wgpu.Buffer

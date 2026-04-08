@@ -76,9 +76,10 @@ struct FSOut {
 @group(1) @binding(0) var<uniform> medium_params: MediumParams;
 @group(1) @binding(1) var<storage, read> media: array<MediumRecord>;
 @group(2) @binding(0) var in_depth: texture_2d<f32>;
-@group(2) @binding(1) var prev_history: texture_2d<f32>;
-@group(2) @binding(2) var prev_history_depth: texture_2d<f32>;
-@group(2) @binding(3) var<uniform> history_params: HistoryParams;
+@group(2) @binding(1) var planet_depth: texture_2d<f32>;
+@group(2) @binding(2) var prev_history: texture_2d<f32>;
+@group(2) @binding(3) var prev_history_depth: texture_2d<f32>;
+@group(2) @binding(4) var<uniform> history_params: HistoryParams;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
@@ -281,6 +282,29 @@ fn intersect_medium(origin: vec3<f32>, dir: vec3<f32>, m: MediumRecord) -> vec2<
   return intersect_sphere(origin, dir, m.bounds.xyz, m.bounds.w);
 }
 
+fn first_positive_hit(hit: vec2<f32>) -> f32 {
+  if (hit.x >= 0.0) {
+    return hit.x;
+  }
+  if (hit.y >= 0.0) {
+    return hit.y;
+  }
+  return FAR_T;
+}
+
+fn sanitize_opaque_depth(depth: f32) -> f32 {
+  if (depth > 0.0 && depth < FAR_T) {
+    return depth;
+  }
+  return FAR_T;
+}
+
+fn nearest_opaque_depth(ipos: vec2<i32>) -> f32 {
+  let scene_t = sanitize_opaque_depth(textureLoad(in_depth, ipos, 0).r);
+  let planet_t = sanitize_opaque_depth(textureLoad(planet_depth, ipos, 0).r);
+  return min(scene_t, planet_t);
+}
+
 fn medium_density(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
   let shape = u32(m.noise.w + 0.5);
   var radial = pos_ws - m.bounds.xyz;
@@ -308,7 +332,7 @@ fn medium_density(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
     shell_pos = saturate((dist - inner) / thickness);
   }
 
-  var density = pow(1.0 - shell_pos, max(m.params.x, 0.05));
+  var density = exp(-shell_pos * max(m.params.x, 0.05));
   let soft_extent = max(m.params.y, 1e-4);
 
   if (shape == 1u) {
@@ -318,11 +342,9 @@ fn medium_density(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
     density *= outer_soft;
   } else {
     let outer = m.bounds.w;
-    let inner = m.shape0.w;
     let dist = length(pos_ws - m.bounds.xyz);
-    let inner_soft = smoothstep(inner, inner + soft_extent, dist);
     let outer_soft = 1.0 - smoothstep(outer - soft_extent, outer, dist);
-    density *= inner_soft * outer_soft;
+    density *= outer_soft;
   }
 
   if (m.noise.y > 1e-4 && m.noise.x > 1e-4) {
@@ -345,16 +367,14 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     clamp(i32(render_uv.x * f32(full_dims.x)), 0, i32(full_dims.x) - 1),
     clamp(i32(render_uv.y * f32(full_dims.y)), 0, i32(full_dims.y) - 1),
   );
-  var t_limit = textureLoad(in_depth, ipos, 0).r;
-  if (t_limit >= FAR_T || t_limit <= 0.0) {
-    t_limit = FAR_T;
-  }
+  let t_limit = nearest_opaque_depth(ipos);
 
   let ray_origin = uCamera.cam_pos.xyz;
   let ray_dir = get_ray_from_uv(render_uv);
   let ambient = uCamera.ambient_color.xyz;
   let light_dir = primary_light_dir(ray_origin);
   let light_color = primary_light_color();
+  let scene_has_opaque = t_limit < FAR_T * 0.5;
 
   var accum_rgb = vec3<f32>(0.0);
   var accum_a = 0.0;
@@ -367,29 +387,29 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     let t_outer = intersect_medium(ray_origin, ray_dir, m);
     let t_start = max(t_outer.x, 0.0);
     let t_end = min(t_outer.y, t_limit);
+    let has_opaque_behind = scene_has_opaque;
     if (t_end <= t_start) {
       continue;
     }
     nearest_t = min(nearest_t, t_start);
 
     let base_step_count = clamp(u32(max(m.noise.z, 4.0)), 4u, 24u);
+    let min_step_count = select(4u, 8u, m.shape0.w > 0.0);
     let characteristic = medium_characteristic_thickness(m);
     let path_length = t_end - t_start;
     let coverage = saturate(path_length / characteristic);
     let density_budget = saturate(m.scatter.w * max(m.style1.x, m.style1.y) * characteristic * 0.25);
     let sample_factor = mix(0.18, 1.0, max(coverage * 0.55, density_budget));
-    let step_count = clamp(u32(round(max(4.0, f32(base_step_count) * sample_factor))), 4u, base_step_count);
+    let step_count = clamp(u32(round(max(f32(min_step_count), f32(base_step_count) * sample_factor))), min_step_count, base_step_count);
     let segment_len = (t_end - t_start) / f32(step_count);
     if (segment_len <= 1e-5) {
       continue;
     }
 
-    let pixel_jitter = hash13(vec3<f32>(f32(ipos.x), f32(ipos.y), f32(i) * 7.13));
-    var trans = 1.0;
+    let pixel_jitter = hash13(vec3<f32>(f32(ipos.x), f32(ipos.y), f32(i) * 7.13 + history_params.params0.x * 12.3));
+    var trans = vec3<f32>(1.0);
     var source = vec3<f32>(0.0);
     var integrated_tau = 0.0;
-    let has_opaque_behind = t_limit < FAR_T * 0.5;
-
     for (var step = 0u; step < step_count; step = step + 1u) {
       let t = t_start + (f32(step) + pixel_jitter) * segment_len;
       let pos_ws = ray_origin + ray_dir * t;
@@ -408,19 +428,21 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       if (m.style1.w > m.style1.z + 1e-4) {
         boundary_fade = 1.0 - smoothstep(m.style1.z, m.style1.w, boundary_pos);
       }
-      let space_edge_soften = select(mix(0.12, 1.0, boundary_fade), 1.0, has_opaque_behind);
-      let horizon_glow = limb_boost * mix(0.75, 1.0, boundary_fade) * space_edge_soften;
+      let space_edge_soften = mix(0.0, 1.0, boundary_fade);
+      let horizon_glow = limb_boost * mix(0.5, 1.0, boundary_fade) * space_edge_soften;
       let cos_theta = dot(light_dir, -ray_dir);
       let phase = hg_phase(cos_theta, clamp(m.emission.w, -0.85, 0.85));
       let phase_term = 0.04 + phase * 1.15;
-      let ambient_term = ambient * (m.params.w * 0.12) * mix(0.5, 1.0, boundary_fade);
+      let ambient_term = ambient * (m.params.w * 0.12) * boundary_fade;
       let direct_term = light_color * (m.params.z * phase_term) * horizon_glow;
-      let space_scatter_soften = select(mix(0.18, 1.0, boundary_fade), 1.0, has_opaque_behind);
-      let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 * space_scatter_soften + m.emission.xyz * (0.02 + tangent_boost * 0.05);
+      let space_scatter_soften = mix(0.0, 1.0, boundary_fade);
+      let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 * space_scatter_soften + m.emission.xyz * (0.02 + tangent_boost * 0.05) * space_scatter_soften;
       let extinction_scale = select(max(m.style1.y, 1e-4), max(m.style1.x, 1e-4), has_opaque_behind);
       let optical = density * segment_len * extinction_scale * mix(0.45, 1.0, tangent_boost);
       integrated_tau += optical;
-      let alpha_step = 1.0 - exp(-optical);
+      
+      let step_extinction = max(m.absorption.xyz * optical, vec3<f32>(1e-4));
+      let alpha_step = vec3<f32>(1.0) - exp(-step_extinction);
       source += trans * scatter * alpha_step;
 
       if (has_opaque_behind && m.style0.z > 1e-4) {
@@ -431,14 +453,14 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
         source += trans * disk_haze;
       }
 
-      let absorption = dot(m.absorption.xyz, vec3<f32>(0.33333334)) * optical;
-      trans *= exp(-max(absorption, 1e-4));
-      if (trans <= 0.01) {
+      trans *= exp(-step_extinction);
+      if (max(trans.x, max(trans.y, trans.z)) <= 0.01) {
         break;
       }
     }
 
-    let alpha_raw = clamp(1.0 - trans, 0.0, 0.995);
+    let trans_scalar = dot(trans, vec3<f32>(0.33333334));
+    let alpha_raw = clamp(1.0 - trans_scalar, 0.0, 0.995);
     if (alpha_raw <= 1e-4) {
       continue;
     }
@@ -448,7 +470,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     let tau_alpha = 1.0 - exp(-integrated_tau * select(m.style2.y, m.style2.x, has_opaque_behind));
     let alpha_shaped = max(alpha_raw, tau_alpha);
     let w = max(1e-3, alpha_shaped) * mix(0.32, 0.72, pow(1.0 - z, 2.0));
-    let reveal_alpha = clamp(max(-log(max(trans, 1e-4)), integrated_tau) * select(m.style2.w, m.style2.z, has_opaque_behind), 0.0, 0.7);
+    let reveal_alpha = clamp(max(-log(max(trans_scalar, 1e-4)), integrated_tau) * select(m.style2.w, m.style2.z, has_opaque_behind), 0.0, 0.7);
     accum_rgb += color * alpha_shaped * w;
     accum_a += reveal_alpha;
     accum_w += alpha_shaped * w;
@@ -476,7 +498,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       var history_weight = history_params.params0.z;
       if (prev_depth > 0.0 && prev_depth < FAR_T * 0.5) {
         let depth_delta = abs(prev_depth - prev_t);
-        let rejection = saturate(1.0 - depth_delta / (0.12 * max(prev_t, 1.0) + 0.6));
+        let rejection = saturate(1.0 - depth_delta / (0.005 * max(prev_t, 1.0) + 0.08));
         history_weight *= rejection;
       } else {
         history_weight = 0.0;

@@ -51,6 +51,11 @@ func (a *App) setupPlanetBodyPipeline() {
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
 			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
+			},
 		},
 	})
 	if err != nil {
@@ -95,6 +100,10 @@ func (a *App) setupPlanetBodyPipeline() {
 			Targets: []wgpu.ColorTargetState{
 				{
 					Format:    wgpu.TextureFormatRGBA16Float,
+					WriteMask: wgpu.ColorWriteMaskAll,
+				},
+				{
+					Format:    wgpu.TextureFormatR16Float,
 					WriteMask: wgpu.ColorWriteMaskAll,
 				},
 			},

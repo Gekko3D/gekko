@@ -609,7 +609,7 @@ func (a *App) setupResolvePipeline() {
 	}
 
 	// Group 0: opaque lit color, accum color, weight, volumetric color, volumetric depth,
-	// scene depth, CA color, CA depth
+	// scene depth, analytic planet depth, CA color, CA depth
 	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "Resolve BGL0",
 		Entries: []wgpu.BindGroupLayoutEntry{
@@ -677,6 +677,14 @@ func (a *App) setupResolvePipeline() {
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
+			{
+				Binding:    8,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -728,7 +736,7 @@ func (a *App) createResolveBindGroup(layout *wgpu.BindGroupLayout) {
 	if a == nil || a.BufferManager == nil || layout == nil {
 		return
 	}
-	if a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil || a.BufferManager.CurrentVolumetricView() == nil || a.BufferManager.CurrentVolumetricDepthView() == nil || a.BufferManager.DepthView == nil || a.BufferManager.CAVolumeColorView == nil || a.BufferManager.CAVolumeDepthView == nil {
+	if a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil || a.BufferManager.CurrentVolumetricView() == nil || a.BufferManager.CurrentVolumetricDepthView() == nil || a.BufferManager.DepthView == nil || a.BufferManager.PlanetDepthView == nil || a.BufferManager.CAVolumeColorView == nil || a.BufferManager.CAVolumeDepthView == nil {
 		// Views not ready yet (e.g., during early init/resize), skip creating BG
 		return
 	}
@@ -742,8 +750,9 @@ func (a *App) createResolveBindGroup(layout *wgpu.BindGroupLayout) {
 			{Binding: 3, TextureView: a.BufferManager.CurrentVolumetricView()},
 			{Binding: 4, TextureView: a.BufferManager.CurrentVolumetricDepthView()},
 			{Binding: 5, TextureView: a.BufferManager.DepthView},
-			{Binding: 6, TextureView: a.BufferManager.CAVolumeColorView},
-			{Binding: 7, TextureView: a.BufferManager.CAVolumeDepthView},
+			{Binding: 6, TextureView: a.BufferManager.PlanetDepthView},
+			{Binding: 7, TextureView: a.BufferManager.CAVolumeColorView},
+			{Binding: 8, TextureView: a.BufferManager.CAVolumeDepthView},
 		},
 	})
 	if err != nil {

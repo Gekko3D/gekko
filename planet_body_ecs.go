@@ -2,24 +2,39 @@ package gekko
 
 import "github.com/go-gl/mathgl/mgl32"
 
+const (
+	planetBodyBakedSurfaceFaceCount     = 6
+	PlanetBodyMaxBakedSurfaceResolution = 1024
+)
+
+type PlanetBakedSurfaceSample struct {
+	Height       float32
+	NormalOctX   float32
+	NormalOctY   float32
+	MaterialBand float32
+}
+
 // PlanetBodyComponent describes an analytic far-body planet rendered by the
 // voxel RT renderer. Values are authored in local world units before transform
 // scale is applied.
 type PlanetBodyComponent struct {
 	Disabled bool
 
-	Radius           float32
-	OceanRadius      float32
-	AtmosphereRadius float32
-	HeightAmplitude  float32
-	NoiseScale       float32
-	BlockSize        float32
-	HeightSteps      int
-	HandoffNearAlt   float32
-	HandoffFarAlt    float32
-	Seed             uint32
-	BiomeMix         float32
-	BandColors       [6][3]float32
+	Radius                 float32
+	OceanRadius            float32
+	AtmosphereRadius       float32
+	AtmosphereRimWidth     float32
+	HeightAmplitude        float32
+	NoiseScale             float32
+	BlockSize              float32
+	HeightSteps            int
+	HandoffNearAlt         float32
+	HandoffFarAlt          float32
+	Seed                   uint32
+	BiomeMix               float32
+	BakedSurfaceResolution int
+	BakedSurfaceSamples    []PlanetBakedSurfaceSample
+	BandColors             [6][3]float32
 
 	AmbientStrength  float32
 	DiffuseStrength  float32
@@ -70,6 +85,23 @@ func (p *PlanetBodyComponent) NormalizedAtmosphereRadius() float32 {
 		atmosphere = minAtmosphere
 	}
 	return atmosphere
+}
+
+func (p *PlanetBodyComponent) NormalizedAtmosphereRimWidth() float32 {
+	if p == nil || p.AtmosphereRimWidth <= 0 {
+		return 0
+	}
+	maxWidth := p.NormalizedHeightAmplitude() * 1.5
+	if maxWidth <= 0 {
+		maxWidth = p.NormalizedRadius() * 0.12
+	}
+	if maxWidth <= 0 {
+		return p.AtmosphereRimWidth
+	}
+	if p.AtmosphereRimWidth > maxWidth {
+		return maxWidth
+	}
+	return p.AtmosphereRimWidth
 }
 
 func (p *PlanetBodyComponent) NormalizedHeightAmplitude() float32 {
@@ -143,6 +175,24 @@ func (p *PlanetBodyComponent) NormalizedBiomeMix() float32 {
 		return 0.5
 	}
 	return clamp01(p.BiomeMix)
+}
+
+func (p *PlanetBodyComponent) NormalizedBakedSurfaceResolution() int {
+	if p == nil || p.BakedSurfaceResolution < 2 {
+		return 0
+	}
+	if p.BakedSurfaceResolution > PlanetBodyMaxBakedSurfaceResolution {
+		return PlanetBodyMaxBakedSurfaceResolution
+	}
+	return p.BakedSurfaceResolution
+}
+
+func (p *PlanetBodyComponent) NormalizedBakedSurfaceSampleCount() int {
+	resolution := p.NormalizedBakedSurfaceResolution()
+	if resolution == 0 {
+		return 0
+	}
+	return resolution * resolution * planetBodyBakedSurfaceFaceCount
 }
 
 func (p *PlanetBodyComponent) NormalizedBandColors() [6][3]float32 {
@@ -265,6 +315,10 @@ func (p *PlanetBodyComponent) WorldOceanRadius(tr *TransformComponent) float32 {
 
 func (p *PlanetBodyComponent) WorldAtmosphereRadius(tr *TransformComponent) float32 {
 	return p.NormalizedAtmosphereRadius() * planetUniformScale(tr)
+}
+
+func (p *PlanetBodyComponent) WorldAtmosphereRimWidth(tr *TransformComponent) float32 {
+	return p.NormalizedAtmosphereRimWidth() * planetUniformScale(tr)
 }
 
 func (p *PlanetBodyComponent) WorldHeightAmplitude(tr *TransformComponent) float32 {

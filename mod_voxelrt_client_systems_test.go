@@ -353,11 +353,12 @@ func TestBuildPlanetBodyHostsNormalizesAndSortsResults(t *testing.T) {
 			Rotation: mgl32.QuatRotate(mgl32.DegToRad(15), mgl32.Vec3{0, 1, 0}),
 		},
 		&PlanetBodyComponent{
-			Radius:          20,
-			OceanRadius:     21,
-			HeightAmplitude: 5,
-			HandoffNearAlt:  9,
-			HandoffFarAlt:   24,
+			Radius:             20,
+			OceanRadius:        21,
+			AtmosphereRimWidth: 3,
+			HeightAmplitude:    5,
+			HandoffNearAlt:     9,
+			HandoffFarAlt:      24,
 		},
 	)
 	cmd.AddEntity(
@@ -384,6 +385,9 @@ func TestBuildPlanetBodyHostsNormalizesAndSortsResults(t *testing.T) {
 	}
 	if hosts[0].HeightAmplitude != 10 {
 		t.Fatalf("expected scaled height amplitude 10, got %v", hosts[0].HeightAmplitude)
+	}
+	if hosts[0].AtmosphereRimWidth != 6 {
+		t.Fatalf("expected scaled atmosphere rim width 6, got %v", hosts[0].AtmosphereRimWidth)
 	}
 	if hosts[0].HeightSteps != 6 {
 		t.Fatalf("expected default height steps 6, got %d", hosts[0].HeightSteps)

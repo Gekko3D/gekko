@@ -47,6 +47,7 @@ struct PlanetRecord {
   surface: vec4<f32>,
   noise: vec4<f32>,
   style: vec4<f32>,
+  bake_meta: vec4<u32>,
   band0: vec4<f32>,
   band1: vec4<f32>,
   band2: vec4<f32>,
@@ -63,6 +64,7 @@ struct VSOut {
 
 struct FSOut {
   @location(0) color: vec4<f32>,
+  @location(1) depth: f32,
 };
 
 struct PlanetSurfaceEval {
@@ -94,10 +96,18 @@ struct PlanetDetailSettings {
   mid_weight: f32,
 };
 
+struct BakedPlanetSurfaceSample {
+  height: f32,
+  normal_oct_x: f32,
+  normal_oct_y: f32,
+  material_band: f32,
+};
+
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(0) @binding(1) var<storage, read> lights: array<Light>;
 @group(1) @binding(0) var<uniform> planet_params: PlanetParams;
 @group(1) @binding(1) var<storage, read> planets: array<PlanetRecord>;
+@group(1) @binding(2) var<storage, read> planet_baked_surface: array<BakedPlanetSurfaceSample>;
 @group(2) @binding(0) var scene_depth: texture_2d<f32>;
 
 fn saturate(v: f32) -> f32 {
@@ -333,6 +343,16 @@ fn quantized_planet_sample_dir(planet: PlanetRecord, dir_local: vec3<f32>, block
 }
 
 fn planet_detail_settings(planet: PlanetRecord) -> PlanetDetailSettings {
+  if (baked_planet_surface_available(planet)) {
+    let baked_resolution = max(f32(planet.bake_meta.x), 2.0);
+    let baked_uv_step = 2.0 / max(baked_resolution - 1.0, 1.0);
+    return PlanetDetailSettings(
+      max(planet.bounds.w * baked_uv_step, 0.5),
+      max(planet.noise.y, 1.0),
+      0.0,
+      0.0,
+    );
+  }
   let altitude = max(length(camera.cam_pos.xyz - planet.bounds.xyz) - max(planet.bounds.w, planet.surface.x), 0.0);
   let far_block = max(planet.surface.w, 0.5);
   let mid_block = max(far_block * 0.5, 0.35);
@@ -353,7 +373,105 @@ fn planet_detail_settings(planet: PlanetRecord) -> PlanetDetailSettings {
   return PlanetDetailSettings(block_size, height_steps, near_weight, mid_weight);
 }
 
+fn baked_planet_surface_available(planet: PlanetRecord) -> bool {
+  return planet.bake_meta.x > 1u && planet.bake_meta.z >= planet.bake_meta.x * planet.bake_meta.x * 6u;
+}
+
+fn baked_planet_surface_texel(planet: PlanetRecord, face: i32, x: i32, y: i32) -> BakedPlanetSurfaceSample {
+  let resolution = max(i32(planet.bake_meta.x), 1);
+  let clamped_face = clamp(face, 0, 5);
+  let clamped_x = clamp(x, 0, resolution - 1);
+  let clamped_y = clamp(y, 0, resolution - 1);
+  let base = planet.bake_meta.y + u32(clamped_face * resolution * resolution + clamped_y * resolution + clamped_x);
+  return planet_baked_surface[base];
+}
+
+fn decode_oct_normal(oct_xy: vec2<f32>) -> vec3<f32> {
+  var v = vec3<f32>(oct_xy.xy, 1.0 - abs(oct_xy.x) - abs(oct_xy.y));
+  if (v.z < 0.0) {
+    let x = (1.0 - abs(v.y)) * select(-1.0, 1.0, v.x >= 0.0);
+    let y = (1.0 - abs(v.x)) * select(-1.0, 1.0, v.y >= 0.0);
+    v.x = x;
+    v.y = y;
+  }
+  return normalize(v);
+}
+
+fn encode_oct_normal(normal: vec3<f32>) -> vec2<f32> {
+  let denom = max(abs(normal.x) + abs(normal.y) + abs(normal.z), 1e-5);
+  var n = normal / denom;
+  if (n.z < 0.0) {
+    let x = (1.0 - abs(n.y)) * select(-1.0, 1.0, n.x >= 0.0);
+    let y = (1.0 - abs(n.x)) * select(-1.0, 1.0, n.y >= 0.0);
+    n.x = x;
+    n.y = y;
+  }
+  return vec2<f32>(clamp(n.x, -1.0, 1.0), clamp(n.y, -1.0, 1.0));
+}
+
+fn sample_planet_surface_baked(planet: PlanetRecord, sample_dir: vec3<f32>) -> BakedPlanetSurfaceSample {
+  let face_uv = cube_sphere_face_uv(sample_dir);
+  let resolution = max(f32(planet.bake_meta.x), 2.0);
+  let texel_coord = (vec2<f32>(face_uv.u, face_uv.v) * 0.5 + vec2<f32>(0.5, 0.5)) * (resolution - 1.0);
+  let x0 = i32(floor(texel_coord.x));
+  let y0 = i32(floor(texel_coord.y));
+  let x1 = min(x0 + 1, i32(resolution) - 1);
+  let y1 = min(y0 + 1, i32(resolution) - 1);
+  let tx = fract(texel_coord.x);
+  let ty = fract(texel_coord.y);
+  let s00 = baked_planet_surface_texel(planet, face_uv.face, x0, y0);
+  let s10 = baked_planet_surface_texel(planet, face_uv.face, x1, y0);
+  let s01 = baked_planet_surface_texel(planet, face_uv.face, x0, y1);
+  let s11 = baked_planet_surface_texel(planet, face_uv.face, x1, y1);
+  let h0 = mix(s00.height, s10.height, tx);
+  let h1 = mix(s01.height, s11.height, tx);
+  let height = clamp(mix(h0, h1, ty) * planet.surface.z, -planet.surface.z, planet.surface.z);
+  let normal = normalize(
+    decode_oct_normal(vec2<f32>(s00.normal_oct_x, s00.normal_oct_y)) * ((1.0 - tx) * (1.0 - ty)) +
+    decode_oct_normal(vec2<f32>(s10.normal_oct_x, s10.normal_oct_y)) * (tx * (1.0 - ty)) +
+    decode_oct_normal(vec2<f32>(s01.normal_oct_x, s01.normal_oct_y)) * ((1.0 - tx) * ty) +
+    decode_oct_normal(vec2<f32>(s11.normal_oct_x, s11.normal_oct_y)) * (tx * ty)
+  );
+  let nearest_x = i32(round(texel_coord.x));
+  let nearest_y = i32(round(texel_coord.y));
+  let material = baked_planet_surface_texel(planet, face_uv.face, nearest_x, nearest_y).material_band;
+  let oct_xy = encode_oct_normal(normal);
+  return BakedPlanetSurfaceSample(height / max(planet.surface.z, 1e-4), oct_xy.x, oct_xy.y, material);
+}
+
+fn quantized_baked_planet_sample_dir(planet: PlanetRecord, dir_local: vec3<f32>) -> vec3<f32> {
+  let face_uv = cube_sphere_face_uv(dir_local);
+  let resolution = max(f32(planet.bake_meta.x), 2.0);
+  let texel_coord = (vec2<f32>(face_uv.u, face_uv.v) * 0.5 + vec2<f32>(0.5, 0.5)) * (resolution - 1.0);
+  let snapped_x = clamp(i32(round(texel_coord.x)), 0, i32(resolution) - 1);
+  let snapped_y = clamp(i32(round(texel_coord.y)), 0, i32(resolution) - 1);
+  let snapped_u = mix(-1.0, 1.0, f32(snapped_x) / max(resolution - 1.0, 1.0));
+  let snapped_v = mix(-1.0, 1.0, f32(snapped_y) / max(resolution - 1.0, 1.0));
+  return cube_sphere_direction(face_uv.face, snapped_u, snapped_v);
+}
+
+fn sample_planet_surface_baked_nearest(planet: PlanetRecord, sample_dir: vec3<f32>) -> BakedPlanetSurfaceSample {
+  let face_uv = cube_sphere_face_uv(sample_dir);
+  let resolution = max(f32(planet.bake_meta.x), 2.0);
+  let texel_coord = (vec2<f32>(face_uv.u, face_uv.v) * 0.5 + vec2<f32>(0.5, 0.5)) * (resolution - 1.0);
+  let x = clamp(i32(round(texel_coord.x)), 0, i32(resolution) - 1);
+  let y = clamp(i32(round(texel_coord.y)), 0, i32(resolution) - 1);
+  return baked_planet_surface_texel(planet, face_uv.face, x, y);
+}
+
+fn baked_surface_sample_height_world(planet: PlanetRecord, sample: BakedPlanetSurfaceSample) -> f32 {
+  return sample.height * planet.surface.z;
+}
+
+fn baked_surface_sample_normal_local(sample: BakedPlanetSurfaceSample) -> vec3<f32> {
+  return decode_oct_normal(vec2<f32>(sample.normal_oct_x, sample.normal_oct_y));
+}
+
 fn sample_planet_height_continuous(planet: PlanetRecord, sample_dir: vec3<f32>) -> f32 {
+  if (baked_planet_surface_available(planet)) {
+    let baked_dir = quantized_baked_planet_sample_dir(planet, sample_dir);
+    return baked_surface_sample_height_world(planet, sample_planet_surface_baked_nearest(planet, baked_dir));
+  }
   let detail_settings = planet_detail_settings(planet);
   let seed = u32(planet.noise.z);
   let amp = planet.surface.z;
@@ -390,6 +508,11 @@ fn planet_polar_cap_metric(planet: PlanetRecord, signed_height: f32, dir_local: 
 }
 
 fn sample_planet_height(planet: PlanetRecord, dir_local: vec3<f32>) -> f32 {
+  if (baked_planet_surface_available(planet)) {
+    let baked_dir = quantized_baked_planet_sample_dir(planet, dir_local);
+    let baked_sample = sample_planet_surface_baked_nearest(planet, baked_dir);
+    return baked_surface_sample_height_world(planet, baked_sample);
+  }
   let detail_settings = planet_detail_settings(planet);
   let sample_dir = quantized_planet_sample_dir(planet, dir_local, detail_settings.block_size);
   return quantize_planet_height(planet, sample_planet_height_continuous(planet, sample_dir), detail_settings.height_steps);
@@ -441,6 +564,11 @@ fn planet_normal_sample_angle(planet: PlanetRecord, surface_radius: f32) -> f32 
 fn sample_planet_terrain_normal_world(planet: PlanetRecord, dir_world: vec3<f32>) -> vec3<f32> {
   let inv_rot = quat_conjugate(planet.rotation);
   let dir_local = normalize(quat_rotate(inv_rot, dir_world));
+  if (baked_planet_surface_available(planet)) {
+    let baked_dir = quantized_baked_planet_sample_dir(planet, dir_local);
+    let baked_sample = sample_planet_surface_baked_nearest(planet, baked_dir);
+    return normalize(quat_rotate(planet.rotation, baked_surface_sample_normal_local(baked_sample)));
+  }
   let tangent_ref = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(dir_local.y) > 0.92);
   let tangent_a = normalize(cross(tangent_ref, dir_local));
   let tangent_b = normalize(cross(dir_local, tangent_a));
@@ -527,6 +655,25 @@ fn planet_surface_color(planet: PlanetRecord, signed_height: f32, dir_local: vec
     return mix(ocean_base, horizon_tint, fresnel * 0.45);
   }
 
+  if (baked_planet_surface_available(planet)) {
+    let baked_sample = sample_planet_surface_baked_nearest(planet, dir_local);
+    let material_band = clamp(i32(round(baked_sample.material_band)), 0, 5);
+    switch (material_band) {
+      case 5: {
+        return planet.band5.xyz;
+      }
+      case 4: {
+        return planet.band4.xyz;
+      }
+      case 3: {
+        return planet.band3.xyz;
+      }
+      default: {
+        return planet.band2.xyz;
+      }
+    }
+  }
+
   let snow_line = amp * lerp_scalar(0.9, 0.78, biome_mix);
   let polar_cap_start = lerp_scalar(0.992, 0.962, biome_mix);
   if (planet_polar_cap_metric(planet, signed_height, dir_local) > polar_cap_start || signed_height > snow_line) {
@@ -598,7 +745,11 @@ fn fs_main(in: VSOut) -> FSOut {
     let terrain_normal = sample_planet_terrain_normal_world(planet, world_normal);
     let inv_rot = quat_conjugate(planet.rotation);
     let local_normal = normalize(quat_rotate(inv_rot, world_normal));
-    let block_local_normal = quantized_planet_sample_dir(planet, local_normal, detail_settings.block_size);
+    let block_local_normal = select(
+      quantized_planet_sample_dir(planet, local_normal, detail_settings.block_size),
+      quantized_baked_planet_sample_dir(planet, local_normal),
+      baked_planet_surface_available(planet),
+    );
     let block_normal = normalize(quat_rotate(planet.rotation, block_local_normal));
     let is_ocean = surface_hit.is_ocean > 0.5;
     let terrain_mix = select(mix(0.12, 0.34, detail_settings.near_weight), mix(0.42, 0.72, detail_settings.near_weight), is_ocean);
@@ -613,7 +764,7 @@ fn fs_main(in: VSOut) -> FSOut {
     let spec_power = select(24.0, 92.0, is_ocean);
     let spec = pow(max(dot(reflect(-light_dir, shading_normal), view_dir), 0.0), spec_power) * planet.style.z;
     let rim = pow(1.0 - saturate(dot(world_normal, view_dir)), 3.0) * planet.style.w;
-    let atmosphere_mix = saturate((planet.surface.y - surface_hit.radius) / max(planet.surface.y - planet.surface.x, 1.0));
+    let atmosphere_mix = saturate((planet.surface.y - surface_hit.radius) / max(planet.atmosphere.w, 1.0));
     let land_spec_tint = mix(base_color, light_color, 0.22);
     let ocean_spec_tint = mix(light_color, vec3<f32>(1.0), 0.35);
     let spec_tint = select(land_spec_tint, ocean_spec_tint, is_ocean);
@@ -631,5 +782,6 @@ fn fs_main(in: VSOut) -> FSOut {
   }
   var out: FSOut;
   out.color = vec4<f32>(best_color, 1.0);
+  out.depth = best_t;
   return out;
 }

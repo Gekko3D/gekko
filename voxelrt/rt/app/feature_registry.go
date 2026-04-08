@@ -64,11 +64,11 @@ func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
 	if flags.CAVolumes {
 		defaults = append(defaults, &CAVolumeFeature{})
 	}
-	if flags.AnalyticMedia {
-		defaults = append(defaults, &AnalyticMediumFeature{})
-	}
 	if flags.PlanetBodies {
 		defaults = append(defaults, &PlanetBodyFeature{})
+	}
+	if flags.AnalyticMedia {
+		defaults = append(defaults, &AnalyticMediumFeature{})
 	}
 	if flags.Water {
 		defaults = append(defaults, &WaterFeature{})

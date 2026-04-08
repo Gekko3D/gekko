@@ -13,21 +13,22 @@ func TestPlanetBodyComponentNormalizationAndWorldScaling(t *testing.T) {
 	}
 
 	planet := &PlanetBodyComponent{
-		Radius:           10,
-		OceanRadius:      9,
-		AtmosphereRadius: 10.5,
-		HeightAmplitude:  3,
-		NoiseScale:       0,
-		BlockSize:        0,
-		HeightSteps:      0,
-		HandoffNearAlt:   8,
-		HandoffFarAlt:    20,
-		BiomeMix:         2,
-		BandColors:       [6][3]float32{{2, -1, 0.5}},
-		AmbientStrength:  2,
-		DiffuseStrength:  5,
-		SpecularStrength: -1,
-		RimStrength:      -1,
+		Radius:             10,
+		OceanRadius:        9,
+		AtmosphereRadius:   10.5,
+		AtmosphereRimWidth: 1.5,
+		HeightAmplitude:    3,
+		NoiseScale:         0,
+		BlockSize:          0,
+		HeightSteps:        0,
+		HandoffNearAlt:     8,
+		HandoffFarAlt:      20,
+		BiomeMix:           2,
+		BandColors:         [6][3]float32{{2, -1, 0.5}},
+		AmbientStrength:    2,
+		DiffuseStrength:    5,
+		SpecularStrength:   -1,
+		RimStrength:        -1,
 	}
 	tr := &TransformComponent{
 		Position: mgl32.Vec3{4, 5, 6},
@@ -62,6 +63,12 @@ func TestPlanetBodyComponentNormalizationAndWorldScaling(t *testing.T) {
 	if got := planet.NormalizedBiomeMix(); got != 1 {
 		t.Fatalf("expected biome mix clamped to 1, got %v", got)
 	}
+	if got := planet.NormalizedBakedSurfaceResolution(); got != 0 {
+		t.Fatalf("expected missing baked surface data to report resolution 0, got %d", got)
+	}
+	if got := planet.NormalizedBakedSurfaceSampleCount(); got != 0 {
+		t.Fatalf("expected missing baked surface data to report zero samples, got %d", got)
+	}
 	bands := planet.NormalizedBandColors()
 	if bands[0] != ([3]float32{1, 0, 0.5}) {
 		t.Fatalf("expected first band color clamped, got %v", bands[0])
@@ -95,5 +102,18 @@ func TestPlanetBodyComponentNormalizationAndWorldScaling(t *testing.T) {
 	}
 	if got := planet.WorldAtmosphereRadius(tr); got != 52 {
 		t.Fatalf("expected scaled atmosphere radius 52, got %v", got)
+	}
+	if got := planet.WorldAtmosphereRimWidth(tr); got != 6 {
+		t.Fatalf("expected scaled atmosphere rim width 6, got %v", got)
+	}
+}
+
+func TestPlanetBodyComponentNormalizedBakedSurfaceResolution(t *testing.T) {
+	planet := &PlanetBodyComponent{BakedSurfaceResolution: 2048}
+	if got := planet.NormalizedBakedSurfaceResolution(); got != PlanetBodyMaxBakedSurfaceResolution {
+		t.Fatalf("expected baked surface resolution clamp to %d, got %d", PlanetBodyMaxBakedSurfaceResolution, got)
+	}
+	if got := planet.NormalizedBakedSurfaceSampleCount(); got != PlanetBodyMaxBakedSurfaceResolution*PlanetBodyMaxBakedSurfaceResolution*planetBodyBakedSurfaceFaceCount {
+		t.Fatalf("unexpected baked surface sample count %d", got)
 	}
 }

@@ -60,8 +60,8 @@ func (f *PlanetBodyFeature) HasCommandStage(a *App, stage FeatureCommandStage) b
 		a != nil &&
 		a.BufferManager != nil &&
 		a.PlanetBodyPipeline != nil &&
-		a.BufferManager.PlanetBodyCount > 0 &&
-		a.StorageView != nil
+		a.StorageView != nil &&
+		a.BufferManager.PlanetDepthView != nil
 }
 
 func (f *PlanetBodyFeature) DispatchCommandStage(a *App, stage FeatureCommandStage, encoder *wgpu.CommandEncoder) error {
@@ -71,10 +71,6 @@ func (f *PlanetBodyFeature) DispatchCommandStage(a *App, stage FeatureCommandSta
 	if a == nil || encoder == nil || a.BufferManager == nil || a.PlanetBodyPipeline == nil {
 		return nil
 	}
-	if a.BufferManager.PlanetBodyBG0 == nil || a.BufferManager.PlanetBodyBG1 == nil || a.BufferManager.PlanetBodyBG2 == nil {
-		return nil
-	}
-
 	pass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments: []wgpu.RenderPassColorAttachment{
 			{
@@ -82,13 +78,21 @@ func (f *PlanetBodyFeature) DispatchCommandStage(a *App, stage FeatureCommandSta
 				LoadOp:  wgpu.LoadOpLoad,
 				StoreOp: wgpu.StoreOpStore,
 			},
+			{
+				View:       a.BufferManager.PlanetDepthView,
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{R: 60000.0, G: 0, B: 0, A: 0},
+			},
 		},
 	})
-	pass.SetPipeline(a.PlanetBodyPipeline)
-	pass.SetBindGroup(0, a.BufferManager.PlanetBodyBG0, nil)
-	pass.SetBindGroup(1, a.BufferManager.PlanetBodyBG1, nil)
-	pass.SetBindGroup(2, a.BufferManager.PlanetBodyBG2, nil)
-	pass.Draw(3, 1, 0, 0)
+	if a.BufferManager.PlanetBodyCount > 0 && a.BufferManager.PlanetBodyBG0 != nil && a.BufferManager.PlanetBodyBG1 != nil && a.BufferManager.PlanetBodyBG2 != nil {
+		pass.SetPipeline(a.PlanetBodyPipeline)
+		pass.SetBindGroup(0, a.BufferManager.PlanetBodyBG0, nil)
+		pass.SetBindGroup(1, a.BufferManager.PlanetBodyBG1, nil)
+		pass.SetBindGroup(2, a.BufferManager.PlanetBodyBG2, nil)
+		pass.Draw(3, 1, 0, 0)
+	}
 	return pass.End()
 }
 
