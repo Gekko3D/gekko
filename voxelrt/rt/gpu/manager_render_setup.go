@@ -124,6 +124,7 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 11, Buffer: m.TerrainChunkLookupBuf, Size: wgpu.WholeSize},
+			{Binding: 12, Buffer: m.PlanetTileLookupBuf, Size: wgpu.WholeSize},
 		}, 2),
 	})
 	if err != nil {

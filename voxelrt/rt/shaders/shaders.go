@@ -46,6 +46,9 @@ var AnalyticMediumWGSL string
 //go:embed water_surface.wgsl
 var WaterSurfaceWGSL string
 
+//go:embed planet_body.wgsl
+var PlanetBodyWGSL string
+
 /**
  */
 //go:embed transparent_overlay.wgsl

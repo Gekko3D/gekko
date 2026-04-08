@@ -21,6 +21,12 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	obj.TerrainGroupID = 77
 	obj.TerrainChunkCoord = [3]int{-2, 0, 3}
 	obj.TerrainChunkSize = 32
+	obj.IsPlanetTile = true
+	obj.PlanetTileGroupID = 88
+	obj.PlanetTileFace = 2
+	obj.PlanetTileLevel = 4
+	obj.PlanetTileX = -3
+	obj.PlanetTileY = 7
 
 	alloc := &ObjectGpuAllocation{}
 	matAlloc := &MaterialGpuAllocation{MaterialOffset: 7}
@@ -68,6 +74,24 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	if got := binary.LittleEndian.Uint32(buf[60:64]); got != uint32(obj.TerrainChunkSize) {
 		t.Fatalf("expected terrain chunk size %d, got %d", obj.TerrainChunkSize, got)
 	}
+	if got := binary.LittleEndian.Uint32(buf[64:68]); got != 1 {
+		t.Fatalf("expected planet tile flag 1, got %d", got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[68:72]); got != obj.PlanetTileGroupID {
+		t.Fatalf("expected planet tile group %d, got %d", obj.PlanetTileGroupID, got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[80:84])); got != int32(obj.PlanetTileFace) {
+		t.Fatalf("expected planet tile face %d, got %d", obj.PlanetTileFace, got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[84:88])); got != int32(obj.PlanetTileLevel) {
+		t.Fatalf("expected planet tile level %d, got %d", obj.PlanetTileLevel, got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[88:92])); got != int32(obj.PlanetTileX) {
+		t.Fatalf("expected planet tile x %d, got %d", obj.PlanetTileX, got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[92:96])); got != int32(obj.PlanetTileY) {
+		t.Fatalf("expected planet tile y %d, got %d", obj.PlanetTileY, got)
+	}
 }
 
 func TestBuildTerrainChunkLookupIncludesVisibleTerrainChunksOnly(t *testing.T) {
@@ -106,6 +130,49 @@ func TestBuildTerrainChunkLookupIncludesVisibleTerrainChunksOnly(t *testing.T) {
 	}
 	if got := findTerrainChunkLookupObjectID(entries, params, 1001, [3]int32{2, 0, 0}); got != -1 {
 		t.Fatalf("expected missing terrain chunk lookup to fail, got %d", got)
+	}
+}
+
+func TestBuildPlanetTileLookupIncludesVisiblePlanetTilesOnly(t *testing.T) {
+	scene := &core.Scene{
+		VisibleObjects: []*core.VoxelObject{
+			{
+				IsPlanetTile:      true,
+				PlanetTileGroupID: 111,
+				PlanetTileFace:    1,
+				PlanetTileLevel:   3,
+				PlanetTileX:       4,
+				PlanetTileY:       5,
+			},
+			{
+				IsPlanetTile:      true,
+				PlanetTileGroupID: 111,
+				PlanetTileFace:    1,
+				PlanetTileLevel:   3,
+				PlanetTileX:       5,
+				PlanetTileY:       5,
+			},
+			{
+				IsPlanetTile: false,
+			},
+		},
+	}
+
+	entries, params := buildPlanetTileLookup(scene)
+	if params.GridSize == 0 {
+		t.Fatal("expected non-empty planet tile lookup")
+	}
+	if got := findPlanetTileLookupObjectID(entries, params, 111, [4]int32{1, 3, 4, 5}); got != 0 {
+		t.Fatalf("expected lookup for first planet tile to resolve object 0, got %d", got)
+	}
+	if got := findPlanetTileLookupObjectID(entries, params, 111, [4]int32{1, 3, 5, 5}); got != 1 {
+		t.Fatalf("expected lookup for second planet tile to resolve object 1, got %d", got)
+	}
+	if got := findPlanetTileLookupObjectID(entries, params, 222, [4]int32{1, 3, 4, 5}); got != -1 {
+		t.Fatalf("expected missing planet tile group lookup to fail, got %d", got)
+	}
+	if got := findPlanetTileLookupObjectID(entries, params, 111, [4]int32{1, 3, 8, 9}); got != -1 {
+		t.Fatalf("expected missing planet tile lookup to fail, got %d", got)
 	}
 }
 

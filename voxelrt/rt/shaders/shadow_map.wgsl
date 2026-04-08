@@ -129,6 +129,10 @@ struct ObjectParams {
     is_terrain_chunk: u32,
     terrain_group_id: u32,
     terrain_chunk: vec4<i32>,
+    is_planet_tile: u32,
+    planet_tile_group_id: u32,
+    padding2: vec2<u32>,
+    planet_tile: vec4<i32>,
 };
 
 struct SectorGridEntry {
@@ -167,7 +171,7 @@ struct SectorGridParams {
 @group(2) @binding(7) var<storage, read> object_params: array<ObjectParams>;
 @group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
-@group(2) @binding(10) var<storage, read> sector_grid_params: SectorGridParams;
+@group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
 
 // ============== TRAVERSAL LOGIC ==============
 

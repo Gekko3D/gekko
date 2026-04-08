@@ -462,8 +462,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   }
 
   var out_color = vec4<f32>(current_color, current_trans);
-  if (history_params.params0.w > 0.5 && t_limit < FAR_T * 0.5) {
-    let world_pos = reconstruct_world_pos(render_uv, ray_dir, t_limit);
+  if (history_params.params0.w > 0.5 && nearest_t < FAR_T * 0.5) {
+    let world_pos = reconstruct_world_pos(render_uv, ray_dir, nearest_t);
     let prev_uv = reproject_prev_uv(world_pos);
     if (all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0))) {
       let prev_dims = textureDimensions(prev_history);

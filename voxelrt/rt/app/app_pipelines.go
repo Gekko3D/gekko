@@ -438,8 +438,8 @@ func (a *App) setupTransparentOverlayPipeline() {
 				Binding:    10,
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
-					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
-					MinBindingSize: 0,
+					Type:           wgpu.BufferBindingTypeUniform,
+					MinBindingSize: 16,
 				},
 			},
 		}, 2, wgpu.ShaderStageFragment),

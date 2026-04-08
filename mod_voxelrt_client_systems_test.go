@@ -342,6 +342,60 @@ func TestBuildWaterSurfaceHostsNormalizesAndSortsResults(t *testing.T) {
 	}
 }
 
+func TestBuildPlanetBodyHostsNormalizesAndSortsResults(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{8, 9, 10},
+			Scale:    mgl32.Vec3{2, 2, 2},
+			Rotation: mgl32.QuatRotate(mgl32.DegToRad(15), mgl32.Vec3{0, 1, 0}),
+		},
+		&PlanetBodyComponent{
+			Radius:          20,
+			OceanRadius:     21,
+			HeightAmplitude: 5,
+			HandoffNearAlt:  9,
+			HandoffFarAlt:   24,
+		},
+	)
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{1, 2, 3}},
+		&PlanetBodyComponent{
+			Disabled: true,
+			Radius:   12,
+		},
+	)
+	app.FlushCommands()
+
+	hosts := buildPlanetBodyHosts(cmd)
+	if len(hosts) != 1 {
+		t.Fatalf("expected one enabled planet host, got %d", len(hosts))
+	}
+	if hosts[0].Position != (mgl32.Vec3{8, 9, 10}) {
+		t.Fatalf("unexpected host position: %v", hosts[0].Position)
+	}
+	if hosts[0].Radius != 40 {
+		t.Fatalf("expected scaled radius 40, got %v", hosts[0].Radius)
+	}
+	if hosts[0].OceanRadius != 42 {
+		t.Fatalf("expected scaled ocean radius 42, got %v", hosts[0].OceanRadius)
+	}
+	if hosts[0].HeightAmplitude != 10 {
+		t.Fatalf("expected scaled height amplitude 10, got %v", hosts[0].HeightAmplitude)
+	}
+	if hosts[0].HeightSteps != 6 {
+		t.Fatalf("expected default height steps 6, got %d", hosts[0].HeightSteps)
+	}
+	if hosts[0].HandoffNearAlt != 18 {
+		t.Fatalf("expected scaled handoff near altitude 18, got %v", hosts[0].HandoffNearAlt)
+	}
+	if hosts[0].HandoffFarAlt != 48 {
+		t.Fatalf("expected scaled handoff far altitude 48, got %v", hosts[0].HandoffFarAlt)
+	}
+}
+
 func newVoxelRtStateTest() *VoxelRtState {
 	return &VoxelRtState{
 		RtApp: &app_rt.App{

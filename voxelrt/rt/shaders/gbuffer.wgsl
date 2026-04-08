@@ -105,6 +105,10 @@ struct ObjectParams {
     is_terrain_chunk: u32,
     terrain_group_id: u32,
     terrain_chunk: vec4<i32>, // xyz: chunk coord, w: chunk size in voxels
+    is_planet_tile: u32,
+    planet_tile_group_id: u32,
+    padding0: vec2<u32>,
+    planet_tile: vec4<i32>, // face, level, x, y
 };
 
 struct SectorGridEntry {
@@ -124,6 +128,13 @@ struct SectorGridParams {
 struct TerrainChunkLookupEntry {
     coords: vec4<i32>,
     terrain_group_id: u32,
+    object_id: i32,
+    padding: vec2<u32>,
+};
+
+struct PlanetTileLookupEntry {
+    coords: vec4<i32>, // face, level, x, y
+    planet_tile_group_id: u32,
     object_id: i32,
     padding: vec2<u32>,
 };
@@ -151,8 +162,9 @@ struct TerrainChunkLookupEntry {
 @group(2) @binding(7) var<storage, read> object_params: array<ObjectParams>;
 @group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
-@group(2) @binding(10) var<storage, read> sector_grid_params: SectorGridParams;
+@group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
 @group(2) @binding(11) var<storage, read> terrain_chunk_lookup: array<TerrainChunkLookupEntry>;
+@group(2) @binding(12) var<storage, read> planet_tile_lookup: array<PlanetTileLookupEntry>;
 
 // ============== HELPERS ==============
 
@@ -366,14 +378,83 @@ fn find_terrain_chunk_object_id(chunk_coord: vec3<i32>, terrain_group_id: u32) -
     return -1;
 }
 
-fn sample_occupancy_for_normal(v: vec3<i32>, params: ObjectParams) -> f32 {
+fn point_inside_local_bounds(p: vec3<f32>, inst: Instance, padding: f32) -> bool {
+    let pad = vec3<f32>(padding);
+    return all(p >= inst.local_aabb_min.xyz - pad) && all(p <= inst.local_aabb_max.xyz + pad);
+}
+
+fn find_planet_tile_object_id(tile_coord: vec4<i32>, planet_group_id: u32) -> i32 {
+    let lookup_header = planet_tile_lookup[0];
+    let size = u32(lookup_header.coords.x);
+    if (size == 0u) { return -1; }
+    let mask = u32(lookup_header.coords.y);
+    let h = (u32(tile_coord.x) * 2654435761u ^
+             u32(tile_coord.y) * 2246822519u ^
+             u32(tile_coord.z) * 3266489917u ^
+             u32(tile_coord.w) * 668265263u ^
+             planet_group_id * 1640531513u) & mask;
+    for (var i = 0u; i < size; i++) {
+        let idx = ((h + i) & mask) + 1u;
+        let entry = planet_tile_lookup[idx];
+        if (entry.object_id == -1) { return -1; }
+        if (entry.planet_tile_group_id == planet_group_id &&
+            all(entry.coords == tile_coord)) {
+            return entry.object_id;
+        }
+    }
+    return -1;
+}
+
+fn sample_planet_tile_neighbor(world_pos: vec3<f32>, neighbor_object_id: i32) -> f32 {
+    if (neighbor_object_id < 0) {
+        return 0.0;
+    }
+    let neighbor_inst = instances[u32(neighbor_object_id)];
+    let neighbor_pos = (neighbor_inst.world_to_object * vec4<f32>(world_pos, 1.0)).xyz;
+    if (!point_inside_local_bounds(neighbor_pos, neighbor_inst, 0.75)) {
+        return 0.0;
+    }
+    let neighbor_params = object_params[u32(neighbor_object_id)];
+    return sample_occupancy_local(vec3<i32>(floor(neighbor_pos)), neighbor_params);
+}
+
+fn sample_occupancy_for_normal(v: vec3<i32>, inst: Instance, params: ObjectParams) -> f32 {
+    let local_occ = sample_occupancy_local(v, params);
     if (params.is_terrain_chunk == 0u || params.terrain_group_id == 0u || params.terrain_chunk.w <= 0) {
-        return sample_occupancy_local(v, params);
+        if (params.is_planet_tile == 0u || params.planet_tile_group_id == 0u) {
+            return local_occ;
+        }
+
+        let local_pos = vec3<f32>(v) + vec3<f32>(0.5);
+        if (local_occ > 0.5 || point_inside_local_bounds(local_pos, inst, 0.25)) {
+            return local_occ;
+        }
+
+        let world_pos = (inst.object_to_world * vec4<f32>(local_pos, 1.0)).xyz;
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                let neighbor_tile = vec4<i32>(
+                    params.planet_tile.x,
+                    params.planet_tile.y,
+                    params.planet_tile.z + dx,
+                    params.planet_tile.w + dy,
+                );
+                let neighbor_object_id = find_planet_tile_object_id(neighbor_tile, params.planet_tile_group_id);
+                let neighbor_occ = sample_planet_tile_neighbor(world_pos, neighbor_object_id);
+                if (neighbor_occ > 0.5) {
+                    return neighbor_occ;
+                }
+            }
+        }
+        return local_occ;
     }
 
     let chunk_size = params.terrain_chunk.w;
     if (v.x >= 0 && v.x < chunk_size && v.y >= 0 && v.y < chunk_size && v.z >= 0 && v.z < chunk_size) {
-        return sample_occupancy_local(v, params);
+        return local_occ;
     }
 
     let chunk_offset_x = floor_div_i32(v.x, chunk_size);
@@ -398,16 +479,16 @@ fn sample_occupancy_for_normal(v: vec3<i32>, params: ObjectParams) -> f32 {
     return sample_occupancy_local(neighbor_voxel, neighbor_params);
 }
 
-fn voxel_occupancy_gradient(vi: vec3<i32>, params: ObjectParams) -> vec3<f32> {
-    let dx = sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), params) - sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), params);
-    let dy = sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), params) - sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), params);
-    let dz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), params) - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), params);
+fn voxel_occupancy_gradient(vi: vec3<i32>, inst: Instance, params: ObjectParams) -> vec3<f32> {
+    let dx = sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), inst, params) - sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), inst, params);
+    let dy = sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), inst, params) - sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), inst, params);
+    let dz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), inst, params) - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), inst, params);
     return vec3<f32>(dx, dy, dz);
 }
 
-fn estimate_normal(p: vec3<f32>, params: ObjectParams) -> vec3<f32> {
+fn estimate_normal(p: vec3<f32>, inst: Instance, params: ObjectParams) -> vec3<f32> {
     let vi = vec3<i32>(floor(p));
-    let grad = voxel_occupancy_gradient(vi, params);
+    let grad = voxel_occupancy_gradient(vi, inst, params);
     if (length(grad) < 0.01) { return vec3<f32>(0.0); }
     return -normalize(grad);
 }
@@ -425,16 +506,17 @@ fn fallback_exposed_voxel_normal(
     voxel_center_os: vec3<f32>,
     local_aabb_min: vec3<f32>,
     local_aabb_max: vec3<f32>,
+    inst: Instance,
     params: ObjectParams,
 ) -> vec3<f32> {
     let vi = vec3<i32>(floor(voxel_center_os));
 
-    let occ_px = sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), params);
-    let occ_nx = sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), params);
-    let occ_py = sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), params);
-    let occ_ny = sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), params);
-    let occ_pz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), params);
-    let occ_nz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), params);
+    let occ_px = sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), inst, params);
+    let occ_nx = sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), inst, params);
+    let occ_py = sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), inst, params);
+    let occ_ny = sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), inst, params);
+    let occ_pz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), inst, params);
+    let occ_nz = sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), inst, params);
 
     let empty_px = 1.0 - occ_px;
     let empty_nx = 1.0 - occ_nx;
@@ -474,14 +556,14 @@ fn fallback_exposed_voxel_normal(
     return vec3<f32>(0.0);
 }
 
-fn has_two_sided_voxel_exposure(voxel_center_os: vec3<f32>, params: ObjectParams) -> bool {
+fn has_two_sided_voxel_exposure(voxel_center_os: vec3<f32>, inst: Instance, params: ObjectParams) -> bool {
     let vi = vec3<i32>(floor(voxel_center_os));
-    let empty_px = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), params);
-    let empty_nx = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), params);
-    let empty_py = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), params);
-    let empty_ny = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), params);
-    let empty_pz = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), params);
-    let empty_nz = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), params);
+    let empty_px = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(1, 0, 0), inst, params);
+    let empty_nx = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(-1, 0, 0), inst, params);
+    let empty_py = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 1, 0), inst, params);
+    let empty_ny = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, -1, 0), inst, params);
+    let empty_pz = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, 1), inst, params);
+    let empty_nz = 1.0 - sample_occupancy_for_normal(vi + vec3<i32>(0, 0, -1), inst, params);
     return
         (empty_px > 0.01 && empty_nx > 0.01) ||
         (empty_py > 0.01 && empty_ny > 0.01) ||
@@ -531,7 +613,7 @@ fn dominant_axis_normal_i(normal_os: vec3<f32>) -> vec3<i32> {
     return vec3<i32>(0, 0, select(-1, 1, normal_os.z >= 0.0));
 }
 
-fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: ObjectParams, sample_budget: u32) -> f32 {
+fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, inst: Instance, params: ObjectParams, sample_budget: u32) -> f32 {
     let vi = vec3<i32>(floor(voxel_center_os));
     let normal_i = dominant_axis_normal_i(normal_os);
 
@@ -556,55 +638,55 @@ fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: Ob
     var occlusion = 0.0;
     var total_weight = 0.0;
     if (sample_budget > 0u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step, params) * 0.30;
+        occlusion += sample_occupancy_for_normal(vi + normal_step, inst, params) * 0.30;
         total_weight += 0.30;
     }
     if (sample_budget > 1u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step + tangent_u_step, params) * 0.10;
+        occlusion += sample_occupancy_for_normal(vi + normal_step + tangent_u_step, inst, params) * 0.10;
         total_weight += 0.10;
     }
     if (sample_budget > 2u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step - tangent_u_step, params) * 0.10;
+        occlusion += sample_occupancy_for_normal(vi + normal_step - tangent_u_step, inst, params) * 0.10;
         total_weight += 0.10;
     }
     if (sample_budget > 3u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step + tangent_v_step, params) * 0.10;
+        occlusion += sample_occupancy_for_normal(vi + normal_step + tangent_v_step, inst, params) * 0.10;
         total_weight += 0.10;
     }
     if (sample_budget > 4u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step - tangent_v_step, params) * 0.10;
+        occlusion += sample_occupancy_for_normal(vi + normal_step - tangent_v_step, inst, params) * 0.10;
         total_weight += 0.10;
     }
     if (sample_budget > 5u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step + tangent_u_step + tangent_v_step, params) * 0.05;
+        occlusion += sample_occupancy_for_normal(vi + normal_step + tangent_u_step + tangent_v_step, inst, params) * 0.05;
         total_weight += 0.05;
     }
     if (sample_budget > 6u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step + tangent_u_step - tangent_v_step, params) * 0.05;
+        occlusion += sample_occupancy_for_normal(vi + normal_step + tangent_u_step - tangent_v_step, inst, params) * 0.05;
         total_weight += 0.05;
     }
     if (sample_budget > 7u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step - tangent_u_step + tangent_v_step, params) * 0.05;
+        occlusion += sample_occupancy_for_normal(vi + normal_step - tangent_u_step + tangent_v_step, inst, params) * 0.05;
         total_weight += 0.05;
     }
     if (sample_budget > 8u) {
-        occlusion += sample_occupancy_for_normal(vi + normal_step - tangent_u_step - tangent_v_step, params) * 0.05;
+        occlusion += sample_occupancy_for_normal(vi + normal_step - tangent_u_step - tangent_v_step, inst, params) * 0.05;
         total_weight += 0.05;
     }
     if (sample_budget > 9u) {
-        occlusion += sample_occupancy_for_normal(vi + tangent_u_step, params) * 0.025;
+        occlusion += sample_occupancy_for_normal(vi + tangent_u_step, inst, params) * 0.025;
         total_weight += 0.025;
     }
     if (sample_budget > 10u) {
-        occlusion += sample_occupancy_for_normal(vi - tangent_u_step, params) * 0.025;
+        occlusion += sample_occupancy_for_normal(vi - tangent_u_step, inst, params) * 0.025;
         total_weight += 0.025;
     }
     if (sample_budget > 11u) {
-        occlusion += sample_occupancy_for_normal(vi + tangent_v_step, params) * 0.025;
+        occlusion += sample_occupancy_for_normal(vi + tangent_v_step, inst, params) * 0.025;
         total_weight += 0.025;
     }
     if (sample_budget > 12u) {
-        occlusion += sample_occupancy_for_normal(vi - tangent_v_step, params) * 0.025;
+        occlusion += sample_occupancy_for_normal(vi - tangent_v_step, inst, params) * 0.025;
         total_weight += 0.025;
     }
 
@@ -617,7 +699,7 @@ fn compute_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: Ob
     return max(0.15, mix(base_ao, curved_ao, curved_factor));
 }
 
-fn resolve_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: ObjectParams) -> f32 {
+fn resolve_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, inst: Instance, params: ObjectParams) -> f32 {
     let sample_budget = min(u32(round(max(camera.ao_quality.x, 0.0))), 13u);
     if (sample_budget == 0u) {
         return 1.0;
@@ -626,7 +708,7 @@ fn resolve_voxel_ao(voxel_center_os: vec3<f32>, normal_os: vec3<f32>, params: Ob
         return 1.0;
     }
     if (params.ambient_occlusion_mode == AO_MODE_DEFAULT || params.ambient_occlusion_mode == AO_MODE_ENABLED) {
-        return compute_voxel_ao(voxel_center_os, normal_os, params, sample_budget);
+        return compute_voxel_ao(voxel_center_os, normal_os, inst, params, sample_budget);
     }
     return 1.0;
 }
@@ -692,18 +774,18 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let p_hit_os = ray.origin + dir * (t_brick + (EPS * 0.1));
                                 let vi_hit = vec3<i32>(floor(p_hit_os));
                                 let voxel_center_os = vec3<f32>(vi_hit) + 0.5;
-                                var n_os = estimate_normal(voxel_center_os, params);
+                                var n_os = estimate_normal(voxel_center_os, inst, params);
                                 var two_sided_lighting = 0u;
                                 if (length(n_os) < 0.01) {
-                                    n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
-                                    two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, params));
+                                    n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, inst, params);
+                                    two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, inst, params));
                                 }
                                 if (length(n_os) < 0.01) {
                                     n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
                                 }
 
                                 result.normal = transform_normal_to_world(inst, n_os);
-                                result.ao = resolve_voxel_ao(voxel_center_os, n_os, params);
+                                result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
                                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                 result.shadow_group_id = params.shadow_group_id;
                                 result.two_sided_lighting = two_sided_lighting;
@@ -742,17 +824,17 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
                                             let vi_hit = vec3<i32>(floor(voxel_center_os));
                                             let p_hit_os = ray.origin + dir * (t_micro + (EPS * 0.1));
-                                            var n_os = estimate_normal(voxel_center_os, params);
+                                            var n_os = estimate_normal(voxel_center_os, inst, params);
                                             var two_sided_lighting = 0u;
                                             if (length(n_os) < 0.01) {
-                                                n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
-                                                two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, params));
+                                                n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, inst, params);
+                                                two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, inst, params));
                                             }
                                             if (length(n_os) < 0.01) {
                                                 n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
                                             }
                                             result.normal = transform_normal_to_world(inst, n_os);
-                                            result.ao = resolve_voxel_ao(voxel_center_os, n_os, params);
+                                            result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
                                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                             result.shadow_group_id = params.shadow_group_id;
                                             result.two_sided_lighting = two_sided_lighting;
@@ -844,18 +926,18 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                             result.hit = true; result.t = t_micro; result.palette_idx = palette_idx2; result.material_idx = params.material_table_base;
                             let p_hit_os = ray.origin + ray.dir * (t_micro + (EPS * 0.1));
                             let voxel_center_os = vec3<f32>(vi2) + 0.5;
-                            var n_os = estimate_normal(voxel_center_os, params);
+                            var n_os = estimate_normal(voxel_center_os, inst, params);
                             var two_sided_lighting = 0u;
                             if (length(n_os) < 0.01) {
-                                n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
-                                two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, params));
+                                n_os = fallback_exposed_voxel_normal(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, inst, params);
+                                two_sided_lighting = select(0u, 1u, has_two_sided_voxel_exposure(voxel_center_os, inst, params));
                             }
                             if (length(n_os) < 0.01) {
                                 n_os = fallback_face_normal(p_hit_os, vi2, ray.dir);
                             }
 
                             result.normal = transform_normal_to_world(inst, n_os);
-                            result.ao = resolve_voxel_ao(voxel_center_os, n_os, params);
+                            result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                             result.shadow_group_id = params.shadow_group_id;
                             result.two_sided_lighting = two_sided_lighting;

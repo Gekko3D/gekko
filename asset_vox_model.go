@@ -196,6 +196,25 @@ func (server *AssetServer) CloneVoxelGeometry(id AssetId) (AssetId, bool) {
 	return server.RegisterSharedVoxelGeometry(asset.XBrickMap, asset.SourcePath), true
 }
 
+func (server *AssetServer) DeleteVoxelGeometry(id AssetId) bool {
+	if server == nil || id == (AssetId{}) {
+		return false
+	}
+	server.ensureVoxelStorage()
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if _, ok := server.voxModels[id]; !ok {
+		return false
+	}
+	delete(server.voxModels, id)
+	for key, cachedID := range server.voxModelKeys {
+		if cachedID == id {
+			delete(server.voxModelKeys, key)
+		}
+	}
+	return true
+}
+
 func (server *AssetServer) CreateVoxelModel(model VoxModel, resolution float32) AssetId {
 	return server.CreateVoxelGeometryFromSource(model, resolution, "")
 }

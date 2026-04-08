@@ -77,6 +77,14 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	binary.LittleEndian.PutUint32(dst[52:56], uint32(obj.TerrainChunkCoord[1]))
 	binary.LittleEndian.PutUint32(dst[56:60], uint32(obj.TerrainChunkCoord[2]))
 	binary.LittleEndian.PutUint32(dst[60:64], uint32(obj.TerrainChunkSize))
+	if obj.IsPlanetTile {
+		binary.LittleEndian.PutUint32(dst[64:68], 1)
+	}
+	binary.LittleEndian.PutUint32(dst[68:72], obj.PlanetTileGroupID)
+	binary.LittleEndian.PutUint32(dst[80:84], uint32(obj.PlanetTileFace))
+	binary.LittleEndian.PutUint32(dst[84:88], uint32(obj.PlanetTileLevel))
+	binary.LittleEndian.PutUint32(dst[88:92], uint32(obj.PlanetTileX))
+	binary.LittleEndian.PutUint32(dst[92:96], uint32(obj.PlanetTileY))
 }
 
 func buildInstanceData(objects []*core.VoxelObject) []byte {
@@ -285,6 +293,9 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 		recreated = true
 	}
 	if m.updateTerrainChunkLookup(scene) {
+		recreated = true
+	}
+	if m.updatePlanetTileLookup(scene) {
 		recreated = true
 	}
 	m.Profiler.EndScope("Scene: Grid")
@@ -553,7 +564,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0) {
 			recreated = true
 		}
-		if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, make([]byte, 16), wgpu.BufferUsageStorage, 0) {
+		if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, make([]byte, 16), wgpu.BufferUsageUniform, 0) {
 			recreated = true
 		}
 		return recreated
@@ -641,7 +652,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	binary.LittleEndian.PutUint32(paramsData[0:4], uint32(gridSize))
 	binary.LittleEndian.PutUint32(paramsData[4:8], uint32(gridSize-1)) // mask if we used power of 2, but we use modulo just in case. Wait, h % gridSize is fine.
 
-	if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, paramsData, wgpu.BufferUsageStorage, 0) {
+	if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, paramsData, wgpu.BufferUsageUniform, 0) {
 		recreated = true
 	}
 
