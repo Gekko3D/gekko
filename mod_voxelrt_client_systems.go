@@ -408,6 +408,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			NoiseScale:                medium.NormalizedNoiseScale(),
 			NoiseStrength:             medium.NormalizedNoiseStrength(),
 			SampleCount:               uint32(medium.NormalizedSampleCount()),
+			CloudBlockSize:            medium.CloudBlockSize,
+			CloudThreshold:            medium.CloudThreshold,
+			CloudTime:                 float32(t.Elapsed) * medium.CloudSpeed,
+			CloudAltitudeSteps:        medium.CloudAltitudeSteps,
 		})
 		return true
 	})

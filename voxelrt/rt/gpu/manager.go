@@ -125,6 +125,10 @@ type AnalyticMediumHost struct {
 	NoiseScale                float32
 	NoiseStrength             float32
 	SampleCount               uint32
+	CloudBlockSize            float32
+	CloudThreshold            float32
+	CloudTime                 float32
+	CloudAltitudeSteps        float32
 }
 
 type WaterSurfaceHost struct {

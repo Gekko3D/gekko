@@ -19,6 +19,7 @@ type analyticMediumRecord struct {
 	Style0     [4]float32
 	Style1     [4]float32
 	Style2     [4]float32
+	Style3     [4]float32
 }
 
 type analyticMediumParamsUniform struct {
@@ -103,6 +104,12 @@ func (m *GpuBufferManager) UpdateAnalyticMedia(media []AnalyticMediumHost) bool 
 				medium.BackgroundAlphaScale,
 				medium.OpaqueRevealScale,
 				medium.BackgroundRevealScale,
+			},
+			Style3: [4]float32{
+				medium.CloudBlockSize,
+				medium.CloudThreshold,
+				medium.CloudTime,
+				medium.CloudAltitudeSteps,
 			},
 		}
 	}
