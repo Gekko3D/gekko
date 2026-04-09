@@ -380,7 +380,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	return recreated
 }
 
-const objectParamsSizeBytes = 64
+const objectParamsSizeBytes = 96
 
 func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, matAlloc *MaterialGpuAllocation) []byte {
 	pBuf := make([]byte, objectParamsSizeBytes)
@@ -408,6 +408,14 @@ func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, m
 	binary.LittleEndian.PutUint32(pBuf[52:56], uint32(obj.TerrainChunkCoord[1]))
 	binary.LittleEndian.PutUint32(pBuf[56:60], uint32(obj.TerrainChunkCoord[2]))
 	binary.LittleEndian.PutUint32(pBuf[60:64], uint32(obj.TerrainChunkSize))
+	if obj.IsPlanetTile {
+		binary.LittleEndian.PutUint32(pBuf[64:68], 1)
+	}
+	binary.LittleEndian.PutUint32(pBuf[68:72], obj.PlanetTileGroupID)
+	binary.LittleEndian.PutUint32(pBuf[80:84], uint32(obj.PlanetTileFace))
+	binary.LittleEndian.PutUint32(pBuf[84:88], uint32(obj.PlanetTileLevel))
+	binary.LittleEndian.PutUint32(pBuf[88:92], uint32(obj.PlanetTileX))
+	binary.LittleEndian.PutUint32(pBuf[92:96], uint32(obj.PlanetTileY))
 	return pBuf
 }
 

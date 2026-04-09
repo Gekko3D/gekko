@@ -88,14 +88,20 @@ func TestEnsureDefaultFeaturesRespectsConfig(t *testing.T) {
 		t.Fatal("expected default features to be registered")
 	}
 	foundWater := false
+	foundPlanetBodies := false
 	for _, feature := range app.features {
 		if feature != nil && feature.Name() == "water" {
 			foundWater = true
-			break
+		}
+		if feature != nil && feature.Name() == "planet-bodies" {
+			foundPlanetBodies = true
 		}
 	}
 	if !foundWater {
 		t.Fatal("expected water feature to be registered by default")
+	}
+	if !foundPlanetBodies {
+		t.Fatal("expected planet body feature to be registered by default")
 	}
 
 	noDefaults := &App{FeatureConfig: AppFeatureConfig{AutoRegisterDefaults: false}}

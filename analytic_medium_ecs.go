@@ -45,6 +45,11 @@ type AnalyticMediumComponent struct {
 	NoiseScale    float32
 	NoiseStrength float32
 	SampleCount   int
+
+	CloudBlockSize     float32
+	CloudThreshold     float32
+	CloudSpeed         float32
+	CloudAltitudeSteps float32
 }
 
 func (m *AnalyticMediumComponent) Enabled() bool {
@@ -353,8 +358,8 @@ func (m *AnalyticMediumComponent) NormalizedSampleCount() int {
 	if m.SampleCount < 4 {
 		return 4
 	}
-	if m.SampleCount > 24 {
-		return 24
+	if m.SampleCount > 48 {
+		return 48
 	}
 	return m.SampleCount
 }

@@ -225,6 +225,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.TerrainGroupID = vox.TerrainGroupID
 		obj.TerrainChunkCoord = vox.TerrainChunkCoord
 		obj.TerrainChunkSize = vox.TerrainChunkSize
+		obj.IsPlanetTile = vox.IsPlanetTile
+		obj.PlanetTileGroupID = vox.PlanetTileGroupID
+		obj.PlanetTileFace = vox.PlanetTileFace
+		obj.PlanetTileLevel = vox.PlanetTileLevel
+		obj.PlanetTileX = vox.PlanetTileX
+		obj.PlanetTileY = vox.PlanetTileY
 
 		return true
 	})
@@ -402,6 +408,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			NoiseScale:                medium.NormalizedNoiseScale(),
 			NoiseStrength:             medium.NormalizedNoiseStrength(),
 			SampleCount:               uint32(medium.NormalizedSampleCount()),
+			CloudBlockSize:            medium.CloudBlockSize,
+			CloudThreshold:            medium.CloudThreshold,
+			CloudTime:                 float32(t.Elapsed) * medium.CloudSpeed,
+			CloudAltitudeSteps:        medium.CloudAltitudeSteps,
 		})
 		return true
 	})
@@ -412,6 +422,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		state.RtApp.BufferManager.UpdateAnalyticMedia(gpuMedia)
 	}
 	state.RtApp.Profiler.EndScope("Sync Media")
+
+	state.RtApp.Profiler.BeginScope("Sync Planet Bodies")
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdatePlanetBodies(buildPlanetBodyHosts(cmd))
+	}
+	state.RtApp.Profiler.EndScope("Sync Planet Bodies")
 
 	state.RtApp.Profiler.BeginScope("Sync Water")
 	if state.RtApp.BufferManager != nil {
@@ -509,6 +525,62 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 func voxelObjectAllowsOcclusion(cmd *Commands, entityId EntityId, vox *VoxelModelComponent) bool {
 	return true
+}
+
+func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
+	hosts := make([]gpu_rt.PlanetBodyHost, 0, 4)
+	if cmd == nil {
+		return hosts
+	}
+	MakeQuery2[TransformComponent, PlanetBodyComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, planet *PlanetBodyComponent) bool {
+		if planet == nil || tr == nil || !planet.Enabled() {
+			return true
+		}
+		bakedSurfaceSamples := make([]gpu_rt.PlanetBakedSurfaceSampleHost, len(planet.BakedSurfaceSamples))
+		for i, sample := range planet.BakedSurfaceSamples {
+			bakedSurfaceSamples[i] = gpu_rt.PlanetBakedSurfaceSampleHost{
+				Height:       sample.Height,
+				NormalOctX:   sample.NormalOctX,
+				NormalOctY:   sample.NormalOctY,
+				MaterialBand: sample.MaterialBand,
+			}
+		}
+		hosts = append(hosts, gpu_rt.PlanetBodyHost{
+			EntityID:               uint32(eid),
+			Seed:                   planet.Seed,
+			Position:               planet.WorldCenter(tr),
+			Rotation:               planet.WorldRotation(tr),
+			Radius:                 planet.WorldRadius(tr),
+			OceanRadius:            planet.WorldOceanRadius(tr),
+			AtmosphereRadius:       planet.WorldAtmosphereRadius(tr),
+			AtmosphereRimWidth:     planet.WorldAtmosphereRimWidth(tr),
+			HeightAmplitude:        planet.WorldHeightAmplitude(tr),
+			NoiseScale:             planet.NormalizedNoiseScale(),
+			BlockSize:              planet.WorldBlockSize(tr),
+			HeightSteps:            uint32(planet.NormalizedHeightSteps()),
+			HandoffNearAlt:         planet.WorldHandoffNearAlt(tr),
+			HandoffFarAlt:          planet.WorldHandoffFarAlt(tr),
+			BiomeMix:               planet.NormalizedBiomeMix(),
+			BakedSurfaceResolution: uint32(planet.NormalizedBakedSurfaceResolution()),
+			BakedSurfaceSamples:    bakedSurfaceSamples,
+			BandColors:             planet.NormalizedBandColors(),
+			AmbientStrength:        planet.NormalizedAmbientStrength(),
+			DiffuseStrength:        planet.NormalizedDiffuseStrength(),
+			SpecularStrength:       planet.NormalizedSpecularStrength(),
+			RimStrength:            planet.NormalizedRimStrength(),
+			TerrainLowColor:        planet.NormalizedTerrainLowColor(),
+			TerrainHighColor:       planet.NormalizedTerrainHighColor(),
+			RockColor:              planet.NormalizedRockColor(),
+			OceanDeepColor:         planet.NormalizedOceanDeepColor(),
+			OceanShallowColor:      planet.NormalizedOceanShallowColor(),
+			AtmosphereColor:        planet.NormalizedAtmosphereTintColor(),
+		})
+		return true
+	})
+	sort.Slice(hosts, func(i, j int) bool {
+		return hosts[i].EntityID < hosts[j].EntityID
+	})
+	return hosts
 }
 
 func spriteAtlasTexture(server *AssetServer, atlasKey string) (TextureAsset, bool) {

@@ -53,6 +53,7 @@ struct MediumRecord {
   style0: vec4<f32>,
   style1: vec4<f32>,
   style2: vec4<f32>,
+  style3: vec4<f32>,
 };
 
 struct HistoryParams {
@@ -76,9 +77,10 @@ struct FSOut {
 @group(1) @binding(0) var<uniform> medium_params: MediumParams;
 @group(1) @binding(1) var<storage, read> media: array<MediumRecord>;
 @group(2) @binding(0) var in_depth: texture_2d<f32>;
-@group(2) @binding(1) var prev_history: texture_2d<f32>;
-@group(2) @binding(2) var prev_history_depth: texture_2d<f32>;
-@group(2) @binding(3) var<uniform> history_params: HistoryParams;
+@group(2) @binding(1) var planet_depth: texture_2d<f32>;
+@group(2) @binding(2) var prev_history: texture_2d<f32>;
+@group(2) @binding(3) var prev_history_depth: texture_2d<f32>;
+@group(2) @binding(4) var<uniform> history_params: HistoryParams;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
@@ -127,11 +129,54 @@ fn value_noise_3(p: vec3<f32>) -> f32 {
   return mix(nxy0, nxy1, u.z);
 }
 
-fn fbm3(p: vec3<f32>) -> f32 {
+fn hash33(p: vec3<f32>) -> vec3<f32> {
+  var p3 = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yxz + 33.33);
+  return fract((p3.xxy + p3.yxx) * p3.zyx);
+}
+
+fn worley_noise_3(p: vec3<f32>) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  var min_dist = 1.0;
+  for (var z = -1; z <= 1; z = z + 1) {
+    for (var y = -1; y <= 1; y = y + 1) {
+      for (var x = -1; x <= 1; x = x + 1) {
+        let neighbor = vec3<f32>(f32(x), f32(y), f32(z));
+        let point = hash33(i + neighbor);
+        let diff = neighbor + point - f;
+        min_dist = min(min_dist, dot(diff, diff));
+      }
+    }
+  }
+  return min_dist; // Squared distance for faster puffy look
+}
+
+fn cloud_noise(p: vec3<f32>, morph: f32, octaves: i32) -> f32 {
+  // Blend FBM (wispy) with Worley (puffy)
   var total = 0.0;
   var amplitude = 0.5;
   var frequency = 1.0;
-  for (var octave = 0; octave < 3; octave = octave + 1) {
+  
+  // Base wispy FBM
+  for (var octave = 0; octave < octaves; octave = octave + 1) {
+    total += value_noise_3(p * frequency + vec3<f32>(morph * 0.1, -morph * 0.05, 0.0)) * amplitude;
+    frequency *= 2.15;
+    amplitude *= 0.45;
+  }
+  
+  // Puffy cellular structure
+  let worley = 1.0 - worley_noise_3(p * 1.8 - vec3<f32>(0.0, morph * 0.2, morph * 0.1));
+  total = mix(total, saturate(worley), 0.42);
+  
+  return saturate(total * 1.2 - 0.1);
+}
+
+fn fbm3(p: vec3<f32>, octaves: i32) -> f32 {
+  var total = 0.0;
+  var amplitude = 0.5;
+  var frequency = 1.0;
+  for (var octave = 0; octave < octaves; octave = octave + 1) {
     total += value_noise_3(p * frequency) * amplitude;
     frequency *= 2.07;
     amplitude *= 0.5;
@@ -281,6 +326,104 @@ fn intersect_medium(origin: vec3<f32>, dir: vec3<f32>, m: MediumRecord) -> vec2<
   return intersect_sphere(origin, dir, m.bounds.xyz, m.bounds.w);
 }
 
+fn rotate_y(v: vec3<f32>, angle: f32) -> vec3<f32> {
+  let s = sin(angle);
+  let c = cos(angle);
+  return vec3<f32>(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
+}
+
+struct CubeSphereFaceUV {
+  face: i32,
+  u: f32,
+  v: f32,
+};
+
+fn cube_sphere_direction(face: i32, u: f32, v: f32) -> vec3<f32> {
+  var dir = vec3<f32>(0.0, 0.0, 1.0);
+  switch (face) {
+    case 0: {
+      dir = vec3<f32>(1.0, -v, -u);
+    }
+    case 1: {
+      dir = vec3<f32>(-1.0, -v, u);
+    }
+    case 2: {
+      dir = vec3<f32>(u, 1.0, v);
+    }
+    case 3: {
+      dir = vec3<f32>(u, -1.0, -v);
+    }
+    case 4: {
+      dir = vec3<f32>(u, -v, 1.0);
+    }
+    default: {
+      dir = vec3<f32>(-u, -v, -1.0);
+    }
+  }
+  return normalize(dir);
+}
+
+fn cube_sphere_face_uv(dir: vec3<f32>) -> CubeSphereFaceUV {
+  let abs_dir = abs(dir);
+  if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) {
+    let scale = max(abs_dir.x, 1e-5);
+    if (dir.x >= 0.0) {
+      return CubeSphereFaceUV(0, -dir.z / scale, -dir.y / scale);
+    }
+    return CubeSphereFaceUV(1, dir.z / scale, -dir.y / scale);
+  }
+  if (abs_dir.y >= abs_dir.x && abs_dir.y >= abs_dir.z) {
+    let scale = max(abs_dir.y, 1e-5);
+    if (dir.y >= 0.0) {
+      return CubeSphereFaceUV(2, dir.x / scale, dir.z / scale);
+    }
+    return CubeSphereFaceUV(3, dir.x / scale, -dir.z / scale);
+  }
+  let scale = max(abs_dir.z, 1e-5);
+  if (dir.z >= 0.0) {
+    return CubeSphereFaceUV(4, dir.x / scale, -dir.y / scale);
+  }
+  return CubeSphereFaceUV(5, -dir.x / scale, -dir.y / scale);
+}
+
+fn quantize_cube_sphere_coord(coord: f32, step_size: f32) -> f32 {
+  let clamped = clamp(coord, -1.0, 1.0);
+  let shifted = clamped + 1.0;
+  return clamp((floor(shifted / step_size) + 0.5) * step_size - 1.0, -1.0, 1.0);
+}
+
+fn quantized_medium_sample_dir(m: MediumRecord, dir_local: vec3<f32>, block_size: f32) -> vec3<f32> {
+  let radius = max(m.bounds.w, 1.0);
+  let uv_step = clamp(block_size / radius, 1e-3, 2.0);
+  let face_uv = cube_sphere_face_uv(dir_local);
+  let snapped_u = quantize_cube_sphere_coord(face_uv.u, uv_step);
+  let snapped_v = quantize_cube_sphere_coord(face_uv.v, uv_step);
+  return cube_sphere_direction(face_uv.face, snapped_u, snapped_v);
+}
+
+fn first_positive_hit(hit: vec2<f32>) -> f32 {
+  if (hit.x >= 0.0) {
+    return hit.x;
+  }
+  if (hit.y >= 0.0) {
+    return hit.y;
+  }
+  return FAR_T;
+}
+
+fn sanitize_opaque_depth(depth: f32) -> f32 {
+  if (depth > 0.0 && depth < FAR_T) {
+    return depth;
+  }
+  return FAR_T;
+}
+
+fn nearest_opaque_depth(ipos: vec2<i32>) -> f32 {
+  let scene_t = sanitize_opaque_depth(textureLoad(in_depth, ipos, 0).r);
+  let planet_t = sanitize_opaque_depth(textureLoad(planet_depth, ipos, 0).r);
+  return min(scene_t, planet_t);
+}
+
 fn medium_density(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
   let shape = u32(m.noise.w + 0.5);
   var radial = pos_ws - m.bounds.xyz;
@@ -308,7 +451,7 @@ fn medium_density(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
     shell_pos = saturate((dist - inner) / thickness);
   }
 
-  var density = pow(1.0 - shell_pos, max(m.params.x, 0.05));
+  var density = exp(-shell_pos * max(m.params.x, 0.05));
   let soft_extent = max(m.params.y, 1e-4);
 
   if (shape == 1u) {
@@ -318,21 +461,111 @@ fn medium_density(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
     density *= outer_soft;
   } else {
     let outer = m.bounds.w;
-    let inner = m.shape0.w;
     let dist = length(pos_ws - m.bounds.xyz);
-    let inner_soft = smoothstep(inner, inner + soft_extent, dist);
     let outer_soft = 1.0 - smoothstep(outer - soft_extent, outer, dist);
-    density *= inner_soft * outer_soft;
+    density *= outer_soft;
   }
 
   if (m.noise.y > 1e-4 && m.noise.x > 1e-4) {
-    let dir = normalize(radial + vec3<f32>(1e-4, 0.0, 0.0));
-    let n = fbm3(dir * m.noise.x + vec3<f32>(f32(medium_idx) * 3.1, -1.7, 2.9));
-    let modulate = mix(1.0 - m.noise.y, 1.0, saturate(n));
+    let block_size = m.style3.x;
+    let cloud_time = m.style3.z;
+    let alt_steps = m.style3.w;
+    
+    var sample_radial = radial;
+    if (shape != 1u && alt_steps > 0.0) {
+        let inner = m.shape0.w;
+        let outer = m.bounds.w;
+        let thickness = max(outer - inner, 1e-4);
+        let dist = length(radial);
+        let n_pos = saturate((dist - inner) / thickness);
+        let snapped_n = (floor(n_pos * alt_steps) + 0.5) / alt_steps;
+        sample_radial = normalize(radial) * (inner + snapped_n * thickness);
+    }
+    
+    var sample_dir = normalize(sample_radial + vec3<f32>(1e-4, 0.0, 0.0));
+    var sample_dir1 = sample_dir;
+    var sample_dir2 = sample_dir;
+    
+    if (cloud_time != 0.0) {
+      sample_dir1 = rotate_y(sample_dir, cloud_time);
+      sample_dir2 = rotate_y(sample_dir, cloud_time * 1.45 + 2.3);
+    }
+    
+    if (block_size > 0.0) {
+      sample_dir1 = quantized_medium_sample_dir(m, sample_dir1, block_size);
+      sample_dir2 = quantized_medium_sample_dir(m, sample_dir2, block_size * 1.5);
+    }
+    
+    let n1 = cloud_noise(sample_dir1 * m.noise.x + vec3<f32>(f32(medium_idx) * 3.1, -1.7, 2.9), cloud_time, 3);
+    let n2 = cloud_noise(sample_dir2 * m.noise.x * 2.2 + vec3<f32>(-1.1, 4.2, f32(medium_idx) * 0.7), cloud_time * 0.82, 2);
+    
+    let n = saturate(n1 * 0.75 + n2 * 0.45);
+    var modulate = mix(1.0 - m.noise.y, 1.0, saturate(n));
+    
+    // Thresholding for hard cloud edges
+    if (block_size > 0.0) {
+      let threshold = max(m.style3.y, 0.01);
+      let is_cloud = select(0.0, 1.0, n > threshold);
+      modulate = mix(1.0 - m.noise.y, 1.0, is_cloud);
+    }
+    
     density *= modulate;
   }
 
   return density * max(m.scatter.w, 0.0);
+}
+
+fn medium_density_fast(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
+  let shape = u32(m.noise.w + 0.5);
+  var radial = pos_ws - m.bounds.xyz;
+  var shell_pos = 0.0;
+
+  if (shape == 1u) {
+    let extents = max(m.shape0.xyz, vec3<f32>(1e-4));
+    let inv_rot = quat_conjugate(m.shape1);
+    let local = quat_rotate(inv_rot, radial);
+    let scaled = abs(local) / extents;
+    shell_pos = max(max(scaled.x, scaled.y), scaled.z);
+    if (shell_pos >= 1.0) { return 0.0; }
+  } else {
+    let outer = m.bounds.w;
+    let inner = m.shape0.w;
+    let dist = length(radial);
+    if (dist >= outer || dist <= inner) { return 0.0; }
+    shell_pos = saturate((dist - inner) / max(outer - inner, 1e-4));
+  }
+
+  var density = exp(-shell_pos * max(m.params.x, 0.05));
+  if (m.noise.y > 1e-4) {
+    let block_size = m.style3.x;
+    let cloud_time = m.style3.z;
+    var sample_dir = normalize(radial + vec3<f32>(1e-4, 0.0, 0.0));
+    if (cloud_time != 0.0) { sample_dir = rotate_y(sample_dir, cloud_time); }
+    if (block_size > 0.0) { sample_dir = quantized_medium_sample_dir(m, sample_dir, block_size); }
+    
+    // Fast path: single octave for shadows
+    let n = cloud_noise(sample_dir * m.noise.x + vec3<f32>(f32(medium_idx) * 3.1, -1.7, 2.9), cloud_time, 1);
+    let n_sat = saturate(n);
+    if (block_size > 0.0) {
+      let is_cloud = select(0.0, 1.0, n_sat > max(m.style3.y, 0.01));
+      density *= mix(1.0 - m.noise.y, 1.0, is_cloud);
+    } else {
+      density *= mix(1.0 - m.noise.y, 1.0, n_sat);
+    }
+  }
+  return density * max(m.scatter.w, 0.0);
+}
+
+fn get_cloud_self_shadow(m: MediumRecord, pos_ws: vec3<f32>, light_dir: vec3<f32>, medium_idx: u32) -> f32 {
+  // Simple 3-step light march for volumetric shadows using fast density
+  let steps = 3u;
+  let step_size = medium_characteristic_thickness(m) * 0.16;
+  var shadow_tau = 0.0;
+  for (var i = 1u; i <= steps; i = i + 1u) {
+    let p = pos_ws + light_dir * f32(i) * step_size;
+    shadow_tau += medium_density_fast(m, p, medium_idx) * step_size;
+  }
+  return exp(-shadow_tau * m.style1.x * 10.0);
 }
 
 @fragment
@@ -345,16 +578,14 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     clamp(i32(render_uv.x * f32(full_dims.x)), 0, i32(full_dims.x) - 1),
     clamp(i32(render_uv.y * f32(full_dims.y)), 0, i32(full_dims.y) - 1),
   );
-  var t_limit = textureLoad(in_depth, ipos, 0).r;
-  if (t_limit >= FAR_T || t_limit <= 0.0) {
-    t_limit = FAR_T;
-  }
+  let t_limit = nearest_opaque_depth(ipos);
 
   let ray_origin = uCamera.cam_pos.xyz;
   let ray_dir = get_ray_from_uv(render_uv);
   let ambient = uCamera.ambient_color.xyz;
   let light_dir = primary_light_dir(ray_origin);
   let light_color = primary_light_color();
+  let scene_has_opaque = t_limit < FAR_T * 0.5;
 
   var accum_rgb = vec3<f32>(0.0);
   var accum_a = 0.0;
@@ -367,29 +598,30 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     let t_outer = intersect_medium(ray_origin, ray_dir, m);
     let t_start = max(t_outer.x, 0.0);
     let t_end = min(t_outer.y, t_limit);
+    let has_opaque_behind = scene_has_opaque;
     if (t_end <= t_start) {
       continue;
     }
     nearest_t = min(nearest_t, t_start);
 
-    let base_step_count = clamp(u32(max(m.noise.z, 4.0)), 4u, 24u);
+    let base_step_count = clamp(u32(max(m.noise.z, 4.0)), 4u, 32u);
+    let min_step_count = select(4u, 8u, m.shape0.w > 0.0);
     let characteristic = medium_characteristic_thickness(m);
     let path_length = t_end - t_start;
     let coverage = saturate(path_length / characteristic);
     let density_budget = saturate(m.scatter.w * max(m.style1.x, m.style1.y) * characteristic * 0.25);
     let sample_factor = mix(0.18, 1.0, max(coverage * 0.55, density_budget));
-    let step_count = clamp(u32(round(max(4.0, f32(base_step_count) * sample_factor))), 4u, base_step_count);
+    let step_count = clamp(u32(round(max(f32(min_step_count), f32(base_step_count) * sample_factor))), min_step_count, base_step_count);
     let segment_len = (t_end - t_start) / f32(step_count);
     if (segment_len <= 1e-5) {
       continue;
     }
 
-    let pixel_jitter = hash13(vec3<f32>(f32(ipos.x), f32(ipos.y), f32(i) * 7.13));
-    var trans = 1.0;
+    let procedural_noise_enabled = m.noise.y > 1e-4 && m.noise.x > 1e-4;
+    let pixel_jitter = select(0.5, hash13(vec3<f32>(f32(ipos.x), f32(ipos.y), f32(i) * 7.13)), procedural_noise_enabled);
+    var trans = vec3<f32>(1.0);
     var source = vec3<f32>(0.0);
     var integrated_tau = 0.0;
-    let has_opaque_behind = t_limit < FAR_T * 0.5;
-
     for (var step = 0u; step < step_count; step = step + 1u) {
       let t = t_start + (f32(step) + pixel_jitter) * segment_len;
       let pos_ws = ray_origin + ray_dir * t;
@@ -408,19 +640,22 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       if (m.style1.w > m.style1.z + 1e-4) {
         boundary_fade = 1.0 - smoothstep(m.style1.z, m.style1.w, boundary_pos);
       }
-      let space_edge_soften = select(mix(0.12, 1.0, boundary_fade), 1.0, has_opaque_behind);
-      let horizon_glow = limb_boost * mix(0.75, 1.0, boundary_fade) * space_edge_soften;
+      let space_edge_soften = mix(0.0, 1.0, boundary_fade);
+      let horizon_glow = limb_boost * mix(0.5, 1.0, boundary_fade) * space_edge_soften;
       let cos_theta = dot(light_dir, -ray_dir);
       let phase = hg_phase(cos_theta, clamp(m.emission.w, -0.85, 0.85));
       let phase_term = 0.04 + phase * 1.15;
-      let ambient_term = ambient * (m.params.w * 0.12) * mix(0.5, 1.0, boundary_fade);
-      let direct_term = light_color * (m.params.z * phase_term) * horizon_glow;
-      let space_scatter_soften = select(mix(0.18, 1.0, boundary_fade), 1.0, has_opaque_behind);
-      let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 * space_scatter_soften + m.emission.xyz * (0.02 + tangent_boost * 0.05);
+      let ambient_term = ambient * (m.params.w * 0.12) * boundary_fade;
+      let self_shadow = get_cloud_self_shadow(m, pos_ws, light_dir, i);
+      let direct_term = light_color * (m.params.z * phase_term) * horizon_glow * self_shadow;
+      let space_scatter_soften = mix(0.0, 1.0, boundary_fade);
+      let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 * space_scatter_soften + m.emission.xyz * (0.02 + tangent_boost * 0.05) * space_scatter_soften;
       let extinction_scale = select(max(m.style1.y, 1e-4), max(m.style1.x, 1e-4), has_opaque_behind);
       let optical = density * segment_len * extinction_scale * mix(0.45, 1.0, tangent_boost);
       integrated_tau += optical;
-      let alpha_step = 1.0 - exp(-optical);
+      
+      let step_extinction = max(m.absorption.xyz * optical, vec3<f32>(1e-4));
+      let alpha_step = vec3<f32>(1.0) - exp(-step_extinction);
       source += trans * scatter * alpha_step;
 
       if (has_opaque_behind && m.style0.z > 1e-4) {
@@ -431,14 +666,14 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
         source += trans * disk_haze;
       }
 
-      let absorption = dot(m.absorption.xyz, vec3<f32>(0.33333334)) * optical;
-      trans *= exp(-max(absorption, 1e-4));
-      if (trans <= 0.01) {
+      trans *= exp(-step_extinction);
+      if (max(trans.x, max(trans.y, trans.z)) <= 0.01) {
         break;
       }
     }
 
-    let alpha_raw = clamp(1.0 - trans, 0.0, 0.995);
+    let trans_scalar = dot(trans, vec3<f32>(0.33333334));
+    let alpha_raw = clamp(1.0 - trans_scalar, 0.0, 0.995);
     if (alpha_raw <= 1e-4) {
       continue;
     }
@@ -448,7 +683,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     let tau_alpha = 1.0 - exp(-integrated_tau * select(m.style2.y, m.style2.x, has_opaque_behind));
     let alpha_shaped = max(alpha_raw, tau_alpha);
     let w = max(1e-3, alpha_shaped) * mix(0.32, 0.72, pow(1.0 - z, 2.0));
-    let reveal_alpha = clamp(max(-log(max(trans, 1e-4)), integrated_tau) * select(m.style2.w, m.style2.z, has_opaque_behind), 0.0, 0.7);
+    let reveal_alpha = clamp(max(-log(max(trans_scalar, 1e-4)), integrated_tau) * select(m.style2.w, m.style2.z, has_opaque_behind), 0.0, 0.7);
     accum_rgb += color * alpha_shaped * w;
     accum_a += reveal_alpha;
     accum_w += alpha_shaped * w;
@@ -462,8 +697,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   }
 
   var out_color = vec4<f32>(current_color, current_trans);
-  if (history_params.params0.w > 0.5 && t_limit < FAR_T * 0.5) {
-    let world_pos = reconstruct_world_pos(render_uv, ray_dir, t_limit);
+  if (history_params.params0.w > 0.5 && nearest_t < FAR_T * 0.5) {
+    let world_pos = reconstruct_world_pos(render_uv, ray_dir, nearest_t);
     let prev_uv = reproject_prev_uv(world_pos);
     if (all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0))) {
       let prev_dims = textureDimensions(prev_history);
@@ -476,7 +711,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       var history_weight = history_params.params0.z;
       if (prev_depth > 0.0 && prev_depth < FAR_T * 0.5) {
         let depth_delta = abs(prev_depth - prev_t);
-        let rejection = saturate(1.0 - depth_delta / (0.12 * max(prev_t, 1.0) + 0.6));
+        let rejection = saturate(1.0 - depth_delta / (0.005 * max(prev_t, 1.0) + 0.08));
         history_weight *= rejection;
       } else {
         history_weight = 0.0;

@@ -8,6 +8,7 @@ type Time struct {
 	Time     time.Time
 	Duration time.Duration
 	Dt             float64
+	Elapsed        float64
 	Alpha          float32
 	FixedStepCount int
 }

@@ -8,18 +8,18 @@ import (
 	"github.com/cogentcore/webgpu/wgpu"
 )
 
-func (a *App) setupAnalyticMediumPipeline() {
+func (a *App) setupPlanetBodyPipeline() {
 	mod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
-		Label:          "Analytic Medium Render",
-		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.AnalyticMediumWGSL},
+		Label:          "Planet Body Render",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.PlanetBodyWGSL},
 	})
 	if err != nil {
-		fmt.Printf("ERROR: Failed to create analytic medium shader module: %v\n", err)
+		fmt.Printf("ERROR: Failed to create planet body shader module: %v\n", err)
 		return
 	}
 
 	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
-		Label: "AnalyticMedium BGL0",
+		Label: "PlanetBody BGL0",
 		Entries: []wgpu.BindGroupLayoutEntry{
 			{
 				Binding:    0,
@@ -34,12 +34,12 @@ func (a *App) setupAnalyticMediumPipeline() {
 		},
 	})
 	if err != nil {
-		fmt.Printf("ERROR: Failed to create analytic medium BGL0: %v\n", err)
+		fmt.Printf("ERROR: Failed to create planet body BGL0: %v\n", err)
 		return
 	}
 
 	bgl1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
-		Label: "AnalyticMedium BGL1",
+		Label: "PlanetBody BGL1",
 		Entries: []wgpu.BindGroupLayoutEntry{
 			{
 				Binding:    0,
@@ -51,15 +51,20 @@ func (a *App) setupAnalyticMediumPipeline() {
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
 			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
+			},
 		},
 	})
 	if err != nil {
-		fmt.Printf("ERROR: Failed to create analytic medium BGL1: %v\n", err)
+		fmt.Printf("ERROR: Failed to create planet body BGL1: %v\n", err)
 		return
 	}
 
 	bgl2, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
-		Label: "AnalyticMedium BGL2",
+		Label: "PlanetBody BGL2",
 		Entries: []wgpu.BindGroupLayoutEntry{
 			{
 				Binding:    0,
@@ -69,53 +74,24 @@ func (a *App) setupAnalyticMediumPipeline() {
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
-			{
-				Binding:    1,
-				Visibility: wgpu.ShaderStageFragment,
-				Texture: wgpu.TextureBindingLayout{
-					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
-					ViewDimension: wgpu.TextureViewDimension2D,
-				},
-			},
-			{
-				Binding:    2,
-				Visibility: wgpu.ShaderStageFragment,
-				Texture: wgpu.TextureBindingLayout{
-					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
-					ViewDimension: wgpu.TextureViewDimension2D,
-				},
-			},
-			{
-				Binding:    3,
-				Visibility: wgpu.ShaderStageFragment,
-				Texture: wgpu.TextureBindingLayout{
-					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
-					ViewDimension: wgpu.TextureViewDimension2D,
-				},
-			},
-			{
-				Binding:    4,
-				Visibility: wgpu.ShaderStageFragment,
-				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 96},
-			},
 		},
 	})
 	if err != nil {
-		fmt.Printf("ERROR: Failed to create analytic medium BGL2: %v\n", err)
+		fmt.Printf("ERROR: Failed to create planet body BGL2: %v\n", err)
 		return
 	}
 
 	layout, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
-		Label:            "Analytic Medium Layout",
+		Label:            "Planet Body Layout",
 		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1, bgl2},
 	})
 	if err != nil {
-		fmt.Printf("ERROR: Failed to create analytic medium layout: %v\n", err)
+		fmt.Printf("ERROR: Failed to create planet body layout: %v\n", err)
 		return
 	}
 
 	pipeline, err := a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
-		Label:  "Analytic Medium Pipeline",
+		Label:  "Planet Body Pipeline",
 		Layout: layout,
 		Vertex: wgpu.VertexState{Module: mod, EntryPoint: "vs_main"},
 		Fragment: &wgpu.FragmentState{
@@ -136,10 +112,10 @@ func (a *App) setupAnalyticMediumPipeline() {
 		Multisample: wgpu.MultisampleState{Count: 1, Mask: 0xFFFFFFFF},
 	})
 	if err != nil {
-		fmt.Printf("ERROR: Failed to create analytic medium pipeline: %v\n", err)
+		fmt.Printf("ERROR: Failed to create planet body pipeline: %v\n", err)
 		return
 	}
 
-	a.AnalyticMediumPipeline = pipeline
-	a.BufferManager.CreateAnalyticMediumBindGroups(a.AnalyticMediumPipeline)
+	a.PlanetBodyPipeline = pipeline
+	a.BufferManager.CreatePlanetBodyBindGroups(a.PlanetBodyPipeline)
 }

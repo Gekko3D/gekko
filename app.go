@@ -89,6 +89,7 @@ func (app *App) Run() {
 		if t, ok := app.resources[reflect.TypeOf(Time{})]; ok {
 			timeRes := t.(*Time)
 			timeRes.Dt = dynamicDt
+			timeRes.Elapsed += dynamicDt
 			timeRes.Duration = dt
 			timeRes.Time = frameStart
 			timeRes.Alpha = 0

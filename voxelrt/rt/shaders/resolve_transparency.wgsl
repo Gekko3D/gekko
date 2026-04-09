@@ -27,16 +27,18 @@ const FAR_T: f32 = 60000.0;
 //  - 3: volumetric color history (RGBA16Float, rgb=color, a=transmittance)
 //  - 4: volumetric scene depth history (R16Float)
 //  - 5: full-resolution scene depth
-//  - 6: half-resolution CA color (rgb=radiance, a=transmittance)
-//  - 7: half-resolution CA front depth
+//  - 6: analytic planet depth
+//  - 7: half-resolution CA color (rgb=radiance, a=transmittance)
+//  - 8: half-resolution CA front depth
 @group(0) @binding(0) var tOpaque : texture_2d<f32>;
 @group(0) @binding(1) var tAccum  : texture_2d<f32>;
 @group(0) @binding(2) var tWeight : texture_2d<f32>;
 @group(0) @binding(3) var tVolume : texture_2d<f32>;
 @group(0) @binding(4) var tVolumeDepth : texture_2d<f32>;
 @group(0) @binding(5) var tSceneDepth : texture_2d<f32>;
-@group(0) @binding(6) var tCAColor : texture_2d<f32>;
-@group(0) @binding(7) var tCADepth : texture_2d<f32>;
+@group(0) @binding(6) var tPlanetDepth : texture_2d<f32>;
+@group(0) @binding(7) var tCAColor : texture_2d<f32>;
+@group(0) @binding(8) var tCADepth : texture_2d<f32>;
 
 fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
   let a = 2.51;
@@ -45,6 +47,19 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
   let d = 0.59;
   let e = 0.14;
   return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn sanitize_opaque_depth(depth: f32) -> f32 {
+  if (depth > 0.0 && depth < FAR_T) {
+    return depth;
+  }
+  return FAR_T;
+}
+
+fn combined_opaque_depth(ipos: vec2<i32>) -> f32 {
+  let scene_depth = sanitize_opaque_depth(textureLoad(tSceneDepth, ipos, 0).r);
+  let planet_depth = sanitize_opaque_depth(textureLoad(tPlanetDepth, ipos, 0).r);
+  return min(scene_depth, planet_depth);
 }
 
 fn depth_weight(current_depth: f32, sample_depth: f32) -> f32 {
@@ -124,7 +139,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     clamp(i32(frag_pos.y), 0, i32(dims.y) - 1)
   );
   let copq = textureLoad(tOpaque,  ipos, 0).rgb;
-  let current_depth = textureLoad(tSceneDepth, ipos, 0).r;
+  let current_depth = combined_opaque_depth(ipos);
   let acc4 = textureLoad(tAccum,   ipos, 0);
   let acc  = acc4.rgb;
   let accA = acc4.a;

@@ -69,6 +69,12 @@ type VoxelModelComponent struct {
 	TerrainGroupID         uint32
 	TerrainChunkCoord      [3]int
 	TerrainChunkSize       int
+	IsPlanetTile           bool
+	PlanetTileGroupID      uint32
+	PlanetTileFace         int
+	PlanetTileLevel        int
+	PlanetTileX            int
+	PlanetTileY            int
 }
 
 func (vmc *VoxelModelComponent) NormalizeGeometryRefs() {
