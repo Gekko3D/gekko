@@ -225,7 +225,7 @@ fn sample_directional_shadow(
     let receiver_light_offset_world = max(0.12, 0.40 * cascade_params.y);
     let compare_bias_world = max(0.15, 1.0 * cascade_params.y);
     
-    // Snapping pos_ws slightly toward the normal to avoid boundary jitter
+    // Snapping pos_ws slightly toward the normal and light to avoid self-shadowing
     let pos_ws = hit_pos + normal * receiver_normal_offset_world + L * receiver_light_offset_world;
     let directional_compare_bias = compare_bias_world * cascade_params.z;
     let seam_pos_ls = cascade_view_proj * vec4<f32>(pos_ws - L * receiver_shadow_seam_epsilon, 1.0);
@@ -368,6 +368,8 @@ fn calculate_lighting(
     var attenuation = 1.0;
     let light_type = u32(light.params.z);
 
+    let shadow_L = select(-normalize(light.direction.xyz), normalize(light.position.xyz - shadow_receiver_pos), light_type != 1u);
+    
     if (light_type == 1u) { // Directional
         L = -normalize(light.direction.xyz);
     } else {
@@ -385,7 +387,7 @@ fn calculate_lighting(
             attenuation = inv_sq * smooth_factor * smooth_factor * 50.0;
             if (light_type == 2u) { // Spot
                 let spot_dir = normalize(light.direction.xyz);
-                let cos_cur = dot(-L, spot_dir);
+                let cos_cur = dot(-shadow_L, spot_dir);
                 let cos_cone = light.params.y;
                 if (cos_cur < cos_cone) {
                     attenuation = 0.0;
@@ -399,16 +401,16 @@ fn calculate_lighting(
     
     if (attenuation > 0.0) {
         // Shadowing
-        let shadow_normal = select(normal, normal * select(-1.0, 1.0, dot(normal, L) >= 0.0), two_sided_lighting);
+        let shadow_normal = select(normal, normal * select(-1.0, 1.0, dot(normal, shadow_L) >= 0.0), two_sided_lighting);
 
         let casts_shadows = light.params.w > 0.5;
         if (casts_shadows && light.shadow_meta.y > 0u) {
             if (light_type == 1u) {
                 let selection = choose_directional_cascade(light, shadow_receiver_pos);
-                let primary_visibility = sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
+                let primary_visibility = sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, shadow_L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
                 let secondary_visibility = select(
                     primary_visibility,
-                    sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
+                    sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, shadow_L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
                     selection.secondary_index != selection.primary_index,
                 );
                 attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
@@ -434,7 +436,7 @@ fn calculate_lighting(
                     let pos_off = shadow_receiver_pos + shadow_normal * receiver_offset;
                     my_depth_m = distance(light.position.xyz, pos_off);
 
-                    let NdL = max(dot(shadow_normal, L), 0.0);
+                    let NdL = max(dot(shadow_normal, shadow_L), 0.0);
                     let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
                     let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
                     let hard_sampled_depth = hard_shadow_sample.r;
@@ -471,7 +473,7 @@ fn calculate_lighting(
                     attenuation *= mix(hard_visibility, pcf_visibility, softness);
                 }
             } else {
-                attenuation *= sample_point_shadow(light, shadow_receiver_pos, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
+                attenuation *= sample_point_shadow(light, shadow_receiver_pos, shadow_normal, shadow_L, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
             }
         }
 
@@ -640,10 +642,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let hit_pos_ws = reconstruct_world_pos(uv, depth);
     let voxel_center_ws = depth_data.gba;
 
-    // Shade the voxel as one cell by evaluating BRDF terms from the stored voxel
-    // center, but receive shadows at the actual visible surface hit point.
+    // Shade the voxel as one cell by evaluating BRDF terms and receiving
+    // shadows from the stored voxel center, to act like a 3d pixel.
     let lighting_pos_ws = voxel_center_ws;
-    let shadow_receiver_pos_ws = hit_pos_ws;
+    let shadow_receiver_pos_ws = voxel_center_ws;
     let view_dir = normalize(camera.cam_pos.xyz - lighting_pos_ws);
     let NdotV = max(dot(normal, view_dir), 0.0);
     let dielectric_f0 = dielectric_f0_from_ior(ior);
