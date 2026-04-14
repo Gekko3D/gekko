@@ -26,6 +26,13 @@ const (
 	PlacementVolumeRuleModeDensity PlacementVolumeRuleMode = "density"
 )
 
+type LevelBrushKind string
+
+const (
+	LevelBrushKindProcedural LevelBrushKind = "procedural"
+	LevelBrushKindVoxelShape LevelBrushKind = "voxel_shape"
+)
+
 const (
 	LevelTagShooter = "shooter"
 )
@@ -69,8 +76,10 @@ type LevelBrushLayerDef struct {
 type LevelBrushDef struct {
 	ID           string              `json:"id"`
 	Name         string              `json:"name"`
+	Kind         LevelBrushKind      `json:"kind,omitempty"`
 	Primitive    string              `json:"primitive"`
 	Params       map[string]float32  `json:"params,omitempty"`
+	VoxelShape   *AssetVoxelShapeDef `json:"voxel_shape,omitempty"`
 	Transform    LevelTransformDef   `json:"transform"`
 	MaterialID   string              `json:"material_id,omitempty"`
 	Operation    AssetShapeOperation `json:"operation,omitempty"`
@@ -257,6 +266,13 @@ func normalizeLevelBrush(brush *LevelBrushDef) {
 	if brush.ID == "" {
 		brush.ID = newID()
 	}
+	if brush.Kind == "" {
+		if brush.VoxelShape != nil {
+			brush.Kind = LevelBrushKindVoxelShape
+		} else {
+			brush.Kind = LevelBrushKindProcedural
+		}
+	}
 	if brush.Transform.Rotation == (Quat{}) {
 		brush.Transform.Rotation = Quat{0, 0, 0, 1}
 	}
@@ -330,6 +346,16 @@ func EffectiveLevelBrushOperation(brush LevelBrushDef) AssetShapeOperation {
 		return AssetShapeOperationAdd
 	}
 	return brush.Operation
+}
+
+func EffectiveLevelBrushKind(brush LevelBrushDef) LevelBrushKind {
+	if brush.Kind != "" {
+		return brush.Kind
+	}
+	if brush.VoxelShape != nil {
+		return LevelBrushKindVoxelShape
+	}
+	return LevelBrushKindProcedural
 }
 
 func defaultIndexedLevelBrushLayerName(index int) string {

@@ -32,7 +32,6 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 
 	state := &VoxelRtState{
 		RtApp:              RtApp,
-		HideDebugGizmos:    mod.HideDebugGizmos,
 		loadedModels:       make(map[AssetId]*core.VoxelObject),
 		instanceMap:        make(map[EntityId]*core.VoxelObject),
 		lastMaterialKeys:   make(map[*core.VoxelObject]materialTableCacheKey),
@@ -667,8 +666,11 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 			cosAngle = float32(math.Cos(float64(light.ConeAngle) * math.Pi / 180.0 / 2.0))
 		}
 
-		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
-		gpuLight.CastsShadows = light.Type != LightTypePoint || light.CastsShadows
+		var castsShadows float32
+		if light.CastsShadows {
+			castsShadows = 1.0
+		}
+		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), castsShadows}
 		pendingLights = append(pendingLights, pendingLight{
 			entityID:  entityId,
 			lightType: light.Type,
@@ -729,6 +731,7 @@ func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *C
 	state.syncSkybox(cmd, time)
 }
 
+
 func voxelRtRenderSystem(cmd *Commands, state *VoxelRtState, prof *Profiler) {
 	if prof != nil {
 		start := time.Now()
@@ -752,12 +755,25 @@ func syncVoxelRtGizmos(state *VoxelRtState, cmd *Commands) {
 	}
 
 	state.RtApp.Scene.Gizmos = state.RtApp.Scene.Gizmos[:0]
-	if !state.HideDebugGizmos {
-		appendSceneDebugGizmos(state, cmd)
+	if state.DebugOverlayMode() == VoxelRtDebugModeScene {
+		// Automatic light gizmos (engine helpers shown in Scene Debug mode)
+		MakeQuery2[LightComponent, TransformComponent](cmd).Map(func(eid EntityId, l *LightComponent, tr *TransformComponent) bool {
+			if l.Type == LightTypeAmbient {
+				return true
+			}
+			color := [4]float32{l.Color[0], l.Color[1], l.Color[2], 0.8}
+			rtGizmo := core.Gizmo{
+				Type:  core.GizmoSphere,
+				Color: color,
+			}
+			modelMat := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z()).Mul4(mgl32.Scale3D(1.0, 1.0, 1.0))
+			rtGizmo.ModelMatrix = modelMat
+			state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtGizmo)
+			return true
+		})
 	}
-}
 
-func appendSceneDebugGizmos(state *VoxelRtState, cmd *Commands) {
+	// Always sync user-defined GizmoComponents
 	MakeQuery2[GizmoComponent, TransformComponent](cmd).Map(func(eid EntityId, g *GizmoComponent, tr *TransformComponent) bool {
 		rtGizmo := core.Gizmo{
 			Type:  core.GizmoType(g.Type),

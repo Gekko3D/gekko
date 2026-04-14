@@ -189,7 +189,7 @@ func expectedShadowLayers(lights []core.Light, hasCamera bool) uint32 {
 	var total uint32
 	for _, light := range lights {
 		lightType := uint32(light.Params[2])
-		if lightType == core.LightTypePoint && !light.CastsShadows {
+		if lightType == core.LightTypePoint && light.Params[3] <= 0.5 {
 			continue
 		}
 		switch lightType {
@@ -402,7 +402,7 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 		for c := range l.DirectionalCascades {
 			l.DirectionalCascades[c] = core.DirectionalShadowCascade{}
 		}
-		if lightType == core.LightTypePoint && !l.CastsShadows {
+		if lightType == core.LightTypePoint && l.Params[3] <= 0.5 {
 			continue
 		}
 

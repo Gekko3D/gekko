@@ -35,8 +35,8 @@ struct Light {
     position: vec4<f32>,
     direction: vec4<f32>,
     color: vec4<f32>,
-    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
-    shadow_meta: vec4<u32>, // x: first shadow layer, y: layer count, z: cascade count, w: reserved
+    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: casts_shadows
+    shadow_meta: vec4<u32>,
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     directional_cascades: array<DirectionalShadowCascade, 2>,

@@ -105,7 +105,10 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 	MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent) bool {
 		vSize := VoxelSize
 		scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
-		diff := pm.CenterOffset.Sub(scaledPivot)
+		diff := mgl32.Vec3{}
+		if pm != nil {
+			diff = pm.CenterOffset.Sub(scaledPivot)
+		}
 
 		// Start with visual state
 		physPos := tr.Position.Add(tr.Rotation.Rotate(diff))
@@ -132,8 +135,19 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 		if rb.Mass > 0 {
 			invMass = 1.0 / rb.Mass
 		}
+
+		invInertiaLocal := mgl32.Ident3()
+		if pm != nil {
+			invInertiaLocal = CalculateInverseInertiaLocal(rb.Mass, pm)
+		}
+
 		vel := rb.Velocity.Add(rb.AccumulatedImpulse.Mul(invMass))
-		angVel := rb.AngularVelocity.Add(rb.AccumulatedTorque.Mul(invMass))
+		angVel := rb.AngularVelocity.Add(ApplyInverseInertiaWorld(physRot, invInertiaLocal, rb.AccumulatedTorque))
+
+		pmValue := PhysicsModel{}
+		if pm != nil {
+			pmValue = *pm
+		}
 
 		snapshot.Entities = append(snapshot.Entities, PhysicsEntityState{
 			Eid:            eid,
@@ -143,7 +157,7 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 			AngVel:         angVel,
 			IsStatic:       rb.IsStatic,
 			Mass:           rb.Mass,
-			Model:          *pm,
+			Model:          pmValue,
 			Friction:       col.Friction,
 			Restitution:    col.Restitution,
 			IdleTime:       rb.IdleTime,
@@ -161,7 +175,7 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 		}{tr, rb, pm}
 
 		return true
-	})
+	}, PhysicsModel{})
 
 	proxy.pendingState.Store(snapshot)
 
@@ -307,7 +321,7 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 				rb.LastPulledRot = tr.Rotation
 			}
 			return true
-		})
+		}, PhysicsModel{})
 	}
 }
 
@@ -357,7 +371,10 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 		// Calculate the physics position from visual transform
 		vSize := VoxelSize
 		scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
-		diff := pm.CenterOffset.Sub(scaledPivot)
+		diff := mgl32.Vec3{}
+		if pm != nil {
+			diff = pm.CenterOffset.Sub(scaledPivot)
+		}
 		rotatedOffset := tr.Rotation.Rotate(diff)
 		physicsPos := tr.Position.Add(rotatedOffset)
 
@@ -366,8 +383,13 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 		if rb.Mass > 0 {
 			invMass = 1.0 / rb.Mass
 		}
+
+		invInertiaLocal := mgl32.Ident3()
+		if pm != nil {
+			invInertiaLocal = CalculateInverseInertiaLocal(rb.Mass, pm)
+		}
 		vel := rb.Velocity.Add(rb.AccumulatedImpulse.Mul(invMass))
-		angVel := rb.AngularVelocity.Add(rb.AccumulatedTorque.Mul(invMass))
+		angVel := rb.AngularVelocity.Add(ApplyInverseInertiaWorld(tr.Rotation, invInertiaLocal, rb.AccumulatedTorque))
 
 		// Detect manual move or rotate (teleport)
 		isTeleport := false
@@ -380,6 +402,11 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 			isTeleport = true
 		}
 
+		pmValue := PhysicsModel{}
+		if pm != nil {
+			pmValue = *pm
+		}
+
 		snap.Entities = append(snap.Entities, PhysicsEntityState{
 			Eid:            eid,
 			Pos:            physicsPos,
@@ -388,7 +415,7 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 			AngVel:         angVel,
 			IsStatic:       rb.IsStatic,
 			Mass:           rb.Mass,
-			Model:          *pm,
+			Model:          pmValue,
 			Friction:       col.Friction,
 			Restitution:    col.Restitution,
 			IdleTime:       rb.IdleTime,
@@ -399,7 +426,7 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 			Teleport:       isTeleport,
 		})
 		return true
-	})
+	}, PhysicsModel{})
 
 	proxy.pendingState.Store(snap)
 }
@@ -407,7 +434,10 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 func physicsToRenderPosition(physicsPos mgl32.Vec3, rot mgl32.Quat, tr *TransformComponent, pm *PhysicsModel) mgl32.Vec3 {
 	vSize := VoxelSize
 	scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
-	diff := pm.CenterOffset.Sub(scaledPivot)
+	diff := mgl32.Vec3{}
+	if pm != nil {
+		diff = pm.CenterOffset.Sub(scaledPivot)
+	}
 	rotatedOffset := rot.Rotate(diff)
 	return physicsPos.Sub(rotatedOffset)
 }

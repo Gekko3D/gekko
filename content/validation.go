@@ -251,6 +251,9 @@ func validateSource(result *AssetValidationResult, itemID string, itemName strin
 		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
 		validateShapeOperation(result, itemID, itemName, itemKind, source)
 		validateProceduralPrimitive(result, itemID, itemName, itemKind, source)
+	case AssetSourceKindVoxelShape:
+		validateShapeOperation(result, itemID, itemName, itemKind, source)
+		validateVoxelShape(result, itemID, itemName, itemKind, source, materialIDs)
 	default:
 		result.addError("invalid_source_payload", fmt.Sprintf("unsupported source kind %q", source.Kind), itemID, itemName, itemKind)
 	}
@@ -282,6 +285,44 @@ func validateProceduralPrimitive(result *AssetValidationResult, itemID string, i
 		}
 		if value <= 0 {
 			result.addError("invalid_source_payload", fmt.Sprintf("procedural primitive %q param %s must be > 0", source.Primitive, key), itemID, itemName, itemKind)
+		}
+	}
+}
+
+func validateVoxelShape(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef, materialIDs map[string]struct{}) {
+	if source.VoxelShape == nil {
+		result.addError("invalid_source_payload", "voxel_shape source requires voxel_shape payload", itemID, itemName, itemKind)
+		return
+	}
+
+	paletteByValue := make(map[uint8]string, len(source.VoxelShape.Palette))
+	for _, entry := range source.VoxelShape.Palette {
+		if entry.Value == 0 {
+			result.addError("invalid_source_payload", "voxel_shape palette value 0 is reserved for empty voxels", itemID, itemName, itemKind)
+			continue
+		}
+		if _, exists := paletteByValue[entry.Value]; exists {
+			result.addError("invalid_source_payload", fmt.Sprintf("voxel_shape palette value %d must be unique", entry.Value), itemID, itemName, itemKind)
+			continue
+		}
+		if strings.TrimSpace(entry.MaterialID) == "" {
+			result.addError("invalid_source_payload", fmt.Sprintf("voxel_shape palette value %d requires material_id", entry.Value), itemID, itemName, itemKind)
+			continue
+		}
+		if _, ok := materialIDs[entry.MaterialID]; !ok {
+			result.addError("missing_material_reference", fmt.Sprintf("missing material %s", entry.MaterialID), itemID, itemName, itemKind)
+			continue
+		}
+		paletteByValue[entry.Value] = entry.MaterialID
+	}
+
+	for _, voxel := range source.VoxelShape.Voxels {
+		if voxel.Value == 0 {
+			result.addError("invalid_source_payload", "voxel_shape voxels must use non-zero palette values", itemID, itemName, itemKind)
+			continue
+		}
+		if _, ok := paletteByValue[voxel.Value]; !ok {
+			result.addError("invalid_source_payload", fmt.Sprintf("voxel_shape voxel value %d is missing from palette", voxel.Value), itemID, itemName, itemKind)
 		}
 	}
 }

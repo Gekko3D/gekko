@@ -33,8 +33,7 @@ type Light struct {
 	Position            [4]float32 // xyz, pad
 	Direction           [4]float32 // xyz, pad
 	Color               [4]float32 // rgb, intensity
-	Params              [4]float32 // range, cone_angle_cos, type, padding
-	CastsShadows        bool
+	Params              [4]float32 // range, cone_angle_cos, type, casts_shadows (0.0 or 1.0)
 	ShadowMeta          [4]uint32   // x: first shadow layer, y: shadow layer count, z: directional cascade count, w: reserved
 	ViewProj            [16]float32 // Spot light shadow matrix
 	InvViewProj         [16]float32 // Spot light inverse shadow matrix

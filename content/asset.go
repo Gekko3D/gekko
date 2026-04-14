@@ -3,7 +3,7 @@ package content
 import "github.com/google/uuid"
 
 const (
-	CurrentAssetSchemaVersion = 2
+	CurrentAssetSchemaVersion = 3
 	DefaultAssetVoxelSize     = 0.1
 )
 
@@ -20,6 +20,7 @@ const (
 	AssetSourceKindVoxModel            AssetSourceKind = "vox_model"
 	AssetSourceKindVoxSceneNode        AssetSourceKind = "vox_scene_node"
 	AssetSourceKindProceduralPrimitive AssetSourceKind = "procedural_primitive"
+	AssetSourceKindVoxelShape          AssetSourceKind = "voxel_shape"
 )
 
 type AssetLightType string
@@ -141,8 +142,19 @@ type AssetSourceDef struct {
 	NodeName   string              `json:"node_name,omitempty"`
 	Primitive  string              `json:"primitive,omitempty"`
 	Params     map[string]float32  `json:"params,omitempty"`
+	VoxelShape *AssetVoxelShapeDef `json:"voxel_shape,omitempty"`
 	MaterialID string              `json:"material_id,omitempty"`
 	Operation  AssetShapeOperation `json:"operation,omitempty"`
+}
+
+type AssetVoxelShapeDef struct {
+	Palette []AssetVoxelPaletteEntryDef `json:"palette,omitempty"`
+	Voxels  []VoxelObjectVoxelDef       `json:"voxels,omitempty"`
+}
+
+type AssetVoxelPaletteEntryDef struct {
+	Value      uint8  `json:"value"`
+	MaterialID string `json:"material_id,omitempty"`
 }
 
 type EmitterDef struct {
@@ -220,7 +232,7 @@ func NormalizeAssetDef(def *AssetDef) {
 
 func AssetPartUsesVoxelSource(part AssetPartDef) bool {
 	switch part.Source.Kind {
-	case AssetSourceKindVoxModel, AssetSourceKindVoxSceneNode, AssetSourceKindProceduralPrimitive:
+	case AssetSourceKindVoxModel, AssetSourceKindVoxSceneNode, AssetSourceKindProceduralPrimitive, AssetSourceKindVoxelShape:
 		return true
 	default:
 		return false

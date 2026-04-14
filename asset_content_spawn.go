@@ -283,6 +283,16 @@ func modelAndPaletteFromSource(assets *AssetServer, def *content.AssetDef, part 
 			return AssetId{}, AssetId{}, err
 		}
 		return model, palette, nil
+	case content.AssetSourceKindVoxelShape:
+		model, err := authoredVoxelShapeGeometry(assets, part)
+		if err != nil {
+			return AssetId{}, AssetId{}, err
+		}
+		palette, err := authoredVoxelShapePalette(assets, def, part)
+		if err != nil {
+			return AssetId{}, AssetId{}, err
+		}
+		return model, palette, nil
 	case content.AssetSourceKindVoxSceneNode:
 		voxFile, err := LoadVoxFile(sourcePath)
 		if err != nil {

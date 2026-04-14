@@ -94,7 +94,6 @@ type VoxelRtModule struct {
 	WindowHeight    int
 	WindowTitle     string
 	DebugMode       bool
-	HideDebugGizmos bool
 	RenderMode      RenderMode
 	QualityPreset   LightingQualityPreset
 	LightingQuality LightingQualityConfig
@@ -106,7 +105,6 @@ type VoxelRtModule struct {
 
 type VoxelRtState struct {
 	RtApp              *app_rt.App
-	HideDebugGizmos    bool
 	loadedModels       map[AssetId]*core.VoxelObject
 	instanceMap        map[EntityId]*core.VoxelObject
 	lastMaterialKeys   map[*core.VoxelObject]materialTableCacheKey
@@ -256,18 +254,6 @@ func (s *VoxelRtState) SpotShadowSoftness() float32 {
 	return s.LightingQuality().Shadow.SpotShadowSoftness
 }
 
-func (s *VoxelRtState) SetDebugGizmos(enabled bool) {
-	if s != nil {
-		s.HideDebugGizmos = !enabled
-	}
-}
-
-func (s *VoxelRtState) IsDebugGizmosEnabled() bool {
-	if s == nil {
-		return false
-	}
-	return !s.HideDebugGizmos
-}
 
 func (s *VoxelRtState) GetVoxelObject(eid EntityId) *core.VoxelObject {
 	if obj, ok := s.instanceMap[eid]; ok {

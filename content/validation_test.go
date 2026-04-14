@@ -140,6 +140,40 @@ func TestValidateAssetValidatesProceduralPrimitivePayload(t *testing.T) {
 	assertHasValidationCode(t, result, "invalid_source_payload")
 }
 
+func TestValidateAssetValidatesVoxelShapePayload(t *testing.T) {
+	def := NewAssetDef("voxel-shape")
+	def.Materials = []AssetMaterialDef{{
+		ID:           "mat_good",
+		Name:         "Good",
+		BaseColor:    [4]uint8{255, 255, 255, 255},
+		Roughness:    1,
+		IOR:          1.5,
+		Transparency: 0,
+	}}
+	def.Parts = []AssetPartDef{{
+		ID:   "shape",
+		Name: "shape",
+		Source: AssetSourceDef{
+			Kind: AssetSourceKindVoxelShape,
+			VoxelShape: &AssetVoxelShapeDef{
+				Palette: []AssetVoxelPaletteEntryDef{
+					{Value: 0, MaterialID: "mat_good"},
+					{Value: 1, MaterialID: "missing"},
+				},
+				Voxels: []VoxelObjectVoxelDef{
+					{X: 0, Y: 0, Z: 0, Value: 0},
+					{X: 1, Y: 0, Z: 0, Value: 2},
+				},
+			},
+		},
+		Transform: identityTransform(),
+	}}
+
+	result := ValidateAsset(def, AssetValidationOptions{})
+	assertHasValidationCode(t, result, "missing_material_reference")
+	assertHasValidationCode(t, result, "invalid_source_payload")
+}
+
 func TestValidateAssetValidatesMaterialLibraryAndReferences(t *testing.T) {
 	def := NewAssetDef("materials")
 	def.Materials = []AssetMaterialDef{

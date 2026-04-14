@@ -28,7 +28,7 @@ struct Light {
     position: vec4<f32>,
     direction: vec4<f32>,
     color: vec4<f32>,
-    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
+    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: casts_shadows
     shadow_meta: vec4<u32>,
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -401,7 +401,8 @@ fn calculate_lighting(
         // Shadowing
         let shadow_normal = select(normal, normal * select(-1.0, 1.0, dot(normal, L) >= 0.0), two_sided_lighting);
 
-        if (light.shadow_meta.y > 0u) {
+        let casts_shadows = light.params.w > 0.5;
+        if (casts_shadows && light.shadow_meta.y > 0u) {
             if (light_type == 1u) {
                 let selection = choose_directional_cascade(light, shadow_receiver_pos);
                 let primary_visibility = sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);

@@ -400,11 +400,12 @@ func buildCollapsedAuthoredLevelBrushes(assets *AssetServer, level *content.Leve
 					ID:   brush.ID,
 					Name: brush.Name,
 					Source: content.AssetSourceDef{
-						Kind:       content.AssetSourceKindProceduralPrimitive,
+						Kind:       levelBrushSourceKind(brush),
 						Primitive:  brush.Primitive,
 						Params:     brush.Params,
 						MaterialID: brush.MaterialID,
 						Operation:  brush.Operation,
+						VoxelShape: cloneLevelBrushVoxelShape(brush.VoxelShape),
 					},
 				},
 				world:           levelTransformToComponent(brush.Transform),
@@ -472,11 +473,15 @@ func cachedAuthoredLevelBrushPalette(assets *AssetServer, cache *levelBrushBakeR
 
 func levelBrushModelCacheKey(brush content.LevelBrushDef) (string, error) {
 	payload := struct {
+		Kind      content.LevelBrushKind
 		Primitive string
 		Params    map[string]float32
+		Shape     *content.AssetVoxelShapeDef
 	}{
+		Kind:      content.EffectiveLevelBrushKind(brush),
 		Primitive: brush.Primitive,
 		Params:    brush.Params,
+		Shape:     brush.VoxelShape,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -510,6 +515,9 @@ func levelBrushModelAsset(assets *AssetServer, brush content.LevelBrushDef) (Ass
 	if assets == nil {
 		return AssetId{}, nil
 	}
+	if content.EffectiveLevelBrushKind(brush) == content.LevelBrushKindVoxelShape {
+		return authoredLevelBrushVoxelShapeGeometry(assets, brush)
+	}
 	params := brush.Params
 	switch brush.Primitive {
 	case "cube":
@@ -535,6 +543,9 @@ func authoredLevelBrushPalette(assets *AssetServer, level *content.LevelDef, bru
 	if assets == nil {
 		return AssetId{}, nil
 	}
+	if content.EffectiveLevelBrushKind(brush) == content.LevelBrushKindVoxelShape {
+		return authoredLevelBrushVoxelShapePalette(assets, level, brush)
+	}
 	if brush.MaterialID == "" {
 		return assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1.5), nil
 	}
@@ -550,6 +561,71 @@ func authoredLevelBrushPalette(assets *AssetServer, level *content.LevelDef, bru
 		material.IOR,
 		material.Transparency,
 	), nil
+}
+
+func authoredLevelBrushVoxelShapeGeometry(assets *AssetServer, brush content.LevelBrushDef) (AssetId, error) {
+	if assets == nil {
+		return AssetId{}, nil
+	}
+	if brush.VoxelShape == nil {
+		return AssetId{}, fmt.Errorf("voxel_shape brush %s is missing payload", brush.ID)
+	}
+
+	cachePayload, err := json.Marshal(struct {
+		Shape *content.AssetVoxelShapeDef `json:"shape"`
+	}{
+		Shape: brush.VoxelShape,
+	})
+	if err != nil {
+		return AssetId{}, err
+	}
+
+	xbm := XBrickMapFromVoxelObjectSnapshot(&content.VoxelObjectSnapshotDef{
+		SchemaVersion: content.CurrentVoxelObjectSnapshotSchemaVersion,
+		Voxels:        append([]content.VoxelObjectVoxelDef(nil), brush.VoxelShape.Voxels...),
+	})
+	xbm.ComputeAABB()
+	xbm.ClearDirty()
+
+	cacheKey := string(cachePayload)
+	return assets.RegisterSharedVoxelGeometryWithCacheKey(cacheKey, xbm, cacheKey), nil
+}
+
+func authoredLevelBrushVoxelShapePalette(assets *AssetServer, level *content.LevelDef, brush content.LevelBrushDef) (AssetId, error) {
+	if assets == nil {
+		return AssetId{}, nil
+	}
+	if brush.VoxelShape == nil {
+		return AssetId{}, fmt.Errorf("voxel_shape brush %s is missing payload", brush.ID)
+	}
+
+	asset := VoxelPaletteAsset{}
+	for _, entry := range brush.VoxelShape.Palette {
+		material, ok := content.FindLevelMaterialByID(level, entry.MaterialID)
+		if !ok {
+			return AssetId{}, fmt.Errorf("missing material %s for brush %s", entry.MaterialID, brush.ID)
+		}
+		asset.VoxPalette[entry.Value] = material.BaseColor
+		asset.Materials = append(asset.Materials, authoredMaterialToVoxMaterial(int(entry.Value), material))
+	}
+	return assets.CreateVoxelPaletteAsset(asset), nil
+}
+
+func levelBrushSourceKind(brush content.LevelBrushDef) content.AssetSourceKind {
+	if content.EffectiveLevelBrushKind(brush) == content.LevelBrushKindVoxelShape {
+		return content.AssetSourceKindVoxelShape
+	}
+	return content.AssetSourceKindProceduralPrimitive
+}
+
+func cloneLevelBrushVoxelShape(shape *content.AssetVoxelShapeDef) *content.AssetVoxelShapeDef {
+	if shape == nil {
+		return nil
+	}
+	return &content.AssetVoxelShapeDef{
+		Palette: append([]content.AssetVoxelPaletteEntryDef(nil), shape.Palette...),
+		Voxels:  append([]content.VoxelObjectVoxelDef(nil), shape.Voxels...),
+	}
 }
 
 func levelBrushCollapseGeometryCacheKey(level *content.LevelDef, voxelResolution float32) (string, error) {
