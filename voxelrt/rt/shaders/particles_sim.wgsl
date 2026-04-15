@@ -187,6 +187,11 @@ fn get_occupancy_info(pos: vec3<f32>, out_normal: ptr<function, vec3<f32>>) -> b
     return false;
 }
 
+fn recycle_particle(idx: u32) {
+    let dead_idx = atomicAdd(&counters.dead_count, 1u);
+    dead_pool[dead_idx] = idx;
+}
+
 // PCG hash for random numbers
 fn pcg_hash(input: u32) -> u32 {
     var state = input * 747796405u + 2891336453u;
@@ -222,13 +227,18 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
         // Physics-based Collision
         let next_pos = p.pos + p.velocity * params.dt;
         var normal: vec3<f32>;
+        var collided = false;
         if (get_occupancy_info(next_pos, &normal)) {
+            collided = true;
             // Reflect! Standard physics bounce
             p.velocity = reflect(p.velocity, normal) * 0.4;
             // Stop if energy is too low
-            if (length(p.velocity) < 0.2) { p.velocity = vec3<f32>(0.0); }
-            // Push slightly out of surface
-            p.pos += normal * 0.05;
+            if (length(p.velocity) < 0.2) {
+                p.life = p.max_life;
+            } else {
+                // Push slightly out of surface
+                p.pos = next_pos + normal * 0.08;
+            }
         } else {
             p.pos = next_pos;
         }
@@ -236,9 +246,17 @@ fn simulate(@builtin(global_invocation_id) id: vec3<u32>) {
         
         if (p.life >= p.max_life) {
             p.life = p.max_life;
-            let dead_idx = atomicAdd(&counters.dead_count, 1u);
-            dead_pool[dead_idx] = idx;
+            recycle_particle(idx);
         } else {
+            if (collided) {
+                var inside_normal: vec3<f32>;
+                if (get_occupancy_info(p.pos, &inside_normal)) {
+                    p.life = p.max_life;
+                    recycle_particle(idx);
+                    particles[idx] = p;
+                    return;
+                }
+            }
             let alive_idx = atomicAdd(&counters.alive_count, 1u);
             alive_list[alive_idx] = idx;
         }
@@ -270,8 +288,7 @@ fn spawn(@builtin(global_invocation_id) id: vec3<u32>) {
     var state = params.seed ^ pcg_hash(request_idx);
     
     var p: Particle;
-    p.pos = em.pos;
-    
+
     // Cone sampling
     let axis = vec3<f32>(0.0, 1.0, 0.0);
     let theta_max = em.cone_angle * 0.0174533; // deg to rad
@@ -285,6 +302,40 @@ fn spawn(@builtin(global_invocation_id) id: vec3<u32>) {
     
     let speed = mix(em.speed_min, em.speed_max, rand_f32(&state));
     p.velocity = world_dir * speed;
+
+    var spawn_pos = em.pos;
+    var surface_normal = quat_rotate(em.rot, axis);
+    if (length(surface_normal) < 0.001) {
+        surface_normal = axis;
+    } else {
+        surface_normal = normalize(surface_normal);
+    }
+
+    var occupied = get_occupancy_info(spawn_pos, &surface_normal);
+    if (occupied) {
+        var escape_dir = normalize(surface_normal);
+        if (length(escape_dir) < 0.001) {
+            escape_dir = normalize(world_dir);
+        }
+        if (length(escape_dir) < 0.001) {
+            escape_dir = axis;
+        }
+
+        for (var i = 0u; i < 12u && occupied; i++) {
+            spawn_pos += escape_dir * 0.35;
+            occupied = get_occupancy_info(spawn_pos, &surface_normal);
+            if (length(surface_normal) > 0.001) {
+                escape_dir = normalize(surface_normal);
+            }
+        }
+
+        if (occupied) {
+            recycle_particle(p_idx);
+            return;
+        }
+    }
+
+    p.pos = spawn_pos;
     
     p.life = 0.0;
     p.max_life = mix(em.life_min, em.life_max, rand_f32(&state));
