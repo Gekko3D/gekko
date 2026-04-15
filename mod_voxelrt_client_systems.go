@@ -439,6 +439,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	state.RtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
 		state.RtApp.Camera.Position = camera.Position
+		state.RtApp.Camera.LookAt = camera.LookAt
+		state.RtApp.Camera.Up = camera.Up
 		state.RtApp.Camera.Yaw = mgl32.DegToRad(camera.Yaw)
 		state.RtApp.Camera.Pitch = mgl32.DegToRad(camera.Pitch)
 		state.RtApp.Camera.Fov = camera.Fov

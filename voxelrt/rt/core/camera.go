@@ -8,6 +8,8 @@ import (
 
 type CameraState struct {
 	Position    mgl32.Vec3
+	LookAt      mgl32.Vec3
+	Up          mgl32.Vec3
 	Yaw         float32
 	Pitch       float32
 	Fov         float32
@@ -21,6 +23,8 @@ type CameraState struct {
 func NewCameraState() *CameraState {
 	return &CameraState{
 		Position:    mgl32.Vec3{0, 2, 20},
+		LookAt:      mgl32.Vec3{0, 2, 19},
+		Up:          mgl32.Vec3{0, 1, 0},
 		Yaw:         0,
 		Pitch:       0,
 		Fov:         60,
@@ -32,6 +36,9 @@ func NewCameraState() *CameraState {
 }
 
 func (c *CameraState) GetForward() mgl32.Vec3 {
+	if forward, _, ok := c.viewFrame(); ok {
+		return forward
+	}
 	return mgl32.Vec3{
 		float32(math.Sin(float64(c.Yaw)) * math.Cos(float64(c.Pitch))),
 		float32(math.Sin(float64(c.Pitch))),
@@ -40,11 +47,28 @@ func (c *CameraState) GetForward() mgl32.Vec3 {
 }
 
 func (c *CameraState) GetRight() mgl32.Vec3 {
+	if forward, up, ok := c.viewFrame(); ok {
+		return forward.Cross(up).Normalize()
+	}
 	return mgl32.Vec3{
 		float32(math.Cos(float64(c.Yaw))),
 		0,
 		float32(math.Sin(float64(c.Yaw))),
 	}
+}
+
+func (c *CameraState) GetUp() mgl32.Vec3 {
+	if forward, up, ok := c.viewFrame(); ok {
+		right := forward.Cross(up).Normalize()
+		return right.Cross(forward).Normalize()
+	}
+
+	right := c.GetRight()
+	up := right.Cross(c.GetForward())
+	if up.LenSqr() > 1e-6 {
+		return up.Normalize()
+	}
+	return mgl32.Vec3{0, 1, 0}
 }
 
 func (c *CameraState) ScreenToWorldRay(mouseX, mouseY float64, width, height int) Ray {
@@ -54,7 +78,7 @@ func (c *CameraState) ScreenToWorldRay(mouseX, mouseY float64, width, height int
 
 	forward := c.GetForward()
 	right := c.GetRight()
-	up := right.Cross(forward).Normalize()
+	up := c.GetUp()
 
 	// Aspect ratio and FOV
 	aspect := float32(width) / float32(height)
@@ -99,11 +123,35 @@ func (c *CameraState) ProjectionMatrix(aspect float32) mgl32.Mat4 {
 }
 
 func (c *CameraState) GetViewMatrix() mgl32.Mat4 {
+	if _, up, ok := c.viewFrame(); ok {
+		return mgl32.LookAtV(c.Position, c.LookAt, up)
+	}
+
 	forward := c.GetForward()
 	eye := c.Position
 	target := eye.Add(forward)
-	up := mgl32.Vec3{0, 1, 0} // Approximate up is fine for LookAt
-	return mgl32.LookAtV(eye, target, up)
+	return mgl32.LookAtV(eye, target, mgl32.Vec3{0, 1, 0})
+}
+
+func (c *CameraState) viewFrame() (mgl32.Vec3, mgl32.Vec3, bool) {
+	forward := c.LookAt.Sub(c.Position)
+	if forward.LenSqr() <= 1e-6 {
+		return mgl32.Vec3{}, mgl32.Vec3{}, false
+	}
+	up := c.Up
+	if up.LenSqr() <= 1e-6 {
+		up = mgl32.Vec3{0, 1, 0}
+	}
+
+	forward = forward.Normalize()
+	right := forward.Cross(up)
+	if right.LenSqr() <= 1e-6 {
+		return mgl32.Vec3{}, mgl32.Vec3{}, false
+	}
+
+	right = right.Normalize()
+	up = right.Cross(forward).Normalize()
+	return forward, up, true
 }
 
 // ExtractFrustum extracts the 6 planes of the frustum from the view-projection matrix.

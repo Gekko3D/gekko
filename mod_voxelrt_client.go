@@ -254,7 +254,6 @@ func (s *VoxelRtState) SpotShadowSoftness() float32 {
 	return s.LightingQuality().Shadow.SpotShadowSoftness
 }
 
-
 func (s *VoxelRtState) GetVoxelObject(eid EntityId) *core.VoxelObject {
 	if obj, ok := s.instanceMap[eid]; ok {
 		return obj
@@ -351,6 +350,8 @@ func cameraStateFromComponent(camera *CameraComponent) core.CameraState {
 		return camState
 	}
 	camState.Position = camera.Position
+	camState.LookAt = camera.LookAt
+	camState.Up = camera.Up
 	camState.Yaw = mgl32.DegToRad(camera.Yaw)
 	camState.Pitch = mgl32.DegToRad(camera.Pitch)
 	camState.Fov = camera.Fov

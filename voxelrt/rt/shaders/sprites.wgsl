@@ -48,6 +48,7 @@ struct VSOut {
     @location(6) @interpolate(flat) is_ui: u32,
     @location(7) @interpolate(flat) is_unlit: u32,
     @location(8) @interpolate(flat) alpha_mode: u32,
+    @location(9) sprite_center: vec3<f32>,
 };
 
 fn get_camera_right() -> vec3<f32> {
@@ -81,6 +82,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     out.is_ui = inst.is_ui;
     out.is_unlit = inst.is_unlit;
     out.alpha_mode = inst.alpha_mode;
+    out.sprite_center = inst.pos;
 
     if (inst.is_ui != 0u) {
         // UI Space: inst.pos.xy is screen pixels, inst.size is pixels
@@ -159,17 +161,30 @@ fn fs_main(in: VSOut) -> FSOut {
     
     // Simple Lighting for world sprites
     if (in.is_ui == 0u && in.is_unlit == 0u) {
-        let L = normalize(camera.light_pos.xyz - in.world_pos);
-        let N = normalize(camera.cam_pos.xyz - in.world_pos); // Assume facing camera
-        let diff = max(0.0, dot(N, L));
-        final_rgb = final_rgb * (camera.ambient_color.rgb + diff);
+        let light_vec = camera.light_pos.xyz - in.sprite_center;
+        let view_vec = camera.cam_pos.xyz - in.sprite_center;
+        let light_len_sq = dot(light_vec, light_vec);
+        let view_len_sq = dot(view_vec, view_vec);
+        var lighting = camera.ambient_color.rgb;
+        if (light_len_sq > 1e-6 && view_len_sq > 1e-6) {
+            let L = light_vec * inverseSqrt(light_len_sq);
+            let N = view_vec * inverseSqrt(view_len_sq);
+            // Billboards are effectively two-sided cards. Using the center-facing
+            // normal avoids distance-dependent darkening as the camera moves.
+            let diff = abs(dot(N, L));
+            lighting = lighting + vec3<f32>(0.65 * diff);
+        }
+        final_rgb = final_rgb * lighting;
     }
 
     var weight = max(1e-3, alpha);
     if (in.is_ui == 0u) {
-        let z_norm = clamp(t_pixel / max(t_scene, 1e-4), 0.0, 1.0);
-        let k: f32 = 8.0;
-        weight = max(1e-3, alpha) * pow(1.0 - z_norm, k);
+        // Use camera depth, not opaque scene depth behind the sprite. Tying the
+        // weight to t_scene makes cards near the ground or walls fade out when
+        // their screen projection overlaps nearby opaque geometry.
+        let depth_norm = clamp(t_pixel / 160.0, 0.0, 1.0);
+        let k: f32 = 4.0;
+        weight = max(1e-3, alpha) * pow(1.0 - depth_norm, k);
     }
 
     var out: FSOut;
