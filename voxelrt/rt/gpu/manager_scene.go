@@ -81,6 +81,7 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 		binary.LittleEndian.PutUint32(dst[64:68], 1)
 	}
 	binary.LittleEndian.PutUint32(dst[68:72], obj.PlanetTileGroupID)
+	binary.LittleEndian.PutUint32(dst[72:76], obj.EmitterLinkID)
 	binary.LittleEndian.PutUint32(dst[80:84], uint32(obj.PlanetTileFace))
 	binary.LittleEndian.PutUint32(dst[84:88], uint32(obj.PlanetTileLevel))
 	binary.LittleEndian.PutUint32(dst[88:92], uint32(obj.PlanetTileX))

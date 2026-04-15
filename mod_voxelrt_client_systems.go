@@ -217,6 +217,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.ShadowCasterGroupID = vox.ShadowCasterGroupID
 		obj.ShadowCasterGroupLimit = vox.ShadowCasterGroupLimit
 		obj.ShadowGroupID = vox.ShadowGroupID
+		obj.EmitterLinkID = vox.EmitterLinkID
 		obj.AmbientOcclusionMode = core.AmbientOcclusionMode(vox.AmbientOcclusionMode)
 		obj.ShadowSeamWorldEpsilon = vox.ShadowSeamWorldEpsilon
 		obj.AllowOcclusionCulling = voxelObjectAllowsOcclusion(cmd, entityId, vox)
@@ -644,7 +645,14 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 		rot := tr.Rotation
 
 		gpuLight := core.Light{}
-		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), 1.0}
+		sourceRadius := light.SourceRadius
+		if sourceRadius < 0 {
+			sourceRadius = 0
+		}
+		if sourceRadius == 0 && light.EmitterLinkID != 0 {
+			sourceRadius = derivedEmitterSourceRadius(state, light.EmitterLinkID)
+		}
+		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), sourceRadius}
 
 		baseForward := mgl32.Vec3{0, 0, -1}
 		if light.Type == LightTypeDirectional {
@@ -671,6 +679,7 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 			castsShadows = 1.0
 		}
 		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), castsShadows}
+		gpuLight.ShadowMeta[3] = light.EmitterLinkID
 		pendingLights = append(pendingLights, pendingLight{
 			entityID:  entityId,
 			lightType: light.Type,
@@ -718,6 +727,29 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 	state.RtApp.Scene.SkyAmbientMix = skyAmbientMix
 }
 
+func derivedEmitterSourceRadius(state *VoxelRtState, emitterLinkID uint32) float32 {
+	if state == nil || emitterLinkID == 0 {
+		return 0
+	}
+
+	var radius float32
+	for _, obj := range state.instanceMap {
+		if obj == nil || obj.EmitterLinkID != emitterLinkID || obj.XBrickMap == nil {
+			continue
+		}
+		obj.UpdateWorldAABB()
+		if obj.WorldAABB == nil {
+			continue
+		}
+		extent := obj.WorldAABB[1].Sub(obj.WorldAABB[0])
+		candidate := extent.Len() * 0.5
+		if candidate > radius {
+			radius = candidate
+		}
+	}
+	return radius
+}
+
 func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *Commands) {
 	if state == nil || state.RtApp == nil {
 		return
@@ -730,7 +762,6 @@ func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *C
 	// Skybox Sync & Generation
 	state.syncSkybox(cmd, time)
 }
-
 
 func voxelRtRenderSystem(cmd *Commands, state *VoxelRtState, prof *Profiler) {
 	if prof != nil {

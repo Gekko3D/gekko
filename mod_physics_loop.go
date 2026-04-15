@@ -934,6 +934,44 @@ func CalculateInverseInertiaLocal(mass float32, model *PhysicsModel) mgl32.Mat3 
 	return localInertia.Inv()
 }
 
+// calculateLocalInertiaTensor is a compatibility wrapper retained for tests and
+// older internal call sites. Runtime code should prefer calculateLocalInertiaTensorFromModel.
+func calculateLocalInertiaTensor(body *internalBody) mgl32.Mat3 {
+	if body == nil {
+		return mgl32.Ident3()
+	}
+	model := physicsModelForInertia(body)
+	return calculateLocalInertiaTensorFromModel(body.mass, &model)
+}
+
+// calculateInverseInertiaLocal is a compatibility wrapper retained for tests and
+// older internal call sites. Runtime code should prefer CalculateInverseInertiaLocal.
+func calculateInverseInertiaLocal(body *internalBody) mgl32.Mat3 {
+	if body == nil {
+		return mgl32.Ident3()
+	}
+	model := physicsModelForInertia(body)
+	return CalculateInverseInertiaLocal(body.mass, &model)
+}
+
+func physicsModelForInertia(body *internalBody) PhysicsModel {
+	if body == nil {
+		return PhysicsModel{}
+	}
+	if body.model.Grid != nil || len(body.model.Boxes) > 0 {
+		return body.model
+	}
+	if len(body.boxes) == 0 {
+		return body.model
+	}
+	model := body.model
+	model.Boxes = make([]CollisionBox, len(body.boxes))
+	for i := range body.boxes {
+		model.Boxes[i] = body.boxes[i].Box
+	}
+	return model
+}
+
 func calculateLocalInertiaTensorFromModel(mass float32, model *PhysicsModel) mgl32.Mat3 {
 	if mass <= 0 {
 		return mgl32.Ident3()

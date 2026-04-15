@@ -63,6 +63,10 @@ type VoxelModelComponent struct {
 	ShadowCasterGroupID    uint64
 	ShadowCasterGroupLimit int
 	ShadowGroupID          uint32
+	// EmitterLinkID tags visible voxel geometry as the emitter shell for any light
+	// using the same link ID. It does not disable ordinary occlusion or shadows for
+	// other lights; it only prevents self-occlusion for the linked light.
+	EmitterLinkID          uint32
 	AmbientOcclusionMode   VoxelAmbientOcclusionMode
 	ShadowSeamWorldEpsilon float32
 	IsTerrainChunk         bool

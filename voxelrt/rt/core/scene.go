@@ -68,6 +68,7 @@ type VoxelObject struct {
 	ShadowCasterGroupID    uint64
 	ShadowCasterGroupLimit int
 	ShadowGroupID          uint32
+	EmitterLinkID          uint32
 	AmbientOcclusionMode   AmbientOcclusionMode
 	ShadowSeamWorldEpsilon float32
 	AllowOcclusionCulling  bool

@@ -32,11 +32,11 @@ struct DirectionalShadowCascade {
 };
 
 struct Light {
-    position: vec4<f32>,
+    position: vec4<f32>, // xyz, source radius
     direction: vec4<f32>,
     color: vec4<f32>,
     params: vec4<f32>, // x: range, y: cos_cone, z: type, w: casts_shadows
-    shadow_meta: vec4<u32>,
+    shadow_meta: vec4<u32>, // w: emitter link id
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     directional_cascades: array<DirectionalShadowCascade, 2>,
@@ -131,7 +131,8 @@ struct ObjectParams {
     terrain_chunk: vec4<i32>,
     is_planet_tile: u32,
     planet_tile_group_id: u32,
-    padding2: vec2<u32>,
+    emitter_link_id: u32,
+    padding2: u32,
     planet_tile: vec4<i32>,
 };
 
@@ -172,6 +173,8 @@ struct SectorGridParams {
 @group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
+
+var<private> g_light_emitter_link_id: u32 = 0u;
 
 // ============== TRAVERSAL LOGIC ==============
 
@@ -333,6 +336,13 @@ fn point_shadow_face_dir(face: u32, uv: vec2<f32>) -> vec3<f32> {
         case 4u: { return normalize(vec3<f32>(face_uv.x, -face_uv.y, 1.0)); }
         default: { return normalize(vec3<f32>(-face_uv.x, -face_uv.y, -1.0)); }
     }
+}
+
+fn should_skip_object_for_light(object_id: u32) -> bool {
+    if (g_light_emitter_link_id == 0u) {
+        return false;
+    }
+    return object_params[object_id].emitter_link_id == g_light_emitter_link_id;
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
@@ -553,6 +563,10 @@ fn traverse_scene(ray: Ray) -> HitResult {
                 loop {
                     if (li >= node.leaf_count) { break; }
                     let inst = instances[node.leaf_first + li];
+                    if (should_skip_object_for_light(inst.object_id)) {
+                        li = li + 1;
+                        continue;
+                    }
                     let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
                     if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
                         var res: HitResult;
@@ -586,6 +600,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let light_idx = update.light_index;
     
     let light = lights[light_idx];
+    g_light_emitter_link_id = light.shadow_meta.w;
     var light_view_proj = light.view_proj;
     var light_inv_view_proj = light.inv_view_proj;
     if (update.kind == 1u) {
@@ -604,7 +619,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (update.kind == 2u) {
         let dir = point_shadow_face_dir(update.cascade_index, uv);
         let safe_dir = make_safe_dir(dir);
-        ray = Ray(light.position.xyz, dir, 1.0 / safe_dir);
+        let source_radius = max(light.position.w, 0.0);
+        let ray_origin = light.position.xyz + dir * (source_radius + EPS * 8.0);
+        ray = Ray(ray_origin, dir, 1.0 / safe_dir);
     } else {
         let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
         let p_near = light_inv_view_proj * vec4<f32>(ndc, -1.0, 1.0);

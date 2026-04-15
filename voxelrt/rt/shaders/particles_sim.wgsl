@@ -89,7 +89,7 @@ struct SectorRecord { origin_vox: vec4<i32>, brick_table_index: u32, brick_mask_
 struct BrickRecord { atlas_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, atlas_page: u32, flags: u32 };
 struct SectorGridEntry { coords: vec4<i32>, base_idx: u32, sector_idx: i32, padding: vec2<u32> };
 struct SectorGridParams { grid_size: u32, grid_mask: u32, padding0: u32, padding1: u32 };
-struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, ambient_occlusion_mode: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32>, is_planet_tile: u32, planet_tile_group_id: u32, padding2: vec2<u32>, planet_tile: vec4<i32> };
+struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, ambient_occlusion_mode: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32>, is_planet_tile: u32, planet_tile_group_id: u32, emitter_link_id: u32, padding2: u32, planet_tile: vec4<i32> };
 
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
 @group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;

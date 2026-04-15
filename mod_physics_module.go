@@ -100,15 +100,11 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 		tr *TransformComponent
 		rb *RigidBodyComponent
 		pm *PhysicsModel
+		vm *VoxelModelComponent
 	})
 
-	MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent) bool {
-		vSize := VoxelSize
-		scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
-		diff := mgl32.Vec3{}
-		if pm != nil {
-			diff = pm.CenterOffset.Sub(scaledPivot)
-		}
+	MakeQuery5[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent, vm *VoxelModelComponent) bool {
+		diff := renderToPhysicsOffset(tr, pm, vm)
 
 		// Start with visual state
 		physPos := tr.Position.Add(tr.Rotation.Rotate(diff))
@@ -172,10 +168,11 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 			tr *TransformComponent
 			rb *RigidBodyComponent
 			pm *PhysicsModel
-		}{tr, rb, pm}
+			vm *VoxelModelComponent
+		}{tr, rb, pm, vm}
 
 		return true
-	}, PhysicsModel{})
+	}, PhysicsModel{}, VoxelModelComponent{})
 
 	proxy.pendingState.Store(snapshot)
 
@@ -205,7 +202,7 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 			// But note that interpolation will overwrite it in PreUpdate.
 			// This is fine because PreUpdate runs AFTER all fixed steps.
 			e.tr.Rotation = res.Rot
-			e.tr.Position = physicsToRenderPosition(res.Pos, res.Rot, e.tr, e.pm)
+			e.tr.Position = physicsToRenderPosition(res.Pos, res.Rot, e.tr, e.pm, e.vm)
 			e.rb.Velocity = res.Vel
 			e.rb.AngularVelocity = res.AngVel
 			e.rb.Sleeping = res.Sleeping
@@ -287,7 +284,7 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 			resMap[res.Eid] = res
 		}
 
-		MakeQuery3[TransformComponent, RigidBodyComponent, PhysicsModel](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel) bool {
+		MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, vm *VoxelModelComponent) bool {
 			if res, ok := resMap[eid]; ok {
 				if rb.LastPhysicsTick != results.Tick {
 					if rb.LastPhysicsTick == 0 {
@@ -311,7 +308,7 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 					interpRot = mgl32.QuatNlerp(rb.PreviousPhysicsRot, rb.CurrentPhysicsRot, alpha)
 				}
 
-				tr.Position = physicsToRenderPosition(interpPos, interpRot, tr, pm)
+				tr.Position = physicsToRenderPosition(interpPos, interpRot, tr, pm, vm)
 				tr.Rotation = interpRot
 				rb.Velocity = res.Vel
 				rb.AngularVelocity = res.AngVel
@@ -321,7 +318,7 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 				rb.LastPulledRot = tr.Rotation
 			}
 			return true
-		}, PhysicsModel{})
+		}, PhysicsModel{}, VoxelModelComponent{})
 	}
 }
 
@@ -367,14 +364,9 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 		Dt:      float32(time.Dt),
 	}
 
-	MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent) bool {
+	MakeQuery5[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent, vm *VoxelModelComponent) bool {
 		// Calculate the physics position from visual transform
-		vSize := VoxelSize
-		scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
-		diff := mgl32.Vec3{}
-		if pm != nil {
-			diff = pm.CenterOffset.Sub(scaledPivot)
-		}
+		diff := renderToPhysicsOffset(tr, pm, vm)
 		rotatedOffset := tr.Rotation.Rotate(diff)
 		physicsPos := tr.Position.Add(rotatedOffset)
 
@@ -426,20 +418,34 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 			Teleport:       isTeleport,
 		})
 		return true
-	}, PhysicsModel{})
+	}, PhysicsModel{}, VoxelModelComponent{})
 
 	proxy.pendingState.Store(snap)
 }
 
-func physicsToRenderPosition(physicsPos mgl32.Vec3, rot mgl32.Quat, tr *TransformComponent, pm *PhysicsModel) mgl32.Vec3 {
-	vSize := VoxelSize
-	scaledPivot := mgl32.Vec3{tr.Pivot.X() * tr.Scale.X() * vSize, tr.Pivot.Y() * tr.Scale.Y() * vSize, tr.Pivot.Z() * tr.Scale.Z() * vSize}
-	diff := mgl32.Vec3{}
-	if pm != nil {
-		diff = pm.CenterOffset.Sub(scaledPivot)
-	}
+func physicsToRenderPosition(physicsPos mgl32.Vec3, rot mgl32.Quat, tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) mgl32.Vec3 {
+	diff := renderToPhysicsOffset(tr, pm, vm)
 	rotatedOffset := rot.Rotate(diff)
 	return physicsPos.Sub(rotatedOffset)
+}
+
+func renderToPhysicsOffset(tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) mgl32.Vec3 {
+	if tr == nil || pm == nil {
+		return mgl32.Vec3{}
+	}
+	return pm.CenterOffset.Sub(scaledPivotWorld(tr, vm))
+}
+
+func scaledPivotWorld(tr *TransformComponent, vm *VoxelModelComponent) mgl32.Vec3 {
+	if tr == nil {
+		return mgl32.Vec3{}
+	}
+	voxelScale := EffectiveVoxelScale(vm, tr)
+	return mgl32.Vec3{
+		tr.Pivot.X() * voxelScale.X(),
+		tr.Pivot.Y() * voxelScale.Y(),
+		tr.Pivot.Z() * voxelScale.Z(),
+	}
 }
 
 func physicsInterpolationAlpha(generated time.Time, updateFrequency float32) float32 {
