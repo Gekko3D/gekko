@@ -411,6 +411,71 @@ Acceptance criteria:
 - A single approved dense-occupancy layout exists.
 - CPU and WGSL indexing order is frozen in prose before implementation starts.
 
+Frozen contract:
+
+- Representation:
+  - Use a dedicated storage buffer named `dense_occupancy_words`.
+  - Store exact occupancy only for non-solid bricks.
+  - Each dense brick entry is `512 bits = 16 x u32 = 64 bytes`.
+  - The buffer is a flat `array<u32>` on the GPU and a flat `[]uint32`/packed byte upload on the CPU.
+- `BrickRecord` change:
+  - Extend `BrickRecord` by one `u32` field named `dense_occupancy_word_base`.
+  - New `BrickRecord` field order:
+    - `atlas_offset: u32`
+    - `occupancy_mask_lo: u32`
+    - `occupancy_mask_hi: u32`
+    - `atlas_page: u32`
+    - `flags: u32`
+    - `dense_occupancy_word_base: u32`
+  - New `BrickRecord` size: `24 bytes`.
+  - `dense_occupancy_word_base` is the word index into `dense_occupancy_words`, not a byte offset.
+  - Invalid sentinel: `0xFFFFFFFF`.
+- Binding contract:
+  - Add the dense occupancy buffer as a new voxel-data binding after the current lookup buffers rather than reordering existing bindings.
+  - Freeze the intended WGSL resource as:
+    - `@group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;`
+  - Existing bindings `0..12` keep their current meaning.
+- Indexing order:
+  - Dense occupancy uses the same voxel linearization as brick payload upload order.
+  - Voxel linear index inside a brick is:
+    - `linear = x + y*8 + z*64`
+  - Word selection:
+    - `word_index = linear >> 5`
+    - `bit_index = linear & 31`
+  - Occupancy test:
+    - occupied when `(dense_occupancy_words[dense_occupancy_word_base + word_index] & (1u << bit_index)) != 0`.
+  - This ordering is frozen for both CPU packing and WGSL reads.
+- Relationship to existing masks:
+  - Keep `occupancy_mask_lo/hi` as the coarse `2x2x2` micro-mask early-out.
+  - Dense occupancy is the exact per-voxel refinement layer for non-solid bricks.
+  - Dense occupancy must never replace or reinterpret the existing micro-mask contract.
+- Solid-brick semantics:
+  - `BrickFlagSolid` remains authoritative.
+  - Solid bricks do not allocate dense occupancy words.
+  - Solid bricks must set `dense_occupancy_word_base = 0xFFFFFFFF`.
+  - Shader logic must treat a solid brick as fully occupied without consulting the dense buffer.
+- Empty-brick semantics:
+  - Empty bricks are represented by absence in the sector `brick_mask`, as today.
+  - Empty bricks do not allocate dense occupancy words.
+  - Any zeroed or cleared GPU brick record must leave `dense_occupancy_word_base = 0xFFFFFFFF`.
+  - There is no valid "allocated but empty" dense entry in v1.
+- Allocation and lifetime:
+  - Dense occupancy allocation granularity is exactly one brick entry (`16` words).
+  - Allocation is owned by the GPU-side brick upload lifecycle, not by sectors or objects directly.
+  - Re-upload of an unchanged non-solid brick may reuse its existing dense slot.
+  - Brick replacement, brick deletion, solid<->non-solid transitions, and sector teardown must release or replace the dense slot in the same lifecycle path that already manages payload slots.
+- CPU build rule:
+  - CPU packing must derive dense occupancy from `brick.Payload[x][y][z] != 0`.
+  - Dense occupancy for a non-solid brick must exactly match payload non-zero voxels.
+  - `TryCompress`/solid-brick promotion may skip dense generation entirely once the brick is marked solid.
+- Shader consumption rule for later tasks:
+  - Traversal checks stay ordered as:
+    - sector `brick_mask`
+    - brick `occupancy_mask`
+    - solid-brick fast path or dense occupancy test
+    - payload fetch only after dense occupancy confirms the voxel is occupied for non-solid bricks
+  - Task `3C` must preserve visible behavior and only use dense occupancy to remove unnecessary payload reads.
+
 Prompt seed:
 
 ```text

@@ -61,6 +61,7 @@ struct BrickRecord {
   occupancy_mask_hi: u32,
   atlas_page: u32,
   flags: u32,
+  dense_occupancy_word_base: u32,
 };
 
 struct Tree64Node {
@@ -193,9 +194,9 @@ struct TransparentHit {
 @group(1) @binding(5) var voxel_payload_3: texture_3d<u32>;
 @group(1) @binding(6) var<storage, read> materials            : array<vec4<f32>>;
 @group(1) @binding(7) var<storage, read> object_params        : array<ObjectParams>;
-@group(1) @binding(8) var<storage, read> tree64_nodes         : array<Tree64Node>;
 @group(1) @binding(9) var<storage, read> sector_grid          : array<SectorGridEntry>;
 @group(1) @binding(10) var<uniform> sector_grid_params   : SectorGridParams;
+@group(1) @binding(13) var<storage, read> dense_occupancy_words : array<u32>;
 
 // Group 2: GBuffer inputs
 @group(2) @binding(0) var in_depth    : texture_2d<f32>;      // stores ray t in .r
@@ -279,6 +280,13 @@ fn load_u8(packed_offset: u32, atlas_page: u32, voxel_idx: u32) -> u32 {
 
   let coords = vec3<u32>(ax + vx, ay + vy, az + vz);
   return load_voxel_payload(atlas_page, coords);
+}
+
+fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
+  if (word_base == 0xFFFFFFFFu) { return false; }
+  let word = dense_occupancy_words[word_base + (voxel_idx >> 5u)];
+  let bit = 1u << (voxel_idx & 31u);
+  return (word & bit) != 0u;
 }
 
 fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
@@ -366,16 +374,23 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
     return 0.0;
   }
   let packed_idx = sector.brick_table_index + brick_idx_local;
-  let b_flags = bricks[packed_idx].flags;
+  let brick = bricks[packed_idx];
+  let b_flags = brick.flags;
   if (b_flags == 0u) {
+    let mx = (v.x >> 1u) & 3;
+    let my = (v.y >> 1u) & 3;
+    let mz = (v.z >> 1u) & 3;
+    let mvid = vec3<u32>(u32(mx), u32(my), u32(mz));
+    let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
+    if (!bit_test64(brick.occupancy_mask_lo, brick.occupancy_mask_hi, micro_idx)) {
+      return 0.0;
+    }
     let vx = v.x & 7;
     let vy = v.y & 7;
     let vz = v.z & 7;
     let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
     let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-    let b_atlas = bricks[packed_idx].atlas_offset;
-    let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
-    return select(0.0, 1.0, palette_idx != 0u);
+    return select(0.0, 1.0, dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx));
   }
   return 1.0;
 }
@@ -1150,8 +1165,9 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
 
                     if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
                       let packed_idx = sector.brick_table_index + brick_idx_local;
-                      let b_flags = bricks[packed_idx].flags;
-                      let b_atlas = bricks[packed_idx].atlas_offset;
+                      let brick = bricks[packed_idx];
+                      let b_flags = brick.flags;
+                      let b_atlas = brick.atlas_offset;
                       var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
 
                       if (b_flags == 1u) {
@@ -1274,18 +1290,18 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                         voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
                         var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
                         let t_delta_1 = abs(1.0 * inv_dir);
-                        let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
-                        let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
+                        let b_mask_lo = brick.occupancy_mask_lo;
+                        let b_mask_hi = brick.occupancy_mask_hi;
                         var it_micro = 0;
                         while (t_micro < t_brick_exit && it_micro < 32) {
                           it_micro += 1;
                           let vvid = vec3<u32>(u32(voxel_pos.x), u32(voxel_pos.y), u32(voxel_pos.z));
                           let mvid = vvid / 2u;
                           let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
-                          let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx);
+                          let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
+                          let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx);
                           if (process) {
-                            let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-                            let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
+                            let palette_idx = load_u8(b_atlas, brick.atlas_page, voxel_idx);
                             if (palette_idx != 0u) {
                               let mat_base = params.material_table_base;
                               let mat_idx = mat_base + palette_idx * 4u;

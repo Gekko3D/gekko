@@ -242,3 +242,49 @@ func TestReleaseBrickSlotReturnsCapacityToOwningPage(t *testing.T) {
 		t.Fatalf("expected freed slot to be reused from page 1, got %+v", slot)
 	}
 }
+
+func TestBuildDenseOccupancyBytesMatchesFrozenPacking(t *testing.T) {
+	brick := volume.NewBrick()
+	brick.SetVoxel(0, 0, 0, 1)
+	brick.SetVoxel(7, 0, 0, 2)
+	brick.SetVoxel(0, 1, 0, 3)
+	brick.SetVoxel(0, 0, 1, 4)
+	brick.SetVoxel(7, 7, 7, 5)
+
+	buf := buildDenseOccupancyBytes(brick)
+	if len(buf) != DenseOccupancyRecordBytes {
+		t.Fatalf("expected dense occupancy payload size %d, got %d", DenseOccupancyRecordBytes, len(buf))
+	}
+
+	if got := binary.LittleEndian.Uint32(buf[0:4]); got != (1<<0 | 1<<7 | 1<<8) {
+		t.Fatalf("unexpected dense occupancy word 0: got %#x", got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[8:12]); got != 1<<0 {
+		t.Fatalf("unexpected dense occupancy word 2: got %#x", got)
+	}
+	lastWordOffset := (volume.DenseOccupancyWordCount - 1) * 4
+	if got := binary.LittleEndian.Uint32(buf[lastWordOffset : lastWordOffset+4]); got != 1<<31 {
+		t.Fatalf("unexpected dense occupancy last word: got %#x", got)
+	}
+}
+
+func TestReleaseDenseOccupancySlotReturnsCapacityToAllocator(t *testing.T) {
+	brick := volume.NewBrick()
+	m := &GpuBufferManager{
+		BrickToDenseSlot: map[*volume.Brick]uint32{brick: 7},
+	}
+	m.DenseOccupancyAlloc.Tail = 8
+
+	m.releaseDenseOccupancySlot(brick)
+
+	if _, exists := m.BrickToDenseSlot[brick]; exists {
+		t.Fatal("expected released dense occupancy mapping to be cleared")
+	}
+	slot := m.DenseOccupancyAlloc.Alloc()
+	if slot != 7 {
+		t.Fatalf("expected dense occupancy slot 7 to be reused, got %d", slot)
+	}
+	if got := denseOccupancyWordBase(slot); got != slot*volume.DenseOccupancyWordCount {
+		t.Fatalf("expected dense occupancy word base %d, got %d", slot*volume.DenseOccupancyWordCount, got)
+	}
+}

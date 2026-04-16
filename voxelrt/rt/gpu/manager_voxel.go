@@ -85,6 +85,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					for i := 0; i < 64; i++ {
 						if brick := bPtrs[i]; brick != nil {
 							m.releaseBrickSlot(brick)
+							m.releaseDenseOccupancySlot(brick)
 						}
 					}
 				}
@@ -147,6 +148,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		recreated = true
 	}
 	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*BrickRecordSize) {
+		recreated = true
+	}
+	if m.ensureBuffer("DenseOccupancyBuf", &m.DenseOccupancyBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*DenseOccupancyRecordBytes) {
 		recreated = true
 	}
 	if m.ensureVoxelPayloadPages() {
@@ -227,6 +231,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 							for i := 0; i < 64; i++ {
 								if brick := bPtrs[i]; brick != nil {
 									m.releaseBrickSlot(brick)
+									m.releaseDenseOccupancySlot(brick)
 								}
 							}
 							delete(alloc.Bricks, k)
@@ -300,6 +305,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					if bPtrs, has := alloc.Bricks[sKey]; has {
 						if oldBrick := bPtrs[i]; oldBrick != nil {
 							m.releaseBrickSlot(oldBrick)
+							m.releaseDenseOccupancySlot(oldBrick)
 						}
 						bPtrs[i] = nil
 					}
@@ -339,6 +345,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					if oldBrick != nil && oldBrick != brick {
 						// Brick changed! Release old one
 						m.releaseBrickSlot(oldBrick)
+						m.releaseDenseOccupancySlot(oldBrick)
 					}
 					bPtrs[bx+by*4+bz*16] = brick
 				}
@@ -348,6 +355,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 				if hasPtrs {
 					if oldBrick := bPtrs[bx+by*4+bz*16]; oldBrick != nil {
 						m.releaseBrickSlot(oldBrick)
+						m.releaseDenseOccupancySlot(oldBrick)
 					}
 					bPtrs[bx+by*4+bz*16] = nil
 				}
@@ -439,6 +447,28 @@ func (m *GpuBufferManager) releaseBrickSlot(brick *volume.Brick) {
 	m.PayloadAlloc[slot.Page].FreeSlot(slot.Slot)
 }
 
+func (m *GpuBufferManager) releaseDenseOccupancySlot(brick *volume.Brick) {
+	slot, exists := m.BrickToDenseSlot[brick]
+	if !exists {
+		return
+	}
+	delete(m.BrickToDenseSlot, brick)
+	m.DenseOccupancyAlloc.FreeSlot(slot)
+}
+
+func denseOccupancyWordBase(slot uint32) uint32 {
+	return slot * volume.DenseOccupancyWordCount
+}
+
+func buildDenseOccupancyBytes(brick *volume.Brick) []byte {
+	words := brick.DenseOccupancyWords()
+	buf := make([]byte, DenseOccupancyRecordBytes)
+	for i, word := range words {
+		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], word)
+	}
+	return buf
+}
+
 func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorGpuInfo) {
 	sData := make([]byte, 32)
 	ox, oy, oz := int32(sector.Coords[0]*32), int32(sector.Coords[1]*32), int32(sector.Coords[2]*32)
@@ -461,10 +491,12 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 	}
 	var gpuAtlasOffset uint32
 	var gpuAtlasPage uint32
+	denseWordBase := DenseOccupancyInvalidWordBase
 	if brick.Flags&volume.BrickFlagSolid != 0 {
 		gpuAtlasOffset = brick.AtlasOffset
 		gpuAtlasPage = 0
 		m.releaseBrickSlot(brick)
+		m.releaseDenseOccupancySlot(brick)
 	} else {
 		payloadSlot, exists := m.BrickToSlot[brick]
 		if !exists {
@@ -515,6 +547,14 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 				DepthOrArrayLayers: 8,
 			},
 		)
+
+		denseSlot, exists := m.BrickToDenseSlot[brick]
+		if !exists {
+			denseSlot = m.DenseOccupancyAlloc.Alloc()
+			m.BrickToDenseSlot[brick] = denseSlot
+		}
+		denseWordBase = denseOccupancyWordBase(denseSlot)
+		m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(denseSlot*DenseOccupancyRecordBytes), buildDenseOccupancyBytes(brick))
 	}
 
 	bbuf := make([]byte, BrickRecordSize)
@@ -523,6 +563,7 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 	binary.LittleEndian.PutUint32(bbuf[8:12], uint32(brick.OccupancyMask64>>32))
 	binary.LittleEndian.PutUint32(bbuf[12:16], gpuAtlasPage)
 	binary.LittleEndian.PutUint32(bbuf[16:20], brick.Flags)
+	binary.LittleEndian.PutUint32(bbuf[20:24], denseWordBase)
 	m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(slotIdx*BrickRecordSize), bbuf)
 }
 

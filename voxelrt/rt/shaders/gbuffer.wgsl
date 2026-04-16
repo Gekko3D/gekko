@@ -63,6 +63,7 @@ struct BrickRecord {
     occupancy_mask_hi: u32,
     atlas_page: u32,
     flags: u32,
+    dense_occupancy_word_base: u32,
 };
 
 struct Tree64Node {
@@ -126,16 +127,9 @@ struct SectorGridParams {
     padding1: u32,
 };
 
-struct TerrainChunkLookupEntry {
+struct ObjectLookupEntry {
     coords: vec4<i32>,
-    terrain_group_id: u32,
-    object_id: i32,
-    padding: vec2<u32>,
-};
-
-struct PlanetTileLookupEntry {
-    coords: vec4<i32>, // face, level, x, y
-    planet_tile_group_id: u32,
+    group_id: u32,
     object_id: i32,
     padding: vec2<u32>,
 };
@@ -164,8 +158,8 @@ struct PlanetTileLookupEntry {
 @group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
-@group(2) @binding(11) var<storage, read> terrain_chunk_lookup: array<TerrainChunkLookupEntry>;
-@group(2) @binding(12) var<storage, read> planet_tile_lookup: array<PlanetTileLookupEntry>;
+@group(2) @binding(11) var<storage, read> object_lookup: array<ObjectLookupEntry>;
+@group(2) @binding(12) var<storage, read> dense_occupancy_words: array<u32>;
 
 // ============== HELPERS ==============
 
@@ -231,6 +225,15 @@ fn load_u8(packed_offset: u32, atlas_page: u32, voxel_idx: u32) -> u32 {
 
     let coords = vec3<u32>(ax + vx, ay + vy, az + vz);
     return load_voxel_payload(atlas_page, coords);
+}
+
+fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
+    if (word_base == 0xFFFFFFFFu) {
+        return false;
+    }
+    let word = dense_occupancy_words[word_base + (voxel_idx >> 5u)];
+    let bit = 1u << (voxel_idx & 31u);
+    return (word & bit) != 0u;
 }
 
 fn make_safe_dir(d: vec3<f32>) -> vec3<f32> {
@@ -318,8 +321,8 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
         return 0.0;
     }
     let packed_idx = sector.brick_table_index + brick_idx_local;
-    
-    let b_flags = bricks[packed_idx].flags;
+    let brick = bricks[packed_idx];
+    let b_flags = brick.flags;
     if (b_flags == 0u) {
         let mx = (v.x >> 1u) & 3;
         let my = (v.y >> 1u) & 3;
@@ -327,8 +330,8 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
         let mvid = vec3<u32>(u32(mx), u32(my), u32(mz));
         let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
         
-        let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
-        let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
+        let b_mask_lo = brick.occupancy_mask_lo;
+        let b_mask_hi = brick.occupancy_mask_hi;
         if (!bit_test64(b_mask_lo, b_mask_hi, micro_idx)) { return 0.0; }
         
         let vx = v.x & 7;
@@ -336,9 +339,7 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
         let vz = v.z & 7;
         let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
         let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-        let b_atlas = bricks[packed_idx].atlas_offset;
-        let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
-        return select(0.0, 1.0, palette_idx != EMPTY_VOXEL);
+        return select(0.0, 1.0, dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx));
     }
     return 1.0;
 }
@@ -361,19 +362,20 @@ fn positive_mod_i32(a: i32, b: i32) -> i32 {
 }
 
 fn find_terrain_chunk_object_id(chunk_coord: vec3<i32>, terrain_group_id: u32) -> i32 {
-    let lookup_header = terrain_chunk_lookup[0];
+    let lookup_header = object_lookup[0];
     let size = u32(lookup_header.coords.x);
     if (size == 0u) { return -1; }
     let mask = u32(lookup_header.coords.y);
+    let start_idx = u32(lookup_header.coords.z);
     let h = (u32(chunk_coord.x) * 73856093u ^
              u32(chunk_coord.y) * 19349663u ^
              u32(chunk_coord.z) * 83492791u ^
              terrain_group_id * 1640531513u) & mask;
     for (var i = 0u; i < size; i++) {
-        let idx = ((h + i) & mask) + 1u;
-        let entry = terrain_chunk_lookup[idx];
+        let idx = ((h + i) & mask) + start_idx;
+        let entry = object_lookup[idx];
         if (entry.object_id == -1) { return -1; }
-        if (entry.terrain_group_id == terrain_group_id &&
+        if (entry.group_id == terrain_group_id &&
             entry.coords.x == chunk_coord.x &&
             entry.coords.y == chunk_coord.y &&
             entry.coords.z == chunk_coord.z) {
@@ -389,20 +391,21 @@ fn point_inside_local_bounds(p: vec3<f32>, inst: Instance, padding: f32) -> bool
 }
 
 fn find_planet_tile_object_id(tile_coord: vec4<i32>, planet_group_id: u32) -> i32 {
-    let lookup_header = planet_tile_lookup[0];
+    let lookup_header = object_lookup[1];
     let size = u32(lookup_header.coords.x);
     if (size == 0u) { return -1; }
     let mask = u32(lookup_header.coords.y);
+    let start_idx = u32(lookup_header.coords.z);
     let h = (u32(tile_coord.x) * 2654435761u ^
              u32(tile_coord.y) * 2246822519u ^
              u32(tile_coord.z) * 3266489917u ^
              u32(tile_coord.w) * 668265263u ^
              planet_group_id * 1640531513u) & mask;
     for (var i = 0u; i < size; i++) {
-        let idx = ((h + i) & mask) + 1u;
-        let entry = planet_tile_lookup[idx];
+        let idx = ((h + i) & mask) + start_idx;
+        let entry = object_lookup[idx];
         if (entry.object_id == -1) { return -1; }
-        if (entry.planet_tile_group_id == planet_group_id &&
+        if (entry.group_id == planet_group_id &&
             all(entry.coords == tile_coord)) {
             return entry.object_id;
         }
@@ -763,8 +766,9 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                     let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
                     if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
                         let packed_idx = sector.brick_table_index + brick_idx_local;
-                        let b_flags = bricks[packed_idx].flags;
-                        let b_atlas = bricks[packed_idx].atlas_offset;
+                        let brick = bricks[packed_idx];
+                        let b_flags = brick.flags;
+                        let b_atlas = brick.atlas_offset;
                         
                         var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
                         if (b_flags == 1u) {
@@ -806,8 +810,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                             voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
                             var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray.origin) * inv_dir;
                             let t_delta_1 = abs(1.0 * inv_dir);
-                            let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
-                            let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
+                            let b_mask_lo = brick.occupancy_mask_lo;
+                            let b_mask_hi = brick.occupancy_mask_hi;
                             var iter_micro = 0;
                             while (t_micro < t_brick_exit && iter_micro < 32) {
                                 iter_micro += 1;
@@ -816,8 +820,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let mvid = vvid / 2u;
                                 let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
                                 
-        if (bit_test64(b_mask_lo, b_mask_hi, micro_idx)) {
-                                    let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
+        if (bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx)) {
+                                    let palette_idx = load_u8(b_atlas, brick.atlas_page, voxel_idx);
                                     if (palette_idx != EMPTY_VOXEL) {
                                         // Check transparency per-voxel
                                         let mat_idx_v = params.material_table_base + palette_idx * 4u;

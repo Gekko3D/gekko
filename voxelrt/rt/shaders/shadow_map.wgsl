@@ -92,6 +92,7 @@ struct BrickRecord {
     occupancy_mask_hi: u32,
     atlas_page: u32,
     flags: u32,
+    dense_occupancy_word_base: u32,
 };
 
 struct Tree64Node {
@@ -173,6 +174,7 @@ struct SectorGridParams {
 @group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
+@group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;
 
 var<private> g_light_emitter_link_id: u32 = 0u;
 
@@ -242,6 +244,13 @@ fn load_u8(packed_offset: u32, atlas_page: u32, voxel_idx: u32) -> u32 {
     return load_voxel_payload(atlas_page, coords);
 }
 
+fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
+    if (word_base == 0xFFFFFFFFu) { return false; }
+    let word = dense_occupancy_words[word_base + (voxel_idx >> 5u)];
+    let bit = 1u << (voxel_idx & 31u);
+    return (word & bit) != 0u;
+}
+
 var<private> g_cached_sector_id: i32 = -1;
 var<private> g_cached_sector_coords: vec3<i32> = vec3<i32>(-999, -999, -999);
 var<private> g_cached_sector_base: u32 = 0xFFFFFFFFu;
@@ -290,8 +299,8 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
         return 0.0;
     }
     let packed_idx = sector.brick_table_index + brick_idx_local;
-    
-    let b_flags = bricks[packed_idx].flags;
+    let brick = bricks[packed_idx];
+    let b_flags = brick.flags;
     if (b_flags == 0u) {
         let mx = (v.x >> 1u) & 3;
         let my = (v.y >> 1u) & 3;
@@ -299,8 +308,8 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
         let mvid = vec3<u32>(u32(mx), u32(my), u32(mz));
         let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
         
-        let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
-        let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
+        let b_mask_lo = brick.occupancy_mask_lo;
+        let b_mask_hi = brick.occupancy_mask_hi;
         if (!bit_test64(b_mask_lo, b_mask_hi, micro_idx)) { return 0.0; }
         
         let vx = v.x & 7;
@@ -308,9 +317,7 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
         let vz = v.z & 7;
         let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
         let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-        let b_atlas = bricks[packed_idx].atlas_offset;
-        let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
-        return select(0.0, 1.0, palette_idx != EMPTY_VOXEL);
+        return select(0.0, 1.0, dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx));
     }
     return 1.0;
 }
@@ -387,8 +394,9 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                     let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
                     if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
                         let packed_idx = sector.brick_table_index + brick_idx_local;
-                        let b_flags = bricks[packed_idx].flags;
-                        let b_atlas = bricks[packed_idx].atlas_offset;
+                        let brick = bricks[packed_idx];
+                        let b_flags = brick.flags;
+                        let b_atlas = brick.atlas_offset;
                         
                         var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
                         if (b_flags == 1u) {
@@ -424,10 +432,10 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let mvid = vvid / 2u;
                                 let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
                                 
-                                let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
-                                let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
-                                if (bit_test64(b_mask_lo, b_mask_hi, micro_idx)) {
-                                    let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
+                                let b_mask_lo = brick.occupancy_mask_lo;
+                                let b_mask_hi = brick.occupancy_mask_hi;
+                                if (bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx)) {
+                                    let palette_idx = load_u8(b_atlas, brick.atlas_page, voxel_idx);
                                     if (palette_idx != EMPTY_VOXEL) {
                                         let mat_idx_v = params.material_table_base + palette_idx * 4u;
                                         let pbr_v = materials[mat_idx_v + 2u];

@@ -138,16 +138,16 @@ func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
 		panic(err)
 	}
 
-	// BG2: Voxel Data (Shared with Shadow/GBuffer)
-	bg2Entries := appendVoxelPayloadTextureLayoutEntries([]wgpu.BindGroupLayoutEntry{
+	// BG2: Voxel Data used for particle collision
+	bg2Entries := []wgpu.BindGroupLayoutEntry{
 		{Binding: 0, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},              // Sectors
 		{Binding: 1, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},              // Bricks
-		{Binding: 6, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},              // Materials
 		{Binding: 7, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},              // ObjectParams
 		{Binding: 8, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},              // Instances
 		{Binding: 9, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},              // Grid
 		{Binding: 10, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 16}}, // GridParams
-	}, 2, wgpu.ShaderStageCompute)
+		{Binding: 13, Visibility: wgpu.ShaderStageCompute, Buffer: wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage}},             // Dense occupancy
+	}
 	simBGL2, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{Label: "Particle Sim BGL2", Entries: bg2Entries})
 	if err != nil {
 		panic(err)

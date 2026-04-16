@@ -4,6 +4,36 @@ import (
 	"testing"
 )
 
+func TestBrickDenseOccupancyWordsPackVoxelOrder(t *testing.T) {
+	brick := NewBrick()
+	brick.SetVoxel(0, 0, 0, 1)
+	brick.SetVoxel(7, 0, 0, 2)
+	brick.SetVoxel(0, 1, 0, 3)
+	brick.SetVoxel(0, 0, 1, 4)
+	brick.SetVoxel(7, 7, 7, 5)
+
+	words := brick.DenseOccupancyWords()
+
+	if got := words[0]; got != (1<<0 | 1<<7 | 1<<8) {
+		t.Fatalf("unexpected first dense occupancy word: got %#x", got)
+	}
+	if got := words[2]; got != 1<<0 {
+		t.Fatalf("unexpected dense occupancy word 2: got %#x", got)
+	}
+	if got := words[15]; got != 1<<31 {
+		t.Fatalf("unexpected dense occupancy word 15: got %#x", got)
+	}
+
+	for i, word := range words {
+		if i == 0 || i == 2 || i == 15 {
+			continue
+		}
+		if word != 0 {
+			t.Fatalf("expected dense occupancy word %d to be empty, got %#x", i, word)
+		}
+	}
+}
+
 func TestSplitDisconnectedComponents(t *testing.T) {
 	xbm := NewXBrickMap()
 

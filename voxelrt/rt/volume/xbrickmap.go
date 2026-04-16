@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	BrickSize    = 8
-	MicroSize    = 2
-	SectorBricks = 4
-	SectorSize   = SectorBricks * BrickSize // 32
+	BrickSize               = 8
+	MicroSize               = 2
+	SectorBricks            = 4
+	SectorSize              = SectorBricks * BrickSize // 32
+	DenseOccupancyWordCount = (BrickSize * BrickSize * BrickSize) / 32
 
 	BrickFlagSolid = 1
 )
@@ -104,6 +105,28 @@ func (b *Brick) TryCompress() bool {
 
 func (b *Brick) IsEmpty() bool {
 	return b.OccupancyMask64 == 0
+}
+
+func denseOccupancyLinearIndex(x, y, z int) int {
+	return x + y*BrickSize + z*BrickSize*BrickSize
+}
+
+func (b *Brick) DenseOccupancyWords() [DenseOccupancyWordCount]uint32 {
+	var words [DenseOccupancyWordCount]uint32
+	for z := 0; z < BrickSize; z++ {
+		for y := 0; y < BrickSize; y++ {
+			for x := 0; x < BrickSize; x++ {
+				if b.Payload[x][y][z] == 0 {
+					continue
+				}
+				linear := denseOccupancyLinearIndex(x, y, z)
+				wordIdx := linear >> 5
+				bitIdx := uint32(linear & 31)
+				words[wordIdx] |= 1 << bitIdx
+			}
+		}
+	}
+	return words
 }
 
 type Sector struct {

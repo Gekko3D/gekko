@@ -24,8 +24,9 @@ type terrainChunkLookupParams struct {
 }
 
 func (m *GpuBufferManager) updateTerrainChunkLookup(scene *core.Scene) bool {
-	entries, params := buildTerrainChunkLookup(scene)
-	entryBytes := serializeTerrainChunkLookupBuffer(entries, params)
+	terrainEntries, terrainParams := buildTerrainChunkLookup(scene)
+	planetEntries, planetParams := buildPlanetTileLookup(scene)
+	entryBytes := serializeCombinedObjectLookupBuffer(terrainEntries, terrainParams, planetEntries, planetParams)
 
 	recreated := false
 	if m.ensureBuffer("TerrainChunkLookupBuf", &m.TerrainChunkLookupBuf, entryBytes, wgpu.BufferUsageStorage, 0) {
@@ -122,5 +123,46 @@ func serializeTerrainChunkLookupBuffer(entries []terrainChunkLookupEntry, params
 		binary.LittleEndian.PutUint32(buf[offset+16:offset+20], entry.TerrainGroupID)
 		binary.LittleEndian.PutUint32(buf[offset+20:offset+24], uint32(entry.ObjectID))
 	}
+	return buf
+}
+
+func serializeCombinedObjectLookupBuffer(terrainEntries []terrainChunkLookupEntry, terrainParams terrainChunkLookupParams, planetEntries []planetTileLookupEntry, planetParams planetTileLookupParams) []byte {
+	const headerCount = 2
+	totalEntries := headerCount + len(terrainEntries) + len(planetEntries)
+	buf := make([]byte, totalEntries*terrainChunkLookupEntrySize)
+
+	terrainStart := uint32(headerCount)
+	planetStart := terrainStart + uint32(len(terrainEntries))
+
+	binary.LittleEndian.PutUint32(buf[0:4], terrainParams.GridSize)
+	binary.LittleEndian.PutUint32(buf[4:8], terrainParams.GridMask)
+	binary.LittleEndian.PutUint32(buf[8:12], terrainStart)
+	binary.LittleEndian.PutUint32(buf[20:24], uint32(^uint32(0)))
+
+	binary.LittleEndian.PutUint32(buf[terrainChunkLookupEntrySize+0:terrainChunkLookupEntrySize+4], planetParams.GridSize)
+	binary.LittleEndian.PutUint32(buf[terrainChunkLookupEntrySize+4:terrainChunkLookupEntrySize+8], planetParams.GridMask)
+	binary.LittleEndian.PutUint32(buf[terrainChunkLookupEntrySize+8:terrainChunkLookupEntrySize+12], planetStart)
+	binary.LittleEndian.PutUint32(buf[terrainChunkLookupEntrySize+20:terrainChunkLookupEntrySize+24], uint32(^uint32(0)))
+
+	for i, entry := range terrainEntries {
+		offset := (headerCount + i) * terrainChunkLookupEntrySize
+		binary.LittleEndian.PutUint32(buf[offset+0:offset+4], uint32(entry.ChunkCoord[0]))
+		binary.LittleEndian.PutUint32(buf[offset+4:offset+8], uint32(entry.ChunkCoord[1]))
+		binary.LittleEndian.PutUint32(buf[offset+8:offset+12], uint32(entry.ChunkCoord[2]))
+		binary.LittleEndian.PutUint32(buf[offset+12:offset+16], 0)
+		binary.LittleEndian.PutUint32(buf[offset+16:offset+20], entry.TerrainGroupID)
+		binary.LittleEndian.PutUint32(buf[offset+20:offset+24], uint32(entry.ObjectID))
+	}
+
+	for i, entry := range planetEntries {
+		offset := int(planetStart)*terrainChunkLookupEntrySize + i*terrainChunkLookupEntrySize
+		binary.LittleEndian.PutUint32(buf[offset+0:offset+4], uint32(entry.PlanetTile[0]))
+		binary.LittleEndian.PutUint32(buf[offset+4:offset+8], uint32(entry.PlanetTile[1]))
+		binary.LittleEndian.PutUint32(buf[offset+8:offset+12], uint32(entry.PlanetTile[2]))
+		binary.LittleEndian.PutUint32(buf[offset+12:offset+16], uint32(entry.PlanetTile[3]))
+		binary.LittleEndian.PutUint32(buf[offset+16:offset+20], entry.PlanetGroupID)
+		binary.LittleEndian.PutUint32(buf[offset+20:offset+24], uint32(entry.ObjectID))
+	}
+
 	return buf
 }
