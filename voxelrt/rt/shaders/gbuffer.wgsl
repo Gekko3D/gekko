@@ -314,6 +314,9 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
     let bz = (v.z >> 3u) & 3;
     let bvid = vec3<u32>(u32(bx), u32(by), u32(bz));
     let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
+    if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
+        return 0.0;
+    }
     let packed_idx = sector.brick_table_index + brick_idx_local;
     
     let b_flags = bricks[packed_idx].flags;
