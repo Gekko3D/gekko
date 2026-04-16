@@ -62,6 +62,11 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	var pm PhysicsModel
 	found := false
 	for _, c := range comps {
+		if p, ok := c.(*PhysicsModel); ok {
+			pm = *p
+			found = true
+			break
+		}
 		if p, ok := c.(PhysicsModel); ok {
 			pm = p
 			found = true
@@ -94,6 +99,11 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	found = false
 	var pm2 PhysicsModel
 	for _, c := range comps {
+		if p, ok := c.(*PhysicsModel); ok {
+			pm2 = *p
+			found = true
+			break
+		}
 		if p, ok := c.(PhysicsModel); ok {
 			pm2 = p
 			found = true
@@ -116,6 +126,9 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	// Verify PhysicsModel was updated
 	comps = cmd.GetAllComponents(eid)
 	for _, c := range comps {
+		if p, ok := c.(*PhysicsModel); ok {
+			pm2 = *p
+		}
 		if p, ok := c.(PhysicsModel); ok {
 			pm2 = p
 		}
@@ -137,6 +150,9 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 
 	comps = cmd.GetAllComponents(eid)
 	for _, c := range comps {
+		if p, ok := c.(*PhysicsModel); ok {
+			pm2 = *p
+		}
 		if p, ok := c.(PhysicsModel); ok {
 			pm2 = p
 		}
@@ -162,6 +178,9 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 
 	comps = cmd.GetAllComponents(eid)
 	for _, c := range comps {
+		if p, ok := c.(*PhysicsModel); ok {
+			pm2 = *p
+		}
 		if p, ok := c.(PhysicsModel); ok {
 			pm2 = p
 		}

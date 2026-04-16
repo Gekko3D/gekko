@@ -372,7 +372,7 @@ func (ecs *Ecs) getAllComponents(entityId EntityId) []any {
 	res := make([]any, 0, len(arch.componentData))
 	for _, componentsSlice := range arch.componentData {
 		val := reflectSliceGet(componentsSlice, int(r))
-		res = append(res, val.Interface())
+		res = append(res, val.Addr().Interface())
 	}
 	return res
 }

@@ -122,7 +122,10 @@ func (v *voxelGridSnapshot) ForEachPrimitiveInRange(minX, minY, minZ, maxX, maxY
 			}
 
 			if brick.Flags&volume.BrickFlagSolid != 0 {
-				if !emitVoxelPrimitiveRange(rangeMinX, rangeMinY, rangeMinZ, rangeMaxX, rangeMaxY, rangeMaxZ, voxelScale, fn) {
+				// Emit the whole solid brick, not only the clipped overlap slice.
+				// Using the clipped range creates artificial side faces that can
+				// produce incorrect contact normals for resting/sliding bodies.
+				if !emitVoxelPrimitiveRange(brickMinX, brickMinY, brickMinZ, brickMaxX, brickMaxY, brickMaxZ, voxelScale, fn) {
 					return true
 				}
 				continue

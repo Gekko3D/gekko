@@ -54,14 +54,18 @@ func TestTransformHierarchy(t *testing.T) {
 
 	allChild := cmd.GetAllComponents(child)
 	for _, c := range allChild {
-		if tr, ok := c.(TransformComponent); ok {
+		if tr, ok := c.(*TransformComponent); ok {
+			childWorld = tr
+		} else if tr, ok := c.(TransformComponent); ok {
 			childWorld = &tr
 		}
 	}
 
 	allGrand := cmd.GetAllComponents(grandchild)
 	for _, c := range allGrand {
-		if tr, ok := c.(TransformComponent); ok {
+		if tr, ok := c.(*TransformComponent); ok {
+			grandchildWorld = tr
+		} else if tr, ok := c.(TransformComponent); ok {
 			grandchildWorld = &tr
 		}
 	}
@@ -78,7 +82,9 @@ func TestTransformHierarchy(t *testing.T) {
 	// Rotate parent 90 deg around Y
 	parentTr := &TransformComponent{}
 	for _, c := range cmd.GetAllComponents(parent) {
-		if tr, ok := c.(TransformComponent); ok {
+		if tr, ok := c.(*TransformComponent); ok {
+			*parentTr = *tr
+		} else if tr, ok := c.(TransformComponent); ok {
 			*parentTr = tr
 		}
 	}
@@ -90,12 +96,16 @@ func TestTransformHierarchy(t *testing.T) {
 
 	// Refresh world transforms
 	for _, c := range cmd.GetAllComponents(child) {
-		if tr, ok := c.(TransformComponent); ok {
+		if tr, ok := c.(*TransformComponent); ok {
+			childWorld = tr
+		} else if tr, ok := c.(TransformComponent); ok {
 			childWorld = &tr
 		}
 	}
 	for _, c := range cmd.GetAllComponents(grandchild) {
-		if tr, ok := c.(TransformComponent); ok {
+		if tr, ok := c.(*TransformComponent); ok {
+			grandchildWorld = tr
+		} else if tr, ok := c.(TransformComponent); ok {
 			grandchildWorld = &tr
 		}
 	}
@@ -107,7 +117,9 @@ func TestTransformHierarchy(t *testing.T) {
 
 	childLocal := &LocalTransformComponent{}
 	for _, c := range cmd.GetAllComponents(child) {
-		if l, ok := c.(LocalTransformComponent); ok {
+		if l, ok := c.(*LocalTransformComponent); ok {
+			*childLocal = *l
+		} else if l, ok := c.(LocalTransformComponent); ok {
 			*childLocal = l
 		}
 	}
@@ -119,7 +131,9 @@ func TestTransformHierarchy(t *testing.T) {
 
 	// Refresh
 	for _, c := range cmd.GetAllComponents(child) {
-		if tr, ok := c.(TransformComponent); ok {
+		if tr, ok := c.(*TransformComponent); ok {
+			childWorld = tr
+		} else if tr, ok := c.(TransformComponent); ok {
 			childWorld = &tr
 		}
 	}

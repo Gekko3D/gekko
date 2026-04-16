@@ -89,90 +89,8 @@ func (m PhysicsModule) Install(app *App, cmd *Commands) {
 }
 
 func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *PhysicsProxy, simulator *PhysicsSimulator) {
-	// 1. Snapshot + Step (We do this as one atomic operation per Entity to be fast)
-	// Actually, we still need a global snapshot for the simulator.
-	snapshot := &PhysicsSnapshot{
-		Gravity: physics.Gravity,
-		Dt:      float32(time.Dt),
-	}
-
-	entities := make(map[EntityId]struct {
-		tr *TransformComponent
-		rb *RigidBodyComponent
-		pm *PhysicsModel
-		vm *VoxelModelComponent
-	})
-
-	MakeQuery5[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent, vm *VoxelModelComponent) bool {
-		diff := renderToPhysicsOffset(tr, pm, vm)
-
-		// Start with visual state
-		physPos := tr.Position.Add(tr.Rotation.Rotate(diff))
-		physRot := tr.Rotation
-
-		// Detect teleport BEFORE choosing physical state
-		isTeleport := false
-		if rb.LastPhysicsTick > 0 {
-			posDiff := tr.Position.Sub(rb.LastPulledPos).Len()
-			rotDiff := 1.0 - float64(absf(tr.Rotation.Dot(rb.LastPulledRot)))
-			if posDiff > 0.05 || rotDiff > 0.05 {
-				isTeleport = true
-			}
-		}
-
-		// Use the core physical state if no manual teleport occurred
-		// This avoids reading back interpolated values from the last Dynamic frame!
-		if !isTeleport && rb.LastPhysicsTick > 0 {
-			physPos = rb.CurrentPhysicsPos
-			physRot = rb.CurrentPhysicsRot
-		}
-
-		invMass := float32(1.0)
-		if rb.Mass > 0 {
-			invMass = 1.0 / rb.Mass
-		}
-
-		invInertiaLocal := mgl32.Ident3()
-		if pm != nil {
-			invInertiaLocal = CalculateInverseInertiaLocal(rb.Mass, pm)
-		}
-
-		vel := rb.Velocity.Add(rb.AccumulatedImpulse.Mul(invMass))
-		angVel := rb.AngularVelocity.Add(ApplyInverseInertiaWorld(physRot, invInertiaLocal, rb.AccumulatedTorque))
-
-		pmValue := PhysicsModel{}
-		if pm != nil {
-			pmValue = *pm
-		}
-
-		snapshot.Entities = append(snapshot.Entities, PhysicsEntityState{
-			Eid:            eid,
-			Pos:            physPos,
-			Rot:            physRot,
-			Vel:            vel,
-			AngVel:         angVel,
-			IsStatic:       rb.IsStatic,
-			Mass:           rb.Mass,
-			Model:          pmValue,
-			Friction:       col.Friction,
-			Restitution:    col.Restitution,
-			IdleTime:       rb.IdleTime,
-			GravityScale:   rb.GravityScale,
-			LinearDamping:  rb.LinearDamping,
-			AngularDamping: rb.AngularDamping,
-			Sleeping:       rb.Sleeping,
-			Teleport:       isTeleport,
-		})
-
-		entities[eid] = struct {
-			tr *TransformComponent
-			rb *RigidBodyComponent
-			pm *PhysicsModel
-			vm *VoxelModelComponent
-		}{tr, rb, pm, vm}
-
-		return true
-	}, PhysicsModel{}, VoxelModelComponent{})
+	assets := assetServerFromApp(cmd.app)
+	snapshot, entities := collectPhysicsSnapshot(cmd, time, physics, assets)
 
 	proxy.pendingState.Store(snapshot)
 
@@ -202,7 +120,7 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 			// But note that interpolation will overwrite it in PreUpdate.
 			// This is fine because PreUpdate runs AFTER all fixed steps.
 			e.tr.Rotation = res.Rot
-			e.tr.Position = physicsToRenderPosition(res.Pos, res.Rot, e.tr, e.pm, e.vm)
+			e.tr.Position = physicsToRenderPositionWithAssets(assets, res.Pos, res.Rot, e.tr, &e.pm, e.vm)
 			e.rb.Velocity = res.Vel
 			e.rb.AngularVelocity = res.AngVel
 			e.rb.Sleeping = res.Sleeping
@@ -268,6 +186,8 @@ type PhysicsEntityResult struct {
 }
 
 func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *PhysicsWorld) {
+	assets := assetServerFromApp(cmd.app)
+
 	// Pull latest results from simulation
 	results := proxy.latestResults.Load()
 	if results != nil {
@@ -286,6 +206,14 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 
 		MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, vm *VoxelModelComponent) bool {
 			if res, ok := resMap[eid]; ok {
+				resolvedModel, ok := resolvePhysicsModelForStep(assets, tr, pm, vm)
+				if !ok {
+					return true
+				}
+				if pm == nil {
+					cmd.AddComponents(eid, resolvedModel)
+				}
+
 				if rb.LastPhysicsTick != results.Tick {
 					if rb.LastPhysicsTick == 0 {
 						rb.PreviousPhysicsPos = res.Pos
@@ -308,7 +236,7 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 					interpRot = mgl32.QuatNlerp(rb.PreviousPhysicsRot, rb.CurrentPhysicsRot, alpha)
 				}
 
-				tr.Position = physicsToRenderPosition(interpPos, interpRot, tr, pm, vm)
+				tr.Position = physicsToRenderPositionWithAssets(assets, interpPos, interpRot, tr, &resolvedModel, vm)
 				tr.Rotation = interpRot
 				rb.Velocity = res.Vel
 				rb.AngularVelocity = res.AngVel
@@ -358,56 +286,97 @@ func (p *PhysicsProxy) DrainCollisionEvents() []PhysicsCollisionEvent {
 }
 
 func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *PhysicsProxy) {
-	// Push current state to simulation
-	snap := &PhysicsSnapshot{
+	assets := assetServerFromApp(cmd.app)
+	snap, _ := collectPhysicsSnapshot(cmd, time, physics, assets)
+	proxy.pendingState.Store(snap)
+}
+
+func physicsToRenderPosition(physicsPos mgl32.Vec3, rot mgl32.Quat, tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) mgl32.Vec3 {
+	return physicsToRenderPositionWithAssets(nil, physicsPos, rot, tr, pm, vm)
+}
+
+func physicsToRenderPositionWithAssets(assets *AssetServer, physicsPos mgl32.Vec3, rot mgl32.Quat, tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) mgl32.Vec3 {
+	diff := renderToPhysicsOffsetWithAssets(assets, tr, pm, vm)
+	rotatedOffset := rot.Rotate(diff)
+	return physicsPos.Sub(rotatedOffset)
+}
+
+func renderToPhysicsOffset(tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) mgl32.Vec3 {
+	return renderToPhysicsOffsetWithAssets(nil, tr, pm, vm)
+}
+
+func renderToPhysicsOffsetWithAssets(assets *AssetServer, tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) mgl32.Vec3 {
+	if tr == nil || pm == nil {
+		return mgl32.Vec3{}
+	}
+	return pm.CenterOffset.Sub(resolveScaledPivotWorldForPhysics(assets, tr, vm))
+}
+
+type physicsStepEntityRefs struct {
+	tr *TransformComponent
+	rb *RigidBodyComponent
+	pm PhysicsModel
+	vm *VoxelModelComponent
+}
+
+func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, assets *AssetServer) (*PhysicsSnapshot, map[EntityId]physicsStepEntityRefs) {
+	snapshot := &PhysicsSnapshot{
 		Gravity: physics.Gravity,
 		Dt:      float32(time.Dt),
 	}
 
-	MakeQuery5[TransformComponent, RigidBodyComponent, PhysicsModel, ColliderComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, col *ColliderComponent, vm *VoxelModelComponent) bool {
-		// Calculate the physics position from visual transform
-		diff := renderToPhysicsOffset(tr, pm, vm)
-		rotatedOffset := tr.Rotation.Rotate(diff)
-		physicsPos := tr.Position.Add(rotatedOffset)
+	entities := make(map[EntityId]physicsStepEntityRefs)
 
-		// Apply accumulated forces to the velocity we send to physics
+	MakeQuery5[TransformComponent, RigidBodyComponent, ColliderComponent, PhysicsModel, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, pm *PhysicsModel, vm *VoxelModelComponent) bool {
+		resolvedModel, ok := resolvePhysicsModelForStep(assets, tr, pm, vm)
+		if !ok {
+			return true
+		}
+		if pm == nil {
+			cmd.AddComponents(eid, resolvedModel)
+		}
+
+		diff := renderToPhysicsOffsetWithAssets(assets, tr, &resolvedModel, vm)
+
+		// Start with visual state
+		physPos := tr.Position.Add(tr.Rotation.Rotate(diff))
+		physRot := tr.Rotation
+
+		// Detect teleport BEFORE choosing physical state
+		isTeleport := false
+		if rb.LastPhysicsTick > 0 {
+			posDiff := tr.Position.Sub(rb.LastPulledPos).Len()
+			rotDiff := 1.0 - float64(absf(tr.Rotation.Dot(rb.LastPulledRot)))
+			if posDiff > 0.05 || rotDiff > 0.05 {
+				isTeleport = true
+			}
+		}
+
+		// Use the core physical state if no manual teleport occurred
+		// This avoids reading back interpolated values from the last Dynamic frame.
+		if !isTeleport && rb.LastPhysicsTick > 0 {
+			physPos = rb.CurrentPhysicsPos
+			physRot = rb.CurrentPhysicsRot
+		}
+
 		invMass := float32(1.0)
 		if rb.Mass > 0 {
 			invMass = 1.0 / rb.Mass
 		}
 
-		invInertiaLocal := mgl32.Ident3()
-		if pm != nil {
-			invInertiaLocal = CalculateInverseInertiaLocal(rb.Mass, pm)
-		}
+		invInertiaLocal := CalculateInverseInertiaLocal(rb.Mass, &resolvedModel)
 		vel := rb.Velocity.Add(rb.AccumulatedImpulse.Mul(invMass))
-		angVel := rb.AngularVelocity.Add(ApplyInverseInertiaWorld(tr.Rotation, invInertiaLocal, rb.AccumulatedTorque))
+		angVel := rb.AngularVelocity.Add(ApplyInverseInertiaWorld(physRot, invInertiaLocal, rb.AccumulatedTorque))
 
-		// Detect manual move or rotate (teleport)
-		isTeleport := false
-		posDiff := tr.Position.Sub(rb.LastPulledPos).Len()
-
-		// For rotation, check dot product (1.0 means same orientation)
-		rotDiff := 1.0 - float64(absf(tr.Rotation.Dot(rb.LastPulledRot)))
-
-		if posDiff > 0.05 || rotDiff > 0.05 {
-			isTeleport = true
-		}
-
-		pmValue := PhysicsModel{}
-		if pm != nil {
-			pmValue = *pm
-		}
-
-		snap.Entities = append(snap.Entities, PhysicsEntityState{
+		snapshot.Entities = append(snapshot.Entities, PhysicsEntityState{
 			Eid:            eid,
-			Pos:            physicsPos,
-			Rot:            tr.Rotation,
+			Pos:            physPos,
+			Rot:            physRot,
 			Vel:            vel,
 			AngVel:         angVel,
 			IsStatic:       rb.IsStatic,
 			Mass:           rb.Mass,
-			Model:          pmValue,
+			Model:          resolvedModel,
 			Friction:       col.Friction,
 			Restitution:    col.Restitution,
 			IdleTime:       rb.IdleTime,
@@ -417,23 +386,115 @@ func PhysicsPushSystem(cmd *Commands, time *Time, physics *PhysicsWorld, proxy *
 			Sleeping:       rb.Sleeping,
 			Teleport:       isTeleport,
 		})
+
+		entities[eid] = physicsStepEntityRefs{
+			tr: tr,
+			rb: rb,
+			pm: resolvedModel,
+			vm: vm,
+		}
+
 		return true
 	}, PhysicsModel{}, VoxelModelComponent{})
 
-	proxy.pendingState.Store(snap)
+	return snapshot, entities
 }
 
-func physicsToRenderPosition(physicsPos mgl32.Vec3, rot mgl32.Quat, tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) mgl32.Vec3 {
-	diff := renderToPhysicsOffset(tr, pm, vm)
-	rotatedOffset := rot.Rotate(diff)
-	return physicsPos.Sub(rotatedOffset)
+func resolvePhysicsModelForStep(assets *AssetServer, tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) (PhysicsModel, bool) {
+	if pm != nil {
+		return *pm, true
+	}
+	return buildFallbackPhysicsModelFromVoxel(assets, tr, vm)
 }
 
-func renderToPhysicsOffset(tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) mgl32.Vec3 {
-	if tr == nil || pm == nil {
+func buildFallbackPhysicsModelFromVoxel(assets *AssetServer, tr *TransformComponent, vm *VoxelModelComponent) (PhysicsModel, bool) {
+	if assets == nil || vm == nil {
+		return PhysicsModel{}, false
+	}
+
+	geometryID := vm.GeometryAsset()
+	if geometryID == (AssetId{}) {
+		return PhysicsModel{}, false
+	}
+
+	geometryAsset, ok := assets.GetVoxelGeometry(geometryID)
+	if !ok {
+		return PhysicsModel{}, false
+	}
+
+	voxelScale := EffectiveVoxelScale(vm, tr)
+	minW := vec3MulComponents(geometryAsset.LocalMin, voxelScale)
+	maxW := vec3MulComponents(geometryAsset.LocalMax, voxelScale)
+	center := minW.Add(maxW).Mul(0.5)
+	half := maxW.Sub(minW).Mul(0.5)
+
+	model := PhysicsModel{
+		CenterOffset: center,
+		Boxes: []CollisionBox{{
+			HalfExtents: half,
+			LocalOffset: mgl32.Vec3{},
+		}},
+	}
+
+	if geometryAsset.XBrickMap != nil {
+		model.Grid = &voxelGridSnapshot{
+			xbm:        geometryAsset.XBrickMap,
+			vSize:      voxelScale.X(),
+			voxelScale: voxelScale,
+			cachedMin:  geometryAsset.LocalMin,
+			cachedMax:  geometryAsset.LocalMax,
+		}
+	}
+
+	return model, true
+}
+
+func resolveScaledPivotWorldForPhysics(assets *AssetServer, tr *TransformComponent, vm *VoxelModelComponent) mgl32.Vec3 {
+	if vm == nil {
+		return scaledPivotWorld(tr, vm)
+	}
+
+	pivot := resolveVoxelPivotLocalForPhysics(assets, tr, vm)
+	voxelScale := EffectiveVoxelScale(vm, tr)
+	return mgl32.Vec3{
+		pivot.X() * voxelScale.X(),
+		pivot.Y() * voxelScale.Y(),
+		pivot.Z() * voxelScale.Z(),
+	}
+}
+
+func resolveVoxelPivotLocalForPhysics(assets *AssetServer, tr *TransformComponent, vm *VoxelModelComponent) mgl32.Vec3 {
+	if vm == nil {
+		if tr != nil {
+			return tr.Pivot
+		}
 		return mgl32.Vec3{}
 	}
-	return pm.CenterOffset.Sub(scaledPivotWorld(tr, vm))
+
+	switch vm.PivotMode {
+	case PivotModeCustom:
+		return vm.CustomPivot
+	case PivotModeCorner:
+		return mgl32.Vec3{}
+	case PivotModeCenter:
+		if assets != nil {
+			geometryID := vm.GeometryAsset()
+			if geometryID != (AssetId{}) {
+				if geometryAsset, ok := assets.GetVoxelGeometry(geometryID); ok {
+					if geometryAsset.XBrickMap != nil {
+						minB, maxB := geometryAsset.XBrickMap.ComputeAABB()
+						return minB.Add(maxB).Mul(0.5)
+					}
+					return geometryAsset.LocalMin.Add(geometryAsset.LocalMax).Mul(0.5)
+				}
+			}
+		}
+	}
+
+	if tr != nil {
+		return tr.Pivot
+	}
+	return mgl32.Vec3{}
 }
 
 func scaledPivotWorld(tr *TransformComponent, vm *VoxelModelComponent) mgl32.Vec3 {

@@ -333,6 +333,33 @@ func reduceVoxelContacts(contacts []voxelCollisionContact, maxContacts int) []vo
 		return contacts
 	}
 
+	dominantNormal := mgl32.Vec3{}
+	deepest := contacts[0]
+	for _, contact := range contacts {
+		weight := maxf(contact.penetration, 0.001)
+		dominantNormal = dominantNormal.Add(contact.normal.Mul(weight))
+		if contact.penetration > deepest.penetration {
+			deepest = contact
+		}
+	}
+	if dominantNormal.LenSqr() > 1e-6 {
+		dominantNormal = dominantNormal.Normalize()
+	} else {
+		dominantNormal = deepest.normal
+	}
+
+	filtered := make([]voxelCollisionContact, 0, len(contacts))
+	for _, contact := range contacts {
+		if contact.normal.Dot(dominantNormal) >= 0.5 {
+			filtered = append(filtered, contact)
+		}
+	}
+	if len(filtered) >= maxContacts {
+		contacts = filtered
+	} else if len(filtered) > 0 {
+		contacts = filtered
+	}
+
 	sort.Slice(contacts, func(i, j int) bool {
 		if contacts[i].penetration == contacts[j].penetration {
 			return contacts[i].point.LenSqr() < contacts[j].point.LenSqr()

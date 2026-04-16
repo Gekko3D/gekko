@@ -122,14 +122,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					}
 
 					// Damping (scaled to preserve current 60 Hz tuning across physics rates)
-					lDamp := float32(0.999)
-					if b.linearDamping > 0 {
-						lDamp = b.linearDamping
-					}
-					aDamp := float32(0.99)
-					if b.angularDamping > 0 {
-						aDamp = b.angularDamping
-					}
+					lDamp := dampingRetentionFactor(b.linearDamping, 0.999)
+					aDamp := dampingRetentionFactor(b.angularDamping, 0.99)
 					const dampingReferenceHz = float32(60.0)
 					b.vel = b.vel.Mul(powf(lDamp, dt*dampingReferenceHz))
 					b.angVel = b.angVel.Mul(powf(aDamp, dt*dampingReferenceHz))
