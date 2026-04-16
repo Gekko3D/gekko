@@ -402,6 +402,40 @@ func TestBuildWaterSurfaceHostsNormalizesAndSortsResults(t *testing.T) {
 	}
 }
 
+func TestBuildWaterSurfaceHostsIncludesResolvedPatches(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{5, 2, 1}},
+		&ResolvedWaterPatchComponent{
+			Owner:           99,
+			PatchIndex:      0,
+			Kind:            WaterPatchKindSurface,
+			Center:          mgl32.Vec3{5, 2, 1},
+			HalfExtents:     [2]float32{3, 2},
+			Depth:           4,
+			Color:           [3]float32{0.1, 0.2, 0.3},
+			AbsorptionColor: [3]float32{0.4, 0.5, 0.6},
+			Opacity:         0.7,
+			Roughness:       0.15,
+			Refraction:      0.25,
+			FlowDirection:   [2]float32{1, 0},
+			FlowSpeed:       0.9,
+			WaveAmplitude:   0.03,
+		},
+	)
+	app.FlushCommands()
+
+	hosts, _ := buildWaterSurfaceHosts(cmd, nil)
+	if len(hosts) != 1 {
+		t.Fatalf("expected one resolved water host, got %d", len(hosts))
+	}
+	if hosts[0].Position != (mgl32.Vec3{5, 2, 1}) || hosts[0].Depth != 4 || hosts[0].HalfExtents != ([2]float32{3, 2}) {
+		t.Fatalf("unexpected resolved host %+v", hosts[0])
+	}
+}
+
 func TestBuildPlanetBodyHostsNormalizesAndSortsResults(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

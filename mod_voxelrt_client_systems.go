@@ -42,6 +42,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 	cmd.AddResources(state)
 	cmd.AddResources(&WaterInteractionState{})
+	cmd.AddResources(&WaterBodyResolutionState{})
 
 	cmd.AddResources(&Profiler{})
 
@@ -55,6 +56,12 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	// Cellular automaton step system (low Hz via TickRate in component)
 	app.UseSystem(
 		System(caStepSystem).
+			InStage(Update).
+			RunAlways(),
+	)
+
+	app.UseSystem(
+		System(waterBodyResolutionSystem).
 			InStage(Update).
 			RunAlways(),
 	)

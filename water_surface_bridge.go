@@ -32,6 +32,26 @@ func buildWaterSurfaceHosts(cmd *Commands, interactions *WaterInteractionState) 
 		})
 		return true
 	})
+	MakeQuery2[TransformComponent, ResolvedWaterPatchComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, patch *ResolvedWaterPatchComponent) bool {
+		if tr == nil || patch == nil || !patch.Enabled() || patch.Kind != WaterPatchKindSurface {
+			return true
+		}
+		hosts = append(hosts, gpu_rt.WaterSurfaceHost{
+			EntityID:        uint32(eid),
+			Position:        patch.Center,
+			HalfExtents:     patch.HalfExtents,
+			Depth:           patch.Depth,
+			Color:           patch.Color,
+			AbsorptionColor: patch.AbsorptionColor,
+			Opacity:         patch.Opacity,
+			Roughness:       patch.Roughness,
+			Refraction:      patch.Refraction,
+			FlowDirection:   patch.FlowDirection,
+			FlowSpeed:       patch.FlowSpeed,
+			WaveAmplitude:   patch.WaveAmplitude,
+		})
+		return true
+	})
 	sort.Slice(hosts, func(i, j int) bool {
 		return hosts[i].EntityID < hosts[j].EntityID
 	})
