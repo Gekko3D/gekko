@@ -150,6 +150,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 		// 2. Parallel Collision Detection (Narrow-phase)
 		manifolds = manifolds[:0]
+		triggerEvents := make([]PhysicsCollisionEvent, 0, 64)
 		var manifoldMu sync.Mutex
 
 		for i := 0; i < numWorkers; i++ {
@@ -168,6 +169,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				queryUnique := make(map[EntityId]struct{})
 				var candidates []EntityId
 				localManifolds := make([]collisionManifold, 0, 32)
+				localTriggerEvents := make([]PhysicsCollisionEvent, 0, 16)
 				for _, b := range bodies {
 					// Only dynamic bodies initiate collision checks
 					if b.isStatic || b.sleeping {
@@ -203,6 +205,20 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 							if wasHandled {
 								voxelHandled = true
 								for _, contact := range contacts {
+									if isTriggerPair(b, other) {
+										pair := orderedCollisionPair(b.Eid, other.Eid)
+										localTriggerEvents = append(localTriggerEvents, PhysicsCollisionEvent{
+											IsTrigger:     true,
+											A:             pair.A,
+											B:             pair.B,
+											Point:         contact.point,
+											Normal:        contact.normal,
+											Penetration:   contact.penetration,
+											RelativeSpeed: b.vel.Sub(other.vel).Len(),
+											Tick:          tick,
+										})
+										continue
+									}
 									localManifolds = append(localManifolds, collisionManifold{
 										bodyA:       b,
 										bodyB:       other,
@@ -218,6 +234,20 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 							for _, boxA := range b.boxes {
 								for _, boxB := range other.boxes {
 									if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
+										if isTriggerPair(b, other) {
+											pair := orderedCollisionPair(b.Eid, other.Eid)
+											localTriggerEvents = append(localTriggerEvents, PhysicsCollisionEvent{
+												IsTrigger:     true,
+												A:             pair.A,
+												B:             pair.B,
+												Point:         contactPoint,
+												Normal:        normal,
+												Penetration:   penetration,
+												RelativeSpeed: b.vel.Sub(other.vel).Len(),
+												Tick:          tick,
+											})
+											continue
+										}
 										localManifolds = append(localManifolds, collisionManifold{
 											bodyA:       b,
 											bodyB:       other,
@@ -231,9 +261,14 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						}
 					}
 				}
-				if len(localManifolds) > 0 {
+				if len(localManifolds) > 0 || len(localTriggerEvents) > 0 {
 					manifoldMu.Lock()
-					manifolds = append(manifolds, localManifolds...)
+					if len(localManifolds) > 0 {
+						manifolds = append(manifolds, localManifolds...)
+					}
+					if len(localTriggerEvents) > 0 {
+						triggerEvents = append(triggerEvents, localTriggerEvents...)
+					}
 					manifoldMu.Unlock()
 				}
 			}(bodiesList[start:end])
@@ -402,6 +437,14 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				currentPairs[pair] = event
 			}
 		}
+		for _, event := range triggerEvents {
+			pair := orderedCollisionPair(event.A, event.B)
+			if existing, ok := currentPairs[pair]; ok {
+				currentPairs[pair] = mergeCollisionEvent(existing, event)
+			} else {
+				currentPairs[pair] = event
+			}
+		}
 
 		// 4. Sleeping and Results
 		groundedSleepThreshold := maxf(world.SleepThreshold, gravity.Len()*dt*2.0)
@@ -494,6 +537,7 @@ func syncInternalBody(body *internalBody, es PhysicsEntityState, isNew bool) {
 	body.restitution = es.Restitution
 	body.collisionLayer = es.CollisionLayer
 	body.collisionMask = es.CollisionMask
+	body.isTrigger = es.IsTrigger
 	body.gravityScale = es.GravityScale
 	body.sleeping = es.Sleeping
 	body.linearDamping = es.LinearDamping
@@ -539,6 +583,10 @@ func shouldBodiesCollide(a, b *internalBody) bool {
 	maskA := effectiveCollisionMask(a.collisionMask)
 	maskB := effectiveCollisionMask(b.collisionMask)
 	return maskA&layerB != 0 && maskB&layerA != 0
+}
+
+func isTriggerPair(a, b *internalBody) bool {
+	return a != nil && a.isTrigger || b != nil && b.isTrigger
 }
 
 func seedManifoldImpulses(manifolds []collisionManifold, cache map[collisionPair][]cachedContactImpulse, pointThreshold float32, normalThreshold float32) {
@@ -768,6 +816,9 @@ func worldPointToLocal(body *internalBody, point mgl32.Vec3) mgl32.Vec3 {
 }
 
 func mergeCollisionEvent(current, candidate PhysicsCollisionEvent) PhysicsCollisionEvent {
+	if candidate.IsTrigger {
+		current.IsTrigger = true
+	}
 	if candidate.Penetration > current.Penetration {
 		current.Point = candidate.Point
 		current.Normal = candidate.Normal
@@ -824,6 +875,7 @@ type internalBody struct {
 	restitution     float32
 	collisionLayer  uint32
 	collisionMask   uint32
+	isTrigger       bool
 	gravityScale    float32
 	linearDamping   float32
 	angularDamping  float32

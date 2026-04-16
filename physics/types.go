@@ -63,6 +63,7 @@ type ColliderComponent struct {
 	Restitution     float32
 	CollisionLayer  uint32
 	CollisionMask   uint32
+	IsTrigger       bool
 	AABBHalfExtents mgl32.Vec3 // Cached or calculated total half extents
 }
 

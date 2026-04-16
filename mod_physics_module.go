@@ -31,6 +31,7 @@ func (t CollisionEventType) String() string {
 
 type PhysicsCollisionEvent struct {
 	Type          CollisionEventType
+	IsTrigger     bool
 	A             EntityId
 	B             EntityId
 	Point         mgl32.Vec3
@@ -162,6 +163,7 @@ type PhysicsEntityState struct {
 	Restitution    float32
 	CollisionLayer uint32
 	CollisionMask  uint32
+	IsTrigger      bool
 	IdleTime       float32
 	GravityScale   float32
 	LinearDamping  float32
@@ -383,6 +385,7 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 			Restitution:    col.Restitution,
 			CollisionLayer: col.CollisionLayer,
 			CollisionMask:  col.CollisionMask,
+			IsTrigger:      col.IsTrigger,
 			IdleTime:       rb.IdleTime,
 			GravityScale:   rb.GravityScale,
 			LinearDamping:  rb.LinearDamping,
