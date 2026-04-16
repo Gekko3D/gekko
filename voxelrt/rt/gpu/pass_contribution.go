@@ -40,7 +40,7 @@ func (m *GpuBufferManager) HasParticleContribution() bool {
 
 func (m *GpuBufferManager) HasCAVolumeContribution() bool {
 	return m != nil &&
-		m.CAVolumeCount > 0 &&
+		m.CAVolumeVisibleCount > 0 &&
 		m.CAVolumeRenderBG0 != nil &&
 		m.CurrentCAVolumeRenderBG1() != nil &&
 		m.CAVolumeRenderBG2 != nil

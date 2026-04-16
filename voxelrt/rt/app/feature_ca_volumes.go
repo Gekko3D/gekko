@@ -1,10 +1,6 @@
 package app
 
-import (
-	"sort"
-
-	"github.com/cogentcore/webgpu/wgpu"
-)
+import "github.com/cogentcore/webgpu/wgpu"
 
 // CAVolumeFeature owns CA volume simulation, bounds, and accumulation rendering.
 type CAVolumeFeature struct{}
@@ -103,31 +99,28 @@ func (f *CAVolumeFeature) DispatchCommandStage(a *App, stage FeatureCommandStage
 			a.HadCAVolumePass = false
 			return nil
 		}
+		if a.BufferManager.CAVolumeVisibleCount == 0 {
+			a.HadCAVolumePass = false
+			return nil
+		}
 		volumes := a.BufferManager.CurrentCAVolumes()
 		if len(volumes) == 0 {
 			a.HadCAVolumePass = false
 			return nil
 		}
-		order := make([]int, 0, len(volumes))
-		for i := range volumes {
-			order = append(order, i)
+		candidates := buildCAVolumeRenderCandidates(a.Camera, a.BufferManager.VolumetricWidth, a.BufferManager.VolumetricHeight, volumes)
+		if len(candidates) == 0 {
+			a.HadCAVolumePass = false
+			return nil
 		}
-		sort.Slice(order, func(i, j int) bool {
-			aIdx := order[i]
-			bIdx := order[j]
-			aCenter := caVolumeWorldCenter(volumes[aIdx])
-			bCenter := caVolumeWorldCenter(volumes[bIdx])
-			aDist := aCenter.Sub(a.Camera.Position).LenSqr()
-			bDist := bCenter.Sub(a.Camera.Position).LenSqr()
-			return aDist > bDist
-		})
 
 		pass.SetPipeline(a.CAVolumePipeline)
 		pass.SetBindGroup(0, a.BufferManager.CAVolumeRenderBG0, nil)
 		pass.SetBindGroup(1, a.BufferManager.CurrentCAVolumeRenderBG1(), nil)
 		pass.SetBindGroup(2, a.BufferManager.CAVolumeRenderBG2, nil)
-		for _, idx := range order {
-			pass.Draw(3, 1, 0, uint32(idx))
+		for _, candidate := range candidates {
+			pass.SetScissorRect(candidate.Scissor.X, candidate.Scissor.Y, candidate.Scissor.W, candidate.Scissor.H)
+			pass.Draw(3, 1, 0, uint32(candidate.VolumeIndex))
 		}
 		a.HadCAVolumePass = true
 		return nil
@@ -147,7 +140,7 @@ func (f *CAVolumeFeature) HasCommandStage(a *App, stage FeatureCommandStage) boo
 	case FeatureCommandStagePostLighting:
 		return a.BufferManager.CAVolumeColorView != nil &&
 			a.BufferManager.CAVolumeDepthView != nil &&
-			(a.BufferManager.CAVolumeCount > 0 || a.HadCAVolumePass)
+			(a.BufferManager.CAVolumeVisibleCount > 0 || a.HadCAVolumePass)
 	default:
 		return false
 	}
