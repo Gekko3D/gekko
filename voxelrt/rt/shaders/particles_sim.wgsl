@@ -121,9 +121,10 @@ fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
 fn find_sector(sx: i32, sy: i32, sz: i32, base_idx: u32) -> i32 {
     let size = sector_grid_params.grid_size;
     if (size == 0u) { return -1; }
-    let h = (u32(sx) * 73856093u ^ u32(sy) * 19349663u ^ u32(sz) * 83492791u ^ base_idx * 99999989u) % size;
+    let mask = sector_grid_params.grid_mask;
+    let h = (u32(sx) * 73856093u ^ u32(sy) * 19349663u ^ u32(sz) * 83492791u ^ base_idx * 99999989u) & mask;
     for (var i = 0u; i < 128u; i++) {
-        let idx = (h + i) % size;
+        let idx = (h + i) & mask;
         let entry = sector_grid[idx];
         if (entry.sector_idx == -1) { return -1; }
         if (entry.coords.x == sx && entry.coords.y == sy && entry.coords.z == sz && entry.base_idx == base_idx) {

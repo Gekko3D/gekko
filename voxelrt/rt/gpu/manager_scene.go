@@ -601,7 +601,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 
 	hash := func(x, y, z int32, base uint32) uint32 {
 		h := uint32(x)*73856093 ^ uint32(y)*19349663 ^ uint32(z)*83492791 ^ base*99999989
-		return h % uint32(gridSize)
+		return h & uint32(gridSize-1)
 	}
 
 	processedMaps := make(map[*volume.XBrickMap]bool)
@@ -623,7 +623,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 			h := hash(sx, sy, sz, baseIdx)
 			inserted := false
 			for i := 0; i < 128; i++ {
-				probeIdx := (h + uint32(i)) % uint32(gridSize)
+				probeIdx := (h + uint32(i)) & uint32(gridSize-1)
 				sectorIdx := binary.LittleEndian.Uint32(m.gridDataPool[probeIdx*32+20:])
 				if sectorIdx == 0xFFFFFFFF {
 					// Found empty slot
@@ -651,7 +651,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 
 	paramsData := make([]byte, 16)
 	binary.LittleEndian.PutUint32(paramsData[0:4], uint32(gridSize))
-	binary.LittleEndian.PutUint32(paramsData[4:8], uint32(gridSize-1)) // mask if we used power of 2, but we use modulo just in case. Wait, h % gridSize is fine.
+	binary.LittleEndian.PutUint32(paramsData[4:8], uint32(gridSize-1)) // gridSize is always power-of-two, so shaders can wrap with grid_mask.
 
 	if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, paramsData, wgpu.BufferUsageUniform, 0) {
 		recreated = true
