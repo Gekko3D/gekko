@@ -9,6 +9,11 @@ const (
 	ShapeSphere
 )
 
+const (
+	DefaultCollisionLayer uint32 = 1 << 0
+	AllCollisionLayers    uint32 = ^uint32(0)
+)
+
 type RigidBodyComponent struct {
 	Velocity           mgl32.Vec3
 	AngularVelocity    mgl32.Vec3
@@ -56,7 +61,31 @@ type ColliderComponent struct {
 	Radius          float32    // For Sphere
 	Friction        float32
 	Restitution     float32
+	CollisionLayer  uint32
+	CollisionMask   uint32
 	AABBHalfExtents mgl32.Vec3 // Cached or calculated total half extents
+}
+
+func EffectiveCollisionLayer(layer uint32) uint32 {
+	if layer == 0 {
+		return DefaultCollisionLayer
+	}
+	return layer
+}
+
+func EffectiveCollisionMask(mask uint32) uint32 {
+	if mask == 0 {
+		return AllCollisionLayers
+	}
+	return mask
+}
+
+func CollisionLayersMatch(layerA, maskA, layerB, maskB uint32) bool {
+	effectiveLayerA := EffectiveCollisionLayer(layerA)
+	effectiveLayerB := EffectiveCollisionLayer(layerB)
+	effectiveMaskA := EffectiveCollisionMask(maskA)
+	effectiveMaskB := EffectiveCollisionMask(maskB)
+	return effectiveMaskA&effectiveLayerB != 0 && effectiveMaskB&effectiveLayerA != 0
 }
 
 type VoxelGrid interface {

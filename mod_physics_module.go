@@ -160,6 +160,8 @@ type PhysicsEntityState struct {
 	Model          PhysicsModel
 	Friction       float32
 	Restitution    float32
+	CollisionLayer uint32
+	CollisionMask  uint32
 	IdleTime       float32
 	GravityScale   float32
 	LinearDamping  float32
@@ -379,6 +381,8 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 			Model:          resolvedModel,
 			Friction:       col.Friction,
 			Restitution:    col.Restitution,
+			CollisionLayer: col.CollisionLayer,
+			CollisionMask:  col.CollisionMask,
 			IdleTime:       rb.IdleTime,
 			GravityScale:   rb.GravityScale,
 			LinearDamping:  rb.LinearDamping,

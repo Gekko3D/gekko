@@ -161,6 +161,9 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 					if !other.isStatic && !other.sleeping && b.Eid > other.Eid {
 						continue
 					}
+					if !shouldBodiesCollide(b, other) {
+						continue
+					}
 
 					voxelHandled := false
 					if b.model.Grid != nil || other.model.Grid != nil {

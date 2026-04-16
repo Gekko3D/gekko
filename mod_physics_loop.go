@@ -192,6 +192,9 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						if !other.isStatic && !other.sleeping && b.Eid > other.Eid {
 							continue
 						}
+						if !shouldBodiesCollide(b, other) {
+							continue
+						}
 
 						// Narrow-phase
 						voxelHandled := false
@@ -489,6 +492,8 @@ func syncInternalBody(body *internalBody, es PhysicsEntityState, isNew bool) {
 	body.model = es.Model
 	body.friction = es.Friction
 	body.restitution = es.Restitution
+	body.collisionLayer = es.CollisionLayer
+	body.collisionMask = es.CollisionMask
 	body.gravityScale = es.GravityScale
 	body.sleeping = es.Sleeping
 	body.linearDamping = es.LinearDamping
@@ -515,6 +520,25 @@ func orderedCollisionPair(a, b EntityId) collisionPair {
 		return collisionPair{A: a, B: b}
 	}
 	return collisionPair{A: b, B: a}
+}
+
+func effectiveCollisionLayer(layer uint32) uint32 {
+	return rootphysics.EffectiveCollisionLayer(layer)
+}
+
+func effectiveCollisionMask(mask uint32) uint32 {
+	return rootphysics.EffectiveCollisionMask(mask)
+}
+
+func shouldBodiesCollide(a, b *internalBody) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	layerA := effectiveCollisionLayer(a.collisionLayer)
+	layerB := effectiveCollisionLayer(b.collisionLayer)
+	maskA := effectiveCollisionMask(a.collisionMask)
+	maskB := effectiveCollisionMask(b.collisionMask)
+	return maskA&layerB != 0 && maskB&layerA != 0
 }
 
 func seedManifoldImpulses(manifolds []collisionManifold, cache map[collisionPair][]cachedContactImpulse, pointThreshold float32, normalThreshold float32) {
@@ -798,6 +822,8 @@ type internalBody struct {
 	idleTime        float32
 	friction        float32
 	restitution     float32
+	collisionLayer  uint32
+	collisionMask   uint32
 	gravityScale    float32
 	linearDamping   float32
 	angularDamping  float32
