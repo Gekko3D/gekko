@@ -116,13 +116,16 @@ For their data model, see:
 - Resources:
   - `*PhysicsWorld`
   - `*PhysicsProxy`
+  - `*PhysicsSimulator` in synchronous mode
 - Systems:
   - `PhysicsPullSystem` in `PreUpdate`
-  - `PhysicsPushSystem` in `PostUpdate`
+  - `PhysicsPushSystem` in `PostUpdate` for async mode
+  - `SynchronousPhysicsSystem` in `PhysicsUpdate` for sync mode
 - Owns:
-  - async simulation bridge between ECS state and physics world state
+  - physics snapshot bridge between ECS state and simulation state
 - Important:
-  - simulation runs in its own goroutine
+  - async mode runs simulation in its own goroutine
+  - sync mode steps physics inside the fixed-update schedule
   - ECS-facing state is synchronized through snapshots and results, not direct mutation
 
 ### `VoxPhysicsModule`
@@ -134,6 +137,9 @@ For their data model, see:
   - `VoxPhysicsPreCalcSystem`
 - Owns:
   - voxel-aware physics preparation and collision helpers
+- Important:
+  - remains the authoritative cached voxel-physics preparation path
+  - the physics bridge can bootstrap fallback voxel models/pivots on first tick, but that is a robustness path, not a replacement for the cache
 
 ### `DestructionModule`
 

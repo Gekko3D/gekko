@@ -187,7 +187,7 @@ func resolveAuthoredCollapseParts(assets *AssetServer, def *content.AssetDef, do
 
 	for _, part := range def.Parts {
 		switch part.Source.Kind {
-		case content.AssetSourceKindGroup, content.AssetSourceKindVoxModel, content.AssetSourceKindVoxSceneNode, content.AssetSourceKindProceduralPrimitive:
+		case content.AssetSourceKindGroup, content.AssetSourceKindVoxModel, content.AssetSourceKindVoxSceneNode, content.AssetSourceKindProceduralPrimitive, content.AssetSourceKindVoxelShape:
 		default:
 			return nil, fmt.Errorf("voxel collapse does not support source kind %q", part.Source.Kind)
 		}

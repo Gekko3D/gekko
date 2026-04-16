@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 
@@ -8,15 +9,40 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-// CellularType is a coarse preset for CA rules.
+// CellularType identifies the supported cellular volume simulation family.
+//
+// Production support is currently limited to smoke and fire volumes.
 type CellularType uint32
 
 const (
 	CellularSmoke CellularType = iota
 	CellularFire
+	// Deprecated: sand volumes are not implemented by the runtime.
+	// Only CellularSmoke and CellularFire are currently supported.
 	CellularSand
+	// Deprecated: water volumes are not implemented by the runtime.
+	// Only CellularSmoke and CellularFire are currently supported.
 	CellularWater
 )
+
+func (t CellularType) String() string {
+	switch t {
+	case CellularSmoke:
+		return "CellularSmoke"
+	case CellularFire:
+		return "CellularFire"
+	case CellularSand:
+		return "CellularSand"
+	case CellularWater:
+		return "CellularWater"
+	default:
+		return fmt.Sprintf("CellularType(%d)", t)
+	}
+}
+
+func (t CellularType) IsSupported() bool {
+	return t == CellularSmoke || t == CellularFire
+}
 
 type CAVolumePreset uint32
 
@@ -36,7 +62,11 @@ const (
 	CAVolumeAnchorCustom                           // Transform position is a custom local anchor
 )
 
-// CellularVolumeComponent holds a small 3D grid and rule params.
+// CellularVolumeComponent configures a small 3D grid and its volumetric CA behavior.
+//
+// Supported runtime types are CellularSmoke and CellularFire only.
+// When UseIntensity is false, enabled volumes target full intensity (1.0).
+// When Disabled is true, the target intensity is forced to zero.
 // The grid is in local space of the entity's TransformComponent.
 type CellularVolumeComponent struct {
 	Resolution   [3]int // e.g., [32, 48, 32]
@@ -88,11 +118,54 @@ type CellularVolumeComponent struct {
 	_intensityInited  bool
 }
 
+func (cv *CellularVolumeComponent) Validate() error {
+	if cv == nil {
+		return nil
+	}
+	if !cv.Type.IsSupported() {
+		return fmt.Errorf("unsupported cellular volume type %s: only CellularSmoke and CellularFire are supported", cv.Type)
+	}
+	return nil
+}
+
+func mustValidateCellularVolumeComponent(cv *CellularVolumeComponent) {
+	if err := cv.Validate(); err != nil {
+		panic(err)
+	}
+}
+
+// UsesGPUVolume reports whether this component belongs to the managed GPU CA path.
+// Supported fire/smoke volumes stay resident in the GPU system even at zero intensity.
+func (cv *CellularVolumeComponent) UsesGPUVolume() bool {
+	mustValidateCellularVolumeComponent(cv)
+	return cv != nil
+}
+
+// HasVisibleGPUVolume reports whether the volume should currently contribute visible output.
+func (cv *CellularVolumeComponent) HasVisibleGPUVolume() bool {
+	mustValidateCellularVolumeComponent(cv)
+	if cv == nil {
+		return false
+	}
+	return cv.targetIntensity() > 0.001 || cv.CurrentIntensity() > 0.001
+}
+
+// WantsGPUVolumeSimulation reports whether the volume should advance simulation this frame.
+// Volumes remain allocated in the GPU CA system when false so they can resume without reseeding.
+func (cv *CellularVolumeComponent) WantsGPUVolumeSimulation() bool {
+	mustValidateCellularVolumeComponent(cv)
+	if cv == nil {
+		return false
+	}
+	return cv.HasVisibleGPUVolume()
+}
+
 func clamp01(v float32) float32 {
 	return float32(math.Max(0.0, math.Min(1.0, float64(v))))
 }
 
 func (cv *CellularVolumeComponent) targetIntensity() float32 {
+	mustValidateCellularVolumeComponent(cv)
 	if cv == nil || cv.Disabled {
 		return 0
 	}
@@ -142,6 +215,7 @@ func (cv *CellularVolumeComponent) advanceIntensity(dt float32) {
 }
 
 func (cv *CellularVolumeComponent) AnchorLocal() mgl32.Vec3 {
+	mustValidateCellularVolumeComponent(cv)
 	if cv == nil {
 		return mgl32.Vec3{}
 	}
@@ -181,6 +255,7 @@ func (cv *CellularVolumeComponent) VolumeOrigin(tr *TransformComponent) mgl32.Ve
 }
 
 func (cv *CellularVolumeComponent) ensureGrid() {
+	mustValidateCellularVolumeComponent(cv)
 	nx, ny, nz := cv.Resolution[0], cv.Resolution[1], cv.Resolution[2]
 	if nx <= 0 || ny <= 0 || nz <= 0 {
 		cv.Resolution = [3]int{32, 32, 32}
@@ -200,13 +275,6 @@ func (cv *CellularVolumeComponent) ensureGrid() {
 	cv._inited = true
 }
 
-func (cv *CellularVolumeComponent) UsesGPUVolume() bool {
-	if cv == nil || (cv.Type != CellularSmoke && cv.Type != CellularFire) {
-		return false
-	}
-	return cv.targetIntensity() > 0.001 || cv.CurrentIntensity() > 0.001
-}
-
 func idx3(x, y, z, nx, ny, nz int) int {
 	if x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz {
 		return -1
@@ -216,6 +284,7 @@ func idx3(x, y, z, nx, ny, nz int) int {
 
 // seed some initial smoke/fire if empty
 func (cv *CellularVolumeComponent) seed() {
+	mustValidateCellularVolumeComponent(cv)
 	nx, ny, nz := cv.Resolution[0], cv.Resolution[1], cv.Resolution[2]
 	// small plume near the bottom center
 	cx, cz := nx/2, nz/2
@@ -237,6 +306,7 @@ func (cv *CellularVolumeComponent) seed() {
 }
 
 func (cv *CellularVolumeComponent) stepSmoke(dt float32) {
+	mustValidateCellularVolumeComponent(cv)
 	nx, ny, nz := cv.Resolution[0], cv.Resolution[1], cv.Resolution[2]
 	// Reuse next buffer and clear it
 	next := cv._nextDensity
@@ -330,12 +400,14 @@ func caStepSystem(t *Time, cmd *Commands) {
 		if cv == nil {
 			return true
 		}
+		mustValidateCellularVolumeComponent(cv)
 		cv.advanceIntensity(dt)
 		if cv.Type == CellularSmoke || cv.Type == CellularFire {
-			if !cv.UsesGPUVolume() {
+			cv.ensureGrid()
+			if !cv.WantsGPUVolumeSimulation() {
+				cv._gpuStepsPending = 0
 				return true
 			}
-			cv.ensureGrid()
 			target := float32(1.0)
 			if cv.TickRate > 0 {
 				target = 1.0 / cv.TickRate
@@ -377,22 +449,15 @@ func caStepSystem(t *Time, cmd *Commands) {
 		// continuous injection to keep plume alive
 		cv.seed()
 
-		switch cv.Type {
-		case CellularSmoke, CellularFire:
-			cv.stepSmoke(dt)
-			// Fire cooling: lower temperature gradually, bleed into density as faint emissive hint (used by bridging)
-			if cv.Type == CellularFire && cv.Cooling > 0 {
-				for i := range cv._temp {
-					cv._temp[i] *= (1.0 - cv.Cooling)
-					if cv._temp[i] < 0 {
-						cv._temp[i] = 0
-					}
+		cv.stepSmoke(dt)
+		// Fire cooling: lower temperature gradually, bleed into density as faint emissive hint (used by bridging)
+		if cv.Type == CellularFire && cv.Cooling > 0 {
+			for i := range cv._temp {
+				cv._temp[i] *= (1.0 - cv.Cooling)
+				if cv._temp[i] < 0 {
+					cv._temp[i] = 0
 				}
 			}
-		case CellularSand:
-			// TODO: basic sand settle (not implemented in MVP)
-		case CellularWater:
-			// TODO: basic water flow (not implemented in MVP)
 		}
 		// Mark density changed for bridges (particles/voxels) after a simulation step
 		cv._dirty = true
@@ -413,7 +478,11 @@ func bridgeCellsToParticles(cmd *Commands, instances *[]core.ParticleInstance, m
 		return false
 	})
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
-		if cv == nil || !cv.BridgeToParticles || cv._density == nil {
+		if cv == nil {
+			return true
+		}
+		mustValidateCellularVolumeComponent(cv)
+		if !cv.BridgeToParticles || cv._density == nil {
 			return true
 		}
 		intensity := cv.CurrentIntensity()

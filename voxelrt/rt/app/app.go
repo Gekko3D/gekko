@@ -128,6 +128,7 @@ type AppFeatureConfig struct {
 	// When false, the app starts with no default features and callers can register their own.
 	AutoRegisterDefaults bool
 	Defaults             AppFeatureFlags
+	CAVolumes            gpu.CAVolumeBudgetConfig
 }
 
 func DefaultFeatureFlags() AppFeatureFlags {
@@ -149,6 +150,7 @@ func DefaultFeatureConfig() AppFeatureConfig {
 	return AppFeatureConfig{
 		AutoRegisterDefaults: true,
 		Defaults:             DefaultFeatureFlags(),
+		CAVolumes:            gpu.DefaultCAVolumeBudgetConfig(),
 	}
 }
 

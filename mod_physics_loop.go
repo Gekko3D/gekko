@@ -122,14 +122,8 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 					}
 
 					// Damping (scaled to preserve current 60 Hz tuning across physics rates)
-					lDamp := float32(0.999)
-					if b.linearDamping > 0 {
-						lDamp = b.linearDamping
-					}
-					aDamp := float32(0.99)
-					if b.angularDamping > 0 {
-						aDamp = b.angularDamping
-					}
+					lDamp := dampingRetentionFactor(b.linearDamping, 0.999)
+					aDamp := dampingRetentionFactor(b.angularDamping, 0.99)
 					const dampingReferenceHz = float32(60.0)
 					b.vel = b.vel.Mul(powf(lDamp, dt*dampingReferenceHz))
 					b.angVel = b.angVel.Mul(powf(aDamp, dt*dampingReferenceHz))
@@ -512,7 +506,7 @@ func syncInternalBody(body *internalBody, es PhysicsEntityState, isNew bool) {
 	}
 
 	if massChanged || modelChanged {
-		body.invInertiaLocal = calculateInverseInertiaLocal(body)
+		body.invInertiaLocal = CalculateInverseInertiaLocal(body.mass, &body.model)
 	}
 }
 
@@ -627,7 +621,7 @@ func applyWorldImpulse(body *internalBody, r, impulse mgl32.Vec3, direction floa
 
 	signedImpulse := impulse.Mul(direction)
 	body.vel = body.vel.Add(signedImpulse.Mul(invMass))
-	body.angVel = body.angVel.Add(applyInverseInertiaWorld(body, r.Cross(signedImpulse)))
+	body.angVel = body.angVel.Add(ApplyInverseInertiaWorld(body.rot, body.invInertiaLocal, r.Cross(signedImpulse)))
 }
 
 func clearCollisionImpulseMap(cache map[collisionPair][]cachedContactImpulse) {
@@ -910,21 +904,18 @@ func angularConstraintDenominator(b *internalBody, r mgl32.Vec3, axis mgl32.Vec3
 		return 0
 	}
 	rCrossAxis := r.Cross(axis)
-	invInertiaTerm := applyInverseInertiaWorld(b, rCrossAxis)
+	invInertiaTerm := ApplyInverseInertiaWorld(b.rot, b.invInertiaLocal, rCrossAxis)
 	return axis.Dot(invInertiaTerm.Cross(r))
 }
 
-func applyInverseInertiaWorld(b *internalBody, angularImpulse mgl32.Vec3) mgl32.Vec3 {
-	if b == nil || b.isStatic || b.mass <= 0 {
-		return mgl32.Vec3{}
-	}
-	rotMat := rotationMat3(b.rot)
-	invInertiaWorld := rotMat.Mul3(b.invInertiaLocal).Mul3(rotMat.Transpose())
+func ApplyInverseInertiaWorld(rot mgl32.Quat, invInertiaLocal mgl32.Mat3, angularImpulse mgl32.Vec3) mgl32.Vec3 {
+	rotMat := RotationMat3(rot)
+	invInertiaWorld := rotMat.Mul3(invInertiaLocal).Mul3(rotMat.Transpose())
 	return invInertiaWorld.Mul3x1(angularImpulse)
 }
 
-func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
-	localInertia := calculateLocalInertiaTensor(b)
+func CalculateInverseInertiaLocal(mass float32, model *PhysicsModel) mgl32.Mat3 {
+	localInertia := calculateLocalInertiaTensorFromModel(mass, model)
 	if absf(localInertia.Det()) > 1e-6 {
 		return localInertia.Inv()
 	}
@@ -937,13 +928,51 @@ func calculateInverseInertiaLocal(b *internalBody) mgl32.Mat3 {
 	return localInertia.Inv()
 }
 
-func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
-	if b.mass <= 0 {
+// calculateLocalInertiaTensor is a compatibility wrapper retained for tests and
+// older internal call sites. Runtime code should prefer calculateLocalInertiaTensorFromModel.
+func calculateLocalInertiaTensor(body *internalBody) mgl32.Mat3 {
+	if body == nil {
+		return mgl32.Ident3()
+	}
+	model := physicsModelForInertia(body)
+	return calculateLocalInertiaTensorFromModel(body.mass, &model)
+}
+
+// calculateInverseInertiaLocal is a compatibility wrapper retained for tests and
+// older internal call sites. Runtime code should prefer CalculateInverseInertiaLocal.
+func calculateInverseInertiaLocal(body *internalBody) mgl32.Mat3 {
+	if body == nil {
+		return mgl32.Ident3()
+	}
+	model := physicsModelForInertia(body)
+	return CalculateInverseInertiaLocal(body.mass, &model)
+}
+
+func physicsModelForInertia(body *internalBody) PhysicsModel {
+	if body == nil {
+		return PhysicsModel{}
+	}
+	if body.model.Grid != nil || len(body.model.Boxes) > 0 {
+		return body.model
+	}
+	if len(body.boxes) == 0 {
+		return body.model
+	}
+	model := body.model
+	model.Boxes = make([]CollisionBox, len(body.boxes))
+	for i := range body.boxes {
+		model.Boxes[i] = body.boxes[i].Box
+	}
+	return model
+}
+
+func calculateLocalInertiaTensorFromModel(mass float32, model *PhysicsModel) mgl32.Mat3 {
+	if mass <= 0 {
 		return mgl32.Ident3()
 	}
 
-	if b.model.Grid != nil {
-		grid := b.model.Grid
+	if model.Grid != nil {
+		grid := model.Grid
 		voxelScale := grid.VoxelScale()
 		voxelHalfExtents := voxelScale.Mul(0.5)
 		minV := grid.GetAABBMin()
@@ -965,8 +994,8 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 			return mgl32.Ident3()
 		}
 
-		m := b.mass / float32(count)
-		com := b.model.CenterOffset
+		m := mass / float32(count)
+		com := model.CenterOffset
 		voxelIxx := (1.0 / 3.0) * m * (voxelHalfExtents.Y()*voxelHalfExtents.Y() + voxelHalfExtents.Z()*voxelHalfExtents.Z())
 		voxelIyy := (1.0 / 3.0) * m * (voxelHalfExtents.X()*voxelHalfExtents.X() + voxelHalfExtents.Z()*voxelHalfExtents.Z())
 		voxelIzz := (1.0 / 3.0) * m * (voxelHalfExtents.X()*voxelHalfExtents.X() + voxelHalfExtents.Y()*voxelHalfExtents.Y())
@@ -999,23 +1028,23 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 		return res
 	}
 
-	if len(b.boxes) == 0 {
+	if len(model.Boxes) == 0 {
 		return mgl32.Ident3()
 	}
 
 	totalVolume := float32(0)
-	for _, box := range b.boxes {
-		totalVolume += effectiveCollisionBoxVolume(box.Box.HalfExtents)
+	for _, box := range model.Boxes {
+		totalVolume += effectiveCollisionBoxVolume(box.HalfExtents)
 	}
 	if totalVolume <= 0 {
 		return mgl32.Ident3()
 	}
 
 	totalInertia := mgl32.Mat3{}
-	for _, box := range b.boxes {
-		half := box.Box.HalfExtents
+	for _, box := range model.Boxes {
+		half := box.HalfExtents
 		volume := effectiveCollisionBoxVolume(half)
-		boxMass := (volume / totalVolume) * b.mass
+		boxMass := (volume / totalVolume) * mass
 
 		ix := (1.0 / 3.0) * boxMass * (half.Y()*half.Y() + half.Z()*half.Z())
 		iy := (1.0 / 3.0) * boxMass * (half.X()*half.X() + half.Z()*half.Z())
@@ -1026,7 +1055,7 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 			mgl32.Vec3{0, 0, iz},
 		)
 
-		offset := box.Box.LocalOffset
+		offset := box.LocalOffset
 		offsetSq := offset.LenSqr()
 		outer := mgl32.Mat3FromRows(
 			mgl32.Vec3{offset.X() * offset.X(), offset.X() * offset.Y(), offset.X() * offset.Z()},
@@ -1041,7 +1070,7 @@ func calculateLocalInertiaTensor(b *internalBody) mgl32.Mat3 {
 	return totalInertia
 }
 
-func rotationMat3(q mgl32.Quat) mgl32.Mat3 {
+func RotationMat3(q mgl32.Quat) mgl32.Mat3 {
 	rot := q.Mat4()
 	return mgl32.Mat3FromCols(rot.Col(0).Vec3(), rot.Col(1).Vec3(), rot.Col(2).Vec3())
 }

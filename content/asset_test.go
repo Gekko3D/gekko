@@ -189,10 +189,55 @@ func TestAssetJSONUsesStringEnums(t *testing.T) {
 	}
 
 	jsonText := string(data)
-	for _, want := range []string{`"schema_version":2`, `"kind":"vox_model"`, `"type":"ambient"`, `"alpha_mode":"texture"`, `"material_id":"mat_0"`, `"operation":"subtract"`} {
+	for _, want := range []string{`"schema_version":3`, `"kind":"vox_model"`, `"type":"ambient"`, `"alpha_mode":"texture"`, `"material_id":"mat_0"`, `"operation":"subtract"`} {
 		if !contains(jsonText, want) {
 			t.Fatalf("expected JSON to contain %s, got %s", want, jsonText)
 		}
+	}
+}
+
+func TestAssetVoxelShapeRoundTrip(t *testing.T) {
+	asset := NewAssetDef("custom")
+	asset.Materials = []AssetMaterialDef{{
+		ID:           "mat_red",
+		Name:         "Red",
+		BaseColor:    [4]uint8{255, 80, 80, 255},
+		Roughness:    0.6,
+		Metallic:     0.1,
+		IOR:          1.5,
+		Transparency: 0,
+	}}
+	asset.Parts = []AssetPartDef{{
+		ID:   "shape",
+		Name: "shape",
+		Source: AssetSourceDef{
+			Kind: AssetSourceKindVoxelShape,
+			VoxelShape: &AssetVoxelShapeDef{
+				Palette: []AssetVoxelPaletteEntryDef{{Value: 1, MaterialID: "mat_red"}},
+				Voxels: []VoxelObjectVoxelDef{
+					{X: 0, Y: 0, Z: 0, Value: 1},
+					{X: 1, Y: 0, Z: 0, Value: 1},
+				},
+			},
+		},
+		Transform: AssetTransformDef{Rotation: Quat{0, 0, 0, 1}, Scale: Vec3{1, 1, 1}},
+	}}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "custom.gkasset")
+	if err := SaveAsset(path, asset); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+
+	loaded, err := LoadAsset(path)
+	if err != nil {
+		t.Fatalf("LoadAsset failed: %v", err)
+	}
+	if loaded.Parts[0].Source.Kind != AssetSourceKindVoxelShape {
+		t.Fatalf("expected voxel_shape source, got %+v", loaded.Parts[0].Source)
+	}
+	if loaded.Parts[0].Source.VoxelShape == nil || len(loaded.Parts[0].Source.VoxelShape.Voxels) != 2 {
+		t.Fatalf("expected voxel shape voxels to round-trip, got %+v", loaded.Parts[0].Source.VoxelShape)
 	}
 }
 

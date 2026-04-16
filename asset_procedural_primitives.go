@@ -52,6 +52,43 @@ func (server *AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resoluti
 	}, 1.0)
 }
 
+func (server *AssetServer) CreateFrameModel(sizeX, sizeY, sizeZ, thickness float32, resolution float32) AssetId {
+	sx, sy, sz := int(sizeX*resolution), int(sizeY*resolution), int(sizeZ*resolution)
+	if sx <= 0 || sy <= 0 || sz <= 0 {
+		return server.CreateVoxelGeometry(VoxModel{}, 1.0)
+	}
+
+	frame := int(thickness * resolution)
+	if frame < 1 {
+		frame = 1
+	}
+
+	voxels := []Voxel{}
+	for x := 0; x < sx; x++ {
+		isFrameX := x < frame || x >= sx-frame
+		for y := 0; y < sy; y++ {
+			for z := 0; z < sz; z++ {
+				if !isFrameX && z >= frame && z < sz-frame {
+					continue
+				}
+				voxels = append(voxels, Voxel{
+					X:          uint32(x),
+					Y:          uint32(y),
+					Z:          uint32(z),
+					ColorIndex: 1,
+				})
+			}
+		}
+	}
+
+	return server.CreateVoxelGeometry(VoxModel{
+		SizeX:  uint32(sx),
+		SizeY:  uint32(sy),
+		SizeZ:  uint32(sz),
+		Voxels: voxels,
+	}, 1.0)
+}
+
 func (server *AssetServer) CreateConeModel(radius, height float32, resolution float32) AssetId {
 	scaledRadius := radius * resolution
 	scaledHeight := height * resolution

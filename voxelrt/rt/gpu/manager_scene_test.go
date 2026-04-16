@@ -96,7 +96,13 @@ func TestBuildLightsDataUsesStableRecordSize(t *testing.T) {
 	if got := floatAt(buf, 0); got != 1 {
 		t.Fatalf("expected position x at offset 0, got %v", got)
 	}
+	if got := floatAt(buf, 12); got != 4 {
+		t.Fatalf("expected source radius in position.w at offset 12, got %v", got)
+	}
 	if got := binary.LittleEndian.Uint32(buf[64:68]); got != 17 {
 		t.Fatalf("expected shadow meta x at offset 64, got %d", got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[76:80]); got != 20 {
+		t.Fatalf("expected emitter link in shadow meta w at offset 76, got %d", got)
 	}
 }

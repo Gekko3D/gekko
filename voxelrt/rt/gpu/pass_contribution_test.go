@@ -96,6 +96,24 @@ func TestHasContributionHelpersReflectBoundState(t *testing.T) {
 	}
 }
 
+func TestHasCAVolumeContributionRequiresVisibleVolumes(t *testing.T) {
+	manager := &GpuBufferManager{
+		CAVolumeCount:        1,
+		CAVolumeVisibleCount: 0,
+		CAVolumeRenderBG0:    &wgpu.BindGroup{},
+		CAVolumeRenderBG1A:   &wgpu.BindGroup{},
+		CAVolumeRenderBG2:    &wgpu.BindGroup{},
+	}
+	if manager.HasCAVolumeContribution() {
+		t.Fatal("expected invisible resident CA volumes to skip the render contribution")
+	}
+
+	manager.CAVolumeVisibleCount = 1
+	if !manager.HasCAVolumeContribution() {
+		t.Fatal("expected visible CA volume state to require contribution")
+	}
+}
+
 func TestHasParticleContributionRequiresActivatedSystem(t *testing.T) {
 	manager := &GpuBufferManager{ParticleSystemActive: true}
 	if manager.HasParticleContribution() {

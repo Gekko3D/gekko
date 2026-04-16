@@ -401,8 +401,17 @@ type GpuBufferManager struct {
 	CAAtlasWidth                uint32
 	CAAtlasHeight               uint32
 	CAAtlasDepth                uint32
+	CAAtlasCellCount            uint64
+	CAAtlasByteCount            uint64
 	CAFieldIndex                int
 	CAElapsedTime               float32
+	CARequestedVolumeCount      uint32
+	CAVolumeVisibleCount        uint32
+	CAResolutionClampedCount    uint32
+	CADeferredStepVolumeCount   uint32
+	CASuspendedVolumeCount      uint32
+	CADroppedVolumeCount        uint32
+	CATotalScheduledSteps       uint32
 	CAVolumeBindingsDirty       bool
 	AnalyticMediumBindingsDirty bool
 	PlanetBodyBindingsDirty     bool

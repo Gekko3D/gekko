@@ -46,6 +46,25 @@ type caParamsUniform struct {
 	Pad4         uint32
 }
 
+func computeCAAtlasDimensions(volumes []CAVolumeHost) (atlasW, atlasH, atlasD uint32, visibleCount uint32, cellCount, byteCount uint64) {
+	atlasW, atlasH, atlasD = 1, 1, 1
+	for _, v := range volumes {
+		if v.Intensity > 0.001 {
+			visibleCount++
+		}
+		if v.Resolution[0] > atlasW {
+			atlasW = v.Resolution[0]
+		}
+		if v.Resolution[1] > atlasH {
+			atlasH = v.Resolution[1]
+		}
+		atlasD += v.Resolution[2]
+	}
+	cellCount = uint64(atlasW) * uint64(atlasH) * uint64(atlasD)
+	byteCount = cellCount * 16
+	return atlasW, atlasH, atlasD, visibleCount, cellCount, byteCount
+}
+
 func (m *GpuBufferManager) UpdateCAVolumes(volumes []CAVolumeHost) bool {
 	layoutChanged := len(volumes) != len(m.caLayout)
 	if !layoutChanged {
@@ -58,21 +77,17 @@ func (m *GpuBufferManager) UpdateCAVolumes(volumes []CAVolumeHost) bool {
 		}
 	}
 
-	atlasW, atlasH, atlasD := uint32(1), uint32(1), uint32(1)
+	atlasW, atlasH, atlasD, visibleCount, cellCount, byteCount := computeCAAtlasDimensions(volumes)
 	layout := make([]caVolumeLayout, len(volumes))
 	records := make([]caVolumeRecord, len(volumes))
 	m.caVolumes = append(m.caVolumes[:0], volumes...)
+	m.CAVolumeVisibleCount = visibleCount
+	m.CAAtlasCellCount = cellCount
+	m.CAAtlasByteCount = byteCount
 	zOffset := uint32(0)
 
 	for i, v := range volumes {
 		layout[i] = caVolumeLayout{EntityID: v.EntityID, Type: v.Type, Resolution: v.Resolution}
-		if v.Resolution[0] > atlasW {
-			atlasW = v.Resolution[0]
-		}
-		if v.Resolution[1] > atlasH {
-			atlasH = v.Resolution[1]
-		}
-		atlasD += v.Resolution[2]
 
 		scale := v.VoxelScale
 		localToWorld := mgl32.Translate3D(v.Position.X(), v.Position.Y(), v.Position.Z()).
@@ -161,115 +176,8 @@ func (m *GpuBufferManager) CurrentCAVolumes() []CAVolumeHost {
 
 func (m *GpuBufferManager) UpdateCAPresets() {
 	presets := make([]CAPresetData, 8)
-
-	// Preset 0: Default
-	presets[0] = CAPresetData{
-		SmokeSeed:       0.02,
-		FireSeed:        0.08,
-		SmokeInject:     0.14,
-		FireInject:      0.45,
-		Diffusion:       0.12,
-		Buoyancy:        0.85,
-		Cooling:         0.08,
-		Dissipation:     0.02,
-		SmokeDensityCut: 0.14,
-		FireHeatCut:     0.04,
-		SigmaTSmoke:     1.0,
-		SigmaTFire:      0.32,
-		AlphaScaleSmoke: 1.35,
-		AlphaScaleFire:  1.35,
-		AbsorptionScale: 1.0,
-		ScatterScale:    1.0,
-		EmberTint:       [4]float32{0.62, 0.16, 0.04, 1.0},
-		FireCoreTint:    [4]float32{1.0, 0.72, 0.38, 1.0},
-	}
-
-	// Preset 1: Torch
-	presets[1] = CAPresetData{
-		SmokeSeed:       0.014,
-		FireSeed:        0.12,
-		SmokeInject:     0.08,
-		FireInject:      0.55,
-		Diffusion:       0.06,
-		Buoyancy:        1.15,
-		Cooling:         0.14,
-		Dissipation:     0.04,
-		SmokeDensityCut: 0.035,
-		FireHeatCut:     0.04,
-		SigmaTSmoke:     1.0,
-		SigmaTFire:      0.32,
-		AlphaScaleSmoke: 1.35,
-		AlphaScaleFire:  1.35,
-		AbsorptionScale: 1.0,
-		ScatterScale:    1.0,
-		EmberTint:       [4]float32{0.62, 0.16, 0.04, 1.0},
-		FireCoreTint:    [4]float32{1.0, 0.72, 0.38, 1.0},
-	}
-
-	// Preset 2: Campfire
-	presets[2] = CAPresetData{
-		SmokeSeed:       0.022,
-		FireSeed:        0.06,
-		SmokeInject:     0.12,
-		FireInject:      0.38,
-		Diffusion:       0.14,
-		Buoyancy:        0.72,
-		Cooling:         0.06,
-		Dissipation:     0.015,
-		SmokeDensityCut: 0.02,
-		FireHeatCut:     0.04,
-		SigmaTSmoke:     1.0,
-		SigmaTFire:      0.32,
-		AlphaScaleSmoke: 1.35,
-		AlphaScaleFire:  1.35,
-		AbsorptionScale: 1.0,
-		ScatterScale:    1.0,
-		EmberTint:       [4]float32{0.62, 0.16, 0.04, 1.0},
-		FireCoreTint:    [4]float32{1.0, 0.72, 0.38, 1.0},
-	}
-
-	// Preset 3: Jet Flame
-	presets[3] = CAPresetData{
-		SmokeSeed:       0.002,
-		FireSeed:        0.18,
-		SmokeInject:     0.04,
-		FireInject:      1.15,
-		Diffusion:       0.02,
-		Buoyancy:        2.4,
-		Cooling:         0.22,
-		Dissipation:     0.08,
-		SmokeDensityCut: 0.025,
-		FireHeatCut:     0.015,
-		SigmaTSmoke:     1.0,
-		SigmaTFire:      1.02,
-		AlphaScaleSmoke: 1.35,
-		AlphaScaleFire:  1.65,
-		AbsorptionScale: 0.38,
-		ScatterScale:    0.1,
-		EmberTint:       [4]float32{0.24, 0.34, 0.7, 1.0},
-		FireCoreTint:    [4]float32{1.0, 1.0, 1.0, 1.0},
-	}
-
-	// Preset 4: Explosion
-	presets[4] = CAPresetData{
-		SmokeSeed:       0.015,
-		FireSeed:        0.16,
-		SmokeInject:     0.28,
-		FireInject:      0.65,
-		Diffusion:       0.14,
-		Buoyancy:        1.45,
-		Cooling:         0.12,
-		Dissipation:     0.028,
-		SmokeDensityCut: 0.012,
-		FireHeatCut:     0.05,
-		SigmaTSmoke:     1.1,
-		SigmaTFire:      0.28,
-		AlphaScaleSmoke: 1.0,
-		AlphaScaleFire:  1.0,
-		AbsorptionScale: 1.0,
-		ScatterScale:    1.0,
-		EmberTint:       [4]float32{0.62, 0.16, 0.04, 1.0},
-		FireCoreTint:    [4]float32{1.0, 0.72, 0.38, 1.0},
+	for i := range presets {
+		presets[i] = CAVolumePresetDefinitionFor(uint32(i)).Sim
 	}
 
 	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, unsafe.Slice((*byte)(unsafe.Pointer(&presets[0])), len(presets)*int(unsafe.Sizeof(CAPresetData{}))), wgpu.BufferUsageStorage, 0)

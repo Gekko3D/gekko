@@ -32,11 +32,11 @@ struct DirectionalShadowCascade {
 };
 
 struct Light {
-    position: vec4<f32>,
+    position: vec4<f32>, // xyz, source radius
     direction: vec4<f32>,
     color: vec4<f32>,
-    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: pad
-    shadow_meta: vec4<u32>, // x: first shadow layer, y: layer count, z: cascade count, w: reserved
+    params: vec4<f32>, // x: range, y: cos_cone, z: type, w: casts_shadows
+    shadow_meta: vec4<u32>, // w: emitter link id
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     directional_cascades: array<DirectionalShadowCascade, 2>,
@@ -131,7 +131,8 @@ struct ObjectParams {
     terrain_chunk: vec4<i32>,
     is_planet_tile: u32,
     planet_tile_group_id: u32,
-    padding2: vec2<u32>,
+    emitter_link_id: u32,
+    padding2: u32,
     planet_tile: vec4<i32>,
 };
 
@@ -172,6 +173,8 @@ struct SectorGridParams {
 @group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
+
+var<private> g_light_emitter_link_id: u32 = 0u;
 
 // ============== TRAVERSAL LOGIC ==============
 
@@ -270,6 +273,44 @@ fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
     return -1;
 }
 
+fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
+    let sx = v.x >> 5u;
+    let sy = v.y >> 5u;
+    let sz = v.z >> 5u;
+    let sector_idx = find_sector_cached(sx, sy, sz, params);
+    if (sector_idx < 0) { return 0.0; }
+    let sector = sectors[sector_idx];
+    let bx = (v.x >> 3u) & 3;
+    let by = (v.y >> 3u) & 3;
+    let bz = (v.z >> 3u) & 3;
+    let bvid = vec3<u32>(u32(bx), u32(by), u32(bz));
+    let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
+    let packed_idx = sector.brick_table_index + brick_idx_local;
+    
+    let b_flags = bricks[packed_idx].flags;
+    if (b_flags == 0u) {
+        let mx = (v.x >> 1u) & 3;
+        let my = (v.y >> 1u) & 3;
+        let mz = (v.z >> 1u) & 3;
+        let mvid = vec3<u32>(u32(mx), u32(my), u32(mz));
+        let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
+        
+        let b_mask_lo = bricks[packed_idx].occupancy_mask_lo;
+        let b_mask_hi = bricks[packed_idx].occupancy_mask_hi;
+        if (!bit_test64(b_mask_lo, b_mask_hi, micro_idx)) { return 0.0; }
+        
+        let vx = v.x & 7;
+        let vy = v.y & 7;
+        let vz = v.z & 7;
+        let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
+        let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
+        let b_atlas = bricks[packed_idx].atlas_offset;
+        let palette_idx = load_u8(b_atlas, bricks[packed_idx].atlas_page, voxel_idx);
+        return select(0.0, 1.0, palette_idx != EMPTY_VOXEL);
+    }
+    return 1.0;
+}
+
 fn make_safe_dir(d: vec3<f32>) -> vec3<f32> {
     let eps = 1e-6;
     let sx = select(d.x, (select(1.0, -1.0, d.x < 0.0)) * eps, abs(d.x) < eps);
@@ -297,6 +338,13 @@ fn point_shadow_face_dir(face: u32, uv: vec2<f32>) -> vec3<f32> {
     }
 }
 
+fn should_skip_object_for_light(object_id: u32) -> bool {
+    if (g_light_emitter_link_id == 0u) {
+        return false;
+    }
+    return object_params[object_id].emitter_link_id == g_light_emitter_link_id;
+}
+
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
     var result = HitResult(false, 60000.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
@@ -315,7 +363,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
     var sector_pos = vec3<i32>(floor(((ray.origin + dir * t_curr) - sector_bias) / SECTOR_SIZE));
     var t_max_sector = (vec3<f32>(sector_pos) * SECTOR_SIZE + select(vec3<f32>(0.0), vec3<f32>(SECTOR_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
     var iter_sectors = 0;
-    while (t_curr < t_end && iter_sectors < 64) {
+    while (t_curr < t_end && iter_sectors < 512) {
         iter_sectors += 1;
         let sector_idx = find_sector_cached(sector_pos.x, sector_pos.y, sector_pos.z, params);
         if (sector_idx >= 0) {
@@ -328,7 +376,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
             brick_pos = clamp(brick_pos, vec3<i32>(0), vec3<i32>(3));
             var t_max_brick = (sector_origin + vec3<f32>(brick_pos) * BRICK_SIZE + select(vec3<f32>(0.0), vec3<f32>(BRICK_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
             var iter_bricks = 0;
-            while (t_brick < t_sector_exit && iter_bricks < 64) {
+            while (t_brick < t_sector_exit && iter_bricks < 512) {
                 iter_bricks += 1;
                 if (all(brick_pos >= vec3<i32>(0)) && all(brick_pos < vec3<i32>(4))) {
                     let bvid = vec3<u32>(brick_pos);
@@ -346,10 +394,11 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 t_brick = t_brick_exit;
                             } else {
                                 result.hit = true; result.t = t_brick;
-                                let p_hit_os = ray.origin + dir * (t_brick + 0.01);
-                                let hit_pos_os = ray.origin + dir * t_brick;
-                                let voxel_center_os = floor(p_hit_os) + 0.5;
+                                 let p_hit_os = ray.origin + dir * (t_brick + EPS * 0.1);
+                                 let hit_pos_os = ray.origin + dir * t_brick;
+                                 let voxel_center_os = floor(p_hit_os) + 0.5;
                                 result.hit_pos_ws = (inst.object_to_world * vec4<f32>(hit_pos_os, 1.0)).xyz;
+                                result.t = distance(ray_ws.origin, result.hit_pos_ws);
                                 result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                 result.shadow_group_id = params.shadow_group_id;
                                 return result;
@@ -383,6 +432,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                             let hit_pos_os = ray.origin + dir * t_micro;
                                             let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
                                             result.hit_pos_ws = (inst.object_to_world * vec4<f32>(hit_pos_os, 1.0)).xyz;
+                                            result.t = distance(ray_ws.origin, result.hit_pos_ws);
                                             result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                             result.shadow_group_id = params.shadow_group_id;
                                             return result;
@@ -396,6 +446,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                     if (t_max_micro.y < t_max_micro.z) { voxel_pos.y += step.y; t_micro = t_max_micro.y; t_max_micro.y += t_delta_1.y; }
                                     else { voxel_pos.z += step.z; t_micro = t_max_micro.z; t_max_micro.z += t_delta_1.z; }
                                 }
+                                t_micro += EPS;
                             }
                         }
                     }
@@ -431,7 +482,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
     if (t >= t_max_obj) { return result; }
     let root = tree64_nodes[params.tree64_base];
     var iterations = 0;
-    while (t < t_max_obj && iterations < 64) {
+    while (t < t_max_obj && iterations < 512) {
         iterations++;
         let p = ray.origin + ray.dir * t;
         let lx = u32(floor(p.x / 32.0)) % 4u; let ly = u32(floor(p.y / 32.0)) % 4u; let lz = u32(floor(p.z / 32.0)) % 4u;
@@ -442,12 +493,43 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
             let bx = u32(floor(p.x / 8.0)) % 4u; let by = u32(floor(p.y / 8.0)) % 4u; let bz = u32(floor(p.z / 8.0)) % 4u;
             let b_bit = bx + by*4u + bz*16u;
             if (bit_test64(l1_node.mask_lo, l1_node.mask_hi, b_bit)) {
-                result.hit = true; result.t = t;
-                result.hit_pos_ws = (inst.object_to_world * vec4<f32>(p, 1.0)).xyz;
-                let voxel_center_os = floor(p / 8.0) * 8.0 + 4.0;
-                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                result.shadow_group_id = params.shadow_group_id;
-                return result;
+                // Refine inside the 8x8x8 block to find the actual microvoxel hit
+                let step_local2 = vec3<i32>(sign(ray.dir));
+                let bias2 = select(vec3<f32>(0.0), vec3<f32>(EPS), step_local2 < vec3<i32>(0));
+                let block_min = floor((p - bias2) / 8.0) * 8.0;
+                let block_max = block_min + 8.0;
+                let t_block = intersect_aabb(ray, block_min, block_max);
+                var t_micro = max(t, t_block.x);
+                var voxel_pos2 = vec3<i32>(floor((ray.origin + ray.dir * t_micro) - bias2));
+                var t_max_micro2 = (vec3<f32>(voxel_pos2) + select(vec3<f32>(0.0), vec3<f32>(1.0), step_local2 > vec3<i32>(0)) - ray.origin) * ray.inv_dir;
+                let t_delta_1_2 = abs(1.0 * ray.inv_dir);
+                let t_exit_block = min(t_block.y, t_max_obj);
+                var iter_ref = 0;
+                while (t_micro < t_exit_block && iter_ref < 32) {
+                    iter_ref++;
+                    if (sample_occupancy_local(voxel_pos2, params) > 0.5) {
+                        let palette_idx2 = l1_node.data;
+                        let mat_idx2 = params.material_table_base + palette_idx2 * 4u;
+                        let pbr2 = materials[mat_idx2 + 2u];
+                        if (pbr2.w <= 0.001) { // Opaque
+                            result.hit = true;
+                            result.hit_pos_ws = (inst.object_to_world * vec4<f32>(ray.origin + ray.dir * t_micro, 1.0)).xyz;
+                            result.t = distance(ray_ws.origin, result.hit_pos_ws);
+                            let voxel_center_os = vec3<f32>(voxel_pos2) + 0.5;
+                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                            result.shadow_group_id = params.shadow_group_id;
+                            return result;
+                        }
+                    }
+                    if (t_max_micro2.x < t_max_micro2.y) {
+                        if (t_max_micro2.x < t_max_micro2.z) { voxel_pos2.x += step_local2.x; t_micro = t_max_micro2.x; t_max_micro2.x += t_delta_1_2.x; }
+                        else { voxel_pos2.z += step_local2.z; t_micro = t_max_micro2.z; t_max_micro2.z += t_delta_1_2.z; }
+                    } else {
+                        if (t_max_micro2.y < t_max_micro2.z) { voxel_pos2.y += step_local2.y; t_micro = t_max_micro2.y; t_max_micro2.y += t_delta_1_2.y; }
+                        else { voxel_pos2.z += step_local2.z; t_micro = t_max_micro2.z; t_max_micro2.z += t_delta_1_2.z; }
+                    }
+                    t_micro += EPS;
+                }
             }
             t += step_to_next_cell(p, ray.dir, ray.inv_dir, 8.0);
         } else { t += step_to_next_cell(p, ray.dir, ray.inv_dir, 32.0); }
@@ -467,7 +549,7 @@ fn traverse_scene(ray: Ray) -> HitResult {
     }
     
     var iterations = 0;
-    while (stack_ptr > 0 && iterations < 128) {
+    while (stack_ptr > 0 && iterations < 512) {
         iterations++;
         stack_ptr--;
         let node_idx = stack[stack_ptr];
@@ -481,6 +563,10 @@ fn traverse_scene(ray: Ray) -> HitResult {
                 loop {
                     if (li >= node.leaf_count) { break; }
                     let inst = instances[node.leaf_first + li];
+                    if (should_skip_object_for_light(inst.object_id)) {
+                        li = li + 1;
+                        continue;
+                    }
                     let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
                     if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
                         var res: HitResult;
@@ -514,6 +600,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let light_idx = update.light_index;
     
     let light = lights[light_idx];
+    g_light_emitter_link_id = light.shadow_meta.w;
     var light_view_proj = light.view_proj;
     var light_inv_view_proj = light.inv_view_proj;
     if (update.kind == 1u) {
@@ -532,7 +619,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (update.kind == 2u) {
         let dir = point_shadow_face_dir(update.cascade_index, uv);
         let safe_dir = make_safe_dir(dir);
-        ray = Ray(light.position.xyz, dir, 1.0 / safe_dir);
+        let source_radius = max(light.position.w, 0.0);
+        let ray_origin = light.position.xyz + dir * (source_radius + EPS * 8.0);
+        ray = Ray(ray_origin, dir, 1.0 / safe_dir);
     } else {
         let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
         let p_near = light_inv_view_proj * vec4<f32>(ndc, -1.0, 1.0);
@@ -547,24 +636,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Perform traversal
     var hit_res = traverse_scene(ray);
     
-    // Force usage of tree64_nodes (Binding 5) to prevent layout mismatch
-    // (We disabled traverse_tree64 so the compiler stripped the binding)
+    // Force usage of tree64_nodes (Binding 8) to prevent layout mismatch
+    // (We disabled traverse_tree64 in the main path so the compiler would otherwise strip the binding)
     let dummy = tree64_nodes[0].mask_lo;
     if (dummy > 0xFFFF0000u) { hit_res.t += 0.00001; } // Unlikely condition, effectively no-op
     
-    // Write occluder depth from the entered surface, while keeping receiver evaluation voxel-stable elsewhere.
+    // Write occluder depth from the voxel center to act like a solid 3d pixel.
     if (hit_res.hit) {
-        if (update.kind == 2u) {
-            // Point lights keep the blocky microvoxel look by shadowing against voxel centers.
+        if (update.kind == 2u || light_type == 2u) {
+            // Point and Spot lights: store linear distance from light position (meters)
             let depth_m = distance(light.position.xyz, hit_res.voxel_center_ws);
-            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
-        } else if (light_type == 2u) {
-            // Spot light: store linear distance from light position (meters)
-            let depth_m = distance(light.position.xyz, hit_res.hit_pos_ws);
             textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
         } else {
             // Directional/others: store NDC depth for stable generic shadowing.
-            let pos_ls = light_view_proj * vec4<f32>(hit_res.hit_pos_ws, 1.0);
+            let pos_ls = light_view_proj * vec4<f32>(hit_res.voxel_center_ws, 1.0);
             let depth_ndc = clamp(pos_ls.z / pos_ls.w, -1.0, 1.0);
             textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_ndc, f32(hit_res.shadow_group_id), 0.0, 0.0));
         }

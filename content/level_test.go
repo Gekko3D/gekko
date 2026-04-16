@@ -165,6 +165,9 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	if len(loadedBrushes) != 1 || loadedBrushes[0].ID != "brush-1" || loadedBrushes[0].MaterialID != "mat_wall" {
 		t.Fatalf("expected level brush to round-trip, got %+v", loadedBrushes)
 	}
+	if EffectiveLevelBrushKind(loadedBrushes[0]) != LevelBrushKindProcedural {
+		t.Fatalf("expected procedural brush kind, got %+v", loadedBrushes[0])
+	}
 	if EffectiveLevelBrushOperation(loadedBrushes[0]) != AssetShapeOperationAdd {
 		t.Fatalf("expected brush operation add, got %+v", loadedBrushes[0])
 	}
@@ -214,6 +217,48 @@ func TestLevelJSONUsesStringPlacementModes(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"operation":"subtract"`) {
 		t.Fatalf("expected brush operation in JSON, got %s", string(data))
+	}
+}
+
+func TestLevelVoxelShapeBrushRoundTrip(t *testing.T) {
+	level := NewLevelDef("Voxel Brush")
+	level.Materials = []LevelMaterialDef{{
+		ID:   "mat_0",
+		Name: "Stone",
+	}}
+	level.BrushLayers[0].Brushes = []LevelBrushDef{{
+		ID:   "brush-voxel",
+		Name: "custom",
+		Kind: LevelBrushKindVoxelShape,
+		VoxelShape: &AssetVoxelShapeDef{
+			Palette: []AssetVoxelPaletteEntryDef{{Value: 1, MaterialID: "mat_0"}},
+			Voxels: []VoxelObjectVoxelDef{
+				{X: 0, Y: 0, Z: 0, Value: 1},
+				{X: 1, Y: 0, Z: 0, Value: 1},
+			},
+		},
+		Transform: LevelTransformDef{
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+	}}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "voxel.gklevel")
+	if err := SaveLevel(path, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	loaded, err := LoadLevel(path)
+	if err != nil {
+		t.Fatalf("LoadLevel failed: %v", err)
+	}
+	brushes := LevelBrushes(loaded)
+	if len(brushes) != 1 || EffectiveLevelBrushKind(brushes[0]) != LevelBrushKindVoxelShape {
+		t.Fatalf("expected voxel_shape brush after load, got %+v", brushes)
+	}
+	if brushes[0].VoxelShape == nil || len(brushes[0].VoxelShape.Voxels) != 2 {
+		t.Fatalf("expected voxel payload to round-trip, got %+v", brushes[0].VoxelShape)
 	}
 }
 
@@ -305,6 +350,19 @@ func TestValidateLevelValidatesBrushesAndMaterials(t *testing.T) {
 			Name:      "bad-primitive",
 			Primitive: "capsule",
 			Params:    map[string]float32{"radius": 2},
+			Transform: LevelTransformDef{
+				Rotation: Quat{0, 0, 0, 1},
+				Scale:    Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:   "brush-4",
+			Name: "bad-custom",
+			Kind: LevelBrushKindVoxelShape,
+			VoxelShape: &AssetVoxelShapeDef{
+				Palette: []AssetVoxelPaletteEntryDef{{Value: 1, MaterialID: "missing"}},
+				Voxels:  []VoxelObjectVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+			},
 			Transform: LevelTransformDef{
 				Rotation: Quat{0, 0, 0, 1},
 				Scale:    Vec3{1, 1, 1},

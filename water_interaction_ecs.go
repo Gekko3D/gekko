@@ -215,6 +215,19 @@ func collectWaterInteractionBodies(cmd *Commands) []waterInteractionBody {
 		})
 		return true
 	})
+	MakeQuery2[TransformComponent, ResolvedWaterPatchComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, patch *ResolvedWaterPatchComponent) bool {
+		if tr == nil || patch == nil || !patch.Enabled() || patch.Kind != WaterPatchKindSurface {
+			return true
+		}
+		bodies = append(bodies, waterInteractionBody{
+			Entity:      eid,
+			Center:      patch.Center,
+			HalfExtents: patch.HalfExtents,
+			SurfaceY:    patch.Center.Y(),
+			BottomY:     patch.Center.Y() - patch.Depth,
+		})
+		return true
+	})
 	sort.Slice(bodies, func(i, j int) bool {
 		return bodies[i].Entity < bodies[j].Entity
 	})

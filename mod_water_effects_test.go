@@ -3,6 +3,7 @@ package gekko
 import (
 	"testing"
 
+	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
 )
 
@@ -77,5 +78,53 @@ func TestWaterSplashEffectsSystemUsesPerWaterOverride(t *testing.T) {
 	})
 	if !foundOverride {
 		t.Fatal("expected at least one emitter to use per-water splash override")
+	}
+}
+
+func TestWaterBodyResolutionCopiesSplashOverrideToResolvedPatches(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := &WaterBodyResolutionState{}
+
+	textureID := AssetId{UUID: uuid.New()}
+	owner := cmd.AddEntity(
+		&WaterBodyComponent{
+			Mode:            WaterBodyModeExplicitRect,
+			SurfaceY:        2,
+			Depth:           3,
+			RectHalfExtents: [2]float32{2, 2},
+		},
+		&WaterSplashEffectComponent{
+			Texture:        textureID,
+			AtlasCols:      2,
+			AtlasRows:      3,
+			SplashSprite:   7,
+			MinImpactSpeed: 3,
+		},
+		&TransformComponent{Position: mgl32.Vec3{1, 2, 3}},
+	)
+	app.FlushCommands()
+
+	waterBodyResolutionSystem(cmd, nil, state)
+	app.FlushCommands()
+
+	patchIDs := state.PatchEntitiesByOwner[owner]
+	if len(patchIDs) != 1 {
+		t.Fatalf("expected one resolved patch entity, got %d", len(patchIDs))
+	}
+
+	found := false
+	MakeQuery1[WaterSplashEffectComponent](cmd).Map(func(eid EntityId, splash *WaterSplashEffectComponent) bool {
+		if eid == patchIDs[0] {
+			found = true
+			if splash.Texture != textureID || splash.AtlasCols != 2 || splash.AtlasRows != 3 || splash.SplashSprite != 7 {
+				t.Fatalf("unexpected copied splash override: %+v", *splash)
+			}
+			return false
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("expected resolved patch to carry copied splash override")
 	}
 }

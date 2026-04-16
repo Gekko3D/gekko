@@ -2,6 +2,7 @@ package app
 
 import (
 	"math"
+	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
@@ -13,6 +14,53 @@ type caScissorRect struct {
 	Y uint32
 	W uint32
 	H uint32
+}
+
+type caRenderCandidate struct {
+	VolumeIndex      int
+	EntityID         uint32
+	Scissor          caScissorRect
+	SurfaceDistance  float32
+	FarthestDistance float32
+}
+
+func buildCAVolumeRenderCandidates(camera *core.CameraState, width, height uint32, volumes []gpu_rt.CAVolumeHost) []caRenderCandidate {
+	if camera == nil || width == 0 || height == 0 || len(volumes) == 0 {
+		return nil
+	}
+
+	candidates := make([]caRenderCandidate, 0, len(volumes))
+	for idx, volume := range volumes {
+		if volume.Intensity <= 0.001 {
+			continue
+		}
+		scissor, ok := projectedCAVolumeScissor(camera, width, height, volume)
+		if !ok || scissor.W == 0 || scissor.H == 0 {
+			continue
+		}
+
+		surfaceDistance, farthestDistance := caVolumeCameraDistanceRange(camera.Position, volume, true)
+		candidates = append(candidates, caRenderCandidate{
+			VolumeIndex:      idx,
+			EntityID:         volume.EntityID,
+			Scissor:          scissor,
+			SurfaceDistance:  surfaceDistance,
+			FarthestDistance: farthestDistance,
+		})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if !nearlyEqualf(a.SurfaceDistance, b.SurfaceDistance, 1e-3) {
+			return a.SurfaceDistance > b.SurfaceDistance
+		}
+		if !nearlyEqualf(a.FarthestDistance, b.FarthestDistance, 1e-3) {
+			return a.FarthestDistance > b.FarthestDistance
+		}
+		return a.EntityID < b.EntityID
+	})
+	return candidates
 }
 
 func projectedCAVolumeScissor(camera *core.CameraState, width, height uint32, volume gpu_rt.CAVolumeHost) (caScissorRect, bool) {
@@ -150,6 +198,32 @@ func caVolumeWorldCenter(volume gpu_rt.CAVolumeHost) mgl32.Vec3 {
 	})
 }
 
+func caVolumeCameraDistanceRange(cameraPos mgl32.Vec3, volume gpu_rt.CAVolumeHost, expanded bool) (float32, float32) {
+	localToWorld := caVolumeLocalToWorld(volume)
+	worldToLocal := localToWorld.Inv()
+	localCamera := worldToLocal.Mul4x1(cameraPos.Vec4(1.0)).Vec3()
+	minCorner, maxCorner := caVolumeLocalBounds(volume, expanded)
+	closestLocal := mgl32.Vec3{
+		clampf(localCamera.X(), minCorner.X(), maxCorner.X()),
+		clampf(localCamera.Y(), minCorner.Y(), maxCorner.Y()),
+		clampf(localCamera.Z(), minCorner.Z(), maxCorner.Z()),
+	}
+	closestWorld := transformPoint(localToWorld, closestLocal)
+	nearestDistance := closestWorld.Sub(cameraPos).Len()
+	if cameraInsideCAVolume(cameraPos, volume, expanded) {
+		nearestDistance = 0
+	}
+
+	farthestDistance := float32(0)
+	for _, corner := range caVolumeWorldCorners(volume, expanded) {
+		dist := corner.Sub(cameraPos).Len()
+		if dist > farthestDistance {
+			farthestDistance = dist
+		}
+	}
+	return nearestDistance, farthestDistance
+}
+
 func caVolumeLocalToWorld(volume gpu_rt.CAVolumeHost) mgl32.Mat4 {
 	return mgl32.Translate3D(volume.Position.X(), volume.Position.Y(), volume.Position.Z()).
 		Mul4(volume.Rotation.Mat4()).
@@ -221,6 +295,10 @@ func maxf(a, b float32) float32 {
 		return a
 	}
 	return b
+}
+
+func nearlyEqualf(a, b, eps float32) bool {
+	return absf(a-b) <= eps
 }
 
 func min(a, b uint32) uint32 {

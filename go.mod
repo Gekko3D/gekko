@@ -18,4 +18,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/cogentcore/webgpu => github.com/ddevidchenko/webgpu v0.0.0-20251229132442-94b855119696
+replace github.com/cogentcore/webgpu => github.com/ddevidchenko/webgpu aeecc6463905a5ad27857c6d81619f56883e9226

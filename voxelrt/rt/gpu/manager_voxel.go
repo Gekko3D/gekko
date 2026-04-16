@@ -412,6 +412,7 @@ func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, m
 		binary.LittleEndian.PutUint32(pBuf[64:68], 1)
 	}
 	binary.LittleEndian.PutUint32(pBuf[68:72], obj.PlanetTileGroupID)
+	binary.LittleEndian.PutUint32(pBuf[72:76], obj.EmitterLinkID)
 	binary.LittleEndian.PutUint32(pBuf[80:84], uint32(obj.PlanetTileFace))
 	binary.LittleEndian.PutUint32(pBuf[84:88], uint32(obj.PlanetTileLevel))
 	binary.LittleEndian.PutUint32(pBuf[88:92], uint32(obj.PlanetTileX))

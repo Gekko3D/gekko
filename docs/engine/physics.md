@@ -12,7 +12,12 @@ Read it when touching:
 
 ## Architecture
 
-The physics path is asynchronous.
+The engine supports two physics execution modes:
+
+- asynchronous
+  - background simulation goroutine driven by `physicsLoop(...)`
+- synchronous
+  - fixed-step simulation inside the ECS schedule via `SynchronousPhysicsSystem`
 
 Main pieces:
 
@@ -24,10 +29,13 @@ Main pieces:
   - snapshot/results bridge between ECS and the async simulation loop
 - `physicsLoop(...)`
   - background simulation goroutine
+- `PhysicsSimulator`
+  - in-process fixed-step simulator used by synchronous mode
 
 Important files:
 
 - `mod_physics_module.go`
+- `mod_physics_simulator.go`
 - `mod_physics_loop.go`
 - `mod_physics_collision.go`
 - `mod_vox_physics.go`
@@ -37,7 +45,8 @@ Important files:
 `PhysicsModule` installs:
 
 - `PhysicsPullSystem` in `PreUpdate`
-- `PhysicsPushSystem` in `PostUpdate`
+- `PhysicsPushSystem` in `PostUpdate` when running async mode
+- `SynchronousPhysicsSystem` in `PhysicsUpdate` when running sync mode
 
 That split is intentional.
 
@@ -49,9 +58,18 @@ Frame shape:
 3. `PhysicsPushSystem`
   - snapshots current ECS state back into the async simulation
 
+In synchronous mode, the fixed-step portion instead runs:
+
+1. fixed-step `SynchronousPhysicsSystem`
+   - snapshots ECS state
+   - steps `PhysicsSimulator`
+   - writes results back immediately
+2. `PhysicsPullSystem`
+   - still owns interpolation/collision-event capture for the render-facing side
+
 If a change needs to affect the next simulation step, it usually needs to be visible by `PostUpdate`.
 
-## Async Snapshot Model
+## Snapshot Model
 
 Physics does not mutate ECS directly from the background goroutine.
 
@@ -63,6 +81,8 @@ Instead:
 - `PhysicsPullSystem` copies results back to ECS components
 
 This avoids cross-thread ECS mutation but means the physics world is always at least one synchronization step away from immediate ECS changes.
+
+In synchronous mode the same snapshot/result types are still used, but the producer and consumer both live inside the main-thread fixed-step schedule.
 
 ## What `PhysicsPullSystem` Owns
 
@@ -89,6 +109,8 @@ If visual transforms look wrong while physics state is correct, start here befor
 - tells the async loop what the current authoritative ECS-side body state is
 
 If gameplay changes are not reaching physics, start here.
+
+`SynchronousPhysicsSystem` owns the same snapshot-building responsibility in synchronous mode.
 
 ## Collision Model
 
@@ -118,6 +140,13 @@ If a bug mentions:
 
 start in `mod_vox_physics.go` before touching the generic loop.
 
+Important runtime detail:
+
+- physics no longer requires voxel pivot state or `PhysicsModel` data to have already been populated by later renderer-facing stages
+- when needed, the physics bridge resolves centered voxel pivots from geometry assets and can synthesize a fallback `PhysicsModel` for voxel bodies during snapshot construction
+
+That fallback is meant to make first-tick behavior robust, not to replace `VoxPhysicsPreCalcSystem`. Keep `VoxPhysicsPreCalcSystem` as the authoritative cached path for voxel-heavy scenes.
+
 ## Collision Events
 
 Collision events are buffered through `PhysicsProxy`.
@@ -134,10 +163,30 @@ Event kinds:
 
 `PhysicsProxy.DrainCollisionEvents()` is the handoff point for gameplay systems that want discrete collision events instead of raw body state.
 
+Call `DrainCollisionEvents()` once per frame in one gameplay-facing system. It drains the proxy buffer.
+
+If UI/logging only cares about notable impacts, remember that interesting collisions may show up as `stay` events after the initial contact frame, not only `enter`/`exit`.
+
+## Damping Semantics
+
+`RigidBodyComponent.LinearDamping` and `AngularDamping` support two styles already used in the codebase:
+
+- low values such as `0.02`
+  - treated as damping amounts, so the body keeps `1 - value`
+- high values such as `0.99`
+  - treated as direct retention multipliers
+
+In practice:
+
+- use very small values for light gameplay damping
+- use values near `1.0` only when you intentionally want near-per-step retention semantics
+
 ## Common Failure Modes
 
 - body moves visually but physics does not react
   - snapshot push path is wrong
+- first-tick voxel bodies behave differently from later frames
+  - physics bootstrap path is missing geometry/pivot/model data
 - physics reacts but render pose lags or snaps
   - pull/interpolation path is wrong
 - voxel collisions miss or over-penetrate

@@ -138,7 +138,8 @@ struct ObjectParams {
   terrain_chunk: vec4<i32>,
   is_planet_tile: u32,
   planet_tile_group_id: u32,
-  padding2: vec2<u32>,
+  emitter_link_id: u32,
+  padding2: u32,
   planet_tile: vec4<i32>,
 };
 

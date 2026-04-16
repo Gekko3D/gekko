@@ -81,6 +81,7 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 		binary.LittleEndian.PutUint32(dst[64:68], 1)
 	}
 	binary.LittleEndian.PutUint32(dst[68:72], obj.PlanetTileGroupID)
+	binary.LittleEndian.PutUint32(dst[72:76], obj.EmitterLinkID)
 	binary.LittleEndian.PutUint32(dst[80:84], uint32(obj.PlanetTileFace))
 	binary.LittleEndian.PutUint32(dst[84:88], uint32(obj.PlanetTileLevel))
 	binary.LittleEndian.PutUint32(dst[88:92], uint32(obj.PlanetTileX))
@@ -189,7 +190,7 @@ func expectedShadowLayers(lights []core.Light, hasCamera bool) uint32 {
 	var total uint32
 	for _, light := range lights {
 		lightType := uint32(light.Params[2])
-		if lightType == core.LightTypePoint && !light.CastsShadows {
+		if lightType == core.LightTypePoint && light.Params[3] <= 0.5 {
 			continue
 		}
 		switch lightType {
@@ -402,7 +403,7 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 		for c := range l.DirectionalCascades {
 			l.DirectionalCascades[c] = core.DirectionalShadowCascade{}
 		}
-		if lightType == core.LightTypePoint && !l.CastsShadows {
+		if lightType == core.LightTypePoint && l.Params[3] <= 0.5 {
 			continue
 		}
 

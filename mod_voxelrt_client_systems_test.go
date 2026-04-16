@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"math"
 	"testing"
 
 	"github.com/gekko3d/gekko/content"
@@ -36,6 +37,65 @@ func TestSyncVoxelRtLightsUsesDaylightDirectionalLightAsSun(t *testing.T) {
 	}
 	if state.RtApp.Scene.AmbientLight.Len() <= 0 {
 		t.Fatalf("expected non-zero ambient light, got %v", state.RtApp.Scene.AmbientLight)
+	}
+}
+
+func TestSyncVoxelRtLightsDerivesSourceRadiusFromLinkedEmitterGeometry(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateVoxelModel(VoxModel{
+		SizeX: 1,
+		SizeY: 1,
+		SizeZ: 1,
+		Voxels: []Voxel{
+			{X: 0, Y: 0, Z: 0, ColorIndex: 1},
+		},
+	}, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{255, 220, 96, 255})
+
+	cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{0, 0, 0},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{2, 2, 2},
+		},
+		&VoxelModelComponent{
+			VoxelModel:    modelID,
+			VoxelPalette:  paletteID,
+			EmitterLinkID: 77,
+		},
+	)
+	cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{0, 0, 0},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&LightComponent{
+			Type:          LightTypePoint,
+			Color:         [3]float32{1, 1, 1},
+			Intensity:     4,
+			Range:         20,
+			CastsShadows:  true,
+			EmitterLinkID: 77,
+		},
+	)
+	app.FlushCommands()
+
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
+	syncVoxelRtLights(state, cmd)
+
+	if len(state.RtApp.Scene.Lights) != 1 {
+		t.Fatalf("expected one synced light, got %d", len(state.RtApp.Scene.Lights))
+	}
+
+	got := state.RtApp.Scene.Lights[0].Position[3]
+	want := float32(math.Sqrt(0.12) / 2.0)
+	if math.Abs(float64(got-want)) > 0.0001 {
+		t.Fatalf("expected derived source radius %v, got %v", want, got)
 	}
 }
 
@@ -339,6 +399,40 @@ func TestBuildWaterSurfaceHostsNormalizesAndSortsResults(t *testing.T) {
 	}
 	if hosts[0].FlowDirection != ([2]float32{0, 1}) {
 		t.Fatalf("unexpected normalized flow direction: %v", hosts[0].FlowDirection)
+	}
+}
+
+func TestBuildWaterSurfaceHostsIncludesResolvedPatches(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{5, 2, 1}},
+		&ResolvedWaterPatchComponent{
+			Owner:           99,
+			PatchIndex:      0,
+			Kind:            WaterPatchKindSurface,
+			Center:          mgl32.Vec3{5, 2, 1},
+			HalfExtents:     [2]float32{3, 2},
+			Depth:           4,
+			Color:           [3]float32{0.1, 0.2, 0.3},
+			AbsorptionColor: [3]float32{0.4, 0.5, 0.6},
+			Opacity:         0.7,
+			Roughness:       0.15,
+			Refraction:      0.25,
+			FlowDirection:   [2]float32{1, 0},
+			FlowSpeed:       0.9,
+			WaveAmplitude:   0.03,
+		},
+	)
+	app.FlushCommands()
+
+	hosts, _ := buildWaterSurfaceHosts(cmd, nil)
+	if len(hosts) != 1 {
+		t.Fatalf("expected one resolved water host, got %d", len(hosts))
+	}
+	if hosts[0].Position != (mgl32.Vec3{5, 2, 1}) || hosts[0].Depth != 4 || hosts[0].HalfExtents != ([2]float32{3, 2}) {
+		t.Fatalf("unexpected resolved host %+v", hosts[0])
 	}
 }
 

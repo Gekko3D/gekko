@@ -83,7 +83,9 @@ type ParticleEmitterDef struct {
 	Emitter  ParticleEmitterComponent
 }
 
-// CellularVolumeDef defines a cellular automaton volume.
+// CellularVolumeDef defines a supported cellular volume spawn.
+//
+// Supported volume types are CellularSmoke and CellularFire.
 type CellularVolumeDef struct {
 	Position mgl32.Vec3
 	Rotation mgl32.Quat
@@ -243,6 +245,7 @@ func spawnParticleEmitter(cmd *Commands, def ParticleEmitterDef) {
 }
 
 func spawnCellularVolume(cmd *Commands, def CellularVolumeDef) {
+	mustValidateCellularVolumeComponent(&def.Volume)
 	cmd.AddEntity(
 		&TransformComponent{
 			Position: def.Position,

@@ -107,7 +107,8 @@ struct ObjectParams {
     terrain_chunk: vec4<i32>, // xyz: chunk coord, w: chunk size in voxels
     is_planet_tile: u32,
     planet_tile_group_id: u32,
-    padding0: vec2<u32>,
+    emitter_link_id: u32,
+    padding0: u32,
     planet_tile: vec4<i32>, // face, level, x, y
 };
 

@@ -161,10 +161,12 @@ fn fs_main(in: VSOut) -> FSOut {
         discard;
     }
 
-    // WBOIT weighting normalized by opaque limit (matches transparent overlay)
-    let z_norm = clamp(t_pixel / max(t_scene, 1e-4), 0.0, 1.0);
-    let k: f32 = 8.0;
-    let weight = max(1e-3, alpha) * pow(1.0 - z_norm, k);
+    // Use camera depth, not opaque scene depth behind the particle. Tying the
+    // weight to t_scene makes particles near the ground or walls fade out when
+    // their screen projection overlaps nearby opaque geometry.
+    let depth_norm = clamp(t_pixel / 160.0, 0.0, 1.0);
+    let k: f32 = 4.0;
+    let weight = max(1e-3, alpha) * pow(1.0 - depth_norm, k);
 
     var out: FSOut;
     // Accumulate premultiplied color with weighted alpha, but store unweighted alpha in accum.a (for revealage)

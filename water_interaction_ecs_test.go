@@ -111,3 +111,58 @@ func TestBuildWaterSurfaceHostsIncludesRippleHosts(t *testing.T) {
 		t.Fatalf("expected ripple to map to first sorted water host, got %d", ripples[0].WaterIndex)
 	}
 }
+
+func TestWaterInteractionSystemWorksWithResolvedWaterPatch(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	interactions := &WaterInteractionState{}
+
+	patch := cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{5, 3, 5},
+		},
+		&ResolvedWaterPatchComponent{
+			Owner:       42,
+			PatchIndex:  0,
+			Kind:        WaterPatchKindSurface,
+			Center:      mgl32.Vec3{5, 3, 5},
+			HalfExtents: [2]float32{2, 2},
+			Depth:       2,
+		},
+	)
+	body := cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{5, 4, 5},
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&RigidBodyComponent{
+			Mass:     1,
+			Velocity: mgl32.Vec3{0, -6, 0},
+		},
+		&ColliderComponent{
+			Shape:       ShapeBox,
+			HalfExtents: mgl32.Vec3{0.35, 0.35, 0.35},
+		},
+	)
+	app.FlushCommands()
+
+	waterInteractionSystem(cmd, &Time{Dt: 1.0 / 60.0}, interactions)
+
+	MakeQuery1[TransformComponent](cmd).Map(func(eid EntityId, tr *TransformComponent) bool {
+		if eid == body {
+			tr.Position = mgl32.Vec3{5, 2.4, 5}
+			return false
+		}
+		return true
+	})
+
+	waterInteractionSystem(cmd, &Time{Dt: 1.0 / 60.0}, interactions)
+	events := interactions.ImpactEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected one water impact event, got %d", len(events))
+	}
+	if events[0].WaterEntity != patch {
+		t.Fatalf("expected impact to target resolved patch entity %d, got %d", patch, events[0].WaterEntity)
+	}
+}

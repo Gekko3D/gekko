@@ -16,6 +16,7 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	obj.LODThreshold = 72.5
 	obj.AmbientOcclusionMode = core.AmbientOcclusionModeDisabled
 	obj.ShadowGroupID = 42
+	obj.EmitterLinkID = 55
 	obj.ShadowSeamWorldEpsilon = 0.75
 	obj.IsTerrainChunk = true
 	obj.TerrainGroupID = 77
@@ -55,6 +56,9 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	}
 	if got := math.Float32frombits(binary.LittleEndian.Uint32(buf[36:40])); got != obj.ShadowSeamWorldEpsilon {
 		t.Fatalf("expected seam epsilon %v, got %v", obj.ShadowSeamWorldEpsilon, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[72:76]); got != obj.EmitterLinkID {
+		t.Fatalf("expected emitter link %d, got %d", obj.EmitterLinkID, got)
 	}
 	if got := binary.LittleEndian.Uint32(buf[40:44]); got != 1 {
 		t.Fatalf("expected terrain flag 1, got %d", got)

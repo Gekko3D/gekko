@@ -671,6 +671,49 @@ func TestBakeAuthoredLevelBrushesMatchesSpawnedRuntimeBrushGeometryAndPalette(t 
 	}
 }
 
+func TestBakeAuthoredLevelBrushesSupportsVoxelShapeBrushes(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+	level := content.NewLevelDef("custom")
+	level.Materials = []content.LevelMaterialDef{{
+		ID:        "stone",
+		Name:      "Stone",
+		BaseColor: [4]uint8{120, 130, 140, 255},
+		Roughness: 1,
+		IOR:       1.5,
+	}}
+	level.BrushLayers[0].Brushes = []content.LevelBrushDef{{
+		ID:   "brush-custom",
+		Name: "custom",
+		Kind: content.LevelBrushKindVoxelShape,
+		VoxelShape: &content.AssetVoxelShapeDef{
+			Palette: []content.AssetVoxelPaletteEntryDef{{Value: 1, MaterialID: "stone"}},
+			Voxels: []content.VoxelObjectVoxelDef{
+				{X: 0, Y: 0, Z: 0, Value: 1},
+				{X: 1, Y: 0, Z: 0, Value: 1},
+			},
+		},
+		Transform: content.LevelTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+
+	bake, err := BakeAuthoredLevelBrushes(assets, level)
+	if err != nil {
+		t.Fatalf("BakeAuthoredLevelBrushes failed: %v", err)
+	}
+	if len(bake.Batches) != 1 {
+		t.Fatalf("expected one baked batch, got %d", len(bake.Batches))
+	}
+	geometry, ok := assets.GetVoxelGeometry(bake.Batches[0].Geometry)
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatalf("expected baked geometry asset, got %+v ok=%v", geometry, ok)
+	}
+	if geometry.XBrickMap.GetVoxelCount() != 2 {
+		t.Fatalf("expected two voxels in baked custom brush, got %d", geometry.XBrickMap.GetVoxelCount())
+	}
+}
+
 func TestCachedLevelBrushModelAssetReusesRepeatedPrimitiveCombos(t *testing.T) {
 	assets := newSpawnTestAssetServer()
 	cache := &levelBrushBakeResolveCache{

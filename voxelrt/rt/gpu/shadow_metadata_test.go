@@ -340,9 +340,8 @@ func TestUpdateLightsAssignsPointShadowFacesAndLayers(t *testing.T) {
 	scene := &core.Scene{
 		Lights: []core.Light{
 			{
-				Position:     [4]float32{4, 8, -2, 1},
-				Params:       [4]float32{24, 0, float32(core.LightTypePoint), 0},
-				CastsShadows: true,
+				Position: [4]float32{4, 8, -2, 1},
+				Params:   [4]float32{24, 0, float32(core.LightTypePoint), 1.0},
 			},
 		},
 	}
@@ -380,9 +379,8 @@ func TestBuildShadowUpdatesRotatesPointFacesAcrossFrames(t *testing.T) {
 	scene := &core.Scene{
 		Lights: []core.Light{
 			{
-				Position:     [4]float32{8, 12, 0, 1},
-				Params:       [4]float32{32, 0, float32(core.LightTypePoint), 0},
-				CastsShadows: true,
+				Position: [4]float32{8, 12, 0, 1},
+				Params:   [4]float32{32, 0, float32(core.LightTypePoint), 1.0},
 			},
 		},
 	}
@@ -456,14 +454,12 @@ func TestUpdateLightsUsesReducedPointShadowResolutionByTier(t *testing.T) {
 	scene := &core.Scene{
 		Lights: []core.Light{
 			{
-				Position:     [4]float32{0, 8, 20, 1},
-				Params:       [4]float32{24, 0, float32(core.LightTypePoint), 0},
-				CastsShadows: true,
+				Position: [4]float32{0, 8, 20, 1},
+				Params:   [4]float32{24, 0, float32(core.LightTypePoint), 1.0},
 			},
 			{
-				Position:     [4]float32{0, 8, -10, 1},
-				Params:       [4]float32{24, 0, float32(core.LightTypePoint), 0},
-				CastsShadows: true,
+				Position: [4]float32{0, 8, -10, 1},
+				Params:   [4]float32{24, 0, float32(core.LightTypePoint), 1.0},
 			},
 		},
 	}

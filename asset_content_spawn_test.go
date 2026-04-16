@@ -124,6 +124,61 @@ func TestSpawnAuthoredAssetRejectsInvalidSourcePayload(t *testing.T) {
 	}
 }
 
+func TestSpawnAuthoredAssetBuildsVoxelShapeGeometryAndPalette(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	def := content.NewAssetDef("custom")
+	def.Materials = []content.AssetMaterialDef{{
+		ID:           "mat_red",
+		Name:         "Red",
+		BaseColor:    [4]uint8{255, 80, 80, 255},
+		Roughness:    0.4,
+		Metallic:     0.1,
+		Emissive:     0.2,
+		IOR:          1.4,
+		Transparency: 0.15,
+	}}
+	def.Parts = []content.AssetPartDef{{
+		ID:   "shape",
+		Name: "shape",
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxelShape,
+			VoxelShape: &content.AssetVoxelShapeDef{
+				Palette: []content.AssetVoxelPaletteEntryDef{{Value: 1, MaterialID: "mat_red"}},
+				Voxels: []content.VoxelObjectVoxelDef{
+					{X: 0, Y: 0, Z: 0, Value: 1},
+					{X: 1, Y: 0, Z: 0, Value: 1},
+				},
+			},
+		},
+		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+	}}
+
+	result, err := SpawnAuthoredAsset(cmd, assets, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAsset returned error: %v", err)
+	}
+	app.FlushCommands()
+
+	vmc := mustVoxelModelForSpawnTest(t, cmd, result.EntitiesByAssetID["shape"])
+	geometry, ok := assets.GetVoxelGeometry(vmc.GeometryAsset())
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatal("expected voxel shape geometry asset")
+	}
+	if found, value := geometry.XBrickMap.GetVoxel(1, 0, 0); !found || value != 1 {
+		t.Fatalf("expected voxel shape voxel at 1,0,0 with value 1, got found=%v value=%d", found, value)
+	}
+	palette, ok := assets.GetVoxelPalette(vmc.VoxelPalette)
+	if !ok {
+		t.Fatal("expected voxel shape palette asset")
+	}
+	if palette.VoxPalette[1] != [4]uint8{255, 80, 80, 255} {
+		t.Fatalf("unexpected palette entry %+v", palette.VoxPalette[1])
+	}
+}
+
 func TestSpawnAuthoredAssetSpawnsPartLightEmitterAndMarkerHierarchy(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

@@ -149,9 +149,10 @@ func (f *TextFeature) HasScreenStage(a *App, stage FeatureScreenStage) bool {
 
 func (f *TextFeature) resolveDefaultFontPath() string {
 	candidates := []string{
-		"gekko/voxelrt/rt/fonts/Roboto-Medium.ttf",    // Root
-		"../gekko/voxelrt/rt/fonts/Roboto-Medium.ttf", // From subfolders like actiongame
-		"assets/Roboto-Medium.ttf",                    // Local assets
+		"gekko/voxelrt/rt/fonts/Roboto-Medium.ttf",       // Root
+		"../gekko/voxelrt/rt/fonts/Roboto-Medium.ttf",    // From subfolders like actiongame
+		"../../gekko/voxelrt/rt/fonts/Roboto-Medium.ttf", // From examples/pbr_gallery etc.
+		"assets/Roboto-Medium.ttf",                       // Local assets
 	}
 
 	for _, c := range candidates {

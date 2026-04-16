@@ -20,9 +20,8 @@ func testSceneFrustumPlanes() [6]mgl32.Vec4 {
 
 func testShadowCastingDirectionalLight() Light {
 	return Light{
-		Direction:    [4]float32{0, -1, 0, 0},
-		Params:       [4]float32{0, 0, float32(LightTypeDirectional), 0},
-		CastsShadows: true,
+		Direction: [4]float32{0, -1, 0, 0},
+		Params:    [4]float32{0, 0, float32(LightTypeDirectional), 1.0},
 	}
 }
 
@@ -578,8 +577,7 @@ func TestSceneCommitSkipsShadowCasterWorkWithoutShadowCastingLights(t *testing.T
 
 	scene.Lights = []Light{
 		{
-			Params:       [4]float32{12, 0, float32(LightTypePoint), 0},
-			CastsShadows: false,
+			Params: [4]float32{12, 0, float32(LightTypePoint), 0.0},
 		},
 	}
 

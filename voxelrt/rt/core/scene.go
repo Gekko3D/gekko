@@ -68,6 +68,7 @@ type VoxelObject struct {
 	ShadowCasterGroupID    uint64
 	ShadowCasterGroupLimit int
 	ShadowGroupID          uint32
+	EmitterLinkID          uint32
 	AmbientOcclusionMode   AmbientOcclusionMode
 	ShadowSeamWorldEpsilon float32
 	AllowOcclusionCulling  bool
@@ -552,7 +553,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 
 func sceneHasShadowCastingLights(lights []Light) bool {
 	for _, light := range lights {
-		if light.CastsShadows {
+		if light.Params[3] > 0.5 {
 			return true
 		}
 	}

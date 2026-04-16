@@ -29,6 +29,9 @@ func mustPhysicsModel(t *testing.T, cmd *Commands, eid EntityId) PhysicsModel {
 	t.Helper()
 
 	for _, component := range cmd.GetAllComponents(eid) {
+		if model, ok := component.(*PhysicsModel); ok {
+			return *model
+		}
 		if model, ok := component.(PhysicsModel); ok {
 			return model
 		}
@@ -42,6 +45,9 @@ func mustTransformComponent(t *testing.T, cmd *Commands, eid EntityId) Transform
 	t.Helper()
 
 	for _, component := range cmd.GetAllComponents(eid) {
+		if tr, ok := component.(*TransformComponent); ok {
+			return *tr
+		}
 		if tr, ok := component.(TransformComponent); ok {
 			return tr
 		}
@@ -55,6 +61,9 @@ func mustVoxelModelComponent(t *testing.T, cmd *Commands, eid EntityId) VoxelMod
 	t.Helper()
 
 	for _, component := range cmd.GetAllComponents(eid) {
+		if vm, ok := component.(*VoxelModelComponent); ok {
+			return *vm
+		}
 		if vm, ok := component.(VoxelModelComponent); ok {
 			return vm
 		}

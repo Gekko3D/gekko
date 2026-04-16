@@ -32,7 +32,6 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 
 	state := &VoxelRtState{
 		RtApp:              RtApp,
-		HideDebugGizmos:    mod.HideDebugGizmos,
 		loadedModels:       make(map[AssetId]*core.VoxelObject),
 		instanceMap:        make(map[EntityId]*core.VoxelObject),
 		lastMaterialKeys:   make(map[*core.VoxelObject]materialTableCacheKey),
@@ -43,6 +42,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 	cmd.AddResources(state)
 	cmd.AddResources(&WaterInteractionState{})
+	cmd.AddResources(&WaterBodyResolutionState{})
 
 	cmd.AddResources(&Profiler{})
 
@@ -56,6 +56,12 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	// Cellular automaton step system (low Hz via TickRate in component)
 	app.UseSystem(
 		System(caStepSystem).
+			InStage(Update).
+			RunAlways(),
+	)
+
+	app.UseSystem(
+		System(waterBodyResolutionSystem).
 			InStage(Update).
 			RunAlways(),
 	)
@@ -111,6 +117,241 @@ func voxelRtPreludeSystem(input *Input, state *VoxelRtState) {
 	if state.RtApp.BufferManager != nil {
 		state.RtApp.BufferManager.BeginBatch()
 	}
+}
+
+type caBudgetCameraView struct {
+	Position mgl32.Vec3
+	Forward  mgl32.Vec3
+	Valid    bool
+}
+
+type caVolumeBudgetCandidate struct {
+	host              gpu_rt.CAVolumeHost
+	volume            *CellularVolumeComponent
+	rawSteps          uint32
+	scheduledSteps    uint32
+	distance          float32
+	visible           bool
+	behindCamera      bool
+	resolutionClamped bool
+	stepDeferred      bool
+	suspended         bool
+	dropped           bool
+	priority          float32
+}
+
+func readCAVolumeBudgetCamera(cmd *Commands, fallback *core.CameraState) caBudgetCameraView {
+	view := caBudgetCameraView{}
+	if cmd != nil {
+		MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
+			if camera == nil {
+				return true
+			}
+			view.Position = camera.Position
+			forward := camera.LookAt.Sub(camera.Position)
+			if forward.LenSqr() <= 1e-6 {
+				yaw := mgl32.DegToRad(camera.Yaw)
+				pitch := mgl32.DegToRad(camera.Pitch)
+				forward = mgl32.Vec3{
+					float32(math.Sin(float64(yaw)) * math.Cos(float64(pitch))),
+					float32(math.Sin(float64(pitch))),
+					float32(-math.Cos(float64(yaw)) * math.Cos(float64(pitch))),
+				}
+			}
+			if forward.LenSqr() > 1e-6 {
+				view.Forward = forward.Normalize()
+				view.Valid = true
+				return false
+			}
+			return true
+		})
+	}
+	if !view.Valid && fallback != nil {
+		view.Position = fallback.Position
+		forward := fallback.GetForward()
+		if forward.LenSqr() > 1e-6 {
+			view.Forward = forward.Normalize()
+			view.Valid = true
+		}
+	}
+	return view
+}
+
+func caVolumeCellCount(resolution [3]uint32) uint64 {
+	return uint64(resolution[0]) * uint64(resolution[1]) * uint64(resolution[2])
+}
+
+func clampCAVolumeResolution(resolution [3]uint32, cfg gpu_rt.CAVolumeBudgetConfig) ([3]uint32, bool) {
+	clamped := false
+	for axis := range resolution {
+		if resolution[axis] == 0 {
+			resolution[axis] = 1
+			clamped = true
+		}
+		if resolution[axis] > uint32(cfg.MaxResolutionAxis) {
+			resolution[axis] = uint32(cfg.MaxResolutionAxis)
+			clamped = true
+		}
+	}
+	if caVolumeCellCount(resolution) <= uint64(cfg.MaxCellsPerVolume) {
+		return resolution, clamped
+	}
+
+	scale := math.Cbrt(float64(cfg.MaxCellsPerVolume) / float64(caVolumeCellCount(resolution)))
+	for axis := range resolution {
+		scaled := uint32(math.Floor(float64(resolution[axis]) * scale))
+		if scaled < 1 {
+			scaled = 1
+		}
+		if scaled != resolution[axis] {
+			clamped = true
+			resolution[axis] = scaled
+		}
+	}
+	for caVolumeCellCount(resolution) > uint64(cfg.MaxCellsPerVolume) {
+		largestAxis := 0
+		for axis := 1; axis < len(resolution); axis++ {
+			if resolution[axis] > resolution[largestAxis] {
+				largestAxis = axis
+			}
+		}
+		if resolution[largestAxis] <= 1 {
+			break
+		}
+		resolution[largestAxis]--
+		clamped = true
+	}
+	return resolution, clamped
+}
+
+func scheduleCAVolumeSteps(raw uint32, distance float32, behindCamera bool, cfg gpu_rt.CAVolumeBudgetConfig) (scheduled uint32, deferred bool, suspended bool) {
+	scheduled = min(raw, uint32(cfg.MaxStepsPerVolume))
+	deferred = scheduled < raw
+	if scheduled == 0 {
+		return 0, deferred, false
+	}
+
+	if behindCamera && distance >= cfg.StepSuspendDistance {
+		return 0, true, true
+	}
+	if distance >= cfg.StepSuspendDistance {
+		scheduled = min(scheduled, 1)
+	}
+	if distance >= cfg.StepReduceDistance {
+		scheduled = min(scheduled, 1)
+	}
+	if behindCamera {
+		scheduled = min(scheduled, 1)
+	}
+	if scheduled < raw {
+		deferred = true
+	}
+	suspended = raw > 0 && scheduled == 0
+	return scheduled, deferred, suspended
+}
+
+func caVolumeBudgetPriority(candidate caVolumeBudgetCandidate) float32 {
+	priority := candidate.host.Intensity * 100.0
+	if candidate.visible {
+		priority += 1000.0
+	}
+	if !candidate.behindCamera {
+		priority += 500.0
+	}
+	priority += max(0.0, 256.0-candidate.distance)
+	priority += float32(candidate.rawSteps) * 16.0
+	return priority
+}
+
+func budgetCAVolumes(candidates []caVolumeBudgetCandidate, cfg gpu_rt.CAVolumeBudgetConfig) ([]gpu_rt.CAVolumeHost, uint32, uint32, uint32, uint32) {
+	cfg = cfg.WithDefaults()
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].priority == candidates[j].priority {
+			return candidates[i].host.EntityID < candidates[j].host.EntityID
+		}
+		return candidates[i].priority > candidates[j].priority
+	})
+
+	selected := make([]*caVolumeBudgetCandidate, 0, min(len(candidates), cfg.MaxManagedVolumes))
+	currentMaxX := uint32(1)
+	currentMaxY := uint32(1)
+	currentDepth := uint32(1)
+	dropped := uint32(0)
+
+	for i := range candidates {
+		candidate := &candidates[i]
+		if len(selected) >= cfg.MaxManagedVolumes {
+			candidate.dropped = true
+			dropped++
+			continue
+		}
+		nextMaxX := max(currentMaxX, candidate.host.Resolution[0])
+		nextMaxY := max(currentMaxY, candidate.host.Resolution[1])
+		nextDepth := currentDepth + candidate.host.Resolution[2]
+		nextCells := uint64(nextMaxX) * uint64(nextMaxY) * uint64(nextDepth)
+		if nextCells > uint64(cfg.MaxAtlasCells) {
+			candidate.dropped = true
+			dropped++
+			continue
+		}
+		selected = append(selected, candidate)
+		currentMaxX = nextMaxX
+		currentMaxY = nextMaxY
+		currentDepth = nextDepth
+	}
+
+	remainingSteps := cfg.MaxTotalStepsPerFrame
+	deferredCount := uint32(0)
+	suspendedCount := uint32(0)
+	totalSteps := uint32(0)
+	for _, candidate := range selected {
+		if candidate.scheduledSteps == 0 {
+			candidate.host.StepsPending = 0
+			if candidate.stepDeferred {
+				deferredCount++
+			}
+			if candidate.suspended {
+				suspendedCount++
+			}
+			continue
+		}
+		allowed := min(int(candidate.scheduledSteps), remainingSteps)
+		if allowed < int(candidate.scheduledSteps) {
+			candidate.stepDeferred = true
+			if allowed == 0 && candidate.rawSteps > 0 {
+				candidate.suspended = true
+			}
+		}
+		candidate.scheduledSteps = uint32(allowed)
+		candidate.host.StepsPending = float32(candidate.scheduledSteps)
+		remainingSteps -= allowed
+		totalSteps += candidate.scheduledSteps
+		if candidate.stepDeferred {
+			deferredCount++
+		}
+		if candidate.suspended {
+			suspendedCount++
+		}
+	}
+
+	for i := range candidates {
+		remaining := candidates[i].rawSteps
+		if !candidates[i].dropped && candidates[i].scheduledSteps < remaining {
+			remaining -= candidates[i].scheduledSteps
+		} else if !candidates[i].dropped {
+			remaining = 0
+		}
+		candidates[i].volume._gpuStepsPending = remaining
+	}
+
+	hosts := make([]gpu_rt.CAVolumeHost, 0, len(selected))
+	for _, candidate := range selected {
+		hosts = append(hosts, candidate.host)
+	}
+	sort.Slice(hosts, func(i, j int) bool {
+		return hosts[i].EntityID < hosts[j].EntityID
+	})
+	return hosts, dropped, deferredCount, suspendedCount, totalSteps
 }
 
 func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands, waterInteractions *WaterInteractionState) {
@@ -218,6 +459,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.ShadowCasterGroupID = vox.ShadowCasterGroupID
 		obj.ShadowCasterGroupLimit = vox.ShadowCasterGroupLimit
 		obj.ShadowGroupID = vox.ShadowGroupID
+		obj.EmitterLinkID = vox.EmitterLinkID
 		obj.AmbientOcclusionMode = core.AmbientOcclusionMode(vox.AmbientOcclusionMode)
 		obj.ShadowSeamWorldEpsilon = vox.ShadowSeamWorldEpsilon
 		obj.AllowOcclusionCulling = voxelObjectAllowsOcclusion(cmd, entityId, vox)
@@ -253,7 +495,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	// CA volumetrics: smoke/fire are simulated on GPU and rendered as raymarched volumes.
 	state.RtApp.Profiler.BeginScope("Sync CA")
 	currentCA := make(map[EntityId]bool)
-	gpuVolumes := make([]gpu_rt.CAVolumeHost, 0, 8)
+	cameraView := readCAVolumeBudgetCamera(cmd, state.RtApp.Camera)
+	caBudget := state.RtApp.FeatureConfig.CAVolumes.WithDefaults()
+	caCandidates := make([]caVolumeBudgetCandidate, 0, 8)
+	resolutionClampedCount := uint32(0)
 	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
 		if cv == nil || !cv.UsesGPUVolume() {
 			return true
@@ -266,51 +511,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			delete(state.objectToEntity, obj)
 		}
 
-		scatterColor := [3]float32{0.72, 0.72, 0.72}
-		shadowTint := [3]float32{0.45, 0.45, 0.46}
-		absorptionColor := [3]float32{0.28, 0.29, 0.31}
-		extinction := float32(1.35)
-		emission := float32(0.0)
-		if cv.Type == CellularFire {
-			scatterColor = [3]float32{1.0, 0.48, 0.1}
-			shadowTint = [3]float32{0.62, 0.18, 0.04}
-			absorptionColor = [3]float32{0.54, 0.12, 0.03}
-			extinction = 0.5
-			emission = 5.5
-		}
-		switch cv.Preset {
-		case CAVolumePresetTorch:
-			scatterColor = [3]float32{0.78, 0.38, 0.12}
-			shadowTint = [3]float32{0.42, 0.12, 0.04}
-			absorptionColor = [3]float32{0.34, 0.08, 0.02}
-			extinction = 0.3
-			emission = 10.5
-		case CAVolumePresetCampfire:
-			if cv.Type == CellularFire {
-				scatterColor = [3]float32{1.0, 0.42, 0.1}
-				shadowTint = [3]float32{0.54, 0.14, 0.04}
-				absorptionColor = [3]float32{0.42, 0.1, 0.03}
-				extinction = 0.42
-				emission = 7.2
-			} else {
-				scatterColor = [3]float32{0.34, 0.35, 0.38}
-				shadowTint = [3]float32{0.2, 0.18, 0.16}
-				absorptionColor = [3]float32{0.14, 0.11, 0.09}
-				extinction = 0.72
-			}
-		case CAVolumePresetJetFlame:
-			scatterColor = [3]float32{0.16, 0.22, 0.34}
-			shadowTint = [3]float32{0.08, 0.12, 0.2}
-			absorptionColor = [3]float32{0.05, 0.08, 0.16}
-			extinction = 0.12
-			emission = 10.8
-		case CAVolumePresetExplosion:
-			scatterColor = [3]float32{0.58, 0.52, 0.46}
-			shadowTint = [3]float32{0.24, 0.18, 0.14}
-			absorptionColor = [3]float32{0.1, 0.08, 0.06}
-			extinction = 0.82
-			emission = 24.0
-		}
+		renderDefaults := gpu_rt.CAVolumeRenderDefaultsFor(uint32(cv.Preset), uint32(cv.Type))
+		scatterColor := renderDefaults.ScatterColor
+		shadowTint := renderDefaults.ShadowTint
+		absorptionColor := renderDefaults.AbsorptionColor
+		extinction := renderDefaults.Extinction
+		emission := renderDefaults.Emission
 		if cv.UseAppearanceOverride {
 			scatterColor = cv.ScatterColor
 			extinction = cv.Extinction
@@ -323,15 +529,21 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			absorptionColor = cv.AbsorptionColor
 		}
 
-		gpuVolumes = append(gpuVolumes, gpu_rt.CAVolumeHost{
-			EntityID: uint32(eid),
-			Type:     uint32(cv.Type),
-			Preset:   uint32(cv.Preset),
-			Resolution: [3]uint32{
-				uint32(max(1, cv.Resolution[0])),
-				uint32(max(1, cv.Resolution[1])),
-				uint32(max(1, cv.Resolution[2])),
-			},
+		resolution := [3]uint32{
+			uint32(max(1, cv.Resolution[0])),
+			uint32(max(1, cv.Resolution[1])),
+			uint32(max(1, cv.Resolution[2])),
+		}
+		resolution, resolutionClamped := clampCAVolumeResolution(resolution, caBudget)
+		if resolutionClamped {
+			resolutionClampedCount++
+		}
+
+		host := gpu_rt.CAVolumeHost{
+			EntityID:        uint32(eid),
+			Type:            uint32(cv.Type),
+			Preset:          uint32(cv.Preset),
+			Resolution:      resolution,
 			Position:        cv.VolumeOrigin(tr),
 			Rotation:        tr.Rotation,
 			VoxelScale:      mgl32.Vec3{VoxelSize * tr.Scale.X(), VoxelSize * tr.Scale.Y(), VoxelSize * tr.Scale.Z()},
@@ -347,8 +559,34 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			ScatterColor:    scatterColor,
 			ShadowTint:      shadowTint,
 			AbsorptionColor: absorptionColor,
-		})
-		cv._gpuStepsPending = 0
+		}
+		rawSteps := cv._gpuStepsPending
+		scheduledSteps, stepDeferred, suspended := scheduleCAVolumeSteps(rawSteps, 0, false, caBudget)
+		distance := float32(0)
+		behindCamera := false
+		if cameraView.Valid {
+			offset := host.Position.Sub(cameraView.Position)
+			distance = offset.Len()
+			if distance > 0.001 {
+				behindCamera = offset.Normalize().Dot(cameraView.Forward) < caBudget.BehindCameraDot
+			}
+			scheduledSteps, stepDeferred, suspended = scheduleCAVolumeSteps(rawSteps, distance, behindCamera, caBudget)
+		}
+
+		candidate := caVolumeBudgetCandidate{
+			host:              host,
+			volume:            cv,
+			rawSteps:          rawSteps,
+			scheduledSteps:    scheduledSteps,
+			distance:          distance,
+			visible:           host.Intensity > 0.001,
+			behindCamera:      behindCamera,
+			resolutionClamped: resolutionClamped,
+			stepDeferred:      stepDeferred,
+			suspended:         suspended,
+		}
+		candidate.priority = caVolumeBudgetPriority(candidate)
+		caCandidates = append(caCandidates, candidate)
 		cv._dirty = false
 
 		return true
@@ -360,10 +598,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			delete(state.objectToEntity, obj)
 		}
 	}
-	sort.Slice(gpuVolumes, func(i, j int) bool {
-		return gpuVolumes[i].EntityID < gpuVolumes[j].EntityID
-	})
+	gpuVolumes, droppedCount, deferredCount, suspendedCount, totalSteps := budgetCAVolumes(caCandidates, caBudget)
 	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.CARequestedVolumeCount = uint32(len(caCandidates))
+		state.RtApp.BufferManager.CAResolutionClampedCount = resolutionClampedCount
+		state.RtApp.BufferManager.CADeferredStepVolumeCount = deferredCount
+		state.RtApp.BufferManager.CASuspendedVolumeCount = suspendedCount
+		state.RtApp.BufferManager.CADroppedVolumeCount = droppedCount
+		state.RtApp.BufferManager.CATotalScheduledSteps = totalSteps
 		state.RtApp.BufferManager.UpdateCAVolumes(gpuVolumes)
 		state.RtApp.BufferManager.UpdateCAParams(float32(t.Dt))
 	}
@@ -439,6 +681,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	state.RtApp.Profiler.BeginScope("Sync Lights")
 	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
 		state.RtApp.Camera.Position = camera.Position
+		state.RtApp.Camera.LookAt = camera.LookAt
+		state.RtApp.Camera.Up = camera.Up
 		state.RtApp.Camera.Yaw = mgl32.DegToRad(camera.Yaw)
 		state.RtApp.Camera.Pitch = mgl32.DegToRad(camera.Pitch)
 		state.RtApp.Camera.Fov = camera.Fov
@@ -645,7 +889,14 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 		rot := tr.Rotation
 
 		gpuLight := core.Light{}
-		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), 1.0}
+		sourceRadius := light.SourceRadius
+		if sourceRadius < 0 {
+			sourceRadius = 0
+		}
+		if sourceRadius == 0 && light.EmitterLinkID != 0 {
+			sourceRadius = derivedEmitterSourceRadius(state, light.EmitterLinkID)
+		}
+		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), sourceRadius}
 
 		baseForward := mgl32.Vec3{0, 0, -1}
 		if light.Type == LightTypeDirectional {
@@ -667,8 +918,12 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 			cosAngle = float32(math.Cos(float64(light.ConeAngle) * math.Pi / 180.0 / 2.0))
 		}
 
-		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), 0.0}
-		gpuLight.CastsShadows = light.Type != LightTypePoint || light.CastsShadows
+		var castsShadows float32
+		if light.CastsShadows {
+			castsShadows = 1.0
+		}
+		gpuLight.Params = [4]float32{light.Range, cosAngle, float32(light.Type), castsShadows}
+		gpuLight.ShadowMeta[3] = light.EmitterLinkID
 		pendingLights = append(pendingLights, pendingLight{
 			entityID:  entityId,
 			lightType: light.Type,
@@ -716,6 +971,29 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 	state.RtApp.Scene.SkyAmbientMix = skyAmbientMix
 }
 
+func derivedEmitterSourceRadius(state *VoxelRtState, emitterLinkID uint32) float32 {
+	if state == nil || emitterLinkID == 0 {
+		return 0
+	}
+
+	var radius float32
+	for _, obj := range state.instanceMap {
+		if obj == nil || obj.EmitterLinkID != emitterLinkID || obj.XBrickMap == nil {
+			continue
+		}
+		obj.UpdateWorldAABB()
+		if obj.WorldAABB == nil {
+			continue
+		}
+		extent := obj.WorldAABB[1].Sub(obj.WorldAABB[0])
+		candidate := extent.Len() * 0.5
+		if candidate > radius {
+			radius = candidate
+		}
+	}
+	return radius
+}
+
 func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *Commands) {
 	if state == nil || state.RtApp == nil {
 		return
@@ -752,12 +1030,25 @@ func syncVoxelRtGizmos(state *VoxelRtState, cmd *Commands) {
 	}
 
 	state.RtApp.Scene.Gizmos = state.RtApp.Scene.Gizmos[:0]
-	if !state.HideDebugGizmos {
-		appendSceneDebugGizmos(state, cmd)
+	if state.DebugOverlayMode() == VoxelRtDebugModeScene {
+		// Automatic light gizmos (engine helpers shown in Scene Debug mode)
+		MakeQuery2[LightComponent, TransformComponent](cmd).Map(func(eid EntityId, l *LightComponent, tr *TransformComponent) bool {
+			if l.Type == LightTypeAmbient {
+				return true
+			}
+			color := [4]float32{l.Color[0], l.Color[1], l.Color[2], 0.8}
+			rtGizmo := core.Gizmo{
+				Type:  core.GizmoSphere,
+				Color: color,
+			}
+			modelMat := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z()).Mul4(mgl32.Scale3D(1.0, 1.0, 1.0))
+			rtGizmo.ModelMatrix = modelMat
+			state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtGizmo)
+			return true
+		})
 	}
-}
 
-func appendSceneDebugGizmos(state *VoxelRtState, cmd *Commands) {
+	// Always sync user-defined GizmoComponents
 	MakeQuery2[GizmoComponent, TransformComponent](cmd).Map(func(eid EntityId, g *GizmoComponent, tr *TransformComponent) bool {
 		rtGizmo := core.Gizmo{
 			Type:  core.GizmoType(g.Type),

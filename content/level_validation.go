@@ -292,10 +292,6 @@ func validateLevelMaterial(result *LevelValidationResult, material LevelMaterial
 }
 
 func validateLevelBrush(result *LevelValidationResult, brush LevelBrushDef, materialIDs map[string]struct{}) {
-	if strings.TrimSpace(brush.Primitive) == "" {
-		result.addError("invalid_brush_payload", "level brush primitive is required", "", "", "", "", "", brush.ID, "")
-		return
-	}
 	if strings.TrimSpace(brush.MaterialID) != "" {
 		if _, ok := materialIDs[brush.MaterialID]; !ok {
 			result.addError("missing_material_reference", fmt.Sprintf("missing material %s", brush.MaterialID), "", "", "", "", "", brush.ID, "")
@@ -307,19 +303,72 @@ func validateLevelBrush(result *LevelValidationResult, brush LevelBrushDef, mate
 		result.addError("invalid_brush_payload", fmt.Sprintf("unsupported brush operation %q", brush.Operation), "", "", "", "", "", brush.ID, "")
 	}
 
-	spec, ok := ProceduralPrimitiveSpecFor(brush.Primitive)
-	if !ok {
-		result.addError("invalid_brush_payload", fmt.Sprintf("unsupported level brush primitive %q", brush.Primitive), "", "", "", "", "", brush.ID, "")
+	switch EffectiveLevelBrushKind(brush) {
+	case LevelBrushKindProcedural:
+		if strings.TrimSpace(brush.Primitive) == "" {
+			result.addError("invalid_brush_payload", "level brush primitive is required", "", "", "", "", "", brush.ID, "")
+			return
+		}
+		spec, ok := ProceduralPrimitiveSpecFor(brush.Primitive)
+		if !ok {
+			result.addError("invalid_brush_payload", fmt.Sprintf("unsupported level brush primitive %q", brush.Primitive), "", "", "", "", "", brush.ID, "")
+			return
+		}
+		for _, key := range spec.Params {
+			value, ok := brush.Params[key]
+			if !ok {
+				result.addError("invalid_brush_payload", fmt.Sprintf("level brush %q requires param %s", brush.Primitive, key), "", "", "", "", "", brush.ID, "")
+				continue
+			}
+			if value <= 0 {
+				result.addError("invalid_brush_payload", fmt.Sprintf("level brush %q param %s must be > 0", brush.Primitive, key), "", "", "", "", "", brush.ID, "")
+			}
+		}
+	case LevelBrushKindVoxelShape:
+		validateLevelBrushVoxelShape(result, brush, materialIDs)
+	default:
+		result.addError("invalid_brush_payload", fmt.Sprintf("unsupported level brush kind %q", brush.Kind), "", "", "", "", "", brush.ID, "")
 		return
 	}
-	for _, key := range spec.Params {
-		value, ok := brush.Params[key]
-		if !ok {
-			result.addError("invalid_brush_payload", fmt.Sprintf("level brush %q requires param %s", brush.Primitive, key), "", "", "", "", "", brush.ID, "")
+}
+
+func validateLevelBrushVoxelShape(result *LevelValidationResult, brush LevelBrushDef, materialIDs map[string]struct{}) {
+	if result == nil {
+		return
+	}
+	if brush.VoxelShape == nil {
+		result.addError("invalid_brush_payload", "voxel_shape brush requires voxel_shape payload", "", "", "", "", "", brush.ID, "")
+		return
+	}
+
+	paletteByValue := make(map[uint8]string, len(brush.VoxelShape.Palette))
+	for _, entry := range brush.VoxelShape.Palette {
+		if entry.Value == 0 {
+			result.addError("invalid_brush_payload", "voxel_shape palette value 0 is reserved for empty voxels", "", "", "", "", "", brush.ID, "")
 			continue
 		}
-		if value <= 0 {
-			result.addError("invalid_brush_payload", fmt.Sprintf("level brush %q param %s must be > 0", brush.Primitive, key), "", "", "", "", "", brush.ID, "")
+		if _, exists := paletteByValue[entry.Value]; exists {
+			result.addError("invalid_brush_payload", fmt.Sprintf("voxel_shape palette value %d must be unique", entry.Value), "", "", "", "", "", brush.ID, "")
+			continue
+		}
+		if strings.TrimSpace(entry.MaterialID) == "" {
+			result.addError("invalid_brush_payload", fmt.Sprintf("voxel_shape palette value %d requires material_id", entry.Value), "", "", "", "", "", brush.ID, "")
+			continue
+		}
+		if _, ok := materialIDs[entry.MaterialID]; !ok {
+			result.addError("missing_material_reference", fmt.Sprintf("missing material %s", entry.MaterialID), "", "", "", "", "", brush.ID, "")
+			continue
+		}
+		paletteByValue[entry.Value] = entry.MaterialID
+	}
+
+	for _, voxel := range brush.VoxelShape.Voxels {
+		if voxel.Value == 0 {
+			result.addError("invalid_brush_payload", "voxel_shape voxels must use non-zero palette values", "", "", "", "", "", brush.ID, "")
+			continue
+		}
+		if _, ok := paletteByValue[voxel.Value]; !ok {
+			result.addError("invalid_brush_payload", fmt.Sprintf("voxel_shape voxel value %d is missing from palette", voxel.Value), "", "", "", "", "", brush.ID, "")
 		}
 	}
 }
