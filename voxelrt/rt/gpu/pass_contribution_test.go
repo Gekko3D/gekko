@@ -40,6 +40,22 @@ func TestHasLocalLightsDetectsSpotAndPoint(t *testing.T) {
 	}
 }
 
+func TestResetTiledLightCullStateClearsMetricsWithoutEncoder(t *testing.T) {
+	manager := &GpuBufferManager{
+		TileLightAvgCount: 7,
+		TileLightMaxCount: 13,
+	}
+
+	manager.ResetTiledLightCullState(nil)
+
+	if manager.TileLightAvgCount != 0 {
+		t.Fatalf("avg count = %d, want 0", manager.TileLightAvgCount)
+	}
+	if manager.TileLightMaxCount != 0 {
+		t.Fatalf("max count = %d, want 0", manager.TileLightMaxCount)
+	}
+}
+
 func TestHasVisibleTransparentOverlayUsesVisibleObjects(t *testing.T) {
 	manager := &GpuBufferManager{}
 

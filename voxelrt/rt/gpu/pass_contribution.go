@@ -1,6 +1,9 @@
 package gpu
 
-import "github.com/gekko3d/gekko/voxelrt/rt/core"
+import (
+	"github.com/cogentcore/webgpu/wgpu"
+	"github.com/gekko3d/gekko/voxelrt/rt/core"
+)
 
 func (m *GpuBufferManager) HasLocalLights(scene *core.Scene) bool {
 	if scene == nil {
@@ -13,6 +16,23 @@ func (m *GpuBufferManager) HasLocalLights(scene *core.Scene) bool {
 		}
 	}
 	return false
+}
+
+func (m *GpuBufferManager) ResetTiledLightCullState(encoder *wgpu.CommandEncoder) {
+	if m == nil {
+		return
+	}
+	m.TileLightAvgCount = 0
+	m.TileLightMaxCount = 0
+	if encoder == nil {
+		return
+	}
+	if m.TileLightHeadersBuf != nil && m.TileLightHeadersBuf.GetSize() > 0 {
+		_ = encoder.ClearBuffer(m.TileLightHeadersBuf, 0, m.TileLightHeadersBuf.GetSize())
+	}
+	if m.TileLightIndicesBuf != nil && m.TileLightIndicesBuf.GetSize() > 0 {
+		_ = encoder.ClearBuffer(m.TileLightIndicesBuf, 0, m.TileLightIndicesBuf.GetSize())
+	}
 }
 
 func (m *GpuBufferManager) HasVisibleTransparentOverlay(scene *core.Scene) bool {

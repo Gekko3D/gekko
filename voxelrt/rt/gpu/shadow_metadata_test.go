@@ -149,12 +149,46 @@ func TestCollectShadowCastersUsesDirectionalLightSpaceVolumes(t *testing.T) {
 	inside := testShadowCasterObject(mgl32.Vec3{-2, -1, -35}, mgl32.Vec3{2, 3, -31})
 	outside := testShadowCasterObject(mgl32.Vec3{420, -1, -35}, mgl32.Vec3{424, 3, -31})
 
-	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, []directionalShadowCullVolume{volume}, nil, nil)
+	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, []directionalShadowCullVolume{volume}, nil, nil, camera.Position)
 	if len(shadowObjects) != 1 {
 		t.Fatalf("expected exactly one directional shadow caster, got %d", len(shadowObjects))
 	}
 	if shadowObjects[0] != inside {
 		t.Fatal("expected only the light-space-relevant object to remain a shadow caster")
+	}
+}
+
+func TestCollectShadowCastersCapsGroupedObjectsByNearestDistance(t *testing.T) {
+	point := pointShadowCullVolume{
+		Position: mgl32.Vec3{0, 0, 0},
+		Range:    32,
+	}
+	cameraPosition := mgl32.Vec3{0, 0, 0}
+
+	near := testShadowCasterObject(mgl32.Vec3{-1, -1, -4}, mgl32.Vec3{1, 1, -2})
+	near.ShadowCasterGroupID = 7
+	near.ShadowCasterGroupLimit = 2
+
+	mid := testShadowCasterObject(mgl32.Vec3{-1, -1, -10}, mgl32.Vec3{1, 1, -8})
+	mid.ShadowCasterGroupID = 7
+	mid.ShadowCasterGroupLimit = 2
+
+	far := testShadowCasterObject(mgl32.Vec3{-1, -1, -18}, mgl32.Vec3{1, 1, -16})
+	far.ShadowCasterGroupID = 7
+	far.ShadowCasterGroupLimit = 2
+
+	shadowObjects := collectShadowCasters([]*core.VoxelObject{far, mid, near}, nil, nil, []pointShadowCullVolume{point}, cameraPosition)
+	if len(shadowObjects) != 2 {
+		t.Fatalf("expected 2 grouped shadow casters, got %d", len(shadowObjects))
+	}
+	if shadowObjects[0] != near && shadowObjects[1] != near {
+		t.Fatal("expected nearest grouped caster to remain")
+	}
+	if shadowObjects[0] != mid && shadowObjects[1] != mid {
+		t.Fatal("expected second-nearest grouped caster to remain")
+	}
+	if shadowObjects[0] == far || shadowObjects[1] == far {
+		t.Fatal("expected farthest grouped caster to be dropped")
 	}
 }
 
@@ -327,7 +361,7 @@ func TestCollectShadowCastersUsesSpotVolumes(t *testing.T) {
 		CosCone:  float32(math.Cos(math.Pi / 8)),
 	}
 
-	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, nil, []spotShadowCullVolume{spot}, nil)
+	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, nil, []spotShadowCullVolume{spot}, nil, mgl32.Vec3{})
 	if len(shadowObjects) != 1 {
 		t.Fatalf("expected exactly one spot shadow caster, got %d", len(shadowObjects))
 	}
@@ -486,7 +520,7 @@ func TestCollectShadowCastersUsesPointVolumes(t *testing.T) {
 		Range:    12,
 	}
 
-	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, nil, nil, []pointShadowCullVolume{point})
+	shadowObjects := collectShadowCasters([]*core.VoxelObject{inside, outside}, nil, nil, []pointShadowCullVolume{point}, mgl32.Vec3{})
 	if len(shadowObjects) != 1 {
 		t.Fatalf("expected exactly one point shadow caster, got %d", len(shadowObjects))
 	}

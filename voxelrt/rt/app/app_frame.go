@@ -237,7 +237,7 @@ func (a *App) Update() {
 		historyBlend = 0.12
 	}
 	a.BufferManager.UpdateVolumetricHistoryParams(prevViewProj, a.LastCameraPos, historyBlend, a.HasLastCameraState)
-	a.BufferManager.EstimateTiledLightMetrics(a.Scene, viewProj, invView, a.Camera.Position)
+	a.updateTiledLightMetrics(viewProj, invView, a.Camera.Position)
 	a.Profiler.SetCount("LightListEntriesAvg", a.BufferManager.TileLightAvgCount)
 	a.Profiler.SetCount("LightListEntriesMax", a.BufferManager.TileLightMaxCount)
 	if a.ResolvePipeline != nil {
@@ -308,6 +308,16 @@ func boolToCount(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func (a *App) updateTiledLightMetrics(viewProj, invView mgl32.Mat4, camPos mgl32.Vec3) {
+	if a == nil || a.BufferManager == nil {
+		return
+	}
+	a.BufferManager.EstimateTiledLightMetrics(a.Scene, viewProj, invView, camPos)
+	if !a.BufferManager.HasLocalLights(a.Scene) {
+		a.BufferManager.ResetTiledLightCullState(nil)
+	}
 }
 
 func (a *App) ClearText() {
@@ -428,8 +438,10 @@ func (a *App) Render() {
 
 	// Lighting Pass
 	a.Profiler.BeginScope("Tile Light Cull")
-	if hasSceneLights {
+	if hasLocalLights {
 		a.BufferManager.DispatchTiledLightCull(encoder, a.TiledLightCullPipeline)
+	} else {
+		a.BufferManager.ResetTiledLightCullState(encoder)
 	}
 	a.Profiler.EndScope("Tile Light Cull")
 
