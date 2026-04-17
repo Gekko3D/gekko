@@ -45,6 +45,7 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 				}
 
 				brick.SetVoxel(vx, vy, vz, 0)
+				brick.RefreshMaterialFlags()
 				if !x.GPUEditMode {
 					x.DirtySectors[sKey] = true
 					x.DirtyBricks[bKey] = true
@@ -92,6 +93,7 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		}
 
 		brick.SetVoxel(vx, vy, vz, val)
+		brick.RefreshMaterialFlags()
 		if !x.GPUEditMode {
 			x.DirtySectors[sKey] = true
 			x.DirtyBricks[bKey] = true
@@ -116,8 +118,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 			}
 		}
 
-		// Optional: Compress if full
-		brick.TryCompress()
 	}
 }
 

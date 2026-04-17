@@ -9,6 +9,8 @@ const EMPTY_VOXEL: u32 = 0u;
 const AO_MODE_DEFAULT: u32 = 0u;
 const AO_MODE_ENABLED: u32 = 1u;
 const AO_MODE_DISABLED: u32 = 2u;
+const BRICK_FLAG_SOLID: u32 = 1u;
+const BRICK_FLAG_UNIFORM_MATERIAL: u32 = 2u;
 
 // ============== STRUCTS ==============
 
@@ -58,12 +60,14 @@ struct SectorRecord {
 };
 
 struct BrickRecord {
-    atlas_offset: u32,
+    material_index: u32,
+    payload_offset: u32,
     occupancy_mask_lo: u32,
     occupancy_mask_hi: u32,
-    atlas_page: u32,
+    payload_page: u32,
     flags: u32,
     dense_occupancy_word_base: u32,
+    padding: u32,
 };
 
 struct Tree64Node {
@@ -239,6 +243,14 @@ fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
     return (word & bit) != 0u;
 }
 
+fn brick_is_solid(flags: u32) -> bool {
+    return (flags & BRICK_FLAG_SOLID) != 0u;
+}
+
+fn brick_is_uniform_material(flags: u32) -> bool {
+    return (flags & BRICK_FLAG_UNIFORM_MATERIAL) != 0u;
+}
+
 fn make_safe_dir(d: vec3<f32>) -> vec3<f32> {
     let eps = 1e-6;
     let sx = select(d.x, (select(1.0, -1.0, d.x < 0.0)) * eps, abs(d.x) < eps);
@@ -357,7 +369,7 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
     let packed_idx = sector.brick_table_index + brick_idx_local;
     let brick = bricks[packed_idx];
     let b_flags = brick.flags;
-    if (b_flags == 0u) {
+    if (!brick_is_solid(b_flags)) {
         let mx = (v.x >> 1u) & 3;
         let my = (v.y >> 1u) & 3;
         let mz = (v.z >> 1u) & 3;
@@ -802,18 +814,18 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                         let packed_idx = sector.brick_table_index + brick_idx_local;
                         let brick = bricks[packed_idx];
                         let b_flags = brick.flags;
-                        let b_atlas = brick.atlas_offset;
+                        let b_material = brick.material_index;
                         
                         var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
-                        if (b_flags == 1u) {
+                        if (brick_is_solid(b_flags)) {
                             // Solid brick: check transparency via material table
-                            let mat_idx_s = params.material_table_base + b_atlas * 4u;
+                            let mat_idx_s = params.material_table_base + b_material * 4u;
                             let pbr_s = materials[mat_idx_s + 2u]; // x=roughness, y=metalness, z=ior, w=transparency
                             if (pbr_s.w > 0.001) {
                                 // Transparent solid: skip this brick, advance to its exit and continue tracing
                                 t_brick = t_brick_exit;
                             } else {
-                                result.hit = true; result.t = t_brick; result.palette_idx = b_atlas; result.material_idx = params.material_table_base;
+                                result.hit = true; result.t = t_brick; result.palette_idx = b_material; result.material_idx = params.material_table_base;
                                 let p_hit_os = ray.origin + dir * (t_brick + (EPS * 0.1));
                                 let vi_hit = vec3<i32>(floor(p_hit_os));
                                 let voxel_center_os = vec3<f32>(vi_hit) + 0.5;
@@ -836,7 +848,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 return result;
                             }
                         }
-                        if (b_flags == 0u) {
+                        if (!brick_is_solid(b_flags)) {
                             var t_micro = t_brick;
                             let brick_origin = sector_origin + vec3<f32>(bvid) * BRICK_SIZE;
                             let voxel_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
@@ -855,7 +867,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
                                 
         if (bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx)) {
-                                    let palette_idx = load_u8(b_atlas, brick.atlas_page, voxel_idx);
+                                    let palette_idx = select(load_u8(brick.payload_offset, brick.payload_page, voxel_idx), b_material, brick_is_uniform_material(b_flags));
                                     if (palette_idx != EMPTY_VOXEL) {
                                         // Check transparency per-voxel
                                         let mat_idx_v = params.material_table_base + palette_idx * 4u;

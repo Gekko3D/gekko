@@ -1,6 +1,18 @@
 # XBrickMap Uniform-Material Payload Reduction Plan
 
-This document is the live execution plan for reducing `XBrickMap` payload upload and payload texture usage for non-solid bricks that do not need per-voxel material variation.
+This document started as the execution plan for reducing `XBrickMap` payload upload and payload texture usage for non-solid bricks that do not need per-voxel material variation.
+
+Current status:
+
+- implemented
+- runtime contract finalized
+- upload-frame counters added
+
+Use this document as the design and outcome record for the change.
+For the live runtime contract, also see:
+
+- `docs/renderer/runtime.md`
+- `reports/2026-04-18-xbrickmap-uniform-material-status.md`
 
 It is written for agent execution. Each task includes:
 
@@ -53,7 +65,7 @@ Key assumptions:
 
 - A meaningful fraction of sparse non-solid bricks are uniform in material.
 - The extra shader branch is cheaper than uploading and reading full payload texture data for those bricks.
-- Using the existing `atlas_offset` field as a palette/material source for uniform sparse bricks is acceptable.
+- A fixed-size but explicit `BrickRecord` is acceptable long-term.
 
 What would raise confidence further:
 
@@ -125,19 +137,19 @@ Rules:
 
 - `Solid`:
   - whole brick is occupied
-  - `atlas_offset` stores the single palette index
+  - `material_index` stores the single palette index
   - no dense occupancy allocation required
   - no payload atlas allocation required
 - `UniformMaterial`:
   - sparse occupancy
   - dense occupancy required
-  - `atlas_offset` stores the single palette index for all occupied voxels
+  - `material_index` stores the single palette index for all occupied voxels
   - no payload atlas allocation required
 - default sparse mode:
   - sparse occupancy
   - dense occupancy required
   - payload atlas allocation required
-  - `atlas_offset` points into the payload atlas as today
+  - `payload_offset` and `payload_page` point into the payload atlas
 
 ### Detection rule
 
@@ -154,18 +166,23 @@ For a non-solid brick:
 After dense occupancy confirms a sparse voxel hit:
 
 - if `Solid`:
-  - palette = `atlas_offset`
+  - palette = `material_index`
 - else if `UniformMaterial`:
-  - palette = `atlas_offset`
+  - palette = `material_index`
 - else:
   - palette = `load_u8(...)`
 
 ## Persistence And Allocation Rules
 
 - `BrickRecord` stays fixed-size.
-- Reuse `atlas_offset` for both:
-  - palette index in `Solid` or `UniformMaterial`
-  - payload atlas offset in payload-backed sparse mode
+- `BrickRecord` is now `32 bytes` and uses explicit fields:
+  - `material_index`
+  - `payload_offset`
+  - `occupancy_mask_lo`
+  - `occupancy_mask_hi`
+  - `payload_page`
+  - `flags`
+  - `dense_occupancy_word_base`
 - `dense_occupancy_word_base` remains the exact occupancy source for sparse bricks.
 - Payload allocation lifetime:
   - release payload slots when a brick becomes `Solid` or `UniformMaterial`
@@ -185,12 +202,40 @@ Every task that claims a performance win must use the same workload definition:
 
 If precise GPU timings are unavailable, report:
 
-- number of payload-backed sparse bricks
-- number of uniform sparse bricks
-- payload atlas uploads skipped
-- bytes avoided in payload uploads
+- `VoxelPayBrk`
+- `VoxelUniBrk`
+- `VoxelPaySkip`
+- `VoxelPayBytes`
+
+## Implementation Outcome
+
+Implemented results:
+
+1. `BrickFlagUniformMaterial` was added and is maintained on the CPU-authoritative `Brick`.
+2. Uniform sparse bricks now skip payload atlas allocation and payload texture upload.
+3. Shader consumers resolve palette from `material_index` for `Solid` and `UniformMaterial` bricks.
+4. `BrickRecord` was migrated from the older overloaded layout to an explicit `32-byte` layout.
+5. Upload-frame observability counters were added:
+   - `VoxelUniBrk`
+   - `VoxelPayBrk`
+   - `VoxelPaySkip`
+   - `VoxelPayBytes`
+
+Verification used during implementation:
+
+- `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume`
+- `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu`
+- `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/core`
+- `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/app`
+
+Notes from `examples/testing-vox`:
+
+- the demo benchmark runs successfully in env-gated benchmark mode
+- the new counters are upload-frame counters, so steady-state capture windows can legitimately report zeros after startup uploads finish
 
 ## Recommended Execution Order
+
+Historical note: the steps below are retained as the original execution sequence.
 
 Do the work in this order:
 
@@ -242,7 +287,7 @@ Requirements:
 - Freeze the new flag name and meaning.
 - State exactly when dense occupancy exists.
 - State exactly when payload atlas allocation is skipped.
-- State exactly how `atlas_offset` is interpreted in each brick mode.
+- State exactly how `material_index`, `payload_offset`, and `payload_page` are interpreted in each brick mode.
 
 Verification:
 
@@ -261,7 +306,7 @@ Scope:
 - Design only. No code changes.
 
 Requirements:
-- Define exact semantics for flags, atlas_offset, dense occupancy, and payload allocation.
+- Define exact semantics for flags, explicit `BrickRecord` fields, dense occupancy, and payload allocation.
 - Keep the contract compatible with the current XBrickMap and shader traversal model.
 ```
 

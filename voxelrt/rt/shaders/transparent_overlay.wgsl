@@ -8,6 +8,8 @@ const BRICK_SIZE: f32 = 8.0;
 const EPS: f32 = 1e-3;
 const FAR_T: f32 = 60000.0;
 const PI: f32 = 3.14159265359;
+const BRICK_FLAG_SOLID: u32 = 1u;
+const BRICK_FLAG_UNIFORM_MATERIAL: u32 = 2u;
 
 // ============== STRUCTS (match gbuffer/deferred) ==============
 struct CameraData {
@@ -56,12 +58,14 @@ struct SectorRecord {
 };
 
 struct BrickRecord {
-  atlas_offset: u32,
+  material_index: u32,
+  payload_offset: u32,
   occupancy_mask_lo: u32,
   occupancy_mask_hi: u32,
-  atlas_page: u32,
+  payload_page: u32,
   flags: u32,
   dense_occupancy_word_base: u32,
+  padding: u32,
 };
 
 struct Tree64Node {
@@ -292,6 +296,14 @@ fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
   return (word & bit) != 0u;
 }
 
+fn brick_is_solid(flags: u32) -> bool {
+  return (flags & BRICK_FLAG_SOLID) != 0u;
+}
+
+fn brick_is_uniform_material(flags: u32) -> bool {
+  return (flags & BRICK_FLAG_UNIFORM_MATERIAL) != 0u;
+}
+
 fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
   let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
   let clip = vec4<f32>(ndc, 1.0, 1.0);
@@ -413,7 +425,7 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
   let packed_idx = sector.brick_table_index + brick_idx_local;
   let brick = bricks[packed_idx];
   let b_flags = brick.flags;
-  if (b_flags == 0u) {
+  if (!brick_is_solid(b_flags)) {
     let mx = (v.x >> 1u) & 3;
     let my = (v.y >> 1u) & 3;
     let mz = (v.z >> 1u) & 3;
@@ -1204,11 +1216,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                       let packed_idx = sector.brick_table_index + brick_idx_local;
                       let brick = bricks[packed_idx];
                       let b_flags = brick.flags;
-                      let b_atlas = brick.atlas_offset;
+                      let b_material = brick.material_index;
                       var t_brick_exit = min(min(min(t_max_brick.x, t_max_brick.y), t_max_brick.z), t_sector_exit);
 
-                      if (b_flags == 1u) {
-                        let palette_idx = b_atlas;
+                      if (brick_is_solid(b_flags)) {
+                        let palette_idx = b_material;
                         let mat_base = params.material_table_base;
                         let mat_idx = mat_base + palette_idx * 4u;
                         let base_col = srgb_to_linear(materials[mat_idx].xyz);
@@ -1338,7 +1350,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                           let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
                           let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx);
                           if (process) {
-                            let palette_idx = load_u8(b_atlas, brick.atlas_page, voxel_idx);
+                            let palette_idx = select(load_u8(brick.payload_offset, brick.payload_page, voxel_idx), b_material, brick_is_uniform_material(b_flags));
                             if (palette_idx != 0u) {
                               let mat_base = params.material_table_base;
                               let mat_idx = mat_base + palette_idx * 4u;

@@ -21,7 +21,7 @@ const (
 	MaxVoxelAtlasPages            = 4
 	AtlasBricksPerSide            = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
 	AtlasSize                     = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
-	BrickRecordSize               = 24
+	BrickRecordSize               = 32
 	DenseOccupancyBinding         = 13
 	GBufferObjectLookupBinding    = 12
 	GBufferDenseOccupancyBinding  = 13
@@ -451,18 +451,22 @@ type GpuBufferManager struct {
 	MaterialAllocations map[*core.VoxelObject]*MaterialGpuAllocation
 
 	// Smooth streaming state
-	SectorsPerFrame          uint32
-	lastTotalSectors         int
-	lastSceneRevision        uint64
-	gridDataPool             []byte
-	TileLightTilesX          uint32
-	TileLightTilesY          uint32
-	TileLightAvgCount        int
-	TileLightMaxCount        int
-	VoxelSectorsUploaded     int
-	VoxelBricksUploaded      int
-	VoxelDirtySectorsPending int
-	VoxelDirtyBricksPending  int
+	SectorsPerFrame            uint32
+	lastTotalSectors           int
+	lastSceneRevision          uint64
+	gridDataPool               []byte
+	TileLightTilesX            uint32
+	TileLightTilesY            uint32
+	TileLightAvgCount          int
+	TileLightMaxCount          int
+	VoxelSectorsUploaded       int
+	VoxelBricksUploaded        int
+	VoxelDirtySectorsPending   int
+	VoxelDirtyBricksPending    int
+	VoxelUniformSparseBricks   int
+	VoxelPayloadSparseBricks   int
+	VoxelPayloadUploadsSkipped int
+	VoxelPayloadBytesAvoided   int
 }
 
 type caVolumeLayout struct {

@@ -86,7 +86,7 @@ struct SpawnRequest {
 
 // Group 2: Voxel Data (Shared with Renderer)
 struct SectorRecord { origin_vox: vec4<i32>, brick_table_index: u32, brick_mask_lo: u32, brick_mask_hi: u32, padding: u32 };
-struct BrickRecord { atlas_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, atlas_page: u32, flags: u32, dense_occupancy_word_base: u32 };
+struct BrickRecord { material_index: u32, payload_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, payload_page: u32, flags: u32, dense_occupancy_word_base: u32, padding: u32 };
 struct SectorGridEntry { coords: vec4<i32>, base_idx: u32, sector_idx: i32, padding: vec2<u32> };
 struct SectorGridParams { grid_size: u32, grid_mask: u32, padding0: u32, padding1: u32 };
 struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, ambient_occlusion_mode: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32>, is_planet_tile: u32, planet_tile_group_id: u32, emitter_link_id: u32, padding2: u32, planet_tile: vec4<i32>, direct_lookup_origin_mode: vec4<i32>, direct_lookup_extent_base: vec4<u32> };
@@ -110,10 +110,15 @@ struct Instance {
 @group(2) @binding(11) var<storage, read> direct_sector_lookup_words: array<u32>;
 @group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;
 const LOOKUP_MODE_DIRECT: i32 = 1;
+const BRICK_FLAG_SOLID: u32 = 1u;
 
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
     if (idx < 32u) { return (mask_lo & (1u << idx)) != 0u; }
     else { return (mask_hi & (1u << (idx - 32u))) != 0u; }
+}
+
+fn brick_is_solid(flags: u32) -> bool {
+    return (flags & BRICK_FLAG_SOLID) != 0u;
 }
 
 fn find_sector_hash(sx: i32, sy: i32, sz: i32, base_idx: u32) -> i32 {
@@ -176,7 +181,7 @@ fn check_voxel_occupancy(pos: vec3<f32>, op: ObjectParams) -> bool {
     
     if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, b_idx)) {
         let brick = bricks[sector.brick_table_index + b_idx];
-        if (brick.flags == 1u) { return true; } // Solid brick
+        if (brick_is_solid(brick.flags)) { return true; } // Solid brick
         
         let mx = (vox_pos.x >> 1) & 3; let my = (vox_pos.y >> 1) & 3; let mz = (vox_pos.z >> 1) & 3;
         let m_idx = u32(mx + my*4 + mz*16);

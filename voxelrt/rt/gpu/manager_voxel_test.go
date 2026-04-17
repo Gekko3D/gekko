@@ -340,6 +340,142 @@ func TestAllocPayloadSlotSpillsAcrossPages(t *testing.T) {
 	}
 }
 
+func TestResolveBrickUploadMode(t *testing.T) {
+	tests := []struct {
+		name        string
+		flags       uint32
+		usesPayload bool
+		usesDense   bool
+	}{
+		{
+			name:        "solid",
+			flags:       volume.BrickFlagSolid,
+			usesPayload: false,
+			usesDense:   false,
+		},
+		{
+			name:        "uniform sparse",
+			flags:       volume.BrickFlagUniformMaterial,
+			usesPayload: false,
+			usesDense:   true,
+		},
+		{
+			name:        "payload sparse",
+			flags:       0,
+			usesPayload: true,
+			usesDense:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mode := resolveBrickUploadMode(tc.flags)
+			if mode.usesPayload != tc.usesPayload {
+				t.Fatalf("expected usesPayload=%v, got %v", tc.usesPayload, mode.usesPayload)
+			}
+			if mode.usesDense != tc.usesDense {
+				t.Fatalf("expected usesDense=%v, got %v", tc.usesDense, mode.usesDense)
+			}
+		})
+	}
+}
+
+func TestEncodeGpuBrickRecordUsesExplicitMaterialAndPayloadFields(t *testing.T) {
+	record := gpuBrickRecord{
+		materialIndex:          11,
+		payloadOffset:          22,
+		occupancyMaskLo:        33,
+		occupancyMaskHi:        44,
+		payloadPage:            55,
+		flags:                  volume.BrickFlagUniformMaterial,
+		denseOccupancyWordBase: 66,
+	}
+
+	buf := encodeGpuBrickRecord(record)
+	if len(buf) != BrickRecordSize {
+		t.Fatalf("expected encoded brick record size %d, got %d", BrickRecordSize, len(buf))
+	}
+	if got := binary.LittleEndian.Uint32(buf[0:4]); got != record.materialIndex {
+		t.Fatalf("expected material index %d, got %d", record.materialIndex, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[4:8]); got != record.payloadOffset {
+		t.Fatalf("expected payload offset %d, got %d", record.payloadOffset, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[8:12]); got != record.occupancyMaskLo {
+		t.Fatalf("expected occupancy mask lo %d, got %d", record.occupancyMaskLo, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[12:16]); got != record.occupancyMaskHi {
+		t.Fatalf("expected occupancy mask hi %d, got %d", record.occupancyMaskHi, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[16:20]); got != record.payloadPage {
+		t.Fatalf("expected payload page %d, got %d", record.payloadPage, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[20:24]); got != record.flags {
+		t.Fatalf("expected flags %d, got %d", record.flags, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[24:28]); got != record.denseOccupancyWordBase {
+		t.Fatalf("expected dense occupancy word base %d, got %d", record.denseOccupancyWordBase, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[28:32]); got != 0 {
+		t.Fatalf("expected trailing padding to be zeroed, got %d", got)
+	}
+}
+
+func TestBuildGpuBrickRecordMapsModesToExplicitFields(t *testing.T) {
+	brick := volume.NewBrick()
+	brick.OccupancyMask64 = 0x8877665544332211
+	brick.AtlasOffset = 9
+
+	solid := buildGpuBrickRecord(brick, resolveBrickUploadMode(volume.BrickFlagSolid), 123, 4, DenseOccupancyInvalidWordBase)
+	if solid.materialIndex != 9 || solid.payloadOffset != 0 || solid.payloadPage != 0 {
+		t.Fatalf("expected solid brick to use material field only, got %+v", solid)
+	}
+
+	uniform := buildGpuBrickRecord(brick, resolveBrickUploadMode(volume.BrickFlagUniformMaterial), 123, 4, 77)
+	if uniform.materialIndex != 9 || uniform.payloadOffset != 0 || uniform.payloadPage != 0 || uniform.denseOccupancyWordBase != 77 {
+		t.Fatalf("expected uniform sparse brick to use material field plus dense occupancy, got %+v", uniform)
+	}
+
+	payload := buildGpuBrickRecord(brick, resolveBrickUploadMode(0), 123, 4, 88)
+	if payload.materialIndex != 0 || payload.payloadOffset != 123 || payload.payloadPage != 4 || payload.denseOccupancyWordBase != 88 {
+		t.Fatalf("expected payload sparse brick to use payload fields, got %+v", payload)
+	}
+}
+
+func TestRecordVoxelUploadStatsCountsUniformAndPayloadSparseUploads(t *testing.T) {
+	m := &GpuBufferManager{}
+
+	m.recordVoxelUploadStats(resolveBrickUploadMode(volume.BrickFlagUniformMaterial))
+	if m.VoxelUniformSparseBricks != 1 {
+		t.Fatalf("expected uniform sparse brick count 1, got %d", m.VoxelUniformSparseBricks)
+	}
+	if m.VoxelPayloadUploadsSkipped != 1 {
+		t.Fatalf("expected skipped payload upload count 1, got %d", m.VoxelPayloadUploadsSkipped)
+	}
+	if m.VoxelPayloadBytesAvoided != payloadBytesPerBrick {
+		t.Fatalf("expected payload bytes avoided %d, got %d", payloadBytesPerBrick, m.VoxelPayloadBytesAvoided)
+	}
+	if m.VoxelPayloadSparseBricks != 0 {
+		t.Fatalf("expected payload sparse brick count 0, got %d", m.VoxelPayloadSparseBricks)
+	}
+
+	m.recordVoxelUploadStats(resolveBrickUploadMode(0))
+	if m.VoxelPayloadSparseBricks != 1 {
+		t.Fatalf("expected payload sparse brick count 1, got %d", m.VoxelPayloadSparseBricks)
+	}
+	if m.VoxelUniformSparseBricks != 1 {
+		t.Fatalf("expected uniform sparse brick count to remain 1, got %d", m.VoxelUniformSparseBricks)
+	}
+	if m.VoxelPayloadUploadsSkipped != 1 {
+		t.Fatalf("expected skipped payload upload count to remain 1, got %d", m.VoxelPayloadUploadsSkipped)
+	}
+
+	m.recordVoxelUploadStats(resolveBrickUploadMode(volume.BrickFlagSolid))
+	if m.VoxelUniformSparseBricks != 1 || m.VoxelPayloadSparseBricks != 1 || m.VoxelPayloadUploadsSkipped != 1 {
+		t.Fatalf("expected solid uploads to leave counters unchanged, got uniform=%d payload=%d skipped=%d", m.VoxelUniformSparseBricks, m.VoxelPayloadSparseBricks, m.VoxelPayloadUploadsSkipped)
+	}
+}
+
 func TestReleaseBrickSlotReturnsCapacityToOwningPage(t *testing.T) {
 	brick := volume.NewBrick()
 	m := &GpuBufferManager{

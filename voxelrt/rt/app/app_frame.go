@@ -218,6 +218,10 @@ func (a *App) Update() {
 	a.Profiler.SetCount("VoxelBrkUp", a.BufferManager.VoxelBricksUploaded)
 	a.Profiler.SetCount("VoxelSecPend", a.BufferManager.VoxelDirtySectorsPending)
 	a.Profiler.SetCount("VoxelBrkPend", a.BufferManager.VoxelDirtyBricksPending)
+	a.Profiler.SetCount("VoxelUniBrk", a.BufferManager.VoxelUniformSparseBricks)
+	a.Profiler.SetCount("VoxelPayBrk", a.BufferManager.VoxelPayloadSparseBricks)
+	a.Profiler.SetCount("VoxelPaySkip", a.BufferManager.VoxelPayloadUploadsSkipped)
+	a.Profiler.SetCount("VoxelPayBytes", a.BufferManager.VoxelPayloadBytesAvoided)
 	a.Profiler.EndScope("Buffer Update")
 	a.Profiler.SetCount("ShadowCasters", len(a.Scene.ShadowObjects))
 
