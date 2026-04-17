@@ -3,7 +3,6 @@ package gpu
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
 	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -395,47 +394,7 @@ const objectParamsSizeBytes = 128
 
 func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, matAlloc *MaterialGpuAllocation) []byte {
 	pBuf := make([]byte, objectParamsSizeBytes)
-	if obj == nil || obj.XBrickMap == nil || alloc == nil {
-		return pBuf
-	}
-	// sector_table_base is used as the stable map ID for hash lookup.
-	binary.LittleEndian.PutUint32(pBuf[0:4], obj.XBrickMap.ID)
-	binary.LittleEndian.PutUint32(pBuf[4:8], 0) // brick_table_base - now internal to sector
-	binary.LittleEndian.PutUint32(pBuf[8:12], 0)
-	if matAlloc != nil {
-		binary.LittleEndian.PutUint32(pBuf[12:16], matAlloc.MaterialOffset*4)
-	}
-	binary.LittleEndian.PutUint32(pBuf[16:20], ^uint32(0))
-	binary.LittleEndian.PutUint32(pBuf[20:24], math.Float32bits(obj.LODThreshold))
-	binary.LittleEndian.PutUint32(pBuf[24:28], uint32(len(obj.XBrickMap.Sectors)))
-	binary.LittleEndian.PutUint32(pBuf[28:32], uint32(obj.AmbientOcclusionMode))
-	binary.LittleEndian.PutUint32(pBuf[32:36], obj.ShadowGroupID)
-	binary.LittleEndian.PutUint32(pBuf[36:40], math.Float32bits(obj.ShadowSeamWorldEpsilon))
-	if obj.IsTerrainChunk {
-		binary.LittleEndian.PutUint32(pBuf[40:44], 1)
-	}
-	binary.LittleEndian.PutUint32(pBuf[44:48], obj.TerrainGroupID)
-	binary.LittleEndian.PutUint32(pBuf[48:52], uint32(obj.TerrainChunkCoord[0]))
-	binary.LittleEndian.PutUint32(pBuf[52:56], uint32(obj.TerrainChunkCoord[1]))
-	binary.LittleEndian.PutUint32(pBuf[56:60], uint32(obj.TerrainChunkCoord[2]))
-	binary.LittleEndian.PutUint32(pBuf[60:64], uint32(obj.TerrainChunkSize))
-	if obj.IsPlanetTile {
-		binary.LittleEndian.PutUint32(pBuf[64:68], 1)
-	}
-	binary.LittleEndian.PutUint32(pBuf[68:72], obj.PlanetTileGroupID)
-	binary.LittleEndian.PutUint32(pBuf[72:76], obj.EmitterLinkID)
-	binary.LittleEndian.PutUint32(pBuf[80:84], uint32(obj.PlanetTileFace))
-	binary.LittleEndian.PutUint32(pBuf[84:88], uint32(obj.PlanetTileLevel))
-	binary.LittleEndian.PutUint32(pBuf[88:92], uint32(obj.PlanetTileX))
-	binary.LittleEndian.PutUint32(pBuf[92:96], uint32(obj.PlanetTileY))
-	binary.LittleEndian.PutUint32(pBuf[96:100], uint32(alloc.DirectLookup.Origin[0]))
-	binary.LittleEndian.PutUint32(pBuf[100:104], uint32(alloc.DirectLookup.Origin[1]))
-	binary.LittleEndian.PutUint32(pBuf[104:108], uint32(alloc.DirectLookup.Origin[2]))
-	binary.LittleEndian.PutUint32(pBuf[108:112], alloc.DirectLookup.LookupMode)
-	binary.LittleEndian.PutUint32(pBuf[112:116], alloc.DirectLookup.Extent[0])
-	binary.LittleEndian.PutUint32(pBuf[116:120], alloc.DirectLookup.Extent[1])
-	binary.LittleEndian.PutUint32(pBuf[120:124], alloc.DirectLookup.Extent[2])
-	binary.LittleEndian.PutUint32(pBuf[124:128], alloc.DirectLookup.TableBase)
+	writeObjectParamsData(pBuf, obj, alloc, matAlloc)
 	return pBuf
 }
 

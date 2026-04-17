@@ -201,7 +201,12 @@ func (a *App) Init() error {
 	}
 	a.Adapter = adapter
 
-	a.Device, err = adapter.RequestDevice(nil)
+	requiredLimits := adapter.GetLimits().Limits
+	a.Device, err = adapter.RequestDevice(&wgpu.DeviceDescriptor{
+		RequiredLimits: &wgpu.RequiredLimits{
+			Limits: requiredLimits,
+		},
+	})
 	if err != nil {
 		return err
 	}

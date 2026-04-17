@@ -44,13 +44,6 @@ func flattenDirectSectorLookupIndex(local [3]uint32, extent [3]uint32) uint32 {
 	return local[0] + local[1]*extent[0] + local[2]*extent[0]*extent[1]
 }
 
-func directSectorLookupWordAt(words []uint32, idx uint32) uint32 {
-	if int(idx) >= len(words) {
-		return DirectSectorLookupInvalid
-	}
-	return words[idx]
-}
-
 func buildDirectSectorLookupForMap(xbm *volume.XBrickMap, sectorToInfo map[*volume.Sector]SectorGpuInfo) (directSectorLookupMetadata, []uint32, bool) {
 	meta := defaultDirectSectorLookupMetadata()
 	if xbm == nil || len(xbm.Sectors) == 0 {
@@ -157,23 +150,6 @@ func buildDirectSectorLookupData(scene *core.Scene, sectorToInfo map[*volume.Sec
 	return buf
 }
 
-func packDirectSectorLookupWords(words []uint32) []byte {
-	if len(words) == 0 {
-		return nil
-	}
-	entryCount := (len(words) + 7) / 8
-	buf := make([]byte, entryCount*32)
-	for i, word := range words {
-		offset := i * 4
-		binary.LittleEndian.PutUint32(buf[offset:offset+4], word)
-	}
-	for i := len(words); i < entryCount*8; i++ {
-		offset := i * 4
-		binary.LittleEndian.PutUint32(buf[offset:offset+4], DirectSectorLookupInvalid)
-	}
-	return buf
-}
-
 func appendUint32LE(dst []byte, v uint32) []byte {
 	n := len(dst)
 	dst = append(dst, 0, 0, 0, 0)
@@ -246,6 +222,8 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	binary.LittleEndian.PutUint32(dst[84:88], uint32(obj.PlanetTileLevel))
 	binary.LittleEndian.PutUint32(dst[88:92], uint32(obj.PlanetTileX))
 	binary.LittleEndian.PutUint32(dst[92:96], uint32(obj.PlanetTileY))
+	// The tail packs direct sector lookup metadata consumed by WGSL as:
+	// direct_lookup_origin_mode: vec4<i32> and direct_lookup_extent_base: vec4<u32>.
 	binary.LittleEndian.PutUint32(dst[96:100], uint32(alloc.DirectLookup.Origin[0]))
 	binary.LittleEndian.PutUint32(dst[100:104], uint32(alloc.DirectLookup.Origin[1]))
 	binary.LittleEndian.PutUint32(dst[104:108], uint32(alloc.DirectLookup.Origin[2]))
@@ -741,6 +719,9 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0) {
 			recreated = true
 		}
+		if m.ensureBuffer("DirectSectorLookupBuf", &m.DirectSectorLookupBuf, make([]byte, 4), wgpu.BufferUsageStorage, 0) {
+			recreated = true
+		}
 		if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, make([]byte, 16), wgpu.BufferUsageUniform, 0) {
 			recreated = true
 		}
@@ -820,27 +801,13 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		}
 	}
 
-	directData := buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, uint32(len(m.gridDataPool)/4))
-	packedDirectData := packDirectSectorLookupWords(func() []uint32 {
-		if len(directData) == 0 {
-			return nil
-		}
-		wordCount := len(directData) / 4
-		words := make([]uint32, wordCount)
-		for i := 0; i < wordCount; i++ {
-			words[i] = binary.LittleEndian.Uint32(directData[i*4 : i*4+4])
-		}
-		return words
-	}())
-	combinedGridData := m.gridDataPool
-	if len(packedDirectData) > 0 {
-		combinedGridData = make([]byte, 0, len(m.gridDataPool)+len(packedDirectData))
-		combinedGridData = append(combinedGridData, m.gridDataPool...)
-		combinedGridData = append(combinedGridData, packedDirectData...)
-	}
+	directData := buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, 0)
 
 	recreated := false
-	if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, combinedGridData, wgpu.BufferUsageStorage, 0) {
+	if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, m.gridDataPool, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("DirectSectorLookupBuf", &m.DirectSectorLookupBuf, directData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 

@@ -221,6 +221,7 @@ type GpuBufferManager struct {
 	ShadowObjectParamsBuf      *wgpu.Buffer
 	Tree64Buf                  *wgpu.Buffer
 	SectorGridBuf              *wgpu.Buffer
+	DirectSectorLookupBuf      *wgpu.Buffer
 	SectorGridParamsBuf        *wgpu.Buffer
 	TerrainChunkLookupBuf      *wgpu.Buffer
 	PlanetTileLookupBuf        *wgpu.Buffer
@@ -545,6 +546,7 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("DirectSectorLookupBuf", &m.DirectSectorLookupBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, nil, wgpu.BufferUsageUniform, 1024)
 	m.ensureBuffer("TerrainChunkLookupBuf", &m.TerrainChunkLookupBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("PlanetTileLookupBuf", &m.PlanetTileLookupBuf, nil, wgpu.BufferUsageStorage, 1024)
@@ -639,6 +641,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 			{Binding: 7, Buffer: m.TransparentObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 11, Buffer: m.DirectSectorLookupBuf, Size: wgpu.WholeSize},
 		}, 2), DenseOccupancyBinding),
 	})
 	if err != nil {

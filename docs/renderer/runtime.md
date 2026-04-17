@@ -268,7 +268,7 @@ Current transparency modes:
 When `UpdateScene(...)` recreates buffers, `App.Update()` must rebuild dependent bind groups. Renderer bugs after object-count growth or shadow-capacity growth are usually stale-bind-group issues.
 
 Voxel payload uploads follow the same rule. `BrickRecord` is 24 bytes, non-solid bricks carry a `dense_occupancy_word_base`, and any bind group that reads voxel payload data must be recreated if payload pages or voxel-table resources were recreated.
-Hybrid sector lookup is now part of that same contract. `ObjectParams` is 128 bytes, qualifying objects use object-local direct lookup, and the compact direct-lookup words are packed into the tail of `SectorGridBuf` rather than exposed as a separate voxel-data binding. Any pass that reads voxel occupancy must keep its shader structs, bind groups, and hand-written pipeline layouts aligned with that live layout.
+Hybrid sector lookup is now part of that same contract. `ObjectParams` is 128 bytes, qualifying objects use object-local direct lookup, `SectorGridBuf` still holds the hash-probed `SectorGridEntry` array, and `DirectSectorLookupBuf` now carries the compact direct-lookup words as a dedicated storage buffer. Any pass that reads voxel occupancy must keep its shader structs, bind groups, and hand-written pipeline layouts aligned with that live layout. This split depends on `App.Init()` requesting adapter-supported limits when creating the native WebGPU device.
 
 ## Common Sources of Drift
 

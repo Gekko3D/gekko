@@ -434,6 +434,14 @@ func (a *App) setupTransparentOverlayPipeline() {
 					MinBindingSize: 16,
 				},
 			},
+			{ // Direct sector lookup words
+				Binding:    11,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
 			{ // Dense occupancy words
 				Binding:    13,
 				Visibility: wgpu.ShaderStageFragment,

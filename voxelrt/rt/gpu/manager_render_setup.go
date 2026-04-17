@@ -124,6 +124,7 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 			{Binding: 8, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 11, Buffer: m.DirectSectorLookupBuf, Size: wgpu.WholeSize},
 			{Binding: GBufferObjectLookupBinding, Buffer: m.TerrainChunkLookupBuf, Size: wgpu.WholeSize},
 		}, 2), GBufferDenseOccupancyBinding),
 	})

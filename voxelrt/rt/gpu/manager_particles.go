@@ -133,6 +133,7 @@ func (m *GpuBufferManager) CreateParticleSimBindGroups() {
 			{Binding: 8, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
 			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
+			{Binding: 11, Buffer: m.DirectSectorLookupBuf, Size: wgpu.WholeSize},
 		}, DenseOccupancyBinding),
 	})
 	if err != nil {

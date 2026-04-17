@@ -176,6 +176,7 @@ struct SectorGridParams {
 @group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
+@group(2) @binding(11) var<storage, read> direct_sector_lookup_words: array<u32>;
 @group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;
 
 var<private> g_light_emitter_link_id: u32 = 0u;
@@ -288,17 +289,7 @@ fn find_sector_hash(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
 }
 
 fn sector_grid_word(word_idx: u32) -> u32 {
-    let entry = sector_grid[word_idx >> 3u];
-    switch (word_idx & 7u) {
-        case 0u: { return bitcast<u32>(entry.coords.x); }
-        case 1u: { return bitcast<u32>(entry.coords.y); }
-        case 2u: { return bitcast<u32>(entry.coords.z); }
-        case 3u: { return bitcast<u32>(entry.coords.w); }
-        case 4u: { return entry.base_idx; }
-        case 5u: { return bitcast<u32>(entry.sector_idx); }
-        case 6u: { return entry.padding.x; }
-        default: { return entry.padding.y; }
-    }
+    return direct_sector_lookup_words[word_idx];
 }
 
 fn find_sector_direct(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {

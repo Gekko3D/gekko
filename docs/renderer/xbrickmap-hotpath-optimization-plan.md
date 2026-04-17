@@ -754,7 +754,7 @@ Design recommendation:
 
 - Go for `Task 5B`, but only as a hybrid path.
 - Do not replace the current hash grid for every object.
-- Keep the direct path logically separate from the hash path even if both live in the same GPU buffer.
+- Keep the direct path logically separate from the hash path even if both are bound into the same voxel lookup interface.
   - The direct path still operates on compact `u32` sector indices with `0xFFFFFFFF` as the empty sentinel.
 
 Current baseline:
@@ -768,7 +768,7 @@ Current baseline:
 - The direct dense table would cost:
   - `4 bytes` per addressable sector cell
   - plus one small per-object metadata expansion in `ObjectParams`
-  - plus padding to the enclosing `SectorGridEntry` storage format when the table is packed into the tail of `SectorGridBuf`
+  - plus one additional storage-buffer binding in voxel-reading passes
 
 Break-even rule of thumb:
 
@@ -822,7 +822,7 @@ Expected win:
 - The direct path reduces that to:
   - one bounds check
   - one flatten operation
-  - one compact sector-index word read from the packed `SectorGridBuf` tail
+  - one compact sector-index word read from `DirectSectorLookupBuf`
   - one sentinel comparison
 - This should help most when rays or occupancy queries cross sector boundaries frequently:
   - primary-ray stepping through dense objects
@@ -853,14 +853,14 @@ Object-params packing decision:
 
 Implementation note for `Task 5B`:
 
-- Keep the shader-facing lookup model as two logical tables:
-  - the front of `SectorGridBuf` remains the hash-probed `SectorGridEntry` array
-  - the tail of `SectorGridBuf` stores packed direct-lookup `u32` words
+- Keep the shader-facing lookup model as two logical tables and two physical buffers:
+  - `SectorGridBuf` remains the hash-probed `SectorGridEntry` array
+  - `DirectSectorLookupBuf` stores compact direct-lookup `u32` words
 - Reason:
-  - the renderer already sits close to WebGPU compute-stage storage-buffer limits in voxel passes
-  - packing the direct table into the existing sector-grid buffer avoids adding another storage binding and keeps the pipelines valid
-- `direct_sector_table_base` in `ObjectParams` must be expressed in packed-word units from the start of the combined `SectorGridBuf`, not from the start of the appended tail.
-- If future renderer work frees a storage binding budget, a dedicated direct-lookup buffer is still a cleaner architectural option, but it is not required for the current implementation.
+  - the dedicated direct-lookup buffer is cleaner and keeps the dense table layout independent from `SectorGridEntry`
+  - this now works because renderer device creation requests the adapter-supported limits through `RequiredLimits`, including the higher storage-buffer-per-shader-stage limit exposed by the patched native `webgpu` wrapper
+- `direct_sector_table_base` in `ObjectParams` is expressed in word units from the start of `DirectSectorLookupBuf`.
+- Any new voxel-reading pass must bind both `SectorGridBuf` and `DirectSectorLookupBuf` if it calls the shared hybrid sector lookup helper.
 
 Prompt seed:
 
