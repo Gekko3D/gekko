@@ -267,8 +267,8 @@ Current transparency modes:
 
 When `UpdateScene(...)` recreates buffers, `App.Update()` must rebuild dependent bind groups. Renderer bugs after object-count growth or shadow-capacity growth are usually stale-bind-group issues.
 
-Voxel payload uploads follow the same rule. The brick table now uses 20-byte records, and any bind group that reads voxel payload data must be recreated if payload pages or voxel-table resources were recreated.
-Dense occupancy is now part of that same contract. `BrickRecord` is 24 bytes, non-solid bricks carry a `dense_occupancy_word_base`, and any pass that reads voxel occupancy must keep its shader bindings, bind groups, and hand-written pipeline layouts aligned with the live voxel-data layout.
+Voxel payload uploads follow the same rule. `BrickRecord` is 24 bytes, non-solid bricks carry a `dense_occupancy_word_base`, and any bind group that reads voxel payload data must be recreated if payload pages or voxel-table resources were recreated.
+Hybrid sector lookup is now part of that same contract. `ObjectParams` is 128 bytes, qualifying objects use object-local direct lookup, and the compact direct-lookup words are packed into the tail of `SectorGridBuf` rather than exposed as a separate voxel-data binding. Any pass that reads voxel occupancy must keep its shader structs, bind groups, and hand-written pipeline layouts aligned with that live layout.
 
 ## Common Sources of Drift
 
@@ -278,5 +278,5 @@ Dense occupancy is now part of that same contract. `BrickRecord` is 24 bytes, no
 - changing scene-buffer layouts without rebuilding dependent bind groups
 - changing half-resolution volumetric or CA resolve inputs without updating resolve bind groups and shader bindings together
 - changing analytic-media history or half-resolution target bindings without updating `feature_analytic_medium.go`, `app_medium.go`, `manager_medium.go`, and `resolve_transparency.wgsl` together
-- changing voxel payload page bindings, dense-occupancy bindings, or `BrickRecord` layout in one pass but not the other voxel consumers
+- changing voxel payload page bindings, dense-occupancy bindings, hybrid-lookup metadata, or `BrickRecord` layout in one pass but not the other voxel consumers
 - changing a shader resource list without updating the corresponding hand-written pipeline layout in `voxelrt/rt/app/`

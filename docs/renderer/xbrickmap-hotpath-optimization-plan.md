@@ -647,6 +647,53 @@ Acceptance criteria:
 
 - A recommendation exists, backed by measurements, on whether the micro mask remains worthwhile.
 
+Task 4 result:
+
+- Date:
+  - `2026-04-17`
+- Measurement scope:
+  - Added a focused occupancy A/B benchmark in `voxelrt/rt/volume/xbrickmap_task4_bench_test.go`.
+  - This is a CPU-side proxy for occupancy-query work, not a direct frame-time or GPU timestamp capture.
+  - Use it to compare:
+    - branch + coarse micro-mask reject + dense occupancy
+    - dense occupancy only
+- Commands run:
+  - `cd /Users/ddevidch/code/go/gekko3d/gekko`
+  - `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run TestTask4MicroMaskDenseOccupancyStats -v`
+  - `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^$' -bench BenchmarkTask4Occupancy -benchmem -benchtime=300ms`
+- Workloads:
+  - `sparse_corners`
+  - `clustered_core_4x4x4`
+  - `surface_shell`
+  - `checkerboard`
+- Dense-check skip rates from the coarse micro mask:
+  - `sparse_corners`: `87.5%`
+  - `clustered_core_4x4x4`: `87.5%`
+  - `surface_shell`: `12.5%`
+  - `checkerboard`: `0.0%`
+- CPU proxy timings:
+  - `micro + dense`
+    - `sparse_corners`: `1.767 ns/op`
+    - `clustered_core_4x4x4`: `1.738 ns/op`
+    - `surface_shell`: `2.392 ns/op`
+    - `checkerboard`: `2.486 ns/op`
+  - `dense only`
+    - `sparse_corners`: `0.7474 ns/op`
+    - `clustered_core_4x4x4`: `0.7456 ns/op`
+    - `surface_shell`: `0.7458 ns/op`
+    - `checkerboard`: `0.7452 ns/op`
+- Interpretation:
+  - The scalar CPU proxy favors `dense only` because it removes one branch and one coarse bit-test.
+  - That proxy understates the value of the micro mask on GPU because it does not price in the cost of an extra storage-buffer read in the hot path.
+  - The load-reduction signal is still meaningful: on sparse structured non-solid bricks, the micro mask avoids most dense-buffer checks before they happen.
+- Recommendation:
+  - Keep the micro mask for now.
+  - Reason:
+    - Sparse and clustered bricks still skip `87.5%` of dense checks.
+    - Shell-like bricks still skip some work.
+    - The worst case (`checkerboard`) is neutral on rejection power, but that alone is not strong enough evidence to delete the coarse mask from the GPU path.
+  - Revisit only after a true frame-time comparison or GPU counter capture is available on representative scenes.
+
 Prompt seed:
 
 ```text
@@ -702,6 +749,118 @@ Acceptance criteria:
 
 - A documented go/no-go decision exists for hybrid direct sector indexing.
 - Memory overhead and expected win are stated explicitly.
+
+Design recommendation:
+
+- Go for `Task 5B`, but only as a hybrid path.
+- Do not replace the current hash grid for every object.
+- Keep the direct path logically separate from the hash path even if both live in the same GPU buffer.
+  - The direct path still operates on compact `u32` sector indices with `0xFFFFFFFF` as the empty sentinel.
+
+Current baseline:
+
+- The live hash grid in `manager_scene.go` uses:
+  - `32 bytes` per `SectorGridEntry`
+  - grid size `= next_pow2(max(1024, fallback_sector_count * 8))`
+- That means the fallback hash path costs approximately:
+  - `256 bytes` per live fallback sector in the nominal case
+  - just under `512 bytes` per live fallback sector in the worst power-of-two rounding window
+- The direct dense table would cost:
+  - `4 bytes` per addressable sector cell
+  - plus one small per-object metadata expansion in `ObjectParams`
+  - plus padding to the enclosing `SectorGridEntry` storage format when the table is packed into the tail of `SectorGridBuf`
+
+Break-even rule of thumb:
+
+- Let:
+  - `live_sectors = len(xbm.Sectors)`
+  - `bounds_volume = dx * dy * dz` in sector space, where `dx`, `dy`, and `dz` are the object-local dense lookup extents
+- Direct indexing is memory-favorable against the current `8x` hash grid when:
+  - `bounds_volume <= 64 * live_sectors`
+- That is the theoretical break-even line before power-of-two rounding and before accounting for the extra probe-loop work removed on the shader side.
+
+Recommended qualification policy:
+
+- Qualify an object for dense direct indexing only when all of the following are true:
+  - the sector-space bounds are finite and computed from the current `XBrickMap.Sectors` keys
+  - `bounds_volume <= 4096`
+  - `bounds_volume <= 16 * live_sectors`
+- Reason:
+  - `4096` dense slots caps the direct table at `16 KiB` per object
+  - the `16x` density rule is materially more conservative than the `64x` memory break-even line, which avoids using dense tables for very sparse objects where hash fallback remains the safer choice
+- Expected qualifying shapes:
+  - compact authored props
+  - terrain chunks with mostly contiguous sector bounds
+  - planet-tile-style objects with naturally bounded local sector ranges
+- Expected fallback shapes:
+  - very sparse kitbashed objects
+  - objects with long thin bounds and low fill
+  - unusually large edited structures whose dense sector bounds would exceed the `4096`-slot cap
+
+Fallback behavior:
+
+- Keep one shader-facing lookup helper:
+  - `find_sector(...)`
+- Dispatch inside that helper by per-object lookup mode:
+  - `lookup_mode_hash = 0`
+  - `lookup_mode_direct = 1`
+- For `lookup_mode_hash`:
+  - preserve the current global `sector_grid` probing path unchanged
+- For `lookup_mode_direct`:
+  - convert `(sx, sy, sz)` to object-local dense coordinates
+  - reject out-of-bounds coordinates immediately
+  - flatten the local coordinates to one dense-table index
+  - return the stored sector index or `-1` if the slot contains `0xFFFFFFFF`
+
+Expected win:
+
+- The current hash path pays for:
+  - hash computation
+  - a probe loop of up to `16` iterations in shader code
+  - one `32-byte` sector-grid read per probe
+  - per-probe coordinate and base-id comparisons
+- The direct path reduces that to:
+  - one bounds check
+  - one flatten operation
+  - one compact sector-index word read from the packed `SectorGridBuf` tail
+  - one sentinel comparison
+- This should help most when rays or occupancy queries cross sector boundaries frequently:
+  - primary-ray stepping through dense objects
+  - shadow rays
+  - occupancy-heavy normal or neighbor sampling
+- Cached repeated accesses inside the same sector already mitigate some cost today, so the direct path is not expected to change every scene equally. The win is specifically about removing probe work when the lookup cannot reuse the cache.
+
+Object-params packing decision:
+
+- Expand `ObjectParams` from `96 bytes` to `128 bytes` in `Task 5B`.
+- Keep the first `96 bytes` semantically unchanged.
+- Append two new words of lookup metadata:
+  - `direct_lookup_origin_and_mode: vec4<i32>`
+    - `x = origin_sx`
+    - `y = origin_sy`
+    - `z = origin_sz`
+    - `w = lookup_mode`
+  - `direct_lookup_extent_and_base: vec4<u32>`
+    - `x = extent_x`
+    - `y = extent_y`
+    - `z = extent_z`
+    - `w = direct_sector_table_base`
+- Rationale:
+  - the current `96-byte` object params block already carries active terrain, planet, shadow, and emitter metadata
+  - the single existing padding word is not enough for origin, bounds, mode, and table base
+  - appending metadata keeps the migration explicit and avoids hidden reinterpretation of existing fields
+- Negative sector coordinates remain correct because the shader will subtract the signed origin before converting to dense-table indices.
+
+Implementation note for `Task 5B`:
+
+- Keep the shader-facing lookup model as two logical tables:
+  - the front of `SectorGridBuf` remains the hash-probed `SectorGridEntry` array
+  - the tail of `SectorGridBuf` stores packed direct-lookup `u32` words
+- Reason:
+  - the renderer already sits close to WebGPU compute-stage storage-buffer limits in voxel passes
+  - packing the direct table into the existing sector-grid buffer avoids adding another storage binding and keeps the pipelines valid
+- `direct_sector_table_base` in `ObjectParams` must be expressed in packed-word units from the start of the combined `SectorGridBuf`, not from the start of the appended tail.
+- If future renderer work frees a storage binding budget, a dedicated direct-lookup buffer is still a cleaner architectural option, but it is not required for the current implementation.
 
 Prompt seed:
 
@@ -761,6 +920,37 @@ Acceptance criteria:
 - Qualifying objects use direct lookup with no probe loop.
 - Non-qualifying objects continue to render correctly through fallback lookup.
 - Tests pass and measured lookups improve on representative workloads.
+
+Representative-workload measurement pass completed on April 17, 2026:
+
+- Harness:
+  - added an env-gated benchmark mode to `examples/testing-vox/main.go`
+  - `GEKKO_BENCH_WARMUP_SECONDS` controls warmup duration
+  - `GEKKO_BENCH_SECONDS` controls capture duration and enables the benchmark mode
+  - `GEKKO_BENCH_LABEL` tags the emitted result line
+  - `GEKKO_XBM_FORCE_HASH_LOOKUP=1` forces the hash-only fallback for A/B comparison
+- Workload commands used:
+  - `cd /Users/ddevidch/code/go/gekko3d`
+  - `env GOCACHE=/tmp/gekko3d-gocache GEKKO_BENCH_WARMUP_SECONDS=5 GEKKO_BENCH_SECONDS=10 GEKKO_BENCH_LABEL=hybrid go run ./examples/testing-vox`
+  - `env GOCACHE=/tmp/gekko3d-gocache GEKKO_BENCH_WARMUP_SECONDS=5 GEKKO_BENCH_SECONDS=10 GEKKO_BENCH_LABEL=hash-only GEKKO_XBM_FORCE_HASH_LOOKUP=1 go run ./examples/testing-vox`
+- Captured results on the pinned `testing-vox` scene:
+  - hybrid:
+    - `avg_fps=10.00`
+    - `avg_frame_ms=100.00`
+    - `last_fps=7.23`
+    - profiler snapshot: `Buffer Update=0.109 ms`, `Scene Commit=0.107 ms`, `Scene: Instances=0.010 ms`, `Scene: Voxel=0.026 ms`
+  - hash-only:
+    - `avg_fps=10.00`
+    - `avg_frame_ms=100.00`
+    - `last_fps=7.15`
+    - profiler snapshot: `Buffer Update=0.131 ms`, `Scene Commit=0.117 ms`, `Scene: Instances=0.014 ms`, `Scene: Voxel=0.029 ms`
+- Interpretation:
+  - this environment is presentation-limited for the sample run, so the coarse end-to-end FPS metric stayed flat between modes
+  - the per-frame profiler snapshot trends slightly in favor of the hybrid direct-lookup path, but the delta is small enough that it should be treated as directional only, not a strong performance claim
+  - the pass still closes the non-optional Task 5B reporting requirement: the hybrid path runs the representative workload correctly, shows no regression against forced hash fallback, and remains the recommended implementation
+- Remaining follow-up:
+  - no additional implementation work is required for Task 5B
+  - if a cleaner performance signal is needed later, rerun the same harness on a non-present-limited desktop/GPU setup
 
 Prompt seed:
 

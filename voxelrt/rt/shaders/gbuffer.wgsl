@@ -111,6 +111,8 @@ struct ObjectParams {
     emitter_link_id: u32,
     padding0: u32,
     planet_tile: vec4<i32>, // face, level, x, y
+    direct_lookup_origin_mode: vec4<i32>, // xyz: sector origin, w: lookup mode
+    direct_lookup_extent_base: vec4<u32>, // xyz: sector extents, w: table base
 };
 
 struct SectorGridEntry {
@@ -158,8 +160,8 @@ struct ObjectLookupEntry {
 @group(2) @binding(8) var<storage, read> tree64_nodes: array<Tree64Node>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
-@group(2) @binding(11) var<storage, read> object_lookup: array<ObjectLookupEntry>;
-@group(2) @binding(12) var<storage, read> dense_occupancy_words: array<u32>;
+@group(2) @binding(12) var<storage, read> object_lookup: array<ObjectLookupEntry>;
+@group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;
 
 // ============== HELPERS ==============
 
@@ -276,6 +278,8 @@ fn quantize_ao(ao: f32) -> f32 {
 var<private> g_cached_sector_id: i32 = -1;
 var<private> g_cached_sector_coords: vec3<i32> = vec3<i32>(-999, -999, -999);
 var<private> g_cached_sector_base: u32 = 0xFFFFFFFFu;
+const LOOKUP_MODE_HASH: i32 = 0;
+const LOOKUP_MODE_DIRECT: i32 = 1;
 
 fn find_sector_cached(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
     if (sx == g_cached_sector_coords.x && sy == g_cached_sector_coords.y && sz == g_cached_sector_coords.z && 
@@ -289,7 +293,7 @@ fn find_sector_cached(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
     return sid;
 }
 
-fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
+fn find_sector_hash(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
     let size = sector_grid_params.grid_size;
     if (size == 0u) { return -1; }
     let mask = sector_grid_params.grid_mask;
@@ -303,6 +307,45 @@ fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
         }
     }
     return -1;
+}
+
+fn sector_grid_word(word_idx: u32) -> u32 {
+    let entry = sector_grid[word_idx >> 3u];
+    switch (word_idx & 7u) {
+        case 0u: { return bitcast<u32>(entry.coords.x); }
+        case 1u: { return bitcast<u32>(entry.coords.y); }
+        case 2u: { return bitcast<u32>(entry.coords.z); }
+        case 3u: { return bitcast<u32>(entry.coords.w); }
+        case 4u: { return entry.base_idx; }
+        case 5u: { return bitcast<u32>(entry.sector_idx); }
+        case 6u: { return entry.padding.x; }
+        default: { return entry.padding.y; }
+    }
+}
+
+fn find_sector_direct(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
+    let local = vec3<i32>(sx, sy, sz) - params.direct_lookup_origin_mode.xyz;
+    if (any(local < vec3<i32>(0))) {
+        return -1;
+    }
+    let extent = params.direct_lookup_extent_base.xyz;
+    let local_u = vec3<u32>(local);
+    if (local_u.x >= extent.x || local_u.y >= extent.y || local_u.z >= extent.z) {
+        return -1;
+    }
+    let idx = params.direct_lookup_extent_base.w + local_u.x + local_u.y * extent.x + local_u.z * extent.x * extent.y;
+    let sector_idx = sector_grid_word(idx);
+    if (sector_idx == 0xFFFFFFFFu) {
+        return -1;
+    }
+    return i32(sector_idx);
+}
+
+fn find_sector(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
+    if (params.direct_lookup_origin_mode.w == LOOKUP_MODE_DIRECT) {
+        return find_sector_direct(sx, sy, sz, params);
+    }
+    return find_sector_hash(sx, sy, sz, params);
 }
 
 fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {

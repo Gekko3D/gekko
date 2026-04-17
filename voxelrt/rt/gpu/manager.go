@@ -23,9 +23,15 @@ const (
 	AtlasSize                     = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
 	BrickRecordSize               = 24
 	DenseOccupancyBinding         = 13
-	GBufferDenseOccupancyBinding  = 12
+	GBufferObjectLookupBinding    = 12
+	GBufferDenseOccupancyBinding  = 13
 	DenseOccupancyInvalidWordBase = ^uint32(0)
 	DenseOccupancyRecordBytes     = volume.DenseOccupancyWordCount * 4
+	DirectSectorLookupInvalid     = ^uint32(0)
+	DirectSectorLookupMaxCells    = 4096
+	DirectSectorLookupDensityMax  = 16
+	LookupModeHash                = 0
+	LookupModeDirect              = 1
 
 	TiledLightingTileSize         = 16
 	TiledLightingMaxLightsPerTile = 128
@@ -466,8 +472,9 @@ type caVolumeLayout struct {
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
 type ObjectGpuAllocation struct {
-	Sectors map[[3]int]*volume.Sector     // Track which sector is at which coordinate
-	Bricks  map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
+	Sectors      map[[3]int]*volume.Sector     // Track which sector is at which coordinate
+	Bricks       map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
+	DirectLookup directSectorLookupMetadata
 }
 
 type MaterialGpuAllocation struct {

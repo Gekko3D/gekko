@@ -30,6 +30,12 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	obj.PlanetTileY = 7
 
 	alloc := &ObjectGpuAllocation{}
+	alloc.DirectLookup = directSectorLookupMetadata{
+		LookupMode: LookupModeDirect,
+		Origin:     [3]int32{-1, 2, -3},
+		Extent:     [3]uint32{4, 5, 6},
+		TableBase:  99,
+	}
 	matAlloc := &MaterialGpuAllocation{MaterialOffset: 7}
 
 	buf := buildObjectParamsBytes(obj, alloc, matAlloc)
@@ -95,6 +101,121 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	}
 	if got := int32(binary.LittleEndian.Uint32(buf[92:96])); got != int32(obj.PlanetTileY) {
 		t.Fatalf("expected planet tile y %d, got %d", obj.PlanetTileY, got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[96:100])); got != alloc.DirectLookup.Origin[0] {
+		t.Fatalf("expected direct lookup origin x %d, got %d", alloc.DirectLookup.Origin[0], got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[100:104])); got != alloc.DirectLookup.Origin[1] {
+		t.Fatalf("expected direct lookup origin y %d, got %d", alloc.DirectLookup.Origin[1], got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[104:108])); got != alloc.DirectLookup.Origin[2] {
+		t.Fatalf("expected direct lookup origin z %d, got %d", alloc.DirectLookup.Origin[2], got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[108:112]); got != alloc.DirectLookup.LookupMode {
+		t.Fatalf("expected lookup mode %d, got %d", alloc.DirectLookup.LookupMode, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[112:116]); got != alloc.DirectLookup.Extent[0] {
+		t.Fatalf("expected direct lookup extent x %d, got %d", alloc.DirectLookup.Extent[0], got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[116:120]); got != alloc.DirectLookup.Extent[1] {
+		t.Fatalf("expected direct lookup extent y %d, got %d", alloc.DirectLookup.Extent[1], got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[120:124]); got != alloc.DirectLookup.Extent[2] {
+		t.Fatalf("expected direct lookup extent z %d, got %d", alloc.DirectLookup.Extent[2], got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[124:128]); got != alloc.DirectLookup.TableBase {
+		t.Fatalf("expected direct lookup table base %d, got %d", alloc.DirectLookup.TableBase, got)
+	}
+}
+
+func TestBuildDirectSectorLookupForMapQualifiesCompactBounds(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	sectorA := volume.NewSector(-1, 0, 2)
+	sectorB := volume.NewSector(0, 0, 2)
+	xbm.Sectors[[3]int{-1, 0, 2}] = sectorA
+	xbm.Sectors[[3]int{0, 0, 2}] = sectorB
+
+	meta, table, ok := buildDirectSectorLookupForMap(xbm, map[*volume.Sector]SectorGpuInfo{
+		sectorA: {SlotIndex: 17},
+		sectorB: {SlotIndex: 29},
+	})
+	if !ok {
+		t.Fatal("expected compact sector bounds to qualify for direct lookup")
+	}
+	if meta.LookupMode != LookupModeDirect {
+		t.Fatalf("expected direct lookup mode %d, got %d", LookupModeDirect, meta.LookupMode)
+	}
+	if meta.Origin != [3]int32{-1, 0, 2} {
+		t.Fatalf("unexpected direct lookup origin: %+v", meta.Origin)
+	}
+	if meta.Extent != [3]uint32{2, 1, 1} {
+		t.Fatalf("unexpected direct lookup extent: %+v", meta.Extent)
+	}
+	if len(table) != 2 {
+		t.Fatalf("expected 2 lookup entries, got %d", len(table))
+	}
+	if table[0] != 17 || table[1] != 29 {
+		t.Fatalf("unexpected direct lookup table contents: %+v", table)
+	}
+}
+
+func TestBuildDirectSectorLookupForMapFallsBackForSparseBounds(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	sectorA := volume.NewSector(0, 0, 0)
+	sectorB := volume.NewSector(40, 0, 0)
+	xbm.Sectors[[3]int{0, 0, 0}] = sectorA
+	xbm.Sectors[[3]int{40, 0, 0}] = sectorB
+
+	meta, table, ok := buildDirectSectorLookupForMap(xbm, map[*volume.Sector]SectorGpuInfo{
+		sectorA: {SlotIndex: 1},
+		sectorB: {SlotIndex: 2},
+	})
+	if ok {
+		t.Fatal("expected sparse sector bounds to stay on hash lookup")
+	}
+	if meta.LookupMode != LookupModeHash {
+		t.Fatalf("expected hash lookup mode %d, got %d", LookupModeHash, meta.LookupMode)
+	}
+	if meta.TableBase != DirectSectorLookupInvalid {
+		t.Fatalf("expected invalid direct table base %#x, got %#x", DirectSectorLookupInvalid, meta.TableBase)
+	}
+	if len(table) != 0 {
+		t.Fatalf("expected no direct lookup table for sparse bounds, got %d entries", len(table))
+	}
+}
+
+func TestBuildDirectSectorLookupDataRebasesTableBaseToPackedSectorGridTail(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	sector := volume.NewSector(3, 4, 5)
+	xbm.Sectors[[3]int{3, 4, 5}] = sector
+
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = xbm
+
+	scene := &core.Scene{
+		Objects: []*core.VoxelObject{obj},
+	}
+
+	alloc := &ObjectGpuAllocation{
+		DirectLookup: defaultDirectSectorLookupMetadata(),
+	}
+	allocations := map[*volume.XBrickMap]*ObjectGpuAllocation{
+		xbm: alloc,
+	}
+
+	baseWordOffset := uint32(256)
+	buf := buildDirectSectorLookupData(scene, map[*volume.Sector]SectorGpuInfo{
+		sector: {SlotIndex: 77},
+	}, allocations, baseWordOffset)
+
+	if len(buf) != 4 {
+		t.Fatalf("expected one direct lookup word, got %d bytes", len(buf))
+	}
+	if got := binary.LittleEndian.Uint32(buf[0:4]); got != 77 {
+		t.Fatalf("expected direct lookup slot index 77, got %d", got)
+	}
+	if alloc.DirectLookup.TableBase != baseWordOffset {
+		t.Fatalf("expected direct lookup table base %d, got %d", baseWordOffset, alloc.DirectLookup.TableBase)
 	}
 }
 

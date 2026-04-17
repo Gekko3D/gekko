@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -13,6 +14,165 @@ import (
 )
 
 const lightSizeBytes = 496
+const forceHashLookupEnv = "GEKKO_XBM_FORCE_HASH_LOOKUP"
+
+type directSectorLookupMetadata struct {
+	LookupMode uint32
+	Origin     [3]int32
+	Extent     [3]uint32
+	TableBase  uint32
+}
+
+func defaultDirectSectorLookupMetadata() directSectorLookupMetadata {
+	return directSectorLookupMetadata{
+		LookupMode: LookupModeHash,
+		TableBase:  DirectSectorLookupInvalid,
+	}
+}
+
+func directSectorLookupQualified(boundsVolume int64, liveSectors int) bool {
+	if liveSectors <= 0 || boundsVolume <= 0 {
+		return false
+	}
+	if boundsVolume > DirectSectorLookupMaxCells {
+		return false
+	}
+	return boundsVolume <= int64(DirectSectorLookupDensityMax)*int64(liveSectors)
+}
+
+func flattenDirectSectorLookupIndex(local [3]uint32, extent [3]uint32) uint32 {
+	return local[0] + local[1]*extent[0] + local[2]*extent[0]*extent[1]
+}
+
+func directSectorLookupWordAt(words []uint32, idx uint32) uint32 {
+	if int(idx) >= len(words) {
+		return DirectSectorLookupInvalid
+	}
+	return words[idx]
+}
+
+func buildDirectSectorLookupForMap(xbm *volume.XBrickMap, sectorToInfo map[*volume.Sector]SectorGpuInfo) (directSectorLookupMetadata, []uint32, bool) {
+	meta := defaultDirectSectorLookupMetadata()
+	if xbm == nil || len(xbm.Sectors) == 0 {
+		return meta, nil, false
+	}
+	if os.Getenv(forceHashLookupEnv) == "1" {
+		return meta, nil, false
+	}
+
+	first := true
+	var minCoord [3]int32
+	var maxCoord [3]int32
+	for sKey := range xbm.Sectors {
+		coord := [3]int32{int32(sKey[0]), int32(sKey[1]), int32(sKey[2])}
+		if first {
+			minCoord = coord
+			maxCoord = coord
+			first = false
+			continue
+		}
+		for axis := 0; axis < 3; axis++ {
+			if coord[axis] < minCoord[axis] {
+				minCoord[axis] = coord[axis]
+			}
+			if coord[axis] > maxCoord[axis] {
+				maxCoord[axis] = coord[axis]
+			}
+		}
+	}
+
+	extentX := int64(maxCoord[0]-minCoord[0]) + 1
+	extentY := int64(maxCoord[1]-minCoord[1]) + 1
+	extentZ := int64(maxCoord[2]-minCoord[2]) + 1
+	boundsVolume := extentX * extentY * extentZ
+	if !directSectorLookupQualified(boundsVolume, len(xbm.Sectors)) {
+		return meta, nil, false
+	}
+
+	extent := [3]uint32{uint32(extentX), uint32(extentY), uint32(extentZ)}
+	table := make([]uint32, int(boundsVolume))
+	for i := range table {
+		table[i] = DirectSectorLookupInvalid
+	}
+
+	for sKey, sector := range xbm.Sectors {
+		info, ok := sectorToInfo[sector]
+		if !ok {
+			return meta, nil, false
+		}
+		local := [3]uint32{
+			uint32(int32(sKey[0]) - minCoord[0]),
+			uint32(int32(sKey[1]) - minCoord[1]),
+			uint32(int32(sKey[2]) - minCoord[2]),
+		}
+		table[flattenDirectSectorLookupIndex(local, extent)] = info.SlotIndex
+	}
+
+	meta.LookupMode = LookupModeDirect
+	meta.Origin = minCoord
+	meta.Extent = extent
+	return meta, table, true
+}
+
+func buildDirectSectorLookupData(scene *core.Scene, sectorToInfo map[*volume.Sector]SectorGpuInfo, allocations map[*volume.XBrickMap]*ObjectGpuAllocation, baseWordOffset uint32) []byte {
+	if scene == nil {
+		return make([]byte, 4)
+	}
+
+	tables := make([]uint32, 0)
+	processedMaps := make(map[*volume.XBrickMap]bool)
+	for _, obj := range scene.Objects {
+		if obj == nil || obj.XBrickMap == nil {
+			continue
+		}
+		xbm := obj.XBrickMap
+		if processedMaps[xbm] {
+			continue
+		}
+		processedMaps[xbm] = true
+
+		alloc := allocations[xbm]
+		if alloc == nil {
+			continue
+		}
+		alloc.DirectLookup = defaultDirectSectorLookupMetadata()
+
+		meta, table, ok := buildDirectSectorLookupForMap(xbm, sectorToInfo)
+		if !ok {
+			continue
+		}
+		meta.TableBase = baseWordOffset + uint32(len(tables))
+		alloc.DirectLookup = meta
+		tables = append(tables, table...)
+	}
+
+	if len(tables) == 0 {
+		return make([]byte, 4)
+	}
+
+	buf := make([]byte, len(tables)*4)
+	for i, sectorIdx := range tables {
+		binary.LittleEndian.PutUint32(buf[i*4:], sectorIdx)
+	}
+	return buf
+}
+
+func packDirectSectorLookupWords(words []uint32) []byte {
+	if len(words) == 0 {
+		return nil
+	}
+	entryCount := (len(words) + 7) / 8
+	buf := make([]byte, entryCount*32)
+	for i, word := range words {
+		offset := i * 4
+		binary.LittleEndian.PutUint32(buf[offset:offset+4], word)
+	}
+	for i := len(words); i < entryCount*8; i++ {
+		offset := i * 4
+		binary.LittleEndian.PutUint32(buf[offset:offset+4], DirectSectorLookupInvalid)
+	}
+	return buf
+}
 
 func appendUint32LE(dst []byte, v uint32) []byte {
 	n := len(dst)
@@ -86,6 +246,14 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	binary.LittleEndian.PutUint32(dst[84:88], uint32(obj.PlanetTileLevel))
 	binary.LittleEndian.PutUint32(dst[88:92], uint32(obj.PlanetTileX))
 	binary.LittleEndian.PutUint32(dst[92:96], uint32(obj.PlanetTileY))
+	binary.LittleEndian.PutUint32(dst[96:100], uint32(alloc.DirectLookup.Origin[0]))
+	binary.LittleEndian.PutUint32(dst[100:104], uint32(alloc.DirectLookup.Origin[1]))
+	binary.LittleEndian.PutUint32(dst[104:108], uint32(alloc.DirectLookup.Origin[2]))
+	binary.LittleEndian.PutUint32(dst[108:112], alloc.DirectLookup.LookupMode)
+	binary.LittleEndian.PutUint32(dst[112:116], alloc.DirectLookup.Extent[0])
+	binary.LittleEndian.PutUint32(dst[116:120], alloc.DirectLookup.Extent[1])
+	binary.LittleEndian.PutUint32(dst[120:124], alloc.DirectLookup.Extent[2])
+	binary.LittleEndian.PutUint32(dst[124:128], alloc.DirectLookup.TableBase)
 }
 
 func buildInstanceData(objects []*core.VoxelObject) []byte {
@@ -276,19 +444,7 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 	m.Profiler.EndScope("Scene: Voxel")
 
-	m.Profiler.BeginScope("Scene: Params")
-	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	if m.ensureBuffer("TransparentObjectParamsBuf", &m.TransparentObjectParamsBuf, buildObjectParamsData(scene.TransparentVisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	m.Profiler.EndScope("Scene: Params")
-
-	// 6. Sector Hash Grid
+	// 6. Sector lookup structures
 	m.Profiler.BeginScope("Scene: Grid")
 	if m.updateSectorGrid(scene) {
 		recreated = true
@@ -300,6 +456,18 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 		recreated = true
 	}
 	m.Profiler.EndScope("Scene: Grid")
+
+	m.Profiler.BeginScope("Scene: Params")
+	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("TransparentObjectParamsBuf", &m.TransparentObjectParamsBuf, buildObjectParamsData(scene.TransparentVisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	m.Profiler.EndScope("Scene: Params")
 	_ = recreated
 	return recreated
 }
@@ -562,6 +730,14 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	// Always ensure buffers exist even if empty to avoid bind group panics
 	if totalSectors == 0 {
 		recreated := false
+		for _, obj := range scene.Objects {
+			if obj == nil || obj.XBrickMap == nil {
+				continue
+			}
+			if alloc := m.Allocations[obj.XBrickMap]; alloc != nil {
+				alloc.DirectLookup = defaultDirectSectorLookupMetadata()
+			}
+		}
 		if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0) {
 			recreated = true
 		}
@@ -644,8 +820,27 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		}
 	}
 
+	directData := buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, uint32(len(m.gridDataPool)/4))
+	packedDirectData := packDirectSectorLookupWords(func() []uint32 {
+		if len(directData) == 0 {
+			return nil
+		}
+		wordCount := len(directData) / 4
+		words := make([]uint32, wordCount)
+		for i := 0; i < wordCount; i++ {
+			words[i] = binary.LittleEndian.Uint32(directData[i*4 : i*4+4])
+		}
+		return words
+	}())
+	combinedGridData := m.gridDataPool
+	if len(packedDirectData) > 0 {
+		combinedGridData = make([]byte, 0, len(m.gridDataPool)+len(packedDirectData))
+		combinedGridData = append(combinedGridData, m.gridDataPool...)
+		combinedGridData = append(combinedGridData, packedDirectData...)
+	}
+
 	recreated := false
-	if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, m.gridDataPool, wgpu.BufferUsageStorage, 0) {
+	if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, combinedGridData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 
@@ -656,6 +851,5 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, paramsData, wgpu.BufferUsageUniform, 0) {
 		recreated = true
 	}
-
 	return recreated
 }

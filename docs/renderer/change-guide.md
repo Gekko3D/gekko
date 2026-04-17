@@ -81,6 +81,16 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - `BrickRecord` is no longer 16 bytes.
   - The live layout is `atlas_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `atlas_page`, `flags`, `dense_occupancy_word_base` for 24 bytes total.
   - Any CPU writer or WGSL struct drift here will corrupt voxel reads.
+- `ObjectParams` is now 128 bytes.
+  - The trailing `32` bytes carry hybrid sector-lookup metadata: signed sector origin, lookup mode, dense lookup extents, and the packed direct-table base.
+  - CPU writers in `manager_scene.go` and `manager_voxel.go` plus every voxel-reading shader must stay aligned.
+- Hybrid direct lookup does not have its own GPU binding.
+  - Qualifying objects use a packed direct-lookup table stored in the tail of `SectorGridBuf`.
+  - The front of `SectorGridBuf` is still the hash-probed `SectorGridEntry` array.
+  - If you change the sector-grid entry layout, the packed-tail word accessors in all voxel-reading shaders must be reviewed at the same time.
+- Compute-stage binding limits are load-bearing.
+  - The current direct-lookup packing exists specifically to avoid adding another storage-buffer binding to voxel compute passes.
+  - If you try to split it back out into a dedicated buffer, re-check WebGPU per-stage storage-buffer limits and every explicit bind-group layout before assuming the pipelines will still validate.
 - Exact empty-voxel rejection is no longer payload-driven for non-solid bricks.
   - The live hot path is sector brick mask, then micro mask, then dense occupancy, then payload/material fetch only for confirmed occupied voxels.
 - Voxel shading style has a deliberate contract.
@@ -106,7 +116,7 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - Black frame after a scene or resize change
   - suspect stale bind groups, invalid pipeline layouts, or a resource that was not recreated in `Resize()`
 - Voxel surfaces render in one pass but disappear in another
-  - suspect voxel payload page binding drift, mismatched `BrickRecord` layout, dense-occupancy binding drift, or a bind-group builder / hand-written pipeline layout that was updated in only one pass
+  - suspect voxel payload page binding drift, mismatched `BrickRecord` layout, hybrid-lookup metadata drift, packed `SectorGridBuf` tail drift, dense-occupancy binding drift, or a bind-group builder / hand-written pipeline layout that was updated in only one pass
 - Transparent content missing
   - inspect accumulation targets, resolve bindings, and particle or transparent-overlay bind groups
 - Atmosphere or fog missing, stale, or sampling the wrong frame

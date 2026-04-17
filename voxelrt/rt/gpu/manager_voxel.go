@@ -176,6 +176,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			alloc = &ObjectGpuAllocation{
 				Sectors: make(map[[3]int]*volume.Sector),
 				Bricks:  make(map[[3]int]*[64]*volume.Brick),
+				DirectLookup: directSectorLookupMetadata{
+					TableBase: DirectSectorLookupInvalid,
+				},
 			}
 			m.Allocations[xbm] = alloc
 		}
@@ -388,7 +391,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	return recreated
 }
 
-const objectParamsSizeBytes = 96
+const objectParamsSizeBytes = 128
 
 func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, matAlloc *MaterialGpuAllocation) []byte {
 	pBuf := make([]byte, objectParamsSizeBytes)
@@ -425,6 +428,14 @@ func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, m
 	binary.LittleEndian.PutUint32(pBuf[84:88], uint32(obj.PlanetTileLevel))
 	binary.LittleEndian.PutUint32(pBuf[88:92], uint32(obj.PlanetTileX))
 	binary.LittleEndian.PutUint32(pBuf[92:96], uint32(obj.PlanetTileY))
+	binary.LittleEndian.PutUint32(pBuf[96:100], uint32(alloc.DirectLookup.Origin[0]))
+	binary.LittleEndian.PutUint32(pBuf[100:104], uint32(alloc.DirectLookup.Origin[1]))
+	binary.LittleEndian.PutUint32(pBuf[104:108], uint32(alloc.DirectLookup.Origin[2]))
+	binary.LittleEndian.PutUint32(pBuf[108:112], alloc.DirectLookup.LookupMode)
+	binary.LittleEndian.PutUint32(pBuf[112:116], alloc.DirectLookup.Extent[0])
+	binary.LittleEndian.PutUint32(pBuf[116:120], alloc.DirectLookup.Extent[1])
+	binary.LittleEndian.PutUint32(pBuf[120:124], alloc.DirectLookup.Extent[2])
+	binary.LittleEndian.PutUint32(pBuf[124:128], alloc.DirectLookup.TableBase)
 	return pBuf
 }
 
