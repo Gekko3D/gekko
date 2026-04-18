@@ -267,7 +267,41 @@ Current transparency modes:
 
 When `UpdateScene(...)` recreates buffers, `App.Update()` must rebuild dependent bind groups. Renderer bugs after object-count growth or shadow-capacity growth are usually stale-bind-group issues.
 
-Voxel payload uploads follow the same rule. The brick table now uses 20-byte records, and any bind group that reads voxel payload data must be recreated if payload pages or voxel-table resources were recreated.
+Voxel payload uploads follow the same rule. `BrickRecord` is now 32 bytes and uses explicit fields rather than overloaded payload/material storage:
+
+- `material_index`
+  - used by `Solid` and `UniformMaterial` bricks
+- `payload_offset`
+  - packed 3D payload-atlas offset used only by payload-backed sparse bricks
+- `occupancy_mask_lo` / `occupancy_mask_hi`
+  - coarse `2x2x2` microblock occupancy mask
+- `payload_page`
+  - payload atlas page for payload-backed sparse bricks
+- `flags`
+  - includes `BrickFlagSolid` and `BrickFlagUniformMaterial`
+- `dense_occupancy_word_base`
+  - exact `8x8x8` occupancy pointer for non-solid bricks
+
+The live brick-mode contract is:
+
+- `Solid`
+  - whole brick occupied
+  - reads `material_index`
+  - does not allocate payload atlas storage
+  - does not allocate dense occupancy
+- `UniformMaterial`
+  - sparse occupancy
+  - reads `material_index`
+  - allocates dense occupancy
+  - does not allocate payload atlas storage
+- payload-backed sparse
+  - sparse occupancy
+  - reads `payload_offset` and `payload_page`
+  - allocates dense occupancy
+  - allocates payload atlas storage
+
+Any bind group or shader that reads voxel payload data must be recreated if payload pages or voxel-table resources were recreated, and any pass that reads `BrickRecord` must keep this field order aligned with the GPU upload path in `voxelrt/rt/gpu/manager_voxel.go`.
+Hybrid sector lookup is now part of that same contract. `ObjectParams` is 128 bytes, qualifying objects use object-local direct lookup, `SectorGridBuf` still holds the hash-probed `SectorGridEntry` array, and `DirectSectorLookupBuf` now carries the compact direct-lookup words as a dedicated storage buffer. Any pass that reads voxel occupancy must keep its shader structs, bind groups, and hand-written pipeline layouts aligned with that live layout. This split depends on `App.Init()` requesting adapter-supported limits when creating the native WebGPU device.
 
 ## Common Sources of Drift
 
@@ -277,4 +311,5 @@ Voxel payload uploads follow the same rule. The brick table now uses 20-byte rec
 - changing scene-buffer layouts without rebuilding dependent bind groups
 - changing half-resolution volumetric or CA resolve inputs without updating resolve bind groups and shader bindings together
 - changing analytic-media history or half-resolution target bindings without updating `feature_analytic_medium.go`, `app_medium.go`, `manager_medium.go`, and `resolve_transparency.wgsl` together
-- changing voxel payload page bindings or `BrickRecord` layout in one pass but not the other voxel consumers
+- changing voxel payload page bindings, dense-occupancy bindings, hybrid-lookup metadata, or `BrickRecord` layout in one pass but not the other voxel consumers
+- changing a shader resource list without updating the corresponding hand-written pipeline layout in `voxelrt/rt/app/`

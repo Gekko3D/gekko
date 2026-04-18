@@ -126,15 +126,15 @@ func (m *GpuBufferManager) CreateParticleSimBindGroups() {
 
 	m.ParticleSimBG2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: m.ParticleSimPipeline.GetBindGroupLayout(2),
-		Entries: m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
+		Entries: m.appendDenseOccupancyEntry([]wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
-			{Binding: 6, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
 			{Binding: 7, Buffer: m.ObjectParamsBuf, Size: wgpu.WholeSize},
 			{Binding: 8, Buffer: m.InstancesBuf, Size: wgpu.WholeSize},
 			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
-		}, 2),
+			{Binding: 11, Buffer: m.DirectSectorLookupBuf, Size: wgpu.WholeSize},
+		}, DenseOccupancyBinding),
 	})
 	if err != nil {
 		panic(err)

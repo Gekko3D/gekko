@@ -18,10 +18,20 @@ const (
 	SafeBufferSizeLimit = 1024 * 1024 * 1024 // 1GB Warning/Compaction Limit
 
 	// Texture Atlas Constants
-	MaxVoxelAtlasPages = 4
-	AtlasBricksPerSide = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
-	AtlasSize          = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
-	BrickRecordSize    = 20
+	MaxVoxelAtlasPages            = 4
+	AtlasBricksPerSide            = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
+	AtlasSize                     = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
+	BrickRecordSize               = 32
+	DenseOccupancyBinding         = 13
+	GBufferObjectLookupBinding    = 12
+	GBufferDenseOccupancyBinding  = 13
+	DenseOccupancyInvalidWordBase = ^uint32(0)
+	DenseOccupancyRecordBytes     = volume.DenseOccupancyWordCount * 4
+	DirectSectorLookupInvalid     = ^uint32(0)
+	DirectSectorLookupMaxCells    = 4096
+	DirectSectorLookupDensityMax  = 16
+	LookupModeHash                = 0
+	LookupModeDirect              = 1
 
 	TiledLightingTileSize         = 16
 	TiledLightingMaxLightsPerTile = 128
@@ -200,6 +210,7 @@ type GpuBufferManager struct {
 	MaterialBuf                *wgpu.Buffer
 	SectorTableBuf             *wgpu.Buffer
 	BrickTableBuf              *wgpu.Buffer
+	DenseOccupancyBuf          *wgpu.Buffer
 	VoxelPayloadTex            [MaxVoxelAtlasPages]*wgpu.Texture
 	VoxelPayloadView           [MaxVoxelAtlasPages]*wgpu.TextureView
 	VoxelPayloadPageSize       uint32
@@ -210,6 +221,7 @@ type GpuBufferManager struct {
 	ShadowObjectParamsBuf      *wgpu.Buffer
 	Tree64Buf                  *wgpu.Buffer
 	SectorGridBuf              *wgpu.Buffer
+	DirectSectorLookupBuf      *wgpu.Buffer
 	SectorGridParamsBuf        *wgpu.Buffer
 	TerrainChunkLookupBuf      *wgpu.Buffer
 	PlanetTileLookupBuf        *wgpu.Buffer
@@ -424,31 +436,37 @@ type GpuBufferManager struct {
 	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
 
 	// Allocators for global pools
-	SectorAlloc  SlotAllocator
-	BrickAlloc   SlotAllocator                     // Allocates blocks of 64 bricks
-	PayloadAlloc [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
+	SectorAlloc         SlotAllocator
+	BrickAlloc          SlotAllocator                     // Allocates blocks of 64 bricks
+	PayloadAlloc        [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
+	DenseOccupancyAlloc SlotAllocator                     // Allocates one dense record per non-solid brick
 
 	// Mapping from volume objects to GPU slots
-	SectorToInfo map[*volume.Sector]SectorGpuInfo
-	BrickToSlot  map[*volume.Brick]PayloadSlot
+	SectorToInfo     map[*volume.Sector]SectorGpuInfo
+	BrickToSlot      map[*volume.Brick]PayloadSlot
+	BrickToDenseSlot map[*volume.Brick]uint32
 
 	MaterialAlloc       SlotAllocator // Allocates blocks of 256 materials (16KB each)
 	Allocations         map[*volume.XBrickMap]*ObjectGpuAllocation
 	MaterialAllocations map[*core.VoxelObject]*MaterialGpuAllocation
 
 	// Smooth streaming state
-	SectorsPerFrame          uint32
-	lastTotalSectors         int
-	lastSceneRevision        uint64
-	gridDataPool             []byte
-	TileLightTilesX          uint32
-	TileLightTilesY          uint32
-	TileLightAvgCount        int
-	TileLightMaxCount        int
-	VoxelSectorsUploaded     int
-	VoxelBricksUploaded      int
-	VoxelDirtySectorsPending int
-	VoxelDirtyBricksPending  int
+	SectorsPerFrame            uint32
+	lastTotalSectors           int
+	lastSceneRevision          uint64
+	gridDataPool               []byte
+	TileLightTilesX            uint32
+	TileLightTilesY            uint32
+	TileLightAvgCount          int
+	TileLightMaxCount          int
+	VoxelSectorsUploaded       int
+	VoxelBricksUploaded        int
+	VoxelDirtySectorsPending   int
+	VoxelDirtyBricksPending    int
+	VoxelUniformSparseBricks   int
+	VoxelPayloadSparseBricks   int
+	VoxelPayloadUploadsSkipped int
+	VoxelPayloadBytesAvoided   int
 }
 
 type caVolumeLayout struct {
@@ -459,8 +477,9 @@ type caVolumeLayout struct {
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
 type ObjectGpuAllocation struct {
-	Sectors map[[3]int]*volume.Sector     // Track which sector is at which coordinate
-	Bricks  map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
+	Sectors      map[[3]int]*volume.Sector     // Track which sector is at which coordinate
+	Bricks       map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
+	DirectLookup directSectorLookupMetadata
 }
 
 type MaterialGpuAllocation struct {
@@ -519,16 +538,19 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
 	m.SectorToInfo = make(map[*volume.Sector]SectorGpuInfo)
 	m.BrickToSlot = make(map[*volume.Brick]PayloadSlot)
+	m.BrickToDenseSlot = make(map[*volume.Brick]uint32)
 	m.SpriteAtlases = make(map[string]*SpriteAtlasResource)
 
 	// Pre-allocate minimal buffers to avoid bind group validation errors at startup
 	m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("DenseOccupancyBuf", &m.DenseOccupancyBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("DirectSectorLookupBuf", &m.DirectSectorLookupBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, nil, wgpu.BufferUsageUniform, 1024)
 	m.ensureBuffer("TerrainChunkLookupBuf", &m.TerrainChunkLookupBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("PlanetTileLookupBuf", &m.PlanetTileLookupBuf, nil, wgpu.BufferUsageStorage, 1024)
@@ -579,6 +601,14 @@ func (m *GpuBufferManager) appendVoxelPayloadEntries(entries []wgpu.BindGroupEnt
 	return entries
 }
 
+func (m *GpuBufferManager) appendDenseOccupancyEntry(entries []wgpu.BindGroupEntry, binding uint32) []wgpu.BindGroupEntry {
+	return append(entries, wgpu.BindGroupEntry{
+		Binding: binding,
+		Buffer:  m.DenseOccupancyBuf,
+		Size:    wgpu.WholeSize,
+	})
+}
+
 // CreateTransparentOverlayBindGroups wires the overlay pass bind groups:
 // Group 0: camera (uniform) + instances (storage) + BVH nodes (storage)
 // Group 1: voxel data buffers (sector, brick, payload, object params, tree64, sector grid, sector grid params)
@@ -608,15 +638,15 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 	// Group 1
 	m.TransparentBG1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: pipeline.GetBindGroupLayout(1),
-		Entries: m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
+		Entries: m.appendDenseOccupancyEntry(m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
 			{Binding: 6, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
 			{Binding: 7, Buffer: m.TransparentObjectParamsBuf, Size: wgpu.WholeSize},
-			{Binding: 8, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
-		}, 2),
+			{Binding: 11, Buffer: m.DirectSectorLookupBuf, Size: wgpu.WholeSize},
+		}, 2), DenseOccupancyBinding),
 	})
 	if err != nil {
 		panic(err)

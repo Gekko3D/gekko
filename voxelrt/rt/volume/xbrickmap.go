@@ -7,12 +7,14 @@ import (
 )
 
 const (
-	BrickSize    = 8
-	MicroSize    = 2
-	SectorBricks = 4
-	SectorSize   = SectorBricks * BrickSize // 32
+	BrickSize               = 8
+	MicroSize               = 2
+	SectorBricks            = 4
+	SectorSize              = SectorBricks * BrickSize // 32
+	DenseOccupancyWordCount = (BrickSize * BrickSize * BrickSize) / 32
 
-	BrickFlagSolid = 1
+	BrickFlagSolid           = 1
+	BrickFlagUniformMaterial = 1 << 1
 )
 
 type Brick struct {
@@ -69,7 +71,7 @@ func (b *Brick) SetVoxel(bx, by, bz int, val uint8) {
 }
 
 func (b *Brick) Expand(paletteIdx uint8) {
-	b.Flags &^= BrickFlagSolid
+	b.Flags &^= BrickFlagSolid | BrickFlagUniformMaterial
 	b.OccupancyMask64 = 0xFFFFFFFFFFFFFFFF
 	for z := 0; z < BrickSize; z++ {
 		for y := 0; y < BrickSize; y++ {
@@ -81,29 +83,79 @@ func (b *Brick) Expand(paletteIdx uint8) {
 }
 
 func (b *Brick) TryCompress() bool {
+	return b.RefreshMaterialFlags()
+}
+
+func (b *Brick) RefreshMaterialFlags() bool {
+	b.Flags &^= BrickFlagSolid | BrickFlagUniformMaterial
+	b.AtlasOffset = 0
 	if b.IsEmpty() {
 		return false
 	}
-	firstVal := b.Payload[0][0][0]
-	if firstVal == 0 {
-		return false
-	}
+
+	solidPalette := b.Payload[0][0][0]
+	isSolid := solidPalette != 0
+	var uniformPalette uint8
+	hasOccupied := false
+
 	for z := 0; z < BrickSize; z++ {
 		for y := 0; y < BrickSize; y++ {
 			for x := 0; x < BrickSize; x++ {
-				if b.Payload[x][y][z] != firstVal {
+				val := b.Payload[x][y][z]
+				if val == 0 {
+					isSolid = false
+					continue
+				}
+				if !hasOccupied {
+					uniformPalette = val
+					hasOccupied = true
+				} else if val != uniformPalette {
 					return false
+				}
+				if val != solidPalette {
+					isSolid = false
 				}
 			}
 		}
 	}
-	b.Flags |= BrickFlagSolid
-	b.AtlasOffset = uint32(firstVal)
-	return true
+
+	if isSolid {
+		b.Flags |= BrickFlagSolid
+		b.AtlasOffset = uint32(solidPalette)
+		return true
+	}
+
+	if hasOccupied {
+		b.Flags |= BrickFlagUniformMaterial
+		b.AtlasOffset = uint32(uniformPalette)
+	}
+	return false
 }
 
 func (b *Brick) IsEmpty() bool {
 	return b.OccupancyMask64 == 0
+}
+
+func denseOccupancyLinearIndex(x, y, z int) int {
+	return x + y*BrickSize + z*BrickSize*BrickSize
+}
+
+func (b *Brick) DenseOccupancyWords() [DenseOccupancyWordCount]uint32 {
+	var words [DenseOccupancyWordCount]uint32
+	for z := 0; z < BrickSize; z++ {
+		for y := 0; y < BrickSize; y++ {
+			for x := 0; x < BrickSize; x++ {
+				if b.Payload[x][y][z] == 0 {
+					continue
+				}
+				linear := denseOccupancyLinearIndex(x, y, z)
+				wordIdx := linear >> 5
+				bitIdx := uint32(linear & 31)
+				words[wordIdx] |= 1 << bitIdx
+			}
+		}
+	}
+	return words
 }
 
 type Sector struct {

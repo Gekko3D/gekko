@@ -3,7 +3,6 @@ package gpu
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
 	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -13,6 +12,7 @@ import (
 )
 
 const materialBlockCapacity = 256
+const payloadBytesPerBrick = volume.BrickSize * volume.BrickSize * volume.BrickSize
 
 func materialTableHasTransparency(table []core.Material) bool {
 	for _, mat := range table {
@@ -59,6 +59,10 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	m.VoxelBricksUploaded = 0
 	m.VoxelDirtySectorsPending = 0
 	m.VoxelDirtyBricksPending = 0
+	m.VoxelUniformSparseBricks = 0
+	m.VoxelPayloadSparseBricks = 0
+	m.VoxelPayloadUploadsSkipped = 0
+	m.VoxelPayloadBytesAvoided = 0
 
 	// Cleanup orphan allocations
 	activeMaps := make(map[*volume.XBrickMap]bool)
@@ -85,6 +89,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					for i := 0; i < 64; i++ {
 						if brick := bPtrs[i]; brick != nil {
 							m.releaseBrickSlot(brick)
+							m.releaseDenseOccupancySlot(brick)
 						}
 					}
 				}
@@ -149,6 +154,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*BrickRecordSize) {
 		recreated = true
 	}
+	if m.ensureBuffer("DenseOccupancyBuf", &m.DenseOccupancyBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*DenseOccupancyRecordBytes) {
+		recreated = true
+	}
 	if m.ensureVoxelPayloadPages() {
 		recreated = true
 	}
@@ -172,6 +180,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			alloc = &ObjectGpuAllocation{
 				Sectors: make(map[[3]int]*volume.Sector),
 				Bricks:  make(map[[3]int]*[64]*volume.Brick),
+				DirectLookup: directSectorLookupMetadata{
+					TableBase: DirectSectorLookupInvalid,
+				},
 			}
 			m.Allocations[xbm] = alloc
 		}
@@ -227,6 +238,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 							for i := 0; i < 64; i++ {
 								if brick := bPtrs[i]; brick != nil {
 									m.releaseBrickSlot(brick)
+									m.releaseDenseOccupancySlot(brick)
 								}
 							}
 							delete(alloc.Bricks, k)
@@ -300,6 +312,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					if bPtrs, has := alloc.Bricks[sKey]; has {
 						if oldBrick := bPtrs[i]; oldBrick != nil {
 							m.releaseBrickSlot(oldBrick)
+							m.releaseDenseOccupancySlot(oldBrick)
 						}
 						bPtrs[i] = nil
 					}
@@ -339,6 +352,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					if oldBrick != nil && oldBrick != brick {
 						// Brick changed! Release old one
 						m.releaseBrickSlot(oldBrick)
+						m.releaseDenseOccupancySlot(oldBrick)
 					}
 					bPtrs[bx+by*4+bz*16] = brick
 				}
@@ -348,6 +362,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 				if hasPtrs {
 					if oldBrick := bPtrs[bx+by*4+bz*16]; oldBrick != nil {
 						m.releaseBrickSlot(oldBrick)
+						m.releaseDenseOccupancySlot(oldBrick)
 					}
 					bPtrs[bx+by*4+bz*16] = nil
 				}
@@ -380,43 +395,11 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	return recreated
 }
 
-const objectParamsSizeBytes = 96
+const objectParamsSizeBytes = 128
 
 func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, matAlloc *MaterialGpuAllocation) []byte {
 	pBuf := make([]byte, objectParamsSizeBytes)
-	if obj == nil || obj.XBrickMap == nil || alloc == nil {
-		return pBuf
-	}
-	// sector_table_base is used as the stable map ID for hash lookup.
-	binary.LittleEndian.PutUint32(pBuf[0:4], obj.XBrickMap.ID)
-	binary.LittleEndian.PutUint32(pBuf[4:8], 0) // brick_table_base - now internal to sector
-	binary.LittleEndian.PutUint32(pBuf[8:12], 0)
-	if matAlloc != nil {
-		binary.LittleEndian.PutUint32(pBuf[12:16], matAlloc.MaterialOffset*4)
-	}
-	binary.LittleEndian.PutUint32(pBuf[16:20], ^uint32(0))
-	binary.LittleEndian.PutUint32(pBuf[20:24], math.Float32bits(obj.LODThreshold))
-	binary.LittleEndian.PutUint32(pBuf[24:28], uint32(len(obj.XBrickMap.Sectors)))
-	binary.LittleEndian.PutUint32(pBuf[28:32], uint32(obj.AmbientOcclusionMode))
-	binary.LittleEndian.PutUint32(pBuf[32:36], obj.ShadowGroupID)
-	binary.LittleEndian.PutUint32(pBuf[36:40], math.Float32bits(obj.ShadowSeamWorldEpsilon))
-	if obj.IsTerrainChunk {
-		binary.LittleEndian.PutUint32(pBuf[40:44], 1)
-	}
-	binary.LittleEndian.PutUint32(pBuf[44:48], obj.TerrainGroupID)
-	binary.LittleEndian.PutUint32(pBuf[48:52], uint32(obj.TerrainChunkCoord[0]))
-	binary.LittleEndian.PutUint32(pBuf[52:56], uint32(obj.TerrainChunkCoord[1]))
-	binary.LittleEndian.PutUint32(pBuf[56:60], uint32(obj.TerrainChunkCoord[2]))
-	binary.LittleEndian.PutUint32(pBuf[60:64], uint32(obj.TerrainChunkSize))
-	if obj.IsPlanetTile {
-		binary.LittleEndian.PutUint32(pBuf[64:68], 1)
-	}
-	binary.LittleEndian.PutUint32(pBuf[68:72], obj.PlanetTileGroupID)
-	binary.LittleEndian.PutUint32(pBuf[72:76], obj.EmitterLinkID)
-	binary.LittleEndian.PutUint32(pBuf[80:84], uint32(obj.PlanetTileFace))
-	binary.LittleEndian.PutUint32(pBuf[84:88], uint32(obj.PlanetTileLevel))
-	binary.LittleEndian.PutUint32(pBuf[88:92], uint32(obj.PlanetTileX))
-	binary.LittleEndian.PutUint32(pBuf[92:96], uint32(obj.PlanetTileY))
+	writeObjectParamsData(pBuf, obj, alloc, matAlloc)
 	return pBuf
 }
 
@@ -439,6 +422,93 @@ func (m *GpuBufferManager) releaseBrickSlot(brick *volume.Brick) {
 	m.PayloadAlloc[slot.Page].FreeSlot(slot.Slot)
 }
 
+func (m *GpuBufferManager) releaseDenseOccupancySlot(brick *volume.Brick) {
+	slot, exists := m.BrickToDenseSlot[brick]
+	if !exists {
+		return
+	}
+	delete(m.BrickToDenseSlot, brick)
+	m.DenseOccupancyAlloc.FreeSlot(slot)
+}
+
+func denseOccupancyWordBase(slot uint32) uint32 {
+	return slot * volume.DenseOccupancyWordCount
+}
+
+func buildDenseOccupancyBytes(brick *volume.Brick) []byte {
+	words := brick.DenseOccupancyWords()
+	buf := make([]byte, DenseOccupancyRecordBytes)
+	for i, word := range words {
+		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], word)
+	}
+	return buf
+}
+
+type brickUploadMode struct {
+	usesPayload bool
+	usesDense   bool
+}
+
+type gpuBrickRecord struct {
+	materialIndex          uint32
+	payloadOffset          uint32
+	occupancyMaskLo        uint32
+	occupancyMaskHi        uint32
+	payloadPage            uint32
+	flags                  uint32
+	denseOccupancyWordBase uint32
+}
+
+func resolveBrickUploadMode(flags uint32) brickUploadMode {
+	if flags&volume.BrickFlagSolid != 0 {
+		return brickUploadMode{}
+	}
+	if flags&volume.BrickFlagUniformMaterial != 0 {
+		return brickUploadMode{usesDense: true}
+	}
+	return brickUploadMode{usesPayload: true, usesDense: true}
+}
+
+func buildGpuBrickRecord(brick *volume.Brick, mode brickUploadMode, payloadOffset, payloadPage, denseWordBase uint32) gpuBrickRecord {
+	record := gpuBrickRecord{
+		occupancyMaskLo:        uint32(brick.OccupancyMask64),
+		occupancyMaskHi:        uint32(brick.OccupancyMask64 >> 32),
+		flags:                  brick.Flags,
+		denseOccupancyWordBase: denseWordBase,
+	}
+	if mode.usesPayload {
+		record.payloadOffset = payloadOffset
+		record.payloadPage = payloadPage
+	} else {
+		record.materialIndex = brick.AtlasOffset
+	}
+	return record
+}
+
+func encodeGpuBrickRecord(record gpuBrickRecord) []byte {
+	buf := make([]byte, BrickRecordSize)
+	binary.LittleEndian.PutUint32(buf[0:4], record.materialIndex)
+	binary.LittleEndian.PutUint32(buf[4:8], record.payloadOffset)
+	binary.LittleEndian.PutUint32(buf[8:12], record.occupancyMaskLo)
+	binary.LittleEndian.PutUint32(buf[12:16], record.occupancyMaskHi)
+	binary.LittleEndian.PutUint32(buf[16:20], record.payloadPage)
+	binary.LittleEndian.PutUint32(buf[20:24], record.flags)
+	binary.LittleEndian.PutUint32(buf[24:28], record.denseOccupancyWordBase)
+	return buf
+}
+
+func (m *GpuBufferManager) recordVoxelUploadStats(mode brickUploadMode) {
+	if mode.usesPayload {
+		m.VoxelPayloadSparseBricks++
+		return
+	}
+	if mode.usesDense {
+		m.VoxelUniformSparseBricks++
+		m.VoxelPayloadUploadsSkipped++
+		m.VoxelPayloadBytesAvoided += payloadBytesPerBrick
+	}
+}
+
 func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorGpuInfo) {
 	sData := make([]byte, 32)
 	ox, oy, oz := int32(sector.Coords[0]*32), int32(sector.Coords[1]*32), int32(sector.Coords[2]*32)
@@ -459,11 +529,12 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 	if brick == nil {
 		return
 	}
-	var gpuAtlasOffset uint32
-	var gpuAtlasPage uint32
-	if brick.Flags&volume.BrickFlagSolid != 0 {
-		gpuAtlasOffset = brick.AtlasOffset
-		gpuAtlasPage = 0
+	mode := resolveBrickUploadMode(brick.Flags)
+	m.recordVoxelUploadStats(mode)
+	var payloadOffset uint32
+	var payloadPage uint32
+	denseWordBase := DenseOccupancyInvalidWordBase
+	if !mode.usesPayload {
 		m.releaseBrickSlot(brick)
 	} else {
 		payloadSlot, exists := m.BrickToSlot[brick]
@@ -475,14 +546,14 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 			}
 			m.BrickToSlot[brick] = payloadSlot
 		}
-		gpuAtlasPage = payloadSlot.Page
+		payloadPage = payloadSlot.Page
 
 		// Calculate 3D coordinates in the atlas
 		ax := (payloadSlot.Slot % m.VoxelPayloadBricks) * volume.BrickSize
 		ay := ((payloadSlot.Slot / m.VoxelPayloadBricks) % m.VoxelPayloadBricks) * volume.BrickSize
 		az := (payloadSlot.Slot / (m.VoxelPayloadBricks * m.VoxelPayloadBricks)) * volume.BrickSize
 
-		gpuAtlasOffset = packVoxelAtlasOffset(ax, ay, az)
+		payloadOffset = packVoxelAtlasOffset(ax, ay, az)
 
 		// Upload payload via WriteTexture
 		payload := make([]byte, 512)
@@ -498,7 +569,7 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 
 		m.Device.GetQueue().WriteTexture(
 			&wgpu.ImageCopyTexture{
-				Texture:  m.VoxelPayloadTex[gpuAtlasPage],
+				Texture:  m.VoxelPayloadTex[payloadPage],
 				MipLevel: 0,
 				Origin:   wgpu.Origin3D{X: uint32(ax), Y: uint32(ay), Z: uint32(az)},
 				Aspect:   wgpu.TextureAspectAll,
@@ -517,12 +588,20 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 		)
 	}
 
-	bbuf := make([]byte, BrickRecordSize)
-	binary.LittleEndian.PutUint32(bbuf[0:4], gpuAtlasOffset)
-	binary.LittleEndian.PutUint32(bbuf[4:8], uint32(brick.OccupancyMask64))
-	binary.LittleEndian.PutUint32(bbuf[8:12], uint32(brick.OccupancyMask64>>32))
-	binary.LittleEndian.PutUint32(bbuf[12:16], gpuAtlasPage)
-	binary.LittleEndian.PutUint32(bbuf[16:20], brick.Flags)
+	if mode.usesDense {
+		denseSlot, exists := m.BrickToDenseSlot[brick]
+		if !exists {
+			denseSlot = m.DenseOccupancyAlloc.Alloc()
+			m.BrickToDenseSlot[brick] = denseSlot
+		}
+		denseWordBase = denseOccupancyWordBase(denseSlot)
+		m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(denseSlot*DenseOccupancyRecordBytes), buildDenseOccupancyBytes(brick))
+	} else {
+		m.releaseDenseOccupancySlot(brick)
+	}
+
+	record := buildGpuBrickRecord(brick, mode, payloadOffset, payloadPage, denseWordBase)
+	bbuf := encodeGpuBrickRecord(record)
 	m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(slotIdx*BrickRecordSize), bbuf)
 }
 

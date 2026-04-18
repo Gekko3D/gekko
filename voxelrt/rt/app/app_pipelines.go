@@ -382,7 +382,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 		return
 	}
 
-	// Group 1: voxel data (sector, brick, payload, object params, tree, sector grid)
+	// Group 1: voxel data (sector, brick, payload, object params, sector grid, dense occupancy)
 	bgl1, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "TransparentOverlay BGL1",
 		Entries: appendVoxelPayloadTextureLayoutEntries([]wgpu.BindGroupLayoutEntry{
@@ -418,14 +418,6 @@ func (a *App) setupTransparentOverlayPipeline() {
 					MinBindingSize: 0,
 				},
 			},
-			{ // Tree64
-				Binding:    8,
-				Visibility: wgpu.ShaderStageFragment,
-				Buffer: wgpu.BufferBindingLayout{
-					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
-					MinBindingSize: 0,
-				},
-			},
 			{ // SectorGrid
 				Binding:    9,
 				Visibility: wgpu.ShaderStageFragment,
@@ -440,6 +432,22 @@ func (a *App) setupTransparentOverlayPipeline() {
 				Buffer: wgpu.BufferBindingLayout{
 					Type:           wgpu.BufferBindingTypeUniform,
 					MinBindingSize: 16,
+				},
+			},
+			{ // Direct sector lookup words
+				Binding:    11,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
+				},
+			},
+			{ // Dense occupancy words
+				Binding:    13,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeReadOnlyStorage,
+					MinBindingSize: 0,
 				},
 			},
 		}, 2, wgpu.ShaderStageFragment),

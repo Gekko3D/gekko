@@ -49,12 +49,23 @@ struct TileLightHeader {
     pad0: u32,
 };
 
+struct LocalLightCoverage {
+    mode: u32,
+    min_uv: vec2<f32>,
+    max_uv: vec2<f32>,
+};
+
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(0) @binding(1) var<storage, read> lights: array<Light>;
 
 @group(1) @binding(0) var<uniform> tile_params: TileLightListParams;
 @group(1) @binding(1) var<storage, read_write> tile_headers: array<TileLightHeader>;
 @group(1) @binding(2) var<storage, read_write> tile_light_indices: array<u32>;
+
+const TILE_LIGHT_NEAR_PLANE_CLAMP = 1e-4;
+const LOCAL_LIGHT_COVERAGE_HIDDEN = 0u;
+const LOCAL_LIGHT_COVERAGE_PARTIAL = 1u;
+const LOCAL_LIGHT_COVERAGE_FULLSCREEN = 2u;
 
 fn camera_axis_ws(axis: vec3<f32>) -> vec3<f32> {
     let axis_ws = (camera.inv_view * vec4<f32>(axis, 0.0)).xyz;
@@ -64,9 +75,83 @@ fn camera_axis_ws(axis: vec3<f32>) -> vec3<f32> {
     return normalize(axis_ws);
 }
 
-fn clip_to_uv(clip: vec4<f32>) -> vec2<f32> {
-    let ndc = clip.xy / clip.w;
-    return vec2<f32>(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+fn project_local_light_coverage(light: Light) -> LocalLightCoverage {
+    let light_range = max(light.params.x, 0.0);
+    if (light_range <= 0.0) {
+        return LocalLightCoverage(LOCAL_LIGHT_COVERAGE_HIDDEN, vec2<f32>(0.0), vec2<f32>(0.0));
+    }
+
+    let camera_right = camera_axis_ws(vec3<f32>(1.0, 0.0, 0.0));
+    let camera_up = camera_axis_ws(vec3<f32>(0.0, 1.0, 0.0));
+    let camera_forward = camera_axis_ws(vec3<f32>(0.0, 0.0, -1.0));
+    let delta = light.position.xyz - camera.cam_pos.xyz;
+    let view_pos = vec3<f32>(
+        dot(delta, camera_right),
+        dot(delta, camera_up),
+        -dot(delta, camera_forward),
+    );
+
+    if (length(view_pos) <= light_range) {
+        return LocalLightCoverage(LOCAL_LIGHT_COVERAGE_FULLSCREEN, vec2<f32>(0.0), vec2<f32>(1.0));
+    }
+
+    // OpenGL-style view space looks down -Z, so a light is fully behind the
+    // camera when even the closest point on the sphere stays on or behind z=0.
+    if (view_pos.z - light_range >= 0.0) {
+        return LocalLightCoverage(LOCAL_LIGHT_COVERAGE_HIDDEN, vec2<f32>(0.0), vec2<f32>(0.0));
+    }
+
+    var min_ndc = vec2<f32>(1e9, 1e9);
+    var max_ndc = vec2<f32>(-1e9, -1e9);
+    var visible = 0u;
+    let signs = array<f32, 2>(-1.0, 1.0);
+
+    for (var ix = 0u; ix < 2u; ix = ix + 1u) {
+        for (var iy = 0u; iy < 2u; iy = iy + 1u) {
+            for (var iz = 0u; iz < 2u; iz = iz + 1u) {
+                var corner = vec3<f32>(
+                    view_pos.x + signs[ix] * light_range,
+                    view_pos.y + signs[iy] * light_range,
+                    view_pos.z + signs[iz] * light_range,
+                );
+                if (corner.z >= 0.0) {
+                    corner.z = -TILE_LIGHT_NEAR_PLANE_CLAMP;
+                }
+
+                let world_corner =
+                    camera.cam_pos.xyz +
+                    camera_right * corner.x +
+                    camera_up * corner.y -
+                    camera_forward * corner.z;
+                let clip = camera.view_proj * vec4<f32>(world_corner, 1.0);
+                if (abs(clip.w) < 1e-6) {
+                    continue;
+                }
+
+                let ndc = clip.xy / clip.w;
+                min_ndc = min(min_ndc, ndc);
+                max_ndc = max(max_ndc, ndc);
+                visible = 1u;
+            }
+        }
+    }
+
+    if (visible == 0u) {
+        return LocalLightCoverage(LOCAL_LIGHT_COVERAGE_HIDDEN, vec2<f32>(0.0), vec2<f32>(0.0));
+    }
+    if (max_ndc.x < -1.0 || min_ndc.x > 1.0 || max_ndc.y < -1.0 || min_ndc.y > 1.0) {
+        return LocalLightCoverage(LOCAL_LIGHT_COVERAGE_HIDDEN, vec2<f32>(0.0), vec2<f32>(0.0));
+    }
+
+    min_ndc = clamp(min_ndc, vec2<f32>(-1.0), vec2<f32>(1.0));
+    max_ndc = clamp(max_ndc, vec2<f32>(-1.0), vec2<f32>(1.0));
+
+    let min_u = min_ndc.x * 0.5 + 0.5;
+    let max_u = max_ndc.x * 0.5 + 0.5;
+    let min_v = (-max_ndc.y) * 0.5 + 0.5;
+    let max_v = (-min_ndc.y) * 0.5 + 0.5;
+
+    return LocalLightCoverage(LOCAL_LIGHT_COVERAGE_PARTIAL, vec2<f32>(min_u, min_v), vec2<f32>(max_u, max_v));
 }
 
 fn light_affects_tile(light: Light, tile_coord: vec2<u32>) -> bool {
@@ -80,24 +165,13 @@ fn light_affects_tile(light: Light, tile_coord: vec2<u32>) -> bool {
         return false;
     }
 
-    if (distance(camera.cam_pos.xyz, light.position.xyz) <= light_range) {
+    let coverage = project_local_light_coverage(light);
+    if (coverage.mode == LOCAL_LIGHT_COVERAGE_HIDDEN) {
+        return false;
+    }
+    if (coverage.mode == LOCAL_LIGHT_COVERAGE_FULLSCREEN) {
         return true;
     }
-
-    let center_clip = camera.view_proj * vec4<f32>(light.position.xyz, 1.0);
-    let right_clip = camera.view_proj * vec4<f32>(light.position.xyz + camera_axis_ws(vec3<f32>(1.0, 0.0, 0.0)) * light_range, 1.0);
-    let up_clip = camera.view_proj * vec4<f32>(light.position.xyz + camera_axis_ws(vec3<f32>(0.0, 1.0, 0.0)) * light_range, 1.0);
-    if (center_clip.w <= 0.0 || right_clip.w <= 0.0 || up_clip.w <= 0.0) {
-        return true;
-    }
-
-    let center_uv = clip_to_uv(center_clip);
-    let right_uv = clip_to_uv(right_clip);
-    let up_uv = clip_to_uv(up_clip);
-    let radius_u = max(abs(right_uv.x - center_uv.x), abs(up_uv.x - center_uv.x));
-    let radius_v = max(abs(right_uv.y - center_uv.y), abs(up_uv.y - center_uv.y));
-    let light_min_uv = center_uv - vec2<f32>(radius_u, radius_v);
-    let light_max_uv = center_uv + vec2<f32>(radius_u, radius_v);
 
     let tile_min_px = vec2<f32>(
         f32(tile_coord.x * tile_params.tile_size),
@@ -112,10 +186,10 @@ fn light_affects_tile(light: Light, tile_coord: vec2<u32>) -> bool {
     let tile_max_uv = tile_max_px / screen_size;
 
     return !(
-        light_max_uv.x < tile_min_uv.x ||
-        light_min_uv.x > tile_max_uv.x ||
-        light_max_uv.y < tile_min_uv.y ||
-        light_min_uv.y > tile_max_uv.y
+        coverage.max_uv.x < tile_min_uv.x ||
+        coverage.min_uv.x > tile_max_uv.x ||
+        coverage.max_uv.y < tile_min_uv.y ||
+        coverage.min_uv.y > tile_max_uv.y
     );
 }
 

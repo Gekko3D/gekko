@@ -183,7 +183,7 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 	// Group 2: Voxel Data
 	m.ShadowBindGroup2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: m.ShadowPipeline.GetBindGroupLayout(2),
-		Entries: m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
+		Entries: m.appendDenseOccupancyEntry(m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
 			{Binding: 1, Buffer: m.BrickTableBuf, Size: wgpu.WholeSize},
 			{Binding: 6, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},
@@ -191,7 +191,8 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 			{Binding: 8, Buffer: m.Tree64Buf, Size: wgpu.WholeSize},
 			{Binding: 9, Buffer: m.SectorGridBuf, Size: wgpu.WholeSize},
 			{Binding: 10, Buffer: m.SectorGridParamsBuf, Size: wgpu.WholeSize},
-		}, 2),
+			{Binding: 11, Buffer: m.DirectSectorLookupBuf, Size: wgpu.WholeSize},
+		}, 2), DenseOccupancyBinding),
 	})
 	if err != nil {
 		panic(err)

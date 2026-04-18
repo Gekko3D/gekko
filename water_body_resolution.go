@@ -31,9 +31,8 @@ func waterBodyResolutionSystem(cmd *Commands, assets *AssetServer, state *WaterB
 	}
 
 	state.ensureMaps()
-	staticColliders := collectWaterStaticColliders(cmd)
-	staticVoxelOccupancy := collectWaterStaticVoxelOccupancy(cmd, assets)
 	active := make(map[EntityId]struct{})
+	pendingResolution := false
 	transformType := reflect.TypeOf(TransformComponent{})
 	splashType := reflect.TypeOf(WaterSplashEffectComponent{})
 
@@ -48,10 +47,54 @@ func waterBodyResolutionSystem(cmd *Commands, assets *AssetServer, state *WaterB
 			return true
 		}
 
+		if _, ok := state.ByEntity[eid]; !ok {
+			pendingResolution = true
+		}
+		return true
+	})
+
+	for eid := range state.ByEntity {
+		if _, ok := active[eid]; !ok {
+			clearResolvedWaterPatchEntities(cmd, state, eid)
+			delete(state.ByEntity, eid)
+		}
+	}
+	for eid := range state.PatchEntitiesByOwner {
+		if _, ok := active[eid]; !ok {
+			clearResolvedWaterPatchEntities(cmd, state, eid)
+		}
+	}
+	if !pendingResolution {
+		return
+	}
+
+	var staticColliders []waterStaticCollider
+	staticCollidersReady := false
+	loadStaticColliders := func() []waterStaticCollider {
+		if !staticCollidersReady {
+			staticColliders = collectWaterStaticColliders(cmd)
+			staticCollidersReady = true
+		}
+		return staticColliders
+	}
+
+	var staticVoxelOccupancy []waterStaticCollider
+	staticVoxelOccupancyReady := false
+	loadStaticVoxelOccupancy := func() []waterStaticCollider {
+		if !staticVoxelOccupancyReady {
+			staticVoxelOccupancy = collectWaterStaticVoxelOccupancy(cmd, assets)
+			staticVoxelOccupancyReady = true
+		}
+		return staticVoxelOccupancy
+	}
+
+	MakeQuery1[WaterBodyComponent](cmd).Map(func(eid EntityId, body *WaterBodyComponent) bool {
+		if body == nil || body.Disabled {
+			return true
+		}
 		if _, ok := state.ByEntity[eid]; ok {
 			return true
 		}
-
 		var tr *TransformComponent
 		if comp := cmd.GetComponent(eid, transformType); comp != nil {
 			if typed, ok := comp.(TransformComponent); ok {
@@ -60,7 +103,14 @@ func waterBodyResolutionSystem(cmd *Commands, assets *AssetServer, state *WaterB
 			}
 		}
 
-		record, patches := resolveWaterBody(eid, body, tr, staticColliders, staticVoxelOccupancy)
+		var colliders []waterStaticCollider
+		var voxelOccupancyLoader func() []waterStaticCollider
+		if body.NormalizedMode() == WaterBodyModeFitBounds {
+			colliders = loadStaticColliders()
+			voxelOccupancyLoader = loadStaticVoxelOccupancy
+		}
+
+		record, patches := resolveWaterBody(eid, body, tr, colliders, voxelOccupancyLoader)
 		state.ByEntity[eid] = record
 		ownerSplash, hasOwnerSplash := lookupWaterSplashEffect(cmd, eid, splashType)
 		if len(patches) > 0 {
@@ -82,18 +132,6 @@ func waterBodyResolutionSystem(cmd *Commands, assets *AssetServer, state *WaterB
 		}
 		return true
 	})
-
-	for eid := range state.ByEntity {
-		if _, ok := active[eid]; !ok {
-			clearResolvedWaterPatchEntities(cmd, state, eid)
-			delete(state.ByEntity, eid)
-		}
-	}
-	for eid := range state.PatchEntitiesByOwner {
-		if _, ok := active[eid]; !ok {
-			clearResolvedWaterPatchEntities(cmd, state, eid)
-		}
-	}
 }
 
 func lookupWaterSplashEffect(cmd *Commands, eid EntityId, splashType reflect.Type) (WaterSplashEffectComponent, bool) {
@@ -122,7 +160,7 @@ func clearResolvedWaterPatchEntities(cmd *Commands, state *WaterBodyResolutionSt
 	delete(state.PatchEntitiesByOwner, owner)
 }
 
-func resolveWaterBody(owner EntityId, body *WaterBodyComponent, tr *TransformComponent, staticColliders []waterStaticCollider, staticVoxelOccupancy []waterStaticCollider) (WaterBodyResolvedRecord, []ResolvedWaterPatchComponent) {
+func resolveWaterBody(owner EntityId, body *WaterBodyComponent, tr *TransformComponent, staticColliders []waterStaticCollider, loadStaticVoxelOccupancy func() []waterStaticCollider) (WaterBodyResolvedRecord, []ResolvedWaterPatchComponent) {
 	record := WaterBodyResolvedRecord{Status: WaterBodyResolutionStatusFailed}
 	if body == nil || body.Disabled {
 		return record, nil
@@ -136,8 +174,8 @@ func resolveWaterBody(owner EntityId, body *WaterBodyComponent, tr *TransformCom
 	case WaterBodyModeFitBounds:
 		rects := fitWaterBodyBoundsFromStaticColliders(body, staticColliders)
 		source := WaterFitSourceStaticCollider
-		if len(rects) == 0 {
-			rects = fitWaterBodyBoundsFromStaticColliders(body, staticVoxelOccupancy)
+		if len(rects) == 0 && loadStaticVoxelOccupancy != nil {
+			rects = fitWaterBodyBoundsFromStaticColliders(body, loadStaticVoxelOccupancy())
 			source = WaterFitSourceVoxelOccupancy
 		}
 		if len(rects) == 0 {

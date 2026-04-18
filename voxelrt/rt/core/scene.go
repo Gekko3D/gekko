@@ -192,6 +192,18 @@ type Scene struct {
 	lastOcclusionDirty        map[*VoxelObject]bool
 }
 
+type sceneSpotShadowCullVolume struct {
+	Position mgl32.Vec3
+	Dir      mgl32.Vec3
+	Range    float32
+	CosCone  float32
+}
+
+type scenePointShadowCullVolume struct {
+	Position mgl32.Vec3
+	Range    float32
+}
+
 func NewScene() *Scene {
 	return &Scene{
 		Objects:            []*VoxelObject{},
@@ -481,6 +493,8 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		opts.Profiler.EndScope("Commit: Shadows")
 		return
 	}
+	hasDirectionalShadowLight := sceneHasShadowCastingDirectionalLight(s.Lights)
+	localSpotShadowVolumes, localPointShadowVolumes := collectSceneLocalShadowCullVolumes(s.Lights)
 	type groupedShadowCandidate struct {
 		obj      *VoxelObject
 		distance float32
@@ -493,6 +507,9 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		}
 		distance := distancePointToAABB(opts.CameraPosition, *obj.WorldAABB)
 		if obj.ShadowMaxDistance > 0 && distance > obj.ShadowMaxDistance {
+			continue
+		}
+		if !hasDirectionalShadowLight && !intersectsAnySceneLocalShadowVolume(*obj.WorldAABB, localSpotShadowVolumes, localPointShadowVolumes) {
 			continue
 		}
 		if obj.ShadowCasterGroupID != 0 && obj.ShadowCasterGroupLimit > 0 {
@@ -554,6 +571,96 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 func sceneHasShadowCastingLights(lights []Light) bool {
 	for _, light := range lights {
 		if light.Params[3] > 0.5 {
+			return true
+		}
+	}
+	return false
+}
+
+func sceneHasShadowCastingDirectionalLight(lights []Light) bool {
+	for _, light := range lights {
+		if light.Params[3] > 0.5 && uint32(light.Params[2]) == LightTypeDirectional {
+			return true
+		}
+	}
+	return false
+}
+
+func collectSceneLocalShadowCullVolumes(lights []Light) ([]sceneSpotShadowCullVolume, []scenePointShadowCullVolume) {
+	spots := make([]sceneSpotShadowCullVolume, 0, len(lights))
+	points := make([]scenePointShadowCullVolume, 0, len(lights))
+	for _, light := range lights {
+		if light.Params[3] <= 0.5 {
+			continue
+		}
+		switch uint32(light.Params[2]) {
+		case LightTypeSpot:
+			dir := mgl32.Vec3{light.Direction[0], light.Direction[1], light.Direction[2]}
+			if dir.Len() < 1e-5 {
+				dir = mgl32.Vec3{0, -1, 0}
+			} else {
+				dir = dir.Normalize()
+			}
+			spots = append(spots, sceneSpotShadowCullVolume{
+				Position: mgl32.Vec3{light.Position[0], light.Position[1], light.Position[2]},
+				Dir:      dir,
+				Range:    light.Params[0],
+				CosCone:  light.Params[1],
+			})
+		case LightTypePoint:
+			points = append(points, scenePointShadowCullVolume{
+				Position: mgl32.Vec3{light.Position[0], light.Position[1], light.Position[2]},
+				Range:    light.Params[0],
+			})
+		}
+	}
+	return spots, points
+}
+
+func intersectsSceneSpotShadowVolume(aabb [2]mgl32.Vec3, volume sceneSpotShadowCullVolume) bool {
+	center := aabb[0].Add(aabb[1]).Mul(0.5)
+	radius := aabb[1].Sub(center).Len()
+	toCenter := center.Sub(volume.Position)
+	dist := toCenter.Len()
+	if dist-radius > volume.Range {
+		return false
+	}
+	if dist <= radius || dist <= 1e-5 {
+		return true
+	}
+
+	dir := volume.Dir
+	if dir.Len() < 1e-5 {
+		return false
+	}
+	dir = dir.Normalize()
+	dotCenter := dir.Dot(toCenter.Mul(1.0 / dist))
+	angularSlack := float32(math.Asin(math.Min(1.0, float64(radius/dist))))
+	minDot := float32(math.Cos(math.Acos(float64(volume.CosCone)) + float64(angularSlack)))
+	return dotCenter >= minDot
+}
+
+func intersectsScenePointShadowVolume(aabb [2]mgl32.Vec3, volume scenePointShadowCullVolume) bool {
+	center := aabb[0].Add(aabb[1]).Mul(0.5)
+	halfExtents := aabb[1].Sub(center)
+	delta := center.Sub(volume.Position)
+	clamped := mgl32.Vec3{
+		max(-halfExtents.X(), min(delta.X(), halfExtents.X())),
+		max(-halfExtents.Y(), min(delta.Y(), halfExtents.Y())),
+		max(-halfExtents.Z(), min(delta.Z(), halfExtents.Z())),
+	}
+	closest := center.Add(clamped)
+	return closest.Sub(volume.Position).LenSqr() <= volume.Range*volume.Range
+}
+
+func intersectsAnySceneLocalShadowVolume(aabb [2]mgl32.Vec3, spots []sceneSpotShadowCullVolume, points []scenePointShadowCullVolume) bool {
+	for _, volume := range spots {
+		if intersectsSceneSpotShadowVolume(aabb, volume) {
+			return true
+		}
+	}
+	for _, volume := range points {
+		if intersectsScenePointShadowVolume(aabb, volume) {
 			return true
 		}
 	}

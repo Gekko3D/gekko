@@ -35,6 +35,7 @@ That is broader than the renderer-only packages, but it catches bridge regressio
   - then `./...`
 - Voxel atlas page count, voxel payload bindings, or `BrickRecord` layout change:
   - `./voxelrt/rt/gpu`
+  - `./voxelrt/rt/app`
   - then `./...`
 - Probe GI or deferred-lighting change:
   - `./voxelrt/rt/gpu`

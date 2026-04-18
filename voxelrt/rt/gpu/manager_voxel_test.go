@@ -30,6 +30,12 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	obj.PlanetTileY = 7
 
 	alloc := &ObjectGpuAllocation{}
+	alloc.DirectLookup = directSectorLookupMetadata{
+		LookupMode: LookupModeDirect,
+		Origin:     [3]int32{-1, 2, -3},
+		Extent:     [3]uint32{4, 5, 6},
+		TableBase:  99,
+	}
 	matAlloc := &MaterialGpuAllocation{MaterialOffset: 7}
 
 	buf := buildObjectParamsBytes(obj, alloc, matAlloc)
@@ -95,6 +101,121 @@ func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
 	}
 	if got := int32(binary.LittleEndian.Uint32(buf[92:96])); got != int32(obj.PlanetTileY) {
 		t.Fatalf("expected planet tile y %d, got %d", obj.PlanetTileY, got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[96:100])); got != alloc.DirectLookup.Origin[0] {
+		t.Fatalf("expected direct lookup origin x %d, got %d", alloc.DirectLookup.Origin[0], got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[100:104])); got != alloc.DirectLookup.Origin[1] {
+		t.Fatalf("expected direct lookup origin y %d, got %d", alloc.DirectLookup.Origin[1], got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[104:108])); got != alloc.DirectLookup.Origin[2] {
+		t.Fatalf("expected direct lookup origin z %d, got %d", alloc.DirectLookup.Origin[2], got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[108:112]); got != alloc.DirectLookup.LookupMode {
+		t.Fatalf("expected lookup mode %d, got %d", alloc.DirectLookup.LookupMode, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[112:116]); got != alloc.DirectLookup.Extent[0] {
+		t.Fatalf("expected direct lookup extent x %d, got %d", alloc.DirectLookup.Extent[0], got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[116:120]); got != alloc.DirectLookup.Extent[1] {
+		t.Fatalf("expected direct lookup extent y %d, got %d", alloc.DirectLookup.Extent[1], got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[120:124]); got != alloc.DirectLookup.Extent[2] {
+		t.Fatalf("expected direct lookup extent z %d, got %d", alloc.DirectLookup.Extent[2], got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[124:128]); got != alloc.DirectLookup.TableBase {
+		t.Fatalf("expected direct lookup table base %d, got %d", alloc.DirectLookup.TableBase, got)
+	}
+}
+
+func TestBuildDirectSectorLookupForMapQualifiesCompactBounds(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	sectorA := volume.NewSector(-1, 0, 2)
+	sectorB := volume.NewSector(0, 0, 2)
+	xbm.Sectors[[3]int{-1, 0, 2}] = sectorA
+	xbm.Sectors[[3]int{0, 0, 2}] = sectorB
+
+	meta, table, ok := buildDirectSectorLookupForMap(xbm, map[*volume.Sector]SectorGpuInfo{
+		sectorA: {SlotIndex: 17},
+		sectorB: {SlotIndex: 29},
+	})
+	if !ok {
+		t.Fatal("expected compact sector bounds to qualify for direct lookup")
+	}
+	if meta.LookupMode != LookupModeDirect {
+		t.Fatalf("expected direct lookup mode %d, got %d", LookupModeDirect, meta.LookupMode)
+	}
+	if meta.Origin != [3]int32{-1, 0, 2} {
+		t.Fatalf("unexpected direct lookup origin: %+v", meta.Origin)
+	}
+	if meta.Extent != [3]uint32{2, 1, 1} {
+		t.Fatalf("unexpected direct lookup extent: %+v", meta.Extent)
+	}
+	if len(table) != 2 {
+		t.Fatalf("expected 2 lookup entries, got %d", len(table))
+	}
+	if table[0] != 17 || table[1] != 29 {
+		t.Fatalf("unexpected direct lookup table contents: %+v", table)
+	}
+}
+
+func TestBuildDirectSectorLookupForMapFallsBackForSparseBounds(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	sectorA := volume.NewSector(0, 0, 0)
+	sectorB := volume.NewSector(40, 0, 0)
+	xbm.Sectors[[3]int{0, 0, 0}] = sectorA
+	xbm.Sectors[[3]int{40, 0, 0}] = sectorB
+
+	meta, table, ok := buildDirectSectorLookupForMap(xbm, map[*volume.Sector]SectorGpuInfo{
+		sectorA: {SlotIndex: 1},
+		sectorB: {SlotIndex: 2},
+	})
+	if ok {
+		t.Fatal("expected sparse sector bounds to stay on hash lookup")
+	}
+	if meta.LookupMode != LookupModeHash {
+		t.Fatalf("expected hash lookup mode %d, got %d", LookupModeHash, meta.LookupMode)
+	}
+	if meta.TableBase != DirectSectorLookupInvalid {
+		t.Fatalf("expected invalid direct table base %#x, got %#x", DirectSectorLookupInvalid, meta.TableBase)
+	}
+	if len(table) != 0 {
+		t.Fatalf("expected no direct lookup table for sparse bounds, got %d entries", len(table))
+	}
+}
+
+func TestBuildDirectSectorLookupDataRebasesTableBaseToPackedSectorGridTail(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	sector := volume.NewSector(3, 4, 5)
+	xbm.Sectors[[3]int{3, 4, 5}] = sector
+
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = xbm
+
+	scene := &core.Scene{
+		Objects: []*core.VoxelObject{obj},
+	}
+
+	alloc := &ObjectGpuAllocation{
+		DirectLookup: defaultDirectSectorLookupMetadata(),
+	}
+	allocations := map[*volume.XBrickMap]*ObjectGpuAllocation{
+		xbm: alloc,
+	}
+
+	baseWordOffset := uint32(256)
+	buf := buildDirectSectorLookupData(scene, map[*volume.Sector]SectorGpuInfo{
+		sector: {SlotIndex: 77},
+	}, allocations, baseWordOffset)
+
+	if len(buf) != 4 {
+		t.Fatalf("expected one direct lookup word, got %d bytes", len(buf))
+	}
+	if got := binary.LittleEndian.Uint32(buf[0:4]); got != 77 {
+		t.Fatalf("expected direct lookup slot index 77, got %d", got)
+	}
+	if alloc.DirectLookup.TableBase != baseWordOffset {
+		t.Fatalf("expected direct lookup table base %d, got %d", baseWordOffset, alloc.DirectLookup.TableBase)
 	}
 }
 
@@ -219,6 +340,142 @@ func TestAllocPayloadSlotSpillsAcrossPages(t *testing.T) {
 	}
 }
 
+func TestResolveBrickUploadMode(t *testing.T) {
+	tests := []struct {
+		name        string
+		flags       uint32
+		usesPayload bool
+		usesDense   bool
+	}{
+		{
+			name:        "solid",
+			flags:       volume.BrickFlagSolid,
+			usesPayload: false,
+			usesDense:   false,
+		},
+		{
+			name:        "uniform sparse",
+			flags:       volume.BrickFlagUniformMaterial,
+			usesPayload: false,
+			usesDense:   true,
+		},
+		{
+			name:        "payload sparse",
+			flags:       0,
+			usesPayload: true,
+			usesDense:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mode := resolveBrickUploadMode(tc.flags)
+			if mode.usesPayload != tc.usesPayload {
+				t.Fatalf("expected usesPayload=%v, got %v", tc.usesPayload, mode.usesPayload)
+			}
+			if mode.usesDense != tc.usesDense {
+				t.Fatalf("expected usesDense=%v, got %v", tc.usesDense, mode.usesDense)
+			}
+		})
+	}
+}
+
+func TestEncodeGpuBrickRecordUsesExplicitMaterialAndPayloadFields(t *testing.T) {
+	record := gpuBrickRecord{
+		materialIndex:          11,
+		payloadOffset:          22,
+		occupancyMaskLo:        33,
+		occupancyMaskHi:        44,
+		payloadPage:            55,
+		flags:                  volume.BrickFlagUniformMaterial,
+		denseOccupancyWordBase: 66,
+	}
+
+	buf := encodeGpuBrickRecord(record)
+	if len(buf) != BrickRecordSize {
+		t.Fatalf("expected encoded brick record size %d, got %d", BrickRecordSize, len(buf))
+	}
+	if got := binary.LittleEndian.Uint32(buf[0:4]); got != record.materialIndex {
+		t.Fatalf("expected material index %d, got %d", record.materialIndex, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[4:8]); got != record.payloadOffset {
+		t.Fatalf("expected payload offset %d, got %d", record.payloadOffset, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[8:12]); got != record.occupancyMaskLo {
+		t.Fatalf("expected occupancy mask lo %d, got %d", record.occupancyMaskLo, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[12:16]); got != record.occupancyMaskHi {
+		t.Fatalf("expected occupancy mask hi %d, got %d", record.occupancyMaskHi, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[16:20]); got != record.payloadPage {
+		t.Fatalf("expected payload page %d, got %d", record.payloadPage, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[20:24]); got != record.flags {
+		t.Fatalf("expected flags %d, got %d", record.flags, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[24:28]); got != record.denseOccupancyWordBase {
+		t.Fatalf("expected dense occupancy word base %d, got %d", record.denseOccupancyWordBase, got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[28:32]); got != 0 {
+		t.Fatalf("expected trailing padding to be zeroed, got %d", got)
+	}
+}
+
+func TestBuildGpuBrickRecordMapsModesToExplicitFields(t *testing.T) {
+	brick := volume.NewBrick()
+	brick.OccupancyMask64 = 0x8877665544332211
+	brick.AtlasOffset = 9
+
+	solid := buildGpuBrickRecord(brick, resolveBrickUploadMode(volume.BrickFlagSolid), 123, 4, DenseOccupancyInvalidWordBase)
+	if solid.materialIndex != 9 || solid.payloadOffset != 0 || solid.payloadPage != 0 {
+		t.Fatalf("expected solid brick to use material field only, got %+v", solid)
+	}
+
+	uniform := buildGpuBrickRecord(brick, resolveBrickUploadMode(volume.BrickFlagUniformMaterial), 123, 4, 77)
+	if uniform.materialIndex != 9 || uniform.payloadOffset != 0 || uniform.payloadPage != 0 || uniform.denseOccupancyWordBase != 77 {
+		t.Fatalf("expected uniform sparse brick to use material field plus dense occupancy, got %+v", uniform)
+	}
+
+	payload := buildGpuBrickRecord(brick, resolveBrickUploadMode(0), 123, 4, 88)
+	if payload.materialIndex != 0 || payload.payloadOffset != 123 || payload.payloadPage != 4 || payload.denseOccupancyWordBase != 88 {
+		t.Fatalf("expected payload sparse brick to use payload fields, got %+v", payload)
+	}
+}
+
+func TestRecordVoxelUploadStatsCountsUniformAndPayloadSparseUploads(t *testing.T) {
+	m := &GpuBufferManager{}
+
+	m.recordVoxelUploadStats(resolveBrickUploadMode(volume.BrickFlagUniformMaterial))
+	if m.VoxelUniformSparseBricks != 1 {
+		t.Fatalf("expected uniform sparse brick count 1, got %d", m.VoxelUniformSparseBricks)
+	}
+	if m.VoxelPayloadUploadsSkipped != 1 {
+		t.Fatalf("expected skipped payload upload count 1, got %d", m.VoxelPayloadUploadsSkipped)
+	}
+	if m.VoxelPayloadBytesAvoided != payloadBytesPerBrick {
+		t.Fatalf("expected payload bytes avoided %d, got %d", payloadBytesPerBrick, m.VoxelPayloadBytesAvoided)
+	}
+	if m.VoxelPayloadSparseBricks != 0 {
+		t.Fatalf("expected payload sparse brick count 0, got %d", m.VoxelPayloadSparseBricks)
+	}
+
+	m.recordVoxelUploadStats(resolveBrickUploadMode(0))
+	if m.VoxelPayloadSparseBricks != 1 {
+		t.Fatalf("expected payload sparse brick count 1, got %d", m.VoxelPayloadSparseBricks)
+	}
+	if m.VoxelUniformSparseBricks != 1 {
+		t.Fatalf("expected uniform sparse brick count to remain 1, got %d", m.VoxelUniformSparseBricks)
+	}
+	if m.VoxelPayloadUploadsSkipped != 1 {
+		t.Fatalf("expected skipped payload upload count to remain 1, got %d", m.VoxelPayloadUploadsSkipped)
+	}
+
+	m.recordVoxelUploadStats(resolveBrickUploadMode(volume.BrickFlagSolid))
+	if m.VoxelUniformSparseBricks != 1 || m.VoxelPayloadSparseBricks != 1 || m.VoxelPayloadUploadsSkipped != 1 {
+		t.Fatalf("expected solid uploads to leave counters unchanged, got uniform=%d payload=%d skipped=%d", m.VoxelUniformSparseBricks, m.VoxelPayloadSparseBricks, m.VoxelPayloadUploadsSkipped)
+	}
+}
+
 func TestReleaseBrickSlotReturnsCapacityToOwningPage(t *testing.T) {
 	brick := volume.NewBrick()
 	m := &GpuBufferManager{
@@ -240,5 +497,51 @@ func TestReleaseBrickSlotReturnsCapacityToOwningPage(t *testing.T) {
 	}
 	if slot.Page != 1 || slot.Slot != 7 {
 		t.Fatalf("expected freed slot to be reused from page 1, got %+v", slot)
+	}
+}
+
+func TestBuildDenseOccupancyBytesMatchesFrozenPacking(t *testing.T) {
+	brick := volume.NewBrick()
+	brick.SetVoxel(0, 0, 0, 1)
+	brick.SetVoxel(7, 0, 0, 2)
+	brick.SetVoxel(0, 1, 0, 3)
+	brick.SetVoxel(0, 0, 1, 4)
+	brick.SetVoxel(7, 7, 7, 5)
+
+	buf := buildDenseOccupancyBytes(brick)
+	if len(buf) != DenseOccupancyRecordBytes {
+		t.Fatalf("expected dense occupancy payload size %d, got %d", DenseOccupancyRecordBytes, len(buf))
+	}
+
+	if got := binary.LittleEndian.Uint32(buf[0:4]); got != (1<<0 | 1<<7 | 1<<8) {
+		t.Fatalf("unexpected dense occupancy word 0: got %#x", got)
+	}
+	if got := binary.LittleEndian.Uint32(buf[8:12]); got != 1<<0 {
+		t.Fatalf("unexpected dense occupancy word 2: got %#x", got)
+	}
+	lastWordOffset := (volume.DenseOccupancyWordCount - 1) * 4
+	if got := binary.LittleEndian.Uint32(buf[lastWordOffset : lastWordOffset+4]); got != 1<<31 {
+		t.Fatalf("unexpected dense occupancy last word: got %#x", got)
+	}
+}
+
+func TestReleaseDenseOccupancySlotReturnsCapacityToAllocator(t *testing.T) {
+	brick := volume.NewBrick()
+	m := &GpuBufferManager{
+		BrickToDenseSlot: map[*volume.Brick]uint32{brick: 7},
+	}
+	m.DenseOccupancyAlloc.Tail = 8
+
+	m.releaseDenseOccupancySlot(brick)
+
+	if _, exists := m.BrickToDenseSlot[brick]; exists {
+		t.Fatal("expected released dense occupancy mapping to be cleared")
+	}
+	slot := m.DenseOccupancyAlloc.Alloc()
+	if slot != 7 {
+		t.Fatalf("expected dense occupancy slot 7 to be reused, got %d", slot)
+	}
+	if got := denseOccupancyWordBase(slot); got != slot*volume.DenseOccupancyWordCount {
+		t.Fatalf("expected dense occupancy word base %d, got %d", slot*volume.DenseOccupancyWordCount, got)
 	}
 }

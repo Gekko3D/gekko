@@ -11,6 +11,7 @@ import (
 )
 
 const tileLightParamsSizeBytes = 32
+const tileLightNearPlaneClamp = 1e-4
 
 func buildTileLightParamsData(screenW, screenH, tilesX, tilesY uint32) []byte {
 	buf := make([]byte, tileLightParamsSizeBytes)
@@ -103,16 +104,98 @@ func (m *GpuBufferManager) DispatchTiledLightCull(encoder *wgpu.CommandEncoder, 
 	_ = pass.End()
 }
 
-func clipToTileUV(clip mgl32.Vec4) (mgl32.Vec2, bool) {
-	if math.Abs(float64(clip.W())) < 1e-5 {
-		return mgl32.Vec2{}, false
+type tiledLightCoverage struct {
+	fullscreen bool
+	visible    bool
+	minX       int
+	maxX       int
+	minY       int
+	maxY       int
+}
+
+func projectLocalLightCoverage(light core.Light, view, proj mgl32.Mat4, tilesX, tilesY uint32) tiledLightCoverage {
+	lightRange := tileMaxf(light.Params[0], 0.0)
+	if lightRange <= 0.0 || tilesX == 0 || tilesY == 0 {
+		return tiledLightCoverage{}
 	}
-	ndcX := clip.X() / clip.W()
-	ndcY := clip.Y() / clip.W()
-	return mgl32.Vec2{
-		ndcX*0.5 + 0.5,
-		-ndcY*0.5 + 0.5,
-	}, true
+
+	pos := mgl32.Vec3{light.Position[0], light.Position[1], light.Position[2]}
+	viewPos := view.Mul4x1(pos.Vec4(1.0)).Vec3()
+
+	if viewPos.Len() <= lightRange {
+		return tiledLightCoverage{
+			fullscreen: true,
+			visible:    true,
+			minX:       0,
+			maxX:       int(tilesX) - 1,
+			minY:       0,
+			maxY:       int(tilesY) - 1,
+		}
+	}
+
+	// OpenGL-style view space looks down -Z, so a light is entirely behind the
+	// camera when even its closest sphere point stays on or behind the eye plane.
+	if viewPos.Z()-lightRange >= 0.0 {
+		return tiledLightCoverage{}
+	}
+
+	minNDCX := float32(math.Inf(1))
+	minNDCY := float32(math.Inf(1))
+	maxNDCX := float32(math.Inf(-1))
+	maxNDCY := float32(math.Inf(-1))
+	visible := false
+
+	for _, sx := range [...]float32{-1, 1} {
+		for _, sy := range [...]float32{-1, 1} {
+			for _, sz := range [...]float32{-1, 1} {
+				corner := mgl32.Vec3{
+					viewPos.X() + sx*lightRange,
+					viewPos.Y() + sy*lightRange,
+					viewPos.Z() + sz*lightRange,
+				}
+				if corner.Z() >= 0.0 {
+					corner[2] = -tileLightNearPlaneClamp
+				}
+
+				clip := proj.Mul4x1(corner.Vec4(1.0))
+				if math.Abs(float64(clip.W())) < 1e-6 {
+					continue
+				}
+
+				ndc := clip.Mul(1.0 / clip.W())
+				minNDCX = tileMinf(minNDCX, ndc.X())
+				minNDCY = tileMinf(minNDCY, ndc.Y())
+				maxNDCX = tileMaxf(maxNDCX, ndc.X())
+				maxNDCY = tileMaxf(maxNDCY, ndc.Y())
+				visible = true
+			}
+		}
+	}
+
+	if !visible {
+		return tiledLightCoverage{}
+	}
+	if maxNDCX < -1.0 || minNDCX > 1.0 || maxNDCY < -1.0 || minNDCY > 1.0 {
+		return tiledLightCoverage{}
+	}
+
+	minNDCX = clampf(minNDCX, -1.0, 1.0)
+	minNDCY = clampf(minNDCY, -1.0, 1.0)
+	maxNDCX = clampf(maxNDCX, -1.0, 1.0)
+	maxNDCY = clampf(maxNDCY, -1.0, 1.0)
+
+	minU := minNDCX*0.5 + 0.5
+	maxU := maxNDCX*0.5 + 0.5
+	minV := (-maxNDCY)*0.5 + 0.5
+	maxV := (-minNDCY)*0.5 + 0.5
+
+	return tiledLightCoverage{
+		visible: true,
+		minX:    clampTileIndex(int(math.Floor(float64(minU*float32(tilesX)))), int(tilesX)),
+		maxX:    clampTileIndex(int(math.Floor(float64(maxU*float32(tilesX)))), int(tilesX)),
+		minY:    clampTileIndex(int(math.Floor(float64(minV*float32(tilesY)))), int(tilesY)),
+		maxY:    clampTileIndex(int(math.Floor(float64(maxV*float32(tilesY)))), int(tilesY)),
+	}
 }
 
 func (m *GpuBufferManager) EstimateTiledLightMetrics(scene *core.Scene, viewProj, invView mgl32.Mat4, camPos mgl32.Vec3) {
@@ -124,18 +207,8 @@ func (m *GpuBufferManager) EstimateTiledLightMetrics(scene *core.Scene, viewProj
 	}
 
 	counts := make([]int, numTiles)
-	cameraRight := invView.Mul4x1(mgl32.Vec4{1, 0, 0, 0}).Vec3()
-	cameraUp := invView.Mul4x1(mgl32.Vec4{0, 1, 0, 0}).Vec3()
-	if cameraRight.Len() < 1e-5 {
-		cameraRight = mgl32.Vec3{1, 0, 0}
-	} else {
-		cameraRight = cameraRight.Normalize()
-	}
-	if cameraUp.Len() < 1e-5 {
-		cameraUp = mgl32.Vec3{0, 1, 0}
-	} else {
-		cameraUp = cameraUp.Normalize()
-	}
+	view := invView.Inv()
+	proj := viewProj.Mul4(invView)
 
 	addFullscreen := func() {
 		for i := range counts {
@@ -163,35 +236,18 @@ func (m *GpuBufferManager) EstimateTiledLightMetrics(scene *core.Scene, viewProj
 			continue
 		}
 
-		centerClip := viewProj.Mul4x1(pos.Vec4(1.0))
-		rightClip := viewProj.Mul4x1(pos.Add(cameraRight.Mul(lightRange)).Vec4(1.0))
-		upClip := viewProj.Mul4x1(pos.Add(cameraUp.Mul(lightRange)).Vec4(1.0))
-		centerUV, centerOK := clipToTileUV(centerClip)
-		rightUV, rightOK := clipToTileUV(rightClip)
-		upUV, upOK := clipToTileUV(upClip)
-		if !centerOK || !rightOK || !upOK || centerClip.W() <= 0 || rightClip.W() <= 0 || upClip.W() <= 0 {
+		coverage := projectLocalLightCoverage(light, view, proj, m.TileLightTilesX, m.TileLightTilesY)
+		if !coverage.visible {
+			continue
+		}
+		if coverage.fullscreen {
 			addFullscreen()
 			continue
 		}
 
-		radiusU := tileMaxf(tileAbsf(rightUV.X()-centerUV.X()), tileAbsf(upUV.X()-centerUV.X()))
-		radiusV := tileMaxf(tileAbsf(rightUV.Y()-centerUV.Y()), tileAbsf(upUV.Y()-centerUV.Y()))
-		minU := centerUV.X() - radiusU
-		maxU := centerUV.X() + radiusU
-		minV := centerUV.Y() - radiusV
-		maxV := centerUV.Y() + radiusV
-		if maxU < 0.0 || minU > 1.0 || maxV < 0.0 || minV > 1.0 {
-			continue
-		}
-
-		tileMinX := clampTileIndex(int(math.Floor(float64(minU*float32(m.TileLightTilesX)))), int(m.TileLightTilesX))
-		tileMaxX := clampTileIndex(int(math.Floor(float64(maxU*float32(m.TileLightTilesX)))), int(m.TileLightTilesX))
-		tileMinY := clampTileIndex(int(math.Floor(float64(minV*float32(m.TileLightTilesY)))), int(m.TileLightTilesY))
-		tileMaxY := clampTileIndex(int(math.Floor(float64(maxV*float32(m.TileLightTilesY)))), int(m.TileLightTilesY))
-
-		for ty := tileMinY; ty <= tileMaxY; ty++ {
+		for ty := coverage.minY; ty <= coverage.maxY; ty++ {
 			base := ty * int(m.TileLightTilesX)
-			for tx := tileMinX; tx <= tileMaxX; tx++ {
+			for tx := coverage.minX; tx <= coverage.maxX; tx++ {
 				idx := base + tx
 				if counts[idx] < TiledLightingMaxLightsPerTile {
 					counts[idx]++
@@ -237,4 +293,21 @@ func tileMaxf(a, b float32) float32 {
 		return a
 	}
 	return b
+}
+
+func tileMinf(a, b float32) float32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func clampf(v, minV, maxV float32) float32 {
+	if v < minV {
+		return minV
+	}
+	if v > maxV {
+		return maxV
+	}
+	return v
 }

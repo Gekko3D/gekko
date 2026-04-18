@@ -86,18 +86,13 @@ struct SpawnRequest {
 
 // Group 2: Voxel Data (Shared with Renderer)
 struct SectorRecord { origin_vox: vec4<i32>, brick_table_index: u32, brick_mask_lo: u32, brick_mask_hi: u32, padding: u32 };
-struct BrickRecord { atlas_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, atlas_page: u32, flags: u32 };
+struct BrickRecord { material_index: u32, payload_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, payload_page: u32, flags: u32, dense_occupancy_word_base: u32, padding: u32 };
 struct SectorGridEntry { coords: vec4<i32>, base_idx: u32, sector_idx: i32, padding: vec2<u32> };
 struct SectorGridParams { grid_size: u32, grid_mask: u32, padding0: u32, padding1: u32 };
-struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, ambient_occlusion_mode: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32>, is_planet_tile: u32, planet_tile_group_id: u32, emitter_link_id: u32, padding2: u32, planet_tile: vec4<i32> };
+struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, ambient_occlusion_mode: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32>, is_planet_tile: u32, planet_tile_group_id: u32, emitter_link_id: u32, padding2: u32, planet_tile: vec4<i32>, direct_lookup_origin_mode: vec4<i32>, direct_lookup_extent_base: vec4<u32> };
 
 @group(2) @binding(0) var<storage, read> sectors: array<SectorRecord>;
 @group(2) @binding(1) var<storage, read> bricks: array<BrickRecord>;
-@group(2) @binding(2) var voxel_payload_0: texture_3d<u32>;
-@group(2) @binding(3) var voxel_payload_1: texture_3d<u32>;
-@group(2) @binding(4) var voxel_payload_2: texture_3d<u32>;
-@group(2) @binding(5) var voxel_payload_3: texture_3d<u32>;
-@group(2) @binding(6) var<storage, read> materials: array<vec4<f32>>;
 @group(2) @binding(7) var<storage, read> object_params: array<ObjectParams>;
 struct Instance {
     object_to_world: mat4x4<f32>,
@@ -112,18 +107,27 @@ struct Instance {
 @group(2) @binding(8) var<storage, read> instances: array<Instance>;
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
+@group(2) @binding(11) var<storage, read> direct_sector_lookup_words: array<u32>;
+@group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;
+const LOOKUP_MODE_DIRECT: i32 = 1;
+const BRICK_FLAG_SOLID: u32 = 1u;
 
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
     if (idx < 32u) { return (mask_lo & (1u << idx)) != 0u; }
     else { return (mask_hi & (1u << (idx - 32u))) != 0u; }
 }
 
-fn find_sector(sx: i32, sy: i32, sz: i32, base_idx: u32) -> i32 {
+fn brick_is_solid(flags: u32) -> bool {
+    return (flags & BRICK_FLAG_SOLID) != 0u;
+}
+
+fn find_sector_hash(sx: i32, sy: i32, sz: i32, base_idx: u32) -> i32 {
     let size = sector_grid_params.grid_size;
     if (size == 0u) { return -1; }
-    let h = (u32(sx) * 73856093u ^ u32(sy) * 19349663u ^ u32(sz) * 83492791u ^ base_idx * 99999989u) % size;
+    let mask = sector_grid_params.grid_mask;
+    let h = (u32(sx) * 73856093u ^ u32(sy) * 19349663u ^ u32(sz) * 83492791u ^ base_idx * 99999989u) & mask;
     for (var i = 0u; i < 128u; i++) {
-        let idx = (h + i) % size;
+        let idx = (h + i) & mask;
         let entry = sector_grid[idx];
         if (entry.sector_idx == -1) { return -1; }
         if (entry.coords.x == sx && entry.coords.y == sy && entry.coords.z == sz && entry.base_idx == base_idx) {
@@ -133,12 +137,42 @@ fn find_sector(sx: i32, sy: i32, sz: i32, base_idx: u32) -> i32 {
     return -1;
 }
 
+fn sector_grid_word(word_idx: u32) -> u32 {
+    return direct_sector_lookup_words[word_idx];
+}
+
+fn find_sector_direct(sx: i32, sy: i32, sz: i32, op: ObjectParams) -> i32 {
+    let local = vec3<i32>(sx, sy, sz) - op.direct_lookup_origin_mode.xyz;
+    if (any(local < vec3<i32>(0))) { return -1; }
+    let extent = op.direct_lookup_extent_base.xyz;
+    let local_u = vec3<u32>(local);
+    if (local_u.x >= extent.x || local_u.y >= extent.y || local_u.z >= extent.z) { return -1; }
+    let idx = op.direct_lookup_extent_base.w + local_u.x + local_u.y * extent.x + local_u.z * extent.x * extent.y;
+    let sector_idx = sector_grid_word(idx);
+    if (sector_idx == 0xFFFFFFFFu) { return -1; }
+    return i32(sector_idx);
+}
+
+fn find_sector(sx: i32, sy: i32, sz: i32, op: ObjectParams) -> i32 {
+    if (op.direct_lookup_origin_mode.w == LOOKUP_MODE_DIRECT) {
+        return find_sector_direct(sx, sy, sz, op);
+    }
+    return find_sector_hash(sx, sy, sz, op.sector_table_base);
+}
+
+fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
+    if (word_base == 0xFFFFFFFFu) { return false; }
+    let word = dense_occupancy_words[word_base + (voxel_idx >> 5u)];
+    let bit = 1u << (voxel_idx & 31u);
+    return (word & bit) != 0u;
+}
+
 fn check_voxel_occupancy(pos: vec3<f32>, op: ObjectParams) -> bool {
     // In object space, coordinates are directly in voxel units (1 unit = 1 voxel)
     let vox_pos = vec3<i32>(floor(pos));
     
     let sx = vox_pos.x >> 5; let sy = vox_pos.y >> 5; let sz = vox_pos.z >> 5;
-    let s_idx = find_sector(sx, sy, sz, op.sector_table_base);
+    let s_idx = find_sector(sx, sy, sz, op);
     if (s_idx < 0) { return false; }
     
     let sector = sectors[s_idx];
@@ -147,11 +181,16 @@ fn check_voxel_occupancy(pos: vec3<f32>, op: ObjectParams) -> bool {
     
     if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, b_idx)) {
         let brick = bricks[sector.brick_table_index + b_idx];
-        if (brick.flags == 1u) { return true; } // Solid brick
+        if (brick_is_solid(brick.flags)) { return true; } // Solid brick
         
         let mx = (vox_pos.x >> 1) & 3; let my = (vox_pos.y >> 1) & 3; let mz = (vox_pos.z >> 1) & 3;
         let m_idx = u32(mx + my*4 + mz*16);
-        return bit_test64(brick.occupancy_mask_lo, brick.occupancy_mask_hi, m_idx);
+        if (!bit_test64(brick.occupancy_mask_lo, brick.occupancy_mask_hi, m_idx)) {
+            return false;
+        }
+        let vx = vox_pos.x & 7; let vy = vox_pos.y & 7; let vz = vox_pos.z & 7;
+        let voxel_idx = u32(vx + vy*8 + vz*64);
+        return dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx);
     }
     return false;
 }

@@ -79,7 +79,20 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - Voxel payload bindings move as a set.
   - `gbuffer.wgsl`, `shadow_map.wgsl`, `transparent_overlay.wgsl`, and `particles_sim.wgsl` all expect `voxel_payload_0..3`, and their bind-group builders must match.
 - `BrickRecord` is no longer 16 bytes.
-  - The live layout is `atlas_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `atlas_page`, `flags` for 20 bytes total. Any CPU writer or WGSL struct drift here will corrupt voxel reads.
+  - The live layout is `atlas_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `atlas_page`, `flags`, `dense_occupancy_word_base` for 24 bytes total.
+  - Any CPU writer or WGSL struct drift here will corrupt voxel reads.
+- `ObjectParams` is now 128 bytes.
+  - The trailing `32` bytes carry hybrid sector-lookup metadata: signed sector origin, lookup mode, dense lookup extents, and the direct-table base.
+  - CPU writers in `manager_scene.go` and `manager_voxel.go` plus every voxel-reading shader must stay aligned.
+- Hybrid direct lookup has its own GPU binding again.
+  - `SectorGridBuf` is still the hash-probed `SectorGridEntry` array.
+  - `DirectSectorLookupBuf` now carries the compact direct-lookup `u32` words for qualifying objects.
+  - If you change the direct-table layout or base semantics, review all voxel-reading shaders and bind-group builders together.
+- Compute-stage binding limits are load-bearing.
+  - The current dedicated direct-lookup binding depends on requesting adapter-supported limits at device creation through `RequiredLimits`.
+  - If that limit request path changes in the native `webgpu` wrapper, re-check WebGPU per-stage storage-buffer limits and every explicit bind-group layout before assuming the pipelines will still validate.
+- Exact empty-voxel rejection is no longer payload-driven for non-solid bricks.
+  - The live hot path is sector brick mask, then micro mask, then dense occupancy, then payload/material fetch only for confirmed occupied voxels.
 - Voxel shading style has a deliberate contract.
   - Keep voxel albedo/material lookup palette-driven and blocky.
   - Keep one normal per visible voxel cell rather than interpolating mesh-like normals across a voxel.
@@ -103,7 +116,7 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - Black frame after a scene or resize change
   - suspect stale bind groups, invalid pipeline layouts, or a resource that was not recreated in `Resize()`
 - Voxel surfaces render in one pass but disappear in another
-  - suspect voxel payload page binding drift, mismatched `BrickRecord` layout, or a bind-group builder that was updated in only one pass
+  - suspect voxel payload page binding drift, mismatched `BrickRecord` layout, hybrid-lookup metadata drift, packed `SectorGridBuf` tail drift, dense-occupancy binding drift, or a bind-group builder / hand-written pipeline layout that was updated in only one pass
 - Transparent content missing
   - inspect accumulation targets, resolve bindings, and particle or transparent-overlay bind groups
 - Atmosphere or fog missing, stale, or sampling the wrong frame

@@ -201,7 +201,12 @@ func (a *App) Init() error {
 	}
 	a.Adapter = adapter
 
-	a.Device, err = adapter.RequestDevice(nil)
+	requiredLimits := adapter.GetLimits().Limits
+	a.Device, err = adapter.RequestDevice(&wgpu.DeviceDescriptor{
+		RequiredLimits: &wgpu.RequiredLimits{
+			Limits: requiredLimits,
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -263,10 +268,13 @@ func (a *App) Init() error {
 	}
 
 	// G-Buffer Pipeline
-	gbMod, _ := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+	gbMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label:          "GBuffer CS",
 		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaders.GBufferWGSL},
 	})
+	if err != nil {
+		return fmt.Errorf("create gbuffer shader module: %w", err)
+	}
 	a.GBufferPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
 		Label: "GBuffer Pipeline",
 		Compute: wgpu.ProgrammableStageDescriptor{

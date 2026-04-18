@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"math"
+	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/bvh"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -35,6 +36,11 @@ type spotShadowCullVolume struct {
 type pointShadowCullVolume struct {
 	Position mgl32.Vec3
 	Range    float32
+}
+
+type groupedShadowCandidate struct {
+	obj      *core.VoxelObject
+	distance float32
 }
 
 func shadowUpVector(dir mgl32.Vec3) mgl32.Vec3 {
@@ -224,14 +230,16 @@ func intersectsPointShadowVolume(aabb [2]mgl32.Vec3, volume pointShadowCullVolum
 	return closest.Sub(volume.Position).LenSqr() <= volume.Range*volume.Range
 }
 
-func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []directionalShadowCullVolume, spotVolumes []spotShadowCullVolume, pointVolumes []pointShadowCullVolume) []*core.VoxelObject {
+func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []directionalShadowCullVolume, spotVolumes []spotShadowCullVolume, pointVolumes []pointShadowCullVolume, cameraPosition mgl32.Vec3) []*core.VoxelObject {
 	if len(directionalVolumes) == 0 && len(spotVolumes) == 0 && len(pointVolumes) == 0 {
 		return nil
 	}
 
 	shadowObjects := make([]*core.VoxelObject, 0, len(objects))
+	grouped := make(map[uint64][]groupedShadowCandidate)
+	groupLimits := make(map[uint64]int)
 	for _, obj := range objects {
-		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil {
+		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil || !obj.CastsShadows {
 			continue
 		}
 
@@ -259,7 +267,49 @@ func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []dire
 			}
 		}
 		if include {
+			distance := distancePointToAABB(cameraPosition, *obj.WorldAABB)
+			if obj.ShadowMaxDistance > 0 && distance > obj.ShadowMaxDistance {
+				continue
+			}
+			if obj.ShadowCasterGroupID != 0 && obj.ShadowCasterGroupLimit > 0 {
+				grouped[obj.ShadowCasterGroupID] = append(grouped[obj.ShadowCasterGroupID], groupedShadowCandidate{
+					obj:      obj,
+					distance: distance,
+				})
+				limit := groupLimits[obj.ShadowCasterGroupID]
+				if limit == 0 || obj.ShadowCasterGroupLimit < limit {
+					groupLimits[obj.ShadowCasterGroupID] = obj.ShadowCasterGroupLimit
+				}
+				continue
+			}
 			shadowObjects = append(shadowObjects, obj)
+		}
+	}
+	if len(grouped) == 0 {
+		return shadowObjects
+	}
+
+	groupIDs := make([]uint64, 0, len(grouped))
+	for groupID := range grouped {
+		groupIDs = append(groupIDs, groupID)
+	}
+	sort.Slice(groupIDs, func(i, j int) bool {
+		return groupIDs[i] < groupIDs[j]
+	})
+	for _, groupID := range groupIDs {
+		candidates := grouped[groupID]
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].distance == candidates[j].distance {
+				return candidates[i].obj.WorldAABB[0].Z() < candidates[j].obj.WorldAABB[0].Z()
+			}
+			return candidates[i].distance < candidates[j].distance
+		})
+		limit := groupLimits[groupID]
+		if limit <= 0 || limit > len(candidates) {
+			limit = len(candidates)
+		}
+		for i := 0; i < limit; i++ {
+			shadowObjects = append(shadowObjects, candidates[i].obj)
 		}
 	}
 	return shadowObjects
@@ -294,4 +344,13 @@ func maxf(a, b float32) float32 {
 		return a
 	}
 	return b
+}
+
+func distancePointToAABB(point mgl32.Vec3, aabb [2]mgl32.Vec3) float32 {
+	clamped := mgl32.Vec3{
+		maxf(aabb[0].X(), minf(point.X(), aabb[1].X())),
+		maxf(aabb[0].Y(), minf(point.Y(), aabb[1].Y())),
+		maxf(aabb[0].Z(), minf(point.Z(), aabb[1].Z())),
+	}
+	return point.Sub(clamped).Len()
 }

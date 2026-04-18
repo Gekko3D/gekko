@@ -1,6 +1,7 @@
 package core
 
 import (
+	"math"
 	"testing"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -497,6 +498,88 @@ func TestSceneCommitRespectsShadowFlagsAndDistance(t *testing.T) {
 	}
 	if scene.ShadowObjects[0] != near {
 		t.Fatal("expected only the near shadow-enabled object to remain a shadow caster")
+	}
+}
+
+func TestSceneCommitFiltersShadowCastersOutsideLocalShadowLightVolumes(t *testing.T) {
+	scene := NewScene()
+	scene.Lights = []Light{
+		{
+			Position: [4]float32{0, 8, 0, 0},
+			Params:   [4]float32{12, 0, float32(LightTypePoint), 1.0},
+		},
+		{
+			Position:  [4]float32{20, 12, 0, 0},
+			Direction: [4]float32{0, -1, 0, 0},
+			Params:    [4]float32{16, float32(math.Cos(math.Pi / 6)), float32(LightTypeSpot), 1.0},
+		},
+	}
+
+	pointCaster := NewVoxelObject()
+	pointCaster.Transform.Position = mgl32.Vec3{0, 0, 0}
+	pointCaster.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(pointCaster)
+
+	spotCaster := NewVoxelObject()
+	spotCaster.Transform.Position = mgl32.Vec3{20, 0, 0}
+	spotCaster.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(spotCaster)
+
+	outsideAllLights := NewVoxelObject()
+	outsideAllLights.Transform.Position = mgl32.Vec3{80, 0, 0}
+	outsideAllLights.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(outsideAllLights)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		CameraPosition: mgl32.Vec3{0, 0, 0},
+	})
+
+	if len(scene.ShadowObjects) != 2 {
+		t.Fatalf("expected 2 local-light shadow casters after culling, got %d", len(scene.ShadowObjects))
+	}
+	if scene.ShadowObjects[0] != pointCaster && scene.ShadowObjects[1] != pointCaster {
+		t.Fatal("expected point-light caster to remain")
+	}
+	if scene.ShadowObjects[0] != spotCaster && scene.ShadowObjects[1] != spotCaster {
+		t.Fatal("expected spot-light caster to remain")
+	}
+	if scene.ShadowObjects[0] == outsideAllLights || scene.ShadowObjects[1] == outsideAllLights {
+		t.Fatal("expected object outside all local shadow volumes to be removed")
+	}
+}
+
+func TestSceneCommitKeepsBroadShadowCasterSetWhenDirectionalShadowLightExists(t *testing.T) {
+	scene := NewScene()
+	scene.Lights = []Light{
+		testShadowCastingDirectionalLight(),
+		{
+			Position: [4]float32{0, 8, 0, 0},
+			Params:   [4]float32{12, 0, float32(LightTypePoint), 1.0},
+		},
+	}
+
+	nearLocal := NewVoxelObject()
+	nearLocal.Transform.Position = mgl32.Vec3{0, 0, 0}
+	nearLocal.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(nearLocal)
+
+	farDirectionalOnly := NewVoxelObject()
+	farDirectionalOnly.Transform.Position = mgl32.Vec3{120, 0, -20}
+	farDirectionalOnly.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(farDirectionalOnly)
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		CameraPosition: mgl32.Vec3{0, 0, 0},
+	})
+
+	if len(scene.ShadowObjects) != 2 {
+		t.Fatalf("expected directional light to keep both shadow casters, got %d", len(scene.ShadowObjects))
+	}
+	if scene.ShadowObjects[0] != nearLocal && scene.ShadowObjects[1] != nearLocal {
+		t.Fatal("expected near local caster to remain")
+	}
+	if scene.ShadowObjects[0] != farDirectionalOnly && scene.ShadowObjects[1] != farDirectionalOnly {
+		t.Fatal("expected distant directional-only caster to remain")
 	}
 }
 
