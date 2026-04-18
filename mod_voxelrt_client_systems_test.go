@@ -547,6 +547,9 @@ func TestVoxelRtSystemUsesRuntimeImpostorSpritesForFarLOD(t *testing.T) {
 	if sprite.BillboardMode != BillboardSpherical {
 		t.Fatalf("expected spherical billboard, got %v", sprite.BillboardMode)
 	}
+	if sprite.Unlit {
+		t.Fatal("expected impostor sprite to use lit world-sprite shading")
+	}
 	if sprite.Size[0] <= 0 || sprite.Size[1] <= 0 {
 		t.Fatalf("expected positive sprite size, got %v", sprite.Size)
 	}
@@ -607,6 +610,9 @@ func TestVoxelRtSystemFallsBackToDotSpritesWhenImpostorGenerationFails(t *testin
 	if sprite.Texture != server.entityLODDotTexture() {
 		t.Fatal("expected fallback sprite to use shared dot texture")
 	}
+	if sprite.Color[0] >= 1 || sprite.Color[1] >= 1 || sprite.Color[2] >= 1 {
+		t.Fatalf("expected dot fallback sprite brightness tint below full white, got %v", sprite.Color)
+	}
 	if sprite.Size[0] < 2*VoxelSize || sprite.Size[1] < 2*VoxelSize {
 		t.Fatalf("expected clamped dot sprite size, got %v", sprite.Size)
 	}
@@ -652,6 +658,56 @@ func TestEntityLODImpostorSpriteSizePreservesProjectedAspect(t *testing.T) {
 	)
 	if size[0] <= size[1] {
 		t.Fatalf("expected wide model impostor sprite to preserve projected aspect, got %v", size)
+	}
+}
+
+func TestEntityLODImpostorBrightnessTintUsesDirectionalFacing(t *testing.T) {
+	state := &VoxelRtState{
+		RtApp: &app_rt.App{
+			Scene: core.NewScene(),
+		},
+	}
+	state.RtApp.Scene.AmbientLight = mgl32.Vec3{0.1, 0.1, 0.1}
+	state.RtApp.Scene.Lights = []core.Light{
+		{
+			Direction: [4]float32{0, 0, -1, 0},
+			Color:     [4]float32{1, 1, 1, 0.8},
+			Params:    [4]float32{0, 0, float32(LightTypeDirectional), 0},
+		},
+	}
+
+	facing := entityLODImpostorBrightnessTint(state, &TransformComponent{Rotation: mgl32.QuatIdent()})
+	turned := entityLODImpostorBrightnessTint(state, &TransformComponent{
+		Rotation: mgl32.QuatRotate(mgl32.DegToRad(180), mgl32.Vec3{0, 1, 0}),
+	})
+	if facing <= turned {
+		t.Fatalf("expected front-facing impostor tint %v to exceed turned-away tint %v", facing, turned)
+	}
+}
+
+func TestEntityLODDotBrightnessTintStaysBelowImpostorTint(t *testing.T) {
+	state := &VoxelRtState{
+		RtApp: &app_rt.App{
+			Scene: core.NewScene(),
+		},
+	}
+	state.RtApp.Scene.AmbientLight = mgl32.Vec3{0.1, 0.1, 0.1}
+	state.RtApp.Scene.Lights = []core.Light{
+		{
+			Direction: [4]float32{0, 0, -1, 0},
+			Color:     [4]float32{1, 1, 1, 0.8},
+			Params:    [4]float32{0, 0, float32(LightTypeDirectional), 0},
+		},
+	}
+
+	transform := &TransformComponent{Rotation: mgl32.QuatIdent()}
+	impostor := entityLODImpostorBrightnessTint(state, transform)
+	dot := entityLODDotBrightnessTint(state, transform)
+	if dot >= impostor {
+		t.Fatalf("expected dot tint %v to stay below impostor tint %v", dot, impostor)
+	}
+	if dot > 0.6 {
+		t.Fatalf("expected dot tint to be capped, got %v", dot)
 	}
 }
 

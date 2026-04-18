@@ -455,16 +455,16 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 					scaleAdjustX, scaleAdjustY, scaleAdjustZ = entityLODProxyScaleAdjust(geometryAsset, simplifiedAsset)
 				}
 			case EntityLODRepresentationImpostor:
-				sprite, spriteOK := buildEntityLODImpostorSprite(server, transform, vox, geometryID, geometryAsset)
+				sprite, spriteOK := buildEntityLODImpostorSprite(state, server, transform, vox, geometryID, geometryAsset)
 				if !spriteOK {
-					sprite, spriteOK = buildEntityLODDotSprite(server, transform, vox, geometryAsset)
+					sprite, spriteOK = buildEntityLODDotSprite(state, server, transform, vox, geometryAsset)
 				}
 				if spriteOK {
 					state.runtimeSprites = append(state.runtimeSprites, sprite)
 					return true
 				}
 			case EntityLODRepresentationDot:
-				sprite, spriteOK := buildEntityLODDotSprite(server, transform, vox, geometryAsset)
+				sprite, spriteOK := buildEntityLODDotSprite(state, server, transform, vox, geometryAsset)
 				if spriteOK {
 					state.runtimeSprites = append(state.runtimeSprites, sprite)
 					return true
@@ -1016,7 +1016,50 @@ func entityLODImpostorSpriteSize(vox *VoxelModelComponent, transform *TransformC
 	return [2]float32{width, height}
 }
 
-func buildEntityLODImpostorSprite(server *AssetServer, transform *TransformComponent, vox *VoxelModelComponent, geometryID AssetId, source *VoxelGeometryAsset) (SpriteComponent, bool) {
+func entityLODLuminance(rgb mgl32.Vec3) float32 {
+	return rgb.X()*0.2126 + rgb.Y()*0.7152 + rgb.Z()*0.0722
+}
+
+func entityLODImpostorBrightnessTint(state *VoxelRtState, transform *TransformComponent) float32 {
+	if state == nil || state.RtApp == nil || state.RtApp.Scene == nil || transform == nil {
+		return 1
+	}
+
+	ambient := entityLODLuminance(state.RtApp.Scene.AmbientLight)
+	brightness := ambient
+
+	front := transform.Rotation.Rotate(mgl32.Vec3{0, 0, 1})
+	if front.LenSqr() > 1e-6 {
+		front = front.Normalize()
+	}
+
+	bestDirectional := float32(0)
+	for i := range state.RtApp.Scene.Lights {
+		light := state.RtApp.Scene.Lights[i]
+		if uint32(light.Params[2]) != uint32(LightTypeDirectional) {
+			continue
+		}
+		lightDir := mgl32.Vec3{light.Direction[0], light.Direction[1], light.Direction[2]}
+		if lightDir.LenSqr() <= 1e-6 {
+			continue
+		}
+		lightDir = lightDir.Normalize()
+		facing := max(0, front.Dot(lightDir.Mul(-1)))
+		intensity := entityLODLuminance(mgl32.Vec3{light.Color[0], light.Color[1], light.Color[2]}) * light.Color[3]
+		contrib := facing * intensity
+		if contrib > bestDirectional {
+			bestDirectional = contrib
+		}
+	}
+	brightness += bestDirectional * 0.85
+	return clampF(brightness, 0.12, 1.0)
+}
+
+func entityLODDotBrightnessTint(state *VoxelRtState, transform *TransformComponent) float32 {
+	return clampF(entityLODImpostorBrightnessTint(state, transform)*0.6, 0.08, 0.6)
+}
+
+func buildEntityLODImpostorSprite(state *VoxelRtState, server *AssetServer, transform *TransformComponent, vox *VoxelModelComponent, geometryID AssetId, source *VoxelGeometryAsset) (SpriteComponent, bool) {
 	if server == nil || transform == nil || vox == nil || source == nil {
 		return SpriteComponent{}, false
 	}
@@ -1029,19 +1072,20 @@ func buildEntityLODImpostorSprite(server *AssetServer, transform *TransformCompo
 	minB, maxB := entityLODLocalBounds(source)
 	localCenter := minB.Add(maxB).Mul(0.5)
 	size := entityLODImpostorSpriteSize(vox, transform, source)
+	brightness := entityLODImpostorBrightnessTint(state, transform)
 	return SpriteComponent{
 		Enabled:       true,
 		Position:      entityLODWorldPoint(transform, localCenter, sourcePivot, baseScale),
 		Size:          size,
-		Color:         [4]float32{1, 1, 1, 1},
+		Color:         [4]float32{brightness, brightness, brightness, 1},
 		Texture:       textureID,
 		BillboardMode: BillboardSpherical,
-		Unlit:         true,
+		Unlit:         false,
 		AlphaMode:     SpriteAlphaTexture,
 	}, true
 }
 
-func buildEntityLODDotSprite(server *AssetServer, transform *TransformComponent, vox *VoxelModelComponent, source *VoxelGeometryAsset) (SpriteComponent, bool) {
+func buildEntityLODDotSprite(state *VoxelRtState, server *AssetServer, transform *TransformComponent, vox *VoxelModelComponent, source *VoxelGeometryAsset) (SpriteComponent, bool) {
 	if server == nil || transform == nil || vox == nil || source == nil {
 		return SpriteComponent{}, false
 	}
@@ -1054,11 +1098,12 @@ func buildEntityLODDotSprite(server *AssetServer, transform *TransformComponent,
 	minB, maxB := entityLODLocalBounds(source)
 	localCenter := minB.Add(maxB).Mul(0.5)
 	size := max(entityLODImpostorBaseSize(vox, transform, source)*0.25, 2*VoxelSize)
+	brightness := entityLODDotBrightnessTint(state, transform)
 	return SpriteComponent{
 		Enabled:       true,
 		Position:      entityLODWorldPoint(transform, localCenter, sourcePivot, baseScale),
 		Size:          [2]float32{size, size},
-		Color:         [4]float32{1, 1, 1, 1},
+		Color:         [4]float32{brightness, brightness, brightness, 1},
 		Texture:       textureID,
 		BillboardMode: BillboardSpherical,
 		Unlit:         true,
