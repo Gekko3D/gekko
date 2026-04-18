@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	entityLODGeneratedAssetVersion = "e009-v2"
+	entityLODGeneratedAssetVersion = "e009-v3"
 	entityLODSimplifiedScale       = 0.5
 	entityLODImpostorTextureSize   = 64
 	entityLODDotTextureSize        = 8
@@ -229,16 +229,29 @@ func (server *AssetServer) entityLODImpostorTexture(geometryID, paletteID AssetI
 		return AssetId{}, false
 	}
 	entityLODDilateTransparentRGB(texels, size, size)
-	return server.createTextureFromTexelsWithCacheKey(cacheKey, texels, size, size, 1, TextureDimension2D, TextureFormatRGBA8Unorm), true
+	return server.createTextureFromTexelsWithCacheKey(cacheKey, texels, size, size, 1, TextureDimension2D, TextureFormatRGBA8UnormSrgb), true
 }
 
 func entityLODDilateTransparentRGB(texels []uint8, width, height int) {
 	if width <= 0 || height <= 0 || len(texels) != width*height*4 {
 		return
 	}
+	var fallbackR, fallbackG, fallbackB, fallbackCount int
+	for i := 0; i < len(texels); i += 4 {
+		if texels[i+3] == 0 {
+			continue
+		}
+		fallbackR += int(texels[i+0])
+		fallbackG += int(texels[i+1])
+		fallbackB += int(texels[i+2])
+		fallbackCount++
+	}
+	if fallbackCount == 0 {
+		return
+	}
 	working := make([]uint8, len(texels))
 	copy(working, texels)
-	for pass := 0; pass < 4; pass++ {
+	for pass := 0; pass < width+height; pass++ {
 		changed := false
 		next := make([]uint8, len(working))
 		copy(next, working)
@@ -283,6 +296,19 @@ func entityLODDilateTransparentRGB(texels []uint8, width, height int) {
 			break
 		}
 	}
+	fillR := uint8(fallbackR / fallbackCount)
+	fillG := uint8(fallbackG / fallbackCount)
+	fillB := uint8(fallbackB / fallbackCount)
+	for i := 0; i < len(working); i += 4 {
+		if working[i+3] != 0 {
+			continue
+		}
+		if working[i+0] == 0 && working[i+1] == 0 && working[i+2] == 0 {
+			working[i+0] = fillR
+			working[i+1] = fillG
+			working[i+2] = fillB
+		}
+	}
 	copy(texels, working)
 }
 
@@ -321,7 +347,7 @@ func (server *AssetServer) entityLODDotTexture() AssetId {
 			texels[idx+3] = alpha
 		}
 	}
-	return server.createTextureFromTexelsWithCacheKey(cacheKey, texels, size, size, 1, TextureDimension2D, TextureFormatRGBA8Unorm)
+	return server.createTextureFromTexelsWithCacheKey(cacheKey, texels, size, size, 1, TextureDimension2D, TextureFormatRGBA8UnormSrgb)
 }
 
 func (server *AssetServer) entityLODTextureByCacheKey(cacheKey string) (TextureAsset, bool) {

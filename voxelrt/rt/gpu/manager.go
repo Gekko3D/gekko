@@ -67,6 +67,7 @@ type SpriteAtlasResource struct {
 	Texture *wgpu.Texture
 	View    *wgpu.TextureView
 	Version uint
+	Format  wgpu.TextureFormat
 }
 
 type SpriteRenderBatch struct {

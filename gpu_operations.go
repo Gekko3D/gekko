@@ -171,7 +171,7 @@ func createTextureFromAsset(txAsset *TextureAsset, gpuState *GpuState) *wgpu.Tex
 		MipLevelCount: 1,
 		SampleCount:   1,
 		Dimension:     wgpu.TextureDimension(txAsset.Dimension),
-		Format:        wgpu.TextureFormat(txAsset.Format),
+		Format:        assetTextureFormatToWGPU(txAsset.Format),
 		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
 	})
 	if err != nil {
@@ -189,7 +189,7 @@ func createTextureFromAsset(txAsset *TextureAsset, gpuState *GpuState) *wgpu.Tex
 		wgpu.ToBytes(txAsset.Texels),
 		&wgpu.TextureDataLayout{
 			Offset:       0,
-			BytesPerRow:  txAsset.Width * uint32(wgpuBytesPerPixel(wgpu.TextureFormat(txAsset.Format))),
+			BytesPerRow:  txAsset.Width * uint32(wgpuBytesPerPixel(assetTextureFormatToWGPU(txAsset.Format))),
 			RowsPerImage: txAsset.Height,
 		},
 		&textureExtent,

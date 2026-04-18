@@ -138,7 +138,8 @@ fn fs_main(in: VSOut) -> FSOut {
     let sprite_uv = vec2<f32>(sprite_x, sprite_y) + in.quad_uv * vec2<f32>(col_w, row_h);
     let atlas_color = textureSample(atlas_tex, atlas_sampler, sprite_uv);
 
-    var alpha = in.color.a * atlas_color.a;
+    let tex_alpha = atlas_color.a;
+    var alpha = in.color.a * tex_alpha;
     if (in.alpha_mode == 1u) {
         alpha = in.color.a * max(atlas_color.r, max(atlas_color.g, atlas_color.b));
     }
@@ -165,7 +166,16 @@ fn fs_main(in: VSOut) -> FSOut {
         }
     }
 
-    var final_rgb = in.color.rgb * atlas_color.rgb;
+    var sampled_rgb = atlas_color.rgb;
+    if (in.alpha_mode == 0u && tex_alpha > 1e-3) {
+        // Sprite atlases are stored as straight-alpha textures. When the GPU
+        // linearly filters distant sprites, both RGB and alpha are averaged.
+        // If we then multiply by alpha again below, silhouettes darken toward
+        // gray/black at distance. Undo the filtered premultiplication here.
+        sampled_rgb = clamp(atlas_color.rgb / tex_alpha, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
+    var final_rgb = in.color.rgb * sampled_rgb;
     
     // Simple Lighting for world sprites
     if (in.is_ui == 0u && in.is_unlit == 0u) {
@@ -192,7 +202,7 @@ fn fs_main(in: VSOut) -> FSOut {
         // their screen projection overlaps nearby opaque geometry.
         let depth_norm = clamp(t_pixel / 160.0, 0.0, 1.0);
         let k: f32 = 4.0;
-        weight = max(1e-3, alpha) * pow(1.0 - depth_norm, k);
+        weight = max(1e-3, alpha * pow(1.0 - depth_norm, k));
     }
 
     var out: FSOut;

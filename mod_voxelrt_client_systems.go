@@ -836,7 +836,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 		seenSpriteAtlases[batch.AtlasKey] = struct{}{}
 		if texAsset, ok := spriteAtlasTexture(server, batch.AtlasKey); ok && state.RtApp.BufferManager != nil {
-			state.RtApp.BufferManager.SetSpriteAtlas(batch.AtlasKey, texAsset.Texels, texAsset.Width, texAsset.Height, texAsset.Version)
+			state.RtApp.BufferManager.SetSpriteAtlas(
+				batch.AtlasKey,
+				texAsset.Texels,
+				texAsset.Width,
+				texAsset.Height,
+				texAsset.Version,
+				assetTextureFormatToWGPU(texAsset.Format),
+			)
 		}
 	}
 	if state.RtApp.BufferManager != nil {

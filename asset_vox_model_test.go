@@ -128,6 +128,9 @@ func TestEntityLODImpostorTextureCachesAndProducesOpaquePixels(t *testing.T) {
 	if !ok {
 		t.Fatal("expected impostor texture asset")
 	}
+	if tex.Format != TextureFormatRGBA8UnormSrgb {
+		t.Fatalf("expected impostor texture format %v, got %v", TextureFormatRGBA8UnormSrgb, tex.Format)
+	}
 	if tex.Width != entityLODImpostorTextureSize || tex.Height != entityLODImpostorTextureSize {
 		t.Fatalf("expected %dx%d impostor texture, got %dx%d", entityLODImpostorTextureSize, entityLODImpostorTextureSize, tex.Width, tex.Height)
 	}
@@ -300,6 +303,9 @@ func TestEntityLODDotTextureReturnsStableSharedAsset(t *testing.T) {
 	tex, ok := server.textures[id1]
 	if !ok {
 		t.Fatal("expected dot texture asset")
+	}
+	if tex.Format != TextureFormatRGBA8UnormSrgb {
+		t.Fatalf("expected dot texture format %v, got %v", TextureFormatRGBA8UnormSrgb, tex.Format)
 	}
 	if tex.Width != entityLODDotTextureSize || tex.Height != entityLODDotTextureSize {
 		t.Fatalf("expected %dx%d dot texture, got %dx%d", entityLODDotTextureSize, entityLODDotTextureSize, tex.Width, tex.Height)
