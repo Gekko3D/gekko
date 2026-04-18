@@ -17,6 +17,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	cmd.AddResources(windowState)
 	RtApp := app_rt.NewApp(windowState.windowGlfw)
 	RtApp.DebugMode = mod.DebugMode
+	RtApp.Camera.DepthMode = core.DepthMode(mod.DepthMode).Normalized()
 	RtApp.RenderMode = uint32(mod.RenderMode)
 	RtApp.QualityPreset = mod.QualityPreset
 	RtApp.LightingQuality = mod.LightingQuality
@@ -688,6 +689,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		state.RtApp.Camera.Fov = camera.Fov
 		state.RtApp.Camera.Near = camera.Near
 		state.RtApp.Camera.Far = camera.Far
+		state.RtApp.Camera.DepthMode = camera.DepthMode.Normalized()
 		return false
 	})
 	// Sync text

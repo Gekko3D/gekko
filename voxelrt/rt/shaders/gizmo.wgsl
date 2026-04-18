@@ -48,7 +48,12 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
     var out: VertexOutput;
     let world_pos = instance_matrix * vec4<f32>(in.position, 1.0);
-    out.position = camera.view_proj * world_pos;
+    // CameraState currently produces GL-style clip Z in [-w, +w].
+    // Raster pipelines in WGSL/WebGPU expect clip Z in [0, +w], so convert here
+    // before line rasterization and fragment-stage depth comparisons.
+    var clip_pos = camera.view_proj * world_pos;
+    clip_pos.z = clip_pos.z * 0.5 + clip_pos.w * 0.5;
+    out.position = clip_pos;
     out.color = in.inst_color;
     // Calculate distance from camera for depth testing
     out.dist = distance(camera.cam_pos.xyz, world_pos.xyz);

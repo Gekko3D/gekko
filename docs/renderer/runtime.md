@@ -61,6 +61,7 @@ Important details:
 - Hi-Z uses previous-frame data and is disabled during fast camera motion.
 - `Scene.Commit(...)` produces both `VisibleObjects` and `ShadowObjects`.
 - `UpdateScene(...)` can grow shadow maps or scene buffers, which forces downstream bind-group recreation.
+- `CameraState.DepthMode` changes the projection and inverse-projection contract used by CPU culling helpers and WGSL ray reconstruction, but it does not change the G-buffer depth payload format.
 - analytic media history uses previous-frame camera state and previous half-resolution volumetric buffers, so `Update()` has to prepare those inputs before feature execution
 - Probe GI state is prepared during `Update()` and baked later during `Render()`.
 
@@ -109,6 +110,7 @@ The legacy fullscreen blit pipeline still exists in setup code, but the resolve 
 - `GBufferDepth.r` stores hit distance along the camera ray
 - `GBufferDepth.gba` stores voxel-center world position for voxel-stable shadowing
 - deferred lighting can reconstruct the exact visible hit position from screen UV, camera inverse matrices, and `GBufferDepth.r`
+- reverse-z affects only the projection matrices that generate those camera rays; `GBufferDepth.r` remains linear hit distance along the camera ray
 - live opaque shading evaluates view- and direct-light terms from the stored voxel-center world position so each visible voxel shades as one cell
 - deferred shadowing also uses the stored voxel-center world position so each visible voxel can receive one stable shadow response per light
 

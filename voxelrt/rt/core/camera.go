@@ -15,6 +15,7 @@ type CameraState struct {
 	Fov         float32
 	Near        float32
 	Far         float32
+	DepthMode   DepthMode
 	Speed       float32
 	Sensitivity float32
 	DebugMode   uint32
@@ -30,6 +31,7 @@ func NewCameraState() *CameraState {
 		Fov:         60,
 		Near:        0.1,
 		Far:         1000.0,
+		DepthMode:   DepthModeStandard,
 		Speed:       10.0,
 		Sensitivity: 0.003,
 	}
@@ -119,6 +121,9 @@ func (c *CameraState) ProjectionMatrix(aspect float32) mgl32.Mat4 {
 	if aspect <= 0 {
 		aspect = 1.0
 	}
+	if c.DepthMode.Normalized() == DepthModeReverseZ {
+		return reverseZPerspective(c.FovRadians(), aspect, c.NearPlane(), c.FarPlane())
+	}
 	return mgl32.Perspective(c.FovRadians(), aspect, c.NearPlane(), c.FarPlane())
 }
 
@@ -152,6 +157,28 @@ func (c *CameraState) viewFrame() (mgl32.Vec3, mgl32.Vec3, bool) {
 	right = right.Normalize()
 	up = right.Cross(forward).Normalize()
 	return forward, up, true
+}
+
+func reverseZPerspective(fovRadians, aspect, near, far float32) mgl32.Mat4 {
+	f := float32(1.0 / math.Tan(float64(fovRadians*0.5)))
+	a := (far + near) / (far - near)
+	b := (2 * far * near) / (far - near)
+
+	return mgl32.Mat4{
+		f / aspect, 0, 0, 0,
+		0, f, 0, 0,
+		0, 0, a, -1,
+		0, 0, b, 0,
+	}
+}
+
+func (c *CameraState) ClipPointVisible(clip mgl32.Vec4) bool {
+	if clip.W() <= 0 {
+		return false
+	}
+
+	ndc := clip.Vec3().Mul(1.0 / clip.W())
+	return ndc.Z() >= -1.0 && ndc.Z() <= 1.0
 }
 
 // ExtractFrustum extracts the 6 planes of the frustum from the view-projection matrix.
@@ -188,19 +215,36 @@ func (c *CameraState) ExtractFrustum(vp mgl32.Mat4) [6]mgl32.Vec4 {
 		vp.At(3, 2) - vp.At(1, 2),
 		vp.At(3, 3) - vp.At(1, 3),
 	}
-	// Near plane: Row 3 + Row 2 (OpenGL-style -1..1)
-	planes[4] = mgl32.Vec4{
-		vp.At(3, 0) + vp.At(2, 0),
-		vp.At(3, 1) + vp.At(2, 1),
-		vp.At(3, 2) + vp.At(2, 2),
-		vp.At(3, 3) + vp.At(2, 3),
-	}
-	// Far plane: Row 3 - Row 2
-	planes[5] = mgl32.Vec4{
-		vp.At(3, 0) - vp.At(2, 0),
-		vp.At(3, 1) - vp.At(2, 1),
-		vp.At(3, 2) - vp.At(2, 2),
-		vp.At(3, 3) - vp.At(2, 3),
+	if c.DepthMode.Normalized() == DepthModeReverseZ {
+		// Reverse-Z keeps the same clip range but swaps which clip boundary represents
+		// the near and far planes.
+		planes[4] = mgl32.Vec4{
+			vp.At(3, 0) - vp.At(2, 0),
+			vp.At(3, 1) - vp.At(2, 1),
+			vp.At(3, 2) - vp.At(2, 2),
+			vp.At(3, 3) - vp.At(2, 3),
+		}
+		planes[5] = mgl32.Vec4{
+			vp.At(3, 0) + vp.At(2, 0),
+			vp.At(3, 1) + vp.At(2, 1),
+			vp.At(3, 2) + vp.At(2, 2),
+			vp.At(3, 3) + vp.At(2, 3),
+		}
+	} else {
+		// Near plane: Row 3 + Row 2 (OpenGL-style -1..1)
+		planes[4] = mgl32.Vec4{
+			vp.At(3, 0) + vp.At(2, 0),
+			vp.At(3, 1) + vp.At(2, 1),
+			vp.At(3, 2) + vp.At(2, 2),
+			vp.At(3, 3) + vp.At(2, 3),
+		}
+		// Far plane: Row 3 - Row 2
+		planes[5] = mgl32.Vec4{
+			vp.At(3, 0) - vp.At(2, 0),
+			vp.At(3, 1) - vp.At(2, 1),
+			vp.At(3, 2) - vp.At(2, 2),
+			vp.At(3, 3) - vp.At(2, 3),
+		}
 	}
 
 	// Normalize planes

@@ -59,6 +59,14 @@ fn get_camera_up() -> vec3<f32> {
     return normalize(camera.inv_view[1].xyz);
 }
 
+fn raster_clip_pos(world_pos: vec3<f32>) -> vec4<f32> {
+    var clip_pos = camera.view_proj * vec4<f32>(world_pos, 1.0);
+    // CameraState emits GL-style clip Z in [-w, +w]. WebGPU raster pipelines
+    // expect clip Z in [0, +w], including when reverse-z is active.
+    clip_pos.z = clip_pos.z * 0.5 + clip_pos.w * 0.5;
+    return clip_pos;
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VSOut {
     let inst = sprite_pool[iid];
@@ -107,7 +115,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
         }
 
         let world_pos = inst.pos + (r * corner.x * inst.size.x + u * corner.y * inst.size.y);
-        out.position = camera.view_proj * vec4<f32>(world_pos, 1.0);
+        out.position = raster_clip_pos(world_pos);
         out.world_pos = world_pos;
     }
 

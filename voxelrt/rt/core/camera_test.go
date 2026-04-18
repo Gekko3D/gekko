@@ -9,9 +9,10 @@ import (
 
 func TestCameraProjectionMatrixUsesConfiguredParameters(t *testing.T) {
 	camera := &CameraState{
-		Fov:  45,
-		Near: 0.5,
-		Far:  250,
+		Fov:       45,
+		Near:      0.5,
+		Far:       250,
+		DepthMode: DepthModeStandard,
 	}
 
 	got := camera.ProjectionMatrix(16.0 / 9.0)
@@ -21,6 +22,60 @@ func TestCameraProjectionMatrixUsesConfiguredParameters(t *testing.T) {
 		if diff := abs32(got[i] - want[i]); diff > 1e-5 {
 			t.Fatalf("matrix mismatch at %d: got %.6f want %.6f", i, got[i], want[i])
 		}
+	}
+}
+
+func TestCameraProjectionMatrixReverseZMapsNearAndFarToExpectedClipDepth(t *testing.T) {
+	camera := &CameraState{
+		Fov:       45,
+		Near:      0.5,
+		Far:       250,
+		DepthMode: DepthModeReverseZ,
+	}
+
+	proj := camera.ProjectionMatrix(16.0 / 9.0)
+
+	nearClip := proj.Mul4x1(mgl32.Vec4{0, 0, -camera.Near, 1})
+	farClip := proj.Mul4x1(mgl32.Vec4{0, 0, -camera.Far, 1})
+	nearNDC := nearClip.Mul(1.0 / nearClip.W())
+	farNDC := farClip.Mul(1.0 / farClip.W())
+
+	if diff := abs32(nearNDC.Z() - 1.0); diff > 1e-5 {
+		t.Fatalf("expected reverse-z near plane to map to +1, got %.6f", nearNDC.Z())
+	}
+	if diff := abs32(farNDC.Z() + 1.0); diff > 1e-4 {
+		t.Fatalf("expected reverse-z far plane to map to -1, got %.6f", farNDC.Z())
+	}
+}
+
+func TestCameraProjectionMatrixDepthModesProduceDistinctMatrices(t *testing.T) {
+	camera := &CameraState{
+		Fov:  60,
+		Near: 0.1,
+		Far:  4200,
+	}
+
+	camera.DepthMode = DepthModeStandard
+	standard := camera.ProjectionMatrix(16.0 / 9.0)
+	camera.DepthMode = DepthModeReverseZ
+	reverse := camera.ProjectionMatrix(16.0 / 9.0)
+
+	same := true
+	for i := 0; i < 16; i++ {
+		if abs32(standard[i]-reverse[i]) > 1e-6 {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("expected standard and reverse-z projection matrices to differ")
+	}
+}
+
+func TestNewCameraStateDefaultsToStandardDepthMode(t *testing.T) {
+	camera := NewCameraState()
+	if camera.DepthMode != DepthModeStandard {
+		t.Fatalf("expected default depth mode %q, got %q", DepthModeStandard, camera.DepthMode)
 	}
 }
 
@@ -73,6 +128,20 @@ func TestCameraScreenToWorldRayUsesCameraFrame(t *testing.T) {
 	want := mgl32.Vec3{0, 1, 0}
 	if ray.Direction.Sub(want).Len() > 1e-5 {
 		t.Fatalf("expected center ray to follow LookAt frame, got %v", ray.Direction)
+	}
+}
+
+func TestCameraClipPointVisibleAcceptsReverseZVisibleDepth(t *testing.T) {
+	camera := &CameraState{
+		Fov:       60,
+		Near:      0.1,
+		Far:       1000,
+		DepthMode: DepthModeReverseZ,
+	}
+
+	clip := camera.ProjectionMatrix(1.0).Mul4x1(mgl32.Vec4{0, 0, -5, 1})
+	if !camera.ClipPointVisible(clip) {
+		t.Fatal("expected reverse-z clip point inside frustum to be visible")
 	}
 }
 

@@ -34,6 +34,30 @@ func TestProjectedCAVolumeScissorVisibleVolume(t *testing.T) {
 	}
 }
 
+func TestProjectedCAVolumeScissorVisibleVolumeReverseZ(t *testing.T) {
+	camera := &core.CameraState{
+		Position:  mgl32.Vec3{0, 2, 8},
+		Fov:       60,
+		Near:      0.1,
+		Far:       1000,
+		DepthMode: core.DepthModeReverseZ,
+	}
+	volume := gpu_rt.CAVolumeHost{
+		Position:   mgl32.Vec3{-1, 0, 0},
+		Rotation:   mgl32.QuatIdent(),
+		VoxelScale: mgl32.Vec3{0.1, 0.1, 0.1},
+		Resolution: [3]uint32{20, 30, 20},
+	}
+
+	rect, ok := projectedCAVolumeScissor(camera, 1280, 720, volume)
+	if !ok {
+		t.Fatal("expected visible reverse-z CA volume scissor")
+	}
+	if rect.W == 0 || rect.H == 0 {
+		t.Fatalf("expected non-empty reverse-z scissor, got %+v", rect)
+	}
+}
+
 func TestProjectedCAVolumeScissorCameraInsideUsesFullscreen(t *testing.T) {
 	camera := &core.CameraState{
 		Position: mgl32.Vec3{0.5, 0.5, 0.5},

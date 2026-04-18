@@ -3,6 +3,8 @@ package gekko
 import (
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/go-gl/mathgl/mgl32"
+
+	"github.com/gekko3d/gekko/voxelrt/rt/core"
 )
 
 type Float2 = mgl32.Vec2
@@ -128,15 +130,16 @@ type Parent struct {
 }
 
 type CameraComponent struct {
-	Position mgl32.Vec3
-	LookAt   mgl32.Vec3
-	Up       mgl32.Vec3
-	Yaw      float32
-	Pitch    float32
-	Fov      float32
-	Aspect   float32
-	Near     float32
-	Far      float32
+	Position  mgl32.Vec3
+	LookAt    mgl32.Vec3
+	Up        mgl32.Vec3
+	Yaw       float32
+	Pitch     float32
+	Fov       float32
+	Aspect    float32
+	Near      float32
+	Far       float32
+	DepthMode core.DepthMode
 }
 
 type renderState struct {
