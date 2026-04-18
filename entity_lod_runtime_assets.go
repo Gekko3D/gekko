@@ -142,6 +142,15 @@ func (server *AssetServer) entityLODImpostorTexture(geometryID, paletteID AssetI
 	if server == nil || source == nil || source.XBrickMap == nil {
 		return AssetId{}, false
 	}
+	cacheKey := entityLODCacheKey("impostor", geometryID, paletteID)
+	if cached, ok := server.entityLODTextureByCacheKey(cacheKey); ok && cached.Width > 0 && cached.Height > 0 {
+		server.mu.RLock()
+		id := server.textureKeys[cacheKey]
+		server.mu.RUnlock()
+		if id != (AssetId{}) {
+			return id, true
+		}
+	}
 	paletteAsset, ok := server.GetVoxelPalette(paletteID)
 	if !ok {
 		return AssetId{}, false
@@ -152,7 +161,6 @@ func (server *AssetServer) entityLODImpostorTexture(geometryID, paletteID AssetI
 	}
 
 	const size = entityLODImpostorTextureSize
-	cacheKey := entityLODCacheKey("impostor", geometryID, paletteID)
 	texels := make([]uint8, size*size*4)
 	zBuffer := make([]float32, size*size)
 	for i := range zBuffer {
