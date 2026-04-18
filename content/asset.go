@@ -51,7 +51,20 @@ const (
 	AssetMarkerKindHandMount    = "hand_mount"
 	AssetMarkerKindEffectAnchor = "effect_anchor"
 	AssetMarkerKindSpawnAnchor  = "spawn_anchor"
+	AssetMarkerKindDockPort     = "dock_port"
+	AssetMarkerKindWeaponSlot   = "weapon_slot"
 )
+
+func KnownAssetMarkerKinds() []string {
+	return []string{
+		AssetMarkerKindMuzzle,
+		AssetMarkerKindDockPort,
+		AssetMarkerKindWeaponSlot,
+		AssetMarkerKindHandMount,
+		AssetMarkerKindEffectAnchor,
+		AssetMarkerKindSpawnAnchor,
+	}
+}
 
 type AssetDef struct {
 	ID            string             `json:"id"`

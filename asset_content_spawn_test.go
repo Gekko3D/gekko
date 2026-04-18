@@ -237,6 +237,9 @@ func TestSpawnAuthoredAssetSpawnsPartLightEmitterAndMarkerHierarchy(t *testing.T
 	if !ok {
 		t.Fatal("expected marker metadata component")
 	}
+	if marker.Name != "marker" {
+		t.Fatalf("expected marker name marker, got %q", marker.Name)
+	}
 	if marker.Kind != "socket" {
 		t.Fatalf("expected marker kind socket, got %q", marker.Kind)
 	}

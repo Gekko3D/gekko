@@ -24,6 +24,7 @@ type CollapsedAuthoredVoxelPartsComponent struct {
 }
 
 type AuthoredMarkerComponent struct {
+	Name string
 	Kind string
 	Tags []string
 }

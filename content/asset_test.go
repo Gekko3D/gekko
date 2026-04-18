@@ -371,6 +371,86 @@ func TestGoldenCompositeAssetPreservesChildBeforeParentOrder(t *testing.T) {
 	}
 }
 
+func TestAssetRoundTripPreservesSpaceSimMarkerKindsAndTags(t *testing.T) {
+	asset := NewAssetDef("spacesim-markers")
+	asset.Parts = []AssetPartDef{{
+		ID:   "hull",
+		Name: "hull",
+		Source: AssetSourceDef{
+			Kind:      AssetSourceKindGroup,
+			Operation: AssetShapeOperationAdd,
+		},
+		Transform: AssetTransformDef{
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+	}}
+	asset.Markers = []AssetMarkerDef{
+		{
+			ID:       "dock",
+			Name:     "dock_a",
+			ParentID: "hull",
+			Transform: AssetTransformDef{
+				Position: Vec3{1, 2, 3},
+				Rotation: Quat{0, 0, 0, 1},
+				Scale:    Vec3{1, 1, 1},
+			},
+			Kind: AssetMarkerKindDockPort,
+			Tags: []string{"station", "primary"},
+		},
+		{
+			ID:       "weapon",
+			Name:     "weapon_front",
+			ParentID: "hull",
+			Transform: AssetTransformDef{
+				Position: Vec3{0, 0, 4},
+				Rotation: Quat{0, 0, 0, 1},
+				Scale:    Vec3{1, 1, 1},
+			},
+			Kind: AssetMarkerKindWeaponSlot,
+			Tags: []string{"laser"},
+		},
+	}
+
+	tmpDir, err := os.MkdirTemp("", "content_asset_marker_contract_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	path := filepath.Join(tmpDir, "spacesim_markers.gkasset")
+	if err := SaveAsset(path, asset); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+
+	loaded, err := LoadAsset(path)
+	if err != nil {
+		t.Fatalf("LoadAsset failed: %v", err)
+	}
+	if len(loaded.Markers) != 2 {
+		t.Fatalf("expected 2 markers, got %+v", loaded.Markers)
+	}
+	if loaded.Markers[0].Kind != AssetMarkerKindDockPort || loaded.Markers[0].ParentID != "hull" {
+		t.Fatalf("expected dock marker contract to round-trip, got %+v", loaded.Markers[0])
+	}
+	if !reflect.DeepEqual(loaded.Markers[0].Tags, []string{"station", "primary"}) {
+		t.Fatalf("expected dock marker tags to round-trip, got %+v", loaded.Markers[0].Tags)
+	}
+	if loaded.Markers[1].Kind != AssetMarkerKindWeaponSlot || loaded.Markers[1].ParentID != "hull" {
+		t.Fatalf("expected weapon marker contract to round-trip, got %+v", loaded.Markers[1])
+	}
+}
+
+func TestKnownAssetMarkerKindsIncludesSpaceSimAnchors(t *testing.T) {
+	kinds := KnownAssetMarkerKinds()
+	if !containsString(kinds, AssetMarkerKindDockPort) {
+		t.Fatalf("expected known marker kinds to include %q, got %+v", AssetMarkerKindDockPort, kinds)
+	}
+	if !containsString(kinds, AssetMarkerKindWeaponSlot) {
+		t.Fatalf("expected known marker kinds to include %q, got %+v", AssetMarkerKindWeaponSlot, kinds)
+	}
+}
+
 func assertGoldenAssetRoundTrip(t *testing.T, fileName string) *AssetDef {
 	t.Helper()
 
@@ -421,6 +501,15 @@ func goldenAssetPathForTest(t *testing.T, fileName string) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Join(filepath.Dir(currentFile), "testdata", fileName)
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(haystack, needle string) bool {
