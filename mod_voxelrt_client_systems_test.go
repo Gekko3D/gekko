@@ -310,6 +310,351 @@ func TestVoxelRtSystemDefaultsAmbientOcclusionModeToInherited(t *testing.T) {
 	}
 }
 
+func TestEntityLODSelectionSystemUpdatesRuntimeSelection(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := newVoxelRtStateTest()
+
+	cmd.AddEntity(&CameraComponent{
+		Position: mgl32.Vec3{0, 0, 0},
+		LookAt:   mgl32.Vec3{0, 0, -1},
+		Up:       mgl32.Vec3{0, 1, 0},
+		Fov:      60,
+		Aspect:   1,
+		Near:     0.1,
+		Far:      1000,
+	})
+	cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{0, 0, -120},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&EntityLODComponent{
+			Bands: []EntityLODBand{
+				{MaxDistance: 50, Representation: EntityLODRepresentationFullVoxel},
+				{MaxDistance: 100, Representation: EntityLODRepresentationSimplifiedVoxel},
+				{MaxDistance: 0, Representation: EntityLODRepresentationImpostor},
+			},
+		},
+	)
+	app.FlushCommands()
+
+	entityLODSelectionSystem(cmd, state)
+
+	found := false
+	MakeQuery1[EntityLODComponent](cmd).Map(func(entityId EntityId, lod *EntityLODComponent) bool {
+		found = true
+		if !lod.SelectionValid {
+			t.Fatalf("expected runtime selection to be valid")
+		}
+		if lod.ActiveBandIndex != 2 {
+			t.Fatalf("expected far band index 2, got %d", lod.ActiveBandIndex)
+		}
+		if lod.ActiveRepresentation != EntityLODRepresentationImpostor {
+			t.Fatalf("expected impostor representation, got %v", lod.ActiveRepresentation)
+		}
+		if lod.ActiveDistance < 119.9 || lod.ActiveDistance > 120.1 {
+			t.Fatalf("expected active distance near 120, got %v", lod.ActiveDistance)
+		}
+		return false
+	})
+	if !found {
+		t.Fatalf("expected entity LOD component to exist")
+	}
+}
+
+func TestVoxelRtSystemCapturesEntityLODSelectionForVoxelEntities(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateVoxelModel(VoxModel{
+		SizeX: 1,
+		SizeY: 1,
+		SizeZ: 1,
+		Voxels: []Voxel{
+			{X: 0, Y: 0, Z: 0, ColorIndex: 1},
+		},
+	}, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{96, 160, 224, 255})
+
+	cmd.AddEntity(&CameraComponent{
+		Position: mgl32.Vec3{0, 0, 0},
+		LookAt:   mgl32.Vec3{0, 0, -1},
+		Up:       mgl32.Vec3{0, 1, 0},
+		Fov:      60,
+		Aspect:   1,
+		Near:     0.1,
+		Far:      1000,
+	})
+	eid := cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{0, 0, -75},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			VoxelModel:   modelID,
+			VoxelPalette: paletteID,
+		},
+		&EntityLODComponent{
+			Bands: []EntityLODBand{
+				{MaxDistance: 25, Representation: EntityLODRepresentationFullVoxel},
+				{MaxDistance: 50, Representation: EntityLODRepresentationSimplifiedVoxel},
+				{MaxDistance: 0, Representation: EntityLODRepresentationImpostor},
+			},
+		},
+	)
+	app.FlushCommands()
+
+	entityLODSelectionSystem(cmd, state)
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
+
+	selection, ok := state.entityLODSelections[eid]
+	if !ok {
+		t.Fatalf("expected voxel runtime state to capture entity LOD selection")
+	}
+	if selection.BandIndex != 2 {
+		t.Fatalf("expected band index 2, got %d", selection.BandIndex)
+	}
+	if selection.Representation != EntityLODRepresentationImpostor {
+		t.Fatalf("expected impostor representation, got %v", selection.Representation)
+	}
+}
+
+func TestVoxelRtSystemUsesSimplifiedGeometryForSimplifiedLOD(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateCubeModel(8, 8, 8, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{120, 220, 160, 255})
+
+	cmd.AddEntity(&CameraComponent{
+		Position: mgl32.Vec3{0, 0, 0},
+		LookAt:   mgl32.Vec3{0, 0, -1},
+		Up:       mgl32.Vec3{0, 1, 0},
+		Fov:      60,
+		Aspect:   1,
+		Near:     0.1,
+		Far:      1000,
+	})
+	eid := cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{0, 0, -75},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			VoxelModel:   modelID,
+			VoxelPalette: paletteID,
+			PivotMode:    PivotModeCenter,
+		},
+		&EntityLODComponent{
+			Bands: []EntityLODBand{
+				{MaxDistance: 25, Representation: EntityLODRepresentationFullVoxel},
+				{MaxDistance: 100, Representation: EntityLODRepresentationSimplifiedVoxel},
+				{MaxDistance: 0, Representation: EntityLODRepresentationImpostor},
+			},
+		},
+	)
+	app.FlushCommands()
+
+	entityLODSelectionSystem(cmd, state)
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
+
+	obj, ok := state.instanceMap[eid]
+	if !ok || obj == nil {
+		t.Fatal("expected voxel object to remain synced")
+	}
+	source, ok := server.GetVoxelGeometry(modelID)
+	if !ok || source.XBrickMap == nil {
+		t.Fatal("expected source geometry")
+	}
+	simplifiedID, simplified, ok := server.entityLODSimplifiedGeometry(modelID, paletteID, &source)
+	if !ok || simplified == nil || simplified.XBrickMap == nil {
+		t.Fatal("expected simplified geometry")
+	}
+	if obj.XBrickMap != simplified.XBrickMap {
+		t.Fatal("expected renderer object to swap to simplified geometry")
+	}
+	if obj.Transform.Scale.X() <= VoxelSize {
+		t.Fatalf("expected simplified render scale compensation above base voxel size, got %v", obj.Transform.Scale)
+	}
+	if _, exists := state.loadedModels[simplifiedID]; !exists {
+		t.Fatal("expected simplified geometry template to be cached")
+	}
+	if len(state.runtimeSprites) != 0 {
+		t.Fatalf("expected simplified voxel path to avoid runtime sprites, got %d", len(state.runtimeSprites))
+	}
+}
+
+func TestVoxelRtSystemUsesRuntimeImpostorSpritesForFarLOD(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateFrameModel(12, 18, 12, 2, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{112, 206, 255, 255})
+
+	cmd.AddEntity(&CameraComponent{
+		Position: mgl32.Vec3{0, 0, 0},
+		LookAt:   mgl32.Vec3{0, 0, -1},
+		Up:       mgl32.Vec3{0, 1, 0},
+		Fov:      60,
+		Aspect:   1,
+		Near:     0.1,
+		Far:      1000,
+	})
+	eid := cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{0, 0, -150},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			VoxelModel:   modelID,
+			VoxelPalette: paletteID,
+			PivotMode:    PivotModeCenter,
+		},
+		&EntityLODComponent{
+			Bands: []EntityLODBand{
+				{MaxDistance: 50, Representation: EntityLODRepresentationFullVoxel},
+				{MaxDistance: 100, Representation: EntityLODRepresentationSimplifiedVoxel},
+				{MaxDistance: 0, Representation: EntityLODRepresentationImpostor},
+			},
+		},
+	)
+	app.FlushCommands()
+
+	entityLODSelectionSystem(cmd, state)
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
+
+	if _, ok := state.instanceMap[eid]; ok {
+		t.Fatal("expected impostor LOD to suppress voxel object sync")
+	}
+	if len(state.runtimeSprites) != 1 {
+		t.Fatalf("expected one runtime sprite, got %d", len(state.runtimeSprites))
+	}
+	sprite := state.runtimeSprites[0]
+	if sprite.Texture == (AssetId{}) {
+		t.Fatal("expected runtime impostor sprite to have a texture")
+	}
+	if sprite.BillboardMode != BillboardSpherical {
+		t.Fatalf("expected spherical billboard, got %v", sprite.BillboardMode)
+	}
+	if sprite.Size[0] <= 0 || sprite.Size[1] <= 0 {
+		t.Fatalf("expected positive sprite size, got %v", sprite.Size)
+	}
+	spriteBytes, spriteCount, batches := spritesSync(state, cmd)
+	if len(spriteBytes) == 0 || spriteCount != 1 || len(batches) != 1 {
+		t.Fatalf("expected runtime sprite sync output, got bytes=%d count=%d batches=%d", len(spriteBytes), spriteCount, len(batches))
+	}
+}
+
+func TestVoxelRtSystemFallsBackToDotSpritesWhenImpostorGenerationFails(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateVoxelModel(VoxModel{}, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{255, 120, 232, 255})
+
+	cmd.AddEntity(&CameraComponent{
+		Position: mgl32.Vec3{0, 0, 0},
+		LookAt:   mgl32.Vec3{0, 0, -1},
+		Up:       mgl32.Vec3{0, 1, 0},
+		Fov:      60,
+		Aspect:   1,
+		Near:     0.1,
+		Far:      1000,
+	})
+	eid := cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{0, 0, -150},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			VoxelModel:   modelID,
+			VoxelPalette: paletteID,
+			PivotMode:    PivotModeCenter,
+		},
+		&EntityLODComponent{
+			Bands: []EntityLODBand{
+				{MaxDistance: 10, Representation: EntityLODRepresentationFullVoxel},
+				{MaxDistance: 0, Representation: EntityLODRepresentationImpostor},
+			},
+		},
+	)
+	app.FlushCommands()
+
+	entityLODSelectionSystem(cmd, state)
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
+
+	if _, ok := state.instanceMap[eid]; ok {
+		t.Fatal("expected far fallback path to suppress voxel object sync")
+	}
+	if len(state.runtimeSprites) != 1 {
+		t.Fatalf("expected one dot fallback sprite, got %d", len(state.runtimeSprites))
+	}
+	sprite := state.runtimeSprites[0]
+	if sprite.Texture != server.entityLODDotTexture() {
+		t.Fatal("expected fallback sprite to use shared dot texture")
+	}
+	if sprite.Size[0] < 2*VoxelSize || sprite.Size[1] < 2*VoxelSize {
+		t.Fatalf("expected clamped dot sprite size, got %v", sprite.Size)
+	}
+}
+
+func TestEntityLODImpostorBaseSizeUsesFull3DBounds(t *testing.T) {
+	server := newVoxelRtAssetServerTest(t)
+	modelID := server.CreateCubeModel(2, 2, 40, 1.0)
+	source, ok := server.GetVoxelGeometry(modelID)
+	if !ok || source.XBrickMap == nil {
+		t.Fatal("expected source geometry")
+	}
+
+	vox := &VoxelModelComponent{VoxelModel: modelID, PivotMode: PivotModeCenter}
+	transform := &TransformComponent{Scale: mgl32.Vec3{1, 1, 1}}
+	size := entityLODImpostorBaseSize(vox, transform, &source)
+	extentX, extentY, extentZ := entityLODGeometryExtents(&source)
+	baseScale := EffectiveVoxelScale(vox, transform)
+	worldX := float32(math.Abs(float64(baseScale.X()))) * extentX
+	worldY := float32(math.Abs(float64(baseScale.Y()))) * extentY
+	worldZ := float32(math.Abs(float64(baseScale.Z()))) * extentZ
+	want := float32(math.Sqrt(float64(worldX*worldX+worldY*worldY+worldZ*worldZ))) * 1.1
+	if math.Abs(float64(size-want)) > 1e-4 {
+		t.Fatalf("expected billboard size %v from 3D bounds, got %v", want, size)
+	}
+	if size <= max(worldX, worldY)*1.1 {
+		t.Fatalf("expected billboard size to include the dominant Z extent, got %v", size)
+	}
+}
+
+func TestEntityLODImpostorSpriteSizePreservesProjectedAspect(t *testing.T) {
+	server := newVoxelRtAssetServerTest(t)
+	modelID := server.CreateCubeModel(24, 8, 8, 1.0)
+	source, ok := server.GetVoxelGeometry(modelID)
+	if !ok || source.XBrickMap == nil {
+		t.Fatal("expected source geometry")
+	}
+
+	size := entityLODImpostorSpriteSize(
+		&VoxelModelComponent{VoxelModel: modelID, PivotMode: PivotModeCenter},
+		&TransformComponent{Scale: mgl32.Vec3{1, 1, 1}},
+		&source,
+	)
+	if size[0] <= size[1] {
+		t.Fatalf("expected wide model impostor sprite to preserve projected aspect, got %v", size)
+	}
+}
+
 func TestSpriteAtlasTextureLooksUpTextureByAtlasKey(t *testing.T) {
 	server := newVoxelRtAssetServerTest(t)
 	atlasID := server.CreateTextureFromTexels(
@@ -501,14 +846,16 @@ func newVoxelRtStateTest() *VoxelRtState {
 			Camera:   core.NewCameraState(),
 			Profiler: core.NewProfiler(),
 		},
-		loadedModels:       make(map[AssetId]*core.VoxelObject),
-		instanceMap:        make(map[EntityId]*core.VoxelObject),
-		lastMaterialKeys:   make(map[*core.VoxelObject]materialTableCacheKey),
-		materialTableCache: make(map[materialTableCacheKey][]core.Material),
-		particlePools:      make(map[EntityId]*particlePool),
-		caVolumeMap:        make(map[EntityId]*core.VoxelObject),
-		objectToEntity:     make(map[*core.VoxelObject]EntityId),
-		skyboxLayers:       make(map[EntityId]SkyboxLayerComponent),
+		loadedModels:        make(map[AssetId]*core.VoxelObject),
+		instanceMap:         make(map[EntityId]*core.VoxelObject),
+		entityLODSelections: make(map[EntityId]EntityLODSelection),
+		runtimeSprites:      make([]SpriteComponent, 0, 8),
+		lastMaterialKeys:    make(map[*core.VoxelObject]materialTableCacheKey),
+		materialTableCache:  make(map[materialTableCacheKey][]core.Material),
+		particlePools:       make(map[EntityId]*particlePool),
+		caVolumeMap:         make(map[EntityId]*core.VoxelObject),
+		objectToEntity:      make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:        make(map[EntityId]SkyboxLayerComponent),
 	}
 }
 
@@ -518,6 +865,7 @@ func newVoxelRtAssetServerTest(t *testing.T) *AssetServer {
 		meshes:         make(map[AssetId]MeshAsset),
 		materials:      make(map[AssetId]MaterialAsset),
 		textures:       make(map[AssetId]TextureAsset),
+		textureKeys:    make(map[string]AssetId),
 		samplers:       make(map[AssetId]SamplerAsset),
 		voxModels:      make(map[AssetId]VoxelGeometryAsset),
 		voxModelKeys:   make(map[string]AssetId),

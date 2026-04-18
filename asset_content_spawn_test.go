@@ -58,6 +58,9 @@ func TestSpawnAuthoredAssetResolvesChildBeforeParent(t *testing.T) {
 
 	var childWorld *TransformComponent
 	for _, comp := range cmd.GetAllComponents(childEntity) {
+		if tr, ok := comp.(*TransformComponent); ok {
+			childWorld = tr
+		}
 		if tr, ok := comp.(TransformComponent); ok {
 			childWorld = &tr
 		}
