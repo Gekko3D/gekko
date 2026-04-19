@@ -3,12 +3,22 @@ package gekko
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 
 	rooteecs "github.com/gekko3d/gekko/ecs"
 )
 
 type EntityId = rooteecs.EntityID
+type EntityGroupKey struct {
+	Kind string
+	ID   string
+}
+
+type EntityGroupMembershipComponent struct {
+	Groups []EntityGroupKey
+}
+
 type archetypeId uint64
 type archetypeKey []componentId
 type componentId uint32
@@ -35,6 +45,9 @@ type Ecs struct {
 	componentIdCounter     componentId
 	componentTypeIdMap     map[reflect.Type]componentId
 	componentIdTypeMap     map[componentId]reflect.Type
+
+	groupIndex       map[EntityGroupKey]set[EntityId]
+	entityGroupIndex map[EntityId][]EntityGroupKey
 }
 
 func MakeEcs() Ecs {
@@ -55,6 +68,8 @@ func MakeEcs() Ecs {
 		componentIdCounter: componentId(0),
 		componentTypeIdMap: make(map[reflect.Type]componentId),
 		componentIdTypeMap: make(map[componentId]reflect.Type),
+		groupIndex:         make(map[EntityGroupKey]set[EntityId]),
+		entityGroupIndex:   make(map[EntityId][]EntityGroupKey),
 	}
 }
 
@@ -81,6 +96,7 @@ func (ecs *Ecs) insertEntity(entityId EntityId, components ...any) EntityId {
 	}
 
 	ecs.storage.entityIndex[entityId] = archId
+	ecs.syncEntityGroupIndex(entityId)
 
 	return entityId
 }
@@ -112,6 +128,7 @@ func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
 
 	dstArch.entities[entityId] = dstRow
 	ecs.storage.entityIndex[entityId] = dstArchId
+	ecs.syncEntityGroupIndex(entityId)
 }
 
 func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
@@ -150,6 +167,7 @@ func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
 
 	dstArch.entities[entityId] = dstRow
 	ecs.storage.entityIndex[entityId] = dstArchId
+	ecs.syncEntityGroupIndex(entityId)
 }
 
 func (ecs *Ecs) moveComponents(srcArch *archetype, srcRow row, dstArch *archetype, dstRow row) {
@@ -179,6 +197,10 @@ func (ecs *Ecs) writeComponent(dstArch *archetype, dstRow row, component any) {
 		componentType = componentType.Elem()
 		reflectValue = reflectValue.Elem()
 	}
+	if componentType == reflect.TypeOf(EntityGroupMembershipComponent{}) {
+		membership := canonicalizeEntityGroupMembership(reflectValue.Interface().(EntityGroupMembershipComponent))
+		reflectValue = reflect.ValueOf(membership)
+	}
 
 	componentId := ecs.getComponentId(componentType)
 	reflectSliceSet(dstArch.componentData[componentId], int(dstRow), reflectValue)
@@ -191,10 +213,12 @@ func (ecs *Ecs) recycleEntity(entityId EntityId) {
 	}
 	arch := ecs.storage.archetypes[archId]
 	if arch == nil {
+		ecs.clearEntityGroupIndex(entityId)
 		delete(ecs.storage.entityIndex, entityId)
 		return
 	}
 
+	ecs.clearEntityGroupIndex(entityId)
 	row := arch.entities[entityId]
 	arch.recycled = append(arch.recycled, row)
 
@@ -351,6 +375,111 @@ func (ecs *Ecs) getComponentType(componentId componentId) reflect.Type {
 		return t
 	}
 	panic("ComponentID not registered")
+}
+
+func canonicalizeEntityGroupMembership(component EntityGroupMembershipComponent) EntityGroupMembershipComponent {
+	if len(component.Groups) == 0 {
+		return EntityGroupMembershipComponent{}
+	}
+
+	unique := make(map[EntityGroupKey]struct{}, len(component.Groups))
+	canonical := make([]EntityGroupKey, 0, len(component.Groups))
+	for _, group := range component.Groups {
+		if group.Kind == "" || group.ID == "" {
+			continue
+		}
+		if _, seen := unique[group]; seen {
+			continue
+		}
+		unique[group] = struct{}{}
+		canonical = append(canonical, group)
+	}
+
+	sort.Slice(canonical, func(i, j int) bool {
+		if canonical[i].Kind != canonical[j].Kind {
+			return canonical[i].Kind < canonical[j].Kind
+		}
+		return canonical[i].ID < canonical[j].ID
+	})
+
+	return EntityGroupMembershipComponent{Groups: canonical}
+}
+
+func (ecs *Ecs) clearEntityGroupIndex(entityId EntityId) {
+	groups := ecs.entityGroupIndex[entityId]
+	for _, group := range groups {
+		members := ecs.groupIndex[group]
+		delete(members, entityId)
+		if len(members) == 0 {
+			delete(ecs.groupIndex, group)
+		}
+	}
+	delete(ecs.entityGroupIndex, entityId)
+}
+
+func (ecs *Ecs) syncEntityGroupIndex(entityId EntityId) {
+	ecs.clearEntityGroupIndex(entityId)
+
+	component := ecs.getComponent(entityId, reflect.TypeOf(EntityGroupMembershipComponent{}))
+	if component == nil {
+		return
+	}
+
+	membership, ok := component.(*EntityGroupMembershipComponent)
+	if !ok || membership == nil || len(membership.Groups) == 0 {
+		return
+	}
+
+	canonical := append([]EntityGroupKey(nil), membership.Groups...)
+	ecs.entityGroupIndex[entityId] = canonical
+	for _, group := range canonical {
+		members := ecs.groupIndex[group]
+		if members == nil {
+			members = make(set[EntityId])
+			ecs.groupIndex[group] = members
+		}
+		members[entityId] = struct{}{}
+	}
+}
+
+func (ecs *Ecs) getEntitiesInGroup(key EntityGroupKey) []EntityId {
+	if key.Kind == "" || key.ID == "" {
+		return nil
+	}
+
+	members := ecs.groupIndex[key]
+	if len(members) == 0 {
+		return nil
+	}
+
+	entities := make([]EntityId, 0, len(members))
+	for entityId := range members {
+		entities = append(entities, entityId)
+	}
+	sort.Slice(entities, func(i, j int) bool {
+		return entities[i] < entities[j]
+	})
+	return entities
+}
+
+func (ecs *Ecs) getEntityGroups(entityId EntityId) []EntityGroupKey {
+	groups := ecs.entityGroupIndex[entityId]
+	if len(groups) == 0 {
+		return nil
+	}
+	return append([]EntityGroupKey(nil), groups...)
+}
+
+func (ecs *Ecs) hasGroup(entityId EntityId, key EntityGroupKey) bool {
+	if key.Kind == "" || key.ID == "" {
+		return false
+	}
+	for _, group := range ecs.entityGroupIndex[entityId] {
+		if group == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (ecs *Ecs) getAllComponents(entityId EntityId) []any {
