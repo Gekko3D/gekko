@@ -33,6 +33,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
   - [`editor/workflows.md`](editor/workflows.md)
 - Common agent workflows:
   - [`workflows/agent-task-loop.md`](workflows/agent-task-loop.md)
+  - [`workflows/status-report.md`](workflows/status-report.md)
   - [`workflows/add-module.md`](workflows/add-module.md)
   - [`workflows/add-content-type.md`](workflows/add-content-type.md)
 - Debugging GPU buffer layout issues:
@@ -49,7 +50,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
 - `editor/`
   - engine/editor integration notes plus operator-facing editor guides
 - `workflows/`
-  - task-oriented playbooks for common agent changes
+  - task-oriented playbooks for common agent changes, handoffs, and status artifacts
 - `renderer/`
   - renderer architecture, frame flow, analytic media, editing/picking behavior, particles, and contributor guidance
 - `content/`

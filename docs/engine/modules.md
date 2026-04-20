@@ -54,6 +54,10 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
   - `UpdateSpatialGridSystem` in `PreUpdate`
 - Owns:
   - broadphase AABB grid for queries and neighborhood lookups
+- Important:
+  - install this module whenever ECS systems need `*SpatialHashGrid` through dependency injection
+  - `PhysicsModule` also uses a spatial grid internally, but that simulator-owned grid is not registered as an ECS resource
+  - if game code performs same-frame local-space rebases after `PreUpdate`, it may need to refresh AABBs/grid state immediately after the reprojected transform jump instead of waiting for the next frame
 
 ### `ChunkObserverModule`
 
@@ -127,6 +131,7 @@ For their data model, see:
   - async mode runs simulation in its own goroutine
   - sync mode steps physics inside the fixed-update schedule
   - ECS-facing state is synchronized through snapshots and results, not direct mutation
+  - physics owns local simulation only; large-world authoritative coordinates must remain above the engine and be projected into ECS space by the game/runtime layer
 
 ### `VoxPhysicsModule`
 

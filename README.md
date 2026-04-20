@@ -6,6 +6,8 @@ Use [`docs/README.md`](docs/README.md) as the engine documentation index. Use [`
 
 ## Repository Layout
 
+- `base/`
+  - agent routing and workflow manifests
 - `docs/`
   - canonical engine documentation
 - `voxelrt/`
@@ -21,6 +23,8 @@ Use [`docs/README.md`](docs/README.md) as the engine documentation index. Use [`
 
 ## High-Value Docs
 
+- [`base/skills-manifest.md`](base/skills-manifest.md)
+- [`AGENTS.md`](AGENTS.md)
 - [`docs/engine/runtime.md`](docs/engine/runtime.md)
 - [`docs/engine/modules.md`](docs/engine/modules.md)
 - [`docs/engine/ecs.md`](docs/engine/ecs.md)
@@ -35,6 +39,8 @@ Use [`docs/README.md`](docs/README.md) as the engine documentation index. Use [`
 - [`docs/content/levels.md`](docs/content/levels.md)
 - [`docs/content/streaming-and-worlds.md`](docs/content/streaming-and-worlds.md)
 - [`docs/content/asset-format.md`](docs/content/asset-format.md)
+- [`docs/workflows/agent-task-loop.md`](docs/workflows/agent-task-loop.md)
+- [`docs/workflows/status-report.md`](docs/workflows/status-report.md)
 
 ## Bridge Entry Points
 

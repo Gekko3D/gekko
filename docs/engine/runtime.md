@@ -117,6 +117,12 @@ There is no separate DI container beyond `app.resources`.
 
 That means module ordering matters whenever one module expects another module's resources to exist by the time a system runs.
 
+Practical rule:
+
+- if a system asks for `*SomeResource`, some module must install that resource explicitly
+- internal helper state created inside another subsystem does not satisfy ECS DI unless it is also registered in `app.resources`
+- if your system depends on `*SpatialHashGrid`, install `SpatialGridModule` or add an equivalent resource yourself; `PhysicsModule`'s internal simulation grid is not the same thing
+
 ## Resource Model
 
 Resources are registered through:
@@ -199,6 +205,24 @@ It is not the time to assume any per-frame state already exists.
   - the system was placed in the wrong stage relative to the producer or consumer
 - state transition side effects happen late
   - state changes are buffered until after execute
+
+## Large-World Runtime Pattern
+
+`gekko` remains a local-space engine runtime.
+
+That means:
+
+- `TransformComponent`, broadphase AABBs, renderer submission, and physics all stay `float32`
+- large-world authoritative coordinates should live in the game/runtime layer above the engine
+- the game should project authoritative coordinates into local ECS space at one explicit boundary, then sync dynamic runtime results back out intentionally
+
+This pattern is now exercised by SpaceSim:
+
+- high-precision world state lives in SpaceSim-owned contracts
+- one active floating-origin frame defines the current local projection
+- rebasing is handled in game code by recomputing projected local transforms, then refreshing any engine-side caches that depend on those local transforms
+
+Do not treat raw ECS transforms as global gameplay truth in large-world consumers.
 
 ## Practical Reading Order
 
