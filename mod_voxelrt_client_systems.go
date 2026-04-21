@@ -908,6 +908,7 @@ func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
 			DiffuseStrength:        planet.NormalizedDiffuseStrength(),
 			SpecularStrength:       planet.NormalizedSpecularStrength(),
 			RimStrength:            planet.NormalizedRimStrength(),
+			EmissionStrength:       planet.NormalizedEmissionStrength(),
 			TerrainLowColor:        planet.NormalizedTerrainLowColor(),
 			TerrainHighColor:       planet.NormalizedTerrainHighColor(),
 			RockColor:              planet.NormalizedRockColor(),

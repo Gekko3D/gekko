@@ -30,6 +30,7 @@ type PlanetBodyHost struct {
 	DiffuseStrength        float32
 	SpecularStrength       float32
 	RimStrength            float32
+	EmissionStrength       float32
 	TerrainLowColor        [3]float32
 	TerrainHighColor       [3]float32
 	RockColor              [3]float32
@@ -51,6 +52,7 @@ type planetBodyRecord struct {
 	Surface    [4]float32
 	Noise      [4]float32
 	Style      [4]float32
+	Emission   [4]float32
 	BakeMeta   [4]uint32
 	Band0      [4]float32
 	Band1      [4]float32
@@ -160,6 +162,12 @@ func buildPlanetBodyRecords(planets []PlanetBodyHost) ([]planetBodyRecord, []Pla
 				planet.DiffuseStrength,
 				planet.SpecularStrength,
 				planet.RimStrength,
+			},
+			Emission: [4]float32{
+				planet.EmissionStrength,
+				0,
+				0,
+				0,
 			},
 			BakeMeta: [4]uint32{
 				bakeResolution,

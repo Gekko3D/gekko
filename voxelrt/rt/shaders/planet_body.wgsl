@@ -47,6 +47,7 @@ struct PlanetRecord {
   surface: vec4<f32>,
   noise: vec4<f32>,
   style: vec4<f32>,
+  emission: vec4<f32>,
   bake_meta: vec4<u32>,
   band0: vec4<f32>,
   band1: vec4<f32>,
@@ -877,7 +878,12 @@ fn fs_main(in: VSOut) -> FSOut {
     let spec_tint = mix(mix(base_color, light_color, surface_material.spec_tint_mix), vec3<f32>(1.0), surface_material.white_spec_mix);
     let rim_tint = mix(base_color, planet.atmosphere.xyz, 0.65);
     let rim_scale = surface_material.rim_scale;
-    let lit = base_color * (ambient + diffuse * light_color) + spec * spec_tint + rim_tint * rim * atmosphere_mix * rim_scale;
+    let emissive_strength = max(planet.emission.x, 0.0);
+    let core_view = pow(saturate(dot(world_normal, view_dir) * 0.5 + 0.5), 1.6);
+    let emissive_core = mix(base_color, planet.band5.xyz, 0.5 + 0.35 * core_view);
+    let emissive_glow = mix(base_color, planet.atmosphere.xyz, 0.7);
+    let emission = (emissive_core * (0.7 + 0.6 * core_view) + emissive_glow * (0.35 + 0.65 * rim)) * emissive_strength;
+    let lit = base_color * (ambient + diffuse * light_color) + spec * spec_tint + rim_tint * rim * atmosphere_mix * rim_scale + emission;
 
     best_t = t_hit;
     best_color = clamp(compress_planet_highlights(max(lit, vec3<f32>(0.0))), vec3<f32>(0.0), vec3<f32>(1.0));
