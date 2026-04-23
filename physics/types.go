@@ -31,6 +31,7 @@ type RigidBodyComponent struct {
 	CurrentPhysicsPos  mgl32.Vec3
 	CurrentPhysicsRot  mgl32.Quat
 	LastPhysicsTick    uint64
+	ForceTeleport      bool
 	AccumulatedImpulse mgl32.Vec3
 	AccumulatedTorque  mgl32.Vec3
 }
