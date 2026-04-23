@@ -312,7 +312,7 @@ func (a *App) Init() error {
 				Visibility: wgpu.ShaderStageCompute,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   288, // CameraData size
+					MinBindingSize:   gpu.CameraUniformSizeBytes, // CameraData size
 					HasDynamicOffset: false,
 				},
 			},
@@ -348,7 +348,7 @@ func (a *App) Init() error {
 				Visibility: wgpu.ShaderStageCompute,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   288,
+					MinBindingSize:   gpu.CameraUniformSizeBytes,
 					HasDynamicOffset: false,
 				},
 			},
@@ -613,7 +613,7 @@ func (a *App) Init() error {
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
 	a.BufferManager.LightingQuality = a.EffectiveLightingQuality()
-	a.BufferManager.UpdateCamera(view, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, 1.0, a.Scene.SkyAmbientMix, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), uint32(width), uint32(height), a.EffectiveLightingQuality())
+	a.BufferManager.UpdateCamera(view, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, 1.0, a.Scene.SkyAmbientMix, a.Camera.FarPlane(), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), uint32(width), uint32(height), a.EffectiveLightingQuality())
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene, a.Camera, float32(width)/float32(height))

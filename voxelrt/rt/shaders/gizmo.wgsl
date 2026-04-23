@@ -24,6 +24,7 @@ struct CameraUniform {
     screen_size: vec2<f32>,
     pad2: vec2<u32>,
     ao_quality: vec4<f32>,
+    distance_limits: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -35,6 +36,10 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) dist: f32,
+}
+
+fn camera_far_t() -> f32 {
+    return max(camera.distance_limits.y, 1.0);
 }
 
 @vertex
@@ -66,8 +71,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // in.position.xy are screen coordinates (pixels)
     let depth_val = textureLoad(depth_tex, vec2<i32>(in.position.xy), 0).r;
     
-    // If the G-Buffer has a hit (depth < 60000) and it's closer than us, discard
-    if (depth_val < 50000.0 && depth_val < in.dist - 0.1) {
+    // If the G-Buffer has a finite hit and it's closer than us, discard.
+    if (depth_val > 0.0 && depth_val < camera_far_t() && depth_val < in.dist - 0.1) {
         discard;
     }
 

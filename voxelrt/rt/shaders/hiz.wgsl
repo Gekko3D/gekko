@@ -1,11 +1,33 @@
 // voxelrt/shaders/hiz.wgsl
 
+struct CameraData {
+    view_proj: mat4x4<f32>,
+    inv_view: mat4x4<f32>,
+    inv_proj: mat4x4<f32>,
+    cam_pos: vec4<f32>,
+    light_pos: vec4<f32>,
+    ambient_color: vec4<f32>,
+    debug_mode: u32,
+    render_mode: u32,
+    num_lights: u32,
+    pad1: u32,
+    screen_size: vec2<f32>,
+    pad2: vec2<f32>,
+    ao_quality: vec4<f32>,
+    distance_limits: vec4<f32>,
+};
+
 @group(0) @binding(0) var sourceTexture: texture_2d<f32>; // Use texture_2d<f32> for sampled depth, or texture_depth_2d if using comparison
 // Since we are reading raw values in compute, we likely bind it as a sampled texture (float) or use textureLoad.
 // If the source is the depth buffer, it's usually texture_depth_2d.
 // However, WebGPU doesn't allow binding texture_depth_2d as storage. We use textureLoad.
 
 @group(0) @binding(1) var destTexture: texture_storage_2d<r32float, write>;
+@group(0) @binding(2) var<uniform> camera: CameraData;
+
+fn camera_far_t() -> f32 {
+    return max(camera.distance_limits.y, 1.0);
+}
 
 // Simple 2x2 reduction
 @compute @workgroup_size(8, 8, 1)
@@ -106,10 +128,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let sx = srcBase.x;
     let sy = srcBase.y;
     
-    var val00 = 60000.0; if (sx < srcSize.x && sy < srcSize.y) { val00 = textureLoad(sourceTexture, vec2<u32>(sx, sy), 0).x; }
-    var val10 = 60000.0; if (sx + 1u < srcSize.x && sy < srcSize.y) { val10 = textureLoad(sourceTexture, vec2<u32>(sx + 1u, sy), 0).x; }
-    var val01 = 60000.0; if (sx < srcSize.x && sy + 1u < srcSize.y) { val01 = textureLoad(sourceTexture, vec2<u32>(sx, sy + 1u), 0).x; }
-    var val11 = 60000.0; if (sx + 1u < srcSize.x && sy + 1u < srcSize.y) { val11 = textureLoad(sourceTexture, vec2<u32>(sx + 1u, sy + 1u), 0).x; }
+    let far_t = camera_far_t();
+    var val00 = far_t; if (sx < srcSize.x && sy < srcSize.y) { val00 = textureLoad(sourceTexture, vec2<u32>(sx, sy), 0).x; }
+    var val10 = far_t; if (sx + 1u < srcSize.x && sy < srcSize.y) { val10 = textureLoad(sourceTexture, vec2<u32>(sx + 1u, sy), 0).x; }
+    var val01 = far_t; if (sx < srcSize.x && sy + 1u < srcSize.y) { val01 = textureLoad(sourceTexture, vec2<u32>(sx, sy + 1u), 0).x; }
+    var val11 = far_t; if (sx + 1u < srcSize.x && sy + 1u < srcSize.y) { val11 = textureLoad(sourceTexture, vec2<u32>(sx + 1u, sy + 1u), 0).x; }
     
     // For Standard Depth (0=Near, 1=Far):
     // Reduction is MAX.
@@ -118,12 +141,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // NOTE: G-Buffer Depth output is R32F with "t" (distance). 
     // It is NOT 0..1 depth buffer. It is WORLD DISTANCE.
     // gbuffer.wgsl: textureStore(out_depth, ... vec4<f32>(hit_res.t, ...))
-    // Empty space is 60000.0.
-    // So 0 is near, 60000 is far.
+    // Empty space is the active camera far distance.
+    // So 0 is near, camera far is far.
     // Logic holds: Max(t) works.
     // If tile has [10, 20, 10, 15]. Max=20.
     // Object at 30. 30 > 20. Occluded.
-    // OOB should be 60000.0 (Far).
+    // OOB should be camera far (Far).
     
     // Wait. If we are using G-Buffer linear depth "t", we must project AABB to "t" distance from camera, not "Z" clip space.
     // That's fine, easier actually.

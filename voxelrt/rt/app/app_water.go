@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 
+	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/shaders"
 
 	"github.com/cogentcore/webgpu/wgpu"
@@ -24,7 +25,7 @@ func (a *App) setupWaterPipeline() {
 			{
 				Binding:    0,
 				Visibility: wgpu.ShaderStageFragment,
-				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 288},
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: gpu.CameraUniformSizeBytes},
 			},
 		},
 	})

@@ -8,6 +8,23 @@ struct VSOut {
   @location(0) uv : vec2<f32>,
 };
 
+struct CameraData {
+  view_proj: mat4x4<f32>,
+  inv_view: mat4x4<f32>,
+  inv_proj: mat4x4<f32>,
+  cam_pos: vec4<f32>,
+  light_pos: vec4<f32>,
+  ambient_color: vec4<f32>,
+  debug_mode: u32,
+  render_mode: u32,
+  num_lights: u32,
+  pad1: u32,
+  screen_size: vec2<f32>,
+  pad2: vec2<f32>,
+  ao_quality: vec4<f32>,
+  distance_limits: vec4<f32>,
+};
+
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32) -> VSOut {
   var out : VSOut;
@@ -18,27 +35,35 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VSOut {
   return out;
 }
 
-const FAR_T: f32 = 60000.0;
-
 // Group 0: Inputs
-//  - 0: opaque lit color (RGBA8Unorm)
-//  - 1: accum color (RGBA16Float), premultiplied by alpha and weight
-//  - 2: accum weight (R16Float), sum of alpha*weight
-//  - 3: volumetric color history (RGBA16Float, rgb=color, a=transmittance)
-//  - 4: volumetric scene depth history (R16Float)
-//  - 5: full-resolution scene depth
-//  - 6: analytic planet depth
-//  - 7: half-resolution CA color (rgb=radiance, a=transmittance)
-//  - 8: half-resolution CA front depth
-@group(0) @binding(0) var tOpaque : texture_2d<f32>;
-@group(0) @binding(1) var tAccum  : texture_2d<f32>;
-@group(0) @binding(2) var tWeight : texture_2d<f32>;
-@group(0) @binding(3) var tVolume : texture_2d<f32>;
-@group(0) @binding(4) var tVolumeDepth : texture_2d<f32>;
-@group(0) @binding(5) var tSceneDepth : texture_2d<f32>;
-@group(0) @binding(6) var tPlanetDepth : texture_2d<f32>;
-@group(0) @binding(7) var tCAColor : texture_2d<f32>;
-@group(0) @binding(8) var tCADepth : texture_2d<f32>;
+//  - 0: camera uniform
+//  - 1: opaque lit color (RGBA8Unorm)
+//  - 2: accum color (RGBA16Float), premultiplied by alpha and weight
+//  - 3: accum weight (R16Float), sum of alpha*weight
+//  - 4: volumetric color history (RGBA16Float, rgb=color, a=transmittance)
+//  - 5: volumetric scene depth history (R16Float)
+//  - 6: full-resolution scene depth
+//  - 7: analytic planet depth
+//  - 8: half-resolution CA color (rgb=radiance, a=transmittance)
+//  - 9: half-resolution CA front depth
+@group(0) @binding(0) var<uniform> camera : CameraData;
+@group(0) @binding(1) var tOpaque : texture_2d<f32>;
+@group(0) @binding(2) var tAccum  : texture_2d<f32>;
+@group(0) @binding(3) var tWeight : texture_2d<f32>;
+@group(0) @binding(4) var tVolume : texture_2d<f32>;
+@group(0) @binding(5) var tVolumeDepth : texture_2d<f32>;
+@group(0) @binding(6) var tSceneDepth : texture_2d<f32>;
+@group(0) @binding(7) var tPlanetDepth : texture_2d<f32>;
+@group(0) @binding(8) var tCAColor : texture_2d<f32>;
+@group(0) @binding(9) var tCADepth : texture_2d<f32>;
+
+fn camera_far_t() -> f32 {
+  return max(camera.distance_limits.y, 1.0);
+}
+
+fn camera_far_half() -> f32 {
+  return camera_far_t() * 0.5;
+}
 
 fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
   let a = 2.51;
@@ -49,22 +74,32 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
   return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-fn sanitize_opaque_depth(depth: f32) -> f32 {
-  if (depth > 0.0 && depth < FAR_T) {
+fn sanitize_scene_depth(depth: f32) -> f32 {
+  let far_t = camera_far_t();
+  if (depth > 0.0 && depth < far_t) {
     return depth;
   }
-  return FAR_T;
+  return far_t;
+}
+
+fn sanitize_planet_depth(depth: f32) -> f32 {
+  let far_t = camera_far_t();
+  if (depth > 0.0 && depth < far_t) {
+    return depth;
+  }
+  return far_t;
 }
 
 fn combined_opaque_depth(ipos: vec2<i32>) -> f32 {
-  let scene_depth = sanitize_opaque_depth(textureLoad(tSceneDepth, ipos, 0).r);
-  let planet_depth = sanitize_opaque_depth(textureLoad(tPlanetDepth, ipos, 0).r);
+  let scene_depth = sanitize_scene_depth(textureLoad(tSceneDepth, ipos, 0).r);
+  let planet_depth = sanitize_planet_depth(textureLoad(tPlanetDepth, ipos, 0).r);
   return min(scene_depth, planet_depth);
 }
 
 fn depth_weight(current_depth: f32, sample_depth: f32) -> f32 {
-  let current_finite = current_depth > 0.0 && current_depth < FAR_T * 0.5;
-  let sample_finite = sample_depth > 0.0 && sample_depth < FAR_T * 0.5;
+  let far_half = camera_far_half();
+  let current_finite = current_depth > 0.0 && current_depth < far_half;
+  let sample_finite = sample_depth > 0.0 && sample_depth < far_half;
   if (!current_finite && sample_finite) {
     // Atmosphere/fog against open space should still upsample cleanly.
     return 1.0;
@@ -133,6 +168,7 @@ fn composite_two_layers(base: vec3<f32>, front: vec4<f32>, back: vec4<f32>) -> v
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   // Fetch all inputs via textureLoad with integer pixel coords (no filtering)
+  let far_half = camera_far_half();
   let dims = textureDimensions(tAccum);
   let ipos = vec2<i32>(
     clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
@@ -147,7 +183,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let vol = sample_halfres_bilateral(ipos, current_depth, tVolume, tVolumeDepth);
   let ca = sample_halfres_bilateral(ipos, current_depth, tCAColor, tCADepth);
   let vol_valid = any(vol.color.rgb > vec3<f32>(1e-4)) || vol.color.a < 0.999;
-  let ca_valid = ca.depth > 0.0 && ca.depth < FAR_T * 0.5;
+  let ca_valid = ca.depth > 0.0 && ca.depth < far_half;
   var base = copq;
   if (vol_valid && ca_valid) {
     if (ca.depth <= vol.depth) {

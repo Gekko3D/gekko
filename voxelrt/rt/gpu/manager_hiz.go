@@ -8,6 +8,8 @@ import (
 	"github.com/cogentcore/webgpu/wgpu"
 )
 
+const hiZDefaultFarDepth = float32(1e20)
+
 func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.ShaderModule) {
 	// Release old if any
 	if m.HiZTexture != nil {
@@ -147,6 +149,14 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageCompute,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeUniform,
+					MinBindingSize: CameraUniformSizeBytes,
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -182,6 +192,7 @@ func (m *GpuBufferManager) SetupHiZ(width, height uint32, hizModule *wgpu.Shader
 			Entries: []wgpu.BindGroupEntry{
 				{Binding: 0, TextureView: m.HiZViews[i]},   // Source
 				{Binding: 1, TextureView: m.HiZViews[i+1]}, // Dest
+				{Binding: 2, Buffer: m.CameraBuf, Size: CameraUniformSizeBytes},
 			},
 		})
 		m.HiZBindGroups[i+1] = bg
@@ -226,6 +237,7 @@ func (m *GpuBufferManager) DispatchHiZ(encoder *wgpu.CommandEncoder, sourceDepth
 			Entries: []wgpu.BindGroupEntry{
 				{Binding: 0, TextureView: sourceDepthView},
 				{Binding: 1, TextureView: m.HiZViews[0]},
+				{Binding: 2, Buffer: m.CameraBuf, Size: CameraUniformSizeBytes},
 			},
 		})
 		if err != nil || bg0 == nil {
@@ -262,6 +274,7 @@ func (m *GpuBufferManager) DispatchHiZ(encoder *wgpu.CommandEncoder, sourceDepth
 				Entries: []wgpu.BindGroupEntry{
 					{Binding: 0, TextureView: m.HiZViews[i]},
 					{Binding: 1, TextureView: m.HiZViews[i+1]},
+					{Binding: 2, Buffer: m.CameraBuf, Size: CameraUniformSizeBytes},
 				},
 			})
 			m.HiZBindGroups[i+1] = bg
@@ -354,7 +367,7 @@ func (m *GpuBufferManager) ReadbackHiZ() ([]float32, uint32, uint32) {
 		if len(m.LastHiZData) != int(w*h) {
 			m.LastHiZData = make([]float32, w*h)
 			for i := range m.LastHiZData {
-				m.LastHiZData[i] = 60000.0 // Default to far
+				m.LastHiZData[i] = hiZDefaultFarDepth // Default to far
 			}
 		}
 		m.LastHiZW = w
@@ -381,7 +394,7 @@ func (m *GpuBufferManager) ReadbackHiZ() ([]float32, uint32, uint32) {
 		w, h := m.HiZReadbackWidth, m.HiZReadbackHeight
 		m.LastHiZData = make([]float32, w*h)
 		for i := range m.LastHiZData {
-			m.LastHiZData[i] = 60000.0
+			m.LastHiZData[i] = hiZDefaultFarDepth
 		}
 		m.LastHiZW = w
 		m.LastHiZH = h

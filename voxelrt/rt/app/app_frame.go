@@ -234,7 +234,7 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, sunIntensity, a.Scene.SkyAmbientMix, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height, lightingQuality)
+	a.BufferManager.UpdateCamera(viewProj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, sunIntensity, a.Scene.SkyAmbientMix, a.Camera.FarPlane(), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height, lightingQuality)
 	a.BufferManager.BeginVolumetricFrame()
 	historyBlend := float32(0.7)
 	if fastCameraMotion {

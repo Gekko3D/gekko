@@ -82,7 +82,7 @@ func (f *PlanetBodyFeature) DispatchCommandStage(a *App, stage FeatureCommandSta
 				View:       a.BufferManager.PlanetDepthView,
 				LoadOp:     wgpu.LoadOpClear,
 				StoreOp:    wgpu.StoreOpStore,
-				ClearValue: wgpu.Color{R: 60000.0, G: 0, B: 0, A: 0},
+				ClearValue: wgpu.Color{R: analyticDepthClearValue(a), G: 0, B: 0, A: 0},
 			},
 		},
 	})

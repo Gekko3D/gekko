@@ -90,7 +90,7 @@ func (f *CAVolumeFeature) DispatchCommandStage(a *App, stage FeatureCommandStage
 					View:       a.BufferManager.CAVolumeDepthView,
 					LoadOp:     wgpu.LoadOpClear,
 					StoreOp:    wgpu.StoreOpStore,
-					ClearValue: wgpu.Color{R: volumetricClearDepth, G: 0, B: 0, A: 0},
+					ClearValue: wgpu.Color{R: analyticDepthClearValue(a), G: 0, B: 0, A: 0},
 				},
 			},
 		})

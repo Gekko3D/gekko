@@ -12,6 +12,7 @@ struct CameraData {
   screen_size: vec2<f32>,
   pad2: vec2<f32>,
   ao_quality: vec4<f32>,
+  distance_limits: vec4<f32>,
 };
 
 struct WaterParams {
@@ -58,7 +59,6 @@ struct Hit {
 };
 
 const EPS: f32 = 1e-4;
-const FAR_T: f32 = 60000.0;
 const VOXEL_SIZE: f32 = 0.1;
 const PI: f32 = 3.14159265359;
 
@@ -86,6 +86,18 @@ fn make_ray(uv: vec2<f32>) -> Ray {
     select(dir_ws.z, 1e-5, abs(dir_ws.z) < 1e-5)
   );
   return Ray(camera.cam_pos.xyz, safe_dir, 1.0 / safe_dir);
+}
+
+fn camera_far_t() -> f32 {
+  return max(camera.distance_limits.y, 1.0);
+}
+
+fn camera_far_half() -> f32 {
+  return camera_far_t() * 0.5;
+}
+
+fn scene_depth_has_hit(depth: f32) -> bool {
+  return depth > 0.0 && depth < camera_far_half();
 }
 
 fn intersect_aabb(ray: Ray, min_b: vec3<f32>, max_b: vec3<f32>) -> vec2<f32> {
@@ -195,7 +207,8 @@ fn fs_main(in: VSOut) -> FSOut {
   let t_scene = textureLoad(scene_depth, ipos, 0).r;
   let ray = make_ray(uv_screen);
 
-  var hit = Hit(false, FAR_T, FAR_T, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
+  let far_t = camera_far_t();
+  var hit = Hit(false, far_t, far_t, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
   for (var i: u32 = 0u; i < water_params.header.x; i = i + 1u) {
     let water = waters[i];
     let center = water.bounds.xyz;
@@ -207,7 +220,7 @@ fn fs_main(in: VSOut) -> FSOut {
       continue;
     }
     let t_enter = max(span.x, 0.0);
-    if (t_scene > 0.0 && t_scene < FAR_T * 0.5 && t_enter > t_scene + 0.03) {
+    if (scene_depth_has_hit(t_scene) && t_enter > t_scene + 0.03) {
       continue;
     }
     if (t_enter >= hit.t_enter) {

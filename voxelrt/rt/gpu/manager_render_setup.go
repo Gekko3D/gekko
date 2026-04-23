@@ -51,7 +51,7 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	setupTexture(&m.GBufferDepth, &m.DepthView, "GBuffer Depth", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding, w, h)
 	setupTexture(&m.GBufferNormal, &m.NormalView, "GBuffer Normal", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding, w, h)
 	setupTexture(&m.GBufferMaterial, &m.MaterialView, "GBuffer Material", wgpu.TextureFormatRGBA32Float, wgpu.TextureUsageStorageBinding|wgpu.TextureUsageTextureBinding, w, h)
-	setupTexture(&m.PlanetDepthTex, &m.PlanetDepthView, "Planet Depth", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, w, h)
+	setupTexture(&m.PlanetDepthTex, &m.PlanetDepthView, "Planet Depth", wgpu.TextureFormatR32Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, w, h)
 
 	// Transparent accumulation targets for WBOIT
 	setupTexture(&m.TransparentAccumTex, &m.TransparentAccumView, "Transparent Accum", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, w, h)
@@ -61,10 +61,10 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 	volH := max(1, (h+1)/2)
 	for i := 0; i < 2; i++ {
 		setupTexture(&m.VolumetricTex[i], &m.VolumetricView[i], "Volumetric Color", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
-		setupTexture(&m.VolumetricDepthTex[i], &m.VolumetricDepthView[i], "Volumetric Depth", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
+		setupTexture(&m.VolumetricDepthTex[i], &m.VolumetricDepthView[i], "Volumetric Depth", wgpu.TextureFormatR32Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
 	}
 	setupTexture(&m.CAVolumeColorTex, &m.CAVolumeColorView, "CA Volume Color", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
-	setupTexture(&m.CAVolumeDepthTex, &m.CAVolumeDepthView, "CA Volume Depth", wgpu.TextureFormatR16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
+	setupTexture(&m.CAVolumeDepthTex, &m.CAVolumeDepthView, "CA Volume Depth", wgpu.TextureFormatR32Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
 	m.VolumetricWidth = volW
 	m.VolumetricHeight = volH
 	m.VolumetricHistoryIdx = 0

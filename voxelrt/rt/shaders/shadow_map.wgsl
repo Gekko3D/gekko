@@ -8,6 +8,7 @@ const EPS: f32 = 1e-3;
 const EMPTY_VOXEL: u32 = 0u;
 const BRICK_FLAG_SOLID: u32 = 1u;
 const BRICK_FLAG_UNIFORM_MATERIAL: u32 = 2u;
+const SHADOW_NO_HIT_T: f32 = 1e20;
 
 // ============== STRUCTS ==============
 
@@ -25,6 +26,7 @@ struct CameraData {
     screen_size: vec2<f32>,
     pad2: vec2<f32>,
     ao_quality: vec4<f32>,
+    distance_limits: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -403,7 +405,7 @@ fn should_skip_object_for_light(object_id: u32) -> bool {
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
+    var result = HitResult(false, SHADOW_NO_HIT_T, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
     let ray = transform_ray(ray_ws, inst.world_to_object);
     let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
@@ -530,7 +532,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
 }
 
 fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
+    var result = HitResult(false, SHADOW_NO_HIT_T, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
     if (params.tree64_base == 0xFFFFFFFFu) { return result; }
     let ray = transform_ray(ray_ws, inst.world_to_object);
@@ -596,7 +598,7 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
 }
 
 fn traverse_scene(ray: Ray) -> HitResult {
-    var hit_res = HitResult(false, 60000.0, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
+    var hit_res = HitResult(false, SHADOW_NO_HIT_T, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     var stack: array<i32, 64>;
     var stack_ptr = 0;
     

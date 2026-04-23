@@ -12,6 +12,7 @@ struct CameraData {
     screen_size: vec2<f32>,
     pad2: vec2<f32>,
     ao_quality: vec4<f32>,
+    distance_limits: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
