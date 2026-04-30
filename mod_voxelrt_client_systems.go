@@ -759,6 +759,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync Planet Bodies")
 
+	state.RtApp.Profiler.BeginScope("Sync Astronomical")
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateAstronomicalBodies(buildAstronomicalBodyHosts(cmd))
+	}
+	state.RtApp.Profiler.EndScope("Sync Astronomical")
+
 	state.RtApp.Profiler.BeginScope("Sync Water")
 	if state.RtApp.BufferManager != nil {
 		waterHosts, rippleHosts := buildWaterSurfaceHosts(cmd, waterInteractions)

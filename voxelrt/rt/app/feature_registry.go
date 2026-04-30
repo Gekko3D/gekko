@@ -51,7 +51,7 @@ func (a *App) ensureDefaultFeatures() {
 }
 
 func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
-	defaults := make([]Feature, 0, 8)
+	defaults := make([]Feature, 0, 9)
 	if flags.Text {
 		defaults = append(defaults, &TextFeature{})
 	}
@@ -63,6 +63,9 @@ func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
 	}
 	if flags.CAVolumes {
 		defaults = append(defaults, &CAVolumeFeature{})
+	}
+	if flags.Astronomical {
+		defaults = append(defaults, &AstronomicalFeature{})
 	}
 	if flags.PlanetBodies {
 		defaults = append(defaults, &PlanetBodyFeature{})

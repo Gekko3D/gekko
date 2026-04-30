@@ -197,8 +197,8 @@ fn camera_far_t() -> f32 {
   return max(uCamera.distance_limits.y, 1.0);
 }
 
-fn camera_far_half() -> f32 {
-  return camera_far_t() * 0.5;
+fn finite_depth_limit() -> f32 {
+  return camera_far_t() - max(camera_far_t() * 1e-5, 1e-3);
 }
 
 fn sanitize_scene_depth(depth: f32) -> f32 {
@@ -604,8 +604,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let light_dir = primary_light_dir(ray_origin);
   let light_color = primary_light_color();
   let far_t = camera_far_t();
-  let far_half = camera_far_half();
-  let scene_has_opaque = t_limit < far_half;
+  let finite_limit = finite_depth_limit();
+  let scene_has_opaque = t_limit < finite_limit;
 
   var accum_rgb = vec3<f32>(0.0);
   var accum_a = 0.0;
@@ -717,7 +717,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   }
 
   var out_color = vec4<f32>(current_color, current_trans);
-  if (history_params.params0.w > 0.5 && nearest_t < far_half) {
+  if (history_params.params0.w > 0.5 && nearest_t < finite_limit) {
     let world_pos = reconstruct_world_pos(render_uv, ray_dir, nearest_t);
     let prev_uv = reproject_prev_uv(world_pos);
     if (all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0))) {
@@ -729,7 +729,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       let prev_depth = textureLoad(prev_history_depth, prev_ipos, 0).r;
       let prev_t = length(world_pos - history_params.prev_cam_pos.xyz);
       var history_weight = history_params.params0.z;
-      if (prev_depth > 0.0 && prev_depth < far_half) {
+      if (prev_depth > 0.0 && prev_depth < finite_limit) {
         let depth_delta = abs(prev_depth - prev_t);
         let rejection = saturate(1.0 - depth_delta / (0.005 * max(prev_t, 1.0) + 0.08));
         history_weight *= rejection;
@@ -743,6 +743,6 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     }
   }
 
-  let out_depth = select(nearest_t, far_t, nearest_t >= far_half);
+  let out_depth = select(nearest_t, far_t, nearest_t >= finite_limit);
   return FSOut(out_color, out_depth);
 }

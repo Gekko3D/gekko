@@ -232,12 +232,12 @@ fn camera_far_t() -> f32 {
   return max(camera.distance_limits.y, 1.0);
 }
 
-fn camera_far_half() -> f32 {
-  return camera_far_t() * 0.5;
+fn finite_depth_limit() -> f32 {
+  return camera_far_t() - max(camera_far_t() * 1e-5, 1e-3);
 }
 
 fn scene_depth_has_hit(depth: f32) -> bool {
-  return depth > 0.0 && depth < camera_far_half();
+  return depth > 0.0 && depth < finite_depth_limit();
 }
 
 fn intersect_sphere(origin: vec3<f32>, dir: vec3<f32>, center: vec3<f32>, radius: f32) -> vec2<f32> {

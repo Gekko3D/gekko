@@ -32,6 +32,7 @@ type App struct {
 	WaterPipeline          *wgpu.RenderPipeline
 	CAVolumePipeline       *wgpu.RenderPipeline
 	AnalyticMediumPipeline *wgpu.RenderPipeline
+	AstronomicalPipeline   *wgpu.RenderPipeline
 	PlanetBodyPipeline     *wgpu.RenderPipeline
 	ResolvePipeline        *wgpu.RenderPipeline
 
@@ -116,6 +117,7 @@ type AppFeatureFlags struct {
 	Skybox        bool
 	CAVolumes     bool
 	AnalyticMedia bool
+	Astronomical  bool
 	PlanetBodies  bool
 	Water         bool
 	Transparency  bool
@@ -138,6 +140,7 @@ func DefaultFeatureFlags() AppFeatureFlags {
 		Skybox:        true,
 		CAVolumes:     true,
 		AnalyticMedia: true,
+		Astronomical:  true,
 		PlanetBodies:  true,
 		Water:         true,
 		Transparency:  true,

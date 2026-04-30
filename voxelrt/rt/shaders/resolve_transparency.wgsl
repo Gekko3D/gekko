@@ -61,8 +61,8 @@ fn camera_far_t() -> f32 {
   return max(camera.distance_limits.y, 1.0);
 }
 
-fn camera_far_half() -> f32 {
-  return camera_far_t() * 0.5;
+fn finite_depth_limit() -> f32 {
+  return camera_far_t() - max(camera_far_t() * 1e-5, 1e-3);
 }
 
 fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
@@ -97,9 +97,9 @@ fn combined_opaque_depth(ipos: vec2<i32>) -> f32 {
 }
 
 fn depth_weight(current_depth: f32, sample_depth: f32) -> f32 {
-  let far_half = camera_far_half();
-  let current_finite = current_depth > 0.0 && current_depth < far_half;
-  let sample_finite = sample_depth > 0.0 && sample_depth < far_half;
+  let finite_limit = finite_depth_limit();
+  let current_finite = current_depth > 0.0 && current_depth < finite_limit;
+  let sample_finite = sample_depth > 0.0 && sample_depth < finite_limit;
   if (!current_finite && sample_finite) {
     // Atmosphere/fog against open space should still upsample cleanly.
     return 1.0;
@@ -168,7 +168,7 @@ fn composite_two_layers(base: vec3<f32>, front: vec4<f32>, back: vec4<f32>) -> v
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   // Fetch all inputs via textureLoad with integer pixel coords (no filtering)
-  let far_half = camera_far_half();
+  let finite_limit = finite_depth_limit();
   let dims = textureDimensions(tAccum);
   let ipos = vec2<i32>(
     clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
@@ -183,7 +183,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let vol = sample_halfres_bilateral(ipos, current_depth, tVolume, tVolumeDepth);
   let ca = sample_halfres_bilateral(ipos, current_depth, tCAColor, tCADepth);
   let vol_valid = any(vol.color.rgb > vec3<f32>(1e-4)) || vol.color.a < 0.999;
-  let ca_valid = ca.depth > 0.0 && ca.depth < far_half;
+  let ca_valid = ca.depth > 0.0 && ca.depth < finite_limit;
   var base = copq;
   if (vol_valid && ca_valid) {
     if (ca.depth <= vol.depth) {

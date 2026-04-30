@@ -1024,7 +1024,8 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
 fn get_ray(uv: vec2<f32>) -> Ray {
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let clip = vec4<f32>(ndc, 1.0, 1.0);
-    var view = camera.inv_proj * clip; view = view / view.w;
+    var view = camera.inv_proj * clip;
+    view = view / max(view.w, 1e-6);
     let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
     let origin = camera.cam_pos.xyz;
     let dir = normalize(world_target - origin);
