@@ -44,7 +44,7 @@ func (a *App) setupParticlesPipeline() {
 				Visibility: wgpu.ShaderStageVertex | wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   288, // CameraData size
+					MinBindingSize:   gpu_rt.CameraUniformSizeBytes, // CameraData size
 					HasDynamicOffset: false,
 				},
 			},
@@ -195,7 +195,7 @@ func (a *App) setupSpritesPipeline() {
 				Visibility: wgpu.ShaderStageVertex | wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:           wgpu.BufferBindingTypeUniform,
-					MinBindingSize: 288,
+					MinBindingSize: gpu_rt.CameraUniformSizeBytes,
 				},
 			},
 			{
@@ -335,7 +335,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 				Visibility: wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   288,
+					MinBindingSize:   gpu_rt.CameraUniformSizeBytes,
 					HasDynamicOffset: false,
 				},
 			},
@@ -616,13 +616,22 @@ func (a *App) setupResolvePipeline() {
 		return
 	}
 
-	// Group 0: opaque lit color, accum color, weight, volumetric color, volumetric depth,
-	// scene depth, analytic planet depth, CA color, CA depth
+	// Group 0: camera uniform, opaque lit color, accum color, weight, volumetric color,
+	// volumetric depth, scene depth, analytic planet depth, CA color, CA depth
 	bgl0, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "Resolve BGL0",
 		Entries: []wgpu.BindGroupLayoutEntry{
 			{
 				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeUniform,
+					MinBindingSize:   gpu_rt.CameraUniformSizeBytes,
+					HasDynamicOffset: false,
+				},
+			},
+			{
+				Binding:    1,
 				Visibility: wgpu.ShaderStageFragment,
 				Texture: wgpu.TextureBindingLayout{
 					SampleType:    wgpu.TextureSampleTypeFloat, // RGBA8Unorm
@@ -630,7 +639,7 @@ func (a *App) setupResolvePipeline() {
 				},
 			},
 			{
-				Binding:    1,
+				Binding:    2,
 				Visibility: wgpu.ShaderStageFragment,
 				Texture: wgpu.TextureBindingLayout{
 					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat, // RGBA16Float
@@ -638,18 +647,10 @@ func (a *App) setupResolvePipeline() {
 				},
 			},
 			{
-				Binding:    2,
-				Visibility: wgpu.ShaderStageFragment,
-				Texture: wgpu.TextureBindingLayout{
-					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat, // R16Float
-					ViewDimension: wgpu.TextureViewDimension2D,
-				},
-			},
-			{
 				Binding:    3,
 				Visibility: wgpu.ShaderStageFragment,
 				Texture: wgpu.TextureBindingLayout{
-					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat, // Depth history
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
@@ -687,6 +688,14 @@ func (a *App) setupResolvePipeline() {
 			},
 			{
 				Binding:    8,
+				Visibility: wgpu.ShaderStageFragment,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
+				},
+			},
+			{
+				Binding:    9,
 				Visibility: wgpu.ShaderStageFragment,
 				Texture: wgpu.TextureBindingLayout{
 					SampleType:    wgpu.TextureSampleTypeUnfilterableFloat,
@@ -744,7 +753,7 @@ func (a *App) createResolveBindGroup(layout *wgpu.BindGroupLayout) {
 	if a == nil || a.BufferManager == nil || layout == nil {
 		return
 	}
-	if a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil || a.BufferManager.CurrentVolumetricView() == nil || a.BufferManager.CurrentVolumetricDepthView() == nil || a.BufferManager.DepthView == nil || a.BufferManager.PlanetDepthView == nil || a.BufferManager.CAVolumeColorView == nil || a.BufferManager.CAVolumeDepthView == nil {
+	if a.BufferManager.CameraBuf == nil || a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil || a.BufferManager.CurrentVolumetricView() == nil || a.BufferManager.CurrentVolumetricDepthView() == nil || a.BufferManager.DepthView == nil || a.BufferManager.PlanetDepthView == nil || a.BufferManager.CAVolumeColorView == nil || a.BufferManager.CAVolumeDepthView == nil {
 		// Views not ready yet (e.g., during early init/resize), skip creating BG
 		return
 	}
@@ -752,15 +761,16 @@ func (a *App) createResolveBindGroup(layout *wgpu.BindGroupLayout) {
 	a.ResolveBG, err = a.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Layout: layout,
 		Entries: []wgpu.BindGroupEntry{
-			{Binding: 0, TextureView: a.StorageView},
-			{Binding: 1, TextureView: a.BufferManager.TransparentAccumView},
-			{Binding: 2, TextureView: a.BufferManager.TransparentWeightView},
-			{Binding: 3, TextureView: a.BufferManager.CurrentVolumetricView()},
-			{Binding: 4, TextureView: a.BufferManager.CurrentVolumetricDepthView()},
-			{Binding: 5, TextureView: a.BufferManager.DepthView},
-			{Binding: 6, TextureView: a.BufferManager.PlanetDepthView},
-			{Binding: 7, TextureView: a.BufferManager.CAVolumeColorView},
-			{Binding: 8, TextureView: a.BufferManager.CAVolumeDepthView},
+			{Binding: 0, Buffer: a.BufferManager.CameraBuf, Size: gpu_rt.CameraUniformSizeBytes},
+			{Binding: 1, TextureView: a.StorageView},
+			{Binding: 2, TextureView: a.BufferManager.TransparentAccumView},
+			{Binding: 3, TextureView: a.BufferManager.TransparentWeightView},
+			{Binding: 4, TextureView: a.BufferManager.CurrentVolumetricView()},
+			{Binding: 5, TextureView: a.BufferManager.CurrentVolumetricDepthView()},
+			{Binding: 6, TextureView: a.BufferManager.DepthView},
+			{Binding: 7, TextureView: a.BufferManager.PlanetDepthView},
+			{Binding: 8, TextureView: a.BufferManager.CAVolumeColorView},
+			{Binding: 9, TextureView: a.BufferManager.CAVolumeDepthView},
 		},
 	})
 	if err != nil {

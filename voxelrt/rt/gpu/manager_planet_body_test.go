@@ -36,6 +36,7 @@ func TestBuildPlanetBodyRecordsPreservesStableLayout(t *testing.T) {
 			DiffuseStrength:  1.3,
 			SpecularStrength: 0.4,
 			RimStrength:      0.5,
+			EmissionStrength: 1.75,
 			AtmosphereColor:  [3]float32{0.77, 0.88, 0.99},
 		},
 	})
@@ -69,6 +70,9 @@ func TestBuildPlanetBodyRecordsPreservesStableLayout(t *testing.T) {
 	}
 	if got := records[0].Style[3]; got != 0.5 {
 		t.Fatalf("expected rim strength 0.5, got %v", got)
+	}
+	if got := records[0].Emission[0]; got != 1.75 {
+		t.Fatalf("expected emission strength 1.75, got %v", got)
 	}
 	if got := records[0].Band4[0]; got != 0.41 {
 		t.Fatalf("expected band4 red 0.41, got %v", got)

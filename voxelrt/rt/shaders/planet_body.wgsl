@@ -1,4 +1,3 @@
-const FAR_T: f32 = 60000.0;
 const PI: f32 = 3.14159265359;
 
 struct CameraData {
@@ -15,6 +14,7 @@ struct CameraData {
   screen_size: vec2<f32>,
   pad2: vec2<f32>,
   ao_quality: vec4<f32>,
+  distance_limits: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -47,6 +47,7 @@ struct PlanetRecord {
   surface: vec4<f32>,
   noise: vec4<f32>,
   style: vec4<f32>,
+  emission: vec4<f32>,
   bake_meta: vec4<u32>,
   band0: vec4<f32>,
   band1: vec4<f32>,
@@ -227,13 +228,25 @@ fn make_ray(uv: vec2<f32>) -> vec3<f32> {
   return normalize(world_target - camera.cam_pos.xyz);
 }
 
+fn camera_far_t() -> f32 {
+  return max(camera.distance_limits.y, 1.0);
+}
+
+fn finite_depth_limit() -> f32 {
+  return camera_far_t() - max(camera_far_t() * 1e-5, 1e-3);
+}
+
+fn scene_depth_has_hit(depth: f32) -> bool {
+  return depth > 0.0 && depth < finite_depth_limit();
+}
+
 fn intersect_sphere(origin: vec3<f32>, dir: vec3<f32>, center: vec3<f32>, radius: f32) -> vec2<f32> {
   let oc = origin - center;
   let b = dot(oc, dir);
   let c = dot(oc, oc) - radius * radius;
   let h = b * b - c;
   if (h < 0.0) {
-    return vec2<f32>(FAR_T, -FAR_T);
+    return vec2<f32>(camera_far_t(), -camera_far_t());
   }
   let s = sqrt(h);
   return vec2<f32>(-b - s, -b + s);
@@ -653,7 +666,7 @@ fn trace_planet_surface(planet: PlanetRecord, ray_origin: vec3<f32>, ray_dir: ve
     prev_eval = eval;
   }
 
-  return PlanetTraceHit(FAR_T, 0.0, 0.0, 0.0, 0.0);
+  return PlanetTraceHit(camera_far_t(), 0.0, 0.0, 0.0, 0.0);
 }
 
 fn planet_band_color(planet: PlanetRecord, band: i32) -> vec3<f32> {
@@ -820,7 +833,8 @@ fn fs_main(in: VSOut) -> FSOut {
   let ray_dir = make_ray(uv);
   let scene_t = textureLoad(scene_depth, ipos, 0).r;
 
-  var best_t = FAR_T;
+  let far_t = camera_far_t();
+  var best_t = far_t;
   var best_color = vec3<f32>(0.0);
   var hit_any = false;
 
@@ -835,16 +849,16 @@ fn fs_main(in: VSOut) -> FSOut {
     }
 
     let candidate_t = max(outer_hit.x, 0.0);
-    if (scene_t > 0.0 && scene_t < FAR_T * 0.5 && candidate_t > scene_t + 0.05) {
+    if (scene_depth_has_hit(scene_t) && candidate_t > scene_t + 0.05) {
       continue;
     }
 
     let surface_hit = trace_planet_surface(planet, camera.cam_pos.xyz, ray_dir, candidate_t, outer_hit.y);
     let t_hit = surface_hit.t;
-    if (t_hit >= best_t || t_hit >= FAR_T) {
+    if (t_hit >= best_t || t_hit >= far_t) {
       continue;
     }
-    if (scene_t > 0.0 && scene_t < FAR_T * 0.5 && t_hit > scene_t + 0.05) {
+    if (scene_depth_has_hit(scene_t) && t_hit > scene_t + 0.05) {
       continue;
     }
     let hit_pos = camera.cam_pos.xyz + ray_dir * t_hit;
@@ -877,7 +891,12 @@ fn fs_main(in: VSOut) -> FSOut {
     let spec_tint = mix(mix(base_color, light_color, surface_material.spec_tint_mix), vec3<f32>(1.0), surface_material.white_spec_mix);
     let rim_tint = mix(base_color, planet.atmosphere.xyz, 0.65);
     let rim_scale = surface_material.rim_scale;
-    let lit = base_color * (ambient + diffuse * light_color) + spec * spec_tint + rim_tint * rim * atmosphere_mix * rim_scale;
+    let emissive_strength = max(planet.emission.x, 0.0);
+    let core_view = pow(saturate(dot(world_normal, view_dir) * 0.5 + 0.5), 1.6);
+    let emissive_core = mix(base_color, planet.band5.xyz, 0.5 + 0.35 * core_view);
+    let emissive_glow = mix(base_color, planet.atmosphere.xyz, 0.7);
+    let emission = (emissive_core * (0.7 + 0.6 * core_view) + emissive_glow * (0.35 + 0.65 * rim)) * emissive_strength;
+    let lit = base_color * (ambient + diffuse * light_color) + spec * spec_tint + rim_tint * rim * atmosphere_mix * rim_scale + emission;
 
     best_t = t_hit;
     best_color = clamp(compress_planet_highlights(max(lit, vec3<f32>(0.0))), vec3<f32>(0.0), vec3<f32>(1.0));

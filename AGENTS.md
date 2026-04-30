@@ -9,6 +9,62 @@ This workspace is a Go game-engine umbrella, not a single top-level Git repo. Th
 - `examples/testing/`: low-level rendering sample
 - `examples/testing-vox/`: voxel scene sample
 
+## Agent-Driven Workflow
+
+Use a collaboration-first workflow for non-trivial work. The goal is to let an agent classify the task, choose the smallest safe verification pass, and leave behind a reviewable handoff artifact when scope or risk is not obviously small.
+
+Start with these repo-local sources of truth:
+
+- [`base/skills-manifest.md`](/Users/ddevidch/code/go/gekko3d/gekko/base/skills-manifest.md): request normalization, routing rules, confidence thresholds, and expected artifacts
+- [`docs/workflows/agent-task-loop.md`](/Users/ddevidch/code/go/gekko3d/gekko/docs/workflows/agent-task-loop.md): what to read first, which invariants to name, and how to pick verification
+- [`docs/workflows/status-report.md`](/Users/ddevidch/code/go/gekko3d/gekko/docs/workflows/status-report.md): when to write a status report and the canonical template
+
+### Confidence Gate
+
+Run a quick confidence gate before broad edits.
+
+- High:
+  - proceed after reading the owning docs and selecting the smallest verification command
+- Medium:
+  - narrow the scope, write down assumptions, and create a status report before broad changes
+- Low:
+  - stop and ask for alignment before implementation
+
+Use this template in notes, a status report, or the task handoff:
+
+- Confidence: `High | Medium | Low`
+- Why:
+  - uncertainty sources
+- Key assumptions:
+  - what you believe is true about ownership or invariants
+- What would raise confidence:
+  - docs to read, tests to run, or files to inspect
+- SME alignment required?:
+  - `Yes | No`
+
+### When A Status Report Is Required
+
+Write a report under `reports/` when any of these apply:
+
+- the task crosses engine and consumer modules
+- the change affects shared schemas, runtime contracts, or verification policy
+- the direction is still ambiguous after the first doc/code read
+- the work may be paused, handed off, or reviewed asynchronously before merge
+
+Use the naming convention:
+
+- `reports/<YYYY-MM-DD>-<topic>-status.md`
+
+### Expected Handoff
+
+For any non-trivial task, the final handoff should leave the next reviewer or agent with:
+
+- the primary owner bucket and affected consumers
+- the invariant that was preserved or intentionally changed
+- the exact verification commands that were run
+- anything intentionally not verified
+- links to updated docs when behavior or workflow expectations changed
+
 ## First Things To Know
 
 - Run Git commands inside a module directory such as `gekko/` or `gekko-editor/`. The workspace root has no `.git` directory.

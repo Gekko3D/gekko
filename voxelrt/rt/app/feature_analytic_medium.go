@@ -5,7 +5,15 @@ import "github.com/cogentcore/webgpu/wgpu"
 // AnalyticMediumFeature owns the bounded analytic medium accumulation pass.
 type AnalyticMediumFeature struct{}
 
-const volumetricClearDepth = 60000.0
+func analyticDepthClearValue(a *App) float64 {
+	if a != nil && a.Camera != nil {
+		far := float64(a.Camera.FarPlane())
+		if far > 0 {
+			return far
+		}
+	}
+	return 1e20
+}
 
 func (f *AnalyticMediumFeature) Name() string {
 	return "analytic-media"
@@ -91,7 +99,7 @@ func (f *AnalyticMediumFeature) DispatchCommandStage(a *App, stage FeatureComman
 						View:       a.BufferManager.CurrentVolumetricDepthView(),
 						LoadOp:     wgpu.LoadOpClear,
 						StoreOp:    wgpu.StoreOpStore,
-						ClearValue: wgpu.Color{R: volumetricClearDepth, G: 0, B: 0, A: 0},
+						ClearValue: wgpu.Color{R: analyticDepthClearValue(a), G: 0, B: 0, A: 0},
 					},
 				},
 			})
@@ -112,7 +120,7 @@ func (f *AnalyticMediumFeature) DispatchCommandStage(a *App, stage FeatureComman
 				View:       a.BufferManager.CurrentVolumetricDepthView(),
 				LoadOp:     wgpu.LoadOpClear,
 				StoreOp:    wgpu.StoreOpStore,
-				ClearValue: wgpu.Color{R: volumetricClearDepth, G: 0, B: 0, A: 0},
+				ClearValue: wgpu.Color{R: analyticDepthClearValue(a), G: 0, B: 0, A: 0},
 			},
 		},
 	})

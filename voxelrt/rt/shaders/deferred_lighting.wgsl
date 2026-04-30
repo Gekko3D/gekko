@@ -16,6 +16,7 @@ struct CameraData {
     screen_size: vec2<f32>,
     pad2: vec2<f32>,
     ao_quality: vec4<f32>, // x: AO sample count, y: AO radius, z: directional shadow softness, w: spot shadow softness
+    distance_limits: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -34,6 +35,10 @@ struct Light {
     inv_view_proj: mat4x4<f32>,
     directional_cascades: array<DirectionalShadowCascade, 2>,
 };
+
+fn camera_far_t() -> f32 {
+    return max(camera.distance_limits.y, 1.0);
+}
 
 struct DirectionalCascadeSelection {
     primary_index: u32,
@@ -575,7 +580,8 @@ fn sample_specular_sky_ambient(normal: vec3<f32>, view_dir: vec3<f32>, roughness
 fn get_ray(uv: vec2<f32>) -> Ray {
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let clip = vec4<f32>(ndc, 1.0, 1.0);
-    var view = camera.inv_proj * clip; view = view / view.w;
+    var view = camera.inv_proj * clip;
+    view = view / max(view.w, 1e-6);
     let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
     let origin = camera.cam_pos.xyz;
     let dir = normalize(world_target - origin);
@@ -608,7 +614,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let depth_data = textureLoad(in_depth, global_id.xy, 0);
     let depth = depth_data.r;
-    if (depth >= 50000.0) {
+    if (depth >= camera_far_t()) {
         let ray = get_ray(uv);
         let sky_uv = dir_to_uv(ray.dir);
         let sky_sample = textureSampleLevel(in_skybox, skybox_sampler, sky_uv, 0.0);

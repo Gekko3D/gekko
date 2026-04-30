@@ -1,0 +1,20 @@
+# Gekko Engine
+# AI Code Assist Rules for Cline
+
+Read these before editing:
+
+1. `.ai/context.md`
+2. `.ai/conventions.md`
+3. `AGENTS.md`
+4. `base/skills-manifest.md`
+
+Core rules:
+
+- Use the smallest matching verification command; do not default to `go test ./...`.
+- Run Go commands from `/Users/ddevidch/code/go/gekko3d/gekko` and prefer `env GOCACHE=/tmp/gekko3d-gocache ...`.
+- Create a task context in `.ai/features/` for non-trivial work.
+- If confidence is not `High`, narrow scope or write a status report in `reports/`.
+- Update canonical docs when behavior or workflow expectations change.
+- Do not overwrite unrelated user changes in a dirty worktree.
+- Do not push or open PRs without an explicit user request.
+

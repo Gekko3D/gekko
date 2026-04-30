@@ -833,10 +833,10 @@ func IsOccluded(aabb [2]mgl32.Vec3, hizData []float32, w, h uint32, viewProj mgl
 	// 20 > 10. Occluded? YES.
 
 	// Check 2:
-	// Occluder (Wall) with hole. Wall is at 10. Hole is empty (depth 60000).
-	// HiZ max = 60000 (because MAX reduction).
+	// Occluder (Wall) with hole. Wall is at 10. Hole is empty (depth = scene far).
+	// HiZ max = scene far (because MAX reduction).
 	// Object at 20.
-	// 20 > 60000? NO. Visible.
+	// 20 > scene far? NO. Visible.
 	// Correct.
 
 	// Tolerance?

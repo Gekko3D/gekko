@@ -54,6 +54,7 @@ type AssetServer struct {
 	meshes         map[AssetId]MeshAsset
 	materials      map[AssetId]MaterialAsset
 	textures       map[AssetId]TextureAsset
+	textureKeys    map[string]AssetId
 	samplers       map[AssetId]SamplerAsset
 	voxModels      map[AssetId]VoxelGeometryAsset
 	voxModelKeys   map[string]AssetId
@@ -69,6 +70,7 @@ func (AssetServerModule) Install(app *App, cmd *Commands) {
 		meshes:         make(map[AssetId]MeshAsset),
 		materials:      make(map[AssetId]MaterialAsset),
 		textures:       make(map[AssetId]TextureAsset),
+		textureKeys:    make(map[string]AssetId),
 		samplers:       make(map[AssetId]SamplerAsset),
 		voxModels:      make(map[AssetId]VoxelGeometryAsset),
 		voxModelKeys:   make(map[string]AssetId),

@@ -40,6 +40,7 @@ type PlanetBodyComponent struct {
 	DiffuseStrength  float32
 	SpecularStrength float32
 	RimStrength      float32
+	EmissionStrength float32
 
 	TerrainLowColor     [3]float32
 	TerrainHighColor    [3]float32
@@ -265,6 +266,16 @@ func (p *PlanetBodyComponent) NormalizedRimStrength() float32 {
 		return 4
 	}
 	return p.RimStrength
+}
+
+func (p *PlanetBodyComponent) NormalizedEmissionStrength() float32 {
+	if p == nil || p.EmissionStrength <= 0 {
+		return 0
+	}
+	if p.EmissionStrength > 4 {
+		return 4
+	}
+	return p.EmissionStrength
 }
 
 func (p *PlanetBodyComponent) NormalizedTerrainLowColor() [3]float32 {

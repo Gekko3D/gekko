@@ -28,6 +28,7 @@ struct CameraData {
     screen_size: vec2<f32>,
     pad2: vec2<f32>,
     ao_quality: vec4<f32>,
+    distance_limits: vec4<f32>,
 };
 
 struct Instance {
@@ -169,6 +170,10 @@ struct ObjectLookupEntry {
 @group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;
 
 // ============== HELPERS ==============
+
+fn camera_far_t() -> f32 {
+    return max(camera.distance_limits.y, 1.0);
+}
 
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
     if (idx < 32u) {
@@ -775,7 +780,7 @@ fn transform_ray(ray: Ray, mat: mat4x4<f32>) -> Ray {
 }
 
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
+    var result = HitResult(false, camera_far_t(), 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
     let params = object_params[object_id];
     let ray = transform_ray(ray_ws, inst.world_to_object);
     let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
@@ -931,7 +936,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
 }
 
 fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
-    var result = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
+    var result = HitResult(false, camera_far_t(), 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
     let params = object_params[object_id];
     if (params.tree64_base == 0xFFFFFFFFu) { return result; }
     let ray = transform_ray(ray_ws, inst.world_to_object);
@@ -1019,7 +1024,8 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
 fn get_ray(uv: vec2<f32>) -> Ray {
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let clip = vec4<f32>(ndc, 1.0, 1.0);
-    var view = camera.inv_proj * clip; view = view / view.w;
+    var view = camera.inv_proj * clip;
+    view = view / max(view.w, 1e-6);
     let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
     let origin = camera.cam_pos.xyz;
     let dir = normalize(world_target - origin);
@@ -1038,7 +1044,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ray = get_ray(uv);
     
     // Trace scene via BVH
-    var hit_res = HitResult(false, 60000.0, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
+    let far_t = camera_far_t();
+    var hit_res = HitResult(false, far_t, 0u, 0u, vec3<f32>(0.0), 1.0, vec3<f32>(0.0), 0u, 0u, 0.0);
     
     var stack: array<i32, 64>;
     var stack_ptr = 0;
@@ -1090,7 +1097,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let mat_idx = mat_base + palette_idx * 4u;
         let pbr = materials[mat_idx + 2u]; // x=roughness, y=metalness, z=ior, w=transparency
         if (pbr.w > 0.001) {
-            textureStore(out_depth, global_id.xy, vec4<f32>(60000.0, 0.0, 0.0, 0.0));
+            textureStore(out_depth, global_id.xy, vec4<f32>(far_t, 0.0, 0.0, 0.0));
             textureStore(out_normal, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
             textureStore(out_material, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
             return;
@@ -1101,7 +1108,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let packed_shadow_group = hit_res.shadow_group_id * 2u + hit_res.two_sided_lighting;
         textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), f32(packed_shadow_group), hit_res.shadow_seam_epsilon, f32(hit_res.material_idx)));
     } else {
-        textureStore(out_depth, global_id.xy, vec4<f32>(100000.0, 0.0, 0.0, 0.0));
+        textureStore(out_depth, global_id.xy, vec4<f32>(far_t, 0.0, 0.0, 0.0));
         textureStore(out_normal, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         textureStore(out_material, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
     }

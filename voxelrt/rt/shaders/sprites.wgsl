@@ -15,6 +15,7 @@ struct CameraData {
     screen_size: vec2<f32>,
     pad2: vec2<u32>,
     ao_quality: vec4<f32>,
+    distance_limits: vec4<f32>,
 };
 
 struct SpriteInstance {
@@ -57,6 +58,14 @@ fn get_camera_right() -> vec3<f32> {
 
 fn get_camera_up() -> vec3<f32> {
     return normalize(camera.inv_view[1].xyz);
+}
+
+fn raster_clip_pos(world_pos: vec3<f32>) -> vec4<f32> {
+    var clip_pos = camera.view_proj * vec4<f32>(world_pos, 1.0);
+    // CameraState emits GL-style clip Z in [-w, +w]. WebGPU raster pipelines
+    // expect clip Z in [0, +w], including when reverse-z is active.
+    clip_pos.z = clip_pos.z * 0.5 + clip_pos.w * 0.5;
+    return clip_pos;
 }
 
 @vertex
@@ -107,7 +116,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
         }
 
         let world_pos = inst.pos + (r * corner.x * inst.size.x + u * corner.y * inst.size.y);
-        out.position = camera.view_proj * vec4<f32>(world_pos, 1.0);
+        out.position = raster_clip_pos(world_pos);
         out.world_pos = world_pos;
     }
 
@@ -130,7 +139,8 @@ fn fs_main(in: VSOut) -> FSOut {
     let sprite_uv = vec2<f32>(sprite_x, sprite_y) + in.quad_uv * vec2<f32>(col_w, row_h);
     let atlas_color = textureSample(atlas_tex, atlas_sampler, sprite_uv);
 
-    var alpha = in.color.a * atlas_color.a;
+    let tex_alpha = atlas_color.a;
+    var alpha = in.color.a * tex_alpha;
     if (in.alpha_mode == 1u) {
         alpha = in.color.a * max(atlas_color.r, max(atlas_color.g, atlas_color.b));
     }
@@ -157,7 +167,16 @@ fn fs_main(in: VSOut) -> FSOut {
         }
     }
 
-    var final_rgb = in.color.rgb * atlas_color.rgb;
+    var sampled_rgb = atlas_color.rgb;
+    if (in.alpha_mode == 0u && tex_alpha > 1e-3) {
+        // Sprite atlases are stored as straight-alpha textures. When the GPU
+        // linearly filters distant sprites, both RGB and alpha are averaged.
+        // If we then multiply by alpha again below, silhouettes darken toward
+        // gray/black at distance. Undo the filtered premultiplication here.
+        sampled_rgb = clamp(atlas_color.rgb / tex_alpha, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
+    var final_rgb = in.color.rgb * sampled_rgb;
     
     // Simple Lighting for world sprites
     if (in.is_ui == 0u && in.is_unlit == 0u) {
@@ -184,7 +203,7 @@ fn fs_main(in: VSOut) -> FSOut {
         // their screen projection overlaps nearby opaque geometry.
         let depth_norm = clamp(t_pixel / 160.0, 0.0, 1.0);
         let k: f32 = 4.0;
-        weight = max(1e-3, alpha) * pow(1.0 - depth_norm, k);
+        weight = max(1e-3, alpha * pow(1.0 - depth_norm, k));
     }
 
     var out: FSOut;

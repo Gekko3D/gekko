@@ -1,4 +1,3 @@
-const FAR_T: f32 = 60000.0;
 const PI: f32 = 3.14159265359;
 
 struct CameraData {
@@ -15,6 +14,7 @@ struct CameraData {
   screen_size: vec2<f32>,
   pad2: vec2<f32>,
   ao_quality: vec4<f32>,
+  distance_limits: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -193,6 +193,30 @@ fn get_ray_from_uv(uv: vec2<f32>) -> vec3<f32> {
   return normalize(world_target - uCamera.cam_pos.xyz);
 }
 
+fn camera_far_t() -> f32 {
+  return max(uCamera.distance_limits.y, 1.0);
+}
+
+fn finite_depth_limit() -> f32 {
+  return camera_far_t() - max(camera_far_t() * 1e-5, 1e-3);
+}
+
+fn sanitize_scene_depth(depth: f32) -> f32 {
+  let far_t = camera_far_t();
+  if (depth > 0.0 && depth < far_t) {
+    return depth;
+  }
+  return far_t;
+}
+
+fn sanitize_planet_depth(depth: f32) -> f32 {
+  let far_t = camera_far_t();
+  if (depth > 0.0 && depth < far_t) {
+    return depth;
+  }
+  return far_t;
+}
+
 fn reconstruct_world_pos(uv: vec2<f32>, ray_dir: vec3<f32>, t_depth: f32) -> vec3<f32> {
   _ = uv;
   return uCamera.cam_pos.xyz + ray_dir * t_depth;
@@ -213,7 +237,7 @@ fn intersect_sphere(origin: vec3<f32>, dir: vec3<f32>, center: vec3<f32>, radius
   let c = dot(oc, oc) - radius * radius;
   let h = b * b - c;
   if (h < 0.0) {
-    return vec2<f32>(FAR_T, -FAR_T);
+    return vec2<f32>(camera_far_t(), -camera_far_t());
   }
   let s = sqrt(h);
   return vec2<f32>(-b - s, -b + s);
@@ -286,15 +310,16 @@ fn medium_characteristic_thickness(m: MediumRecord) -> f32 {
 }
 
 fn intersect_box_local(origin: vec3<f32>, dir: vec3<f32>, half_extents: vec3<f32>) -> vec2<f32> {
-  var tmin = -FAR_T;
-  var tmax = FAR_T;
+  let far_t = camera_far_t();
+  var tmin = -far_t;
+  var tmax = far_t;
   for (var axis = 0; axis < 3; axis = axis + 1) {
     let o = origin[axis];
     let d = dir[axis];
     let e = half_extents[axis];
     if (abs(d) < 1e-5) {
       if (o < -e || o > e) {
-        return vec2<f32>(FAR_T, -FAR_T);
+        return vec2<f32>(far_t, -far_t);
       }
       continue;
     }
@@ -309,7 +334,7 @@ fn intersect_box_local(origin: vec3<f32>, dir: vec3<f32>, half_extents: vec3<f32
     tmin = max(tmin, t1);
     tmax = min(tmax, t2);
     if (tmax < tmin) {
-      return vec2<f32>(FAR_T, -FAR_T);
+      return vec2<f32>(far_t, -far_t);
     }
   }
   return vec2<f32>(tmin, tmax);
@@ -408,19 +433,12 @@ fn first_positive_hit(hit: vec2<f32>) -> f32 {
   if (hit.y >= 0.0) {
     return hit.y;
   }
-  return FAR_T;
-}
-
-fn sanitize_opaque_depth(depth: f32) -> f32 {
-  if (depth > 0.0 && depth < FAR_T) {
-    return depth;
-  }
-  return FAR_T;
+  return camera_far_t();
 }
 
 fn nearest_opaque_depth(ipos: vec2<i32>) -> f32 {
-  let scene_t = sanitize_opaque_depth(textureLoad(in_depth, ipos, 0).r);
-  let planet_t = sanitize_opaque_depth(textureLoad(planet_depth, ipos, 0).r);
+  let scene_t = sanitize_scene_depth(textureLoad(in_depth, ipos, 0).r);
+  let planet_t = sanitize_planet_depth(textureLoad(planet_depth, ipos, 0).r);
   return min(scene_t, planet_t);
 }
 
@@ -585,12 +603,14 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let ambient = uCamera.ambient_color.xyz;
   let light_dir = primary_light_dir(ray_origin);
   let light_color = primary_light_color();
-  let scene_has_opaque = t_limit < FAR_T * 0.5;
+  let far_t = camera_far_t();
+  let finite_limit = finite_depth_limit();
+  let scene_has_opaque = t_limit < finite_limit;
 
   var accum_rgb = vec3<f32>(0.0);
   var accum_a = 0.0;
   var accum_w = 0.0;
-  var nearest_t = FAR_T;
+  var nearest_t = far_t;
 
   let count = min(medium_params.medium_count, arrayLength(&media));
   for (var i = 0u; i < count; i = i + 1u) {
@@ -697,7 +717,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   }
 
   var out_color = vec4<f32>(current_color, current_trans);
-  if (history_params.params0.w > 0.5 && nearest_t < FAR_T * 0.5) {
+  if (history_params.params0.w > 0.5 && nearest_t < finite_limit) {
     let world_pos = reconstruct_world_pos(render_uv, ray_dir, nearest_t);
     let prev_uv = reproject_prev_uv(world_pos);
     if (all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0))) {
@@ -709,7 +729,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       let prev_depth = textureLoad(prev_history_depth, prev_ipos, 0).r;
       let prev_t = length(world_pos - history_params.prev_cam_pos.xyz);
       var history_weight = history_params.params0.z;
-      if (prev_depth > 0.0 && prev_depth < FAR_T * 0.5) {
+      if (prev_depth > 0.0 && prev_depth < finite_limit) {
         let depth_delta = abs(prev_depth - prev_t);
         let rejection = saturate(1.0 - depth_delta / (0.005 * max(prev_t, 1.0) + 0.08));
         history_weight *= rejection;
@@ -723,6 +743,6 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
     }
   }
 
-  let out_depth = select(nearest_t, FAR_T, nearest_t >= FAR_T * 0.5);
+  let out_depth = select(nearest_t, far_t, nearest_t >= finite_limit);
   return FSOut(out_color, out_depth);
 }

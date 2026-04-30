@@ -40,6 +40,12 @@ Important files:
 - `mod_physics_collision.go`
 - `mod_vox_physics.go`
 
+Large-world contract:
+
+- physics simulates local `float32` space only
+- authoritative large-world coordinates are not a physics concern inside `gekko`
+- games that need star-system-scale precision should keep authoritative state outside physics, project bodies into a local frame, then sync dynamic results back into authoritative coordinates explicitly
+
 ## Stage Ownership
 
 `PhysicsModule` installs:
@@ -195,6 +201,8 @@ In practice:
   - dt handling or clamping assumptions changed
 - collision events duplicate or disappear
   - proxy buffering or pair-tracking changed
+- large-world scene looks correct but physics/gameplay queries are wrong after a rebase
+  - local transforms were reprojected but local-space caches such as AABBs or the spatial grid were not refreshed in the same frame
 
 ## Verification Strategy
 

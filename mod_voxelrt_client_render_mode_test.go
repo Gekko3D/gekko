@@ -31,3 +31,19 @@ func TestCycleRenderModeWraps(t *testing.T) {
 		t.Fatalf("expected light density -> lit wrap, got %v", got)
 	}
 }
+
+func TestParseVoxelRtDepthModeAcceptsKnownModes(t *testing.T) {
+	got, err := ParseVoxelRtDepthMode("reverse-z")
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if got != VoxelRtDepthModeReverseZ {
+		t.Fatalf("expected reverse-z depth mode, got %q", got)
+	}
+}
+
+func TestParseVoxelRtDepthModeRejectsUnknownModes(t *testing.T) {
+	if _, err := ParseVoxelRtDepthMode("log-z"); err == nil {
+		t.Fatal("expected invalid depth mode to fail")
+	}
+}

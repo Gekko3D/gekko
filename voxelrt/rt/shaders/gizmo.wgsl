@@ -24,6 +24,7 @@ struct CameraUniform {
     screen_size: vec2<f32>,
     pad2: vec2<u32>,
     ao_quality: vec4<f32>,
+    distance_limits: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -37,6 +38,10 @@ struct VertexOutput {
     @location(1) dist: f32,
 }
 
+fn camera_far_t() -> f32 {
+    return max(camera.distance_limits.y, 1.0);
+}
+
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     let instance_matrix = mat4x4<f32>(
@@ -48,7 +53,12 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
     var out: VertexOutput;
     let world_pos = instance_matrix * vec4<f32>(in.position, 1.0);
-    out.position = camera.view_proj * world_pos;
+    // CameraState currently produces GL-style clip Z in [-w, +w].
+    // Raster pipelines in WGSL/WebGPU expect clip Z in [0, +w], so convert here
+    // before line rasterization and fragment-stage depth comparisons.
+    var clip_pos = camera.view_proj * world_pos;
+    clip_pos.z = clip_pos.z * 0.5 + clip_pos.w * 0.5;
+    out.position = clip_pos;
     out.color = in.inst_color;
     // Calculate distance from camera for depth testing
     out.dist = distance(camera.cam_pos.xyz, world_pos.xyz);
@@ -61,8 +71,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // in.position.xy are screen coordinates (pixels)
     let depth_val = textureLoad(depth_tex, vec2<i32>(in.position.xy), 0).r;
     
-    // If the G-Buffer has a hit (depth < 60000) and it's closer than us, discard
-    if (depth_val < 50000.0 && depth_val < in.dist - 0.1) {
+    // If the G-Buffer has a finite hit and it's closer than us, discard.
+    if (depth_val > 0.0 && depth_val < camera_far_t() && depth_val < in.dist - 0.1) {
         discard;
     }
 

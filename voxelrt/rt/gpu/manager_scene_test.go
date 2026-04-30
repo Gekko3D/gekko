@@ -27,6 +27,7 @@ func TestBuildCameraUniformDataPacksExpectedMatrices(t *testing.T) {
 		mgl32.Vec3{0.1, 0.2, 0.3},
 		0.7,
 		0.8,
+		4200,
 		11,
 		12,
 		13,
@@ -58,6 +59,12 @@ func TestBuildCameraUniformDataPacksExpectedMatrices(t *testing.T) {
 	}
 	if got := floatAt(buf, 284); got != 0.4 {
 		t.Fatalf("expected spot shadow softness 0.4 at offset 284, got %v", got)
+	}
+	if got := floatAt(buf, 288); got != 4200 {
+		t.Fatalf("expected far plane 4200 at offset 288, got %v", got)
+	}
+	if got := floatAt(buf, 292); got != 4200 {
+		t.Fatalf("expected analytic far distance 4200 at offset 292, got %v", got)
 	}
 }
 

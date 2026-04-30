@@ -88,13 +88,27 @@ func TestEnsureDefaultFeaturesRespectsConfig(t *testing.T) {
 		t.Fatal("expected default features to be registered")
 	}
 	foundWater := false
+	foundAstronomical := false
 	foundPlanetBodies := false
+	foundAnalyticMedia := false
+	astronomicalIndex := -1
+	planetBodiesIndex := -1
+	analyticMediaIndex := -1
 	for _, feature := range app.features {
 		if feature != nil && feature.Name() == "water" {
 			foundWater = true
 		}
+		if feature != nil && feature.Name() == "astronomical" {
+			foundAstronomical = true
+			astronomicalIndex = indexOfFeature(app.features, feature.Name())
+		}
 		if feature != nil && feature.Name() == "planet-bodies" {
 			foundPlanetBodies = true
+			planetBodiesIndex = indexOfFeature(app.features, feature.Name())
+		}
+		if feature != nil && feature.Name() == "analytic-media" {
+			foundAnalyticMedia = true
+			analyticMediaIndex = indexOfFeature(app.features, feature.Name())
 		}
 	}
 	if !foundWater {
@@ -103,12 +117,33 @@ func TestEnsureDefaultFeaturesRespectsConfig(t *testing.T) {
 	if !foundPlanetBodies {
 		t.Fatal("expected planet body feature to be registered by default")
 	}
+	if !foundAstronomical {
+		t.Fatal("expected astronomical feature to be registered by default")
+	}
+	if !foundAnalyticMedia {
+		t.Fatal("expected analytic media feature to be registered by default")
+	}
+	if astronomicalIndex < 0 || planetBodiesIndex < 0 || astronomicalIndex > planetBodiesIndex {
+		t.Fatalf("expected astronomical feature before planet bodies, got astronomical=%d planet-bodies=%d", astronomicalIndex, planetBodiesIndex)
+	}
+	if planetBodiesIndex < 0 || analyticMediaIndex < 0 || planetBodiesIndex > analyticMediaIndex {
+		t.Fatalf("expected planet bodies before analytic media, got planet-bodies=%d analytic-media=%d", planetBodiesIndex, analyticMediaIndex)
+	}
 
 	noDefaults := &App{FeatureConfig: AppFeatureConfig{AutoRegisterDefaults: false}}
 	noDefaults.ensureDefaultFeatures()
 	if len(noDefaults.features) != 0 {
 		t.Fatalf("expected no default features, got %d", len(noDefaults.features))
 	}
+}
+
+func indexOfFeature(features []Feature, name string) int {
+	for i, feature := range features {
+		if feature != nil && feature.Name() == name {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestEnsureDefaultFeaturesPrependsCustomRegistrations(t *testing.T) {

@@ -6,7 +6,6 @@
 const SECTOR_SIZE: f32 = 32.0;
 const BRICK_SIZE: f32 = 8.0;
 const EPS: f32 = 1e-3;
-const FAR_T: f32 = 60000.0;
 const PI: f32 = 3.14159265359;
 const BRICK_FLAG_SOLID: u32 = 1u;
 const BRICK_FLAG_UNIFORM_MATERIAL: u32 = 2u;
@@ -26,6 +25,7 @@ struct CameraData {
   screen_size: vec2<f32>,
   pad2: vec2<f32>,
   ao_quality: vec4<f32>, // x: AO sample count, y: AO radius, z: directional shadow softness, w: spot shadow softness
+  distance_limits: vec4<f32>,
 };
 
 struct Instance {
@@ -216,6 +216,18 @@ struct TransparentHit {
 @group(3) @binding(1) var<storage, read> tile_light_headers : array<TileLightHeader>;
 @group(3) @binding(2) var<storage, read> tile_light_indices : array<u32>;
 
+fn camera_far_t() -> f32 {
+  return max(uCamera.distance_limits.y, 1.0);
+}
+
+fn sanitize_scene_depth(depth: f32) -> f32 {
+  let far_t = camera_far_t();
+  if (depth > 0.0 && depth < far_t) {
+    return depth;
+  }
+  return far_t;
+}
+
 // ============== HELPERS (copied/trimmed from gbuffer) ==============
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
   if (idx < 32u) {
@@ -260,7 +272,7 @@ fn step_to_next_cell(p: vec3<f32>, dir: vec3<f32>, inv_dir: vec3<f32>, cell_size
   let cell = floor(p / cell_size);
   let next_bound = select(cell * cell_size, (cell + 1.0) * cell_size, dir > vec3<f32>(0.0));
   let t_to_bound = (next_bound - p) * inv_dir;
-  var t_min = FAR_T;
+  var t_min = camera_far_t();
   if (abs(dir.x) > 1e-6 && t_to_bound.x > 0.0) { t_min = min(t_min, t_to_bound.x); }
   if (abs(dir.y) > 1e-6 && t_to_bound.y > 0.0) { t_min = min(t_min, t_to_bound.y); }
   if (abs(dir.z) > 1e-6 && t_to_bound.z > 0.0) { t_min = min(t_min, t_to_bound.z); }
@@ -307,7 +319,8 @@ fn brick_is_uniform_material(flags: u32) -> bool {
 fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
   let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
   let clip = vec4<f32>(ndc, 1.0, 1.0);
-  var view = uCamera.inv_proj * clip; view = view / view.w;
+  var view = uCamera.inv_proj * clip;
+  view = view / max(view.w, 1e-6);
   let world_target = (uCamera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
   let origin = uCamera.cam_pos.xyz;
   let dir = normalize(world_target - origin);
@@ -1131,9 +1144,10 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let ipos = vec2<i32>( clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
                         clamp(i32(frag_pos.y), 0, i32(dims.y) - 1) );
   let tile_index = tile_index_for_frag_pos(frag_pos);
-  let t_opaque = textureLoad(in_depth, ipos, 0).r;
+  let t_opaque = sanitize_scene_depth(textureLoad(in_depth, ipos, 0).r);
   var t_limit = t_opaque;
-  if (t_limit >= FAR_T) { t_limit = FAR_T; }
+  let far_t = camera_far_t();
+  if (t_limit >= far_t) { t_limit = far_t; }
 
   let uv_screen = (vec2<f32>(f32(ipos.x), f32(ipos.y)) + 0.5) / vec2<f32>(f32(dims.x), f32(dims.y));
   let ray = get_ray_from_uv(uv_screen);

@@ -29,6 +29,7 @@ func TestPlanetBodyComponentNormalizationAndWorldScaling(t *testing.T) {
 		DiffuseStrength:    5,
 		SpecularStrength:   -1,
 		RimStrength:        -1,
+		EmissionStrength:   6,
 	}
 	tr := &TransformComponent{
 		Position: mgl32.Vec3{4, 5, 6},
@@ -84,6 +85,9 @@ func TestPlanetBodyComponentNormalizationAndWorldScaling(t *testing.T) {
 	}
 	if got := planet.NormalizedRimStrength(); got != 0.35 {
 		t.Fatalf("expected default rim strength, got %v", got)
+	}
+	if got := planet.NormalizedEmissionStrength(); got != 4 {
+		t.Fatalf("expected emission strength clamped to 4, got %v", got)
 	}
 	if got := planet.WorldCenter(tr); got != tr.Position {
 		t.Fatalf("expected world center %v, got %v", tr.Position, got)

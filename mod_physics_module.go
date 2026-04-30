@@ -31,6 +31,7 @@ func (t CollisionEventType) String() string {
 
 type PhysicsCollisionEvent struct {
 	Type          CollisionEventType
+	IsTrigger     bool
 	A             EntityId
 	B             EntityId
 	Point         mgl32.Vec3
@@ -160,6 +161,9 @@ type PhysicsEntityState struct {
 	Model          PhysicsModel
 	Friction       float32
 	Restitution    float32
+	CollisionLayer uint32
+	CollisionMask  uint32
+	IsTrigger      bool
 	IdleTime       float32
 	GravityScale   float32
 	LinearDamping  float32
@@ -342,8 +346,11 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 		physPos := tr.Position.Add(tr.Rotation.Rotate(diff))
 		physRot := tr.Rotation
 
-		// Detect teleport BEFORE choosing physical state
-		isTeleport := false
+		// Detect teleport BEFORE choosing physical state.
+		// Floating-origin rebases translate projected local coordinates without
+		// changing authoritative state, so the next physics step must treat the
+		// rebased pose as a teleport to keep the internal body in sync.
+		isTeleport := rb.ForceTeleport
 		if rb.LastPhysicsTick > 0 {
 			posDiff := tr.Position.Sub(rb.LastPulledPos).Len()
 			rotDiff := 1.0 - float64(absf(tr.Rotation.Dot(rb.LastPulledRot)))
@@ -379,6 +386,9 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 			Model:          resolvedModel,
 			Friction:       col.Friction,
 			Restitution:    col.Restitution,
+			CollisionLayer: col.CollisionLayer,
+			CollisionMask:  col.CollisionMask,
+			IsTrigger:      col.IsTrigger,
 			IdleTime:       rb.IdleTime,
 			GravityScale:   rb.GravityScale,
 			LinearDamping:  rb.LinearDamping,
@@ -386,6 +396,7 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 			Sleeping:       rb.Sleeping,
 			Teleport:       isTeleport,
 		})
+		rb.ForceTeleport = false
 
 		entities[eid] = physicsStepEntityRefs{
 			tr: tr,

@@ -67,6 +67,7 @@ type SpriteAtlasResource struct {
 	Texture *wgpu.Texture
 	View    *wgpu.TextureView
 	Version uint
+	Format  wgpu.TextureFormat
 }
 
 type SpriteRenderBatch struct {
@@ -372,6 +373,8 @@ type GpuBufferManager struct {
 	CAPresetBuf                 *wgpu.Buffer
 	AnalyticMediumBuf           *wgpu.Buffer
 	AnalyticMediumParamsBuf     *wgpu.Buffer
+	AstronomicalBodyBuf         *wgpu.Buffer
+	AstronomicalBodyParamsBuf   *wgpu.Buffer
 	PlanetBodyBuf               *wgpu.Buffer
 	PlanetBodyParamsBuf         *wgpu.Buffer
 	PlanetBodySurfaceBuf        *wgpu.Buffer
@@ -400,6 +403,10 @@ type GpuBufferManager struct {
 	AnalyticMediumBG1           *wgpu.BindGroup
 	AnalyticMediumBG2           *wgpu.BindGroup
 	AnalyticMediumCount         uint32
+	AstronomicalBG0             *wgpu.BindGroup
+	AstronomicalBG1             *wgpu.BindGroup
+	AstronomicalBG2             *wgpu.BindGroup
+	AstronomicalBodyCount       uint32
 	PlanetBodyBG0               *wgpu.BindGroup
 	PlanetBodyBG1               *wgpu.BindGroup
 	PlanetBodyBG2               *wgpu.BindGroup
@@ -426,6 +433,7 @@ type GpuBufferManager struct {
 	CATotalScheduledSteps       uint32
 	CAVolumeBindingsDirty       bool
 	AnalyticMediumBindingsDirty bool
+	AstronomicalBindingsDirty   bool
 	PlanetBodyBindingsDirty     bool
 	WaterBindingsDirty          bool
 	caLayout                    []caVolumeLayout
@@ -569,6 +577,8 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, nil, wgpu.BufferUsageStorage, 4096)
 	m.ensureBuffer("AnalyticMediumBuf", &m.AnalyticMediumBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("AnalyticMediumParamsBuf", &m.AnalyticMediumParamsBuf, nil, wgpu.BufferUsageUniform, 256)
+	m.ensureBuffer("AstronomicalBodyBuf", &m.AstronomicalBodyBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("AstronomicalBodyParamsBuf", &m.AstronomicalBodyParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("PlanetBodyBuf", &m.PlanetBodyBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("PlanetBodyParamsBuf", &m.PlanetBodyParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("WaterSurfaceBuf", &m.WaterSurfaceBuf, nil, wgpu.BufferUsageStorage, 1024)

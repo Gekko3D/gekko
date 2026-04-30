@@ -450,8 +450,10 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	return recreated
 }
 
-func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, sunIntensity, skyAmbientMix float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) []byte {
-	buf := make([]byte, 288)
+const CameraUniformSizeBytes = 304
+
+func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, sunIntensity, skyAmbientMix, farPlane float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) []byte {
+	buf := make([]byte, CameraUniformSizeBytes)
 	lightingQuality = lightingQuality.WithDefaults()
 
 	writeMat := func(offset int, mat mgl32.Mat4) {
@@ -492,17 +494,21 @@ func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, light
 	binary.LittleEndian.PutUint32(buf[276:], math.Float32bits(lightingQuality.AmbientOcclusion.Radius))
 	binary.LittleEndian.PutUint32(buf[280:], math.Float32bits(lightingQuality.Shadow.DirectionalShadowSoftness))
 	binary.LittleEndian.PutUint32(buf[284:], math.Float32bits(lightingQuality.Shadow.SpotShadowSoftness))
+	binary.LittleEndian.PutUint32(buf[288:], math.Float32bits(farPlane))
+	binary.LittleEndian.PutUint32(buf[292:], math.Float32bits(farPlane))
+	binary.LittleEndian.PutUint32(buf[296:], 0)
+	binary.LittleEndian.PutUint32(buf[300:], 0)
 
 	return buf
 }
 
-func (m *GpuBufferManager) UpdateCamera(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, sunIntensity, skyAmbientMix float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) {
-	buf := buildCameraUniformData(viewProj, invView, invProj, camPos, lightPos, ambientColor, sunIntensity, skyAmbientMix, debugMode, renderMode, numLights, screenW, screenH, lightingQuality)
+func (m *GpuBufferManager) UpdateCamera(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, sunIntensity, skyAmbientMix, farPlane float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) {
+	buf := buildCameraUniformData(viewProj, invView, invProj, camPos, lightPos, ambientColor, sunIntensity, skyAmbientMix, farPlane, debugMode, renderMode, numLights, screenW, screenH, lightingQuality)
 
 	if m.CameraBuf == nil {
 		desc := &wgpu.BufferDescriptor{
 			Label: "CameraUB",
-			Size:  288,
+			Size:  CameraUniformSizeBytes,
 			Usage: wgpu.BufferUsageUniform | wgpu.BufferUsageCopyDst,
 		}
 		var err error

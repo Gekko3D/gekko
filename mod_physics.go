@@ -9,6 +9,11 @@ const (
 	ShapeSphere = rootphysics.ShapeSphere
 )
 
+const (
+	DefaultCollisionLayer uint32 = rootphysics.DefaultCollisionLayer
+	AllCollisionLayers    uint32 = rootphysics.AllCollisionLayers
+)
+
 type RigidBodyComponent = rootphysics.RigidBodyComponent
 type CollisionBox = rootphysics.CollisionBox
 type ColliderComponent = rootphysics.ColliderComponent

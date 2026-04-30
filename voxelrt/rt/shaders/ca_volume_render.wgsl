@@ -1,5 +1,3 @@
-const FAR_T: f32 = 60000.0;
-
 struct CameraData {
   view_proj: mat4x4<f32>,
   inv_view: mat4x4<f32>,
@@ -14,6 +12,7 @@ struct CameraData {
   screen_size: vec2<f32>,
   pad2: vec2<u32>,
   ao_quality: vec4<f32>,
+  distance_limits: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -130,6 +129,18 @@ struct FSOut {
 @group(1) @binding(4) var<storage, read> ca_presets: array<PresetRecord>;
 @group(2) @binding(0) var in_depth: texture_2d<f32>;
 
+fn camera_far_t() -> f32 {
+  return max(uCamera.distance_limits.y, 1.0);
+}
+
+fn sanitize_scene_depth(depth: f32) -> f32 {
+  let far_t = camera_far_t();
+  if (depth > 0.0 && depth < far_t) {
+    return depth;
+  }
+  return far_t;
+}
+
 fn make_safe_dir(d: vec3<f32>) -> vec3<f32> {
   let eps = 1e-6;
   let sx = select(d.x, (select(1.0, -1.0, d.x < 0.0)) * eps, abs(d.x) < eps);
@@ -142,7 +153,7 @@ fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
   let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
   let clip = vec4<f32>(ndc, 1.0, 1.0);
   var view = uCamera.inv_proj * clip;
-  view = view / view.w;
+  view = view / max(view.w, 1e-6);
   let world_target = (uCamera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
   let origin = uCamera.cam_pos.xyz;
   let dir = normalize(world_target - origin);
@@ -190,12 +201,13 @@ fn ca_dda_init(origin: vec3<f32>, dir: vec3<f32>, min_cell: vec3<i32>, max_cell:
   if (dir.y > 0.0) { boundary.y = f32(cell.y + 1); } else { boundary.y = f32(cell.y); }
   if (dir.z > 0.0) { boundary.z = f32(cell.z + 1); } else { boundary.z = f32(cell.z); }
 
-  var t_max = vec3<f32>(FAR_T);
+  let far_t = camera_far_t();
+  var t_max = vec3<f32>(far_t);
   if (abs(dir.x) > 1e-8) { t_max.x = t_entry + (boundary.x - pos.x) / dir.x; }
   if (abs(dir.y) > 1e-8) { t_max.y = t_entry + (boundary.y - pos.y) / dir.y; }
   if (abs(dir.z) > 1e-8) { t_max.z = t_entry + (boundary.z - pos.z) / dir.z; }
 
-  var t_delta = vec3<f32>(FAR_T);
+  var t_delta = vec3<f32>(far_t);
   if (abs(dir.x) > 1e-8) { t_delta.x = 1.0 / abs(dir.x); }
   if (abs(dir.y) > 1e-8) { t_delta.y = 1.0 / abs(dir.y); }
   if (abs(dir.z) > 1e-8) { t_delta.z = 1.0 / abs(dir.z); }
@@ -796,9 +808,10 @@ fn fs_main(
     clamp(i32(render_uv.x * f32(dims.x)), 0, i32(dims.x) - 1),
     clamp(i32(render_uv.y * f32(dims.y)), 0, i32(dims.y) - 1),
   );
-  var t_limit = textureLoad(in_depth, ipos, 0).r;
-  if (t_limit >= FAR_T || t_limit <= 0.0) {
-    t_limit = FAR_T;
+  var t_limit = sanitize_scene_depth(textureLoad(in_depth, ipos, 0).r);
+  let far_t = camera_far_t();
+  if (t_limit >= far_t || t_limit <= 0.0) {
+    t_limit = far_t;
   }
 
   let uv_screen = render_uv;

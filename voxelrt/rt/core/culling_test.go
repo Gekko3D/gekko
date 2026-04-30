@@ -7,18 +7,11 @@ import (
 )
 
 func TestFrustumCulling(t *testing.T) {
-	// Setup a simple camera at origin looking down -Z
-	// Perspective: 90 deg FOV, Aspect 1.0, Near 1, Far 100
-	proj := mgl32.Perspective(mgl32.DegToRad(90), 1.0, 1.0, 100.0)
 	view := mgl32.LookAtV(
 		mgl32.Vec3{0, 0, 0},  // Eye
 		mgl32.Vec3{0, 0, -1}, // Center
 		mgl32.Vec3{0, 1, 0},  // Up
 	)
-	viewProj := proj.Mul4(view)
-
-	cam := &CameraState{}
-	planes := cam.ExtractFrustum(viewProj)
 
 	tests := []struct {
 		name     string
@@ -58,11 +51,23 @@ func TestFrustumCulling(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		aabb := [2]mgl32.Vec3{tc.aabbMin, tc.aabbMax}
-		visible := AABBInFrustum(aabb, planes)
-		if visible != tc.expected {
-			t.Errorf("Test %s failed: expected %v, got %v", tc.name, tc.expected, visible)
+	for _, mode := range []DepthMode{DepthModeStandard, DepthModeReverseZ} {
+		cam := &CameraState{
+			Fov:       90,
+			Near:      1,
+			Far:       100,
+			DepthMode: mode,
+		}
+		proj := cam.ProjectionMatrix(1.0)
+		viewProj := proj.Mul4(view)
+		planes := cam.ExtractFrustum(viewProj)
+
+		for _, tc := range tests {
+			aabb := [2]mgl32.Vec3{tc.aabbMin, tc.aabbMax}
+			visible := AABBInFrustum(aabb, planes)
+			if visible != tc.expected {
+				t.Errorf("mode %s, test %s failed: expected %v, got %v", mode, tc.name, tc.expected, visible)
+			}
 		}
 	}
 }
@@ -98,38 +103,37 @@ func TestOcclusion(t *testing.T) {
 		hiz[i] = 10.0
 	}
 
-	// View pointing down -Z. Perspective.
-	proj := mgl32.Perspective(mgl32.DegToRad(90), 1.0, 1.0, 100.0)
 	view := mgl32.LookAtV(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 0, -1}, mgl32.Vec3{0, 1, 0})
-	vp := proj.Mul4(view)
 
-	// 1. Object CLOSE (Z=-5). Dist = 5.
-	// 5 < 10. Should NOT be occluded.
-	aabbClose := [2]mgl32.Vec3{{-1, -1, -6}, {1, 1, -4}}
-	if IsOccluded(aabbClose, hiz, w, h, vp, 0) {
-		t.Error("Close object (dist 5) should NOT be occluded by wall at dist 10")
-	}
+	for _, mode := range []DepthMode{DepthModeStandard, DepthModeReverseZ} {
+		cam := &CameraState{
+			Fov:       90,
+			Near:      1,
+			Far:       100,
+			DepthMode: mode,
+		}
+		vp := cam.ProjectionMatrix(1.0).Mul4(view)
 
-	// 2. Object FAR (Z=-20). Dist = 20.
-	// 20 > 10. Should be occluded.
-	aabbFar := [2]mgl32.Vec3{{-1, -1, -21}, {1, 1, -19}}
-	if !IsOccluded(aabbFar, hiz, w, h, vp, 0) {
-		t.Error("Far object (dist 20) MUST be occluded by wall at dist 10")
-	}
+		// 1. Object CLOSE (Z=-5). Dist = 5.
+		aabbClose := [2]mgl32.Vec3{{-1, -1, -6}, {1, 1, -4}}
+		if IsOccluded(aabbClose, hiz, w, h, vp, 0) {
+			t.Errorf("mode %s: close object (dist 5) should NOT be occluded by wall at dist 10", mode)
+		}
 
-	// 3. Object FAR but in a "Hole"
-	// Set one pixel to 100.0 (Far)
-	// Map center to pixel coords?
-	// Center 0,0 maps to UV 0.5, 0.5 -> Pixel 2,2?
-	hiz[2*4+2] = 100.0
-	hiz[2*4+3] = 100.0
-	hiz[3*4+2] = 100.0
-	hiz[3*4+3] = 100.0 // Ensure coverage
+		// 2. Object FAR (Z=-20). Dist = 20.
+		aabbFar := [2]mgl32.Vec3{{-1, -1, -21}, {1, 1, -19}}
+		if !IsOccluded(aabbFar, hiz, w, h, vp, 0) {
+			t.Errorf("mode %s: far object (dist 20) MUST be occluded by wall at dist 10", mode)
+		}
 
-	// Object at Z=-20 is dist 20.
-	// 20 < 100. Should NOT be occluded now because of the hole.
-	if IsOccluded(aabbFar, hiz, w, h, vp, 0) {
-		t.Error("Far object should be visible through the hole (depth 100)")
+		holeHiZ := append([]float32(nil), hiz...)
+		holeHiZ[2*4+2] = 100.0
+		holeHiZ[2*4+3] = 100.0
+		holeHiZ[3*4+2] = 100.0
+		holeHiZ[3*4+3] = 100.0
+		if IsOccluded(aabbFar, holeHiZ, w, h, vp, 0) {
+			t.Errorf("mode %s: far object should be visible through the hole (depth 100)", mode)
+		}
 	}
 }
 
@@ -140,15 +144,22 @@ func TestOcclusionDepthSlack(t *testing.T) {
 		hiz[i] = 18.0
 	}
 
-	proj := mgl32.Perspective(mgl32.DegToRad(90), 1.0, 1.0, 100.0)
 	view := mgl32.LookAtV(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 0, -1}, mgl32.Vec3{0, 1, 0})
-	vp := proj.Mul4(view)
-
 	aabb := [2]mgl32.Vec3{{-1, -1, -21}, {1, 1, -19}}
-	if !IsOccluded(aabb, hiz, w, h, vp, 0) {
-		t.Fatal("expected object to be occluded without slack")
-	}
-	if IsOccluded(aabb, hiz, w, h, vp, 2.5) {
-		t.Fatal("expected depth slack to keep the object visible")
+
+	for _, mode := range []DepthMode{DepthModeStandard, DepthModeReverseZ} {
+		cam := &CameraState{
+			Fov:       90,
+			Near:      1,
+			Far:       100,
+			DepthMode: mode,
+		}
+		vp := cam.ProjectionMatrix(1.0).Mul4(view)
+		if !IsOccluded(aabb, hiz, w, h, vp, 0) {
+			t.Fatalf("mode %s: expected object to be occluded without slack", mode)
+		}
+		if IsOccluded(aabb, hiz, w, h, vp, 2.5) {
+			t.Fatalf("mode %s: expected depth slack to keep the object visible", mode)
+		}
 	}
 }

@@ -69,6 +69,7 @@ func (m RenderMode) String() string {
 
 type LightingQualityConfig = core.LightingQualityConfig
 type LightingQualityPreset = core.LightingQualityPreset
+type VoxelRtDepthMode = core.DepthMode
 type VoxelAmbientOcclusionMode = core.AmbientOcclusionMode
 type VoxelRtDebugMode = core.DebugMode
 type VoxelRtFeatureFlags = app_rt.AppFeatureFlags
@@ -78,6 +79,8 @@ const (
 	LightingQualityPerformance = core.LightingQualityPresetPerformance
 	LightingQualityBalanced    = core.LightingQualityPresetBalanced
 	LightingQualityQuality     = core.LightingQualityPresetQuality
+	VoxelRtDepthModeStandard   = core.DepthModeStandard
+	VoxelRtDepthModeReverseZ   = core.DepthModeReverseZ
 	VoxelAOInherited           = core.AmbientOcclusionModeDefault
 	VoxelAOEnabled             = core.AmbientOcclusionModeEnabled
 	VoxelAODisabled            = core.AmbientOcclusionModeDisabled
@@ -89,11 +92,16 @@ func DefaultVoxelRtFeatureConfig() VoxelRtFeatureConfig {
 	return app_rt.DefaultFeatureConfig()
 }
 
+func ParseVoxelRtDepthMode(raw string) (VoxelRtDepthMode, error) {
+	return core.ParseDepthMode(raw)
+}
+
 type VoxelRtModule struct {
 	WindowWidth     int
 	WindowHeight    int
 	WindowTitle     string
 	DebugMode       bool
+	DepthMode       VoxelRtDepthMode
 	RenderMode      RenderMode
 	QualityPreset   LightingQualityPreset
 	LightingQuality LightingQualityConfig
@@ -104,21 +112,23 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	RtApp              *app_rt.App
-	loadedModels       map[AssetId]*core.VoxelObject
-	instanceMap        map[EntityId]*core.VoxelObject
-	lastMaterialKeys   map[*core.VoxelObject]materialTableCacheKey
-	materialTableCache map[materialTableCacheKey][]core.Material
-	particlePools      map[EntityId]*particlePool
-	caVolumeMap        map[EntityId]*core.VoxelObject
-	objectToEntity     map[*core.VoxelObject]EntityId
-	skyboxLayers       map[EntityId]SkyboxLayerComponent // Stored values to detect changes
-	skyboxSun          SkyboxSunComponent
-	lastSkyboxVer      int64 // To track if any layer changed
-	SunDirection       mgl32.Vec3
-	SunIntensity       float32
-	lastParticleAtlas  AssetId
-	lastSpriteAtlas    AssetId
+	RtApp               *app_rt.App
+	loadedModels        map[AssetId]*core.VoxelObject
+	instanceMap         map[EntityId]*core.VoxelObject
+	entityLODSelections map[EntityId]EntityLODSelection
+	runtimeSprites      []SpriteComponent
+	lastMaterialKeys    map[*core.VoxelObject]materialTableCacheKey
+	materialTableCache  map[materialTableCacheKey][]core.Material
+	particlePools       map[EntityId]*particlePool
+	caVolumeMap         map[EntityId]*core.VoxelObject
+	objectToEntity      map[*core.VoxelObject]EntityId
+	skyboxLayers        map[EntityId]SkyboxLayerComponent // Stored values to detect changes
+	skyboxSun           SkyboxSunComponent
+	lastSkyboxVer       int64 // To track if any layer changed
+	SunDirection        mgl32.Vec3
+	SunIntensity        float32
+	lastParticleAtlas   AssetId
+	lastSpriteAtlas     AssetId
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -133,6 +143,13 @@ func (s *VoxelRtState) FPS() float64 {
 		return 0
 	}
 	return s.RtApp.FPS
+}
+
+func (s *VoxelRtState) RuntimeSpriteCount() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.runtimeSprites)
 }
 
 func (s *VoxelRtState) ProfilerStats() string {
@@ -309,9 +326,7 @@ func (s *VoxelRtState) Project(pos mgl32.Vec3, camera *CameraComponent) (float32
 	vp := proj.Mul4(view)
 
 	clip := vp.Mul4x1(pos.Vec4(1.0))
-
-	// Clip points behind far or too close to near plane
-	if clip.W() < 0.1 {
+	if !camState.ClipPointVisible(clip) {
 		return 0, 0, false
 	}
 
@@ -357,6 +372,7 @@ func cameraStateFromComponent(camera *CameraComponent) core.CameraState {
 	camState.Fov = camera.Fov
 	camState.Near = camera.Near
 	camState.Far = camera.Far
+	camState.DepthMode = camera.DepthMode.Normalized()
 	return camState
 }
 

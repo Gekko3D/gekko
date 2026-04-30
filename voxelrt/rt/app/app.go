@@ -32,6 +32,7 @@ type App struct {
 	WaterPipeline          *wgpu.RenderPipeline
 	CAVolumePipeline       *wgpu.RenderPipeline
 	AnalyticMediumPipeline *wgpu.RenderPipeline
+	AstronomicalPipeline   *wgpu.RenderPipeline
 	PlanetBodyPipeline     *wgpu.RenderPipeline
 	ResolvePipeline        *wgpu.RenderPipeline
 
@@ -116,6 +117,7 @@ type AppFeatureFlags struct {
 	Skybox        bool
 	CAVolumes     bool
 	AnalyticMedia bool
+	Astronomical  bool
 	PlanetBodies  bool
 	Water         bool
 	Transparency  bool
@@ -138,6 +140,7 @@ func DefaultFeatureFlags() AppFeatureFlags {
 		Skybox:        true,
 		CAVolumes:     true,
 		AnalyticMedia: true,
+		Astronomical:  true,
 		PlanetBodies:  true,
 		Water:         true,
 		Transparency:  true,
@@ -312,7 +315,7 @@ func (a *App) Init() error {
 				Visibility: wgpu.ShaderStageCompute,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   288, // CameraData size
+					MinBindingSize:   gpu.CameraUniformSizeBytes, // CameraData size
 					HasDynamicOffset: false,
 				},
 			},
@@ -348,7 +351,7 @@ func (a *App) Init() error {
 				Visibility: wgpu.ShaderStageCompute,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   288,
+					MinBindingSize:   gpu.CameraUniformSizeBytes,
 					HasDynamicOffset: false,
 				},
 			},
@@ -613,7 +616,7 @@ func (a *App) Init() error {
 	invView := mgl32.Ident4()
 	invProj := mgl32.Ident4()
 	a.BufferManager.LightingQuality = a.EffectiveLightingQuality()
-	a.BufferManager.UpdateCamera(view, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, 1.0, a.Scene.SkyAmbientMix, a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), uint32(width), uint32(height), a.EffectiveLightingQuality())
+	a.BufferManager.UpdateCamera(view, invView, invProj, a.Camera.Position, mgl32.Vec3{10, 20, 10}, a.Scene.AmbientLight, 1.0, a.Scene.SkyAmbientMix, a.Camera.FarPlane(), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), uint32(width), uint32(height), a.EffectiveLightingQuality())
 
 	// Ensure scene buffers are created (even if empty) before bind groups
 	a.BufferManager.UpdateScene(a.Scene, a.Camera, float32(width)/float32(height))
@@ -653,7 +656,7 @@ func (a *App) Init() error {
 
 func (a *App) SetSpriteAtlas(data []byte, w, h uint32) {
 	if a.BufferManager != nil {
-		a.BufferManager.SetSpriteAtlas("", data, w, h, 0)
+		a.BufferManager.SetSpriteAtlas("", data, w, h, 0, 0)
 	}
 }
 

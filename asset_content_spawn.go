@@ -232,7 +232,7 @@ func spawnAuthoredMarker(cmd *Commands, assetID string, marker content.AssetMark
 		&tr,
 		&local,
 		&AuthoredAssetRefComponent{AssetID: assetID, ItemID: marker.ID, Kind: AuthoredItemKindMarker},
-		&AuthoredMarkerComponent{Kind: marker.Kind, Tags: append([]string(nil), marker.Tags...)},
+		&AuthoredMarkerComponent{Name: marker.Name, Kind: marker.Kind, Tags: append([]string(nil), marker.Tags...)},
 	), nil
 }
 

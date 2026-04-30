@@ -58,6 +58,9 @@ func TestSpawnAuthoredAssetResolvesChildBeforeParent(t *testing.T) {
 
 	var childWorld *TransformComponent
 	for _, comp := range cmd.GetAllComponents(childEntity) {
+		if tr, ok := comp.(*TransformComponent); ok {
+			childWorld = tr
+		}
 		if tr, ok := comp.(TransformComponent); ok {
 			childWorld = &tr
 		}
@@ -236,6 +239,9 @@ func TestSpawnAuthoredAssetSpawnsPartLightEmitterAndMarkerHierarchy(t *testing.T
 	marker, ok := AuthoredMarkerForEntity(cmd, result.EntitiesByAssetID["marker"])
 	if !ok {
 		t.Fatal("expected marker metadata component")
+	}
+	if marker.Name != "marker" {
+		t.Fatalf("expected marker name marker, got %q", marker.Name)
 	}
 	if marker.Kind != "socket" {
 		t.Fatalf("expected marker kind socket, got %q", marker.Kind)

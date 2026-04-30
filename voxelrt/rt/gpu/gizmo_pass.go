@@ -50,10 +50,10 @@ func NewGizmoRenderPass(device *wgpu.Device, format wgpu.TextureFormat) (*GizmoR
 		Entries: []wgpu.BindGroupLayoutEntry{
 			{
 				Binding:    0,
-				Visibility: wgpu.ShaderStageVertex,
+				Visibility: wgpu.ShaderStageVertex | wgpu.ShaderStageFragment,
 				Buffer: wgpu.BufferBindingLayout{
 					Type:             wgpu.BufferBindingTypeUniform,
-					MinBindingSize:   288, // Size of CameraData (Struct size in shader)
+					MinBindingSize:   CameraUniformSizeBytes, // Size of CameraData (Struct size in shader)
 					HasDynamicOffset: false,
 				},
 			},
@@ -349,7 +349,7 @@ func (p *GizmoRenderPass) CreateBindGroup(cameraBuffer *wgpu.Buffer) (*wgpu.Bind
 			{
 				Binding: 0,
 				Buffer:  cameraBuffer,
-				Size:    288, // Must match MinBindingSize
+				Size:    CameraUniformSizeBytes, // Must match MinBindingSize
 			},
 		},
 	})

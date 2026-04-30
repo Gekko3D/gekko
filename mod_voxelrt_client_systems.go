@@ -17,6 +17,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	cmd.AddResources(windowState)
 	RtApp := app_rt.NewApp(windowState.windowGlfw)
 	RtApp.DebugMode = mod.DebugMode
+	RtApp.Camera.DepthMode = core.DepthMode(mod.DepthMode).Normalized()
 	RtApp.RenderMode = uint32(mod.RenderMode)
 	RtApp.QualityPreset = mod.QualityPreset
 	RtApp.LightingQuality = mod.LightingQuality
@@ -31,14 +32,15 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 
 	state := &VoxelRtState{
-		RtApp:              RtApp,
-		loadedModels:       make(map[AssetId]*core.VoxelObject),
-		instanceMap:        make(map[EntityId]*core.VoxelObject),
-		lastMaterialKeys:   make(map[*core.VoxelObject]materialTableCacheKey),
-		materialTableCache: make(map[materialTableCacheKey][]core.Material),
-		caVolumeMap:        make(map[EntityId]*core.VoxelObject),
-		objectToEntity:     make(map[*core.VoxelObject]EntityId),
-		skyboxLayers:       make(map[EntityId]SkyboxLayerComponent),
+		RtApp:               RtApp,
+		loadedModels:        make(map[AssetId]*core.VoxelObject),
+		instanceMap:         make(map[EntityId]*core.VoxelObject),
+		entityLODSelections: make(map[EntityId]EntityLODSelection),
+		lastMaterialKeys:    make(map[*core.VoxelObject]materialTableCacheKey),
+		materialTableCache:  make(map[materialTableCacheKey][]core.Material),
+		caVolumeMap:         make(map[EntityId]*core.VoxelObject),
+		objectToEntity:      make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:        make(map[EntityId]SkyboxLayerComponent),
 	}
 	cmd.AddResources(state)
 	cmd.AddResources(&WaterInteractionState{})
@@ -69,6 +71,12 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
 		System(waterInteractionSystem).
 			InStage(Update).
+			RunAlways(),
+	)
+
+	app.UseSystem(
+		System(entityLODSelectionSystem).
+			InStage(PostUpdate).
 			RunAlways(),
 	)
 
@@ -138,6 +146,51 @@ type caVolumeBudgetCandidate struct {
 	suspended         bool
 	dropped           bool
 	priority          float32
+}
+
+func readEntityLODCameraPosition(cmd *Commands, fallback *core.CameraState) (mgl32.Vec3, bool) {
+	if cmd != nil {
+		found := false
+		position := mgl32.Vec3{}
+		MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
+			if camera == nil {
+				return true
+			}
+			position = camera.Position
+			found = true
+			return false
+		})
+		if found {
+			return position, true
+		}
+	}
+	if fallback != nil {
+		return fallback.Position, true
+	}
+	return mgl32.Vec3{}, false
+}
+
+func entityLODSelectionSystem(cmd *Commands, state *VoxelRtState) {
+	cameraState := (*core.CameraState)(nil)
+	if state != nil && state.RtApp != nil {
+		cameraState = state.RtApp.Camera
+	}
+	cameraPosition, ok := readEntityLODCameraPosition(cmd, cameraState)
+	MakeQuery2[TransformComponent, EntityLODComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, lod *EntityLODComponent) bool {
+		if lod == nil || !lod.Enabled() || !ok {
+			if lod != nil {
+				lod.ClearRuntimeSelection()
+			}
+			return true
+		}
+		selection, err := SelectEntityLOD(cameraPosition, transform, lod)
+		if err != nil {
+			lod.ClearRuntimeSelection()
+			return true
+		}
+		lod.ApplySelection(selection)
+		return true
+	})
 }
 
 func readCAVolumeBudgetCamera(cmd *Commands, fallback *core.CameraState) caBudgetCameraView {
@@ -359,9 +412,11 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		return
 	}
 	state.ensureMaterialCaches()
+	state.runtimeSprites = state.runtimeSprites[:0]
 	// Sync instances
 	state.RtApp.Profiler.BeginScope("Sync Instances")
-	currentEntities := make(map[EntityId]bool, len(state.instanceMap))
+	currentObjectEntities := make(map[EntityId]bool, len(state.instanceMap))
+	currentVoxelEntities := make(map[EntityId]bool, len(state.entityLODSelections))
 	frameMaterialKeys := make(map[AssetId]materialTableCacheKey)
 
 	// Collect instances from models
@@ -369,7 +424,17 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if server == nil {
 			return true
 		}
-		currentEntities[entityId] = true
+		currentVoxelEntities[entityId] = true
+		if lod, ok := entityLODComponentForEntity(cmd, entityId); ok && lod.SelectionValid {
+			state.entityLODSelections[entityId] = EntityLODSelection{
+				Distance:       lod.ActiveDistance,
+				BandIndex:      lod.ActiveBandIndex,
+				MaxDistance:    lod.ActiveMaxDistance,
+				Representation: lod.ActiveRepresentation,
+			}
+		} else {
+			delete(state.entityLODSelections, entityId)
+		}
 		vox.NormalizeGeometryRefs()
 
 		geometryID, geometryAsset, ok := ResolveVoxelGeometry(server, vox)
@@ -377,6 +442,37 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			return true
 		}
 
+		displayGeometryID := geometryID
+		displayGeometryAsset := geometryAsset
+		scaleAdjustX, scaleAdjustY, scaleAdjustZ := float32(1), float32(1), float32(1)
+		if selection, ok := state.entityLODSelections[entityId]; ok {
+			switch selection.Representation {
+			case EntityLODRepresentationSimplifiedVoxel:
+				simplifiedID, simplifiedAsset, simplifiedOK := server.entityLODSimplifiedGeometry(geometryID, vox.VoxelPalette, geometryAsset)
+				if simplifiedOK && simplifiedAsset != nil && simplifiedAsset.XBrickMap != nil {
+					displayGeometryID = simplifiedID
+					displayGeometryAsset = simplifiedAsset
+					scaleAdjustX, scaleAdjustY, scaleAdjustZ = entityLODProxyScaleAdjust(geometryAsset, simplifiedAsset)
+				}
+			case EntityLODRepresentationImpostor:
+				sprite, spriteOK := buildEntityLODImpostorSprite(state, server, transform, vox, geometryID, geometryAsset)
+				if !spriteOK {
+					sprite, spriteOK = buildEntityLODDotSprite(state, server, transform, vox, geometryAsset)
+				}
+				if spriteOK {
+					state.runtimeSprites = append(state.runtimeSprites, sprite)
+					return true
+				}
+			case EntityLODRepresentationDot:
+				sprite, spriteOK := buildEntityLODDotSprite(state, server, transform, vox, geometryAsset)
+				if spriteOK {
+					state.runtimeSprites = append(state.runtimeSprites, sprite)
+					return true
+				}
+			}
+		}
+
+		currentObjectEntities[entityId] = true
 		materialKey, hasKey := frameMaterialKeys[vox.VoxelPalette]
 		if !hasKey {
 			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
@@ -386,11 +482,11 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 		obj, exists := state.instanceMap[entityId]
 		if !exists {
-			modelTemplate, hasTemplate := state.loadedModels[geometryID]
+			modelTemplate, hasTemplate := state.loadedModels[displayGeometryID]
 			if !hasTemplate {
 				modelTemplate = core.NewVoxelObject()
-				modelTemplate.XBrickMap = geometryAsset.XBrickMap
-				state.loadedModels[geometryID] = modelTemplate
+				modelTemplate.XBrickMap = displayGeometryAsset.XBrickMap
+				state.loadedModels[displayGeometryID] = modelTemplate
 			}
 
 			obj = core.NewVoxelObject()
@@ -403,28 +499,15 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			state.lastMaterialKeys[obj] = materialKey
 		}
 
-		if geometryAsset.XBrickMap != obj.XBrickMap {
-			obj.XBrickMap = geometryAsset.XBrickMap
+		if displayGeometryAsset.XBrickMap != obj.XBrickMap {
+			obj.XBrickMap = displayGeometryAsset.XBrickMap
 			obj.XBrickMap.StructureDirty = true
 			state.RtApp.Scene.StructureRevision++ // Force hash grid rebuild
 		}
-		scale := EffectiveVoxelScale(vox, transform)
+		scale := entityLODScaleVector(EffectiveVoxelScale(vox, transform), scaleAdjustX, scaleAdjustY, scaleAdjustZ)
 
 		// Compute and apply Pivot
-		pivot := mgl32.Vec3{0, 0, 0}
-		switch vox.PivotMode {
-		case PivotModeCenter:
-			if obj.XBrickMap != nil {
-				minB, maxB := obj.XBrickMap.ComputeAABB()
-				pivot = minB.Add(maxB).Mul(0.5)
-			}
-		case PivotModeCustom:
-			pivot = vox.CustomPivot
-		case PivotModeCorner:
-			fallthrough
-		default:
-			pivot = mgl32.Vec3{0, 0, 0}
-		}
+		pivot := entityLODRenderPivot(vox, geometryAsset, scaleAdjustX, scaleAdjustY, scaleAdjustZ)
 		transform.Pivot = pivot
 
 		transformChanged := false
@@ -478,11 +561,16 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	})
 
 	for eid, obj := range state.instanceMap {
-		if !currentEntities[eid] {
+		if !currentObjectEntities[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
 			delete(state.lastMaterialKeys, obj)
 			delete(state.objectToEntity, obj)
+		}
+	}
+	for eid := range state.entityLODSelections {
+		if !currentVoxelEntities[eid] {
+			delete(state.entityLODSelections, eid)
 		}
 	}
 	state.RtApp.Profiler.EndScope("Sync Instances")
@@ -671,6 +759,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync Planet Bodies")
 
+	state.RtApp.Profiler.BeginScope("Sync Astronomical")
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateAstronomicalBodies(buildAstronomicalBodyHosts(cmd))
+	}
+	state.RtApp.Profiler.EndScope("Sync Astronomical")
+
 	state.RtApp.Profiler.BeginScope("Sync Water")
 	if state.RtApp.BufferManager != nil {
 		waterHosts, rippleHosts := buildWaterSurfaceHosts(cmd, waterInteractions)
@@ -688,6 +782,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		state.RtApp.Camera.Fov = camera.Fov
 		state.RtApp.Camera.Near = camera.Near
 		state.RtApp.Camera.Far = camera.Far
+		state.RtApp.Camera.DepthMode = camera.DepthMode.Normalized()
 		return false
 	})
 	// Sync text
@@ -747,7 +842,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 		seenSpriteAtlases[batch.AtlasKey] = struct{}{}
 		if texAsset, ok := spriteAtlasTexture(server, batch.AtlasKey); ok && state.RtApp.BufferManager != nil {
-			state.RtApp.BufferManager.SetSpriteAtlas(batch.AtlasKey, texAsset.Texels, texAsset.Width, texAsset.Height, texAsset.Version)
+			state.RtApp.BufferManager.SetSpriteAtlas(
+				batch.AtlasKey,
+				texAsset.Texels,
+				texAsset.Width,
+				texAsset.Height,
+				texAsset.Version,
+				assetTextureFormatToWGPU(texAsset.Format),
+			)
 		}
 	}
 	if state.RtApp.BufferManager != nil {
@@ -812,6 +914,7 @@ func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
 			DiffuseStrength:        planet.NormalizedDiffuseStrength(),
 			SpecularStrength:       planet.NormalizedSpecularStrength(),
 			RimStrength:            planet.NormalizedRimStrength(),
+			EmissionStrength:       planet.NormalizedEmissionStrength(),
 			TerrainLowColor:        planet.NormalizedTerrainLowColor(),
 			TerrainHighColor:       planet.NormalizedTerrainHighColor(),
 			RockColor:              planet.NormalizedRockColor(),
@@ -827,13 +930,201 @@ func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
 	return hosts
 }
 
+func entityLODScaleVector(base mgl32.Vec3, adjustX, adjustY, adjustZ float32) mgl32.Vec3 {
+	return mgl32.Vec3{
+		base.X() * adjustX,
+		base.Y() * adjustY,
+		base.Z() * adjustZ,
+	}
+}
+
+func entityLODLocalBounds(asset *VoxelGeometryAsset) (mgl32.Vec3, mgl32.Vec3) {
+	if asset == nil {
+		return mgl32.Vec3{}, mgl32.Vec3{}
+	}
+	minB, maxB := asset.LocalMin, asset.LocalMax
+	if maxB.Sub(minB).LenSqr() <= 0 && asset.XBrickMap != nil {
+		minB, maxB = asset.XBrickMap.ComputeAABB()
+	}
+	return minB, maxB
+}
+
+func entityLODSourcePivot(vox *VoxelModelComponent, source *VoxelGeometryAsset) mgl32.Vec3 {
+	if vox == nil {
+		return mgl32.Vec3{}
+	}
+	switch vox.PivotMode {
+	case PivotModeCenter:
+		minB, maxB := entityLODLocalBounds(source)
+		return minB.Add(maxB).Mul(0.5)
+	case PivotModeCustom:
+		return vox.CustomPivot
+	case PivotModeCorner:
+		fallthrough
+	default:
+		return mgl32.Vec3{}
+	}
+}
+
+func entityLODRenderPivot(vox *VoxelModelComponent, source *VoxelGeometryAsset, adjustX, adjustY, adjustZ float32) mgl32.Vec3 {
+	sourcePivot := entityLODSourcePivot(vox, source)
+	if adjustX == 0 {
+		adjustX = 1
+	}
+	if adjustY == 0 {
+		adjustY = 1
+	}
+	if adjustZ == 0 {
+		adjustZ = 1
+	}
+	return mgl32.Vec3{
+		sourcePivot.X() / adjustX,
+		sourcePivot.Y() / adjustY,
+		sourcePivot.Z() / adjustZ,
+	}
+}
+
+func entityLODWorldPoint(transform *TransformComponent, localPoint, pivot, scale mgl32.Vec3) mgl32.Vec3 {
+	if transform == nil {
+		return mgl32.Vec3{}
+	}
+	offset := mgl32.Vec3{
+		(localPoint.X() - pivot.X()) * scale.X(),
+		(localPoint.Y() - pivot.Y()) * scale.Y(),
+		(localPoint.Z() - pivot.Z()) * scale.Z(),
+	}
+	return transform.Position.Add(transform.Rotation.Rotate(offset))
+}
+
+func entityLODImpostorBaseSize(vox *VoxelModelComponent, transform *TransformComponent, source *VoxelGeometryAsset) float32 {
+	baseScale := EffectiveVoxelScale(vox, transform)
+	extentX, extentY, extentZ := entityLODGeometryExtents(source)
+	worldX := float32(math.Abs(float64(baseScale.X()))) * extentX
+	worldY := float32(math.Abs(float64(baseScale.Y()))) * extentY
+	worldZ := float32(math.Abs(float64(baseScale.Z()))) * extentZ
+	size := float32(math.Sqrt(float64(worldX*worldX+worldY*worldY+worldZ*worldZ))) * 1.1
+	if size <= 0 {
+		size = 2 * VoxelSize
+	}
+	return size
+}
+
+func entityLODImpostorSpriteSize(vox *VoxelModelComponent, transform *TransformComponent, source *VoxelGeometryAsset) [2]float32 {
+	baseScale := EffectiveVoxelScale(vox, transform)
+	extentX, extentY, _ := entityLODGeometryExtents(source)
+	width := float32(math.Abs(float64(baseScale.X()))) * extentX * 1.1
+	height := float32(math.Abs(float64(baseScale.Y()))) * extentY * 1.1
+	if width <= 0 {
+		width = 2 * VoxelSize
+	}
+	if height <= 0 {
+		height = 2 * VoxelSize
+	}
+	return [2]float32{width, height}
+}
+
+func entityLODLuminance(rgb mgl32.Vec3) float32 {
+	return rgb.X()*0.2126 + rgb.Y()*0.7152 + rgb.Z()*0.0722
+}
+
+func entityLODImpostorBrightnessTint(state *VoxelRtState, transform *TransformComponent) float32 {
+	if state == nil || state.RtApp == nil || state.RtApp.Scene == nil || transform == nil {
+		return 1
+	}
+
+	ambient := entityLODLuminance(state.RtApp.Scene.AmbientLight)
+	brightness := ambient
+
+	front := transform.Rotation.Rotate(mgl32.Vec3{0, 0, 1})
+	if front.LenSqr() > 1e-6 {
+		front = front.Normalize()
+	}
+
+	bestDirectional := float32(0)
+	for i := range state.RtApp.Scene.Lights {
+		light := state.RtApp.Scene.Lights[i]
+		if uint32(light.Params[2]) != uint32(LightTypeDirectional) {
+			continue
+		}
+		lightDir := mgl32.Vec3{light.Direction[0], light.Direction[1], light.Direction[2]}
+		if lightDir.LenSqr() <= 1e-6 {
+			continue
+		}
+		lightDir = lightDir.Normalize()
+		facing := max(0, front.Dot(lightDir.Mul(-1)))
+		intensity := entityLODLuminance(mgl32.Vec3{light.Color[0], light.Color[1], light.Color[2]}) * light.Color[3]
+		contrib := facing * intensity
+		if contrib > bestDirectional {
+			bestDirectional = contrib
+		}
+	}
+	brightness += bestDirectional * 0.85
+	return clampF(brightness, 0.12, 1.0)
+}
+
+func entityLODDotBrightnessTint(state *VoxelRtState, transform *TransformComponent) float32 {
+	return clampF(entityLODImpostorBrightnessTint(state, transform)*0.6, 0.08, 0.6)
+}
+
+func buildEntityLODImpostorSprite(state *VoxelRtState, server *AssetServer, transform *TransformComponent, vox *VoxelModelComponent, geometryID AssetId, source *VoxelGeometryAsset) (SpriteComponent, bool) {
+	if server == nil || transform == nil || vox == nil || source == nil {
+		return SpriteComponent{}, false
+	}
+	textureID, ok := server.entityLODImpostorTexture(geometryID, vox.VoxelPalette, source)
+	if !ok || textureID == (AssetId{}) {
+		return SpriteComponent{}, false
+	}
+	baseScale := EffectiveVoxelScale(vox, transform)
+	sourcePivot := entityLODSourcePivot(vox, source)
+	minB, maxB := entityLODLocalBounds(source)
+	localCenter := minB.Add(maxB).Mul(0.5)
+	size := entityLODImpostorSpriteSize(vox, transform, source)
+	brightness := entityLODImpostorBrightnessTint(state, transform)
+	return SpriteComponent{
+		Enabled:       true,
+		Position:      entityLODWorldPoint(transform, localCenter, sourcePivot, baseScale),
+		Size:          size,
+		Color:         [4]float32{brightness, brightness, brightness, 1},
+		Texture:       textureID,
+		BillboardMode: BillboardSpherical,
+		Unlit:         false,
+		AlphaMode:     SpriteAlphaTexture,
+	}, true
+}
+
+func buildEntityLODDotSprite(state *VoxelRtState, server *AssetServer, transform *TransformComponent, vox *VoxelModelComponent, source *VoxelGeometryAsset) (SpriteComponent, bool) {
+	if server == nil || transform == nil || vox == nil || source == nil {
+		return SpriteComponent{}, false
+	}
+	textureID := server.entityLODDotTexture()
+	if textureID == (AssetId{}) {
+		return SpriteComponent{}, false
+	}
+	baseScale := EffectiveVoxelScale(vox, transform)
+	sourcePivot := entityLODSourcePivot(vox, source)
+	minB, maxB := entityLODLocalBounds(source)
+	localCenter := minB.Add(maxB).Mul(0.5)
+	size := max(entityLODImpostorBaseSize(vox, transform, source)*0.25, 2*VoxelSize)
+	brightness := entityLODDotBrightnessTint(state, transform)
+	return SpriteComponent{
+		Enabled:       true,
+		Position:      entityLODWorldPoint(transform, localCenter, sourcePivot, baseScale),
+		Size:          [2]float32{size, size},
+		Color:         [4]float32{brightness, brightness, brightness, 1},
+		Texture:       textureID,
+		BillboardMode: BillboardSpherical,
+		Unlit:         true,
+		AlphaMode:     SpriteAlphaTexture,
+	}, true
+}
+
 func spriteAtlasTexture(server *AssetServer, atlasKey string) (TextureAsset, bool) {
 	if server == nil || atlasKey == "" {
 		return TextureAsset{}, false
 	}
 	parsed, err := uuid.Parse(atlasKey)
 	if err != nil {
-		return TextureAsset{}, false
+		return server.entityLODTextureByCacheKey(atlasKey)
 	}
 	texAsset, ok := server.textures[AssetId{UUID: parsed}]
 	return texAsset, ok

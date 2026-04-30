@@ -130,12 +130,15 @@ func (m *GpuBufferManager) ensureSpritesDepthBindGroup(pipeline *wgpu.RenderPipe
 func (m *GpuBufferManager) CreateDefaultSpriteAtlas() {
 	width, height := uint32(1), uint32(1)
 	pixels := []byte{255, 255, 255, 255}
-	m.SetSpriteAtlas(defaultSpriteAtlasKey, pixels, width, height, 1)
+	m.SetSpriteAtlas(defaultSpriteAtlasKey, pixels, width, height, 1, wgpu.TextureFormatRGBA8UnormSrgb)
 }
 
-func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, version uint) {
+func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, version uint, format wgpu.TextureFormat) {
+	if format == 0 {
+		format = wgpu.TextureFormatRGBA8UnormSrgb
+	}
 	if version != 0 {
-		if existing, ok := m.SpriteAtlases[key]; ok && existing != nil && existing.Version == version {
+		if existing, ok := m.SpriteAtlases[key]; ok && existing != nil && existing.Version == version && existing.Format == format {
 			return
 		}
 	}
@@ -155,7 +158,7 @@ func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, 
 		MipLevelCount: 1,
 		SampleCount:   1,
 		Dimension:     wgpu.TextureDimension2D,
-		Format:        wgpu.TextureFormatRGBA8Unorm,
+		Format:        format,
 		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
 	})
 	if err != nil {
@@ -178,7 +181,7 @@ func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, 
 		},
 		&size,
 	)
-	m.SpriteAtlases[key] = &SpriteAtlasResource{Texture: tex, View: view, Version: version}
+	m.SpriteAtlases[key] = &SpriteAtlasResource{Texture: tex, View: view, Version: version, Format: format}
 }
 
 func (m *GpuBufferManager) ensureSpriteAtlasSampler() {
