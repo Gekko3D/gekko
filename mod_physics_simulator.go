@@ -150,6 +150,7 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 				}
 
 				candidates = s.grid.QueryAABBInto(AABBComponent{Min: b.aabbMin, Max: b.aabbMax}, queryUnique, candidates)
+				localContacts := make([]narrowPhaseContact, 0, 16)
 				for _, otherEid := range candidates {
 					if otherEid == b.Eid {
 						continue
@@ -167,65 +168,29 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 						continue
 					}
 
-					voxelHandled := false
-					if b.model.Grid != nil || other.model.Grid != nil {
-						contacts, wasHandled := checkVoxelCollision(b, other, world.PointInOBBEpsilon)
-						if wasHandled {
-							voxelHandled = true
-							for _, contact := range contacts {
-								if isTriggerPair(b, other) {
-									pair := orderedCollisionPair(b.Eid, other.Eid)
-									localTriggerEvents = append(localTriggerEvents, PhysicsCollisionEvent{
-										IsTrigger:     true,
-										A:             pair.A,
-										B:             pair.B,
-										Point:         contact.point,
-										Normal:        contact.normal,
-										Penetration:   contact.penetration,
-										RelativeSpeed: b.vel.Sub(other.vel).Len(),
-										Tick:          s.tick,
-									})
-									continue
-								}
-								localManifolds = append(localManifolds, collisionManifold{
-									bodyA:       b,
-									bodyB:       other,
-									normal:      contact.normal,
-									penetration: contact.penetration,
-									point:       contact.point,
-								})
-							}
+					localContacts = collectNarrowPhaseContacts(b, other, world.PointInOBBEpsilon, localContacts[:0])
+					for _, contact := range localContacts {
+						if isTriggerPair(b, other) {
+							pair := orderedCollisionPair(b.Eid, other.Eid)
+							localTriggerEvents = append(localTriggerEvents, PhysicsCollisionEvent{
+								IsTrigger:     true,
+								A:             pair.A,
+								B:             pair.B,
+								Point:         contact.point,
+								Normal:        contact.normal,
+								Penetration:   contact.penetration,
+								RelativeSpeed: b.vel.Sub(other.vel).Len(),
+								Tick:          s.tick,
+							})
+							continue
 						}
-					}
-
-					if !voxelHandled {
-						for _, boxA := range b.boxes {
-							for _, boxB := range other.boxes {
-								if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
-									if isTriggerPair(b, other) {
-										pair := orderedCollisionPair(b.Eid, other.Eid)
-										localTriggerEvents = append(localTriggerEvents, PhysicsCollisionEvent{
-											IsTrigger:     true,
-											A:             pair.A,
-											B:             pair.B,
-											Point:         contactPoint,
-											Normal:        normal,
-											Penetration:   penetration,
-											RelativeSpeed: b.vel.Sub(other.vel).Len(),
-											Tick:          s.tick,
-										})
-										continue
-									}
-									localManifolds = append(localManifolds, collisionManifold{
-										bodyA:       b,
-										bodyB:       other,
-										normal:      normal,
-										penetration: penetration,
-										point:       contactPoint,
-									})
-								}
-							}
-						}
+						localManifolds = append(localManifolds, collisionManifold{
+							bodyA:       b,
+							bodyB:       other,
+							normal:      contact.normal,
+							penetration: contact.penetration,
+							point:       contact.point,
+						})
 					}
 				}
 			}

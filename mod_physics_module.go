@@ -151,25 +151,28 @@ type PhysicsSnapshot struct {
 }
 
 type PhysicsEntityState struct {
-	Eid            EntityId
-	Pos            mgl32.Vec3
-	Rot            mgl32.Quat
-	Vel            mgl32.Vec3
-	AngVel         mgl32.Vec3
-	IsStatic       bool
-	Mass           float32
-	Model          PhysicsModel
-	Friction       float32
-	Restitution    float32
-	CollisionLayer uint32
-	CollisionMask  uint32
-	IsTrigger      bool
-	IdleTime       float32
-	GravityScale   float32
-	LinearDamping  float32
-	AngularDamping float32
-	Sleeping       bool
-	Teleport       bool
+	Eid               EntityId
+	Pos               mgl32.Vec3
+	Rot               mgl32.Quat
+	Vel               mgl32.Vec3
+	AngVel            mgl32.Vec3
+	IsStatic          bool
+	Mass              float32
+	Model             PhysicsModel
+	Shape             ColliderShape
+	Radius            float32
+	CapsuleHalfHeight float32
+	Friction          float32
+	Restitution       float32
+	CollisionLayer    uint32
+	CollisionMask     uint32
+	IsTrigger         bool
+	IdleTime          float32
+	GravityScale      float32
+	LinearDamping     float32
+	AngularDamping    float32
+	Sleeping          bool
+	Teleport          bool
 }
 
 type PhysicsResults struct {
@@ -208,13 +211,17 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 			resMap[res.Eid] = res
 		}
 
-		MakeQuery4[TransformComponent, RigidBodyComponent, PhysicsModel, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, pm *PhysicsModel, vm *VoxelModelComponent) bool {
+		MakeQuery5[TransformComponent, RigidBodyComponent, ColliderComponent, PhysicsModel, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, pm *PhysicsModel, vm *VoxelModelComponent) bool {
 			if res, ok := resMap[eid]; ok {
 				resolvedModel, ok := resolvePhysicsModelForStep(assets, tr, pm, vm)
+				if !ok && isValidPrimitiveCollider(col) {
+					resolvedModel = PhysicsModel{}
+					ok = true
+				}
 				if !ok {
 					return true
 				}
-				if pm == nil {
+				if pm == nil && (len(resolvedModel.Boxes) > 0 || resolvedModel.Grid != nil) {
 					cmd.AddComponents(eid, resolvedModel)
 				}
 
@@ -333,10 +340,14 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 
 	MakeQuery5[TransformComponent, RigidBodyComponent, ColliderComponent, PhysicsModel, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, pm *PhysicsModel, vm *VoxelModelComponent) bool {
 		resolvedModel, ok := resolvePhysicsModelForStep(assets, tr, pm, vm)
+		if !ok && isValidPrimitiveCollider(col) {
+			resolvedModel = PhysicsModel{}
+			ok = true
+		}
 		if !ok {
 			return true
 		}
-		if pm == nil {
+		if pm == nil && (len(resolvedModel.Boxes) > 0 || resolvedModel.Grid != nil) {
 			cmd.AddComponents(eid, resolvedModel)
 		}
 
@@ -371,30 +382,36 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 			invMass = 1.0 / rb.Mass
 		}
 
-		invInertiaLocal := CalculateInverseInertiaLocal(rb.Mass, &resolvedModel)
+		shape := col.Shape
+		radius := scaledColliderRadius(col, tr)
+		capsuleHalfHeight := scaledCapsuleHalfHeight(col, tr)
+		invInertiaLocal := CalculateInverseInertiaLocalForCollider(rb.Mass, shape, radius, capsuleHalfHeight, &resolvedModel)
 		vel := rb.Velocity.Add(rb.AccumulatedImpulse.Mul(invMass))
 		angVel := rb.AngularVelocity.Add(ApplyInverseInertiaWorld(physRot, invInertiaLocal, rb.AccumulatedTorque))
 
 		snapshot.Entities = append(snapshot.Entities, PhysicsEntityState{
-			Eid:            eid,
-			Pos:            physPos,
-			Rot:            physRot,
-			Vel:            vel,
-			AngVel:         angVel,
-			IsStatic:       rb.IsStatic,
-			Mass:           rb.Mass,
-			Model:          resolvedModel,
-			Friction:       col.Friction,
-			Restitution:    col.Restitution,
-			CollisionLayer: col.CollisionLayer,
-			CollisionMask:  col.CollisionMask,
-			IsTrigger:      col.IsTrigger,
-			IdleTime:       rb.IdleTime,
-			GravityScale:   rb.GravityScale,
-			LinearDamping:  rb.LinearDamping,
-			AngularDamping: rb.AngularDamping,
-			Sleeping:       rb.Sleeping,
-			Teleport:       isTeleport,
+			Eid:               eid,
+			Pos:               physPos,
+			Rot:               physRot,
+			Vel:               vel,
+			AngVel:            angVel,
+			IsStatic:          rb.IsStatic,
+			Mass:              rb.Mass,
+			Model:             resolvedModel,
+			Shape:             shape,
+			Radius:            radius,
+			CapsuleHalfHeight: capsuleHalfHeight,
+			Friction:          col.Friction,
+			Restitution:       col.Restitution,
+			CollisionLayer:    col.CollisionLayer,
+			CollisionMask:     col.CollisionMask,
+			IsTrigger:         col.IsTrigger,
+			IdleTime:          rb.IdleTime,
+			GravityScale:      rb.GravityScale,
+			LinearDamping:     rb.LinearDamping,
+			AngularDamping:    rb.AngularDamping,
+			Sleeping:          rb.Sleeping,
+			Teleport:          isTeleport,
 		})
 		rb.ForceTeleport = false
 
@@ -416,6 +433,71 @@ func resolvePhysicsModelForStep(assets *AssetServer, tr *TransformComponent, pm 
 		return *pm, true
 	}
 	return buildFallbackPhysicsModelFromVoxel(assets, tr, vm)
+}
+
+func isValidSphereCollider(col *ColliderComponent) bool {
+	return col != nil && col.Shape == ShapeSphere && col.Radius > 0
+}
+
+func isValidCapsuleCollider(col *ColliderComponent) bool {
+	return col != nil && col.Shape == ShapeCapsule && col.Radius > 0 && col.CapsuleHalfHeight >= 0
+}
+
+func isValidPrimitiveCollider(col *ColliderComponent) bool {
+	return isValidSphereCollider(col) || isValidCapsuleCollider(col)
+}
+
+func scaledSphereRadius(col *ColliderComponent, tr *TransformComponent) float32 {
+	if !isValidSphereCollider(col) {
+		return 0
+	}
+	scale := float32(1)
+	if tr != nil {
+		scale = maxf(absf(tr.Scale.X()), maxf(absf(tr.Scale.Y()), absf(tr.Scale.Z())))
+	}
+	if scale <= 0 {
+		return 0
+	}
+	return col.Radius * scale
+}
+
+func scaledColliderRadius(col *ColliderComponent, tr *TransformComponent) float32 {
+	if col == nil {
+		return 0
+	}
+	switch col.Shape {
+	case ShapeSphere:
+		return scaledSphereRadius(col, tr)
+	case ShapeCapsule:
+		return scaledCapsuleRadius(col, tr)
+	default:
+		return 0
+	}
+}
+
+func scaledCapsuleRadius(col *ColliderComponent, tr *TransformComponent) float32 {
+	if !isValidCapsuleCollider(col) {
+		return 0
+	}
+	scale := float32(1)
+	if tr != nil {
+		scale = maxf(absf(tr.Scale.X()), absf(tr.Scale.Z()))
+	}
+	if scale <= 0 {
+		return 0
+	}
+	return col.Radius * scale
+}
+
+func scaledCapsuleHalfHeight(col *ColliderComponent, tr *TransformComponent) float32 {
+	if !isValidCapsuleCollider(col) {
+		return 0
+	}
+	scale := float32(1)
+	if tr != nil {
+		scale = absf(tr.Scale.Y())
+	}
+	return col.CapsuleHalfHeight * scale
 }
 
 func buildFallbackPhysicsModelFromVoxel(assets *AssetServer, tr *TransformComponent, vm *VoxelModelComponent) (PhysicsModel, bool) {

@@ -178,6 +178,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 					// Query spatial grid for candidates
 					candidates = grid.QueryAABBInto(AABBComponent{Min: b.aabbMin, Max: b.aabbMax}, queryUnique, candidates)
+					localContacts := make([]narrowPhaseContact, 0, 16)
 					for _, otherEid := range candidates {
 						if otherEid == b.Eid {
 							continue
@@ -198,66 +199,29 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 							continue
 						}
 
-						// Narrow-phase
-						voxelHandled := false
-						if b.model.Grid != nil || other.model.Grid != nil {
-							contacts, wasHandled := checkVoxelCollision(b, other, world.PointInOBBEpsilon)
-							if wasHandled {
-								voxelHandled = true
-								for _, contact := range contacts {
-									if isTriggerPair(b, other) {
-										pair := orderedCollisionPair(b.Eid, other.Eid)
-										localTriggerEvents = append(localTriggerEvents, PhysicsCollisionEvent{
-											IsTrigger:     true,
-											A:             pair.A,
-											B:             pair.B,
-											Point:         contact.point,
-											Normal:        contact.normal,
-											Penetration:   contact.penetration,
-											RelativeSpeed: b.vel.Sub(other.vel).Len(),
-											Tick:          tick,
-										})
-										continue
-									}
-									localManifolds = append(localManifolds, collisionManifold{
-										bodyA:       b,
-										bodyB:       other,
-										normal:      contact.normal,
-										penetration: contact.penetration,
-										point:       contact.point,
-									})
-								}
+						localContacts = collectNarrowPhaseContacts(b, other, world.PointInOBBEpsilon, localContacts[:0])
+						for _, contact := range localContacts {
+							if isTriggerPair(b, other) {
+								pair := orderedCollisionPair(b.Eid, other.Eid)
+								localTriggerEvents = append(localTriggerEvents, PhysicsCollisionEvent{
+									IsTrigger:     true,
+									A:             pair.A,
+									B:             pair.B,
+									Point:         contact.point,
+									Normal:        contact.normal,
+									Penetration:   contact.penetration,
+									RelativeSpeed: b.vel.Sub(other.vel).Len(),
+									Tick:          tick,
+								})
+								continue
 							}
-						}
-
-						if !voxelHandled {
-							for _, boxA := range b.boxes {
-								for _, boxB := range other.boxes {
-									if collision, normal, penetration, contactPoint := checkSingleOBBCollision(b.pos, b.rot, boxA.Box, other.pos, other.rot, boxB.Box, world.PointInOBBEpsilon); collision {
-										if isTriggerPair(b, other) {
-											pair := orderedCollisionPair(b.Eid, other.Eid)
-											localTriggerEvents = append(localTriggerEvents, PhysicsCollisionEvent{
-												IsTrigger:     true,
-												A:             pair.A,
-												B:             pair.B,
-												Point:         contactPoint,
-												Normal:        normal,
-												Penetration:   penetration,
-												RelativeSpeed: b.vel.Sub(other.vel).Len(),
-												Tick:          tick,
-											})
-											continue
-										}
-										localManifolds = append(localManifolds, collisionManifold{
-											bodyA:       b,
-											bodyB:       other,
-											normal:      normal,
-											penetration: penetration,
-											point:       contactPoint,
-										})
-									}
-								}
-							}
+							localManifolds = append(localManifolds, collisionManifold{
+								bodyA:       b,
+								bodyB:       other,
+								normal:      contact.normal,
+								penetration: contact.penetration,
+								point:       contact.point,
+							})
 						}
 					}
 				}
@@ -530,9 +494,13 @@ func syncInternalBody(body *internalBody, es PhysicsEntityState, isNew bool) {
 
 	massChanged := body.mass != es.Mass
 	modelChanged := physicsModelChanged(body, es.Model)
+	primitiveChanged := body.shape != es.Shape || body.radius != es.Radius || body.capsuleHalfHeight != es.CapsuleHalfHeight
 
 	body.mass = es.Mass
 	body.model = es.Model
+	body.shape = es.Shape
+	body.radius = es.Radius
+	body.capsuleHalfHeight = es.CapsuleHalfHeight
 	body.friction = es.Friction
 	body.restitution = es.Restitution
 	body.collisionLayer = es.CollisionLayer
@@ -554,8 +522,8 @@ func syncInternalBody(body *internalBody, es PhysicsEntityState, isNew bool) {
 		}
 	}
 
-	if massChanged || modelChanged {
-		body.invInertiaLocal = CalculateInverseInertiaLocal(body.mass, &body.model)
+	if massChanged || modelChanged || primitiveChanged {
+		body.invInertiaLocal = CalculateInverseInertiaLocalForCollider(body.mass, body.shape, body.radius, body.capsuleHalfHeight, &body.model)
 	}
 }
 
@@ -860,28 +828,31 @@ type InternalBox struct {
 }
 
 type internalBody struct {
-	Eid             EntityId
-	pos             mgl32.Vec3
-	rot             mgl32.Quat
-	vel             mgl32.Vec3
-	angVel          mgl32.Vec3
-	isStatic        bool
-	mass            float32
-	model           PhysicsModel
-	boxes           []InternalBox
-	sleeping        bool
-	idleTime        float32
-	friction        float32
-	restitution     float32
-	collisionLayer  uint32
-	collisionMask   uint32
-	isTrigger       bool
-	gravityScale    float32
-	linearDamping   float32
-	angularDamping  float32
-	invInertiaLocal mgl32.Mat3
-	aabbMin         mgl32.Vec3
-	aabbMax         mgl32.Vec3
+	Eid               EntityId
+	pos               mgl32.Vec3
+	rot               mgl32.Quat
+	vel               mgl32.Vec3
+	angVel            mgl32.Vec3
+	isStatic          bool
+	mass              float32
+	model             PhysicsModel
+	shape             ColliderShape
+	radius            float32
+	capsuleHalfHeight float32
+	boxes             []InternalBox
+	sleeping          bool
+	idleTime          float32
+	friction          float32
+	restitution       float32
+	collisionLayer    uint32
+	collisionMask     uint32
+	isTrigger         bool
+	gravityScale      float32
+	linearDamping     float32
+	angularDamping    float32
+	invInertiaLocal   mgl32.Mat3
+	aabbMin           mgl32.Vec3
+	aabbMax           mgl32.Vec3
 }
 
 func integrateAngularVelocity(rot mgl32.Quat, angVel mgl32.Vec3, dt float32) mgl32.Quat {
@@ -897,6 +868,21 @@ func integrateAngularVelocity(rot mgl32.Quat, angVel mgl32.Vec3, dt float32) mgl
 }
 
 func (b *internalBody) updateAABB() {
+	if b.shape == ShapeSphere && b.radius > 0 {
+		extents := mgl32.Vec3{b.radius, b.radius, b.radius}
+		b.aabbMin = b.pos.Sub(extents)
+		b.aabbMax = b.pos.Add(extents)
+		return
+	}
+
+	if b.shape == ShapeCapsule && b.radius > 0 && b.capsuleHalfHeight >= 0 {
+		endA, endB := capsuleSegmentEndpoints(b.pos, b.rot, b.capsuleHalfHeight)
+		extents := mgl32.Vec3{b.radius, b.radius, b.radius}
+		b.aabbMin = vec3Min(endA, endB).Sub(extents)
+		b.aabbMax = vec3Max(endA, endB).Add(extents)
+		return
+	}
+
 	if len(b.boxes) == 0 {
 		b.aabbMin = b.pos
 		b.aabbMax = b.pos
@@ -994,6 +980,15 @@ func ApplyInverseInertiaWorld(rot mgl32.Quat, invInertiaLocal mgl32.Mat3, angula
 
 func CalculateInverseInertiaLocal(mass float32, model *PhysicsModel) mgl32.Mat3 {
 	localInertia := calculateLocalInertiaTensorFromModel(mass, model)
+	return inverseInertiaFromLocalTensor(localInertia)
+}
+
+func CalculateInverseInertiaLocalForCollider(mass float32, shape ColliderShape, radius, capsuleHalfHeight float32, model *PhysicsModel) mgl32.Mat3 {
+	localInertia := calculateLocalInertiaTensorForCollider(mass, shape, radius, capsuleHalfHeight, model)
+	return inverseInertiaFromLocalTensor(localInertia)
+}
+
+func inverseInertiaFromLocalTensor(localInertia mgl32.Mat3) mgl32.Mat3 {
 	if absf(localInertia.Det()) > 1e-6 {
 		return localInertia.Inv()
 	}
@@ -1013,7 +1008,7 @@ func calculateLocalInertiaTensor(body *internalBody) mgl32.Mat3 {
 		return mgl32.Ident3()
 	}
 	model := physicsModelForInertia(body)
-	return calculateLocalInertiaTensorFromModel(body.mass, &model)
+	return calculateLocalInertiaTensorForCollider(body.mass, body.shape, body.radius, body.capsuleHalfHeight, &model)
 }
 
 // calculateInverseInertiaLocal is a compatibility wrapper retained for tests and
@@ -1023,7 +1018,7 @@ func calculateInverseInertiaLocal(body *internalBody) mgl32.Mat3 {
 		return mgl32.Ident3()
 	}
 	model := physicsModelForInertia(body)
-	return CalculateInverseInertiaLocal(body.mass, &model)
+	return CalculateInverseInertiaLocalForCollider(body.mass, body.shape, body.radius, body.capsuleHalfHeight, &model)
 }
 
 func physicsModelForInertia(body *internalBody) PhysicsModel {
@@ -1045,7 +1040,28 @@ func physicsModelForInertia(body *internalBody) PhysicsModel {
 }
 
 func calculateLocalInertiaTensorFromModel(mass float32, model *PhysicsModel) mgl32.Mat3 {
+	return calculateLocalInertiaTensorForCollider(mass, ShapeBox, 0, 0, model)
+}
+
+func calculateLocalInertiaTensorForCollider(mass float32, shape ColliderShape, radius, capsuleHalfHeight float32, model *PhysicsModel) mgl32.Mat3 {
 	if mass <= 0 {
+		return mgl32.Ident3()
+	}
+
+	if shape == ShapeSphere && radius > 0 {
+		moment := (2.0 / 5.0) * mass * radius * radius
+		return mgl32.Mat3FromRows(
+			mgl32.Vec3{moment, 0, 0},
+			mgl32.Vec3{0, moment, 0},
+			mgl32.Vec3{0, 0, moment},
+		)
+	}
+
+	if shape == ShapeCapsule && radius > 0 && capsuleHalfHeight >= 0 {
+		return capsuleLocalInertiaTensor(mass, radius, capsuleHalfHeight)
+	}
+
+	if model == nil {
 		return mgl32.Ident3()
 	}
 
@@ -1146,6 +1162,37 @@ func calculateLocalInertiaTensorFromModel(mass float32, model *PhysicsModel) mgl
 	}
 
 	return totalInertia
+}
+
+func capsuleLocalInertiaTensor(mass, radius, halfHeight float32) mgl32.Mat3 {
+	if halfHeight <= 0 {
+		moment := (2.0 / 5.0) * mass * radius * radius
+		return mgl32.Mat3FromRows(
+			mgl32.Vec3{moment, 0, 0},
+			mgl32.Vec3{0, moment, 0},
+			mgl32.Vec3{0, 0, moment},
+		)
+	}
+
+	r2 := radius * radius
+	cylinderVolume := 2 * r2 * halfHeight
+	sphereVolume := (4.0 / 3.0) * r2 * radius
+	totalVolume := cylinderVolume + sphereVolume
+	if totalVolume <= 0 {
+		return mgl32.Ident3()
+	}
+
+	cylinderMass := mass * cylinderVolume / totalVolume
+	sphereMass := mass * sphereVolume / totalVolume
+	perpendicular := cylinderMass*(0.25*r2+(1.0/3.0)*halfHeight*halfHeight) +
+		sphereMass*(halfHeight*halfHeight+0.75*halfHeight*radius+(2.0/5.0)*r2)
+	axis := 0.5*cylinderMass*r2 + (2.0/5.0)*sphereMass*r2
+
+	return mgl32.Mat3FromRows(
+		mgl32.Vec3{perpendicular, 0, 0},
+		mgl32.Vec3{0, axis, 0},
+		mgl32.Vec3{0, 0, perpendicular},
+	)
 }
 
 func RotationMat3(q mgl32.Quat) mgl32.Mat3 {

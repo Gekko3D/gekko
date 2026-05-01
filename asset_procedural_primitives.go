@@ -174,6 +174,8 @@ func (server *AssetServer) CreateCylinderModel(radius, height float32, resolutio
 	}, 1.0)
 }
 
+// CreateCapsuleModel creates a capsule whose long axis is local Z, matching the
+// legacy procedural model convention used by authored content primitives.
 func (server *AssetServer) CreateCapsuleModel(radius, height float32, resolution float32) AssetId {
 	scaledRadius := radius * resolution
 	totalHeight := height * resolution
@@ -208,6 +210,46 @@ func (server *AssetServer) CreateCapsuleModel(radius, height float32, resolution
 
 	return server.CreateVoxelGeometry(VoxModel{
 		SizeX: uint32(r*2 + 1), SizeY: uint32(r*2 + 1), SizeZ: uint32(totalSizeZ),
+		Voxels: voxels,
+	}, 1.0)
+}
+
+// CreateCapsuleYModel creates a capsule whose long axis is local Y, matching
+// ShapeCapsule's physics collider contract.
+func (server *AssetServer) CreateCapsuleYModel(radius, height float32, resolution float32) AssetId {
+	scaledRadius := radius * resolution
+	totalHeight := height * resolution
+	r := int(scaledRadius)
+	bodyHeight := int(math.Max(1, float64(totalHeight-scaledRadius*2)))
+	totalSizeY := bodyHeight + r*2 + 1
+	voxels := []Voxel{}
+	r2 := scaledRadius * scaledRadius
+	cylinderOffset := float32(r)
+	topCenter := cylinderOffset + float32(bodyHeight)
+
+	for x := -r; x <= r; x++ {
+		for y := 0; y < totalSizeY; y++ {
+			for z := -r; z <= r; z++ {
+				fx, fy, fz := float32(x), float32(y), float32(z)
+				insideCylinder := y >= r && y < r+bodyHeight && fx*fx+fz*fz <= r2
+				bottomDy := fy - cylinderOffset
+				topDy := fy - topCenter
+				insideBottom := fx*fx+fz*fz+bottomDy*bottomDy <= r2
+				insideTop := fx*fx+fz*fz+topDy*topDy <= r2
+				if insideCylinder || insideBottom || insideTop {
+					voxels = append(voxels, Voxel{
+						X:          uint32(x + r),
+						Y:          uint32(y),
+						Z:          uint32(z + r),
+						ColorIndex: 1,
+					})
+				}
+			}
+		}
+	}
+
+	return server.CreateVoxelGeometry(VoxModel{
+		SizeX: uint32(r*2 + 1), SizeY: uint32(totalSizeY), SizeZ: uint32(r*2 + 1),
 		Voxels: voxels,
 	}, 1.0)
 }

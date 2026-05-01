@@ -64,6 +64,29 @@ func TestCreateFrameModelBuildsHollowInterior(t *testing.T) {
 	}
 }
 
+func TestCreateCapsuleYModelUsesLocalYAxis(t *testing.T) {
+	server := &AssetServer{}
+
+	id := server.CreateCapsuleYModel(3, 16, 1)
+	geometry, ok := server.GetVoxelGeometry(id)
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatal("expected Y-axis capsule geometry asset")
+	}
+
+	if geometry.LocalMax.X() != 7 || geometry.LocalMax.Y() != 17 || geometry.LocalMax.Z() != 7 {
+		t.Fatalf("expected Y-axis capsule bounds 7x17x7, got min=%v max=%v", geometry.LocalMin, geometry.LocalMax)
+	}
+	if found, value := geometry.XBrickMap.GetVoxel(3, 0, 3); !found || value != 1 {
+		t.Fatalf("expected bottom cap on local Y axis, got found=%v value=%d", found, value)
+	}
+	if found, value := geometry.XBrickMap.GetVoxel(3, 8, 3); !found || value != 1 {
+		t.Fatalf("expected cylinder body along local Y axis, got found=%v value=%d", found, value)
+	}
+	if found, value := geometry.XBrickMap.GetVoxel(3, 16, 3); !found || value != 1 {
+		t.Fatalf("expected top cap on local Y axis, got found=%v value=%d", found, value)
+	}
+}
+
 func TestEntityLODSimplifiedGeometryCachesAndShrinksVoxelCount(t *testing.T) {
 	server := &AssetServer{
 		textures:       make(map[AssetId]TextureAsset),

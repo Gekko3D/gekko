@@ -14,8 +14,555 @@ type voxelCollisionContact struct {
 	point       mgl32.Vec3
 }
 
+type narrowPhaseContact struct {
+	normal      mgl32.Vec3
+	penetration float32
+	point       mgl32.Vec3
+}
+
 type voxelPrimitiveRangeIterator interface {
 	ForEachPrimitiveInRange(minX, minY, minZ, maxX, maxY, maxZ int, fn func(localCenter, halfExtents mgl32.Vec3) bool) bool
+}
+
+func collectNarrowPhaseContacts(bodyA, bodyB *internalBody, pointInOBBEpsilon float32, contacts []narrowPhaseContact) []narrowPhaseContact {
+	if bodyA == nil || bodyB == nil {
+		return contacts
+	}
+
+	if isPrimitiveVoxelPair(bodyA, bodyB) {
+		voxelContacts, handled := checkPrimitiveVoxelCollision(bodyA, bodyB)
+		if handled {
+			for _, contact := range voxelContacts {
+				contacts = append(contacts, narrowPhaseContact{
+					normal:      contact.normal,
+					penetration: contact.penetration,
+					point:       contact.point,
+				})
+			}
+			return contacts
+		}
+	}
+
+	if bodyA.model.Grid != nil || bodyB.model.Grid != nil {
+		voxelContacts, handled := checkVoxelCollision(bodyA, bodyB, pointInOBBEpsilon)
+		if handled {
+			for _, contact := range voxelContacts {
+				contacts = append(contacts, narrowPhaseContact{
+					normal:      contact.normal,
+					penetration: contact.penetration,
+					point:       contact.point,
+				})
+			}
+			return contacts
+		}
+	}
+
+	if usesPrimitive(bodyA) || usesPrimitive(bodyB) {
+		return collectPrimitiveContacts(bodyA, bodyB, contacts)
+	}
+
+	for _, boxA := range bodyA.boxes {
+		for _, boxB := range bodyB.boxes {
+			if collision, normal, penetration, contactPoint := checkSingleOBBCollision(bodyA.pos, bodyA.rot, boxA.Box, bodyB.pos, bodyB.rot, boxB.Box, pointInOBBEpsilon); collision {
+				contacts = append(contacts, narrowPhaseContact{
+					normal:      normal,
+					penetration: penetration,
+					point:       contactPoint,
+				})
+			}
+		}
+	}
+	return contacts
+}
+
+type capsulePrimitive struct {
+	a      mgl32.Vec3
+	b      mgl32.Vec3
+	radius float32
+}
+
+func usesPrimitive(body *internalBody) bool {
+	return body != nil && (body.shape == ShapeSphere || body.shape == ShapeCapsule)
+}
+
+func isPrimitiveVoxelPair(bodyA, bodyB *internalBody) bool {
+	return validPrimitiveBody(bodyA) && bodyB != nil && bodyB.model.Grid != nil ||
+		validPrimitiveBody(bodyB) && bodyA != nil && bodyA.model.Grid != nil
+}
+
+func validPrimitiveBody(body *internalBody) bool {
+	return validSphereBody(body) || validCapsuleBody(body)
+}
+
+func validSphereBody(body *internalBody) bool {
+	return body != nil && body.shape == ShapeSphere && body.radius > 0
+}
+
+func validCapsuleBody(body *internalBody) bool {
+	return body != nil && body.shape == ShapeCapsule && body.radius > 0 && body.capsuleHalfHeight >= 0
+}
+
+func capsuleFromBody(body *internalBody) (capsulePrimitive, bool) {
+	if !validCapsuleBody(body) {
+		return capsulePrimitive{}, false
+	}
+	a, b := capsuleSegmentEndpoints(body.pos, body.rot, body.capsuleHalfHeight)
+	return capsulePrimitive{
+		a:      a,
+		b:      b,
+		radius: body.radius,
+	}, true
+}
+
+func capsuleSegmentEndpoints(pos mgl32.Vec3, rot mgl32.Quat, halfHeight float32) (mgl32.Vec3, mgl32.Vec3) {
+	offset := rot.Rotate(mgl32.Vec3{0, halfHeight, 0})
+	return pos.Sub(offset), pos.Add(offset)
+}
+
+func vec3Min(a, b mgl32.Vec3) mgl32.Vec3 {
+	return mgl32.Vec3{minf(a.X(), b.X()), minf(a.Y(), b.Y()), minf(a.Z(), b.Z())}
+}
+
+func vec3Max(a, b mgl32.Vec3) mgl32.Vec3 {
+	return mgl32.Vec3{maxf(a.X(), b.X()), maxf(a.Y(), b.Y()), maxf(a.Z(), b.Z())}
+}
+
+func collectPrimitiveContacts(bodyA, bodyB *internalBody, contacts []narrowPhaseContact) []narrowPhaseContact {
+	sphereA := bodyA.shape == ShapeSphere && bodyA.radius > 0
+	sphereB := bodyB.shape == ShapeSphere && bodyB.radius > 0
+	capsuleA, validCapsuleA := capsuleFromBody(bodyA)
+	capsuleB, validCapsuleB := capsuleFromBody(bodyB)
+
+	switch {
+	case sphereA && sphereB:
+		if contact, ok := checkSphereSphereCollision(bodyA.pos, bodyA.radius, bodyB.pos, bodyB.radius); ok {
+			contacts = append(contacts, contact)
+		}
+	case validCapsuleA && sphereB:
+		if contact, ok := checkCapsuleSphereCollision(capsuleA, bodyB.pos, bodyB.radius); ok {
+			contacts = append(contacts, contact)
+		}
+	case sphereA && validCapsuleB:
+		if contact, ok := checkCapsuleSphereCollision(capsuleB, bodyA.pos, bodyA.radius); ok {
+			contact.normal = contact.normal.Mul(-1)
+			contacts = append(contacts, contact)
+		}
+	case validCapsuleA && validCapsuleB:
+		if contact, ok := checkCapsuleCapsuleCollision(capsuleA, capsuleB); ok {
+			contacts = append(contacts, contact)
+		}
+	case validCapsuleA:
+		for _, boxB := range bodyB.boxes {
+			if contact, ok := checkCapsuleOBBCollision(capsuleA, bodyB.pos, bodyB.rot, boxB.Box); ok {
+				contacts = append(contacts, contact)
+			}
+		}
+	case validCapsuleB:
+		for _, boxA := range bodyA.boxes {
+			if contact, ok := checkCapsuleOBBCollision(capsuleB, bodyA.pos, bodyA.rot, boxA.Box); ok {
+				contact.normal = contact.normal.Mul(-1)
+				contacts = append(contacts, contact)
+			}
+		}
+	case sphereA:
+		for _, boxB := range bodyB.boxes {
+			if contact, ok := checkSphereOBBCollision(bodyA.pos, bodyA.radius, bodyB.pos, bodyB.rot, boxB.Box); ok {
+				contacts = append(contacts, contact)
+			}
+		}
+	case sphereB:
+		for _, boxA := range bodyA.boxes {
+			if contact, ok := checkSphereOBBCollision(bodyB.pos, bodyB.radius, bodyA.pos, bodyA.rot, boxA.Box); ok {
+				contact.normal = contact.normal.Mul(-1)
+				contacts = append(contacts, contact)
+			}
+		}
+	}
+
+	return contacts
+}
+
+func checkPrimitiveVoxelCollision(bodyA, bodyB *internalBody) ([]voxelCollisionContact, bool) {
+	swapped := false
+	if !validPrimitiveBody(bodyA) && validPrimitiveBody(bodyB) {
+		bodyA, bodyB = bodyB, bodyA
+		swapped = true
+	}
+	if !validPrimitiveBody(bodyA) || bodyB == nil || bodyB.model.Grid == nil {
+		return nil, false
+	}
+
+	gridB := bodyB.model.Grid
+	overlapMin := mgl32.Vec3{
+		maxf(bodyA.aabbMin.X(), bodyB.aabbMin.X()),
+		maxf(bodyA.aabbMin.Y(), bodyB.aabbMin.Y()),
+		maxf(bodyA.aabbMin.Z(), bodyB.aabbMin.Z()),
+	}
+	overlapMax := mgl32.Vec3{
+		minf(bodyA.aabbMax.X(), bodyB.aabbMax.X()),
+		minf(bodyA.aabbMax.Y(), bodyB.aabbMax.Y()),
+		minf(bodyA.aabbMax.Z(), bodyB.aabbMax.Z()),
+	}
+
+	if overlapMin.X() >= overlapMax.X() || overlapMin.Y() >= overlapMax.Y() || overlapMin.Z() >= overlapMax.Z() {
+		return nil, true
+	}
+
+	voxelScaleB := gridB.VoxelScale()
+	invRotB := bodyB.rot.Inverse()
+	centerB := bodyB.model.CenterOffset
+	lMin, lMax := transformedOverlapBounds(overlapMin, overlapMax, bodyB.pos, invRotB, centerB, voxelScaleB)
+
+	minX, minY, minZ := int(math.Floor(float64(lMin.X()))), int(math.Floor(float64(lMin.Y()))), int(math.Floor(float64(lMin.Z())))
+	maxX, maxY, maxZ := int(math.Ceil(float64(lMax.X()))), int(math.Ceil(float64(lMax.Y()))), int(math.Ceil(float64(lMax.Z())))
+
+	voxelBoxB := CollisionBox{
+		HalfExtents: voxelScaleB.Mul(0.5),
+	}
+	capsuleA, capsuleAOk := capsuleFromBody(bodyA)
+	contacts := make([]voxelCollisionContact, 0, 16)
+	handled := forEachVoxelPrimitiveInRange(gridB, minX, minY, minZ, maxX, maxY, maxZ, func(localCenterB, halfExtentsB mgl32.Vec3) bool {
+		worldPosB := bodyB.rot.Rotate(localCenterB.Sub(centerB)).Add(bodyB.pos)
+		voxelBoxB.HalfExtents = halfExtentsB
+		var contact narrowPhaseContact
+		var ok bool
+		if capsuleAOk {
+			contact, ok = checkCapsuleOBBCollision(capsuleA, worldPosB, bodyB.rot, voxelBoxB)
+		} else {
+			contact, ok = checkSphereOBBCollision(bodyA.pos, bodyA.radius, worldPosB, bodyB.rot, voxelBoxB)
+		}
+		if !ok {
+			return true
+		}
+		if swapped {
+			contact.normal = contact.normal.Mul(-1)
+		}
+		contacts = append(contacts, voxelCollisionContact{
+			normal:      contact.normal,
+			penetration: contact.penetration,
+			point:       contact.point,
+		})
+		return true
+	})
+	if !handled {
+		return nil, false
+	}
+	if len(contacts) == 0 {
+		return nil, true
+	}
+	return reduceVoxelContacts(contacts, 6), true
+}
+
+func checkCapsuleSphereCollision(capsule capsulePrimitive, spherePos mgl32.Vec3, sphereRadius float32) (narrowPhaseContact, bool) {
+	if capsule.radius <= 0 || sphereRadius <= 0 {
+		return narrowPhaseContact{}, false
+	}
+
+	capsulePoint := closestPointOnSegment(spherePos, capsule.a, capsule.b)
+	delta := capsulePoint.Sub(spherePos)
+	radiusSum := capsule.radius + sphereRadius
+	distSqr := delta.LenSqr()
+	if distSqr >= radiusSum*radiusSum {
+		return narrowPhaseContact{}, false
+	}
+
+	dist := float32(math.Sqrt(float64(distSqr)))
+	normal := capsuleNormalFallback(capsule, spherePos)
+	if dist > 1e-6 {
+		normal = delta.Mul(1.0 / dist)
+	}
+	penetration := radiusSum - dist
+	point := capsulePoint.Sub(normal.Mul(capsule.radius - penetration*0.5))
+	return narrowPhaseContact{
+		normal:      normal,
+		penetration: penetration,
+		point:       point,
+	}, true
+}
+
+func checkCapsuleCapsuleCollision(capsuleA, capsuleB capsulePrimitive) (narrowPhaseContact, bool) {
+	if capsuleA.radius <= 0 || capsuleB.radius <= 0 {
+		return narrowPhaseContact{}, false
+	}
+
+	pointA, pointB := closestSegmentSegment(capsuleA.a, capsuleA.b, capsuleB.a, capsuleB.b)
+	delta := pointA.Sub(pointB)
+	radiusSum := capsuleA.radius + capsuleB.radius
+	distSqr := delta.LenSqr()
+	if distSqr >= radiusSum*radiusSum {
+		return narrowPhaseContact{}, false
+	}
+
+	dist := float32(math.Sqrt(float64(distSqr)))
+	normal := capsulePairNormalFallback(capsuleA, capsuleB)
+	if dist > 1e-6 {
+		normal = delta.Mul(1.0 / dist)
+	}
+	penetration := radiusSum - dist
+	point := pointA.Sub(normal.Mul(capsuleA.radius - penetration*0.5))
+	return narrowPhaseContact{
+		normal:      normal,
+		penetration: penetration,
+		point:       point,
+	}, true
+}
+
+func checkCapsuleOBBCollision(capsule capsulePrimitive, boxPos mgl32.Vec3, boxRot mgl32.Quat, box CollisionBox) (narrowPhaseContact, bool) {
+	if capsule.radius <= 0 {
+		return narrowPhaseContact{}, false
+	}
+
+	worldBoxPos := boxPos.Add(boxRot.Rotate(box.LocalOffset))
+	invRot := boxRot.Inverse()
+	localA := invRot.Rotate(capsule.a.Sub(worldBoxPos))
+	localB := invRot.Rotate(capsule.b.Sub(worldBoxPos))
+	localCapsulePoint, localBoxPoint := closestSegmentAABB(localA, localB, box.HalfExtents)
+	worldCapsulePoint := worldBoxPos.Add(boxRot.Rotate(localCapsulePoint))
+	worldBoxPoint := worldBoxPos.Add(boxRot.Rotate(localBoxPoint))
+	delta := worldCapsulePoint.Sub(worldBoxPoint)
+	distSqr := delta.LenSqr()
+	if distSqr >= capsule.radius*capsule.radius {
+		return narrowPhaseContact{}, false
+	}
+
+	if distSqr > 1e-8 {
+		dist := float32(math.Sqrt(float64(distSqr)))
+		normal := delta.Mul(1.0 / dist)
+		return narrowPhaseContact{
+			normal:      normal,
+			penetration: capsule.radius - dist,
+			point:       worldBoxPoint,
+		}, true
+	}
+
+	normal, faceDistance := closestOBBInteriorNormal(localCapsulePoint, box.HalfExtents, boxRot)
+	return narrowPhaseContact{
+		normal:      normal,
+		penetration: capsule.radius + faceDistance,
+		point:       worldCapsulePoint.Sub(normal.Mul(capsule.radius)),
+	}, true
+}
+
+func closestPointOnSegment(point, a, b mgl32.Vec3) mgl32.Vec3 {
+	ab := b.Sub(a)
+	denom := ab.LenSqr()
+	if denom <= 1e-8 {
+		return a
+	}
+	t := point.Sub(a).Dot(ab) / denom
+	t = clampf(t, 0, 1)
+	return a.Add(ab.Mul(t))
+}
+
+func closestSegmentSegment(p1, q1, p2, q2 mgl32.Vec3) (mgl32.Vec3, mgl32.Vec3) {
+	const epsilon = float32(1e-6)
+	d1 := q1.Sub(p1)
+	d2 := q2.Sub(p2)
+	r := p1.Sub(p2)
+	a := d1.Dot(d1)
+	e := d2.Dot(d2)
+	f := d2.Dot(r)
+
+	var s, t float32
+	if a <= epsilon && e <= epsilon {
+		return p1, p2
+	}
+	if a <= epsilon {
+		s = 0
+		t = clampf(f/e, 0, 1)
+	} else {
+		c := d1.Dot(r)
+		if e <= epsilon {
+			t = 0
+			s = clampf(-c/a, 0, 1)
+		} else {
+			b := d1.Dot(d2)
+			denom := a*e - b*b
+			if denom != 0 {
+				s = clampf((b*f-c*e)/denom, 0, 1)
+			} else {
+				s = 0
+			}
+			t = (b*s + f) / e
+			if t < 0 {
+				t = 0
+				s = clampf(-c/a, 0, 1)
+			} else if t > 1 {
+				t = 1
+				s = clampf((b-c)/a, 0, 1)
+			}
+		}
+	}
+
+	return p1.Add(d1.Mul(s)), p2.Add(d2.Mul(t))
+}
+
+func capsuleNormalFallback(capsule capsulePrimitive, otherPoint mgl32.Vec3) mgl32.Vec3 {
+	mid := capsule.a.Add(capsule.b).Mul(0.5)
+	if delta := mid.Sub(otherPoint); delta.LenSqr() > 1e-8 {
+		return delta.Normalize()
+	}
+	axis := capsule.b.Sub(capsule.a)
+	if axis.LenSqr() > 1e-8 {
+		n := axis.Cross(mgl32.Vec3{1, 0, 0})
+		if n.LenSqr() <= 1e-8 {
+			n = axis.Cross(mgl32.Vec3{0, 0, 1})
+		}
+		if n.LenSqr() > 1e-8 {
+			return n.Normalize()
+		}
+	}
+	return mgl32.Vec3{1, 0, 0}
+}
+
+func capsulePairNormalFallback(capsuleA, capsuleB capsulePrimitive) mgl32.Vec3 {
+	midA := capsuleA.a.Add(capsuleA.b).Mul(0.5)
+	midB := capsuleB.a.Add(capsuleB.b).Mul(0.5)
+	if delta := midA.Sub(midB); delta.LenSqr() > 1e-8 {
+		return delta.Normalize()
+	}
+	axisA := capsuleA.b.Sub(capsuleA.a)
+	axisB := capsuleB.b.Sub(capsuleB.a)
+	if cross := axisA.Cross(axisB); cross.LenSqr() > 1e-8 {
+		return cross.Normalize()
+	}
+	return capsuleNormalFallback(capsuleA, midB)
+}
+
+func closestSegmentAABB(a, b, halfExtents mgl32.Vec3) (mgl32.Vec3, mgl32.Vec3) {
+	d := b.Sub(a)
+	if d.LenSqr() <= 1e-8 {
+		boxPoint := closestPointOnAABB(a, halfExtents)
+		return a, boxPoint
+	}
+
+	lo := float32(0)
+	hi := float32(1)
+	for i := 0; i < 32; i++ {
+		m1 := lo + (hi-lo)/3
+		m2 := hi - (hi-lo)/3
+		p1 := a.Add(d.Mul(m1))
+		p2 := a.Add(d.Mul(m2))
+		if sqDistPointAABB(p1, halfExtents) < sqDistPointAABB(p2, halfExtents) {
+			hi = m2
+		} else {
+			lo = m1
+		}
+	}
+	t := (lo + hi) * 0.5
+	segmentPoint := a.Add(d.Mul(t))
+	boxPoint := closestPointOnAABB(segmentPoint, halfExtents)
+	return segmentPoint, boxPoint
+}
+
+func closestPointOnAABB(point, halfExtents mgl32.Vec3) mgl32.Vec3 {
+	return mgl32.Vec3{
+		clampf(point.X(), -halfExtents.X(), halfExtents.X()),
+		clampf(point.Y(), -halfExtents.Y(), halfExtents.Y()),
+		clampf(point.Z(), -halfExtents.Z(), halfExtents.Z()),
+	}
+}
+
+func sqDistPointAABB(point, halfExtents mgl32.Vec3) float32 {
+	closest := closestPointOnAABB(point, halfExtents)
+	return point.Sub(closest).LenSqr()
+}
+
+func checkSphereSphereCollision(posA mgl32.Vec3, radiusA float32, posB mgl32.Vec3, radiusB float32) (narrowPhaseContact, bool) {
+	if radiusA <= 0 || radiusB <= 0 {
+		return narrowPhaseContact{}, false
+	}
+	delta := posA.Sub(posB)
+	radiusSum := radiusA + radiusB
+	distSqr := delta.LenSqr()
+	if distSqr >= radiusSum*radiusSum {
+		return narrowPhaseContact{}, false
+	}
+
+	dist := float32(math.Sqrt(float64(distSqr)))
+	normal := mgl32.Vec3{1, 0, 0}
+	if dist > 1e-6 {
+		normal = delta.Mul(1.0 / dist)
+	}
+
+	penetration := radiusSum - dist
+	point := posA.Sub(normal.Mul(radiusA - penetration*0.5))
+	return narrowPhaseContact{
+		normal:      normal,
+		penetration: penetration,
+		point:       point,
+	}, true
+}
+
+func checkSphereOBBCollision(spherePos mgl32.Vec3, sphereRadius float32, boxPos mgl32.Vec3, boxRot mgl32.Quat, box CollisionBox) (narrowPhaseContact, bool) {
+	if sphereRadius <= 0 {
+		return narrowPhaseContact{}, false
+	}
+
+	worldBoxPos := boxPos.Add(boxRot.Rotate(box.LocalOffset))
+	invRot := boxRot.Inverse()
+	localSphere := invRot.Rotate(spherePos.Sub(worldBoxPos))
+	closestLocal := mgl32.Vec3{
+		clampf(localSphere.X(), -box.HalfExtents.X(), box.HalfExtents.X()),
+		clampf(localSphere.Y(), -box.HalfExtents.Y(), box.HalfExtents.Y()),
+		clampf(localSphere.Z(), -box.HalfExtents.Z(), box.HalfExtents.Z()),
+	}
+	closestWorld := worldBoxPos.Add(boxRot.Rotate(closestLocal))
+	delta := spherePos.Sub(closestWorld)
+	distSqr := delta.LenSqr()
+	if distSqr >= sphereRadius*sphereRadius {
+		return narrowPhaseContact{}, false
+	}
+
+	if distSqr > 1e-8 {
+		dist := float32(math.Sqrt(float64(distSqr)))
+		normal := delta.Mul(1.0 / dist)
+		return narrowPhaseContact{
+			normal:      normal,
+			penetration: sphereRadius - dist,
+			point:       closestWorld,
+		}, true
+	}
+
+	normal, faceDistance := closestOBBInteriorNormal(localSphere, box.HalfExtents, boxRot)
+	return narrowPhaseContact{
+		normal:      normal,
+		penetration: sphereRadius + faceDistance,
+		point:       spherePos.Sub(normal.Mul(sphereRadius)),
+	}, true
+}
+
+func closestOBBInteriorNormal(localPoint, halfExtents mgl32.Vec3, rot mgl32.Quat) (mgl32.Vec3, float32) {
+	bestAxis := 0
+	bestDistance := halfExtents.X() - absf(localPoint.X())
+	for axis := 1; axis < 3; axis++ {
+		distance := halfExtents[axis] - absf(localPoint[axis])
+		if distance < bestDistance {
+			bestAxis = axis
+			bestDistance = distance
+		}
+	}
+	if bestDistance < 0 {
+		bestDistance = 0
+	}
+
+	localNormal := mgl32.Vec3{}
+	if localPoint[bestAxis] < 0 {
+		localNormal[bestAxis] = -1
+	} else {
+		localNormal[bestAxis] = 1
+	}
+	return rot.Rotate(localNormal), bestDistance
+}
+
+func clampf(v, minV, maxV float32) float32 {
+	if v < minV {
+		return minV
+	}
+	if v > maxV {
+		return maxV
+	}
+	return v
 }
 
 func checkSingleOBBCollision(posA mgl32.Vec3, rotA mgl32.Quat, boxA CollisionBox, posB mgl32.Vec3, rotB mgl32.Quat, boxB CollisionBox, pointInOBBEpsilon float32) (bool, mgl32.Vec3, float32, mgl32.Vec3) {

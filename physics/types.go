@@ -7,6 +7,7 @@ type ColliderShape int
 const (
 	ShapeBox ColliderShape = iota
 	ShapeSphere
+	ShapeCapsule
 )
 
 const (
@@ -57,15 +58,16 @@ type CollisionBox struct {
 }
 
 type ColliderComponent struct {
-	Shape           ColliderShape
-	HalfExtents     mgl32.Vec3 // For Box
-	Radius          float32    // For Sphere
-	Friction        float32
-	Restitution     float32
-	CollisionLayer  uint32
-	CollisionMask   uint32
-	IsTrigger       bool
-	AABBHalfExtents mgl32.Vec3 // Cached or calculated total half extents
+	Shape             ColliderShape
+	HalfExtents       mgl32.Vec3 // For Box
+	Radius            float32    // For Sphere/Capsule
+	CapsuleHalfHeight float32    // For Capsule: half the cylindrical segment length along local Y
+	Friction          float32
+	Restitution       float32
+	CollisionLayer    uint32
+	CollisionMask     uint32
+	IsTrigger         bool
+	AABBHalfExtents   mgl32.Vec3 // Cached or calculated total half extents
 }
 
 func EffectiveCollisionLayer(layer uint32) uint32 {
