@@ -68,6 +68,7 @@ type App struct {
 	TextBindGroup    *wgpu.BindGroup
 	TextVertexBuffer *wgpu.Buffer
 	TextItems        []core.TextItem
+	RectItems        []core.RectItem
 	TextVertexCount  uint32
 
 	GizmoPass *gpu.GizmoRenderPass

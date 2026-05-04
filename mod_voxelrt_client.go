@@ -172,6 +172,12 @@ func (s *VoxelRtState) DrawText(text string, x, y float32, scale float32, color 
 	}
 }
 
+func (s *VoxelRtState) DrawRect(x, y, w, h float32, color [4]float32) {
+	if s != nil && s.RtApp != nil {
+		s.RtApp.DrawRect(x, y, w, h, color)
+	}
+}
+
 func (s *VoxelRtState) MeasureText(text string, scale float32) (float32, float32) {
 	if s == nil || s.RtApp == nil {
 		return 0, 0
@@ -236,6 +242,14 @@ func (s *VoxelRtState) SetLightingQuality(cfg LightingQualityConfig) {
 	if s != nil && s.RtApp != nil {
 		s.RtApp.LightingQuality = cfg
 	}
+}
+
+
+func (s *VoxelRtState) GetTextAscent(scale float32) float32 {
+	if s == nil || s.RtApp == nil {
+		return 0
+	}
+	return s.RtApp.GetTextAscent(scale)
 }
 
 func (s *VoxelRtState) LightingQuality() LightingQualityConfig {

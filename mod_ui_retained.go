@@ -107,6 +107,8 @@ type UiPanel struct {
 	Scale     float32
 	Title     string
 	Visible   bool
+	BgColor   [4]float32
+	TextColor [4]float32
 	Children  []UiNode
 }
 
@@ -142,6 +144,7 @@ type UiLabel struct {
 	Width float32
 	Scale float32
 	Dim   bool
+	Color [4]float32
 }
 
 func (UiLabel) isUiNode() {}
@@ -153,6 +156,9 @@ type UiAsciiGrid struct {
 	CellHeight float32
 	Scale      float32
 	Color      [4]float32
+	BgColor    [4]float32
+	ColorGrid  [][][4]float32
+	BgColorGrid [][][4]float32
 }
 
 func (UiAsciiGrid) isUiNode() {}
@@ -267,6 +273,8 @@ type uiLayoutContext struct {
 	state      *VoxelRtState
 	input      *Input
 	pixelRatio float32
+	textColor  [4]float32
+	scale      float32
 }
 
 func uiPanelInputSystem(state *VoxelRtState, input *Input, runtime *UiRuntime, cmd *Commands) {
@@ -332,15 +340,17 @@ func makeUiLayoutContext(state *VoxelRtState, input *Input) uiLayoutContext {
 		state:      state,
 		input:      input,
 		pixelRatio: pixelRatio,
+		scale:      1.0,
 	}
 }
 
 func panelVisible(panel *UiPanel) bool {
-	return panel != nil
+	return panel != nil && panel.Visible
 }
 
 func uiBuildPanelLayout(ctx uiLayoutContext, panel *UiPanel, scrollY float32) *uiLayoutNode {
-	scale := uiNodeScale(panel.Scale)
+	ctx.scale *= uiNodeScale(panel.Scale)
+	scale := ctx.scale
 	padding := panel.Padding
 	if padding <= 0 {
 		padding = uiPanelPadding
@@ -570,7 +580,7 @@ func uiLayoutRow(row UiRow, path string, x, y, width float32, ctx uiLayoutContex
 }
 
 func uiLayoutLabel(label UiLabel, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
-	scale := uiNodeScale(label.Scale)
+	scale := uiNodeScale(label.Scale) * ctx.scale
 	tw, _ := uiMeasureText(ctx, label.Text, scale)
 	w := tw
 	if label.Width > 0 {
@@ -588,7 +598,7 @@ func uiLayoutLabel(label UiLabel, path string, x, y float32, ctx uiLayoutContext
 }
 
 func uiLayoutAsciiGrid(grid UiAsciiGrid, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
-	scale := uiNodeScale(grid.Scale)
+	scale := uiNodeScale(grid.Scale) * ctx.scale
 	cellW, cellH := uiAsciiGridCellSize(ctx, grid, scale)
 	return &uiLayoutNode{
 		kind: uiNodeAsciiGrid,
@@ -602,7 +612,7 @@ func uiLayoutAsciiGrid(grid UiAsciiGrid, path string, x, y float32, ctx uiLayout
 }
 
 func uiLayoutProgressBar(bar UiProgressBar, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
-	scale := uiNodeScale(bar.Scale)
+	scale := uiNodeScale(bar.Scale) * ctx.scale
 	w := uiProgressBarVisualWidth(ctx, bar, scale)
 	if bar.Width > 0 {
 		w = bar.Width
@@ -619,7 +629,7 @@ func uiLayoutProgressBar(bar UiProgressBar, path string, x, y float32, ctx uiLay
 }
 
 func uiLayoutButton(button UiButtonControl, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
-	scale := uiNodeScale(button.Scale)
+	scale := uiNodeScale(button.Scale) * ctx.scale
 	w, h := uiBoxSize(ctx, button.Width, button.Label, scale)
 	return &uiLayoutNode{
 		kind: uiNodeButton,
@@ -633,7 +643,7 @@ func uiLayoutButton(button UiButtonControl, path string, x, y float32, ctx uiLay
 }
 
 func uiLayoutTextField(field UiTextField, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
-	scale := uiNodeScale(field.Scale)
+	scale := uiNodeScale(field.Scale) * ctx.scale
 	display := field.Value
 	if display == "" {
 		display = field.Placeholder
@@ -651,7 +661,7 @@ func uiLayoutTextField(field UiTextField, path string, x, y float32, ctx uiLayou
 }
 
 func uiLayoutNumberField(field UiNumberField, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
-	scale := uiNodeScale(field.Scale)
+	scale := uiNodeScale(field.Scale) * ctx.scale
 	display := formatUiNumber(field.Value, field.Precision)
 	if display == "" {
 		display = field.Placeholder
@@ -669,7 +679,7 @@ func uiLayoutNumberField(field UiNumberField, path string, x, y float32, ctx uiL
 }
 
 func uiLayoutSelectCycle(field UiSelectCycle, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
-	scale := uiNodeScale(field.Scale)
+	scale := uiNodeScale(field.Scale) * ctx.scale
 	label := currentUiSelectLabel(field)
 	w, h := uiBoxSize(ctx, field.Width, label, scale)
 	return &uiLayoutNode{
@@ -888,6 +898,10 @@ func uiRenderLayout(root *uiLayoutNode, layout *uiLayoutNode, eid EntityId, ctx 
 	switch layout.kind {
 	case uiNodePanel:
 		panel := layout.node.(*UiPanel)
+		if panel.TextColor != ([4]float32{}) {
+			ctx.textColor = panel.TextColor
+		}
+		ctx.scale *= uiNodeScale(panel.Scale)
 		uiRenderPanel(layout, ctx, panel)
 	case uiNodeLabel:
 		if !uiLayoutVisible(layout, root) {
@@ -939,13 +953,16 @@ func uiRenderLayout(root *uiLayoutNode, layout *uiLayoutNode, eid EntityId, ctx 
 }
 
 func uiRenderPanel(layout *uiLayoutNode, ctx uiLayoutContext, panel *UiPanel) {
-	scale := uiNodeScale(panel.Scale)
+	scale := ctx.scale
 	padding := panel.Padding
 	if padding <= 0 {
 		padding = uiPanelPadding
 	}
 	borderInsetY := uiPanelBorderHeight(ctx, scale)
 	color := [4]float32{0.9, 0.9, 0.9, 1}
+	if panel.BgColor != ([4]float32{}) {
+		uiDrawRect(ctx, layout.x, layout.y, layout.w, layout.h, panel.BgColor)
+	}
 	uiDrawBox(ctx, layout.x, layout.y, layout.w, layout.h, color, scale)
 	if panel.Title != "" {
 		titleY := layout.y + borderInsetY + padding
@@ -959,8 +976,14 @@ func uiRenderPanel(layout *uiLayoutNode, ctx uiLayoutContext, panel *UiPanel) {
 
 func uiRenderLabel(layout *uiLayoutNode, ctx uiLayoutContext) {
 	label := layout.node.(UiLabel)
-	scale := uiNodeScale(label.Scale)
-	color := [4]float32{1, 1, 1, 1}
+	scale := uiNodeScale(label.Scale) * ctx.scale
+	color := label.Color
+	if color == ([4]float32{}) {
+		color = ctx.textColor
+		if color == ([4]float32{}) {
+			color = [4]float32{1, 1, 1, 1}
+		}
+	}
 	if label.Dim {
 		color = [4]float32{0.65, 0.65, 0.65, 1}
 	}
@@ -969,30 +992,57 @@ func uiRenderLabel(layout *uiLayoutNode, ctx uiLayoutContext) {
 
 func uiRenderAsciiGrid(layout *uiLayoutNode, ctx uiLayoutContext) {
 	grid := layout.node.(UiAsciiGrid)
-	scale := uiNodeScale(grid.Scale)
+	scale := uiNodeScale(grid.Scale) * ctx.scale
 	color := grid.Color
 	if color == ([4]float32{}) {
-		color = [4]float32{1, 1, 1, 1}
+		color = ctx.textColor
+		if color == ([4]float32{}) {
+			color = [4]float32{1, 1, 1, 1}
+		}
 	}
+	bgColor := grid.BgColor
 	cellW, cellH := uiAsciiGridCellSize(ctx, grid, scale)
 	for row, line := range grid.Lines {
 		for col, glyph := range line {
+			cellBgColor := bgColor
+			if row < len(grid.BgColorGrid) && col < len(grid.BgColorGrid[row]) {
+				cellBgColor = grid.BgColorGrid[row][col]
+			}
+			if cellBgColor != ([4]float32{}) {
+				uiDrawRect(ctx, layout.x+float32(col)*cellW, layout.y+float32(row)*cellH, cellW, cellH, cellBgColor)
+			}
+
 			if glyph == ' ' {
 				continue
 			}
+			cellColor := color
+			if row < len(grid.ColorGrid) && col < len(grid.ColorGrid[row]) {
+				cellColor = grid.ColorGrid[row][col]
+			}
+			if cellColor == ([4]float32{}) {
+				cellColor = [4]float32{1, 1, 1, 1}
+			}
+
 			glyphText := string(glyph)
 			glyphW, _ := uiMeasureText(ctx, glyphText, scale)
 			glyphX := layout.x + float32(col)*cellW + (cellW-glyphW)/2
 			glyphY := layout.y + float32(row)*cellH
-			uiDrawText(ctx, glyphText, glyphX, glyphY, scale, color)
+			uiDrawText(ctx, glyphText, glyphX, glyphY, scale, cellColor)
 		}
 	}
 }
 
+func uiDrawRect(ctx uiLayoutContext, x, y, w, h float32, color [4]float32) {
+	ctx.state.DrawRect(x*ctx.pixelRatio, y*ctx.pixelRatio, w*ctx.pixelRatio, h*ctx.pixelRatio, color)
+}
+
 func uiRenderProgressBar(layout *uiLayoutNode, ctx uiLayoutContext) {
 	bar := layout.node.(UiProgressBar)
-	scale := uiNodeScale(bar.Scale)
-	color := [4]float32{1, 1, 1, 1}
+	scale := uiNodeScale(bar.Scale) * ctx.scale
+	color := ctx.textColor
+	if color == ([4]float32{}) {
+		color = [4]float32{1, 1, 1, 1}
+	}
 	x := layout.x
 
 	if bar.Label != "" {
@@ -1035,7 +1085,7 @@ func uiRenderProgressBar(layout *uiLayoutNode, ctx uiLayoutContext) {
 }
 
 func uiRenderButton(layout *uiLayoutNode, ctx uiLayoutContext, button UiButtonControl, state *uiWidgetState) {
-	scale := uiNodeScale(button.Scale)
+	scale := uiNodeScale(button.Scale) * ctx.scale
 	color := [4]float32{1, 1, 1, 1}
 	if state.Hovered {
 		color = [4]float32{1, 1, 0, 1}
@@ -1044,7 +1094,7 @@ func uiRenderButton(layout *uiLayoutNode, ctx uiLayoutContext, button UiButtonCo
 }
 
 func uiRenderTextField(layout *uiLayoutNode, ctx uiLayoutContext, field UiTextField, state *uiWidgetState) {
-	scale := uiNodeScale(field.Scale)
+	scale := uiNodeScale(field.Scale) * ctx.scale
 	display := state.Draft
 	isPlaceholder := false
 	if display == "" {
@@ -1058,7 +1108,7 @@ func uiRenderTextField(layout *uiLayoutNode, ctx uiLayoutContext, field UiTextFi
 }
 
 func uiRenderNumberField(layout *uiLayoutNode, ctx uiLayoutContext, field UiNumberField, state *uiWidgetState) {
-	scale := uiNodeScale(field.Scale)
+	scale := uiNodeScale(field.Scale) * ctx.scale
 	display := state.Draft
 	isPlaceholder := false
 	if display == "" {
@@ -1072,7 +1122,7 @@ func uiRenderNumberField(layout *uiLayoutNode, ctx uiLayoutContext, field UiNumb
 }
 
 func uiRenderSelectCycle(layout *uiLayoutNode, ctx uiLayoutContext, field UiSelectCycle, state *uiWidgetState) {
-	scale := uiNodeScale(field.Scale)
+	scale := uiNodeScale(field.Scale) * ctx.scale
 	color := [4]float32{1, 1, 1, 1}
 	if state.Hovered {
 		color = [4]float32{1, 1, 0, 1}
@@ -1115,7 +1165,8 @@ func uiDrawButtonBox(ctx uiLayoutContext, x, y, w, h, scale float32, color [4]fl
 	if textX < x+uiFieldPaddingX {
 		textX = x + uiFieldPaddingX
 	}
-	textY := y + (h-uiTextHeight(ctx, scale))/2
+	textH := uiTextHeight(ctx, scale)
+	textY := y + (h-textH)/2
 	uiDrawText(ctx, label, textX, textY, scale, textColor)
 }
 
@@ -1127,8 +1178,10 @@ func uiDrawFieldBox(ctx uiLayoutContext, x, y, w, h, scale float32, color [4]flo
 		textColor = [4]float32{0.55, 0.55, 0.55, 1}
 	}
 
-	textY := y + h/2 - uiTextHeight(ctx, scale)/2 + uiTextHeight(ctx, scale)*0.08
-	uiDrawText(ctx, label, x+uiFieldPaddingX, textY, scale, textColor)
+	textX := x + uiFieldPaddingX
+	textH := uiTextHeight(ctx, scale)
+	textY := y + (h-textH)/2
+	uiDrawText(ctx, label, textX, textY, scale, textColor)
 }
 
 func uiDrawBox(ctx uiLayoutContext, x, y, w, h float32, color [4]float32, scale float32) {
@@ -1293,6 +1346,10 @@ func uiTextHeight(ctx uiLayoutContext, scale float32) float32 {
 		lineH = uiMinBoxLineH * scale
 	}
 	return lineH / ctx.pixelRatio
+}
+
+func uiTextAscent(ctx uiLayoutContext, scale float32) float32 {
+	return ctx.state.GetTextAscent(scale) / ctx.pixelRatio
 }
 
 func uiMeasureText(ctx uiLayoutContext, text string, scale float32) (float32, float32) {

@@ -72,12 +72,13 @@ func (f *TextFeature) Update(a *App) error {
 		a.DrawText(stats, x, 10, 0.6, [4]float32{1, 1, 0, 1})
 	}
 
-	if len(a.TextItems) == 0 || a.TextRenderer == nil || a.Device == nil || a.Queue == nil {
+	if (len(a.TextItems) == 0 && len(a.RectItems) == 0) || a.TextRenderer == nil || a.Device == nil || a.Queue == nil {
 		return nil
 	}
 
-	vertices := a.TextRenderer.BuildVertices(a.TextItems, int(a.Config.Width), int(a.Config.Height))
+	vertices := a.TextRenderer.BuildVertices(a.TextItems, a.RectItems, int(a.Config.Width), int(a.Config.Height))
 	if len(vertices) == 0 {
+		a.TextVertexCount = 0
 		return nil
 	}
 	vSize := uint64(len(vertices) * int(unsafe.Sizeof(core.TextVertex{})))

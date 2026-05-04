@@ -326,6 +326,7 @@ func (a *App) updateTiledLightMetrics(viewProj, invView mgl32.Mat4, camPos mgl32
 
 func (a *App) ClearText() {
 	a.TextItems = a.TextItems[:0]
+	a.RectItems = a.RectItems[:0]
 	a.TextVertexCount = 0
 }
 
@@ -335,6 +336,16 @@ func (a *App) DrawText(text string, x, y float32, scale float32, color [4]float3
 		Position: [2]float32{x, y},
 		Scale:    scale,
 		Color:    color,
+	})
+}
+
+func (a *App) DrawRect(x, y, w, h float32, color [4]float32) {
+	a.RectItems = append(a.RectItems, core.RectItem{
+		X:     x,
+		Y:     y,
+		W:     w,
+		H:     h,
+		Color: color,
 	})
 }
 
@@ -350,6 +361,13 @@ func (a *App) GetLineHeight(scale float32) float32 {
 		return 0
 	}
 	return a.TextRenderer.GetLineHeight(scale)
+}
+
+func (a *App) GetTextAscent(scale float32) float32 {
+	if a.TextRenderer == nil {
+		return 0
+	}
+	return a.TextRenderer.GetAscent(scale)
 }
 
 func (a *App) Render() {

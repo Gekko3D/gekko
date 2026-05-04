@@ -24,6 +24,11 @@ type TextItem struct {
 	Color    [4]float32
 }
 
+type RectItem struct {
+	X, Y, W, H float32
+	Color      [4]float32
+}
+
 type GlyphInfo struct {
 	UVMin [2]float32
 	UVMax [2]float32
@@ -33,9 +38,10 @@ type GlyphInfo struct {
 }
 
 type TextRenderer struct {
-	AtlasImage *image.Alpha
-	Glyphs     map[rune]GlyphInfo
-	Face       font.Face
+	AtlasImage   *image.Alpha
+	Glyphs       map[rune]GlyphInfo
+	Face         font.Face
+	WhitePixelUV [2]float32
 }
 
 func NewTextRenderer(fontPath string, fontSize float64) (*TextRenderer, error) {
@@ -61,6 +67,10 @@ func NewTextRenderer(fontPath string, fontSize float64) (*TextRenderer, error) {
 	const atlasSize = 512
 	atlas := image.NewAlpha(image.Rect(0, 0, atlasSize, atlasSize))
 	glyphs := make(map[rune]GlyphInfo)
+
+	// Reserve (0,0) for white pixel (used for rects)
+	atlas.Pix[0] = 255
+	whitePixelUV := [2]float32{0.5 / atlasSize, 0.5 / atlasSize}
 
 	x, y := 2, 2
 	rowHeight := 0
@@ -101,20 +111,40 @@ func NewTextRenderer(fontPath string, fontSize float64) (*TextRenderer, error) {
 	}
 
 	return &TextRenderer{
-		AtlasImage: atlas,
-		Glyphs:     glyphs,
-		Face:       face,
+		AtlasImage:   atlas,
+		Glyphs:       glyphs,
+		Face:         face,
+		WhitePixelUV: whitePixelUV,
 	}, nil
 }
 
-func (tr *TextRenderer) BuildVertices(items []TextItem, screenW, screenH int) []TextVertex {
-	vertices := make([]TextVertex, 0, len(items)*6)
+func (tr *TextRenderer) BuildVertices(items []TextItem, rects []RectItem, screenW, screenH int) []TextVertex {
+	vertices := make([]TextVertex, 0, (len(items)+len(rects))*6)
 
 	sw := float32(screenW)
 	sh := float32(screenH)
 	metrics := tr.Face.Metrics()
 	ascent := float32(metrics.Ascent.Ceil())
 	lineHeight := float32(metrics.Height.Ceil())
+
+	for _, r := range rects {
+		x0 := r.X/sw*2.0 - 1.0
+		y0 := 1.0 - r.Y/sh*2.0
+		x1 := (r.X+r.W)/sw*2.0 - 1.0
+		y1 := 1.0 - (r.Y+r.H)/sh*2.0
+
+		uv := tr.WhitePixelUV
+
+		// Triangle 1
+		vertices = append(vertices, TextVertex{Pos: [2]float32{x0, y0}, UV: uv, Color: r.Color})
+		vertices = append(vertices, TextVertex{Pos: [2]float32{x1, y0}, UV: uv, Color: r.Color})
+		vertices = append(vertices, TextVertex{Pos: [2]float32{x0, y1}, UV: uv, Color: r.Color})
+
+		// Triangle 2
+		vertices = append(vertices, TextVertex{Pos: [2]float32{x1, y0}, UV: uv, Color: r.Color})
+		vertices = append(vertices, TextVertex{Pos: [2]float32{x1, y1}, UV: uv, Color: r.Color})
+		vertices = append(vertices, TextVertex{Pos: [2]float32{x0, y1}, UV: uv, Color: r.Color})
+	}
 
 	for _, item := range items {
 		startX := item.Position[0]
@@ -133,9 +163,9 @@ func (tr *TextRenderer) BuildVertices(items []TextItem, screenW, screenH int) []
 				continue
 			}
 
-			x0 := (posX+g.Off[0]*item.Scale)/sw*2.0 - 1.0
+			x0 := (posX + g.Off[0]*item.Scale) / sw * 2.0 - 1.0
 			y0 := 1.0 - (posY+g.Off[1]*item.Scale)/sh*2.0
-			x1 := (posX+(g.Off[0]+g.Size[0])*item.Scale)/sw*2.0 - 1.0
+			x1 := (posX + (g.Off[0]+g.Size[0])*item.Scale) / sw * 2.0 - 1.0
 			y1 := 1.0 - (posY+(g.Off[1]+g.Size[1])*item.Scale)/sh*2.0
 
 			// Triangle 1
@@ -197,4 +227,12 @@ func (tr *TextRenderer) GetLineHeight(scale float32) float32 {
 	}
 	metrics := tr.Face.Metrics()
 	return float32(metrics.Height.Ceil()) * scale
+}
+
+func (tr *TextRenderer) GetAscent(scale float32) float32 {
+	if tr == nil {
+		return 0
+	}
+	metrics := tr.Face.Metrics()
+	return float32(metrics.Ascent.Ceil()) * scale
 }
