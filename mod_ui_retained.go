@@ -15,6 +15,7 @@ const (
 	uiFieldPaddingY  = float32(5)
 	uiPanelMinHeight = float32(12)
 	uiMinBoxLineH    = float32(28)
+	uiProgressCells  = 18
 )
 
 type UiRuntime struct {
@@ -123,6 +124,7 @@ type UiRow struct {
 	Key        string
 	Spacing    float32
 	LabelWidth float32
+	AlignTop   bool
 	Children   []UiNode
 }
 
@@ -143,6 +145,34 @@ type UiLabel struct {
 }
 
 func (UiLabel) isUiNode() {}
+
+type UiAsciiGrid struct {
+	Key        string
+	Lines      []string
+	CellWidth  float32
+	CellHeight float32
+	Scale      float32
+	Color      [4]float32
+}
+
+func (UiAsciiGrid) isUiNode() {}
+
+type UiProgressBar struct {
+	Key        string
+	Label      string
+	Value      float32
+	Min        float32
+	Max        float32
+	Width      float32
+	Scale      float32
+	ValueLabel string
+	ValueWidth float32
+	Precision  int
+	Fill       string
+	Empty      string
+}
+
+func (UiProgressBar) isUiNode() {}
 
 type UiTextAlign int
 
@@ -209,6 +239,8 @@ const (
 	uiNodeRow
 	uiNodeSpacer
 	uiNodeLabel
+	uiNodeAsciiGrid
+	uiNodeProgressBar
 	uiNodeButton
 	uiNodeTextField
 	uiNodeNumberField
@@ -420,6 +452,14 @@ func uiLayoutNodeFor(node UiNode, path string, x, y, width float32, ctx uiLayout
 		return uiLayoutLabel(typed, path, x, y, ctx)
 	case *UiLabel:
 		return uiLayoutLabel(*typed, path, x, y, ctx)
+	case UiAsciiGrid:
+		return uiLayoutAsciiGrid(typed, path, x, y, ctx)
+	case *UiAsciiGrid:
+		return uiLayoutAsciiGrid(*typed, path, x, y, ctx)
+	case UiProgressBar:
+		return uiLayoutProgressBar(typed, path, x, y, ctx)
+	case *UiProgressBar:
+		return uiLayoutProgressBar(*typed, path, x, y, ctx)
 	case UiButtonControl:
 		return uiLayoutButton(typed, path, x, y, ctx)
 	case *UiButtonControl:
@@ -521,8 +561,10 @@ func uiLayoutRow(row UiRow, path string, x, y, width float32, ctx uiLayoutContex
 	}
 	layout.w = totalW
 	layout.h = maxH
-	for _, child := range layout.children {
-		child.y = y + (maxH-child.h)/2
+	if !row.AlignTop {
+		for _, child := range layout.children {
+			child.y = y + (maxH-child.h)/2
+		}
 	}
 	return layout
 }
@@ -542,6 +584,37 @@ func uiLayoutLabel(label UiLabel, path string, x, y float32, ctx uiLayoutContext
 		w:    w,
 		h:    uiTextHeight(ctx, scale),
 		node: label,
+	}
+}
+
+func uiLayoutAsciiGrid(grid UiAsciiGrid, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
+	scale := uiNodeScale(grid.Scale)
+	cellW, cellH := uiAsciiGridCellSize(ctx, grid, scale)
+	return &uiLayoutNode{
+		kind: uiNodeAsciiGrid,
+		key:  uiStableKey("ascii", grid.Key, path),
+		x:    x,
+		y:    y,
+		w:    float32(uiAsciiGridWidth(grid.Lines)) * cellW,
+		h:    float32(len(grid.Lines)) * cellH,
+		node: grid,
+	}
+}
+
+func uiLayoutProgressBar(bar UiProgressBar, path string, x, y float32, ctx uiLayoutContext) *uiLayoutNode {
+	scale := uiNodeScale(bar.Scale)
+	w := uiProgressBarVisualWidth(ctx, bar, scale)
+	if bar.Width > 0 {
+		w = bar.Width
+	}
+	return &uiLayoutNode{
+		kind: uiNodeProgressBar,
+		key:  uiStableKey("progress", bar.Key, path),
+		x:    x,
+		y:    y,
+		w:    w,
+		h:    uiTextHeight(ctx, scale),
+		node: bar,
 	}
 }
 
@@ -821,6 +894,16 @@ func uiRenderLayout(root *uiLayoutNode, layout *uiLayoutNode, eid EntityId, ctx 
 			return
 		}
 		uiRenderLabel(layout, ctx)
+	case uiNodeAsciiGrid:
+		if !uiLayoutVisible(layout, root) {
+			return
+		}
+		uiRenderAsciiGrid(layout, ctx)
+	case uiNodeProgressBar:
+		if !uiLayoutVisible(layout, root) {
+			return
+		}
+		uiRenderProgressBar(layout, ctx)
 	case uiNodeButton:
 		if !uiLayoutVisible(layout, root) {
 			return
@@ -882,6 +965,73 @@ func uiRenderLabel(layout *uiLayoutNode, ctx uiLayoutContext) {
 		color = [4]float32{0.65, 0.65, 0.65, 1}
 	}
 	uiDrawText(ctx, label.Text, layout.x, layout.y, scale, color)
+}
+
+func uiRenderAsciiGrid(layout *uiLayoutNode, ctx uiLayoutContext) {
+	grid := layout.node.(UiAsciiGrid)
+	scale := uiNodeScale(grid.Scale)
+	color := grid.Color
+	if color == ([4]float32{}) {
+		color = [4]float32{1, 1, 1, 1}
+	}
+	cellW, cellH := uiAsciiGridCellSize(ctx, grid, scale)
+	for row, line := range grid.Lines {
+		for col, glyph := range line {
+			if glyph == ' ' {
+				continue
+			}
+			glyphText := string(glyph)
+			glyphW, _ := uiMeasureText(ctx, glyphText, scale)
+			glyphX := layout.x + float32(col)*cellW + (cellW-glyphW)/2
+			glyphY := layout.y + float32(row)*cellH
+			uiDrawText(ctx, glyphText, glyphX, glyphY, scale, color)
+		}
+	}
+}
+
+func uiRenderProgressBar(layout *uiLayoutNode, ctx uiLayoutContext) {
+	bar := layout.node.(UiProgressBar)
+	scale := uiNodeScale(bar.Scale)
+	color := [4]float32{1, 1, 1, 1}
+	x := layout.x
+
+	if bar.Label != "" {
+		label := bar.Label + " "
+		uiDrawText(ctx, label, x, layout.y, scale, color)
+		labelW, _ := uiMeasureText(ctx, label, scale)
+		x += labelW
+	}
+
+	fill := uiProgressGlyph(bar.Fill, "#")
+	empty := uiProgressGlyph(bar.Empty, "-")
+	fillW, _ := uiMeasureText(ctx, fill, scale)
+	emptyW, _ := uiMeasureText(ctx, empty, scale)
+	cellW := maxf(fillW, emptyW)
+	if cellW <= 0 {
+		cellW = 8 * scale
+	}
+
+	uiDrawText(ctx, "[", x, layout.y, scale, color)
+	bracketW, _ := uiMeasureText(ctx, "[", scale)
+	x += bracketW
+
+	filled := uiProgressFilledCells(bar)
+	for i := 0; i < uiProgressCells; i++ {
+		glyph := empty
+		glyphW := emptyW
+		if i < filled {
+			glyph = fill
+			glyphW = fillW
+		}
+		cellX := x + float32(i)*cellW + (cellW-glyphW)/2
+		uiDrawText(ctx, glyph, cellX, layout.y, scale, color)
+	}
+
+	x += float32(uiProgressCells) * cellW
+	uiDrawText(ctx, "] ", x, layout.y, scale, color)
+	closeW, _ := uiMeasureText(ctx, "] ", scale)
+	x += closeW
+	uiDrawText(ctx, uiProgressValueLabel(bar), x, layout.y, scale, color)
 }
 
 func uiRenderButton(layout *uiLayoutNode, ctx uiLayoutContext, button UiButtonControl, state *uiWidgetState) {
@@ -1019,6 +1169,34 @@ func uiDrawBoxHLine(ctx uiLayoutContext, x, y, w, scale float32, color [4]float3
 
 func uiDrawText(ctx uiLayoutContext, text string, x, y, scale float32, color [4]float32) {
 	ctx.state.DrawText(text, x*ctx.pixelRatio, y*ctx.pixelRatio, scale, color)
+}
+
+func uiAsciiGridCellSize(ctx uiLayoutContext, grid UiAsciiGrid, scale float32) (float32, float32) {
+	cellW := grid.CellWidth
+	cellH := grid.CellHeight
+	if cellH <= 0 {
+		cellH = uiTextHeight(ctx, scale) * 0.82
+	}
+	if cellW <= 0 {
+		cellW = cellH
+	}
+	if cellW < 1 {
+		cellW = 1
+	}
+	if cellH < 1 {
+		cellH = 1
+	}
+	return cellW, cellH
+}
+
+func uiAsciiGridWidth(lines []string) int {
+	width := 0
+	for _, line := range lines {
+		if len([]rune(line)) > width {
+			width = len([]rune(line))
+		}
+	}
+	return width
 }
 
 func uiDrawScrollbar(ctx uiLayoutContext, layout *uiLayoutNode) {
@@ -1211,6 +1389,106 @@ func resolveUiTextAlign(value UiTextAlign, fallback UiTextAlign) UiTextAlign {
 		return fallback
 	}
 	return value
+}
+
+func uiProgressFraction(value, min, max float32) float32 {
+	if math.IsNaN(float64(value)) || math.IsNaN(float64(min)) || math.IsNaN(float64(max)) {
+		return 0
+	}
+	if math.IsInf(float64(min), 0) || math.IsInf(float64(max), 0) {
+		return 0
+	}
+	if max <= min {
+		return 0
+	}
+	if value <= min {
+		return 0
+	}
+	if value >= max {
+		return 1
+	}
+	return (value - min) / (max - min)
+}
+
+func uiProgressBarText(bar UiProgressBar) string {
+	filled := uiProgressFilledCells(bar)
+	fill := uiProgressGlyph(bar.Fill, "#")
+	empty := uiProgressGlyph(bar.Empty, "-")
+
+	text := "[" + strings.Repeat(fill, filled) + strings.Repeat(empty, uiProgressCells-filled) + "] " + uiProgressValueLabel(bar)
+	if bar.Label != "" {
+		text = bar.Label + " " + text
+	}
+	return text
+}
+
+func uiProgressFilledCells(bar UiProgressBar) int {
+	fraction := uiProgressFraction(bar.Value, bar.Min, bar.Max)
+	filled := int(math.Round(float64(fraction * uiProgressCells)))
+	if filled < 0 {
+		return 0
+	}
+	if filled > uiProgressCells {
+		return uiProgressCells
+	}
+	return filled
+}
+
+func uiProgressValueLabel(bar UiProgressBar) string {
+	if bar.ValueLabel != "" {
+		return bar.ValueLabel
+	}
+	precision := bar.Precision
+	if precision < 0 {
+		precision = 0
+	}
+	fraction := uiProgressFraction(bar.Value, bar.Min, bar.Max)
+	return strconv.FormatFloat(float64(fraction*100), 'f', precision, 32) + "%"
+}
+
+func uiProgressMaxValueLabel(bar UiProgressBar) string {
+	if bar.ValueLabel != "" {
+		return bar.ValueLabel
+	}
+	precision := bar.Precision
+	if precision < 0 {
+		precision = 0
+	}
+	return strconv.FormatFloat(100, 'f', precision, 32) + "%"
+}
+
+func uiProgressBarVisualWidth(ctx uiLayoutContext, bar UiProgressBar, scale float32) float32 {
+	width := float32(0)
+	if bar.Label != "" {
+		labelW, _ := uiMeasureText(ctx, bar.Label+" ", scale)
+		width += labelW
+	}
+
+	fillW, _ := uiMeasureText(ctx, uiProgressGlyph(bar.Fill, "#"), scale)
+	emptyW, _ := uiMeasureText(ctx, uiProgressGlyph(bar.Empty, "-"), scale)
+	cellW := maxf(fillW, emptyW)
+	if cellW <= 0 {
+		cellW = 8 * scale
+	}
+
+	openW, _ := uiMeasureText(ctx, "[", scale)
+	closeW, _ := uiMeasureText(ctx, "] ", scale)
+	valueW := bar.ValueWidth
+	if valueW <= 0 {
+		valueW, _ = uiMeasureText(ctx, uiProgressMaxValueLabel(bar), scale)
+	}
+	return width + openW + float32(uiProgressCells)*cellW + closeW + valueW
+}
+
+func uiProgressGlyph(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return fallback
+	}
+	return string(runes[0])
 }
 
 func uiLayoutVisible(layout *uiLayoutNode, root *uiLayoutNode) bool {

@@ -1,6 +1,9 @@
 package gekko
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestParseUiFloat(t *testing.T) {
 	value, ok := parseUiFloat("12.5")
@@ -84,5 +87,92 @@ func TestClampUiScroll(t *testing.T) {
 	}
 	if got := clampUiScroll(20, 50); got != 20 {
 		t.Fatalf("expected in-range scroll to stay unchanged, got %v", got)
+	}
+}
+
+func TestUiProgressFractionClampsToRange(t *testing.T) {
+	if got := uiProgressFraction(-5, 0, 10); got != 0 {
+		t.Fatalf("expected below-min progress to clamp to 0, got %v", got)
+	}
+	if got := uiProgressFraction(15, 0, 10); got != 1 {
+		t.Fatalf("expected above-max progress to clamp to 1, got %v", got)
+	}
+	if got := uiProgressFraction(5, 0, 10); got != 0.5 {
+		t.Fatalf("expected half progress, got %v", got)
+	}
+}
+
+func TestUiProgressFractionRejectsInvalidRange(t *testing.T) {
+	if got := uiProgressFraction(5, 10, 10); got != 0 {
+		t.Fatalf("expected zero-width range to render empty, got %v", got)
+	}
+	if got := uiProgressFraction(5, 10, 0); got != 0 {
+		t.Fatalf("expected inverted range to render empty, got %v", got)
+	}
+	if got := uiProgressFraction(float32(math.NaN()), 0, 10); got != 0 {
+		t.Fatalf("expected NaN value to render empty, got %v", got)
+	}
+	if got := uiProgressFraction(5, 0, float32(math.Inf(1))); got != 0 {
+		t.Fatalf("expected infinite range to render empty, got %v", got)
+	}
+}
+
+func TestUiProgressBarTextDefaults(t *testing.T) {
+	got := uiProgressBarText(UiProgressBar{
+		Label: "Loading",
+		Value: 5,
+		Min:   0,
+		Max:   10,
+	})
+	want := "Loading [#########---------] 50%"
+	if got != want {
+		t.Fatalf("unexpected progress bar text:\nwant %q\n got %q", want, got)
+	}
+}
+
+func TestUiProgressBarTextCustomValueLabel(t *testing.T) {
+	got := uiProgressBarText(UiProgressBar{
+		Label:      "Speed",
+		Value:      20,
+		Min:        0,
+		Max:        40,
+		ValueLabel: "20 / 40 u/s",
+	})
+	want := "Speed [#########---------] 20 / 40 u/s"
+	if got != want {
+		t.Fatalf("unexpected progress bar text:\nwant %q\n got %q", want, got)
+	}
+}
+
+func TestUiProgressBarKeepsConfiguredValueWidth(t *testing.T) {
+	bar := UiProgressBar{ValueLabel: "1 / 40 u/s", ValueWidth: 78}
+	if bar.ValueWidth != 78 {
+		t.Fatalf("expected progress bar value width to be configurable, got %v", bar.ValueWidth)
+	}
+}
+
+func TestUiProgressBarTextCustomGlyphsUseFirstRune(t *testing.T) {
+	got := uiProgressBarText(UiProgressBar{
+		Value: 5,
+		Min:   0,
+		Max:   10,
+		Fill:  "=>",
+		Empty: ". ",
+	})
+	want := "[=========.........] 50%"
+	if got != want {
+		t.Fatalf("unexpected custom glyph progress bar text:\nwant %q\n got %q", want, got)
+	}
+}
+
+func TestUiProgressBarTextFullAndEmpty(t *testing.T) {
+	full := uiProgressBarText(UiProgressBar{Value: 10, Min: 0, Max: 10})
+	if want := "[##################] 100%"; full != want {
+		t.Fatalf("unexpected full progress bar:\nwant %q\n got %q", want, full)
+	}
+
+	empty := uiProgressBarText(UiProgressBar{Value: 0, Min: 0, Max: 10})
+	if want := "[------------------] 0%"; empty != want {
+		t.Fatalf("unexpected empty progress bar:\nwant %q\n got %q", want, empty)
 	}
 }

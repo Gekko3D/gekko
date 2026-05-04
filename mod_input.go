@@ -68,6 +68,9 @@ const (
 	KeyEqual
 	KeyLeftBracket
 	KeyRightBracket
+	KeyComma
+	KeyPeriod
+	KeyGraveAccent
 	KeyKPPlus
 	KeyKPMinus
 	KeyShift
@@ -86,12 +89,12 @@ type Input struct {
 	JustPressed  [256]bool
 	JustReleased [256]bool
 
-	MouseX, MouseY                                     float64
-	MouseDeltaX, MouseDeltaY                           float64
-	AccumulatedMouseDeltaX, AccumulatedMouseDeltaY     float64
-	MouseScrollX, MouseScrollY                         float64
-	MouseCaptured              bool
-	GuiCaptured                bool // Set by UI system if mouse is over UI
+	MouseX, MouseY                                 float64
+	MouseDeltaX, MouseDeltaY                       float64
+	AccumulatedMouseDeltaX, AccumulatedMouseDeltaY float64
+	MouseScrollX, MouseScrollY                     float64
+	MouseCaptured                                  bool
+	GuiCaptured                                    bool // Set by UI system if mouse is over UI
 
 	WindowWidth, WindowHeight int
 	CharBuffer                []rune
@@ -263,6 +266,9 @@ var keyToGlfw = map[int]glfw.Key{
 	KeyEqual:        glfw.KeyEqual,
 	KeyLeftBracket:  glfw.KeyLeftBracket,
 	KeyRightBracket: glfw.KeyRightBracket,
+	KeyComma:        glfw.KeyComma,
+	KeyPeriod:       glfw.KeyPeriod,
+	KeyGraveAccent:  glfw.KeyGraveAccent,
 	KeyKPPlus:       glfw.KeyKPAdd,
 	KeyKPMinus:      glfw.KeyKPSubtract,
 	KeyShift:        glfw.KeyLeftShift,
