@@ -36,6 +36,7 @@ struct AstronomicalRecord {
   direction_kind: vec4<f32>,
   angular: vec4<f32>,
   tint_emission: vec4<f32>,
+  light_phase: vec4<f32>,
   record_meta: vec4<u32>,
 };
 
@@ -91,20 +92,38 @@ fn hash11(seed: u32) -> f32 {
   return f32(n & 0x00ffffffu) / f32(0x00ffffffu);
 }
 
+fn surface_variation(normal: vec3<f32>, seed: u32) -> f32 {
+  let phase = hash11(seed) * 6.2831853;
+  let a = sin(dot(normal, vec3<f32>(12.9898, 78.233, 37.719)) + phase);
+  let b = sin(dot(normal, vec3<f32>(39.346, 11.135, 83.155)) + phase * 1.73);
+  let c = sin(dot(normal, vec3<f32>(8.271, 41.311, 19.113)) + phase * 2.41);
+  return saturate(0.5 + a * 0.22 + b * 0.18 + c * 0.10);
+}
+
 fn disc_sample_color(body: AstronomicalRecord, ray_dir: vec3<f32>, body_dir: vec3<f32>, angle: f32, radius: f32) -> vec4<f32> {
   let kind = u32(body.direction_kind.w + 0.5);
   let tint = body.tint_emission.rgb;
   let emission = max(body.tint_emission.w, 0.0);
-  let phase = f32(body.record_meta.z) / 65535.0;
-  let radial01 = saturate(angle / max(radius, 1e-6));
-  let limb = smoothstep(1.0, 0.78, radial01);
+  let phase = body.light_phase.w;
+  let disk_r = saturate(sin(angle) / max(sin(radius), 1e-6));
+  let limb = smoothstep(0.68, 1.0, disk_r);
+  let limb_shade = mix(1.08, 0.48, limb);
+  let tangent = ray_dir - body_dir * dot(ray_dir, body_dir);
+  var tangent_dir = vec3<f32>(0.0);
+  if (dot(tangent, tangent) > 1e-8) {
+    tangent_dir = normalize(tangent);
+  }
+  let sphere_normal = normalize(tangent_dir * disk_r - body_dir * sqrt(max(1.0 - disk_r * disk_r, 0.0)));
+  let light_dir = normalize(body.light_phase.xyz);
+  let light_dot = dot(sphere_normal, light_dir);
+  let day = smoothstep(-0.08, 0.20, light_dot);
+  let night = mix(0.035, 0.12, saturate(phase));
   var color = tint;
-  var alpha = smoothstep(1.0, 0.92, radial01);
+  var alpha = 1.0 - smoothstep(0.92, 1.0, disk_r);
 
   if (kind == KIND_GAS_GIANT) {
-    let p = normalize(ray_dir - body_dir * dot(ray_dir, body_dir));
     let band_phase = hash11(body.record_meta.x) * 6.2831853;
-    let bands = 0.5 + 0.5 * sin((p.y * 18.0) + band_phase);
+    let bands = 0.5 + 0.5 * sin((sphere_normal.y * 18.0) + band_phase + sin(sphere_normal.x * 7.0 + band_phase) * 0.35);
     color = mix(tint * 0.72, min(tint * 1.32 + vec3<f32>(0.08, 0.06, 0.03), vec3<f32>(1.0)), bands);
   }
 
@@ -113,8 +132,15 @@ fn disc_sample_color(body: AstronomicalRecord, ray_dir: vec3<f32>, body_dir: vec
     return vec4<f32>(core, alpha);
   }
 
-  let phase_light = mix(0.18, 1.0, saturate(phase));
-  color = color * (phase_light * mix(0.68, 1.08, limb));
+  if (kind != KIND_GAS_GIANT) {
+    let variation = surface_variation(sphere_normal, body.record_meta.x);
+    let cool_shadow = vec3<f32>(0.72, 0.78, 0.90);
+    let warm_highlight = vec3<f32>(1.10, 1.04, 0.94);
+    color = color * mix(cool_shadow, warm_highlight, variation);
+  }
+
+  let sphere_light = mix(night, 1.0, day);
+  color = color * sphere_light * limb_shade;
   return vec4<f32>(color, alpha);
 }
 

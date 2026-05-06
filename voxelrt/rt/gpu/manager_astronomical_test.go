@@ -11,6 +11,7 @@ func TestBuildAstronomicalBodyRecordsPreservesStableLayout(t *testing.T) {
 		{
 			Kind:                      3,
 			DirectionViewSpace:        mgl32.Vec3{0, 0, -2},
+			LightDirectionViewSpace:   mgl32.Vec3{0, 2, 0},
 			AngularRadiusRad:          0.01,
 			GlowAngularRadiusRad:      0.05,
 			RingInnerAngularRadiusRad: 0.02,
@@ -39,8 +40,27 @@ func TestBuildAstronomicalBodyRecordsPreservesStableLayout(t *testing.T) {
 	if rec.TintEmission != [4]float32{0.2, 0.4, 0.8, 1.5} {
 		t.Fatalf("unexpected tint/emission packing: %+v", rec.TintEmission)
 	}
+	if rec.LightPhase != [4]float32{0, 1, 0, 0.25} {
+		t.Fatalf("unexpected light/phase packing: %+v", rec.LightPhase)
+	}
 	if rec.Meta[0] != 77 || rec.Meta[1] != 9 || rec.Meta[2] == 0 {
 		t.Fatalf("unexpected metadata packing: %+v", rec.Meta)
+	}
+}
+
+func TestBuildAstronomicalBodyRecordsDefaultsLightDirectionTowardCamera(t *testing.T) {
+	records, _ := buildAstronomicalBodyRecords([]AstronomicalBodyHost{
+		{
+			Kind:               2,
+			DirectionViewSpace: mgl32.Vec3{0, 0, -1},
+			AngularRadiusRad:   0.01,
+			BodyTint:           [3]float32{1, 1, 1},
+		},
+	})
+
+	got := [3]float32{records[0].LightPhase[0], records[0].LightPhase[1], records[0].LightPhase[2]}
+	if got != [3]float32{0, 0, 1} {
+		t.Fatalf("expected fallback light direction toward camera, got %+v", records[0].LightPhase)
 	}
 }
 

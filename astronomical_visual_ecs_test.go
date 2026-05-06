@@ -9,13 +9,14 @@ func TestBuildAstronomicalBodyHostsSortsAndLimitsDeterministically(t *testing.T)
 		MaxRenderedBodies: 2,
 		Visuals: []AstronomicalVisualRecord{
 			{
-				BodyID:             "far-large",
-				Kind:               AstronomicalVisualRockyPlanet,
-				DirectionViewSpace: [3]float32{0, 0, -1},
-				AngularRadiusRad:   0.3,
-				DistanceMeters:     200,
-				BodyTint:           [3]float32{0.1, 0.2, 0.3},
-				PhaseLight01:       0.5,
+				BodyID:                  "far-large",
+				Kind:                    AstronomicalVisualRockyPlanet,
+				DirectionViewSpace:      [3]float32{0, 0, -1},
+				LightDirectionViewSpace: [3]float32{0, 2, 0},
+				AngularRadiusRad:        0.3,
+				DistanceMeters:          200,
+				BodyTint:                [3]float32{0.1, 0.2, 0.3},
+				PhaseLight01:            0.5,
 			},
 			{
 				BodyID:             "near-large",
@@ -51,6 +52,9 @@ func TestBuildAstronomicalBodyHostsSortsAndLimitsDeterministically(t *testing.T)
 	}
 	if hosts[0].DirectionViewSpace[0] != 0 || hosts[0].DirectionViewSpace[1] != 0 || hosts[0].DirectionViewSpace[2] != -1 {
 		t.Fatalf("expected normalized view direction, got %v", hosts[0].DirectionViewSpace)
+	}
+	if hosts[1].LightDirectionViewSpace[0] != 0 || hosts[1].LightDirectionViewSpace[1] != 2 || hosts[1].LightDirectionViewSpace[2] != 0 {
+		t.Fatalf("expected light direction to be forwarded, got %v", hosts[1].LightDirectionViewSpace)
 	}
 }
 

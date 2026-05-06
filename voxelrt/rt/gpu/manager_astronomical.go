@@ -12,6 +12,7 @@ const MaxAstronomicalBodies = 256
 type AstronomicalBodyHost struct {
 	Kind                      uint32
 	DirectionViewSpace        mgl32.Vec3
+	LightDirectionViewSpace   mgl32.Vec3
 	AngularRadiusRad          float32
 	GlowAngularRadiusRad      float32
 	RingInnerAngularRadiusRad float32
@@ -27,6 +28,7 @@ type astronomicalBodyRecord struct {
 	DirectionKind [4]float32
 	Angular       [4]float32
 	TintEmission  [4]float32
+	LightPhase    [4]float32
 	Meta          [4]uint32
 }
 
@@ -49,6 +51,12 @@ func buildAstronomicalBodyRecords(hosts []AstronomicalBodyHost) ([]astronomicalB
 		} else {
 			dir = mgl32.Vec3{0, 0, -1}
 		}
+		lightDir := host.LightDirectionViewSpace
+		if lightDir.LenSqr() > 1e-6 {
+			lightDir = lightDir.Normalize()
+		} else {
+			lightDir = dir.Mul(-1)
+		}
 		records[i] = astronomicalBodyRecord{
 			DirectionKind: [4]float32{
 				dir.X(),
@@ -67,6 +75,12 @@ func buildAstronomicalBodyRecords(hosts []AstronomicalBodyHost) ([]astronomicalB
 				clamp01f(host.BodyTint[1]),
 				clamp01f(host.BodyTint[2]),
 				maxAstronomicalFloat(host.EmissionStrength, 0),
+			},
+			LightPhase: [4]float32{
+				lightDir.X(),
+				lightDir.Y(),
+				lightDir.Z(),
+				clamp01f(host.PhaseLight01),
 			},
 			Meta: [4]uint32{
 				host.Seed,

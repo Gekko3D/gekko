@@ -25,6 +25,7 @@ type AstronomicalVisualRecord struct {
 	BodyID                    string
 	Kind                      AstronomicalVisualKind
 	DirectionViewSpace        [3]float32
+	LightDirectionViewSpace   [3]float32
 	AngularRadiusRad          float32
 	DistanceMeters            float64
 	Seed                      uint32
@@ -109,6 +110,7 @@ func buildAstronomicalBodyHosts(cmd *Commands) []gpu_rt.AstronomicalBodyHost {
 		hosts = append(hosts, gpu_rt.AstronomicalBodyHost{
 			Kind:                      uint32(visual.Kind),
 			DirectionViewSpace:        dir,
+			LightDirectionViewSpace:   mgl32.Vec3{visual.LightDirectionViewSpace[0], visual.LightDirectionViewSpace[1], visual.LightDirectionViewSpace[2]},
 			AngularRadiusRad:          visual.AngularRadiusRad,
 			GlowAngularRadiusRad:      visual.GlowAngularRadiusRad,
 			RingInnerAngularRadiusRad: visual.RingInnerAngularRadiusRad,
@@ -173,6 +175,11 @@ func astronomicalVisualRecordRenderable(visual AstronomicalVisualRecord) bool {
 		return false
 	}
 	for _, component := range visual.DirectionViewSpace {
+		if !isFiniteFloat32(component) {
+			return false
+		}
+	}
+	for _, component := range visual.LightDirectionViewSpace {
 		if !isFiniteFloat32(component) {
 			return false
 		}
