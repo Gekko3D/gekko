@@ -107,6 +107,7 @@ type UiPanel struct {
 	Scale     float32
 	Title     string
 	Visible   bool
+	Borderless bool
 	BgColor   [4]float32
 	TextColor [4]float32
 	Children  []UiNode
@@ -149,6 +150,13 @@ type UiLabel struct {
 
 func (UiLabel) isUiNode() {}
 
+type UiZStack struct {
+	Key      string
+	Children []UiNode
+}
+
+func (UiZStack) isUiNode() {}
+
 type UiAsciiGrid struct {
 	Key        string
 	Lines      []string
@@ -157,8 +165,18 @@ type UiAsciiGrid struct {
 	Scale      float32
 	Color      [4]float32
 	BgColor    [4]float32
+	Hidden     bool
 	ColorGrid  [][][4]float32
 	BgColorGrid [][][4]float32
+	OverlayLabels []UiAsciiLabel
+}
+
+type UiAsciiLabel struct {
+	Text    string
+	X       int
+	Y       int
+	Color   [4]float32
+	BgColor [4]float32
 }
 
 func (UiAsciiGrid) isUiNode() {}
@@ -251,6 +269,7 @@ const (
 	uiNodeTextField
 	uiNodeNumberField
 	uiNodeSelectCycle
+	uiNodeZStack
 )
 
 type uiLayoutNode struct {
@@ -364,8 +383,12 @@ func uiBuildPanelLayout(ctx uiLayoutContext, panel *UiPanel, scrollY float32) *u
 	if panelW <= 0 {
 		panelW = 280
 	}
-	borderInsetX := uiPanelBorderWidth(ctx, scale)
-	borderInsetY := uiPanelBorderHeight(ctx, scale)
+	borderInsetX := float32(0)
+	borderInsetY := float32(0)
+	if !panel.Borderless {
+		borderInsetX = uiPanelBorderWidth(ctx, scale)
+		borderInsetY = uiPanelBorderHeight(ctx, scale)
+	}
 
 	availableW := panelW - (borderInsetX+padding)*2
 	if availableW < 0 {
@@ -482,10 +505,12 @@ func uiLayoutNodeFor(node UiNode, path string, x, y, width float32, ctx uiLayout
 		return uiLayoutNumberField(typed, path, x, y, ctx)
 	case *UiNumberField:
 		return uiLayoutNumberField(*typed, path, x, y, ctx)
-	case UiSelectCycle:
-		return uiLayoutSelectCycle(typed, path, x, y, ctx)
 	case *UiSelectCycle:
 		return uiLayoutSelectCycle(*typed, path, x, y, ctx)
+	case UiZStack:
+		return uiLayoutZStack(typed, path, x, y, width, ctx)
+	case *UiZStack:
+		return uiLayoutZStack(*typed, path, x, y, width, ctx)
 	default:
 		return nil
 	}
@@ -576,6 +601,35 @@ func uiLayoutRow(row UiRow, path string, x, y, width float32, ctx uiLayoutContex
 			child.y = y + (maxH-child.h)/2
 		}
 	}
+	return layout
+}
+
+func uiLayoutZStack(zstack UiZStack, path string, x, y, width float32, ctx uiLayoutContext) *uiLayoutNode {
+	layout := &uiLayoutNode{
+		kind: uiNodeZStack,
+		key:  uiStableKey("zstack", zstack.Key, path),
+		x:    x,
+		y:    y,
+		node: zstack,
+	}
+
+	maxW := float32(0)
+	maxH := float32(0)
+	for idx, child := range zstack.Children {
+		childLayout := uiLayoutNodeFor(child, fmt.Sprintf("%s/%d", path, idx), x, y, width, ctx)
+		if childLayout == nil {
+			continue
+		}
+		layout.children = append(layout.children, childLayout)
+		if childLayout.w > maxW {
+			maxW = childLayout.w
+		}
+		if childLayout.h > maxH {
+			maxH = childLayout.h
+		}
+	}
+	layout.w = maxW
+	layout.h = maxH
 	return layout
 }
 
@@ -958,16 +1012,32 @@ func uiRenderPanel(layout *uiLayoutNode, ctx uiLayoutContext, panel *UiPanel) {
 	if padding <= 0 {
 		padding = uiPanelPadding
 	}
-	borderInsetY := uiPanelBorderHeight(ctx, scale)
-	color := [4]float32{0.9, 0.9, 0.9, 1}
+	borderInsetY := float32(0)
+	if !panel.Borderless {
+		borderInsetY = uiPanelBorderHeight(ctx, scale)
+	}
+	
+	borderColor := [4]float32{0.75, 0.82, 0.9, 1} // Brighter, slightly blue-ish default
+	if ctx.textColor != ([4]float32{}) {
+		// Use a slightly dimmed version of text color for border
+		borderColor = ctx.textColor
+		borderColor[3] = 0.85
+	}
+
 	if panel.BgColor != ([4]float32{}) {
 		uiDrawRect(ctx, layout.x, layout.y, layout.w, layout.h, panel.BgColor)
 	}
-	uiDrawBox(ctx, layout.x, layout.y, layout.w, layout.h, color, scale)
+	if !panel.Borderless {
+		uiDrawBox(ctx, layout.x, layout.y, layout.w, layout.h, borderColor, scale)
+	}
 	if panel.Title != "" {
 		titleY := layout.y + borderInsetY + padding
-		uiDrawText(ctx, panel.Title, layout.x+uiPanelBorderWidth(ctx, scale)+padding, titleY, scale, [4]float32{1, 1, 0, 1})
-		uiDrawText(ctx, strings.Repeat("-", intMax(8, len(panel.Title)+2)), layout.x+uiPanelBorderWidth(ctx, scale)+padding, titleY+uiTextHeight(ctx, scale)*0.9, 0.45, [4]float32{0.65, 0.65, 0.65, 1})
+		borderInsetX := float32(0)
+		if !panel.Borderless {
+			borderInsetX = uiPanelBorderWidth(ctx, scale)
+		}
+		uiDrawText(ctx, panel.Title, layout.x+borderInsetX+padding, titleY, scale, [4]float32{1, 1, 0, 1})
+		uiDrawText(ctx, strings.Repeat("-", intMax(8, len(panel.Title)+2)), layout.x+borderInsetX+padding, titleY+uiTextHeight(ctx, scale)*0.9, 0.45, [4]float32{0.65, 0.65, 0.65, 1})
 	}
 	if layout.scrollMax > 0 {
 		uiDrawScrollbar(ctx, layout)
@@ -992,6 +1062,9 @@ func uiRenderLabel(layout *uiLayoutNode, ctx uiLayoutContext) {
 
 func uiRenderAsciiGrid(layout *uiLayoutNode, ctx uiLayoutContext) {
 	grid := layout.node.(UiAsciiGrid)
+	if grid.Hidden {
+		return
+	}
 	scale := uiNodeScale(grid.Scale) * ctx.scale
 	color := grid.Color
 	if color == ([4]float32{}) {
@@ -1002,17 +1075,34 @@ func uiRenderAsciiGrid(layout *uiLayoutNode, ctx uiLayoutContext) {
 	}
 	bgColor := grid.BgColor
 	cellW, cellH := uiAsciiGridCellSize(ctx, grid, scale)
+
+	// Pass 0: Identify cells occupied by labels to prevent background bleed-through
+	type cellPos struct{ x, y int }
+	occupied := make(map[cellPos]bool)
+	for _, label := range grid.OverlayLabels {
+		if label.Text == "" || label.BgColor[3] <= 0 {
+			continue
+		}
+		// Mask out only the exact cells covered by the label text
+		runes := []rune(label.Text)
+		for dx := 0; dx < len(runes); dx++ {
+			occupied[cellPos{label.X + dx, label.Y}] = true
+		}
+	}
+
 	for row, line := range grid.Lines {
 		for col, glyph := range line {
 			cellBgColor := bgColor
 			if row < len(grid.BgColorGrid) && col < len(grid.BgColorGrid[row]) {
 				cellBgColor = grid.BgColorGrid[row][col]
 			}
+			lx := layout.x + float32(col)*cellW
+			ly := layout.y + float32(row)*cellH
 			if cellBgColor != ([4]float32{}) {
-				uiDrawRect(ctx, layout.x+float32(col)*cellW, layout.y+float32(row)*cellH, cellW, cellH, cellBgColor)
+				uiDrawRect(ctx, lx, ly, cellW, cellH, cellBgColor)
 			}
 
-			if glyph == ' ' {
+			if glyph == ' ' || occupied[cellPos{col, row}] {
 				continue
 			}
 			cellColor := color
@@ -1025,10 +1115,38 @@ func uiRenderAsciiGrid(layout *uiLayoutNode, ctx uiLayoutContext) {
 
 			glyphText := string(glyph)
 			glyphW, _ := uiMeasureText(ctx, glyphText, scale)
-			glyphX := layout.x + float32(col)*cellW + (cellW-glyphW)/2
-			glyphY := layout.y + float32(row)*cellH
-			uiDrawText(ctx, glyphText, glyphX, glyphY, scale, cellColor)
+			glyphX := lx + (cellW-glyphW)/2
+			uiDrawText(ctx, glyphText, glyphX, ly, scale, cellColor)
 		}
+	}
+
+	// Second pass: Overlay labels
+	for _, label := range grid.OverlayLabels {
+		if label.Text == "" {
+			continue
+		}
+		labelColor := label.Color
+		if labelColor == ([4]float32{}) {
+			labelColor = color
+		}
+
+		lx := layout.x + float32(label.X)*cellW
+		ly := layout.y + float32(label.Y)*cellH
+
+		ascent := uiTextAscent(ctx, scale)
+		// We use a slightly tighter height than the full cell to make it look like a badge
+		textH := ascent // Most of our labels don't have descenders
+		
+		if label.BgColor[3] > 0 {
+			textW, _ := uiMeasureText(ctx, label.Text, scale)
+			// Draw the rect centered vertically in the cell
+			rectY := ly + (cellH-textH)/2
+			uiDrawRect(ctx, lx-2*scale, rectY, textW+4*scale, textH, label.BgColor)
+		}
+
+		// Draw text at the same Y as the rectangle top
+		textY := ly + (cellH-textH)/2
+		uiDrawText(ctx, label.Text, lx, textY, scale, labelColor)
 	}
 }
 
