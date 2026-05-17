@@ -409,8 +409,8 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
     let params = object_params[object_id];
     let ray = transform_ray(ray_ws, inst.world_to_object);
     let t_obj = intersect_aabb(ray, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
-    var t_start = max(t_obj.x, 0.0) + EPS;
-    let t_end = t_obj.y;
+    var t_start = max(t_enter, max(t_obj.x, 0.0)) + EPS;
+    let t_end = min(t_exit, t_obj.y);
     if (t_start >= t_end) { return result; }
     let dir = ray.dir;
     let inv_dir = ray.inv_dir;
@@ -631,14 +631,41 @@ fn traverse_scene(ray: Ray) -> HitResult {
                     if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
                         var res: HitResult;
                         // Force full traversal (no LOD) for shadow map to avoid blinking/flickering
-                        res = traverse_xbrickmap(ray, inst, t_inst.x, t_inst.y, inst.object_id);
+                        res = traverse_xbrickmap(ray, inst, t_inst.x, min(t_inst.y, hit_res.t), inst.object_id);
                         if (res.hit && res.t < hit_res.t) { hit_res = res; }
                     }
                     li = li + 1;
                 }
             } else {
-                if (node.left != -1) { stack[stack_ptr] = node.left; stack_ptr++; }
-                if (node.right != -1 && stack_ptr < 64) { stack[stack_ptr] = node.right; stack_ptr++; }
+                var hit_l = false; var t_l = hit_res.t;
+                if (node.left != -1) {
+                    let child_l = nodes[node.left];
+                    let t_vals = intersect_aabb(ray, child_l.aabb_min.xyz, child_l.aabb_max.xyz);
+                    if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < hit_res.t) {
+                        hit_l = true; t_l = max(t_vals.x, 0.0);
+                    }
+                }
+                var hit_r = false; var t_r = hit_res.t;
+                if (node.right != -1 && stack_ptr < 64) {
+                    let child_r = nodes[node.right];
+                    let t_vals = intersect_aabb(ray, child_r.aabb_min.xyz, child_r.aabb_max.xyz);
+                    if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < hit_res.t) {
+                        hit_r = true; t_r = max(t_vals.x, 0.0);
+                    }
+                }
+                if (hit_l && hit_r) {
+                    if (t_l < t_r) {
+                        if (stack_ptr < 64) { stack[stack_ptr] = node.right; stack_ptr++; }
+                        if (stack_ptr < 64) { stack[stack_ptr] = node.left; stack_ptr++; }
+                    } else {
+                        if (stack_ptr < 64) { stack[stack_ptr] = node.left; stack_ptr++; }
+                        if (stack_ptr < 64) { stack[stack_ptr] = node.right; stack_ptr++; }
+                    }
+                } else if (hit_l) {
+                    if (stack_ptr < 64) { stack[stack_ptr] = node.left; stack_ptr++; }
+                } else if (hit_r) {
+                    if (stack_ptr < 64) { stack[stack_ptr] = node.right; stack_ptr++; }
+                }
             }
         }
     }

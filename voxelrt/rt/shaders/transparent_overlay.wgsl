@@ -1501,8 +1501,35 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
         }
         if (surface_done) { break; }
       } else {
-        if (node.left != -1 && sp < 64) { stack[sp] = node.left; sp += 1; }
-        if (node.right != -1 && sp < 64) { stack[sp] = node.right; sp += 1; }
+        var hit_l = false; var t_l = t_limit;
+        if (node.left != -1) {
+            let child_l = nodes[node.left];
+            let t_vals = intersect_aabb(ray, child_l.aabb_min.xyz, child_l.aabb_max.xyz);
+            if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < t_limit) {
+                hit_l = true; t_l = max(t_vals.x, 0.0);
+            }
+        }
+        var hit_r = false; var t_r = t_limit;
+        if (node.right != -1 && sp < 64) {
+            let child_r = nodes[node.right];
+            let t_vals = intersect_aabb(ray, child_r.aabb_min.xyz, child_r.aabb_max.xyz);
+            if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < t_limit) {
+                hit_r = true; t_r = max(t_vals.x, 0.0);
+            }
+        }
+        if (hit_l && hit_r) {
+            if (t_l < t_r) {
+                if (sp < 64) { stack[sp] = node.right; sp++; }
+                if (sp < 64) { stack[sp] = node.left; sp++; }
+            } else {
+                if (sp < 64) { stack[sp] = node.left; sp++; }
+                if (sp < 64) { stack[sp] = node.right; sp++; }
+            }
+        } else if (hit_l) {
+            if (sp < 64) { stack[sp] = node.left; sp++; }
+        } else if (hit_r) {
+            if (sp < 64) { stack[sp] = node.right; sp++; }
+        }
       }
     }
     if (surface_done) { break; }
