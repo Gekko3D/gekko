@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/cogentcore/webgpu/wgpu"
@@ -22,6 +23,11 @@ type AstronomicalBodyHost struct {
 	EmissionStrength          float32
 	Seed                      uint32
 	OcclusionPriority         int32
+	RingNormalViewSpace       mgl32.Vec3
+	RingInnerRadiusMeters     float32
+	RingOuterRadiusMeters     float32
+	RingDistanceMeters        float32
+	RingParentPlanetRadius    float32
 }
 
 type astronomicalBodyRecord struct {
@@ -57,37 +63,79 @@ func buildAstronomicalBodyRecords(hosts []AstronomicalBodyHost) ([]astronomicalB
 		} else {
 			lightDir = dir.Mul(-1)
 		}
-		records[i] = astronomicalBodyRecord{
-			DirectionKind: [4]float32{
-				dir.X(),
-				dir.Y(),
-				dir.Z(),
-				float32(host.Kind),
-			},
-			Angular: [4]float32{
-				clampNonNegative(host.AngularRadiusRad),
-				clampNonNegative(host.GlowAngularRadiusRad),
-				clampNonNegative(host.RingInnerAngularRadiusRad),
-				clampNonNegative(host.RingOuterAngularRadiusRad),
-			},
-			TintEmission: [4]float32{
-				clamp01f(host.BodyTint[0]),
-				clamp01f(host.BodyTint[1]),
-				clamp01f(host.BodyTint[2]),
-				maxAstronomicalFloat(host.EmissionStrength, 0),
-			},
-			LightPhase: [4]float32{
-				lightDir.X(),
-				lightDir.Y(),
-				lightDir.Z(),
-				clamp01f(host.PhaseLight01),
-			},
-			Meta: [4]uint32{
-				host.Seed,
-				uint32(max(host.OcclusionPriority, 0)),
-				uint32(clamp01f(host.PhaseLight01) * 65535.0),
-				0,
-			},
+
+		if host.Kind == 5 {
+			normal := host.RingNormalViewSpace
+			if normal.LenSqr() > 1e-6 {
+				normal = normal.Normalize()
+			} else {
+				normal = mgl32.Vec3{0, 1, 0}
+			}
+			records[i] = astronomicalBodyRecord{
+				DirectionKind: [4]float32{
+					dir.X(),
+					dir.Y(),
+					dir.Z(),
+					float32(host.Kind),
+				},
+				Angular: [4]float32{
+					host.RingInnerRadiusMeters,
+					host.RingOuterRadiusMeters,
+					host.RingDistanceMeters,
+					host.RingParentPlanetRadius,
+				},
+				TintEmission: [4]float32{
+					clamp01f(host.BodyTint[0]),
+					clamp01f(host.BodyTint[1]),
+					clamp01f(host.BodyTint[2]),
+					host.EmissionStrength, // opacity
+				},
+				LightPhase: [4]float32{
+					lightDir.X(),
+					lightDir.Y(),
+					lightDir.Z(),
+					clamp01f(host.PhaseLight01),
+				},
+				Meta: [4]uint32{
+					math.Float32bits(normal.X()),
+					math.Float32bits(normal.Y()),
+					math.Float32bits(normal.Z()),
+					host.Seed,
+				},
+			}
+		} else {
+			records[i] = astronomicalBodyRecord{
+				DirectionKind: [4]float32{
+					dir.X(),
+					dir.Y(),
+					dir.Z(),
+					float32(host.Kind),
+				},
+				Angular: [4]float32{
+					clampNonNegative(host.AngularRadiusRad),
+					clampNonNegative(host.GlowAngularRadiusRad),
+					clampNonNegative(host.RingInnerAngularRadiusRad),
+					clampNonNegative(host.RingOuterAngularRadiusRad),
+				},
+				TintEmission: [4]float32{
+					clamp01f(host.BodyTint[0]),
+					clamp01f(host.BodyTint[1]),
+					clamp01f(host.BodyTint[2]),
+					maxAstronomicalFloat(host.EmissionStrength, 0),
+				},
+				LightPhase: [4]float32{
+					lightDir.X(),
+					lightDir.Y(),
+					lightDir.Z(),
+					clamp01f(host.PhaseLight01),
+				},
+				Meta: [4]uint32{
+					host.Seed,
+					uint32(max(host.OcclusionPriority, 0)),
+					uint32(clamp01f(host.PhaseLight01) * 65535.0),
+					0,
+				},
+			}
 		}
 	}
 	return records, astronomicalBodyParamsUniform{BodyCount: uint32(len(hosts))}

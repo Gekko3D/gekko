@@ -41,6 +41,21 @@ func (grid *SpatialHashGrid) Insert(id EntityId, aabb AABBComponent) {
 	minY, maxY := grid.getCellIndex(aabb.Min.Y()), grid.getCellIndex(aabb.Max.Y())
 	minZ, maxZ := grid.getCellIndex(aabb.Min.Z()), grid.getCellIndex(aabb.Max.Z())
 
+	spanX := maxX - minX + 1
+	spanY := maxY - minY + 1
+	spanZ := maxZ - minZ + 1
+
+	if spanX <= 0 || spanY <= 0 || spanZ <= 0 {
+		return
+	}
+
+	// Uniform grid explosion guard: if the entity is extremely large (e.g., massive stations, planets,
+	// or asteroid field anchors), do not insert it into millions of tiny 2-meter cells, which would
+	// hang the engine on startup or bubble activation.
+	if uint64(spanX)*uint64(spanY)*uint64(spanZ) > 2048 {
+		return
+	}
+
 	for x := minX; x <= maxX; x++ {
 		for y := minY; y <= maxY; y++ {
 			for z := minZ; z <= maxZ; z++ {
@@ -69,6 +84,33 @@ func (grid *SpatialHashGrid) QueryAABBInto(aabb AABBComponent, unique map[Entity
 
 	clear(unique)
 	results = results[:0]
+
+	spanX := maxX - minX + 1
+	spanY := maxY - minY + 1
+	spanZ := maxZ - minZ + 1
+
+	if spanX <= 0 || spanY <= 0 || spanZ <= 0 {
+		return results
+	}
+
+	// Uniform grid query explosion guard:
+	if uint64(spanX)*uint64(spanY)*uint64(spanZ) > 4096 {
+		if spanX > 16 {
+			centerX := (minX + maxX) / 2
+			minX = centerX - 8
+			maxX = centerX + 8
+		}
+		if spanY > 16 {
+			centerY := (minY + maxY) / 2
+			minY = centerY - 8
+			maxY = centerY + 8
+		}
+		if spanZ > 16 {
+			centerZ := (minZ + maxZ) / 2
+			minZ = centerZ - 8
+			maxZ = centerZ + 8
+		}
+	}
 
 	for x := minX; x <= maxX; x++ {
 		for y := minY; y <= maxY; y++ {

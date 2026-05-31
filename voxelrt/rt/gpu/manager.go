@@ -375,6 +375,10 @@ type GpuBufferManager struct {
 	AnalyticMediumParamsBuf     *wgpu.Buffer
 	AstronomicalBodyBuf         *wgpu.Buffer
 	AstronomicalBodyParamsBuf   *wgpu.Buffer
+	FarPlanetRingBuf            *wgpu.Buffer
+	FarPlanetRingParamsBuf      *wgpu.Buffer
+	DebrisMidfieldBuf           *wgpu.Buffer
+	DebrisMidfieldParamsBuf     *wgpu.Buffer
 	PlanetBodyBuf               *wgpu.Buffer
 	PlanetBodyParamsBuf         *wgpu.Buffer
 	PlanetBodySurfaceBuf        *wgpu.Buffer
@@ -407,6 +411,14 @@ type GpuBufferManager struct {
 	AstronomicalBG1             *wgpu.BindGroup
 	AstronomicalBG2             *wgpu.BindGroup
 	AstronomicalBodyCount       uint32
+	FarPlanetRingBG0            *wgpu.BindGroup
+	FarPlanetRingBG1            *wgpu.BindGroup
+	FarPlanetRingBG2            *wgpu.BindGroup
+	FarPlanetRingCount          uint32
+	DebrisMidfieldBG0           *wgpu.BindGroup
+	DebrisMidfieldBG1           *wgpu.BindGroup
+	DebrisMidfieldBG2           *wgpu.BindGroup
+	DebrisMidfieldCount         uint32
 	PlanetBodyBG0               *wgpu.BindGroup
 	PlanetBodyBG1               *wgpu.BindGroup
 	PlanetBodyBG2               *wgpu.BindGroup
@@ -434,6 +446,8 @@ type GpuBufferManager struct {
 	CAVolumeBindingsDirty       bool
 	AnalyticMediumBindingsDirty bool
 	AstronomicalBindingsDirty   bool
+	FarPlanetRingBindingsDirty  bool
+	DebrisMidfieldBindingsDirty bool
 	PlanetBodyBindingsDirty     bool
 	WaterBindingsDirty          bool
 	caLayout                    []caVolumeLayout
@@ -579,6 +593,10 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("AnalyticMediumParamsBuf", &m.AnalyticMediumParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("AstronomicalBodyBuf", &m.AstronomicalBodyBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("AstronomicalBodyParamsBuf", &m.AstronomicalBodyParamsBuf, nil, wgpu.BufferUsageUniform, 256)
+	m.ensureBuffer("FarPlanetRingBuf", &m.FarPlanetRingBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("FarPlanetRingParamsBuf", &m.FarPlanetRingParamsBuf, nil, wgpu.BufferUsageUniform, 256)
+	m.ensureBuffer("DebrisMidfieldBuf", &m.DebrisMidfieldBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("DebrisMidfieldParamsBuf", &m.DebrisMidfieldParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("PlanetBodyBuf", &m.PlanetBodyBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("PlanetBodyParamsBuf", &m.PlanetBodyParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("WaterSurfaceBuf", &m.WaterSurfaceBuf, nil, wgpu.BufferUsageStorage, 1024)

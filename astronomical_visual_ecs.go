@@ -37,6 +37,11 @@ type AstronomicalVisualRecord struct {
 	RingOuterAngularRadiusRad float32
 	PhaseLight01              float32
 	OcclusionPriority         int
+	RingNormalViewSpace       [3]float32
+	RingInnerRadiusMeters     float32
+	RingOuterRadiusMeters     float32
+	RingDistanceMeters        float32
+	RingParentPlanetRadius    float32
 }
 
 type AstronomicalVisualComponent struct {
@@ -120,6 +125,11 @@ func buildAstronomicalBodyHosts(cmd *Commands) []gpu_rt.AstronomicalBodyHost {
 			EmissionStrength:          visual.EmissionStrength,
 			Seed:                      visual.Seed,
 			OcclusionPriority:         int32(visual.OcclusionPriority),
+			RingNormalViewSpace:       mgl32.Vec3{visual.RingNormalViewSpace[0], visual.RingNormalViewSpace[1], visual.RingNormalViewSpace[2]},
+			RingInnerRadiusMeters:     visual.RingInnerRadiusMeters,
+			RingOuterRadiusMeters:     visual.RingOuterRadiusMeters,
+			RingDistanceMeters:        visual.RingDistanceMeters,
+			RingParentPlanetRadius:    visual.RingParentPlanetRadius,
 		})
 	}
 	return hosts

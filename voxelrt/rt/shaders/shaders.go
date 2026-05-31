@@ -52,6 +52,12 @@ var PlanetBodyWGSL string
 //go:embed astronomical.wgsl
 var AstronomicalWGSL string
 
+//go:embed far_planet_ring.wgsl
+var FarPlanetRingWGSL string
+
+//go:embed debris_midfield.wgsl
+var DebrisMidfieldWGSL string
+
 /**
  */
 //go:embed transparent_overlay.wgsl

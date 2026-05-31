@@ -70,6 +70,10 @@ func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
 	if flags.PlanetBodies {
 		defaults = append(defaults, &PlanetBodyFeature{})
 	}
+	if flags.Astronomical {
+		defaults = append(defaults, &FarPlanetRingFeature{})
+		defaults = append(defaults, &DebrisMidfieldFeature{})
+	}
 	if flags.AnalyticMedia {
 		defaults = append(defaults, &AnalyticMediumFeature{})
 	}

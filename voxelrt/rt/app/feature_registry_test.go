@@ -89,9 +89,13 @@ func TestEnsureDefaultFeaturesRespectsConfig(t *testing.T) {
 	}
 	foundWater := false
 	foundAstronomical := false
+	foundFarPlanetRing := false
+	foundDebrisMidfield := false
 	foundPlanetBodies := false
 	foundAnalyticMedia := false
 	astronomicalIndex := -1
+	farPlanetRingIndex := -1
+	debrisMidfieldIndex := -1
 	planetBodiesIndex := -1
 	analyticMediaIndex := -1
 	for _, feature := range app.features {
@@ -101,6 +105,14 @@ func TestEnsureDefaultFeaturesRespectsConfig(t *testing.T) {
 		if feature != nil && feature.Name() == "astronomical" {
 			foundAstronomical = true
 			astronomicalIndex = indexOfFeature(app.features, feature.Name())
+		}
+		if feature != nil && feature.Name() == "far_planet_ring" {
+			foundFarPlanetRing = true
+			farPlanetRingIndex = indexOfFeature(app.features, feature.Name())
+		}
+		if feature != nil && feature.Name() == "debris_midfield" {
+			foundDebrisMidfield = true
+			debrisMidfieldIndex = indexOfFeature(app.features, feature.Name())
 		}
 		if feature != nil && feature.Name() == "planet-bodies" {
 			foundPlanetBodies = true
@@ -120,11 +132,26 @@ func TestEnsureDefaultFeaturesRespectsConfig(t *testing.T) {
 	if !foundAstronomical {
 		t.Fatal("expected astronomical feature to be registered by default")
 	}
+	if !foundFarPlanetRing {
+		t.Fatal("expected far planet-ring feature to be registered by default")
+	}
+	if !foundDebrisMidfield {
+		t.Fatal("expected debris-midfield feature to be registered by default")
+	}
 	if !foundAnalyticMedia {
 		t.Fatal("expected analytic media feature to be registered by default")
 	}
 	if astronomicalIndex < 0 || planetBodiesIndex < 0 || astronomicalIndex > planetBodiesIndex {
 		t.Fatalf("expected astronomical feature before planet bodies, got astronomical=%d planet-bodies=%d", astronomicalIndex, planetBodiesIndex)
+	}
+	if astronomicalIndex < 0 || farPlanetRingIndex < 0 || astronomicalIndex > farPlanetRingIndex {
+		t.Fatalf("expected far planet-ring feature after astronomical feature, got astronomical=%d far-ring=%d", astronomicalIndex, farPlanetRingIndex)
+	}
+	if planetBodiesIndex < 0 || farPlanetRingIndex < 0 || planetBodiesIndex > farPlanetRingIndex {
+		t.Fatalf("expected far planet-ring feature after planet bodies for correct composition, got planet-bodies=%d far-ring=%d", planetBodiesIndex, farPlanetRingIndex)
+	}
+	if farPlanetRingIndex < 0 || debrisMidfieldIndex < 0 || farPlanetRingIndex > debrisMidfieldIndex {
+		t.Fatalf("expected debris-midfield feature after far planet-ring feature, got far-ring=%d debris-midfield=%d", farPlanetRingIndex, debrisMidfieldIndex)
 	}
 	if planetBodiesIndex < 0 || analyticMediaIndex < 0 || planetBodiesIndex > analyticMediaIndex {
 		t.Fatalf("expected planet bodies before analytic media, got planet-bodies=%d analytic-media=%d", planetBodiesIndex, analyticMediaIndex)
@@ -134,6 +161,33 @@ func TestEnsureDefaultFeaturesRespectsConfig(t *testing.T) {
 	noDefaults.ensureDefaultFeatures()
 	if len(noDefaults.features) != 0 {
 		t.Fatalf("expected no default features, got %d", len(noDefaults.features))
+	}
+}
+
+func TestFarPlanetRingFeaturePassStageGating(t *testing.T) {
+	feature := &FarPlanetRingFeature{}
+	app := &App{}
+	if feature.HasCommandStage(app, FeatureCommandStagePostLighting) {
+		t.Fatal("expected far planet-ring feature to no longer use post-lighting command stage")
+	}
+	if feature.HasPassStage(app, FeaturePassStageAccumulation) {
+		t.Fatal("expected far planet-ring feature to gate off without renderer resources")
+	}
+	app.BufferManager = nil
+	if feature.HasPassStage(app, FeaturePassStageAccumulation) {
+		t.Fatal("expected far planet-ring feature to gate off without buffer manager")
+	}
+}
+
+func TestDebrisMidfieldFeaturePassStageGating(t *testing.T) {
+	feature := &DebrisMidfieldFeature{}
+	app := &App{}
+	if feature.HasPassStage(app, FeaturePassStageAccumulation) {
+		t.Fatal("expected debris-midfield feature to gate off without renderer resources")
+	}
+	app.BufferManager = nil
+	if feature.HasPassStage(app, FeaturePassStageAccumulation) {
+		t.Fatal("expected debris-midfield feature to gate off without buffer manager")
 	}
 }
 

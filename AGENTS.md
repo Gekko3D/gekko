@@ -13,6 +13,29 @@ This workspace is a Go game-engine umbrella, not a single top-level Git repo. Th
 
 Use a collaboration-first workflow for non-trivial work. The goal is to let an agent classify the task, choose the smallest safe verification pass, and leave behind a reviewable handoff artifact when scope or risk is not obviously small.
 
+### Human Alignment Gate
+
+Do not jump from a broad request to implementation when the design, ownership
+boundary, or intended long-term architecture is unclear.
+
+Before editing code for any non-trivial renderer, shader, engine-runtime,
+content-contract, physics, ECS, or cross-module change, first state:
+
+- what is known from docs/code
+- what is uncertain or missing
+- whether the proposed work is a long-term architecture step, a tactical
+  bridge, or a throwaway diagnostic
+- the viable alternatives and which one best matches the project docs
+- the specific files/systems that would be touched
+- the verification plan, including any manual visual/GPU check that automated
+  tests cannot cover
+
+If confidence is not high, or the implementation could create a short-term
+solution that conflicts with the documented architecture, stop and ask for
+alignment before making code changes. Do not implement tactical fixes unless
+the user explicitly accepts them as tactical/temporary. If context is missing,
+say exactly what is missing and what must be read, tested, or decided first.
+
 Start with these repo-local sources of truth:
 
 - [`base/skills-manifest.md`](/Users/ddevidch/code/go/gekko3d/gekko/base/skills-manifest.md): request normalization, routing rules, confidence thresholds, and expected artifacts

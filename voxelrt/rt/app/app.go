@@ -33,6 +33,8 @@ type App struct {
 	CAVolumePipeline       *wgpu.RenderPipeline
 	AnalyticMediumPipeline *wgpu.RenderPipeline
 	AstronomicalPipeline   *wgpu.RenderPipeline
+	FarPlanetRingPipeline  *wgpu.RenderPipeline
+	DebrisMidfieldPipeline *wgpu.RenderPipeline
 	PlanetBodyPipeline     *wgpu.RenderPipeline
 	ResolvePipeline        *wgpu.RenderPipeline
 

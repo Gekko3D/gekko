@@ -765,6 +765,18 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync Astronomical")
 
+	state.RtApp.Profiler.BeginScope("Sync Far Planet Rings")
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateFarPlanetRings(buildFarPlanetRingHosts(cmd))
+	}
+	state.RtApp.Profiler.EndScope("Sync Far Planet Rings")
+
+	state.RtApp.Profiler.BeginScope("Sync Midfield Debris")
+	if state.RtApp.BufferManager != nil {
+		state.RtApp.BufferManager.UpdateDebrisMidfieldCells(buildDebrisMidfieldHosts(cmd))
+	}
+	state.RtApp.Profiler.EndScope("Sync Midfield Debris")
+
 	state.RtApp.Profiler.BeginScope("Sync Water")
 	if state.RtApp.BufferManager != nil {
 		waterHosts, rippleHosts := buildWaterSurfaceHosts(cmd, waterInteractions)

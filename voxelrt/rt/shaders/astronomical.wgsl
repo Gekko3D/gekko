@@ -193,10 +193,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let ring_outer = max(body.angular.w, 0.0);
 
     var sample = vec4<f32>(0.0);
-    if (kind == KIND_RING_OR_BELT && ring_outer > ring_inner && angle >= ring_inner && angle <= ring_outer) {
-      let edge = min(angle - ring_inner, ring_outer - angle) / max(ring_outer - ring_inner, 1e-6);
-      let alpha = smoothstep(0.0, 0.12, edge) * 0.32;
-      sample = vec4<f32>(body.tint_emission.rgb, alpha);
+    if (kind == KIND_RING_OR_BELT) {
+      // Dedicated far planet-ring rendering owns this path now; keep legacy records inert
+      // so planet rings are not rendered twice. Star belts are deferred to a later feature.
+      sample = vec4<f32>(0.0);
     } else if (radius > 0.0 && angle <= radius) {
       sample = disc_sample_color(body, ray_dir, body_dir, angle, radius);
     } else if (kind == KIND_STAR && glow_radius > radius && angle <= glow_radius) {
