@@ -26,6 +26,7 @@ struct CameraData {
   pad2: vec2<f32>,
   ao_quality: vec4<f32>, // x: AO sample count, y: AO radius, z: directional shadow softness, w: spot shadow softness
   distance_limits: vec4<f32>,
+  render_origin: vec4<f32>,
 };
 
 struct Instance {
@@ -220,6 +221,10 @@ fn camera_far_t() -> f32 {
   return max(uCamera.distance_limits.y, 1.0);
 }
 
+fn camera_render_pos() -> vec3<f32> {
+  return uCamera.cam_pos.xyz - uCamera.render_origin.xyz;
+}
+
 fn sanitize_scene_depth(depth: f32) -> f32 {
   let far_t = camera_far_t();
   if (depth > 0.0 && depth < far_t) {
@@ -321,8 +326,8 @@ fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
   let clip = vec4<f32>(ndc, 1.0, 1.0);
   var view = uCamera.inv_proj * clip;
   view = view / max(view.w, 1e-6);
-  let world_target = (uCamera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
-  let origin = uCamera.cam_pos.xyz;
+  let world_target = (uCamera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz - uCamera.render_origin.xyz;
+  let origin = camera_render_pos();
   let dir = normalize(world_target - origin);
   let safe_dir = make_safe_dir(dir);
   return Ray(origin, dir, 1.0 / safe_dir);
@@ -333,7 +338,7 @@ fn clamp_uv01(uv: vec2<f32>) -> vec2<f32> {
 }
 
 fn world_to_uv(p_ws: vec3<f32>) -> vec2<f32> {
-  let clip = uCamera.view_proj * vec4<f32>(p_ws, 1.0);
+  let clip = uCamera.view_proj * vec4<f32>(p_ws + uCamera.render_origin.xyz, 1.0);
   let ndc = clip.xy / max(clip.w, 1e-4);
   return vec2<f32>(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
 }
@@ -681,7 +686,7 @@ fn choose_directional_cascade(light: Light, hit_pos: vec3<f32>) -> DirectionalCa
     return DirectionalCascadeSelection(0u, 0u, 0.0);
   }
   // Cascades are authored as view-depth slices, not spherical shells around the camera.
-  let receiver_depth = max(dot(hit_pos - uCamera.cam_pos.xyz, camera_forward_ws()), 0.0);
+  let receiver_depth = max(dot(hit_pos - camera_render_pos(), camera_forward_ws()), 0.0);
   let split_depth = light.directional_cascades[0].params.x;
   let transition = max(4.0, max(light.directional_cascades[0].params.y * 24.0, split_depth * 0.12));
   let blend_start = max(0.0, split_depth - transition);
@@ -899,7 +904,7 @@ fn calculate_lighting(
   receiver_shadow_seam_epsilon: f32,
   tile_index: u32
 ) -> vec3<f32> {
-  let V = normalize(uCamera.cam_pos.xyz - p);
+  let V = normalize(camera_render_pos() - p);
   let NdotV = max(dot(n, V), 0.0);
   let dielectric_f0 = dielectric_f0_from_ior(ior);
   let F0 = mix(dielectric_f0, base_color, metalness);
@@ -1276,7 +1281,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                               let shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
                               let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                              let view_dir = normalize(uCamera.cam_pos.xyz - pos_ws);
+                              let view_dir = normalize(camera_render_pos() - pos_ws);
                               let opacity = clamp(1.0 - trans, 0.0, 1.0);
                               let surface_glass = transmission > 0.01 && density <= 0.01;
                               let is_volumetric = density > 0.01;
@@ -1397,7 +1402,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let pos_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
                                   let shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
                                   let z = clamp(t_micro / max(t_limit, 1e-4), 0.0, 1.0);
-                                  let view_dir = normalize(uCamera.cam_pos.xyz - pos_ws);
+                                  let view_dir = normalize(camera_render_pos() - pos_ws);
                                   let opacity = clamp(1.0 - trans, 0.0, 1.0);
                                   let surface_glass = transmission > 0.01 && density <= 0.01;
                                   let is_volumetric = density > 0.01;

@@ -52,9 +52,9 @@ struct SimulationParams {
     max_particles: u32,
     emitter_count: u32,
     inv_vsize: f32,
-    pad1: f32,
-    pad2: f32,
-    pad3: f32,
+    render_origin_x: f32,
+    render_origin_y: f32,
+    render_origin_z: f32,
 };
 
 struct Counters {
@@ -207,15 +207,16 @@ fn get_voxel_normal(pos: vec3<f32>, op: ObjectParams) -> vec3<f32> {
 }
 
 fn get_occupancy_info(pos: vec3<f32>, out_normal: ptr<function, vec3<f32>>) -> bool {
+    let pos_render = pos - vec3<f32>(params.render_origin_x, params.render_origin_y, params.render_origin_z);
     let num_instances = arrayLength(&instances);
     for (var i = 0u; i < num_instances; i++) {
         let inst = instances[i];
-        if (pos.x < inst.aabb_min.x || pos.y < inst.aabb_min.y || pos.z < inst.aabb_min.z ||
-            pos.x > inst.aabb_max.x || pos.y > inst.aabb_max.y || pos.z > inst.aabb_max.z) {
+        if (pos_render.x < inst.aabb_min.x || pos_render.y < inst.aabb_min.y || pos_render.z < inst.aabb_min.z ||
+            pos_render.x > inst.aabb_max.x || pos_render.y > inst.aabb_max.y || pos_render.z > inst.aabb_max.z) {
             continue;
         }
 
-        let obj_pos = (inst.world_to_object * vec4<f32>(pos, 1.0)).xyz;
+        let obj_pos = (inst.world_to_object * vec4<f32>(pos_render, 1.0)).xyz;
         let op = object_params[inst.object_id];
         if (check_voxel_occupancy(obj_pos, op)) {
             let n_os = get_voxel_normal(obj_pos, op);

@@ -29,6 +29,7 @@ struct CameraData {
     pad2: vec2<f32>,
     ao_quality: vec4<f32>,
     distance_limits: vec4<f32>,
+    render_origin: vec4<f32>,
 };
 
 struct Instance {
@@ -173,6 +174,10 @@ struct ObjectLookupEntry {
 
 fn camera_far_t() -> f32 {
     return max(camera.distance_limits.y, 1.0);
+}
+
+fn camera_render_pos() -> vec3<f32> {
+    return camera.cam_pos.xyz - camera.render_origin.xyz;
 }
 
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
@@ -1026,8 +1031,8 @@ fn get_ray(uv: vec2<f32>) -> Ray {
     let clip = vec4<f32>(ndc, 1.0, 1.0);
     var view = camera.inv_proj * clip;
     view = view / max(view.w, 1e-6);
-    let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
-    let origin = camera.cam_pos.xyz;
+    let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz - camera.render_origin.xyz;
+    let origin = camera_render_pos();
     let dir = normalize(world_target - origin);
     let safe_dir = make_safe_dir(dir);
     return Ray(origin, dir, 1.0 / safe_dir);
@@ -1072,7 +1077,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let t_inst = intersect_aabb(ray, inst.aabb_min.xyz, inst.aabb_max.xyz);
                     if (t_inst.x <= t_inst.y && t_inst.y > 0.0 && t_inst.x < hit_res.t) {
                         let params = object_params[inst.object_id];
-                        let dist_cam = distance(camera.cam_pos.xyz, inst.aabb_min.xyz);
+                        let dist_cam = distance(camera_render_pos(), inst.aabb_min.xyz);
                         var res: HitResult;
                         if (dist_cam > params.lod_threshold && params.tree64_base != 0xFFFFFFFFu) {
                             res = traverse_tree64(ray, inst, t_inst.x, min(t_inst.y, hit_res.t), inst.object_id);

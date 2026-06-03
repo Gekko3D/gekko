@@ -17,6 +17,7 @@ struct CameraData {
     pad2: vec2<f32>,
     ao_quality: vec4<f32>, // x: AO sample count, y: AO radius, z: directional shadow softness, w: spot shadow softness
     distance_limits: vec4<f32>,
+    render_origin: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -38,6 +39,10 @@ struct Light {
 
 fn camera_far_t() -> f32 {
     return max(camera.distance_limits.y, 1.0);
+}
+
+fn camera_render_pos() -> vec3<f32> {
+    return camera.cam_pos.xyz - camera.render_origin.xyz;
 }
 
 struct DirectionalCascadeSelection {
@@ -194,7 +199,7 @@ fn choose_directional_cascade(light: Light, hit_pos: vec3<f32>) -> DirectionalCa
         return DirectionalCascadeSelection(0u, 0u, 0.0);
     }
     // Cascades are authored as view-depth slices, not spherical shells around the camera.
-    let receiver_depth = max(dot(hit_pos - camera.cam_pos.xyz, camera_forward_ws()), 0.0);
+    let receiver_depth = max(dot(hit_pos - camera_render_pos(), camera_forward_ws()), 0.0);
     let split_depth = light.directional_cascades[0].params.x;
     let transition = max(4.0, max(light.directional_cascades[0].params.y * 24.0, split_depth * 0.12));
     let blend_start = max(0.0, split_depth - transition);
@@ -582,8 +587,8 @@ fn get_ray(uv: vec2<f32>) -> Ray {
     let clip = vec4<f32>(ndc, 1.0, 1.0);
     var view = camera.inv_proj * clip;
     view = view / max(view.w, 1e-6);
-    let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz;
-    let origin = camera.cam_pos.xyz;
+    let world_target = (camera.inv_view * vec4<f32>(view.xyz, 1.0)).xyz - camera.render_origin.xyz;
+    let origin = camera_render_pos();
     let dir = normalize(world_target - origin);
     return Ray(origin, dir, 1.0 / dir);
 }
@@ -652,7 +657,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // shadows from the stored voxel center, to act like a 3d pixel.
     let lighting_pos_ws = voxel_center_ws;
     let shadow_receiver_pos_ws = voxel_center_ws;
-    let view_dir = normalize(camera.cam_pos.xyz - lighting_pos_ws);
+    let view_dir = normalize(camera_render_pos() - lighting_pos_ws);
     let NdotV = max(dot(normal, view_dir), 0.0);
     let dielectric_f0 = dielectric_f0_from_ior(ior);
     let F0 = mix(dielectric_f0, base_color, metalness);

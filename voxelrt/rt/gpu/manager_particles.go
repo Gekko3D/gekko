@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/cogentcore/webgpu/wgpu"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 func (m *GpuBufferManager) UpdateParticles(maxCount uint32, emitters []byte) bool {
@@ -141,14 +142,16 @@ func (m *GpuBufferManager) CreateParticleSimBindGroups() {
 	}
 }
 
-func (m *GpuBufferManager) UpdateParticleParams(dt, invVsize float32, seed uint32, emitterCount uint32) {
+func (m *GpuBufferManager) UpdateParticleParams(dt, invVsize float32, seed uint32, emitterCount uint32, renderOrigin mgl32.Vec3) {
 	data := make([]uint32, 8)
 	data[0] = math.Float32bits(dt)
 	data[1] = seed
 	data[2] = m.MaxParticleCount
 	data[3] = emitterCount
 	data[4] = math.Float32bits(invVsize)
-	// padding 4,5,6,7 remains 0
+	data[5] = math.Float32bits(renderOrigin.X())
+	data[6] = math.Float32bits(renderOrigin.Y())
+	data[7] = math.Float32bits(renderOrigin.Z())
 
 	bytes := unsafe.Slice((*byte)(unsafe.Pointer(&data[0])), 32)
 	m.Device.GetQueue().WriteBuffer(m.ParticleParamsBuf, 0, bytes)

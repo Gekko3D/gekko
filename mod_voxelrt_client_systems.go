@@ -832,7 +832,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	invVsize := 1.0 / vSize
 	state.RtApp.ParticleSpawnCount = uint32(len(spawnReqs))
 	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), float32(invVsize), uint32(time.Now().UnixNano()), emitterCount)
+		state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), float32(invVsize), uint32(time.Now().UnixNano()), emitterCount, state.RtApp.Camera.Position)
 		pRecreated := state.RtApp.BufferManager.UpdateParticles(1000000, emitters) // Pass max count
 		state.RtApp.BufferManager.UpdateSpawnRequests(spawnReqs)
 		if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil || state.RtApp.BufferManager.ParticleSimBG0 == nil {

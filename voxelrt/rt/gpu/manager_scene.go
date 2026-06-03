@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/gekko3d/gekko/voxelrt/rt/bvh"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
@@ -234,23 +235,23 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	binary.LittleEndian.PutUint32(dst[124:128], alloc.DirectLookup.TableBase)
 }
 
-func buildInstanceData(objects []*core.VoxelObject) []byte {
+func buildInstanceData(objects []*core.VoxelObject, renderOrigin mgl32.Vec3) []byte {
 	if len(objects) == 0 {
 		return make([]byte, 208)
 	}
 
 	instData := make([]byte, 0, len(objects)*208)
 	for i, obj := range objects {
-		o2w := obj.Transform.ObjectToWorld()
-		w2o := obj.Transform.WorldToObject()
+		o2w := renderRelativeObjectToWorld(obj.Transform.ObjectToWorld(), renderOrigin)
+		w2o := renderRelativeWorldToObject(obj.Transform.WorldToObject(), renderOrigin)
 
 		instData = appendMat4LE(instData, o2w)
 		instData = appendMat4LE(instData, w2o)
 
 		minB, maxB := [3]float32{}, [3]float32{}
 		if obj.WorldAABB != nil {
-			minB = obj.WorldAABB[0]
-			maxB = obj.WorldAABB[1]
+			minB = obj.WorldAABB[0].Sub(renderOrigin)
+			maxB = obj.WorldAABB[1].Sub(renderOrigin)
 		}
 		instData = appendVec3PaddedLE(instData, minB)
 		instData = appendVec3PaddedLE(instData, maxB)
@@ -263,6 +264,38 @@ func buildInstanceData(objects []*core.VoxelObject) []byte {
 		instData = append(instData, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	}
 	return instData
+}
+
+func renderRelativeObjectToWorld(objectToWorld mgl32.Mat4, renderOrigin mgl32.Vec3) mgl32.Mat4 {
+	if renderOrigin == (mgl32.Vec3{}) {
+		return objectToWorld
+	}
+	return mgl32.Translate3D(-renderOrigin.X(), -renderOrigin.Y(), -renderOrigin.Z()).Mul4(objectToWorld)
+}
+
+func renderRelativeWorldToObject(worldToObject mgl32.Mat4, renderOrigin mgl32.Vec3) mgl32.Mat4 {
+	if renderOrigin == (mgl32.Vec3{}) {
+		return worldToObject
+	}
+	return worldToObject.Mul4(mgl32.Translate3D(renderOrigin.X(), renderOrigin.Y(), renderOrigin.Z()))
+}
+
+func buildRenderBVHData(objects []*core.VoxelObject, renderOrigin mgl32.Vec3) []byte {
+	if len(objects) == 0 {
+		return make([]byte, 64)
+	}
+	aabbs := make([][2]mgl32.Vec3, len(objects))
+	for i, obj := range objects {
+		if obj == nil || obj.WorldAABB == nil {
+			continue
+		}
+		aabbs[i] = [2]mgl32.Vec3{
+			obj.WorldAABB[0].Sub(renderOrigin),
+			obj.WorldAABB[1].Sub(renderOrigin),
+		}
+	}
+	builder := &bvh.TLASBuilder{}
+	return builder.Build(aabbs)
 }
 
 func buildObjectParamsData(objects []*core.VoxelObject, allocations map[*volume.XBrickMap]*ObjectGpuAllocation, materialAllocations map[*core.VoxelObject]*MaterialGpuAllocation) []byte {
@@ -279,13 +312,14 @@ func buildObjectParamsData(objects []*core.VoxelObject, allocations map[*volume.
 	return objParams
 }
 
-func buildLightsData(lights []core.Light) []byte {
+func buildLightsData(lights []core.Light, renderOrigin mgl32.Vec3) []byte {
 	if len(lights) == 0 {
 		return make([]byte, lightSizeBytes)
 	}
 
 	lightsData := make([]byte, 0, len(lights)*lightSizeBytes)
 	for _, l := range lights {
+		l = renderRelativeLight(l, renderOrigin)
 		lightsData = appendVec4LE(lightsData, l.Position)
 		lightsData = appendVec4LE(lightsData, l.Direction)
 		lightsData = appendVec4LE(lightsData, l.Color)
@@ -300,6 +334,31 @@ func buildLightsData(lights []core.Light) []byte {
 		}
 	}
 	return lightsData
+}
+
+func renderRelativeLight(light core.Light, renderOrigin mgl32.Vec3) core.Light {
+	if renderOrigin == (mgl32.Vec3{}) {
+		return light
+	}
+
+	light.Position[0] -= renderOrigin.X()
+	light.Position[1] -= renderOrigin.Y()
+	light.Position[2] -= renderOrigin.Z()
+
+	translateToAbsolute := mgl32.Translate3D(renderOrigin.X(), renderOrigin.Y(), renderOrigin.Z())
+	translateToRelative := mgl32.Translate3D(-renderOrigin.X(), -renderOrigin.Y(), -renderOrigin.Z())
+	relViewProj := mgl32.Mat4(light.ViewProj).Mul4(translateToAbsolute)
+	relInvViewProj := translateToRelative.Mul4(mgl32.Mat4(light.InvViewProj))
+	light.ViewProj = [16]float32(relViewProj)
+	light.InvViewProj = [16]float32(relInvViewProj)
+	for i := range light.DirectionalCascades {
+		cascade := &light.DirectionalCascades[i]
+		relCascadeViewProj := mgl32.Mat4(cascade.ViewProj).Mul4(translateToAbsolute)
+		relCascadeInvViewProj := translateToRelative.Mul4(mgl32.Mat4(cascade.InvViewProj))
+		cascade.ViewProj = [16]float32(relCascadeViewProj)
+		cascade.InvViewProj = [16]float32(relCascadeInvViewProj)
+	}
+	return light
 }
 
 func (m *GpuBufferManager) buildLightsDataForGPU(lights []core.Light) []byte {
@@ -321,7 +380,7 @@ func (m *GpuBufferManager) buildLightsDataForGPU(lights []core.Light) []byte {
 			}
 		}
 	}
-	return buildLightsData(gpuLights)
+	return buildLightsData(gpuLights, m.RenderOrigin)
 }
 
 func totalShadowLayers(lights []core.Light) uint32 {
@@ -353,13 +412,14 @@ func expectedShadowLayers(lights []core.Light, hasCamera bool) uint32 {
 	return total
 }
 
-func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraState, aspect float32) bool {
+func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraState, aspect float32, renderOrigin mgl32.Vec3) bool {
 	recreated := false
+	m.RenderOrigin = renderOrigin
 
 	// 1. Instances
 	m.Profiler.BeginScope("Scene: Instances")
-	instData := buildInstanceData(scene.VisibleObjects)
-	transparentInstData := buildInstanceData(scene.TransparentVisibleObjects)
+	instData := buildInstanceData(scene.VisibleObjects, renderOrigin)
+	transparentInstData := buildInstanceData(scene.TransparentVisibleObjects, renderOrigin)
 	if m.ensureBuffer("InstancesBuf", &m.InstancesBuf, instData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
@@ -369,14 +429,8 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	m.Profiler.EndScope("Scene: Instances")
 
 	// 2. BVH
-	bvhData := scene.BVHNodesBytes
-	if len(bvhData) == 0 {
-		bvhData = make([]byte, 64)
-	}
-	transparentBVHData := scene.TransparentBVHNodesBytes
-	if len(transparentBVHData) == 0 {
-		transparentBVHData = make([]byte, 64)
-	}
+	bvhData := buildRenderBVHData(scene.VisibleObjects, renderOrigin)
+	transparentBVHData := buildRenderBVHData(scene.TransparentVisibleObjects, renderOrigin)
 	if m.ensureBuffer("BVHNodesBuf", &m.BVHNodesBuf, bvhData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
@@ -390,15 +444,12 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	m.Profiler.EndScope("Scene: Lights")
 
 	// Update shadow acceleration structures from scene data.
-	shadowInstData := buildInstanceData(scene.ShadowObjects)
+	shadowInstData := buildInstanceData(scene.ShadowObjects, renderOrigin)
 	if m.ensureBuffer("ShadowInstancesBuf", &m.ShadowInstancesBuf, shadowInstData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 
-	shadowBVHData := scene.ShadowBVHNodesBytes
-	if len(shadowBVHData) == 0 {
-		shadowBVHData = make([]byte, 64)
-	}
+	shadowBVHData := buildRenderBVHData(scene.ShadowObjects, renderOrigin)
 	if m.ensureBuffer("ShadowBVHNodesBuf", &m.ShadowBVHNodesBuf, shadowBVHData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
@@ -450,9 +501,9 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	return recreated
 }
 
-const CameraUniformSizeBytes = 304
+const CameraUniformSizeBytes = 320
 
-func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, sunIntensity, skyAmbientMix, farPlane float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) []byte {
+func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor, renderOrigin mgl32.Vec3, sunIntensity, skyAmbientMix, farPlane float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) []byte {
 	buf := make([]byte, CameraUniformSizeBytes)
 	lightingQuality = lightingQuality.WithDefaults()
 
@@ -498,12 +549,16 @@ func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, light
 	binary.LittleEndian.PutUint32(buf[292:], math.Float32bits(farPlane))
 	binary.LittleEndian.PutUint32(buf[296:], 0)
 	binary.LittleEndian.PutUint32(buf[300:], 0)
+	binary.LittleEndian.PutUint32(buf[304:], math.Float32bits(renderOrigin[0]))
+	binary.LittleEndian.PutUint32(buf[308:], math.Float32bits(renderOrigin[1]))
+	binary.LittleEndian.PutUint32(buf[312:], math.Float32bits(renderOrigin[2]))
+	binary.LittleEndian.PutUint32(buf[316:], 0)
 
 	return buf
 }
 
-func (m *GpuBufferManager) UpdateCamera(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor mgl32.Vec3, sunIntensity, skyAmbientMix, farPlane float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) {
-	buf := buildCameraUniformData(viewProj, invView, invProj, camPos, lightPos, ambientColor, sunIntensity, skyAmbientMix, farPlane, debugMode, renderMode, numLights, screenW, screenH, lightingQuality)
+func (m *GpuBufferManager) UpdateCamera(viewProj, invView, invProj mgl32.Mat4, camPos, lightPos, ambientColor, renderOrigin mgl32.Vec3, sunIntensity, skyAmbientMix, farPlane float32, debugMode uint32, renderMode uint32, numLights uint32, screenW, screenH uint32, lightingQuality core.LightingQualityConfig) {
+	buf := buildCameraUniformData(viewProj, invView, invProj, camPos, lightPos, ambientColor, renderOrigin, sunIntensity, skyAmbientMix, farPlane, debugMode, renderMode, numLights, screenW, screenH, lightingQuality)
 
 	if m.CameraBuf == nil {
 		desc := &wgpu.BufferDescriptor{

@@ -137,6 +137,7 @@ func (a *App) Update() {
 	viewProj := proj.Mul4(view)
 	invView := view.Inv()
 	invProj := proj.Inv()
+	renderOrigin := a.Camera.Position
 	fastCameraMotion := a.hasFastCameraMotion()
 
 	// Readback Hi-Z from previous frame (cheap latency)
@@ -208,7 +209,7 @@ func (a *App) Update() {
 	a.BufferManager.LightingQuality = lightingQuality
 	a.Profiler.BeginScope("Buffer Update")
 	recreated := false
-	if a.BufferManager.UpdateScene(a.Scene, a.Camera, aspect) {
+	if a.BufferManager.UpdateScene(a.Scene, a.Camera, aspect, renderOrigin) {
 		recreated = true
 	}
 	if a.BufferManager.UpdateTiledLightingResources(a.Config.Width, a.Config.Height) {
@@ -234,7 +235,7 @@ func (a *App) Update() {
 	}
 
 	// Update Camera Uniforms
-	a.BufferManager.UpdateCamera(viewProj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, sunIntensity, a.Scene.SkyAmbientMix, a.Camera.FarPlane(), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height, lightingQuality)
+	a.BufferManager.UpdateCamera(viewProj, invView, invProj, a.Camera.Position, lightPos, a.Scene.AmbientLight, renderOrigin, sunIntensity, a.Scene.SkyAmbientMix, a.Camera.FarPlane(), a.Camera.DebugMode, a.RenderMode, uint32(len(a.Scene.Lights)), a.Config.Width, a.Config.Height, lightingQuality)
 	a.BufferManager.BeginVolumetricFrame()
 	historyBlend := float32(0.7)
 	if fastCameraMotion {

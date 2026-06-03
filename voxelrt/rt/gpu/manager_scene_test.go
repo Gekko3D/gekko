@@ -25,6 +25,7 @@ func TestBuildCameraUniformDataPacksExpectedMatrices(t *testing.T) {
 		mgl32.Vec3{1, 2, 3},
 		mgl32.Vec3{4, 5, 6},
 		mgl32.Vec3{0.1, 0.2, 0.3},
+		mgl32.Vec3{100, 200, 300},
 		0.7,
 		0.8,
 		4200,
@@ -66,6 +67,12 @@ func TestBuildCameraUniformDataPacksExpectedMatrices(t *testing.T) {
 	if got := floatAt(buf, 292); got != 4200 {
 		t.Fatalf("expected analytic far distance 4200 at offset 292, got %v", got)
 	}
+	if got := floatAt(buf, 304); got != 100 {
+		t.Fatalf("expected render origin x at offset 304, got %v", got)
+	}
+	if got := floatAt(buf, 312); got != 300 {
+		t.Fatalf("expected render origin z at offset 312, got %v", got)
+	}
 }
 
 func TestBuildInstanceDataKeepsBinaryLayout(t *testing.T) {
@@ -73,7 +80,7 @@ func TestBuildInstanceDataKeepsBinaryLayout(t *testing.T) {
 	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
 	obj.WorldAABB = &[2]mgl32.Vec3{{1, 2, 3}, {4, 5, 6}}
 
-	buf := buildInstanceData([]*core.VoxelObject{obj})
+	buf := buildInstanceData([]*core.VoxelObject{obj}, mgl32.Vec3{})
 	if len(buf) != 208 {
 		t.Fatalf("expected 208-byte instance record, got %d", len(buf))
 	}
@@ -88,6 +95,34 @@ func TestBuildInstanceDataKeepsBinaryLayout(t *testing.T) {
 	}
 }
 
+func TestBuildInstanceDataUsesRenderRelativeCoordinates(t *testing.T) {
+	obj := core.NewVoxelObject()
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	obj.Transform.Position = mgl32.Vec3{1100, 2050, -3900}
+	obj.Transform.Dirty = true
+	obj.WorldAABB = &[2]mgl32.Vec3{{1099, 2049, -3901}, {1101, 2051, -3899}}
+
+	buf := buildInstanceData([]*core.VoxelObject{obj}, mgl32.Vec3{1000, 2000, -4000})
+	if len(buf) != 208 {
+		t.Fatalf("expected 208-byte instance record, got %d", len(buf))
+	}
+	if got := floatAt(buf, 48); got != 100 {
+		t.Fatalf("expected relative object translation x at matrix offset 48, got %v", got)
+	}
+	if got := floatAt(buf, 52); got != 50 {
+		t.Fatalf("expected relative object translation y at matrix offset 52, got %v", got)
+	}
+	if got := floatAt(buf, 56); got != 100 {
+		t.Fatalf("expected relative object translation z at matrix offset 56, got %v", got)
+	}
+	if got := floatAt(buf, 128); got != 99 {
+		t.Fatalf("expected relative AABB min x at offset 128, got %v", got)
+	}
+	if got := floatAt(buf, 144); got != 101 {
+		t.Fatalf("expected relative AABB max x at offset 144, got %v", got)
+	}
+}
+
 func TestBuildLightsDataUsesStableRecordSize(t *testing.T) {
 	light := core.Light{
 		Position:   [4]float32{1, 2, 3, 4},
@@ -96,7 +131,7 @@ func TestBuildLightsDataUsesStableRecordSize(t *testing.T) {
 		Params:     [4]float32{13, 14, 15, 16},
 		ShadowMeta: [4]uint32{17, 18, 19, 20},
 	}
-	buf := buildLightsData([]core.Light{light})
+	buf := buildLightsData([]core.Light{light}, mgl32.Vec3{})
 	if len(buf) != lightSizeBytes {
 		t.Fatalf("expected %d-byte light record, got %d", lightSizeBytes, len(buf))
 	}
@@ -111,5 +146,24 @@ func TestBuildLightsDataUsesStableRecordSize(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(buf[76:80]); got != 20 {
 		t.Fatalf("expected emitter link in shadow meta w at offset 76, got %d", got)
+	}
+}
+
+func TestBuildLightsDataUsesRenderRelativePosition(t *testing.T) {
+	light := core.Light{
+		Position: [4]float32{101, 202, 303, 4},
+	}
+	buf := buildLightsData([]core.Light{light}, mgl32.Vec3{100, 200, 300})
+	if got := floatAt(buf, 0); got != 1 {
+		t.Fatalf("expected relative light position x at offset 0, got %v", got)
+	}
+	if got := floatAt(buf, 4); got != 2 {
+		t.Fatalf("expected relative light position y at offset 4, got %v", got)
+	}
+	if got := floatAt(buf, 8); got != 3 {
+		t.Fatalf("expected relative light position z at offset 8, got %v", got)
+	}
+	if got := floatAt(buf, 12); got != 4 {
+		t.Fatalf("expected light position w/source radius to be preserved, got %v", got)
 	}
 }

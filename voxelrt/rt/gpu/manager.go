@@ -273,6 +273,7 @@ type GpuBufferManager struct {
 	shadowTierOffsets        [shadowTierCount]int
 	MaterialBufferGeneration uint64
 	VoxelUploadRevision      uint64
+	RenderOrigin             mgl32.Vec3
 	shadowDirectionalVolumes []directionalShadowCullVolume
 	shadowSpotVolumes        []spotShadowCullVolume
 	shadowPointVolumes       []pointShadowCullVolume
