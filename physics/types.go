@@ -10,6 +10,15 @@ const (
 	ShapeCapsule
 )
 
+type BodyMode int
+
+const (
+	BodyModeDynamic BodyMode = iota
+	BodyModeKinematic
+	BodyModeStatic
+	BodyModePresentationOnly
+)
+
 const (
 	DefaultCollisionLayer uint32 = 1 << 0
 	AllCollisionLayers    uint32 = ^uint32(0)
@@ -22,7 +31,7 @@ type RigidBodyComponent struct {
 	GravityScale       float32
 	LinearDamping      float32
 	AngularDamping     float32
-	IsStatic           bool
+	BodyMode           BodyMode
 	Sleeping           bool
 	IdleTime           float32
 	LastPulledPos      mgl32.Vec3

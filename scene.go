@@ -46,7 +46,7 @@ type PhysicsDef struct {
 	GravityScale float32
 	Friction     float32
 	Restitution  float32
-	IsStatic     bool
+	BodyMode     BodyMode
 	HalfExtents  mgl32.Vec3
 }
 
@@ -191,7 +191,7 @@ func spawnVoxelObject(cmd *Commands, assets *AssetServer, def VoxelObjectDef) {
 		comps = append(comps, &RigidBodyComponent{
 			Mass:         def.Physics.Mass,
 			GravityScale: def.Physics.GravityScale,
-			IsStatic:     def.Physics.IsStatic,
+			BodyMode:     def.Physics.BodyMode,
 		})
 		comps = append(comps, &ColliderComponent{
 			AABBHalfExtents: def.Physics.HalfExtents,

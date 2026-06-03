@@ -14,6 +14,24 @@ type SpriteBatchDesc struct {
 	InstanceCount uint32
 }
 
+func spriteBatchDescsFromRenderBatches(batches []SpriteRenderBatch) []SpriteBatchDesc {
+	if len(batches) == 0 {
+		return nil
+	}
+	descs := make([]SpriteBatchDesc, 0, len(batches))
+	for _, batch := range batches {
+		if batch.InstanceCount == 0 {
+			continue
+		}
+		descs = append(descs, SpriteBatchDesc{
+			AtlasKey:      batch.AtlasKey,
+			FirstInstance: batch.FirstInstance,
+			InstanceCount: batch.InstanceCount,
+		})
+	}
+	return descs
+}
+
 // UpdateSprites uploads sprite instance data to a GPU buffer.
 func (m *GpuBufferManager) UpdateSprites(data []byte, count uint32) bool {
 	m.SpriteCount = count
@@ -98,6 +116,13 @@ func (m *GpuBufferManager) SyncSpriteBatches(pipeline *wgpu.RenderPipeline, batc
 		}
 	}
 	m.SpriteBatches = newBatches
+}
+
+func (m *GpuBufferManager) RebuildSpriteBindGroups(pipeline *wgpu.RenderPipeline) {
+	if m == nil {
+		return
+	}
+	m.SyncSpriteBatches(pipeline, spriteBatchDescsFromRenderBatches(m.SpriteBatches))
 }
 
 func (m *GpuBufferManager) ensureSpritesDepthBindGroup(pipeline *wgpu.RenderPipeline) {

@@ -89,7 +89,7 @@ func waterInteractionSystem(cmd *Commands, time *Time, state *WaterInteractionSt
 	activePairs := make(map[waterOccupancyKey]struct{})
 
 	MakeQuery3[TransformComponent, RigidBodyComponent, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent) bool {
-		if tr == nil || rb == nil || col == nil || rb.IsStatic {
+		if tr == nil || rb == nil || col == nil || rb.BodyMode != BodyModeDynamic {
 			return true
 		}
 

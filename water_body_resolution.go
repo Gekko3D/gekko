@@ -380,7 +380,7 @@ func collectWaterStaticColliders(cmd *Commands) []waterStaticCollider {
 	}
 	out := make([]waterStaticCollider, 0, 8)
 	MakeQuery3[TransformComponent, RigidBodyComponent, ColliderComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent) bool {
-		if tr == nil || rb == nil || col == nil || !rb.IsStatic {
+		if tr == nil || rb == nil || col == nil || rb.BodyMode != BodyModeStatic {
 			return true
 		}
 		minV, maxV := waterStaticColliderAABB(tr, col)
@@ -396,7 +396,7 @@ func collectWaterStaticVoxelOccupancy(cmd *Commands, assets *AssetServer) []wate
 	}
 	out := make([]waterStaticCollider, 0, 32)
 	MakeQuery3[TransformComponent, RigidBodyComponent, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, vmc *VoxelModelComponent) bool {
-		if tr == nil || rb == nil || vmc == nil || !rb.IsStatic {
+		if tr == nil || rb == nil || vmc == nil || rb.BodyMode != BodyModeStatic {
 			return true
 		}
 		geometry, voxelTransform, ok := resolveStaticVoxelOccupancyGeometry(assets, tr, vmc)

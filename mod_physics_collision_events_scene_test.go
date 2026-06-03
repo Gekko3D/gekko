@@ -84,13 +84,13 @@ func TestSynchronousPhysicsScene_BallKnocksPinsAndProducesCollisionEvents(t *tes
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{-22, -0.9, -34}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
 		&VoxelModelComponent{VoxelModel: floorModel, PivotMode: PivotModeCorner, VoxelResolution: voxelResolution},
-		&RigidBodyComponent{IsStatic: true, Mass: 0},
+		&RigidBodyComponent{BodyMode: BodyModeStatic, Mass: 0},
 		&ColliderComponent{Friction: 0.7, Restitution: 0.1},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{-1.8, 0.1, -28}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
 		&VoxelModelComponent{VoxelModel: laneModel, PivotMode: PivotModeCorner, VoxelResolution: voxelResolution},
-		&RigidBodyComponent{IsStatic: true, Mass: 0},
+		&RigidBodyComponent{BodyMode: BodyModeStatic, Mass: 0},
 		&ColliderComponent{Friction: 0.14, Restitution: 0.05},
 	)
 

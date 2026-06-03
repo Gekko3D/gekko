@@ -112,7 +112,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 			go func(bodies []*internalBody) {
 				defer wg.Done()
 				for _, b := range bodies {
-					if b.isStatic || b.sleeping {
+					if b.isFixed() || b.sleeping {
 						continue
 					}
 
@@ -142,7 +142,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		for _, b := range bodiesList {
 			// updateAABB was already called in integration for dynamic bodies,
 			// but static bodies need it called once or preserved.
-			if b.isStatic {
+			if b.isFixed() {
 				b.updateAABB()
 			}
 			grid.Insert(b.Eid, AABBComponent{Min: b.aabbMin, Max: b.aabbMax})
@@ -172,7 +172,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				localTriggerEvents := make([]PhysicsCollisionEvent, 0, 16)
 				for _, b := range bodies {
 					// Only dynamic bodies initiate collision checks
-					if b.isStatic || b.sleeping {
+					if b.isFixed() || b.sleeping {
 						continue
 					}
 
@@ -192,7 +192,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 						// Ensure we only check each pair once.
 						// If both are dynamic and awake, only initiate once.
 						// If other is static or sleeping, we MUST check it now because it won't run its own initiation.
-						if !other.isStatic && !other.sleeping && b.Eid > other.Eid {
+						if other.isDynamic() && !other.sleeping && b.Eid > other.Eid {
 							continue
 						}
 						if !shouldBodiesCollide(b, other) {
@@ -254,10 +254,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				depth := (m.penetration - slop) * positionCorrectionPercent
 				invMassA := float32(0)
 				invMassB := float32(0)
-				if !b.isStatic && b.mass > 0 {
+				if b.isDynamic() && b.mass > 0 {
 					invMassA = 1.0 / b.mass
 				}
-				if !other.isStatic && other.mass > 0 {
+				if other.isDynamic() && other.mass > 0 {
 					invMassB = 1.0 / other.mass
 				}
 
@@ -276,10 +276,10 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 		clear(staticContactBodies)
 		for _, m := range manifolds {
-			if !m.bodyA.isStatic && m.bodyB.isStatic {
+			if m.bodyA.isDynamic() && m.bodyB.isFixed() {
 				staticContactBodies[m.bodyA.Eid] = true
 			}
-			if !m.bodyB.isStatic && m.bodyA.isStatic {
+			if m.bodyB.isDynamic() && m.bodyA.isFixed() {
 				staticContactBodies[m.bodyB.Eid] = true
 			}
 		}
@@ -299,7 +299,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 
 				vA := b.vel.Add(b.angVel.Cross(rA))
 				vB := other.vel
-				if !other.isStatic {
+				if other.isDynamic() {
 					vB = other.vel.Add(other.angVel.Cross(rB))
 				}
 
@@ -348,7 +348,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 				friction := (b.friction + other.friction) * 0.5
 				vA = b.vel.Add(b.angVel.Cross(rA))
 				vB = other.vel
-				if !other.isStatic {
+				if other.isDynamic() {
 					vB = other.vel.Add(other.angVel.Cross(rB))
 				}
 				relativeVel = vA.Sub(vB)
@@ -415,7 +415,7 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 		groundedAngularThreshold := maxf(world.SleepThreshold, world.GroundedAngularThreshold)
 		groundedSleepTime := minf(world.SleepTime, world.GroundedSleepTime)
 		for _, b := range internalBodies {
-			if !b.isStatic && !b.sleeping {
+			if b.isDynamic() && !b.sleeping {
 				if b.vel.Len() < world.VelocityZeroThreshold {
 					b.vel = mgl32.Vec3{}
 				}
@@ -483,14 +483,14 @@ func physicsLoop(world *PhysicsWorld, proxy *PhysicsProxy) {
 }
 
 func syncInternalBody(body *internalBody, es PhysicsEntityState, isNew bool) {
-	if es.Teleport || isNew {
+	if es.Teleport || isNew || es.BodyMode == BodyModeKinematic || es.BodyMode == BodyModeStatic {
 		body.pos = es.Pos
 		body.rot = es.Rot
 	}
 
 	body.vel = es.Vel
 	body.angVel = es.AngVel
-	body.isStatic = es.IsStatic
+	body.bodyMode = es.BodyMode
 
 	massChanged := body.mass != es.Mass
 	modelChanged := physicsModelChanged(body, es.Model)
@@ -805,7 +805,7 @@ func mergeCollisionEvent(current, candidate PhysicsCollisionEvent) PhysicsCollis
 }
 
 func wakeBodyForContact(body *internalBody, highImpact bool, deepPenetration bool) {
-	if body == nil || body.isStatic {
+	if body == nil || body.isFixed() {
 		return
 	}
 
@@ -833,7 +833,7 @@ type internalBody struct {
 	rot               mgl32.Quat
 	vel               mgl32.Vec3
 	angVel            mgl32.Vec3
-	isStatic          bool
+	bodyMode          BodyMode
 	mass              float32
 	model             PhysicsModel
 	shape             ColliderShape
@@ -853,6 +853,14 @@ type internalBody struct {
 	invInertiaLocal   mgl32.Mat3
 	aabbMin           mgl32.Vec3
 	aabbMax           mgl32.Vec3
+}
+
+func (b *internalBody) isDynamic() bool {
+	return b != nil && b.bodyMode == BodyModeDynamic
+}
+
+func (b *internalBody) isFixed() bool {
+	return b == nil || b.bodyMode == BodyModeStatic || b.bodyMode == BodyModeKinematic
 }
 
 func integrateAngularVelocity(rot mgl32.Quat, angVel mgl32.Vec3, dt float32) mgl32.Quat {
@@ -957,14 +965,14 @@ func physicsModelChanged(body *internalBody, model PhysicsModel) bool {
 }
 
 func inverseMass(b *internalBody) float32 {
-	if b == nil || b.isStatic || b.mass <= 0 {
+	if b == nil || b.isFixed() || b.mass <= 0 {
 		return 0
 	}
 	return 1.0 / b.mass
 }
 
 func angularConstraintDenominator(b *internalBody, r mgl32.Vec3, axis mgl32.Vec3) float32 {
-	if b == nil || b.isStatic || b.mass <= 0 {
+	if b == nil || b.isFixed() || b.mass <= 0 {
 		return 0
 	}
 	rCrossAxis := r.Cross(axis)

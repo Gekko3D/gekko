@@ -138,7 +138,7 @@ func runDropSimulation(t *testing.T, useVoxelGrid bool, angularVelocity mgl32.Ve
 				Eid:         floorID,
 				Pos:         floorCenter,
 				Rot:         mgl32.QuatIdent(),
-				IsStatic:    true,
+				BodyMode:    BodyModeStatic,
 				Model:       floorModel,
 				Teleport:    true,
 				Friction:    0.5,
@@ -189,7 +189,7 @@ func TestVoxelCollisionDetectsShallowFloorOverlap(t *testing.T) {
 		Eid:      1,
 		pos:      mgl32.Vec3{5, 0.1, 5},
 		rot:      mgl32.QuatIdent(),
-		isStatic: true,
+		bodyMode: BodyModeStatic,
 		boxes: []InternalBox{{
 			Box: CollisionBox{
 				HalfExtents: mgl32.Vec3{5, 0.1, 5},
@@ -240,7 +240,7 @@ func TestVoxelCollisionReturnsRepresentativeContactPatch(t *testing.T) {
 		Eid:      1,
 		pos:      mgl32.Vec3{5, 0.1, 5},
 		rot:      mgl32.QuatIdent(),
-		isStatic: true,
+		bodyMode: BodyModeStatic,
 		boxes: []InternalBox{{
 			Box: CollisionBox{
 				HalfExtents: mgl32.Vec3{5, 0.1, 5},
@@ -300,7 +300,7 @@ func TestPhysicsLoopInitialSnapshotAppliesPoseWithoutTeleport(t *testing.T) {
 			Eid:          bodyID,
 			Pos:          expectedPos,
 			Rot:          expectedRot,
-			IsStatic:     true,
+			BodyMode:     BodyModeStatic,
 			GravityScale: 0,
 			Model: PhysicsModel{
 				CenterOffset: mgl32.Vec3{0.5, 0.5, 0.5},

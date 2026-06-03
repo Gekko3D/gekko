@@ -29,7 +29,11 @@ func (f *SpriteFeature) Resize(a *App, _, _ uint32) error {
 	return nil
 }
 
-func (f *SpriteFeature) OnSceneBuffersRecreated(*App) error {
+func (f *SpriteFeature) OnSceneBuffersRecreated(a *App) error {
+	if a == nil || a.BufferManager == nil {
+		return nil
+	}
+	a.BufferManager.RebuildSpriteBindGroups(a.SpritesPipeline)
 	return nil
 }
 

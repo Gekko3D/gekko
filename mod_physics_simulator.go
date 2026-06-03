@@ -93,7 +93,7 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 		go func(bodies []*internalBody) {
 			defer wg.Done()
 			for _, b := range bodies {
-				if b.isStatic || b.sleeping {
+				if b.isFixed() || b.sleeping {
 					continue
 				}
 
@@ -117,7 +117,7 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 
 	s.grid.Clear()
 	for _, b := range bodiesList {
-		if b.isStatic {
+		if b.isFixed() {
 			b.updateAABB()
 		}
 		s.grid.Insert(b.Eid, AABBComponent{Min: b.aabbMin, Max: b.aabbMax})
@@ -145,7 +145,7 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 			localManifolds := make([]collisionManifold, 0, 32)
 			localTriggerEvents := make([]PhysicsCollisionEvent, 0, 16)
 			for _, b := range bodies {
-				if b.isStatic || b.sleeping {
+				if b.isFixed() || b.sleeping {
 					continue
 				}
 
@@ -161,7 +161,7 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 						continue
 					}
 
-					if !other.isStatic && !other.sleeping && b.Eid > other.Eid {
+					if other.isDynamic() && !other.sleeping && b.Eid > other.Eid {
 						continue
 					}
 					if !shouldBodiesCollide(b, other) {
@@ -222,10 +222,10 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 			depth := (m.penetration - slop) * positionCorrectionPercent
 			invMassA := float32(0)
 			invMassB := float32(0)
-			if !b.isStatic && b.mass > 0 {
+			if b.isDynamic() && b.mass > 0 {
 				invMassA = 1.0 / b.mass
 			}
-			if !other.isStatic && other.mass > 0 {
+			if other.isDynamic() && other.mass > 0 {
 				invMassB = 1.0 / other.mass
 			}
 
@@ -244,10 +244,10 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 
 	clear(s.staticContactBodies)
 	for _, m := range s.manifolds {
-		if !m.bodyA.isStatic && m.bodyB.isStatic {
+		if m.bodyA.isDynamic() && m.bodyB.isFixed() {
 			s.staticContactBodies[m.bodyA.Eid] = true
 		}
-		if !m.bodyB.isStatic && m.bodyA.isStatic {
+		if m.bodyB.isDynamic() && m.bodyA.isFixed() {
 			s.staticContactBodies[m.bodyB.Eid] = true
 		}
 	}
@@ -267,7 +267,7 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 
 			vA := b.vel.Add(b.angVel.Cross(rA))
 			vB := other.vel
-			if !other.isStatic {
+			if other.isDynamic() {
 				vB = other.vel.Add(other.angVel.Cross(rB))
 			}
 
@@ -316,7 +316,7 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 			friction := (b.friction + other.friction) * 0.5
 			vA = b.vel.Add(b.angVel.Cross(rA))
 			vB = other.vel
-			if !other.isStatic {
+			if other.isDynamic() {
 				vB = other.vel.Add(other.angVel.Cross(rB))
 			}
 			relativeVel = vA.Sub(vB)
@@ -381,7 +381,7 @@ func (s *PhysicsSimulator) Step(world *PhysicsWorld, proxy *PhysicsProxy) *Physi
 	groundedAngularThreshold := maxf(world.SleepThreshold, world.GroundedAngularThreshold)
 	groundedSleepTime := minf(world.SleepTime, world.GroundedSleepTime)
 	for _, b := range s.internalBodies {
-		if !b.isStatic && !b.sleeping {
+		if b.isDynamic() && !b.sleeping {
 			if b.vel.Len() < world.VelocityZeroThreshold {
 				b.vel = mgl32.Vec3{}
 			}

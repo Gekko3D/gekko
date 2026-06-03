@@ -69,7 +69,7 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 	}
 	if def.CollisionEnabled {
 		comps = append(comps,
-			&RigidBodyComponent{IsStatic: true},
+			&RigidBodyComponent{BodyMode: BodyModeStatic},
 			&ColliderComponent{},
 			&AABBComponent{},
 		)

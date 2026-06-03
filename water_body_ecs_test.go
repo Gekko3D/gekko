@@ -145,22 +145,22 @@ func TestWaterBodyResolutionSystemSeedsStateDeterministically(t *testing.T) {
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 4}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{6, 2, 0}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 4}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{3, 2, -3}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 2, 0.5}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{3, 2, 3}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 2, 0.5}},
 	)
 	app.FlushCommands()
@@ -222,27 +222,27 @@ func TestWaterBodyResolutionSystemSplitsInteriorIntoDeterministicPatches(t *test
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 4}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{6, 2, 0}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 4}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{3, 2, -3}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 2, 0.5}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{3, 2, 3}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 2, 0.5}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{3, 2, 0}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 2}},
 	)
 	app.FlushCommands()
@@ -305,7 +305,7 @@ func TestWaterBodyResolutionSystemFallsBackToVoxelOccupancy(t *testing.T) {
 	geomID := assets.RegisterSharedVoxelGeometry(xbm, "")
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 0, -3}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&VoxelModelComponent{SharedGeometry: geomID, VoxelResolution: 1, PivotMode: PivotModeCorner},
 	)
 	app.FlushCommands()
@@ -344,22 +344,22 @@ func TestWaterBodyResolutionSystemPrefersColliderFitOverVoxelOccupancy(t *testin
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 4}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{6, 2, 0}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 4}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{3, 2, -3}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 2, 0.5}},
 	)
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{3, 2, 3}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 2, 0.5}},
 	)
 
@@ -377,7 +377,7 @@ func TestWaterBodyResolutionSystemPrefersColliderFitOverVoxelOccupancy(t *testin
 	geomID := assets.RegisterSharedVoxelGeometry(xbm, "")
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{20, 0, -3}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
-		&RigidBodyComponent{IsStatic: true},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
 		&VoxelModelComponent{SharedGeometry: geomID, VoxelResolution: 1, PivotMode: PivotModeCorner},
 	)
 	app.FlushCommands()

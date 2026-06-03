@@ -3,11 +3,19 @@ package gekko
 import rootphysics "github.com/gekko3d/gekko/physics"
 
 type ColliderShape = rootphysics.ColliderShape
+type BodyMode = rootphysics.BodyMode
 
 const (
 	ShapeBox     = rootphysics.ShapeBox
 	ShapeSphere  = rootphysics.ShapeSphere
 	ShapeCapsule = rootphysics.ShapeCapsule
+)
+
+const (
+	BodyModeDynamic          = rootphysics.BodyModeDynamic
+	BodyModeKinematic        = rootphysics.BodyModeKinematic
+	BodyModeStatic           = rootphysics.BodyModeStatic
+	BodyModePresentationOnly = rootphysics.BodyModePresentationOnly
 )
 
 const (

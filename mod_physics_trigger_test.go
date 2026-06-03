@@ -16,7 +16,7 @@ func TestTriggerVolumeReportsOverlapWithoutPhysicalResolution(t *testing.T) {
 
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
-		&RigidBodyComponent{IsStatic: true, Mass: 0},
+		&RigidBodyComponent{BodyMode: BodyModeStatic, Mass: 0},
 		&ColliderComponent{IsTrigger: true, CollisionLayer: DefaultCollisionLayer, CollisionMask: AllCollisionLayers},
 		&PhysicsModel{
 			Boxes: []CollisionBox{{

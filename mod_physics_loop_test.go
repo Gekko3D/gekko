@@ -254,7 +254,7 @@ func TestWarmStartManifoldAppliesCachedImpulse(t *testing.T) {
 	}
 	bodyB := &internalBody{
 		Eid:      2,
-		isStatic: true,
+		bodyMode: BodyModeStatic,
 	}
 	manifold := collisionManifold{
 		bodyA:                    bodyA,

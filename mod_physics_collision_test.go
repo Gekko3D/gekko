@@ -103,7 +103,7 @@ func TestVoxelCollisionHonorsNonUniformVoxelScale(t *testing.T) {
 		Eid:      2,
 		pos:      voxelCenter,
 		rot:      mgl32.QuatIdent(),
-		isStatic: true,
+		bodyMode: BodyModeStatic,
 		boxes: []InternalBox{{
 			Box: CollisionBox{
 				HalfExtents: voxelCenter,

@@ -150,7 +150,7 @@ func TestCapsuleVoxelOverlapProducesContact(t *testing.T) {
 		Eid:      2,
 		pos:      center,
 		rot:      mgl32.QuatIdent(),
-		isStatic: true,
+		bodyMode: BodyModeStatic,
 		model: PhysicsModel{
 			CenterOffset: center,
 			Boxes:        []CollisionBox{{HalfExtents: center}},
@@ -177,7 +177,7 @@ func TestCapsuleBoxCollisionResolvesInSynchronousPhysics(t *testing.T) {
 
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, -1, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
-		&RigidBodyComponent{IsStatic: true, Mass: 0},
+		&RigidBodyComponent{BodyMode: BodyModeStatic, Mass: 0},
 		&ColliderComponent{Friction: 0.6, Restitution: 0.0},
 		&PhysicsModel{Boxes: []CollisionBox{{HalfExtents: mgl32.Vec3{6, 1, 6}}}},
 	)
@@ -209,7 +209,7 @@ func TestCapsuleTriggerReportsEnterAndExitWithoutResolution(t *testing.T) {
 
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
-		&RigidBodyComponent{IsStatic: true, Mass: 0},
+		&RigidBodyComponent{BodyMode: BodyModeStatic, Mass: 0},
 		&ColliderComponent{Shape: ShapeCapsule, Radius: 2, CapsuleHalfHeight: 1, IsTrigger: true, CollisionLayer: DefaultCollisionLayer, CollisionMask: AllCollisionLayers},
 	)
 
@@ -253,7 +253,7 @@ func TestCapsuleLayerMaskFilteringSkipsPairs(t *testing.T) {
 
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
-		&RigidBodyComponent{IsStatic: true, Mass: 0},
+		&RigidBodyComponent{BodyMode: BodyModeStatic, Mass: 0},
 		&ColliderComponent{Shape: ShapeCapsule, Radius: 2, CapsuleHalfHeight: 1, IsTrigger: true, CollisionLayer: 1 << 0, CollisionMask: 1 << 0},
 	)
 

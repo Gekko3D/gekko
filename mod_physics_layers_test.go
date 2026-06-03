@@ -18,7 +18,7 @@ func runCollisionLayerScene(t *testing.T, dynamicCollider ColliderComponent) (mg
 
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{0, -1, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
-		&RigidBodyComponent{IsStatic: true, Mass: 0},
+		&RigidBodyComponent{BodyMode: BodyModeStatic, Mass: 0},
 		&ColliderComponent{Friction: 0.6, Restitution: 0.0},
 		&PhysicsModel{
 			Boxes: []CollisionBox{{

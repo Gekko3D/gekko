@@ -156,7 +156,7 @@ type PhysicsEntityState struct {
 	Rot               mgl32.Quat
 	Vel               mgl32.Vec3
 	AngVel            mgl32.Vec3
-	IsStatic          bool
+	BodyMode          BodyMode
 	Mass              float32
 	Model             PhysicsModel
 	Shape             ColliderShape
@@ -212,6 +212,9 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 		}
 
 		MakeQuery5[TransformComponent, RigidBodyComponent, ColliderComponent, PhysicsModel, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, pm *PhysicsModel, vm *VoxelModelComponent) bool {
+			if rb.BodyMode == BodyModePresentationOnly {
+				return true
+			}
 			if res, ok := resMap[eid]; ok {
 				resolvedModel, ok := resolvePhysicsModelForStep(assets, tr, pm, vm)
 				if !ok && isValidPrimitiveCollider(col) {
@@ -339,6 +342,9 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 	entities := make(map[EntityId]physicsStepEntityRefs)
 
 	MakeQuery5[TransformComponent, RigidBodyComponent, ColliderComponent, PhysicsModel, VoxelModelComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, rb *RigidBodyComponent, col *ColliderComponent, pm *PhysicsModel, vm *VoxelModelComponent) bool {
+		if rb.BodyMode == BodyModePresentationOnly {
+			return true
+		}
 		resolvedModel, ok := resolvePhysicsModelForStep(assets, tr, pm, vm)
 		if !ok && isValidPrimitiveCollider(col) {
 			resolvedModel = PhysicsModel{}
@@ -370,9 +376,11 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 			}
 		}
 
-		// Use the core physical state if no manual teleport occurred
-		// This avoids reading back interpolated values from the last Dynamic frame.
-		if !isTeleport && rb.LastPhysicsTick > 0 {
+		// Dynamic bodies are physics-owned between teleports, so continue from
+		// the last simulated pose instead of interpolated/render pose. Fixed
+		// non-presentation bodies are ECS-owned and must accept authored pose
+		// updates, including slow kinematic motion below the teleport threshold.
+		if rb.BodyMode == BodyModeDynamic && !isTeleport && rb.LastPhysicsTick > 0 {
 			physPos = rb.CurrentPhysicsPos
 			physRot = rb.CurrentPhysicsRot
 		}
@@ -395,7 +403,7 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 			Rot:               physRot,
 			Vel:               vel,
 			AngVel:            angVel,
-			IsStatic:          rb.IsStatic,
+			BodyMode:          rb.BodyMode,
 			Mass:              rb.Mass,
 			Model:             resolvedModel,
 			Shape:             shape,
