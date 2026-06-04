@@ -14,6 +14,29 @@ type PlanetBakedSurfaceSample struct {
 	MaterialBand float32
 }
 
+type PlanetBodySurfacePreloadComponent struct {
+	BakedSurfaceResolution int
+	BakedSurfaceSamples    []PlanetBakedSurfaceSample
+}
+
+func (p *PlanetBodySurfacePreloadComponent) NormalizedBakedSurfaceResolution() int {
+	if p == nil || p.BakedSurfaceResolution < 2 {
+		return 0
+	}
+	if p.BakedSurfaceResolution > PlanetBodyMaxBakedSurfaceResolution {
+		return PlanetBodyMaxBakedSurfaceResolution
+	}
+	return p.BakedSurfaceResolution
+}
+
+func (p *PlanetBodySurfacePreloadComponent) NormalizedBakedSurfaceSampleCount() int {
+	resolution := p.NormalizedBakedSurfaceResolution()
+	if resolution == 0 {
+		return 0
+	}
+	return resolution * resolution * planetBodyBakedSurfaceFaceCount
+}
+
 // PlanetBodyComponent describes an analytic far-body planet rendered by the
 // voxel RT renderer. Values are authored in local world units before transform
 // scale is applied.

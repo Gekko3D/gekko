@@ -106,6 +106,17 @@ fn hash13(p: vec3<f32>) -> f32 {
   return fract((p3a.x + p3a.y) * p3a.z);
 }
 
+fn pixel_dither(ipos: vec2<i32>, seed: u32) -> f32 {
+  let p = vec3<f32>(f32(ipos.x), f32(ipos.y), f32(seed) * 19.19);
+  return hash13(p);
+}
+
+fn quantize_dithered_medium_step(v: f32, steps: f32, ipos: vec2<i32>, seed: u32) -> f32 {
+  let s = max(steps, 1.0);
+  let d = pixel_dither(ipos, seed) - 0.5;
+  return clamp((floor(clamp(v, 0.0, 1.0) * s + d) + 0.5) / s, 0.0, 1.0);
+}
+
 fn value_noise_3(p: vec3<f32>) -> f32 {
   let i = floor(p);
   let f = fract(p);
@@ -651,6 +662,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       }
 
       let radial_dir = normalize(pos_ws - m.bounds.xyz);
+      let sun_side = smoothstep(-0.12, 0.32, dot(radial_dir, light_dir));
+      let emission_luma = dot(m.emission.xyz, vec3<f32>(0.33333334));
+      let self_emissive = saturate(emission_luma * 8.0);
+      let atmosphere_light_gate = max(sun_side, self_emissive * 0.85);
+      let night_air_gate = mix(0.08, 1.0, atmosphere_light_gate);
       let tangent = 1.0 - abs(dot(ray_dir, radial_dir));
       let tangent_boost = pow(saturate(tangent), max(m.style0.y, 0.25));
       let limb_scale = max(m.style0.x, 0.0) * select(0.32, 1.0, has_opaque_behind);
@@ -661,17 +677,23 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
         boundary_fade = 1.0 - smoothstep(m.style1.z, m.style1.w, boundary_pos);
       }
       let space_edge_soften = mix(0.0, 1.0, boundary_fade);
-      let horizon_glow = limb_boost * mix(0.5, 1.0, boundary_fade) * space_edge_soften;
+      let haze_cell = quantize_dithered_medium_step(
+        saturate(tangent_boost * (0.35 + boundary_fade * 0.65)),
+        select(5.0, 7.0, procedural_noise_enabled),
+        ipos,
+        i + 17u,
+      );
+      let horizon_glow = limb_boost * mix(0.5, 1.0, boundary_fade) * space_edge_soften * mix(0.88, 1.16, haze_cell);
       let cos_theta = dot(light_dir, -ray_dir);
       let phase = hg_phase(cos_theta, clamp(m.emission.w, -0.85, 0.85));
       let phase_term = 0.04 + phase * 1.15;
-      let ambient_term = ambient * (m.params.w * 0.12) * boundary_fade;
+      let ambient_term = ambient * (m.params.w * 0.12) * boundary_fade * mix(0.18, 1.0, atmosphere_light_gate);
       let self_shadow = get_cloud_self_shadow(m, pos_ws, light_dir, i);
-      let direct_term = light_color * (m.params.z * phase_term) * horizon_glow * self_shadow;
+      let direct_term = light_color * (m.params.z * phase_term) * horizon_glow * self_shadow * night_air_gate;
       let space_scatter_soften = mix(0.0, 1.0, boundary_fade);
-      let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 * space_scatter_soften + m.emission.xyz * (0.02 + tangent_boost * 0.05) * space_scatter_soften;
+      let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 * space_scatter_soften + m.emission.xyz * (0.02 + tangent_boost * 0.05) * space_scatter_soften * mix(0.22, 1.0, atmosphere_light_gate);
       let extinction_scale = select(max(m.style1.y, 1e-4), max(m.style1.x, 1e-4), has_opaque_behind);
-      let optical = density * segment_len * extinction_scale * mix(0.45, 1.0, tangent_boost);
+      let optical = density * segment_len * extinction_scale * mix(0.45, 1.0, tangent_boost) * mix(0.92, 1.10, haze_cell);
       integrated_tau += optical;
       
       let step_extinction = max(m.absorption.xyz * optical, vec3<f32>(1e-4));
@@ -680,9 +702,9 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
 
       if (has_opaque_behind && m.style0.z > 1e-4) {
         let haze_light = ambient * (0.03 + 0.02 * boundary_fade) +
-          light_color * (0.012 + 0.03 * tangent_boost);
+          light_color * (0.012 + 0.03 * tangent_boost) * night_air_gate;
         let haze_tint = mix(m.scatter.xyz, m.scatter.xyz * m.absorption.xyz, clamp(m.style0.w, 0.0, 1.0));
-        let disk_haze = haze_tint * haze_light * optical * m.style0.z * mix(1.0, 0.72, boundary_pos);
+        let disk_haze = haze_tint * haze_light * optical * m.style0.z * mix(1.0, 0.72, boundary_pos) * mix(0.86, 1.18, haze_cell) * mix(0.20, 1.0, atmosphere_light_gate);
         source += trans * disk_haze;
       }
 

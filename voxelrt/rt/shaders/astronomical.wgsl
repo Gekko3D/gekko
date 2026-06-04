@@ -100,6 +100,56 @@ fn surface_variation(normal: vec3<f32>, seed: u32) -> f32 {
   return saturate(0.5 + a * 0.22 + b * 0.18 + c * 0.10);
 }
 
+fn far_cloud_mask(normal: vec3<f32>, seed: u32) -> f32 {
+  let phase = hash11(seed ^ 0x7f4a7c15u) * 6.2831853;
+  let lat_bands = 0.5 + 0.5 * sin(normal.y * 10.0 + phase + sin(normal.x * 6.0 + phase) * 0.35);
+  let cell = surface_variation(normal * vec3<f32>(1.9, 1.1, 1.6), seed ^ 0x2c1b3c6du);
+  let cloud = saturate(lat_bands * 0.55 + cell * 0.65 - 0.38);
+  return floor(cloud * 4.0) / 4.0;
+}
+
+fn far_atmosphere_color(body: AstronomicalRecord, kind: u32) -> vec3<f32> {
+  let tint = body.tint_emission.rgb;
+  if (kind == KIND_GAS_GIANT) {
+    return mix(tint, vec3<f32>(0.92, 0.82, 0.66), 0.42);
+  }
+  let warm = saturate(tint.r - tint.b);
+  let icy = saturate(tint.b - tint.r);
+  let temperate_air = vec3<f32>(0.46, 0.72, 1.0);
+  let icy_air = vec3<f32>(0.72, 0.88, 1.0);
+  let volcanic_air = vec3<f32>(1.0, 0.48, 0.20);
+  return mix(mix(temperate_air, icy_air, icy * 0.7), volcanic_air, warm * 0.65);
+}
+
+fn far_atmosphere_halo(body: AstronomicalRecord, ray_dir: vec3<f32>, body_dir: vec3<f32>, angle: f32, radius: f32) -> vec4<f32> {
+  let kind = u32(body.direction_kind.w + 0.5);
+  if (kind == KIND_STAR || kind == KIND_RING_OR_BELT || radius <= 0.0 || angle <= radius) {
+    return vec4<f32>(0.0);
+  }
+  let halo_extent = radius * select(0.16, 0.24, kind == KIND_GAS_GIANT);
+  if (halo_extent <= 1e-6 || angle > radius + halo_extent) {
+    return vec4<f32>(0.0);
+  }
+  let halo01 = saturate((angle - radius) / halo_extent);
+  let light_dir = normalize(body.light_phase.xyz);
+  let edge_dir = normalize(ray_dir - body_dir * dot(ray_dir, body_dir));
+  let rim_normal = normalize(edge_dir - body_dir * 0.12);
+  let sun_lit = smoothstep(-0.15, 0.55, dot(rim_normal, light_dir));
+  let step_halo = floor((1.0 - halo01) * 5.0) / 5.0;
+  let alpha = step_halo * step_halo * mix(0.05, 0.16, sun_lit) * select(0.75, 1.25, kind == KIND_GAS_GIANT);
+  return vec4<f32>(far_atmosphere_color(body, kind) * mix(0.55, 1.25, sun_lit), alpha);
+}
+
+fn star_corona_sample(body: AstronomicalRecord, angle: f32, radius: f32, glow_radius: f32) -> vec4<f32> {
+  let glow01 = saturate((angle - radius) / max(glow_radius - radius, 1e-6));
+  let seed = body.record_meta.x;
+  let ray = floor((1.0 - glow01) * 6.0) / 6.0;
+  let pulse = 0.72 + 0.28 * surface_variation(vec3<f32>(cos(angle * 91.0), sin(angle * 73.0), glow01), seed);
+  let alpha = pow(1.0 - glow01, 2.2) * (0.20 + 0.18 * max(body.tint_emission.w, 0.0)) * mix(0.82, 1.18, ray) * pulse;
+  let color = body.tint_emission.rgb * (1.08 + body.tint_emission.w * 0.32) + vec3<f32>(1.0, 0.78, 0.38) * (0.04 * ray);
+  return vec4<f32>(color, alpha);
+}
+
 fn disc_sample_color(body: AstronomicalRecord, ray_dir: vec3<f32>, body_dir: vec3<f32>, angle: f32, radius: f32) -> vec4<f32> {
   let kind = u32(body.direction_kind.w + 0.5);
   let tint = body.tint_emission.rgb;
@@ -124,7 +174,10 @@ fn disc_sample_color(body: AstronomicalRecord, ray_dir: vec3<f32>, body_dir: vec
   if (kind == KIND_GAS_GIANT) {
     let band_phase = hash11(body.record_meta.x) * 6.2831853;
     let bands = 0.5 + 0.5 * sin((sphere_normal.y * 18.0) + band_phase + sin(sphere_normal.x * 7.0 + band_phase) * 0.35);
-    color = mix(tint * 0.72, min(tint * 1.32 + vec3<f32>(0.08, 0.06, 0.03), vec3<f32>(1.0)), bands);
+    let band_steps = floor(bands * 7.0) / 7.0;
+    let cloud = far_cloud_mask(sphere_normal, body.record_meta.x);
+    color = mix(tint * 0.68, min(tint * 1.36 + vec3<f32>(0.08, 0.06, 0.03), vec3<f32>(1.0)), band_steps);
+    color = mix(color, far_atmosphere_color(body, kind), cloud * 0.18);
   }
 
   if (kind == KIND_STAR) {
@@ -137,10 +190,15 @@ fn disc_sample_color(body: AstronomicalRecord, ray_dir: vec3<f32>, body_dir: vec
     let cool_shadow = vec3<f32>(0.72, 0.78, 0.90);
     let warm_highlight = vec3<f32>(1.10, 1.04, 0.94);
     color = color * mix(cool_shadow, warm_highlight, variation);
+    let cloud = far_cloud_mask(sphere_normal, body.record_meta.x);
+    let cloud_tint = far_atmosphere_color(body, kind);
+    color = mix(color, min(cloud_tint * 1.14, vec3<f32>(1.0)), cloud * 0.28 * day);
   }
 
   let sphere_light = mix(night, 1.0, day);
   color = color * sphere_light * limb_shade;
+  let atmosphere_edge = pow(limb, 1.4) * smoothstep(-0.12, 0.35, light_dot);
+  color = mix(color, far_atmosphere_color(body, kind), atmosphere_edge * select(0.22, 0.34, kind == KIND_GAS_GIANT));
   return vec4<f32>(color, alpha);
 }
 
@@ -200,9 +258,9 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     } else if (radius > 0.0 && angle <= radius) {
       sample = disc_sample_color(body, ray_dir, body_dir, angle, radius);
     } else if (kind == KIND_STAR && glow_radius > radius && angle <= glow_radius) {
-      let glow01 = saturate((angle - radius) / max(glow_radius - radius, 1e-6));
-      let alpha = pow(1.0 - glow01, 2.4) * (0.18 + 0.14 * max(body.tint_emission.w, 0.0));
-      sample = vec4<f32>(body.tint_emission.rgb * (1.0 + body.tint_emission.w * 0.25), alpha);
+      sample = star_corona_sample(body, angle, radius, glow_radius);
+    } else {
+      sample = far_atmosphere_halo(body, ray_dir, body_dir, angle, radius);
     }
 
     if (sample.a > 0.001) {

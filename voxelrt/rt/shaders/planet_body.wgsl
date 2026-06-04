@@ -371,11 +371,27 @@ fn planet_detail_settings(planet: PlanetRecord) -> PlanetDetailSettings {
   if (baked_planet_surface_available(planet)) {
     let baked_resolution = max(f32(planet.bake_meta.x), 2.0);
     let baked_uv_step = 2.0 / max(baked_resolution - 1.0, 1.0);
+    let altitude = max(length(camera.cam_pos.xyz - planet.bounds.xyz) - max(planet.bounds.w, planet.surface.x), 0.0);
+    let gas_giant = planet.emission.x > 0.01 && planet.emission.x < 0.5;
+    let default_mid_alt_start = max(planet.surface.z * 5.0, planet.bounds.w * 0.08);
+    let default_mid_alt_end = max(planet.surface.z * 44.0, planet.bounds.w * 0.65);
+    let default_near_alt_start = max(planet.surface.z * 1.5, planet.bounds.w * 0.02);
+    let default_near_alt_end = max(planet.surface.z * 14.0, planet.bounds.w * 0.16);
+    let gas_mid_alt_start = max(planet.surface.z * 40.0, planet.bounds.w * 0.18);
+    let gas_mid_alt_end = max(planet.surface.z * 220.0, planet.bounds.w * 1.65);
+    let gas_near_alt_start = max(planet.surface.z * 12.0, planet.bounds.w * 0.035);
+    let gas_near_alt_end = max(planet.surface.z * 120.0, planet.bounds.w * 0.85);
+    let mid_alt_start = select(default_mid_alt_start, gas_mid_alt_start, gas_giant);
+    let mid_alt_end = select(default_mid_alt_end, gas_mid_alt_end, gas_giant);
+    let near_alt_start = select(default_near_alt_start, gas_near_alt_start, gas_giant);
+    let near_alt_end = select(default_near_alt_end, gas_near_alt_end, gas_giant);
+    let mid_weight = 1.0 - smoothstep(mid_alt_start, mid_alt_end, altitude);
+    let near_weight = 1.0 - smoothstep(near_alt_start, near_alt_end, altitude);
     return PlanetDetailSettings(
       max(planet.bounds.w * baked_uv_step, 0.5),
       max(planet.noise.y, 1.0),
-      0.0,
-      0.0,
+      near_weight,
+      mid_weight,
     );
   }
   let altitude = max(length(camera.cam_pos.xyz - planet.bounds.xyz) - max(planet.bounds.w, planet.surface.x), 0.0);
@@ -385,10 +401,19 @@ fn planet_detail_settings(planet: PlanetRecord) -> PlanetDetailSettings {
   let far_steps = max(planet.noise.y, 1.0);
   let mid_steps = min(far_steps * 2.0, 64.0);
   let near_steps = min(far_steps * 4.0, 96.0);
-  let mid_alt_start = max(planet.surface.z * 4.0, planet.bounds.w * 0.045);
-  let mid_alt_end = max(planet.surface.z * 20.0, planet.bounds.w * 0.16);
-  let near_alt_start = max(planet.surface.z * 1.25, planet.bounds.w * 0.008);
-  let near_alt_end = max(planet.surface.z * 6.0, planet.bounds.w * 0.04);
+  let gas_giant = planet.emission.x > 0.01 && planet.emission.x < 0.5;
+  let default_mid_alt_start = max(planet.surface.z * 5.0, planet.bounds.w * 0.08);
+  let default_mid_alt_end = max(planet.surface.z * 44.0, planet.bounds.w * 0.65);
+  let default_near_alt_start = max(planet.surface.z * 1.5, planet.bounds.w * 0.02);
+  let default_near_alt_end = max(planet.surface.z * 14.0, planet.bounds.w * 0.16);
+  let gas_mid_alt_start = max(planet.surface.z * 40.0, planet.bounds.w * 0.18);
+  let gas_mid_alt_end = max(planet.surface.z * 220.0, planet.bounds.w * 1.65);
+  let gas_near_alt_start = max(planet.surface.z * 12.0, planet.bounds.w * 0.035);
+  let gas_near_alt_end = max(planet.surface.z * 120.0, planet.bounds.w * 0.85);
+  let mid_alt_start = select(default_mid_alt_start, gas_mid_alt_start, gas_giant);
+  let mid_alt_end = select(default_mid_alt_end, gas_mid_alt_end, gas_giant);
+  let near_alt_start = select(default_near_alt_start, gas_near_alt_start, gas_giant);
+  let near_alt_end = select(default_near_alt_end, gas_near_alt_end, gas_giant);
   let mid_weight = 1.0 - smoothstep(mid_alt_start, mid_alt_end, altitude);
   let near_weight = 1.0 - smoothstep(near_alt_start, near_alt_end, altitude);
   let block_after_mid = mix(far_block, mid_block, mid_weight);
@@ -719,6 +744,173 @@ fn planet_surface_band(planet: PlanetRecord, signed_height: f32, dir_local: vec3
   return 2;
 }
 
+fn is_gas_giant_planet(planet: PlanetRecord) -> bool {
+  return planet.emission.x > 0.01 && planet.emission.x < 0.5;
+}
+
+fn is_rocky_detail_planet(planet: PlanetRecord) -> bool {
+  return !is_gas_giant_planet(planet) && planet.emission.x <= 0.01;
+}
+
+fn gas_giant_lane_signal(dir_local: vec3<f32>, seed: u32) -> f32 {
+  let lon = atan2(dir_local.z, dir_local.x);
+  let lat = dir_local.y;
+  let lon01 = (lon + PI) / (2.0 * PI);
+  let lat01 = (lat + 1.0) * 0.5;
+  let lon_cell = i32(floor(lon01 * 128.0));
+  let lat_cell = i32(floor(lat01 * 64.0));
+  let pixel_cell = hashed_noise_3(lon_cell, lat_cell, 0, seed + 251u);
+  let shear = hashed_noise_3(lon_cell / 6, lat_cell / 3, 1, seed + 89u);
+  let fine = hashed_noise_3(lon_cell * 2, lat_cell * 2, 2, seed + 263u);
+  let belt_phase = (lat + (shear * 2.0 - 1.0) * 0.075) * PI * 10.5;
+  let belt = 0.5 + 0.5 * sin(belt_phase);
+  let lane_edge = saturate((0.18 - abs(belt - 0.5)) / 0.18);
+  let block_cell = floor((pixel_cell * 0.65 + fine * 0.35) * 5.0) / 4.0;
+  return clamp(lane_edge * 0.85 + (block_cell - 0.5) * 0.45 + (belt - 0.5) * 0.25, -1.0, 1.35);
+}
+
+
+fn gas_giant_cloud_light_step(dir_local: vec3<f32>, seed: u32, detail_weight: f32) -> f32 {
+  let lane = gas_giant_lane_signal(dir_local, seed);
+  let stepped = floor(clamp(0.84 + lane * 0.22, 0.56, 1.24) * 6.0) / 6.0;
+  return mix(1.0, stepped, saturate(detail_weight));
+}
+
+fn gas_giant_virtual_cell_dir(planet: PlanetRecord, dir_local: vec3<f32>, detail_weight: f32) -> vec3<f32> {
+  let face_uv = cube_sphere_face_uv(dir_local);
+  let base_resolution = max(f32(planet.bake_meta.x), 128.0);
+  let virtual_resolution = min(base_resolution * mix(1.0, 4.0, saturate(detail_weight)), 2048.0);
+  let texel_coord = (vec2<f32>(face_uv.u, face_uv.v) * 0.5 + vec2<f32>(0.5, 0.5)) * (virtual_resolution - 1.0);
+  let snapped_x = clamp(i32(round(texel_coord.x)), 0, i32(virtual_resolution) - 1);
+  let snapped_y = clamp(i32(round(texel_coord.y)), 0, i32(virtual_resolution) - 1);
+  let snapped_u = mix(-1.0, 1.0, f32(snapped_x) / max(virtual_resolution - 1.0, 1.0));
+  let snapped_v = mix(-1.0, 1.0, f32(snapped_y) / max(virtual_resolution - 1.0, 1.0));
+  return cube_sphere_direction(face_uv.face, snapped_u, snapped_v);
+}
+
+fn gas_giant_virtual_cell_detail(planet: PlanetRecord, dir_local: vec3<f32>, detail_weight: f32) -> vec4<f32> {
+  let qdir = gas_giant_virtual_cell_dir(planet, dir_local, detail_weight);
+  let face_uv = cube_sphere_face_uv(qdir);
+  let base_resolution = max(f32(planet.bake_meta.x), 128.0);
+  let virtual_resolution = min(base_resolution * mix(1.0, 4.0, saturate(detail_weight)), 2048.0);
+  let cell_x = i32(floor((face_uv.u * 0.5 + 0.5) * virtual_resolution));
+  let cell_y = i32(floor((face_uv.v * 0.5 + 0.5) * virtual_resolution));
+  let seed = u32(planet.noise.z);
+  let cell_noise = hashed_noise_3(cell_x, cell_y, face_uv.face, seed + 317u);
+  let lane_noise = hashed_noise_3(cell_x / 8, cell_y / 3, face_uv.face, seed + 331u);
+  let belt_phase = (qdir.y + (lane_noise * 2.0 - 1.0) * 0.045) * PI * 11.0;
+  let belt = 0.5 + 0.5 * sin(belt_phase);
+  let lane_edge = saturate((0.16 - abs(belt - 0.5)) / 0.16);
+  let zone = clamp(belt * 0.66 + cell_noise * 0.22 + lane_edge * 0.12, 0.0, 1.0);
+  var band: i32 = 2;
+  if (zone < 0.16) {
+    band = 0;
+  } else if (zone < 0.31) {
+    band = 1;
+  } else if (zone < 0.50) {
+    band = 4;
+  } else if (zone < 0.67) {
+    band = 2;
+  } else if (zone < 0.84) {
+    band = 3;
+  } else {
+    band = 5;
+  }
+  let polar = saturate((abs(qdir.y) - 0.74) / 0.22);
+  if (polar > 0.5 && band <= 1) {
+    band = 4;
+  }
+  let color = planet_band_color(planet, band);
+  let light = floor(clamp(0.88 + lane_edge * 0.22 + (cell_noise - 0.5) * 0.18, 0.68, 1.24) * 6.0) / 6.0;
+  return vec4<f32>(color, light);
+}
+
+fn rocky_virtual_cell_dir(planet: PlanetRecord, dir_local: vec3<f32>, detail_weight: f32) -> vec3<f32> {
+  let face_uv = cube_sphere_face_uv(dir_local);
+  let base_resolution = max(f32(planet.bake_meta.x), 96.0);
+  let virtual_resolution = min(base_resolution * mix(1.0, 5.0, saturate(detail_weight)), 2048.0);
+  let texel_coord = (vec2<f32>(face_uv.u, face_uv.v) * 0.5 + vec2<f32>(0.5, 0.5)) * (virtual_resolution - 1.0);
+  let snapped_x = clamp(i32(round(texel_coord.x)), 0, i32(virtual_resolution) - 1);
+  let snapped_y = clamp(i32(round(texel_coord.y)), 0, i32(virtual_resolution) - 1);
+  let snapped_u = mix(-1.0, 1.0, f32(snapped_x) / max(virtual_resolution - 1.0, 1.0));
+  let snapped_v = mix(-1.0, 1.0, f32(snapped_y) / max(virtual_resolution - 1.0, 1.0));
+  return cube_sphere_direction(face_uv.face, snapped_u, snapped_v);
+}
+
+fn rocky_virtual_cell_detail(planet: PlanetRecord, dir_local: vec3<f32>, signed_height: f32, is_ocean: bool, detail_weight: f32) -> vec4<f32> {
+  let qdir = rocky_virtual_cell_dir(planet, dir_local, detail_weight);
+  let face_uv = cube_sphere_face_uv(qdir);
+  let base_resolution = max(f32(planet.bake_meta.x), 96.0);
+  let virtual_resolution = min(base_resolution * mix(1.0, 5.0, saturate(detail_weight)), 2048.0);
+  let cell_x = i32(floor((face_uv.u * 0.5 + 0.5) * virtual_resolution));
+  let cell_y = i32(floor((face_uv.v * 0.5 + 0.5) * virtual_resolution));
+  let seed = u32(planet.noise.z);
+  let cell_noise = hashed_noise_3(cell_x, cell_y, face_uv.face, seed + 541u);
+  let patch_noise = hashed_noise_3(cell_x / 5, cell_y / 5, face_uv.face, seed + 557u);
+  let streak_noise = hashed_noise_3(cell_x / 2 + cell_y / 7, cell_y / 3, face_uv.face, seed + 563u);
+  let base_band = planet_surface_band(planet, signed_height, qdir, is_ocean);
+
+  if (is_ocean) {
+    let depth_t = saturate(-signed_height / max(planet.surface.z, 1e-4));
+    let shallow = mix(planet.band1.xyz, planet.band2.xyz, 0.18 + patch_noise * 0.18);
+    let deep = mix(planet.band0.xyz, planet.band1.xyz, cell_noise * 0.22);
+    let color = mix(shallow, deep, floor(depth_t * 5.0) / 5.0);
+    let light = floor(clamp(0.90 + (cell_noise - 0.5) * 0.20 + (streak_noise - 0.5) * 0.12, 0.72, 1.14) * 7.0) / 7.0;
+    return vec4<f32>(color, light);
+  }
+
+  let height_t = saturate(signed_height / max(planet.surface.z, 1e-4));
+  let polar_t = saturate((abs(qdir.y) - 0.78) / 0.18);
+  var detail_band = base_band;
+  if (polar_t > 0.55) {
+    if (cell_noise > 0.22) {
+      detail_band = 5;
+    }
+  } else if (height_t > 0.68) {
+    detail_band = 4;
+    if (cell_noise > 0.72) {
+      detail_band = 5;
+    }
+  } else if (height_t > 0.36) {
+    detail_band = 3;
+    if (patch_noise + cell_noise * 0.35 > 0.72) {
+      detail_band = 4;
+    }
+  } else if (height_t > 0.12) {
+    detail_band = 2;
+    if (cell_noise + streak_noise * 0.25 > 0.74) {
+      detail_band = 3;
+    }
+  } else if (base_band <= 2 && patch_noise < 0.26) {
+    detail_band = 1;
+  }
+
+  let base_color = planet_band_color(planet, detail_band);
+  let warm_shift = mix(vec3<f32>(0.92, 0.96, 1.04), vec3<f32>(1.08, 1.02, 0.92), patch_noise);
+  let mottled = floor(clamp(0.84 + (cell_noise - 0.5) * 0.34 + (streak_noise - 0.5) * 0.22, 0.66, 1.24) * 7.0) / 7.0;
+  let color = base_color * mix(vec3<f32>(1.0), warm_shift, 0.18) * mottled;
+  let light = floor(clamp(0.88 + (patch_noise - 0.5) * 0.26 + height_t * 0.10, 0.66, 1.22) * 7.0) / 7.0;
+  return vec4<f32>(color, light);
+}
+
+fn quantize_dithered_step(v: f32, steps: f32, ipos: vec2<i32>) -> f32 {
+  let level_count = max(steps, 2.0);
+  let max_level = level_count - 1.0;
+  let dither = (ordered_dither_4x4(ipos) - 0.5) * 0.45;
+  return clamp(floor(saturate(v) * max_level + 0.5 + dither) / max_level, 0.0, 1.0);
+}
+
+fn gas_giant_limb_haze(world_normal: vec3<f32>, view_dir: vec3<f32>, detail_weight: f32, ipos: vec2<i32>) -> f32 {
+  let raw_limb = pow(1.0 - saturate(dot(world_normal, view_dir)), 1.55);
+  let haze = quantize_dithered_step(raw_limb, mix(5.0, 7.0, saturate(detail_weight)), ipos);
+  return haze * mix(0.82, 1.0, saturate(detail_weight));
+}
+
+fn gas_giant_terminator_step(surface_normal: vec3<f32>, light_dir: vec3<f32>, detail_weight: f32, ipos: vec2<i32>) -> f32 {
+  let raw_light = smoothstep(-0.16, 0.38, dot(surface_normal, light_dir));
+  return quantize_dithered_step(raw_light, mix(5.0, 7.0, saturate(detail_weight)), ipos);
+}
+
 fn planet_surface_material(planet: PlanetRecord, signed_height: f32, dir_local: vec3<f32>, is_ocean: bool, normal: vec3<f32>, view_dir: vec3<f32>) -> PlanetSurfaceMaterial {
   let band = planet_surface_band(planet, signed_height, dir_local, is_ocean);
   if (is_ocean) {
@@ -877,20 +1069,58 @@ fn fs_main(in: VSOut) -> FSOut {
     let light_color = primary_light_color();
     let view_dir = normalize(camera.cam_pos.xyz - hit_pos);
     let surface_material = planet_surface_material(planet, surface_hit.signed_height, local_normal, is_ocean, terrain_normal, view_dir);
-    let terrain_mix = clamp(surface_material.normal_mix + detail_settings.near_weight * 0.14, 0.0, 1.0);
-    let shading_normal = normalize(mix(block_normal, terrain_normal, terrain_mix));
-    let base_color = surface_material.base_color;
-    let ndotl = max(dot(shading_normal, light_dir), 0.0);
+    let gas_giant = is_gas_giant_planet(planet);
+    let gas_detail_weight = select(0.0, max(detail_settings.near_weight, detail_settings.mid_weight * 0.72), gas_giant);
+    let rocky_detail = is_rocky_detail_planet(planet);
+    let rocky_detail_weight = select(0.0, max(detail_settings.near_weight, detail_settings.mid_weight * 0.82), rocky_detail);
+    var terrain_mix = clamp(surface_material.normal_mix + detail_settings.near_weight * 0.14, 0.0, 1.0);
+    if (gas_giant) {
+      terrain_mix = clamp(terrain_mix + 0.18 + detail_settings.near_weight * 0.16, 0.0, 1.0);
+    }
+    var relief_normal = terrain_normal;
+    let shading_normal = normalize(mix(block_normal, relief_normal, terrain_mix));
+    let gas_height01 = saturate(surface_hit.signed_height / max(planet.surface.z, 1e-4) * 2.2 + 0.5);
+    let gas_height_step = floor(gas_height01 * 5.0) / 5.0;
+    let gas_lane_light = mix(0.78, 1.20, gas_height_step);
+    let gas_limb = pow(1.0 - saturate(dot(world_normal, view_dir)), 2.0);
+    let gas_limb_haze = gas_giant_limb_haze(world_normal, view_dir, gas_detail_weight, ipos);
+    var base_color = surface_material.base_color;
+    if (gas_giant) {
+      let virtual_detail = gas_giant_virtual_cell_detail(planet, local_normal, gas_detail_weight);
+      base_color = mix(base_color, virtual_detail.xyz, gas_detail_weight * 0.62);
+      let cloud_light = gas_giant_cloud_light_step(block_local_normal, u32(planet.noise.z), gas_detail_weight) * virtual_detail.w;
+      base_color = mix(base_color * gas_lane_light * cloud_light, planet.atmosphere.xyz, max(gas_limb * 0.10, gas_limb_haze * 0.18));
+    } else if (rocky_detail_weight > 0.0) {
+      let virtual_detail = rocky_virtual_cell_detail(planet, local_normal, surface_hit.signed_height, is_ocean, rocky_detail_weight);
+      base_color = mix(base_color, virtual_detail.xyz, rocky_detail_weight * 0.72);
+      base_color = mix(base_color, base_color * virtual_detail.w, rocky_detail_weight * 0.58);
+    }
+    var ndotl = max(dot(shading_normal, light_dir), 0.0);
+    if (gas_giant) {
+      ndotl = mix(ndotl, quantize_dithered_step(ndotl, mix(5.0, 7.0, gas_detail_weight), ipos), 0.72);
+    } else if (rocky_detail_weight > 0.0) {
+      ndotl = mix(ndotl, quantize_dithered_step(ndotl, mix(5.0, 8.0, rocky_detail_weight), ipos), 0.38);
+    }
     let diffuse = planet.style.y * ndotl * surface_material.diffuse_scale;
     let hemisphere_light = smoothstep(-0.08, 0.3, dot(world_normal, light_dir));
-    let ambient_shadow = mix(0.08, 1.0, hemisphere_light);
+    var ambient_shadow = mix(0.08, 1.0, hemisphere_light);
+    if (gas_giant) {
+      let terminator = gas_giant_terminator_step(block_normal, light_dir, gas_detail_weight, ipos);
+      ambient_shadow = mix(0.12, 1.06, terminator);
+    }
     let ambient = (planet.style.x + dot(camera.ambient_color.xyz, vec3<f32>(0.3333))) * surface_material.ambient_scale * ambient_shadow;
     let spec = pow(max(dot(reflect(-light_dir, shading_normal), view_dir), 0.0), surface_material.spec_power) * planet.style.z * surface_material.spec_strength;
-    let rim = pow(1.0 - saturate(dot(world_normal, view_dir)), 3.0) * planet.style.w;
+    var rim = pow(1.0 - saturate(dot(world_normal, view_dir)), 3.0) * planet.style.w;
+    if (gas_giant) {
+      rim = gas_limb_haze * planet.style.w;
+    }
     let atmosphere_mix = saturate((planet.surface.y - surface_hit.radius) / max(planet.atmosphere.w, 1.0));
     let spec_tint = mix(mix(base_color, light_color, surface_material.spec_tint_mix), vec3<f32>(1.0), surface_material.white_spec_mix);
     let rim_tint = mix(base_color, planet.atmosphere.xyz, 0.65);
-    let rim_scale = surface_material.rim_scale;
+    var rim_scale = surface_material.rim_scale;
+    if (gas_giant) {
+      rim_scale = rim_scale + 0.28 + gas_height_step * 0.08 + gas_limb_haze * 0.42;
+    }
     let emissive_strength = max(planet.emission.x, 0.0);
     let core_view = pow(saturate(dot(world_normal, view_dir) * 0.5 + 0.5), 1.6);
     let emissive_core = mix(base_color, planet.band5.xyz, 0.5 + 0.35 * core_view);

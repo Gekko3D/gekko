@@ -686,3 +686,120 @@ func TestFarRangeDepthValidityUsesCameraFarPlane(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanetBodyShaderHasGasGiantPixelReliefPath(t *testing.T) {
+	required := []string{
+		"fn is_gas_giant_planet",
+		"let gas_mid_alt_end = max(planet.surface.z * 220.0, planet.bounds.w * 1.65);",
+		"let gas_near_alt_end = max(planet.surface.z * 120.0, planet.bounds.w * 0.85);",
+		"fn gas_giant_lane_signal",
+		"fn gas_giant_cloud_light_step",
+		"fn gas_giant_virtual_cell_dir",
+		"fn gas_giant_virtual_cell_detail",
+		"let virtual_resolution = min(base_resolution * mix(1.0, 4.0, saturate(detail_weight)), 2048.0);",
+		"fn quantize_dithered_step",
+		"fn gas_giant_limb_haze",
+		"fn gas_giant_terminator_step",
+		"let gas_height_step = floor(gas_height01 * 5.0) / 5.0;",
+		"let near_weight = 1.0 - smoothstep(near_alt_start, near_alt_end, altitude);",
+		"terrain_mix = clamp(terrain_mix + 0.18 + detail_settings.near_weight * 0.16, 0.0, 1.0);",
+		"let gas_detail_weight = select(0.0, max(detail_settings.near_weight, detail_settings.mid_weight * 0.72), gas_giant);",
+		"let gas_limb_haze = gas_giant_limb_haze(world_normal, view_dir, gas_detail_weight, ipos);",
+		"let virtual_detail = gas_giant_virtual_cell_detail(planet, local_normal, gas_detail_weight);",
+		"base_color = mix(base_color, virtual_detail.xyz, gas_detail_weight * 0.62);",
+		"let cloud_light = gas_giant_cloud_light_step(block_local_normal, u32(planet.noise.z), gas_detail_weight) * virtual_detail.w;",
+		"base_color = mix(base_color * gas_lane_light * cloud_light, planet.atmosphere.xyz, max(gas_limb * 0.10, gas_limb_haze * 0.18));",
+		"ndotl = mix(ndotl, quantize_dithered_step(ndotl, mix(5.0, 7.0, gas_detail_weight), ipos), 0.72);",
+		"let terminator = gas_giant_terminator_step(block_normal, light_dir, gas_detail_weight, ipos);",
+		"ambient_shadow = mix(0.12, 1.06, terminator);",
+		"rim = gas_limb_haze * planet.style.w;",
+	}
+	for _, needle := range required {
+		if !strings.Contains(PlanetBodyWGSL, needle) {
+			t.Fatalf("planet body shader missing gas giant pixel relief path %q", needle)
+		}
+	}
+	forbidden := []string{
+		"fn gas_giant_cloud_normal_world",
+		"gas_relief_strength",
+		"relief_delta *",
+		"cloud_normal",
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(PlanetBodyWGSL, needle) {
+			t.Fatalf("planet body shader still uses double gas giant normal perturbation %q", needle)
+		}
+	}
+}
+
+func TestPlanetBodyShaderHasRockyPixelDetailPath(t *testing.T) {
+	required := []string{
+		"fn is_rocky_detail_planet",
+		"fn rocky_virtual_cell_dir",
+		"fn rocky_virtual_cell_detail",
+		"let default_mid_alt_end = max(planet.surface.z * 44.0, planet.bounds.w * 0.65);",
+		"let default_near_alt_end = max(planet.surface.z * 14.0, planet.bounds.w * 0.16);",
+		"let virtual_resolution = min(base_resolution * mix(1.0, 5.0, saturate(detail_weight)), 2048.0);",
+		"let rocky_detail = is_rocky_detail_planet(planet);",
+		"let rocky_detail_weight = select(0.0, max(detail_settings.near_weight, detail_settings.mid_weight * 0.82), rocky_detail);",
+		"let virtual_detail = rocky_virtual_cell_detail(planet, local_normal, surface_hit.signed_height, is_ocean, rocky_detail_weight);",
+		"base_color = mix(base_color, virtual_detail.xyz, rocky_detail_weight * 0.72);",
+		"base_color = mix(base_color, base_color * virtual_detail.w, rocky_detail_weight * 0.58);",
+		"ndotl = mix(ndotl, quantize_dithered_step(ndotl, mix(5.0, 8.0, rocky_detail_weight), ipos), 0.38);",
+	}
+	for _, needle := range required {
+		if !strings.Contains(PlanetBodyWGSL, needle) {
+			t.Fatalf("planet body shader missing rocky pixel detail path %q", needle)
+		}
+	}
+	forbidden := []string{
+		"fn rocky_cloud_normal_world",
+		"rocky_relief_strength",
+		"rocky_normal",
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(PlanetBodyWGSL, needle) {
+			t.Fatalf("planet body shader must keep rocky detail color/light-only, found %q", needle)
+		}
+	}
+}
+
+func TestAstronomicalShaderHasAtmosphereCloudLOD(t *testing.T) {
+	required := []string{
+		"fn far_cloud_mask",
+		"fn far_atmosphere_color",
+		"fn far_atmosphere_halo",
+		"fn star_corona_sample",
+		"let band_steps = floor(bands * 7.0) / 7.0;",
+		"color = mix(color, min(cloud_tint * 1.14, vec3<f32>(1.0)), cloud * 0.28 * day);",
+		"sample = far_atmosphere_halo(body, ray_dir, body_dir, angle, radius);",
+		"sample = star_corona_sample(body, angle, radius, glow_radius);",
+	}
+	for _, needle := range required {
+		if !strings.Contains(AstronomicalWGSL, needle) {
+			t.Fatalf("astronomical shader missing atmosphere/cloud LOD path %q", needle)
+		}
+	}
+}
+
+func TestAnalyticMediumShaderHasPixelSteppedAtmosphereHaze(t *testing.T) {
+	required := []string{
+		"fn pixel_dither",
+		"fn quantize_dithered_medium_step",
+		"let sun_side = smoothstep(-0.12, 0.32, dot(radial_dir, light_dir));",
+		"let atmosphere_light_gate = max(sun_side, self_emissive * 0.85);",
+		"let night_air_gate = mix(0.08, 1.0, atmosphere_light_gate);",
+		"let haze_cell = quantize_dithered_medium_step(",
+		"select(5.0, 7.0, procedural_noise_enabled)",
+		"* mix(0.88, 1.16, haze_cell)",
+		"* night_air_gate",
+		"* mix(0.20, 1.0, atmosphere_light_gate)",
+		"* mix(0.92, 1.10, haze_cell)",
+		"* mix(0.86, 1.18, haze_cell)",
+	}
+	for _, needle := range required {
+		if !strings.Contains(AnalyticMediumWGSL, needle) {
+			t.Fatalf("analytic medium shader missing pixel-stepped atmosphere haze path %q", needle)
+		}
+	}
+}

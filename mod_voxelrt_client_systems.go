@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 	"time"
+	"unsafe"
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -755,7 +756,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	state.RtApp.Profiler.BeginScope("Sync Planet Bodies")
 	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdatePlanetBodies(buildPlanetBodyHosts(cmd))
+		state.RtApp.BufferManager.UpdatePlanetBodiesWithSurfacePreloads(buildPlanetBodyHosts(cmd), buildPlanetBodySurfacePreloads(cmd))
 	}
 	state.RtApp.Profiler.EndScope("Sync Planet Bodies")
 
@@ -894,15 +895,7 @@ func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
 		if planet == nil || tr == nil || !planet.Enabled() {
 			return true
 		}
-		bakedSurfaceSamples := make([]gpu_rt.PlanetBakedSurfaceSampleHost, len(planet.BakedSurfaceSamples))
-		for i, sample := range planet.BakedSurfaceSamples {
-			bakedSurfaceSamples[i] = gpu_rt.PlanetBakedSurfaceSampleHost{
-				Height:       sample.Height,
-				NormalOctX:   sample.NormalOctX,
-				NormalOctY:   sample.NormalOctY,
-				MaterialBand: sample.MaterialBand,
-			}
-		}
+		bakedSurfaceSamples, bakedSurfaceID := planetBakedSurfaceHostSlice(planet.BakedSurfaceSamples)
 		hosts = append(hosts, gpu_rt.PlanetBodyHost{
 			EntityID:               uint32(eid),
 			Seed:                   planet.Seed,
@@ -921,6 +914,7 @@ func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
 			BiomeMix:               planet.NormalizedBiomeMix(),
 			BakedSurfaceResolution: uint32(planet.NormalizedBakedSurfaceResolution()),
 			BakedSurfaceSamples:    bakedSurfaceSamples,
+			BakedSurfaceID:         bakedSurfaceID,
 			BandColors:             planet.NormalizedBandColors(),
 			AmbientStrength:        planet.NormalizedAmbientStrength(),
 			DiffuseStrength:        planet.NormalizedDiffuseStrength(),
@@ -938,6 +932,38 @@ func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
 	})
 	sort.Slice(hosts, func(i, j int) bool {
 		return hosts[i].EntityID < hosts[j].EntityID
+	})
+	return hosts
+}
+
+func planetBakedSurfaceHostSlice(samples []PlanetBakedSurfaceSample) ([]gpu_rt.PlanetBakedSurfaceSampleHost, uintptr) {
+	if len(samples) == 0 {
+		return nil, 0
+	}
+	ptr := unsafe.Pointer(unsafe.SliceData(samples))
+	return unsafe.Slice((*gpu_rt.PlanetBakedSurfaceSampleHost)(ptr), len(samples)), uintptr(ptr)
+}
+
+func buildPlanetBodySurfacePreloads(cmd *Commands) []gpu_rt.PlanetBodySurfaceHost {
+	hosts := make([]gpu_rt.PlanetBodySurfaceHost, 0, 2)
+	if cmd == nil {
+		return hosts
+	}
+	MakeQuery1[PlanetBodySurfacePreloadComponent](cmd).Map(func(_ EntityId, preload *PlanetBodySurfacePreloadComponent) bool {
+		if preload == nil {
+			return true
+		}
+		count := preload.NormalizedBakedSurfaceSampleCount()
+		if count <= 0 || len(preload.BakedSurfaceSamples) < count {
+			return true
+		}
+		bakedSurfaceSamples, bakedSurfaceID := planetBakedSurfaceHostSlice(preload.BakedSurfaceSamples[:count])
+		hosts = append(hosts, gpu_rt.PlanetBodySurfaceHost{
+			BakedSurfaceResolution: uint32(preload.NormalizedBakedSurfaceResolution()),
+			BakedSurfaceSamples:    bakedSurfaceSamples,
+			BakedSurfaceID:         bakedSurfaceID,
+		})
+		return true
 	})
 	return hosts
 }

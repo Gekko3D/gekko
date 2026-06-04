@@ -383,6 +383,7 @@ type GpuBufferManager struct {
 	PlanetBodyBuf               *wgpu.Buffer
 	PlanetBodyParamsBuf         *wgpu.Buffer
 	PlanetBodySurfaceBuf        *wgpu.Buffer
+	PlanetBodySurfaceSignature  uint64
 	WaterSurfaceBuf             *wgpu.Buffer
 	WaterSurfaceParamsBuf       *wgpu.Buffer
 	WaterRippleBuf              *wgpu.Buffer
@@ -599,6 +600,7 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("DebrisMidfieldBuf", &m.DebrisMidfieldBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("DebrisMidfieldParamsBuf", &m.DebrisMidfieldParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("PlanetBodyBuf", &m.PlanetBodyBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("PlanetBodySurfaceBuf", &m.PlanetBodySurfaceBuf, nil, wgpu.BufferUsageStorage, planetBodySurfacePreallocBytes())
 	m.ensureBuffer("PlanetBodyParamsBuf", &m.PlanetBodyParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("WaterSurfaceBuf", &m.WaterSurfaceBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("WaterSurfaceParamsBuf", &m.WaterSurfaceParamsBuf, nil, wgpu.BufferUsageUniform, 256)

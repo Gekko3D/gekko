@@ -895,6 +895,40 @@ func TestBuildPlanetBodyHostsNormalizesAndSortsResults(t *testing.T) {
 	}
 }
 
+func TestBuildPlanetBodySurfacePreloadsUsesDirectSampleSlice(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	samples := make([]PlanetBakedSurfaceSample, planetBodyBakedSurfaceFaceCount*2*2)
+	samples[0].Height = 0.25
+
+	cmd.AddEntity(&PlanetBodySurfacePreloadComponent{
+		BakedSurfaceResolution: 2,
+		BakedSurfaceSamples:    samples,
+	})
+	cmd.AddEntity(&PlanetBodySurfacePreloadComponent{
+		BakedSurfaceResolution: 2,
+		BakedSurfaceSamples:    samples[:2],
+	})
+	app.FlushCommands()
+
+	hosts := buildPlanetBodySurfacePreloads(cmd)
+	if len(hosts) != 1 {
+		t.Fatalf("expected one valid preload host, got %d", len(hosts))
+	}
+	if hosts[0].BakedSurfaceResolution != 2 {
+		t.Fatalf("expected preload resolution 2, got %d", hosts[0].BakedSurfaceResolution)
+	}
+	if len(hosts[0].BakedSurfaceSamples) != len(samples) {
+		t.Fatalf("expected preload sample count %d, got %d", len(samples), len(hosts[0].BakedSurfaceSamples))
+	}
+	if hosts[0].BakedSurfaceSamples[0].Height != 0.25 {
+		t.Fatalf("expected direct baked sample data, got %+v", hosts[0].BakedSurfaceSamples[0])
+	}
+	if hosts[0].BakedSurfaceID == 0 {
+		t.Fatal("expected direct preload surface pointer id")
+	}
+}
+
 func newVoxelRtStateTest() *VoxelRtState {
 	return &VoxelRtState{
 		RtApp: &app_rt.App{

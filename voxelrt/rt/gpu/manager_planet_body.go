@@ -25,6 +25,7 @@ type PlanetBodyHost struct {
 	BiomeMix               float32
 	BakedSurfaceResolution uint32
 	BakedSurfaceSamples    []PlanetBakedSurfaceSampleHost
+	BakedSurfaceID         uintptr
 	BandColors             [6][3]float32
 	AmbientStrength        float32
 	DiffuseStrength        float32
@@ -37,6 +38,12 @@ type PlanetBodyHost struct {
 	OceanDeepColor         [3]float32
 	OceanShallowColor      [3]float32
 	AtmosphereColor        [3]float32
+}
+
+type PlanetBodySurfaceHost struct {
+	BakedSurfaceResolution uint32
+	BakedSurfaceSamples    []PlanetBakedSurfaceSampleHost
+	BakedSurfaceID         uintptr
 }
 
 type PlanetBakedSurfaceSampleHost struct {
@@ -74,7 +81,16 @@ const (
 	planetBodyBakeMinResolution = 2
 	planetBodyBakeMaxResolution = 1024
 	planetBodyBakeFaceCount     = 6
+
+	planetBodySurfacePreallocResolution = 256
 )
+
+func planetBodySurfacePreallocBytes() int {
+	return planetBodyBakeFaceCount *
+		planetBodySurfacePreallocResolution *
+		planetBodySurfacePreallocResolution *
+		int(unsafe.Sizeof(PlanetBakedSurfaceSampleHost{}))
+}
 
 func normalizePlanetBakedSurfaceData(resolution uint32, samples []PlanetBakedSurfaceSampleHost) (uint32, int) {
 	if resolution < planetBodyBakeMinResolution {
@@ -122,15 +138,79 @@ func appendPlanetBakedSurfaceSamples(dst []PlanetBakedSurfaceSampleHost, src []P
 	return dst
 }
 
+func appendPlanetBodySurfaceHostsFromPlanets(dst []PlanetBodySurfaceHost, planets []PlanetBodyHost) []PlanetBodySurfaceHost {
+	for _, planet := range planets {
+		bakeResolution, bakeCount := normalizePlanetBakedSurfaceData(planet.BakedSurfaceResolution, planet.BakedSurfaceSamples)
+		if bakeResolution == 0 || bakeCount == 0 {
+			continue
+		}
+		dst = append(dst, PlanetBodySurfaceHost{
+			BakedSurfaceResolution: bakeResolution,
+			BakedSurfaceSamples:    planet.BakedSurfaceSamples[:bakeCount],
+			BakedSurfaceID:         planet.BakedSurfaceID,
+		})
+	}
+	return dst
+}
+
+func normalizedPlanetBodySurfaceHosts(hosts []PlanetBodySurfaceHost) []PlanetBodySurfaceHost {
+	normalized := make([]PlanetBodySurfaceHost, 0, len(hosts))
+	for _, host := range hosts {
+		bakeResolution, bakeCount := normalizePlanetBakedSurfaceData(host.BakedSurfaceResolution, host.BakedSurfaceSamples)
+		if bakeResolution == 0 || bakeCount == 0 {
+			continue
+		}
+		normalized = append(normalized, PlanetBodySurfaceHost{
+			BakedSurfaceResolution: bakeResolution,
+			BakedSurfaceSamples:    host.BakedSurfaceSamples[:bakeCount],
+			BakedSurfaceID:         host.BakedSurfaceID,
+		})
+	}
+	return normalized
+}
+
+func planetBodySurfaceSamplesFromHosts(hosts []PlanetBodySurfaceHost) []PlanetBakedSurfaceSampleHost {
+	if len(hosts) == 1 && hosts[0].BakedSurfaceID != 0 {
+		return hosts[0].BakedSurfaceSamples
+	}
+	sampleCount := 0
+	for _, host := range hosts {
+		_, count := normalizePlanetBakedSurfaceData(host.BakedSurfaceResolution, host.BakedSurfaceSamples)
+		sampleCount += count
+	}
+	surfaceSamples := make([]PlanetBakedSurfaceSampleHost, 0, sampleCount)
+	for _, host := range hosts {
+		_, count := normalizePlanetBakedSurfaceData(host.BakedSurfaceResolution, host.BakedSurfaceSamples)
+		surfaceSamples = appendPlanetBakedSurfaceSamples(surfaceSamples, host.BakedSurfaceSamples, count)
+	}
+	return surfaceSamples
+}
+
 func buildPlanetBodyRecords(planets []PlanetBodyHost) ([]planetBodyRecord, []PlanetBakedSurfaceSampleHost, planetBodyParamsUniform) {
+	return buildPlanetBodyRecordsWithSurfaceData(planets, true)
+}
+
+func buildPlanetBodyRecordsWithSurfaceData(planets []PlanetBodyHost, includeSurfaceData bool) ([]planetBodyRecord, []PlanetBakedSurfaceSampleHost, planetBodyParamsUniform) {
 	records := make([]planetBodyRecord, max(1, len(planets)))
-	surfaceSamples := make([]PlanetBakedSurfaceSampleHost, 1)
+	var surfaceSamples []PlanetBakedSurfaceSampleHost
+	directSurfaceIndex := -1
+	if includeSurfaceData && len(planets) == 1 {
+		bakeResolution, bakeCount := normalizePlanetBakedSurfaceData(planets[0].BakedSurfaceResolution, planets[0].BakedSurfaceSamples)
+		if bakeResolution > 0 && bakeCount > 0 && planets[0].BakedSurfaceID != 0 {
+			directSurfaceIndex = 0
+			surfaceSamples = planets[0].BakedSurfaceSamples[:bakeCount]
+		}
+	}
+	nextBakeOffset := uint32(0)
 	for i, planet := range planets {
 		bakeResolution, bakeCount := normalizePlanetBakedSurfaceData(planet.BakedSurfaceResolution, planet.BakedSurfaceSamples)
 		bakeOffset := uint32(0)
 		if bakeResolution > 0 {
-			bakeOffset = uint32(len(surfaceSamples))
-			surfaceSamples = appendPlanetBakedSurfaceSamples(surfaceSamples, planet.BakedSurfaceSamples, bakeCount)
+			bakeOffset = nextBakeOffset
+			nextBakeOffset += uint32(bakeCount)
+			if includeSurfaceData && i != directSurfaceIndex {
+				surfaceSamples = appendPlanetBakedSurfaceSamples(surfaceSamples, planet.BakedSurfaceSamples, bakeCount)
+			}
 		}
 		records[i] = planetBodyRecord{
 			Bounds: [4]float32{
@@ -193,24 +273,88 @@ func buildPlanetBodyRecords(planets []PlanetBodyHost) ([]planetBodyRecord, []Pla
 }
 
 func (m *GpuBufferManager) UpdatePlanetBodies(planets []PlanetBodyHost) bool {
-	records, surfaceSamples, params := buildPlanetBodyRecords(planets)
+	return m.UpdatePlanetBodiesWithSurfacePreloads(planets, nil)
+}
+
+func (m *GpuBufferManager) UpdatePlanetBodiesWithSurfacePreloads(planets []PlanetBodyHost, preloads []PlanetBodySurfaceHost) bool {
+	activeSurfaceHosts := appendPlanetBodySurfaceHostsFromPlanets(nil, planets)
+	surfaceHosts := activeSurfaceHosts
+	preloadOnlySurface := len(surfaceHosts) == 0 && len(preloads) > 0
+	if preloadOnlySurface {
+		surfaceHosts = normalizedPlanetBodySurfaceHosts(preloads)
+	}
+	surfaceDirty := false
+	surfaceSignature := m.PlanetBodySurfaceSignature
+	if len(surfaceHosts) > 0 {
+		surfaceSignature = planetBodySurfaceSignatureFromHosts(surfaceHosts)
+		surfaceDirty = surfaceSignature != m.PlanetBodySurfaceSignature || m.PlanetBodySurfaceBuf == nil
+	}
+	records, surfaceSamples, params := buildPlanetBodyRecordsWithSurfaceData(planets, surfaceDirty && !preloadOnlySurface)
 	recreated := false
 
 	recBytes := unsafe.Slice((*byte)(unsafe.Pointer(&records[0])), len(records)*int(unsafe.Sizeof(planetBodyRecord{})))
 	if m.ensureBuffer("PlanetBodyBuf", &m.PlanetBodyBuf, recBytes, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
-	surfaceBytes := unsafe.Slice((*byte)(unsafe.Pointer(&surfaceSamples[0])), len(surfaceSamples)*int(unsafe.Sizeof(PlanetBakedSurfaceSampleHost{})))
-	if m.ensureBuffer("PlanetBodySurfaceBuf", &m.PlanetBodySurfaceBuf, surfaceBytes, wgpu.BufferUsageStorage, 0) {
-		recreated = true
+	if surfaceDirty {
+		if preloadOnlySurface {
+			surfaceSamples = planetBodySurfaceSamplesFromHosts(surfaceHosts)
+		}
+		if len(surfaceSamples) == 0 {
+			surfaceSamples = make([]PlanetBakedSurfaceSampleHost, 1)
+		}
+		surfaceBytes := unsafe.Slice((*byte)(unsafe.Pointer(&surfaceSamples[0])), len(surfaceSamples)*int(unsafe.Sizeof(PlanetBakedSurfaceSampleHost{})))
+		if m.ensureBuffer("PlanetBodySurfaceBuf", &m.PlanetBodySurfaceBuf, surfaceBytes, wgpu.BufferUsageStorage, 0) {
+			recreated = true
+		}
+		m.PlanetBodySurfaceSignature = surfaceSignature
 	}
 	paramsBytes := unsafe.Slice((*byte)(unsafe.Pointer(&params)), int(unsafe.Sizeof(params)))
 	if m.ensureBuffer("PlanetBodyParamsBuf", &m.PlanetBodyParamsBuf, paramsBytes, wgpu.BufferUsageUniform, 0) {
 		recreated = true
 	}
 	m.PlanetBodyCount = uint32(len(planets))
-	m.PlanetBodyBindingsDirty = true
+	m.PlanetBodyBindingsDirty = recreated || m.PlanetBodyBG0 == nil || m.PlanetBodyBG1 == nil || m.PlanetBodyBG2 == nil
 	return recreated
+}
+
+func planetBodySurfaceSignature(planets []PlanetBodyHost) uint64 {
+	return planetBodySurfaceSignatureFromHosts(appendPlanetBodySurfaceHostsFromPlanets(nil, planets))
+}
+
+func planetBodySurfaceSignatureFromHosts(hosts []PlanetBodySurfaceHost) uint64 {
+	const offsetBasis = uint64(1469598103934665603)
+	const prime = uint64(1099511628211)
+	sig := offsetBasis
+	mix := func(v uint64) {
+		sig ^= v
+		sig *= prime
+	}
+	hosts = normalizedPlanetBodySurfaceHosts(hosts)
+	mix(uint64(len(hosts)))
+	for _, host := range hosts {
+		bakeResolution, bakeCount := normalizePlanetBakedSurfaceData(host.BakedSurfaceResolution, host.BakedSurfaceSamples)
+		mix(uint64(bakeResolution))
+		mix(uint64(bakeCount))
+		mix(uint64(host.BakedSurfaceID))
+		if bakeCount > 0 {
+			first := host.BakedSurfaceSamples[0]
+			last := host.BakedSurfaceSamples[bakeCount-1]
+			mix(uint64(bitcastFloat32(first.Height)))
+			mix(uint64(bitcastFloat32(first.NormalOctX)))
+			mix(uint64(bitcastFloat32(first.NormalOctY)))
+			mix(uint64(bitcastFloat32(first.MaterialBand)))
+			mix(uint64(bitcastFloat32(last.Height)))
+			mix(uint64(bitcastFloat32(last.NormalOctX)))
+			mix(uint64(bitcastFloat32(last.NormalOctY)))
+			mix(uint64(bitcastFloat32(last.MaterialBand)))
+		}
+	}
+	return sig
+}
+
+func bitcastFloat32(v float32) uint32 {
+	return *(*uint32)(unsafe.Pointer(&v))
 }
 
 func (m *GpuBufferManager) CreatePlanetBodyBindGroups(pipeline *wgpu.RenderPipeline) {
