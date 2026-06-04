@@ -893,6 +893,81 @@ fn rocky_virtual_cell_detail(planet: PlanetRecord, dir_local: vec3<f32>, signed_
   return vec4<f32>(color, light);
 }
 
+fn rocky_virtual_relief_signal(planet: PlanetRecord, cell_x: i32, cell_y: i32, face: i32, signed_height: f32, is_ocean: bool) -> f32 {
+  let seed = u32(planet.noise.z);
+  let cell_noise = hashed_noise_3(cell_x, cell_y, face, seed + 541u);
+  let patch_noise = hashed_noise_3(cell_x / 5, cell_y / 5, face, seed + 557u);
+  let streak_noise = hashed_noise_3(cell_x / 2 + cell_y / 7, cell_y / 3, face, seed + 563u);
+  if (is_ocean) {
+    return floor(clamp(0.50 + (cell_noise - 0.5) * 0.34 + (streak_noise - 0.5) * 0.24, 0.0, 1.0) * 6.0) / 6.0;
+  }
+  let height_t = saturate(signed_height / max(planet.surface.z, 1e-4));
+  let relief = 0.48 + (cell_noise - 0.5) * 0.58 + (patch_noise - 0.5) * 0.34 + (streak_noise - 0.5) * 0.24 + height_t * 0.18;
+  return floor(clamp(relief, 0.0, 1.0) * 7.0) / 7.0;
+}
+
+fn rocky_virtual_relief_normal_world(planet: PlanetRecord, dir_local: vec3<f32>, detail_weight: f32, signed_height: f32, is_ocean: bool) -> vec3<f32> {
+  let qdir = rocky_virtual_cell_dir(planet, dir_local, detail_weight);
+  let face_uv = cube_sphere_face_uv(qdir);
+  let base_resolution = max(f32(planet.bake_meta.x), 96.0);
+  let virtual_resolution = min(base_resolution * mix(1.0, 5.0, saturate(detail_weight)), 2048.0);
+  let cell_x = i32(floor((face_uv.u * 0.5 + 0.5) * virtual_resolution));
+  let cell_y = i32(floor((face_uv.v * 0.5 + 0.5) * virtual_resolution));
+  let max_cell = i32(virtual_resolution) - 1;
+  let x0 = max(cell_x - 1, 0);
+  let x1 = min(cell_x + 1, max_cell);
+  let y0 = max(cell_y - 1, 0);
+  let y1 = min(cell_y + 1, max_cell);
+  let relief_x = rocky_virtual_relief_signal(planet, x1, cell_y, face_uv.face, signed_height, is_ocean) -
+    rocky_virtual_relief_signal(planet, x0, cell_y, face_uv.face, signed_height, is_ocean);
+  let relief_y = rocky_virtual_relief_signal(planet, cell_x, y1, face_uv.face, signed_height, is_ocean) -
+    rocky_virtual_relief_signal(planet, cell_x, y0, face_uv.face, signed_height, is_ocean);
+  let tangent_ref = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(qdir.y) > 0.92);
+  let tangent_a = normalize(cross(tangent_ref, qdir));
+  let tangent_b = normalize(cross(qdir, tangent_a));
+  let slope_strength = mix(0.10, select(0.24, 0.46, !is_ocean), saturate(detail_weight));
+  let normal_local = normalize(qdir - (tangent_a * relief_x + tangent_b * relief_y) * slope_strength);
+  return normalize(quat_rotate(planet.rotation, normal_local));
+}
+
+fn rocky_surface_cloud_mask(planet: PlanetRecord, dir_local: vec3<f32>, detail_weight: f32) -> vec3<f32> {
+  let qdir = rocky_virtual_cell_dir(planet, dir_local, detail_weight);
+  let face_uv = cube_sphere_face_uv(qdir);
+  let base_resolution = max(f32(planet.bake_meta.x), 96.0);
+  let virtual_resolution = min(base_resolution * mix(0.75, 2.6, saturate(detail_weight)), 1024.0);
+  let cell_x = i32(floor((face_uv.u * 0.5 + 0.5) * virtual_resolution));
+  let cell_y = i32(floor((face_uv.v * 0.5 + 0.5) * virtual_resolution));
+  let seed = u32(planet.noise.z);
+  let cell = hashed_noise_3(cell_x, cell_y, face_uv.face, seed + 701u);
+  let patch_cell = hashed_noise_3(cell_x / 4, cell_y / 4, face_uv.face, seed + 709u);
+  let stream = hashed_noise_3(cell_x / 2 + cell_y / 6, cell_y / 3, face_uv.face, seed + 727u);
+  let latitude_gate = 1.0 - smoothstep(0.72, 0.96, abs(qdir.y));
+  let cover = clamp(cell * 0.42 + patch_cell * 0.46 + stream * 0.25 + latitude_gate * 0.18 - 0.50, 0.0, 1.0);
+  let mask = floor(cover * 5.0) / 5.0;
+  let thickness = floor(clamp(mask * 0.78 + patch_cell * 0.22, 0.0, 1.0) * 6.0) / 6.0;
+  let shadow = floor(clamp(mask * 0.62 + stream * 0.20, 0.0, 1.0) * 5.0) / 5.0;
+  return vec3<f32>(mask, thickness, shadow);
+}
+
+fn gas_giant_surface_cloud_mask(planet: PlanetRecord, dir_local: vec3<f32>, detail_weight: f32) -> vec3<f32> {
+  let qdir = gas_giant_virtual_cell_dir(planet, dir_local, detail_weight);
+  let face_uv = cube_sphere_face_uv(qdir);
+  let base_resolution = max(f32(planet.bake_meta.x), 128.0);
+  let virtual_resolution = min(base_resolution * mix(0.75, 3.2, saturate(detail_weight)), 1536.0);
+  let cell_x = i32(floor((face_uv.u * 0.5 + 0.5) * virtual_resolution));
+  let cell_y = i32(floor((face_uv.v * 0.5 + 0.5) * virtual_resolution));
+  let seed = u32(planet.noise.z);
+  let lane = gas_giant_lane_signal(qdir, seed + 13u);
+  let cell = hashed_noise_3(cell_x, cell_y, face_uv.face, seed + 733u);
+  let patch_cell = hashed_noise_3(cell_x / 8, cell_y / 3, face_uv.face, seed + 739u);
+  let oval = hashed_noise_3(cell_x / 14, cell_y / 5, face_uv.face, seed + 743u);
+  let cover = clamp(0.38 + lane * 0.24 + patch_cell * 0.34 + cell * 0.24 + oval * 0.18, 0.0, 1.0);
+  let mask = floor(cover * 7.0) / 7.0;
+  let bright = floor(clamp(0.68 + lane * 0.22 + cell * 0.16 + oval * 0.14, 0.0, 1.0) * 7.0) / 7.0;
+  let shadow = floor(clamp(0.24 + (1.0 - lane) * 0.24 + patch_cell * 0.18, 0.0, 1.0) * 6.0) / 6.0;
+  return vec3<f32>(mask, bright, shadow);
+}
+
 fn quantize_dithered_step(v: f32, steps: f32, ipos: vec2<i32>) -> f32 {
   let level_count = max(steps, 2.0);
   let max_level = level_count - 1.0;
@@ -1078,6 +1153,12 @@ fn fs_main(in: VSOut) -> FSOut {
       terrain_mix = clamp(terrain_mix + 0.18 + detail_settings.near_weight * 0.16, 0.0, 1.0);
     }
     var relief_normal = terrain_normal;
+    if (rocky_detail_weight > 0.0) {
+      let virtual_relief = rocky_virtual_relief_normal_world(planet, local_normal, rocky_detail_weight, surface_hit.signed_height, is_ocean);
+      let relief_blend = rocky_detail_weight * select(0.30, 0.56, !is_ocean);
+      relief_normal = normalize(mix(relief_normal, virtual_relief, relief_blend));
+      terrain_mix = clamp(terrain_mix + rocky_detail_weight * select(0.08, 0.18, !is_ocean), 0.0, 1.0);
+    }
     let shading_normal = normalize(mix(block_normal, relief_normal, terrain_mix));
     let gas_height01 = saturate(surface_hit.signed_height / max(planet.surface.z, 1e-4) * 2.2 + 0.5);
     let gas_height_step = floor(gas_height01 * 5.0) / 5.0;
@@ -1087,13 +1168,24 @@ fn fs_main(in: VSOut) -> FSOut {
     var base_color = surface_material.base_color;
     if (gas_giant) {
       let virtual_detail = gas_giant_virtual_cell_detail(planet, local_normal, gas_detail_weight);
+      let cloud_mask = gas_giant_surface_cloud_mask(planet, local_normal, gas_detail_weight);
       base_color = mix(base_color, virtual_detail.xyz, gas_detail_weight * 0.62);
       let cloud_light = gas_giant_cloud_light_step(block_local_normal, u32(planet.noise.z), gas_detail_weight) * virtual_detail.w;
+      let gas_cloud_tint = mix(planet.atmosphere.xyz, min(planet.band5.xyz * 1.22 + vec3<f32>(0.04, 0.035, 0.02), vec3<f32>(1.0)), 0.48);
+      base_color = mix(base_color * mix(0.92, 1.16, cloud_mask.y), gas_cloud_tint, cloud_mask.x * gas_detail_weight * 0.34);
+      base_color = mix(base_color, base_color * mix(1.0, 0.74, cloud_mask.z), cloud_mask.x * gas_detail_weight * 0.18);
       base_color = mix(base_color * gas_lane_light * cloud_light, planet.atmosphere.xyz, max(gas_limb * 0.10, gas_limb_haze * 0.18));
     } else if (rocky_detail_weight > 0.0) {
       let virtual_detail = rocky_virtual_cell_detail(planet, local_normal, surface_hit.signed_height, is_ocean, rocky_detail_weight);
       base_color = mix(base_color, virtual_detail.xyz, rocky_detail_weight * 0.72);
       base_color = mix(base_color, base_color * virtual_detail.w, rocky_detail_weight * 0.58);
+      if (planet.surface.y > planet.bounds.w) {
+        let cloud_mask = rocky_surface_cloud_mask(planet, local_normal, rocky_detail_weight);
+        let cloud_day = smoothstep(-0.16, 0.32, dot(block_normal, light_dir));
+        let cloud_tint = mix(vec3<f32>(0.86, 0.90, 0.94), min(planet.atmosphere.xyz * 1.18 + vec3<f32>(0.08), vec3<f32>(1.0)), 0.42);
+        base_color = mix(base_color, cloud_tint * mix(0.72, 1.18, cloud_day) * mix(0.86, 1.14, cloud_mask.y), cloud_mask.x * rocky_detail_weight * 0.58);
+        base_color = mix(base_color, base_color * mix(1.0, 0.78, cloud_mask.z), cloud_mask.x * rocky_detail_weight * 0.16 * cloud_day);
+      }
     }
     var ndotl = max(dot(shading_normal, light_dir), 0.0);
     if (gas_giant) {

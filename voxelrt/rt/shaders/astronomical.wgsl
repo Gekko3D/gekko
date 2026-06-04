@@ -100,12 +100,31 @@ fn surface_variation(normal: vec3<f32>, seed: u32) -> f32 {
   return saturate(0.5 + a * 0.22 + b * 0.18 + c * 0.10);
 }
 
-fn far_cloud_mask(normal: vec3<f32>, seed: u32) -> f32 {
+fn far_rocky_cloud_mask(normal: vec3<f32>, seed: u32) -> vec2<f32> {
   let phase = hash11(seed ^ 0x7f4a7c15u) * 6.2831853;
-  let lat_bands = 0.5 + 0.5 * sin(normal.y * 10.0 + phase + sin(normal.x * 6.0 + phase) * 0.35);
-  let cell = surface_variation(normal * vec3<f32>(1.9, 1.1, 1.6), seed ^ 0x2c1b3c6du);
-  let cloud = saturate(lat_bands * 0.55 + cell * 0.65 - 0.38);
-  return floor(cloud * 4.0) / 4.0;
+  let belts = 0.5 + 0.5 * sin(normal.y * 9.0 + phase + sin(normal.x * 5.5 + phase) * 0.42);
+  let cell = surface_variation(normal * vec3<f32>(2.3, 1.2, 1.8), seed ^ 0x2c1b3c6du);
+  let stream = surface_variation(normal * vec3<f32>(4.4, 1.6, 2.7) + vec3<f32>(0.17, -0.31, 0.29), seed ^ 0x6c8e9cf5u);
+  let latitude_gate = 1.0 - smoothstep(0.76, 0.98, abs(normal.y));
+  let cloud = saturate(belts * 0.32 + cell * 0.50 + stream * 0.32 + latitude_gate * 0.18 - 0.44);
+  let mask = floor(cloud * 5.0) / 5.0;
+  let thickness = floor(clamp(mask * 0.78 + stream * 0.22, 0.0, 1.0) * 5.0) / 5.0;
+  return vec2<f32>(mask, thickness);
+}
+
+fn far_gas_cloud_mask(normal: vec3<f32>, seed: u32) -> vec2<f32> {
+  let phase = hash11(seed ^ 0x51ed270bu) * 6.2831853;
+  let bands = 0.5 + 0.5 * sin(normal.y * 21.0 + phase + sin(normal.x * 8.0 + phase) * 0.34);
+  let cell = surface_variation(normal * vec3<f32>(2.8, 1.0, 2.2), seed ^ 0x297a2d39u);
+  let storm = surface_variation(normal * vec3<f32>(6.0, 2.2, 3.8) + vec3<f32>(0.41, 0.13, -0.27), seed ^ 0x5f356495u);
+  let cloud = saturate(bands * 0.48 + cell * 0.34 + storm * 0.30 - 0.24);
+  let mask = floor(cloud * 7.0) / 7.0;
+  let bright = floor(clamp(0.58 + bands * 0.24 + storm * 0.18, 0.0, 1.0) * 7.0) / 7.0;
+  return vec2<f32>(mask, bright);
+}
+
+fn far_cloud_mask(normal: vec3<f32>, seed: u32) -> f32 {
+  return far_rocky_cloud_mask(normal, seed).x;
 }
 
 fn far_atmosphere_color(body: AstronomicalRecord, kind: u32) -> vec3<f32> {
@@ -175,9 +194,9 @@ fn disc_sample_color(body: AstronomicalRecord, ray_dir: vec3<f32>, body_dir: vec
     let band_phase = hash11(body.record_meta.x) * 6.2831853;
     let bands = 0.5 + 0.5 * sin((sphere_normal.y * 18.0) + band_phase + sin(sphere_normal.x * 7.0 + band_phase) * 0.35);
     let band_steps = floor(bands * 7.0) / 7.0;
-    let cloud = far_cloud_mask(sphere_normal, body.record_meta.x);
+    let cloud = far_gas_cloud_mask(sphere_normal, body.record_meta.x);
     color = mix(tint * 0.68, min(tint * 1.36 + vec3<f32>(0.08, 0.06, 0.03), vec3<f32>(1.0)), band_steps);
-    color = mix(color, far_atmosphere_color(body, kind), cloud * 0.18);
+    color = mix(color * mix(0.90, 1.16, cloud.y), far_atmosphere_color(body, kind), cloud.x * 0.26);
   }
 
   if (kind == KIND_STAR) {
@@ -190,9 +209,10 @@ fn disc_sample_color(body: AstronomicalRecord, ray_dir: vec3<f32>, body_dir: vec
     let cool_shadow = vec3<f32>(0.72, 0.78, 0.90);
     let warm_highlight = vec3<f32>(1.10, 1.04, 0.94);
     color = color * mix(cool_shadow, warm_highlight, variation);
-    let cloud = far_cloud_mask(sphere_normal, body.record_meta.x);
+    let cloud = far_rocky_cloud_mask(sphere_normal, body.record_meta.x);
     let cloud_tint = far_atmosphere_color(body, kind);
-    color = mix(color, min(cloud_tint * 1.14, vec3<f32>(1.0)), cloud * 0.28 * day);
+    color = mix(color, min(cloud_tint * (1.05 + cloud.y * 0.22), vec3<f32>(1.0)), cloud.x * 0.42 * day);
+    color = mix(color, color * 0.78, cloud.x * 0.12 * day);
   }
 
   let sphere_light = mix(night, 1.0, day);

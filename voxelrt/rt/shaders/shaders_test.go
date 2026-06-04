@@ -737,14 +737,23 @@ func TestPlanetBodyShaderHasRockyPixelDetailPath(t *testing.T) {
 		"fn is_rocky_detail_planet",
 		"fn rocky_virtual_cell_dir",
 		"fn rocky_virtual_cell_detail",
+		"fn rocky_virtual_relief_signal",
+		"fn rocky_virtual_relief_normal_world",
+		"fn rocky_surface_cloud_mask",
+		"fn gas_giant_surface_cloud_mask",
 		"let default_mid_alt_end = max(planet.surface.z * 44.0, planet.bounds.w * 0.65);",
 		"let default_near_alt_end = max(planet.surface.z * 14.0, planet.bounds.w * 0.16);",
 		"let virtual_resolution = min(base_resolution * mix(1.0, 5.0, saturate(detail_weight)), 2048.0);",
 		"let rocky_detail = is_rocky_detail_planet(planet);",
 		"let rocky_detail_weight = select(0.0, max(detail_settings.near_weight, detail_settings.mid_weight * 0.82), rocky_detail);",
+		"let virtual_relief = rocky_virtual_relief_normal_world(planet, local_normal, rocky_detail_weight, surface_hit.signed_height, is_ocean);",
+		"relief_normal = normalize(mix(relief_normal, virtual_relief, relief_blend));",
+		"terrain_mix = clamp(terrain_mix + rocky_detail_weight * select(0.08, 0.18, !is_ocean), 0.0, 1.0);",
 		"let virtual_detail = rocky_virtual_cell_detail(planet, local_normal, surface_hit.signed_height, is_ocean, rocky_detail_weight);",
 		"base_color = mix(base_color, virtual_detail.xyz, rocky_detail_weight * 0.72);",
 		"base_color = mix(base_color, base_color * virtual_detail.w, rocky_detail_weight * 0.58);",
+		"let cloud_mask = rocky_surface_cloud_mask(planet, local_normal, rocky_detail_weight);",
+		"let cloud_mask = gas_giant_surface_cloud_mask(planet, local_normal, gas_detail_weight);",
 		"ndotl = mix(ndotl, quantize_dithered_step(ndotl, mix(5.0, 8.0, rocky_detail_weight), ipos), 0.38);",
 	}
 	for _, needle := range required {
@@ -756,10 +765,12 @@ func TestPlanetBodyShaderHasRockyPixelDetailPath(t *testing.T) {
 		"fn rocky_cloud_normal_world",
 		"rocky_relief_strength",
 		"rocky_normal",
+		"sample_planet_surface(planet, rocky_virtual",
+		"let patch =",
 	}
 	for _, needle := range forbidden {
 		if strings.Contains(PlanetBodyWGSL, needle) {
-			t.Fatalf("planet body shader must keep rocky detail color/light-only, found %q", needle)
+			t.Fatalf("planet body shader must keep rocky relief out of ray geometry and smooth cloud normals, found %q", needle)
 		}
 	}
 }
@@ -767,11 +778,14 @@ func TestPlanetBodyShaderHasRockyPixelDetailPath(t *testing.T) {
 func TestAstronomicalShaderHasAtmosphereCloudLOD(t *testing.T) {
 	required := []string{
 		"fn far_cloud_mask",
+		"fn far_rocky_cloud_mask",
+		"fn far_gas_cloud_mask",
 		"fn far_atmosphere_color",
 		"fn far_atmosphere_halo",
 		"fn star_corona_sample",
 		"let band_steps = floor(bands * 7.0) / 7.0;",
-		"color = mix(color, min(cloud_tint * 1.14, vec3<f32>(1.0)), cloud * 0.28 * day);",
+		"color = mix(color * mix(0.90, 1.16, cloud.y), far_atmosphere_color(body, kind), cloud.x * 0.26);",
+		"color = mix(color, min(cloud_tint * (1.05 + cloud.y * 0.22), vec3<f32>(1.0)), cloud.x * 0.42 * day);",
 		"sample = far_atmosphere_halo(body, ray_dir, body_dir, angle, radius);",
 		"sample = star_corona_sample(body, angle, radius, glow_radius);",
 	}
@@ -790,10 +804,13 @@ func TestAnalyticMediumShaderHasPixelSteppedAtmosphereHaze(t *testing.T) {
 		"let atmosphere_light_gate = max(sun_side, self_emissive * 0.85);",
 		"let night_air_gate = mix(0.08, 1.0, atmosphere_light_gate);",
 		"let haze_cell = quantize_dithered_medium_step(",
+		"let cloud_core = floor(saturate((n - threshold) / max(1.0 - threshold, 1e-4)) * 5.0) / 5.0;",
+		"let cloud_step = quantize_dithered_medium_step(cloud_luma, select(4.0, 6.0, procedural_noise_enabled), ipos, i + 41u);",
 		"select(5.0, 7.0, procedural_noise_enabled)",
 		"* mix(0.88, 1.16, haze_cell)",
 		"* night_air_gate",
 		"* mix(0.20, 1.0, atmosphere_light_gate)",
+		"* mix(0.92, 1.16, cloud_step)",
 		"* mix(0.92, 1.10, haze_cell)",
 		"* mix(0.86, 1.18, haze_cell)",
 	}

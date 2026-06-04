@@ -535,7 +535,9 @@ fn medium_density(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f32 {
     if (block_size > 0.0) {
       let threshold = max(m.style3.y, 0.01);
       let is_cloud = select(0.0, 1.0, n > threshold);
-      modulate = mix(1.0 - m.noise.y, 1.0, is_cloud);
+      let cloud_core = floor(saturate((n - threshold) / max(1.0 - threshold, 1e-4)) * 5.0) / 5.0;
+      let cloud_edge = floor(saturate((n - threshold + 0.12) / 0.24) * 4.0) / 4.0;
+      modulate = mix(1.0 - m.noise.y * 0.92, 1.0 + cloud_core * m.noise.y * 0.75, max(is_cloud, cloud_edge * 0.55));
     }
     
     density *= modulate;
@@ -577,7 +579,8 @@ fn medium_density_fast(m: MediumRecord, pos_ws: vec3<f32>, medium_idx: u32) -> f
     let n_sat = saturate(n);
     if (block_size > 0.0) {
       let is_cloud = select(0.0, 1.0, n_sat > max(m.style3.y, 0.01));
-      density *= mix(1.0 - m.noise.y, 1.0, is_cloud);
+      let cloud_core = floor(saturate((n_sat - max(m.style3.y, 0.01)) / max(1.0 - max(m.style3.y, 0.01), 1e-4)) * 4.0) / 4.0;
+      density *= mix(1.0 - m.noise.y * 0.88, 1.0 + cloud_core * m.noise.y * 0.55, is_cloud);
     } else {
       density *= mix(1.0 - m.noise.y, 1.0, n_sat);
     }
@@ -689,7 +692,10 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
       let phase_term = 0.04 + phase * 1.15;
       let ambient_term = ambient * (m.params.w * 0.12) * boundary_fade * mix(0.18, 1.0, atmosphere_light_gate);
       let self_shadow = get_cloud_self_shadow(m, pos_ws, light_dir, i);
-      let direct_term = light_color * (m.params.z * phase_term) * horizon_glow * self_shadow * night_air_gate;
+      let cloud_luma = saturate(density / max(m.scatter.w, 1e-4));
+      let cloud_step = quantize_dithered_medium_step(cloud_luma, select(4.0, 6.0, procedural_noise_enabled), ipos, i + 41u);
+      let cloud_core_light = mix(0.86, 1.22, cloud_step);
+      let direct_term = light_color * (m.params.z * phase_term) * horizon_glow * self_shadow * night_air_gate * cloud_core_light;
       let space_scatter_soften = mix(0.0, 1.0, boundary_fade);
       let scatter = m.scatter.xyz * (ambient_term + direct_term) * 0.22 * space_scatter_soften + m.emission.xyz * (0.02 + tangent_boost * 0.05) * space_scatter_soften * mix(0.22, 1.0, atmosphere_light_gate);
       let extinction_scale = select(max(m.style1.y, 1e-4), max(m.style1.x, 1e-4), has_opaque_behind);
@@ -704,7 +710,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
         let haze_light = ambient * (0.03 + 0.02 * boundary_fade) +
           light_color * (0.012 + 0.03 * tangent_boost) * night_air_gate;
         let haze_tint = mix(m.scatter.xyz, m.scatter.xyz * m.absorption.xyz, clamp(m.style0.w, 0.0, 1.0));
-        let disk_haze = haze_tint * haze_light * optical * m.style0.z * mix(1.0, 0.72, boundary_pos) * mix(0.86, 1.18, haze_cell) * mix(0.20, 1.0, atmosphere_light_gate);
+        let disk_haze = haze_tint * haze_light * optical * m.style0.z * mix(1.0, 0.72, boundary_pos) * mix(0.86, 1.18, haze_cell) * mix(0.92, 1.16, cloud_step) * mix(0.20, 1.0, atmosphere_light_gate);
         source += trans * disk_haze;
       }
 
