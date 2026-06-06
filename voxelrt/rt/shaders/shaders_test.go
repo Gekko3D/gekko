@@ -657,6 +657,21 @@ func TestRayReconstructionGuardsFarPlaneW(t *testing.T) {
 	}
 }
 
+func TestGBufferHitExposureAcceptsRayFacingBoundaryHits(t *testing.T) {
+	required := []string{
+		"the hit-position fallback can pick an internal side face",
+		"let ray_facing = -sign(ray_dir_os);",
+		"vi_hit + vec3<i32>(i32(ray_facing.x), 0, 0)",
+		"vi_hit + vec3<i32>(0, i32(ray_facing.y), 0)",
+		"vi_hit + vec3<i32>(0, 0, i32(ray_facing.z))",
+	}
+	for _, needle := range required {
+		if !strings.Contains(GBufferWGSL, needle) {
+			t.Fatalf("gbuffer shader missing ray-facing voxel-boundary hit exposure guard %q", needle)
+		}
+	}
+}
+
 func TestFarRangeDepthValidityUsesCameraFarPlane(t *testing.T) {
 	forbidden := []string{
 		"camera_far_t() * 0.5",

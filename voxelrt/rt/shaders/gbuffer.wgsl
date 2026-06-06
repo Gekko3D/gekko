@@ -731,7 +731,27 @@ fn fallback_face_normal(p_hit_os: vec3<f32>, vi_hit: vec3<i32>, ray_dir_os: vec3
 fn hit_face_is_exposed(p_hit_os: vec3<f32>, vi_hit: vec3<i32>, ray_dir_os: vec3<f32>, inst: Instance, params: ObjectParams) -> bool {
     let face_normal = fallback_face_normal(p_hit_os, vi_hit, ray_dir_os);
     let neighbor_vi = vi_hit + dominant_axis_normal_i(face_normal);
-    return sample_occupancy_for_normal(neighbor_vi, inst, params) < 0.5;
+    if (sample_occupancy_for_normal(neighbor_vi, inst, params) < 0.5) {
+        return true;
+    }
+
+    // When a ray lands close to an edge shared by neighboring occupied voxels,
+    // the hit-position fallback can pick an internal side face. Keep the
+    // first-hit contract stable by also accepting any ray-facing exposed face.
+    let ray_facing = -sign(ray_dir_os);
+    if (abs(ray_dir_os.x) > 1e-6 &&
+        sample_occupancy_for_normal(vi_hit + vec3<i32>(i32(ray_facing.x), 0, 0), inst, params) < 0.5) {
+        return true;
+    }
+    if (abs(ray_dir_os.y) > 1e-6 &&
+        sample_occupancy_for_normal(vi_hit + vec3<i32>(0, i32(ray_facing.y), 0), inst, params) < 0.5) {
+        return true;
+    }
+    if (abs(ray_dir_os.z) > 1e-6 &&
+        sample_occupancy_for_normal(vi_hit + vec3<i32>(0, 0, i32(ray_facing.z)), inst, params) < 0.5) {
+        return true;
+    }
+    return false;
 }
 
 fn transform_normal_to_world(inst: Instance, normal_os: vec3<f32>) -> vec3<f32> {
