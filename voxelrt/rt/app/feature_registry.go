@@ -115,6 +115,13 @@ func (a *App) setupFeatures() error {
 	return nil
 }
 
+func (a *App) setupRenderGraphNodes() error {
+	if a == nil || a.RenderGraph == nil {
+		return nil
+	}
+	return a.RenderGraph.Setup(a)
+}
+
 func (a *App) resizeFeatures(width, height uint32) error {
 	if a == nil {
 		return nil
@@ -128,6 +135,13 @@ func (a *App) resizeFeatures(width, height uint32) error {
 		}
 	}
 	return nil
+}
+
+func (a *App) resizeRenderGraphNodes(width, height uint32) error {
+	if a == nil || a.RenderGraph == nil {
+		return nil
+	}
+	return a.RenderGraph.Resize(a, width, height)
 }
 
 func (a *App) sceneBuffersRecreatedFeatures() error {
@@ -145,6 +159,13 @@ func (a *App) sceneBuffersRecreatedFeatures() error {
 	return nil
 }
 
+func (a *App) sceneBuffersRecreatedRenderGraphNodes() error {
+	if a == nil || a.RenderGraph == nil {
+		return nil
+	}
+	return a.RenderGraph.OnSceneBuffersRecreated(a)
+}
+
 func (a *App) updateFeatures() error {
 	if a == nil {
 		return nil
@@ -160,12 +181,22 @@ func (a *App) updateFeatures() error {
 	return nil
 }
 
-func (a *App) renderFeatures(encoder *wgpu.CommandEncoder, target *wgpu.TextureView) error {
+func (a *App) updateRenderGraphNodes() error {
+	if a == nil || a.RenderGraph == nil {
+		return nil
+	}
+	return a.RenderGraph.Update(a)
+}
+
+func (a *App) renderFeatures(stage FeatureScreenStage, encoder *wgpu.CommandEncoder, target *wgpu.TextureView) error {
 	if a == nil {
 		return nil
 	}
 	for _, feature := range a.features {
 		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		if featureUsesGraphScreenStage(feature, stage) {
 			continue
 		}
 		if err := feature.Render(a, encoder, target); err != nil {
@@ -181,6 +212,9 @@ func (a *App) dispatchCommandStage(stage FeatureCommandStage, encoder *wgpu.Comm
 	}
 	for _, feature := range a.features {
 		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		if featureUsesGraphCommandStage(feature, stage) {
 			continue
 		}
 		stageFeature, ok := feature.(FeatureCommandStageHandler)
@@ -202,6 +236,9 @@ func (a *App) hasCommandStageWork(stage FeatureCommandStage) bool {
 		if feature == nil || !feature.Enabled(a) {
 			continue
 		}
+		if featureUsesGraphCommandStage(feature, stage) {
+			continue
+		}
 		contributor, ok := feature.(FeatureCommandStageContributor)
 		if ok && contributor.HasCommandStage(a, stage) {
 			return true
@@ -218,12 +255,42 @@ func (a *App) renderPassStage(stage FeaturePassStage, pass *wgpu.RenderPassEncod
 		if feature == nil || !feature.Enabled(a) {
 			continue
 		}
+		if featureUsesGraphPassStage(feature, stage) {
+			continue
+		}
 		stageFeature, ok := feature.(FeaturePassStageHandler)
 		if !ok {
 			continue
 		}
 		if err := stageFeature.RenderPassStage(a, stage, pass); err != nil {
 			return fmt.Errorf("feature %q pass stage %d failed: %w", feature.Name(), stage, err)
+		}
+	}
+	return nil
+}
+
+func (a *App) renderPassStageForRenderGraph(stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
+	if a == nil {
+		return nil
+	}
+	for _, feature := range a.features {
+		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		if graphFeature, ok := feature.(FeatureGraphPassStageOwner); ok && featureUsesGraphPassStage(feature, stage) {
+			if !graphFeature.HasPassStage(a, stage) {
+				continue
+			}
+			if err := graphFeature.RenderPassStage(a, stage, pass); err != nil {
+				return fmt.Errorf("feature %q pass stage %d failed: %w", feature.Name(), stage, err)
+			}
+			continue
+		}
+		stageFeature, ok := feature.(FeaturePassStageHandler)
+		if ok {
+			if err := stageFeature.RenderPassStage(a, stage, pass); err != nil {
+				return fmt.Errorf("feature %q pass stage %d failed: %w", feature.Name(), stage, err)
+			}
 		}
 	}
 	return nil
@@ -237,6 +304,9 @@ func (a *App) hasPassStageWork(stage FeaturePassStage) bool {
 		if feature == nil || !feature.Enabled(a) {
 			continue
 		}
+		if featureUsesGraphPassStage(feature, stage) {
+			continue
+		}
 		contributor, ok := feature.(FeaturePassStageContributor)
 		if ok && contributor.HasPassStage(a, stage) {
 			return true
@@ -245,10 +315,34 @@ func (a *App) hasPassStageWork(stage FeaturePassStage) bool {
 	return false
 }
 
+func (a *App) hasPassStageWorkForRenderGraph(stage FeaturePassStage) bool {
+	if a == nil {
+		return false
+	}
+	for _, feature := range a.features {
+		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		if graphFeature, ok := feature.(FeatureGraphPassStageOwner); ok && featureUsesGraphPassStage(feature, stage) {
+			if graphFeature.HasPassStage(a, stage) {
+				return true
+			}
+			continue
+		}
+		contributor, ok := feature.(FeaturePassStageContributor)
+		if ok {
+			if contributor.HasPassStage(a, stage) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (a *App) renderScreenStage(stage FeatureScreenStage, encoder *wgpu.CommandEncoder, target *wgpu.TextureView) error {
 	switch stage {
 	case FeatureScreenStagePostResolve:
-		return a.renderFeatures(encoder, target)
+		return a.renderFeatures(stage, encoder, target)
 	default:
 		return nil
 	}
@@ -260,6 +354,9 @@ func (a *App) hasScreenStageWork(stage FeatureScreenStage) bool {
 	}
 	for _, feature := range a.features {
 		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		if featureUsesGraphScreenStage(feature, stage) {
 			continue
 		}
 		contributor, ok := feature.(FeatureScreenStageContributor)
@@ -281,4 +378,102 @@ func (a *App) shutdownFeatures() {
 		}
 		feature.Shutdown(a)
 	}
+}
+
+func (a *App) shutdownRenderGraphNodes() {
+	if a == nil || a.RenderGraph == nil {
+		return
+	}
+	a.RenderGraph.Shutdown(a)
+}
+
+func featureUsesGraphNodes(feature Feature) bool {
+	owner, ok := feature.(FeatureGraphNodeOwner)
+	return ok && len(owner.GraphNodeNames()) > 0
+}
+
+func featureUsesGraphCommandStage(feature Feature, stage FeatureCommandStage) bool {
+	owner, ok := feature.(FeatureGraphCommandStageOwner)
+	return ok && hasCommandStage(owner.GraphCommandStages(), stage)
+}
+
+func featureUsesGraphPassStage(feature Feature, stage FeaturePassStage) bool {
+	owner, ok := feature.(FeatureGraphPassStageOwner)
+	return ok && hasPassStage(owner.GraphPassStages(), stage)
+}
+
+func featureUsesGraphScreenStage(feature Feature, stage FeatureScreenStage) bool {
+	owner, ok := feature.(FeatureGraphScreenStageOwner)
+	return ok && hasScreenStage(owner.GraphScreenStages(), stage)
+}
+
+func hasCommandStage(stages []FeatureCommandStage, stage FeatureCommandStage) bool {
+	for _, candidate := range stages {
+		if candidate == stage {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPassStage(stages []FeaturePassStage, stage FeaturePassStage) bool {
+	for _, candidate := range stages {
+		if candidate == stage {
+			return true
+		}
+	}
+	return false
+}
+
+func hasScreenStage(stages []FeatureScreenStage, stage FeatureScreenStage) bool {
+	for _, candidate := range stages {
+		if candidate == stage {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) hasFeatureGraphNode(name string) bool {
+	if a == nil || name == "" {
+		return false
+	}
+	for _, feature := range a.features {
+		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		owner, ok := feature.(FeatureGraphNodeOwner)
+		if !ok {
+			continue
+		}
+		for _, nodeName := range owner.GraphNodeNames() {
+			if nodeName == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a *App) HasFeatureGraphNode(name string) bool {
+	return a.hasFeatureGraphNode(name)
+}
+
+func (a *App) hasFeature(name string) bool {
+	if a == nil || name == "" {
+		return false
+	}
+	for _, feature := range a.features {
+		if feature == nil || !feature.Enabled(a) {
+			continue
+		}
+		if feature.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) HasFeature(name string) bool {
+	return a.hasFeature(name)
 }

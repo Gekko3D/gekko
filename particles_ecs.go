@@ -1,7 +1,7 @@
 package gekko
 
 import (
-	"unsafe"
+	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 )
 
 // ParticleEmitterComponent controls a CPU-simulated particle emitter.
@@ -27,44 +27,12 @@ type ParticleEmitterComponent struct {
 	AlphaMode        SpriteAlphaMode // How to derive transparency from the atlas
 }
 
-// EmitterParams matches WGSL layout in particles_sim.wgsl
-// Std430: vec3 (16-align), vec4 (16-align), f32 (4-align)
-type EmitterParams struct {
-	Pos        [3]float32
-	SpawnCount uint32 // 16 bytes total
-
-	Rot [4]float32 // 16 bytes
-
-	LifeMin  float32
-	LifeMax  float32
-	SpeedMin float32
-	SpeedMax float32 // 16 bytes
-
-	SizeMin float32
-	SizeMax float32
-	Gravity float32
-	Drag    float32 // 16 bytes
-
-	ColorMin [4]float32 // 16 bytes
-	ColorMax [4]float32 // 16 bytes
-
-	ConeAngle   float32
-	SpriteIndex uint32
-	AtlasCols   uint32
-	AtlasRows   uint32 // 16 bytes
-
-	AlphaMode uint32
-	Pad1      uint32
-	Pad2      uint32
-	Pad3      uint32 // 16 bytes
-}
-
 type particlePool struct {
 	spawnAcc float32
 }
 
 // particlesSync collects emitter data and generates spawn requests for the GPU.
-func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []byte, uint32, AssetId) {
+func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app_rt.ParticleEmitterInput, AssetId) {
 	dt := float32(t.Dt)
 	if dt <= 0 {
 		dt = 1.0 / 60.0
@@ -76,7 +44,7 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []byt
 		state.particlePools = make(map[EntityId]*particlePool) // Reuse the map
 	}
 
-	emitterParams := make([]EmitterParams, 0, 32)
+	emitterParams := make([]app_rt.ParticleEmitterInput, 0, 32)
 	spawnRequests := make([]uint32, 0, 128)
 	var firstAtlas AssetId
 
@@ -129,7 +97,7 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []byt
 		}
 
 		// Pack Params
-		p := EmitterParams{
+		p := app_rt.ParticleEmitterInput{
 			Pos:         [3]float32{tr.Position.X(), tr.Position.Y(), tr.Position.Z()},
 			SpawnCount:  spawnCount,
 			Rot:         [4]float32{tr.Rotation.V[0], tr.Rotation.V[1], tr.Rotation.V[2], tr.Rotation.W},
@@ -154,13 +122,7 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []byt
 		return true
 	})
 
-	var emitterBytes []byte
-	emitterCount := uint32(len(emitterParams))
-	if emitterCount > 0 {
-		emitterBytes = unsafe.Slice((*byte)(unsafe.Pointer(&emitterParams[0])), len(emitterParams)*int(unsafe.Sizeof(EmitterParams{})))
-	}
-
-	return spawnRequests, emitterBytes, emitterCount, firstAtlas
+	return spawnRequests, emitterParams, firstAtlas
 }
 
 // Keep the old bridge logic if we want to still support it, but it needs to be GPU-ified too.

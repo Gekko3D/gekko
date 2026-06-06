@@ -1,8 +1,7 @@
 package gekko
 
 import (
-	"unsafe"
-
+	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -42,31 +41,7 @@ type SpriteComponent struct {
 	AlphaMode     SpriteAlphaMode
 }
 
-// SpriteInstance matches WGSL layout in sprites.wgsl
-// Std430: vec3 (16-align), vec4 (16-align), f32 (4-align)
-type SpriteInstance struct {
-	Pos  [3]float32
-	IsUI uint32 // 16 bytes total
-
-	Size      [2]float32
-	IsUnlit   uint32
-	AlphaMode uint32 // 16 bytes
-
-	Color [4]float32 // 16 bytes
-
-	SpriteIndex   uint32
-	AtlasCols     uint32
-	AtlasRows     uint32
-	BillboardMode BillboardMode // 16 bytes
-}
-
-type SpriteBatch struct {
-	AtlasKey      string
-	FirstInstance uint32
-	InstanceCount uint32
-}
-
-func appendSpriteInstance(spriteInstances *[]SpriteInstance, batches *[]SpriteBatch, sp *SpriteComponent) {
+func appendSpriteInstance(spriteInstances *[]app_rt.SpriteInstanceInput, batches *[]app_rt.SpriteBatchInput, sp *SpriteComponent) {
 	if sp == nil || !sp.Enabled {
 		return
 	}
@@ -85,7 +60,7 @@ func appendSpriteInstance(spriteInstances *[]SpriteInstance, batches *[]SpriteBa
 		isUIVal = 1
 	}
 
-	inst := SpriteInstance{
+	inst := app_rt.SpriteInstanceInput{
 		Pos:           [3]float32{sp.Position.X(), sp.Position.Y(), sp.Position.Z()},
 		IsUI:          isUIVal,
 		Size:          sp.Size,
@@ -93,7 +68,7 @@ func appendSpriteInstance(spriteInstances *[]SpriteInstance, batches *[]SpriteBa
 		SpriteIndex:   sp.SpriteIndex,
 		AtlasCols:     cols,
 		AtlasRows:     rows,
-		BillboardMode: sp.BillboardMode,
+		BillboardMode: uint32(sp.BillboardMode),
 		AlphaMode:     uint32(sp.AlphaMode),
 	}
 	if sp.Unlit {
@@ -103,7 +78,7 @@ func appendSpriteInstance(spriteInstances *[]SpriteInstance, batches *[]SpriteBa
 	atlasKey := spriteAtlasKey(sp.Texture)
 	instanceIndex := uint32(len(*spriteInstances))
 	if len(*batches) == 0 || (*batches)[len(*batches)-1].AtlasKey != atlasKey {
-		*batches = append(*batches, SpriteBatch{
+		*batches = append(*batches, app_rt.SpriteBatchInput{
 			AtlasKey:      atlasKey,
 			FirstInstance: instanceIndex,
 		})
@@ -113,9 +88,9 @@ func appendSpriteInstance(spriteInstances *[]SpriteInstance, batches *[]SpriteBa
 }
 
 // spritesSync collects sprite data for the GPU.
-func spritesSync(state *VoxelRtState, cmd *Commands) ([]byte, uint32, []SpriteBatch) {
-	spriteInstances := make([]SpriteInstance, 0, 32)
-	batches := make([]SpriteBatch, 0, 8)
+func spritesSync(state *VoxelRtState, cmd *Commands) ([]app_rt.SpriteInstanceInput, []app_rt.SpriteBatchInput) {
+	spriteInstances := make([]app_rt.SpriteInstanceInput, 0, 32)
+	batches := make([]app_rt.SpriteBatchInput, 0, 8)
 
 	MakeQuery1[SpriteComponent](cmd).Map(func(eid EntityId, sp *SpriteComponent) bool {
 		appendSpriteInstance(&spriteInstances, &batches, sp)
@@ -127,13 +102,7 @@ func spritesSync(state *VoxelRtState, cmd *Commands) ([]byte, uint32, []SpriteBa
 		}
 	}
 
-	var spriteBytes []byte
-	spriteCount := uint32(len(spriteInstances))
-	if spriteCount > 0 {
-		spriteBytes = unsafe.Slice((*byte)(unsafe.Pointer(&spriteInstances[0])), len(spriteInstances)*int(unsafe.Sizeof(SpriteInstance{})))
-	}
-
-	return spriteBytes, spriteCount, batches
+	return spriteInstances, batches
 }
 
 func spriteAtlasKey(id AssetId) string {

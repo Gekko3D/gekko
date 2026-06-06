@@ -24,6 +24,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
   - [`content/game-assets.md`](content/game-assets.md)
   - [`content/levels.md`](content/levels.md)
   - [`content/streaming-and-worlds.md`](content/streaming-and-worlds.md)
+  - [`content/hl1-import.md`](content/hl1-import.md)
   - [`content/asset-format.md`](content/asset-format.md)
 - Working on runtime asset plumbing:
   - [`assets/runtime-assets.md`](assets/runtime-assets.md)
@@ -40,6 +41,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
   - [`reference/gpu-alignment.md`](reference/gpu-alignment.md)
 - Planning renderer quality or performance work:
   - [`roadmaps/renderer-lighting.md`](roadmaps/renderer-lighting.md)
+  - [`renderer/voxelrt-render-graph-migration-plan.md`](renderer/voxelrt-render-graph-migration-plan.md)
 
 ## Sections
 

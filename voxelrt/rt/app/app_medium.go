@@ -141,6 +141,6 @@ func (a *App) setupAnalyticMediumPipeline() {
 		return
 	}
 
-	a.AnalyticMediumPipeline = pipeline
-	a.BufferManager.CreateAnalyticMediumBindGroups(a.AnalyticMediumPipeline)
+	a.ensureAnalyticMediumResources().Pipeline = pipeline
+	a.BufferManager.CreateAnalyticMediumBindGroups(pipeline)
 }

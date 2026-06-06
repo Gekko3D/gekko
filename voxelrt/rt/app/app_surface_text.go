@@ -17,8 +17,12 @@ func GetSurfaceDescriptor(w *glfw.Window) *wgpu.SurfaceDescriptor {
 }
 
 func (a *App) setupTextResources() {
+	textResources := a.ensureTextResources()
+	if textResources == nil || textResources.Renderer == nil {
+		return
+	}
 	// Texture
-	tr := a.TextRenderer
+	tr := textResources.Renderer
 	w, h := tr.AtlasImage.Bounds().Dx(), tr.AtlasImage.Bounds().Dy()
 	tex, err := a.Device.CreateTexture(&wgpu.TextureDescriptor{
 		Label:         "Text Atlas",
@@ -38,7 +42,7 @@ func (a *App) setupTextResources() {
 		RowsPerImage: uint32(h),
 	}, &wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1})
 
-	a.TextAtlasView, _ = tex.CreateView(nil)
+	textResources.AtlasView, _ = tex.CreateView(nil)
 
 	// Pipeline
 	textMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
@@ -50,7 +54,7 @@ func (a *App) setupTextResources() {
 		return
 	}
 
-	a.TextPipeline, err = a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+	textResources.Pipeline, err = a.Device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
 		Label: "Text Pipeline",
 		Vertex: wgpu.VertexState{
 			Module:     textMod,
@@ -98,10 +102,10 @@ func (a *App) setupTextResources() {
 		return
 	}
 
-	a.TextBindGroup, err = a.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
-		Layout: a.TextPipeline.GetBindGroupLayout(0),
+	textResources.BindGroup, err = a.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Layout: textResources.Pipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
-			{Binding: 0, TextureView: a.TextAtlasView},
+			{Binding: 0, TextureView: textResources.AtlasView},
 			{Binding: 1, Sampler: a.Sampler},
 		},
 	})
@@ -162,7 +166,7 @@ func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
 		panic(err)
 	}
 
-	a.ParticleInitPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+	initPipeline, err := a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
 		Label:  "Particle Init Pipeline",
 		Layout: simLayout,
 		Compute: wgpu.ProgrammableStageDescriptor{
@@ -174,7 +178,7 @@ func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
 		panic(err)
 	}
 
-	a.ParticleSimPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+	simPipeline, err := a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
 		Label:  "Particle Sim Pipeline",
 		Layout: simLayout,
 		Compute: wgpu.ProgrammableStageDescriptor{
@@ -186,7 +190,7 @@ func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
 		panic(err)
 	}
 
-	a.ParticleSpawnPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+	spawnPipeline, err := a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
 		Label:  "Particle Spawn Pipeline",
 		Layout: simLayout,
 		Compute: wgpu.ProgrammableStageDescriptor{
@@ -198,7 +202,7 @@ func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
 		panic(err)
 	}
 
-	a.ParticleFinalizePipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+	finalizePipeline, err := a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
 		Label:  "Particle Finalize Pipeline",
 		Layout: simLayout,
 		Compute: wgpu.ProgrammableStageDescriptor{
@@ -210,7 +214,13 @@ func (a *App) createParticleSimPipelines(mod *wgpu.ShaderModule) {
 		panic(err)
 	}
 
+	particleResources := a.ensureParticleResources()
+	particleResources.InitPipeline = initPipeline
+	particleResources.SimPipeline = simPipeline
+	particleResources.SpawnPipeline = spawnPipeline
+	particleResources.FinalizePipeline = finalizePipeline
+
 	// Also update BufferManager with one of them to get bind group layouts
-	a.BufferManager.ParticleSimPipeline = a.ParticleSimPipeline
+	a.BufferManager.ParticleSimPipeline = simPipeline
 	a.BufferManager.CreateParticleSimBindGroups()
 }

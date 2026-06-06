@@ -103,6 +103,9 @@ func (a *App) Resize(w, h int) {
 		if err := a.resizeFeatures(uint32(w), uint32(h)); err != nil {
 			fmt.Printf("ERROR: Feature resize failed: %v\n", err)
 		}
+		if err := a.resizeRenderGraphNodes(uint32(w), uint32(h)); err != nil {
+			fmt.Printf("ERROR: Render graph resize failed: %v\n", err)
+		}
 	}
 }
 
@@ -232,6 +235,9 @@ func (a *App) Update() {
 		if err := a.sceneBuffersRecreatedFeatures(); err != nil {
 			fmt.Printf("ERROR: Feature scene-buffer recreation failed: %v\n", err)
 		}
+		if err := a.sceneBuffersRecreatedRenderGraphNodes(); err != nil {
+			fmt.Printf("ERROR: Render graph scene-buffer recreation failed: %v\n", err)
+		}
 	}
 
 	// Update Camera Uniforms
@@ -250,6 +256,9 @@ func (a *App) Update() {
 	}
 	if err := a.updateFeatures(); err != nil {
 		fmt.Printf("ERROR: Feature update failed: %v\n", err)
+	}
+	if err := a.updateRenderGraphNodes(); err != nil {
+		fmt.Printf("ERROR: Render graph update failed: %v\n", err)
 	}
 }
 
@@ -326,13 +335,15 @@ func (a *App) updateTiledLightMetrics(viewProj, invView mgl32.Mat4, camPos mgl32
 }
 
 func (a *App) ClearText() {
-	a.TextItems = a.TextItems[:0]
-	a.RectItems = a.RectItems[:0]
-	a.TextVertexCount = 0
+	textResources := a.ensureTextResources()
+	textResources.Items = textResources.Items[:0]
+	textResources.RectItems = textResources.RectItems[:0]
+	textResources.VertexCount = 0
 }
 
 func (a *App) DrawText(text string, x, y float32, scale float32, color [4]float32) {
-	a.TextItems = append(a.TextItems, core.TextItem{
+	textResources := a.ensureTextResources()
+	textResources.Items = append(textResources.Items, core.TextItem{
 		Text:     text,
 		Position: [2]float32{x, y},
 		Scale:    scale,
@@ -341,7 +352,8 @@ func (a *App) DrawText(text string, x, y float32, scale float32, color [4]float3
 }
 
 func (a *App) DrawRect(x, y, w, h float32, color [4]float32) {
-	a.RectItems = append(a.RectItems, core.RectItem{
+	textResources := a.ensureTextResources()
+	textResources.RectItems = append(textResources.RectItems, core.RectItem{
 		X:     x,
 		Y:     y,
 		W:     w,
@@ -351,24 +363,27 @@ func (a *App) DrawRect(x, y, w, h float32, color [4]float32) {
 }
 
 func (a *App) MeasureText(text string, scale float32) (float32, float32) {
-	if a.TextRenderer == nil {
+	textRenderer := a.textRenderer()
+	if textRenderer == nil {
 		return 0, 0
 	}
-	return a.TextRenderer.MeasureText(text, scale)
+	return textRenderer.MeasureText(text, scale)
 }
 
 func (a *App) GetLineHeight(scale float32) float32 {
-	if a.TextRenderer == nil {
+	textRenderer := a.textRenderer()
+	if textRenderer == nil {
 		return 0
 	}
-	return a.TextRenderer.GetLineHeight(scale)
+	return textRenderer.GetLineHeight(scale)
 }
 
 func (a *App) GetTextAscent(scale float32) float32 {
-	if a.TextRenderer == nil {
+	textRenderer := a.textRenderer()
+	if textRenderer == nil {
 		return 0
 	}
-	return a.TextRenderer.GetAscent(scale)
+	return textRenderer.GetAscent(scale)
 }
 
 func (a *App) Render() {
@@ -394,166 +409,18 @@ func (a *App) Render() {
 		return
 	}
 
-	a.runFeatureCommandStage("Feature Pre-GBuffer", FeatureCommandStagePreGBuffer, encoder)
-	a.runFeatureCommandStage("Feature Pre-GBuffer Volumes", FeatureCommandStagePreGBufferVolumes, encoder)
-
-	// Compute Pass
-	a.Profiler.BeginScope("G-Buffer")
-	cPass := encoder.BeginComputePass(nil)
-	cPass.SetPipeline(a.GBufferPipeline)
-	cPass.SetBindGroup(0, a.BufferManager.GBufferBindGroup0, nil)
-	cPass.SetBindGroup(1, a.BufferManager.GBufferBindGroup, nil)
-	cPass.SetBindGroup(2, a.BufferManager.GBufferBindGroup2, nil)
-
-	// Dispatch
 	wgX := (a.Config.Width + 7) / 8
 	wgY := (a.Config.Height + 7) / 8
-	cPass.DispatchWorkgroups(wgX, wgY, 1)
-	err = cPass.End()
-	if err != nil {
-		fmt.Printf("ERROR: G-Buffer pass End failed: %v\n", err)
-	}
-	a.Profiler.EndScope("G-Buffer")
-
-	// Hi-Z Pass
-	a.Profiler.BeginScope("Hi-Z Generation")
-	a.BufferManager.DispatchHiZ(encoder, a.BufferManager.DepthView)
-	a.Profiler.EndScope("Hi-Z Generation")
-
-	a.runFeatureCommandStage("Feature Post-GBuffer", FeatureCommandStagePostGBuffer, encoder)
-
-	// Shadow Pass
-	a.Profiler.BeginScope("Shadows")
-	shadowCameraMotion := a.hasShadowCameraMotion()
-	shadowUpdates := a.BufferManager.BuildShadowUpdates(a.Scene, a.Camera, a.RenderFrameIndex, shadowCameraMotion)
-	a.BufferManager.PrepareShadowLights(a.Scene, shadowUpdates)
-
-	a.BufferManager.DispatchShadowPass(encoder, shadowUpdates)
-	a.BufferManager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.StructureRevision)
-	shadowPointUpdates := 0
-	shadowSpotUpdates := 0
-	shadowDirectionalUpdates := 0
-	for _, update := range shadowUpdates {
-		switch update.Kind {
-		case core.ShadowUpdateKindDirectional:
-			shadowDirectionalUpdates++
-		case core.ShadowUpdateKindPoint:
-			shadowPointUpdates++
-		case core.ShadowUpdateKindSpot:
-			shadowSpotUpdates++
-		}
-	}
-	a.Profiler.SetCount("ShadowUpdates", len(shadowUpdates))
-	a.Profiler.SetCount("ShadowPointUpdates", shadowPointUpdates)
-	a.Profiler.SetCount("ShadowSpotUpdates", shadowSpotUpdates)
-	a.Profiler.SetCount("ShadowDirectionalUpdates", shadowDirectionalUpdates)
-	a.ShadowUpdateSummary = formatShadowUpdateSummary(shadowUpdates)
-	a.Profiler.EndScope("Shadows")
-
-	hasLocalLights := a.BufferManager.HasLocalLights(a.Scene)
-	hasSceneLights := len(a.Scene.Lights) > 0
-	needsAccumulation := a.hasPassStageWork(FeaturePassStageAccumulation)
-	a.Profiler.SetCount("LocalLights", boolToCount(hasLocalLights))
-	a.Profiler.SetCount("SceneLights", boolToCount(hasSceneLights))
-	a.Profiler.SetCount("AccumulationActive", boolToCount(needsAccumulation))
-
-	a.runFeatureCommandStage("Feature Pre-Lighting", FeatureCommandStagePreLighting, encoder)
-
-	// Lighting Pass
-	a.Profiler.BeginScope("Tile Light Cull")
-	if hasLocalLights {
-		a.BufferManager.DispatchTiledLightCull(encoder, a.TiledLightCullPipeline)
-	} else {
-		a.BufferManager.ResetTiledLightCullState(encoder)
-	}
-	a.Profiler.EndScope("Tile Light Cull")
-
-	a.Profiler.BeginScope("Lighting")
-	lPass := encoder.BeginComputePass(nil)
-	lPass.SetPipeline(a.LightingPipeline)
-	lPass.SetBindGroup(0, a.BufferManager.LightingBindGroup, nil)
-	lPass.SetBindGroup(1, a.BufferManager.LightingBindGroup2, nil)
-	lPass.SetBindGroup(2, a.BufferManager.LightingBindGroupMaterial, nil) // For materials/sectors
-	lPass.SetBindGroup(3, a.BufferManager.LightingTileBindGroup, nil)
-	lPass.DispatchWorkgroups(wgX, wgY, 1)
-	err = lPass.End()
-	if err != nil {
-		fmt.Printf("ERROR: Lighting pass End failed: %v\n", err)
-	}
-	a.Profiler.EndScope("Lighting")
-
-	a.runFeatureCommandStage("Feature Post-Lighting", FeatureCommandStagePostLighting, encoder)
-
-	// Debug Pass
-	if a.DebugMode && a.Camera != nil && core.DebugMode(a.Camera.DebugMode) == core.DebugModeScene {
-		dPass := encoder.BeginComputePass(nil)
-		dPass.SetPipeline(a.DebugComputePipeline)
-		dPass.SetBindGroup(0, a.BufferManager.DebugBindGroup0, nil)
-		dPass.SetBindGroup(1, a.BindGroup1Debug, nil)
-		dPass.DispatchWorkgroups(wgX, wgY, 1)
-		err = dPass.End()
-		if err != nil {
-			fmt.Printf("ERROR: Debug pass End failed: %v\n", err)
-		}
+	frame := &FrameContext{
+		Width:         a.Config.Width,
+		Height:        a.Config.Height,
+		SwapchainView: view,
+		WorkgroupsX:   wgX,
+		WorkgroupsY:   wgY,
 	}
 
-	// Accumulation Pass (Transparent overlay + Particles) -> WBOIT targets
-	a.Profiler.BeginScope("Accumulation")
-	if needsAccumulation || a.HadAccumulationPass {
-		accPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
-			ColorAttachments: []wgpu.RenderPassColorAttachment{
-				{
-					View:       a.BufferManager.TransparentAccumView,
-					LoadOp:     wgpu.LoadOpClear,
-					StoreOp:    wgpu.StoreOpStore,
-					ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 0},
-				},
-				{
-					View:       a.BufferManager.TransparentWeightView,
-					LoadOp:     wgpu.LoadOpClear,
-					StoreOp:    wgpu.StoreOpStore,
-					ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 0},
-				},
-			},
-		})
-		if needsAccumulation {
-			if err := a.renderPassStage(FeaturePassStageAccumulation, accPass); err != nil {
-				fmt.Printf("ERROR: Feature accumulation render failed: %v\n", err)
-			}
-		}
-		err = accPass.End()
-		if err != nil {
-			fmt.Printf("ERROR: Accumulation pass End failed: %v\n", err)
-		}
-	}
-	a.HadAccumulationPass = needsAccumulation
-	a.Profiler.EndScope("Accumulation")
-
-	a.runFeatureCommandStage("Feature Pre-Resolve", FeatureCommandStagePreResolve, encoder)
-
-	// Resolve Pass -> Swapchain (composite opaque + accum/weight)
-	a.Profiler.BeginScope("Resolve")
-	rPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
-		ColorAttachments: []wgpu.RenderPassColorAttachment{{
-			View:       view,
-			LoadOp:     wgpu.LoadOpClear,
-			StoreOp:    wgpu.StoreOpStore,
-			ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 1},
-		}},
-	})
-	if a.ResolvePipeline != nil && a.ResolveBG != nil {
-		rPass.SetPipeline(a.ResolvePipeline)
-		rPass.SetBindGroup(0, a.ResolveBG, nil)
-		rPass.Draw(3, 1, 0, 0)
-	}
-
-	err = rPass.End()
-	if err != nil {
-		fmt.Printf("ERROR: Resolve pass End failed: %v\n", err)
-	}
-	a.Profiler.EndScope("Resolve")
-
-	a.runFeatureScreenStage("Feature Post-Resolve", FeatureScreenStagePostResolve, encoder, view)
+	a.recordRenderFrameMetrics()
+	a.recordRenderGraph(encoder, frame)
 
 	a.Profiler.BeginScope("Submit/Present")
 	cmd, err := encoder.Finish(nil)
@@ -583,6 +450,620 @@ func (a *App) Render() {
 	a.BufferManager.CommitVolumetricFrame(a.BufferManager.AnalyticMediumCount > 0)
 	a.recordCameraState()
 	a.RenderFrameIndex++
+}
+
+func (a *App) recordRenderFrameMetrics() {
+	if a == nil || a.Profiler == nil {
+		return
+	}
+	hasLocalLights := false
+	if a.BufferManager != nil {
+		hasLocalLights = a.BufferManager.HasLocalLights(a.Scene)
+	}
+	hasSceneLights := a.Scene != nil && len(a.Scene.Lights) > 0
+	needsAccumulation := a.hasPassStageWorkForRenderGraph(FeaturePassStageAccumulation)
+	a.Profiler.SetCount("LocalLights", boolToCount(hasLocalLights))
+	a.Profiler.SetCount("SceneLights", boolToCount(hasSceneLights))
+	a.Profiler.SetCount("AccumulationActive", boolToCount(needsAccumulation))
+}
+
+func (a *App) recordRenderGraph(encoder *wgpu.CommandEncoder, frame *FrameContext) {
+	if a == nil {
+		return
+	}
+	if a.RenderGraph == nil {
+		for _, nodeName := range runtimeRenderGraphNodeSequence() {
+			a.runLegacyRenderGraphFeatureNode(nodeName, encoder, frame)
+		}
+		return
+	}
+	if err := a.RenderGraph.Record(a, encoder, frame); err != nil {
+		fmt.Printf("ERROR: Render graph failed: %v\n", err)
+	}
+}
+
+func runtimeRenderGraphNodesBeforeLightingMetrics() []string {
+	return []string{
+		RenderNodeFeatureParticlesSim,
+		RenderNodeFeaturePreGBuffer,
+		RenderNodeFeatureCAVolumesSim,
+		RenderNodeFeaturePreGBufferVolumes,
+		RenderNodeCoreGBuffer,
+		RenderNodeCoreHiZ,
+		RenderNodeFeaturePostGBuffer,
+		RenderNodeCoreShadows,
+	}
+}
+
+func runtimeRenderGraphNodesAfterLightingMetrics() []string {
+	return []string{
+		RenderNodeFeaturePreLighting,
+		RenderNodeFeatureSkyboxUpdate,
+		RenderNodeCoreTiledLightCull,
+		RenderNodeCoreLighting,
+		RenderNodeFeaturePostLighting,
+		RenderNodeFeatureCAVolumesRender,
+		RenderNodeFeatureAstronomical,
+		RenderNodeFeaturePlanetBodies,
+		RenderNodeFeatureAnalyticMedia,
+		RenderNodeCoreDebugScene,
+		RenderNodeCoreAccumulation,
+		RenderNodeFeaturePreResolve,
+		RenderNodeCoreResolve,
+		RenderNodeFeatureTextOverlay,
+		RenderNodeFeatureGizmosOverlay,
+		RenderNodeFeaturePostResolve,
+	}
+}
+
+func runtimeRenderGraphNodeSequence() []string {
+	nodes := runtimeRenderGraphNodesBeforeLightingMetrics()
+	nodes = append(nodes, runtimeRenderGraphNodesAfterLightingMetrics()...)
+	return nodes
+}
+
+func (a *App) runLegacyRenderGraphFeatureNode(name string, encoder *wgpu.CommandEncoder, frame *FrameContext) {
+	switch name {
+	case RenderNodeFeatureParticlesSim:
+		if err := a.recordParticlesSimulationPass(encoder); err != nil {
+			fmt.Printf("ERROR: Particle simulation pass failed: %v\n", err)
+		}
+	case RenderNodeFeaturePreGBuffer:
+		a.runFeatureCommandStage("Feature Pre-GBuffer", FeatureCommandStagePreGBuffer, encoder)
+	case RenderNodeFeatureCAVolumesSim:
+		if err := a.recordCAVolumeSimulationPass(encoder); err != nil {
+			fmt.Printf("ERROR: CA volume simulation pass failed: %v\n", err)
+		}
+	case RenderNodeFeaturePreGBufferVolumes:
+		a.runFeatureCommandStage("Feature Pre-GBuffer Volumes", FeatureCommandStagePreGBufferVolumes, encoder)
+	case RenderNodeCoreGBuffer:
+		if err := a.recordGBufferPass(encoder, frame); err != nil {
+			fmt.Printf("ERROR: G-Buffer pass failed: %v\n", err)
+		}
+	case RenderNodeFeaturePostGBuffer:
+		a.runFeatureCommandStage("Feature Post-GBuffer", FeatureCommandStagePostGBuffer, encoder)
+	case RenderNodeCoreHiZ:
+		if err := a.recordHiZPass(encoder); err != nil {
+			fmt.Printf("ERROR: Hi-Z pass failed: %v\n", err)
+		}
+	case RenderNodeCoreShadows:
+		if err := a.recordShadowPass(encoder); err != nil {
+			fmt.Printf("ERROR: Shadow pass failed: %v\n", err)
+		}
+	case RenderNodeFeaturePreLighting:
+		a.runFeatureCommandStage("Feature Pre-Lighting", FeatureCommandStagePreLighting, encoder)
+	case RenderNodeFeatureSkyboxUpdate:
+		// Skybox input is applied during graph update before render recording.
+	case RenderNodeCoreTiledLightCull:
+		if err := a.recordTiledLightCullPass(encoder); err != nil {
+			fmt.Printf("ERROR: Tile light cull failed: %v\n", err)
+		}
+	case RenderNodeCoreLighting:
+		if err := a.recordLightingPass(encoder, frame); err != nil {
+			fmt.Printf("ERROR: Lighting pass failed: %v\n", err)
+		}
+	case RenderNodeFeaturePostLighting:
+		a.runFeatureCommandStage("Feature Post-Lighting", FeatureCommandStagePostLighting, encoder)
+	case RenderNodeFeatureCAVolumesRender:
+		if err := a.recordCAVolumeRenderPass(encoder); err != nil {
+			fmt.Printf("ERROR: CA volume render pass failed: %v\n", err)
+		}
+	case RenderNodeFeatureAstronomical:
+		if err := a.recordAstronomicalPass(encoder); err != nil {
+			fmt.Printf("ERROR: Astronomical pass failed: %v\n", err)
+		}
+	case RenderNodeFeaturePlanetBodies:
+		if err := a.recordPlanetBodiesPass(encoder); err != nil {
+			fmt.Printf("ERROR: Planet bodies pass failed: %v\n", err)
+		}
+	case RenderNodeFeatureAnalyticMedia:
+		if err := a.recordAnalyticMediumPass(encoder); err != nil {
+			fmt.Printf("ERROR: Analytic media pass failed: %v\n", err)
+		}
+	case RenderNodeCoreDebugScene:
+		if err := a.recordDebugScenePass(encoder, frame); err != nil {
+			fmt.Printf("ERROR: Debug pass failed: %v\n", err)
+		}
+	case RenderNodeCoreAccumulation:
+		if err := a.recordAccumulationPass(encoder); err != nil {
+			fmt.Printf("ERROR: Accumulation pass failed: %v\n", err)
+		}
+	case RenderNodeFeaturePreResolve:
+		a.runFeatureCommandStage("Feature Pre-Resolve", FeatureCommandStagePreResolve, encoder)
+	case RenderNodeCoreResolve:
+		if err := a.recordResolvePass(encoder, frame); err != nil {
+			fmt.Printf("ERROR: Resolve pass failed: %v\n", err)
+		}
+	case RenderNodeFeatureTextOverlay:
+		if err := a.recordTextOverlayPass(encoder, frame); err != nil {
+			fmt.Printf("ERROR: Text overlay pass failed: %v\n", err)
+		}
+	case RenderNodeFeatureGizmosOverlay:
+		if err := a.recordGizmosOverlayPass(encoder, frame); err != nil {
+			fmt.Printf("ERROR: Gizmos overlay pass failed: %v\n", err)
+		}
+	case RenderNodeFeaturePostResolve:
+		var target *wgpu.TextureView
+		if frame != nil {
+			target = frame.SwapchainView
+		}
+		a.runFeatureScreenStage("Feature Post-Resolve", FeatureScreenStagePostResolve, encoder, target)
+	}
+}
+
+func (a *App) tiledLightCullPassEnabled() bool {
+	return a != nil && a.BufferManager != nil
+}
+
+func (a *App) gBufferPassEnabled() bool {
+	return a != nil && a.BufferManager != nil
+}
+
+func (a *App) recordGBufferPass(encoder *wgpu.CommandEncoder, frame *FrameContext) error {
+	if !a.gBufferPassEnabled() {
+		return nil
+	}
+
+	manager := a.BufferManager
+	a.Profiler.SetCount("GBufferGraphNode", 1)
+	a.Profiler.SetCount("GBufferPipelineReady", boolToCount(a.GBufferPipeline != nil))
+	a.Profiler.SetCount("GBufferBG0Ready", boolToCount(manager.GBufferBindGroup0 != nil))
+	a.Profiler.SetCount("GBufferBG1Ready", boolToCount(manager.GBufferBindGroup != nil))
+	a.Profiler.SetCount("GBufferBG2Ready", boolToCount(manager.GBufferBindGroup2 != nil))
+
+	if encoder == nil {
+		return fmt.Errorf("g-buffer command encoder is nil")
+	}
+	if frame == nil {
+		return fmt.Errorf("g-buffer frame context is nil")
+	}
+
+	workgroupsX := frame.WorkgroupsX
+	workgroupsY := frame.WorkgroupsY
+	if workgroupsX == 0 && frame.Width > 0 {
+		workgroupsX = (frame.Width + 7) / 8
+	}
+	if workgroupsY == 0 && frame.Height > 0 {
+		workgroupsY = (frame.Height + 7) / 8
+	}
+	a.Profiler.SetCount("GBufferWorkgroupsX", int(workgroupsX))
+	a.Profiler.SetCount("GBufferWorkgroupsY", int(workgroupsY))
+
+	if workgroupsX == 0 || workgroupsY == 0 {
+		return fmt.Errorf("g-buffer workgroup count is zero")
+	}
+	if a.GBufferPipeline == nil {
+		return fmt.Errorf("g-buffer pipeline is nil")
+	}
+	if manager.GBufferBindGroup0 == nil {
+		return fmt.Errorf("g-buffer bind group 0 is nil")
+	}
+	if manager.GBufferBindGroup == nil {
+		return fmt.Errorf("g-buffer bind group 1 is nil")
+	}
+	if manager.GBufferBindGroup2 == nil {
+		return fmt.Errorf("g-buffer bind group 2 is nil")
+	}
+
+	a.Profiler.BeginScope("G-Buffer")
+	defer a.Profiler.EndScope("G-Buffer")
+
+	cPass := encoder.BeginComputePass(nil)
+	cPass.SetPipeline(a.GBufferPipeline)
+	cPass.SetBindGroup(0, manager.GBufferBindGroup0, nil)
+	cPass.SetBindGroup(1, manager.GBufferBindGroup, nil)
+	cPass.SetBindGroup(2, manager.GBufferBindGroup2, nil)
+	cPass.DispatchWorkgroups(workgroupsX, workgroupsY, 1)
+	if err := cPass.End(); err != nil {
+		return fmt.Errorf("g-buffer pass End failed: %w", err)
+	}
+	return nil
+}
+
+func (a *App) recordTiledLightCullPass(encoder *wgpu.CommandEncoder) error {
+	if !a.tiledLightCullPassEnabled() {
+		return nil
+	}
+
+	manager := a.BufferManager
+	hasLocalLights := manager.HasLocalLights(a.Scene)
+	a.Profiler.SetCount("TiledCullGraphNode", 1)
+	a.Profiler.SetCount("TiledCullLocalLights", boolToCount(hasLocalLights))
+	a.Profiler.SetCount("TiledCullPipelineReady", boolToCount(a.TiledLightCullPipeline != nil))
+	a.Profiler.SetCount("TiledCullBG0Ready", boolToCount(manager.TiledLightCullBindGroup0 != nil))
+	a.Profiler.SetCount("TiledCullBG1Ready", boolToCount(manager.TiledLightCullBindGroup1 != nil))
+	a.Profiler.SetCount("TiledCullTilesX", int(manager.TileLightTilesX))
+	a.Profiler.SetCount("TiledCullTilesY", int(manager.TileLightTilesY))
+
+	a.Profiler.BeginScope("Tile Light Cull")
+	defer a.Profiler.EndScope("Tile Light Cull")
+
+	if !hasLocalLights {
+		manager.ResetTiledLightCullState(encoder)
+		return nil
+	}
+	if encoder == nil {
+		return fmt.Errorf("tile light cull command encoder is nil")
+	}
+	if a.TiledLightCullPipeline == nil {
+		return fmt.Errorf("tile light cull pipeline is nil")
+	}
+	if manager.TiledLightCullBindGroup0 == nil {
+		return fmt.Errorf("tile light cull bind group 0 is nil")
+	}
+	if manager.TiledLightCullBindGroup1 == nil {
+		return fmt.Errorf("tile light cull bind group 1 is nil")
+	}
+	if manager.TileLightTilesX == 0 || manager.TileLightTilesY == 0 {
+		return fmt.Errorf("tile light cull tile dimensions are zero")
+	}
+
+	manager.DispatchTiledLightCull(encoder, a.TiledLightCullPipeline)
+	return nil
+}
+
+func (a *App) lightingPassEnabled() bool {
+	return a != nil && a.BufferManager != nil
+}
+
+func (a *App) hiZPassEnabled() bool {
+	return a != nil && a.BufferManager != nil
+}
+
+func (a *App) shadowPassEnabled() bool {
+	return a != nil && a.BufferManager != nil
+}
+
+func (a *App) recordShadowPass(encoder *wgpu.CommandEncoder) error {
+	if !a.shadowPassEnabled() {
+		return nil
+	}
+	if a.Scene == nil {
+		return fmt.Errorf("shadow scene is nil")
+	}
+
+	manager := a.BufferManager
+	a.Profiler.BeginScope("Shadows")
+	defer a.Profiler.EndScope("Shadows")
+
+	shadowCameraMotion := a.hasShadowCameraMotion()
+	shadowUpdates := manager.BuildShadowUpdates(a.Scene, a.Camera, a.RenderFrameIndex, shadowCameraMotion)
+	manager.PrepareShadowLights(a.Scene, shadowUpdates)
+
+	shadowPointUpdates := 0
+	shadowSpotUpdates := 0
+	shadowDirectionalUpdates := 0
+	for _, update := range shadowUpdates {
+		switch update.Kind {
+		case core.ShadowUpdateKindDirectional:
+			shadowDirectionalUpdates++
+		case core.ShadowUpdateKindPoint:
+			shadowPointUpdates++
+		case core.ShadowUpdateKindSpot:
+			shadowSpotUpdates++
+		}
+	}
+	a.Profiler.SetCount("ShadowGraphNode", 1)
+	a.Profiler.SetCount("ShadowCameraMotion", boolToCount(shadowCameraMotion))
+	a.Profiler.SetCount("ShadowUpdates", len(shadowUpdates))
+	a.Profiler.SetCount("ShadowPointUpdates", shadowPointUpdates)
+	a.Profiler.SetCount("ShadowSpotUpdates", shadowSpotUpdates)
+	a.Profiler.SetCount("ShadowDirectionalUpdates", shadowDirectionalUpdates)
+	a.Profiler.SetCount("ShadowPipelineReady", boolToCount(manager.ShadowPipeline != nil))
+	a.Profiler.SetCount("ShadowBG0Ready", boolToCount(manager.ShadowBindGroup0 != nil))
+	a.Profiler.SetCount("ShadowBG1Ready", boolToCount(manager.ShadowBindGroup1 != nil))
+	a.Profiler.SetCount("ShadowBG2Ready", boolToCount(manager.ShadowBindGroup2 != nil))
+	a.Profiler.SetCount("ShadowLayerCount", len(manager.ShadowLayerParams))
+	a.ShadowUpdateSummary = formatShadowUpdateSummary(shadowUpdates)
+
+	if len(shadowUpdates) == 0 {
+		manager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.StructureRevision)
+		return nil
+	}
+	if encoder == nil {
+		return fmt.Errorf("shadow command encoder is nil")
+	}
+	if manager.ShadowPipeline == nil {
+		return fmt.Errorf("shadow pipeline is nil")
+	}
+	if manager.ShadowBindGroup0 == nil {
+		return fmt.Errorf("shadow bind group 0 is nil")
+	}
+	if manager.ShadowBindGroup1 == nil {
+		return fmt.Errorf("shadow bind group 1 is nil")
+	}
+	if manager.ShadowBindGroup2 == nil {
+		return fmt.Errorf("shadow bind group 2 is nil")
+	}
+
+	manager.DispatchShadowPass(encoder, shadowUpdates)
+	manager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.StructureRevision)
+	return nil
+}
+
+func (a *App) recordHiZPass(encoder *wgpu.CommandEncoder) error {
+	if !a.hiZPassEnabled() {
+		return nil
+	}
+
+	manager := a.BufferManager
+	a.Profiler.SetCount("HiZGraphNode", 1)
+	a.Profiler.SetCount("HiZPipelineReady", boolToCount(manager.HiZPipeline != nil))
+	a.Profiler.SetCount("HiZTextureReady", boolToCount(manager.HiZTexture != nil))
+	a.Profiler.SetCount("HiZDepthReady", boolToCount(manager.DepthView != nil))
+	a.Profiler.SetCount("HiZMipViews", len(manager.HiZViews))
+	a.Profiler.SetCount("HiZBindGroups", len(manager.HiZBindGroups))
+	a.Profiler.SetCount("HiZCameraBufReady", boolToCount(manager.CameraBuf != nil))
+	a.Profiler.SetCount("HiZReadbackReady", boolToCount(manager.ReadbackBuffer != nil))
+
+	if encoder == nil {
+		return fmt.Errorf("hi-z command encoder is nil")
+	}
+	if manager.HiZPipeline == nil {
+		return fmt.Errorf("hi-z pipeline is nil")
+	}
+	if manager.HiZTexture == nil {
+		return fmt.Errorf("hi-z texture is nil")
+	}
+	if manager.DepthView == nil {
+		return fmt.Errorf("hi-z source depth view is nil")
+	}
+	if len(manager.HiZViews) == 0 || manager.HiZViews[0] == nil {
+		return fmt.Errorf("hi-z mip 0 view is nil")
+	}
+	if len(manager.HiZBindGroups) < len(manager.HiZViews) {
+		return fmt.Errorf("hi-z bind group count %d is less than mip view count %d", len(manager.HiZBindGroups), len(manager.HiZViews))
+	}
+	if manager.CameraBuf == nil {
+		return fmt.Errorf("hi-z camera buffer is nil")
+	}
+	if manager.ReadbackBuffer == nil {
+		return fmt.Errorf("hi-z readback buffer is nil")
+	}
+	if manager.HiZReadbackWidth == 0 || manager.HiZReadbackHeight == 0 {
+		return fmt.Errorf("hi-z readback dimensions are zero")
+	}
+
+	a.Profiler.BeginScope("Hi-Z Generation")
+	defer a.Profiler.EndScope("Hi-Z Generation")
+
+	manager.DispatchHiZ(encoder, manager.DepthView)
+	return nil
+}
+
+func (a *App) recordLightingPass(encoder *wgpu.CommandEncoder, frame *FrameContext) error {
+	if !a.lightingPassEnabled() {
+		return nil
+	}
+
+	manager := a.BufferManager
+	a.Profiler.SetCount("LightingGraphNode", 1)
+	a.Profiler.SetCount("LightingPipelineReady", boolToCount(a.LightingPipeline != nil))
+	a.Profiler.SetCount("LightingBG0Ready", boolToCount(manager.LightingBindGroup != nil))
+	a.Profiler.SetCount("LightingBG1Ready", boolToCount(manager.LightingBindGroup2 != nil))
+	a.Profiler.SetCount("LightingBG2Ready", boolToCount(manager.LightingBindGroupMaterial != nil))
+	a.Profiler.SetCount("LightingBG3Ready", boolToCount(manager.LightingTileBindGroup != nil))
+
+	if encoder == nil {
+		return fmt.Errorf("lighting command encoder is nil")
+	}
+	if frame == nil {
+		return fmt.Errorf("lighting frame context is nil")
+	}
+
+	workgroupsX := frame.WorkgroupsX
+	workgroupsY := frame.WorkgroupsY
+	if workgroupsX == 0 && frame.Width > 0 {
+		workgroupsX = (frame.Width + 7) / 8
+	}
+	if workgroupsY == 0 && frame.Height > 0 {
+		workgroupsY = (frame.Height + 7) / 8
+	}
+	a.Profiler.SetCount("LightingWorkgroupsX", int(workgroupsX))
+	a.Profiler.SetCount("LightingWorkgroupsY", int(workgroupsY))
+
+	if workgroupsX == 0 || workgroupsY == 0 {
+		return fmt.Errorf("lighting workgroup count is zero")
+	}
+	if a.LightingPipeline == nil {
+		return fmt.Errorf("lighting pipeline is nil")
+	}
+	if manager.LightingBindGroup == nil {
+		return fmt.Errorf("lighting bind group 0 is nil")
+	}
+	if manager.LightingBindGroup2 == nil {
+		return fmt.Errorf("lighting bind group 1 is nil")
+	}
+	if manager.LightingBindGroupMaterial == nil {
+		return fmt.Errorf("lighting bind group 2 is nil")
+	}
+	if manager.LightingTileBindGroup == nil {
+		return fmt.Errorf("lighting bind group 3 is nil")
+	}
+
+	a.Profiler.BeginScope("Lighting")
+	defer a.Profiler.EndScope("Lighting")
+
+	lPass := encoder.BeginComputePass(nil)
+	lPass.SetPipeline(a.LightingPipeline)
+	lPass.SetBindGroup(0, manager.LightingBindGroup, nil)
+	lPass.SetBindGroup(1, manager.LightingBindGroup2, nil)
+	lPass.SetBindGroup(2, manager.LightingBindGroupMaterial, nil)
+	lPass.SetBindGroup(3, manager.LightingTileBindGroup, nil)
+	lPass.DispatchWorkgroups(workgroupsX, workgroupsY, 1)
+	if err := lPass.End(); err != nil {
+		return fmt.Errorf("lighting pass End failed: %w", err)
+	}
+	return nil
+}
+
+func (a *App) accumulationPassEnabled() bool {
+	return a != nil && a.BufferManager != nil
+}
+
+func (a *App) recordAccumulationPass(encoder *wgpu.CommandEncoder) error {
+	if !a.accumulationPassEnabled() {
+		return nil
+	}
+
+	needsAccumulation := a.hasPassStageWorkForRenderGraph(FeaturePassStageAccumulation)
+	hadAccumulation := a.hadAccumulationPass()
+	a.Profiler.SetCount("AccumulationGraphNode", 1)
+	a.Profiler.SetCount("AccumulationActive", boolToCount(needsAccumulation))
+	a.Profiler.SetCount("AccumulationHadPrevious", boolToCount(hadAccumulation))
+	defer func() {
+		a.setHadAccumulationPass(needsAccumulation)
+	}()
+
+	a.Profiler.BeginScope("Accumulation")
+	defer a.Profiler.EndScope("Accumulation")
+
+	if !needsAccumulation && !hadAccumulation {
+		return nil
+	}
+	if encoder == nil {
+		return fmt.Errorf("accumulation command encoder is nil")
+	}
+	if a.BufferManager.TransparentAccumView == nil {
+		return fmt.Errorf("transparent accumulation view is nil")
+	}
+	if a.BufferManager.TransparentWeightView == nil {
+		return fmt.Errorf("transparent weight view is nil")
+	}
+
+	accPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+		ColorAttachments: []wgpu.RenderPassColorAttachment{
+			{
+				View:       a.BufferManager.TransparentAccumView,
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 0},
+			},
+			{
+				View:       a.BufferManager.TransparentWeightView,
+				LoadOp:     wgpu.LoadOpClear,
+				StoreOp:    wgpu.StoreOpStore,
+				ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 0},
+			},
+		},
+	})
+	var featureErr error
+	if needsAccumulation {
+		featureErr = a.renderPassStageForRenderGraph(FeaturePassStageAccumulation, accPass)
+	}
+	if err := accPass.End(); err != nil {
+		if featureErr != nil {
+			return fmt.Errorf("accumulation pass End failed after feature render error %v: %w", featureErr, err)
+		}
+		return fmt.Errorf("accumulation pass End failed: %w", err)
+	}
+	if featureErr != nil {
+		return fmt.Errorf("feature accumulation render failed: %w", featureErr)
+	}
+	return nil
+}
+
+func (a *App) resolvePassEnabled() bool {
+	return a != nil
+}
+
+func (a *App) recordResolvePass(encoder *wgpu.CommandEncoder, frame *FrameContext) error {
+	if !a.resolvePassEnabled() {
+		return nil
+	}
+
+	a.Profiler.SetCount("ResolveGraphNode", 1)
+	a.Profiler.SetCount("ResolvePipelineReady", boolToCount(a.ResolvePipeline != nil))
+	a.Profiler.SetCount("ResolveBGReady", boolToCount(a.ResolveBG != nil))
+
+	if encoder == nil {
+		return fmt.Errorf("resolve command encoder is nil")
+	}
+	if frame == nil {
+		return fmt.Errorf("resolve frame context is nil")
+	}
+	if frame.SwapchainView == nil {
+		return fmt.Errorf("resolve swapchain view is nil")
+	}
+
+	a.Profiler.BeginScope("Resolve")
+	defer a.Profiler.EndScope("Resolve")
+
+	rPass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+		ColorAttachments: []wgpu.RenderPassColorAttachment{{
+			View:       frame.SwapchainView,
+			LoadOp:     wgpu.LoadOpClear,
+			StoreOp:    wgpu.StoreOpStore,
+			ClearValue: wgpu.Color{R: 0, G: 0, B: 0, A: 1},
+		}},
+	})
+	if a.ResolvePipeline != nil && a.ResolveBG != nil {
+		rPass.SetPipeline(a.ResolvePipeline)
+		rPass.SetBindGroup(0, a.ResolveBG, nil)
+		rPass.Draw(3, 1, 0, 0)
+	}
+	if err := rPass.End(); err != nil {
+		return fmt.Errorf("resolve pass End failed: %w", err)
+	}
+	return nil
+}
+
+func (a *App) debugScenePassEnabled() bool {
+	return a != nil && a.DebugMode && a.Camera != nil && core.DebugMode(a.Camera.DebugMode) == core.DebugModeScene
+}
+
+func (a *App) recordDebugScenePass(encoder *wgpu.CommandEncoder, frame *FrameContext) error {
+	if !a.debugScenePassEnabled() {
+		return nil
+	}
+	if encoder == nil {
+		return fmt.Errorf("debug scene command encoder is nil")
+	}
+	if frame == nil {
+		return fmt.Errorf("debug scene frame context is nil")
+	}
+
+	workgroupsX := frame.WorkgroupsX
+	workgroupsY := frame.WorkgroupsY
+	if workgroupsX == 0 && frame.Width > 0 {
+		workgroupsX = (frame.Width + 7) / 8
+	}
+	if workgroupsY == 0 && frame.Height > 0 {
+		workgroupsY = (frame.Height + 7) / 8
+	}
+	if workgroupsX == 0 || workgroupsY == 0 {
+		return fmt.Errorf("debug scene workgroup count is zero")
+	}
+
+	dPass := encoder.BeginComputePass(nil)
+	dPass.SetPipeline(a.DebugComputePipeline)
+	dPass.SetBindGroup(0, a.BufferManager.DebugBindGroup0, nil)
+	dPass.SetBindGroup(1, a.BindGroup1Debug, nil)
+	dPass.DispatchWorkgroups(workgroupsX, workgroupsY, 1)
+	if err := dPass.End(); err != nil {
+		return fmt.Errorf("debug pass End failed: %w", err)
+	}
+	return nil
 }
 
 func (a *App) runFeatureCommandStage(scope string, stage FeatureCommandStage, encoder *wgpu.CommandEncoder) {

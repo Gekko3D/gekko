@@ -103,13 +103,14 @@ The bridge upload happens in `mod_voxelrt_client_systems.go`.
 
 The live renderer path is:
 
-1. ECS sync builds `gpu.AnalyticMediumHost` records.
-2. `GpuBufferManager.UpdateAnalyticMedia(...)` packs per-medium GPU records and history uniforms.
-3. `AnalyticMediumFeature` runs after deferred lighting in a dedicated half-resolution render pass.
-4. The analytic media shader raymarches the current frame, reprojects previous history, and writes:
+1. ECS sync builds typed `app.AnalyticMediumInput` records.
+2. `App.ApplyAnalyticMediumInput(...)` hands those inputs to the renderer feature boundary.
+3. `GpuBufferManager.UpdateAnalyticMedia(...)` packs per-medium GPU records and history uniforms.
+4. `AnalyticMediumFeature` runs after deferred lighting in a dedicated half-resolution render pass.
+5. The analytic media shader raymarches the current frame, reprojects previous history, and writes:
    - half-resolution volumetric color
    - half-resolution volumetric front depth
-5. The resolve pass upsamples that result with full-resolution depth-aware filtering and composites it over opaque lighting before WBOIT transparency.
+6. The resolve pass upsamples that result with full-resolution depth-aware filtering and composites it over opaque lighting before WBOIT transparency.
 
 Live code locations:
 
@@ -187,8 +188,9 @@ Current path:
 
 1. `waterInteractionSystem` detects rigid-body entry into water volumes.
 2. `WaterInteractionState` stores discrete `WaterImpactEvent` records plus short-lived ripple state.
-3. `buildWaterSurfaceHosts(...)` merges water surfaces with active ripples.
-4. `GpuBufferManager.UpdateWaterSurfaces(...)` uploads both buffers for the water feature.
-5. `water_surface.wgsl` turns those ripple records into expanding surface rings.
+3. `buildWaterSurfaceInputs(...)` merges water surfaces with active ripples into typed renderer input.
+4. `App.ApplyWaterInput(...)` hands that input to the water feature boundary.
+5. `GpuBufferManager.UpdateWaterSurfaces(...)` uploads both buffers for the water feature.
+6. `water_surface.wgsl` turns those ripple records into expanding surface rings.
 
 This keeps interaction quality reasonably high without introducing a full fluid simulation.

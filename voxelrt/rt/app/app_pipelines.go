@@ -174,7 +174,7 @@ func (a *App) setupParticlesPipeline() {
 		fmt.Printf("ERROR: Failed to create particle render pipeline: %v\n", err)
 		return
 	}
-	a.ParticlesPipeline = pipeline
+	a.ensureParticleResources().RenderPipeline = pipeline
 }
 
 func (a *App) setupSpritesPipeline() {
@@ -311,7 +311,7 @@ func (a *App) setupSpritesPipeline() {
 		fmt.Printf("ERROR: Failed to create sprite render pipeline: %v\n", err)
 		return
 	}
-	a.SpritesPipeline = pipeline
+	a.SpriteResources = &SpriteResources{Pipeline: pipeline}
 }
 
 // setupTransparentOverlayPipeline creates a fullscreen render pipeline to alpha-blend
@@ -600,7 +600,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 		fmt.Printf("ERROR: Failed to create transparent overlay pipeline: %v\n", err)
 		return
 	}
-	a.TransparentPipeline = pipeline
+	a.ensureAccumulationResources().TransparentPipeline = pipeline
 }
 
 // setupResolvePipeline creates a fullscreen resolve pass that composites the opaque lit

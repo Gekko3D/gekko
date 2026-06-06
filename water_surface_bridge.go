@@ -3,20 +3,20 @@ package gekko
 import (
 	"sort"
 
-	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
+	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 )
 
-func buildWaterSurfaceHosts(cmd *Commands, interactions *WaterInteractionState) ([]gpu_rt.WaterSurfaceHost, []gpu_rt.WaterRippleHost) {
+func buildWaterSurfaceInputs(cmd *Commands, interactions *WaterInteractionState) ([]app_rt.WaterSurfaceInput, []app_rt.WaterRippleInput) {
 	if cmd == nil {
 		return nil, nil
 	}
 
-	hosts := make([]gpu_rt.WaterSurfaceHost, 0, 4)
+	hosts := make([]app_rt.WaterSurfaceInput, 0, 4)
 	MakeQuery2[TransformComponent, WaterSurfaceComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, water *WaterSurfaceComponent) bool {
 		if water == nil || tr == nil || !water.Enabled() {
 			return true
 		}
-		hosts = append(hosts, gpu_rt.WaterSurfaceHost{
+		hosts = append(hosts, app_rt.WaterSurfaceInput{
 			EntityID:        uint32(eid),
 			Position:        water.WorldCenter(tr),
 			HalfExtents:     water.WorldHalfExtents(tr),
@@ -36,7 +36,7 @@ func buildWaterSurfaceHosts(cmd *Commands, interactions *WaterInteractionState) 
 		if tr == nil || patch == nil || !patch.Enabled() || patch.Kind != WaterPatchKindSurface {
 			return true
 		}
-		hosts = append(hosts, gpu_rt.WaterSurfaceHost{
+		hosts = append(hosts, app_rt.WaterSurfaceInput{
 			EntityID:        uint32(eid),
 			Position:        patch.Center,
 			HalfExtents:     patch.HalfExtents,
@@ -65,14 +65,14 @@ func buildWaterSurfaceHosts(cmd *Commands, interactions *WaterInteractionState) 
 	if interactions != nil {
 		rippleCap = len(interactions.activeRipples)
 	}
-	ripples := make([]gpu_rt.WaterRippleHost, 0, rippleCap)
+	ripples := make([]app_rt.WaterRippleInput, 0, rippleCap)
 	if interactions != nil {
 		for _, ripple := range interactions.activeRipples {
 			waterIndex, ok := indexByEntity[ripple.WaterEntity]
 			if !ok || ripple.Age >= ripple.Lifetime {
 				continue
 			}
-			ripples = append(ripples, gpu_rt.WaterRippleHost{
+			ripples = append(ripples, app_rt.WaterRippleInput{
 				WaterIndex: waterIndex,
 				Position:   ripple.Position,
 				Strength:   ripple.Strength,

@@ -4,6 +4,8 @@ This document describes a staged refactor plan to make `voxelrt` modular without
 
 The immediate goal is not renderer-backend abstraction. The goal is to turn the current hardwired pass graph into a feature-oriented architecture where optional rendering capabilities can be added, removed, and evolved independently.
 
+For the longer-term plan that turns the feature-stage architecture into an explicit native render graph, see [`voxelrt-render-graph-migration-plan.md`](voxelrt-render-graph-migration-plan.md).
+
 ## Why This Refactor
 
 Today `voxelrt` is internally separated into bridge, app, GPU manager, core scene, and shaders, but pass setup and execution are still mostly hardcoded inside the app layer.

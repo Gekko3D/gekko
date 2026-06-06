@@ -115,6 +115,6 @@ func (a *App) setupAstronomicalPipeline() {
 		return
 	}
 
-	a.AstronomicalPipeline = pipeline
-	a.BufferManager.CreateAstronomicalBindGroups(a.AstronomicalPipeline)
+	a.ensureAstronomicalResources().Pipeline = pipeline
+	a.BufferManager.CreateAstronomicalBindGroups(pipeline)
 }

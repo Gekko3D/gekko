@@ -10,6 +10,7 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 | --- | --- | --- |
 | Understand renderer ownership and safe edit zones | [`change-guide.md`](change-guide.md) | [`runtime.md`](runtime.md) |
 | Follow the current frame graph | [`runtime.md`](runtime.md) | `voxelrt/rt/app/app_frame.go` |
+| Plan long-term render graph migration | [`voxelrt-render-graph-migration-plan.md`](voxelrt-render-graph-migration-plan.md) | [`voxelrt-modularization-plan.md`](voxelrt-modularization-plan.md), `voxelrt/rt/app/feature*.go` |
 | Change voxel normals, voxel lighting style, or shaded voxel look | [`runtime.md`](runtime.md) | [`change-guide.md`](change-guide.md), `voxelrt/rt/shaders/gbuffer.wgsl`, `voxelrt/rt/shaders/deferred_lighting.wgsl` |
 | Change ECS-to-renderer sync or picking/edit APIs | [`editing.md`](editing.md) | `mod_voxelrt_client.go`, `mod_voxelrt_client_systems.go` |
 | Change atmosphere, fog, or bounded volumetric media | [`media.md`](media.md) | `analytic_medium_ecs.go`, `analytic_medium_presets.go`, `mod_voxelrt_client_systems.go`, `voxelrt/rt/app/feature_analytic_medium.go` |
@@ -21,6 +22,8 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 
 - [`runtime.md`](runtime.md)
   - authoritative frame flow, resource ownership, and live renderer behavior
+- [`voxelrt-render-graph-migration-plan.md`](voxelrt-render-graph-migration-plan.md)
+  - long-term graph migration and feature-owned bridge extraction plan
 - [`gbuffer-compaction-note.md`](gbuffer-compaction-note.md)
   - Task I design note for the current compacted G-buffer layout and position reconstruction path
 - [`change-guide.md`](change-guide.md)
@@ -41,7 +44,7 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 - `voxelrt/rt/app/`
   - WebGPU app lifetime, pass scheduling, resize handling, and render loop orchestration
 - `voxelrt/rt/gpu/`
-  - GPU buffers, textures, bind groups, paged voxel payload atlases, shadows, Hi-Z, particles, sprites, analytic media, CA volumes, and probe GI resources
+  - GPU buffers, textures, bind groups, paged voxel payload atlases, shadows, Hi-Z, particles, sprites, analytic media, and CA volumes
 - `voxelrt/rt/core/`
   - scene model, camera, lights, culling, raycast, gizmos, and text primitives
 - `voxelrt/rt/volume/`
@@ -56,5 +59,5 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 - The opaque lighting target is `RGBA16Float`.
 - The live compositor is the resolve path, not the legacy fullscreen blit pipeline.
 - Picking and voxel edits are still CPU-authoritative through `Scene` and `XBrickMap`.
-- Probe GI is implemented and participates in the live frame graph when enabled.
+- Probe GI has object metadata, but no live scheduled render pass in the current frame graph.
 - Bounded atmosphere and fog use the analytic media path, not transparent voxels.

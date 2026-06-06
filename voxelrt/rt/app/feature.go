@@ -77,3 +77,30 @@ type FeaturePassStageContributor interface {
 type FeatureScreenStageContributor interface {
 	HasScreenStage(*App, FeatureScreenStage) bool
 }
+
+// FeatureGraphNodeOwner marks features whose render work is handled by
+// explicit graph nodes instead of the compatibility feature-stage dispatchers.
+type FeatureGraphNodeOwner interface {
+	GraphNodeNames() []string
+}
+
+// FeatureGraphCommandStageOwner marks command stages that a graph-owned feature
+// has migrated out of the compatibility command-stage dispatcher.
+type FeatureGraphCommandStageOwner interface {
+	GraphCommandStages() []FeatureCommandStage
+}
+
+// FeatureGraphPassStageOwner marks graph-owned features that still draw inside
+// a renderer-owned pass stage, such as WBOIT accumulation.
+type FeatureGraphPassStageOwner interface {
+	FeatureGraphNodeOwner
+	FeaturePassStageContributor
+	FeaturePassStageHandler
+	GraphPassStages() []FeaturePassStage
+}
+
+// FeatureGraphScreenStageOwner marks screen stages that a graph-owned feature
+// has migrated out of the compatibility screen-stage dispatcher.
+type FeatureGraphScreenStageOwner interface {
+	GraphScreenStages() []FeatureScreenStage
+}

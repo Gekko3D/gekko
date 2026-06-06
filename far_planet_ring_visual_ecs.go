@@ -3,6 +3,7 @@ package gekko
 import (
 	"sort"
 
+	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -65,7 +66,7 @@ type farPlanetRingCandidate struct {
 	record   FarPlanetRingVisualRecord
 }
 
-func buildFarPlanetRingHosts(cmd *Commands) []gpu_rt.FarPlanetRingHost {
+func buildFarPlanetRingInputs(cmd *Commands) []app_rt.FarPlanetRingInput {
 	if cmd == nil {
 		return nil
 	}
@@ -99,11 +100,11 @@ func buildFarPlanetRingHosts(cmd *Commands) []gpu_rt.FarPlanetRingHost {
 	if len(candidates) > maxRendered {
 		candidates = candidates[:maxRendered]
 	}
-	hosts := make([]gpu_rt.FarPlanetRingHost, 0, len(candidates))
+	inputs := make([]app_rt.FarPlanetRingInput, 0, len(candidates))
 	for _, candidate := range candidates {
 		r := candidate.record
 		haze := farPlanetRingDustHazeSettingsWithDefaults(r)
-		hosts = append(hosts, gpu_rt.FarPlanetRingHost{
+		inputs = append(inputs, app_rt.FarPlanetRingInput{
 			BandID:                           r.BandID,
 			ParentBodyID:                     r.ParentBodyID,
 			CenterCameraRelativeMeters:       mgl32.Vec3{r.CenterCameraRelativeMeters[0], r.CenterCameraRelativeMeters[1], r.CenterCameraRelativeMeters[2]},
@@ -132,7 +133,7 @@ func buildFarPlanetRingHosts(cmd *Commands) []gpu_rt.FarPlanetRingHost {
 			LightDirectionViewSpace:          normalizedOr(r.LightDirectionViewSpace, mgl32.Vec3{0, 1, 0}),
 		})
 	}
-	return hosts
+	return inputs
 }
 
 func sortFarPlanetRingCandidates(candidates []farPlanetRingCandidate) {

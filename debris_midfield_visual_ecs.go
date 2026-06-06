@@ -3,6 +3,7 @@ package gekko
 import (
 	"sort"
 
+	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -46,7 +47,7 @@ type debrisMidfieldCandidate struct {
 	record   DebrisMidfieldCellRecord
 }
 
-func buildDebrisMidfieldHosts(cmd *Commands) []gpu_rt.DebrisMidfieldHost {
+func buildDebrisMidfieldInputs(cmd *Commands) []app_rt.DebrisMidfieldInput {
 	if cmd == nil {
 		return nil
 	}
@@ -66,7 +67,7 @@ func buildDebrisMidfieldHosts(cmd *Commands) []gpu_rt.DebrisMidfieldHost {
 	if len(candidates) > gpu_rt.MaxDebrisMidfieldCells {
 		candidates = candidates[:gpu_rt.MaxDebrisMidfieldCells]
 	}
-	hosts := make([]gpu_rt.DebrisMidfieldHost, 0, len(candidates))
+	inputs := make([]app_rt.DebrisMidfieldInput, 0, len(candidates))
 	seenCells := map[string]struct{}{}
 	for _, candidate := range candidates {
 		cell := candidate.record
@@ -78,7 +79,7 @@ func buildDebrisMidfieldHosts(cmd *Commands) []gpu_rt.DebrisMidfieldHost {
 			continue
 		}
 		seenCells[identity] = struct{}{}
-		hosts = append(hosts, gpu_rt.DebrisMidfieldHost{
+		inputs = append(inputs, app_rt.DebrisMidfieldInput{
 			BandID:               cell.BandID,
 			CellID:               cell.CellID,
 			AsteroidID:           cell.AsteroidID,
@@ -103,7 +104,7 @@ func buildDebrisMidfieldHosts(cmd *Commands) []gpu_rt.DebrisMidfieldHost {
 			HandoffRadiusMeters:  cell.HandoffRadiusMeters,
 		})
 	}
-	return hosts
+	return inputs
 }
 
 func sortDebrisMidfieldCandidates(candidates []debrisMidfieldCandidate) {

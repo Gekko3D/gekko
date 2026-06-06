@@ -7,43 +7,43 @@ import (
 	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
 )
 
-func TestBuildFarPlanetRingHostsPreservesValidRecord(t *testing.T) {
+func TestBuildFarPlanetRingInputsPreservesValidRecord(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
 	record := testFarPlanetRingRecord("ring-a", "planet-a", 10)
 	cmd.AddEntity(&FarPlanetRingVisualComponent{Rings: []FarPlanetRingVisualRecord{record}})
 	app.FlushCommands()
 
-	hosts := buildFarPlanetRingHosts(cmd)
-	if len(hosts) != 1 {
-		t.Fatalf("expected one host, got %d", len(hosts))
+	inputs := buildFarPlanetRingInputs(cmd)
+	if len(inputs) != 1 {
+		t.Fatalf("expected one input, got %d", len(inputs))
 	}
-	host := hosts[0]
-	if host.BandID != record.BandID || host.ParentBodyID != record.ParentBodyID {
-		t.Fatalf("expected ids preserved, got %+v", host)
+	input := inputs[0]
+	if input.BandID != record.BandID || input.ParentBodyID != record.ParentBodyID {
+		t.Fatalf("expected ids preserved, got %+v", input)
 	}
-	if host.NormalCameraRelative.LenSqr() < 0.99 || host.TangentUCameraRelative.LenSqr() < 0.99 || host.TangentVCameraRelative.LenSqr() < 0.99 {
-		t.Fatalf("expected normalized basis vectors, got %+v", host)
+	if input.NormalCameraRelative.LenSqr() < 0.99 || input.TangentUCameraRelative.LenSqr() < 0.99 || input.TangentVCameraRelative.LenSqr() < 0.99 {
+		t.Fatalf("expected normalized basis vectors, got %+v", input)
 	}
-	if host.RadialOpacityProfile != record.RadialOpacityProfile {
-		t.Fatalf("expected profile preserved, got %v", host.RadialOpacityProfile)
+	if input.RadialOpacityProfile != record.RadialOpacityProfile {
+		t.Fatalf("expected profile preserved, got %v", input.RadialOpacityProfile)
 	}
-	if host.DustHazeOpacity != record.DustHazeOpacity {
-		t.Fatalf("expected dust haze opacity preserved, got %f", host.DustHazeOpacity)
+	if input.DustHazeOpacity != record.DustHazeOpacity {
+		t.Fatalf("expected dust haze opacity preserved, got %f", input.DustHazeOpacity)
 	}
-	if host.DustHazeMaxAlpha != record.DustHazeMaxAlpha ||
-		host.DustHazeThicknessScale != record.DustHazeThicknessScale ||
-		host.DustHazeMinHalfThicknessMeters != record.DustHazeMinHalfThicknessMeters ||
-		host.DustHazeRadialEdgeFadeFraction != record.DustHazeRadialEdgeFadeFraction ||
-		host.DustHazeVerticalCoreFraction != record.DustHazeVerticalCoreFraction ||
-		host.DustHazeSampleCount != record.DustHazeSampleCount ||
-		host.DustHazeForwardScatterStrength != record.DustHazeForwardScatterStrength ||
-		host.DustHazeShadowStrength != record.DustHazeShadowStrength {
-		t.Fatalf("expected dust haze tuning preserved, got %+v", host)
+	if input.DustHazeMaxAlpha != record.DustHazeMaxAlpha ||
+		input.DustHazeThicknessScale != record.DustHazeThicknessScale ||
+		input.DustHazeMinHalfThicknessMeters != record.DustHazeMinHalfThicknessMeters ||
+		input.DustHazeRadialEdgeFadeFraction != record.DustHazeRadialEdgeFadeFraction ||
+		input.DustHazeVerticalCoreFraction != record.DustHazeVerticalCoreFraction ||
+		input.DustHazeSampleCount != record.DustHazeSampleCount ||
+		input.DustHazeForwardScatterStrength != record.DustHazeForwardScatterStrength ||
+		input.DustHazeShadowStrength != record.DustHazeShadowStrength {
+		t.Fatalf("expected dust haze tuning preserved, got %+v", input)
 	}
 }
 
-func TestBuildFarPlanetRingHostsSkipsDisabledAndInvalidRecords(t *testing.T) {
+func TestBuildFarPlanetRingInputsSkipsDisabledAndInvalidRecords(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
 	valid := testFarPlanetRingRecord("valid", "planet", 1)
@@ -61,12 +61,12 @@ func TestBuildFarPlanetRingHostsSkipsDisabledAndInvalidRecords(t *testing.T) {
 	cmd.AddEntity(&FarPlanetRingVisualComponent{Rings: []FarPlanetRingVisualRecord{invalid, nanRecord, zeroBasis}})
 	app.FlushCommands()
 
-	if hosts := buildFarPlanetRingHosts(cmd); len(hosts) != 0 {
-		t.Fatalf("expected disabled/invalid records to be skipped, got %+v", hosts)
+	if inputs := buildFarPlanetRingInputs(cmd); len(inputs) != 0 {
+		t.Fatalf("expected disabled/invalid records to be skipped, got %+v", inputs)
 	}
 }
 
-func TestBuildFarPlanetRingHostsSortsAndTruncatesDeterministically(t *testing.T) {
+func TestBuildFarPlanetRingInputsSortsAndTruncatesDeterministically(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
 	records := make([]FarPlanetRingVisualRecord, 0, gpu_rt.MaxFarPlanetRings+4)
@@ -82,16 +82,16 @@ func TestBuildFarPlanetRingHostsSortsAndTruncatesDeterministically(t *testing.T)
 	cmd.AddEntity(&FarPlanetRingVisualComponent{Rings: records})
 	app.FlushCommands()
 
-	hosts := buildFarPlanetRingHosts(cmd)
-	if len(hosts) != gpu_rt.MaxFarPlanetRings {
-		t.Fatalf("expected max hosts %d, got %d", gpu_rt.MaxFarPlanetRings, len(hosts))
+	inputs := buildFarPlanetRingInputs(cmd)
+	if len(inputs) != gpu_rt.MaxFarPlanetRings {
+		t.Fatalf("expected max inputs %d, got %d", gpu_rt.MaxFarPlanetRings, len(inputs))
 	}
-	if hosts[0].ParentDepthMeters != 0 || hosts[0].BandID != "ring-a" {
-		t.Fatalf("expected nearest sorted record retained first, got %+v", hosts[0])
+	if inputs[0].ParentDepthMeters != 0 || inputs[0].BandID != "ring-a" {
+		t.Fatalf("expected nearest sorted record retained first, got %+v", inputs[0])
 	}
-	for i := 1; i < len(hosts); i++ {
-		if hosts[i].ParentDepthMeters < hosts[i-1].ParentDepthMeters {
-			t.Fatalf("expected stable ascending depth order at %d: %.1f < %.1f", i, hosts[i].ParentDepthMeters, hosts[i-1].ParentDepthMeters)
+	for i := 1; i < len(inputs); i++ {
+		if inputs[i].ParentDepthMeters < inputs[i-1].ParentDepthMeters {
+			t.Fatalf("expected stable ascending depth order at %d: %.1f < %.1f", i, inputs[i].ParentDepthMeters, inputs[i-1].ParentDepthMeters)
 		}
 	}
 }

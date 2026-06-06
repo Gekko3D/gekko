@@ -1,11 +1,52 @@
 package app
 
-import "github.com/cogentcore/webgpu/wgpu"
+import (
+	"github.com/cogentcore/webgpu/wgpu"
+	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
+	"github.com/go-gl/mathgl/mgl32"
+)
 
 type DebrisMidfieldFeature struct{}
 
+type DebrisMidfieldResources struct {
+	Pipeline *wgpu.RenderPipeline
+}
+
+type DebrisMidfieldInput struct {
+	BandID               string
+	CellID               string
+	AsteroidID           string
+	RadialIndex          int32
+	AngularIndex         int32
+	VerticalIndex        int32
+	PositionViewSpace    mgl32.Vec3
+	PlaneNormalViewSpace mgl32.Vec3
+	InnerRadiusMeters    float32
+	OuterRadiusMeters    float32
+	Seed                 uint32
+	Tint                 [3]float32
+	Opacity              float32
+	DensityScale         float32
+	ApproachFade         float32
+	DistanceMeters       float32
+	GapInnerRadius       float32
+	GapOuterRadius       float32
+	LightDirViewSpace    mgl32.Vec3
+	ActiveHandoff        bool
+	HandoffExact         bool
+	HandoffRadiusMeters  float32
+}
+
 func (f *DebrisMidfieldFeature) Name() string {
 	return "debris_midfield"
+}
+
+func (f *DebrisMidfieldFeature) GraphNodeNames() []string {
+	return []string{RenderNodeCoreAccumulation}
+}
+
+func (f *DebrisMidfieldFeature) GraphPassStages() []FeaturePassStage {
+	return []FeaturePassStage{FeaturePassStageAccumulation}
 }
 
 func (f *DebrisMidfieldFeature) Enabled(a *App) bool {
@@ -54,14 +95,15 @@ func (f *DebrisMidfieldFeature) Shutdown(a *App) {
 	if a == nil {
 		return
 	}
-	a.DebrisMidfieldPipeline = nil
+	a.DebrisMidfieldResources = nil
 }
 
 func (f *DebrisMidfieldFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
+	pipeline := a.debrisMidfieldPipeline()
 	return stage == FeaturePassStageAccumulation &&
 		a != nil &&
 		a.BufferManager != nil &&
-		a.DebrisMidfieldPipeline != nil &&
+		pipeline != nil &&
 		a.BufferManager.DepthView != nil &&
 		a.BufferManager.PlanetDepthView != nil &&
 		a.BufferManager.DebrisMidfieldCount > 0 &&
@@ -77,14 +119,15 @@ func (f *DebrisMidfieldFeature) RenderPassStage(a *App, stage FeaturePassStage, 
 	if a == nil || pass == nil || a.BufferManager == nil {
 		return nil
 	}
-	if a.DebrisMidfieldPipeline == nil || a.BufferManager.DebrisMidfieldCount == 0 || a.BufferManager.DepthView == nil || a.BufferManager.PlanetDepthView == nil {
+	pipeline := a.debrisMidfieldPipeline()
+	if pipeline == nil || a.BufferManager.DebrisMidfieldCount == 0 || a.BufferManager.DepthView == nil || a.BufferManager.PlanetDepthView == nil {
 		return nil
 	}
 	if a.BufferManager.DebrisMidfieldBG0 == nil || a.BufferManager.DebrisMidfieldBG1 == nil || a.BufferManager.DebrisMidfieldBG2 == nil {
 		return nil
 	}
 
-	pass.SetPipeline(a.DebrisMidfieldPipeline)
+	pass.SetPipeline(pipeline)
 	pass.SetBindGroup(0, a.BufferManager.DebrisMidfieldBG0, nil)
 	pass.SetBindGroup(1, a.BufferManager.DebrisMidfieldBG1, nil)
 	pass.SetBindGroup(2, a.BufferManager.DebrisMidfieldBG2, nil)
@@ -94,8 +137,61 @@ func (f *DebrisMidfieldFeature) RenderPassStage(a *App, stage FeaturePassStage, 
 }
 
 func (f *DebrisMidfieldFeature) rebuildBindGroups(a *App) {
-	if a == nil || a.BufferManager == nil || a.DebrisMidfieldPipeline == nil {
+	pipeline := a.debrisMidfieldPipeline()
+	if pipeline == nil || a.BufferManager == nil {
 		return
 	}
-	a.BufferManager.CreateDebrisMidfieldBindGroups(a.DebrisMidfieldPipeline)
+	a.BufferManager.CreateDebrisMidfieldBindGroups(pipeline)
+}
+
+func (a *App) debrisMidfieldPipeline() *wgpu.RenderPipeline {
+	if a == nil || a.DebrisMidfieldResources == nil {
+		return nil
+	}
+	return a.DebrisMidfieldResources.Pipeline
+}
+
+func (a *App) ApplyDebrisMidfieldInput(cells []DebrisMidfieldInput) {
+	if a == nil || a.BufferManager == nil {
+		return
+	}
+	a.BufferManager.UpdateDebrisMidfieldCells(debrisMidfieldGPUHosts(cells))
+}
+
+func (a *App) ClearDebrisMidfieldInput() {
+	if a == nil || a.BufferManager == nil {
+		return
+	}
+	a.BufferManager.DebrisMidfieldCount = 0
+}
+
+func debrisMidfieldGPUHosts(cells []DebrisMidfieldInput) []gpu.DebrisMidfieldHost {
+	hosts := make([]gpu.DebrisMidfieldHost, 0, len(cells))
+	for _, cell := range cells {
+		hosts = append(hosts, gpu.DebrisMidfieldHost{
+			BandID:               cell.BandID,
+			CellID:               cell.CellID,
+			AsteroidID:           cell.AsteroidID,
+			RadialIndex:          cell.RadialIndex,
+			AngularIndex:         cell.AngularIndex,
+			VerticalIndex:        cell.VerticalIndex,
+			PositionViewSpace:    cell.PositionViewSpace,
+			PlaneNormalViewSpace: cell.PlaneNormalViewSpace,
+			InnerRadiusMeters:    cell.InnerRadiusMeters,
+			OuterRadiusMeters:    cell.OuterRadiusMeters,
+			Seed:                 cell.Seed,
+			Tint:                 cell.Tint,
+			Opacity:              cell.Opacity,
+			DensityScale:         cell.DensityScale,
+			ApproachFade:         cell.ApproachFade,
+			DistanceMeters:       cell.DistanceMeters,
+			GapInnerRadius:       cell.GapInnerRadius,
+			GapOuterRadius:       cell.GapOuterRadius,
+			LightDirViewSpace:    cell.LightDirViewSpace,
+			ActiveHandoff:        cell.ActiveHandoff,
+			HandoffExact:         cell.HandoffExact,
+			HandoffRadiusMeters:  cell.HandoffRadiusMeters,
+		})
+	}
+	return hosts
 }

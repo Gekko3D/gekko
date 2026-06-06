@@ -2,7 +2,7 @@ package gekko
 
 import "testing"
 
-func TestBuildAstronomicalBodyHostsSortsAndLimitsDeterministically(t *testing.T) {
+func TestBuildAstronomicalBodyInputsSortsAndLimitsDeterministically(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
 	cmd.AddEntity(&AstronomicalVisualComponent{
@@ -40,25 +40,25 @@ func TestBuildAstronomicalBodyHostsSortsAndLimitsDeterministically(t *testing.T)
 	})
 	app.FlushCommands()
 
-	hosts := buildAstronomicalBodyHosts(cmd)
-	if len(hosts) != 2 {
-		t.Fatalf("expected two limited hosts, got %d", len(hosts))
+	inputs := buildAstronomicalBodyInputs(cmd)
+	if len(inputs) != 2 {
+		t.Fatalf("expected two limited inputs, got %d", len(inputs))
 	}
-	if hosts[0].Kind != uint32(AstronomicalVisualStar) {
-		t.Fatalf("expected nearer equal-angular body first, got kind %d", hosts[0].Kind)
+	if inputs[0].Kind != uint32(AstronomicalVisualStar) {
+		t.Fatalf("expected nearer equal-angular body first, got kind %d", inputs[0].Kind)
 	}
-	if hosts[1].Kind != uint32(AstronomicalVisualRockyPlanet) {
-		t.Fatalf("expected farther equal-angular body second, got kind %d", hosts[1].Kind)
+	if inputs[1].Kind != uint32(AstronomicalVisualRockyPlanet) {
+		t.Fatalf("expected farther equal-angular body second, got kind %d", inputs[1].Kind)
 	}
-	if hosts[0].DirectionViewSpace[0] != 0 || hosts[0].DirectionViewSpace[1] != 0 || hosts[0].DirectionViewSpace[2] != -1 {
-		t.Fatalf("expected normalized view direction, got %v", hosts[0].DirectionViewSpace)
+	if inputs[0].DirectionViewSpace[0] != 0 || inputs[0].DirectionViewSpace[1] != 0 || inputs[0].DirectionViewSpace[2] != -1 {
+		t.Fatalf("expected normalized view direction, got %v", inputs[0].DirectionViewSpace)
 	}
-	if hosts[1].LightDirectionViewSpace[0] != 0 || hosts[1].LightDirectionViewSpace[1] != 2 || hosts[1].LightDirectionViewSpace[2] != 0 {
-		t.Fatalf("expected light direction to be forwarded, got %v", hosts[1].LightDirectionViewSpace)
+	if inputs[1].LightDirectionViewSpace[0] != 0 || inputs[1].LightDirectionViewSpace[1] != 2 || inputs[1].LightDirectionViewSpace[2] != 0 {
+		t.Fatalf("expected light direction to be forwarded, got %v", inputs[1].LightDirectionViewSpace)
 	}
 }
 
-func TestBuildAstronomicalBodyHostsKeepsSelectedPriorityWhenLimited(t *testing.T) {
+func TestBuildAstronomicalBodyInputsKeepsSelectedPriorityWhenLimited(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
 	cmd.AddEntity(&AstronomicalVisualComponent{
@@ -94,23 +94,23 @@ func TestBuildAstronomicalBodyHostsKeepsSelectedPriorityWhenLimited(t *testing.T
 	})
 	app.FlushCommands()
 
-	hosts := buildAstronomicalBodyHosts(cmd)
-	if len(hosts) != 2 {
-		t.Fatalf("expected two limited hosts, got %d", len(hosts))
+	inputs := buildAstronomicalBodyInputs(cmd)
+	if len(inputs) != 2 {
+		t.Fatalf("expected two limited inputs, got %d", len(inputs))
 	}
 	foundSelected := false
-	for _, host := range hosts {
-		if host.Seed == 99 && host.OcclusionPriority == 200 {
+	for _, input := range inputs {
+		if input.Seed == 99 && input.OcclusionPriority == 200 {
 			foundSelected = true
 			break
 		}
 	}
 	if !foundSelected {
-		t.Fatalf("expected selected high-priority body to remain in GPU host list, got %#v", hosts)
+		t.Fatalf("expected selected high-priority body to remain in renderer input list, got %#v", inputs)
 	}
 }
 
-func TestBuildAstronomicalBodyHostsRejectsInvalidRecords(t *testing.T) {
+func TestBuildAstronomicalBodyInputsRejectsInvalidRecords(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
 	cmd.AddEntity(&AstronomicalVisualComponent{
@@ -141,11 +141,11 @@ func TestBuildAstronomicalBodyHostsRejectsInvalidRecords(t *testing.T) {
 	})
 	app.FlushCommands()
 
-	hosts := buildAstronomicalBodyHosts(cmd)
-	if len(hosts) != 1 {
-		t.Fatalf("expected one valid host, got %d", len(hosts))
+	inputs := buildAstronomicalBodyInputs(cmd)
+	if len(inputs) != 1 {
+		t.Fatalf("expected one valid input, got %d", len(inputs))
 	}
-	if hosts[0].Kind != uint32(AstronomicalVisualStar) {
-		t.Fatalf("expected valid star host, got kind %d", hosts[0].Kind)
+	if inputs[0].Kind != uint32(AstronomicalVisualStar) {
+		t.Fatalf("expected valid star input, got kind %d", inputs[0].Kind)
 	}
 }

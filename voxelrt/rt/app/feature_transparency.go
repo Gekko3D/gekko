@@ -5,8 +5,21 @@ import "github.com/cogentcore/webgpu/wgpu"
 // TransparencyFeature owns transparent overlay pipeline lifecycle and accumulation rendering.
 type TransparencyFeature struct{}
 
+type AccumulationResources struct {
+	TransparentPipeline *wgpu.RenderPipeline
+	HadPass             bool
+}
+
 func (f *TransparencyFeature) Name() string {
 	return "transparency"
+}
+
+func (f *TransparencyFeature) GraphNodeNames() []string {
+	return []string{RenderNodeCoreAccumulation}
+}
+
+func (f *TransparencyFeature) GraphPassStages() []FeaturePassStage {
+	return []FeaturePassStage{FeaturePassStageAccumulation}
 }
 
 func (f *TransparencyFeature) Enabled(*App) bool {
@@ -48,14 +61,14 @@ func (f *TransparencyFeature) Shutdown(a *App) {
 	if a == nil {
 		return
 	}
-	a.TransparentPipeline = nil
+	a.AccumulationResources = nil
 }
 
 func (f *TransparencyFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
 	return stage == FeaturePassStageAccumulation &&
 		a != nil &&
 		a.BufferManager != nil &&
-		a.TransparentPipeline != nil &&
+		a.transparentPipeline() != nil &&
 		a.BufferManager.HasVisibleTransparentOverlay(a.Scene)
 }
 
@@ -66,14 +79,15 @@ func (f *TransparencyFeature) RenderPassStage(a *App, stage FeaturePassStage, pa
 	if a == nil || pass == nil || a.BufferManager == nil {
 		return nil
 	}
-	if a.TransparentPipeline == nil || !a.BufferManager.HasVisibleTransparentOverlay(a.Scene) {
+	transparentPipeline := a.transparentPipeline()
+	if transparentPipeline == nil || !a.BufferManager.HasVisibleTransparentOverlay(a.Scene) {
 		return nil
 	}
 	if a.BufferManager.TransparentBG0 == nil || a.BufferManager.TransparentBG1 == nil || a.BufferManager.TransparentBG2 == nil || a.BufferManager.TransparentBG3 == nil {
 		return nil
 	}
 
-	pass.SetPipeline(a.TransparentPipeline)
+	pass.SetPipeline(transparentPipeline)
 	pass.SetBindGroup(0, a.BufferManager.TransparentBG0, nil)
 	pass.SetBindGroup(1, a.BufferManager.TransparentBG1, nil)
 	pass.SetBindGroup(2, a.BufferManager.TransparentBG2, nil)
@@ -83,9 +97,47 @@ func (f *TransparencyFeature) RenderPassStage(a *App, stage FeaturePassStage, pa
 }
 
 func (f *TransparencyFeature) rebuildBindGroups(a *App) {
-	if a == nil || a.BufferManager == nil || a.TransparentPipeline == nil {
+	if a == nil || a.BufferManager == nil || a.transparentPipeline() == nil {
 		return
 	}
 	a.BufferManager.StorageView = a.StorageView
-	a.BufferManager.CreateTransparentOverlayBindGroups(a.TransparentPipeline)
+	a.BufferManager.CreateTransparentOverlayBindGroups(a.transparentPipeline())
+}
+
+func (a *App) accumulationResources() *AccumulationResources {
+	if a == nil {
+		return nil
+	}
+	return a.AccumulationResources
+}
+
+func (a *App) ensureAccumulationResources() *AccumulationResources {
+	if a == nil {
+		return nil
+	}
+	if a.AccumulationResources == nil {
+		a.AccumulationResources = &AccumulationResources{}
+	}
+	return a.AccumulationResources
+}
+
+func (a *App) transparentPipeline() *wgpu.RenderPipeline {
+	resources := a.accumulationResources()
+	if resources == nil {
+		return nil
+	}
+	return resources.TransparentPipeline
+}
+
+func (a *App) hadAccumulationPass() bool {
+	resources := a.accumulationResources()
+	return resources != nil && resources.HadPass
+}
+
+func (a *App) setHadAccumulationPass(hadPass bool) {
+	resources := a.ensureAccumulationResources()
+	if resources == nil {
+		return
+	}
+	resources.HadPass = hadPass
 }

@@ -117,6 +117,6 @@ func (a *App) setupPlanetBodyPipeline() {
 		return
 	}
 
-	a.PlanetBodyPipeline = pipeline
-	a.BufferManager.CreatePlanetBodyBindGroups(a.PlanetBodyPipeline)
+	a.ensurePlanetBodyResources().Pipeline = pipeline
+	a.BufferManager.CreatePlanetBodyBindGroups(pipeline)
 }

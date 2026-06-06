@@ -74,6 +74,9 @@ type VoxelAmbientOcclusionMode = core.AmbientOcclusionMode
 type VoxelRtDebugMode = core.DebugMode
 type VoxelRtFeatureFlags = app_rt.AppFeatureFlags
 type VoxelRtFeatureConfig = app_rt.AppFeatureConfig
+type VoxelRtRenderFeature = app_rt.Feature
+type VoxelRtRenderNode = app_rt.RenderNode
+type VoxelRtRenderNodeSpec = app_rt.RenderNodeSpec
 
 const (
 	LightingQualityPerformance = core.LightingQualityPresetPerformance
@@ -97,18 +100,21 @@ func ParseVoxelRtDepthMode(raw string) (VoxelRtDepthMode, error) {
 }
 
 type VoxelRtModule struct {
-	WindowWidth     int
-	WindowHeight    int
-	WindowTitle     string
-	DebugMode       bool
-	DepthMode       VoxelRtDepthMode
-	RenderMode      RenderMode
-	QualityPreset   LightingQualityPreset
-	LightingQuality LightingQualityConfig
-	OcclusionMode   core.OcclusionMode
-	FontPath        string
-	UIFontSize      float64
-	FeatureConfig   *VoxelRtFeatureConfig
+	WindowWidth      int
+	WindowHeight     int
+	WindowTitle      string
+	DebugMode        bool
+	DepthMode        VoxelRtDepthMode
+	RenderMode       RenderMode
+	QualityPreset    LightingQualityPreset
+	LightingQuality  LightingQualityConfig
+	OcclusionMode    core.OcclusionMode
+	FontPath         string
+	UIFontSize       float64
+	FeatureConfig    *VoxelRtFeatureConfig
+	BridgeFeatures   []VoxelRtBridgeFeatureRegistration
+	RenderFeatures   []VoxelRtRenderFeature
+	RenderGraphNodes []VoxelRtRenderNodeSpec
 }
 
 type VoxelRtState struct {
@@ -124,11 +130,11 @@ type VoxelRtState struct {
 	objectToEntity      map[*core.VoxelObject]EntityId
 	skyboxLayers        map[EntityId]SkyboxLayerComponent // Stored values to detect changes
 	skyboxSun           SkyboxSunComponent
-	lastSkyboxVer       int64 // To track if any layer changed
 	SunDirection        mgl32.Vec3
 	SunIntensity        float32
 	lastParticleAtlas   AssetId
 	lastSpriteAtlas     AssetId
+	bridgeFeatures      voxelRtBridgeRegistry
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -243,7 +249,6 @@ func (s *VoxelRtState) SetLightingQuality(cfg LightingQualityConfig) {
 		s.RtApp.LightingQuality = cfg
 	}
 }
-
 
 func (s *VoxelRtState) GetTextAscent(scale float32) float32 {
 	if s == nil || s.RtApp == nil {

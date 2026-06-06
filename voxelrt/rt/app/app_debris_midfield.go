@@ -139,6 +139,6 @@ func (a *App) setupDebrisMidfieldPipeline() {
 		return
 	}
 
-	a.DebrisMidfieldPipeline = pipeline
-	a.BufferManager.CreateDebrisMidfieldBindGroups(a.DebrisMidfieldPipeline)
+	a.DebrisMidfieldResources = &DebrisMidfieldResources{Pipeline: pipeline}
+	a.BufferManager.CreateDebrisMidfieldBindGroups(pipeline)
 }

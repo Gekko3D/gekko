@@ -49,7 +49,7 @@ func (a *App) SetParticleAtlas(texels []byte, w, h uint32) {
 	})
 
 	// Recreate particle bind groups to include the new texture
-	a.BufferManager.CreateParticlesBindGroups(a.ParticlesPipeline)
+	a.BufferManager.CreateParticlesBindGroups(a.ParticleRenderPipeline())
 }
 
 func (a *App) setupParticleSimulationPipelines() error {

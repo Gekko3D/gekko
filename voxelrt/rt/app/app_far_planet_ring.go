@@ -134,6 +134,6 @@ func (a *App) setupFarPlanetRingPipeline() {
 		fmt.Printf("ERROR: Failed to create far planet-ring pipeline: %v\n", err)
 		return
 	}
-	a.FarPlanetRingPipeline = pipeline
-	a.BufferManager.CreateFarPlanetRingBindGroups(a.FarPlanetRingPipeline)
+	a.FarPlanetRingResources = &FarPlanetRingResources{Pipeline: pipeline}
+	a.BufferManager.CreateFarPlanetRingBindGroups(pipeline)
 }

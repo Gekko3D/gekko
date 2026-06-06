@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 
+	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -66,10 +67,10 @@ type astronomicalVisualCandidate struct {
 	visual   AstronomicalVisualRecord
 }
 
-func buildAstronomicalBodyHosts(cmd *Commands) []gpu_rt.AstronomicalBodyHost {
-	hosts := make([]gpu_rt.AstronomicalBodyHost, 0, DefaultAstronomicalMaxRenderedBodies)
+func buildAstronomicalBodyInputs(cmd *Commands) []app_rt.AstronomicalBodyInput {
+	inputs := make([]app_rt.AstronomicalBodyInput, 0, DefaultAstronomicalMaxRenderedBodies)
 	if cmd == nil {
-		return hosts
+		return inputs
 	}
 
 	maxRendered := 0
@@ -101,7 +102,7 @@ func buildAstronomicalBodyHosts(cmd *Commands) []gpu_rt.AstronomicalBodyHost {
 	}
 	candidates = limitAstronomicalVisualCandidatesForRender(candidates, maxRendered)
 
-	hosts = make([]gpu_rt.AstronomicalBodyHost, 0, len(candidates))
+	inputs = make([]app_rt.AstronomicalBodyInput, 0, len(candidates))
 	for _, candidate := range candidates {
 		visual := candidate.visual
 		dir := mgl32.Vec3{
@@ -112,7 +113,7 @@ func buildAstronomicalBodyHosts(cmd *Commands) []gpu_rt.AstronomicalBodyHost {
 		if dir.LenSqr() > 1e-6 {
 			dir = dir.Normalize()
 		}
-		hosts = append(hosts, gpu_rt.AstronomicalBodyHost{
+		inputs = append(inputs, app_rt.AstronomicalBodyInput{
 			Kind:                      uint32(visual.Kind),
 			DirectionViewSpace:        dir,
 			LightDirectionViewSpace:   mgl32.Vec3{visual.LightDirectionViewSpace[0], visual.LightDirectionViewSpace[1], visual.LightDirectionViewSpace[2]},
@@ -132,7 +133,7 @@ func buildAstronomicalBodyHosts(cmd *Commands) []gpu_rt.AstronomicalBodyHost {
 			RingParentPlanetRadius:    visual.RingParentPlanetRadius,
 		})
 	}
-	return hosts
+	return inputs
 }
 
 func sortAstronomicalVisualCandidatesForRender(candidates []astronomicalVisualCandidate) {

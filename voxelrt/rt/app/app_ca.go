@@ -64,7 +64,7 @@ func (a *App) createCAVolumeSimPipeline() error {
 		return err
 	}
 
-	a.CAVolumeSimPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+	pipeline, err := a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
 		Label:  "CA Volume Sim Pipeline",
 		Layout: layout,
 		Compute: wgpu.ProgrammableStageDescriptor{
@@ -75,7 +75,8 @@ func (a *App) createCAVolumeSimPipeline() error {
 	if err != nil {
 		return err
 	}
-	a.BufferManager.CAVolumeSimPipeline = a.CAVolumeSimPipeline
+	a.ensureCAVolumeResources().SimPipeline = pipeline
+	a.BufferManager.CAVolumeSimPipeline = pipeline
 	a.BufferManager.CreateCAVolumeSimBindGroups()
 	return nil
 }
@@ -126,7 +127,7 @@ func (a *App) createCAVolumeBoundsPipeline() error {
 		return err
 	}
 
-	a.CAVolumeBoundsPipeline, err = a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+	pipeline, err := a.Device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
 		Label:  "CA Volume Bounds Pipeline",
 		Layout: layout,
 		Compute: wgpu.ProgrammableStageDescriptor{
@@ -137,7 +138,8 @@ func (a *App) createCAVolumeBoundsPipeline() error {
 	if err != nil {
 		return err
 	}
-	a.BufferManager.CAVolumeBoundsPipeline = a.CAVolumeBoundsPipeline
+	a.ensureCAVolumeResources().BoundsPipeline = pipeline
+	a.BufferManager.CAVolumeBoundsPipeline = pipeline
 	a.BufferManager.CreateCAVolumeBoundsBindGroups()
 	return nil
 }
@@ -267,6 +269,6 @@ func (a *App) setupCAVolumePipeline() {
 		return
 	}
 
-	a.CAVolumePipeline = pipeline
-	a.BufferManager.CreateCAVolumeRenderBindGroups(a.CAVolumePipeline)
+	a.ensureCAVolumeResources().RenderPipeline = pipeline
+	a.BufferManager.CreateCAVolumeRenderBindGroups(pipeline)
 }

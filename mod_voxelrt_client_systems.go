@@ -28,6 +28,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	if mod.FeatureConfig != nil {
 		RtApp.FeatureConfig = *mod.FeatureConfig
 	}
+	mod.applyRenderExtensions(RtApp)
 	if err := RtApp.Init(); err != nil {
 		panic(err)
 	}
@@ -42,6 +43,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		caVolumeMap:         make(map[EntityId]*core.VoxelObject),
 		objectToEntity:      make(map[*core.VoxelObject]EntityId),
 		skyboxLayers:        make(map[EntityId]SkyboxLayerComponent),
+		bridgeFeatures:      mod.bridgeFeatureRegistry(),
 	}
 	cmd.AddResources(state)
 	cmd.AddResources(&WaterInteractionState{})
@@ -98,18 +100,45 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 			InStage(PreRender).
 			RunAlways(),
 	)
+	mod.installBatchedBridgeSystems(app)
+	app.UseSystem(
+		System(voxelRtBatchEndSystem).
+			InStage(PreRender).
+			RunAlways(),
+	)
+	mod.installBridgeSystemsAfterBatch(app)
+	mod.installBridgeSystems(app)
 
 	app.UseSystem(
 		System(voxelRtUpdateSystem).
 			InStage(PreRender).
 			RunAlways(),
 	)
+	mod.installBridgeSystemsAfterUpdate(app)
 
 	app.UseSystem(
 		System(voxelRtRenderSystem).
 			InStage(Render).
 			RunAlways(),
 	)
+}
+
+func (mod VoxelRtModule) applyRenderExtensions(rtApp *app_rt.App) {
+	if rtApp == nil {
+		return
+	}
+	for _, feature := range mod.RenderFeatures {
+		rtApp.RegisterFeature(feature)
+	}
+	if len(mod.RenderGraphNodes) == 0 {
+		return
+	}
+	if rtApp.RenderGraph == nil {
+		rtApp.RenderGraph = app_rt.NewDefaultRenderGraph()
+	}
+	for _, spec := range mod.RenderGraphNodes {
+		rtApp.RenderGraph.Register(spec)
+	}
 }
 
 func voxelRtPreludeSystem(input *Input, state *VoxelRtState) {
@@ -128,6 +157,95 @@ func voxelRtPreludeSystem(input *Input, state *VoxelRtState) {
 	}
 }
 
+func (mod VoxelRtModule) bridgeFeatureRegistry() voxelRtBridgeRegistry {
+	registrations := DefaultVoxelRtBridgeFeatureRegistrations()
+	if len(mod.BridgeFeatures) > 0 {
+		registrations = append(registrations, mod.BridgeFeatures...)
+	}
+	return voxelRtBridgeRegistryFrom(registrations)
+}
+
+func (mod VoxelRtModule) installBridgeSystems(app *App) {
+	if app == nil {
+		return
+	}
+	for _, registration := range append(DefaultVoxelRtBridgeFeatureRegistrations(), mod.BridgeFeatures...) {
+		if registration.PreRenderSystem == nil {
+			continue
+		}
+		app.UseSystem(
+			System(registration.PreRenderSystem).
+				InStage(PreRender).
+				RunAlways(),
+		)
+	}
+}
+
+func (mod VoxelRtModule) installBatchedBridgeSystems(app *App) {
+	if app == nil {
+		return
+	}
+	for _, registration := range append(DefaultVoxelRtBridgeFeatureRegistrations(), mod.BridgeFeatures...) {
+		if registration.PreRenderBatchedSystem == nil {
+			continue
+		}
+		app.UseSystem(
+			System(registration.PreRenderBatchedSystem).
+				InStage(PreRender).
+				RunAlways(),
+		)
+	}
+}
+
+func (mod VoxelRtModule) installBridgeSystemsAfterBatch(app *App) {
+	if app == nil {
+		return
+	}
+	for _, registration := range append(DefaultVoxelRtBridgeFeatureRegistrations(), mod.BridgeFeatures...) {
+		if registration.PreRenderAfterBatchSystem == nil {
+			continue
+		}
+		app.UseSystem(
+			System(registration.PreRenderAfterBatchSystem).
+				InStage(PreRender).
+				RunAlways(),
+		)
+	}
+}
+
+func (mod VoxelRtModule) installBridgeSystemsAfterUpdate(app *App) {
+	if app == nil {
+		return
+	}
+	for _, registration := range append(DefaultVoxelRtBridgeFeatureRegistrations(), mod.BridgeFeatures...) {
+		if registration.PreRenderAfterUpdateSystem == nil {
+			continue
+		}
+		app.UseSystem(
+			System(registration.PreRenderAfterUpdateSystem).
+				InStage(PreRender).
+				RunAlways(),
+		)
+	}
+}
+
+func (state *VoxelRtState) ensureBridgeFeatures() voxelRtBridgeRegistry {
+	if state == nil {
+		return nil
+	}
+	if state.bridgeFeatures == nil {
+		state.bridgeFeatures = voxelRtBridgeRegistryFrom(DefaultVoxelRtBridgeFeatureRegistrations())
+	}
+	return state.bridgeFeatures
+}
+
+func (state *VoxelRtState) bridgeFeatureEnabled(feature VoxelRtBridgeFeature) bool {
+	if state == nil || state.RtApp == nil {
+		return false
+	}
+	return state.ensureBridgeFeatures().enabled(state.RtApp, feature)
+}
+
 type caBudgetCameraView struct {
 	Position mgl32.Vec3
 	Forward  mgl32.Vec3
@@ -135,7 +253,7 @@ type caBudgetCameraView struct {
 }
 
 type caVolumeBudgetCandidate struct {
-	host              gpu_rt.CAVolumeHost
+	host              app_rt.CAVolumeInput
 	volume            *CellularVolumeComponent
 	rawSteps          uint32
 	scheduledSteps    uint32
@@ -317,7 +435,7 @@ func caVolumeBudgetPriority(candidate caVolumeBudgetCandidate) float32 {
 	return priority
 }
 
-func budgetCAVolumes(candidates []caVolumeBudgetCandidate, cfg gpu_rt.CAVolumeBudgetConfig) ([]gpu_rt.CAVolumeHost, uint32, uint32, uint32, uint32) {
+func budgetCAVolumes(candidates []caVolumeBudgetCandidate, cfg gpu_rt.CAVolumeBudgetConfig) ([]app_rt.CAVolumeInput, uint32, uint32, uint32, uint32) {
 	cfg = cfg.WithDefaults()
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].priority == candidates[j].priority {
@@ -398,7 +516,7 @@ func budgetCAVolumes(candidates []caVolumeBudgetCandidate, cfg gpu_rt.CAVolumeBu
 		candidates[i].volume._gpuStepsPending = remaining
 	}
 
-	hosts := make([]gpu_rt.CAVolumeHost, 0, len(selected))
+	hosts := make([]app_rt.CAVolumeInput, 0, len(selected))
 	for _, candidate := range selected {
 		hosts = append(hosts, candidate.host)
 	}
@@ -406,6 +524,132 @@ func budgetCAVolumes(candidates []caVolumeBudgetCandidate, cfg gpu_rt.CAVolumeBu
 		return hosts[i].EntityID < hosts[j].EntityID
 	})
 	return hosts, dropped, deferredCount, suspendedCount, totalSteps
+}
+
+func buildCAVolumeFrameInput(cmd *Commands, camera *core.CameraState, cfg gpu_rt.CAVolumeBudgetConfig, dt float32) app_rt.CAVolumeFrameInput {
+	cameraView := readCAVolumeBudgetCamera(cmd, camera)
+	caBudget := cfg.WithDefaults()
+	caCandidates := make([]caVolumeBudgetCandidate, 0, 8)
+	resolutionClampedCount := uint32(0)
+	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
+		if cv == nil || !cv.UsesGPUVolume() {
+			return true
+		}
+		candidate, resolutionClamped, ok := buildCAVolumeBudgetCandidate(eid, tr, cv, cameraView, caBudget)
+		if !ok {
+			return true
+		}
+		if resolutionClamped {
+			resolutionClampedCount++
+		}
+		caCandidates = append(caCandidates, candidate)
+		cv._dirty = false
+		return true
+	})
+
+	caVolumes, droppedCount, deferredCount, suspendedCount, totalSteps := budgetCAVolumes(caCandidates, caBudget)
+	return app_rt.CAVolumeFrameInput{
+		Volumes:                caVolumes,
+		DeltaTime:              dt,
+		UpdatePresets:          true,
+		RequestedVolumeCount:   uint32(len(caCandidates)),
+		ResolutionClampedCount: resolutionClampedCount,
+		DeferredStepCount:      deferredCount,
+		SuspendedVolumeCount:   suspendedCount,
+		DroppedVolumeCount:     droppedCount,
+		TotalScheduledSteps:    totalSteps,
+	}
+}
+
+func buildCAVolumeBudgetCandidate(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent, cameraView caBudgetCameraView, cfg gpu_rt.CAVolumeBudgetConfig) (caVolumeBudgetCandidate, bool, bool) {
+	if tr == nil || cv == nil || !cv.UsesGPUVolume() {
+		return caVolumeBudgetCandidate{}, false, false
+	}
+	renderDefaults := gpu_rt.CAVolumeRenderDefaultsFor(uint32(cv.Preset), uint32(cv.Type))
+	scatterColor := renderDefaults.ScatterColor
+	shadowTint := renderDefaults.ShadowTint
+	absorptionColor := renderDefaults.AbsorptionColor
+	extinction := renderDefaults.Extinction
+	emission := renderDefaults.Emission
+	if cv.UseAppearanceOverride {
+		scatterColor = cv.ScatterColor
+		extinction = cv.Extinction
+		emission = cv.Emission
+	}
+	if cv.UseShadowTintOverride {
+		shadowTint = cv.ShadowTint
+	}
+	if cv.UseAbsorptionOverride {
+		absorptionColor = cv.AbsorptionColor
+	}
+
+	resolution := [3]uint32{
+		uint32(max(1, cv.Resolution[0])),
+		uint32(max(1, cv.Resolution[1])),
+		uint32(max(1, cv.Resolution[2])),
+	}
+	resolution, resolutionClamped := clampCAVolumeResolution(resolution, cfg)
+	host := app_rt.CAVolumeInput{
+		EntityID:        uint32(eid),
+		Type:            uint32(cv.Type),
+		Preset:          uint32(cv.Preset),
+		Resolution:      resolution,
+		Position:        cv.VolumeOrigin(tr),
+		Rotation:        tr.Rotation,
+		VoxelScale:      mgl32.Vec3{VoxelSize * tr.Scale.X(), VoxelSize * tr.Scale.Y(), VoxelSize * tr.Scale.Z()},
+		Intensity:       cv.CurrentIntensity(),
+		Diffusion:       cv.Diffusion,
+		Buoyancy:        cv.Buoyancy,
+		Cooling:         cv.Cooling,
+		Dissipation:     cv.Dissipation,
+		Extinction:      extinction,
+		Emission:        emission,
+		StepsPending:    float32(cv._gpuStepsPending),
+		StepDt:          1.0 / max(cv.TickRate, 1.0),
+		ScatterColor:    scatterColor,
+		ShadowTint:      shadowTint,
+		AbsorptionColor: absorptionColor,
+	}
+	rawSteps := cv._gpuStepsPending
+	scheduledSteps, stepDeferred, suspended := scheduleCAVolumeSteps(rawSteps, 0, false, cfg)
+	distance := float32(0)
+	behindCamera := false
+	if cameraView.Valid {
+		offset := host.Position.Sub(cameraView.Position)
+		distance = offset.Len()
+		if distance > 0.001 {
+			behindCamera = offset.Normalize().Dot(cameraView.Forward) < cfg.BehindCameraDot
+		}
+		scheduledSteps, stepDeferred, suspended = scheduleCAVolumeSteps(rawSteps, distance, behindCamera, cfg)
+	}
+
+	candidate := caVolumeBudgetCandidate{
+		host:              host,
+		volume:            cv,
+		rawSteps:          rawSteps,
+		scheduledSteps:    scheduledSteps,
+		distance:          distance,
+		visible:           host.Intensity > 0.001,
+		behindCamera:      behindCamera,
+		resolutionClamped: resolutionClamped,
+		stepDeferred:      stepDeferred,
+		suspended:         suspended,
+	}
+	candidate.priority = caVolumeBudgetPriority(candidate)
+	return candidate, resolutionClamped, true
+}
+
+func clearVoxelRtCAVolumeSceneObjects(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	for eid, obj := range state.caVolumeMap {
+		if state.RtApp.Scene != nil {
+			state.RtApp.Scene.RemoveObject(obj)
+		}
+		delete(state.caVolumeMap, eid)
+		delete(state.objectToEntity, obj)
+	}
 }
 
 func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands, waterInteractions *WaterInteractionState) {
@@ -446,6 +690,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		displayGeometryID := geometryID
 		displayGeometryAsset := geometryAsset
 		scaleAdjustX, scaleAdjustY, scaleAdjustZ := float32(1), float32(1), float32(1)
+		spriteBridgeEnabled := state.bridgeFeatureEnabled(voxelRtBridgeFeatureSprites)
 		if selection, ok := state.entityLODSelections[entityId]; ok {
 			switch selection.Representation {
 			case EntityLODRepresentationSimplifiedVoxel:
@@ -456,19 +701,23 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 					scaleAdjustX, scaleAdjustY, scaleAdjustZ = entityLODProxyScaleAdjust(geometryAsset, simplifiedAsset)
 				}
 			case EntityLODRepresentationImpostor:
-				sprite, spriteOK := buildEntityLODImpostorSprite(state, server, transform, vox, geometryID, geometryAsset)
-				if !spriteOK {
-					sprite, spriteOK = buildEntityLODDotSprite(state, server, transform, vox, geometryAsset)
-				}
-				if spriteOK {
-					state.runtimeSprites = append(state.runtimeSprites, sprite)
-					return true
+				if spriteBridgeEnabled {
+					sprite, spriteOK := buildEntityLODImpostorSprite(state, server, transform, vox, geometryID, geometryAsset)
+					if !spriteOK {
+						sprite, spriteOK = buildEntityLODDotSprite(state, server, transform, vox, geometryAsset)
+					}
+					if spriteOK {
+						state.runtimeSprites = append(state.runtimeSprites, sprite)
+						return true
+					}
 				}
 			case EntityLODRepresentationDot:
-				sprite, spriteOK := buildEntityLODDotSprite(state, server, transform, vox, geometryAsset)
-				if spriteOK {
-					state.runtimeSprites = append(state.runtimeSprites, sprite)
-					return true
+				if spriteBridgeEnabled {
+					sprite, spriteOK := buildEntityLODDotSprite(state, server, transform, vox, geometryAsset)
+					if spriteOK {
+						state.runtimeSprites = append(state.runtimeSprites, sprite)
+						return true
+					}
 				}
 			}
 		}
@@ -576,138 +825,37 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 	state.RtApp.Profiler.EndScope("Sync Instances")
 
-	// Init CA presets
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateCAPresets()
-	}
-
-	// CA volumetrics: smoke/fire are simulated on GPU and rendered as raymarched volumes.
-	state.RtApp.Profiler.BeginScope("Sync CA")
-	currentCA := make(map[EntityId]bool)
-	cameraView := readCAVolumeBudgetCamera(cmd, state.RtApp.Camera)
-	caBudget := state.RtApp.FeatureConfig.CAVolumes.WithDefaults()
-	caCandidates := make([]caVolumeBudgetCandidate, 0, 8)
-	resolutionClampedCount := uint32(0)
-	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
-		if cv == nil || !cv.UsesGPUVolume() {
-			return true
-		}
-		currentCA[eid] = true
-
-		if obj, exists := state.caVolumeMap[eid]; exists {
-			state.RtApp.Scene.RemoveObject(obj)
-			delete(state.caVolumeMap, eid)
-			delete(state.objectToEntity, obj)
-		}
-
-		renderDefaults := gpu_rt.CAVolumeRenderDefaultsFor(uint32(cv.Preset), uint32(cv.Type))
-		scatterColor := renderDefaults.ScatterColor
-		shadowTint := renderDefaults.ShadowTint
-		absorptionColor := renderDefaults.AbsorptionColor
-		extinction := renderDefaults.Extinction
-		emission := renderDefaults.Emission
-		if cv.UseAppearanceOverride {
-			scatterColor = cv.ScatterColor
-			extinction = cv.Extinction
-			emission = cv.Emission
-		}
-		if cv.UseShadowTintOverride {
-			shadowTint = cv.ShadowTint
-		}
-		if cv.UseAbsorptionOverride {
-			absorptionColor = cv.AbsorptionColor
-		}
-
-		resolution := [3]uint32{
-			uint32(max(1, cv.Resolution[0])),
-			uint32(max(1, cv.Resolution[1])),
-			uint32(max(1, cv.Resolution[2])),
-		}
-		resolution, resolutionClamped := clampCAVolumeResolution(resolution, caBudget)
-		if resolutionClamped {
-			resolutionClampedCount++
-		}
-
-		host := gpu_rt.CAVolumeHost{
-			EntityID:        uint32(eid),
-			Type:            uint32(cv.Type),
-			Preset:          uint32(cv.Preset),
-			Resolution:      resolution,
-			Position:        cv.VolumeOrigin(tr),
-			Rotation:        tr.Rotation,
-			VoxelScale:      mgl32.Vec3{VoxelSize * tr.Scale.X(), VoxelSize * tr.Scale.Y(), VoxelSize * tr.Scale.Z()},
-			Intensity:       cv.CurrentIntensity(),
-			Diffusion:       cv.Diffusion,
-			Buoyancy:        cv.Buoyancy,
-			Cooling:         cv.Cooling,
-			Dissipation:     cv.Dissipation,
-			Extinction:      extinction,
-			Emission:        emission,
-			StepsPending:    float32(cv._gpuStepsPending),
-			StepDt:          1.0 / max(cv.TickRate, 1.0),
-			ScatterColor:    scatterColor,
-			ShadowTint:      shadowTint,
-			AbsorptionColor: absorptionColor,
-		}
-		rawSteps := cv._gpuStepsPending
-		scheduledSteps, stepDeferred, suspended := scheduleCAVolumeSteps(rawSteps, 0, false, caBudget)
-		distance := float32(0)
-		behindCamera := false
-		if cameraView.Valid {
-			offset := host.Position.Sub(cameraView.Position)
-			distance = offset.Len()
-			if distance > 0.001 {
-				behindCamera = offset.Normalize().Dot(cameraView.Forward) < caBudget.BehindCameraDot
-			}
-			scheduledSteps, stepDeferred, suspended = scheduleCAVolumeSteps(rawSteps, distance, behindCamera, caBudget)
-		}
-
-		candidate := caVolumeBudgetCandidate{
-			host:              host,
-			volume:            cv,
-			rawSteps:          rawSteps,
-			scheduledSteps:    scheduledSteps,
-			distance:          distance,
-			visible:           host.Intensity > 0.001,
-			behindCamera:      behindCamera,
-			resolutionClamped: resolutionClamped,
-			stepDeferred:      stepDeferred,
-			suspended:         suspended,
-		}
-		candidate.priority = caVolumeBudgetPriority(candidate)
-		caCandidates = append(caCandidates, candidate)
-		cv._dirty = false
-
-		return true
+	state.RtApp.Profiler.BeginScope("Sync Lights")
+	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
+		state.RtApp.Camera.Position = camera.Position
+		state.RtApp.Camera.LookAt = camera.LookAt
+		state.RtApp.Camera.Up = camera.Up
+		state.RtApp.Camera.Yaw = mgl32.DegToRad(camera.Yaw)
+		state.RtApp.Camera.Pitch = mgl32.DegToRad(camera.Pitch)
+		state.RtApp.Camera.Fov = camera.Fov
+		state.RtApp.Camera.Near = camera.Near
+		state.RtApp.Camera.Far = camera.Far
+		state.RtApp.Camera.DepthMode = camera.DepthMode.Normalized()
+		return false
 	})
-	for eid, obj := range state.caVolumeMap {
-		if !currentCA[eid] {
-			state.RtApp.Scene.RemoveObject(obj)
-			delete(state.caVolumeMap, eid)
-			delete(state.objectToEntity, obj)
-		}
-	}
-	gpuVolumes, droppedCount, deferredCount, suspendedCount, totalSteps := budgetCAVolumes(caCandidates, caBudget)
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.CARequestedVolumeCount = uint32(len(caCandidates))
-		state.RtApp.BufferManager.CAResolutionClampedCount = resolutionClampedCount
-		state.RtApp.BufferManager.CADeferredStepVolumeCount = deferredCount
-		state.RtApp.BufferManager.CASuspendedVolumeCount = suspendedCount
-		state.RtApp.BufferManager.CADroppedVolumeCount = droppedCount
-		state.RtApp.BufferManager.CATotalScheduledSteps = totalSteps
-		state.RtApp.BufferManager.UpdateCAVolumes(gpuVolumes)
-		state.RtApp.BufferManager.UpdateCAParams(float32(t.Dt))
-	}
-	state.RtApp.Profiler.EndScope("Sync CA")
+	syncVoxelRtLights(state, cmd)
+}
 
-	state.RtApp.Profiler.BeginScope("Sync Media")
-	gpuMedia := make([]gpu_rt.AnalyticMediumHost, 0, 4)
+func buildAnalyticMediumInputs(cmd *Commands, t *Time) []app_rt.AnalyticMediumInput {
+	mediaInputs := make([]app_rt.AnalyticMediumInput, 0, 4)
+	if cmd == nil {
+		return mediaInputs
+	}
+	cloudTime := float32(0)
+	if t != nil {
+		cloudTime = float32(t.Elapsed)
+	}
 	MakeQuery2[TransformComponent, AnalyticMediumComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, medium *AnalyticMediumComponent) bool {
 		if medium == nil || tr == nil || !medium.Enabled() {
 			return true
 		}
 
-		gpuMedia = append(gpuMedia, gpu_rt.AnalyticMediumHost{
+		mediaInputs = append(mediaInputs, app_rt.AnalyticMediumInput{
 			EntityID:                  uint32(eid),
 			Shape:                     uint32(medium.NormalizedShape()),
 			Position:                  medium.WorldCenter(tr),
@@ -741,88 +889,73 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			SampleCount:               uint32(medium.NormalizedSampleCount()),
 			CloudBlockSize:            medium.CloudBlockSize,
 			CloudThreshold:            medium.CloudThreshold,
-			CloudTime:                 float32(t.Elapsed) * medium.CloudSpeed,
+			CloudTime:                 cloudTime * medium.CloudSpeed,
 			CloudAltitudeSteps:        medium.CloudAltitudeSteps,
 		})
 		return true
 	})
-	sort.Slice(gpuMedia, func(i, j int) bool {
-		return gpuMedia[i].EntityID < gpuMedia[j].EntityID
+	sort.Slice(mediaInputs, func(i, j int) bool {
+		return mediaInputs[i].EntityID < mediaInputs[j].EntityID
 	})
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateAnalyticMedia(gpuMedia)
+	return mediaInputs
+}
+
+func voxelRtBatchEndSystem(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
 	}
-	state.RtApp.Profiler.EndScope("Sync Media")
-
-	state.RtApp.Profiler.BeginScope("Sync Planet Bodies")
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdatePlanetBodiesWithSurfacePreloads(buildPlanetBodyHosts(cmd), buildPlanetBodySurfacePreloads(cmd))
-	}
-	state.RtApp.Profiler.EndScope("Sync Planet Bodies")
-
-	state.RtApp.Profiler.BeginScope("Sync Astronomical")
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateAstronomicalBodies(buildAstronomicalBodyHosts(cmd))
-	}
-	state.RtApp.Profiler.EndScope("Sync Astronomical")
-
-	state.RtApp.Profiler.BeginScope("Sync Far Planet Rings")
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateFarPlanetRings(buildFarPlanetRingHosts(cmd))
-	}
-	state.RtApp.Profiler.EndScope("Sync Far Planet Rings")
-
-	state.RtApp.Profiler.BeginScope("Sync Midfield Debris")
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateDebrisMidfieldCells(buildDebrisMidfieldHosts(cmd))
-	}
-	state.RtApp.Profiler.EndScope("Sync Midfield Debris")
-
-	state.RtApp.Profiler.BeginScope("Sync Water")
-	if state.RtApp.BufferManager != nil {
-		waterHosts, rippleHosts := buildWaterSurfaceHosts(cmd, waterInteractions)
-		state.RtApp.BufferManager.UpdateWaterSurfaces(waterHosts, rippleHosts, float32(t.Dt))
-	}
-	state.RtApp.Profiler.EndScope("Sync Water")
-
-	state.RtApp.Profiler.BeginScope("Sync Lights")
-	MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
-		state.RtApp.Camera.Position = camera.Position
-		state.RtApp.Camera.LookAt = camera.LookAt
-		state.RtApp.Camera.Up = camera.Up
-		state.RtApp.Camera.Yaw = mgl32.DegToRad(camera.Yaw)
-		state.RtApp.Camera.Pitch = mgl32.DegToRad(camera.Pitch)
-		state.RtApp.Camera.Fov = camera.Fov
-		state.RtApp.Camera.Near = camera.Near
-		state.RtApp.Camera.Far = camera.Far
-		state.RtApp.Camera.DepthMode = camera.DepthMode.Normalized()
-		return false
-	})
-	// Sync text
-	MakeQuery1[TextComponent](cmd).Map(func(entityId EntityId, text *TextComponent) bool {
-		state.RtApp.DrawText(text.Text, text.Position[0], text.Position[1], text.Scale, text.Color)
-		return true
-	})
-
-	syncVoxelRtLights(state, cmd)
-
-	state.RtApp.Profiler.BeginScope("Sync Gizmos")
-	syncVoxelRtGizmos(state, cmd)
-	state.RtApp.Profiler.EndScope("Sync Gizmos")
-
 	state.RtApp.Profiler.BeginScope("GPU Batch")
-	// End batching and process all accumulated updates
+	defer state.RtApp.Profiler.EndScope("GPU Batch")
+
 	if state.RtApp.BufferManager != nil {
 		state.RtApp.BufferManager.EndBatch()
 	}
-	state.RtApp.Profiler.EndScope("GPU Batch")
+}
+
+func voxelRtAnalyticMediaBridgeSystem(state *VoxelRtState, t *Time, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureAnalyticMedia) {
+		syncVoxelRtAnalyticMedia(state, t, cmd)
+	} else {
+		clearVoxelRtAnalyticMedia(state)
+	}
+}
+
+func voxelRtCAVolumeBridgeSystem(state *VoxelRtState, t *Time, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureCAVolumes) {
+		syncVoxelRtCAVolumes(state, t, cmd)
+	} else {
+		clearVoxelRtCAVolumes(state)
+	}
+}
+
+func voxelRtParticlesBridgeSystem(state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureParticles) {
+		syncVoxelRtParticles(state, server, t, cmd)
+	} else {
+		clearVoxelRtParticles(state)
+	}
+}
+
+func syncVoxelRtParticles(state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands) {
+	if state == nil || state.RtApp == nil || t == nil {
+		return
+	}
 
 	state.RtApp.Profiler.BeginScope("Sync Particles")
-	// Sync GPU emitters and spawn requests
-	spawnReqs, emitters, emitterCount, atlasId := particlesSync(state, t, cmd)
+	defer state.RtApp.Profiler.EndScope("Sync Particles")
 
-	// Update Particle Atlas if provided by user code and changed
-	if atlasId != (AssetId{}) && atlasId != state.lastParticleAtlas {
+	spawnReqs, emitters, atlasId := particlesSync(state, t, cmd)
+
+	if atlasId != (AssetId{}) && atlasId != state.lastParticleAtlas && server != nil {
 		if texAsset, ok := server.textures[atlasId]; ok {
 			state.RtApp.SetParticleAtlas(texAsset.Texels, texAsset.Width, texAsset.Height)
 			state.lastParticleAtlas = atlasId
@@ -831,20 +964,42 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	vSize := VoxelSize
 	invVsize := 1.0 / vSize
-	state.RtApp.ParticleSpawnCount = uint32(len(spawnReqs))
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateParticleParams(float32(t.Dt), float32(invVsize), uint32(time.Now().UnixNano()), emitterCount, state.RtApp.Camera.Position)
-		pRecreated := state.RtApp.BufferManager.UpdateParticles(1000000, emitters) // Pass max count
-		state.RtApp.BufferManager.UpdateSpawnRequests(spawnReqs)
-		if pRecreated || state.RtApp.BufferManager.ParticlesBindGroup0 == nil || state.RtApp.BufferManager.ParticleSimBG0 == nil {
-			state.RtApp.BufferManager.CreateParticleSimBindGroups()
-			state.RtApp.BufferManager.CreateParticlesBindGroups(state.RtApp.ParticlesPipeline)
-		}
+	state.RtApp.ApplyParticleInput(app_rt.ParticleFrameInput{
+		DeltaTime:     float32(t.Dt),
+		InvVoxelSize:  float32(invVsize),
+		MaxParticles:  app_rt.DefaultParticleMaxCount,
+		SpawnRequests: spawnReqs,
+		Emitters:      emitters,
+	})
+}
+
+func clearVoxelRtParticles(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	state.RtApp.ClearParticleInput()
+}
+
+func voxelRtSpritesBridgeSystem(state *VoxelRtState, server *AssetServer, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureSprites) {
+		syncVoxelRtSprites(state, server, cmd)
+	} else {
+		clearVoxelRtSprites(state)
+	}
+}
+
+func syncVoxelRtSprites(state *VoxelRtState, server *AssetServer, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
 	}
 
 	state.RtApp.Profiler.BeginScope("Sync Sprites")
-	// Sync GPU sprites
-	spriteBytes, spriteCount, spriteBatches := spritesSync(state, cmd)
+	defer state.RtApp.Profiler.EndScope("Sync Sprites")
+
+	spriteInstances, spriteBatches := spritesSync(state, cmd)
 	seenSpriteAtlases := make(map[string]struct{}, len(spriteBatches))
 	for _, batch := range spriteBatches {
 		if batch.AtlasKey == "" {
@@ -865,38 +1020,224 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			)
 		}
 	}
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.UpdateSprites(spriteBytes, spriteCount)
+	state.RtApp.ApplySpriteInput(spriteInstances, spriteBatches)
+}
+
+func clearVoxelRtSprites(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
 	}
-	gpuSpriteBatches := make([]gpu_rt.SpriteBatchDesc, 0, len(spriteBatches))
-	for _, batch := range spriteBatches {
-		gpuSpriteBatches = append(gpuSpriteBatches, gpu_rt.SpriteBatchDesc{
-			AtlasKey:      batch.AtlasKey,
-			FirstInstance: batch.FirstInstance,
-			InstanceCount: batch.InstanceCount,
-		})
+	state.RtApp.ClearSpriteInput()
+}
+
+func syncVoxelRtCAVolumes(state *VoxelRtState, t *Time, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
 	}
-	if state.RtApp.BufferManager != nil {
-		state.RtApp.BufferManager.SyncSpriteBatches(state.RtApp.SpritesPipeline, gpuSpriteBatches)
+
+	state.RtApp.Profiler.BeginScope("Sync CA")
+	defer state.RtApp.Profiler.EndScope("Sync CA")
+
+	dt := float32(0)
+	if t != nil {
+		dt = float32(t.Dt)
 	}
-	state.RtApp.Profiler.EndScope("Sync Sprites")
+	input := buildCAVolumeFrameInput(cmd, state.RtApp.Camera, state.RtApp.FeatureConfig.CAVolumes, dt)
+	clearVoxelRtCAVolumeSceneObjects(state)
+	state.RtApp.ApplyCAVolumeInput(input)
+}
+
+func clearVoxelRtCAVolumes(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	clearVoxelRtCAVolumeSceneObjects(state)
+	state.RtApp.ClearCAVolumeInput()
+}
+
+func syncVoxelRtAnalyticMedia(state *VoxelRtState, t *Time, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+
+	state.RtApp.Profiler.BeginScope("Sync Media")
+	defer state.RtApp.Profiler.EndScope("Sync Media")
+
+	state.RtApp.ApplyAnalyticMediumInput(buildAnalyticMediumInputs(cmd, t))
+}
+
+func clearVoxelRtAnalyticMedia(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	state.RtApp.ClearAnalyticMediumInput()
+}
+
+func voxelRtPlanetBodyBridgeSystem(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeaturePlanetBodies) {
+		syncVoxelRtPlanetBodies(state, cmd)
+	} else {
+		clearVoxelRtPlanetBodies(state)
+	}
+}
+
+func syncVoxelRtPlanetBodies(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+
+	state.RtApp.Profiler.BeginScope("Sync Planet Bodies")
+	defer state.RtApp.Profiler.EndScope("Sync Planet Bodies")
+
+	state.RtApp.ApplyPlanetBodyInput(buildPlanetBodyInputs(cmd), buildPlanetBodySurfacePreloadInputs(cmd))
+}
+
+func clearVoxelRtPlanetBodies(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	state.RtApp.ClearPlanetBodyInput()
+}
+
+func voxelRtAstronomicalBridgeSystem(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureAstronomical) {
+		syncVoxelRtAstronomical(state, cmd)
+	} else {
+		clearVoxelRtAstronomical(state)
+	}
+}
+
+func syncVoxelRtAstronomical(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+
+	state.RtApp.Profiler.BeginScope("Sync Astronomical")
+	defer state.RtApp.Profiler.EndScope("Sync Astronomical")
+
+	state.RtApp.ApplyAstronomicalInput(buildAstronomicalBodyInputs(cmd))
+}
+
+func clearVoxelRtAstronomical(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	state.RtApp.ClearAstronomicalInput()
+}
+
+func voxelRtFarPlanetRingBridgeSystem(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureFarPlanetRings) {
+		syncVoxelRtFarPlanetRings(state, cmd)
+	} else {
+		clearVoxelRtFarPlanetRings(state)
+	}
+}
+
+func syncVoxelRtFarPlanetRings(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+
+	state.RtApp.Profiler.BeginScope("Sync Far Planet Rings")
+	defer state.RtApp.Profiler.EndScope("Sync Far Planet Rings")
+
+	state.RtApp.ApplyFarPlanetRingInput(buildFarPlanetRingInputs(cmd))
+}
+
+func clearVoxelRtFarPlanetRings(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	state.RtApp.ClearFarPlanetRingInput()
+}
+
+func voxelRtDebrisMidfieldBridgeSystem(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureDebrisMidfield) {
+		syncVoxelRtDebrisMidfield(state, cmd)
+	} else {
+		clearVoxelRtDebrisMidfield(state)
+	}
+}
+
+func syncVoxelRtDebrisMidfield(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+
+	state.RtApp.Profiler.BeginScope("Sync Midfield Debris")
+	defer state.RtApp.Profiler.EndScope("Sync Midfield Debris")
+
+	state.RtApp.ApplyDebrisMidfieldInput(buildDebrisMidfieldInputs(cmd))
+}
+
+func clearVoxelRtDebrisMidfield(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	state.RtApp.ClearDebrisMidfieldInput()
+}
+
+func voxelRtWaterBridgeSystem(state *VoxelRtState, t *Time, cmd *Commands, waterInteractions *WaterInteractionState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureWater) {
+		syncVoxelRtWater(state, t, cmd, waterInteractions)
+	} else {
+		clearVoxelRtWater(state)
+	}
+}
+
+func syncVoxelRtWater(state *VoxelRtState, t *Time, cmd *Commands, waterInteractions *WaterInteractionState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+
+	state.RtApp.Profiler.BeginScope("Sync Water")
+	defer state.RtApp.Profiler.EndScope("Sync Water")
+
+	dt := float32(0)
+	if t != nil {
+		dt = float32(t.Dt)
+	}
+	waterHosts, rippleHosts := buildWaterSurfaceInputs(cmd, waterInteractions)
+	state.RtApp.ApplyWaterInput(waterHosts, rippleHosts, dt)
+}
+
+func clearVoxelRtWater(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	state.RtApp.ClearWaterInput()
 }
 
 func voxelObjectAllowsOcclusion(cmd *Commands, entityId EntityId, vox *VoxelModelComponent) bool {
 	return true
 }
 
-func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
-	hosts := make([]gpu_rt.PlanetBodyHost, 0, 4)
+func buildPlanetBodyInputs(cmd *Commands) []app_rt.PlanetBodyInput {
+	inputs := make([]app_rt.PlanetBodyInput, 0, 4)
 	if cmd == nil {
-		return hosts
+		return inputs
 	}
 	MakeQuery2[TransformComponent, PlanetBodyComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, planet *PlanetBodyComponent) bool {
 		if planet == nil || tr == nil || !planet.Enabled() {
 			return true
 		}
-		bakedSurfaceSamples, bakedSurfaceID := planetBakedSurfaceHostSlice(planet.BakedSurfaceSamples)
-		hosts = append(hosts, gpu_rt.PlanetBodyHost{
+		bakedSurfaceSamples, bakedSurfaceID := planetBakedSurfaceInputSlice(planet.BakedSurfaceSamples)
+		inputs = append(inputs, app_rt.PlanetBodyInput{
 			EntityID:               uint32(eid),
 			Seed:                   planet.Seed,
 			Position:               planet.WorldCenter(tr),
@@ -930,24 +1271,24 @@ func buildPlanetBodyHosts(cmd *Commands) []gpu_rt.PlanetBodyHost {
 		})
 		return true
 	})
-	sort.Slice(hosts, func(i, j int) bool {
-		return hosts[i].EntityID < hosts[j].EntityID
+	sort.Slice(inputs, func(i, j int) bool {
+		return inputs[i].EntityID < inputs[j].EntityID
 	})
-	return hosts
+	return inputs
 }
 
-func planetBakedSurfaceHostSlice(samples []PlanetBakedSurfaceSample) ([]gpu_rt.PlanetBakedSurfaceSampleHost, uintptr) {
+func planetBakedSurfaceInputSlice(samples []PlanetBakedSurfaceSample) ([]app_rt.PlanetBakedSurfaceSampleInput, uintptr) {
 	if len(samples) == 0 {
 		return nil, 0
 	}
 	ptr := unsafe.Pointer(unsafe.SliceData(samples))
-	return unsafe.Slice((*gpu_rt.PlanetBakedSurfaceSampleHost)(ptr), len(samples)), uintptr(ptr)
+	return unsafe.Slice((*app_rt.PlanetBakedSurfaceSampleInput)(ptr), len(samples)), uintptr(ptr)
 }
 
-func buildPlanetBodySurfacePreloads(cmd *Commands) []gpu_rt.PlanetBodySurfaceHost {
-	hosts := make([]gpu_rt.PlanetBodySurfaceHost, 0, 2)
+func buildPlanetBodySurfacePreloadInputs(cmd *Commands) []app_rt.PlanetBodySurfaceInput {
+	inputs := make([]app_rt.PlanetBodySurfaceInput, 0, 2)
 	if cmd == nil {
-		return hosts
+		return inputs
 	}
 	MakeQuery1[PlanetBodySurfacePreloadComponent](cmd).Map(func(_ EntityId, preload *PlanetBodySurfacePreloadComponent) bool {
 		if preload == nil {
@@ -957,15 +1298,15 @@ func buildPlanetBodySurfacePreloads(cmd *Commands) []gpu_rt.PlanetBodySurfaceHos
 		if count <= 0 || len(preload.BakedSurfaceSamples) < count {
 			return true
 		}
-		bakedSurfaceSamples, bakedSurfaceID := planetBakedSurfaceHostSlice(preload.BakedSurfaceSamples[:count])
-		hosts = append(hosts, gpu_rt.PlanetBodySurfaceHost{
+		bakedSurfaceSamples, bakedSurfaceID := planetBakedSurfaceInputSlice(preload.BakedSurfaceSamples[:count])
+		inputs = append(inputs, app_rt.PlanetBodySurfaceInput{
 			BakedSurfaceResolution: uint32(preload.NormalizedBakedSurfaceResolution()),
 			BakedSurfaceSamples:    bakedSurfaceSamples,
 			BakedSurfaceID:         bakedSurfaceID,
 		})
 		return true
 	})
-	return hosts
+	return inputs
 }
 
 func entityLODScaleVector(base mgl32.Vec3, adjustX, adjustY, adjustZ float32) mgl32.Vec3 {
@@ -1331,9 +1672,17 @@ func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *C
 	state.RtApp.Profiler.BeginScope("RT Update")
 	state.RtApp.Update()
 	state.RtApp.Profiler.EndScope("RT Update")
+}
 
-	// Skybox Sync & Generation
-	state.syncSkybox(cmd, time)
+func voxelRtSkyboxBridgeSystem(state *VoxelRtState, time *Time, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureSkybox) {
+		state.syncSkybox(cmd, time)
+	} else {
+		state.clearSkybox()
+	}
 }
 
 func voxelRtRenderSystem(cmd *Commands, state *VoxelRtState, prof *Profiler) {
@@ -1353,33 +1702,93 @@ func voxelRtDebugSystem(input *Input, state *VoxelRtState) {
 	}
 }
 
+func voxelRtTextBridgeSystem(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureText) {
+		syncVoxelRtText(state, cmd)
+	}
+}
+
+func syncVoxelRtText(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil || cmd == nil {
+		return
+	}
+	state.RtApp.AppendTextOverlayItems(buildTextBridgeItems(cmd))
+}
+
+func buildTextBridgeItems(cmd *Commands) []app_rt.TextOverlayItem {
+	if cmd == nil {
+		return nil
+	}
+	items := make([]app_rt.TextOverlayItem, 0)
+	MakeQuery1[TextComponent](cmd).Map(func(entityId EntityId, text *TextComponent) bool {
+		items = append(items, app_rt.TextOverlayItem{
+			Text:     text.Text,
+			Position: text.Position,
+			Scale:    text.Scale,
+			Color:    text.Color,
+		})
+		return true
+	})
+	return items
+}
+
+func voxelRtGizmoBridgeSystem(state *VoxelRtState, cmd *Commands) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureGizmos) {
+		state.RtApp.Profiler.BeginScope("Sync Gizmos")
+		syncVoxelRtGizmos(state, cmd)
+		state.RtApp.Profiler.EndScope("Sync Gizmos")
+	} else {
+		clearVoxelRtGizmos(state)
+	}
+}
+
+func clearVoxelRtGizmos(state *VoxelRtState) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	state.RtApp.ClearGizmoOverlayItems()
+}
+
 func syncVoxelRtGizmos(state *VoxelRtState, cmd *Commands) {
-	if state == nil || state.RtApp == nil || state.RtApp.Scene == nil {
+	if state == nil || state.RtApp == nil {
 		return
 	}
 
-	state.RtApp.Scene.Gizmos = state.RtApp.Scene.Gizmos[:0]
-	if state.DebugOverlayMode() == VoxelRtDebugModeScene {
+	state.RtApp.SetGizmoOverlayItems(buildGizmoBridgeItems(cmd, state.DebugOverlayMode() == VoxelRtDebugModeScene))
+}
+
+func buildGizmoBridgeItems(cmd *Commands, includeLightHelpers bool) []app_rt.GizmoOverlayItem {
+	if cmd == nil {
+		return nil
+	}
+	items := make([]app_rt.GizmoOverlayItem, 0)
+	if includeLightHelpers {
 		// Automatic light gizmos (engine helpers shown in Scene Debug mode)
 		MakeQuery2[LightComponent, TransformComponent](cmd).Map(func(eid EntityId, l *LightComponent, tr *TransformComponent) bool {
 			if l.Type == LightTypeAmbient {
 				return true
 			}
 			color := [4]float32{l.Color[0], l.Color[1], l.Color[2], 0.8}
-			rtGizmo := core.Gizmo{
+			rtGizmo := app_rt.GizmoOverlayItem{
 				Type:  core.GizmoSphere,
 				Color: color,
 			}
 			modelMat := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z()).Mul4(mgl32.Scale3D(1.0, 1.0, 1.0))
 			rtGizmo.ModelMatrix = modelMat
-			state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtGizmo)
+			items = append(items, rtGizmo)
 			return true
 		})
 	}
 
 	// Always sync user-defined GizmoComponents
 	MakeQuery2[GizmoComponent, TransformComponent](cmd).Map(func(eid EntityId, g *GizmoComponent, tr *TransformComponent) bool {
-		rtGizmo := core.Gizmo{
+		rtGizmo := app_rt.GizmoOverlayItem{
 			Type:  core.GizmoType(g.Type),
 			Color: g.Color,
 		}
@@ -1397,15 +1806,15 @@ func syncVoxelRtGizmos(state *VoxelRtState, cmd *Commands) {
 
 				lx := mgl32.Translate3D(offset, 0, -halfSize)
 				sz := mgl32.Scale3D(1, 1, g.Size)
-				rtLineZ := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
+				rtLineZ := app_rt.GizmoOverlayItem{Type: core.GizmoLine, Color: g.Color}
 				rtLineZ.ModelMatrix = tr.ObjectToWorld().Mul4(lx).Mul4(sz)
-				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineZ)
+				items = append(items, rtLineZ)
 
 				lz := mgl32.Translate3D(-halfSize, 0, offset)
 				rx := mgl32.QuatRotate(mgl32.DegToRad(90), mgl32.Vec3{0, 1, 0}).Mat4()
-				rtLineX := core.Gizmo{Type: core.GizmoLine, Color: g.Color}
+				rtLineX := app_rt.GizmoOverlayItem{Type: core.GizmoLine, Color: g.Color}
 				rtLineX.ModelMatrix = tr.ObjectToWorld().Mul4(lz).Mul4(rx).Mul4(sz)
-				state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtLineX)
+				items = append(items, rtLineX)
 			}
 			return true
 		}
@@ -1418,7 +1827,8 @@ func syncVoxelRtGizmos(state *VoxelRtState, cmd *Commands) {
 		}
 
 		rtGizmo.ModelMatrix = modelMat
-		state.RtApp.Scene.Gizmos = append(state.RtApp.Scene.Gizmos, rtGizmo)
+		items = append(items, rtGizmo)
 		return true
 	})
+	return items
 }

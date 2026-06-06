@@ -128,6 +128,6 @@ func (a *App) setupWaterPipeline() {
 		return
 	}
 
-	a.WaterPipeline = pipeline
-	a.BufferManager.CreateWaterBindGroups(a.WaterPipeline)
+	a.WaterResources = &WaterResources{Pipeline: pipeline}
+	a.BufferManager.CreateWaterBindGroups(pipeline)
 }

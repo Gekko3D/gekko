@@ -3,11 +3,14 @@ package gekko
 import (
 	"sort"
 
-	"github.com/gekko3d/gekko/voxelrt/rt/gpu"
+	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
 func (s *VoxelRtState) syncSkybox(cmd *Commands, time *Time) {
+	if s == nil || s.RtApp == nil {
+		return
+	}
 	s.RtApp.Profiler.BeginScope("Sync Skybox")
 	defer s.RtApp.Profiler.EndScope("Sync Skybox")
 
@@ -27,7 +30,10 @@ func (s *VoxelRtState) syncSkybox(cmd *Commands, time *Time) {
 		DiskEnd:                0.9999,
 	}
 
-	dt := float32(time.Dt)
+	dt := float32(0)
+	if time != nil {
+		dt = float32(time.Dt)
+	}
 
 	MakeQuery1[SkyboxLayerComponent](cmd).Map(func(eid EntityId, layer *SkyboxLayerComponent) bool {
 		// Update animation offset
@@ -65,27 +71,45 @@ func (s *VoxelRtState) syncSkybox(cmd *Commands, time *Time) {
 	if layersChanged {
 		s.skyboxLayers = currentLayers
 		s.skyboxSun = currentSun
-		s.rebuildSkybox()
+		if input, ok := buildSkyboxBridgeInput(s.skyboxLayers, s.skyboxSun); ok {
+			s.RtApp.SetSkyboxInput(input)
+		} else {
+			s.RtApp.ClearSkyboxInput()
+		}
 	}
 }
 
-func (s *VoxelRtState) rebuildSkybox() {
-	// Sort layers by priority
-	type layerInfo struct {
-		eid   EntityId
-		layer SkyboxLayerComponent
-	}
-	sorted := make([]layerInfo, 0, len(s.skyboxLayers))
-	for eid, l := range s.skyboxLayers {
-		sorted = append(sorted, layerInfo{eid, l})
-	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].layer.Priority < sorted[j].layer.Priority
-	})
-
-	if len(sorted) == 0 {
+func (s *VoxelRtState) clearSkybox() {
+	if s == nil {
 		return
 	}
+	if s.skyboxLayers == nil {
+		s.skyboxLayers = make(map[EntityId]SkyboxLayerComponent)
+	} else {
+		for eid := range s.skyboxLayers {
+			delete(s.skyboxLayers, eid)
+		}
+	}
+	s.skyboxSun = SkyboxSunComponent{}
+	if s.RtApp != nil {
+		s.RtApp.ClearSkyboxInput()
+	}
+}
+
+func buildSkyboxBridgeInput(layerMap map[EntityId]SkyboxLayerComponent, sun SkyboxSunComponent) (app_rt.SkyboxInput, bool) {
+	if len(layerMap) == 0 {
+		return app_rt.SkyboxInput{}, false
+	}
+	sorted := make([]skyboxBridgeLayer, 0, len(layerMap))
+	for eid, layer := range layerMap {
+		sorted = append(sorted, skyboxBridgeLayer{entityID: eid, layer: layer})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].layer.Priority != sorted[j].layer.Priority {
+			return sorted[i].layer.Priority < sorted[j].layer.Priority
+		}
+		return sorted[i].entityID < sorted[j].entityID
+	})
 
 	width, height := 1024, 512
 	for _, li := range sorted {
@@ -95,25 +119,23 @@ func (s *VoxelRtState) rebuildSkybox() {
 		}
 	}
 
-	gpuLayers := make([]gpu.GpuSkyboxLayer, 0, len(sorted))
+	layerInputs := make([]app_rt.SkyboxLayerInput, 0, len(sorted))
 	for _, li := range sorted {
 		l := li.layer
 
-		invert := uint32(0)
-		if l.Invert {
-			invert = 1
-		}
-
-		gpuLayers = append(gpuLayers, gpu.GpuSkyboxLayer{
-			ColorA:      [4]float32{l.ColorA.X(), l.ColorA.Y(), l.ColorA.Z(), l.Threshold},
-			ColorB:      [4]float32{l.ColorB.X(), l.ColorB.Y(), l.ColorB.Z(), l.Opacity},
-			Offset:      [4]float32{l.Offset.X(), l.Offset.Y(), l.Offset.Z(), l.Scale},
+		layerInputs = append(layerInputs, app_rt.SkyboxLayerInput{
+			ColorA:      [3]float32{l.ColorA.X(), l.ColorA.Y(), l.ColorA.Z()},
+			ColorB:      [3]float32{l.ColorB.X(), l.ColorB.Y(), l.ColorB.Z()},
+			Offset:      [3]float32{l.Offset.X(), l.Offset.Y(), l.Offset.Z()},
+			Threshold:   l.Threshold,
+			Opacity:     l.Opacity,
+			Scale:       l.Scale,
 			Persistence: l.Persistence,
 			Lacunarity:  l.Lacunarity,
 			Seed:        int32(l.Seed),
 			Octaves:     int32(l.Octaves),
 			BlendMode:   uint32(l.BlendMode),
-			Invert:      invert,
+			Invert:      l.Invert,
 			LayerType:   uint32(l.LayerType),
 		})
 	}
@@ -126,10 +148,25 @@ func (s *VoxelRtState) rebuildSkybox() {
 		}
 	}
 
-	sunDir := [4]float32{s.skyboxSun.Direction.X(), s.skyboxSun.Direction.Y(), s.skyboxSun.Direction.Z(), s.skyboxSun.Intensity}
-	sunColor := [4]float32{s.skyboxSun.HaloColor.X(), s.skyboxSun.HaloColor.Y(), s.skyboxSun.HaloColor.Z(), s.skyboxSun.CoreGlowStrength}
-	sunParams := [4]float32{s.skyboxSun.CoreGlowExponent, s.skyboxSun.AtmosphereExponent, s.skyboxSun.AtmosphereGlowStrength, 0}
-	diskColor := [4]float32{s.skyboxSun.DiskColor.X(), s.skyboxSun.DiskColor.Y(), s.skyboxSun.DiskColor.Z(), s.skyboxSun.DiskStrength}
-	diskParams := [4]float32{s.skyboxSun.DiskStart, s.skyboxSun.DiskEnd, 0, 0}
-	s.RtApp.BufferManager.UpdateSkyboxGPU(uint32(width), uint32(height), gpuLayers, sunDir, sunColor, sunParams, diskColor, diskParams, smooth, s.RtApp.LightingPipeline, s.RtApp.StorageView)
+	sunDir := [4]float32{sun.Direction.X(), sun.Direction.Y(), sun.Direction.Z(), sun.Intensity}
+	sunColor := [4]float32{sun.HaloColor.X(), sun.HaloColor.Y(), sun.HaloColor.Z(), sun.CoreGlowStrength}
+	sunParams := [4]float32{sun.CoreGlowExponent, sun.AtmosphereExponent, sun.AtmosphereGlowStrength, 0}
+	diskColor := [4]float32{sun.DiskColor.X(), sun.DiskColor.Y(), sun.DiskColor.Z(), sun.DiskStrength}
+	diskParams := [4]float32{sun.DiskStart, sun.DiskEnd, 0, 0}
+	return app_rt.SkyboxInput{
+		Width:      uint32(width),
+		Height:     uint32(height),
+		Layers:     layerInputs,
+		SunDir:     sunDir,
+		SunColor:   sunColor,
+		SunParams:  sunParams,
+		DiskColor:  diskColor,
+		DiskParams: diskParams,
+		Smooth:     smooth,
+	}, true
+}
+
+type skyboxBridgeLayer struct {
+	entityID EntityId
+	layer    SkyboxLayerComponent
 }

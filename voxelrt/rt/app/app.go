@@ -25,18 +25,8 @@ type App struct {
 
 	DebugComputePipeline *wgpu.ComputePipeline
 
-	RenderPipeline         *wgpu.RenderPipeline
-	ParticlesPipeline      *wgpu.RenderPipeline
-	SpritesPipeline        *wgpu.RenderPipeline
-	TransparentPipeline    *wgpu.RenderPipeline
-	WaterPipeline          *wgpu.RenderPipeline
-	CAVolumePipeline       *wgpu.RenderPipeline
-	AnalyticMediumPipeline *wgpu.RenderPipeline
-	AstronomicalPipeline   *wgpu.RenderPipeline
-	FarPlanetRingPipeline  *wgpu.RenderPipeline
-	DebrisMidfieldPipeline *wgpu.RenderPipeline
-	PlanetBodyPipeline     *wgpu.RenderPipeline
-	ResolvePipeline        *wgpu.RenderPipeline
+	RenderPipeline  *wgpu.RenderPipeline
+	ResolvePipeline *wgpu.RenderPipeline
 
 	ResolveBG *wgpu.BindGroup
 
@@ -44,14 +34,6 @@ type App struct {
 	GBufferPipeline        *wgpu.ComputePipeline
 	TiledLightCullPipeline *wgpu.ComputePipeline
 	LightingPipeline       *wgpu.ComputePipeline
-
-	// Particle Sim Pipelines
-	ParticleSimPipeline      *wgpu.ComputePipeline
-	ParticleSpawnPipeline    *wgpu.ComputePipeline
-	ParticleInitPipeline     *wgpu.ComputePipeline
-	ParticleFinalizePipeline *wgpu.ComputePipeline
-	CAVolumeSimPipeline      *wgpu.ComputePipeline
-	CAVolumeBoundsPipeline   *wgpu.ComputePipeline
 
 	StorageTexture *wgpu.Texture
 	StorageView    *wgpu.TextureView
@@ -64,16 +46,19 @@ type App struct {
 	Scene         *core.Scene
 	Camera        *core.CameraState
 
-	TextRenderer     *core.TextRenderer
-	TextPipeline     *wgpu.RenderPipeline
-	TextAtlasView    *wgpu.TextureView
-	TextBindGroup    *wgpu.BindGroup
-	TextVertexBuffer *wgpu.Buffer
-	TextItems        []core.TextItem
-	RectItems        []core.RectItem
-	TextVertexCount  uint32
-
-	GizmoPass *gpu.GizmoRenderPass
+	GizmoResources          *GizmoResources
+	TextResources           *TextResources
+	SkyboxResources         *SkyboxResources
+	AccumulationResources   *AccumulationResources
+	WaterResources          *WaterResources
+	FarPlanetRingResources  *FarPlanetRingResources
+	DebrisMidfieldResources *DebrisMidfieldResources
+	SpriteResources         *SpriteResources
+	ParticleResources       *ParticleResources
+	CAVolumeResources       *CAVolumeResources
+	AnalyticMediumResources *AnalyticMediumResources
+	AstronomicalResources   *AstronomicalResources
+	PlanetBodyResources     *PlanetBodyResources
 
 	LastViewProj       mgl32.Mat4
 	LastTime           float64
@@ -98,15 +83,12 @@ type App struct {
 	RenderFrameIndex      uint64
 	ShadowUpdateOffset    int
 	ShadowUpdateSummary   string
-	HadAccumulationPass   bool
-	HadCAVolumePass       bool
 	PreviousProfilerStats string
 
 	Profiler *core.Profiler
 
-	ParticleSpawnCount uint32
-	ParticleAtlasData  []byte // If set before Init, uses this instead of embedded
-	FeatureConfig      AppFeatureConfig
+	FeatureConfig AppFeatureConfig
+	RenderGraph   *RenderGraph
 
 	features                  []Feature
 	defaultFeaturesRegistered bool
@@ -170,6 +152,7 @@ func NewApp(window *glfw.Window) *App {
 		LightingQuality: core.DefaultLightingQualityConfig(),
 		OcclusionMode:   core.OcclusionOff,
 		FeatureConfig:   DefaultFeatureConfig(),
+		RenderGraph:     NewDefaultRenderGraph(),
 	}
 	return app
 }
@@ -653,6 +636,9 @@ func (a *App) Init() error {
 	if err := a.setupFeatures(); err != nil {
 		return err
 	}
+	if err := a.setupRenderGraphNodes(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -664,5 +650,6 @@ func (a *App) SetSpriteAtlas(data []byte, w, h uint32) {
 }
 
 func (a *App) Shutdown() {
+	a.shutdownRenderGraphNodes()
 	a.shutdownFeatures()
 }

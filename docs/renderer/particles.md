@@ -34,13 +34,18 @@ This document describes the current hybrid particle path.
 
 - queries `TransformComponent + ParticleEmitterComponent`
 - computes per-emitter spawn counts from `SpawnRate * dt`
-- packs `EmitterParams`
+- builds typed renderer `ParticleEmitterInput` records
 - emits spawn requests as emitter indices
-- returns `(spawnRequests, emitterBytes, emitterCount, atlasAssetId)`
+- returns `(spawnRequests, emitters, atlasAssetId)`
 
 The bridge then:
 
 - updates the particle atlas if the active atlas changes
+- hands `ParticleFrameInput` to the renderer app
+
+`App.ApplyParticleInput(...)` then:
+
+- packs `ParticleEmitterInput` to the WGSL emitter layout
 - writes sim params
 - ensures particle buffers exist with `UpdateParticles(...)`
 - uploads spawn requests
@@ -50,7 +55,7 @@ Current practical constraints:
 
 - emitter distance cull is 200 world units
 - per-emitter spawn burst is capped to 1024 per frame
-- bridge-side pool provisioning uses `UpdateParticles(1000000, ...)`
+- renderer-side pool provisioning still uses `UpdateParticles(1000000, ...)`
 - the first active emitter atlas wins for the frame
 
 ## GPU Side

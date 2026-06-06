@@ -79,7 +79,7 @@ func TestWaterInteractionCleanupSystemClearsImpacts(t *testing.T) {
 	}
 }
 
-func TestBuildWaterSurfaceHostsIncludesRippleHosts(t *testing.T) {
+func TestBuildWaterSurfaceInputsIncludesRippleHosts(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
 
@@ -100,7 +100,7 @@ func TestBuildWaterSurfaceHostsIncludesRippleHosts(t *testing.T) {
 		},
 	}
 
-	hosts, ripples := buildWaterSurfaceHosts(cmd, interactions)
+	hosts, ripples := buildWaterSurfaceInputs(cmd, interactions)
 	if len(hosts) != 2 {
 		t.Fatalf("expected two water hosts, got %d", len(hosts))
 	}
