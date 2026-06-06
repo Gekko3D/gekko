@@ -65,9 +65,7 @@ func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []b
 			m.Device.GetQueue().Submit(cmdBuf)
 		}
 
-		if current != nil {
-			current.Release()
-		}
+		m.retireBuffer(current)
 
 		*buf = newBuf
 
@@ -81,4 +79,36 @@ func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []b
 		}
 		return false
 	}
+}
+
+func (m *GpuBufferManager) retireBuffer(buf *wgpu.Buffer) {
+	if m == nil || buf == nil {
+		return
+	}
+	m.retiredBuffers = append(m.retiredBuffers, retiredBuffer{
+		Buffer:     buf,
+		FramesLeft: RetiredBufferFrameDelay,
+	})
+}
+
+func (m *GpuBufferManager) AdvanceRetiredBuffers() {
+	if m == nil || len(m.retiredBuffers) == 0 {
+		return
+	}
+
+	kept := m.retiredBuffers[:0]
+	for _, retired := range m.retiredBuffers {
+		retired.FramesLeft--
+		if retired.FramesLeft <= 0 {
+			if retired.Buffer != nil {
+				retired.Buffer.Release()
+			}
+			continue
+		}
+		kept = append(kept, retired)
+	}
+	for i := len(kept); i < len(m.retiredBuffers); i++ {
+		m.retiredBuffers[i] = retiredBuffer{}
+	}
+	m.retiredBuffers = kept
 }

@@ -10,6 +10,7 @@ import (
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -1437,6 +1438,60 @@ func TestVoxelRtSystemDefaultsAmbientOcclusionModeToInherited(t *testing.T) {
 	}
 }
 
+func TestVoxelRtSystemUsesObjectScopedGeometryForTerrainChunksSharingModel(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateCubeModel(32, 5, 32, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{96, 128, 96, 255})
+	leftID := cmd.AddEntity(
+		&TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&VoxelModelComponent{
+			VoxelModel:        modelID,
+			VoxelPalette:      paletteID,
+			IsTerrainChunk:    true,
+			TerrainGroupID:    44,
+			TerrainChunkCoord: [3]int{0, 0, 0},
+			TerrainChunkSize:  32,
+		},
+	)
+	rightID := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{32, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&VoxelModelComponent{
+			VoxelModel:        modelID,
+			VoxelPalette:      paletteID,
+			IsTerrainChunk:    true,
+			TerrainGroupID:    44,
+			TerrainChunkCoord: [3]int{1, 0, 0},
+			TerrainChunkSize:  32,
+		},
+	)
+	app.FlushCommands()
+
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
+
+	source, ok := server.GetVoxelGeometry(modelID)
+	if !ok || source.XBrickMap == nil {
+		t.Fatal("expected source geometry")
+	}
+	left := state.instanceMap[leftID]
+	right := state.instanceMap[rightID]
+	if left == nil || right == nil {
+		t.Fatalf("expected both terrain chunks to sync, got left=%v right=%v", left != nil, right != nil)
+	}
+	if left.XBrickMap == source.XBrickMap || right.XBrickMap == source.XBrickMap {
+		t.Fatal("expected terrain chunks to use object-scoped geometry copies")
+	}
+	if left.XBrickMap == right.XBrickMap {
+		t.Fatal("expected neighboring terrain chunks sharing a source model to have distinct runtime maps")
+	}
+	if !state.instanceObjectScopedGeometry[leftID] || !state.instanceObjectScopedGeometry[rightID] {
+		t.Fatal("expected runtime state to mark terrain chunks as object-scoped")
+	}
+}
+
 func TestEntityLODSelectionSystemUpdatesRuntimeSelection(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
@@ -2119,17 +2174,19 @@ func newVoxelRtStateTest() *VoxelRtState {
 			Profiler:      core.NewProfiler(),
 			FeatureConfig: app_rt.DefaultFeatureConfig(),
 		},
-		loadedModels:        make(map[AssetId]*core.VoxelObject),
-		instanceMap:         make(map[EntityId]*core.VoxelObject),
-		entityLODSelections: make(map[EntityId]EntityLODSelection),
-		runtimeSprites:      make([]SpriteComponent, 0, 8),
-		lastMaterialKeys:    make(map[*core.VoxelObject]materialTableCacheKey),
-		materialTableCache:  make(map[materialTableCacheKey][]core.Material),
-		particlePools:       make(map[EntityId]*particlePool),
-		caVolumeMap:         make(map[EntityId]*core.VoxelObject),
-		objectToEntity:      make(map[*core.VoxelObject]EntityId),
-		skyboxLayers:        make(map[EntityId]SkyboxLayerComponent),
-		bridgeFeatures:      voxelRtBridgeRegistryFrom(DefaultVoxelRtBridgeFeatureRegistrations()),
+		loadedModels:                 make(map[AssetId]*core.VoxelObject),
+		instanceMap:                  make(map[EntityId]*core.VoxelObject),
+		instanceGeometrySources:      make(map[EntityId]*volume.XBrickMap),
+		instanceObjectScopedGeometry: make(map[EntityId]bool),
+		entityLODSelections:          make(map[EntityId]EntityLODSelection),
+		runtimeSprites:               make([]SpriteComponent, 0, 8),
+		lastMaterialKeys:             make(map[*core.VoxelObject]materialTableCacheKey),
+		materialTableCache:           make(map[materialTableCacheKey][]core.Material),
+		particlePools:                make(map[EntityId]*particlePool),
+		caVolumeMap:                  make(map[EntityId]*core.VoxelObject),
+		objectToEntity:               make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:                 make(map[EntityId]SkyboxLayerComponent),
+		bridgeFeatures:               voxelRtBridgeRegistryFrom(DefaultVoxelRtBridgeFeatureRegistrations()),
 	}
 }
 

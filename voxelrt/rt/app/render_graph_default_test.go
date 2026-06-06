@@ -680,6 +680,7 @@ func TestRecordGBufferPassRequiresEncoder(t *testing.T) {
 	app := &App{
 		Profiler:      core.NewProfiler(),
 		BufferManager: &gpu.GpuBufferManager{},
+		OcclusionMode: core.OcclusionConservative,
 	}
 
 	err := app.recordGBufferPass(nil, &FrameContext{Width: 8, Height: 8})
@@ -763,8 +764,13 @@ func TestDefaultRenderGraphHiZNodeGating(t *testing.T) {
 	}
 
 	app.BufferManager = &gpu.GpuBufferManager{}
+	if node.Enabled(app) {
+		t.Fatal("expected hi-z node to be disabled when occlusion is off")
+	}
+
+	app.OcclusionMode = core.OcclusionConservative
 	if !node.Enabled(app) {
-		t.Fatal("expected hi-z node to be enabled with buffer manager")
+		t.Fatal("expected hi-z node to be enabled with buffer manager and conservative occlusion")
 	}
 }
 
@@ -772,6 +778,7 @@ func TestRecordHiZPassRequiresEncoder(t *testing.T) {
 	app := &App{
 		Profiler:      core.NewProfiler(),
 		BufferManager: &gpu.GpuBufferManager{},
+		OcclusionMode: core.OcclusionConservative,
 	}
 
 	err := app.recordHiZPass(nil)

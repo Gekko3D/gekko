@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
 type materialTableCacheKey struct {
@@ -24,6 +25,12 @@ func (s *VoxelRtState) ensureMaterialCaches() {
 	}
 	if s.materialTableCache == nil {
 		s.materialTableCache = make(map[materialTableCacheKey][]core.Material)
+	}
+	if s.instanceGeometrySources == nil {
+		s.instanceGeometrySources = make(map[EntityId]*volume.XBrickMap)
+	}
+	if s.instanceObjectScopedGeometry == nil {
+		s.instanceObjectScopedGeometry = make(map[EntityId]bool)
 	}
 }
 

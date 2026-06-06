@@ -118,23 +118,25 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	RtApp               *app_rt.App
-	loadedModels        map[AssetId]*core.VoxelObject
-	instanceMap         map[EntityId]*core.VoxelObject
-	entityLODSelections map[EntityId]EntityLODSelection
-	runtimeSprites      []SpriteComponent
-	lastMaterialKeys    map[*core.VoxelObject]materialTableCacheKey
-	materialTableCache  map[materialTableCacheKey][]core.Material
-	particlePools       map[EntityId]*particlePool
-	caVolumeMap         map[EntityId]*core.VoxelObject
-	objectToEntity      map[*core.VoxelObject]EntityId
-	skyboxLayers        map[EntityId]SkyboxLayerComponent // Stored values to detect changes
-	skyboxSun           SkyboxSunComponent
-	SunDirection        mgl32.Vec3
-	SunIntensity        float32
-	lastParticleAtlas   AssetId
-	lastSpriteAtlas     AssetId
-	bridgeFeatures      voxelRtBridgeRegistry
+	RtApp                        *app_rt.App
+	loadedModels                 map[AssetId]*core.VoxelObject
+	instanceMap                  map[EntityId]*core.VoxelObject
+	instanceGeometrySources      map[EntityId]*volume.XBrickMap
+	instanceObjectScopedGeometry map[EntityId]bool
+	entityLODSelections          map[EntityId]EntityLODSelection
+	runtimeSprites               []SpriteComponent
+	lastMaterialKeys             map[*core.VoxelObject]materialTableCacheKey
+	materialTableCache           map[materialTableCacheKey][]core.Material
+	particlePools                map[EntityId]*particlePool
+	caVolumeMap                  map[EntityId]*core.VoxelObject
+	objectToEntity               map[*core.VoxelObject]EntityId
+	skyboxLayers                 map[EntityId]SkyboxLayerComponent // Stored values to detect changes
+	skyboxSun                    SkyboxSunComponent
+	SunDirection                 mgl32.Vec3
+	SunIntensity                 float32
+	lastParticleAtlas            AssetId
+	lastSpriteAtlas              AssetId
+	bridgeFeatures               voxelRtBridgeRegistry
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {

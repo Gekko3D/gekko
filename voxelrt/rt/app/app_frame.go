@@ -433,6 +433,7 @@ func (a *App) Render() {
 	a.BufferManager.ResolveHiZReadback()
 	a.Surface.Present()
 	a.Device.Poll(false, nil)
+	a.BufferManager.AdvanceRetiredBuffers()
 	a.Profiler.EndScope("Submit/Present")
 
 	// Update FPS
@@ -727,7 +728,7 @@ func (a *App) lightingPassEnabled() bool {
 }
 
 func (a *App) hiZPassEnabled() bool {
-	return a != nil && a.BufferManager != nil
+	return a != nil && a.BufferManager != nil && a.OcclusionMode == core.OcclusionConservative
 }
 
 func (a *App) shadowPassEnabled() bool {

@@ -105,15 +105,17 @@ fn project_local_light_coverage(light: Light) -> LocalLightCoverage {
     var min_ndc = vec2<f32>(1e9, 1e9);
     var max_ndc = vec2<f32>(-1e9, -1e9);
     var visible = 0u;
-    let signs = array<f32, 2>(-1.0, 1.0);
 
     for (var ix = 0u; ix < 2u; ix = ix + 1u) {
         for (var iy = 0u; iy < 2u; iy = iy + 1u) {
             for (var iz = 0u; iz < 2u; iz = iz + 1u) {
+                let sign_x = select(-1.0, 1.0, ix == 1u);
+                let sign_y = select(-1.0, 1.0, iy == 1u);
+                let sign_z = select(-1.0, 1.0, iz == 1u);
                 var corner = vec3<f32>(
-                    view_pos.x + signs[ix] * light_range,
-                    view_pos.y + signs[iy] * light_range,
-                    view_pos.z + signs[iz] * light_range,
+                    view_pos.x + sign_x * light_range,
+                    view_pos.y + sign_y * light_range,
+                    view_pos.z + sign_z * light_range,
                 );
                 if (corner.z >= 0.0) {
                     corner.z = -TILE_LIGHT_NEAR_PLANE_CLAMP;

@@ -728,6 +728,12 @@ fn fallback_face_normal(p_hit_os: vec3<f32>, vi_hit: vec3<i32>, ray_dir_os: vec3
     return n_os;
 }
 
+fn hit_face_is_exposed(p_hit_os: vec3<f32>, vi_hit: vec3<i32>, ray_dir_os: vec3<f32>, inst: Instance, params: ObjectParams) -> bool {
+    let face_normal = fallback_face_normal(p_hit_os, vi_hit, ray_dir_os);
+    let neighbor_vi = vi_hit + dominant_axis_normal_i(face_normal);
+    return sample_occupancy_for_normal(neighbor_vi, inst, params) < 0.5;
+}
+
 fn transform_normal_to_world(inst: Instance, normal_os: vec3<f32>) -> vec3<f32> {
     return normalize((transpose(inst.world_to_object) * vec4<f32>(normal_os, 0.0)).xyz);
 }
@@ -901,24 +907,28 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 // Transparent solid: skip this brick, advance to its exit and continue tracing
                                 t_brick = t_brick_exit;
                             } else {
-                                result.hit = true; result.t = t_brick; result.palette_idx = b_material; result.material_idx = params.material_table_base;
                                 let p_hit_os = ray.origin + dir * (t_brick + (EPS * 0.1));
                                 let vi_hit = vec3<i32>(floor(p_hit_os));
-                                let voxel_center_os = vec3<f32>(vi_hit) + 0.5;
-                                let baked_normal = load_baked_voxel_normal_local(vi_hit, params);
-                                var n_os = baked_normal.normal;
-                                let two_sided_lighting = baked_normal.two_sided_lighting;
-                                if (!baked_normal.valid) {
-                                    n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
-                                }
+                                if (!hit_face_is_exposed(p_hit_os, vi_hit, dir, inst, params)) {
+                                    t_brick = t_brick_exit;
+                                } else {
+                                    result.hit = true; result.t = t_brick; result.palette_idx = b_material; result.material_idx = params.material_table_base;
+                                    let voxel_center_os = vec3<f32>(vi_hit) + 0.5;
+                                    let baked_normal = load_baked_voxel_normal_local(vi_hit, params);
+                                    var n_os = baked_normal.normal;
+                                    let two_sided_lighting = baked_normal.two_sided_lighting;
+                                    if (!baked_normal.valid) {
+                                        n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
+                                    }
 
-                                result.normal = transform_normal_to_world(inst, n_os);
-                                result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
-                                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                                result.shadow_group_id = params.shadow_group_id;
-                                result.two_sided_lighting = two_sided_lighting;
-                                result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
-                                return result;
+                                    result.normal = transform_normal_to_world(inst, n_os);
+                                    result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
+                                    result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                    result.shadow_group_id = params.shadow_group_id;
+                                    result.two_sided_lighting = two_sided_lighting;
+                                    result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
+                                    return result;
+                                }
                             }
                         }
                         if (!brick_is_solid(b_flags)) {
@@ -948,23 +958,25 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                         if (pbr_v.w > 0.001) {
                                             // Transparent voxel: skip and continue marching
                                         } else {
-                                            result.hit = true; result.t = t_micro; result.palette_idx = palette_idx; result.material_idx = params.material_table_base;
                                             let voxel_center_os = brick_origin + vec3<f32>(voxel_pos) + 0.5;
                                             let vi_hit = vec3<i32>(floor(voxel_center_os));
                                             let p_hit_os = ray.origin + dir * (t_micro + (EPS * 0.1));
-                                            let baked_normal = load_baked_voxel_normal_local(vi_hit, params);
-                                            var n_os = baked_normal.normal;
-                                            let two_sided_lighting = baked_normal.two_sided_lighting;
-                                            if (!baked_normal.valid) {
-                                                n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
+                                            if (hit_face_is_exposed(p_hit_os, vi_hit, dir, inst, params)) {
+                                                result.hit = true; result.t = t_micro; result.palette_idx = palette_idx; result.material_idx = params.material_table_base;
+                                                let baked_normal = load_baked_voxel_normal_local(vi_hit, params);
+                                                var n_os = baked_normal.normal;
+                                                let two_sided_lighting = baked_normal.two_sided_lighting;
+                                                if (!baked_normal.valid) {
+                                                    n_os = fallback_face_normal(p_hit_os, vi_hit, dir);
+                                                }
+                                                result.normal = transform_normal_to_world(inst, n_os);
+                                                result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
+                                                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                                result.shadow_group_id = params.shadow_group_id;
+                                                result.two_sided_lighting = two_sided_lighting;
+                                                result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
+                                                return result;
                                             }
-                                            result.normal = transform_normal_to_world(inst, n_os);
-                                            result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
-                                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                                            result.shadow_group_id = params.shadow_group_id;
-                                            result.two_sided_lighting = two_sided_lighting;
-                                            result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
-                                            return result;
                                         }
                                     }
                                 }
@@ -1048,23 +1060,25 @@ fn traverse_tree64(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, objec
                         if (pbr2.w > 0.001) {
                             // Transparent: do not return, keep marching within the block
                         } else {
-                            result.hit = true; result.t = t_micro; result.palette_idx = palette_idx2; result.material_idx = params.material_table_base;
                             let p_hit_os = ray.origin + ray.dir * (t_micro + (EPS * 0.1));
-                            let voxel_center_os = vec3<f32>(vi2) + 0.5;
-                            let baked_normal = load_baked_voxel_normal_local(vi2, params);
-                            var n_os = baked_normal.normal;
-                            let two_sided_lighting = baked_normal.two_sided_lighting;
-                            if (!baked_normal.valid) {
-                                n_os = fallback_face_normal(p_hit_os, vi2, ray.dir);
-                            }
+                            if (hit_face_is_exposed(p_hit_os, vi2, ray.dir, inst, params)) {
+                                result.hit = true; result.t = t_micro; result.palette_idx = palette_idx2; result.material_idx = params.material_table_base;
+                                let voxel_center_os = vec3<f32>(vi2) + 0.5;
+                                let baked_normal = load_baked_voxel_normal_local(vi2, params);
+                                var n_os = baked_normal.normal;
+                                let two_sided_lighting = baked_normal.two_sided_lighting;
+                                if (!baked_normal.valid) {
+                                    n_os = fallback_face_normal(p_hit_os, vi2, ray.dir);
+                                }
 
-                            result.normal = transform_normal_to_world(inst, n_os);
-                            result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
-                            result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
-                            result.shadow_group_id = params.shadow_group_id;
-                            result.two_sided_lighting = two_sided_lighting;
-                            result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
-                            return result;
+                                result.normal = transform_normal_to_world(inst, n_os);
+                                result.ao = resolve_voxel_ao(voxel_center_os, n_os, inst, params);
+                                result.voxel_center_ws = (inst.object_to_world * vec4<f32>(voxel_center_os, 1.0)).xyz;
+                                result.shadow_group_id = params.shadow_group_id;
+                                result.two_sided_lighting = two_sided_lighting;
+                                result.shadow_seam_epsilon = shadow_seam_epsilon_at_hit(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params.shadow_seam_epsilon);
+                                return result;
+                            }
                         }
                     }
                     if (t_max_micro2.x < t_max_micro2.y) {

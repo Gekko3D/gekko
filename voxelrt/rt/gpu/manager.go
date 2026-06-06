@@ -35,6 +35,7 @@ const (
 
 	TiledLightingTileSize         = 16
 	TiledLightingMaxLightsPerTile = 128
+	RetiredBufferFrameDelay       = 3
 )
 
 type GpuSkyboxLayer struct {
@@ -491,12 +492,18 @@ type GpuBufferManager struct {
 	VoxelPayloadSparseBricks   int
 	VoxelPayloadUploadsSkipped int
 	VoxelPayloadBytesAvoided   int
+	retiredBuffers             []retiredBuffer
 }
 
 type caVolumeLayout struct {
 	EntityID   uint32
 	Type       uint32
 	Resolution [3]uint32
+}
+
+type retiredBuffer struct {
+	Buffer     *wgpu.Buffer
+	FramesLeft int
 }
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.

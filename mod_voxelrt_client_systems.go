@@ -9,6 +9,7 @@ import (
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
 )
@@ -34,16 +35,18 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	}
 
 	state := &VoxelRtState{
-		RtApp:               RtApp,
-		loadedModels:        make(map[AssetId]*core.VoxelObject),
-		instanceMap:         make(map[EntityId]*core.VoxelObject),
-		entityLODSelections: make(map[EntityId]EntityLODSelection),
-		lastMaterialKeys:    make(map[*core.VoxelObject]materialTableCacheKey),
-		materialTableCache:  make(map[materialTableCacheKey][]core.Material),
-		caVolumeMap:         make(map[EntityId]*core.VoxelObject),
-		objectToEntity:      make(map[*core.VoxelObject]EntityId),
-		skyboxLayers:        make(map[EntityId]SkyboxLayerComponent),
-		bridgeFeatures:      mod.bridgeFeatureRegistry(),
+		RtApp:                        RtApp,
+		loadedModels:                 make(map[AssetId]*core.VoxelObject),
+		instanceMap:                  make(map[EntityId]*core.VoxelObject),
+		instanceGeometrySources:      make(map[EntityId]*volume.XBrickMap),
+		instanceObjectScopedGeometry: make(map[EntityId]bool),
+		entityLODSelections:          make(map[EntityId]EntityLODSelection),
+		lastMaterialKeys:             make(map[*core.VoxelObject]materialTableCacheKey),
+		materialTableCache:           make(map[materialTableCacheKey][]core.Material),
+		caVolumeMap:                  make(map[EntityId]*core.VoxelObject),
+		objectToEntity:               make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:                 make(map[EntityId]SkyboxLayerComponent),
+		bridgeFeatures:               mod.bridgeFeatureRegistry(),
 	}
 	cmd.AddResources(state)
 	cmd.AddResources(&WaterInteractionState{})
@@ -652,6 +655,26 @@ func clearVoxelRtCAVolumeSceneObjects(state *VoxelRtState) {
 	}
 }
 
+func voxelModelNeedsObjectScopedGeometry(vox *VoxelModelComponent) bool {
+	if vox == nil {
+		return false
+	}
+	if vox.IsTerrainChunk && vox.TerrainGroupID != 0 && vox.TerrainChunkSize > 0 {
+		return true
+	}
+	return vox.IsPlanetTile && vox.PlanetTileGroupID != 0
+}
+
+func voxelRuntimeGeometryMap(source *volume.XBrickMap, objectScoped bool) *volume.XBrickMap {
+	if source == nil {
+		return nil
+	}
+	if objectScoped {
+		return source.Copy()
+	}
+	return source
+}
+
 func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands, waterInteractions *WaterInteractionState) {
 	if state == nil || state.RtApp == nil {
 		return
@@ -730,28 +753,43 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			frameMaterialKeys[vox.VoxelPalette] = materialKey
 		}
 
+		objectScopedGeometry := voxelModelNeedsObjectScopedGeometry(vox)
+		sourceGeometryMap := displayGeometryAsset.XBrickMap
 		obj, exists := state.instanceMap[entityId]
 		if !exists {
-			modelTemplate, hasTemplate := state.loadedModels[displayGeometryID]
-			if !hasTemplate {
-				modelTemplate = core.NewVoxelObject()
-				modelTemplate.XBrickMap = displayGeometryAsset.XBrickMap
-				state.loadedModels[displayGeometryID] = modelTemplate
+			runtimeGeometryMap := voxelRuntimeGeometryMap(sourceGeometryMap, objectScopedGeometry)
+			if !objectScopedGeometry {
+				modelTemplate, hasTemplate := state.loadedModels[displayGeometryID]
+				if !hasTemplate {
+					modelTemplate = core.NewVoxelObject()
+					modelTemplate.XBrickMap = sourceGeometryMap
+					state.loadedModels[displayGeometryID] = modelTemplate
+				}
+				runtimeGeometryMap = modelTemplate.XBrickMap
 			}
 
 			obj = core.NewVoxelObject()
-			obj.XBrickMap = modelTemplate.XBrickMap
+			obj.XBrickMap = runtimeGeometryMap
 			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
 			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 			state.RtApp.Scene.AddObject(obj)
 			state.instanceMap[entityId] = obj
 			state.objectToEntity[obj] = entityId
 			state.lastMaterialKeys[obj] = materialKey
+			state.instanceGeometrySources[entityId] = sourceGeometryMap
+			state.instanceObjectScopedGeometry[entityId] = objectScopedGeometry
 		}
 
-		if displayGeometryAsset.XBrickMap != obj.XBrickMap {
-			obj.XBrickMap = displayGeometryAsset.XBrickMap
+		previousSource := state.instanceGeometrySources[entityId]
+		previousObjectScoped := state.instanceObjectScopedGeometry[entityId]
+		geometryChanged := previousSource != sourceGeometryMap ||
+			previousObjectScoped != objectScopedGeometry ||
+			(!objectScopedGeometry && sourceGeometryMap != obj.XBrickMap)
+		if geometryChanged {
+			obj.XBrickMap = voxelRuntimeGeometryMap(sourceGeometryMap, objectScopedGeometry)
 			obj.XBrickMap.StructureDirty = true
+			state.instanceGeometrySources[entityId] = sourceGeometryMap
+			state.instanceObjectScopedGeometry[entityId] = objectScopedGeometry
 			state.RtApp.Scene.StructureRevision++ // Force hash grid rebuild
 		}
 		scale := entityLODScaleVector(EffectiveVoxelScale(vox, transform), scaleAdjustX, scaleAdjustY, scaleAdjustZ)
@@ -814,6 +852,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if !currentObjectEntities[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
+			delete(state.instanceGeometrySources, eid)
+			delete(state.instanceObjectScopedGeometry, eid)
 			delete(state.lastMaterialKeys, obj)
 			delete(state.objectToEntity, obj)
 		}
