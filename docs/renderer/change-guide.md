@@ -79,7 +79,7 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - Voxel payload bindings move as a set.
   - `gbuffer.wgsl`, `shadow_map.wgsl`, `transparent_overlay.wgsl`, and `particles_sim.wgsl` all expect `voxel_payload_0..3`, and their bind-group builders must match.
 - `BrickRecord` is no longer 16 bytes.
-  - The live layout is `atlas_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `atlas_page`, `flags`, `dense_occupancy_word_base` for 24 bytes total.
+  - The live layout is `material_index`, `payload_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `payload_page`, `flags`, `voxel_aux_word_base`, and padding for 32 bytes total.
   - Any CPU writer or WGSL struct drift here will corrupt voxel reads.
 - `ObjectParams` is now 128 bytes.
   - The trailing `32` bytes carry hybrid sector-lookup metadata: signed sector origin, lookup mode, dense lookup extents, and the direct-table base.
@@ -92,7 +92,11 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
   - The current dedicated direct-lookup binding depends on requesting adapter-supported limits at device creation through `RequiredLimits`.
   - If that limit request path changes in the native `webgpu` wrapper, re-check WebGPU per-stage storage-buffer limits and every explicit bind-group layout before assuming the pipelines will still validate.
 - Exact empty-voxel rejection is no longer payload-driven for non-solid bricks.
-  - The live hot path is sector brick mask, then micro mask, then dense occupancy, then payload/material fetch only for confirmed occupied voxels.
+  - The live hot path is sector brick mask, then micro mask, then voxel-aux dense occupancy, then payload/material fetch only for confirmed occupied voxels.
+- Baked normals live in the voxel auxiliary sidecar.
+  - The sidecar starts with dense occupancy words and then stores one packed normal byte per voxel.
+  - G-buffer, transparent overlay, and particles load the baked normal for the hit voxel; AO remains a separate neighbor-sampling feature.
+  - Cross-object terrain and planet tile seams depend on scene-level dirty propagation, not only `XBrickMap.SetVoxel` dirtying within the edited object.
 - Voxel shading style has a deliberate contract.
   - Keep voxel albedo/material lookup palette-driven and blocky.
   - Keep one normal per visible voxel cell rather than interpolating mesh-like normals across a voxel.

@@ -86,7 +86,7 @@ struct SpawnRequest {
 
 // Group 2: Voxel Data (Shared with Renderer)
 struct SectorRecord { origin_vox: vec4<i32>, brick_table_index: u32, brick_mask_lo: u32, brick_mask_hi: u32, padding: u32 };
-struct BrickRecord { material_index: u32, payload_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, payload_page: u32, flags: u32, dense_occupancy_word_base: u32, padding: u32 };
+struct BrickRecord { material_index: u32, payload_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, payload_page: u32, flags: u32, voxel_aux_word_base: u32, padding: u32 };
 struct SectorGridEntry { coords: vec4<i32>, base_idx: u32, sector_idx: i32, padding: vec2<u32> };
 struct SectorGridParams { grid_size: u32, grid_mask: u32, padding0: u32, padding1: u32 };
 struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, ambient_occlusion_mode: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32>, is_planet_tile: u32, planet_tile_group_id: u32, emitter_link_id: u32, padding2: u32, planet_tile: vec4<i32>, direct_lookup_origin_mode: vec4<i32>, direct_lookup_extent_base: vec4<u32> };
@@ -108,9 +108,11 @@ struct Instance {
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
 @group(2) @binding(11) var<storage, read> direct_sector_lookup_words: array<u32>;
-@group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;
+@group(2) @binding(13) var<storage, read> voxel_aux_words: array<u32>;
 const LOOKUP_MODE_DIRECT: i32 = 1;
 const BRICK_FLAG_SOLID: u32 = 1u;
+const VOXEL_AUX_OCCUPANCY_WORD_COUNT: u32 = 16u;
+const VOXEL_NORMAL_VALID_BIT: u32 = 0x40u;
 
 fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
     if (idx < 32u) { return (mask_lo & (1u << idx)) != 0u; }
@@ -162,9 +164,50 @@ fn find_sector(sx: i32, sy: i32, sz: i32, op: ObjectParams) -> i32 {
 
 fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
     if (word_base == 0xFFFFFFFFu) { return false; }
-    let word = dense_occupancy_words[word_base + (voxel_idx >> 5u)];
+    let word = voxel_aux_words[word_base + (voxel_idx >> 5u)];
     let bit = 1u << (voxel_idx & 31u);
     return (word & bit) != 0u;
+}
+
+fn decode_baked_normal_axis(bits: u32) -> f32 {
+    let v = bits & 0x3u;
+    if (v == 1u) { return 1.0; }
+    if (v == 2u) { return -1.0; }
+    return 0.0;
+}
+
+fn decode_baked_voxel_normal(encoded: u32) -> vec3<f32> {
+    let n = vec3<f32>(
+        decode_baked_normal_axis(encoded),
+        decode_baked_normal_axis(encoded >> 2u),
+        decode_baked_normal_axis(encoded >> 4u),
+    );
+    if ((encoded & VOXEL_NORMAL_VALID_BIT) == 0u || dot(n, n) <= 0.0) {
+        return vec3<f32>(0.0, 1.0, 0.0);
+    }
+    return normalize(n);
+}
+
+fn load_baked_voxel_normal(pos: vec3<f32>, op: ObjectParams) -> vec3<f32> {
+    let vox_pos = vec3<i32>(floor(pos));
+    let sx = vox_pos.x >> 5; let sy = vox_pos.y >> 5; let sz = vox_pos.z >> 5;
+    let s_idx = find_sector(sx, sy, sz, op);
+    if (s_idx < 0) { return vec3<f32>(0.0, 1.0, 0.0); }
+    let sector = sectors[s_idx];
+    let bx = (vox_pos.x >> 3) & 3; let by = (vox_pos.y >> 3) & 3; let bz = (vox_pos.z >> 3) & 3;
+    let b_idx = u32(bx + by*4 + bz*16);
+    if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, b_idx)) {
+        return vec3<f32>(0.0, 1.0, 0.0);
+    }
+    let brick = bricks[sector.brick_table_index + b_idx];
+    if (brick.voxel_aux_word_base == 0xFFFFFFFFu) {
+        return vec3<f32>(0.0, 1.0, 0.0);
+    }
+    let vx = vox_pos.x & 7; let vy = vox_pos.y & 7; let vz = vox_pos.z & 7;
+    let voxel_idx = u32(vx + vy*8 + vz*64);
+    let word = voxel_aux_words[brick.voxel_aux_word_base + VOXEL_AUX_OCCUPANCY_WORD_COUNT + (voxel_idx >> 2u)];
+    let encoded = (word >> ((voxel_idx & 3u) * 8u)) & 0xFFu;
+    return decode_baked_voxel_normal(encoded);
 }
 
 fn check_voxel_occupancy(pos: vec3<f32>, op: ObjectParams) -> bool {
@@ -190,20 +233,13 @@ fn check_voxel_occupancy(pos: vec3<f32>, op: ObjectParams) -> bool {
         }
         let vx = vox_pos.x & 7; let vy = vox_pos.y & 7; let vz = vox_pos.z & 7;
         let voxel_idx = u32(vx + vy*8 + vz*64);
-        return dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx);
+        return dense_occupancy_test(brick.voxel_aux_word_base, voxel_idx);
     }
     return false;
 }
 
 fn get_voxel_normal(pos: vec3<f32>, op: ObjectParams) -> vec3<f32> {
-    // Check 6 neighbors to find the gradient/normal
-    let dx = f32(check_voxel_occupancy(pos + vec3<f32>(0.2, 0.0, 0.0), op)) - f32(check_voxel_occupancy(pos - vec3<f32>(0.2, 0.0, 0.0), op));
-    let dy = f32(check_voxel_occupancy(pos + vec3<f32>(0.0, 0.2, 0.0), op)) - f32(check_voxel_occupancy(pos - vec3<f32>(0.0, 0.2, 0.0), op));
-    let dz = f32(check_voxel_occupancy(pos + vec3<f32>(0.0, 0.0, 0.2), op)) - f32(check_voxel_occupancy(pos - vec3<f32>(0.0, 0.0, 0.2), op));
-    
-    let n = -vec3<f32>(dx, dy, dz);
-    if (length(n) < 0.01) { return vec3<f32>(0.0, 1.0, 0.0); } // Default to Up if inside a solid block
-    return normalize(n);
+    return load_baked_voxel_normal(pos, op);
 }
 
 fn get_occupancy_info(pos: vec3<f32>, out_normal: ptr<function, vec3<f32>>) -> bool {

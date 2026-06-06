@@ -345,25 +345,25 @@ func TestResolveBrickUploadMode(t *testing.T) {
 		name        string
 		flags       uint32
 		usesPayload bool
-		usesDense   bool
+		usesAux     bool
 	}{
 		{
 			name:        "solid",
 			flags:       volume.BrickFlagSolid,
 			usesPayload: false,
-			usesDense:   false,
+			usesAux:     true,
 		},
 		{
 			name:        "uniform sparse",
 			flags:       volume.BrickFlagUniformMaterial,
 			usesPayload: false,
-			usesDense:   true,
+			usesAux:     true,
 		},
 		{
 			name:        "payload sparse",
 			flags:       0,
 			usesPayload: true,
-			usesDense:   true,
+			usesAux:     true,
 		},
 	}
 
@@ -373,8 +373,8 @@ func TestResolveBrickUploadMode(t *testing.T) {
 			if mode.usesPayload != tc.usesPayload {
 				t.Fatalf("expected usesPayload=%v, got %v", tc.usesPayload, mode.usesPayload)
 			}
-			if mode.usesDense != tc.usesDense {
-				t.Fatalf("expected usesDense=%v, got %v", tc.usesDense, mode.usesDense)
+			if mode.usesAux != tc.usesAux {
+				t.Fatalf("expected usesAux=%v, got %v", tc.usesAux, mode.usesAux)
 			}
 		})
 	}
@@ -382,13 +382,13 @@ func TestResolveBrickUploadMode(t *testing.T) {
 
 func TestEncodeGpuBrickRecordUsesExplicitMaterialAndPayloadFields(t *testing.T) {
 	record := gpuBrickRecord{
-		materialIndex:          11,
-		payloadOffset:          22,
-		occupancyMaskLo:        33,
-		occupancyMaskHi:        44,
-		payloadPage:            55,
-		flags:                  volume.BrickFlagUniformMaterial,
-		denseOccupancyWordBase: 66,
+		materialIndex:    11,
+		payloadOffset:    22,
+		occupancyMaskLo:  33,
+		occupancyMaskHi:  44,
+		payloadPage:      55,
+		flags:            volume.BrickFlagUniformMaterial,
+		voxelAuxWordBase: 66,
 	}
 
 	buf := encodeGpuBrickRecord(record)
@@ -413,8 +413,8 @@ func TestEncodeGpuBrickRecordUsesExplicitMaterialAndPayloadFields(t *testing.T) 
 	if got := binary.LittleEndian.Uint32(buf[20:24]); got != record.flags {
 		t.Fatalf("expected flags %d, got %d", record.flags, got)
 	}
-	if got := binary.LittleEndian.Uint32(buf[24:28]); got != record.denseOccupancyWordBase {
-		t.Fatalf("expected dense occupancy word base %d, got %d", record.denseOccupancyWordBase, got)
+	if got := binary.LittleEndian.Uint32(buf[24:28]); got != record.voxelAuxWordBase {
+		t.Fatalf("expected voxel aux word base %d, got %d", record.voxelAuxWordBase, got)
 	}
 	if got := binary.LittleEndian.Uint32(buf[28:32]); got != 0 {
 		t.Fatalf("expected trailing padding to be zeroed, got %d", got)
@@ -426,18 +426,18 @@ func TestBuildGpuBrickRecordMapsModesToExplicitFields(t *testing.T) {
 	brick.OccupancyMask64 = 0x8877665544332211
 	brick.AtlasOffset = 9
 
-	solid := buildGpuBrickRecord(brick, resolveBrickUploadMode(volume.BrickFlagSolid), 123, 4, DenseOccupancyInvalidWordBase)
-	if solid.materialIndex != 9 || solid.payloadOffset != 0 || solid.payloadPage != 0 {
-		t.Fatalf("expected solid brick to use material field only, got %+v", solid)
+	solid := buildGpuBrickRecord(brick, resolveBrickUploadMode(volume.BrickFlagSolid), 123, 4, VoxelAuxInvalidWordBase)
+	if solid.materialIndex != 9 || solid.payloadOffset != 0 || solid.payloadPage != 0 || solid.voxelAuxWordBase != VoxelAuxInvalidWordBase {
+		t.Fatalf("expected solid brick to use material field plus voxel aux, got %+v", solid)
 	}
 
 	uniform := buildGpuBrickRecord(brick, resolveBrickUploadMode(volume.BrickFlagUniformMaterial), 123, 4, 77)
-	if uniform.materialIndex != 9 || uniform.payloadOffset != 0 || uniform.payloadPage != 0 || uniform.denseOccupancyWordBase != 77 {
-		t.Fatalf("expected uniform sparse brick to use material field plus dense occupancy, got %+v", uniform)
+	if uniform.materialIndex != 9 || uniform.payloadOffset != 0 || uniform.payloadPage != 0 || uniform.voxelAuxWordBase != 77 {
+		t.Fatalf("expected uniform sparse brick to use material field plus voxel aux, got %+v", uniform)
 	}
 
 	payload := buildGpuBrickRecord(brick, resolveBrickUploadMode(0), 123, 4, 88)
-	if payload.materialIndex != 0 || payload.payloadOffset != 123 || payload.payloadPage != 4 || payload.denseOccupancyWordBase != 88 {
+	if payload.materialIndex != 0 || payload.payloadOffset != 123 || payload.payloadPage != 4 || payload.voxelAuxWordBase != 88 {
 		t.Fatalf("expected payload sparse brick to use payload fields, got %+v", payload)
 	}
 }
@@ -500,7 +500,7 @@ func TestReleaseBrickSlotReturnsCapacityToOwningPage(t *testing.T) {
 	}
 }
 
-func TestBuildDenseOccupancyBytesMatchesFrozenPacking(t *testing.T) {
+func TestBuildVoxelAuxBytesMatchesFrozenOccupancyPacking(t *testing.T) {
 	brick := volume.NewBrick()
 	brick.SetVoxel(0, 0, 0, 1)
 	brick.SetVoxel(7, 0, 0, 2)
@@ -508,9 +508,9 @@ func TestBuildDenseOccupancyBytesMatchesFrozenPacking(t *testing.T) {
 	brick.SetVoxel(0, 0, 1, 4)
 	brick.SetVoxel(7, 7, 7, 5)
 
-	buf := buildDenseOccupancyBytes(brick)
-	if len(buf) != DenseOccupancyRecordBytes {
-		t.Fatalf("expected dense occupancy payload size %d, got %d", DenseOccupancyRecordBytes, len(buf))
+	buf := buildVoxelAuxBytes(voxelNormalBakeContext{}, nil, brick, [3]int{})
+	if len(buf) != VoxelAuxRecordBytes {
+		t.Fatalf("expected voxel aux payload size %d, got %d", VoxelAuxRecordBytes, len(buf))
 	}
 
 	if got := binary.LittleEndian.Uint32(buf[0:4]); got != (1<<0 | 1<<7 | 1<<8) {
@@ -525,23 +525,114 @@ func TestBuildDenseOccupancyBytesMatchesFrozenPacking(t *testing.T) {
 	}
 }
 
-func TestReleaseDenseOccupancySlotReturnsCapacityToAllocator(t *testing.T) {
+func TestBuildVoxelAuxBytesBakesTerrainNeighborNormalsAcrossChunks(t *testing.T) {
+	leftMap := volume.NewXBrickMap()
+	leftMap.SetVoxel(31, 0, 0, 1)
+	rightMap := volume.NewXBrickMap()
+	rightMap.SetVoxel(0, 0, 0, 1)
+
+	left := core.NewVoxelObject()
+	left.XBrickMap = leftMap
+	left.IsTerrainChunk = true
+	left.TerrainGroupID = 12
+	left.TerrainChunkCoord = [3]int{0, 0, 0}
+	left.TerrainChunkSize = 32
+
+	right := core.NewVoxelObject()
+	right.XBrickMap = rightMap
+	right.IsTerrainChunk = true
+	right.TerrainGroupID = 12
+	right.TerrainChunkCoord = [3]int{1, 0, 0}
+	right.TerrainChunkSize = 32
+
+	scene := &core.Scene{Objects: []*core.VoxelObject{left, right}}
+	ctx := newVoxelNormalBakeContext(scene)
+	sector := leftMap.Sectors[[3]int{0, 0, 0}]
+	brick := sector.GetBrick(3, 0, 0)
+	buf := buildVoxelAuxBytes(ctx, left, brick, [3]int{24, 0, 0})
+
+	normalByte := bakedNormalByte(buf, 7)
+	nx, ny, nz, valid, _ := decodeBakedNormalByteForTest(normalByte)
+	if !valid {
+		t.Fatal("expected baked normal to be valid")
+	}
+	if nx != -1 || ny != 0 || nz != 0 {
+		t.Fatalf("expected seam-aware normal -X, got (%d,%d,%d) from byte %#x", nx, ny, nz, normalByte)
+	}
+}
+
+func TestMarkCrossObjectNormalHaloDirtyMarksAdjacentTerrainBrick(t *testing.T) {
+	leftMap := volume.NewXBrickMap()
+	leftMap.SetVoxel(31, 0, 0, 1)
+	rightMap := volume.NewXBrickMap()
+	rightMap.SetVoxel(0, 0, 0, 1)
+	leftMap.ClearDirty()
+	rightMap.ClearDirty()
+	leftMap.DirtyBricks[[6]int{0, 0, 0, 3, 0, 0}] = true
+
+	left := core.NewVoxelObject()
+	left.XBrickMap = leftMap
+	left.IsTerrainChunk = true
+	left.TerrainGroupID = 12
+	left.TerrainChunkCoord = [3]int{0, 0, 0}
+	left.TerrainChunkSize = 32
+
+	right := core.NewVoxelObject()
+	right.XBrickMap = rightMap
+	right.IsTerrainChunk = true
+	right.TerrainGroupID = 12
+	right.TerrainChunkCoord = [3]int{1, 0, 0}
+	right.TerrainChunkSize = 32
+
+	scene := &core.Scene{Objects: []*core.VoxelObject{left, right}}
+	ctx := newVoxelNormalBakeContext(scene)
+	markCrossObjectNormalHaloDirty(scene, ctx)
+
+	if !rightMap.DirtyBricks[[6]int{0, 0, 0, 0, 0, 0}] {
+		t.Fatal("expected adjacent terrain chunk boundary brick to be dirtied")
+	}
+}
+
+func TestReleaseVoxelAuxSlotReturnsCapacityToAllocator(t *testing.T) {
 	brick := volume.NewBrick()
 	m := &GpuBufferManager{
-		BrickToDenseSlot: map[*volume.Brick]uint32{brick: 7},
+		BrickToAuxSlot: map[*volume.Brick]uint32{brick: 7},
 	}
-	m.DenseOccupancyAlloc.Tail = 8
+	m.VoxelAuxAlloc.Tail = 8
 
-	m.releaseDenseOccupancySlot(brick)
+	m.releaseVoxelAuxSlot(brick)
 
-	if _, exists := m.BrickToDenseSlot[brick]; exists {
-		t.Fatal("expected released dense occupancy mapping to be cleared")
+	if _, exists := m.BrickToAuxSlot[brick]; exists {
+		t.Fatal("expected released voxel aux mapping to be cleared")
 	}
-	slot := m.DenseOccupancyAlloc.Alloc()
+	slot := m.VoxelAuxAlloc.Alloc()
 	if slot != 7 {
-		t.Fatalf("expected dense occupancy slot 7 to be reused, got %d", slot)
+		t.Fatalf("expected voxel aux slot 7 to be reused, got %d", slot)
 	}
-	if got := denseOccupancyWordBase(slot); got != slot*volume.DenseOccupancyWordCount {
-		t.Fatalf("expected dense occupancy word base %d, got %d", slot*volume.DenseOccupancyWordCount, got)
+	if got := voxelAuxWordBase(slot); got != slot*volume.VoxelAuxWordCount {
+		t.Fatalf("expected voxel aux word base %d, got %d", slot*volume.VoxelAuxWordCount, got)
 	}
+}
+
+func bakedNormalByte(buf []byte, voxelIdx int) byte {
+	normalBase := volume.DenseOccupancyWordCount * 4
+	return buf[normalBase+voxelIdx]
+}
+
+func decodeBakedNormalByteForTest(b byte) (int, int, int, bool, bool) {
+	decodeAxis := func(bits byte) int {
+		switch bits & 0x3 {
+		case voxelNormalAxisPositive:
+			return 1
+		case voxelNormalAxisNegative:
+			return -1
+		default:
+			return 0
+		}
+	}
+	return decodeAxis(b),
+		decodeAxis(b >> 2),
+		decodeAxis(b >> 4),
+		b&voxelNormalValidBit != 0,
+		b&voxelNormalTwoSidedBit != 0
 }

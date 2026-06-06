@@ -97,7 +97,7 @@ struct BrickRecord {
     occupancy_mask_hi: u32,
     payload_page: u32,
     flags: u32,
-    dense_occupancy_word_base: u32,
+    voxel_aux_word_base: u32,
     padding: u32,
 };
 
@@ -183,7 +183,7 @@ struct SectorGridParams {
 @group(2) @binding(9) var<storage, read> sector_grid: array<SectorGridEntry>;
 @group(2) @binding(10) var<uniform> sector_grid_params: SectorGridParams;
 @group(2) @binding(11) var<storage, read> direct_sector_lookup_words: array<u32>;
-@group(2) @binding(13) var<storage, read> dense_occupancy_words: array<u32>;
+@group(2) @binding(13) var<storage, read> voxel_aux_words: array<u32>;
 
 var<private> g_light_emitter_link_id: u32 = 0u;
 
@@ -255,7 +255,7 @@ fn load_u8(packed_offset: u32, atlas_page: u32, voxel_idx: u32) -> u32 {
 
 fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
     if (word_base == 0xFFFFFFFFu) { return false; }
-    let word = dense_occupancy_words[word_base + (voxel_idx >> 5u)];
+    let word = voxel_aux_words[word_base + (voxel_idx >> 5u)];
     let bit = 1u << (voxel_idx & 31u);
     return (word & bit) != 0u;
 }
@@ -365,7 +365,7 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
         let vz = v.z & 7;
         let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
         let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-        return select(0.0, 1.0, dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx));
+        return select(0.0, 1.0, dense_occupancy_test(brick.voxel_aux_word_base, voxel_idx));
     }
     return 1.0;
 }
@@ -482,7 +482,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 
                                 let b_mask_lo = brick.occupancy_mask_lo;
                                 let b_mask_hi = brick.occupancy_mask_hi;
-                                if (bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx)) {
+                                if (bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.voxel_aux_word_base, voxel_idx)) {
                                     let palette_idx = select(load_u8(brick.payload_offset, brick.payload_page, voxel_idx), b_material, brick_is_uniform_material(b_flags));
                                     if (palette_idx != EMPTY_VOXEL) {
                                         let mat_idx_v = params.material_table_base + palette_idx * 4u;

@@ -237,7 +237,8 @@ The voxel renderer intentionally keeps a blocky albedo/material look while allow
 Current implementation notes:
 
 - The live normal-generation path is in `voxelrt/rt/shaders/gbuffer.wgsl`.
-- Neighbor-derived normals are computed from 6-neighbor occupancy samples, terrain chunks included across chunk boundaries.
+- Neighbor-derived normals are baked during voxel upload into the voxel auxiliary sidecar, terrain chunks included across chunk boundaries.
+- The sidecar keeps dense occupancy words followed by one packed normal byte per voxel. G-buffer, transparent overlay, and particle collision paths load the baked normal at the hit voxel instead of sampling six neighbors at hit time.
 - The degenerate fallback path is occupancy-based and deterministic per voxel; face-entry is only a last resort.
 - Degenerate thin voxels carry a two-sided direct-light flag through the G-buffer so deferred and transparent lighting agree on planes and rods.
 - Deferred lighting consumes the stored G-buffer normal directly; the albedo/material lookup stays palette-driven.

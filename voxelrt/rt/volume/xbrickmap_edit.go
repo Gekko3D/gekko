@@ -2,6 +2,46 @@ package volume
 
 import "github.com/go-gl/mathgl/mgl32"
 
+func sectorBrickKeyForVoxel(gx, gy, gz int) ([3]int, [6]int) {
+	sx, sy, sz := gx/SectorSize, gy/SectorSize, gz/SectorSize
+	slx, sly, slz := gx%SectorSize, gy%SectorSize, gz%SectorSize
+	if slx < 0 {
+		slx += SectorSize
+		sx--
+	}
+	if sly < 0 {
+		sly += SectorSize
+		sy--
+	}
+	if slz < 0 {
+		slz += SectorSize
+		sz--
+	}
+
+	bx, by, bz := slx/BrickSize, sly/BrickSize, slz/BrickSize
+	return [3]int{sx, sy, sz}, [6]int{sx, sy, sz, bx, by, bz}
+}
+
+func (x *XBrickMap) markVoxelNormalHaloDirty(gx, gy, gz int) {
+	if x.GPUEditMode {
+		return
+	}
+
+	dirs := [][3]int{
+		{0, 0, 0},
+		{1, 0, 0},
+		{-1, 0, 0},
+		{0, 1, 0},
+		{0, -1, 0},
+		{0, 0, 1},
+		{0, 0, -1},
+	}
+	for _, dir := range dirs {
+		_, bKey := sectorBrickKeyForVoxel(gx+dir[0], gy+dir[1], gz+dir[2])
+		x.DirtyBricks[bKey] = true
+	}
+}
+
 func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 	// GPU-first mode: queue edit on GPU instead of CPU update
 	if x.GPUEditMode && x.gpuManager != nil {
@@ -49,6 +89,7 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 				if !x.GPUEditMode {
 					x.DirtySectors[sKey] = true
 					x.DirtyBricks[bKey] = true
+					x.markVoxelNormalHaloDirty(gx, gy, gz)
 				}
 
 				// Incremental AABB: Only mark dirty if removing a boundary voxel
@@ -97,6 +138,7 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		if !x.GPUEditMode {
 			x.DirtySectors[sKey] = true
 			x.DirtyBricks[bKey] = true
+			x.markVoxelNormalHaloDirty(gx, gy, gz)
 		}
 
 		// Incremental AABB: Expand existing bounds or mark dirty if already dirty

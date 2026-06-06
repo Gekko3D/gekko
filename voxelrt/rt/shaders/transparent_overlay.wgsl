@@ -9,6 +9,9 @@ const EPS: f32 = 1e-3;
 const PI: f32 = 3.14159265359;
 const BRICK_FLAG_SOLID: u32 = 1u;
 const BRICK_FLAG_UNIFORM_MATERIAL: u32 = 2u;
+const VOXEL_AUX_OCCUPANCY_WORD_COUNT: u32 = 16u;
+const VOXEL_NORMAL_VALID_BIT: u32 = 0x40u;
+const VOXEL_NORMAL_TWO_SIDED_BIT: u32 = 0x80u;
 
 // ============== STRUCTS (match gbuffer/deferred) ==============
 struct CameraData {
@@ -65,7 +68,7 @@ struct BrickRecord {
   occupancy_mask_hi: u32,
   payload_page: u32,
   flags: u32,
-  dense_occupancy_word_base: u32,
+  voxel_aux_word_base: u32,
   padding: u32,
 };
 
@@ -171,6 +174,12 @@ struct Ray {
   inv_dir: vec3<f32>,
 };
 
+struct BakedVoxelNormal {
+  normal: vec3<f32>,
+  valid: bool,
+  two_sided_lighting: bool,
+};
+
 struct TransparentHit {
   hit: bool,
   t: f32,
@@ -204,7 +213,7 @@ struct TransparentHit {
 @group(1) @binding(9) var<storage, read> sector_grid          : array<SectorGridEntry>;
 @group(1) @binding(10) var<uniform> sector_grid_params   : SectorGridParams;
 @group(1) @binding(11) var<storage, read> direct_sector_lookup_words : array<u32>;
-@group(1) @binding(13) var<storage, read> dense_occupancy_words : array<u32>;
+@group(1) @binding(13) var<storage, read> voxel_aux_words : array<u32>;
 
 // Group 2: GBuffer inputs
 @group(2) @binding(0) var in_depth    : texture_2d<f32>;      // stores ray t in .r
@@ -308,9 +317,43 @@ fn load_u8(packed_offset: u32, atlas_page: u32, voxel_idx: u32) -> u32 {
 
 fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
   if (word_base == 0xFFFFFFFFu) { return false; }
-  let word = dense_occupancy_words[word_base + (voxel_idx >> 5u)];
+  let word = voxel_aux_words[word_base + (voxel_idx >> 5u)];
   let bit = 1u << (voxel_idx & 31u);
   return (word & bit) != 0u;
+}
+
+fn decode_baked_normal_axis(bits: u32) -> f32 {
+  let v = bits & 0x3u;
+  if (v == 1u) { return 1.0; }
+  if (v == 2u) { return -1.0; }
+  return 0.0;
+}
+
+fn decode_baked_voxel_normal(encoded: u32) -> BakedVoxelNormal {
+  let n = vec3<f32>(
+    decode_baked_normal_axis(encoded),
+    decode_baked_normal_axis(encoded >> 2u),
+    decode_baked_normal_axis(encoded >> 4u),
+  );
+  let valid = (encoded & VOXEL_NORMAL_VALID_BIT) != 0u && dot(n, n) > 0.0;
+  if (!valid) {
+    return BakedVoxelNormal(vec3<f32>(0.0), false, false);
+  }
+  return BakedVoxelNormal(
+    normalize(n),
+    true,
+    (encoded & VOXEL_NORMAL_TWO_SIDED_BIT) != 0u,
+  );
+}
+
+fn load_baked_voxel_normal_from_brick(brick: BrickRecord, voxel_idx: u32) -> BakedVoxelNormal {
+  if (brick.voxel_aux_word_base == 0xFFFFFFFFu) {
+    return BakedVoxelNormal(vec3<f32>(0.0), false, false);
+  }
+  let word_idx = brick.voxel_aux_word_base + VOXEL_AUX_OCCUPANCY_WORD_COUNT + (voxel_idx >> 2u);
+  let word = voxel_aux_words[word_idx];
+  let encoded = (word >> ((voxel_idx & 3u) * 8u)) & 0xFFu;
+  return decode_baked_voxel_normal(encoded);
 }
 
 fn brick_is_solid(flags: u32) -> bool {
@@ -457,9 +500,32 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
     let vz = v.z & 7;
     let vvid = vec3<u32>(u32(vx), u32(vy), u32(vz));
     let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-    return select(0.0, 1.0, dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx));
+    return select(0.0, 1.0, dense_occupancy_test(brick.voxel_aux_word_base, voxel_idx));
   }
   return 1.0;
+}
+
+fn load_baked_voxel_normal_local(vi: vec3<i32>, params: ObjectParams) -> BakedVoxelNormal {
+  let sx = vi.x >> 5u;
+  let sy = vi.y >> 5u;
+  let sz = vi.z >> 5u;
+  let sector_idx = find_sector_cached(sx, sy, sz, params);
+  if (sector_idx < 0) { return BakedVoxelNormal(vec3<f32>(0.0), false, false); }
+  let sector = sectors[sector_idx];
+  let bx = (vi.x >> 3u) & 3;
+  let by = (vi.y >> 3u) & 3;
+  let bz = (vi.z >> 3u) & 3;
+  let bvid = vec3<u32>(u32(bx), u32(by), u32(bz));
+  let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
+  if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
+    return BakedVoxelNormal(vec3<f32>(0.0), false, false);
+  }
+  let brick = bricks[sector.brick_table_index + brick_idx_local];
+  let vx = vi.x & 7;
+  let vy = vi.y & 7;
+  let vz = vi.z & 7;
+  let voxel_idx = u32(vx) + u32(vy) * 8u + u32(vz) * 64u;
+  return load_baked_voxel_normal_from_brick(brick, voxel_idx);
 }
 
 fn estimate_normal_os(voxel_center_os: vec3<f32>, params: ObjectParams) -> vec3<f32> {
@@ -1268,13 +1334,10 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                               let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                               let voxel_center_os = floor(p_hit_os) + 0.5;
                               let vi_hit = vec3<i32>(floor(voxel_center_os));
-                              var n_os = estimate_normal_os(voxel_center_os, params);
-                              var two_sided_lighting = false;
-                              if (length(n_os) < 0.01) {
-                                n_os = fallback_exposed_voxel_normal_os(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
-                                two_sided_lighting = has_two_sided_voxel_exposure_os(voxel_center_os, params);
-                              }
-                              if (length(n_os) < 0.01) {
+                              let baked_normal = load_baked_voxel_normal_local(vi_hit, params);
+                              var n_os = baked_normal.normal;
+                              let two_sided_lighting = baked_normal.two_sided_lighting;
+                              if (!baked_normal.valid) {
                                 n_os = fallback_face_normal_os(p_hit_os, vi_hit, dir);
                               }
                               let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);
@@ -1367,7 +1430,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                           let mvid = vvid / 2u;
                           let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
                           let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
-                          let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.dense_occupancy_word_base, voxel_idx);
+                          let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.voxel_aux_word_base, voxel_idx);
                           if (process) {
                             let palette_idx = select(load_u8(brick.payload_offset, brick.payload_page, voxel_idx), b_material, brick_is_uniform_material(b_flags));
                             if (palette_idx != 0u) {
@@ -1389,13 +1452,10 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                                   let p_hit_os = ray_os.origin + dir * (t_micro + dt * 0.5);
                                   let voxel_center_os = floor(p_hit_os) + 0.5;
                                   let vi_hit = vec3<i32>(floor(voxel_center_os));
-                                  var n_os = estimate_normal_os(voxel_center_os, params);
-                                  var two_sided_lighting = false;
-                                  if (length(n_os) < 0.01) {
-                                    n_os = fallback_exposed_voxel_normal_os(voxel_center_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, params);
-                                    two_sided_lighting = has_two_sided_voxel_exposure_os(voxel_center_os, params);
-                                  }
-                                  if (length(n_os) < 0.01) {
+                                  let baked_normal = load_baked_voxel_normal_local(vi_hit, params);
+                                  var n_os = baked_normal.normal;
+                                  let two_sided_lighting = baked_normal.two_sided_lighting;
+                                  if (!baked_normal.valid) {
                                     n_os = fallback_face_normal_os(p_hit_os, vi_hit, dir);
                                   }
                                   let n_ws = normalize((transpose(inst.world_to_object) * vec4<f32>(n_os, 0.0)).xyz);

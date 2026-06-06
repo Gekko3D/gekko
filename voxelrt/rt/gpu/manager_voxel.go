@@ -63,6 +63,8 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	m.VoxelPayloadSparseBricks = 0
 	m.VoxelPayloadUploadsSkipped = 0
 	m.VoxelPayloadBytesAvoided = 0
+	normalBakeContext := newVoxelNormalBakeContext(scene)
+	markCrossObjectNormalHaloDirty(scene, normalBakeContext)
 
 	// Cleanup orphan allocations
 	activeMaps := make(map[*volume.XBrickMap]bool)
@@ -89,7 +91,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					for i := 0; i < 64; i++ {
 						if brick := bPtrs[i]; brick != nil {
 							m.releaseBrickSlot(brick)
-							m.releaseDenseOccupancySlot(brick)
+							m.releaseVoxelAuxSlot(brick)
 						}
 					}
 				}
@@ -154,7 +156,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*BrickRecordSize) {
 		recreated = true
 	}
-	if m.ensureBuffer("DenseOccupancyBuf", &m.DenseOccupancyBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*DenseOccupancyRecordBytes) {
+	if m.ensureBuffer("DenseOccupancyBuf", &m.DenseOccupancyBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*VoxelAuxRecordBytes) {
 		recreated = true
 	}
 	if m.ensureVoxelPayloadPages() {
@@ -238,7 +240,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 							for i := 0; i < 64; i++ {
 								if brick := bPtrs[i]; brick != nil {
 									m.releaseBrickSlot(brick)
-									m.releaseDenseOccupancySlot(brick)
+									m.releaseVoxelAuxSlot(brick)
 								}
 							}
 							delete(alloc.Bricks, k)
@@ -306,13 +308,13 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					if bPtrs, has := alloc.Bricks[sKey]; has {
 						bPtrs[i] = brick // Sync pointer
 					}
-					m.uploadBrick(brick, info.BrickTableIndex+uint32(i))
+					m.uploadBrick(normalBakeContext, obj, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(sKey, i))
 				} else {
 					// Clear brick record in GPU to 0
 					if bPtrs, has := alloc.Bricks[sKey]; has {
 						if oldBrick := bPtrs[i]; oldBrick != nil {
 							m.releaseBrickSlot(oldBrick)
-							m.releaseDenseOccupancySlot(oldBrick)
+							m.releaseVoxelAuxSlot(oldBrick)
 						}
 						bPtrs[i] = nil
 					}
@@ -352,17 +354,22 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					if oldBrick != nil && oldBrick != brick {
 						// Brick changed! Release old one
 						m.releaseBrickSlot(oldBrick)
-						m.releaseDenseOccupancySlot(oldBrick)
+						m.releaseVoxelAuxSlot(oldBrick)
 					}
 					bPtrs[bx+by*4+bz*16] = brick
 				}
-				m.uploadBrick(brick, info.BrickTableIndex+uint32(bx+by*4+bz*16))
+				origin := [3]int{
+					sx*volume.SectorSize + bx*volume.BrickSize,
+					sy*volume.SectorSize + by*volume.BrickSize,
+					sz*volume.SectorSize + bz*volume.BrickSize,
+				}
+				m.uploadBrick(normalBakeContext, obj, brick, info.BrickTableIndex+uint32(bx+by*4+bz*16), origin)
 			} else {
 				// Clear brick record in GPU to 0
 				if hasPtrs {
 					if oldBrick := bPtrs[bx+by*4+bz*16]; oldBrick != nil {
 						m.releaseBrickSlot(oldBrick)
-						m.releaseDenseOccupancySlot(oldBrick)
+						m.releaseVoxelAuxSlot(oldBrick)
 					}
 					bPtrs[bx+by*4+bz*16] = nil
 				}
@@ -422,59 +429,60 @@ func (m *GpuBufferManager) releaseBrickSlot(brick *volume.Brick) {
 	m.PayloadAlloc[slot.Page].FreeSlot(slot.Slot)
 }
 
-func (m *GpuBufferManager) releaseDenseOccupancySlot(brick *volume.Brick) {
-	slot, exists := m.BrickToDenseSlot[brick]
+func (m *GpuBufferManager) releaseVoxelAuxSlot(brick *volume.Brick) {
+	slot, exists := m.BrickToAuxSlot[brick]
 	if !exists {
 		return
 	}
-	delete(m.BrickToDenseSlot, brick)
-	m.DenseOccupancyAlloc.FreeSlot(slot)
+	delete(m.BrickToAuxSlot, brick)
+	m.VoxelAuxAlloc.FreeSlot(slot)
 }
 
-func denseOccupancyWordBase(slot uint32) uint32 {
-	return slot * volume.DenseOccupancyWordCount
+func voxelAuxWordBase(slot uint32) uint32 {
+	return slot * volume.VoxelAuxWordCount
 }
 
-func buildDenseOccupancyBytes(brick *volume.Brick) []byte {
-	words := brick.DenseOccupancyWords()
-	buf := make([]byte, DenseOccupancyRecordBytes)
-	for i, word := range words {
-		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], word)
+func brickOriginForSectorIndex(sKey [3]int, brickIdx int) [3]int {
+	bx, by, bz := brickIdx%4, (brickIdx/4)%4, brickIdx/16
+	return [3]int{
+		sKey[0]*volume.SectorSize + bx*volume.BrickSize,
+		sKey[1]*volume.SectorSize + by*volume.BrickSize,
+		sKey[2]*volume.SectorSize + bz*volume.BrickSize,
 	}
-	return buf
 }
 
 type brickUploadMode struct {
-	usesPayload bool
-	usesDense   bool
+	usesPayload     bool
+	usesAux         bool
+	isUniformSparse bool
 }
 
 type gpuBrickRecord struct {
-	materialIndex          uint32
-	payloadOffset          uint32
-	occupancyMaskLo        uint32
-	occupancyMaskHi        uint32
-	payloadPage            uint32
-	flags                  uint32
-	denseOccupancyWordBase uint32
+	materialIndex    uint32
+	payloadOffset    uint32
+	occupancyMaskLo  uint32
+	occupancyMaskHi  uint32
+	payloadPage      uint32
+	flags            uint32
+	voxelAuxWordBase uint32
 }
 
 func resolveBrickUploadMode(flags uint32) brickUploadMode {
 	if flags&volume.BrickFlagSolid != 0 {
-		return brickUploadMode{}
+		return brickUploadMode{usesAux: true}
 	}
 	if flags&volume.BrickFlagUniformMaterial != 0 {
-		return brickUploadMode{usesDense: true}
+		return brickUploadMode{usesAux: true, isUniformSparse: true}
 	}
-	return brickUploadMode{usesPayload: true, usesDense: true}
+	return brickUploadMode{usesPayload: true, usesAux: true}
 }
 
-func buildGpuBrickRecord(brick *volume.Brick, mode brickUploadMode, payloadOffset, payloadPage, denseWordBase uint32) gpuBrickRecord {
+func buildGpuBrickRecord(brick *volume.Brick, mode brickUploadMode, payloadOffset, payloadPage, auxWordBase uint32) gpuBrickRecord {
 	record := gpuBrickRecord{
-		occupancyMaskLo:        uint32(brick.OccupancyMask64),
-		occupancyMaskHi:        uint32(brick.OccupancyMask64 >> 32),
-		flags:                  brick.Flags,
-		denseOccupancyWordBase: denseWordBase,
+		occupancyMaskLo:  uint32(brick.OccupancyMask64),
+		occupancyMaskHi:  uint32(brick.OccupancyMask64 >> 32),
+		flags:            brick.Flags,
+		voxelAuxWordBase: auxWordBase,
 	}
 	if mode.usesPayload {
 		record.payloadOffset = payloadOffset
@@ -493,7 +501,7 @@ func encodeGpuBrickRecord(record gpuBrickRecord) []byte {
 	binary.LittleEndian.PutUint32(buf[12:16], record.occupancyMaskHi)
 	binary.LittleEndian.PutUint32(buf[16:20], record.payloadPage)
 	binary.LittleEndian.PutUint32(buf[20:24], record.flags)
-	binary.LittleEndian.PutUint32(buf[24:28], record.denseOccupancyWordBase)
+	binary.LittleEndian.PutUint32(buf[24:28], record.voxelAuxWordBase)
 	return buf
 }
 
@@ -502,7 +510,7 @@ func (m *GpuBufferManager) recordVoxelUploadStats(mode brickUploadMode) {
 		m.VoxelPayloadSparseBricks++
 		return
 	}
-	if mode.usesDense {
+	if mode.isUniformSparse {
 		m.VoxelUniformSparseBricks++
 		m.VoxelPayloadUploadsSkipped++
 		m.VoxelPayloadBytesAvoided += payloadBytesPerBrick
@@ -525,7 +533,7 @@ func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorG
 	m.Device.GetQueue().WriteBuffer(m.SectorTableBuf, uint64(info.SlotIndex*32), sData)
 }
 
-func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
+func (m *GpuBufferManager) uploadBrick(ctx voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int) {
 	if brick == nil {
 		return
 	}
@@ -533,7 +541,7 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 	m.recordVoxelUploadStats(mode)
 	var payloadOffset uint32
 	var payloadPage uint32
-	denseWordBase := DenseOccupancyInvalidWordBase
+	auxWordBase := VoxelAuxInvalidWordBase
 	if !mode.usesPayload {
 		m.releaseBrickSlot(brick)
 	} else {
@@ -588,19 +596,19 @@ func (m *GpuBufferManager) uploadBrick(brick *volume.Brick, slotIdx uint32) {
 		)
 	}
 
-	if mode.usesDense {
-		denseSlot, exists := m.BrickToDenseSlot[brick]
+	if mode.usesAux {
+		auxSlot, exists := m.BrickToAuxSlot[brick]
 		if !exists {
-			denseSlot = m.DenseOccupancyAlloc.Alloc()
-			m.BrickToDenseSlot[brick] = denseSlot
+			auxSlot = m.VoxelAuxAlloc.Alloc()
+			m.BrickToAuxSlot[brick] = auxSlot
 		}
-		denseWordBase = denseOccupancyWordBase(denseSlot)
-		m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(denseSlot*DenseOccupancyRecordBytes), buildDenseOccupancyBytes(brick))
+		auxWordBase = voxelAuxWordBase(auxSlot)
+		m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot*VoxelAuxRecordBytes), buildVoxelAuxBytes(ctx, obj, brick, brickOrigin))
 	} else {
-		m.releaseDenseOccupancySlot(brick)
+		m.releaseVoxelAuxSlot(brick)
 	}
 
-	record := buildGpuBrickRecord(brick, mode, payloadOffset, payloadPage, denseWordBase)
+	record := buildGpuBrickRecord(brick, mode, payloadOffset, payloadPage, auxWordBase)
 	bbuf := encodeGpuBrickRecord(record)
 	m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(slotIdx*BrickRecordSize), bbuf)
 }

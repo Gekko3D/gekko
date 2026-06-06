@@ -18,20 +18,20 @@ const (
 	SafeBufferSizeLimit = 1024 * 1024 * 1024 // 1GB Warning/Compaction Limit
 
 	// Texture Atlas Constants
-	MaxVoxelAtlasPages            = 4
-	AtlasBricksPerSide            = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
-	AtlasSize                     = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
-	BrickRecordSize               = 32
-	DenseOccupancyBinding         = 13
-	GBufferObjectLookupBinding    = 12
-	GBufferDenseOccupancyBinding  = 13
-	DenseOccupancyInvalidWordBase = ^uint32(0)
-	DenseOccupancyRecordBytes     = volume.DenseOccupancyWordCount * 4
-	DirectSectorLookupInvalid     = ^uint32(0)
-	DirectSectorLookupMaxCells    = 4096
-	DirectSectorLookupDensityMax  = 16
-	LookupModeHash                = 0
-	LookupModeDirect              = 1
+	MaxVoxelAtlasPages           = 4
+	AtlasBricksPerSide           = 128                                   // 128^3 = 2,097,152 bricks (1GB at 512 bytes per brick)
+	AtlasSize                    = AtlasBricksPerSide * volume.BrickSize // 1024 voxels per side if BrickSize is 8
+	BrickRecordSize              = 32
+	DenseOccupancyBinding        = 13
+	GBufferObjectLookupBinding   = 12
+	GBufferDenseOccupancyBinding = 13
+	VoxelAuxInvalidWordBase      = ^uint32(0)
+	VoxelAuxRecordBytes          = volume.VoxelAuxWordCount * 4
+	DirectSectorLookupInvalid    = ^uint32(0)
+	DirectSectorLookupMaxCells   = 4096
+	DirectSectorLookupDensityMax = 16
+	LookupModeHash               = 0
+	LookupModeDirect             = 1
 
 	TiledLightingTileSize         = 16
 	TiledLightingMaxLightsPerTile = 128
@@ -460,15 +460,15 @@ type GpuBufferManager struct {
 	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
 
 	// Allocators for global pools
-	SectorAlloc         SlotAllocator
-	BrickAlloc          SlotAllocator                     // Allocates blocks of 64 bricks
-	PayloadAlloc        [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
-	DenseOccupancyAlloc SlotAllocator                     // Allocates one dense record per non-solid brick
+	SectorAlloc   SlotAllocator
+	BrickAlloc    SlotAllocator                     // Allocates blocks of 64 bricks
+	PayloadAlloc  [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
+	VoxelAuxAlloc SlotAllocator                     // Allocates one occupancy/normal record per brick
 
 	// Mapping from volume objects to GPU slots
-	SectorToInfo     map[*volume.Sector]SectorGpuInfo
-	BrickToSlot      map[*volume.Brick]PayloadSlot
-	BrickToDenseSlot map[*volume.Brick]uint32
+	SectorToInfo   map[*volume.Sector]SectorGpuInfo
+	BrickToSlot    map[*volume.Brick]PayloadSlot
+	BrickToAuxSlot map[*volume.Brick]uint32
 
 	MaterialAlloc       SlotAllocator // Allocates blocks of 256 materials (16KB each)
 	Allocations         map[*volume.XBrickMap]*ObjectGpuAllocation
@@ -562,7 +562,7 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
 	m.SectorToInfo = make(map[*volume.Sector]SectorGpuInfo)
 	m.BrickToSlot = make(map[*volume.Brick]PayloadSlot)
-	m.BrickToDenseSlot = make(map[*volume.Brick]uint32)
+	m.BrickToAuxSlot = make(map[*volume.Brick]uint32)
 	m.SpriteAtlases = make(map[string]*SpriteAtlasResource)
 
 	// Pre-allocate minimal buffers to avoid bind group validation errors at startup

@@ -133,6 +133,21 @@ func TestSetVoxelRefreshesBrickClassificationAcrossTransitions(t *testing.T) {
 	}
 }
 
+func TestSetVoxelMarksNormalHaloBricksDirty(t *testing.T) {
+	xbm := NewXBrickMap()
+	xbm.SetVoxel(7, 0, 0, 1)
+	xbm.ClearDirty()
+
+	xbm.SetVoxel(7, 0, 0, 0)
+
+	if !xbm.DirtyBricks[[6]int{0, 0, 0, 0, 0, 0}] {
+		t.Fatal("expected edited brick to be dirty")
+	}
+	if !xbm.DirtyBricks[[6]int{0, 0, 0, 1, 0, 0}] {
+		t.Fatal("expected neighboring +X brick to be dirty for baked normal halo")
+	}
+}
+
 func TestSplitDisconnectedComponents(t *testing.T) {
 	xbm := NewXBrickMap()
 
