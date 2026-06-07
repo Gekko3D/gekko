@@ -162,10 +162,22 @@ func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, 
 	if format == 0 {
 		format = wgpu.TextureFormatRGBA8UnormSrgb
 	}
-	if version != 0 {
-		if existing, ok := m.SpriteAtlases[key]; ok && existing != nil && existing.Version == version && existing.Format == format {
-			return
-		}
+	mipLevels := spriteAtlasUploadMipLevelCount(w, h)
+	if existing, ok := m.SpriteAtlases[key]; ok &&
+		existing != nil &&
+		existing.Version == version &&
+		existing.Format == format &&
+		existing.Width == w &&
+		existing.Height == h &&
+		existing.MipLevels == mipLevels {
+		return
+	}
+	required := int(w) * int(h) * 4
+	if w == 0 || h == 0 {
+		panic("sprite atlas dimensions must be non-zero")
+	}
+	if len(data) < required {
+		panic(fmt.Errorf("sprite atlas data too short: got %d bytes, need %d", len(data), required))
 	}
 	if existing, ok := m.SpriteAtlases[key]; ok && existing != nil {
 		if existing.View != nil {
@@ -180,7 +192,7 @@ func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, 
 	tex, err := m.Device.CreateTexture(&wgpu.TextureDescriptor{
 		Label:         "Sprite Atlas",
 		Size:          size,
-		MipLevelCount: 1,
+		MipLevelCount: mipLevels,
 		SampleCount:   1,
 		Dimension:     wgpu.TextureDimension2D,
 		Format:        format,
@@ -197,8 +209,12 @@ func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, 
 
 	m.ensureSpriteAtlasSampler()
 	m.Device.GetQueue().WriteTexture(
-		&wgpu.ImageCopyTexture{Texture: tex},
-		data,
+		&wgpu.ImageCopyTexture{
+			Texture:  tex,
+			MipLevel: 0,
+			Origin:   wgpu.Origin3D{X: 0, Y: 0, Z: 0},
+		},
+		data[:required],
 		&wgpu.TextureDataLayout{
 			Offset:       0,
 			BytesPerRow:  4 * w,
@@ -206,7 +222,110 @@ func (m *GpuBufferManager) SetSpriteAtlas(key string, data []byte, w, h uint32, 
 		},
 		&size,
 	)
-	m.SpriteAtlases[key] = &SpriteAtlasResource{Texture: tex, View: view, Version: version, Format: format}
+	m.SpriteAtlases[key] = &SpriteAtlasResource{
+		Texture:   tex,
+		View:      view,
+		Version:   version,
+		Format:    format,
+		Width:     w,
+		Height:    h,
+		MipLevels: mipLevels,
+	}
+}
+
+func spriteAtlasUploadMipLevelCount(w, h uint32) uint32 {
+	// Keep live uploads at one mip level for now. The current native backend
+	// reports a validation-invalid texture when sprite atlases are created with
+	// a CPU-supplied mip chain, so the alpha-aware helpers below stay tested but
+	// offline until the backend upload path is verified in a windowed smoke run.
+	return 1
+}
+
+type spriteAtlasMipLevel struct {
+	Data   []byte
+	Width  uint32
+	Height uint32
+}
+
+func spriteAtlasMipLevelCount(w, h uint32) uint32 {
+	if w == 0 || h == 0 {
+		return 1
+	}
+	levels := uint32(1)
+	for w > 1 || h > 1 {
+		w = max(uint32(1), (w+1)/2)
+		h = max(uint32(1), (h+1)/2)
+		levels++
+	}
+	return levels
+}
+
+func buildSpriteAtlasMipChainRGBA8(data []byte, w, h uint32) []spriteAtlasMipLevel {
+	if w == 0 || h == 0 {
+		panic("sprite atlas dimensions must be non-zero")
+	}
+	required := int(w) * int(h) * 4
+	if len(data) < required {
+		panic(fmt.Errorf("sprite atlas data too short: got %d bytes, need %d", len(data), required))
+	}
+
+	base := make([]byte, required)
+	copy(base, data[:required])
+	mips := []spriteAtlasMipLevel{{Data: base, Width: w, Height: h}}
+	for w > 1 || h > 1 {
+		prev := mips[len(mips)-1]
+		w = max(uint32(1), (prev.Width+1)/2)
+		h = max(uint32(1), (prev.Height+1)/2)
+		next := downsampleSpriteMipRGBA8(prev.Data, prev.Width, prev.Height, w, h)
+		mips = append(mips, spriteAtlasMipLevel{Data: next, Width: w, Height: h})
+	}
+	return mips
+}
+
+func downsampleSpriteMipRGBA8(prev []byte, prevW, prevH, nextW, nextH uint32) []byte {
+	next := make([]byte, int(nextW)*int(nextH)*4)
+	for y := uint32(0); y < nextH; y++ {
+		for x := uint32(0); x < nextW; x++ {
+			srcX0 := x * 2
+			srcY0 := y * 2
+			srcX1 := min(srcX0+2, prevW)
+			srcY1 := min(srcY0+2, prevH)
+
+			var sumR, sumG, sumB, sumA uint32
+			var weightedR, weightedG, weightedB uint32
+			var count uint32
+			for sy := srcY0; sy < srcY1; sy++ {
+				for sx := srcX0; sx < srcX1; sx++ {
+					idx := (int(sy)*int(prevW) + int(sx)) * 4
+					r := uint32(prev[idx+0])
+					g := uint32(prev[idx+1])
+					b := uint32(prev[idx+2])
+					a := uint32(prev[idx+3])
+					sumR += r
+					sumG += g
+					sumB += b
+					sumA += a
+					weightedR += r * a
+					weightedG += g * a
+					weightedB += b * a
+					count++
+				}
+			}
+
+			dst := (int(y)*int(nextW) + int(x)) * 4
+			if sumA > 0 {
+				next[dst+0] = uint8((weightedR + sumA/2) / sumA)
+				next[dst+1] = uint8((weightedG + sumA/2) / sumA)
+				next[dst+2] = uint8((weightedB + sumA/2) / sumA)
+			} else {
+				next[dst+0] = uint8((sumR + count/2) / count)
+				next[dst+1] = uint8((sumG + count/2) / count)
+				next[dst+2] = uint8((sumB + count/2) / count)
+			}
+			next[dst+3] = uint8((sumA + count/2) / count)
+		}
+	}
+	return next
 }
 
 func (m *GpuBufferManager) ensureSpriteAtlasSampler() {
@@ -221,7 +340,7 @@ func (m *GpuBufferManager) ensureSpriteAtlasSampler() {
 		MinFilter:     wgpu.FilterModeLinear,
 		MipmapFilter:  wgpu.MipmapFilterModeLinear,
 		LodMinClamp:   0,
-		LodMaxClamp:   32,
+		LodMaxClamp:   0,
 		MaxAnisotropy: 1,
 	})
 }

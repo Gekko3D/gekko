@@ -65,10 +65,13 @@ type GpuSkyboxUniforms struct {
 }
 
 type SpriteAtlasResource struct {
-	Texture *wgpu.Texture
-	View    *wgpu.TextureView
-	Version uint
-	Format  wgpu.TextureFormat
+	Texture   *wgpu.Texture
+	View      *wgpu.TextureView
+	Version   uint
+	Format    wgpu.TextureFormat
+	Width     uint32
+	Height    uint32
+	MipLevels uint32
 }
 
 type SpriteRenderBatch struct {

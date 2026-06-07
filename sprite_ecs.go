@@ -1,6 +1,8 @@
 package gekko
 
 import (
+	"math"
+
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -41,11 +43,16 @@ type SpriteComponent struct {
 	AlphaMode     SpriteAlphaMode
 }
 
-func appendSpriteInstance(spriteInstances *[]app_rt.SpriteInstanceInput, batches *[]app_rt.SpriteBatchInput, sp *SpriteComponent) {
-	if sp == nil || !sp.Enabled {
-		return
-	}
+type spriteSyncItem struct {
+	Instance app_rt.SpriteInstanceInput
+	AtlasKey string
+	IsUI     bool
+}
 
+func spriteSyncItemFromComponent(sp *SpriteComponent) (spriteSyncItem, bool) {
+	if sp == nil || !sp.Enabled || !spriteHasDrawableSurface(sp) {
+		return spriteSyncItem{}, false
+	}
 	cols := sp.AtlasCols
 	if cols == 0 {
 		cols = 1
@@ -75,34 +82,99 @@ func appendSpriteInstance(spriteInstances *[]app_rt.SpriteInstanceInput, batches
 		inst.IsUnlit = 1
 	}
 
-	atlasKey := spriteAtlasKey(sp.Texture)
+	return spriteSyncItem{
+		Instance: inst,
+		AtlasKey: spriteAtlasKey(sp.Texture),
+		IsUI:     sp.IsUI,
+	}, true
+}
+
+func spriteHasDrawableSurface(sp *SpriteComponent) bool {
+	if sp.Size[0] <= 0 || sp.Size[1] <= 0 || sp.Color[3] <= 0 {
+		return false
+	}
+	for i := 0; i < 2; i++ {
+		if math.IsNaN(float64(sp.Size[i])) || math.IsInf(float64(sp.Size[i]), 0) {
+			return false
+		}
+	}
+	for i := 0; i < 4; i++ {
+		if math.IsNaN(float64(sp.Color[i])) || math.IsInf(float64(sp.Color[i]), 0) {
+			return false
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if math.IsNaN(float64(sp.Position[i])) || math.IsInf(float64(sp.Position[i]), 0) {
+			return false
+		}
+	}
+	return true
+}
+
+func appendSpriteInstance(spriteInstances *[]app_rt.SpriteInstanceInput, batches *[]app_rt.SpriteBatchInput, item spriteSyncItem) {
 	instanceIndex := uint32(len(*spriteInstances))
-	if len(*batches) == 0 || (*batches)[len(*batches)-1].AtlasKey != atlasKey {
+	if len(*batches) == 0 || (*batches)[len(*batches)-1].AtlasKey != item.AtlasKey {
 		*batches = append(*batches, app_rt.SpriteBatchInput{
-			AtlasKey:      atlasKey,
+			AtlasKey:      item.AtlasKey,
 			FirstInstance: instanceIndex,
 		})
 	}
 	(*batches)[len(*batches)-1].InstanceCount++
-	*spriteInstances = append(*spriteInstances, inst)
+	*spriteInstances = append(*spriteInstances, item.Instance)
 }
 
 // spritesSync collects sprite data for the GPU.
 func spritesSync(state *VoxelRtState, cmd *Commands) ([]app_rt.SpriteInstanceInput, []app_rt.SpriteBatchInput) {
-	spriteInstances := make([]app_rt.SpriteInstanceInput, 0, 32)
-	batches := make([]app_rt.SpriteBatchInput, 0, 8)
+	items := make([]spriteSyncItem, 0, 32)
 
 	MakeQuery1[SpriteComponent](cmd).Map(func(eid EntityId, sp *SpriteComponent) bool {
-		appendSpriteInstance(&spriteInstances, &batches, sp)
+		if item, ok := spriteSyncItemFromComponent(sp); ok {
+			items = append(items, item)
+		}
 		return true
 	})
 	if state != nil {
 		for i := range state.runtimeSprites {
-			appendSpriteInstance(&spriteInstances, &batches, &state.runtimeSprites[i])
+			if item, ok := spriteSyncItemFromComponent(&state.runtimeSprites[i]); ok {
+				items = append(items, item)
+			}
 		}
 	}
 
+	spriteInstances := make([]app_rt.SpriteInstanceInput, 0, len(items))
+	batches := make([]app_rt.SpriteBatchInput, 0, 8)
+	appendGroupedWorldSpriteInstances(&spriteInstances, &batches, items)
+	appendUISpriteInstances(&spriteInstances, &batches, items)
+
 	return spriteInstances, batches
+}
+
+func appendGroupedWorldSpriteInstances(spriteInstances *[]app_rt.SpriteInstanceInput, batches *[]app_rt.SpriteBatchInput, items []spriteSyncItem) {
+	worldAtlasOrder := make([]string, 0, 8)
+	worldByAtlas := make(map[string][]spriteSyncItem, 8)
+	for _, item := range items {
+		if item.IsUI {
+			continue
+		}
+		if _, ok := worldByAtlas[item.AtlasKey]; !ok {
+			worldAtlasOrder = append(worldAtlasOrder, item.AtlasKey)
+		}
+		worldByAtlas[item.AtlasKey] = append(worldByAtlas[item.AtlasKey], item)
+	}
+	for _, atlasKey := range worldAtlasOrder {
+		for _, item := range worldByAtlas[atlasKey] {
+			appendSpriteInstance(spriteInstances, batches, item)
+		}
+	}
+}
+
+func appendUISpriteInstances(spriteInstances *[]app_rt.SpriteInstanceInput, batches *[]app_rt.SpriteBatchInput, items []spriteSyncItem) {
+	for _, item := range items {
+		if !item.IsUI {
+			continue
+		}
+		appendSpriteInstance(spriteInstances, batches, item)
+	}
 }
 
 func spriteAtlasKey(id AssetId) string {

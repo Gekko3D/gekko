@@ -911,6 +911,99 @@ func TestVoxelRtSystemGatesSpriteBridgeSyncByRegisteredFeature(t *testing.T) {
 	}
 }
 
+func TestSpritesSyncGroupsWorldSpritesByAtlasAndKeepsUIStable(t *testing.T) {
+	items := []spriteSyncItem{
+		testSpriteSyncItem("atlas-a", false, 10),
+		testSpriteSyncItem("atlas-b", false, 20),
+		testSpriteSyncItem("atlas-a", false, 30),
+		testSpriteSyncItem("atlas-ui", true, 40),
+		testSpriteSyncItem("atlas-b", false, 50),
+		testSpriteSyncItem("atlas-ui", true, 60),
+	}
+	instances := make([]app_rt.SpriteInstanceInput, 0, len(items))
+	batches := make([]app_rt.SpriteBatchInput, 0, len(items))
+	appendGroupedWorldSpriteInstances(&instances, &batches, items)
+	appendUISpriteInstances(&instances, &batches, items)
+
+	if got, want := len(instances), 6; got != want {
+		t.Fatalf("expected %d sprite instances, got %d", want, got)
+	}
+	if got, want := len(batches), 3; got != want {
+		t.Fatalf("expected %d sprite batches, got %d: %+v", want, got, batches)
+	}
+
+	if batches[0].AtlasKey != "atlas-a" || batches[0].FirstInstance != 0 || batches[0].InstanceCount != 2 {
+		t.Fatalf("unexpected atlas A world batch: %+v", batches[0])
+	}
+	if batches[1].AtlasKey != "atlas-b" || batches[1].FirstInstance != 2 || batches[1].InstanceCount != 2 {
+		t.Fatalf("unexpected atlas B world batch: %+v", batches[1])
+	}
+	if batches[2].AtlasKey != "atlas-ui" || batches[2].FirstInstance != 4 || batches[2].InstanceCount != 2 {
+		t.Fatalf("unexpected UI batch: %+v", batches[2])
+	}
+
+	gotOrder := []float32{
+		instances[0].Pos[0],
+		instances[1].Pos[0],
+		instances[2].Pos[0],
+		instances[3].Pos[0],
+		instances[4].Pos[0],
+		instances[5].Pos[0],
+	}
+	wantOrder := []float32{10, 30, 20, 50, 40, 60}
+	for i := range wantOrder {
+		if gotOrder[i] != wantOrder[i] {
+			t.Fatalf("sprite instance order = %v, want %v", gotOrder, wantOrder)
+		}
+	}
+}
+
+func testSpriteSyncItem(atlasKey string, isUI bool, x float32) spriteSyncItem {
+	return spriteSyncItem{
+		Instance: app_rt.SpriteInstanceInput{
+			Pos: [3]float32{x, 0, -4},
+		},
+		AtlasKey: atlasKey,
+		IsUI:     isUI,
+	}
+}
+
+func TestSpritesSyncSkipsUndrawableSprites(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	cmd.AddEntity(testSpriteComponent(AssetId{}, false, 1))
+	zeroAlpha := testSpriteComponent(AssetId{}, false, 2)
+	zeroAlpha.Color[3] = 0
+	cmd.AddEntity(zeroAlpha)
+	zeroSize := testSpriteComponent(AssetId{}, false, 3)
+	zeroSize.Size[0] = 0
+	cmd.AddEntity(zeroSize)
+	app.FlushCommands()
+
+	instances, batches := spritesSync(nil, cmd)
+	if got, want := len(instances), 1; got != want {
+		t.Fatalf("expected %d drawable sprite instance, got %d", want, got)
+	}
+	if got, want := len(batches), 1; got != want {
+		t.Fatalf("expected %d sprite batch, got %d", want, got)
+	}
+	if instances[0].Pos[0] != 1 {
+		t.Fatalf("expected drawable sprite to survive culling, got instance %+v", instances[0])
+	}
+}
+
+func testSpriteComponent(texture AssetId, isUI bool, x float32) *SpriteComponent {
+	return &SpriteComponent{
+		Enabled:       true,
+		Position:      mgl32.Vec3{x, 0, -4},
+		Size:          [2]float32{2, 2},
+		Color:         [4]float32{1, 1, 1, 1},
+		Texture:       texture,
+		IsUI:          isUI,
+		BillboardMode: BillboardSpherical,
+	}
+}
+
 func TestVoxelRtSkyboxBridgeSyncIsGatedByRegisteredFeature(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

@@ -162,7 +162,13 @@ fn fs_main(in: VSOut) -> FSOut {
         let view_ray = in.world_pos - camera.cam_pos.xyz;
         t_pixel = length(view_ray);
 
-        if (t_pixel > t_scene + 0.05) {
+        let depth_delta = t_pixel - t_scene;
+        let depth_fade = 1.0 - smoothstep(0.02, 0.45, depth_delta);
+        if (depth_fade <= 1e-3) {
+            discard;
+        }
+        alpha = alpha * depth_fade;
+        if (alpha < 0.01) {
             discard;
         }
     }
