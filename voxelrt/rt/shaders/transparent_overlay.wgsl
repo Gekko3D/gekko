@@ -949,6 +949,135 @@ fn tile_index_for_frag_pos(frag_pos: vec4<f32>) -> u32 {
   return tile_coord.y * tile_light_params.tiles_x + tile_coord.x;
 }
 
+fn calculate_light_contribution(
+  light: Light,
+  p: vec3<f32>,
+  n: vec3<f32>,
+  V: vec3<f32>,
+  NdotV: f32,
+  F0: vec3<f32>,
+  base_color: vec3<f32>,
+  roughness: f32,
+  metalness: f32,
+  two_sided_lighting: bool,
+  receiver_shadow_group_id: u32,
+  receiver_shadow_seam_epsilon: f32
+) -> vec3<f32> {
+  let light_type = u32(light.params.z);
+  var L = vec3<f32>(0.0);
+  var attenuation = 1.0;
+
+  if (light_type == 1u) {
+    L = normalize(-light.direction.xyz);
+  } else {
+    let dist_vec = light.position.xyz - p;
+    let dist = length(dist_vec);
+    let range = light.params.x;
+    L = normalize(dist_vec);
+    if (dist > range) {
+      attenuation = 0.0;
+    } else {
+      let dist_sq = dist * dist;
+      let factor = dist / range;
+      let smooth_factor = max(0.0, 1.0 - factor * factor);
+      let inv_sq = 1.0 / (dist_sq + 1.0);
+      attenuation = inv_sq * smooth_factor * smooth_factor * 50.0;
+      if (light_type == 2u) {
+        let spot_dir = normalize(light.direction.xyz);
+        let cos_cur = dot(-L, spot_dir);
+        let cos_cone = light.params.y;
+        if (cos_cur < cos_cone) {
+          attenuation = 0.0;
+        } else {
+          let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
+          attenuation *= spot_att;
+        }
+      }
+    }
+  }
+
+  if (attenuation <= 0.0) {
+    return vec3<f32>(0.0);
+  }
+
+  let shadow_normal = select(n, n * select(-1.0, 1.0, dot(n, L) >= 0.0), two_sided_lighting);
+
+  if (light.shadow_meta.y > 0u) {
+    if (light_type == 1u) {
+      let selection = choose_directional_cascade(light, p);
+      let primary_visibility = sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
+      let secondary_visibility = select(
+        primary_visibility,
+        sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
+        selection.secondary_index != selection.primary_index,
+      );
+      attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
+    } else if (light_type == 2u) {
+      let shadow_view_proj = light.view_proj;
+      let layer = light.shadow_meta.x;
+      let layer_params = shadow_layer_params[layer];
+      let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
+      let pos_ls = shadow_view_proj * vec4<f32>(p, 1.0);
+      let proj_pos = pos_ls.xyz / pos_ls.w;
+      let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
+
+      if (pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
+        let base_px_f = shadow_uv * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
+        let base_px = vec2<i32>(
+          i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
+          i32(clamp(base_px_f.y, 0.0, f32(effective_resolution - 1u)))
+        );
+
+        let receiver_offset = max(receiver_shadow_seam_epsilon * 0.5, 0.05);
+        let pos_off = p + shadow_normal * receiver_offset;
+        let my_depth_m = distance(light.position.xyz, pos_off);
+        let NdL_shadow = max(dot(shadow_normal, L), 0.0);
+        if (!voxel_shadow_skip_grazing(NdL_shadow)) {
+          let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
+          let hard_sampled_depth = hard_shadow_sample.r;
+          let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
+          let hard_same_shadow_group =
+            receiver_shadow_group_id != 0u &&
+            hard_sampled_shadow_group_id == receiver_shadow_group_id;
+          let baseBiasM = 0.05;
+          let slopeBiasM = 0.1;
+          let biasM = baseBiasM + voxel_shadow_bias(slopeBiasM, NdL_shadow);
+          let hard_receiver_minus_occluder = my_depth_m - hard_sampled_depth;
+          let hard_seam_lit = hard_same_shadow_group && hard_receiver_minus_occluder <= receiver_shadow_seam_epsilon;
+          attenuation *= select(0.0, 1.0, hard_seam_lit || hard_sampled_depth >= my_depth_m - biasM);
+        }
+      }
+    } else {
+      attenuation *= sample_point_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
+    }
+  }
+
+  if (attenuation <= 0.0) {
+    return vec3<f32>(0.0);
+  }
+
+  let NdotL = select(max(dot(n, L), 0.0), abs(dot(n, L)), two_sided_lighting);
+  let NdotV_local = select(NdotV, abs(dot(n, V)), two_sided_lighting);
+  if (NdotL <= 0.0 || NdotV_local <= 0.0) {
+    return vec3<f32>(0.0);
+  }
+
+  let H = normalize(V + L);
+  let NdotH = select(max(dot(n, H), 0.0), abs(dot(n, H)), two_sided_lighting);
+  let HdotV = max(dot(H, V), 0.0);
+  let rough = max(roughness, MIN_ROUGHNESS);
+  let fresnel = fresnel_schlick(HdotV, F0);
+  let D = distribution_ggx(NdotH, rough);
+  let G = geometry_smith(NdotV_local, NdotL, rough);
+  let specular = (D * G * fresnel) / max(4.0 * NdotV_local * NdotL, PBR_EPSILON);
+  let kS = fresnel;
+  let kD = (vec3<f32>(1.0) - kS) * (1.0 - metalness);
+  let diffuse = kD * base_color / PI;
+  let radiance = light.color.xyz * attenuation * light.color.w;
+
+  return (diffuse + specular) * radiance * NdotL;
+}
+
 fn calculate_lighting(
   p: vec3<f32>,
   n: vec3<f32>,
@@ -973,125 +1102,20 @@ fn calculate_lighting(
   let rough_reflection_dir = normalize(mix(reflection_dir, n, saturate(roughness * roughness)));
   let specular_ambient_light = uCamera.ambient_color.xyz * directional_ambient_scale(rough_reflection_dir);
   var total_light = ambient_kd * base_color * diffuse_ambient_light + ambient_fresnel * specular_ambient_light + emissive;
-  
+
+  for (var light_idx = 0u; light_idx < uCamera.num_lights; light_idx++) {
+    if (u32(lights[light_idx].params.z) != 1u) {
+      continue;
+    }
+    total_light += calculate_light_contribution(lights[light_idx], p, n, V, NdotV, F0, base_color, roughness, metalness, two_sided_lighting, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
+  }
+
   let tile_header = tile_light_headers[tile_index];
   for (var i = 0u; i < tile_header.count; i++) {
     let light = lights[tile_light_indices[tile_header.offset + i]];
-    let light_type = u32(light.params.z);
-    var L = vec3<f32>(0.0);
-    var attenuation = 1.0;
-    
-    if (light_type == 1u) {
-      L = normalize(-light.direction.xyz);
-    } else {
-      let dist_vec = light.position.xyz - p;
-      let dist = length(dist_vec);
-      let range = light.params.x;
-      L = normalize(dist_vec);
-      if (dist > range) {
-        attenuation = 0.0;
-      } else {
-        let dist_sq = dist * dist;
-        let factor = dist / range;
-        let smooth_factor = max(0.0, 1.0 - factor * factor);
-        let inv_sq = 1.0 / (dist_sq + 1.0);
-        attenuation = inv_sq * smooth_factor * smooth_factor * 50.0;
-        if (light_type == 2u) {
-          let spot_dir = normalize(light.direction.xyz);
-          let cos_cur = dot(-L, spot_dir);
-          let cos_cone = light.params.y;
-          if (cos_cur < cos_cone) {
-            attenuation = 0.0;
-          } else {
-            let spot_att = smoothstep(cos_cone, cos_cone + 0.1, cos_cur);
-            attenuation *= spot_att;
-          }
-        }
-      }
-    }
-
-    if (attenuation <= 0.0) {
-      continue;
-    }
-
-    let shadow_normal = select(n, n * select(-1.0, 1.0, dot(n, L) >= 0.0), two_sided_lighting);
-
-    if (light.shadow_meta.y > 0u) {
-      if (light_type == 1u) {
-        let selection = choose_directional_cascade(light, p);
-        let primary_visibility = sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
-        let secondary_visibility = select(
-          primary_visibility,
-          sample_directional_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
-          selection.secondary_index != selection.primary_index,
-        );
-        attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
-      } else if (light_type == 2u) {
-        let shadow_view_proj = light.view_proj;
-        let layer = light.shadow_meta.x;
-        let layer_params = shadow_layer_params[layer];
-        let effective_resolution = max(u32(layer_params.effective_resolution + 0.5), 1u);
-        let pos_ls = shadow_view_proj * vec4<f32>(p, 1.0);
-        let proj_pos = pos_ls.xyz / pos_ls.w;
-        let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
-
-        if (pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
-          let base_px_f = shadow_uv * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
-          let base_px = vec2<i32>(
-            i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
-            i32(clamp(base_px_f.y, 0.0, f32(effective_resolution - 1u)))
-          );
-
-          let receiver_offset = max(receiver_shadow_seam_epsilon * 0.5, 0.05);
-          let pos_off = p + shadow_normal * receiver_offset;
-          let my_depth_m = distance(light.position.xyz, pos_off);
-          let NdL_shadow = max(dot(shadow_normal, L), 0.0);
-          if (!voxel_shadow_skip_grazing(NdL_shadow)) {
-            let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
-            let hard_sampled_depth = hard_shadow_sample.r;
-            let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
-            let hard_same_shadow_group =
-              receiver_shadow_group_id != 0u &&
-              hard_sampled_shadow_group_id == receiver_shadow_group_id;
-            let baseBiasM = 0.05;
-            let slopeBiasM = 0.1;
-            let biasM = baseBiasM + voxel_shadow_bias(slopeBiasM, NdL_shadow);
-            let hard_receiver_minus_occluder = my_depth_m - hard_sampled_depth;
-            let hard_seam_lit = hard_same_shadow_group && hard_receiver_minus_occluder <= receiver_shadow_seam_epsilon;
-            attenuation *= select(0.0, 1.0, hard_seam_lit || hard_sampled_depth >= my_depth_m - biasM);
-          }
-        }
-      } else {
-        attenuation *= sample_point_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
-      }
-    }
-    
-    if (attenuation <= 0.0) {
-      continue;
-    }
-
-    let NdotL = select(max(dot(n, L), 0.0), abs(dot(n, L)), two_sided_lighting);
-    let NdotV_local = select(NdotV, abs(dot(n, V)), two_sided_lighting);
-    if (NdotL <= 0.0 || NdotV_local <= 0.0) {
-      continue;
-    }
-
-    let H = normalize(V + L);
-    let NdotH = select(max(dot(n, H), 0.0), abs(dot(n, H)), two_sided_lighting);
-    let HdotV = max(dot(H, V), 0.0);
-    let rough = max(roughness, MIN_ROUGHNESS);
-    let fresnel = fresnel_schlick(HdotV, F0);
-    let D = distribution_ggx(NdotH, rough);
-    let G = geometry_smith(NdotV_local, NdotL, rough);
-    let specular = (D * G * fresnel) / max(4.0 * NdotV_local * NdotL, PBR_EPSILON);
-    let kS = fresnel;
-    let kD = (vec3<f32>(1.0) - kS) * (1.0 - metalness);
-    let diffuse = kD * base_color / PI;
-    let radiance = light.color.xyz * attenuation * light.color.w;
-
-    total_light += (diffuse + specular) * radiance * NdotL;
+    total_light += calculate_light_contribution(light, p, n, V, NdotV, F0, base_color, roughness, metalness, two_sided_lighting, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
   }
-  
+
   return total_light;
 }
 

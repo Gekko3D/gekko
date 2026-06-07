@@ -221,7 +221,6 @@ func (m *GpuBufferManager) EstimateTiledLightMetrics(scene *core.Scene, viewProj
 	for _, light := range scene.Lights {
 		lightType := uint32(light.Params[2])
 		if lightType == core.LightTypeDirectional {
-			addFullscreen()
 			continue
 		}
 

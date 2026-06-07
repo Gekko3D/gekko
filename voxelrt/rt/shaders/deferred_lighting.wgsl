@@ -641,6 +641,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let indirect_color = ambient_term * ambient_occlusion;
     let emissive_term = emissive;
     var direct_color = vec3<f32>(0.0);
+
+    for (var light_idx = 0u; light_idx < camera.num_lights; light_idx++) {
+        if (u32(lights[light_idx].params.z) != 1u) {
+            continue;
+        }
+        let contribution = calculate_lighting(lighting_pos_ws, shadow_receiver_pos_ws, normal, view_dir, base_color, roughness, metalness, ior, two_sided_lighting, receiver_shadow_group_id, receiver_shadow_seam_epsilon, light_idx);
+        direct_color += contribution.color;
+    }
+
     let tile_header = tile_light_headers[tile_index_for_pixel(global_id.xy)];
 
     for (var i = 0u; i < tile_header.count; i++) {

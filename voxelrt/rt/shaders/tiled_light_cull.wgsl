@@ -13,6 +13,7 @@ struct CameraData {
     pad2: vec2<f32>,
     ao_quality: vec4<f32>,
     distance_limits: vec4<f32>,
+    render_origin: vec4<f32>,
 };
 
 struct DirectionalShadowCascade {
@@ -85,7 +86,8 @@ fn project_local_light_coverage(light: Light) -> LocalLightCoverage {
     let camera_right = camera_axis_ws(vec3<f32>(1.0, 0.0, 0.0));
     let camera_up = camera_axis_ws(vec3<f32>(0.0, 1.0, 0.0));
     let camera_forward = camera_axis_ws(vec3<f32>(0.0, 0.0, -1.0));
-    let delta = light.position.xyz - camera.cam_pos.xyz;
+    let camera_pos = camera.cam_pos.xyz - camera.render_origin.xyz;
+    let delta = light.position.xyz - camera_pos;
     let view_pos = vec3<f32>(
         dot(delta, camera_right),
         dot(delta, camera_up),
@@ -121,11 +123,12 @@ fn project_local_light_coverage(light: Light) -> LocalLightCoverage {
                     corner.z = -TILE_LIGHT_NEAR_PLANE_CLAMP;
                 }
 
-                let world_corner =
-                    camera.cam_pos.xyz +
+                let corner_pos =
+                    camera_pos +
                     camera_right * corner.x +
                     camera_up * corner.y -
                     camera_forward * corner.z;
+                let world_corner = corner_pos + camera.render_origin.xyz;
                 let clip = camera.view_proj * vec4<f32>(world_corner, 1.0);
                 if (abs(clip.w) < 1e-6) {
                     continue;
@@ -160,7 +163,7 @@ fn project_local_light_coverage(light: Light) -> LocalLightCoverage {
 fn light_affects_tile(light: Light, tile_coord: vec2<u32>) -> bool {
     let light_type = u32(light.params.z);
     if (light_type == 1u) {
-        return true;
+        return false;
     }
 
     let light_range = max(light.params.x, 0.0);

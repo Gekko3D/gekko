@@ -85,3 +85,27 @@ func TestEstimateTiledLightMetricsIgnoresLocalLightsFullyBehindCamera(t *testing
 		t.Fatalf("expected behind-camera local light to add no tile pressure, got avg=%d max=%d", manager.TileLightAvgCount, manager.TileLightMaxCount)
 	}
 }
+
+func TestEstimateTiledLightMetricsIgnoresDirectionalLights(t *testing.T) {
+	_, proj, invView := testTiledLightMatrices()
+	manager := &GpuBufferManager{
+		TileLightTilesX: 1,
+		TileLightTilesY: 1,
+	}
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Params: [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+			},
+			{
+				Position: [4]float32{0, 0, -2, 0},
+				Params:   [4]float32{0.5, 0, float32(core.LightTypePoint), 0},
+			},
+		},
+	}
+
+	manager.EstimateTiledLightMetrics(scene, proj, invView, mgl32.Vec3{})
+	if manager.TileLightAvgCount != 1 || manager.TileLightMaxCount != 1 {
+		t.Fatalf("expected metrics to count only local light, got avg=%d max=%d", manager.TileLightAvgCount, manager.TileLightMaxCount)
+	}
+}

@@ -48,6 +48,44 @@ func TestAstronomicalShaderIsEmbedded(t *testing.T) {
 	}
 }
 
+func TestDeferredLightingShadesDirectionalLightsOutsideTileList(t *testing.T) {
+	for _, needle := range []string{
+		"for (var light_idx = 0u; light_idx < camera.num_lights; light_idx++)",
+		"if (u32(lights[light_idx].params.z) != 1u)",
+		"let tile_header = tile_light_headers[tile_index_for_pixel(global_id.xy)];",
+	} {
+		if !strings.Contains(DeferredLightingWGSL, needle) {
+			t.Fatalf("deferred lighting shader missing directional-light contract %q", needle)
+		}
+	}
+
+	if strings.Contains(TiledLightCullWGSL, "if (light_type == 1u) {\n        return true;") {
+		t.Fatal("tiled light cull must not list directional lights; deferred lighting handles them directly")
+	}
+	for _, needle := range []string{
+		"render_origin: vec4<f32>,",
+		"let camera_pos = camera.cam_pos.xyz - camera.render_origin.xyz;",
+		"let world_corner = corner_pos + camera.render_origin.xyz;",
+		"if (light_type == 1u) {\n        return false;",
+		"for (var light_idx = 0u; light_idx < camera.num_lights; light_idx = light_idx + 1u)",
+	} {
+		if !strings.Contains(TiledLightCullWGSL, needle) {
+			t.Fatalf("tiled light cull shader missing local-light-list contract %q", needle)
+		}
+	}
+
+	for _, needle := range []string{
+		"fn calculate_light_contribution(",
+		"for (var light_idx = 0u; light_idx < uCamera.num_lights; light_idx++)",
+		"if (u32(lights[light_idx].params.z) != 1u)",
+		"let tile_header = tile_light_headers[tile_index];",
+	} {
+		if !strings.Contains(TransparentOverlayWGSL, needle) {
+			t.Fatalf("transparent overlay shader missing directional-light contract %q", needle)
+		}
+	}
+}
+
 func TestFarPlanetRingShaderContract(t *testing.T) {
 	for _, needle := range []string{
 		"struct FarPlanetRingRecord",
