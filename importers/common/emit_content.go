@@ -18,6 +18,10 @@ type ImportedWorldEmitOptions struct {
 	Tags               []string
 }
 
+type ImportedWorldSaveOptions struct {
+	ChunkPayloadKind string
+}
+
 type ImportedWorldEmission struct {
 	Manifest        *content.ImportedWorldDef
 	Chunks          map[[3]int]*content.ImportedWorldChunkDef
@@ -109,19 +113,36 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 }
 
 func SaveImportedWorldEmission(manifestPath string, emission ImportedWorldEmission) error {
+	return SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{
+		ChunkPayloadKind: content.ImportedWorldChunkPayloadSparseJSONV1,
+	})
+}
+
+func SaveImportedWorldEmissionWithOptions(manifestPath string, emission ImportedWorldEmission, opts ImportedWorldSaveOptions) error {
 	if emission.Manifest == nil {
 		return fmt.Errorf("manifest is nil")
 	}
+	payloadKind, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind)
+	if err != nil {
+		return err
+	}
+	emission.Manifest.ChunkPayloadKind = payloadKind
 	manifestDir := filepath.Dir(manifestPath)
-	for _, entry := range emission.Manifest.Entries {
+	for i := range emission.Manifest.Entries {
+		entry := &emission.Manifest.Entries[i]
 		coord := [3]int{entry.Coord.X, entry.Coord.Y, entry.Coord.Z}
 		chunk := emission.Chunks[coord]
 		if chunk == nil {
 			return fmt.Errorf("missing chunk for coord %v", coord)
 		}
-		if err := content.SaveImportedWorldChunk(filepath.Join(manifestDir, filepath.FromSlash(entry.ChunkPath)), chunk); err != nil {
+		if err := content.SaveImportedWorldChunkWithOptions(filepath.Join(manifestDir, filepath.FromSlash(entry.ChunkPath)), chunk, content.ImportedWorldChunkSaveOptions{
+			PayloadKind: payloadKind,
+		}); err != nil {
 			return err
 		}
+		entry.PayloadKind = chunk.PayloadKind
+		entry.PayloadHash = chunk.PayloadHash
+		entry.PayloadSizeBytes = chunk.PayloadSizeBytes
 	}
 	return content.SaveImportedWorld(manifestPath, emission.Manifest)
 }

@@ -75,6 +75,27 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 			CollisionEnabled:  true,
 			Tags:              []string{"imported"},
 		},
+		Player: &LevelPlayerDef{
+			SpawnKind:        "hl1_player_spawn",
+			Height:           1.8288,
+			EyeHeight:        1.6256,
+			Radius:           0.4064,
+			Speed:            4.8,
+			SprintMultiplier: 1.2,
+			JumpSpeed:        5,
+			Gravity:          18,
+			StepHeight:       0.4572,
+			Tags:             []string{"source:hl1"},
+		},
+		LadderVolumes: []LevelLadderVolumeDef{{
+			ID:                "ladder-1",
+			Name:              "maintenance ladder",
+			BoundsCenter:      Vec3{2, 3, 4},
+			BoundsHalfExtents: Vec3{0.25, 2, 0.5},
+			ClimbSpeed:        3.25,
+			SourceTag:         "hl1:func_ladder",
+			Tags:              []string{"source:hl1"},
+		}},
 		Placements: []LevelPlacementDef{
 			{
 				AssetPath:     "assets/station.gkasset",
@@ -173,6 +194,9 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 
 	if loaded.SchemaVersion != CurrentLevelSchemaVersion {
 		t.Fatalf("expected schema version %d, got %d", CurrentLevelSchemaVersion, loaded.SchemaVersion)
+	}
+	if loaded.Player == nil || loaded.Player.SpawnKind != "hl1_player_spawn" || loaded.Player.Height != 1.8288 || loaded.Player.EyeHeight != 1.6256 || loaded.Player.Radius != 0.4064 {
+		t.Fatalf("expected player metadata to round-trip, got %+v", loaded.Player)
 	}
 	if loaded.ID == "" || loaded.Placements[0].ID == "" || loaded.Markers[0].ID == "" {
 		t.Fatal("expected IDs to be assigned")
@@ -686,6 +710,116 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 		loaded.WaterBodies[0].DirectLightOcclusion == nil || *loaded.WaterBodies[0].DirectLightOcclusion != 0.75 {
 		t.Fatalf("water bodies did not round-trip: %+v", loaded.WaterBodies)
 	}
+}
+
+func TestLevelLadderVolumeRoundTripAndValidate(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "ladder.gklevel")
+	def := NewLevelDef("ladder")
+	def.LadderVolumes = []LevelLadderVolumeDef{{
+		ID:                "ladder-1",
+		Name:              "ladder",
+		BoundsCenter:      Vec3{1, 2, 3},
+		BoundsHalfExtents: Vec3{0.25, 2, 0.4},
+		ClimbSpeed:        3.5,
+		SourceTag:         "hl1:func_ladder",
+		Tags:              []string{"source:hl1"},
+	}}
+	if result := ValidateLevel(def, LevelValidationOptions{DocumentPath: path}); result.HasErrors() {
+		t.Fatalf("expected valid ladder volume, got %+v", result.Issues)
+	}
+	if err := SaveLevel(path, def); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	loaded, err := LoadLevel(path)
+	if err != nil {
+		t.Fatalf("LoadLevel failed: %v", err)
+	}
+	if len(loaded.LadderVolumes) != 1 || loaded.LadderVolumes[0].BoundsHalfExtents != (Vec3{0.25, 2, 0.4}) || loaded.LadderVolumes[0].ClimbSpeed != 3.5 {
+		t.Fatalf("ladder volumes did not round-trip: %+v", loaded.LadderVolumes)
+	}
+}
+
+func TestValidateLevelRejectsInvalidLadderVolume(t *testing.T) {
+	def := NewLevelDef("bad-ladder")
+	def.LadderVolumes = []LevelLadderVolumeDef{{
+		ID:                "bad-ladder",
+		BoundsHalfExtents: Vec3{0, 2, 0.4},
+		ClimbSpeed:        -1,
+	}}
+	result := ValidateLevel(def, LevelValidationOptions{})
+	if !result.HasErrors() {
+		t.Fatal("expected ladder volume validation errors")
+	}
+	assertHasLevelValidationCode(t, result, "invalid_ladder_volume_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_ladder_climb_speed")
+}
+
+func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "moving.gklevel")
+	def := NewLevelDef("moving")
+	def.MovingBrushes = []LevelMovingBrushDef{{
+		ID:                "door-1",
+		Name:              "door",
+		Kind:              "hl1_func_door",
+		BoundsCenter:      Vec3{1, 2, 3},
+		BoundsHalfExtents: Vec3{0.5, 1, 0.25},
+		MoveDirection:     Vec3{1, 0, 0},
+		MoveDistance:      2,
+		Speed:             3.5,
+		Wait:              1,
+		Lip:               0.1,
+		TargetName:        "door_a",
+		SourceTag:         "hl1:func_door",
+	}}
+	def.UseTriggers = []LevelUseTriggerDef{{
+		ID:                "button-1",
+		Name:              "button",
+		Kind:              "hl1_func_button",
+		BoundsCenter:      Vec3{4, 5, 6},
+		BoundsHalfExtents: Vec3{0.25, 0.5, 0.25},
+		Target:            "door_a",
+		SourceTag:         "hl1:func_button",
+	}}
+	if result := ValidateLevel(def, LevelValidationOptions{DocumentPath: path}); result.HasErrors() {
+		t.Fatalf("expected valid moving brush/use trigger, got %+v", result.Issues)
+	}
+	if err := SaveLevel(path, def); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	loaded, err := LoadLevel(path)
+	if err != nil {
+		t.Fatalf("LoadLevel failed: %v", err)
+	}
+	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 {
+		t.Fatalf("moving brushes did not round-trip: %+v", loaded.MovingBrushes)
+	}
+	if len(loaded.UseTriggers) != 1 || loaded.UseTriggers[0].Target != "door_a" {
+		t.Fatalf("use triggers did not round-trip: %+v", loaded.UseTriggers)
+	}
+}
+
+func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
+	def := NewLevelDef("bad-moving")
+	def.MovingBrushes = []LevelMovingBrushDef{{
+		ID:                "bad-door",
+		BoundsHalfExtents: Vec3{0, 1, 1},
+		MoveDistance:      -1,
+		Speed:             -1,
+	}}
+	def.UseTriggers = []LevelUseTriggerDef{{
+		ID:                "bad-button",
+		BoundsHalfExtents: Vec3{1, 0, 1},
+	}}
+	result := ValidateLevel(def, LevelValidationOptions{})
+	if !result.HasErrors() {
+		t.Fatal("expected moving brush/use trigger validation errors")
+	}
+	assertHasLevelValidationCode(t, result, "invalid_moving_brush_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_moving_brush_distance")
+	assertHasLevelValidationCode(t, result, "invalid_moving_brush_speed")
+	assertHasLevelValidationCode(t, result, "invalid_use_trigger_bounds")
 }
 
 func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {

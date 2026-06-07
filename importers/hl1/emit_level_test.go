@@ -1,6 +1,7 @@
 package hl1
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -92,6 +93,9 @@ func TestBuildAndSaveGeneratedLevel(t *testing.T) {
 	}
 	if loaded.Environment.DirectionalCastsShadows == nil || !*loaded.Environment.DirectionalCastsShadows {
 		t.Fatalf("expected HL1 generated level to request directional shadows, got %+v", loaded.Environment)
+	}
+	if loaded.Player == nil || loaded.Player.SpawnKind != MarkerKindHL1PlayerSpawn || loaded.Player.Height != 72*HammerUnitMeters || loaded.Player.EyeHeight != 64*HammerUnitMeters || loaded.Player.Radius != 16*HammerUnitMeters {
+		t.Fatalf("expected HL1 player hull metadata, got %+v", loaded.Player)
 	}
 	if len(loaded.Lights) != 3 {
 		t.Fatalf("lights = %+v", loaded.Lights)
@@ -253,6 +257,278 @@ func TestBuildGeneratedLevelCanDisableEmissiveSurfaceLights(t *testing.T) {
 	}
 }
 
+func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
+	dir := t.TempDir()
+	opts := ImportOptions{
+		MapName:         "doormap",
+		OutputRoot:      dir,
+		ChunkSize:       256,
+		VoxelResolution: 0.1,
+	}
+	summary := ImportSummary{
+		Map: importcommon.MapImport{
+			Source: importcommon.SourceInfo{MapName: "doormap"},
+			Entities: []importcommon.Entity{
+				{
+					ClassName:    "func_door",
+					BrushModelID: 1,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 1, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 5, Y: 6, Z: 7},
+					},
+					KeyValues: map[string]string{
+						"targetname": "door_a",
+						"target":     "button_a",
+						"speed":      "120",
+					},
+				},
+				{
+					ClassName:    "func_button",
+					BrushModelID: 2,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 10, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 12, Y: 4, Z: 5},
+					},
+					KeyValues: map[string]string{
+						"target": "door_a",
+						"wait":   "1",
+					},
+				},
+			},
+		},
+		Report: importcommon.ImportReport{
+			Source: importcommon.SourceInfo{MapName: "doormap"},
+		},
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "worlds", "doormap.gkworld"))
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.Level.Markers) != 2 {
+		t.Fatalf("markers = %+v", level.Level.Markers)
+	}
+	if len(level.Level.MovingBrushes) != 2 {
+		t.Fatalf("moving brushes = %+v", level.Level.MovingBrushes)
+	}
+	if len(level.Level.UseTriggers) != 1 {
+		t.Fatalf("use triggers = %+v", level.Level.UseTriggers)
+	}
+	door := level.Level.Markers[0]
+	if door.Kind != MarkerKindHL1Door || door.Name != "door_a" {
+		t.Fatalf("door marker = %+v", door)
+	}
+	if door.Transform.Position != (content.Vec3{3, 4, 5}) {
+		t.Fatalf("door center = %+v", door.Transform.Position)
+	}
+	if !hasTag(door.Tags, "hl1_target:button_a") || !hasTag(door.Tags, "bounds_min:1.0000,2.0000,3.0000") {
+		t.Fatalf("door tags = %+v", door.Tags)
+	}
+	button := level.Level.Markers[1]
+	if button.Kind != MarkerKindHL1Button || !hasTag(button.Tags, "hl1_target:door_a") {
+		t.Fatalf("button marker = %+v", button)
+	}
+	moving := level.Level.MovingBrushes[0]
+	if moving.Kind != MovingBrushKindHL1Door || moving.TargetName != "door_a" || moving.Target != "button_a" {
+		t.Fatalf("moving brush = %+v", moving)
+	}
+	if math.Abs(float64(moving.Speed-120*HammerUnitMeters)) > 1e-5 || moving.MoveDirection != (content.Vec3{1, 0, 0}) {
+		t.Fatalf("moving brush motion = %+v", moving)
+	}
+	trigger := level.Level.UseTriggers[0]
+	if trigger.Kind != UseTriggerKindHL1Button || trigger.Target != "door_a" {
+		t.Fatalf("use trigger = %+v", trigger)
+	}
+	buttonBrush := level.Level.MovingBrushes[1]
+	if buttonBrush.Kind != MovingBrushKindHL1Button || buttonBrush.Target != "door_a" {
+		t.Fatalf("button moving brush = %+v", buttonBrush)
+	}
+}
+
+func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
+	dir := t.TempDir()
+	bspPath := filepath.Join(dir, "valve", "maps", "doormap.bsp")
+	mustWriteFile(t, bspPath, syntheticBSP(t, syntheticBSPConfig{
+		Entities: `{
+"classname" "worldspawn"
+}
+{
+"classname" "func_door"
+"model" "*1"
+"targetname" "door_a"
+"speed" "100"
+}`,
+		Textures: []syntheticTexture{{Name: "TESTWALL", Width: 64, Height: 64}},
+		Planes:   []Plane{{Normal: vec3(0, 1, 0), Dist: 0}},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0), vec3(16, 0, 0), vec3(16, 0, 16), vec3(0, 0, 16),
+			vec3(32, 0, 0), vec3(48, 0, 0), vec3(48, 0, 16), vec3(32, 0, 16),
+		},
+		TexInfos: []TexInfo{{MipTex: 0}},
+		Faces: []FaceHeader{
+			{PlaneID: 0, FirstEdge: 0, EdgeCount: 4, TexInfoID: 0},
+			{PlaneID: 0, FirstEdge: 4, EdgeCount: 4, TexInfoID: 0},
+		},
+		Edges: []Edge{
+			{A: 0, B: 1}, {A: 1, B: 2}, {A: 2, B: 3}, {A: 0, B: 3},
+			{A: 4, B: 5}, {A: 5, B: 6}, {A: 6, B: 7}, {A: 4, B: 7},
+		},
+		SurfEdges: []int32{0, 1, 2, -3, 4, 5, 6, -7},
+		Models: []Model{
+			{FirstFace: 0, FaceCount: 1},
+			{FirstFace: 1, FaceCount: 1},
+		},
+	}))
+	opts := ImportOptions{
+		GameDir:         dir,
+		MapName:         "doormap",
+		OutputRoot:      filepath.Join(dir, "out"),
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	}
+	summary, err := BuildImportSummary(opts)
+	if err != nil {
+		t.Fatalf("BuildImportSummary failed: %v", err)
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "doormap.gkworld"))
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.MovingBrushAssets) != 1 {
+		t.Fatalf("moving brush assets = %+v", level.MovingBrushAssets)
+	}
+	if len(level.Level.MovingBrushes) != 1 || level.Level.MovingBrushes[0].AssetPath == "" {
+		t.Fatalf("moving brush missing asset path: %+v", level.Level.MovingBrushes)
+	}
+	if err := SaveGeneratedLevel(level); err != nil {
+		t.Fatalf("SaveGeneratedLevel failed: %v", err)
+	}
+	asset, err := content.LoadAsset(level.MovingBrushAssets[0].AssetPath)
+	if err != nil {
+		t.Fatalf("LoadAsset failed: %v", err)
+	}
+	if len(asset.Parts) != 1 || asset.Parts[0].Source.VoxelShape == nil || len(asset.Parts[0].Source.VoxelShape.Voxels) == 0 {
+		t.Fatalf("moving brush asset payload = %+v", asset.Parts)
+	}
+}
+
+func TestBuildGeneratedLevelEmitsFuncPlatMovingBrushAsset(t *testing.T) {
+	dir := t.TempDir()
+	bspPath := filepath.Join(dir, "valve", "maps", "platmap.bsp")
+	mustWriteFile(t, bspPath, syntheticBSP(t, syntheticBSPConfig{
+		Entities: `{
+"classname" "worldspawn"
+}
+{
+"classname" "func_plat"
+"model" "*1"
+"targetname" "lift_a"
+"height" "128"
+"speed" "200"
+}`,
+		Textures: []syntheticTexture{{Name: "TESTWALL", Width: 64, Height: 64}},
+		Planes:   []Plane{{Normal: vec3(0, 1, 0), Dist: 0}},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0), vec3(16, 0, 0), vec3(16, 0, 16), vec3(0, 0, 16),
+			vec3(32, 0, 0), vec3(48, 0, 0), vec3(48, 0, 16), vec3(32, 0, 16),
+		},
+		TexInfos: []TexInfo{{MipTex: 0}},
+		Faces: []FaceHeader{
+			{PlaneID: 0, FirstEdge: 0, EdgeCount: 4, TexInfoID: 0},
+			{PlaneID: 0, FirstEdge: 4, EdgeCount: 4, TexInfoID: 0},
+		},
+		Edges: []Edge{
+			{A: 0, B: 1}, {A: 1, B: 2}, {A: 2, B: 3}, {A: 0, B: 3},
+			{A: 4, B: 5}, {A: 5, B: 6}, {A: 6, B: 7}, {A: 4, B: 7},
+		},
+		SurfEdges: []int32{0, 1, 2, -3, 4, 5, 6, -7},
+		Models: []Model{
+			{FirstFace: 0, FaceCount: 1},
+			{FirstFace: 1, FaceCount: 1},
+		},
+	}))
+	opts := ImportOptions{
+		GameDir:         dir,
+		MapName:         "platmap",
+		OutputRoot:      filepath.Join(dir, "out"),
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	}
+	summary, err := BuildImportSummary(opts)
+	if err != nil {
+		t.Fatalf("BuildImportSummary failed: %v", err)
+	}
+	if len(summary.BakeFaces) != 1 {
+		t.Fatalf("expected func_plat excluded from static bake, got %d bake faces", len(summary.BakeFaces))
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "platmap.gkworld"))
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.MovingBrushAssets) != 1 {
+		t.Fatalf("moving brush assets = %+v", level.MovingBrushAssets)
+	}
+	if len(level.Level.MovingBrushes) != 1 {
+		t.Fatalf("moving brushes = %+v", level.Level.MovingBrushes)
+	}
+	plat := level.Level.MovingBrushes[0]
+	if plat.Kind != MovingBrushKindHL1Plat || plat.TargetName != "lift_a" {
+		t.Fatalf("plat moving brush = %+v", plat)
+	}
+	if plat.MoveDirection != (content.Vec3{0, 1, 0}) || math.Abs(float64(plat.MoveDistance-128*HammerUnitMeters)) > 1e-5 || math.Abs(float64(plat.Speed-200*HammerUnitMeters)) > 1e-5 {
+		t.Fatalf("plat motion = %+v", plat)
+	}
+	if plat.AssetPath == "" {
+		t.Fatalf("plat missing asset path: %+v", plat)
+	}
+}
+
+func TestBuildGeneratedLevelEmitsLadderVolumes(t *testing.T) {
+	dir := t.TempDir()
+	opts := ImportOptions{
+		MapName:         "laddermap",
+		OutputRoot:      dir,
+		ChunkSize:       256,
+		VoxelResolution: 0.1,
+	}
+	summary := ImportSummary{
+		Map: importcommon.MapImport{
+			Source: importcommon.SourceInfo{MapName: "laddermap"},
+			Entities: []importcommon.Entity{{
+				ClassName:    "func_ladder",
+				BrushModelID: 3,
+				BrushWorldBounds: importcommon.Bounds{
+					Min: importcommon.Vec3{X: 1, Y: 2, Z: 3},
+					Max: importcommon.Vec3{X: 2, Y: 6, Z: 4},
+				},
+				KeyValues: map[string]string{"targetname": "ladder_a"},
+			}},
+		},
+		Report: importcommon.ImportReport{
+			Source: importcommon.SourceInfo{MapName: "laddermap"},
+		},
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "worlds", "laddermap.gkworld"))
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.Level.LadderVolumes) != 1 {
+		t.Fatalf("ladder volumes = %+v", level.Level.LadderVolumes)
+	}
+	ladder := level.Level.LadderVolumes[0]
+	if ladder.Name != "ladder_a" || ladder.SourceTag != "hl1:func_ladder" {
+		t.Fatalf("ladder metadata = %+v", ladder)
+	}
+	if ladder.BoundsCenter != (content.Vec3{1.5, 4, 3.5}) {
+		t.Fatalf("ladder center = %+v", ladder.BoundsCenter)
+	}
+	if ladder.BoundsHalfExtents != (content.Vec3{0.55, 2.05, 0.55}) {
+		t.Fatalf("ladder half extents = %+v", ladder.BoundsHalfExtents)
+	}
+	if ladder.ClimbSpeed != DefaultHL1LadderClimbSpeed || !hasTag(ladder.Tags, "classname:func_ladder") {
+		t.Fatalf("ladder tags/speed = %+v", ladder)
+	}
+}
+
 func TestBuildGeneratedLevelEmitsWaterBodies(t *testing.T) {
 	dir := t.TempDir()
 	opts := ImportOptions{
@@ -292,4 +568,13 @@ func TestBuildGeneratedLevelEmitsWaterBodies(t *testing.T) {
 	if level.Level.WaterBodies[0].DirectLightOcclusion == nil || *level.Level.WaterBodies[0].DirectLightOcclusion != 1 {
 		t.Fatalf("water direct light occlusion = %v", level.Level.WaterBodies[0].DirectLightOcclusion)
 	}
+}
+
+func hasTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
 }

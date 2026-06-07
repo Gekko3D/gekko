@@ -228,6 +228,82 @@ func TestStreamedRuntimeSpawnsLevelWaterBodies(t *testing.T) {
 	}
 }
 
+func TestStreamedRuntimeSpawnsLevelLadderVolumes(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "ladder.gklevel")
+	level := content.NewLevelDef("ladder")
+	level.LadderVolumes = []content.LevelLadderVolumeDef{{
+		ID:                "ladder-1",
+		BoundsCenter:      content.Vec3{5, 2, 6},
+		BoundsHalfExtents: content.Vec3{0.25, 2, 0.4},
+		ClimbSpeed:        3.25,
+		SourceTag:         "hl1:func_ladder",
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	app, cmd, _ := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	app.FlushCommands()
+	var found bool
+	MakeQuery1[LadderVolumeComponent](cmd).Map(func(_ EntityId, ladder *LadderVolumeComponent) bool {
+		found = true
+		if ladder.BoundsCenter != (mgl32.Vec3{5, 2, 6}) || ladder.BoundsHalfExtents != (mgl32.Vec3{0.25, 2, 0.4}) || ladder.ClimbSpeed != 3.25 {
+			t.Fatalf("ladder component = %+v", ladder)
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("expected streamed runtime ladder volume")
+	}
+}
+
+func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "moving.gklevel")
+	level := content.NewLevelDef("moving")
+	level.MovingBrushes = []content.LevelMovingBrushDef{{
+		ID:                "door-1",
+		BoundsCenter:      content.Vec3{5, 2, 6},
+		BoundsHalfExtents: content.Vec3{0.5, 1, 0.25},
+		TargetName:        "door_a",
+	}}
+	level.UseTriggers = []content.LevelUseTriggerDef{{
+		ID:                "button-1",
+		BoundsCenter:      content.Vec3{4, 2, 6},
+		BoundsHalfExtents: content.Vec3{0.25, 0.5, 0.25},
+		Target:            "door_a",
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	app, cmd, _ := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	app.FlushCommands()
+	var brushCount, triggerCount int
+	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, _ *MovingBrushComponent) bool {
+		brushCount++
+		return true
+	})
+	MakeQuery1[UseTriggerComponent](cmd).Map(func(_ EntityId, _ *UseTriggerComponent) bool {
+		triggerCount++
+		return true
+	})
+	if brushCount != 1 || triggerCount != 1 {
+		t.Fatalf("expected 1 brush and 1 trigger, got %d/%d", brushCount, triggerCount)
+	}
+}
+
 func TestStreamedRuntimeSpawnsLevelLights(t *testing.T) {
 	root := t.TempDir()
 	levelPath := filepath.Join(root, "levels", "lights.gklevel")
@@ -516,6 +592,91 @@ func TestStartStreamedRuntimeAutoSpawnUsesConfiguredPlayerDimensions(t *testing.
 			t.Fatalf("expected configured player controller, got %+v", *ctrl)
 		}
 		if cam.Position != (mgl32.Vec3{0, 1.5, 0}) {
+			t.Fatalf("unexpected player camera position %v", cam.Position)
+		}
+		return true
+	})
+	if playerCount != 1 {
+		t.Fatalf("expected one grounded player camera, got %d", playerCount)
+	}
+}
+
+func TestStartStreamedRuntimeAutoSpawnUsesLevelPlayerDimensions(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "player_spawn.gklevel")
+	worldPath := filepath.Join(root, "worlds", "station.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "chunks", "0_0_0.gkchunk")
+
+	if err := content.SaveImportedWorldChunk(chunkPath, &content.ImportedWorldChunkDef{
+		WorldID:            "station",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		NonEmptyVoxelCount: 0,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+	if err := content.SaveImportedWorld(worldPath, &content.ImportedWorldDef{
+		WorldID:         "station",
+		Kind:            content.ImportedWorldKindVoxelWorld,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Entries: []content.ImportedWorldChunkEntryDef{{
+			Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkPath:          content.AuthorDocumentPath(chunkPath, worldPath),
+			NonEmptyVoxelCount: 0,
+		}},
+	}); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+
+	level := content.NewLevelDef("player_spawn")
+	level.ChunkSize = 16
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:         content.ImportedWorldKindVoxelWorld,
+		ManifestPath: content.AuthorDocumentPath(worldPath, levelPath),
+	}
+	level.Player = &content.LevelPlayerDef{
+		SpawnKind:  "hl1_player_spawn",
+		Height:     1.8288,
+		EyeHeight:  1.6256,
+		Radius:     0.4064,
+		StepHeight: 0.4572,
+	}
+	level.Markers = []content.LevelMarkerDef{{
+		ID:   "player-1",
+		Name: "player-1",
+		Kind: "hl1_player_spawn",
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{0, 0, 0},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app, cmd, _ := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{
+		LevelPath:       levelPath,
+		StreamingRadius: 0,
+		AutoSpawnPlayer: true,
+	}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	app.FlushCommands()
+
+	playerCount := 0
+	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(_ EntityId, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent) bool {
+		playerCount++
+		if ctrl.Height != 1.8288 || ctrl.EyeHeight != 1.6256 || ctrl.Radius != 0.4064 || ctrl.StepHeight != 0.4572 {
+			t.Fatalf("expected level player controller, got %+v", *ctrl)
+		}
+		if cam.Position != (mgl32.Vec3{0, 1.6256, 0}) {
 			t.Fatalf("unexpected player camera position %v", cam.Position)
 		}
 		return true

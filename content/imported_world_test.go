@@ -99,17 +99,63 @@ func TestImportedWorldChunkRoundTripPreservesSparseVoxels(t *testing.T) {
 	}
 }
 
+func TestImportedWorldChunkDenseRLEBinaryRoundTripPreservesSparseVoxels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chunk.gkchunk")
+	def := &ImportedWorldChunkDef{
+		WorldID:         "world-a",
+		Coord:           TerrainChunkCoordDef{X: -1, Y: 2, Z: 3},
+		ChunkSize:       8,
+		VoxelResolution: 0.25,
+		Voxels: []ImportedWorldVoxelDef{
+			{X: 0, Y: 0, Z: 0, Value: 1},
+			{X: 1, Y: 0, Z: 0, Value: 1},
+			{X: 7, Y: 7, Z: 7, Value: 3},
+			{X: 3, Y: 4, Z: 5, Value: 2},
+		},
+		Tags: []string{"binary"},
+	}
+	if err := SaveImportedWorldChunkWithOptions(path, def, ImportedWorldChunkSaveOptions{PayloadKind: ImportedWorldChunkPayloadDenseRLEBinaryV1}); err != nil {
+		t.Fatalf("SaveImportedWorldChunkWithOptions failed: %v", err)
+	}
+	if def.PayloadKind != ImportedWorldChunkPayloadDenseRLEBinaryV1 || def.PayloadHash == "" || def.PayloadSizeBytes <= 0 {
+		t.Fatalf("expected binary payload metadata, got %+v", def)
+	}
+	loaded, err := LoadImportedWorldChunk(path)
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk failed: %v", err)
+	}
+	if loaded.PayloadKind != ImportedWorldChunkPayloadDenseRLEBinaryV1 || loaded.PayloadHash != def.PayloadHash {
+		t.Fatalf("expected binary payload metadata to round-trip, got %+v", loaded)
+	}
+	if loaded.WorldID != def.WorldID || loaded.Coord != def.Coord || loaded.ChunkSize != def.ChunkSize || loaded.VoxelResolution != def.VoxelResolution {
+		t.Fatalf("expected chunk metadata to round-trip, got %+v", loaded)
+	}
+	if len(loaded.Voxels) != len(def.Voxels) {
+		t.Fatalf("expected %d voxels, got %d: %+v", len(def.Voxels), len(loaded.Voxels), loaded.Voxels)
+	}
+	wantVoxels := map[ImportedWorldVoxelDef]struct{}{}
+	for _, voxel := range def.Voxels {
+		wantVoxels[voxel] = struct{}{}
+	}
+	for _, voxel := range loaded.Voxels {
+		if _, ok := wantVoxels[voxel]; !ok {
+			t.Fatalf("unexpected loaded voxel %+v from %+v", voxel, loaded.Voxels)
+		}
+	}
+}
+
 func TestValidateImportedWorldRejectsBrokenManifestEntries(t *testing.T) {
 	root := t.TempDir()
 	manifestPath := filepath.Join(root, "broken.gkworld")
 	def := &ImportedWorldDef{
-		WorldID:         "",
-		Kind:            ImportedWorldKind("bad"),
-		ChunkSize:       0,
-		VoxelResolution: 0,
+		WorldID:          "",
+		Kind:             ImportedWorldKind("bad"),
+		ChunkSize:        0,
+		VoxelResolution:  0,
+		ChunkPayloadKind: "bad",
 		Entries: []ImportedWorldChunkEntryDef{
 			{Coord: TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, ChunkPath: "missing.gkchunk"},
-			{Coord: TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, ChunkPath: "bad.txt"},
+			{Coord: TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, ChunkPath: "bad.txt", PayloadKind: "also_bad"},
 		},
 	}
 
@@ -121,6 +167,7 @@ func TestValidateImportedWorldRejectsBrokenManifestEntries(t *testing.T) {
 	assertImportedWorldValidationCode(t, result, "invalid_world_kind")
 	assertImportedWorldValidationCode(t, result, "invalid_chunk_size")
 	assertImportedWorldValidationCode(t, result, "invalid_voxel_resolution")
+	assertImportedWorldValidationCode(t, result, "invalid_chunk_payload_kind")
 	assertImportedWorldValidationCode(t, result, "missing_chunk_file")
 	assertImportedWorldValidationCode(t, result, "duplicate_chunk_coord")
 }

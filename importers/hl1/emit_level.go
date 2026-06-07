@@ -16,7 +16,17 @@ import (
 )
 
 const MarkerKindHL1PlayerSpawn = "hl1_player_spawn"
+const MarkerKindHL1Door = "hl1_func_door"
+const MarkerKindHL1DoorRotating = "hl1_func_door_rotating"
+const MarkerKindHL1Button = "hl1_func_button"
+const MarkerKindHL1MovingBrush = "hl1_moving_brush"
+const MovingBrushKindHL1Door = "hl1_func_door"
+const MovingBrushKindHL1DoorRotating = "hl1_func_door_rotating"
+const MovingBrushKindHL1Button = "hl1_func_button"
+const MovingBrushKindHL1Plat = "hl1_func_plat"
+const UseTriggerKindHL1Button = "hl1_func_button"
 const DefaultMaxEmissiveSurfaceLights = 64
+const DefaultHL1LadderClimbSpeed = 200 * HammerUnitMeters
 
 const minEmissiveSurfaceLightVoxels = 8
 
@@ -24,6 +34,7 @@ type GeneratedLevelResult struct {
 	LevelPath          string
 	Level              *content.LevelDef
 	LightFixtureAssets []GeneratedAssetResult
+	MovingBrushAssets  []GeneratedAssetResult
 }
 
 type GeneratedAssetResult struct {
@@ -43,6 +54,7 @@ func BuildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	level.ChunkSize = opts.ChunkSize
 	level.VoxelResolution = opts.VoxelResolution
 	level.Tags = []string{"source:hl1", "debug:surface_voxel"}
+	level.Player = hl1LevelPlayerDef()
 	directionalCastsShadows := true
 	level.Environment = &content.LevelEnvironmentDef{
 		Preset:                  "fullmoonnight_gi",
@@ -74,6 +86,14 @@ func BuildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 			Tags: []string{"source:hl1", "classname:info_player_start"},
 		})
 	}
+	level.Markers = append(level.Markers, buildHL1GameplayMarkers(summary.Map.Entities)...)
+	level.LadderVolumes = buildHL1LadderVolumes(summary.Map.Entities, opts.VoxelResolution)
+	movingBrushes, movingBrushAssets, err := buildHL1MovingBrushes(opts, summary, levelPath)
+	if err != nil {
+		return GeneratedLevelResult{}, err
+	}
+	level.MovingBrushes = movingBrushes
+	level.UseTriggers = buildHL1UseTriggers(summary.Map.Entities)
 	lights, err := buildHL1LevelLights(opts, summary.Map.Entities)
 	if err != nil {
 		return GeneratedLevelResult{}, err
@@ -88,19 +108,30 @@ func BuildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 			return GeneratedLevelResult{}, err
 		}
 		content.EnsureLevelIDs(level)
-		return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, LightFixtureAssets: assets}, nil
+		return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, LightFixtureAssets: assets, MovingBrushAssets: movingBrushAssets}, nil
 	}
 	content.EnsureLevelIDs(level)
-	return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level}, nil
+	return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, MovingBrushAssets: movingBrushAssets}, nil
+}
+
+func hl1LevelPlayerDef() *content.LevelPlayerDef {
+	return &content.LevelPlayerDef{
+		SpawnKind:  MarkerKindHL1PlayerSpawn,
+		Height:     72 * HammerUnitMeters,
+		EyeHeight:  64 * HammerUnitMeters,
+		Radius:     16 * HammerUnitMeters,
+		StepHeight: 18 * HammerUnitMeters,
+		Tags:       []string{"source:hl1", "hull:standing"},
+	}
 }
 
 func SaveGeneratedLevel(result GeneratedLevelResult) error {
 	if result.Level == nil {
 		return fmt.Errorf("level is nil")
 	}
-	for _, asset := range result.LightFixtureAssets {
+	for _, asset := range append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.MovingBrushAssets...) {
 		if asset.Asset == nil {
-			return fmt.Errorf("light fixture asset is nil")
+			return fmt.Errorf("generated asset is nil")
 		}
 		if err := os.MkdirAll(filepath.Dir(asset.AssetPath), 0755); err != nil {
 			return err
@@ -113,6 +144,423 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 		return err
 	}
 	return content.SaveLevel(result.LevelPath, result.Level)
+}
+
+func buildHL1GameplayMarkers(entities []importcommon.Entity) []content.LevelMarkerDef {
+	markers := make([]content.LevelMarkerDef, 0)
+	countsByClass := map[string]int{}
+	for _, entity := range entities {
+		kind, ok := hl1GameplayMarkerKind(entity.ClassName)
+		if !ok || entity.BrushModelID <= 0 {
+			continue
+		}
+		className := strings.ToLower(entity.ClassName)
+		index := countsByClass[className]
+		countsByClass[className]++
+		bounds := entity.BrushWorldBounds
+		center := content.Vec3{
+			(bounds.Min.X + bounds.Max.X) * 0.5,
+			(bounds.Min.Y + bounds.Max.Y) * 0.5,
+			(bounds.Min.Z + bounds.Max.Z) * 0.5,
+		}
+		markers = append(markers, content.LevelMarkerDef{
+			ID:   fmt.Sprintf("hl1_%s_%d", className, index),
+			Name: hl1EntityDisplayName(entity, className),
+			Kind: kind,
+			Transform: content.LevelTransformDef{
+				Position: center,
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			Tags: hl1GameplayMarkerTags(entity, bounds),
+		})
+	}
+	return markers
+}
+
+func hl1GameplayMarkerKind(className string) (string, bool) {
+	switch strings.ToLower(className) {
+	case "func_door", "momentary_door":
+		return MarkerKindHL1Door, true
+	case "func_door_rotating":
+		return MarkerKindHL1DoorRotating, true
+	case "func_button":
+		return MarkerKindHL1Button, true
+	case "func_plat", "func_train":
+		return MarkerKindHL1MovingBrush, true
+	default:
+		return "", false
+	}
+}
+
+func hl1EntityDisplayName(entity importcommon.Entity, fallback string) string {
+	if entity.KeyValues != nil {
+		if value := strings.TrimSpace(entity.KeyValues["targetname"]); value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
+func hl1GameplayMarkerTags(entity importcommon.Entity, bounds importcommon.Bounds) []string {
+	className := strings.ToLower(entity.ClassName)
+	tags := []string{
+		"source:hl1",
+		"classname:" + className,
+		fmt.Sprintf("model:%d", entity.BrushModelID),
+		"bounds_min:" + hl1Vec3Tag(bounds.Min),
+		"bounds_max:" + hl1Vec3Tag(bounds.Max),
+	}
+	for _, key := range []string{"targetname", "target", "master", "message", "speed", "wait", "delay", "lip", "height", "angle", "angles", "movedir", "spawnflags", "sounds", "dmg"} {
+		if entity.KeyValues == nil {
+			break
+		}
+		value := strings.TrimSpace(entity.KeyValues[key])
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
+}
+
+func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath string) ([]content.LevelMovingBrushDef, []GeneratedAssetResult, error) {
+	entities := summary.Map.Entities
+	out := make([]content.LevelMovingBrushDef, 0)
+	assets := make([]GeneratedAssetResult, 0)
+	var textureStore *TextureStore
+	materialColors := materialColorMap(summary.Map.Materials)
+	if summary.BSP != nil {
+		wads, _ := LoadResolvedWADs(summary.Report.Source.WADPaths)
+		textureStore = NewTextureStore(summary.BSP.Textures, wads)
+	}
+	countsByClass := map[string]int{}
+	for _, entity := range entities {
+		kind, ok := hl1MovingBrushKind(entity.ClassName)
+		if !ok || entity.BrushModelID <= 0 {
+			continue
+		}
+		className := strings.ToLower(entity.ClassName)
+		index := countsByClass[className]
+		countsByClass[className]++
+		bounds := entity.BrushWorldBounds
+		center, halfExtents := contentBoundsCenterHalfExtents(bounds)
+		brush := content.LevelMovingBrushDef{
+			ID:                fmt.Sprintf("hl1_moving_%s_%d", className, index),
+			Name:              hl1EntityDisplayName(entity, className),
+			Kind:              kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			MoveDirection:     hl1MoveDirection(entity),
+			MoveDistance:      hl1MoveDistance(entity),
+			Speed:             hl1FloatKey(entity, "speed") * HammerUnitMeters,
+			Wait:              hl1FloatKey(entity, "wait"),
+			Lip:               hl1FloatKey(entity, "lip") * HammerUnitMeters,
+			TargetName:        hl1StringKey(entity, "targetname"),
+			Target:            hl1StringKey(entity, "target"),
+			SourceTag:         "hl1:" + className,
+			Tags:              hl1GameplayMarkerTags(entity, bounds),
+		}
+		if summary.BSP != nil && hl1MovingBrushHasSeparateVisual(className) {
+			asset, visualOrigin, err := buildHL1MovingBrushAsset(opts, summary.BSP, textureStore, materialColors, entity, brush.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if asset.Asset != nil {
+				brush.AssetPath = filepath.ToSlash(relativeOrBase(filepath.Dir(levelPath), asset.AssetPath))
+				brush.VisualOrigin = visualOrigin
+				assets = append(assets, asset)
+			}
+		}
+		out = append(out, brush)
+	}
+	return out, assets, nil
+}
+
+func buildHL1UseTriggers(entities []importcommon.Entity) []content.LevelUseTriggerDef {
+	out := make([]content.LevelUseTriggerDef, 0)
+	count := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "func_button") || entity.BrushModelID <= 0 {
+			continue
+		}
+		bounds := entity.BrushWorldBounds
+		center, halfExtents := contentBoundsCenterHalfExtents(bounds)
+		out = append(out, content.LevelUseTriggerDef{
+			ID:                fmt.Sprintf("hl1_use_func_button_%d", count),
+			Name:              hl1EntityDisplayName(entity, "func_button"),
+			Kind:              UseTriggerKindHL1Button,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			TargetName:        hl1StringKey(entity, "targetname"),
+			Target:            hl1StringKey(entity, "target"),
+			SourceTag:         "hl1:func_button",
+			Tags:              hl1GameplayMarkerTags(entity, bounds),
+		})
+		count++
+	}
+	return out
+}
+
+func hl1MovingBrushKind(className string) (string, bool) {
+	switch strings.ToLower(className) {
+	case "func_door", "momentary_door":
+		return MovingBrushKindHL1Door, true
+	case "func_door_rotating":
+		return MovingBrushKindHL1DoorRotating, true
+	case "func_button":
+		return MovingBrushKindHL1Button, true
+	case "func_plat":
+		return MovingBrushKindHL1Plat, true
+	default:
+		return "", false
+	}
+}
+
+func hl1MovingBrushHasSeparateVisual(className string) bool {
+	switch strings.ToLower(className) {
+	case "func_door", "momentary_door", "func_button", "func_plat":
+		return true
+	default:
+		return false
+	}
+}
+
+func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *TextureStore, materialColors map[int][4]uint8, entity importcommon.Entity, brushID string) (GeneratedAssetResult, content.Vec3, error) {
+	if bsp == nil || entity.BrushModelID <= 0 {
+		return GeneratedAssetResult{}, content.Vec3{}, nil
+	}
+	faces, err := bsp.ModelFaces(entity.BrushModelID)
+	if err != nil {
+		return GeneratedAssetResult{}, content.Vec3{}, fmt.Errorf("model %d moving brush faces: %w", entity.BrushModelID, err)
+	}
+	voxelized := VoxelizeFacesCPU(faces, VoxelizeOptions{
+		VoxelResolution: opts.VoxelResolution,
+		TextureStore:    textureStore,
+		MaterialColors:  materialColors,
+	})
+	if len(voxelized.Voxels) == 0 {
+		return GeneratedAssetResult{}, content.Vec3{}, nil
+	}
+	localVoxels, visualOrigin := localizeHL1MovingBrushVoxels(voxelized.Voxels, opts.VoxelResolution)
+	asset := content.NewAssetDef(brushID)
+	asset.Tags = []string{"source:hl1", "moving_brush", "classname:" + strings.ToLower(entity.ClassName)}
+	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
+	asset.Materials = assetMaterialsForHL1Voxels(voxelized.Materials, localVoxels)
+	asset.Parts = []content.AssetPartDef{{
+		ID:              "brush",
+		Name:            "brush",
+		VoxelResolution: opts.VoxelResolution,
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxelShape,
+			VoxelShape: &content.AssetVoxelShapeDef{
+				Palette: assetVoxelPaletteForMaterials(asset.Materials),
+				Voxels:  localVoxels,
+			},
+		},
+		Tags: []string{"source:hl1", "moving_brush"},
+	}}
+	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "moving_brushes", brushID+".gkasset")
+	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
+}
+
+func localizeHL1MovingBrushVoxels(voxels []importcommon.Voxel, resolution float32) ([]content.VoxelObjectVoxelDef, content.Vec3) {
+	minX, minY, minZ := voxels[0].X, voxels[0].Y, voxels[0].Z
+	for _, voxel := range voxels[1:] {
+		minX = min(minX, voxel.X)
+		minY = min(minY, voxel.Y)
+		minZ = min(minZ, voxel.Z)
+	}
+	out := make([]content.VoxelObjectVoxelDef, 0, len(voxels))
+	for _, voxel := range voxels {
+		out = append(out, content.VoxelObjectVoxelDef{
+			X:     voxel.X - minX,
+			Y:     voxel.Y - minY,
+			Z:     voxel.Z - minZ,
+			Value: voxel.Palette,
+		})
+	}
+	return out, content.Vec3{float32(minX) * resolution, float32(minY) * resolution, float32(minZ) * resolution}
+}
+
+func assetMaterialsForHL1Voxels(materials []importcommon.Material, voxels []content.VoxelObjectVoxelDef) []content.AssetMaterialDef {
+	used := map[uint8]struct{}{}
+	for _, voxel := range voxels {
+		if voxel.Value != 0 {
+			used[voxel.Value] = struct{}{}
+		}
+	}
+	byPalette := map[uint8]importcommon.Material{}
+	for _, material := range materials {
+		if material.PaletteIndex != 0 {
+			byPalette[material.PaletteIndex] = material
+		} else if material.ID > 0 && material.ID <= 255 {
+			byPalette[uint8(material.ID)] = material
+		}
+	}
+	keys := make([]int, 0, len(used))
+	for value := range used {
+		keys = append(keys, int(value))
+	}
+	sort.Ints(keys)
+	out := make([]content.AssetMaterialDef, 0, len(keys))
+	for _, key := range keys {
+		value := uint8(key)
+		material := byPalette[value]
+		baseColor := material.BaseColor
+		if baseColor == ([4]uint8{}) {
+			baseColor = [4]uint8{180, 180, 180, 255}
+		}
+		out = append(out, content.AssetMaterialDef{
+			ID:        fmt.Sprintf("mat_%d", value),
+			Name:      fmt.Sprintf("mat_%d", value),
+			BaseColor: baseColor,
+			Roughness: 1,
+			Emissive:  material.Emissive,
+			Tags:      []string{"source:hl1"},
+		})
+	}
+	return out
+}
+
+func assetVoxelPaletteForMaterials(materials []content.AssetMaterialDef) []content.AssetVoxelPaletteEntryDef {
+	out := make([]content.AssetVoxelPaletteEntryDef, 0, len(materials))
+	for _, material := range materials {
+		var value int
+		if _, err := fmt.Sscanf(material.ID, "mat_%d", &value); err != nil || value <= 0 || value > 255 {
+			continue
+		}
+		out = append(out, content.AssetVoxelPaletteEntryDef{
+			Value:      uint8(value),
+			MaterialID: material.ID,
+		})
+	}
+	return out
+}
+
+func contentBoundsCenterHalfExtents(bounds importcommon.Bounds) (content.Vec3, content.Vec3) {
+	center := content.Vec3{
+		(bounds.Min.X + bounds.Max.X) * 0.5,
+		(bounds.Min.Y + bounds.Max.Y) * 0.5,
+		(bounds.Min.Z + bounds.Max.Z) * 0.5,
+	}
+	halfExtents := content.Vec3{
+		maxf32((bounds.Max.X-bounds.Min.X)*0.5, 0.001),
+		maxf32((bounds.Max.Y-bounds.Min.Y)*0.5, 0.001),
+		maxf32((bounds.Max.Z-bounds.Min.Z)*0.5, 0.001),
+	}
+	return center, halfExtents
+}
+
+func hl1MoveDirection(entity importcommon.Entity) content.Vec3 {
+	if strings.EqualFold(entity.ClassName, "func_plat") {
+		return content.Vec3{0, 1, 0}
+	}
+	if movedir := hl1StringKey(entity, "movedir"); movedir != "" {
+		parts := strings.Fields(strings.ReplaceAll(movedir, ",", " "))
+		if len(parts) == 3 {
+			x, xErr := strconv.ParseFloat(parts[0], 32)
+			y, yErr := strconv.ParseFloat(parts[1], 32)
+			z, zErr := strconv.ParseFloat(parts[2], 32)
+			if xErr == nil && yErr == nil && zErr == nil {
+				return normalizeContentVec3(content.Vec3{float32(x), float32(z), -float32(y)})
+			}
+		}
+	}
+	angle := hl1FloatKey(entity, "angle")
+	switch angle {
+	case -1:
+		return content.Vec3{0, 1, 0}
+	case -2:
+		return content.Vec3{0, -1, 0}
+	default:
+		rad := float64(angle) * math.Pi / 180
+		return normalizeContentVec3(content.Vec3{float32(math.Cos(rad)), 0, -float32(math.Sin(rad))})
+	}
+}
+
+func hl1MoveDistance(entity importcommon.Entity) float32 {
+	if strings.EqualFold(entity.ClassName, "func_plat") {
+		if height := hl1FloatKey(entity, "height"); height > 0 {
+			return height * HammerUnitMeters
+		}
+	}
+	return 0
+}
+
+func normalizeContentVec3(v content.Vec3) content.Vec3 {
+	length := float32(math.Sqrt(float64(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])))
+	if length <= 1e-6 {
+		return content.Vec3{1, 0, 0}
+	}
+	return content.Vec3{v[0] / length, v[1] / length, v[2] / length}
+}
+
+func hl1FloatKey(entity importcommon.Entity, key string) float32 {
+	value := hl1StringKey(entity, key)
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.ParseFloat(value, 32)
+	if err != nil {
+		return 0
+	}
+	return float32(parsed)
+}
+
+func hl1StringKey(entity importcommon.Entity, key string) string {
+	if entity.KeyValues == nil {
+		return ""
+	}
+	return strings.TrimSpace(entity.KeyValues[key])
+}
+
+func buildHL1LadderVolumes(entities []importcommon.Entity, voxelResolution float32) []content.LevelLadderVolumeDef {
+	volumes := make([]content.LevelLadderVolumeDef, 0)
+	padding := float32(math.Max(float64(voxelResolution*0.5), 0.05))
+	count := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "func_ladder") || entity.BrushModelID <= 0 {
+			continue
+		}
+		bounds := entity.BrushWorldBounds
+		center := content.Vec3{
+			(bounds.Min.X + bounds.Max.X) * 0.5,
+			(bounds.Min.Y + bounds.Max.Y) * 0.5,
+			(bounds.Min.Z + bounds.Max.Z) * 0.5,
+		}
+		halfExtents := content.Vec3{
+			maxf32((bounds.Max.X-bounds.Min.X)*0.5+padding, padding),
+			maxf32((bounds.Max.Y-bounds.Min.Y)*0.5+padding, padding),
+			maxf32((bounds.Max.Z-bounds.Min.Z)*0.5+padding, padding),
+		}
+		volumes = append(volumes, content.LevelLadderVolumeDef{
+			ID:                fmt.Sprintf("hl1_func_ladder_%d", count),
+			Name:              hl1EntityDisplayName(entity, "func_ladder"),
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			ClimbSpeed:        DefaultHL1LadderClimbSpeed,
+			SourceTag:         "hl1:func_ladder",
+			Tags:              hl1GameplayMarkerTags(entity, bounds),
+		})
+		count++
+	}
+	return volumes
+}
+
+func maxf32(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func hl1Vec3Tag(v importcommon.Vec3) string {
+	return fmt.Sprintf("%.4f,%.4f,%.4f", v.X, v.Y, v.Z)
 }
 
 func attachHL1LightFixtures(opts ImportOptions, levelPath string, level *content.LevelDef) ([]GeneratedAssetResult, error) {

@@ -46,23 +46,27 @@ const (
 )
 
 type LevelDef struct {
-	ID               string               `json:"id"`
-	SchemaVersion    int                  `json:"schema_version"`
-	Name             string               `json:"name"`
-	Tags             []string             `json:"tags,omitempty"`
-	ChunkSize        int                  `json:"chunk_size,omitempty"`
-	VoxelResolution  float32              `json:"voxel_resolution,omitempty"`
-	Materials        []LevelMaterialDef   `json:"materials,omitempty"`
-	BrushLayers      []LevelBrushLayerDef `json:"brush_layers,omitempty"`
-	Brushes          []LevelBrushDef      `json:"brushes,omitempty"`
-	Terrain          *LevelTerrainDef     `json:"terrain,omitempty"`
-	BaseWorld        *LevelBaseWorldDef   `json:"base_world,omitempty"`
-	Placements       []LevelPlacementDef  `json:"placements,omitempty"`
-	PlacementVolumes []PlacementVolumeDef `json:"placement_volumes,omitempty"`
-	Environment      *LevelEnvironmentDef `json:"environment,omitempty"`
-	Lights           []LevelLightDef      `json:"lights,omitempty"`
-	WaterBodies      []LevelWaterBodyDef  `json:"water_bodies,omitempty"`
-	Markers          []LevelMarkerDef     `json:"markers,omitempty"`
+	ID               string                 `json:"id"`
+	SchemaVersion    int                    `json:"schema_version"`
+	Name             string                 `json:"name"`
+	Tags             []string               `json:"tags,omitempty"`
+	ChunkSize        int                    `json:"chunk_size,omitempty"`
+	VoxelResolution  float32                `json:"voxel_resolution,omitempty"`
+	Materials        []LevelMaterialDef     `json:"materials,omitempty"`
+	BrushLayers      []LevelBrushLayerDef   `json:"brush_layers,omitempty"`
+	Brushes          []LevelBrushDef        `json:"brushes,omitempty"`
+	Terrain          *LevelTerrainDef       `json:"terrain,omitempty"`
+	BaseWorld        *LevelBaseWorldDef     `json:"base_world,omitempty"`
+	Player           *LevelPlayerDef        `json:"player,omitempty"`
+	Placements       []LevelPlacementDef    `json:"placements,omitempty"`
+	PlacementVolumes []PlacementVolumeDef   `json:"placement_volumes,omitempty"`
+	Environment      *LevelEnvironmentDef   `json:"environment,omitempty"`
+	Lights           []LevelLightDef        `json:"lights,omitempty"`
+	WaterBodies      []LevelWaterBodyDef    `json:"water_bodies,omitempty"`
+	LadderVolumes    []LevelLadderVolumeDef `json:"ladder_volumes,omitempty"`
+	MovingBrushes    []LevelMovingBrushDef  `json:"moving_brushes,omitempty"`
+	UseTriggers      []LevelUseTriggerDef   `json:"use_triggers,omitempty"`
+	Markers          []LevelMarkerDef       `json:"markers,omitempty"`
 }
 
 type LevelMaterialDef = AssetMaterialDef
@@ -148,6 +152,21 @@ type LevelBaseWorldDef struct {
 	Tags              []string          `json:"tags,omitempty"`
 }
 
+type LevelPlayerDef struct {
+	SpawnKind        string   `json:"spawn_kind,omitempty"`
+	Height           float32  `json:"height,omitempty"`
+	EyeHeight        float32  `json:"eye_height,omitempty"`
+	Radius           float32  `json:"radius,omitempty"`
+	Speed            float32  `json:"speed,omitempty"`
+	SprintMultiplier float32  `json:"sprint_multiplier,omitempty"`
+	Sensitivity      float32  `json:"sensitivity,omitempty"`
+	JumpSpeed        float32  `json:"jump_speed,omitempty"`
+	Gravity          float32  `json:"gravity,omitempty"`
+	StepHeight       float32  `json:"step_height,omitempty"`
+	GroundProbe      float32  `json:"ground_probe,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+}
+
 type LevelLightDef struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name,omitempty"`
@@ -214,6 +233,47 @@ type LevelEnvironmentDef struct {
 	Preset                  string   `json:"preset,omitempty"`
 	DirectionalCastsShadows *bool    `json:"directional_casts_shadows,omitempty"`
 	Tags                    []string `json:"tags,omitempty"`
+}
+
+type LevelLadderVolumeDef struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name,omitempty"`
+	BoundsCenter      Vec3     `json:"bounds_center"`
+	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	ClimbSpeed        float32  `json:"climb_speed,omitempty"`
+	SourceTag         string   `json:"source_tag,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+}
+
+type LevelMovingBrushDef struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name,omitempty"`
+	Kind              string   `json:"kind,omitempty"`
+	AssetPath         string   `json:"asset_path,omitempty"`
+	BoundsCenter      Vec3     `json:"bounds_center"`
+	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	VisualOrigin      Vec3     `json:"visual_origin,omitempty"`
+	MoveDirection     Vec3     `json:"move_direction,omitempty"`
+	MoveDistance      float32  `json:"move_distance,omitempty"`
+	Speed             float32  `json:"speed,omitempty"`
+	Wait              float32  `json:"wait,omitempty"`
+	Lip               float32  `json:"lip,omitempty"`
+	TargetName        string   `json:"target_name,omitempty"`
+	Target            string   `json:"target,omitempty"`
+	SourceTag         string   `json:"source_tag,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+}
+
+type LevelUseTriggerDef struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name,omitempty"`
+	Kind              string   `json:"kind,omitempty"`
+	BoundsCenter      Vec3     `json:"bounds_center"`
+	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	TargetName        string   `json:"target_name,omitempty"`
+	Target            string   `json:"target,omitempty"`
+	SourceTag         string   `json:"source_tag,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
 }
 
 type LevelMarkerDef struct {
@@ -305,6 +365,21 @@ func EnsureLevelIDs(def *LevelDef) {
 		}
 		if def.WaterBodies[i].Transform.Scale == (Vec3{}) {
 			def.WaterBodies[i].Transform.Scale = Vec3{1, 1, 1}
+		}
+	}
+	for i := range def.LadderVolumes {
+		if def.LadderVolumes[i].ID == "" {
+			def.LadderVolumes[i].ID = newID()
+		}
+	}
+	for i := range def.MovingBrushes {
+		if def.MovingBrushes[i].ID == "" {
+			def.MovingBrushes[i].ID = newID()
+		}
+	}
+	for i := range def.UseTriggers {
+		if def.UseTriggers[i].ID == "" {
+			def.UseTriggers[i].ID = newID()
 		}
 	}
 	for i := range def.Lights {

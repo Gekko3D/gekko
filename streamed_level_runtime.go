@@ -347,8 +347,23 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	for _, water := range level.WaterBodies {
 		spawnAuthoredLevelWaterBody(cmd, state.LevelRoot, level.ID, water)
 	}
+	for _, ladder := range level.LadderVolumes {
+		spawnAuthoredLevelLadderVolume(cmd, state.LevelRoot, level.ID, ladder)
+	}
+	for _, brush := range level.MovingBrushes {
+		if _, err := spawnAuthoredLevelMovingBrush(cmd, assets, loader, state.LevelRoot, level.ID, cfg.LevelPath, brush); err != nil {
+			state.InitErr = err
+			return err
+		}
+	}
+	for _, trigger := range level.UseTriggers {
+		spawnAuthoredLevelUseTrigger(cmd, state.LevelRoot, level.ID, trigger)
+	}
 	if cfg.AutoSpawnPlayer {
 		playerMarkerKind := cfg.PlayerSpawnKind
+		if playerMarkerKind == "" && level.Player != nil && level.Player.SpawnKind != "" {
+			playerMarkerKind = level.Player.SpawnKind
+		}
 		if playerMarkerKind == "" {
 			playerMarkerKind = content.LevelMarkerKindPlayerSpawn
 		}
@@ -359,6 +374,8 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			}
 			if cfg.PlayerConfig != nil {
 				SpawnGroundedPlayerAtMarkerWithConfig(cmd, marker, *cfg.PlayerConfig)
+			} else if level.Player != nil {
+				SpawnGroundedPlayerAtMarkerWithConfig(cmd, marker, groundedPlayerConfigFromLevelPlayer(level.Player))
 			} else {
 				SpawnGroundedPlayerAtMarker(cmd, marker)
 			}
@@ -366,6 +383,24 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	}
 	cmd.app.FlushCommands()
 	return nil
+}
+
+func groundedPlayerConfigFromLevelPlayer(player *content.LevelPlayerDef) GroundedPlayerControllerConfig {
+	if player == nil {
+		return GroundedPlayerControllerConfig{}
+	}
+	return GroundedPlayerControllerConfig{
+		Height:           player.Height,
+		EyeHeight:        player.EyeHeight,
+		Radius:           player.Radius,
+		Speed:            player.Speed,
+		SprintMultiplier: player.SprintMultiplier,
+		Sensitivity:      player.Sensitivity,
+		JumpSpeed:        player.JumpSpeed,
+		Gravity:          player.Gravity,
+		StepHeight:       player.StepHeight,
+		GroundProbe:      player.GroundProbe,
+	}
 }
 
 func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntimeState) {

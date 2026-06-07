@@ -29,6 +29,9 @@ type AuthoredLevelSpawnResult struct {
 	MarkerEntities          map[string]EntityId
 	LightEntities           map[string]EntityId
 	WaterBodyEntities       map[string]EntityId
+	LadderVolumeEntities    map[string]EntityId
+	MovingBrushEntities     map[string]EntityId
+	UseTriggerEntities      map[string]EntityId
 	ExpandedVolumeInstances []content.PlacementVolumePreviewInstance
 }
 
@@ -76,6 +79,9 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		MarkerEntities:        make(map[string]EntityId),
 		LightEntities:         make(map[string]EntityId),
 		WaterBodyEntities:     make(map[string]EntityId),
+		LadderVolumeEntities:  make(map[string]EntityId),
+		MovingBrushEntities:   make(map[string]EntityId),
+		UseTriggerEntities:    make(map[string]EntityId),
 	}
 	if cmd == nil {
 		return result, fmt.Errorf("commands is nil")
@@ -175,6 +181,21 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 	for _, water := range def.WaterBodies {
 		entity := spawnAuthoredLevelWaterBody(cmd, result.RootEntity, def.ID, water)
 		result.WaterBodyEntities[water.ID] = entity
+	}
+	for _, ladder := range def.LadderVolumes {
+		entity := spawnAuthoredLevelLadderVolume(cmd, result.RootEntity, def.ID, ladder)
+		result.LadderVolumeEntities[ladder.ID] = entity
+	}
+	for _, brush := range def.MovingBrushes {
+		entity, err := spawnAuthoredLevelMovingBrush(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, brush)
+		if err != nil {
+			return result, err
+		}
+		result.MovingBrushEntities[brush.ID] = entity
+	}
+	for _, trigger := range def.UseTriggers {
+		entity := spawnAuthoredLevelUseTrigger(cmd, result.RootEntity, def.ID, trigger)
+		result.UseTriggerEntities[trigger.ID] = entity
 	}
 
 	if def.Terrain != nil && strings.TrimSpace(def.Terrain.ManifestPath) != "" {
@@ -279,6 +300,177 @@ func spawnAuthoredLevelWaterBody(cmd *Commands, parent EntityId, levelID string,
 			LevelID:     levelID,
 			WaterBodyID: water.ID,
 			Name:        water.Name,
+		},
+	)
+}
+
+func spawnAuthoredLevelLadderVolume(cmd *Commands, parent EntityId, levelID string, ladder content.LevelLadderVolumeDef) EntityId {
+	center := mgl32.Vec3{ladder.BoundsCenter[0], ladder.BoundsCenter[1], ladder.BoundsCenter[2]}
+	halfExtents := mgl32.Vec3{ladder.BoundsHalfExtents[0], ladder.BoundsHalfExtents[1], ladder.BoundsHalfExtents[2]}
+	transform := TransformComponent{
+		Position: center,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&LadderVolumeComponent{
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			ClimbSpeed:        ladder.ClimbSpeed,
+			SourceTag:         ladder.SourceTag,
+			Tags:              append([]string(nil), ladder.Tags...),
+		},
+		&AuthoredLevelLadderVolumeRefComponent{
+			LevelID:        levelID,
+			LadderVolumeID: ladder.ID,
+			Name:           ladder.Name,
+		},
+	)
+}
+
+func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, brush content.LevelMovingBrushDef) (EntityId, error) {
+	center := mgl32.Vec3{brush.BoundsCenter[0], brush.BoundsCenter[1], brush.BoundsCenter[2]}
+	halfExtents := mgl32.Vec3{brush.BoundsHalfExtents[0], brush.BoundsHalfExtents[1], brush.BoundsHalfExtents[2]}
+	visualOrigin := mgl32.Vec3{brush.VisualOrigin[0], brush.VisualOrigin[1], brush.VisualOrigin[2]}
+	if visualOrigin == (mgl32.Vec3{}) {
+		visualOrigin = center
+	}
+	moveDirection := mgl32.Vec3{brush.MoveDirection[0], brush.MoveDirection[1], brush.MoveDirection[2]}
+	if moveDirection.LenSqr() > 1e-6 {
+		moveDirection = moveDirection.Normalize()
+	}
+	openDistance := brush.MoveDistance
+	if openDistance <= 0 {
+		openDistance = maxf(movingBrushExtentAlongDirection(halfExtents, moveDirection)*2-brush.Lip, 0)
+	}
+	transform := TransformComponent{
+		Position: visualOrigin,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	comps := []any{
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&MovingBrushComponent{
+			Kind:               brush.Kind,
+			BoundsCenter:       center,
+			BoundsHalfExtents:  halfExtents,
+			MoveDirection:      moveDirection,
+			ClosedPosition:     visualOrigin,
+			ClosedBoundsCenter: center,
+			OpenOffset:         moveDirection.Mul(openDistance),
+			Speed:              brush.Speed,
+			Wait:               brush.Wait,
+			Lip:                brush.Lip,
+			TargetName:         brush.TargetName,
+			Target:             brush.Target,
+			SourceTag:          brush.SourceTag,
+			Tags:               append([]string(nil), brush.Tags...),
+		},
+		&AuthoredLevelMovingBrushRefComponent{
+			LevelID:       levelID,
+			MovingBrushID: brush.ID,
+			Name:          brush.Name,
+		},
+	}
+	if strings.TrimSpace(brush.AssetPath) != "" {
+		if loader == nil {
+			loader = NewRuntimeContentLoader()
+		}
+		assetPath := content.ResolveDocumentPath(brush.AssetPath, levelPath)
+		asset, err := loader.LoadAsset(assetPath)
+		if err != nil {
+			return 0, err
+		}
+		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		if err != nil {
+			return 0, err
+		}
+		if model != (AssetId{}) {
+			comps = append(comps, &VoxelModelComponent{
+				SharedGeometry:         model,
+				VoxelPalette:           palette,
+				VoxelResolution:        voxelResolution,
+				PivotMode:              PivotModeCorner,
+				ShadowSeamWorldEpsilon: voxelResolution,
+			})
+		}
+	}
+	return cmd.AddEntity(comps...), nil
+}
+
+func movingBrushExtentAlongDirection(halfExtents mgl32.Vec3, direction mgl32.Vec3) float32 {
+	if direction.LenSqr() <= 1e-6 {
+		return 0
+	}
+	d := direction.Normalize()
+	return absf(d.X())*halfExtents.X() + absf(d.Y())*halfExtents.Y() + absf(d.Z())*halfExtents.Z()
+}
+
+func movingBrushVoxelModelFromAsset(assets *AssetServer, asset *content.AssetDef, assetPath string) (AssetId, AssetId, float32, error) {
+	if assets == nil || asset == nil {
+		return AssetId{}, AssetId{}, 0, nil
+	}
+	content.NormalizeAssetDef(asset)
+	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{DocumentPath: assetPath}); validation.HasErrors() {
+		return AssetId{}, AssetId{}, 0, fmt.Errorf("moving brush asset validation failed: %s", validation.Error())
+	}
+	if len(asset.Parts) == 0 {
+		return AssetId{}, AssetId{}, 0, fmt.Errorf("moving brush asset %s has no parts", assetPath)
+	}
+	part := asset.Parts[0]
+	model, palette, err := modelAndPaletteFromSource(assets, asset, part, assetPath)
+	if err != nil {
+		return AssetId{}, AssetId{}, 0, err
+	}
+	voxelResolution := part.VoxelResolution
+	if voxelResolution <= 0 {
+		voxelResolution = content.DefaultAssetVoxelSize
+	}
+	return model, palette, voxelResolution, nil
+}
+
+func spawnAuthoredLevelUseTrigger(cmd *Commands, parent EntityId, levelID string, trigger content.LevelUseTriggerDef) EntityId {
+	center := mgl32.Vec3{trigger.BoundsCenter[0], trigger.BoundsCenter[1], trigger.BoundsCenter[2]}
+	halfExtents := mgl32.Vec3{trigger.BoundsHalfExtents[0], trigger.BoundsHalfExtents[1], trigger.BoundsHalfExtents[2]}
+	transform := TransformComponent{
+		Position: center,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&UseTriggerComponent{
+			Kind:              trigger.Kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			TargetName:        trigger.TargetName,
+			Target:            trigger.Target,
+			SourceTag:         trigger.SourceTag,
+			Tags:              append([]string(nil), trigger.Tags...),
+		},
+		&AuthoredLevelUseTriggerRefComponent{
+			LevelID:      levelID,
+			UseTriggerID: trigger.ID,
+			Name:         trigger.Name,
 		},
 	)
 }

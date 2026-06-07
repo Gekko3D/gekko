@@ -50,6 +50,9 @@ func ValidateImportedWorld(def *ImportedWorldDef, opts ImportedWorldValidationOp
 	if def.VoxelResolution <= 0 {
 		result.addError("invalid_voxel_resolution", "imported world voxel_resolution must be positive")
 	}
+	if _, err := NormalizeImportedWorldChunkPayloadKind(def.ChunkPayloadKind); err != nil {
+		result.addError("invalid_chunk_payload_kind", err.Error())
+	}
 	seenCoords := map[string]struct{}{}
 	for _, entry := range def.Entries {
 		key := TerrainChunkKey(entry.Coord)
@@ -64,6 +67,10 @@ func ValidateImportedWorld(def *ImportedWorldDef, opts ImportedWorldValidationOp
 		}
 		if strings.ToLower(filepath.Ext(entry.ChunkPath)) != ".gkchunk" {
 			result.addError("invalid_chunk_path", fmt.Sprintf("imported world chunk_path must point to a .gkchunk: %s", entry.ChunkPath))
+			continue
+		}
+		if _, err := NormalizeImportedWorldChunkPayloadKind(entry.PayloadKind); err != nil {
+			result.addError("invalid_chunk_payload_kind", err.Error())
 			continue
 		}
 		if opts.DocumentPath != "" {

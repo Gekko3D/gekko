@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 )
 
+type ImportedWorldChunkSaveOptions struct {
+	PayloadKind string
+}
+
 func SaveImportedWorld(path string, def *ImportedWorldDef) error {
 	if def == nil {
 		return fmt.Errorf("imported world is nil")
@@ -42,6 +46,12 @@ func LoadImportedWorld(path string) (*ImportedWorldDef, error) {
 }
 
 func SaveImportedWorldChunk(path string, def *ImportedWorldChunkDef) error {
+	return SaveImportedWorldChunkWithOptions(path, def, ImportedWorldChunkSaveOptions{
+		PayloadKind: ImportedWorldChunkPayloadSparseJSONV1,
+	})
+}
+
+func SaveImportedWorldChunkWithOptions(path string, def *ImportedWorldChunkDef, opts ImportedWorldChunkSaveOptions) error {
 	if def == nil {
 		return fmt.Errorf("imported world chunk is nil")
 	}
@@ -52,6 +62,16 @@ func SaveImportedWorldChunk(path string, def *ImportedWorldChunkDef) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
+	payloadKind, err := NormalizeImportedWorldChunkPayloadKind(opts.PayloadKind)
+	if err != nil {
+		return err
+	}
+	def.PayloadKind = payloadKind
+	if payloadKind == ImportedWorldChunkPayloadDenseRLEBinaryV1 {
+		return saveImportedWorldChunkDenseRLEBinary(path, def)
+	}
+	def.PayloadHash = ""
+	def.PayloadSizeBytes = 0
 	data, err := json.MarshalIndent(def, "", "  ")
 	if err != nil {
 		return err
@@ -63,6 +83,9 @@ func LoadImportedWorldChunk(path string) (*ImportedWorldChunkDef, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	if isImportedWorldChunkDenseRLEBinary(data) {
+		return loadImportedWorldChunkDenseRLEBinary(data)
 	}
 	var def ImportedWorldChunkDef
 	if err := json.Unmarshal(data, &def); err != nil {

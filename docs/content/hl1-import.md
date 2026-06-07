@@ -193,6 +193,7 @@ Important structs and fields:
   - `BaseWorld *LevelBaseWorldDef`
   - `Environment *LevelEnvironmentDef`
   - `Markers []LevelMarkerDef`
+  - `LadderVolumes []LevelLadderVolumeDef`
 - `content.LevelBaseWorldDef`
   - `Kind`
   - `ManifestPath`
@@ -347,6 +348,12 @@ Phase 1 should use existing fields only:
 
 - Set `BaseWorld` to the generated `.gkworld`.
 - Generate a `player_spawn` marker.
+- Emit `level.player` with HL1 standing-hull dimensions so actiongame camera
+  and collision match the imported map scale:
+  - height: `72 HU = 1.8288m`
+  - eye height: `64 HU = 1.6256m`
+  - radius: `16 HU = 0.4064m`
+  - step height: `18 HU = 0.4572m`
 - Generate landmark and unsupported entity markers using new string `Kind`
   values, because `LevelMarkerDef.Kind` is already a string.
 - Preserve richer entity data in the import report or sidecar metadata until
@@ -427,12 +434,15 @@ type ImportedWorldVoxelDef struct {
 }
 ```
 
-Phase 2 should add compact payload support before broad campaign import:
+Implemented compact payload support keeps JSON available for fixtures and
+debugging while allowing imported maps to use a binary RLE chunk payload:
 
 - Keep `.gkchunk` extension.
-- Add `payload_kind`, for example `sparse_json_v1`, `rle_binary_v1`, or
-  `zstd_binary_v1`.
-- Add `payload_hash` for deterministic validation.
+- `sparse_json_v1` is the readable fallback/debug payload.
+- `dense_rle_binary_v1` stores chunk-local voxels as dense linear value runs
+  with a small metadata header and payload hash.
+- `payload_kind`, `payload_hash`, and `payload_size_bytes` are recorded where
+  available.
 - Keep a debug dump/report path so failures remain inspectable.
 
 ### `.gkasset`
@@ -798,9 +808,62 @@ Palette risk:
 - Do not collapse material identity permanently into RGBA. Keep source material
   ids in IR and reports even if phase 1 chunks only store palette values.
 
-## CLI Contract
+## How To Use The Importer
 
-Create the CLI before editor UI.
+There are two supported import paths:
+
+- `gekko-editor` level editor UI. Use this for normal authoring and quick
+  iteration.
+- `gekko/cmd/hl1import` CLI. Use this for repeatable tests, automation, and
+  debugging.
+
+Both paths use the same importer package and generate the same content shape:
+
+- `<map>.gklevel`
+- `worlds/<map>.gkworld`
+- `worlds/chunks/*.gkchunk`
+- `worlds/<map>_import_report.json`
+- generated helper `.gkasset` files for imported moving brush visuals
+
+The generated `.gklevel` is the file to open or run. It references the base
+world plus imported lights, water, ladders, moving brushes, use triggers, and
+player spawn metadata.
+
+### Editor Import
+
+1. Start the editor:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/gekko-editor
+go run .
+```
+
+2. Switch to **Level Editor**.
+3. Open the **Base World** dock.
+4. Use **Import HL1 .bsp**.
+5. Enter an absolute BSP path, for example:
+
+```text
+/Users/ddevidch/code/other/hl/valve/maps/crossfire.bsp
+```
+
+6. Keep the recommended defaults for first smoke tests:
+
+- output root: `assets`
+- voxel: `0.1`
+- chunk: `256`
+- band: `24`
+- cells: `100000000`
+- chunk payload: `RLE chunks`
+- light mode: `faithful`
+- emit lights: `on`
+
+7. Click **import + open**.
+
+`import + open` opens the generated `.gklevel` after import. Use plain
+**import** when you only want to generate files and inspect the report later.
+
+### CLI Import
 
 Suggested command:
 
@@ -820,14 +883,26 @@ go run ./cmd/hl1import \
   -debug-world-mode solid
 ```
 
+The CLI defaults to compact RLE binary chunks. For readable JSON chunks, add:
+
+```bash
+-chunk-payload sparse_json_v1
+```
+
+For explicit binary chunks, add:
+
+```bash
+-chunk-payload dense_rle_binary_v1
+```
+
 Local developer smoke command:
 
 ```bash
 cd /Users/ddevidch/code/go/gekko3d/gekko
 go run ./cmd/hl1import \
-  -map gasworks \
-  -bsp /Users/ddevidch/code/other/hl/valve/maps/gasworks.bsp \
-  -out /tmp/gekko3d-hl1import-gasworks-solid \
+  -map crossfire \
+  -bsp /Users/ddevidch/code/other/hl/valve/maps/crossfire.bsp \
+  -out /tmp/gekko3d-hl1import-crossfire-rle \
   -chunk-size 256 \
   -voxel-resolution 0.1 \
   -light-mode faithful \
@@ -837,6 +912,38 @@ go run ./cmd/hl1import \
   -emit-level \
   -debug-world-mode solid
 ```
+
+This writes:
+
+```text
+/tmp/gekko3d-hl1import-crossfire-rle/crossfire.gklevel
+/tmp/gekko3d-hl1import-crossfire-rle/worlds/crossfire.gkworld
+/tmp/gekko3d-hl1import-crossfire-rle/worlds/crossfire_import_report.json
+/tmp/gekko3d-hl1import-crossfire-rle/worlds/chunks/*.gkchunk
+```
+
+### Actiongame Smoke Test
+
+Run the generated level in `actiongame` with:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/actiongame
+GEKKO_ACTIONGAME_LEVEL=/tmp/gekko3d-hl1import-crossfire-rle/crossfire.gklevel \
+GEKKO_ACTIONGAME_PLAYER_SPAWN_KIND=hl1_player_spawn \
+go run .
+```
+
+For editor-generated levels under `gekko-editor/assets`, point
+`GEKKO_ACTIONGAME_LEVEL` at that generated `.gklevel` instead.
+
+Manual check list:
+
+- player spawns at an HL1 `info_player_start`
+- world scale matches HL1 doorways and ladders
+- textures are baked onto voxel surfaces
+- water, lights, ladders, doors, buttons, and lifts appear where expected
+- chunk streaming does not introduce severe holes or stalls
+- destructive edits work on imported world voxels
 
 Current debug world modes:
 
@@ -850,6 +957,15 @@ Current debug world modes:
   `PointContents`-solid cells within that depth from reachable playable space,
   or from a bounded 6-neighbor flood seeded by visible surface voxels when
   playable flood is too large.
+
+Temporary chunk-size guidance:
+
+- Use `-chunk-size 256` for playable HL1 smoke testing at `0.1m` voxel
+  resolution.
+- Smaller chunks such as `32` are useful for importer/render diagnostics, but
+  they create a chunk every `3.2m` and can make streamed runtime churn visible.
+- This is a tactical bridge until sector/page streaming and no-hole LOD proxies
+  are implemented in [`streaming-and-worlds.md`](streaming-and-worlds.md).
 
 Light import modes:
 
@@ -1173,18 +1289,45 @@ Goal:
 
 Recommended path:
 
-- `func_ladder` becomes a ladder volume component consumed by the grounded
-  player controller.
+- Implemented: `func_ladder` emits `content.LevelDef.LadderVolumes`
+  records. Streamed level runtime spawns them as `LadderVolumeComponent`
+  entities, and the grounded player controller consumes those volumes for
+  first-pass climbing.
+- Implemented: `func_door`, `momentary_door`, `func_button`, and `func_plat`
+  are excluded from the static base-world bake and emitted as generated
+  moving-brush voxel assets referenced by `content.LevelDef.MovingBrushes`.
+  `func_button` also emits `content.LevelDef.UseTriggers`. Streamed level
+  runtime spawns `MovingBrushComponent` and `UseTriggerComponent`; the grounded
+  player controller can activate them with E through `target`/`target_name`
+  links, and moving-brush visuals move between closed/open positions.
+- Implemented foundation: `func_door_rotating` emits moving-brush metadata, but
+  exact rotating motion is still future work.
 - `trigger_changelevel`, `trigger_once`, and `trigger_multiple` become typed
   trigger volumes with target metadata.
-- `func_door`, `func_plat`, `func_train`, and related brush models become
-  moving-brush entities or prefab placements only after actiongame has matching
-  systems.
+- Current transitional importer behavior emits source-linked level markers for
+  `func_door`, `func_door_rotating`, `func_button`, `func_plat`, `func_train`,
+  and `momentary_door`. The markers preserve brush bounds, model id, target,
+  targetname, speed, wait, lip, angle/angles, spawnflags, sounds, and damage
+  values in tags for compatibility with existing editor/actiongame tooling.
+- `func_train` and related brush models become visual moving-brush entities
+  after actiongame has matching path-following semantics.
+- Deferred: HL1 target graph entities such as `multi_manager` and
+  `trigger_relay` are intentionally not implemented yet. They should become a
+  small runtime action dispatcher that resolves `target`/`targetname` links,
+  supports delayed target firing, and can activate moving brushes, trigger
+  volumes, lights, pickups, and later scripted events without adding a general
+  scripting language. This is needed for maps where a button targets a relay or
+  multi-manager instead of a mover directly, such as some `crossfire` tower
+  controls.
+- Deferred: pickups, ammo, health, batteries, weapons, and `func_breakable`
+  should be imported after the target graph is in place, so direct placement and
+  triggered behavior use the same event path.
 - Unsupported scripted sequences remain diagnostics and debug markers.
 
 Acceptance criteria:
 
-- Ladder volumes can be debug-rendered and inspected.
+- Ladder volumes are generated from HL1 brush-model bounds and can be
+  debug-rendered or inspected as level-owned gameplay components.
 - Changelevel trigger volumes preserve target map and landmark.
 - Moving brush entities remain source-linked in diagnostics even before they
   are playable.
@@ -1199,17 +1342,21 @@ Goal:
 
 Implementation:
 
-- Extend `.gkchunk` with payload kind.
-- Add compact binary or compressed payload.
+- Implemented: `.gkchunk` loader auto-detects `dense_rle_binary_v1` binary
+  chunks by magic header and otherwise falls back to JSON.
+- Implemented: `.gkworld` and chunk entries can record chunk payload kind,
+  payload hash, and payload byte size.
+- Implemented: HL1 importer defaults to `dense_rle_binary_v1`; use
+  `-chunk-payload sparse_json_v1` when readable chunk dumps are needed.
 - Keep JSON support for fixtures and debugging.
-- Update content IO, validation, runtime loader, and tests.
+- Future: add optional zstd wrapping after streaming/page behavior is stable.
 
 Acceptance criteria:
 
-- Existing JSON chunks still load.
-- Binary/compressed chunks validate.
-- Runtime streaming works with both payload kinds.
-- Import report records uncompressed and compressed sizes.
+- [x] Existing JSON chunks still load.
+- [x] Binary RLE chunks validate and load through the same runtime path.
+- [x] Runtime streaming works with both payload kinds.
+- [ ] Import report records total uncompressed and compressed sizes.
 
 ### M7: Editor Integration
 
@@ -1289,7 +1436,7 @@ Engine/content:
 - [ ] Deterministic palette quantization for baked texture samples.
 - [ ] Structural fill material propagation from nearest visible source surface.
 - [ ] Optional `.gkworld` source material metadata.
-- [ ] Optional `.gkchunk` compact payload support.
+- [x] Optional `.gkchunk` compact payload support.
 - [ ] Optional `.gklevel` light definitions.
 - [ ] Optional `.gklevel` trigger volume definitions.
 - [ ] Richer `LevelEnvironmentDef`.
@@ -1300,9 +1447,16 @@ Runtime:
 - [ ] Spawn/import level-owned lights.
 - [ ] Apply imported player spawn rotation.
 - [ ] Represent changelevel trigger volumes.
-- [ ] Represent ladder volumes.
-- [ ] Represent moving brush entities for doors/lifts/trains when actiongame
-      has matching systems.
+- [x] Represent ladder volumes.
+- [x] Represent typed door/button moving-brush metadata and use activation.
+- [x] Spawn visual moving brush geometry for linear doors/buttons/platforms
+      outside the static base-world bake.
+- [ ] Import HL1 target graph relays (`multi_manager`, `trigger_relay`) and
+      delayed target firing.
+- [ ] Spawn/import pickups, ammo, health, weapons, and `func_breakable`
+      gameplay entities.
+- [ ] Spawn visual moving brush geometry for rotating doors/trains when
+      actiongame has matching motion semantics.
 - [ ] Confirm imported base-world chunks can be destructively edited or
       explicitly gate destruction with a documented policy.
 - [ ] Debug render unsupported imported entities.
@@ -1310,9 +1464,11 @@ Runtime:
 
 Editor:
 
-- [ ] HL1 import panel.
-- [ ] Import progress and cancellation.
-- [ ] Import report display.
+- [x] HL1 import panel in `gekko-editor` level base-world dock.
+- [x] Coarse import progress for BSP read, world voxelization, level build,
+      save, and report phases.
+- [x] Import report path and generated content summary display.
+- [ ] Import cancellation.
 - [ ] Missing WAD/texture diagnostics.
 - [ ] Unsupported entity diagnostics.
 - [ ] Imported light/trigger inspection after schema exists.

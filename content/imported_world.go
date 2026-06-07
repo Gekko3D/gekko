@@ -9,6 +9,9 @@ type ImportedWorldKind string
 
 const (
 	ImportedWorldKindVoxelWorld ImportedWorldKind = "imported_voxel_world"
+
+	ImportedWorldChunkPayloadSparseJSONV1     = "sparse_json_v1"
+	ImportedWorldChunkPayloadDenseRLEBinaryV1 = "dense_rle_binary_v1"
 )
 
 type ImportedWorldDef struct {
@@ -21,6 +24,7 @@ type ImportedWorldDef struct {
 	Materials          []ImportedWorldMaterialDef   `json:"materials,omitempty"`
 	SourceBuildVersion string                       `json:"source_build_version,omitempty"`
 	SourceHash         string                       `json:"source_hash,omitempty"`
+	ChunkPayloadKind   string                       `json:"chunk_payload_kind,omitempty"`
 	Tags               []string                     `json:"tags,omitempty"`
 	Entries            []ImportedWorldChunkEntryDef `json:"entries,omitempty"`
 }
@@ -45,6 +49,9 @@ type ImportedWorldChunkEntryDef struct {
 	Coord              TerrainChunkCoordDef `json:"coord"`
 	ChunkPath          string               `json:"chunk_path"`
 	NonEmptyVoxelCount int                  `json:"non_empty_voxel_count,omitempty"`
+	PayloadKind        string               `json:"payload_kind,omitempty"`
+	PayloadHash        string               `json:"payload_hash,omitempty"`
+	PayloadSizeBytes   int                  `json:"payload_size_bytes,omitempty"`
 	Tags               []string             `json:"tags,omitempty"`
 }
 
@@ -54,6 +61,9 @@ type ImportedWorldChunkDef struct {
 	Coord              TerrainChunkCoordDef    `json:"coord"`
 	ChunkSize          int                     `json:"chunk_size"`
 	VoxelResolution    float32                 `json:"voxel_resolution"`
+	PayloadKind        string                  `json:"payload_kind,omitempty"`
+	PayloadHash        string                  `json:"payload_hash,omitempty"`
+	PayloadSizeBytes   int                     `json:"payload_size_bytes,omitempty"`
 	Voxels             []ImportedWorldVoxelDef `json:"voxels,omitempty"`
 	NonEmptyVoxelCount int                     `json:"non_empty_voxel_count,omitempty"`
 	Tags               []string                `json:"tags,omitempty"`
@@ -76,6 +86,9 @@ func EnsureImportedWorldDefaults(def *ImportedWorldDef) {
 	if def.Kind == "" {
 		def.Kind = ImportedWorldKindVoxelWorld
 	}
+	if def.ChunkPayloadKind == "" {
+		def.ChunkPayloadKind = ImportedWorldChunkPayloadSparseJSONV1
+	}
 }
 
 func EnsureImportedWorldChunkDefaults(def *ImportedWorldChunkDef) {
@@ -84,6 +97,9 @@ func EnsureImportedWorldChunkDefaults(def *ImportedWorldChunkDef) {
 	}
 	if def.SchemaVersion == 0 {
 		def.SchemaVersion = CurrentImportedWorldChunkSchemaVersion
+	}
+	if def.PayloadKind == "" {
+		def.PayloadKind = ImportedWorldChunkPayloadSparseJSONV1
 	}
 	if def.NonEmptyVoxelCount == 0 {
 		def.NonEmptyVoxelCount = len(def.Voxels)

@@ -13,7 +13,9 @@ A level describes:
 - procedural placement volumes
 - optional terrain
 - optional imported base-world data
+- optional player controller defaults
 - environment preset selection
+- authored lights and water bodies
 - gameplay markers such as player spawns or objectives
 
 Use a level when you want to assemble a playable space from reusable authored assets and world data.
@@ -34,12 +36,15 @@ The top-level `LevelDef` contains:
 - `voxel_resolution`
 - `terrain`
 - `base_world`
+- `player`
 - `placements`
 - `placement_volumes`
 - `environment`
+- `lights`
+- `water_bodies`
 - `markers`
 
-Schema version is currently `1`.
+Schema version is currently `3`.
 
 ## Core Sections
 
@@ -115,6 +120,37 @@ Important runtime distinction:
 
 So `base_world` is part of the authored level contract, but it is mainly consumed by the streamed-level runtime path.
 
+### Player
+
+`player` stores optional level-authored defaults for automatic player spawning.
+
+Fields:
+
+- `spawn_kind`
+- `height`
+- `eye_height`
+- `radius`
+- `speed`
+- `sprint_multiplier`
+- `sensitivity`
+- `jump_speed`
+- `gravity`
+- `step_height`
+- `ground_probe`
+- optional tags
+
+Streamed runtime uses this block only when `AutoSpawnPlayer` is enabled and the
+caller did not pass an explicit `StreamedLevelRuntimeConfig.PlayerConfig`.
+Explicit runtime config always wins.
+
+Imported maps should use this for source-game player hulls. For example, HL1
+levels use the standing player hull:
+
+- height: `72 HU = 1.8288m`
+- eye height: `64 HU = 1.6256m`
+- radius: `16 HU = 0.4064m`
+- step height: `18 HU = 0.4572m`
+
 ### Environment
 
 `environment` currently selects a preset-driven lighting and sky setup.
@@ -155,6 +191,60 @@ Each explicit rectangle contains:
 Streamed runtime spawns water bodies at level load; water patches then resolve
 through the normal water body system and render through the dedicated water
 surface feature.
+
+### Ladder Volumes
+
+`ladder_volumes[]` are authored gameplay volumes in level space. They spawn
+runtime `LadderVolumeComponent` entities and are consumed directly by the
+grounded player controller.
+
+Each ladder volume contains:
+
+- `id`
+- `bounds_center`
+- `bounds_half_extents`
+- optional `climb_speed`
+- optional `source_tag`
+- optional tags
+
+The current controller behavior is intentionally simple: when the player capsule
+overlaps a ladder volume, W/S climb vertically, A/D can move sideways, gravity is
+paused, and jump exits the ladder.
+
+### Moving Brushes And Use Triggers
+
+`moving_brushes[]` describe level-owned dynamic brush intent, such as doors.
+`use_triggers[]` describe player-use volumes, such as buttons.
+
+Moving brushes contain:
+
+- `id`
+- `kind`
+- optional `asset_path`
+- `bounds_center`
+- `bounds_half_extents`
+- optional `visual_origin`
+- optional `move_direction`, `move_distance`, `speed`, `wait`, and `lip`
+- optional `target_name` and `target`
+- optional `source_tag` and tags
+
+`speed` and explicit `move_distance` are non-negative. `wait` and `lip` may be
+negative to preserve imported mover semantics from formats such as Half-Life 1,
+where negative wait usually means stay open and negative lip can mean overtravel.
+
+Use triggers contain:
+
+- `id`
+- `kind`
+- `bounds_center`
+- `bounds_half_extents`
+- optional `target_name` and `target`
+- optional `source_tag` and tags
+
+The grounded player controller can activate a nearby use trigger or moving brush
+with E. Activation toggles the matching `MovingBrushComponent` state through
+`target`/`target_name` links. If `asset_path` is present, runtime spawns that
+voxel asset on the moving-brush entity and moves it between closed/open targets.
 
 ### Markers
 
@@ -203,6 +293,10 @@ Prefer keeping paths relative to the `.gklevel` file so levels remain portable a
 - placement-volume IDs are unique
 - placement volumes define exactly one source
 - placement-volume shape and rule parameters are valid
+- ladder-volume IDs are unique
+- ladder-volume bounds are positive
+- moving-brush IDs are unique and bounds/speeds are valid
+- use-trigger IDs are unique and bounds are valid
 - referenced asset sets load and validate
 - terrain kind, extension, file existence, and chunk-size or voxel-size compatibility
 - base-world kind, extension, file existence, and chunk-size or voxel-size compatibility
@@ -226,6 +320,7 @@ There are two main ways levels are consumed.
 - spawn explicit placements as authored assets
 - expand placement volumes and spawn the resulting authored assets
 - spawn marker entities
+- spawn lights, water bodies, ladder volumes, moving brushes, and use triggers
 - spawn terrain chunks when terrain is configured
 - apply the environment preset
 

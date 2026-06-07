@@ -151,6 +151,18 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		validateLevelWaterBodyUniqueID(&result, seenIDs, water.ID)
 		validateLevelWaterBody(&result, water)
 	}
+	for _, ladder := range def.LadderVolumes {
+		validateLevelLadderVolumeUniqueID(&result, seenIDs, ladder.ID)
+		validateLevelLadderVolume(&result, ladder)
+	}
+	for _, brush := range def.MovingBrushes {
+		validateLevelMovingBrushUniqueID(&result, seenIDs, brush.ID)
+		validateLevelMovingBrush(&result, brush, opts)
+	}
+	for _, trigger := range def.UseTriggers {
+		validateLevelUseTriggerUniqueID(&result, seenIDs, trigger.ID)
+		validateLevelUseTrigger(&result, trigger)
+	}
 
 	validateLevelTerrain(&result, def, opts)
 	validateLevelBaseWorld(&result, def, opts)
@@ -216,6 +228,39 @@ func validateLevelWaterBodyUniqueID(result *LevelValidationResult, seen map[stri
 	}
 	if _, ok := seen[id]; ok {
 		result.addError("duplicate_water_body_id", fmt.Sprintf("duplicate water body id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelLadderVolumeUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_ladder_volume_id", fmt.Sprintf("duplicate ladder volume id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelMovingBrushUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_moving_brush_id", fmt.Sprintf("duplicate moving brush id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelUseTriggerUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_use_trigger_id", fmt.Sprintf("duplicate use trigger id %s", id), "", "", "", "", "", "", "")
 		return
 	}
 	seen[id] = struct{}{}
@@ -294,6 +339,48 @@ func validateLevelWaterBody(result *LevelValidationResult, water LevelWaterBodyD
 		if water.RectHalfExtents[0] <= 0 || water.RectHalfExtents[1] <= 0 {
 			result.addError("invalid_water_body_rect", "explicit water body requires positive rect half extents", "", "", "", "", "", "", "")
 		}
+	}
+}
+
+func validateLevelLadderVolume(result *LevelValidationResult, ladder LevelLadderVolumeDef) {
+	if strings.TrimSpace(ladder.ID) == "" {
+		result.addError("empty_ladder_volume_id", "ladder volume id is required", "", "", "", "", "", "", "")
+	}
+	if ladder.BoundsHalfExtents[0] <= 0 || ladder.BoundsHalfExtents[1] <= 0 || ladder.BoundsHalfExtents[2] <= 0 {
+		result.addError("invalid_ladder_volume_bounds", "ladder volume requires positive bounds half extents", "", "", "", "", "", "", "")
+	}
+	if ladder.ClimbSpeed < 0 {
+		result.addError("invalid_ladder_climb_speed", "ladder climb speed must be non-negative", "", "", "", "", "", "", "")
+	}
+}
+
+func validateLevelMovingBrush(result *LevelValidationResult, brush LevelMovingBrushDef, opts LevelValidationOptions) {
+	if strings.TrimSpace(brush.ID) == "" {
+		result.addError("empty_moving_brush_id", "moving brush id is required", "", "", "", "", "", "", "")
+	}
+	if brush.BoundsHalfExtents[0] <= 0 || brush.BoundsHalfExtents[1] <= 0 || brush.BoundsHalfExtents[2] <= 0 {
+		result.addError("invalid_moving_brush_bounds", "moving brush requires positive bounds half extents", "", "", "", "", "", "", "")
+	}
+	if brush.Speed < 0 {
+		result.addError("invalid_moving_brush_speed", "moving brush speed must be non-negative", "", "", "", "", "", "", "")
+	}
+	if brush.MoveDistance < 0 {
+		result.addError("invalid_moving_brush_distance", "moving brush move distance must be non-negative", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(brush.AssetPath) != "" && opts.DocumentPath != "" {
+		resolvedPath := ResolveDocumentPath(brush.AssetPath, opts.DocumentPath)
+		if _, err := os.Stat(resolvedPath); err != nil {
+			result.addError("missing_moving_brush_asset", fmt.Sprintf("missing moving brush asset %s", brush.AssetPath), "", "", "", "", "", "", "")
+		}
+	}
+}
+
+func validateLevelUseTrigger(result *LevelValidationResult, trigger LevelUseTriggerDef) {
+	if strings.TrimSpace(trigger.ID) == "" {
+		result.addError("empty_use_trigger_id", "use trigger id is required", "", "", "", "", "", "", "")
+	}
+	if trigger.BoundsHalfExtents[0] <= 0 || trigger.BoundsHalfExtents[1] <= 0 || trigger.BoundsHalfExtents[2] <= 0 {
+		result.addError("invalid_use_trigger_bounds", "use trigger requires positive bounds half extents", "", "", "", "", "", "", "")
 	}
 }
 

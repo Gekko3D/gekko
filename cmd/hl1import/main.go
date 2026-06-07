@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/gekko3d/gekko/content"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 	"github.com/gekko3d/gekko/importers/hl1"
 )
@@ -22,6 +23,8 @@ func main() {
 	flag.StringVar(&opts.BSPPath, "bsp", "", "explicit BSP path; overrides -game-dir/-map lookup")
 	flag.StringVar(&opts.OutputRoot, "out", "../actiongame/assets/levels", "generated content output root")
 	flag.IntVar(&opts.ChunkSize, "chunk-size", hl1.DefaultImportedWorldChunkSize, "imported-world chunk size")
+	opts.ChunkPayloadKind = hl1.DefaultChunkPayloadKind
+	flag.StringVar(&opts.ChunkPayloadKind, "chunk-payload", hl1.DefaultChunkPayloadKind, "imported-world chunk payload: sparse_json_v1 or dense_rle_binary_v1")
 	flag.Int64Var(&opts.MaxSolidSampleCells, "max-solid-sample-cells", hl1.DefaultImportedMaxSampledCells, "maximum BSP solid voxel sample cells")
 	flag.IntVar(&opts.SolidBandDepth, "solid-band-depth", hl1.DefaultImportedSolidBandDepth, "solid debug mode fill depth in voxels from reachable playable empty space")
 	flag.Var((*hl1LightModeFlag)(&opts.LightMode), "light-mode", "HL1 light import mode: faithful or point-proxy")
@@ -45,6 +48,9 @@ func main() {
 	}
 	if opts.VoxelResolution <= 0 {
 		fatalf("-voxel-resolution must be positive")
+	}
+	if _, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind); err != nil {
+		fatalf("%v", err)
 	}
 	if emitLevel {
 		emitDebugWorld = true
@@ -100,6 +106,7 @@ func main() {
 	if emitDebugWorld {
 		fmt.Printf("debug world written: %s\n", debugResult.ManifestPath)
 		fmt.Printf("debug world mode: %s\n", debugResult.Mode)
+		fmt.Printf("debug world chunk payload: %s\n", debugResult.PayloadKind)
 		fmt.Printf("debug voxels: %d surface, %d filled, %d chunks\n", debugResult.Voxelize.SurfaceCount, debugResult.Voxelize.FilledCount, len(debugResult.Emission.Chunks))
 		if debugResult.Mode == hl1.DebugWorldModeSolid {
 			fmt.Printf("sampled cells: %d, playable empty: %d, solid band depth: %d\n", debugResult.Voxelize.SampledCount, debugResult.Voxelize.PlayableEmptyCount, opts.SolidBandDepth)
@@ -112,7 +119,11 @@ func main() {
 		fmt.Printf("level written: %s\n", levelResult.LevelPath)
 		fmt.Printf("player spawn marker kind: %s\n", hl1.MarkerKindHL1PlayerSpawn)
 		fmt.Printf("water bodies: %d\n", len(levelResult.Level.WaterBodies))
+		fmt.Printf("ladder volumes: %d\n", len(levelResult.Level.LadderVolumes))
+		fmt.Printf("moving brushes: %d\n", len(levelResult.Level.MovingBrushes))
+		fmt.Printf("use triggers: %d\n", len(levelResult.Level.UseTriggers))
 		fmt.Printf("light fixture assets: %d\n", len(levelResult.LightFixtureAssets))
+		fmt.Printf("moving brush assets: %d\n", len(levelResult.MovingBrushAssets))
 	}
 }
 

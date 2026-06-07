@@ -132,6 +132,184 @@ func TestLoadAndSpawnAuthoredLevelSpawnsWaterBody(t *testing.T) {
 	}
 }
 
+func TestLoadAndSpawnAuthoredLevelSpawnsLadderVolume(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "ladder.gklevel")
+	level := content.NewLevelDef("ladder")
+	level.LadderVolumes = []content.LevelLadderVolumeDef{{
+		ID:                "ladder-1",
+		Name:              "ladder",
+		BoundsCenter:      content.Vec3{10, 2, 20},
+		BoundsHalfExtents: content.Vec3{0.25, 2, 0.5},
+		ClimbSpeed:        3.5,
+		SourceTag:         "hl1:func_ladder",
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+	entity := result.LadderVolumeEntities["ladder-1"]
+	if entity == 0 {
+		t.Fatalf("expected ladder entity in spawn result: %+v", result.LadderVolumeEntities)
+	}
+	var found bool
+	MakeQuery2[TransformComponent, LadderVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, ladder *LadderVolumeComponent) bool {
+		if eid != entity {
+			return true
+		}
+		found = true
+		if tr.Position != (mgl32.Vec3{10, 2, 20}) {
+			t.Fatalf("ladder transform position = %v", tr.Position)
+		}
+		if ladder.BoundsCenter != (mgl32.Vec3{10, 2, 20}) || ladder.BoundsHalfExtents != (mgl32.Vec3{0.25, 2, 0.5}) || ladder.ClimbSpeed != 3.5 {
+			t.Fatalf("ladder component = %+v", ladder)
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("expected spawned ladder volume component")
+	}
+}
+
+func TestLoadAndSpawnAuthoredLevelSpawnsMovingBrushAndUseTrigger(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "moving.gklevel")
+	level := content.NewLevelDef("moving")
+	level.MovingBrushes = []content.LevelMovingBrushDef{{
+		ID:                "door-1",
+		Name:              "door",
+		Kind:              "hl1_func_door",
+		BoundsCenter:      content.Vec3{10, 2, 20},
+		BoundsHalfExtents: content.Vec3{0.5, 1, 0.25},
+		MoveDirection:     content.Vec3{1, 0, 0},
+		Speed:             3,
+		TargetName:        "door_a",
+	}}
+	level.UseTriggers = []content.LevelUseTriggerDef{{
+		ID:                "button-1",
+		Name:              "button",
+		Kind:              "hl1_func_button",
+		BoundsCenter:      content.Vec3{8, 2, 20},
+		BoundsHalfExtents: content.Vec3{0.25, 0.5, 0.25},
+		Target:            "door_a",
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+	if result.MovingBrushEntities["door-1"] == 0 {
+		t.Fatalf("expected moving brush entity in spawn result: %+v", result.MovingBrushEntities)
+	}
+	if result.UseTriggerEntities["button-1"] == 0 {
+		t.Fatalf("expected use trigger entity in spawn result: %+v", result.UseTriggerEntities)
+	}
+	var foundBrush, foundTrigger bool
+	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent) bool {
+		foundBrush = true
+		if brush.TargetName != "door_a" || brush.Speed != 3 || brush.BoundsCenter != (mgl32.Vec3{10, 2, 20}) {
+			t.Fatalf("moving brush component = %+v", brush)
+		}
+		return true
+	})
+	MakeQuery1[UseTriggerComponent](cmd).Map(func(_ EntityId, trigger *UseTriggerComponent) bool {
+		foundTrigger = true
+		if trigger.Target != "door_a" || trigger.BoundsCenter != (mgl32.Vec3{8, 2, 20}) {
+			t.Fatalf("use trigger component = %+v", trigger)
+		}
+		return true
+	})
+	if !foundBrush || !foundTrigger {
+		t.Fatalf("expected spawned brush and trigger, found brush=%v trigger=%v", foundBrush, foundTrigger)
+	}
+}
+
+func TestLoadAndSpawnAuthoredLevelSpawnsMovingBrushVoxelAsset(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "door.gkasset")
+	levelPath := filepath.Join(root, "levels", "moving.gklevel")
+	asset := content.NewAssetDef("door")
+	asset.Materials = []content.AssetMaterialDef{{
+		ID:        "mat_1",
+		Name:      "mat_1",
+		BaseColor: [4]uint8{200, 100, 50, 255},
+		Roughness: 1,
+	}}
+	asset.Parts = []content.AssetPartDef{{
+		ID:              "brush",
+		Name:            "brush",
+		VoxelResolution: 0.1,
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxelShape,
+			VoxelShape: &content.AssetVoxelShapeDef{
+				Palette: []content.AssetVoxelPaletteEntryDef{{Value: 1, MaterialID: "mat_1"}},
+				Voxels:  []content.VoxelObjectVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+			},
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveAsset(assetPath, asset); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+	level := content.NewLevelDef("moving")
+	level.MovingBrushes = []content.LevelMovingBrushDef{{
+		ID:                "door-1",
+		AssetPath:         "../assets/door.gkasset",
+		BoundsCenter:      content.Vec3{10, 2, 20},
+		BoundsHalfExtents: content.Vec3{0.5, 1, 0.25},
+		VisualOrigin:      content.Vec3{9.5, 1, 19.75},
+		MoveDirection:     content.Vec3{1, 0, 0},
+		Speed:             3,
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, assets, NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+	entity := result.MovingBrushEntities["door-1"]
+	if entity == 0 {
+		t.Fatal("expected moving brush entity")
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	if vmc.SharedGeometry == (AssetId{}) || vmc.VoxelPalette == (AssetId{}) || vmc.VoxelResolution != 0.1 {
+		t.Fatalf("moving brush voxel model = %+v", vmc)
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelCollapsedAssetKeepsPlacementRefWithoutItemRefs(t *testing.T) {
 	root := t.TempDir()
 	assetPath := filepath.Join(root, "assets", "ship_collapsed.gkasset")

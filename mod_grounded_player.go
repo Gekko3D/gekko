@@ -47,6 +47,9 @@ type GroundedPlayerControllerComponent struct {
 	VerticalVelocity float32
 	Grounded         bool
 	NeedsGroundSnap  bool
+	OnLadder         bool
+	LadderEntity     EntityId
+	LadderClimbSpeed float32
 }
 
 func DefaultGroundedPlayerControllerConfig() GroundedPlayerControllerConfig {
@@ -109,6 +112,8 @@ func (mod GroundedPlayerControllerModule) Install(app *App, cmd *Commands) {
 	}
 	app.UseSystem(System(groundedPlayerInputSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(groundedPlayerControlSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(groundedPlayerUseSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(movingBrushMotionSystem).InStage(Update).RunAlways())
 }
 
 func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) EntityId {
@@ -214,18 +219,30 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 
 		flatForward := forwardFromYawPitch(cam.Yaw, 0)
 		right := flatForward.Cross(mgl32.Vec3{0, 1, 0}).Normalize()
-		move := right.Mul(ctrl.MoveInput[0]).Add(flatForward.Mul(ctrl.MoveInput[1]))
-		if move.Len() > 0 {
-			move = move.Normalize()
-		}
 		speed := defaulted(ctrl.Speed, 5.5)
 		if input != nil && input.Pressed[KeyShift] {
 			speed *= defaulted(ctrl.SprintMultiplier, 1.6)
 		}
-		horizontalMove := move.Mul(speed * dt)
-		basePos = tryGroundedHorizontalMove(voxRt, basePos, horizontalMove, ctrl)
 
-		resolveGroundedVertical(voxRt, &basePos, ctrl, dt)
+		if ladderEntity, ladder, ok := findGroundedPlayerLadderVolume(cmd, basePos, ctrl); ok {
+			ctrl.OnLadder = true
+			ctrl.LadderEntity = ladderEntity
+			ctrl.LadderClimbSpeed = ladder.NormalizedClimbSpeed()
+			lateralMove := right.Mul(ctrl.MoveInput[0] * speed * 0.5 * dt)
+			basePos = tryGroundedHorizontalMove(voxRt, basePos, lateralMove, ctrl)
+			resolveGroundedLadderMovement(voxRt, &basePos, ctrl, dt)
+		} else {
+			ctrl.OnLadder = false
+			ctrl.LadderEntity = 0
+			ctrl.LadderClimbSpeed = 0
+			move := right.Mul(ctrl.MoveInput[0]).Add(flatForward.Mul(ctrl.MoveInput[1]))
+			if move.Len() > 0 {
+				move = move.Normalize()
+			}
+			horizontalMove := move.Mul(speed * dt)
+			basePos = tryGroundedHorizontalMove(voxRt, basePos, horizontalMove, ctrl)
+			resolveGroundedVertical(voxRt, &basePos, ctrl, dt)
+		}
 
 		cam.Position = basePos.Add(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
 		cam.LookAt = cam.Position.Add(forwardFromYawPitch(cam.Yaw, cam.Pitch))
@@ -242,6 +259,242 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 		}
 		return true
 	})
+}
+
+func groundedPlayerUseSystem(cmd *Commands, input *Input) {
+	if cmd == nil || input == nil || !input.JustPressed[KeyE] {
+		return
+	}
+	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(_ EntityId, cam *CameraComponent, _ *GroundedPlayerControllerComponent) bool {
+		origin := cam.Position
+		dir := forwardFromYawPitch(cam.Yaw, cam.Pitch)
+		if hit, ok := findUseTriggerHit(cmd, origin, dir, 2.2); ok {
+			hit.Trigger.ActivationCount++
+			activateMovingBrushAtBounds(cmd, hit.Trigger.BoundsCenter, hit.Trigger.BoundsHalfExtents)
+			activateMovingBrushTarget(cmd, hit.Trigger.Target)
+			return false
+		}
+		if hit, ok := findMovingBrushUseHit(cmd, origin, dir, 2.2); ok {
+			hit.Brush.ActivationCount++
+			hit.Brush.Open = !hit.Brush.Open
+			if hit.Brush.Target != "" {
+				activateMovingBrushTarget(cmd, hit.Brush.Target)
+			}
+			return false
+		}
+		return true
+	})
+}
+
+type useTriggerHit struct {
+	Entity  EntityId
+	Trigger *UseTriggerComponent
+	T       float32
+}
+
+type movingBrushUseHit struct {
+	Entity EntityId
+	Brush  *MovingBrushComponent
+	T      float32
+}
+
+func findUseTriggerHit(cmd *Commands, origin, dir mgl32.Vec3, maxDistance float32) (useTriggerHit, bool) {
+	var best useTriggerHit
+	MakeQuery1[UseTriggerComponent](cmd).Map(func(eid EntityId, trigger *UseTriggerComponent) bool {
+		if trigger == nil {
+			return true
+		}
+		t, ok := rayAABB(origin, dir, trigger.BoundsCenter.Sub(trigger.BoundsHalfExtents), trigger.BoundsCenter.Add(trigger.BoundsHalfExtents), maxDistance)
+		if !ok {
+			return true
+		}
+		if best.Trigger == nil || t < best.T {
+			best = useTriggerHit{Entity: eid, Trigger: trigger, T: t}
+		}
+		return true
+	})
+	return best, best.Trigger != nil
+}
+
+func findMovingBrushUseHit(cmd *Commands, origin, dir mgl32.Vec3, maxDistance float32) (movingBrushUseHit, bool) {
+	var best movingBrushUseHit
+	MakeQuery1[MovingBrushComponent](cmd).Map(func(eid EntityId, brush *MovingBrushComponent) bool {
+		if brush == nil {
+			return true
+		}
+		t, ok := rayAABB(origin, dir, brush.BoundsCenter.Sub(brush.BoundsHalfExtents), brush.BoundsCenter.Add(brush.BoundsHalfExtents), maxDistance)
+		if !ok {
+			return true
+		}
+		if best.Brush == nil || t < best.T {
+			best = movingBrushUseHit{Entity: eid, Brush: brush, T: t}
+		}
+		return true
+	})
+	return best, best.Brush != nil
+}
+
+func activateMovingBrushTarget(cmd *Commands, target string) {
+	if cmd == nil || target == "" {
+		return
+	}
+	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent) bool {
+		if brush == nil || brush.TargetName != target {
+			return true
+		}
+		brush.Open = !brush.Open
+		brush.ActivationCount++
+		return true
+	})
+}
+
+func activateMovingBrushAtBounds(cmd *Commands, center, halfExtents mgl32.Vec3) {
+	if cmd == nil {
+		return
+	}
+	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent) bool {
+		if brush == nil {
+			return true
+		}
+		if !aabbOverlap(center.Sub(halfExtents), center.Add(halfExtents), brush.BoundsCenter.Sub(brush.BoundsHalfExtents), brush.BoundsCenter.Add(brush.BoundsHalfExtents)) {
+			return true
+		}
+		brush.Open = !brush.Open
+		brush.ActivationCount++
+		return false
+	})
+}
+
+func rayAABB(origin, dir, minB, maxB mgl32.Vec3, maxDistance float32) (float32, bool) {
+	if dir.LenSqr() <= 1e-8 || maxDistance <= 0 {
+		return 0, false
+	}
+	dir = dir.Normalize()
+	tMin := float32(0)
+	tMax := maxDistance
+	for axis := 0; axis < 3; axis++ {
+		if math.Abs(float64(dir[axis])) < 1e-6 {
+			if origin[axis] < minB[axis] || origin[axis] > maxB[axis] {
+				return 0, false
+			}
+			continue
+		}
+		invD := 1 / dir[axis]
+		t0 := (minB[axis] - origin[axis]) * invD
+		t1 := (maxB[axis] - origin[axis]) * invD
+		if t0 > t1 {
+			t0, t1 = t1, t0
+		}
+		tMin = maxf(tMin, t0)
+		tMax = minf(tMax, t1)
+		if tMax < tMin {
+			return 0, false
+		}
+	}
+	return tMin, true
+}
+
+func findGroundedPlayerLadderVolume(cmd *Commands, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent) (EntityId, LadderVolumeComponent, bool) {
+	if cmd == nil || ctrl == nil {
+		return 0, LadderVolumeComponent{}, false
+	}
+	radius := defaulted(ctrl.Radius, 0.35)
+	height := defaulted(ctrl.Height, 1.8)
+	playerMin := basePos.Add(mgl32.Vec3{-radius, 0, -radius})
+	playerMax := basePos.Add(mgl32.Vec3{radius, height, radius})
+	var foundEntity EntityId
+	var foundLadder LadderVolumeComponent
+	MakeQuery1[LadderVolumeComponent](cmd).Map(func(eid EntityId, ladder *LadderVolumeComponent) bool {
+		if ladder == nil {
+			return true
+		}
+		center := ladder.BoundsCenter
+		extents := ladder.BoundsHalfExtents.Add(mgl32.Vec3{0.05, 0.05, 0.05})
+		ladderMin := center.Sub(extents)
+		ladderMax := center.Add(extents)
+		if aabbOverlap(playerMin, playerMax, ladderMin, ladderMax) {
+			foundEntity = eid
+			foundLadder = *ladder
+			return false
+		}
+		return true
+	})
+	return foundEntity, foundLadder, foundEntity != 0
+}
+
+func resolveGroundedLadderMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32) {
+	if basePos == nil || ctrl == nil {
+		return
+	}
+	if ctrl.JumpQueued {
+		ctrl.OnLadder = false
+		ctrl.LadderEntity = 0
+		ctrl.Grounded = false
+		ctrl.NeedsGroundSnap = false
+		ctrl.VerticalVelocity = defaulted(ctrl.JumpSpeed, 5.5) * 0.5
+		nextBase, blocked := tryGroundedVerticalMove(voxRt, *basePos, ctrl.VerticalVelocity*dt, ctrl)
+		*basePos = nextBase
+		if blocked {
+			ctrl.VerticalVelocity = 0
+		}
+		ctrl.JumpQueued = false
+		return
+	}
+	*basePos, _ = tryGroundedVerticalMove(voxRt, *basePos, ctrl.MoveInput[1]*defaulted(ctrl.LadderClimbSpeed, DefaultLadderClimbSpeed)*dt, ctrl)
+	ctrl.VerticalVelocity = 0
+	ctrl.Grounded = false
+	ctrl.NeedsGroundSnap = false
+	ctrl.JumpQueued = false
+}
+
+func tryGroundedVerticalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, ctrl *GroundedPlayerControllerComponent) (mgl32.Vec3, bool) {
+	if voxRt == nil || ctrl == nil || math.Abs(float64(deltaY)) <= 1e-5 {
+		return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
+	}
+	height := defaulted(ctrl.Height, 1.8)
+	radius := defaulted(ctrl.Radius, 0.35)
+	dirY := float32(1)
+	originY := height
+	if deltaY < 0 {
+		dirY = -1
+		originY = 0.02
+	}
+	dir := mgl32.Vec3{0, dirY, 0}
+	distance := float32(math.Abs(float64(deltaY)))
+	clearance := float32(0.03)
+	allowed := distance
+	for _, offset := range groundedVerticalCollisionOffsets(radius) {
+		origin := basePos.Add(offset).Add(mgl32.Vec3{0, originY, 0})
+		hit := voxRt.Raycast(origin, dir, distance+clearance)
+		if !hit.Hit || hit.T > distance+clearance {
+			continue
+		}
+		allowed = minf(allowed, maxf(hit.T-clearance, 0))
+	}
+	if allowed < distance {
+		return basePos.Add(mgl32.Vec3{0, dirY * allowed, 0}), true
+	}
+	return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
+}
+
+func groundedVerticalCollisionOffsets(radius float32) []mgl32.Vec3 {
+	r := maxf(radius*0.85, 0)
+	if r <= 1e-5 {
+		return []mgl32.Vec3{{0, 0, 0}}
+	}
+	return []mgl32.Vec3{
+		{0, 0, 0},
+		{r, 0, 0},
+		{-r, 0, 0},
+		{0, 0, r},
+		{0, 0, -r},
+	}
+}
+
+func aabbOverlap(aMin, aMax, bMin, bMax mgl32.Vec3) bool {
+	return aMin.X() <= bMax.X() && aMax.X() >= bMin.X() &&
+		aMin.Y() <= bMax.Y() && aMax.Y() >= bMin.Y() &&
+		aMin.Z() <= bMax.Z() && aMax.Z() >= bMin.Z()
 }
 
 func applyGroundedLook(cam *CameraComponent, ctrl *GroundedPlayerControllerComponent) {

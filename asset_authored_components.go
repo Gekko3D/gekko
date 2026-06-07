@@ -76,6 +76,24 @@ type AuthoredLevelWaterBodyRefComponent struct {
 	Name        string
 }
 
+type AuthoredLevelLadderVolumeRefComponent struct {
+	LevelID        string
+	LadderVolumeID string
+	Name           string
+}
+
+type AuthoredLevelMovingBrushRefComponent struct {
+	LevelID       string
+	MovingBrushID string
+	Name          string
+}
+
+type AuthoredLevelUseTriggerRefComponent struct {
+	LevelID      string
+	UseTriggerID string
+	Name         string
+}
+
 func IsAuthoredAssetRootEntity(cmd *Commands, eid EntityId) bool {
 	if cmd == nil {
 		return false

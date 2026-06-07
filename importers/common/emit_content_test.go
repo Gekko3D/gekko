@@ -79,3 +79,43 @@ func TestSaveImportedWorldEmissionRoundTripsAndValidates(t *testing.T) {
 		t.Fatalf("chunk voxels = %d", chunk.NonEmptyVoxelCount)
 	}
 }
+
+func TestSaveImportedWorldEmissionCanWriteDenseRLEBinaryChunks(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "worlds", "test_world.gkworld")
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 0, Y: 0, Z: 0, Palette: 1, MaterialID: 1},
+		{X: 1, Y: 0, Z: 0, Palette: 1, MaterialID: 1},
+		{X: 31, Y: 31, Z: 31, Palette: 2, MaterialID: 2},
+	}, []Material{{ID: 1, PaletteIndex: 1}, {ID: 2, PaletteIndex: 2}}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	if err := SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{
+		ChunkPayloadKind: content.ImportedWorldChunkPayloadDenseRLEBinaryV1,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldEmissionWithOptions failed: %v", err)
+	}
+	loaded, err := content.LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld failed: %v", err)
+	}
+	if loaded.ChunkPayloadKind != content.ImportedWorldChunkPayloadDenseRLEBinaryV1 {
+		t.Fatalf("manifest payload kind = %q", loaded.ChunkPayloadKind)
+	}
+	if len(loaded.Entries) != 1 || loaded.Entries[0].PayloadKind != content.ImportedWorldChunkPayloadDenseRLEBinaryV1 || loaded.Entries[0].PayloadHash == "" {
+		t.Fatalf("entry payload metadata = %+v", loaded.Entries)
+	}
+	chunkPath := content.ResolveImportedWorldChunkPath(loaded.Entries[0], manifestPath)
+	chunk, err := content.LoadImportedWorldChunk(chunkPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk failed: %v", err)
+	}
+	if chunk.PayloadKind != content.ImportedWorldChunkPayloadDenseRLEBinaryV1 || chunk.NonEmptyVoxelCount != 3 || len(chunk.Voxels) != 3 {
+		t.Fatalf("chunk = %+v", chunk)
+	}
+}

@@ -57,7 +57,7 @@ func TestBuildImportSummaryUsesSyntheticBSPAndWAD(t *testing.T) {
 	}
 }
 
-func TestBuildImportSummaryAddsVisibleBrushModelFacesToBakeSet(t *testing.T) {
+func TestBuildImportSummaryExcludesDoorBrushFacesFromStaticBakeSet(t *testing.T) {
 	dir := t.TempDir()
 	bspPath := filepath.Join(dir, "valve", "maps", "brushmap.bsp")
 	mustWriteFile(t, bspPath, syntheticBSP(t, syntheticBSPConfig{
@@ -110,8 +110,8 @@ func TestBuildImportSummaryAddsVisibleBrushModelFacesToBakeSet(t *testing.T) {
 	if len(summary.WorldFaces) != 1 {
 		t.Fatalf("world faces = %d", len(summary.WorldFaces))
 	}
-	if len(summary.BakeFaces) != 2 {
-		t.Fatalf("bake faces = %d, want world + func_door", len(summary.BakeFaces))
+	if len(summary.BakeFaces) != 1 {
+		t.Fatalf("bake faces = %d, want only world faces; moving door is emitted separately", len(summary.BakeFaces))
 	}
 	if len(summary.AllFaces) != 3 {
 		t.Fatalf("all faces = %d", len(summary.AllFaces))

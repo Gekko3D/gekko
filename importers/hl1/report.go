@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gekko3d/gekko/content"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
 
@@ -16,6 +17,7 @@ const (
 	DefaultImportedVoxelResolution = 0.1
 	DefaultImportedSolidBandDepth  = DefaultSolidBandDepth
 	DefaultImportedMaxSampledCells = DefaultMaxSolidSampleCells
+	DefaultChunkPayloadKind        = content.ImportedWorldChunkPayloadDenseRLEBinaryV1
 )
 
 type HL1LightMode string
@@ -34,6 +36,7 @@ type ImportOptions struct {
 	VoxelResolution           float32
 	MaxSolidSampleCells       int64
 	SolidBandDepth            int
+	ChunkPayloadKind          string
 	LightMode                 HL1LightMode
 	EmitLightFixtures         bool
 	EmitEmissiveSurfaceLights bool
@@ -174,14 +177,10 @@ func visibleBrushEntityClass(className string) bool {
 	case "func_wall",
 		"func_illusionary",
 		"func_breakable",
-		"func_door",
 		"func_door_rotating",
-		"func_button",
 		"func_healthcharger",
 		"func_recharge",
-		"func_plat",
-		"func_train",
-		"momentary_door":
+		"func_train":
 		return true
 	default:
 		return false

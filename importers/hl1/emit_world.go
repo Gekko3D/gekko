@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/gekko3d/gekko/content"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
 
@@ -22,6 +23,7 @@ type DebugWorldEmissionResult struct {
 	Emission     importcommon.ImportedWorldEmission
 	Voxelize     VoxelizeResult
 	Mode         DebugWorldMode
+	PayloadKind  string
 }
 
 func BuildDebugSurfaceWorld(opts ImportOptions) (DebugWorldEmissionResult, error) {
@@ -33,6 +35,12 @@ func BuildDebugSolidWorld(opts ImportOptions) (DebugWorldEmissionResult, error) 
 }
 
 func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissionResult, error) {
+	if opts.ChunkPayloadKind == "" {
+		opts.ChunkPayloadKind = DefaultChunkPayloadKind
+	}
+	if _, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind); err != nil {
+		return DebugWorldEmissionResult{}, err
+	}
 	summary, err := BuildImportSummary(opts)
 	if err != nil {
 		return DebugWorldEmissionResult{}, err
@@ -110,6 +118,7 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 		Emission:     emission,
 		Voxelize:     voxelized,
 		Mode:         mode,
+		PayloadKind:  opts.ChunkPayloadKind,
 	}, nil
 }
 
@@ -129,7 +138,13 @@ func SaveDebugSurfaceWorld(result DebugWorldEmissionResult) error {
 }
 
 func SaveDebugWorld(result DebugWorldEmissionResult) error {
-	return importcommon.SaveImportedWorldEmission(result.ManifestPath, result.Emission)
+	payloadKind := result.PayloadKind
+	if payloadKind == "" {
+		payloadKind = DefaultChunkPayloadKind
+	}
+	return importcommon.SaveImportedWorldEmissionWithOptions(result.ManifestPath, result.Emission, importcommon.ImportedWorldSaveOptions{
+		ChunkPayloadKind: payloadKind,
+	})
 }
 
 func firstStructuralMaterialID(materials []importcommon.Material) int {
