@@ -126,6 +126,94 @@ func TestStreamedRuntimeLoadsOnlyDesiredChunk(t *testing.T) {
 	}
 }
 
+func TestStreamedRuntimeSpawnsLevelWaterBodies(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "water.gklevel")
+	level := content.NewLevelDef("water")
+	level.WaterBodies = []content.LevelWaterBodyDef{{
+		ID:              "water-1",
+		Mode:            content.LevelWaterBodyModeExplicitRect,
+		SurfaceY:        2,
+		Depth:           1,
+		RectHalfExtents: content.Vec2{3, 4},
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{5, 2, 6},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	app, cmd, _ := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	app.FlushCommands()
+	var found bool
+	MakeQuery1[WaterBodyComponent](cmd).Map(func(_ EntityId, water *WaterBodyComponent) bool {
+		found = true
+		if water.SurfaceY != 2 || water.Depth != 1 || water.RectHalfExtents != ([2]float32{3, 4}) {
+			t.Fatalf("water component = %+v", water)
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("expected streamed runtime water body")
+	}
+}
+
+func TestStreamedRuntimeSpawnsLevelLights(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "lights.gklevel")
+	level := content.NewLevelDef("lights")
+	level.Lights = []content.LevelLightDef{{
+		ID:            "light-1",
+		Type:          content.LevelLightTypePoint,
+		Color:         [3]float32{1, 0.8, 0.4},
+		Intensity:     3,
+		Range:         12,
+		SourceRadius:  0.25,
+		EmitterLinkID: 44,
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{4, 5, 6},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	app, cmd, state := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	app.FlushCommands()
+	if state.LightEntities["light-1"] == 0 {
+		t.Fatal("expected streamed runtime to track level light entity")
+	}
+	var found bool
+	MakeQuery2[LightComponent, TransformComponent](cmd).Map(func(_ EntityId, light *LightComponent, tr *TransformComponent) bool {
+		found = true
+		if light.Type != LightTypePoint || light.Intensity != 3 || light.Range != 12 || light.SourceRadius != 0.25 || light.EmitterLinkID != 44 {
+			t.Fatalf("light component = %+v", light)
+		}
+		if tr.Position != (mgl32.Vec3{4, 5, 6}) {
+			t.Fatalf("light position = %v", tr.Position)
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("expected streamed runtime light")
+	}
+}
+
 func TestStreamedRuntimePlacementVolumesUseStableSyntheticIDs(t *testing.T) {
 	root := t.TempDir()
 	assetPath := filepath.Join(root, "assets", "asteroid.gkasset")

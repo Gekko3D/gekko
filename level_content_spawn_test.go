@@ -77,6 +77,61 @@ func TestLoadAndSpawnAuthoredLevelSpawnsPlacementWithLevelAndAssetMetadata(t *te
 	}
 }
 
+func TestLoadAndSpawnAuthoredLevelSpawnsWaterBody(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "water.gklevel")
+	level := content.NewLevelDef("water")
+	level.WaterBodies = []content.LevelWaterBodyDef{{
+		ID:              "water-1",
+		Name:            "pool",
+		Mode:            content.LevelWaterBodyModeExplicitRect,
+		SurfaceY:        3,
+		Depth:           1.5,
+		RectHalfExtents: content.Vec2{4, 6},
+		Color:           content.Vec3{0.1, 0.2, 0.8},
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{10, 3, 20},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app := NewApp()
+	cmd := app.Commands()
+	result, err := LoadAndSpawnAuthoredLevel(levelPath, cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("LoadAndSpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+	entity := result.WaterBodyEntities["water-1"]
+	if entity == 0 {
+		t.Fatalf("expected water entity in spawn result: %+v", result.WaterBodyEntities)
+	}
+	var found bool
+	MakeQuery2[TransformComponent, WaterBodyComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, water *WaterBodyComponent) bool {
+		if eid != entity {
+			return true
+		}
+		found = true
+		if tr.Position != (mgl32.Vec3{10, 3, 20}) {
+			t.Fatalf("water transform position = %v", tr.Position)
+		}
+		if water.Depth != 1.5 || water.RectHalfExtents != ([2]float32{4, 6}) || water.SurfaceY != 3 {
+			t.Fatalf("water component = %+v", water)
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("expected spawned water body component")
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelCollapsedAssetKeepsPlacementRefWithoutItemRefs(t *testing.T) {
 	root := t.TempDir()
 	assetPath := filepath.Join(root, "assets", "ship_collapsed.gkasset")
@@ -888,6 +943,56 @@ func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	})
 	if gradientCount != 1 || noiseCount != 2 {
 		t.Fatalf("expected daylight skybox to spawn 1 gradient and 2 noise layers, got gradient=%d noise=%d", gradientCount, noiseCount)
+	}
+}
+
+func TestLoadAndSpawnAuthoredLevelSpawnsLevelLights(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	level := content.NewLevelDef("lights")
+	level.Lights = []content.LevelLightDef{{
+		ID:            "spot-1",
+		Name:          "spot",
+		Type:          content.LevelLightTypeSpot,
+		Color:         [3]float32{1, 0.75, 0.5},
+		Intensity:     1.5,
+		Range:         14,
+		ConeAngle:     50,
+		SourceRadius:  0.3,
+		EmitterLinkID: 88,
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{2, 3, 4},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
+
+	result, err := SpawnAuthoredLevel(cmd, nil, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
+	}
+	app.FlushCommands()
+
+	if result.LightEntities["spot-1"] == 0 {
+		t.Fatalf("expected light entity in spawn result: %+v", result.LightEntities)
+	}
+	var found bool
+	MakeQuery2[LightComponent, TransformComponent](cmd).Map(func(_ EntityId, light *LightComponent, tr *TransformComponent) bool {
+		if light.Type == LightTypeSpot {
+			found = true
+			if light.Intensity != 1.5 || light.Range != 14 || light.ConeAngle != 50 || light.SourceRadius != 0.3 || light.EmitterLinkID != 88 {
+				t.Fatalf("unexpected spawned light: %+v", light)
+			}
+			if tr.Position != (mgl32.Vec3{2, 3, 4}) {
+				t.Fatalf("unexpected light position %v", tr.Position)
+			}
+			return false
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("expected spawned spot light")
 	}
 }
 

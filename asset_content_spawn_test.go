@@ -156,7 +156,8 @@ func TestSpawnAuthoredAssetBuildsVoxelShapeGeometryAndPalette(t *testing.T) {
 				},
 			},
 		},
-		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+		Transform:     content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+		EmitterLinkID: 33,
 	}}
 
 	result, err := SpawnAuthoredAsset(cmd, assets, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
@@ -166,6 +167,9 @@ func TestSpawnAuthoredAssetBuildsVoxelShapeGeometryAndPalette(t *testing.T) {
 	app.FlushCommands()
 
 	vmc := mustVoxelModelForSpawnTest(t, cmd, result.EntitiesByAssetID["shape"])
+	if vmc.EmitterLinkID != 33 {
+		t.Fatalf("expected emitter link 33, got %d", vmc.EmitterLinkID)
+	}
 	geometry, ok := assets.GetVoxelGeometry(vmc.GeometryAsset())
 	if !ok || geometry.XBrickMap == nil {
 		t.Fatal("expected voxel shape geometry asset")

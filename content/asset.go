@@ -105,6 +105,7 @@ type AssetPartDef struct {
 	Transform       AssetTransformDef `json:"transform"`
 	VoxelResolution float32           `json:"voxel_resolution,omitempty"`
 	ModelScale      float32           `json:"model_scale,omitempty"`
+	EmitterLinkID   uint32            `json:"emitter_link_id,omitempty"`
 	Tags            []string          `json:"tags,omitempty"`
 }
 

@@ -133,6 +133,27 @@ Known presets in current tests include:
 - `fullmoonNight`
 - `fullmoonnight_gi`
 
+### Water Bodies
+
+`water_bodies[]` are authored rectangular or fit-bounds water volumes that
+spawn runtime `WaterBodyComponent` entities.
+
+Each explicit rectangle contains:
+
+- `id`
+- `mode: "ExplicitRect"`
+- `surface_y`
+- `depth`
+- `rect_half_extents`
+- `transform`
+- optional visual fields such as `color`, `absorption_color`, `opacity`,
+  `roughness`, `refraction`, `flow_direction`, `flow_speed`, and
+  `wave_amplitude`
+
+Streamed runtime spawns water bodies at level load; water patches then resolve
+through the normal water body system and render through the dedicated water
+surface feature.
+
 ### Markers
 
 `markers[]` are authored gameplay anchors in level space.

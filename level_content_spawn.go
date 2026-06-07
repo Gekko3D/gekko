@@ -27,6 +27,8 @@ type AuthoredLevelSpawnResult struct {
 	BrushRootEntities       map[string]EntityId
 	TerrainChunkEntities    map[string]EntityId
 	MarkerEntities          map[string]EntityId
+	LightEntities           map[string]EntityId
+	WaterBodyEntities       map[string]EntityId
 	ExpandedVolumeInstances []content.PlacementVolumePreviewInstance
 }
 
@@ -71,6 +73,8 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		BrushRootEntities:     make(map[string]EntityId),
 		TerrainChunkEntities:  make(map[string]EntityId),
 		MarkerEntities:        make(map[string]EntityId),
+		LightEntities:         make(map[string]EntityId),
+		WaterBodyEntities:     make(map[string]EntityId),
 	}
 	if cmd == nil {
 		return result, fmt.Errorf("commands is nil")
@@ -158,6 +162,17 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		entity := spawnAuthoredLevelMarker(cmd, result.RootEntity, def.ID, marker)
 		result.MarkerEntities[marker.ID] = entity
 	}
+	for _, light := range def.Lights {
+		entity, err := spawnAuthoredLevelLight(cmd, result.RootEntity, def.ID, light)
+		if err != nil {
+			return result, err
+		}
+		result.LightEntities[light.ID] = entity
+	}
+	for _, water := range def.WaterBodies {
+		entity := spawnAuthoredLevelWaterBody(cmd, result.RootEntity, def.ID, water)
+		result.WaterBodyEntities[water.ID] = entity
+	}
 
 	if def.Terrain != nil && strings.TrimSpace(def.Terrain.ManifestPath) != "" {
 		if err := spawnAuthoredTerrain(cmd, assets, loader, result.RootEntity, def, opts, &result); err != nil {
@@ -169,6 +184,33 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 	cmd.app.FlushCommands()
 	TransformHierarchySystem(cmd)
 	return result, nil
+}
+
+func spawnAuthoredLevelLight(cmd *Commands, parent EntityId, _ string, light content.LevelLightDef) (EntityId, error) {
+	transform := levelTransformToComponent(light.Transform)
+	lightType, err := AssetLightTypeToEngine(content.AssetLightType(light.Type))
+	if err != nil {
+		return 0, err
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&LightComponent{
+			Type:          lightType,
+			Color:         light.Color,
+			Intensity:     light.Intensity,
+			Range:         light.Range,
+			ConeAngle:     light.ConeAngle,
+			CastsShadows:  light.CastsShadows,
+			SourceRadius:  light.SourceRadius,
+			EmitterLinkID: light.EmitterLinkID,
+		},
+	), nil
 }
 
 func spawnAuthoredLevelMarker(cmd *Commands, parent EntityId, levelID string, marker content.LevelMarkerDef) EntityId {
@@ -188,6 +230,51 @@ func spawnAuthoredLevelMarker(cmd *Commands, parent EntityId, levelID string, ma
 			MarkerID: marker.ID,
 			Name:     marker.Name,
 			Kind:     marker.Kind,
+		},
+	)
+}
+
+func spawnAuthoredLevelWaterBody(cmd *Commands, parent EntityId, levelID string, water content.LevelWaterBodyDef) EntityId {
+	transform := levelTransformToComponent(water.Transform)
+	body := &WaterBodyComponent{
+		Mode:              WaterBodyMode(water.Mode),
+		SurfaceY:          water.SurfaceY,
+		Depth:             water.Depth,
+		RectHalfExtents:   [2]float32{water.RectHalfExtents[0], water.RectHalfExtents[1]},
+		BoundsCenter:      mgl32.Vec3{water.BoundsCenter[0], water.BoundsCenter[1], water.BoundsCenter[2]},
+		BoundsHalfExtents: mgl32.Vec3{water.BoundsHalfExtents[0], water.BoundsHalfExtents[1], water.BoundsHalfExtents[2]},
+		Inset:             water.Inset,
+		Overlap:           water.Overlap,
+		MinCellSize:       water.MinCellSize,
+		SourceTag:         water.SourceTag,
+		EnableSkirt:       water.EnableSkirt,
+		MaxPatchCount:     water.MaxPatchCount,
+		DebugName:         water.DebugName,
+		Color:             [3]float32{water.Color[0], water.Color[1], water.Color[2]},
+		AbsorptionColor:   [3]float32{water.AbsorptionColor[0], water.AbsorptionColor[1], water.AbsorptionColor[2]},
+		Opacity:           water.Opacity,
+		Roughness:         water.Roughness,
+		Refraction:        water.Refraction,
+		FlowDirection:     [2]float32{water.FlowDirection[0], water.FlowDirection[1]},
+		FlowSpeed:         water.FlowSpeed,
+		WaveAmplitude:     water.WaveAmplitude,
+	}
+	if body.Mode == "" {
+		body.Mode = WaterBodyModeExplicitRect
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		body,
+		&AuthoredLevelWaterBodyRefComponent{
+			LevelID:     levelID,
+			WaterBodyID: water.ID,
+			Name:        water.Name,
 		},
 	)
 }

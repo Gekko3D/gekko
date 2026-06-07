@@ -60,10 +60,20 @@ type LevelDef struct {
 	Placements       []LevelPlacementDef  `json:"placements,omitempty"`
 	PlacementVolumes []PlacementVolumeDef `json:"placement_volumes,omitempty"`
 	Environment      *LevelEnvironmentDef `json:"environment,omitempty"`
+	Lights           []LevelLightDef      `json:"lights,omitempty"`
+	WaterBodies      []LevelWaterBodyDef  `json:"water_bodies,omitempty"`
 	Markers          []LevelMarkerDef     `json:"markers,omitempty"`
 }
 
 type LevelMaterialDef = AssetMaterialDef
+type LevelLightType = AssetLightType
+
+const (
+	LevelLightTypePoint       LevelLightType = AssetLightTypePoint
+	LevelLightTypeDirectional LevelLightType = AssetLightTypeDirectional
+	LevelLightTypeSpot        LevelLightType = AssetLightTypeSpot
+	LevelLightTypeAmbient     LevelLightType = AssetLightTypeAmbient
+)
 
 type LevelBrushLayerDef struct {
 	ID           string          `json:"id"`
@@ -136,6 +146,65 @@ type LevelBaseWorldDef struct {
 	ReadOnlyByDefault bool              `json:"read_only_by_default,omitempty"`
 	CollisionEnabled  bool              `json:"collision_enabled,omitempty"`
 	Tags              []string          `json:"tags,omitempty"`
+}
+
+type LevelLightDef struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name,omitempty"`
+	Transform     LevelTransformDef `json:"transform"`
+	Type          LevelLightType    `json:"type"`
+	Color         [3]float32        `json:"color,omitempty"`
+	Intensity     float32           `json:"intensity,omitempty"`
+	Range         float32           `json:"range,omitempty"`
+	ConeAngle     float32           `json:"cone_angle,omitempty"`
+	CastsShadows  bool              `json:"casts_shadows,omitempty"`
+	SourceRadius  float32           `json:"source_radius,omitempty"`
+	EmitterLinkID uint32            `json:"emitter_link_id,omitempty"`
+	SourceTag     string            `json:"source_tag,omitempty"`
+	Style         string            `json:"style,omitempty"`
+	Tags          []string          `json:"tags,omitempty"`
+}
+
+type LevelWaterBodyMode string
+
+const (
+	LevelWaterBodyModeExplicitRect LevelWaterBodyMode = "ExplicitRect"
+	LevelWaterBodyModeFitBounds    LevelWaterBodyMode = "FitBounds"
+)
+
+type LevelWaterBodyDef struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+
+	Mode LevelWaterBodyMode `json:"mode,omitempty"`
+
+	SurfaceY float32 `json:"surface_y"`
+	Depth    float32 `json:"depth"`
+
+	RectHalfExtents   Vec2 `json:"rect_half_extents,omitempty"`
+	BoundsCenter      Vec3 `json:"bounds_center,omitempty"`
+	BoundsHalfExtents Vec3 `json:"bounds_half_extents,omitempty"`
+
+	Inset       float32 `json:"inset,omitempty"`
+	Overlap     float32 `json:"overlap,omitempty"`
+	MinCellSize float32 `json:"min_cell_size,omitempty"`
+
+	SourceTag     string `json:"source_tag,omitempty"`
+	EnableSkirt   *bool  `json:"enable_skirt,omitempty"`
+	MaxPatchCount uint32 `json:"max_patch_count,omitempty"`
+	DebugName     string `json:"debug_name,omitempty"`
+
+	Color           Vec3    `json:"color,omitempty"`
+	AbsorptionColor Vec3    `json:"absorption_color,omitempty"`
+	Opacity         float32 `json:"opacity,omitempty"`
+	Roughness       float32 `json:"roughness,omitempty"`
+	Refraction      float32 `json:"refraction,omitempty"`
+	FlowDirection   Vec2    `json:"flow_direction,omitempty"`
+	FlowSpeed       float32 `json:"flow_speed,omitempty"`
+	WaveAmplitude   float32 `json:"wave_amplitude,omitempty"`
+
+	Transform LevelTransformDef `json:"transform,omitempty"`
+	Tags      []string          `json:"tags,omitempty"`
 }
 
 type LevelEnvironmentDef struct {
@@ -218,6 +287,34 @@ func EnsureLevelIDs(def *LevelDef) {
 	for i := range def.PlacementVolumes {
 		if def.PlacementVolumes[i].ID == "" {
 			def.PlacementVolumes[i].ID = newID()
+		}
+	}
+	for i := range def.WaterBodies {
+		if def.WaterBodies[i].ID == "" {
+			def.WaterBodies[i].ID = newID()
+		}
+		if def.WaterBodies[i].Mode == "" {
+			def.WaterBodies[i].Mode = LevelWaterBodyModeExplicitRect
+		}
+		if def.WaterBodies[i].Transform.Rotation == (Quat{}) {
+			def.WaterBodies[i].Transform.Rotation = Quat{0, 0, 0, 1}
+		}
+		if def.WaterBodies[i].Transform.Scale == (Vec3{}) {
+			def.WaterBodies[i].Transform.Scale = Vec3{1, 1, 1}
+		}
+	}
+	for i := range def.Lights {
+		if def.Lights[i].ID == "" {
+			def.Lights[i].ID = newID()
+		}
+		if def.Lights[i].Transform.Rotation == (Quat{}) {
+			def.Lights[i].Transform.Rotation = Quat{0, 0, 0, 1}
+		}
+		if def.Lights[i].Transform.Scale == (Vec3{}) {
+			def.Lights[i].Transform.Scale = Vec3{1, 1, 1}
+		}
+		if def.Lights[i].Type == "" {
+			def.Lights[i].Type = LevelLightTypePoint
 		}
 	}
 	for i := range def.Materials {

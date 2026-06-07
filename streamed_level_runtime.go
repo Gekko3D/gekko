@@ -70,6 +70,7 @@ type StreamedLevelRuntimeState struct {
 	BaseWorldPalette          AssetId
 	BaseWorldCollisionEnabled bool
 	MarkerEntities            map[string]EntityId
+	LightEntities             map[string]EntityId
 
 	DesiredChunks        map[ChunkCoord]struct{}
 	PendingLoads         map[ChunkCoord]struct{}
@@ -141,6 +142,7 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		TerrainEntries:       make(map[ChunkCoord]content.TerrainChunkEntryDef),
 		ImportedWorldEntries: make(map[ChunkCoord]content.ImportedWorldChunkEntryDef),
 		MarkerEntities:       make(map[string]EntityId),
+		LightEntities:        make(map[string]EntityId),
 		placementOverrideMap: make(map[string]content.LevelTransformDef),
 		deletedPlacementIDs:  make(map[string]struct{}),
 		terrainOverrideMap:   make(map[string]content.TerrainChunkOverrideDef),
@@ -236,6 +238,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.BaseWorldPalette = AssetId{}
 	state.BaseWorldCollisionEnabled = false
 	state.MarkerEntities = make(map[string]EntityId)
+	state.LightEntities = make(map[string]EntityId)
 	state.DesiredChunks = make(map[ChunkCoord]struct{})
 	state.PendingLoads = make(map[ChunkCoord]struct{})
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
@@ -331,6 +334,17 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	applyLevelEnvironment(cmd, level.Environment)
 	for _, marker := range level.Markers {
 		state.MarkerEntities[marker.ID] = spawnAuthoredLevelMarker(cmd, state.LevelRoot, level.ID, marker)
+	}
+	for _, light := range level.Lights {
+		entity, err := spawnAuthoredLevelLight(cmd, state.LevelRoot, level.ID, light)
+		if err != nil {
+			state.InitErr = err
+			return err
+		}
+		state.LightEntities[light.ID] = entity
+	}
+	for _, water := range level.WaterBodies {
+		spawnAuthoredLevelWaterBody(cmd, state.LevelRoot, level.ID, water)
 	}
 	if cfg.AutoSpawnPlayer {
 		playerMarkerKind := cfg.PlayerSpawnKind

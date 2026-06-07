@@ -49,6 +49,23 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 			Preset: "orbit",
 			Tags:   []string{"placeholder"},
 		},
+		Lights: []LevelLightDef{{
+			ID:            "light-1",
+			Name:          "Lamp",
+			Type:          LevelLightTypeSpot,
+			Color:         [3]float32{1, 0.8, 0.6},
+			Intensity:     1.25,
+			Range:         12,
+			ConeAngle:     45,
+			SourceRadius:  0.25,
+			EmitterLinkID: 42,
+			Transform: LevelTransformDef{
+				Position: Vec3{3, 4, 5},
+				Rotation: Quat{0, 0, 0, 1},
+				Scale:    Vec3{1, 1, 1},
+			},
+			Tags: []string{"source:hl1"},
+		}},
 		BaseWorld: &LevelBaseWorldDef{
 			Kind:              ImportedWorldKindVoxelWorld,
 			ManifestPath:      "worlds/station.gkworld",
@@ -179,6 +196,9 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	}
 	if loaded.Environment == nil || loaded.Environment.Preset != "orbit" {
 		t.Fatalf("expected placeholder environment to round-trip, got %+v", loaded.Environment)
+	}
+	if len(loaded.Lights) != 1 || loaded.Lights[0].Type != LevelLightTypeSpot || loaded.Lights[0].ConeAngle != 45 || loaded.Lights[0].SourceRadius != 0.25 || loaded.Lights[0].EmitterLinkID != 42 {
+		t.Fatalf("expected lights to round-trip, got %+v", loaded.Lights)
 	}
 	if loaded.BaseWorld == nil || loaded.BaseWorld.Kind != ImportedWorldKindVoxelWorld || loaded.BaseWorld.ManifestPath != "worlds/station.gkworld" {
 		t.Fatalf("expected base world to round-trip, got %+v", loaded.BaseWorld)
@@ -553,6 +573,58 @@ func TestValidateLevelRejectsBrokenTerrainReference(t *testing.T) {
 		t.Fatal("expected terrain validation errors")
 	}
 	assertHasLevelValidationCode(t, result, "missing_terrain_source_file")
+}
+
+func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "water.gklevel")
+	def := NewLevelDef("water")
+	def.WaterBodies = []LevelWaterBodyDef{{
+		ID:              "water-1",
+		Name:            "pool",
+		Mode:            LevelWaterBodyModeExplicitRect,
+		SurfaceY:        2.5,
+		Depth:           1.25,
+		RectHalfExtents: Vec2{4, 6},
+		Color:           Vec3{0.1, 0.3, 0.8},
+		FlowDirection:   Vec2{1, 0},
+		Transform: LevelTransformDef{
+			Position: Vec3{10, 2.5, 20},
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+		Tags: []string{"source:hl1"},
+	}}
+	if result := ValidateLevel(def, LevelValidationOptions{DocumentPath: path}); result.HasErrors() {
+		t.Fatalf("expected valid water body, got %+v", result.Issues)
+	}
+	if err := SaveLevel(path, def); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	loaded, err := LoadLevel(path)
+	if err != nil {
+		t.Fatalf("LoadLevel failed: %v", err)
+	}
+	if len(loaded.WaterBodies) != 1 || loaded.WaterBodies[0].RectHalfExtents != (Vec2{4, 6}) {
+		t.Fatalf("water bodies did not round-trip: %+v", loaded.WaterBodies)
+	}
+}
+
+func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
+	def := NewLevelDef("bad-water")
+	def.WaterBodies = []LevelWaterBodyDef{{
+		ID:              "bad-water",
+		Mode:            LevelWaterBodyModeExplicitRect,
+		SurfaceY:        1,
+		Depth:           0,
+		RectHalfExtents: Vec2{0, 4},
+	}}
+	result := ValidateLevel(def, LevelValidationOptions{})
+	if !result.HasErrors() {
+		t.Fatal("expected water body validation errors")
+	}
+	assertHasLevelValidationCode(t, result, "invalid_water_body_depth")
+	assertHasLevelValidationCode(t, result, "invalid_water_body_rect")
 }
 
 func assertHasLevelValidationCode(t *testing.T, result LevelValidationResult, want string) {

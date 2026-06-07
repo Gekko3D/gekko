@@ -204,6 +204,41 @@ func TestWaterBodyResolutionSystemSeedsStateDeterministically(t *testing.T) {
 	}
 }
 
+func TestWaterBodyResolutionSystemUsesExplicitRectTransform(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := &WaterBodyResolutionState{}
+
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{-15, 0, -20}},
+		&WaterBodyComponent{
+			Mode:            WaterBodyModeExplicitRect,
+			SurfaceY:        -3,
+			Depth:           2,
+			RectHalfExtents: [2]float32{4, 5},
+		},
+	)
+	app.FlushCommands()
+
+	waterBodyResolutionSystem(cmd, nil, state)
+	app.FlushCommands()
+
+	var found bool
+	MakeQuery1[ResolvedWaterPatchComponent](cmd).Map(func(_ EntityId, patch *ResolvedWaterPatchComponent) bool {
+		found = true
+		if patch.Center != (mgl32.Vec3{-15, -3, -20}) {
+			t.Fatalf("patch center = %+v", patch.Center)
+		}
+		if patch.HalfExtents != ([2]float32{4, 5}) {
+			t.Fatalf("patch half extents = %+v", patch.HalfExtents)
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("expected resolved explicit water patch")
+	}
+}
+
 func TestWaterBodyResolutionSystemSplitsInteriorIntoDeterministicPatches(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

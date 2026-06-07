@@ -68,6 +68,12 @@ type AuthoredLevelMarkerRefComponent struct {
 	Kind     string
 }
 
+type AuthoredLevelWaterBodyRefComponent struct {
+	LevelID     string
+	WaterBodyID string
+	Name        string
+}
+
 func IsAuthoredAssetRootEntity(cmd *Commands, eid EntityId) bool {
 	if cmd == nil {
 		return false

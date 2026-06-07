@@ -97,7 +97,9 @@ func waterBodyResolutionSystem(cmd *Commands, assets *AssetServer, state *WaterB
 		}
 		var tr *TransformComponent
 		if comp := cmd.GetComponent(eid, transformType); comp != nil {
-			if typed, ok := comp.(TransformComponent); ok {
+			if typed, ok := comp.(*TransformComponent); ok {
+				tr = typed
+			} else if typed, ok := comp.(TransformComponent); ok {
 				copy := typed
 				tr = &copy
 			}

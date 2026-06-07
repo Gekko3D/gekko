@@ -120,10 +120,32 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 			result.addError("empty_marker_kind", "level marker kind is required", "", "", "", "", marker.ID, "", "")
 		}
 	}
+	for _, light := range def.Lights {
+		validateLevelUniqueID(&result, seenIDs, light.ID, light.Name, "", "", "")
+		if !isValidLevelLightType(light.Type) {
+			result.addError("invalid_light_type", fmt.Sprintf("unsupported light type %q", light.Type), "", "", "", "", "", "", "")
+		}
+		if light.Intensity < 0 {
+			result.addError("invalid_light_intensity", "light intensity must be non-negative", "", "", "", "", "", "", "")
+		}
+		if light.Range < 0 {
+			result.addError("invalid_light_range", "light range must be non-negative", "", "", "", "", "", "", "")
+		}
+		if light.ConeAngle < 0 {
+			result.addError("invalid_light_cone_angle", "light cone angle must be non-negative", "", "", "", "", "", "", "")
+		}
+		if light.SourceRadius < 0 {
+			result.addError("invalid_light_source_radius", "light source radius must be non-negative", "", "", "", "", "", "", "")
+		}
+	}
 
 	for _, volume := range def.PlacementVolumes {
 		validateLevelVolumeUniqueID(&result, seenIDs, volume.ID)
 		validatePlacementVolume(&result, volume, opts)
+	}
+	for _, water := range def.WaterBodies {
+		validateLevelWaterBodyUniqueID(&result, seenIDs, water.ID)
+		validateLevelWaterBody(&result, water)
 	}
 
 	validateLevelTerrain(&result, def, opts)
@@ -131,6 +153,15 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 	validateShooterLevelRequirements(&result, def, opts)
 
 	return result
+}
+
+func isValidLevelLightType(lightType LevelLightType) bool {
+	switch lightType {
+	case LevelLightTypePoint, LevelLightTypeDirectional, LevelLightTypeSpot, LevelLightTypeAmbient:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *LevelValidationResult) addError(code string, message string, placementID string, placementPath string, volumeID string, volumePath string, markerID string, brushID string, baseWorldPath string) {
@@ -171,6 +202,17 @@ func validateLevelVolumeUniqueID(result *LevelValidationResult, seen map[string]
 	seen[id] = struct{}{}
 }
 
+func validateLevelWaterBodyUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_water_body_id", fmt.Sprintf("duplicate water body id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
 func isValidPlacementMode(mode LevelPlacementMode) bool {
 	switch mode {
 	case LevelPlacementModeSurfaceSnap, LevelPlacementModePlaneSnap, LevelPlacementModeFree3D:
@@ -198,6 +240,15 @@ func isValidPlacementVolumeRuleMode(mode PlacementVolumeRuleMode) bool {
 	}
 }
 
+func isValidLevelWaterBodyMode(mode LevelWaterBodyMode) bool {
+	switch mode {
+	case LevelWaterBodyModeExplicitRect, LevelWaterBodyModeFitBounds:
+		return true
+	default:
+		return false
+	}
+}
+
 func validatePlacementAssetPath(result *LevelValidationResult, placement LevelPlacementDef, opts LevelValidationOptions) {
 	if strings.TrimSpace(placement.AssetPath) == "" || opts.DocumentPath == "" {
 		return
@@ -206,6 +257,32 @@ func validatePlacementAssetPath(result *LevelValidationResult, placement LevelPl
 	resolvedPath := ResolveDocumentPath(placement.AssetPath, opts.DocumentPath)
 	if _, err := os.Stat(resolvedPath); err != nil {
 		result.addError("missing_asset_file", fmt.Sprintf("missing asset file %s", placement.AssetPath), placement.ID, placement.AssetPath, "", "", "", "", "")
+	}
+}
+
+func validateLevelWaterBody(result *LevelValidationResult, water LevelWaterBodyDef) {
+	if strings.TrimSpace(water.ID) == "" {
+		result.addError("empty_water_body_id", "water body id is required", "", "", "", "", "", "", "")
+	}
+	mode := water.Mode
+	if mode == "" {
+		mode = LevelWaterBodyModeExplicitRect
+	}
+	if !isValidLevelWaterBodyMode(mode) {
+		result.addError("invalid_water_body_mode", fmt.Sprintf("unsupported water body mode %q", water.Mode), "", "", "", "", "", "", "")
+	}
+	if water.Depth <= 0 {
+		result.addError("invalid_water_body_depth", "water body depth must be positive", "", "", "", "", "", "", "")
+	}
+	switch mode {
+	case LevelWaterBodyModeFitBounds:
+		if water.BoundsHalfExtents[0] <= 0 || water.BoundsHalfExtents[1] <= 0 || water.BoundsHalfExtents[2] <= 0 {
+			result.addError("invalid_water_body_bounds", "fit-bounds water body requires positive bounds half extents", "", "", "", "", "", "", "")
+		}
+	default:
+		if water.RectHalfExtents[0] <= 0 || water.RectHalfExtents[1] <= 0 {
+			result.addError("invalid_water_body_rect", "explicit water body requires positive rect half extents", "", "", "", "", "", "", "")
+		}
 	}
 }
 

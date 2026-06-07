@@ -178,6 +178,7 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, def *content.AssetDef
 			SharedGeometry:         model,
 			VoxelPalette:           palette,
 			VoxelResolution:        part.VoxelResolution,
+			EmitterLinkID:          part.EmitterLinkID,
 			DisableShadows:         shadowSettings.disable,
 			ShadowMaxDistance:      shadowSettings.maxDistance,
 			ShadowCasterGroupID:    shadowSettings.casterGroupID,

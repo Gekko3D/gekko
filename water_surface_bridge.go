@@ -1,10 +1,14 @@
 package gekko
 
 import (
+	"fmt"
+	"os"
 	"sort"
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 )
+
+var waterSurfaceDebugPrinted bool
 
 func buildWaterSurfaceInputs(cmd *Commands, interactions *WaterInteractionState) ([]app_rt.WaterSurfaceInput, []app_rt.WaterRippleInput) {
 	if cmd == nil {
@@ -88,5 +92,32 @@ func buildWaterSurfaceInputs(cmd *Commands, interactions *WaterInteractionState)
 		})
 	}
 
+	debugWaterSurfaceInputsOnce(hosts, ripples)
 	return hosts, ripples
+}
+
+func debugWaterSurfaceInputsOnce(hosts []app_rt.WaterSurfaceInput, ripples []app_rt.WaterRippleInput) {
+	if waterSurfaceDebugPrinted || os.Getenv("GEKKO_DEBUG_WATER_HOSTS") == "" {
+		return
+	}
+	waterSurfaceDebugPrinted = true
+	var largest app_rt.WaterSurfaceInput
+	var largestArea float32
+	for _, host := range hosts {
+		area := host.HalfExtents[0] * host.HalfExtents[1] * 4
+		if area > largestArea {
+			largestArea = area
+			largest = host
+		}
+	}
+	fmt.Printf("DEBUG water hosts: count=%d ripples=%d largest_center=(%.3f, %.3f, %.3f) largest_half_extents=(%.3f, %.3f) largest_depth=%.3f\n",
+		len(hosts),
+		len(ripples),
+		largest.Position.X(),
+		largest.Position.Y(),
+		largest.Position.Z(),
+		largest.HalfExtents[0],
+		largest.HalfExtents[1],
+		largest.Depth,
+	)
 }

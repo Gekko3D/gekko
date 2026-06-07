@@ -41,6 +41,7 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 				},
 				VoxelResolution: DefaultAssetVoxelSize,
 				ModelScale:      1,
+				EmitterLinkID:   77,
 				Tags:            []string{"hero"},
 			},
 		},
@@ -132,6 +133,9 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	}
 	if loaded.Parts[0].Source.MaterialID != "mat_painted_metal" {
 		t.Fatalf("expected part material ref to round-trip, got %+v", loaded.Parts[0].Source)
+	}
+	if loaded.Parts[0].EmitterLinkID != 77 {
+		t.Fatalf("expected emitter link to round-trip, got %+v", loaded.Parts[0])
 	}
 	if EffectiveAssetSourceOperation(loaded.Parts[0].Source) != AssetShapeOperationAdd {
 		t.Fatalf("expected part operation add, got %+v", loaded.Parts[0].Source)

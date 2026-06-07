@@ -18,6 +18,51 @@ format. `.vox` is useful for debug inspection and visual parity checks, but the
 Gekko importer should preserve BSP, WAD, texture, material, entity, trigger,
 and source-diagnostic data directly.
 
+## Architecture Decision
+
+Use `voxlife` as a reference implementation, not as the data model. The Gekko
+importer should read the original source data directly, translate it into a
+source-aware import IR, then emit normal Gekko content. The canonical result is
+a streamed Gekko base world, not a MagicaVoxel scene.
+
+The importer architecture should be source-extensible from the start:
+
+```text
+source adapter
+  HL1 BSP/WAD/entities
+  Minecraft region/block/entity data
+  future importers
+    -> shared import IR
+    -> Gekko content emitter
+    -> .gkworld/.gkchunk/.gklevel/.gkasset where appropriate
+```
+
+Half-Life 1 and Minecraft are different source formats, but they should share
+the boring parts of the pipeline: material records, voxel chunk emission,
+diagnostics, generated level assembly, editor progress/report UI, and runtime
+UAT loading. HL1 needs BSP-aware solid reconstruction; Minecraft is already
+block-native and should bypass that step.
+
+Do not extend Gekko formats before the first direct importer proves the missing
+data. Phase 1 should use current `.gkworld`, `.gkchunk`, and `.gklevel` fields
+plus an import report. Add versioned schema fields only when more than one
+consumer needs to inspect or edit the generated data.
+
+The first UAT target is:
+
+- import one locally supplied HL1 map without committing copyrighted assets
+- generate `actiongame/assets/levels/<map>.gklevel`
+- stream it through `StartStreamedLevelRuntime(...)`
+- spawn the player from `info_player_start`
+- verify collision, scale, orientation, lighting diagnostics, chunk streaming,
+  and at least one destructive edit against imported solid matter
+
+Visual fidelity is a core requirement, not optional polish. Imported HL1 maps
+should look as close to the original as the voxel renderer and current palette
+path allow. The importer therefore must bake original BSP/WAD texture samples
+onto visible voxel surfaces. Per-texture average colors are acceptable only as
+diagnostics and fallback for missing/unsupported texture data.
+
 ## Alignment Gate
 
 Known from local docs and code:
@@ -43,17 +88,21 @@ Known from local docs and code:
 
 Uncertain or still requiring alignment before implementation:
 
-- Whether HL1 imported geometry should be read-only by default, destructible by
+- Whether HL1 imported geometry should be destructible by default, read-only by
   default, or split into read-only world geometry plus selected destructible
-  gameplay brush assets.
-- First playable scope: geometry-only, geometry plus spawns/lights/triggers, or
-  a broader HL1 entity conversion.
+  gameplay brush assets. The UAT should exercise destruction, but the default
+  authoring policy still needs an explicit decision.
+- First playable scope: geometry plus player spawn and collision is the minimum;
+  lights and changelevel trigger metadata are recommended for the first UAT;
+  broader HL1 entity conversion is not part of the first slice.
 - Whether to add compact/binary `.gkchunk` payload support before the first
   playable map or after proving one small map with JSON chunks.
 - Where fixture data should live. Do not commit copyrighted HL1 maps, textures,
   WADs, or extracted assets.
 - Whether generated HL1 trigger/lights should extend `.gklevel` directly or be
   represented first as typed markers and sidecar import metadata.
+- Whether actiongame should expose generated level selection through a CLI flag,
+  environment variable, config file, or developer-only menu.
 
 Classification:
 
@@ -61,8 +110,8 @@ Classification:
 - A `.vox` bridge is tactical only. It can be used to compare the direct Gekko
   bake against `voxlife`, but should not shape the Gekko schema.
 - The correct first implementation surface is a shared importer library plus a
-  CLI. Editor UI should come after generated content validates and loads in
-  `actiongame`.
+  CLI. Editor UI should come after generated content validates, streams, and
+  loads in `actiongame`.
 
 Best-matching alternative:
 
@@ -70,6 +119,10 @@ Best-matching alternative:
 - Avoid `BSP -> .vox -> Gekko`, except as a temporary debug path.
 - Avoid storing whole maps as `.gkasset`; use `.gkasset` only for reusable props
   and gameplay prefabs.
+- Avoid adding a general scripting language as the first answer to HL1
+  behavior. Prefer typed actiongame systems for ladders, triggers, doors,
+  lifts, trains, and pickups; revisit scripting only after those contracts are
+  understood.
 
 ## Current Gekko Seams
 
@@ -396,9 +449,16 @@ Use `.gkasset` later for:
 
 ## Proposed Package Layout
 
-Prefer a new importer package outside `content`:
+Prefer importer packages outside `content`:
 
 ```text
+gekko/importers/common/
+  ir.go
+  material.go
+  diagnostics.go
+  emit_content.go
+  report.go
+
 gekko/importers/hl1/
   bsp.go
   bsp_faces.go
@@ -409,10 +469,8 @@ gekko/importers/hl1/
   entities_test.go
   coords.go
   coords_test.go
-  ir.go
+  extract.go
   voxelize.go
-  emit_content.go
-  report.go
 
 gekko/cmd/hl1import/
   main.go
@@ -421,23 +479,30 @@ gekko/cmd/hl1import/
 Rationale:
 
 - `content` should remain the schema, IO, and validation package.
-- `importers/hl1` can depend on `content` to emit Gekko documents.
+- `importers/common` owns source-neutral import IR, diagnostics, and Gekko
+  content emission helpers.
+- `importers/hl1` owns GoldSrc parsing, coordinate conversion, entity
+  extraction, texture/material classification, and BSP-aware voxelization.
 - Runtime code should not depend on HL1 parser internals.
 - Editor and CLI can share the same importer package.
+- A future Minecraft importer should reuse `importers/common` and emit the same
+  Gekko content shapes without inheriting HL1-specific BSP logic.
 
 If this repository avoids top-level importer packages, a reasonable fallback is
-`gekko/content/hl1import`, but that is less clean because parser code is source
-format specific rather than Gekko content schema.
+`gekko/content/importers/...`, but that is less clean because parser code is
+source-format specific rather than Gekko content schema.
 
 ## Import IR
 
 Create an internal IR before writing Gekko files. This prevents runtime schema
-churn while the importer matures.
+churn while the importer matures and lets non-HL1 importers share the Gekko
+emission path.
 
 Suggested core types:
 
 ```go
 type ImportOptions struct {
+    SourceKind          string
     GameDir             string
     MapName             string
     OutputRoot          string
@@ -465,6 +530,7 @@ type MapImport struct {
 }
 
 type SourceInfo struct {
+    Kind        string
     GameDir      string
     MapName      string
     BSPPath      string
@@ -491,6 +557,7 @@ type Voxel struct {
     Z          int
     Palette    uint8
     MaterialID int
+    SolidKind  string
 }
 
 type Entity struct {
@@ -534,6 +601,46 @@ Keep the IR package-private until the importer has at least one stable external
 consumer. The stable API should be the import options, generated files, and
 report.
 
+Source-specific adapters may add private fields while parsing, but those fields
+should not leak into `content` packages. For example:
+
+- HL1 may track BSP model id, face id, leaf classification, texture axes, and
+  source entity keyvalues.
+- Minecraft may track region/chunk coordinates, block state, biome, block
+  light, sky light, and entity NBT.
+- The common emitter should only need source kind, bounds, materials, voxels,
+  lights, triggers, markers, environment, and diagnostics.
+
+## Future Minecraft Import
+
+The Minecraft importer should be planned as a sibling source adapter, not a
+fork of the HL1 importer. It should reuse:
+
+- common material and palette mapping
+- `.gkworld` manifest emission
+- `.gkchunk` payload emission
+- generated `.gklevel` assembly
+- import reports and diagnostics
+- editor progress/report UI
+- actiongame UAT level selection
+
+It should not reuse:
+
+- BSP parsing
+- WAD texture lookup
+- HL1 entity classification
+- BSP solid reconstruction
+- GoldSrc coordinate conversion
+
+Minecraft-specific questions to defer until that importer starts:
+
+- block-state to Gekko material mapping
+- biome color and light preservation
+- entity/NBT mapping
+- chunk vertical range and scale policy
+- whether authored Minecraft maps should preserve block grid scale exactly or
+  be rescaled for actiongame movement
+
 ## Coordinate And Scale Policy
 
 GoldSrc/Hammer units are inches. Gekko imported-world `VoxelResolution` is a
@@ -575,32 +682,119 @@ Acceptance criteria for the conversion:
 - Imported world is not mirrored relative to landmarks and changelevel exits.
 - Collision aligns with visible voxels.
 
+## Solid Reconstruction And Destruction Policy
+
+The importer must not treat the HL1 map as a generic triangle mesh. Rasterizing
+only visible faces produces hollow, paper-thin walls that look acceptable until
+the first destructive edit exposes empty interiors. The goal is to reconstruct
+the solid complement of the BSP:
+
+```text
+playable leaf/portal space -> empty voxels
+world/brush solid space    -> filled voxels
+visible textured surfaces  -> boundary color/material assignment
+interior solid matter      -> inherited or fallback structural material
+```
+
+Recommended approach:
+
+1. Use BSP/model data to classify voxel cells as empty or solid.
+2. Use visible faces and texture coordinates to assign boundary voxel colors
+   from original WAD/BSP texture pixels.
+3. Flood-fill or leaf-classify reachable playable space so rooms, corridors,
+   vents, and exterior sky voids stay empty.
+4. Fill solid wall/floor/ceiling volume behind visible surfaces.
+5. Assign interior material from nearest source surface, dominant local
+   material, or a deterministic structural fallback.
+6. Generate diagnostics for suspiciously thin features, giant solid masses,
+   unclassified voids, and chunk hotspots.
+
+Important constraints:
+
+- Do not fill the playable void. "Fill empty space" means filling the original
+  mesh's solid interior, not filling rooms.
+- `SKY` faces should not become physical ceiling blocks unless the source BSP
+  semantics indicate actual solid matter behind them.
+- Trigger, clip, ladder, water, slime, lava, and monsterclip brush semantics are
+  gameplay volumes or special materials, not ordinary visible structural
+  geometry.
+- Brush models used by doors, lifts, trains, buttons, and breakables should be
+  preserved as source entities even if phase 1 bakes them into static geometry.
+
+Phase 1 can prove this with a conservative CPU implementation on synthetic BSP
+fixtures and one locally supplied small map. If CPU bake time becomes the
+blocker, port or replace the `voxlife` GPU voxelizer after the solid
+classification rules are already covered by tests.
+
+Current phase-1 solid mode is tactical: it flood-fills reachable empty space
+from player starts, then fills a bounded `CONTENTS_SOLID` band outward from
+that playable space. This avoids GoldSrc outside-world solid leakage while
+making walls/floors destructible. It is not full brush/CSG reconstruction; deep
+solid mass beyond the band is intentionally omitted until brush-plane
+reconstruction exists. If the playable empty flood would exceed the sample cap,
+the importer falls back to a surface-guided band: each visible non-sky surface
+seeds a bounded 6-neighbor flood through adjacent BSP-solid cells to the
+configured depth. It does not march along the dominant face-normal axis. Visible
+boundary voxels are produced by conservative triangle-vs-voxel overlap tests,
+not projected face-center sampling, so inclined surfaces should not collapse
+into axis-aligned ghost sheets and partial edge cells stay filled.
+
+Destruction UAT requirement:
+
+- Imported chunks must be editable through the same voxel geometry path used by
+  existing destruction.
+- A destructive hit against a wall/floor should expose filled solid material,
+  not an empty shell.
+- Disconnected fragments should either split into debris through existing
+  destruction behavior or be explicitly reported as unsupported for imported
+  base-world chunks.
+
 ## Material And Texture Policy
 
-Phase 1:
+Required phase-1 behavior:
 
-- Sample WAD texture colors into a palette.
+- Sample original WAD/BSP texture pixels per visible surface voxel using BSP
+  texinfo axes, shifts, miptex dimensions, and GoldSrc texture wrapping.
+- Quantize sampled texel colors into the imported-world palette and assign the
+  resulting palette/material value to each boundary voxel.
+- Use per-texture average colors only as fallback when source pixels are
+  missing, unsupported, or intentionally disabled for diagnostics.
 - Store palette RGBA in `ImportedWorldDef.Palette`.
 - Store source texture/material details in the import report.
+- Preserve source face id, texture name, WAD source, and texture-coordinate
+  diagnostics in the importer report so bad UV alignment can be debugged.
+- Propagate nearest visible-surface material into structural fill voxels so
+  destructive edits expose plausible wall/floor material instead of arbitrary
+  gray fill. This is still an approximation until brush/CSG material ownership
+  is reconstructed.
 - Classify obvious special textures:
   - `SKY` and `sky`: skipped from solid geometry and mapped to environment
     metadata.
-  - Water/slime/lava texture names: preserve as diagnostics or marker data
-    until runtime supports liquid volumes.
+  - Water/slime/lava texture names, plus GoldSrc `!` animated liquid textures:
+    skipped from solid voxel chunks. BSP liquid leaves are preferred for
+    generated `.gklevel` water body volume/depth; mostly horizontal liquid faces
+    remain a fallback when leaf bounds are not useful. Imported solid voxels are
+    also carved out of BSP liquid contents so renderer water is not hidden by
+    stale surface voxels.
   - Transparent textures: preserve diagnostics; render as opaque unless the
     renderer/imported-world format supports transparency.
 
-Phase 2:
+Required follow-up if palette-only bake is visibly insufficient:
 
 - Add `source_materials` to `.gkworld` or a companion metadata document.
 - Preserve texture name, source WAD, average color, material kind, collision
   kind, transparency, and emissive hints.
 - Use source material classification to drive actiongame behavior.
+- Extend imported-world/chunk material storage only after the 255-color palette
+  bake proves too lossy for close visual parity.
 
 Palette risk:
 
 - HL1 maps can have more meaningful texture/material classes than a uint8
   palette can represent.
+- A 255-entry global palette may posterize full-map baked textures. Prefer
+  deterministic quantization first; consider chunk-local palettes or larger
+  material/color tables only after measuring real maps.
 - Do not collapse material identity permanently into RGBA. Keep source material
   ids in IR and reports even if phase 1 chunks only store palette values.
 
@@ -616,11 +810,86 @@ go run ./cmd/hl1import \
   -game-dir /path/to/Half-Life \
   -map c1a0 \
   -out ../actiongame/assets/levels \
-  -chunk-size 32 \
+  -chunk-size 256 \
   -voxel-resolution 0.1 \
-  -read-only=true \
-  -collision=true
+  -light-mode faithful \
+  -emit-light-fixtures=false \
+  -solid-band-depth 24 \
+  -max-solid-sample-cells 100000000 \
+  -emit-level \
+  -debug-world-mode solid
 ```
+
+Local developer smoke command:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/gekko
+go run ./cmd/hl1import \
+  -map gasworks \
+  -bsp /Users/ddevidch/code/other/hl/valve/maps/gasworks.bsp \
+  -out /tmp/gekko3d-hl1import-gasworks-solid \
+  -chunk-size 256 \
+  -voxel-resolution 0.1 \
+  -light-mode faithful \
+  -emit-light-fixtures=false \
+  -solid-band-depth 24 \
+  -max-solid-sample-cells 100000000 \
+  -emit-level \
+  -debug-world-mode solid
+```
+
+Current debug world modes:
+
+- `surface`: visible BSP faces only. Useful for visual comparison and fast
+  diagnostics, but hollow and not suitable for destruction.
+- `solid`: BSP leaf contents classify voxel cells, visible faces provide
+  boundary material, structural fill voxels make walls/floors destructive, and
+  reachable empty space is flood-filled from player starts.
+  Sampling bounds come from non-sky visible faces first, with model bounds only
+  as fallback, then expanded by `-solid-band-depth`. Solid candidates are the
+  `PointContents`-solid cells within that depth from reachable playable space,
+  or from a bounded 6-neighbor flood seeded by visible surface voxels when
+  playable flood is too large.
+
+Light import modes:
+
+- `faithful`: default. HL1 `light` becomes a point light. HL1 `light_spot`
+  becomes a Gekko spot light using BSP entity `pitch`, `angle`, and `_cone`.
+- `point-proxy`: diagnostic fallback. HL1 `light_spot` is emitted as a point
+  light at the authored lamp position, preserving color/intensity/range but
+  ignoring spot cone direction. Use this when validating runtime light upload
+  or when spot direction conversion is suspected.
+
+Light fixtures:
+
+- `-emit-light-fixtures=false` is default for CLI imports because generic
+  generated bulbs can look like visible floating markers when original fixture
+  meshes/textures already exist in imported geometry.
+- `-emit-light-fixtures=true` is an optional diagnostic/authoring bridge.
+- Each non-ambient HL1 light gets a tiny generated emissive `.gkasset` under
+  `assets/hl1_light_emitters/` plus a `.gklevel` placement at the imported
+  light position.
+- The generated emitter part and its paired `LevelLightDef` share
+  `emitter_link_id`, so renderer shadow code can avoid lamp self-occlusion for
+  the associated light.
+- This is an authored-object bridge, not the material migration. Source texture
+  material identity and per-voxel emissive material tables remain separate
+  future work.
+
+Solid mode has a sample guard:
+
+```bash
+-max-solid-sample-cells 20000000
+```
+
+Solid band depth is in voxels:
+
+```bash
+-solid-band-depth 24
+```
+
+At the default `0.1m` voxel resolution, `24` means about `2.4m` of destructible
+solid behind reachable surfaces.
 
 Suggested output:
 
@@ -657,7 +926,7 @@ Initial generated `.gklevel` should use existing schema:
 {
   "schema_version": 3,
   "name": "c1a0",
-  "chunk_size": 32,
+  "chunk_size": 256,
   "voxel_resolution": 0.1,
   "base_world": {
     "kind": "imported_voxel_world",
@@ -669,6 +938,22 @@ Initial generated `.gklevel` should use existing schema:
   "environment": {
     "preset": "hl1:c1a0"
   },
+  "water_bodies": [
+    {
+      "id": "hl1_water_0",
+      "name": "water",
+      "mode": "ExplicitRect",
+      "surface_y": 1.6,
+      "depth": 1.2,
+      "rect_half_extents": [4.0, 3.0],
+      "transform": {
+        "position": [12.0, 1.6, -8.0],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "tags": ["source:hl1", "liquid:water"]
+    }
+  ],
   "markers": [
     {
       "name": "info_player_start",
@@ -692,6 +977,15 @@ Initial generated `.gklevel` should use existing schema:
 When `.gklevel` gets first-class lights and triggers, migrate generated data out
 of marker-only representation.
 
+Water bodies are already first-class for phase 1. Connected liquid leaves are
+used to recover total volume depth and surface footprint. A connected HL1 pool
+should normally emit one explicit rectangular water body; solid pillars and
+other imported geometry remain responsible for occlusion and collision inside
+that rectangle. Multiple water bodies are reserved for disconnected liquid
+components or different liquid kinds. Concave or masked liquid shapes may need
+future renderer/schema support if rectangular water plus solid occluders is not
+visually good enough.
+
 ## Implementation Milestones
 
 ### M1: Parser And Fixtures
@@ -707,6 +1001,8 @@ Implementation:
 - Add `gekko/importers/hl1/wad.go`.
 - Add `gekko/importers/hl1/entities.go`.
 - Add small synthetic fixtures generated by tests, not copied from HL1.
+- Add optional local integration tests that use real HL1 files only when an
+  explicit environment variable points at a developer-owned install/copy.
 
 Acceptance criteria:
 
@@ -716,12 +1012,24 @@ Acceptance criteria:
 - Entity parser handles representative quoted key/value records.
 - WAD lookup is case-insensitive.
 - Missing external WADs produce diagnostics, not panics.
+- Normal `go test` does not require Steam/Half-Life files.
+- Optional integration tests can read `/Users/ddevidch/code/other/hl` when
+  enabled locally.
 
 Tests:
 
 ```bash
 cd /Users/ddevidch/code/go/gekko3d/gekko
 env GOCACHE=/tmp/gekko3d-gocache go test ./importers/hl1/...
+```
+
+Optional local integration test shape:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/gekko
+GEKKO_HL1_GAME_DIR=/Users/ddevidch/code/other/hl \
+  env GOCACHE=/tmp/gekko3d-gocache \
+  go test ./importers/hl1/... -run HL1Integration
 ```
 
 ### M2: Entity Extraction And Coordinates
@@ -757,19 +1065,27 @@ Acceptance criteria:
 Goal:
 
 - Emit a small map as Gekko imported-world JSON chunks without going through
-  `.vox`.
+  `.vox`, using BSP-aware solid reconstruction rather than visible-surface-only
+  voxelization.
 
 Implementation:
 
 - Add `voxelize.go`.
 - Add `emit_content.go`.
-- Start with a CPU reference voxelizer if it is fast enough for small maps.
+- Start with a CPU reference solid classifier and voxelizer if it is fast enough
+  for small maps.
 - Port or replace the `voxlife` GPU voxelizer later if CPU bake is too slow.
 
 Acceptance criteria:
 
 - SKY faces are skipped from solid chunks.
-- Textured faces produce deterministic palette values.
+- Playable leaf/room space remains empty.
+- Walls/floors/ceilings have filled solid volume behind the visible boundary.
+- Textured faces bake original WAD/BSP texel colors onto boundary voxels using
+  BSP texture coordinates.
+- Texture bake output is deterministic for the same BSP/WAD inputs.
+- Interior solid voxels get deterministic material assignment from nearby
+  visible source surfaces or a reported fallback.
 - Voxels partition into `ImportedWorldChunkDef`.
 - `content.ValidateImportedWorld(...)` passes.
 - Import report includes chunk and material statistics.
@@ -820,6 +1136,8 @@ Manual check:
 - Run `actiongame` with the generated level.
 - Check scale, spawn position, orientation, collision, visible geometry,
   streaming boundaries, and absence of severe chunk gaps.
+- Apply one destructive edit to a wall or floor and confirm the imported world
+  is not a hollow shell.
 
 ### M5: Lights, Environment, And Trigger Semantics
 
@@ -845,6 +1163,33 @@ Acceptance criteria:
 - `trigger_changelevel` has bounds and target metadata.
 - Editor can inspect imported lights/triggers without reading ad hoc report
   JSON.
+
+### M5b: Typed Gameplay Volumes And Moving Brushes
+
+Goal:
+
+- Map the first non-static HL1 entities to explicit actiongame/Gekko behavior
+  contracts without introducing a general scripting language prematurely.
+
+Recommended path:
+
+- `func_ladder` becomes a ladder volume component consumed by the grounded
+  player controller.
+- `trigger_changelevel`, `trigger_once`, and `trigger_multiple` become typed
+  trigger volumes with target metadata.
+- `func_door`, `func_plat`, `func_train`, and related brush models become
+  moving-brush entities or prefab placements only after actiongame has matching
+  systems.
+- Unsupported scripted sequences remain diagnostics and debug markers.
+
+Acceptance criteria:
+
+- Ladder volumes can be debug-rendered and inspected.
+- Changelevel trigger volumes preserve target map and landmark.
+- Moving brush entities remain source-linked in diagnostics even before they
+  are playable.
+- The implementation does not require embedding HL1 script semantics in the
+  renderer or content schema.
 
 ### M6: Compact Chunk Payloads
 
@@ -922,15 +1267,17 @@ Initial mapping order:
 3. `light_environment`
 4. `trigger_changelevel`
 5. `info_landmark`
-6. pickups and simple props
-7. doors/buttons/ladders/water only after actiongame has matching systems
-8. NPC spawn markers, then real NPC behavior later
+6. `func_ladder`
+7. pickups and simple props
+8. doors/buttons/lifts/trains only after actiongame has matching systems
+9. NPC spawn markers, then real NPC behavior later
 
 Acceptance criteria:
 
 - Unsupported classes remain visible in diagnostics.
 - Imported behavior is opt-in and testable.
 - No fake HL1 gameplay parity is implied before systems exist.
+- A general scripting system is not required for the first imported-level UAT.
 
 ## Missing Capabilities Checklist
 
@@ -938,6 +1285,9 @@ Engine/content:
 
 - [ ] HL1 importer package.
 - [ ] Import report schema.
+- [ ] Required WAD/BSP texture bake onto visible voxel surfaces.
+- [ ] Deterministic palette quantization for baked texture samples.
+- [ ] Structural fill material propagation from nearest visible source surface.
 - [ ] Optional `.gkworld` source material metadata.
 - [ ] Optional `.gkchunk` compact payload support.
 - [ ] Optional `.gklevel` light definitions.
@@ -950,6 +1300,11 @@ Runtime:
 - [ ] Spawn/import level-owned lights.
 - [ ] Apply imported player spawn rotation.
 - [ ] Represent changelevel trigger volumes.
+- [ ] Represent ladder volumes.
+- [ ] Represent moving brush entities for doors/lifts/trains when actiongame
+      has matching systems.
+- [ ] Confirm imported base-world chunks can be destructively edited or
+      explicitly gate destruction with a documented policy.
 - [ ] Debug render unsupported imported entities.
 - [ ] Validate imported collision scale visually.
 
@@ -969,6 +1324,15 @@ Parser/importer:
 ```bash
 cd /Users/ddevidch/code/go/gekko3d/gekko
 env GOCACHE=/tmp/gekko3d-gocache go test ./importers/hl1/...
+```
+
+Optional local real-file importer checks:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/gekko
+GEKKO_HL1_GAME_DIR=/Users/ddevidch/code/other/hl \
+  env GOCACHE=/tmp/gekko3d-gocache \
+  go test ./importers/hl1/... -run HL1Integration
 ```
 
 Content schemas and validation:
@@ -1008,7 +1372,15 @@ Manual visual/GPU checks:
 - Confirm player spawn position and orientation.
 - Confirm world scale.
 - Confirm visible geometry.
+- Compare distinctive HL1 floor/wall textures against the original map or
+  reference screenshots; flat average-color surfaces do not satisfy visual
+  parity.
+- Confirm baked texture alignment on floors, vertical walls, and inclined
+  surfaces.
+- Confirm palette quantization does not collapse most of the map into gray or
+  one dominant material.
 - Confirm collision.
+- Confirm a wall/floor destructive edit exposes filled matter.
 - Confirm point light placement if imported lights are enabled.
 - Confirm no severe chunk-boundary artifacts.
 - Confirm streaming radius loads/unloads chunks without stalls.
@@ -1018,6 +1390,8 @@ Manual scale-up checks:
 - Import one outdoor/sky map.
 - Import one map with changelevel triggers.
 - Import one map with dense texture/material variety.
+- Import one map with repeated tiled textures and verify tile scale/orientation
+  against HL1.
 - Compare report voxel counts, chunk hotspots, and file sizes before broad
   campaign import.
 
@@ -1026,17 +1400,31 @@ Manual scale-up checks:
 - JSON chunk size may become the largest blocker for full campaign imports.
 - Palette-only material storage loses HL1 texture/material semantics unless the
   IR/report keeps source material ids.
+- Texture bake is required for visual parity; average-color materials are a
+  fallback only and should be treated as visually incomplete.
+- Global 255-color palette quantization may be too lossy for some maps and may
+  force chunk-local palettes or larger imported-world material storage.
+- Wrong BSP texinfo axis/shift/wrap handling will make textures look worse than
+  flat colors because alignment errors are obvious on tiled HL1 surfaces.
 - CPU voxelization may be too slow; GPU voxelization may be harder to test
   deterministically.
 - Missing WADs and case-sensitive path differences must be reported clearly.
 - `SKY`, transparent, water, slime, lava, ladder, clip, and trigger textures
   need special handling.
+- Surface-only voxelization will create hollow shells; BSP-aware solid
+  classification must be verified before destruction is considered supported.
 - Trigger brush semantics are not the same as visible geometry.
+- Moving brush models may be baked static in phase 1 unless the importer
+  preserves their source ids for later behavior extraction.
 - Collision scale mistakes will make imported maps feel wrong even when they
   look correct.
 - Imported lighting may need renderer/runtime work before it looks like HL1.
+- A premature general scripting system could couple source-game behavior too
+  tightly to the engine. Typed gameplay components should come first.
 - HL1 assets/maps are copyrighted. Do not commit original BSP, WAD, texture, or
-  extracted asset data to this repository.
+  extracted asset data to this repository. Real files are acceptable for local
+  manual UAT and opt-in integration tests that point at a developer-owned
+  install/copy.
 
 ## Questions To Resolve Before Code Implementation
 
@@ -1046,26 +1434,30 @@ changes, but they do not block maintaining this planning doc.
 - Should imported HL1 world geometry be read-only by default?
 - Is the first playable target geometry-only, or geometry plus
   spawns/lights/changelevel triggers?
+- Should destruction be enabled for all imported base-world chunks in the first
+  UAT, or should the UAT use a deliberately destructible subset?
 - Should compact `.gkchunk` payloads be implemented before the first real map?
 - Should `.gklevel` get first-class lights/triggers immediately, or should the
   first importer version use markers plus report metadata?
 - Should the CLI live at `gekko/cmd/hl1import`?
 - What generated level selection mechanism should `actiongame` use?
-- What non-copyrighted fixtures should be used for automated parser and
-  coordinate tests?
+- Which small synthetic fixtures should be generated for always-on parser,
+  coordinate, WAD, and voxelization tests?
 
 ## Recommended First Slice
 
 Implement the first slice in this order:
 
-1. Add `gekko/importers/hl1` with parser-only tests.
+1. Add `gekko/importers/common` and `gekko/importers/hl1` with parser-only
+   tests.
 2. Add entity extraction and coordinate conversion tests.
 3. Add a CLI that emits an import report without writing Gekko content.
-4. Add direct `.gkworld`/`.gkchunk` emission for a synthetic fixture.
+4. Add BSP-aware direct `.gkworld`/`.gkchunk` emission for a synthetic fixture.
 5. Add `.gklevel` emission with `BaseWorld` and `player_spawn`.
 6. Load the generated level with `StartStreamedLevelRuntime(...)`.
 7. Add `actiongame` level selection.
-8. Only then add editor UI.
+8. Run the first manual actiongame UAT, including one destructive edit.
+9. Only then add editor UI.
 
 This sequence keeps the architecture aligned with existing Gekko content
 formats while avoiding a short-lived MagicaVoxel-centered importer.
