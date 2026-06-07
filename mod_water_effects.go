@@ -1,6 +1,10 @@
 package gekko
 
-import "github.com/go-gl/mathgl/mgl32"
+import (
+	"math"
+
+	"github.com/go-gl/mathgl/mgl32"
+)
 
 type WaterSplashEffectComponent struct {
 	Disabled bool
@@ -71,23 +75,42 @@ func spawnWaterSplashEffect(cmd *Commands, impact WaterImpactEvent, cfg WaterSpl
 	}
 
 	strength := clampWaterFloat(impact.Strength*cfg.normalizedStrengthScale(), 0.4, 1.9)
+	radius := clampWaterFloat(impact.Radius, 0.2, 3.0)
+	radiusScale := clampWaterFloat(0.85+radius*0.45, 0.9, 2.2)
+	skim := impact.Kind == WaterDisturbanceSkim
+	emitterRotation := waterSplashRotationForImpact(impact)
 	cols, rows := cfg.normalizedAtlasGrid()
-	flashSize := 1.15 + 0.85*strength
+	flashSize := (1.05 + 0.82*strength) * radiusScale
+	crownCone := float32(20)
+	crownGravity := float32(14.0)
+	crownDrag := float32(1.4)
+	sprayCone := float32(64)
+	sprayGravity := float32(10.0)
+	sprayDrag := float32(2.0)
+	if skim {
+		crownCone = 42
+		crownGravity = 9.0
+		crownDrag = 2.1
+		sprayCone = 78
+		sprayGravity = 7.5
+		sprayDrag = 2.8
+		flashSize *= 1.25
+	}
 
 	cmd.AddEntity(
-		&TransformComponent{Position: impact.Position, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&TransformComponent{Position: impact.Position, Rotation: emitterRotation, Scale: mgl32.Vec3{1, 1, 1}},
 		&ParticleEmitterComponent{
 			Enabled:          true,
 			MaxParticles:     4096,
-			SpawnRate:        980.0 * strength,
+			SpawnRate:        780.0 * strength * radiusScale,
 			LifetimeRange:    [2]float32{0.45, 0.8},
-			StartSpeedRange:  [2]float32{4.2 * strength, 7.1 * strength},
-			StartSizeRange:   [2]float32{0.13, 0.24},
+			StartSpeedRange:  [2]float32{3.9 * strength, 6.8 * strength * radiusScale},
+			StartSizeRange:   [2]float32{0.12 * radiusScale, 0.22 * radiusScale},
 			StartColorMin:    cfg.normalizedDropletColorMin(),
 			StartColorMax:    cfg.normalizedDropletColorMax(),
-			Gravity:          14.0,
-			Drag:             1.4,
-			ConeAngleDegrees: 20,
+			Gravity:          crownGravity,
+			Drag:             crownDrag,
+			ConeAngleDegrees: crownCone,
 			SpriteIndex:      cfg.normalizedSplashSprite(),
 			AtlasCols:        cols,
 			AtlasRows:        rows,
@@ -98,19 +121,19 @@ func spawnWaterSplashEffect(cmd *Commands, impact WaterImpactEvent, cfg WaterSpl
 	)
 
 	cmd.AddEntity(
-		&TransformComponent{Position: impact.Position, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&TransformComponent{Position: impact.Position, Rotation: emitterRotation, Scale: mgl32.Vec3{1, 1, 1}},
 		&ParticleEmitterComponent{
 			Enabled:          true,
 			MaxParticles:     4096,
-			SpawnRate:        760.0 * strength,
-			LifetimeRange:    [2]float32{0.3, 0.55},
-			StartSpeedRange:  [2]float32{3.4 * strength, 5.4 * strength},
-			StartSizeRange:   [2]float32{0.18, 0.32},
+			SpawnRate:        640.0 * strength * radiusScale,
+			LifetimeRange:    [2]float32{0.28, 0.55 + 0.08*radiusScale},
+			StartSpeedRange:  [2]float32{3.2 * strength, 5.2 * strength * radiusScale},
+			StartSizeRange:   [2]float32{0.16 * radiusScale, 0.3 * radiusScale},
 			StartColorMin:    cfg.normalizedSprayColorMin(),
 			StartColorMax:    cfg.normalizedSprayColorMax(),
-			Gravity:          10.0,
-			Drag:             2.0,
-			ConeAngleDegrees: 64,
+			Gravity:          sprayGravity,
+			Drag:             sprayDrag,
+			ConeAngleDegrees: sprayCone,
 			SpriteIndex:      cfg.normalizedSpraySprite(),
 			AtlasCols:        cols,
 			AtlasRows:        rows,
@@ -136,6 +159,25 @@ func spawnWaterSplashEffect(cmd *Commands, impact WaterImpactEvent, cfg WaterSpl
 		},
 		&LifetimeComponent{TimeLeft: 0.12},
 	)
+}
+
+func waterSplashRotationForImpact(impact WaterImpactEvent) mgl32.Quat {
+	if impact.Kind != WaterDisturbanceSkim {
+		return mgl32.QuatIdent()
+	}
+	horizontal := mgl32.Vec3{impact.Velocity.X(), 0, impact.Velocity.Z()}
+	if horizontal.LenSqr() < 1e-5 {
+		return mgl32.QuatIdent()
+	}
+	target := horizontal.Normalize().Mul(0.72).Add(mgl32.Vec3{0, 0.7, 0}).Normalize()
+	up := mgl32.Vec3{0, 1, 0}
+	dot := clampWaterFloat(up.Dot(target), -1, 1)
+	angle := float32(math.Acos(float64(dot)))
+	axis := up.Cross(target)
+	if axis.LenSqr() < 1e-5 {
+		return mgl32.QuatIdent()
+	}
+	return mgl32.QuatRotate(angle, axis.Normalize())
 }
 
 func (c *WaterSplashEffectComponent) normalizedAtlasGrid() (uint32, uint32) {

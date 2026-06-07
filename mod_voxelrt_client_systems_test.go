@@ -2004,9 +2004,11 @@ func TestBuildWaterSurfaceInputsNormalizesAndSortsResults(t *testing.T) {
 			Scale:    mgl32.Vec3{2, 1, 3},
 		},
 		&WaterSurfaceComponent{
-			HalfExtents:   [2]float32{2, 1},
-			Depth:         2,
-			FlowDirection: [2]float32{0, 3},
+			HalfExtents:          [2]float32{2, 1},
+			Depth:                2,
+			FlowDirection:        [2]float32{0, 3},
+			DirectLightOcclusion: 0.75,
+			VisualCellSize:       0.35,
 		},
 	)
 	cmd.AddEntity(
@@ -2038,6 +2040,12 @@ func TestBuildWaterSurfaceInputsNormalizesAndSortsResults(t *testing.T) {
 	if hosts[0].FlowDirection != ([2]float32{0, 1}) {
 		t.Fatalf("unexpected normalized flow direction: %v", hosts[0].FlowDirection)
 	}
+	if hosts[0].VisualCellSize != 0.35 {
+		t.Fatalf("unexpected visual cell size: %v", hosts[0].VisualCellSize)
+	}
+	if hosts[0].DirectLightOcclusion != 0.75 {
+		t.Fatalf("unexpected direct light occlusion: %v", hosts[0].DirectLightOcclusion)
+	}
 }
 
 func TestBuildWaterSurfaceInputsIncludesResolvedPatches(t *testing.T) {
@@ -2047,20 +2055,22 @@ func TestBuildWaterSurfaceInputsIncludesResolvedPatches(t *testing.T) {
 	cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{5, 2, 1}},
 		&ResolvedWaterPatchComponent{
-			Owner:           99,
-			PatchIndex:      0,
-			Kind:            WaterPatchKindSurface,
-			Center:          mgl32.Vec3{5, 2, 1},
-			HalfExtents:     [2]float32{3, 2},
-			Depth:           4,
-			Color:           [3]float32{0.1, 0.2, 0.3},
-			AbsorptionColor: [3]float32{0.4, 0.5, 0.6},
-			Opacity:         0.7,
-			Roughness:       0.15,
-			Refraction:      0.25,
-			FlowDirection:   [2]float32{1, 0},
-			FlowSpeed:       0.9,
-			WaveAmplitude:   0.03,
+			Owner:                99,
+			PatchIndex:           0,
+			Kind:                 WaterPatchKindSurface,
+			Center:               mgl32.Vec3{5, 2, 1},
+			HalfExtents:          [2]float32{3, 2},
+			Depth:                4,
+			Color:                [3]float32{0.1, 0.2, 0.3},
+			AbsorptionColor:      [3]float32{0.4, 0.5, 0.6},
+			Opacity:              0.7,
+			Roughness:            0.15,
+			Refraction:           0.25,
+			DirectLightOcclusion: 0.5,
+			FlowDirection:        [2]float32{1, 0},
+			FlowSpeed:            0.9,
+			WaveAmplitude:        0.03,
+			VisualCellSize:       0.45,
 		},
 	)
 	app.FlushCommands()
@@ -2071,6 +2081,12 @@ func TestBuildWaterSurfaceInputsIncludesResolvedPatches(t *testing.T) {
 	}
 	if hosts[0].Position != (mgl32.Vec3{5, 2, 1}) || hosts[0].Depth != 4 || hosts[0].HalfExtents != ([2]float32{3, 2}) {
 		t.Fatalf("unexpected resolved host %+v", hosts[0])
+	}
+	if hosts[0].VisualCellSize != 0.45 {
+		t.Fatalf("unexpected resolved host visual cell size %v", hosts[0].VisualCellSize)
+	}
+	if hosts[0].DirectLightOcclusion != 0.5 {
+		t.Fatalf("unexpected resolved host direct light occlusion %v", hosts[0].DirectLightOcclusion)
 	}
 }
 

@@ -81,6 +81,39 @@ func TestWaterSplashEffectsSystemUsesPerWaterOverride(t *testing.T) {
 	}
 }
 
+func TestWaterSplashEffectsSystemOrientsSkimEmitters(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	interactions := &WaterInteractionState{
+		impactBuffer: []WaterImpactEvent{
+			{
+				WaterEntity: 1,
+				Velocity:    mgl32.Vec3{5, -2, 0},
+				Speed:       2.5,
+				Strength:    0.8,
+				Radius:      0.8,
+				Kind:        WaterDisturbanceSkim,
+			},
+		},
+	}
+	effects := &WaterEffectsState{}
+
+	waterSplashEffectsSystem(cmd, interactions, effects)
+	app.FlushCommands()
+
+	foundTiltedEmitter := false
+	MakeQuery2[TransformComponent, ParticleEmitterComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, emitter *ParticleEmitterComponent) bool {
+		if tr.Rotation != mgl32.QuatIdent() {
+			foundTiltedEmitter = true
+		}
+		return true
+	})
+	if !foundTiltedEmitter {
+		t.Fatal("expected skim impact to orient particle emitters")
+	}
+}
+
 func TestWaterBodyResolutionCopiesSplashOverrideToResolvedPatches(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

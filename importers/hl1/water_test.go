@@ -54,6 +54,9 @@ func TestBuildHL1WaterBodiesExtractsHorizontalTopFace(t *testing.T) {
 	if body.Depth < 1.62 || body.Depth > 1.63 {
 		t.Fatalf("depth = %f", body.Depth)
 	}
+	if body.DirectLightOcclusion == nil || *body.DirectLightOcclusion != 1 {
+		t.Fatalf("direct light occlusion = %v, want 1", body.DirectLightOcclusion)
+	}
 	if body.Transform.Position[0] < 1.62 || body.Transform.Position[0] > 1.63 ||
 		body.Transform.Position[2] > -1.62 || body.Transform.Position[2] < -1.63 {
 		t.Fatalf("transform position = %+v", body.Transform.Position)

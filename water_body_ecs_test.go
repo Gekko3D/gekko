@@ -24,6 +24,12 @@ func TestWaterBodyComponentExplicitRectNormalization(t *testing.T) {
 	if got := nilBody.NormalizedMinCellSize(); got != DefaultWaterBodyMinCellSize {
 		t.Fatalf("expected default min cell size %v, got %v", DefaultWaterBodyMinCellSize, got)
 	}
+	if got := nilBody.NormalizedVisualCellSize(); got != DefaultWaterVisualCellSize {
+		t.Fatalf("expected default visual cell size %v, got %v", DefaultWaterVisualCellSize, got)
+	}
+	if got := nilBody.NormalizedDirectLightOcclusion(); got != 0 {
+		t.Fatalf("expected default direct light occlusion 0, got %v", got)
+	}
 	if got := nilBody.NormalizedEnableSkirt(); !got {
 		t.Fatal("expected default skirt enablement")
 	}
@@ -46,6 +52,10 @@ func TestWaterBodyComponentExplicitRectNormalization(t *testing.T) {
 	}
 	if got := body.NormalizedOpacity(); got != 0.68 {
 		t.Fatalf("expected default opacity 0.68, got %v", got)
+	}
+	body.DirectLightOcclusion = 0.4
+	if got := body.NormalizedDirectLightOcclusion(); got != 0.4 {
+		t.Fatalf("expected direct light occlusion 0.4, got %v", got)
 	}
 }
 
@@ -83,6 +93,14 @@ func TestWaterBodyComponentFitBoundsNormalizationAndValidation(t *testing.T) {
 	}
 	if got := body.NormalizedMaxPatchCount(); got != DefaultWaterBodyMaxPatchCount {
 		t.Fatalf("expected default max patch count %v, got %v", DefaultWaterBodyMaxPatchCount, got)
+	}
+	body.MinCellSize = 0.35
+	if got := body.NormalizedVisualCellSize(); got != 0.35 {
+		t.Fatalf("expected visual cell size fallback from min cell size 0.35, got %v", got)
+	}
+	body.VisualCellSize = 0.5
+	if got := body.NormalizedVisualCellSize(); got != 0.5 {
+		t.Fatalf("expected explicit visual cell size 0.5, got %v", got)
 	}
 	if got := body.NormalizedEnableSkirt(); got {
 		t.Fatal("expected explicit skirt disablement")
@@ -216,6 +234,7 @@ func TestWaterBodyResolutionSystemUsesExplicitRectTransform(t *testing.T) {
 			SurfaceY:        -3,
 			Depth:           2,
 			RectHalfExtents: [2]float32{4, 5},
+			VisualCellSize:  0.4,
 		},
 	)
 	app.FlushCommands()
@@ -232,10 +251,120 @@ func TestWaterBodyResolutionSystemUsesExplicitRectTransform(t *testing.T) {
 		if patch.HalfExtents != ([2]float32{4, 5}) {
 			t.Fatalf("patch half extents = %+v", patch.HalfExtents)
 		}
+		if patch.VisualCellSize != 0.4 {
+			t.Fatalf("patch visual cell size = %+v", patch.VisualCellSize)
+		}
 		return true
 	})
 	if !found {
 		t.Fatal("expected resolved explicit water patch")
+	}
+}
+
+func TestWaterBodyResolutionSystemRebuildsWhenExplicitBodyChanges(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := &WaterBodyResolutionState{}
+
+	owner := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{1, 0, 2}},
+		&WaterBodyComponent{
+			Mode:            WaterBodyModeExplicitRect,
+			SurfaceY:        1,
+			Depth:           2,
+			RectHalfExtents: [2]float32{2, 3},
+		},
+	)
+	app.FlushCommands()
+
+	waterBodyResolutionSystem(cmd, nil, state)
+	app.FlushCommands()
+
+	MakeQuery1[WaterBodyComponent](cmd).Map(func(eid EntityId, body *WaterBodyComponent) bool {
+		if eid == owner {
+			body.SurfaceY = 4
+			body.RectHalfExtents = [2]float32{5, 6}
+			return false
+		}
+		return true
+	})
+
+	waterBodyResolutionSystem(cmd, nil, state)
+	app.FlushCommands()
+
+	patchCount := 0
+	MakeQuery1[ResolvedWaterPatchComponent](cmd).Map(func(_ EntityId, patch *ResolvedWaterPatchComponent) bool {
+		if patch != nil && patch.Owner == owner {
+			patchCount++
+			if patch.Center != (mgl32.Vec3{1, 4, 2}) {
+				t.Fatalf("patch center after rebuild = %+v", patch.Center)
+			}
+			if patch.HalfExtents != ([2]float32{5, 6}) {
+				t.Fatalf("patch extents after rebuild = %+v", patch.HalfExtents)
+			}
+		}
+		return true
+	})
+	if patchCount != 1 {
+		t.Fatalf("expected one rebuilt patch, got %d", patchCount)
+	}
+	if got := state.ByEntity[owner].PatchCount; got != 1 {
+		t.Fatalf("state patch count after rebuild = %d", got)
+	}
+}
+
+func TestWaterBodyResolutionSystemRetriesFailedFitWhenSourcesArrive(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := &WaterBodyResolutionState{}
+
+	owner := cmd.AddEntity(
+		&WaterBodyComponent{
+			Mode:              WaterBodyModeFitBounds,
+			SurfaceY:          2,
+			Depth:             3,
+			BoundsCenter:      mgl32.Vec3{3, 0, 0},
+			BoundsHalfExtents: mgl32.Vec3{4, 2, 4},
+			MinCellSize:       1,
+			Inset:             0,
+		},
+	)
+	app.FlushCommands()
+
+	waterBodyResolutionSystem(cmd, nil, state)
+	app.FlushCommands()
+	if got := state.ByEntity[owner].Status; got != WaterBodyResolutionStatusFailed {
+		t.Fatalf("expected initial failed resolution, got %q", got)
+	}
+
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
+		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 4}},
+	)
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{6, 2, 0}},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
+		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 2, 4}},
+	)
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{3, 2, -3}},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
+		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 2, 0.5}},
+	)
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{3, 2, 3}},
+		&RigidBodyComponent{BodyMode: BodyModeStatic},
+		&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 2, 0.5}},
+	)
+	app.FlushCommands()
+
+	waterBodyResolutionSystem(cmd, nil, state)
+	app.FlushCommands()
+
+	record := state.ByEntity[owner]
+	if record.Status != WaterBodyResolutionStatusResolved || record.PatchCount != 1 {
+		t.Fatalf("expected retry to resolve one patch, got %+v", record)
 	}
 }
 
@@ -308,6 +437,171 @@ func TestWaterBodyResolutionSystemSplitsInteriorIntoDeterministicPatches(t *test
 	}
 }
 
+func TestWaterBodyFitBoundsOverlapExpandsInteriorAndClampsToBounds(t *testing.T) {
+	body := &WaterBodyComponent{
+		Mode:              WaterBodyModeFitBounds,
+		SurfaceY:          0,
+		Depth:             1,
+		BoundsCenter:      mgl32.Vec3{0, 0, 0},
+		BoundsHalfExtents: mgl32.Vec3{3, 1, 3},
+		MinCellSize:       1,
+		Inset:             0,
+		Overlap:           0.25,
+	}
+	colliders := []waterStaticCollider{
+		{Min: mgl32.Vec3{-3, -1, -3}, Max: mgl32.Vec3{-2, 1, 3}},
+		{Min: mgl32.Vec3{2, -1, -3}, Max: mgl32.Vec3{3, 1, 3}},
+		{Min: mgl32.Vec3{-3, -1, -3}, Max: mgl32.Vec3{3, 1, -2}},
+		{Min: mgl32.Vec3{-3, -1, 2}, Max: mgl32.Vec3{3, 1, 3}},
+	}
+
+	rects := fitWaterBodyBoundsFromStaticColliders(body, colliders)
+	if len(rects) != 1 {
+		t.Fatalf("expected one fitted rect, got %d", len(rects))
+	}
+	rect := rects[0]
+	if rect.minX != -2.25 || rect.maxX != 2.25 || rect.minZ != -2.25 || rect.maxZ != 2.25 {
+		t.Fatalf("expected overlap-expanded interior rect, got %+v", rect)
+	}
+
+	body.Overlap = 2
+	rects = fitWaterBodyBoundsFromStaticColliders(body, colliders)
+	if len(rects) != 1 {
+		t.Fatalf("expected one fitted rect after large overlap, got %d", len(rects))
+	}
+	rect = rects[0]
+	if rect.minX != -3 || rect.maxX != 3 || rect.minZ != -3 || rect.maxZ != 3 {
+		t.Fatalf("expected overlap to clamp to authored bounds, got %+v", rect)
+	}
+}
+
+func TestWaterBodyFitBoundsDisableSkirtSuppressesOverlapExpansion(t *testing.T) {
+	disableSkirt := false
+	body := &WaterBodyComponent{
+		Mode:              WaterBodyModeFitBounds,
+		SurfaceY:          0,
+		Depth:             1,
+		BoundsCenter:      mgl32.Vec3{0, 0, 0},
+		BoundsHalfExtents: mgl32.Vec3{3, 1, 3},
+		MinCellSize:       1,
+		Inset:             0,
+		Overlap:           0.25,
+		EnableSkirt:       &disableSkirt,
+	}
+	colliders := []waterStaticCollider{
+		{Min: mgl32.Vec3{-3, -1, -3}, Max: mgl32.Vec3{-2, 1, 3}},
+		{Min: mgl32.Vec3{2, -1, -3}, Max: mgl32.Vec3{3, 1, 3}},
+		{Min: mgl32.Vec3{-3, -1, -3}, Max: mgl32.Vec3{3, 1, -2}},
+		{Min: mgl32.Vec3{-3, -1, 2}, Max: mgl32.Vec3{3, 1, 3}},
+	}
+
+	rects := fitWaterBodyBoundsFromStaticColliders(body, colliders)
+	if len(rects) != 1 {
+		t.Fatalf("expected one fitted rect, got %d", len(rects))
+	}
+	rect := rects[0]
+	if rect.minX != -2 || rect.maxX != 2 || rect.minZ != -2 || rect.maxZ != 2 {
+		t.Fatalf("expected disabled skirt to suppress overlap expansion, got %+v", rect)
+	}
+}
+
+func TestWaterBodyFitBoundsHonorsAuthoredYBounds(t *testing.T) {
+	body := &WaterBodyComponent{
+		Mode:              WaterBodyModeFitBounds,
+		SurfaceY:          0,
+		Depth:             1,
+		BoundsCenter:      mgl32.Vec3{0, 10, 0},
+		BoundsHalfExtents: mgl32.Vec3{3, 1, 3},
+		MinCellSize:       1,
+		Inset:             0,
+	}
+	colliders := []waterStaticCollider{
+		{Min: mgl32.Vec3{-3, -1, -3}, Max: mgl32.Vec3{-2, 1, 3}},
+		{Min: mgl32.Vec3{2, -1, -3}, Max: mgl32.Vec3{3, 1, 3}},
+		{Min: mgl32.Vec3{-3, -1, -3}, Max: mgl32.Vec3{3, 1, -2}},
+		{Min: mgl32.Vec3{-3, -1, 2}, Max: mgl32.Vec3{3, 1, 3}},
+	}
+
+	if rects := fitWaterBodyBoundsFromStaticColliders(body, colliders); len(rects) != 0 {
+		t.Fatalf("expected surface outside authored Y bounds to fail, got %+v", rects)
+	}
+
+	body.BoundsCenter = mgl32.Vec3{0, 0, 0}
+	body.BoundsHalfExtents = mgl32.Vec3{3, 0.01, 3}
+	colliders = []waterStaticCollider{
+		{Min: mgl32.Vec3{-3, 0.02, -3}, Max: mgl32.Vec3{-2, 0.04, 3}},
+		{Min: mgl32.Vec3{2, 0.02, -3}, Max: mgl32.Vec3{3, 0.04, 3}},
+		{Min: mgl32.Vec3{-3, 0.02, -3}, Max: mgl32.Vec3{3, 0.04, -2}},
+		{Min: mgl32.Vec3{-3, 0.02, 2}, Max: mgl32.Vec3{3, 0.04, 3}},
+	}
+
+	if rects := fitWaterBodyBoundsFromStaticColliders(body, colliders); len(rects) != 0 {
+		t.Fatalf("expected sources outside authored Y bounds to be ignored, got %+v", rects)
+	}
+}
+
+func TestWaterBodyResolutionSourceTagFiltersStaticColliders(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := &WaterBodyResolutionState{}
+
+	owner := cmd.AddEntity(
+		&WaterBodyComponent{
+			Mode:              WaterBodyModeFitBounds,
+			SurfaceY:          0,
+			Depth:             1,
+			BoundsCenter:      mgl32.Vec3{4, 0, 0},
+			BoundsHalfExtents: mgl32.Vec3{8, 1, 4},
+			MinCellSize:       1,
+			Inset:             0,
+			SourceTag:         "pool-a",
+		},
+	)
+	addTaggedWaterTestBasin := func(centerX float32, tag string) {
+		cmd.AddEntity(
+			&TransformComponent{Position: mgl32.Vec3{centerX - 3, 0, 0}},
+			&RigidBodyComponent{BodyMode: BodyModeStatic},
+			&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 1, 3}},
+			&AuthoredLevelItemRefComponent{Tags: []string{tag}},
+		)
+		cmd.AddEntity(
+			&TransformComponent{Position: mgl32.Vec3{centerX + 3, 0, 0}},
+			&RigidBodyComponent{BodyMode: BodyModeStatic},
+			&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{0.5, 1, 3}},
+			&AuthoredLevelItemRefComponent{Tags: []string{tag}},
+		)
+		cmd.AddEntity(
+			&TransformComponent{Position: mgl32.Vec3{centerX, 0, -3}},
+			&RigidBodyComponent{BodyMode: BodyModeStatic},
+			&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 1, 0.5}},
+			&AuthoredLevelItemRefComponent{Tags: []string{tag}},
+		)
+		cmd.AddEntity(
+			&TransformComponent{Position: mgl32.Vec3{centerX, 0, 3}},
+			&RigidBodyComponent{BodyMode: BodyModeStatic},
+			&ColliderComponent{Shape: ShapeBox, HalfExtents: mgl32.Vec3{3.5, 1, 0.5}},
+			&AuthoredLevelItemRefComponent{Tags: []string{tag}},
+		)
+	}
+	addTaggedWaterTestBasin(0, "pool-a")
+	addTaggedWaterTestBasin(8, "pool-b")
+	app.FlushCommands()
+
+	waterBodyResolutionSystem(cmd, nil, state)
+	app.FlushCommands()
+
+	record := state.ByEntity[owner]
+	if record.Status != WaterBodyResolutionStatusResolved || record.PatchCount != 1 {
+		t.Fatalf("expected source-tagged resolution to select one basin, got %+v", record)
+	}
+	MakeQuery1[ResolvedWaterPatchComponent](cmd).Map(func(_ EntityId, patch *ResolvedWaterPatchComponent) bool {
+		if patch != nil && patch.Owner == owner && patch.Center.X() > 4 {
+			t.Fatalf("expected pool-a patch, got center %+v", patch.Center)
+		}
+		return true
+	})
+}
+
 func TestWaterBodyResolutionSystemFallsBackToVoxelOccupancy(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
@@ -357,6 +651,90 @@ func TestWaterBodyResolutionSystemFallsBackToVoxelOccupancy(t *testing.T) {
 	}
 	if record.PatchCount != 1 {
 		t.Fatalf("expected one resolved patch, got %d", record.PatchCount)
+	}
+}
+
+func TestWaterBodyResolutionSystemUsesVoxelOccupancyWithoutRigidBody(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := &WaterBodyResolutionState{}
+	assets := &AssetServer{}
+
+	owner := cmd.AddEntity(
+		&WaterBodyComponent{
+			Mode:              WaterBodyModeFitBounds,
+			SurfaceY:          2,
+			Depth:             3,
+			BoundsCenter:      mgl32.Vec3{3, 0, 0},
+			BoundsHalfExtents: mgl32.Vec3{4, 2, 4},
+			MinCellSize:       1,
+			Inset:             0,
+		},
+	)
+
+	xbm := volume.NewXBrickMap()
+	for y := 0; y < 4; y++ {
+		for z := 0; z < 7; z++ {
+			xbm.SetVoxel(0, y, z, 1)
+			xbm.SetVoxel(6, y, z, 1)
+		}
+		for x := 0; x < 7; x++ {
+			xbm.SetVoxel(x, y, 0, 1)
+			xbm.SetVoxel(x, y, 6, 1)
+		}
+	}
+	geomID := assets.RegisterSharedVoxelGeometry(xbm, "")
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 0, -3}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&VoxelModelComponent{SharedGeometry: geomID, VoxelResolution: 1, PivotMode: PivotModeCorner},
+	)
+	app.FlushCommands()
+
+	waterBodyResolutionSystem(cmd, assets, state)
+	app.FlushCommands()
+
+	record := state.ByEntity[owner]
+	if record.Status != WaterBodyResolutionStatusResolved {
+		t.Fatalf("expected no-rigid-body voxel occupancy fallback to resolve, got %q", record.Status)
+	}
+	if record.PrimarySource != WaterFitSourceVoxelOccupancy {
+		t.Fatalf("expected voxel occupancy source, got %q", record.PrimarySource)
+	}
+	if record.PatchCount != 1 {
+		t.Fatalf("expected one resolved patch, got %d", record.PatchCount)
+	}
+}
+
+func TestWaterBodySourceInventoryHashTracksRepeatedDirtyBrickEdits(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := &AssetServer{}
+	body := &WaterBodyComponent{Mode: WaterBodyModeFitBounds}
+
+	xbm := volume.NewXBrickMap()
+	geomID := assets.RegisterSharedVoxelGeometry(xbm, "")
+	geometry, ok := assets.GetVoxelGeometry(geomID)
+	if !ok || geometry.XBrickMap == nil {
+		t.Fatal("expected registered voxel geometry")
+	}
+	geometry.XBrickMap.ClearDirty()
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&VoxelModelComponent{SharedGeometry: geomID, VoxelResolution: 1, PivotMode: PivotModeCorner},
+	)
+	app.FlushCommands()
+
+	initial := waterBodySourceInventoryHash(cmd, assets, body)
+	geometry.XBrickMap.SetVoxel(0, 0, 0, 1)
+	firstEdit := waterBodySourceInventoryHash(cmd, assets, body)
+	geometry.XBrickMap.SetVoxel(1, 0, 0, 1)
+	secondEdit := waterBodySourceInventoryHash(cmd, assets, body)
+
+	if initial == firstEdit {
+		t.Fatal("expected first voxel edit to change water source inventory hash")
+	}
+	if firstEdit == secondEdit {
+		t.Fatal("expected repeated edit in dirty brick to change water source inventory hash")
 	}
 }
 

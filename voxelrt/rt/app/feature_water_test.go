@@ -10,27 +10,33 @@ import (
 func TestWaterGPUHostsMapRendererInput(t *testing.T) {
 	waters := []WaterSurfaceInput{
 		{
-			EntityID:        3,
-			Position:        mgl32.Vec3{1, 2, 3},
-			HalfExtents:     [2]float32{4, 5},
-			Depth:           6,
-			Color:           [3]float32{0.1, 0.2, 0.3},
-			AbsorptionColor: [3]float32{0.4, 0.5, 0.6},
-			Opacity:         0.7,
-			Roughness:       0.8,
-			Refraction:      0.9,
-			FlowDirection:   [2]float32{0, 1},
-			FlowSpeed:       2,
-			WaveAmplitude:   0.25,
+			EntityID:             3,
+			Position:             mgl32.Vec3{1, 2, 3},
+			HalfExtents:          [2]float32{4, 5},
+			Depth:                6,
+			Color:                [3]float32{0.1, 0.2, 0.3},
+			AbsorptionColor:      [3]float32{0.4, 0.5, 0.6},
+			Opacity:              0.7,
+			Roughness:            0.8,
+			Refraction:           0.9,
+			DirectLightOcclusion: 0.6,
+			FlowDirection:        [2]float32{0, 1},
+			FlowSpeed:            2,
+			WaveAmplitude:        0.25,
+			VisualCellSize:       0.35,
 		},
 	}
 	ripples := []WaterRippleInput{
 		{
-			WaterIndex: 0,
-			Position:   mgl32.Vec3{1.5, 2, 3.5},
-			Strength:   0.9,
-			Age:        0.2,
-			Lifetime:   2,
+			WaterIndex:         0,
+			Position:           mgl32.Vec3{1.5, 2, 3.5},
+			Strength:           0.9,
+			Age:                0.2,
+			Lifetime:           2,
+			Radius:             0.5,
+			HorizontalVelocity: [2]float32{1, -1},
+			Foam:               0.4,
+			DisturbanceKind:    1,
 		},
 	}
 
@@ -54,8 +60,11 @@ func TestWaterGPUHostsMapRendererInput(t *testing.T) {
 func TestClearWaterInputClearsContributionCounts(t *testing.T) {
 	app := &App{
 		BufferManager: &gpu.GpuBufferManager{
-			WaterCount:       2,
-			WaterRippleCount: 3,
+			WaterCount:              2,
+			WaterRippleCount:        3,
+			WaterRippleSourceCount:  4,
+			WaterRippleDroppedCount: 1,
+			WaterSurfaces:           []gpu.WaterSurfaceHost{{Depth: 1}},
 		},
 	}
 
@@ -65,5 +74,13 @@ func TestClearWaterInputClearsContributionCounts(t *testing.T) {
 		t.Fatalf("expected water contribution counts cleared, got water=%d ripples=%d",
 			app.BufferManager.WaterCount,
 			app.BufferManager.WaterRippleCount)
+	}
+	if app.BufferManager.WaterRippleSourceCount != 0 || app.BufferManager.WaterRippleDroppedCount != 0 {
+		t.Fatalf("expected water ripple budget counts cleared, got source=%d dropped=%d",
+			app.BufferManager.WaterRippleSourceCount,
+			app.BufferManager.WaterRippleDroppedCount)
+	}
+	if len(app.BufferManager.WaterSurfaces) != 0 {
+		t.Fatalf("expected cached water surfaces cleared, got %d", len(app.BufferManager.WaterSurfaces))
 	}
 }

@@ -199,9 +199,12 @@ type LevelWaterBodyDef struct {
 	Opacity         float32 `json:"opacity,omitempty"`
 	Roughness       float32 `json:"roughness,omitempty"`
 	Refraction      float32 `json:"refraction,omitempty"`
-	FlowDirection   Vec2    `json:"flow_direction,omitempty"`
-	FlowSpeed       float32 `json:"flow_speed,omitempty"`
-	WaveAmplitude   float32 `json:"wave_amplitude,omitempty"`
+	// DirectLightOcclusion attenuates global sun/moon lighting on water.
+	// 0 keeps full direct light; 1 fully removes direct-light sparkle.
+	DirectLightOcclusion *float32 `json:"direct_light_occlusion,omitempty"`
+	FlowDirection        Vec2     `json:"flow_direction,omitempty"`
+	FlowSpeed            float32  `json:"flow_speed,omitempty"`
+	WaveAmplitude        float32  `json:"wave_amplitude,omitempty"`
 
 	Transform LevelTransformDef `json:"transform,omitempty"`
 	Tags      []string          `json:"tags,omitempty"`

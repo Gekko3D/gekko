@@ -31,6 +31,20 @@ func TestWaterSurfaceComponentNormalizationAndEnablement(t *testing.T) {
 	if got := water.NormalizedFlowDirection(); got != ([2]float32{1, 0}) {
 		t.Fatalf("expected default flow direction, got %v", got)
 	}
+	if got := water.NormalizedVisualCellSize(); got != DefaultWaterVisualCellSize {
+		t.Fatalf("expected default visual cell size %v, got %v", DefaultWaterVisualCellSize, got)
+	}
+	if got := water.NormalizedDirectLightOcclusion(); got != 0 {
+		t.Fatalf("expected default direct light occlusion 0, got %v", got)
+	}
+	water.DirectLightOcclusion = 1.7
+	if got := water.NormalizedDirectLightOcclusion(); got != 1 {
+		t.Fatalf("expected clamped direct light occlusion 1, got %v", got)
+	}
+	water.VisualCellSize = 3
+	if got := water.NormalizedVisualCellSize(); got != 1 {
+		t.Fatalf("expected clamped visual cell size 1, got %v", got)
+	}
 }
 
 func TestWaterSurfaceWorldScalingUsesTransformScale(t *testing.T) {

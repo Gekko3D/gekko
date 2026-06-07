@@ -289,4 +289,7 @@ func TestBuildGeneratedLevelEmitsWaterBodies(t *testing.T) {
 	if level.Level.WaterBodies[0].SourceTag != "hl1:water" {
 		t.Fatalf("water source tag = %q", level.Level.WaterBodies[0].SourceTag)
 	}
+	if level.Level.WaterBodies[0].DirectLightOcclusion == nil || *level.Level.WaterBodies[0].DirectLightOcclusion != 1 {
+		t.Fatalf("water direct light occlusion = %v", level.Level.WaterBodies[0].DirectLightOcclusion)
+	}
 }

@@ -808,6 +808,39 @@ func TestRayReconstructionGuardsFarPlaneW(t *testing.T) {
 	}
 }
 
+func TestWaterSurfaceDirectLightExposureAttenuatesSunSpecular(t *testing.T) {
+	required := []string{
+		"lighting: vec4<f32>",
+		"let direct_light_exposure = clamp(water.lighting.x, 0.0, 1.0);",
+		"* direct_light_exposure;",
+		"ndotl * 0.18 * direct_light_exposure",
+	}
+	for _, needle := range required {
+		if !strings.Contains(WaterSurfaceWGSL, needle) {
+			t.Fatalf("water shader missing direct-light exposure guard %q", needle)
+		}
+	}
+}
+
+func TestWaterSurfaceUsesBoundedTiledLocalLightReflections(t *testing.T) {
+	required := []string{
+		"const MAX_WATER_LOCAL_LIGHT_REFLECTIONS: u32 = 8u;",
+		"@group(3) @binding(0) var<storage, read> lights: array<Light>;",
+		"@group(3) @binding(1) var<uniform> tile_light_params: TileLightListParams;",
+		"@group(3) @binding(2) var<storage, read> tile_light_headers: array<TileLightHeader>;",
+		"@group(3) @binding(3) var<storage, read> tile_light_indices: array<u32>;",
+		"let count = min(tile_header.count, MAX_WATER_LOCAL_LIGHT_REFLECTIONS);",
+		"let broad_spec = pow(reflected_angle, broad_shininess) * 0.22;",
+		"let local_reflection = select(vec3<f32>(0.0), local_light_reflection(",
+		"+ local_reflection +",
+	}
+	for _, needle := range required {
+		if !strings.Contains(WaterSurfaceWGSL, needle) {
+			t.Fatalf("water shader missing bounded tiled local-light reflection path %q", needle)
+		}
+	}
+}
+
 func TestGBufferHitExposureAcceptsRayFacingBoundaryHits(t *testing.T) {
 	required := []string{
 		"the hit-position fallback can pick an internal side face",

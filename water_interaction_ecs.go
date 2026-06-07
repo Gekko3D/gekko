@@ -11,6 +11,14 @@ const (
 	maxWaterInteractionRipples = 64
 )
 
+type WaterDisturbanceKind uint32
+
+const (
+	WaterDisturbanceImpact WaterDisturbanceKind = iota
+	WaterDisturbanceSkim
+	WaterDisturbanceWake
+)
+
 type WaterImpactEvent struct {
 	WaterEntity EntityId
 	BodyEntity  EntityId
@@ -18,14 +26,20 @@ type WaterImpactEvent struct {
 	Velocity    mgl32.Vec3
 	Speed       float32
 	Strength    float32
+	Radius      float32
+	Kind        WaterDisturbanceKind
 }
 
 type WaterRipple struct {
-	WaterEntity EntityId
-	Position    mgl32.Vec3
-	Strength    float32
-	Age         float32
-	Lifetime    float32
+	WaterEntity        EntityId
+	Position           mgl32.Vec3
+	Strength           float32
+	Age                float32
+	Lifetime           float32
+	Radius             float32
+	HorizontalVelocity [2]float32
+	Foam               float32
+	Kind               WaterDisturbanceKind
 }
 
 type waterOccupancyKey struct {
@@ -46,6 +60,7 @@ type WaterInteractionState struct {
 	activeRipples     []WaterRipple
 	previousPositions map[EntityId]mgl32.Vec3
 	occupancy         map[waterOccupancyKey]bool
+	wakeTimers        map[waterOccupancyKey]float32
 }
 
 func (s *WaterInteractionState) ImpactEvents() []WaterImpactEvent {
@@ -68,6 +83,9 @@ func (s *WaterInteractionState) ensureMaps() {
 	}
 	if s.occupancy == nil {
 		s.occupancy = make(map[waterOccupancyKey]bool)
+	}
+	if s.wakeTimers == nil {
+		s.wakeTimers = make(map[waterOccupancyKey]float32)
 	}
 }
 
@@ -97,6 +115,7 @@ func waterInteractionSystem(cmd *Commands, time *Time, state *WaterInteractionSt
 		currentPos := tr.Position
 		prevPos, hadPrev := state.previousPositions[eid]
 		probeRadius := waterInteractionProbeRadius(tr, col)
+		horizontalSpeed := waterInteractionHorizontalSpeed(rb.Velocity)
 
 		for _, water := range waters {
 			key := waterOccupancyKey{WaterEntity: water.Entity, BodyEntity: eid}
@@ -110,7 +129,9 @@ func waterInteractionSystem(cmd *Commands, time *Time, state *WaterInteractionSt
 				if entered {
 					speed := maxf(-rb.Velocity.Y(), 0)
 					if speed >= 2.0 {
-						strength := clampWaterFloat(speed/9.0, 0.35, 1.6)
+						kind := classifyWaterDisturbance(speed, horizontalSpeed)
+						strength := clampWaterFloat((speed+horizontalSpeed*0.35)/9.0, 0.35, 1.6)
+						foam := clampWaterFloat(0.24+strength*0.28+probeRadius*0.12, 0.25, 0.9)
 						state.impactBuffer = append(state.impactBuffer, WaterImpactEvent{
 							WaterEntity: water.Entity,
 							BodyEntity:  eid,
@@ -118,11 +139,28 @@ func waterInteractionSystem(cmd *Commands, time *Time, state *WaterInteractionSt
 							Velocity:    rb.Velocity,
 							Speed:       speed,
 							Strength:    strength,
+							Radius:      probeRadius,
+							Kind:        kind,
 						})
-						state.spawnRipple(water.Entity, impactPos, strength)
+						state.spawnRipple(water.Entity, impactPos, strength, probeRadius, rb.Velocity, foam, kind)
 						isInside = true
 					}
 				}
+			}
+
+			if wasInside && isInside && horizontalSpeed > 1.2 {
+				state.wakeTimers[key] += float32(time.Dt)
+				interval := clampWaterFloat(0.34-probeRadius*0.05, 0.16, 0.34)
+				if state.wakeTimers[key] >= interval {
+					state.wakeTimers[key] = 0
+					wakePos := currentPos
+					wakePos[1] = water.SurfaceY + 0.02
+					wakeStrength := clampWaterFloat(horizontalSpeed/9.0, 0.18, 0.8)
+					wakeFoam := clampWaterFloat(wakeStrength*0.28, 0.08, 0.35)
+					state.spawnRipple(water.Entity, wakePos, wakeStrength, probeRadius, rb.Velocity, wakeFoam, WaterDisturbanceWake)
+				}
+			} else if !isInside {
+				delete(state.wakeTimers, key)
 			}
 
 			state.occupancy[key] = isInside
@@ -157,13 +195,20 @@ func (s *WaterInteractionState) advanceRipples(dt float32) {
 	s.activeRipples = dst
 }
 
-func (s *WaterInteractionState) spawnRipple(waterEntity EntityId, pos mgl32.Vec3, strength float32) {
+func (s *WaterInteractionState) spawnRipple(waterEntity EntityId, pos mgl32.Vec3, strength, radius float32, velocity mgl32.Vec3, foam float32, kind WaterDisturbanceKind) {
+	if radius <= 0 {
+		radius = 0.25
+	}
 	s.activeRipples = append(s.activeRipples, WaterRipple{
-		WaterEntity: waterEntity,
-		Position:    pos,
-		Strength:    strength,
-		Age:         0,
-		Lifetime:    1.8 + 0.5*strength,
+		WaterEntity:        waterEntity,
+		Position:           pos,
+		Strength:           strength,
+		Age:                0,
+		Lifetime:           1.8 + 0.45*strength + 0.18*radius,
+		Radius:             radius,
+		HorizontalVelocity: [2]float32{velocity.X(), velocity.Z()},
+		Foam:               foam,
+		Kind:               kind,
 	})
 	if len(s.activeRipples) > maxWaterInteractionRipples {
 		s.activeRipples = append([]WaterRipple(nil), s.activeRipples[len(s.activeRipples)-maxWaterInteractionRipples:]...)
@@ -184,12 +229,25 @@ func (s *WaterInteractionState) clearInactiveBodies(activeBodies map[EntityId]st
 	for key := range s.occupancy {
 		if activePairs == nil {
 			delete(s.occupancy, key)
+			delete(s.wakeTimers, key)
 			continue
 		}
 		if _, ok := activePairs[key]; !ok {
 			delete(s.occupancy, key)
+			delete(s.wakeTimers, key)
 		}
 	}
+}
+
+func waterInteractionHorizontalSpeed(velocity mgl32.Vec3) float32 {
+	return float32(math.Hypot(float64(velocity.X()), float64(velocity.Z())))
+}
+
+func classifyWaterDisturbance(verticalSpeed, horizontalSpeed float32) WaterDisturbanceKind {
+	if horizontalSpeed > verticalSpeed*0.75 && horizontalSpeed > 2.5 {
+		return WaterDisturbanceSkim
+	}
+	return WaterDisturbanceImpact
 }
 
 func collectWaterInteractionBodies(cmd *Commands) []waterInteractionBody {

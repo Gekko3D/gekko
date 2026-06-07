@@ -58,8 +58,70 @@ func TestWaterInteractionSystemEmitsImpactAndTracksRipple(t *testing.T) {
 	if events[0].Speed < 2.0 {
 		t.Fatalf("expected meaningful impact speed, got %f", events[0].Speed)
 	}
-	if len(interactions.ActiveRipples()) != 1 {
-		t.Fatalf("expected one active ripple, got %d", len(interactions.ActiveRipples()))
+	if events[0].Radius != 0.35 || events[0].Kind != WaterDisturbanceImpact {
+		t.Fatalf("unexpected impact metadata: %+v", events[0])
+	}
+	ripples := interactions.ActiveRipples()
+	if len(ripples) != 1 {
+		t.Fatalf("expected one active ripple, got %d", len(ripples))
+	}
+	if ripples[0].Radius != 0.35 || ripples[0].Kind != WaterDisturbanceImpact {
+		t.Fatalf("unexpected ripple metadata: %+v", ripples[0])
+	}
+}
+
+func TestWaterInteractionSystemEmitsRateLimitedWakeForMovingBodyInWater(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	interactions := &WaterInteractionState{}
+
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{5, 3, 5}},
+		&WaterSurfaceComponent{
+			HalfExtents: [2]float32{3, 3},
+			Depth:       2,
+		},
+	)
+	body := cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{5, 2.9, 5},
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&RigidBodyComponent{
+			Mass:     1,
+			Velocity: mgl32.Vec3{4, 0, 0},
+		},
+		&ColliderComponent{
+			Shape:       ShapeBox,
+			HalfExtents: mgl32.Vec3{0.35, 0.35, 0.35},
+		},
+	)
+	app.FlushCommands()
+
+	waterInteractionSystem(cmd, &Time{Dt: 1.0 / 60.0}, interactions)
+	if len(interactions.ActiveRipples()) != 0 {
+		t.Fatal("expected no wake before the body has a previous in-water sample")
+	}
+
+	MakeQuery1[TransformComponent](cmd).Map(func(eid EntityId, tr *TransformComponent) bool {
+		if eid == body {
+			tr.Position = mgl32.Vec3{5.5, 2.9, 5}
+			return false
+		}
+		return true
+	})
+
+	waterInteractionSystem(cmd, &Time{Dt: 0.5}, interactions)
+	ripples := interactions.ActiveRipples()
+	if len(ripples) != 1 {
+		t.Fatalf("expected one wake ripple, got %d", len(ripples))
+	}
+	if ripples[0].Kind != WaterDisturbanceWake {
+		t.Fatalf("expected wake disturbance, got %+v", ripples[0])
+	}
+	if got := interactions.ImpactEvents(); len(got) != 0 {
+		t.Fatalf("expected wake not to emit splash impact events, got %d", len(got))
 	}
 }
 
@@ -95,7 +157,17 @@ func TestBuildWaterSurfaceInputsIncludesRippleHosts(t *testing.T) {
 
 	interactions := &WaterInteractionState{
 		activeRipples: []WaterRipple{
-			{WaterEntity: waterA, Position: mgl32.Vec3{0.5, 2, 0.5}, Strength: 0.9, Age: 0.2, Lifetime: 2.0},
+			{
+				WaterEntity:        waterA,
+				Position:           mgl32.Vec3{0.5, 2, 0.5},
+				Strength:           0.9,
+				Age:                0.2,
+				Lifetime:           2.0,
+				Radius:             0.6,
+				HorizontalVelocity: [2]float32{2, -1},
+				Foam:               0.35,
+				Kind:               WaterDisturbanceSkim,
+			},
 			{WaterEntity: EntityId(9999), Position: mgl32.Vec3{1, 2, 1}, Strength: 0.7, Age: 0.1, Lifetime: 2.0},
 		},
 	}
@@ -109,6 +181,9 @@ func TestBuildWaterSurfaceInputsIncludesRippleHosts(t *testing.T) {
 	}
 	if ripples[0].WaterIndex != 0 {
 		t.Fatalf("expected ripple to map to first sorted water host, got %d", ripples[0].WaterIndex)
+	}
+	if ripples[0].Radius != 0.6 || ripples[0].HorizontalVelocity != ([2]float32{2, -1}) || ripples[0].Foam != 0.35 || ripples[0].DisturbanceKind != uint32(WaterDisturbanceSkim) {
+		t.Fatalf("unexpected mapped ripple metadata: %+v", ripples[0])
 	}
 }
 

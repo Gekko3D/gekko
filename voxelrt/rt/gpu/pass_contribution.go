@@ -79,5 +79,6 @@ func (m *GpuBufferManager) HasWaterContribution() bool {
 		m.WaterCount > 0 &&
 		m.WaterBG0 != nil &&
 		m.WaterBG1 != nil &&
-		m.WaterBG2 != nil
+		m.WaterBG2 != nil &&
+		m.WaterBG3 != nil
 }

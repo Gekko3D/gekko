@@ -282,6 +282,9 @@ func validateLevelWaterBody(result *LevelValidationResult, water LevelWaterBodyD
 	if water.Depth <= 0 {
 		result.addError("invalid_water_body_depth", "water body depth must be positive", "", "", "", "", "", "", "")
 	}
+	if water.DirectLightOcclusion != nil && (*water.DirectLightOcclusion < 0 || *water.DirectLightOcclusion > 1) {
+		result.addError("invalid_water_body_direct_light_occlusion", "water body direct light occlusion must be between 0 and 1", "", "", "", "", "", "", "")
+	}
 	switch mode {
 	case LevelWaterBodyModeFitBounds:
 		if water.BoundsHalfExtents[0] <= 0 || water.BoundsHalfExtents[1] <= 0 || water.BoundsHalfExtents[2] <= 0 {

@@ -58,6 +58,10 @@ func (m *GpuBufferManager) UpdateTiledLightingResources(screenW, screenH uint32)
 		recreated = true
 	}
 
+	if recreated {
+		m.WaterBindingsDirty = m.WaterShouldDirtyBindings(true)
+	}
+
 	return recreated
 }
 

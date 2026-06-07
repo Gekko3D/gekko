@@ -85,9 +85,39 @@ func (a *App) setupWaterPipeline() {
 		return
 	}
 
+	bgl3, err := a.Device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "WaterSurface BGL3",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
+			},
+			{
+				Binding:    1,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeUniform, MinBindingSize: 32},
+			},
+			{
+				Binding:    2,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
+			},
+			{
+				Binding:    3,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer:     wgpu.BufferBindingLayout{Type: wgpu.BufferBindingTypeReadOnlyStorage},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("ERROR: Failed to create water BGL3: %v\n", err)
+		return
+	}
+
 	layout, err := a.Device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
 		Label:            "Water Surface Layout",
-		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1, bgl2},
+		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl0, bgl1, bgl2, bgl3},
 	})
 	if err != nil {
 		fmt.Printf("ERROR: Failed to create water layout: %v\n", err)

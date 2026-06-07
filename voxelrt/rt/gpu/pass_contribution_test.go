@@ -146,6 +146,7 @@ func TestHasWaterContributionRequiresBoundState(t *testing.T) {
 	manager.WaterBG0 = &wgpu.BindGroup{}
 	manager.WaterBG1 = &wgpu.BindGroup{}
 	manager.WaterBG2 = &wgpu.BindGroup{}
+	manager.WaterBG3 = &wgpu.BindGroup{}
 	if !manager.HasWaterContribution() {
 		t.Fatal("expected water contribution once all water bind groups are bound")
 	}

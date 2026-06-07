@@ -43,6 +43,7 @@ const (
 	DefaultWaterBodyOverlap       float32 = 0.05
 	DefaultWaterBodyMinCellSize   float32 = 0.2
 	DefaultWaterBodyMaxPatchCount uint32  = 16
+	DefaultWaterVisualCellSize    float32 = 0.2
 )
 
 // WaterBodyComponent is the public authored API for water bodies. V1 supports
@@ -76,10 +77,14 @@ type WaterBodyComponent struct {
 	Opacity    float32
 	Roughness  float32
 	Refraction float32
+	// DirectLightOcclusion attenuates sun/moon lighting on water. A value of 0
+	// keeps full outdoor direct light; 1 fully removes direct-light sparkle.
+	DirectLightOcclusion float32
 
-	FlowDirection [2]float32
-	FlowSpeed     float32
-	WaveAmplitude float32
+	FlowDirection  [2]float32
+	FlowSpeed      float32
+	WaveAmplitude  float32
+	VisualCellSize float32
 }
 
 func (w *WaterBodyComponent) Enabled() bool {
@@ -225,6 +230,13 @@ func (w *WaterBodyComponent) NormalizedRefraction() float32 {
 	return (&WaterSurfaceComponent{Refraction: w.Refraction}).NormalizedRefraction()
 }
 
+func (w *WaterBodyComponent) NormalizedDirectLightOcclusion() float32 {
+	if w == nil {
+		return (&WaterSurfaceComponent{}).NormalizedDirectLightOcclusion()
+	}
+	return (&WaterSurfaceComponent{DirectLightOcclusion: w.DirectLightOcclusion}).NormalizedDirectLightOcclusion()
+}
+
 func (w *WaterBodyComponent) NormalizedFlowDirection() [2]float32 {
 	if w == nil {
 		return (&WaterSurfaceComponent{}).NormalizedFlowDirection()
@@ -244,6 +256,19 @@ func (w *WaterBodyComponent) NormalizedWaveAmplitude() float32 {
 		return (&WaterSurfaceComponent{}).NormalizedWaveAmplitude()
 	}
 	return (&WaterSurfaceComponent{WaveAmplitude: w.WaveAmplitude}).NormalizedWaveAmplitude()
+}
+
+func (w *WaterBodyComponent) NormalizedVisualCellSize() float32 {
+	if w == nil {
+		return DefaultWaterVisualCellSize
+	}
+	if w.VisualCellSize > 0 {
+		return (&WaterSurfaceComponent{VisualCellSize: w.VisualCellSize}).NormalizedVisualCellSize()
+	}
+	if w.MinCellSize > 0 {
+		return (&WaterSurfaceComponent{VisualCellSize: w.MinCellSize}).NormalizedVisualCellSize()
+	}
+	return DefaultWaterVisualCellSize
 }
 
 func (w *WaterBodyComponent) HasValidShapeForMode() bool {
@@ -306,13 +331,15 @@ type ResolvedWaterPatchComponent struct {
 	Color           [3]float32
 	AbsorptionColor [3]float32
 
-	Opacity    float32
-	Roughness  float32
-	Refraction float32
+	Opacity              float32
+	Roughness            float32
+	Refraction           float32
+	DirectLightOcclusion float32
 
-	FlowDirection [2]float32
-	FlowSpeed     float32
-	WaveAmplitude float32
+	FlowDirection  [2]float32
+	FlowSpeed      float32
+	WaveAmplitude  float32
+	VisualCellSize float32
 
 	Source       WaterFitSource
 	DebugInset   float32
@@ -343,6 +370,7 @@ type WaterBodyResolvedRecord struct {
 type WaterBodyResolutionState struct {
 	ByEntity             map[EntityId]WaterBodyResolvedRecord
 	PatchEntitiesByOwner map[EntityId][]EntityId
+	signaturesByEntity   map[EntityId]waterBodyResolutionSignature
 }
 
 func (s *WaterBodyResolutionState) ensureMaps() {
@@ -351,5 +379,8 @@ func (s *WaterBodyResolutionState) ensureMaps() {
 	}
 	if s.PatchEntitiesByOwner == nil {
 		s.PatchEntitiesByOwner = make(map[EntityId][]EntityId)
+	}
+	if s.signaturesByEntity == nil {
+		s.signaturesByEntity = make(map[EntityId]waterBodyResolutionSignature)
 	}
 }

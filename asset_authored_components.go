@@ -38,6 +38,7 @@ type AuthoredLevelPlacementRefComponent struct {
 	PlacementID string
 	AssetPath   string
 	VolumeID    string
+	Tags        []string
 }
 
 type AuthoredLevelItemRefComponent struct {
@@ -47,6 +48,7 @@ type AuthoredLevelItemRefComponent struct {
 	AssetID     string
 	AssetPath   string
 	VolumeID    string
+	Tags        []string
 }
 
 type AuthoredTerrainChunkRefComponent struct {

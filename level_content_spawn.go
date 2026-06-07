@@ -37,6 +37,7 @@ type AuthoredPlacementSpawnDef struct {
 	VolumeID                       string
 	AssetPath                      string
 	Transform                      content.LevelTransformDef
+	Tags                           []string
 	OverrideCastShadows            *bool
 	OverrideShadowMaxDistance      *float32
 	OverrideShadowCasterGroupID    uint64
@@ -109,6 +110,7 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 			PlacementID: placement.ID,
 			AssetPath:   placement.AssetPath,
 			Transform:   placement.Transform,
+			Tags:        append([]string(nil), placement.Tags...),
 		})
 		if err != nil {
 			return result, err
@@ -147,6 +149,7 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 				VolumeID:                       volumeDef.ID,
 				AssetPath:                      assetPath,
 				Transform:                      instance.Transform,
+				Tags:                           append([]string(nil), volumeDef.Tags...),
 				OverrideCastShadows:            volumeDef.CastsShadows,
 				OverrideShadowMaxDistance:      optionalPositiveFloat32Pointer(volumeDef.ShadowMaxDistance),
 				OverrideShadowCasterGroupID:    stablePlacementVolumeShadowGroupID(def.ID, volumeDef.ID),
@@ -237,27 +240,28 @@ func spawnAuthoredLevelMarker(cmd *Commands, parent EntityId, levelID string, ma
 func spawnAuthoredLevelWaterBody(cmd *Commands, parent EntityId, levelID string, water content.LevelWaterBodyDef) EntityId {
 	transform := levelTransformToComponent(water.Transform)
 	body := &WaterBodyComponent{
-		Mode:              WaterBodyMode(water.Mode),
-		SurfaceY:          water.SurfaceY,
-		Depth:             water.Depth,
-		RectHalfExtents:   [2]float32{water.RectHalfExtents[0], water.RectHalfExtents[1]},
-		BoundsCenter:      mgl32.Vec3{water.BoundsCenter[0], water.BoundsCenter[1], water.BoundsCenter[2]},
-		BoundsHalfExtents: mgl32.Vec3{water.BoundsHalfExtents[0], water.BoundsHalfExtents[1], water.BoundsHalfExtents[2]},
-		Inset:             water.Inset,
-		Overlap:           water.Overlap,
-		MinCellSize:       water.MinCellSize,
-		SourceTag:         water.SourceTag,
-		EnableSkirt:       water.EnableSkirt,
-		MaxPatchCount:     water.MaxPatchCount,
-		DebugName:         water.DebugName,
-		Color:             [3]float32{water.Color[0], water.Color[1], water.Color[2]},
-		AbsorptionColor:   [3]float32{water.AbsorptionColor[0], water.AbsorptionColor[1], water.AbsorptionColor[2]},
-		Opacity:           water.Opacity,
-		Roughness:         water.Roughness,
-		Refraction:        water.Refraction,
-		FlowDirection:     [2]float32{water.FlowDirection[0], water.FlowDirection[1]},
-		FlowSpeed:         water.FlowSpeed,
-		WaveAmplitude:     water.WaveAmplitude,
+		Mode:                 WaterBodyMode(water.Mode),
+		SurfaceY:             water.SurfaceY,
+		Depth:                water.Depth,
+		RectHalfExtents:      [2]float32{water.RectHalfExtents[0], water.RectHalfExtents[1]},
+		BoundsCenter:         mgl32.Vec3{water.BoundsCenter[0], water.BoundsCenter[1], water.BoundsCenter[2]},
+		BoundsHalfExtents:    mgl32.Vec3{water.BoundsHalfExtents[0], water.BoundsHalfExtents[1], water.BoundsHalfExtents[2]},
+		Inset:                water.Inset,
+		Overlap:              water.Overlap,
+		MinCellSize:          water.MinCellSize,
+		SourceTag:            water.SourceTag,
+		EnableSkirt:          water.EnableSkirt,
+		MaxPatchCount:        water.MaxPatchCount,
+		DebugName:            water.DebugName,
+		Color:                [3]float32{water.Color[0], water.Color[1], water.Color[2]},
+		AbsorptionColor:      [3]float32{water.AbsorptionColor[0], water.AbsorptionColor[1], water.AbsorptionColor[2]},
+		Opacity:              water.Opacity,
+		Roughness:            water.Roughness,
+		Refraction:           water.Refraction,
+		DirectLightOcclusion: levelWaterDirectLightOcclusion(water),
+		FlowDirection:        [2]float32{water.FlowDirection[0], water.FlowDirection[1]},
+		FlowSpeed:            water.FlowSpeed,
+		WaveAmplitude:        water.WaveAmplitude,
 	}
 	if body.Mode == "" {
 		body.Mode = WaterBodyModeExplicitRect
@@ -277,6 +281,21 @@ func spawnAuthoredLevelWaterBody(cmd *Commands, parent EntityId, levelID string,
 			Name:        water.Name,
 		},
 	)
+}
+
+func levelWaterDirectLightOcclusion(water content.LevelWaterBodyDef) float32 {
+	if water.DirectLightOcclusion != nil {
+		return *water.DirectLightOcclusion
+	}
+	if strings.HasPrefix(water.SourceTag, "hl1:") {
+		return 1
+	}
+	for _, tag := range water.Tags {
+		if tag == "source:hl1" {
+			return 1
+		}
+	}
+	return 0
 }
 
 func spawnAuthoredTerrain(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, rootEntity EntityId, def *content.LevelDef, opts AuthoredLevelSpawnOptions, result *AuthoredLevelSpawnResult) error {
@@ -347,6 +366,7 @@ func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *Run
 			PlacementID: placement.PlacementID,
 			AssetPath:   filepath.Clean(placement.AssetPath),
 			VolumeID:    placement.VolumeID,
+			Tags:        append([]string(nil), placement.Tags...),
 		},
 	)
 	for itemID, eid := range spawnResult.EntitiesByAssetID {
@@ -357,6 +377,7 @@ func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *Run
 			AssetID:     spawnResult.AssetID,
 			AssetPath:   filepath.Clean(placement.AssetPath),
 			VolumeID:    placement.VolumeID,
+			Tags:        append([]string(nil), placement.Tags...),
 		})
 	}
 	return spawnResult, nil

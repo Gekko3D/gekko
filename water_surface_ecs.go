@@ -20,10 +20,14 @@ type WaterSurfaceComponent struct {
 	Opacity    float32
 	Roughness  float32
 	Refraction float32
+	// DirectLightOcclusion attenuates sun/moon lighting on water. A value of 0
+	// keeps full outdoor direct light; 1 fully removes direct-light sparkle.
+	DirectLightOcclusion float32
 
-	FlowDirection [2]float32
-	FlowSpeed     float32
-	WaveAmplitude float32
+	FlowDirection  [2]float32
+	FlowSpeed      float32
+	WaveAmplitude  float32
+	VisualCellSize float32
 }
 
 func (w *WaterSurfaceComponent) Enabled() bool {
@@ -104,6 +108,13 @@ func (w *WaterSurfaceComponent) NormalizedRefraction() float32 {
 	return clampWaterFloat(w.Refraction, 0.0, 1.0)
 }
 
+func (w *WaterSurfaceComponent) NormalizedDirectLightOcclusion() float32 {
+	if w == nil || w.DirectLightOcclusion <= 0 {
+		return 0
+	}
+	return clampWaterFloat(w.DirectLightOcclusion, 0.0, 1.0)
+}
+
 func (w *WaterSurfaceComponent) NormalizedFlowDirection() [2]float32 {
 	if w == nil {
 		return [2]float32{1, 0}
@@ -129,6 +140,13 @@ func (w *WaterSurfaceComponent) NormalizedWaveAmplitude() float32 {
 		return 0.025
 	}
 	return clampWaterFloat(w.WaveAmplitude, 0.0, 0.15)
+}
+
+func (w *WaterSurfaceComponent) NormalizedVisualCellSize() float32 {
+	if w == nil || w.VisualCellSize <= 0 {
+		return DefaultWaterVisualCellSize
+	}
+	return clampWaterFloat(w.VisualCellSize, 0.05, 1.0)
 }
 
 func (w *WaterSurfaceComponent) WorldCenter(tr *TransformComponent) mgl32.Vec3 {

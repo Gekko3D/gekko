@@ -144,26 +144,32 @@ type AnalyticMediumHost struct {
 }
 
 type WaterSurfaceHost struct {
-	EntityID        uint32
-	Position        mgl32.Vec3
-	HalfExtents     [2]float32
-	Depth           float32
-	Color           [3]float32
-	AbsorptionColor [3]float32
-	Opacity         float32
-	Roughness       float32
-	Refraction      float32
-	FlowDirection   [2]float32
-	FlowSpeed       float32
-	WaveAmplitude   float32
+	EntityID             uint32
+	Position             mgl32.Vec3
+	HalfExtents          [2]float32
+	Depth                float32
+	Color                [3]float32
+	AbsorptionColor      [3]float32
+	Opacity              float32
+	Roughness            float32
+	Refraction           float32
+	DirectLightOcclusion float32
+	FlowDirection        [2]float32
+	FlowSpeed            float32
+	WaveAmplitude        float32
+	VisualCellSize       float32
 }
 
 type WaterRippleHost struct {
-	WaterIndex uint32
-	Position   mgl32.Vec3
-	Strength   float32
-	Age        float32
-	Lifetime   float32
+	WaterIndex         uint32
+	Position           mgl32.Vec3
+	Strength           float32
+	Age                float32
+	Lifetime           float32
+	Radius             float32
+	HorizontalVelocity [2]float32
+	Foam               float32
+	DisturbanceKind    uint32
 }
 
 type CAPresetData struct {
@@ -429,9 +435,13 @@ type GpuBufferManager struct {
 	WaterBG0                    *wgpu.BindGroup
 	WaterBG1                    *wgpu.BindGroup
 	WaterBG2                    *wgpu.BindGroup
+	WaterBG3                    *wgpu.BindGroup
 	WaterCount                  uint32
 	WaterRippleCount            uint32
+	WaterRippleSourceCount      uint32
+	WaterRippleDroppedCount     uint32
 	WaterElapsedTime            float32
+	WaterSurfaces               []WaterSurfaceHost
 	CAAtlasWidth                uint32
 	CAAtlasHeight               uint32
 	CAAtlasDepth                uint32

@@ -928,6 +928,7 @@ func TestWaterFeatureAccumulationReadinessUsesResources(t *testing.T) {
 		WaterBG0:   &wgpu.BindGroup{},
 		WaterBG1:   &wgpu.BindGroup{},
 		WaterBG2:   &wgpu.BindGroup{},
+		WaterBG3:   &wgpu.BindGroup{},
 	}
 	app := &App{
 		BufferManager: manager,

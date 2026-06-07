@@ -97,6 +97,7 @@ type streamedPlacementInstance struct {
 	VolumeID    string
 	AssetPath   string
 	Transform   content.LevelTransformDef
+	Tags        []string
 }
 
 type streamedLoadedChunk struct {
@@ -453,6 +454,7 @@ func buildEffectiveStreamedPlacementIndex(level *content.LevelDef, levelPath str
 			PlacementID: placement.ID,
 			AssetPath:   placement.AssetPath,
 			Transform:   effectiveLevelTransform(placement.ID, placement.Transform, overrides),
+			Tags:        append([]string(nil), placement.Tags...),
 		})
 	}
 	if maxVolumeInstances <= 0 {
@@ -473,6 +475,7 @@ func buildEffectiveStreamedPlacementIndex(level *content.LevelDef, levelPath str
 				VolumeID:    volumeDef.ID,
 				AssetPath:   authoredPathForLevel(instance.AssetPath, levelPath),
 				Transform:   effectiveLevelTransform(placementID, instance.Transform, overrides),
+				Tags:        append([]string(nil), volumeDef.Tags...),
 			})
 		}
 	}
@@ -628,6 +631,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 			VolumeID:    placement.VolumeID,
 			AssetPath:   placement.AssetPath,
 			Transform:   placement.Transform,
+			Tags:        append([]string(nil), placement.Tags...),
 		})
 		if err != nil {
 			return err
@@ -655,7 +659,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 			hook(cmd, PostSpawnPlacementContext{
 				ChunkCoord:  prepared.Coord,
 				LevelID:     state.LevelID,
-				Placement:   AuthoredPlacementSpawnDef{PlacementID: placement.PlacementID, VolumeID: placement.VolumeID, AssetPath: placement.AssetPath, Transform: placement.Transform},
+				Placement:   AuthoredPlacementSpawnDef{PlacementID: placement.PlacementID, VolumeID: placement.VolumeID, AssetPath: placement.AssetPath, Transform: placement.Transform, Tags: append([]string(nil), placement.Tags...)},
 				RootEntity:  spawnResult.RootEntity,
 				SpawnResult: spawnResult,
 			})

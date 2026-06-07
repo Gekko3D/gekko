@@ -4,12 +4,69 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/go-gl/mathgl/mgl32"
 )
+
+func TestBuildEffectiveStreamedPlacementIndexPreservesTags(t *testing.T) {
+	level := content.NewLevelDef("tagged-stream")
+	level.Placements = []content.LevelPlacementDef{
+		{
+			ID:        "direct-pool",
+			AssetPath: "direct.gkasset",
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{1, 0, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			Tags: []string{"pool-a"},
+		},
+	}
+	level.PlacementVolumes = []content.PlacementVolumeDef{
+		{
+			ID:        "volume-pool",
+			Kind:      content.PlacementVolumeKindBox,
+			AssetPath: "volume.gkasset",
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{0, 0, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			Extents: content.Vec3{4, 1, 4},
+			Rule:    content.PlacementVolumeRuleDef{Mode: content.PlacementVolumeRuleModeCount, Count: 1},
+			Tags:    []string{"pool-b"},
+		},
+	}
+
+	placements, err := buildEffectiveStreamedPlacementIndex(level, "", nil, nil, 4)
+	if err != nil {
+		t.Fatalf("buildEffectiveStreamedPlacementIndex failed: %v", err)
+	}
+
+	foundDirect := false
+	foundVolume := false
+	for _, placement := range placements {
+		switch placement.PlacementID {
+		case "direct-pool":
+			foundDirect = true
+			if !slices.Equal(placement.Tags, []string{"pool-a"}) {
+				t.Fatalf("expected direct placement tags to survive, got %v", placement.Tags)
+			}
+		case "volume-pool:0":
+			foundVolume = true
+			if !slices.Equal(placement.Tags, []string{"pool-b"}) {
+				t.Fatalf("expected volume placement tags to survive, got %v", placement.Tags)
+			}
+		}
+	}
+	if !foundDirect || !foundVolume {
+		t.Fatalf("expected direct and volume placements, got %+v", placements)
+	}
+}
 
 func TestStreamedRuntimeLoadsOnlyDesiredChunk(t *testing.T) {
 	root := t.TempDir()
@@ -130,12 +187,14 @@ func TestStreamedRuntimeSpawnsLevelWaterBodies(t *testing.T) {
 	root := t.TempDir()
 	levelPath := filepath.Join(root, "levels", "water.gklevel")
 	level := content.NewLevelDef("water")
+	directLightOcclusion := float32(0.8)
 	level.WaterBodies = []content.LevelWaterBodyDef{{
-		ID:              "water-1",
-		Mode:            content.LevelWaterBodyModeExplicitRect,
-		SurfaceY:        2,
-		Depth:           1,
-		RectHalfExtents: content.Vec2{3, 4},
+		ID:                   "water-1",
+		Mode:                 content.LevelWaterBodyModeExplicitRect,
+		SurfaceY:             2,
+		Depth:                1,
+		RectHalfExtents:      content.Vec2{3, 4},
+		DirectLightOcclusion: &directLightOcclusion,
 		Transform: content.LevelTransformDef{
 			Position: content.Vec3{5, 2, 6},
 			Rotation: content.Quat{0, 0, 0, 1},
@@ -158,6 +217,9 @@ func TestStreamedRuntimeSpawnsLevelWaterBodies(t *testing.T) {
 		found = true
 		if water.SurfaceY != 2 || water.Depth != 1 || water.RectHalfExtents != ([2]float32{3, 4}) {
 			t.Fatalf("water component = %+v", water)
+		}
+		if water.DirectLightOcclusion != 0.8 {
+			t.Fatalf("water direct light occlusion = %v", water.DirectLightOcclusion)
 		}
 		return true
 	})

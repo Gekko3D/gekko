@@ -21,18 +21,20 @@ func buildWaterSurfaceInputs(cmd *Commands, interactions *WaterInteractionState)
 			return true
 		}
 		hosts = append(hosts, app_rt.WaterSurfaceInput{
-			EntityID:        uint32(eid),
-			Position:        water.WorldCenter(tr),
-			HalfExtents:     water.WorldHalfExtents(tr),
-			Depth:           water.WorldDepth(tr),
-			Color:           water.NormalizedColor(),
-			AbsorptionColor: water.NormalizedAbsorptionColor(),
-			Opacity:         water.NormalizedOpacity(),
-			Roughness:       water.NormalizedRoughness(),
-			Refraction:      water.NormalizedRefraction(),
-			FlowDirection:   water.NormalizedFlowDirection(),
-			FlowSpeed:       water.NormalizedFlowSpeed(),
-			WaveAmplitude:   water.NormalizedWaveAmplitude(),
+			EntityID:             uint32(eid),
+			Position:             water.WorldCenter(tr),
+			HalfExtents:          water.WorldHalfExtents(tr),
+			Depth:                water.WorldDepth(tr),
+			Color:                water.NormalizedColor(),
+			AbsorptionColor:      water.NormalizedAbsorptionColor(),
+			Opacity:              water.NormalizedOpacity(),
+			Roughness:            water.NormalizedRoughness(),
+			Refraction:           water.NormalizedRefraction(),
+			DirectLightOcclusion: water.NormalizedDirectLightOcclusion(),
+			FlowDirection:        water.NormalizedFlowDirection(),
+			FlowSpeed:            water.NormalizedFlowSpeed(),
+			WaveAmplitude:        water.NormalizedWaveAmplitude(),
+			VisualCellSize:       water.NormalizedVisualCellSize(),
 		})
 		return true
 	})
@@ -41,18 +43,20 @@ func buildWaterSurfaceInputs(cmd *Commands, interactions *WaterInteractionState)
 			return true
 		}
 		hosts = append(hosts, app_rt.WaterSurfaceInput{
-			EntityID:        uint32(eid),
-			Position:        patch.Center,
-			HalfExtents:     patch.HalfExtents,
-			Depth:           patch.Depth,
-			Color:           patch.Color,
-			AbsorptionColor: patch.AbsorptionColor,
-			Opacity:         patch.Opacity,
-			Roughness:       patch.Roughness,
-			Refraction:      patch.Refraction,
-			FlowDirection:   patch.FlowDirection,
-			FlowSpeed:       patch.FlowSpeed,
-			WaveAmplitude:   patch.WaveAmplitude,
+			EntityID:             uint32(eid),
+			Position:             patch.Center,
+			HalfExtents:          patch.HalfExtents,
+			Depth:                patch.Depth,
+			Color:                patch.Color,
+			AbsorptionColor:      patch.AbsorptionColor,
+			Opacity:              patch.Opacity,
+			Roughness:            patch.Roughness,
+			Refraction:           patch.Refraction,
+			DirectLightOcclusion: patch.DirectLightOcclusion,
+			FlowDirection:        patch.FlowDirection,
+			FlowSpeed:            patch.FlowSpeed,
+			WaveAmplitude:        patch.WaveAmplitude,
+			VisualCellSize:       patch.VisualCellSize,
 		})
 		return true
 	})
@@ -77,11 +81,15 @@ func buildWaterSurfaceInputs(cmd *Commands, interactions *WaterInteractionState)
 				continue
 			}
 			ripples = append(ripples, app_rt.WaterRippleInput{
-				WaterIndex: waterIndex,
-				Position:   ripple.Position,
-				Strength:   ripple.Strength,
-				Age:        ripple.Age,
-				Lifetime:   ripple.Lifetime,
+				WaterIndex:         waterIndex,
+				Position:           ripple.Position,
+				Strength:           ripple.Strength,
+				Age:                ripple.Age,
+				Lifetime:           ripple.Lifetime,
+				Radius:             ripple.Radius,
+				HorizontalVelocity: ripple.HorizontalVelocity,
+				Foam:               ripple.Foam,
+				DisturbanceKind:    uint32(ripple.Kind),
 			})
 		}
 		sort.Slice(ripples, func(i, j int) bool {

@@ -654,15 +654,17 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "water.gklevel")
 	def := NewLevelDef("water")
+	directLightOcclusion := float32(0.75)
 	def.WaterBodies = []LevelWaterBodyDef{{
-		ID:              "water-1",
-		Name:            "pool",
-		Mode:            LevelWaterBodyModeExplicitRect,
-		SurfaceY:        2.5,
-		Depth:           1.25,
-		RectHalfExtents: Vec2{4, 6},
-		Color:           Vec3{0.1, 0.3, 0.8},
-		FlowDirection:   Vec2{1, 0},
+		ID:                   "water-1",
+		Name:                 "pool",
+		Mode:                 LevelWaterBodyModeExplicitRect,
+		SurfaceY:             2.5,
+		Depth:                1.25,
+		RectHalfExtents:      Vec2{4, 6},
+		Color:                Vec3{0.1, 0.3, 0.8},
+		DirectLightOcclusion: &directLightOcclusion,
+		FlowDirection:        Vec2{1, 0},
 		Transform: LevelTransformDef{
 			Position: Vec3{10, 2.5, 20},
 			Rotation: Quat{0, 0, 0, 1},
@@ -680,19 +682,22 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
-	if len(loaded.WaterBodies) != 1 || loaded.WaterBodies[0].RectHalfExtents != (Vec2{4, 6}) {
+	if len(loaded.WaterBodies) != 1 || loaded.WaterBodies[0].RectHalfExtents != (Vec2{4, 6}) ||
+		loaded.WaterBodies[0].DirectLightOcclusion == nil || *loaded.WaterBodies[0].DirectLightOcclusion != 0.75 {
 		t.Fatalf("water bodies did not round-trip: %+v", loaded.WaterBodies)
 	}
 }
 
 func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
 	def := NewLevelDef("bad-water")
+	directLightOcclusion := float32(1.5)
 	def.WaterBodies = []LevelWaterBodyDef{{
-		ID:              "bad-water",
-		Mode:            LevelWaterBodyModeExplicitRect,
-		SurfaceY:        1,
-		Depth:           0,
-		RectHalfExtents: Vec2{0, 4},
+		ID:                   "bad-water",
+		Mode:                 LevelWaterBodyModeExplicitRect,
+		SurfaceY:             1,
+		Depth:                0,
+		RectHalfExtents:      Vec2{0, 4},
+		DirectLightOcclusion: &directLightOcclusion,
 	}}
 	result := ValidateLevel(def, LevelValidationOptions{})
 	if !result.HasErrors() {
@@ -700,6 +705,7 @@ func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
 	}
 	assertHasLevelValidationCode(t, result, "invalid_water_body_depth")
 	assertHasLevelValidationCode(t, result, "invalid_water_body_rect")
+	assertHasLevelValidationCode(t, result, "invalid_water_body_direct_light_occlusion")
 }
 
 func assertHasLevelValidationCode(t *testing.T, result LevelValidationResult, want string) {

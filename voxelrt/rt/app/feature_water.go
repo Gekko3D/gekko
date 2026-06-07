@@ -14,26 +14,32 @@ type WaterResources struct {
 }
 
 type WaterSurfaceInput struct {
-	EntityID        uint32
-	Position        mgl32.Vec3
-	HalfExtents     [2]float32
-	Depth           float32
-	Color           [3]float32
-	AbsorptionColor [3]float32
-	Opacity         float32
-	Roughness       float32
-	Refraction      float32
-	FlowDirection   [2]float32
-	FlowSpeed       float32
-	WaveAmplitude   float32
+	EntityID             uint32
+	Position             mgl32.Vec3
+	HalfExtents          [2]float32
+	Depth                float32
+	Color                [3]float32
+	AbsorptionColor      [3]float32
+	Opacity              float32
+	Roughness            float32
+	Refraction           float32
+	DirectLightOcclusion float32
+	FlowDirection        [2]float32
+	FlowSpeed            float32
+	WaveAmplitude        float32
+	VisualCellSize       float32
 }
 
 type WaterRippleInput struct {
-	WaterIndex uint32
-	Position   mgl32.Vec3
-	Strength   float32
-	Age        float32
-	Lifetime   float32
+	WaterIndex         uint32
+	Position           mgl32.Vec3
+	Strength           float32
+	Age                float32
+	Lifetime           float32
+	Radius             float32
+	HorizontalVelocity [2]float32
+	Foam               float32
+	DisturbanceKind    uint32
 }
 
 func (f *WaterFeature) Name() string {
@@ -114,7 +120,20 @@ func (f *WaterFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgp
 	if pipeline == nil || !a.BufferManager.HasWaterContribution() {
 		return nil
 	}
-	if a.BufferManager.WaterBG0 == nil || a.BufferManager.WaterBG1 == nil || a.BufferManager.WaterBG2 == nil {
+	if a.BufferManager.WaterBindGroupsMissing() {
+		return nil
+	}
+	if a.Config == nil || a.Config.Width == 0 || a.Config.Height == 0 {
+		return nil
+	}
+	candidates := buildWaterRenderCandidates(a.Camera, a.Config.Width, a.Config.Height, a.BufferManager.WaterSurfaces)
+	if a.Profiler != nil {
+		a.Profiler.SetCount("WaterRenderCandidates", len(candidates))
+		a.Profiler.SetCount("WaterRipplesSource", int(a.BufferManager.WaterRippleSourceCount))
+		a.Profiler.SetCount("WaterRipplesPacked", int(a.BufferManager.WaterRippleCount))
+		a.Profiler.SetCount("WaterRipplesDropped", int(a.BufferManager.WaterRippleDroppedCount))
+	}
+	if len(candidates) == 0 {
 		return nil
 	}
 
@@ -122,7 +141,12 @@ func (f *WaterFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgp
 	pass.SetBindGroup(0, a.BufferManager.WaterBG0, nil)
 	pass.SetBindGroup(1, a.BufferManager.WaterBG1, nil)
 	pass.SetBindGroup(2, a.BufferManager.WaterBG2, nil)
-	pass.Draw(3, 1, 0, 0)
+	pass.SetBindGroup(3, a.BufferManager.WaterBG3, nil)
+	for _, candidate := range candidates {
+		pass.SetScissorRect(candidate.Scissor.X, candidate.Scissor.Y, candidate.Scissor.W, candidate.Scissor.H)
+		pass.Draw(3, 1, 0, uint32(candidate.WaterIndex))
+	}
+	pass.SetScissorRect(0, 0, a.Config.Width, a.Config.Height)
 	return nil
 }
 
@@ -155,24 +179,29 @@ func (a *App) ClearWaterInput() {
 	}
 	a.BufferManager.WaterCount = 0
 	a.BufferManager.WaterRippleCount = 0
+	a.BufferManager.WaterRippleSourceCount = 0
+	a.BufferManager.WaterRippleDroppedCount = 0
+	a.BufferManager.WaterSurfaces = a.BufferManager.WaterSurfaces[:0]
 }
 
 func waterSurfaceGPUHosts(waters []WaterSurfaceInput) []gpu.WaterSurfaceHost {
 	hosts := make([]gpu.WaterSurfaceHost, 0, len(waters))
 	for _, water := range waters {
 		hosts = append(hosts, gpu.WaterSurfaceHost{
-			EntityID:        water.EntityID,
-			Position:        water.Position,
-			HalfExtents:     water.HalfExtents,
-			Depth:           water.Depth,
-			Color:           water.Color,
-			AbsorptionColor: water.AbsorptionColor,
-			Opacity:         water.Opacity,
-			Roughness:       water.Roughness,
-			Refraction:      water.Refraction,
-			FlowDirection:   water.FlowDirection,
-			FlowSpeed:       water.FlowSpeed,
-			WaveAmplitude:   water.WaveAmplitude,
+			EntityID:             water.EntityID,
+			Position:             water.Position,
+			HalfExtents:          water.HalfExtents,
+			Depth:                water.Depth,
+			Color:                water.Color,
+			AbsorptionColor:      water.AbsorptionColor,
+			Opacity:              water.Opacity,
+			Roughness:            water.Roughness,
+			Refraction:           water.Refraction,
+			DirectLightOcclusion: water.DirectLightOcclusion,
+			FlowDirection:        water.FlowDirection,
+			FlowSpeed:            water.FlowSpeed,
+			WaveAmplitude:        water.WaveAmplitude,
+			VisualCellSize:       water.VisualCellSize,
 		})
 	}
 	return hosts
@@ -182,11 +211,15 @@ func waterRippleGPUHosts(ripples []WaterRippleInput) []gpu.WaterRippleHost {
 	hosts := make([]gpu.WaterRippleHost, 0, len(ripples))
 	for _, ripple := range ripples {
 		hosts = append(hosts, gpu.WaterRippleHost{
-			WaterIndex: ripple.WaterIndex,
-			Position:   ripple.Position,
-			Strength:   ripple.Strength,
-			Age:        ripple.Age,
-			Lifetime:   ripple.Lifetime,
+			WaterIndex:         ripple.WaterIndex,
+			Position:           ripple.Position,
+			Strength:           ripple.Strength,
+			Age:                ripple.Age,
+			Lifetime:           ripple.Lifetime,
+			Radius:             ripple.Radius,
+			HorizontalVelocity: ripple.HorizontalVelocity,
+			Foam:               ripple.Foam,
+			DisturbanceKind:    ripple.DisturbanceKind,
 		})
 	}
 	return hosts
