@@ -27,7 +27,7 @@ struct CameraData {
   pad1: u32,
   screen_size: vec2<f32>,
   pad2: vec2<f32>,
-  ao_quality: vec4<f32>, // x: AO sample count, y: AO radius, z: directional shadow softness, w: spot shadow softness
+  ao_quality: vec4<f32>, // x: AO sample count, y: AO radius, zw: reserved shadow style controls
   distance_limits: vec4<f32>,
   render_origin: vec4<f32>,
 };
@@ -812,7 +812,6 @@ fn sample_directional_shadow(
   let my_depth_n = clamp(proj_pos.z, -1.0, 1.0);
   let NdL_shadow = max(dot(n, L), 0.0);
   let bias = directional_compare_bias + directional_compare_bias * 0.75 * (1.0 - NdL_shadow);
-  let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
   let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
   let hard_sampled_depth_n = clamp(hard_shadow_sample.r, -1.0, 1.0);
   let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
@@ -821,31 +820,7 @@ fn sample_directional_shadow(
     hard_sampled_shadow_group_id == receiver_shadow_group_id;
   let hard_receiver_minus_occluder = my_depth_n - hard_sampled_depth_n;
   let hard_seam_lit = hard_same_shadow_group && hard_receiver_minus_occluder <= directional_seam_epsilon_n;
-  let hard_visibility = select(0.0, 1.0, hard_seam_lit || hard_sampled_depth_n >= my_depth_n - bias);
-  var visibility = 0.0;
-  var sample_weight_sum = 0.0;
-  for (var dy: i32 = -1; dy <= 1; dy = dy + 1) {
-    for (var dx: i32 = -1; dx <= 1; dx = dx + 1) {
-      let off = base_px + vec2<i32>(dx, dy);
-      let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
-      let shadow_sample = textureLoad(in_shadow_maps, clamped_off, i32(layer), 0);
-      let sampled_depth_n = clamp(shadow_sample.r, -1.0, 1.0);
-      let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
-      let same_shadow_group =
-        receiver_shadow_group_id != 0u &&
-        sampled_shadow_group_id == receiver_shadow_group_id;
-      let receiver_minus_occluder = my_depth_n - sampled_depth_n;
-      let seam_lit = same_shadow_group && receiver_minus_occluder <= directional_seam_epsilon_n;
-      let wx = f32(2 - abs(dx));
-      let wy = f32(2 - abs(dy));
-      let sample_weight = wx * wy;
-      sample_weight_sum += sample_weight;
-      visibility += sample_weight * select(0.0, 1.0, seam_lit || sampled_depth_n >= my_depth_n - bias);
-    }
-  }
-  let pcf_visibility = visibility / max(sample_weight_sum, 1.0);
-  let softness = saturate(uCamera.ao_quality.z);
-  return mix(hard_visibility, pcf_visibility, softness);
+  return select(0.0, 1.0, hard_seam_lit || hard_sampled_depth_n >= my_depth_n - bias);
 }
 
 fn point_shadow_face_and_uv(dir: vec3<f32>) -> PointShadowLookup {
@@ -1054,7 +1029,6 @@ fn calculate_lighting(
           let pos_off = p + shadow_normal * receiver_offset;
           let my_depth_m = distance(light.position.xyz, pos_off);
           let NdL_shadow = max(dot(shadow_normal, L), 0.0);
-          let max_px = vec2<i32>(i32(effective_resolution) - 1, i32(effective_resolution) - 1);
           let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
           let hard_sampled_depth = hard_shadow_sample.r;
           let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
@@ -1066,28 +1040,7 @@ fn calculate_lighting(
           let biasM = baseBiasM + slopeBiasM * (1.0 - NdL_shadow);
           let hard_receiver_minus_occluder = my_depth_m - hard_sampled_depth;
           let hard_seam_lit = hard_same_shadow_group && hard_receiver_minus_occluder <= receiver_shadow_seam_epsilon;
-          let hard_visibility = select(0.0, 1.0, hard_seam_lit || hard_sampled_depth >= my_depth_m - biasM);
-          var visibility = 0.0;
-          var sample_weight_sum = 0.0;
-          for (var dy: i32 = -2; dy <= 2; dy = dy + 1) {
-            for (var dx: i32 = -2; dx <= 2; dx = dx + 1) {
-              let off = base_px + vec2<i32>(dx, dy);
-              let clamped_off = clamp(off, vec2<i32>(0, 0), max_px);
-              let shadow_sample = textureLoad(in_shadow_maps, clamped_off, i32(layer), 0);
-              let sampled_depth = shadow_sample.r;
-              let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
-              let same_shadow_group =
-                receiver_shadow_group_id != 0u &&
-                sampled_shadow_group_id == receiver_shadow_group_id;
-              let receiver_minus_occluder = my_depth_m - sampled_depth;
-              let seam_lit = same_shadow_group && receiver_minus_occluder <= receiver_shadow_seam_epsilon;
-              sample_weight_sum += 1.0;
-              visibility += select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
-            }
-          }
-          let pcf_visibility = visibility / max(sample_weight_sum, 1.0);
-          let softness = saturate(uCamera.ao_quality.w);
-          attenuation *= mix(hard_visibility, pcf_visibility, softness);
+          attenuation *= select(0.0, 1.0, hard_seam_lit || hard_sampled_depth >= my_depth_m - biasM);
         }
       } else {
         attenuation *= sample_point_shadow(light, p, shadow_normal, L, receiver_shadow_group_id, receiver_shadow_seam_epsilon);

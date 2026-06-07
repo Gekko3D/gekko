@@ -642,6 +642,28 @@ func TestDeferredDirectionalShadowRejectsOutOfCascadeDepth(t *testing.T) {
 	}
 }
 
+func TestVoxelShadowSamplingStaysHardNoPCF(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code string
+	}{
+		{name: "deferred lighting", code: DeferredLightingWGSL},
+		{name: "transparent overlay", code: TransparentOverlayWGSL},
+	} {
+		for _, forbidden := range []string{
+			"pcf_visibility",
+			"sample_weight_sum",
+			"mix(hard_visibility",
+			"ao_quality.z",
+			"ao_quality.w",
+		} {
+			if strings.Contains(tc.code, forbidden) {
+				t.Fatalf("%s shader must keep voxel shadows hard; found %q", tc.name, forbidden)
+			}
+		}
+	}
+}
+
 func TestRayReconstructionGuardsFarPlaneW(t *testing.T) {
 	for _, tc := range []struct {
 		name string
