@@ -126,6 +126,8 @@ struct LightingContribution {
 const PI: f32 = 3.14159265359;
 const MIN_ROUGHNESS: f32 = 0.045;
 const PBR_EPSILON: f32 = 1e-4;
+const VOXEL_SHADOW_GRAZING_NDOTL: f32 = 0.06;
+const VOXEL_SHADOW_GRAZING_BIAS_SCALE: f32 = 1.75;
 
 fn saturate(v: f32) -> f32 {
     return clamp(v, 0.0, 1.0);
@@ -137,6 +139,15 @@ fn abs_i32(v: i32) -> i32 {
 
 fn max3f(v: vec3<f32>) -> f32 {
     return max(v.x, max(v.y, v.z));
+}
+
+fn voxel_shadow_bias(base_bias: f32, ndotl: f32) -> f32 {
+    let grazing = 1.0 - saturate(ndotl);
+    return base_bias * (1.0 + VOXEL_SHADOW_GRAZING_BIAS_SCALE * grazing * grazing);
+}
+
+fn voxel_shadow_skip_grazing(ndotl: f32) -> bool {
+    return ndotl <= VOXEL_SHADOW_GRAZING_NDOTL;
 }
 
 fn srgb_channel_to_linear(v: f32) -> f32 {
@@ -261,7 +272,10 @@ fn sample_directional_shadow(
     );
     let my_depth_n = clamp(proj_pos.z, -1.0, 1.0);
     let NdL = max(dot(normal, L), 0.0);
-    let bias = directional_compare_bias + directional_compare_bias * 0.75 * (1.0 - NdL);
+    if (voxel_shadow_skip_grazing(NdL)) {
+        return 1.0;
+    }
+    let bias = voxel_shadow_bias(directional_compare_bias, NdL);
     let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
     let hard_sampled_depth_n = clamp(hard_shadow_sample.r, -1.0, 1.0);
     let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
@@ -327,8 +341,11 @@ fn sample_point_shadow(
         receiver_shadow_group_id != 0u &&
         sampled_shadow_group_id == receiver_shadow_group_id;
     let NdL = max(dot(shadow_normal, L), 0.0);
+    if (voxel_shadow_skip_grazing(NdL)) {
+        return 1.0;
+    }
     let seam_tolerance_m = max(receiver_shadow_seam_epsilon, texel_depth_m * 1.5);
-    let biasM = max(seam_tolerance_m, 0.05 + texel_depth_m + 0.08 * (1.0 - NdL));
+    let biasM = max(seam_tolerance_m, 0.05 + texel_depth_m + voxel_shadow_bias(0.08, NdL));
     let receiver_minus_occluder = my_depth_m - sampled_depth;
     let seam_lit = same_shadow_group && receiver_minus_occluder <= seam_tolerance_m;
     return select(0.0, 1.0, seam_lit || sampled_depth >= my_depth_m - biasM);
@@ -422,19 +439,21 @@ fn calculate_lighting(
                     my_depth_m = distance(light.position.xyz, pos_off);
 
                     let NdL = max(dot(shadow_normal, shadow_L), 0.0);
-	                    let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
-	                    let hard_sampled_depth = hard_shadow_sample.r;
-                    let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
-                    let hard_same_shadow_group =
-                        receiver_shadow_group_id != 0u &&
-                        hard_sampled_shadow_group_id == receiver_shadow_group_id;
-                    let baseBiasM = 0.05;
-                    let slopeBiasM = 0.1;
-                    let biasM = baseBiasM + slopeBiasM * (1.0 - NdL);
-	                    let hard_receiver_minus_occluder = my_depth_m - hard_sampled_depth;
-	                    let hard_seam_lit = hard_same_shadow_group && hard_receiver_minus_occluder <= receiver_shadow_seam_epsilon;
-	                    attenuation *= select(0.0, 1.0, hard_seam_lit || hard_sampled_depth >= my_depth_m - biasM);
-	                }
+                    if (!voxel_shadow_skip_grazing(NdL)) {
+                        let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
+                        let hard_sampled_depth = hard_shadow_sample.r;
+                        let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
+                        let hard_same_shadow_group =
+                            receiver_shadow_group_id != 0u &&
+                            hard_sampled_shadow_group_id == receiver_shadow_group_id;
+                        let baseBiasM = 0.05;
+                        let slopeBiasM = 0.1;
+                        let biasM = baseBiasM + voxel_shadow_bias(slopeBiasM, NdL);
+                        let hard_receiver_minus_occluder = my_depth_m - hard_sampled_depth;
+                        let hard_seam_lit = hard_same_shadow_group && hard_receiver_minus_occluder <= receiver_shadow_seam_epsilon;
+                        attenuation *= select(0.0, 1.0, hard_seam_lit || hard_sampled_depth >= my_depth_m - biasM);
+                    }
+                }
             } else {
                 attenuation *= sample_point_shadow(light, shadow_receiver_pos, shadow_normal, shadow_L, receiver_shadow_group_id, receiver_shadow_seam_epsilon);
             }

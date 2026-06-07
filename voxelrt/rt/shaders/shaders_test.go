@@ -636,9 +636,17 @@ func TestDeferredSkyRayReconstructionGuardsFarPlaneW(t *testing.T) {
 	}
 }
 
-func TestDeferredDirectionalShadowRejectsOutOfCascadeDepth(t *testing.T) {
-	if !strings.Contains(DeferredLightingWGSL, "proj_pos.z >= -1.0 && proj_pos.z <= 1.0") {
-		t.Fatal("directional shadow sampling must reject receivers outside cascade depth")
+func TestDirectionalShadowRejectsOutOfCascadeDepth(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code string
+	}{
+		{name: "deferred lighting", code: DeferredLightingWGSL},
+		{name: "transparent overlay", code: TransparentOverlayWGSL},
+	} {
+		if !strings.Contains(tc.code, "proj_pos.z >= -1.0 && proj_pos.z <= 1.0") {
+			t.Fatalf("%s directional shadow sampling must reject receivers outside cascade depth", tc.name)
+		}
 	}
 }
 
@@ -659,6 +667,29 @@ func TestVoxelShadowSamplingStaysHardNoPCF(t *testing.T) {
 		} {
 			if strings.Contains(tc.code, forbidden) {
 				t.Fatalf("%s shader must keep voxel shadows hard; found %q", tc.name, forbidden)
+			}
+		}
+	}
+}
+
+func TestVoxelShadowSamplingSkipsGrazingShadowMapNoise(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code string
+	}{
+		{name: "deferred lighting", code: DeferredLightingWGSL},
+		{name: "transparent overlay", code: TransparentOverlayWGSL},
+	} {
+		for _, needle := range []string{
+			"const VOXEL_SHADOW_GRAZING_NDOTL",
+			"const VOXEL_SHADOW_GRAZING_BIAS_SCALE",
+			"fn voxel_shadow_bias",
+			"fn voxel_shadow_skip_grazing",
+			"if (voxel_shadow_skip_grazing(",
+			"if (!voxel_shadow_skip_grazing(",
+		} {
+			if !strings.Contains(tc.code, needle) {
+				t.Fatalf("%s shader missing hard voxel grazing-shadow guard %q", tc.name, needle)
 			}
 		}
 	}
