@@ -97,20 +97,20 @@ type UiNode interface {
 }
 
 type UiPanel struct {
-	Key       string
-	Anchor    UiAnchor
-	Position  [2]float32
-	Width     float32
-	MaxHeight float32
-	Padding   float32
-	Spacing   float32
-	Scale     float32
-	Title     string
-	Visible   bool
+	Key        string
+	Anchor     UiAnchor
+	Position   [2]float32
+	Width      float32
+	MaxHeight  float32
+	Padding    float32
+	Spacing    float32
+	Scale      float32
+	Title      string
+	Visible    bool
 	Borderless bool
-	BgColor   [4]float32
-	TextColor [4]float32
-	Children  []UiNode
+	BgColor    [4]float32
+	TextColor  [4]float32
+	Children   []UiNode
 }
 
 func (UiPanel) isUiNode() {}
@@ -158,16 +158,16 @@ type UiZStack struct {
 func (UiZStack) isUiNode() {}
 
 type UiAsciiGrid struct {
-	Key        string
-	Lines      []string
-	CellWidth  float32
-	CellHeight float32
-	Scale      float32
-	Color      [4]float32
-	BgColor    [4]float32
-	Hidden     bool
-	ColorGrid  [][][4]float32
-	BgColorGrid [][][4]float32
+	Key           string
+	Lines         []string
+	CellWidth     float32
+	CellHeight    float32
+	Scale         float32
+	Color         [4]float32
+	BgColor       [4]float32
+	Hidden        bool
+	ColorGrid     [][][4]float32
+	BgColorGrid   [][][4]float32
 	OverlayLabels []UiAsciiLabel
 }
 
@@ -846,11 +846,14 @@ func uiHandleTextFieldInput(layout *uiLayoutNode, eid EntityId, field UiTextFiel
 	}
 	*hasFocusedField = true
 
-	for _, char := range input.CharBuffer {
-		state.Draft += string(char)
-		state.Dirty = true
-		if field.OnChange != nil {
-			field.OnChange(state.Draft)
+	pasted := applyUiTextFieldPaste(state, input.ClipboardText, field.OnChange)
+	if !pasted {
+		for _, char := range input.CharBuffer {
+			state.Draft += string(char)
+			state.Dirty = true
+			if field.OnChange != nil {
+				field.OnChange(state.Draft)
+			}
 		}
 	}
 	if input.JustPressed[KeyBackspace] && len(state.Draft) > 0 {
@@ -870,6 +873,29 @@ func uiHandleTextFieldInput(layout *uiLayoutNode, eid EntityId, field UiTextFiel
 		state.Focused = false
 		runtime.focused = ""
 	}
+}
+
+func applyUiTextFieldPaste(state *uiWidgetState, clipboardText string, onChange func(string)) bool {
+	if state == nil || clipboardText == "" {
+		return false
+	}
+	text := sanitizeUiSingleLinePaste(clipboardText)
+	if text == "" {
+		return true
+	}
+	state.Draft += text
+	state.Dirty = true
+	if onChange != nil {
+		onChange(state.Draft)
+	}
+	return true
+}
+
+func sanitizeUiSingleLinePaste(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "")
+	text = strings.ReplaceAll(text, "\n", "")
+	text = strings.ReplaceAll(text, "\r", "")
+	return text
 }
 
 func uiHandleNumberFieldInput(layout *uiLayoutNode, eid EntityId, field UiNumberField, input *Input, runtime *UiRuntime, clickedField *string, clickConsumed *bool, hasFocusedField *bool) {
@@ -1016,7 +1042,7 @@ func uiRenderPanel(layout *uiLayoutNode, ctx uiLayoutContext, panel *UiPanel) {
 	if !panel.Borderless {
 		borderInsetY = uiPanelBorderHeight(ctx, scale)
 	}
-	
+
 	borderColor := [4]float32{0.75, 0.82, 0.9, 1} // Brighter, slightly blue-ish default
 	if ctx.textColor != ([4]float32{}) {
 		// Use a slightly dimmed version of text color for border
@@ -1136,7 +1162,7 @@ func uiRenderAsciiGrid(layout *uiLayoutNode, ctx uiLayoutContext) {
 		ascent := uiTextAscent(ctx, scale)
 		// We use a slightly tighter height than the full cell to make it look like a badge
 		textH := ascent // Most of our labels don't have descenders
-		
+
 		if label.BgColor[3] > 0 {
 			textW, _ := uiMeasureText(ctx, label.Text, scale)
 			// Draw the rect centered vertically in the cell

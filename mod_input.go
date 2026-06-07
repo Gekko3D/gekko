@@ -75,6 +75,7 @@ const (
 	KeyKPMinus
 	KeyShift
 	KeyControl
+	KeySuper
 	KeyLeftAlt
 	MouseButtonLeft
 	MouseButtonRight
@@ -98,6 +99,7 @@ type Input struct {
 
 	WindowWidth, WindowHeight int
 	CharBuffer                []rune
+	ClipboardText             string
 }
 
 func (mod InputModule) Install(app *App, cmd *Commands) {
@@ -111,6 +113,7 @@ func (mod InputModule) Install(app *App, cmd *Commands) {
 
 func inputSystem(s *WindowState, input *Input) {
 	input.CharBuffer = nil // Clear buffer at start of frame
+	input.ClipboardText = ""
 	input.MouseScrollX = 0
 	input.MouseScrollY = 0
 	input.GuiCaptured = false
@@ -145,6 +148,10 @@ func inputSystem(s *WindowState, input *Input) {
 			}
 			input.Pressed[key] = false
 		}
+	}
+
+	if inputPasteShortcutPressed(input) {
+		input.ClipboardText = s.windowGlfw.GetClipboardString()
 	}
 
 	// Update Mouse
@@ -273,5 +280,13 @@ var keyToGlfw = map[int]glfw.Key{
 	KeyKPMinus:      glfw.KeyKPSubtract,
 	KeyShift:        glfw.KeyLeftShift,
 	KeyControl:      glfw.KeyLeftControl,
+	KeySuper:        glfw.KeyLeftSuper,
 	KeyLeftAlt:      glfw.KeyLeftAlt,
+}
+
+func inputPasteShortcutPressed(input *Input) bool {
+	if input == nil {
+		return false
+	}
+	return input.JustPressed[KeyV] && (input.Pressed[KeyControl] || input.Pressed[KeySuper])
 }

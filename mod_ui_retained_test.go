@@ -66,6 +66,49 @@ func TestUiRuntimeFocusTransitionBlursPreviousField(t *testing.T) {
 	}
 }
 
+func TestUiTextFieldPastesFocusedClipboardText(t *testing.T) {
+	runtime := newUiRuntime()
+	eid := EntityId(7)
+	layout := &uiLayoutNode{
+		kind: uiNodeTextField,
+		key:  "path",
+		x:    10,
+		y:    10,
+		w:    200,
+		h:    24,
+	}
+	runtime.focus(uiWidgetID(eid, layout.key))
+	var changed string
+	field := UiTextField{
+		Value: "",
+		OnChange: func(text string) {
+			changed = text
+		},
+	}
+	input := &Input{
+		MouseX:        -1,
+		MouseY:        -1,
+		ClipboardText: "/tmp/crossfire.bsp\n",
+		CharBuffer:    []rune{'v'},
+	}
+	clickedField := ""
+	clickConsumed := false
+	hasFocusedField := false
+
+	uiHandleTextFieldInput(layout, eid, field, input, runtime, &clickedField, &clickConsumed, &hasFocusedField)
+
+	state := runtime.touch(uiWidgetID(eid, layout.key))
+	if !hasFocusedField {
+		t.Fatal("expected focused field")
+	}
+	if state.Draft != "/tmp/crossfire.bsp" {
+		t.Fatalf("expected clipboard text to paste without newline, got %q", state.Draft)
+	}
+	if changed != state.Draft {
+		t.Fatalf("expected OnChange to receive pasted value, got %q", changed)
+	}
+}
+
 func TestResolveUiPositionAnchors(t *testing.T) {
 	x, y := resolveUiPosition(UiAnchorTopRight, [2]float32{20, 30}, 100, 50, 1280, 720)
 	if x != 1160 || y != 30 {
