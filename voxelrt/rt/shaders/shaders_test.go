@@ -636,6 +636,12 @@ func TestDeferredSkyRayReconstructionGuardsFarPlaneW(t *testing.T) {
 	}
 }
 
+func TestDeferredDirectionalShadowRejectsOutOfCascadeDepth(t *testing.T) {
+	if !strings.Contains(DeferredLightingWGSL, "proj_pos.z >= -1.0 && proj_pos.z <= 1.0") {
+		t.Fatal("directional shadow sampling must reject receivers outside cascade depth")
+	}
+}
+
 func TestRayReconstructionGuardsFarPlaneW(t *testing.T) {
 	for _, tc := range []struct {
 		name string

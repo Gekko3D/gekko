@@ -361,12 +361,44 @@ func renderRelativeLight(light core.Light, renderOrigin mgl32.Vec3) core.Light {
 	return light
 }
 
-func (m *GpuBufferManager) buildLightsDataForGPU(lights []core.Light) []byte {
+func (m *GpuBufferManager) shadowLayerCacheValid(layer uint32, shadowRevision uint64) bool {
+	if int(layer) >= len(m.shadowCacheStates) || int(layer) >= len(m.ShadowLayerParams) {
+		return false
+	}
+	state := m.shadowCacheStates[layer]
+	params := m.ShadowLayerParams[layer]
+	return state.Initialized &&
+		state.LastLightSignature == params.LightSignature &&
+		state.LastSceneRevision == shadowRevision &&
+		state.LastVoxelUploadRevision == m.VoxelUploadRevision
+}
+
+func (m *GpuBufferManager) localShadowCacheReady(light core.Light, shadowRevision uint64) bool {
+	layerCount := light.ShadowMeta[1]
+	if layerCount == 0 {
+		return false
+	}
+	baseLayer := light.ShadowMeta[0]
+	for layerOffset := uint32(0); layerOffset < layerCount; layerOffset++ {
+		if !m.shadowLayerCacheValid(baseLayer+layerOffset, shadowRevision) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *GpuBufferManager) buildLightsDataForGPU(lights []core.Light, shadowRevision uint64) []byte {
 	gpuLights := make([]core.Light, len(lights))
 	copy(gpuLights, lights)
 	for i := range gpuLights {
 		light := &gpuLights[i]
-		if uint32(light.Params[2]) != core.LightTypeDirectional || light.ShadowMeta[1] == 0 {
+		lightType := uint32(light.Params[2])
+		if lightType != core.LightTypeDirectional && light.ShadowMeta[1] > 0 && !m.localShadowCacheReady(*light, shadowRevision) {
+			light.Params[3] = 0
+			light.ShadowMeta[1] = 0
+			continue
+		}
+		if lightType != core.LightTypeDirectional || light.ShadowMeta[1] == 0 {
 			continue
 		}
 		baseLayer := light.ShadowMeta[0]
@@ -395,7 +427,7 @@ func expectedShadowLayers(lights []core.Light, hasCamera bool) uint32 {
 	var total uint32
 	for _, light := range lights {
 		lightType := uint32(light.Params[2])
-		if lightType == core.LightTypePoint && light.Params[3] <= 0.5 {
+		if light.Params[3] <= 0.5 {
 			continue
 		}
 		switch lightType {
@@ -455,14 +487,15 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 
 	// 4. Lights
-	lightsData := m.buildLightsDataForGPU(scene.Lights)
+	if m.EnsureShadowMapCapacity(totalShadowLayers(scene.Lights)) {
+		m.invalidateShadowCache()
+		recreated = true
+	}
+	lightsData := m.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
 	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
 	}
 	if m.ensureBuffer("ShadowLayerParamsBuf", &m.ShadowLayerParamsBuf, buildShadowLayerParamsData(m.ShadowLayerParams), wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	if m.EnsureShadowMapCapacity(totalShadowLayers(scene.Lights)) {
 		recreated = true
 	}
 
@@ -610,9 +643,6 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 		for c := range l.DirectionalCascades {
 			l.DirectionalCascades[c] = core.DirectionalShadowCascade{}
 		}
-		if lightType == core.LightTypePoint && l.Params[3] <= 0.5 {
-			continue
-		}
 
 		if lightType == core.LightTypeDirectional {
 			if dir.Len() < 1e-4 {
@@ -620,7 +650,7 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 			}
 			dir = dir.Normalize()
 			l.Direction[0], l.Direction[1], l.Direction[2] = dir.X(), dir.Y(), dir.Z()
-			if camera != nil {
+			if camera != nil && l.Params[3] > 0.5 {
 				l.ShadowMeta[0] = nextShadowLayer
 				l.ShadowMeta[1] = core.DirectionalShadowCascadeCount
 				l.ShadowMeta[2] = core.DirectionalShadowCascadeCount
@@ -667,6 +697,9 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 			}
 			dir = dir.Normalize()
 			l.Direction[0], l.Direction[1], l.Direction[2] = dir.X(), dir.Y(), dir.Z()
+			if l.Params[3] <= 0.5 {
+				continue
+			}
 			fov := math.Acos(float64(l.Params[1])) * 2.0
 			proj := mgl32.Perspective(float32(fov), 1.0, 0.1, l.Params[0])
 			view := mgl32.LookAtV(pos, pos.Add(dir), up)
@@ -710,6 +743,9 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 				CosCone:  l.Params[1],
 			})
 		} else if lightType == core.LightTypePoint {
+			if l.Params[3] <= 0.5 {
+				continue
+			}
 			tier := core.ShadowTierFar
 			if camera != nil {
 				tier = classifySpotShadowTier(camera.Position, pos, spotBands)

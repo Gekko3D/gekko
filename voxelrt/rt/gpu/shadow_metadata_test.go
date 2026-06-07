@@ -21,17 +21,17 @@ func TestUpdateLightsAssignsDirectionalCascadesAndShadowLayers(t *testing.T) {
 		Lights: []core.Light{
 			{
 				Direction: [4]float32{0, -1, -0.25, 0},
-				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 1},
 			},
 			{
 				Position:  [4]float32{0, 12, 0, 0},
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
 			},
 			{
 				Position:  [4]float32{24, 12, 0, 0},
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
 			},
 		},
 	}
@@ -83,32 +83,72 @@ func TestUpdateLightsAssignsDirectionalCascadesAndShadowLayers(t *testing.T) {
 	}
 }
 
+func TestUpdateLightsSkipsShadowLayersForNonCastingDirectionalAndSpotLights(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Direction: [4]float32{0, -2, 0, 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+			},
+			{
+				Position:  [4]float32{0, 12, 0, 0},
+				Direction: [4]float32{0, -3, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 16.0/9.0)
+
+	if got := totalShadowLayers(scene.Lights); got != 0 {
+		t.Fatalf("expected non-casting directional/spot lights to allocate no shadow layers, got %d", got)
+	}
+	if len(manager.ShadowLayerParams) != 0 {
+		t.Fatalf("expected no shadow layer params, got %d", len(manager.ShadowLayerParams))
+	}
+	if len(manager.shadowDirectionalVolumes) != 0 {
+		t.Fatalf("expected no directional shadow cull volumes, got %d", len(manager.shadowDirectionalVolumes))
+	}
+	if len(manager.shadowSpotVolumes) != 0 {
+		t.Fatalf("expected no spot shadow cull volumes, got %d", len(manager.shadowSpotVolumes))
+	}
+	if scene.Lights[0].Direction[1] != -1 {
+		t.Fatalf("expected non-casting directional light direction to remain normalized, got %v", scene.Lights[0].Direction)
+	}
+	if scene.Lights[1].Direction[1] != -1 {
+		t.Fatalf("expected non-casting spot light direction to remain normalized, got %v", scene.Lights[1].Direction)
+	}
+}
+
 func TestUpdateLightsUsesConfiguredQualityPreset(t *testing.T) {
 	scene := &core.Scene{
 		Lights: []core.Light{
 			{
 				Direction: [4]float32{0, -1, -0.25, 0},
-				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 1},
 			},
 			{
 				Position:  [4]float32{0, 12, 20, 0},
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
 			},
 			{
 				Position:  [4]float32{0, 12, -5, 0},
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
 			},
 			{
 				Position:  [4]float32{0, 12, -50, 0},
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
 			},
 			{
 				Position:  [4]float32{0, 12, -120, 0},
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
 			},
 		},
 	}
@@ -226,12 +266,12 @@ func TestBuildShadowUpdatesUsesCadenceAndInvalidation(t *testing.T) {
 		Lights: []core.Light{
 			{
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 1},
 			},
 			{
 				Position:  [4]float32{8, 12, 0, 0},
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
 			},
 		},
 	}
@@ -245,7 +285,7 @@ func TestBuildShadowUpdatesUsesCadenceAndInvalidation(t *testing.T) {
 	if len(initial) != 3 {
 		t.Fatalf("expected all 3 shadow layers on first frame, got %d", len(initial))
 	}
-	manager.RecordShadowUpdates(initial, 0, scene.StructureRevision)
+	manager.RecordShadowUpdates(initial, 0, scene.ShadowRevision())
 
 	next := manager.BuildShadowUpdates(scene, camera, 1, false)
 	if len(next) != 2 {
@@ -272,7 +312,7 @@ func TestBuildShadowUpdatesUsesCadenceAndInvalidation(t *testing.T) {
 		t.Fatalf("expected only directional cascade 0 to refresh at frame 1, got c0=%d c1=%d", directionalCascade0, directionalCascade1)
 	}
 
-	manager.RecordShadowUpdates(next, 1, scene.StructureRevision)
+	manager.RecordShadowUpdates(next, 1, scene.ShadowRevision())
 	third := manager.BuildShadowUpdates(scene, camera, 2, false)
 	if len(third) != 3 {
 		t.Fatalf("expected both directional cascades plus the hero spot at frame 2, got %d", len(third))
@@ -290,12 +330,12 @@ func TestBuildShadowUpdatesKeepsDirectionalRefreshWhileCameraMoves(t *testing.T)
 		Lights: []core.Light{
 			{
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 1},
 			},
 			{
 				Position:  [4]float32{8, 12, 0, 0},
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
 			},
 		},
 	}
@@ -304,7 +344,7 @@ func TestBuildShadowUpdatesKeepsDirectionalRefreshWhileCameraMoves(t *testing.T)
 
 	var manager GpuBufferManager
 	manager.UpdateLights(scene, camera, 1.0)
-	manager.RecordShadowUpdates(manager.BuildShadowUpdates(scene, camera, 0, false), 0, scene.StructureRevision)
+	manager.RecordShadowUpdates(manager.BuildShadowUpdates(scene, camera, 0, false), 0, scene.ShadowRevision())
 
 	moving := manager.BuildShadowUpdates(scene, camera, 1, true)
 	directionalCount := 0
@@ -323,7 +363,7 @@ func TestBuildLightsDataForGPUUsesCachedDirectionalCascade(t *testing.T) {
 		Lights: []core.Light{
 			{
 				Direction: [4]float32{0, -1, 0, 0},
-				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 0},
+				Params:    [4]float32{0, 0, float32(core.LightTypeDirectional), 1},
 			},
 		},
 	}
@@ -338,7 +378,7 @@ func TestBuildLightsDataForGPUUsesCachedDirectionalCascade(t *testing.T) {
 	cached.Params[0] = 123.0
 	manager.shadowCachedCascades[layer] = cached
 
-	data := manager.buildLightsDataForGPU(scene.Lights)
+	data := manager.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
 	if len(data) == 0 {
 		t.Fatal("expected light buffer data")
 	}
@@ -347,6 +387,123 @@ func TestBuildLightsDataForGPUUsesCachedDirectionalCascade(t *testing.T) {
 	got := math.Float32frombits(gotBits)
 	if got != 123.0 {
 		t.Fatalf("expected cached directional cascade params to be uploaded, got %v", got)
+	}
+}
+
+func lightParamsWFromData(data []byte, lightIndex int) float32 {
+	const paramsWOffset = 60
+	offset := lightIndex*lightSizeBytes + paramsWOffset
+	return math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
+}
+
+func lightShadowLayerCountFromData(data []byte, lightIndex int) uint32 {
+	const shadowMetaYOffset = 68
+	offset := lightIndex*lightSizeBytes + shadowMetaYOffset
+	return binary.LittleEndian.Uint32(data[offset : offset+4])
+}
+
+func TestBuildLightsDataForGPUDisablesSpotShadowUntilCacheMatches(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position:  [4]float32{8, 12, 0, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+
+	data := manager.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
+	if got := lightParamsWFromData(data, 0); got != 0 {
+		t.Fatalf("expected uninitialized spot shadow to be disabled in GPU data, got casts=%v", got)
+	}
+	if got := lightShadowLayerCountFromData(data, 0); got != 0 {
+		t.Fatalf("expected uninitialized spot shadow layer count 0 in GPU data, got %d", got)
+	}
+
+	updates := manager.BuildShadowUpdates(scene, camera, 0, false)
+	manager.RecordShadowUpdates(updates, 0, scene.ShadowRevision())
+	data = manager.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
+	if got := lightParamsWFromData(data, 0); got != 1 {
+		t.Fatalf("expected initialized spot shadow to remain enabled in GPU data, got casts=%v", got)
+	}
+	if got := lightShadowLayerCountFromData(data, 0); got != 1 {
+		t.Fatalf("expected initialized spot shadow layer count 1 in GPU data, got %d", got)
+	}
+
+	scene.Lights[0].Position[0] = 9
+	manager.UpdateLights(scene, camera, 1.0)
+	data = manager.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
+	if got := lightParamsWFromData(data, 0); got != 0 {
+		t.Fatalf("expected moved spot shadow to be disabled until refreshed, got casts=%v", got)
+	}
+}
+
+func TestBuildLightsDataForGPUDisablesPointShadowUntilAllFacesValid(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position: [4]float32{8, 12, 0, 1},
+				Params:   [4]float32{32, 0, float32(core.LightTypePoint), 1},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+
+	initial := manager.BuildShadowUpdates(scene, camera, 0, false)
+	manager.RecordShadowUpdates(initial, 0, scene.ShadowRevision())
+	data := manager.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
+	if got := lightParamsWFromData(data, 0); got != 0 {
+		t.Fatalf("expected partial point shadow cache to stay disabled, got casts=%v", got)
+	}
+	if got := lightShadowLayerCountFromData(data, 0); got != 0 {
+		t.Fatalf("expected partial point shadow layer count 0 in GPU data, got %d", got)
+	}
+
+	next := manager.BuildShadowUpdates(scene, camera, 1, false)
+	manager.RecordShadowUpdates(next, 1, scene.ShadowRevision())
+	data = manager.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
+	if got := lightParamsWFromData(data, 0); got != 1 {
+		t.Fatalf("expected complete point shadow cache to be enabled, got casts=%v", got)
+	}
+	if got := lightShadowLayerCountFromData(data, 0); got != core.PointShadowFaceCount {
+		t.Fatalf("expected complete point shadow layer count %d, got %d", core.PointShadowFaceCount, got)
+	}
+}
+
+func TestInvalidateShadowCacheClearsLayerValidity(t *testing.T) {
+	var manager GpuBufferManager
+	manager.ensureShadowCacheCapacity(2)
+	manager.shadowCacheStates[0] = shadowCacheState{
+		Initialized:             true,
+		LastUpdatedFrame:        12,
+		LastLightSignature:      34,
+		LastSceneRevision:       56,
+		LastVoxelUploadRevision: 78,
+	}
+	manager.shadowCacheStates[1] = shadowCacheState{
+		Initialized:             true,
+		LastUpdatedFrame:        90,
+		LastLightSignature:      12,
+		LastSceneRevision:       34,
+		LastVoxelUploadRevision: 56,
+	}
+
+	manager.invalidateShadowCache()
+
+	for i, state := range manager.shadowCacheStates {
+		if state != (shadowCacheState{}) {
+			t.Fatalf("expected shadow cache state %d to be cleared, got %+v", i, state)
+		}
 	}
 }
 
@@ -436,7 +593,7 @@ func TestBuildShadowUpdatesRotatesPointFacesAcrossFrames(t *testing.T) {
 			t.Fatalf("expected face update %d, got %d", face, update.CascadeIndex)
 		}
 	}
-	manager.RecordShadowUpdates(initial, 0, scene.StructureRevision)
+	manager.RecordShadowUpdates(initial, 0, scene.ShadowRevision())
 
 	next := manager.BuildShadowUpdates(scene, camera, 1, false)
 	if len(next) != 3 {
@@ -448,7 +605,7 @@ func TestBuildShadowUpdatesRotatesPointFacesAcrossFrames(t *testing.T) {
 			t.Fatalf("expected second frame face update %d, got %d", wantFace, update.CascadeIndex)
 		}
 	}
-	manager.RecordShadowUpdates(next, 1, scene.StructureRevision)
+	manager.RecordShadowUpdates(next, 1, scene.ShadowRevision())
 
 	third := manager.BuildShadowUpdates(scene, camera, 2, false)
 	if len(third) != 3 {

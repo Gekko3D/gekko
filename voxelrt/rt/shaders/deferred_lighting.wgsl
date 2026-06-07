@@ -244,12 +244,12 @@ fn sample_directional_shadow(
     let receiver_depth_n = clamp(receiver_pos_ls.z / receiver_pos_ls.w, -1.0, 1.0);
     let directional_seam_epsilon_n = abs(seam_depth_n - receiver_depth_n);
 
-    let pos_ls = cascade_view_proj * vec4<f32>(pos_ws, 1.0);
-    let proj_pos = pos_ls.xyz / pos_ls.w;
-    let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
-    if (!(pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0)) {
-        return 1.0;
-    }
+	    let pos_ls = cascade_view_proj * vec4<f32>(pos_ws, 1.0);
+	    let proj_pos = pos_ls.xyz / pos_ls.w;
+	    let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
+	    if (!(pos_ls.w > 0.0 && proj_pos.z >= -1.0 && proj_pos.z <= 1.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0)) {
+	        return 1.0;
+	    }
 
     let layer = light.shadow_meta.x + cascade_idx;
     let layer_params = shadow_layer_params[layer];

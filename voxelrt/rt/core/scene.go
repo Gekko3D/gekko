@@ -217,6 +217,13 @@ func NewScene() *Scene {
 	}
 }
 
+func (s *Scene) ShadowRevision() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.shadowBVHRevision
+}
+
 func (s *Scene) markOcclusionWarmup(obj *VoxelObject) {
 	if obj == nil {
 		return

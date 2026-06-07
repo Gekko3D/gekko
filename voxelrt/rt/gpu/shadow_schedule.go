@@ -34,7 +34,7 @@ func shadowTierBudget(tier uint32) int {
 	}
 }
 
-func (m *GpuBufferManager) shadowNeedsRefresh(layer ShadowLayerParams, sceneRevision, frameIndex uint64) (invalidated bool, cadenceDue bool) {
+func (m *GpuBufferManager) shadowNeedsRefresh(layer ShadowLayerParams, shadowRevision, frameIndex uint64) (invalidated bool, cadenceDue bool) {
 	if int(layer.Layer) >= len(m.shadowCacheStates) {
 		return true, true
 	}
@@ -43,7 +43,7 @@ func (m *GpuBufferManager) shadowNeedsRefresh(layer ShadowLayerParams, sceneRevi
 		return true, true
 	}
 	if state.LastLightSignature != layer.LightSignature ||
-		state.LastSceneRevision != sceneRevision ||
+		state.LastSceneRevision != shadowRevision ||
 		state.LastVoxelUploadRevision != m.VoxelUploadRevision {
 		return true, true
 	}
@@ -135,12 +135,13 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 	if len(m.ShadowLayerParams) == 0 {
 		return updates
 	}
+	shadowRevision := scene.ShadowRevision()
 
 	for _, layer := range m.ShadowLayerParams {
 		if layer.Kind != core.ShadowUpdateKindDirectional {
 			continue
 		}
-		invalidated, cadenceDue := m.shadowNeedsRefresh(layer, scene.StructureRevision, frameIndex)
+		invalidated, cadenceDue := m.shadowNeedsRefresh(layer, shadowRevision, frameIndex)
 		if !forceDirectionalRefresh && !invalidated && !cadenceDue {
 			continue
 		}
@@ -181,7 +182,7 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 			if int(layer) >= len(m.ShadowLayerParams) {
 				continue
 			}
-			layerInvalidated, layerCadenceDue := m.shadowNeedsRefresh(m.ShadowLayerParams[layer], scene.StructureRevision, frameIndex)
+			layerInvalidated, layerCadenceDue := m.shadowNeedsRefresh(m.ShadowLayerParams[layer], shadowRevision, frameIndex)
 			invalidated = invalidated || layerInvalidated
 			cadenceDue = cadenceDue || layerCadenceDue
 		}
@@ -239,7 +240,7 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 	return updates
 }
 
-func (m *GpuBufferManager) RecordShadowUpdates(updates []core.ShadowUpdate, frameIndex, sceneRevision uint64) {
+func (m *GpuBufferManager) RecordShadowUpdates(updates []core.ShadowUpdate, frameIndex, shadowRevision uint64) {
 	for _, update := range updates {
 		layer := update.ShadowLayer
 		if int(layer) >= len(m.shadowCacheStates) || int(layer) >= len(m.ShadowLayerParams) {
@@ -249,16 +250,15 @@ func (m *GpuBufferManager) RecordShadowUpdates(updates []core.ShadowUpdate, fram
 		state.Initialized = true
 		state.LastUpdatedFrame = frameIndex
 		state.LastLightSignature = m.ShadowLayerParams[layer].LightSignature
-		state.LastSceneRevision = sceneRevision
+		state.LastSceneRevision = shadowRevision
 		state.LastVoxelUploadRevision = m.VoxelUploadRevision
 	}
 }
 
 func (m *GpuBufferManager) PrepareShadowLights(scene *core.Scene, updates []core.ShadowUpdate) {
-	if m.LightsBuf == nil || len(scene.Lights) == 0 {
+	if m.LightsBuf == nil || len(scene.Lights) == 0 || len(updates) == 0 {
 		return
 	}
-	updatedDirectional := false
 	for _, update := range updates {
 		if update.Kind != core.ShadowUpdateKindDirectional {
 			continue
@@ -271,11 +271,7 @@ func (m *GpuBufferManager) PrepareShadowLights(scene *core.Scene, updates []core
 			continue
 		}
 		m.shadowCachedCascades[update.ShadowLayer] = light.DirectionalCascades[update.CascadeIndex]
-		updatedDirectional = true
 	}
-	if !updatedDirectional {
-		return
-	}
-	lightsData := m.buildLightsDataForGPU(scene.Lights)
+	lightsData := m.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
 	m.Device.GetQueue().WriteBuffer(m.LightsBuf, 0, lightsData)
 }

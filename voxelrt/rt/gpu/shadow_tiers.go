@@ -206,3 +206,9 @@ func (m *GpuBufferManager) ensureShadowCacheCapacity(numLayers uint32) {
 		m.shadowCachedCascades = m.shadowCachedCascades[:numLayers]
 	}
 }
+
+func (m *GpuBufferManager) invalidateShadowCache() {
+	for i := range m.shadowCacheStates {
+		m.shadowCacheStates[i] = shadowCacheState{}
+	}
+}

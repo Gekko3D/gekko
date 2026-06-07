@@ -749,7 +749,6 @@ func (a *App) recordShadowPass(encoder *wgpu.CommandEncoder) error {
 
 	shadowCameraMotion := a.hasShadowCameraMotion()
 	shadowUpdates := manager.BuildShadowUpdates(a.Scene, a.Camera, a.RenderFrameIndex, shadowCameraMotion)
-	manager.PrepareShadowLights(a.Scene, shadowUpdates)
 
 	shadowPointUpdates := 0
 	shadowSpotUpdates := 0
@@ -778,7 +777,6 @@ func (a *App) recordShadowPass(encoder *wgpu.CommandEncoder) error {
 	a.ShadowUpdateSummary = formatShadowUpdateSummary(shadowUpdates)
 
 	if len(shadowUpdates) == 0 {
-		manager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.StructureRevision)
 		return nil
 	}
 	if encoder == nil {
@@ -797,8 +795,9 @@ func (a *App) recordShadowPass(encoder *wgpu.CommandEncoder) error {
 		return fmt.Errorf("shadow bind group 2 is nil")
 	}
 
+	manager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.ShadowRevision())
+	manager.PrepareShadowLights(a.Scene, shadowUpdates)
 	manager.DispatchShadowPass(encoder, shadowUpdates)
-	manager.RecordShadowUpdates(shadowUpdates, a.RenderFrameIndex, a.Scene.StructureRevision)
 	return nil
 }
 
