@@ -23,11 +23,21 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 	}
 
 	def := &ImportedWorldDef{
-		WorldID:            "world-a",
-		Kind:               ImportedWorldKindVoxelWorld,
-		ChunkSize:          16,
-		VoxelResolution:    1,
-		Palette:            []ImportedWorldPaletteColor{{0, 0, 0, 0}, {10, 20, 30, 255}},
+		WorldID:         "world-a",
+		Kind:            ImportedWorldKindVoxelWorld,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Palette:         []ImportedWorldPaletteColor{{0, 0, 0, 0}, {10, 20, 30, 255}},
+		Materials: []ImportedWorldMaterialDef{{
+			ID:                42,
+			PaletteIndex:      1,
+			SourceTextureName: "LIGHT01",
+			BaseColor:         ImportedWorldPaletteColor{10, 20, 30, 255},
+			Kind:              "emissive",
+			CollisionKind:     "solid",
+			EmitsLight:        true,
+			Emissive:          2.5,
+		}},
 		SourceBuildVersion: "importer-1",
 		SourceHash:         "abc123",
 		Tags:               []string{"hl"},
@@ -54,6 +64,9 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 	}
 	if len(loaded.Palette) != len(def.Palette) || loaded.Palette[1] != def.Palette[1] {
 		t.Fatalf("expected imported world palette to round-trip, got %+v", loaded.Palette)
+	}
+	if len(loaded.Materials) != 1 || !loaded.Materials[0].EmitsLight || loaded.Materials[0].Emissive != 2.5 {
+		t.Fatalf("expected imported world materials to round-trip, got %+v", loaded.Materials)
 	}
 	if len(loaded.Entries) != 1 || loaded.Entries[0].ChunkPath != def.Entries[0].ChunkPath {
 		t.Fatalf("expected imported world entries to round-trip, got %+v", loaded.Entries)

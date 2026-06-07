@@ -104,6 +104,7 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 	for _, light := range def.Lights {
 		validateUniqueID(&result, seenIDs, light.ID, light.Name, "light")
 		validateName(&result, light.ID, light.Name, "light")
+		validateAssetLight(&result, light)
 		allItemIDs[light.ID] = "light"
 	}
 	for _, emitter := range def.Emitters {
@@ -205,6 +206,38 @@ func validateName(result *AssetValidationResult, id string, name string, kind st
 	if strings.TrimSpace(name) == "" {
 		result.addError("empty_name", fmt.Sprintf("%s name is required", kind), id, name, kind)
 	}
+}
+
+func validateAssetLight(result *AssetValidationResult, light AssetLightDef) {
+	if !isValidAssetLightType(light.Type) {
+		result.addError("invalid_light_type", fmt.Sprintf("unsupported light type %q", light.Type), light.ID, light.Name, "light")
+	}
+	if light.Intensity < 0 {
+		result.addError("invalid_light_intensity", "light intensity must be non-negative", light.ID, light.Name, "light")
+	}
+	if isLocalAssetLightType(light.Type) {
+		if light.Range <= 0 {
+			result.addError("invalid_light_range", "point and spot light range must be > 0", light.ID, light.Name, "light")
+		}
+	} else if light.Range < 0 {
+		result.addError("invalid_light_range", "light range must be non-negative", light.ID, light.Name, "light")
+	}
+	if light.Type == AssetLightTypeSpot && (light.ConeAngle <= 0 || light.ConeAngle >= 180) {
+		result.addError("invalid_light_cone_angle", "spot light cone angle must be > 0 and < 180", light.ID, light.Name, "light")
+	}
+}
+
+func isValidAssetLightType(lightType AssetLightType) bool {
+	switch lightType {
+	case AssetLightTypePoint, AssetLightTypeDirectional, AssetLightTypeSpot, AssetLightTypeAmbient:
+		return true
+	default:
+		return false
+	}
+}
+
+func isLocalAssetLightType(lightType AssetLightType) bool {
+	return lightType == AssetLightTypePoint || lightType == AssetLightTypeSpot
 }
 
 func validatePartParent(result *AssetValidationResult, partIDs map[string]struct{}, allItemIDs map[string]string, parentID string, itemID string, itemName string, itemKind string) {

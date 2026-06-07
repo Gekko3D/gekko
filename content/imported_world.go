@@ -18,6 +18,7 @@ type ImportedWorldDef struct {
 	ChunkSize          int                          `json:"chunk_size"`
 	VoxelResolution    float32                      `json:"voxel_resolution"`
 	Palette            []ImportedWorldPaletteColor  `json:"palette,omitempty"`
+	Materials          []ImportedWorldMaterialDef   `json:"materials,omitempty"`
 	SourceBuildVersion string                       `json:"source_build_version,omitempty"`
 	SourceHash         string                       `json:"source_hash,omitempty"`
 	Tags               []string                     `json:"tags,omitempty"`
@@ -25,6 +26,20 @@ type ImportedWorldDef struct {
 }
 
 type ImportedWorldPaletteColor [4]uint8
+
+type ImportedWorldMaterialDef struct {
+	ID                int                       `json:"id"`
+	PaletteIndex      uint8                     `json:"palette_index,omitempty"`
+	SourceTextureName string                    `json:"source_texture_name,omitempty"`
+	BaseColor         ImportedWorldPaletteColor `json:"base_color,omitempty"`
+	Kind              string                    `json:"kind,omitempty"`
+	CollisionKind     string                    `json:"collision_kind,omitempty"`
+	Transparent       bool                      `json:"transparent,omitempty"`
+	EmitsLight        bool                      `json:"emits_light,omitempty"`
+	Emissive          float32                   `json:"emissive,omitempty"`
+	SourceWAD         string                    `json:"source_wad,omitempty"`
+	Size              [2]uint32                 `json:"size,omitempty"`
+}
 
 type ImportedWorldChunkEntryDef struct {
 	Coord              TerrainChunkCoordDef `json:"coord"`

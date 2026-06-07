@@ -26,6 +26,9 @@ func main() {
 	flag.IntVar(&opts.SolidBandDepth, "solid-band-depth", hl1.DefaultImportedSolidBandDepth, "solid debug mode fill depth in voxels from reachable playable empty space")
 	flag.Var((*hl1LightModeFlag)(&opts.LightMode), "light-mode", "HL1 light import mode: faithful or point-proxy")
 	flag.BoolVar(&opts.EmitLightFixtures, "emit-light-fixtures", false, "write tiny emissive fixture assets and placements for imported HL1 lights")
+	opts.EmitEmissiveSurfaceLights = true
+	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize point lights from imported emissive surface clusters")
+	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
 	flag.Var((*float32Flag)(&opts.VoxelResolution), "voxel-resolution", "planned voxel resolution")
 	flag.StringVar(&reportPath, "report", "", "report output path")
@@ -62,7 +65,7 @@ func main() {
 	}
 	var levelResult hl1.GeneratedLevelResult
 	if emitLevel {
-		levelResult, err = hl1.BuildGeneratedLevel(opts, summary, debugResult.ManifestPath)
+		levelResult, err = hl1.BuildGeneratedLevel(opts, summary, debugResult.ManifestPath, debugResult.Voxelize)
 		if err != nil {
 			fatalf("build level: %v", err)
 		}

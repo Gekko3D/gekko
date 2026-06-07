@@ -676,6 +676,36 @@ func TestSceneCommitSkipsShadowCasterWorkWithoutShadowCastingLights(t *testing.T
 	}
 }
 
+func TestSceneCommitSkipsShadowCasterWorkForInvalidLocalShadowLights(t *testing.T) {
+	scene := NewScene()
+
+	obj := NewVoxelObject()
+	obj.Transform.Position = mgl32.Vec3{0, 0, -10}
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	scene.AddObject(obj)
+
+	scene.Lights = []Light{
+		{
+			Params: [4]float32{0, 0, float32(LightTypePoint), 1.0},
+		},
+		{
+			Direction: [4]float32{0, -1, 0, 0},
+			Params:    [4]float32{20, 1.0, float32(LightTypeSpot), 1.0},
+		},
+	}
+
+	scene.Commit(testSceneFrustumPlanes(), SceneCommitOptions{
+		CameraPosition: mgl32.Vec3{0, 0, 0},
+	})
+
+	if len(scene.ShadowObjects) != 0 {
+		t.Fatalf("expected invalid local shadow lights to collect no shadow casters, got %d", len(scene.ShadowObjects))
+	}
+	if len(scene.ShadowBVHNodesBytes) != 64 {
+		t.Fatalf("expected empty shadow BVH payload, got %d bytes", len(scene.ShadowBVHNodesBytes))
+	}
+}
+
 // Helper function
 func closeEnough(a, b, epsilon float32) bool {
 	diff := a - b

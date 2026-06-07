@@ -90,11 +90,17 @@ func TestBuildAndSaveGeneratedLevel(t *testing.T) {
 	if loaded.Environment == nil || loaded.Environment.Preset != "fullmoonnight_gi" {
 		t.Fatalf("expected HL1 generated level to use night environment, got %+v", loaded.Environment)
 	}
+	if loaded.Environment.DirectionalCastsShadows == nil || !*loaded.Environment.DirectionalCastsShadows {
+		t.Fatalf("expected HL1 generated level to request directional shadows, got %+v", loaded.Environment)
+	}
 	if len(loaded.Lights) != 3 {
 		t.Fatalf("lights = %+v", loaded.Lights)
 	}
 	if loaded.Lights[0].Type != content.LevelLightTypeAmbient || loaded.Lights[1].Type != content.LevelLightTypePoint || loaded.Lights[2].Type != content.LevelLightTypeSpot {
 		t.Fatalf("light types = %+v", loaded.Lights)
+	}
+	if !loaded.Lights[1].CastsShadows || !loaded.Lights[2].CastsShadows {
+		t.Fatalf("expected imported local lights to cast shadows, got %+v", loaded.Lights)
 	}
 	if loaded.Lights[2].ConeAngle != 45 {
 		t.Fatalf("spot cone = %f", loaded.Lights[2].ConeAngle)
@@ -158,6 +164,92 @@ func TestBuildGeneratedLevelCanEmitPointProxyLights(t *testing.T) {
 	}
 	if level.Level.Lights[1].Type != content.LevelLightTypePoint || level.Level.Lights[1].ConeAngle != 0 {
 		t.Fatalf("point proxy light = %+v", level.Level.Lights[1])
+	}
+}
+
+func TestBuildGeneratedLevelCanEmitEmissiveSurfaceLights(t *testing.T) {
+	dir := t.TempDir()
+	palette := emissivePaletteIndexForToneLevel(emissiveWarmTone, emissiveRampLevels-1)
+	opts := ImportOptions{
+		MapName:                   "emissivemap",
+		OutputRoot:                dir,
+		ChunkSize:                 32,
+		VoxelResolution:           0.1,
+		EmitEmissiveSurfaceLights: true,
+	}
+	summary := ImportSummary{
+		Map: importcommon.MapImport{
+			Source: importcommon.SourceInfo{MapName: "emissivemap"},
+		},
+		Report: importcommon.ImportReport{
+			Source: importcommon.SourceInfo{MapName: "emissivemap"},
+		},
+	}
+	voxelized := VoxelizeResult{
+		Materials: []importcommon.Material{{
+			ID:           int(palette),
+			PaletteIndex: palette,
+			BaseColor:    [4]uint8{255, 224, 132, 255},
+			EmitsLight:   true,
+			Emissive:     3,
+		}},
+	}
+	for x := 0; x < minEmissiveSurfaceLightVoxels; x++ {
+		voxelized.Voxels = append(voxelized.Voxels, importcommon.Voxel{
+			X: x, Y: 10, Z: 20, Palette: palette, MaterialID: int(palette), SolidKind: "emissive",
+		})
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "worlds", "emissivemap.gkworld"), voxelized)
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.Level.Lights) != 2 {
+		t.Fatalf("lights = %+v", level.Level.Lights)
+	}
+	light := level.Level.Lights[1]
+	if light.Type != content.LevelLightTypePoint || light.SourceTag != "hl1:emissive_surface" {
+		t.Fatalf("emissive light = %+v", light)
+	}
+	if light.Intensity <= 0 || light.Range <= 0 || light.CastsShadows {
+		t.Fatalf("unexpected emissive light params = %+v", light)
+	}
+}
+
+func TestBuildGeneratedLevelCanDisableEmissiveSurfaceLights(t *testing.T) {
+	dir := t.TempDir()
+	palette := emissivePaletteIndexForToneLevel(emissiveWarmTone, emissiveRampLevels-1)
+	opts := ImportOptions{
+		MapName:         "emissivemap",
+		OutputRoot:      dir,
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	}
+	summary := ImportSummary{
+		Map: importcommon.MapImport{Source: importcommon.SourceInfo{MapName: "emissivemap"}},
+		Report: importcommon.ImportReport{
+			Source: importcommon.SourceInfo{MapName: "emissivemap"},
+		},
+	}
+	voxelized := VoxelizeResult{
+		Materials: []importcommon.Material{{
+			ID:           int(palette),
+			PaletteIndex: palette,
+			BaseColor:    [4]uint8{255, 224, 132, 255},
+			EmitsLight:   true,
+			Emissive:     3,
+		}},
+	}
+	for x := 0; x < minEmissiveSurfaceLightVoxels; x++ {
+		voxelized.Voxels = append(voxelized.Voxels, importcommon.Voxel{
+			X: x, Y: 0, Z: 0, Palette: palette, MaterialID: int(palette), SolidKind: "emissive",
+		})
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "worlds", "emissivemap.gkworld"), voxelized)
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.Level.Lights) != 1 {
+		t.Fatalf("lights = %+v", level.Level.Lights)
 	}
 }
 

@@ -688,6 +688,20 @@ func TestDirectionalShadowRejectsOutOfCascadeDepth(t *testing.T) {
 	}
 }
 
+func TestSpotShadowRejectsOutOfProjectionDepth(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code string
+	}{
+		{name: "deferred lighting", code: DeferredLightingWGSL},
+		{name: "transparent overlay", code: TransparentOverlayWGSL},
+	} {
+		if strings.Count(tc.code, "pos_ls.w > 0.0 && proj_pos.z >= -1.0 && proj_pos.z <= 1.0") < 2 {
+			t.Fatalf("%s shader must reject spot and directional receivers outside shadow projection depth", tc.name)
+		}
+	}
+}
+
 func TestVoxelShadowSamplingStaysHardNoPCF(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -700,12 +714,52 @@ func TestVoxelShadowSamplingStaysHardNoPCF(t *testing.T) {
 			"pcf_visibility",
 			"sample_weight_sum",
 			"mix(hard_visibility",
+			"mix(primary_visibility",
+			"secondary_visibility",
+			"smoothstep(blend_start",
 			"ao_quality.z",
 			"ao_quality.w",
 		} {
 			if strings.Contains(tc.code, forbidden) {
 				t.Fatalf("%s shader must keep voxel shadows hard; found %q", tc.name, forbidden)
 			}
+		}
+	}
+}
+
+func TestShadowGroupIDsUseExactSplitFloatLanes(t *testing.T) {
+	for _, needle := range []string{
+		"let shadow_group_low_packed = ((hit_res.shadow_group_id & SHADOW_GROUP_LOW_MASK) * 2u) + (hit_res.two_sided_lighting & 1u);",
+		"let shadow_group_high = hit_res.shadow_group_id >> 16u;",
+		"textureStore(out_material, global_id.xy, vec4<f32>(f32(shadow_group_high), f32(shadow_group_low_packed), hit_res.shadow_seam_epsilon, f32(mat_idx)))",
+	} {
+		if !strings.Contains(GBufferWGSL, needle) {
+			t.Fatalf("gbuffer shader missing exact shadow-group packing %q", needle)
+		}
+	}
+
+	for _, needle := range []string{
+		"fn encode_shadow_group_id(group_id: u32) -> vec2<f32>",
+		"vec4<f32>(depth_m, encoded_shadow_group.x, encoded_shadow_group.y, 0.0)",
+		"vec4<f32>(depth_ndc, encoded_shadow_group.x, encoded_shadow_group.y, 0.0)",
+	} {
+		if !strings.Contains(ShadowMapWGSL, needle) {
+			t.Fatalf("shadow-map shader missing exact shadow-group packing %q", needle)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		code string
+	}{
+		{name: "deferred lighting", code: DeferredLightingWGSL},
+		{name: "transparent overlay", code: TransparentOverlayWGSL},
+	} {
+		if !strings.Contains(tc.code, "fn decode_shadow_group_id(low_f: f32, high_f: f32) -> u32") {
+			t.Fatalf("%s shader missing exact shadow-group decode helper", tc.name)
+		}
+		if strings.Contains(tc.code, "shadow_sample.g + 0.5") || strings.Contains(tc.code, "hard_shadow_sample.g + 0.5") {
+			t.Fatalf("%s shader still decodes shadow group IDs from a single float lane", tc.name)
 		}
 	}
 }

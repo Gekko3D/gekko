@@ -128,6 +128,7 @@ const MIN_ROUGHNESS: f32 = 0.045;
 const PBR_EPSILON: f32 = 1e-4;
 const VOXEL_SHADOW_GRAZING_NDOTL: f32 = 0.06;
 const VOXEL_SHADOW_GRAZING_BIAS_SCALE: f32 = 1.75;
+const SHADOW_GROUP_LOW_MASK: u32 = 0xFFFFu;
 
 fn saturate(v: f32) -> f32 {
     return clamp(v, 0.0, 1.0);
@@ -148,6 +149,21 @@ fn voxel_shadow_bias(base_bias: f32, ndotl: f32) -> f32 {
 
 fn voxel_shadow_skip_grazing(ndotl: f32) -> bool {
     return ndotl <= VOXEL_SHADOW_GRAZING_NDOTL;
+}
+
+fn decode_shadow_group_id(low_f: f32, high_f: f32) -> u32 {
+    let low = u32(low_f + 0.5) & SHADOW_GROUP_LOW_MASK;
+    let high = (u32(high_f + 0.5) & SHADOW_GROUP_LOW_MASK) << 16u;
+    return high | low;
+}
+
+fn decode_receiver_shadow_group_id(low_packed_f: f32, high_f: f32) -> u32 {
+    let low_packed = u32(low_packed_f + 0.5);
+    return decode_shadow_group_id(f32((low_packed >> 1u) & SHADOW_GROUP_LOW_MASK), high_f);
+}
+
+fn decode_receiver_two_sided_lighting(low_packed_f: f32) -> bool {
+    return (u32(low_packed_f + 0.5) & 1u) != 0u;
 }
 
 fn srgb_channel_to_linear(v: f32) -> f32 {
@@ -212,18 +228,11 @@ fn choose_directional_cascade(light: Light, hit_pos: vec3<f32>) -> DirectionalCa
     // Cascades are authored as view-depth slices, not spherical shells around the camera.
     let receiver_depth = max(dot(hit_pos - camera_render_pos(), camera_forward_ws()), 0.0);
     let split_depth = light.directional_cascades[0].params.x;
-    let transition = max(4.0, max(light.directional_cascades[0].params.y * 24.0, split_depth * 0.12));
-    let blend_start = max(0.0, split_depth - transition);
-    let blend_end = split_depth + transition;
-    if (receiver_depth <= blend_start) {
+    if (receiver_depth <= split_depth) {
         return DirectionalCascadeSelection(0u, 0u, 0.0);
     }
-    if (receiver_depth >= blend_end) {
-        let far_idx = min(1u, cascade_count - 1u);
-        return DirectionalCascadeSelection(far_idx, far_idx, 0.0);
-    }
-    let blend = smoothstep(blend_start, blend_end, receiver_depth);
-    return DirectionalCascadeSelection(0u, min(1u, cascade_count - 1u), blend);
+    let far_idx = min(1u, cascade_count - 1u);
+    return DirectionalCascadeSelection(far_idx, far_idx, 0.0);
 }
 
 fn sample_directional_shadow(
@@ -278,7 +287,7 @@ fn sample_directional_shadow(
     let bias = voxel_shadow_bias(directional_compare_bias, NdL);
     let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
     let hard_sampled_depth_n = clamp(hard_shadow_sample.r, -1.0, 1.0);
-    let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
+    let hard_sampled_shadow_group_id = decode_shadow_group_id(hard_shadow_sample.g, hard_shadow_sample.b);
     let hard_same_shadow_group =
         receiver_shadow_group_id != 0u &&
         hard_sampled_shadow_group_id == receiver_shadow_group_id;
@@ -336,7 +345,7 @@ fn sample_point_shadow(
     );
     let shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
     let sampled_depth = shadow_sample.r;
-    let sampled_shadow_group_id = u32(shadow_sample.g + 0.5);
+    let sampled_shadow_group_id = decode_shadow_group_id(shadow_sample.g, shadow_sample.b);
     let same_shadow_group =
         receiver_shadow_group_id != 0u &&
         sampled_shadow_group_id == receiver_shadow_group_id;
@@ -409,13 +418,7 @@ fn calculate_lighting(
         if (casts_shadows && light.shadow_meta.y > 0u) {
             if (light_type == 1u) {
                 let selection = choose_directional_cascade(light, shadow_receiver_pos);
-                let primary_visibility = sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, shadow_L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
-                let secondary_visibility = select(
-                    primary_visibility,
-                    sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, shadow_L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.secondary_index),
-                    selection.secondary_index != selection.primary_index,
-                );
-                attenuation *= mix(primary_visibility, secondary_visibility, selection.blend);
+                attenuation *= sample_directional_shadow(light, shadow_receiver_pos, shadow_normal, shadow_L, receiver_shadow_group_id, receiver_shadow_seam_epsilon, selection.primary_index);
             } else if (light_type == 2u) {
                 var pos_ws = shadow_receiver_pos;
                 let shadow_view_proj = light.view_proj;
@@ -426,7 +429,7 @@ fn calculate_lighting(
                 let proj_pos = pos_ls.xyz / pos_ls.w;
                 let shadow_uv = vec2<f32>(proj_pos.x * 0.5 + 0.5, -proj_pos.y * 0.5 + 0.5);
 
-                if (pos_ls.w > 0.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
+                if (pos_ls.w > 0.0 && proj_pos.z >= -1.0 && proj_pos.z <= 1.0 && shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0) {
                     let base_px_f = shadow_uv * vec2<f32>(f32(effective_resolution), f32(effective_resolution));
                     let base_px = vec2<i32>(
                         i32(clamp(base_px_f.x, 0.0, f32(effective_resolution - 1u))),
@@ -442,7 +445,7 @@ fn calculate_lighting(
                     if (!voxel_shadow_skip_grazing(NdL)) {
                         let hard_shadow_sample = textureLoad(in_shadow_maps, base_px, i32(layer), 0);
                         let hard_sampled_depth = hard_shadow_sample.r;
-                        let hard_sampled_shadow_group_id = u32(hard_shadow_sample.g + 0.5);
+                        let hard_sampled_shadow_group_id = decode_shadow_group_id(hard_shadow_sample.g, hard_shadow_sample.b);
                         let hard_same_shadow_group =
                             receiver_shadow_group_id != 0u &&
                             hard_sampled_shadow_group_id == receiver_shadow_group_id;
@@ -604,14 +607,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ambient_occlusion = clamp(normal_data.w, 0.0, 1.0);
     let mat_data = textureLoad(in_material, global_id.xy, 0);
     
-    let palette_idx = u32(mat_data.x + 0.5);
-    let packed_shadow_group = u32(mat_data.y + 0.5);
-    let receiver_shadow_group_id = packed_shadow_group >> 1u;
-    let two_sided_lighting = (packed_shadow_group & 1u) != 0u;
+    let receiver_shadow_group_id = decode_receiver_shadow_group_id(mat_data.y, mat_data.x);
+    let two_sided_lighting = decode_receiver_two_sided_lighting(mat_data.y);
     let receiver_shadow_seam_epsilon = max(mat_data.z, 0.0);
-    let material_base = u32(mat_data.w + 0.5);
+    let mat_idx = u32(mat_data.w + 0.5);
     
-    let mat_idx = material_base + palette_idx * 4u;
     let mat_packed = materials[mat_idx];
     let base_color = srgb_to_linear(mat_packed.xyz);
     let emissive_linear = srgb_to_linear(materials[mat_idx + 1u].xyz);

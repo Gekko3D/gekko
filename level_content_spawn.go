@@ -979,14 +979,15 @@ func levelTransformToComponent(def content.LevelTransformDef) TransformComponent
 }
 
 type environmentPresetConfig struct {
-	ambientIntensity     float32
-	directionalIntensity float32
-	ambientColor         [3]float32
-	directionalColor     [3]float32
-	directionalRotation  mgl32.Quat
-	skyAmbientMix        float32
-	skySun               *SkyboxSunComponent
-	spawnSkybox          func(*Commands)
+	ambientIntensity        float32
+	directionalIntensity    float32
+	directionalCastsShadows bool
+	ambientColor            [3]float32
+	directionalColor        [3]float32
+	directionalRotation     mgl32.Quat
+	skyAmbientMix           float32
+	skySun                  *SkyboxSunComponent
+	spawnSkybox             func(*Commands)
 }
 
 func canonicalEnvironmentPresetName(name string) string {
@@ -1153,6 +1154,10 @@ func applyLevelEnvironment(cmd *Commands, env *content.LevelEnvironmentDef) {
 		return
 	}
 	cfg := environmentPreset(env.Preset)
+	directionalCastsShadows := cfg.directionalCastsShadows
+	if env.DirectionalCastsShadows != nil {
+		directionalCastsShadows = *env.DirectionalCastsShadows
+	}
 
 	cmd.AddEntity(
 		&LightComponent{
@@ -1169,10 +1174,11 @@ func applyLevelEnvironment(cmd *Commands, env *content.LevelEnvironmentDef) {
 			Scale:    mgl32.Vec3{1, 1, 1},
 		},
 		&LightComponent{
-			Type:      LightTypeDirectional,
-			Intensity: cfg.directionalIntensity,
-			Color:     cfg.directionalColor,
-			Range:     1000,
+			Type:         LightTypeDirectional,
+			Intensity:    cfg.directionalIntensity,
+			Color:        cfg.directionalColor,
+			Range:        1000,
+			CastsShadows: directionalCastsShadows,
 		},
 	)
 

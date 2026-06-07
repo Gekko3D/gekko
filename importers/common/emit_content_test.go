@@ -16,7 +16,7 @@ func TestBuildImportedWorldEmissionPartitionsVoxels(t *testing.T) {
 		{X: 99, Y: 0, Z: 0, Palette: 0, MaterialID: 1},
 	}, []Material{
 		{ID: 1, PaletteIndex: 1, BaseColor: [4]uint8{10, 20, 30, 255}},
-		{ID: 2, PaletteIndex: 2, BaseColor: [4]uint8{40, 50, 60, 255}},
+		{ID: 2, PaletteIndex: 2, BaseColor: [4]uint8{40, 50, 60, 255}, SourceTextureName: "LIGHT01", EmitsLight: true, Emissive: 2.5},
 	}, ImportedWorldEmitOptions{
 		WorldID:            "test_world",
 		ChunkSize:          32,
@@ -37,6 +37,9 @@ func TestBuildImportedWorldEmissionPartitionsVoxels(t *testing.T) {
 	}
 	if emission.Manifest.Palette[1] != (content.ImportedWorldPaletteColor{10, 20, 30, 255}) {
 		t.Fatalf("palette[1] = %+v", emission.Manifest.Palette[1])
+	}
+	if len(emission.Manifest.Materials) != 2 || !emission.Manifest.Materials[1].EmitsLight || emission.Manifest.Materials[1].Emissive != 2.5 {
+		t.Fatalf("materials = %+v", emission.Manifest.Materials)
 	}
 	negativeChunk := emission.Chunks[[3]int{-1, 0, 0}]
 	if negativeChunk == nil || len(negativeChunk.Voxels) != 1 || negativeChunk.Voxels[0].X != 31 {

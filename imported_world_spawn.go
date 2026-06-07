@@ -119,5 +119,35 @@ func ImportedWorldPaletteAsset(assets *AssetServer, def *content.ImportedWorldDe
 	if !nonZero {
 		return AssetId{}
 	}
-	return assets.CreateVoxelPalette(palette, nil)
+	materials := importedWorldVoxMaterials(def.Materials)
+	return assets.CreateVoxelPalette(palette, materials)
+}
+
+func importedWorldVoxMaterials(materials []content.ImportedWorldMaterialDef) []VoxMaterial {
+	out := make([]VoxMaterial, 0, len(materials))
+	for _, material := range materials {
+		if material.PaletteIndex == 0 {
+			continue
+		}
+		props := map[string]interface{}{}
+		if material.EmitsLight || material.Emissive > 0 {
+			emissive := material.Emissive
+			if emissive <= 0 {
+				emissive = 2.0
+			}
+			props["_type"] = "_emit"
+			props["_emit"] = emissive
+		} else if material.Transparent {
+			props["_type"] = "_glass"
+			props["_trans"] = float32(0.35)
+		}
+		if len(props) == 0 {
+			continue
+		}
+		out = append(out, VoxMaterial{
+			ID:       int(material.PaletteIndex),
+			Property: props,
+		})
+	}
+	return out
 }

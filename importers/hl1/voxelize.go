@@ -440,7 +440,11 @@ func bakedFacePalette(face Face, key [3]int, opts VoxelizeOptions) (int, bool) {
 		}
 	}
 	if opts.TextureStore != nil {
-		if color, ok := sampleFaceTextureColor(face, key, opts); ok {
+		if sample, ok := sampleFaceTextureTexel(face, key, opts); ok {
+			if index, emissive := emissivePaletteIndexForTexel(face.TextureName, sample.Color); emissive {
+				return int(index), true
+			}
+			color := sample.Color
 			return bakedPaletteIndex(color), true
 		}
 	}
@@ -472,6 +476,28 @@ func sampleFaceTextureTexel(face Face, key [3]int, opts VoxelizeOptions) (Textur
 		return TextureSample{}, false
 	}
 	return opts.TextureStore.SampleTexel(face.TextureName, u, v)
+}
+
+func emissivePaletteIndexForTexel(textureName string, color [4]uint8) (uint8, bool) {
+	if !isCandidateEmissiveTextureName(textureName) || color[3] == 0 {
+		return 0, false
+	}
+	r := int(color[0])
+	g := int(color[1])
+	b := int(color[2])
+	luma := (r*299 + g*587 + b*114) / 1000
+	maxChannel := max(r, max(g, b))
+	if luma < 105 || maxChannel < 140 {
+		return 0, false
+	}
+	level := min(emissiveRampLevels-1, max(0, (luma-105)*(emissiveRampLevels-1)/(255-105)))
+	if b > r+24 && b > g-8 {
+		return emissivePaletteIndexForToneLevel(emissiveCoolTone, level), true
+	}
+	if r > b+18 || g > b+18 {
+		return emissivePaletteIndexForToneLevel(emissiveWarmTone, level), true
+	}
+	return emissivePaletteIndexForToneLevel(emissiveNeutralTone, level), true
 }
 
 func sampleFaceTextureCutoutOpaqueSample(face Face, key [3]int, opts VoxelizeOptions) (TextureSample, bool, bool) {

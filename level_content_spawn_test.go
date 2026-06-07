@@ -916,12 +916,14 @@ func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 
 	ambientCount := 0
 	directionalCount := 0
+	directionalCastsShadows := false
 	MakeQuery1[LightComponent](cmd).Map(func(_ EntityId, light *LightComponent) bool {
 		switch light.Type {
 		case LightTypeAmbient:
 			ambientCount++
 		case LightTypeDirectional:
 			directionalCount++
+			directionalCastsShadows = light.CastsShadows
 		}
 		return true
 	})
@@ -930,6 +932,9 @@ func TestLoadAndSpawnAuthoredLevelAppliesDaylightEnvironment(t *testing.T) {
 	}
 	if directionalCount != 1 {
 		t.Fatalf("expected one directional light, got %d", directionalCount)
+	}
+	if directionalCastsShadows {
+		t.Fatal("expected daylight environment directional light not to cast shadows by default")
 	}
 
 	var gradientCount, noiseCount int
@@ -1086,7 +1091,11 @@ func TestLoadAndSpawnAuthoredLevelAppliesFullmoonNightGIEnvironment(t *testing.T
 	cmd := app.Commands()
 
 	level := content.NewLevelDef("fullmoon-gi")
-	level.Environment = &content.LevelEnvironmentDef{Preset: "fullmoonnight_gi"}
+	castsShadows := true
+	level.Environment = &content.LevelEnvironmentDef{
+		Preset:                  "fullmoonnight_gi",
+		DirectionalCastsShadows: &castsShadows,
+	}
 
 	if _, err := SpawnAuthoredLevel(cmd, nil, NewRuntimeContentLoader(), level, AuthoredLevelSpawnOptions{}); err != nil {
 		t.Fatalf("SpawnAuthoredLevel failed: %v", err)
@@ -1105,6 +1114,9 @@ func TestLoadAndSpawnAuthoredLevelAppliesFullmoonNightGIEnvironment(t *testing.T
 			directionalFound = true
 			if light.Intensity != 0.16 {
 				t.Fatalf("expected fullmoonnight_gi directional intensity 0.16, got %f", light.Intensity)
+			}
+			if !light.CastsShadows {
+				t.Fatal("expected fullmoonnight_gi directional light to honor directional_casts_shadows")
 			}
 		}
 		return true

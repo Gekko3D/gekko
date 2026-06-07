@@ -35,12 +35,14 @@ func TestValidateAssetDetectsBrokenParentAndCycleAndUnsupportedParentTarget(t *t
 			ParentID:  "missing",
 			Transform: identityTransform(),
 			Type:      AssetLightTypePoint,
+			Range:     1,
 		},
 		{
 			ID:        "light-parent",
 			Name:      "light-parent",
 			Transform: identityTransform(),
 			Type:      AssetLightTypePoint,
+			Range:     1,
 		},
 		{
 			ID:        "light-child",
@@ -48,6 +50,7 @@ func TestValidateAssetDetectsBrokenParentAndCycleAndUnsupportedParentTarget(t *t
 			ParentID:  "light-parent",
 			Transform: identityTransform(),
 			Type:      AssetLightTypePoint,
+			Range:     1,
 		},
 	}
 
@@ -65,6 +68,61 @@ func TestValidateAssetDetectsEmptyNamesAndMarkerKind(t *testing.T) {
 	result := ValidateAsset(def, AssetValidationOptions{})
 	assertHasValidationCode(t, result, "empty_name")
 	assertHasValidationCode(t, result, "empty_marker_kind")
+}
+
+func TestValidateAssetValidatesLightPayload(t *testing.T) {
+	def := NewAssetDef("lights")
+	def.Lights = []AssetLightDef{
+		{
+			ID:        "bad-type",
+			Name:      "bad-type",
+			Type:      AssetLightType("area"),
+			Transform: identityTransform(),
+		},
+		{
+			ID:        "bad-range",
+			Name:      "bad-range",
+			Type:      AssetLightTypePoint,
+			Intensity: -1,
+			Range:     -2,
+			Transform: identityTransform(),
+		},
+		{
+			ID:        "zero-range",
+			Name:      "zero-range",
+			Type:      AssetLightTypePoint,
+			Range:     0,
+			Transform: identityTransform(),
+		},
+		{
+			ID:        "zero-cone",
+			Name:      "zero-cone",
+			Type:      AssetLightTypeSpot,
+			Range:     1,
+			ConeAngle: 0,
+			Transform: identityTransform(),
+		},
+		{
+			ID:        "wide-cone",
+			Name:      "wide-cone",
+			Type:      AssetLightTypeSpot,
+			Range:     1,
+			ConeAngle: 180,
+			Transform: identityTransform(),
+		},
+	}
+
+	result := ValidateAsset(def, AssetValidationOptions{})
+	if !result.HasErrors() {
+		t.Fatal("expected validation errors")
+	}
+	if result.HardErrorCount != 6 {
+		t.Fatalf("expected 6 validation errors, got %d: %+v", result.HardErrorCount, result.Issues)
+	}
+	assertHasValidationCode(t, result, "invalid_light_type")
+	assertHasValidationCode(t, result, "invalid_light_intensity")
+	assertHasValidationCode(t, result, "invalid_light_range")
+	assertHasValidationCode(t, result, "invalid_light_cone_angle")
 }
 
 func TestValidateAssetValidatesVoxAndSceneNodePayloads(t *testing.T) {

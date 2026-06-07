@@ -806,7 +806,8 @@ func representativeAuthoredAssetForTest() *content.AssetDef {
 			Rotation: content.Quat{0, 0, 0, 1},
 			Scale:    content.Vec3{1, 1, 1},
 		},
-		Type: content.AssetLightTypePoint,
+		Type:  content.AssetLightTypePoint,
+		Range: 6,
 	}}
 	def.Emitters = []content.AssetEmitterDef{{
 		ID:       "emitter",

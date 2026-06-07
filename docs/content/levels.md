@@ -122,6 +122,8 @@ So `base_world` is part of the authored level contract, but it is mainly consume
 The field is intentionally small:
 
 - `preset`
+- optional `directional_casts_shadows`, which requests shadow maps for the
+  preset directional light
 - optional tags
 
 `applyLevelEnvironment(...)` converts the preset into ambient light, directional light, sky ambient, sun configuration, and skybox layers.

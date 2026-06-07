@@ -14,6 +14,7 @@ const BRICK_FLAG_UNIFORM_MATERIAL: u32 = 2u;
 const VOXEL_AUX_OCCUPANCY_WORD_COUNT: u32 = 16u;
 const VOXEL_NORMAL_VALID_BIT: u32 = 0x40u;
 const VOXEL_NORMAL_TWO_SIDED_BIT: u32 = 0x80u;
+const SHADOW_GROUP_LOW_MASK: u32 = 0xFFFFu;
 
 // ============== STRUCTS ==============
 
@@ -1228,8 +1229,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         textureStore(out_depth, global_id.xy, vec4<f32>(hit_res.t, hit_res.voxel_center_ws));
         textureStore(out_normal, global_id.xy, vec4<f32>(hit_res.normal, hit_res.ao));
-        let packed_shadow_group = hit_res.shadow_group_id * 2u + hit_res.two_sided_lighting;
-        textureStore(out_material, global_id.xy, vec4<f32>(f32(hit_res.palette_idx), f32(packed_shadow_group), hit_res.shadow_seam_epsilon, f32(hit_res.material_idx)));
+        let shadow_group_low_packed = ((hit_res.shadow_group_id & SHADOW_GROUP_LOW_MASK) * 2u) + (hit_res.two_sided_lighting & 1u);
+        let shadow_group_high = hit_res.shadow_group_id >> 16u;
+        textureStore(out_material, global_id.xy, vec4<f32>(f32(shadow_group_high), f32(shadow_group_low_packed), hit_res.shadow_seam_epsilon, f32(mat_idx)));
     } else {
         textureStore(out_depth, global_id.xy, vec4<f32>(far_t, 0.0, 0.0, 0.0));
         textureStore(out_normal, global_id.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));

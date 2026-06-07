@@ -128,11 +128,15 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		if light.Intensity < 0 {
 			result.addError("invalid_light_intensity", "light intensity must be non-negative", "", "", "", "", "", "", "")
 		}
-		if light.Range < 0 {
+		if isLocalLevelLightType(light.Type) {
+			if light.Range <= 0 {
+				result.addError("invalid_light_range", "point and spot light range must be > 0", "", "", "", "", "", "", "")
+			}
+		} else if light.Range < 0 {
 			result.addError("invalid_light_range", "light range must be non-negative", "", "", "", "", "", "", "")
 		}
-		if light.ConeAngle < 0 {
-			result.addError("invalid_light_cone_angle", "light cone angle must be non-negative", "", "", "", "", "", "", "")
+		if light.Type == LevelLightTypeSpot && (light.ConeAngle <= 0 || light.ConeAngle >= 180) {
+			result.addError("invalid_light_cone_angle", "spot light cone angle must be > 0 and < 180", "", "", "", "", "", "", "")
 		}
 		if light.SourceRadius < 0 {
 			result.addError("invalid_light_source_radius", "light source radius must be non-negative", "", "", "", "", "", "", "")
@@ -162,6 +166,10 @@ func isValidLevelLightType(lightType LevelLightType) bool {
 	default:
 		return false
 	}
+}
+
+func isLocalLevelLightType(lightType LevelLightType) bool {
+	return lightType == LevelLightTypePoint || lightType == LevelLightTypeSpot
 }
 
 func (r *LevelValidationResult) addError(code string, message string, placementID string, placementPath string, volumeID string, volumePath string, markerID string, brushID string, baseWorldPath string) {

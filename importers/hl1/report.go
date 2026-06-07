@@ -26,16 +26,18 @@ const (
 )
 
 type ImportOptions struct {
-	GameDir             string
-	MapName             string
-	BSPPath             string
-	OutputRoot          string
-	ChunkSize           int
-	VoxelResolution     float32
-	MaxSolidSampleCells int64
-	SolidBandDepth      int
-	LightMode           HL1LightMode
-	EmitLightFixtures   bool
+	GameDir                   string
+	MapName                   string
+	BSPPath                   string
+	OutputRoot                string
+	ChunkSize                 int
+	VoxelResolution           float32
+	MaxSolidSampleCells       int64
+	SolidBandDepth            int
+	LightMode                 HL1LightMode
+	EmitLightFixtures         bool
+	EmitEmissiveSurfaceLights bool
+	MaxEmissiveSurfaceLights  int
 }
 
 type ImportSummary struct {
@@ -311,11 +313,20 @@ func materialsFromBSPTextures(textures []Texture, wads []*WAD) []importcommon.Ma
 			Kind:              materialKind(texture.Name),
 			CollisionKind:     collisionKind(texture.Name),
 			Transparent:       isTransparentTexture(texture.Name),
+			EmitsLight:        isCandidateEmissiveTextureName(texture.Name),
+			Emissive:          emissiveStrengthForTextureName(texture.Name),
 			SourceWAD:         sourceWAD,
 			Size:              [2]uint32{texture.Width, texture.Height},
 		})
 	}
 	return out
+}
+
+func emissiveStrengthForTextureName(textureName string) float32 {
+	if !isCandidateEmissiveTextureName(textureName) {
+		return 0
+	}
+	return 2.0
 }
 
 func countSkyFaces(faces []Face) int {
@@ -402,6 +413,8 @@ func supportedClass(className string) bool {
 func materialKind(textureName string) string {
 	name := strings.ToLower(textureName)
 	switch {
+	case isCandidateEmissiveTextureName(textureName):
+		return "emissive"
 	case name == "sky":
 		return "sky"
 	case strings.Contains(name, "aaatrigger") || strings.Contains(name, "trigger"):
@@ -425,6 +438,37 @@ func materialKind(textureName string) string {
 	default:
 		return "structural"
 	}
+}
+
+func isCandidateEmissiveTextureName(textureName string) bool {
+	name := normalizedEmissiveTextureName(textureName)
+	switch {
+	case strings.HasPrefix(name, "~"):
+		return true
+	case strings.Contains(name, "light"),
+		strings.Contains(name, "lght"),
+		strings.Contains(name, "lite"),
+		strings.Contains(name, "lamp"),
+		strings.Contains(name, "bulb"),
+		strings.Contains(name, "fluor"),
+		strings.Contains(name, "flour"),
+		strings.Contains(name, "glow"):
+		return true
+	default:
+		raw := strings.ToLower(strings.TrimSpace(textureName))
+		return strings.HasPrefix(raw, "+") && (strings.Contains(raw, "light") || strings.Contains(raw, "lght") || strings.Contains(raw, "lite"))
+	}
+}
+
+func normalizedEmissiveTextureName(textureName string) string {
+	name := strings.ToLower(strings.TrimSpace(textureName))
+	if len(name) > 2 && (name[0] == '+' || name[0] == '-') {
+		prefix := name[1]
+		if (prefix >= '0' && prefix <= '9') || (prefix >= 'a' && prefix <= 'j') {
+			name = name[2:]
+		}
+	}
+	return name
 }
 
 func collisionKind(textureName string) string {

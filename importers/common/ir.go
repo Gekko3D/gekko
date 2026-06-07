@@ -31,6 +31,7 @@ type Material struct {
 	CollisionKind     string    `json:"collision_kind,omitempty"`
 	Transparent       bool      `json:"transparent,omitempty"`
 	EmitsLight        bool      `json:"emits_light,omitempty"`
+	Emissive          float32   `json:"emissive,omitempty"`
 	SourceWAD         string    `json:"source_wad,omitempty"`
 	Size              [2]uint32 `json:"size,omitempty"`
 }

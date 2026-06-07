@@ -27,6 +27,7 @@ const (
 	occlusionWarmupFrames      = 3
 	occlusionHysteresisFrames  = 3
 	defaultOcclusionDepthSlack = 0.25
+	sceneMaxSpotShadowFOV      = math.Pi - 1e-4
 )
 
 type SceneCommitOptions struct {
@@ -577,7 +578,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 
 func sceneHasShadowCastingLights(lights []Light) bool {
 	for _, light := range lights {
-		if light.Params[3] > 0.5 {
+		if sceneLightCastsValidShadows(light) {
 			return true
 		}
 	}
@@ -586,18 +587,38 @@ func sceneHasShadowCastingLights(lights []Light) bool {
 
 func sceneHasShadowCastingDirectionalLight(lights []Light) bool {
 	for _, light := range lights {
-		if light.Params[3] > 0.5 && uint32(light.Params[2]) == LightTypeDirectional {
+		if sceneLightCastsValidShadows(light) && uint32(light.Params[2]) == LightTypeDirectional {
 			return true
 		}
 	}
 	return false
 }
 
+func sceneLightCastsValidShadows(light Light) bool {
+	if light.Params[3] <= 0.5 {
+		return false
+	}
+	switch uint32(light.Params[2]) {
+	case LightTypeDirectional:
+		return true
+	case LightTypePoint:
+		return light.Params[0] > 0
+	case LightTypeSpot:
+		if light.Params[0] <= 0 {
+			return false
+		}
+		fov := math.Acos(float64(light.Params[1])) * 2.0
+		return fov > 0 && fov < sceneMaxSpotShadowFOV && !math.IsNaN(fov) && !math.IsInf(fov, 0)
+	default:
+		return false
+	}
+}
+
 func collectSceneLocalShadowCullVolumes(lights []Light) ([]sceneSpotShadowCullVolume, []scenePointShadowCullVolume) {
 	spots := make([]sceneSpotShadowCullVolume, 0, len(lights))
 	points := make([]scenePointShadowCullVolume, 0, len(lights))
 	for _, light := range lights {
-		if light.Params[3] <= 0.5 {
+		if !sceneLightCastsValidShadows(light) {
 			continue
 		}
 		switch uint32(light.Params[2]) {

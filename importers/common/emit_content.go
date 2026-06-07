@@ -97,6 +97,7 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 			ChunkSize:          opts.ChunkSize,
 			VoxelResolution:    opts.VoxelResolution,
 			Palette:            paletteFromMaterials(materials),
+			Materials:          importedWorldMaterialsFromMaterials(materials),
 			SourceBuildVersion: opts.SourceBuildVersion,
 			SourceHash:         opts.SourceHash,
 			Tags:               append([]string(nil), opts.Tags...),
@@ -143,6 +144,33 @@ func paletteFromMaterials(materials []Material) []content.ImportedWorldPaletteCo
 		palette[index] = content.ImportedWorldPaletteColor{color[0], color[1], color[2], color[3]}
 	}
 	return palette
+}
+
+func importedWorldMaterialsFromMaterials(materials []Material) []content.ImportedWorldMaterialDef {
+	out := make([]content.ImportedWorldMaterialDef, 0, len(materials))
+	for i, material := range materials {
+		index := int(material.PaletteIndex)
+		if index <= 0 {
+			index = i + 1
+		}
+		if index <= 0 || index > 255 {
+			continue
+		}
+		out = append(out, content.ImportedWorldMaterialDef{
+			ID:                material.ID,
+			PaletteIndex:      uint8(index),
+			SourceTextureName: material.SourceTextureName,
+			BaseColor:         content.ImportedWorldPaletteColor{material.BaseColor[0], material.BaseColor[1], material.BaseColor[2], material.BaseColor[3]},
+			Kind:              material.Kind,
+			CollisionKind:     material.CollisionKind,
+			Transparent:       material.Transparent,
+			EmitsLight:        material.EmitsLight,
+			Emissive:          material.Emissive,
+			SourceWAD:         material.SourceWAD,
+			Size:              material.Size,
+		})
+	}
+	return out
 }
 
 func sortedChunkCoords(chunks map[[3]int]*content.ImportedWorldChunkDef) [][3]int {

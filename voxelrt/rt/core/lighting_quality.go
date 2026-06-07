@@ -16,8 +16,10 @@ type AmbientOcclusionQuality struct {
 type ShadowQualityConfig struct {
 	DirectionalCascadeDistances [DirectionalShadowCascadeCount]float32
 	SpotShadowDistanceBands     [3]float32
-	DirectionalShadowSoftness   float32
-	SpotShadowSoftness          float32
+	// Deprecated: voxel shadows are hard-sampled; this field is ignored.
+	DirectionalShadowSoftness float32
+	// Deprecated: voxel shadows are hard-sampled; this field is ignored.
+	SpotShadowSoftness float32
 }
 
 type LightingQualityConfig struct {
@@ -42,8 +44,6 @@ func LightingQualityPresetConfig(preset LightingQualityPreset) LightingQualityCo
 			Shadow: ShadowQualityConfig{
 				DirectionalCascadeDistances: [DirectionalShadowCascadeCount]float32{36.0, 112.0},
 				SpotShadowDistanceBands:     [3]float32{18.0, 42.0, 88.0},
-				DirectionalShadowSoftness:   0.35,
-				SpotShadowSoftness:          0.20,
 			},
 		}
 	case LightingQualityPresetQuality:
@@ -56,8 +56,6 @@ func LightingQualityPresetConfig(preset LightingQualityPreset) LightingQualityCo
 			Shadow: ShadowQualityConfig{
 				DirectionalCascadeDistances: [DirectionalShadowCascadeCount]float32{64.0, 224.0},
 				SpotShadowDistanceBands:     [3]float32{32.0, 72.0, 144.0},
-				DirectionalShadowSoftness:   1.00,
-				SpotShadowSoftness:          0.70,
 			},
 		}
 	default:
@@ -70,8 +68,6 @@ func LightingQualityPresetConfig(preset LightingQualityPreset) LightingQualityCo
 			Shadow: ShadowQualityConfig{
 				DirectionalCascadeDistances: [DirectionalShadowCascadeCount]float32{48.0, 160.0},
 				SpotShadowDistanceBands:     [3]float32{24.0, 56.0, 120.0},
-				DirectionalShadowSoftness:   0.65,
-				SpotShadowSoftness:          0.40,
 			},
 		}
 	}
@@ -101,18 +97,8 @@ func (cfg LightingQualityConfig) WithDefaults() LightingQualityConfig {
 	if cfg.Shadow.SpotShadowDistanceBands == [3]float32{} {
 		cfg.Shadow.SpotShadowDistanceBands = base.Shadow.SpotShadowDistanceBands
 	}
-	if cfg.Shadow.DirectionalShadowSoftness <= 0 {
-		cfg.Shadow.DirectionalShadowSoftness = base.Shadow.DirectionalShadowSoftness
-	}
-	if cfg.Shadow.SpotShadowSoftness <= 0 {
-		cfg.Shadow.SpotShadowSoftness = base.Shadow.SpotShadowSoftness
-	}
-	if cfg.Shadow.DirectionalShadowSoftness > 1 {
-		cfg.Shadow.DirectionalShadowSoftness = 1
-	}
-	if cfg.Shadow.SpotShadowSoftness > 1 {
-		cfg.Shadow.SpotShadowSoftness = 1
-	}
+	cfg.Shadow.DirectionalShadowSoftness = 0
+	cfg.Shadow.SpotShadowSoftness = 0
 
 	return cfg
 }

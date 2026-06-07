@@ -9,6 +9,7 @@ import (
 )
 
 func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
+	directionalCastsShadows := true
 	level := &LevelDef{
 		Name:      "Station",
 		ChunkSize: 48,
@@ -46,8 +47,9 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 			SourcePath: "assets/heightmap.png",
 		},
 		Environment: &LevelEnvironmentDef{
-			Preset: "orbit",
-			Tags:   []string{"placeholder"},
+			Preset:                  "orbit",
+			DirectionalCastsShadows: &directionalCastsShadows,
+			Tags:                    []string{"placeholder"},
 		},
 		Lights: []LevelLightDef{{
 			ID:            "light-1",
@@ -196,6 +198,9 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	}
 	if loaded.Environment == nil || loaded.Environment.Preset != "orbit" {
 		t.Fatalf("expected placeholder environment to round-trip, got %+v", loaded.Environment)
+	}
+	if loaded.Environment.DirectionalCastsShadows == nil || !*loaded.Environment.DirectionalCastsShadows {
+		t.Fatalf("expected directional shadow flag to round-trip, got %+v", loaded.Environment)
 	}
 	if len(loaded.Lights) != 1 || loaded.Lights[0].Type != LevelLightTypeSpot || loaded.Lights[0].ConeAngle != 45 || loaded.Lights[0].SourceRadius != 0.25 || loaded.Lights[0].EmitterLinkID != 42 {
 		t.Fatalf("expected lights to round-trip, got %+v", loaded.Lights)
@@ -397,6 +402,76 @@ func TestValidateLevelValidatesBrushesAndMaterials(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "invalid_material_payload")
 	assertHasLevelValidationCode(t, result, "missing_material_reference")
 	assertHasLevelValidationCode(t, result, "invalid_brush_payload")
+}
+
+func TestValidateLevelRejectsInvalidSpotCone(t *testing.T) {
+	def := NewLevelDef("lights")
+	def.Lights = []LevelLightDef{
+		{
+			ID:        "zero-cone",
+			Name:      "zero-cone",
+			Type:      LevelLightTypeSpot,
+			Range:     1,
+			ConeAngle: 0,
+		},
+		{
+			ID:        "wide-cone",
+			Name:      "wide-cone",
+			Type:      LevelLightTypeSpot,
+			Range:     1,
+			ConeAngle: 180,
+		},
+		{
+			ID:        "point-zero-cone",
+			Name:      "point-zero-cone",
+			Type:      LevelLightTypePoint,
+			Range:     1,
+			ConeAngle: 0,
+		},
+	}
+
+	result := ValidateLevel(def, LevelValidationOptions{})
+	if !result.HasErrors() {
+		t.Fatal("expected validation errors")
+	}
+	if result.HardErrorCount != 2 {
+		t.Fatalf("expected only the two spot cones to fail validation, got %d: %+v", result.HardErrorCount, result.Issues)
+	}
+	assertHasLevelValidationCode(t, result, "invalid_light_cone_angle")
+}
+
+func TestValidateLevelRejectsZeroRangeLocalLights(t *testing.T) {
+	def := NewLevelDef("lights")
+	def.Lights = []LevelLightDef{
+		{
+			ID:    "zero-point",
+			Name:  "zero-point",
+			Type:  LevelLightTypePoint,
+			Range: 0,
+		},
+		{
+			ID:        "zero-spot",
+			Name:      "zero-spot",
+			Type:      LevelLightTypeSpot,
+			Range:     0,
+			ConeAngle: 45,
+		},
+		{
+			ID:    "directional-zero-range",
+			Name:  "directional-zero-range",
+			Type:  LevelLightTypeDirectional,
+			Range: 0,
+		},
+	}
+
+	result := ValidateLevel(def, LevelValidationOptions{})
+	if !result.HasErrors() {
+		t.Fatal("expected validation errors")
+	}
+	if result.HardErrorCount != 2 {
+		t.Fatalf("expected only the two local lights to fail validation, got %d: %+v", result.HardErrorCount, result.Issues)
+	}
+	assertHasLevelValidationCode(t, result, "invalid_light_range")
 }
 
 func TestValidateLevelRejectsInvalidBaseWorld(t *testing.T) {

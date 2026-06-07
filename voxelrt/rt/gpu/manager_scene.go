@@ -16,6 +16,7 @@ import (
 
 const lightSizeBytes = 496
 const forceHashLookupEnv = "GEKKO_XBM_FORCE_HASH_LOOKUP"
+const maxSpotShadowFOV = math.Pi - 1e-4
 
 type directSectorLookupMetadata struct {
 	LookupMode uint32
@@ -436,12 +437,26 @@ func expectedShadowLayers(lights []core.Light, hasCamera bool) uint32 {
 				total += core.DirectionalShadowCascadeCount
 			}
 		case core.LightTypePoint:
+			if !localLightRangeValid(light) {
+				continue
+			}
 			total += core.PointShadowFaceCount
 		case core.LightTypeSpot:
+			if !localLightRangeValid(light) {
+				continue
+			}
 			total++
 		}
 	}
 	return total
+}
+
+func spotShadowFOVFromCosCone(cosCone float32) float64 {
+	return math.Acos(float64(cosCone)) * 2.0
+}
+
+func localLightRangeValid(light core.Light) bool {
+	return light.Params[0] > 0
 }
 
 func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraState, aspect float32, renderOrigin mgl32.Vec3) bool {
@@ -576,8 +591,8 @@ func buildCameraUniformData(viewProj, invView, invProj mgl32.Mat4, camPos, light
 	binary.LittleEndian.PutUint32(buf[268:], 0) // pad2.y
 	binary.LittleEndian.PutUint32(buf[272:], math.Float32bits(float32(lightingQuality.AmbientOcclusion.SampleCount)))
 	binary.LittleEndian.PutUint32(buf[276:], math.Float32bits(lightingQuality.AmbientOcclusion.Radius))
-	binary.LittleEndian.PutUint32(buf[280:], math.Float32bits(lightingQuality.Shadow.DirectionalShadowSoftness))
-	binary.LittleEndian.PutUint32(buf[284:], math.Float32bits(lightingQuality.Shadow.SpotShadowSoftness))
+	binary.LittleEndian.PutUint32(buf[280:], 0) // ao_quality.z: reserved shadow style control
+	binary.LittleEndian.PutUint32(buf[284:], 0) // ao_quality.w: reserved shadow style control
 	binary.LittleEndian.PutUint32(buf[288:], math.Float32bits(farPlane))
 	binary.LittleEndian.PutUint32(buf[292:], math.Float32bits(farPlane))
 	binary.LittleEndian.PutUint32(buf[296:], 0)
@@ -634,10 +649,11 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 	nextShadowLayer := uint32(0)
 	for i := range scene.Lights {
 		l := &scene.Lights[i]
-		lightType := uint32(l.Params[2])
-		pos := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
-		dir := mgl32.Vec3{l.Direction[0], l.Direction[1], l.Direction[2]}
-		l.ShadowMeta = [4]uint32{}
+			lightType := uint32(l.Params[2])
+			pos := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
+			dir := mgl32.Vec3{l.Direction[0], l.Direction[1], l.Direction[2]}
+			emitterLinkID := l.ShadowMeta[3]
+			l.ShadowMeta = [4]uint32{0, 0, 0, emitterLinkID}
 		l.ViewProj = [16]float32{}
 		l.InvViewProj = [16]float32{}
 		for c := range l.DirectionalCascades {
@@ -691,16 +707,22 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 				nextShadowLayer += core.DirectionalShadowCascadeCount
 			}
 		} else if lightType == core.LightTypeSpot {
-			up := shadowUpVector(dir)
 			if dir.Len() < 1e-4 {
 				dir = mgl32.Vec3{0, -1, 0}
 			}
 			dir = dir.Normalize()
+			up := shadowUpVector(dir)
 			l.Direction[0], l.Direction[1], l.Direction[2] = dir.X(), dir.Y(), dir.Z()
 			if l.Params[3] <= 0.5 {
 				continue
 			}
-			fov := math.Acos(float64(l.Params[1])) * 2.0
+			if !localLightRangeValid(*l) {
+				continue
+			}
+			fov := spotShadowFOVFromCosCone(l.Params[1])
+			if fov <= 0 || fov >= maxSpotShadowFOV || math.IsNaN(fov) || math.IsInf(fov, 0) {
+				continue
+			}
 			proj := mgl32.Perspective(float32(fov), 1.0, 0.1, l.Params[0])
 			view := mgl32.LookAtV(pos, pos.Add(dir), up)
 			vp := proj.Mul4(view)
@@ -744,6 +766,9 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 			})
 		} else if lightType == core.LightTypePoint {
 			if l.Params[3] <= 0.5 {
+				continue
+			}
+			if !localLightRangeValid(*l) {
 				continue
 			}
 			tier := core.ShadowTierFar

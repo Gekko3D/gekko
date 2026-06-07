@@ -208,8 +208,9 @@ type LevelWaterBodyDef struct {
 }
 
 type LevelEnvironmentDef struct {
-	Preset string   `json:"preset,omitempty"`
-	Tags   []string `json:"tags,omitempty"`
+	Preset                  string   `json:"preset,omitempty"`
+	DirectionalCastsShadows *bool    `json:"directional_casts_shadows,omitempty"`
+	Tags                    []string `json:"tags,omitempty"`
 }
 
 type LevelMarkerDef struct {

@@ -133,9 +133,85 @@ func TestVoxelizeFacesCPUBakesTextureSampleIntoPalette(t *testing.T) {
 			t.Fatalf("voxel baked palette = %+v, want %d", voxel, want)
 		}
 	}
-	if len(result.Materials) != 252 {
+	if len(result.Materials) != 255 {
 		t.Fatalf("baked palette materials = %d", len(result.Materials))
 	}
+}
+
+func TestVoxelizeFacesCPUBakesBrightLampTexelAsEmissive(t *testing.T) {
+	texture := TexturePixels{
+		Name:   "LIGHTWALL",
+		Width:  1,
+		Height: 1,
+		Pixels: []byte{0},
+		Colors: [][3]uint8{{250, 220, 120}},
+	}
+	store := &TextureStore{byName: map[string]TexturePixels{"lightwall": texture}}
+	face := Face{
+		TextureID:   0,
+		TextureName: "LIGHTWALL",
+		Normal:      vec3(0, 0, 1),
+		TexInfo: TexInfo{
+			S: TextureAxis{Axis: vec3(1, 0, 0)},
+			T: TextureAxis{Axis: vec3(0, 1, 0)},
+		},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0),
+			vec3(16, 0, 0),
+			vec3(16, 16, 0),
+			vec3(0, 16, 0),
+		},
+	}
+	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{VoxelResolution: 0.1, TextureStore: store})
+	if len(result.Voxels) == 0 {
+		t.Fatal("no voxels")
+	}
+	for _, voxel := range result.Voxels {
+		if !emissivePaletteIndexHasTone(voxel.Palette, emissiveWarmTone) || voxel.MaterialID != int(voxel.Palette) {
+			t.Fatalf("voxel baked palette = %+v, want emissive", voxel)
+		}
+	}
+}
+
+func TestEmissivePaletteIndexRequiresLampNameAndBrightTexel(t *testing.T) {
+	if _, ok := emissivePaletteIndexForTexel("METAL", [4]uint8{255, 240, 200, 255}); ok {
+		t.Fatal("metal texture should not emit even when bright")
+	}
+	if _, ok := emissivePaletteIndexForTexel("LIGHTWALL", [4]uint8{80, 80, 80, 255}); ok {
+		t.Fatal("dark lamp texel should not emit")
+	}
+	if got, ok := emissivePaletteIndexForTexel("+0LIGHT", [4]uint8{210, 230, 255, 255}); !ok || !emissivePaletteIndexHasTone(got, emissiveCoolTone) {
+		t.Fatalf("expected animated cool light texel, got index=%d ok=%v", got, ok)
+	}
+	if got, ok := emissivePaletteIndexForTexel("+0~fifts_lght01", [4]uint8{170, 145, 96, 255}); !ok || !emissivePaletteIndexHasTone(got, emissiveWarmTone) {
+		t.Fatalf("expected HL1 ~ lght texture to emit warm, got index=%d ok=%v", got, ok)
+	}
+	if got, ok := emissivePaletteIndexForTexel("+0~generic65", [4]uint8{150, 150, 145, 255}); !ok || !emissivePaletteIndexHasTone(got, emissiveNeutralTone) {
+		t.Fatalf("expected HL1 ~ generic light texture to emit neutral, got index=%d ok=%v", got, ok)
+	}
+	if _, ok := emissivePaletteIndexForTexel("+0~light6a", [4]uint8{125, 112, 84, 255}); ok {
+		t.Fatal("dim light6a texel should not emit")
+	}
+	if got, ok := emissivePaletteIndexForTexel("+0~light6a", [4]uint8{150, 132, 96, 255}); !ok || !emissivePaletteIndexHasTone(got, emissiveWarmTone) {
+		t.Fatalf("expected dimmer HL1 light texture to emit warm, got index=%d ok=%v", got, ok)
+	}
+	low, ok := emissivePaletteIndexForTexel("+0~fifts_lght01", [4]uint8{150, 132, 96, 255})
+	if !ok {
+		t.Fatal("expected low warm lamp texel to emit")
+	}
+	high, ok := emissivePaletteIndexForTexel("+0~fifts_lght01", [4]uint8{255, 224, 132, 255})
+	if !ok {
+		t.Fatal("expected high warm lamp texel to emit")
+	}
+	if low == high {
+		t.Fatalf("expected emissive ramp to preserve brightness variation, got same index %d", low)
+	}
+}
+
+func emissivePaletteIndexHasTone(index uint8, tone int) bool {
+	start := emissivePaletteIndexForToneLevel(tone, 0)
+	end := emissivePaletteIndexForToneLevel(tone, emissiveRampLevels-1)
+	return index >= start && index <= end
 }
 
 func TestVoxelizeFacesCPUSkipsCutoutTextureTransparentTexels(t *testing.T) {

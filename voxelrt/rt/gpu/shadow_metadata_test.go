@@ -16,6 +16,15 @@ func testShadowCasterObject(minB, maxB mgl32.Vec3) *core.VoxelObject {
 	return obj
 }
 
+func assertFiniteMat4(t *testing.T, mat [16]float32) {
+	t.Helper()
+	for i, v := range mat {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			t.Fatalf("matrix element %d is not finite: %v", i, v)
+		}
+	}
+}
+
 func TestUpdateLightsAssignsDirectionalCascadesAndShadowLayers(t *testing.T) {
 	scene := &core.Scene{
 		Lights: []core.Light{
@@ -83,6 +92,34 @@ func TestUpdateLightsAssignsDirectionalCascadesAndShadowLayers(t *testing.T) {
 	}
 }
 
+func TestUpdateLightsPreservesEmitterLinkShadowMetadata(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position:   [4]float32{4, 8, -2, 1},
+				Params:     [4]float32{24, 0, float32(core.LightTypePoint), 1.0},
+				ShadowMeta: [4]uint32{0, 0, 0, 77},
+			},
+			{
+				Direction:  [4]float32{0, -1, 0, 0},
+				Params:     [4]float32{0, 0, float32(core.LightTypeDirectional), 1},
+				ShadowMeta: [4]uint32{0, 0, 0, 88},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 1.0)
+
+	if got := scene.Lights[0].ShadowMeta[3]; got != 77 {
+		t.Fatalf("expected point light emitter link to survive shadow metadata rebuild, got %d", got)
+	}
+	if got := scene.Lights[1].ShadowMeta[3]; got != 88 {
+		t.Fatalf("expected directional light emitter link to survive shadow metadata rebuild, got %d", got)
+	}
+}
+
 func TestUpdateLightsSkipsShadowLayersForNonCastingDirectionalAndSpotLights(t *testing.T) {
 	scene := &core.Scene{
 		Lights: []core.Light{
@@ -120,6 +157,104 @@ func TestUpdateLightsSkipsShadowLayersForNonCastingDirectionalAndSpotLights(t *t
 	}
 	if scene.Lights[1].Direction[1] != -1 {
 		t.Fatalf("expected non-casting spot light direction to remain normalized, got %v", scene.Lights[1].Direction)
+	}
+}
+
+func TestUpdateLightsSkipsInvalidSpotShadowCone(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position:  [4]float32{0, 12, 0, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, 1, float32(core.LightTypeSpot), 1},
+			},
+			{
+				Position:  [4]float32{8, 12, 0, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{32, 0, float32(core.LightTypeSpot), 1},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 16.0/9.0)
+
+	if got := scene.Lights[0].ShadowMeta; got != [4]uint32{} {
+		t.Fatalf("expected zero-cone spot shadow metadata to stay empty, got %v", got)
+	}
+	if got := scene.Lights[1].ShadowMeta; got != [4]uint32{} {
+		t.Fatalf("expected 180-degree spot shadow metadata to stay empty, got %v", got)
+	}
+	if len(manager.shadowSpotVolumes) != 0 {
+		t.Fatalf("expected invalid spot cones to add no cull volumes, got %d", len(manager.shadowSpotVolumes))
+	}
+}
+
+func TestUpdateLightsSkipsZeroRangeLocalShadows(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position:  [4]float32{0, 12, 0, 0},
+				Direction: [4]float32{0, -1, 0, 0},
+				Params:    [4]float32{0, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
+			},
+			{
+				Position: [4]float32{8, 12, 0, 0},
+				Params:   [4]float32{0, 0, float32(core.LightTypePoint), 1},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 16.0/9.0)
+
+	if got := scene.Lights[0].ShadowMeta; got != [4]uint32{} {
+		t.Fatalf("expected zero-range spot shadow metadata to stay empty, got %v", got)
+	}
+	if got := scene.Lights[1].ShadowMeta; got != [4]uint32{} {
+		t.Fatalf("expected zero-range point shadow metadata to stay empty, got %v", got)
+	}
+	if len(manager.ShadowLayerParams) != 0 {
+		t.Fatalf("expected zero-range local shadows to allocate no layers, got %d", len(manager.ShadowLayerParams))
+	}
+	if len(manager.shadowSpotVolumes) != 0 {
+		t.Fatalf("expected zero-range spot to add no cull volumes, got %d", len(manager.shadowSpotVolumes))
+	}
+	if len(manager.shadowPointVolumes) != 0 {
+		t.Fatalf("expected zero-range point to add no cull volumes, got %d", len(manager.shadowPointVolumes))
+	}
+}
+
+func TestUpdateLightsFallbackSpotDirectionProducesFiniteShadowMatrix(t *testing.T) {
+	scene := &core.Scene{
+		Lights: []core.Light{
+			{
+				Position:  [4]float32{0, 12, 0, 0},
+				Direction: [4]float32{0, 0, 0, 0},
+				Params:    [4]float32{32, float32(math.Cos(math.Pi / 6)), float32(core.LightTypeSpot), 1},
+			},
+		},
+	}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{0, 3, 20}
+
+	var manager GpuBufferManager
+	manager.UpdateLights(scene, camera, 16.0/9.0)
+
+	if got, want := scene.Lights[0].ShadowMeta, [4]uint32{0, 1, 0, 0}; got != want {
+		t.Fatalf("expected fallback spot shadow metadata %v, got %v", want, got)
+	}
+	if scene.Lights[0].Direction != [4]float32{0, -1, 0, 0} {
+		t.Fatalf("expected fallback spot direction [0 -1 0 0], got %v", scene.Lights[0].Direction)
+	}
+	assertFiniteMat4(t, scene.Lights[0].ViewProj)
+	assertFiniteMat4(t, scene.Lights[0].InvViewProj)
+	if len(manager.shadowSpotVolumes) != 1 {
+		t.Fatalf("expected fallback spot to add one cull volume, got %d", len(manager.shadowSpotVolumes))
 	}
 }
 

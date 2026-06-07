@@ -9,6 +9,7 @@ const EMPTY_VOXEL: u32 = 0u;
 const BRICK_FLAG_SOLID: u32 = 1u;
 const BRICK_FLAG_UNIFORM_MATERIAL: u32 = 2u;
 const SHADOW_NO_HIT_T: f32 = 1e20;
+const SHADOW_GROUP_LOW_MASK: u32 = 0xFFFFu;
 
 // ============== STRUCTS ==============
 
@@ -404,6 +405,13 @@ fn should_skip_object_for_light(object_id: u32) -> bool {
     return object_params[object_id].emitter_link_id == g_light_emitter_link_id;
 }
 
+fn encode_shadow_group_id(group_id: u32) -> vec2<f32> {
+    return vec2<f32>(
+        f32(group_id & SHADOW_GROUP_LOW_MASK),
+        f32(group_id >> 16u),
+    );
+}
+
 fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, object_id: u32) -> HitResult {
     var result = HitResult(false, SHADOW_NO_HIT_T, vec3<f32>(0.0), vec3<f32>(0.0), 0u);
     let params = object_params[object_id];
@@ -730,15 +738,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Write occluder depth from the voxel center to act like a solid 3d pixel.
     if (hit_res.hit) {
+        let encoded_shadow_group = encode_shadow_group_id(hit_res.shadow_group_id);
         if (update.kind == 2u || light_type == 2u) {
             // Point and Spot lights: store linear distance from light position (meters)
             let depth_m = distance(light.position.xyz, hit_res.voxel_center_ws);
-            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_m, f32(hit_res.shadow_group_id), 0.0, 0.0));
+            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_m, encoded_shadow_group.x, encoded_shadow_group.y, 0.0));
         } else {
             // Directional/others: store NDC depth for stable generic shadowing.
             let pos_ls = light_view_proj * vec4<f32>(hit_res.voxel_center_ws, 1.0);
             let depth_ndc = clamp(pos_ls.z / pos_ls.w, -1.0, 1.0);
-            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_ndc, f32(hit_res.shadow_group_id), 0.0, 0.0));
+            textureStore(out_shadow_map, global_id.xy, i32(update.shadow_layer), vec4<f32>(depth_ndc, encoded_shadow_group.x, encoded_shadow_group.y, 0.0));
         }
     } else {
         if (light_type == 2u || update.kind == 2u) {

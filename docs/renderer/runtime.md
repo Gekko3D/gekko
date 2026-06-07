@@ -207,6 +207,9 @@ The remaining broad `voxelRtSystem` bridge is now core-only: it syncs voxel scen
 - no dedicated position target
 - `GBufferDepth.r` stores hit distance along the camera ray
 - `GBufferDepth.gba` stores voxel-center world position for voxel-stable shadowing
+- `GBufferMaterial.xy` stores the receiver shadow group as exact split 16-bit lanes, with the low lane also carrying the two-sided-lighting flag
+- `GBufferMaterial.z` stores shadow seam epsilon
+- `GBufferMaterial.w` stores the final material-table index
 - deferred lighting can reconstruct the exact visible hit position from screen UV, camera inverse matrices, and `GBufferDepth.r`
 - reverse-z affects only the projection matrices that generate those camera rays; `GBufferDepth.r` remains linear hit distance along the camera ray
 - live opaque shading evaluates view- and direct-light terms from the stored voxel-center world position so each visible voxel shades as one cell
@@ -245,9 +248,9 @@ Current implementation notes:
 - Opaque deferred point and spot lights evaluate attenuation from the stored voxel center, matching the transparent overlay path.
 - Point-light shadows use six cube faces stored in the shadow-map array and are sampled with hard voxel-stable compares.
   - Keep them discrete per receiving voxel. Do not add per-voxel gradient filtering that turns a microvoxel into a soft-lit surface patch.
-- Shadow softness is controlled separately for directional and spot lights through `LightingQualityConfig.Shadow`.
-  - Lower values push toward harder voxel-block shadows.
-  - Higher values keep more of the filtered penumbra look.
+- Voxel shadow sampling is intentionally hard.
+  - `LightingQualityConfig.Shadow` still controls cascade distances and local-light tier bands.
+  - Deprecated shadow-softness fields are ignored so a receiving voxel keeps one discrete shadow response.
 
 ### Transparency / WBOIT
 
