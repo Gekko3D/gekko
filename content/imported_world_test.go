@@ -37,6 +37,20 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 			CollisionKind:     "solid",
 			EmitsLight:        true,
 			Emissive:          2.5,
+			Roughness:         0.35,
+			Metallic:          0.2,
+			Tags:              []string{"material:emissive"},
+		}},
+		SourceMaterials: []ImportedWorldMaterialDef{{
+			ID:                7,
+			PaletteIndex:      7,
+			SourceTextureName: "METAL01",
+			BaseColor:         ImportedWorldPaletteColor{80, 90, 100, 255},
+			Kind:              "metal",
+			CollisionKind:     "solid",
+			Roughness:         0.5,
+			Metallic:          0.85,
+			Tags:              []string{"material:metal"},
 		}},
 		SourceBuildVersion: "importer-1",
 		SourceHash:         "abc123",
@@ -67,6 +81,12 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 	}
 	if len(loaded.Materials) != 1 || !loaded.Materials[0].EmitsLight || loaded.Materials[0].Emissive != 2.5 {
 		t.Fatalf("expected imported world materials to round-trip, got %+v", loaded.Materials)
+	}
+	if loaded.Materials[0].Roughness != 0.35 || loaded.Materials[0].Metallic != 0.2 || len(loaded.Materials[0].Tags) != 1 {
+		t.Fatalf("expected imported world material metadata to round-trip, got %+v", loaded.Materials[0])
+	}
+	if len(loaded.SourceMaterials) != 1 || loaded.SourceMaterials[0].Kind != "metal" || loaded.SourceMaterials[0].Metallic != 0.85 {
+		t.Fatalf("expected source materials to round-trip, got %+v", loaded.SourceMaterials)
 	}
 	if len(loaded.Entries) != 1 || loaded.Entries[0].ChunkPath != def.Entries[0].ChunkPath {
 		t.Fatalf("expected imported world entries to round-trip, got %+v", loaded.Entries)

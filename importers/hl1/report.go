@@ -41,6 +41,7 @@ type ImportOptions struct {
 	EmitLightFixtures         bool
 	EmitEmissiveSurfaceLights bool
 	MaxEmissiveSurfaceLights  int
+	EmitGameAssets            bool
 }
 
 type ImportSummary struct {
@@ -139,6 +140,7 @@ func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
 		GeneratedLevelPath:      generatedLevelPath(opts),
 		GeneratedWorldPath:      generatedWorldPath(opts),
 		MaterialCount:           len(mapImport.Materials),
+		MaterialKindCounts:      materialKindCounts(mapImport.Materials),
 		PaletteCount:            min(len(mapImport.Materials), 255),
 		ModelCount:              len(bsp.Models),
 		FaceCount:               len(worldFaces),
@@ -304,18 +306,23 @@ func materialsFromBSPTextures(textures []Texture, wads []*WAD) []importcommon.Ma
 				}
 			}
 		}
+		semantics := materialSemantics(texture.Name)
 		out = append(out, importcommon.Material{
 			ID:                i + 1,
 			PaletteIndex:      uint8(min(i+1, 255)),
 			SourceTextureName: texture.Name,
 			BaseColor:         baseColor,
-			Kind:              materialKind(texture.Name),
-			CollisionKind:     collisionKind(texture.Name),
-			Transparent:       isTransparentTexture(texture.Name),
-			EmitsLight:        isCandidateEmissiveTextureName(texture.Name),
-			Emissive:          emissiveStrengthForTextureName(texture.Name),
+			Kind:              semantics.Kind,
+			CollisionKind:     semantics.CollisionKind,
+			Transparent:       semantics.Transparent,
+			EmitsLight:        semantics.EmitsLight,
+			Emissive:          semantics.Emissive,
+			Roughness:         semantics.Roughness,
+			Metallic:          semantics.Metallic,
+			Transparency:      semantics.Transparency,
 			SourceWAD:         sourceWAD,
 			Size:              [2]uint32{texture.Width, texture.Height},
+			Tags:              semantics.Tags,
 		})
 	}
 	return out
@@ -336,6 +343,18 @@ func countSkyFaces(faces []Face) int {
 		}
 	}
 	return count
+}
+
+func materialKindCounts(materials []importcommon.Material) []importcommon.EntityCount {
+	kinds := make([]string, 0, len(materials))
+	for _, material := range materials {
+		kind := material.Kind
+		if kind == "" {
+			kind = "unknown"
+		}
+		kinds = append(kinds, kind)
+	}
+	return importcommon.EntityCounts(kinds)
 }
 
 func missingTextureDiagnostics(textures []Texture, wads []*WAD) []importcommon.Diagnostic {
@@ -410,33 +429,7 @@ func supportedClass(className string) bool {
 }
 
 func materialKind(textureName string) string {
-	name := strings.ToLower(textureName)
-	switch {
-	case isCandidateEmissiveTextureName(textureName):
-		return "emissive"
-	case name == "sky":
-		return "sky"
-	case strings.Contains(name, "aaatrigger") || strings.Contains(name, "trigger"):
-		return "trigger"
-	case strings.Contains(name, "clip"):
-		return "clip"
-	case strings.Contains(name, "origin"):
-		return "origin"
-	case name == "null" || name == "skip" || name == "hint":
-		return "tool"
-	case strings.Contains(name, "slime"):
-		return "slime"
-	case strings.Contains(name, "lava"):
-		return "lava"
-	case strings.Contains(name, "water") || strings.HasPrefix(name, "!"):
-		return "water"
-	case strings.Contains(name, "ladder"):
-		return "ladder"
-	case strings.HasPrefix(name, "{"):
-		return "transparent"
-	default:
-		return "structural"
-	}
+	return materialSemantics(textureName).Kind
 }
 
 func isCandidateEmissiveTextureName(textureName string) bool {
@@ -471,20 +464,11 @@ func normalizedEmissiveTextureName(textureName string) string {
 }
 
 func collisionKind(textureName string) string {
-	switch materialKind(textureName) {
-	case "sky", "transparent":
-		return "none"
-	case "water", "slime", "lava":
-		return "liquid"
-	case "ladder":
-		return "ladder"
-	default:
-		return "solid"
-	}
+	return materialSemantics(textureName).CollisionKind
 }
 
 func isTransparentTexture(textureName string) bool {
-	return strings.HasPrefix(textureName, "{")
+	return materialSemantics(textureName).Transparent
 }
 
 func isCutoutTexture(textureName string) bool {

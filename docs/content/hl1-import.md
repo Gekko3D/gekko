@@ -786,17 +786,28 @@ Required phase-1 behavior:
     remain a fallback when leaf bounds are not useful. Imported solid voxels are
     also carved out of BSP liquid contents so renderer water is not hidden by
     stale surface voxels.
-  - Transparent textures: preserve diagnostics; render as opaque unless the
-    renderer/imported-world format supports transparency.
+  - Transparent textures: preserve semantic metadata and transparency hints;
+    imported-world voxels still render through current voxel material support.
+  - Common material names are classified into semantic kinds such as `metal`,
+    `glass`, `grate`, `concrete`, `wood`, `terrain`, `ladder`, `water`,
+    `slime`, `lava`, `emissive`, and tool/trigger/clip classes.
+
+Current material output:
+
+- `.gkworld.materials` describes the runtime chunk palette used by baked voxel
+  colors.
+- `.gkworld.source_materials` preserves original HL1 texture provenance:
+  texture name, source WAD, average color, material kind, collision kind,
+  transparency, emissive hints, roughness, metallic, and semantic tags.
+- Generated moving-brush, MDL, and SPR `.gkasset` materials receive matching
+  authored material metadata where the importer can infer it.
 
 Required follow-up if palette-only bake is visibly insufficient:
 
-- Add `source_materials` to `.gkworld` or a companion metadata document.
-- Preserve texture name, source WAD, average color, material kind, collision
-  kind, transparency, and emissive hints.
-- Use source material classification to drive actiongame behavior.
 - Extend imported-world/chunk material storage only after the 255-color palette
-  bake proves too lossy for close visual parity.
+  bake proves too lossy for close visual parity. Exact per-voxel source texture
+  identity is not represented yet when baked color palette entries are shared by
+  multiple original textures.
 
 Palette risk:
 
@@ -824,6 +835,8 @@ Both paths use the same importer package and generate the same content shape:
 - `worlds/chunks/*.gkchunk`
 - `worlds/<map>_import_report.json`
 - generated helper `.gkasset` files for imported moving brush visuals
+- optional `hl1_assets/<map>/manifest.gkhl1assets` plus copied source game
+  assets referenced by the imported map
 
 The generated `.gklevel` is the file to open or run. It references the base
 world plus imported lights, water, ladders, moving brushes, use triggers, and
@@ -857,11 +870,38 @@ go run .
 - chunk payload: `RLE chunks`
 - light mode: `faithful`
 - emit lights: `on`
+- game assets: `off` unless you want a local copied/cataloged asset library
 
 7. Click **import + open**.
 
 `import + open` opens the generated `.gklevel` after import. Use plain
 **import** when you only want to generate files and inspect the report later.
+
+Turn **game assets** on when you want the importer to copy, catalog, and
+partially convert HL1 source assets used by the map. The current asset pass
+records:
+
+- WAD files resolved from `worldspawn.wad`
+- `.mdl` references from entity key-values
+- `.spr` references from entity key-values
+- `.wav` references from entity key-values
+
+WADs are already used for BSP texture baking. MDL files are copied, parsed, and
+voxelized into generated surface `.gkasset` files under
+`hl1_assets/<map>/generated/models/`. SPR files are copied, parsed, and
+converted from their first indexed frame into thin emissive voxel-card
+`.gkasset` files under `hl1_assets/<map>/generated/sprites/`. The manifest
+entries keep source provenance, decoded metadata, generated asset path, and
+generated voxel count. Generated model assets currently use the default static
+pose and texture-baked surface voxels; they are not solid-filled or animated
+yet. Generated sprite assets are not true camera-facing billboards yet; they are
+placed voxel cards that preserve palette color and cutout/additive transparency
+well enough for first visual coverage. When **game assets** is enabled, entities
+whose `model` key references a converted `.mdl` or `.spr` get normal
+`LevelPlacementDef` entries pointing at those generated `.gkasset` files, using
+the imported entity origin and yaw. Sound files are copied/cataloged only and
+remain `convert_state: cataloged_source_only` until later passes wire sounds
+without losing source provenance.
 
 ### CLI Import
 
@@ -877,6 +917,7 @@ go run ./cmd/hl1import \
   -voxel-resolution 0.1 \
   -light-mode faithful \
   -emit-light-fixtures=false \
+  -emit-game-assets \
   -solid-band-depth 24 \
   -max-solid-sample-cells 100000000 \
   -emit-level \
@@ -1015,6 +1056,8 @@ assets/levels/worlds/c1a0.gkworld
 assets/levels/worlds/c1a0_import_report.json
 assets/levels/worlds/chunks/c1a0_0_0_0.gkchunk
 assets/levels/worlds/chunks/...
+assets/levels/hl1_assets/c1a0/manifest.gkhl1assets
+assets/levels/hl1_assets/c1a0/files/...
 ```
 
 Import report fields:
@@ -1024,6 +1067,8 @@ Import report fields:
 - missing WADs/textures
 - generated level path
 - generated world path
+- generated game asset manifest path is currently printed by the CLI and stored
+  in `hl1_assets/<map>/manifest.gkhl1assets`, not embedded into `.gklevel`
 - chunk count
 - non-empty voxel count
 - material count
@@ -1554,8 +1599,9 @@ Manual scale-up checks:
 ## Risk Log
 
 - JSON chunk size may become the largest blocker for full campaign imports.
-- Palette-only material storage loses HL1 texture/material semantics unless the
-  IR/report keeps source material ids.
+- Palette-only chunk material storage can still lose exact per-voxel HL1
+  texture identity, but `.gkworld.source_materials` preserves source material
+  provenance and semantic classification for later runtime use.
 - Texture bake is required for visual parity; average-color materials are a
   fallback only and should be treated as visually incomplete.
 - Global 255-color palette quantization may be too lossy for some maps and may

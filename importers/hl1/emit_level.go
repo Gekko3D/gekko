@@ -43,6 +43,14 @@ type GeneratedAssetResult struct {
 }
 
 func BuildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath string, voxelizedWorld ...VoxelizeResult) (GeneratedLevelResult, error) {
+	return buildGeneratedLevel(opts, summary, manifestPath, nil, voxelizedWorld...)
+}
+
+func BuildGeneratedLevelWithGameAssets(opts ImportOptions, summary ImportSummary, manifestPath string, gameAssets GameAssetImportResult, voxelizedWorld ...VoxelizeResult) (GeneratedLevelResult, error) {
+	return buildGeneratedLevel(opts, summary, manifestPath, &gameAssets, voxelizedWorld...)
+}
+
+func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath string, gameAssets *GameAssetImportResult, voxelizedWorld ...VoxelizeResult) (GeneratedLevelResult, error) {
 	if manifestPath == "" {
 		return GeneratedLevelResult{}, fmt.Errorf("manifest path is empty")
 	}
@@ -94,6 +102,7 @@ func BuildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	}
 	level.MovingBrushes = movingBrushes
 	level.UseTriggers = buildHL1UseTriggers(summary.Map.Entities)
+	level.Placements = append(level.Placements, buildHL1GeneratedAssetPlacements(summary.Map.Entities, levelPath, gameAssets)...)
 	lights, err := buildHL1LevelLights(opts, summary.Map.Entities)
 	if err != nil {
 		return GeneratedLevelResult{}, err
@@ -123,6 +132,78 @@ func hl1LevelPlayerDef() *content.LevelPlayerDef {
 		StepHeight: 18 * HammerUnitMeters,
 		Tags:       []string{"source:hl1", "hull:standing"},
 	}
+}
+
+func buildHL1GeneratedAssetPlacements(entities []importcommon.Entity, levelPath string, gameAssets *GameAssetImportResult) []content.LevelPlacementDef {
+	if gameAssets == nil || gameAssets.Manifest == nil {
+		return nil
+	}
+	generatedByRef := generatedHL1AssetPathsByRef(gameAssets.Manifest.Assets)
+	if len(generatedByRef) == 0 {
+		return nil
+	}
+	levelDir := filepath.Dir(levelPath)
+	placements := make([]content.LevelPlacementDef, 0)
+	countsByBase := map[string]int{}
+	for _, entity := range entities {
+		if entity.KeyValues == nil {
+			continue
+		}
+		modelRef := strings.TrimSpace(entity.KeyValues["model"])
+		assetKind := hl1AssetKindForRef(modelRef)
+		if modelRef == "" || strings.HasPrefix(modelRef, "*") || (assetKind != "model" && assetKind != "sprite") {
+			continue
+		}
+		assetPath := generatedByRef[normalizedHL1AssetRef(modelRef)]
+		if assetPath == "" {
+			continue
+		}
+		base := safeHL1AssetBaseName(modelRef)
+		index := countsByBase[base]
+		countsByBase[base]++
+		placements = append(placements, content.LevelPlacementDef{
+			ID:        fmt.Sprintf("hl1_%s_%s_%d", assetKind, base, index),
+			AssetPath: filepath.ToSlash(relativeOrBase(levelDir, assetPath)),
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{entity.WorldPosition.X, entity.WorldPosition.Y, entity.WorldPosition.Z},
+				Rotation: hl1StaticModelRotation(entity),
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			PlacementMode: content.LevelPlacementModeFree3D,
+			Tags: []string{
+				"source:hl1",
+				"classname:" + strings.ToLower(entity.ClassName),
+				"model:" + filepath.ToSlash(modelRef),
+				"kind:static_" + assetKind,
+			},
+		})
+	}
+	return placements
+}
+
+func generatedHL1AssetPathsByRef(entries []GameAssetManifestEntry) map[string]string {
+	out := map[string]string{}
+	for _, entry := range entries {
+		if (entry.Kind != "model" && entry.Kind != "sprite") || entry.GeneratedAssetPath == "" || entry.ConvertState != "generated_voxel_asset" {
+			continue
+		}
+		out[normalizedHL1AssetRef(entry.SourceRef)] = entry.GeneratedAssetPath
+	}
+	return out
+}
+
+func normalizedHL1AssetRef(ref string) string {
+	return strings.ToLower(filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(ref)))))
+}
+
+func hl1StaticModelRotation(entity importcommon.Entity) content.Quat {
+	yaw := float32(0)
+	if angles, ok := parseEntityVec3(entity, "angles"); ok {
+		yaw = angles.Y
+	} else if value, ok := parseEntityFloat(entity, "angle"); ok && value >= 0 {
+		yaw = value
+	}
+	return quatDefFromMGL(mgl32.QuatRotate(float32(float64(yaw)*math.Pi/180), mgl32.Vec3{0, 1, 0}))
 }
 
 func SaveGeneratedLevel(result GeneratedLevelResult) error {
@@ -415,16 +496,40 @@ func assetMaterialsForHL1Voxels(materials []importcommon.Material, voxels []cont
 		if baseColor == ([4]uint8{}) {
 			baseColor = [4]uint8{180, 180, 180, 255}
 		}
-		out = append(out, content.AssetMaterialDef{
-			ID:        fmt.Sprintf("mat_%d", value),
-			Name:      fmt.Sprintf("mat_%d", value),
-			BaseColor: baseColor,
-			Roughness: 1,
-			Emissive:  material.Emissive,
-			Tags:      []string{"source:hl1"},
-		})
+		materialID := fmt.Sprintf("mat_%d", value)
+		out = append(out, assetMaterialFromHL1Material(materialID, materialID, material, baseColor, []string{"source_asset:moving_brush"}))
 	}
 	return out
+}
+
+func assetMaterialFromHL1Material(id, name string, material importcommon.Material, baseColor [4]uint8, extraTags []string) content.AssetMaterialDef {
+	if baseColor == ([4]uint8{}) {
+		baseColor = [4]uint8{180, 180, 180, 255}
+	}
+	roughness := material.Roughness
+	if roughness <= 0 {
+		roughness = 1
+	}
+	transparency := material.Transparency
+	if baseColor[3] < 255 {
+		transparency = maxFloat32(transparency, 1-float32(baseColor[3])/255)
+	}
+	tags := append([]string{"source:hl1"}, material.Tags...)
+	tags = appendUniqueString(tags, "kind:"+material.Kind)
+	if material.SourceTextureName != "" {
+		tags = appendUniqueString(tags, "source_texture:"+material.SourceTextureName)
+	}
+	tags = append(tags, extraTags...)
+	return content.AssetMaterialDef{
+		ID:           id,
+		Name:         name,
+		BaseColor:    baseColor,
+		Roughness:    roughness,
+		Metallic:     material.Metallic,
+		Emissive:     material.Emissive,
+		Transparency: transparency,
+		Tags:         tags,
+	}
 }
 
 func assetVoxelPaletteForMaterials(materials []content.AssetMaterialDef) []content.AssetVoxelPaletteEntryDef {

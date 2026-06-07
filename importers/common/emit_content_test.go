@@ -24,7 +24,18 @@ func TestBuildImportedWorldEmissionPartitionsVoxels(t *testing.T) {
 		ChunkDirectoryName: "chunks",
 		SourceBuildVersion: "test_v1",
 		SourceHash:         "hash",
-		Tags:               []string{"source:test"},
+		SourceMaterials: []Material{{
+			ID:                7,
+			PaletteIndex:      7,
+			SourceTextureName: "METAL01",
+			BaseColor:         [4]uint8{80, 90, 100, 255},
+			Kind:              "metal",
+			CollisionKind:     "solid",
+			Roughness:         0.5,
+			Metallic:          0.85,
+			Tags:              []string{"material:metal"},
+		}},
+		Tags: []string{"source:test"},
 	})
 	if err != nil {
 		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
@@ -40,6 +51,9 @@ func TestBuildImportedWorldEmissionPartitionsVoxels(t *testing.T) {
 	}
 	if len(emission.Manifest.Materials) != 2 || !emission.Manifest.Materials[1].EmitsLight || emission.Manifest.Materials[1].Emissive != 2.5 {
 		t.Fatalf("materials = %+v", emission.Manifest.Materials)
+	}
+	if len(emission.Manifest.SourceMaterials) != 1 || emission.Manifest.SourceMaterials[0].Kind != "metal" || emission.Manifest.SourceMaterials[0].Metallic != 0.85 || len(emission.Manifest.SourceMaterials[0].Tags) == 0 {
+		t.Fatalf("source materials = %+v", emission.Manifest.SourceMaterials)
 	}
 	negativeChunk := emission.Chunks[[3]int{-1, 0, 0}]
 	if negativeChunk == nil || len(negativeChunk.Voxels) != 1 || negativeChunk.Voxels[0].X != 31 {

@@ -71,7 +71,9 @@ func FixedBakedPaletteMaterials() []importcommon.Material {
 						uint8((bBin*255 + (bakedPaletteBBinCount-1)/2) / (bakedPaletteBBinCount - 1)),
 						255,
 					},
-					Kind: "baked_texture",
+					Kind:      "baked_texture",
+					Roughness: 0.9,
+					Tags:      []string{"source:hl1", "material:baked_texture"},
 				})
 			}
 		}
@@ -109,6 +111,8 @@ func fixedEmissivePaletteMaterials() []importcommon.Material {
 				Kind:       "baked_texture_emissive",
 				EmitsLight: true,
 				Emissive:   0.6 + f*(def.maxEmissive-0.6),
+				Roughness:  0.45,
+				Tags:       []string{"source:hl1", "material:baked_texture", "material:emissive"},
 			})
 		}
 	}

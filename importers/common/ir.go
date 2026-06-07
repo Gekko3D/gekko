@@ -32,8 +32,12 @@ type Material struct {
 	Transparent       bool      `json:"transparent,omitempty"`
 	EmitsLight        bool      `json:"emits_light,omitempty"`
 	Emissive          float32   `json:"emissive,omitempty"`
+	Roughness         float32   `json:"roughness,omitempty"`
+	Metallic          float32   `json:"metallic,omitempty"`
+	Transparency      float32   `json:"transparency,omitempty"`
 	SourceWAD         string    `json:"source_wad,omitempty"`
 	Size              [2]uint32 `json:"size,omitempty"`
+	Tags              []string  `json:"tags,omitempty"`
 }
 
 type Voxel struct {

@@ -32,6 +32,7 @@ func main() {
 	opts.EmitEmissiveSurfaceLights = true
 	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize point lights from imported emissive surface clusters")
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
+	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
 	flag.Var((*float32Flag)(&opts.VoxelResolution), "voxel-resolution", "planned voxel resolution")
 	flag.StringVar(&reportPath, "report", "", "report output path")
@@ -69,9 +70,21 @@ func main() {
 		summary.Report.ChunkCount = len(debugResult.Emission.Chunks)
 		summary.Report.NonEmptyVoxelCount = debugResult.Emission.TotalVoxelCount
 	}
+	var gameAssets hl1.GameAssetImportResult
+	if opts.EmitGameAssets {
+		gameAssets, err = hl1.BuildGameAssetImport(opts, summary)
+		if err != nil {
+			fatalf("build game assets: %v", err)
+		}
+		summary.Report.Diagnostics = append(summary.Report.Diagnostics, gameAssets.Manifest.Diagnostics...)
+	}
 	var levelResult hl1.GeneratedLevelResult
 	if emitLevel {
-		levelResult, err = hl1.BuildGeneratedLevel(opts, summary, debugResult.ManifestPath, debugResult.Voxelize)
+		if opts.EmitGameAssets {
+			levelResult, err = hl1.BuildGeneratedLevelWithGameAssets(opts, summary, debugResult.ManifestPath, gameAssets, debugResult.Voxelize)
+		} else {
+			levelResult, err = hl1.BuildGeneratedLevel(opts, summary, debugResult.ManifestPath, debugResult.Voxelize)
+		}
 		if err != nil {
 			fatalf("build level: %v", err)
 		}
@@ -85,6 +98,11 @@ func main() {
 	if emitLevel {
 		if err := hl1.SaveGeneratedLevel(levelResult); err != nil {
 			fatalf("save level: %v", err)
+		}
+	}
+	if opts.EmitGameAssets {
+		if err := hl1.SaveGameAssetImport(gameAssets); err != nil {
+			fatalf("save game assets: %v", err)
 		}
 	}
 	if reportPath == "" {
@@ -124,6 +142,10 @@ func main() {
 		fmt.Printf("use triggers: %d\n", len(levelResult.Level.UseTriggers))
 		fmt.Printf("light fixture assets: %d\n", len(levelResult.LightFixtureAssets))
 		fmt.Printf("moving brush assets: %d\n", len(levelResult.MovingBrushAssets))
+	}
+	if opts.EmitGameAssets {
+		fmt.Printf("game asset manifest written: %s\n", gameAssets.ManifestPath)
+		fmt.Printf("game assets: %d\n", len(gameAssets.Manifest.Assets))
 	}
 }
 

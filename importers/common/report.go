@@ -34,6 +34,7 @@ type ImportReport struct {
 	ChunkCount              int           `json:"chunk_count,omitempty"`
 	NonEmptyVoxelCount      int           `json:"non_empty_voxel_count,omitempty"`
 	MaterialCount           int           `json:"material_count,omitempty"`
+	MaterialKindCounts      []EntityCount `json:"material_kind_counts,omitempty"`
 	PaletteCount            int           `json:"palette_count,omitempty"`
 	ModelCount              int           `json:"model_count,omitempty"`
 	FaceCount               int           `json:"face_count,omitempty"`

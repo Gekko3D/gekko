@@ -133,6 +133,82 @@ func TestBuildAndSaveGeneratedLevel(t *testing.T) {
 	}
 }
 
+func TestBuildGeneratedLevelPlacesGeneratedMDLAssets(t *testing.T) {
+	dir := t.TempDir()
+	gameDir := filepath.Join(dir, "hl")
+	outDir := filepath.Join(dir, "out")
+	modelPath := filepath.Join(gameDir, "valve", "models", "filecabinet.mdl")
+	spritePath := filepath.Join(gameDir, "valve", "sprites", "flare1.spr")
+	mustWriteFile(t, modelPath, syntheticMDL())
+	mustWriteFile(t, spritePath, syntheticSPR())
+	summary := ImportSummary{
+		Map: importcommon.MapImport{
+			Entities: []importcommon.Entity{
+				{
+					ClassName:     "monster_furniture",
+					WorldPosition: importcommon.Vec3{X: 1, Y: 2, Z: 3},
+					KeyValues: map[string]string{
+						"model": "models/filecabinet.mdl",
+						"angle": "90",
+					},
+				},
+				{
+					ClassName:     "env_sprite",
+					WorldPosition: importcommon.Vec3{X: 4, Y: 5, Z: 6},
+					KeyValues: map[string]string{
+						"model": "sprites/flare1.spr",
+					},
+				},
+			},
+		},
+		Report: importcommon.ImportReport{
+			Source: importcommon.SourceInfo{
+				Kind:    "hl1",
+				GameDir: gameDir,
+				MapName: "propmap",
+			},
+		},
+	}
+	opts := ImportOptions{
+		GameDir:         gameDir,
+		MapName:         "propmap",
+		OutputRoot:      outDir,
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	}
+	gameAssets, err := BuildGameAssetImport(opts, summary)
+	if err != nil {
+		t.Fatalf("BuildGameAssetImport failed: %v", err)
+	}
+	if err := SaveGameAssetImport(gameAssets); err != nil {
+		t.Fatalf("SaveGameAssetImport failed: %v", err)
+	}
+	level, err := BuildGeneratedLevelWithGameAssets(opts, summary, filepath.Join(outDir, "worlds", "propmap.gkworld"), gameAssets)
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevelWithGameAssets failed: %v", err)
+	}
+	if len(level.Level.Placements) != 2 {
+		t.Fatalf("placements = %+v", level.Level.Placements)
+	}
+	placement := level.Level.Placements[0]
+	if placement.AssetPath != filepath.ToSlash(filepath.Join("hl1_assets", "propmap", "generated", "models", "filecabinet.gkasset")) {
+		t.Fatalf("asset path = %q", placement.AssetPath)
+	}
+	if placement.PlacementMode != content.LevelPlacementModeFree3D || placement.Transform.Position != (content.Vec3{1, 2, 3}) {
+		t.Fatalf("placement = %+v", placement)
+	}
+	if placement.Transform.Rotation == (content.Quat{0, 0, 0, 1}) {
+		t.Fatalf("expected angle to produce non-identity rotation, got %+v", placement.Transform.Rotation)
+	}
+	spritePlacement := level.Level.Placements[1]
+	if spritePlacement.ID != "hl1_sprite_flare1_0" || spritePlacement.AssetPath != filepath.ToSlash(filepath.Join("hl1_assets", "propmap", "generated", "sprites", "flare1.gkasset")) {
+		t.Fatalf("sprite placement = %+v", spritePlacement)
+	}
+	if spritePlacement.Transform.Position != (content.Vec3{4, 5, 6}) {
+		t.Fatalf("sprite position = %+v", spritePlacement.Transform.Position)
+	}
+}
+
 func TestBuildGeneratedLevelCanEmitPointProxyLights(t *testing.T) {
 	dir := t.TempDir()
 	opts := ImportOptions{

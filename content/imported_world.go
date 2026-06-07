@@ -22,6 +22,7 @@ type ImportedWorldDef struct {
 	VoxelResolution    float32                      `json:"voxel_resolution"`
 	Palette            []ImportedWorldPaletteColor  `json:"palette,omitempty"`
 	Materials          []ImportedWorldMaterialDef   `json:"materials,omitempty"`
+	SourceMaterials    []ImportedWorldMaterialDef   `json:"source_materials,omitempty"`
 	SourceBuildVersion string                       `json:"source_build_version,omitempty"`
 	SourceHash         string                       `json:"source_hash,omitempty"`
 	ChunkPayloadKind   string                       `json:"chunk_payload_kind,omitempty"`
@@ -41,8 +42,12 @@ type ImportedWorldMaterialDef struct {
 	Transparent       bool                      `json:"transparent,omitempty"`
 	EmitsLight        bool                      `json:"emits_light,omitempty"`
 	Emissive          float32                   `json:"emissive,omitempty"`
+	Roughness         float32                   `json:"roughness,omitempty"`
+	Metallic          float32                   `json:"metallic,omitempty"`
+	Transparency      float32                   `json:"transparency,omitempty"`
 	SourceWAD         string                    `json:"source_wad,omitempty"`
 	Size              [2]uint32                 `json:"size,omitempty"`
+	Tags              []string                  `json:"tags,omitempty"`
 }
 
 type ImportedWorldChunkEntryDef struct {

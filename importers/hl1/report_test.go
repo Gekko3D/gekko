@@ -49,11 +49,50 @@ func TestBuildImportSummaryUsesSyntheticBSPAndWAD(t *testing.T) {
 	if summary.Report.MaterialCount != 1 {
 		t.Fatalf("material count = %d", summary.Report.MaterialCount)
 	}
+	if len(summary.Report.MaterialKindCounts) != 1 || summary.Report.MaterialKindCounts[0].ClassName != "structural" {
+		t.Fatalf("material kind counts = %+v", summary.Report.MaterialKindCounts)
+	}
 	if len(summary.Report.UnsupportedEntityCounts) != 1 || summary.Report.UnsupportedEntityCounts[0].ClassName != "monster_barney" {
 		t.Fatalf("unsupported = %+v", summary.Report.UnsupportedEntityCounts)
 	}
 	if len(summary.Report.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %+v", summary.Report.Diagnostics)
+	}
+}
+
+func TestHL1MaterialSemanticsClassifiesCommonTextures(t *testing.T) {
+	tests := []struct {
+		name        string
+		kind        string
+		collision   string
+		metallic    bool
+		transparent bool
+		emitsLight  bool
+		tag         string
+	}{
+		{name: "METALWALL01", kind: "metal", collision: "solid", metallic: true, tag: "material:metal"},
+		{name: "GLASS01", kind: "glass", collision: "solid", transparent: true, tag: "material:glass"},
+		{name: "!WATERBLUE", kind: "water", collision: "liquid", tag: "material:liquid"},
+		{name: "{LADDER1", kind: "ladder", collision: "ladder", transparent: true, tag: "material:ladder"},
+		{name: "+0LIGHT1", kind: "emissive", collision: "solid", emitsLight: true, tag: "material:emissive"},
+	}
+	for _, tt := range tests {
+		semantics := materialSemantics(tt.name)
+		if semantics.Kind != tt.kind || semantics.CollisionKind != tt.collision {
+			t.Fatalf("%s classified as %+v, want kind=%s collision=%s", tt.name, semantics, tt.kind, tt.collision)
+		}
+		if tt.metallic && semantics.Metallic <= 0 {
+			t.Fatalf("%s expected metallic semantics, got %+v", tt.name, semantics)
+		}
+		if tt.transparent && (!semantics.Transparent || semantics.Transparency <= 0) {
+			t.Fatalf("%s expected transparent semantics, got %+v", tt.name, semantics)
+		}
+		if tt.emitsLight && (!semantics.EmitsLight || semantics.Emissive <= 0) {
+			t.Fatalf("%s expected emissive semantics, got %+v", tt.name, semantics)
+		}
+		if !hasTag(semantics.Tags, tt.tag) {
+			t.Fatalf("%s missing tag %q in %+v", tt.name, tt.tag, semantics.Tags)
+		}
 	}
 }
 

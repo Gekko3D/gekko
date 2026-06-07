@@ -104,6 +104,7 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 		ChunkDirectoryName: "chunks",
 		SourceBuildVersion: sourceBuildVersion,
 		SourceHash:         summary.Report.Source.BSPHash,
+		SourceMaterials:    summary.Map.Materials,
 		Tags:               tags,
 	})
 	if err != nil {

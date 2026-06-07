@@ -15,6 +15,7 @@ type ImportedWorldEmitOptions struct {
 	ChunkDirectoryName string
 	SourceBuildVersion string
 	SourceHash         string
+	SourceMaterials    []Material
 	Tags               []string
 }
 
@@ -102,6 +103,7 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 			VoxelResolution:    opts.VoxelResolution,
 			Palette:            paletteFromMaterials(materials),
 			Materials:          importedWorldMaterialsFromMaterials(materials),
+			SourceMaterials:    importedWorldMaterialsFromMaterials(opts.SourceMaterials),
 			SourceBuildVersion: opts.SourceBuildVersion,
 			SourceHash:         opts.SourceHash,
 			Tags:               append([]string(nil), opts.Tags...),
@@ -187,8 +189,12 @@ func importedWorldMaterialsFromMaterials(materials []Material) []content.Importe
 			Transparent:       material.Transparent,
 			EmitsLight:        material.EmitsLight,
 			Emissive:          material.Emissive,
+			Roughness:         material.Roughness,
+			Metallic:          material.Metallic,
+			Transparency:      material.Transparency,
 			SourceWAD:         material.SourceWAD,
 			Size:              material.Size,
+			Tags:              append([]string(nil), material.Tags...),
 		})
 	}
 	return out
