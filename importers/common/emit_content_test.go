@@ -67,6 +67,41 @@ func TestBuildImportedWorldEmissionPartitionsVoxels(t *testing.T) {
 	}
 }
 
+func TestBuildImportedWorldEmissionCreatesMaterialPaletteForTransparentVoxels(t *testing.T) {
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 0, Y: 0, Z: 0, Palette: 4, SolidKind: "structural"},
+		{X: 1, Y: 0, Z: 0, Palette: 4, SolidKind: "glass"},
+	}, []Material{
+		{ID: 4, PaletteIndex: 4, BaseColor: [4]uint8{120, 180, 220, 255}, Kind: "baked_texture", Roughness: 0.9},
+	}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	chunk := emission.Chunks[[3]int{0, 0, 0}]
+	if chunk == nil || len(chunk.Voxels) != 2 {
+		t.Fatalf("chunk = %+v", chunk)
+	}
+	opaque := chunk.Voxels[0]
+	glass := chunk.Voxels[1]
+	if opaque.Value != 4 || glass.Value != 4 {
+		t.Fatalf("expected both voxels to preserve baked color value 4, got %+v", chunk.Voxels)
+	}
+	if content.ImportedWorldVoxelMaterialValue(opaque) == content.ImportedWorldVoxelMaterialValue(glass) {
+		t.Fatalf("expected structural and glass material values to differ, got %+v", chunk.Voxels)
+	}
+	glassMaterial, ok := content.FindImportedWorldMaterialByPaletteIndex(emission.Manifest, content.ImportedWorldVoxelMaterialValue(glass))
+	if !ok || glassMaterial.Kind != "glass" || !glassMaterial.Transparent || glassMaterial.Transparency < 0.5 {
+		t.Fatalf("expected glass runtime material, got %+v ok=%t", glassMaterial, ok)
+	}
+	if emission.Manifest.MaterialPalette[content.ImportedWorldVoxelMaterialValue(glass)] != (content.ImportedWorldPaletteColor{120, 180, 220, 255}) {
+		t.Fatalf("expected glass material palette color to preserve baked color, got %+v", emission.Manifest.MaterialPalette[content.ImportedWorldVoxelMaterialValue(glass)])
+	}
+}
+
 func TestSaveImportedWorldEmissionRoundTripsAndValidates(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "worlds", "test_world.gkworld")
@@ -108,6 +143,44 @@ func TestSaveImportedWorldEmissionRoundTripsAndValidates(t *testing.T) {
 	}
 	if proxy.NonEmptyVoxelCount != 1 || proxy.VoxelResolution <= loaded.VoxelResolution {
 		t.Fatalf("unexpected proxy chunk %+v", proxy)
+	}
+}
+
+func TestSaveImportedWorldEmissionWritesMaterialDenseRLEWhenNeeded(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "worlds", "test_world.gkworld")
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 0, Y: 0, Z: 0, Palette: 4, SolidKind: "structural"},
+		{X: 1, Y: 0, Z: 0, Palette: 4, SolidKind: "glass"},
+	}, []Material{{ID: 4, PaletteIndex: 4, BaseColor: [4]uint8{120, 180, 220, 255}}}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	if err := SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{
+		ChunkPayloadKind: content.ImportedWorldChunkPayloadDenseRLEBinaryV1,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldEmissionWithOptions failed: %v", err)
+	}
+	loaded, err := content.LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld failed: %v", err)
+	}
+	if loaded.ChunkPayloadKind != content.ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1 {
+		t.Fatalf("manifest payload kind = %q", loaded.ChunkPayloadKind)
+	}
+	if len(loaded.Entries) != 1 || loaded.Entries[0].PayloadKind != content.ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1 {
+		t.Fatalf("entry payload metadata = %+v", loaded.Entries)
+	}
+	chunk, err := content.LoadImportedWorldChunk(content.ResolveImportedWorldChunkPath(loaded.Entries[0], manifestPath))
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk failed: %v", err)
+	}
+	if chunk.PayloadKind != content.ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1 || content.ImportedWorldVoxelMaterialValue(chunk.Voxels[0]) == content.ImportedWorldVoxelMaterialValue(chunk.Voxels[1]) {
+		t.Fatalf("expected material-value chunk, got %+v", chunk)
 	}
 }
 

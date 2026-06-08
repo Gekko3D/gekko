@@ -21,8 +21,9 @@ type ImportedWorldKind string
 const (
 	ImportedWorldKindVoxelWorld ImportedWorldKind = "imported_voxel_world"
 
-	ImportedWorldChunkPayloadSparseJSONV1     = "sparse_json_v1"
-	ImportedWorldChunkPayloadDenseRLEBinaryV1 = "dense_rle_binary_v1"
+	ImportedWorldChunkPayloadSparseJSONV1             = "sparse_json_v1"
+	ImportedWorldChunkPayloadDenseRLEBinaryV1         = "dense_rle_binary_v1"
+	ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1 = "dense_rle_material_binary_v1"
 )
 
 type ImportedWorldDef struct {
@@ -32,6 +33,7 @@ type ImportedWorldDef struct {
 	ChunkSize          int                          `json:"chunk_size"`
 	VoxelResolution    float32                      `json:"voxel_resolution"`
 	Palette            []ImportedWorldPaletteColor  `json:"palette,omitempty"`
+	MaterialPalette    []ImportedWorldPaletteColor  `json:"material_palette,omitempty"`
 	Materials          []ImportedWorldMaterialDef   `json:"materials,omitempty"`
 	SourceMaterials    []ImportedWorldMaterialDef   `json:"source_materials,omitempty"`
 	SourceBuildVersion string                       `json:"source_build_version,omitempty"`
@@ -114,10 +116,11 @@ type ImportedWorldChunkDef struct {
 }
 
 type ImportedWorldVoxelDef struct {
-	X     int   `json:"x"`
-	Y     int   `json:"y"`
-	Z     int   `json:"z"`
-	Value uint8 `json:"value"`
+	X             int   `json:"x"`
+	Y             int   `json:"y"`
+	Z             int   `json:"z"`
+	Value         uint8 `json:"value"`
+	MaterialValue uint8 `json:"material_value,omitempty"`
 }
 
 type ImportedWorldSectorProxyOptions struct {
@@ -192,6 +195,25 @@ func ImportedWorldChunkPaletteAt(chunk *ImportedWorldChunkDef, x, y, z int) (uin
 		}
 	}
 	return 0, false
+}
+
+func ImportedWorldChunkMaterialAt(chunk *ImportedWorldChunkDef, x, y, z int) (uint8, bool) {
+	if chunk == nil || x < 0 || y < 0 || z < 0 || x >= chunk.ChunkSize || y >= chunk.ChunkSize || z >= chunk.ChunkSize {
+		return 0, false
+	}
+	for _, voxel := range chunk.Voxels {
+		if voxel.X == x && voxel.Y == y && voxel.Z == z && voxel.Value != 0 {
+			return ImportedWorldVoxelMaterialValue(voxel), true
+		}
+	}
+	return 0, false
+}
+
+func ImportedWorldVoxelMaterialValue(voxel ImportedWorldVoxelDef) uint8 {
+	if voxel.MaterialValue != 0 {
+		return voxel.MaterialValue
+	}
+	return voxel.Value
 }
 
 func findImportedWorldMaterialByPaletteIndex(materials []ImportedWorldMaterialDef, paletteIndex uint8) (ImportedWorldMaterialDef, bool) {
@@ -270,8 +292,9 @@ func buildImportedWorldSectorProxyChunk(sector ImportedWorldSectorDef, chunks ma
 		return nil
 	}
 	type cellMaterialCount struct {
-		value uint8
-		count int
+		value         uint8
+		materialValue uint8
+		count         int
 	}
 	counts := make(map[[4]int]int)
 	best := make(map[[3]int]cellMaterialCount)
@@ -293,13 +316,14 @@ func buildImportedWorldSectorProxyChunk(sector ImportedWorldSectorDef, chunks ma
 			if x < 0 || y < 0 || z < 0 || x >= proxySize || y >= proxySize || z >= proxySize {
 				continue
 			}
-			key4 := [4]int{x, y, z, int(voxel.Value)}
+			materialValue := ImportedWorldVoxelMaterialValue(voxel)
+			key4 := [4]int{x, y, z, int(materialValue)}
 			counts[key4]++
 			key3 := [3]int{x, y, z}
 			current := best[key3]
 			nextCount := counts[key4]
 			if nextCount > current.count || current.value == 0 {
-				best[key3] = cellMaterialCount{value: voxel.Value, count: nextCount}
+				best[key3] = cellMaterialCount{value: voxel.Value, materialValue: materialValue, count: nextCount}
 			}
 		}
 	}
@@ -321,12 +345,17 @@ func buildImportedWorldSectorProxyChunk(sector ImportedWorldSectorDef, chunks ma
 	})
 	voxels := make([]ImportedWorldVoxelDef, 0, len(keys))
 	for _, key := range keys {
-		voxels = append(voxels, ImportedWorldVoxelDef{
+		bestCell := best[key]
+		voxel := ImportedWorldVoxelDef{
 			X:     key[0],
 			Y:     key[1],
 			Z:     key[2],
-			Value: best[key].value,
-		})
+			Value: bestCell.value,
+		}
+		if bestCell.materialValue != 0 && bestCell.materialValue != bestCell.value {
+			voxel.MaterialValue = bestCell.materialValue
+		}
+		voxels = append(voxels, voxel)
 	}
 	return &ImportedWorldChunkDef{
 		WorldID:            opts.WorldID,

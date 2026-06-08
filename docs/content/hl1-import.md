@@ -429,12 +429,18 @@ Phase 1 can use the current JSON shape for a small map:
 
 ```go
 type ImportedWorldVoxelDef struct {
-    X     int   `json:"x"`
-    Y     int   `json:"y"`
-    Z     int   `json:"z"`
-    Value uint8 `json:"value"`
+    X             int   `json:"x"`
+    Y             int   `json:"y"`
+    Z             int   `json:"z"`
+    Value         uint8 `json:"value"`
+    MaterialValue uint8 `json:"material_value,omitempty"`
 }
 ```
+
+`Value` is the baked source/color palette value. `MaterialValue` is optional
+runtime material palette identity. When absent, runtime falls back to `Value`.
+This lets imported worlds keep color-baked voxels while still rendering special
+materials such as glass with transparency.
 
 Implemented compact payload support keeps JSON available for fixtures and
 debugging while allowing imported maps to use a binary RLE chunk payload:
@@ -443,6 +449,9 @@ debugging while allowing imported maps to use a binary RLE chunk payload:
 - `sparse_json_v1` is the readable fallback/debug payload.
 - `dense_rle_binary_v1` stores chunk-local voxels as dense linear value runs
   with a small metadata header and payload hash.
+- `dense_rle_material_binary_v1` stores dense linear runs of
+  `(value, material_value)` pairs when any chunk voxel has explicit runtime
+  material identity.
 - `payload_kind`, `payload_hash`, and `payload_size_bytes` are recorded where
   available.
 - Keep a debug dump/report path so failures remain inspectable.
@@ -796,20 +805,28 @@ Required phase-1 behavior:
 
 Current material output:
 
-- `.gkworld.materials` describes the runtime chunk palette used by baked voxel
-  colors.
+- `.gkworld.palette` preserves baked source/color palette values.
+- `.gkworld.material_palette` is optional runtime material colors keyed by
+  `material_value`. It is generated when source material semantics need to
+  differ from baked color identity, such as glass using the same blue texel bin
+  as an opaque painted surface.
+- `.gkworld.materials` describes the runtime chunk material palette.
 - `.gkworld.source_materials` preserves original HL1 texture provenance:
   texture name, source WAD, average color, material kind, collision kind,
   transparency, emissive hints, roughness, metallic, and semantic tags.
 - Generated moving-brush, MDL, and SPR `.gkasset` materials receive matching
   authored material metadata where the importer can infer it.
 
-Required follow-up if palette-only bake is visibly insufficient:
+Implemented follow-up for palette-only material loss:
 
-- Extend imported-world/chunk material storage only after the 255-color palette
-  bake proves too lossy for close visual parity. Exact per-voxel source texture
-  identity is not represented yet when baked color palette entries are shared by
-  multiple original textures.
+- Imported chunks can store `material_value` alongside baked `value`.
+- Runtime chunk geometry uses `material_value` when present; old chunks keep
+  using `value`.
+- HL1 glass/window surfaces become transparent runtime materials without
+  making every similarly colored blue voxel transparent.
+- Exact per-voxel source texture identity is still not represented; material
+  values preserve semantic class plus baked color, not the full original face
+  reference.
 
 Palette risk:
 
@@ -1451,11 +1468,13 @@ Goal:
 
 Implementation:
 
-- Implemented: `.gkchunk` loader auto-detects `dense_rle_binary_v1` binary
-  chunks by magic header and otherwise falls back to JSON.
+- Implemented: `.gkchunk` loader auto-detects `dense_rle_binary_v1` and
+  `dense_rle_material_binary_v1` binary chunks by magic header and otherwise
+  falls back to JSON.
 - Implemented: `.gkworld` and chunk entries can record chunk payload kind,
   payload hash, and payload byte size.
-- Implemented: HL1 importer defaults to `dense_rle_binary_v1`; use
+- Implemented: HL1 importer defaults to `dense_rle_binary_v1`; chunks with
+  explicit `material_value` are saved as `dense_rle_material_binary_v1`. Use
   `-chunk-payload sparse_json_v1` when readable chunk dumps are needed.
 - Keep JSON support for fixtures and debugging.
 - Future: add optional zstd wrapping after streaming/page behavior is stable.

@@ -138,6 +138,42 @@ func TestVoxelizeFacesCPUBakesTextureSampleIntoPalette(t *testing.T) {
 	}
 }
 
+func TestVoxelizeFacesCPUPreservesGlassMaterialKindWithBakedColor(t *testing.T) {
+	texture := TexturePixels{
+		Name:   "GLASSBLUE",
+		Width:  1,
+		Height: 1,
+		Pixels: []byte{0},
+		Colors: [][3]uint8{{120, 180, 220}},
+	}
+	store := &TextureStore{byName: map[string]TexturePixels{"glassblue": texture}}
+	face := Face{
+		TextureID:   0,
+		TextureName: "GLASSBLUE",
+		Normal:      vec3(0, 0, 1),
+		TexInfo: TexInfo{
+			S: TextureAxis{Axis: vec3(1, 0, 0)},
+			T: TextureAxis{Axis: vec3(0, 1, 0)},
+		},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0),
+			vec3(16, 0, 0),
+			vec3(16, 16, 0),
+			vec3(0, 16, 0),
+		},
+	}
+	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{VoxelResolution: 0.1, TextureStore: store})
+	if len(result.Voxels) == 0 {
+		t.Fatal("no voxels")
+	}
+	want := uint8(bakedPaletteIndex([4]uint8{120, 180, 220, 255}))
+	for _, voxel := range result.Voxels {
+		if voxel.Palette != want || voxel.SolidKind != "glass" {
+			t.Fatalf("expected baked glass voxel, got %+v", voxel)
+		}
+	}
+}
+
 func TestVoxelizeFacesCPUBakesBrightLampTexelAsEmissive(t *testing.T) {
 	texture := TexturePixels{
 		Name:   "LIGHTWALL",

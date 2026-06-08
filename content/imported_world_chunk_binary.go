@@ -32,12 +32,20 @@ type importedWorldChunkRLERun struct {
 	length uint32
 }
 
+type importedWorldChunkMaterialRLERun struct {
+	value         uint8
+	materialValue uint8
+	length        uint32
+}
+
 func NormalizeImportedWorldChunkPayloadKind(kind string) (string, error) {
 	switch kind {
 	case "", ImportedWorldChunkPayloadSparseJSONV1:
 		return ImportedWorldChunkPayloadSparseJSONV1, nil
 	case ImportedWorldChunkPayloadDenseRLEBinaryV1:
 		return ImportedWorldChunkPayloadDenseRLEBinaryV1, nil
+	case ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1:
+		return ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1, nil
 	default:
 		return "", fmt.Errorf("unsupported imported world chunk payload kind %q", kind)
 	}
@@ -48,12 +56,21 @@ func isImportedWorldChunkDenseRLEBinary(data []byte) bool {
 }
 
 func saveImportedWorldChunkDenseRLEBinary(path string, def *ImportedWorldChunkDef) error {
-	payload, nonEmpty, err := encodeImportedWorldChunkDenseRLEPayload(def)
+	payloadKind := ImportedWorldChunkPayloadDenseRLEBinaryV1
+	var payload []byte
+	var nonEmpty int
+	var err error
+	if importedWorldChunkHasMaterialValues(def) {
+		payloadKind = ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1
+		payload, nonEmpty, err = encodeImportedWorldChunkDenseRLEMaterialPayload(def)
+	} else {
+		payload, nonEmpty, err = encodeImportedWorldChunkDenseRLEPayload(def)
+	}
 	if err != nil {
 		return err
 	}
 	hash := sha256.Sum256(payload)
-	def.PayloadKind = ImportedWorldChunkPayloadDenseRLEBinaryV1
+	def.PayloadKind = payloadKind
 	def.PayloadHash = hex.EncodeToString(hash[:])
 	def.PayloadSizeBytes = len(payload)
 	def.NonEmptyVoxelCount = nonEmpty
@@ -101,7 +118,7 @@ func loadImportedWorldChunkDenseRLEBinary(data []byte) (*ImportedWorldChunkDef, 
 		return nil, err
 	}
 	offset += metaLen
-	if meta.PayloadKind != ImportedWorldChunkPayloadDenseRLEBinaryV1 {
+	if meta.PayloadKind != ImportedWorldChunkPayloadDenseRLEBinaryV1 && meta.PayloadKind != ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1 {
 		return nil, fmt.Errorf("unsupported imported world chunk binary payload kind %q", meta.PayloadKind)
 	}
 	payload := data[offset:]
@@ -126,7 +143,14 @@ func loadImportedWorldChunkDenseRLEBinary(data []byte) (*ImportedWorldChunkDef, 
 	if chunk.SchemaVersion != CurrentImportedWorldChunkSchemaVersion {
 		return nil, fmt.Errorf("unsupported imported world chunk schema version %d", chunk.SchemaVersion)
 	}
-	voxels, nonEmpty, err := decodeImportedWorldChunkDenseRLEPayload(payload, chunk.ChunkSize, chunk.NonEmptyVoxelCount)
+	var voxels []ImportedWorldVoxelDef
+	var nonEmpty int
+	var err error
+	if meta.PayloadKind == ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1 {
+		voxels, nonEmpty, err = decodeImportedWorldChunkDenseRLEMaterialPayload(payload, chunk.ChunkSize, chunk.NonEmptyVoxelCount)
+	} else {
+		voxels, nonEmpty, err = decodeImportedWorldChunkDenseRLEPayload(payload, chunk.ChunkSize, chunk.NonEmptyVoxelCount)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +158,18 @@ func loadImportedWorldChunkDenseRLEBinary(data []byte) (*ImportedWorldChunkDef, 
 	chunk.NonEmptyVoxelCount = nonEmpty
 	EnsureImportedWorldChunkDefaults(chunk)
 	return chunk, nil
+}
+
+func importedWorldChunkHasMaterialValues(def *ImportedWorldChunkDef) bool {
+	if def == nil {
+		return false
+	}
+	for _, voxel := range def.Voxels {
+		if voxel.Value != 0 && voxel.MaterialValue != 0 && voxel.MaterialValue != voxel.Value {
+			return true
+		}
+	}
+	return false
 }
 
 func encodeImportedWorldChunkDenseRLEPayload(def *ImportedWorldChunkDef) ([]byte, int, error) {
@@ -238,6 +274,114 @@ func decodeImportedWorldChunkDenseRLEPayload(payload []byte, chunkSize int, expe
 	return voxels, len(voxels), nil
 }
 
+func encodeImportedWorldChunkDenseRLEMaterialPayload(def *ImportedWorldChunkDef) ([]byte, int, error) {
+	if def.ChunkSize <= 0 {
+		return nil, 0, fmt.Errorf("imported world chunk size must be positive")
+	}
+	totalCells, err := importedWorldChunkTotalCells(def.ChunkSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	voxels := make([]ImportedWorldVoxelDef, 0, len(def.Voxels))
+	for _, voxel := range def.Voxels {
+		if voxel.Value == 0 {
+			continue
+		}
+		if _, ok := importedWorldVoxelLinearIndex(voxel, def.ChunkSize); !ok {
+			return nil, 0, fmt.Errorf("imported world voxel (%d,%d,%d) is outside chunk size %d", voxel.X, voxel.Y, voxel.Z, def.ChunkSize)
+		}
+		voxels = append(voxels, voxel)
+	}
+	sort.Slice(voxels, func(i, j int) bool {
+		left, _ := importedWorldVoxelLinearIndex(voxels[i], def.ChunkSize)
+		right, _ := importedWorldVoxelLinearIndex(voxels[j], def.ChunkSize)
+		return left < right
+	})
+	runs := make([]importedWorldChunkMaterialRLERun, 0, len(voxels)*2+1)
+	cursor := uint64(0)
+	var previousIndex uint64
+	for i, voxel := range voxels {
+		index, _ := importedWorldVoxelLinearIndex(voxel, def.ChunkSize)
+		if i > 0 && index == previousIndex {
+			return nil, 0, fmt.Errorf("duplicate imported world voxel at linear index %d", index)
+		}
+		if index > cursor {
+			runs = appendImportedWorldChunkMaterialRLERun(runs, 0, 0, index-cursor)
+		}
+		runs = appendImportedWorldChunkMaterialRLERun(runs, voxel.Value, ImportedWorldVoxelMaterialValue(voxel), 1)
+		cursor = index + 1
+		previousIndex = index
+	}
+	if cursor < totalCells {
+		runs = appendImportedWorldChunkMaterialRLERun(runs, 0, 0, totalCells-cursor)
+	}
+	if len(runs) > math.MaxUint32 {
+		return nil, 0, fmt.Errorf("imported world chunk RLE run count exceeds uint32")
+	}
+	var out bytes.Buffer
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], uint32(len(runs)))
+	out.Write(buf[:])
+	for _, run := range runs {
+		out.WriteByte(run.value)
+		out.WriteByte(run.materialValue)
+		binary.LittleEndian.PutUint32(buf[:], run.length)
+		out.Write(buf[:])
+	}
+	return out.Bytes(), len(voxels), nil
+}
+
+func decodeImportedWorldChunkDenseRLEMaterialPayload(payload []byte, chunkSize int, expectedNonEmpty int) ([]ImportedWorldVoxelDef, int, error) {
+	if chunkSize <= 0 {
+		return nil, 0, fmt.Errorf("imported world chunk size must be positive")
+	}
+	totalCells, err := importedWorldChunkTotalCells(chunkSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(payload) < 4 {
+		return nil, 0, fmt.Errorf("imported world chunk RLE payload is truncated")
+	}
+	runCount := int(binary.LittleEndian.Uint32(payload[:4]))
+	offset := 4
+	if len(payload)-offset != runCount*6 {
+		return nil, 0, fmt.Errorf("imported world chunk material RLE payload length does not match run count")
+	}
+	capacityHint := expectedNonEmpty
+	if capacityHint < 0 {
+		capacityHint = 0
+	}
+	voxels := make([]ImportedWorldVoxelDef, 0, capacityHint)
+	cursor := uint64(0)
+	for i := 0; i < runCount; i++ {
+		value := payload[offset]
+		materialValue := payload[offset+1]
+		length := uint64(binary.LittleEndian.Uint32(payload[offset+2 : offset+6]))
+		offset += 6
+		if length == 0 {
+			return nil, 0, fmt.Errorf("imported world chunk RLE run %d has zero length", i)
+		}
+		if cursor+length > totalCells {
+			return nil, 0, fmt.Errorf("imported world chunk RLE run %d exceeds chunk bounds", i)
+		}
+		if value != 0 {
+			for n := uint64(0); n < length; n++ {
+				x, y, z := importedWorldVoxelCoordsFromLinear(cursor+n, chunkSize)
+				voxel := ImportedWorldVoxelDef{X: x, Y: y, Z: z, Value: value}
+				if materialValue != 0 && materialValue != value {
+					voxel.MaterialValue = materialValue
+				}
+				voxels = append(voxels, voxel)
+			}
+		}
+		cursor += length
+	}
+	if cursor != totalCells {
+		return nil, 0, fmt.Errorf("imported world chunk RLE payload covers %d cells, expected %d", cursor, totalCells)
+	}
+	return voxels, len(voxels), nil
+}
+
 func appendImportedWorldChunkRLERun(runs []importedWorldChunkRLERun, value uint8, length uint64) []importedWorldChunkRLERun {
 	for length > 0 {
 		part := length
@@ -248,6 +392,22 @@ func appendImportedWorldChunkRLERun(runs []importedWorldChunkRLERun, value uint8
 			runs[len(runs)-1].length += uint32(part)
 		} else {
 			runs = append(runs, importedWorldChunkRLERun{value: value, length: uint32(part)})
+		}
+		length -= part
+	}
+	return runs
+}
+
+func appendImportedWorldChunkMaterialRLERun(runs []importedWorldChunkMaterialRLERun, value uint8, materialValue uint8, length uint64) []importedWorldChunkMaterialRLERun {
+	for length > 0 {
+		part := length
+		if part > math.MaxUint32 {
+			part = math.MaxUint32
+		}
+		if len(runs) > 0 && runs[len(runs)-1].value == value && runs[len(runs)-1].materialValue == materialValue && uint64(runs[len(runs)-1].length)+part <= math.MaxUint32 {
+			runs[len(runs)-1].length += uint32(part)
+		} else {
+			runs = append(runs, importedWorldChunkMaterialRLERun{value: value, materialValue: materialValue, length: uint32(part)})
 		}
 		length -= part
 	}

@@ -43,8 +43,9 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 	if opts.ChunkDirectoryName == "" {
 		opts.ChunkDirectoryName = "chunks"
 	}
+	materializedVoxels, materialPalette, runtimeMaterials := importedWorldMaterializedVoxels(voxels, materials)
 	chunks := make(map[[3]int]*content.ImportedWorldChunkDef)
-	for _, voxel := range voxels {
+	for _, voxel := range materializedVoxels {
 		if voxel.Palette == 0 {
 			continue
 		}
@@ -65,12 +66,17 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 			}
 			chunks[coord] = chunk
 		}
-		chunk.Voxels = append(chunk.Voxels, content.ImportedWorldVoxelDef{
-			X:     voxel.X - coord[0]*opts.ChunkSize,
-			Y:     voxel.Y - coord[1]*opts.ChunkSize,
-			Z:     voxel.Z - coord[2]*opts.ChunkSize,
-			Value: voxel.Palette,
-		})
+		outVoxel := content.ImportedWorldVoxelDef{
+			X:             voxel.X - coord[0]*opts.ChunkSize,
+			Y:             voxel.Y - coord[1]*opts.ChunkSize,
+			Z:             voxel.Z - coord[2]*opts.ChunkSize,
+			Value:         voxel.Palette,
+			MaterialValue: voxel.MaterialValue,
+		}
+		if outVoxel.MaterialValue == outVoxel.Value {
+			outVoxel.MaterialValue = 0
+		}
+		chunk.Voxels = append(chunk.Voxels, outVoxel)
 	}
 	coords := sortedChunkCoords(chunks)
 	entries := make([]content.ImportedWorldChunkEntryDef, 0, len(coords))
@@ -115,7 +121,8 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 			ChunkSize:          opts.ChunkSize,
 			VoxelResolution:    opts.VoxelResolution,
 			Palette:            paletteFromMaterials(materials),
-			Materials:          importedWorldMaterialsFromMaterials(materials),
+			MaterialPalette:    materialPalette,
+			Materials:          runtimeMaterials,
 			SourceMaterials:    importedWorldMaterialsFromMaterials(opts.SourceMaterials),
 			SourceBuildVersion: opts.SourceBuildVersion,
 			SourceHash:         opts.SourceHash,
@@ -144,6 +151,9 @@ func SaveImportedWorldEmissionWithOptions(manifestPath string, emission Imported
 		return err
 	}
 	emission.Manifest.ChunkPayloadKind = payloadKind
+	if payloadKind == content.ImportedWorldChunkPayloadDenseRLEBinaryV1 && importedWorldEmissionHasMaterialValues(emission) {
+		emission.Manifest.ChunkPayloadKind = content.ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1
+	}
 	manifestDir := filepath.Dir(manifestPath)
 	for i := range emission.Manifest.Entries {
 		entry := &emission.Manifest.Entries[i]
@@ -170,6 +180,24 @@ func SaveImportedWorldEmissionWithOptions(manifestPath string, emission Imported
 		updateImportedWorldSectorLODMetadata(emission.Manifest.Sectors, path, chunk)
 	}
 	return content.SaveImportedWorld(manifestPath, emission.Manifest)
+}
+
+func importedWorldEmissionHasMaterialValues(emission ImportedWorldEmission) bool {
+	for _, chunk := range emission.Chunks {
+		for _, voxel := range chunk.Voxels {
+			if voxel.Value != 0 && voxel.MaterialValue != 0 && voxel.MaterialValue != voxel.Value {
+				return true
+			}
+		}
+	}
+	for _, chunk := range emission.ProxyChunks {
+		for _, voxel := range chunk.Voxels {
+			if voxel.Value != 0 && voxel.MaterialValue != 0 && voxel.MaterialValue != voxel.Value {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func updateImportedWorldSectorLODMetadata(sectors []content.ImportedWorldSectorDef, path string, chunk *content.ImportedWorldChunkDef) {
@@ -237,6 +265,156 @@ func importedWorldMaterialsFromMaterials(materials []Material) []content.Importe
 		})
 	}
 	return out
+}
+
+type importedWorldMaterialKey struct {
+	ColorPalette uint8
+	Kind         string
+	Transparent  bool
+	EmitsLight   bool
+}
+
+func importedWorldMaterializedVoxels(voxels []Voxel, colorMaterials []Material) ([]Voxel, []content.ImportedWorldPaletteColor, []content.ImportedWorldMaterialDef) {
+	colorPalette := paletteFromMaterials(colorMaterials)
+	materialByPalette := map[uint8]Material{}
+	for _, material := range colorMaterials {
+		index := material.PaletteIndex
+		if index == 0 && material.ID > 0 && material.ID <= 255 {
+			index = uint8(material.ID)
+		}
+		if index != 0 {
+			materialByPalette[index] = material
+		}
+	}
+	materialPalette := make([]content.ImportedWorldPaletteColor, 256)
+	materials := make([]content.ImportedWorldMaterialDef, 0)
+	valuesByKey := map[importedWorldMaterialKey]uint8{}
+	out := make([]Voxel, 0, len(voxels))
+	nextValue := uint8(1)
+	for _, voxel := range voxels {
+		if voxel.Palette == 0 {
+			continue
+		}
+		key := importedWorldMaterialKeyForVoxel(voxel, materialByPalette[voxel.Palette])
+		value, ok := valuesByKey[key]
+		if !ok {
+			if nextValue == 0 {
+				voxel.MaterialValue = voxel.Palette
+				out = append(out, voxel)
+				continue
+			}
+			value = nextValue
+			nextValue++
+			valuesByKey[key] = value
+			source := materialByPalette[voxel.Palette]
+			material := importedWorldRuntimeMaterialForVoxel(value, voxel, source, colorPalette)
+			materialPalette[value] = material.BaseColor
+			materials = append(materials, material)
+		}
+		voxel.MaterialValue = value
+		out = append(out, voxel)
+	}
+	return out, materialPalette, materials
+}
+
+func importedWorldMaterialKeyForVoxel(voxel Voxel, source Material) importedWorldMaterialKey {
+	kind := source.Kind
+	transparent := source.Transparent
+	emitsLight := source.EmitsLight
+	switch voxel.SolidKind {
+	case "glass", "transparent", "grate", "ladder":
+		kind = voxel.SolidKind
+		transparent = true
+	case "emissive":
+		emitsLight = true
+	}
+	return importedWorldMaterialKey{
+		ColorPalette: voxel.Palette,
+		Kind:         kind,
+		Transparent:  transparent,
+		EmitsLight:   emitsLight,
+	}
+}
+
+func importedWorldRuntimeMaterialForVoxel(value uint8, voxel Voxel, source Material, colorPalette []content.ImportedWorldPaletteColor) content.ImportedWorldMaterialDef {
+	color := content.ImportedWorldPaletteColor{180, 180, 180, 255}
+	if int(voxel.Palette) < len(colorPalette) && colorPalette[voxel.Palette] != (content.ImportedWorldPaletteColor{}) {
+		color = colorPalette[voxel.Palette]
+	}
+	material := content.ImportedWorldMaterialDef{
+		ID:                int(value),
+		PaletteIndex:      value,
+		SourceTextureName: source.SourceTextureName,
+		BaseColor:         color,
+		Kind:              source.Kind,
+		CollisionKind:     source.CollisionKind,
+		Transparent:       source.Transparent,
+		EmitsLight:        source.EmitsLight,
+		Emissive:          source.Emissive,
+		Roughness:         source.Roughness,
+		Metallic:          source.Metallic,
+		Transparency:      source.Transparency,
+		SourceWAD:         source.SourceWAD,
+		Size:              source.Size,
+		Tags:              append([]string(nil), source.Tags...),
+	}
+	if material.Kind == "" {
+		material.Kind = "baked_texture"
+	}
+	if material.Roughness == 0 {
+		material.Roughness = 0.9
+	}
+	switch voxel.SolidKind {
+	case "glass":
+		material.Kind = "glass"
+		material.Transparent = true
+		material.Transparency = maxFloat32(material.Transparency, 0.55)
+		material.Roughness = 0.08
+		material.Tags = appendUniqueString(material.Tags, "material:glass")
+	case "transparent":
+		material.Kind = "transparent"
+		material.Transparent = true
+		material.Transparency = maxFloat32(material.Transparency, 0.45)
+		material.Tags = appendUniqueString(material.Tags, "material:transparent")
+	case "grate":
+		material.Kind = "grate"
+		material.Transparent = true
+		material.Transparency = maxFloat32(material.Transparency, 0.35)
+		material.Metallic = maxFloat32(material.Metallic, 0.65)
+		material.Roughness = 0.55
+		material.Tags = appendUniqueString(material.Tags, "material:cutout")
+	case "ladder":
+		material.Kind = "ladder"
+		material.Transparent = true
+		material.Transparency = maxFloat32(material.Transparency, 0.35)
+		material.Tags = appendUniqueString(material.Tags, "material:ladder")
+	case "emissive":
+		material.EmitsLight = true
+		if material.Emissive <= 0 {
+			material.Emissive = 2.0
+		}
+		material.Tags = appendUniqueString(material.Tags, "material:emissive")
+	}
+	return material
+}
+
+func appendUniqueString(values []string, value string) []string {
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func maxFloat32(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func sortedChunkCoords(chunks map[[3]int]*content.ImportedWorldChunkDef) [][3]int {

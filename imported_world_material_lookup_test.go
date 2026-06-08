@@ -45,3 +45,34 @@ func TestImportedWorldMaterialLookupFindsChunkAndXBrickMapVoxels(t *testing.T) {
 		t.Fatal("expected empty xbrickmap voxel lookup to miss")
 	}
 }
+
+func TestImportedWorldMaterialLookupUsesMaterialValueWhenPresent(t *testing.T) {
+	def := &content.ImportedWorldDef{
+		WorldID: "world-a",
+		Materials: []content.ImportedWorldMaterialDef{{
+			ID:           12,
+			PaletteIndex: 12,
+			Kind:         "glass",
+			Transparent:  true,
+			Transparency: 0.55,
+			Tags:         []string{"material:glass"},
+		}},
+	}
+	chunk := &content.ImportedWorldChunkDef{
+		WorldID:         "world-a",
+		ChunkSize:       8,
+		VoxelResolution: 1,
+		Voxels:          []content.ImportedWorldVoxelDef{{X: 2, Y: 3, Z: 4, Value: 5, MaterialValue: 12}},
+	}
+
+	lookup := NewImportedWorldMaterialLookup(def)
+	material, paletteIndex, ok := lookup.MaterialForChunkVoxel(chunk, [3]int{2, 3, 4})
+	if !ok || paletteIndex != 12 || material.Kind != "glass" {
+		t.Fatalf("expected material_value lookup, got material=%+v palette=%d ok=%t", material, paletteIndex, ok)
+	}
+	xbm := ImportedWorldChunkToXBrickMap(chunk)
+	material, paletteIndex, ok = lookup.MaterialForXBrickMapVoxel(xbm, [3]int{2, 3, 4})
+	if !ok || paletteIndex != 12 || !content.ImportedWorldMaterialHasTag(material, "material:glass") {
+		t.Fatalf("expected xbrickmap material_value lookup, got material=%+v palette=%d ok=%t", material, paletteIndex, ok)
+	}
+}

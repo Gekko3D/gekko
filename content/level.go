@@ -217,10 +217,11 @@ type LevelWaterBodyDef struct {
 	Overlap     float32 `json:"overlap,omitempty"`
 	MinCellSize float32 `json:"min_cell_size,omitempty"`
 
-	SourceTag     string `json:"source_tag,omitempty"`
-	EnableSkirt   *bool  `json:"enable_skirt,omitempty"`
-	MaxPatchCount uint32 `json:"max_patch_count,omitempty"`
-	DebugName     string `json:"debug_name,omitempty"`
+	SourceTag       string `json:"source_tag,omitempty"`
+	ContinuityGroup string `json:"continuity_group,omitempty"`
+	EnableSkirt     *bool  `json:"enable_skirt,omitempty"`
+	MaxPatchCount   uint32 `json:"max_patch_count,omitempty"`
+	DebugName       string `json:"debug_name,omitempty"`
 
 	Color           Vec3    `json:"color,omitempty"`
 	AbsorptionColor Vec3    `json:"absorption_color,omitempty"`

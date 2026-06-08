@@ -42,7 +42,7 @@ func ImportedWorldChunkToXBrickMap(chunk *content.ImportedWorldChunkDef) *volume
 		if voxel.Value == 0 {
 			continue
 		}
-		xbm.SetVoxel(voxel.X, voxel.Y, voxel.Z, voxel.Value)
+		xbm.SetVoxel(voxel.X, voxel.Y, voxel.Z, content.ImportedWorldVoxelMaterialValue(voxel))
 	}
 	return xbm
 }
@@ -173,7 +173,11 @@ func ImportedWorldPaletteAsset(assets *AssetServer, def *content.ImportedWorldDe
 	}
 	var palette VoxPalette
 	nonZero := false
-	for i, color := range def.Palette {
+	paletteColors := def.Palette
+	if len(def.MaterialPalette) > 0 {
+		paletteColors = def.MaterialPalette
+	}
+	for i, color := range paletteColors {
 		if i >= len(palette) {
 			break
 		}

@@ -686,6 +686,7 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 		SurfaceY:             2.5,
 		Depth:                1.25,
 		RectHalfExtents:      Vec2{4, 6},
+		ContinuityGroup:      "pool-a",
 		Color:                Vec3{0.1, 0.3, 0.8},
 		DirectLightOcclusion: &directLightOcclusion,
 		FlowDirection:        Vec2{1, 0},
@@ -707,6 +708,7 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
 	if len(loaded.WaterBodies) != 1 || loaded.WaterBodies[0].RectHalfExtents != (Vec2{4, 6}) ||
+		loaded.WaterBodies[0].ContinuityGroup != "pool-a" ||
 		loaded.WaterBodies[0].DirectLightOcclusion == nil || *loaded.WaterBodies[0].DirectLightOcclusion != 0.75 {
 		t.Fatalf("water bodies did not round-trip: %+v", loaded.WaterBodies)
 	}

@@ -41,12 +41,13 @@ type Material struct {
 }
 
 type Voxel struct {
-	X          int    `json:"x"`
-	Y          int    `json:"y"`
-	Z          int    `json:"z"`
-	Palette    uint8  `json:"palette"`
-	MaterialID int    `json:"material_id,omitempty"`
-	SolidKind  string `json:"solid_kind,omitempty"`
+	X             int    `json:"x"`
+	Y             int    `json:"y"`
+	Z             int    `json:"z"`
+	Palette       uint8  `json:"palette"`
+	MaterialValue uint8  `json:"material_value,omitempty"`
+	MaterialID    int    `json:"material_id,omitempty"`
+	SolidKind     string `json:"solid_kind,omitempty"`
 }
 
 type Entity struct {

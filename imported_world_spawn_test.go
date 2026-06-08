@@ -44,6 +44,39 @@ func TestImportedWorldPaletteAssetPreservesEmissiveMaterials(t *testing.T) {
 	}
 }
 
+func TestImportedWorldPaletteAssetPrefersRuntimeMaterialPalette(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+	def := &content.ImportedWorldDef{
+		WorldID: "world",
+		Palette: []content.ImportedWorldPaletteColor{
+			{0, 0, 0, 0},
+			{255, 0, 0, 255},
+		},
+		MaterialPalette: []content.ImportedWorldPaletteColor{
+			{0, 0, 0, 0},
+			{120, 180, 220, 255},
+		},
+		Materials: []content.ImportedWorldMaterialDef{{
+			PaletteIndex: 1,
+			Kind:         "glass",
+			Transparent:  true,
+			Transparency: 0.55,
+		}},
+	}
+
+	paletteID := ImportedWorldPaletteAsset(assets, def)
+	palette, ok := assets.GetVoxelPalette(paletteID)
+	if !ok {
+		t.Fatal("expected imported-world palette asset")
+	}
+	if palette.VoxPalette[1] != [4]uint8{120, 180, 220, 255} {
+		t.Fatalf("expected material palette color, got %+v", palette.VoxPalette[1])
+	}
+	if len(palette.Materials) != 1 || palette.Materials[0].Property["_type"] != "_glass" {
+		t.Fatalf("expected glass material, got %+v", palette.Materials)
+	}
+}
+
 func TestImportedWorldVoxMaterialsPreservePBRHints(t *testing.T) {
 	materials := importedWorldVoxMaterials([]content.ImportedWorldMaterialDef{
 		{

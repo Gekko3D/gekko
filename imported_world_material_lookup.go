@@ -61,7 +61,7 @@ func (lookup ImportedWorldMaterialLookup) MaterialForSourceTexture(textureName s
 }
 
 func (lookup ImportedWorldMaterialLookup) MaterialForChunkVoxel(chunk *content.ImportedWorldChunkDef, local [3]int) (content.ImportedWorldMaterialDef, uint8, bool) {
-	paletteIndex, ok := content.ImportedWorldChunkPaletteAt(chunk, local[0], local[1], local[2])
+	paletteIndex, ok := content.ImportedWorldChunkMaterialAt(chunk, local[0], local[1], local[2])
 	if !ok {
 		return content.ImportedWorldMaterialDef{}, 0, false
 	}
