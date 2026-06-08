@@ -787,6 +787,17 @@ Required phase-1 behavior:
   palette and assign the resulting palette/material value to each boundary
   voxel. The importer reserves the existing emissive ramp slots and uses the
   remaining albedo slots for sampled source colors.
+- Preserve GoldSrc digit texture animations such as `+0name`, `+1name`, etc.
+  as generic imported-world material animation records. The runtime feature is
+  palette/material based rather than HL1-specific: animated texture frames drive
+  the generated runtime `material_value` palette entries.
+- Preserve obvious scrolling conveyor-style textures as generic
+  `palette_scroll` material animation records. This is a phase-bucket
+  approximation of UV scrolling: the importer assigns different material values
+  to sampled texture phases, then the runtime rotates their palette colors.
+  These records also preserve generic `uv_scroll.velocity` metadata so a later
+  textured voxel material path can switch to true shader-side UV scrolling
+  without changing HL1 entity semantics.
 - Use per-texture average colors only as fallback when source pixels are
   missing, unsupported, or intentionally disabled for diagnostics.
 - Store palette RGBA in `ImportedWorldDef.Palette`.
@@ -829,11 +840,26 @@ Current material output:
   differ from baked color identity, such as glass using the same blue texel bin
   as an opaque painted surface.
 - `.gkworld.materials` describes the runtime chunk material palette.
+- `.gkworld.material_animations` optionally describes palette/material
+  animation sequences. A frame may animate palette colors, emissive colors,
+  emission strength, roughness, and transparency. HL1 imports use this for
+  GoldSrc `+0.../+1...` animated texture groups such as lights, monitors,
+  liquids, and fans, plus `palette_scroll` conveyor-style textures, when those
+  surfaces become voxel materials.
+- `material_animations[].uv_scroll` is preserved as engine-level intent, not
+  currently a renderer branch. The live renderer still applies the palette and
+  scalar material frames through the voxel material table; true UV scrolling
+  needs per-hit texture coordinates and texture/atlas sampling in the voxel
+  shader path.
 - `.gkworld.source_materials` preserves original HL1 texture provenance:
   texture name, source WAD, average color, material kind, collision kind,
   transparency, emissive hints, roughness, metallic, and semantic tags.
 - Generated moving-brush, MDL, and SPR `.gkasset` materials receive matching
   authored material metadata where the importer can infer it.
+- Generated moving-brush `.gkasset` files may also contain
+  `material_animations`. HL1 uses this for conveyor brushes such as
+  `func_conveyor`, because those visuals live in generated assets rather than
+  the streamed base-world chunk palette.
 
 Implemented follow-up for palette-only material loss:
 
@@ -851,9 +877,24 @@ Implemented follow-up for palette-only material loss:
 - HL1 albedo colors use map-local adaptive quantization. This replaces the
   earlier fixed `6x6x6` RGB cube that visibly distorted concrete and masonry
   textures.
-- Exact per-voxel source texture identity is still not represented; material
-  values preserve semantic class plus baked color, not the full original face
-  reference.
+- HL1 digit texture animations are represented as imported-world
+  `palette_sequence` material animations. Alternate `+a...` GoldSrc sequences
+  are intentionally deferred until the engine has an authored way to select
+  alternate animation states.
+- HL1 explicit scrolling texture names such as `scroll*` are represented as
+  `palette_scroll` material animations. Generic conveyor-looking names such as
+  `*_conv*` are not animated from name alone because some HL1 conveyor trim and
+  frame textures are static.
+- Conveyor scroll animation IDs include the chosen texture axis, for example
+  `hl1.scroll.u.scroll_conv3` or `hl1.scroll.v.scroll_conv3`. `func_conveyor`
+  brush assets prefer the texture axis with the strongest stripe/contrast
+  signal. If the texture has no clear content axis, the importer falls back to
+  entity movement direction and then UV span. The generated animation records
+  also include matching `uv_scroll.velocity` metadata: `[1, 0]` for U-axis
+  scroll and `[0, 1]` for V-axis scroll.
+- Exact per-voxel source face identity is still not represented in chunks;
+  material values preserve semantic class, baked color, and selected animation
+  group when needed, not the full original face reference.
 
 Palette risk:
 

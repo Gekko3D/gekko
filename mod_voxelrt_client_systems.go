@@ -690,6 +690,11 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	currentObjectEntities := make(map[EntityId]bool, len(state.instanceMap))
 	currentVoxelEntities := make(map[EntityId]bool, len(state.entityLODSelections))
 	frameMaterialKeys := make(map[AssetId]materialTableCacheKey)
+	frameVoxelPalettes := make(map[AssetId]VoxelPaletteAsset)
+	elapsed := float64(0)
+	if t != nil {
+		elapsed = t.Elapsed
+	}
 
 	// Collect instances from models
 	MakeQuery2[TransformComponent, VoxelModelComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent) bool {
@@ -755,10 +760,17 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 		currentObjectEntities[entityId] = true
 		materialKey, hasKey := frameMaterialKeys[vox.VoxelPalette]
+		gekkoPalette, hasPalette := frameVoxelPalettes[vox.VoxelPalette]
 		if !hasKey {
-			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
+			gekkoPalette = effectiveVoxelPaletteAt(server.voxPalettes[vox.VoxelPalette], elapsed)
+			frameVoxelPalettes[vox.VoxelPalette] = gekkoPalette
+			hasPalette = true
 			materialKey = state.materialTableKey(vox.VoxelPalette, &gekkoPalette)
 			frameMaterialKeys[vox.VoxelPalette] = materialKey
+		}
+		if !hasPalette {
+			gekkoPalette = effectiveVoxelPaletteAt(server.voxPalettes[vox.VoxelPalette], elapsed)
+			frameVoxelPalettes[vox.VoxelPalette] = gekkoPalette
 		}
 
 		objectScopedGeometry := voxelModelNeedsObjectScopedGeometry(vox)
@@ -778,7 +790,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 			obj = core.NewVoxelObject()
 			obj.XBrickMap = runtimeGeometryMap
-			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
 			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 			state.RtApp.Scene.AddObject(obj)
 			if vox.RetainRendererGeometry {
@@ -831,7 +842,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 
 		if lastKey, ok := state.lastMaterialKeys[obj]; !ok || lastKey != materialKey {
-			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
 			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 			state.lastMaterialKeys[obj] = materialKey
 		}

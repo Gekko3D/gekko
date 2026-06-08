@@ -122,3 +122,82 @@ func TestBuildMaterialTable_PaletteAlphaGetsSurfaceGlassDefaults(t *testing.T) {
 		t.Fatalf("expected alpha glass refraction to be visibly stronger, got %f", mat.Refraction)
 	}
 }
+
+func TestEffectiveVoxelPaletteAtAppliesLoopingMaterialAnimation(t *testing.T) {
+	var palette VoxPalette
+	palette[5] = [4]uint8{10, 20, 30, 255}
+	asset := VoxelPaletteAsset{
+		VoxPalette: palette,
+		Animations: []VoxelPaletteAnimation{{
+			ID:             "test.animation",
+			Kind:           "palette_sequence",
+			FPS:            2,
+			Mode:           "loop",
+			PaletteIndices: []uint8{5},
+			Frames: []VoxelPaletteAnimationFrame{
+				{Colors: [][4]uint8{{10, 20, 30, 255}}},
+				{Colors: [][4]uint8{{90, 100, 110, 255}}},
+			},
+		}},
+	}
+
+	frame0 := effectiveVoxelPaletteAt(asset, 0.0)
+	if frame0.VoxPalette[5] != ([4]uint8{10, 20, 30, 255}) {
+		t.Fatalf("frame0 color = %+v", frame0.VoxPalette[5])
+	}
+	frame1 := effectiveVoxelPaletteAt(asset, 0.5)
+	if frame1.VoxPalette[5] != ([4]uint8{90, 100, 110, 255}) {
+		t.Fatalf("frame1 color = %+v", frame1.VoxPalette[5])
+	}
+	frameLoop := effectiveVoxelPaletteAt(asset, 1.0)
+	if frameLoop.VoxPalette[5] != ([4]uint8{10, 20, 30, 255}) {
+		t.Fatalf("looped color = %+v", frameLoop.VoxPalette[5])
+	}
+}
+
+func TestEffectiveVoxelPaletteAtAppliesMaterialFrameOverrides(t *testing.T) {
+	var palette VoxPalette
+	palette[6] = [4]uint8{80, 90, 100, 255}
+	asset := VoxelPaletteAsset{
+		VoxPalette: palette,
+		Animations: []VoxelPaletteAnimation{{
+			ID:             "test.material.animation",
+			Kind:           "material_sequence",
+			FPS:            2,
+			Mode:           "loop",
+			PaletteIndices: []uint8{6},
+			Frames: []VoxelPaletteAnimationFrame{
+				{
+					EmissiveColors: [][4]uint8{{0, 0, 0, 255}},
+					Emission:       []float32{0},
+					Roughness:      []float32{0.9},
+					Transparency:   []float32{0},
+				},
+				{
+					EmissiveColors: [][4]uint8{{220, 180, 80, 255}},
+					Emission:       []float32{3.5},
+					Roughness:      []float32{0.25},
+					Transparency:   []float32{0.4},
+				},
+			},
+		}},
+	}
+
+	frame1 := effectiveVoxelPaletteAt(asset, 0.5)
+	state := &VoxelRtState{materialTableCache: make(map[materialTableCacheKey][]core.Material)}
+	table := state.buildMaterialTable(state.materialTableKey(AssetId{}, &frame1), &frame1)
+
+	mat := table[6]
+	if mat.Emissive != ([4]uint8{220, 180, 80, 255}) || mat.Emission != 3.5 {
+		t.Fatalf("expected emissive override, got emissive=%+v emission=%f", mat.Emissive, mat.Emission)
+	}
+	if mat.Roughness != 0.25 {
+		t.Fatalf("expected roughness override, got %f", mat.Roughness)
+	}
+	if mat.Transparency != 0.4 {
+		t.Fatalf("expected transparency override, got %f", mat.Transparency)
+	}
+	if mat.Transmission < 0.99 {
+		t.Fatalf("expected transparent override to opt into transmission, got %f", mat.Transmission)
+	}
+}

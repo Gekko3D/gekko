@@ -77,6 +77,54 @@ func TestImportedWorldPaletteAssetPrefersRuntimeMaterialPalette(t *testing.T) {
 	}
 }
 
+func TestImportedWorldPaletteAssetPreservesMaterialAnimations(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+	def := &content.ImportedWorldDef{
+		WorldID: "world",
+		MaterialPalette: []content.ImportedWorldPaletteColor{
+			{0, 0, 0, 0},
+			{10, 20, 30, 255},
+		},
+		MaterialAnimations: []content.ImportedWorldMaterialAnimationDef{{
+			ID:             "hl1.texture.light",
+			Kind:           "palette_sequence",
+			FPS:            10,
+			Mode:           "loop",
+			PaletteIndices: []uint8{1},
+			Frames: []content.ImportedWorldMaterialAnimationFrameDef{
+				{Colors: []content.ImportedWorldPaletteColor{{10, 20, 30, 255}}},
+				{
+					Colors:         []content.ImportedWorldPaletteColor{{40, 50, 60, 255}},
+					EmissiveColors: []content.ImportedWorldPaletteColor{{120, 90, 60, 255}},
+					Emission:       []float32{1.5},
+					Roughness:      []float32{0.3},
+					Transparency:   []float32{0.2},
+				},
+			},
+			UVScroll: &content.ImportedWorldMaterialUVScrollDef{Velocity: [2]float32{1, 0}},
+		}},
+	}
+
+	paletteID := ImportedWorldPaletteAsset(assets, def)
+	palette, ok := assets.GetVoxelPalette(paletteID)
+	if !ok {
+		t.Fatal("expected imported-world palette asset")
+	}
+	if len(palette.Animations) != 1 || palette.Animations[0].ID != "hl1.texture.light" {
+		t.Fatalf("animations = %+v", palette.Animations)
+	}
+	if len(palette.Animations[0].Frames) != 2 || palette.Animations[0].Frames[1].Colors[0] != ([4]uint8{40, 50, 60, 255}) {
+		t.Fatalf("animation frames = %+v", palette.Animations[0].Frames)
+	}
+	if palette.Animations[0].UVScroll == nil || palette.Animations[0].UVScroll.Velocity != ([2]float32{1, 0}) {
+		t.Fatalf("animation uv scroll = %+v", palette.Animations[0].UVScroll)
+	}
+	frame := palette.Animations[0].Frames[1]
+	if frame.EmissiveColors[0] != ([4]uint8{120, 90, 60, 255}) || frame.Emission[0] != 1.5 || frame.Roughness[0] != 0.3 || frame.Transparency[0] != 0.2 {
+		t.Fatalf("animation material frame = %+v", frame)
+	}
+}
+
 func TestImportedWorldVoxMaterialsPreservePBRHints(t *testing.T) {
 	materials := importedWorldVoxMaterials([]content.ImportedWorldMaterialDef{
 		{

@@ -250,6 +250,8 @@ func importedWorldMaterialsFromMaterials(materials []Material) []content.Importe
 			ID:                material.ID,
 			PaletteIndex:      uint8(index),
 			SourceTextureName: material.SourceTextureName,
+			AnimationID:       material.AnimationID,
+			AnimationPhase:    material.AnimationPhase,
 			BaseColor:         content.ImportedWorldPaletteColor{material.BaseColor[0], material.BaseColor[1], material.BaseColor[2], material.BaseColor[3]},
 			Kind:              material.Kind,
 			CollisionKind:     material.CollisionKind,
@@ -268,10 +270,13 @@ func importedWorldMaterialsFromMaterials(materials []Material) []content.Importe
 }
 
 type importedWorldMaterialKey struct {
-	ColorPalette uint8
-	Kind         string
-	Transparent  bool
-	EmitsLight   bool
+	ColorPalette      uint8
+	Kind              string
+	Transparent       bool
+	EmitsLight        bool
+	SourceTextureName string
+	AnimationID       string
+	AnimationPhase    int
 }
 
 func importedWorldMaterializedVoxels(voxels []Voxel, colorMaterials []Material) ([]Voxel, []content.ImportedWorldPaletteColor, []content.ImportedWorldMaterialDef) {
@@ -332,10 +337,13 @@ func importedWorldMaterialKeyForVoxel(voxel Voxel, source Material) importedWorl
 		emitsLight = true
 	}
 	return importedWorldMaterialKey{
-		ColorPalette: voxel.Palette,
-		Kind:         kind,
-		Transparent:  transparent,
-		EmitsLight:   emitsLight,
+		ColorPalette:      voxel.Palette,
+		Kind:              kind,
+		Transparent:       transparent,
+		EmitsLight:        emitsLight,
+		SourceTextureName: voxel.SourceTextureName,
+		AnimationID:       voxel.AnimationID,
+		AnimationPhase:    voxel.AnimationPhase,
 	}
 }
 
@@ -348,6 +356,8 @@ func importedWorldRuntimeMaterialForVoxel(value uint8, voxel Voxel, source Mater
 		ID:                int(value),
 		PaletteIndex:      value,
 		SourceTextureName: source.SourceTextureName,
+		AnimationID:       source.AnimationID,
+		AnimationPhase:    source.AnimationPhase,
 		BaseColor:         color,
 		Kind:              source.Kind,
 		CollisionKind:     source.CollisionKind,
@@ -363,6 +373,14 @@ func importedWorldRuntimeMaterialForVoxel(value uint8, voxel Voxel, source Mater
 	}
 	if material.Kind == "" {
 		material.Kind = "baked_texture"
+	}
+	if voxel.SourceTextureName != "" {
+		material.SourceTextureName = voxel.SourceTextureName
+	}
+	if voxel.AnimationID != "" {
+		material.AnimationID = voxel.AnimationID
+		material.AnimationPhase = voxel.AnimationPhase
+		material.Tags = appendUniqueString(material.Tags, "material:animated")
 	}
 	if material.Roughness == 0 {
 		material.Roughness = 0.9

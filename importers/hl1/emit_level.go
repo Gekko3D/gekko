@@ -26,6 +26,7 @@ const MovingBrushKindHL1DoorRotating = "hl1_func_door_rotating"
 const MovingBrushKindHL1Button = "hl1_func_button"
 const MovingBrushKindHL1Plat = "hl1_func_plat"
 const MovingBrushKindHL1Train = "hl1_func_train"
+const MovingBrushKindHL1Conveyor = "hl1_func_conveyor"
 const UseTriggerKindHL1Button = "hl1_func_button"
 const ChargerKindHL1Health = "hl1_func_healthcharger"
 const ChargerKindHL1Suit = "hl1_func_recharge"
@@ -1031,6 +1032,8 @@ func hl1MovingBrushKind(className string) (string, bool) {
 		return MovingBrushKindHL1Plat, true
 	case "func_train":
 		return MovingBrushKindHL1Train, true
+	case "func_conveyor":
+		return MovingBrushKindHL1Conveyor, true
 	default:
 		return "", false
 	}
@@ -1038,7 +1041,7 @@ func hl1MovingBrushKind(className string) (string, bool) {
 
 func hl1MovingBrushHasSeparateVisual(className string) bool {
 	switch strings.ToLower(className) {
-	case "func_door", "momentary_door", "func_button", "func_plat", "func_train", "func_door_rotating":
+	case "func_door", "momentary_door", "func_button", "func_plat", "func_train", "func_door_rotating", "func_conveyor":
 		return true
 	default:
 		return false
@@ -1054,12 +1057,14 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 		return GeneratedAssetResult{}, content.Vec3{}, fmt.Errorf("model %d moving brush faces: %w", entity.BrushModelID, err)
 	}
 	voxelized := VoxelizeFacesCPU(faces, VoxelizeOptions{
-		VoxelResolution:     opts.VoxelResolution,
-		TextureStore:        textureStore,
-		LightingData:        bsp.LightingData,
-		BakeStaticLightmaps: opts.BakeStaticLightmaps,
-		MaterialColors:      materialColors,
+		VoxelResolution:       opts.VoxelResolution,
+		TextureStore:          textureStore,
+		LightingData:          bsp.LightingData,
+		BakeStaticLightmaps:   opts.BakeStaticLightmaps,
+		MaterialColors:        materialColors,
+		ScrollDirectionHammer: hl1ConveyorDirectionHammer(entity),
 	})
+	materializeHL1ScrollAssetVoxels(&voxelized)
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}
@@ -1068,6 +1073,7 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 	asset.Tags = []string{"source:hl1", "moving_brush", "classname:" + strings.ToLower(entity.ClassName)}
 	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
 	asset.Materials = assetMaterialsForHL1Voxels(voxelized.Materials, localVoxels)
+	asset.MaterialAnimations = HL1ScrollAssetMaterialAnimations(voxelized.Materials, textureStore)
 	asset.Parts = []content.AssetPartDef{{
 		ID:              "brush",
 		Name:            "brush",
@@ -1087,6 +1093,86 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 	}}
 	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "moving_brushes", brushID+".gkasset")
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
+}
+
+type hl1ScrollAssetMaterialKey struct {
+	Palette     uint8
+	AnimationID string
+	Phase       int
+}
+
+func materializeHL1ScrollAssetVoxels(result *VoxelizeResult) {
+	if result == nil || len(result.Voxels) == 0 {
+		return
+	}
+	used := map[uint8]struct{}{}
+	for _, voxel := range result.Voxels {
+		if voxel.Palette != 0 {
+			used[voxel.Palette] = struct{}{}
+		}
+	}
+	freeValues := make([]uint8, 0)
+	for value := 1; value <= 255; value++ {
+		palette := uint8(value)
+		if _, ok := used[palette]; !ok {
+			freeValues = append(freeValues, palette)
+		}
+	}
+	if len(freeValues) == 0 {
+		return
+	}
+	materialByPalette := map[uint8]importcommon.Material{}
+	for _, material := range result.Materials {
+		index := material.PaletteIndex
+		if index == 0 && material.ID > 0 && material.ID <= 255 {
+			index = uint8(material.ID)
+		}
+		if index != 0 {
+			materialByPalette[index] = material
+		}
+	}
+	nextFree := 0
+	valueByKey := map[hl1ScrollAssetMaterialKey]uint8{}
+	var newMaterials []importcommon.Material
+	for i, voxel := range result.Voxels {
+		if voxel.Palette == 0 || !strings.HasPrefix(voxel.AnimationID, "hl1.scroll.") {
+			continue
+		}
+		key := hl1ScrollAssetMaterialKey{
+			Palette:     voxel.Palette,
+			AnimationID: voxel.AnimationID,
+			Phase:       voxel.AnimationPhase,
+		}
+		value, ok := valueByKey[key]
+		if !ok {
+			if nextFree >= len(freeValues) {
+				continue
+			}
+			value = freeValues[nextFree]
+			nextFree++
+			valueByKey[key] = value
+			material := materialByPalette[voxel.Palette]
+			material.ID = int(value)
+			material.PaletteIndex = value
+			if material.Kind == "" {
+				material.Kind = "baked_texture"
+			}
+			if voxel.SourceTextureName != "" {
+				material.SourceTextureName = voxel.SourceTextureName
+			}
+			material.AnimationID = voxel.AnimationID
+			material.AnimationPhase = voxel.AnimationPhase
+			material.Tags = appendUniqueString(material.Tags, "material:animated")
+			material.Tags = appendUniqueString(material.Tags, "material:scroll_texture")
+			newMaterials = append(newMaterials, material)
+		}
+		voxel.Palette = value
+		voxel.MaterialID = int(value)
+		result.Voxels[i] = voxel
+	}
+	if len(newMaterials) > 0 {
+		result.Materials = append(result.Materials, newMaterials...)
+	}
 }
 
 func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureStore, materialColors map[int][4]uint8, entity importcommon.Entity, breakableID string) (GeneratedAssetResult, content.Vec3, error) {
@@ -1131,6 +1217,14 @@ func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureS
 	}}
 	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "breakables", breakableID+".gkasset")
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
+}
+
+func hl1ConveyorDirectionHammer(entity importcommon.Entity) importcommon.Vec3 {
+	if !strings.EqualFold(entity.ClassName, "func_conveyor") {
+		return importcommon.Vec3{}
+	}
+	move := hl1MoveDirection(entity)
+	return importcommon.Vec3{X: move[0], Y: -move[2], Z: move[1]}
 }
 
 func localizeHL1MovingBrushVoxels(voxels []importcommon.Voxel, resolution float32) ([]content.VoxelObjectVoxelDef, content.Vec3) {
@@ -1278,6 +1372,8 @@ func hl1MovingBrushMotionKind(entity importcommon.Entity) string {
 		return "path"
 	case "func_door_rotating":
 		return "rotate"
+	case "func_conveyor":
+		return "static"
 	default:
 		return "linear"
 	}

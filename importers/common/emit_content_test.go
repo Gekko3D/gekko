@@ -102,6 +102,35 @@ func TestBuildImportedWorldEmissionCreatesMaterialPaletteForTransparentVoxels(t 
 	}
 }
 
+func TestBuildImportedWorldEmissionSplitsAnimatedTextureRuntimeMaterials(t *testing.T) {
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 0, Y: 0, Z: 0, Palette: 4, SourceTextureName: "+0LIGHT", AnimationID: "hl1.texture.light"},
+		{X: 1, Y: 0, Z: 0, Palette: 4, SourceTextureName: "WALL"},
+	}, []Material{
+		{ID: 4, PaletteIndex: 4, BaseColor: [4]uint8{220, 210, 120, 255}, Kind: "baked_texture", Roughness: 0.9},
+	}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	chunk := emission.Chunks[[3]int{0, 0, 0}]
+	if chunk == nil || len(chunk.Voxels) != 2 {
+		t.Fatalf("chunk = %+v", chunk)
+	}
+	first := content.ImportedWorldVoxelMaterialValue(chunk.Voxels[0])
+	second := content.ImportedWorldVoxelMaterialValue(chunk.Voxels[1])
+	if first == second {
+		t.Fatalf("expected animated and static source texels to get different runtime material values, got %+v", chunk.Voxels)
+	}
+	material, ok := content.FindImportedWorldMaterialByPaletteIndex(emission.Manifest, first)
+	if !ok || material.AnimationID != "hl1.texture.light" || material.SourceTextureName != "+0LIGHT" {
+		t.Fatalf("expected animated material metadata, got %+v ok=%t", material, ok)
+	}
+}
+
 func TestBuildImportedWorldEmissionKeepsCutoutVoxelsOpaque(t *testing.T) {
 	emission, err := BuildImportedWorldEmission([]Voxel{
 		{X: 0, Y: 0, Z: 0, Palette: 8, SolidKind: "grate"},

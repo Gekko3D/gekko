@@ -265,7 +265,7 @@ func decodeMipTexture(data []byte, offset int, source string) (TexturePixels, bo
 }
 
 func (texture TexturePixels) AverageColor() ([4]uint8, bool) {
-	if texture.Width <= 0 || texture.Height <= 0 || len(texture.Pixels) == 0 || len(texture.Colors) == 0 {
+	if !texture.Valid() {
 		return [4]uint8{}, false
 	}
 	var r, g, b, n int
@@ -286,23 +286,38 @@ func (texture TexturePixels) AverageColor() ([4]uint8, bool) {
 	return [4]uint8{uint8(r / n), uint8(g / n), uint8(b / n), 255}, true
 }
 
+func (texture TexturePixels) Valid() bool {
+	return texture.Width > 0 && texture.Height > 0 && len(texture.Pixels) >= texture.Width*texture.Height && len(texture.Colors) > 0
+}
+
+func (texture TexturePixels) ColorAt(x, y int) ([4]uint8, bool) {
+	if !texture.Valid() {
+		return [4]uint8{}, false
+	}
+	x = wrapTextureCoord(x, texture.Width)
+	y = wrapTextureCoord(y, texture.Height)
+	paletteIndex := int(texture.Pixels[y*texture.Width+x])
+	if paletteIndex < 0 || paletteIndex >= len(texture.Colors) {
+		return [4]uint8{}, false
+	}
+	color := texture.Colors[paletteIndex]
+	return [4]uint8{color[0], color[1], color[2], 255}, true
+}
+
 func (texture TexturePixels) Sample(u, v float32) ([4]uint8, bool) {
 	sample, ok := texture.SampleTexel(u, v)
 	return sample.Color, ok
 }
 
 func (texture TexturePixels) SampleTexel(u, v float32) (TextureSample, bool) {
-	if texture.Width <= 0 || texture.Height <= 0 || len(texture.Pixels) < texture.Width*texture.Height || len(texture.Colors) == 0 {
-		return TextureSample{}, false
-	}
 	x := wrapTextureCoord(int(math.Floor(float64(u))), texture.Width)
 	y := wrapTextureCoord(int(math.Floor(float64(v))), texture.Height)
-	paletteIndex := int(texture.Pixels[y*texture.Width+x])
-	if paletteIndex < 0 || paletteIndex >= len(texture.Colors) {
+	color, ok := texture.ColorAt(x, y)
+	if !ok {
 		return TextureSample{}, false
 	}
-	color := texture.Colors[paletteIndex]
-	return TextureSample{Color: [4]uint8{color[0], color[1], color[2], 255}, PaletteIndex: uint8(paletteIndex)}, true
+	paletteIndex := int(texture.Pixels[y*texture.Width+x])
+	return TextureSample{Color: color, PaletteIndex: uint8(paletteIndex)}, true
 }
 
 func wrapTextureCoord(value int, size int) int {

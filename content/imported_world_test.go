@@ -33,6 +33,7 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 			ID:                42,
 			PaletteIndex:      1,
 			SourceTextureName: "LIGHT01",
+			AnimationID:       "hl1.texture.light01",
 			BaseColor:         ImportedWorldPaletteColor{10, 20, 30, 255},
 			Kind:              "emissive",
 			CollisionKind:     "solid",
@@ -55,7 +56,26 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 		}},
 		SourceBuildVersion: "importer-1",
 		SourceHash:         "abc123",
-		Tags:               []string{"hl"},
+		MaterialAnimations: []ImportedWorldMaterialAnimationDef{{
+			ID:             "hl1.texture.light01",
+			Kind:           "palette_sequence",
+			FPS:            10,
+			Mode:           "loop",
+			PaletteIndices: []uint8{1},
+			Frames: []ImportedWorldMaterialAnimationFrameDef{
+				{Colors: []ImportedWorldPaletteColor{{10, 20, 30, 255}}},
+				{
+					Colors:         []ImportedWorldPaletteColor{{30, 40, 50, 255}},
+					EmissiveColors: []ImportedWorldPaletteColor{{120, 100, 80, 255}},
+					Emission:       []float32{2},
+					Roughness:      []float32{0.2},
+					Transparency:   []float32{0.1},
+				},
+			},
+			UVScroll: &ImportedWorldMaterialUVScrollDef{Velocity: [2]float32{1, 0}},
+			Tags:     []string{"material:animated_texture"},
+		}},
+		Tags: []string{"hl"},
 		Entries: []ImportedWorldChunkEntryDef{{
 			Coord:              TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
 			ChunkPath:          AuthorDocumentPath(chunkPath, manifestPath),
@@ -83,8 +103,21 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 	if len(loaded.Materials) != 1 || !loaded.Materials[0].EmitsLight || loaded.Materials[0].Emissive != 2.5 {
 		t.Fatalf("expected imported world materials to round-trip, got %+v", loaded.Materials)
 	}
+	if loaded.Materials[0].AnimationID != "hl1.texture.light01" {
+		t.Fatalf("expected imported world material animation id to round-trip, got %+v", loaded.Materials[0])
+	}
 	if loaded.Materials[0].Roughness != 0.35 || loaded.Materials[0].Metallic != 0.2 || len(loaded.Materials[0].Tags) != 1 {
 		t.Fatalf("expected imported world material metadata to round-trip, got %+v", loaded.Materials[0])
+	}
+	if len(loaded.MaterialAnimations) != 1 || loaded.MaterialAnimations[0].ID != "hl1.texture.light01" || len(loaded.MaterialAnimations[0].Frames) != 2 {
+		t.Fatalf("expected imported world material animations to round-trip, got %+v", loaded.MaterialAnimations)
+	}
+	loadedAnimation := loaded.MaterialAnimations[0]
+	if loadedAnimation.UVScroll == nil || loadedAnimation.UVScroll.Velocity != ([2]float32{1, 0}) {
+		t.Fatalf("expected imported world UV scroll metadata to round-trip, got %+v", loadedAnimation.UVScroll)
+	}
+	if loadedAnimation.Frames[1].EmissiveColors[0] != (ImportedWorldPaletteColor{120, 100, 80, 255}) || loadedAnimation.Frames[1].Emission[0] != 2 || loadedAnimation.Frames[1].Roughness[0] != 0.2 || loadedAnimation.Frames[1].Transparency[0] != 0.1 {
+		t.Fatalf("expected imported world material frame overrides to round-trip, got %+v", loadedAnimation.Frames[1])
 	}
 	if len(loaded.SourceMaterials) != 1 || loaded.SourceMaterials[0].Kind != "metal" || loaded.SourceMaterials[0].Metallic != 0.85 {
 		t.Fatalf("expected source materials to round-trip, got %+v", loaded.SourceMaterials)

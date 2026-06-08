@@ -57,6 +57,14 @@ func (store *TextureStore) SampleTexel(name string, u, v float32) (TextureSample
 	return texture.SampleTexel(u, v)
 }
 
+func (store *TextureStore) Texture(name string) (TexturePixels, bool) {
+	if store == nil || name == "" {
+		return TexturePixels{}, false
+	}
+	texture, ok := store.byName[strings.ToLower(name)]
+	return texture, ok
+}
+
 func FixedBakedPaletteMaterials() []importcommon.Material {
 	materials := make([]importcommon.Material, 0, 255)
 	for rBin := 0; rBin < bakedPaletteRBinCount; rBin++ {

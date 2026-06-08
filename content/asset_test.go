@@ -24,6 +24,21 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 			IOR:          1.45,
 			Transparency: 0.1,
 		}},
+		MaterialAnimations: []AssetMaterialAnimationDef{{
+			ID:             "asset.material.light",
+			Kind:           "material_sequence",
+			FPS:            8,
+			Mode:           "loop",
+			PaletteIndices: []uint8{3},
+			Frames: []AssetMaterialAnimationFrameDef{{
+				Colors:         [][4]uint8{{10, 20, 30, 255}},
+				EmissiveColors: [][4]uint8{{200, 180, 120, 255}},
+				Emission:       []float32{2.25},
+				Roughness:      []float32{0.35},
+				Transparency:   []float32{0.15},
+			}},
+			UVScroll: &AssetMaterialUVScrollDef{Velocity: [2]float32{0, 1}},
+		}},
 		Parts: []AssetPartDef{
 			{
 				Name: "Part 1",
@@ -127,6 +142,13 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	}
 	if len(loaded.Materials) != 1 || loaded.Materials[0].ID != "mat_painted_metal" {
 		t.Fatalf("expected authored material to round-trip, got %+v", loaded.Materials)
+	}
+	if len(loaded.MaterialAnimations) != 1 || loaded.MaterialAnimations[0].ID != "asset.material.light" || loaded.MaterialAnimations[0].UVScroll == nil {
+		t.Fatalf("expected material animation to round-trip, got %+v", loaded.MaterialAnimations)
+	}
+	loadedMaterialFrame := loaded.MaterialAnimations[0].Frames[0]
+	if loaded.MaterialAnimations[0].UVScroll.Velocity != ([2]float32{0, 1}) || loadedMaterialFrame.EmissiveColors[0] != ([4]uint8{200, 180, 120, 255}) || loadedMaterialFrame.Emission[0] != 2.25 || loadedMaterialFrame.Roughness[0] != 0.35 || loadedMaterialFrame.Transparency[0] != 0.15 {
+		t.Fatalf("expected material animation frame overrides to round-trip, got animation=%+v frame=%+v", loaded.MaterialAnimations[0], loadedMaterialFrame)
 	}
 	if loaded.Parts[0].Source.Kind != AssetSourceKindVoxModel || loaded.Parts[0].Source.ModelIndex != 2 {
 		t.Fatalf("unexpected part source after round-trip: %+v", loaded.Parts[0].Source)

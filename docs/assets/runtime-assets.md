@@ -46,7 +46,7 @@ The most important record types are:
 - `VoxelModelAsset`
   - voxel data, brick size, optional source path
 - `VoxelPaletteAsset`
-  - palette colors, optional material data, optional PBR-style metadata, optional source path
+  - palette colors, optional material data, optional palette/material animations, optional PBR-style metadata, optional source path
 - `VoxelFileAsset`
   - stored VOX file handle
 - `TextureAsset`
@@ -76,6 +76,9 @@ Typical flows:
   - stores a voxel model, optionally scaling it first
 - `CreateVoxelPaletteFromSource(...)`
   - stores the palette and VOX material data
+- `CreateVoxelPaletteAsset(...)`
+  - stores a full palette asset, including material animation metadata when
+    imported or authored content needs palette/material color sequences
 - `CreatePBRPalette(...)`
   - creates a synthetic palette with engine-side material metadata
 - `CreateVoxelFile(...)`

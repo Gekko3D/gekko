@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -288,8 +289,198 @@ func materialTableFingerprint(gekkoPalette *VoxelPaletteAsset) uint64 {
 			writeUint32(uint32(propertyHash >> 32))
 		}
 	}
+	for _, animation := range gekkoPalette.Animations {
+		writeString(animation.ID)
+		writeString(animation.Kind)
+		writeFloat32(animation.FPS)
+		writeString(animation.Mode)
+		for _, index := range animation.PaletteIndices {
+			writeUint32(uint32(index))
+		}
+		for _, frame := range animation.Frames {
+			writeFloat32(frame.Duration)
+			for _, color := range frame.Colors {
+				_, _ = hasher.Write(color[:])
+			}
+			for _, color := range frame.EmissiveColors {
+				_, _ = hasher.Write(color[:])
+			}
+			for _, value := range frame.Emission {
+				writeFloat32(value)
+			}
+			for _, value := range frame.Roughness {
+				writeFloat32(value)
+			}
+			for _, value := range frame.Transparency {
+				writeFloat32(value)
+			}
+		}
+		if animation.UVScroll != nil {
+			writeFloat32(animation.UVScroll.Velocity[0])
+			writeFloat32(animation.UVScroll.Velocity[1])
+		}
+		for _, tag := range animation.Tags {
+			writeString(tag)
+		}
+	}
+	if len(gekkoPalette.MaterialFrameOverrides) > 0 {
+		keys := make([]int, 0, len(gekkoPalette.MaterialFrameOverrides))
+		for index := range gekkoPalette.MaterialFrameOverrides {
+			keys = append(keys, int(index))
+		}
+		sort.Ints(keys)
+		for _, key := range keys {
+			override := gekkoPalette.MaterialFrameOverrides[uint8(key)]
+			writeUint32(uint32(key))
+			if override.HasEmissiveColor {
+				_, _ = hasher.Write([]byte{1})
+				_, _ = hasher.Write(override.EmissiveColor[:])
+			} else {
+				_, _ = hasher.Write([]byte{0})
+			}
+			if override.HasEmission {
+				_, _ = hasher.Write([]byte{1})
+				writeFloat32(override.Emission)
+			} else {
+				_, _ = hasher.Write([]byte{0})
+			}
+			if override.HasRoughness {
+				_, _ = hasher.Write([]byte{1})
+				writeFloat32(override.Roughness)
+			} else {
+				_, _ = hasher.Write([]byte{0})
+			}
+			if override.HasTransparency {
+				_, _ = hasher.Write([]byte{1})
+				writeFloat32(override.Transparency)
+			} else {
+				_, _ = hasher.Write([]byte{0})
+			}
+		}
+	}
 
 	return hasher.Sum64()
+}
+
+func effectiveVoxelPaletteAt(gekkoPalette VoxelPaletteAsset, elapsed float64) VoxelPaletteAsset {
+	if len(gekkoPalette.Animations) == 0 {
+		return gekkoPalette
+	}
+	out := gekkoPalette
+	out.VoxPalette = gekkoPalette.VoxPalette
+	if len(gekkoPalette.MaterialFrameOverrides) > 0 {
+		out.MaterialFrameOverrides = make(map[uint8]VoxelPaletteMaterialFrameOverride, len(gekkoPalette.MaterialFrameOverrides))
+		for index, override := range gekkoPalette.MaterialFrameOverrides {
+			out.MaterialFrameOverrides[index] = override
+		}
+	} else {
+		out.MaterialFrameOverrides = nil
+	}
+	for _, animation := range out.Animations {
+		frame, ok := voxelPaletteAnimationFrameAt(animation, elapsed)
+		if !ok {
+			continue
+		}
+		for i, paletteIndex := range animation.PaletteIndices {
+			if paletteIndex == 0 {
+				continue
+			}
+			if i < len(frame.Colors) {
+				out.VoxPalette[paletteIndex] = frame.Colors[i]
+			} else if len(frame.Colors) == 1 {
+				out.VoxPalette[paletteIndex] = frame.Colors[0]
+			}
+			override, hasOverride := out.MaterialFrameOverrides[paletteIndex]
+			if color, ok := voxelPaletteAnimationColorAt(frame.EmissiveColors, i); ok {
+				override.EmissiveColor = color
+				override.HasEmissiveColor = true
+				hasOverride = true
+			}
+			if value, ok := voxelPaletteAnimationFloatAt(frame.Emission, i); ok {
+				override.Emission = value
+				override.HasEmission = true
+				hasOverride = true
+			}
+			if value, ok := voxelPaletteAnimationFloatAt(frame.Roughness, i); ok {
+				override.Roughness = value
+				override.HasRoughness = true
+				hasOverride = true
+			}
+			if value, ok := voxelPaletteAnimationFloatAt(frame.Transparency, i); ok {
+				override.Transparency = value
+				override.HasTransparency = true
+				hasOverride = true
+			}
+			if hasOverride {
+				if out.MaterialFrameOverrides == nil {
+					out.MaterialFrameOverrides = map[uint8]VoxelPaletteMaterialFrameOverride{}
+				}
+				out.MaterialFrameOverrides[paletteIndex] = override
+			}
+		}
+	}
+	return out
+}
+
+func voxelPaletteAnimationColorAt(colors [][4]uint8, index int) ([4]uint8, bool) {
+	if index < len(colors) {
+		return colors[index], true
+	}
+	if len(colors) == 1 {
+		return colors[0], true
+	}
+	return [4]uint8{}, false
+}
+
+func voxelPaletteAnimationFloatAt(values []float32, index int) (float32, bool) {
+	if index < len(values) {
+		return values[index], true
+	}
+	if len(values) == 1 {
+		return values[0], true
+	}
+	return 0, false
+}
+
+func voxelPaletteAnimationFrameAt(animation VoxelPaletteAnimation, elapsed float64) (VoxelPaletteAnimationFrame, bool) {
+	if len(animation.Frames) == 0 {
+		return VoxelPaletteAnimationFrame{}, false
+	}
+	totalDuration := float64(0)
+	for _, frame := range animation.Frames {
+		if frame.Duration > 0 {
+			totalDuration += float64(frame.Duration)
+		}
+	}
+	if totalDuration > 0 {
+		t := math.Mod(max(elapsed, 0), totalDuration)
+		accum := float64(0)
+		for _, frame := range animation.Frames {
+			duration := float64(frame.Duration)
+			if duration <= 0 {
+				continue
+			}
+			accum += duration
+			if t < accum {
+				return frame, true
+			}
+		}
+		return animation.Frames[len(animation.Frames)-1], true
+	}
+	fps := float64(animation.FPS)
+	if fps <= 0 {
+		fps = 10
+	}
+	index := int(math.Floor(max(elapsed, 0) * fps))
+	switch strings.ToLower(strings.TrimSpace(animation.Mode)) {
+	case "once", "clamp":
+		if index >= len(animation.Frames) {
+			index = len(animation.Frames) - 1
+		}
+	default:
+		index %= len(animation.Frames)
+	}
+	return animation.Frames[index], true
 }
 
 func (s *VoxelRtState) materialTableKey(paletteID AssetId, gekkoPalette *VoxelPaletteAsset) materialTableCacheKey {
@@ -346,6 +537,9 @@ func (s *VoxelRtState) buildMaterialTable(key materialTableCacheKey, gekkoPalett
 				mat.Transparency = t
 			}
 		}
+		if override, ok := gekkoPalette.MaterialFrameOverrides[uint8(i)]; ok {
+			applyVoxelPaletteMaterialFrameOverride(&mat, color, override)
+		}
 		if mat.Transparency > 0.001 && mat.Transmission <= 0.0 && mat.Metalness < 0.5 {
 			// Palette alpha usually represents a thin surface such as glass, not a
 			// fully volumetric medium. Keep transmission enabled so the
@@ -365,4 +559,22 @@ func (s *VoxelRtState) buildMaterialTable(key materialTableCacheKey, gekkoPalett
 		s.materialTableCache[key] = materialTable
 	}
 	return materialTable
+}
+
+func applyVoxelPaletteMaterialFrameOverride(mat *core.Material, color [4]uint8, override VoxelPaletteMaterialFrameOverride) {
+	if override.HasEmissiveColor {
+		mat.Emissive = override.EmissiveColor
+	}
+	if override.HasEmission {
+		mat.Emission = max(override.Emission, 0)
+		if mat.Emission > 0 && !override.HasEmissiveColor {
+			mat.Emissive = [4]uint8{color[0], color[1], color[2], 255}
+		}
+	}
+	if override.HasRoughness {
+		mat.Roughness = clampF(override.Roughness, 0.0, 1.0)
+	}
+	if override.HasTransparency {
+		mat.Transparency = clampF(override.Transparency, 0.0, 1.0)
+	}
 }

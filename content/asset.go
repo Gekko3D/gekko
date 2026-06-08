@@ -67,16 +67,17 @@ func KnownAssetMarkerKinds() []string {
 }
 
 type AssetDef struct {
-	ID            string             `json:"id"`
-	SchemaVersion int                `json:"schema_version"`
-	Name          string             `json:"name"`
-	Tags          []string           `json:"tags,omitempty"`
-	Materials     []AssetMaterialDef `json:"materials,omitempty"`
-	Runtime       *AssetRuntimeDef   `json:"runtime,omitempty"`
-	Parts         []AssetPartDef     `json:"parts,omitempty"`
-	Lights        []AssetLightDef    `json:"lights,omitempty"`
-	Emitters      []AssetEmitterDef  `json:"emitters,omitempty"`
-	Markers       []AssetMarkerDef   `json:"markers,omitempty"`
+	ID                 string                      `json:"id"`
+	SchemaVersion      int                         `json:"schema_version"`
+	Name               string                      `json:"name"`
+	Tags               []string                    `json:"tags,omitempty"`
+	Materials          []AssetMaterialDef          `json:"materials,omitempty"`
+	MaterialAnimations []AssetMaterialAnimationDef `json:"material_animations,omitempty"`
+	Runtime            *AssetRuntimeDef            `json:"runtime,omitempty"`
+	Parts              []AssetPartDef              `json:"parts,omitempty"`
+	Lights             []AssetLightDef             `json:"lights,omitempty"`
+	Emitters           []AssetEmitterDef           `json:"emitters,omitempty"`
+	Markers            []AssetMarkerDef            `json:"markers,omitempty"`
 }
 
 type AssetMaterialDef struct {
@@ -89,6 +90,30 @@ type AssetMaterialDef struct {
 	Emissive     float32  `json:"emissive,omitempty"`
 	IOR          float32  `json:"ior,omitempty"`
 	Transparency float32  `json:"transparency,omitempty"`
+}
+
+type AssetMaterialAnimationDef struct {
+	ID             string                           `json:"id"`
+	Kind           string                           `json:"kind,omitempty"`
+	FPS            float32                          `json:"fps,omitempty"`
+	Mode           string                           `json:"mode,omitempty"`
+	PaletteIndices []uint8                          `json:"palette_indices,omitempty"`
+	Frames         []AssetMaterialAnimationFrameDef `json:"frames,omitempty"`
+	UVScroll       *AssetMaterialUVScrollDef        `json:"uv_scroll,omitempty"`
+	Tags           []string                         `json:"tags,omitempty"`
+}
+
+type AssetMaterialUVScrollDef struct {
+	Velocity [2]float32 `json:"velocity"`
+}
+
+type AssetMaterialAnimationFrameDef struct {
+	Duration       float32    `json:"duration,omitempty"`
+	Colors         [][4]uint8 `json:"colors,omitempty"`
+	EmissiveColors [][4]uint8 `json:"emissive_colors,omitempty"`
+	Emission       []float32  `json:"emission,omitempty"`
+	Roughness      []float32  `json:"roughness,omitempty"`
+	Transparency   []float32  `json:"transparency,omitempty"`
 }
 
 type AssetRuntimeDef struct {

@@ -24,6 +24,7 @@ type DebugWorldEmissionResult struct {
 	Voxelize     VoxelizeResult
 	Mode         DebugWorldMode
 	PayloadKind  string
+	Diagnostics  []importcommon.Diagnostic
 }
 
 func BuildDebugSurfaceWorld(opts ImportOptions) (DebugWorldEmissionResult, error) {
@@ -114,6 +115,8 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	if err != nil {
 		return DebugWorldEmissionResult{}, err
 	}
+	animationDiagnostics := ApplyHL1MaterialAnimations(emission.Manifest, textureStore)
+	animationDiagnostics = append(animationDiagnostics, ApplyHL1ScrollMaterialAnimations(emission.Manifest, textureStore)...)
 	ApplyHL1SectorVisibility(emission.Manifest, bsp)
 	manifestPath := generatedWorldPath(opts)
 	if manifestPath == "" {
@@ -125,6 +128,7 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 		Voxelize:     voxelized,
 		Mode:         mode,
 		PayloadKind:  opts.ChunkPayloadKind,
+		Diagnostics:  animationDiagnostics,
 	}, nil
 }
 

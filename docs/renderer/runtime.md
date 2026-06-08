@@ -246,6 +246,23 @@ Current implementation notes:
 - The degenerate fallback path is occupancy-based and deterministic per voxel; face-entry is only a last resort.
 - Degenerate thin voxels carry a two-sided direct-light flag through the G-buffer so deferred and transparent lighting agree on planes and rods.
 - Deferred lighting consumes the stored G-buffer normal directly; the albedo/material lookup stays palette-driven.
+- Voxel palette assets may define material animations. During ECS-to-renderer
+  instance sync, the bridge builds an effective palette for the current engine
+  time and lets the existing material-table fingerprint/cache decide whether a
+  material table must be rebuilt. This is CPU-side palette sequencing; shaders
+  still consume the normal material table.
+- Material animation frames are generic engine data, not HL1-specific data.
+  Today the runtime applies palette color, emissive color, emission strength,
+  roughness, and transparency changes by producing an effective
+  `VoxelPaletteAsset` before material-table upload.
+- Current animation kinds are data labels, not renderer branches. Imported HL1
+  content emits `palette_sequence` for `+0/+1/...` texture frames and
+  `palette_scroll` for conveyor-style phase buckets; both resolve to the same
+  effective palette update path before material-table upload.
+- `palette_scroll` animations may carry `uv_scroll.velocity` metadata. That is
+  preserved intent for the future textured voxel material path. It is not true
+  shader-side UV scrolling yet, because current VoxelRT material hits do not
+  carry per-surface UVs or texture/atlas references into the shader.
 - Opaque deferred point and spot lights evaluate attenuation from the stored voxel center, matching the transparent overlay path.
 - Point-light shadows use six cube faces stored in the shadow-map array and are sampled with hard voxel-stable compares.
   - Keep them discrete per receiving voxel. Do not add per-voxel gradient filtering that turns a microvoxel into a soft-lit surface patch.

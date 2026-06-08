@@ -715,3 +715,67 @@ func TestFillClosedInteriorDoesNotFillOpenShell(t *testing.T) {
 		t.Fatalf("open shell filled %d voxel(s)", got)
 	}
 }
+
+func TestHL1FaceScrollAxisPrefersConveyorDirection(t *testing.T) {
+	face := Face{
+		Vertices: []importcommon.Vec3{
+			{X: 0, Y: 0, Z: 0},
+			{X: 256, Y: 0, Z: 0},
+			{X: 256, Y: 64, Z: 0},
+			{X: 0, Y: 64, Z: 0},
+		},
+		TexInfo: TexInfo{
+			S: TextureAxis{Axis: importcommon.Vec3{X: 1}},
+			T: TextureAxis{Axis: importcommon.Vec3{Y: 1}},
+		},
+	}
+	texture := TexturePixels{
+		Name:   "c2a4_conv1",
+		Width:  64,
+		Height: 64,
+		Pixels: make([]byte, 64*64),
+		Colors: [][3]uint8{{255, 255, 255}},
+	}
+
+	if axis := hl1FaceScrollAxis(face, texture, importcommon.Vec3{Y: 1}); axis != hl1ScrollAxisV {
+		t.Fatalf("axis with conveyor direction = %q, want %q", axis, hl1ScrollAxisV)
+	}
+	if axis := hl1FaceScrollAxis(face, texture, importcommon.Vec3{}); axis != hl1ScrollAxisU {
+		t.Fatalf("axis without conveyor direction = %q, want %q", axis, hl1ScrollAxisU)
+	}
+}
+
+func TestHL1FaceScrollAxisPrefersTextureStripeAxis(t *testing.T) {
+	face := Face{
+		Vertices: []importcommon.Vec3{
+			{X: 0, Y: 0, Z: 0},
+			{X: 256, Y: 0, Z: 0},
+			{X: 256, Y: 64, Z: 0},
+			{X: 0, Y: 64, Z: 0},
+		},
+		TexInfo: TexInfo{
+			S: TextureAxis{Axis: importcommon.Vec3{X: 1}},
+			T: TextureAxis{Axis: importcommon.Vec3{Y: 1}},
+		},
+	}
+	texture := TexturePixels{
+		Name:   "striped",
+		Width:  8,
+		Height: 8,
+		Pixels: []byte{
+			0, 0, 0, 0, 0, 0, 0, 0,
+			1, 1, 1, 1, 1, 1, 1, 1,
+			0, 0, 0, 0, 0, 0, 0, 0,
+			1, 1, 1, 1, 1, 1, 1, 1,
+			0, 0, 0, 0, 0, 0, 0, 0,
+			1, 1, 1, 1, 1, 1, 1, 1,
+			0, 0, 0, 0, 0, 0, 0, 0,
+			1, 1, 1, 1, 1, 1, 1, 1,
+		},
+		Colors: [][3]uint8{{20, 20, 20}, {220, 220, 220}},
+	}
+
+	if axis := hl1FaceScrollAxis(face, texture, importcommon.Vec3{X: 1}); axis != hl1ScrollAxisV {
+		t.Fatalf("axis = %q, want stripe axis %q", axis, hl1ScrollAxisV)
+	}
+}

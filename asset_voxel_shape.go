@@ -58,7 +58,49 @@ func authoredVoxelShapePalette(assets *AssetServer, def *content.AssetDef, part 
 		asset.VoxPalette[entry.Value] = material.BaseColor
 		asset.Materials = append(asset.Materials, authoredMaterialToVoxMaterial(int(entry.Value), material))
 	}
+	asset.Animations = authoredAssetVoxelPaletteAnimations(def.MaterialAnimations)
 	return assets.CreateVoxelPaletteAsset(asset), nil
+}
+
+func authoredAssetVoxelPaletteAnimations(animations []content.AssetMaterialAnimationDef) []VoxelPaletteAnimation {
+	out := make([]VoxelPaletteAnimation, 0, len(animations))
+	for _, animation := range animations {
+		if animation.ID == "" || len(animation.PaletteIndices) == 0 || len(animation.Frames) == 0 {
+			continue
+		}
+		frames := make([]VoxelPaletteAnimationFrame, 0, len(animation.Frames))
+		for _, frame := range animation.Frames {
+			if len(frame.Colors) == 0 && len(frame.EmissiveColors) == 0 && len(frame.Emission) == 0 && len(frame.Roughness) == 0 && len(frame.Transparency) == 0 {
+				continue
+			}
+			frames = append(frames, VoxelPaletteAnimationFrame{
+				Duration:       frame.Duration,
+				Colors:         append([][4]uint8(nil), frame.Colors...),
+				EmissiveColors: append([][4]uint8(nil), frame.EmissiveColors...),
+				Emission:       append([]float32(nil), frame.Emission...),
+				Roughness:      append([]float32(nil), frame.Roughness...),
+				Transparency:   append([]float32(nil), frame.Transparency...),
+			})
+		}
+		if len(frames) == 0 {
+			continue
+		}
+		var uvScroll *VoxelPaletteUVScroll
+		if animation.UVScroll != nil {
+			uvScroll = &VoxelPaletteUVScroll{Velocity: animation.UVScroll.Velocity}
+		}
+		out = append(out, VoxelPaletteAnimation{
+			ID:             animation.ID,
+			Kind:           animation.Kind,
+			FPS:            animation.FPS,
+			Mode:           animation.Mode,
+			PaletteIndices: append([]uint8(nil), animation.PaletteIndices...),
+			Frames:         frames,
+			UVScroll:       uvScroll,
+			Tags:           append([]string(nil), animation.Tags...),
+		})
+	}
+	return out
 }
 
 func authoredMaterialToVoxMaterial(id int, material content.AssetMaterialDef) VoxMaterial {

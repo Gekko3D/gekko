@@ -22,13 +22,50 @@ type VoxelGeometryAsset struct {
 type VoxelModelAsset = VoxelGeometryAsset
 
 type VoxelPaletteAsset struct {
-	VoxPalette   VoxPalette
-	Materials    []VoxMaterial
-	IsPBR        bool
-	Roughness    float32
-	Metalness    float32
-	Emission     float32
-	IOR          float32
-	Transparency float32
-	SourcePath   string
+	VoxPalette             VoxPalette
+	Materials              []VoxMaterial
+	Animations             []VoxelPaletteAnimation
+	MaterialFrameOverrides map[uint8]VoxelPaletteMaterialFrameOverride
+	IsPBR                  bool
+	Roughness              float32
+	Metalness              float32
+	Emission               float32
+	IOR                    float32
+	Transparency           float32
+	SourcePath             string
+}
+
+type VoxelPaletteAnimation struct {
+	ID             string
+	Kind           string
+	FPS            float32
+	Mode           string
+	PaletteIndices []uint8
+	Frames         []VoxelPaletteAnimationFrame
+	UVScroll       *VoxelPaletteUVScroll
+	Tags           []string
+}
+
+type VoxelPaletteUVScroll struct {
+	Velocity [2]float32
+}
+
+type VoxelPaletteAnimationFrame struct {
+	Duration       float32
+	Colors         [][4]uint8
+	EmissiveColors [][4]uint8
+	Emission       []float32
+	Roughness      []float32
+	Transparency   []float32
+}
+
+type VoxelPaletteMaterialFrameOverride struct {
+	EmissiveColor    [4]uint8
+	HasEmissiveColor bool
+	Emission         float32
+	HasEmission      bool
+	Roughness        float32
+	HasRoughness     bool
+	Transparency     float32
+	HasTransparency  bool
 }

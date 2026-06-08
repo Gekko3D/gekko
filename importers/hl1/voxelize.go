@@ -22,6 +22,8 @@ type VoxelizeOptions struct {
 	LightingData             []byte
 	BakeStaticLightmaps      bool
 	MaterialColors           map[int][4]uint8
+	ForceScrollAnimation     bool
+	ScrollDirectionHammer    importcommon.Vec3
 }
 
 type VoxelizeResult struct {
@@ -441,15 +443,159 @@ func voxelizeFaceSurface(face Face, opts VoxelizeOptions, voxels map[[3]int]impo
 				sampledColors[key] = sample.Color
 			}
 		}
+		sourceTexture, animationID, animationPhase := hl1VoxelMaterialAnimation(face, key, opts)
 		voxels[key] = importcommon.Voxel{
-			X:          key[0],
-			Y:          key[1],
-			Z:          key[2],
-			Palette:    palette,
-			MaterialID: materialID,
-			SolidKind:  materialKind(face.TextureName),
+			X:                 key[0],
+			Y:                 key[1],
+			Z:                 key[2],
+			Palette:           palette,
+			MaterialID:        materialID,
+			SolidKind:         materialKind(face.TextureName),
+			SourceTextureName: sourceTexture,
+			AnimationID:       animationID,
+			AnimationPhase:    animationPhase,
 		}
 	}
+}
+
+func hl1VoxelMaterialAnimation(face Face, key [3]int, opts VoxelizeOptions) (string, string, int) {
+	if animationID := hl1TextureAnimationID(face.TextureName); animationID != "" {
+		return face.TextureName, animationID, 0
+	}
+	if !opts.ForceScrollAnimation && !hl1TextureLooksScrollable(face.TextureName) {
+		return "", "", 0
+	}
+	u, v, ok := faceTextureUV(face, key, opts)
+	if !ok {
+		return face.TextureName, hl1TextureScrollAnimationID(face.TextureName, hl1ScrollAxisU), 0
+	}
+	axis := hl1ScrollAxisU
+	size := 0
+	if opts.TextureStore != nil {
+		if texture, ok := opts.TextureStore.Texture(face.TextureName); ok {
+			axis = hl1FaceScrollAxis(face, texture, opts.ScrollDirectionHammer)
+			size = hl1ScrollTextureSize(texture, axis)
+		}
+	}
+	coord := u
+	if axis == hl1ScrollAxisV {
+		coord = v
+	}
+	return face.TextureName, hl1TextureScrollAnimationID(face.TextureName, axis), hl1TextureScrollPhase(coord, size)
+}
+
+func hl1FaceScrollAxis(face Face, texture TexturePixels, direction importcommon.Vec3) hl1ScrollAxis {
+	if !texture.Valid() || len(face.Vertices) == 0 {
+		return hl1ScrollAxisU
+	}
+	if axis, ok := hl1TextureScrollContentAxis(texture); ok {
+		return axis
+	}
+	if vec3Length(direction) > 1e-4 {
+		sScore := math.Abs(float64(dotVec3(normalizeVec3(face.TexInfo.S.Axis), normalizeVec3(direction))))
+		tScore := math.Abs(float64(dotVec3(normalizeVec3(face.TexInfo.T.Axis), normalizeVec3(direction))))
+		if tScore > sScore*1.05 {
+			return hl1ScrollAxisV
+		}
+		if sScore > tScore*1.05 {
+			return hl1ScrollAxisU
+		}
+	}
+	minU, maxU := float32(math.MaxFloat32), float32(-math.MaxFloat32)
+	minV, maxV := float32(math.MaxFloat32), float32(-math.MaxFloat32)
+	for _, vertex := range face.Vertices {
+		u := dotVec3(vertex, face.TexInfo.S.Axis) + face.TexInfo.S.Shift
+		v := dotVec3(vertex, face.TexInfo.T.Axis) + face.TexInfo.T.Shift
+		minU = minFloat32(minU, u)
+		maxU = maxFloat32(maxU, u)
+		minV = minFloat32(minV, v)
+		maxV = maxFloat32(maxV, v)
+	}
+	uSpan := (maxU - minU) / float32(max(1, texture.Width))
+	vSpan := (maxV - minV) / float32(max(1, texture.Height))
+	if vSpan > uSpan*1.1 {
+		return hl1ScrollAxisV
+	}
+	return hl1ScrollAxisU
+}
+
+func hl1TextureScrollContentAxis(texture TexturePixels) (hl1ScrollAxis, bool) {
+	if !texture.Valid() || texture.Width <= 1 || texture.Height <= 1 {
+		return "", false
+	}
+	xVariance := hl1TextureMeanLumaVarianceByColumn(texture)
+	yVariance := hl1TextureMeanLumaVarianceByRow(texture)
+	const minVariance = 4.0
+	const dominance = 1.2
+	switch {
+	case xVariance > minVariance && xVariance > yVariance*dominance:
+		return hl1ScrollAxisU, true
+	case yVariance > minVariance && yVariance > xVariance*dominance:
+		return hl1ScrollAxisV, true
+	default:
+		return "", false
+	}
+}
+
+func hl1TextureMeanLumaVarianceByColumn(texture TexturePixels) float64 {
+	values := make([]float64, 0, texture.Width)
+	for x := 0; x < texture.Width; x++ {
+		sum := 0.0
+		count := 0.0
+		for y := 0; y < texture.Height; y++ {
+			color, ok := texture.ColorAt(x, y)
+			if !ok {
+				continue
+			}
+			sum += float64(hl1Luma(color))
+			count++
+		}
+		if count > 0 {
+			values = append(values, sum/count)
+		}
+	}
+	return hl1Variance(values)
+}
+
+func hl1TextureMeanLumaVarianceByRow(texture TexturePixels) float64 {
+	values := make([]float64, 0, texture.Height)
+	for y := 0; y < texture.Height; y++ {
+		sum := 0.0
+		count := 0.0
+		for x := 0; x < texture.Width; x++ {
+			color, ok := texture.ColorAt(x, y)
+			if !ok {
+				continue
+			}
+			sum += float64(hl1Luma(color))
+			count++
+		}
+		if count > 0 {
+			values = append(values, sum/count)
+		}
+	}
+	return hl1Variance(values)
+}
+
+func hl1Luma(color [4]uint8) int {
+	return (int(color[0])*299 + int(color[1])*587 + int(color[2])*114) / 1000
+}
+
+func hl1Variance(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, value := range values {
+		sum += value
+	}
+	mean := sum / float64(len(values))
+	variance := 0.0
+	for _, value := range values {
+		delta := value - mean
+		variance += delta * delta
+	}
+	return variance / float64(len(values))
 }
 
 func applyAdaptiveVoxelPalette(voxels map[[3]int]importcommon.Voxel, sampledColors map[[3]int][4]uint8, opts VoxelizeOptions) []importcommon.Material {
@@ -1176,6 +1322,14 @@ func dotVec3(a, b importcommon.Vec3) float32 {
 
 func vec3Length(v importcommon.Vec3) float32 {
 	return float32(math.Sqrt(float64(dotVec3(v, v))))
+}
+
+func normalizeVec3(v importcommon.Vec3) importcommon.Vec3 {
+	length := vec3Length(v)
+	if length <= 1e-6 {
+		return importcommon.Vec3{}
+	}
+	return importcommon.Vec3{X: v.X / length, Y: v.Y / length, Z: v.Z / length}
 }
 
 func crossVec3(a, b importcommon.Vec3) importcommon.Vec3 {

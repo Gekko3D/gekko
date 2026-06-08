@@ -168,7 +168,7 @@ func stableImportedWorldGroupID(levelID string, worldID string) uint32 {
 }
 
 func ImportedWorldPaletteAsset(assets *AssetServer, def *content.ImportedWorldDef) AssetId {
-	if assets == nil || def == nil || len(def.Palette) == 0 {
+	if assets == nil || def == nil || (len(def.Palette) == 0 && len(def.MaterialPalette) == 0) {
 		return AssetId{}
 	}
 	var palette VoxPalette
@@ -190,7 +190,11 @@ func ImportedWorldPaletteAsset(assets *AssetServer, def *content.ImportedWorldDe
 		return AssetId{}
 	}
 	materials := importedWorldVoxMaterials(def.Materials)
-	return assets.CreateVoxelPalette(palette, materials)
+	return assets.CreateVoxelPaletteAsset(VoxelPaletteAsset{
+		VoxPalette: palette,
+		Materials:  materials,
+		Animations: importedWorldVoxelPaletteAnimations(def.MaterialAnimations),
+	})
 }
 
 func importedWorldVoxMaterials(materials []content.ImportedWorldMaterialDef) []VoxMaterial {
@@ -226,6 +230,55 @@ func importedWorldVoxMaterials(materials []content.ImportedWorldMaterialDef) []V
 		out = append(out, VoxMaterial{
 			ID:       int(material.PaletteIndex),
 			Property: props,
+		})
+	}
+	return out
+}
+
+func importedWorldVoxelPaletteAnimations(animations []content.ImportedWorldMaterialAnimationDef) []VoxelPaletteAnimation {
+	out := make([]VoxelPaletteAnimation, 0, len(animations))
+	for _, animation := range animations {
+		if animation.ID == "" || len(animation.PaletteIndices) == 0 || len(animation.Frames) == 0 {
+			continue
+		}
+		frames := make([]VoxelPaletteAnimationFrame, 0, len(animation.Frames))
+		for _, frame := range animation.Frames {
+			colors := make([][4]uint8, 0, len(frame.Colors))
+			for _, color := range frame.Colors {
+				colors = append(colors, [4]uint8{color[0], color[1], color[2], color[3]})
+			}
+			emissiveColors := make([][4]uint8, 0, len(frame.EmissiveColors))
+			for _, color := range frame.EmissiveColors {
+				emissiveColors = append(emissiveColors, [4]uint8{color[0], color[1], color[2], color[3]})
+			}
+			if len(colors) == 0 && len(emissiveColors) == 0 && len(frame.Emission) == 0 && len(frame.Roughness) == 0 && len(frame.Transparency) == 0 {
+				continue
+			}
+			frames = append(frames, VoxelPaletteAnimationFrame{
+				Duration:       frame.Duration,
+				Colors:         colors,
+				EmissiveColors: emissiveColors,
+				Emission:       append([]float32(nil), frame.Emission...),
+				Roughness:      append([]float32(nil), frame.Roughness...),
+				Transparency:   append([]float32(nil), frame.Transparency...),
+			})
+		}
+		if len(frames) == 0 {
+			continue
+		}
+		var uvScroll *VoxelPaletteUVScroll
+		if animation.UVScroll != nil {
+			uvScroll = &VoxelPaletteUVScroll{Velocity: animation.UVScroll.Velocity}
+		}
+		out = append(out, VoxelPaletteAnimation{
+			ID:             animation.ID,
+			Kind:           animation.Kind,
+			FPS:            animation.FPS,
+			Mode:           animation.Mode,
+			PaletteIndices: append([]uint8(nil), animation.PaletteIndices...),
+			Frames:         frames,
+			UVScroll:       uvScroll,
+			Tags:           append([]string(nil), animation.Tags...),
 		})
 	}
 	return out

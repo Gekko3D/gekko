@@ -81,23 +81,29 @@ func voxelPaletteCacheKey(palette VoxPalette, materials []VoxMaterial, sourcePat
 
 func voxelPaletteAssetCacheKey(asset VoxelPaletteAsset) string {
 	payload, _ := json.Marshal(struct {
-		Palette      VoxPalette
-		Materials    []VoxMaterial
-		IsPBR        bool
-		Roughness    float32
-		Metalness    float32
-		Emission     float32
-		IOR          float32
-		Transparency float32
+		Palette                VoxPalette
+		Materials              []VoxMaterial
+		Animations             []VoxelPaletteAnimation
+		MaterialFrameOverrides map[uint8]VoxelPaletteMaterialFrameOverride
+		IsPBR                  bool
+		Roughness              float32
+		Metalness              float32
+		Emission               float32
+		IOR                    float32
+		Transparency           float32
+		SourcePath             string
 	}{
-		Palette:      asset.VoxPalette,
-		Materials:    asset.Materials,
-		IsPBR:        asset.IsPBR,
-		Roughness:    asset.Roughness,
-		Metalness:    asset.Metalness,
-		Emission:     asset.Emission,
-		IOR:          asset.IOR,
-		Transparency: asset.Transparency,
+		Palette:                asset.VoxPalette,
+		Materials:              asset.Materials,
+		Animations:             asset.Animations,
+		MaterialFrameOverrides: asset.MaterialFrameOverrides,
+		IsPBR:                  asset.IsPBR,
+		Roughness:              asset.Roughness,
+		Metalness:              asset.Metalness,
+		Emission:               asset.Emission,
+		IOR:                    asset.IOR,
+		Transparency:           asset.Transparency,
+		SourcePath:             asset.SourcePath,
 	})
 	return string(payload)
 }

@@ -180,6 +180,9 @@ func TestHL1ReviewEntityCountsClassifyInteractiveImports(t *testing.T) {
 	if !supportedClass("func_ladder") {
 		t.Fatalf("func_ladder should be supported")
 	}
+	if !supportedClass("func_conveyor") {
+		t.Fatalf("func_conveyor should be supported")
+	}
 }
 
 func assertHasDiagnosticCode(t *testing.T, diagnostics []importcommon.Diagnostic, code string) {

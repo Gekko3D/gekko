@@ -27,21 +27,22 @@ const (
 )
 
 type ImportedWorldDef struct {
-	WorldID            string                       `json:"world_id"`
-	SchemaVersion      int                          `json:"schema_version"`
-	Kind               ImportedWorldKind            `json:"kind"`
-	ChunkSize          int                          `json:"chunk_size"`
-	VoxelResolution    float32                      `json:"voxel_resolution"`
-	Palette            []ImportedWorldPaletteColor  `json:"palette,omitempty"`
-	MaterialPalette    []ImportedWorldPaletteColor  `json:"material_palette,omitempty"`
-	Materials          []ImportedWorldMaterialDef   `json:"materials,omitempty"`
-	SourceMaterials    []ImportedWorldMaterialDef   `json:"source_materials,omitempty"`
-	SourceBuildVersion string                       `json:"source_build_version,omitempty"`
-	SourceHash         string                       `json:"source_hash,omitempty"`
-	ChunkPayloadKind   string                       `json:"chunk_payload_kind,omitempty"`
-	Tags               []string                     `json:"tags,omitempty"`
-	Entries            []ImportedWorldChunkEntryDef `json:"entries,omitempty"`
-	Sectors            []ImportedWorldSectorDef     `json:"sectors,omitempty"`
+	WorldID            string                              `json:"world_id"`
+	SchemaVersion      int                                 `json:"schema_version"`
+	Kind               ImportedWorldKind                   `json:"kind"`
+	ChunkSize          int                                 `json:"chunk_size"`
+	VoxelResolution    float32                             `json:"voxel_resolution"`
+	Palette            []ImportedWorldPaletteColor         `json:"palette,omitempty"`
+	MaterialPalette    []ImportedWorldPaletteColor         `json:"material_palette,omitempty"`
+	Materials          []ImportedWorldMaterialDef          `json:"materials,omitempty"`
+	SourceMaterials    []ImportedWorldMaterialDef          `json:"source_materials,omitempty"`
+	MaterialAnimations []ImportedWorldMaterialAnimationDef `json:"material_animations,omitempty"`
+	SourceBuildVersion string                              `json:"source_build_version,omitempty"`
+	SourceHash         string                              `json:"source_hash,omitempty"`
+	ChunkPayloadKind   string                              `json:"chunk_payload_kind,omitempty"`
+	Tags               []string                            `json:"tags,omitempty"`
+	Entries            []ImportedWorldChunkEntryDef        `json:"entries,omitempty"`
+	Sectors            []ImportedWorldSectorDef            `json:"sectors,omitempty"`
 }
 
 type ImportedWorldPaletteColor [4]uint8
@@ -50,6 +51,8 @@ type ImportedWorldMaterialDef struct {
 	ID                int                       `json:"id"`
 	PaletteIndex      uint8                     `json:"palette_index,omitempty"`
 	SourceTextureName string                    `json:"source_texture_name,omitempty"`
+	AnimationID       string                    `json:"animation_id,omitempty"`
+	AnimationPhase    int                       `json:"animation_phase,omitempty"`
 	BaseColor         ImportedWorldPaletteColor `json:"base_color,omitempty"`
 	Kind              string                    `json:"kind,omitempty"`
 	CollisionKind     string                    `json:"collision_kind,omitempty"`
@@ -62,6 +65,30 @@ type ImportedWorldMaterialDef struct {
 	SourceWAD         string                    `json:"source_wad,omitempty"`
 	Size              [2]uint32                 `json:"size,omitempty"`
 	Tags              []string                  `json:"tags,omitempty"`
+}
+
+type ImportedWorldMaterialAnimationDef struct {
+	ID             string                                   `json:"id"`
+	Kind           string                                   `json:"kind,omitempty"`
+	FPS            float32                                  `json:"fps,omitempty"`
+	Mode           string                                   `json:"mode,omitempty"`
+	PaletteIndices []uint8                                  `json:"palette_indices,omitempty"`
+	Frames         []ImportedWorldMaterialAnimationFrameDef `json:"frames,omitempty"`
+	UVScroll       *ImportedWorldMaterialUVScrollDef        `json:"uv_scroll,omitempty"`
+	Tags           []string                                 `json:"tags,omitempty"`
+}
+
+type ImportedWorldMaterialUVScrollDef struct {
+	Velocity [2]float32 `json:"velocity"`
+}
+
+type ImportedWorldMaterialAnimationFrameDef struct {
+	Duration       float32                     `json:"duration,omitempty"`
+	Colors         []ImportedWorldPaletteColor `json:"colors,omitempty"`
+	EmissiveColors []ImportedWorldPaletteColor `json:"emissive_colors,omitempty"`
+	Emission       []float32                   `json:"emission,omitempty"`
+	Roughness      []float32                   `json:"roughness,omitempty"`
+	Transparency   []float32                   `json:"transparency,omitempty"`
 }
 
 type ImportedWorldChunkEntryDef struct {

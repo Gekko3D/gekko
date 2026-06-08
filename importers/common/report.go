@@ -33,34 +33,37 @@ type NamedCount struct {
 }
 
 type ImportReport struct {
-	Source                   SourceInfo    `json:"source"`
-	GeneratedLevelPath       string        `json:"generated_level_path,omitempty"`
-	GeneratedWorldPath       string        `json:"generated_world_path,omitempty"`
-	ChunkCount               int           `json:"chunk_count,omitempty"`
-	NonEmptyVoxelCount       int           `json:"non_empty_voxel_count,omitempty"`
-	MaterialCount            int           `json:"material_count,omitempty"`
-	MaterialKindCounts       []EntityCount `json:"material_kind_counts,omitempty"`
-	UnclassifiedMaterials    []string      `json:"unclassified_materials,omitempty"`
-	PaletteCount             int           `json:"palette_count,omitempty"`
-	ModelCount               int           `json:"model_count,omitempty"`
-	FaceCount                int           `json:"face_count,omitempty"`
-	SkyFaceCount             int           `json:"sky_face_count,omitempty"`
-	EntityCounts             []EntityCount `json:"entity_counts,omitempty"`
-	UnsupportedEntityCounts  []EntityCount `json:"unsupported_entity_counts,omitempty"`
-	MovingBrushEntityCounts  []EntityCount `json:"moving_brush_entity_counts,omitempty"`
-	PathNodeEntityCounts     []EntityCount `json:"path_node_entity_counts,omitempty"`
-	LadderEntityCounts       []EntityCount `json:"ladder_entity_counts,omitempty"`
-	ChargerEntityCounts      []EntityCount `json:"charger_entity_counts,omitempty"`
-	PickupEntityCounts       []EntityCount `json:"pickup_entity_counts,omitempty"`
-	TriggerEntityCounts      []EntityCount `json:"trigger_entity_counts,omitempty"`
-	BreakableEntityCounts    []EntityCount `json:"breakable_entity_counts,omitempty"`
-	UnresolvedTargetCounts   []NamedCount  `json:"unresolved_target_counts,omitempty"`
-	SkippedMultiTargetCounts []NamedCount  `json:"skipped_multi_target_counts,omitempty"`
-	BoundsBeforeConversion   Bounds        `json:"bounds_before_conversion,omitempty"`
-	BoundsAfterConversion    Bounds        `json:"bounds_after_conversion,omitempty"`
-	Diagnostics              []Diagnostic  `json:"diagnostics,omitempty"`
-	DiagnosticSeverityCounts []NamedCount  `json:"diagnostic_severity_counts,omitempty"`
-	DiagnosticCodeCounts     []NamedCount  `json:"diagnostic_code_counts,omitempty"`
+	Source                      SourceInfo    `json:"source"`
+	GeneratedLevelPath          string        `json:"generated_level_path,omitempty"`
+	GeneratedWorldPath          string        `json:"generated_world_path,omitempty"`
+	ChunkCount                  int           `json:"chunk_count,omitempty"`
+	NonEmptyVoxelCount          int           `json:"non_empty_voxel_count,omitempty"`
+	MaterialCount               int           `json:"material_count,omitempty"`
+	MaterialAnimationCount      int           `json:"material_animation_count,omitempty"`
+	AnimatedMaterialCount       int           `json:"animated_material_count,omitempty"`
+	MaterialAnimationFrameCount int           `json:"material_animation_frame_count,omitempty"`
+	MaterialKindCounts          []EntityCount `json:"material_kind_counts,omitempty"`
+	UnclassifiedMaterials       []string      `json:"unclassified_materials,omitempty"`
+	PaletteCount                int           `json:"palette_count,omitempty"`
+	ModelCount                  int           `json:"model_count,omitempty"`
+	FaceCount                   int           `json:"face_count,omitempty"`
+	SkyFaceCount                int           `json:"sky_face_count,omitempty"`
+	EntityCounts                []EntityCount `json:"entity_counts,omitempty"`
+	UnsupportedEntityCounts     []EntityCount `json:"unsupported_entity_counts,omitempty"`
+	MovingBrushEntityCounts     []EntityCount `json:"moving_brush_entity_counts,omitempty"`
+	PathNodeEntityCounts        []EntityCount `json:"path_node_entity_counts,omitempty"`
+	LadderEntityCounts          []EntityCount `json:"ladder_entity_counts,omitempty"`
+	ChargerEntityCounts         []EntityCount `json:"charger_entity_counts,omitempty"`
+	PickupEntityCounts          []EntityCount `json:"pickup_entity_counts,omitempty"`
+	TriggerEntityCounts         []EntityCount `json:"trigger_entity_counts,omitempty"`
+	BreakableEntityCounts       []EntityCount `json:"breakable_entity_counts,omitempty"`
+	UnresolvedTargetCounts      []NamedCount  `json:"unresolved_target_counts,omitempty"`
+	SkippedMultiTargetCounts    []NamedCount  `json:"skipped_multi_target_counts,omitempty"`
+	BoundsBeforeConversion      Bounds        `json:"bounds_before_conversion,omitempty"`
+	BoundsAfterConversion       Bounds        `json:"bounds_after_conversion,omitempty"`
+	Diagnostics                 []Diagnostic  `json:"diagnostics,omitempty"`
+	DiagnosticSeverityCounts    []NamedCount  `json:"diagnostic_severity_counts,omitempty"`
+	DiagnosticCodeCounts        []NamedCount  `json:"diagnostic_code_counts,omitempty"`
 }
 
 func EntityCounts(classNames []string) []EntityCount {

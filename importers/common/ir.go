@@ -26,6 +26,8 @@ type Material struct {
 	ID                int       `json:"id"`
 	PaletteIndex      uint8     `json:"palette_index,omitempty"`
 	SourceTextureName string    `json:"source_texture_name,omitempty"`
+	AnimationID       string    `json:"animation_id,omitempty"`
+	AnimationPhase    int       `json:"animation_phase,omitempty"`
 	BaseColor         [4]uint8  `json:"base_color,omitempty"`
 	Kind              string    `json:"kind,omitempty"`
 	CollisionKind     string    `json:"collision_kind,omitempty"`
@@ -41,13 +43,16 @@ type Material struct {
 }
 
 type Voxel struct {
-	X             int    `json:"x"`
-	Y             int    `json:"y"`
-	Z             int    `json:"z"`
-	Palette       uint8  `json:"palette"`
-	MaterialValue uint8  `json:"material_value,omitempty"`
-	MaterialID    int    `json:"material_id,omitempty"`
-	SolidKind     string `json:"solid_kind,omitempty"`
+	X                 int    `json:"x"`
+	Y                 int    `json:"y"`
+	Z                 int    `json:"z"`
+	Palette           uint8  `json:"palette"`
+	MaterialValue     uint8  `json:"material_value,omitempty"`
+	MaterialID        int    `json:"material_id,omitempty"`
+	SolidKind         string `json:"solid_kind,omitempty"`
+	SourceTextureName string `json:"source_texture_name,omitempty"`
+	AnimationID       string `json:"animation_id,omitempty"`
+	AnimationPhase    int    `json:"animation_phase,omitempty"`
 }
 
 type Entity struct {

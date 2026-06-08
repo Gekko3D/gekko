@@ -80,6 +80,8 @@ func main() {
 		summary.Report.GeneratedWorldPath = debugResult.ManifestPath
 		summary.Report.ChunkCount = len(debugResult.Emission.Chunks)
 		summary.Report.NonEmptyVoxelCount = debugResult.Emission.TotalVoxelCount
+		summary.Report.Diagnostics = append(summary.Report.Diagnostics, debugResult.Diagnostics...)
+		hl1.PopulateMaterialAnimationReport(&summary.Report, debugResult.Emission.Manifest)
 	}
 	var gameAssets hl1.GameAssetImportResult
 	if opts.EmitGameAssets {
@@ -129,6 +131,9 @@ func main() {
 	fmt.Printf("HL1 import report written: %s\n", reportPath)
 	fmt.Printf("BSP: %s\n", summary.Report.Source.BSPPath)
 	fmt.Printf("materials: %d\n", summary.Report.MaterialCount)
+	if summary.Report.MaterialAnimationCount > 0 {
+		fmt.Printf("material animations: %d (%d animated material values, %d frame records)\n", summary.Report.MaterialAnimationCount, summary.Report.AnimatedMaterialCount, summary.Report.MaterialAnimationFrameCount)
+	}
 	fmt.Printf("world faces: %d (sky: %d)\n", summary.Report.FaceCount, summary.Report.SkyFaceCount)
 	fmt.Printf("entities: %d class(es)\n", len(summary.Report.EntityCounts))
 	fmt.Printf("diagnostics: %d\n", len(summary.Report.Diagnostics))
