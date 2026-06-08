@@ -1,6 +1,7 @@
 package hl1
 
 import (
+	"sort"
 	"strings"
 
 	importcommon "github.com/gekko3d/gekko/importers/common"
@@ -82,6 +83,246 @@ func FixedBakedPaletteMaterials() []importcommon.Material {
 		materials = append(materials, material)
 	}
 	return materials
+}
+
+func AdaptiveBakedPaletteMaterials(colors [][4]uint8) ([]importcommon.Material, map[[4]uint8]uint8) {
+	palette := adaptiveBakedPalette(colors, bakedPaletteBinCount)
+	materials := make([]importcommon.Material, 0, len(palette)+emissiveToneCount*emissiveRampLevels)
+	indexByColor := make(map[[4]uint8]uint8)
+	for i, color := range palette {
+		index := uint8(i + 1)
+		materials = append(materials, importcommon.Material{
+			ID:           int(index),
+			PaletteIndex: index,
+			BaseColor:    color,
+			Kind:         "baked_texture",
+			Roughness:    0.9,
+			Tags:         []string{"source:hl1", "material:baked_texture", "palette:adaptive"},
+		})
+	}
+	for _, color := range uniqueSortedColors(colors) {
+		if len(palette) == 0 {
+			break
+		}
+		indexByColor[color] = nearestAdaptivePaletteIndex(color, palette)
+	}
+	for _, material := range fixedEmissivePaletteMaterials() {
+		materials = append(materials, material)
+	}
+	return materials, indexByColor
+}
+
+type adaptiveColorCount struct {
+	Color [4]uint8
+	Count int
+}
+
+func adaptiveBakedPalette(colors [][4]uint8, limit int) [][4]uint8 {
+	if limit <= 0 {
+		return nil
+	}
+	unique := countedSortedColors(colors)
+	if len(unique) == 0 {
+		return nil
+	}
+	if len(unique) <= limit {
+		out := make([][4]uint8, 0, len(unique))
+		for _, entry := range unique {
+			out = append(out, entry.Color)
+		}
+		return out
+	}
+	boxes := []adaptiveColorBox{{Colors: unique}}
+	for len(boxes) < limit {
+		boxIndex := adaptiveBoxToSplit(boxes)
+		if boxIndex < 0 {
+			break
+		}
+		left, right, ok := splitAdaptiveColorBox(boxes[boxIndex])
+		if !ok {
+			break
+		}
+		boxes[boxIndex] = left
+		boxes = append(boxes, right)
+	}
+	out := make([][4]uint8, 0, len(boxes))
+	for _, box := range boxes {
+		out = append(out, adaptiveBoxAverageColor(box))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return compareRGBA(out[i], out[j]) < 0
+	})
+	return out
+}
+
+type adaptiveColorBox struct {
+	Colors []adaptiveColorCount
+}
+
+func adaptiveBoxToSplit(boxes []adaptiveColorBox) int {
+	best := -1
+	bestScore := -1
+	for i, box := range boxes {
+		if len(box.Colors) < 2 {
+			continue
+		}
+		rRange, gRange, bRange := adaptiveBoxRanges(box)
+		score := max(max(rRange, gRange), bRange) * adaptiveBoxWeight(box)
+		if score > bestScore {
+			best = i
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func splitAdaptiveColorBox(box adaptiveColorBox) (adaptiveColorBox, adaptiveColorBox, bool) {
+	if len(box.Colors) < 2 {
+		return adaptiveColorBox{}, adaptiveColorBox{}, false
+	}
+	axis := adaptiveBoxSplitAxis(box)
+	colors := append([]adaptiveColorCount(nil), box.Colors...)
+	sort.Slice(colors, func(i, j int) bool {
+		a := adaptiveColorChannel(colors[i].Color, axis)
+		b := adaptiveColorChannel(colors[j].Color, axis)
+		if a != b {
+			return a < b
+		}
+		return compareRGBA(colors[i].Color, colors[j].Color) < 0
+	})
+	total := 0
+	for _, entry := range colors {
+		total += entry.Count
+	}
+	accum := 0
+	split := 1
+	for i, entry := range colors[:len(colors)-1] {
+		accum += entry.Count
+		if accum*2 >= total {
+			split = i + 1
+			break
+		}
+	}
+	return adaptiveColorBox{Colors: colors[:split]}, adaptiveColorBox{Colors: colors[split:]}, true
+}
+
+func adaptiveBoxSplitAxis(box adaptiveColorBox) int {
+	rRange, gRange, bRange := adaptiveBoxRanges(box)
+	if rRange >= gRange && rRange >= bRange {
+		return 0
+	}
+	if gRange >= bRange {
+		return 1
+	}
+	return 2
+}
+
+func adaptiveBoxRanges(box adaptiveColorBox) (int, int, int) {
+	mins := [3]int{255, 255, 255}
+	maxs := [3]int{0, 0, 0}
+	for _, entry := range box.Colors {
+		color := entry.Color
+		for axis := 0; axis < 3; axis++ {
+			value := int(adaptiveColorChannel(color, axis))
+			if value < mins[axis] {
+				mins[axis] = value
+			}
+			if value > maxs[axis] {
+				maxs[axis] = value
+			}
+		}
+	}
+	return maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]
+}
+
+func adaptiveBoxWeight(box adaptiveColorBox) int {
+	total := 0
+	for _, entry := range box.Colors {
+		total += entry.Count
+	}
+	return total
+}
+
+func adaptiveBoxAverageColor(box adaptiveColorBox) [4]uint8 {
+	var r, g, b, a, total int
+	for _, entry := range box.Colors {
+		r += int(entry.Color[0]) * entry.Count
+		g += int(entry.Color[1]) * entry.Count
+		b += int(entry.Color[2]) * entry.Count
+		a += int(entry.Color[3]) * entry.Count
+		total += entry.Count
+	}
+	if total <= 0 {
+		return [4]uint8{180, 180, 180, 255}
+	}
+	return [4]uint8{uint8(r / total), uint8(g / total), uint8(b / total), uint8(a / total)}
+}
+
+func nearestAdaptivePaletteIndex(color [4]uint8, palette [][4]uint8) uint8 {
+	bestIndex := 0
+	bestDist := int(^uint(0) >> 1)
+	for i, candidate := range palette {
+		dr := int(color[0]) - int(candidate[0])
+		dg := int(color[1]) - int(candidate[1])
+		db := int(color[2]) - int(candidate[2])
+		dist := dr*dr + dg*dg + db*db
+		if dist < bestDist {
+			bestIndex = i
+			bestDist = dist
+		}
+	}
+	return uint8(bestIndex + 1)
+}
+
+func countedSortedColors(colors [][4]uint8) []adaptiveColorCount {
+	counts := make(map[[4]uint8]int)
+	for _, color := range colors {
+		if color[3] == 0 {
+			continue
+		}
+		color[3] = 255
+		counts[color]++
+	}
+	out := make([]adaptiveColorCount, 0, len(counts))
+	for color, count := range counts {
+		out = append(out, adaptiveColorCount{Color: color, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return compareRGBA(out[i].Color, out[j].Color) < 0
+	})
+	return out
+}
+
+func uniqueSortedColors(colors [][4]uint8) [][4]uint8 {
+	counted := countedSortedColors(colors)
+	out := make([][4]uint8, 0, len(counted))
+	for _, entry := range counted {
+		out = append(out, entry.Color)
+	}
+	return out
+}
+
+func adaptiveColorChannel(color [4]uint8, axis int) uint8 {
+	switch axis {
+	case 0:
+		return color[0]
+	case 1:
+		return color[1]
+	default:
+		return color[2]
+	}
+}
+
+func compareRGBA(a, b [4]uint8) int {
+	for i := 0; i < 4; i++ {
+		if a[i] < b[i] {
+			return -1
+		}
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 func fixedEmissivePaletteMaterials() []importcommon.Material {

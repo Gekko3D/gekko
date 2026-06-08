@@ -127,14 +127,34 @@ func TestVoxelizeFacesCPUBakesTextureSampleIntoPalette(t *testing.T) {
 	if len(result.Voxels) == 0 {
 		t.Fatal("no voxels")
 	}
-	want := uint8(bakedPaletteIndex([4]uint8{250, 10, 10, 255}))
 	for _, voxel := range result.Voxels {
-		if voxel.Palette != want || voxel.MaterialID != int(want) {
-			t.Fatalf("voxel baked palette = %+v, want %d", voxel, want)
+		if voxel.Palette != 1 || voxel.MaterialID != 1 {
+			t.Fatalf("voxel baked palette = %+v, want adaptive index 1", voxel)
 		}
 	}
-	if len(result.Materials) != 255 {
+	if color := testMaterialColor(result.Materials, 1); color != ([4]uint8{250, 10, 10, 255}) {
+		t.Fatalf("adaptive material color = %+v", color)
+	}
+	if len(result.Materials) != 1+emissiveToneCount*emissiveRampLevels {
 		t.Fatalf("baked palette materials = %d", len(result.Materials))
+	}
+}
+
+func TestAdaptiveBakedPalettePreservesConcreteTones(t *testing.T) {
+	colors := [][4]uint8{
+		{125, 115, 106, 255},
+		{88, 85, 83, 255},
+		{43, 37, 31, 255},
+	}
+	materials, indexByColor := AdaptiveBakedPaletteMaterials(colors)
+	for _, color := range colors {
+		index := indexByColor[color]
+		if index == 0 {
+			t.Fatalf("missing adaptive index for %+v", color)
+		}
+		if got := testMaterialColor(materials, index); got != color {
+			t.Fatalf("adaptive color for %+v = %+v", color, got)
+		}
 	}
 }
 
@@ -144,11 +164,13 @@ func TestVoxelizeFacesCPUDoesNotBakeLightmapByDefault(t *testing.T) {
 	if len(result.Voxels) == 0 {
 		t.Fatal("no voxels")
 	}
-	want := uint8(bakedPaletteIndex([4]uint8{255, 255, 255, 255}))
 	for _, voxel := range result.Voxels {
-		if voxel.Palette != want || voxel.MaterialID != int(want) {
-			t.Fatalf("voxel baked palette = %+v, want unlightmapped %d", voxel, want)
+		if voxel.Palette != 1 || voxel.MaterialID != 1 {
+			t.Fatalf("voxel baked palette = %+v, want adaptive index 1", voxel)
 		}
+	}
+	if color := testMaterialColor(result.Materials, 1); color != ([4]uint8{255, 255, 255, 255}) {
+		t.Fatalf("default material color = %+v, want unlightmapped white", color)
 	}
 }
 
@@ -163,11 +185,13 @@ func TestVoxelizeFacesCPUBakesLightmapWhenEnabled(t *testing.T) {
 	if len(result.Voxels) == 0 {
 		t.Fatal("no voxels")
 	}
-	want := uint8(bakedPaletteIndex([4]uint8{127, 127, 127, 255}))
 	for _, voxel := range result.Voxels {
-		if voxel.Palette != want || voxel.MaterialID != int(want) {
-			t.Fatalf("voxel baked palette = %+v, want lightmapped %d", voxel, want)
+		if voxel.Palette != 1 || voxel.MaterialID != 1 {
+			t.Fatalf("voxel baked palette = %+v, want adaptive index 1", voxel)
 		}
+	}
+	if color := testMaterialColor(result.Materials, 1); color != ([4]uint8{127, 127, 127, 255}) {
+		t.Fatalf("lightmapped material color = %+v", color)
 	}
 }
 
@@ -206,6 +230,15 @@ func lightmappedTestFace() (Face, *TextureStore, []byte) {
 	return face, store, lighting
 }
 
+func testMaterialColor(materials []importcommon.Material, paletteIndex uint8) [4]uint8 {
+	for _, material := range materials {
+		if material.PaletteIndex == paletteIndex {
+			return material.BaseColor
+		}
+	}
+	return [4]uint8{}
+}
+
 func TestVoxelizeFacesCPUPreservesGlassMaterialKindWithBakedColor(t *testing.T) {
 	texture := TexturePixels{
 		Name:   "GLASSBLUE",
@@ -234,11 +267,13 @@ func TestVoxelizeFacesCPUPreservesGlassMaterialKindWithBakedColor(t *testing.T) 
 	if len(result.Voxels) == 0 {
 		t.Fatal("no voxels")
 	}
-	want := uint8(bakedPaletteIndex([4]uint8{120, 180, 220, 255}))
 	for _, voxel := range result.Voxels {
-		if voxel.Palette != want || voxel.SolidKind != "glass" {
+		if voxel.Palette != 1 || voxel.MaterialID != 1 || voxel.SolidKind != "glass" {
 			t.Fatalf("expected baked glass voxel, got %+v", voxel)
 		}
+	}
+	if color := testMaterialColor(result.Materials, 1); color != ([4]uint8{120, 180, 220, 255}) {
+		t.Fatalf("glass material color = %+v", color)
 	}
 }
 

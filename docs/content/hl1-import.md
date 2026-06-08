@@ -783,8 +783,10 @@ Required phase-1 behavior:
   lightmap style only when the diagnostic `-bake-static-lightmaps` CLI flag is
   enabled. Dynamic/animated light styles are intentionally left for a later
   analysis pass.
-- Quantize sampled texel colors into the imported-world palette and assign the
-  resulting palette/material value to each boundary voxel.
+- Quantize sampled texel colors into a map-local adaptive imported-world
+  palette and assign the resulting palette/material value to each boundary
+  voxel. The importer reserves the existing emissive ramp slots and uses the
+  remaining albedo slots for sampled source colors.
 - Use per-texture average colors only as fallback when source pixels are
   missing, unsupported, or intentionally disabled for diagnostics.
 - Store palette RGBA in `ImportedWorldDef.Palette`.
@@ -819,6 +821,9 @@ Required phase-1 behavior:
 Current material output:
 
 - `.gkworld.palette` preserves baked source/color palette values.
+- Normal HL1 imports build this as a map-local adaptive albedo palette instead
+  of a fixed RGB cube, so subtle concrete/stone/wall tones are not forced into
+  coarse red/gray bins.
 - `.gkworld.material_palette` is optional runtime material colors keyed by
   `material_value`. It is generated when source material semantics need to
   differ from baked color identity, such as glass using the same blue texel bin
@@ -843,6 +848,9 @@ Implemented follow-up for palette-only material loss:
 - HL1 static face lightmap bytes and face references are parsed, but normal
   imports do not bake them into voxel colors. The data is kept for future light
   validation, ambient/probe inference, or explicit visual comparison imports.
+- HL1 albedo colors use map-local adaptive quantization. This replaces the
+  earlier fixed `6x6x6` RGB cube that visibly distorted concrete and masonry
+  textures.
 - Exact per-voxel source texture identity is still not represented; material
   values preserve semantic class plus baked color, not the full original face
   reference.
@@ -851,9 +859,10 @@ Palette risk:
 
 - HL1 maps can have more meaningful texture/material classes than a uint8
   palette can represent.
-- A 255-entry global palette may posterize full-map baked textures. Prefer
-  deterministic quantization first; consider chunk-local palettes or larger
-  material/color tables only after measuring real maps.
+- The current adaptive palette still has a global 255-entry limit. After
+  reserving emissive ramp slots, ordinary albedo gets 216 adaptive colors. If a
+  map remains too color-diverse, consider chunk-local palettes or larger
+  material/color tables after measuring real maps.
 - Do not collapse material identity permanently into RGBA. Keep source material
   ids in IR and reports even if phase 1 chunks only store palette values.
 
@@ -1591,7 +1600,7 @@ Engine/content:
 - [ ] HL1 importer package.
 - [ ] Import report schema.
 - [ ] Required WAD/BSP texture bake onto visible voxel surfaces.
-- [ ] Deterministic palette quantization for baked texture samples.
+- [x] Deterministic adaptive palette quantization for baked texture samples.
 - [ ] Structural fill material propagation from nearest visible source surface.
 - [ ] Optional `.gkworld` source material metadata.
 - [x] Optional `.gkchunk` compact payload support.
@@ -1704,8 +1713,9 @@ Manual visual/GPU checks:
   parity.
 - Confirm baked texture alignment on floors, vertical walls, and inclined
   surfaces.
-- Confirm palette quantization does not collapse most of the map into gray or
-  one dominant material.
+- Confirm adaptive palette quantization preserves concrete, masonry, wall, and
+  terrain color families without collapsing them into gray or one dominant
+  material.
 - Confirm collision.
 - Confirm a wall/floor destructive edit exposes filled matter.
 - Confirm point light placement if imported lights are enabled.
@@ -1730,8 +1740,8 @@ Manual scale-up checks:
   provenance and semantic classification for later runtime use.
 - Texture bake is required for visual parity; average-color materials are a
   fallback only and should be treated as visually incomplete.
-- Global 255-color palette quantization may be too lossy for some maps and may
-  force chunk-local palettes or larger imported-world material storage.
+- Global adaptive palette quantization may still be too lossy for some maps and
+  may force chunk-local palettes or larger imported-world material storage.
 - Wrong BSP texinfo axis/shift/wrap handling will make textures look worse than
   flat colors because alignment errors are obvious on tiled HL1 surfaces.
 - CPU voxelization may be too slow; GPU voxelization may be harder to test
