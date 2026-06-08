@@ -289,6 +289,24 @@ Verification:
 - Manual check: movement through `gasworks` no longer produces large commit
   spikes, even if holes may still exist at this step.
 
+Implementation note, 2026-06-08:
+
+- Prepare-side imported-world geometry staging was attempted by building
+  `XBrickMap` geometry and bounds on streaming worker goroutines before commit.
+- Direct runtime-owned map adoption made `commit_last_ms` tiny, but crashed
+  during `gasworks_128` testing with an invalid wgpu bind group.
+- A copied prepared-map registration path and then atomic `XBrickMap` ID
+  allocation were also tested; both still crashed under the same
+  `gasworks_128` renderer load.
+- Prepared imported-world geometry staging is disabled. Imported-world full
+  chunks and sector proxies again build their voxel geometry during entity
+  spawn on the stable renderer path.
+- Atomic `XBrickMap` ID allocation remains because concurrent map construction
+  is independently possible and IDs are uploaded into GPU scene data.
+- The next commit/upload optimization should be renderer-owned staging or GPU
+  upload scheduling, not publishing worker-built `XBrickMap` instances into
+  live voxel model assets.
+
 #### Step 3: Add Hysteresis And Prefetch Rings
 
 Separate load and unload decisions:
@@ -336,9 +354,19 @@ Runtime state should gain:
 
 Verification:
 
-- Existing `.gkworld` files without sectors still load through the old path.
-- New sector manifests load through the sector path.
+- Schema v1 `.gkworld` files are re-imported to schema v2 before runtime use.
+- Sector manifests load through the sector path.
 - Sector grouping does not change world scale or chunk placement.
+
+Implementation note, 2026-06-08:
+
+- `.gkworld` schema v2 adds `sectors`.
+- Chunk `entries` remain the file catalog.
+- Sector `full_chunk_refs` are now the runtime-facing imported-world grouping.
+- The streamed runtime indexes imported-world chunks through sectors before
+  falling back to chunk preparation/commit.
+- Backward compatibility with schema v1 manifests is intentionally not
+  preserved; re-import old worlds to regenerate schema v2 metadata.
 
 #### Step 5: Generate Coarse Proxy LODs At Import/Bake Time
 
@@ -367,6 +395,15 @@ Verification:
 - Confirm the level has no holes from normal viewing distances.
 - Confirm full-res data can replace proxy data without transform seams.
 
+Implementation note, 2026-06-08:
+
+- Sector `lods` metadata now supports proxy chunk references.
+- Import/bake emits one `lod1` `voxel_proxy` chunk per sector under `lods/`.
+- Proxy chunks downsample full sector voxels by 4x and preserve the dominant
+  material in each coarse cell.
+- Runtime does not consume proxy LODs yet; this only prepares the assets needed
+  for no-hole replacement.
+
 #### Step 6: Implement No-Hole Replacement
 
 Change runtime residency so a sector always has a visible fallback before full
@@ -385,6 +422,26 @@ Verification:
 - Artificially slow chunk loading.
 - Move quickly through the level.
 - Confirm visible holes do not appear.
+
+Implementation note, 2026-06-08:
+
+- The streamed runtime now derives desired/keep sectors from desired/keep
+  imported-world chunks.
+- Sector `lod1` proxy chunks are prepared and committed as visual-only entities
+  before full chunk commits when available.
+- Proxy entities do not get collision components.
+- A sector proxy is hidden after all full non-empty chunks referenced by the
+  sector are loaded.
+- Sector proxy visual residency is now separate from full chunk visual
+  residency. Proxy sectors can be kept as a cheap far-world fallback, hidden
+  while all full chunks for the sector are resident, and shown before full
+  chunks unload so the base world does not disappear at distance.
+- Streaming metrics now include loadable desired/keep chunk counts,
+  collision-resident chunk counts, desired/keep sector counts, proxy pending
+  and prepared queues, and loaded proxy counts. The original `desired` and
+  `keep` counters still include empty radius coordinates for compatibility.
+- Runtime visibility can consume imported-world sector metadata; radius
+  streaming remains the fallback when sector visibility metadata is absent.
 
 #### Step 7: Split Render, Collision, And Destruction Residency
 
@@ -419,6 +476,37 @@ Verification:
 - Destruction works after a sector reaches full residency.
 - Far sectors remain visible but cheap.
 
+Implementation note, 2026-06-08:
+
+- Imported-world full visual chunk residency is now separate from collision
+  residency.
+- Observer `PrefetchRadius` requests full visual chunks.
+- Observer `Radius` feeds the current-sector/visibility seed.
+- Observer `CollisionRadius`, or `GEKKO_STREAMING_COLLISION_RADIUS` in
+  `actiongame`, requests near collision residency. When unset, collision
+  residency follows `Radius` to preserve existing behavior.
+- Observer `DestructionRadius`, or `GEKKO_STREAMING_DESTRUCTION_RADIUS` in
+  `actiongame`, requests near destruction/editability residency. When unset,
+  destruction residency follows collision residency.
+- Full imported-world chunks outside collision residency are committed without
+  rigid body, collider, or AABB components.
+- Full imported-world chunks inside collision residency are committed with
+  collision components.
+- Full imported-world chunks outside destruction residency ignore destruction
+  events. Full imported-world chunks inside destruction residency receive an
+  explicit residency marker and use the existing voxel destruction path.
+- Streaming logs include `collision_loadable`, `proxy_committed_frame`,
+  `destruction_loadable`, `proxy_committed_frame`, `full_committed_frame`,
+  `collision_committed_frame`, and matching total counters so visual, proxy,
+  collision, and destruction residency can be compared.
+- Already-loaded full chunks are not promoted/demoted in place yet; mutating
+  renderer-active chunk entities caused stale GPU bind-group validation failures
+  during visual testing.
+- Imported-world destruction persistence writes dirty imported chunks to
+  `ImportedWorldChunkOverrides` in the world delta. The imported source world
+  remains immutable; runtime loads the saved override chunk before falling back
+  to the imported manifest entry.
+
 #### Step 8: Add HL1/BSP Visibility Provider
 
 For HL1 imports, radius streaming should become a fallback. The importer should
@@ -442,6 +530,61 @@ Verification:
   sphere.
 - Looking through doorways or around corners has required sectors ready.
 - Hidden rooms do not cost full-resolution rendering/collision.
+
+Implementation note, 2026-06-08:
+
+- HL1 BSP imports now retain the raw visibility lump and can decode compressed
+  PVS bitsets for playable leafs.
+- Imported-world sectors now carry `source_leaf_ids`,
+  `visible_sector_refs`, and `adjacent_sector_refs` in addition to
+  `visibility_id`.
+- The HL1 debug world importer annotates sectors by overlapping sector bounds
+  with playable BSP leaf bounds, then expands visible sector refs through PVS
+  and neighbor adjacency.
+- `gasworks_128` re-import produced 32 sectors, 32 proxy LODs, 31 sectors with
+  source leaf IDs, and visible refs for every sector.
+- Runtime streaming now uses the observer's current imported-world sectors as
+  visibility seeds when sector refs exist.
+- Full imported-world chunk desire expands through sector
+  `visible_sector_refs` and `adjacent_sector_refs`.
+- Imported-world chunks inside the old prefetch sphere but outside the visible
+  sector set are filtered out unless they also contain terrain/placements.
+- Radius/keep/prefetch remains the fallback for worlds without sector
+  visibility metadata, and collision residency still follows the near radius.
+- `gasworks_128` visual checkpoint passed with no crashes and no visible holes,
+  but this map's broad sector PVS still produced `desired=3375`; the remaining
+  high-water mark is commit/upload cost rather than visibility selection.
+- `gasworks_128` later reproduced the same invalid wgpu bind-group crash even
+  after prepare-side geometry staging was disabled. Runtime diagnostic knobs now
+  allow sector proxy scheduling to be disabled, or proxy removal to be retained,
+  so proxy lifetime can be isolated from full-chunk streaming and renderer
+  upload behavior.
+- Disabling sector proxies avoided the crash; retaining proxies still crashed
+  after the world finished loading, so proxy removal is not the trigger. Sector
+  proxy entities now skip terrain renderer metadata and stay out of terrain
+  lookup/normal-seam systems while remaining visual voxel fallback objects.
+- A retained-proxy run without terrain metadata still crashed while moving the
+  camera during heavy startup loading. Sector proxies now also opt out of
+  shadows and occlusion culling to isolate camera-driven visibility/shadow work
+  from proxy voxel upload.
+- The crash was later isolated to a stale feature-owned transparent bind group:
+  wgpu reported `Transparent Scene BG0` as invalid after scene/voxel buffer
+  recreation. The renderer now labels core scene/voxel bind groups, tracks a
+  scene binding revision so the transparency feature refreshes its bind groups
+  before rendering if they are behind the current scene buffers, and releases
+  retired scene buffers only after the render queue submission associated with
+  the retirement has completed.
+- A later gasworks stress run still reported the same transparent bind group
+  invalid after many full-chunk commits. The transparent overlay now also
+  tracks the actual source buffers used to build `Transparent Scene BG0`, so a
+  missed buffer pointer change forces a rebuild even if the coarse scene
+  binding revision appears current.
+- Replaced transparent overlay bind groups are also retired under the same
+  queue-submission fence as buffers. This keeps old bind-group handles owned by
+  the renderer until command buffers that may reference them have completed.
+- `gasworks_128` visual checkpoint then passed while moving immediately during
+  startup; sector proxies were replaced by detailed chunks without crashes or
+  persistent low-LOD objects.
 
 #### Step 9: Add Clipmap Provider For Open Worlds
 

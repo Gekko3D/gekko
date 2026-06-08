@@ -13,6 +13,7 @@ type WorldDeltaDef struct {
 	PlacementTransformOverrides []PlacementTransformOverrideDef `json:"placement_transform_overrides,omitempty"`
 	PlacementDeletions          []PlacementDeletionDef          `json:"placement_deletions,omitempty"`
 	TerrainChunkOverrides       []TerrainChunkOverrideDef       `json:"terrain_chunk_overrides,omitempty"`
+	ImportedWorldChunkOverrides []ImportedWorldChunkOverrideDef `json:"imported_world_chunk_overrides,omitempty"`
 	VoxelObjectOverrides        []VoxelObjectOverrideDef        `json:"voxel_object_overrides,omitempty"`
 }
 
@@ -27,6 +28,12 @@ type PlacementDeletionDef struct {
 
 type TerrainChunkOverrideDef struct {
 	TerrainID    string               `json:"terrain_id"`
+	ChunkCoord   TerrainChunkCoordDef `json:"chunk_coord"`
+	SnapshotPath string               `json:"snapshot_path"`
+}
+
+type ImportedWorldChunkOverrideDef struct {
+	WorldID      string               `json:"world_id"`
 	ChunkCoord   TerrainChunkCoordDef `json:"chunk_coord"`
 	SnapshotPath string               `json:"snapshot_path"`
 }

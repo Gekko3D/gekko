@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"hash/fnv"
+	"time"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -9,11 +10,24 @@ import (
 )
 
 type AuthoredImportedWorldSpawnDef struct {
-	LevelID          string
-	WorldID          string
-	ShadowGroupID    uint32
-	Chunk            *content.ImportedWorldChunkDef
-	CollisionEnabled bool
+	LevelID                 string
+	WorldID                 string
+	ShadowGroupID           uint32
+	Chunk                   *content.ImportedWorldChunkDef
+	CollisionEnabled        bool
+	DestructionEnabled      bool
+	DisableTerrainMetadata  bool
+	DisableShadows          bool
+	DisableOcclusionCulling bool
+	PreparedGeometry        *volume.XBrickMap
+	Timing                  *AuthoredImportedWorldSpawnTiming
+}
+
+type AuthoredImportedWorldSpawnTiming struct {
+	VoxelCount                      int
+	GeometryBuildDuration           time.Duration
+	GeometryRegistrationDuration    time.Duration
+	EntityAndComponentSpawnDuration time.Duration
 }
 
 func ImportedWorldChunkToXBrickMap(chunk *content.ImportedWorldChunkDef) *volume.XBrickMap {
@@ -34,9 +48,40 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 	if cmd == nil || def.Chunk == nil {
 		return 0
 	}
+	if def.Timing != nil {
+		*def.Timing = AuthoredImportedWorldSpawnTiming{
+			VoxelCount: def.Chunk.NonEmptyVoxelCount,
+		}
+		if def.Timing.VoxelCount <= 0 {
+			def.Timing.VoxelCount = len(def.Chunk.Voxels)
+		}
+	}
 	overrideGeometry := AssetId{}
 	if assets := assetServerFromApp(cmd.app); assets != nil {
-		overrideGeometry = assets.RegisterSharedVoxelGeometry(ImportedWorldChunkToXBrickMap(def.Chunk), "")
+		xbm := def.PreparedGeometry
+		if xbm == nil {
+			buildStart := time.Now()
+			xbm = ImportedWorldChunkToXBrickMap(def.Chunk)
+			if def.Timing != nil {
+				def.Timing.GeometryBuildDuration += time.Since(buildStart)
+			}
+		}
+		registerStart := time.Now()
+		overrideGeometry = assets.RegisterSharedVoxelGeometry(xbm, "")
+		if def.Timing != nil {
+			def.Timing.GeometryRegistrationDuration += time.Since(registerStart)
+		}
+	}
+	isTerrainChunk := !def.DisableTerrainMetadata
+	terrainGroupID := uint32(0)
+	terrainChunkCoord := [3]int{}
+	terrainChunkSize := 0
+	shadowSeamWorldEpsilon := float32(0)
+	if isTerrainChunk {
+		terrainGroupID = def.ShadowGroupID
+		terrainChunkCoord = [3]int{def.Chunk.Coord.X, def.Chunk.Coord.Y, def.Chunk.Coord.Z}
+		terrainChunkSize = def.Chunk.ChunkSize
+		shadowSeamWorldEpsilon = def.Chunk.VoxelResolution
 	}
 	comps := []any{
 		&TransformComponent{
@@ -51,15 +96,17 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 		},
 		&Parent{Entity: parent},
 		&VoxelModelComponent{
-			VoxelPalette:           palette,
-			PivotMode:              PivotModeCorner,
-			OverrideGeometry:       overrideGeometry,
-			ShadowGroupID:          def.ShadowGroupID,
-			ShadowSeamWorldEpsilon: def.Chunk.VoxelResolution,
-			IsTerrainChunk:         true,
-			TerrainGroupID:         def.ShadowGroupID,
-			TerrainChunkCoord:      [3]int{def.Chunk.Coord.X, def.Chunk.Coord.Y, def.Chunk.Coord.Z},
-			TerrainChunkSize:       def.Chunk.ChunkSize,
+			VoxelPalette:            palette,
+			PivotMode:               PivotModeCorner,
+			OverrideGeometry:        overrideGeometry,
+			DisableShadows:          def.DisableShadows,
+			DisableOcclusionCulling: def.DisableOcclusionCulling,
+			ShadowGroupID:           def.ShadowGroupID,
+			ShadowSeamWorldEpsilon:  shadowSeamWorldEpsilon,
+			IsTerrainChunk:          isTerrainChunk,
+			TerrainGroupID:          terrainGroupID,
+			TerrainChunkCoord:       terrainChunkCoord,
+			TerrainChunkSize:        terrainChunkSize,
 		},
 		&AuthoredImportedWorldChunkRefComponent{
 			LevelID:    def.LevelID,
@@ -74,7 +121,19 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 			&AABBComponent{},
 		)
 	}
-	return cmd.AddEntity(comps...)
+	if def.DestructionEnabled {
+		comps = append(comps, &StreamedDestructionResidentComponent{
+			LevelID:    def.LevelID,
+			WorldID:    def.WorldID,
+			ChunkCoord: [3]int{def.Chunk.Coord.X, def.Chunk.Coord.Y, def.Chunk.Coord.Z},
+		})
+	}
+	entityStart := time.Now()
+	entity := cmd.AddEntity(comps...)
+	if def.Timing != nil {
+		def.Timing.EntityAndComponentSpawnDuration += time.Since(entityStart)
+	}
+	return entity
 }
 
 func importedWorldChunkPosition(chunk *content.ImportedWorldChunkDef) mgl32.Vec3 {

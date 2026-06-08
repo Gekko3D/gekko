@@ -121,3 +121,59 @@ func terrainChunkDefFromXBrickMap(terrainID string, coord content.TerrainChunkCo
 	}
 	return chunk
 }
+
+func importedWorldChunkDefFromXBrickMap(worldID string, coord content.TerrainChunkCoordDef, chunkSize int, voxelResolution float32, xbm *volume.XBrickMap) *content.ImportedWorldChunkDef {
+	chunk := &content.ImportedWorldChunkDef{
+		SchemaVersion:   content.CurrentImportedWorldChunkSchemaVersion,
+		WorldID:         worldID,
+		Coord:           coord,
+		ChunkSize:       chunkSize,
+		VoxelResolution: voxelResolution,
+		PayloadKind:     content.ImportedWorldChunkPayloadSparseJSONV1,
+	}
+	if xbm == nil {
+		return chunk
+	}
+	for sKey, sector := range xbm.Sectors {
+		for i := 0; i < 64; i++ {
+			if (sector.BrickMask64 & (1 << i)) == 0 {
+				continue
+			}
+			bx, by, bz := i%4, (i/4)%4, i/16
+			brick := sector.GetBrick(bx, by, bz)
+			if brick == nil {
+				continue
+			}
+			originX := sKey[0]*volume.SectorSize + bx*volume.BrickSize
+			originY := sKey[1]*volume.SectorSize + by*volume.BrickSize
+			originZ := sKey[2]*volume.SectorSize + bz*volume.BrickSize
+			for vz := 0; vz < volume.BrickSize; vz++ {
+				for vy := 0; vy < volume.BrickSize; vy++ {
+					for vx := 0; vx < volume.BrickSize; vx++ {
+						val := brick.Payload[vx][vy][vz]
+						if val == 0 {
+							continue
+						}
+						chunk.Voxels = append(chunk.Voxels, content.ImportedWorldVoxelDef{
+							X:     originX + vx,
+							Y:     originY + vy,
+							Z:     originZ + vz,
+							Value: val,
+						})
+					}
+				}
+			}
+		}
+	}
+	sort.Slice(chunk.Voxels, func(i, j int) bool {
+		if chunk.Voxels[i].X != chunk.Voxels[j].X {
+			return chunk.Voxels[i].X < chunk.Voxels[j].X
+		}
+		if chunk.Voxels[i].Y != chunk.Voxels[j].Y {
+			return chunk.Voxels[i].Y < chunk.Voxels[j].Y
+		}
+		return chunk.Voxels[i].Z < chunk.Voxels[j].Z
+	})
+	chunk.NonEmptyVoxelCount = len(chunk.Voxels)
+	return chunk
+}

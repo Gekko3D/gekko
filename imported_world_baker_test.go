@@ -40,6 +40,9 @@ func TestBakeImportedWorldFromVoxBuildsDeterministicChunkedWorld(t *testing.T) {
 	if got := len(result.Manifest.Entries); got != 2 {
 		t.Fatalf("expected 2 manifest entries, got %d", got)
 	}
+	if got := len(result.Manifest.Sectors); got != 2 {
+		t.Fatalf("expected 2 manifest sectors, got %d", got)
+	}
 	if result.TotalVoxelCount != 4 {
 		t.Fatalf("expected 4 baked voxels, got %d", result.TotalVoxelCount)
 	}

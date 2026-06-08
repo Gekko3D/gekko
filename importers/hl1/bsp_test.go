@@ -60,6 +60,61 @@ func TestParseBSPExtractsCoreLumps(t *testing.T) {
 	}
 }
 
+func TestBSPPVSLeafIDsDecodesVisibilityLump(t *testing.T) {
+	bsp := &BSP{
+		VisibilityData: []byte{0b00000101},
+		Leafs: []Leaf{
+			{Contents: ContentsSolid, VisibilityOffset: -1},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+		},
+		Models: []Model{{VisLeafs: 3}},
+	}
+
+	visible, ok := bsp.PVSLeafIDs(1)
+	if !ok {
+		t.Fatalf("expected PVS to decode")
+	}
+	want := []int{1, 3}
+	if len(visible) != len(want) {
+		t.Fatalf("visible leaf ids = %+v, want %+v", visible, want)
+	}
+	for i := range want {
+		if visible[i] != want[i] {
+			t.Fatalf("visible leaf ids = %+v, want %+v", visible, want)
+		}
+	}
+}
+
+func TestBSPPVSLeafIDsDecodesZeroRuns(t *testing.T) {
+	bsp := &BSP{
+		VisibilityData: []byte{0, 1, 0b00000010},
+		Leafs: []Leaf{
+			{Contents: ContentsSolid, VisibilityOffset: -1},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+			{Contents: ContentsEmpty, VisibilityOffset: 0},
+		},
+		Models: []Model{{VisLeafs: 10}},
+	}
+
+	visible, ok := bsp.PVSLeafIDs(1)
+	if !ok {
+		t.Fatalf("expected PVS to decode")
+	}
+	if len(visible) != 1 || visible[0] != 10 {
+		t.Fatalf("visible leaf ids = %+v, want [10]", visible)
+	}
+}
+
 func TestModelFacesReconstructsOrderedSquare(t *testing.T) {
 	data := syntheticBSP(t, syntheticBSPConfig{
 		Entities: "{}",
@@ -244,17 +299,18 @@ func TestParseBSPRejectsBadLumpBounds(t *testing.T) {
 }
 
 type syntheticBSPConfig struct {
-	Entities  string
-	Textures  []syntheticTexture
-	Planes    []Plane
-	Nodes     []Node
-	Vertices  []importcommon.Vec3
-	TexInfos  []TexInfo
-	Faces     []FaceHeader
-	Edges     []Edge
-	SurfEdges []int32
-	Leafs     []Leaf
-	Models    []Model
+	Entities   string
+	Textures   []syntheticTexture
+	Visibility []byte
+	Planes     []Plane
+	Nodes      []Node
+	Vertices   []importcommon.Vec3
+	TexInfos   []TexInfo
+	Faces      []FaceHeader
+	Edges      []Edge
+	SurfEdges  []int32
+	Leafs      []Leaf
+	Models     []Model
 }
 
 type syntheticTexture struct {
@@ -280,6 +336,7 @@ func syntheticBSP(t *testing.T, cfg syntheticBSPConfig) []byte {
 	setLump(LumpNodes, syntheticNodeLump(cfg.Nodes))
 	setLump(LumpTextures, syntheticTextureLump(cfg.Textures))
 	setLump(LumpVertices, syntheticVertexLump(cfg.Vertices))
+	setLump(LumpVisibility, cfg.Visibility)
 	setLump(LumpTexInfo, syntheticTexInfoLump(cfg.TexInfos))
 	setLump(LumpFaces, syntheticFaceLump(cfg.Faces))
 	setLump(LumpEdges, syntheticEdgeLump(cfg.Edges))

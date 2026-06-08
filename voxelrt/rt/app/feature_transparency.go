@@ -6,8 +6,9 @@ import "github.com/cogentcore/webgpu/wgpu"
 type TransparencyFeature struct{}
 
 type AccumulationResources struct {
-	TransparentPipeline *wgpu.RenderPipeline
-	HadPass             bool
+	TransparentPipeline        *wgpu.RenderPipeline
+	TransparentBindingRevision uint64
+	HadPass                    bool
 }
 
 func (f *TransparencyFeature) Name() string {
@@ -65,11 +66,20 @@ func (f *TransparencyFeature) Shutdown(a *App) {
 }
 
 func (f *TransparencyFeature) HasPassStage(a *App, stage FeaturePassStage) bool {
-	return stage == FeaturePassStageAccumulation &&
-		a != nil &&
-		a.BufferManager != nil &&
-		a.transparentPipeline() != nil &&
-		a.BufferManager.HasVisibleTransparentOverlay(a.Scene)
+	if stage != FeaturePassStageAccumulation ||
+		a == nil ||
+		a.BufferManager == nil ||
+		a.transparentPipeline() == nil ||
+		!a.BufferManager.HasVisibleTransparentOverlay(a.Scene) {
+		return false
+	}
+	if !f.bindGroupsCurrent(a) {
+		f.rebuildBindGroups(a)
+	}
+	return a.BufferManager.TransparentBG0 != nil &&
+		a.BufferManager.TransparentBG1 != nil &&
+		a.BufferManager.TransparentBG2 != nil &&
+		a.BufferManager.TransparentBG3 != nil
 }
 
 func (f *TransparencyFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgpu.RenderPassEncoder) error {
@@ -102,6 +112,21 @@ func (f *TransparencyFeature) rebuildBindGroups(a *App) {
 	}
 	a.BufferManager.StorageView = a.StorageView
 	a.BufferManager.CreateTransparentOverlayBindGroups(a.transparentPipeline())
+	if resources := a.accumulationResources(); resources != nil {
+		resources.TransparentBindingRevision = a.BufferManager.SceneBindingRevision
+	}
+}
+
+func (f *TransparencyFeature) bindGroupsCurrent(a *App) bool {
+	if a == nil || a.BufferManager == nil {
+		return true
+	}
+	resources := a.accumulationResources()
+	if resources == nil {
+		return false
+	}
+	return resources.TransparentBindingRevision == a.BufferManager.SceneBindingRevision &&
+		a.BufferManager.TransparentOverlaySceneBindGroupCurrent()
 }
 
 func (a *App) accumulationResources() *AccumulationResources {

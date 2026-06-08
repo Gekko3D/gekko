@@ -55,6 +55,12 @@ func TestBuildImportedWorldEmissionPartitionsVoxels(t *testing.T) {
 	if len(emission.Manifest.SourceMaterials) != 1 || emission.Manifest.SourceMaterials[0].Kind != "metal" || emission.Manifest.SourceMaterials[0].Metallic != 0.85 || len(emission.Manifest.SourceMaterials[0].Tags) == 0 {
 		t.Fatalf("source materials = %+v", emission.Manifest.SourceMaterials)
 	}
+	if len(emission.Manifest.Sectors) != 2 {
+		t.Fatalf("sectors = %+v", emission.Manifest.Sectors)
+	}
+	if len(emission.Manifest.Sectors[1].LODs) != 1 {
+		t.Fatalf("expected sector lod metadata, got %+v", emission.Manifest.Sectors[1])
+	}
 	negativeChunk := emission.Chunks[[3]int{-1, 0, 0}]
 	if negativeChunk == nil || len(negativeChunk.Voxels) != 1 || negativeChunk.Voxels[0].X != 31 {
 		t.Fatalf("negative chunk = %+v", negativeChunk)
@@ -92,6 +98,17 @@ func TestSaveImportedWorldEmissionRoundTripsAndValidates(t *testing.T) {
 	if chunk.NonEmptyVoxelCount != 1 {
 		t.Fatalf("chunk voxels = %d", chunk.NonEmptyVoxelCount)
 	}
+	if len(loaded.Sectors) != 1 || len(loaded.Sectors[0].LODs) != 1 {
+		t.Fatalf("expected saved sector proxy lod, got %+v", loaded.Sectors)
+	}
+	proxyPath := content.ResolveDocumentPath(loaded.Sectors[0].LODs[0].ChunkPath, manifestPath)
+	proxy, err := content.LoadImportedWorldChunk(proxyPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk proxy failed: %v", err)
+	}
+	if proxy.NonEmptyVoxelCount != 1 || proxy.VoxelResolution <= loaded.VoxelResolution {
+		t.Fatalf("unexpected proxy chunk %+v", proxy)
+	}
 }
 
 func TestSaveImportedWorldEmissionCanWriteDenseRLEBinaryChunks(t *testing.T) {
@@ -123,6 +140,9 @@ func TestSaveImportedWorldEmissionCanWriteDenseRLEBinaryChunks(t *testing.T) {
 	}
 	if len(loaded.Entries) != 1 || loaded.Entries[0].PayloadKind != content.ImportedWorldChunkPayloadDenseRLEBinaryV1 || loaded.Entries[0].PayloadHash == "" {
 		t.Fatalf("entry payload metadata = %+v", loaded.Entries)
+	}
+	if len(loaded.Sectors) != 1 || len(loaded.Sectors[0].LODs) != 1 || loaded.Sectors[0].LODs[0].PayloadKind != content.ImportedWorldChunkPayloadDenseRLEBinaryV1 || loaded.Sectors[0].LODs[0].PayloadHash == "" {
+		t.Fatalf("sector lod payload metadata = %+v", loaded.Sectors)
 	}
 	chunkPath := content.ResolveImportedWorldChunkPath(loaded.Entries[0], manifestPath)
 	chunk, err := content.LoadImportedWorldChunk(chunkPath)

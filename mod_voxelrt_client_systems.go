@@ -40,6 +40,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		instanceMap:                  make(map[EntityId]*core.VoxelObject),
 		instanceGeometrySources:      make(map[EntityId]*volume.XBrickMap),
 		instanceObjectScopedGeometry: make(map[EntityId]bool),
+		runtimeEditedVoxelEntities:   make(map[EntityId]struct{}),
 		entityLODSelections:          make(map[EntityId]EntityLODSelection),
 		lastMaterialKeys:             make(map[*core.VoxelObject]materialTableCacheKey),
 		materialTableCache:           make(map[materialTableCacheKey][]core.Material),
@@ -692,6 +693,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if server == nil {
 			return true
 		}
+		if VoxelEntityRenderHidden(cmd, entityId) {
+			delete(state.entityLODSelections, entityId)
+			return true
+		}
 		currentVoxelEntities[entityId] = true
 		if lod, ok := entityLODComponentForEntity(cmd, entityId); ok && lod.SelectionValid {
 			state.entityLODSelections[entityId] = EntityLODSelection{
@@ -833,7 +838,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.EmitterLinkID = vox.EmitterLinkID
 		obj.AmbientOcclusionMode = core.AmbientOcclusionMode(vox.AmbientOcclusionMode)
 		obj.ShadowSeamWorldEpsilon = vox.ShadowSeamWorldEpsilon
-		obj.AllowOcclusionCulling = voxelObjectAllowsOcclusion(cmd, entityId, vox)
+		obj.AllowOcclusionCulling = !vox.DisableOcclusionCulling && voxelObjectAllowsOcclusion(cmd, entityId, vox)
 		obj.IsTerrainChunk = vox.IsTerrainChunk
 		obj.TerrainGroupID = vox.TerrainGroupID
 		obj.TerrainChunkCoord = vox.TerrainChunkCoord
@@ -854,6 +859,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			delete(state.instanceMap, eid)
 			delete(state.instanceGeometrySources, eid)
 			delete(state.instanceObjectScopedGeometry, eid)
+			state.clearRuntimeEditedVoxelEntity(eid)
 			delete(state.lastMaterialKeys, obj)
 			delete(state.objectToEntity, obj)
 		}

@@ -2,6 +2,7 @@ package volume
 
 import (
 	"math/bits"
+	"sync/atomic"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -253,8 +254,7 @@ type XBrickMap struct {
 }
 
 func NewXBrickMap() *XBrickMap {
-	id := NextMapID
-	NextMapID++
+	id := atomic.AddUint32(&NextMapID, 1) - 1
 	return &XBrickMap{
 		ID:             id,
 		Sectors:        make(map[[3]int]*Sector),

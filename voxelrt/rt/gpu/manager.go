@@ -35,7 +35,10 @@ const (
 
 	TiledLightingTileSize         = 16
 	TiledLightingMaxLightsPerTile = 128
-	RetiredBufferFrameDelay       = 3
+	// Fallback for retired buffers that have not yet been associated with a
+	// submitted render frame. Actual release is gated by queue submission
+	// completion when available.
+	RetiredBufferFrameDelay = 120
 )
 
 type GpuSkyboxLayer struct {
@@ -283,6 +286,7 @@ type GpuBufferManager struct {
 	shadowTierOffsets        [shadowTierCount]int
 	MaterialBufferGeneration uint64
 	VoxelUploadRevision      uint64
+	SceneBindingRevision     uint64
 	RenderOrigin             mgl32.Vec3
 	shadowDirectionalVolumes []directionalShadowCullVolume
 	shadowSpotVolumes        []spotShadowCullVolume
@@ -330,6 +334,10 @@ type GpuBufferManager struct {
 	TiledLightCullBindGroup0  *wgpu.BindGroup
 	TiledLightCullBindGroup1  *wgpu.BindGroup
 
+	gBufferBG0Camera    *wgpu.Buffer
+	gBufferBG0Instances *wgpu.Buffer
+	gBufferBG0BVHNodes  *wgpu.Buffer
+
 	// Shadow Map Bind Groups
 	ShadowPipeline   *wgpu.ComputePipeline
 	ShadowBindGroup0 *wgpu.BindGroup
@@ -376,6 +384,12 @@ type GpuBufferManager struct {
 	TransparentBG2 *wgpu.BindGroup // gbuffer depth/material/shadows
 	TransparentBG3 *wgpu.BindGroup // tiled light lists
 	StorageView    *wgpu.TextureView
+
+	transparentBG0Camera           *wgpu.Buffer
+	transparentBG0Instances        *wgpu.Buffer
+	transparentBG0BVHNodes         *wgpu.Buffer
+	transparentBG0Lights           *wgpu.Buffer
+	transparentBG0ShadowLayerParam *wgpu.Buffer
 
 	// GPU cellular automata + volumetric rendering
 	CAVolumeBuf                 *wgpu.Buffer
@@ -506,6 +520,7 @@ type GpuBufferManager struct {
 	VoxelPayloadUploadsSkipped int
 	VoxelPayloadBytesAvoided   int
 	retiredBuffers             []retiredBuffer
+	retiredBindGroups          []retiredBindGroup
 }
 
 type caVolumeLayout struct {
@@ -515,8 +530,18 @@ type caVolumeLayout struct {
 }
 
 type retiredBuffer struct {
-	Buffer     *wgpu.Buffer
-	FramesLeft int
+	Buffer          *wgpu.Buffer
+	FramesLeft      int
+	Queue           *wgpu.Queue
+	SubmissionIndex wgpu.SubmissionIndex
+}
+
+type retiredBindGroup struct {
+	BindGroup       *wgpu.BindGroup
+	Buffers         []*wgpu.Buffer
+	FramesLeft      int
+	Queue           *wgpu.Queue
+	SubmissionIndex wgpu.SubmissionIndex
 }
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
@@ -670,9 +695,19 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 		return
 	}
 	var err error
+	oldBG0 := m.TransparentBG0
+	oldBG1 := m.TransparentBG1
+	oldBG2 := m.TransparentBG2
+	oldBG3 := m.TransparentBG3
+	oldBG0Camera := m.transparentBG0Camera
+	oldBG0Instances := m.transparentBG0Instances
+	oldBG0BVHNodes := m.transparentBG0BVHNodes
+	oldBG0Lights := m.transparentBG0Lights
+	oldBG0ShadowLayerParam := m.transparentBG0ShadowLayerParam
 
 	// Group 0
 	m.TransparentBG0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Transparent Scene BG0",
 		Layout: pipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
@@ -685,9 +720,15 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 	if err != nil {
 		panic(err)
 	}
+	m.transparentBG0Camera = m.CameraBuf
+	m.transparentBG0Instances = m.TransparentInstancesBuf
+	m.transparentBG0BVHNodes = m.TransparentBVHNodesBuf
+	m.transparentBG0Lights = m.LightsBuf
+	m.transparentBG0ShadowLayerParam = m.ShadowLayerParamsBuf
 
 	// Group 1
 	m.TransparentBG1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Transparent Voxel BG1",
 		Layout: pipeline.GetBindGroupLayout(1),
 		Entries: m.appendDenseOccupancyEntry(m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
@@ -705,6 +746,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 
 	// Group 2
 	m.TransparentBG2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Transparent Inputs BG2",
 		Layout: pipeline.GetBindGroupLayout(2),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, TextureView: m.DepthView},
@@ -718,6 +760,7 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 	}
 
 	m.TransparentBG3, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Transparent Tiles BG3",
 		Layout: pipeline.GetBindGroupLayout(3),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.TileLightParamsBuf, Size: wgpu.WholeSize},
@@ -728,4 +771,19 @@ func (m *GpuBufferManager) CreateTransparentOverlayBindGroups(pipeline *wgpu.Ren
 	if err != nil {
 		panic(err)
 	}
+	m.retireBindGroupWithBuffers(oldBG0, oldBG0Camera, oldBG0Instances, oldBG0BVHNodes, oldBG0Lights, oldBG0ShadowLayerParam)
+	m.retireBindGroup(oldBG1)
+	m.retireBindGroup(oldBG2)
+	m.retireBindGroup(oldBG3)
+}
+
+func (m *GpuBufferManager) TransparentOverlaySceneBindGroupCurrent() bool {
+	if m == nil || m.TransparentBG0 == nil {
+		return false
+	}
+	return m.transparentBG0Camera == m.CameraBuf &&
+		m.transparentBG0Instances == m.TransparentInstancesBuf &&
+		m.transparentBG0BVHNodes == m.TransparentBVHNodesBuf &&
+		m.transparentBG0Lights == m.LightsBuf &&
+		m.transparentBG0ShadowLayerParam == m.ShadowLayerParamsBuf
 }

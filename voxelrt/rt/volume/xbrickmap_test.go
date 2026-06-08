@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -145,6 +146,38 @@ func TestSetVoxelMarksNormalHaloBricksDirty(t *testing.T) {
 	}
 	if !xbm.DirtyBricks[[6]int{0, 0, 0, 1, 0, 0}] {
 		t.Fatal("expected neighboring +X brick to be dirty for baked normal halo")
+	}
+}
+
+func TestNewXBrickMapAssignsUniqueIDsConcurrently(t *testing.T) {
+	const workers = 16
+	const perWorker = 256
+	ids := make(chan uint32, workers*perWorker)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				ids <- NewXBrickMap().ID
+			}
+		}()
+	}
+	wg.Wait()
+	close(ids)
+
+	seen := map[uint32]struct{}{}
+	for id := range ids {
+		if id == 0 {
+			t.Fatal("expected non-zero XBrickMap ID")
+		}
+		if _, ok := seen[id]; ok {
+			t.Fatalf("duplicate XBrickMap ID %d", id)
+		}
+		seen[id] = struct{}{}
+	}
+	if len(seen) != workers*perWorker {
+		t.Fatalf("expected %d unique IDs, got %d", workers*perWorker, len(seen))
 	}
 }
 

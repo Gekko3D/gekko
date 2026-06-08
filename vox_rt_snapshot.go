@@ -51,18 +51,19 @@ const (
 )
 
 type VoxelModelComponent struct {
-	SharedGeometry         AssetId `gekko:"voxel" usage:"geometry"`
-	OverrideGeometry       AssetId
-	VoxelModel             AssetId `gekko:"voxel" usage:"model"`
-	VoxelPalette           AssetId `gekko:"voxel" usage:"palette"`
-	VoxelResolution        float32
-	PivotMode              VoxelPivotMode // How to determine the rotation pivot
-	CustomPivot            mgl32.Vec3     // Used if PivotMode == PivotModeCustom
-	DisableShadows         bool
-	ShadowMaxDistance      float32
-	ShadowCasterGroupID    uint64
-	ShadowCasterGroupLimit int
-	ShadowGroupID          uint32
+	SharedGeometry          AssetId `gekko:"voxel" usage:"geometry"`
+	OverrideGeometry        AssetId
+	VoxelModel              AssetId `gekko:"voxel" usage:"model"`
+	VoxelPalette            AssetId `gekko:"voxel" usage:"palette"`
+	VoxelResolution         float32
+	PivotMode               VoxelPivotMode // How to determine the rotation pivot
+	CustomPivot             mgl32.Vec3     // Used if PivotMode == PivotModeCustom
+	DisableShadows          bool
+	DisableOcclusionCulling bool
+	ShadowMaxDistance       float32
+	ShadowCasterGroupID     uint64
+	ShadowCasterGroupLimit  int
+	ShadowGroupID           uint32
 	// EmitterLinkID tags visible voxel geometry as the emitter shell for any light
 	// using the same link ID. It does not disable ordinary occlusion or shadows for
 	// other lights; it only prevents self-occlusion for the linked light.

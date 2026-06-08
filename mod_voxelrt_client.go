@@ -123,6 +123,7 @@ type VoxelRtState struct {
 	instanceMap                  map[EntityId]*core.VoxelObject
 	instanceGeometrySources      map[EntityId]*volume.XBrickMap
 	instanceObjectScopedGeometry map[EntityId]bool
+	runtimeEditedVoxelEntities   map[EntityId]struct{}
 	entityLODSelections          map[EntityId]EntityLODSelection
 	runtimeSprites               []SpriteComponent
 	lastMaterialKeys             map[*core.VoxelObject]materialTableCacheKey
@@ -312,6 +313,32 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 		return
 	}
 	voxelSphereEditWithTransform(obj.XBrickMap, obj.Transform, worldCenter, radius, val)
+	s.markRuntimeEditedVoxelEntity(eid)
+}
+
+func (s *VoxelRtState) markRuntimeEditedVoxelEntity(eid EntityId) {
+	if s == nil || eid == 0 {
+		return
+	}
+	if s.runtimeEditedVoxelEntities == nil {
+		s.runtimeEditedVoxelEntities = make(map[EntityId]struct{})
+	}
+	s.runtimeEditedVoxelEntities[eid] = struct{}{}
+}
+
+func (s *VoxelRtState) clearRuntimeEditedVoxelEntity(eid EntityId) {
+	if s == nil || s.runtimeEditedVoxelEntities == nil {
+		return
+	}
+	delete(s.runtimeEditedVoxelEntities, eid)
+}
+
+func (s *VoxelRtState) runtimeEditedVoxelEntity(eid EntityId) bool {
+	if s == nil || s.runtimeEditedVoxelEntities == nil {
+		return false
+	}
+	_, ok := s.runtimeEditedVoxelEntities[eid]
+	return ok
 }
 
 func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {

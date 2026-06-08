@@ -1,6 +1,7 @@
 package content
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 )
@@ -90,6 +91,157 @@ func TestImportedWorldRoundTripPreservesManifestFields(t *testing.T) {
 	}
 	if len(loaded.Entries) != 1 || loaded.Entries[0].ChunkPath != def.Entries[0].ChunkPath {
 		t.Fatalf("expected imported world entries to round-trip, got %+v", loaded.Entries)
+	}
+	if len(loaded.Sectors) != 1 || len(loaded.Sectors[0].FullChunkRefs) != 1 || loaded.Sectors[0].FullChunkRefs[0] != def.Entries[0].Coord {
+		t.Fatalf("expected imported world sectors to reference chunk entries, got %+v", loaded.Sectors)
+	}
+}
+
+func TestImportedWorldRoundTripPreservesSectorVisibilityRefs(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "worlds", "demo.gkworld")
+	chunkPathA := filepath.Join(root, "worlds", "demo_chunks", "0_0_0.gkchunk")
+	chunkPathB := filepath.Join(root, "worlds", "demo_chunks", "1_0_0.gkchunk")
+
+	for _, chunk := range []struct {
+		path  string
+		coord TerrainChunkCoordDef
+	}{
+		{path: chunkPathA, coord: TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}},
+		{path: chunkPathB, coord: TerrainChunkCoordDef{X: 1, Y: 0, Z: 0}},
+	} {
+		if err := SaveImportedWorldChunk(chunk.path, &ImportedWorldChunkDef{
+			WorldID:         "world-a",
+			Coord:           chunk.coord,
+			ChunkSize:       16,
+			VoxelResolution: 1,
+			Voxels:          []ImportedWorldVoxelDef{{X: 1, Y: 1, Z: 1, Value: 1}},
+		}); err != nil {
+			t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+		}
+	}
+
+	def := &ImportedWorldDef{
+		WorldID:         "world-a",
+		Kind:            ImportedWorldKindVoxelWorld,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Entries: []ImportedWorldChunkEntryDef{
+			{Coord: TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, ChunkPath: AuthorDocumentPath(chunkPathA, manifestPath), NonEmptyVoxelCount: 1},
+			{Coord: TerrainChunkCoordDef{X: 1, Y: 0, Z: 0}, ChunkPath: AuthorDocumentPath(chunkPathB, manifestPath), NonEmptyVoxelCount: 1},
+		},
+		Sectors: []ImportedWorldSectorDef{{
+			Coord:              TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			BoundsMin:          [3]float32{0, 0, 0},
+			BoundsMax:          [3]float32{16, 16, 16},
+			FullChunkRefs:      []TerrainChunkCoordDef{{X: 0, Y: 0, Z: 0}},
+			VisibilityID:       "hl1_leaf:4",
+			SourceLeafIDs:      []int{4, 8},
+			VisibleSectorRefs:  []TerrainChunkCoordDef{{X: 0, Y: 0, Z: 0}, {X: 1, Y: 0, Z: 0}},
+			AdjacentSectorRefs: []TerrainChunkCoordDef{{X: 1, Y: 0, Z: 0}},
+		}, {
+			Coord:              TerrainChunkCoordDef{X: 1, Y: 0, Z: 0},
+			BoundsMin:          [3]float32{16, 0, 0},
+			BoundsMax:          [3]float32{32, 16, 16},
+			FullChunkRefs:      []TerrainChunkCoordDef{{X: 1, Y: 0, Z: 0}},
+			VisibleSectorRefs:  []TerrainChunkCoordDef{{X: 1, Y: 0, Z: 0}},
+			AdjacentSectorRefs: []TerrainChunkCoordDef{{X: 0, Y: 0, Z: 0}},
+		}},
+	}
+	if err := SaveImportedWorld(manifestPath, def); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+	loaded, err := LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld failed: %v", err)
+	}
+	if validation := ValidateImportedWorld(loaded, ImportedWorldValidationOptions{DocumentPath: manifestPath}); validation.HasErrors() {
+		t.Fatalf("ValidateImportedWorld failed: %s", validation.Error())
+	}
+	sector := loaded.Sectors[0]
+	if sector.VisibilityID != "hl1_leaf:4" || len(sector.SourceLeafIDs) != 2 || len(sector.VisibleSectorRefs) != 2 || len(sector.AdjacentSectorRefs) != 1 {
+		t.Fatalf("expected sector visibility metadata to round-trip, got %+v", sector)
+	}
+}
+
+func TestBuildImportedWorldSectorsGroupsChunksByTargetWorldSize(t *testing.T) {
+	entries := []ImportedWorldChunkEntryDef{
+		{Coord: TerrainChunkCoordDef{X: -1, Y: 0, Z: 0}, NonEmptyVoxelCount: 2},
+		{Coord: TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, NonEmptyVoxelCount: 3},
+		{Coord: TerrainChunkCoordDef{X: 1, Y: 0, Z: 0}, NonEmptyVoxelCount: 5},
+	}
+
+	sectors := BuildImportedWorldSectors(entries, 128, 0.1, DefaultImportedWorldSectorTargetWorldSize)
+
+	if len(sectors) != 2 {
+		t.Fatalf("expected negative and positive chunk groups, got %+v", sectors)
+	}
+	if sectors[0].Coord != (TerrainChunkCoordDef{X: -1, Y: 0, Z: 0}) || len(sectors[0].FullChunkRefs) != 1 || sectors[0].NonEmptyVoxelCount != 2 {
+		t.Fatalf("unexpected negative sector %+v", sectors[0])
+	}
+	if sectors[1].Coord != (TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}) || len(sectors[1].FullChunkRefs) != 2 || sectors[1].NonEmptyVoxelCount != 8 {
+		t.Fatalf("unexpected positive sector %+v", sectors[1])
+	}
+	if math.Abs(float64(sectors[1].BoundsMax[0]-sectors[1].BoundsMin[0]-25.6)) > 0.001 {
+		t.Fatalf("expected two 12.8m chunks per sector, got bounds %+v..%+v", sectors[1].BoundsMin, sectors[1].BoundsMax)
+	}
+}
+
+func TestBuildImportedWorldSectorProxyChunksDownsamplesFullChunks(t *testing.T) {
+	sector := ImportedWorldSectorDef{
+		Coord:              TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		BoundsMin:          [3]float32{0, 0, 0},
+		BoundsMax:          [3]float32{32, 16, 16},
+		FullChunkRefs:      []TerrainChunkCoordDef{{X: 0, Y: 0, Z: 0}, {X: 1, Y: 0, Z: 0}},
+		NonEmptyVoxelCount: 4,
+	}
+	chunks := map[TerrainChunkCoordDef]*ImportedWorldChunkDef{
+		{X: 0, Y: 0, Z: 0}: {
+			WorldID:         "world-a",
+			Coord:           TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkSize:       16,
+			VoxelResolution: 1,
+			Voxels: []ImportedWorldVoxelDef{
+				{X: 0, Y: 0, Z: 0, Value: 1},
+				{X: 1, Y: 0, Z: 0, Value: 2},
+				{X: 2, Y: 0, Z: 0, Value: 2},
+				{X: 3, Y: 0, Z: 0, Value: 2},
+			},
+		},
+		{X: 1, Y: 0, Z: 0}: {
+			WorldID:         "world-a",
+			Coord:           TerrainChunkCoordDef{X: 1, Y: 0, Z: 0},
+			ChunkSize:       16,
+			VoxelResolution: 1,
+			Voxels:          []ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 3}},
+		},
+	}
+
+	sectors, proxies := BuildImportedWorldSectorProxyChunks([]ImportedWorldSectorDef{sector}, chunks, ImportedWorldSectorProxyOptions{
+		WorldID:         "world-a",
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Downsample:      4,
+	})
+
+	if len(sectors) != 1 || len(sectors[0].LODs) != 1 {
+		t.Fatalf("expected one sector lod, got %+v", sectors)
+	}
+	proxy := proxies[sectors[0].LODs[0].ChunkPath]
+	if proxy == nil {
+		t.Fatalf("missing proxy chunk for %+v", sectors[0].LODs[0])
+	}
+	if proxy.ChunkSize != 8 || proxy.VoxelResolution != 4 {
+		t.Fatalf("unexpected proxy scale: %+v", proxy)
+	}
+	if len(proxy.Voxels) != 2 {
+		t.Fatalf("expected two proxy voxels after downsample, got %+v", proxy.Voxels)
+	}
+	if proxy.Voxels[0] != (ImportedWorldVoxelDef{X: 0, Y: 0, Z: 0, Value: 2}) {
+		t.Fatalf("expected dominant material in first proxy cell, got %+v", proxy.Voxels)
+	}
+	if proxy.Voxels[1] != (ImportedWorldVoxelDef{X: 4, Y: 0, Z: 0, Value: 3}) {
+		t.Fatalf("expected second chunk to map into sector-local proxy coord, got %+v", proxy.Voxels)
 	}
 }
 
@@ -190,6 +342,7 @@ func TestValidateImportedWorldRejectsBrokenManifestEntries(t *testing.T) {
 	assertImportedWorldValidationCode(t, result, "invalid_chunk_payload_kind")
 	assertImportedWorldValidationCode(t, result, "missing_chunk_file")
 	assertImportedWorldValidationCode(t, result, "duplicate_chunk_coord")
+	assertImportedWorldValidationCode(t, result, "empty_sectors")
 }
 
 func assertImportedWorldValidationCode(t *testing.T, result ImportedWorldValidationResult, code string) {

@@ -91,16 +91,76 @@ func (m *GpuBufferManager) retireBuffer(buf *wgpu.Buffer) {
 	})
 }
 
-func (m *GpuBufferManager) AdvanceRetiredBuffers() {
-	if m == nil || len(m.retiredBuffers) == 0 {
+func (m *GpuBufferManager) retireBindGroup(bindGroup *wgpu.BindGroup) {
+	m.retireBindGroupWithBuffers(bindGroup)
+}
+
+func (m *GpuBufferManager) retireBindGroupWithBuffers(bindGroup *wgpu.BindGroup, buffers ...*wgpu.Buffer) {
+	if m == nil || bindGroup == nil {
 		return
 	}
+	m.retiredBindGroups = append(m.retiredBindGroups, retiredBindGroup{
+		BindGroup:  bindGroup,
+		Buffers:    nonNilBuffers(buffers),
+		FramesLeft: RetiredBufferFrameDelay,
+	})
+}
 
+func (m *GpuBufferManager) AdvanceRetiredBuffers() {
+	if m == nil {
+		return
+	}
+	m.advanceRetiredBindGroups()
+	m.advanceRetiredBuffers()
+}
+
+func nonNilBuffers(buffers []*wgpu.Buffer) []*wgpu.Buffer {
+	if len(buffers) == 0 {
+		return nil
+	}
+	kept := buffers[:0]
+	for _, buf := range buffers {
+		if buf != nil {
+			kept = append(kept, buf)
+		}
+	}
+	return kept
+}
+
+func (m *GpuBufferManager) advanceRetiredBuffers() {
+	if len(m.retiredBuffers) == 0 {
+		return
+	}
 	kept := m.retiredBuffers[:0]
 	for _, retired := range m.retiredBuffers {
 		retired.FramesLeft--
-		if retired.FramesLeft <= 0 {
+		if retired.Queue != nil {
+			done := false
+			if m.Device != nil {
+				done = m.Device.Poll(false, &wgpu.WrappedSubmissionIndex{
+					Queue:           retired.Queue,
+					SubmissionIndex: retired.SubmissionIndex,
+				})
+			}
+			if done {
+				if retired.Buffer != nil {
+					if m.bufferPinnedByRetiredBindGroup(retired.Buffer) {
+						kept = append(kept, retired)
+						continue
+					}
+					retired.Buffer.Release()
+				}
+				continue
+			}
+			kept = append(kept, retired)
+			continue
+		}
+		if retired.FramesLeft <= 0 && retired.Queue == nil {
 			if retired.Buffer != nil {
+				if m.bufferPinnedByRetiredBindGroup(retired.Buffer) {
+					kept = append(kept, retired)
+					continue
+				}
 				retired.Buffer.Release()
 			}
 			continue
@@ -111,4 +171,76 @@ func (m *GpuBufferManager) AdvanceRetiredBuffers() {
 		m.retiredBuffers[i] = retiredBuffer{}
 	}
 	m.retiredBuffers = kept
+}
+
+func (m *GpuBufferManager) bufferPinnedByRetiredBindGroup(buffer *wgpu.Buffer) bool {
+	if m == nil || buffer == nil {
+		return false
+	}
+	for _, retired := range m.retiredBindGroups {
+		for _, pinned := range retired.Buffers {
+			if pinned == buffer {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m *GpuBufferManager) advanceRetiredBindGroups() {
+	if len(m.retiredBindGroups) == 0 {
+		return
+	}
+	kept := m.retiredBindGroups[:0]
+	for _, retired := range m.retiredBindGroups {
+		retired.FramesLeft--
+		if retired.Queue != nil {
+			done := false
+			if m.Device != nil {
+				done = m.Device.Poll(false, &wgpu.WrappedSubmissionIndex{
+					Queue:           retired.Queue,
+					SubmissionIndex: retired.SubmissionIndex,
+				})
+			}
+			if done {
+				if retired.BindGroup != nil {
+					retired.BindGroup.Release()
+				}
+				continue
+			}
+			kept = append(kept, retired)
+			continue
+		}
+		if retired.FramesLeft <= 0 && retired.Queue == nil {
+			if retired.BindGroup != nil {
+				retired.BindGroup.Release()
+			}
+			continue
+		}
+		kept = append(kept, retired)
+	}
+	for i := len(kept); i < len(m.retiredBindGroups); i++ {
+		m.retiredBindGroups[i] = retiredBindGroup{}
+	}
+	m.retiredBindGroups = kept
+}
+
+func (m *GpuBufferManager) MarkRetiredBuffersSubmitted(queue *wgpu.Queue, submissionIndex wgpu.SubmissionIndex) {
+	if m == nil || queue == nil {
+		return
+	}
+	for i := range m.retiredBuffers {
+		if m.retiredBuffers[i].Queue != nil {
+			continue
+		}
+		m.retiredBuffers[i].Queue = queue
+		m.retiredBuffers[i].SubmissionIndex = submissionIndex
+	}
+	for i := range m.retiredBindGroups {
+		if m.retiredBindGroups[i].Queue != nil {
+			continue
+		}
+		m.retiredBindGroups[i].Queue = queue
+		m.retiredBindGroups[i].SubmissionIndex = submissionIndex
+	}
 }

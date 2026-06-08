@@ -25,6 +25,11 @@ func TestWorldDeltaRoundTrip(t *testing.T) {
 			ChunkCoord:   TerrainChunkCoordDef{X: 3, Y: 0, Z: -2},
 			SnapshotPath: "demo.gkworlddelta_data/terrain_3_0_-2.gkchunk",
 		}},
+		ImportedWorldChunkOverrides: []ImportedWorldChunkOverrideDef{{
+			WorldID:      "world-a",
+			ChunkCoord:   TerrainChunkCoordDef{X: 4, Y: 1, Z: -3},
+			SnapshotPath: "demo.gkworlddelta_data/imported_world-a_4_1_-3.gkchunk",
+		}},
 		VoxelObjectOverrides: []VoxelObjectOverrideDef{{
 			PlacementID:  "ship",
 			ItemID:       "hull",

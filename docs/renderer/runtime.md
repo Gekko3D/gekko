@@ -11,6 +11,7 @@ Related docs:
 - [`media.md`](media.md)
 - [`particles.md`](particles.md)
 - [`verification.md`](verification.md)
+- [`webgpu-bindgroup-lifetime-notes.md`](webgpu-bindgroup-lifetime-notes.md)
 - [`voxelrt-render-graph-migration-plan.md`](voxelrt-render-graph-migration-plan.md)
 
 ## Ownership Boundaries

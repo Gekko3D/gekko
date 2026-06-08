@@ -57,6 +57,8 @@ If a change depends on scene upload, particle uploads, or text lifetime, it usua
 ## Resource Rebuild Rules
 
 These rules are load-bearing. Many renderer regressions reduce to stale bind groups after a resize or buffer growth event.
+For the current WebGPU bind-group lifetime investigation and migration notes,
+see [`webgpu-bindgroup-lifetime-notes.md`](webgpu-bindgroup-lifetime-notes.md).
 
 ### Resize
 

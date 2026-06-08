@@ -38,6 +38,9 @@ func destructionSystem(state *VoxelRtState, queue *DestructionQueue, cmd *Comman
 }
 
 func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *Commands, server *AssetServer) {
+	if !destructionEventAllowedForEntity(cmd, event.Entity) {
+		return
+	}
 	voxObj := state.GetVoxelObject(event.Entity)
 	if voxObj == nil || voxObj.XBrickMap == nil {
 		return
@@ -49,6 +52,7 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 		return
 	}
 	voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
+	MarkVoxelEntityPersistenceDirty(cmd, event.Entity)
 
 	// 2. Detect disconnected components
 	components := editableMap.SplitDisconnectedComponents()
@@ -198,4 +202,20 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 			},
 		)
 	}
+}
+
+func destructionEventAllowedForEntity(cmd *Commands, eid EntityId) bool {
+	if cmd == nil {
+		return false
+	}
+	if _, imported := AuthoredImportedWorldChunkRefForEntity(cmd, eid); !imported {
+		return true
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		switch comp.(type) {
+		case *StreamedDestructionResidentComponent, StreamedDestructionResidentComponent:
+			return true
+		}
+	}
+	return false
 }

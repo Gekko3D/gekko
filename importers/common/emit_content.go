@@ -26,6 +26,7 @@ type ImportedWorldSaveOptions struct {
 type ImportedWorldEmission struct {
 	Manifest        *content.ImportedWorldDef
 	Chunks          map[[3]int]*content.ImportedWorldChunkDef
+	ProxyChunks     map[string]*content.ImportedWorldChunkDef
 	TotalVoxelCount int
 }
 
@@ -94,6 +95,18 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 			Tags:               append([]string(nil), opts.Tags...),
 		})
 	}
+	chunksByCoord := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(chunks))
+	for coord, chunk := range chunks {
+		chunksByCoord[content.TerrainChunkCoordDef{X: coord[0], Y: coord[1], Z: coord[2]}] = chunk
+	}
+	sectors := content.BuildImportedWorldSectors(entries, opts.ChunkSize, opts.VoxelResolution, content.DefaultImportedWorldSectorTargetWorldSize)
+	sectors, proxyChunks := content.BuildImportedWorldSectorProxyChunks(sectors, chunksByCoord, content.ImportedWorldSectorProxyOptions{
+		WorldID:         opts.WorldID,
+		ChunkSize:       opts.ChunkSize,
+		VoxelResolution: opts.VoxelResolution,
+		Tags:            opts.Tags,
+	})
+
 	return ImportedWorldEmission{
 		Manifest: &content.ImportedWorldDef{
 			WorldID:            opts.WorldID,
@@ -108,8 +121,10 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 			SourceHash:         opts.SourceHash,
 			Tags:               append([]string(nil), opts.Tags...),
 			Entries:            entries,
+			Sectors:            sectors,
 		},
 		Chunks:          chunks,
+		ProxyChunks:     proxyChunks,
 		TotalVoxelCount: total,
 	}, nil
 }
@@ -146,7 +161,31 @@ func SaveImportedWorldEmissionWithOptions(manifestPath string, emission Imported
 		entry.PayloadHash = chunk.PayloadHash
 		entry.PayloadSizeBytes = chunk.PayloadSizeBytes
 	}
+	for path, chunk := range emission.ProxyChunks {
+		if err := content.SaveImportedWorldChunkWithOptions(filepath.Join(manifestDir, filepath.FromSlash(path)), chunk, content.ImportedWorldChunkSaveOptions{
+			PayloadKind: payloadKind,
+		}); err != nil {
+			return err
+		}
+		updateImportedWorldSectorLODMetadata(emission.Manifest.Sectors, path, chunk)
+	}
 	return content.SaveImportedWorld(manifestPath, emission.Manifest)
+}
+
+func updateImportedWorldSectorLODMetadata(sectors []content.ImportedWorldSectorDef, path string, chunk *content.ImportedWorldChunkDef) {
+	for i := range sectors {
+		for j := range sectors[i].LODs {
+			lod := &sectors[i].LODs[j]
+			if lod.ChunkPath != path {
+				continue
+			}
+			lod.PayloadKind = chunk.PayloadKind
+			lod.PayloadHash = chunk.PayloadHash
+			lod.PayloadSizeBytes = chunk.PayloadSizeBytes
+			lod.NonEmptyVoxelCount = chunk.NonEmptyVoxelCount
+			return
+		}
+	}
 }
 
 func paletteFromMaterials(materials []Material) []content.ImportedWorldPaletteColor {

@@ -68,23 +68,24 @@ type Lump struct {
 }
 
 type BSP struct {
-	Path        string
-	Version     int
-	SHA256      string
-	Lumps       [bspLumpCount]Lump
-	EntityText  string
-	Entities    []RawEntity
-	Planes      []Plane
-	Nodes       []Node
-	Vertices    []importcommon.Vec3
-	Textures    []Texture
-	TexInfos    []TexInfo
-	Faces       []FaceHeader
-	Edges       []Edge
-	SurfEdges   []int32
-	Leafs       []Leaf
-	Models      []Model
-	Diagnostics []importcommon.Diagnostic
+	Path           string
+	Version        int
+	SHA256         string
+	Lumps          [bspLumpCount]Lump
+	EntityText     string
+	Entities       []RawEntity
+	Planes         []Plane
+	Nodes          []Node
+	Vertices       []importcommon.Vec3
+	Textures       []Texture
+	VisibilityData []byte
+	TexInfos       []TexInfo
+	Faces          []FaceHeader
+	Edges          []Edge
+	SurfEdges      []int32
+	Leafs          []Leaf
+	Models         []Model
+	Diagnostics    []importcommon.Diagnostic
 }
 
 type Plane struct {
@@ -225,6 +226,7 @@ func ParseBSP(data []byte, path string) (*BSP, error) {
 	out.Nodes = parseNodes(lumpBytes(data, out.Lumps[LumpNodes]), &out.Diagnostics)
 	out.Vertices = parseVertices(lumpBytes(data, out.Lumps[LumpVertices]), &out.Diagnostics)
 	out.Textures = parseTextures(lumpBytes(data, out.Lumps[LumpTextures]), &out.Diagnostics)
+	out.VisibilityData = append([]byte(nil), lumpBytes(data, out.Lumps[LumpVisibility])...)
 	out.TexInfos = parseTexInfos(lumpBytes(data, out.Lumps[LumpTexInfo]), &out.Diagnostics)
 	out.Faces = parseFaces(lumpBytes(data, out.Lumps[LumpFaces]), &out.Diagnostics)
 	out.Edges = parseEdges(lumpBytes(data, out.Lumps[LumpEdges]), &out.Diagnostics)

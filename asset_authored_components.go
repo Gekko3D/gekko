@@ -63,6 +63,16 @@ type AuthoredImportedWorldChunkRefComponent struct {
 	ChunkCoord [3]int
 }
 
+type StreamedDestructionResidentComponent struct {
+	LevelID    string
+	WorldID    string
+	ChunkCoord [3]int
+}
+
+type VoxelPersistenceDirtyComponent struct{}
+
+type VoxelRenderHiddenComponent struct{}
+
 type AuthoredLevelMarkerRefComponent struct {
 	LevelID  string
 	MarkerID string
@@ -197,6 +207,39 @@ func AuthoredImportedWorldChunkRefForEntity(cmd *Commands, eid EntityId) (Author
 		}
 	}
 	return AuthoredImportedWorldChunkRefComponent{}, false
+}
+
+func MarkVoxelEntityPersistenceDirty(cmd *Commands, eid EntityId) {
+	if cmd == nil || eid == 0 {
+		return
+	}
+	cmd.AddComponents(eid, &VoxelPersistenceDirtyComponent{})
+}
+
+func VoxelEntityPersistenceDirty(cmd *Commands, eid EntityId) bool {
+	if cmd == nil || eid == 0 {
+		return false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		switch comp.(type) {
+		case *VoxelPersistenceDirtyComponent, VoxelPersistenceDirtyComponent:
+			return true
+		}
+	}
+	return false
+}
+
+func VoxelEntityRenderHidden(cmd *Commands, eid EntityId) bool {
+	if cmd == nil || eid == 0 {
+		return false
+	}
+	for _, comp := range cmd.GetAllComponents(eid) {
+		switch comp.(type) {
+		case *VoxelRenderHiddenComponent, VoxelRenderHiddenComponent:
+			return true
+		}
+	}
+	return false
 }
 
 func AuthoredLevelItemRefForEntity(cmd *Commands, eid EntityId) (AuthoredLevelItemRefComponent, bool) {

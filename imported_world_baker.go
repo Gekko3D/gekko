@@ -44,6 +44,7 @@ type ImportedWorldBakeWarning struct {
 type ImportedWorldBakeResult struct {
 	Manifest        *content.ImportedWorldDef
 	Chunks          map[ChunkCoord]*content.ImportedWorldChunkDef
+	ProxyChunks     map[string]*content.ImportedWorldChunkDef
 	Warnings        []ImportedWorldBakeWarning
 	TotalVoxelCount int
 	BoundsMin       [3]int
@@ -74,6 +75,7 @@ type importedWorldBakeReport struct {
 	BoundsMax       [3]int                      `json:"bounds_max"`
 	Warnings        []ImportedWorldBakeWarning  `json:"warnings,omitempty"`
 	Chunks          []importedWorldBakeChunkLog `json:"chunks,omitempty"`
+	ProxyChunks     []importedWorldBakeChunkLog `json:"proxy_chunks,omitempty"`
 }
 
 type importedWorldBakeChunkLog struct {
@@ -171,6 +173,17 @@ func BakeImportedWorldFromVoxWithProgress(voxFile *VoxFile, cfg ImportedWorldBak
 		emitImportedWorldBakeProgress(progress, "manifest", "Building manifest entries", len(entries), len(chunkCoords), 0.98+0.01*progressFraction(len(entries), len(chunkCoords)))
 	}
 
+	chunksByCoord := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(chunks))
+	for coord, chunk := range chunks {
+		chunksByCoord[content.TerrainChunkCoordDef{X: coord.X, Y: coord.Y, Z: coord.Z}] = chunk
+	}
+	sectors := content.BuildImportedWorldSectors(entries, cfg.ChunkSize, cfg.VoxelResolution, content.DefaultImportedWorldSectorTargetWorldSize)
+	sectors, proxyChunks := content.BuildImportedWorldSectorProxyChunks(sectors, chunksByCoord, content.ImportedWorldSectorProxyOptions{
+		WorldID:         cfg.WorldID,
+		ChunkSize:       cfg.ChunkSize,
+		VoxelResolution: cfg.VoxelResolution,
+	})
+
 	result := ImportedWorldBakeResult{
 		Manifest: &content.ImportedWorldDef{
 			WorldID:            cfg.WorldID,
@@ -181,8 +194,10 @@ func BakeImportedWorldFromVoxWithProgress(voxFile *VoxFile, cfg ImportedWorldBak
 			Palette:            importedWorldPaletteFromVox(voxFile),
 			SourceBuildVersion: cfg.SourceBuildVersion,
 			Entries:            entries,
+			Sectors:            sectors,
 		},
 		Chunks:          chunks,
+		ProxyChunks:     proxyChunks,
 		Warnings:        warnings,
 		TotalVoxelCount: len(worldVoxels),
 		BoundsMin:       boundsMin,
@@ -237,6 +252,20 @@ func SaveImportedWorldBakeWithProgress(manifestPath string, bake ImportedWorldBa
 			return err
 		}
 	}
+	proxyPaths := make([]string, 0, len(bake.ProxyChunks))
+	for path := range bake.ProxyChunks {
+		proxyPaths = append(proxyPaths, path)
+	}
+	sort.Strings(proxyPaths)
+	for i, proxyPath := range proxyPaths {
+		chunk := bake.ProxyChunks[proxyPath]
+		chunkPath := content.ResolveDocumentPath(proxyPath, manifestPath)
+		emitImportedWorldBakeProgress(progress, "save_proxy_chunks", fmt.Sprintf("Saving proxy chunk %d of %d", i+1, len(proxyPaths)), i, len(proxyPaths), progressFraction(i, len(proxyPaths)))
+		if err := content.SaveImportedWorldChunk(chunkPath, chunk); err != nil {
+			return err
+		}
+		updateImportedWorldBakeSectorLODMetadata(bake.Manifest.Sectors, proxyPath, chunk)
+	}
 	emitImportedWorldBakeProgress(progress, "save_manifest", "Saving world manifest", len(coords), len(coords)+1, progressFraction(len(coords), len(coords)+1))
 	if err := content.SaveImportedWorld(manifestPath, bake.Manifest); err != nil {
 		return err
@@ -275,7 +304,38 @@ func BuildImportedWorldBakeReport(bake ImportedWorldBakeResult) importedWorldBak
 			NonEmptyVoxelCount: chunk.NonEmptyVoxelCount,
 		})
 	}
+	proxyPaths := make([]string, 0, len(bake.ProxyChunks))
+	for path := range bake.ProxyChunks {
+		proxyPaths = append(proxyPaths, path)
+	}
+	sort.Strings(proxyPaths)
+	for _, path := range proxyPaths {
+		chunk := bake.ProxyChunks[path]
+		if chunk == nil {
+			continue
+		}
+		report.ProxyChunks = append(report.ProxyChunks, importedWorldBakeChunkLog{
+			Coord:              [3]int{chunk.Coord.X, chunk.Coord.Y, chunk.Coord.Z},
+			NonEmptyVoxelCount: chunk.NonEmptyVoxelCount,
+		})
+	}
 	return report
+}
+
+func updateImportedWorldBakeSectorLODMetadata(sectors []content.ImportedWorldSectorDef, path string, chunk *content.ImportedWorldChunkDef) {
+	for i := range sectors {
+		for j := range sectors[i].LODs {
+			lod := &sectors[i].LODs[j]
+			if lod.ChunkPath != path {
+				continue
+			}
+			lod.PayloadKind = chunk.PayloadKind
+			lod.PayloadHash = chunk.PayloadHash
+			lod.PayloadSizeBytes = chunk.PayloadSizeBytes
+			lod.NonEmptyVoxelCount = chunk.NonEmptyVoxelCount
+			return
+		}
+	}
 }
 
 func SaveImportedWorldBakeReport(reportPath string, bake ImportedWorldBakeResult) error {

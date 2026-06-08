@@ -77,8 +77,16 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 
 func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wgpu.ComputePipeline) {
 	var err error
+	oldGBufferBG1 := m.GBufferBindGroup
+	oldLightingBG0 := m.LightingBindGroup
+	oldGBufferBG0 := m.GBufferBindGroup0
+	oldGBufferBG2 := m.GBufferBindGroup2
+	oldGBufferBG0Camera := m.gBufferBG0Camera
+	oldGBufferBG0Instances := m.gBufferBG0Instances
+	oldGBufferBG0BVHNodes := m.gBufferBG0BVHNodes
 
 	m.GBufferBindGroup, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "GBuffer Textures BG1",
 		Layout: gbPipeline.GetBindGroupLayout(1),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, TextureView: m.DepthView},
@@ -91,6 +99,7 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 	}
 
 	m.LightingBindGroup, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Lighting Scene BG0",
 		Layout: lightPipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
@@ -103,6 +112,7 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 	}
 
 	m.GBufferBindGroup0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "GBuffer Scene BG0",
 		Layout: gbPipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.CameraBuf, Size: wgpu.WholeSize},
@@ -113,8 +123,12 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 	if err != nil {
 		panic(err)
 	}
+	m.gBufferBG0Camera = m.CameraBuf
+	m.gBufferBG0Instances = m.InstancesBuf
+	m.gBufferBG0BVHNodes = m.BVHNodesBuf
 
 	m.GBufferBindGroup2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "GBuffer Voxel BG2",
 		Layout: gbPipeline.GetBindGroupLayout(2),
 		Entries: m.appendDenseOccupancyEntry(m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},
@@ -131,11 +145,26 @@ func (m *GpuBufferManager) CreateGBufferBindGroups(gbPipeline, lightPipeline *wg
 	if err != nil {
 		panic(err)
 	}
+
+	m.retireBindGroup(oldGBufferBG1)
+	m.retireBindGroup(oldLightingBG0)
+	m.retireBindGroupWithBuffers(oldGBufferBG0, oldGBufferBG0Camera, oldGBufferBG0Instances, oldGBufferBG0BVHNodes)
+	m.retireBindGroup(oldGBufferBG2)
+}
+
+func (m *GpuBufferManager) GBufferSceneBindGroupCurrent() bool {
+	if m == nil || m.GBufferBindGroup0 == nil {
+		return false
+	}
+	return m.gBufferBG0Camera == m.CameraBuf &&
+		m.gBufferBG0Instances == m.InstancesBuf &&
+		m.gBufferBG0BVHNodes == m.BVHNodesBuf
 }
 
 func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputePipeline, outputView *wgpu.TextureView) {
 	var err error
 	m.LightingBindGroup2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Lighting GBuffer BG1",
 		Layout: lightPipeline.GetBindGroupLayout(1),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, TextureView: m.DepthView},
@@ -152,6 +181,7 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 	}
 
 	m.LightingTileBindGroup, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Lighting Tiles BG3",
 		Layout: lightPipeline.GetBindGroupLayout(3),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.TileLightParamsBuf, Size: wgpu.WholeSize},
@@ -165,6 +195,7 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 
 	// Create materials bind group (group 2)
 	m.LightingBindGroupMaterial, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Lighting Material BG2",
 		Layout: lightPipeline.GetBindGroupLayout(2),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 3, Buffer: m.MaterialBuf, Size: wgpu.WholeSize},

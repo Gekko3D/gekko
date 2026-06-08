@@ -230,6 +230,7 @@ func (a *App) Update() {
 	a.Profiler.SetCount("ShadowCasters", len(a.Scene.ShadowObjects))
 
 	if recreated {
+		a.BufferManager.SceneBindingRevision++
 		a.rebuildCoreSceneBindings()
 
 		if err := a.sceneBuffersRecreatedFeatures(); err != nil {
@@ -429,7 +430,8 @@ func (a *App) Render() {
 		fmt.Printf("ERROR: Encoder Finish failed: %v\n", err)
 		return
 	}
-	a.Queue.Submit(cmd)
+	submissionIndex := a.Queue.Submit(cmd)
+	a.BufferManager.MarkRetiredBuffersSubmitted(a.Queue, submissionIndex)
 	a.BufferManager.ResolveHiZReadback()
 	a.Surface.Present()
 	a.Device.Poll(false, nil)
@@ -628,9 +630,6 @@ func (a *App) recordGBufferPass(encoder *wgpu.CommandEncoder, frame *FrameContex
 	manager := a.BufferManager
 	a.Profiler.SetCount("GBufferGraphNode", 1)
 	a.Profiler.SetCount("GBufferPipelineReady", boolToCount(a.GBufferPipeline != nil))
-	a.Profiler.SetCount("GBufferBG0Ready", boolToCount(manager.GBufferBindGroup0 != nil))
-	a.Profiler.SetCount("GBufferBG1Ready", boolToCount(manager.GBufferBindGroup != nil))
-	a.Profiler.SetCount("GBufferBG2Ready", boolToCount(manager.GBufferBindGroup2 != nil))
 
 	if encoder == nil {
 		return fmt.Errorf("g-buffer command encoder is nil")
@@ -656,6 +655,17 @@ func (a *App) recordGBufferPass(encoder *wgpu.CommandEncoder, frame *FrameContex
 	if a.GBufferPipeline == nil {
 		return fmt.Errorf("g-buffer pipeline is nil")
 	}
+	bg0Current := manager.GBufferSceneBindGroupCurrent()
+	a.Profiler.SetCount("GBufferBG0Current", boolToCount(bg0Current))
+	if !bg0Current {
+		if a.LightingPipeline == nil {
+			return fmt.Errorf("lighting pipeline is nil")
+		}
+		manager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
+	}
+	a.Profiler.SetCount("GBufferBG0Ready", boolToCount(manager.GBufferBindGroup0 != nil))
+	a.Profiler.SetCount("GBufferBG1Ready", boolToCount(manager.GBufferBindGroup != nil))
+	a.Profiler.SetCount("GBufferBG2Ready", boolToCount(manager.GBufferBindGroup2 != nil))
 	if manager.GBufferBindGroup0 == nil {
 		return fmt.Errorf("g-buffer bind group 0 is nil")
 	}

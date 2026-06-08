@@ -156,6 +156,7 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 
 	// Group 0: Scene + Lights + Update Indices
 	m.ShadowBindGroup0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Shadow Scene BG0",
 		Layout: m.ShadowPipeline.GetBindGroupLayout(0),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.ShadowUpdatesBuf, Size: wgpu.WholeSize},
@@ -171,6 +172,7 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 
 	// Group 1: Output Shadow Maps
 	m.ShadowBindGroup1, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Shadow Output BG1",
 		Layout: m.ShadowPipeline.GetBindGroupLayout(1),
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, TextureView: m.ShadowMapView},
@@ -182,6 +184,7 @@ func (m *GpuBufferManager) CreateShadowBindGroups() {
 
 	// Group 2: Voxel Data
 	m.ShadowBindGroup2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
+		Label:  "Shadow Voxel BG2",
 		Layout: m.ShadowPipeline.GetBindGroupLayout(2),
 		Entries: m.appendDenseOccupancyEntry(m.appendVoxelPayloadEntries([]wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: m.SectorTableBuf, Size: wgpu.WholeSize},

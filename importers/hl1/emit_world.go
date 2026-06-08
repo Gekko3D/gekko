@@ -110,6 +110,7 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	if err != nil {
 		return DebugWorldEmissionResult{}, err
 	}
+	ApplyHL1SectorVisibility(emission.Manifest, bsp)
 	manifestPath := generatedWorldPath(opts)
 	if manifestPath == "" {
 		return DebugWorldEmissionResult{}, fmt.Errorf("output root and map name are required for debug world emission")

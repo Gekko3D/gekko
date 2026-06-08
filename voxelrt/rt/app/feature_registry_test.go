@@ -556,6 +556,31 @@ func TestTransparencyFeatureIsGraphOwnedByAccumulationNode(t *testing.T) {
 	}
 }
 
+func TestTransparencyFeatureTreatsChangedSceneBindGroupSourcesAsStale(t *testing.T) {
+	feature := &TransparencyFeature{}
+	camera := &wgpu.Buffer{}
+	instances := &wgpu.Buffer{}
+	bvh := &wgpu.Buffer{}
+	lights := &wgpu.Buffer{}
+	shadowParams := &wgpu.Buffer{}
+	app := &App{
+		BufferManager: &gpu.GpuBufferManager{
+			SceneBindingRevision:    7,
+			TransparentBG0:          &wgpu.BindGroup{},
+			CameraBuf:               camera,
+			TransparentInstancesBuf: instances,
+			TransparentBVHNodesBuf:  bvh,
+			LightsBuf:               lights,
+			ShadowLayerParamsBuf:    shadowParams,
+		},
+		AccumulationResources: &AccumulationResources{TransparentBindingRevision: 7},
+	}
+
+	if feature.bindGroupsCurrent(app) {
+		t.Fatal("expected missing transparent bind-group source tracking to be stale")
+	}
+}
+
 func TestWaterFeatureIsGraphOwnedByAccumulationNode(t *testing.T) {
 	feature := &WaterFeature{}
 	nodes := feature.GraphNodeNames()

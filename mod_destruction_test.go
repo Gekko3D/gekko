@@ -105,6 +105,47 @@ func TestDestructionSystem_Split(t *testing.T) {
 	}
 }
 
+func TestDestructionSystemSkipsImportedWorldChunkOutsideDestructionResidency(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := newDestructionTestVoxelRtState()
+	server := newDestructionTestAssetServer()
+	entity, xbm := addImportedDestructionTestEntity(app, cmd, server, state, false)
+
+	processDestructionEvent(state, DestructionEvent{
+		Entity: entity,
+		Center: mgl32.Vec3{0, 0, 0},
+		Radius: 2,
+	}, cmd, server)
+	app.FlushCommands()
+
+	if xbm.GetVoxelCount() != 1 {
+		t.Fatalf("expected nonresident imported chunk to ignore destruction, got %d voxels", xbm.GetVoxelCount())
+	}
+	if len(cmd.GetAllComponents(entity)) == 0 {
+		t.Fatalf("expected nonresident imported chunk entity to remain")
+	}
+}
+
+func TestDestructionSystemAllowsImportedWorldChunkInsideDestructionResidency(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := newDestructionTestVoxelRtState()
+	server := newDestructionTestAssetServer()
+	entity, _ := addImportedDestructionTestEntity(app, cmd, server, state, true)
+
+	processDestructionEvent(state, DestructionEvent{
+		Entity: entity,
+		Center: mgl32.Vec3{0, 0, 0},
+		Radius: 2,
+	}, cmd, server)
+	app.FlushCommands()
+
+	if len(cmd.GetAllComponents(entity)) != 0 {
+		t.Fatalf("expected resident imported chunk entity to be destroyed")
+	}
+}
+
 func TestDestructionSystem_SpawnDebris(t *testing.T) {
 	app := NewApp()
 	app.UseModules(DestructionModule{})
@@ -559,4 +600,64 @@ func TestDestructionSystem_MomentumInheritance(t *testing.T) {
 	if !foundDebris {
 		t.Errorf("No debris found with RigidBodyComponent")
 	}
+}
+
+func newDestructionTestVoxelRtState() *VoxelRtState {
+	return &VoxelRtState{
+		loadedModels:   make(map[AssetId]*core.VoxelObject),
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
+		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
+		RtApp: &app_rt.App{
+			Scene:    core.NewScene(),
+			Profiler: core.NewProfiler(),
+			Camera:   &core.CameraState{},
+		},
+	}
+}
+
+func newDestructionTestAssetServer() *AssetServer {
+	return &AssetServer{
+		voxModels:   make(map[AssetId]VoxelGeometryAsset),
+		voxPalettes: make(map[AssetId]VoxelPaletteAsset),
+	}
+}
+
+func addImportedDestructionTestEntity(app *App, cmd *Commands, server *AssetServer, state *VoxelRtState, resident bool) (EntityId, *volume.XBrickMap) {
+	xbm := volume.NewXBrickMap()
+	xbm.SetVoxel(0, 0, 0, 1)
+	palette := AssetId{}
+	server.voxPalettes[palette] = VoxelPaletteAsset{}
+	geometry := server.RegisterSharedVoxelGeometry(xbm, "")
+	comps := []any{
+		&TransformComponent{
+			Position: mgl32.Vec3{0, 0, 0},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			SharedGeometry:  geometry,
+			VoxelPalette:    palette,
+			VoxelResolution: 1,
+		},
+		&AuthoredImportedWorldChunkRefComponent{
+			LevelID:    "level",
+			WorldID:    "world",
+			ChunkCoord: [3]int{0, 0, 0},
+		},
+	}
+	if resident {
+		comps = append(comps, &StreamedDestructionResidentComponent{
+			LevelID:    "level",
+			WorldID:    "world",
+			ChunkCoord: [3]int{0, 0, 0},
+		})
+	}
+	entity := cmd.AddEntity(comps...)
+	app.FlushCommands()
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = xbm
+	state.instanceMap[entity] = obj
+	return entity, xbm
 }
