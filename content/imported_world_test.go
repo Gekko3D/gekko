@@ -345,6 +345,59 @@ func TestValidateImportedWorldRejectsBrokenManifestEntries(t *testing.T) {
 	assertImportedWorldValidationCode(t, result, "empty_sectors")
 }
 
+func TestImportedWorldMaterialLookupHelpers(t *testing.T) {
+	def := &ImportedWorldDef{
+		Materials: []ImportedWorldMaterialDef{{
+			ID:                1,
+			PaletteIndex:      7,
+			SourceTextureName: "metalwall01",
+			Kind:              "metal",
+			Tags:              []string{"material:metal"},
+		}},
+		SourceMaterials: []ImportedWorldMaterialDef{{
+			ID:                2,
+			PaletteIndex:      9,
+			SourceTextureName: "light01",
+			Kind:              "emissive",
+			Tags:              []string{"material:emissive"},
+		}},
+	}
+
+	material, ok := FindImportedWorldMaterialByPaletteIndex(def, 7)
+	if !ok || material.Kind != "metal" {
+		t.Fatalf("expected palette material lookup, got %+v ok=%t", material, ok)
+	}
+	material, ok = FindImportedWorldMaterialByPaletteIndex(def, 9)
+	if !ok || material.Kind != "emissive" {
+		t.Fatalf("expected source material fallback lookup, got %+v ok=%t", material, ok)
+	}
+	material, ok = FindImportedWorldMaterialBySourceTexture(def, " LIGHT01 ")
+	if !ok || !ImportedWorldMaterialHasTag(material, "material:emissive") {
+		t.Fatalf("expected case-insensitive source texture lookup, got %+v ok=%t", material, ok)
+	}
+	if _, ok := FindImportedWorldMaterialByPaletteIndex(def, 0); ok {
+		t.Fatal("palette index 0 must not resolve to a material")
+	}
+}
+
+func TestImportedWorldChunkPaletteAt(t *testing.T) {
+	chunk := &ImportedWorldChunkDef{
+		ChunkSize: 4,
+		Voxels: []ImportedWorldVoxelDef{
+			{X: 1, Y: 2, Z: 3, Value: 8},
+		},
+	}
+	if got, ok := ImportedWorldChunkPaletteAt(chunk, 1, 2, 3); !ok || got != 8 {
+		t.Fatalf("expected palette 8 at voxel, got %d ok=%t", got, ok)
+	}
+	if _, ok := ImportedWorldChunkPaletteAt(chunk, 0, 0, 0); ok {
+		t.Fatal("expected empty voxel lookup to miss")
+	}
+	if _, ok := ImportedWorldChunkPaletteAt(chunk, 4, 0, 0); ok {
+		t.Fatal("expected out-of-bounds voxel lookup to miss")
+	}
+}
+
 func assertImportedWorldValidationCode(t *testing.T, result ImportedWorldValidationResult, code string) {
 	t.Helper()
 	for _, issue := range result.Issues {

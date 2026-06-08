@@ -5,6 +5,7 @@ import (
 	"math"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const (
@@ -142,6 +143,77 @@ func EnsureImportedWorldDefaults(def *ImportedWorldDef) {
 		def.ChunkPayloadKind = ImportedWorldChunkPayloadSparseJSONV1
 	}
 	EnsureImportedWorldSectors(def)
+}
+
+func FindImportedWorldMaterialByPaletteIndex(def *ImportedWorldDef, paletteIndex uint8) (ImportedWorldMaterialDef, bool) {
+	if def == nil || paletteIndex == 0 {
+		return ImportedWorldMaterialDef{}, false
+	}
+	if material, ok := findImportedWorldMaterialByPaletteIndex(def.Materials, paletteIndex); ok {
+		return material, true
+	}
+	return findImportedWorldMaterialByPaletteIndex(def.SourceMaterials, paletteIndex)
+}
+
+func FindImportedWorldMaterialBySourceTexture(def *ImportedWorldDef, textureName string) (ImportedWorldMaterialDef, bool) {
+	if def == nil {
+		return ImportedWorldMaterialDef{}, false
+	}
+	name := normalizeImportedWorldTextureName(textureName)
+	if name == "" {
+		return ImportedWorldMaterialDef{}, false
+	}
+	if material, ok := findImportedWorldMaterialBySourceTexture(def.Materials, name); ok {
+		return material, true
+	}
+	return findImportedWorldMaterialBySourceTexture(def.SourceMaterials, name)
+}
+
+func ImportedWorldMaterialHasTag(material ImportedWorldMaterialDef, tag string) bool {
+	want := strings.TrimSpace(tag)
+	if want == "" {
+		return false
+	}
+	for _, got := range material.Tags {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
+func ImportedWorldChunkPaletteAt(chunk *ImportedWorldChunkDef, x, y, z int) (uint8, bool) {
+	if chunk == nil || x < 0 || y < 0 || z < 0 || x >= chunk.ChunkSize || y >= chunk.ChunkSize || z >= chunk.ChunkSize {
+		return 0, false
+	}
+	for _, voxel := range chunk.Voxels {
+		if voxel.X == x && voxel.Y == y && voxel.Z == z && voxel.Value != 0 {
+			return voxel.Value, true
+		}
+	}
+	return 0, false
+}
+
+func findImportedWorldMaterialByPaletteIndex(materials []ImportedWorldMaterialDef, paletteIndex uint8) (ImportedWorldMaterialDef, bool) {
+	for _, material := range materials {
+		if material.PaletteIndex == paletteIndex {
+			return material, true
+		}
+	}
+	return ImportedWorldMaterialDef{}, false
+}
+
+func findImportedWorldMaterialBySourceTexture(materials []ImportedWorldMaterialDef, textureName string) (ImportedWorldMaterialDef, bool) {
+	for _, material := range materials {
+		if normalizeImportedWorldTextureName(material.SourceTextureName) == textureName {
+			return material, true
+		}
+	}
+	return ImportedWorldMaterialDef{}, false
+}
+
+func normalizeImportedWorldTextureName(textureName string) string {
+	return strings.ToUpper(strings.TrimSpace(textureName))
 }
 
 func BuildImportedWorldSectorProxyChunks(sectors []ImportedWorldSectorDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, opts ImportedWorldSectorProxyOptions) ([]ImportedWorldSectorDef, map[string]*ImportedWorldChunkDef) {

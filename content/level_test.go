@@ -782,6 +782,72 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		Target:            "door_a",
 		SourceTag:         "hl1:func_button",
 	}}
+	def.TriggerVolumes = []LevelTriggerVolumeDef{{
+		ID:                "trigger-1",
+		Name:              "trigger",
+		Kind:              "hl1_trigger_once",
+		BoundsCenter:      Vec3{7, 8, 9},
+		BoundsHalfExtents: Vec3{1, 2, 3},
+		Target:            "manager_a",
+		Delay:             0.25,
+		Wait:              0.5,
+		Once:              true,
+		SourceTag:         "hl1:trigger_once",
+	}}
+	def.MultiTargets = []LevelMultiTargetDef{{
+		ID:         "manager-1",
+		Name:       "manager",
+		TargetName: "manager_a",
+		Delay:      0.1,
+		Events: []LevelTargetEventDef{{
+			Target: "door_a",
+			Delay:  0.2,
+		}},
+		SourceTag: "hl1:multi_manager",
+	}}
+	def.TargetRelays = []LevelTargetRelayDef{{
+		ID:           "relay-1",
+		Name:         "relay",
+		Kind:         "hl1_trigger_relay",
+		TargetName:   "relay_a",
+		Target:       "door_a",
+		Delay:        0.15,
+		KillTarget:   "old_target",
+		TriggerState: 1,
+		SpawnFlags:   1,
+		SourceTag:    "hl1:trigger_relay",
+	}}
+	def.Breakables = []LevelBreakableDef{{
+		ID:                "breakable-1",
+		Name:              "crate",
+		Kind:              "hl1_func_breakable",
+		BoundsCenter:      Vec3{2, 3, 4},
+		BoundsHalfExtents: Vec3{0.5, 0.5, 0.5},
+		Health:            25,
+		Material:          "1",
+		SpawnObject:       "0",
+		SpawnFlags:        1,
+		TargetName:        "crate_a",
+		Target:            "door_a",
+		Delay:             0.2,
+		SourceTag:         "hl1:func_breakable",
+	}}
+	def.Pickups = []LevelPickupDef{{
+		ID:        "pickup-1",
+		Name:      "clip",
+		Kind:      "hl1_pickup",
+		Category:  "ammo",
+		Item:      "9mmclip",
+		Amount:    17,
+		ClassName: "ammo_9mmclip",
+		Transform: LevelTransformDef{
+			Position: Vec3{3, 4, 5},
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+		TargetName: "clip_a",
+		SourceTag:  "hl1:ammo_9mmclip",
+	}}
 	if result := ValidateLevel(def, LevelValidationOptions{DocumentPath: path}); result.HasErrors() {
 		t.Fatalf("expected valid moving brush/use trigger, got %+v", result.Issues)
 	}
@@ -798,6 +864,21 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	if len(loaded.UseTriggers) != 1 || loaded.UseTriggers[0].Target != "door_a" {
 		t.Fatalf("use triggers did not round-trip: %+v", loaded.UseTriggers)
 	}
+	if len(loaded.TriggerVolumes) != 1 || !loaded.TriggerVolumes[0].Once || loaded.TriggerVolumes[0].Target != "manager_a" || loaded.TriggerVolumes[0].Delay != 0.25 {
+		t.Fatalf("trigger volumes did not round-trip: %+v", loaded.TriggerVolumes)
+	}
+	if len(loaded.MultiTargets) != 1 || loaded.MultiTargets[0].TargetName != "manager_a" || len(loaded.MultiTargets[0].Events) != 1 || loaded.MultiTargets[0].Events[0].Target != "door_a" {
+		t.Fatalf("multi-targets did not round-trip: %+v", loaded.MultiTargets)
+	}
+	if len(loaded.TargetRelays) != 1 || loaded.TargetRelays[0].TargetName != "relay_a" || loaded.TargetRelays[0].Target != "door_a" || loaded.TargetRelays[0].TriggerState != 1 {
+		t.Fatalf("target relays did not round-trip: %+v", loaded.TargetRelays)
+	}
+	if len(loaded.Breakables) != 1 || loaded.Breakables[0].TargetName != "crate_a" || loaded.Breakables[0].Target != "door_a" || loaded.Breakables[0].Health != 25 {
+		t.Fatalf("breakables did not round-trip: %+v", loaded.Breakables)
+	}
+	if len(loaded.Pickups) != 1 || loaded.Pickups[0].Category != "ammo" || loaded.Pickups[0].Item != "9mmclip" || loaded.Pickups[0].Amount != 17 {
+		t.Fatalf("pickups did not round-trip: %+v", loaded.Pickups)
+	}
 }
 
 func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
@@ -812,6 +893,37 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 		ID:                "bad-button",
 		BoundsHalfExtents: Vec3{1, 0, 1},
 	}}
+	def.TriggerVolumes = []LevelTriggerVolumeDef{{
+		ID:                "bad-trigger",
+		BoundsHalfExtents: Vec3{1, 0, 1},
+		Delay:             -1,
+		Wait:              -1,
+	}}
+	def.MultiTargets = []LevelMultiTargetDef{{
+		ID:         "bad-manager",
+		TargetName: "",
+		Delay:      -1,
+		Events: []LevelTargetEventDef{{
+			Target: "",
+			Delay:  -1,
+		}},
+	}}
+	def.TargetRelays = []LevelTargetRelayDef{{
+		ID:           "bad-relay",
+		TargetName:   "",
+		Delay:        -1,
+		TriggerState: 3,
+	}}
+	def.Breakables = []LevelBreakableDef{{
+		ID:                "bad-breakable",
+		BoundsHalfExtents: Vec3{1, 0, 1},
+		Health:            -1,
+		Delay:             -1,
+	}}
+	def.Pickups = []LevelPickupDef{{
+		ID:     "bad-pickup",
+		Amount: -1,
+	}}
 	result := ValidateLevel(def, LevelValidationOptions{})
 	if !result.HasErrors() {
 		t.Fatal("expected moving brush/use trigger validation errors")
@@ -820,6 +932,22 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_distance")
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_speed")
 	assertHasLevelValidationCode(t, result, "invalid_use_trigger_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_trigger_volume_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_trigger_volume_delay")
+	assertHasLevelValidationCode(t, result, "invalid_trigger_volume_wait")
+	assertHasLevelValidationCode(t, result, "empty_multi_target_name")
+	assertHasLevelValidationCode(t, result, "invalid_multi_target_delay")
+	assertHasLevelValidationCode(t, result, "empty_multi_target_event")
+	assertHasLevelValidationCode(t, result, "invalid_multi_target_event_delay")
+	assertHasLevelValidationCode(t, result, "empty_target_relay_name")
+	assertHasLevelValidationCode(t, result, "invalid_target_relay_delay")
+	assertHasLevelValidationCode(t, result, "invalid_target_relay_state")
+	assertHasLevelValidationCode(t, result, "invalid_breakable_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_breakable_health")
+	assertHasLevelValidationCode(t, result, "invalid_breakable_delay")
+	assertHasLevelValidationCode(t, result, "empty_pickup_category")
+	assertHasLevelValidationCode(t, result, "empty_pickup_item")
+	assertHasLevelValidationCode(t, result, "invalid_pickup_amount")
 }
 
 func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {

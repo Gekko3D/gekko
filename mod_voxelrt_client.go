@@ -26,11 +26,12 @@ func voxelSphereEditWithTransform(xbm *volume.XBrickMap, tr *core.Transform, wor
 }
 
 type RaycastHit struct {
-	Hit    bool
-	T      float32
-	Pos    [3]int
-	Normal mgl32.Vec3
-	Entity EntityId
+	Hit          bool
+	T            float32
+	Pos          [3]int
+	Normal       mgl32.Vec3
+	Entity       EntityId
+	PaletteIndex uint8
 }
 
 type RenderMode uint32
@@ -455,12 +456,18 @@ func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit 
 			}
 		}
 
+		paletteIndex := uint8(0)
+		if res.Object != nil && res.Object.XBrickMap != nil {
+			_, paletteIndex = res.Object.XBrickMap.GetVoxel(res.Coord[0], res.Coord[1], res.Coord[2])
+		}
+
 		return RaycastHit{
-			Hit:    true,
-			T:      res.T,
-			Pos:    res.Coord,
-			Normal: res.Normal,
-			Entity: hitEid,
+			Hit:          true,
+			T:            res.T,
+			Pos:          res.Coord,
+			Normal:       res.Normal,
+			Entity:       hitEid,
+			PaletteIndex: paletteIndex,
 		}
 	}
 

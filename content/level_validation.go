@@ -163,6 +163,26 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		validateLevelUseTriggerUniqueID(&result, seenIDs, trigger.ID)
 		validateLevelUseTrigger(&result, trigger)
 	}
+	for _, trigger := range def.TriggerVolumes {
+		validateLevelTriggerVolumeUniqueID(&result, seenIDs, trigger.ID)
+		validateLevelTriggerVolume(&result, trigger)
+	}
+	for _, relay := range def.TargetRelays {
+		validateLevelTargetRelayUniqueID(&result, seenIDs, relay.ID)
+		validateLevelTargetRelay(&result, relay)
+	}
+	for _, multi := range def.MultiTargets {
+		validateLevelMultiTargetUniqueID(&result, seenIDs, multi.ID)
+		validateLevelMultiTarget(&result, multi)
+	}
+	for _, breakable := range def.Breakables {
+		validateLevelBreakableUniqueID(&result, seenIDs, breakable.ID)
+		validateLevelBreakable(&result, breakable, opts)
+	}
+	for _, pickup := range def.Pickups {
+		validateLevelPickupUniqueID(&result, seenIDs, pickup.ID)
+		validateLevelPickup(&result, pickup, opts)
+	}
 
 	validateLevelTerrain(&result, def, opts)
 	validateLevelBaseWorld(&result, def, opts)
@@ -261,6 +281,61 @@ func validateLevelUseTriggerUniqueID(result *LevelValidationResult, seen map[str
 	}
 	if _, ok := seen[id]; ok {
 		result.addError("duplicate_use_trigger_id", fmt.Sprintf("duplicate use trigger id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelTriggerVolumeUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_trigger_volume_id", fmt.Sprintf("duplicate trigger volume id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelMultiTargetUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_multi_target_id", fmt.Sprintf("duplicate multi-target id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelTargetRelayUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_target_relay_id", fmt.Sprintf("duplicate target relay id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelBreakableUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_breakable_id", fmt.Sprintf("duplicate breakable id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelPickupUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_pickup_id", fmt.Sprintf("duplicate pickup id %s", id), "", "", "", "", "", "", "")
 		return
 	}
 	seen[id] = struct{}{}
@@ -381,6 +456,98 @@ func validateLevelUseTrigger(result *LevelValidationResult, trigger LevelUseTrig
 	}
 	if trigger.BoundsHalfExtents[0] <= 0 || trigger.BoundsHalfExtents[1] <= 0 || trigger.BoundsHalfExtents[2] <= 0 {
 		result.addError("invalid_use_trigger_bounds", "use trigger requires positive bounds half extents", "", "", "", "", "", "", "")
+	}
+}
+
+func validateLevelTriggerVolume(result *LevelValidationResult, trigger LevelTriggerVolumeDef) {
+	if strings.TrimSpace(trigger.ID) == "" {
+		result.addError("empty_trigger_volume_id", "trigger volume id is required", "", "", "", "", "", "", "")
+	}
+	if trigger.BoundsHalfExtents[0] <= 0 || trigger.BoundsHalfExtents[1] <= 0 || trigger.BoundsHalfExtents[2] <= 0 {
+		result.addError("invalid_trigger_volume_bounds", "trigger volume requires positive bounds half extents", "", "", "", "", "", "", "")
+	}
+	if trigger.Delay < 0 {
+		result.addError("invalid_trigger_volume_delay", "trigger volume delay must be non-negative", "", "", "", "", "", "", "")
+	}
+	if trigger.Wait < 0 {
+		result.addError("invalid_trigger_volume_wait", "trigger volume wait must be non-negative", "", "", "", "", "", "", "")
+	}
+}
+
+func validateLevelMultiTarget(result *LevelValidationResult, multi LevelMultiTargetDef) {
+	if strings.TrimSpace(multi.ID) == "" {
+		result.addError("empty_multi_target_id", "multi-target id is required", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(multi.TargetName) == "" {
+		result.addError("empty_multi_target_name", "multi-target target_name is required", "", "", "", "", "", "", "")
+	}
+	if multi.Delay < 0 {
+		result.addError("invalid_multi_target_delay", "multi-target delay must be non-negative", "", "", "", "", "", "", "")
+	}
+	for _, event := range multi.Events {
+		if strings.TrimSpace(event.Target) == "" {
+			result.addError("empty_multi_target_event", "multi-target event target is required", "", "", "", "", "", "", "")
+		}
+		if event.Delay < 0 {
+			result.addError("invalid_multi_target_event_delay", "multi-target event delay must be non-negative", "", "", "", "", "", "", "")
+		}
+	}
+}
+
+func validateLevelTargetRelay(result *LevelValidationResult, relay LevelTargetRelayDef) {
+	if strings.TrimSpace(relay.ID) == "" {
+		result.addError("empty_target_relay_id", "target relay id is required", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(relay.TargetName) == "" {
+		result.addError("empty_target_relay_name", "target relay target_name is required", "", "", "", "", "", "", "")
+	}
+	if relay.Delay < 0 {
+		result.addError("invalid_target_relay_delay", "target relay delay must be non-negative", "", "", "", "", "", "", "")
+	}
+	if relay.TriggerState < 0 || relay.TriggerState > 2 {
+		result.addError("invalid_target_relay_state", "target relay trigger_state must be 0, 1, or 2", "", "", "", "", "", "", "")
+	}
+}
+
+func validateLevelBreakable(result *LevelValidationResult, breakable LevelBreakableDef, opts LevelValidationOptions) {
+	if strings.TrimSpace(breakable.ID) == "" {
+		result.addError("empty_breakable_id", "breakable id is required", "", "", "", "", "", "", "")
+	}
+	if breakable.BoundsHalfExtents[0] <= 0 || breakable.BoundsHalfExtents[1] <= 0 || breakable.BoundsHalfExtents[2] <= 0 {
+		result.addError("invalid_breakable_bounds", "breakable requires positive bounds half extents", "", "", "", "", "", "", "")
+	}
+	if breakable.Health < 0 {
+		result.addError("invalid_breakable_health", "breakable health must be non-negative", "", "", "", "", "", "", "")
+	}
+	if breakable.Delay < 0 {
+		result.addError("invalid_breakable_delay", "breakable delay must be non-negative", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(breakable.AssetPath) != "" && opts.DocumentPath != "" {
+		resolvedPath := ResolveDocumentPath(breakable.AssetPath, opts.DocumentPath)
+		if _, err := os.Stat(resolvedPath); err != nil {
+			result.addError("missing_breakable_asset", fmt.Sprintf("missing breakable asset %s", breakable.AssetPath), "", "", "", "", "", "", "")
+		}
+	}
+}
+
+func validateLevelPickup(result *LevelValidationResult, pickup LevelPickupDef, opts LevelValidationOptions) {
+	if strings.TrimSpace(pickup.ID) == "" {
+		result.addError("empty_pickup_id", "pickup id is required", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(pickup.Category) == "" {
+		result.addError("empty_pickup_category", "pickup category is required", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(pickup.Item) == "" {
+		result.addError("empty_pickup_item", "pickup item is required", "", "", "", "", "", "", "")
+	}
+	if pickup.Amount < 0 {
+		result.addError("invalid_pickup_amount", "pickup amount must be non-negative", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(pickup.AssetPath) != "" && opts.DocumentPath != "" {
+		resolvedPath := ResolveDocumentPath(pickup.AssetPath, opts.DocumentPath)
+		if _, err := os.Stat(resolvedPath); err != nil {
+			result.addError("missing_pickup_asset", fmt.Sprintf("missing pickup asset %s", pickup.AssetPath), "", "", "", "", "", "", "")
+		}
 	}
 }
 

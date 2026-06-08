@@ -34,9 +34,6 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 				},
 				{
 					ClassName: "weapon_9mmhandgun",
-					KeyValues: map[string]string{
-						"model": "models/w_9mmhandgun.mdl",
-					},
 				},
 				{
 					ClassName: "env_sprite",
@@ -61,7 +58,13 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 			},
 		},
 	}
-	result, err := BuildGameAssetImport(ImportOptions{GameDir: gameDir, OutputRoot: outDir}, summary)
+	result, err := BuildGameAssetImport(ImportOptions{
+		GameDir:                  gameDir,
+		OutputRoot:               outDir,
+		VoxelResolution:          0.2,
+		GameAssetVoxelResolution: 0.07,
+		PickupVoxelResolution:    0.03,
+	}, summary)
 	if err != nil {
 		t.Fatalf("BuildGameAssetImport failed: %v", err)
 	}
@@ -76,9 +79,18 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	if modelEntry.GeneratedAssetPath == "" || modelEntry.GeneratedVoxelCount == 0 {
 		t.Fatalf("expected generated voxel asset metadata, got %+v", modelEntry)
 	}
+	if modelEntry.GeneratedVoxelResolution != 0.03 {
+		t.Fatalf("expected pickup model voxel resolution 0.03, got %+v", modelEntry)
+	}
+	if modelEntry.generatedAsset == nil || len(modelEntry.generatedAsset.Parts) != 1 || modelEntry.generatedAsset.Parts[0].VoxelResolution != 0.03 {
+		t.Fatalf("expected generated pickup model asset resolution 0.03, got %+v", modelEntry.generatedAsset)
+	}
 	spriteEntry := assertHL1AssetEntry(t, result.Manifest.Assets, "sprite", spritePath, "generated_voxel_asset")
 	if spriteEntry.SpriteInfo == nil || spriteEntry.SpriteInfo.FrameCount != 1 || spriteEntry.GeneratedAssetPath == "" || spriteEntry.GeneratedVoxelCount == 0 {
 		t.Fatalf("expected generated sprite asset metadata, got %+v", spriteEntry)
+	}
+	if spriteEntry.GeneratedVoxelResolution != 0.07 {
+		t.Fatalf("expected generic game asset voxel resolution 0.07, got %+v", spriteEntry)
 	}
 	assertHL1AssetEntry(t, result.Manifest.Assets, "sound", soundPath, "cataloged_source_only")
 	if len(result.Manifest.Diagnostics) != 0 {

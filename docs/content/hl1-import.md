@@ -454,8 +454,8 @@ Use `.gkasset` later for:
 - Reusable props.
 - NPC prefabs.
 - Pickup prefabs.
-- Doors, buttons, breakables, or scripted objects after actiongame has systems
-  for them.
+- Doors, buttons, breakables, platforms, and scripted objects that need to stay
+  separate from the static base-world bake.
 
 ## Proposed Package Layout
 
@@ -863,7 +863,9 @@ go run .
 6. Keep the recommended defaults for first smoke tests:
 
 - output root: `assets`
-- voxel: `0.1`
+- voxel: `0.1` for world/base geometry
+- asset voxel: `0.08` for generic imported `.mdl`/`.spr` assets
+- item voxel: `0.04` for pickup/item assets
 - chunk: `256`
 - band: `24`
 - cells: `100000000`
@@ -892,12 +894,18 @@ voxelized into generated surface `.gkasset` files under
 converted from their first indexed frame into thin emissive voxel-card
 `.gkasset` files under `hl1_assets/<map>/generated/sprites/`. The manifest
 entries keep source provenance, decoded metadata, generated asset path, and
-generated voxel count. Generated model assets currently use the default static
-pose and texture-baked surface voxels; they are not solid-filled or animated
-yet. Generated sprite assets are not true camera-facing billboards yet; they are
-placed voxel cards that preserve palette color and cutout/additive transparency
-well enough for first visual coverage. When **game assets** is enabled, entities
-whose `model` key references a converted `.mdl` or `.spr` get normal
+generated voxel count/resolution. Imported world geometry, generic game assets,
+and pickup/item assets intentionally have separate voxel-resolution settings:
+small pickups need finer voxels than BSP walls and floors. Generated model
+assets currently use the default static pose and texture-baked surface voxels;
+they are not solid-filled or animated yet. Generated sprite assets are not true
+camera-facing billboards yet; they are placed voxel cards that preserve palette
+color and cutout/additive transparency well enough for first visual coverage.
+When **game assets** is enabled, typed pickups try to attach the generated HL1
+world model asset directly to `LevelPickupDef.AssetPath`; actiongame uses that
+model as the collectible visual and falls back to the colored placeholder cube
+only when no generated pickup asset is available. Other entities whose `model`
+key references a converted `.mdl` or `.spr` get normal
 `LevelPlacementDef` entries pointing at those generated `.gkasset` files, using
 the imported entity origin and yaw. Sound files are copied/cataloged only and
 remain `convert_state: cataloged_source_only` until later passes wire sounds
@@ -915,6 +923,8 @@ go run ./cmd/hl1import \
   -out ../actiongame/assets/levels \
   -chunk-size 256 \
   -voxel-resolution 0.1 \
+  -game-asset-voxel-resolution 0.08 \
+  -pickup-voxel-resolution 0.04 \
   -light-mode faithful \
   -emit-light-fixtures=false \
   -emit-game-assets \
@@ -1347,6 +1357,20 @@ Recommended path:
   links, and moving-brush visuals move between closed/open positions.
 - Implemented foundation: `func_door_rotating` emits moving-brush metadata, but
   exact rotating motion is still future work.
+- Implemented: `func_breakable` is excluded from the static base-world bake and
+  emitted as generated breakable voxel assets referenced by
+  `content.LevelDef.Breakables`. Runtime spawns `BreakableComponent`, supports
+  simple health/damage removal, honors the HL1 `Only Trigger` flag for weapon
+  damage, spawns a typed pickup for supported `spawnobject` values, and fires
+  the breakable's `target` through the same delayed target event path used by
+  triggers and moving brushes.
+- Implemented first slice: HL1 `weapon_*`, `ammo_*`, `item_healthkit`,
+  `item_battery`, `item_suit`, `item_longjump`, and `weaponbox` entities are
+  emitted as typed `content.LevelDef.Pickups`. Runtime spawns
+  `PickupComponent`; when game assets are enabled, pickups reference generated
+  HL1 world-model `.gkasset` visuals. Actiongame uses those visuals when
+  present, falls back to simple collectible placeholders when missing, and
+  tracks basic health, armor, ammo, and owned weapon state.
 - `trigger_changelevel`, `trigger_once`, and `trigger_multiple` become typed
   trigger volumes with target metadata.
 - Current transitional importer behavior emits source-linked level markers for
@@ -1356,17 +1380,18 @@ Recommended path:
   values in tags for compatibility with existing editor/actiongame tooling.
 - `func_train` and related brush models become visual moving-brush entities
   after actiongame has matching path-following semantics.
-- Deferred: HL1 target graph entities such as `multi_manager` and
-  `trigger_relay` are intentionally not implemented yet. They should become a
-  small runtime action dispatcher that resolves `target`/`targetname` links,
-  supports delayed target firing, and can activate moving brushes, trigger
-  volumes, lights, pickups, and later scripted events without adding a general
-  scripting language. This is needed for maps where a button targets a relay or
-  multi-manager instead of a mover directly, such as some `crossfire` tower
-  controls.
-- Deferred: pickups, ammo, health, batteries, weapons, and `func_breakable`
-  should be imported after the target graph is in place, so direct placement and
-  triggered behavior use the same event path.
+- Implemented: HL1 target graph entities `multi_manager` and `trigger_relay`
+  are imported as typed runtime dispatchers. `multi_manager` queues delayed
+  outputs, while `trigger_relay` forwards to `target`, preserves `killtarget`,
+  `triggerstate`, `spawnflags`, and can remove itself after firing. This covers
+  common button -> relay/manager -> mover chains without adding a general
+  scripting language.
+- Deferred: exact target-state semantics for every possible target class,
+  `trigger_relay` master/global-state gating, and the remaining target graph
+  relay/action entities.
+- Deferred: exact HL1 respawn timing, exact difficulty/skill-convar amounts,
+  breakable gibs/explosions, pickup animation/spin/bobbing, and full weapon
+  switching/fire behavior.
 - Unsupported scripted sequences remain diagnostics and debug markers.
 
 Acceptance criteria:
@@ -1496,10 +1521,17 @@ Runtime:
 - [x] Represent typed door/button moving-brush metadata and use activation.
 - [x] Spawn visual moving brush geometry for linear doors/buttons/platforms
       outside the static base-world bake.
-- [ ] Import HL1 target graph relays (`multi_manager`, `trigger_relay`) and
+- [x] Import HL1 target graph relays for `multi_manager`, `trigger_relay`, and
       delayed target firing.
-- [ ] Spawn/import pickups, ammo, health, weapons, and `func_breakable`
-      gameplay entities.
+- [x] Spawn/import `func_breakable` gameplay entities with generated voxel
+      assets and simple health/target behavior.
+- [x] Spawn/import pickups, ammo, health, and weapons as typed pickup
+      components with actiongame placeholder collection.
+- [x] Attach generated HL1 world-model pickup visuals when game assets are
+      enabled, with placeholder fallback for missing assets.
+- [ ] Import remaining target graph relay/action entities.
+- [ ] Implement exact HL1 pickup respawn/skill behavior and animated pickup
+      presentation.
 - [ ] Spawn visual moving brush geometry for rotating doors/trains when
       actiongame has matching motion semantics.
 - [ ] Confirm imported base-world chunks can be destructively edited or

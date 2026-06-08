@@ -83,6 +83,9 @@ func TestRaycastScaling(t *testing.T) {
 		if hit.T < 149.0 || hit.T > 151.0 {
 			t.Errorf("Hit wrong distance: %f, expected ~150", hit.T)
 		}
+		if hit.PaletteIndex != 1 {
+			t.Errorf("expected hit palette index 1, got %d", hit.PaletteIndex)
+		}
 	}
 
 	// EDGE CASE: Negative Zero Ray Direction

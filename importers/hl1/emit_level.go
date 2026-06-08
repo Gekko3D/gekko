@@ -20,11 +20,17 @@ const MarkerKindHL1Door = "hl1_func_door"
 const MarkerKindHL1DoorRotating = "hl1_func_door_rotating"
 const MarkerKindHL1Button = "hl1_func_button"
 const MarkerKindHL1MovingBrush = "hl1_moving_brush"
+const MarkerKindHL1Pickup = "hl1_pickup"
 const MovingBrushKindHL1Door = "hl1_func_door"
 const MovingBrushKindHL1DoorRotating = "hl1_func_door_rotating"
 const MovingBrushKindHL1Button = "hl1_func_button"
 const MovingBrushKindHL1Plat = "hl1_func_plat"
 const UseTriggerKindHL1Button = "hl1_func_button"
+const TriggerVolumeKindHL1TriggerOnce = "hl1_trigger_once"
+const TriggerVolumeKindHL1TriggerMultiple = "hl1_trigger_multiple"
+const MultiTargetKindHL1MultiManager = "hl1_multi_manager"
+const TargetRelayKindHL1TriggerRelay = "hl1_trigger_relay"
+const BreakableKindHL1FuncBreakable = "hl1_func_breakable"
 const DefaultMaxEmissiveSurfaceLights = 64
 const DefaultHL1LadderClimbSpeed = 200 * HammerUnitMeters
 
@@ -35,6 +41,7 @@ type GeneratedLevelResult struct {
 	Level              *content.LevelDef
 	LightFixtureAssets []GeneratedAssetResult
 	MovingBrushAssets  []GeneratedAssetResult
+	BreakableAssets    []GeneratedAssetResult
 }
 
 type GeneratedAssetResult struct {
@@ -95,6 +102,7 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 		})
 	}
 	level.Markers = append(level.Markers, buildHL1GameplayMarkers(summary.Map.Entities)...)
+	level.Pickups = buildHL1Pickups(summary.Map.Entities, levelPath, gameAssets)
 	level.LadderVolumes = buildHL1LadderVolumes(summary.Map.Entities, opts.VoxelResolution)
 	movingBrushes, movingBrushAssets, err := buildHL1MovingBrushes(opts, summary, levelPath)
 	if err != nil {
@@ -102,6 +110,14 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	}
 	level.MovingBrushes = movingBrushes
 	level.UseTriggers = buildHL1UseTriggers(summary.Map.Entities)
+	level.TriggerVolumes = buildHL1TriggerVolumes(summary.Map.Entities)
+	level.MultiTargets = buildHL1MultiTargets(summary.Map.Entities)
+	level.TargetRelays = buildHL1TargetRelays(summary.Map.Entities)
+	breakables, breakableAssets, err := buildHL1Breakables(opts, summary, levelPath)
+	if err != nil {
+		return GeneratedLevelResult{}, err
+	}
+	level.Breakables = breakables
 	level.Placements = append(level.Placements, buildHL1GeneratedAssetPlacements(summary.Map.Entities, levelPath, gameAssets)...)
 	lights, err := buildHL1LevelLights(opts, summary.Map.Entities)
 	if err != nil {
@@ -117,10 +133,10 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 			return GeneratedLevelResult{}, err
 		}
 		content.EnsureLevelIDs(level)
-		return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, LightFixtureAssets: assets, MovingBrushAssets: movingBrushAssets}, nil
+		return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, LightFixtureAssets: assets, MovingBrushAssets: movingBrushAssets, BreakableAssets: breakableAssets}, nil
 	}
 	content.EnsureLevelIDs(level)
-	return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, MovingBrushAssets: movingBrushAssets}, nil
+	return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, MovingBrushAssets: movingBrushAssets, BreakableAssets: breakableAssets}, nil
 }
 
 func hl1LevelPlayerDef() *content.LevelPlayerDef {
@@ -146,6 +162,9 @@ func buildHL1GeneratedAssetPlacements(entities []importcommon.Entity, levelPath 
 	placements := make([]content.LevelPlacementDef, 0)
 	countsByBase := map[string]int{}
 	for _, entity := range entities {
+		if _, ok := hl1PickupClass(entity.ClassName); ok {
+			continue
+		}
 		if entity.KeyValues == nil {
 			continue
 		}
@@ -210,7 +229,7 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 	if result.Level == nil {
 		return fmt.Errorf("level is nil")
 	}
-	for _, asset := range append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.MovingBrushAssets...) {
+	for _, asset := range append(append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.MovingBrushAssets...), result.BreakableAssets...) {
 		if asset.Asset == nil {
 			return fmt.Errorf("generated asset is nil")
 		}
@@ -274,6 +293,184 @@ func hl1GameplayMarkerKind(className string) (string, bool) {
 	}
 }
 
+func buildHL1Pickups(entities []importcommon.Entity, levelPath string, gameAssets *GameAssetImportResult) []content.LevelPickupDef {
+	pickups := make([]content.LevelPickupDef, 0)
+	countsByClass := map[string]int{}
+	generatedByRef := generatedHL1AssetPathsByRef(nil)
+	if gameAssets != nil && gameAssets.Manifest != nil {
+		generatedByRef = generatedHL1AssetPathsByRef(gameAssets.Manifest.Assets)
+	}
+	levelDir := filepath.Dir(levelPath)
+	for _, entity := range entities {
+		pickup, ok := hl1PickupClass(entity.ClassName)
+		if !ok {
+			continue
+		}
+		className := strings.ToLower(entity.ClassName)
+		assetPath := ""
+		if modelRef := hl1PickupModelRef(className); modelRef != "" {
+			if generatedPath := generatedByRef[normalizedHL1AssetRef(modelRef)]; generatedPath != "" {
+				assetPath = filepath.ToSlash(relativeOrBase(levelDir, generatedPath))
+			}
+		}
+		index := countsByClass[className]
+		countsByClass[className]++
+		pickups = append(pickups, content.LevelPickupDef{
+			ID:        fmt.Sprintf("hl1_pickup_%s_%d", className, index),
+			Name:      hl1EntityDisplayName(entity, className),
+			Kind:      MarkerKindHL1Pickup,
+			AssetPath: assetPath,
+			Category:  pickup.Category,
+			Item:      pickup.Item,
+			Amount:    hl1PickupDefaultAmount(pickup),
+			ClassName: className,
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{entity.WorldPosition.X, entity.WorldPosition.Y, entity.WorldPosition.Z},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			TargetName: hl1StringKey(entity, "targetname"),
+			SpawnFlags: hl1IntKey(entity, "spawnflags"),
+			SourceTag:  "hl1:" + className,
+			Tags:       hl1PickupTags(entity, pickup),
+		})
+	}
+	return pickups
+}
+
+type hl1PickupInfo struct {
+	Category string
+	Item     string
+}
+
+func hl1PickupClass(className string) (hl1PickupInfo, bool) {
+	className = strings.ToLower(strings.TrimSpace(className))
+	switch {
+	case strings.HasPrefix(className, "weapon_"):
+		return hl1PickupInfo{Category: "weapon", Item: strings.TrimPrefix(className, "weapon_")}, true
+	case strings.HasPrefix(className, "ammo_"):
+		return hl1PickupInfo{Category: "ammo", Item: strings.TrimPrefix(className, "ammo_")}, true
+	}
+	switch className {
+	case "item_healthkit", "item_battery", "item_suit", "item_longjump", "weaponbox":
+		return hl1PickupInfo{Category: "item", Item: strings.TrimPrefix(className, "item_")}, true
+	default:
+		return hl1PickupInfo{}, false
+	}
+}
+
+func hl1PickupModelRef(className string) string {
+	switch strings.ToLower(strings.TrimSpace(className)) {
+	case "weapon_9mmhandgun":
+		return "models/w_9mmhandgun.mdl"
+	case "weapon_357":
+		return "models/w_357.mdl"
+	case "weapon_9mmar":
+		return "models/w_9mmar.mdl"
+	case "weapon_shotgun":
+		return "models/w_shotgun.mdl"
+	case "weapon_crossbow":
+		return "models/w_crossbow.mdl"
+	case "weapon_rpg":
+		return "models/w_rpg.mdl"
+	case "weapon_gauss":
+		return "models/w_gauss.mdl"
+	case "weapon_egon":
+		return "models/w_egon.mdl"
+	case "weapon_hornetgun":
+		return "models/w_hgun.mdl"
+	case "weapon_handgrenade":
+		return "models/w_grenade.mdl"
+	case "weapon_satchel":
+		return "models/w_satchel.mdl"
+	case "weapon_tripmine":
+		return "models/w_tripmine.mdl"
+	case "weapon_snark":
+		return "models/w_squeak.mdl"
+	case "ammo_9mmclip":
+		return "models/w_9mmclip.mdl"
+	case "ammo_9mmbox":
+		return "models/w_9mmbox.mdl"
+	case "ammo_9mmar":
+		return "models/w_9mmarclip.mdl"
+	case "ammo_argrenades":
+		return "models/w_argrenade.mdl"
+	case "ammo_buckshot":
+		return "models/w_shotbox.mdl"
+	case "ammo_357":
+		return "models/w_357ammobox.mdl"
+	case "ammo_crossbow":
+		return "models/w_crossbow_clip.mdl"
+	case "ammo_gaussclip":
+		return "models/w_gaussammo.mdl"
+	case "ammo_rpgclip":
+		return "models/w_rpgammo.mdl"
+	case "item_healthkit":
+		return "models/w_medkit.mdl"
+	case "item_battery":
+		return "models/w_battery.mdl"
+	case "item_suit":
+		return "models/w_suit.mdl"
+	case "item_longjump":
+		return "models/w_longjump.mdl"
+	case "weaponbox":
+		return "models/w_weaponbox.mdl"
+	default:
+		return ""
+	}
+}
+
+func hl1PickupDefaultAmount(pickup hl1PickupInfo) int {
+	switch pickup.Category {
+	case "ammo":
+		switch pickup.Item {
+		case "9mmclip", "glockclip":
+			return 17
+		case "9mmbox", "9mmar", "mp5clip":
+			return 50
+		case "argrenades":
+			return 2
+		case "buckshot":
+			return 12
+		default:
+			return 1
+		}
+	case "item":
+		switch pickup.Item {
+		case "healthkit":
+			return 15
+		case "battery":
+			return 15
+		default:
+			return 1
+		}
+	default:
+		return 1
+	}
+}
+
+func hl1PickupTags(entity importcommon.Entity, pickup hl1PickupInfo) []string {
+	className := strings.ToLower(entity.ClassName)
+	tags := []string{
+		"source:hl1",
+		"classname:" + className,
+		"pickup:hl1",
+		"pickup_category:" + pickup.Category,
+		"pickup_item:" + pickup.Item,
+	}
+	for _, key := range []string{"targetname", "spawnflags"} {
+		if entity.KeyValues == nil {
+			break
+		}
+		value := strings.TrimSpace(entity.KeyValues[key])
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
+}
+
 func hl1EntityDisplayName(entity importcommon.Entity, fallback string) string {
 	if entity.KeyValues != nil {
 		if value := strings.TrimSpace(entity.KeyValues["targetname"]); value != "" {
@@ -293,6 +490,25 @@ func hl1GameplayMarkerTags(entity importcommon.Entity, bounds importcommon.Bound
 		"bounds_max:" + hl1Vec3Tag(bounds.Max),
 	}
 	for _, key := range []string{"targetname", "target", "master", "message", "speed", "wait", "delay", "lip", "height", "angle", "angles", "movedir", "spawnflags", "sounds", "dmg"} {
+		if entity.KeyValues == nil {
+			break
+		}
+		value := strings.TrimSpace(entity.KeyValues[key])
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
+}
+
+func hl1PointEntityTags(entity importcommon.Entity) []string {
+	className := strings.ToLower(entity.ClassName)
+	tags := []string{
+		"source:hl1",
+		"classname:" + className,
+	}
+	for _, key := range []string{"targetname", "target", "master", "message", "delay", "spawnflags"} {
 		if entity.KeyValues == nil {
 			break
 		}
@@ -358,6 +574,76 @@ func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath 
 	return out, assets, nil
 }
 
+func buildHL1Breakables(opts ImportOptions, summary ImportSummary, levelPath string) ([]content.LevelBreakableDef, []GeneratedAssetResult, error) {
+	entities := summary.Map.Entities
+	out := make([]content.LevelBreakableDef, 0)
+	assets := make([]GeneratedAssetResult, 0)
+	var textureStore *TextureStore
+	materialColors := materialColorMap(summary.Map.Materials)
+	if summary.BSP != nil {
+		wads, _ := LoadResolvedWADs(summary.Report.Source.WADPaths)
+		textureStore = NewTextureStore(summary.BSP.Textures, wads)
+	}
+	count := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "func_breakable") || entity.BrushModelID <= 0 {
+			continue
+		}
+		bounds := entity.BrushWorldBounds
+		center, halfExtents := contentBoundsCenterHalfExtents(bounds)
+		breakable := content.LevelBreakableDef{
+			ID:                fmt.Sprintf("hl1_breakable_func_breakable_%d", count),
+			Name:              hl1EntityDisplayName(entity, "func_breakable"),
+			Kind:              BreakableKindHL1FuncBreakable,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			Health:            hl1BreakableHealth(entity),
+			Material:          hl1StringKey(entity, "material"),
+			SpawnObject:       hl1StringKey(entity, "spawnobject"),
+			SpawnFlags:        hl1IntKey(entity, "spawnflags"),
+			TargetName:        hl1StringKey(entity, "targetname"),
+			Target:            hl1StringKey(entity, "target"),
+			Delay:             hl1FloatKey(entity, "delay"),
+			SourceTag:         "hl1:func_breakable",
+			Tags:              hl1BreakableTags(entity, bounds),
+		}
+		if summary.BSP != nil {
+			asset, visualOrigin, err := buildHL1BreakableAsset(opts, summary.BSP, textureStore, materialColors, entity, breakable.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if asset.Asset != nil {
+				breakable.AssetPath = filepath.ToSlash(relativeOrBase(filepath.Dir(levelPath), asset.AssetPath))
+				breakable.VisualOrigin = visualOrigin
+				assets = append(assets, asset)
+			}
+		}
+		out = append(out, breakable)
+		count++
+	}
+	return out, assets, nil
+}
+
+func hl1BreakableHealth(entity importcommon.Entity) float32 {
+	health := hl1FloatKey(entity, "health")
+	if health <= 0 {
+		return 1
+	}
+	return health
+}
+
+func hl1BreakableTags(entity importcommon.Entity, bounds importcommon.Bounds) []string {
+	tags := hl1GameplayMarkerTags(entity, bounds)
+	for _, key := range []string{"health", "material", "spawnobject", "explodemagnitude", "gibmodel"} {
+		value := hl1StringKey(entity, key)
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
+}
+
 func buildHL1UseTriggers(entities []importcommon.Entity) []content.LevelUseTriggerDef {
 	out := make([]content.LevelUseTriggerDef, 0)
 	count := 0
@@ -381,6 +667,153 @@ func buildHL1UseTriggers(entities []importcommon.Entity) []content.LevelUseTrigg
 		count++
 	}
 	return out
+}
+
+func buildHL1TriggerVolumes(entities []importcommon.Entity) []content.LevelTriggerVolumeDef {
+	out := make([]content.LevelTriggerVolumeDef, 0)
+	countsByClass := map[string]int{}
+	for _, entity := range entities {
+		kind, once, ok := hl1TriggerVolumeKind(entity.ClassName)
+		if !ok || entity.BrushModelID <= 0 {
+			continue
+		}
+		className := strings.ToLower(entity.ClassName)
+		index := countsByClass[className]
+		countsByClass[className]++
+		bounds := entity.BrushWorldBounds
+		center, halfExtents := contentBoundsCenterHalfExtents(bounds)
+		out = append(out, content.LevelTriggerVolumeDef{
+			ID:                fmt.Sprintf("hl1_trigger_%s_%d", className, index),
+			Name:              hl1EntityDisplayName(entity, className),
+			Kind:              kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			TargetName:        hl1StringKey(entity, "targetname"),
+			Target:            hl1StringKey(entity, "target"),
+			Delay:             hl1FloatKey(entity, "delay"),
+			Wait:              hl1FloatKey(entity, "wait"),
+			Once:              once,
+			SourceTag:         "hl1:" + className,
+			Tags:              hl1GameplayMarkerTags(entity, bounds),
+		})
+	}
+	return out
+}
+
+func hl1TriggerVolumeKind(className string) (string, bool, bool) {
+	switch strings.ToLower(className) {
+	case "trigger_once":
+		return TriggerVolumeKindHL1TriggerOnce, true, true
+	case "trigger_multiple":
+		return TriggerVolumeKindHL1TriggerMultiple, false, true
+	default:
+		return "", false, false
+	}
+}
+
+func buildHL1MultiTargets(entities []importcommon.Entity) []content.LevelMultiTargetDef {
+	out := make([]content.LevelMultiTargetDef, 0)
+	count := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "multi_manager") {
+			continue
+		}
+		events := hl1MultiManagerEvents(entity)
+		if len(events) == 0 {
+			continue
+		}
+		out = append(out, content.LevelMultiTargetDef{
+			ID:         fmt.Sprintf("hl1_multi_manager_%d", count),
+			Name:       hl1EntityDisplayName(entity, "multi_manager"),
+			TargetName: hl1StringKey(entity, "targetname"),
+			Delay:      hl1FloatKey(entity, "delay"),
+			Events:     events,
+			SourceTag:  "hl1:multi_manager",
+			Tags:       hl1PointEntityTags(entity),
+		})
+		count++
+	}
+	return out
+}
+
+func buildHL1TargetRelays(entities []importcommon.Entity) []content.LevelTargetRelayDef {
+	out := make([]content.LevelTargetRelayDef, 0)
+	count := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "trigger_relay") {
+			continue
+		}
+		out = append(out, content.LevelTargetRelayDef{
+			ID:           fmt.Sprintf("hl1_trigger_relay_%d", count),
+			Name:         hl1EntityDisplayName(entity, "trigger_relay"),
+			Kind:         TargetRelayKindHL1TriggerRelay,
+			TargetName:   hl1StringKey(entity, "targetname"),
+			Target:       hl1StringKey(entity, "target"),
+			Delay:        hl1FloatKey(entity, "delay"),
+			KillTarget:   hl1StringKey(entity, "killtarget"),
+			TriggerState: hl1TriggerRelayState(entity),
+			SpawnFlags:   hl1IntKey(entity, "spawnflags"),
+			SourceTag:    "hl1:trigger_relay",
+			Tags:         hl1PointEntityTags(entity),
+		})
+		count++
+	}
+	return out
+}
+
+func hl1TriggerRelayState(entity importcommon.Entity) int {
+	state := hl1IntKey(entity, "triggerstate")
+	if state < 0 || state > 2 {
+		return 2
+	}
+	return state
+}
+
+func hl1MultiManagerEvents(entity importcommon.Entity) []content.LevelTargetEventDef {
+	if entity.KeyValues == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(entity.KeyValues))
+	for key := range entity.KeyValues {
+		key = strings.TrimSpace(key)
+		if key == "" || hl1MultiManagerReservedKey(key) {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	events := make([]content.LevelTargetEventDef, 0, len(keys))
+	for _, key := range keys {
+		delay, err := strconv.ParseFloat(strings.TrimSpace(entity.KeyValues[key]), 32)
+		if err != nil || delay < 0 {
+			continue
+		}
+		events = append(events, content.LevelTargetEventDef{Target: hl1MultiManagerTargetName(key), Delay: float32(delay)})
+	}
+	return events
+}
+
+func hl1MultiManagerReservedKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "classname", "targetname", "target", "origin", "angles", "angle", "model", "spawnflags", "delay", "wait", "message", "master", "globalname":
+		return true
+	default:
+		return false
+	}
+}
+
+func hl1MultiManagerTargetName(key string) string {
+	key = strings.TrimSpace(key)
+	hash := strings.LastIndex(key, "#")
+	if hash < 0 || hash == len(key)-1 {
+		return key
+	}
+	for _, r := range key[hash+1:] {
+		if r < '0' || r > '9' {
+			return key
+		}
+	}
+	return key[:hash]
 }
 
 func hl1MovingBrushKind(className string) (string, bool) {
@@ -446,6 +879,48 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 		Tags: []string{"source:hl1", "moving_brush"},
 	}}
 	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "moving_brushes", brushID+".gkasset")
+	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
+}
+
+func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureStore, materialColors map[int][4]uint8, entity importcommon.Entity, breakableID string) (GeneratedAssetResult, content.Vec3, error) {
+	if bsp == nil || entity.BrushModelID <= 0 {
+		return GeneratedAssetResult{}, content.Vec3{}, nil
+	}
+	faces, err := bsp.ModelFaces(entity.BrushModelID)
+	if err != nil {
+		return GeneratedAssetResult{}, content.Vec3{}, fmt.Errorf("model %d breakable faces: %w", entity.BrushModelID, err)
+	}
+	voxelized := VoxelizeFacesCPU(faces, VoxelizeOptions{
+		VoxelResolution: opts.VoxelResolution,
+		TextureStore:    textureStore,
+		MaterialColors:  materialColors,
+	})
+	if len(voxelized.Voxels) == 0 {
+		return GeneratedAssetResult{}, content.Vec3{}, nil
+	}
+	localVoxels, visualOrigin := localizeHL1MovingBrushVoxels(voxelized.Voxels, opts.VoxelResolution)
+	asset := content.NewAssetDef(breakableID)
+	asset.Tags = []string{"source:hl1", "breakable", "classname:" + strings.ToLower(entity.ClassName)}
+	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
+	asset.Materials = assetMaterialsForHL1Voxels(voxelized.Materials, localVoxels)
+	asset.Parts = []content.AssetPartDef{{
+		ID:              "breakable",
+		Name:            "breakable",
+		VoxelResolution: opts.VoxelResolution,
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxelShape,
+			VoxelShape: &content.AssetVoxelShapeDef{
+				Palette: assetVoxelPaletteForMaterials(asset.Materials),
+				Voxels:  localVoxels,
+			},
+		},
+		Tags: []string{"source:hl1", "breakable"},
+	}}
+	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "breakables", breakableID+".gkasset")
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
 }
 
@@ -615,6 +1090,18 @@ func hl1FloatKey(entity importcommon.Entity, key string) float32 {
 		return 0
 	}
 	return float32(parsed)
+}
+
+func hl1IntKey(entity importcommon.Entity, key string) int {
+	value := hl1StringKey(entity, key)
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func hl1StringKey(entity importcommon.Entity, key string) string {

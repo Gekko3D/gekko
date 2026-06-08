@@ -282,6 +282,48 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		BoundsHalfExtents: content.Vec3{0.25, 0.5, 0.25},
 		Target:            "door_a",
 	}}
+	level.TriggerVolumes = []content.LevelTriggerVolumeDef{{
+		ID:                "trigger-1",
+		BoundsCenter:      content.Vec3{3, 2, 6},
+		BoundsHalfExtents: content.Vec3{0.5, 0.5, 0.5},
+		Target:            "manager_a",
+		Once:              true,
+	}}
+	level.MultiTargets = []content.LevelMultiTargetDef{{
+		ID:         "manager-1",
+		TargetName: "manager_a",
+		Events: []content.LevelTargetEventDef{{
+			Target: "door_a",
+		}},
+	}}
+	level.TargetRelays = []content.LevelTargetRelayDef{{
+		ID:           "relay-1",
+		Kind:         "hl1_trigger_relay",
+		TargetName:   "relay_a",
+		Target:       "door_a",
+		TriggerState: 1,
+	}}
+	level.Breakables = []content.LevelBreakableDef{{
+		ID:                "breakable-1",
+		BoundsCenter:      content.Vec3{6, 2, 6},
+		BoundsHalfExtents: content.Vec3{0.5, 0.5, 0.5},
+		Health:            25,
+		TargetName:        "crate_a",
+		Target:            "door_a",
+	}}
+	level.Pickups = []content.LevelPickupDef{{
+		ID:        "pickup-1",
+		Kind:      "hl1_pickup",
+		Category:  "ammo",
+		Item:      "9mmclip",
+		Amount:    17,
+		ClassName: "ammo_9mmclip",
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{7, 2, 6},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+	}}
 	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +335,7 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	app.FlushCommands()
-	var brushCount, triggerCount int
+	var brushCount, triggerCount, touchTriggerCount, multiTargetCount, relayCount, breakableCount, pickupCount int
 	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, _ *MovingBrushComponent) bool {
 		brushCount++
 		return true
@@ -302,8 +344,28 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		triggerCount++
 		return true
 	})
-	if brushCount != 1 || triggerCount != 1 {
-		t.Fatalf("expected 1 brush and 1 trigger, got %d/%d", brushCount, triggerCount)
+	MakeQuery1[TriggerVolumeComponent](cmd).Map(func(_ EntityId, _ *TriggerVolumeComponent) bool {
+		touchTriggerCount++
+		return true
+	})
+	MakeQuery1[MultiTargetComponent](cmd).Map(func(_ EntityId, _ *MultiTargetComponent) bool {
+		multiTargetCount++
+		return true
+	})
+	MakeQuery1[TargetRelayComponent](cmd).Map(func(_ EntityId, _ *TargetRelayComponent) bool {
+		relayCount++
+		return true
+	})
+	MakeQuery1[BreakableComponent](cmd).Map(func(_ EntityId, _ *BreakableComponent) bool {
+		breakableCount++
+		return true
+	})
+	MakeQuery1[PickupComponent](cmd).Map(func(_ EntityId, _ *PickupComponent) bool {
+		pickupCount++
+		return true
+	})
+	if brushCount != 1 || triggerCount != 1 || touchTriggerCount != 1 || multiTargetCount != 1 || relayCount != 1 || breakableCount != 1 || pickupCount != 1 {
+		t.Fatalf("expected 1 brush/use/touch/multi/relay/breakable/pickup, got %d/%d/%d/%d/%d/%d/%d", brushCount, triggerCount, touchTriggerCount, multiTargetCount, relayCount, breakableCount, pickupCount)
 	}
 }
 
@@ -1019,6 +1081,81 @@ func TestStreamedRuntimePreservesImportedBaseWorldPalette(t *testing.T) {
 	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
 	if vmc.VoxelPalette != state.BaseWorldPalette {
 		t.Fatalf("expected chunk to use base-world palette %v, got %v", state.BaseWorldPalette, vmc.VoxelPalette)
+	}
+}
+
+func TestStreamedRuntimeExposesImportedBaseWorldMaterialLookup(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "baseworld_materials.gklevel")
+	worldPath := filepath.Join(root, "worlds", "baseworld_materials.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "baseworld_materials_chunks", "0_0_0.gkchunk")
+
+	chunkDef := &content.ImportedWorldChunkDef{
+		WorldID:            "world-materials",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 1, Y: 2, Z: 3, Value: 4}},
+		NonEmptyVoxelCount: 1,
+	}
+	writeImportedWorldChunkForStreamedTest(t, chunkPath, chunkDef)
+
+	if err := os.MkdirAll(filepath.Dir(worldPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveImportedWorld(worldPath, &content.ImportedWorldDef{
+		WorldID:         "world-materials",
+		Kind:            content.ImportedWorldKindVoxelWorld,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		Palette:         []content.ImportedWorldPaletteColor{{0, 0, 0, 0}, {0, 0, 0, 255}, {0, 0, 0, 255}, {0, 0, 0, 255}, {64, 80, 96, 255}},
+		Materials: []content.ImportedWorldMaterialDef{{
+			ID:                12,
+			PaletteIndex:      4,
+			SourceTextureName: "CONCRETE01",
+			Kind:              "stone",
+			CollisionKind:     "solid",
+			Roughness:         0.9,
+			Tags:              []string{"material:stone"},
+		}},
+		Entries: []content.ImportedWorldChunkEntryDef{{
+			Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkPath:          content.AuthorDocumentPath(chunkPath, worldPath),
+			NonEmptyVoxelCount: 1,
+		}},
+	}); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+
+	level := content.NewLevelDef("baseworld_materials")
+	level.ChunkSize = 16
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:         content.ImportedWorldKindVoxelWorld,
+		ManifestPath: content.AuthorDocumentPath(worldPath, levelPath),
+	}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app, cmd, state := newStreamedRuntimeHarness(t)
+	assets := app.resources[reflect.TypeOf(AssetServer{})].(*AssetServer)
+	if err := StartStreamedLevelRuntime(cmd, assets, StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+
+	if state.BaseWorldManifest == nil || state.BaseWorldManifest.WorldID != "world-materials" {
+		t.Fatalf("expected base-world manifest to be retained, got %+v", state.BaseWorldManifest)
+	}
+	material, ok := state.BaseWorldMaterialForPalette(4)
+	if !ok || material.SourceTextureName != "CONCRETE01" || material.Roughness != 0.9 {
+		t.Fatalf("expected runtime material lookup, got %+v ok=%t", material, ok)
+	}
+	material, paletteIndex, ok := state.BaseWorldMaterialForChunkVoxel(chunkDef, [3]int{1, 2, 3})
+	if !ok || paletteIndex != 4 || !content.ImportedWorldMaterialHasTag(material, "material:stone") {
+		t.Fatalf("expected runtime chunk voxel material lookup, got material=%+v palette=%d ok=%t", material, paletteIndex, ok)
 	}
 }
 

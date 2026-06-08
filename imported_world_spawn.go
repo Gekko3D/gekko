@@ -188,7 +188,11 @@ func importedWorldVoxMaterials(materials []content.ImportedWorldMaterialDef) []V
 		if material.PaletteIndex == 0 {
 			continue
 		}
-		props := map[string]interface{}{}
+		props := map[string]interface{}{
+			"_rough": material.Roughness,
+			"_metal": material.Metallic,
+			"_trans": material.Transparency,
+		}
 		if material.EmitsLight || material.Emissive > 0 {
 			emissive := material.Emissive
 			if emissive <= 0 {
@@ -197,11 +201,16 @@ func importedWorldVoxMaterials(materials []content.ImportedWorldMaterialDef) []V
 			props["_type"] = "_emit"
 			props["_emit"] = emissive
 		} else if material.Transparent {
+			transparency := material.Transparency
+			if transparency <= 0 {
+				transparency = 0.35
+			}
 			props["_type"] = "_glass"
-			props["_trans"] = float32(0.35)
-		}
-		if len(props) == 0 {
-			continue
+			props["_trans"] = transparency
+		} else if material.Metallic > 0.5 {
+			props["_type"] = "_metal"
+		} else {
+			props["_type"] = "_diffuse"
 		}
 		out = append(out, VoxMaterial{
 			ID:       int(material.PaletteIndex),

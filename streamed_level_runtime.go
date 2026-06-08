@@ -227,7 +227,9 @@ type StreamedLevelRuntimeState struct {
 	TerrainID                  string
 	TerrainPalette             AssetId
 	BaseWorldID                string
+	BaseWorldManifest          *content.ImportedWorldDef
 	BaseWorldPalette           AssetId
+	BaseWorldMaterialLookup    ImportedWorldMaterialLookup
 	BaseWorldCollisionEnabled  bool
 	MarkerEntities             map[string]EntityId
 	LightEntities              map[string]EntityId
@@ -472,7 +474,9 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.TerrainID = ""
 	state.TerrainPalette = AssetId{}
 	state.BaseWorldID = ""
+	state.BaseWorldManifest = nil
 	state.BaseWorldPalette = AssetId{}
+	state.BaseWorldMaterialLookup = ImportedWorldMaterialLookup{}
 	state.BaseWorldCollisionEnabled = false
 	state.MarkerEntities = make(map[string]EntityId)
 	state.LightEntities = make(map[string]EntityId)
@@ -560,6 +564,8 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			return err
 		}
 		state.BaseWorldID = manifest.WorldID
+		state.BaseWorldManifest = manifest
+		state.BaseWorldMaterialLookup = NewImportedWorldMaterialLookup(manifest)
 		state.BaseWorldCollisionEnabled = level.BaseWorld.CollisionEnabled
 		entriesByCoord := make(map[content.TerrainChunkCoordDef]content.ImportedWorldChunkEntryDef, len(manifest.Entries))
 		for _, entry := range manifest.Entries {
@@ -625,6 +631,27 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	}
 	for _, trigger := range level.UseTriggers {
 		spawnAuthoredLevelUseTrigger(cmd, state.LevelRoot, level.ID, trigger)
+	}
+	for _, trigger := range level.TriggerVolumes {
+		spawnAuthoredLevelTriggerVolume(cmd, state.LevelRoot, level.ID, trigger)
+	}
+	for _, multi := range level.MultiTargets {
+		spawnAuthoredLevelMultiTarget(cmd, state.LevelRoot, level.ID, multi)
+	}
+	for _, relay := range level.TargetRelays {
+		spawnAuthoredLevelTargetRelay(cmd, state.LevelRoot, level.ID, relay)
+	}
+	for _, breakable := range level.Breakables {
+		if _, err := spawnAuthoredLevelBreakable(cmd, assets, loader, state.LevelRoot, level.ID, cfg.LevelPath, breakable); err != nil {
+			state.InitErr = err
+			return err
+		}
+	}
+	for _, pickup := range level.Pickups {
+		if _, err := spawnAuthoredLevelPickup(cmd, assets, loader, state.LevelRoot, level.ID, cfg.LevelPath, pickup); err != nil {
+			state.InitErr = err
+			return err
+		}
 	}
 	if cfg.AutoSpawnPlayer {
 		playerMarkerKind := cfg.PlayerSpawnKind

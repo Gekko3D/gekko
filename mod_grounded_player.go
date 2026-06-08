@@ -113,6 +113,8 @@ func (mod GroundedPlayerControllerModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(System(groundedPlayerInputSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(groundedPlayerControlSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(groundedPlayerUseSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(triggerVolumeTouchSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(targetEventSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(movingBrushMotionSystem).InStage(Update).RunAlways())
 }
 
@@ -271,14 +273,14 @@ func groundedPlayerUseSystem(cmd *Commands, input *Input) {
 		if hit, ok := findUseTriggerHit(cmd, origin, dir, 2.2); ok {
 			hit.Trigger.ActivationCount++
 			activateMovingBrushAtBounds(cmd, hit.Trigger.BoundsCenter, hit.Trigger.BoundsHalfExtents)
-			activateMovingBrushTarget(cmd, hit.Trigger.Target)
+			ActivateTarget(cmd, hit.Trigger.Target, 0)
 			return false
 		}
 		if hit, ok := findMovingBrushUseHit(cmd, origin, dir, 2.2); ok {
 			hit.Brush.ActivationCount++
 			hit.Brush.Open = !hit.Brush.Open
 			if hit.Brush.Target != "" {
-				activateMovingBrushTarget(cmd, hit.Brush.Target)
+				ActivateTarget(cmd, hit.Brush.Target, 0)
 			}
 			return false
 		}
@@ -335,17 +337,7 @@ func findMovingBrushUseHit(cmd *Commands, origin, dir mgl32.Vec3, maxDistance fl
 }
 
 func activateMovingBrushTarget(cmd *Commands, target string) {
-	if cmd == nil || target == "" {
-		return
-	}
-	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent) bool {
-		if brush == nil || brush.TargetName != target {
-			return true
-		}
-		brush.Open = !brush.Open
-		brush.ActivationCount++
-		return true
-	})
+	ActivateTarget(cmd, target, 0)
 }
 
 func activateMovingBrushAtBounds(cmd *Commands, center, halfExtents mgl32.Vec3) {

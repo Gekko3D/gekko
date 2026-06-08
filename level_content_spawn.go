@@ -32,6 +32,11 @@ type AuthoredLevelSpawnResult struct {
 	LadderVolumeEntities    map[string]EntityId
 	MovingBrushEntities     map[string]EntityId
 	UseTriggerEntities      map[string]EntityId
+	TriggerVolumeEntities   map[string]EntityId
+	MultiTargetEntities     map[string]EntityId
+	TargetRelayEntities     map[string]EntityId
+	BreakableEntities       map[string]EntityId
+	PickupEntities          map[string]EntityId
 	ExpandedVolumeInstances []content.PlacementVolumePreviewInstance
 }
 
@@ -82,6 +87,11 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		LadderVolumeEntities:  make(map[string]EntityId),
 		MovingBrushEntities:   make(map[string]EntityId),
 		UseTriggerEntities:    make(map[string]EntityId),
+		TriggerVolumeEntities: make(map[string]EntityId),
+		MultiTargetEntities:   make(map[string]EntityId),
+		TargetRelayEntities:   make(map[string]EntityId),
+		BreakableEntities:     make(map[string]EntityId),
+		PickupEntities:        make(map[string]EntityId),
 	}
 	if cmd == nil {
 		return result, fmt.Errorf("commands is nil")
@@ -196,6 +206,32 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 	for _, trigger := range def.UseTriggers {
 		entity := spawnAuthoredLevelUseTrigger(cmd, result.RootEntity, def.ID, trigger)
 		result.UseTriggerEntities[trigger.ID] = entity
+	}
+	for _, trigger := range def.TriggerVolumes {
+		entity := spawnAuthoredLevelTriggerVolume(cmd, result.RootEntity, def.ID, trigger)
+		result.TriggerVolumeEntities[trigger.ID] = entity
+	}
+	for _, multi := range def.MultiTargets {
+		entity := spawnAuthoredLevelMultiTarget(cmd, result.RootEntity, def.ID, multi)
+		result.MultiTargetEntities[multi.ID] = entity
+	}
+	for _, relay := range def.TargetRelays {
+		entity := spawnAuthoredLevelTargetRelay(cmd, result.RootEntity, def.ID, relay)
+		result.TargetRelayEntities[relay.ID] = entity
+	}
+	for _, breakable := range def.Breakables {
+		entity, err := spawnAuthoredLevelBreakable(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, breakable)
+		if err != nil {
+			return result, err
+		}
+		result.BreakableEntities[breakable.ID] = entity
+	}
+	for _, pickup := range def.Pickups {
+		entity, err := spawnAuthoredLevelPickup(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, pickup)
+		if err != nil {
+			return result, err
+		}
+		result.PickupEntities[pickup.ID] = entity
 	}
 
 	if def.Terrain != nil && strings.TrimSpace(def.Terrain.ManifestPath) != "" {
@@ -473,6 +509,211 @@ func spawnAuthoredLevelUseTrigger(cmd *Commands, parent EntityId, levelID string
 			Name:         trigger.Name,
 		},
 	)
+}
+
+func spawnAuthoredLevelTriggerVolume(cmd *Commands, parent EntityId, levelID string, trigger content.LevelTriggerVolumeDef) EntityId {
+	center := mgl32.Vec3{trigger.BoundsCenter[0], trigger.BoundsCenter[1], trigger.BoundsCenter[2]}
+	halfExtents := mgl32.Vec3{trigger.BoundsHalfExtents[0], trigger.BoundsHalfExtents[1], trigger.BoundsHalfExtents[2]}
+	transform := TransformComponent{
+		Position: center,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&TriggerVolumeComponent{
+			Kind:              trigger.Kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			TargetName:        trigger.TargetName,
+			Target:            trigger.Target,
+			Delay:             trigger.Delay,
+			Wait:              trigger.Wait,
+			Once:              trigger.Once,
+			SourceTag:         trigger.SourceTag,
+			Tags:              append([]string(nil), trigger.Tags...),
+		},
+		&AuthoredLevelTriggerVolumeRefComponent{
+			LevelID:         levelID,
+			TriggerVolumeID: trigger.ID,
+			Name:            trigger.Name,
+		},
+	)
+}
+
+func spawnAuthoredLevelMultiTarget(cmd *Commands, parent EntityId, levelID string, multi content.LevelMultiTargetDef) EntityId {
+	events := make([]TargetEventDef, 0, len(multi.Events))
+	for _, event := range multi.Events {
+		events = append(events, TargetEventDef{Target: event.Target, Delay: event.Delay})
+	}
+	return cmd.AddEntity(
+		&Parent{Entity: parent},
+		&MultiTargetComponent{
+			TargetName: multi.TargetName,
+			Delay:      multi.Delay,
+			Events:     events,
+			SourceTag:  multi.SourceTag,
+			Tags:       append([]string(nil), multi.Tags...),
+		},
+		&AuthoredLevelMultiTargetRefComponent{
+			LevelID:       levelID,
+			MultiTargetID: multi.ID,
+			Name:          multi.Name,
+		},
+	)
+}
+
+func spawnAuthoredLevelTargetRelay(cmd *Commands, parent EntityId, levelID string, relay content.LevelTargetRelayDef) EntityId {
+	return cmd.AddEntity(
+		&Parent{Entity: parent},
+		&TargetRelayComponent{
+			Kind:         relay.Kind,
+			TargetName:   relay.TargetName,
+			Target:       relay.Target,
+			Delay:        relay.Delay,
+			KillTarget:   relay.KillTarget,
+			TriggerState: relay.TriggerState,
+			SpawnFlags:   relay.SpawnFlags,
+			SourceTag:    relay.SourceTag,
+			Tags:         append([]string(nil), relay.Tags...),
+		},
+		&AuthoredLevelTargetRelayRefComponent{
+			LevelID:       levelID,
+			TargetRelayID: relay.ID,
+			Name:          relay.Name,
+		},
+	)
+}
+
+func spawnAuthoredLevelBreakable(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, breakable content.LevelBreakableDef) (EntityId, error) {
+	center := mgl32.Vec3{breakable.BoundsCenter[0], breakable.BoundsCenter[1], breakable.BoundsCenter[2]}
+	halfExtents := mgl32.Vec3{breakable.BoundsHalfExtents[0], breakable.BoundsHalfExtents[1], breakable.BoundsHalfExtents[2]}
+	visualOrigin := mgl32.Vec3{breakable.VisualOrigin[0], breakable.VisualOrigin[1], breakable.VisualOrigin[2]}
+	if visualOrigin == (mgl32.Vec3{}) {
+		visualOrigin = center
+	}
+	health := breakable.Health
+	if health <= 0 {
+		health = 1
+	}
+	transform := TransformComponent{
+		Position: visualOrigin,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	comps := []any{
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&BreakableComponent{
+			Kind:              breakable.Kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			Health:            health,
+			MaxHealth:         health,
+			Material:          breakable.Material,
+			SpawnObject:       breakable.SpawnObject,
+			SpawnFlags:        breakable.SpawnFlags,
+			TargetName:        breakable.TargetName,
+			Target:            breakable.Target,
+			Delay:             breakable.Delay,
+			SourceTag:         breakable.SourceTag,
+			Tags:              append([]string(nil), breakable.Tags...),
+		},
+		&AuthoredLevelBreakableRefComponent{
+			LevelID:     levelID,
+			BreakableID: breakable.ID,
+			Name:        breakable.Name,
+		},
+	}
+	if strings.TrimSpace(breakable.AssetPath) != "" {
+		if loader == nil {
+			loader = NewRuntimeContentLoader()
+		}
+		assetPath := content.ResolveDocumentPath(breakable.AssetPath, levelPath)
+		asset, err := loader.LoadAsset(assetPath)
+		if err != nil {
+			return 0, err
+		}
+		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		if err != nil {
+			return 0, err
+		}
+		if model != (AssetId{}) {
+			comps = append(comps, &VoxelModelComponent{
+				SharedGeometry:         model,
+				VoxelPalette:           palette,
+				VoxelResolution:        voxelResolution,
+				PivotMode:              PivotModeCorner,
+				ShadowSeamWorldEpsilon: voxelResolution,
+			})
+		}
+	}
+	return cmd.AddEntity(comps...), nil
+}
+
+func spawnAuthoredLevelPickup(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, pickup content.LevelPickupDef) (EntityId, error) {
+	transform := levelTransformToComponent(pickup.Transform)
+	comps := []any{
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&PickupComponent{
+			Kind:       pickup.Kind,
+			AssetPath:  pickup.AssetPath,
+			Category:   pickup.Category,
+			Item:       pickup.Item,
+			Amount:     pickup.Amount,
+			ClassName:  pickup.ClassName,
+			TargetName: pickup.TargetName,
+			SpawnFlags: pickup.SpawnFlags,
+			SourceTag:  pickup.SourceTag,
+			Tags:       append([]string(nil), pickup.Tags...),
+		},
+		&AuthoredLevelPickupRefComponent{
+			LevelID:  levelID,
+			PickupID: pickup.ID,
+			Name:     pickup.Name,
+		},
+	}
+	if strings.TrimSpace(pickup.AssetPath) != "" {
+		if loader == nil {
+			loader = NewRuntimeContentLoader()
+		}
+		assetPath := content.ResolveDocumentPath(pickup.AssetPath, levelPath)
+		asset, err := loader.LoadAsset(assetPath)
+		if err != nil {
+			return 0, err
+		}
+		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		if err != nil {
+			return 0, err
+		}
+		if model != (AssetId{}) {
+			comps = append(comps, &VoxelModelComponent{
+				SharedGeometry:         model,
+				VoxelPalette:           palette,
+				VoxelResolution:        voxelResolution,
+				PivotMode:              PivotModeCorner,
+				ShadowSeamWorldEpsilon: voxelResolution,
+			})
+		}
+	}
+	return cmd.AddEntity(comps...), nil
 }
 
 func levelWaterDirectLightOcclusion(water content.LevelWaterBodyDef) float32 {

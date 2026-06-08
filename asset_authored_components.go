@@ -104,6 +104,36 @@ type AuthoredLevelUseTriggerRefComponent struct {
 	Name         string
 }
 
+type AuthoredLevelTriggerVolumeRefComponent struct {
+	LevelID         string
+	TriggerVolumeID string
+	Name            string
+}
+
+type AuthoredLevelMultiTargetRefComponent struct {
+	LevelID       string
+	MultiTargetID string
+	Name          string
+}
+
+type AuthoredLevelTargetRelayRefComponent struct {
+	LevelID       string
+	TargetRelayID string
+	Name          string
+}
+
+type AuthoredLevelBreakableRefComponent struct {
+	LevelID     string
+	BreakableID string
+	Name        string
+}
+
+type AuthoredLevelPickupRefComponent struct {
+	LevelID  string
+	PickupID string
+	Name     string
+}
+
 func IsAuthoredAssetRootEntity(cmd *Commands, eid EntityId) bool {
 	if cmd == nil {
 		return false

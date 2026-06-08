@@ -34,7 +34,11 @@ func main() {
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
-	flag.Var((*float32Flag)(&opts.VoxelResolution), "voxel-resolution", "planned voxel resolution")
+	opts.GameAssetVoxelResolution = hl1.DefaultGameAssetVoxelResolution
+	opts.PickupVoxelResolution = hl1.DefaultPickupVoxelResolution
+	flag.Var((*float32Flag)(&opts.VoxelResolution), "voxel-resolution", "world voxel resolution")
+	flag.Var((*float32Flag)(&opts.GameAssetVoxelResolution), "game-asset-voxel-resolution", "voxel resolution for imported HL1 model/sprite assets")
+	flag.Var((*float32Flag)(&opts.PickupVoxelResolution), "pickup-voxel-resolution", "voxel resolution for imported HL1 pickup/item assets")
 	flag.StringVar(&reportPath, "report", "", "report output path")
 	flag.BoolVar(&emitDebugWorld, "emit-debug-world", false, "write debug .gkworld/.gkchunk output")
 	flag.StringVar(&debugWorldMode, "debug-world-mode", string(hl1.DebugWorldModeSurface), "debug world mode: surface or solid")
@@ -49,6 +53,12 @@ func main() {
 	}
 	if opts.VoxelResolution <= 0 {
 		fatalf("-voxel-resolution must be positive")
+	}
+	if opts.GameAssetVoxelResolution <= 0 {
+		fatalf("-game-asset-voxel-resolution must be positive")
+	}
+	if opts.PickupVoxelResolution <= 0 {
+		fatalf("-pickup-voxel-resolution must be positive")
 	}
 	if _, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind); err != nil {
 		fatalf("%v", err)
@@ -140,8 +150,12 @@ func main() {
 		fmt.Printf("ladder volumes: %d\n", len(levelResult.Level.LadderVolumes))
 		fmt.Printf("moving brushes: %d\n", len(levelResult.Level.MovingBrushes))
 		fmt.Printf("use triggers: %d\n", len(levelResult.Level.UseTriggers))
+		fmt.Printf("target relays: %d\n", len(levelResult.Level.TargetRelays))
+		fmt.Printf("breakables: %d\n", len(levelResult.Level.Breakables))
+		fmt.Printf("pickups: %d\n", len(levelResult.Level.Pickups))
 		fmt.Printf("light fixture assets: %d\n", len(levelResult.LightFixtureAssets))
 		fmt.Printf("moving brush assets: %d\n", len(levelResult.MovingBrushAssets))
+		fmt.Printf("breakable assets: %d\n", len(levelResult.BreakableAssets))
 	}
 	if opts.EmitGameAssets {
 		fmt.Printf("game asset manifest written: %s\n", gameAssets.ManifestPath)

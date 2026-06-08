@@ -401,8 +401,8 @@ Implementation note, 2026-06-08:
 - Import/bake emits one `lod1` `voxel_proxy` chunk per sector under `lods/`.
 - Proxy chunks downsample full sector voxels by 4x and preserve the dominant
   material in each coarse cell.
-- Runtime does not consume proxy LODs yet; this only prepares the assets needed
-  for no-hole replacement.
+- Runtime and editor preview can consume proxy LODs as cheap visual fallback
+  data. Proxy LODs are still not collision-accurate, destructible, or editable.
 
 #### Step 6: Implement No-Hole Replacement
 
@@ -624,19 +624,91 @@ Verification:
 - New compact payloads load through the same runtime abstraction.
 - Import report shows payload sizes and decode times.
 
-### Tactical Work That Is Still Worth Doing
+### Finalized Implementation Status, 2026-06-08
 
-These are useful before the full sector system:
+The current implemented baseline is:
 
-- budget `commitPreparedStreamedChunksSystem(...)`
-- add load/unload hysteresis
+- Imported worlds are schema v2, sector-driven, and should be re-imported if
+  old manifests lack sector or LOD metadata.
+- Import/bake emits full chunks plus sector `lod1` proxy chunks.
+- Runtime visual residency has separate full and proxy paths.
+- Runtime collision and destruction residency are separate from visual
+  residency.
+- Proxies are visual-only and are hidden when their referenced full chunks are
+  resident.
+- Full chunks are not unloaded until a sector proxy is available when the
+  sector has proxy LOD metadata.
+- Runtime edits to streamed imported chunks persist into world-delta imported
+  chunk overrides. The imported source world remains immutable.
+- `actiongame` exposes runtime tuning through environment variables:
+  - `GEKKO_STREAMING_RADIUS`
+  - `GEKKO_STREAMING_PREFETCH_RADIUS`
+  - `GEKKO_STREAMING_KEEP_RADIUS`
+  - `GEKKO_STREAMING_COLLISION_RADIUS`
+  - `GEKKO_STREAMING_DESTRUCTION_RADIUS`
+  - `GEKKO_STREAMING_MAX_COMMITS_PER_FRAME`
+  - `GEKKO_STREAMING_MAX_COMMIT_MS`
+  - `GEKKO_STREAMING_METRICS_INTERVAL_MS`
+- Streaming metrics now report full/proxy/collision/destruction commit and
+  residency counts so manual visual checks can be paired with logs.
+- `gasworks_128` passed visual checkpoints for:
+  - no holes while moving
+  - no persistent low-LOD objects after full chunks loaded
+  - destruction/edit persistence across chunk unload/reload
+  - stable runs using upstream `cogentcore/webgpu` main
+
+Known caveats:
+
+- Full-detail chunk commit/upload spikes can still be high on integrated GPUs.
+  The commit budget reduces per-frame churn, but explicit full-detail loading
+  remains expensive by design.
+- Already-loaded full chunks are not promoted/demoted in place between
+  collision/destruction modes; residency transitions happen through unload and
+  reload.
+- Sector pinning/focused-detail selection in the editor is not implemented yet.
+- Clipmap-style open-world handling is deferred.
+
+### Editor Base-World Preview
+
+`gekko-editor` uses its own base-world preview controller rather than the game
+streamed runtime.
+
+Current preview modes:
+
+- `hybrid`
+  - sector LOD proxies for the whole imported world when available
+  - detailed full chunks around the editor camera
+  - hides a proxy once its sector's full chunk refs are resident
+- `lod`
+  - proxy-only overview when sector LODs exist
+  - falls back to normal chunk preview for old/no-proxy manifests
+- `full`
+  - explicitly loads every non-empty full imported-world chunk
+  - useful for inspection, expensive for large maps
+
+The Base World panel exposes preview mode and radius controls before a level or
+base world is loaded. Choose `lod` before opening heavy maps when startup load
+cost matters.
+
+Editor proxy preview entities are locked preview objects, visual-only, shadow
+disabled, and occlusion-culling disabled. They should not be used for
+voxel-accurate edits; detailed chunks are still required for exact edit
+operations.
+
+### Remaining Useful Follow-Ups
+
+These are useful after the sector/proxy baseline:
+
 - prefetch the observer's current chunk synchronously before player spawn
 - use larger import chunk sizes for maps where edit granularity permits it
 - reduce command flushes inside `commitPreparedStreamedChunk(...)`
-- add profiler counters for streaming commit, geometry registration, and GPU
-  upload churn
+- keep extending profiler counters around renderer upload churn
+- add editor sector pin/focused-detail controls
+- persist editor preview mode across editor restarts if it becomes a regular
+  workflow preference
 
-These are tactical bridges, not the final architecture.
+These are refinements on top of the current architecture, not replacements for
+the sector/proxy model.
 
 ### What Not To Do
 

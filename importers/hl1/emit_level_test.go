@@ -420,6 +420,236 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 	}
 }
 
+func TestBuildGeneratedLevelEmitsHL1TriggerVolumesAndMultiTargets(t *testing.T) {
+	dir := t.TempDir()
+	opts := ImportOptions{
+		MapName:         "triggermap",
+		OutputRoot:      dir,
+		ChunkSize:       256,
+		VoxelResolution: 0.1,
+	}
+	summary := ImportSummary{
+		Map: importcommon.MapImport{
+			Source: importcommon.SourceInfo{MapName: "triggermap"},
+			Entities: []importcommon.Entity{
+				{
+					ClassName:    "trigger_once",
+					BrushModelID: 3,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 1, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 5, Y: 6, Z: 7},
+					},
+					KeyValues: map[string]string{
+						"targetname": "trigger_a",
+						"target":     "manager_a",
+						"delay":      "0.5",
+					},
+				},
+				{
+					ClassName:    "trigger_multiple",
+					BrushModelID: 4,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 10, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 12, Y: 4, Z: 5},
+					},
+					KeyValues: map[string]string{
+						"target": "door_b",
+						"wait":   "1.25",
+					},
+				},
+				{
+					ClassName: "multi_manager",
+					KeyValues: map[string]string{
+						"targetname": "manager_a",
+						"door_a":     "0.25",
+						"door_a#1":   "0.75",
+						"wait":       "99",
+						"not_delay":  "nope",
+					},
+				},
+				{
+					ClassName: "trigger_relay",
+					KeyValues: map[string]string{
+						"targetname":   "relay_a",
+						"target":       "door_a",
+						"delay":        "0.1",
+						"killtarget":   "obsolete_a",
+						"triggerstate": "1",
+						"spawnflags":   "1",
+					},
+				},
+			},
+		},
+		Report: importcommon.ImportReport{
+			Source: importcommon.SourceInfo{MapName: "triggermap"},
+		},
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "worlds", "triggermap.gkworld"))
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.Level.TriggerVolumes) != 2 {
+		t.Fatalf("trigger volumes = %+v", level.Level.TriggerVolumes)
+	}
+	once := level.Level.TriggerVolumes[0]
+	if once.Kind != TriggerVolumeKindHL1TriggerOnce || !once.Once || once.TargetName != "trigger_a" || once.Target != "manager_a" || once.Delay != 0.5 {
+		t.Fatalf("trigger_once volume = %+v", once)
+	}
+	if once.BoundsCenter != (content.Vec3{3, 4, 5}) || once.BoundsHalfExtents != (content.Vec3{2, 2, 2}) {
+		t.Fatalf("trigger_once bounds = %+v/%+v", once.BoundsCenter, once.BoundsHalfExtents)
+	}
+	multiple := level.Level.TriggerVolumes[1]
+	if multiple.Kind != TriggerVolumeKindHL1TriggerMultiple || multiple.Once || multiple.Target != "door_b" || multiple.Wait != 1.25 {
+		t.Fatalf("trigger_multiple volume = %+v", multiple)
+	}
+	if len(level.Level.MultiTargets) != 1 {
+		t.Fatalf("multi-targets = %+v", level.Level.MultiTargets)
+	}
+	manager := level.Level.MultiTargets[0]
+	if manager.TargetName != "manager_a" || len(manager.Events) != 2 {
+		t.Fatalf("multi-manager = %+v", manager)
+	}
+	if manager.Events[0].Target != "door_a" || manager.Events[0].Delay != 0.25 || manager.Events[1].Target != "door_a" || manager.Events[1].Delay != 0.75 {
+		t.Fatalf("multi-manager events = %+v", manager.Events)
+	}
+	if len(level.Level.TargetRelays) != 1 {
+		t.Fatalf("target relays = %+v", level.Level.TargetRelays)
+	}
+	relay := level.Level.TargetRelays[0]
+	if relay.Kind != TargetRelayKindHL1TriggerRelay || relay.TargetName != "relay_a" || relay.Target != "door_a" || relay.Delay != 0.1 || relay.KillTarget != "obsolete_a" || relay.TriggerState != 1 || relay.SpawnFlags != 1 {
+		t.Fatalf("trigger relay = %+v", relay)
+	}
+}
+
+func TestBuildGeneratedLevelEmitsHL1Breakables(t *testing.T) {
+	dir := t.TempDir()
+	opts := ImportOptions{
+		MapName:         "breakablemap",
+		OutputRoot:      dir,
+		ChunkSize:       256,
+		VoxelResolution: 0.1,
+	}
+	summary := ImportSummary{
+		Map: importcommon.MapImport{
+			Source: importcommon.SourceInfo{MapName: "breakablemap"},
+			Entities: []importcommon.Entity{
+				{
+					ClassName:    "func_breakable",
+					BrushModelID: 5,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 1, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 5, Y: 6, Z: 7},
+					},
+					KeyValues: map[string]string{
+						"targetname":       "crate_a",
+						"target":           "door_a",
+						"health":           "35",
+						"material":         "2",
+						"spawnobject":      "4",
+						"spawnflags":       "1",
+						"delay":            "0.25",
+						"explodemagnitude": "80",
+					},
+				},
+			},
+		},
+		Report: importcommon.ImportReport{
+			Source: importcommon.SourceInfo{MapName: "breakablemap"},
+		},
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "worlds", "breakablemap.gkworld"))
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.Level.Breakables) != 1 {
+		t.Fatalf("breakables = %+v", level.Level.Breakables)
+	}
+	breakable := level.Level.Breakables[0]
+	if breakable.Kind != BreakableKindHL1FuncBreakable || breakable.TargetName != "crate_a" || breakable.Target != "door_a" {
+		t.Fatalf("breakable target metadata = %+v", breakable)
+	}
+	if breakable.Health != 35 || breakable.Material != "2" || breakable.SpawnObject != "4" || breakable.SpawnFlags != 1 || breakable.Delay != 0.25 {
+		t.Fatalf("breakable gameplay metadata = %+v", breakable)
+	}
+	if breakable.BoundsCenter != (content.Vec3{3, 4, 5}) || breakable.BoundsHalfExtents != (content.Vec3{2, 2, 2}) {
+		t.Fatalf("breakable bounds = %+v/%+v", breakable.BoundsCenter, breakable.BoundsHalfExtents)
+	}
+	if !hasTag(breakable.Tags, "hl1_target:door_a") || !hasTag(breakable.Tags, "hl1_health:35") || !hasTag(breakable.Tags, "hl1_explodemagnitude:80") {
+		t.Fatalf("breakable tags = %+v", breakable.Tags)
+	}
+}
+
+func TestBuildGeneratedLevelImportsHL1Pickups(t *testing.T) {
+	dir := t.TempDir()
+	opts := ImportOptions{
+		MapName:         "pickupmap",
+		OutputRoot:      filepath.Join(dir, "out"),
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	}
+	summary := ImportSummary{
+		Map: importcommon.MapImport{
+			Entities: []importcommon.Entity{
+				{
+					ClassName:     "weapon_9mmhandgun",
+					WorldPosition: importcommon.Vec3{X: 1, Y: 2, Z: 3},
+					KeyValues:     map[string]string{"targetname": "pistol_a"},
+				},
+				{
+					ClassName:     "ammo_9mmclip",
+					WorldPosition: importcommon.Vec3{X: 4, Y: 5, Z: 6},
+				},
+				{
+					ClassName:     "item_healthkit",
+					WorldPosition: importcommon.Vec3{X: 7, Y: 8, Z: 9},
+				},
+			},
+		},
+		Report: importcommon.ImportReport{
+			Source: importcommon.SourceInfo{MapName: "pickupmap"},
+		},
+	}
+	levelPath := filepath.Join(dir, "out", "worlds", "pickupmap.gkworld")
+	handgunAssetPath := filepath.Join(dir, "out", "hl1_assets", "pickupmap", "generated", "models", "w_9mmhandgun.gkasset")
+	level, err := BuildGeneratedLevelWithGameAssets(opts, summary, levelPath, GameAssetImportResult{
+		Manifest: &GameAssetManifest{Assets: []GameAssetManifestEntry{{
+			Kind:               "model",
+			SourceRef:          "models/w_9mmhandgun.mdl",
+			GeneratedAssetPath: handgunAssetPath,
+			ConvertState:       "generated_voxel_asset",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	pickups := level.Level.Pickups
+	if len(pickups) != 3 {
+		t.Fatalf("pickups = %+v", level.Level.Pickups)
+	}
+	if pickups[0].Name != "pistol_a" || pickups[0].Transform.Position != (content.Vec3{1, 2, 3}) {
+		t.Fatalf("weapon pickup = %+v", pickups[0])
+	}
+	if pickups[0].Kind != MarkerKindHL1Pickup || pickups[0].ClassName != "weapon_9mmhandgun" || pickups[0].Category != "weapon" || pickups[0].Item != "9mmhandgun" || pickups[0].TargetName != "pistol_a" {
+		t.Fatalf("weapon pickup metadata = %+v", pickups[0])
+	}
+	expectedAssetPath, err := filepath.Rel(filepath.Join(dir, "out"), handgunAssetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pickups[0].AssetPath != filepath.ToSlash(expectedAssetPath) {
+		t.Fatalf("weapon pickup asset path = %q, want %q", pickups[0].AssetPath, filepath.ToSlash(expectedAssetPath))
+	}
+	if !hasTag(pickups[0].Tags, "pickup_category:weapon") || !hasTag(pickups[0].Tags, "pickup_item:9mmhandgun") || !hasTag(pickups[0].Tags, "hl1_targetname:pistol_a") {
+		t.Fatalf("weapon pickup tags = %+v", pickups[0].Tags)
+	}
+	if pickups[1].Category != "ammo" || pickups[1].Item != "9mmclip" || pickups[1].Amount != 17 || pickups[2].Category != "item" || pickups[2].Item != "healthkit" || pickups[2].Amount != 15 {
+		t.Fatalf("pickup metadata = %+v %+v", pickups[1], pickups[2])
+	}
+	if !hasTag(pickups[1].Tags, "pickup_category:ammo") || !hasTag(pickups[2].Tags, "pickup_category:item") {
+		t.Fatalf("pickup tags = %+v %+v", pickups[1].Tags, pickups[2].Tags)
+	}
+}
+
 func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
 	dir := t.TempDir()
 	bspPath := filepath.Join(dir, "valve", "maps", "doormap.bsp")

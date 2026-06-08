@@ -11,13 +11,15 @@ import (
 )
 
 const (
-	ImporterName                   = "gekko-hl1import"
-	ImporterVersion                = "hl1_import_report_v1"
-	DefaultImportedWorldChunkSize  = 256
-	DefaultImportedVoxelResolution = 0.1
-	DefaultImportedSolidBandDepth  = DefaultSolidBandDepth
-	DefaultImportedMaxSampledCells = DefaultMaxSolidSampleCells
-	DefaultChunkPayloadKind        = content.ImportedWorldChunkPayloadDenseRLEBinaryV1
+	ImporterName                    = "gekko-hl1import"
+	ImporterVersion                 = "hl1_import_report_v1"
+	DefaultImportedWorldChunkSize   = 256
+	DefaultImportedVoxelResolution  = 0.1
+	DefaultGameAssetVoxelResolution = 0.08
+	DefaultPickupVoxelResolution    = 0.04
+	DefaultImportedSolidBandDepth   = DefaultSolidBandDepth
+	DefaultImportedMaxSampledCells  = DefaultMaxSolidSampleCells
+	DefaultChunkPayloadKind         = content.ImportedWorldChunkPayloadDenseRLEBinaryV1
 )
 
 type HL1LightMode string
@@ -34,6 +36,8 @@ type ImportOptions struct {
 	OutputRoot                string
 	ChunkSize                 int
 	VoxelResolution           float32
+	GameAssetVoxelResolution  float32
+	PickupVoxelResolution     float32
 	MaxSolidSampleCells       int64
 	SolidBandDepth            int
 	ChunkPayloadKind          string
@@ -141,20 +145,26 @@ func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
 		GeneratedWorldPath:      generatedWorldPath(opts),
 		MaterialCount:           len(mapImport.Materials),
 		MaterialKindCounts:      materialKindCounts(mapImport.Materials),
+		UnclassifiedMaterials:   unclassifiedMaterialTextures(mapImport.Materials),
 		PaletteCount:            min(len(mapImport.Materials), 255),
 		ModelCount:              len(bsp.Models),
 		FaceCount:               len(worldFaces),
 		SkyFaceCount:            countSkyFaces(worldFaces),
 		EntityCounts:            importcommon.EntityCounts(classNames),
 		UnsupportedEntityCounts: importcommon.EntityCounts(unsupported),
+		PickupEntityCounts:      importcommon.EntityCounts(hl1PickupClassNames(mapImport.Entities)),
+		TriggerEntityCounts:     importcommon.EntityCounts(hl1TriggerEntityClassNames(mapImport.Entities)),
+		BreakableEntityCounts:   importcommon.EntityCounts(hl1BreakableEntityClassNames(mapImport.Entities)),
 		Diagnostics:             append([]importcommon.Diagnostic(nil), mapImport.Diagnostics...),
 	}
+	appendHL1TargetDiagnostics(&report, mapImport.Entities)
 	if bounds, ok := bsp.WorldBoundsHammer(); ok {
 		report.BoundsBeforeConversion = bounds
 	}
 	if bounds, ok := bsp.WorldBoundsGekko(); ok {
 		report.BoundsAfterConversion = bounds
 	}
+	importcommon.PopulateImportReportDiagnosticCounts(&report)
 	report.Source.WADPaths = append([]string(nil), source.WADPaths...)
 	mapImport.Source = report.Source
 	return ImportSummary{Map: mapImport, Report: report, BSP: bsp, WorldFaces: worldFaces, BakeFaces: bakeFaces, AllFaces: allFaces}, nil
@@ -357,6 +367,149 @@ func materialKindCounts(materials []importcommon.Material) []importcommon.Entity
 	return importcommon.EntityCounts(kinds)
 }
 
+func unclassifiedMaterialTextures(materials []importcommon.Material) []string {
+	var out []string
+	for _, material := range materials {
+		if material.Kind != "structural" || !materialHasTag(material.Tags, "material:structural") {
+			continue
+		}
+		if material.SourceTextureName == "" {
+			continue
+		}
+		out = append(out, material.SourceTextureName)
+	}
+	return out
+}
+
+func materialHasTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hl1PickupClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		if _, ok := hl1PickupClass(entity.ClassName); ok {
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
+func hl1TriggerEntityClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		switch strings.ToLower(strings.TrimSpace(entity.ClassName)) {
+		case "trigger_once", "trigger_multiple", "multi_manager", "trigger_relay":
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
+func hl1BreakableEntityClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		if strings.EqualFold(entity.ClassName, "func_breakable") {
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
+func appendHL1TargetDiagnostics(report *importcommon.ImportReport, entities []importcommon.Entity) {
+	if report == nil {
+		return
+	}
+	targetNames := hl1TargetNameSet(entities)
+	var unresolvedTargets []string
+	var skippedMultiTargets []string
+	for _, entity := range entities {
+		className := strings.ToLower(strings.TrimSpace(entity.ClassName))
+		if target := hl1EntityKey(entity, "target"); target != "" {
+			if _, ok := targetNames[target]; !ok {
+				unresolvedTargets = append(unresolvedTargets, target)
+				report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+					Severity: importcommon.SeverityWarning,
+					Code:     "hl1.target_unresolved",
+					Subject:  className + ":" + target,
+					Message:  "entity target does not match any imported targetname",
+				})
+			}
+		}
+		if className != "multi_manager" {
+			continue
+		}
+		for _, skipped := range hl1SkippedMultiManagerOutputs(entity) {
+			skippedMultiTargets = append(skippedMultiTargets, skipped)
+			report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+				Severity: importcommon.SeverityWarning,
+				Code:     "hl1.multi_manager_output_skipped",
+				Subject:  skipped,
+				Message:  "multi_manager output key was skipped because its value is not a non-negative delay",
+			})
+		}
+		for _, event := range hl1MultiManagerEvents(entity) {
+			target := strings.TrimSpace(event.Target)
+			if target == "" {
+				continue
+			}
+			if _, ok := targetNames[target]; ok {
+				continue
+			}
+			unresolvedTargets = append(unresolvedTargets, target)
+			report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+				Severity: importcommon.SeverityWarning,
+				Code:     "hl1.target_unresolved",
+				Subject:  className + ":" + target,
+				Message:  "multi_manager output target does not match any imported targetname",
+			})
+		}
+	}
+	report.UnresolvedTargetCounts = importcommon.NamedCounts(unresolvedTargets)
+	report.SkippedMultiTargetCounts = importcommon.NamedCounts(skippedMultiTargets)
+}
+
+func hl1TargetNameSet(entities []importcommon.Entity) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, entity := range entities {
+		if targetName := hl1EntityKey(entity, "targetname"); targetName != "" {
+			out[targetName] = struct{}{}
+		}
+	}
+	return out
+}
+
+func hl1SkippedMultiManagerOutputs(entity importcommon.Entity) []string {
+	if entity.KeyValues == nil {
+		return nil
+	}
+	out := make([]string, 0)
+	for key, value := range entity.KeyValues {
+		key = strings.TrimSpace(key)
+		if key == "" || hl1MultiManagerReservedKey(key) {
+			continue
+		}
+		delay, err := strconv.ParseFloat(strings.TrimSpace(value), 32)
+		if err == nil && delay >= 0 {
+			continue
+		}
+		out = append(out, key)
+	}
+	return out
+}
+
+func hl1EntityKey(entity importcommon.Entity, key string) string {
+	if entity.KeyValues == nil {
+		return ""
+	}
+	return strings.TrimSpace(entity.KeyValues[key])
+}
+
 func missingTextureDiagnostics(textures []Texture, wads []*WAD) []importcommon.Diagnostic {
 	var diagnostics []importcommon.Diagnostic
 	for _, texture := range textures {
@@ -421,10 +574,15 @@ func supportedClass(className string) bool {
 		"func_recharge",
 		"func_plat",
 		"func_train",
+		"trigger_once",
+		"trigger_multiple",
+		"multi_manager",
+		"trigger_relay",
 		"momentary_door":
 		return true
 	default:
-		return false
+		_, ok := hl1PickupClass(className)
+		return ok
 	}
 }
 

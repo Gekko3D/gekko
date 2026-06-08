@@ -26,6 +26,14 @@ func TestBuildImportSummaryUsesSyntheticBSPAndWAD(t *testing.T) {
 {
 "classname" "monster_barney"
 "origin" "0 0 0"
+}
+{
+"classname" "weapon_9mmhandgun"
+"origin" "16 0 0"
+}
+{
+"classname" "item_healthkit"
+"origin" "32 0 0"
 }`,
 		Textures: []syntheticTexture{{Name: "TESTWALL", Width: 64, Height: 64}},
 		Models:   []Model{{Min: vec3(-16, -16, -16), Max: vec3(16, 16, 16)}},
@@ -55,8 +63,92 @@ func TestBuildImportSummaryUsesSyntheticBSPAndWAD(t *testing.T) {
 	if len(summary.Report.UnsupportedEntityCounts) != 1 || summary.Report.UnsupportedEntityCounts[0].ClassName != "monster_barney" {
 		t.Fatalf("unsupported = %+v", summary.Report.UnsupportedEntityCounts)
 	}
+	if len(summary.Report.PickupEntityCounts) != 2 || summary.Report.PickupEntityCounts[0].ClassName != "item_healthkit" || summary.Report.PickupEntityCounts[1].ClassName != "weapon_9mmhandgun" {
+		t.Fatalf("pickup counts = %+v", summary.Report.PickupEntityCounts)
+	}
+	if len(summary.Report.UnclassifiedMaterials) != 0 {
+		t.Fatalf("unclassified materials = %+v", summary.Report.UnclassifiedMaterials)
+	}
+	if len(summary.Report.DiagnosticSeverityCounts) != 0 || len(summary.Report.DiagnosticCodeCounts) != 0 {
+		t.Fatalf("diagnostic counts = %+v %+v", summary.Report.DiagnosticSeverityCounts, summary.Report.DiagnosticCodeCounts)
+	}
 	if len(summary.Report.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %+v", summary.Report.Diagnostics)
+	}
+}
+
+func TestAppendHL1TargetDiagnosticsReportsTriggerGraphHealth(t *testing.T) {
+	report := importcommon.ImportReport{}
+	appendHL1TargetDiagnostics(&report, []importcommon.Entity{
+		{
+			ClassName: "func_door",
+			KeyValues: map[string]string{
+				"targetname": "door_a",
+			},
+		},
+		{
+			ClassName: "trigger_once",
+			KeyValues: map[string]string{
+				"target": "manager_a",
+			},
+		},
+		{
+			ClassName: "multi_manager",
+			KeyValues: map[string]string{
+				"targetname": "manager_a",
+				"door_a":     "0.25",
+				"door_b":     "nope",
+				"door_c":     "0.5",
+			},
+		},
+	})
+
+	if len(report.UnresolvedTargetCounts) != 1 || report.UnresolvedTargetCounts[0] != (importcommon.NamedCount{Name: "door_c", Count: 1}) {
+		t.Fatalf("unresolved target counts = %+v", report.UnresolvedTargetCounts)
+	}
+	if len(report.SkippedMultiTargetCounts) != 1 || report.SkippedMultiTargetCounts[0] != (importcommon.NamedCount{Name: "door_b", Count: 1}) {
+		t.Fatalf("skipped multi-target counts = %+v", report.SkippedMultiTargetCounts)
+	}
+	if len(report.Diagnostics) != 2 {
+		t.Fatalf("diagnostics = %+v", report.Diagnostics)
+	}
+	if report.Diagnostics[0].Code != "hl1.multi_manager_output_skipped" || report.Diagnostics[1].Code != "hl1.target_unresolved" {
+		t.Fatalf("diagnostic codes = %+v", report.Diagnostics)
+	}
+}
+
+func TestHL1TriggerEntityClassNamesCountsTargetGraphClasses(t *testing.T) {
+	got := importcommon.EntityCounts(hl1TriggerEntityClassNames([]importcommon.Entity{
+		{ClassName: "trigger_once"},
+		{ClassName: "trigger_multiple"},
+		{ClassName: "multi_manager"},
+		{ClassName: "trigger_relay"},
+		{ClassName: "func_door"},
+	}))
+	if len(got) != 4 || got[0].ClassName != "multi_manager" || got[1].ClassName != "trigger_multiple" || got[2].ClassName != "trigger_once" || got[3].ClassName != "trigger_relay" {
+		t.Fatalf("trigger entity counts = %+v", got)
+	}
+}
+
+func TestHL1BreakableEntityClassNamesCountsFuncBreakable(t *testing.T) {
+	got := importcommon.EntityCounts(hl1BreakableEntityClassNames([]importcommon.Entity{
+		{ClassName: "func_breakable"},
+		{ClassName: "FUNC_BREAKABLE"},
+		{ClassName: "func_door"},
+	}))
+	if len(got) != 1 || got[0].ClassName != "func_breakable" || got[0].Count != 2 {
+		t.Fatalf("breakable entity counts = %+v", got)
+	}
+}
+
+func TestUnclassifiedMaterialTexturesReportsStructuralFallbacks(t *testing.T) {
+	got := unclassifiedMaterialTextures([]importcommon.Material{
+		{Kind: "structural", SourceTextureName: "RANDOM01", Tags: []string{"source:hl1", "material:structural"}},
+		{Kind: "structural", SourceTextureName: "WALL01", Tags: []string{"source:hl1", "material:architectural"}},
+		{Kind: "metal", SourceTextureName: "METAL01", Tags: []string{"source:hl1", "material:metal"}},
+	})
+	if len(got) != 1 || got[0] != "RANDOM01" {
+		t.Fatalf("unclassified material textures = %+v", got)
 	}
 }
 
