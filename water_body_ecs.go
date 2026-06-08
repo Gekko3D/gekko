@@ -65,7 +65,8 @@ type WaterBodyComponent struct {
 	Overlap     float32
 	MinCellSize float32
 
-	SourceTag string
+	SourceTag       string
+	ContinuityGroup string
 
 	EnableSkirt   *bool
 	MaxPatchCount uint32
@@ -341,9 +342,10 @@ type ResolvedWaterPatchComponent struct {
 	WaveAmplitude  float32
 	VisualCellSize float32
 
-	Source       WaterFitSource
-	DebugInset   float32
-	DebugOverlap float32
+	Source          WaterFitSource
+	ContinuityGroup string
+	DebugInset      float32
+	DebugOverlap    float32
 }
 
 func (p *ResolvedWaterPatchComponent) Enabled() bool {

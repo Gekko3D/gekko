@@ -2248,6 +2248,9 @@ func TestBuildWaterSurfaceInputsNormalizesAndSortsResults(t *testing.T) {
 	if hosts[0].DirectLightOcclusion != 0.75 {
 		t.Fatalf("unexpected direct light occlusion: %v", hosts[0].DirectLightOcclusion)
 	}
+	if hosts[0].ShapeKind != waterShapeKindBox {
+		t.Fatalf("unexpected ungrouped water shape kind: %v", hosts[0].ShapeKind)
+	}
 }
 
 func TestBuildWaterSurfaceInputsIncludesResolvedPatches(t *testing.T) {
@@ -2289,6 +2292,60 @@ func TestBuildWaterSurfaceInputsIncludesResolvedPatches(t *testing.T) {
 	}
 	if hosts[0].DirectLightOcclusion != 0.5 {
 		t.Fatalf("unexpected resolved host direct light occlusion %v", hosts[0].DirectLightOcclusion)
+	}
+}
+
+func TestBuildWaterSurfaceInputsMasksInternalContinuityEdges(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}},
+		&WaterSurfaceComponent{
+			ContinuityGroup: "channel-a",
+			HalfExtents:     [2]float32{2, 2},
+			Depth:           2,
+		},
+	)
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{4, 2, 0}},
+		&WaterSurfaceComponent{
+			ContinuityGroup: "channel-a",
+			HalfExtents:     [2]float32{2, 2},
+			Depth:           2,
+		},
+	)
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{8, 2.2, 0}},
+		&WaterSurfaceComponent{
+			ContinuityGroup: "channel-a",
+			HalfExtents:     [2]float32{2, 2},
+			Depth:           2,
+		},
+	)
+	app.FlushCommands()
+
+	hosts, _ := buildWaterSurfaceInputs(cmd, nil)
+	if len(hosts) != 3 {
+		t.Fatalf("expected three water hosts, got %d", len(hosts))
+	}
+	if hosts[0].EdgeMask != waterContinuityMaxXMask {
+		t.Fatalf("first host edge mask = %04b", hosts[0].EdgeMask)
+	}
+	if hosts[0].ShapeKind != waterShapeKindFootprint {
+		t.Fatalf("first host shape kind = %d", hosts[0].ShapeKind)
+	}
+	if hosts[1].EdgeMask != waterContinuityMinXMask {
+		t.Fatalf("second host edge mask = %04b", hosts[1].EdgeMask)
+	}
+	if hosts[1].ShapeKind != waterShapeKindFootprint {
+		t.Fatalf("second host shape kind = %d", hosts[1].ShapeKind)
+	}
+	if hosts[2].EdgeMask != 0 {
+		t.Fatalf("height-mismatched host edge mask = %04b", hosts[2].EdgeMask)
+	}
+	if hosts[2].ShapeKind != waterShapeKindFootprint {
+		t.Fatalf("height-mismatched grouped host should still use footprint shape, got %d", hosts[2].ShapeKind)
 	}
 }
 

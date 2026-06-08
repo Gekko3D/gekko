@@ -336,9 +336,14 @@ Current transparency modes:
 
 ### Water surfaces
 
-- authored from `WaterSurfaceComponent`
+- authored from `WaterSurfaceComponent` or resolved `WaterBodyComponent`
+  patches
 - ECS sync hands typed water surface and ripple input to the renderer app
-- rendered as dedicated horizontal surface bodies with visible side walls
+- ungrouped water renders as dedicated horizontal box-shaped surface bodies with
+  visible side walls
+- patches with the same `continuity_group` render as a shared horizontal
+  footprint: edge masks suppress internal patch sides while depth still drives
+  absorption/thickness
 - rendered during the accumulation pass instead of the half-resolution volumetric passes
 - intended to stay stylized and voxel-adjacent, with stepped motion and discrete refraction/highlight response
 

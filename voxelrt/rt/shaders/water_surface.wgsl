@@ -104,6 +104,12 @@ const DISTURBANCE_IMPACT: u32 = 0u;
 const DISTURBANCE_SKIM: u32 = 1u;
 const DISTURBANCE_WAKE: u32 = 2u;
 const MAX_WATER_LOCAL_LIGHT_REFLECTIONS: u32 = 8u;
+const WATER_EDGE_MIN_X: u32 = 1u;
+const WATER_EDGE_MAX_X: u32 = 2u;
+const WATER_EDGE_MIN_Z: u32 = 4u;
+const WATER_EDGE_MAX_Z: u32 = 8u;
+const WATER_SHAPE_BOX: u32 = 0u;
+const WATER_SHAPE_FOOTPRINT: u32 = 1u;
 
 @group(0) @binding(0) var<uniform> camera: CameraData;
 @group(1) @binding(0) var<uniform> water_params: WaterParams;
@@ -323,8 +329,17 @@ fn stepped_water_normal(pos: vec3<f32>, water: WaterRecord) -> vec3<f32> {
 }
 
 fn water_edge_distance(pos: vec3<f32>, water: WaterRecord) -> f32 {
-  let local = abs(pos.xz - water.bounds.xz);
-  return min(water.extents.x - local.x, water.extents.y - local.y);
+  let min_x_dist = pos.x - (water.bounds.x - water.extents.x);
+  let max_x_dist = (water.bounds.x + water.extents.x) - pos.x;
+  let min_z_dist = pos.z - (water.bounds.z - water.extents.y);
+  let max_z_dist = (water.bounds.z + water.extents.y) - pos.z;
+  let edge_mask = water.disturbance.z;
+  let far_edge = 1e6;
+  let x_min = select(min_x_dist, far_edge, (edge_mask & WATER_EDGE_MIN_X) != 0u);
+  let x_max = select(max_x_dist, far_edge, (edge_mask & WATER_EDGE_MAX_X) != 0u);
+  let z_min = select(min_z_dist, far_edge, (edge_mask & WATER_EDGE_MIN_Z) != 0u);
+  let z_max = select(max_z_dist, far_edge, (edge_mask & WATER_EDGE_MAX_Z) != 0u);
+  return min(min(x_min, x_max), min(z_min, z_max));
 }
 
 fn water_edge_factor(pos: vec3<f32>, water: WaterRecord) -> f32 {
@@ -382,6 +397,32 @@ fn disturbance_foam_factor(pos_xz: vec2<f32>, water: WaterRecord) -> f32 {
     total += band * fade * foam;
   }
   return floor(saturate(total) * 4.0) / 4.0;
+}
+
+fn water_side_masked(normal: vec3<f32>, water: WaterRecord) -> bool {
+  let edge_mask = water.disturbance.z;
+  if (normal.x < -0.9 && (edge_mask & WATER_EDGE_MIN_X) != 0u) {
+    return true;
+  }
+  if (normal.x > 0.9 && (edge_mask & WATER_EDGE_MAX_X) != 0u) {
+    return true;
+  }
+  if (normal.z < -0.9 && (edge_mask & WATER_EDGE_MIN_Z) != 0u) {
+    return true;
+  }
+  if (normal.z > 0.9 && (edge_mask & WATER_EDGE_MAX_Z) != 0u) {
+    return true;
+  }
+  return false;
+}
+
+fn water_shape_kind(water: WaterRecord) -> u32 {
+  return water.disturbance.w;
+}
+
+fn point_inside_water_footprint(pos: vec3<f32>, water: WaterRecord) -> bool {
+  let local = abs(pos.xz - water.bounds.xz);
+  return local.x <= water.extents.x + EPS && local.y <= water.extents.y + EPS;
 }
 
 fn sample_opaque(uv: vec2<f32>) -> vec3<f32> {
@@ -448,12 +489,25 @@ fn fs_main(in: VSOut) -> FSOut {
   let depth = max(water_for_intersect.bounds.w, 0.01);
   let min_b = vec3<f32>(center.x - water_for_intersect.extents.x, center.y - depth, center.z - water_for_intersect.extents.y);
   let max_b = vec3<f32>(center.x + water_for_intersect.extents.x, center.y, center.z + water_for_intersect.extents.y);
-  let span = intersect_aabb(ray, min_b, max_b);
-  if (span.x <= span.y && span.y > 0.0) {
-    let t_enter = max(span.x, 0.0);
-    if (!(scene_depth_has_hit(t_scene) && t_enter > t_scene + 0.03)) {
-      let pos = ray.origin + ray.dir * t_enter;
-      hit = Hit(true, t_enter, span.y, pos, box_normal(pos, min_b, max_b), in.water_index);
+  if (water_shape_kind(water_for_intersect) == WATER_SHAPE_FOOTPRINT) {
+    if (abs(ray.dir.y) > 1e-5) {
+      let t_plane = (center.y - ray.origin.y) / ray.dir.y;
+      if (t_plane > 0.0 && !(scene_depth_has_hit(t_scene) && t_plane > t_scene + 0.03)) {
+        let pos = ray.origin + ray.dir * t_plane;
+        if (point_inside_water_footprint(pos, water_for_intersect)) {
+          let scene_limited_exit = select(t_plane + depth, min(t_scene, t_plane + depth), scene_depth_has_hit(t_scene) && t_scene > t_plane);
+          hit = Hit(true, t_plane, scene_limited_exit, pos, vec3<f32>(0.0, 1.0, 0.0), in.water_index);
+        }
+      }
+    }
+  } else {
+    let span = intersect_aabb(ray, min_b, max_b);
+    if (span.x <= span.y && span.y > 0.0) {
+      let t_enter = max(span.x, 0.0);
+      if (!(scene_depth_has_hit(t_scene) && t_enter > t_scene + 0.03)) {
+        let pos = ray.origin + ray.dir * t_enter;
+        hit = Hit(true, t_enter, span.y, pos, box_normal(pos, min_b, max_b), in.water_index);
+      }
     }
   }
 
@@ -465,6 +519,9 @@ fn fs_main(in: VSOut) -> FSOut {
   let cell_size = water_cell_size(water);
   let thickness = max(hit.t_exit - hit.t_enter, cell_size * 0.6);
   let is_top = hit.normal.y > 0.9;
+  if (!is_top && water_side_masked(hit.normal, water)) {
+    discard;
+  }
   var normal = hit.normal;
   if (is_top) {
     normal = stepped_water_normal(hit.pos, water);

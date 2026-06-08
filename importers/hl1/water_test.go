@@ -144,3 +144,21 @@ func TestBuildHL1WaterBodiesCollapsesConnectedLeafVolume(t *testing.T) {
 		t.Fatalf("connected volume half extents = %+v", body.RectHalfExtents)
 	}
 }
+
+func TestBuildHL1WaterBodyDefsAssignsContinuityGroupsForCoplanarConnectedRects(t *testing.T) {
+	bodies := buildHL1WaterBodyDefs([]hl1WaterRect{
+		{Kind: "water", SurfaceY: 2, Depth: 1, MinX: 0, MaxX: 2, MinZ: 0, MaxZ: 2},
+		{Kind: "water", SurfaceY: 2, Depth: 3, MinX: 2, MaxX: 4, MinZ: 0, MaxZ: 2},
+		{Kind: "water", SurfaceY: 2.5, Depth: 1, MinX: 4, MaxX: 6, MinZ: 0, MaxZ: 2},
+		{Kind: "slime", SurfaceY: 2, Depth: 1, MinX: 6, MaxX: 8, MinZ: 0, MaxZ: 2},
+	})
+	if len(bodies) != 4 {
+		t.Fatalf("water bodies = %d", len(bodies))
+	}
+	if bodies[0].ContinuityGroup == "" || bodies[0].ContinuityGroup != bodies[1].ContinuityGroup {
+		t.Fatalf("expected first two coplanar water rects to share group, got %q and %q", bodies[0].ContinuityGroup, bodies[1].ContinuityGroup)
+	}
+	if bodies[2].ContinuityGroup != "" || bodies[3].ContinuityGroup != "" {
+		t.Fatalf("expected height/kind mismatches to stay ungrouped, got %q and %q", bodies[2].ContinuityGroup, bodies[3].ContinuityGroup)
+	}
+}

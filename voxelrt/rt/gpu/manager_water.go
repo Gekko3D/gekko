@@ -197,8 +197,8 @@ func buildWaterSurfaceRecord(water WaterSurfaceHost, disturbanceStart, disturban
 		Disturbance: [4]uint32{
 			disturbanceStart,
 			disturbanceCount,
-			0,
-			0,
+			water.EdgeMask,
+			water.ShapeKind,
 		},
 	}
 }

@@ -15,6 +15,9 @@ type WaterResources struct {
 
 type WaterSurfaceInput struct {
 	EntityID             uint32
+	ContinuityGroup      string
+	EdgeMask             uint32
+	ShapeKind            uint32
 	Position             mgl32.Vec3
 	HalfExtents          [2]float32
 	Depth                float32
@@ -189,6 +192,9 @@ func waterSurfaceGPUHosts(waters []WaterSurfaceInput) []gpu.WaterSurfaceHost {
 	for _, water := range waters {
 		hosts = append(hosts, gpu.WaterSurfaceHost{
 			EntityID:             water.EntityID,
+			ContinuityGroup:      water.ContinuityGroup,
+			EdgeMask:             water.EdgeMask,
+			ShapeKind:            water.ShapeKind,
 			Position:             water.Position,
 			HalfExtents:          water.HalfExtents,
 			Depth:                water.Depth,

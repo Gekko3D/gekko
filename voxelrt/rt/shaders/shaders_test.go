@@ -822,6 +822,23 @@ func TestWaterSurfaceDirectLightExposureAttenuatesSunSpecular(t *testing.T) {
 	}
 }
 
+func TestWaterSurfaceUsesContinuityEdgeMask(t *testing.T) {
+	required := []string{
+		"const WATER_EDGE_MIN_X: u32 = 1u;",
+		"const WATER_SHAPE_FOOTPRINT: u32 = 1u;",
+		"let edge_mask = water.disturbance.z;",
+		"fn point_inside_water_footprint(pos: vec3<f32>, water: WaterRecord) -> bool",
+		"if (water_shape_kind(water_for_intersect) == WATER_SHAPE_FOOTPRINT)",
+		"fn water_side_masked(normal: vec3<f32>, water: WaterRecord) -> bool",
+		"if (!is_top && water_side_masked(hit.normal, water))",
+	}
+	for _, needle := range required {
+		if !strings.Contains(WaterSurfaceWGSL, needle) {
+			t.Fatalf("water shader missing continuity edge-mask path %q", needle)
+		}
+	}
+}
+
 func TestWaterSurfaceUsesBoundedTiledLocalLightReflections(t *testing.T) {
 	required := []string{
 		"const MAX_WATER_LOCAL_LIGHT_REFLECTIONS: u32 = 8u;",

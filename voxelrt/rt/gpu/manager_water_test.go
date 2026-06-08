@@ -25,6 +25,8 @@ func TestBuildWaterSurfaceRecordsPacksVisualCellSizeAndDisturbanceRanges(t *test
 			FlowSpeed:            2,
 			WaveAmplitude:        0.25,
 			VisualCellSize:       0.35,
+			EdgeMask:             0b1010,
+			ShapeKind:            1,
 		},
 		{EntityID: 8},
 	}, []WaterRippleHost{
@@ -42,7 +44,7 @@ func TestBuildWaterSurfaceRecordsPacksVisualCellSizeAndDisturbanceRanges(t *test
 	if got := records[0].Lighting[0]; math.Abs(float64(got-0.4)) > 1e-6 {
 		t.Fatalf("expected direct light exposure 0.4 packed into lighting.x, got %v", got)
 	}
-	if got := records[0].Disturbance; got != ([4]uint32{0, 2, 0, 0}) {
+	if got := records[0].Disturbance; got != ([4]uint32{0, 2, 0b1010, 1}) {
 		t.Fatalf("expected first water disturbance range [0 2], got %v", got)
 	}
 	if got := records[1].Disturbance; got != ([4]uint32{2, 1, 0, 0}) {

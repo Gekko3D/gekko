@@ -173,6 +173,7 @@ func waterBoxesOverlapOrTouch(a, b hl1WaterBox, eps float32) bool {
 
 func buildHL1WaterBodyDefs(rects []hl1WaterRect) []content.LevelWaterBodyDef {
 	bodies := make([]content.LevelWaterBodyDef, 0, len(rects))
+	continuityGroups := hl1WaterContinuityGroups(rects)
 	for i, rect := range rects {
 		centerX := (rect.MinX + rect.MaxX) * 0.5
 		centerZ := (rect.MinZ + rect.MaxZ) * 0.5
@@ -185,6 +186,7 @@ func buildHL1WaterBodyDefs(rects []hl1WaterRect) []content.LevelWaterBodyDef {
 			Depth:                rect.Depth,
 			RectHalfExtents:      content.Vec2{(rect.MaxX - rect.MinX) * 0.5, (rect.MaxZ - rect.MinZ) * 0.5},
 			SourceTag:            "hl1:" + rect.Kind,
+			ContinuityGroup:      continuityGroups[i],
 			DebugName:            rect.Kind,
 			Color:                liquidColor(rect.Kind),
 			AbsorptionColor:      liquidAbsorptionColor(rect.Kind),
@@ -205,6 +207,55 @@ func buildHL1WaterBodyDefs(rects []hl1WaterRect) []content.LevelWaterBodyDef {
 		bodies = append(bodies, body)
 	}
 	return bodies
+}
+
+func hl1WaterContinuityGroups(rects []hl1WaterRect) []string {
+	groups := make([]string, len(rects))
+	visited := make([]bool, len(rects))
+	groupIndex := 0
+	for i := range rects {
+		if visited[i] {
+			continue
+		}
+		visited[i] = true
+		queue := []int{i}
+		component := make([]int, 0, 1)
+		for len(queue) > 0 {
+			next := queue[0]
+			queue = queue[1:]
+			component = append(component, next)
+			for j := range rects {
+				if visited[j] {
+					continue
+				}
+				if hl1WaterRectsContinuous(rects[next], rects[j]) {
+					visited[j] = true
+					queue = append(queue, j)
+				}
+			}
+		}
+		if len(component) <= 1 {
+			continue
+		}
+		groupID := fmt.Sprintf("hl1:%s:water_continuity:%d", rects[i].Kind, groupIndex)
+		groupIndex++
+		for _, idx := range component {
+			groups[idx] = groupID
+		}
+	}
+	return groups
+}
+
+func hl1WaterRectsContinuous(a, b hl1WaterRect) bool {
+	if a.Kind != b.Kind || absFloat32(a.SurfaceY-b.SurfaceY) > waterMergeEpsilon {
+		return false
+	}
+	if !rectsOverlapOrTouch(a.MinX, a.MaxX, a.MinZ, a.MaxZ, b.MinX, b.MaxX, b.MinZ, b.MaxZ, waterMergeEpsilon) {
+		return false
+	}
+	overlapX := minFloat32(a.MaxX, b.MaxX) - maxFloat32(a.MinX, b.MinX)
+	overlapZ := minFloat32(a.MaxZ, b.MaxZ) - maxFloat32(a.MinZ, b.MinZ)
+	return overlapX > waterMergeEpsilon || overlapZ > waterMergeEpsilon
 }
 
 func faceBoundsGekko(face Face) (importcommon.Bounds, bool) {

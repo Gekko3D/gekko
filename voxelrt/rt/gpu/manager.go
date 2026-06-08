@@ -151,6 +151,9 @@ type AnalyticMediumHost struct {
 
 type WaterSurfaceHost struct {
 	EntityID             uint32
+	ContinuityGroup      string
+	EdgeMask             uint32
+	ShapeKind            uint32
 	Position             mgl32.Vec3
 	HalfExtents          [2]float32
 	Depth                float32

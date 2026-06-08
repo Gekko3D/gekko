@@ -36,6 +36,7 @@ type waterBodyResolutionSignature struct {
 	Overlap              float32
 	MinCellSize          float32
 	SourceTag            string
+	ContinuityGroup      string
 	EnableSkirt          bool
 	MaxPatchCount        uint32
 	Color                [3]float32
@@ -213,6 +214,7 @@ func waterBodyResolutionSignatureFor(body *WaterBodyComponent, tr *TransformComp
 		Overlap:              body.NormalizedOverlap(),
 		MinCellSize:          body.NormalizedMinCellSize(),
 		SourceTag:            strings.TrimSpace(body.SourceTag),
+		ContinuityGroup:      strings.TrimSpace(body.ContinuityGroup),
 		EnableSkirt:          body.NormalizedEnableSkirt(),
 		MaxPatchCount:        body.NormalizedMaxPatchCount(),
 		Color:                body.NormalizedColor(),
@@ -309,6 +311,7 @@ func makeResolvedWaterPatches(owner EntityId, body *WaterBodyComponent, tr *Tran
 			WaveAmplitude:        body.NormalizedWaveAmplitude(),
 			VisualCellSize:       body.NormalizedVisualCellSize(),
 			Source:               source,
+			ContinuityGroup:      strings.TrimSpace(body.ContinuityGroup),
 			DebugInset:           body.NormalizedInset(),
 			DebugOverlap:         body.NormalizedOverlap(),
 		})

@@ -11,6 +11,9 @@ func TestWaterGPUHostsMapRendererInput(t *testing.T) {
 	waters := []WaterSurfaceInput{
 		{
 			EntityID:             3,
+			ContinuityGroup:      "pool-a",
+			EdgeMask:             0b0011,
+			ShapeKind:            1,
 			Position:             mgl32.Vec3{1, 2, 3},
 			HalfExtents:          [2]float32{4, 5},
 			Depth:                6,

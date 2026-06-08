@@ -135,6 +135,9 @@ There are now three different categories to keep straight:
   - contributes through WBOIT accumulation
 - dedicated water surfaces:
   - stylized horizontal water bodies with blocky stepped highlights/refraction
+  - ungrouped water uses box-volume sides
+  - `continuity_group` water uses a shared surface footprint so adjacent
+    patches do not expose internal vertical sides
   - engine-side impact ripples are fed through `WaterInteractionState`
   - contributes through WBOIT accumulation as its own feature
 - analytic media:
@@ -180,9 +183,18 @@ When changing analytic media behavior:
 
 If you only tweak atmosphere appearance, prefer preset changes first.
 
-## Water Interaction Notes
+## Water Surface Notes
 
 The water renderer now accepts a compact engine-side ripple stream in addition to static `WaterSurfaceComponent` records.
+
+Water inputs can come from directly authored `WaterSurfaceComponent` entities or
+from resolved `WaterBodyComponent` patches. Ungrouped inputs use the simple
+box-volume shape and can show side walls. Inputs with the same
+`continuity_group` use footprint mode: the bridge marks covered edges between
+same-height neighbors, and the shader intersects the horizontal water footprint
+instead of drawing internal box sides. Depth remains per patch, so absorption and
+underwater thickness still work without turning segmented imported water into a
+single huge bounding rectangle.
 
 Current path:
 

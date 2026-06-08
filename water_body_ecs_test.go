@@ -234,6 +234,7 @@ func TestWaterBodyResolutionSystemUsesExplicitRectTransform(t *testing.T) {
 			SurfaceY:        -3,
 			Depth:           2,
 			RectHalfExtents: [2]float32{4, 5},
+			ContinuityGroup: "pool-a",
 			VisualCellSize:  0.4,
 		},
 	)
@@ -253,6 +254,9 @@ func TestWaterBodyResolutionSystemUsesExplicitRectTransform(t *testing.T) {
 		}
 		if patch.VisualCellSize != 0.4 {
 			t.Fatalf("patch visual cell size = %+v", patch.VisualCellSize)
+		}
+		if patch.ContinuityGroup != "pool-a" {
+			t.Fatalf("patch continuity group = %q", patch.ContinuityGroup)
 		}
 		return true
 	})

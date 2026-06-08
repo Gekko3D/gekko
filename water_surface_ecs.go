@@ -9,7 +9,8 @@ import (
 // WaterSurfaceComponent describes a horizontal stylized water body rendered by
 // the dedicated water surface accumulation pass.
 type WaterSurfaceComponent struct {
-	Disabled bool
+	Disabled        bool
+	ContinuityGroup string
 
 	HalfExtents [2]float32
 	Depth       float32
