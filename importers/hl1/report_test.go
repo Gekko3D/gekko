@@ -69,10 +69,13 @@ func TestBuildImportSummaryUsesSyntheticBSPAndWAD(t *testing.T) {
 	if len(summary.Report.UnclassifiedMaterials) != 0 {
 		t.Fatalf("unclassified materials = %+v", summary.Report.UnclassifiedMaterials)
 	}
-	if len(summary.Report.DiagnosticSeverityCounts) != 0 || len(summary.Report.DiagnosticCodeCounts) != 0 {
+	if len(summary.Report.DiagnosticSeverityCounts) != 1 || summary.Report.DiagnosticSeverityCounts[0].Name != "info" || summary.Report.DiagnosticSeverityCounts[0].Count != 1 {
 		t.Fatalf("diagnostic counts = %+v %+v", summary.Report.DiagnosticSeverityCounts, summary.Report.DiagnosticCodeCounts)
 	}
-	if len(summary.Report.Diagnostics) != 0 {
+	if len(summary.Report.DiagnosticCodeCounts) != 1 || summary.Report.DiagnosticCodeCounts[0].Name != "hl1.entity_unsupported" || summary.Report.DiagnosticCodeCounts[0].Count != 1 {
+		t.Fatalf("diagnostic code counts = %+v", summary.Report.DiagnosticCodeCounts)
+	}
+	if len(summary.Report.Diagnostics) != 1 || summary.Report.Diagnostics[0].Code != "hl1.entity_unsupported" || summary.Report.Diagnostics[0].Subject != "monster_barney" {
 		t.Fatalf("diagnostics = %+v", summary.Report.Diagnostics)
 	}
 }
@@ -117,15 +120,89 @@ func TestAppendHL1TargetDiagnosticsReportsTriggerGraphHealth(t *testing.T) {
 	}
 }
 
+func TestAppendHL1ReviewDiagnosticsReportsImportCoverageProblems(t *testing.T) {
+	report := importcommon.ImportReport{}
+	appendHL1ReviewDiagnostics(&report, []importcommon.Entity{
+		{
+			ClassName:    "func_train",
+			BrushModelID: 1,
+			KeyValues: map[string]string{
+				"targetname": "train_a",
+				"target":     "missing_corner",
+			},
+		},
+		{
+			ClassName: "path_corner",
+			KeyValues: map[string]string{
+				"targetname": "corner_a",
+				"target":     "missing_next",
+			},
+		},
+		{ClassName: "path_corner"},
+		{
+			ClassName: "func_door",
+			KeyValues: map[string]string{
+				"targetname": "door_without_model",
+			},
+		},
+		{ClassName: "monster_scientist"},
+	})
+
+	assertHasDiagnosticCode(t, report.Diagnostics, "hl1.train_path_target_unresolved")
+	assertHasDiagnosticCode(t, report.Diagnostics, "hl1.path_corner_next_unresolved")
+	assertHasDiagnosticCode(t, report.Diagnostics, "hl1.path_corner_targetname_missing")
+	assertHasDiagnosticCode(t, report.Diagnostics, "hl1.moving_brush_model_missing")
+	assertHasDiagnosticCode(t, report.Diagnostics, "hl1.entity_unsupported")
+}
+
+func TestHL1ReviewEntityCountsClassifyInteractiveImports(t *testing.T) {
+	entities := []importcommon.Entity{
+		{ClassName: "func_train"},
+		{ClassName: "func_door_rotating"},
+		{ClassName: "path_corner"},
+		{ClassName: "func_ladder"},
+		{ClassName: "func_healthcharger"},
+		{ClassName: "func_recharge"},
+		{ClassName: "weapon_shotgun"},
+	}
+	if got := importcommon.EntityCounts(hl1MovingBrushEntityClassNames(entities)); len(got) != 2 || got[0].ClassName != "func_door_rotating" || got[1].ClassName != "func_train" {
+		t.Fatalf("moving brush counts = %+v", got)
+	}
+	if got := importcommon.EntityCounts(hl1PathNodeEntityClassNames(entities)); len(got) != 1 || got[0].ClassName != "path_corner" {
+		t.Fatalf("path node counts = %+v", got)
+	}
+	if got := importcommon.EntityCounts(hl1LadderEntityClassNames(entities)); len(got) != 1 || got[0].ClassName != "func_ladder" {
+		t.Fatalf("ladder counts = %+v", got)
+	}
+	if got := importcommon.EntityCounts(hl1ChargerEntityClassNames(entities)); len(got) != 2 || got[0].ClassName != "func_healthcharger" || got[1].ClassName != "func_recharge" {
+		t.Fatalf("charger counts = %+v", got)
+	}
+	if !supportedClass("func_ladder") {
+		t.Fatalf("func_ladder should be supported")
+	}
+}
+
+func assertHasDiagnosticCode(t *testing.T, diagnostics []importcommon.Diagnostic, code string) {
+	t.Helper()
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return
+		}
+	}
+	t.Fatalf("missing diagnostic code %q in %+v", code, diagnostics)
+}
+
 func TestHL1TriggerEntityClassNamesCountsTargetGraphClasses(t *testing.T) {
 	got := importcommon.EntityCounts(hl1TriggerEntityClassNames([]importcommon.Entity{
 		{ClassName: "trigger_once"},
 		{ClassName: "trigger_multiple"},
+		{ClassName: "trigger_hurt"},
+		{ClassName: "trigger_changelevel"},
 		{ClassName: "multi_manager"},
 		{ClassName: "trigger_relay"},
 		{ClassName: "func_door"},
 	}))
-	if len(got) != 4 || got[0].ClassName != "multi_manager" || got[1].ClassName != "trigger_multiple" || got[2].ClassName != "trigger_once" || got[3].ClassName != "trigger_relay" {
+	if len(got) != 6 || got[0].ClassName != "multi_manager" || got[1].ClassName != "trigger_changelevel" || got[2].ClassName != "trigger_hurt" || got[3].ClassName != "trigger_multiple" || got[4].ClassName != "trigger_once" || got[5].ClassName != "trigger_relay" {
 		t.Fatalf("trigger entity counts = %+v", got)
 	}
 }

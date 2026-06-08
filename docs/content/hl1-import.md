@@ -253,9 +253,8 @@ Current runtime behavior:
 Current limitation:
 
 - Runtime only consumes imported geometry and palette colors.
-- It does not spawn imported HL1 lights from `.gklevel`.
-- It does not create trigger volumes for `trigger_changelevel`.
-- It does not map imported entity classes to actiongame behavior.
+- It does not perform actual next-level loading for `trigger_changelevel` yet.
+- It maps only the implemented HL1 entity classes to actiongame behavior.
 - `actiongame` still needs a way to choose a generated HL1 level instead of the
   hardcoded level path.
 
@@ -364,6 +363,9 @@ need to inspect or edit the data:
 
 - `Lights []LevelLightDef`
 - `TriggerVolumes []LevelTriggerVolumeDef`
+- `DamageVolumes []LevelDamageVolumeDef`
+- `ChangeLevels []LevelChangeLevelDef`
+- `Chargers []LevelChargerDef`
 - richer `Environment`
 - optional `SourceMetadata` or `ImportedEntities`
 
@@ -890,8 +892,10 @@ records:
 
 WADs are already used for BSP texture baking. MDL files are copied, parsed, and
 voxelized into generated surface `.gkasset` files under
-`hl1_assets/<map>/generated/models/`. SPR files are copied, parsed, and
-converted from their first indexed frame into thin emissive voxel-card
+`hl1_assets/<map>/generated/models/`. When a GoldSrc model stores geometry in
+`w_foo.mdl` and texture pixels in a companion `w_foot.mdl`, the importer loads
+that companion texture model before baking voxel colors. SPR files are copied,
+parsed, and converted from their first indexed frame into thin emissive voxel-card
 `.gkasset` files under `hl1_assets/<map>/generated/sprites/`. The manifest
 entries keep source provenance, decoded metadata, generated asset path, and
 generated voxel count/resolution. Imported world geometry, generic game assets,
@@ -1086,6 +1090,12 @@ Import report fields:
 - skipped faces by reason
 - converted entity counts by classname
 - unsupported entity counts by classname
+- interactive entity counts by classname: moving brushes, path nodes, ladders,
+  chargers, pickups, triggers, breakables
+- review diagnostics for incomplete imported behavior, including unsupported
+  entity classes, missing moving-brush models, `func_train` without usable
+  `path_corner` links, unresolved path-corner chains, unresolved trigger
+  targets, and skipped `multi_manager` outputs
 - coordinate bounds before and after conversion
 - warnings for huge chunks or suspicious scale
 
@@ -1279,8 +1289,8 @@ Implementation:
 
 - Emit `LevelDef.BaseWorld`.
 - Emit `player_spawn` marker.
-- Emit `hl1_landmark` and `hl1_trigger_changelevel` markers as transitional
-  data.
+- Emit `hl1_landmark` markers and typed `LevelDef.ChangeLevels` records for
+  `trigger_changelevel`.
 - Add an `actiongame` startup option or config path so generated maps can be
   loaded without editing source every time.
 
@@ -1355,8 +1365,17 @@ Recommended path:
   runtime spawns `MovingBrushComponent` and `UseTriggerComponent`; the grounded
   player controller can activate them with E through `target`/`target_name`
   links, and moving-brush visuals move between closed/open positions.
-- Implemented foundation: `func_door_rotating` emits moving-brush metadata, but
-  exact rotating motion is still future work.
+- Implemented first slice: `func_door_rotating` is excluded from the static
+  base-world bake, emitted as a generated moving-brush voxel asset, and runtime
+  rotates it between closed/open angles around the imported origin when
+  triggered. Deferred: exact GoldSrc spawnflag matrix, collision bounds during
+  rotation, sounds, lock/master behavior, and nonstandard pivots that need
+  visual review.
+- Implemented first slice: `path_corner` point entities become typed
+  `content.LevelDef.PathNodes`; `func_train` emits as a generated moving-brush
+  voxel asset linked to its first path node and runtime moves it along the
+  path-corner chain with basic speed/wait support. Deferred: path-corner
+  spawnflags, stop/start sounds, blocking behavior, and exact restart semantics.
 - Implemented: `func_breakable` is excluded from the static base-world bake and
   emitted as generated breakable voxel assets referenced by
   `content.LevelDef.Breakables`. Runtime spawns `BreakableComponent`, supports
@@ -1371,15 +1390,35 @@ Recommended path:
   HL1 world-model `.gkasset` visuals. Actiongame uses those visuals when
   present, falls back to simple collectible placeholders when missing, and
   tracks basic health, armor, ammo, and owned weapon state.
-- `trigger_changelevel`, `trigger_once`, and `trigger_multiple` become typed
-  trigger volumes with target metadata.
+- Implemented first slice: `func_healthcharger` and `func_recharge` are emitted
+  as typed `content.LevelDef.Chargers`. Runtime spawns `ChargerComponent`;
+  actiongame charges health or armor while E is held and the camera ray hits the
+  fixture, drains a finite reserve, and preserves targetname/spawnflag/source
+  metadata. Defaults use the local HL1 `skill.cfg` easy values currently found
+  in the copied game assets: health charger 50 and suit charger 75. Deferred:
+  exact difficulty selection, recharge timing, sounds, animated empty/active
+  visual states, and global-state behavior.
+- `trigger_once` and `trigger_multiple` become typed trigger volumes with
+  target metadata.
+- Implemented first slice: `trigger_changelevel` is emitted as typed
+  `content.LevelDef.ChangeLevels`. Runtime spawns `ChangeLevelVolumeComponent`;
+  actiongame records the requested target map and landmark on player overlap and
+  shows a transition HUD line, but does not load the next map yet. Deferred:
+  exact landmark spawn handoff, change-target behavior, and next-level
+  streaming/loading policy.
+- Implemented first slice: `trigger_hurt` is emitted as typed
+  `content.LevelDef.DamageVolumes`. Runtime spawns `DamageVolumeComponent`;
+  actiongame applies overlap damage on a conservative Gekko cadence, can fire
+  the imported target after the imported delay, and target graph dispatch can
+  enable, disable, toggle, or kill named damage volumes. The
+  importer preserves `dmg`, `delay`, `spawnflags`, `damagetype`, `target`, and
+  `targetname` metadata. Deferred: exact GoldSrc damage-type effects, skill
+  scaling, master/global-state gating, and every spawnflag nuance.
 - Current transitional importer behavior emits source-linked level markers for
   `func_door`, `func_door_rotating`, `func_button`, `func_plat`, `func_train`,
   and `momentary_door`. The markers preserve brush bounds, model id, target,
   targetname, speed, wait, lip, angle/angles, spawnflags, sounds, and damage
   values in tags for compatibility with existing editor/actiongame tooling.
-- `func_train` and related brush models become visual moving-brush entities
-  after actiongame has matching path-following semantics.
 - Implemented: HL1 target graph entities `multi_manager` and `trigger_relay`
   are imported as typed runtime dispatchers. `multi_manager` queues delayed
   outputs, while `trigger_relay` forwards to `target`, preserves `killtarget`,
@@ -1516,13 +1555,17 @@ Runtime:
 - [ ] Load selected generated HL1 level in `actiongame`.
 - [ ] Spawn/import level-owned lights.
 - [ ] Apply imported player spawn rotation.
-- [ ] Represent changelevel trigger volumes.
+- [x] Represent changelevel trigger volumes as typed transition metadata.
 - [x] Represent ladder volumes.
 - [x] Represent typed door/button moving-brush metadata and use activation.
 - [x] Spawn visual moving brush geometry for linear doors/buttons/platforms
       outside the static base-world bake.
 - [x] Import HL1 target graph relays for `multi_manager`, `trigger_relay`, and
       delayed target firing.
+- [x] Import `trigger_hurt` as typed damage volumes with basic actiongame
+      overlap damage and target on/off/toggle support.
+- [x] Import `func_healthcharger` and `func_recharge` as typed chargers with
+      basic actiongame hold-to-use health/armor charging.
 - [x] Spawn/import `func_breakable` gameplay entities with generated voxel
       assets and simple health/target behavior.
 - [x] Spawn/import pickups, ammo, health, and weapons as typed pickup
@@ -1532,8 +1575,10 @@ Runtime:
 - [ ] Import remaining target graph relay/action entities.
 - [ ] Implement exact HL1 pickup respawn/skill behavior and animated pickup
       presentation.
-- [ ] Spawn visual moving brush geometry for rotating doors/trains when
-      actiongame has matching motion semantics.
+- [x] Spawn visual moving brush geometry for rotating doors and path-following
+      trains with first-pass runtime motion semantics.
+- [ ] Implement exact rotating-door flags/collision/sounds and full
+      path-corner train semantics.
 - [ ] Confirm imported base-world chunks can be destructively edited or
       explicitly gate destruction with a documented policy.
 - [ ] Debug render unsupported imported entities.

@@ -188,6 +188,32 @@ func TestParseMDLGeometryDecodesTexturePixelsAndTriangleCommands(t *testing.T) {
 	}
 }
 
+func TestLoadMDLGeometryUsesCompanionTextureModel(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "w_test.mdl")
+	texturePath := filepath.Join(dir, "w_testt.mdl")
+	mustWriteFile(t, mainPath, syntheticMDLWithoutEmbeddedTextures())
+	mustWriteFile(t, texturePath, syntheticMDL())
+
+	geometry, err := LoadMDLGeometry(mainPath)
+	if err != nil {
+		t.Fatalf("LoadMDLGeometry failed: %v", err)
+	}
+	if geometry.Info.DecodedTextureCount != 1 || len(geometry.Textures) != 1 {
+		t.Fatalf("expected companion texture payload, got info=%+v textures=%d", geometry.Info, len(geometry.Textures))
+	}
+	if len(geometry.Triangles) != 1 || geometry.Triangles[0].Vertices[1].UV[0] == 0 {
+		t.Fatalf("expected companion texture dimensions to drive UV decode, got %+v", geometry.Triangles)
+	}
+	asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{Name: "w_test", SourceRef: "models/w_test.mdl", VoxelResolution: 0.005})
+	if err != nil {
+		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
+	}
+	if voxelCount == 0 || len(asset.Materials) < 2 {
+		t.Fatalf("expected texture-colored model voxels, voxels=%d materials=%+v", voxelCount, asset.Materials)
+	}
+}
+
 func TestParseSPRGeometryDecodesPaletteAndFrame(t *testing.T) {
 	geometry, err := ParseSPRGeometry(syntheticSPR())
 	if err != nil {
@@ -322,6 +348,13 @@ func syntheticMDL() []byte {
 		data[base+1] = byte(255 - i)
 		data[base+2] = byte(i / 2)
 	}
+	return data
+}
+
+func syntheticMDLWithoutEmbeddedTextures() []byte {
+	data := syntheticMDL()
+	writeTestInt32(data, 180, 0)
+	writeTestInt32(data, 184, 0)
 	return data
 }
 

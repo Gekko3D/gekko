@@ -273,9 +273,19 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 	level := content.NewLevelDef("moving")
 	level.MovingBrushes = []content.LevelMovingBrushDef{{
 		ID:                "door-1",
+		MotionKind:        "rotate",
 		BoundsCenter:      content.Vec3{5, 2, 6},
 		BoundsHalfExtents: content.Vec3{0.5, 1, 0.25},
+		RotationAxis:      content.Vec3{0, 1, 0},
+		OpenAngle:         90,
+		PathTarget:        "corner_a",
 		TargetName:        "door_a",
+	}}
+	level.PathNodes = []content.LevelPathNodeDef{{
+		ID:         "corner-1",
+		TargetName: "corner_a",
+		Target:     "corner_b",
+		Position:   content.Vec3{8, 2, 6},
 	}}
 	level.UseTriggers = []content.LevelUseTriggerDef{{
 		ID:                "button-1",
@@ -289,6 +299,30 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		BoundsHalfExtents: content.Vec3{0.5, 0.5, 0.5},
 		Target:            "manager_a",
 		Once:              true,
+	}}
+	level.DamageVolumes = []content.LevelDamageVolumeDef{{
+		ID:                "damage-1",
+		BoundsCenter:      content.Vec3{8, 2, 6},
+		BoundsHalfExtents: content.Vec3{0.5, 0.5, 0.5},
+		Damage:            12,
+		DamageInterval:    0.4,
+		TargetName:        "acid_a",
+	}}
+	level.ChangeLevels = []content.LevelChangeLevelDef{{
+		ID:                "change-1",
+		BoundsCenter:      content.Vec3{9, 2, 6},
+		BoundsHalfExtents: content.Vec3{0.5, 0.5, 0.5},
+		TargetMap:         "c1a1",
+		Landmark:          "lm_a",
+	}}
+	level.Chargers = []content.LevelChargerDef{{
+		ID:                "charger-1",
+		BoundsCenter:      content.Vec3{10, 2, 6},
+		BoundsHalfExtents: content.Vec3{0.5, 0.5, 0.5},
+		ChargeKind:        "health",
+		Capacity:          50,
+		Rate:              15,
+		TargetName:        "charger_a",
 	}}
 	level.MultiTargets = []content.LevelMultiTargetDef{{
 		ID:         "manager-1",
@@ -336,9 +370,13 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	app.FlushCommands()
-	var brushCount, triggerCount, touchTriggerCount, multiTargetCount, relayCount, breakableCount, pickupCount int
+	var brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount int
 	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, _ *MovingBrushComponent) bool {
 		brushCount++
+		return true
+	})
+	MakeQuery1[PathNodeComponent](cmd).Map(func(_ EntityId, _ *PathNodeComponent) bool {
+		pathNodeCount++
 		return true
 	})
 	MakeQuery1[UseTriggerComponent](cmd).Map(func(_ EntityId, _ *UseTriggerComponent) bool {
@@ -347,6 +385,18 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 	})
 	MakeQuery1[TriggerVolumeComponent](cmd).Map(func(_ EntityId, _ *TriggerVolumeComponent) bool {
 		touchTriggerCount++
+		return true
+	})
+	MakeQuery1[DamageVolumeComponent](cmd).Map(func(_ EntityId, _ *DamageVolumeComponent) bool {
+		damageCount++
+		return true
+	})
+	MakeQuery1[ChangeLevelVolumeComponent](cmd).Map(func(_ EntityId, _ *ChangeLevelVolumeComponent) bool {
+		changeCount++
+		return true
+	})
+	MakeQuery1[ChargerComponent](cmd).Map(func(_ EntityId, _ *ChargerComponent) bool {
+		chargerCount++
 		return true
 	})
 	MakeQuery1[MultiTargetComponent](cmd).Map(func(_ EntityId, _ *MultiTargetComponent) bool {
@@ -365,8 +415,8 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		pickupCount++
 		return true
 	})
-	if brushCount != 1 || triggerCount != 1 || touchTriggerCount != 1 || multiTargetCount != 1 || relayCount != 1 || breakableCount != 1 || pickupCount != 1 {
-		t.Fatalf("expected 1 brush/use/touch/multi/relay/breakable/pickup, got %d/%d/%d/%d/%d/%d/%d", brushCount, triggerCount, touchTriggerCount, multiTargetCount, relayCount, breakableCount, pickupCount)
+	if brushCount != 1 || pathNodeCount != 1 || triggerCount != 1 || touchTriggerCount != 1 || damageCount != 1 || changeCount != 1 || chargerCount != 1 || multiTargetCount != 1 || relayCount != 1 || breakableCount != 1 || pickupCount != 1 {
+		t.Fatalf("expected 1 brush/path/use/touch/damage/change/charger/multi/relay/breakable/pickup, got %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d", brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount)
 	}
 }
 

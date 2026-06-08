@@ -98,6 +98,12 @@ type AuthoredLevelMovingBrushRefComponent struct {
 	Name          string
 }
 
+type AuthoredLevelPathNodeRefComponent struct {
+	LevelID    string
+	PathNodeID string
+	Name       string
+}
+
 type AuthoredLevelUseTriggerRefComponent struct {
 	LevelID      string
 	UseTriggerID string
@@ -108,6 +114,24 @@ type AuthoredLevelTriggerVolumeRefComponent struct {
 	LevelID         string
 	TriggerVolumeID string
 	Name            string
+}
+
+type AuthoredLevelDamageVolumeRefComponent struct {
+	LevelID        string
+	DamageVolumeID string
+	Name           string
+}
+
+type AuthoredLevelChangeLevelRefComponent struct {
+	LevelID       string
+	ChangeLevelID string
+	Name          string
+}
+
+type AuthoredLevelChargerRefComponent struct {
+	LevelID   string
+	ChargerID string
+	Name      string
 }
 
 type AuthoredLevelMultiTargetRefComponent struct {

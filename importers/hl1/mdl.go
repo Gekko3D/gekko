@@ -3,6 +3,8 @@ package hl1
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
@@ -102,7 +104,26 @@ func LoadMDLGeometry(path string) (MDLGeometry, error) {
 	if err != nil {
 		return MDLGeometry{}, err
 	}
-	return ParseMDLGeometry(data)
+	geometry, err := ParseMDLGeometry(data)
+	if err != nil {
+		return MDLGeometry{}, err
+	}
+	if len(geometry.Textures) > 0 {
+		return geometry, nil
+	}
+	companionPath := mdlTextureCompanionPath(path)
+	if companionPath == "" {
+		return geometry, nil
+	}
+	companionData, err := os.ReadFile(companionPath)
+	if err != nil {
+		return geometry, nil
+	}
+	textures, textureInfos := parseMDLExternalTexturePixels(companionData)
+	if len(textures) == 0 {
+		return geometry, nil
+	}
+	return ParseMDLGeometryWithExternalTextures(data, textures, textureInfos)
 }
 
 func ParseMDLInfo(data []byte) (MDLInfo, error) {
@@ -153,13 +174,30 @@ func ParseMDLInfo(data []byte) (MDLInfo, error) {
 }
 
 func ParseMDLGeometry(data []byte) (MDLGeometry, error) {
+	return ParseMDLGeometryWithExternalTextures(data, nil, nil)
+}
+
+func ParseMDLGeometryWithExternalTextures(data []byte, externalTextures []MDLTexturePixels, externalTextureInfos []MDLTextureInfo) (MDLGeometry, error) {
 	info, err := ParseMDLInfo(data)
 	if err != nil {
 		return MDLGeometry{}, err
 	}
+	textures := parseMDLTexturePixels(data, info.Textures)
+	if len(textures) == 0 && len(externalTextures) > 0 {
+		textures = externalTextures
+		info.TextureCount = len(externalTextures)
+		if len(externalTextureInfos) > 0 {
+			info.Textures = externalTextureInfos
+		} else {
+			info.Textures = make([]MDLTextureInfo, 0, len(externalTextures))
+			for _, texture := range externalTextures {
+				info.Textures = append(info.Textures, texture.Info)
+			}
+		}
+	}
 	geometry := MDLGeometry{
 		Info:     info,
-		Textures: parseMDLTexturePixels(data, info.Textures),
+		Textures: textures,
 	}
 	for _, part := range decodeMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount) {
 		for _, model := range part.models {
@@ -169,6 +207,24 @@ func ParseMDLGeometry(data []byte) (MDLGeometry, error) {
 	geometry.Info.DecodedTriangleCount = len(geometry.Triangles)
 	geometry.Info.DecodedTextureCount = len(geometry.Textures)
 	return geometry, nil
+}
+
+func parseMDLExternalTexturePixels(data []byte) ([]MDLTexturePixels, []MDLTextureInfo) {
+	info, err := ParseMDLInfo(data)
+	if err != nil {
+		return nil, nil
+	}
+	textures := parseMDLTexturePixels(data, info.Textures)
+	return textures, info.Textures
+}
+
+func mdlTextureCompanionPath(path string) string {
+	ext := filepath.Ext(path)
+	if !strings.EqualFold(ext, ".mdl") {
+		return ""
+	}
+	base := strings.TrimSuffix(path, ext)
+	return base + "t" + ext
 }
 
 func parseMDLTextures(data []byte, offset int, count int) []MDLTextureInfo {

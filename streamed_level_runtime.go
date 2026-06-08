@@ -681,11 +681,23 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			return err
 		}
 	}
+	for _, node := range level.PathNodes {
+		spawnAuthoredLevelPathNode(cmd, state.LevelRoot, level.ID, node)
+	}
 	for _, trigger := range level.UseTriggers {
 		spawnAuthoredLevelUseTrigger(cmd, state.LevelRoot, level.ID, trigger)
 	}
 	for _, trigger := range level.TriggerVolumes {
 		spawnAuthoredLevelTriggerVolume(cmd, state.LevelRoot, level.ID, trigger)
+	}
+	for _, volume := range level.DamageVolumes {
+		spawnAuthoredLevelDamageVolume(cmd, state.LevelRoot, level.ID, volume)
+	}
+	for _, change := range level.ChangeLevels {
+		spawnAuthoredLevelChangeLevel(cmd, state.LevelRoot, level.ID, change)
+	}
+	for _, charger := range level.Chargers {
+		spawnAuthoredLevelCharger(cmd, state.LevelRoot, level.ID, charger)
 	}
 	for _, multi := range level.MultiTargets {
 		spawnAuthoredLevelMultiTarget(cmd, state.LevelRoot, level.ID, multi)

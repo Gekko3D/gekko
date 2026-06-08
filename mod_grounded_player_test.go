@@ -357,6 +357,168 @@ func TestTargetRelayDispatchesStateKillTargetAndRemoveOnFire(t *testing.T) {
 	}
 }
 
+func TestTargetActivationControlsDamageVolumes(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	volume := cmd.AddEntity(&DamageVolumeComponent{
+		TargetName: "acid_a",
+		Enabled:    false,
+	})
+	app.FlushCommands()
+
+	ActivateTargetWithState(cmd, "acid_a", 0, 1)
+	app.FlushCommands()
+	damage := cmd.GetComponent(volume, reflect.TypeOf(DamageVolumeComponent{})).(*DamageVolumeComponent)
+	if damage == nil || !damage.Enabled || damage.ActivationCount != 1 {
+		t.Fatalf("expected target state on to enable damage volume, got %+v", damage)
+	}
+
+	ActivateTargetWithState(cmd, "acid_a", 0, 0)
+	app.FlushCommands()
+	if damage.Enabled || damage.ActivationCount != 2 {
+		t.Fatalf("expected target state off to disable damage volume, got %+v", damage)
+	}
+
+	ActivateTargetWithState(cmd, "acid_a", 0, 2)
+	app.FlushCommands()
+	if !damage.Enabled || damage.ActivationCount != 3 {
+		t.Fatalf("expected target toggle to enable damage volume, got %+v", damage)
+	}
+
+	KillTarget(cmd, "acid_a")
+	app.FlushCommands()
+	if comps := cmd.GetAllComponents(volume); len(comps) != 0 {
+		t.Fatalf("expected killtarget to remove damage volume, got %+v", comps)
+	}
+}
+
+func TestTargetActivationControlsChangeLevelVolumes(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	volume := cmd.AddEntity(&ChangeLevelVolumeComponent{
+		TargetName: "exit_a",
+		TargetMap:  "c1a1",
+		Enabled:    false,
+	})
+	app.FlushCommands()
+
+	ActivateTargetWithState(cmd, "exit_a", 0, 1)
+	app.FlushCommands()
+	change := cmd.GetComponent(volume, reflect.TypeOf(ChangeLevelVolumeComponent{})).(*ChangeLevelVolumeComponent)
+	if change == nil || !change.Enabled || change.ActivationCount != 1 {
+		t.Fatalf("expected target state on to enable changelevel volume, got %+v", change)
+	}
+
+	ActivateTargetWithState(cmd, "exit_a", 0, 0)
+	app.FlushCommands()
+	if change.Enabled || change.ActivationCount != 2 {
+		t.Fatalf("expected target state off to disable changelevel volume, got %+v", change)
+	}
+
+	KillTarget(cmd, "exit_a")
+	app.FlushCommands()
+	if comps := cmd.GetAllComponents(volume); len(comps) != 0 {
+		t.Fatalf("expected killtarget to remove changelevel volume, got %+v", comps)
+	}
+}
+
+func TestTargetActivationControlsChargers(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	charger := cmd.AddEntity(&ChargerComponent{
+		TargetName: "charger_a",
+		ChargeKind: "health",
+		Enabled:    false,
+	})
+	app.FlushCommands()
+
+	ActivateTargetWithState(cmd, "charger_a", 0, 1)
+	app.FlushCommands()
+	component := cmd.GetComponent(charger, reflect.TypeOf(ChargerComponent{})).(*ChargerComponent)
+	if component == nil || !component.Enabled || component.ActivationCount != 1 {
+		t.Fatalf("expected target state on to enable charger, got %+v", component)
+	}
+
+	ActivateTargetWithState(cmd, "charger_a", 0, 0)
+	app.FlushCommands()
+	if component.Enabled || component.ActivationCount != 2 {
+		t.Fatalf("expected target state off to disable charger, got %+v", component)
+	}
+
+	KillTarget(cmd, "charger_a")
+	app.FlushCommands()
+	if comps := cmd.GetAllComponents(charger); len(comps) != 0 {
+		t.Fatalf("expected killtarget to remove charger, got %+v", comps)
+	}
+}
+
+func TestMovingBrushFollowsPathNodes(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	brush := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&LocalTransformComponent{},
+		&MovingBrushComponent{
+			Kind:       "hl1_func_train",
+			MotionKind: "path",
+			PathTarget: "corner_a",
+			Speed:      2,
+			Open:       true,
+		},
+	)
+	cmd.AddEntity(&PathNodeComponent{
+		TargetName: "corner_a",
+		Target:     "corner_b",
+		Position:   mgl32.Vec3{2, 0, 0},
+	})
+	cmd.AddEntity(&PathNodeComponent{
+		TargetName: "corner_b",
+		Position:   mgl32.Vec3{2, 0, -2},
+	})
+	app.FlushCommands()
+
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	app.FlushCommands()
+	tr := cmd.GetComponent(brush, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	moving := cmd.GetComponent(brush, reflect.TypeOf(MovingBrushComponent{})).(*MovingBrushComponent)
+	if tr.Position != (mgl32.Vec3{2, 0, 0}) || moving.PathTarget != "corner_b" || !moving.Open {
+		t.Fatalf("expected train to reach first path node, tr=%+v brush=%+v", tr, moving)
+	}
+
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	app.FlushCommands()
+	if tr.Position != (mgl32.Vec3{2, 0, -2}) || moving.PathTarget != "" || moving.Open {
+		t.Fatalf("expected train to stop at last path node, tr=%+v brush=%+v", tr, moving)
+	}
+}
+
+func TestMovingBrushRotatesToOpenAngle(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	brush := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{1, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&LocalTransformComponent{},
+		&MovingBrushComponent{
+			Kind:           "hl1_func_door_rotating",
+			MotionKind:     "rotate",
+			RotationOrigin: mgl32.Vec3{0, 0, 0},
+			RotationAxis:   mgl32.Vec3{0, 1, 0},
+			OpenAngle:      90,
+			Speed:          90,
+			Open:           true,
+		},
+	)
+	app.FlushCommands()
+
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	app.FlushCommands()
+	tr := cmd.GetComponent(brush, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	moving := cmd.GetComponent(brush, reflect.TypeOf(MovingBrushComponent{})).(*MovingBrushComponent)
+	if absf(moving.CurrentAngle-90) > 0.001 || tr.Position.Sub(mgl32.Vec3{0, 0, -1}).Len() > 0.001 {
+		t.Fatalf("expected rotating door to reach open angle, tr=%+v brush=%+v", tr, moving)
+	}
+}
+
 func TestBreakableDamageAndTargetActivation(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

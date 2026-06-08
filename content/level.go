@@ -65,8 +65,12 @@ type LevelDef struct {
 	WaterBodies      []LevelWaterBodyDef     `json:"water_bodies,omitempty"`
 	LadderVolumes    []LevelLadderVolumeDef  `json:"ladder_volumes,omitempty"`
 	MovingBrushes    []LevelMovingBrushDef   `json:"moving_brushes,omitempty"`
+	PathNodes        []LevelPathNodeDef      `json:"path_nodes,omitempty"`
 	UseTriggers      []LevelUseTriggerDef    `json:"use_triggers,omitempty"`
 	TriggerVolumes   []LevelTriggerVolumeDef `json:"trigger_volumes,omitempty"`
+	DamageVolumes    []LevelDamageVolumeDef  `json:"damage_volumes,omitempty"`
+	ChangeLevels     []LevelChangeLevelDef   `json:"change_levels,omitempty"`
+	Chargers         []LevelChargerDef       `json:"chargers,omitempty"`
 	TargetRelays     []LevelTargetRelayDef   `json:"target_relays,omitempty"`
 	MultiTargets     []LevelMultiTargetDef   `json:"multi_targets,omitempty"`
 	Breakables       []LevelBreakableDef     `json:"breakables,omitempty"`
@@ -254,12 +258,17 @@ type LevelMovingBrushDef struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name,omitempty"`
 	Kind              string   `json:"kind,omitempty"`
+	MotionKind        string   `json:"motion_kind,omitempty"`
 	AssetPath         string   `json:"asset_path,omitempty"`
 	BoundsCenter      Vec3     `json:"bounds_center"`
 	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
 	VisualOrigin      Vec3     `json:"visual_origin,omitempty"`
 	MoveDirection     Vec3     `json:"move_direction,omitempty"`
 	MoveDistance      float32  `json:"move_distance,omitempty"`
+	RotationOrigin    Vec3     `json:"rotation_origin,omitempty"`
+	RotationAxis      Vec3     `json:"rotation_axis,omitempty"`
+	OpenAngle         float32  `json:"open_angle,omitempty"`
+	PathTarget        string   `json:"path_target,omitempty"`
 	Speed             float32  `json:"speed,omitempty"`
 	Wait              float32  `json:"wait,omitempty"`
 	Lip               float32  `json:"lip,omitempty"`
@@ -267,6 +276,19 @@ type LevelMovingBrushDef struct {
 	Target            string   `json:"target,omitempty"`
 	SourceTag         string   `json:"source_tag,omitempty"`
 	Tags              []string `json:"tags,omitempty"`
+}
+
+type LevelPathNodeDef struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name,omitempty"`
+	TargetName string   `json:"target_name,omitempty"`
+	Target     string   `json:"target,omitempty"`
+	Position   Vec3     `json:"position"`
+	Wait       float32  `json:"wait,omitempty"`
+	Speed      float32  `json:"speed,omitempty"`
+	SpawnFlags int      `json:"spawn_flags,omitempty"`
+	SourceTag  string   `json:"source_tag,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
 }
 
 type LevelUseTriggerDef struct {
@@ -292,6 +314,54 @@ type LevelTriggerVolumeDef struct {
 	Delay             float32  `json:"delay,omitempty"`
 	Wait              float32  `json:"wait,omitempty"`
 	Once              bool     `json:"once,omitempty"`
+	SourceTag         string   `json:"source_tag,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+}
+
+type LevelDamageVolumeDef struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name,omitempty"`
+	Kind              string   `json:"kind,omitempty"`
+	BoundsCenter      Vec3     `json:"bounds_center"`
+	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	Damage            float32  `json:"damage,omitempty"`
+	DamageInterval    float32  `json:"damage_interval,omitempty"`
+	TargetName        string   `json:"target_name,omitempty"`
+	Target            string   `json:"target,omitempty"`
+	Delay             float32  `json:"delay,omitempty"`
+	SpawnFlags        int      `json:"spawn_flags,omitempty"`
+	StartDisabled     bool     `json:"start_disabled,omitempty"`
+	SourceTag         string   `json:"source_tag,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+}
+
+type LevelChangeLevelDef struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name,omitempty"`
+	Kind              string   `json:"kind,omitempty"`
+	BoundsCenter      Vec3     `json:"bounds_center"`
+	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	TargetMap         string   `json:"target_map,omitempty"`
+	Landmark          string   `json:"landmark,omitempty"`
+	TargetName        string   `json:"target_name,omitempty"`
+	SpawnFlags        int      `json:"spawn_flags,omitempty"`
+	StartDisabled     bool     `json:"start_disabled,omitempty"`
+	SourceTag         string   `json:"source_tag,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+}
+
+type LevelChargerDef struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name,omitempty"`
+	Kind              string   `json:"kind,omitempty"`
+	BoundsCenter      Vec3     `json:"bounds_center"`
+	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	ChargeKind        string   `json:"charge_kind,omitempty"`
+	Capacity          float32  `json:"capacity,omitempty"`
+	Rate              float32  `json:"rate,omitempty"`
+	TargetName        string   `json:"target_name,omitempty"`
+	SpawnFlags        int      `json:"spawn_flags,omitempty"`
+	StartDisabled     bool     `json:"start_disabled,omitempty"`
 	SourceTag         string   `json:"source_tag,omitempty"`
 	Tags              []string `json:"tags,omitempty"`
 }
@@ -461,6 +531,11 @@ func EnsureLevelIDs(def *LevelDef) {
 			def.MovingBrushes[i].ID = newID()
 		}
 	}
+	for i := range def.PathNodes {
+		if def.PathNodes[i].ID == "" {
+			def.PathNodes[i].ID = newID()
+		}
+	}
 	for i := range def.UseTriggers {
 		if def.UseTriggers[i].ID == "" {
 			def.UseTriggers[i].ID = newID()
@@ -469,6 +544,21 @@ func EnsureLevelIDs(def *LevelDef) {
 	for i := range def.TriggerVolumes {
 		if def.TriggerVolumes[i].ID == "" {
 			def.TriggerVolumes[i].ID = newID()
+		}
+	}
+	for i := range def.DamageVolumes {
+		if def.DamageVolumes[i].ID == "" {
+			def.DamageVolumes[i].ID = newID()
+		}
+	}
+	for i := range def.ChangeLevels {
+		if def.ChangeLevels[i].ID == "" {
+			def.ChangeLevels[i].ID = newID()
+		}
+	}
+	for i := range def.Chargers {
+		if def.Chargers[i].ID == "" {
+			def.Chargers[i].ID = newID()
 		}
 	}
 	for i := range def.MultiTargets {

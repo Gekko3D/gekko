@@ -47,6 +47,10 @@ type ImportReport struct {
 	SkyFaceCount             int           `json:"sky_face_count,omitempty"`
 	EntityCounts             []EntityCount `json:"entity_counts,omitempty"`
 	UnsupportedEntityCounts  []EntityCount `json:"unsupported_entity_counts,omitempty"`
+	MovingBrushEntityCounts  []EntityCount `json:"moving_brush_entity_counts,omitempty"`
+	PathNodeEntityCounts     []EntityCount `json:"path_node_entity_counts,omitempty"`
+	LadderEntityCounts       []EntityCount `json:"ladder_entity_counts,omitempty"`
+	ChargerEntityCounts      []EntityCount `json:"charger_entity_counts,omitempty"`
 	PickupEntityCounts       []EntityCount `json:"pickup_entity_counts,omitempty"`
 	TriggerEntityCounts      []EntityCount `json:"trigger_entity_counts,omitempty"`
 	BreakableEntityCounts    []EntityCount `json:"breakable_entity_counts,omitempty"`

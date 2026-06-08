@@ -370,6 +370,73 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 						"wait":   "1",
 					},
 				},
+				{
+					ClassName: "path_corner",
+					KeyValues: map[string]string{
+						"targetname": "corner_a",
+						"target":     "corner_b",
+						"speed":      "80",
+					},
+					WorldPosition: importcommon.Vec3{X: 20, Y: 2, Z: 3},
+				},
+				{
+					ClassName: "path_corner",
+					KeyValues: map[string]string{
+						"targetname": "corner_b",
+					},
+					WorldPosition: importcommon.Vec3{X: 22, Y: 2, Z: 3},
+				},
+				{
+					ClassName:    "func_train",
+					BrushModelID: 3,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 20, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 22, Y: 4, Z: 5},
+					},
+					KeyValues: map[string]string{
+						"targetname": "train_a",
+						"target":     "corner_a",
+						"speed":      "100",
+					},
+				},
+				{
+					ClassName:    "func_door_rotating",
+					BrushModelID: 4,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 30, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 32, Y: 4, Z: 5},
+					},
+					SourceOrigin:  importcommon.Vec3{X: 30, Y: 2, Z: 3},
+					WorldPosition: importcommon.Vec3{X: 30, Y: 3, Z: -2},
+					KeyValues: map[string]string{
+						"targetname": "rot_a",
+						"speed":      "90",
+						"distance":   "120",
+						"spawnflags": "2",
+					},
+				},
+				{
+					ClassName:    "func_healthcharger",
+					BrushModelID: 5,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 40, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 42, Y: 4, Z: 5},
+					},
+					KeyValues: map[string]string{
+						"targetname": "health_a",
+					},
+				},
+				{
+					ClassName:    "func_recharge",
+					BrushModelID: 6,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 50, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 52, Y: 4, Z: 5},
+					},
+					KeyValues: map[string]string{
+						"targetname": "suit_a",
+					},
+				},
 			},
 		},
 		Report: importcommon.ImportReport{
@@ -380,14 +447,20 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildGeneratedLevel failed: %v", err)
 	}
-	if len(level.Level.Markers) != 2 {
+	if len(level.Level.Markers) != 4 {
 		t.Fatalf("markers = %+v", level.Level.Markers)
 	}
-	if len(level.Level.MovingBrushes) != 2 {
+	if len(level.Level.MovingBrushes) != 4 {
 		t.Fatalf("moving brushes = %+v", level.Level.MovingBrushes)
+	}
+	if len(level.Level.PathNodes) != 2 {
+		t.Fatalf("path nodes = %+v", level.Level.PathNodes)
 	}
 	if len(level.Level.UseTriggers) != 1 {
 		t.Fatalf("use triggers = %+v", level.Level.UseTriggers)
+	}
+	if len(level.Level.Chargers) != 2 {
+		t.Fatalf("chargers = %+v", level.Level.Chargers)
 	}
 	door := level.Level.Markers[0]
 	if door.Kind != MarkerKindHL1Door || door.Name != "door_a" {
@@ -417,6 +490,26 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 	buttonBrush := level.Level.MovingBrushes[1]
 	if buttonBrush.Kind != MovingBrushKindHL1Button || buttonBrush.Target != "door_a" {
 		t.Fatalf("button moving brush = %+v", buttonBrush)
+	}
+	path := level.Level.PathNodes[0]
+	if path.TargetName != "corner_a" || path.Target != "corner_b" || path.Speed != 80*HammerUnitMeters {
+		t.Fatalf("path corner = %+v", path)
+	}
+	train := level.Level.MovingBrushes[2]
+	if train.Kind != MovingBrushKindHL1Train || train.MotionKind != "path" || train.PathTarget != "corner_a" || train.Speed != 100*HammerUnitMeters {
+		t.Fatalf("train moving brush = %+v", train)
+	}
+	rotating := level.Level.MovingBrushes[3]
+	if rotating.Kind != MovingBrushKindHL1DoorRotating || rotating.MotionKind != "rotate" || rotating.OpenAngle != -120 || rotating.Speed != 90 || rotating.RotationAxis != (content.Vec3{0, 1, 0}) {
+		t.Fatalf("rotating moving brush = %+v", rotating)
+	}
+	health := level.Level.Chargers[0]
+	if health.Kind != ChargerKindHL1Health || health.ChargeKind != "health" || health.Capacity != 50 || health.Rate != 15 || health.TargetName != "health_a" {
+		t.Fatalf("health charger = %+v", health)
+	}
+	suit := level.Level.Chargers[1]
+	if suit.Kind != ChargerKindHL1Suit || suit.ChargeKind != "armor" || suit.Capacity != 75 || suit.Rate != 15 || suit.TargetName != "suit_a" {
+		t.Fatalf("suit charger = %+v", suit)
 	}
 }
 
@@ -455,6 +548,34 @@ func TestBuildGeneratedLevelEmitsHL1TriggerVolumesAndMultiTargets(t *testing.T) 
 					KeyValues: map[string]string{
 						"target": "door_b",
 						"wait":   "1.25",
+					},
+				},
+				{
+					ClassName:    "trigger_hurt",
+					BrushModelID: 5,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 20, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 24, Y: 6, Z: 7},
+					},
+					KeyValues: map[string]string{
+						"targetname": "acid_a",
+						"target":     "alarm_a",
+						"dmg":        "25",
+						"delay":      "0.75",
+						"spawnflags": "2",
+					},
+				},
+				{
+					ClassName:    "trigger_changelevel",
+					BrushModelID: 6,
+					BrushWorldBounds: importcommon.Bounds{
+						Min: importcommon.Vec3{X: 30, Y: 2, Z: 3},
+						Max: importcommon.Vec3{X: 34, Y: 6, Z: 7},
+					},
+					KeyValues: map[string]string{
+						"targetname": "exit_a",
+						"map":        "c1a1",
+						"landmark":   "lm_a",
 					},
 				},
 				{
@@ -501,6 +622,26 @@ func TestBuildGeneratedLevelEmitsHL1TriggerVolumesAndMultiTargets(t *testing.T) 
 	multiple := level.Level.TriggerVolumes[1]
 	if multiple.Kind != TriggerVolumeKindHL1TriggerMultiple || multiple.Once || multiple.Target != "door_b" || multiple.Wait != 1.25 {
 		t.Fatalf("trigger_multiple volume = %+v", multiple)
+	}
+	if len(level.Level.DamageVolumes) != 1 {
+		t.Fatalf("damage volumes = %+v", level.Level.DamageVolumes)
+	}
+	damage := level.Level.DamageVolumes[0]
+	if damage.Kind != DamageVolumeKindHL1TriggerHurt || damage.TargetName != "acid_a" || damage.Target != "alarm_a" || damage.Damage != 25 || damage.DamageInterval != 0.5 || damage.Delay != 0.75 || !damage.StartDisabled {
+		t.Fatalf("trigger_hurt damage volume = %+v", damage)
+	}
+	if damage.BoundsCenter != (content.Vec3{22, 4, 5}) || damage.BoundsHalfExtents != (content.Vec3{2, 2, 2}) {
+		t.Fatalf("trigger_hurt bounds = %+v/%+v", damage.BoundsCenter, damage.BoundsHalfExtents)
+	}
+	if len(level.Level.ChangeLevels) != 1 {
+		t.Fatalf("changelevels = %+v", level.Level.ChangeLevels)
+	}
+	change := level.Level.ChangeLevels[0]
+	if change.Kind != ChangeLevelKindHL1TriggerChangeLevel || change.TargetName != "exit_a" || change.TargetMap != "c1a1" || change.Landmark != "lm_a" {
+		t.Fatalf("trigger_changelevel volume = %+v", change)
+	}
+	if change.BoundsCenter != (content.Vec3{32, 4, 5}) || change.BoundsHalfExtents != (content.Vec3{2, 2, 2}) {
+		t.Fatalf("trigger_changelevel bounds = %+v/%+v", change.BoundsCenter, change.BoundsHalfExtents)
 	}
 	if len(level.Level.MultiTargets) != 1 {
 		t.Fatalf("multi-targets = %+v", level.Level.MultiTargets)

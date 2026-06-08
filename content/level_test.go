@@ -763,15 +763,30 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		ID:                "door-1",
 		Name:              "door",
 		Kind:              "hl1_func_door",
+		MotionKind:        "rotate",
 		BoundsCenter:      Vec3{1, 2, 3},
 		BoundsHalfExtents: Vec3{0.5, 1, 0.25},
 		MoveDirection:     Vec3{1, 0, 0},
 		MoveDistance:      2,
+		RotationOrigin:    Vec3{0, 2, 3},
+		RotationAxis:      Vec3{0, 1, 0},
+		OpenAngle:         -90,
+		PathTarget:        "corner_a",
 		Speed:             3.5,
 		Wait:              1,
 		Lip:               0.1,
 		TargetName:        "door_a",
 		SourceTag:         "hl1:func_door",
+	}}
+	def.PathNodes = []LevelPathNodeDef{{
+		ID:         "corner-1",
+		Name:       "corner",
+		TargetName: "corner_a",
+		Target:     "corner_b",
+		Position:   Vec3{2, 3, 4},
+		Wait:       0.25,
+		Speed:      1.5,
+		SourceTag:  "hl1:path_corner",
 	}}
 	def.UseTriggers = []LevelUseTriggerDef{{
 		ID:                "button-1",
@@ -793,6 +808,48 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		Wait:              0.5,
 		Once:              true,
 		SourceTag:         "hl1:trigger_once",
+	}}
+	def.DamageVolumes = []LevelDamageVolumeDef{{
+		ID:                "damage-1",
+		Name:              "acid",
+		Kind:              "hl1_trigger_hurt",
+		BoundsCenter:      Vec3{6, 7, 8},
+		BoundsHalfExtents: Vec3{1, 1, 1},
+		Damage:            15,
+		DamageInterval:    0.75,
+		TargetName:        "acid_a",
+		Target:            "alarm_a",
+		Delay:             0.2,
+		SpawnFlags:        1,
+		StartDisabled:     true,
+		SourceTag:         "hl1:trigger_hurt",
+	}}
+	def.ChangeLevels = []LevelChangeLevelDef{{
+		ID:                "change-1",
+		Name:              "exit",
+		Kind:              "hl1_trigger_changelevel",
+		BoundsCenter:      Vec3{8, 9, 10},
+		BoundsHalfExtents: Vec3{1, 1, 1},
+		TargetMap:         "c1a1",
+		Landmark:          "lm_a",
+		TargetName:        "exit_a",
+		SpawnFlags:        2,
+		StartDisabled:     true,
+		SourceTag:         "hl1:trigger_changelevel",
+	}}
+	def.Chargers = []LevelChargerDef{{
+		ID:                "charger-1",
+		Name:              "wall health",
+		Kind:              "hl1_func_healthcharger",
+		BoundsCenter:      Vec3{9, 10, 11},
+		BoundsHalfExtents: Vec3{0.5, 0.5, 0.5},
+		ChargeKind:        "health",
+		Capacity:          50,
+		Rate:              15,
+		TargetName:        "charger_a",
+		SpawnFlags:        1,
+		StartDisabled:     true,
+		SourceTag:         "hl1:func_healthcharger",
 	}}
 	def.MultiTargets = []LevelMultiTargetDef{{
 		ID:         "manager-1",
@@ -858,14 +915,26 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
-	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 {
+	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 || loaded.MovingBrushes[0].MotionKind != "rotate" || loaded.MovingBrushes[0].OpenAngle != -90 || loaded.MovingBrushes[0].PathTarget != "corner_a" {
 		t.Fatalf("moving brushes did not round-trip: %+v", loaded.MovingBrushes)
+	}
+	if len(loaded.PathNodes) != 1 || loaded.PathNodes[0].TargetName != "corner_a" || loaded.PathNodes[0].Target != "corner_b" || loaded.PathNodes[0].Speed != 1.5 {
+		t.Fatalf("path nodes did not round-trip: %+v", loaded.PathNodes)
 	}
 	if len(loaded.UseTriggers) != 1 || loaded.UseTriggers[0].Target != "door_a" {
 		t.Fatalf("use triggers did not round-trip: %+v", loaded.UseTriggers)
 	}
 	if len(loaded.TriggerVolumes) != 1 || !loaded.TriggerVolumes[0].Once || loaded.TriggerVolumes[0].Target != "manager_a" || loaded.TriggerVolumes[0].Delay != 0.25 {
 		t.Fatalf("trigger volumes did not round-trip: %+v", loaded.TriggerVolumes)
+	}
+	if len(loaded.DamageVolumes) != 1 || loaded.DamageVolumes[0].Damage != 15 || loaded.DamageVolumes[0].DamageInterval != 0.75 || loaded.DamageVolumes[0].Delay != 0.2 || !loaded.DamageVolumes[0].StartDisabled {
+		t.Fatalf("damage volumes did not round-trip: %+v", loaded.DamageVolumes)
+	}
+	if len(loaded.ChangeLevels) != 1 || loaded.ChangeLevels[0].TargetMap != "c1a1" || loaded.ChangeLevels[0].Landmark != "lm_a" || !loaded.ChangeLevels[0].StartDisabled {
+		t.Fatalf("changelevel volumes did not round-trip: %+v", loaded.ChangeLevels)
+	}
+	if len(loaded.Chargers) != 1 || loaded.Chargers[0].ChargeKind != "health" || loaded.Chargers[0].Capacity != 50 || loaded.Chargers[0].Rate != 15 || !loaded.Chargers[0].StartDisabled {
+		t.Fatalf("chargers did not round-trip: %+v", loaded.Chargers)
 	}
 	if len(loaded.MultiTargets) != 1 || loaded.MultiTargets[0].TargetName != "manager_a" || len(loaded.MultiTargets[0].Events) != 1 || loaded.MultiTargets[0].Events[0].Target != "door_a" {
 		t.Fatalf("multi-targets did not round-trip: %+v", loaded.MultiTargets)
@@ -889,6 +958,12 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 		MoveDistance:      -1,
 		Speed:             -1,
 	}}
+	def.PathNodes = []LevelPathNodeDef{{
+		ID:         "bad-path",
+		TargetName: "",
+		Wait:       -1,
+		Speed:      -1,
+	}}
 	def.UseTriggers = []LevelUseTriggerDef{{
 		ID:                "bad-button",
 		BoundsHalfExtents: Vec3{1, 0, 1},
@@ -898,6 +973,24 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 		BoundsHalfExtents: Vec3{1, 0, 1},
 		Delay:             -1,
 		Wait:              -1,
+	}}
+	def.DamageVolumes = []LevelDamageVolumeDef{{
+		ID:                "bad-damage",
+		BoundsHalfExtents: Vec3{1, 0, 1},
+		Damage:            -1,
+		DamageInterval:    -1,
+		Delay:             -1,
+	}}
+	def.ChangeLevels = []LevelChangeLevelDef{{
+		ID:                "bad-change",
+		BoundsHalfExtents: Vec3{1, 0, 1},
+	}}
+	def.Chargers = []LevelChargerDef{{
+		ID:                "bad-charger",
+		BoundsHalfExtents: Vec3{1, 0, 1},
+		ChargeKind:        "mana",
+		Capacity:          -1,
+		Rate:              -1,
 	}}
 	def.MultiTargets = []LevelMultiTargetDef{{
 		ID:         "bad-manager",
@@ -931,10 +1024,23 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_bounds")
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_distance")
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_speed")
+	assertHasLevelValidationCode(t, result, "empty_path_node_target_name")
+	assertHasLevelValidationCode(t, result, "invalid_path_node_wait")
+	assertHasLevelValidationCode(t, result, "invalid_path_node_speed")
 	assertHasLevelValidationCode(t, result, "invalid_use_trigger_bounds")
 	assertHasLevelValidationCode(t, result, "invalid_trigger_volume_bounds")
 	assertHasLevelValidationCode(t, result, "invalid_trigger_volume_delay")
 	assertHasLevelValidationCode(t, result, "invalid_trigger_volume_wait")
+	assertHasLevelValidationCode(t, result, "invalid_damage_volume_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_damage_volume_damage")
+	assertHasLevelValidationCode(t, result, "invalid_damage_volume_interval")
+	assertHasLevelValidationCode(t, result, "invalid_damage_volume_delay")
+	assertHasLevelValidationCode(t, result, "invalid_change_level_bounds")
+	assertHasLevelValidationCode(t, result, "empty_change_level_target_map")
+	assertHasLevelValidationCode(t, result, "invalid_charger_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_charger_kind")
+	assertHasLevelValidationCode(t, result, "invalid_charger_capacity")
+	assertHasLevelValidationCode(t, result, "invalid_charger_rate")
 	assertHasLevelValidationCode(t, result, "empty_multi_target_name")
 	assertHasLevelValidationCode(t, result, "invalid_multi_target_delay")
 	assertHasLevelValidationCode(t, result, "empty_multi_target_event")

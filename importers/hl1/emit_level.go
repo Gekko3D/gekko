@@ -25,9 +25,14 @@ const MovingBrushKindHL1Door = "hl1_func_door"
 const MovingBrushKindHL1DoorRotating = "hl1_func_door_rotating"
 const MovingBrushKindHL1Button = "hl1_func_button"
 const MovingBrushKindHL1Plat = "hl1_func_plat"
+const MovingBrushKindHL1Train = "hl1_func_train"
 const UseTriggerKindHL1Button = "hl1_func_button"
+const ChargerKindHL1Health = "hl1_func_healthcharger"
+const ChargerKindHL1Suit = "hl1_func_recharge"
 const TriggerVolumeKindHL1TriggerOnce = "hl1_trigger_once"
 const TriggerVolumeKindHL1TriggerMultiple = "hl1_trigger_multiple"
+const DamageVolumeKindHL1TriggerHurt = "hl1_trigger_hurt"
+const ChangeLevelKindHL1TriggerChangeLevel = "hl1_trigger_changelevel"
 const MultiTargetKindHL1MultiManager = "hl1_multi_manager"
 const TargetRelayKindHL1TriggerRelay = "hl1_trigger_relay"
 const BreakableKindHL1FuncBreakable = "hl1_func_breakable"
@@ -104,13 +109,17 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	level.Markers = append(level.Markers, buildHL1GameplayMarkers(summary.Map.Entities)...)
 	level.Pickups = buildHL1Pickups(summary.Map.Entities, levelPath, gameAssets)
 	level.LadderVolumes = buildHL1LadderVolumes(summary.Map.Entities, opts.VoxelResolution)
+	level.PathNodes = buildHL1PathNodes(summary.Map.Entities)
 	movingBrushes, movingBrushAssets, err := buildHL1MovingBrushes(opts, summary, levelPath)
 	if err != nil {
 		return GeneratedLevelResult{}, err
 	}
 	level.MovingBrushes = movingBrushes
 	level.UseTriggers = buildHL1UseTriggers(summary.Map.Entities)
+	level.Chargers = buildHL1Chargers(summary.Map.Entities)
 	level.TriggerVolumes = buildHL1TriggerVolumes(summary.Map.Entities)
+	level.DamageVolumes = buildHL1DamageVolumes(summary.Map.Entities)
+	level.ChangeLevels = buildHL1ChangeLevels(summary.Map.Entities)
 	level.MultiTargets = buildHL1MultiTargets(summary.Map.Entities)
 	level.TargetRelays = buildHL1TargetRelays(summary.Map.Entities)
 	breakables, breakableAssets, err := buildHL1Breakables(opts, summary, levelPath)
@@ -521,6 +530,35 @@ func hl1PointEntityTags(entity importcommon.Entity) []string {
 	return tags
 }
 
+func buildHL1PathNodes(entities []importcommon.Entity) []content.LevelPathNodeDef {
+	out := make([]content.LevelPathNodeDef, 0)
+	count := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "path_corner") {
+			continue
+		}
+		targetName := hl1StringKey(entity, "targetname")
+		if targetName == "" {
+			continue
+		}
+		className := strings.ToLower(entity.ClassName)
+		out = append(out, content.LevelPathNodeDef{
+			ID:         fmt.Sprintf("hl1_path_corner_%d", count),
+			Name:       hl1EntityDisplayName(entity, className),
+			TargetName: targetName,
+			Target:     hl1StringKey(entity, "target"),
+			Position:   content.Vec3{entity.WorldPosition.X, entity.WorldPosition.Y, entity.WorldPosition.Z},
+			Wait:       hl1FloatKey(entity, "wait"),
+			Speed:      hl1FloatKey(entity, "speed") * HammerUnitMeters,
+			SpawnFlags: hl1IntKey(entity, "spawnflags"),
+			SourceTag:  "hl1:path_corner",
+			Tags:       hl1PointEntityTags(entity),
+		})
+		count++
+	}
+	return out
+}
+
 func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath string) ([]content.LevelMovingBrushDef, []GeneratedAssetResult, error) {
 	entities := summary.Map.Entities
 	out := make([]content.LevelMovingBrushDef, 0)
@@ -546,11 +584,16 @@ func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath 
 			ID:                fmt.Sprintf("hl1_moving_%s_%d", className, index),
 			Name:              hl1EntityDisplayName(entity, className),
 			Kind:              kind,
+			MotionKind:        hl1MovingBrushMotionKind(entity),
 			BoundsCenter:      center,
 			BoundsHalfExtents: halfExtents,
 			MoveDirection:     hl1MoveDirection(entity),
 			MoveDistance:      hl1MoveDistance(entity),
-			Speed:             hl1FloatKey(entity, "speed") * HammerUnitMeters,
+			RotationOrigin:    hl1RotatingDoorOrigin(entity, center),
+			RotationAxis:      hl1RotatingDoorAxis(entity),
+			OpenAngle:         hl1RotatingDoorOpenAngle(entity),
+			PathTarget:        hl1MovingBrushPathTarget(entity),
+			Speed:             hl1MovingBrushSpeed(entity),
 			Wait:              hl1FloatKey(entity, "wait"),
 			Lip:               hl1FloatKey(entity, "lip") * HammerUnitMeters,
 			TargetName:        hl1StringKey(entity, "targetname"),
@@ -669,6 +712,67 @@ func buildHL1UseTriggers(entities []importcommon.Entity) []content.LevelUseTrigg
 	return out
 }
 
+func buildHL1Chargers(entities []importcommon.Entity) []content.LevelChargerDef {
+	out := make([]content.LevelChargerDef, 0)
+	countsByClass := map[string]int{}
+	for _, entity := range entities {
+		kind, chargeKind, ok := hl1ChargerKind(entity.ClassName)
+		if !ok || entity.BrushModelID <= 0 {
+			continue
+		}
+		className := strings.ToLower(entity.ClassName)
+		index := countsByClass[className]
+		countsByClass[className]++
+		bounds := entity.BrushWorldBounds
+		center, halfExtents := contentBoundsCenterHalfExtents(bounds)
+		out = append(out, content.LevelChargerDef{
+			ID:                fmt.Sprintf("hl1_charger_%s_%d", className, index),
+			Name:              hl1EntityDisplayName(entity, className),
+			Kind:              kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			ChargeKind:        chargeKind,
+			Capacity:          hl1ChargerCapacity(chargeKind),
+			Rate:              15,
+			TargetName:        hl1StringKey(entity, "targetname"),
+			SpawnFlags:        hl1IntKey(entity, "spawnflags"),
+			SourceTag:         "hl1:" + className,
+			Tags:              hl1ChargerTags(entity, bounds),
+		})
+	}
+	return out
+}
+
+func hl1ChargerKind(className string) (string, string, bool) {
+	switch strings.ToLower(strings.TrimSpace(className)) {
+	case "func_healthcharger":
+		return ChargerKindHL1Health, "health", true
+	case "func_recharge":
+		return ChargerKindHL1Suit, "armor", true
+	default:
+		return "", "", false
+	}
+}
+
+func hl1ChargerCapacity(chargeKind string) float32 {
+	if chargeKind == "armor" {
+		return 75
+	}
+	return 50
+}
+
+func hl1ChargerTags(entity importcommon.Entity, bounds importcommon.Bounds) []string {
+	tags := hl1GameplayMarkerTags(entity, bounds)
+	for _, key := range []string{"globalname", "dmdelay"} {
+		value := hl1StringKey(entity, key)
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
+}
+
 func buildHL1TriggerVolumes(entities []importcommon.Entity) []content.LevelTriggerVolumeDef {
 	out := make([]content.LevelTriggerVolumeDef, 0)
 	countsByClass := map[string]int{}
@@ -709,6 +813,105 @@ func hl1TriggerVolumeKind(className string) (string, bool, bool) {
 	default:
 		return "", false, false
 	}
+}
+
+func buildHL1DamageVolumes(entities []importcommon.Entity) []content.LevelDamageVolumeDef {
+	out := make([]content.LevelDamageVolumeDef, 0)
+	count := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "trigger_hurt") || entity.BrushModelID <= 0 {
+			continue
+		}
+		bounds := entity.BrushWorldBounds
+		center, halfExtents := contentBoundsCenterHalfExtents(bounds)
+		spawnFlags := hl1IntKey(entity, "spawnflags")
+		out = append(out, content.LevelDamageVolumeDef{
+			ID:                fmt.Sprintf("hl1_damage_trigger_hurt_%d", count),
+			Name:              hl1EntityDisplayName(entity, "trigger_hurt"),
+			Kind:              DamageVolumeKindHL1TriggerHurt,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			Damage:            hl1TriggerHurtDamage(entity),
+			DamageInterval:    hl1TriggerHurtInterval(entity),
+			TargetName:        hl1StringKey(entity, "targetname"),
+			Target:            hl1StringKey(entity, "target"),
+			Delay:             hl1FloatKey(entity, "delay"),
+			SpawnFlags:        spawnFlags,
+			StartDisabled:     hl1TriggerHurtStartsDisabled(spawnFlags),
+			SourceTag:         "hl1:trigger_hurt",
+			Tags:              hl1TriggerHurtTags(entity, bounds),
+		})
+		count++
+	}
+	return out
+}
+
+func hl1TriggerHurtDamage(entity importcommon.Entity) float32 {
+	damage := hl1FloatKey(entity, "dmg")
+	if damage <= 0 {
+		return 10
+	}
+	return damage
+}
+
+func hl1TriggerHurtInterval(entity importcommon.Entity) float32 {
+	return 0.5
+}
+
+func hl1TriggerHurtStartsDisabled(spawnFlags int) bool {
+	return spawnFlags&2 != 0
+}
+
+func hl1TriggerHurtTags(entity importcommon.Entity, bounds importcommon.Bounds) []string {
+	tags := hl1GameplayMarkerTags(entity, bounds)
+	for _, key := range []string{"damagetype", "delay"} {
+		value := hl1StringKey(entity, key)
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
+}
+
+func buildHL1ChangeLevels(entities []importcommon.Entity) []content.LevelChangeLevelDef {
+	out := make([]content.LevelChangeLevelDef, 0)
+	count := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "trigger_changelevel") || entity.BrushModelID <= 0 {
+			continue
+		}
+		bounds := entity.BrushWorldBounds
+		center, halfExtents := contentBoundsCenterHalfExtents(bounds)
+		spawnFlags := hl1IntKey(entity, "spawnflags")
+		out = append(out, content.LevelChangeLevelDef{
+			ID:                fmt.Sprintf("hl1_changelevel_trigger_changelevel_%d", count),
+			Name:              hl1EntityDisplayName(entity, "trigger_changelevel"),
+			Kind:              ChangeLevelKindHL1TriggerChangeLevel,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			TargetMap:         hl1StringKey(entity, "map"),
+			Landmark:          hl1StringKey(entity, "landmark"),
+			TargetName:        hl1StringKey(entity, "targetname"),
+			SpawnFlags:        spawnFlags,
+			SourceTag:         "hl1:trigger_changelevel",
+			Tags:              hl1ChangeLevelTags(entity, bounds),
+		})
+		count++
+	}
+	return out
+}
+
+func hl1ChangeLevelTags(entity importcommon.Entity, bounds importcommon.Bounds) []string {
+	tags := hl1GameplayMarkerTags(entity, bounds)
+	for _, key := range []string{"map", "landmark", "changetarget", "changedelay"} {
+		value := hl1StringKey(entity, key)
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
 }
 
 func buildHL1MultiTargets(entities []importcommon.Entity) []content.LevelMultiTargetDef {
@@ -826,6 +1029,8 @@ func hl1MovingBrushKind(className string) (string, bool) {
 		return MovingBrushKindHL1Button, true
 	case "func_plat":
 		return MovingBrushKindHL1Plat, true
+	case "func_train":
+		return MovingBrushKindHL1Train, true
 	default:
 		return "", false
 	}
@@ -833,7 +1038,7 @@ func hl1MovingBrushKind(className string) (string, bool) {
 
 func hl1MovingBrushHasSeparateVisual(className string) bool {
 	switch strings.ToLower(className) {
-	case "func_door", "momentary_door", "func_button", "func_plat":
+	case "func_door", "momentary_door", "func_button", "func_plat", "func_train", "func_door_rotating":
 		return true
 	default:
 		return false
@@ -1061,6 +1266,71 @@ func hl1MoveDirection(entity importcommon.Entity) content.Vec3 {
 		rad := float64(angle) * math.Pi / 180
 		return normalizeContentVec3(content.Vec3{float32(math.Cos(rad)), 0, -float32(math.Sin(rad))})
 	}
+}
+
+func hl1MovingBrushMotionKind(entity importcommon.Entity) string {
+	switch strings.ToLower(strings.TrimSpace(entity.ClassName)) {
+	case "func_train":
+		return "path"
+	case "func_door_rotating":
+		return "rotate"
+	default:
+		return "linear"
+	}
+}
+
+func hl1MovingBrushPathTarget(entity importcommon.Entity) string {
+	if !strings.EqualFold(entity.ClassName, "func_train") {
+		return ""
+	}
+	return hl1StringKey(entity, "target")
+}
+
+func hl1MovingBrushSpeed(entity importcommon.Entity) float32 {
+	speed := hl1FloatKey(entity, "speed")
+	if strings.EqualFold(entity.ClassName, "func_door_rotating") {
+		return speed
+	}
+	return speed * HammerUnitMeters
+}
+
+func hl1RotatingDoorOrigin(entity importcommon.Entity, fallback content.Vec3) content.Vec3 {
+	if !strings.EqualFold(entity.ClassName, "func_door_rotating") {
+		return content.Vec3{}
+	}
+	if entity.SourceOrigin != (importcommon.Vec3{}) {
+		return content.Vec3{entity.WorldPosition.X, entity.WorldPosition.Y, entity.WorldPosition.Z}
+	}
+	return fallback
+}
+
+func hl1RotatingDoorAxis(entity importcommon.Entity) content.Vec3 {
+	if !strings.EqualFold(entity.ClassName, "func_door_rotating") {
+		return content.Vec3{}
+	}
+	spawnFlags := hl1IntKey(entity, "spawnflags")
+	switch {
+	case spawnFlags&64 != 0:
+		return content.Vec3{1, 0, 0}
+	case spawnFlags&128 != 0:
+		return content.Vec3{0, 0, 1}
+	default:
+		return content.Vec3{0, 1, 0}
+	}
+}
+
+func hl1RotatingDoorOpenAngle(entity importcommon.Entity) float32 {
+	if !strings.EqualFold(entity.ClassName, "func_door_rotating") {
+		return 0
+	}
+	angle := hl1FloatKey(entity, "distance")
+	if angle <= 0 {
+		angle = 90
+	}
+	if hl1IntKey(entity, "spawnflags")&2 != 0 {
+		angle = -angle
+	}
+	return angle
 }
 
 func hl1MoveDistance(entity importcommon.Entity) float32 {

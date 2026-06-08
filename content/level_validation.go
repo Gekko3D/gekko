@@ -159,6 +159,10 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		validateLevelMovingBrushUniqueID(&result, seenIDs, brush.ID)
 		validateLevelMovingBrush(&result, brush, opts)
 	}
+	for _, node := range def.PathNodes {
+		validateLevelPathNodeUniqueID(&result, seenIDs, node.ID)
+		validateLevelPathNode(&result, node)
+	}
 	for _, trigger := range def.UseTriggers {
 		validateLevelUseTriggerUniqueID(&result, seenIDs, trigger.ID)
 		validateLevelUseTrigger(&result, trigger)
@@ -166,6 +170,18 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 	for _, trigger := range def.TriggerVolumes {
 		validateLevelTriggerVolumeUniqueID(&result, seenIDs, trigger.ID)
 		validateLevelTriggerVolume(&result, trigger)
+	}
+	for _, volume := range def.DamageVolumes {
+		validateLevelDamageVolumeUniqueID(&result, seenIDs, volume.ID)
+		validateLevelDamageVolume(&result, volume)
+	}
+	for _, change := range def.ChangeLevels {
+		validateLevelChangeLevelUniqueID(&result, seenIDs, change.ID)
+		validateLevelChangeLevel(&result, change)
+	}
+	for _, charger := range def.Chargers {
+		validateLevelChargerUniqueID(&result, seenIDs, charger.ID)
+		validateLevelCharger(&result, charger)
 	}
 	for _, relay := range def.TargetRelays {
 		validateLevelTargetRelayUniqueID(&result, seenIDs, relay.ID)
@@ -275,6 +291,17 @@ func validateLevelMovingBrushUniqueID(result *LevelValidationResult, seen map[st
 	seen[id] = struct{}{}
 }
 
+func validateLevelPathNodeUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_path_node_id", fmt.Sprintf("duplicate path node id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
 func validateLevelUseTriggerUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
 	if id == "" {
 		return
@@ -292,6 +319,39 @@ func validateLevelTriggerVolumeUniqueID(result *LevelValidationResult, seen map[
 	}
 	if _, ok := seen[id]; ok {
 		result.addError("duplicate_trigger_volume_id", fmt.Sprintf("duplicate trigger volume id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelDamageVolumeUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_damage_volume_id", fmt.Sprintf("duplicate damage volume id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelChangeLevelUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_change_level_id", fmt.Sprintf("duplicate changelevel volume id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelChargerUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_charger_id", fmt.Sprintf("duplicate charger id %s", id), "", "", "", "", "", "", "")
 		return
 	}
 	seen[id] = struct{}{}
@@ -450,6 +510,21 @@ func validateLevelMovingBrush(result *LevelValidationResult, brush LevelMovingBr
 	}
 }
 
+func validateLevelPathNode(result *LevelValidationResult, node LevelPathNodeDef) {
+	if strings.TrimSpace(node.ID) == "" {
+		result.addError("empty_path_node_id", "path node id is required", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(node.TargetName) == "" {
+		result.addError("empty_path_node_target_name", "path node target_name is required", "", "", "", "", "", "", "")
+	}
+	if node.Wait < 0 {
+		result.addError("invalid_path_node_wait", "path node wait must be non-negative", "", "", "", "", "", "", "")
+	}
+	if node.Speed < 0 {
+		result.addError("invalid_path_node_speed", "path node speed must be non-negative", "", "", "", "", "", "", "")
+	}
+}
+
 func validateLevelUseTrigger(result *LevelValidationResult, trigger LevelUseTriggerDef) {
 	if strings.TrimSpace(trigger.ID) == "" {
 		result.addError("empty_use_trigger_id", "use trigger id is required", "", "", "", "", "", "", "")
@@ -471,6 +546,56 @@ func validateLevelTriggerVolume(result *LevelValidationResult, trigger LevelTrig
 	}
 	if trigger.Wait < 0 {
 		result.addError("invalid_trigger_volume_wait", "trigger volume wait must be non-negative", "", "", "", "", "", "", "")
+	}
+}
+
+func validateLevelDamageVolume(result *LevelValidationResult, volume LevelDamageVolumeDef) {
+	if strings.TrimSpace(volume.ID) == "" {
+		result.addError("empty_damage_volume_id", "damage volume id is required", "", "", "", "", "", "", "")
+	}
+	if volume.BoundsHalfExtents[0] <= 0 || volume.BoundsHalfExtents[1] <= 0 || volume.BoundsHalfExtents[2] <= 0 {
+		result.addError("invalid_damage_volume_bounds", "damage volume requires positive bounds half extents", "", "", "", "", "", "", "")
+	}
+	if volume.Damage < 0 {
+		result.addError("invalid_damage_volume_damage", "damage volume damage must be non-negative", "", "", "", "", "", "", "")
+	}
+	if volume.DamageInterval < 0 {
+		result.addError("invalid_damage_volume_interval", "damage volume interval must be non-negative", "", "", "", "", "", "", "")
+	}
+	if volume.Delay < 0 {
+		result.addError("invalid_damage_volume_delay", "damage volume delay must be non-negative", "", "", "", "", "", "", "")
+	}
+}
+
+func validateLevelChangeLevel(result *LevelValidationResult, change LevelChangeLevelDef) {
+	if strings.TrimSpace(change.ID) == "" {
+		result.addError("empty_change_level_id", "changelevel volume id is required", "", "", "", "", "", "", "")
+	}
+	if change.BoundsHalfExtents[0] <= 0 || change.BoundsHalfExtents[1] <= 0 || change.BoundsHalfExtents[2] <= 0 {
+		result.addError("invalid_change_level_bounds", "changelevel volume requires positive bounds half extents", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(change.TargetMap) == "" {
+		result.addError("empty_change_level_target_map", "changelevel volume target_map is required", "", "", "", "", "", "", "")
+	}
+}
+
+func validateLevelCharger(result *LevelValidationResult, charger LevelChargerDef) {
+	if strings.TrimSpace(charger.ID) == "" {
+		result.addError("empty_charger_id", "charger id is required", "", "", "", "", "", "", "")
+	}
+	if charger.BoundsHalfExtents[0] <= 0 || charger.BoundsHalfExtents[1] <= 0 || charger.BoundsHalfExtents[2] <= 0 {
+		result.addError("invalid_charger_bounds", "charger requires positive bounds half extents", "", "", "", "", "", "", "")
+	}
+	switch strings.TrimSpace(charger.ChargeKind) {
+	case "", "health", "armor":
+	default:
+		result.addError("invalid_charger_kind", "charger charge_kind must be health or armor", "", "", "", "", "", "", "")
+	}
+	if charger.Capacity < 0 {
+		result.addError("invalid_charger_capacity", "charger capacity must be non-negative", "", "", "", "", "", "", "")
+	}
+	if charger.Rate < 0 {
+		result.addError("invalid_charger_rate", "charger rate must be non-negative", "", "", "", "", "", "", "")
 	}
 }
 

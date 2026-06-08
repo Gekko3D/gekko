@@ -31,8 +31,12 @@ type AuthoredLevelSpawnResult struct {
 	WaterBodyEntities       map[string]EntityId
 	LadderVolumeEntities    map[string]EntityId
 	MovingBrushEntities     map[string]EntityId
+	PathNodeEntities        map[string]EntityId
 	UseTriggerEntities      map[string]EntityId
 	TriggerVolumeEntities   map[string]EntityId
+	DamageVolumeEntities    map[string]EntityId
+	ChangeLevelEntities     map[string]EntityId
+	ChargerEntities         map[string]EntityId
 	MultiTargetEntities     map[string]EntityId
 	TargetRelayEntities     map[string]EntityId
 	BreakableEntities       map[string]EntityId
@@ -86,8 +90,12 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		WaterBodyEntities:     make(map[string]EntityId),
 		LadderVolumeEntities:  make(map[string]EntityId),
 		MovingBrushEntities:   make(map[string]EntityId),
+		PathNodeEntities:      make(map[string]EntityId),
 		UseTriggerEntities:    make(map[string]EntityId),
 		TriggerVolumeEntities: make(map[string]EntityId),
+		DamageVolumeEntities:  make(map[string]EntityId),
+		ChangeLevelEntities:   make(map[string]EntityId),
+		ChargerEntities:       make(map[string]EntityId),
 		MultiTargetEntities:   make(map[string]EntityId),
 		TargetRelayEntities:   make(map[string]EntityId),
 		BreakableEntities:     make(map[string]EntityId),
@@ -203,6 +211,10 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		}
 		result.MovingBrushEntities[brush.ID] = entity
 	}
+	for _, node := range def.PathNodes {
+		entity := spawnAuthoredLevelPathNode(cmd, result.RootEntity, def.ID, node)
+		result.PathNodeEntities[node.ID] = entity
+	}
 	for _, trigger := range def.UseTriggers {
 		entity := spawnAuthoredLevelUseTrigger(cmd, result.RootEntity, def.ID, trigger)
 		result.UseTriggerEntities[trigger.ID] = entity
@@ -210,6 +222,18 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 	for _, trigger := range def.TriggerVolumes {
 		entity := spawnAuthoredLevelTriggerVolume(cmd, result.RootEntity, def.ID, trigger)
 		result.TriggerVolumeEntities[trigger.ID] = entity
+	}
+	for _, volume := range def.DamageVolumes {
+		entity := spawnAuthoredLevelDamageVolume(cmd, result.RootEntity, def.ID, volume)
+		result.DamageVolumeEntities[volume.ID] = entity
+	}
+	for _, change := range def.ChangeLevels {
+		entity := spawnAuthoredLevelChangeLevel(cmd, result.RootEntity, def.ID, change)
+		result.ChangeLevelEntities[change.ID] = entity
+	}
+	for _, charger := range def.Chargers {
+		entity := spawnAuthoredLevelCharger(cmd, result.RootEntity, def.ID, charger)
+		result.ChargerEntities[charger.ID] = entity
 	}
 	for _, multi := range def.MultiTargets {
 		entity := spawnAuthoredLevelMultiTarget(cmd, result.RootEntity, def.ID, multi)
@@ -382,6 +406,7 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 	if moveDirection.LenSqr() > 1e-6 {
 		moveDirection = moveDirection.Normalize()
 	}
+	rotationOrigin := mgl32.Vec3{brush.RotationOrigin[0], brush.RotationOrigin[1], brush.RotationOrigin[2]}
 	openDistance := brush.MoveDistance
 	if openDistance <= 0 {
 		openDistance = maxf(movingBrushExtentAlongDirection(halfExtents, moveDirection)*2-brush.Lip, 0)
@@ -401,12 +426,18 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 		&Parent{Entity: parent},
 		&MovingBrushComponent{
 			Kind:               brush.Kind,
+			MotionKind:         brush.MotionKind,
 			BoundsCenter:       center,
 			BoundsHalfExtents:  halfExtents,
 			MoveDirection:      moveDirection,
 			ClosedPosition:     visualOrigin,
 			ClosedBoundsCenter: center,
 			OpenOffset:         moveDirection.Mul(openDistance),
+			RotationOrigin:     rotationOrigin,
+			RotationAxis:       mgl32.Vec3{brush.RotationAxis[0], brush.RotationAxis[1], brush.RotationAxis[2]},
+			ClosedRotation:     mgl32.QuatIdent(),
+			OpenAngle:          brush.OpenAngle,
+			PathTarget:         brush.PathTarget,
 			Speed:              brush.Speed,
 			Wait:               brush.Wait,
 			Lip:                brush.Lip,
@@ -420,6 +451,11 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 			MovingBrushID: brush.ID,
 			Name:          brush.Name,
 		},
+	}
+	if brush.PathTarget != "" && brush.TargetName == "" {
+		if moving, ok := comps[3].(*MovingBrushComponent); ok {
+			moving.Open = true
+		}
 	}
 	if strings.TrimSpace(brush.AssetPath) != "" {
 		if loader == nil {
@@ -445,6 +481,39 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 		}
 	}
 	return cmd.AddEntity(comps...), nil
+}
+
+func spawnAuthoredLevelPathNode(cmd *Commands, parent EntityId, levelID string, node content.LevelPathNodeDef) EntityId {
+	position := mgl32.Vec3{node.Position[0], node.Position[1], node.Position[2]}
+	transform := TransformComponent{
+		Position: position,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&PathNodeComponent{
+			TargetName: node.TargetName,
+			Target:     node.Target,
+			Position:   position,
+			Wait:       node.Wait,
+			Speed:      node.Speed,
+			SpawnFlags: node.SpawnFlags,
+			SourceTag:  node.SourceTag,
+			Tags:       append([]string(nil), node.Tags...),
+		},
+		&AuthoredLevelPathNodeRefComponent{
+			LevelID:    levelID,
+			PathNodeID: node.ID,
+			Name:       node.Name,
+		},
+	)
 }
 
 func movingBrushExtentAlongDirection(halfExtents mgl32.Vec3, direction mgl32.Vec3) float32 {
@@ -543,6 +612,141 @@ func spawnAuthoredLevelTriggerVolume(cmd *Commands, parent EntityId, levelID str
 			LevelID:         levelID,
 			TriggerVolumeID: trigger.ID,
 			Name:            trigger.Name,
+		},
+	)
+}
+
+func spawnAuthoredLevelDamageVolume(cmd *Commands, parent EntityId, levelID string, volume content.LevelDamageVolumeDef) EntityId {
+	center := mgl32.Vec3{volume.BoundsCenter[0], volume.BoundsCenter[1], volume.BoundsCenter[2]}
+	halfExtents := mgl32.Vec3{volume.BoundsHalfExtents[0], volume.BoundsHalfExtents[1], volume.BoundsHalfExtents[2]}
+	damage := volume.Damage
+	if damage <= 0 {
+		damage = 10
+	}
+	interval := volume.DamageInterval
+	if interval <= 0 {
+		interval = 0.5
+	}
+	transform := TransformComponent{
+		Position: center,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&DamageVolumeComponent{
+			Kind:              volume.Kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			Damage:            damage,
+			DamageInterval:    interval,
+			TargetName:        volume.TargetName,
+			Target:            volume.Target,
+			Delay:             volume.Delay,
+			SpawnFlags:        volume.SpawnFlags,
+			Enabled:           !volume.StartDisabled,
+			SourceTag:         volume.SourceTag,
+			Tags:              append([]string(nil), volume.Tags...),
+		},
+		&AuthoredLevelDamageVolumeRefComponent{
+			LevelID:        levelID,
+			DamageVolumeID: volume.ID,
+			Name:           volume.Name,
+		},
+	)
+}
+
+func spawnAuthoredLevelChangeLevel(cmd *Commands, parent EntityId, levelID string, change content.LevelChangeLevelDef) EntityId {
+	center := mgl32.Vec3{change.BoundsCenter[0], change.BoundsCenter[1], change.BoundsCenter[2]}
+	halfExtents := mgl32.Vec3{change.BoundsHalfExtents[0], change.BoundsHalfExtents[1], change.BoundsHalfExtents[2]}
+	transform := TransformComponent{
+		Position: center,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&ChangeLevelVolumeComponent{
+			Kind:              change.Kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			TargetMap:         change.TargetMap,
+			Landmark:          change.Landmark,
+			TargetName:        change.TargetName,
+			SpawnFlags:        change.SpawnFlags,
+			Enabled:           !change.StartDisabled,
+			SourceTag:         change.SourceTag,
+			Tags:              append([]string(nil), change.Tags...),
+		},
+		&AuthoredLevelChangeLevelRefComponent{
+			LevelID:       levelID,
+			ChangeLevelID: change.ID,
+			Name:          change.Name,
+		},
+	)
+}
+
+func spawnAuthoredLevelCharger(cmd *Commands, parent EntityId, levelID string, charger content.LevelChargerDef) EntityId {
+	center := mgl32.Vec3{charger.BoundsCenter[0], charger.BoundsCenter[1], charger.BoundsCenter[2]}
+	halfExtents := mgl32.Vec3{charger.BoundsHalfExtents[0], charger.BoundsHalfExtents[1], charger.BoundsHalfExtents[2]}
+	chargeKind := strings.TrimSpace(charger.ChargeKind)
+	if chargeKind == "" {
+		chargeKind = "health"
+	}
+	capacity := charger.Capacity
+	if capacity <= 0 {
+		capacity = 50
+		if chargeKind == "armor" {
+			capacity = 75
+		}
+	}
+	rate := charger.Rate
+	if rate <= 0 {
+		rate = 15
+	}
+	transform := TransformComponent{
+		Position: center,
+		Rotation: mgl32.QuatIdent(),
+		Scale:    mgl32.Vec3{1, 1, 1},
+	}
+	return cmd.AddEntity(
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&ChargerComponent{
+			Kind:              charger.Kind,
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			ChargeKind:        chargeKind,
+			Capacity:          capacity,
+			Remaining:         capacity,
+			Rate:              rate,
+			TargetName:        charger.TargetName,
+			SpawnFlags:        charger.SpawnFlags,
+			Enabled:           !charger.StartDisabled,
+			SourceTag:         charger.SourceTag,
+			Tags:              append([]string(nil), charger.Tags...),
+		},
+		&AuthoredLevelChargerRefComponent{
+			LevelID:   levelID,
+			ChargerID: charger.ID,
+			Name:      charger.Name,
 		},
 	)
 }

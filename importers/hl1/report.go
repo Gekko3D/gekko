@@ -3,6 +3,7 @@ package hl1
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -152,12 +153,17 @@ func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
 		SkyFaceCount:            countSkyFaces(worldFaces),
 		EntityCounts:            importcommon.EntityCounts(classNames),
 		UnsupportedEntityCounts: importcommon.EntityCounts(unsupported),
+		MovingBrushEntityCounts: importcommon.EntityCounts(hl1MovingBrushEntityClassNames(mapImport.Entities)),
+		PathNodeEntityCounts:    importcommon.EntityCounts(hl1PathNodeEntityClassNames(mapImport.Entities)),
+		LadderEntityCounts:      importcommon.EntityCounts(hl1LadderEntityClassNames(mapImport.Entities)),
+		ChargerEntityCounts:     importcommon.EntityCounts(hl1ChargerEntityClassNames(mapImport.Entities)),
 		PickupEntityCounts:      importcommon.EntityCounts(hl1PickupClassNames(mapImport.Entities)),
 		TriggerEntityCounts:     importcommon.EntityCounts(hl1TriggerEntityClassNames(mapImport.Entities)),
 		BreakableEntityCounts:   importcommon.EntityCounts(hl1BreakableEntityClassNames(mapImport.Entities)),
 		Diagnostics:             append([]importcommon.Diagnostic(nil), mapImport.Diagnostics...),
 	}
 	appendHL1TargetDiagnostics(&report, mapImport.Entities)
+	appendHL1ReviewDiagnostics(&report, mapImport.Entities)
 	if bounds, ok := bsp.WorldBoundsHammer(); ok {
 		report.BoundsBeforeConversion = bounds
 	}
@@ -189,10 +195,8 @@ func visibleBrushEntityClass(className string) bool {
 	case "func_wall",
 		"func_illusionary",
 		"func_breakable",
-		"func_door_rotating",
 		"func_healthcharger",
-		"func_recharge",
-		"func_train":
+		"func_recharge":
 		return true
 	default:
 		return false
@@ -400,11 +404,51 @@ func hl1PickupClassNames(entities []importcommon.Entity) []string {
 	return out
 }
 
+func hl1MovingBrushEntityClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		if _, ok := hl1MovingBrushKind(entity.ClassName); ok {
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
+func hl1PathNodeEntityClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		if strings.EqualFold(entity.ClassName, "path_corner") {
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
+func hl1LadderEntityClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		if strings.EqualFold(entity.ClassName, "func_ladder") {
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
+func hl1ChargerEntityClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		if _, _, ok := hl1ChargerKind(entity.ClassName); ok {
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
 func hl1TriggerEntityClassNames(entities []importcommon.Entity) []string {
 	out := make([]string, 0)
 	for _, entity := range entities {
 		switch strings.ToLower(strings.TrimSpace(entity.ClassName)) {
-		case "trigger_once", "trigger_multiple", "multi_manager", "trigger_relay":
+		case "trigger_once", "trigger_multiple", "trigger_hurt", "trigger_changelevel", "multi_manager", "trigger_relay":
 			out = append(out, strings.ToLower(entity.ClassName))
 		}
 	}
@@ -472,6 +516,113 @@ func appendHL1TargetDiagnostics(report *importcommon.ImportReport, entities []im
 	}
 	report.UnresolvedTargetCounts = importcommon.NamedCounts(unresolvedTargets)
 	report.SkippedMultiTargetCounts = importcommon.NamedCounts(skippedMultiTargets)
+}
+
+func appendHL1ReviewDiagnostics(report *importcommon.ImportReport, entities []importcommon.Entity) {
+	if report == nil {
+		return
+	}
+	pathCornerNames := map[string]struct{}{}
+	pathCornerCount := 0
+	for _, entity := range entities {
+		if !strings.EqualFold(entity.ClassName, "path_corner") {
+			continue
+		}
+		pathCornerCount++
+		if targetName := hl1EntityKey(entity, "targetname"); targetName != "" {
+			pathCornerNames[targetName] = struct{}{}
+		}
+	}
+	trainCount := 0
+	unsupportedCounts := map[string]int{}
+	for _, entity := range entities {
+		className := strings.ToLower(strings.TrimSpace(entity.ClassName))
+		if className == "" {
+			continue
+		}
+		if !supportedClass(className) {
+			unsupportedCounts[className]++
+		}
+		if _, ok := hl1MovingBrushKind(className); ok && entity.BrushModelID <= 0 {
+			report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+				Severity: importcommon.SeverityWarning,
+				Code:     "hl1.moving_brush_model_missing",
+				Subject:  hl1EntityDiagnosticSubject(entity, className),
+				Message:  "moving brush entity has no BSP brush model and cannot emit a visual/gameplay brush",
+			})
+		}
+		switch className {
+		case "func_train":
+			trainCount++
+			pathTarget := hl1MovingBrushPathTarget(entity)
+			if pathTarget == "" {
+				report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+					Severity: importcommon.SeverityWarning,
+					Code:     "hl1.train_path_target_missing",
+					Subject:  hl1EntityDiagnosticSubject(entity, className),
+					Message:  "func_train has no target path_corner, so path motion cannot start",
+				})
+			} else if _, ok := pathCornerNames[pathTarget]; !ok {
+				report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+					Severity: importcommon.SeverityWarning,
+					Code:     "hl1.train_path_target_unresolved",
+					Subject:  className + ":" + pathTarget,
+					Message:  "func_train target does not match any imported path_corner targetname",
+				})
+			}
+		case "path_corner":
+			if targetName := hl1EntityKey(entity, "targetname"); targetName == "" {
+				report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+					Severity: importcommon.SeverityWarning,
+					Code:     "hl1.path_corner_targetname_missing",
+					Subject:  hl1EntityDiagnosticSubject(entity, className),
+					Message:  "path_corner has no targetname and cannot be addressed by func_train/path links",
+				})
+			}
+			if next := hl1EntityKey(entity, "target"); next != "" {
+				if _, ok := pathCornerNames[next]; !ok {
+					report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+						Severity: importcommon.SeverityWarning,
+						Code:     "hl1.path_corner_next_unresolved",
+						Subject:  className + ":" + next,
+						Message:  "path_corner target does not match any imported path_corner targetname",
+					})
+				}
+			}
+		}
+	}
+	if trainCount > 0 && pathCornerCount == 0 {
+		report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+			Severity: importcommon.SeverityWarning,
+			Code:     "hl1.train_path_nodes_missing",
+			Subject:  "func_train",
+			Message:  "func_train entities exist but no path_corner entities were found in the BSP",
+		})
+	}
+	unsupportedClasses := make([]string, 0, len(unsupportedCounts))
+	for className := range unsupportedCounts {
+		unsupportedClasses = append(unsupportedClasses, className)
+	}
+	sort.Strings(unsupportedClasses)
+	for _, className := range unsupportedClasses {
+		count := unsupportedCounts[className]
+		report.Diagnostics = append(report.Diagnostics, importcommon.Diagnostic{
+			Severity: importcommon.SeverityInfo,
+			Code:     "hl1.entity_unsupported",
+			Subject:  className,
+			Message:  fmt.Sprintf("%d entity/entities of this class are cataloged but not imported into typed gameplay yet", count),
+		})
+	}
+}
+
+func hl1EntityDiagnosticSubject(entity importcommon.Entity, className string) string {
+	if targetName := hl1EntityKey(entity, "targetname"); targetName != "" {
+		return className + ":" + targetName
+	}
+	if model := hl1EntityKey(entity, "model"); model != "" {
+		return className + ":" + model
+	}
+	return className
 }
 
 func hl1TargetNameSet(entities []importcommon.Entity) map[string]struct{} {
@@ -567,6 +718,7 @@ func supportedClass(className string) bool {
 		"func_wall",
 		"func_illusionary",
 		"func_breakable",
+		"func_ladder",
 		"func_door",
 		"func_door_rotating",
 		"func_button",
@@ -574,8 +726,10 @@ func supportedClass(className string) bool {
 		"func_recharge",
 		"func_plat",
 		"func_train",
+		"path_corner",
 		"trigger_once",
 		"trigger_multiple",
+		"trigger_hurt",
 		"multi_manager",
 		"trigger_relay",
 		"momentary_door":
