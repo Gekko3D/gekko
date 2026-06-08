@@ -1585,6 +1585,51 @@ func TestVoxelRtSystemUsesObjectScopedGeometryForTerrainChunksSharingModel(t *te
 	}
 }
 
+func TestVoxelRtSystemSharesTerrainGeometryWhenRequested(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+	state.RtApp.BufferManager = &gpu_rt.GpuBufferManager{}
+
+	modelID := server.CreateCubeModel(32, 5, 32, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{96, 128, 96, 255})
+	entity := cmd.AddEntity(
+		&TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&VoxelModelComponent{
+			VoxelModel:             modelID,
+			VoxelPalette:           paletteID,
+			IsTerrainChunk:         true,
+			ShareTerrainGeometry:   true,
+			RetainRendererGeometry: true,
+			TerrainGroupID:         44,
+			TerrainChunkCoord:      [3]int{0, 0, 0},
+			TerrainChunkSize:       32,
+		},
+	)
+	app.FlushCommands()
+
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
+
+	source, ok := server.GetVoxelGeometry(modelID)
+	if !ok || source.XBrickMap == nil {
+		t.Fatal("expected source geometry")
+	}
+	obj := state.instanceMap[entity]
+	if obj == nil {
+		t.Fatal("expected shared terrain entity to sync")
+	}
+	if obj.XBrickMap != source.XBrickMap {
+		t.Fatal("expected shared terrain geometry to reuse the source XBrickMap")
+	}
+	if state.instanceObjectScopedGeometry[entity] {
+		t.Fatal("expected runtime state to mark shared terrain geometry as non-object-scoped")
+	}
+	if stats := state.RtApp.BufferManager.RetainedVoxelMapStats(); stats.Activations != 1 || stats.Misses != 1 {
+		t.Fatalf("expected one retained-map activation miss for new geometry, got %+v", stats)
+	}
+}
+
 func TestEntityLODSelectionSystemUpdatesRuntimeSelection(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

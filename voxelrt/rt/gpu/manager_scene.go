@@ -649,11 +649,11 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 	nextShadowLayer := uint32(0)
 	for i := range scene.Lights {
 		l := &scene.Lights[i]
-			lightType := uint32(l.Params[2])
-			pos := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
-			dir := mgl32.Vec3{l.Direction[0], l.Direction[1], l.Direction[2]}
-			emitterLinkID := l.ShadowMeta[3]
-			l.ShadowMeta = [4]uint32{0, 0, 0, emitterLinkID}
+		lightType := uint32(l.Params[2])
+		pos := mgl32.Vec3{l.Position[0], l.Position[1], l.Position[2]}
+		dir := mgl32.Vec3{l.Direction[0], l.Direction[1], l.Direction[2]}
+		emitterLinkID := l.ShadowMeta[3]
+		l.ShadowMeta = [4]uint32{0, 0, 0, emitterLinkID}
 		l.ViewProj = [16]float32{}
 		l.InvViewProj = [16]float32{}
 		for c := range l.DirectionalCascades {

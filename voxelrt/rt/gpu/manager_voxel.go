@@ -13,9 +13,13 @@ import (
 
 const materialBlockCapacity = 256
 const payloadBytesPerBrick = volume.BrickSize * volume.BrickSize * volume.BrickSize
+const DefaultRetainedVoxelMapBudgetSectors = 4096
 
 func materialTableHasTransparency(table []core.Material) bool {
-	for _, mat := range table {
+	for i, mat := range table {
+		if i == 0 {
+			continue
+		}
 		if mat.Transparency > 0.001 || mat.Transmission > 0.001 {
 			return true
 		}
@@ -55,6 +59,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	recreated := false
 	uploadedAny := false
 	materialBufRecreated := false
+	m.ensureRetainedVoxelMaps()
 	m.VoxelSectorsUploaded = 0
 	m.VoxelBricksUploaded = 0
 	m.VoxelDirtySectorsPending = 0
@@ -76,27 +81,13 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		activeObjects[obj] = true
 		activeMaps[obj.XBrickMap] = true
 	}
+	m.evictRetainedVoxelMaps(activeMaps)
 	for xbm, alloc := range m.Allocations {
 		if !activeMaps[xbm] {
-			// Free slots based on what was ACTUALLY allocated to the GPU,
-			// not the current CPU state (which could have been cleared)
-			for sKey, sector := range alloc.Sectors {
-				if info, ok := m.SectorToInfo[sector]; ok {
-					m.SectorAlloc.FreeSlot(info.SlotIndex)
-					m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
-					delete(m.SectorToInfo, sector)
-				}
-				// Free bricks payloads
-				if bPtrs, has := alloc.Bricks[sKey]; has {
-					for i := 0; i < 64; i++ {
-						if brick := bPtrs[i]; brick != nil {
-							m.releaseBrickSlot(brick)
-							m.releaseVoxelAuxSlot(brick)
-						}
-					}
-				}
+			if _, retain := m.retainedVoxelMaps[xbm]; retain {
+				continue
 			}
-			delete(m.Allocations, xbm)
+			m.releaseVoxelMapAllocation(xbm, alloc)
 		}
 	}
 	for obj, alloc := range m.MaterialAllocations {
@@ -402,6 +393,114 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	return recreated
 }
 
+func (m *GpuBufferManager) ensureRetainedVoxelMaps() {
+	if m == nil {
+		return
+	}
+	if m.retainedVoxelMaps == nil {
+		m.retainedVoxelMaps = make(map[*volume.XBrickMap]*retainedVoxelMapEntry)
+	}
+}
+
+func (m *GpuBufferManager) ActivateRetainedVoxelMap(xbm *volume.XBrickMap) bool {
+	if m == nil || xbm == nil {
+		return false
+	}
+	m.ensureRetainedVoxelMaps()
+	m.retainedVoxelMapClock++
+	m.retainedVoxelMapStats.Activations++
+	if entry := m.retainedVoxelMaps[xbm]; entry != nil {
+		entry.LastUse = m.retainedVoxelMapClock
+		if _, ok := m.Allocations[xbm]; ok {
+			m.retainedVoxelMapStats.Hits++
+			return true
+		}
+		m.retainedVoxelMapStats.Misses++
+		return false
+	}
+	m.retainedVoxelMapStats.Misses++
+	return false
+}
+
+func (m *GpuBufferManager) RetainVoxelMap(xbm *volume.XBrickMap) bool {
+	if m == nil || xbm == nil {
+		return false
+	}
+	m.ensureRetainedVoxelMaps()
+	m.retainedVoxelMapClock++
+	m.retainedVoxelMapStats.RetainRequests++
+	allocated := false
+	if _, ok := m.Allocations[xbm]; ok {
+		allocated = true
+		m.retainedVoxelMapStats.RetainRequestsAllocated++
+	}
+	entry := m.retainedVoxelMaps[xbm]
+	if entry == nil {
+		entry = &retainedVoxelMapEntry{}
+		m.retainedVoxelMaps[xbm] = entry
+	}
+	entry.SectorCount = len(xbm.Sectors)
+	entry.LastUse = m.retainedVoxelMapClock
+	return allocated
+}
+
+func (m *GpuBufferManager) ReleaseRetainedVoxelMap(xbm *volume.XBrickMap) {
+	if m == nil || xbm == nil || len(m.retainedVoxelMaps) == 0 {
+		return
+	}
+	delete(m.retainedVoxelMaps, xbm)
+}
+
+func (m *GpuBufferManager) RetainedVoxelMapStats() RetainedVoxelMapStats {
+	if m == nil {
+		return RetainedVoxelMapStats{}
+	}
+	m.ensureRetainedVoxelMaps()
+	stats := m.retainedVoxelMapStats
+	for _, entry := range m.retainedVoxelMaps {
+		if entry == nil {
+			continue
+		}
+		stats.Entries++
+		stats.Sectors += entry.SectorCount
+	}
+	return stats
+}
+
+func (m *GpuBufferManager) evictRetainedVoxelMaps(activeMaps map[*volume.XBrickMap]bool) {
+	if m == nil || len(m.retainedVoxelMaps) == 0 || m.RetainedVoxelMapBudgetSectors <= 0 {
+		return
+	}
+	for {
+		stats := m.RetainedVoxelMapStats()
+		if stats.Sectors <= m.RetainedVoxelMapBudgetSectors {
+			return
+		}
+		var victimMap *volume.XBrickMap
+		var victimEntry *retainedVoxelMapEntry
+		for xbm, entry := range m.retainedVoxelMaps {
+			if xbm == nil || entry == nil {
+				continue
+			}
+			if activeMaps != nil && activeMaps[xbm] {
+				continue
+			}
+			if victimEntry == nil || entry.LastUse < victimEntry.LastUse {
+				victimMap = xbm
+				victimEntry = entry
+			}
+		}
+		if victimMap == nil {
+			return
+		}
+		delete(m.retainedVoxelMaps, victimMap)
+		if alloc := m.Allocations[victimMap]; alloc != nil && (activeMaps == nil || !activeMaps[victimMap]) {
+			m.releaseVoxelMapAllocation(victimMap, alloc)
+		}
+		m.retainedVoxelMapStats.Evictions++
+	}
+}
+
 const objectParamsSizeBytes = 128
 
 func buildObjectParamsBytes(obj *core.VoxelObject, alloc *ObjectGpuAllocation, matAlloc *MaterialGpuAllocation) []byte {
@@ -427,6 +526,31 @@ func (m *GpuBufferManager) releaseBrickSlot(brick *volume.Brick) {
 		return
 	}
 	m.PayloadAlloc[slot.Page].FreeSlot(slot.Slot)
+}
+
+func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, alloc *ObjectGpuAllocation) {
+	if m == nil || xbm == nil || alloc == nil {
+		return
+	}
+	// Free slots based on what was actually allocated to the GPU, not the
+	// current CPU state, which may already have been cleared or replaced.
+	for sKey, sector := range alloc.Sectors {
+		if info, ok := m.SectorToInfo[sector]; ok {
+			m.SectorAlloc.FreeSlot(info.SlotIndex)
+			m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
+			delete(m.SectorToInfo, sector)
+		}
+		if bPtrs, has := alloc.Bricks[sKey]; has {
+			for i := 0; i < 64; i++ {
+				if brick := bPtrs[i]; brick != nil {
+					m.releaseBrickSlot(brick)
+					m.releaseVoxelAuxSlot(brick)
+				}
+			}
+		}
+	}
+	delete(m.Allocations, xbm)
+	delete(m.retainedVoxelMaps, xbm)
 }
 
 func (m *GpuBufferManager) releaseVoxelAuxSlot(brick *volume.Brick) {

@@ -614,6 +614,107 @@ func TestReleaseVoxelAuxSlotReturnsCapacityToAllocator(t *testing.T) {
 	}
 }
 
+func TestRetainedVoxelMapEvictsInactiveLeastRecentAllocationBySectorBudget(t *testing.T) {
+	oldMap := volume.NewXBrickMap()
+	oldMap.SetVoxel(0, 0, 0, 1)
+	newMap := volume.NewXBrickMap()
+	newMap.SetVoxel(0, 0, 0, 1)
+	newMap.SetVoxel(volume.SectorSize, 0, 0, 1)
+
+	oldAlloc := testObjectGpuAllocationForMap(oldMap)
+	newAlloc := testObjectGpuAllocationForMap(newMap)
+	oldSector := firstSectorForTest(oldMap)
+	oldBrick := firstBrickForTest(oldSector)
+
+	m := &GpuBufferManager{
+		RetainedVoxelMapBudgetSectors: 2,
+		VoxelPayloadPageCount:         1,
+		Allocations: map[*volume.XBrickMap]*ObjectGpuAllocation{
+			oldMap: oldAlloc,
+			newMap: newAlloc,
+		},
+		SectorToInfo: map[*volume.Sector]SectorGpuInfo{},
+		BrickToSlot: map[*volume.Brick]PayloadSlot{
+			oldBrick: {Page: 0, Slot: 3},
+		},
+		BrickToAuxSlot: map[*volume.Brick]uint32{
+			oldBrick: 5,
+		},
+	}
+	m.PayloadAlloc[0].Tail = 4
+	m.VoxelAuxAlloc.Tail = 6
+	for _, sector := range oldAlloc.Sectors {
+		m.SectorToInfo[sector] = SectorGpuInfo{SlotIndex: 1, BrickTableIndex: 64}
+	}
+	for _, sector := range newAlloc.Sectors {
+		m.SectorToInfo[sector] = SectorGpuInfo{SlotIndex: 2, BrickTableIndex: 128}
+	}
+
+	if !m.RetainVoxelMap(oldMap) {
+		t.Fatal("expected old map retain to observe an existing allocation")
+	}
+	if !m.RetainVoxelMap(newMap) {
+		t.Fatal("expected new map retain to observe an existing allocation")
+	}
+
+	m.evictRetainedVoxelMaps(nil)
+
+	stats := m.RetainedVoxelMapStats()
+	if stats.Entries != 1 || stats.Sectors != 2 || stats.Evictions != 1 {
+		t.Fatalf("expected only newer two-sector map retained after eviction, got %+v", stats)
+	}
+	if _, ok := m.Allocations[oldMap]; ok {
+		t.Fatal("expected old map GPU allocation to be released")
+	}
+	if _, ok := m.Allocations[newMap]; !ok {
+		t.Fatal("expected new map GPU allocation to remain")
+	}
+	if _, ok := m.BrickToSlot[oldBrick]; ok {
+		t.Fatal("expected old brick payload slot mapping to be released")
+	}
+	if slot := m.PayloadAlloc[0].Alloc(); slot != 3 {
+		t.Fatalf("expected released payload slot 3 to be reusable, got %d", slot)
+	}
+	if slot := m.VoxelAuxAlloc.Alloc(); slot != 5 {
+		t.Fatalf("expected released aux slot 5 to be reusable, got %d", slot)
+	}
+}
+
+func testObjectGpuAllocationForMap(xbm *volume.XBrickMap) *ObjectGpuAllocation {
+	alloc := &ObjectGpuAllocation{
+		Sectors: make(map[[3]int]*volume.Sector),
+		Bricks:  make(map[[3]int]*[64]*volume.Brick),
+	}
+	for key, sector := range xbm.Sectors {
+		alloc.Sectors[key] = sector
+		brickPtrs := &[64]*volume.Brick{}
+		for i := 0; i < 64; i++ {
+			brickPtrs[i] = sector.GetBrick(i%4, (i/4)%4, i/16)
+		}
+		alloc.Bricks[key] = brickPtrs
+	}
+	return alloc
+}
+
+func firstSectorForTest(xbm *volume.XBrickMap) *volume.Sector {
+	for _, sector := range xbm.Sectors {
+		return sector
+	}
+	return nil
+}
+
+func firstBrickForTest(sector *volume.Sector) *volume.Brick {
+	if sector == nil {
+		return nil
+	}
+	for i := 0; i < 64; i++ {
+		if brick := sector.GetBrick(i%4, (i/4)%4, i/16); brick != nil {
+			return brick
+		}
+	}
+	return nil
+}
+
 func bakedNormalByte(buf []byte, voxelIdx int) byte {
 	normalBase := volume.DenseOccupancyWordCount * 4
 	return buf[normalBase+voxelIdx]

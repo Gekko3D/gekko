@@ -19,7 +19,10 @@ type AuthoredImportedWorldSpawnDef struct {
 	DisableTerrainMetadata  bool
 	DisableShadows          bool
 	DisableOcclusionCulling bool
+	ShareTerrainGeometry    bool
+	RetainRendererGeometry  bool
 	PreparedGeometry        *volume.XBrickMap
+	PreparedGeometryAsset   AssetId
 	Timing                  *AuthoredImportedWorldSpawnTiming
 }
 
@@ -56,20 +59,22 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 			def.Timing.VoxelCount = len(def.Chunk.Voxels)
 		}
 	}
-	overrideGeometry := AssetId{}
+	overrideGeometry := def.PreparedGeometryAsset
 	if assets := assetServerFromApp(cmd.app); assets != nil {
-		xbm := def.PreparedGeometry
-		if xbm == nil {
-			buildStart := time.Now()
-			xbm = ImportedWorldChunkToXBrickMap(def.Chunk)
-			if def.Timing != nil {
-				def.Timing.GeometryBuildDuration += time.Since(buildStart)
+		if overrideGeometry == (AssetId{}) {
+			xbm := def.PreparedGeometry
+			if xbm == nil {
+				buildStart := time.Now()
+				xbm = ImportedWorldChunkToXBrickMap(def.Chunk)
+				if def.Timing != nil {
+					def.Timing.GeometryBuildDuration += time.Since(buildStart)
+				}
 			}
-		}
-		registerStart := time.Now()
-		overrideGeometry = assets.RegisterSharedVoxelGeometry(xbm, "")
-		if def.Timing != nil {
-			def.Timing.GeometryRegistrationDuration += time.Since(registerStart)
+			registerStart := time.Now()
+			overrideGeometry = assets.RegisterSharedVoxelGeometry(xbm, "")
+			if def.Timing != nil {
+				def.Timing.GeometryRegistrationDuration += time.Since(registerStart)
+			}
 		}
 	}
 	isTerrainChunk := !def.DisableTerrainMetadata
@@ -104,6 +109,8 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 			ShadowGroupID:           def.ShadowGroupID,
 			ShadowSeamWorldEpsilon:  shadowSeamWorldEpsilon,
 			IsTerrainChunk:          isTerrainChunk,
+			ShareTerrainGeometry:    def.ShareTerrainGeometry,
+			RetainRendererGeometry:  def.RetainRendererGeometry,
 			TerrainGroupID:          terrainGroupID,
 			TerrainChunkCoord:       terrainChunkCoord,
 			TerrainChunkSize:        terrainChunkSize,

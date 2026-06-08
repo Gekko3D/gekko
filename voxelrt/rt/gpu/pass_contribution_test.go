@@ -85,10 +85,13 @@ func TestMaterialTableHasTransparencyDetectsTransparentEntries(t *testing.T) {
 	if materialTableHasTransparency([]core.Material{{}}) {
 		t.Fatal("expected default material to be opaque")
 	}
-	if !materialTableHasTransparency([]core.Material{{Transparency: 0.2}}) {
+	if materialTableHasTransparency([]core.Material{{Transparency: 1.0}}) {
+		t.Fatal("expected air material slot 0 to be ignored for overlay classification")
+	}
+	if !materialTableHasTransparency([]core.Material{{}, {Transparency: 0.2}}) {
 		t.Fatal("expected transparency to be detected")
 	}
-	if !materialTableHasTransparency([]core.Material{{Transmission: 0.5}}) {
+	if !materialTableHasTransparency([]core.Material{{}, {Transmission: 0.5}}) {
 		t.Fatal("expected transmission-only material to be treated as transparent")
 	}
 }

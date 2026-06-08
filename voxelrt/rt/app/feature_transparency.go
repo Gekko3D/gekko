@@ -93,6 +93,12 @@ func (f *TransparencyFeature) RenderPassStage(a *App, stage FeaturePassStage, pa
 	if transparentPipeline == nil || !a.BufferManager.HasVisibleTransparentOverlay(a.Scene) {
 		return nil
 	}
+	if !f.bindGroupsCurrent(a) {
+		f.rebuildBindGroups(a)
+	}
+	if !f.bindGroupsCurrent(a) {
+		return nil
+	}
 	if a.BufferManager.TransparentBG0 == nil || a.BufferManager.TransparentBG1 == nil || a.BufferManager.TransparentBG2 == nil || a.BufferManager.TransparentBG3 == nil {
 		return nil
 	}

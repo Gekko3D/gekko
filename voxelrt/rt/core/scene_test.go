@@ -263,6 +263,24 @@ func TestSceneCommitBuildsTransparentSubsetAndBVH(t *testing.T) {
 	}
 }
 
+func TestVoxelObjectHasTransparencyIgnoresAirMaterialSlot(t *testing.T) {
+	obj := NewVoxelObject()
+	obj.MaterialTable = []Material{
+		{Transparency: 1.0},
+	}
+	if obj.HasTransparency() {
+		t.Fatal("expected air material slot 0 to be ignored for object transparency classification")
+	}
+
+	obj.MaterialTable = []Material{
+		{Transparency: 1.0},
+		{Transmission: 0.25},
+	}
+	if !obj.HasTransparency() {
+		t.Fatal("expected transparent material slot 1 to mark object transparent")
+	}
+}
+
 func TestSharedXBrickMap(t *testing.T) {
 	// Create shared geometry
 	sharedMap := volume.NewXBrickMap()

@@ -585,6 +585,18 @@ Implementation note, 2026-06-08:
 - `gasworks_128` visual checkpoint then passed while moving immediately during
   startup; sector proxies were replaced by detailed chunks without crashes or
   persistent low-LOD objects.
+- Later GPU stress runs exposed the same validation class in `GBuffer Scene
+  BG0`. Source-buffer tracking, pass-boundary freshness checks, retired
+  bind-group pinning, and temporary lifetime instrumentation were used to
+  isolate the issue.
+- The final crash cause was an allocator bug, not streaming lifetime itself:
+  geometric buffer growth could pick an unaligned final size after the
+  requested size had already been aligned. The observed bad `InstancesBuf`
+  allocation was `39366` bytes, then a fresh `GBuffer Scene BG0` was created
+  from that buffer and failed validation at submit. Managed GPU buffer
+  allocation sizes are now aligned after geometric growth as well.
+- After the allocator alignment fix, `gasworks_128` ran without the previous
+  `Transparent Scene BG0` / `GBuffer Scene BG0` validation crashes.
 
 #### Step 9: Add Clipmap Provider For Open Worlds
 

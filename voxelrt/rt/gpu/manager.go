@@ -501,26 +501,46 @@ type GpuBufferManager struct {
 	MaterialAlloc       SlotAllocator // Allocates blocks of 256 materials (16KB each)
 	Allocations         map[*volume.XBrickMap]*ObjectGpuAllocation
 	MaterialAllocations map[*core.VoxelObject]*MaterialGpuAllocation
+	retainedVoxelMaps   map[*volume.XBrickMap]*retainedVoxelMapEntry
 
 	// Smooth streaming state
-	SectorsPerFrame            uint32
-	lastTotalSectors           int
-	lastSceneRevision          uint64
-	gridDataPool               []byte
-	TileLightTilesX            uint32
-	TileLightTilesY            uint32
-	TileLightAvgCount          int
-	TileLightMaxCount          int
-	VoxelSectorsUploaded       int
-	VoxelBricksUploaded        int
-	VoxelDirtySectorsPending   int
-	VoxelDirtyBricksPending    int
-	VoxelUniformSparseBricks   int
-	VoxelPayloadSparseBricks   int
-	VoxelPayloadUploadsSkipped int
-	VoxelPayloadBytesAvoided   int
-	retiredBuffers             []retiredBuffer
-	retiredBindGroups          []retiredBindGroup
+	SectorsPerFrame               uint32
+	lastTotalSectors              int
+	lastSceneRevision             uint64
+	gridDataPool                  []byte
+	TileLightTilesX               uint32
+	TileLightTilesY               uint32
+	TileLightAvgCount             int
+	TileLightMaxCount             int
+	VoxelSectorsUploaded          int
+	VoxelBricksUploaded           int
+	VoxelDirtySectorsPending      int
+	VoxelDirtyBricksPending       int
+	VoxelUniformSparseBricks      int
+	VoxelPayloadSparseBricks      int
+	VoxelPayloadUploadsSkipped    int
+	VoxelPayloadBytesAvoided      int
+	RetainedVoxelMapBudgetSectors int
+	retainedVoxelMapClock         uint64
+	retainedVoxelMapStats         RetainedVoxelMapStats
+	retiredBuffers                []retiredBuffer
+	retiredBindGroups             []retiredBindGroup
+}
+
+type retainedVoxelMapEntry struct {
+	SectorCount int
+	LastUse     uint64
+}
+
+type RetainedVoxelMapStats struct {
+	Entries                 int
+	Sectors                 int
+	Activations             int
+	Hits                    int
+	Misses                  int
+	RetainRequests          int
+	RetainRequestsAllocated int
+	Evictions               int
 }
 
 type caVolumeLayout struct {
@@ -593,17 +613,19 @@ func (a *SlotAllocator) FreeSlot(idx uint32) {
 func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBufferManager {
 	pageSize := computeVoxelPayloadPageSize(device.GetLimits().Limits.MaxTextureDimension3D)
 	m := &GpuBufferManager{
-		Device:                device,
-		Profiler:              profiler,
-		LightingQuality:       core.DefaultLightingQualityConfig(),
-		BatchMode:             false,
-		SectorsPerFrame:       MaxUpdatesPerFrame,
-		VoxelPayloadPageSize:  pageSize,
-		VoxelPayloadPageCount: MaxVoxelAtlasPages,
-		VoxelPayloadBricks:    pageSize / volume.BrickSize,
+		Device:                        device,
+		Profiler:                      profiler,
+		LightingQuality:               core.DefaultLightingQualityConfig(),
+		BatchMode:                     false,
+		SectorsPerFrame:               MaxUpdatesPerFrame,
+		RetainedVoxelMapBudgetSectors: DefaultRetainedVoxelMapBudgetSectors,
+		VoxelPayloadPageSize:          pageSize,
+		VoxelPayloadPageCount:         MaxVoxelAtlasPages,
+		VoxelPayloadBricks:            pageSize / volume.BrickSize,
 	}
 	m.Allocations = make(map[*volume.XBrickMap]*ObjectGpuAllocation)
 	m.MaterialAllocations = make(map[*core.VoxelObject]*MaterialGpuAllocation)
+	m.retainedVoxelMaps = make(map[*volume.XBrickMap]*retainedVoxelMapEntry)
 	m.PendingUpdates = make(map[*volume.XBrickMap]bool)
 	m.SectorToInfo = make(map[*volume.Sector]SectorGpuInfo)
 	m.BrickToSlot = make(map[*volume.Brick]PayloadSlot)

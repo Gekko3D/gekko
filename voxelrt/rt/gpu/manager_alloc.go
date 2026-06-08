@@ -7,13 +7,7 @@ import (
 )
 
 func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []byte, usage wgpu.BufferUsage, headroom int) bool {
-	neededSize := uint64(len(data) + headroom)
-	if neededSize < 256 {
-		neededSize = 256
-	}
-	if neededSize%256 != 0 {
-		neededSize += 256 - (neededSize % 256)
-	}
+	neededSize := alignGpuBufferAllocationSize(uint64(len(data) + headroom))
 
 	current := *buf
 	// Always add CopySrc/CopyDst to allow resizing copies and writes
@@ -29,6 +23,7 @@ func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []b
 				newSize = growthSize
 			}
 		}
+		newSize = alignGpuBufferAllocationSize(newSize)
 
 		if newSize > SafeBufferSizeLimit {
 			fmt.Printf("WARNING: Buffer %s allocation size %d exceeds safety limit %d\n", name, newSize, SafeBufferSizeLimit)
@@ -81,6 +76,16 @@ func (m *GpuBufferManager) ensureBuffer(name string, buf **wgpu.Buffer, data []b
 	}
 }
 
+func alignGpuBufferAllocationSize(size uint64) uint64 {
+	if size < 256 {
+		size = 256
+	}
+	if size%256 != 0 {
+		size += 256 - (size % 256)
+	}
+	return size
+}
+
 func (m *GpuBufferManager) retireBuffer(buf *wgpu.Buffer) {
 	if m == nil || buf == nil {
 		return
@@ -99,9 +104,10 @@ func (m *GpuBufferManager) retireBindGroupWithBuffers(bindGroup *wgpu.BindGroup,
 	if m == nil || bindGroup == nil {
 		return
 	}
+	pinned := nonNilBuffers(buffers)
 	m.retiredBindGroups = append(m.retiredBindGroups, retiredBindGroup{
 		BindGroup:  bindGroup,
-		Buffers:    nonNilBuffers(buffers),
+		Buffers:    pinned,
 		FramesLeft: RetiredBufferFrameDelay,
 	})
 }
@@ -144,6 +150,10 @@ func (m *GpuBufferManager) advanceRetiredBuffers() {
 			}
 			if done {
 				if retired.Buffer != nil {
+					if m.bufferReferencedByLiveBindGroup(retired.Buffer) {
+						kept = append(kept, retired)
+						continue
+					}
 					if m.bufferPinnedByRetiredBindGroup(retired.Buffer) {
 						kept = append(kept, retired)
 						continue
@@ -157,6 +167,10 @@ func (m *GpuBufferManager) advanceRetiredBuffers() {
 		}
 		if retired.FramesLeft <= 0 && retired.Queue == nil {
 			if retired.Buffer != nil {
+				if m.bufferReferencedByLiveBindGroup(retired.Buffer) {
+					kept = append(kept, retired)
+					continue
+				}
 				if m.bufferPinnedByRetiredBindGroup(retired.Buffer) {
 					kept = append(kept, retired)
 					continue
@@ -187,6 +201,28 @@ func (m *GpuBufferManager) bufferPinnedByRetiredBindGroup(buffer *wgpu.Buffer) b
 	return false
 }
 
+func (m *GpuBufferManager) bufferReferencedByLiveBindGroup(buffer *wgpu.Buffer) bool {
+	if m == nil || buffer == nil {
+		return false
+	}
+	liveBuffers := []*wgpu.Buffer{
+		m.gBufferBG0Camera,
+		m.gBufferBG0Instances,
+		m.gBufferBG0BVHNodes,
+		m.transparentBG0Camera,
+		m.transparentBG0Instances,
+		m.transparentBG0BVHNodes,
+		m.transparentBG0Lights,
+		m.transparentBG0ShadowLayerParam,
+	}
+	for _, live := range liveBuffers {
+		if live == buffer {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *GpuBufferManager) advanceRetiredBindGroups() {
 	if len(m.retiredBindGroups) == 0 {
 		return
@@ -204,6 +240,10 @@ func (m *GpuBufferManager) advanceRetiredBindGroups() {
 			}
 			if done {
 				if retired.BindGroup != nil {
+					if m.bindGroupReferencedByLiveState(retired.BindGroup) {
+						kept = append(kept, retired)
+						continue
+					}
 					retired.BindGroup.Release()
 				}
 				continue
@@ -213,6 +253,10 @@ func (m *GpuBufferManager) advanceRetiredBindGroups() {
 		}
 		if retired.FramesLeft <= 0 && retired.Queue == nil {
 			if retired.BindGroup != nil {
+				if m.bindGroupReferencedByLiveState(retired.BindGroup) {
+					kept = append(kept, retired)
+					continue
+				}
 				retired.BindGroup.Release()
 			}
 			continue
@@ -223,6 +267,37 @@ func (m *GpuBufferManager) advanceRetiredBindGroups() {
 		m.retiredBindGroups[i] = retiredBindGroup{}
 	}
 	m.retiredBindGroups = kept
+}
+
+func (m *GpuBufferManager) bindGroupReferencedByLiveState(bindGroup *wgpu.BindGroup) bool {
+	if m == nil || bindGroup == nil {
+		return false
+	}
+	liveBindGroups := []*wgpu.BindGroup{
+		m.GBufferBindGroup0,
+		m.GBufferBindGroup,
+		m.GBufferBindGroup2,
+		m.TransparentBG0,
+		m.TransparentBG1,
+		m.TransparentBG2,
+		m.TransparentBG3,
+		m.LightingBindGroup,
+		m.LightingBindGroup2,
+		m.LightingBindGroupMaterial,
+		m.LightingTileBindGroup,
+		m.TiledLightCullBindGroup0,
+		m.TiledLightCullBindGroup1,
+		m.ShadowBindGroup0,
+		m.ShadowBindGroup1,
+		m.ShadowBindGroup2,
+		m.DebugBindGroup0,
+	}
+	for _, live := range liveBindGroups {
+		if live == bindGroup {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *GpuBufferManager) MarkRetiredBuffersSubmitted(queue *wgpu.Queue, submissionIndex wgpu.SubmissionIndex) {

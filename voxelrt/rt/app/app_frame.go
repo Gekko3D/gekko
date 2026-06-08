@@ -663,9 +663,14 @@ func (a *App) recordGBufferPass(encoder *wgpu.CommandEncoder, frame *FrameContex
 		}
 		manager.CreateGBufferBindGroups(a.GBufferPipeline, a.LightingPipeline)
 	}
+	bg0Current = manager.GBufferSceneBindGroupCurrent()
+	a.Profiler.SetCount("GBufferBG0CurrentBeforeDispatch", boolToCount(bg0Current))
 	a.Profiler.SetCount("GBufferBG0Ready", boolToCount(manager.GBufferBindGroup0 != nil))
 	a.Profiler.SetCount("GBufferBG1Ready", boolToCount(manager.GBufferBindGroup != nil))
 	a.Profiler.SetCount("GBufferBG2Ready", boolToCount(manager.GBufferBindGroup2 != nil))
+	if !bg0Current {
+		return fmt.Errorf("g-buffer bind group 0 is stale")
+	}
 	if manager.GBufferBindGroup0 == nil {
 		return fmt.Errorf("g-buffer bind group 0 is nil")
 	}

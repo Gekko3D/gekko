@@ -660,6 +660,9 @@ func voxelModelNeedsObjectScopedGeometry(vox *VoxelModelComponent) bool {
 	if vox == nil {
 		return false
 	}
+	if vox.ShareTerrainGeometry {
+		return false
+	}
 	if vox.IsTerrainChunk && vox.TerrainGroupID != 0 && vox.TerrainChunkSize > 0 {
 		return true
 	}
@@ -778,6 +781,9 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			gekkoPalette := server.voxPalettes[vox.VoxelPalette]
 			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 			state.RtApp.Scene.AddObject(obj)
+			if vox.RetainRendererGeometry {
+				state.RtApp.ActivateRetainedVoxelMap(sourceGeometryMap)
+			}
 			state.instanceMap[entityId] = obj
 			state.objectToEntity[obj] = entityId
 			state.lastMaterialKeys[obj] = materialKey

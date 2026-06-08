@@ -71,6 +71,8 @@ type VoxelModelComponent struct {
 	AmbientOcclusionMode   VoxelAmbientOcclusionMode
 	ShadowSeamWorldEpsilon float32
 	IsTerrainChunk         bool
+	ShareTerrainGeometry   bool
+	RetainRendererGeometry bool
 	TerrainGroupID         uint32
 	TerrainChunkCoord      [3]int
 	TerrainChunkSize       int

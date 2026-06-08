@@ -58,6 +58,14 @@ The renderer is single-threaded at the engine stage level:
 So the leading theory is not an update/render data race. The risk is stale
 cached WebGPU handles and release ordering across frames.
 
+Final result from the `gasworks_128` repro: lifetime hardening was useful and
+should remain, but the last `GBuffer Scene BG0` crash was caused by invalid
+buffer sizing, not by an early release of the active bind group. The GPU
+lifetime log showed a fresh BG0 built from an `InstancesBuf` allocated at
+`39366` bytes. That size came from geometric growth after the requested size
+had already been aligned. The allocator now aligns the final selected size
+after geometric growth, so storage/uniform buffers stay 256-byte aligned.
+
 ## WebGPU Binding Diagnostics
 
 No lasting changes were made to `~/code/go/webgpu`.
@@ -190,28 +198,74 @@ This is deliberately narrower than pinning every resource globally. It encodes
 the WebGPU ownership rule for the two scene bind groups already implicated by
 validation labels.
 
-Important status: this pinning patch passed automated tests, but still needs a
-manual gasworks GPU stress run before being considered validated.
+Important status: this pinning patch passed automated tests and remains useful
+renderer hardening, but it did not fix the final `GBuffer Scene BG0` crash by
+itself. The final crash had a newly created BG0 and no release of the current
+BG0/source buffers before submit.
+
+### GBuffer Lifetime Instrumentation
+
+Temporary targeted lifetime instrumentation was added during the investigation
+and removed before merge. It recorded create, retire, release, and final
+`before-set-bind-group` state for `CameraBuf`, `InstancesBuf`, `BVHNodesBuf`,
+and `GBuffer Scene BG0`.
+
+The useful final repro window was:
+
+```text
+gpu-lifetime buffer create label=InstancesBuf gen=174 ... size=39366
+gpu-lifetime bindgroup create label=GBuffer Scene BG0 gen=49 ...
+gpu-lifetime gbuffer-bg0 phase=before-set-bind-group current=true ...
+BindGroup with 'GBuffer Scene BG0' label is invalid
+```
+
+No release of BG0 or its source buffers appeared before the crash.
+
+### Buffer Allocation Alignment
+
+Files:
+
+- `voxelrt/rt/gpu/manager_alloc.go`
+- `voxelrt/rt/gpu/manager_alloc_test.go`
+
+`ensureBuffer` already aligned requested sizes to at least 256 bytes. However,
+when an existing buffer grew, the allocator could pick `current.GetSize() *
+1.5` as the final size after the requested size had been aligned. That growth
+result was not re-aligned.
+
+Example from the crash:
+
+```text
+old InstancesBuf size: 26244
+geometric growth:    39366
+fixed allocation:    39424
+```
+
+The allocator now uses `alignGpuBufferAllocationSize` both for requested size
+and final selected allocation size. This prevents non-aligned storage/uniform
+buffers from being bound with `wgpu.WholeSize`.
 
 ## Verification Already Run
 
-After the G-buffer tracking and bind-group pinning changes:
+After the renderer tracking, retirement, and allocation alignment changes:
 
 ```sh
 cd /Users/ddevidch/code/go/gekko3d/gekko
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run 'TestAlignGpuBufferAllocationSizeAlignsGeometricGrowthResult|TestLiveSceneBindGroupsPinSourceBuffers|TestAdvanceRetiredBuffersKeepsLiveSceneSourceBuffer|TestAdvanceRetiredBindGroupsKeepsLiveSceneBindGroup'
 env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu ./voxelrt/rt/app -count=1
-env GOCACHE=/tmp/gekko3d-gocache go test ./...
-
-cd /Users/ddevidch/code/go/gekko3d/actiongame
-env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go test .
 ```
 
-Automated tests only validate source-buffer tracking, stale detection, and
-retirement bookkeeping. They do not prove native WebGPU lifetime correctness.
+Automated tests validate source-buffer tracking, stale detection, retirement
+bookkeeping, and allocator alignment. The final native WebGPU validation proof
+came from the manual gasworks repro no longer crashing.
 
-## Pending Manual GPU Check
+## Manual GPU Result
 
-Run:
+The final `gasworks_128` run after the allocation alignment fix no longer
+reproduces the native WebGPU crash.
+
+Useful repro command for future regressions:
 
 ```sh
 cd /Users/ddevidch/code/go/gekko3d/actiongame
@@ -270,8 +324,6 @@ retention under heavy streaming.
 
 ## Open Questions
 
-- Does the latest bind-group buffer pinning remove the remaining
-  `GBuffer Scene BG0` crash?
 - Are `GBuffer Voxel BG2` and other voxel-reading bind groups also vulnerable
   when voxel atlas buffers grow, or are their existing rebuild paths sufficient?
 - Should retired bind-group pinning be generalized to all bind groups that
@@ -280,4 +332,3 @@ retention under heavy streaming.
   upstream `cogentcore/webgpu` would?
 - Would an upstream binding version expose better queue-completion or ownership
   semantics that let this engine simplify retirement?
-

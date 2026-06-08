@@ -91,7 +91,10 @@ func (obj *VoxelObject) HasTransparency() bool {
 	if obj == nil {
 		return false
 	}
-	for _, mat := range obj.MaterialTable {
+	for i, mat := range obj.MaterialTable {
+		if i == 0 {
+			continue
+		}
 		if mat.HasTransparency() {
 			return true
 		}

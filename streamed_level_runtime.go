@@ -44,27 +44,28 @@ type PostSpawnTerrainContext struct {
 type PostSpawnTerrainHook func(cmd *Commands, ctx PostSpawnTerrainContext)
 
 type StreamedLevelRuntimeConfig struct {
-	LevelPath                  string
-	Loader                     *RuntimeContentLoader
-	StreamingRadius            int
-	StreamingKeepRadius        int
-	StreamingPrefetchRadius    int
-	StreamingCollisionRadius   int
-	StreamingDestructionRadius int
-	MaxVolumeInstances         int
-	MaxPrepareJobs             int
-	MaxChunkCommitsPerFrame    int
-	MaxStreamingCommitMillis   int
-	MetricsLogInterval         time.Duration
-	DisableSectorProxies       bool
-	RetainSectorProxies        bool
-	MetricsSink                func(StreamedLevelRuntimeMetrics)
-	TerrainGroupID             uint32
-	AutoSpawnPlayer            bool
-	PlayerSpawnKind            string
-	PlayerConfig               *GroundedPlayerControllerConfig
-	PlacementHooks             []PostSpawnPlacementHook
-	TerrainHooks               []PostSpawnTerrainHook
+	LevelPath                       string
+	Loader                          *RuntimeContentLoader
+	StreamingRadius                 int
+	StreamingKeepRadius             int
+	StreamingPrefetchRadius         int
+	StreamingCollisionRadius        int
+	StreamingDestructionRadius      int
+	MaxVolumeInstances              int
+	MaxPrepareJobs                  int
+	MaxPreparedGeometryCacheEntries int
+	MaxChunkCommitsPerFrame         int
+	MaxStreamingCommitMillis        int
+	MetricsLogInterval              time.Duration
+	DisableSectorProxies            bool
+	RetainSectorProxies             bool
+	MetricsSink                     func(StreamedLevelRuntimeMetrics)
+	TerrainGroupID                  uint32
+	AutoSpawnPlayer                 bool
+	PlayerSpawnKind                 string
+	PlayerConfig                    *GroundedPlayerControllerConfig
+	PlacementHooks                  []PostSpawnPlacementHook
+	TerrainHooks                    []PostSpawnTerrainHook
 }
 
 type StreamedLevelRuntimeMetrics struct {
@@ -88,6 +89,13 @@ type StreamedLevelRuntimeMetrics struct {
 	PreparedQueueDepth                int
 	PreparedChunkQueueDepth           int
 	PreparedProxyQueueDepth           int
+	PreparedGeometryCacheEntries      int
+	PreparedGeometryCacheVoxels       int
+	PreparedGeometryCacheHits         int
+	PreparedGeometryCacheMisses       int
+	PreparedGeometryCacheEvictions    int
+	PreparedGeometryAssetRegisters    int
+	PreparedGeometryAssetReuses       int
 	LoadedChunkCount                  int
 	LoadedSectorProxyCount            int
 	LoadedSectorProxyFullReadyCount   int
@@ -134,12 +142,17 @@ type StreamedLevelRuntimeMetrics struct {
 	GPUVoxelDirtySectorsPending    int
 	GPUVoxelDirtyBricksPending     int
 	GPUVoxelUploadRevision         uint64
+	GPURetainedVoxelMapEntries     int
+	GPURetainedVoxelMapSectors     int
+	GPURetainedVoxelMapHits        int
+	GPURetainedVoxelMapMisses      int
+	GPURetainedVoxelMapEvictions   int
 	RendererSceneStructureRevision uint64
 }
 
 func (m StreamedLevelRuntimeMetrics) LogLine() string {
 	return fmt.Sprintf(
-		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_frame=%d proxy_committed_frame=%d full_committed_frame=%d collision_committed_frame=%d entities_frame=%d budget_hit=%t budget_reason=%s prepared_total=%d prepare_last_ms=%.3f prepare_total_ms=%.3f committed_total=%d proxy_committed_total=%d full_committed_total=%d collision_committed_total=%d commit_last_ms=%.3f commit_terrain_ms=%.3f commit_world_ms=%.3f commit_world_voxels=%d commit_world_build_ms=%.3f commit_world_register_ms=%.3f commit_world_entity_ms=%.3f commit_placements_ms=%.3f commit_flush_ms=%.3f commit_flushes=%d commit_total_ms=%.3f commit_system_ms=%.3f gpu_voxel_sectors_up=%d gpu_voxel_bricks_up=%d gpu_voxel_dirty_sectors=%d gpu_voxel_dirty_bricks=%d gpu_upload_revision=%d scene_structure_revision=%d",
+		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d prepared_geom_cache_entries=%d prepared_geom_cache_voxels=%d prepared_geom_cache_hits=%d prepared_geom_cache_misses=%d prepared_geom_cache_evictions=%d prepared_geom_asset_registers=%d prepared_geom_asset_reuses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_frame=%d proxy_committed_frame=%d full_committed_frame=%d collision_committed_frame=%d entities_frame=%d budget_hit=%t budget_reason=%s prepared_total=%d prepare_last_ms=%.3f prepare_total_ms=%.3f committed_total=%d proxy_committed_total=%d full_committed_total=%d collision_committed_total=%d commit_last_ms=%.3f commit_terrain_ms=%.3f commit_world_ms=%.3f commit_world_voxels=%d commit_world_build_ms=%.3f commit_world_register_ms=%.3f commit_world_entity_ms=%.3f commit_placements_ms=%.3f commit_flush_ms=%.3f commit_flushes=%d commit_total_ms=%.3f commit_system_ms=%.3f gpu_voxel_sectors_up=%d gpu_voxel_bricks_up=%d gpu_voxel_dirty_sectors=%d gpu_voxel_dirty_bricks=%d gpu_upload_revision=%d gpu_retained_maps=%d gpu_retained_sectors=%d gpu_retained_hits=%d gpu_retained_misses=%d gpu_retained_evictions=%d scene_structure_revision=%d",
 		m.DesiredChunkCount,
 		m.DesiredLoadableChunkCount,
 		m.KeepChunkCount,
@@ -160,6 +173,13 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 		m.PreparedQueueDepth,
 		m.PreparedChunkQueueDepth,
 		m.PreparedProxyQueueDepth,
+		m.PreparedGeometryCacheEntries,
+		m.PreparedGeometryCacheVoxels,
+		m.PreparedGeometryCacheHits,
+		m.PreparedGeometryCacheMisses,
+		m.PreparedGeometryCacheEvictions,
+		m.PreparedGeometryAssetRegisters,
+		m.PreparedGeometryAssetReuses,
 		m.LoadedChunkCount,
 		m.LoadedSectorProxyCount,
 		m.LoadedSectorProxyFullReadyCount,
@@ -196,12 +216,35 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 		m.GPUVoxelDirtySectorsPending,
 		m.GPUVoxelDirtyBricksPending,
 		m.GPUVoxelUploadRevision,
+		m.GPURetainedVoxelMapEntries,
+		m.GPURetainedVoxelMapSectors,
+		m.GPURetainedVoxelMapHits,
+		m.GPURetainedVoxelMapMisses,
+		m.GPURetainedVoxelMapEvictions,
 		m.RendererSceneStructureRevision,
 	)
 }
 
 func durationMillis(duration time.Duration) float64 {
 	return float64(duration) / float64(time.Millisecond)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 type StreamedLevelRuntimeModule struct{}
@@ -234,30 +277,31 @@ type StreamedLevelRuntimeState struct {
 	MarkerEntities             map[string]EntityId
 	LightEntities              map[string]EntityId
 
-	DesiredChunks        map[ChunkCoord]struct{}
-	KeepChunks           map[ChunkCoord]struct{}
-	CollisionChunks      map[ChunkCoord]struct{}
-	DestructionChunks    map[ChunkCoord]struct{}
-	DesiredSectors       map[ChunkCoord]struct{}
-	KeepSectors          map[ChunkCoord]struct{}
-	DesiredProxySectors  map[ChunkCoord]struct{}
-	KeepProxySectors     map[ChunkCoord]struct{}
-	PendingLoads         map[ChunkCoord]struct{}
-	PendingProxyLoads    map[ChunkCoord]struct{}
-	PreparedLoads        chan streamedPreparedChunk
-	PreparedProxyLoads   chan streamedPreparedSectorProxy
-	activePrepareMu      sync.Mutex
-	activeChunkPrepares  int
-	activeProxyPrepares  int
-	LoadedChunks         map[ChunkCoord]*streamedLoadedChunk
-	LoadedSectorProxies  map[ChunkCoord]*streamedLoadedSectorProxy
-	PlacementsByChunk    map[ChunkCoord][]streamedPlacementInstance
-	PlacementChunk       map[string]ChunkCoord
-	ObjectChunk          map[string]ChunkCoord
-	TerrainEntries       map[ChunkCoord]content.TerrainChunkEntryDef
-	ImportedWorldSectors map[ChunkCoord]content.ImportedWorldSectorDef
-	ImportedChunkSector  map[ChunkCoord]ChunkCoord
-	ImportedWorldEntries map[ChunkCoord]content.ImportedWorldChunkEntryDef
+	DesiredChunks         map[ChunkCoord]struct{}
+	KeepChunks            map[ChunkCoord]struct{}
+	CollisionChunks       map[ChunkCoord]struct{}
+	DestructionChunks     map[ChunkCoord]struct{}
+	DesiredSectors        map[ChunkCoord]struct{}
+	KeepSectors           map[ChunkCoord]struct{}
+	DesiredProxySectors   map[ChunkCoord]struct{}
+	KeepProxySectors      map[ChunkCoord]struct{}
+	PendingLoads          map[ChunkCoord]struct{}
+	PendingProxyLoads     map[ChunkCoord]struct{}
+	PreparedLoads         chan streamedPreparedChunk
+	PreparedProxyLoads    chan streamedPreparedSectorProxy
+	PreparedGeometryCache *streamedPreparedGeometryCache
+	activePrepareMu       sync.Mutex
+	activeChunkPrepares   int
+	activeProxyPrepares   int
+	LoadedChunks          map[ChunkCoord]*streamedLoadedChunk
+	LoadedSectorProxies   map[ChunkCoord]*streamedLoadedSectorProxy
+	PlacementsByChunk     map[ChunkCoord][]streamedPlacementInstance
+	PlacementChunk        map[string]ChunkCoord
+	ObjectChunk           map[string]ChunkCoord
+	TerrainEntries        map[ChunkCoord]content.TerrainChunkEntryDef
+	ImportedWorldSectors  map[ChunkCoord]content.ImportedWorldSectorDef
+	ImportedChunkSector   map[ChunkCoord]ChunkCoord
+	ImportedWorldEntries  map[ChunkCoord]content.ImportedWorldChunkEntryDef
 
 	WorldDeltaPath   string
 	WorldDataDir     string
@@ -281,27 +325,30 @@ type streamedPlacementInstance struct {
 }
 
 type streamedLoadedChunk struct {
-	TerrainEntities       map[EntityId]struct{}
-	ImportedWorldEntities map[EntityId]struct{}
-	PlacementRoots        map[string]EntityId
-	OwnedEntities         map[EntityId]struct{}
-	ObjectEntities        map[string]EntityId
+	TerrainEntities           map[EntityId]struct{}
+	ImportedWorldEntities     map[EntityId]struct{}
+	ImportedWorldGeometryKeys map[string]struct{}
+	PlacementRoots            map[string]EntityId
+	OwnedEntities             map[EntityId]struct{}
+	ObjectEntities            map[string]EntityId
 }
 
 type streamedLoadedSectorProxy struct {
-	Entity EntityId
-	LOD    content.ImportedWorldLODDef
+	Entity           EntityId
+	LOD              content.ImportedWorldLODDef
+	GeometryCacheKey string
 }
 
 type streamedPreparedChunk struct {
-	Coord                         ChunkCoord
-	TerrainChunk                  *content.TerrainChunkDef
-	ImportedWorldChunk            *content.ImportedWorldChunkDef
-	PreparedImportedWorldGeometry *volume.XBrickMap
-	PlacementItems                []streamedPlacementInstance
-	ObjectSnapshots               map[string]*content.VoxelObjectSnapshotDef
-	PrepareDuration               time.Duration
-	Err                           error
+	Coord                                 ChunkCoord
+	TerrainChunk                          *content.TerrainChunkDef
+	ImportedWorldChunk                    *content.ImportedWorldChunkDef
+	PreparedImportedWorldGeometry         *volume.XBrickMap
+	PreparedImportedWorldGeometryCacheKey string
+	PlacementItems                        []streamedPlacementInstance
+	ObjectSnapshots                       map[string]*content.VoxelObjectSnapshotDef
+	PrepareDuration                       time.Duration
+	Err                                   error
 }
 
 type streamedChunkLoadJob struct {
@@ -317,22 +364,25 @@ type streamedChunkLoadJob struct {
 	Placements                []streamedPlacementInstance
 	VoxelOverrides            map[string]content.VoxelObjectOverrideDef
 	WorldDeltaPath            string
+	PreparedGeometryCache     *streamedPreparedGeometryCache
 }
 
 type streamedSectorProxyLoadJob struct {
-	SectorCoord  ChunkCoord
-	ManifestPath string
-	LOD          content.ImportedWorldLODDef
-	Loader       *RuntimeContentLoader
+	SectorCoord           ChunkCoord
+	ManifestPath          string
+	LOD                   content.ImportedWorldLODDef
+	Loader                *RuntimeContentLoader
+	PreparedGeometryCache *streamedPreparedGeometryCache
 }
 
 type streamedPreparedSectorProxy struct {
-	SectorCoord      ChunkCoord
-	LOD              content.ImportedWorldLODDef
-	Chunk            *content.ImportedWorldChunkDef
-	PreparedGeometry *volume.XBrickMap
-	Err              error
-	PrepareDuration  time.Duration
+	SectorCoord              ChunkCoord
+	LOD                      content.ImportedWorldLODDef
+	Chunk                    *content.ImportedWorldChunkDef
+	PreparedGeometry         *volume.XBrickMap
+	PreparedGeometryCacheKey string
+	Err                      error
+	PrepareDuration          time.Duration
 }
 
 func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
@@ -348,6 +398,7 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		PendingProxyLoads:        make(map[ChunkCoord]struct{}),
 		PreparedLoads:            make(chan streamedPreparedChunk, 256),
 		PreparedProxyLoads:       make(chan streamedPreparedSectorProxy, 256),
+		PreparedGeometryCache:    newStreamedPreparedGeometryCache(defaultStreamedPreparedGeometryCacheEntries),
 		LoadedChunks:             make(map[ChunkCoord]*streamedLoadedChunk),
 		LoadedSectorProxies:      make(map[ChunkCoord]*streamedLoadedSectorProxy),
 		PlacementsByChunk:        make(map[ChunkCoord][]streamedPlacementInstance),
@@ -490,6 +541,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.KeepProxySectors = make(map[ChunkCoord]struct{})
 	state.PendingLoads = make(map[ChunkCoord]struct{})
 	state.PendingProxyLoads = make(map[ChunkCoord]struct{})
+	state.PreparedGeometryCache = newStreamedPreparedGeometryCache(streamedPreparedGeometryCacheMaxEntries(cfg.MaxPreparedGeometryCacheEntries))
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
 	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
 	state.PlacementsByChunk = make(map[ChunkCoord][]streamedPlacementInstance)
@@ -839,6 +891,9 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 				reconcileStreamedSectorProxyAfterFullCommit(cmd, state, sectorCoord)
 				continue
 			}
+			if !streamedSectorProxyCommitNeeded(state, sectorCoord) {
+				continue
+			}
 			if _, ok := state.PendingProxyLoads[sectorCoord]; ok {
 				continue
 			}
@@ -1174,6 +1229,9 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 			if _, alreadyLoaded := state.LoadedSectorProxies[prepared.SectorCoord]; alreadyLoaded {
 				continue
 			}
+			if !streamedSectorProxyCommitNeeded(state, prepared.SectorCoord) {
+				continue
+			}
 			entityCount, err := commitPreparedStreamedSectorProxy(cmd, assets, state, prepared)
 			if err != nil {
 				state.Metrics.CommitErrorCount++
@@ -1280,6 +1338,14 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 		state.Metrics.PreparedProxyQueueDepth = 0
 	}
 	state.Metrics.PreparedQueueDepth = state.Metrics.PreparedChunkQueueDepth + state.Metrics.PreparedProxyQueueDepth
+	cacheStats := state.PreparedGeometryCache.snapshot()
+	state.Metrics.PreparedGeometryCacheEntries = cacheStats.Entries
+	state.Metrics.PreparedGeometryCacheVoxels = cacheStats.Voxels
+	state.Metrics.PreparedGeometryCacheHits = cacheStats.Hits
+	state.Metrics.PreparedGeometryCacheMisses = cacheStats.Misses
+	state.Metrics.PreparedGeometryCacheEvictions = cacheStats.Evictions
+	state.Metrics.PreparedGeometryAssetRegisters = cacheStats.AssetRegisters
+	state.Metrics.PreparedGeometryAssetReuses = cacheStats.AssetReuses
 	state.Metrics.LoadedChunkCount = len(state.LoadedChunks)
 	state.Metrics.LoadedSectorProxyCount = len(state.LoadedSectorProxies)
 	state.Metrics.LoadedSectorProxyFullReadyCount, state.Metrics.LoadedSectorProxyFullPendingCount, state.Metrics.LoadedSectorProxyOutOfKeepCount = streamedSectorProxyResidencyCounts(state)
@@ -1462,6 +1528,12 @@ func recordStreamingRendererPressure(cmd *Commands, state *StreamedLevelRuntimeS
 		state.Metrics.GPUVoxelDirtySectorsPending = rt.RtApp.BufferManager.VoxelDirtySectorsPending
 		state.Metrics.GPUVoxelDirtyBricksPending = rt.RtApp.BufferManager.VoxelDirtyBricksPending
 		state.Metrics.GPUVoxelUploadRevision = rt.RtApp.BufferManager.VoxelUploadRevision
+		retainedStats := rt.RtApp.BufferManager.RetainedVoxelMapStats()
+		state.Metrics.GPURetainedVoxelMapEntries = retainedStats.Entries
+		state.Metrics.GPURetainedVoxelMapSectors = retainedStats.Sectors
+		state.Metrics.GPURetainedVoxelMapHits = retainedStats.Hits
+		state.Metrics.GPURetainedVoxelMapMisses = retainedStats.Misses
+		state.Metrics.GPURetainedVoxelMapEvictions = retainedStats.Evictions
 	}
 	if rt.RtApp.Scene != nil {
 		state.Metrics.RendererSceneStructureRevision = rt.RtApp.Scene.StructureRevision
@@ -1545,12 +1617,13 @@ func buildEffectiveStreamedPlacementIndex(level *content.LevelDef, levelPath str
 
 func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoord) streamedChunkLoadJob {
 	job := streamedChunkLoadJob{
-		Coord:          coord,
-		LevelPath:      state.LevelPath,
-		Loader:         state.Loader,
-		Placements:     append([]streamedPlacementInstance(nil), state.PlacementsByChunk[coord]...),
-		VoxelOverrides: make(map[string]content.VoxelObjectOverrideDef),
-		WorldDeltaPath: state.WorldDeltaPath,
+		Coord:                 coord,
+		LevelPath:             state.LevelPath,
+		Loader:                state.Loader,
+		PreparedGeometryCache: state.PreparedGeometryCache,
+		Placements:            append([]streamedPlacementInstance(nil), state.PlacementsByChunk[coord]...),
+		VoxelOverrides:        make(map[string]content.VoxelObjectOverrideDef),
+		WorldDeltaPath:        state.WorldDeltaPath,
 	}
 	if entry, ok := state.TerrainEntries[coord]; ok {
 		job.TerrainEntry = &entry
@@ -1581,9 +1654,10 @@ func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoor
 
 func buildStreamedSectorProxyLoadJob(state *StreamedLevelRuntimeState, sectorCoord ChunkCoord, lod content.ImportedWorldLODDef) streamedSectorProxyLoadJob {
 	job := streamedSectorProxyLoadJob{
-		SectorCoord: sectorCoord,
-		LOD:         lod,
-		Loader:      state.Loader,
+		SectorCoord:           sectorCoord,
+		LOD:                   lod,
+		Loader:                state.Loader,
+		PreparedGeometryCache: state.PreparedGeometryCache,
 	}
 	if state.Level != nil && state.Level.BaseWorld != nil {
 		job.ManifestPath = content.ResolveDocumentPath(state.Level.BaseWorld.ManifestPath, state.LevelPath)
@@ -1642,7 +1716,10 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 		return result
 	}
 	result.Chunk = chunk
-	result.PreparedGeometry = prepareImportedWorldChunkGeometry(chunk)
+	result.PreparedGeometryCacheKey = streamedImportedWorldGeometryCacheKey("sector_proxy", chunkPath, firstNonEmptyString(job.LOD.PayloadHash, chunk.PayloadHash), firstPositiveInt(job.LOD.PayloadSizeBytes, chunk.PayloadSizeBytes))
+	result.PreparedGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedGeometryCacheKey, func() *volume.XBrickMap {
+		return prepareImportedWorldChunkGeometry(chunk)
+	})
 	return result
 }
 
@@ -1681,7 +1758,10 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			return result
 		}
 		result.ImportedWorldChunk = chunk
-		result.PreparedImportedWorldGeometry = prepareImportedWorldChunkGeometry(chunk)
+		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_override", chunkPath, chunk.PayloadHash, chunk.PayloadSizeBytes)
+		result.PreparedImportedWorldGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedImportedWorldGeometryCacheKey, func() *volume.XBrickMap {
+			return prepareImportedWorldChunkGeometry(chunk)
+		})
 	} else if job.ImportedWorldEntry != nil && job.ImportedWorldEntry.NonEmptyVoxelCount > 0 {
 		chunkPath := content.ResolveImportedWorldChunkPath(*job.ImportedWorldEntry, job.ImportedWorldManifestPath)
 		chunk, err := job.Loader.LoadImportedWorldChunk(chunkPath)
@@ -1690,7 +1770,10 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			return result
 		}
 		result.ImportedWorldChunk = chunk
-		result.PreparedImportedWorldGeometry = prepareImportedWorldChunkGeometry(chunk)
+		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_full", chunkPath, firstNonEmptyString(job.ImportedWorldEntry.PayloadHash, chunk.PayloadHash), firstPositiveInt(job.ImportedWorldEntry.PayloadSizeBytes, chunk.PayloadSizeBytes))
+		result.PreparedImportedWorldGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedImportedWorldGeometryCacheKey, func() *volume.XBrickMap {
+			return prepareImportedWorldChunkGeometry(chunk)
+		})
 	}
 	for key, override := range job.VoxelOverrides {
 		snapshotPath := content.ResolveDocumentPath(override.SnapshotPath, job.WorldDeltaPath)
@@ -1733,8 +1816,14 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 	if cmd == nil || state == nil || prepared.Chunk == nil || prepared.Chunk.NonEmptyVoxelCount == 0 {
 		return 0, nil
 	}
+	if !streamedSectorProxyCommitNeeded(state, prepared.SectorCoord) {
+		return 0, nil
+	}
 	worldStart := time.Now()
 	spawnTiming := AuthoredImportedWorldSpawnTiming{}
+	geometryAssetStart := time.Now()
+	preparedGeometryAsset, _ := state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedGeometryCacheKey, prepared.PreparedGeometry)
+	geometryAssetDuration := time.Since(geometryAssetStart)
 	entity := spawnAuthoredImportedWorldChunkEntity(cmd, state.LevelRoot, state.BaseWorldPalette, AuthoredImportedWorldSpawnDef{
 		LevelID:                 state.LevelID,
 		WorldID:                 importedWorldIDForPreparedChunk(state, prepared.Chunk),
@@ -1744,16 +1833,24 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 		DisableTerrainMetadata:  true,
 		DisableShadows:          true,
 		DisableOcclusionCulling: true,
+		ShareTerrainGeometry:    true,
+		RetainRendererGeometry:  true,
 		PreparedGeometry:        prepared.PreparedGeometry,
+		PreparedGeometryAsset:   preparedGeometryAsset,
 		Timing:                  &spawnTiming,
 	})
 	recordImportedWorldSpawnTiming(state, spawnTiming)
+	state.Metrics.LastCommitWorldRegisterDuration += geometryAssetDuration
 	state.Metrics.LastCommitWorldDuration += time.Since(worldStart)
+	if streamedSectorProxyShouldBeHidden(state, prepared.SectorCoord) {
+		cmd.AddComponents(entity, &VoxelRenderHiddenComponent{})
+	}
 	recordStreamedCommitFlush(cmd, state)
 	clearEntityVoxelDirty(cmd, entity)
 	state.LoadedSectorProxies[prepared.SectorCoord] = &streamedLoadedSectorProxy{
-		Entity: entity,
-		LOD:    prepared.LOD,
+		Entity:           entity,
+		LOD:              prepared.LOD,
+		GeometryCacheKey: prepared.PreparedGeometryCacheKey,
 	}
 	reconcileStreamedSectorProxyAfterFullCommit(cmd, state, prepared.SectorCoord)
 	entityCount = 1
@@ -1782,11 +1879,12 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		}
 	}()
 	chunk := &streamedLoadedChunk{
-		TerrainEntities:       make(map[EntityId]struct{}),
-		ImportedWorldEntities: make(map[EntityId]struct{}),
-		PlacementRoots:        make(map[string]EntityId),
-		OwnedEntities:         make(map[EntityId]struct{}),
-		ObjectEntities:        make(map[string]EntityId),
+		TerrainEntities:           make(map[EntityId]struct{}),
+		ImportedWorldEntities:     make(map[EntityId]struct{}),
+		ImportedWorldGeometryKeys: make(map[string]struct{}),
+		PlacementRoots:            make(map[string]EntityId),
+		OwnedEntities:             make(map[EntityId]struct{}),
+		ObjectEntities:            make(map[string]EntityId),
 	}
 
 	if prepared.TerrainChunk != nil && prepared.TerrainChunk.NonEmptyVoxelCount > 0 {
@@ -1818,23 +1916,33 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		collisionEnabled := state.streamedImportedWorldChunkCollisionEnabled(prepared.Coord)
 		destructionEnabled := state.streamedImportedWorldChunkDestructionEnabled(prepared.Coord)
 		spawnTiming := AuthoredImportedWorldSpawnTiming{}
+		geometryAssetStart := time.Now()
+		preparedGeometryAsset, _ := state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry)
+		geometryAssetDuration := time.Since(geometryAssetStart)
 		entity := spawnAuthoredImportedWorldChunkEntity(cmd, state.LevelRoot, state.BaseWorldPalette, AuthoredImportedWorldSpawnDef{
-			LevelID:            state.LevelID,
-			WorldID:            importedWorldIDForPreparedChunk(state, prepared.ImportedWorldChunk),
-			ShadowGroupID:      importedWorldGroupIDForStreamedState(state),
-			Chunk:              prepared.ImportedWorldChunk,
-			CollisionEnabled:   collisionEnabled,
-			DestructionEnabled: destructionEnabled,
-			PreparedGeometry:   prepared.PreparedImportedWorldGeometry,
-			Timing:             &spawnTiming,
+			LevelID:                state.LevelID,
+			WorldID:                importedWorldIDForPreparedChunk(state, prepared.ImportedWorldChunk),
+			ShadowGroupID:          importedWorldGroupIDForStreamedState(state),
+			Chunk:                  prepared.ImportedWorldChunk,
+			CollisionEnabled:       collisionEnabled,
+			DestructionEnabled:     destructionEnabled,
+			ShareTerrainGeometry:   !destructionEnabled,
+			RetainRendererGeometry: !destructionEnabled,
+			PreparedGeometry:       prepared.PreparedImportedWorldGeometry,
+			PreparedGeometryAsset:  preparedGeometryAsset,
+			Timing:                 &spawnTiming,
 		})
 		recordImportedWorldSpawnTiming(state, spawnTiming)
+		state.Metrics.LastCommitWorldRegisterDuration += geometryAssetDuration
 		state.Metrics.LastCommitWorldDuration += time.Since(worldStart)
 		recordStreamedCommitFlush(cmd, state)
 		entityCount++
 		importedWorldCollisionCommitted = collisionEnabled
 		clearEntityVoxelDirty(cmd, entity)
 		chunk.ImportedWorldEntities[entity] = struct{}{}
+		if prepared.PreparedImportedWorldGeometryCacheKey != "" {
+			chunk.ImportedWorldGeometryKeys[prepared.PreparedImportedWorldGeometryCacheKey] = struct{}{}
+		}
 		chunk.OwnedEntities[entity] = struct{}{}
 	}
 
@@ -1895,7 +2003,22 @@ func reconcileStreamedSectorProxyAfterFullCommit(cmd *Commands, state *StreamedL
 	if state == nil {
 		return
 	}
-	setStreamedSectorProxyHidden(cmd, state, sectorCoord, streamedSectorFullChunksLoaded(state, sectorCoord))
+	setStreamedSectorProxyHidden(cmd, state, sectorCoord, streamedSectorProxyShouldBeHidden(state, sectorCoord))
+}
+
+func streamedSectorProxyCommitNeeded(state *StreamedLevelRuntimeState, sectorCoord ChunkCoord) bool {
+	if state == nil {
+		return false
+	}
+	if !streamedSectorFullChunksLoaded(state, sectorCoord) {
+		return true
+	}
+	_, keepFull := state.KeepSectors[sectorCoord]
+	return !keepFull
+}
+
+func streamedSectorProxyShouldBeHidden(state *StreamedLevelRuntimeState, sectorCoord ChunkCoord) bool {
+	return streamedSectorFullChunksLoaded(state, sectorCoord)
 }
 
 func (state *StreamedLevelRuntimeState) streamedSectorProxyUnloadEnabled() bool {
@@ -1950,9 +2073,40 @@ func unloadStreamedSectorProxy(cmd *Commands, state *StreamedLevelRuntimeState, 
 		return
 	}
 	if loaded.Entity != 0 {
+		retainStreamedRendererGeometryForEntity(cmd, loaded.Entity)
 		cmd.RemoveEntity(loaded.Entity)
 	}
+	if loaded.GeometryCacheKey != "" {
+		assets := assetServerFromApp(cmd.app)
+		state.PreparedGeometryCache.releaseAsset(assets, loaded.GeometryCacheKey)
+	}
 	delete(state.LoadedSectorProxies, sectorCoord)
+}
+
+func retainStreamedRendererGeometryForEntity(cmd *Commands, eid EntityId) bool {
+	if cmd == nil || eid == 0 {
+		return false
+	}
+	rt := voxelRtStateFromApp(cmd.app)
+	if rt == nil || rt.RtApp == nil || rt.RtApp.BufferManager == nil {
+		return false
+	}
+	if rt.runtimeEditedVoxelEntity(eid) {
+		return false
+	}
+	vmc, ok := voxelModelComponentForEntity(cmd, eid)
+	if !ok || !vmc.RetainRendererGeometry {
+		return false
+	}
+	assets := assetServerFromApp(cmd.app)
+	if assets == nil {
+		return false
+	}
+	geometry, ok := ResolveVoxelGeometryMap(assets, &vmc)
+	if !ok || geometry == nil {
+		return false
+	}
+	return rt.RtApp.BufferManager.RetainVoxelMap(geometry)
 }
 
 func (state *StreamedLevelRuntimeState) streamedImportedWorldChunkCollisionEnabled(coord ChunkCoord) bool {
@@ -1986,10 +2140,15 @@ func unloadStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 		return err
 	}
 	for eid := range loaded.OwnedEntities {
+		retainStreamedRendererGeometryForEntity(cmd, eid)
 		if rt := voxelRtStateFromApp(cmd.app); rt != nil {
 			rt.clearRuntimeEditedVoxelEntity(eid)
 		}
 		cmd.RemoveEntity(eid)
+	}
+	assets := assetServerFromApp(cmd.app)
+	for key := range loaded.ImportedWorldGeometryKeys {
+		state.PreparedGeometryCache.releaseAsset(assets, key)
 	}
 	for objectKey := range loaded.ObjectEntities {
 		delete(state.ObjectChunk, objectKey)

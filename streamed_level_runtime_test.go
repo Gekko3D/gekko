@@ -12,6 +12,7 @@ import (
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -2196,6 +2197,145 @@ func TestStreamedRuntimeCommitsSectorProxyWithoutCollision(t *testing.T) {
 	if !vmc.DisableShadows || !vmc.DisableOcclusionCulling {
 		t.Fatalf("expected proxy entity %d to skip shadows and occlusion culling, got %+v", loaded.Entity, vmc)
 	}
+	if !vmc.ShareTerrainGeometry || !vmc.RetainRendererGeometry {
+		t.Fatalf("expected proxy entity %d to opt into renderer geometry residency, got %+v", loaded.Entity, vmc)
+	}
+}
+
+func TestStreamedRuntimeSkipsLateSectorProxyForFullKeptSector(t *testing.T) {
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	assets := newSpawnTestAssetServer()
+	state.Initialized = true
+	state.LevelID = "proxy_skip"
+	state.BaseWorldID = "world-sector-proxy-skip"
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "proxy_skip"})
+	sectorCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	fullCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	state.KeepSectors[sectorCoord] = struct{}{}
+	state.ImportedWorldSectors[sectorCoord] = content.ImportedWorldSectorDef{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		FullChunkRefs:      []content.TerrainChunkCoordDef{{X: 0, Y: 0, Z: 0}},
+		NonEmptyVoxelCount: 1,
+	}
+	state.ImportedWorldEntries[fullCoord] = content.ImportedWorldChunkEntryDef{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		NonEmptyVoxelCount: 1,
+	}
+	state.LoadedChunks[fullCoord] = &streamedLoadedChunk{OwnedEntities: make(map[EntityId]struct{}), ObjectEntities: make(map[string]EntityId)}
+
+	entities, err := commitPreparedStreamedSectorProxy(cmd, assets, state, streamedPreparedSectorProxyForTest(sectorCoord))
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedSectorProxy failed: %v", err)
+	}
+	if entities != 0 {
+		t.Fatalf("expected late proxy commit to be skipped for full-kept sector, got %d entities", entities)
+	}
+	if _, loaded := state.LoadedSectorProxies[sectorCoord]; loaded {
+		t.Fatalf("did not expect a proxy to be loaded for full-kept sector, got %+v", state.LoadedSectorProxies)
+	}
+}
+
+func TestStreamedRuntimeCommitsFallbackSectorProxyHiddenWhileFullLoaded(t *testing.T) {
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	assets := newSpawnTestAssetServer()
+	state.Initialized = true
+	state.LevelID = "proxy_fallback"
+	state.BaseWorldID = "world-sector-proxy-fallback"
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "proxy_fallback"})
+	sectorCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	fullCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	state.ImportedWorldSectors[sectorCoord] = content.ImportedWorldSectorDef{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		FullChunkRefs:      []content.TerrainChunkCoordDef{{X: 0, Y: 0, Z: 0}},
+		NonEmptyVoxelCount: 1,
+	}
+	state.ImportedWorldEntries[fullCoord] = content.ImportedWorldChunkEntryDef{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		NonEmptyVoxelCount: 1,
+	}
+	state.LoadedChunks[fullCoord] = &streamedLoadedChunk{OwnedEntities: make(map[EntityId]struct{}), ObjectEntities: make(map[string]EntityId)}
+
+	entities, err := commitPreparedStreamedSectorProxy(cmd, assets, state, streamedPreparedSectorProxyForTest(sectorCoord))
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedSectorProxy failed: %v", err)
+	}
+	if entities != 1 {
+		t.Fatalf("expected fallback proxy to commit, got %d entities", entities)
+	}
+	loaded := state.LoadedSectorProxies[sectorCoord]
+	if loaded == nil || loaded.Entity == 0 {
+		t.Fatalf("expected loaded fallback proxy, got %+v", state.LoadedSectorProxies)
+	}
+	if !VoxelEntityRenderHidden(cmd, loaded.Entity) {
+		t.Fatalf("expected fallback proxy %d to spawn hidden while full detail is still loaded", loaded.Entity)
+	}
+}
+
+func TestStreamedRuntimeKeepsLateSectorProxyVisibleWhenFullChunksArePartial(t *testing.T) {
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	assets := newSpawnTestAssetServer()
+	state.Initialized = true
+	state.LevelID = "proxy_partial"
+	state.BaseWorldID = "world-sector-proxy-partial"
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "proxy_partial"})
+	sectorCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	loadedFullCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	missingFullCoord := ChunkCoord{X: 1, Y: 0, Z: 0}
+	state.ImportedWorldSectors[sectorCoord] = content.ImportedWorldSectorDef{
+		Coord: content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		FullChunkRefs: []content.TerrainChunkCoordDef{
+			{X: 0, Y: 0, Z: 0},
+			{X: 1, Y: 0, Z: 0},
+		},
+		NonEmptyVoxelCount: 2,
+	}
+	for _, coord := range []ChunkCoord{loadedFullCoord, missingFullCoord} {
+		state.ImportedWorldEntries[coord] = content.ImportedWorldChunkEntryDef{
+			Coord:              content.TerrainChunkCoordDef{X: coord.X, Y: coord.Y, Z: coord.Z},
+			NonEmptyVoxelCount: 1,
+		}
+	}
+	state.LoadedChunks[loadedFullCoord] = &streamedLoadedChunk{OwnedEntities: make(map[EntityId]struct{}), ObjectEntities: make(map[string]EntityId)}
+
+	entities, err := commitPreparedStreamedSectorProxy(cmd, assets, state, streamedPreparedSectorProxyForTest(sectorCoord))
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedSectorProxy failed: %v", err)
+	}
+	if entities != 1 {
+		t.Fatalf("expected late partial proxy to commit hidden for fallback, got %d entities", entities)
+	}
+	loaded := state.LoadedSectorProxies[sectorCoord]
+	if loaded == nil || loaded.Entity == 0 {
+		t.Fatalf("expected loaded partial fallback proxy, got %+v", state.LoadedSectorProxies)
+	}
+	if VoxelEntityRenderHidden(cmd, loaded.Entity) {
+		t.Fatalf("expected partial fallback proxy %d to remain visible while full sector coverage is incomplete", loaded.Entity)
+	}
+}
+
+func TestStreamedRuntimeSectorProxyCommitNeededRespectsFullKeepResidency(t *testing.T) {
+	_, _, state := newStreamedRuntimeHarness(t)
+	sectorCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	fullCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	state.ImportedWorldSectors[sectorCoord] = content.ImportedWorldSectorDef{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		FullChunkRefs:      []content.TerrainChunkCoordDef{{X: 0, Y: 0, Z: 0}},
+		NonEmptyVoxelCount: 1,
+	}
+	state.ImportedWorldEntries[fullCoord] = content.ImportedWorldChunkEntryDef{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		NonEmptyVoxelCount: 1,
+	}
+	state.LoadedChunks[fullCoord] = &streamedLoadedChunk{OwnedEntities: make(map[EntityId]struct{}), ObjectEntities: make(map[string]EntityId)}
+
+	state.KeepSectors[sectorCoord] = struct{}{}
+	if streamedSectorProxyCommitNeeded(state, sectorCoord) {
+		t.Fatal("did not expect a proxy to be needed while full sector is kept")
+	}
+	delete(state.KeepSectors, sectorCoord)
+	if !streamedSectorProxyCommitNeeded(state, sectorCoord) {
+		t.Fatal("expected a proxy to be needed when full sector is loaded but outside keep residency")
+	}
 }
 
 func TestStreamedRuntimeHidesSectorProxyAfterFullChunksLoaded(t *testing.T) {
@@ -2225,6 +2365,39 @@ func TestStreamedRuntimeHidesSectorProxyAfterFullChunksLoaded(t *testing.T) {
 	}
 	if !VoxelEntityRenderHidden(cmd, proxyEntity) {
 		t.Fatalf("expected proxy entity %d to be hidden", proxyEntity)
+	}
+}
+
+func TestStreamedRuntimeKeepsSectorProxyVisibleUntilAllFullChunksLoaded(t *testing.T) {
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	sectorCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	loadedFullCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	missingFullCoord := ChunkCoord{X: 1, Y: 0, Z: 0}
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "proxy-hide-partial"})
+	proxyEntity := cmd.AddEntity(&TransformComponent{})
+	state.ImportedWorldSectors[sectorCoord] = content.ImportedWorldSectorDef{
+		Coord: content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		FullChunkRefs: []content.TerrainChunkCoordDef{
+			{X: 0, Y: 0, Z: 0},
+			{X: 1, Y: 0, Z: 0},
+		},
+		NonEmptyVoxelCount: 2,
+	}
+	for _, coord := range []ChunkCoord{loadedFullCoord, missingFullCoord} {
+		state.ImportedWorldEntries[coord] = content.ImportedWorldChunkEntryDef{
+			Coord:              content.TerrainChunkCoordDef{X: coord.X, Y: coord.Y, Z: coord.Z},
+			NonEmptyVoxelCount: 1,
+		}
+	}
+	state.LoadedSectorProxies[sectorCoord] = &streamedLoadedSectorProxy{Entity: proxyEntity}
+	state.LoadedChunks[loadedFullCoord] = &streamedLoadedChunk{OwnedEntities: make(map[EntityId]struct{}), ObjectEntities: make(map[string]EntityId)}
+
+	reconcileStreamedSectorProxyAfterFullCommit(cmd, state, sectorCoord)
+	cmd.app.FlushCommands()
+
+	if VoxelEntityRenderHidden(cmd, proxyEntity) {
+		t.Fatalf("expected proxy entity %d to remain visible while full sector coverage is incomplete", proxyEntity)
 	}
 }
 
@@ -2324,6 +2497,138 @@ func TestStreamedRuntimeCanCommitImportedWorldFullVisualWithoutCollision(t *test
 		if !vmc.IsTerrainChunk || vmc.TerrainGroupID == 0 || vmc.TerrainChunkSize == 0 {
 			t.Fatalf("expected full imported chunk %d to keep terrain metadata, got %+v", entity, vmc)
 		}
+		if !vmc.ShareTerrainGeometry || !vmc.RetainRendererGeometry {
+			t.Fatalf("expected immutable full imported chunk %d to opt into renderer geometry residency, got %+v", entity, vmc)
+		}
+	}
+}
+
+func TestStreamedRuntimeReusesPreparedImportedWorldGeometryAcrossReload(t *testing.T) {
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	assets := newSpawnTestAssetServer()
+	state.Initialized = true
+	state.LevelID = "geometry_cache_level"
+	state.BaseWorldID = "world-geometry-cache"
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "geometry_cache_level"})
+	state.PreparedGeometryCache = newStreamedPreparedGeometryCache(8)
+	coord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	chunk := &content.ImportedWorldChunkDef{
+		WorldID:            "world-geometry-cache",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+		NonEmptyVoxelCount: 1,
+	}
+	cacheKey := "test:world-geometry-cache:0:0:0"
+	preparedGeometry, _ := state.PreparedGeometryCache.getOrBuild(cacheKey, func() *volume.XBrickMap {
+		return prepareImportedWorldChunkGeometry(chunk)
+	})
+
+	firstPrepared := streamedPreparedChunk{
+		Coord:                                 coord,
+		ImportedWorldChunk:                    chunk,
+		PreparedImportedWorldGeometry:         preparedGeometry,
+		PreparedImportedWorldGeometryCacheKey: cacheKey,
+	}
+	if _, err := commitPreparedStreamedChunk(cmd, assets, state, firstPrepared); err != nil {
+		t.Fatalf("first commitPreparedStreamedChunk failed: %v", err)
+	}
+	firstLoaded := state.LoadedChunks[coord]
+	if firstLoaded == nil || len(firstLoaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected first loaded chunk, got %+v", state.LoadedChunks)
+	}
+	var firstAsset AssetId
+	for entity := range firstLoaded.ImportedWorldEntities {
+		firstAsset = mustVoxelModelComponentForLevelTest(t, cmd, entity).OverrideGeometry
+	}
+	if firstAsset == (AssetId{}) {
+		t.Fatal("expected first imported chunk to use override geometry")
+	}
+	if len(assets.voxModels) != 1 {
+		t.Fatalf("expected one geometry asset after first commit, got %d", len(assets.voxModels))
+	}
+
+	if err := unloadStreamedChunk(cmd, state, coord); err != nil {
+		t.Fatalf("unloadStreamedChunk failed: %v", err)
+	}
+	cmd.app.FlushCommands()
+	if len(assets.voxModels) != 1 {
+		t.Fatalf("expected cache to retain unreferenced geometry asset, got %d", len(assets.voxModels))
+	}
+
+	secondGeometry, hit := state.PreparedGeometryCache.getOrBuild(cacheKey, func() *volume.XBrickMap {
+		return prepareImportedWorldChunkGeometry(chunk)
+	})
+	if !hit || secondGeometry != preparedGeometry {
+		t.Fatal("expected second prepare to reuse cached geometry")
+	}
+	secondPrepared := streamedPreparedChunk{
+		Coord:                                 coord,
+		ImportedWorldChunk:                    chunk,
+		PreparedImportedWorldGeometry:         secondGeometry,
+		PreparedImportedWorldGeometryCacheKey: cacheKey,
+	}
+	if _, err := commitPreparedStreamedChunk(cmd, assets, state, secondPrepared); err != nil {
+		t.Fatalf("second commitPreparedStreamedChunk failed: %v", err)
+	}
+	secondLoaded := state.LoadedChunks[coord]
+	var secondAsset AssetId
+	for entity := range secondLoaded.ImportedWorldEntities {
+		secondAsset = mustVoxelModelComponentForLevelTest(t, cmd, entity).OverrideGeometry
+	}
+	if secondAsset != firstAsset {
+		t.Fatalf("expected reload to reuse geometry asset %s, got %s", firstAsset, secondAsset)
+	}
+	if len(assets.voxModels) != 1 {
+		t.Fatalf("expected asset count to stay at one after reload, got %d", len(assets.voxModels))
+	}
+	refreshStreamedRuntimeMetricsCounts(state)
+	if state.Metrics.PreparedGeometryCacheHits <= 0 || state.Metrics.PreparedGeometryAssetReuses <= 0 {
+		t.Fatalf("expected cache hit and asset reuse metrics, got %+v", state.Metrics)
+	}
+}
+
+func TestStreamedPreparedGeometryCacheEvictsUnreferencedAssetsByEntryBudget(t *testing.T) {
+	assets := newSpawnTestAssetServer()
+	cache := newStreamedPreparedGeometryCache(1)
+	chunkA := &content.ImportedWorldChunkDef{
+		WorldID:            "world-cache",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+		NonEmptyVoxelCount: 1,
+	}
+	chunkB := &content.ImportedWorldChunkDef{
+		WorldID:            "world-cache",
+		Coord:              content.TerrainChunkCoordDef{X: 1, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 1, Y: 0, Z: 0, Value: 2}},
+		NonEmptyVoxelCount: 1,
+	}
+	geometryA, _ := cache.getOrBuild("a", func() *volume.XBrickMap {
+		return prepareImportedWorldChunkGeometry(chunkA)
+	})
+	assetA, _ := cache.acquireAsset(assets, "a", geometryA)
+	cache.releaseAsset(assets, "a")
+	geometryB, _ := cache.getOrBuild("b", func() *volume.XBrickMap {
+		return prepareImportedWorldChunkGeometry(chunkB)
+	})
+	assetB, _ := cache.acquireAsset(assets, "b", geometryB)
+	if assetA == (AssetId{}) || assetB == (AssetId{}) {
+		t.Fatalf("expected non-empty assets, got %s and %s", assetA, assetB)
+	}
+	if _, ok := assets.GetVoxelGeometry(assetA); ok {
+		t.Fatal("expected first unreferenced geometry asset to be evicted")
+	}
+	if _, ok := assets.GetVoxelGeometry(assetB); !ok {
+		t.Fatal("expected second geometry asset to remain resident")
+	}
+	stats := cache.snapshot()
+	if stats.Entries != 1 || stats.Evictions != 1 {
+		t.Fatalf("expected one cache entry and one eviction, got %+v", stats)
 	}
 }
 
@@ -2397,6 +2702,10 @@ func TestStreamedRuntimeCommitsImportedWorldDestructionMarkerInsideRadius(t *tes
 	for entity := range loaded.ImportedWorldEntities {
 		if !hasComponentOfType[StreamedDestructionResidentComponent](cmd, entity) {
 			t.Fatalf("expected near imported chunk %d to commit with destruction residency marker", entity)
+		}
+		vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+		if vmc.ShareTerrainGeometry || vmc.RetainRendererGeometry {
+			t.Fatalf("expected destruction-resident imported chunk %d to keep isolated renderer geometry, got %+v", entity, vmc)
 		}
 	}
 }
@@ -2591,6 +2900,26 @@ func placementItemEntityByIDForStreamedTest(cmd *Commands, placementID string, i
 		return true
 	})
 	return found
+}
+
+func streamedPreparedSectorProxyForTest(coord ChunkCoord) streamedPreparedSectorProxy {
+	geometry := volume.NewXBrickMap()
+	geometry.SetVoxel(0, 0, 0, 1)
+	geometry.ComputeAABB()
+	geometry.ClearDirty()
+	return streamedPreparedSectorProxy{
+		SectorCoord: coord,
+		LOD:         content.ImportedWorldLODDef{Level: 1, Kind: "voxel_proxy", NonEmptyVoxelCount: 1},
+		Chunk: &content.ImportedWorldChunkDef{
+			WorldID:            "world-sector-proxy-test",
+			Coord:              content.TerrainChunkCoordDef{X: coord.X, Y: coord.Y, Z: coord.Z},
+			ChunkSize:          4,
+			VoxelResolution:    4,
+			Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+			NonEmptyVoxelCount: 1,
+		},
+		PreparedGeometry: geometry,
+	}
 }
 
 func terrainChunkEntityByCoordForStreamedTest(cmd *Commands, coord [3]int) EntityId {

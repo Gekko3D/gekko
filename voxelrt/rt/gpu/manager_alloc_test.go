@@ -56,6 +56,71 @@ func TestRetiredBindGroupPinsSourceBuffers(t *testing.T) {
 	}
 }
 
+func TestAlignGpuBufferAllocationSizeAlignsGeometricGrowthResult(t *testing.T) {
+	if got := alignGpuBufferAllocationSize(39366); got != 39424 {
+		t.Fatalf("alignGpuBufferAllocationSize(39366) = %d, want 39424", got)
+	}
+	if got := alignGpuBufferAllocationSize(0); got != 256 {
+		t.Fatalf("alignGpuBufferAllocationSize(0) = %d, want 256", got)
+	}
+	if got := alignGpuBufferAllocationSize(26244); got != 26368 {
+		t.Fatalf("alignGpuBufferAllocationSize(26244) = %d, want 26368", got)
+	}
+}
+
+func TestLiveSceneBindGroupsPinSourceBuffers(t *testing.T) {
+	camera := &wgpu.Buffer{}
+	instances := &wgpu.Buffer{}
+	bvh := &wgpu.Buffer{}
+	unpinned := &wgpu.Buffer{}
+	manager := &GpuBufferManager{
+		gBufferBG0Camera:    camera,
+		gBufferBG0Instances: instances,
+		gBufferBG0BVHNodes:  bvh,
+	}
+
+	for _, buffer := range []*wgpu.Buffer{camera, instances, bvh} {
+		if !manager.bufferReferencedByLiveBindGroup(buffer) {
+			t.Fatalf("expected live g-buffer source %p to be pinned", buffer)
+		}
+	}
+	if manager.bufferReferencedByLiveBindGroup(unpinned) {
+		t.Fatal("expected unrelated buffer to be unpinned")
+	}
+}
+
+func TestAdvanceRetiredBuffersKeepsLiveSceneSourceBuffer(t *testing.T) {
+	camera := &wgpu.Buffer{}
+	manager := &GpuBufferManager{
+		gBufferBG0Camera: camera,
+		retiredBuffers: []retiredBuffer{
+			{Buffer: camera, FramesLeft: 0},
+		},
+	}
+
+	manager.advanceRetiredBuffers()
+
+	if len(manager.retiredBuffers) != 1 || manager.retiredBuffers[0].Buffer != camera {
+		t.Fatalf("expected live scene source buffer to remain retired but unreleased, got %+v", manager.retiredBuffers)
+	}
+}
+
+func TestAdvanceRetiredBindGroupsKeepsLiveSceneBindGroup(t *testing.T) {
+	bg := &wgpu.BindGroup{}
+	manager := &GpuBufferManager{
+		GBufferBindGroup0: bg,
+		retiredBindGroups: []retiredBindGroup{
+			{BindGroup: bg, FramesLeft: 0},
+		},
+	}
+
+	manager.advanceRetiredBindGroups()
+
+	if len(manager.retiredBindGroups) != 1 || manager.retiredBindGroups[0].BindGroup != bg {
+		t.Fatalf("expected live scene bind group to remain retired but unreleased, got %+v", manager.retiredBindGroups)
+	}
+}
+
 func TestTransparentOverlaySceneBindGroupCurrentTracksSourceBuffers(t *testing.T) {
 	camera := &wgpu.Buffer{}
 	instances := &wgpu.Buffer{}
