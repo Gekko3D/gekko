@@ -43,6 +43,7 @@ type ImportOptions struct {
 	SolidBandDepth            int
 	ChunkPayloadKind          string
 	LightMode                 HL1LightMode
+	BakeStaticLightmaps       bool
 	EmitLightFixtures         bool
 	EmitEmissiveSurfaceLights bool
 	MaxEmissiveSurfaceLights  int

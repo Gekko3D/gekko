@@ -1054,9 +1054,11 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 		return GeneratedAssetResult{}, content.Vec3{}, fmt.Errorf("model %d moving brush faces: %w", entity.BrushModelID, err)
 	}
 	voxelized := VoxelizeFacesCPU(faces, VoxelizeOptions{
-		VoxelResolution: opts.VoxelResolution,
-		TextureStore:    textureStore,
-		MaterialColors:  materialColors,
+		VoxelResolution:     opts.VoxelResolution,
+		TextureStore:        textureStore,
+		LightingData:        bsp.LightingData,
+		BakeStaticLightmaps: opts.BakeStaticLightmaps,
+		MaterialColors:      materialColors,
 	})
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
@@ -1096,9 +1098,11 @@ func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureS
 		return GeneratedAssetResult{}, content.Vec3{}, fmt.Errorf("model %d breakable faces: %w", entity.BrushModelID, err)
 	}
 	voxelized := VoxelizeFacesCPU(faces, VoxelizeOptions{
-		VoxelResolution: opts.VoxelResolution,
-		TextureStore:    textureStore,
-		MaterialColors:  materialColors,
+		VoxelResolution:     opts.VoxelResolution,
+		TextureStore:        textureStore,
+		LightingData:        bsp.LightingData,
+		BakeStaticLightmaps: opts.BakeStaticLightmaps,
+		MaterialColors:      materialColors,
 	})
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil

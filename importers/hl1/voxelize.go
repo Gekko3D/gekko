@@ -19,6 +19,8 @@ type VoxelizeOptions struct {
 	StructuralFillMaterialID int
 	SolidBandDepth           int
 	TextureStore             *TextureStore
+	LightingData             []byte
+	BakeStaticLightmaps      bool
 	MaterialColors           map[int][4]uint8
 }
 
@@ -436,7 +438,8 @@ func bakedFacePalette(face Face, key [3]int, opts VoxelizeOptions) (int, bool) {
 	}
 	if isCutoutTexture(face.TextureName) {
 		if sample, sampled, opaque := sampleFaceTextureCutoutOpaqueSample(face, key, opts); sampled && opaque {
-			return bakedPaletteIndex(sample.Color), true
+			color := lightmapModulatedFaceColor(face, key, opts, sample.Color)
+			return bakedPaletteIndex(color), true
 		}
 	}
 	if opts.TextureStore != nil {
@@ -444,14 +447,85 @@ func bakedFacePalette(face Face, key [3]int, opts VoxelizeOptions) (int, bool) {
 			if index, emissive := emissivePaletteIndexForTexel(face.TextureName, sample.Color); emissive {
 				return int(index), true
 			}
-			color := sample.Color
+			color := lightmapModulatedFaceColor(face, key, opts, sample.Color)
 			return bakedPaletteIndex(color), true
 		}
 	}
 	if color, ok := opts.MaterialColors[face.TextureID+1]; ok && color != ([4]uint8{}) {
+		color = lightmapModulatedFaceColor(face, key, opts, color)
 		return bakedPaletteIndex(color), true
 	}
 	return 0, false
+}
+
+func lightmapModulatedFaceColor(face Face, key [3]int, opts VoxelizeOptions, color [4]uint8) [4]uint8 {
+	if !opts.BakeStaticLightmaps {
+		return color
+	}
+	sample, ok := sampleFaceLightmap(face, key, opts)
+	if !ok {
+		return color
+	}
+	return [4]uint8{
+		lightmapModulatedChannel(color[0], sample[0]),
+		lightmapModulatedChannel(color[1], sample[1]),
+		lightmapModulatedChannel(color[2], sample[2]),
+		color[3],
+	}
+}
+
+func lightmapModulatedChannel(albedo, light uint8) uint8 {
+	value := int(albedo) * int(light) / 128
+	if value > 255 {
+		return 255
+	}
+	return uint8(value)
+}
+
+func sampleFaceLightmap(face Face, key [3]int, opts VoxelizeOptions) ([3]uint8, bool) {
+	if face.LightOfs < 0 || len(opts.LightingData) == 0 || face.Styles[0] == 255 {
+		return [3]uint8{}, false
+	}
+	mins, size, ok := faceLightmapExtents(face)
+	if !ok || size[0] <= 0 || size[1] <= 0 {
+		return [3]uint8{}, false
+	}
+	u, v, ok := faceTextureUV(face, key, opts)
+	if !ok {
+		return [3]uint8{}, false
+	}
+	x := clampInt(int(math.Round(float64(u/16.0-float32(mins[0])))), 0, size[0]-1)
+	y := clampInt(int(math.Round(float64(v/16.0-float32(mins[1])))), 0, size[1]-1)
+	offset := int(face.LightOfs) + (y*size[0]+x)*3
+	if offset < 0 || offset+2 >= len(opts.LightingData) {
+		return [3]uint8{}, false
+	}
+	return [3]uint8{opts.LightingData[offset], opts.LightingData[offset+1], opts.LightingData[offset+2]}, true
+}
+
+func faceLightmapExtents(face Face) ([2]int, [2]int, bool) {
+	if len(face.Vertices) == 0 {
+		return [2]int{}, [2]int{}, false
+	}
+	mins := [2]float32{float32(math.MaxFloat32), float32(math.MaxFloat32)}
+	maxs := [2]float32{-float32(math.MaxFloat32), -float32(math.MaxFloat32)}
+	for _, vertex := range face.Vertices {
+		s := dotVec3(vertex, face.TexInfo.S.Axis) + face.TexInfo.S.Shift
+		t := dotVec3(vertex, face.TexInfo.T.Axis) + face.TexInfo.T.Shift
+		mins[0] = minFloat32(mins[0], s)
+		mins[1] = minFloat32(mins[1], t)
+		maxs[0] = maxFloat32(maxs[0], s)
+		maxs[1] = maxFloat32(maxs[1], t)
+	}
+	lightMin := [2]int{
+		int(math.Floor(float64(mins[0] / 16.0))),
+		int(math.Floor(float64(mins[1] / 16.0))),
+	}
+	lightMax := [2]int{
+		int(math.Ceil(float64(maxs[0] / 16.0))),
+		int(math.Ceil(float64(maxs[1] / 16.0))),
+	}
+	return lightMin, [2]int{lightMax[0] - lightMin[0] + 1, lightMax[1] - lightMin[1] + 1}, true
 }
 
 func sampleFaceTextureColor(face Face, key [3]int, opts VoxelizeOptions) ([4]uint8, bool) {
@@ -1068,6 +1142,16 @@ func maxFloat32(a, b float32) float32 {
 		return a
 	}
 	return b
+}
+
+func clampInt(v, minValue, maxValue int) int {
+	if v < minValue {
+		return minValue
+	}
+	if v > maxValue {
+		return maxValue
+	}
+	return v
 }
 
 func voxelsToSortedSlice(voxels map[[3]int]importcommon.Voxel) []importcommon.Voxel {

@@ -129,6 +129,7 @@ func TestModelFacesReconstructsOrderedSquare(t *testing.T) {
 			vec3(64, 64, 0),
 			vec3(0, 64, 0),
 		},
+		Lighting: []byte{12, 34, 56},
 		TexInfos: []TexInfo{{
 			S:      TextureAxis{Axis: vec3(1, 0, 0), Shift: 4},
 			T:      TextureAxis{Axis: vec3(0, 1, 0), Shift: 8},
@@ -139,6 +140,8 @@ func TestModelFacesReconstructsOrderedSquare(t *testing.T) {
 			FirstEdge: 0,
 			EdgeCount: 4,
 			TexInfoID: 0,
+			Styles:    [4]byte{0, 255, 255, 255},
+			LightOfs:  0,
 		}},
 		Edges: []Edge{
 			{A: 0, B: 1},
@@ -165,6 +168,9 @@ func TestModelFacesReconstructsOrderedSquare(t *testing.T) {
 	if len(faces) != 1 {
 		t.Fatalf("faces = %d", len(faces))
 	}
+	if string(bsp.LightingData) != string([]byte{12, 34, 56}) {
+		t.Fatalf("lighting data = %+v", bsp.LightingData)
+	}
 	face := faces[0]
 	if face.TextureName != "SKY" || face.TextureID != 1 {
 		t.Fatalf("texture = id %d name %q", face.TextureID, face.TextureName)
@@ -180,6 +186,9 @@ func TestModelFacesReconstructsOrderedSquare(t *testing.T) {
 	}
 	if face.TexInfo.S.Shift != 4 || face.TexInfo.T.Shift != 8 {
 		t.Fatalf("texinfo = %+v", face.TexInfo)
+	}
+	if face.Styles != [4]byte{0, 255, 255, 255} || face.LightOfs != 0 {
+		t.Fatalf("lightmap refs = styles %+v ofs %d", face.Styles, face.LightOfs)
 	}
 	if face.Bounds.Min != vec3(0, 0, 0) || face.Bounds.Max != vec3(64, 64, 0) {
 		t.Fatalf("bounds = %+v", face.Bounds)
@@ -305,6 +314,7 @@ type syntheticBSPConfig struct {
 	Planes     []Plane
 	Nodes      []Node
 	Vertices   []importcommon.Vec3
+	Lighting   []byte
 	TexInfos   []TexInfo
 	Faces      []FaceHeader
 	Edges      []Edge
@@ -337,6 +347,7 @@ func syntheticBSP(t *testing.T, cfg syntheticBSPConfig) []byte {
 	setLump(LumpTextures, syntheticTextureLump(cfg.Textures))
 	setLump(LumpVertices, syntheticVertexLump(cfg.Vertices))
 	setLump(LumpVisibility, cfg.Visibility)
+	setLump(LumpLighting, cfg.Lighting)
 	setLump(LumpTexInfo, syntheticTexInfoLump(cfg.TexInfos))
 	setLump(LumpFaces, syntheticFaceLump(cfg.Faces))
 	setLump(LumpEdges, syntheticEdgeLump(cfg.Edges))

@@ -242,7 +242,10 @@ func TestHL1MaterialSemanticsClassifiesCommonTextures(t *testing.T) {
 		{name: "METALWALL01", kind: "metal", collision: "solid", metallic: true, tag: "material:metal"},
 		{name: "GLASS01", kind: "glass", collision: "solid", transparent: true, tag: "material:glass"},
 		{name: "!WATERBLUE", kind: "water", collision: "liquid", tag: "material:liquid"},
-		{name: "{LADDER1", kind: "ladder", collision: "ladder", transparent: true, tag: "material:ladder"},
+		{name: "{LADDER1", kind: "ladder", collision: "ladder", tag: "material:ladder"},
+		{name: "{FENCE1", kind: "grate", collision: "solid", metallic: true, tag: "material:cutout"},
+		{name: "{BLUE", kind: "cutout", collision: "solid", tag: "material:cutout"},
+		{name: "GRATE01", kind: "grate", collision: "solid", metallic: true, tag: "material:cutout"},
 		{name: "+0LIGHT1", kind: "emissive", collision: "solid", emitsLight: true, tag: "material:emissive"},
 	}
 	for _, tt := range tests {

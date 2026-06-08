@@ -28,6 +28,7 @@ func main() {
 	flag.Int64Var(&opts.MaxSolidSampleCells, "max-solid-sample-cells", hl1.DefaultImportedMaxSampledCells, "maximum BSP solid voxel sample cells")
 	flag.IntVar(&opts.SolidBandDepth, "solid-band-depth", hl1.DefaultImportedSolidBandDepth, "solid debug mode fill depth in voxels from reachable playable empty space")
 	flag.Var((*hl1LightModeFlag)(&opts.LightMode), "light-mode", "HL1 light import mode: faithful or point-proxy")
+	flag.BoolVar(&opts.BakeStaticLightmaps, "bake-static-lightmaps", false, "diagnostic: bake HL1 static face lightmaps into voxel albedo")
 	flag.BoolVar(&opts.EmitLightFixtures, "emit-light-fixtures", false, "write tiny emissive fixture assets and placements for imported HL1 lights")
 	opts.EmitEmissiveSurfaceLights = true
 	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize point lights from imported emissive surface clusters")

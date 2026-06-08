@@ -174,7 +174,9 @@ Known presets in current tests include:
 ### Water Bodies
 
 `water_bodies[]` are authored rectangular or fit-bounds water volumes that
-spawn runtime `WaterBodyComponent` entities.
+spawn runtime `WaterBodyComponent` entities. They can render as independent
+box-shaped water volumes or as a connected surface footprint when several
+patches share a `continuity_group`.
 
 Each explicit rectangle contains:
 
@@ -184,6 +186,8 @@ Each explicit rectangle contains:
 - `depth`
 - `rect_half_extents`
 - `transform`
+- optional `source_tag`
+- optional `continuity_group`
 - optional visual fields such as `color`, `absorption_color`, `opacity`,
   `roughness`, `refraction`, `flow_direction`, `flow_speed`, and
   `wave_amplitude`
@@ -191,6 +195,14 @@ Each explicit rectangle contains:
 Streamed runtime spawns water bodies at level load; water patches then resolve
 through the normal water body system and render through the dedicated water
 surface feature.
+
+`continuity_group` is the long-term path for imported or authored water that is
+made from multiple side-by-side rectangles. The resolver keeps the group on each
+runtime patch, and the renderer treats grouped patches as one horizontal surface
+footprint with shared edge continuity. This avoids drawing internal vertical
+sides between adjacent patches while still using each patch's depth for
+absorption and underwater thickness. Leave the field empty for isolated water
+boxes that should keep visible sides.
 
 ### Ladder Volumes
 

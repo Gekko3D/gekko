@@ -322,9 +322,12 @@ func importedWorldMaterialKeyForVoxel(voxel Voxel, source Material) importedWorl
 	transparent := source.Transparent
 	emitsLight := source.EmitsLight
 	switch voxel.SolidKind {
-	case "glass", "transparent", "grate", "ladder":
+	case "glass", "transparent":
 		kind = voxel.SolidKind
 		transparent = true
+	case "grate", "ladder", "cutout":
+		kind = voxel.SolidKind
+		transparent = false
 	case "emissive":
 		emitsLight = true
 	}
@@ -378,16 +381,22 @@ func importedWorldRuntimeMaterialForVoxel(value uint8, voxel Voxel, source Mater
 		material.Tags = appendUniqueString(material.Tags, "material:transparent")
 	case "grate":
 		material.Kind = "grate"
-		material.Transparent = true
-		material.Transparency = maxFloat32(material.Transparency, 0.35)
+		material.Transparent = false
+		material.Transparency = 0
 		material.Metallic = maxFloat32(material.Metallic, 0.65)
 		material.Roughness = 0.55
 		material.Tags = appendUniqueString(material.Tags, "material:cutout")
 	case "ladder":
 		material.Kind = "ladder"
-		material.Transparent = true
-		material.Transparency = maxFloat32(material.Transparency, 0.35)
+		material.Transparent = false
+		material.Transparency = 0
 		material.Tags = appendUniqueString(material.Tags, "material:ladder")
+		material.Tags = appendUniqueString(material.Tags, "material:cutout")
+	case "cutout":
+		material.Kind = "cutout"
+		material.Transparent = false
+		material.Transparency = 0
+		material.Tags = appendUniqueString(material.Tags, "material:cutout")
 	case "emissive":
 		material.EmitsLight = true
 		if material.Emissive <= 0 {

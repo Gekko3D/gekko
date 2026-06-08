@@ -102,6 +102,41 @@ func TestBuildImportedWorldEmissionCreatesMaterialPaletteForTransparentVoxels(t 
 	}
 }
 
+func TestBuildImportedWorldEmissionKeepsCutoutVoxelsOpaque(t *testing.T) {
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 0, Y: 0, Z: 0, Palette: 8, SolidKind: "grate"},
+		{X: 1, Y: 0, Z: 0, Palette: 8, SolidKind: "ladder"},
+		{X: 2, Y: 0, Z: 0, Palette: 8, SolidKind: "cutout"},
+	}, []Material{
+		{ID: 8, PaletteIndex: 8, BaseColor: [4]uint8{100, 100, 96, 255}, Kind: "baked_texture", Roughness: 0.9},
+	}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, material := range emission.Manifest.Materials {
+		switch material.Kind {
+		case "grate", "ladder", "cutout":
+			if material.Transparent || material.Transparency != 0 {
+				t.Fatalf("expected opaque cutout material, got %+v", material)
+			}
+			if !content.ImportedWorldMaterialHasTag(material, "material:cutout") {
+				t.Fatalf("expected cutout tag, got %+v", material)
+			}
+			seen[material.Kind] = true
+		}
+	}
+	for _, kind := range []string{"grate", "ladder", "cutout"} {
+		if !seen[kind] {
+			t.Fatalf("missing material kind %q in %+v", kind, emission.Manifest.Materials)
+		}
+	}
+}
+
 func TestSaveImportedWorldEmissionRoundTripsAndValidates(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "worlds", "test_world.gkworld")

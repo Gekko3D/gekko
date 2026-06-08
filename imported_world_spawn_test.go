@@ -114,3 +114,31 @@ func TestImportedWorldVoxMaterialsPreservePBRHints(t *testing.T) {
 		t.Fatalf("expected transparency, got %+v", glass)
 	}
 }
+
+func TestImportedWorldVoxMaterialsKeepCutoutBarsOpaque(t *testing.T) {
+	materials := importedWorldVoxMaterials([]content.ImportedWorldMaterialDef{
+		{
+			PaletteIndex: 7,
+			Kind:         "grate",
+			Roughness:    0.55,
+			Metallic:     0.65,
+		},
+		{
+			PaletteIndex: 8,
+			Kind:         "cutout",
+			Roughness:    0.9,
+		},
+	})
+	if len(materials) != 2 {
+		t.Fatalf("materials = %+v", materials)
+	}
+	if got := materials[0].Property["_type"]; got != "_metal" {
+		t.Fatalf("expected grate bars to render as opaque metal, got %+v", materials[0].Property)
+	}
+	if got := materials[1].Property["_type"]; got != "_diffuse" {
+		t.Fatalf("expected generic cutout texels to render as opaque diffuse, got %+v", materials[1].Property)
+	}
+	if materials[0].Property["_trans"] != float32(0) || materials[1].Property["_trans"] != float32(0) {
+		t.Fatalf("expected no bar transparency, got %+v", materials)
+	}
+}

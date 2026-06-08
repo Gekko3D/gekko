@@ -91,15 +91,8 @@ func materialSemantics(textureName string) hl1MaterialSemantics {
 	case strings.Contains(name, "ladder"):
 		kind = "ladder"
 		collision = "ladder"
-		transparent = true
-		transparency = 0.35
 		addTag("material:ladder")
-	case strings.HasPrefix(name, "{"):
-		kind = "transparent"
-		collision = "none"
-		transparent = true
-		transparency = 0.45
-		addTag("material:transparent")
+		addTag("material:cutout")
 	case containsAny(name, "glass", "window"):
 		kind = "glass"
 		transparent = true
@@ -108,11 +101,12 @@ func materialSemantics(textureName string) hl1MaterialSemantics {
 		addTag("material:glass")
 	case containsAny(name, "grate", "fence", "chain"):
 		kind = "grate"
-		transparent = true
-		transparency = 0.35
 		metallic = 0.65
 		roughness = 0.55
 		addTag("material:metal")
+		addTag("material:cutout")
+	case strings.HasPrefix(rawLower, "{"):
+		kind = "cutout"
 		addTag("material:cutout")
 	case containsAny(name, "metal", "metl", "steel", "pipe", "vent", "duct", "rail", "trim"):
 		kind = "metal"

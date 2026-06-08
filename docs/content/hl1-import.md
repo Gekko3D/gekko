@@ -776,6 +776,13 @@ Required phase-1 behavior:
 
 - Sample original WAD/BSP texture pixels per visible surface voxel using BSP
   texinfo axes, shifts, miptex dimensions, and GoldSrc texture wrapping.
+- Keep sampled source texels as material/albedo colors by default. Gekko uses
+  dynamic lights and destructible voxel geometry, so static HL1 face lightmaps
+  must not be baked into imported albedo during normal imports.
+- Optionally modulate sampled source texels with the first static HL1 face
+  lightmap style only when the diagnostic `-bake-static-lightmaps` CLI flag is
+  enabled. Dynamic/animated light styles are intentionally left for a later
+  analysis pass.
 - Quantize sampled texel colors into the imported-world palette and assign the
   resulting palette/material value to each boundary voxel.
 - Use per-texture average colors only as fallback when source pixels are
@@ -797,8 +804,14 @@ Required phase-1 behavior:
     remain a fallback when leaf bounds are not useful. Imported solid voxels are
     also carved out of BSP liquid contents so renderer water is not hidden by
     stale surface voxels.
-  - Transparent textures: preserve semantic metadata and transparency hints;
-    imported-world voxels still render through current voxel material support.
+  - Cutout textures, especially GoldSrc `{...}` textures and common ladder,
+    grate, fence, and chain textures: palette-index 255 texels are skipped
+    during voxelization, so holes are represented by missing voxels. The
+    surviving bars/rails/painted texels are emitted as opaque cutout materials,
+    not refractive glass.
+  - Transparent/glass textures: preserve semantic metadata and transparency
+    hints; imported-world voxels still render through current voxel material
+    support.
   - Common material names are classified into semantic kinds such as `metal`,
     `glass`, `grate`, `concrete`, `wood`, `terrain`, `ladder`, `water`,
     `slime`, `lava`, `emissive`, and tool/trigger/clip classes.
@@ -824,6 +837,12 @@ Implemented follow-up for palette-only material loss:
   using `value`.
 - HL1 glass/window surfaces become transparent runtime materials without
   making every similarly colored blue voxel transparent.
+- HL1 cutout surfaces keep their mask by omitting transparent texels during
+  voxelization. Their surviving voxels are tagged as `material:cutout` and kept
+  opaque so ladder/grate/fence bars do not become glassy.
+- HL1 static face lightmap bytes and face references are parsed, but normal
+  imports do not bake them into voxel colors. The data is kept for future light
+  validation, ambient/probe inference, or explicit visual comparison imports.
 - Exact per-voxel source texture identity is still not represented; material
   values preserve semantic class plus baked color, not the full original face
   reference.
@@ -960,6 +979,15 @@ The CLI defaults to compact RLE binary chunks. For readable JSON chunks, add:
 ```bash
 -chunk-payload sparse_json_v1
 ```
+
+For visual comparison against original GoldSrc baked lighting, add:
+
+```bash
+-bake-static-lightmaps
+```
+
+Do not use this for normal destructible imports; it bakes old static lighting
+into voxel albedo and conflicts with dynamic lights and edited geometry.
 
 For explicit binary chunks, add:
 
@@ -1144,6 +1172,8 @@ Initial generated `.gklevel` should use existing schema:
       "surface_y": 1.6,
       "depth": 1.2,
       "rect_half_extents": [4.0, 3.0],
+      "source_tag": "hl1:water",
+      "continuity_group": "hl1:water:water_continuity:0",
       "transform": {
         "position": [12.0, 1.6, -8.0],
         "rotation": [0, 0, 0, 1],
@@ -1176,13 +1206,13 @@ When `.gklevel` gets first-class lights and triggers, migrate generated data out
 of marker-only representation.
 
 Water bodies are already first-class for phase 1. Connected liquid leaves are
-used to recover total volume depth and surface footprint. A connected HL1 pool
-should normally emit one explicit rectangular water body; solid pillars and
-other imported geometry remain responsible for occlusion and collision inside
-that rectangle. Multiple water bodies are reserved for disconnected liquid
-components or different liquid kinds. Concave or masked liquid shapes may need
-future renderer/schema support if rectangular water plus solid occluders is not
-visually good enough.
+used to recover volume depth and surface footprint. Simple rectangular pools can
+still emit one explicit water body. Segmented, curved, or concave HL1 liquid
+should emit multiple explicit rectangular bodies that share a
+`continuity_group`; the renderer uses that group to treat adjacent same-height
+patches as one surface footprint and avoid internal vertical sides between
+patches. Disconnected liquid components, different liquid kinds, or liquid at
+different heights remain separate groups.
 
 ## Implementation Milestones
 

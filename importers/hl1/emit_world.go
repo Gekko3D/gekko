@@ -69,9 +69,11 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	case "", DebugWorldModeSurface:
 		mode = DebugWorldModeSurface
 		voxelized = VoxelizeFacesCPU(faces, VoxelizeOptions{
-			VoxelResolution: opts.VoxelResolution,
-			TextureStore:    textureStore,
-			MaterialColors:  materialColors,
+			VoxelResolution:     opts.VoxelResolution,
+			TextureStore:        textureStore,
+			LightingData:        bsp.LightingData,
+			BakeStaticLightmaps: opts.BakeStaticLightmaps,
+			MaterialColors:      materialColors,
 		})
 	case DebugWorldModeSolid:
 		sourceBuildVersion = DebugSolidVoxelBuildVersion
@@ -81,6 +83,8 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 			MaxSolidSampleCells: opts.MaxSolidSampleCells,
 			SolidBandDepth:      opts.SolidBandDepth,
 			TextureStore:        textureStore,
+			LightingData:        bsp.LightingData,
+			BakeStaticLightmaps: opts.BakeStaticLightmaps,
 			MaterialColors:      materialColors,
 		})
 		if err != nil {

@@ -138,6 +138,74 @@ func TestVoxelizeFacesCPUBakesTextureSampleIntoPalette(t *testing.T) {
 	}
 }
 
+func TestVoxelizeFacesCPUDoesNotBakeLightmapByDefault(t *testing.T) {
+	face, store, lighting := lightmappedTestFace()
+	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{VoxelResolution: 0.1, TextureStore: store, LightingData: lighting})
+	if len(result.Voxels) == 0 {
+		t.Fatal("no voxels")
+	}
+	want := uint8(bakedPaletteIndex([4]uint8{255, 255, 255, 255}))
+	for _, voxel := range result.Voxels {
+		if voxel.Palette != want || voxel.MaterialID != int(want) {
+			t.Fatalf("voxel baked palette = %+v, want unlightmapped %d", voxel, want)
+		}
+	}
+}
+
+func TestVoxelizeFacesCPUBakesLightmapWhenEnabled(t *testing.T) {
+	face, store, lighting := lightmappedTestFace()
+	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{
+		VoxelResolution:     0.1,
+		TextureStore:        store,
+		LightingData:        lighting,
+		BakeStaticLightmaps: true,
+	})
+	if len(result.Voxels) == 0 {
+		t.Fatal("no voxels")
+	}
+	want := uint8(bakedPaletteIndex([4]uint8{127, 127, 127, 255}))
+	for _, voxel := range result.Voxels {
+		if voxel.Palette != want || voxel.MaterialID != int(want) {
+			t.Fatalf("voxel baked palette = %+v, want lightmapped %d", voxel, want)
+		}
+	}
+}
+
+func lightmappedTestFace() (Face, *TextureStore, []byte) {
+	texture := TexturePixels{
+		Name:   "TESTWALL",
+		Width:  1,
+		Height: 1,
+		Pixels: []byte{0},
+		Colors: [][3]uint8{{255, 255, 255}},
+	}
+	store := &TextureStore{byName: map[string]TexturePixels{"testwall": texture}}
+	face := Face{
+		TextureID:   0,
+		TextureName: "TESTWALL",
+		Normal:      vec3(0, 0, 1),
+		TexInfo: TexInfo{
+			S: TextureAxis{Axis: vec3(1, 0, 0)},
+			T: TextureAxis{Axis: vec3(0, 1, 0)},
+		},
+		Styles:   [4]byte{0, 255, 255, 255},
+		LightOfs: 0,
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0),
+			vec3(16, 0, 0),
+			vec3(16, 16, 0),
+			vec3(0, 16, 0),
+		},
+	}
+	lighting := make([]byte, 2*2*3)
+	for i := 0; i < len(lighting); i += 3 {
+		lighting[i+0] = 64
+		lighting[i+1] = 64
+		lighting[i+2] = 64
+	}
+	return face, store, lighting
+}
+
 func TestVoxelizeFacesCPUPreservesGlassMaterialKindWithBakedColor(t *testing.T) {
 	texture := TexturePixels{
 		Name:   "GLASSBLUE",
@@ -310,6 +378,11 @@ func TestVoxelizeFacesCPUKeepsCutoutVoxelWhenFootprintTouchesOpaqueTexel(t *test
 	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{VoxelResolution: 0.1, TextureStore: store})
 	if len(result.Voxels) == 0 {
 		t.Fatal("cutout footprint touching opaque texel produced no voxels")
+	}
+	for _, voxel := range result.Voxels {
+		if voxel.SolidKind != "ladder" {
+			t.Fatalf("cutout ladder solid kind = %q", voxel.SolidKind)
+		}
 	}
 }
 

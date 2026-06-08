@@ -79,6 +79,7 @@ type BSP struct {
 	Vertices       []importcommon.Vec3
 	Textures       []Texture
 	VisibilityData []byte
+	LightingData   []byte
 	TexInfos       []TexInfo
 	Faces          []FaceHeader
 	Edges          []Edge
@@ -181,6 +182,8 @@ type Face struct {
 	TextureID   int
 	TextureName string
 	TexInfo     TexInfo
+	Styles      [4]byte
+	LightOfs    int32
 	Bounds      importcommon.Bounds
 }
 
@@ -227,6 +230,7 @@ func ParseBSP(data []byte, path string) (*BSP, error) {
 	out.Vertices = parseVertices(lumpBytes(data, out.Lumps[LumpVertices]), &out.Diagnostics)
 	out.Textures = parseTextures(lumpBytes(data, out.Lumps[LumpTextures]), &out.Diagnostics)
 	out.VisibilityData = append([]byte(nil), lumpBytes(data, out.Lumps[LumpVisibility])...)
+	out.LightingData = append([]byte(nil), lumpBytes(data, out.Lumps[LumpLighting])...)
 	out.TexInfos = parseTexInfos(lumpBytes(data, out.Lumps[LumpTexInfo]), &out.Diagnostics)
 	out.Faces = parseFaces(lumpBytes(data, out.Lumps[LumpFaces]), &out.Diagnostics)
 	out.Edges = parseEdges(lumpBytes(data, out.Lumps[LumpEdges]), &out.Diagnostics)
@@ -395,6 +399,8 @@ func (b *BSP) reconstructFace(modelID int, faceID int, header FaceHeader) (Face,
 		TextureID:   textureID,
 		TextureName: textureName,
 		TexInfo:     texInfo,
+		Styles:      header.Styles,
+		LightOfs:    header.LightOfs,
 		Bounds:      boundsForVertices(vertices),
 	}, nil
 }
