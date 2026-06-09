@@ -561,8 +561,9 @@ Implementation note, 2026-06-08:
   upload behavior.
 - Disabling sector proxies avoided the crash; retaining proxies still crashed
   after the world finished loading, so proxy removal is not the trigger. Sector
-  proxy entities now skip terrain renderer metadata and stay out of terrain
-  lookup/normal-seam systems while remaining visual voxel fallback objects.
+  proxy entities now skip terrain renderer metadata and voxel adjacency metadata,
+  staying out of terrain lookup and cross-chunk normal-seam systems while
+  remaining visual voxel fallback objects.
 - A retained-proxy run without terrain metadata still crashed while moving the
   camera during heavy startup loading. Sector proxies now also opt out of
   shadows and occlusion culling to isolate camera-driven visibility/shadow work

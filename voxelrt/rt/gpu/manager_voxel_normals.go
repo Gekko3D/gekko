@@ -20,7 +20,7 @@ const (
 	voxelNormalDensityComponentCutoff = 0.28
 )
 
-type terrainBakeKey struct {
+type voxelAdjacencyBakeKey struct {
 	group uint32
 	coord [3]int
 }
@@ -31,8 +31,8 @@ type planetBakeKey struct {
 }
 
 type voxelNormalBakeContext struct {
-	terrain map[terrainBakeKey]*core.VoxelObject
-	planet  map[planetBakeKey]*core.VoxelObject
+	adjacency map[voxelAdjacencyBakeKey]*core.VoxelObject
+	planet    map[planetBakeKey]*core.VoxelObject
 }
 
 type objectDirtyBrickSnapshot struct {
@@ -42,8 +42,8 @@ type objectDirtyBrickSnapshot struct {
 
 func newVoxelNormalBakeContext(scene *core.Scene) voxelNormalBakeContext {
 	ctx := voxelNormalBakeContext{
-		terrain: make(map[terrainBakeKey]*core.VoxelObject),
-		planet:  make(map[planetBakeKey]*core.VoxelObject),
+		adjacency: make(map[voxelAdjacencyBakeKey]*core.VoxelObject),
+		planet:    make(map[planetBakeKey]*core.VoxelObject),
 	}
 	if scene == nil {
 		return ctx
@@ -52,10 +52,10 @@ func newVoxelNormalBakeContext(scene *core.Scene) voxelNormalBakeContext {
 		if obj == nil {
 			continue
 		}
-		if obj.IsTerrainChunk && obj.TerrainGroupID != 0 && obj.TerrainChunkSize > 0 {
-			ctx.terrain[terrainBakeKey{
-				group: obj.TerrainGroupID,
-				coord: obj.TerrainChunkCoord,
+		if group, coord, _, ok := voxelObjectAdjacencyMetadata(obj); ok {
+			ctx.adjacency[voxelAdjacencyBakeKey{
+				group: group,
+				coord: coord,
 			}] = obj
 		}
 		if obj.IsPlanetTile && obj.PlanetTileGroupID != 0 {
@@ -90,8 +90,8 @@ func markCrossObjectNormalHaloDirty(scene *core.Scene, ctx voxelNormalBakeContex
 
 	for _, snapshot := range snapshots {
 		obj := snapshot.obj
-		if obj.IsTerrainChunk && obj.TerrainGroupID != 0 && obj.TerrainChunkSize > 0 {
-			markTerrainNormalHaloDirty(ctx, obj, snapshot.bricks)
+		if _, _, _, ok := voxelObjectAdjacencyMetadata(obj); ok {
+			markVoxelAdjacencyNormalHaloDirty(ctx, obj, snapshot.bricks)
 		}
 		if obj.IsPlanetTile && obj.PlanetTileGroupID != 0 {
 			markPlanetTileNormalHaloDirty(ctx, obj)
@@ -99,8 +99,12 @@ func markCrossObjectNormalHaloDirty(scene *core.Scene, ctx voxelNormalBakeContex
 	}
 }
 
-func markTerrainNormalHaloDirty(ctx voxelNormalBakeContext, obj *core.VoxelObject, dirtyBricks [][6]int) {
-	chunkBricks := obj.TerrainChunkSize / volume.BrickSize
+func markVoxelAdjacencyNormalHaloDirty(ctx voxelNormalBakeContext, obj *core.VoxelObject, dirtyBricks [][6]int) {
+	group, chunkCoord, chunkSize, ok := voxelObjectAdjacencyMetadata(obj)
+	if !ok {
+		return
+	}
+	chunkBricks := chunkSize / volume.BrickSize
 	if chunkBricks <= 0 {
 		return
 	}
@@ -112,17 +116,17 @@ func markTerrainNormalHaloDirty(ctx voxelNormalBakeContext, obj *core.VoxelObjec
 		}
 		for axis := 0; axis < 3; axis++ {
 			if localBrick[axis] == 0 {
-				neighborCoord := obj.TerrainChunkCoord
+				neighborCoord := chunkCoord
 				neighborCoord[axis]--
-				neighbor := ctx.terrain[terrainBakeKey{group: obj.TerrainGroupID, coord: neighborCoord}]
+				neighbor := ctx.adjacency[voxelAdjacencyBakeKey{group: group, coord: neighborCoord}]
 				neighborBrick := localBrick
 				neighborBrick[axis] = chunkBricks - 1
 				markObjectBrickDirty(neighbor, neighborBrick)
 			}
 			if localBrick[axis] == chunkBricks-1 {
-				neighborCoord := obj.TerrainChunkCoord
+				neighborCoord := chunkCoord
 				neighborCoord[axis]++
-				neighbor := ctx.terrain[terrainBakeKey{group: obj.TerrainGroupID, coord: neighborCoord}]
+				neighbor := ctx.adjacency[voxelAdjacencyBakeKey{group: group, coord: neighborCoord}]
 				neighborBrick := localBrick
 				neighborBrick[axis] = 0
 				markObjectBrickDirty(neighbor, neighborBrick)
@@ -188,6 +192,19 @@ func markAllObjectBricksDirty(obj *core.VoxelObject) {
 			obj.XBrickMap.DirtyBricks[[6]int{sKey[0], sKey[1], sKey[2], bx, by, bz}] = true
 		}
 	}
+}
+
+func voxelObjectAdjacencyMetadata(obj *core.VoxelObject) (uint32, [3]int, int, bool) {
+	if obj == nil {
+		return 0, [3]int{}, 0, false
+	}
+	if obj.VoxelAdjacencyGroupID != 0 && obj.VoxelAdjacencyChunkSize > 0 {
+		return obj.VoxelAdjacencyGroupID, obj.VoxelAdjacencyChunkCoord, obj.VoxelAdjacencyChunkSize, true
+	}
+	if obj.IsTerrainChunk && obj.TerrainGroupID != 0 && obj.TerrainChunkSize > 0 {
+		return obj.TerrainGroupID, obj.TerrainChunkCoord, obj.TerrainChunkSize, true
+	}
+	return 0, [3]int{}, 0, false
 }
 
 func buildVoxelAuxBytes(ctx voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, brickOrigin [3]int) []byte {
@@ -509,8 +526,8 @@ func sampleOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj *core.VoxelOb
 	}
 
 	localOcc, _ := obj.XBrickMap.GetVoxel(voxel[0], voxel[1], voxel[2])
-	if obj.IsTerrainChunk && obj.TerrainGroupID != 0 && obj.TerrainChunkSize > 0 {
-		return sampleTerrainOccupancyForBakedNormal(ctx, obj, voxel, localOcc)
+	if _, _, _, ok := voxelObjectAdjacencyMetadata(obj); ok {
+		return sampleVoxelAdjacencyOccupancyForBakedNormal(ctx, obj, voxel, localOcc)
 	}
 	if obj.IsPlanetTile && obj.PlanetTileGroupID != 0 {
 		return samplePlanetTileOccupancyForBakedNormal(ctx, obj, voxel, localOcc)
@@ -518,8 +535,11 @@ func sampleOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj *core.VoxelOb
 	return localOcc
 }
 
-func sampleTerrainOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [3]int, localOcc bool) bool {
-	chunkSize := obj.TerrainChunkSize
+func sampleVoxelAdjacencyOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [3]int, localOcc bool) bool {
+	group, chunkCoord, chunkSize, ok := voxelObjectAdjacencyMetadata(obj)
+	if !ok {
+		return localOcc
+	}
 	if voxel[0] >= 0 && voxel[0] < chunkSize &&
 		voxel[1] >= 0 && voxel[1] < chunkSize &&
 		voxel[2] >= 0 && voxel[2] < chunkSize {
@@ -531,12 +551,12 @@ func sampleTerrainOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj *core.
 		floorDivInt(voxel[1], chunkSize),
 		floorDivInt(voxel[2], chunkSize),
 	}
-	neighbor := ctx.terrain[terrainBakeKey{
-		group: obj.TerrainGroupID,
+	neighbor := ctx.adjacency[voxelAdjacencyBakeKey{
+		group: group,
 		coord: [3]int{
-			obj.TerrainChunkCoord[0] + offset[0],
-			obj.TerrainChunkCoord[1] + offset[1],
-			obj.TerrainChunkCoord[2] + offset[2],
+			chunkCoord[0] + offset[0],
+			chunkCoord[1] + offset[1],
+			chunkCoord[2] + offset[2],
 		},
 	}]
 	if neighbor == nil || neighbor.XBrickMap == nil {

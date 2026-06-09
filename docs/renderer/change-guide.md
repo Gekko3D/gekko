@@ -96,9 +96,10 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - Exact empty-voxel rejection is no longer payload-driven for non-solid bricks.
   - The live hot path is sector brick mask, then micro mask, then voxel-aux dense occupancy, then payload/material fetch only for confirmed occupied voxels.
 - Baked normals live in the voxel auxiliary sidecar.
-  - The sidecar starts with dense occupancy words and then stores one packed normal byte per voxel.
+  - The sidecar starts with dense occupancy words and then stores one 16-bit oct-encoded normal per voxel.
   - G-buffer, transparent overlay, and particles load the baked normal for the hit voxel; AO remains a separate neighbor-sampling feature.
-  - Cross-object terrain and planet tile seams depend on scene-level dirty propagation, not only `XBrickMap.SetVoxel` dirtying within the edited object.
+  - Cross-object voxel adjacency and planet tile seams depend on scene-level dirty propagation, not only `XBrickMap.SetVoxel` dirtying within the edited object.
+  - Prepare structural dirty state before cross-object normal halo propagation; otherwise newly loaded adjacent chunks can leave already-uploaded boundary normals stale.
 - Voxel shading style has a deliberate contract.
   - Keep voxel albedo/material lookup palette-driven and blocky.
   - Keep one normal per visible voxel cell rather than interpolating mesh-like normals across a voxel.

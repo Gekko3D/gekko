@@ -2241,7 +2241,8 @@ func TestStreamedRuntimeCommitsSectorProxyWithoutCollision(t *testing.T) {
 		t.Fatalf("expected proxy entity %d to be visual-only", loaded.Entity)
 	}
 	vmc := mustVoxelModelComponentForLevelTest(t, cmd, loaded.Entity)
-	if vmc.IsTerrainChunk || vmc.TerrainGroupID != 0 || vmc.TerrainChunkSize != 0 || vmc.ShadowSeamWorldEpsilon != 0 {
+	if vmc.IsTerrainChunk || vmc.TerrainGroupID != 0 || vmc.TerrainChunkSize != 0 || vmc.ShadowSeamWorldEpsilon != 0 ||
+		vmc.VoxelAdjacencyGroupID != 0 || vmc.VoxelAdjacencyChunkSize != 0 {
 		t.Fatalf("expected proxy entity %d to skip terrain renderer metadata, got %+v", loaded.Entity, vmc)
 	}
 	if !vmc.DisableShadows || !vmc.DisableOcclusionCulling {
@@ -2546,6 +2547,9 @@ func TestStreamedRuntimeCanCommitImportedWorldFullVisualWithoutCollision(t *test
 		vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
 		if !vmc.IsTerrainChunk || vmc.TerrainGroupID == 0 || vmc.TerrainChunkSize == 0 {
 			t.Fatalf("expected full imported chunk %d to keep terrain metadata, got %+v", entity, vmc)
+		}
+		if vmc.VoxelAdjacencyGroupID == 0 || vmc.VoxelAdjacencyChunkCoord != [3]int{prepared.Coord.X, prepared.Coord.Y, prepared.Coord.Z} || vmc.VoxelAdjacencyChunkSize == 0 {
+			t.Fatalf("expected full imported chunk %d to keep voxel adjacency metadata, got %+v", entity, vmc)
 		}
 		if !vmc.ShareTerrainGeometry || !vmc.RetainRendererGeometry {
 			t.Fatalf("expected immutable full imported chunk %d to opt into renderer geometry residency, got %+v", entity, vmc)

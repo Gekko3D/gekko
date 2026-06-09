@@ -68,9 +68,6 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	m.VoxelPayloadSparseBricks = 0
 	m.VoxelPayloadUploadsSkipped = 0
 	m.VoxelPayloadBytesAvoided = 0
-	normalBakeContext := newVoxelNormalBakeContext(scene)
-	markCrossObjectNormalHaloDirty(scene, normalBakeContext)
-
 	// Cleanup orphan allocations
 	activeMaps := make(map[*volume.XBrickMap]bool)
 	activeObjects := make(map[*core.VoxelObject]bool)
@@ -166,18 +163,15 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		recreated = true
 	}
 
+	m.prepareVoxelStructureDirtyState(scene)
+	normalBakeContext := newVoxelNormalBakeContext(scene)
+	markCrossObjectNormalHaloDirty(scene, normalBakeContext)
+
 	for _, obj := range scene.Objects {
 		xbm := obj.XBrickMap
-		alloc, exists := m.Allocations[xbm]
-		if !exists {
-			alloc = &ObjectGpuAllocation{
-				Sectors: make(map[[3]int]*volume.Sector),
-				Bricks:  make(map[[3]int]*[64]*volume.Brick),
-				DirectLookup: directSectorLookupMetadata{
-					TableBase: DirectSectorLookupInvalid,
-				},
-			}
-			m.Allocations[xbm] = alloc
+		alloc := m.Allocations[xbm]
+		if alloc == nil {
+			continue
 		}
 
 		// Update per-object materials independently from shared geometry.
@@ -219,60 +213,6 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		}
 		matAlloc.HasTransparency = materialTableHasTransparency(obj.MaterialTable)
 
-		if xbm.StructureDirty || !exists {
-			// 1. Detect removed sectors or pointer changes
-			for k, oldSector := range alloc.Sectors {
-				newSector, stillExists := xbm.Sectors[k]
-				if !stillExists || newSector != oldSector {
-					// Sector removed or replaced at this coordinate
-					if info, ok := m.SectorToInfo[oldSector]; ok {
-						// Free payload slots for all bricks in this sector
-						if bPtrs, has := alloc.Bricks[k]; has {
-							for i := 0; i < 64; i++ {
-								if brick := bPtrs[i]; brick != nil {
-									m.releaseBrickSlot(brick)
-									m.releaseVoxelAuxSlot(brick)
-								}
-							}
-							delete(alloc.Bricks, k)
-						}
-						m.SectorAlloc.FreeSlot(info.SlotIndex)
-						m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
-						delete(m.SectorToInfo, oldSector)
-					}
-					delete(alloc.Sectors, k)
-				}
-			}
-
-			// 2. Identify new sectors
-			for sKey, sector := range xbm.Sectors {
-				if _, ok := alloc.Sectors[sKey]; !ok {
-					// New sector at this coordinate (or replacement)
-					info, hasInfo := m.SectorToInfo[sector]
-					if !hasInfo {
-						sSlot := m.SectorAlloc.Alloc()
-						bSlot := m.BrickAlloc.Alloc()
-						info = SectorGpuInfo{
-							SlotIndex:       sSlot,
-							BrickTableIndex: bSlot * 64,
-						}
-						m.SectorToInfo[sector] = info
-					}
-					alloc.Sectors[sKey] = sector
-					alloc.Bricks[sKey] = &[64]*volume.Brick{} // New tracking entry
-					// Force upload for new sectors and ALL their bricks
-					xbm.DirtySectors[sKey] = true
-					for bz := 0; bz < 4; bz++ {
-						for by := 0; by < 4; by++ {
-							for bx := 0; bx < 4; bx++ {
-								xbm.DirtyBricks[[6]int{sKey[0], sKey[1], sKey[2], bx, by, bz}] = true
-							}
-						}
-					}
-				}
-			}
-			xbm.StructureDirty = false
-		}
 		// Upload dirty sectors with budgeting
 		sectorsInFrame := uint32(0)
 		for sKey, isDirty := range xbm.DirtySectors {
@@ -391,6 +331,96 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	}
 
 	return recreated
+}
+
+func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
+	if m == nil || scene == nil {
+		return
+	}
+	if m.Allocations == nil {
+		m.Allocations = make(map[*volume.XBrickMap]*ObjectGpuAllocation)
+	}
+	if m.SectorToInfo == nil {
+		m.SectorToInfo = make(map[*volume.Sector]SectorGpuInfo)
+	}
+	if m.BrickToSlot == nil {
+		m.BrickToSlot = make(map[*volume.Brick]PayloadSlot)
+	}
+	if m.BrickToAuxSlot == nil {
+		m.BrickToAuxSlot = make(map[*volume.Brick]uint32)
+	}
+	for _, obj := range scene.Objects {
+		if obj == nil || obj.XBrickMap == nil {
+			continue
+		}
+		xbm := obj.XBrickMap
+		alloc, exists := m.Allocations[xbm]
+		if !exists {
+			alloc = &ObjectGpuAllocation{
+				Sectors: make(map[[3]int]*volume.Sector),
+				Bricks:  make(map[[3]int]*[64]*volume.Brick),
+				DirectLookup: directSectorLookupMetadata{
+					TableBase: DirectSectorLookupInvalid,
+				},
+			}
+			m.Allocations[xbm] = alloc
+		}
+		if !xbm.StructureDirty && exists {
+			continue
+		}
+
+		// 1. Detect removed sectors or pointer changes.
+		for k, oldSector := range alloc.Sectors {
+			newSector, stillExists := xbm.Sectors[k]
+			if stillExists && newSector == oldSector {
+				continue
+			}
+			if info, ok := m.SectorToInfo[oldSector]; ok {
+				if bPtrs, has := alloc.Bricks[k]; has {
+					for i := 0; i < 64; i++ {
+						if brick := bPtrs[i]; brick != nil {
+							m.releaseBrickSlot(brick)
+							m.releaseVoxelAuxSlot(brick)
+						}
+					}
+					delete(alloc.Bricks, k)
+				}
+				m.SectorAlloc.FreeSlot(info.SlotIndex)
+				m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
+				delete(m.SectorToInfo, oldSector)
+			}
+			delete(alloc.Sectors, k)
+		}
+
+		// 2. Identify new sectors and mark their bricks dirty before cross-object
+		// normal halo propagation runs.
+		for sKey, sector := range xbm.Sectors {
+			if _, ok := alloc.Sectors[sKey]; ok {
+				continue
+			}
+			info, hasInfo := m.SectorToInfo[sector]
+			if !hasInfo {
+				sSlot := m.SectorAlloc.Alloc()
+				bSlot := m.BrickAlloc.Alloc()
+				info = SectorGpuInfo{
+					SlotIndex:       sSlot,
+					BrickTableIndex: bSlot * 64,
+				}
+				m.SectorToInfo[sector] = info
+			}
+			alloc.Sectors[sKey] = sector
+			alloc.Bricks[sKey] = &[64]*volume.Brick{}
+			xbm.DirtySectors[sKey] = true
+			for bz := 0; bz < volume.SectorBricks; bz++ {
+				for by := 0; by < volume.SectorBricks; by++ {
+					for bx := 0; bx < volume.SectorBricks; bx++ {
+						xbm.DirtyBricks[[6]int{sKey[0], sKey[1], sKey[2], bx, by, bz}] = true
+					}
+				}
+			}
+		}
+		xbm.StructureDirty = false
+	}
 }
 
 func (m *GpuBufferManager) ensureRetainedVoxelMaps() {

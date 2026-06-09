@@ -67,21 +67,24 @@ type VoxelModelComponent struct {
 	// EmitterLinkID tags visible voxel geometry as the emitter shell for any light
 	// using the same link ID. It does not disable ordinary occlusion or shadows for
 	// other lights; it only prevents self-occlusion for the linked light.
-	EmitterLinkID          uint32
-	AmbientOcclusionMode   VoxelAmbientOcclusionMode
-	ShadowSeamWorldEpsilon float32
-	IsTerrainChunk         bool
-	ShareTerrainGeometry   bool
-	RetainRendererGeometry bool
-	TerrainGroupID         uint32
-	TerrainChunkCoord      [3]int
-	TerrainChunkSize       int
-	IsPlanetTile           bool
-	PlanetTileGroupID      uint32
-	PlanetTileFace         int
-	PlanetTileLevel        int
-	PlanetTileX            int
-	PlanetTileY            int
+	EmitterLinkID            uint32
+	AmbientOcclusionMode     VoxelAmbientOcclusionMode
+	ShadowSeamWorldEpsilon   float32
+	VoxelAdjacencyGroupID    uint32
+	VoxelAdjacencyChunkCoord [3]int
+	VoxelAdjacencyChunkSize  int
+	IsTerrainChunk           bool
+	ShareTerrainGeometry     bool
+	RetainRendererGeometry   bool
+	TerrainGroupID           uint32
+	TerrainChunkCoord        [3]int
+	TerrainChunkSize         int
+	IsPlanetTile             bool
+	PlanetTileGroupID        uint32
+	PlanetTileFace           int
+	PlanetTileLevel          int
+	PlanetTileX              int
+	PlanetTileY              int
 }
 
 func (vmc *VoxelModelComponent) NormalizeGeometryRefs() {

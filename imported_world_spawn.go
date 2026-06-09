@@ -17,6 +17,7 @@ type AuthoredImportedWorldSpawnDef struct {
 	CollisionEnabled        bool
 	DestructionEnabled      bool
 	DisableTerrainMetadata  bool
+	DisableVoxelAdjacency   bool
 	DisableShadows          bool
 	DisableOcclusionCulling bool
 	ShareTerrainGeometry    bool
@@ -81,12 +82,20 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 	terrainGroupID := uint32(0)
 	terrainChunkCoord := [3]int{}
 	terrainChunkSize := 0
+	voxelAdjacencyGroupID := uint32(0)
+	voxelAdjacencyChunkCoord := [3]int{}
+	voxelAdjacencyChunkSize := 0
 	shadowSeamWorldEpsilon := float32(0)
 	if isTerrainChunk {
 		terrainGroupID = def.ShadowGroupID
 		terrainChunkCoord = [3]int{def.Chunk.Coord.X, def.Chunk.Coord.Y, def.Chunk.Coord.Z}
 		terrainChunkSize = def.Chunk.ChunkSize
 		shadowSeamWorldEpsilon = def.Chunk.VoxelResolution
+	}
+	if !def.DisableVoxelAdjacency {
+		voxelAdjacencyGroupID = def.ShadowGroupID
+		voxelAdjacencyChunkCoord = [3]int{def.Chunk.Coord.X, def.Chunk.Coord.Y, def.Chunk.Coord.Z}
+		voxelAdjacencyChunkSize = def.Chunk.ChunkSize
 	}
 	comps := []any{
 		&TransformComponent{
@@ -101,19 +110,22 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 		},
 		&Parent{Entity: parent},
 		&VoxelModelComponent{
-			VoxelPalette:            palette,
-			PivotMode:               PivotModeCorner,
-			OverrideGeometry:        overrideGeometry,
-			DisableShadows:          def.DisableShadows,
-			DisableOcclusionCulling: def.DisableOcclusionCulling,
-			ShadowGroupID:           def.ShadowGroupID,
-			ShadowSeamWorldEpsilon:  shadowSeamWorldEpsilon,
-			IsTerrainChunk:          isTerrainChunk,
-			ShareTerrainGeometry:    def.ShareTerrainGeometry,
-			RetainRendererGeometry:  def.RetainRendererGeometry,
-			TerrainGroupID:          terrainGroupID,
-			TerrainChunkCoord:       terrainChunkCoord,
-			TerrainChunkSize:        terrainChunkSize,
+			VoxelPalette:             palette,
+			PivotMode:                PivotModeCorner,
+			OverrideGeometry:         overrideGeometry,
+			DisableShadows:           def.DisableShadows,
+			DisableOcclusionCulling:  def.DisableOcclusionCulling,
+			ShadowGroupID:            def.ShadowGroupID,
+			ShadowSeamWorldEpsilon:   shadowSeamWorldEpsilon,
+			VoxelAdjacencyGroupID:    voxelAdjacencyGroupID,
+			VoxelAdjacencyChunkCoord: voxelAdjacencyChunkCoord,
+			VoxelAdjacencyChunkSize:  voxelAdjacencyChunkSize,
+			IsTerrainChunk:           isTerrainChunk,
+			ShareTerrainGeometry:     def.ShareTerrainGeometry,
+			RetainRendererGeometry:   def.RetainRendererGeometry,
+			TerrainGroupID:           terrainGroupID,
+			TerrainChunkCoord:        terrainChunkCoord,
+			TerrainChunkSize:         terrainChunkSize,
 		},
 		&AuthoredImportedWorldChunkRefComponent{
 			LevelID:    def.LevelID,

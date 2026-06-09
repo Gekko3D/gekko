@@ -562,6 +562,40 @@ func TestBuildVoxelAuxBytesBakesTerrainNeighborNormalsAcrossChunks(t *testing.T)
 	}
 }
 
+func TestBuildVoxelAuxBytesBakesVoxelAdjacencyNeighborNormalsAcrossChunks(t *testing.T) {
+	leftMap := volume.NewXBrickMap()
+	leftMap.SetVoxel(31, 0, 0, 1)
+	rightMap := volume.NewXBrickMap()
+	rightMap.SetVoxel(0, 0, 0, 1)
+
+	left := core.NewVoxelObject()
+	left.XBrickMap = leftMap
+	left.VoxelAdjacencyGroupID = 12
+	left.VoxelAdjacencyChunkCoord = [3]int{0, 0, 0}
+	left.VoxelAdjacencyChunkSize = 32
+
+	right := core.NewVoxelObject()
+	right.XBrickMap = rightMap
+	right.VoxelAdjacencyGroupID = 12
+	right.VoxelAdjacencyChunkCoord = [3]int{1, 0, 0}
+	right.VoxelAdjacencyChunkSize = 32
+
+	scene := &core.Scene{Objects: []*core.VoxelObject{left, right}}
+	ctx := newVoxelNormalBakeContext(scene)
+	sector := leftMap.Sectors[[3]int{0, 0, 0}]
+	brick := sector.GetBrick(3, 0, 0)
+	buf := buildVoxelAuxBytes(ctx, left, brick, [3]int{24, 0, 0})
+
+	normalWord := bakedNormalWord(buf, 7)
+	nx, ny, nz, valid, _ := decodeBakedNormalWordForTest(normalWord)
+	if !valid {
+		t.Fatal("expected baked normal to be valid")
+	}
+	if math.Abs(nx+1) > 0.02 || math.Abs(ny) > 0.02 || math.Abs(nz) > 0.02 {
+		t.Fatalf("expected adjacency seam-aware normal near -X, got (%.3f,%.3f,%.3f) from word %#x", nx, ny, nz, normalWord)
+	}
+}
+
 func TestBuildVoxelAuxBytesBakesSlopeSheetNormalFromNearbySurface(t *testing.T) {
 	xbm := volume.NewXBrickMap()
 	for z := 1; z <= 3; z++ {
@@ -667,6 +701,77 @@ func TestMarkCrossObjectNormalHaloDirtyMarksAdjacentTerrainBrick(t *testing.T) {
 
 	if !rightMap.DirtyBricks[[6]int{0, 0, 0, 0, 0, 0}] {
 		t.Fatal("expected adjacent terrain chunk boundary brick to be dirtied")
+	}
+}
+
+func TestMarkCrossObjectNormalHaloDirtyMarksAdjacentVoxelAdjacencyBrick(t *testing.T) {
+	leftMap := volume.NewXBrickMap()
+	leftMap.SetVoxel(31, 0, 0, 1)
+	rightMap := volume.NewXBrickMap()
+	rightMap.SetVoxel(0, 0, 0, 1)
+	leftMap.ClearDirty()
+	rightMap.ClearDirty()
+	leftMap.DirtyBricks[[6]int{0, 0, 0, 3, 0, 0}] = true
+
+	left := core.NewVoxelObject()
+	left.XBrickMap = leftMap
+	left.VoxelAdjacencyGroupID = 12
+	left.VoxelAdjacencyChunkCoord = [3]int{0, 0, 0}
+	left.VoxelAdjacencyChunkSize = 32
+
+	right := core.NewVoxelObject()
+	right.XBrickMap = rightMap
+	right.VoxelAdjacencyGroupID = 12
+	right.VoxelAdjacencyChunkCoord = [3]int{1, 0, 0}
+	right.VoxelAdjacencyChunkSize = 32
+
+	scene := &core.Scene{Objects: []*core.VoxelObject{left, right}}
+	ctx := newVoxelNormalBakeContext(scene)
+	markCrossObjectNormalHaloDirty(scene, ctx)
+
+	if !rightMap.DirtyBricks[[6]int{0, 0, 0, 0, 0, 0}] {
+		t.Fatal("expected adjacent voxel adjacency chunk boundary brick to be dirtied")
+	}
+}
+
+func TestPrepareVoxelStructureDirtyStateLetsNewChunkDirtyExistingAdjacencyHalo(t *testing.T) {
+	leftMap := volume.NewXBrickMap()
+	leftMap.SetVoxel(31, 0, 0, 1)
+	rightMap := volume.NewXBrickMap()
+	rightMap.SetVoxel(0, 0, 0, 1)
+	leftMap.ClearDirty()
+	rightMap.ClearDirty()
+
+	left := core.NewVoxelObject()
+	left.XBrickMap = leftMap
+	left.VoxelAdjacencyGroupID = 12
+	left.VoxelAdjacencyChunkCoord = [3]int{0, 0, 0}
+	left.VoxelAdjacencyChunkSize = 32
+
+	right := core.NewVoxelObject()
+	right.XBrickMap = rightMap
+	right.VoxelAdjacencyGroupID = 12
+	right.VoxelAdjacencyChunkCoord = [3]int{1, 0, 0}
+	right.VoxelAdjacencyChunkSize = 32
+
+	m := &GpuBufferManager{
+		Allocations:     map[*volume.XBrickMap]*ObjectGpuAllocation{leftMap: testObjectGpuAllocationForMap(leftMap)},
+		SectorToInfo:    map[*volume.Sector]SectorGpuInfo{},
+		BrickToSlot:     map[*volume.Brick]PayloadSlot{},
+		BrickToAuxSlot:  map[*volume.Brick]uint32{},
+		SectorsPerFrame: MaxUpdatesPerFrame,
+	}
+	scene := &core.Scene{Objects: []*core.VoxelObject{left, right}}
+
+	m.prepareVoxelStructureDirtyState(scene)
+	ctx := newVoxelNormalBakeContext(scene)
+	markCrossObjectNormalHaloDirty(scene, ctx)
+
+	if !rightMap.DirtyBricks[[6]int{0, 0, 0, 0, 0, 0}] {
+		t.Fatal("expected newly allocated right chunk to become dirty before upload")
+	}
+	if !leftMap.DirtyBricks[[6]int{0, 0, 0, 3, 0, 0}] {
+		t.Fatal("expected new right chunk to dirty existing left chunk normal halo")
 	}
 }
 

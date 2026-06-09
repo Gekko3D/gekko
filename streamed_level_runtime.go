@@ -1843,6 +1843,7 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 		Chunk:                   prepared.Chunk,
 		CollisionEnabled:        false,
 		DisableTerrainMetadata:  true,
+		DisableVoxelAdjacency:   true,
 		DisableShadows:          true,
 		DisableOcclusionCulling: true,
 		ShareTerrainGeometry:    true,

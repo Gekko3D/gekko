@@ -1528,6 +1528,9 @@ func TestLoadAndSpawnAuthoredLevelSpawnsTerrainChunksWithMetadata(t *testing.T) 
 	if !vmc.IsTerrainChunk || vmc.TerrainGroupID != 77 || vmc.TerrainChunkCoord != [3]int{1, 0, -1} || vmc.TerrainChunkSize != 8 {
 		t.Fatalf("unexpected terrain voxel model metadata %+v", vmc)
 	}
+	if vmc.VoxelAdjacencyGroupID != 77 || vmc.VoxelAdjacencyChunkCoord != [3]int{1, 0, -1} || vmc.VoxelAdjacencyChunkSize != 8 {
+		t.Fatalf("unexpected terrain voxel adjacency metadata %+v", vmc)
+	}
 	if vmc.PivotMode != PivotModeCorner {
 		t.Fatalf("expected terrain pivot mode corner, got %v", vmc.PivotMode)
 	}

@@ -1531,6 +1531,48 @@ func TestVoxelRtSystemDefaultsAmbientOcclusionModeToInherited(t *testing.T) {
 	}
 }
 
+func TestVoxelRtSystemCopiesVoxelAdjacencyMetadataToRendererObject(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+
+	modelID := server.CreateVoxelModel(VoxModel{
+		SizeX: 1,
+		SizeY: 1,
+		SizeZ: 1,
+		Voxels: []Voxel{
+			{X: 0, Y: 0, Z: 0, ColorIndex: 1},
+		},
+	}, 1.0)
+	paletteID := server.CreateSimplePalette([4]uint8{64, 96, 128, 255})
+
+	entity := cmd.AddEntity(
+		&TransformComponent{
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&VoxelModelComponent{
+			VoxelModel:               modelID,
+			VoxelPalette:             paletteID,
+			VoxelAdjacencyGroupID:    91,
+			VoxelAdjacencyChunkCoord: [3]int{-2, 0, 5},
+			VoxelAdjacencyChunkSize:  32,
+		},
+	)
+	app.FlushCommands()
+
+	voxelRtSystem(nil, state, server, &Time{Dt: 1.0 / 60.0}, cmd, nil)
+
+	obj := state.instanceMap[entity]
+	if obj == nil {
+		t.Fatal("expected synced renderer object")
+	}
+	if obj.VoxelAdjacencyGroupID != 91 || obj.VoxelAdjacencyChunkCoord != [3]int{-2, 0, 5} || obj.VoxelAdjacencyChunkSize != 32 {
+		t.Fatalf("unexpected renderer voxel adjacency metadata: %+v", obj)
+	}
+}
+
 func TestVoxelRtSystemUsesObjectScopedGeometryForTerrainChunksSharingModel(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

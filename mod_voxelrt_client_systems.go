@@ -855,6 +855,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.AmbientOcclusionMode = core.AmbientOcclusionMode(vox.AmbientOcclusionMode)
 		obj.ShadowSeamWorldEpsilon = vox.ShadowSeamWorldEpsilon
 		obj.AllowOcclusionCulling = !vox.DisableOcclusionCulling && voxelObjectAllowsOcclusion(cmd, entityId, vox)
+		obj.VoxelAdjacencyGroupID = vox.VoxelAdjacencyGroupID
+		obj.VoxelAdjacencyChunkCoord = vox.VoxelAdjacencyChunkCoord
+		obj.VoxelAdjacencyChunkSize = vox.VoxelAdjacencyChunkSize
+		if obj.VoxelAdjacencyGroupID == 0 && vox.IsTerrainChunk && vox.TerrainGroupID != 0 && vox.TerrainChunkSize > 0 {
+			obj.VoxelAdjacencyGroupID = vox.TerrainGroupID
+			obj.VoxelAdjacencyChunkCoord = vox.TerrainChunkCoord
+			obj.VoxelAdjacencyChunkSize = vox.TerrainChunkSize
+		}
 		obj.IsTerrainChunk = vox.IsTerrainChunk
 		obj.TerrainGroupID = vox.TerrainGroupID
 		obj.TerrainChunkCoord = vox.TerrainChunkCoord

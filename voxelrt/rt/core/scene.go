@@ -58,33 +58,36 @@ type HitResult struct {
 }
 
 type VoxelObject struct {
-	Transform              *Transform
-	XBrickMap              *volume.XBrickMap
-	MaterialTable          []Material
-	WorldAABB              *[2]mgl32.Vec3 // Min, Max
-	Tree64LOD              []byte
-	LODThreshold           float32
-	CastsShadows           bool
-	ShadowMaxDistance      float32
-	ShadowCasterGroupID    uint64
-	ShadowCasterGroupLimit int
-	ShadowGroupID          uint32
-	EmitterLinkID          uint32
-	AmbientOcclusionMode   AmbientOcclusionMode
-	ShadowSeamWorldEpsilon float32
-	AllowOcclusionCulling  bool
-	IsStatic               bool
-	ParticipatesInGI       bool
-	IsTerrainChunk         bool
-	TerrainGroupID         uint32
-	TerrainChunkCoord      [3]int
-	TerrainChunkSize       int
-	IsPlanetTile           bool
-	PlanetTileGroupID      uint32
-	PlanetTileFace         int
-	PlanetTileLevel        int
-	PlanetTileX            int
-	PlanetTileY            int
+	Transform                *Transform
+	XBrickMap                *volume.XBrickMap
+	MaterialTable            []Material
+	WorldAABB                *[2]mgl32.Vec3 // Min, Max
+	Tree64LOD                []byte
+	LODThreshold             float32
+	CastsShadows             bool
+	ShadowMaxDistance        float32
+	ShadowCasterGroupID      uint64
+	ShadowCasterGroupLimit   int
+	ShadowGroupID            uint32
+	EmitterLinkID            uint32
+	AmbientOcclusionMode     AmbientOcclusionMode
+	ShadowSeamWorldEpsilon   float32
+	AllowOcclusionCulling    bool
+	IsStatic                 bool
+	ParticipatesInGI         bool
+	VoxelAdjacencyGroupID    uint32
+	VoxelAdjacencyChunkCoord [3]int
+	VoxelAdjacencyChunkSize  int
+	IsTerrainChunk           bool
+	TerrainGroupID           uint32
+	TerrainChunkCoord        [3]int
+	TerrainChunkSize         int
+	IsPlanetTile             bool
+	PlanetTileGroupID        uint32
+	PlanetTileFace           int
+	PlanetTileLevel          int
+	PlanetTileX              int
+	PlanetTileY              int
 }
 
 func (obj *VoxelObject) HasTransparency() bool {
