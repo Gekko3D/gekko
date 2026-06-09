@@ -10,11 +10,14 @@ import (
 )
 
 const (
-	voxelNormalAxisZero     = 0
-	voxelNormalAxisPositive = 1
-	voxelNormalAxisNegative = 2
-	voxelNormalValidBit     = 1 << 6
-	voxelNormalTwoSidedBit  = 1 << 7
+	voxelNormalOctMax      = 127
+	voxelNormalValidBit    = 1 << 14
+	voxelNormalTwoSidedBit = 1 << 15
+
+	voxelNormalSurfaceFitRadius       = 2
+	voxelNormalSurfaceFitMinSamples   = 4
+	voxelNormalSurfaceFitMaxError     = 0.08
+	voxelNormalDensityComponentCutoff = 0.28
 )
 
 type terrainBakeKey struct {
@@ -203,11 +206,11 @@ func buildVoxelAuxBytes(ctx voxelNormalBakeContext, obj *core.VoxelObject, brick
 				}
 				voxelIdx := denseOccupancyLinearIndexLocal(x, y, z)
 				global := [3]int{brickOrigin[0] + x, brickOrigin[1] + y, brickOrigin[2] + z}
-				nx, ny, nz, valid, twoSided := bakedVoxelNormal(ctx, obj, global)
+				normal, valid, twoSided := bakedVoxelNormal(ctx, obj, global)
 				if !valid {
 					continue
 				}
-				buf[normalBase+voxelIdx] = encodeBakedVoxelNormal(nx, ny, nz, twoSided)
+				binary.LittleEndian.PutUint16(buf[normalBase+voxelIdx*2:normalBase+voxelIdx*2+2], encodeBakedVoxelNormal(normal, twoSided))
 			}
 		}
 	}
@@ -228,28 +231,37 @@ func denseOccupancyLinearIndexLocal(x, y, z int) int {
 	return x + y*volume.BrickSize + z*volume.BrickSize*volume.BrickSize
 }
 
-func encodeBakedVoxelNormal(nx, ny, nz int, twoSided bool) byte {
-	axisBits := func(v int) byte {
-		if v > 0 {
-			return voxelNormalAxisPositive
-		}
-		if v < 0 {
-			return voxelNormalAxisNegative
-		}
-		return voxelNormalAxisZero
+func encodeBakedVoxelNormal(normal mgl32.Vec3, twoSided bool) uint16 {
+	n := normalizedVec3OrZero(normal)
+	if n.LenSqr() <= 1e-8 {
+		return 0
+	}
+	denom := float32(math.Abs(float64(n.X())) + math.Abs(float64(n.Y())) + math.Abs(float64(n.Z())))
+	if denom <= 1e-8 {
+		return 0
+	}
+	ox := n.X() / denom
+	oy := n.Y() / denom
+	if n.Z() < 0 {
+		oldX, oldY := ox, oy
+		ox = (1 - float32(math.Abs(float64(oldY)))) * signNotZero(oldX)
+		oy = (1 - float32(math.Abs(float64(oldX)))) * signNotZero(oldY)
+	}
+	pack := func(v float32) uint16 {
+		v = clampFloat32(v*0.5+0.5, 0, 1)
+		return uint16(math.Round(float64(v * voxelNormalOctMax)))
 	}
 
-	b := byte(voxelNormalValidBit)
-	b |= axisBits(nx)
-	b |= axisBits(ny) << 2
-	b |= axisBits(nz) << 4
+	b := uint16(voxelNormalValidBit)
+	b |= pack(ox)
+	b |= pack(oy) << 7
 	if twoSided {
 		b |= voxelNormalTwoSidedBit
 	}
 	return b
 }
 
-func bakedVoxelNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [3]int) (int, int, int, bool, bool) {
+func bakedVoxelNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [3]int) (mgl32.Vec3, bool, bool) {
 	occPX := boolToInt(sampleOccupancyForBakedNormal(ctx, obj, [3]int{voxel[0] + 1, voxel[1], voxel[2]}))
 	occNX := boolToInt(sampleOccupancyForBakedNormal(ctx, obj, [3]int{voxel[0] - 1, voxel[1], voxel[2]}))
 	occPY := boolToInt(sampleOccupancyForBakedNormal(ctx, obj, [3]int{voxel[0], voxel[1] + 1, voxel[2]}))
@@ -261,24 +273,215 @@ func bakedVoxelNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [
 	ny := occNY - occPY
 	nz := occNZ - occPZ
 	twoSided := (occPX == 0 && occNX == 0) || (occPY == 0 && occNY == 0) || (occPZ == 0 && occNZ == 0)
-	if nx != 0 || ny != 0 || nz != 0 {
-		return nx, ny, nz, true, twoSided
-	}
 
 	tx, ty, tz := 0, 0, 0
+	exposedAxisPairs := 0
 	if occPX == 0 || occNX == 0 {
 		tx = axisTieBreakSign(obj, voxel, 0)
+		exposedAxisPairs++
 	}
 	if occPY == 0 || occNY == 0 {
 		ty = axisTieBreakSign(obj, voxel, 1)
+		exposedAxisPairs++
 	}
 	if occPZ == 0 || occNZ == 0 {
 		tz = axisTieBreakSign(obj, voxel, 2)
+		exposedAxisPairs++
+	}
+	if normal, ok := densityGradientVoxelNormal(ctx, obj, voxel); ok {
+		if twoSided && voxelNormalHasMultipleComponents(normal) {
+			normal = canonicalVoxelNormalHemisphere(normal)
+		}
+		return normal, true, twoSided
+	}
+	if nx != 0 || ny != 0 || nz != 0 {
+		return normalizedVec3OrZero(mgl32.Vec3{float32(nx), float32(ny), float32(nz)}), true, twoSided
+	}
+	if exposedAxisPairs <= 1 {
+		if tx != 0 || ty != 0 || tz != 0 {
+			return normalizedVec3OrZero(mgl32.Vec3{float32(tx), float32(ty), float32(tz)}), true, twoSided
+		}
+		return mgl32.Vec3{}, false, twoSided
+	}
+
+	if normal, ok := fittedSurfaceVoxelNormal(ctx, obj, voxel, mgl32.Vec3{float32(tx), float32(ty), float32(tz)}); ok {
+		if twoSided {
+			normal = canonicalVoxelNormalHemisphere(normal)
+		}
+		return normal, true, twoSided
 	}
 	if tx != 0 || ty != 0 || tz != 0 {
-		return tx, ty, tz, true, twoSided
+		return normalizedVec3OrZero(mgl32.Vec3{float32(tx), float32(ty), float32(tz)}), true, twoSided
 	}
-	return 0, 0, 0, false, twoSided
+	return mgl32.Vec3{}, false, twoSided
+}
+
+func fittedSurfaceVoxelNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [3]int, orient mgl32.Vec3) (mgl32.Vec3, bool) {
+	type weightedOffset struct {
+		x, y, z int
+		weight  float64
+	}
+	offsets := make([]weightedOffset, 0, 32)
+	for dz := -voxelNormalSurfaceFitRadius; dz <= voxelNormalSurfaceFitRadius; dz++ {
+		for dy := -voxelNormalSurfaceFitRadius; dy <= voxelNormalSurfaceFitRadius; dy++ {
+			for dx := -voxelNormalSurfaceFitRadius; dx <= voxelNormalSurfaceFitRadius; dx++ {
+				if dx == 0 && dy == 0 && dz == 0 {
+					continue
+				}
+				dist2 := dx*dx + dy*dy + dz*dz
+				if dist2 > voxelNormalSurfaceFitRadius*voxelNormalSurfaceFitRadius {
+					continue
+				}
+				if !sampleOccupancyForBakedNormal(ctx, obj, [3]int{voxel[0] + dx, voxel[1] + dy, voxel[2] + dz}) {
+					continue
+				}
+				offsets = append(offsets, weightedOffset{x: dx, y: dy, z: dz, weight: 1 / float64(dist2)})
+			}
+		}
+	}
+	if len(offsets) < voxelNormalSurfaceFitMinSamples {
+		return mgl32.Vec3{}, false
+	}
+
+	best := mgl32.Vec3{}
+	bestScore := math.MaxFloat64
+	for i := 0; i < len(offsets); i++ {
+		a := mgl32.Vec3{float32(offsets[i].x), float32(offsets[i].y), float32(offsets[i].z)}
+		for j := i + 1; j < len(offsets); j++ {
+			b := mgl32.Vec3{float32(offsets[j].x), float32(offsets[j].y), float32(offsets[j].z)}
+			candidate := a.Cross(b)
+			if candidate.LenSqr() <= 1e-8 {
+				continue
+			}
+			candidate = candidate.Normalize()
+			score := 0.0
+			totalWeight := 0.0
+			for _, offset := range offsets {
+				ov := mgl32.Vec3{float32(offset.x), float32(offset.y), float32(offset.z)}
+				score += offset.weight * math.Pow(float64(candidate.Dot(ov.Normalize())), 2)
+				totalWeight += offset.weight
+			}
+			score /= math.Max(totalWeight, 1e-6)
+			if score < bestScore {
+				bestScore = score
+				best = candidate
+			}
+		}
+	}
+	if bestScore > voxelNormalSurfaceFitMaxError || best.LenSqr() <= 1e-8 {
+		return mgl32.Vec3{}, false
+	}
+	if orient.LenSqr() > 1e-8 && best.Dot(orient) < 0 {
+		best = best.Mul(-1)
+	}
+	return normalizedVec3OrZero(best), true
+}
+
+func densityGradientVoxelNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [3]int) (mgl32.Vec3, bool) {
+	gx, gy, gz := 0.0, 0.0, 0.0
+	for dz := -voxelNormalSurfaceFitRadius; dz <= voxelNormalSurfaceFitRadius; dz++ {
+		for dy := -voxelNormalSurfaceFitRadius; dy <= voxelNormalSurfaceFitRadius; dy++ {
+			for dx := -voxelNormalSurfaceFitRadius; dx <= voxelNormalSurfaceFitRadius; dx++ {
+				if dx == 0 && dy == 0 && dz == 0 {
+					continue
+				}
+				dist2 := dx*dx + dy*dy + dz*dz
+				if dist2 > voxelNormalSurfaceFitRadius*voxelNormalSurfaceFitRadius {
+					continue
+				}
+				if !sampleOccupancyForBakedNormal(ctx, obj, [3]int{voxel[0] + dx, voxel[1] + dy, voxel[2] + dz}) {
+					continue
+				}
+				weight := 1 / float64(dist2)
+				gx -= float64(dx) * weight
+				gy -= float64(dy) * weight
+				gz -= float64(dz) * weight
+			}
+		}
+	}
+	return normalizedGradientVoxelNormal(gx, gy, gz)
+}
+
+func normalizedGradientVoxelNormal(gx, gy, gz float64) (mgl32.Vec3, bool) {
+	maxAbs := math.Max(math.Abs(gx), math.Max(math.Abs(gy), math.Abs(gz)))
+	if maxAbs <= 1e-6 {
+		return mgl32.Vec3{}, false
+	}
+	filter := func(v float64) float32 {
+		if math.Abs(v) < maxAbs*voxelNormalDensityComponentCutoff {
+			return 0
+		}
+		return float32(v)
+	}
+	n := mgl32.Vec3{filter(gx), filter(gy), filter(gz)}
+	if n.LenSqr() <= 1e-8 {
+		return mgl32.Vec3{}, false
+	}
+	return normalizedVec3OrZero(n), true
+}
+
+func normalizedVec3OrZero(v mgl32.Vec3) mgl32.Vec3 {
+	if v.LenSqr() <= 1e-8 {
+		return mgl32.Vec3{}
+	}
+	return v.Normalize()
+}
+
+func canonicalVoxelNormalHemisphere(v mgl32.Vec3) mgl32.Vec3 {
+	n := normalizedVec3OrZero(v)
+	if n.LenSqr() <= 1e-8 {
+		return n
+	}
+	ax := float32(math.Abs(float64(n.X())))
+	ay := float32(math.Abs(float64(n.Y())))
+	az := float32(math.Abs(float64(n.Z())))
+	switch {
+	case ax >= ay && ax >= az:
+		if n.X() < 0 {
+			return n.Mul(-1)
+		}
+	case ay >= ax && ay >= az:
+		if n.Y() < 0 {
+			return n.Mul(-1)
+		}
+	default:
+		if n.Z() < 0 {
+			return n.Mul(-1)
+		}
+	}
+	return n
+}
+
+func voxelNormalHasMultipleComponents(v mgl32.Vec3) bool {
+	const threshold float32 = 0.2
+	count := 0
+	if float32(math.Abs(float64(v.X()))) >= threshold {
+		count++
+	}
+	if float32(math.Abs(float64(v.Y()))) >= threshold {
+		count++
+	}
+	if float32(math.Abs(float64(v.Z()))) >= threshold {
+		count++
+	}
+	return count > 1
+}
+
+func clampFloat32(v, lo, hi float32) float32 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func signNotZero(v float32) float32 {
+	if v < 0 {
+		return -1
+	}
+	return 1
 }
 
 func boolToInt(v bool) int {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 func TestBuildObjectParamsBytesIncludesShadowAndTerrainMetadata(t *testing.T) {
@@ -551,13 +552,89 @@ func TestBuildVoxelAuxBytesBakesTerrainNeighborNormalsAcrossChunks(t *testing.T)
 	brick := sector.GetBrick(3, 0, 0)
 	buf := buildVoxelAuxBytes(ctx, left, brick, [3]int{24, 0, 0})
 
-	normalByte := bakedNormalByte(buf, 7)
-	nx, ny, nz, valid, _ := decodeBakedNormalByteForTest(normalByte)
+	normalWord := bakedNormalWord(buf, 7)
+	nx, ny, nz, valid, _ := decodeBakedNormalWordForTest(normalWord)
 	if !valid {
 		t.Fatal("expected baked normal to be valid")
 	}
-	if nx != -1 || ny != 0 || nz != 0 {
-		t.Fatalf("expected seam-aware normal -X, got (%d,%d,%d) from byte %#x", nx, ny, nz, normalByte)
+	if math.Abs(nx+1) > 0.02 || math.Abs(ny) > 0.02 || math.Abs(nz) > 0.02 {
+		t.Fatalf("expected seam-aware normal near -X, got (%.3f,%.3f,%.3f) from word %#x", nx, ny, nz, normalWord)
+	}
+}
+
+func TestBuildVoxelAuxBytesBakesSlopeSheetNormalFromNearbySurface(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	for z := 1; z <= 3; z++ {
+		for x := 1; x <= 3; x++ {
+			y := 4 - x
+			xbm.SetVoxel(x, y, z, 1)
+		}
+	}
+
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = xbm
+
+	sector := xbm.Sectors[[3]int{0, 0, 0}]
+	brick := sector.GetBrick(0, 0, 0)
+	buf := buildVoxelAuxBytes(voxelNormalBakeContext{}, obj, brick, [3]int{0, 0, 0})
+
+	normalWord := bakedNormalWord(buf, denseOccupancyLinearIndexLocal(2, 2, 2))
+	nx, ny, nz, valid, twoSided := decodeBakedNormalWordForTest(normalWord)
+	if !valid {
+		t.Fatal("expected slope sheet normal to be valid")
+	}
+	want := 1 / math.Sqrt2
+	if math.Abs(nx-want) > 0.03 || math.Abs(ny-want) > 0.03 || math.Abs(nz) > 0.03 {
+		t.Fatalf("expected fitted XY slope normal with no Z component, got (%.3f,%.3f,%.3f) from word %#x", nx, ny, nz, normalWord)
+	}
+	if !twoSided {
+		t.Fatal("expected thin slope sheet to retain two-sided lighting")
+	}
+}
+
+func TestBuildVoxelAuxBytesSmoothsStairStepSlopeNormals(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	for z := 1; z <= 3; z++ {
+		for x := 2; x <= 7; x++ {
+			y := x / 2
+			xbm.SetVoxel(x, y, z, 1)
+		}
+	}
+
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = xbm
+
+	sector := xbm.Sectors[[3]int{0, 0, 0}]
+	brick := sector.GetBrick(0, 0, 0)
+	buf := buildVoxelAuxBytes(voxelNormalBakeContext{}, obj, brick, [3]int{0, 0, 0})
+
+	samples := [][3]int{{3, 1, 2}, {4, 2, 2}, {5, 2, 2}, {6, 3, 2}}
+	var previous mgl32.Vec3
+	for i, sample := range samples {
+		normalWord := bakedNormalWord(buf, denseOccupancyLinearIndexLocal(sample[0], sample[1], sample[2]))
+		nx, ny, nz, valid, _ := decodeBakedNormalWordForTest(normalWord)
+		if !valid {
+			t.Fatalf("expected stair-step slope normal %d to be valid", i)
+		}
+		current := mgl32.Vec3{float32(nx), float32(ny), float32(nz)}
+		if current.LenSqr() <= 0.9 {
+			t.Fatalf("expected normalized stair-step normal %d, got %v", i, current)
+		}
+		if i > 0 && previous.Dot(current) < 0.75 {
+			t.Fatalf("expected neighboring stair-step normals to be coherent, got %v then %v", previous, current)
+		}
+		previous = current
+	}
+}
+
+func TestCanonicalVoxelNormalHemisphereStabilizesTwoSidedNormals(t *testing.T) {
+	a := canonicalVoxelNormalHemisphere(mgl32.Vec3{-1, -1, 0})
+	b := canonicalVoxelNormalHemisphere(mgl32.Vec3{1, 1, 0})
+	if a.Dot(b) < 0.99 {
+		t.Fatalf("expected opposite two-sided normals to canonicalize together, got %v and %v", a, b)
+	}
+	if a.X() < 0 || a.Y() < 0 {
+		t.Fatalf("expected canonical diagonal normal in positive XY hemisphere, got %v", a)
 	}
 }
 
@@ -715,25 +792,33 @@ func firstBrickForTest(sector *volume.Sector) *volume.Brick {
 	return nil
 }
 
-func bakedNormalByte(buf []byte, voxelIdx int) byte {
+func bakedNormalWord(buf []byte, voxelIdx int) uint16 {
 	normalBase := volume.DenseOccupancyWordCount * 4
-	return buf[normalBase+voxelIdx]
+	return binary.LittleEndian.Uint16(buf[normalBase+voxelIdx*2 : normalBase+voxelIdx*2+2])
 }
 
-func decodeBakedNormalByteForTest(b byte) (int, int, int, bool, bool) {
-	decodeAxis := func(bits byte) int {
-		switch bits & 0x3 {
-		case voxelNormalAxisPositive:
-			return 1
-		case voxelNormalAxisNegative:
-			return -1
-		default:
-			return 0
-		}
+func decodeBakedNormalWordForTest(b uint16) (float64, float64, float64, bool, bool) {
+	if b&voxelNormalValidBit == 0 {
+		return 0, 0, 0, false, b&voxelNormalTwoSidedBit != 0
 	}
-	return decodeAxis(b),
-		decodeAxis(b >> 2),
-		decodeAxis(b >> 4),
-		b&voxelNormalValidBit != 0,
-		b&voxelNormalTwoSidedBit != 0
+	x := float64(b&0x7f)/127*2 - 1
+	y := float64((b>>7)&0x7f)/127*2 - 1
+	z := 1 - math.Abs(x) - math.Abs(y)
+	if z < 0 {
+		oldX, oldY := x, y
+		x = (1 - math.Abs(oldY)) * signNotZeroForTest(oldX)
+		y = (1 - math.Abs(oldX)) * signNotZeroForTest(oldY)
+	}
+	len := math.Sqrt(x*x + y*y + z*z)
+	if len <= 1e-8 {
+		return 0, 0, 0, false, b&voxelNormalTwoSidedBit != 0
+	}
+	return x / len, y / len, z / len, true, b&voxelNormalTwoSidedBit != 0
+}
+
+func signNotZeroForTest(v float64) float64 {
+	if v < 0 {
+		return -1
+	}
+	return 1
 }

@@ -13,7 +13,7 @@ const (
 	SectorBricks            = 4
 	SectorSize              = SectorBricks * BrickSize // 32
 	DenseOccupancyWordCount = (BrickSize * BrickSize * BrickSize) / 32
-	VoxelNormalWordCount    = (BrickSize * BrickSize * BrickSize) / 4
+	VoxelNormalWordCount    = (BrickSize * BrickSize * BrickSize) / 2
 	VoxelAuxWordCount       = DenseOccupancyWordCount + VoxelNormalWordCount
 
 	BrickFlagSolid           = 1

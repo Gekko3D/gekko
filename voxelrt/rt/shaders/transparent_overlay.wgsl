@@ -10,8 +10,8 @@ const PI: f32 = 3.14159265359;
 const BRICK_FLAG_SOLID: u32 = 1u;
 const BRICK_FLAG_UNIFORM_MATERIAL: u32 = 2u;
 const VOXEL_AUX_OCCUPANCY_WORD_COUNT: u32 = 16u;
-const VOXEL_NORMAL_VALID_BIT: u32 = 0x40u;
-const VOXEL_NORMAL_TWO_SIDED_BIT: u32 = 0x80u;
+const VOXEL_NORMAL_VALID_BIT: u32 = 0x4000u;
+const VOXEL_NORMAL_TWO_SIDED_BIT: u32 = 0x8000u;
 
 // ============== STRUCTS (match gbuffer/deferred) ==============
 struct CameraData {
@@ -322,21 +322,26 @@ fn dense_occupancy_test(word_base: u32, voxel_idx: u32) -> bool {
   return (word & bit) != 0u;
 }
 
-fn decode_baked_normal_axis(bits: u32) -> f32 {
-  let v = bits & 0x3u;
-  if (v == 1u) { return 1.0; }
-  if (v == 2u) { return -1.0; }
-  return 0.0;
+fn oct_sign_not_zero(v: f32) -> f32 {
+  return select(1.0, -1.0, v < 0.0);
 }
 
 fn decode_baked_voxel_normal(encoded: u32) -> BakedVoxelNormal {
-  let n = vec3<f32>(
-    decode_baked_normal_axis(encoded),
-    decode_baked_normal_axis(encoded >> 2u),
-    decode_baked_normal_axis(encoded >> 4u),
-  );
-  let valid = (encoded & VOXEL_NORMAL_VALID_BIT) != 0u && dot(n, n) > 0.0;
+  let valid = (encoded & VOXEL_NORMAL_VALID_BIT) != 0u;
   if (!valid) {
+    return BakedVoxelNormal(vec3<f32>(0.0), false, false);
+  }
+  var f = vec2<f32>(
+    f32(encoded & 0x7Fu) / 127.0 * 2.0 - 1.0,
+    f32((encoded >> 7u) & 0x7Fu) / 127.0 * 2.0 - 1.0,
+  );
+  var n = vec3<f32>(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+  if (n.z < 0.0) {
+    let old = f;
+    n.x = (1.0 - abs(old.y)) * oct_sign_not_zero(old.x);
+    n.y = (1.0 - abs(old.x)) * oct_sign_not_zero(old.y);
+  }
+  if (dot(n, n) <= 1e-8) {
     return BakedVoxelNormal(vec3<f32>(0.0), false, false);
   }
   return BakedVoxelNormal(
@@ -350,9 +355,9 @@ fn load_baked_voxel_normal_from_brick(brick: BrickRecord, voxel_idx: u32) -> Bak
   if (brick.voxel_aux_word_base == 0xFFFFFFFFu) {
     return BakedVoxelNormal(vec3<f32>(0.0), false, false);
   }
-  let word_idx = brick.voxel_aux_word_base + VOXEL_AUX_OCCUPANCY_WORD_COUNT + (voxel_idx >> 2u);
+  let word_idx = brick.voxel_aux_word_base + VOXEL_AUX_OCCUPANCY_WORD_COUNT + (voxel_idx >> 1u);
   let word = voxel_aux_words[word_idx];
-  let encoded = (word >> ((voxel_idx & 3u) * 8u)) & 0xFFu;
+  let encoded = (word >> ((voxel_idx & 1u) * 16u)) & 0xFFFFu;
   return decode_baked_voxel_normal(encoded);
 }
 
