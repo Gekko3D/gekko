@@ -128,6 +128,9 @@ func TestBuildAndSaveGeneratedLevel(t *testing.T) {
 	if len(fixtureAsset.Parts) != 1 || fixtureAsset.Parts[0].EmitterLinkID != loaded.Lights[1].EmitterLinkID {
 		t.Fatalf("fixture part link mismatch: asset=%+v light=%+v", fixtureAsset.Parts, loaded.Lights[1])
 	}
+	if fixtureAsset.Parts[0].VoxelResolution != DefaultFixtureVoxelResolution {
+		t.Fatalf("fixture voxel resolution = %f", fixtureAsset.Parts[0].VoxelResolution)
+	}
 	if validation := content.ValidateLevel(loaded, content.LevelValidationOptions{DocumentPath: level.LevelPath}); validation.HasErrors() {
 		t.Fatalf("ValidateLevel failed: %s", validation.Error())
 	}
@@ -513,6 +516,78 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 	}
 }
 
+func TestBuildGeneratedLevelEmitsChargerVoxelAssetsAtFixtureResolution(t *testing.T) {
+	dir := t.TempDir()
+	bspPath := filepath.Join(dir, "valve", "maps", "chargermap.bsp")
+	mustWriteFile(t, bspPath, syntheticBSP(t, syntheticBSPConfig{
+		Entities: `{
+"classname" "worldspawn"
+}
+{
+"classname" "func_healthcharger"
+"model" "*1"
+"targetname" "health_a"
+}`,
+		Textures: []syntheticTexture{{Name: "CHARGER", Width: 64, Height: 64}},
+		Planes:   []Plane{{Normal: vec3(0, 1, 0), Dist: 0}},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0), vec3(16, 0, 0), vec3(16, 0, 16), vec3(0, 0, 16),
+			vec3(32, 0, 0), vec3(48, 0, 0), vec3(48, 0, 16), vec3(32, 0, 16),
+		},
+		TexInfos: []TexInfo{{MipTex: 0}},
+		Faces: []FaceHeader{
+			{PlaneID: 0, FirstEdge: 0, EdgeCount: 4, TexInfoID: 0},
+			{PlaneID: 0, FirstEdge: 4, EdgeCount: 4, TexInfoID: 0},
+		},
+		Edges: []Edge{
+			{A: 0, B: 1}, {A: 1, B: 2}, {A: 2, B: 3}, {A: 0, B: 3},
+			{A: 4, B: 5}, {A: 5, B: 6}, {A: 6, B: 7}, {A: 4, B: 7},
+		},
+		SurfEdges: []int32{0, 1, 2, -3, 4, 5, 6, -7},
+		Models: []Model{
+			{FirstFace: 0, FaceCount: 1},
+			{FirstFace: 1, FaceCount: 1},
+		},
+	}))
+	opts := ImportOptions{
+		GameDir:         dir,
+		MapName:         "chargermap",
+		OutputRoot:      filepath.Join(dir, "out"),
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+		VoxelResolutionPolicy: HL1VoxelResolutionPolicy{
+			Fixture: 0.05,
+		},
+	}
+	summary, err := BuildImportSummary(opts)
+	if err != nil {
+		t.Fatalf("BuildImportSummary failed: %v", err)
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "chargermap.gkworld"))
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.Level.Chargers) != 1 || level.Level.Chargers[0].AssetPath == "" {
+		t.Fatalf("charger missing asset path: %+v", level.Level.Chargers)
+	}
+	if len(level.ChargerAssets) != 1 {
+		t.Fatalf("charger assets = %+v", level.ChargerAssets)
+	}
+	if err := SaveGeneratedLevel(level); err != nil {
+		t.Fatalf("SaveGeneratedLevel failed: %v", err)
+	}
+	asset, err := content.LoadAsset(level.ChargerAssets[0].AssetPath)
+	if err != nil {
+		t.Fatalf("LoadAsset failed: %v", err)
+	}
+	if len(asset.Parts) != 1 || asset.Parts[0].Source.VoxelShape == nil || len(asset.Parts[0].Source.VoxelShape.Voxels) == 0 {
+		t.Fatalf("charger asset payload = %+v", asset.Parts)
+	}
+	if asset.Parts[0].VoxelResolution != 0.05 {
+		t.Fatalf("charger voxel resolution = %f", asset.Parts[0].VoxelResolution)
+	}
+}
+
 func TestBuildGeneratedLevelEmitsHL1TriggerVolumesAndMultiTargets(t *testing.T) {
 	dir := t.TempDir()
 	opts := ImportOptions{
@@ -831,6 +906,9 @@ func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
 		OutputRoot:      filepath.Join(dir, "out"),
 		ChunkSize:       32,
 		VoxelResolution: 0.1,
+		VoxelResolutionPolicy: HL1VoxelResolutionPolicy{
+			BrushModel: 0.05,
+		},
 	}
 	summary, err := BuildImportSummary(opts)
 	if err != nil {
@@ -855,6 +933,9 @@ func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
 	}
 	if len(asset.Parts) != 1 || asset.Parts[0].Source.VoxelShape == nil || len(asset.Parts[0].Source.VoxelShape.Voxels) == 0 {
 		t.Fatalf("moving brush asset payload = %+v", asset.Parts)
+	}
+	if asset.Parts[0].VoxelResolution != 0.05 {
+		t.Fatalf("moving brush voxel resolution = %f", asset.Parts[0].VoxelResolution)
 	}
 }
 

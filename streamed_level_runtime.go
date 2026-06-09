@@ -697,7 +697,10 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		spawnAuthoredLevelChangeLevel(cmd, state.LevelRoot, level.ID, change)
 	}
 	for _, charger := range level.Chargers {
-		spawnAuthoredLevelCharger(cmd, state.LevelRoot, level.ID, charger)
+		if _, err := spawnAuthoredLevelCharger(cmd, assets, loader, state.LevelRoot, level.ID, cfg.LevelPath, charger); err != nil {
+			state.InitErr = err
+			return err
+		}
 	}
 	for _, multi := range level.MultiTargets {
 		spawnAuthoredLevelMultiTarget(cmd, state.LevelRoot, level.ID, multi)

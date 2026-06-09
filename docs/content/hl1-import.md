@@ -952,8 +952,8 @@ go run .
 
 - output root: `assets`
 - voxel: `0.1` for world/base geometry
-- asset voxel: `0.08` for generic imported `.mdl`/`.spr` assets
-- item voxel: `0.04` for pickup/item assets
+- asset voxel: `0.05` for generic imported `.mdl`/`.spr` static prop assets
+- item voxel: `0.01` for weapon, ammo, and pickup/item assets
 - chunk: `256`
 - band: `24`
 - cells: `100000000`
@@ -984,13 +984,16 @@ that companion texture model before baking voxel colors. SPR files are copied,
 parsed, and converted from their first indexed frame into thin emissive voxel-card
 `.gkasset` files under `hl1_assets/<map>/generated/sprites/`. The manifest
 entries keep source provenance, decoded metadata, generated asset path, and
-generated voxel count/resolution. Imported world geometry, generic game assets,
-and pickup/item assets intentionally have separate voxel-resolution settings:
-small pickups need finer voxels than BSP walls and floors. Generated model
-assets currently use the default static pose and texture-baked surface voxels;
-they are not solid-filled or animated yet. Generated sprite assets are not true
-camera-facing billboards yet; they are placed voxel cards that preserve palette
-color and cutout/additive transparency well enough for first visual coverage.
+generated voxel count, resolution, and resolution category. Imported world
+geometry, moving/breakable brush models, fixtures, charger visuals, static
+props, and weapon/ammo/pickup assets intentionally have separate
+voxel-resolution buckets: small pickups need finer voxels than BSP walls and
+floors, while props, fixtures, and chargers can sit between those extremes.
+Generated model assets currently use the default static pose and texture-baked
+surface voxels; they are not solid-filled or animated yet. Generated sprite
+assets are not true camera-facing billboards yet; they are placed voxel cards
+that preserve palette color and cutout/additive transparency well enough for
+first visual coverage.
 When **game assets** is enabled, typed pickups try to attach the generated HL1
 world model asset directly to `LevelPickupDef.AssetPath`; actiongame uses that
 model as the collectible visual and falls back to the colored placeholder cube
@@ -1013,8 +1016,10 @@ go run ./cmd/hl1import \
   -out ../actiongame/assets/levels \
   -chunk-size 256 \
   -voxel-resolution 0.1 \
-  -game-asset-voxel-resolution 0.08 \
-  -pickup-voxel-resolution 0.04 \
+  -brush-model-voxel-resolution 0.1 \
+  -fixture-voxel-resolution 0.05 \
+  -static-prop-voxel-resolution 0.05 \
+  -pickup-voxel-resolution 0.01 \
   -light-mode faithful \
   -emit-light-fixtures=false \
   -emit-game-assets \

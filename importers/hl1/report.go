@@ -12,16 +12,107 @@ import (
 )
 
 const (
-	ImporterName                    = "gekko-hl1import"
-	ImporterVersion                 = "hl1_import_report_v1"
-	DefaultImportedWorldChunkSize   = 256
-	DefaultImportedVoxelResolution  = 0.1
-	DefaultGameAssetVoxelResolution = 0.08
-	DefaultPickupVoxelResolution    = 0.04
-	DefaultImportedSolidBandDepth   = DefaultSolidBandDepth
-	DefaultImportedMaxSampledCells  = DefaultMaxSolidSampleCells
-	DefaultChunkPayloadKind         = content.ImportedWorldChunkPayloadDenseRLEBinaryV1
+	ImporterName                     = "gekko-hl1import"
+	ImporterVersion                  = "hl1_import_report_v1"
+	DefaultImportedWorldChunkSize    = 256
+	DefaultImportedVoxelResolution   = 0.1
+	DefaultBrushModelVoxelResolution = DefaultImportedVoxelResolution
+	DefaultFixtureVoxelResolution    = 0.05
+	DefaultStaticPropVoxelResolution = 0.05
+	DefaultPickupVoxelResolution     = 0.01
+	DefaultGameAssetVoxelResolution  = DefaultStaticPropVoxelResolution
+	DefaultImportedSolidBandDepth    = DefaultSolidBandDepth
+	DefaultImportedMaxSampledCells   = DefaultMaxSolidSampleCells
+	DefaultChunkPayloadKind          = content.ImportedWorldChunkPayloadDenseRLEBinaryV1
 )
+
+type HL1VoxelResolutionCategory string
+
+const (
+	HL1VoxelResolutionCategoryWorld      HL1VoxelResolutionCategory = "world"
+	HL1VoxelResolutionCategoryBrushModel HL1VoxelResolutionCategory = "brush_model"
+	HL1VoxelResolutionCategoryFixture    HL1VoxelResolutionCategory = "fixture"
+	HL1VoxelResolutionCategoryStaticProp HL1VoxelResolutionCategory = "static_prop"
+	HL1VoxelResolutionCategoryPickup     HL1VoxelResolutionCategory = "pickup"
+)
+
+type HL1VoxelResolutionPolicy struct {
+	World      float32
+	BrushModel float32
+	Fixture    float32
+	StaticProp float32
+	Pickup     float32
+}
+
+func DefaultHL1VoxelResolutionPolicy() HL1VoxelResolutionPolicy {
+	return HL1VoxelResolutionPolicy{
+		World:      DefaultImportedVoxelResolution,
+		BrushModel: DefaultBrushModelVoxelResolution,
+		Fixture:    DefaultFixtureVoxelResolution,
+		StaticProp: DefaultStaticPropVoxelResolution,
+		Pickup:     DefaultPickupVoxelResolution,
+	}
+}
+
+func EffectiveHL1VoxelResolutionPolicy(opts ImportOptions) HL1VoxelResolutionPolicy {
+	policy := DefaultHL1VoxelResolutionPolicy()
+	if opts.VoxelResolutionPolicy.World > 0 {
+		policy.World = opts.VoxelResolutionPolicy.World
+	}
+	if opts.VoxelResolutionPolicy.BrushModel > 0 {
+		policy.BrushModel = opts.VoxelResolutionPolicy.BrushModel
+	}
+	if opts.VoxelResolutionPolicy.Fixture > 0 {
+		policy.Fixture = opts.VoxelResolutionPolicy.Fixture
+	}
+	if opts.VoxelResolutionPolicy.StaticProp > 0 {
+		policy.StaticProp = opts.VoxelResolutionPolicy.StaticProp
+	}
+	if opts.VoxelResolutionPolicy.Pickup > 0 {
+		policy.Pickup = opts.VoxelResolutionPolicy.Pickup
+	}
+	if opts.VoxelResolution > 0 {
+		policy.World = opts.VoxelResolution
+	}
+	if opts.GameAssetVoxelResolution > 0 {
+		policy.StaticProp = opts.GameAssetVoxelResolution
+	}
+	if opts.PickupVoxelResolution > 0 {
+		policy.Pickup = opts.PickupVoxelResolution
+	}
+	return policy
+}
+
+func (p HL1VoxelResolutionPolicy) Resolution(category HL1VoxelResolutionCategory) float32 {
+	switch category {
+	case HL1VoxelResolutionCategoryWorld:
+		if p.World > 0 {
+			return p.World
+		}
+	case HL1VoxelResolutionCategoryBrushModel:
+		if p.BrushModel > 0 {
+			return p.BrushModel
+		}
+	case HL1VoxelResolutionCategoryFixture:
+		if p.Fixture > 0 {
+			return p.Fixture
+		}
+	case HL1VoxelResolutionCategoryPickup:
+		if p.Pickup > 0 {
+			return p.Pickup
+		}
+	case HL1VoxelResolutionCategoryStaticProp:
+		if p.StaticProp > 0 {
+			return p.StaticProp
+		}
+	default:
+		if p.StaticProp > 0 {
+			return p.StaticProp
+		}
+		return DefaultStaticPropVoxelResolution
+	}
+	return DefaultHL1VoxelResolutionPolicy().Resolution(category)
+}
 
 type HL1LightMode string
 
@@ -37,6 +128,7 @@ type ImportOptions struct {
 	OutputRoot                string
 	ChunkSize                 int
 	VoxelResolution           float32
+	VoxelResolutionPolicy     HL1VoxelResolutionPolicy
 	GameAssetVoxelResolution  float32
 	PickupVoxelResolution     float32
 	MaxSolidSampleCells       int64
@@ -194,10 +286,7 @@ func brushClassByModelID(entities []importcommon.Entity) map[int]string {
 func visibleBrushEntityClass(className string) bool {
 	switch strings.ToLower(className) {
 	case "func_wall",
-		"func_illusionary",
-		"func_breakable",
-		"func_healthcharger",
-		"func_recharge":
+		"func_illusionary":
 		return true
 	default:
 		return false

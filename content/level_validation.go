@@ -181,7 +181,7 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 	}
 	for _, charger := range def.Chargers {
 		validateLevelChargerUniqueID(&result, seenIDs, charger.ID)
-		validateLevelCharger(&result, charger)
+		validateLevelCharger(&result, charger, opts)
 	}
 	for _, relay := range def.TargetRelays {
 		validateLevelTargetRelayUniqueID(&result, seenIDs, relay.ID)
@@ -579,7 +579,7 @@ func validateLevelChangeLevel(result *LevelValidationResult, change LevelChangeL
 	}
 }
 
-func validateLevelCharger(result *LevelValidationResult, charger LevelChargerDef) {
+func validateLevelCharger(result *LevelValidationResult, charger LevelChargerDef, opts LevelValidationOptions) {
 	if strings.TrimSpace(charger.ID) == "" {
 		result.addError("empty_charger_id", "charger id is required", "", "", "", "", "", "", "")
 	}
@@ -596,6 +596,12 @@ func validateLevelCharger(result *LevelValidationResult, charger LevelChargerDef
 	}
 	if charger.Rate < 0 {
 		result.addError("invalid_charger_rate", "charger rate must be non-negative", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(charger.AssetPath) != "" && opts.DocumentPath != "" {
+		resolvedPath := ResolveDocumentPath(charger.AssetPath, opts.DocumentPath)
+		if _, err := os.Stat(resolvedPath); err != nil {
+			result.addError("missing_charger_asset", fmt.Sprintf("missing charger asset %s", charger.AssetPath), "", "", "", "", "", "", "")
+		}
 	}
 }
 

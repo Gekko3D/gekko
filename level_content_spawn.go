@@ -232,7 +232,10 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		result.ChangeLevelEntities[change.ID] = entity
 	}
 	for _, charger := range def.Chargers {
-		entity := spawnAuthoredLevelCharger(cmd, result.RootEntity, def.ID, charger)
+		entity, err := spawnAuthoredLevelCharger(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, charger)
+		if err != nil {
+			return result, err
+		}
 		result.ChargerEntities[charger.ID] = entity
 	}
 	for _, multi := range def.MultiTargets {
@@ -699,9 +702,13 @@ func spawnAuthoredLevelChangeLevel(cmd *Commands, parent EntityId, levelID strin
 	)
 }
 
-func spawnAuthoredLevelCharger(cmd *Commands, parent EntityId, levelID string, charger content.LevelChargerDef) EntityId {
+func spawnAuthoredLevelCharger(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, charger content.LevelChargerDef) (EntityId, error) {
 	center := mgl32.Vec3{charger.BoundsCenter[0], charger.BoundsCenter[1], charger.BoundsCenter[2]}
 	halfExtents := mgl32.Vec3{charger.BoundsHalfExtents[0], charger.BoundsHalfExtents[1], charger.BoundsHalfExtents[2]}
+	visualOrigin := mgl32.Vec3{charger.VisualOrigin[0], charger.VisualOrigin[1], charger.VisualOrigin[2]}
+	if visualOrigin == (mgl32.Vec3{}) {
+		visualOrigin = center
+	}
 	chargeKind := strings.TrimSpace(charger.ChargeKind)
 	if chargeKind == "" {
 		chargeKind = "health"
@@ -718,11 +725,11 @@ func spawnAuthoredLevelCharger(cmd *Commands, parent EntityId, levelID string, c
 		rate = 15
 	}
 	transform := TransformComponent{
-		Position: center,
+		Position: visualOrigin,
 		Rotation: mgl32.QuatIdent(),
 		Scale:    mgl32.Vec3{1, 1, 1},
 	}
-	return cmd.AddEntity(
+	comps := []any{
 		&transform,
 		&LocalTransformComponent{
 			Position: transform.Position,
@@ -749,7 +756,31 @@ func spawnAuthoredLevelCharger(cmd *Commands, parent EntityId, levelID string, c
 			ChargerID: charger.ID,
 			Name:      charger.Name,
 		},
-	)
+	}
+	if strings.TrimSpace(charger.AssetPath) != "" {
+		if loader == nil {
+			loader = NewRuntimeContentLoader()
+		}
+		assetPath := content.ResolveDocumentPath(charger.AssetPath, levelPath)
+		asset, err := loader.LoadAsset(assetPath)
+		if err != nil {
+			return 0, err
+		}
+		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		if err != nil {
+			return 0, err
+		}
+		if model != (AssetId{}) {
+			comps = append(comps, &VoxelModelComponent{
+				SharedGeometry:         model,
+				VoxelPalette:           palette,
+				VoxelResolution:        voxelResolution,
+				PivotMode:              PivotModeCorner,
+				ShadowSeamWorldEpsilon: voxelResolution,
+			})
+		}
+	}
+	return cmd.AddEntity(comps...), nil
 }
 
 func spawnAuthoredLevelMultiTarget(cmd *Commands, parent EntityId, levelID string, multi content.LevelMultiTargetDef) EntityId {

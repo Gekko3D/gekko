@@ -332,6 +332,26 @@ func TestBuildImportSummaryExcludesDoorBrushFacesFromStaticBakeSet(t *testing.T)
 	}
 }
 
+func TestVisibleBrushEntityClassOnlyKeepsStaticBrushesInBakeSet(t *testing.T) {
+	tests := []struct {
+		className string
+		want      bool
+	}{
+		{className: "func_wall", want: true},
+		{className: "func_illusionary", want: true},
+		{className: "func_breakable", want: false},
+		{className: "func_healthcharger", want: false},
+		{className: "func_recharge", want: false},
+		{className: "func_door", want: false},
+		{className: "trigger_multiple", want: false},
+	}
+	for _, tt := range tests {
+		if got := visibleBrushEntityClass(tt.className); got != tt.want {
+			t.Fatalf("visibleBrushEntityClass(%q) = %v, want %v", tt.className, got, tt.want)
+		}
+	}
+}
+
 func TestHL1IntegrationLoadsRealMapWhenConfigured(t *testing.T) {
 	gameDir := os.Getenv("GEKKO_HL1_GAME_DIR")
 	if gameDir == "" {

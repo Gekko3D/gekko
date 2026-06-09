@@ -355,8 +355,10 @@ type LevelChargerDef struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name,omitempty"`
 	Kind              string   `json:"kind,omitempty"`
+	AssetPath         string   `json:"asset_path,omitempty"`
 	BoundsCenter      Vec3     `json:"bounds_center"`
 	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	VisualOrigin      Vec3     `json:"visual_origin,omitempty"`
 	ChargeKind        string   `json:"charge_kind,omitempty"`
 	Capacity          float32  `json:"capacity,omitempty"`
 	Rate              float32  `json:"rate,omitempty"`

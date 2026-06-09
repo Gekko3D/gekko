@@ -30,21 +30,22 @@ type GameAssetManifest struct {
 }
 
 type GameAssetManifestEntry struct {
-	Kind                     string            `json:"kind"`
-	SourceRef                string            `json:"source_ref"`
-	SourcePath               string            `json:"source_path,omitempty"`
-	OutputPath               string            `json:"output_path,omitempty"`
-	GeneratedAssetPath       string            `json:"generated_asset_path,omitempty"`
-	GeneratedVoxelCount      int               `json:"generated_voxel_count,omitempty"`
-	GeneratedVoxelResolution float32           `json:"generated_voxel_resolution,omitempty"`
-	SizeBytes                int64             `json:"size_bytes,omitempty"`
-	SHA256                   string            `json:"sha256,omitempty"`
-	Resolved                 bool              `json:"resolved"`
-	UsedBy                   []string          `json:"used_by,omitempty"`
-	ConvertState             string            `json:"convert_state,omitempty"`
-	ModelInfo                *MDLInfo          `json:"model_info,omitempty"`
-	SpriteInfo               *SPRInfo          `json:"sprite_info,omitempty"`
-	generatedAsset           *content.AssetDef `json:"-"`
+	Kind                             string            `json:"kind"`
+	SourceRef                        string            `json:"source_ref"`
+	SourcePath                       string            `json:"source_path,omitempty"`
+	OutputPath                       string            `json:"output_path,omitempty"`
+	GeneratedAssetPath               string            `json:"generated_asset_path,omitempty"`
+	GeneratedVoxelCount              int               `json:"generated_voxel_count,omitempty"`
+	GeneratedVoxelResolution         float32           `json:"generated_voxel_resolution,omitempty"`
+	GeneratedVoxelResolutionCategory string            `json:"generated_voxel_resolution_category,omitempty"`
+	SizeBytes                        int64             `json:"size_bytes,omitempty"`
+	SHA256                           string            `json:"sha256,omitempty"`
+	Resolved                         bool              `json:"resolved"`
+	UsedBy                           []string          `json:"used_by,omitempty"`
+	ConvertState                     string            `json:"convert_state,omitempty"`
+	ModelInfo                        *MDLInfo          `json:"model_info,omitempty"`
+	SpriteInfo                       *SPRInfo          `json:"sprite_info,omitempty"`
+	generatedAsset                   *content.AssetDef `json:"-"`
 }
 
 func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetImportResult, error) {
@@ -72,13 +73,7 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		Source:        summary.Report.Source,
 	}
 	manifest.Source.GameDir = gameDir
-	collector := newHL1AssetCollector(gameDir, outputRoot, mapName)
-	if opts.GameAssetVoxelResolution > 0 {
-		collector.gameAssetVoxelResolution = opts.GameAssetVoxelResolution
-	}
-	if opts.PickupVoxelResolution > 0 {
-		collector.pickupVoxelResolution = opts.PickupVoxelResolution
-	}
+	collector := newHL1AssetCollector(gameDir, outputRoot, mapName, EffectiveHL1VoxelResolutionPolicy(opts))
 	for _, wadPath := range summary.Report.Source.WADPaths {
 		collector.addAbsolute("wad", wadPath, "worldspawn.wad")
 	}
@@ -153,23 +148,24 @@ func SaveGameAssetImport(result GameAssetImportResult) error {
 }
 
 type hl1AssetCollector struct {
-	gameDir                  string
-	outputRoot               string
-	mapName                  string
-	gameAssetVoxelResolution float32
-	pickupVoxelResolution    float32
-	entries                  map[string]*GameAssetManifestEntry
-	diagnostics              []importcommon.Diagnostic
+	gameDir               string
+	outputRoot            string
+	mapName               string
+	voxelResolutionPolicy HL1VoxelResolutionPolicy
+	entries               map[string]*GameAssetManifestEntry
+	diagnostics           []importcommon.Diagnostic
 }
 
-func newHL1AssetCollector(gameDir, outputRoot, mapName string) *hl1AssetCollector {
+func newHL1AssetCollector(gameDir, outputRoot, mapName string, policy HL1VoxelResolutionPolicy) *hl1AssetCollector {
+	if policy == (HL1VoxelResolutionPolicy{}) {
+		policy = DefaultHL1VoxelResolutionPolicy()
+	}
 	return &hl1AssetCollector{
-		gameDir:                  filepath.Clean(gameDir),
-		outputRoot:               filepath.Clean(outputRoot),
-		mapName:                  mapName,
-		gameAssetVoxelResolution: DefaultGameAssetVoxelResolution,
-		pickupVoxelResolution:    DefaultPickupVoxelResolution,
-		entries:                  map[string]*GameAssetManifestEntry{},
+		gameDir:               filepath.Clean(gameDir),
+		outputRoot:            filepath.Clean(outputRoot),
+		mapName:               mapName,
+		voxelResolutionPolicy: policy,
+		entries:               map[string]*GameAssetManifestEntry{},
 	}
 }
 
@@ -217,7 +213,7 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 	entry.SHA256 = fileSHA256(entry.SourcePath)
 	entry.OutputPath = filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "files", hl1AssetOutputRelPath(entry.SourcePath, c.gameDir, kind, entry.SourceRef))
 	if kind == "model" {
-		voxelResolution := c.voxelResolutionForEntry(entry)
+		category, voxelResolution := c.voxelResolutionForEntry(entry)
 		geometry, err := LoadMDLGeometry(entry.SourcePath)
 		if err != nil {
 			c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -245,12 +241,13 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 				entry.GeneratedAssetPath = filepath.Clean(assetPath)
 				entry.GeneratedVoxelCount = voxelCount
 				entry.GeneratedVoxelResolution = voxelResolution
+				entry.GeneratedVoxelResolutionCategory = string(category)
 				entry.generatedAsset = asset
 				entry.ConvertState = "generated_voxel_asset"
 			}
 		}
 	} else if kind == "sprite" {
-		voxelResolution := c.voxelResolutionForEntry(entry)
+		category, voxelResolution := c.voxelResolutionForEntry(entry)
 		geometry, err := LoadSPRGeometry(entry.SourcePath)
 		if err != nil {
 			c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -278,6 +275,7 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 				entry.GeneratedAssetPath = filepath.Clean(assetPath)
 				entry.GeneratedVoxelCount = voxelCount
 				entry.GeneratedVoxelResolution = voxelResolution
+				entry.GeneratedVoxelResolutionCategory = string(category)
 				entry.generatedAsset = asset
 				entry.ConvertState = "generated_voxel_asset"
 			}
@@ -285,21 +283,20 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 	}
 }
 
-func (c *hl1AssetCollector) voxelResolutionForEntry(entry *GameAssetManifestEntry) float32 {
+func (c *hl1AssetCollector) voxelResolutionForEntry(entry *GameAssetManifestEntry) (HL1VoxelResolutionCategory, float32) {
+	category := hl1VoxelResolutionCategoryForGameAssetEntry(entry)
+	return category, c.voxelResolutionPolicy.Resolution(category)
+}
+
+func hl1VoxelResolutionCategoryForGameAssetEntry(entry *GameAssetManifestEntry) HL1VoxelResolutionCategory {
 	if entry != nil {
 		for _, usedBy := range entry.UsedBy {
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "pickup:") {
-				if c.pickupVoxelResolution > 0 {
-					return c.pickupVoxelResolution
-				}
-				break
+				return HL1VoxelResolutionCategoryPickup
 			}
 		}
 	}
-	if c.gameAssetVoxelResolution > 0 {
-		return c.gameAssetVoxelResolution
-	}
-	return DefaultGameAssetVoxelResolution
+	return HL1VoxelResolutionCategoryStaticProp
 }
 
 func (c *hl1AssetCollector) resolveRef(ref, kind string) string {

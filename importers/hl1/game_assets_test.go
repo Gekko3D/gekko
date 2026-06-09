@@ -82,6 +82,9 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	if modelEntry.GeneratedVoxelResolution != 0.03 {
 		t.Fatalf("expected pickup model voxel resolution 0.03, got %+v", modelEntry)
 	}
+	if modelEntry.GeneratedVoxelResolutionCategory != string(HL1VoxelResolutionCategoryPickup) {
+		t.Fatalf("expected pickup model category, got %+v", modelEntry)
+	}
 	if modelEntry.generatedAsset == nil || len(modelEntry.generatedAsset.Parts) != 1 || modelEntry.generatedAsset.Parts[0].VoxelResolution != 0.03 {
 		t.Fatalf("expected generated pickup model asset resolution 0.03, got %+v", modelEntry.generatedAsset)
 	}
@@ -91,6 +94,9 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	}
 	if spriteEntry.GeneratedVoxelResolution != 0.07 {
 		t.Fatalf("expected generic game asset voxel resolution 0.07, got %+v", spriteEntry)
+	}
+	if spriteEntry.GeneratedVoxelResolutionCategory != string(HL1VoxelResolutionCategoryStaticProp) {
+		t.Fatalf("expected static prop sprite category, got %+v", spriteEntry)
 	}
 	assertHL1AssetEntry(t, result.Manifest.Assets, "sound", soundPath, "cataloged_source_only")
 	if len(result.Manifest.Diagnostics) != 0 {
@@ -114,6 +120,36 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 				t.Fatalf("expected generated asset %s: %v", entry.GeneratedAssetPath, err)
 			}
 		}
+	}
+}
+
+func TestEffectiveHL1VoxelResolutionPolicyUsesNamedDefaultsAndLegacyAliases(t *testing.T) {
+	defaults := EffectiveHL1VoxelResolutionPolicy(ImportOptions{})
+	if defaults.World != 0.1 || defaults.BrushModel != 0.1 || defaults.Fixture != 0.05 || defaults.StaticProp != 0.05 || defaults.Pickup != 0.01 {
+		t.Fatalf("unexpected default policy: %+v", defaults)
+	}
+	policy := EffectiveHL1VoxelResolutionPolicy(ImportOptions{
+		VoxelResolution: 0.2,
+		VoxelResolutionPolicy: HL1VoxelResolutionPolicy{
+			BrushModel: 0.12,
+			Fixture:    0.06,
+			StaticProp: 0.04,
+			Pickup:     0.015,
+		},
+		GameAssetVoxelResolution: 0.07,
+		PickupVoxelResolution:    0.03,
+	})
+	if policy.World != 0.2 || policy.BrushModel != 0.12 || policy.Fixture != 0.06 || policy.StaticProp != 0.07 || policy.Pickup != 0.03 {
+		t.Fatalf("unexpected effective policy: %+v", policy)
+	}
+}
+
+func TestHL1GameAssetResolutionCategorySeparatesPickupsFromStaticProps(t *testing.T) {
+	if got := hl1VoxelResolutionCategoryForGameAssetEntry(&GameAssetManifestEntry{UsedBy: []string{"pickup:weapon_357.model"}}); got != HL1VoxelResolutionCategoryPickup {
+		t.Fatalf("pickup category = %q", got)
+	}
+	if got := hl1VoxelResolutionCategoryForGameAssetEntry(&GameAssetManifestEntry{UsedBy: []string{"env_sprite.model"}}); got != HL1VoxelResolutionCategoryStaticProp {
+		t.Fatalf("static prop category = %q", got)
 	}
 }
 

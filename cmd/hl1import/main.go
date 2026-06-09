@@ -35,11 +35,13 @@ func main() {
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
-	opts.GameAssetVoxelResolution = hl1.DefaultGameAssetVoxelResolution
-	opts.PickupVoxelResolution = hl1.DefaultPickupVoxelResolution
+	opts.VoxelResolutionPolicy = hl1.DefaultHL1VoxelResolutionPolicy()
 	flag.Var((*float32Flag)(&opts.VoxelResolution), "voxel-resolution", "world voxel resolution")
-	flag.Var((*float32Flag)(&opts.GameAssetVoxelResolution), "game-asset-voxel-resolution", "voxel resolution for imported HL1 model/sprite assets")
-	flag.Var((*float32Flag)(&opts.PickupVoxelResolution), "pickup-voxel-resolution", "voxel resolution for imported HL1 pickup/item assets")
+	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.BrushModel), "brush-model-voxel-resolution", "voxel resolution for imported HL1 moving/breakable brush model assets")
+	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.Fixture), "fixture-voxel-resolution", "voxel resolution for imported HL1 fixture assets such as lamps")
+	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.StaticProp), "static-prop-voxel-resolution", "voxel resolution for imported HL1 non-pickup model/sprite assets")
+	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.Pickup), "pickup-voxel-resolution", "voxel resolution for imported HL1 weapon/ammo/pickup assets")
+	flag.Var((*float32Flag)(&opts.GameAssetVoxelResolution), "game-asset-voxel-resolution", "deprecated alias for -static-prop-voxel-resolution")
 	flag.StringVar(&reportPath, "report", "", "report output path")
 	flag.BoolVar(&emitDebugWorld, "emit-debug-world", false, "write debug .gkworld/.gkchunk output")
 	flag.StringVar(&debugWorldMode, "debug-world-mode", string(hl1.DebugWorldModeSurface), "debug world mode: surface or solid")
@@ -55,10 +57,17 @@ func main() {
 	if opts.VoxelResolution <= 0 {
 		fatalf("-voxel-resolution must be positive")
 	}
-	if opts.GameAssetVoxelResolution <= 0 {
-		fatalf("-game-asset-voxel-resolution must be positive")
+	policy := hl1.EffectiveHL1VoxelResolutionPolicy(opts)
+	if policy.BrushModel <= 0 {
+		fatalf("-brush-model-voxel-resolution must be positive")
 	}
-	if opts.PickupVoxelResolution <= 0 {
+	if policy.Fixture <= 0 {
+		fatalf("-fixture-voxel-resolution must be positive")
+	}
+	if policy.StaticProp <= 0 {
+		fatalf("-static-prop-voxel-resolution must be positive")
+	}
+	if policy.Pickup <= 0 {
 		fatalf("-pickup-voxel-resolution must be positive")
 	}
 	if _, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind); err != nil {
@@ -158,6 +167,7 @@ func main() {
 		fmt.Printf("path nodes: %d\n", len(levelResult.Level.PathNodes))
 		fmt.Printf("use triggers: %d\n", len(levelResult.Level.UseTriggers))
 		fmt.Printf("chargers: %d\n", len(levelResult.Level.Chargers))
+		fmt.Printf("charger assets: %d\n", len(levelResult.ChargerAssets))
 		fmt.Printf("trigger volumes: %d\n", len(levelResult.Level.TriggerVolumes))
 		fmt.Printf("damage volumes: %d\n", len(levelResult.Level.DamageVolumes))
 		fmt.Printf("changelevel volumes: %d\n", len(levelResult.Level.ChangeLevels))
