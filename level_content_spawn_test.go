@@ -1561,6 +1561,55 @@ func writeProceduralAssetForLevelTest(t *testing.T, path string, assetID string)
 	}
 }
 
+func writeAnimatedNPCAssetForStreamedTest(t *testing.T, path string, assetID string) {
+	t.Helper()
+	def := content.NewAssetDef(assetID)
+	def.ID = assetID
+	def.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: false}
+	def.Parts = []content.AssetPartDef{
+		{
+			ID:     "body",
+			Name:   "body",
+			Source: testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:       "head",
+			Name:     "head",
+			ParentID: "body",
+			Source:   testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{0, 1, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+	def.AnimationClips = []content.AssetAnimationClipDef{{
+		ID:       "idle",
+		Name:     "idle",
+		FPS:      10,
+		Duration: 1,
+		Loop:     true,
+		Tracks: []content.AssetAnimationTrackDef{{
+			TargetID: "body",
+			RotationKeys: []content.AssetQuatKeyDef{
+				{Time: 0, Value: content.Quat{0, 0, 0, 1}},
+				{Time: 1, Value: content.Quat{0, 0, 0, 1}},
+			},
+		}},
+	}}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveAsset(path, def); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+}
+
 func writeCollapsedProceduralAssetForLevelTest(t *testing.T, path string, assetID string) {
 	t.Helper()
 	def := content.NewAssetDef(assetID)

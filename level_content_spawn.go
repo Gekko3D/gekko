@@ -995,6 +995,7 @@ func spawnAuthoredLevelNPC(cmd *Commands, assets *AssetServer, loader *RuntimeCo
 			Name:    npc.Name,
 		},
 	}
+	entity := cmd.AddEntity(comps...)
 	if strings.TrimSpace(npc.AssetPath) != "" {
 		if loader == nil {
 			loader = NewRuntimeContentLoader()
@@ -1004,21 +1005,20 @@ func spawnAuthoredLevelNPC(cmd *Commands, assets *AssetServer, loader *RuntimeCo
 		if err != nil {
 			return 0, err
 		}
-		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		assetTransform := TransformComponent{
+			Position: mgl32.Vec3{0, 0, 0},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		}
+		spawnResult, err := SpawnAuthoredAssetWithOptions(cmd, assets, asset, assetTransform, AuthoredAssetSpawnOptions{DocumentPath: assetPath})
 		if err != nil {
 			return 0, err
 		}
-		if model != (AssetId{}) {
-			comps = append(comps, &VoxelModelComponent{
-				SharedGeometry:         model,
-				VoxelPalette:           palette,
-				VoxelResolution:        voxelResolution,
-				PivotMode:              PivotModeCorner,
-				ShadowSeamWorldEpsilon: voxelResolution,
-			})
+		if spawnResult.RootEntity != 0 {
+			cmd.AddComponents(spawnResult.RootEntity, &Parent{Entity: entity})
 		}
 	}
-	return cmd.AddEntity(comps...), nil
+	return entity, nil
 }
 
 func levelWaterDirectLightOcclusion(water content.LevelWaterBodyDef) float32 {

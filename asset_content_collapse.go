@@ -58,6 +58,9 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 	if !enabled {
 		return false, nil
 	}
+	if len(def.AnimationClips) > 0 {
+		return false, nil
+	}
 
 	build, err := buildCollapsedAuthoredVoxelAsset(assets, def, opts.DocumentPath)
 	if err != nil {

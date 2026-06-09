@@ -137,6 +137,20 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	}
 	cmd.app.FlushCommands()
 
+	if animationSet := newAuthoredAssetAnimationSetComponent(def, result, cmd); animationSet != nil {
+		defaultClip, ok := animationSet.Clips[animationSet.DefaultClipID]
+		cmd.AddComponents(result.RootEntity,
+			&AnimationPlayerComponent{
+				ClipID:  animationSet.DefaultClipID,
+				Speed:   1,
+				Playing: true,
+				Loop:    ok && defaultClip.Loop,
+			},
+			animationSet,
+		)
+		cmd.app.FlushCommands()
+	}
+
 	TransformHierarchySystem(cmd)
 	return result, nil
 }
@@ -174,7 +188,7 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, def *content.AssetDef
 		return 0, err
 	}
 	if model != (AssetId{}) {
-		comps = append(comps, &VoxelModelComponent{
+		voxelModel := &VoxelModelComponent{
 			SharedGeometry:         model,
 			VoxelPalette:           palette,
 			VoxelResolution:        part.VoxelResolution,
@@ -183,7 +197,12 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, def *content.AssetDef
 			ShadowMaxDistance:      shadowSettings.maxDistance,
 			ShadowCasterGroupID:    shadowSettings.casterGroupID,
 			ShadowCasterGroupLimit: shadowSettings.casterGroupLimit,
-		})
+		}
+		if part.Source.Kind == content.AssetSourceKindVoxelShape {
+			voxelModel.PivotMode = PivotModeCustom
+			voxelModel.CustomPivot = mgl32.Vec3{part.Transform.Pivot[0], part.Transform.Pivot[1], part.Transform.Pivot[2]}
+		}
+		comps = append(comps, voxelModel)
 	}
 
 	return cmd.AddEntity(comps...), nil

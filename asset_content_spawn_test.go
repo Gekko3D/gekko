@@ -170,6 +170,9 @@ func TestSpawnAuthoredAssetBuildsVoxelShapeGeometryAndPalette(t *testing.T) {
 	if vmc.EmitterLinkID != 33 {
 		t.Fatalf("expected emitter link 33, got %d", vmc.EmitterLinkID)
 	}
+	if vmc.PivotMode != PivotModeCustom || vmc.CustomPivot != (mgl32.Vec3{}) {
+		t.Fatalf("expected voxel_shape part to use authored zero pivot, got mode=%v pivot=%v", vmc.PivotMode, vmc.CustomPivot)
+	}
 	geometry, ok := assets.GetVoxelGeometry(vmc.GeometryAsset())
 	if !ok || geometry.XBrickMap == nil {
 		t.Fatal("expected voxel shape geometry asset")
@@ -183,6 +186,31 @@ func TestSpawnAuthoredAssetBuildsVoxelShapeGeometryAndPalette(t *testing.T) {
 	}
 	if palette.VoxPalette[1] != [4]uint8{255, 80, 80, 255} {
 		t.Fatalf("unexpected palette entry %+v", palette.VoxPalette[1])
+	}
+}
+
+func TestSpawnAuthoredAssetKeepsProceduralPrimitiveDefaultPivot(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	def := content.NewAssetDef("procedural-pivot")
+	def.Parts = []content.AssetPartDef{{
+		ID:        "cube",
+		Name:      "cube",
+		Source:    testProceduralPartSource(),
+		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+	}}
+
+	result, err := SpawnAuthoredAsset(cmd, assets, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAsset returned error: %v", err)
+	}
+	app.FlushCommands()
+
+	vmc := mustVoxelModelForSpawnTest(t, cmd, result.EntitiesByAssetID["cube"])
+	if vmc.PivotMode != PivotModeCenter {
+		t.Fatalf("expected procedural primitive to keep center pivot default, got %v", vmc.PivotMode)
 	}
 }
 

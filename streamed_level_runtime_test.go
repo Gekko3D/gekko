@@ -437,6 +437,85 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 	}
 }
 
+func TestStreamedRuntimeSpawnsNPCAssetHierarchy(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "barney.gkasset")
+	levelPath := filepath.Join(root, "levels", "npc.gklevel")
+	writeAnimatedNPCAssetForStreamedTest(t, assetPath, "barney-asset")
+
+	level := content.NewLevelDef("npc")
+	level.NPCs = []content.LevelNPCDef{{
+		ID:        "npc-1",
+		Kind:      "hl1_monster",
+		AssetPath: filepath.Join("..", "assets", "barney.gkasset"),
+		ClassName: "monster_barney",
+		ModelRef:  "models/barney.mdl",
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{8, 2, 6},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Health: 35,
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app, cmd, _ := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	app.FlushCommands()
+	TransformHierarchySystem(cmd)
+
+	var npcEntity EntityId
+	MakeQuery1[NPCComponent](cmd).Map(func(eid EntityId, npc *NPCComponent) bool {
+		if npc.ClassName == "monster_barney" {
+			npcEntity = eid
+			return false
+		}
+		return true
+	})
+	if npcEntity == 0 {
+		t.Fatal("expected streamed runtime NPC entity")
+	}
+
+	var assetRoot EntityId
+	MakeQuery1[AuthoredAssetRootComponent](cmd).Map(func(eid EntityId, root *AuthoredAssetRootComponent) bool {
+		if root.AssetID != "barney-asset" {
+			return true
+		}
+		parent, _ := cmd.GetComponent(eid, reflect.TypeOf(Parent{})).(*Parent)
+		if parent == nil || parent.Entity != npcEntity {
+			t.Fatalf("expected NPC asset root to be parented to NPC %d, got %+v", npcEntity, parent)
+		}
+		assetRoot = eid
+		return false
+	})
+	if assetRoot == 0 {
+		t.Fatal("expected NPC authored asset root")
+	}
+
+	player, _ := cmd.GetComponent(assetRoot, reflect.TypeOf(AnimationPlayerComponent{})).(*AnimationPlayerComponent)
+	if player == nil || player.ClipID != "idle" || !player.Playing {
+		t.Fatalf("expected NPC asset root animation player, got %+v", player)
+	}
+
+	voxelPartCount := 0
+	MakeQuery1[VoxelModelComponent](cmd).Map(func(eid EntityId, _ *VoxelModelComponent) bool {
+		if isEntityOrDescendantOf(cmd, eid, assetRoot) {
+			voxelPartCount++
+		}
+		return true
+	})
+	if voxelPartCount != 2 {
+		t.Fatalf("expected two NPC asset voxel parts under asset root, got %d", voxelPartCount)
+	}
+}
+
 func TestStreamedRuntimeSpawnsLevelLights(t *testing.T) {
 	root := t.TempDir()
 	levelPath := filepath.Join(root, "levels", "lights.gklevel")

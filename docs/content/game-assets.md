@@ -21,6 +21,10 @@ It can contain:
 
 - `parts`
   - visible voxel-backed parts or transform-only groups
+- `skeleton`
+  - optional imported/authored bone metadata for tools and diagnostics
+- `animation_clips`
+  - optional local-space rigid animation tracks for spawned authored items
 - `lights`
   - point, directional, spot, or ambient lights
 - `emitters`
@@ -71,6 +75,12 @@ At spawn time:
 
 Each spawned item gets `AuthoredAssetRefComponent` so runtime code can map entities back to authored item IDs.
 
+Animated authored assets are rigid hierarchies. Runtime playback samples
+`animation_clips` into item `LocalTransformComponent` values, then
+`HierarchyModule` resolves the world transforms. The engine does not skin or
+deform voxel geometry; importers should split characters and machinery into
+rigid voxel parts under transform-only `group` pivots.
+
 ## Source Kinds for Parts
 
 A part's `source.kind` controls how geometry is produced:
@@ -81,10 +91,27 @@ A part's `source.kind` controls how geometry is produced:
   - load a specific model from a `.vox` file by `path` and `model_index`
 - `vox_scene_node`
   - resolve geometry from a named VOX scene node subtree
+- `voxel_shape`
+  - inline explicit voxel payload
+  - uses `transform.pivot` as the voxel renderer pivot, defaulting to the local voxel origin
 - `procedural_primitive`
   - generate a primitive such as `cube`, `sphere`, `cone`, or `pyramid`
 
 Voxel-backed parts become `VoxelModelComponent` entities during spawn. Group parts still participate in hierarchy and parenting but do not create geometry.
+
+Pivot rules:
+
+- `voxel_shape` is explicit local voxel data. Its `transform.pivot` becomes the
+  renderer pivot, defaulting to local voxel origin `[0, 0, 0]`.
+- Other voxel-backed sources keep the runtime renderer's default pivot behavior
+  unless a source-specific loader defines otherwise.
+- A parent part's renderer pivot never changes child transforms. Use `group`
+  parts when an asset needs stable gameplay or animation pivots.
+
+Voxel resolution is per part. Imported or authored assets may mix resolutions
+inside one scene: large static world geometry can stay coarse, props can use a
+medium resolution, and pickups or character parts can use finer voxels. Runtime
+spawn copies each part's `voxel_resolution` into its `VoxelModelComponent`.
 
 ## Path Resolution Rules
 
@@ -165,6 +192,10 @@ This metadata is the bridge between authored content, gameplay logic, editor too
 - Keep authored asset references relative to the containing document.
 - Use `.gkasset` for reusable object hierarchies, not for whole levels.
 - Use `group` parts for pivots and hierarchy organization instead of inventing fake geometry.
+- Keep animated assets uncollapsed. Collapsing voxel parts is for static assets
+  whose child geometry no longer needs independent transforms.
+- Author animation tracks in local space. Do not bake renderer pivots or
+  world-space parent transforms into clip keys.
 - Prefer stable, descriptive names and tags even though IDs are the real identity.
 - Use `.gkset` only when a level needs weighted variety; do not duplicate near-identical placement volumes with hardcoded asset paths.
 
@@ -173,7 +204,7 @@ This metadata is the bridge between authored content, gameplay logic, editor too
 ```json
 {
   "id": "crate-asset",
-  "schema_version": 2,
+  "schema_version": 3,
   "name": "crate",
   "parts": [
     {

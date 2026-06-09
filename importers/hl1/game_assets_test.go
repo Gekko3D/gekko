@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gekko3d/gekko/content"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
 
@@ -255,6 +256,160 @@ func TestParseMDLGeometryAppliesVertexBoneBindPose(t *testing.T) {
 	}
 }
 
+func TestParseMDLInfoReadsBonesAndSequences(t *testing.T) {
+	info, err := ParseMDLInfo(syntheticMDLWithBoneAndSequence())
+	if err != nil {
+		t.Fatalf("ParseMDLInfo failed: %v", err)
+	}
+	if len(info.Bones) != 1 || info.Bones[0].Name != "root" || info.Bones[0].Parent != -1 {
+		t.Fatalf("unexpected bones: %+v", info.Bones)
+	}
+	if info.Bones[0].Position != (importcommon.Vec3{X: 10, Y: 20, Z: 30}) {
+		t.Fatalf("unexpected bone position: %+v", info.Bones[0].Position)
+	}
+	if len(info.Sequences) != 1 || info.Sequences[0].Name != "idle" || info.Sequences[0].FPS != 30 || info.Sequences[0].FrameCount != 16 {
+		t.Fatalf("unexpected sequences: %+v", info.Sequences)
+	}
+}
+
+func TestParseMDLInfoReadsMultipleGoldSrcSequenceRecords(t *testing.T) {
+	info, err := ParseMDLInfo(syntheticMDLWithTwoGoldSrcSequences())
+	if err != nil {
+		t.Fatalf("ParseMDLInfo failed: %v", err)
+	}
+	if len(info.Sequences) != 2 {
+		t.Fatalf("expected two sequences, got %+v", info.Sequences)
+	}
+	if info.Sequences[0].Name != "idle" || info.Sequences[0].FrameCount != 16 {
+		t.Fatalf("unexpected first sequence: %+v", info.Sequences[0])
+	}
+	if info.Sequences[1].Name != "walk" || info.Sequences[1].FrameCount != 24 || info.Sequences[1].FPS != 20 {
+		t.Fatalf("unexpected second sequence: %+v", info.Sequences[1])
+	}
+}
+
+func TestParseMDLInfoSkipsImpossibleSequenceAnimationDecode(t *testing.T) {
+	info, err := ParseMDLInfo(syntheticMDLWithImpossibleSequenceAnimation())
+	if err != nil {
+		t.Fatalf("ParseMDLInfo failed: %v", err)
+	}
+	if len(info.Sequences) != 1 {
+		t.Fatalf("expected one sequence, got %+v", info.Sequences)
+	}
+	if len(info.Sequences[0].BoneAnimations) != 0 {
+		t.Fatalf("expected malformed sequence to skip decoded animation frames, got %+v", info.Sequences[0].BoneAnimations)
+	}
+}
+
+func TestParseMDLInfoDecodesSequenceAnimationFrames(t *testing.T) {
+	info, err := ParseMDLInfo(syntheticMDLWithBoneSequenceAnimation())
+	if err != nil {
+		t.Fatalf("ParseMDLInfo failed: %v", err)
+	}
+	if len(info.Sequences) != 1 || len(info.Sequences[0].BoneAnimations) != 1 {
+		t.Fatalf("expected decoded bone animation, got %+v", info.Sequences)
+	}
+	animation := info.Sequences[0].BoneAnimations[0]
+	if len(animation.PositionFrames) != 2 || len(animation.RotationFrames) != 2 {
+		t.Fatalf("expected two decoded frames, got %+v", animation)
+	}
+	if animation.PositionFrames[0].X != 10 || animation.PositionFrames[1].X != 12 {
+		t.Fatalf("unexpected decoded position frames: %+v", animation.PositionFrames)
+	}
+	if animation.RotationFrames[0].Z != 0 || animation.RotationFrames[1].Z != 1 {
+		t.Fatalf("unexpected decoded rotation frames: %+v", animation.RotationFrames)
+	}
+}
+
+func TestBuildMDLVoxelAssetEmitsSkeletonAndBindPoseClip(t *testing.T) {
+	geometry, err := ParseMDLGeometry(syntheticMDLWithBoneAndSequence())
+	if err != nil {
+		t.Fatalf("ParseMDLGeometry failed: %v", err)
+	}
+	asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{Name: "barney", SourceRef: "models/barney.mdl", VoxelResolution: 0.02})
+	if err != nil {
+		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
+	}
+	if voxelCount == 0 {
+		t.Fatal("expected generated voxels")
+	}
+	if asset.Skeleton == nil || len(asset.Skeleton.Bones) != 1 || asset.Skeleton.Bones[0].ID != "bone_00_root" {
+		t.Fatalf("expected emitted skeleton, got %+v", asset.Skeleton)
+	}
+	if len(asset.Parts) != 2 || asset.Parts[0].ID != "bone_00_root" || asset.Parts[1].ID != "bone_00_root_voxels" || asset.Parts[1].ParentID != "bone_00_root" {
+		t.Fatalf("expected rigid bone group plus voxel child, got %+v", asset.Parts)
+	}
+	if !approxContentVec3(asset.Parts[0].Transform.Position, content.Vec3{0.254, 0.762, -0.508}, 1e-5) {
+		t.Fatalf("unexpected bone group position: %+v", asset.Parts[0].Transform.Position)
+	}
+	if len(asset.AnimationClips) != 1 || asset.AnimationClips[0].ID != "mdl_idle" || len(asset.AnimationClips[0].Tracks) != 1 {
+		t.Fatalf("expected bind-pose animation clip, got %+v", asset.AnimationClips)
+	}
+	if asset.AnimationClips[0].Tracks[0].TargetID != "bone_00_root" {
+		t.Fatalf("expected clip to target bone group, got %+v", asset.AnimationClips[0].Tracks[0])
+	}
+	if asset.Runtime == nil || asset.Runtime.CollapseVoxelParts {
+		t.Fatalf("expected animated mdl asset to keep voxel parts uncollapsed, got %+v", asset.Runtime)
+	}
+	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
+		t.Fatalf("expected rigid MDL asset to validate, got %+v", validation.Issues)
+	}
+}
+
+func TestBuildMDLVoxelAssetEmitsDecodedSequenceClip(t *testing.T) {
+	geometry, err := ParseMDLGeometry(syntheticMDLWithBoneSequenceAnimation())
+	if err != nil {
+		t.Fatalf("ParseMDLGeometry failed: %v", err)
+	}
+	asset, _, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{Name: "barney", SourceRef: "models/barney.mdl", VoxelResolution: 0.02})
+	if err != nil {
+		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
+	}
+	if len(asset.AnimationClips) != 1 || len(asset.AnimationClips[0].Tracks) != 1 {
+		t.Fatalf("expected one decoded clip track, got %+v", asset.AnimationClips)
+	}
+	track := asset.AnimationClips[0].Tracks[0]
+	if len(track.PositionKeys) != 2 || len(track.RotationKeys) != 2 {
+		t.Fatalf("expected per-frame keys, got %+v", track)
+	}
+	if !approxContentVec3(track.PositionKeys[0].Value, content.Vec3{0.254, 0.762, -0.508}, 1e-5) ||
+		!approxContentVec3(track.PositionKeys[1].Value, content.Vec3{0.3048, 0.762, -0.508}, 1e-5) {
+		t.Fatalf("unexpected decoded clip positions: %+v", track.PositionKeys)
+	}
+	if track.RotationKeys[1].Value == (content.Quat{0, 0, 0, 1}) {
+		t.Fatalf("expected decoded rotation key to change, got %+v", track.RotationKeys)
+	}
+	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
+		t.Fatalf("expected decoded MDL asset to validate, got %+v", validation.Issues)
+	}
+}
+
+func TestVoxelizeMDLGeometryByBoneSplitsMixedBoneTriangleBySample(t *testing.T) {
+	geometry := MDLGeometry{
+		Info: MDLInfo{
+			Bones: []MDLBoneInfo{
+				{Name: "root", Parent: -1},
+				{Name: "arm", Parent: 0},
+			},
+		},
+		Triangles: []MDLTriangle{{
+			TextureIndex: -1,
+			Vertices: [3]MDLTriangleVertex{
+				{Position: importcommon.Vec3{X: 0, Y: 0, Z: 0}, BoneIndex: 0},
+				{Position: importcommon.Vec3{X: 100, Y: 0, Z: 0}, BoneIndex: 1},
+				{Position: importcommon.Vec3{X: 0, Y: 0, Z: 100}, BoneIndex: 1},
+			},
+		}},
+	}
+	boneVoxels := voxelizeMDLGeometryByBone(geometry, 0.5)
+	if len(boneVoxels[0]) == 0 {
+		t.Fatalf("expected mixed triangle samples near root vertex to stay on bone 0, got %+v", boneVoxels)
+	}
+	if len(boneVoxels[1]) == 0 {
+		t.Fatalf("expected mixed triangle samples near arm vertices to stay on bone 1, got %+v", boneVoxels)
+	}
+}
+
 func TestLoadMDLGeometryUsesCompanionTextureModel(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "w_test.mdl")
@@ -448,6 +603,89 @@ func syntheticMDLWithBoneTranslation(x float32, y float32, z float32) []byte {
 	return out
 }
 
+func syntheticMDLWithBoneAndSequence() []byte {
+	data := syntheticMDLWithBoneTranslation(10, 20, 30)
+	const sequenceSize = mdlSequenceRecordSize176
+	sequenceOffset := len(data)
+	out := append(data, make([]byte, sequenceSize)...)
+	writeTestInt32(out, 72, len(out))
+	writeTestInt32(out, 164, 1)
+	writeTestInt32(out, 168, sequenceOffset)
+	writeTestCString(out[sequenceOffset:sequenceOffset+32], "idle")
+	writeTestFloat32(out, sequenceOffset+32, 30)
+	writeTestInt32(out, sequenceOffset+56, 16)
+	return out
+}
+
+func syntheticMDLWithTwoGoldSrcSequences() []byte {
+	data := syntheticMDLWithBoneTranslation(10, 20, 30)
+	const sequenceSize = mdlSequenceRecordSize176
+	sequenceOffset := len(data)
+	out := append(data, make([]byte, sequenceSize*2)...)
+	writeTestInt32(out, 72, len(out))
+	writeTestInt32(out, 164, 2)
+	writeTestInt32(out, 168, sequenceOffset)
+	writeTestCString(out[sequenceOffset:sequenceOffset+32], "idle")
+	writeTestFloat32(out, sequenceOffset+32, 30)
+	writeTestInt32(out, sequenceOffset+56, 16)
+	secondOffset := sequenceOffset + sequenceSize
+	writeTestCString(out[secondOffset:secondOffset+32], "walk")
+	writeTestFloat32(out, secondOffset+32, 20)
+	writeTestInt32(out, secondOffset+56, 24)
+	return out
+}
+
+func syntheticMDLWithImpossibleSequenceAnimation() []byte {
+	data := syntheticMDLWithBoneTranslation(10, 20, 30)
+	const sequenceSize = mdlSequenceRecordSize176
+	sequenceOffset := len(data)
+	animOffset := sequenceOffset + sequenceSize
+	out := append(data, make([]byte, sequenceSize+12)...)
+	writeTestInt32(out, 72, len(out))
+	writeTestInt32(out, 164, 1)
+	writeTestInt32(out, 168, sequenceOffset)
+	writeTestCString(out[sequenceOffset:sequenceOffset+32], "idle")
+	writeTestFloat32(out, sequenceOffset+32, 10)
+	writeTestInt32(out, sequenceOffset+56, maxMDLSequenceFrameCount+1)
+	writeTestInt32(out, sequenceOffset+120, 1)
+	writeTestInt32(out, sequenceOffset+124, animOffset)
+	return out
+}
+
+func syntheticMDLWithBoneSequenceAnimation() []byte {
+	data := syntheticMDLWithBoneTranslation(10, 20, 30)
+	const sequenceSize = mdlSequenceRecordSize176
+	sequenceOffset := len(data)
+	animOffset := sequenceOffset + sequenceSize
+	positionStreamOffset := animOffset + 12
+	rotationStreamOffset := positionStreamOffset + 6
+	out := append(data, make([]byte, sequenceSize+12+6+6)...)
+	writeTestInt32(out, 72, len(out))
+	writeTestInt32(out, 164, 1)
+	writeTestInt32(out, 168, sequenceOffset)
+	writeTestCString(out[sequenceOffset:sequenceOffset+32], "idle")
+	writeTestFloat32(out, sequenceOffset+32, 10)
+	writeTestInt32(out, sequenceOffset+56, 2)
+	writeTestInt32(out, sequenceOffset+120, 1)
+	writeTestInt32(out, sequenceOffset+124, animOffset)
+
+	boneOffset := len(syntheticMDL())
+	writeTestFloat32(out, boneOffset+88, 0.5)
+	writeTestFloat32(out, boneOffset+108, 0.1)
+
+	writeTestInt16(out, animOffset+0, positionStreamOffset-animOffset)
+	writeTestInt16(out, animOffset+10, rotationStreamOffset-animOffset)
+	out[positionStreamOffset+0] = 2
+	out[positionStreamOffset+1] = 2
+	writeTestInt16(out, positionStreamOffset+2, 0)
+	writeTestInt16(out, positionStreamOffset+4, 4)
+	out[rotationStreamOffset+0] = 2
+	out[rotationStreamOffset+1] = 2
+	writeTestInt16(out, rotationStreamOffset+2, 0)
+	writeTestInt16(out, rotationStreamOffset+4, 10)
+	return out
+}
+
 func syntheticSPR() []byte {
 	const (
 		width         = 4
@@ -508,6 +746,12 @@ func writeTestTriangleCommandVertex(data []byte, offset int, vertex int, normal 
 	writeTestInt16(data, offset+2, normal)
 	writeTestInt16(data, offset+4, s)
 	writeTestInt16(data, offset+6, t)
+}
+
+func approxContentVec3(got content.Vec3, want content.Vec3, epsilon float32) bool {
+	return math.Abs(float64(got[0]-want[0])) <= float64(epsilon) &&
+		math.Abs(float64(got[1]-want[1])) <= float64(epsilon) &&
+		math.Abs(float64(got[2]-want[2])) <= float64(epsilon)
 }
 
 func writeTestCString(data []byte, value string) {

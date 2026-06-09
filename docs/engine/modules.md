@@ -40,7 +40,13 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
 - Owns:
   - propagation from `LocalTransformComponent` plus `Parent` to `TransformComponent`
 - Important:
-  - parent voxel pivot and voxel resolution affect child world transforms
+  - hierarchy composition is pure entity transform math: parent position,
+    rotation, and scale affect children
+  - voxel renderer pivots do not affect child world transforms; pivots only
+    affect how a voxel model is drawn around its entity origin
+  - if a voxel-authored asset needs a separate visual origin, express it as a
+    child voxel part under a `group` pivot rather than relying on renderer pivot
+    side effects
 
 ## Spatial and Streaming Support
 
@@ -105,6 +111,27 @@ These are not separate `Module` implementations, but they are major integration 
   - eager whole-level spawn from `.gklevel`
 - `runtime_content_loader.go`
   - cached loading of authored content files
+- `asset_animation.go`
+  - advances authored `.gkasset` animation clips through
+    `AnimationPlayerComponent`
+  - applies sampled keys to `LocalTransformComponent` targets identified by
+    authored item IDs
+
+### `AnimationModule`
+
+- File: `asset_animation.go`
+- Resources:
+  - none
+- Systems:
+  - `assetAnimationSystem` in `Update`
+- Owns:
+  - authored asset clip playback for spawned `.gkasset` hierarchies
+  - local transform sampling for position, rotation, and scale keys
+- Important:
+  - animation tracks are local-space authored transforms
+  - omitted channels keep the asset's bind transform
+  - `HierarchyModule` resolves the resulting local transforms to world
+    transforms after animation has run
 
 For their data model, see:
 

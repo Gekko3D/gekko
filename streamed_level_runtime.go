@@ -749,6 +749,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		}
 	}
 	cmd.app.FlushCommands()
+	TransformHierarchySystem(cmd)
 	return nil
 }
 

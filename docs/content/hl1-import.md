@@ -978,24 +978,37 @@ records:
 - `.wav` references from entity key-values
 
 WADs are already used for BSP texture baking. MDL files are copied, parsed, and
-voxelized into generated surface `.gkasset` files under
+voxelized into generated `.gkasset` files under
 `hl1_assets/<map>/generated/models/`. When a GoldSrc model stores geometry in
 `w_foo.mdl` and texture pixels in a companion `w_foot.mdl`, the importer loads
 that companion texture model before baking voxel colors. SPR files are copied,
-parsed, and converted from their first indexed frame into thin emissive voxel-card
-`.gkasset` files under `hl1_assets/<map>/generated/sprites/`. The manifest
-entries keep source provenance, decoded metadata, generated asset path, and
-generated voxel count, resolution, and resolution category. Imported world
-geometry, moving/breakable brush models, fixtures, charger visuals, static
-props, NPCs, and weapon/ammo/pickup assets intentionally have separate
+parsed, and converted from their first indexed frame into thin emissive
+voxel-card `.gkasset` files under `hl1_assets/<map>/generated/sprites/`. The
+manifest entries keep source provenance, decoded metadata, generated asset
+path, and generated voxel count, resolution, and resolution category. Imported
+world geometry, moving/breakable brush models, fixtures, charger visuals,
+static props, NPCs, and weapon/ammo/pickup assets intentionally have separate
 voxel-resolution buckets: small pickups and character silhouettes need finer
 voxels than BSP walls and floors, while props, fixtures, and chargers can sit
 between those extremes.
-Generated model assets currently use the default static pose and texture-baked
-surface voxels; they are not solid-filled or animated yet. Generated sprite
-assets are not true camera-facing billboards yet; they are placed voxel cards
-that preserve palette color and cutout/additive transparency well enough for
-first visual coverage.
+
+Generated MDL assets use rigid voxel-part animation:
+
+- GoldSrc bones and sequence metadata are decoded into `.gkasset` `skeleton`
+  and `animation_clips` metadata.
+- Model triangles are voxelized per vertex bone. Mixed-bone triangles are split
+  by sampled barycentric ownership so arms, legs, and torso chunks do not
+  smear into one rigid part.
+- Each visible bone chunk is emitted as explicit `voxel_shape` data under a
+  transform-only bone group. The chunk's local voxel origin is preserved as the
+  renderer pivot, so localized voxel bounds do not shift the body part.
+- Animation clips target bone group part IDs and write local rigid transforms.
+  The current runtime does not skin or deform voxels.
+- Animated MDL assets keep voxel parts uncollapsed.
+
+Generated sprite assets are not true camera-facing billboards yet; they are
+placed voxel cards that preserve palette color and cutout/additive transparency
+well enough for first visual coverage.
 When **game assets** is enabled, typed pickups try to attach the generated HL1
 world model asset directly to `LevelPickupDef.AssetPath`; actiongame uses that
 model as the collectible visual and falls back to the colored placeholder cube
@@ -1079,6 +1092,25 @@ This writes:
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/crossfire_import_report.json
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/chunks/*.gkchunk
 ```
+
+### Voxel Resolution Policy
+
+HL1 imports use a per-category voxel resolution policy rather than one global
+asset resolution:
+
+- `world`: base BSP world chunks, default `0.1`
+- `brush_model`: generated moving brushes and breakables, default `0.1`
+- `fixture`: lamps, chargers, and similar fixtures, default `0.05`
+- `static_prop`: generic converted `.mdl` and `.spr` placements, default `0.05`
+- `npc`: converted monster/NPC `.mdl` assets, default `0.02`
+- `pickup`: weapons, ammo, batteries, medkits, and other pickup visuals,
+  default `0.01`
+
+The category is stored in the asset manifest entry and the chosen value is
+copied into each generated `.gkasset` part. This is the long-term policy: scene
+content can mix voxel resolutions as long as each runtime `VoxelModelComponent`
+receives the authored part resolution. Do not resample all imported assets to
+the base-world resolution just to simplify placement.
 
 ### Actiongame Smoke Test
 
@@ -1506,8 +1538,10 @@ Recommended path:
 - Implemented first slice: selected HL1 `monster_*` point entities are emitted
   as typed `content.LevelDef.NPCs` plus `ai_spawn` markers. Runtime spawns inert
   `NPCComponent` entities and attaches generated `.mdl` voxel assets when game
-  assets are enabled. Deferred: AI, combat, schedules, animation state,
-  relationships, scripted sequences, and exact skill configuration.
+  assets are enabled. Generated MDL assets can play their default imported
+  rigid-body sequence, such as Barney idle. Deferred: AI, combat, schedules,
+  animation state selection/blending, relationships, scripted sequences, and
+  exact skill configuration.
 - `trigger_once` and `trigger_multiple` become typed trigger volumes with
   target metadata.
 - Implemented first slice: `trigger_changelevel` is emitted as typed
@@ -1651,22 +1685,25 @@ Acceptance criteria:
 
 Engine/content:
 
-- [ ] HL1 importer package.
-- [ ] Import report schema.
-- [ ] Required WAD/BSP texture bake onto visible voxel surfaces.
+- [x] HL1 importer package.
+- [x] Import report schema.
+- [x] Required WAD/BSP texture bake onto visible voxel surfaces.
 - [x] Deterministic adaptive palette quantization for baked texture samples.
-- [ ] Structural fill material propagation from nearest visible source surface.
-- [ ] Optional `.gkworld` source material metadata.
+- [x] Structural fill material propagation from nearest visible source surface.
+- [x] Optional `.gkworld` source material metadata.
 - [x] Optional `.gkchunk` compact payload support.
-- [ ] Optional `.gklevel` light definitions.
-- [ ] Optional `.gklevel` trigger volume definitions.
+- [x] Optional `.gklevel` light definitions.
+- [x] Optional `.gklevel` trigger volume definitions.
+- [x] Generated HL1 game asset manifest with per-category voxel resolution.
+- [x] Generated MDL `.gkasset` rigid bone parts, skeleton metadata, and
+      sequence clips.
 - [ ] Richer `LevelEnvironmentDef`.
 
 Runtime:
 
-- [ ] Load selected generated HL1 level in `actiongame`.
-- [ ] Spawn/import level-owned lights.
-- [ ] Apply imported player spawn rotation.
+- [x] Load selected generated HL1 level in `actiongame`.
+- [x] Spawn/import level-owned lights.
+- [x] Apply imported player spawn rotation.
 - [x] Represent changelevel trigger volumes as typed transition metadata.
 - [x] Represent ladder volumes.
 - [x] Represent typed door/button moving-brush metadata and use activation.
@@ -1684,6 +1721,8 @@ Runtime:
       components with actiongame placeholder collection.
 - [x] Attach generated HL1 world-model pickup visuals when game assets are
       enabled, with placeholder fallback for missing assets.
+- [x] Attach generated HL1 NPC `.mdl` visuals with default rigid animation when
+      game assets are enabled.
 - [ ] Import remaining target graph relay/action entities.
 - [ ] Implement exact HL1 pickup respawn/skill behavior and animated pickup
       presentation.
