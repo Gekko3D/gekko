@@ -40,6 +40,7 @@ func main() {
 	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.BrushModel), "brush-model-voxel-resolution", "voxel resolution for imported HL1 moving/breakable brush model assets")
 	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.Fixture), "fixture-voxel-resolution", "voxel resolution for imported HL1 fixture assets such as lamps")
 	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.StaticProp), "static-prop-voxel-resolution", "voxel resolution for imported HL1 non-pickup model/sprite assets")
+	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.NPC), "npc-voxel-resolution", "voxel resolution for imported HL1 NPC/monster model assets")
 	flag.Var((*float32Flag)(&opts.VoxelResolutionPolicy.Pickup), "pickup-voxel-resolution", "voxel resolution for imported HL1 weapon/ammo/pickup assets")
 	flag.Var((*float32Flag)(&opts.GameAssetVoxelResolution), "game-asset-voxel-resolution", "deprecated alias for -static-prop-voxel-resolution")
 	flag.StringVar(&reportPath, "report", "", "report output path")
@@ -66,6 +67,9 @@ func main() {
 	}
 	if policy.StaticProp <= 0 {
 		fatalf("-static-prop-voxel-resolution must be positive")
+	}
+	if policy.NPC <= 0 {
+		fatalf("-npc-voxel-resolution must be positive")
 	}
 	if policy.Pickup <= 0 {
 		fatalf("-pickup-voxel-resolution must be positive")
@@ -175,6 +179,7 @@ func main() {
 		fmt.Printf("target relays: %d\n", len(levelResult.Level.TargetRelays))
 		fmt.Printf("breakables: %d\n", len(levelResult.Level.Breakables))
 		fmt.Printf("pickups: %d\n", len(levelResult.Level.Pickups))
+		fmt.Printf("npcs: %d\n", len(levelResult.Level.NPCs))
 		fmt.Printf("light fixture assets: %d\n", len(levelResult.LightFixtureAssets))
 		fmt.Printf("moving brush assets: %d\n", len(levelResult.MovingBrushAssets))
 		fmt.Printf("breakable assets: %d\n", len(levelResult.BreakableAssets))

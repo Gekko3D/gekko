@@ -953,6 +953,7 @@ go run .
 - output root: `assets`
 - voxel: `0.1` for world/base geometry
 - asset voxel: `0.05` for generic imported `.mdl`/`.spr` static prop assets
+- NPC voxel: `0.02` for imported monster/NPC model assets
 - item voxel: `0.01` for weapon, ammo, and pickup/item assets
 - chunk: `256`
 - band: `24`
@@ -986,9 +987,10 @@ parsed, and converted from their first indexed frame into thin emissive voxel-ca
 entries keep source provenance, decoded metadata, generated asset path, and
 generated voxel count, resolution, and resolution category. Imported world
 geometry, moving/breakable brush models, fixtures, charger visuals, static
-props, and weapon/ammo/pickup assets intentionally have separate
-voxel-resolution buckets: small pickups need finer voxels than BSP walls and
-floors, while props, fixtures, and chargers can sit between those extremes.
+props, NPCs, and weapon/ammo/pickup assets intentionally have separate
+voxel-resolution buckets: small pickups and character silhouettes need finer
+voxels than BSP walls and floors, while props, fixtures, and chargers can sit
+between those extremes.
 Generated model assets currently use the default static pose and texture-baked
 surface voxels; they are not solid-filled or animated yet. Generated sprite
 assets are not true camera-facing billboards yet; they are placed voxel cards
@@ -1019,6 +1021,7 @@ go run ./cmd/hl1import \
   -brush-model-voxel-resolution 0.1 \
   -fixture-voxel-resolution 0.05 \
   -static-prop-voxel-resolution 0.05 \
+  -npc-voxel-resolution 0.02 \
   -pickup-voxel-resolution 0.01 \
   -light-mode faithful \
   -emit-light-fixtures=false \
@@ -1500,6 +1503,11 @@ Recommended path:
   in the copied game assets: health charger 50 and suit charger 75. Deferred:
   exact difficulty selection, recharge timing, sounds, animated empty/active
   visual states, and global-state behavior.
+- Implemented first slice: selected HL1 `monster_*` point entities are emitted
+  as typed `content.LevelDef.NPCs` plus `ai_spawn` markers. Runtime spawns inert
+  `NPCComponent` entities and attaches generated `.mdl` voxel assets when game
+  assets are enabled. Deferred: AI, combat, schedules, animation state,
+  relationships, scripted sequences, and exact skill configuration.
 - `trigger_once` and `trigger_multiple` become typed trigger volumes with
   target metadata.
 - Implemented first slice: `trigger_changelevel` is emitted as typed
@@ -1630,7 +1638,7 @@ Initial mapping order:
 6. `func_ladder`
 7. pickups and simple props
 8. doors/buttons/lifts/trains only after actiongame has matching systems
-9. NPC spawn markers, then real NPC behavior later
+9. NPC spawn markers and inert visuals, then real NPC behavior later
 
 Acceptance criteria:
 

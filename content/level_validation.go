@@ -199,6 +199,10 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		validateLevelPickupUniqueID(&result, seenIDs, pickup.ID)
 		validateLevelPickup(&result, pickup, opts)
 	}
+	for _, npc := range def.NPCs {
+		validateLevelNPCUniqueID(&result, seenIDs, npc.ID)
+		validateLevelNPC(&result, npc, opts)
+	}
 
 	validateLevelTerrain(&result, def, opts)
 	validateLevelBaseWorld(&result, def, opts)
@@ -396,6 +400,17 @@ func validateLevelPickupUniqueID(result *LevelValidationResult, seen map[string]
 	}
 	if _, ok := seen[id]; ok {
 		result.addError("duplicate_pickup_id", fmt.Sprintf("duplicate pickup id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
+func validateLevelNPCUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_npc_id", fmt.Sprintf("duplicate npc id %s", id), "", "", "", "", "", "", "")
 		return
 	}
 	seen[id] = struct{}{}
@@ -682,6 +697,24 @@ func validateLevelPickup(result *LevelValidationResult, pickup LevelPickupDef, o
 	}
 }
 
+func validateLevelNPC(result *LevelValidationResult, npc LevelNPCDef, opts LevelValidationOptions) {
+	if strings.TrimSpace(npc.ID) == "" {
+		result.addError("empty_npc_id", "npc id is required", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(npc.ClassName) == "" {
+		result.addError("empty_npc_class_name", "npc class_name is required", "", "", "", "", "", "", "")
+	}
+	if npc.Health < 0 {
+		result.addError("invalid_npc_health", "npc health must be non-negative", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(npc.AssetPath) != "" && opts.DocumentPath != "" {
+		resolvedPath := ResolveDocumentPath(npc.AssetPath, opts.DocumentPath)
+		if _, err := os.Stat(resolvedPath); err != nil {
+			result.addError("missing_npc_asset", fmt.Sprintf("missing npc asset %s", npc.AssetPath), "", "", "", "", "", "", "")
+		}
+	}
+}
+
 func validatePlacementVolume(result *LevelValidationResult, volume PlacementVolumeDef, opts LevelValidationOptions) {
 	if !isValidPlacementVolumeKind(volume.Kind) {
 		result.addError("invalid_volume_kind", fmt.Sprintf("unsupported placement volume kind %q", volume.Kind), "", "", volume.ID, "", "", "", "")
@@ -933,10 +966,20 @@ func validateShooterLevelRequirements(result *LevelValidationResult, def *LevelD
 		result.addError("missing_shooter_base_world", "shooter level requires an imported base world", "", "", "", "", "", "", "")
 		return
 	}
-	if _, ok := FindLevelMarkerByKind(def.Markers, LevelMarkerKindPlayerSpawn); !ok {
-		result.addError("missing_player_spawn", "shooter level requires a player_spawn marker", "", "", "", "", "", "", "")
+	spawnKind := shooterPlayerSpawnKind(def)
+	if _, ok := FindLevelMarkerByKind(def.Markers, spawnKind); !ok {
+		result.addError("missing_player_spawn", fmt.Sprintf("shooter level requires a %s marker", spawnKind), "", "", "", "", "", "", "")
 	}
 	validateShooterMarkerPlacement(result, def, opts)
+}
+
+func shooterPlayerSpawnKind(def *LevelDef) string {
+	if def != nil && def.Player != nil {
+		if spawnKind := strings.TrimSpace(def.Player.SpawnKind); spawnKind != "" {
+			return spawnKind
+		}
+	}
+	return LevelMarkerKindPlayerSpawn
 }
 
 func levelNeedsShooterValidation(def *LevelDef) bool {
@@ -977,6 +1020,9 @@ func validateShooterMarkerPlacement(result *LevelValidationResult, def *LevelDef
 	}
 	chunkCache := make(map[TerrainChunkCoordDef]*ImportedWorldChunkDef)
 	for _, marker := range def.Markers {
+		if !isShooterPlacementMarker(def, marker) {
+			continue
+		}
 		position := marker.Transform.Position
 		chunkCoord := TerrainChunkCoordDef{
 			X: int(floorLevelFloat32(position[0] / chunkWorldSize)),
@@ -1010,6 +1056,15 @@ func validateShooterMarkerPlacement(result *LevelValidationResult, def *LevelDef
 		if importedWorldChunkHasVoxel(chunk, localX, localY, localZ) {
 			result.addError("marker_inside_solid", fmt.Sprintf("marker %s is placed inside solid imported geometry", marker.ID), "", "", "", "", marker.ID, "", def.BaseWorld.ManifestPath)
 		}
+	}
+}
+
+func isShooterPlacementMarker(def *LevelDef, marker LevelMarkerDef) bool {
+	switch marker.Kind {
+	case LevelMarkerKindPlayerSpawn, LevelMarkerKindAISpawn:
+		return true
+	default:
+		return marker.Kind == shooterPlayerSpawnKind(def)
 	}
 }
 

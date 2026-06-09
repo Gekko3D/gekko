@@ -88,6 +88,12 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 				collector.addRef(modelRef, usedBy+".model")
 			}
 		}
+		if _, ok := hl1NPCClass(entity.ClassName); ok {
+			usedBy = "npc:" + strings.ToLower(strings.TrimSpace(entity.ClassName))
+			if modelRef := hl1NPCModelRef(entity.ClassName, entity); modelRef != "" {
+				collector.addRef(modelRef, usedBy+".model")
+			}
+		}
 		for key, value := range entity.KeyValues {
 			if strings.EqualFold(key, "wad") {
 				continue
@@ -293,6 +299,9 @@ func hl1VoxelResolutionCategoryForGameAssetEntry(entry *GameAssetManifestEntry) 
 		for _, usedBy := range entry.UsedBy {
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "pickup:") {
 				return HL1VoxelResolutionCategoryPickup
+			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "npc:") {
+				return HL1VoxelResolutionCategoryNPC
 			}
 		}
 	}

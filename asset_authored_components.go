@@ -158,6 +158,12 @@ type AuthoredLevelPickupRefComponent struct {
 	Name     string
 }
 
+type AuthoredLevelNPCRefComponent struct {
+	LevelID string
+	NPCID   string
+	Name    string
+}
+
 func IsAuthoredAssetRootEntity(cmd *Commands, eid EntityId) bool {
 	if cmd == nil {
 		return false

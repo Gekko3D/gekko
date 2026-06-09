@@ -21,6 +21,7 @@ const MarkerKindHL1DoorRotating = "hl1_func_door_rotating"
 const MarkerKindHL1Button = "hl1_func_button"
 const MarkerKindHL1MovingBrush = "hl1_moving_brush"
 const MarkerKindHL1Pickup = "hl1_pickup"
+const MarkerKindHL1NPC = "hl1_npc_spawn"
 const MovingBrushKindHL1Door = "hl1_func_door"
 const MovingBrushKindHL1DoorRotating = "hl1_func_door_rotating"
 const MovingBrushKindHL1Button = "hl1_func_button"
@@ -37,6 +38,7 @@ const ChangeLevelKindHL1TriggerChangeLevel = "hl1_trigger_changelevel"
 const MultiTargetKindHL1MultiManager = "hl1_multi_manager"
 const TargetRelayKindHL1TriggerRelay = "hl1_trigger_relay"
 const BreakableKindHL1FuncBreakable = "hl1_func_breakable"
+const NPCKindHL1Monster = "hl1_monster"
 const DefaultMaxEmissiveSurfaceLights = 64
 const DefaultHL1LadderClimbSpeed = 200 * HammerUnitMeters
 
@@ -109,7 +111,9 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 		})
 	}
 	level.Markers = append(level.Markers, buildHL1GameplayMarkers(summary.Map.Entities)...)
+	level.Markers = append(level.Markers, buildHL1NPCMarkers(summary.Map.Entities)...)
 	level.Pickups = buildHL1Pickups(summary.Map.Entities, levelPath, gameAssets)
+	level.NPCs = buildHL1NPCs(summary.Map.Entities, levelPath, gameAssets)
 	level.LadderVolumes = buildHL1LadderVolumes(summary.Map.Entities, opts.VoxelResolution)
 	level.PathNodes = buildHL1PathNodes(summary.Map.Entities)
 	movingBrushes, movingBrushAssets, err := buildHL1MovingBrushes(opts, summary, levelPath)
@@ -178,6 +182,9 @@ func buildHL1GeneratedAssetPlacements(entities []importcommon.Entity, levelPath 
 	countsByBase := map[string]int{}
 	for _, entity := range entities {
 		if _, ok := hl1PickupClass(entity.ClassName); ok {
+			continue
+		}
+		if _, ok := hl1NPCClass(entity.ClassName); ok {
 			continue
 		}
 		if entity.KeyValues == nil {
@@ -478,6 +485,235 @@ func hl1PickupTags(entity importcommon.Entity, pickup hl1PickupInfo) []string {
 			break
 		}
 		value := strings.TrimSpace(entity.KeyValues[key])
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
+}
+
+type hl1NPCInfo struct {
+	ClassName string
+	Role      string
+}
+
+func hl1NPCClass(className string) (hl1NPCInfo, bool) {
+	className = strings.ToLower(strings.TrimSpace(className))
+	if !strings.HasPrefix(className, "monster_") {
+		return hl1NPCInfo{}, false
+	}
+	role := strings.TrimPrefix(className, "monster_")
+	switch className {
+	case "monster_scientist",
+		"monster_barney",
+		"monster_headcrab",
+		"monster_babycrab",
+		"monster_zombie",
+		"monster_houndeye",
+		"monster_bullsquid",
+		"monster_alien_slave",
+		"monster_alien_grunt",
+		"monster_human_grunt",
+		"monster_human_assassin",
+		"monster_alien_controller",
+		"monster_controller",
+		"monster_gargantua",
+		"monster_bigmomma",
+		"monster_tentacle",
+		"monster_ichthyosaur",
+		"monster_turret",
+		"monster_miniturret",
+		"monster_sentry",
+		"monster_apache",
+		"monster_osprey":
+		return hl1NPCInfo{ClassName: className, Role: role}, true
+	default:
+		return hl1NPCInfo{}, false
+	}
+}
+
+func buildHL1NPCMarkers(entities []importcommon.Entity) []content.LevelMarkerDef {
+	markers := make([]content.LevelMarkerDef, 0)
+	countsByClass := map[string]int{}
+	for _, entity := range entities {
+		npcInfo, ok := hl1NPCClass(entity.ClassName)
+		if !ok {
+			continue
+		}
+		className := npcInfo.ClassName
+		index := countsByClass[className]
+		countsByClass[className]++
+		markers = append(markers, content.LevelMarkerDef{
+			ID:   fmt.Sprintf("hl1_npc_marker_%s_%d", className, index),
+			Name: hl1EntityDisplayName(entity, className),
+			Kind: content.LevelMarkerKindAISpawn,
+			Transform: content.LevelTransformDef{
+				Position: content.Vec3{entity.WorldPosition.X, entity.WorldPosition.Y, entity.WorldPosition.Z},
+				Rotation: hl1StaticModelRotation(entity),
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			Tags: hl1NPCTags(entity, npcInfo),
+		})
+	}
+	return markers
+}
+
+func buildHL1NPCs(entities []importcommon.Entity, levelPath string, gameAssets *GameAssetImportResult) []content.LevelNPCDef {
+	npcs := make([]content.LevelNPCDef, 0)
+	countsByClass := map[string]int{}
+	generatedByRef := generatedHL1AssetPathsByRef(nil)
+	if gameAssets != nil && gameAssets.Manifest != nil {
+		generatedByRef = generatedHL1AssetPathsByRef(gameAssets.Manifest.Assets)
+	}
+	levelDir := filepath.Dir(levelPath)
+	for _, entity := range entities {
+		npcInfo, ok := hl1NPCClass(entity.ClassName)
+		if !ok {
+			continue
+		}
+		className := npcInfo.ClassName
+		modelRef := hl1NPCModelRef(className, entity)
+		assetPath := ""
+		if modelRef != "" {
+			if generatedPath := generatedByRef[normalizedHL1AssetRef(modelRef)]; generatedPath != "" {
+				assetPath = filepath.ToSlash(relativeOrBase(levelDir, generatedPath))
+			}
+		}
+		index := countsByClass[className]
+		countsByClass[className]++
+		npcs = append(npcs, content.LevelNPCDef{
+			ID:         fmt.Sprintf("hl1_npc_%s_%d", className, index),
+			Name:       hl1EntityDisplayName(entity, className),
+			Kind:       NPCKindHL1Monster,
+			AssetPath:  assetPath,
+			ClassName:  className,
+			ModelRef:   modelRef,
+			Transform:  hl1PointEntityTransform(entity),
+			Health:     hl1NPCDefaultHealth(className),
+			TargetName: hl1StringKey(entity, "targetname"),
+			Target:     hl1StringKey(entity, "target"),
+			SquadName:  hl1NPCSquadName(entity),
+			SpawnFlags: hl1IntKey(entity, "spawnflags"),
+			SourceTag:  "hl1:" + className,
+			Tags:       hl1NPCTags(entity, npcInfo),
+		})
+	}
+	return npcs
+}
+
+func hl1PointEntityTransform(entity importcommon.Entity) content.LevelTransformDef {
+	return content.LevelTransformDef{
+		Position: content.Vec3{entity.WorldPosition.X, entity.WorldPosition.Y, entity.WorldPosition.Z},
+		Rotation: hl1StaticModelRotation(entity),
+		Scale:    content.Vec3{1, 1, 1},
+	}
+}
+
+func hl1NPCModelRef(className string, entity importcommon.Entity) string {
+	if entity.KeyValues != nil {
+		if modelRef := strings.TrimSpace(entity.KeyValues["model"]); modelRef != "" && !strings.HasPrefix(modelRef, "*") && hl1AssetKindForRef(modelRef) == "model" {
+			return filepath.ToSlash(modelRef)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(className)) {
+	case "monster_scientist":
+		return "models/scientist.mdl"
+	case "monster_barney":
+		return "models/barney.mdl"
+	case "monster_headcrab":
+		return "models/headcrab.mdl"
+	case "monster_babycrab":
+		return "models/baby_headcrab.mdl"
+	case "monster_zombie":
+		return "models/zombie.mdl"
+	case "monster_houndeye":
+		return "models/houndeye.mdl"
+	case "monster_bullsquid":
+		return "models/bullsquid.mdl"
+	case "monster_alien_slave":
+		return "models/islave.mdl"
+	case "monster_alien_grunt":
+		return "models/agrunt.mdl"
+	case "monster_human_grunt":
+		return "models/hgrunt.mdl"
+	case "monster_human_assassin":
+		return "models/hassassin.mdl"
+	case "monster_alien_controller", "monster_controller":
+		return "models/controller.mdl"
+	case "monster_gargantua":
+		return "models/garg.mdl"
+	case "monster_bigmomma":
+		return "models/big_mom.mdl"
+	case "monster_tentacle":
+		return "models/tentacle2.mdl"
+	case "monster_ichthyosaur":
+		return "models/icky.mdl"
+	case "monster_turret":
+		return "models/turret.mdl"
+	case "monster_miniturret":
+		return "models/miniturret.mdl"
+	case "monster_sentry":
+		return "models/sentry.mdl"
+	case "monster_apache":
+		return "models/apache.mdl"
+	case "monster_osprey":
+		return "models/osprey.mdl"
+	default:
+		return ""
+	}
+}
+
+func hl1NPCDefaultHealth(className string) float32 {
+	switch strings.ToLower(strings.TrimSpace(className)) {
+	case "monster_scientist":
+		return 20
+	case "monster_barney":
+		return 35
+	case "monster_headcrab", "monster_babycrab":
+		return 10
+	case "monster_zombie":
+		return 50
+	case "monster_houndeye":
+		return 20
+	case "monster_bullsquid":
+		return 40
+	case "monster_alien_slave":
+		return 30
+	case "monster_alien_grunt":
+		return 60
+	case "monster_human_grunt", "monster_human_assassin":
+		return 50
+	default:
+		return 1
+	}
+}
+
+func hl1NPCSquadName(entity importcommon.Entity) string {
+	if squad := hl1StringKey(entity, "squadname"); squad != "" {
+		return squad
+	}
+	return hl1StringKey(entity, "netname")
+}
+
+func hl1NPCTags(entity importcommon.Entity, npc hl1NPCInfo) []string {
+	className := strings.ToLower(strings.TrimSpace(entity.ClassName))
+	if npc.ClassName != "" {
+		className = npc.ClassName
+	}
+	tags := []string{
+		"source:hl1",
+		"classname:" + className,
+		"npc:hl1",
+	}
+	if npc.Role != "" {
+		tags = append(tags, "npc_role:"+npc.Role)
+	}
+	if modelRef := hl1NPCModelRef(className, entity); modelRef != "" {
+		tags = append(tags, "model:"+filepath.ToSlash(modelRef))
+	}
+	for _, key := range []string{"targetname", "target", "squadname", "netname", "spawnflags"} {
+		value := hl1StringKey(entity, key)
 		if value == "" {
 			continue
 		}

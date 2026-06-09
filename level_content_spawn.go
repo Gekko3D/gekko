@@ -41,6 +41,7 @@ type AuthoredLevelSpawnResult struct {
 	TargetRelayEntities     map[string]EntityId
 	BreakableEntities       map[string]EntityId
 	PickupEntities          map[string]EntityId
+	NPCEntities             map[string]EntityId
 	ExpandedVolumeInstances []content.PlacementVolumePreviewInstance
 }
 
@@ -100,6 +101,7 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		TargetRelayEntities:   make(map[string]EntityId),
 		BreakableEntities:     make(map[string]EntityId),
 		PickupEntities:        make(map[string]EntityId),
+		NPCEntities:           make(map[string]EntityId),
 	}
 	if cmd == nil {
 		return result, fmt.Errorf("commands is nil")
@@ -259,6 +261,13 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 			return result, err
 		}
 		result.PickupEntities[pickup.ID] = entity
+	}
+	for _, npc := range def.NPCs {
+		entity, err := spawnAuthoredLevelNPC(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, npc)
+		if err != nil {
+			return result, err
+		}
+		result.NPCEntities[npc.ID] = entity
 	}
 
 	if def.Terrain != nil && strings.TrimSpace(def.Terrain.ManifestPath) != "" {
@@ -931,6 +940,66 @@ func spawnAuthoredLevelPickup(cmd *Commands, assets *AssetServer, loader *Runtim
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(pickup.AssetPath, levelPath)
+		asset, err := loader.LoadAsset(assetPath)
+		if err != nil {
+			return 0, err
+		}
+		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		if err != nil {
+			return 0, err
+		}
+		if model != (AssetId{}) {
+			comps = append(comps, &VoxelModelComponent{
+				SharedGeometry:         model,
+				VoxelPalette:           palette,
+				VoxelResolution:        voxelResolution,
+				PivotMode:              PivotModeCorner,
+				ShadowSeamWorldEpsilon: voxelResolution,
+			})
+		}
+	}
+	return cmd.AddEntity(comps...), nil
+}
+
+func spawnAuthoredLevelNPC(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, npc content.LevelNPCDef) (EntityId, error) {
+	transform := levelTransformToComponent(npc.Transform)
+	health := npc.Health
+	if health <= 0 {
+		health = 1
+	}
+	comps := []any{
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&NPCComponent{
+			Kind:       npc.Kind,
+			AssetPath:  npc.AssetPath,
+			ClassName:  npc.ClassName,
+			ModelRef:   npc.ModelRef,
+			Health:     health,
+			MaxHealth:  health,
+			TargetName: npc.TargetName,
+			Target:     npc.Target,
+			SquadName:  npc.SquadName,
+			SpawnFlags: npc.SpawnFlags,
+			SourceTag:  npc.SourceTag,
+			Tags:       append([]string(nil), npc.Tags...),
+		},
+		&AuthoredLevelNPCRefComponent{
+			LevelID: levelID,
+			NPCID:   npc.ID,
+			Name:    npc.Name,
+		},
+	}
+	if strings.TrimSpace(npc.AssetPath) != "" {
+		if loader == nil {
+			loader = NewRuntimeContentLoader()
+		}
+		assetPath := content.ResolveDocumentPath(npc.AssetPath, levelPath)
 		asset, err := loader.LoadAsset(assetPath)
 		if err != nil {
 			return 0, err

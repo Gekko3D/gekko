@@ -359,6 +359,19 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 			Scale:    content.Vec3{1, 1, 1},
 		},
 	}}
+	level.NPCs = []content.LevelNPCDef{{
+		ID:        "npc-1",
+		Kind:      "hl1_monster",
+		ClassName: "monster_barney",
+		ModelRef:  "models/barney.mdl",
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{8, 2, 6},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Health:     35,
+		TargetName: "barney_a",
+	}}
 	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +383,7 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	app.FlushCommands()
-	var brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount int
+	var brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount, npcCount int
 	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, _ *MovingBrushComponent) bool {
 		brushCount++
 		return true
@@ -415,8 +428,12 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		pickupCount++
 		return true
 	})
-	if brushCount != 1 || pathNodeCount != 1 || triggerCount != 1 || touchTriggerCount != 1 || damageCount != 1 || changeCount != 1 || chargerCount != 1 || multiTargetCount != 1 || relayCount != 1 || breakableCount != 1 || pickupCount != 1 {
-		t.Fatalf("expected 1 brush/path/use/touch/damage/change/charger/multi/relay/breakable/pickup, got %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d", brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount)
+	MakeQuery1[NPCComponent](cmd).Map(func(_ EntityId, _ *NPCComponent) bool {
+		npcCount++
+		return true
+	})
+	if brushCount != 1 || pathNodeCount != 1 || triggerCount != 1 || touchTriggerCount != 1 || damageCount != 1 || changeCount != 1 || chargerCount != 1 || multiTargetCount != 1 || relayCount != 1 || breakableCount != 1 || pickupCount != 1 || npcCount != 1 {
+		t.Fatalf("expected 1 brush/path/use/touch/damage/change/charger/multi/relay/breakable/pickup/npc, got %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d", brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount, npcCount)
 	}
 }
 

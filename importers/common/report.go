@@ -55,6 +55,7 @@ type ImportReport struct {
 	LadderEntityCounts          []EntityCount `json:"ladder_entity_counts,omitempty"`
 	ChargerEntityCounts         []EntityCount `json:"charger_entity_counts,omitempty"`
 	PickupEntityCounts          []EntityCount `json:"pickup_entity_counts,omitempty"`
+	NPCEntityCounts             []EntityCount `json:"npc_entity_counts,omitempty"`
 	TriggerEntityCounts         []EntityCount `json:"trigger_entity_counts,omitempty"`
 	BreakableEntityCounts       []EntityCount `json:"breakable_entity_counts,omitempty"`
 	UnresolvedTargetCounts      []NamedCount  `json:"unresolved_target_counts,omitempty"`

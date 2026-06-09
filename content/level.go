@@ -75,6 +75,7 @@ type LevelDef struct {
 	MultiTargets     []LevelMultiTargetDef   `json:"multi_targets,omitempty"`
 	Breakables       []LevelBreakableDef     `json:"breakables,omitempty"`
 	Pickups          []LevelPickupDef        `json:"pickups,omitempty"`
+	NPCs             []LevelNPCDef           `json:"npcs,omitempty"`
 	Markers          []LevelMarkerDef        `json:"markers,omitempty"`
 }
 
@@ -433,6 +434,23 @@ type LevelPickupDef struct {
 	Tags       []string          `json:"tags,omitempty"`
 }
 
+type LevelNPCDef struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name,omitempty"`
+	Kind       string            `json:"kind,omitempty"`
+	AssetPath  string            `json:"asset_path,omitempty"`
+	ClassName  string            `json:"class_name"`
+	ModelRef   string            `json:"model_ref,omitempty"`
+	Transform  LevelTransformDef `json:"transform"`
+	Health     float32           `json:"health,omitempty"`
+	TargetName string            `json:"target_name,omitempty"`
+	Target     string            `json:"target,omitempty"`
+	SquadName  string            `json:"squad_name,omitempty"`
+	SpawnFlags int               `json:"spawn_flags,omitempty"`
+	SourceTag  string            `json:"source_tag,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+}
+
 type LevelMarkerDef struct {
 	ID        string            `json:"id"`
 	Name      string            `json:"name"`
@@ -588,6 +606,17 @@ func EnsureLevelIDs(def *LevelDef) {
 		}
 		if def.Pickups[i].Transform.Scale == (Vec3{}) {
 			def.Pickups[i].Transform.Scale = Vec3{1, 1, 1}
+		}
+	}
+	for i := range def.NPCs {
+		if def.NPCs[i].ID == "" {
+			def.NPCs[i].ID = newID()
+		}
+		if def.NPCs[i].Transform.Rotation == (Quat{}) {
+			def.NPCs[i].Transform.Rotation = Quat{0, 0, 0, 1}
+		}
+		if def.NPCs[i].Transform.Scale == (Vec3{}) {
+			def.NPCs[i].Transform.Scale = Vec3{1, 1, 1}
 		}
 	}
 	for i := range def.Lights {

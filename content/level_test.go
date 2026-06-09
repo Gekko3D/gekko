@@ -619,6 +619,22 @@ func TestValidateLevelShooterRequiresPlayerSpawnAndClearMarkerPlacement(t *testi
 	})
 	result = ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
 	assertHasLevelValidationCode(t, result, "marker_inside_solid")
+
+	def.Player = &LevelPlayerDef{SpawnKind: "hl1_player_spawn"}
+	def.Markers = []LevelMarkerDef{{
+		ID:   "hl1-player-spawn",
+		Name: "hl1-player",
+		Kind: "hl1_player_spawn",
+		Transform: LevelTransformDef{
+			Position: Vec3{0.4, 0.0, 0.4},
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+	}}
+	result = ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
+	if hasLevelValidationCode(result, "missing_player_spawn") {
+		t.Fatalf("custom player spawn kind should satisfy shooter spawn requirement: %+v", result.Issues)
+	}
 }
 
 func TestValidateLevelRejectsInvalidPlacementVolumeAndAssetSet(t *testing.T) {
@@ -907,6 +923,22 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		TargetName: "clip_a",
 		SourceTag:  "hl1:ammo_9mmclip",
 	}}
+	def.NPCs = []LevelNPCDef{{
+		ID:        "npc-1",
+		Name:      "barney",
+		Kind:      "hl1_monster",
+		ClassName: "monster_barney",
+		ModelRef:  "models/barney.mdl",
+		Transform: LevelTransformDef{
+			Position: Vec3{4, 5, 6},
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+		Health:     35,
+		TargetName: "barney_a",
+		SquadName:  "security",
+		SourceTag:  "hl1:monster_barney",
+	}}
 	if result := ValidateLevel(def, LevelValidationOptions{DocumentPath: path}); result.HasErrors() {
 		t.Fatalf("expected valid moving brush/use trigger, got %+v", result.Issues)
 	}
@@ -949,6 +981,9 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	}
 	if len(loaded.Pickups) != 1 || loaded.Pickups[0].Category != "ammo" || loaded.Pickups[0].Item != "9mmclip" || loaded.Pickups[0].Amount != 17 {
 		t.Fatalf("pickups did not round-trip: %+v", loaded.Pickups)
+	}
+	if len(loaded.NPCs) != 1 || loaded.NPCs[0].ClassName != "monster_barney" || loaded.NPCs[0].ModelRef != "models/barney.mdl" || loaded.NPCs[0].Health != 35 {
+		t.Fatalf("npcs did not round-trip: %+v", loaded.NPCs)
 	}
 }
 
@@ -1019,6 +1054,10 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 		ID:     "bad-pickup",
 		Amount: -1,
 	}}
+	def.NPCs = []LevelNPCDef{{
+		ID:     "bad-npc",
+		Health: -1,
+	}}
 	result := ValidateLevel(def, LevelValidationOptions{})
 	if !result.HasErrors() {
 		t.Fatal("expected moving brush/use trigger validation errors")
@@ -1056,6 +1095,8 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "empty_pickup_category")
 	assertHasLevelValidationCode(t, result, "empty_pickup_item")
 	assertHasLevelValidationCode(t, result, "invalid_pickup_amount")
+	assertHasLevelValidationCode(t, result, "empty_npc_class_name")
+	assertHasLevelValidationCode(t, result, "invalid_npc_health")
 }
 
 func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
@@ -1086,4 +1127,13 @@ func assertHasLevelValidationCode(t *testing.T, result LevelValidationResult, wa
 		}
 	}
 	t.Fatalf("expected validation code %q, got %+v", want, result.Issues)
+}
+
+func hasLevelValidationCode(result LevelValidationResult, want string) bool {
+	for _, issue := range result.Issues {
+		if issue.Code == want {
+			return true
+		}
+	}
+	return false
 }

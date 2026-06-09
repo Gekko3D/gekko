@@ -2,6 +2,7 @@ package hl1
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,7 +200,8 @@ func ParseMDLGeometryWithExternalTextures(data []byte, externalTextures []MDLTex
 		Info:     info,
 		Textures: textures,
 	}
-	for _, part := range decodeMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount) {
+	boneTransforms := parseMDLBoneTransforms(data, int(readInt32(data, 144)), info.BoneCount)
+	for _, part := range decodeMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount, boneTransforms) {
 		for _, model := range part.models {
 			geometry.Triangles = append(geometry.Triangles, decodeMDLModelTriangles(data, model, info, geometry.Textures)...)
 		}
@@ -310,7 +312,38 @@ type decodedMDLMesh struct {
 	skinRef              int
 }
 
-func decodeMDLBodyParts(data []byte, offset int, count int) []decodedMDLBodyPart {
+type mdlBoneTransform struct {
+	Parent   int
+	Position importcommon.Vec3
+	Rotation importcommon.Vec3
+}
+
+func parseMDLBoneTransforms(data []byte, offset int, count int) []mdlBoneTransform {
+	const boneSize = 112
+	if count <= 0 || offset < mdlHeaderSize || offset > len(data) || count > (len(data)-offset)/boneSize {
+		return nil
+	}
+	out := make([]mdlBoneTransform, 0, count)
+	for i := 0; i < count; i++ {
+		base := offset + i*boneSize
+		out = append(out, mdlBoneTransform{
+			Parent: int(readInt32(data, base+32)),
+			Position: importcommon.Vec3{
+				X: readFloat32(data, base+64),
+				Y: readFloat32(data, base+68),
+				Z: readFloat32(data, base+72),
+			},
+			Rotation: importcommon.Vec3{
+				X: readFloat32(data, base+76),
+				Y: readFloat32(data, base+80),
+				Z: readFloat32(data, base+84),
+			},
+		})
+	}
+	return out
+}
+
+func decodeMDLBodyParts(data []byte, offset int, count int, boneTransforms []mdlBoneTransform) []decodedMDLBodyPart {
 	const bodyPartSize = 76
 	if count <= 0 || offset < 0 || offset > len(data) || count > (len(data)-offset)/bodyPartSize {
 		return nil
@@ -327,13 +360,13 @@ func decodeMDLBodyParts(data []byte, offset int, count int) []decodedMDLBodyPart
 		}
 		out = append(out, decodedMDLBodyPart{
 			info:   info,
-			models: decodeMDLModels(data, modelIndex, modelCount),
+			models: decodeMDLModels(data, modelIndex, modelCount, boneTransforms),
 		})
 	}
 	return out
 }
 
-func decodeMDLModels(data []byte, offset int, count int) []decodedMDLModel {
+func decodeMDLModels(data []byte, offset int, count int, boneTransforms []mdlBoneTransform) []decodedMDLModel {
 	const modelSize = 112
 	if count <= 0 || offset < 0 || offset > len(data) || count > (len(data)-offset)/modelSize {
 		return nil
@@ -344,6 +377,7 @@ func decodeMDLModels(data []byte, offset int, count int) []decodedMDLModel {
 		meshCount := int(readInt32(data, base+72))
 		meshIndex := int(readInt32(data, base+76))
 		vertexCount := int(readInt32(data, base+80))
+		vertexInfoIndex := int(readInt32(data, base+84))
 		vertexIndex := int(readInt32(data, base+88))
 		model := decodedMDLModel{
 			info: MDLModelInfo{
@@ -356,7 +390,7 @@ func decodeMDLModels(data []byte, offset int, count int) []decodedMDLModel {
 				GroupCount:     int(readInt32(data, base+104)),
 			},
 			vertexIndex: vertexIndex,
-			vertices:    parseMDLVertices(data, vertexIndex, vertexCount),
+			vertices:    parseMDLVertices(data, vertexIndex, vertexInfoIndex, vertexCount, boneTransforms),
 			meshes:      decodeMDLMeshes(data, meshIndex, meshCount),
 		}
 		out = append(out, model)
@@ -364,20 +398,67 @@ func decodeMDLModels(data []byte, offset int, count int) []decodedMDLModel {
 	return out
 }
 
-func parseMDLVertices(data []byte, offset int, count int) []importcommon.Vec3 {
+func parseMDLVertices(data []byte, offset int, boneIndexOffset int, count int, boneTransforms []mdlBoneTransform) []importcommon.Vec3 {
 	const vertexSize = 12
 	if count <= 0 || offset < 0 || offset > len(data) || count > (len(data)-offset)/vertexSize {
 		return nil
 	}
+	boneIndices := parseMDLVertexBoneIndices(data, boneIndexOffset, count)
 	out := make([]importcommon.Vec3, 0, count)
 	for i := 0; i < count; i++ {
 		base := offset + i*vertexSize
-		out = append(out, importcommon.Vec3{
+		position := importcommon.Vec3{
 			X: readFloat32(data, base),
 			Y: readFloat32(data, base+4),
 			Z: readFloat32(data, base+8),
-		})
+		}
+		if len(boneIndices) == count {
+			position = transformMDLVertexByBone(position, int(boneIndices[i]), boneTransforms)
+		}
+		out = append(out, position)
 	}
+	return out
+}
+
+func parseMDLVertexBoneIndices(data []byte, offset int, count int) []byte {
+	if count <= 0 || offset < mdlHeaderSize || offset > len(data) || count > len(data)-offset {
+		return nil
+	}
+	return append([]byte(nil), data[offset:offset+count]...)
+}
+
+func transformMDLVertexByBone(position importcommon.Vec3, boneIndex int, boneTransforms []mdlBoneTransform) importcommon.Vec3 {
+	if boneIndex < 0 || boneIndex >= len(boneTransforms) {
+		return position
+	}
+	return transformMDLPointByBone(position, boneIndex, boneTransforms, 0)
+}
+
+func transformMDLPointByBone(point importcommon.Vec3, boneIndex int, boneTransforms []mdlBoneTransform, depth int) importcommon.Vec3 {
+	if boneIndex < 0 || boneIndex >= len(boneTransforms) || depth > len(boneTransforms) {
+		return point
+	}
+	bone := boneTransforms[boneIndex]
+	rotated := rotateMDLPointXYZ(point, bone.Rotation)
+	transformed := importcommon.Vec3{
+		X: rotated.X + bone.Position.X,
+		Y: rotated.Y + bone.Position.Y,
+		Z: rotated.Z + bone.Position.Z,
+	}
+	if bone.Parent >= 0 && bone.Parent < len(boneTransforms) && bone.Parent != boneIndex {
+		return transformMDLPointByBone(transformed, bone.Parent, boneTransforms, depth+1)
+	}
+	return transformed
+}
+
+func rotateMDLPointXYZ(point importcommon.Vec3, rotation importcommon.Vec3) importcommon.Vec3 {
+	cx, sx := float32(math.Cos(float64(rotation.X))), float32(math.Sin(float64(rotation.X)))
+	cy, sy := float32(math.Cos(float64(rotation.Y))), float32(math.Sin(float64(rotation.Y)))
+	cz, sz := float32(math.Cos(float64(rotation.Z))), float32(math.Sin(float64(rotation.Z)))
+
+	out := importcommon.Vec3{X: point.X, Y: point.Y*cx - point.Z*sx, Z: point.Y*sx + point.Z*cx}
+	out = importcommon.Vec3{X: out.X*cy + out.Z*sy, Y: out.Y, Z: -out.X*sy + out.Z*cy}
+	out = importcommon.Vec3{X: out.X*cz - out.Y*sz, Y: out.X*sz + out.Y*cz, Z: out.Z}
 	return out
 }
 

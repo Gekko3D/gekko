@@ -720,6 +720,12 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			return err
 		}
 	}
+	for _, npc := range level.NPCs {
+		if _, err := spawnAuthoredLevelNPC(cmd, assets, loader, state.LevelRoot, level.ID, cfg.LevelPath, npc); err != nil {
+			state.InitErr = err
+			return err
+		}
+	}
 	if cfg.AutoSpawnPlayer {
 		playerMarkerKind := cfg.PlayerSpawnKind
 		if playerMarkerKind == "" && level.Player != nil && level.Player.SpawnKind != "" {

@@ -141,8 +141,10 @@ func TestBuildGeneratedLevelPlacesGeneratedMDLAssets(t *testing.T) {
 	gameDir := filepath.Join(dir, "hl")
 	outDir := filepath.Join(dir, "out")
 	modelPath := filepath.Join(gameDir, "valve", "models", "filecabinet.mdl")
+	npcModelPath := filepath.Join(gameDir, "valve", "models", "barney.mdl")
 	spritePath := filepath.Join(gameDir, "valve", "sprites", "flare1.spr")
 	mustWriteFile(t, modelPath, syntheticMDL())
+	mustWriteFile(t, npcModelPath, syntheticMDL())
 	mustWriteFile(t, spritePath, syntheticSPR())
 	summary := ImportSummary{
 		Map: importcommon.MapImport{
@@ -160,6 +162,15 @@ func TestBuildGeneratedLevelPlacesGeneratedMDLAssets(t *testing.T) {
 					WorldPosition: importcommon.Vec3{X: 4, Y: 5, Z: 6},
 					KeyValues: map[string]string{
 						"model": "sprites/flare1.spr",
+					},
+				},
+				{
+					ClassName:     "monster_barney",
+					WorldPosition: importcommon.Vec3{X: 7, Y: 8, Z: 9},
+					SourceAngles:  importcommon.Vec3{Y: 180},
+					KeyValues: map[string]string{
+						"targetname": "barney_a",
+						"squadname":  "security",
 					},
 				},
 			},
@@ -192,6 +203,19 @@ func TestBuildGeneratedLevelPlacesGeneratedMDLAssets(t *testing.T) {
 	}
 	if len(level.Level.Placements) != 2 {
 		t.Fatalf("placements = %+v", level.Level.Placements)
+	}
+	if len(level.Level.NPCs) != 1 {
+		t.Fatalf("npcs = %+v", level.Level.NPCs)
+	}
+	if len(level.Level.Markers) != 1 || level.Level.Markers[0].Kind != content.LevelMarkerKindAISpawn {
+		t.Fatalf("npc markers = %+v", level.Level.Markers)
+	}
+	npc := level.Level.NPCs[0]
+	if npc.ClassName != "monster_barney" || npc.ModelRef != "models/barney.mdl" || npc.AssetPath != filepath.ToSlash(filepath.Join("hl1_assets", "propmap", "generated", "models", "barney.gkasset")) {
+		t.Fatalf("npc = %+v", npc)
+	}
+	if npc.TargetName != "barney_a" || npc.SquadName != "security" || npc.Health != 35 {
+		t.Fatalf("npc metadata = %+v", npc)
 	}
 	placement := level.Level.Placements[0]
 	if placement.AssetPath != filepath.ToSlash(filepath.Join("hl1_assets", "propmap", "generated", "models", "filecabinet.gkasset")) {

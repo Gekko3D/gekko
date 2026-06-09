@@ -19,6 +19,7 @@ const (
 	DefaultBrushModelVoxelResolution = DefaultImportedVoxelResolution
 	DefaultFixtureVoxelResolution    = 0.05
 	DefaultStaticPropVoxelResolution = 0.05
+	DefaultNPCVoxelResolution        = 0.02
 	DefaultPickupVoxelResolution     = 0.01
 	DefaultGameAssetVoxelResolution  = DefaultStaticPropVoxelResolution
 	DefaultImportedSolidBandDepth    = DefaultSolidBandDepth
@@ -33,6 +34,7 @@ const (
 	HL1VoxelResolutionCategoryBrushModel HL1VoxelResolutionCategory = "brush_model"
 	HL1VoxelResolutionCategoryFixture    HL1VoxelResolutionCategory = "fixture"
 	HL1VoxelResolutionCategoryStaticProp HL1VoxelResolutionCategory = "static_prop"
+	HL1VoxelResolutionCategoryNPC        HL1VoxelResolutionCategory = "npc"
 	HL1VoxelResolutionCategoryPickup     HL1VoxelResolutionCategory = "pickup"
 )
 
@@ -41,6 +43,7 @@ type HL1VoxelResolutionPolicy struct {
 	BrushModel float32
 	Fixture    float32
 	StaticProp float32
+	NPC        float32
 	Pickup     float32
 }
 
@@ -50,6 +53,7 @@ func DefaultHL1VoxelResolutionPolicy() HL1VoxelResolutionPolicy {
 		BrushModel: DefaultBrushModelVoxelResolution,
 		Fixture:    DefaultFixtureVoxelResolution,
 		StaticProp: DefaultStaticPropVoxelResolution,
+		NPC:        DefaultNPCVoxelResolution,
 		Pickup:     DefaultPickupVoxelResolution,
 	}
 }
@@ -67,6 +71,9 @@ func EffectiveHL1VoxelResolutionPolicy(opts ImportOptions) HL1VoxelResolutionPol
 	}
 	if opts.VoxelResolutionPolicy.StaticProp > 0 {
 		policy.StaticProp = opts.VoxelResolutionPolicy.StaticProp
+	}
+	if opts.VoxelResolutionPolicy.NPC > 0 {
+		policy.NPC = opts.VoxelResolutionPolicy.NPC
 	}
 	if opts.VoxelResolutionPolicy.Pickup > 0 {
 		policy.Pickup = opts.VoxelResolutionPolicy.Pickup
@@ -104,6 +111,10 @@ func (p HL1VoxelResolutionPolicy) Resolution(category HL1VoxelResolutionCategory
 	case HL1VoxelResolutionCategoryStaticProp:
 		if p.StaticProp > 0 {
 			return p.StaticProp
+		}
+	case HL1VoxelResolutionCategoryNPC:
+		if p.NPC > 0 {
+			return p.NPC
 		}
 	default:
 		if p.StaticProp > 0 {
@@ -251,6 +262,7 @@ func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
 		LadderEntityCounts:      importcommon.EntityCounts(hl1LadderEntityClassNames(mapImport.Entities)),
 		ChargerEntityCounts:     importcommon.EntityCounts(hl1ChargerEntityClassNames(mapImport.Entities)),
 		PickupEntityCounts:      importcommon.EntityCounts(hl1PickupClassNames(mapImport.Entities)),
+		NPCEntityCounts:         importcommon.EntityCounts(hl1NPCEntityClassNames(mapImport.Entities)),
 		TriggerEntityCounts:     importcommon.EntityCounts(hl1TriggerEntityClassNames(mapImport.Entities)),
 		BreakableEntityCounts:   importcommon.EntityCounts(hl1BreakableEntityClassNames(mapImport.Entities)),
 		Diagnostics:             append([]importcommon.Diagnostic(nil), mapImport.Diagnostics...),
@@ -489,6 +501,16 @@ func hl1PickupClassNames(entities []importcommon.Entity) []string {
 	out := make([]string, 0)
 	for _, entity := range entities {
 		if _, ok := hl1PickupClass(entity.ClassName); ok {
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
+func hl1NPCEntityClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		if _, ok := hl1NPCClass(entity.ClassName); ok {
 			out = append(out, strings.ToLower(entity.ClassName))
 		}
 	}
@@ -827,7 +849,10 @@ func supportedClass(className string) bool {
 		"momentary_door":
 		return true
 	default:
-		_, ok := hl1PickupClass(className)
+		if _, ok := hl1PickupClass(className); ok {
+			return true
+		}
+		_, ok := hl1NPCClass(className)
 		return ok
 	}
 }

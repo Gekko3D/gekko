@@ -16,10 +16,12 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	outDir := filepath.Join(dir, "out")
 	wadPath := filepath.Join(gameDir, "valve", "halflife.wad")
 	modelPath := filepath.Join(gameDir, "valve", "models", "w_9mmhandgun.mdl")
+	npcModelPath := filepath.Join(gameDir, "valve", "models", "barney.mdl")
 	spritePath := filepath.Join(gameDir, "valve", "sprites", "glow01.spr")
 	soundPath := filepath.Join(gameDir, "valve", "sound", "buttons", "bell1.wav")
 	mustWriteFile(t, wadPath, []byte("wad"))
 	mustWriteFile(t, modelPath, syntheticMDL())
+	mustWriteFile(t, npcModelPath, syntheticMDL())
 	mustWriteFile(t, spritePath, syntheticSPR())
 	mustWriteFile(t, soundPath, []byte("sound"))
 
@@ -34,6 +36,9 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 				},
 				{
 					ClassName: "weapon_9mmhandgun",
+				},
+				{
+					ClassName: "monster_barney",
 				},
 				{
 					ClassName: "env_sprite",
@@ -68,7 +73,7 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildGameAssetImport failed: %v", err)
 	}
-	if len(result.Manifest.Assets) != 4 {
+	if len(result.Manifest.Assets) != 5 {
 		t.Fatalf("assets = %+v", result.Manifest.Assets)
 	}
 	assertHL1AssetEntry(t, result.Manifest.Assets, "wad", wadPath, "used_for_texture_bake")
@@ -87,6 +92,13 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	}
 	if modelEntry.generatedAsset == nil || len(modelEntry.generatedAsset.Parts) != 1 || modelEntry.generatedAsset.Parts[0].VoxelResolution != 0.03 {
 		t.Fatalf("expected generated pickup model asset resolution 0.03, got %+v", modelEntry.generatedAsset)
+	}
+	npcModelEntry := assertHL1AssetEntry(t, result.Manifest.Assets, "model", npcModelPath, "generated_voxel_asset")
+	if npcModelEntry.GeneratedVoxelResolution != DefaultNPCVoxelResolution {
+		t.Fatalf("expected npc model to use npc voxel resolution %f, got %+v", DefaultNPCVoxelResolution, npcModelEntry)
+	}
+	if npcModelEntry.GeneratedVoxelResolutionCategory != string(HL1VoxelResolutionCategoryNPC) {
+		t.Fatalf("expected npc model category, got %+v", npcModelEntry)
 	}
 	spriteEntry := assertHL1AssetEntry(t, result.Manifest.Assets, "sprite", spritePath, "generated_voxel_asset")
 	if spriteEntry.SpriteInfo == nil || spriteEntry.SpriteInfo.FrameCount != 1 || spriteEntry.GeneratedAssetPath == "" || spriteEntry.GeneratedVoxelCount == 0 {
@@ -147,6 +159,9 @@ func TestEffectiveHL1VoxelResolutionPolicyUsesNamedDefaultsAndLegacyAliases(t *t
 func TestHL1GameAssetResolutionCategorySeparatesPickupsFromStaticProps(t *testing.T) {
 	if got := hl1VoxelResolutionCategoryForGameAssetEntry(&GameAssetManifestEntry{UsedBy: []string{"pickup:weapon_357.model"}}); got != HL1VoxelResolutionCategoryPickup {
 		t.Fatalf("pickup category = %q", got)
+	}
+	if got := hl1VoxelResolutionCategoryForGameAssetEntry(&GameAssetManifestEntry{UsedBy: []string{"npc:monster_barney.model"}}); got != HL1VoxelResolutionCategoryNPC {
+		t.Fatalf("npc category = %q", got)
 	}
 	if got := hl1VoxelResolutionCategoryForGameAssetEntry(&GameAssetManifestEntry{UsedBy: []string{"env_sprite.model"}}); got != HL1VoxelResolutionCategoryStaticProp {
 		t.Fatalf("static prop category = %q", got)
@@ -221,6 +236,22 @@ func TestParseMDLGeometryDecodesTexturePixelsAndTriangleCommands(t *testing.T) {
 	}
 	if tri.Vertices[2].Position.Z != 1 || tri.Vertices[1].Texel != [2]int{32, 0} || tri.Vertices[2].UV != [2]float32{0, 1} {
 		t.Fatalf("unexpected triangle vertices: %+v", tri.Vertices)
+	}
+}
+
+func TestParseMDLGeometryAppliesVertexBoneBindPose(t *testing.T) {
+	geometry, err := ParseMDLGeometry(syntheticMDLWithBoneTranslation(10, 20, 30))
+	if err != nil {
+		t.Fatalf("ParseMDLGeometry failed: %v", err)
+	}
+	if len(geometry.Triangles) != 1 {
+		t.Fatalf("triangles = %d", len(geometry.Triangles))
+	}
+	tri := geometry.Triangles[0]
+	if tri.Vertices[0].Position != (importcommon.Vec3{X: 10, Y: 20, Z: 30}) ||
+		tri.Vertices[1].Position != (importcommon.Vec3{X: 11, Y: 20, Z: 30}) ||
+		tri.Vertices[2].Position != (importcommon.Vec3{X: 10, Y: 20, Z: 31}) {
+		t.Fatalf("bone-transformed vertices = %+v", tri.Vertices)
 	}
 }
 
@@ -392,6 +423,29 @@ func syntheticMDLWithoutEmbeddedTextures() []byte {
 	writeTestInt32(data, 180, 0)
 	writeTestInt32(data, 184, 0)
 	return data
+}
+
+func syntheticMDLWithBoneTranslation(x float32, y float32, z float32) []byte {
+	data := syntheticMDL()
+	const (
+		textureOffset  = mdlHeaderSize
+		bodyPartOffset = textureOffset + 80
+		modelOffset    = bodyPartOffset + 76
+		vertexCount    = 8
+		boneSize       = 112
+	)
+	boneOffset := len(data)
+	vertInfoOffset := boneOffset + boneSize
+	out := append(data, make([]byte, boneSize+vertexCount)...)
+	writeTestInt32(out, 72, len(out))
+	writeTestInt32(out, 144, boneOffset)
+	writeTestInt32(out, modelOffset+84, vertInfoOffset)
+	writeTestCString(out[boneOffset:boneOffset+32], "root")
+	writeTestInt32(out, boneOffset+32, -1)
+	writeTestFloat32(out, boneOffset+64, x)
+	writeTestFloat32(out, boneOffset+68, y)
+	writeTestFloat32(out, boneOffset+72, z)
+	return out
 }
 
 func syntheticSPR() []byte {
