@@ -48,6 +48,40 @@ func ImportedWorldChunkToXBrickMap(chunk *content.ImportedWorldChunkDef) *volume
 	return xbm
 }
 
+func ApplyImportedWorldChunkAuxToXBrickMap(xbm *volume.XBrickMap, aux *content.ImportedWorldChunkAuxDef) {
+	if xbm == nil || aux == nil {
+		return
+	}
+	for _, record := range aux.Records {
+		if len(record.Bytes) != volume.VoxelAuxRecordBytes {
+			continue
+		}
+		origin := record.Origin
+		if origin[0]%volume.BrickSize != 0 || origin[1]%volume.BrickSize != 0 || origin[2]%volume.BrickSize != 0 {
+			continue
+		}
+		if origin[0] < 0 || origin[1] < 0 || origin[2] < 0 {
+			continue
+		}
+		sx := origin[0] / volume.SectorSize
+		sy := origin[1] / volume.SectorSize
+		sz := origin[2] / volume.SectorSize
+		lx := origin[0] % volume.SectorSize
+		ly := origin[1] % volume.SectorSize
+		lz := origin[2] % volume.SectorSize
+		bx, by, bz := lx/volume.BrickSize, ly/volume.BrickSize, lz/volume.BrickSize
+		sector := xbm.Sectors[[3]int{sx, sy, sz}]
+		if sector == nil {
+			continue
+		}
+		brick := sector.GetBrick(bx, by, bz)
+		if brick == nil {
+			continue
+		}
+		brick.PrecomputedAux = append(brick.PrecomputedAux[:0], record.Bytes...)
+	}
+}
+
 func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palette AssetId, def AuthoredImportedWorldSpawnDef) EntityId {
 	if cmd == nil || def.Chunk == nil {
 		return 0

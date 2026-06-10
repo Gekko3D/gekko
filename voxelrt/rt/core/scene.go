@@ -274,10 +274,17 @@ func (s *Scene) AddObject(obj *VoxelObject) {
 }
 
 func (s *Scene) Raycast(ray Ray, tMax float32) *HitResult {
+	return s.RaycastFiltered(ray, tMax, nil)
+}
+
+func (s *Scene) RaycastFiltered(ray Ray, tMax float32, accept func(*VoxelObject) bool) *HitResult {
 	closestT := tMax
 	var bestHit *HitResult
 
 	for _, obj := range s.Objects {
+		if accept != nil && !accept(obj) {
+			continue
+		}
 		// 1. Broad phase: World AABB
 		if obj.WorldAABB == nil {
 			continue

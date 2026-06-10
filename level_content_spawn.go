@@ -989,6 +989,9 @@ func spawnAuthoredLevelNPC(cmd *Commands, assets *AssetServer, loader *RuntimeCo
 			SourceTag:  npc.SourceTag,
 			Tags:       append([]string(nil), npc.Tags...),
 		},
+		&NPCAnimationComponent{
+			State: NPCAnimationStateIdle,
+		},
 		&AuthoredLevelNPCRefComponent{
 			LevelID: levelID,
 			NPCID:   npc.ID,

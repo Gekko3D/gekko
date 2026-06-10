@@ -2,6 +2,9 @@ package gekko
 
 import (
 	"math"
+	"sort"
+	"strings"
+	"unicode"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/go-gl/mathgl/mgl32"
@@ -10,6 +13,11 @@ import (
 type AnimationModule struct{}
 
 func (AnimationModule) Install(app *App, cmd *Commands) {
+	app.UseSystem(
+		System(npcAnimationSystem).
+			InStage(Update).
+			RunAlways(),
+	)
 	app.UseSystem(
 		System(assetAnimationSystem).
 			InStage(Update).
@@ -116,6 +124,216 @@ func advanceAnimationPlayer(player *AnimationPlayerComponent, clip content.Asset
 		player.Time = 0
 		player.Playing = false
 	}
+}
+
+func npcAnimationSystem(cmd *Commands) {
+	parentByEntity := animationParentIndex(cmd)
+	MakeQuery2[NPCComponent, NPCAnimationComponent](cmd).
+		Map(func(npcEntity EntityId, _ *NPCComponent, anim *NPCAnimationComponent) bool {
+			assetRoot, player, animationSet, ok := npcAnimationAssetRoot(cmd, parentByEntity, npcEntity)
+			if !ok || assetRoot == 0 || player == nil || animationSet == nil {
+				return true
+			}
+			clipID := selectNPCAnimationClipID(animationSet, anim.State, anim.FallbackClipID)
+			if clipID == "" {
+				return true
+			}
+			if player.ClipID != clipID {
+				player.ClipID = clipID
+				player.Time = 0
+			}
+			if player.Speed == 0 {
+				player.Speed = 1
+			}
+			player.Playing = true
+			if clip, ok := animationSet.Clips[clipID]; ok {
+				player.Loop = clip.Loop
+			}
+			anim.ActiveClipID = clipID
+			return true
+		})
+}
+
+func npcAnimationAssetRoot(cmd *Commands, parentByEntity map[EntityId]EntityId, npcEntity EntityId) (EntityId, *AnimationPlayerComponent, *AuthoredAssetAnimationSetComponent, bool) {
+	var rootEntity EntityId
+	var outPlayer *AnimationPlayerComponent
+	var outSet *AuthoredAssetAnimationSetComponent
+	MakeQuery4[AuthoredAssetRootComponent, Parent, AnimationPlayerComponent, AuthoredAssetAnimationSetComponent](cmd).
+		Map(func(eid EntityId, _ *AuthoredAssetRootComponent, parent *Parent, player *AnimationPlayerComponent, animationSet *AuthoredAssetAnimationSetComponent) bool {
+			if parent == nil || parent.Entity != npcEntity {
+				return true
+			}
+			rootEntity = eid
+			outPlayer = player
+			outSet = animationSet
+			return false
+		})
+	if rootEntity != 0 {
+		return rootEntity, outPlayer, outSet, true
+	}
+	MakeQuery3[AuthoredAssetRootComponent, AnimationPlayerComponent, AuthoredAssetAnimationSetComponent](cmd).
+		Map(func(eid EntityId, _ *AuthoredAssetRootComponent, player *AnimationPlayerComponent, animationSet *AuthoredAssetAnimationSetComponent) bool {
+			if !animationEntityDescendsFrom(parentByEntity, eid, npcEntity) {
+				return true
+			}
+			rootEntity = eid
+			outPlayer = player
+			outSet = animationSet
+			return false
+		})
+	return rootEntity, outPlayer, outSet, rootEntity != 0
+}
+
+func selectNPCAnimationClipID(animationSet *AuthoredAssetAnimationSetComponent, state string, fallbackClipID string) string {
+	if animationSet == nil || len(animationSet.Clips) == 0 {
+		return ""
+	}
+	state = normalizeNPCAnimationToken(state)
+	if state == "" {
+		state = NPCAnimationStateIdle
+	}
+	candidates := npcAnimationClipCandidates(state)
+	clipIDs := sortedAnimationClipIDs(animationSet.Clips)
+	bestClipID := ""
+	bestScore := 0
+	for _, candidate := range candidates {
+		for _, clipID := range clipIDs {
+			clip := animationSet.Clips[clipID]
+			score := npcAnimationClipMatchScore(clip, candidate)
+			if score > bestScore {
+				bestScore = score
+				bestClipID = clipID
+			}
+		}
+	}
+	if bestClipID != "" {
+		return bestClipID
+	}
+	if fallbackClipID != "" {
+		if _, ok := animationSet.Clips[fallbackClipID]; ok {
+			return fallbackClipID
+		}
+	}
+	if animationSet.DefaultClipID != "" {
+		if _, ok := animationSet.Clips[animationSet.DefaultClipID]; ok {
+			return animationSet.DefaultClipID
+		}
+	}
+	if len(clipIDs) > 0 {
+		return clipIDs[0]
+	}
+	return ""
+}
+
+func npcAnimationClipMatchScore(clip content.AssetAnimationClipDef, candidate string) int {
+	candidate = normalizeNPCAnimationToken(candidate)
+	if candidate == "" {
+		return 0
+	}
+	score := 0
+	for _, value := range []string{clip.ID, clip.Name} {
+		normalized := normalizeNPCAnimationToken(value)
+		score = maxNPCAnimationScore(score, npcAnimationTokenMatchScore(normalized, candidate))
+	}
+	for _, tag := range clip.Tags {
+		normalized := normalizeNPCAnimationToken(tag)
+		score = maxNPCAnimationScore(score, npcAnimationTokenMatchScore(normalized, candidate)/2)
+	}
+	if score == 0 {
+		return 0
+	}
+	if npcAnimationClipHasTag(clip, "generated:sequence_clip") {
+		score += 1000
+	}
+	if npcAnimationClipHasTag(clip, "generated:bind_pose_clip") {
+		score -= 100
+	}
+	return score
+}
+
+func npcAnimationTokenMatchScore(normalized string, candidate string) int {
+	if normalized == "" {
+		return 0
+	}
+	switch {
+	case normalized == candidate:
+		return 400
+	case strings.HasPrefix(normalized, candidate):
+		return 350 - minNPCAnimationInt(len(normalized)-len(candidate), 100)
+	case strings.Contains(normalized, candidate):
+		return 200 - minNPCAnimationInt(len(normalized)-len(candidate), 100)
+	default:
+		return 0
+	}
+}
+
+func npcAnimationClipHasTag(clip content.AssetAnimationClipDef, tag string) bool {
+	normalizedTag := normalizeNPCAnimationToken(tag)
+	for _, value := range clip.Tags {
+		if normalizeNPCAnimationToken(value) == normalizedTag {
+			return true
+		}
+	}
+	return false
+}
+
+func maxNPCAnimationScore(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minNPCAnimationInt(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func sortedAnimationClipIDs(clips map[string]content.AssetAnimationClipDef) []string {
+	ids := make([]string, 0, len(clips))
+	for id := range clips {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	return ids
+}
+
+func npcAnimationClipCandidates(state string) []string {
+	switch state {
+	case NPCAnimationStateWalk:
+		return []string{"walk", "move", "run"}
+	case NPCAnimationStateRun:
+		return []string{"run", "walk", "move"}
+	case NPCAnimationStateAttack:
+		return []string{"attack", "shoot", "fire", "melee", "range"}
+	case NPCAnimationStatePain:
+		return []string{"pain", "flinch", "hit"}
+	case NPCAnimationStateDeath:
+		return []string{"death", "die", "dead"}
+	case NPCAnimationStateIdle:
+		fallthrough
+	default:
+		return []string{"idle", "stand", "wait"}
+	}
+}
+
+func npcAnimationClipMatches(clip content.AssetAnimationClipDef, candidate string) bool {
+	return npcAnimationClipMatchScore(clip, candidate) > 0
+}
+
+func normalizeNPCAnimationToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func positiveMod(value float32, divisor float32) float32 {

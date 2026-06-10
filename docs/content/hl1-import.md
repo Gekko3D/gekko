@@ -456,6 +456,18 @@ debugging while allowing imported maps to use a binary RLE chunk payload:
   available.
 - Keep a debug dump/report path so failures remain inspectable.
 
+For Rust runtime import through `rusty-voxelrt`, use the named export profile
+`rusty_voxelrt_interop_v1`. This is a source/interchange profile, not a Rust
+runtime packet format. It keeps `.gklevel` as the scene manifest, emits
+base-world chunks as readable `sparse_json_v1`, preserves material tables in
+the `.gkworld`, enables generated `.gkasset` files for referenced model/sprite
+assets, and tags generated source content with
+`export_profile:rusty_voxelrt_interop_v1`.
+
+The Rust side should still compile this source package into its own
+`.rvlevel/.rvgpu` runtime data. Do not make Rust depend on Gekko's compact
+binary chunk payload for shipping.
+
 ### `.gkasset`
 
 Do not use `.gkasset` for whole BSP maps.
@@ -921,6 +933,7 @@ Both paths use the same importer package and generate the same content shape:
 - `<map>.gklevel`
 - `worlds/<map>.gkworld`
 - `worlds/chunks/*.gkchunk`
+- `worlds/aux/*.gkaux`
 - `worlds/<map>_import_report.json`
 - generated helper `.gkasset` files for imported moving brush visuals
 - optional `hl1_assets/<map>/manifest.gkhl1assets` plus copied source game
@@ -929,6 +942,13 @@ Both paths use the same importer package and generate the same content shape:
 The generated `.gklevel` is the file to open or run. It references the base
 world plus imported lights, water, ladders, moving brushes, use triggers, and
 player spawn metadata.
+
+Generated level saving also ensures the referenced base-world manifest has
+derived normal/aux sidecars before the `.gklevel` is written. Fresh imports emit
+those sidecars during world save; if a generated level points at an older
+manifest without aux refs, the level-save path backfills `worlds/aux/*.gkaux`
+and updates the `.gkworld` manifest. Runtime still falls back to live normal
+baking when a sidecar is missing or stale.
 
 ### Editor Import
 
@@ -958,10 +978,16 @@ go run .
 - chunk: `256`
 - band: `24`
 - cells: `100000000`
+- profile: `Gekko`
 - chunk payload: `RLE chunks`
 - light mode: `faithful`
 - emit lights: `on`
 - game assets: `off` unless you want a local copied/cataloged asset library
+
+For a `rusty-voxelrt` source package, select `Rust interop`. This forces JSON
+chunks and enables generated game assets so Rust can compile base-world chunks,
+moving brushes, props, pickups, NPC markers, and material metadata without
+parsing Gekko's compact binary payload.
 
 7. Click **import + open**.
 
@@ -1051,6 +1077,17 @@ The CLI defaults to compact RLE binary chunks. For readable JSON chunks, add:
 -chunk-payload sparse_json_v1
 ```
 
+For the Rust interop profile, use:
+
+```bash
+-export-profile rusty_voxelrt_interop_v1
+```
+
+That profile currently forces `-chunk-payload sparse_json_v1` and enables
+generated game asset output. Use it when the next consumer is
+`rusty-voxelrt`'s `compile_gekko_level` tool rather than Gekko's own streamed
+runtime.
+
 For visual comparison against original GoldSrc baked lighting, add:
 
 ```bash
@@ -1091,6 +1128,7 @@ This writes:
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/crossfire.gkworld
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/crossfire_import_report.json
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/chunks/*.gkchunk
+/tmp/gekko3d-hl1import-crossfire-rle/worlds/aux/*.gkaux
 ```
 
 ### Voxel Resolution Policy
@@ -1539,9 +1577,28 @@ Recommended path:
   as typed `content.LevelDef.NPCs` plus `ai_spawn` markers. Runtime spawns inert
   `NPCComponent` entities and attaches generated `.mdl` voxel assets when game
   assets are enabled. Generated MDL assets can play their default imported
-  rigid-body sequence, such as Barney idle. Deferred: AI, combat, schedules,
-  animation state selection/blending, relationships, scripted sequences, and
+  rigid-body sequence, such as Barney idle. Runtime also has a semantic NPC
+  animation state bridge that can choose imported clips for states such as
+  idle, walk, run, attack, pain, and death when those clips exist. Deferred:
+  combat, schedules, animation blending, relationships, scripted sequences, and
   exact skill configuration.
+- Implemented first actiongame behavior slice: friendly HL1 NPCs such as
+  `monster_barney` and `monster_scientist` can face the player, follow within a
+  short range, stop at conversational distance, and drive idle/walk animation
+  states. Follow behavior now writes movement intent into an actiongame NPC
+  locomotion component instead of moving transforms directly; the locomotion
+  system applies the movement, performs first-pass voxel-world blocking probes,
+  records actual velocity/blocked state, and drives idle/walk from actual
+  movement. Active nearby NPCs become small streamed-level observers so their
+  local collision can load independently of the player. Locomotion waits for a
+  valid streamed collision floor and freezes at the authored transform until
+  that floor is available, instead of applying gravity into unloaded space.
+  Character grounding now keeps authoritative collision Y separate from a
+  smoothed visual ground Y for attached NPC assets, with a small visual
+  deadband to suppress voxelized ramp/stair noise while preserving exact
+  collision probes. Full
+  navmesh/path graph navigation, squad logic, use/follow commands, and hostile
+  AI remain deferred.
 - `trigger_once` and `trigger_multiple` become typed trigger volumes with
   target metadata.
 - Implemented first slice: `trigger_changelevel` is emitted as typed
@@ -1723,6 +1780,15 @@ Runtime:
       enabled, with placeholder fallback for missing assets.
 - [x] Attach generated HL1 NPC `.mdl` visuals with default rigid animation when
       game assets are enabled.
+- [x] Select generated NPC animation clips from semantic NPC animation states
+      with imported-name fallbacks.
+- [x] First-pass friendly NPC follow behavior drives idle/walk animation states.
+- [x] Route friendly NPC follow movement through an actiongame locomotion
+      component with first-pass voxel-world blocking probes.
+- [x] Make active nearby NPCs request streamed collision and freeze locomotion
+      until their local floor is available.
+- [x] Smooth attached NPC visual roots over voxel stair/ramp ground samples
+      while keeping the NPC collision transform authoritative.
 - [ ] Import remaining target graph relay/action entities.
 - [ ] Implement exact HL1 pickup respawn/skill behavior and animated pickup
       presentation.

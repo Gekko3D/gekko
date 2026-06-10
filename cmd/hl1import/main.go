@@ -18,6 +18,7 @@ func main() {
 	var emitDebugWorld bool
 	var emitLevel bool
 	var debugWorldMode string
+	var exportProfile string
 	flag.StringVar(&opts.GameDir, "game-dir", "", "Half-Life game directory")
 	flag.StringVar(&opts.MapName, "map", "", "HL1 map name, for example c1a0")
 	flag.StringVar(&opts.BSPPath, "bsp", "", "explicit BSP path; overrides -game-dir/-map lookup")
@@ -25,6 +26,7 @@ func main() {
 	flag.IntVar(&opts.ChunkSize, "chunk-size", hl1.DefaultImportedWorldChunkSize, "imported-world chunk size")
 	opts.ChunkPayloadKind = hl1.DefaultChunkPayloadKind
 	flag.StringVar(&opts.ChunkPayloadKind, "chunk-payload", hl1.DefaultChunkPayloadKind, "imported-world chunk payload: sparse_json_v1, dense_rle_binary_v1, or dense_rle_material_binary_v1")
+	flag.StringVar(&exportProfile, "export-profile", "", "named export profile: default or rusty_voxelrt_interop_v1")
 	flag.Int64Var(&opts.MaxSolidSampleCells, "max-solid-sample-cells", hl1.DefaultImportedMaxSampledCells, "maximum BSP solid voxel sample cells")
 	flag.IntVar(&opts.SolidBandDepth, "solid-band-depth", hl1.DefaultImportedSolidBandDepth, "solid debug mode fill depth in voxels from reachable playable empty space")
 	flag.Var((*hl1LightModeFlag)(&opts.LightMode), "light-mode", "HL1 light import mode: faithful or point-proxy")
@@ -49,6 +51,12 @@ func main() {
 	flag.BoolVar(&emitLevel, "emit-level", false, "write generated .gklevel pointing at emitted debug world")
 	flag.Parse()
 
+	opts.ExportProfile = hl1.HL1ExportProfile(exportProfile)
+	var profileErr error
+	opts, profileErr = hl1.ApplyHL1ExportProfile(opts)
+	if profileErr != nil {
+		fatalf("%v", profileErr)
+	}
 	if opts.MapName == "" && opts.BSPPath == "" {
 		fatalf("-map or -bsp is required")
 	}
@@ -154,6 +162,7 @@ func main() {
 		fmt.Printf("debug world written: %s\n", debugResult.ManifestPath)
 		fmt.Printf("debug world mode: %s\n", debugResult.Mode)
 		fmt.Printf("debug world chunk payload: %s\n", debugWorldPayloadKind(debugResult))
+		fmt.Printf("aux sidecars: %d\n", importedWorldAuxSidecarCount(debugResult.Emission.Manifest))
 		fmt.Printf("debug voxels: %d surface, %d filled, %d chunks\n", debugResult.Voxelize.SurfaceCount, debugResult.Voxelize.FilledCount, len(debugResult.Emission.Chunks))
 		if debugResult.Mode == hl1.DebugWorldModeSolid {
 			fmt.Printf("sampled cells: %d, playable empty: %d, solid band depth: %d\n", debugResult.Voxelize.SampledCount, debugResult.Voxelize.PlayableEmptyCount, opts.SolidBandDepth)
@@ -188,6 +197,29 @@ func main() {
 		fmt.Printf("game asset manifest written: %s\n", gameAssets.ManifestPath)
 		fmt.Printf("game assets: %d\n", len(gameAssets.Manifest.Assets))
 	}
+	if opts.ExportProfile != hl1.HL1ExportProfileDefault {
+		fmt.Printf("export profile: %s\n", opts.ExportProfile)
+	}
+}
+
+func importedWorldAuxSidecarCount(def *content.ImportedWorldDef) int {
+	if def == nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range def.Entries {
+		if entry.Aux != nil && entry.Aux.AuxPath != "" {
+			count++
+		}
+	}
+	for _, sector := range def.Sectors {
+		for _, lod := range sector.LODs {
+			if lod.Aux != nil && lod.Aux.AuxPath != "" {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func debugWorldPayloadKind(result hl1.DebugWorldEmissionResult) string {

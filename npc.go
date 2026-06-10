@@ -1,5 +1,14 @@
 package gekko
 
+const (
+	NPCAnimationStateIdle   = "idle"
+	NPCAnimationStateWalk   = "walk"
+	NPCAnimationStateRun    = "run"
+	NPCAnimationStateAttack = "attack"
+	NPCAnimationStatePain   = "pain"
+	NPCAnimationStateDeath  = "death"
+)
+
 type NPCComponent struct {
 	Kind       string
 	AssetPath  string
@@ -13,4 +22,10 @@ type NPCComponent struct {
 	SpawnFlags int
 	SourceTag  string
 	Tags       []string
+}
+
+type NPCAnimationComponent struct {
+	State          string
+	FallbackClipID string
+	ActiveClipID   string
 }

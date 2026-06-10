@@ -20,6 +20,7 @@ type SourceInfo struct {
 	BSPHash         string   `json:"bsp_hash,omitempty"`
 	ImporterName    string   `json:"importer_name,omitempty"`
 	ImporterVersion string   `json:"importer_version,omitempty"`
+	ExportProfile   string   `json:"export_profile,omitempty"`
 }
 
 type Material struct {

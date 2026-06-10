@@ -36,6 +36,11 @@ func BuildDebugSolidWorld(opts ImportOptions) (DebugWorldEmissionResult, error) 
 }
 
 func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissionResult, error) {
+	var profileErr error
+	opts, profileErr = ApplyHL1ExportProfile(opts)
+	if profileErr != nil {
+		return DebugWorldEmissionResult{}, profileErr
+	}
 	if opts.ChunkPayloadKind == "" {
 		opts.ChunkPayloadKind = DefaultChunkPayloadKind
 	}
@@ -94,6 +99,7 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	default:
 		return DebugWorldEmissionResult{}, fmt.Errorf("unsupported debug world mode %q", mode)
 	}
+	tags = append(tags, HL1ExportProfileTags(opts.ExportProfile)...)
 	worldID := summary.Report.Source.MapName
 	if worldID == "" {
 		worldID = "hl1_debug_world"

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gekko3d/gekko/content"
+	contentderived "github.com/gekko3d/gekko/content/derived"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -67,6 +68,11 @@ func BuildGeneratedLevelWithGameAssets(opts ImportOptions, summary ImportSummary
 }
 
 func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath string, gameAssets *GameAssetImportResult, voxelizedWorld ...VoxelizeResult) (GeneratedLevelResult, error) {
+	var profileErr error
+	opts, profileErr = ApplyHL1ExportProfile(opts)
+	if profileErr != nil {
+		return GeneratedLevelResult{}, profileErr
+	}
 	if manifestPath == "" {
 		return GeneratedLevelResult{}, fmt.Errorf("manifest path is empty")
 	}
@@ -78,6 +84,7 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	level.ChunkSize = opts.ChunkSize
 	level.VoxelResolution = opts.VoxelResolution
 	level.Tags = []string{"source:hl1", "debug:surface_voxel"}
+	level.Tags = append(level.Tags, HL1ExportProfileTags(opts.ExportProfile)...)
 	level.Player = hl1LevelPlayerDef()
 	directionalCastsShadows := true
 	level.Environment = &content.LevelEnvironmentDef{
@@ -92,6 +99,7 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 		CollisionEnabled:  true,
 		Tags:              []string{"source:hl1", "debug:surface_voxel"},
 	}
+	level.BaseWorld.Tags = append(level.BaseWorld.Tags, HL1ExportProfileTags(opts.ExportProfile)...)
 	waterFaces := summary.AllFaces
 	if len(waterFaces) == 0 {
 		waterFaces = summary.WorldFaces
@@ -265,7 +273,27 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 	if err := os.MkdirAll(filepath.Dir(result.LevelPath), 0755); err != nil {
 		return err
 	}
+	if err := ensureGeneratedLevelBaseWorldAuxSidecars(result); err != nil {
+		return err
+	}
 	return content.SaveLevel(result.LevelPath, result.Level)
+}
+
+func ensureGeneratedLevelBaseWorldAuxSidecars(result GeneratedLevelResult) error {
+	if result.Level == nil || result.Level.BaseWorld == nil || strings.TrimSpace(result.Level.BaseWorld.ManifestPath) == "" || strings.TrimSpace(result.LevelPath) == "" {
+		return nil
+	}
+	manifestPath := content.ResolveDocumentPath(result.Level.BaseWorld.ManifestPath, result.LevelPath)
+	if _, err := os.Stat(manifestPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := contentderived.EnsureImportedWorldAuxSidecarsForManifest(manifestPath); err != nil {
+		return fmt.Errorf("precalculate base-world aux sidecars: %w", err)
+	}
+	return nil
 }
 
 func buildHL1GameplayMarkers(entities []importcommon.Entity) []content.LevelMarkerDef {

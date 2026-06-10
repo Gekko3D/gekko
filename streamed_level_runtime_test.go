@@ -1674,7 +1674,7 @@ func TestStreamedRuntimeRecordsStreamingObservability(t *testing.T) {
 	if !foundCommittedSnapshot {
 		t.Fatalf("expected metrics sink to receive committed snapshot, got %+v", metricSnapshots)
 	}
-	if line := metrics.LogLine(); line == "" || !strings.Contains(line, "streaming metrics:") || !strings.Contains(line, "committed_total=1") || !strings.Contains(line, "full_committed_total=1") || !strings.Contains(line, "commit_world_ms=") || !strings.Contains(line, "commit_world_register_ms=") || !strings.Contains(line, "commit_flushes=1") {
+	if line := metrics.LogLine(); line == "" || !strings.Contains(line, "streaming metrics:") || !strings.Contains(line, "committed_total=1") || !strings.Contains(line, "full_committed_total=1") || !strings.Contains(line, "commit_world_ms=") || !strings.Contains(line, "commit_world_register_ms=") || !strings.Contains(line, "commit_flushes=1") || !strings.Contains(line, "aux_hits=") || !strings.Contains(line, "aux_misses=") || !strings.Contains(line, "runtime_normal_bake_ms=") {
 		t.Fatalf("unexpected metrics log line: %q", line)
 	}
 }

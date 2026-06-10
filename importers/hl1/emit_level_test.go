@@ -136,6 +136,59 @@ func TestBuildAndSaveGeneratedLevel(t *testing.T) {
 	}
 }
 
+func TestSaveGeneratedLevelPrecalculatesBaseWorldAuxSidecars(t *testing.T) {
+	dir := t.TempDir()
+	levelPath := filepath.Join(dir, "out", "demo.gklevel")
+	manifestPath := filepath.Join(dir, "out", "worlds", "demo.gkworld")
+	chunkPath := filepath.Join(dir, "out", "worlds", "chunks", "demo_0_0_0.gkchunk")
+	chunk := &content.ImportedWorldChunkDef{
+		WorldID:            "demo",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          32,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 2, Y: 2, Z: 2, Value: 1}},
+		NonEmptyVoxelCount: 1,
+	}
+	if err := content.SaveImportedWorldChunk(chunkPath, chunk); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+	manifest := &content.ImportedWorldDef{
+		WorldID:         "demo",
+		Kind:            content.ImportedWorldKindVoxelWorld,
+		ChunkSize:       32,
+		VoxelResolution: 1,
+		Entries: []content.ImportedWorldChunkEntryDef{{
+			Coord:              chunk.Coord,
+			ChunkPath:          content.AuthorDocumentPath(chunkPath, manifestPath),
+			NonEmptyVoxelCount: chunk.NonEmptyVoxelCount,
+		}},
+	}
+	if err := content.SaveImportedWorld(manifestPath, manifest); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+	level := content.NewLevelDef("demo")
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:              content.ImportedWorldKindVoxelWorld,
+		ManifestPath:      content.AuthorDocumentPath(manifestPath, levelPath),
+		ReadOnlyByDefault: true,
+		CollisionEnabled:  true,
+	}
+
+	if err := SaveGeneratedLevel(GeneratedLevelResult{LevelPath: levelPath, Level: level}); err != nil {
+		t.Fatalf("SaveGeneratedLevel failed: %v", err)
+	}
+	loadedManifest, err := content.LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld failed: %v", err)
+	}
+	if len(loadedManifest.Entries) != 1 || loadedManifest.Entries[0].Aux == nil || loadedManifest.Entries[0].Aux.AuxPath == "" {
+		t.Fatalf("expected SaveGeneratedLevel to backfill aux ref, got %+v", loadedManifest.Entries)
+	}
+	if _, err := content.LoadImportedWorldChunkAux(content.ResolveDocumentPath(loadedManifest.Entries[0].Aux.AuxPath, manifestPath)); err != nil {
+		t.Fatalf("LoadImportedWorldChunkAux failed: %v", err)
+	}
+}
+
 func TestBuildGeneratedLevelPlacesGeneratedMDLAssets(t *testing.T) {
 	dir := t.TempDir()
 	gameDir := filepath.Join(dir, "hl")

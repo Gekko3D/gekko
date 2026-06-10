@@ -123,11 +123,16 @@ These are not separate `Module` implementations, but they are major integration 
 - Resources:
   - none
 - Systems:
+  - `npcAnimationSystem` in `Update`
   - `assetAnimationSystem` in `Update`
 - Owns:
+  - semantic NPC animation state selection for attached authored asset visuals
   - authored asset clip playback for spawned `.gkasset` hierarchies
   - local transform sampling for position, rotation, and scale keys
 - Important:
+  - NPC animation states such as `idle`, `walk`, `run`, `attack`, `pain`, and
+    `death` resolve to the best available imported clip by stable name/tag
+    matching, with fallback to the authored default clip
   - animation tracks are local-space authored transforms
   - omitted channels keep the asset's bind transform
   - `HierarchyModule` resolves the resulting local transforms to world

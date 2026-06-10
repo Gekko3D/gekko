@@ -27,6 +27,14 @@ const (
 	DefaultChunkPayloadKind          = content.ImportedWorldChunkPayloadDenseRLEBinaryV1
 )
 
+type HL1ExportProfile string
+
+const (
+	HL1ExportProfileDefault                HL1ExportProfile = ""
+	HL1ExportProfileRustyVoxelRTInteropV1  HL1ExportProfile = "rusty_voxelrt_interop_v1"
+	HL1ExportProfileRustyVoxelRTInteropTag                  = "export_profile:rusty_voxelrt_interop_v1"
+)
+
 type HL1VoxelResolutionCategory string
 
 const (
@@ -145,6 +153,7 @@ type ImportOptions struct {
 	MaxSolidSampleCells       int64
 	SolidBandDepth            int
 	ChunkPayloadKind          string
+	ExportProfile             HL1ExportProfile
 	LightMode                 HL1LightMode
 	BakeStaticLightmaps       bool
 	EmitLightFixtures         bool
@@ -163,6 +172,11 @@ type ImportSummary struct {
 }
 
 func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
+	var profileErr error
+	opts, profileErr = ApplyHL1ExportProfile(opts)
+	if profileErr != nil {
+		return ImportSummary{}, profileErr
+	}
 	bspPath := opts.BSPPath
 	if bspPath == "" {
 		var err error
@@ -186,6 +200,7 @@ func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
 		BSPHash:         bsp.SHA256,
 		ImporterName:    ImporterName,
 		ImporterVersion: ImporterVersion,
+		ExportProfile:   string(opts.ExportProfile),
 	}
 	mapImport := importcommon.MapImport{
 		Source:      source,

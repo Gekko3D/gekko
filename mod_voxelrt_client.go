@@ -426,35 +426,25 @@ func cameraStateFromComponent(camera *CameraComponent) core.CameraState {
 }
 
 func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit {
+	return s.RaycastFiltered(origin, dir, tMax, nil)
+}
+
+func (s *VoxelRtState) RaycastFiltered(origin, dir mgl32.Vec3, tMax float32, acceptEntity func(EntityId, bool) bool) RaycastHit {
 	if s == nil || s.RtApp == nil {
 		return RaycastHit{}
 	}
 
 	ray := core.Ray{Origin: origin, Direction: dir}
-	res := s.RtApp.Scene.Raycast(ray, tMax)
+	res := s.RtApp.Scene.RaycastFiltered(ray, tMax, func(obj *core.VoxelObject) bool {
+		if acceptEntity == nil {
+			return true
+		}
+		eid, ok := s.entityForVoxelObject(obj)
+		return acceptEntity(eid, ok)
+	})
 
 	if res != nil {
-		// Find EntityId for this object
-		var hitEid EntityId = 0
-		if eid, ok := s.objectToEntity[res.Object]; ok {
-			hitEid = eid
-		} else {
-			// Fallback: search instanceMap and caVolumeMap (defensive)
-			for eid, obj := range s.instanceMap {
-				if obj == res.Object {
-					hitEid = eid
-					break
-				}
-			}
-			if hitEid == 0 {
-				for eid, obj := range s.caVolumeMap {
-					if obj == res.Object {
-						hitEid = eid
-						break
-					}
-				}
-			}
-		}
+		hitEid, _ := s.entityForVoxelObject(res.Object)
 
 		paletteIndex := uint8(0)
 		if res.Object != nil && res.Object.XBrickMap != nil {
@@ -472,6 +462,26 @@ func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit 
 	}
 
 	return RaycastHit{}
+}
+
+func (s *VoxelRtState) entityForVoxelObject(obj *core.VoxelObject) (EntityId, bool) {
+	if s == nil || obj == nil {
+		return 0, false
+	}
+	if eid, ok := s.objectToEntity[obj]; ok {
+		return eid, true
+	}
+	for eid, candidate := range s.instanceMap {
+		if candidate == obj {
+			return eid, true
+		}
+	}
+	for eid, candidate := range s.caVolumeMap {
+		if candidate == obj {
+			return eid, true
+		}
+	}
+	return 0, false
 }
 
 func (s *VoxelRtState) RaycastSubstepped(origin, dir mgl32.Vec3, distance float32, substeps int) RaycastHit {

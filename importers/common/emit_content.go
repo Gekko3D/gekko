@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/gekko3d/gekko/content"
+	contentderived "github.com/gekko3d/gekko/content/derived"
 )
 
 type ImportedWorldEmitOptions struct {
@@ -171,6 +172,29 @@ func SaveImportedWorldEmissionWithOptions(manifestPath string, emission Imported
 		entry.PayloadHash = chunk.PayloadHash
 		entry.PayloadSizeBytes = chunk.PayloadSizeBytes
 	}
+	chunksByCoord := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(emission.Chunks))
+	for _, chunk := range emission.Chunks {
+		if chunk != nil {
+			chunksByCoord[chunk.Coord] = chunk
+		}
+	}
+	for i := range emission.Manifest.Entries {
+		entry := &emission.Manifest.Entries[i]
+		coord := [3]int{entry.Coord.X, entry.Coord.Y, entry.Coord.Z}
+		chunk := emission.Chunks[coord]
+		if chunk == nil || chunk.NonEmptyVoxelCount == 0 {
+			continue
+		}
+		aux := contentderived.BuildImportedWorldChunkAux(chunk, chunksByCoord, entry.PayloadHash, entry.PayloadSizeBytes, true)
+		if aux == nil {
+			continue
+		}
+		auxPath := content.DefaultImportedWorldChunkAuxPath(entry.ChunkPath)
+		if err := content.SaveImportedWorldChunkAux(filepath.Join(manifestDir, filepath.FromSlash(auxPath)), aux); err != nil {
+			return err
+		}
+		entry.Aux = content.ImportedWorldChunkAuxRef(auxPath, aux)
+	}
 	for path, chunk := range emission.ProxyChunks {
 		if err := content.SaveImportedWorldChunkWithOptions(filepath.Join(manifestDir, filepath.FromSlash(path)), chunk, content.ImportedWorldChunkSaveOptions{
 			PayloadKind: payloadKind,
@@ -178,6 +202,15 @@ func SaveImportedWorldEmissionWithOptions(manifestPath string, emission Imported
 			return err
 		}
 		updateImportedWorldSectorLODMetadata(emission.Manifest.Sectors, path, chunk)
+		aux := contentderived.BuildImportedWorldChunkAux(chunk, map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef{chunk.Coord: chunk}, chunk.PayloadHash, chunk.PayloadSizeBytes, false)
+		if aux == nil {
+			continue
+		}
+		auxPath := content.DefaultImportedWorldChunkAuxPath(path)
+		if err := content.SaveImportedWorldChunkAux(filepath.Join(manifestDir, filepath.FromSlash(auxPath)), aux); err != nil {
+			return err
+		}
+		updateImportedWorldSectorLODAuxMetadata(emission.Manifest.Sectors, path, content.ImportedWorldChunkAuxRef(auxPath, aux))
 	}
 	return content.SaveImportedWorld(manifestPath, emission.Manifest)
 }
@@ -211,6 +244,19 @@ func updateImportedWorldSectorLODMetadata(sectors []content.ImportedWorldSectorD
 			lod.PayloadHash = chunk.PayloadHash
 			lod.PayloadSizeBytes = chunk.PayloadSizeBytes
 			lod.NonEmptyVoxelCount = chunk.NonEmptyVoxelCount
+			return
+		}
+	}
+}
+
+func updateImportedWorldSectorLODAuxMetadata(sectors []content.ImportedWorldSectorDef, path string, aux *content.ImportedWorldChunkAuxRefDef) {
+	for i := range sectors {
+		for j := range sectors[i].LODs {
+			lod := &sectors[i].LODs[j]
+			if lod.ChunkPath != path {
+				continue
+			}
+			lod.Aux = aux
 			return
 		}
 	}

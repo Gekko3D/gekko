@@ -96,6 +96,8 @@ type StreamedLevelRuntimeMetrics struct {
 	PreparedGeometryCacheEvictions    int
 	PreparedGeometryAssetRegisters    int
 	PreparedGeometryAssetReuses       int
+	AuxSidecarHitCount                int
+	AuxSidecarMissCount               int
 	LoadedChunkCount                  int
 	LoadedSectorProxyCount            int
 	LoadedSectorProxyFullReadyCount   int
@@ -137,22 +139,23 @@ type StreamedLevelRuntimeMetrics struct {
 	ObserverUpdateDuration time.Duration
 	CommitSystemDuration   time.Duration
 
-	GPUVoxelSectorsUploaded        int
-	GPUVoxelBricksUploaded         int
-	GPUVoxelDirtySectorsPending    int
-	GPUVoxelDirtyBricksPending     int
-	GPUVoxelUploadRevision         uint64
-	GPURetainedVoxelMapEntries     int
-	GPURetainedVoxelMapSectors     int
-	GPURetainedVoxelMapHits        int
-	GPURetainedVoxelMapMisses      int
-	GPURetainedVoxelMapEvictions   int
-	RendererSceneStructureRevision uint64
+	GPUVoxelSectorsUploaded           int
+	GPUVoxelBricksUploaded            int
+	GPUVoxelDirtySectorsPending       int
+	GPUVoxelDirtyBricksPending        int
+	GPUVoxelRuntimeNormalBakeDuration time.Duration
+	GPUVoxelUploadRevision            uint64
+	GPURetainedVoxelMapEntries        int
+	GPURetainedVoxelMapSectors        int
+	GPURetainedVoxelMapHits           int
+	GPURetainedVoxelMapMisses         int
+	GPURetainedVoxelMapEvictions      int
+	RendererSceneStructureRevision    uint64
 }
 
 func (m StreamedLevelRuntimeMetrics) LogLine() string {
 	return fmt.Sprintf(
-		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d prepared_geom_cache_entries=%d prepared_geom_cache_voxels=%d prepared_geom_cache_hits=%d prepared_geom_cache_misses=%d prepared_geom_cache_evictions=%d prepared_geom_asset_registers=%d prepared_geom_asset_reuses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_frame=%d proxy_committed_frame=%d full_committed_frame=%d collision_committed_frame=%d entities_frame=%d budget_hit=%t budget_reason=%s prepared_total=%d prepare_last_ms=%.3f prepare_total_ms=%.3f committed_total=%d proxy_committed_total=%d full_committed_total=%d collision_committed_total=%d commit_last_ms=%.3f commit_terrain_ms=%.3f commit_world_ms=%.3f commit_world_voxels=%d commit_world_build_ms=%.3f commit_world_register_ms=%.3f commit_world_entity_ms=%.3f commit_placements_ms=%.3f commit_flush_ms=%.3f commit_flushes=%d commit_total_ms=%.3f commit_system_ms=%.3f gpu_voxel_sectors_up=%d gpu_voxel_bricks_up=%d gpu_voxel_dirty_sectors=%d gpu_voxel_dirty_bricks=%d gpu_upload_revision=%d gpu_retained_maps=%d gpu_retained_sectors=%d gpu_retained_hits=%d gpu_retained_misses=%d gpu_retained_evictions=%d scene_structure_revision=%d",
+		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d prepared_geom_cache_entries=%d prepared_geom_cache_voxels=%d prepared_geom_cache_hits=%d prepared_geom_cache_misses=%d prepared_geom_cache_evictions=%d prepared_geom_asset_registers=%d prepared_geom_asset_reuses=%d aux_hits=%d aux_misses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_frame=%d proxy_committed_frame=%d full_committed_frame=%d collision_committed_frame=%d entities_frame=%d budget_hit=%t budget_reason=%s prepared_total=%d prepare_last_ms=%.3f prepare_total_ms=%.3f committed_total=%d proxy_committed_total=%d full_committed_total=%d collision_committed_total=%d commit_last_ms=%.3f commit_terrain_ms=%.3f commit_world_ms=%.3f commit_world_voxels=%d commit_world_build_ms=%.3f commit_world_register_ms=%.3f commit_world_entity_ms=%.3f commit_placements_ms=%.3f commit_flush_ms=%.3f commit_flushes=%d commit_total_ms=%.3f commit_system_ms=%.3f gpu_voxel_sectors_up=%d gpu_voxel_bricks_up=%d gpu_voxel_dirty_sectors=%d gpu_voxel_dirty_bricks=%d runtime_normal_bake_ms=%.3f gpu_upload_revision=%d gpu_retained_maps=%d gpu_retained_sectors=%d gpu_retained_hits=%d gpu_retained_misses=%d gpu_retained_evictions=%d scene_structure_revision=%d",
 		m.DesiredChunkCount,
 		m.DesiredLoadableChunkCount,
 		m.KeepChunkCount,
@@ -180,6 +183,8 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 		m.PreparedGeometryCacheEvictions,
 		m.PreparedGeometryAssetRegisters,
 		m.PreparedGeometryAssetReuses,
+		m.AuxSidecarHitCount,
+		m.AuxSidecarMissCount,
 		m.LoadedChunkCount,
 		m.LoadedSectorProxyCount,
 		m.LoadedSectorProxyFullReadyCount,
@@ -215,6 +220,7 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 		m.GPUVoxelBricksUploaded,
 		m.GPUVoxelDirtySectorsPending,
 		m.GPUVoxelDirtyBricksPending,
+		durationMillis(m.GPUVoxelRuntimeNormalBakeDuration),
 		m.GPUVoxelUploadRevision,
 		m.GPURetainedVoxelMapEntries,
 		m.GPURetainedVoxelMapSectors,
@@ -343,6 +349,9 @@ type streamedPreparedChunk struct {
 	Coord                                 ChunkCoord
 	TerrainChunk                          *content.TerrainChunkDef
 	ImportedWorldChunk                    *content.ImportedWorldChunkDef
+	ImportedWorldAux                      *content.ImportedWorldChunkAuxDef
+	ImportedWorldAuxHit                   bool
+	ImportedWorldAuxMiss                  bool
 	PreparedImportedWorldGeometry         *volume.XBrickMap
 	PreparedImportedWorldGeometryCacheKey string
 	PlacementItems                        []streamedPlacementInstance
@@ -379,6 +388,9 @@ type streamedPreparedSectorProxy struct {
 	SectorCoord              ChunkCoord
 	LOD                      content.ImportedWorldLODDef
 	Chunk                    *content.ImportedWorldChunkDef
+	Aux                      *content.ImportedWorldChunkAuxDef
+	AuxHit                   bool
+	AuxMiss                  bool
 	PreparedGeometry         *volume.XBrickMap
 	PreparedGeometryCacheKey string
 	Err                      error
@@ -1238,6 +1250,7 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		select {
 		case prepared := <-state.PreparedProxyLoads:
 			delete(state.PendingProxyLoads, prepared.SectorCoord)
+			recordPreparedStreamedSectorProxyAuxMetrics(state, prepared)
 			if prepared.Err != nil {
 				state.Metrics.PrepareErrorCount++
 				if state.InitErr == nil {
@@ -1497,6 +1510,24 @@ func recordPreparedStreamedChunkMetrics(state *StreamedLevelRuntimeState, prepar
 	state.Metrics.LastPrepareCoord = prepared.Coord
 	state.Metrics.LastPrepareDuration = prepared.PrepareDuration
 	state.Metrics.TotalPrepareDuration += prepared.PrepareDuration
+	if prepared.ImportedWorldAuxHit {
+		state.Metrics.AuxSidecarHitCount++
+	}
+	if prepared.ImportedWorldAuxMiss {
+		state.Metrics.AuxSidecarMissCount++
+	}
+}
+
+func recordPreparedStreamedSectorProxyAuxMetrics(state *StreamedLevelRuntimeState, prepared streamedPreparedSectorProxy) {
+	if state == nil {
+		return
+	}
+	if prepared.AuxHit {
+		state.Metrics.AuxSidecarHitCount++
+	}
+	if prepared.AuxMiss {
+		state.Metrics.AuxSidecarMissCount++
+	}
 }
 
 func resetLastStreamedCommitBreakdown(state *StreamedLevelRuntimeState) {
@@ -1549,6 +1580,7 @@ func recordStreamingRendererPressure(cmd *Commands, state *StreamedLevelRuntimeS
 		state.Metrics.GPUVoxelBricksUploaded = rt.RtApp.BufferManager.VoxelBricksUploaded
 		state.Metrics.GPUVoxelDirtySectorsPending = rt.RtApp.BufferManager.VoxelDirtySectorsPending
 		state.Metrics.GPUVoxelDirtyBricksPending = rt.RtApp.BufferManager.VoxelDirtyBricksPending
+		state.Metrics.GPUVoxelRuntimeNormalBakeDuration = rt.RtApp.BufferManager.VoxelRuntimeNormalBakeDuration
 		state.Metrics.GPUVoxelUploadRevision = rt.RtApp.BufferManager.VoxelUploadRevision
 		retainedStats := rt.RtApp.BufferManager.RetainedVoxelMapStats()
 		state.Metrics.GPURetainedVoxelMapEntries = retainedStats.Entries
@@ -1738,9 +1770,11 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 		return result
 	}
 	result.Chunk = chunk
-	result.PreparedGeometryCacheKey = streamedImportedWorldGeometryCacheKey("sector_proxy", chunkPath, firstNonEmptyString(job.LOD.PayloadHash, chunk.PayloadHash), firstPositiveInt(job.LOD.PayloadSizeBytes, chunk.PayloadSizeBytes))
+	result.Aux, result.AuxHit = loadStreamedImportedWorldAux(job.Loader, job.LOD.Aux, job.ManifestPath)
+	result.AuxMiss = !result.AuxHit
+	result.PreparedGeometryCacheKey = streamedImportedWorldGeometryCacheKey("sector_proxy", chunkPath, streamedImportedWorldPayloadAndAuxHash(firstNonEmptyString(job.LOD.PayloadHash, chunk.PayloadHash), result.Aux), firstPositiveInt(job.LOD.PayloadSizeBytes, chunk.PayloadSizeBytes))
 	result.PreparedGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedGeometryCacheKey, func() *volume.XBrickMap {
-		return prepareImportedWorldChunkGeometry(chunk)
+		return prepareImportedWorldChunkGeometry(chunk, result.Aux)
 	})
 	return result
 }
@@ -1782,7 +1816,7 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		result.ImportedWorldChunk = chunk
 		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_override", chunkPath, chunk.PayloadHash, chunk.PayloadSizeBytes)
 		result.PreparedImportedWorldGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedImportedWorldGeometryCacheKey, func() *volume.XBrickMap {
-			return prepareImportedWorldChunkGeometry(chunk)
+			return prepareImportedWorldChunkGeometry(chunk, nil)
 		})
 	} else if job.ImportedWorldEntry != nil && job.ImportedWorldEntry.NonEmptyVoxelCount > 0 {
 		chunkPath := content.ResolveImportedWorldChunkPath(*job.ImportedWorldEntry, job.ImportedWorldManifestPath)
@@ -1792,9 +1826,11 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			return result
 		}
 		result.ImportedWorldChunk = chunk
-		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_full", chunkPath, firstNonEmptyString(job.ImportedWorldEntry.PayloadHash, chunk.PayloadHash), firstPositiveInt(job.ImportedWorldEntry.PayloadSizeBytes, chunk.PayloadSizeBytes))
+		result.ImportedWorldAux, result.ImportedWorldAuxHit = loadStreamedImportedWorldAux(job.Loader, job.ImportedWorldEntry.Aux, job.ImportedWorldManifestPath)
+		result.ImportedWorldAuxMiss = !result.ImportedWorldAuxHit
+		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_full", chunkPath, streamedImportedWorldPayloadAndAuxHash(firstNonEmptyString(job.ImportedWorldEntry.PayloadHash, chunk.PayloadHash), result.ImportedWorldAux), firstPositiveInt(job.ImportedWorldEntry.PayloadSizeBytes, chunk.PayloadSizeBytes))
 		result.PreparedImportedWorldGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedImportedWorldGeometryCacheKey, func() *volume.XBrickMap {
-			return prepareImportedWorldChunkGeometry(chunk)
+			return prepareImportedWorldChunkGeometry(chunk, result.ImportedWorldAux)
 		})
 	}
 	for key, override := range job.VoxelOverrides {
@@ -1809,14 +1845,50 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 	return result
 }
 
-func prepareImportedWorldChunkGeometry(chunk *content.ImportedWorldChunkDef) *volume.XBrickMap {
+func prepareImportedWorldChunkGeometry(chunk *content.ImportedWorldChunkDef, aux ...*content.ImportedWorldChunkAuxDef) *volume.XBrickMap {
 	if chunk == nil || chunk.NonEmptyVoxelCount == 0 {
 		return nil
 	}
 	xbm := ImportedWorldChunkToXBrickMap(chunk)
+	if len(aux) > 0 {
+		ApplyImportedWorldChunkAuxToXBrickMap(xbm, aux[0])
+	}
 	xbm.ComputeAABB()
 	xbm.ClearDirty()
 	return xbm
+}
+
+func loadStreamedImportedWorldAux(loader *RuntimeContentLoader, ref *content.ImportedWorldChunkAuxRefDef, manifestPath string) (*content.ImportedWorldChunkAuxDef, bool) {
+	if loader == nil || ref == nil || strings.TrimSpace(ref.AuxPath) == "" {
+		return nil, false
+	}
+	aux, err := loader.LoadImportedWorldChunkAux(content.ResolveDocumentPath(ref.AuxPath, manifestPath))
+	if err != nil || aux == nil {
+		return nil, false
+	}
+	if ref.NormalBakeVersion != "" && aux.NormalBakeVersion != ref.NormalBakeVersion {
+		return nil, false
+	}
+	if ref.PayloadHash != "" && aux.PayloadHash != ref.PayloadHash {
+		return nil, false
+	}
+	if ref.SourcePayloadHash != "" && aux.SourcePayloadHash != ref.SourcePayloadHash {
+		return nil, false
+	}
+	if ref.SourcePayloadSizeBytes > 0 && aux.SourcePayloadSizeBytes != ref.SourcePayloadSizeBytes {
+		return nil, false
+	}
+	return aux, true
+}
+
+func streamedImportedWorldPayloadAndAuxHash(payloadHash string, aux *content.ImportedWorldChunkAuxDef) string {
+	if aux == nil || aux.PayloadHash == "" {
+		return payloadHash
+	}
+	if payloadHash == "" {
+		return "aux:" + aux.PayloadHash
+	}
+	return payloadHash + ":aux:" + aux.PayloadHash
 }
 
 func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedSectorProxy) (int, error) {
