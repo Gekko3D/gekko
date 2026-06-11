@@ -171,6 +171,59 @@ func TestFindHierarchicalNavRouteConstrainsLocalRefinementToSectorCorridor(t *te
 	}
 }
 
+func TestFindHierarchicalNavRouteCanFallbackOutsideSectorCorridor(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "route.gknav")
+	leftCoord := TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	middleCoord := TerrainChunkCoordDef{X: 1, Y: 0, Z: 0}
+	rightCoord := TerrainChunkCoordDef{X: 2, Y: 0, Z: 0}
+	leftPath := filepath.Join(root, "worlds", "route_navtiles", "tiny_0_0_0.gknavtile")
+	middlePath := filepath.Join(root, "worlds", "route_navtiles", "tiny_1_0_0.gknavtile")
+	rightPath := filepath.Join(root, "worlds", "route_navtiles", "tiny_2_0_0.gknavtile")
+	if err := SaveNavTile(leftPath, navPathTestTile("nav-route", "tiny", leftCoord, "left", Vec3{7, 1, 0}, Vec3{8, 1, 1})); err != nil {
+		t.Fatalf("SaveNavTile left failed: %v", err)
+	}
+	if err := SaveNavTile(middlePath, navPathTestTile("nav-route", "tiny", middleCoord, "middle", Vec3{8, 1, 0}, Vec3{16, 1, 1})); err != nil {
+		t.Fatalf("SaveNavTile middle failed: %v", err)
+	}
+	if err := SaveNavTile(rightPath, navPathTestTile("nav-route", "tiny", rightCoord, "right", Vec3{16, 1, 0}, Vec3{17, 1, 1})); err != nil {
+		t.Fatalf("SaveNavTile right failed: %v", err)
+	}
+	manifest := navRouteTestManifest("nav-route", "tiny", map[TerrainChunkCoordDef]string{
+		leftCoord:   leftPath,
+		middleCoord: middlePath,
+		rightCoord:  rightPath,
+	})
+	manifest.Sectors = append(manifest.Sectors, NavSectorEntryDef{
+		Coord:     rightCoord,
+		BoundsMin: [3]float32{16, 0, 0},
+		BoundsMax: [3]float32{24, 8, 8},
+	})
+	manifest.Sectors[0].Links = []NavSectorLinkDef{{
+		ID:   "coarse-shortcut",
+		To:   rightCoord,
+		Kind: NavTraversalWalk,
+		Cost: 1,
+	}}
+
+	route, err := FindHierarchicalNavRoute(manifest, navPath, nil, "", Vec3{7.5, 1, 0.5}, Vec3{16.5, 1, 0.5}, NavHierarchicalRouteOptions{
+		AllowLocalCorridorFallback: true,
+		LocalPath:                  NavPathOptions{AgentProfileID: "tiny", MaxTileSearchRadius: 2},
+	})
+	if err != nil {
+		t.Fatalf("FindHierarchicalNavRoute failed: %v", err)
+	}
+	if !route.Found || !route.Refined || !route.LocalPath.Found || !route.LocalPathCorridorFallback {
+		t.Fatalf("expected fallback-refined route, got %+v", route)
+	}
+	if len(route.LocalPath.Steps) != 3 || route.LocalPath.Steps[1].Coord != middleCoord {
+		t.Fatalf("expected fallback local path through middle tile, got %+v", route.LocalPath.Steps)
+	}
+	if route.RefinementStatus != NavRouteRefinementStatusRefined || route.RefinementReason != "" {
+		t.Fatalf("expected refined status after fallback, got %+v", route)
+	}
+}
+
 func navRouteTestManifest(navID string, profileID string, tilePaths map[TerrainChunkCoordDef]string) *NavManifestDef {
 	manifest := navPathTestManifest(navID, profileID, "route.gknav", tilePaths)
 	manifest.Sectors = []NavSectorEntryDef{

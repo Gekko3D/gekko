@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,8 @@ type StreamedLevelObserverComponent struct {
 	CollisionRadius   int
 	DestructionRadius int
 }
+
+const defaultRuntimeNavigationEditDebounce = 350 * time.Millisecond
 
 type PostSpawnPlacementContext struct {
 	ChunkCoord  ChunkCoord
@@ -56,6 +59,7 @@ type StreamedLevelRuntimeConfig struct {
 	MaxPreparedGeometryCacheEntries int
 	MaxChunkCommitsPerFrame         int
 	MaxStreamingCommitMillis        int
+	RuntimeNavigationEditDebounce   time.Duration
 	MetricsLogInterval              time.Duration
 	DisableSectorProxies            bool
 	RetainSectorProxies             bool
@@ -89,6 +93,9 @@ type StreamedLevelRuntimeMetrics struct {
 	PreparedQueueDepth                int
 	PreparedChunkQueueDepth           int
 	PreparedProxyQueueDepth           int
+	NavigationRebuildQueueDepth       int
+	NavigationRebuildActive           bool
+	NavigationRuntimeEditPendingCount int
 	PreparedGeometryCacheEntries      int
 	PreparedGeometryCacheVoxels       int
 	PreparedGeometryCacheHits         int
@@ -139,6 +146,21 @@ type StreamedLevelRuntimeMetrics struct {
 	ObserverUpdateDuration time.Duration
 	CommitSystemDuration   time.Duration
 
+	NavigationRebuildCount                int
+	NavigationRebuildErrorCount           int
+	LastNavigationRebuildJobID            int64
+	LastCompletedNavigationRebuildJobID   int64
+	LastNavigationRebuildDirtyCoord       ChunkCoord
+	LastNavigationRebuildDirtyCoordValid  bool
+	LastNavigationRebuildDirtyCount       int
+	LastNavigationRebuildExpandedCount    int
+	LastNavigationRebuildOverrideCount    int
+	LastNavigationRebuildEmptyCount       int
+	LastNavigationRebuildWrittenTileCount int
+	LastNavigationRebuildDuration         time.Duration
+	TotalNavigationRebuildDuration        time.Duration
+	LastNavigationRebuildError            string
+
 	GPUVoxelSectorsUploaded           int
 	GPUVoxelBricksUploaded            int
 	GPUVoxelDirtySectorsPending       int
@@ -155,7 +177,7 @@ type StreamedLevelRuntimeMetrics struct {
 
 func (m StreamedLevelRuntimeMetrics) LogLine() string {
 	return fmt.Sprintf(
-		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d prepared_geom_cache_entries=%d prepared_geom_cache_voxels=%d prepared_geom_cache_hits=%d prepared_geom_cache_misses=%d prepared_geom_cache_evictions=%d prepared_geom_asset_registers=%d prepared_geom_asset_reuses=%d aux_hits=%d aux_misses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_frame=%d proxy_committed_frame=%d full_committed_frame=%d collision_committed_frame=%d entities_frame=%d budget_hit=%t budget_reason=%s prepared_total=%d prepare_last_ms=%.3f prepare_total_ms=%.3f committed_total=%d proxy_committed_total=%d full_committed_total=%d collision_committed_total=%d commit_last_ms=%.3f commit_terrain_ms=%.3f commit_world_ms=%.3f commit_world_voxels=%d commit_world_build_ms=%.3f commit_world_register_ms=%.3f commit_world_entity_ms=%.3f commit_placements_ms=%.3f commit_flush_ms=%.3f commit_flushes=%d commit_total_ms=%.3f commit_system_ms=%.3f gpu_voxel_sectors_up=%d gpu_voxel_bricks_up=%d gpu_voxel_dirty_sectors=%d gpu_voxel_dirty_bricks=%d runtime_normal_bake_ms=%.3f gpu_upload_revision=%d gpu_retained_maps=%d gpu_retained_sectors=%d gpu_retained_hits=%d gpu_retained_misses=%d gpu_retained_evictions=%d scene_structure_revision=%d",
+		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d nav_rebuild_queue=%d nav_rebuild_active=%t nav_runtime_edit_pending=%d prepared_geom_cache_entries=%d prepared_geom_cache_voxels=%d prepared_geom_cache_hits=%d prepared_geom_cache_misses=%d prepared_geom_cache_evictions=%d prepared_geom_asset_registers=%d prepared_geom_asset_reuses=%d aux_hits=%d aux_misses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_frame=%d proxy_committed_frame=%d full_committed_frame=%d collision_committed_frame=%d entities_frame=%d budget_hit=%t budget_reason=%s prepared_total=%d prepare_last_ms=%.3f prepare_total_ms=%.3f committed_total=%d proxy_committed_total=%d full_committed_total=%d collision_committed_total=%d commit_last_ms=%.3f commit_terrain_ms=%.3f commit_world_ms=%.3f commit_world_voxels=%d commit_world_build_ms=%.3f commit_world_register_ms=%.3f commit_world_entity_ms=%.3f commit_placements_ms=%.3f commit_flush_ms=%.3f commit_flushes=%d commit_total_ms=%.3f commit_system_ms=%.3f nav_rebuilds=%d nav_rebuild_errors=%d nav_rebuild_job=%d nav_rebuild_done_job=%d nav_rebuild_dirty=%d nav_rebuild_expanded=%d nav_rebuild_overrides=%d nav_rebuild_empty=%d nav_rebuild_tiles=%d nav_rebuild_last_ms=%.3f nav_rebuild_total_ms=%.3f nav_rebuild_error=%s gpu_voxel_sectors_up=%d gpu_voxel_bricks_up=%d gpu_voxel_dirty_sectors=%d gpu_voxel_dirty_bricks=%d runtime_normal_bake_ms=%.3f gpu_upload_revision=%d gpu_retained_maps=%d gpu_retained_sectors=%d gpu_retained_hits=%d gpu_retained_misses=%d gpu_retained_evictions=%d scene_structure_revision=%d",
 		m.DesiredChunkCount,
 		m.DesiredLoadableChunkCount,
 		m.KeepChunkCount,
@@ -176,6 +198,9 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 		m.PreparedQueueDepth,
 		m.PreparedChunkQueueDepth,
 		m.PreparedProxyQueueDepth,
+		m.NavigationRebuildQueueDepth,
+		m.NavigationRebuildActive,
+		m.NavigationRuntimeEditPendingCount,
 		m.PreparedGeometryCacheEntries,
 		m.PreparedGeometryCacheVoxels,
 		m.PreparedGeometryCacheHits,
@@ -216,6 +241,18 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 		m.LastCommitFlushCount,
 		durationMillis(m.TotalCommitDuration),
 		durationMillis(m.CommitSystemDuration),
+		m.NavigationRebuildCount,
+		m.NavigationRebuildErrorCount,
+		m.LastNavigationRebuildJobID,
+		m.LastCompletedNavigationRebuildJobID,
+		m.LastNavigationRebuildDirtyCount,
+		m.LastNavigationRebuildExpandedCount,
+		m.LastNavigationRebuildOverrideCount,
+		m.LastNavigationRebuildEmptyCount,
+		m.LastNavigationRebuildWrittenTileCount,
+		durationMillis(m.LastNavigationRebuildDuration),
+		durationMillis(m.TotalNavigationRebuildDuration),
+		streamedMetricsToken(m.LastNavigationRebuildError),
 		m.GPUVoxelSectorsUploaded,
 		m.GPUVoxelBricksUploaded,
 		m.GPUVoxelDirtySectorsPending,
@@ -233,6 +270,14 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 
 func durationMillis(duration time.Duration) float64 {
 	return float64(duration) / float64(time.Millisecond)
+}
+
+func streamedMetricsToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return strings.Join(strings.Fields(value), "_")
 }
 
 func firstNonEmptyString(values ...string) string {
@@ -286,31 +331,37 @@ type StreamedLevelRuntimeState struct {
 	MarkerEntities             map[string]EntityId
 	LightEntities              map[string]EntityId
 
-	DesiredChunks         map[ChunkCoord]struct{}
-	KeepChunks            map[ChunkCoord]struct{}
-	CollisionChunks       map[ChunkCoord]struct{}
-	DestructionChunks     map[ChunkCoord]struct{}
-	DesiredSectors        map[ChunkCoord]struct{}
-	KeepSectors           map[ChunkCoord]struct{}
-	DesiredProxySectors   map[ChunkCoord]struct{}
-	KeepProxySectors      map[ChunkCoord]struct{}
-	PendingLoads          map[ChunkCoord]struct{}
-	PendingProxyLoads     map[ChunkCoord]struct{}
-	PreparedLoads         chan streamedPreparedChunk
-	PreparedProxyLoads    chan streamedPreparedSectorProxy
-	PreparedGeometryCache *streamedPreparedGeometryCache
-	activePrepareMu       sync.Mutex
-	activeChunkPrepares   int
-	activeProxyPrepares   int
-	LoadedChunks          map[ChunkCoord]*streamedLoadedChunk
-	LoadedSectorProxies   map[ChunkCoord]*streamedLoadedSectorProxy
-	PlacementsByChunk     map[ChunkCoord][]streamedPlacementInstance
-	PlacementChunk        map[string]ChunkCoord
-	ObjectChunk           map[string]ChunkCoord
-	TerrainEntries        map[ChunkCoord]content.TerrainChunkEntryDef
-	ImportedWorldSectors  map[ChunkCoord]content.ImportedWorldSectorDef
-	ImportedChunkSector   map[ChunkCoord]ChunkCoord
-	ImportedWorldEntries  map[ChunkCoord]content.ImportedWorldChunkEntryDef
+	DesiredChunks                  map[ChunkCoord]struct{}
+	KeepChunks                     map[ChunkCoord]struct{}
+	CollisionChunks                map[ChunkCoord]struct{}
+	DestructionChunks              map[ChunkCoord]struct{}
+	DesiredSectors                 map[ChunkCoord]struct{}
+	KeepSectors                    map[ChunkCoord]struct{}
+	DesiredProxySectors            map[ChunkCoord]struct{}
+	KeepProxySectors               map[ChunkCoord]struct{}
+	PendingLoads                   map[ChunkCoord]struct{}
+	PendingProxyLoads              map[ChunkCoord]struct{}
+	PreparedLoads                  chan streamedPreparedChunk
+	PreparedProxyLoads             chan streamedPreparedSectorProxy
+	NavigationRebuilds             []streamedNavigationRebuildJob
+	NavigationResults              chan streamedNavigationRebuildResult
+	NavigationRebuildActive        bool
+	NavigationRuntimeEditRevisions map[EntityId]uint64
+	NavigationRuntimeEditPending   map[EntityId]streamedRuntimeNavigationEditPending
+	nextNavigationRebuildJobID     int64
+	PreparedGeometryCache          *streamedPreparedGeometryCache
+	activePrepareMu                sync.Mutex
+	activeChunkPrepares            int
+	activeProxyPrepares            int
+	LoadedChunks                   map[ChunkCoord]*streamedLoadedChunk
+	LoadedSectorProxies            map[ChunkCoord]*streamedLoadedSectorProxy
+	PlacementsByChunk              map[ChunkCoord][]streamedPlacementInstance
+	PlacementChunk                 map[string]ChunkCoord
+	ObjectChunk                    map[string]ChunkCoord
+	TerrainEntries                 map[ChunkCoord]content.TerrainChunkEntryDef
+	ImportedWorldSectors           map[ChunkCoord]content.ImportedWorldSectorDef
+	ImportedChunkSector            map[ChunkCoord]ChunkCoord
+	ImportedWorldEntries           map[ChunkCoord]content.ImportedWorldChunkEntryDef
 
 	WorldDeltaPath   string
 	WorldDataDir     string
@@ -400,41 +451,73 @@ type streamedPreparedSectorProxy struct {
 	PrepareDuration          time.Duration
 }
 
+type streamedNavigationRebuildJob struct {
+	ID                  int64
+	WorldDeltaPath      string
+	BaseNavManifestPath string
+	BaseNavManifest     *content.NavManifestDef
+	Delta               content.WorldDeltaDef
+	DirtyCoords         []content.TerrainChunkCoordDef
+	ExpandedCoords      []content.TerrainChunkCoordDef
+	Chunks              map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef
+}
+
+type streamedNavigationRebuildResult struct {
+	ID                      int64
+	WorldDeltaPath          string
+	DirtyCoords             []content.TerrainChunkCoordDef
+	ExpandedCoords          []content.TerrainChunkCoordDef
+	Result                  content.NavDeltaBakeResult
+	NavigationTileOverrides []content.NavigationTileOverrideDef
+	Duration                time.Duration
+	Err                     error
+}
+
+type streamedRuntimeNavigationEditPending struct {
+	Revision uint64
+	ReadyAt  time.Time
+}
+
 func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 	cmd.AddResources(&StreamedLevelRuntimeState{
-		DesiredChunks:            make(map[ChunkCoord]struct{}),
-		KeepChunks:               make(map[ChunkCoord]struct{}),
-		CollisionChunks:          make(map[ChunkCoord]struct{}),
-		DesiredSectors:           make(map[ChunkCoord]struct{}),
-		KeepSectors:              make(map[ChunkCoord]struct{}),
-		DesiredProxySectors:      make(map[ChunkCoord]struct{}),
-		KeepProxySectors:         make(map[ChunkCoord]struct{}),
-		PendingLoads:             make(map[ChunkCoord]struct{}),
-		PendingProxyLoads:        make(map[ChunkCoord]struct{}),
-		PreparedLoads:            make(chan streamedPreparedChunk, 256),
-		PreparedProxyLoads:       make(chan streamedPreparedSectorProxy, 256),
-		PreparedGeometryCache:    newStreamedPreparedGeometryCache(defaultStreamedPreparedGeometryCacheEntries),
-		LoadedChunks:             make(map[ChunkCoord]*streamedLoadedChunk),
-		LoadedSectorProxies:      make(map[ChunkCoord]*streamedLoadedSectorProxy),
-		PlacementsByChunk:        make(map[ChunkCoord][]streamedPlacementInstance),
-		PlacementChunk:           make(map[string]ChunkCoord),
-		ObjectChunk:              make(map[string]ChunkCoord),
-		TerrainEntries:           make(map[ChunkCoord]content.TerrainChunkEntryDef),
-		ImportedWorldSectors:     make(map[ChunkCoord]content.ImportedWorldSectorDef),
-		ImportedChunkSector:      make(map[ChunkCoord]ChunkCoord),
-		ImportedWorldEntries:     make(map[ChunkCoord]content.ImportedWorldChunkEntryDef),
-		MarkerEntities:           make(map[string]EntityId),
-		LightEntities:            make(map[string]EntityId),
-		placementOverrideMap:     make(map[string]content.LevelTransformDef),
-		deletedPlacementIDs:      make(map[string]struct{}),
-		terrainOverrideMap:       make(map[string]content.TerrainChunkOverrideDef),
-		importedWorldOverrideMap: make(map[string]content.ImportedWorldChunkOverrideDef),
-		voxelOverrideMap:         make(map[string]content.VoxelObjectOverrideDef),
+		DesiredChunks:                  make(map[ChunkCoord]struct{}),
+		KeepChunks:                     make(map[ChunkCoord]struct{}),
+		CollisionChunks:                make(map[ChunkCoord]struct{}),
+		DesiredSectors:                 make(map[ChunkCoord]struct{}),
+		KeepSectors:                    make(map[ChunkCoord]struct{}),
+		DesiredProxySectors:            make(map[ChunkCoord]struct{}),
+		KeepProxySectors:               make(map[ChunkCoord]struct{}),
+		PendingLoads:                   make(map[ChunkCoord]struct{}),
+		PendingProxyLoads:              make(map[ChunkCoord]struct{}),
+		PreparedLoads:                  make(chan streamedPreparedChunk, 256),
+		PreparedProxyLoads:             make(chan streamedPreparedSectorProxy, 256),
+		NavigationResults:              make(chan streamedNavigationRebuildResult, 16),
+		NavigationRuntimeEditRevisions: make(map[EntityId]uint64),
+		NavigationRuntimeEditPending:   make(map[EntityId]streamedRuntimeNavigationEditPending),
+		PreparedGeometryCache:          newStreamedPreparedGeometryCache(defaultStreamedPreparedGeometryCacheEntries),
+		LoadedChunks:                   make(map[ChunkCoord]*streamedLoadedChunk),
+		LoadedSectorProxies:            make(map[ChunkCoord]*streamedLoadedSectorProxy),
+		PlacementsByChunk:              make(map[ChunkCoord][]streamedPlacementInstance),
+		PlacementChunk:                 make(map[string]ChunkCoord),
+		ObjectChunk:                    make(map[string]ChunkCoord),
+		TerrainEntries:                 make(map[ChunkCoord]content.TerrainChunkEntryDef),
+		ImportedWorldSectors:           make(map[ChunkCoord]content.ImportedWorldSectorDef),
+		ImportedChunkSector:            make(map[ChunkCoord]ChunkCoord),
+		ImportedWorldEntries:           make(map[ChunkCoord]content.ImportedWorldChunkEntryDef),
+		MarkerEntities:                 make(map[string]EntityId),
+		LightEntities:                  make(map[string]EntityId),
+		placementOverrideMap:           make(map[string]content.LevelTransformDef),
+		deletedPlacementIDs:            make(map[string]struct{}),
+		terrainOverrideMap:             make(map[string]content.TerrainChunkOverrideDef),
+		importedWorldOverrideMap:       make(map[string]content.ImportedWorldChunkOverrideDef),
+		voxelOverrideMap:               make(map[string]content.VoxelObjectOverrideDef),
 	})
 	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
 	app.UseSystem(System(commitPreparedStreamedChunksSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelNavigationRebuildSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(streamedLevelNPCNavigationSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(streamedLevelNPCNavigationMovementSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelRuntimeEditedNavigationRebuildSystem).InStage(PostUpdate).RunAlways())
 }
 
 func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedLevelRuntimeConfig) error {
@@ -450,6 +533,12 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	}
 	if cfg.LevelPath == "" {
 		return fmt.Errorf("level path is empty")
+	}
+	if cfg.RuntimeNavigationEditDebounce == 0 {
+		cfg.RuntimeNavigationEditDebounce = defaultRuntimeNavigationEditDebounce
+	}
+	if cfg.RuntimeNavigationEditDebounce < 0 {
+		cfg.RuntimeNavigationEditDebounce = 0
 	}
 
 	loader := cfg.Loader
@@ -561,6 +650,14 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.KeepProxySectors = make(map[ChunkCoord]struct{})
 	state.PendingLoads = make(map[ChunkCoord]struct{})
 	state.PendingProxyLoads = make(map[ChunkCoord]struct{})
+	state.NavigationRebuilds = nil
+	if state.NavigationResults == nil {
+		state.NavigationResults = make(chan streamedNavigationRebuildResult, 16)
+	}
+	state.NavigationRebuildActive = false
+	state.NavigationRuntimeEditRevisions = make(map[EntityId]uint64)
+	state.NavigationRuntimeEditPending = make(map[EntityId]streamedRuntimeNavigationEditPending)
+	state.nextNavigationRebuildJobID = 0
 	state.PreparedGeometryCache = newStreamedPreparedGeometryCache(streamedPreparedGeometryCacheMaxEntries(cfg.MaxPreparedGeometryCacheEntries))
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
 	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
@@ -639,6 +736,12 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		state.BaseWorldManifest = manifest
 		state.BaseWorldMaterialLookup = NewImportedWorldMaterialLookup(manifest)
 		state.BaseWorldCollisionEnabled = level.BaseWorld.CollisionEnabled
+		if reconcileImportedWorldNavigationOverrides(state) {
+			if err := content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta); err != nil {
+				state.InitErr = err
+				return err
+			}
+		}
 		entriesByCoord := make(map[content.TerrainChunkCoordDef]content.ImportedWorldChunkEntryDef, len(manifest.Entries))
 		for _, entry := range manifest.Entries {
 			entriesByCoord[entry.Coord] = entry
@@ -1347,6 +1450,245 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 	}
 }
 
+func streamedLevelNavigationRebuildSystem(state *StreamedLevelRuntimeState) {
+	if state == nil || !state.Initialized || state.InitErr != nil {
+		return
+	}
+	for {
+		select {
+		case result := <-state.NavigationResults:
+			applyStreamedNavigationRebuildResult(state, result)
+		default:
+			if !state.NavigationRebuildActive && len(state.NavigationRebuilds) > 0 {
+				job := state.NavigationRebuilds[0]
+				copy(state.NavigationRebuilds, state.NavigationRebuilds[1:])
+				state.NavigationRebuilds = state.NavigationRebuilds[:len(state.NavigationRebuilds)-1]
+				startStreamedNavigationRebuildJob(state, job)
+			}
+			state.Metrics.NavigationRebuildQueueDepth = len(state.NavigationRebuilds)
+			state.Metrics.NavigationRebuildActive = state.NavigationRebuildActive
+			return
+		}
+	}
+}
+
+func streamedLevelRuntimeEditedNavigationRebuildSystem(cmd *Commands, state *StreamedLevelRuntimeState) {
+	streamedLevelRuntimeEditedNavigationRebuildSystemAt(cmd, state, time.Now())
+}
+
+func streamedLevelRuntimeEditedNavigationRebuildSystemAt(cmd *Commands, state *StreamedLevelRuntimeState, now time.Time) {
+	if cmd == nil || state == nil || !state.Initialized || state.InitErr != nil {
+		return
+	}
+	rt := voxelRtStateFromApp(cmd.app)
+	if rt == nil {
+		return
+	}
+	if state.NavigationRuntimeEditRevisions == nil {
+		state.NavigationRuntimeEditRevisions = make(map[EntityId]uint64)
+	}
+	if state.NavigationRuntimeEditPending == nil {
+		state.NavigationRuntimeEditPending = make(map[EntityId]streamedRuntimeNavigationEditPending)
+	}
+	if streamedLevelNavigationRebuildBusy(state) {
+		cleanupStreamedRuntimeNavigationEditRevisions(cmd, state)
+		updateStreamedRuntimeNavigationEditMetrics(state)
+		return
+	}
+	debounce := streamedRuntimeNavigationEditDebounce(state)
+	snapshots := make([]*content.ImportedWorldChunkDef, 0)
+	readyRevisions := make(map[EntityId]uint64)
+	for _, loaded := range state.LoadedChunks {
+		if loaded == nil {
+			continue
+		}
+		for eid := range loaded.ImportedWorldEntities {
+			revision, edited := rt.runtimeEditedVoxelRevision(eid)
+			if !edited || revision == 0 || state.NavigationRuntimeEditRevisions[eid] >= revision {
+				continue
+			}
+			if debounce > 0 {
+				pending, pendingOK := state.NavigationRuntimeEditPending[eid]
+				if !pendingOK || pending.Revision != revision {
+					state.NavigationRuntimeEditPending[eid] = streamedRuntimeNavigationEditPending{
+						Revision: revision,
+						ReadyAt:  now.Add(debounce),
+					}
+					continue
+				}
+				if now.Before(pending.ReadyAt) {
+					continue
+				}
+			}
+			ref, ok := AuthoredImportedWorldChunkRefForEntity(cmd, eid)
+			if !ok {
+				continue
+			}
+			chunkCoord := terrainCoordFromArray(ref.ChunkCoord)
+			snapshot := loadedImportedWorldChunkSnapshotForNav(cmd, state, ref.WorldID, chunkCoord)
+			if snapshot == nil {
+				continue
+			}
+			snapshots = append(snapshots, snapshot)
+			readyRevisions[eid] = revision
+		}
+	}
+	if len(snapshots) > 0 {
+		if err := persistImportedWorldRuntimeEditSnapshots(state, snapshots); err != nil {
+			if state.InitErr == nil {
+				state.InitErr = fmt.Errorf("persist runtime-edited imported-world chunks: %w", err)
+			}
+		} else if err := enqueueImportedWorldNavigationRebuild(cmd, state, snapshots); err != nil {
+			if state.InitErr == nil {
+				state.InitErr = fmt.Errorf("enqueue runtime-edited imported-world navigation rebuild: %w", err)
+			}
+		} else {
+			for eid, revision := range readyRevisions {
+				state.NavigationRuntimeEditRevisions[eid] = revision
+				delete(state.NavigationRuntimeEditPending, eid)
+			}
+		}
+	}
+	cleanupStreamedRuntimeNavigationEditRevisions(cmd, state)
+	updateStreamedRuntimeNavigationEditMetrics(state)
+}
+
+func streamedRuntimeNavigationEditDebounce(state *StreamedLevelRuntimeState) time.Duration {
+	if state == nil {
+		return 0
+	}
+	if state.Config.RuntimeNavigationEditDebounce < 0 {
+		return 0
+	}
+	return state.Config.RuntimeNavigationEditDebounce
+}
+
+func streamedLevelNavigationRebuildBusy(state *StreamedLevelRuntimeState) bool {
+	return state != nil && (state.NavigationRebuildActive || len(state.NavigationRebuilds) > 0)
+}
+
+func cleanupStreamedRuntimeNavigationEditRevisions(cmd *Commands, state *StreamedLevelRuntimeState) {
+	if cmd == nil || state == nil {
+		return
+	}
+	for eid := range state.NavigationRuntimeEditRevisions {
+		if len(cmd.GetAllComponents(eid)) == 0 {
+			delete(state.NavigationRuntimeEditRevisions, eid)
+		}
+	}
+	for eid := range state.NavigationRuntimeEditPending {
+		if len(cmd.GetAllComponents(eid)) == 0 {
+			delete(state.NavigationRuntimeEditPending, eid)
+		}
+	}
+}
+
+func updateStreamedRuntimeNavigationEditMetrics(state *StreamedLevelRuntimeState) {
+	if state == nil {
+		return
+	}
+	state.Metrics.NavigationRebuildQueueDepth = len(state.NavigationRebuilds)
+	state.Metrics.NavigationRebuildActive = state.NavigationRebuildActive
+	state.Metrics.NavigationRuntimeEditPendingCount = len(state.NavigationRuntimeEditPending)
+}
+
+// DrainStreamedLevelNavigationRebuilds waits until the runtime has applied all
+// queued imported-world navigation rebuilds. Call it from lifecycle/save code
+// that owns the main runtime thread; normal frame updates should let
+// streamedLevelNavigationRebuildSystem process jobs asynchronously.
+func DrainStreamedLevelNavigationRebuilds(state *StreamedLevelRuntimeState, timeout time.Duration) error {
+	if state == nil || !state.Initialized {
+		return nil
+	}
+	started := time.Now()
+	for {
+		streamedLevelNavigationRebuildSystem(state)
+		if state.InitErr != nil {
+			return state.InitErr
+		}
+		if len(state.NavigationRebuilds) == 0 && !state.NavigationRebuildActive {
+			state.Metrics.NavigationRebuildQueueDepth = 0
+			state.Metrics.NavigationRebuildActive = false
+			return nil
+		}
+		if timeout > 0 && time.Since(started) >= timeout {
+			state.Metrics.NavigationRebuildQueueDepth = len(state.NavigationRebuilds)
+			state.Metrics.NavigationRebuildActive = state.NavigationRebuildActive
+			return fmt.Errorf("timed out draining streamed navigation rebuilds: queued=%d active=%t", len(state.NavigationRebuilds), state.NavigationRebuildActive)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func startStreamedNavigationRebuildJob(state *StreamedLevelRuntimeState, job streamedNavigationRebuildJob) {
+	if state == nil {
+		return
+	}
+	if state.NavigationResults == nil {
+		state.NavigationResults = make(chan streamedNavigationRebuildResult, 16)
+	}
+	state.NavigationRebuildActive = true
+	state.Metrics.LastNavigationRebuildJobID = job.ID
+	state.Metrics.NavigationRebuildQueueDepth = len(state.NavigationRebuilds)
+	state.Metrics.NavigationRebuildActive = true
+	go func() {
+		state.NavigationResults <- runStreamedNavigationRebuildJob(job)
+	}()
+}
+
+func runStreamedNavigationRebuildJob(job streamedNavigationRebuildJob) streamedNavigationRebuildResult {
+	started := time.Now()
+	delta := copyWorldDeltaForNavigationRebuild(&job.Delta)
+	result, err := content.SaveNavDeltaTilesForImportedWorldChunks(job.WorldDeltaPath, &delta, job.BaseNavManifest, job.Chunks, content.NavDeltaBakeOptions{
+		BaseNavPath: job.BaseNavManifestPath,
+	})
+	if err != nil {
+		err = fmt.Errorf("precalculate imported-world navigation override: %w", err)
+	}
+	return streamedNavigationRebuildResult{
+		ID:                      job.ID,
+		WorldDeltaPath:          job.WorldDeltaPath,
+		DirtyCoords:             append([]content.TerrainChunkCoordDef(nil), job.DirtyCoords...),
+		ExpandedCoords:          append([]content.TerrainChunkCoordDef(nil), job.ExpandedCoords...),
+		Result:                  result,
+		NavigationTileOverrides: append([]content.NavigationTileOverrideDef(nil), delta.NavigationTileOverrides...),
+		Duration:                time.Since(started),
+		Err:                     err,
+	}
+}
+
+func applyStreamedNavigationRebuildResult(state *StreamedLevelRuntimeState, result streamedNavigationRebuildResult) {
+	if state == nil {
+		return
+	}
+	if strings.TrimSpace(result.WorldDeltaPath) != strings.TrimSpace(state.WorldDeltaPath) {
+		return
+	}
+	state.NavigationRebuildActive = false
+	if result.Err != nil {
+		recordImportedWorldNavigationRebuildMetrics(state, result.ID, result.DirtyCoords, result.ExpandedCoords, result.Result, result.Duration, result.Err)
+		if state.InitErr == nil {
+			state.InitErr = result.Err
+		}
+		return
+	}
+	if state.WorldDelta != nil {
+		state.WorldDelta.NavigationTileOverrides = append([]content.NavigationTileOverrideDef(nil), result.NavigationTileOverrides...)
+		if err := content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta); err != nil {
+			recordImportedWorldNavigationRebuildMetrics(state, result.ID, result.DirtyCoords, result.ExpandedCoords, result.Result, result.Duration, err)
+			if state.InitErr == nil {
+				state.InitErr = err
+			}
+			return
+		}
+	}
+	recordImportedWorldNavigationRebuildMetrics(state, result.ID, result.DirtyCoords, result.ExpandedCoords, result.Result, result.Duration, nil)
+	if state.Config.MetricsLogInterval > 0 && state.Config.MetricsSink == nil {
+		log.Print(importedWorldNavigationRebuildLogLine(state.Metrics))
+	}
+	state.NavigationRevision++
+}
+
 func streamedCommitFrameBudgetHit(state *StreamedLevelRuntimeState, start time.Time) bool {
 	if state == nil {
 		return false
@@ -1395,6 +1737,8 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 		state.Metrics.PreparedProxyQueueDepth = 0
 	}
 	state.Metrics.PreparedQueueDepth = state.Metrics.PreparedChunkQueueDepth + state.Metrics.PreparedProxyQueueDepth
+	state.Metrics.NavigationRebuildQueueDepth = len(state.NavigationRebuilds)
+	state.Metrics.NavigationRebuildActive = state.NavigationRebuildActive
 	cacheStats := state.PreparedGeometryCache.snapshot()
 	state.Metrics.PreparedGeometryCacheEntries = cacheStats.Entries
 	state.Metrics.PreparedGeometryCacheVoxels = cacheStats.Voxels
@@ -2276,6 +2620,7 @@ func unloadStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 
 func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord, loaded *streamedLoadedChunk) error {
 	manifestDirty := false
+	var importedWorldNavSnapshots []*content.ImportedWorldChunkDef
 	for eid := range loaded.TerrainEntities {
 		if len(cmd.GetAllComponents(eid)) == 0 {
 			continue
@@ -2328,22 +2673,10 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 		}
 		chunkCoord := terrainCoordFromArray(ref.ChunkCoord)
 		snapshot := importedWorldChunkDefFromXBrickMap(ref.WorldID, chunkCoord, chunkSize, voxelResolutionForEntity(cmd, eid), xbm)
-		snapshotPath := filepath.Join(state.WorldDataDir, fmt.Sprintf("imported_%s_%d_%d_%d.gkchunk", sanitizePathSegment(ref.WorldID), ref.ChunkCoord[0], ref.ChunkCoord[1], ref.ChunkCoord[2]))
-		if err := content.SaveImportedWorldChunk(snapshotPath, snapshot); err != nil {
+		if err := persistImportedWorldRuntimeEditSnapshots(state, []*content.ImportedWorldChunkDef{snapshot}); err != nil {
 			return err
 		}
-		override := content.ImportedWorldChunkOverrideDef{
-			WorldID:      ref.WorldID,
-			ChunkCoord:   chunkCoord,
-			SnapshotPath: content.AuthorDocumentPath(snapshotPath, state.WorldDeltaPath),
-		}
-		if state.importedWorldOverrideMap == nil {
-			state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
-		}
-		state.importedWorldOverrideMap[importedWorldChunkRuntimeKey(ref.WorldID, override.ChunkCoord)] = override
-		if err := persistImportedWorldNavigationOverride(cmd, state, snapshot); err != nil {
-			return err
-		}
+		importedWorldNavSnapshots = append(importedWorldNavSnapshots, snapshot)
 		manifestDirty = true
 	}
 
@@ -2374,28 +2707,233 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 	state.WorldDelta.TerrainChunkOverrides = mapTerrainOverrides(state.terrainOverrideMap)
 	state.WorldDelta.ImportedWorldChunkOverrides = mapImportedWorldOverrides(state.importedWorldOverrideMap)
 	state.WorldDelta.VoxelObjectOverrides = mapVoxelOverrides(state.voxelOverrideMap)
+	if err := enqueueImportedWorldNavigationRebuild(cmd, state, importedWorldNavSnapshots); err != nil {
+		return err
+	}
 	return content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta)
 }
 
+func persistImportedWorldRuntimeEditSnapshots(state *StreamedLevelRuntimeState, snapshots []*content.ImportedWorldChunkDef) error {
+	if state == nil || state.WorldDelta == nil || strings.TrimSpace(state.WorldDeltaPath) == "" || len(snapshots) == 0 {
+		return nil
+	}
+	if state.importedWorldOverrideMap == nil {
+		state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	}
+	changed := false
+	for _, snapshot := range snapshots {
+		if snapshot == nil || strings.TrimSpace(snapshot.WorldID) == "" {
+			continue
+		}
+		snapshotPath := filepath.Join(state.WorldDataDir, fmt.Sprintf("imported_%s_%d_%d_%d.gkchunk", sanitizePathSegment(snapshot.WorldID), snapshot.Coord.X, snapshot.Coord.Y, snapshot.Coord.Z))
+		if err := content.SaveImportedWorldChunk(snapshotPath, snapshot); err != nil {
+			return err
+		}
+		override := content.ImportedWorldChunkOverrideDef{
+			WorldID:      snapshot.WorldID,
+			ChunkCoord:   snapshot.Coord,
+			SnapshotPath: content.AuthorDocumentPath(snapshotPath, state.WorldDeltaPath),
+		}
+		state.importedWorldOverrideMap[importedWorldChunkRuntimeKey(snapshot.WorldID, snapshot.Coord)] = override
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	state.WorldDelta.PlacementTransformOverrides = mapPlacementOverrides(state.placementOverrideMap)
+	state.WorldDelta.PlacementDeletions = mapPlacementDeletions(state.deletedPlacementIDs)
+	state.WorldDelta.TerrainChunkOverrides = mapTerrainOverrides(state.terrainOverrideMap)
+	state.WorldDelta.ImportedWorldChunkOverrides = mapImportedWorldOverrides(state.importedWorldOverrideMap)
+	state.WorldDelta.VoxelObjectOverrides = mapVoxelOverrides(state.voxelOverrideMap)
+	return content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta)
+}
+
+func reconcileImportedWorldNavigationOverrides(state *StreamedLevelRuntimeState) bool {
+	if state == nil || state.WorldDelta == nil || strings.TrimSpace(state.BaseWorldID) == "" || len(state.WorldDelta.NavigationTileOverrides) == 0 {
+		return false
+	}
+	hasImportedWorldSource := false
+	for _, override := range state.WorldDelta.ImportedWorldChunkOverrides {
+		if override.WorldID == state.BaseWorldID {
+			hasImportedWorldSource = true
+			break
+		}
+	}
+	if hasImportedWorldSource {
+		return false
+	}
+	filtered := state.WorldDelta.NavigationTileOverrides[:0]
+	changed := false
+	for _, override := range state.WorldDelta.NavigationTileOverrides {
+		if override.SourceOverrideKind == content.NavSourceOverrideKindImportedWorld {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, override)
+	}
+	if !changed {
+		return false
+	}
+	state.WorldDelta.NavigationTileOverrides = filtered
+	return true
+}
+
 func persistImportedWorldNavigationOverride(cmd *Commands, state *StreamedLevelRuntimeState, snapshot *content.ImportedWorldChunkDef) error {
-	if state == nil || state.WorldDelta == nil || state.BaseNavManifest == nil || snapshot == nil || strings.TrimSpace(state.WorldDeltaPath) == "" {
+	return enqueueImportedWorldNavigationRebuild(cmd, state, []*content.ImportedWorldChunkDef{snapshot})
+}
+
+func enqueueImportedWorldNavigationRebuild(cmd *Commands, state *StreamedLevelRuntimeState, snapshots []*content.ImportedWorldChunkDef) error {
+	if state == nil || state.WorldDelta == nil || state.BaseNavManifest == nil || len(snapshots) == 0 || strings.TrimSpace(state.WorldDeltaPath) == "" {
 		return nil
 	}
-	if state.BaseWorldID != "" && snapshot.WorldID != state.BaseWorldID {
-		return nil
-	}
-	chunks, err := importedWorldNavigationRebuildChunks(cmd, state, snapshot)
-	if err != nil {
-		return err
+	chunks := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef)
+	dirtyCoords := make([]content.TerrainChunkCoordDef, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot == nil {
+			continue
+		}
+		if state.BaseWorldID != "" && snapshot.WorldID != state.BaseWorldID {
+			continue
+		}
+		dirtyCoords = append(dirtyCoords, snapshot.Coord)
+		snapshotChunks, err := importedWorldNavigationRebuildChunks(cmd, state, snapshot)
+		if err != nil {
+			return err
+		}
+		if len(snapshotChunks) == 0 {
+			chunks[snapshot.Coord] = snapshot
+			continue
+		}
+		for coord, chunk := range snapshotChunks {
+			if chunk != nil {
+				chunks[coord] = chunk
+			}
+		}
 	}
 	if len(chunks) == 0 {
-		chunks = map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef{snapshot.Coord: snapshot}
+		return nil
 	}
-	if _, err := content.SaveNavDeltaTilesForImportedWorldChunks(state.WorldDeltaPath, state.WorldDelta, state.BaseNavManifest, chunks, content.NavDeltaBakeOptions{}); err != nil {
-		return fmt.Errorf("precalculate imported-world navigation override: %w", err)
+	expandedCoords := sortedNavRebuildChunkCoords(chunks)
+	state.nextNavigationRebuildJobID++
+	job := streamedNavigationRebuildJob{
+		ID:                  state.nextNavigationRebuildJobID,
+		WorldDeltaPath:      state.WorldDeltaPath,
+		BaseNavManifestPath: state.BaseNavManifestPath,
+		BaseNavManifest:     copyNavManifestForNavigationRebuild(state.BaseNavManifest),
+		Delta:               copyWorldDeltaForNavigationRebuild(state.WorldDelta),
+		DirtyCoords:         append([]content.TerrainChunkCoordDef(nil), dirtyCoords...),
+		ExpandedCoords:      append([]content.TerrainChunkCoordDef(nil), expandedCoords...),
+		Chunks:              copyImportedWorldChunksForNavigationRebuild(chunks),
 	}
-	state.NavigationRevision++
+	state.NavigationRebuilds = append(state.NavigationRebuilds, job)
+	state.Metrics.NavigationRebuildQueueDepth = len(state.NavigationRebuilds)
 	return nil
+}
+
+func recordImportedWorldNavigationRebuildMetrics(state *StreamedLevelRuntimeState, jobID int64, dirtyCoords []content.TerrainChunkCoordDef, expandedCoords []content.TerrainChunkCoordDef, result content.NavDeltaBakeResult, duration time.Duration, err error) {
+	if state == nil {
+		return
+	}
+	state.Metrics.LastCompletedNavigationRebuildJobID = jobID
+	state.Metrics.LastNavigationRebuildDirtyCount = len(dirtyCoords)
+	state.Metrics.LastNavigationRebuildExpandedCount = len(expandedCoords)
+	state.Metrics.LastNavigationRebuildOverrideCount = len(result.Overrides)
+	state.Metrics.LastNavigationRebuildWrittenTileCount = len(result.Tiles)
+	state.Metrics.LastNavigationRebuildDuration = duration
+	state.Metrics.TotalNavigationRebuildDuration += duration
+	state.Metrics.LastNavigationRebuildEmptyCount = 0
+	for _, override := range result.Overrides {
+		if override.Empty {
+			state.Metrics.LastNavigationRebuildEmptyCount++
+		}
+	}
+	state.Metrics.LastNavigationRebuildDirtyCoordValid = false
+	state.Metrics.LastNavigationRebuildDirtyCoord = ChunkCoord{}
+	if len(dirtyCoords) > 0 {
+		state.Metrics.LastNavigationRebuildDirtyCoord = chunkCoordFromTerrain(dirtyCoords[0])
+		state.Metrics.LastNavigationRebuildDirtyCoordValid = true
+	}
+	if err != nil {
+		state.Metrics.NavigationRebuildErrorCount++
+		state.Metrics.LastNavigationRebuildError = err.Error()
+		return
+	}
+	state.Metrics.NavigationRebuildCount++
+	state.Metrics.LastNavigationRebuildError = ""
+}
+
+func importedWorldNavigationRebuildLogLine(metrics StreamedLevelRuntimeMetrics) string {
+	return fmt.Sprintf("navigation rebuild: dirty=%d expanded=%d overrides=%d empty=%d tiles=%d duration_ms=%.3f count=%d error=%s",
+		metrics.LastNavigationRebuildDirtyCount,
+		metrics.LastNavigationRebuildExpandedCount,
+		metrics.LastNavigationRebuildOverrideCount,
+		metrics.LastNavigationRebuildEmptyCount,
+		metrics.LastNavigationRebuildWrittenTileCount,
+		durationMillis(metrics.LastNavigationRebuildDuration),
+		metrics.NavigationRebuildCount,
+		streamedMetricsToken(metrics.LastNavigationRebuildError),
+	)
+}
+
+func sortedNavRebuildChunkCoords(chunks map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef) []content.TerrainChunkCoordDef {
+	coords := make([]content.TerrainChunkCoordDef, 0, len(chunks))
+	for coord := range chunks {
+		coords = append(coords, coord)
+	}
+	sort.Slice(coords, func(i, j int) bool {
+		return terrainChunkCoordLessForRuntime(coords[i], coords[j])
+	})
+	return coords
+}
+
+func terrainChunkCoordLessForRuntime(a content.TerrainChunkCoordDef, b content.TerrainChunkCoordDef) bool {
+	if a.X != b.X {
+		return a.X < b.X
+	}
+	if a.Y != b.Y {
+		return a.Y < b.Y
+	}
+	return a.Z < b.Z
+}
+
+func copyWorldDeltaForNavigationRebuild(delta *content.WorldDeltaDef) content.WorldDeltaDef {
+	if delta == nil {
+		return content.WorldDeltaDef{}
+	}
+	out := *delta
+	out.PlacementTransformOverrides = append([]content.PlacementTransformOverrideDef(nil), delta.PlacementTransformOverrides...)
+	out.PlacementDeletions = append([]content.PlacementDeletionDef(nil), delta.PlacementDeletions...)
+	out.TerrainChunkOverrides = append([]content.TerrainChunkOverrideDef(nil), delta.TerrainChunkOverrides...)
+	out.ImportedWorldChunkOverrides = append([]content.ImportedWorldChunkOverrideDef(nil), delta.ImportedWorldChunkOverrides...)
+	out.NavigationTileOverrides = append([]content.NavigationTileOverrideDef(nil), delta.NavigationTileOverrides...)
+	out.VoxelObjectOverrides = append([]content.VoxelObjectOverrideDef(nil), delta.VoxelObjectOverrides...)
+	return out
+}
+
+func copyNavManifestForNavigationRebuild(manifest *content.NavManifestDef) *content.NavManifestDef {
+	if manifest == nil {
+		return nil
+	}
+	out := *manifest
+	out.AgentProfiles = append([]content.NavAgentProfileDef(nil), manifest.AgentProfiles...)
+	out.Tiles = append([]content.NavTileEntryDef(nil), manifest.Tiles...)
+	out.Sectors = append([]content.NavSectorEntryDef(nil), manifest.Sectors...)
+	out.Tags = append([]string(nil), manifest.Tags...)
+	return &out
+}
+
+func copyImportedWorldChunksForNavigationRebuild(chunks map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef) map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef {
+	out := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(chunks))
+	for coord, chunk := range chunks {
+		if chunk == nil {
+			continue
+		}
+		copyChunk := *chunk
+		copyChunk.Voxels = append([]content.ImportedWorldVoxelDef(nil), chunk.Voxels...)
+		copyChunk.Tags = append([]string(nil), chunk.Tags...)
+		out[coord] = &copyChunk
+	}
+	return out
 }
 
 func importedWorldNavigationRebuildChunks(cmd *Commands, state *StreamedLevelRuntimeState, snapshot *content.ImportedWorldChunkDef) (map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, error) {

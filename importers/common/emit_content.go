@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/gekko3d/gekko/content"
 	contentderived "github.com/gekko3d/gekko/content/derived"
@@ -22,6 +23,19 @@ type ImportedWorldEmitOptions struct {
 
 type ImportedWorldSaveOptions struct {
 	ChunkPayloadKind string
+}
+
+type ImportedWorldSaveStats struct {
+	ChunksWritten      int
+	ChunksSkipped      int
+	ChunkAuxWritten    int
+	ChunkAuxSkipped    int
+	ChunkAuxReused     int
+	ProxyChunksWritten int
+	ProxyChunksSkipped int
+	ProxyAuxWritten    int
+	ProxyAuxSkipped    int
+	ProxyAuxReused     int
 }
 
 type ImportedWorldEmission struct {
@@ -144,33 +158,57 @@ func SaveImportedWorldEmission(manifestPath string, emission ImportedWorldEmissi
 }
 
 func SaveImportedWorldEmissionWithOptions(manifestPath string, emission ImportedWorldEmission, opts ImportedWorldSaveOptions) error {
+	_, err := SaveImportedWorldEmissionWithOptionsResult(manifestPath, emission, opts)
+	return err
+}
+
+func SaveImportedWorldEmissionWithOptionsResult(manifestPath string, emission ImportedWorldEmission, opts ImportedWorldSaveOptions) (ImportedWorldSaveStats, error) {
+	var stats ImportedWorldSaveStats
 	if emission.Manifest == nil {
-		return fmt.Errorf("manifest is nil")
+		return stats, fmt.Errorf("manifest is nil")
 	}
 	payloadKind, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind)
 	if err != nil {
-		return err
+		return stats, err
 	}
 	emission.Manifest.ChunkPayloadKind = payloadKind
 	if payloadKind == content.ImportedWorldChunkPayloadDenseRLEBinaryV1 && importedWorldEmissionHasMaterialValues(emission) {
 		emission.Manifest.ChunkPayloadKind = content.ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1
 	}
 	manifestDir := filepath.Dir(manifestPath)
+	previousManifest := loadPreviousImportedWorldManifest(manifestPath)
+	previousEntriesByPath := previousImportedWorldEntriesByPath(previousManifest)
+	previousLODByPath := previousImportedWorldLODsByPath(previousManifest)
+	chunkSourceChangedByCoord := map[content.TerrainChunkCoordDef]bool{}
+	currentEntryPaths := map[string]struct{}{}
 	for i := range emission.Manifest.Entries {
 		entry := &emission.Manifest.Entries[i]
+		currentEntryPaths[entry.ChunkPath] = struct{}{}
 		coord := [3]int{entry.Coord.X, entry.Coord.Y, entry.Coord.Z}
 		chunk := emission.Chunks[coord]
 		if chunk == nil {
-			return fmt.Errorf("missing chunk for coord %v", coord)
+			return stats, fmt.Errorf("missing chunk for coord %v", coord)
 		}
-		if err := content.SaveImportedWorldChunkWithOptions(filepath.Join(manifestDir, filepath.FromSlash(entry.ChunkPath)), chunk, content.ImportedWorldChunkSaveOptions{
+		result, err := content.SaveImportedWorldChunkWithOptionsResult(filepath.Join(manifestDir, filepath.FromSlash(entry.ChunkPath)), chunk, content.ImportedWorldChunkSaveOptions{
 			PayloadKind: payloadKind,
-		}); err != nil {
-			return err
+		})
+		if err != nil {
+			return stats, err
+		}
+		if result.Wrote {
+			stats.ChunksWritten++
+		} else {
+			stats.ChunksSkipped++
 		}
 		entry.PayloadKind = chunk.PayloadKind
 		entry.PayloadHash = chunk.PayloadHash
 		entry.PayloadSizeBytes = chunk.PayloadSizeBytes
+		chunkSourceChangedByCoord[entry.Coord] = importedWorldEntryPayloadChanged(previousEntriesByPath[entry.ChunkPath], *entry, result)
+	}
+	for path, previousEntry := range previousEntriesByPath {
+		if _, ok := currentEntryPaths[path]; !ok {
+			chunkSourceChangedByCoord[previousEntry.Coord] = true
+		}
 	}
 	chunksByCoord := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(emission.Chunks))
 	for _, chunk := range emission.Chunks {
@@ -185,34 +223,185 @@ func SaveImportedWorldEmissionWithOptions(manifestPath string, emission Imported
 		if chunk == nil || chunk.NonEmptyVoxelCount == 0 {
 			continue
 		}
+		previousEntry := previousEntriesByPath[entry.ChunkPath]
+		if !importedWorldFullChunkAuxNeighborhoodChanged(entry.Coord, chunkSourceChangedByCoord) && importedWorldAuxRefReusable(manifestPath, previousEntry.Aux, entry.PayloadHash, entry.PayloadSizeBytes) {
+			entry.Aux = cloneImportedWorldAuxRef(previousEntry.Aux)
+			stats.ChunkAuxReused++
+			continue
+		}
 		aux := contentderived.BuildImportedWorldChunkAux(chunk, chunksByCoord, entry.PayloadHash, entry.PayloadSizeBytes, true)
 		if aux == nil {
 			continue
 		}
 		auxPath := content.DefaultImportedWorldChunkAuxPath(entry.ChunkPath)
-		if err := content.SaveImportedWorldChunkAux(filepath.Join(manifestDir, filepath.FromSlash(auxPath)), aux); err != nil {
-			return err
+		auxSave, err := content.SaveImportedWorldChunkAuxWithResult(filepath.Join(manifestDir, filepath.FromSlash(auxPath)), aux)
+		if err != nil {
+			return stats, err
+		}
+		if auxSave.Wrote {
+			stats.ChunkAuxWritten++
+		} else {
+			stats.ChunkAuxSkipped++
 		}
 		entry.Aux = content.ImportedWorldChunkAuxRef(auxPath, aux)
 	}
+	proxySourceChangedByPath := map[string]bool{}
 	for path, chunk := range emission.ProxyChunks {
-		if err := content.SaveImportedWorldChunkWithOptions(filepath.Join(manifestDir, filepath.FromSlash(path)), chunk, content.ImportedWorldChunkSaveOptions{
+		result, err := content.SaveImportedWorldChunkWithOptionsResult(filepath.Join(manifestDir, filepath.FromSlash(path)), chunk, content.ImportedWorldChunkSaveOptions{
 			PayloadKind: payloadKind,
-		}); err != nil {
-			return err
+		})
+		if err != nil {
+			return stats, err
+		}
+		if result.Wrote {
+			stats.ProxyChunksWritten++
+		} else {
+			stats.ProxyChunksSkipped++
 		}
 		updateImportedWorldSectorLODMetadata(emission.Manifest.Sectors, path, chunk)
+		proxySourceChangedByPath[path] = importedWorldLODPayloadChanged(previousLODByPath[path], path, chunk, result)
+		previousLOD := previousLODByPath[path]
+		if !proxySourceChangedByPath[path] && importedWorldAuxRefReusable(manifestPath, previousLOD.Aux, chunk.PayloadHash, chunk.PayloadSizeBytes) {
+			updateImportedWorldSectorLODAuxMetadata(emission.Manifest.Sectors, path, cloneImportedWorldAuxRef(previousLOD.Aux))
+			stats.ProxyAuxReused++
+			continue
+		}
 		aux := contentderived.BuildImportedWorldChunkAux(chunk, map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef{chunk.Coord: chunk}, chunk.PayloadHash, chunk.PayloadSizeBytes, false)
 		if aux == nil {
 			continue
 		}
 		auxPath := content.DefaultImportedWorldChunkAuxPath(path)
-		if err := content.SaveImportedWorldChunkAux(filepath.Join(manifestDir, filepath.FromSlash(auxPath)), aux); err != nil {
-			return err
+		auxSave, err := content.SaveImportedWorldChunkAuxWithResult(filepath.Join(manifestDir, filepath.FromSlash(auxPath)), aux)
+		if err != nil {
+			return stats, err
+		}
+		if auxSave.Wrote {
+			stats.ProxyAuxWritten++
+		} else {
+			stats.ProxyAuxSkipped++
 		}
 		updateImportedWorldSectorLODAuxMetadata(emission.Manifest.Sectors, path, content.ImportedWorldChunkAuxRef(auxPath, aux))
 	}
-	return content.SaveImportedWorld(manifestPath, emission.Manifest)
+	return stats, content.SaveImportedWorld(manifestPath, emission.Manifest)
+}
+
+func loadPreviousImportedWorldManifest(manifestPath string) *content.ImportedWorldDef {
+	manifest, err := content.LoadImportedWorld(manifestPath)
+	if err != nil {
+		return nil
+	}
+	return manifest
+}
+
+func previousImportedWorldEntriesByPath(manifest *content.ImportedWorldDef) map[string]*content.ImportedWorldChunkEntryDef {
+	out := map[string]*content.ImportedWorldChunkEntryDef{}
+	if manifest == nil {
+		return out
+	}
+	for i := range manifest.Entries {
+		entry := manifest.Entries[i]
+		if strings.TrimSpace(entry.ChunkPath) == "" {
+			continue
+		}
+		out[entry.ChunkPath] = &entry
+	}
+	return out
+}
+
+func previousImportedWorldLODsByPath(manifest *content.ImportedWorldDef) map[string]*content.ImportedWorldLODDef {
+	out := map[string]*content.ImportedWorldLODDef{}
+	if manifest == nil {
+		return out
+	}
+	for _, sector := range manifest.Sectors {
+		for i := range sector.LODs {
+			lod := sector.LODs[i]
+			if strings.TrimSpace(lod.ChunkPath) == "" {
+				continue
+			}
+			out[lod.ChunkPath] = &lod
+		}
+	}
+	return out
+}
+
+func importedWorldEntryPayloadChanged(previous *content.ImportedWorldChunkEntryDef, current content.ImportedWorldChunkEntryDef, result content.ImportedWorldChunkSaveResult) bool {
+	if previous == nil {
+		return true
+	}
+	if previous.PayloadKind != current.PayloadKind || previous.NonEmptyVoxelCount != current.NonEmptyVoxelCount {
+		return true
+	}
+	if previous.PayloadHash != "" || current.PayloadHash != "" {
+		return previous.PayloadHash != current.PayloadHash || previous.PayloadSizeBytes != current.PayloadSizeBytes
+	}
+	return result.Wrote
+}
+
+func importedWorldLODPayloadChanged(previous *content.ImportedWorldLODDef, path string, chunk *content.ImportedWorldChunkDef, result content.ImportedWorldChunkSaveResult) bool {
+	if previous == nil || chunk == nil {
+		return true
+	}
+	if previous.ChunkPath != path || previous.PayloadKind != chunk.PayloadKind || previous.NonEmptyVoxelCount != chunk.NonEmptyVoxelCount {
+		return true
+	}
+	if previous.PayloadHash != "" || chunk.PayloadHash != "" {
+		return previous.PayloadHash != chunk.PayloadHash || previous.PayloadSizeBytes != chunk.PayloadSizeBytes
+	}
+	return result.Wrote
+}
+
+func importedWorldFullChunkAuxNeighborhoodChanged(coord content.TerrainChunkCoordDef, changedByCoord map[content.TerrainChunkCoordDef]bool) bool {
+	for changedCoord, changed := range changedByCoord {
+		if !changed {
+			continue
+		}
+		if absInt(changedCoord.X-coord.X) <= 1 && absInt(changedCoord.Y-coord.Y) <= 1 && absInt(changedCoord.Z-coord.Z) <= 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func importedWorldAuxRefReusable(manifestPath string, ref *content.ImportedWorldChunkAuxRefDef, sourcePayloadHash string, sourcePayloadSizeBytes int) bool {
+	if ref == nil || strings.TrimSpace(ref.AuxPath) == "" {
+		return false
+	}
+	if sourcePayloadHash == "" && sourcePayloadSizeBytes <= 0 {
+		return false
+	}
+	aux, err := content.LoadImportedWorldChunkAux(content.ResolveDocumentPath(ref.AuxPath, manifestPath))
+	if err != nil || aux == nil {
+		return false
+	}
+	if ref.PayloadHash != "" && aux.PayloadHash != ref.PayloadHash {
+		return false
+	}
+	if aux.NormalBakeVersion != content.ImportedWorldNormalBakeVersion {
+		return false
+	}
+	if sourcePayloadHash != "" && aux.SourcePayloadHash != sourcePayloadHash {
+		return false
+	}
+	if sourcePayloadSizeBytes > 0 && aux.SourcePayloadSizeBytes != sourcePayloadSizeBytes {
+		return false
+	}
+	return true
+}
+
+func cloneImportedWorldAuxRef(ref *content.ImportedWorldChunkAuxRefDef) *content.ImportedWorldChunkAuxRefDef {
+	if ref == nil {
+		return nil
+	}
+	clone := *ref
+	return &clone
 }
 
 func importedWorldEmissionHasMaterialValues(emission ImportedWorldEmission) bool {

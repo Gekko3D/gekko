@@ -11,13 +11,21 @@ const (
 	GizmoGrid   // Wireframe grid
 )
 
+type GizmoDepthMode int
+
+const (
+	GizmoDepthModeSceneOccluded GizmoDepthMode = iota
+	GizmoDepthModeAlwaysVisible
+)
+
 // GizmoComponent allows an entity to be visualized as a 3D gizmo.
 // Gizmos are rendered as wireframes.
 type GizmoComponent struct {
-	Type  GizmoType
-	Color [4]float32
-	Size  float32
-	Steps int // For GizmoGrid: number of subdivisions
+	Type      GizmoType
+	Color     [4]float32
+	Size      float32
+	Steps     int // For GizmoGrid: number of subdivisions
+	DepthMode GizmoDepthMode
 }
 
 func NewGizmoLine(size float32, color [4]float32) GizmoComponent {

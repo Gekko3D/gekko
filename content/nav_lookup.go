@@ -20,6 +20,13 @@ type NavTileLookupResult struct {
 	DeltaOverride *NavigationTileOverrideDef
 }
 
+type NavClearanceSourceTileLookupResult struct {
+	Tile        *NavClearanceSourceTileDef
+	TilePath    string
+	Found       bool
+	StaticEntry *NavClearanceSourceTileEntryDef
+}
+
 func LoadEffectiveNavTile(baseNav *NavManifestDef, baseNavPath string, delta *WorldDeltaDef, deltaPath string, coord TerrainChunkCoordDef, agentProfileID string) (NavTileLookupResult, error) {
 	resolved, err := ResolveEffectiveNavTile(baseNav, baseNavPath, delta, deltaPath, coord, agentProfileID)
 	if err != nil || !resolved.Found || resolved.Empty {
@@ -74,6 +81,41 @@ func ResolveEffectiveNavTile(baseNav *NavManifestDef, baseNavPath string, delta 
 		}, nil
 	}
 	return NavTileLookupResult{}, nil
+}
+
+func LoadNavClearanceSourceTileForCoord(baseNav *NavManifestDef, baseNavPath string, coord TerrainChunkCoordDef) (NavClearanceSourceTileLookupResult, error) {
+	resolved, err := ResolveNavClearanceSourceTileForCoord(baseNav, baseNavPath, coord)
+	if err != nil || !resolved.Found {
+		return resolved, err
+	}
+	tile, err := LoadNavClearanceSourceTile(resolved.TilePath)
+	if err != nil {
+		return NavClearanceSourceTileLookupResult{}, err
+	}
+	resolved.Tile = tile
+	return resolved, nil
+}
+
+func ResolveNavClearanceSourceTileForCoord(baseNav *NavManifestDef, baseNavPath string, coord TerrainChunkCoordDef) (NavClearanceSourceTileLookupResult, error) {
+	if baseNav == nil {
+		return NavClearanceSourceTileLookupResult{}, fmt.Errorf("base nav manifest is nil")
+	}
+	EnsureNavManifestDefaults(baseNav)
+	for _, entry := range baseNav.ClearanceSourceTiles {
+		if entry.Coord != coord {
+			continue
+		}
+		if strings.TrimSpace(entry.TilePath) == "" {
+			return NavClearanceSourceTileLookupResult{}, fmt.Errorf("nav clearance source tile %s has empty tile_path", TerrainChunkKey(coord))
+		}
+		entryCopy := entry
+		return NavClearanceSourceTileLookupResult{
+			TilePath:    ResolveNavClearanceSourceTilePath(entry, baseNavPath),
+			Found:       true,
+			StaticEntry: &entryCopy,
+		}, nil
+	}
+	return NavClearanceSourceTileLookupResult{}, nil
 }
 
 func findNavigationTileOverride(overrides []NavigationTileOverrideDef, navID string, agentProfileID string, coord TerrainChunkCoordDef) (NavigationTileOverrideDef, bool) {

@@ -154,11 +154,16 @@ func SaveDebugSurfaceWorld(result DebugWorldEmissionResult) error {
 }
 
 func SaveDebugWorld(result DebugWorldEmissionResult) error {
+	_, err := SaveDebugWorldWithStats(result)
+	return err
+}
+
+func SaveDebugWorldWithStats(result DebugWorldEmissionResult) (importcommon.ImportedWorldSaveStats, error) {
 	payloadKind := result.PayloadKind
 	if payloadKind == "" {
 		payloadKind = DefaultChunkPayloadKind
 	}
-	return importcommon.SaveImportedWorldEmissionWithOptions(result.ManifestPath, result.Emission, importcommon.ImportedWorldSaveOptions{
+	return importcommon.SaveImportedWorldEmissionWithOptionsResult(result.ManifestPath, result.Emission, importcommon.ImportedWorldSaveOptions{
 		ChunkPayloadKind: payloadKind,
 	})
 }

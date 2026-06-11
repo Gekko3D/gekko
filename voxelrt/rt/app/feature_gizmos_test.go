@@ -15,12 +15,14 @@ func TestSetGizmoOverlayItemsCopiesItems(t *testing.T) {
 			Type:        core.GizmoSphere,
 			Color:       [4]float32{1, 0, 0, 1},
 			ModelMatrix: matrix,
+			DepthMode:   core.GizmoDepthModeAlwaysVisible,
 		},
 	}
 
 	app.SetGizmoOverlayItems(items)
 	items[0].Type = core.GizmoLine
 	items[0].Color = [4]float32{0, 1, 0, 1}
+	items[0].DepthMode = core.GizmoDepthModeSceneOccluded
 
 	if got := len(app.Scene.Gizmos); got != 1 {
 		t.Fatalf("expected one gizmo, got %d", got)
@@ -33,6 +35,9 @@ func TestSetGizmoOverlayItemsCopiesItems(t *testing.T) {
 	}
 	if app.Scene.Gizmos[0].ModelMatrix != matrix {
 		t.Fatalf("expected copied gizmo matrix")
+	}
+	if app.Scene.Gizmos[0].DepthMode != core.GizmoDepthModeAlwaysVisible {
+		t.Fatalf("expected copied depth mode, got %v", app.Scene.Gizmos[0].DepthMode)
 	}
 }
 

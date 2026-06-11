@@ -74,6 +74,35 @@ func TestGroundedMovementBlockedUsesPlayerRadiusAtDoorway(t *testing.T) {
 	}
 }
 
+func TestGroundedPlayerVerticalUsesFootprintGroundProbe(t *testing.T) {
+	state := newGroundedPlayerTestVoxelRtState()
+	floor := core.NewVoxelObject()
+	floor.XBrickMap = volume.NewXBrickMap()
+	floor.XBrickMap.SetVoxel(1, 0, 0, 1)
+	floor.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	floor.Transform.Dirty = true
+	floor.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(floor)
+
+	basePos := mgl32.Vec3{0.7, 1, 0.5}
+	ctrl := &GroundedPlayerControllerComponent{
+		Height:      1.7,
+		Radius:      0.7,
+		StepHeight:  0.6,
+		GroundProbe: 0.15,
+		Grounded:    true,
+	}
+
+	resolveGroundedVertical(state, &basePos, ctrl, 1.0/60.0)
+
+	if !ctrl.Grounded {
+		t.Fatalf("expected player footprint to stay grounded on edge-supported floor, got %+v", *ctrl)
+	}
+	if absf(basePos.Y()-1) > 0.002 {
+		t.Fatalf("expected player base to remain on floor top, got %v", basePos)
+	}
+}
+
 func TestGroundedPlayerClimbsOverlappingLadderVolume(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

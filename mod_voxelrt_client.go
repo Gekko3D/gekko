@@ -119,26 +119,28 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	RtApp                        *app_rt.App
-	loadedModels                 map[AssetId]*core.VoxelObject
-	instanceMap                  map[EntityId]*core.VoxelObject
-	instanceGeometrySources      map[EntityId]*volume.XBrickMap
-	instanceObjectScopedGeometry map[EntityId]bool
-	runtimeEditedVoxelEntities   map[EntityId]struct{}
-	entityLODSelections          map[EntityId]EntityLODSelection
-	runtimeSprites               []SpriteComponent
-	lastMaterialKeys             map[*core.VoxelObject]materialTableCacheKey
-	materialTableCache           map[materialTableCacheKey][]core.Material
-	particlePools                map[EntityId]*particlePool
-	caVolumeMap                  map[EntityId]*core.VoxelObject
-	objectToEntity               map[*core.VoxelObject]EntityId
-	skyboxLayers                 map[EntityId]SkyboxLayerComponent // Stored values to detect changes
-	skyboxSun                    SkyboxSunComponent
-	SunDirection                 mgl32.Vec3
-	SunIntensity                 float32
-	lastParticleAtlas            AssetId
-	lastSpriteAtlas              AssetId
-	bridgeFeatures               voxelRtBridgeRegistry
+	RtApp                          *app_rt.App
+	loadedModels                   map[AssetId]*core.VoxelObject
+	instanceMap                    map[EntityId]*core.VoxelObject
+	instanceGeometrySources        map[EntityId]*volume.XBrickMap
+	instanceObjectScopedGeometry   map[EntityId]bool
+	runtimeEditedVoxelEntities     map[EntityId]struct{}
+	runtimeEditedVoxelRevisions    map[EntityId]uint64
+	nextRuntimeEditedVoxelRevision uint64
+	entityLODSelections            map[EntityId]EntityLODSelection
+	runtimeSprites                 []SpriteComponent
+	lastMaterialKeys               map[*core.VoxelObject]materialTableCacheKey
+	materialTableCache             map[materialTableCacheKey][]core.Material
+	particlePools                  map[EntityId]*particlePool
+	caVolumeMap                    map[EntityId]*core.VoxelObject
+	objectToEntity                 map[*core.VoxelObject]EntityId
+	skyboxLayers                   map[EntityId]SkyboxLayerComponent // Stored values to detect changes
+	skyboxSun                      SkyboxSunComponent
+	SunDirection                   mgl32.Vec3
+	SunIntensity                   float32
+	lastParticleAtlas              AssetId
+	lastSpriteAtlas                AssetId
+	bridgeFeatures                 voxelRtBridgeRegistry
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -324,7 +326,12 @@ func (s *VoxelRtState) markRuntimeEditedVoxelEntity(eid EntityId) {
 	if s.runtimeEditedVoxelEntities == nil {
 		s.runtimeEditedVoxelEntities = make(map[EntityId]struct{})
 	}
+	if s.runtimeEditedVoxelRevisions == nil {
+		s.runtimeEditedVoxelRevisions = make(map[EntityId]uint64)
+	}
+	s.nextRuntimeEditedVoxelRevision++
 	s.runtimeEditedVoxelEntities[eid] = struct{}{}
+	s.runtimeEditedVoxelRevisions[eid] = s.nextRuntimeEditedVoxelRevision
 }
 
 func (s *VoxelRtState) clearRuntimeEditedVoxelEntity(eid EntityId) {
@@ -332,6 +339,9 @@ func (s *VoxelRtState) clearRuntimeEditedVoxelEntity(eid EntityId) {
 		return
 	}
 	delete(s.runtimeEditedVoxelEntities, eid)
+	if s.runtimeEditedVoxelRevisions != nil {
+		delete(s.runtimeEditedVoxelRevisions, eid)
+	}
 }
 
 func (s *VoxelRtState) runtimeEditedVoxelEntity(eid EntityId) bool {
@@ -340,6 +350,14 @@ func (s *VoxelRtState) runtimeEditedVoxelEntity(eid EntityId) bool {
 	}
 	_, ok := s.runtimeEditedVoxelEntities[eid]
 	return ok
+}
+
+func (s *VoxelRtState) runtimeEditedVoxelRevision(eid EntityId) (uint64, bool) {
+	if s == nil || s.runtimeEditedVoxelRevisions == nil {
+		return 0, false
+	}
+	revision, ok := s.runtimeEditedVoxelRevisions[eid]
+	return revision, ok
 }
 
 func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {

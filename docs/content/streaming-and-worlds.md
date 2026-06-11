@@ -790,6 +790,40 @@ Navigation consumers should resolve effective local nav tiles through
 is authoritative, and only then does lookup fall back to baked static `.gknav`
 tile entries.
 
+Imported-world voxel edits can refresh derived navigation without a full static
+nav bake. The reusable content entry point is
+`SaveNavDeltaTilesForImportedWorldDelta(...)`; the CLI bridge is:
+
+```bash
+go run ./cmd/navdiag \
+  -rebuild-delta-nav \
+  -world <level-worlds>/<map>.gkworld \
+  -nav <level-worlds>/<map>.gknav \
+  -delta <level>/<map>.gkworlddelta \
+  -profile hl1_standing \
+  -fail-on-error=false
+```
+
+When `-dirty-coords` is omitted, the command uses all imported-world chunk
+overrides in the delta. Use `-dirty-coords "x:y:z;x:y:z"` for a targeted
+repair pass.
+
+At runtime, imported-world nav rebuilds are queued after edited chunk snapshots
+are saved, then executed by a background worker from captured chunk/nav/delta
+inputs. Completion is applied on the main runtime thread: navigation overrides
+are merged back into `WorldDelta`, the delta file is saved again, and
+`NavigationRevision` increments. `StreamedLevelRuntimeMetrics` expose queue
+depth, active/running state, job ids, successful/error rebuild counts, the last
+dirty coord, dirty/rebuilt/override/empty/written tile counts, duration, and
+the last error. When actiongame NPC/nav debug HUD is enabled, the player line
+shows the compact `nav_delta(...)` summary so edited-world nav refreshes can be
+checked in-game without inspecting the delta files.
+
+Lifecycle/save code that needs all queued delta nav tiles to be durable should
+call `DrainStreamedLevelNavigationRebuilds(state, timeout)` from the main
+runtime owner before exiting or taking a final save snapshot. Normal frame
+updates should keep using the async rebuild system.
+
 Important helpers:
 
 - `DefaultWorldDeltaPath(levelPath)`

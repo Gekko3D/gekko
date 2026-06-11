@@ -28,17 +28,29 @@ type importedWorldChunkAuxMetadata struct {
 	SourcePayloadSizeBytes int                  `json:"source_payload_size_bytes,omitempty"`
 }
 
+type ImportedWorldChunkAuxSaveResult struct {
+	Wrote            bool
+	PayloadKind      string
+	PayloadHash      string
+	PayloadSizeBytes int
+}
+
 func SaveImportedWorldChunkAux(path string, def *ImportedWorldChunkAuxDef) error {
+	_, err := SaveImportedWorldChunkAuxWithResult(path, def)
+	return err
+}
+
+func SaveImportedWorldChunkAuxWithResult(path string, def *ImportedWorldChunkAuxDef) (ImportedWorldChunkAuxSaveResult, error) {
 	if def == nil {
-		return fmt.Errorf("imported world chunk aux is nil")
+		return ImportedWorldChunkAuxSaveResult{}, fmt.Errorf("imported world chunk aux is nil")
 	}
 	EnsureImportedWorldChunkAuxDefaults(def)
 	if def.SchemaVersion != CurrentImportedWorldChunkAuxSchemaVersion {
-		return fmt.Errorf("unsupported imported world chunk aux schema version %d", def.SchemaVersion)
+		return ImportedWorldChunkAuxSaveResult{}, fmt.Errorf("unsupported imported world chunk aux schema version %d", def.SchemaVersion)
 	}
 	payload, err := encodeImportedWorldChunkAuxPayload(def.Records)
 	if err != nil {
-		return err
+		return ImportedWorldChunkAuxSaveResult{}, err
 	}
 	hash := sha256.Sum256(payload)
 	def.PayloadKind = ImportedWorldChunkAuxPayloadBinaryV1
@@ -60,10 +72,10 @@ func SaveImportedWorldChunkAux(path string, def *ImportedWorldChunkAuxDef) error
 	}
 	metaData, err := json.Marshal(meta)
 	if err != nil {
-		return err
+		return ImportedWorldChunkAuxSaveResult{}, err
 	}
 	if len(metaData) > math.MaxUint32 {
-		return fmt.Errorf("imported world chunk aux metadata is too large")
+		return ImportedWorldChunkAuxSaveResult{}, fmt.Errorf("imported world chunk aux metadata is too large")
 	}
 	var out bytes.Buffer
 	out.Write(importedWorldChunkAuxMagic)
@@ -73,9 +85,18 @@ func SaveImportedWorldChunkAux(path string, def *ImportedWorldChunkAuxDef) error
 	out.Write(metaData)
 	out.Write(payload)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
+		return ImportedWorldChunkAuxSaveResult{}, err
 	}
-	return os.WriteFile(path, out.Bytes(), 0644)
+	wrote, err := writeFileIfChanged(path, out.Bytes(), 0644)
+	if err != nil {
+		return ImportedWorldChunkAuxSaveResult{}, err
+	}
+	return ImportedWorldChunkAuxSaveResult{
+		Wrote:            wrote,
+		PayloadKind:      def.PayloadKind,
+		PayloadHash:      def.PayloadHash,
+		PayloadSizeBytes: def.PayloadSizeBytes,
+	}, nil
 }
 
 func LoadImportedWorldChunkAux(path string) (*ImportedWorldChunkAuxDef, error) {

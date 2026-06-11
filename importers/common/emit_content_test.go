@@ -1,8 +1,10 @@
 package common
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gekko3d/gekko/content"
 )
@@ -341,4 +343,139 @@ func TestSaveImportedWorldEmissionCanWriteDenseRLEBinaryChunks(t *testing.T) {
 	if chunk.PayloadKind != content.ImportedWorldChunkPayloadDenseRLEBinaryV1 || chunk.NonEmptyVoxelCount != 3 || len(chunk.Voxels) != 3 {
 		t.Fatalf("chunk = %+v", chunk)
 	}
+}
+
+func TestSaveImportedWorldEmissionSkipsUnchangedChunkAndAuxFiles(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "worlds", "test_world.gkworld")
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 31, Y: 0, Z: 0, Palette: 1},
+		{X: 32, Y: 0, Z: 0, Palette: 1},
+	}, []Material{{ID: 1, PaletteIndex: 1}}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	if err := SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{
+		ChunkPayloadKind: content.ImportedWorldChunkPayloadDenseRLEBinaryV1,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldEmissionWithOptions failed: %v", err)
+	}
+	loaded, err := content.LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld failed: %v", err)
+	}
+	entry := importedWorldEntryByCoordForTest(t, loaded, content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0})
+	chunkPath := content.ResolveImportedWorldChunkPath(entry, manifestPath)
+	auxPath := content.ResolveDocumentPath(entry.Aux.AuxPath, manifestPath)
+	chunkInfoBefore := statFileForTest(t, chunkPath)
+	auxInfoBefore := statFileForTest(t, auxPath)
+
+	time.Sleep(20 * time.Millisecond)
+	emission, err = BuildImportedWorldEmission([]Voxel{
+		{X: 31, Y: 0, Z: 0, Palette: 1},
+		{X: 32, Y: 0, Z: 0, Palette: 1},
+	}, []Material{{ID: 1, PaletteIndex: 1}}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission second pass failed: %v", err)
+	}
+	if err := SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{
+		ChunkPayloadKind: content.ImportedWorldChunkPayloadDenseRLEBinaryV1,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldEmissionWithOptions second pass failed: %v", err)
+	}
+	chunkInfoAfter := statFileForTest(t, chunkPath)
+	auxInfoAfter := statFileForTest(t, auxPath)
+	if !chunkInfoAfter.ModTime().Equal(chunkInfoBefore.ModTime()) {
+		t.Fatalf("expected unchanged chunk file not to be rewritten: before=%s after=%s", chunkInfoBefore.ModTime(), chunkInfoAfter.ModTime())
+	}
+	if !auxInfoAfter.ModTime().Equal(auxInfoBefore.ModTime()) {
+		t.Fatalf("expected unchanged aux file not to be rewritten: before=%s after=%s", auxInfoBefore.ModTime(), auxInfoAfter.ModTime())
+	}
+}
+
+func TestSaveImportedWorldEmissionRebuildsAuxWhenNeighborChunkChanges(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "worlds", "test_world.gkworld")
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 31, Y: 0, Z: 0, Palette: 1},
+		{X: 32, Y: 0, Z: 0, Palette: 1},
+	}, []Material{{ID: 1, PaletteIndex: 1}}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	if err := SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{
+		ChunkPayloadKind: content.ImportedWorldChunkPayloadDenseRLEBinaryV1,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldEmissionWithOptions failed: %v", err)
+	}
+	loaded, err := content.LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld failed: %v", err)
+	}
+	leftBefore := importedWorldEntryByCoordForTest(t, loaded, content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0})
+	leftChunkHashBefore := leftBefore.PayloadHash
+	leftAuxHashBefore := leftBefore.Aux.PayloadHash
+
+	emission, err = BuildImportedWorldEmission([]Voxel{
+		{X: 31, Y: 0, Z: 0, Palette: 1},
+		{X: 34, Y: 0, Z: 0, Palette: 1},
+	}, []Material{{ID: 1, PaletteIndex: 1}}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission second pass failed: %v", err)
+	}
+	if err := SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{
+		ChunkPayloadKind: content.ImportedWorldChunkPayloadDenseRLEBinaryV1,
+	}); err != nil {
+		t.Fatalf("SaveImportedWorldEmissionWithOptions second pass failed: %v", err)
+	}
+	loaded, err = content.LoadImportedWorld(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadImportedWorld second pass failed: %v", err)
+	}
+	leftAfter := importedWorldEntryByCoordForTest(t, loaded, content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0})
+	if leftAfter.PayloadHash != leftChunkHashBefore {
+		t.Fatalf("left chunk payload should be unchanged, before=%s after=%s", leftChunkHashBefore, leftAfter.PayloadHash)
+	}
+	if leftAfter.Aux == nil || leftAfter.Aux.PayloadHash == "" || leftAfter.Aux.PayloadHash == leftAuxHashBefore {
+		t.Fatalf("expected left aux to rebuild after neighbor change: before=%s after=%+v", leftAuxHashBefore, leftAfter.Aux)
+	}
+}
+
+func importedWorldEntryByCoordForTest(t *testing.T, world *content.ImportedWorldDef, coord content.TerrainChunkCoordDef) content.ImportedWorldChunkEntryDef {
+	t.Helper()
+	for _, entry := range world.Entries {
+		if entry.Coord == coord {
+			if entry.Aux == nil {
+				t.Fatalf("entry %+v has no aux ref", entry)
+			}
+			return entry
+		}
+	}
+	t.Fatalf("missing entry for coord %+v in %+v", coord, world.Entries)
+	return content.ImportedWorldChunkEntryDef{}
+}
+
+func statFileForTest(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s failed: %v", path, err)
+	}
+	return info
 }

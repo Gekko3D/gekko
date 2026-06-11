@@ -266,9 +266,10 @@ func TestVoxelRtSystemGatesTextAndGizmoBridgeSyncByRegisteredFeature(t *testing.
 			Scale:    mgl32.Vec3{1, 1, 1},
 		},
 		&GizmoComponent{
-			Type:  GizmoLine,
-			Color: [4]float32{1, 0, 0, 1},
-			Size:  2,
+			Type:      GizmoLine,
+			Color:     [4]float32{1, 0, 0, 1},
+			Size:      2,
+			DepthMode: GizmoDepthModeAlwaysVisible,
 		},
 	)
 	app.FlushCommands()
@@ -355,9 +356,10 @@ func TestBuildGizmoBridgeItemsMapsUserAndLightHelpers(t *testing.T) {
 			Scale:    mgl32.Vec3{1, 1, 1},
 		},
 		&GizmoComponent{
-			Type:  GizmoLine,
-			Color: [4]float32{1, 0, 0, 1},
-			Size:  2,
+			Type:      GizmoLine,
+			Color:     [4]float32{1, 0, 0, 1},
+			Size:      2,
+			DepthMode: GizmoDepthModeAlwaysVisible,
 		},
 	)
 	app.FlushCommands()
@@ -374,6 +376,12 @@ func TestBuildGizmoBridgeItemsMapsUserAndLightHelpers(t *testing.T) {
 	}
 	if items[1].Type != core.GizmoLine || items[1].Color != [4]float32{1, 0, 0, 1} {
 		t.Fatalf("unexpected user gizmo: %+v", items[1])
+	}
+	if items[0].DepthMode != core.GizmoDepthModeSceneOccluded {
+		t.Fatalf("expected light helper to use scene-occluded depth mode, got %v", items[0].DepthMode)
+	}
+	if items[1].DepthMode != core.GizmoDepthModeAlwaysVisible {
+		t.Fatalf("expected user gizmo depth mode to be copied, got %v", items[1].DepthMode)
 	}
 	if items[1].ModelMatrix != mgl32.Translate3D(1, 2, 3).Mul4(mgl32.Scale3D(1, 1, 1)).Mul4(mgl32.Scale3D(1, 1, 2)) {
 		t.Fatalf("unexpected user line transform")

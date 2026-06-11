@@ -557,9 +557,9 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 	if basePos == nil || ctrl == nil {
 		return
 	}
-	height := defaulted(ctrl.Height, 1.8)
 	stepHeight := defaulted(ctrl.StepHeight, 0.6)
 	groundProbe := defaulted(ctrl.GroundProbe, 0.15)
+	maxSnapUp := groundedPlayerGroundSnapUpTolerance(ctrl)
 
 	if ctrl.Grounded && ctrl.JumpQueued {
 		ctrl.Grounded = false
@@ -567,6 +567,15 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 		ctrl.VerticalVelocity = defaulted(ctrl.JumpSpeed, 5.5)
 	}
 	ctrl.JumpQueued = false
+
+	if voxRt != nil && ctrl.Grounded {
+		if hit, ok := groundedPlayerGroundHitWithin(voxRt, *basePos, ctrl, maxSnapUp, stepHeight+groundProbe); ok && CharacterAcceptsGroundY(basePos.Y(), hit.Y, maxSnapUp, stepHeight+groundProbe) {
+			basePos[1] = hit.Y
+			ctrl.VerticalVelocity = 0
+			return
+		}
+		ctrl.Grounded = false
+	}
 
 	if !ctrl.Grounded {
 		ctrl.VerticalVelocity -= defaulted(ctrl.Gravity, 18.0) * dt
@@ -576,29 +585,53 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 	if voxRt == nil {
 		return
 	}
-	probeOrigin := basePos.Add(mgl32.Vec3{0, height + stepHeight, 0})
 	fallDistance := maxf(-ctrl.VerticalVelocity*dt, 0)
-	probeDistance := height + stepHeight + groundProbe + fallDistance + groundProbe
-	hit := voxRt.Raycast(probeOrigin, mgl32.Vec3{0, -1, 0}, probeDistance)
 	if ctrl.NeedsGroundSnap {
-		if hit.Hit && hit.Normal.Y() > 0.35 {
-			basePos[1] = probeOrigin.Y() - hit.T
+		if hit, ok := groundedPlayerGroundHitWithin(voxRt, *basePos, ctrl, maxSnapUp, stepHeight+groundProbe+fallDistance); ok {
+			basePos[1] = hit.Y
 			ctrl.VerticalVelocity = 0
 			ctrl.Grounded = true
 			ctrl.NeedsGroundSnap = false
 		}
 		return
 	}
-	if hit.Hit && hit.Normal.Y() > 0.35 {
-		floorY := probeOrigin.Y() - hit.T
-		if ctrl.VerticalVelocity <= 0 && basePos.Y()-floorY <= stepHeight+groundProbe {
-			basePos[1] = floorY
+	if hit, ok := groundedPlayerGroundHitWithin(voxRt, *basePos, ctrl, maxSnapUp+fallDistance, stepHeight+groundProbe+fallDistance); ok {
+		if ctrl.VerticalVelocity <= 0 && CharacterAcceptsGroundY(basePos.Y(), hit.Y, maxSnapUp+fallDistance, stepHeight+groundProbe+fallDistance) {
+			basePos[1] = hit.Y
 			ctrl.VerticalVelocity = 0
 			ctrl.Grounded = true
 			return
 		}
 	}
 	ctrl.Grounded = false
+}
+
+func groundedPlayerGroundHitWithin(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, maxSnapUp, maxSnapDown float32) (CharacterGroundHit, bool) {
+	if ctrl == nil {
+		return CharacterGroundHit{}, false
+	}
+	return CharacterGroundHitAtWithin(voxRt, basePos, groundedPlayerGroundProbeConfig(ctrl), maxSnapUp, maxSnapDown, nil)
+}
+
+func groundedPlayerGroundSnapUpTolerance(ctrl *GroundedPlayerControllerComponent) float32 {
+	return CharacterGroundSnapUpTolerance(groundedPlayerGroundProbeConfig(ctrl))
+}
+
+func groundedPlayerGroundProbeConfig(ctrl *GroundedPlayerControllerComponent) CharacterGroundProbeConfig {
+	if ctrl == nil {
+		return CharacterGroundProbeConfig{
+			Radius:             0.35,
+			StepHeight:         0.6,
+			GroundProbe:        0.15,
+			MinWalkableNormalY: 0.65,
+		}
+	}
+	return CharacterGroundProbeConfig{
+		Radius:             defaulted(ctrl.Radius, 0.35),
+		StepHeight:         defaulted(ctrl.StepHeight, 0.6),
+		GroundProbe:        defaulted(ctrl.GroundProbe, 0.15),
+		MinWalkableNormalY: 0.65,
+	}
 }
 
 func forwardFromYawPitch(yawDeg, pitchDeg float32) mgl32.Vec3 {

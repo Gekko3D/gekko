@@ -1506,6 +1506,91 @@ func TestStartStreamedRuntimeLoadsNavigationManifest(t *testing.T) {
 	}
 }
 
+func TestStartStreamedRuntimePrunesOrphanImportedWorldNavigationOverrides(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "orphan_nav.gklevel")
+	deltaPath := content.DefaultWorldDeltaPath(levelPath)
+	worldPath := filepath.Join(root, "worlds", "orphan_nav.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "orphan_nav_chunks", "0_0_0.gkchunk")
+	navPath := filepath.Join(root, "worlds", "orphan_nav.gknav")
+	writeImportedWorldChunkForStreamedTest(t, chunkPath, &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 1, Y: 0, Z: 1, Value: 1}},
+		NonEmptyVoxelCount: 1,
+	})
+	writeImportedWorldManifestForStreamedTest(t, worldPath, "world-a", []content.ImportedWorldChunkEntryDef{{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkPath:          content.AuthorDocumentPath(chunkPath, worldPath),
+		NonEmptyVoxelCount: 1,
+	}})
+	level := content.NewLevelDef("orphan_nav")
+	level.ChunkSize = 16
+	level.VoxelResolution = 1
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:         content.ImportedWorldKindVoxelWorld,
+		ManifestPath: content.AuthorDocumentPath(worldPath, levelPath),
+	}
+	level.Navigation = &content.LevelNavigationDef{
+		ManifestPath: content.AuthorDocumentPath(navPath, levelPath),
+	}
+	navManifest := &content.NavManifestDef{
+		NavID:           "orphan-nav",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         level.ID,
+		SourceWorldID:   "world-a",
+		BuilderVersion:  content.DefaultNavBuilderVersion,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles: []content.NavAgentProfileDef{{
+			ID:              "tiny",
+			Radius:          0.2,
+			Height:          1,
+			StepHeight:      0.5,
+			MaxSlopeDegrees: 45,
+		}},
+	}
+	if err := content.SaveNavManifest(navPath, navManifest); err != nil {
+		t.Fatalf("SaveNavManifest failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+	if err := content.SaveWorldDelta(deltaPath, &content.WorldDeltaDef{
+		LevelID: level.ID,
+		NavigationTileOverrides: []content.NavigationTileOverrideDef{{
+			NavID:              "orphan-nav",
+			AgentProfileID:     "tiny",
+			ChunkCoord:         content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			TilePath:           "orphan.gknavtile",
+			SourceOverrideKind: content.NavSourceOverrideKindImportedWorld,
+			Tags:               []string{"generated", "runtime_delta"},
+		}},
+	}); err != nil {
+		t.Fatalf("SaveWorldDelta failed: %v", err)
+	}
+
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	if len(state.WorldDelta.NavigationTileOverrides) != 0 {
+		t.Fatalf("expected orphan imported-world nav overrides to be pruned, got %+v", state.WorldDelta.NavigationTileOverrides)
+	}
+	loadedDelta, err := content.LoadWorldDelta(deltaPath)
+	if err != nil {
+		t.Fatalf("LoadWorldDelta failed: %v", err)
+	}
+	if len(loadedDelta.NavigationTileOverrides) != 0 {
+		t.Fatalf("expected pruned world delta to be saved, got %+v", loadedDelta.NavigationTileOverrides)
+	}
+}
+
 func TestStreamedRuntimePersistsDirtyImportedWorldChunkOverrideOnUnload(t *testing.T) {
 	root := t.TempDir()
 	deltaPath := filepath.Join(root, "levels", "persist.gkworlddelta")
@@ -1640,6 +1725,9 @@ func TestStreamedRuntimePersistsDirtyImportedWorldNavOverrideOnUnload(t *testing
 	if err := unloadStreamedChunk(cmd, state, coord); err != nil {
 		t.Fatalf("unloadStreamedChunk failed: %v", err)
 	}
+	if state.Metrics.NavigationRebuildQueueDepth != 1 || state.NavigationRebuildActive {
+		t.Fatalf("expected navigation rebuild queued but not started, got %+v", state.Metrics)
+	}
 
 	loadedDelta, err := content.LoadWorldDelta(deltaPath)
 	if err != nil {
@@ -1647,6 +1735,16 @@ func TestStreamedRuntimePersistsDirtyImportedWorldNavOverrideOnUnload(t *testing
 	}
 	if len(loadedDelta.ImportedWorldChunkOverrides) != 1 {
 		t.Fatalf("expected one imported world override, got %+v", loadedDelta.ImportedWorldChunkOverrides)
+	}
+	if len(loadedDelta.NavigationTileOverrides) != 0 {
+		t.Fatalf("expected async navigation override to be absent before rebuild completes, got %+v", loadedDelta.NavigationTileOverrides)
+	}
+	if err := DrainStreamedLevelNavigationRebuilds(state, time.Second); err != nil {
+		t.Fatalf("DrainStreamedLevelNavigationRebuilds failed: %v", err)
+	}
+	loadedDelta, err = content.LoadWorldDelta(deltaPath)
+	if err != nil {
+		t.Fatalf("LoadWorldDelta after nav rebuild failed: %v", err)
 	}
 	if len(loadedDelta.NavigationTileOverrides) != 1 {
 		t.Fatalf("expected one navigation tile override, got %+v", loadedDelta.NavigationTileOverrides)
@@ -1661,6 +1759,38 @@ func TestStreamedRuntimePersistsDirtyImportedWorldNavOverrideOnUnload(t *testing
 	}
 	if tile.NavID != navOverride.NavID || tile.AgentProfileID != navOverride.AgentProfileID || tile.SourceDeltaHash != navOverride.SourceDeltaHash || len(tile.Polygons) == 0 {
 		t.Fatalf("unexpected nav tile: tile=%+v override=%+v", tile, navOverride)
+	}
+	if state.Metrics.NavigationRebuildCount != 1 || state.Metrics.NavigationRebuildErrorCount != 0 {
+		t.Fatalf("unexpected navigation rebuild counters: %+v", state.Metrics)
+	}
+	if state.Metrics.NavigationRebuildQueueDepth != 0 || state.Metrics.NavigationRebuildActive {
+		t.Fatalf("expected navigation rebuild queue drained, got %+v", state.Metrics)
+	}
+	if state.Metrics.LastNavigationRebuildDirtyCount != 1 || state.Metrics.LastNavigationRebuildExpandedCount != 1 || state.Metrics.LastNavigationRebuildOverrideCount != 1 || state.Metrics.LastNavigationRebuildWrittenTileCount != 1 {
+		t.Fatalf("unexpected navigation rebuild metrics: %+v", state.Metrics)
+	}
+	if !state.Metrics.LastNavigationRebuildDirtyCoordValid || state.Metrics.LastNavigationRebuildDirtyCoord != coord {
+		t.Fatalf("unexpected navigation rebuild coord: %+v", state.Metrics)
+	}
+	if state.Metrics.LastNavigationRebuildDuration <= 0 || !strings.Contains(state.Metrics.LogLine(), "nav_rebuilds=1") {
+		t.Fatalf("expected navigation rebuild timing/log metrics, got %+v line=%q", state.Metrics, state.Metrics.LogLine())
+	}
+}
+
+func TestDrainStreamedLevelNavigationRebuildsTimesOutWhileActive(t *testing.T) {
+	state := &StreamedLevelRuntimeState{
+		Initialized:             true,
+		WorldDeltaPath:          "timeout.gkworlddelta",
+		NavigationResults:       make(chan streamedNavigationRebuildResult),
+		NavigationRebuildActive: true,
+	}
+
+	err := DrainStreamedLevelNavigationRebuilds(state, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out draining streamed navigation rebuilds") {
+		t.Fatalf("expected drain timeout, got %v", err)
+	}
+	if !state.Metrics.NavigationRebuildActive {
+		t.Fatalf("expected active metric to stay true after timeout, got %+v", state.Metrics)
 	}
 }
 
@@ -1732,6 +1862,9 @@ func TestStreamedRuntimePersistsLoadedNeighborNavOverrideOnImportedWorldUnload(t
 
 	if err := unloadStreamedChunk(cmd, state, coords[0]); err != nil {
 		t.Fatalf("unloadStreamedChunk failed: %v", err)
+	}
+	if err := DrainStreamedLevelNavigationRebuilds(state, time.Second); err != nil {
+		t.Fatalf("DrainStreamedLevelNavigationRebuilds failed: %v", err)
 	}
 
 	loadedDelta, err := content.LoadWorldDelta(deltaPath)
@@ -1829,6 +1962,374 @@ func TestStreamedRuntimePersistsRuntimeEditedImportedWorldChunkAfterDirtyFlagsCl
 	}
 	if snapshot.NonEmptyVoxelCount != 1 || len(snapshot.Voxels) != 1 || snapshot.Voxels[0] != (content.ImportedWorldVoxelDef{X: 2, Y: 0, Z: 0, Value: 5}) {
 		t.Fatalf("unexpected persisted imported runtime snapshot: %+v", snapshot)
+	}
+}
+
+func TestStreamedRuntimeRuntimeEditedImportedWorldChunkQueuesNavigationRebuildWhileLoaded(t *testing.T) {
+	root := t.TempDir()
+	deltaPath := filepath.Join(root, "levels", "runtime-nav-edit.gkworlddelta")
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.LevelID = "runtime-nav-edit"
+	state.Level = content.NewLevelDef("runtime-nav-edit")
+	state.Level.ChunkSize = 16
+	state.BaseWorldID = "world-a"
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "runtime-nav-edit"}
+	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	state.BaseNavManifest = &content.NavManifestDef{
+		NavID:           "nav-runtime-edit",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "runtime-nav-edit",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  "builder-a",
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles:   []content.NavAgentProfileDef{content.DefaultHL1NavAgentProfile()},
+	}
+	content.EnsureNavManifestDefaults(state.BaseNavManifest)
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "runtime-nav-edit"})
+	coord := ChunkCoord{X: 0, Y: 0, Z: 0}
+
+	_, err := commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, streamedPreparedChunk{
+		Coord: coord,
+		ImportedWorldChunk: &content.ImportedWorldChunkDef{
+			WorldID:            "world-a",
+			Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkSize:          16,
+			VoxelResolution:    1,
+			Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+			NonEmptyVoxelCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedChunk failed: %v", err)
+	}
+	loaded := state.LoadedChunks[coord]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected loaded imported chunk, got %+v", state.LoadedChunks)
+	}
+	var entity EntityId
+	for eid := range loaded.ImportedWorldEntities {
+		entity = eid
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	assetMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+	if !ok {
+		t.Fatalf("expected imported chunk geometry to resolve")
+	}
+	runtimeMap := assetMap.Copy()
+	runtimeObj := core.NewVoxelObject()
+	runtimeObj.XBrickMap = runtimeMap
+	rtState := &VoxelRtState{
+		instanceMap:                 map[EntityId]*core.VoxelObject{entity: runtimeObj},
+		runtimeEditedVoxelEntities:  make(map[EntityId]struct{}),
+		runtimeEditedVoxelRevisions: make(map[EntityId]uint64),
+	}
+	cmd.AddResources(rtState)
+
+	rtState.VoxelSphereEdit(entity, mgl32.Vec3{0.5, 0.5, 0.5}, 0.75, 0)
+	streamedLevelRuntimeEditedNavigationRebuildSystem(cmd, state)
+	if len(state.NavigationRebuilds) != 1 {
+		t.Fatalf("expected one runtime edit navigation rebuild, got %d", len(state.NavigationRebuilds))
+	}
+	if state.Metrics.NavigationRebuildQueueDepth != 1 {
+		t.Fatalf("expected navigation rebuild queue metric 1, got %+v", state.Metrics)
+	}
+	if state.NavigationRebuilds[0].DirtyCoords[0] != (content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}) {
+		t.Fatalf("unexpected dirty coords: %+v", state.NavigationRebuilds[0].DirtyCoords)
+	}
+	if chunk := state.NavigationRebuilds[0].Chunks[content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}]; chunk == nil || chunk.NonEmptyVoxelCount != 0 {
+		t.Fatalf("expected runtime-edited empty chunk snapshot in nav rebuild, got %+v", chunk)
+	}
+	loadedDelta, err := content.LoadWorldDelta(deltaPath)
+	if err != nil {
+		t.Fatalf("LoadWorldDelta after first runtime nav edit failed: %v", err)
+	}
+	if len(loadedDelta.ImportedWorldChunkOverrides) != 1 {
+		t.Fatalf("expected runtime nav edit to persist imported chunk override, got %+v", loadedDelta.ImportedWorldChunkOverrides)
+	}
+	firstSnapshot, err := content.LoadImportedWorldChunk(content.ResolveDocumentPath(loadedDelta.ImportedWorldChunkOverrides[0].SnapshotPath, deltaPath))
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk first runtime nav edit failed: %v", err)
+	}
+	if firstSnapshot.NonEmptyVoxelCount != 0 {
+		t.Fatalf("expected first runtime nav edit geometry snapshot to be empty, got %+v", firstSnapshot)
+	}
+
+	streamedLevelRuntimeEditedNavigationRebuildSystem(cmd, state)
+	if len(state.NavigationRebuilds) != 1 {
+		t.Fatalf("expected duplicate detector pass not to enqueue, got %d", len(state.NavigationRebuilds))
+	}
+
+	rtState.VoxelSphereEdit(entity, mgl32.Vec3{2.5, 0.5, 0.5}, 0.75, 5)
+	streamedLevelRuntimeEditedNavigationRebuildSystem(cmd, state)
+	if len(state.NavigationRebuilds) != 1 {
+		t.Fatalf("expected runtime edit while rebuild is pending to coalesce, got %d", len(state.NavigationRebuilds))
+	}
+	state.NavigationRebuilds = nil
+	state.Metrics.NavigationRebuildQueueDepth = 0
+	streamedLevelRuntimeEditedNavigationRebuildSystem(cmd, state)
+	if len(state.NavigationRebuilds) != 1 {
+		t.Fatalf("expected latest runtime edit revision to enqueue after pending rebuild clears, got %d", len(state.NavigationRebuilds))
+	}
+	if chunk := state.NavigationRebuilds[0].Chunks[content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}]; chunk == nil || chunk.NonEmptyVoxelCount != 1 || len(chunk.Voxels) != 1 || chunk.Voxels[0] != (content.ImportedWorldVoxelDef{X: 2, Y: 0, Z: 0, Value: 5}) {
+		t.Fatalf("expected second runtime-edited chunk snapshot in nav rebuild, got %+v", chunk)
+	}
+	loadedDelta, err = content.LoadWorldDelta(deltaPath)
+	if err != nil {
+		t.Fatalf("LoadWorldDelta after second runtime nav edit failed: %v", err)
+	}
+	if len(loadedDelta.ImportedWorldChunkOverrides) != 1 {
+		t.Fatalf("expected second runtime nav edit to keep one imported chunk override, got %+v", loadedDelta.ImportedWorldChunkOverrides)
+	}
+	secondSnapshot, err := content.LoadImportedWorldChunk(content.ResolveDocumentPath(loadedDelta.ImportedWorldChunkOverrides[0].SnapshotPath, deltaPath))
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk second runtime nav edit failed: %v", err)
+	}
+	if secondSnapshot.NonEmptyVoxelCount != 1 || len(secondSnapshot.Voxels) != 1 || secondSnapshot.Voxels[0] != (content.ImportedWorldVoxelDef{X: 2, Y: 0, Z: 0, Value: 5}) {
+		t.Fatalf("expected second runtime nav edit geometry snapshot to contain latest voxel, got %+v", secondSnapshot)
+	}
+}
+
+func TestStreamedRuntimeRuntimeEditedNavigationRebuildDebouncesLatestEdit(t *testing.T) {
+	root := t.TempDir()
+	deltaPath := filepath.Join(root, "levels", "runtime-nav-debounce.gkworlddelta")
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.Config.RuntimeNavigationEditDebounce = 100 * time.Millisecond
+	state.LevelID = "runtime-nav-debounce"
+	state.Level = content.NewLevelDef("runtime-nav-debounce")
+	state.Level.ChunkSize = 16
+	state.BaseWorldID = "world-a"
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "runtime-nav-debounce"}
+	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	state.BaseNavManifest = &content.NavManifestDef{
+		NavID:           "nav-runtime-debounce",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "runtime-nav-debounce",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  "builder-a",
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles:   []content.NavAgentProfileDef{content.DefaultHL1NavAgentProfile()},
+	}
+	content.EnsureNavManifestDefaults(state.BaseNavManifest)
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "runtime-nav-debounce"})
+	coord := ChunkCoord{X: 0, Y: 0, Z: 0}
+
+	_, err := commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, streamedPreparedChunk{
+		Coord: coord,
+		ImportedWorldChunk: &content.ImportedWorldChunkDef{
+			WorldID:            "world-a",
+			Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkSize:          16,
+			VoxelResolution:    1,
+			Voxels:             []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}},
+			NonEmptyVoxelCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedChunk failed: %v", err)
+	}
+	loaded := state.LoadedChunks[coord]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected loaded imported chunk, got %+v", state.LoadedChunks)
+	}
+	var entity EntityId
+	for eid := range loaded.ImportedWorldEntities {
+		entity = eid
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	assetMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+	if !ok {
+		t.Fatalf("expected imported chunk geometry to resolve")
+	}
+	runtimeMap := assetMap.Copy()
+	runtimeObj := core.NewVoxelObject()
+	runtimeObj.XBrickMap = runtimeMap
+	rtState := &VoxelRtState{
+		instanceMap:                 map[EntityId]*core.VoxelObject{entity: runtimeObj},
+		runtimeEditedVoxelEntities:  make(map[EntityId]struct{}),
+		runtimeEditedVoxelRevisions: make(map[EntityId]uint64),
+	}
+	cmd.AddResources(rtState)
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+
+	rtState.VoxelSphereEdit(entity, mgl32.Vec3{0.5, 0.5, 0.5}, 0.75, 0)
+	streamedLevelRuntimeEditedNavigationRebuildSystemAt(cmd, state, now)
+	if len(state.NavigationRebuilds) != 0 || state.Metrics.NavigationRuntimeEditPendingCount != 1 {
+		t.Fatalf("expected first edit to wait in pending debounce, rebuilds=%d metrics=%+v", len(state.NavigationRebuilds), state.Metrics)
+	}
+
+	rtState.VoxelSphereEdit(entity, mgl32.Vec3{2.5, 0.5, 0.5}, 0.75, 5)
+	streamedLevelRuntimeEditedNavigationRebuildSystemAt(cmd, state, now.Add(50*time.Millisecond))
+	if len(state.NavigationRebuilds) != 0 || state.Metrics.NavigationRuntimeEditPendingCount != 1 {
+		t.Fatalf("expected updated edit revision to remain pending, rebuilds=%d metrics=%+v", len(state.NavigationRebuilds), state.Metrics)
+	}
+	streamedLevelRuntimeEditedNavigationRebuildSystemAt(cmd, state, now.Add(120*time.Millisecond))
+	if len(state.NavigationRebuilds) != 0 {
+		t.Fatalf("expected latest edit not to be ready before reset debounce, got %d rebuilds", len(state.NavigationRebuilds))
+	}
+	streamedLevelRuntimeEditedNavigationRebuildSystemAt(cmd, state, now.Add(200*time.Millisecond))
+	if len(state.NavigationRebuilds) != 1 || state.Metrics.NavigationRuntimeEditPendingCount != 0 {
+		t.Fatalf("expected one debounced rebuild for latest edit, rebuilds=%d metrics=%+v", len(state.NavigationRebuilds), state.Metrics)
+	}
+	if chunk := state.NavigationRebuilds[0].Chunks[content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}]; chunk == nil || chunk.NonEmptyVoxelCount != 1 || len(chunk.Voxels) != 1 || chunk.Voxels[0] != (content.ImportedWorldVoxelDef{X: 2, Y: 0, Z: 0, Value: 5}) {
+		t.Fatalf("expected debounced rebuild to snapshot latest edit only, got %+v", chunk)
+	}
+}
+
+func TestStreamedRuntimeRuntimeEditedImportedWorldHoleRebuildsEffectiveNav(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "runtime-hole.gknav")
+	staticTilePath := filepath.Join(root, "worlds", "runtime-hole_navtiles", "tiny_0_0_0.gknavtile")
+	deltaPath := filepath.Join(root, "levels", "runtime-hole.gkworlddelta")
+	profile := content.NavAgentProfileDef{
+		ID:              "tiny",
+		Radius:          0.2,
+		Height:          1.0,
+		StepHeight:      0.5,
+		MaxSlopeDegrees: 45,
+	}
+	content.EnsureNavAgentProfileDefaults(&profile)
+	coord := content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	fullField := streamedRuntimeTestFloorVoxels(1, 14, 1, 14, 0)
+	baseChunk := &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              coord,
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             fullField,
+		NonEmptyVoxelCount: len(fullField),
+	}
+	baseTile, err := content.BuildNavTileFromImportedWorldChunk(baseChunk, profile, content.NavTileBuildOptions{NavID: "nav-runtime-hole"})
+	if err != nil {
+		t.Fatalf("BuildNavTileFromImportedWorldChunk failed: %v", err)
+	}
+	if err := content.SaveNavTile(staticTilePath, baseTile.Tile); err != nil {
+		t.Fatalf("SaveNavTile failed: %v", err)
+	}
+	baseNav := &content.NavManifestDef{
+		NavID:           "nav-runtime-hole",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "runtime-hole",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  "builder-a",
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles:   []content.NavAgentProfileDef{profile},
+		Tiles: []content.NavTileEntryDef{{
+			Coord:          coord,
+			AgentProfileID: profile.ID,
+			TilePath:       content.AuthorDocumentPath(staticTilePath, navPath),
+			BoundsMin:      baseTile.Tile.BoundsMin,
+			BoundsMax:      baseTile.Tile.BoundsMax,
+		}},
+	}
+	if err := content.SaveNavManifest(navPath, baseNav); err != nil {
+		t.Fatalf("SaveNavManifest failed: %v", err)
+	}
+
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.LevelID = "runtime-hole"
+	state.Level = content.NewLevelDef("runtime-hole")
+	state.Level.ChunkSize = 16
+	state.BaseWorldID = "world-a"
+	state.BaseNavManifestPath = navPath
+	state.BaseNavManifest = baseNav
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "runtime-hole"}
+	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "runtime-hole"})
+	chunkCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	_, err = commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, streamedPreparedChunk{
+		Coord:              chunkCoord,
+		ImportedWorldChunk: baseChunk,
+	})
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedChunk failed: %v", err)
+	}
+	loaded := state.LoadedChunks[chunkCoord]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected loaded imported chunk, got %+v", state.LoadedChunks)
+	}
+	var entity EntityId
+	for eid := range loaded.ImportedWorldEntities {
+		entity = eid
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	assetMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+	if !ok {
+		t.Fatalf("expected imported chunk geometry to resolve")
+	}
+	runtimeMap := assetMap.Copy()
+	for x := 6; x <= 9; x++ {
+		for z := 6; z <= 9; z++ {
+			runtimeMap.SetVoxel(x, 0, z, 0)
+		}
+	}
+	runtimeObj := core.NewVoxelObject()
+	runtimeObj.XBrickMap = runtimeMap
+	rtState := &VoxelRtState{
+		instanceMap:                 map[EntityId]*core.VoxelObject{entity: runtimeObj},
+		runtimeEditedVoxelEntities:  make(map[EntityId]struct{}),
+		runtimeEditedVoxelRevisions: make(map[EntityId]uint64),
+	}
+	cmd.AddResources(rtState)
+	rtState.markRuntimeEditedVoxelEntity(entity)
+
+	streamedLevelRuntimeEditedNavigationRebuildSystem(cmd, state)
+	if len(state.NavigationRebuilds) != 1 {
+		t.Fatalf("expected runtime edit to queue nav rebuild, got %d", len(state.NavigationRebuilds))
+	}
+	if err := DrainStreamedLevelNavigationRebuilds(state, 2*time.Second); err != nil {
+		t.Fatalf("DrainStreamedLevelNavigationRebuilds failed: %v", err)
+	}
+	if state.NavigationRevision == 0 || state.Metrics.NavigationRebuildCount != 1 {
+		t.Fatalf("expected completed navigation rebuild, rev=%d metrics=%+v", state.NavigationRevision, state.Metrics)
+	}
+	if len(state.WorldDelta.NavigationTileOverrides) != 1 {
+		t.Fatalf("expected one runtime delta nav override, got %+v", state.WorldDelta.NavigationTileOverrides)
+	}
+	if len(state.WorldDelta.ImportedWorldChunkOverrides) != 1 {
+		t.Fatalf("expected runtime edited hole geometry override to persist with nav, got %+v", state.WorldDelta.ImportedWorldChunkOverrides)
+	}
+	editedSnapshot, err := content.LoadImportedWorldChunk(content.ResolveDocumentPath(state.WorldDelta.ImportedWorldChunkOverrides[0].SnapshotPath, deltaPath))
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk edited hole failed: %v", err)
+	}
+	for _, voxel := range editedSnapshot.Voxels {
+		if voxel.Y == 0 && voxel.X >= 6 && voxel.X <= 9 && voxel.Z >= 6 && voxel.Z <= 9 {
+			t.Fatalf("expected persisted edited geometry to exclude hole voxel %+v, snapshot=%+v", voxel, editedSnapshot)
+		}
+	}
+	blocked, err := content.FindEffectiveNavPath(baseNav, navPath, state.WorldDelta, deltaPath, content.Vec3{2.5, 1, 2.5}, content.Vec3{7.5, 1, 7.5}, content.NavPathOptions{
+		AgentProfileID:       profile.ID,
+		MaxTileSearchRadius:  1,
+		EndpointSnapDistance: 0.2,
+	})
+	if err != nil {
+		t.Fatalf("FindEffectiveNavPath blocked endpoint failed: %v", err)
+	}
+	if blocked.Found || blocked.FailureReason != content.NavPathFailureEndPolygonMissing {
+		t.Fatalf("expected edited hole endpoint to be rejected, got %+v", blocked)
+	}
+	around, err := content.FindEffectiveNavPath(baseNav, navPath, state.WorldDelta, deltaPath, content.Vec3{2.5, 1, 2.5}, content.Vec3{13.5, 1, 13.5}, content.NavPathOptions{
+		AgentProfileID:       profile.ID,
+		MaxTileSearchRadius:  1,
+		EndpointSnapDistance: 0.2,
+	})
+	if err != nil {
+		t.Fatalf("FindEffectiveNavPath around hole failed: %v", err)
+	}
+	if !around.Found {
+		t.Fatalf("expected path around edited hole to remain available, got %+v", around)
 	}
 }
 
@@ -3274,6 +3775,16 @@ func driveStreamedRuntimeUntil(t *testing.T, app *App, done func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for streamed runtime")
+}
+
+func streamedRuntimeTestFloorVoxels(minX, maxX, minZ, maxZ, y int) []content.ImportedWorldVoxelDef {
+	out := make([]content.ImportedWorldVoxelDef, 0, (maxX-minX+1)*(maxZ-minZ+1))
+	for x := minX; x <= maxX; x++ {
+		for z := minZ; z <= maxZ; z++ {
+			out = append(out, content.ImportedWorldVoxelDef{X: x, Y: y, Z: z, Value: 1})
+		}
+	}
+	return out
 }
 
 func placementEntityByIDForStreamedTest(cmd *Commands, placementID string) EntityId {

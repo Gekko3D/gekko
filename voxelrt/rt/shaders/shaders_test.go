@@ -27,6 +27,22 @@ func TestBillboardShadersApplyWebGPUClipZConversion(t *testing.T) {
 	}
 }
 
+func TestGizmoShaderOccludesAgainstSceneDepth(t *testing.T) {
+	for _, needle := range []string{
+		"@fragment",
+		"fn fs_main",
+		"textureLoad(depth_tex",
+		"visible_scene_depth",
+		"GIZMO_DEPTH_MODE_ALWAYS_VISIBLE",
+		"in.depth_mode < GIZMO_DEPTH_MODE_ALWAYS_VISIBLE",
+		"discard",
+	} {
+		if !strings.Contains(GizmoWGSL, needle) {
+			t.Fatalf("gizmo shader missing scene-depth occlusion contract %q", needle)
+		}
+	}
+}
+
 func TestAstronomicalShaderIsEmbedded(t *testing.T) {
 	for _, needle := range []string{
 		"struct AstronomicalRecord",

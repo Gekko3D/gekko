@@ -168,7 +168,8 @@ func npcNavigationRouteOptions(nav *NPCNavigationComponent) content.NavHierarchi
 			AgentProfileID:      nav.AgentProfileID,
 			MaxTileSearchRadius: nav.MaxTileSearchRadius,
 		},
-		DisableLocalRefinement: nav.DisableLocalRefinement,
+		DisableLocalRefinement:     nav.DisableLocalRefinement,
+		AllowLocalCorridorFallback: !nav.DisableLocalRefinement,
 	}
 }
 

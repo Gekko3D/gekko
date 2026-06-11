@@ -4,10 +4,14 @@ const (
 	CurrentNavManifestSchemaVersion = 1
 	CurrentNavTileSchemaVersion     = 1
 
-	DefaultNavBuilderVersion   = "voxel_nav_v2"
+	DefaultNavBuilderVersion   = "voxel_nav_v27"
 	DefaultNavAgentProfileID   = "hl1_standing"
+	DefaultNavCellSize         = 0.3
 	NavTilePayloadJSONV1       = "nav_tile_json_v1"
 	NavTraversalWalk           = "walk"
+	NavTraversalRamp           = "ramp"
+	NavTraversalStair          = "stair"
+	NavTraversalStep           = "step"
 	NavTraversalCrouch         = "crouch"
 	NavTraversalJump           = "jump"
 	NavTraversalDrop           = "drop"
@@ -15,21 +19,26 @@ const (
 	NavTraversalSwim           = "swim"
 	NavTraversalDoor           = "door"
 	NavTraversalMovingPlatform = "moving_platform"
+	NavBorderEdgeMinX          = "x_min"
+	NavBorderEdgeMaxX          = "x_max"
+	NavBorderEdgeMinZ          = "z_min"
+	NavBorderEdgeMaxZ          = "z_max"
 )
 
 type NavManifestDef struct {
-	NavID           string               `json:"nav_id"`
-	SchemaVersion   int                  `json:"schema_version"`
-	LevelID         string               `json:"level_id,omitempty"`
-	SourceWorldID   string               `json:"source_world_id,omitempty"`
-	SourceLevelHash string               `json:"source_level_hash,omitempty"`
-	BuilderVersion  string               `json:"builder_version,omitempty"`
-	ChunkSize       int                  `json:"chunk_size"`
-	VoxelResolution float32              `json:"voxel_resolution"`
-	AgentProfiles   []NavAgentProfileDef `json:"agent_profiles,omitempty"`
-	Tiles           []NavTileEntryDef    `json:"tiles,omitempty"`
-	Sectors         []NavSectorEntryDef  `json:"sectors,omitempty"`
-	Tags            []string             `json:"tags,omitempty"`
+	NavID                string                           `json:"nav_id"`
+	SchemaVersion        int                              `json:"schema_version"`
+	LevelID              string                           `json:"level_id,omitempty"`
+	SourceWorldID        string                           `json:"source_world_id,omitempty"`
+	SourceLevelHash      string                           `json:"source_level_hash,omitempty"`
+	BuilderVersion       string                           `json:"builder_version,omitempty"`
+	ChunkSize            int                              `json:"chunk_size"`
+	VoxelResolution      float32                          `json:"voxel_resolution"`
+	AgentProfiles        []NavAgentProfileDef             `json:"agent_profiles,omitempty"`
+	Tiles                []NavTileEntryDef                `json:"tiles,omitempty"`
+	ClearanceSourceTiles []NavClearanceSourceTileEntryDef `json:"clearance_source_tiles,omitempty"`
+	Sectors              []NavSectorEntryDef              `json:"sectors,omitempty"`
+	Tags                 []string                         `json:"tags,omitempty"`
 }
 
 type NavAgentProfileDef struct {
@@ -39,6 +48,7 @@ type NavAgentProfileDef struct {
 	Height          float32  `json:"height"`
 	CrouchHeight    float32  `json:"crouch_height,omitempty"`
 	StepHeight      float32  `json:"step_height"`
+	NavCellSize     float32  `json:"nav_cell_size,omitempty"`
 	MaxSlopeDegrees float32  `json:"max_slope_degrees"`
 	MaxDropHeight   float32  `json:"max_drop_height,omitempty"`
 	MaxJumpUp       float32  `json:"max_jump_up,omitempty"`
@@ -62,6 +72,19 @@ type NavTileEntryDef struct {
 	BoundsMin         [3]float32           `json:"bounds_min"`
 	BoundsMax         [3]float32           `json:"bounds_max"`
 	Tags              []string             `json:"tags,omitempty"`
+}
+
+type NavClearanceSourceTileEntryDef struct {
+	Coord              TerrainChunkCoordDef `json:"coord"`
+	TilePath           string               `json:"tile_path"`
+	PayloadKind        string               `json:"payload_kind,omitempty"`
+	SourcePayloadHash  string               `json:"source_payload_hash,omitempty"`
+	SourceDeltaHash    string               `json:"source_delta_hash,omitempty"`
+	NavBuildHash       string               `json:"nav_build_hash,omitempty"`
+	BoundsMin          [3]float32           `json:"bounds_min"`
+	BoundsMax          [3]float32           `json:"bounds_max"`
+	MaxClearanceRadius float32              `json:"max_clearance_radius,omitempty"`
+	Tags               []string             `json:"tags,omitempty"`
 }
 
 type NavSectorEntryDef struct {
@@ -99,6 +122,8 @@ type NavTileDef struct {
 	BoundsMax         [3]float32           `json:"bounds_max"`
 	Vertices          []Vec3               `json:"vertices,omitempty"`
 	Polygons          []NavPolygonDef      `json:"polygons,omitempty"`
+	BorderSpans       []NavBorderSpanDef   `json:"border_spans,omitempty"`
+	Portals           []NavPortalDef       `json:"portals,omitempty"`
 	OffMeshLinks      []NavOffMeshLinkDef  `json:"off_mesh_links,omitempty"`
 	Tags              []string             `json:"tags,omitempty"`
 }
@@ -111,18 +136,40 @@ type NavPolygonDef struct {
 	Neighbors []string `json:"neighbors,omitempty"`
 }
 
+type NavBorderSpanDef struct {
+	PolygonID string  `json:"polygon_id"`
+	Edge      string  `json:"edge"`
+	Min       float32 `json:"min"`
+	Max       float32 `json:"max"`
+	Area      string  `json:"area,omitempty"`
+}
+
+type NavPortalDef struct {
+	ID            string               `json:"id"`
+	FromPolygonID string               `json:"from_polygon_id"`
+	ToTileCoord   TerrainChunkCoordDef `json:"to_tile_coord"`
+	ToPolygonID   string               `json:"to_polygon_id"`
+	Start         Vec3                 `json:"start"`
+	End           Vec3                 `json:"end"`
+	Area          string               `json:"area,omitempty"`
+	Cost          float32              `json:"cost,omitempty"`
+}
+
 type NavOffMeshLinkDef struct {
-	ID            string   `json:"id"`
-	Kind          string   `json:"kind"`
-	Start         Vec3     `json:"start"`
-	End           Vec3     `json:"end"`
-	Radius        float32  `json:"radius,omitempty"`
-	Cost          float32  `json:"cost,omitempty"`
-	Bidirectional bool     `json:"bidirectional,omitempty"`
-	TargetName    string   `json:"target_name,omitempty"`
-	Openable      bool     `json:"openable,omitempty"`
-	RequiresTag   string   `json:"requires_tag,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
+	ID            string               `json:"id"`
+	Kind          string               `json:"kind"`
+	FromPolygonID string               `json:"from_polygon_id,omitempty"`
+	ToTileCoord   TerrainChunkCoordDef `json:"to_tile_coord,omitempty"`
+	ToPolygonID   string               `json:"to_polygon_id,omitempty"`
+	Start         Vec3                 `json:"start"`
+	End           Vec3                 `json:"end"`
+	Radius        float32              `json:"radius,omitempty"`
+	Cost          float32              `json:"cost,omitempty"`
+	Bidirectional bool                 `json:"bidirectional,omitempty"`
+	TargetName    string               `json:"target_name,omitempty"`
+	Openable      bool                 `json:"openable,omitempty"`
+	RequiresTag   string               `json:"requires_tag,omitempty"`
+	Tags          []string             `json:"tags,omitempty"`
 }
 
 func NewNavManifestDef(navID string) *NavManifestDef {
@@ -146,6 +193,7 @@ func DefaultHL1NavAgentProfile() NavAgentProfileDef {
 		Height:          1.8288,
 		CrouchHeight:    0.9144,
 		StepHeight:      0.4572,
+		NavCellSize:     DefaultNavCellSize,
 		MaxSlopeDegrees: 45,
 		MaxDropHeight:   0.9144,
 		CanCrouch:       true,
@@ -179,6 +227,9 @@ func EnsureNavManifestDefaults(def *NavManifestDef) {
 	for i := range def.Tiles {
 		EnsureNavTileEntryDefaults(&def.Tiles[i])
 	}
+	for i := range def.ClearanceSourceTiles {
+		EnsureNavClearanceSourceTileEntryDefaults(&def.ClearanceSourceTiles[i])
+	}
 	for i := range def.Sectors {
 		EnsureNavSectorDefaults(&def.Sectors[i])
 	}
@@ -204,6 +255,9 @@ func EnsureNavAgentProfileDefaults(profile *NavAgentProfileDef) {
 	if profile.StepHeight == 0 {
 		profile.StepHeight = defaults.StepHeight
 	}
+	if profile.NavCellSize == 0 {
+		profile.NavCellSize = defaults.NavCellSize
+	}
 	if profile.MaxSlopeDegrees == 0 {
 		profile.MaxSlopeDegrees = defaults.MaxSlopeDegrees
 	}
@@ -218,6 +272,15 @@ func EnsureNavTileEntryDefaults(entry *NavTileEntryDef) {
 	}
 	if entry.PayloadKind == "" {
 		entry.PayloadKind = NavTilePayloadJSONV1
+	}
+}
+
+func EnsureNavClearanceSourceTileEntryDefaults(entry *NavClearanceSourceTileEntryDef) {
+	if entry == nil {
+		return
+	}
+	if entry.PayloadKind == "" {
+		entry.PayloadKind = NavClearanceSourceTilePayloadJSONV1
 	}
 }
 

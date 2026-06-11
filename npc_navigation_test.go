@@ -19,6 +19,21 @@ func TestNPCNavigationComponentSetTargetMarksRequestDirty(t *testing.T) {
 	}
 }
 
+func TestNPCNavigationRouteOptionsAllowsCorridorFallback(t *testing.T) {
+	opts := npcNavigationRouteOptions(&NPCNavigationComponent{
+		Enabled:             true,
+		AgentProfileID:      "tiny",
+		MaxTileSearchRadius: 3,
+	})
+
+	if !opts.AllowLocalCorridorFallback {
+		t.Fatalf("expected NPC route options to allow corridor fallback, got %+v", opts)
+	}
+	if opts.LocalPath.AgentProfileID != "tiny" || opts.LocalPath.MaxTileSearchRadius != 3 {
+		t.Fatalf("unexpected local path options: %+v", opts.LocalPath)
+	}
+}
+
 func TestUpdateNPCNavigationRoutesStoresRefinedRoute(t *testing.T) {
 	root := t.TempDir()
 	navPath := filepath.Join(root, "worlds", "npc.gknav")

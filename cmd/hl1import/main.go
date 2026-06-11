@@ -139,9 +139,11 @@ func main() {
 		progressPrinter.Done(hl1.ImportProgressStageBuildLevel, levelResult.LevelPath)
 		summary.Report.GeneratedLevelPath = levelResult.LevelPath
 	}
+	var debugSaveStats importcommon.ImportedWorldSaveStats
 	if emitDebugWorld {
 		progressPrinter.Start(hl1.ImportProgressStageSaveDebugWorld, debugResult.ManifestPath)
-		if err := hl1.SaveDebugWorld(debugResult); err != nil {
+		debugSaveStats, err = hl1.SaveDebugWorldWithStats(debugResult)
+		if err != nil {
 			fatalf("save debug world: %v", err)
 		}
 		progressPrinter.Done(hl1.ImportProgressStageSaveDebugWorld, debugResult.ManifestPath)
@@ -185,6 +187,7 @@ func main() {
 		fmt.Printf("debug world mode: %s\n", debugResult.Mode)
 		fmt.Printf("debug world chunk payload: %s\n", debugWorldPayloadKind(debugResult))
 		fmt.Printf("aux sidecars: %d\n", importedWorldAuxSidecarCount(debugResult.Emission.Manifest))
+		fmt.Printf("incremental save: %s\n", hl1ImportSaveStatsString(debugSaveStats))
 		fmt.Printf("debug voxels: %d surface, %d filled, %d chunks\n", debugResult.Voxelize.SurfaceCount, debugResult.Voxelize.FilledCount, len(debugResult.Emission.Chunks))
 		if debugResult.Mode == hl1.DebugWorldModeSolid {
 			fmt.Printf("sampled cells: %d, playable empty: %d, solid band depth: %d\n", debugResult.Voxelize.SampledCount, debugResult.Voxelize.PlayableEmptyCount, opts.SolidBandDepth)
@@ -222,6 +225,21 @@ func main() {
 	if opts.ExportProfile != hl1.HL1ExportProfileDefault {
 		fmt.Printf("export profile: %s\n", opts.ExportProfile)
 	}
+}
+
+func hl1ImportSaveStatsString(stats importcommon.ImportedWorldSaveStats) string {
+	return fmt.Sprintf("chunks written=%d skipped=%d aux written=%d skipped=%d reused=%d proxies written=%d skipped=%d proxy_aux written=%d skipped=%d reused=%d",
+		stats.ChunksWritten,
+		stats.ChunksSkipped,
+		stats.ChunkAuxWritten,
+		stats.ChunkAuxSkipped,
+		stats.ChunkAuxReused,
+		stats.ProxyChunksWritten,
+		stats.ProxyChunksSkipped,
+		stats.ProxyAuxWritten,
+		stats.ProxyAuxSkipped,
+		stats.ProxyAuxReused,
+	)
 }
 
 func importedWorldAuxSidecarCount(def *content.ImportedWorldDef) int {

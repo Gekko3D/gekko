@@ -16,6 +16,7 @@ type GizmoOverlayItem struct {
 	Type        core.GizmoType
 	Color       [4]float32
 	ModelMatrix mgl32.Mat4
+	DepthMode   core.GizmoDepthMode
 }
 
 type GizmoResources struct {
@@ -106,6 +107,7 @@ func (a *App) AppendGizmoOverlayItems(items []GizmoOverlayItem) {
 			Type:        item.Type,
 			Color:       item.Color,
 			ModelMatrix: item.ModelMatrix,
+			DepthMode:   item.DepthMode,
 		})
 	}
 }

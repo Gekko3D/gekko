@@ -177,17 +177,18 @@ type ImportProgress struct {
 }
 
 const (
-	ImportProgressStageBuildSummary       = "build_summary"
-	ImportProgressStageBuildDebugWorld    = "build_debug_world"
-	ImportProgressStageBuildGameAssets    = "build_game_assets"
-	ImportProgressStageBuildLevel         = "build_level"
-	ImportProgressStageSaveDebugWorld     = "save_debug_world"
-	ImportProgressStageSaveLevel          = "save_level"
-	ImportProgressStageSaveLevelAssets    = "save_level_assets"
-	ImportProgressStageSaveAuxSidecars    = "save_aux_sidecars"
-	ImportProgressStageSaveNavigationBake = "save_navigation_bake"
-	ImportProgressStageSaveGameAssets     = "save_game_assets"
-	ImportProgressStageSaveReport         = "save_report"
+	ImportProgressStageBuildSummary         = "build_summary"
+	ImportProgressStageBuildDebugWorld      = "build_debug_world"
+	ImportProgressStageBuildGameAssets      = "build_game_assets"
+	ImportProgressStageBuildLevel           = "build_level"
+	ImportProgressStageSaveDebugWorld       = "save_debug_world"
+	ImportProgressStageSaveLevel            = "save_level"
+	ImportProgressStageSaveLevelAssets      = "save_level_assets"
+	ImportProgressStageSaveAuxSidecars      = "save_aux_sidecars"
+	ImportProgressStageSaveNavigationSource = "save_navigation_source"
+	ImportProgressStageSaveNavigationBake   = "save_navigation_bake"
+	ImportProgressStageSaveGameAssets       = "save_game_assets"
+	ImportProgressStageSaveReport           = "save_report"
 )
 
 func reportImportProgress(progress ImportProgressFunc, event ImportProgress) {

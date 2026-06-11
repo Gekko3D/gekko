@@ -39,6 +39,11 @@ func DefaultCharacterGroundVisualConfig() CharacterGroundVisualConfig {
 }
 
 func CharacterGroundHitAt(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg CharacterGroundProbeConfig, maxSnapUp float32, acceptEntity func(EntityId, bool) bool) (CharacterGroundHit, bool) {
+	groundProbe := defaultCharacterGroundFloat(cfg.GroundProbe, 0.15)
+	return CharacterGroundHitAtWithin(voxRt, basePos, cfg, maxSnapUp, maxCharacterGroundFloat(groundProbe, 4.0), acceptEntity)
+}
+
+func CharacterGroundHitAtWithin(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg CharacterGroundProbeConfig, maxSnapUp, maxSnapDown float32, acceptEntity func(EntityId, bool) bool) (CharacterGroundHit, bool) {
 	if voxRt == nil {
 		return CharacterGroundHit{}, false
 	}
@@ -46,7 +51,7 @@ func CharacterGroundHitAt(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg Character
 	stepHeight := defaultCharacterGroundFloat(cfg.StepHeight, 0.6)
 	groundProbe := defaultCharacterGroundFloat(cfg.GroundProbe, 0.15)
 	probeHeight := stepHeight + groundProbe
-	probeDistance := probeHeight + maxCharacterGroundFloat(groundProbe, 4.0)
+	probeDistance := probeHeight + maxCharacterGroundFloat(maxSnapDown, groundProbe)
 	minNormalY := CharacterMinWalkableNormalY(cfg)
 	best := CharacterGroundHit{}
 	found := false

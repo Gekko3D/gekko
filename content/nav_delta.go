@@ -2,7 +2,7 @@ package content
 
 import (
 	"fmt"
-	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,11 +18,19 @@ type NavDeltaBakeOptions struct {
 	BuilderVersion     string
 	AgentProfiles      []NavAgentProfileDef
 	SourceOverrideKind string
+	BaseNavPath        string
 }
 
 type NavDeltaBakeResult struct {
 	Overrides []NavigationTileOverrideDef
 	Tiles     map[string]*NavTileDef
+}
+
+type NavImportedWorldDeltaBakeOptions struct {
+	DirtyCoords        []TerrainChunkCoordDef
+	BuilderVersion     string
+	AgentProfiles      []NavAgentProfileDef
+	SourceOverrideKind string
 }
 
 type NavDirtyTileExpansionOptions struct {
@@ -33,20 +41,12 @@ func ExpandNavDirtyTileCoords(modified []TerrainChunkCoordDef, chunkSize int, vo
 	if len(modified) == 0 {
 		return nil
 	}
-	includeHorizontalNeighbors, includeVerticalNeighbors := navDirtyNeighborAxes(chunkSize, voxelResolution, opts.AgentProfiles)
-	xzOffsets := []int{0}
-	if includeHorizontalNeighbors {
-		xzOffsets = []int{-1, 0, 1}
-	}
-	yOffsets := []int{0}
-	if includeVerticalNeighbors {
-		yOffsets = []int{-1, 0, 1}
-	}
+	reach := navBuildChunkReachForProfiles(chunkSize, voxelResolution, opts.AgentProfiles)
 	seen := make(map[TerrainChunkCoordDef]struct{}, len(modified))
 	for _, coord := range modified {
-		for _, dx := range xzOffsets {
-			for _, dy := range yOffsets {
-				for _, dz := range xzOffsets {
+		for dx := -reach.Horizontal; dx <= reach.Horizontal; dx++ {
+			for dy := -reach.Vertical; dy <= reach.Vertical; dy++ {
+				for dz := -reach.Horizontal; dz <= reach.Horizontal; dz++ {
 					seen[TerrainChunkCoordDef{X: coord.X + dx, Y: coord.Y + dy, Z: coord.Z + dz}] = struct{}{}
 				}
 			}
@@ -74,56 +74,87 @@ func DefaultWorldDeltaNavTileDir(deltaPath string, navID string, agentProfileID 
 	return filepath.Join(DefaultWorldDeltaDataDir(deltaPath), DefaultWorldDeltaNavDirName, navID, agentProfileID)
 }
 
-func navDirtyNeighborAxes(chunkSize int, voxelResolution float32, profiles []NavAgentProfileDef) (bool, bool) {
-	if chunkSize <= 0 || voxelResolution <= 0 {
-		return false, false
-	}
-	if len(profiles) == 0 {
-		profiles = []NavAgentProfileDef{DefaultHL1NavAgentProfile()}
-	}
-	maxHorizontalCells := 0
-	maxVerticalCells := 0
-	for _, profile := range profiles {
-		EnsureNavAgentProfileDefaults(&profile)
-		horizontalCells := int(math.Ceil(float64(profile.Radius / voxelResolution)))
-		verticalReach := maxNavDirtyProfileVerticalReach(profile)
-		verticalCells := int(math.Ceil(float64(verticalReach / voxelResolution)))
-		if horizontalCells > maxHorizontalCells {
-			maxHorizontalCells = horizontalCells
-		}
-		if verticalCells > maxVerticalCells {
-			maxVerticalCells = verticalCells
-		}
-	}
-	return maxHorizontalCells > 0, maxVerticalCells > 0
-}
-
-func maxNavDirtyProfileVerticalReach(profile NavAgentProfileDef) float32 {
-	maxReach := profile.Height
-	if profile.CrouchHeight > maxReach {
-		maxReach = profile.CrouchHeight
-	}
-	if profile.StepHeight > maxReach {
-		maxReach = profile.StepHeight
-	}
-	if profile.MaxDropHeight > maxReach {
-		maxReach = profile.MaxDropHeight
-	}
-	if profile.MaxJumpUp > maxReach {
-		maxReach = profile.MaxJumpUp
-	}
-	if profile.MaxJumpDown > maxReach {
-		maxReach = profile.MaxJumpDown
-	}
-	return maxReach
-}
-
 func DefaultWorldDeltaNavTilePath(deltaPath string, navID string, agentProfileID string, coord TerrainChunkCoordDef) string {
 	if strings.TrimSpace(agentProfileID) == "" {
 		agentProfileID = DefaultNavAgentProfileID
 	}
 	agentProfileID = sanitizeNavPathToken(agentProfileID)
 	return filepath.Join(DefaultWorldDeltaNavTileDir(deltaPath, navID, agentProfileID), fmt.Sprintf("%s_%d_%d_%d.gknavtile", agentProfileID, coord.X, coord.Y, coord.Z))
+}
+
+func SaveNavDeltaTilesForImportedWorldDelta(importedWorldManifestPath string, baseNavPath string, deltaPath string, opts NavImportedWorldDeltaBakeOptions) (NavDeltaBakeResult, error) {
+	importedWorldManifestPath = strings.TrimSpace(importedWorldManifestPath)
+	if importedWorldManifestPath == "" {
+		return NavDeltaBakeResult{}, fmt.Errorf("imported world manifest path is empty")
+	}
+	baseNavPath = strings.TrimSpace(baseNavPath)
+	if baseNavPath == "" {
+		return NavDeltaBakeResult{}, fmt.Errorf("base nav manifest path is empty")
+	}
+	deltaPath = strings.TrimSpace(deltaPath)
+	if deltaPath == "" {
+		return NavDeltaBakeResult{}, fmt.Errorf("world delta path is empty")
+	}
+	world, err := LoadImportedWorld(importedWorldManifestPath)
+	if err != nil {
+		return NavDeltaBakeResult{}, err
+	}
+	baseNav, err := LoadNavManifest(baseNavPath)
+	if err != nil {
+		return NavDeltaBakeResult{}, err
+	}
+	EnsureNavManifestDefaults(baseNav)
+	if baseNav.SourceWorldID != "" && world.WorldID != "" && baseNav.SourceWorldID != world.WorldID {
+		return NavDeltaBakeResult{}, fmt.Errorf("base nav source world %q does not match imported world %q", baseNav.SourceWorldID, world.WorldID)
+	}
+	if baseNav.ChunkSize > 0 && world.ChunkSize > 0 && baseNav.ChunkSize != world.ChunkSize {
+		return NavDeltaBakeResult{}, fmt.Errorf("base nav chunk size %d does not match imported world chunk size %d", baseNav.ChunkSize, world.ChunkSize)
+	}
+	if baseNav.VoxelResolution > 0 && world.VoxelResolution > 0 && navDeltaAbsf(baseNav.VoxelResolution-world.VoxelResolution) > 1e-4 {
+		return NavDeltaBakeResult{}, fmt.Errorf("base nav voxel resolution %.4f does not match imported world voxel resolution %.4f", baseNav.VoxelResolution, world.VoxelResolution)
+	}
+	delta, err := LoadWorldDelta(deltaPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return NavDeltaBakeResult{}, err
+		}
+		delta = &WorldDeltaDef{LevelID: baseNav.LevelID}
+	}
+	if delta.LevelID == "" {
+		delta.LevelID = baseNav.LevelID
+	}
+	bakeOpts := NavDeltaBakeOptions{
+		BuilderVersion:     opts.BuilderVersion,
+		AgentProfiles:      opts.AgentProfiles,
+		SourceOverrideKind: opts.SourceOverrideKind,
+		BaseNavPath:        baseNavPath,
+	}
+	bakeOpts = normalizeNavDeltaBakeOptions(baseNav, bakeOpts)
+	dirtyCoords := append([]TerrainChunkCoordDef(nil), opts.DirtyCoords...)
+	if len(dirtyCoords) == 0 {
+		dirtyCoords = importedWorldDeltaOverrideCoords(delta, world.WorldID)
+	}
+	if len(dirtyCoords) == 0 {
+		return NavDeltaBakeResult{Tiles: map[string]*NavTileDef{}}, nil
+	}
+	expandedCoords := ExpandNavDirtyTileCoords(dirtyCoords, world.ChunkSize, world.VoxelResolution, NavDirtyTileExpansionOptions{
+		AgentProfiles: bakeOpts.AgentProfiles,
+	})
+	chunks, err := loadEffectiveImportedWorldDeltaChunks(importedWorldManifestPath, world, deltaPath, delta, expandedCoords)
+	if err != nil {
+		return NavDeltaBakeResult{}, err
+	}
+	if len(chunks) == 0 {
+		return NavDeltaBakeResult{Tiles: map[string]*NavTileDef{}}, nil
+	}
+	result, err := SaveNavDeltaTilesForImportedWorldChunks(deltaPath, delta, baseNav, chunks, bakeOpts)
+	if err != nil {
+		return NavDeltaBakeResult{}, err
+	}
+	if err := SaveWorldDelta(deltaPath, delta); err != nil {
+		return NavDeltaBakeResult{}, err
+	}
+	return result, nil
 }
 
 func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDeltaDef, baseNav *NavManifestDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, opts NavDeltaBakeOptions) (NavDeltaBakeResult, error) {
@@ -152,6 +183,16 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 	result := NavDeltaBakeResult{
 		Tiles: make(map[string]*NavTileDef),
 	}
+	buildCache := &NavTileBuildCache{}
+	buildSources := make(map[string]*NavBuildSourceDef, len(opts.AgentProfiles))
+	for _, profile := range opts.AgentProfiles {
+		EnsureNavAgentProfileDefaults(&profile)
+		source, err := buildNavDeltaSourceForImportedWorldChunks(baseNav, chunks, profile)
+		if err != nil {
+			return NavDeltaBakeResult{}, err
+		}
+		buildSources[profile.ID] = source
+	}
 	overrides := append([]NavigationTileOverrideDef(nil), delta.NavigationTileOverrides...)
 	for _, coord := range coords {
 		chunk := chunks[coord]
@@ -161,13 +202,18 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		sourceHash := importedWorldChunkNavSourceHash(chunk)
 		for _, profile := range opts.AgentProfiles {
 			EnsureNavAgentProfileDefaults(&profile)
-			buildHash := navBuildHash(opts.BuilderVersion, profile, sourceHash)
+			buildSource := buildSources[profile.ID]
+			combinedSourceHash := navCombinedSourceHash(sourceHash, navBuildSourceHash(buildSource))
+			buildHash := navBuildHash(opts.BuilderVersion, profile, combinedSourceHash)
 			tileResult, err := BuildNavTileFromImportedWorldChunk(chunk, profile, NavTileBuildOptions{
-				NavID:           baseNav.NavID,
-				BuilderVersion:  opts.BuilderVersion,
-				SourceDeltaHash: sourceHash,
-				NavBuildHash:    buildHash,
-				NeighborChunks:  chunks,
+				NavID:              baseNav.NavID,
+				BuilderVersion:     opts.BuilderVersion,
+				SourceDeltaHash:    sourceHash,
+				NavBuildHash:       buildHash,
+				NeighborChunks:     chunks,
+				BuildCache:         buildCache,
+				BuildSource:        buildSource,
+				BuildSourcePrimary: true,
 			})
 			if err != nil {
 				return NavDeltaBakeResult{}, err
@@ -188,9 +234,6 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 				tile.SourceDeltaHash = sourceHash
 				tile.NavBuildHash = buildHash
 				tilePath := DefaultWorldDeltaNavTilePath(deltaPath, baseNav.NavID, profile.ID, coord)
-				if err := SaveNavTile(tilePath, tile); err != nil {
-					return NavDeltaBakeResult{}, err
-				}
 				override.TilePath = authorPathRelativeToDocument(tilePath, deltaPath)
 				result.Tiles[tilePath] = tile
 			}
@@ -207,8 +250,114 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		}
 		return terrainChunkCoordLess(overrides[i].ChunkCoord, overrides[j].ChunkCoord)
 	})
+	effectiveDelta := *delta
+	effectiveDelta.NavigationTileOverrides = overrides
+	if err := applyNavDeltaTilePortals(result.Tiles, baseNav, opts.BaseNavPath, &effectiveDelta, deltaPath, opts.AgentProfiles); err != nil {
+		return NavDeltaBakeResult{}, err
+	}
+	for tilePath, tile := range result.Tiles {
+		if err := SaveNavTile(tilePath, tile); err != nil {
+			return NavDeltaBakeResult{}, err
+		}
+	}
 	delta.NavigationTileOverrides = overrides
 	return result, nil
+}
+
+func buildNavDeltaSourceForImportedWorldChunks(baseNav *NavManifestDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, profile NavAgentProfileDef) (*NavBuildSourceDef, error) {
+	if baseNav == nil || len(chunks) == 0 {
+		return nil, nil
+	}
+	worldID := strings.TrimSpace(baseNav.SourceWorldID)
+	if worldID == "" {
+		for _, chunk := range chunks {
+			if chunk != nil && strings.TrimSpace(chunk.WorldID) != "" {
+				worldID = chunk.WorldID
+				break
+			}
+		}
+	}
+	if worldID == "" {
+		worldID = "delta_world"
+	}
+	world := &ImportedWorldDef{
+		WorldID:         worldID,
+		SchemaVersion:   CurrentImportedWorldSchemaVersion,
+		Kind:            ImportedWorldKindVoxelWorld,
+		ChunkSize:       baseNav.ChunkSize,
+		VoxelResolution: baseNav.VoxelResolution,
+	}
+	for coord, chunk := range chunks {
+		if chunk == nil {
+			continue
+		}
+		nonEmpty := chunk.NonEmptyVoxelCount
+		if nonEmpty == 0 {
+			nonEmpty = len(chunk.Voxels)
+		}
+		world.Entries = append(world.Entries, ImportedWorldChunkEntryDef{
+			Coord:              coord,
+			NonEmptyVoxelCount: nonEmpty,
+		})
+	}
+	sort.Slice(world.Entries, func(i, j int) bool {
+		return terrainChunkCoordLess(world.Entries[i].Coord, world.Entries[j].Coord)
+	})
+	source, err := BuildNavBuildSourceFromImportedWorld(world, chunks, NavBuildSourceBuildOptions{
+		SourceID:     baseNav.NavID + "_delta_nav_source",
+		AgentProfile: profile,
+		Tags:         []string{"runtime_delta"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return source, nil
+}
+
+type navTileProfileCoordKey struct {
+	Coord          TerrainChunkCoordDef
+	AgentProfileID string
+}
+
+func applyNavDeltaTilePortals(tiles map[string]*NavTileDef, baseNav *NavManifestDef, baseNavPath string, delta *WorldDeltaDef, deltaPath string, profiles []NavAgentProfileDef) error {
+	if len(tiles) == 0 {
+		return nil
+	}
+	combined := navBakeTileSlice(tiles)
+	if strings.TrimSpace(baseNavPath) == "" {
+		applyNavTilePortals(combined, navAgentProfilesByID(profiles))
+		return nil
+	}
+	seen := make(map[navTileProfileCoordKey]struct{}, len(combined))
+	for _, tile := range combined {
+		if tile == nil {
+			continue
+		}
+		seen[navTileProfileCoordKey{Coord: tile.Coord, AgentProfileID: tile.AgentProfileID}] = struct{}{}
+	}
+	for _, tile := range navBakeTileSlice(tiles) {
+		if tile == nil {
+			continue
+		}
+		for _, offset := range navPortalNeighborOffsets() {
+			coord := TerrainChunkCoordDef{X: tile.Coord.X + offset.X, Y: tile.Coord.Y + offset.Y, Z: tile.Coord.Z + offset.Z}
+			key := navTileProfileCoordKey{Coord: coord, AgentProfileID: tile.AgentProfileID}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			lookup, err := LoadEffectiveNavTile(baseNav, baseNavPath, delta, deltaPath, coord, tile.AgentProfileID)
+			if err != nil {
+				return err
+			}
+			if !lookup.Found || lookup.Empty || lookup.Tile == nil {
+				continue
+			}
+			seen[key] = struct{}{}
+			combined = append(combined, lookup.Tile)
+		}
+	}
+	applyNavTilePortals(combined, navAgentProfilesByID(profiles))
+	return nil
 }
 
 func ResolveNavigationTileOverridePath(override NavigationTileOverrideDef, deltaPath string) string {
@@ -249,6 +398,87 @@ func upsertNavigationTileOverride(overrides []NavigationTileOverrideDef, overrid
 
 func navigationTileOverrideSameKey(a, b NavigationTileOverrideDef) bool {
 	return a.NavID == b.NavID && a.AgentProfileID == b.AgentProfileID && a.ChunkCoord == b.ChunkCoord
+}
+
+func navDeltaAbsf(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func importedWorldDeltaOverrideCoords(delta *WorldDeltaDef, worldID string) []TerrainChunkCoordDef {
+	if delta == nil {
+		return nil
+	}
+	worldID = strings.TrimSpace(worldID)
+	seen := make(map[TerrainChunkCoordDef]struct{}, len(delta.ImportedWorldChunkOverrides))
+	for _, override := range delta.ImportedWorldChunkOverrides {
+		if worldID != "" && strings.TrimSpace(override.WorldID) != worldID {
+			continue
+		}
+		seen[override.ChunkCoord] = struct{}{}
+	}
+	out := make([]TerrainChunkCoordDef, 0, len(seen))
+	for coord := range seen {
+		out = append(out, coord)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return terrainChunkCoordLess(out[i], out[j])
+	})
+	return out
+}
+
+func importedWorldDeltaOverridesByCoord(delta *WorldDeltaDef, worldID string) map[TerrainChunkCoordDef]ImportedWorldChunkOverrideDef {
+	out := make(map[TerrainChunkCoordDef]ImportedWorldChunkOverrideDef)
+	if delta == nil {
+		return out
+	}
+	worldID = strings.TrimSpace(worldID)
+	for _, override := range delta.ImportedWorldChunkOverrides {
+		if worldID != "" && strings.TrimSpace(override.WorldID) != worldID {
+			continue
+		}
+		out[override.ChunkCoord] = override
+	}
+	return out
+}
+
+func loadEffectiveImportedWorldDeltaChunks(importedWorldManifestPath string, world *ImportedWorldDef, deltaPath string, delta *WorldDeltaDef, coords []TerrainChunkCoordDef) (map[TerrainChunkCoordDef]*ImportedWorldChunkDef, error) {
+	if world == nil {
+		return nil, fmt.Errorf("imported world is nil")
+	}
+	entriesByCoord := importedWorldEntriesByCoord(world.Entries)
+	overridesByCoord := importedWorldDeltaOverridesByCoord(delta, world.WorldID)
+	chunks := make(map[TerrainChunkCoordDef]*ImportedWorldChunkDef, len(coords))
+	for _, coord := range coords {
+		if override, ok := overridesByCoord[coord]; ok {
+			if strings.TrimSpace(override.SnapshotPath) == "" {
+				chunks[coord] = emptyNavBakeImportedWorldChunk(world, coord)
+				continue
+			}
+			chunk, err := LoadImportedWorldChunk(ResolveDocumentPath(override.SnapshotPath, deltaPath))
+			if err != nil {
+				return nil, err
+			}
+			chunks[coord] = chunk
+			continue
+		}
+		entry, ok := entriesByCoord[coord]
+		if !ok {
+			continue
+		}
+		if entry.NonEmptyVoxelCount == 0 {
+			chunks[coord] = emptyNavBakeImportedWorldChunk(world, coord)
+			continue
+		}
+		chunk, err := LoadImportedWorldChunk(ResolveImportedWorldChunkPath(entry, importedWorldManifestPath))
+		if err != nil {
+			return nil, err
+		}
+		chunks[coord] = chunk
+	}
+	return chunks, nil
 }
 
 func authorPathRelativeToDocument(targetPath string, documentPath string) string {

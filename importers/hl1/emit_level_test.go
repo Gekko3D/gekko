@@ -253,6 +253,14 @@ func TestSaveGeneratedLevelPrecalculatesNavigationSidecars(t *testing.T) {
 	if navManifest.LevelID != loadedLevel.ID || navManifest.SourceWorldID != "demo" || len(navManifest.Tiles) != 1 {
 		t.Fatalf("unexpected nav manifest: %+v", navManifest)
 	}
+	navBuildSourcePath := content.DefaultNavBuildSourcePath(manifestPath)
+	navBuildSource, err := content.LoadNavBuildSource(navBuildSourcePath)
+	if err != nil {
+		t.Fatalf("LoadNavBuildSource failed: %v", err)
+	}
+	if navBuildSource.SourceWorldID != "demo" || len(navBuildSource.Surfaces) == 0 {
+		t.Fatalf("expected generated nav build source surfaces, got %+v", navBuildSource)
+	}
 	tilePath := content.ResolveNavTilePath(navManifest.Tiles[0], navPath)
 	tile, err := content.LoadNavTile(tilePath)
 	if err != nil {
@@ -261,8 +269,80 @@ func TestSaveGeneratedLevelPrecalculatesNavigationSidecars(t *testing.T) {
 	if len(tile.Polygons) == 0 {
 		t.Fatalf("expected nav tile polygons, got %+v", tile)
 	}
+	if len(tile.Polygons) != len(navBuildSource.Surfaces) {
+		t.Fatalf("expected primary nav source polygons without voxel duplicates, tile=%d source=%d", len(tile.Polygons), len(navBuildSource.Surfaces))
+	}
 	if validation := content.ValidateLevel(loadedLevel, content.LevelValidationOptions{DocumentPath: levelPath}); validation.HasErrors() {
 		t.Fatalf("ValidateLevel failed: %s", validation.Error())
+	}
+}
+
+func TestBuildHL1NavBuildSurfaceInputsUsesStaticWalkableFaces(t *testing.T) {
+	inputs := buildHL1NavBuildSurfaceInputs([]Face{
+		{
+			ModelID:     0,
+			FaceID:      7,
+			TextureName: "TESTWALL",
+			Normal:      vec3(0, 0, 1),
+			Vertices: []importcommon.Vec3{
+				vec3(0, 0, 0),
+				vec3(64, 0, 0),
+				vec3(64, 0, 16),
+				vec3(0, 0, 16),
+			},
+		},
+		{
+			ModelID:     0,
+			FaceID:      8,
+			TextureName: "SKY",
+			Normal:      vec3(0, 0, 1),
+			Vertices: []importcommon.Vec3{
+				vec3(0, 0, 0),
+				vec3(64, 0, 0),
+				vec3(64, 0, 16),
+			},
+		},
+		{
+			ModelID:     0,
+			FaceID:      9,
+			TextureName: "{RAIL1",
+			Normal:      vec3(0, 0, 1),
+			Vertices: []importcommon.Vec3{
+				vec3(0, 0, 0),
+				vec3(64, 0, 0),
+				vec3(64, 0, 16),
+				vec3(0, 0, 16),
+			},
+		},
+		{
+			ModelID:     0,
+			FaceID:      10,
+			TextureName: "{GRATE2A",
+			Normal:      vec3(1, 0, 0),
+			Vertices: []importcommon.Vec3{
+				vec3(0, 0, 0),
+				vec3(0, 64, 0),
+				vec3(0, 64, 16),
+				vec3(0, 0, 16),
+			},
+		},
+	})
+	if len(inputs) != 3 {
+		t.Fatalf("expected one walkable nav source input and two blockers, got %+v", inputs)
+	}
+	input := inputs[0]
+	if input.ID != "hl1_model_0_face_7" || input.Normal != (content.Vec3{0, 1, 0}) {
+		t.Fatalf("unexpected nav source input metadata: %+v", input)
+	}
+	if input.Vertices[1] != (content.Vec3{64 * HammerUnitMeters, 0, 0}) ||
+		input.Vertices[2] != (content.Vec3{64 * HammerUnitMeters, 16 * HammerUnitMeters, 0}) {
+		t.Fatalf("unexpected converted vertices: %+v", input.Vertices)
+	}
+	if inputs[1].ID != "hl1_model_0_face_9" || inputs[1].Kind != content.NavBuildSurfaceClearanceBlocker {
+		t.Fatalf("expected rail face to become a nav clearance blocker, got %+v", inputs[1])
+	}
+	if inputs[2].ID != "hl1_model_0_face_10" || inputs[2].Kind != content.NavBuildSurfaceClearanceBlocker {
+		t.Fatalf("expected vertical grate face to become a nav clearance blocker, got %+v", inputs[2])
 	}
 }
 
@@ -392,8 +472,8 @@ func TestBuildGeneratedLevelPlacesGeneratedMDLAssets(t *testing.T) {
 	if len(level.Level.NPCs) != 1 {
 		t.Fatalf("npcs = %+v", level.Level.NPCs)
 	}
-	if len(level.Level.Markers) != 1 || level.Level.Markers[0].Kind != content.LevelMarkerKindAISpawn {
-		t.Fatalf("npc markers = %+v", level.Level.Markers)
+	if len(level.Level.Markers) != 0 {
+		t.Fatalf("did not expect duplicate npc spawn markers, got %+v", level.Level.Markers)
 	}
 	npc := level.Level.NPCs[0]
 	if npc.ClassName != "monster_barney" || npc.ModelRef != "models/barney.mdl" || npc.AssetPath != filepath.ToSlash(filepath.Join("hl1_assets", "propmap", "generated", "models", "barney.gkasset")) {

@@ -108,6 +108,47 @@ func TestResolveEffectiveNavTileReportsMissingTile(t *testing.T) {
 	}
 }
 
+func TestLoadNavClearanceSourceTileForCoordFallsBackToStaticTile(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "demo.gknav")
+	sourcePath := filepath.Join(root, "worlds", "demo_navsources", "source_0_0_0.gknavsource")
+	coord := TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	sourceTile := &NavClearanceSourceTileDef{
+		NavID:           "nav-demo",
+		SchemaVersion:   CurrentNavClearanceSourceTileSchemaVersion,
+		Coord:           coord,
+		BuilderVersion:  DefaultNavBuilderVersion,
+		PayloadKind:     NavClearanceSourceTilePayloadJSONV1,
+		BoundsMin:       [3]float32{0, 0, 0},
+		BoundsMax:       [3]float32{8, 8, 8},
+		VoxelResolution: 1,
+		Cells: []NavClearanceSourceCellDef{{
+			X: 1, Y: 2, Z: 3, Position: Vec3{1.5, 2, 3.5}, Headroom: 1.8, ClearanceRadius: 0.4,
+		}},
+	}
+	if err := SaveNavClearanceSourceTile(sourcePath, sourceTile); err != nil {
+		t.Fatalf("SaveNavClearanceSourceTile failed: %v", err)
+	}
+	baseNav := navLookupTestManifest("nav-demo", "tiny", coord, "tiles/tiny_0_0_0.gknavtile")
+	baseNav.ClearanceSourceTiles = []NavClearanceSourceTileEntryDef{{
+		Coord:     coord,
+		TilePath:  AuthorDocumentPath(sourcePath, navPath),
+		BoundsMin: sourceTile.BoundsMin,
+		BoundsMax: sourceTile.BoundsMax,
+	}}
+
+	result, err := LoadNavClearanceSourceTileForCoord(baseNav, navPath, coord)
+	if err != nil {
+		t.Fatalf("LoadNavClearanceSourceTileForCoord failed: %v", err)
+	}
+	if !result.Found || result.Tile == nil || result.TilePath != sourcePath || result.StaticEntry == nil {
+		t.Fatalf("expected static clearance source result, got %+v", result)
+	}
+	if len(result.Tile.Cells) != 1 || result.Tile.Cells[0].ClearanceRadius != 0.4 {
+		t.Fatalf("unexpected loaded source tile: %+v", result.Tile)
+	}
+}
+
 func navLookupTestManifest(navID string, profileID string, coord TerrainChunkCoordDef, tilePath string) *NavManifestDef {
 	return &NavManifestDef{
 		NavID:           navID,

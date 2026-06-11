@@ -49,6 +49,9 @@ func SaveNavTile(path string, def *NavTileDef) error {
 	if def.SchemaVersion != CurrentNavTileSchemaVersion {
 		return fmt.Errorf("unsupported nav tile schema version %d", def.SchemaVersion)
 	}
+	if validation := ValidateNavTile(def); validation.HasErrors() {
+		return validation
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -75,6 +78,44 @@ func LoadNavTile(path string) (*NavTileDef, error) {
 	return &def, nil
 }
 
+func SaveNavClearanceSourceTile(path string, def *NavClearanceSourceTileDef) error {
+	if def == nil {
+		return fmt.Errorf("nav clearance source tile is nil")
+	}
+	EnsureNavClearanceSourceTileDefaults(def)
+	if def.SchemaVersion != CurrentNavClearanceSourceTileSchemaVersion {
+		return fmt.Errorf("unsupported nav clearance source tile schema version %d", def.SchemaVersion)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(def, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func LoadNavClearanceSourceTile(path string) (*NavClearanceSourceTileDef, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var def NavClearanceSourceTileDef
+	if err := json.Unmarshal(data, &def); err != nil {
+		return nil, err
+	}
+	EnsureNavClearanceSourceTileDefaults(&def)
+	if def.SchemaVersion != CurrentNavClearanceSourceTileSchemaVersion {
+		return nil, fmt.Errorf("unsupported nav clearance source tile schema version %d", def.SchemaVersion)
+	}
+	return &def, nil
+}
+
 func ResolveNavTilePath(entry NavTileEntryDef, manifestPath string) string {
+	return ResolveDocumentPath(entry.TilePath, manifestPath)
+}
+
+func ResolveNavClearanceSourceTilePath(entry NavClearanceSourceTileEntryDef, manifestPath string) string {
 	return ResolveDocumentPath(entry.TilePath, manifestPath)
 }

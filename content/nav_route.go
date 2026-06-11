@@ -21,22 +21,24 @@ const (
 )
 
 type NavHierarchicalRouteOptions struct {
-	SectorGraph            NavSectorGraphOptions
-	SectorPath             NavSectorPathOptions
-	LocalPath              NavPathOptions
-	DisableLocalRefinement bool
+	SectorGraph                NavSectorGraphOptions
+	SectorPath                 NavSectorPathOptions
+	LocalPath                  NavPathOptions
+	DisableLocalRefinement     bool
+	AllowLocalCorridorFallback bool
 }
 
 type NavHierarchicalRouteResult struct {
-	Found            bool
-	StartSector      TerrainChunkCoordDef
-	EndSector        TerrainChunkCoordDef
-	SectorPath       NavSectorPathResult
-	LocalPath        NavPathResult
-	Refined          bool
-	RefinementStatus string
-	RefinementReason string
-	RefinementTile   TerrainChunkCoordDef
+	Found                     bool
+	StartSector               TerrainChunkCoordDef
+	EndSector                 TerrainChunkCoordDef
+	SectorPath                NavSectorPathResult
+	LocalPath                 NavPathResult
+	LocalPathCorridorFallback bool
+	Refined                   bool
+	RefinementStatus          string
+	RefinementReason          string
+	RefinementTile            TerrainChunkCoordDef
 }
 
 func FindHierarchicalNavRoute(baseNav *NavManifestDef, baseNavPath string, delta *WorldDeltaDef, deltaPath string, start Vec3, end Vec3, opts NavHierarchicalRouteOptions) (NavHierarchicalRouteResult, error) {
@@ -85,6 +87,16 @@ func FindHierarchicalNavRoute(baseNav *NavManifestDef, baseNavPath string, delta
 	localPath, err := FindEffectiveNavPath(baseNav, baseNavPath, delta, deltaPath, start, end, localOpts)
 	if err != nil {
 		return NavHierarchicalRouteResult{}, err
+	}
+	if !localPath.Found && opts.AllowLocalCorridorFallback && localPath.FailureReason == NavPathFailureDisallowedTile {
+		fallbackPath, err := FindEffectiveNavPath(baseNav, baseNavPath, delta, deltaPath, start, end, opts.LocalPath)
+		if err != nil {
+			return NavHierarchicalRouteResult{}, err
+		}
+		if fallbackPath.Found {
+			localPath = fallbackPath
+			result.LocalPathCorridorFallback = true
+		}
 	}
 	result.LocalPath = localPath
 	result.Refined = localPath.Found

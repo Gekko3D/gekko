@@ -1140,6 +1140,105 @@ report files, but leaves `LevelDef.Navigation` empty and skips `.gknav` /
 `.gknavtile` generation. Treat this as an explicit fallback, not the default
 path for NPC navigation validation.
 
+To validate baked navigation topology after an import, run:
+
+```bash
+go run ./cmd/navdiag \
+  -nav ../actiongame/assets/levels/gasworks/worlds/gasworks.gknav
+```
+
+For exploratory checks where you want a report even if the nav has issues, add:
+
+```bash
+-fail-on-error=false
+```
+
+`navdiag` loads the manifest and tiles, validates tile files, and checks
+cross-tile portal topology: target tiles/polygons, reciprocal portals, shared
+boundary placement, and portal heights against the agent profile. It also
+reports stale builder versions when an old bake should be refreshed.
+
+To inspect the voxel heightfield input for one nav tile, add the imported world
+path, tile coordinate, and a dump path:
+
+```bash
+go run ./cmd/navdiag \
+  -nav ../actiongame/assets/levels/gasworks/worlds/gasworks.gknav \
+  -world ../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld \
+  -coord=-2:-1:-2 \
+  -profile hl1_standing \
+  -dump-heightfield /tmp/gasworks-heightfield-debug.json \
+  -fail-on-error=false
+```
+
+The heightfield dump is diagnostic JSON. It records candidate voxel spans,
+accepted/rejected span counts and reasons, compact cells, region traversal
+areas (`walk`, `ramp`, `stair`, `step`), and loaded neighbor context so nav bugs
+can be checked before polygonization.
+
+To rebuild navigation overrides from an existing `.gkworlddelta` after runtime
+or editor voxel changes, use `navdiag` with the imported world, base nav
+manifest, and delta file:
+
+```bash
+go run ./cmd/navdiag \
+  -rebuild-delta-nav \
+  -world ../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld \
+  -nav ../actiongame/assets/levels/gasworks/worlds/gasworks.gknav \
+  -delta ../actiongame/assets/levels/gasworks/gasworks.gkworlddelta \
+  -profile hl1_standing \
+  -fail-on-error=false
+```
+
+Without `-dirty-coords`, the command rebuilds nav for all imported-world chunk
+overrides recorded in the delta, including agent-reach neighbor expansion. To
+focus on known edited chunks, pass a semicolon-separated list:
+
+```bash
+-dirty-coords "0:-2:1;1:-2:1"
+```
+
+The output reports dirty coord count, expanded coord count, regenerated
+navigation overrides, empty overrides, and written delta nav tile paths.
+
+To rebuild navigation from an existing imported voxel world without re-importing
+the original BSP, run:
+
+```bash
+go run ./cmd/navbake \
+  -world ../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld \
+  -nav ../actiongame/assets/levels/gasworks/worlds/gasworks.gknav \
+  -progress \
+  -cpuprofile /tmp/gasworks-navbake.pprof
+```
+
+`navbake -progress` prints per-tile duration and nav build stats, including
+occupied voxels, candidate spans, accepted spans, compact cells, regions,
+polygons, and portal count. Candidate spans are exposed solid/air surface
+spans before full agent clearance, so they should usually be much lower than
+occupied voxels in dense imported chunks. The `build_intermediate` stage is
+the voxel heightfield/clearance/region pass; `build_tile` is polygon emission
+from the cached intermediate. Imported-world full bakes use persisted chunk
+payload hashes as the build-cache identity, so cached polygon emission does
+not rescan and sort every voxel. The bake also caches per-chunk nav occupancy
+as a dense bitset plus exposed span data, so neighboring tile clearance checks
+can reuse the same fast voxel lookup data. The `build_intermediate` stage runs
+in parallel by default using `GOMAXPROCS`; use `-build-workers 1` when comparing
+single-threaded diagnostics. Because intermediate tile builds are parallel,
+`build_intermediate` progress events can arrive out of coordinate order. That is
+expected; saved tile order and manifest output remain deterministic.
+
+Validated Gasworks behavior: the optimized voxel nav bake is quick enough for
+normal testing and preserves the expected generated nav tile output. If a
+future map regresses, compare `build_intermediate` totals first, then inspect
+`candidate_spans / occupied` and the slowest tile durations.
+
+To collect a Go CPU profile for a slow bake, add:
+
+```bash
+-cpuprofile /tmp/navbake.pprof
+```
+
 Local developer smoke command:
 
 ```bash
