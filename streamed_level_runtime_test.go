@@ -1442,6 +1442,70 @@ func TestStreamedRuntimeAppliesImportedWorldChunkOverride(t *testing.T) {
 	}
 }
 
+func TestStartStreamedRuntimeLoadsNavigationManifest(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "levels", "nav_runtime.gklevel")
+	worldPath := filepath.Join(root, "worlds", "nav_runtime.gkworld")
+	chunkPath := filepath.Join(root, "worlds", "nav_runtime_chunks", "0_0_0.gkchunk")
+	navPath := filepath.Join(root, "worlds", "nav_runtime.gknav")
+	writeImportedWorldChunkForStreamedTest(t, chunkPath, &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 1, Y: 0, Z: 1, Value: 1}},
+		NonEmptyVoxelCount: 1,
+	})
+	writeImportedWorldManifestForStreamedTest(t, worldPath, "world-a", []content.ImportedWorldChunkEntryDef{{
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkPath:          content.AuthorDocumentPath(chunkPath, worldPath),
+		NonEmptyVoxelCount: 1,
+	}})
+	level := content.NewLevelDef("nav_runtime")
+	level.ChunkSize = 16
+	level.VoxelResolution = 1
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:         content.ImportedWorldKindVoxelWorld,
+		ManifestPath: content.AuthorDocumentPath(worldPath, levelPath),
+	}
+	level.Navigation = &content.LevelNavigationDef{
+		ManifestPath: content.AuthorDocumentPath(navPath, levelPath),
+	}
+	navManifest := &content.NavManifestDef{
+		NavID:           "nav-runtime",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         level.ID,
+		SourceWorldID:   "world-a",
+		BuilderVersion:  content.DefaultNavBuilderVersion,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles: []content.NavAgentProfileDef{{
+			ID:              "tiny",
+			Radius:          0.2,
+			Height:          1,
+			StepHeight:      0.5,
+			MaxSlopeDegrees: 45,
+		}},
+	}
+	if err := content.SaveNavManifest(navPath, navManifest); err != nil {
+		t.Fatalf("SaveNavManifest failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	if state.BaseNavManifestPath != navPath || state.BaseNavManifest == nil || state.BaseNavManifest.NavID != "nav-runtime" {
+		t.Fatalf("expected runtime to load nav manifest, path=%q manifest=%+v", state.BaseNavManifestPath, state.BaseNavManifest)
+	}
+}
+
 func TestStreamedRuntimePersistsDirtyImportedWorldChunkOverrideOnUnload(t *testing.T) {
 	root := t.TempDir()
 	deltaPath := filepath.Join(root, "levels", "persist.gkworlddelta")
@@ -1505,6 +1569,190 @@ func TestStreamedRuntimePersistsDirtyImportedWorldChunkOverrideOnUnload(t *testi
 	}
 	if snapshot.NonEmptyVoxelCount != 1 || len(snapshot.Voxels) != 1 || snapshot.Voxels[0] != (content.ImportedWorldVoxelDef{X: 1, Y: 0, Z: 0, Value: 9}) {
 		t.Fatalf("unexpected persisted imported chunk snapshot: %+v", snapshot)
+	}
+}
+
+func TestStreamedRuntimePersistsDirtyImportedWorldNavOverrideOnUnload(t *testing.T) {
+	root := t.TempDir()
+	deltaPath := filepath.Join(root, "levels", "persist_nav.gkworlddelta")
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.LevelID = "persist-nav"
+	state.Level = content.NewLevelDef("persist-nav")
+	state.Level.ChunkSize = 16
+	state.BaseWorldID = "world-a"
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "persist-nav"}
+	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	state.BaseNavManifest = &content.NavManifestDef{
+		NavID:           "nav-persist",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "persist-nav",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  "builder-a",
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles: []content.NavAgentProfileDef{{
+			ID:              "tiny",
+			Radius:          0.2,
+			Height:          1,
+			StepHeight:      0.5,
+			MaxSlopeDegrees: 45,
+		}},
+	}
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "persist-nav"})
+	coord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	voxels := make([]content.ImportedWorldVoxelDef, 0, 36)
+	for x := 1; x <= 6; x++ {
+		for z := 1; z <= 6; z++ {
+			voxels = append(voxels, content.ImportedWorldVoxelDef{X: x, Y: 0, Z: z, Value: 1})
+		}
+	}
+
+	_, err := commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, streamedPreparedChunk{
+		Coord: coord,
+		ImportedWorldChunk: &content.ImportedWorldChunkDef{
+			WorldID:            "world-a",
+			Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			ChunkSize:          16,
+			VoxelResolution:    1,
+			Voxels:             voxels,
+			NonEmptyVoxelCount: len(voxels),
+		},
+	})
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedChunk failed: %v", err)
+	}
+	loaded := state.LoadedChunks[coord]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected loaded imported chunk, got %+v", state.LoadedChunks)
+	}
+	for entity := range loaded.ImportedWorldEntities {
+		vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+		geometryMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+		if !ok {
+			t.Fatalf("expected imported chunk geometry to resolve")
+		}
+		geometryMap.SetVoxel(2, 0, 2, 0)
+	}
+
+	if err := unloadStreamedChunk(cmd, state, coord); err != nil {
+		t.Fatalf("unloadStreamedChunk failed: %v", err)
+	}
+
+	loadedDelta, err := content.LoadWorldDelta(deltaPath)
+	if err != nil {
+		t.Fatalf("LoadWorldDelta failed: %v", err)
+	}
+	if len(loadedDelta.ImportedWorldChunkOverrides) != 1 {
+		t.Fatalf("expected one imported world override, got %+v", loadedDelta.ImportedWorldChunkOverrides)
+	}
+	if len(loadedDelta.NavigationTileOverrides) != 1 {
+		t.Fatalf("expected one navigation tile override, got %+v", loadedDelta.NavigationTileOverrides)
+	}
+	navOverride := loadedDelta.NavigationTileOverrides[0]
+	if navOverride.NavID != "nav-persist" || navOverride.AgentProfileID != "tiny" || navOverride.Empty || navOverride.TilePath == "" {
+		t.Fatalf("unexpected nav override: %+v", navOverride)
+	}
+	tile, err := content.LoadNavTile(content.ResolveNavigationTileOverridePath(navOverride, deltaPath))
+	if err != nil {
+		t.Fatalf("LoadNavTile failed: %v", err)
+	}
+	if tile.NavID != navOverride.NavID || tile.AgentProfileID != navOverride.AgentProfileID || tile.SourceDeltaHash != navOverride.SourceDeltaHash || len(tile.Polygons) == 0 {
+		t.Fatalf("unexpected nav tile: tile=%+v override=%+v", tile, navOverride)
+	}
+}
+
+func TestStreamedRuntimePersistsLoadedNeighborNavOverrideOnImportedWorldUnload(t *testing.T) {
+	root := t.TempDir()
+	deltaPath := filepath.Join(root, "levels", "persist_nav_neighbor.gkworlddelta")
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.LevelID = "persist-nav-neighbor"
+	state.Level = content.NewLevelDef("persist-nav-neighbor")
+	state.Level.ChunkSize = 16
+	state.BaseWorldID = "world-a"
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "persist-nav-neighbor"}
+	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	state.BaseNavManifest = &content.NavManifestDef{
+		NavID:           "nav-neighbor",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "persist-nav-neighbor",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  "builder-a",
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles: []content.NavAgentProfileDef{{
+			ID:              "tiny",
+			Radius:          0.2,
+			Height:          1,
+			StepHeight:      0.5,
+			MaxSlopeDegrees: 45,
+		}},
+	}
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "persist-nav-neighbor"})
+	coords := []ChunkCoord{{X: 0, Y: 0, Z: 0}, {X: 1, Y: 0, Z: 0}}
+	for _, coord := range coords {
+		voxels := make([]content.ImportedWorldVoxelDef, 0, 36)
+		for x := 1; x <= 6; x++ {
+			for z := 1; z <= 6; z++ {
+				voxels = append(voxels, content.ImportedWorldVoxelDef{X: x, Y: 0, Z: z, Value: 1})
+			}
+		}
+		_, err := commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, streamedPreparedChunk{
+			Coord: coord,
+			ImportedWorldChunk: &content.ImportedWorldChunkDef{
+				WorldID:            "world-a",
+				Coord:              content.TerrainChunkCoordDef{X: coord.X, Y: coord.Y, Z: coord.Z},
+				ChunkSize:          16,
+				VoxelResolution:    1,
+				Voxels:             voxels,
+				NonEmptyVoxelCount: len(voxels),
+			},
+		})
+		if err != nil {
+			t.Fatalf("commitPreparedStreamedChunk %v failed: %v", coord, err)
+		}
+	}
+	loaded := state.LoadedChunks[coords[0]]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected loaded edited imported chunk, got %+v", state.LoadedChunks)
+	}
+	for entity := range loaded.ImportedWorldEntities {
+		vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+		geometryMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+		if !ok {
+			t.Fatalf("expected imported chunk geometry to resolve")
+		}
+		geometryMap.SetVoxel(2, 0, 2, 0)
+	}
+
+	if err := unloadStreamedChunk(cmd, state, coords[0]); err != nil {
+		t.Fatalf("unloadStreamedChunk failed: %v", err)
+	}
+
+	loadedDelta, err := content.LoadWorldDelta(deltaPath)
+	if err != nil {
+		t.Fatalf("LoadWorldDelta failed: %v", err)
+	}
+	overridesByCoord := map[content.TerrainChunkCoordDef]content.NavigationTileOverrideDef{}
+	for _, override := range loadedDelta.NavigationTileOverrides {
+		overridesByCoord[override.ChunkCoord] = override
+	}
+	for _, want := range []content.TerrainChunkCoordDef{{X: 0, Y: 0, Z: 0}, {X: 1, Y: 0, Z: 0}} {
+		override, ok := overridesByCoord[want]
+		if !ok {
+			t.Fatalf("expected nav override for %s, got %+v", content.TerrainChunkKey(want), loadedDelta.NavigationTileOverrides)
+		}
+		if override.Empty || override.TilePath == "" {
+			t.Fatalf("expected non-empty nav override for %s, got %+v", content.TerrainChunkKey(want), override)
+		}
+		if _, err := content.LoadNavTile(content.ResolveNavigationTileOverridePath(override, deltaPath)); err != nil {
+			t.Fatalf("LoadNavTile for %s failed: %v", content.TerrainChunkKey(want), err)
+		}
 	}
 }
 

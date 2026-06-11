@@ -337,9 +337,13 @@ func importedWorldMaterializedVoxels(voxels []Voxel, colorMaterials []Material) 
 			materialByPalette[index] = material
 		}
 	}
-	materialPalette := make([]content.ImportedWorldPaletteColor, 256)
+	materialPalette := append([]content.ImportedWorldPaletteColor(nil), colorPalette...)
+	if len(materialPalette) < 256 {
+		materialPalette = append(materialPalette, make([]content.ImportedWorldPaletteColor, 256-len(materialPalette))...)
+	}
 	materials := make([]content.ImportedWorldMaterialDef, 0)
 	valuesByKey := map[importedWorldMaterialKey]uint8{}
+	usedValues := map[uint8]struct{}{}
 	out := make([]Voxel, 0, len(voxels))
 	nextValue := uint8(1)
 	for _, voxel := range voxels {
@@ -349,14 +353,15 @@ func importedWorldMaterializedVoxels(voxels []Voxel, colorMaterials []Material) 
 		key := importedWorldMaterialKeyForVoxel(voxel, materialByPalette[voxel.Palette])
 		value, ok := valuesByKey[key]
 		if !ok {
-			if nextValue == 0 {
+			var assigned bool
+			value, assigned = nextImportedWorldRuntimeMaterialValue(key, usedValues, &nextValue)
+			if !assigned {
 				voxel.MaterialValue = voxel.Palette
 				out = append(out, voxel)
 				continue
 			}
-			value = nextValue
-			nextValue++
 			valuesByKey[key] = value
+			usedValues[value] = struct{}{}
 			source := materialByPalette[voxel.Palette]
 			material := importedWorldRuntimeMaterialForVoxel(value, voxel, source, colorPalette)
 			materialPalette[value] = material.BaseColor
@@ -366,6 +371,22 @@ func importedWorldMaterializedVoxels(voxels []Voxel, colorMaterials []Material) 
 		out = append(out, voxel)
 	}
 	return out, materialPalette, materials
+}
+
+func nextImportedWorldRuntimeMaterialValue(key importedWorldMaterialKey, used map[uint8]struct{}, next *uint8) (uint8, bool) {
+	if key.ColorPalette != 0 {
+		if _, exists := used[key.ColorPalette]; !exists {
+			return key.ColorPalette, true
+		}
+	}
+	for *next != 0 {
+		value := *next
+		*next = *next + 1
+		if _, exists := used[value]; !exists {
+			return value, true
+		}
+	}
+	return 0, false
 }
 
 func importedWorldMaterialKeyForVoxel(voxel Voxel, source Material) importedWorldMaterialKey {

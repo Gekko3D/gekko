@@ -506,6 +506,10 @@ Implementation note, 2026-06-08:
   `ImportedWorldChunkOverrides` in the world delta. The imported source world
   remains immutable; runtime loads the saved override chunk before falling back
   to the imported manifest entry.
+- When the level references navigation, imported-world destruction persistence
+  also rebuilds the edited imported chunk's nav tile overrides beside the world
+  delta, plus affected neighboring chunks that are loaded or otherwise
+  resolvable from the base world/delta.
 
 #### Step 8: Add HL1/BSP Visibility Provider
 
@@ -771,9 +775,20 @@ Main top-level fields:
 - placement transform overrides
 - placement deletions
 - terrain chunk overrides
+- imported-world chunk overrides
+- navigation tile overrides
 - voxel object overrides
 
 Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`.
+
+Navigation tile overrides are derived cache records stored beside the world
+delta under `<delta file>_data/nav/...`. A navigation override can either point
+to a regenerated `.gknavtile` or mark the tile as empty after a rebuild, which
+prevents consumers from falling back to stale baked static navigation.
+Navigation consumers should resolve effective local nav tiles through
+`LoadEffectiveNavTile(...)`: delta overrides are checked first, `empty: true`
+is authoritative, and only then does lookup fall back to baked static `.gknav`
+tile entries.
 
 Important helpers:
 

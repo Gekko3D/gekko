@@ -135,7 +135,7 @@ func TestVoxelizeFacesCPUBakesTextureSampleIntoPalette(t *testing.T) {
 	if color := testMaterialColor(result.Materials, 1); color != ([4]uint8{250, 10, 10, 255}) {
 		t.Fatalf("adaptive material color = %+v", color)
 	}
-	if len(result.Materials) != 1+emissiveToneCount*emissiveRampLevels {
+	if len(result.Materials) != 1 {
 		t.Fatalf("baked palette materials = %d", len(result.Materials))
 	}
 }
@@ -306,8 +306,122 @@ func TestVoxelizeFacesCPUBakesBrightLampTexelAsEmissive(t *testing.T) {
 		t.Fatal("no voxels")
 	}
 	for _, voxel := range result.Voxels {
-		if !emissivePaletteIndexHasTone(voxel.Palette, emissiveWarmTone) || voxel.MaterialID != int(voxel.Palette) {
+		if !emissivePaletteIndexInReservedRange(voxel.Palette) || voxel.MaterialID != int(voxel.Palette) || voxel.SolidKind != "emissive" {
 			t.Fatalf("voxel baked palette = %+v, want emissive", voxel)
+		}
+	}
+	if color := testMaterialColor(result.Materials, result.Voxels[0].Palette); color != ([4]uint8{250, 220, 120, 255}) {
+		t.Fatalf("emissive material color = %+v", color)
+	}
+}
+
+func TestVoxelizeFacesCPUBakedAnimatedTextureDoesNotCarryAnimationMetadata(t *testing.T) {
+	texture := TexturePixels{
+		Name:   "+0LIGHT",
+		Width:  1,
+		Height: 1,
+		Pixels: []byte{0},
+		Colors: [][3]uint8{{250, 250, 250}},
+	}
+	store := &TextureStore{byName: map[string]TexturePixels{"+0light": texture}}
+	face := Face{
+		TextureID:   0,
+		TextureName: "+0LIGHT",
+		Normal:      vec3(0, 0, 1),
+		TexInfo: TexInfo{
+			S: TextureAxis{Axis: vec3(1, 0, 0)},
+			T: TextureAxis{Axis: vec3(0, 1, 0)},
+		},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0),
+			vec3(16, 0, 0),
+			vec3(16, 16, 0),
+			vec3(0, 16, 0),
+		},
+	}
+
+	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{VoxelResolution: 0.1, TextureStore: store})
+	if len(result.Voxels) == 0 {
+		t.Fatal("no voxels")
+	}
+	for _, voxel := range result.Voxels {
+		if voxel.SourceTextureName != "" || voxel.AnimationID != "" || voxel.AnimationPhase != 0 {
+			t.Fatalf("baked voxel carried source animation metadata: %+v", voxel)
+		}
+	}
+}
+
+func TestVoxelizeFacesCPUAveragesEmissiveTextureColor(t *testing.T) {
+	texture := TexturePixels{
+		Name:   "+0LIGHT",
+		Width:  2,
+		Height: 1,
+		Pixels: []byte{0, 1},
+		Colors: [][3]uint8{{255, 255, 255}, {145, 145, 145}},
+	}
+	store := &TextureStore{byName: map[string]TexturePixels{"+0light": texture}}
+	face := Face{
+		TextureID:   0,
+		TextureName: "+0LIGHT",
+		Normal:      vec3(0, 0, 1),
+		TexInfo: TexInfo{
+			S: TextureAxis{Axis: vec3(1, 0, 0)},
+			T: TextureAxis{Axis: vec3(0, 1, 0)},
+		},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0),
+			vec3(16, 0, 0),
+			vec3(16, 16, 0),
+			vec3(0, 16, 0),
+		},
+	}
+
+	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{VoxelResolution: 0.1, TextureStore: store})
+	if len(result.Voxels) == 0 {
+		t.Fatal("no voxels")
+	}
+	for _, voxel := range result.Voxels {
+		if !emissivePaletteIndexInReservedRange(voxel.Palette) {
+			t.Fatalf("voxel baked palette = %+v, want emissive", voxel)
+		}
+	}
+	if color := testMaterialColor(result.Materials, result.Voxels[0].Palette); color != ([4]uint8{200, 200, 200, 255}) {
+		t.Fatalf("emissive material color should use texture average, got %+v", color)
+	}
+}
+
+func TestVoxelizeFacesCPUDarkLampTexelDoesNotBecomeEmissiveMaterial(t *testing.T) {
+	texture := TexturePixels{
+		Name:   "LIGHTWALL",
+		Width:  1,
+		Height: 1,
+		Pixels: []byte{0},
+		Colors: [][3]uint8{{80, 80, 80}},
+	}
+	store := &TextureStore{byName: map[string]TexturePixels{"lightwall": texture}}
+	face := Face{
+		TextureID:   0,
+		TextureName: "LIGHTWALL",
+		Normal:      vec3(0, 0, 1),
+		TexInfo: TexInfo{
+			S: TextureAxis{Axis: vec3(1, 0, 0)},
+			T: TextureAxis{Axis: vec3(0, 1, 0)},
+		},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0),
+			vec3(16, 0, 0),
+			vec3(16, 16, 0),
+			vec3(0, 16, 0),
+		},
+	}
+
+	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{VoxelResolution: 0.1, TextureStore: store})
+	if len(result.Voxels) == 0 {
+		t.Fatal("no voxels")
+	}
+	for _, voxel := range result.Voxels {
+		if voxel.SolidKind == "emissive" || emissivePaletteIndexInReservedRange(voxel.Palette) {
+			t.Fatalf("dark light texel should not create emissive material voxel: %+v", voxel)
 		}
 	}
 }
@@ -351,6 +465,11 @@ func emissivePaletteIndexHasTone(index uint8, tone int) bool {
 	start := emissivePaletteIndexForToneLevel(tone, 0)
 	end := emissivePaletteIndexForToneLevel(tone, emissiveRampLevels-1)
 	return index >= start && index <= end
+}
+
+func emissivePaletteIndexInReservedRange(index uint8) bool {
+	value := int(index)
+	return value >= emissivePaletteStart && value < emissivePaletteStart+emissiveToneCount*emissiveRampLevels
 }
 
 func TestVoxelizeFacesCPUSkipsCutoutTextureTransparentTexels(t *testing.T) {
@@ -437,6 +556,27 @@ func TestPropagateStructuralFillMaterialsUsesNearestSurface(t *testing.T) {
 	}
 	if materials[[3]int{3, 0, 0}] != 7 {
 		t.Fatalf("near right material = %d, want 7", materials[[3]int{3, 0, 0}])
+	}
+}
+
+func TestPropagateStructuralFillMaterialsIgnoresSpecialSurfaceMaterials(t *testing.T) {
+	surface := map[[3]int]importcommon.Voxel{
+		{0, 0, 0}: {X: 0, Y: 0, Z: 0, MaterialID: 9, SolidKind: "emissive"},
+		{4, 0, 0}: {X: 4, Y: 0, Z: 0, MaterialID: 2, SolidKind: "metal"},
+	}
+	candidates := map[[3]int]struct{}{
+		{1, 0, 0}: {},
+		{2, 0, 0}: {},
+		{3, 0, 0}: {},
+	}
+	materials := propagateStructuralFillMaterials(surface, candidates, 1)
+	for key, materialID := range materials {
+		if materialID != 2 {
+			t.Fatalf("fill at %+v used material %d, want structural metal material 2", key, materialID)
+		}
+	}
+	if dominant := dominantSurfaceMaterialID(surface); dominant != 2 {
+		t.Fatalf("dominant fill material = %d, want 2", dominant)
 	}
 }
 

@@ -1103,6 +1103,43 @@ For explicit binary chunks, add:
 -chunk-payload dense_rle_binary_v1
 ```
 
+For live terminal progress, add:
+
+```bash
+-progress
+```
+
+This prints timestamped stage lines while the import runs. High-level stages
+cover summary/build/save/report work, and navigation baking also reports chunk
+loads plus per-agent tile build/skip/save events. A typical nav section looks
+like:
+
+```text
+[12:34:56] progress progress stage=save_navigation_bake.load_chunk 3/12 coord=0:0:-1
+[12:34:58] progress progress stage=save_navigation_bake.build_tile 8/12 coord=0:0:-1 profile=hl1_standing polys=142 path=/tmp/out/worlds/map_navtiles/map_0_0_-1_hl1_standing.gknavtile
+[12:35:01] progress progress stage=save_navigation_bake.save_manifest 1/1 path=/tmp/out/worlds/map.gknav
+```
+
+For long imports, keep the progress log:
+
+```bash
+go run ./cmd/hl1import ... -progress 2>&1 | tee /tmp/hl1import.log
+```
+
+Generated levels bake navigation sidecars by default. This is the long-term
+path for NPC navigation and should be left enabled for normal actiongame tests.
+For a diagnostic compile where navigation is known to be irrelevant or is being
+baked separately, add:
+
+```bash
+-skip-navigation-bake
+```
+
+This still writes the `.gklevel`, `.gkworld`, `.gkchunk`, `.gkaux`, and import
+report files, but leaves `LevelDef.Navigation` empty and skips `.gknav` /
+`.gknavtile` generation. Treat this as an explicit fallback, not the default
+path for NPC navigation validation.
+
 Local developer smoke command:
 
 ```bash
@@ -1118,7 +1155,8 @@ go run ./cmd/hl1import \
   -solid-band-depth 24 \
   -max-solid-sample-cells 100000000 \
   -emit-level \
-  -debug-world-mode solid
+  -debug-world-mode solid \
+  -progress
 ```
 
 This writes:
@@ -1129,6 +1167,37 @@ This writes:
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/crossfire_import_report.json
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/chunks/*.gkchunk
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/aux/*.gkaux
+```
+
+Actiongame large-map smoke command:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/gekko
+go run ./cmd/hl1import \
+  -game-dir /Users/ddevidch/code/other/hl \
+  -map gasworks \
+  -bsp /Users/ddevidch/code/other/hl/valve/maps/gasworks.bsp \
+  -out ../actiongame/assets/levels/gasworks \
+  -chunk-size 256 \
+  -voxel-resolution 0.1 \
+  -light-mode faithful \
+  -emit-light-fixtures=false \
+  -solid-band-depth 24 \
+  -max-solid-sample-cells 100000000 \
+  -emit-level \
+  -debug-world-mode solid
+```
+
+This writes:
+
+```text
+../actiongame/assets/levels/gasworks/gasworks.gklevel
+../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld
+../actiongame/assets/levels/gasworks/worlds/gasworks_import_report.json
+../actiongame/assets/levels/gasworks/worlds/gasworks.gknav
+../actiongame/assets/levels/gasworks/worlds/gasworks_navtiles/*.gknavtile
+../actiongame/assets/levels/gasworks/worlds/chunks/*.gkchunk
+../actiongame/assets/levels/gasworks/worlds/aux/*.gkaux
 ```
 
 ### Voxel Resolution Policy
@@ -1163,6 +1232,15 @@ go run .
 
 For editor-generated levels under `gekko-editor/assets`, point
 `GEKKO_ACTIONGAME_LEVEL` at that generated `.gklevel` instead.
+
+For the local gasworks smoke output above:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/actiongame
+GEKKO_ACTIONGAME_LEVEL=assets/levels/gasworks/gasworks.gklevel \
+GEKKO_ACTIONGAME_PLAYER_SPAWN_KIND=hl1_player_spawn \
+go run .
+```
 
 Manual check list:
 
@@ -1585,20 +1663,23 @@ Recommended path:
 - Implemented first actiongame behavior slice: friendly HL1 NPCs such as
   `monster_barney` and `monster_scientist` can face the player, follow within a
   short range, stop at conversational distance, and drive idle/walk animation
-  states. Follow behavior now writes movement intent into an actiongame NPC
-  locomotion component instead of moving transforms directly; the locomotion
-  system applies the movement, performs first-pass voxel-world blocking probes,
-  records actual velocity/blocked state, and drives idle/walk from actual
-  movement. Active nearby NPCs become small streamed-level observers so their
-  local collision can load independently of the player. Locomotion waits for a
-  valid streamed collision floor and freezes at the authored transform until
-  that floor is available, instead of applying gravity into unloaded space.
-  Character grounding now keeps authoritative collision Y separate from a
-  smoothed visual ground Y for attached NPC assets, with a small visual
-  deadband to suppress voxelized ramp/stair noise while preserving exact
-  collision probes. Full
-  navmesh/path graph navigation, squad logic, use/follow commands, and hostile
-  AI remain deferred.
+  states. Actiongame NPCs now have an explicit brain/schedule component with
+  initial `idle`, `follow`, `alert`, and `dead` states; friendly follow is the
+  first schedule backed by that layer, and NPC damage/death can force the
+  `dead` schedule and death animation state. Follow behavior writes movement
+  intent into an actiongame NPC locomotion component instead of moving
+  transforms directly; the locomotion system applies the movement, performs
+  first-pass voxel-world blocking probes, records actual velocity/blocked
+  state, and drives idle/walk from actual movement. Active nearby NPCs become
+  small streamed-level observers so their local collision can load
+  independently of the player. Locomotion waits for a valid streamed collision
+  floor and freezes at the authored transform until that floor is available,
+  instead of applying gravity into unloaded space. Character grounding now keeps
+  authoritative collision Y separate from a smoothed visual ground Y for
+  attached NPC assets, with a small visual deadband to suppress voxelized
+  ramp/stair noise while preserving exact collision probes. Full navmesh/path
+  graph navigation, squad logic, use/follow commands, and hostile AI remain
+  deferred.
 - `trigger_once` and `trigger_multiple` become typed trigger volumes with
   target metadata.
 - Implemented first slice: `trigger_changelevel` is emitted as typed
@@ -1789,6 +1870,8 @@ Runtime:
       until their local floor is available.
 - [x] Smooth attached NPC visual roots over voxel stair/ramp ground samples
       while keeping the NPC collision transform authoritative.
+- [x] Add first actiongame NPC brain/schedule state component for idle,
+      friendly-follow, alert, and dead behavior slices.
 - [ ] Import remaining target graph relay/action entities.
 - [ ] Implement exact HL1 pickup respawn/skill behavior and animated pickup
       presentation.

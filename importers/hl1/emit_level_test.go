@@ -189,6 +189,138 @@ func TestSaveGeneratedLevelPrecalculatesBaseWorldAuxSidecars(t *testing.T) {
 	}
 }
 
+func TestSaveGeneratedLevelPrecalculatesNavigationSidecars(t *testing.T) {
+	dir := t.TempDir()
+	levelPath := filepath.Join(dir, "out", "demo.gklevel")
+	manifestPath := filepath.Join(dir, "out", "worlds", "demo.gkworld")
+	chunkPath := filepath.Join(dir, "out", "worlds", "chunks", "demo_0_0_0.gkchunk")
+	voxels := make([]content.ImportedWorldVoxelDef, 0, 36)
+	for x := 1; x <= 6; x++ {
+		for z := 1; z <= 6; z++ {
+			voxels = append(voxels, content.ImportedWorldVoxelDef{X: x, Y: 0, Z: z, Value: 1})
+		}
+	}
+	chunk := &content.ImportedWorldChunkDef{
+		WorldID:            "demo",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          8,
+		VoxelResolution:    1,
+		Voxels:             voxels,
+		NonEmptyVoxelCount: len(voxels),
+	}
+	if err := content.SaveImportedWorldChunk(chunkPath, chunk); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+	manifest := &content.ImportedWorldDef{
+		WorldID:         "demo",
+		Kind:            content.ImportedWorldKindVoxelWorld,
+		ChunkSize:       chunk.ChunkSize,
+		VoxelResolution: chunk.VoxelResolution,
+		Entries: []content.ImportedWorldChunkEntryDef{{
+			Coord:              chunk.Coord,
+			ChunkPath:          content.AuthorDocumentPath(chunkPath, manifestPath),
+			NonEmptyVoxelCount: chunk.NonEmptyVoxelCount,
+		}},
+	}
+	if err := content.SaveImportedWorld(manifestPath, manifest); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+	level := content.NewLevelDef("demo")
+	level.ChunkSize = chunk.ChunkSize
+	level.VoxelResolution = chunk.VoxelResolution
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:              content.ImportedWorldKindVoxelWorld,
+		ManifestPath:      content.AuthorDocumentPath(manifestPath, levelPath),
+		ReadOnlyByDefault: true,
+		CollisionEnabled:  true,
+	}
+
+	if err := SaveGeneratedLevel(GeneratedLevelResult{LevelPath: levelPath, Level: level}); err != nil {
+		t.Fatalf("SaveGeneratedLevel failed: %v", err)
+	}
+	loadedLevel, err := content.LoadLevel(levelPath)
+	if err != nil {
+		t.Fatalf("LoadLevel failed: %v", err)
+	}
+	if loadedLevel.Navigation == nil || loadedLevel.Navigation.ManifestPath != "worlds/demo.gknav" {
+		t.Fatalf("expected generated level navigation ref, got %+v", loadedLevel.Navigation)
+	}
+	navPath := content.ResolveDocumentPath(loadedLevel.Navigation.ManifestPath, levelPath)
+	navManifest, err := content.LoadNavManifest(navPath)
+	if err != nil {
+		t.Fatalf("LoadNavManifest failed: %v", err)
+	}
+	if navManifest.LevelID != loadedLevel.ID || navManifest.SourceWorldID != "demo" || len(navManifest.Tiles) != 1 {
+		t.Fatalf("unexpected nav manifest: %+v", navManifest)
+	}
+	tilePath := content.ResolveNavTilePath(navManifest.Tiles[0], navPath)
+	tile, err := content.LoadNavTile(tilePath)
+	if err != nil {
+		t.Fatalf("LoadNavTile failed: %v", err)
+	}
+	if len(tile.Polygons) == 0 {
+		t.Fatalf("expected nav tile polygons, got %+v", tile)
+	}
+	if validation := content.ValidateLevel(loadedLevel, content.LevelValidationOptions{DocumentPath: levelPath}); validation.HasErrors() {
+		t.Fatalf("ValidateLevel failed: %s", validation.Error())
+	}
+}
+
+func TestSaveGeneratedLevelCanSkipNavigationSidecars(t *testing.T) {
+	dir := t.TempDir()
+	levelPath := filepath.Join(dir, "out", "demo.gklevel")
+	manifestPath := filepath.Join(dir, "out", "worlds", "demo.gkworld")
+	chunkPath := filepath.Join(dir, "out", "worlds", "chunks", "demo_0_0_0.gkchunk")
+	chunk := &content.ImportedWorldChunkDef{
+		WorldID:            "demo",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          8,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 1, Y: 0, Z: 1, Value: 1}},
+		NonEmptyVoxelCount: 1,
+	}
+	if err := content.SaveImportedWorldChunk(chunkPath, chunk); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+	manifest := &content.ImportedWorldDef{
+		WorldID:         "demo",
+		Kind:            content.ImportedWorldKindVoxelWorld,
+		ChunkSize:       chunk.ChunkSize,
+		VoxelResolution: chunk.VoxelResolution,
+		Entries: []content.ImportedWorldChunkEntryDef{{
+			Coord:              chunk.Coord,
+			ChunkPath:          content.AuthorDocumentPath(chunkPath, manifestPath),
+			NonEmptyVoxelCount: chunk.NonEmptyVoxelCount,
+		}},
+	}
+	if err := content.SaveImportedWorld(manifestPath, manifest); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+	level := content.NewLevelDef("demo")
+	level.ChunkSize = chunk.ChunkSize
+	level.VoxelResolution = chunk.VoxelResolution
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:              content.ImportedWorldKindVoxelWorld,
+		ManifestPath:      content.AuthorDocumentPath(manifestPath, levelPath),
+		ReadOnlyByDefault: true,
+		CollisionEnabled:  true,
+	}
+
+	if err := SaveGeneratedLevel(GeneratedLevelResult{LevelPath: levelPath, Level: level, SkipNavigationBake: true}); err != nil {
+		t.Fatalf("SaveGeneratedLevel failed: %v", err)
+	}
+	loadedLevel, err := content.LoadLevel(levelPath)
+	if err != nil {
+		t.Fatalf("LoadLevel failed: %v", err)
+	}
+	if loadedLevel.Navigation != nil {
+		t.Fatalf("expected navigation to be skipped, got %+v", loadedLevel.Navigation)
+	}
+	if _, err := content.LoadNavManifest(filepath.Join(dir, "out", "worlds", "demo.gknav")); err == nil {
+		t.Fatal("expected skipped navigation manifest to be absent")
+	}
+}
+
 func TestBuildGeneratedLevelPlacesGeneratedMDLAssets(t *testing.T) {
 	dir := t.TempDir()
 	gameDir := filepath.Join(dir, "hl")

@@ -193,3 +193,74 @@ func TestRuntimeContentLoaderCachesImportedWorldManifestAndChunkByPath(t *testin
 		t.Fatal("expected imported world chunk loads to reuse cached pointer")
 	}
 }
+
+func TestRuntimeContentLoaderCachesNavManifestAndTileByPath(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "nav", "demo.gknav")
+	tilePath := filepath.Join(root, "nav", "demo_navtiles", "tiny_0_0_0.gknavtile")
+	manifest := &content.NavManifestDef{
+		NavID:           "nav-a",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "level-a",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  content.DefaultNavBuilderVersion,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles: []content.NavAgentProfileDef{{
+			ID:              "tiny",
+			Radius:          0.2,
+			Height:          1,
+			StepHeight:      0.5,
+			MaxSlopeDegrees: 45,
+		}},
+		Tiles: []content.NavTileEntryDef{{
+			Coord:          content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+			AgentProfileID: "tiny",
+			TilePath:       content.AuthorDocumentPath(tilePath, manifestPath),
+			BoundsMin:      [3]float32{0, 0, 0},
+			BoundsMax:      [3]float32{16, 16, 16},
+		}},
+	}
+	tile := &content.NavTileDef{
+		NavID:          "nav-a",
+		SchemaVersion:  content.CurrentNavTileSchemaVersion,
+		Coord:          content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		AgentProfileID: "tiny",
+		BuilderVersion: content.DefaultNavBuilderVersion,
+		PayloadKind:    content.NavTilePayloadJSONV1,
+		BoundsMin:      [3]float32{0, 0, 0},
+		BoundsMax:      [3]float32{16, 16, 16},
+		Vertices:       []content.Vec3{{0, 1, 0}, {1, 1, 0}, {1, 1, 1}, {0, 1, 1}},
+		Polygons:       []content.NavPolygonDef{{ID: "cell:0:1:0", Vertices: []int{0, 1, 2, 3}, Area: content.NavTraversalWalk}},
+	}
+	if err := content.SaveNavTile(tilePath, tile); err != nil {
+		t.Fatalf("SaveNavTile failed: %v", err)
+	}
+	if err := content.SaveNavManifest(manifestPath, manifest); err != nil {
+		t.Fatalf("SaveNavManifest failed: %v", err)
+	}
+
+	loader := NewRuntimeContentLoader()
+	firstManifest, err := loader.LoadNavManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadNavManifest failed: %v", err)
+	}
+	secondManifest, err := loader.LoadNavManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadNavManifest failed: %v", err)
+	}
+	if firstManifest != secondManifest {
+		t.Fatal("expected nav manifest loads to reuse cached pointer")
+	}
+	firstTile, err := loader.LoadNavTile(content.ResolveNavTilePath(firstManifest.Tiles[0], manifestPath))
+	if err != nil {
+		t.Fatalf("LoadNavTile failed: %v", err)
+	}
+	secondTile, err := loader.LoadNavTile(content.ResolveNavTilePath(firstManifest.Tiles[0], manifestPath))
+	if err != nil {
+		t.Fatalf("LoadNavTile failed: %v", err)
+	}
+	if firstTile != secondTile {
+		t.Fatal("expected nav tile loads to reuse cached pointer")
+	}
+}

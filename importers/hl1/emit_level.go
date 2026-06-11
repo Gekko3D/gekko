@@ -52,6 +52,8 @@ type GeneratedLevelResult struct {
 	MovingBrushAssets  []GeneratedAssetResult
 	ChargerAssets      []GeneratedAssetResult
 	BreakableAssets    []GeneratedAssetResult
+	SkipNavigationBake bool
+	Progress           ImportProgressFunc
 }
 
 type GeneratedAssetResult struct {
@@ -160,10 +162,27 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 			return GeneratedLevelResult{}, err
 		}
 		content.EnsureLevelIDs(level)
-		return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, LightFixtureAssets: assets, MovingBrushAssets: movingBrushAssets, ChargerAssets: chargerAssets, BreakableAssets: breakableAssets}, nil
+		return GeneratedLevelResult{
+			LevelPath:          filepath.Clean(levelPath),
+			Level:              level,
+			LightFixtureAssets: assets,
+			MovingBrushAssets:  movingBrushAssets,
+			ChargerAssets:      chargerAssets,
+			BreakableAssets:    breakableAssets,
+			SkipNavigationBake: opts.SkipNavigationBake,
+			Progress:           opts.Progress,
+		}, nil
 	}
 	content.EnsureLevelIDs(level)
-	return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, MovingBrushAssets: movingBrushAssets, ChargerAssets: chargerAssets, BreakableAssets: breakableAssets}, nil
+	return GeneratedLevelResult{
+		LevelPath:          filepath.Clean(levelPath),
+		Level:              level,
+		MovingBrushAssets:  movingBrushAssets,
+		ChargerAssets:      chargerAssets,
+		BreakableAssets:    breakableAssets,
+		SkipNavigationBake: opts.SkipNavigationBake,
+		Progress:           opts.Progress,
+	}, nil
 }
 
 func hl1LevelPlayerDef() *content.LevelPlayerDef {
@@ -259,7 +278,13 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 	if result.Level == nil {
 		return fmt.Errorf("level is nil")
 	}
-	for _, asset := range append(append(append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.MovingBrushAssets...), result.ChargerAssets...), result.BreakableAssets...) {
+	generatedAssets := append(append(append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.MovingBrushAssets...), result.ChargerAssets...), result.BreakableAssets...)
+	reportImportProgress(result.Progress, ImportProgress{
+		Stage: ImportProgressStageSaveLevelAssets,
+		Total: len(generatedAssets),
+		Path:  result.LevelPath,
+	})
+	for i, asset := range generatedAssets {
 		if asset.Asset == nil {
 			return fmt.Errorf("generated asset is nil")
 		}
@@ -269,12 +294,31 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 		if err := content.SaveAsset(asset.AssetPath, asset.Asset); err != nil {
 			return err
 		}
+		reportImportProgress(result.Progress, ImportProgress{
+			Stage:   ImportProgressStageSaveLevelAssets,
+			Current: i + 1,
+			Total:   len(generatedAssets),
+			Path:    asset.AssetPath,
+		})
 	}
 	if err := os.MkdirAll(filepath.Dir(result.LevelPath), 0755); err != nil {
 		return err
 	}
+	reportImportProgress(result.Progress, ImportProgress{
+		Stage: ImportProgressStageSaveAuxSidecars,
+		Path:  result.LevelPath,
+	})
 	if err := ensureGeneratedLevelBaseWorldAuxSidecars(result); err != nil {
 		return err
+	}
+	if !result.SkipNavigationBake {
+		reportImportProgress(result.Progress, ImportProgress{
+			Stage: ImportProgressStageSaveNavigationBake,
+			Path:  result.LevelPath,
+		})
+		if err := ensureGeneratedLevelNavigationSidecars(result); err != nil {
+			return err
+		}
 	}
 	return content.SaveLevel(result.LevelPath, result.Level)
 }
@@ -294,6 +338,48 @@ func ensureGeneratedLevelBaseWorldAuxSidecars(result GeneratedLevelResult) error
 		return fmt.Errorf("precalculate base-world aux sidecars: %w", err)
 	}
 	return nil
+}
+
+func ensureGeneratedLevelNavigationSidecars(result GeneratedLevelResult) error {
+	if result.Level == nil || result.Level.BaseWorld == nil || strings.TrimSpace(result.Level.BaseWorld.ManifestPath) == "" || strings.TrimSpace(result.LevelPath) == "" {
+		return nil
+	}
+	manifestPath := content.ResolveDocumentPath(result.Level.BaseWorld.ManifestPath, result.LevelPath)
+	if _, err := os.Stat(manifestPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	navManifestPath := content.DefaultNavManifestPath(manifestPath)
+	if _, err := content.SaveNavBakeForImportedWorldManifest(manifestPath, navManifestPath, content.NavBakeOptions{
+		LevelID:  result.Level.ID,
+		Progress: navBakeProgressBridge(result.Progress),
+	}); err != nil {
+		return fmt.Errorf("precalculate navigation sidecars: %w", err)
+	}
+	result.Level.Navigation = &content.LevelNavigationDef{
+		ManifestPath: filepath.ToSlash(relativeOrBase(filepath.Dir(result.LevelPath), navManifestPath)),
+		Tags:         []string{"source:hl1", "generated"},
+	}
+	return nil
+}
+
+func navBakeProgressBridge(progress ImportProgressFunc) content.NavBakeProgressFunc {
+	if progress == nil {
+		return nil
+	}
+	return func(event content.NavBakeProgress) {
+		progress(ImportProgress{
+			Stage:          ImportProgressStageSaveNavigationBake + "." + event.Stage,
+			Current:        event.Current,
+			Total:          event.Total,
+			Path:           event.TilePath,
+			Coord:          event.Coord,
+			AgentProfileID: event.AgentProfileID,
+			Polygons:       event.Polygons,
+		})
+	}
 }
 
 func buildHL1GameplayMarkers(entities []importcommon.Entity) []content.LevelMarkerDef {

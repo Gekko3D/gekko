@@ -131,6 +131,58 @@ func TestBuildImportedWorldEmissionSplitsAnimatedTextureRuntimeMaterials(t *test
 	}
 }
 
+func TestBuildImportedWorldEmissionPrefersMatchingRuntimeMaterialValue(t *testing.T) {
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 0, Y: 0, Z: 0, Palette: 7, SolidKind: "emissive"},
+		{X: 1, Y: 0, Z: 0, Palette: 4, SolidKind: "structural"},
+	}, []Material{
+		{ID: 4, PaletteIndex: 4, BaseColor: [4]uint8{120, 80, 40, 255}, Kind: "baked_texture", Roughness: 0.9},
+		{ID: 7, PaletteIndex: 7, BaseColor: [4]uint8{240, 240, 240, 255}, Kind: "baked_texture_emissive", EmitsLight: true, Emissive: 2.4, Roughness: 0.45},
+	}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	chunk := emission.Chunks[[3]int{0, 0, 0}]
+	if chunk == nil || len(chunk.Voxels) != 2 {
+		t.Fatalf("chunk = %+v", chunk)
+	}
+	if content.ImportedWorldVoxelMaterialValue(chunk.Voxels[0]) != 7 || content.ImportedWorldVoxelMaterialValue(chunk.Voxels[1]) != 4 {
+		t.Fatalf("runtime material values should match color palette values when free, got %+v", chunk.Voxels)
+	}
+	if emission.Manifest.MaterialPalette[4] != (content.ImportedWorldPaletteColor{120, 80, 40, 255}) {
+		t.Fatalf("material palette 4 = %+v", emission.Manifest.MaterialPalette[4])
+	}
+	if emission.Manifest.MaterialPalette[7] != (content.ImportedWorldPaletteColor{240, 240, 240, 255}) {
+		t.Fatalf("material palette 7 = %+v", emission.Manifest.MaterialPalette[7])
+	}
+}
+
+func TestBuildImportedWorldEmissionSeedsMaterialPaletteFromColorPalette(t *testing.T) {
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 0, Y: 0, Z: 0, Palette: 4},
+	}, []Material{
+		{ID: 4, PaletteIndex: 4, BaseColor: [4]uint8{120, 80, 40, 255}, Kind: "baked_texture", Roughness: 0.9},
+		{ID: 7, PaletteIndex: 7, BaseColor: [4]uint8{240, 240, 240, 255}, Kind: "baked_texture_emissive", EmitsLight: true, Emissive: 2.4, Roughness: 0.45},
+	}, ImportedWorldEmitOptions{
+		WorldID:         "test_world",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	if emission.Manifest.MaterialPalette[4] != (content.ImportedWorldPaletteColor{120, 80, 40, 255}) {
+		t.Fatalf("material palette should seed color slot 4, got %+v", emission.Manifest.MaterialPalette[4])
+	}
+	if emission.Manifest.MaterialPalette[7] != (content.ImportedWorldPaletteColor{240, 240, 240, 255}) {
+		t.Fatalf("material palette should seed color slot 7, got %+v", emission.Manifest.MaterialPalette[7])
+	}
+}
+
 func TestBuildImportedWorldEmissionKeepsCutoutVoxelsOpaque(t *testing.T) {
 	emission, err := BuildImportedWorldEmission([]Voxel{
 		{X: 0, Y: 0, Z: 0, Palette: 8, SolidKind: "grate"},

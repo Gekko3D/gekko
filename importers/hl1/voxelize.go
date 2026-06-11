@@ -47,14 +47,15 @@ func VoxelizeFacesCPU(faces []Face, opts VoxelizeOptions) VoxelizeResult {
 	}
 	voxels := make(map[[3]int]importcommon.Voxel)
 	sampledColors := make(map[[3]int][4]uint8)
+	sampledEmissiveColors := make(map[[3]int][4]uint8)
 	for _, face := range faces {
 		if !shouldVoxelizeFaceKind(materialKind(face.TextureName)) {
 			continue
 		}
-		voxelizeFaceSurface(face, opts, voxels, sampledColors)
+		voxelizeFaceSurface(face, opts, voxels, sampledColors, sampledEmissiveColors)
 	}
 	surfaceCount := len(voxels)
-	materials := applyAdaptiveVoxelPalette(voxels, sampledColors, opts)
+	materials := applyAdaptiveVoxelPalette(voxels, sampledColors, sampledEmissiveColors, opts)
 	if opts.FillClosed {
 		fillClosedInterior(voxels)
 	}
@@ -109,14 +110,15 @@ func VoxelizeBSPSolidCPU(bsp *BSP, faces []Face, entities []importcommon.Entity,
 	}
 	voxels := make(map[[3]int]importcommon.Voxel)
 	sampledColors := make(map[[3]int][4]uint8)
+	sampledEmissiveColors := make(map[[3]int][4]uint8)
 	for _, face := range faces {
 		if !shouldVoxelizeFaceKind(materialKind(face.TextureName)) {
 			continue
 		}
-		voxelizeFaceSurface(face, opts, voxels, sampledColors)
+		voxelizeFaceSurface(face, opts, voxels, sampledColors, sampledEmissiveColors)
 	}
 	surfaceCount := len(voxels)
-	materials := applyAdaptiveVoxelPalette(voxels, sampledColors, opts)
+	materials := applyAdaptiveVoxelPalette(voxels, sampledColors, sampledEmissiveColors, opts)
 	playableEmpty := make(map[[3]int]struct{})
 	floodSkipped := false
 	var candidates map[[3]int]struct{}
@@ -200,7 +202,7 @@ func dominantSurfaceMaterialID(voxels map[[3]int]importcommon.Voxel) int {
 	bestCount := 0
 	counts := make(map[int]int)
 	for _, voxel := range voxels {
-		if voxel.MaterialID <= 0 || voxel.SolidKind == "structural_fill" || voxel.SolidKind == "interior_fill" {
+		if voxel.MaterialID <= 0 || !canPropagateStructuralFillMaterial(voxel.SolidKind) {
 			continue
 		}
 		counts[voxel.MaterialID]++
@@ -222,7 +224,7 @@ func propagateStructuralFillMaterials(surface map[[3]int]importcommon.Voxel, can
 	queue := make([][3]int, 0, len(surface)+len(candidates))
 	for _, key := range sortedVoxelKeys(surface) {
 		voxel := surface[key]
-		if voxel.MaterialID <= 0 || voxel.SolidKind == "structural_fill" || voxel.SolidKind == "interior_fill" {
+		if voxel.MaterialID <= 0 || !canPropagateStructuralFillMaterial(voxel.SolidKind) {
 			continue
 		}
 		queue = append(queue, key)
@@ -249,6 +251,15 @@ func propagateStructuralFillMaterials(surface map[[3]int]importcommon.Voxel, can
 		}
 	}
 	return result
+}
+
+func canPropagateStructuralFillMaterial(kind string) bool {
+	switch kind {
+	case "", "structural", "metal", "concrete", "wood", "terrain":
+		return true
+	default:
+		return false
+	}
 }
 
 func sortedVoxelKeys(voxels map[[3]int]importcommon.Voxel) [][3]int {
@@ -423,7 +434,7 @@ func clampVoxelBounds(minB, maxB, clampMin, clampMax [3]int) ([3]int, [3]int, bo
 	return minB, maxB, true
 }
 
-func voxelizeFaceSurface(face Face, opts VoxelizeOptions, voxels map[[3]int]importcommon.Voxel, sampledColors map[[3]int][4]uint8) {
+func voxelizeFaceSurface(face Face, opts VoxelizeOptions, voxels map[[3]int]importcommon.Voxel, sampledColors map[[3]int][4]uint8, sampledEmissiveColors map[[3]int][4]uint8) {
 	for _, key := range rasterizeFaceSurfaceKeys(face, opts) {
 		if _, exists := voxels[key]; exists {
 			continue
@@ -433,24 +444,40 @@ func voxelizeFaceSurface(face Face, opts VoxelizeOptions, voxels map[[3]int]impo
 		}
 		materialID := face.TextureID + 1
 		palette := uint8(min(max(materialID, 1), 255))
+		textureBaked := false
+		bakedEmissive := false
 		if sample, ok := bakedFaceSample(face, key, opts); ok {
+			textureBaked = true
 			if sample.Emissive {
-				materialID = int(sample.Palette)
-				palette = sample.Palette
+				bakedEmissive = true
+				materialID = 1
+				palette = 1
+				sampledEmissiveColors[key] = sample.Color
 			} else {
 				materialID = 1
 				palette = 1
 				sampledColors[key] = sample.Color
 			}
 		}
-		sourceTexture, animationID, animationPhase := hl1VoxelMaterialAnimation(face, key, opts)
+		sourceTexture, animationID, animationPhase := "", "", 0
+		if !textureBaked {
+			sourceTexture, animationID, animationPhase = hl1VoxelMaterialAnimation(face, key, opts)
+		}
+		solidKind := materialKind(face.TextureName)
+		if textureBaked && solidKind == "emissive" {
+			if bakedEmissive {
+				solidKind = "emissive"
+			} else {
+				solidKind = "structural"
+			}
+		}
 		voxels[key] = importcommon.Voxel{
 			X:                 key[0],
 			Y:                 key[1],
 			Z:                 key[2],
 			Palette:           palette,
 			MaterialID:        materialID,
-			SolidKind:         materialKind(face.TextureName),
+			SolidKind:         solidKind,
 			SourceTextureName: sourceTexture,
 			AnimationID:       animationID,
 			AnimationPhase:    animationPhase,
@@ -598,7 +625,7 @@ func hl1Variance(values []float64) float64 {
 	return variance / float64(len(values))
 }
 
-func applyAdaptiveVoxelPalette(voxels map[[3]int]importcommon.Voxel, sampledColors map[[3]int][4]uint8, opts VoxelizeOptions) []importcommon.Material {
+func applyAdaptiveVoxelPalette(voxels map[[3]int]importcommon.Voxel, sampledColors map[[3]int][4]uint8, sampledEmissiveColors map[[3]int][4]uint8, opts VoxelizeOptions) []importcommon.Material {
 	if opts.TextureStore == nil && len(opts.MaterialColors) == 0 {
 		return nil
 	}
@@ -607,6 +634,12 @@ func applyAdaptiveVoxelPalette(voxels map[[3]int]importcommon.Voxel, sampledColo
 		colors = append(colors, sampledColors[key])
 	}
 	materials, indexByColor := AdaptiveBakedPaletteMaterials(colors)
+	emissiveColors := make([][4]uint8, 0, len(sampledEmissiveColors))
+	for _, key := range sortedColorSampleKeys(sampledEmissiveColors) {
+		emissiveColors = append(emissiveColors, sampledEmissiveColors[key])
+	}
+	emissiveMaterials, emissiveIndexByColor := AdaptiveEmissivePaletteMaterials(emissiveColors)
+	materials = append(materials, emissiveMaterials...)
 	for _, key := range sortedColorSampleKeys(sampledColors) {
 		voxel, ok := voxels[key]
 		if !ok {
@@ -622,12 +655,26 @@ func applyAdaptiveVoxelPalette(voxels map[[3]int]importcommon.Voxel, sampledColo
 		voxel.MaterialID = int(index)
 		voxels[key] = voxel
 	}
+	for _, key := range sortedColorSampleKeys(sampledEmissiveColors) {
+		voxel, ok := voxels[key]
+		if !ok {
+			continue
+		}
+		color := sampledEmissiveColors[key]
+		color[3] = 255
+		index := emissiveIndexByColor[color]
+		if index == 0 {
+			continue
+		}
+		voxel.Palette = index
+		voxel.MaterialID = int(index)
+		voxels[key] = voxel
+	}
 	return materials
 }
 
 type bakedFaceSampleResult struct {
 	Color    [4]uint8
-	Palette  uint8
 	Emissive bool
 }
 
@@ -638,26 +685,47 @@ func bakedFaceSample(face Face, key [3]int, opts VoxelizeOptions) (bakedFaceSamp
 	if isCutoutTexture(face.TextureName) {
 		if sample, sampled, opaque := sampleFaceTextureCutoutOpaqueSample(face, key, opts); sampled && opaque {
 			color := lightmapModulatedFaceColor(face, key, opts, sample.Color)
-			if index, emissive := emissivePaletteIndexForTexel(face.TextureName, color); emissive {
-				return bakedFaceSampleResult{Palette: index, Emissive: true}, true
+			if _, emissive := emissivePaletteIndexForTexel(face.TextureName, color); emissive {
+				color = emissiveBakedFaceColor(face, opts, color)
+				return bakedFaceSampleResult{Color: color, Emissive: true}, true
 			}
 			return bakedFaceSampleResult{Color: color}, true
 		}
 	}
 	if opts.TextureStore != nil {
 		if sample, ok := sampleFaceTextureTexel(face, key, opts); ok {
-			if index, emissive := emissivePaletteIndexForTexel(face.TextureName, sample.Color); emissive {
-				return bakedFaceSampleResult{Palette: index, Emissive: true}, true
-			}
 			color := lightmapModulatedFaceColor(face, key, opts, sample.Color)
+			if _, emissive := emissivePaletteIndexForTexel(face.TextureName, color); emissive {
+				color = emissiveBakedFaceColor(face, opts, color)
+				return bakedFaceSampleResult{Color: color, Emissive: true}, true
+			}
 			return bakedFaceSampleResult{Color: color}, true
 		}
 	}
 	if color, ok := opts.MaterialColors[face.TextureID+1]; ok && color != ([4]uint8{}) {
 		color = lightmapModulatedFaceColor(face, key, opts, color)
+		if _, emissive := emissivePaletteIndexForTexel(face.TextureName, color); emissive {
+			color = emissiveBakedFaceColor(face, opts, color)
+			return bakedFaceSampleResult{Color: color, Emissive: true}, true
+		}
 		return bakedFaceSampleResult{Color: color}, true
 	}
 	return bakedFaceSampleResult{}, false
+}
+
+func emissiveBakedFaceColor(face Face, opts VoxelizeOptions, fallback [4]uint8) [4]uint8 {
+	if opts.TextureStore == nil {
+		return fallback
+	}
+	texture, ok := opts.TextureStore.Texture(face.TextureName)
+	if !ok {
+		return fallback
+	}
+	color, ok := texture.AverageColor()
+	if !ok || color == ([4]uint8{}) {
+		return fallback
+	}
+	return color
 }
 
 func lightmapModulatedFaceColor(face Face, key [3]int, opts VoxelizeOptions, color [4]uint8) [4]uint8 {

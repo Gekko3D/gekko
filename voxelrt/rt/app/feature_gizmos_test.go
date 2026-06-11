@@ -36,6 +36,24 @@ func TestSetGizmoOverlayItemsCopiesItems(t *testing.T) {
 	}
 }
 
+func TestAppendGizmoOverlayItemsPreservesExistingGizmos(t *testing.T) {
+	app := NewApp(nil)
+	app.Scene.Gizmos = []core.Gizmo{{Type: core.GizmoLine, Color: [4]float32{1, 1, 1, 1}}}
+
+	app.AppendGizmoOverlayItems([]GizmoOverlayItem{{
+		Type:        core.GizmoSphere,
+		Color:       [4]float32{0, 1, 0, 1},
+		ModelMatrix: mgl32.Translate3D(1, 2, 3),
+	}})
+
+	if got := len(app.Scene.Gizmos); got != 2 {
+		t.Fatalf("expected existing and appended gizmos, got %d", got)
+	}
+	if app.Scene.Gizmos[0].Type != core.GizmoLine || app.Scene.Gizmos[1].Type != core.GizmoSphere {
+		t.Fatalf("unexpected gizmo order/types: %+v", app.Scene.Gizmos)
+	}
+}
+
 func TestClearGizmoOverlayItemsClearsSceneGizmos(t *testing.T) {
 	app := NewApp(nil)
 	app.Scene.Gizmos = []core.Gizmo{{Type: core.GizmoLine}}

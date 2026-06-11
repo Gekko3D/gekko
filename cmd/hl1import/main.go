@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gekko3d/gekko/content"
 	importcommon "github.com/gekko3d/gekko/importers/common"
@@ -19,6 +21,7 @@ func main() {
 	var emitLevel bool
 	var debugWorldMode string
 	var exportProfile string
+	var progress bool
 	flag.StringVar(&opts.GameDir, "game-dir", "", "Half-Life game directory")
 	flag.StringVar(&opts.MapName, "map", "", "HL1 map name, for example c1a0")
 	flag.StringVar(&opts.BSPPath, "bsp", "", "explicit BSP path; overrides -game-dir/-map lookup")
@@ -36,6 +39,7 @@ func main() {
 	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize point lights from imported emissive surface clusters")
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
+	flag.BoolVar(&opts.SkipNavigationBake, "skip-navigation-bake", false, "skip generated .gknav/.gknavtile sidecars during level save")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
 	opts.VoxelResolutionPolicy = hl1.DefaultHL1VoxelResolutionPolicy()
 	flag.Var((*float32Flag)(&opts.VoxelResolution), "voxel-resolution", "world voxel resolution")
@@ -49,6 +53,7 @@ func main() {
 	flag.BoolVar(&emitDebugWorld, "emit-debug-world", false, "write debug .gkworld/.gkchunk output")
 	flag.StringVar(&debugWorldMode, "debug-world-mode", string(hl1.DebugWorldModeSurface), "debug world mode: surface or solid")
 	flag.BoolVar(&emitLevel, "emit-level", false, "write generated .gklevel pointing at emitted debug world")
+	flag.BoolVar(&progress, "progress", false, "print timestamped import progress while running")
 	flag.Parse()
 
 	opts.ExportProfile = hl1.HL1ExportProfile(exportProfile)
@@ -85,19 +90,25 @@ func main() {
 	if _, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind); err != nil {
 		fatalf("%v", err)
 	}
+	progressPrinter := newHL1ImportProgressPrinter(progress)
+	opts.Progress = progressPrinter.Event
 	if emitLevel {
 		emitDebugWorld = true
 	}
+	progressPrinter.Start(hl1.ImportProgressStageBuildSummary, "")
 	summary, err := hl1.BuildImportSummary(opts)
 	if err != nil {
 		fatalf("%v", err)
 	}
+	progressPrinter.Done(hl1.ImportProgressStageBuildSummary, summary.Report.Source.BSPPath)
 	var debugResult hl1.DebugWorldEmissionResult
 	if emitDebugWorld {
+		progressPrinter.Start(hl1.ImportProgressStageBuildDebugWorld, "")
 		debugResult, err = hl1.BuildDebugWorld(opts, hl1.DebugWorldMode(debugWorldMode))
 		if err != nil {
 			fatalf("build debug world: %v", err)
 		}
+		progressPrinter.Done(hl1.ImportProgressStageBuildDebugWorld, debugResult.ManifestPath)
 		summary.Report.GeneratedWorldPath = debugResult.ManifestPath
 		summary.Report.ChunkCount = len(debugResult.Emission.Chunks)
 		summary.Report.NonEmptyVoxelCount = debugResult.Emission.TotalVoxelCount
@@ -106,14 +117,17 @@ func main() {
 	}
 	var gameAssets hl1.GameAssetImportResult
 	if opts.EmitGameAssets {
+		progressPrinter.Start(hl1.ImportProgressStageBuildGameAssets, "")
 		gameAssets, err = hl1.BuildGameAssetImport(opts, summary)
 		if err != nil {
 			fatalf("build game assets: %v", err)
 		}
+		progressPrinter.Done(hl1.ImportProgressStageBuildGameAssets, gameAssets.ManifestPath)
 		summary.Report.Diagnostics = append(summary.Report.Diagnostics, gameAssets.Manifest.Diagnostics...)
 	}
 	var levelResult hl1.GeneratedLevelResult
 	if emitLevel {
+		progressPrinter.Start(hl1.ImportProgressStageBuildLevel, "")
 		if opts.EmitGameAssets {
 			levelResult, err = hl1.BuildGeneratedLevelWithGameAssets(opts, summary, debugResult.ManifestPath, gameAssets, debugResult.Voxelize)
 		} else {
@@ -122,22 +136,29 @@ func main() {
 		if err != nil {
 			fatalf("build level: %v", err)
 		}
+		progressPrinter.Done(hl1.ImportProgressStageBuildLevel, levelResult.LevelPath)
 		summary.Report.GeneratedLevelPath = levelResult.LevelPath
 	}
 	if emitDebugWorld {
+		progressPrinter.Start(hl1.ImportProgressStageSaveDebugWorld, debugResult.ManifestPath)
 		if err := hl1.SaveDebugWorld(debugResult); err != nil {
 			fatalf("save debug world: %v", err)
 		}
+		progressPrinter.Done(hl1.ImportProgressStageSaveDebugWorld, debugResult.ManifestPath)
 	}
 	if emitLevel {
+		progressPrinter.Start(hl1.ImportProgressStageSaveLevel, levelResult.LevelPath)
 		if err := hl1.SaveGeneratedLevel(levelResult); err != nil {
 			fatalf("save level: %v", err)
 		}
+		progressPrinter.Done(hl1.ImportProgressStageSaveLevel, levelResult.LevelPath)
 	}
 	if opts.EmitGameAssets {
+		progressPrinter.Start(hl1.ImportProgressStageSaveGameAssets, gameAssets.ManifestPath)
 		if err := hl1.SaveGameAssetImport(gameAssets); err != nil {
 			fatalf("save game assets: %v", err)
 		}
+		progressPrinter.Done(hl1.ImportProgressStageSaveGameAssets, gameAssets.ManifestPath)
 	}
 	if reportPath == "" {
 		mapName := summary.Report.Source.MapName
@@ -149,6 +170,7 @@ func main() {
 	if err := importcommon.SaveImportReport(reportPath, summary.Report); err != nil {
 		fatalf("save report: %v", err)
 	}
+	progressPrinter.Event(hl1.ImportProgress{Stage: hl1.ImportProgressStageSaveReport, Current: 1, Total: 1, Path: reportPath})
 	fmt.Printf("HL1 import report written: %s\n", reportPath)
 	fmt.Printf("BSP: %s\n", summary.Report.Source.BSPPath)
 	fmt.Printf("materials: %d\n", summary.Report.MaterialCount)
@@ -227,6 +249,96 @@ func debugWorldPayloadKind(result hl1.DebugWorldEmissionResult) string {
 		return result.Emission.Manifest.ChunkPayloadKind
 	}
 	return result.PayloadKind
+}
+
+type hl1ImportProgressPrinter struct {
+	enabled bool
+	stages  map[string]time.Time
+}
+
+func newHL1ImportProgressPrinter(enabled bool) *hl1ImportProgressPrinter {
+	return &hl1ImportProgressPrinter{
+		enabled: enabled,
+		stages:  make(map[string]time.Time),
+	}
+}
+
+func (p *hl1ImportProgressPrinter) Start(stage string, path string) {
+	if p == nil || !p.enabled {
+		return
+	}
+	p.stages[stage] = time.Now()
+	p.print("start", hl1.ImportProgress{
+		Stage: stage,
+		Path:  path,
+	})
+}
+
+func (p *hl1ImportProgressPrinter) Done(stage string, path string) {
+	if p == nil || !p.enabled {
+		return
+	}
+	detail := "done"
+	if started, ok := p.stages[stage]; ok {
+		detail = fmt.Sprintf("done elapsed=%s", time.Since(started).Round(time.Millisecond))
+		delete(p.stages, stage)
+	}
+	p.print(detail, hl1.ImportProgress{
+		Stage:   stage,
+		Current: 1,
+		Total:   1,
+		Path:    path,
+	})
+}
+
+func (p *hl1ImportProgressPrinter) Event(event hl1.ImportProgress) {
+	if p == nil || !p.enabled {
+		return
+	}
+	p.print("progress", event)
+}
+
+func (p *hl1ImportProgressPrinter) print(kind string, event hl1.ImportProgress) {
+	if p == nil || !p.enabled {
+		return
+	}
+	parts := []string{
+		fmt.Sprintf("[%s]", time.Now().Format("15:04:05")),
+		"progress",
+		kind,
+		"stage=" + event.Stage,
+	}
+	if event.Total > 0 {
+		if event.Current > 0 {
+			parts = append(parts, fmt.Sprintf("%d/%d", event.Current, event.Total))
+		} else {
+			parts = append(parts, fmt.Sprintf("total=%d", event.Total))
+		}
+	}
+	if progressEventHasCoord(event) {
+		parts = append(parts, "coord="+content.TerrainChunkKey(event.Coord))
+	}
+	if event.AgentProfileID != "" {
+		parts = append(parts, "profile="+event.AgentProfileID)
+	}
+	if event.Polygons > 0 {
+		parts = append(parts, fmt.Sprintf("polys=%d", event.Polygons))
+	}
+	if event.Path != "" {
+		parts = append(parts, "path="+event.Path)
+	}
+	fmt.Println(strings.Join(parts, " "))
+}
+
+func progressEventHasCoord(event hl1.ImportProgress) bool {
+	if event.Coord != (content.TerrainChunkCoordDef{}) {
+		return true
+	}
+	stage := event.Stage
+	return strings.Contains(stage, "load_chunk") ||
+		strings.Contains(stage, "build_tile") ||
+		strings.Contains(stage, "skip_tile") ||
+		strings.Contains(stage, "save_tile")
 }
 
 type float32Flag float32

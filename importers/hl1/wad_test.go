@@ -70,6 +70,23 @@ func TestWADTextureColorAveragesMipTexPalette(t *testing.T) {
 	}
 }
 
+func TestWADTextureColorSkipsCutoutTransparentPaletteIndex(t *testing.T) {
+	palette := make([][3]byte, 256)
+	palette[1] = [3]byte{120, 80, 40}
+	palette[255] = [3]byte{255, 255, 255}
+	wad, err := ParseWAD(syntheticMipTexWAD("{LADDER", palette, []byte{1, 255, 1, 255}), "cutout.wad")
+	if err != nil {
+		t.Fatalf("ParseWAD failed: %v", err)
+	}
+	color, ok := wad.TextureColor("{ladder")
+	if !ok {
+		t.Fatal("TextureColor failed")
+	}
+	if color != ([4]uint8{120, 80, 40, 255}) {
+		t.Fatalf("cutout color = %+v", color)
+	}
+}
+
 func TestWADTexturePixelsSamplesWrappedTexel(t *testing.T) {
 	wad, err := ParseWAD(syntheticMipTexWAD("TESTWALL", [][3]byte{{10, 20, 30}, {110, 120, 130}}, []byte{0, 1, 1, 0}), "color.wad")
 	if err != nil {

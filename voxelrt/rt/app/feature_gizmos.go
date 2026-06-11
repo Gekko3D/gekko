@@ -94,6 +94,13 @@ func (a *App) SetGizmoOverlayItems(items []GizmoOverlayItem) {
 		return
 	}
 	a.Scene.Gizmos = a.Scene.Gizmos[:0]
+	a.AppendGizmoOverlayItems(items)
+}
+
+func (a *App) AppendGizmoOverlayItems(items []GizmoOverlayItem) {
+	if a == nil || a.Scene == nil || len(items) == 0 {
+		return
+	}
 	for _, item := range items {
 		a.Scene.Gizmos = append(a.Scene.Gizmos, core.Gizmo{
 			Type:        item.Type,

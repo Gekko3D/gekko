@@ -280,6 +280,9 @@ type StreamedLevelRuntimeState struct {
 	BaseWorldPalette           AssetId
 	BaseWorldMaterialLookup    ImportedWorldMaterialLookup
 	BaseWorldCollisionEnabled  bool
+	BaseNavManifestPath        string
+	BaseNavManifest            *content.NavManifestDef
+	NavigationRevision         int64
 	MarkerEntities             map[string]EntityId
 	LightEntities              map[string]EntityId
 
@@ -430,6 +433,8 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 	})
 	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
 	app.UseSystem(System(commitPreparedStreamedChunksSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelNPCNavigationSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelNPCNavigationMovementSystem).InStage(Update).RunAlways())
 }
 
 func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedLevelRuntimeConfig) error {
@@ -541,6 +546,9 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.BaseWorldPalette = AssetId{}
 	state.BaseWorldMaterialLookup = ImportedWorldMaterialLookup{}
 	state.BaseWorldCollisionEnabled = false
+	state.BaseNavManifestPath = ""
+	state.BaseNavManifest = nil
+	state.NavigationRevision = 0
 	state.MarkerEntities = make(map[string]EntityId)
 	state.LightEntities = make(map[string]EntityId)
 	state.DesiredChunks = make(map[ChunkCoord]struct{})
@@ -655,6 +663,20 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 			if state.BaseWorldPalette == (AssetId{}) {
 				state.BaseWorldPalette = assets.CreateSimplePalette([4]uint8{160, 160, 160, 255})
 			}
+		}
+	}
+	if level.Navigation != nil && level.Navigation.ManifestPath != "" {
+		navManifestPath := content.ResolveDocumentPath(level.Navigation.ManifestPath, cfg.LevelPath)
+		navManifest, err := loader.LoadNavManifest(navManifestPath)
+		if err != nil {
+			state.InitErr = err
+			return err
+		}
+		state.BaseNavManifestPath = navManifestPath
+		state.BaseNavManifest = navManifest
+		state.NavigationRevision = 1
+		if len(worldDelta.NavigationTileOverrides) > 0 {
+			state.NavigationRevision++
 		}
 	}
 
@@ -2319,6 +2341,9 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 			state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
 		}
 		state.importedWorldOverrideMap[importedWorldChunkRuntimeKey(ref.WorldID, override.ChunkCoord)] = override
+		if err := persistImportedWorldNavigationOverride(cmd, state, snapshot); err != nil {
+			return err
+		}
 		manifestDirty = true
 	}
 
@@ -2350,6 +2375,113 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 	state.WorldDelta.ImportedWorldChunkOverrides = mapImportedWorldOverrides(state.importedWorldOverrideMap)
 	state.WorldDelta.VoxelObjectOverrides = mapVoxelOverrides(state.voxelOverrideMap)
 	return content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta)
+}
+
+func persistImportedWorldNavigationOverride(cmd *Commands, state *StreamedLevelRuntimeState, snapshot *content.ImportedWorldChunkDef) error {
+	if state == nil || state.WorldDelta == nil || state.BaseNavManifest == nil || snapshot == nil || strings.TrimSpace(state.WorldDeltaPath) == "" {
+		return nil
+	}
+	if state.BaseWorldID != "" && snapshot.WorldID != state.BaseWorldID {
+		return nil
+	}
+	chunks, err := importedWorldNavigationRebuildChunks(cmd, state, snapshot)
+	if err != nil {
+		return err
+	}
+	if len(chunks) == 0 {
+		chunks = map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef{snapshot.Coord: snapshot}
+	}
+	if _, err := content.SaveNavDeltaTilesForImportedWorldChunks(state.WorldDeltaPath, state.WorldDelta, state.BaseNavManifest, chunks, content.NavDeltaBakeOptions{}); err != nil {
+		return fmt.Errorf("precalculate imported-world navigation override: %w", err)
+	}
+	state.NavigationRevision++
+	return nil
+}
+
+func importedWorldNavigationRebuildChunks(cmd *Commands, state *StreamedLevelRuntimeState, snapshot *content.ImportedWorldChunkDef) (map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, error) {
+	if state == nil || snapshot == nil {
+		return nil, nil
+	}
+	coords := content.ExpandNavDirtyTileCoords([]content.TerrainChunkCoordDef{snapshot.Coord}, snapshot.ChunkSize, snapshot.VoxelResolution, content.NavDirtyTileExpansionOptions{
+		AgentProfiles: state.BaseNavManifest.AgentProfiles,
+	})
+	chunks := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(coords))
+	for _, coord := range coords {
+		if coord == snapshot.Coord {
+			chunks[coord] = snapshot
+			continue
+		}
+		chunk, err := importedWorldNavigationRebuildChunkForCoord(cmd, state, snapshot.WorldID, coord)
+		if err != nil {
+			return nil, err
+		}
+		if chunk != nil {
+			chunks[coord] = chunk
+		}
+	}
+	return chunks, nil
+}
+
+func importedWorldNavigationRebuildChunkForCoord(cmd *Commands, state *StreamedLevelRuntimeState, worldID string, coord content.TerrainChunkCoordDef) (*content.ImportedWorldChunkDef, error) {
+	if chunk := loadedImportedWorldChunkSnapshotForNav(cmd, state, worldID, coord); chunk != nil {
+		return chunk, nil
+	}
+	if state == nil {
+		return nil, nil
+	}
+	if state.importedWorldOverrideMap != nil {
+		if override, ok := state.importedWorldOverrideMap[importedWorldChunkRuntimeKey(worldID, coord)]; ok {
+			chunkPath := content.ResolveDocumentPath(override.SnapshotPath, state.WorldDeltaPath)
+			chunk, err := state.Loader.LoadImportedWorldChunk(chunkPath)
+			if err != nil {
+				return nil, err
+			}
+			return chunk, nil
+		}
+	}
+	entry, ok := state.ImportedWorldEntries[chunkCoordFromTerrain(coord)]
+	if !ok || entry.NonEmptyVoxelCount == 0 || state.Level == nil || state.Level.BaseWorld == nil || strings.TrimSpace(state.Level.BaseWorld.ManifestPath) == "" {
+		return nil, nil
+	}
+	manifestPath := content.ResolveDocumentPath(state.Level.BaseWorld.ManifestPath, state.LevelPath)
+	chunk, err := state.Loader.LoadImportedWorldChunk(content.ResolveImportedWorldChunkPath(entry, manifestPath))
+	if err != nil {
+		return nil, err
+	}
+	return chunk, nil
+}
+
+func loadedImportedWorldChunkSnapshotForNav(cmd *Commands, state *StreamedLevelRuntimeState, worldID string, coord content.TerrainChunkCoordDef) *content.ImportedWorldChunkDef {
+	if cmd == nil || state == nil {
+		return nil
+	}
+	loaded := state.LoadedChunks[chunkCoordFromTerrain(coord)]
+	if loaded == nil {
+		return nil
+	}
+	for eid := range loaded.ImportedWorldEntities {
+		ref, ok := AuthoredImportedWorldChunkRefForEntity(cmd, eid)
+		if !ok || ref.WorldID != worldID || terrainCoordFromArray(ref.ChunkCoord) != coord {
+			continue
+		}
+		xbm, _, exists := currentVoxelMapForEntity(cmd, eid)
+		if !exists {
+			continue
+		}
+		vmc, ok := voxelModelComponentForEntity(cmd, eid)
+		if !ok {
+			continue
+		}
+		chunkSize := vmc.TerrainChunkSize
+		if chunkSize <= 0 && state.Level != nil {
+			chunkSize = state.Level.ChunkSize
+		}
+		if chunkSize <= 0 {
+			continue
+		}
+		return importedWorldChunkDefFromXBrickMap(ref.WorldID, coord, chunkSize, voxelResolutionForEntity(cmd, eid), xbm)
+	}
+	return nil
 }
 
 func applyVoxelObjectSnapshotToEntity(cmd *Commands, eid EntityId, snapshot *content.VoxelObjectSnapshotDef) error {
