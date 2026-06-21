@@ -13,7 +13,10 @@ type NavBuildSourceBuildOptions struct {
 	SourceID         string
 	AgentProfile     NavAgentProfileDef
 	ExplicitSurfaces []NavBuildExplicitSurfaceInput
-	Tags             []string
+	// SurfaceHints augments the generated source without replacing voxel-derived
+	// walkable surfaces. Use this for source metadata such as clearance blockers.
+	SurfaceHints []NavBuildExplicitSurfaceInput
+	Tags         []string
 }
 
 func BuildNavBuildSourceFromImportedWorldManifestPath(importedWorldManifestPath string, opts NavBuildSourceBuildOptions) (*NavBuildSourceDef, error) {
@@ -85,7 +88,7 @@ func BuildNavBuildSourceFromImportedWorld(world *ImportedWorldDef, chunks map[Te
 		SchemaVersion: CurrentNavBuildSourceSchemaVersion,
 		Kind:          NavBuildSourceKindGeneric,
 		SourceWorldID: world.WorldID,
-		SourceHash:    navImportedWorldBuildSourceHash(world, chunks, profile, opts.ExplicitSurfaces),
+		SourceHash:    navImportedWorldBuildSourceHash(world, chunks, profile, opts.ExplicitSurfaces, opts.SurfaceHints),
 		Tags:          append([]string{"source:imported_world", "generated", "primary"}, opts.Tags...),
 	}
 
@@ -109,6 +112,9 @@ func BuildNavBuildSourceFromImportedWorld(world *ImportedWorldDef, chunks map[Te
 			surfaces := buildNavSourceSurfacesFromImportedWorldChunk(chunk, chunks, profile)
 			source.Surfaces = append(source.Surfaces, surfaces...)
 		}
+	}
+	if len(opts.SurfaceHints) > 0 {
+		source.Surfaces = append(source.Surfaces, buildNavSourceSurfacesFromExplicitSurfaceInputs(opts.SurfaceHints, profile)...)
 	}
 	navBuildSourceUpdateBounds(source)
 	EnsureNavBuildSourceDefaults(source)
@@ -316,13 +322,14 @@ func navBuildSourceUpdateBounds(source *NavBuildSourceDef) {
 	}
 }
 
-func navImportedWorldBuildSourceHash(world *ImportedWorldDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, profile NavAgentProfileDef, explicitSurfaces []NavBuildExplicitSurfaceInput) string {
+func navImportedWorldBuildSourceHash(world *ImportedWorldDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, profile NavAgentProfileDef, explicitSurfaces []NavBuildExplicitSurfaceInput, surfaceHints []NavBuildExplicitSurfaceInput) string {
 	hashes := make([]string, 0, len(chunks)+3)
 	if world != nil {
 		hashes = append(hashes, world.SourceHash)
 	}
 	hashes = append(hashes, navBuildHash(DefaultNavBuilderVersion, profile, "nav_source_imported_world"))
 	hashes = append(hashes, navExplicitSurfaceInputsHash(explicitSurfaces, profile))
+	hashes = append(hashes, navExplicitSurfaceInputsHash(surfaceHints, profile))
 	coords := make([]TerrainChunkCoordDef, 0, len(chunks))
 	for coord := range chunks {
 		coords = append(coords, coord)

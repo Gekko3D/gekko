@@ -235,7 +235,11 @@ func TestSaveGeneratedLevelPrecalculatesNavigationSidecars(t *testing.T) {
 		CollisionEnabled:  true,
 	}
 
-	if err := SaveGeneratedLevel(GeneratedLevelResult{LevelPath: levelPath, Level: level}); err != nil {
+	if err := SaveGeneratedLevel(GeneratedLevelResult{
+		LevelPath:        levelPath,
+		Level:            level,
+		NavBuildSurfaces: hl1TestNavBuildSurfaces(),
+	}); err != nil {
 		t.Fatalf("SaveGeneratedLevel failed: %v", err)
 	}
 	loadedLevel, err := content.LoadLevel(levelPath)
@@ -261,6 +265,12 @@ func TestSaveGeneratedLevelPrecalculatesNavigationSidecars(t *testing.T) {
 	if navBuildSource.SourceWorldID != "demo" || len(navBuildSource.Surfaces) == 0 {
 		t.Fatalf("expected generated nav build source surfaces, got %+v", navBuildSource)
 	}
+	if navBuildSourceHasSurface(navBuildSource, "hl1_walkable_override") {
+		t.Fatalf("did not expect HL1 walkable surfaces to replace voxel-derived source geometry, got %+v", navBuildSource.Surfaces)
+	}
+	if !navBuildSourceHasSurface(navBuildSource, "hl1_rail_blocker") {
+		t.Fatalf("expected HL1 clearance blocker hint to be preserved, got %+v", navBuildSource.Surfaces)
+	}
 	tilePath := content.ResolveNavTilePath(navManifest.Tiles[0], navPath)
 	tile, err := content.LoadNavTile(tilePath)
 	if err != nil {
@@ -269,12 +279,66 @@ func TestSaveGeneratedLevelPrecalculatesNavigationSidecars(t *testing.T) {
 	if len(tile.Polygons) == 0 {
 		t.Fatalf("expected nav tile polygons, got %+v", tile)
 	}
-	if len(tile.Polygons) != len(navBuildSource.Surfaces) {
-		t.Fatalf("expected primary nav source polygons without voxel duplicates, tile=%d source=%d", len(tile.Polygons), len(navBuildSource.Surfaces))
+	if navTileHasPolygonID(tile, "surface:hl1_walkable_override") || navTileHasPolygonID(tile, "surface:hl1_rail_blocker") {
+		t.Fatalf("expected voxel-derived nav polygons with blocker hints, got %+v", tile.Polygons)
 	}
 	if validation := content.ValidateLevel(loadedLevel, content.LevelValidationOptions{DocumentPath: levelPath}); validation.HasErrors() {
 		t.Fatalf("ValidateLevel failed: %s", validation.Error())
 	}
+}
+
+func navBuildSourceHasSurface(source *content.NavBuildSourceDef, id string) bool {
+	if source == nil {
+		return false
+	}
+	for _, surface := range source.Surfaces {
+		if surface.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hl1TestNavBuildSurfaces() []content.NavBuildExplicitSurfaceInput {
+	return []content.NavBuildExplicitSurfaceInput{
+		{
+			ID:   "hl1_walkable_override",
+			Kind: content.NavBuildSurfaceWalkable,
+			Vertices: []content.Vec3{
+				{20, 1, 20},
+				{22, 1, 20},
+				{22, 1, 22},
+				{20, 1, 22},
+			},
+			Area:      content.NavTraversalWalk,
+			SourceTag: "hl1:model:0:face:1",
+			Tags:      []string{"source:hl1"},
+		},
+		{
+			ID:   "hl1_rail_blocker",
+			Kind: content.NavBuildSurfaceClearanceBlocker,
+			Vertices: []content.Vec3{
+				{3, 1, 1},
+				{3, 3, 1},
+				{3, 3, 7},
+				{3, 1, 7},
+			},
+			SourceTag: "hl1:model:0:face:2",
+			Tags:      []string{"source:hl1"},
+		},
+	}
+}
+
+func navTileHasPolygonID(tile *content.NavTileDef, id string) bool {
+	if tile == nil {
+		return false
+	}
+	for _, polygon := range tile.Polygons {
+		if polygon.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildHL1NavBuildSurfaceInputsUsesStaticWalkableFaces(t *testing.T) {

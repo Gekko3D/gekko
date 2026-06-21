@@ -20,6 +20,9 @@ func main() {
 	var coordText string
 	var dirtyCoordsText string
 	var heightfieldDumpPath string
+	var recastDumpPath string
+	var buildSourcePath string
+	var recastDumpInputMesh bool
 	var rebuildDeltaNav bool
 	var profileID string
 	var pathStartText string
@@ -37,6 +40,9 @@ func main() {
 	flag.StringVar(&coordText, "coord", "", "tile/chunk coord for heightfield dumps, formatted as x:y:z")
 	flag.StringVar(&dirtyCoordsText, "dirty-coords", "", "optional dirty tile coords for -rebuild-delta-nav, formatted as x:y:z;x:y:z")
 	flag.StringVar(&heightfieldDumpPath, "dump-heightfield", "", "write voxel heightfield debug JSON to this path, or '-' for stdout")
+	flag.StringVar(&recastDumpPath, "dump-recast", "", "write Recast builder debug JSON to this path, or '-' for stdout")
+	flag.StringVar(&buildSourcePath, "build-source", "", "optional .gknavsrc used by -dump-recast")
+	flag.BoolVar(&recastDumpInputMesh, "dump-recast-input-mesh", false, "include full Recast input triangle mesh in -dump-recast output")
 	flag.BoolVar(&rebuildDeltaNav, "rebuild-delta-nav", false, "rebuild navigation tile overrides from imported-world chunk overrides in .gkworlddelta")
 	flag.StringVar(&profileID, "profile", "", "optional agent profile id to validate")
 	flag.StringVar(&pathStartText, "path-start", "", "optional path query start point, formatted as x:y:z")
@@ -50,8 +56,8 @@ func main() {
 	flag.BoolVar(&failOnError, "fail-on-error", true, "exit with non-zero status when validation issues are found")
 	flag.Parse()
 
-	if strings.TrimSpace(navPath) == "" && strings.TrimSpace(heightfieldDumpPath) == "" && !rebuildDeltaNav {
-		fatalf("-nav is required unless -dump-heightfield is used")
+	if strings.TrimSpace(navPath) == "" && strings.TrimSpace(heightfieldDumpPath) == "" && strings.TrimSpace(recastDumpPath) == "" && !rebuildDeltaNav {
+		fatalf("-nav is required unless -dump-heightfield or -dump-recast is used")
 	}
 	if rebuildDeltaNav {
 		if strings.TrimSpace(navPath) == "" {
@@ -121,6 +127,40 @@ func main() {
 		}
 	}
 
+	if strings.TrimSpace(recastDumpPath) != "" {
+		if strings.TrimSpace(worldPath) == "" {
+			fatalf("-world is required with -dump-recast")
+		}
+		coord, err := parseNavDiagCoord(coordText)
+		if err != nil {
+			fatalf("parse -coord: %v", err)
+		}
+		profile, err := navDiagHeightfieldProfile(profileID, manifest)
+		if err != nil {
+			fatalf("%v", err)
+		}
+		var source *content.NavBuildSourceDef
+		if strings.TrimSpace(buildSourcePath) != "" {
+			source, err = content.LoadNavBuildSource(content.ResolveDocumentPath(buildSourcePath, worldPath))
+			if err != nil {
+				fatalf("load build source: %v", err)
+			}
+		}
+		debug, err := content.BuildNavRecastDebugFromImportedWorldManifestPath(worldPath, coord, profile, content.NavRecastDebugOptions{
+			BuildSource:      source,
+			IncludeInputMesh: recastDumpInputMesh,
+		})
+		if err != nil {
+			fatalf("build Recast dump: %v", err)
+		}
+		if err := writeNavDiagJSONDump(recastDumpPath, debug); err != nil {
+			fatalf("write Recast dump: %v", err)
+		}
+		if recastDumpPath != "-" {
+			fmt.Printf("recast_dump: %s\n", recastDumpPath)
+		}
+	}
+
 	if pathQueryEnabled {
 		if manifest == nil {
 			fatalf("-nav is required with -path-start/-path-end")
@@ -145,7 +185,7 @@ func runNavValidation(navPath string, manifest *content.NavManifestDef, profileI
 	fmt.Printf("nav: %s\n", navPath)
 	fmt.Printf("nav_id: %s\n", manifest.NavID)
 	fmt.Printf("builder_version: %s\n", manifest.BuilderVersion)
-	fmt.Printf("current_builder_version: %s\n", content.DefaultNavBuilderVersion)
+	fmt.Printf("current_builder_version: %s\n", content.DefaultNavBakeBuilderVersion)
 	fmt.Printf("profiles: %s\n", navDiagProfileList(manifest.AgentProfiles))
 	if profileID != "" {
 		fmt.Printf("profile_filter: %s\n", profileID)
@@ -310,19 +350,19 @@ func navDiagBuilderVersionIssues(manifest *content.NavManifestDef, tiles []*cont
 		return nil
 	}
 	issues := make([]content.NavValidationIssue, 0)
-	if manifest.BuilderVersion != content.DefaultNavBuilderVersion {
+	if manifest.BuilderVersion != content.DefaultNavBakeBuilderVersion {
 		issues = append(issues, content.NavValidationIssue{
 			Code:    "stale_nav_builder_version",
-			Message: fmt.Sprintf("nav manifest was built with %s; current builder is %s", manifest.BuilderVersion, content.DefaultNavBuilderVersion),
+			Message: fmt.Sprintf("nav manifest was built with %s; current builder is %s", manifest.BuilderVersion, content.DefaultNavBakeBuilderVersion),
 		})
 	}
 	for _, tile := range tiles {
-		if tile == nil || tile.BuilderVersion == "" || tile.BuilderVersion == content.DefaultNavBuilderVersion {
+		if tile == nil || tile.BuilderVersion == "" || tile.BuilderVersion == content.DefaultNavBakeBuilderVersion {
 			continue
 		}
 		issues = append(issues, content.NavValidationIssue{
 			Code:    "stale_nav_tile_builder_version",
-			Message: fmt.Sprintf("nav tile %s/%s was built with %s; current builder is %s", tile.AgentProfileID, content.TerrainChunkKey(tile.Coord), tile.BuilderVersion, content.DefaultNavBuilderVersion),
+			Message: fmt.Sprintf("nav tile %s/%s was built with %s; current builder is %s", tile.AgentProfileID, content.TerrainChunkKey(tile.Coord), tile.BuilderVersion, content.DefaultNavBakeBuilderVersion),
 		})
 	}
 	return issues
@@ -631,7 +671,11 @@ func printNavDiagTilePathList(label string, tiles map[string]*content.NavTileDef
 }
 
 func writeNavDiagHeightfieldDump(path string, debug *content.NavVoxelHeightfieldDebugDef) error {
-	data, err := json.MarshalIndent(debug, "", "  ")
+	return writeNavDiagJSONDump(path, debug)
+}
+
+func writeNavDiagJSONDump(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}

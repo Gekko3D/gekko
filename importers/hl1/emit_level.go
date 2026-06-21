@@ -430,18 +430,18 @@ func ensureGeneratedLevelNavigationSidecars(result GeneratedLevelResult) error {
 		Path:  navBuildSourcePath,
 	})
 	navBuildSource, err := content.SaveNavBuildSourceForImportedWorldManifest(manifestPath, navBuildSourcePath, content.NavBuildSourceBuildOptions{
-		AgentProfile:     content.DefaultHL1NavAgentProfile(),
-		ExplicitSurfaces: result.NavBuildSurfaces,
-		Tags:             []string{"source:hl1"},
+		AgentProfile: content.DefaultHL1NavAgentProfile(),
+		SurfaceHints: hl1NavBuildSurfaceHints(result.NavBuildSurfaces),
+		Tags:         []string{"source:hl1", "voxel_first"},
 	})
 	if err != nil {
 		return fmt.Errorf("precalculate navigation source sidecar: %w", err)
 	}
 	if _, err := content.SaveNavBakeForImportedWorldManifest(manifestPath, navManifestPath, content.NavBakeOptions{
-		LevelID:            result.Level.ID,
-		BuildSource:        navBuildSource,
-		BuildSourcePrimary: true,
-		Progress:           navBakeProgressBridge(result.Progress),
+		LevelID:        result.Level.ID,
+		BuilderVersion: content.DefaultNavBakeBuilderVersion,
+		BuildSource:    navBuildSource,
+		Progress:       navBakeProgressBridge(result.Progress),
 	}); err != nil {
 		return fmt.Errorf("precalculate navigation sidecars: %w", err)
 	}
@@ -450,6 +450,16 @@ func ensureGeneratedLevelNavigationSidecars(result GeneratedLevelResult) error {
 		Tags:         []string{"source:hl1", "generated"},
 	}
 	return nil
+}
+
+func hl1NavBuildSurfaceHints(inputs []content.NavBuildExplicitSurfaceInput) []content.NavBuildExplicitSurfaceInput {
+	hints := make([]content.NavBuildExplicitSurfaceInput, 0, len(inputs))
+	for _, input := range inputs {
+		if input.Kind == content.NavBuildSurfaceClearanceBlocker {
+			hints = append(hints, input)
+		}
+	}
+	return hints
 }
 
 func navBakeProgressBridge(progress ImportProgressFunc) content.NavBakeProgressFunc {

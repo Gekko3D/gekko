@@ -1128,6 +1128,19 @@ go run ./cmd/hl1import ... -progress 2>&1 | tee /tmp/hl1import.log
 
 Generated levels bake navigation sidecars by default. This is the long-term
 path for NPC navigation and should be left enabled for normal actiongame tests.
+The generated bake is voxel-first: walkable nav source geometry is derived from
+the emitted `.gkworld/.gkchunk` voxel occupancy, while HL1 BSP face metadata is
+kept only as hints such as clearance blockers for rails, fences, clips, and
+non-walkable grates. This keeps imported HL1 levels on the same navigation
+pipeline as editor-authored and non-HL1 voxel worlds, and prevents nav from
+drifting away from runtime voxel edits or `.gkworlddelta` overrides.
+Builder version `voxel_recast_v1` makes the Recast-backed voxel path the
+production bake path. Voxel collision is converted to Recast input geometry,
+Recast performs the walkable-span/contour/polygon build, and the result is
+written back to Gekko nav tiles. Explicit source-primary polygonization remains
+available for diagnostic compatibility runs, and `voxel_nav_v28` remains
+available as the legacy custom voxel polygonizer, but generated HL1 levels no
+longer use either path for primary walkable topology.
 For a diagnostic compile where navigation is known to be irrelevant or is being
 baked separately, add:
 

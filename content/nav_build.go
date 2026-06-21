@@ -1,6 +1,9 @@
 package content
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -102,6 +105,7 @@ type navTileBuildIntermediateCacheKey struct {
 	VoxelResolution float32
 	ProfileHash     string
 	SourceHash      string
+	BuildSourceHash string
 	NeighborHash    string
 }
 
@@ -333,17 +337,28 @@ func BuildNavTileFromImportedWorldChunk(chunk *ImportedWorldChunkDef, profile Na
 	if profile.Radius <= 0 || profile.Height <= 0 || profile.StepHeight <= 0 {
 		return NavTileBuildResult{}, fmt.Errorf("nav agent profile radius, height, and step_height must be positive")
 	}
+	builderVersion := opts.BuilderVersion
+	if builderVersion == "" {
+		builderVersion = DefaultNavBuilderVersion
+	}
+	if builderVersion == NavBuilderVersionVoxelRecastV1 {
+		return buildRecastNavTileFromImportedWorldChunk(chunk, profile, opts)
+	}
 
 	origin := importedWorldChunkWorldOrigin(chunk)
 	worldSize := float32(chunk.ChunkSize) * chunk.VoxelResolution
+	sourceHasBlockers := navBuildSourceHasClearanceBlockers(opts.BuildSource)
 	intermediate, usedClearanceSource := navTileBuildIntermediateFromClearanceSource(opts.BuildCache, chunk, opts.ClearanceSource, profile)
+	if sourceHasBlockers {
+		usedClearanceSource = false
+	}
 	if !usedClearanceSource {
-		intermediate = navTileBuildIntermediateForChunk(opts.BuildCache, chunk, profile, opts.NeighborChunks)
+		intermediate = navTileBuildIntermediateForChunkWithSource(opts.BuildCache, chunk, profile, opts.NeighborChunks, opts.BuildSource)
 	}
 	cells := intermediate.Cells
 	metrics := intermediate.Metrics
 	regions := intermediate.Regions
-	stitcher := newNavBuildBorderStitcher(chunk, profile, opts.NeighborChunks, metrics, opts.BuildCache)
+	stitcher := newNavBuildBorderStitcher(chunk, profile, opts.NeighborChunks, metrics, opts.BuildCache, opts.BuildSource)
 
 	navID := opts.NavID
 	if navID == "" {
@@ -351,10 +366,6 @@ func BuildNavTileFromImportedWorldChunk(chunk *ImportedWorldChunkDef, profile Na
 	}
 	if navID == "" {
 		navID = newID()
-	}
-	builderVersion := opts.BuilderVersion
-	if builderVersion == "" {
-		builderVersion = DefaultNavBuilderVersion
 	}
 	tile := &NavTileDef{
 		NavID:             navID,
@@ -385,8 +396,10 @@ func BuildNavTileFromImportedWorldChunk(chunk *ImportedWorldChunkDef, profile Na
 	}
 	if !sourcePrimary && len(regions) > 0 {
 		applyNavSurfaceNeighbors(tile, 0, profile)
+		assignNavBuildCellPolygonIDsFromTile(tile, origin, metrics, cells, chunk.VoxelResolution, profile)
+		connectNavTilePolygonsFromCells(tile, origin, metrics, cells, chunk.VoxelResolution, profile)
 		appendNavTileBorderSpans(tile, origin, metrics, cells, chunk.VoxelResolution)
-		appendNavTileDropLinks(tile, origin, metrics, cells, chunk.VoxelResolution, profile, opts.NeighborChunks, opts.BuildCache)
+		appendNavTileDropLinks(tile, origin, metrics, cells, chunk.VoxelResolution, profile, opts.NeighborChunks, opts.BuildCache, opts.BuildSource)
 	} else if !sourcePrimary {
 		appendNavBuildSourcePolygons(tile, opts.BuildSource, profile)
 	}
@@ -644,10 +657,14 @@ func navClearanceSourceVoxelDistance2D(pointX, pointZ float64, voxelX, voxelZ in
 }
 
 func navTileBuildIntermediateForChunk(cache *NavTileBuildCache, chunk *ImportedWorldChunkDef, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef) navTileBuildIntermediate {
+	return navTileBuildIntermediateForChunkWithSource(cache, chunk, profile, chunks, nil)
+}
+
+func navTileBuildIntermediateForChunkWithSource(cache *NavTileBuildCache, chunk *ImportedWorldChunkDef, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, source *NavBuildSourceDef) navTileBuildIntermediate {
 	if cache == nil {
-		return buildNavTileIntermediate(nil, chunk, profile, chunks)
+		return buildNavTileIntermediate(nil, chunk, profile, chunks, source)
 	}
-	key := navTileBuildIntermediateCacheKeyForChunk(cache, chunk, profile, chunks)
+	key := navTileBuildIntermediateCacheKeyForChunk(cache, chunk, profile, chunks, source)
 	cache.mu.Lock()
 	if cache.intermediates == nil {
 		cache.intermediates = make(map[navTileBuildIntermediateCacheKey]navTileBuildIntermediate)
@@ -658,7 +675,7 @@ func navTileBuildIntermediateForChunk(cache *NavTileBuildCache, chunk *ImportedW
 	}
 	cache.mu.Unlock()
 
-	intermediate := buildNavTileIntermediate(cache, chunk, profile, chunks)
+	intermediate := buildNavTileIntermediate(cache, chunk, profile, chunks, source)
 	cache.mu.Lock()
 	if cached, ok := cache.intermediates[key]; ok {
 		cache.mu.Unlock()
@@ -670,7 +687,7 @@ func navTileBuildIntermediateForChunk(cache *NavTileBuildCache, chunk *ImportedW
 	return intermediate
 }
 
-func navTileBuildIntermediateCacheKeyForChunk(cache *NavTileBuildCache, chunk *ImportedWorldChunkDef, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef) navTileBuildIntermediateCacheKey {
+func navTileBuildIntermediateCacheKeyForChunk(cache *NavTileBuildCache, chunk *ImportedWorldChunkDef, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, source *NavBuildSourceDef) navTileBuildIntermediateCacheKey {
 	EnsureNavAgentProfileDefaults(&profile)
 	key := navTileBuildIntermediateCacheKey{
 		ProfileHash: navBuildHash("", profile, ""),
@@ -680,6 +697,7 @@ func navTileBuildIntermediateCacheKeyForChunk(cache *NavTileBuildCache, chunk *I
 		key.ChunkSize = chunk.ChunkSize
 		key.VoxelResolution = chunk.VoxelResolution
 		key.SourceHash = navTileBuildChunkCacheSourceHash(cache, chunk)
+		key.BuildSourceHash = navBuildSourceClearanceBlockerHash(source)
 		key.NeighborHash = navTileBuildNeighborCacheHash(cache, chunk, profile, chunks)
 	}
 	return key
@@ -720,9 +738,10 @@ func navTileBuildNeighborCacheHash(cache *NavTileBuildCache, chunk *ImportedWorl
 	return navCombinedSourceHash(values...)
 }
 
-func buildNavTileIntermediate(cache *NavTileBuildCache, chunk *ImportedWorldChunkDef, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef) navTileBuildIntermediate {
+func buildNavTileIntermediate(cache *NavTileBuildCache, chunk *ImportedWorldChunkDef, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, source *NavBuildSourceDef) navTileBuildIntermediate {
 	data := navTileBuildChunkData(cache, chunk)
 	sampler := newImportedWorldNavOccupancySampler(cache, chunk, data, chunks, profile)
+	addNavBuildSourceClearanceBlockersToSampler(&sampler, source, chunk, profile)
 	cells, metrics, candidateSpans, acceptedSpans := buildNavWalkableCellsForProfile(chunk, profile, data.CandidateSpans, sampler)
 	sort.Slice(cells, func(i, j int) bool {
 		if cells[i].X != cells[j].X {
@@ -832,7 +851,7 @@ func buildNavWalkableCellsForProfileFromClearanceSource(chunk *ImportedWorldChun
 	return cells, metrics, len(source.Cells), acceptedSpans
 }
 
-func newNavBuildBorderStitcher(chunk *ImportedWorldChunkDef, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, metrics navBuildCellMetrics, cache *NavTileBuildCache) *navBuildBorderStitcher {
+func newNavBuildBorderStitcher(chunk *ImportedWorldChunkDef, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, metrics navBuildCellMetrics, cache *NavTileBuildCache, source *NavBuildSourceDef) *navBuildBorderStitcher {
 	if chunk == nil || len(chunks) == 0 || metrics.Horizontal <= 0 || metrics.Vertical <= 0 {
 		return nil
 	}
@@ -848,7 +867,7 @@ func newNavBuildBorderStitcher(chunk *ImportedWorldChunkDef, profile NavAgentPro
 		if !navBuildChunksCompatible(chunk, neighborChunk) {
 			continue
 		}
-		regions := navTileBuildIntermediateForChunk(cache, neighborChunk, profile, chunks).Regions
+		regions := navTileBuildIntermediateForChunkWithSource(cache, neighborChunk, profile, chunks, source).Regions
 		if len(regions) == 0 {
 			continue
 		}
@@ -1639,6 +1658,50 @@ func addNavBuildSourceClearanceBlockersToSampler(s *importedWorldNavOccupancySam
 		}
 		addNavBuildSourceClearanceBlockerVerticesToSampler(s, surface.Vertices, origin, resolution, boundsMin, boundsMax)
 	}
+}
+
+func navBuildSourceHasClearanceBlockers(source *NavBuildSourceDef) bool {
+	if source == nil {
+		return false
+	}
+	EnsureNavBuildSourceDefaults(source)
+	for i := range source.Surfaces {
+		surface := source.Surfaces[i]
+		EnsureNavBuildSurfaceDefaults(&surface)
+		if surface.Kind == NavBuildSurfaceClearanceBlocker && len(surface.Vertices) >= 3 {
+			return true
+		}
+	}
+	return false
+}
+
+func navBuildSourceClearanceBlockerHash(source *NavBuildSourceDef) string {
+	if source == nil {
+		return ""
+	}
+	EnsureNavBuildSourceDefaults(source)
+	blockers := make([]NavBuildSurfaceDef, 0)
+	for i := range source.Surfaces {
+		surface := source.Surfaces[i]
+		EnsureNavBuildSurfaceDefaults(&surface)
+		if surface.Kind == NavBuildSurfaceClearanceBlocker && len(surface.Vertices) >= 3 {
+			blockers = append(blockers, surface)
+		}
+	}
+	if len(blockers) == 0 {
+		return ""
+	}
+	sort.Slice(blockers, func(i, j int) bool {
+		if blockers[i].ID != blockers[j].ID {
+			return blockers[i].ID < blockers[j].ID
+		}
+		return blockers[i].SourceTag < blockers[j].SourceTag
+	})
+	h := sha256.New()
+	writeStringHash(h, "nav_build_source_clearance_blockers_v1")
+	data, _ := json.Marshal(blockers)
+	_, _ = h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func addNavBuildSourceClearanceBlockerVerticesToSampler(s *importedWorldNavOccupancySampler, vertices []Vec3, origin [3]float32, resolution float32, boundsMin Vec3, boundsMax Vec3) {
@@ -2920,7 +2983,101 @@ func appendNavTileBorderSpans(tile *NavTileDef, origin [3]float32, metrics navBu
 	}
 }
 
-func appendNavTileDropLinks(tile *NavTileDef, origin [3]float32, metrics navBuildCellMetrics, cells []NavBuildWalkableCell, voxelResolution float32, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, cache *NavTileBuildCache) {
+func assignNavBuildCellPolygonIDsFromTile(tile *NavTileDef, origin [3]float32, metrics navBuildCellMetrics, cells []NavBuildWalkableCell, voxelResolution float32, profile NavAgentProfileDef) {
+	for i := range cells {
+		if polygonID, ok := navTilePolygonIDForBuildCell(tile, origin, metrics, cells[i], voxelResolution, profile); ok {
+			cells[i].PolygonID = polygonID
+		}
+	}
+}
+
+func connectNavTilePolygonsFromCells(tile *NavTileDef, origin [3]float32, metrics navBuildCellMetrics, cells []NavBuildWalkableCell, voxelResolution float32, profile NavAgentProfileDef) {
+	if tile == nil || len(tile.Polygons) == 0 || len(cells) == 0 {
+		return
+	}
+	polygonIndexes := make(map[string]int, len(tile.Polygons))
+	for i := range tile.Polygons {
+		if tile.Polygons[i].ID != "" {
+			polygonIndexes[tile.Polygons[i].ID] = i
+		}
+	}
+	cellsByXZ := make(map[[2]int][]int, len(cells))
+	cellPolygonIDs := make([]string, len(cells))
+	for i, cell := range cells {
+		cellsByXZ[[2]int{cell.X, cell.Z}] = append(cellsByXZ[[2]int{cell.X, cell.Z}], i)
+		if cell.PolygonID != "" {
+			if _, ok := polygonIndexes[cell.PolygonID]; ok {
+				cellPolygonIDs[i] = cell.PolygonID
+				continue
+			}
+		}
+		if polygonID, ok := navTilePolygonIDForBuildCell(tile, origin, metrics, cell, voxelResolution, profile); ok {
+			cellPolygonIDs[i] = polygonID
+		}
+	}
+	for i, cell := range cells {
+		fromID := cellPolygonIDs[i]
+		fromIndex, ok := polygonIndexes[fromID]
+		if !ok {
+			continue
+		}
+		for _, key := range [][2]int{
+			{cell.X + 1, cell.Z},
+			{cell.X, cell.Z + 1},
+		} {
+			for _, next := range cellsByXZ[key] {
+				toID := cellPolygonIDs[next]
+				toIndex, ok := polygonIndexes[toID]
+				if !ok || fromID == toID {
+					continue
+				}
+				if !navCellsCanConnect(cell, cells[next], metrics, profile) {
+					continue
+				}
+				tile.Polygons[fromIndex].Neighbors = appendUniqueNavString(tile.Polygons[fromIndex].Neighbors, toID)
+				tile.Polygons[toIndex].Neighbors = appendUniqueNavString(tile.Polygons[toIndex].Neighbors, fromID)
+			}
+		}
+	}
+	for i := range tile.Polygons {
+		sort.Strings(tile.Polygons[i].Neighbors)
+	}
+}
+
+func navTilePolygonIDForBuildCell(tile *NavTileDef, origin [3]float32, metrics navBuildCellMetrics, cell NavBuildWalkableCell, voxelResolution float32, profile NavAgentProfileDef) (string, bool) {
+	if polygon, ok := navTilePolygonAtBuildCell(tile, origin, metrics, cell, voxelResolution); ok && polygon.ID != "" {
+		return polygon.ID, true
+	}
+	point := navBuildCellCenterPoint(origin, metrics, cell)
+	if voxelResolution > 0 && !metrics.WorldAligned && metrics.Horizontal == voxelResolution {
+		point[0] = origin[0] + (float32(cell.X)+0.5)*voxelResolution
+		point[2] = origin[2] + (float32(cell.Z)+0.5)*voxelResolution
+	}
+	EnsureNavAgentProfileDefaults(&profile)
+	tolerance := maxNavFloat32(metrics.Vertical*0.5, profile.StepHeight+metrics.Vertical*0.25)
+	bestID := ""
+	bestDelta := float32(0)
+	for _, polygon := range tile.Polygons {
+		if polygon.ID == "" || !navPolygonContainsXZ(tile, polygon, point) {
+			continue
+		}
+		height, ok := navPolygonHeightAtXZ(tile, polygon, point)
+		if !ok {
+			height = navPolygonCenter(tile, polygon)[1]
+		}
+		delta := absNavFloat32(height - point[1])
+		if delta > tolerance {
+			continue
+		}
+		if bestID == "" || delta < bestDelta {
+			bestID = polygon.ID
+			bestDelta = delta
+		}
+	}
+	return bestID, bestID != ""
+}
+
+func appendNavTileDropLinks(tile *NavTileDef, origin [3]float32, metrics navBuildCellMetrics, cells []NavBuildWalkableCell, voxelResolution float32, profile NavAgentProfileDef, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, cache *NavTileBuildCache, source *NavBuildSourceDef) {
 	if tile == nil || metrics.Horizontal <= 0 || metrics.Vertical <= 0 || len(cells) == 0 {
 		return
 	}
@@ -2941,7 +3098,7 @@ func appendNavTileDropLinks(tile *NavTileDef, origin [3]float32, metrics navBuil
 		if neighborChunk == nil {
 			continue
 		}
-		neighborIntermediate := navTileBuildIntermediateForChunk(cache, neighborChunk, profile, chunks)
+		neighborIntermediate := navTileBuildIntermediateForChunkWithSource(cache, neighborChunk, profile, chunks, source)
 		neighborOrigin := importedWorldChunkWorldOrigin(neighborChunk)
 		for _, cell := range neighborIntermediate.Cells {
 			appendNavDropLinkCellRef(refsByXZ, navDropLinkCellRef{Coord: coord, Origin: neighborOrigin, Cell: cell}, metrics)
@@ -3398,6 +3555,7 @@ func appendNavBuildSourcePrimaryPolygons(tile *NavTileDef, source *NavBuildSourc
 	if cellSize > 0 {
 		data := navTileBuildChunkData(cache, chunk)
 		sampler := newImportedWorldNavOccupancySampler(cache, chunk, data, neighbors, profile)
+		addNavBuildSourceClearanceBlockersToSampler(&sampler, source, chunk, profile)
 		rasterized = appendNavBuildSourceRasterPolygons(tile, source, profile, chunk.VoxelResolution, chunk, sampler)
 	}
 	appendNavBuildSourcePolygonsSkipping(tile, source, profile, rasterized)

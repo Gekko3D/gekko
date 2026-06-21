@@ -130,30 +130,41 @@ func navPolygonsCanPortalAcrossTileBoundary(tileA *NavTileDef, polygonA NavPolyg
 	const epsilon = float32(1e-4)
 	switch {
 	case dir.X == 1:
-		return navPolygonBoundsCrossesPlane(a, tileA.BoundsMax[0], 0, epsilon) &&
-			navPolygonBoundsCrossesPlane(b, tileB.BoundsMin[0], 0, epsilon) &&
+		return navPolygonTouchesPortalPlane(tileA, polygonA, a, tileA.BoundsMax[0], 0, epsilon) &&
+			navPolygonTouchesPortalPlane(tileB, polygonB, b, tileB.BoundsMin[0], 0, epsilon) &&
 			navAlmostEqual(tileA.BoundsMax[0], tileB.BoundsMin[0], epsilon) &&
 			navRangesOverlapPositive(a.min[2], a.max[2], b.min[2], b.max[2], epsilon)
 	case dir.X == -1:
-		return navPolygonBoundsCrossesPlane(a, tileA.BoundsMin[0], 0, epsilon) &&
-			navPolygonBoundsCrossesPlane(b, tileB.BoundsMax[0], 0, epsilon) &&
+		return navPolygonTouchesPortalPlane(tileA, polygonA, a, tileA.BoundsMin[0], 0, epsilon) &&
+			navPolygonTouchesPortalPlane(tileB, polygonB, b, tileB.BoundsMax[0], 0, epsilon) &&
 			navAlmostEqual(tileA.BoundsMin[0], tileB.BoundsMax[0], epsilon) &&
 			navRangesOverlapPositive(a.min[2], a.max[2], b.min[2], b.max[2], epsilon)
 	case dir.Y == 1 || dir.Y == -1:
 		return navPolygonsTouchAcrossTileBoundary(tileA, polygonA, tileB, polygonB, dir)
 	case dir.Z == 1:
-		return navPolygonBoundsCrossesPlane(a, tileA.BoundsMax[2], 2, epsilon) &&
-			navPolygonBoundsCrossesPlane(b, tileB.BoundsMin[2], 2, epsilon) &&
+		return navPolygonTouchesPortalPlane(tileA, polygonA, a, tileA.BoundsMax[2], 2, epsilon) &&
+			navPolygonTouchesPortalPlane(tileB, polygonB, b, tileB.BoundsMin[2], 2, epsilon) &&
 			navAlmostEqual(tileA.BoundsMax[2], tileB.BoundsMin[2], epsilon) &&
 			navRangesOverlapPositive(a.min[0], a.max[0], b.min[0], b.max[0], epsilon)
 	case dir.Z == -1:
-		return navPolygonBoundsCrossesPlane(a, tileA.BoundsMin[2], 2, epsilon) &&
-			navPolygonBoundsCrossesPlane(b, tileB.BoundsMax[2], 2, epsilon) &&
+		return navPolygonTouchesPortalPlane(tileA, polygonA, a, tileA.BoundsMin[2], 2, epsilon) &&
+			navPolygonTouchesPortalPlane(tileB, polygonB, b, tileB.BoundsMax[2], 2, epsilon) &&
 			navAlmostEqual(tileA.BoundsMin[2], tileB.BoundsMax[2], epsilon) &&
 			navRangesOverlapPositive(a.min[0], a.max[0], b.min[0], b.max[0], epsilon)
 	default:
 		return false
 	}
+}
+
+func navPolygonTouchesPortalPlane(tile *NavTileDef, polygon NavPolygonDef, bounds navPolygonBounds, plane float32, axis int, epsilon float32) bool {
+	if navPolygonBoundsCrossesPlane(bounds, plane, axis, epsilon) {
+		return true
+	}
+	if polygon.ID == "" {
+		return false
+	}
+	spans, ok := navPolygonBorderSpansAtPlane(tile, polygon.ID, axis, plane)
+	return ok && len(spans) > 0
 }
 
 func navPolygonsBoundaryPortalSegments(tileA *NavTileDef, polygonA NavPolygonDef, tileB *NavTileDef, polygonB NavPolygonDef, dir TerrainChunkCoordDef, profile NavAgentProfileDef) []navBoundaryPortalSegment {

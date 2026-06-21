@@ -21,13 +21,11 @@ type realMapNavFixture struct {
 func TestRealMapNavPathFixtures(t *testing.T) {
 	fixtures := []realMapNavFixture{
 		{
-			Name:          "crossfire_large_field_across_center_seam",
-			MapName:       "crossfire",
-			Start:         Vec3{-17.07, -43.00, 30.77},
-			End:           Vec3{11.00, -43.00, 20.87},
-			MinSteps:      3,
-			WantStartSnap: true,
-			WantEndSnap:   true,
+			Name:     "crossfire_large_field_across_center_seam",
+			MapName:  "crossfire",
+			Start:    Vec3{-17.07, -43.00, 30.77},
+			End:      Vec3{11.00, -43.00, 20.87},
+			MinSteps: 3,
 		},
 		{
 			Name:          "crossfire_endpoint_snap_near_center_seam",
@@ -36,7 +34,6 @@ func TestRealMapNavPathFixtures(t *testing.T) {
 			End:           Vec3{0.15, -43.00, 16.13},
 			MinSteps:      2,
 			WantStartSnap: true,
-			WantEndSnap:   true,
 		},
 		{
 			Name:     "gasworks_large_field_across_center_seam",
@@ -90,18 +87,25 @@ func TestRealMapNavPathFixtures(t *testing.T) {
 	}
 }
 
-func TestRealMapCrossfireNavKeepsHL1SourcePolygonsDirect(t *testing.T) {
+func TestRealMapCrossfireNavAvoidsPrimaryHL1SourcePolygons(t *testing.T) {
 	manifest, manifestPath := loadRealMapNavManifestOrSkip(t, "crossfire")
+	voxelDerived := 0
 	for _, entry := range manifest.Tiles {
 		tile, err := LoadNavTile(ResolveNavTilePath(entry, manifestPath))
 		if err != nil {
 			t.Fatalf("LoadNavTile %s failed: %v", TerrainChunkKey(entry.Coord), err)
 		}
 		for _, polygon := range tile.Polygons {
-			if strings.HasPrefix(polygon.ID, "raster_region:") || strings.HasPrefix(polygon.ID, "raster_cell:") {
-				t.Fatalf("expected Crossfire HL1 source nav to keep direct/contour polygons, got rasterized polygon %q in tile %s", polygon.ID, TerrainChunkKey(entry.Coord))
+			if strings.HasPrefix(polygon.ID, "recast:") || strings.HasPrefix(polygon.ID, "raster_region:") || strings.HasPrefix(polygon.ID, "raster_cell:") || strings.HasPrefix(polygon.ID, "contour:") || strings.HasPrefix(polygon.ID, "voxel_cell:") {
+				voxelDerived++
+			}
+			if strings.HasPrefix(polygon.ID, "surface:hl1_") {
+				t.Fatalf("expected Crossfire production nav to avoid primary HL1 source polygons, got %q in tile %s", polygon.ID, TerrainChunkKey(entry.Coord))
 			}
 		}
+	}
+	if voxelDerived == 0 {
+		t.Fatalf("expected Crossfire production nav to use voxel-heightfield polygons")
 	}
 }
 

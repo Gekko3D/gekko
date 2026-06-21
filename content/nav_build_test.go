@@ -100,6 +100,30 @@ func TestNavCellsCanConnectUsesStepHeightIndependentlyOfSlopeLimit(t *testing.T)
 	}
 }
 
+func TestConnectNavTilePolygonsFromCellsUsesHeightfieldConnectivity(t *testing.T) {
+	tile := &NavTileDef{
+		Vertices: []Vec3{
+			{0, 1, 0}, {0.4, 1, 0}, {0.4, 1, 1}, {0, 1, 1},
+			{1.6, 1, 0}, {2, 1, 0}, {2, 1, 1}, {1.6, 1, 1},
+		},
+		Polygons: []NavPolygonDef{
+			{ID: "left", Vertices: []int{0, 1, 2, 3}, Area: NavTraversalWalk},
+			{ID: "right", Vertices: []int{4, 5, 6, 7}, Area: NavTraversalWalk},
+		},
+	}
+	cells := []NavBuildWalkableCell{
+		{X: 0, Y: 1, Z: 0, PolygonID: "left"},
+		{X: 1, Y: 1, Z: 0, PolygonID: "right"},
+	}
+	profile := navTestAgentProfile(0.2, 1.0, 0.5)
+
+	connectNavTilePolygonsFromCells(tile, [3]float32{}, navBuildCellMetrics{Horizontal: 1, Vertical: 1}, cells, 1, profile)
+
+	if !navTilePolygonsAreNeighbors(tile, "left", "right") {
+		t.Fatalf("expected heightfield-adjacent polygons to be connected, got %+v", tile.Polygons)
+	}
+}
+
 func TestBuildNavTileGeneratesOneWayDropLinks(t *testing.T) {
 	profile := navTestAgentProfile(0.2, 1.0, 0.5)
 	profile.MaxDropHeight = 3

@@ -4,25 +4,28 @@ const (
 	CurrentNavManifestSchemaVersion = 1
 	CurrentNavTileSchemaVersion     = 1
 
-	DefaultNavBuilderVersion   = "voxel_nav_v27"
-	DefaultNavAgentProfileID   = "hl1_standing"
-	DefaultNavCellSize         = 0.3
-	NavTilePayloadJSONV1       = "nav_tile_json_v1"
-	NavTraversalWalk           = "walk"
-	NavTraversalRamp           = "ramp"
-	NavTraversalStair          = "stair"
-	NavTraversalStep           = "step"
-	NavTraversalCrouch         = "crouch"
-	NavTraversalJump           = "jump"
-	NavTraversalDrop           = "drop"
-	NavTraversalLadder         = "ladder"
-	NavTraversalSwim           = "swim"
-	NavTraversalDoor           = "door"
-	NavTraversalMovingPlatform = "moving_platform"
-	NavBorderEdgeMinX          = "x_min"
-	NavBorderEdgeMaxX          = "x_max"
-	NavBorderEdgeMinZ          = "z_min"
-	NavBorderEdgeMaxZ          = "z_max"
+	DefaultNavBuilderVersion       = NavBuilderVersionVoxelNavV28
+	DefaultNavBakeBuilderVersion   = NavBuilderVersionVoxelRecastV1
+	NavBuilderVersionVoxelNavV28   = "voxel_nav_v28"
+	NavBuilderVersionVoxelRecastV1 = "voxel_recast_v1"
+	DefaultNavAgentProfileID       = "hl1_standing"
+	DefaultNavCellSize             = 0.3
+	NavTilePayloadJSONV1           = "nav_tile_json_v1"
+	NavTraversalWalk               = "walk"
+	NavTraversalRamp               = "ramp"
+	NavTraversalStair              = "stair"
+	NavTraversalStep               = "step"
+	NavTraversalCrouch             = "crouch"
+	NavTraversalJump               = "jump"
+	NavTraversalDrop               = "drop"
+	NavTraversalLadder             = "ladder"
+	NavTraversalSwim               = "swim"
+	NavTraversalDoor               = "door"
+	NavTraversalMovingPlatform     = "moving_platform"
+	NavBorderEdgeMinX              = "x_min"
+	NavBorderEdgeMaxX              = "x_max"
+	NavBorderEdgeMinZ              = "z_min"
+	NavBorderEdgeMaxZ              = "z_max"
 )
 
 type NavManifestDef struct {

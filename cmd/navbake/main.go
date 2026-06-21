@@ -17,6 +17,7 @@ func main() {
 	var navID string
 	var tileDir string
 	var buildSourcePath string
+	var builderVersion string
 	var cpuProfilePath string
 	var buildWorkers int
 	var progress bool
@@ -25,6 +26,7 @@ func main() {
 	flag.StringVar(&navID, "nav-id", "", "optional generated nav_id")
 	flag.StringVar(&tileDir, "tile-dir", "", "optional tile directory name relative to nav manifest")
 	flag.StringVar(&buildSourcePath, "build-source", "", "optional .gknavsource path")
+	flag.StringVar(&builderVersion, "builder-version", "", "nav builder version; defaults to current engine builder")
 	flag.StringVar(&cpuProfilePath, "cpuprofile", "", "optional path to write Go CPU profile")
 	flag.IntVar(&buildWorkers, "build-workers", 0, "parallel build_intermediate workers; <=0 uses GOMAXPROCS")
 	flag.BoolVar(&progress, "progress", false, "print timestamped nav bake progress")
@@ -37,10 +39,14 @@ func main() {
 		stopCPUProfile := startCPUProfile(cpuProfilePath)
 		defer stopCPUProfile()
 	}
+	if strings.TrimSpace(builderVersion) == "" {
+		builderVersion = content.DefaultNavBakeBuilderVersion
+	}
 
 	opts := content.NavBakeOptions{
 		NavID:              navID,
 		TileDirectoryName:  tileDir,
+		BuilderVersion:     builderVersion,
 		BuildSourcePath:    buildSourcePath,
 		BuildSourcePrimary: strings.TrimSpace(buildSourcePath) != "",
 		BuildWorkers:       buildWorkers,

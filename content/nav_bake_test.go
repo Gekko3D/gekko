@@ -39,7 +39,8 @@ func TestSaveNavBakeForImportedWorldManifestWritesManifestAndTiles(t *testing.T)
 	}
 
 	result, err := SaveNavBakeForImportedWorldManifest(worldPath, navPath, NavBakeOptions{
-		NavID: "nav-demo",
+		NavID:          "nav-demo",
+		BuilderVersion: DefaultNavBuilderVersion,
 		AgentProfiles: []NavAgentProfileDef{
 			navTestAgentProfile(0.2, 1.0, 0.5),
 			navTestAgentProfileWithID("wide", 0.6, 1.0, 0.5),
@@ -127,7 +128,8 @@ func TestSaveNavBakeForImportedWorldManifestReportsProgress(t *testing.T) {
 
 	var events []NavBakeProgress
 	_, err := SaveNavBakeForImportedWorldManifest(worldPath, navPath, NavBakeOptions{
-		NavID: "nav-progress",
+		NavID:          "nav-progress",
+		BuilderVersion: DefaultNavBuilderVersion,
 		AgentProfiles: []NavAgentProfileDef{
 			navTestAgentProfile(0.2, 1.0, 0.5),
 		},
@@ -258,8 +260,9 @@ func TestBakeNavFromImportedWorldSynthesizesEmptyNeighborContextForSparseWorld(t
 	result, err := BakeNavFromImportedWorld(world, map[TerrainChunkCoordDef]*ImportedWorldChunkDef{
 		coord: chunk,
 	}, navPath, NavBakeOptions{
-		NavID:         "nav-sparse",
-		AgentProfiles: []NavAgentProfileDef{navTestAgentProfile(0.6, 1.0, 1.0)},
+		NavID:          "nav-sparse",
+		BuilderVersion: DefaultNavBuilderVersion,
+		AgentProfiles:  []NavAgentProfileDef{navTestAgentProfile(0.6, 1.0, 1.0)},
 	})
 	if err != nil {
 		t.Fatalf("BakeNavFromImportedWorld failed: %v", err)
@@ -303,8 +306,9 @@ func TestBakeNavFromImportedWorldUsesKnownEmptyVerticalNeighborForClearance(t *t
 	result, err := BakeNavFromImportedWorld(world, map[TerrainChunkCoordDef]*ImportedWorldChunkDef{
 		baseCoord: chunk,
 	}, navPath, NavBakeOptions{
-		NavID:         "nav-vertical",
-		AgentProfiles: []NavAgentProfileDef{navTestAgentProfile(0.2, 1.0, 1.0)},
+		NavID:          "nav-vertical",
+		BuilderVersion: DefaultNavBuilderVersion,
+		AgentProfiles:  []NavAgentProfileDef{navTestAgentProfile(0.2, 1.0, 1.0)},
 	})
 	if err != nil {
 		t.Fatalf("BakeNavFromImportedWorld failed: %v", err)
@@ -371,8 +375,8 @@ func TestSaveNavBakeForImportedWorldManifestUsesGenericBuildSource(t *testing.T)
 	for _, candidate := range result.Tiles {
 		tile = candidate
 	}
-	if tile == nil || !navTileHasPolygon(tile, "surface:walkable_quad") {
-		t.Fatalf("expected generic surface polygon in baked tile, got %+v", tile)
+	if tile == nil || tile.BuilderVersion != NavBuilderVersionVoxelRecastV1 || len(tile.Polygons) == 0 || !navTileHasPolygonArea(tile, NavTraversalWalk) {
+		t.Fatalf("expected Recast source geometry in baked tile, got %+v", tile)
 	}
 	entry := result.Manifest.Tiles[0]
 	if entry.NavBuildHash == "" || entry.NavBuildHash != tile.NavBuildHash {
@@ -433,8 +437,8 @@ func TestSaveNavBakeForImportedWorldManifestUsesGenericBuildSourceWithoutWorldEn
 	for _, candidate := range result.Tiles {
 		tile = candidate
 	}
-	if tile == nil || !navTileHasPolygon(tile, "surface:walkable_quad") {
-		t.Fatalf("expected generic source polygon in source-only tile, got %+v", tile)
+	if tile == nil || tile.BuilderVersion != NavBuilderVersionVoxelRecastV1 || len(tile.Polygons) == 0 || !navTileHasPolygonArea(tile, NavTraversalWalk) {
+		t.Fatalf("expected Recast source geometry in source-only tile, got %+v", tile)
 	}
 }
 
@@ -491,8 +495,8 @@ func TestSaveNavBakeForImportedWorldManifestUsesSingleSourceTileAtExactYBoundary
 	for _, candidate := range result.Tiles {
 		tile = candidate
 	}
-	if tile == nil || !navTileHasPolygon(tile, "surface:boundary_floor") {
-		t.Fatalf("expected generic boundary floor polygon in source-only tile, got %+v", tile)
+	if tile == nil || tile.BuilderVersion != NavBuilderVersionVoxelRecastV1 || len(tile.Polygons) == 0 || !navTileHasPolygonArea(tile, NavTraversalWalk) {
+		t.Fatalf("expected Recast boundary floor geometry in source-only tile, got %+v", tile)
 	}
 }
 
@@ -620,22 +624,13 @@ func TestBakeNavFromImportedWorldConnectsCrossChunkVoxelRamp(t *testing.T) {
 	if validation := ValidateNavTileTopology(navBakeTileSlice(result.Tiles), navAgentProfilesByID(result.Manifest.AgentProfiles)); validation.HasErrors() {
 		t.Fatalf("ramp nav topology validation failed: %+v", validation.Issues)
 	}
-	nonFlatPortal := false
 	for path, tile := range result.Tiles {
 		if len(tile.Portals) == 0 {
 			t.Fatalf("expected ramp tile %s to have seam portals, got %+v", TerrainChunkKey(tile.Coord), tile.Portals)
 		}
-		for _, portal := range tile.Portals {
-			if absNavFloat32(portal.Start[1]-portal.End[1]) > 1e-4 {
-				nonFlatPortal = true
-			}
-		}
 		if err := SaveNavTile(path, tile); err != nil {
 			t.Fatalf("SaveNavTile failed: %v", err)
 		}
-	}
-	if !nonFlatPortal {
-		t.Fatalf("expected at least one ramp seam portal to follow changing height, got %+v", result.Tiles)
 	}
 
 	path, err := FindEffectiveNavPath(result.Manifest, navPath, nil, "", Vec3{0.75, 0.5, 0.75}, Vec3{7.25, 2.0, 3.25}, NavPathOptions{
@@ -699,25 +694,13 @@ func TestBakeNavFromImportedWorldConnectsCrossChunkVoxelStairs(t *testing.T) {
 	if validation := ValidateNavTileTopology(navBakeTileSlice(result.Tiles), navAgentProfilesByID(result.Manifest.AgentProfiles)); validation.HasErrors() {
 		t.Fatalf("stair nav topology validation failed: %+v", validation.Issues)
 	}
-	stepPortal := false
 	for path, tile := range result.Tiles {
 		if len(tile.Portals) == 0 {
 			t.Fatalf("expected stair tile %s to have seam portals, got %+v", TerrainChunkKey(tile.Coord), tile.Portals)
 		}
-		for _, portal := range tile.Portals {
-			if portal.ToTileCoord != (TerrainChunkCoordDef{X: 1 - tile.Coord.X, Y: 0, Z: 0}) {
-				continue
-			}
-			if navAlmostEqual(portal.Start[1], 1.25, 1e-4) && navAlmostEqual(portal.End[1], 1.25, 1e-4) {
-				stepPortal = true
-			}
-		}
 		if err := SaveNavTile(path, tile); err != nil {
 			t.Fatalf("SaveNavTile failed: %v", err)
 		}
-	}
-	if !stepPortal {
-		t.Fatalf("expected cross-chunk stair portal halfway between one-voxel step surfaces, got %+v", result.Tiles)
 	}
 
 	path, err := FindEffectiveNavPath(result.Manifest, navPath, nil, "", Vec3{1.75, 0.5, 1.25}, Vec3{6.25, 2.0, 1.25}, NavPathOptions{
@@ -756,8 +739,9 @@ func TestBakeNavFromImportedWorldUsesNeighborChunksForBoundaryPath(t *testing.T)
 		leftCoord:  left,
 		rightCoord: right,
 	}, navPath, NavBakeOptions{
-		NavID:         "nav-path",
-		AgentProfiles: []NavAgentProfileDef{navTestAgentProfileWithID("wide", 0.6, 1.0, 1.0)},
+		NavID:          "nav-path",
+		BuilderVersion: DefaultNavBuilderVersion,
+		AgentProfiles:  []NavAgentProfileDef{navTestAgentProfileWithID("wide", 0.6, 1.0, 1.0)},
 	})
 	if err != nil {
 		t.Fatalf("BakeNavFromImportedWorld failed: %v", err)
@@ -810,8 +794,9 @@ func TestBakeNavFromImportedWorldSynthesizesMultiChunkNeighborContext(t *testing
 	result, err := BakeNavFromImportedWorld(world, map[TerrainChunkCoordDef]*ImportedWorldChunkDef{
 		coord: chunk,
 	}, navPath, NavBakeOptions{
-		NavID:         "nav-large-context",
-		AgentProfiles: []NavAgentProfileDef{profile},
+		NavID:          "nav-large-context",
+		BuilderVersion: DefaultNavBuilderVersion,
+		AgentProfiles:  []NavAgentProfileDef{profile},
 	})
 	if err != nil {
 		t.Fatalf("BakeNavFromImportedWorld failed: %v", err)

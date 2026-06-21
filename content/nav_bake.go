@@ -286,7 +286,11 @@ func BakeNavFromImportedWorld(world *ImportedWorldDef, chunks map[TerrainChunkCo
 	clearanceSourceTiles := make(map[string]*NavClearanceSourceTileDef)
 	buildCache := &NavTileBuildCache{TrustPayloadHash: true}
 	buildTotal := importedWorldBuildableCoordCount(entriesByCoord, coords, opts.BuildSource, world.ChunkSize, world.VoxelResolution) * len(opts.AgentProfiles)
-	sourceBuildTotal := importedWorldNonEmptyCoordCount(entriesByCoord, coords)
+	buildsClearanceSource := opts.BuilderVersion != NavBuilderVersionVoxelRecastV1
+	sourceBuildTotal := 0
+	if buildsClearanceSource {
+		sourceBuildTotal = importedWorldNonEmptyCoordCount(entriesByCoord, coords)
+	}
 	maxClearanceRadius := navBakeMaxAgentRadius(opts.AgentProfiles)
 	intermediateJobs := make([]navBakeIntermediateJob, 0, buildTotal)
 	for _, coord := range coords {
@@ -323,7 +327,7 @@ func BakeNavFromImportedWorld(world *ImportedWorldDef, chunks map[TerrainChunkCo
 		sourceHash := firstNonEmptyNavString(entry.PayloadHash, chunk.PayloadHash, importedWorldChunkNavSourceHash(chunk))
 		combinedSourceHash := navCombinedSourceHash(sourceHash, navBuildSourceHash(opts.BuildSource))
 		var clearanceSourceForCoord *NavClearanceSourceTileDef
-		if entry.NonEmptyVoxelCount > 0 {
+		if buildsClearanceSource && entry.NonEmptyVoxelCount > 0 {
 			sourceBuildStarted := time.Now()
 			sourceResult, err := BuildNavClearanceSourceTileFromImportedWorldChunk(chunk, NavClearanceSourceTileBuildOptions{
 				NavID:              opts.NavID,
@@ -470,11 +474,14 @@ func prebuildNavBakeIntermediates(buildCache *NavTileBuildCache, chunks map[Terr
 	if len(jobs) == 0 {
 		return nil
 	}
+	if opts.BuilderVersion == NavBuilderVersionVoxelRecastV1 {
+		return nil
+	}
 	workerCount := navBakeBuildWorkerCount(opts.BuildWorkers, len(jobs))
 	if workerCount <= 1 {
 		for i, job := range jobs {
 			started := time.Now()
-			intermediate := navTileBuildIntermediateForChunk(buildCache, job.Chunk, job.Profile, chunks)
+			intermediate := navTileBuildIntermediateForChunkWithSource(buildCache, job.Chunk, job.Profile, chunks, opts.BuildSource)
 			reportNavBakeProgress(opts, NavBakeProgress{
 				Stage:          NavBakeProgressStageIntermediate,
 				Current:        i + 1,
@@ -500,7 +507,7 @@ func prebuildNavBakeIntermediates(buildCache *NavTileBuildCache, chunks map[Terr
 				started := time.Now()
 				resultCh <- navBakeIntermediateResult{
 					Job:          job,
-					Intermediate: navTileBuildIntermediateForChunk(buildCache, job.Chunk, job.Profile, chunks),
+					Intermediate: navTileBuildIntermediateForChunkWithSource(buildCache, job.Chunk, job.Profile, chunks, opts.BuildSource),
 					Duration:     time.Since(started),
 				}
 			}
@@ -886,7 +893,7 @@ func normalizeNavBakeOptions(world *ImportedWorldDef, navManifestPath string, op
 		}
 	}
 	if strings.TrimSpace(opts.BuilderVersion) == "" {
-		opts.BuilderVersion = DefaultNavBuilderVersion
+		opts.BuilderVersion = DefaultNavBakeBuilderVersion
 	}
 	if strings.TrimSpace(opts.TileDirectoryName) == "" {
 		opts.TileDirectoryName = filepath.Base(DefaultNavTileDir(navManifestPath))

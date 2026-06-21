@@ -206,14 +206,13 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 			combinedSourceHash := navCombinedSourceHash(sourceHash, navBuildSourceHash(buildSource))
 			buildHash := navBuildHash(opts.BuilderVersion, profile, combinedSourceHash)
 			tileResult, err := BuildNavTileFromImportedWorldChunk(chunk, profile, NavTileBuildOptions{
-				NavID:              baseNav.NavID,
-				BuilderVersion:     opts.BuilderVersion,
-				SourceDeltaHash:    sourceHash,
-				NavBuildHash:       buildHash,
-				NeighborChunks:     chunks,
-				BuildCache:         buildCache,
-				BuildSource:        buildSource,
-				BuildSourcePrimary: true,
+				NavID:           baseNav.NavID,
+				BuilderVersion:  opts.BuilderVersion,
+				SourceDeltaHash: sourceHash,
+				NavBuildHash:    buildHash,
+				NeighborChunks:  chunks,
+				BuildCache:      buildCache,
+				BuildSource:     buildSource,
 			})
 			if err != nil {
 				return NavDeltaBakeResult{}, err

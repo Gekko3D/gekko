@@ -39,6 +39,113 @@ func TestBuildNavBuildSourceFromImportedWorldCreatesMergedWalkableSurfaces(t *te
 	}
 }
 
+func TestBuildNavBuildSourceFromImportedWorldAddsSurfaceHintsWithoutReplacingVoxels(t *testing.T) {
+	chunk := navTestChunk(16, 0.25, navTestFloorVoxels(2, 13, 2, 13, 0)...)
+	world := &ImportedWorldDef{
+		WorldID:         "world-source-hints",
+		Kind:            ImportedWorldKindVoxelWorld,
+		ChunkSize:       chunk.ChunkSize,
+		VoxelResolution: chunk.VoxelResolution,
+		Entries: []ImportedWorldChunkEntryDef{{
+			Coord:              chunk.Coord,
+			ChunkPath:          "chunks/world-source-hints_0_0_0.gkchunk",
+			NonEmptyVoxelCount: chunk.NonEmptyVoxelCount,
+		}},
+	}
+	profile := navTestAgentProfile(0.4, 1.0, 0.5)
+	profile.NavCellSize = 0.5
+
+	source, err := BuildNavBuildSourceFromImportedWorld(world, map[TerrainChunkCoordDef]*ImportedWorldChunkDef{
+		chunk.Coord: chunk,
+	}, NavBuildSourceBuildOptions{
+		AgentProfile: profile,
+		SurfaceHints: []NavBuildExplicitSurfaceInput{{
+			ID:   "rail_blocker",
+			Kind: NavBuildSurfaceClearanceBlocker,
+			Vertices: []Vec3{
+				{2.0, 0.25, 0.5},
+				{2.0, 1.25, 0.5},
+				{2.0, 1.25, 3.5},
+				{2.0, 0.25, 3.5},
+			},
+			SourceTag: "hl1:model:0:face:5",
+			Tags:      []string{"source:hl1"},
+		}},
+		Tags: []string{"source:hl1"},
+	})
+	if err != nil {
+		t.Fatalf("BuildNavBuildSourceFromImportedWorld failed: %v", err)
+	}
+	if len(source.Surfaces) < 2 {
+		t.Fatalf("expected voxel-derived surfaces plus hint blocker, got %+v", source.Surfaces)
+	}
+	if source.Surfaces[0].Kind != NavBuildSurfaceWalkable || source.Surfaces[0].SourceTag == "hl1:model:0:face:5" {
+		t.Fatalf("expected voxel-derived walkable surface to remain primary, got %+v", source.Surfaces[0])
+	}
+	if source.Surfaces[len(source.Surfaces)-1].ID != "rail_blocker" || source.Surfaces[len(source.Surfaces)-1].Kind != NavBuildSurfaceClearanceBlocker {
+		t.Fatalf("expected source hint blocker to be appended, got %+v", source.Surfaces)
+	}
+
+	result, err := BuildNavTileFromImportedWorldChunk(chunk, profile, NavTileBuildOptions{
+		BuildSource:        source,
+		BuildSourcePrimary: true,
+		NeighborChunks:     navTestEmptyNeighborChunks(chunk, navBuildChunkReachForProfile(chunk.ChunkSize, chunk.VoxelResolution, profile)),
+	})
+	if err != nil {
+		t.Fatalf("BuildNavTileFromImportedWorldChunk failed: %v", err)
+	}
+	if navTileHasPolygon(result.Tile, "surface:rail_blocker") {
+		t.Fatalf("did not expect hint blocker to become walkable nav, got %+v", result.Tile.Polygons)
+	}
+	if navTileHasCell(result.Tile, 8, 1, 8, chunk.VoxelResolution) {
+		t.Fatalf("did not expect nav through expanded hint blocker clearance, got %+v", result.Tile.Polygons)
+	}
+	if !navTileHasCell(result.Tile, 2, 1, 8, chunk.VoxelResolution) || !navTileHasCell(result.Tile, 12, 1, 8, chunk.VoxelResolution) {
+		t.Fatalf("expected voxel-derived source to remain walkable around blocker, got %+v", result.Tile.Polygons)
+	}
+}
+
+func TestBuildNavTileDirectVoxelHeightfieldUsesSourceBlockerHints(t *testing.T) {
+	chunk := navTestChunk(16, 0.25, navTestFloorVoxels(2, 13, 2, 13, 0)...)
+	profile := navTestAgentProfile(0.4, 1.0, 0.5)
+	profile.NavCellSize = 0.5
+	source := &NavBuildSourceDef{
+		SourceID: "voxel-first-hints",
+		Surfaces: []NavBuildSurfaceDef{{
+			ID:   "rail_blocker",
+			Kind: NavBuildSurfaceClearanceBlocker,
+			Vertices: []Vec3{
+				{2.0, 0.25, 0.5},
+				{2.0, 1.25, 0.5},
+				{2.0, 1.25, 3.5},
+				{2.0, 0.25, 3.5},
+			},
+			SourceTag: "hl1:model:0:face:5",
+			Tags:      []string{"source:hl1"},
+		}},
+	}
+
+	result, err := BuildNavTileFromImportedWorldChunk(chunk, profile, NavTileBuildOptions{
+		BuildSource:    source,
+		NeighborChunks: navTestEmptyNeighborChunks(chunk, navBuildChunkReachForProfile(chunk.ChunkSize, chunk.VoxelResolution, profile)),
+	})
+	if err != nil {
+		t.Fatalf("BuildNavTileFromImportedWorldChunk failed: %v", err)
+	}
+	if navTileHasPolygon(result.Tile, "surface:rail_blocker") {
+		t.Fatalf("did not expect blocker hint to become primary nav geometry, got %+v", result.Tile.Polygons)
+	}
+	if navTileHasCell(result.Tile, 8, 1, 8, chunk.VoxelResolution) {
+		t.Fatalf("did not expect direct voxel nav through expanded blocker clearance, got %+v", result.Tile.Polygons)
+	}
+	if !navTileHasCell(result.Tile, 2, 1, 8, chunk.VoxelResolution) || !navTileHasCell(result.Tile, 12, 1, 8, chunk.VoxelResolution) {
+		t.Fatalf("expected direct voxel nav to remain walkable around blocker, got %+v", result.Tile.Polygons)
+	}
+	if len(result.Tile.Polygons) == 0 || len(result.WalkableCells) == 0 {
+		t.Fatalf("expected direct voxel nav output, got result=%+v", result)
+	}
+}
+
 func TestBuildNavBuildSourceFromImportedWorldSynthesizesEmptyNeighborContext(t *testing.T) {
 	coord := TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
 	chunk := navTestChunk(4, 1.0, ImportedWorldVoxelDef{X: 3, Y: 0, Z: 1, Value: 1})
