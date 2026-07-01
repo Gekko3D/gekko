@@ -91,6 +91,9 @@ func applyNavTilePairPortals(tileA *NavTileDef, tileB *NavTileDef, dir TerrainCh
 			}
 			segments := navPolygonsBoundaryPortalSegments(tileA, polygonA, tileB, polygonB, dir, profile)
 			for i, segment := range segments {
+				if !navPortalSegmentHasAgentClearance(segment.Start, segment.End, profile) {
+					continue
+				}
 				tileA.Portals = append(tileA.Portals, NavPortalDef{
 					ID:            navPortalID(tileA.Coord, polygonA.ID, tileB.Coord, polygonB.ID, i),
 					FromPolygonID: polygonA.ID,
@@ -183,21 +186,46 @@ func navPolygonsBoundaryPortalSegments(tileA *NavTileDef, polygonA NavPolygonDef
 	case dir.Z == 1 || dir.Z == -1:
 		return navPolygonsHorizontalBoundaryPortalSegments(tileA, polygonA, tileB, polygonB, dir, profile)
 	case dir.Y == 1 || dir.Y == -1:
-		y := tileA.BoundsMax[1]
-		if dir.Y == -1 {
-			y = tileA.BoundsMin[1]
-		}
-		x0 := maxNavFloat32(a.min[0], b.min[0])
-		x1 := minNavFloat32(a.max[0], b.max[0])
-		z0 := maxNavFloat32(a.min[2], b.min[2])
-		z1 := minNavFloat32(a.max[2], b.max[2])
-		if x1-x0 <= epsilon || z1-z0 <= epsilon {
-			return nil
-		}
-		return []navBoundaryPortalSegment{{Start: Vec3{x0, y, z0}, End: Vec3{x1, y, z1}}}
+		return navPolygonsVerticalBoundaryPortalSegments(tileA, polygonA, tileB, polygonB, a, b, profile)
 	default:
 		return nil
 	}
+}
+
+func navPolygonsVerticalBoundaryPortalSegments(tileA *NavTileDef, polygonA NavPolygonDef, tileB *NavTileDef, polygonB NavPolygonDef, boundsA navPolygonBounds, boundsB navPolygonBounds, profile NavAgentProfileDef) []navBoundaryPortalSegment {
+	x0 := maxNavFloat32(boundsA.min[0], boundsB.min[0])
+	x1 := minNavFloat32(boundsA.max[0], boundsB.max[0])
+	z0 := maxNavFloat32(boundsA.min[2], boundsB.min[2])
+	z1 := minNavFloat32(boundsA.max[2], boundsB.max[2])
+	xLength := x1 - x0
+	zLength := z1 - z0
+	if xLength <= 1e-4 || zLength <= 1e-4 {
+		return nil
+	}
+	requiredWidth := navPortalRequiredWidth(profile)
+	if xLength+1e-4 < requiredWidth || zLength+1e-4 < requiredWidth {
+		return nil
+	}
+	area := navPortalTraversalArea(polygonA, polygonB)
+	sampleStep := navPortalEffectiveSampleStep(tileA, tileB, profile)
+	if xLength >= zLength {
+		z := (z0 + z1) * 0.5
+		return navPortalSegmentsAlongInterval(x0, x1, sampleStep, profile, area, func(x float32) (Vec3, bool) {
+			height, ok := navPortalHeightAt(tileA, polygonA, tileB, polygonB, x, z, profile)
+			if !ok {
+				return Vec3{}, false
+			}
+			return Vec3{x, height, z}, true
+		})
+	}
+	x := (x0 + x1) * 0.5
+	return navPortalSegmentsAlongInterval(z0, z1, sampleStep, profile, area, func(z float32) (Vec3, bool) {
+		height, ok := navPortalHeightAt(tileA, polygonA, tileB, polygonB, x, z, profile)
+		if !ok {
+			return Vec3{}, false
+		}
+		return Vec3{x, height, z}, true
+	})
 }
 
 func navPolygonsHorizontalBoundaryPortalSegments(tileA *NavTileDef, polygonA NavPolygonDef, tileB *NavTileDef, polygonB NavPolygonDef, dir TerrainChunkCoordDef, profile NavAgentProfileDef) []navBoundaryPortalSegment {
@@ -229,7 +257,8 @@ func navPolygonsHorizontalBoundaryPortalSegments(tileA *NavTileDef, polygonA Nav
 				continue
 			}
 			area := navPortalTraversalArea(polygonA, polygonB)
-			segments = append(segments, navPortalSegmentsAlongInterval(overlapMin, overlapMax, profile, area, func(span float32) (Vec3, bool) {
+			sampleStep := navPortalEffectiveSampleStep(tileA, tileB, profile)
+			segments = append(segments, navPortalSegmentsAlongInterval(overlapMin, overlapMax, sampleStep, profile, area, func(span float32) (Vec3, bool) {
 				x, z := navPortalHorizontalBoundaryXZ(normalAxis, coord, span)
 				height, ok := navPortalHeightAt(tileA, polygonA, tileB, polygonB, x, z, profile)
 				if !ok {
@@ -430,7 +459,7 @@ func navPortalDedupeFloat32(values []float32, epsilon float32) []float32 {
 	return out
 }
 
-func navPortalSegmentsAlongInterval(minValue, maxValue float32, profile NavAgentProfileDef, area string, pointAt func(float32) (Vec3, bool)) []navBoundaryPortalSegment {
+func navPortalSegmentsAlongInterval(minValue, maxValue float32, sampleStep float32, profile NavAgentProfileDef, area string, pointAt func(float32) (Vec3, bool)) []navBoundaryPortalSegment {
 	if pointAt == nil {
 		return nil
 	}
@@ -438,7 +467,9 @@ func navPortalSegmentsAlongInterval(minValue, maxValue float32, profile NavAgent
 	if length <= 1e-4 {
 		return nil
 	}
-	sampleStep := navPortalSampleStep(profile)
+	if sampleStep <= 1e-4 {
+		sampleStep = navPortalSampleStep(profile)
+	}
 	samples := int(math.Ceil(float64(length / sampleStep)))
 	if samples < 1 {
 		samples = 1
@@ -480,6 +511,22 @@ func navPortalSegmentsAlongInterval(minValue, maxValue float32, profile NavAgent
 		segments = appendNavPortalSegmentForRun(segments, runStart, maxValue, pointAt)
 	}
 	return segments
+}
+
+func navPortalRequiredWidth(profile NavAgentProfileDef) float32 {
+	EnsureNavAgentProfileDefaults(&profile)
+	if profile.Radius <= 0 {
+		return 0
+	}
+	return profile.Radius * 2
+}
+
+func navPortalSegmentHasAgentClearance(start Vec3, end Vec3, profile NavAgentProfileDef) bool {
+	required := navPortalRequiredWidth(profile)
+	if required <= 0 {
+		return true
+	}
+	return navVec2Length(end[0]-start[0], end[2]-start[2])+1e-4 >= required
 }
 
 func appendNavPortalSegmentForRun(segments []navBoundaryPortalSegment, startValue, endValue float32, pointAt func(float32) (Vec3, bool)) []navBoundaryPortalSegment {
@@ -543,6 +590,17 @@ func navPortalSampleStep(profile NavAgentProfileDef) float32 {
 		return profile.NavCellSize
 	}
 	return DefaultNavCellSize
+}
+
+func navPortalEffectiveSampleStep(tileA *NavTileDef, tileB *NavTileDef, profile NavAgentProfileDef) float32 {
+	if navTileUsesRecastBuilder(tileA) || navTileUsesRecastBuilder(tileB) {
+		return navRecastCellSize(profile)
+	}
+	return navPortalSampleStep(profile)
+}
+
+func navTileUsesRecastBuilder(tile *NavTileDef) bool {
+	return tile != nil && tile.BuilderVersion == NavBuilderVersionVoxelRecastV1
 }
 
 func navPortalHeightAt(tileA *NavTileDef, polygonA NavPolygonDef, tileB *NavTileDef, polygonB NavPolygonDef, x, z float32, profile NavAgentProfileDef) (float32, bool) {
@@ -680,9 +738,9 @@ func navPortalSegmentTouchesTileBoundary(start Vec3, end Vec3, tileA *NavTileDef
 	case dir.X == -1:
 		return navAlmostEqual(start[0], tileA.BoundsMin[0], epsilon) && navAlmostEqual(end[0], tileA.BoundsMin[0], epsilon) && navAlmostEqual(start[0], tileB.BoundsMax[0], epsilon) && navAlmostEqual(end[0], tileB.BoundsMax[0], epsilon)
 	case dir.Y == 1:
-		return navAlmostEqual(start[1], tileA.BoundsMax[1], epsilon) && navAlmostEqual(end[1], tileA.BoundsMax[1], epsilon) && navAlmostEqual(start[1], tileB.BoundsMin[1], epsilon) && navAlmostEqual(end[1], tileB.BoundsMin[1], epsilon)
+		return navPortalVerticalSegmentTouchesTileOverlap(start, end, tileA, tileB)
 	case dir.Y == -1:
-		return navAlmostEqual(start[1], tileA.BoundsMin[1], epsilon) && navAlmostEqual(end[1], tileA.BoundsMin[1], epsilon) && navAlmostEqual(start[1], tileB.BoundsMax[1], epsilon) && navAlmostEqual(end[1], tileB.BoundsMax[1], epsilon)
+		return navPortalVerticalSegmentTouchesTileOverlap(start, end, tileA, tileB)
 	case dir.Z == 1:
 		return navAlmostEqual(start[2], tileA.BoundsMax[2], epsilon) && navAlmostEqual(end[2], tileA.BoundsMax[2], epsilon) && navAlmostEqual(start[2], tileB.BoundsMin[2], epsilon) && navAlmostEqual(end[2], tileB.BoundsMin[2], epsilon)
 	case dir.Z == -1:
@@ -690,6 +748,23 @@ func navPortalSegmentTouchesTileBoundary(start Vec3, end Vec3, tileA *NavTileDef
 	default:
 		return false
 	}
+}
+
+func navPortalVerticalSegmentTouchesTileOverlap(start Vec3, end Vec3, tileA *NavTileDef, tileB *NavTileDef) bool {
+	if tileA == nil || tileB == nil {
+		return false
+	}
+	const epsilon = float32(1e-3)
+	x0 := maxNavFloat32(tileA.BoundsMin[0], tileB.BoundsMin[0])
+	x1 := minNavFloat32(tileA.BoundsMax[0], tileB.BoundsMax[0])
+	z0 := maxNavFloat32(tileA.BoundsMin[2], tileB.BoundsMin[2])
+	z1 := minNavFloat32(tileA.BoundsMax[2], tileB.BoundsMax[2])
+	for _, point := range []Vec3{start, end} {
+		if point[0]+epsilon < x0 || point[0]-epsilon > x1 || point[2]+epsilon < z0 || point[2]-epsilon > z1 {
+			return false
+		}
+	}
+	return true
 }
 
 func navVec3Distance(a Vec3, b Vec3) float32 {

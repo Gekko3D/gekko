@@ -33,6 +33,7 @@ type NavHierarchicalRouteResult struct {
 	StartSector               TerrainChunkCoordDef
 	EndSector                 TerrainChunkCoordDef
 	SectorPath                NavSectorPathResult
+	TraversalActions          []NavTraversalActionDef
 	LocalPath                 NavPathResult
 	LocalPathCorridorFallback bool
 	Refined                   bool
@@ -66,7 +67,7 @@ func FindHierarchicalNavRoute(baseNav *NavManifestDef, baseNavPath string, delta
 		EndSector:        endSector,
 		RefinementStatus: NavRouteRefinementStatusNotAttempted,
 	}
-	graph, err := BuildNavSectorGraph(baseNav, opts.SectorGraph)
+	graph, err := buildNavSectorGraphForRoute(baseNav, opts)
 	if err != nil {
 		return NavHierarchicalRouteResult{}, err
 	}
@@ -77,6 +78,7 @@ func FindHierarchicalNavRoute(baseNav *NavManifestDef, baseNavPath string, delta
 	}
 	result.Found = true
 	result.SectorPath = sectorPath
+	result.TraversalActions = append([]NavTraversalActionDef(nil), sectorPath.Actions...)
 	if opts.DisableLocalRefinement {
 		result.RefinementStatus = NavRouteRefinementStatusDisabled
 		result.RefinementReason = NavRouteRefinementReasonDisabled
@@ -88,7 +90,7 @@ func FindHierarchicalNavRoute(baseNav *NavManifestDef, baseNavPath string, delta
 	if err != nil {
 		return NavHierarchicalRouteResult{}, err
 	}
-	if !localPath.Found && opts.AllowLocalCorridorFallback && localPath.FailureReason == NavPathFailureDisallowedTile {
+	if !localPath.Found && opts.AllowLocalCorridorFallback && navRouteShouldFallbackOutsideSectorCorridor(localPath) {
 		fallbackPath, err := FindEffectiveNavPath(baseNav, baseNavPath, delta, deltaPath, start, end, opts.LocalPath)
 		if err != nil {
 			return NavHierarchicalRouteResult{}, err
@@ -108,6 +110,22 @@ func FindHierarchicalNavRoute(baseNav *NavManifestDef, baseNavPath string, delta
 		result.RefinementTile = localPath.FailureCoord
 	}
 	return result, nil
+}
+
+func buildNavSectorGraphForRoute(baseNav *NavManifestDef, opts NavHierarchicalRouteOptions) (NavSectorGraph, error) {
+	if opts.LocalPath.QueryCache != nil {
+		return opts.LocalPath.QueryCache.SectorGraph(baseNav, opts.SectorGraph)
+	}
+	return BuildNavSectorGraph(baseNav, opts.SectorGraph)
+}
+
+func navRouteShouldFallbackOutsideSectorCorridor(path NavPathResult) bool {
+	switch path.FailureReason {
+	case NavPathFailureDisallowedTile, NavPathFailureNoPath:
+		return true
+	default:
+		return false
+	}
 }
 
 func navRouteAllowedTileCoordsForSectorPath(manifest *NavManifestDef, path NavSectorPathResult, existing map[TerrainChunkCoordDef]struct{}) map[TerrainChunkCoordDef]struct{} {

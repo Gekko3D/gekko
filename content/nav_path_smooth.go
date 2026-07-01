@@ -160,7 +160,7 @@ func navSharedPortalSegment(tileA *NavTileDef, polygonA NavPolygonDef, tileB *Na
 		Z: tileB.Coord.Z - tileA.Coord.Z,
 	}
 	segments := navPolygonsBoundaryPortalSegments(tileA, polygonA, tileB, polygonB, dir, profile)
-	return navLargestPortalSegment(segments)
+	return navLargestPortalSegment(segments, profile)
 }
 
 func navSameTilePortalSegment(tile *NavTileDef, polygonA NavPolygonDef, polygonB NavPolygonDef) (navPathPortalSegment, bool) {
@@ -192,11 +192,14 @@ func navSameTilePortalSegment(tile *NavTileDef, polygonA NavPolygonDef, polygonB
 	return best, found
 }
 
-func navLargestPortalSegment(segments []navBoundaryPortalSegment) (navPathPortalSegment, bool) {
+func navLargestPortalSegment(segments []navBoundaryPortalSegment, profile NavAgentProfileDef) (navPathPortalSegment, bool) {
 	var best navPathPortalSegment
 	bestLength := float32(0)
 	found := false
 	for _, segment := range segments {
+		if !navPortalSegmentHasAgentClearance(segment.Start, segment.End, profile) {
+			continue
+		}
 		length := navVec3Distance(segment.Start, segment.End)
 		if length <= 1e-4 {
 			continue

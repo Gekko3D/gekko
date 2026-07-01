@@ -149,6 +149,81 @@ func TestLoadNavClearanceSourceTileForCoordFallsBackToStaticTile(t *testing.T) {
 	}
 }
 
+func TestLoadEffectiveNavClearanceSourceTilePrefersDeltaOverride(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "demo.gknav")
+	deltaPath := filepath.Join(root, "levels", "demo.gkworlddelta")
+	coord := TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	staticSourcePath := filepath.Join(root, "worlds", "demo_navsources", "source_0_0_0.gknavsource")
+	deltaSourcePath := filepath.Join(root, "levels", "demo.gkworlddelta_data", "nav", "nav-demo", "sources", "source_0_0_0.gknavsource")
+	if err := SaveNavClearanceSourceTile(staticSourcePath, navLookupTestSourceTile("nav-demo", coord, "static-build", "")); err != nil {
+		t.Fatalf("SaveNavClearanceSourceTile static failed: %v", err)
+	}
+	if err := SaveNavClearanceSourceTile(deltaSourcePath, navLookupTestSourceTile("nav-demo", coord, "delta-build", "delta-source")); err != nil {
+		t.Fatalf("SaveNavClearanceSourceTile delta failed: %v", err)
+	}
+	baseNav := navLookupTestManifest("nav-demo", "tiny", coord, "tiles/tiny_0_0_0.gknavtile")
+	baseNav.ClearanceSourceTiles = []NavClearanceSourceTileEntryDef{{
+		Coord:    coord,
+		TilePath: AuthorDocumentPath(staticSourcePath, navPath),
+	}}
+	delta := &WorldDeltaDef{
+		LevelID: "level-a",
+		NavigationClearanceSourceTileOverrides: []NavigationClearanceSourceTileOverrideDef{{
+			NavID:              "nav-demo",
+			ChunkCoord:         coord,
+			TilePath:           authorPathRelativeToDocument(deltaSourcePath, deltaPath),
+			SourceDeltaHash:    "delta-source",
+			NavBuildHash:       "delta-build",
+			SourceOverrideKind: NavSourceOverrideKindImportedWorld,
+		}},
+	}
+
+	result, err := LoadEffectiveNavClearanceSourceTile(baseNav, navPath, delta, deltaPath, coord)
+	if err != nil {
+		t.Fatalf("LoadEffectiveNavClearanceSourceTile failed: %v", err)
+	}
+	if !result.Found || result.Empty || result.Source != NavTileLookupSourceDelta || result.Tile == nil {
+		t.Fatalf("expected delta clearance source result, got %+v", result)
+	}
+	if result.Tile.NavBuildHash != "delta-build" || result.Tile.SourceDeltaHash != "delta-source" || result.TilePath != deltaSourcePath || result.DeltaOverride == nil || result.StaticEntry != nil {
+		t.Fatalf("unexpected delta clearance source lookup result: %+v tile=%+v", result, result.Tile)
+	}
+}
+
+func TestLoadEffectiveNavClearanceSourceTileHonorsEmptyDeltaOverride(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "demo.gknav")
+	deltaPath := filepath.Join(root, "levels", "demo.gkworlddelta")
+	coord := TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	staticSourcePath := filepath.Join(root, "worlds", "demo_navsources", "source_0_0_0.gknavsource")
+	if err := SaveNavClearanceSourceTile(staticSourcePath, navLookupTestSourceTile("nav-demo", coord, "static-build", "")); err != nil {
+		t.Fatalf("SaveNavClearanceSourceTile static failed: %v", err)
+	}
+	baseNav := navLookupTestManifest("nav-demo", "tiny", coord, "tiles/tiny_0_0_0.gknavtile")
+	baseNav.ClearanceSourceTiles = []NavClearanceSourceTileEntryDef{{
+		Coord:    coord,
+		TilePath: AuthorDocumentPath(staticSourcePath, navPath),
+	}}
+	delta := &WorldDeltaDef{
+		LevelID: "level-a",
+		NavigationClearanceSourceTileOverrides: []NavigationClearanceSourceTileOverrideDef{{
+			NavID:        "nav-demo",
+			ChunkCoord:   coord,
+			Empty:        true,
+			NavBuildHash: "empty-build",
+		}},
+	}
+
+	result, err := LoadEffectiveNavClearanceSourceTile(baseNav, navPath, delta, deltaPath, coord)
+	if err != nil {
+		t.Fatalf("LoadEffectiveNavClearanceSourceTile failed: %v", err)
+	}
+	if !result.Found || !result.Empty || result.Source != NavTileLookupSourceDelta || result.Tile != nil || result.TilePath != "" || result.DeltaOverride == nil {
+		t.Fatalf("expected authoritative empty delta clearance source result, got %+v", result)
+	}
+}
+
 func navLookupTestManifest(navID string, profileID string, coord TerrainChunkCoordDef, tilePath string) *NavManifestDef {
 	return &NavManifestDef{
 		NavID:           navID,
@@ -169,6 +244,24 @@ func navLookupTestManifest(navID string, profileID string, coord TerrainChunkCoo
 			TilePath:       tilePath,
 			BoundsMin:      [3]float32{0, 0, 0},
 			BoundsMax:      [3]float32{8, 8, 8},
+		}},
+	}
+}
+
+func navLookupTestSourceTile(navID string, coord TerrainChunkCoordDef, buildHash string, deltaHash string) *NavClearanceSourceTileDef {
+	return &NavClearanceSourceTileDef{
+		NavID:           navID,
+		SchemaVersion:   CurrentNavClearanceSourceTileSchemaVersion,
+		Coord:           coord,
+		BuilderVersion:  DefaultNavBuilderVersion,
+		PayloadKind:     NavClearanceSourceTilePayloadJSONV1,
+		SourceDeltaHash: deltaHash,
+		NavBuildHash:    buildHash,
+		BoundsMin:       [3]float32{0, 0, 0},
+		BoundsMax:       [3]float32{8, 8, 8},
+		VoxelResolution: 1,
+		Cells: []NavClearanceSourceCellDef{{
+			X: 1, Y: 1, Z: 1, Position: Vec3{1.5, 1, 1.5}, Headroom: 1, ClearanceRadius: 0.4,
 		}},
 	}
 }

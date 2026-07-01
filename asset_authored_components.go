@@ -270,14 +270,14 @@ func AuthoredImportedWorldChunkRefForEntity(cmd *Commands, eid EntityId) (Author
 }
 
 func MarkVoxelEntityPersistenceDirty(cmd *Commands, eid EntityId) {
-	if cmd == nil || eid == 0 {
+	if cmd == nil {
 		return
 	}
 	cmd.AddComponents(eid, &VoxelPersistenceDirtyComponent{})
 }
 
 func VoxelEntityPersistenceDirty(cmd *Commands, eid EntityId) bool {
-	if cmd == nil || eid == 0 {
+	if cmd == nil {
 		return false
 	}
 	for _, comp := range cmd.GetAllComponents(eid) {

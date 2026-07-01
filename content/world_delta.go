@@ -8,14 +8,15 @@ const (
 )
 
 type WorldDeltaDef struct {
-	SchemaVersion               int                             `json:"schema_version"`
-	LevelID                     string                          `json:"level_id"`
-	PlacementTransformOverrides []PlacementTransformOverrideDef `json:"placement_transform_overrides,omitempty"`
-	PlacementDeletions          []PlacementDeletionDef          `json:"placement_deletions,omitempty"`
-	TerrainChunkOverrides       []TerrainChunkOverrideDef       `json:"terrain_chunk_overrides,omitempty"`
-	ImportedWorldChunkOverrides []ImportedWorldChunkOverrideDef `json:"imported_world_chunk_overrides,omitempty"`
-	NavigationTileOverrides     []NavigationTileOverrideDef     `json:"navigation_tile_overrides,omitempty"`
-	VoxelObjectOverrides        []VoxelObjectOverrideDef        `json:"voxel_object_overrides,omitempty"`
+	SchemaVersion                          int                                        `json:"schema_version"`
+	LevelID                                string                                     `json:"level_id"`
+	PlacementTransformOverrides            []PlacementTransformOverrideDef            `json:"placement_transform_overrides,omitempty"`
+	PlacementDeletions                     []PlacementDeletionDef                     `json:"placement_deletions,omitempty"`
+	TerrainChunkOverrides                  []TerrainChunkOverrideDef                  `json:"terrain_chunk_overrides,omitempty"`
+	ImportedWorldChunkOverrides            []ImportedWorldChunkOverrideDef            `json:"imported_world_chunk_overrides,omitempty"`
+	NavigationTileOverrides                []NavigationTileOverrideDef                `json:"navigation_tile_overrides,omitempty"`
+	NavigationClearanceSourceTileOverrides []NavigationClearanceSourceTileOverrideDef `json:"navigation_clearance_source_tile_overrides,omitempty"`
+	VoxelObjectOverrides                   []VoxelObjectOverrideDef                   `json:"voxel_object_overrides,omitempty"`
 }
 
 type PlacementTransformOverrideDef struct {
@@ -42,6 +43,17 @@ type ImportedWorldChunkOverrideDef struct {
 type NavigationTileOverrideDef struct {
 	NavID              string               `json:"nav_id"`
 	AgentProfileID     string               `json:"agent_profile_id"`
+	ChunkCoord         TerrainChunkCoordDef `json:"chunk_coord"`
+	TilePath           string               `json:"tile_path,omitempty"`
+	SourceDeltaHash    string               `json:"source_delta_hash,omitempty"`
+	NavBuildHash       string               `json:"nav_build_hash,omitempty"`
+	Empty              bool                 `json:"empty,omitempty"`
+	SourceOverrideKind string               `json:"source_override_kind,omitempty"`
+	Tags               []string             `json:"tags,omitempty"`
+}
+
+type NavigationClearanceSourceTileOverrideDef struct {
+	NavID              string               `json:"nav_id"`
 	ChunkCoord         TerrainChunkCoordDef `json:"chunk_coord"`
 	TilePath           string               `json:"tile_path,omitempty"`
 	SourceDeltaHash    string               `json:"source_delta_hash,omitempty"`

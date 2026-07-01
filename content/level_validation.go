@@ -680,6 +680,14 @@ func validateLevelBreakable(result *LevelValidationResult, breakable LevelBreaka
 	if breakable.Delay < 0 {
 		result.addError("invalid_breakable_delay", "breakable delay must be non-negative", "", "", "", "", "", "", "")
 	}
+	switch strings.TrimSpace(breakable.NavigationMode) {
+	case "", LevelBreakableNavigationModeBlock, LevelBreakableNavigationModeCost, LevelBreakableNavigationModeIgnore:
+	default:
+		result.addError("invalid_breakable_navigation_mode", fmt.Sprintf("breakable navigation mode %q is invalid", breakable.NavigationMode), "", "", "", "", "", "", "")
+	}
+	if breakable.NavigationCostMul < 0 {
+		result.addError("invalid_breakable_navigation_cost", "breakable navigation cost multiplier must be non-negative", "", "", "", "", "", "", "")
+	}
 	if strings.TrimSpace(breakable.AssetPath) != "" && opts.DocumentPath != "" {
 		resolvedPath := ResolveDocumentPath(breakable.AssetPath, opts.DocumentPath)
 		if _, err := os.Stat(resolvedPath); err != nil {

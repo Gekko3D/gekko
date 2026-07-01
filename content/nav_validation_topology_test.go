@@ -71,6 +71,32 @@ func TestValidateNavTileTopologyRejectsInvalidPortalHeight(t *testing.T) {
 	assertHasNavValidationCode(t, result, "invalid_portal_height")
 }
 
+func TestValidateNavTileTopologyRejectsNarrowPortal(t *testing.T) {
+	left, right := navValidationTopologyTestTiles()
+	left.Portals = []NavPortalDef{{
+		ID:            "left-narrow",
+		FromPolygonID: "left",
+		ToTileCoord:   right.Coord,
+		ToPolygonID:   "right",
+		Start:         Vec3{4, 0, 0},
+		End:           Vec3{4, 0, 0.4},
+	}}
+	right.Portals = []NavPortalDef{{
+		ID:            "right-narrow",
+		FromPolygonID: "right",
+		ToTileCoord:   left.Coord,
+		ToPolygonID:   "left",
+		Start:         Vec3{4, 0, 0},
+		End:           Vec3{4, 0, 0.4},
+	}}
+
+	result := ValidateNavTileTopology([]*NavTileDef{left, right}, navValidationTopologyTestProfiles())
+	if !result.HasErrors() {
+		t.Fatal("expected topology validation to reject narrow portal")
+	}
+	assertHasNavValidationCode(t, result, "portal_too_narrow")
+}
+
 func navValidationTopologyTestTiles() (*NavTileDef, *NavTileDef) {
 	left := &NavTileDef{
 		NavID:          "nav-topology-test",

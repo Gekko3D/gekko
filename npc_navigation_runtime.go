@@ -6,7 +6,8 @@ func streamedLevelNPCNavigationSystem(cmd *Commands, state *StreamedLevelRuntime
 	if cmd == nil || state == nil {
 		return
 	}
-	UpdateNPCNavigationRoutes(cmd, RuntimeNavigationServiceFromStreamedLevelState(state))
+	ApplyStreamedNavigationRouteResultsToNPCs(cmd, state, nil)
+	UpdateNPCNavigationRoutesAsync(cmd, state)
 }
 
 func streamedLevelNPCNavigationMovementSystem(cmd *Commands) {

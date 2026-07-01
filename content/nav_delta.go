@@ -22,8 +22,10 @@ type NavDeltaBakeOptions struct {
 }
 
 type NavDeltaBakeResult struct {
-	Overrides []NavigationTileOverrideDef
-	Tiles     map[string]*NavTileDef
+	Overrides                []NavigationTileOverrideDef
+	Tiles                    map[string]*NavTileDef
+	ClearanceSourceOverrides []NavigationClearanceSourceTileOverrideDef
+	ClearanceSourceTiles     map[string]*NavClearanceSourceTileDef
 }
 
 type NavImportedWorldDeltaBakeOptions struct {
@@ -80,6 +82,18 @@ func DefaultWorldDeltaNavTilePath(deltaPath string, navID string, agentProfileID
 	}
 	agentProfileID = sanitizeNavPathToken(agentProfileID)
 	return filepath.Join(DefaultWorldDeltaNavTileDir(deltaPath, navID, agentProfileID), fmt.Sprintf("%s_%d_%d_%d.gknavtile", agentProfileID, coord.X, coord.Y, coord.Z))
+}
+
+func DefaultWorldDeltaNavClearanceSourceTileDir(deltaPath string, navID string) string {
+	if strings.TrimSpace(navID) == "" {
+		navID = "nav"
+	}
+	navID = sanitizeNavPathToken(navID)
+	return filepath.Join(DefaultWorldDeltaDataDir(deltaPath), DefaultWorldDeltaNavDirName, navID, "sources")
+}
+
+func DefaultWorldDeltaNavClearanceSourceTilePath(deltaPath string, navID string, coord TerrainChunkCoordDef) string {
+	return filepath.Join(DefaultWorldDeltaNavClearanceSourceTileDir(deltaPath, navID), fmt.Sprintf("source_%d_%d_%d.gknavsource", coord.X, coord.Y, coord.Z))
 }
 
 func SaveNavDeltaTilesForImportedWorldDelta(importedWorldManifestPath string, baseNavPath string, deltaPath string, opts NavImportedWorldDeltaBakeOptions) (NavDeltaBakeResult, error) {
@@ -181,9 +195,11 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 	})
 
 	result := NavDeltaBakeResult{
-		Tiles: make(map[string]*NavTileDef),
+		Tiles:                make(map[string]*NavTileDef),
+		ClearanceSourceTiles: make(map[string]*NavClearanceSourceTileDef),
 	}
 	buildCache := &NavTileBuildCache{}
+	maxClearanceRadius := navBakeMaxAgentRadius(opts.AgentProfiles)
 	buildSources := make(map[string]*NavBuildSourceDef, len(opts.AgentProfiles))
 	for _, profile := range opts.AgentProfiles {
 		EnsureNavAgentProfileDefaults(&profile)
@@ -194,12 +210,50 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		buildSources[profile.ID] = source
 	}
 	overrides := append([]NavigationTileOverrideDef(nil), delta.NavigationTileOverrides...)
+	clearanceSourceOverrides := append([]NavigationClearanceSourceTileOverrideDef(nil), delta.NavigationClearanceSourceTileOverrides...)
 	for _, coord := range coords {
 		chunk := chunks[coord]
 		if chunk == nil {
 			return NavDeltaBakeResult{}, fmt.Errorf("missing imported world chunk %s", TerrainChunkKey(coord))
 		}
 		sourceHash := importedWorldChunkNavSourceHash(chunk)
+		sourceBuildHash := navClearanceSourceBuildHash(opts.BuilderVersion, sourceHash)
+		sourceResult, err := BuildNavClearanceSourceTileFromImportedWorldChunk(chunk, NavClearanceSourceTileBuildOptions{
+			NavID:              baseNav.NavID,
+			BuilderVersion:     opts.BuilderVersion,
+			SourceDeltaHash:    sourceHash,
+			NavBuildHash:       sourceBuildHash,
+			NeighborChunks:     chunks,
+			BuildCache:         buildCache,
+			MaxClearanceRadius: maxClearanceRadius,
+		})
+		if err != nil {
+			return NavDeltaBakeResult{}, err
+		}
+		sourceOverride := NavigationClearanceSourceTileOverrideDef{
+			NavID:              baseNav.NavID,
+			ChunkCoord:         coord,
+			SourceDeltaHash:    sourceHash,
+			NavBuildHash:       sourceBuildHash,
+			SourceOverrideKind: opts.SourceOverrideKind,
+			Tags:               []string{"generated", "runtime_delta"},
+		}
+		if sourceResult.Tile == nil || len(sourceResult.Tile.Cells) == 0 {
+			sourceOverride.Empty = true
+		} else {
+			sourceTile := sourceResult.Tile
+			sourceTile.SourceDeltaHash = sourceHash
+			sourceTile.NavBuildHash = sourceBuildHash
+			sourcePath := DefaultWorldDeltaNavClearanceSourceTilePath(deltaPath, baseNav.NavID, coord)
+			sourceOverride.TilePath = authorPathRelativeToDocument(sourcePath, deltaPath)
+			result.ClearanceSourceTiles[sourcePath] = sourceTile
+		}
+		clearanceSourceOverrides = upsertNavigationClearanceSourceTileOverride(clearanceSourceOverrides, sourceOverride)
+		result.ClearanceSourceOverrides = append(result.ClearanceSourceOverrides, sourceOverride)
+		clearanceSourceForCoord := sourceResult.Tile
+		if sourceOverride.Empty {
+			clearanceSourceForCoord = nil
+		}
 		for _, profile := range opts.AgentProfiles {
 			EnsureNavAgentProfileDefaults(&profile)
 			buildSource := buildSources[profile.ID]
@@ -213,6 +267,7 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 				NeighborChunks:  chunks,
 				BuildCache:      buildCache,
 				BuildSource:     buildSource,
+				ClearanceSource: clearanceSourceForCoord,
 			})
 			if err != nil {
 				return NavDeltaBakeResult{}, err
@@ -249,10 +304,22 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		}
 		return terrainChunkCoordLess(overrides[i].ChunkCoord, overrides[j].ChunkCoord)
 	})
+	sort.Slice(clearanceSourceOverrides, func(i, j int) bool {
+		if clearanceSourceOverrides[i].NavID != clearanceSourceOverrides[j].NavID {
+			return clearanceSourceOverrides[i].NavID < clearanceSourceOverrides[j].NavID
+		}
+		return terrainChunkCoordLess(clearanceSourceOverrides[i].ChunkCoord, clearanceSourceOverrides[j].ChunkCoord)
+	})
 	effectiveDelta := *delta
 	effectiveDelta.NavigationTileOverrides = overrides
+	effectiveDelta.NavigationClearanceSourceTileOverrides = clearanceSourceOverrides
 	if err := applyNavDeltaTilePortals(result.Tiles, baseNav, opts.BaseNavPath, &effectiveDelta, deltaPath, opts.AgentProfiles); err != nil {
 		return NavDeltaBakeResult{}, err
+	}
+	for tilePath, tile := range result.ClearanceSourceTiles {
+		if err := SaveNavClearanceSourceTile(tilePath, tile); err != nil {
+			return NavDeltaBakeResult{}, err
+		}
 	}
 	for tilePath, tile := range result.Tiles {
 		if err := SaveNavTile(tilePath, tile); err != nil {
@@ -260,6 +327,7 @@ func SaveNavDeltaTilesForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		}
 	}
 	delta.NavigationTileOverrides = overrides
+	delta.NavigationClearanceSourceTileOverrides = clearanceSourceOverrides
 	return result, nil
 }
 
@@ -363,6 +431,10 @@ func ResolveNavigationTileOverridePath(override NavigationTileOverrideDef, delta
 	return ResolveDocumentPath(override.TilePath, deltaPath)
 }
 
+func ResolveNavigationClearanceSourceTileOverridePath(override NavigationClearanceSourceTileOverrideDef, deltaPath string) string {
+	return ResolveDocumentPath(override.TilePath, deltaPath)
+}
+
 func normalizeNavDeltaBakeOptions(baseNav *NavManifestDef, opts NavDeltaBakeOptions) NavDeltaBakeOptions {
 	if strings.TrimSpace(opts.BuilderVersion) == "" {
 		opts.BuilderVersion = baseNav.BuilderVersion
@@ -395,8 +467,22 @@ func upsertNavigationTileOverride(overrides []NavigationTileOverrideDef, overrid
 	return append(overrides, override)
 }
 
+func upsertNavigationClearanceSourceTileOverride(overrides []NavigationClearanceSourceTileOverrideDef, override NavigationClearanceSourceTileOverrideDef) []NavigationClearanceSourceTileOverrideDef {
+	for i := range overrides {
+		if navigationClearanceSourceTileOverrideSameKey(overrides[i], override) {
+			overrides[i] = override
+			return overrides
+		}
+	}
+	return append(overrides, override)
+}
+
 func navigationTileOverrideSameKey(a, b NavigationTileOverrideDef) bool {
 	return a.NavID == b.NavID && a.AgentProfileID == b.AgentProfileID && a.ChunkCoord == b.ChunkCoord
+}
+
+func navigationClearanceSourceTileOverrideSameKey(a, b NavigationClearanceSourceTileOverrideDef) bool {
+	return a.NavID == b.NavID && a.ChunkCoord == b.ChunkCoord
 }
 
 func navDeltaAbsf(v float32) float32 {

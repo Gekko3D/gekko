@@ -45,6 +45,12 @@ const (
 	LevelMarkerKindExtract     = "extract_point"
 )
 
+const (
+	LevelBreakableNavigationModeBlock  = "block"
+	LevelBreakableNavigationModeCost   = "cost"
+	LevelBreakableNavigationModeIgnore = "ignore"
+)
+
 type LevelDef struct {
 	ID               string                  `json:"id"`
 	SchemaVersion    int                     `json:"schema_version"`
@@ -420,6 +426,9 @@ type LevelBreakableDef struct {
 	TargetName        string   `json:"target_name,omitempty"`
 	Target            string   `json:"target,omitempty"`
 	Delay             float32  `json:"delay,omitempty"`
+	NavigationMode    string   `json:"navigation_mode,omitempty"`
+	NavigationCostAdd float32  `json:"navigation_cost_add,omitempty"`
+	NavigationCostMul float32  `json:"navigation_cost_multiplier,omitempty"`
 	SourceTag         string   `json:"source_tag,omitempty"`
 	Tags              []string `json:"tags,omitempty"`
 }

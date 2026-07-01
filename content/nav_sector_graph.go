@@ -22,6 +22,7 @@ type NavSectorPathOptions struct {
 	AgentTags       []string
 	AgentSpeed      float32
 	MaxSectorSearch int
+	DynamicOverlay  NavDynamicOverlayDef
 }
 
 type NavSectorGraph struct {
@@ -32,10 +33,13 @@ type NavSectorGraph struct {
 type NavSectorGraphEdge struct {
 	From        TerrainChunkCoordDef
 	To          TerrainChunkCoordDef
+	FromCenter  Vec3
+	ToCenter    Vec3
 	Kind        string
 	Cost        float32
 	Source      string
 	LinkID      string
+	TargetName  string
 	Openable    bool
 	RequiresTag string
 	Tags        []string
@@ -45,6 +49,7 @@ type NavSectorPathResult struct {
 	Found                  bool
 	SectorCoords           []TerrainChunkCoordDef
 	Edges                  []NavSectorGraphEdge
+	Actions                []NavTraversalActionDef
 	Cost                   float32
 	EstimatedTravelSeconds float32
 }
@@ -138,6 +143,7 @@ func FindNavSectorPathInGraph(graph NavSectorGraph, start TerrainChunkCoordDef, 
 	}
 	allowedKinds := navSectorAllowedKindSet(opts.AllowedKinds)
 	agentTags := navSectorAgentTagSet(opts.AgentTags)
+	overlay := navDynamicOverlayIndex(opts.DynamicOverlay)
 	dist := map[TerrainChunkCoordDef]float32{start: 0}
 	prev := map[TerrainChunkCoordDef]TerrainChunkCoordDef{}
 	prevEdge := map[TerrainChunkCoordDef]NavSectorGraphEdge{}
@@ -153,6 +159,10 @@ func FindNavSectorPathInGraph(graph NavSectorGraph, start TerrainChunkCoordDef, 
 		visited[current] = struct{}{}
 		for _, edge := range graph.Edges[current] {
 			if !navSectorEdgeAllowed(edge, allowedKinds, agentTags) {
+				continue
+			}
+			edge, blocked := overlay.apply(edge)
+			if blocked {
 				continue
 			}
 			if _, done := visited[edge.To]; done {
@@ -221,11 +231,13 @@ func (graph NavSectorGraph) sortEdges() {
 
 func navSectorGraphEdgeFromRefs(graph NavSectorGraph, from TerrainChunkCoordDef, to TerrainChunkCoordDef, source string) NavSectorGraphEdge {
 	return NavSectorGraphEdge{
-		From:   from,
-		To:     to,
-		Kind:   NavTraversalWalk,
-		Cost:   navSectorCenterDistance(graph.Sectors[from], graph.Sectors[to]),
-		Source: source,
+		From:       from,
+		To:         to,
+		FromCenter: navSectorBoundsCenter(graph.Sectors[from].BoundsMin, graph.Sectors[from].BoundsMax),
+		ToCenter:   navSectorBoundsCenter(graph.Sectors[to].BoundsMin, graph.Sectors[to].BoundsMax),
+		Kind:       NavTraversalWalk,
+		Cost:       navSectorCenterDistance(graph.Sectors[from], graph.Sectors[to]),
+		Source:     source,
 	}
 }
 
@@ -241,10 +253,13 @@ func navSectorGraphEdgeFromLink(graph NavSectorGraph, from TerrainChunkCoordDef,
 	return NavSectorGraphEdge{
 		From:        from,
 		To:          link.To,
+		FromCenter:  navSectorBoundsCenter(graph.Sectors[from].BoundsMin, graph.Sectors[from].BoundsMax),
+		ToCenter:    navSectorBoundsCenter(graph.Sectors[link.To].BoundsMin, graph.Sectors[link.To].BoundsMax),
 		Kind:        kind,
 		Cost:        cost,
 		Source:      NavSectorEdgeSourceLink,
 		LinkID:      link.ID,
+		TargetName:  link.TargetName,
 		Openable:    link.Openable,
 		RequiresTag: link.RequiresTag,
 		Tags:        append([]string(nil), link.Tags...),
@@ -271,10 +286,102 @@ func navSectorBuildPathResult(start TerrainChunkCoordDef, end TerrainChunkCoordD
 		Edges:        edges,
 		Cost:         cost,
 	}
+	result.Actions = navDynamicOverlayActionsForEdges(opts.DynamicOverlay, edges)
 	if opts.AgentSpeed > 0 {
 		result.EstimatedTravelSeconds = cost / opts.AgentSpeed
 	}
 	return result
+}
+
+type navDynamicOverlayEdgeIndex struct {
+	entries []NavDynamicOverlayEntryDef
+}
+
+func navDynamicOverlayIndex(overlay NavDynamicOverlayDef) navDynamicOverlayEdgeIndex {
+	return navDynamicOverlayEdgeIndex{entries: append([]NavDynamicOverlayEntryDef(nil), overlay.Entries...)}
+}
+
+func (idx navDynamicOverlayEdgeIndex) apply(edge NavSectorGraphEdge) (NavSectorGraphEdge, bool) {
+	for _, entry := range idx.entries {
+		if !navDynamicOverlayEntryMatchesEdge(entry, edge) {
+			continue
+		}
+		if entry.Blocked {
+			return edge, true
+		}
+		if entry.CostMultiplier > 0 {
+			edge.Cost *= entry.CostMultiplier
+		}
+		if entry.CostAdd != 0 {
+			edge.Cost += entry.CostAdd
+		}
+		if edge.Cost <= 0 {
+			edge.Cost = 1
+		}
+	}
+	return edge, false
+}
+
+func navDynamicOverlayActionsForEdges(overlay NavDynamicOverlayDef, edges []NavSectorGraphEdge) []NavTraversalActionDef {
+	out := make([]NavTraversalActionDef, 0)
+	seen := map[string]struct{}{}
+	for _, edge := range edges {
+		for _, entry := range overlay.Entries {
+			if entry.Action == "" || !navDynamicOverlayEntryMatchesEdge(entry, edge) {
+				continue
+			}
+			key := entry.ID + ":" + edge.LinkID + ":" + TerrainChunkKey(edge.From) + ":" + TerrainChunkKey(edge.To)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, NavTraversalActionDef{
+				ID:         entry.ID,
+				Kind:       edge.Kind,
+				LinkID:     edge.LinkID,
+				TargetName: firstNonEmptyNavString(entry.TargetName, edge.TargetName),
+				Action:     entry.Action,
+				Reason:     entry.Reason,
+				From:       edge.From,
+				To:         edge.To,
+			})
+		}
+	}
+	return out
+}
+
+func navDynamicOverlayEntryMatchesEdge(entry NavDynamicOverlayEntryDef, edge NavSectorGraphEdge) bool {
+	switch entry.Kind {
+	case NavDynamicOverlayEntryKindLink:
+		if entry.LinkID != "" && entry.LinkID == edge.LinkID {
+			return true
+		}
+		return entry.TargetName != "" && entry.TargetName == edge.TargetName
+	case NavDynamicOverlayEntryKindTraversal:
+		kind := firstNonEmptyNavString(edge.Kind, NavTraversalWalk)
+		return entry.TraversalKind != "" && entry.TraversalKind == kind
+	case NavDynamicOverlayEntryKindSectorPair:
+		return entry.From == edge.From && entry.To == edge.To
+	case NavDynamicOverlayEntryKindBounds:
+		return navDynamicOverlayBoundsMatchesEdge(entry, edge)
+	default:
+		if entry.LinkID != "" {
+			return entry.LinkID == edge.LinkID
+		}
+		if entry.TargetName != "" {
+			return entry.TargetName == edge.TargetName
+		}
+		if entry.TraversalKind != "" {
+			return entry.TraversalKind == firstNonEmptyNavString(edge.Kind, NavTraversalWalk)
+		}
+		if entry.From != (TerrainChunkCoordDef{}) || entry.To != (TerrainChunkCoordDef{}) {
+			return entry.From == edge.From && entry.To == edge.To
+		}
+		if navDynamicOverlayEntryHasBounds(entry) {
+			return navDynamicOverlayBoundsMatchesEdge(entry, edge)
+		}
+		return false
+	}
 }
 
 func navSectorClosestUnvisited(dist map[TerrainChunkCoordDef]float32, visited map[TerrainChunkCoordDef]struct{}) (TerrainChunkCoordDef, bool) {
@@ -361,6 +468,54 @@ func navPointInBounds(point Vec3, min [3]float32, max [3]float32) bool {
 	return point[0] >= min[0]-epsilon && point[0] <= max[0]+epsilon &&
 		point[1] >= min[1]-epsilon && point[1] <= max[1]+epsilon &&
 		point[2] >= min[2]-epsilon && point[2] <= max[2]+epsilon
+}
+
+func navDynamicOverlayEntryHasBounds(entry NavDynamicOverlayEntryDef) bool {
+	return entry.BoundsMin != (Vec3{}) || entry.BoundsMax != (Vec3{})
+}
+
+func navDynamicOverlayBoundsMatchesEdge(entry NavDynamicOverlayEntryDef, edge NavSectorGraphEdge) bool {
+	if !navDynamicOverlayEntryHasBounds(entry) || !navDynamicOverlayBoundsValid(entry.BoundsMin, entry.BoundsMax) {
+		return false
+	}
+	if navPointInBounds(edge.FromCenter, entry.BoundsMin, entry.BoundsMax) || navPointInBounds(edge.ToCenter, entry.BoundsMin, entry.BoundsMax) {
+		return true
+	}
+	return navSegmentIntersectsBoundsXZ(edge.FromCenter, edge.ToCenter, entry.BoundsMin, entry.BoundsMax)
+}
+
+func navDynamicOverlayBoundsValid(min Vec3, max Vec3) bool {
+	return min[0] <= max[0] && min[1] <= max[1] && min[2] <= max[2]
+}
+
+func navSegmentIntersectsBoundsXZ(from Vec3, to Vec3, min Vec3, max Vec3) bool {
+	tMin := float32(0)
+	tMax := float32(1)
+	for _, axis := range []int{0, 2} {
+		delta := to[axis] - from[axis]
+		if navFloatNearlyEqual(delta, 0) {
+			if from[axis] < min[axis] || from[axis] > max[axis] {
+				return false
+			}
+			continue
+		}
+		inv := 1 / delta
+		t1 := (min[axis] - from[axis]) * inv
+		t2 := (max[axis] - from[axis]) * inv
+		if t1 > t2 {
+			t1, t2 = t2, t1
+		}
+		if t1 > tMin {
+			tMin = t1
+		}
+		if t2 < tMax {
+			tMax = t2
+		}
+		if tMin > tMax {
+			return false
+		}
+	}
+	return true
 }
 
 func navSectorBoundsTouch(aMin [3]float32, aMax [3]float32, bMin [3]float32, bMax [3]float32) bool {

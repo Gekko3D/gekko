@@ -833,7 +833,7 @@ func buildNavWalkableCellsForProfileFromClearanceSource(chunk *ImportedWorldChun
 		if cell.X < 0 || cell.Y < 0 || cell.Z < 0 || cell.X >= chunk.ChunkSize || cell.Y > chunk.ChunkSize || cell.Z >= chunk.ChunkSize {
 			continue
 		}
-		if !NavClearanceSourceCellSupportsAgent(cell, profile) {
+		if !navClearanceSourceCellSupportsNormalizedAgent(cell, profile) {
 			continue
 		}
 		rawCells = append(rawCells, NavBuildWalkableCell{X: cell.X, Y: cell.Y, Z: cell.Z, PolygonID: navCellPolygonID(cell.X, cell.Y, cell.Z)})

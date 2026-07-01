@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -2333,6 +2334,473 @@ func TestStreamedRuntimeRuntimeEditedImportedWorldHoleRebuildsEffectiveNav(t *te
 	}
 }
 
+func TestStreamedRuntimeRuntimeEditedImportedWorldBlockerRebuildsEffectiveNav(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "runtime-blocker.gknav")
+	staticTilePath := filepath.Join(root, "worlds", "runtime-blocker_navtiles", "tiny_0_0_0.gknavtile")
+	deltaPath := filepath.Join(root, "levels", "runtime-blocker.gkworlddelta")
+	profile := content.NavAgentProfileDef{
+		ID:              "tiny",
+		Radius:          0.2,
+		Height:          1.0,
+		StepHeight:      0.5,
+		MaxSlopeDegrees: 45,
+	}
+	content.EnsureNavAgentProfileDefaults(&profile)
+	coord := content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	fullField := streamedRuntimeTestFloorVoxels(1, 14, 1, 14, 0)
+	baseChunk := &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              coord,
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             fullField,
+		NonEmptyVoxelCount: len(fullField),
+	}
+	baseTile, err := content.BuildNavTileFromImportedWorldChunk(baseChunk, profile, content.NavTileBuildOptions{NavID: "nav-runtime-blocker"})
+	if err != nil {
+		t.Fatalf("BuildNavTileFromImportedWorldChunk failed: %v", err)
+	}
+	if err := content.SaveNavTile(staticTilePath, baseTile.Tile); err != nil {
+		t.Fatalf("SaveNavTile failed: %v", err)
+	}
+	baseNav := &content.NavManifestDef{
+		NavID:           "nav-runtime-blocker",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "runtime-blocker",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  "builder-a",
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles:   []content.NavAgentProfileDef{profile},
+		Tiles: []content.NavTileEntryDef{{
+			Coord:          coord,
+			AgentProfileID: profile.ID,
+			TilePath:       content.AuthorDocumentPath(staticTilePath, navPath),
+			BoundsMin:      baseTile.Tile.BoundsMin,
+			BoundsMax:      baseTile.Tile.BoundsMax,
+		}},
+	}
+	if err := content.SaveNavManifest(navPath, baseNav); err != nil {
+		t.Fatalf("SaveNavManifest failed: %v", err)
+	}
+
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.LevelID = "runtime-blocker"
+	state.Level = content.NewLevelDef("runtime-blocker")
+	state.Level.ChunkSize = 16
+	state.BaseWorldID = "world-a"
+	state.BaseNavManifestPath = navPath
+	state.BaseNavManifest = baseNav
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "runtime-blocker"}
+	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "runtime-blocker"})
+	chunkCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	_, err = commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, streamedPreparedChunk{
+		Coord:              chunkCoord,
+		ImportedWorldChunk: baseChunk,
+	})
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedChunk failed: %v", err)
+	}
+	loaded := state.LoadedChunks[chunkCoord]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected loaded imported chunk, got %+v", state.LoadedChunks)
+	}
+	var entity EntityId
+	for eid := range loaded.ImportedWorldEntities {
+		entity = eid
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	assetMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+	if !ok {
+		t.Fatalf("expected imported chunk geometry to resolve")
+	}
+	runtimeMap := assetMap.Copy()
+	for y := 1; y <= 2; y++ {
+		runtimeMap.SetVoxel(7, y, 7, 9)
+	}
+	runtimeObj := core.NewVoxelObject()
+	runtimeObj.XBrickMap = runtimeMap
+	rtState := &VoxelRtState{
+		instanceMap:                 map[EntityId]*core.VoxelObject{entity: runtimeObj},
+		runtimeEditedVoxelEntities:  make(map[EntityId]struct{}),
+		runtimeEditedVoxelRevisions: make(map[EntityId]uint64),
+	}
+	cmd.AddResources(rtState)
+	rtState.markRuntimeEditedVoxelEntity(entity)
+
+	streamedLevelRuntimeEditedNavigationRebuildSystem(cmd, state)
+	if len(state.NavigationRebuilds) != 1 {
+		t.Fatalf("expected runtime edit to queue nav rebuild, got %d", len(state.NavigationRebuilds))
+	}
+	if err := DrainStreamedLevelNavigationRebuilds(state, 2*time.Second); err != nil {
+		t.Fatalf("DrainStreamedLevelNavigationRebuilds failed: %v", err)
+	}
+	if state.NavigationRevision == 0 || state.Metrics.NavigationRebuildCount != 1 {
+		t.Fatalf("expected completed navigation rebuild, rev=%d metrics=%+v", state.NavigationRevision, state.Metrics)
+	}
+	if len(state.WorldDelta.NavigationTileOverrides) != 1 {
+		t.Fatalf("expected one runtime delta nav override, got %+v", state.WorldDelta.NavigationTileOverrides)
+	}
+	if len(state.WorldDelta.NavigationClearanceSourceTileOverrides) != 1 {
+		t.Fatalf("expected one runtime delta clearance source override, got %+v", state.WorldDelta.NavigationClearanceSourceTileOverrides)
+	}
+	editedSnapshot, err := content.LoadImportedWorldChunk(content.ResolveDocumentPath(state.WorldDelta.ImportedWorldChunkOverrides[0].SnapshotPath, deltaPath))
+	if err != nil {
+		t.Fatalf("LoadImportedWorldChunk edited blocker failed: %v", err)
+	}
+	foundBlocker := false
+	for _, voxel := range editedSnapshot.Voxels {
+		foundBlocker = foundBlocker || voxel.X == 7 && voxel.Y == 1 && voxel.Z == 7 && voxel.Value == 9
+	}
+	if !foundBlocker {
+		t.Fatalf("expected persisted edited geometry to include blocker, snapshot=%+v", editedSnapshot)
+	}
+
+	blocked, err := content.FindEffectiveNavPath(baseNav, navPath, state.WorldDelta, deltaPath, content.Vec3{2.5, 1, 2.5}, content.Vec3{7.5, 1, 7.5}, content.NavPathOptions{
+		AgentProfileID:       profile.ID,
+		MaxTileSearchRadius:  1,
+		EndpointSnapDistance: 0.2,
+	})
+	if err != nil {
+		t.Fatalf("FindEffectiveNavPath blocked endpoint failed: %v", err)
+	}
+	if blocked.Found || blocked.FailureReason != content.NavPathFailureEndPolygonMissing {
+		t.Fatalf("expected edited blocker endpoint to be rejected, got %+v", blocked)
+	}
+	around, err := content.FindEffectiveNavPath(baseNav, navPath, state.WorldDelta, deltaPath, content.Vec3{2.5, 1, 2.5}, content.Vec3{13.5, 1, 13.5}, content.NavPathOptions{
+		AgentProfileID:       profile.ID,
+		MaxTileSearchRadius:  1,
+		EndpointSnapDistance: 0.2,
+	})
+	if err != nil {
+		t.Fatalf("FindEffectiveNavPath around blocker failed: %v", err)
+	}
+	if !around.Found {
+		t.Fatalf("expected path around edited blocker to remain available, got %+v", around)
+	}
+}
+
+func TestStreamedRuntimeRuntimeEditedImportedWorldFloorRebuildsEffectiveNav(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "runtime-floor.gknav")
+	staticTilePath := filepath.Join(root, "worlds", "runtime-floor_navtiles", "tiny_0_0_0.gknavtile")
+	deltaPath := filepath.Join(root, "levels", "runtime-floor.gkworlddelta")
+	profile := content.NavAgentProfileDef{
+		ID:              "tiny",
+		Radius:          0.2,
+		Height:          1.0,
+		StepHeight:      0.5,
+		MaxSlopeDegrees: 45,
+	}
+	content.EnsureNavAgentProfileDefaults(&profile)
+	coord := content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	baseVoxels := streamedRuntimeTestFloorVoxels(1, 4, 1, 4, 0)
+	editedVoxels := streamedRuntimeTestFloorVoxels(1, 14, 1, 14, 0)
+	baseChunk := &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              coord,
+		ChunkSize:          16,
+		VoxelResolution:    1,
+		Voxels:             baseVoxels,
+		NonEmptyVoxelCount: len(baseVoxels),
+	}
+	baseTile, err := content.BuildNavTileFromImportedWorldChunk(baseChunk, profile, content.NavTileBuildOptions{
+		NavID:          "nav-runtime-floor",
+		BuilderVersion: content.NavBuilderVersionVoxelRecastV1,
+	})
+	if err != nil {
+		t.Fatalf("BuildNavTileFromImportedWorldChunk failed: %v", err)
+	}
+	if err := content.SaveNavTile(staticTilePath, baseTile.Tile); err != nil {
+		t.Fatalf("SaveNavTile failed: %v", err)
+	}
+	baseNav := &content.NavManifestDef{
+		NavID:           "nav-runtime-floor",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "runtime-floor",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  content.NavBuilderVersionVoxelRecastV1,
+		ChunkSize:       16,
+		VoxelResolution: 1,
+		AgentProfiles:   []content.NavAgentProfileDef{profile},
+		Tiles: []content.NavTileEntryDef{{
+			Coord:          coord,
+			AgentProfileID: profile.ID,
+			TilePath:       content.AuthorDocumentPath(staticTilePath, navPath),
+			BoundsMin:      baseTile.Tile.BoundsMin,
+			BoundsMax:      baseTile.Tile.BoundsMax,
+		}},
+	}
+	if err := content.SaveNavManifest(navPath, baseNav); err != nil {
+		t.Fatalf("SaveNavManifest failed: %v", err)
+	}
+	before, err := content.FindEffectiveNavPath(baseNav, navPath, nil, "", content.Vec3{2.5, 1, 2.5}, content.Vec3{13.5, 1, 13.5}, content.NavPathOptions{
+		AgentProfileID:       profile.ID,
+		MaxTileSearchRadius:  1,
+		EndpointSnapDistance: 0.2,
+	})
+	if err != nil {
+		t.Fatalf("FindEffectiveNavPath before edit failed: %v", err)
+	}
+	if before.Found {
+		t.Fatalf("expected sparse base floor to have no route to target, got %+v", before)
+	}
+
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.LevelID = "runtime-floor"
+	state.Level = content.NewLevelDef("runtime-floor")
+	state.Level.ChunkSize = 16
+	state.BaseWorldID = "world-a"
+	state.BaseNavManifestPath = navPath
+	state.BaseNavManifest = baseNav
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "runtime-floor"}
+	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "runtime-floor"})
+	chunkCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	_, err = commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, streamedPreparedChunk{
+		Coord:              chunkCoord,
+		ImportedWorldChunk: baseChunk,
+	})
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedChunk failed: %v", err)
+	}
+	loaded := state.LoadedChunks[chunkCoord]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected loaded imported chunk, got %+v", state.LoadedChunks)
+	}
+	var entity EntityId
+	for eid := range loaded.ImportedWorldEntities {
+		entity = eid
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	assetMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+	if !ok {
+		t.Fatalf("expected imported chunk geometry to resolve")
+	}
+	runtimeMap := assetMap.Copy()
+	for _, voxel := range editedVoxels {
+		runtimeMap.SetVoxel(voxel.X, voxel.Y, voxel.Z, voxel.Value)
+	}
+	runtimeObj := core.NewVoxelObject()
+	runtimeObj.XBrickMap = runtimeMap
+	rtState := &VoxelRtState{
+		instanceMap:                 map[EntityId]*core.VoxelObject{entity: runtimeObj},
+		runtimeEditedVoxelEntities:  make(map[EntityId]struct{}),
+		runtimeEditedVoxelRevisions: make(map[EntityId]uint64),
+	}
+	cmd.AddResources(rtState)
+	rtState.markRuntimeEditedVoxelEntity(entity)
+
+	streamedLevelRuntimeEditedNavigationRebuildSystem(cmd, state)
+	if len(state.NavigationRebuilds) != 1 {
+		t.Fatalf("expected runtime edit to queue nav rebuild, got %d", len(state.NavigationRebuilds))
+	}
+	if err := DrainStreamedLevelNavigationRebuilds(state, 2*time.Second); err != nil {
+		t.Fatalf("DrainStreamedLevelNavigationRebuilds failed: %v", err)
+	}
+	if state.NavigationRevision == 0 || state.Metrics.NavigationRebuildCount != 1 {
+		t.Fatalf("expected completed navigation rebuild, rev=%d metrics=%+v", state.NavigationRevision, state.Metrics)
+	}
+	if len(state.WorldDelta.NavigationTileOverrides) != 1 {
+		t.Fatalf("expected one runtime delta nav override, got %+v", state.WorldDelta.NavigationTileOverrides)
+	}
+	if len(state.WorldDelta.NavigationClearanceSourceTileOverrides) != 1 {
+		t.Fatalf("expected one runtime delta clearance source override, got %+v", state.WorldDelta.NavigationClearanceSourceTileOverrides)
+	}
+	after, err := content.FindEffectiveNavPath(baseNav, navPath, state.WorldDelta, deltaPath, content.Vec3{2.5, 1, 2.5}, content.Vec3{13.5, 1, 13.5}, content.NavPathOptions{
+		AgentProfileID:       profile.ID,
+		MaxTileSearchRadius:  1,
+		EndpointSnapDistance: 0.2,
+	})
+	if err != nil {
+		t.Fatalf("FindEffectiveNavPath after edit failed: %v", err)
+	}
+	if !after.Found {
+		t.Fatalf("expected edited floor to create route to target, got %+v", after)
+	}
+	for _, step := range after.Steps {
+		if step.Source != content.NavPathSourceClearance {
+			t.Fatalf("expected edited floor path to use clearance source override, got %+v in path %+v", step, after)
+		}
+	}
+}
+
+func TestStreamedRuntimeRuntimeEditedImportedWorldUnevenSurfaceRebuildsEffectiveNav(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "runtime-uneven.gknav")
+	staticTilePath := filepath.Join(root, "worlds", "runtime-uneven_navtiles", "tiny_0_0_0.gknavtile")
+	deltaPath := filepath.Join(root, "levels", "runtime-uneven.gkworlddelta")
+	profile := content.NavAgentProfileDef{
+		ID:              "tiny",
+		Radius:          0.05,
+		Height:          0.5,
+		StepHeight:      0.3,
+		MaxSlopeDegrees: 45,
+		NavCellSize:     0.025,
+	}
+	content.EnsureNavAgentProfileDefaults(&profile)
+	coord := content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	baseVoxels := streamedRuntimeTestFloorVoxels(10, 25, 10, 25, 0)
+	editedVoxels := streamedRuntimeTestUnevenFieldVoxels()
+	baseChunk := &content.ImportedWorldChunkDef{
+		WorldID:            "world-a",
+		Coord:              coord,
+		ChunkSize:          40,
+		VoxelResolution:    0.025,
+		Voxels:             baseVoxels,
+		NonEmptyVoxelCount: len(baseVoxels),
+	}
+	baseTile, err := content.BuildNavTileFromImportedWorldChunk(baseChunk, profile, content.NavTileBuildOptions{
+		NavID:          "nav-runtime-uneven",
+		BuilderVersion: content.NavBuilderVersionVoxelRecastV1,
+	})
+	if err != nil {
+		t.Fatalf("BuildNavTileFromImportedWorldChunk failed: %v", err)
+	}
+	if err := content.SaveNavTile(staticTilePath, baseTile.Tile); err != nil {
+		t.Fatalf("SaveNavTile failed: %v", err)
+	}
+	baseNav := &content.NavManifestDef{
+		NavID:           "nav-runtime-uneven",
+		SchemaVersion:   content.CurrentNavManifestSchemaVersion,
+		LevelID:         "runtime-uneven",
+		SourceWorldID:   "world-a",
+		BuilderVersion:  content.NavBuilderVersionVoxelRecastV1,
+		ChunkSize:       40,
+		VoxelResolution: 0.025,
+		AgentProfiles:   []content.NavAgentProfileDef{profile},
+		Tiles: []content.NavTileEntryDef{{
+			Coord:          coord,
+			AgentProfileID: profile.ID,
+			TilePath:       content.AuthorDocumentPath(staticTilePath, navPath),
+			BoundsMin:      baseTile.Tile.BoundsMin,
+			BoundsMax:      baseTile.Tile.BoundsMax,
+		}},
+	}
+	if err := content.SaveNavManifest(navPath, baseNav); err != nil {
+		t.Fatalf("SaveNavManifest failed: %v", err)
+	}
+
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.LevelID = "runtime-uneven"
+	state.Level = content.NewLevelDef("runtime-uneven")
+	state.Level.ChunkSize = 40
+	state.Level.VoxelResolution = 0.025
+	state.BaseWorldID = "world-a"
+	state.BaseNavManifestPath = navPath
+	state.BaseNavManifest = baseNav
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "runtime-uneven"}
+	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "runtime-uneven"})
+	chunkCoord := ChunkCoord{X: 0, Y: 0, Z: 0}
+	_, err = commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, streamedPreparedChunk{
+		Coord:              chunkCoord,
+		ImportedWorldChunk: baseChunk,
+	})
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedChunk failed: %v", err)
+	}
+	loaded := state.LoadedChunks[chunkCoord]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected loaded imported chunk, got %+v", state.LoadedChunks)
+	}
+	var entity EntityId
+	for eid := range loaded.ImportedWorldEntities {
+		entity = eid
+	}
+	vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+	assetMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+	if !ok {
+		t.Fatalf("expected imported chunk geometry to resolve")
+	}
+	runtimeMap := assetMap.Copy()
+	for _, voxel := range editedVoxels {
+		runtimeMap.SetVoxel(voxel.X, voxel.Y, voxel.Z, voxel.Value)
+	}
+	runtimeObj := core.NewVoxelObject()
+	runtimeObj.XBrickMap = runtimeMap
+	rtState := &VoxelRtState{
+		instanceMap:                 map[EntityId]*core.VoxelObject{entity: runtimeObj},
+		runtimeEditedVoxelEntities:  make(map[EntityId]struct{}),
+		runtimeEditedVoxelRevisions: make(map[EntityId]uint64),
+	}
+	cmd.AddResources(rtState)
+	rtState.markRuntimeEditedVoxelEntity(entity)
+
+	streamedLevelRuntimeEditedNavigationRebuildSystem(cmd, state)
+	if len(state.NavigationRebuilds) != 1 {
+		t.Fatalf("expected runtime edit to queue nav rebuild, got %d", len(state.NavigationRebuilds))
+	}
+	if err := DrainStreamedLevelNavigationRebuilds(state, 2*time.Second); err != nil {
+		t.Fatalf("DrainStreamedLevelNavigationRebuilds failed: %v", err)
+	}
+	if state.NavigationRevision == 0 || state.Metrics.NavigationRebuildCount != 1 {
+		t.Fatalf("expected completed navigation rebuild, rev=%d metrics=%+v", state.NavigationRevision, state.Metrics)
+	}
+	if len(state.WorldDelta.NavigationTileOverrides) != 1 {
+		t.Fatalf("expected one runtime delta nav override, got %+v", state.WorldDelta.NavigationTileOverrides)
+	}
+	if len(state.WorldDelta.NavigationClearanceSourceTileOverrides) != 1 {
+		t.Fatalf("expected one runtime delta clearance source override, got %+v", state.WorldDelta.NavigationClearanceSourceTileOverrides)
+	}
+	sourceTile, err := content.LoadNavClearanceSourceTile(content.ResolveNavigationClearanceSourceTileOverridePath(state.WorldDelta.NavigationClearanceSourceTileOverrides[0], deltaPath))
+	if err != nil {
+		t.Fatalf("LoadNavClearanceSourceTile runtime uneven override failed: %v", err)
+	}
+	if len(sourceTile.Cells) < 2 {
+		t.Fatalf("expected uneven runtime edit to produce clearance source cells, got %+v", sourceTile)
+	}
+	tile, err := content.LoadNavTile(content.ResolveNavigationTileOverridePath(state.WorldDelta.NavigationTileOverrides[0], deltaPath))
+	if err != nil {
+		t.Fatalf("LoadNavTile runtime uneven override failed: %v", err)
+	}
+	if len(tile.Polygons) == 0 {
+		t.Fatalf("expected uneven runtime edit to produce nav polygons, got %+v", tile)
+	}
+	if !streamedRuntimeNavTileHasNonFlatPolygon(tile) {
+		t.Fatalf("expected uneven runtime edit to produce a non-flat polygon, got %+v", tile.Polygons)
+	}
+	if !streamedRuntimeNavTilePolygonsConnected(tile) {
+		t.Fatalf("expected uneven runtime edit polygons to be connected, got %+v", tile.Polygons)
+	}
+	for _, polygon := range tile.Polygons {
+		if strings.HasPrefix(polygon.ID, "raster_region:") || strings.HasPrefix(polygon.ID, "raster_cell:") {
+			t.Fatalf("expected simplified contour polygon, got %+v", polygon)
+		}
+	}
+	if validation := content.ValidateNavTile(tile); validation.HasErrors() {
+		t.Fatalf("ValidateNavTile failed: %s", validation.Error())
+	}
+	startCell, endCell, componentSize := streamedRuntimeLargestClearanceComponentEndpoints(sourceTile, profile)
+	if componentSize < 16 {
+		t.Fatalf("expected uneven runtime edit to produce a sizeable supported clearance component, size=%d cells=%+v", componentSize, sourceTile.Cells)
+	}
+	start := startCell.Position
+	end := endCell.Position
+	after, err := content.FindEffectiveNavPath(baseNav, navPath, state.WorldDelta, deltaPath, start, end, content.NavPathOptions{
+		AgentProfileID:       profile.ID,
+		MaxTileSearchRadius:  1,
+		EndpointSnapDistance: 0.05,
+	})
+	if err != nil {
+		t.Fatalf("FindEffectiveNavPath after uneven edit failed: %v", err)
+	}
+	if !after.Found {
+		t.Fatalf("expected uneven edited surface to route across clearance source, got %+v", after)
+	}
+}
+
 func TestStreamedRuntimeRecordsStreamingObservability(t *testing.T) {
 	root := t.TempDir()
 	levelPath := filepath.Join(root, "levels", "observability.gklevel")
@@ -3782,6 +4250,146 @@ func streamedRuntimeTestFloorVoxels(minX, maxX, minZ, maxZ, y int) []content.Imp
 	for x := minX; x <= maxX; x++ {
 		for z := minZ; z <= maxZ; z++ {
 			out = append(out, content.ImportedWorldVoxelDef{X: x, Y: y, Z: z, Value: 1})
+		}
+	}
+	return out
+}
+
+func streamedRuntimeTestUnevenFieldVoxels() []content.ImportedWorldVoxelDef {
+	out := make([]content.ImportedWorldVoxelDef, 0)
+	for x := 10; x <= 25; x++ {
+		for z := 10; z <= 25; z++ {
+			height := (x-10)/2 + (z-10)/8
+			height += int(math.Round(5 * math.Sin(float64(x-10)/15*math.Pi)))
+			for y := 0; y <= height; y++ {
+				out = append(out, content.ImportedWorldVoxelDef{X: x, Y: y, Z: z, Value: 1})
+			}
+		}
+	}
+	return out
+}
+
+func streamedRuntimeNavTileHasNonFlatPolygon(tile *content.NavTileDef) bool {
+	if tile == nil {
+		return false
+	}
+	for _, polygon := range tile.Polygons {
+		if len(polygon.Vertices) < 2 {
+			continue
+		}
+		firstYSet := false
+		firstY := float32(0)
+		for _, index := range polygon.Vertices {
+			if index < 0 || index >= len(tile.Vertices) {
+				continue
+			}
+			y := tile.Vertices[index][1]
+			if !firstYSet {
+				firstY = y
+				firstYSet = true
+				continue
+			}
+			if y-firstY > 1e-4 || firstY-y > 1e-4 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func streamedRuntimeNavTilePolygonsConnected(tile *content.NavTileDef) bool {
+	if tile == nil || len(tile.Polygons) == 0 {
+		return false
+	}
+	polygonIDs := make(map[string]struct{}, len(tile.Polygons))
+	links := make(map[string][]string, len(tile.Polygons))
+	for _, polygon := range tile.Polygons {
+		polygonIDs[polygon.ID] = struct{}{}
+		for _, neighbor := range polygon.Neighbors {
+			links[polygon.ID] = append(links[polygon.ID], neighbor)
+			links[neighbor] = append(links[neighbor], polygon.ID)
+		}
+	}
+	start := tile.Polygons[0].ID
+	seen := map[string]struct{}{start: {}}
+	queue := []string{start}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, neighbor := range links[current] {
+			if _, ok := polygonIDs[neighbor]; !ok {
+				continue
+			}
+			if _, ok := seen[neighbor]; ok {
+				continue
+			}
+			seen[neighbor] = struct{}{}
+			queue = append(queue, neighbor)
+		}
+	}
+	return len(seen) == len(tile.Polygons)
+}
+
+func streamedRuntimeLargestClearanceComponentEndpoints(tile *content.NavClearanceSourceTileDef, profile content.NavAgentProfileDef) (content.NavClearanceSourceCellDef, content.NavClearanceSourceCellDef, int) {
+	if tile == nil {
+		return content.NavClearanceSourceCellDef{}, content.NavClearanceSourceCellDef{}, 0
+	}
+	cellByCoord := make(map[[3]int]content.NavClearanceSourceCellDef, len(tile.Cells))
+	for _, cell := range tile.Cells {
+		if content.NavClearanceSourceCellSupportsAgent(cell, profile) {
+			cellByCoord[[3]int{cell.X, cell.Y, cell.Z}] = cell
+		}
+	}
+	visited := make(map[[3]int]struct{}, len(cellByCoord))
+	best := []content.NavClearanceSourceCellDef{}
+	for key, cell := range cellByCoord {
+		if _, ok := visited[key]; ok {
+			continue
+		}
+		component := []content.NavClearanceSourceCellDef{cell}
+		visited[key] = struct{}{}
+		queue := [][3]int{key}
+		for len(queue) > 0 {
+			currentKey := queue[0]
+			queue = queue[1:]
+			current := cellByCoord[currentKey]
+			for _, neighbor := range streamedRuntimeClearanceComponentNeighbors(current, cellByCoord, profile) {
+				neighborKey := [3]int{neighbor.X, neighbor.Y, neighbor.Z}
+				if _, ok := visited[neighborKey]; ok {
+					continue
+				}
+				visited[neighborKey] = struct{}{}
+				component = append(component, neighbor)
+				queue = append(queue, neighborKey)
+			}
+		}
+		if len(component) > len(best) {
+			best = component
+		}
+	}
+	if len(best) == 0 {
+		return content.NavClearanceSourceCellDef{}, content.NavClearanceSourceCellDef{}, 0
+	}
+	return best[0], best[len(best)-1], len(best)
+}
+
+func streamedRuntimeClearanceComponentNeighbors(cell content.NavClearanceSourceCellDef, cellByCoord map[[3]int]content.NavClearanceSourceCellDef, profile content.NavAgentProfileDef) []content.NavClearanceSourceCellDef {
+	out := make([]content.NavClearanceSourceCellDef, 0, 4)
+	for _, offset := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+		for key, candidate := range cellByCoord {
+			if key[0] != cell.X+offset[0] || key[2] != cell.Z+offset[1] {
+				continue
+			}
+			if !content.NavClearanceSourceCellSupportsAgent(candidate, profile) {
+				continue
+			}
+			dy := candidate.Position[1] - cell.Position[1]
+			if dy < 0 {
+				dy = -dy
+			}
+			if dy <= profile.StepHeight+1e-4 {
+				out = append(out, candidate)
+			}
 		}
 	}
 	return out

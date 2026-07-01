@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/go-gl/mathgl/mgl32"
@@ -21,15 +22,16 @@ func TestNPCNavigationComponentSetTargetMarksRequestDirty(t *testing.T) {
 
 func TestNPCNavigationRouteOptionsAllowsCorridorFallback(t *testing.T) {
 	opts := npcNavigationRouteOptions(&NPCNavigationComponent{
-		Enabled:             true,
-		AgentProfileID:      "tiny",
-		MaxTileSearchRadius: 3,
+		Enabled:              true,
+		AgentProfileID:       "tiny",
+		MaxTileSearchRadius:  3,
+		EndpointSnapDistance: 1.25,
 	})
 
 	if !opts.AllowLocalCorridorFallback {
 		t.Fatalf("expected NPC route options to allow corridor fallback, got %+v", opts)
 	}
-	if opts.LocalPath.AgentProfileID != "tiny" || opts.LocalPath.MaxTileSearchRadius != 3 {
+	if opts.LocalPath.AgentProfileID != "tiny" || opts.LocalPath.MaxTileSearchRadius != 3 || opts.LocalPath.EndpointSnapDistance != 1.25 {
 		t.Fatalf("unexpected local path options: %+v", opts.LocalPath)
 	}
 }
@@ -192,10 +194,27 @@ func TestStreamedLevelNPCNavigationSystemUsesRuntimeStateService(t *testing.T) {
 	app.FlushCommands()
 
 	streamedLevelNPCNavigationSystem(cmd, state)
+	drainTestStreamedNPCNavigation(t, cmd, state)
 
 	nav := cmd.GetComponent(npc, reflect.TypeOf(NPCNavigationComponent{})).(*NPCNavigationComponent)
 	if nav.Status != NPCNavigationStatusRouteReady || !nav.Route.Refined || nav.Route.RefinementStatus != content.NavRouteRefinementStatusRefined {
 		t.Fatalf("expected streamed runtime system to store refined NPC route, got %+v", nav)
+	}
+}
+
+func drainTestStreamedNPCNavigation(t *testing.T, cmd *Commands, state *StreamedLevelRuntimeState) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		streamedLevelNPCNavigationSystem(cmd, state)
+		if PendingStreamedNavigationRouteJobCount(state) == 0 {
+			streamedLevelNPCNavigationSystem(cmd, state)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for streamed NPC navigation route jobs: queued=%d active=%t", len(state.NavigationRouteJobs), state.NavigationRouteActive)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 

@@ -71,6 +71,157 @@ func TestFindNavSectorPathUsesAllowedTaggedShortcut(t *testing.T) {
 	}
 }
 
+func TestFindNavSectorPathDynamicOverlayBlocksDoorLink(t *testing.T) {
+	manifest := navSectorGraphTestManifest()
+	manifest.Sectors[0].Links = []NavSectorLinkDef{{
+		ID:         "door-a",
+		TargetName: "door_a",
+		To:         TerrainChunkCoordDef{X: 2, Y: 0, Z: 0},
+		Kind:       NavTraversalDoor,
+		Cost:       1,
+		Openable:   true,
+	}}
+
+	path, err := FindNavSectorPath(manifest, TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, TerrainChunkCoordDef{X: 2, Y: 0, Z: 0}, NavSectorPathOptions{
+		AllowedKinds: []string{NavTraversalWalk, NavTraversalDoor},
+		DynamicOverlay: NavDynamicOverlayDef{Entries: []NavDynamicOverlayEntryDef{{
+			ID:      "closed-door-a",
+			Kind:    NavDynamicOverlayEntryKindLink,
+			LinkID:  "door-a",
+			Blocked: true,
+			Reason:  "door_closed",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("FindNavSectorPath failed: %v", err)
+	}
+	if !path.Found || len(path.SectorCoords) != 3 || path.Cost != 20 {
+		t.Fatalf("expected blocked door shortcut to fall back to walk sectors, got %+v", path)
+	}
+	for _, edge := range path.Edges {
+		if edge.LinkID == "door-a" {
+			t.Fatalf("did not expect blocked door link in path, got %+v", path)
+		}
+	}
+}
+
+func TestFindNavSectorPathDynamicOverlayAddsDoorAction(t *testing.T) {
+	manifest := navSectorGraphTestManifest()
+	manifest.Sectors[0].Links = []NavSectorLinkDef{{
+		ID:         "door-a",
+		TargetName: "door_a",
+		To:         TerrainChunkCoordDef{X: 2, Y: 0, Z: 0},
+		Kind:       NavTraversalDoor,
+		Cost:       1,
+		Openable:   true,
+	}}
+
+	path, err := FindNavSectorPath(manifest, TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, TerrainChunkCoordDef{X: 2, Y: 0, Z: 0}, NavSectorPathOptions{
+		AllowedKinds: []string{NavTraversalWalk, NavTraversalDoor},
+		DynamicOverlay: NavDynamicOverlayDef{Entries: []NavDynamicOverlayEntryDef{{
+			ID:         "open-door-a",
+			Kind:       NavDynamicOverlayEntryKindLink,
+			TargetName: "door_a",
+			Action:     "open_door",
+			Reason:     "door_openable",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("FindNavSectorPath failed: %v", err)
+	}
+	if !path.Found || len(path.SectorCoords) != 2 || len(path.Edges) != 1 || path.Edges[0].LinkID != "door-a" {
+		t.Fatalf("expected door shortcut path, got %+v", path)
+	}
+	if len(path.Actions) != 1 || path.Actions[0].Action != "open_door" || path.Actions[0].LinkID != "door-a" || path.Actions[0].TargetName != "door_a" {
+		t.Fatalf("expected door traversal action, got %+v", path.Actions)
+	}
+}
+
+func TestFindNavSectorPathDynamicOverlayMatchesLinkTargetName(t *testing.T) {
+	manifest := navSectorGraphTestManifest()
+	manifest.Sectors[0].Links = []NavSectorLinkDef{{
+		ID:         "link-1",
+		TargetName: "door_a",
+		To:         TerrainChunkCoordDef{X: 2, Y: 0, Z: 0},
+		Kind:       NavTraversalDoor,
+		Cost:       1,
+		Openable:   true,
+	}}
+
+	path, err := FindNavSectorPath(manifest, TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, TerrainChunkCoordDef{X: 2, Y: 0, Z: 0}, NavSectorPathOptions{
+		AllowedKinds: []string{NavTraversalWalk, NavTraversalDoor},
+		DynamicOverlay: NavDynamicOverlayDef{Entries: []NavDynamicOverlayEntryDef{{
+			ID:         "closed-door-a",
+			Kind:       NavDynamicOverlayEntryKindLink,
+			TargetName: "door_a",
+			Blocked:    true,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("FindNavSectorPath failed: %v", err)
+	}
+	if !path.Found || len(path.SectorCoords) != 3 || path.Cost != 20 {
+		t.Fatalf("expected target-name overlay to block door link, got %+v", path)
+	}
+}
+
+func TestFindNavSectorPathDynamicOverlayBlocksBoundsEdge(t *testing.T) {
+	manifest := navSectorGraphTestManifest()
+
+	path, err := FindNavSectorPath(manifest, TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}, TerrainChunkCoordDef{X: 2, Y: 0, Z: 0}, NavSectorPathOptions{
+		DynamicOverlay: NavDynamicOverlayDef{Entries: []NavDynamicOverlayEntryDef{{
+			ID:        "crate-0-1",
+			Kind:      NavDynamicOverlayEntryKindBounds,
+			BoundsMin: Vec3{9, 0, 4},
+			BoundsMax: Vec3{11, 4, 6},
+			Blocked:   true,
+			Reason:    "temporary_blocker",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("FindNavSectorPath failed: %v", err)
+	}
+	if path.Found {
+		t.Fatalf("expected bounds blocker to disconnect the only sector route, got %+v", path)
+	}
+}
+
+func TestFindNavSectorPathDynamicOverlayBoundsCostChoosesDetour(t *testing.T) {
+	manifest := navSectorGraphTestManifestWithDetour()
+	start := TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	end := TerrainChunkCoordDef{X: 2, Y: 0, Z: 0}
+
+	path, err := FindNavSectorPath(manifest, start, end, NavSectorPathOptions{})
+	if err != nil {
+		t.Fatalf("FindNavSectorPath failed: %v", err)
+	}
+	if !path.Found || len(path.SectorCoords) != 3 || path.SectorCoords[1] != (TerrainChunkCoordDef{X: 1, Y: 0, Z: 0}) {
+		t.Fatalf("expected direct middle route before overlay, got %+v", path)
+	}
+
+	path, err = FindNavSectorPath(manifest, start, end, NavSectorPathOptions{
+		DynamicOverlay: NavDynamicOverlayDef{Entries: []NavDynamicOverlayEntryDef{{
+			ID:        "mud-0-1",
+			Kind:      NavDynamicOverlayEntryKindBounds,
+			BoundsMin: Vec3{9, 0, 4},
+			BoundsMax: Vec3{11, 4, 6},
+			CostAdd:   100,
+			Reason:    "temporary_slow_area",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("FindNavSectorPath with overlay failed: %v", err)
+	}
+	if !path.Found || len(path.SectorCoords) < 4 || path.SectorCoords[1] != (TerrainChunkCoordDef{X: 0, Y: 0, Z: 1}) {
+		t.Fatalf("expected bounds cost to route through detour, got %+v", path)
+	}
+	for _, edge := range path.Edges {
+		if edge.From == start && edge.To == (TerrainChunkCoordDef{X: 1, Y: 0, Z: 0}) {
+			t.Fatalf("expected bounds cost to avoid the repriced direct edge, got %+v", path)
+		}
+	}
+}
+
 func TestFindNavSectorPathBetweenPoints(t *testing.T) {
 	manifest := navSectorGraphTestManifest()
 
@@ -117,6 +268,28 @@ func navSectorGraphTestSectors() []NavSectorEntryDef {
 			BoundsMax: [3]float32{30, 10, 10},
 		},
 	}
+}
+
+func navSectorGraphTestManifestWithDetour() *NavManifestDef {
+	manifest := navSectorGraphTestManifest()
+	manifest.Sectors = append(manifest.Sectors,
+		NavSectorEntryDef{
+			Coord:     TerrainChunkCoordDef{X: 0, Y: 0, Z: 1},
+			BoundsMin: [3]float32{0, 0, 10},
+			BoundsMax: [3]float32{10, 10, 20},
+		},
+		NavSectorEntryDef{
+			Coord:     TerrainChunkCoordDef{X: 1, Y: 0, Z: 1},
+			BoundsMin: [3]float32{10, 0, 10},
+			BoundsMax: [3]float32{20, 10, 20},
+		},
+		NavSectorEntryDef{
+			Coord:     TerrainChunkCoordDef{X: 2, Y: 0, Z: 1},
+			BoundsMin: [3]float32{20, 0, 10},
+			BoundsMax: [3]float32{30, 10, 20},
+		},
+	)
+	return manifest
 }
 
 func navSectorGraphHasEdge(graph NavSectorGraph, from TerrainChunkCoordDef, to TerrainChunkCoordDef, source string) bool {

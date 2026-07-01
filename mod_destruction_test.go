@@ -146,6 +146,45 @@ func TestDestructionSystemAllowsImportedWorldChunkInsideDestructionResidency(t *
 	}
 }
 
+func TestDestructionSystemMarksResidentImportedWorldChunkRuntimeEdited(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := newDestructionTestVoxelRtState()
+	server := newDestructionTestAssetServer()
+	entity, xbm := addImportedDestructionTestEntity(app, cmd, server, state, true)
+	xbm.SetVoxel(2, 0, 0, 1)
+	state.instanceMap[entity].XBrickMap = xbm
+	if !destructionEventAllowedForEntity(cmd, entity) {
+		t.Fatal("test setup expected resident imported-world entity to allow destruction")
+	}
+	if state.GetVoxelObject(entity) == nil || state.GetVoxelObject(entity).XBrickMap == nil {
+		t.Fatal("test setup expected live voxel object")
+	}
+
+	if edited := processDestructionEvent(state, DestructionEvent{
+		Entity: entity,
+		Center: mgl32.Vec3{0, 0, 0},
+		Radius: 0.75,
+	}, cmd, server); !edited {
+		t.Fatal("expected destruction event to edit resident imported-world geometry")
+	}
+
+	if !state.runtimeEditedVoxelEntity(entity) {
+		t.Fatal("expected destruction edit to mark imported-world entity as runtime-edited for nav rebuild")
+	}
+	app.FlushCommands()
+	if !VoxelEntityPersistenceDirty(cmd, entity) {
+		t.Fatal("expected destruction edit to mark entity persistence dirty")
+	}
+	obj := state.GetVoxelObject(entity)
+	if obj == nil || obj.XBrickMap == nil || obj.XBrickMap.GetVoxelCount() != 1 {
+		t.Fatalf("expected live runtime voxel object to point at edited geometry, got %+v", obj)
+	}
+	if len(cmd.GetAllComponents(entity)) == 0 {
+		t.Fatal("expected partially destroyed entity to remain for runtime nav snapshot")
+	}
+}
+
 func TestDestructionSystem_SpawnDebris(t *testing.T) {
 	app := NewApp()
 	app.UseModules(DestructionModule{})

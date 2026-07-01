@@ -1074,6 +1074,7 @@ func buildHL1Breakables(opts ImportOptions, summary ImportSummary, levelPath str
 			TargetName:        hl1StringKey(entity, "targetname"),
 			Target:            hl1StringKey(entity, "target"),
 			Delay:             hl1FloatKey(entity, "delay"),
+			NavigationMode:    content.LevelBreakableNavigationModeBlock,
 			SourceTag:         "hl1:func_breakable",
 			Tags:              hl1BreakableTags(entity, bounds),
 		}

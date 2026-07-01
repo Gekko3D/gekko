@@ -10,6 +10,7 @@ type RuntimeNavigationService struct {
 	WorldDeltaPath      string
 	WorldDelta          *content.WorldDeltaDef
 	NavigationRevision  int64
+	QueryCache          *content.NavRuntimeQueryCache
 }
 
 type RuntimeNavigationRouteRequest struct {
@@ -36,9 +37,14 @@ func RuntimeNavigationServiceFromStreamedLevelState(state *StreamedLevelRuntimeS
 	if state == nil {
 		return RuntimeNavigationService{}
 	}
-	state.mu.RLock()
-	defer state.mu.RUnlock()
-	return NewRuntimeNavigationServiceWithRevision(state.BaseNavManifest, state.BaseNavManifestPath, state.WorldDelta, state.WorldDeltaPath, state.NavigationRevision)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.NavigationQueryCache == nil {
+		state.NavigationQueryCache = content.NewNavRuntimeQueryCache()
+	}
+	service := NewRuntimeNavigationServiceWithRevision(state.BaseNavManifest, state.BaseNavManifestPath, state.WorldDelta, state.WorldDeltaPath, state.NavigationRevision)
+	service.QueryCache = state.NavigationQueryCache
+	return service
 }
 
 func (s RuntimeNavigationService) Available() bool {
@@ -52,5 +58,14 @@ func (s RuntimeNavigationService) FindRoute(req RuntimeNavigationRouteRequest) (
 			RefinementReason: content.NavRouteRefinementReasonNavigationUnavailable,
 		}, nil
 	}
-	return content.FindHierarchicalNavRoute(s.BaseNavManifest, s.BaseNavManifestPath, s.WorldDelta, s.WorldDeltaPath, req.Start, req.End, req.Options)
+	opts := req.Options
+	if s.QueryCache != nil {
+		s.QueryCache.Prepare(content.NavRuntimeQueryCacheKey{
+			BaseNavManifestPath: s.BaseNavManifestPath,
+			WorldDeltaPath:      s.WorldDeltaPath,
+			NavigationRevision:  s.NavigationRevision,
+		})
+		opts.LocalPath.QueryCache = s.QueryCache
+	}
+	return content.FindHierarchicalNavRoute(s.BaseNavManifest, s.BaseNavManifestPath, s.WorldDelta, s.WorldDeltaPath, req.Start, req.End, opts)
 }

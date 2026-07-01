@@ -39,6 +39,7 @@ type NPCAnimationComponent struct {
 
 const (
 	NPCNavigationStatusIdle                  = "idle"
+	NPCNavigationStatusPlanning              = "planning"
 	NPCNavigationStatusRouteReady            = "route_ready"
 	NPCNavigationStatusCoarseRoute           = "coarse_route"
 	NPCNavigationStatusNoRoute               = "no_route"
@@ -61,8 +62,12 @@ type NPCNavigationComponent struct {
 	AgentTags              []string
 	AgentSpeed             float32
 	MaxTileSearchRadius    int
+	EndpointSnapDistance   float32
 	DisableLocalRefinement bool
 	RequestRevision        int64
+	PendingRevision        int64
+	PendingNavRevision     int64
+	PendingRouteJobID      int64
 	PlannedRevision        int64
 	PlannedNavRevision     int64
 	Status                 string
@@ -88,6 +93,9 @@ func (nav *NPCNavigationComponent) SetTarget(target content.Vec3) {
 	nav.HasTarget = true
 	nav.Target = target
 	nav.RequestRevision++
+	nav.PendingRevision = 0
+	nav.PendingNavRevision = 0
+	nav.PendingRouteJobID = 0
 	nav.Status = NPCNavigationStatusIdle
 }
 
@@ -165,8 +173,9 @@ func npcNavigationRouteOptions(nav *NPCNavigationComponent) content.NavHierarchi
 			AgentSpeed: nav.AgentSpeed,
 		},
 		LocalPath: content.NavPathOptions{
-			AgentProfileID:      nav.AgentProfileID,
-			MaxTileSearchRadius: nav.MaxTileSearchRadius,
+			AgentProfileID:       nav.AgentProfileID,
+			MaxTileSearchRadius:  nav.MaxTileSearchRadius,
+			EndpointSnapDistance: nav.EndpointSnapDistance,
 		},
 		DisableLocalRefinement:     nav.DisableLocalRefinement,
 		AllowLocalCorridorFallback: !nav.DisableLocalRefinement,

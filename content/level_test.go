@@ -993,6 +993,9 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		TargetName:        "crate_a",
 		Target:            "door_a",
 		Delay:             0.2,
+		NavigationMode:    LevelBreakableNavigationModeCost,
+		NavigationCostAdd: 4,
+		NavigationCostMul: 1.5,
 		SourceTag:         "hl1:func_breakable",
 	}}
 	def.Pickups = []LevelPickupDef{{
@@ -1067,6 +1070,9 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	if len(loaded.Breakables) != 1 || loaded.Breakables[0].TargetName != "crate_a" || loaded.Breakables[0].Target != "door_a" || loaded.Breakables[0].Health != 25 {
 		t.Fatalf("breakables did not round-trip: %+v", loaded.Breakables)
 	}
+	if loaded.Breakables[0].NavigationMode != LevelBreakableNavigationModeCost || loaded.Breakables[0].NavigationCostAdd != 4 || loaded.Breakables[0].NavigationCostMul != 1.5 {
+		t.Fatalf("breakable navigation metadata did not round-trip: %+v", loaded.Breakables[0])
+	}
 	if len(loaded.Pickups) != 1 || loaded.Pickups[0].Category != "ammo" || loaded.Pickups[0].Item != "9mmclip" || loaded.Pickups[0].Amount != 17 {
 		t.Fatalf("pickups did not round-trip: %+v", loaded.Pickups)
 	}
@@ -1137,6 +1143,8 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 		BoundsHalfExtents: Vec3{1, 0, 1},
 		Health:            -1,
 		Delay:             -1,
+		NavigationMode:    "sideways",
+		NavigationCostMul: -1,
 	}}
 	def.Pickups = []LevelPickupDef{{
 		ID:     "bad-pickup",
@@ -1180,6 +1188,8 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "invalid_breakable_bounds")
 	assertHasLevelValidationCode(t, result, "invalid_breakable_health")
 	assertHasLevelValidationCode(t, result, "invalid_breakable_delay")
+	assertHasLevelValidationCode(t, result, "invalid_breakable_navigation_mode")
+	assertHasLevelValidationCode(t, result, "invalid_breakable_navigation_cost")
 	assertHasLevelValidationCode(t, result, "empty_pickup_category")
 	assertHasLevelValidationCode(t, result, "empty_pickup_item")
 	assertHasLevelValidationCode(t, result, "invalid_pickup_amount")

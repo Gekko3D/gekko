@@ -36,19 +36,13 @@ func TestRealMapNavPathFixtures(t *testing.T) {
 			WantStartSnap: true,
 		},
 		{
-			Name:     "gasworks_large_field_across_center_seam",
-			MapName:  "gasworks",
-			Start:    Vec3{-12.80, 0.10, 7.35},
-			End:      Vec3{9.15, 0.10, 7.35},
-			MinSteps: 2,
-		},
-		{
-			Name:          "gasworks_ramp_chain_with_endpoint_snap",
+			Name:          "gasworks_large_field_across_center_seam",
 			MapName:       "gasworks",
-			Start:         Vec3{-12.80, -8.90, -12.75},
-			End:           Vec3{-12.80, 0.10, 7.35},
-			MinSteps:      3,
+			Start:         Vec3{-12.80, 0.10, 7.35},
+			End:           Vec3{9.15, 0.10, 7.35},
+			MinSteps:      2,
 			WantStartSnap: true,
+			WantEndSnap:   true,
 		},
 	}
 

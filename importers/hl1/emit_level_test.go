@@ -1140,6 +1140,9 @@ func TestBuildGeneratedLevelEmitsHL1Breakables(t *testing.T) {
 	if breakable.Health != 35 || breakable.Material != "2" || breakable.SpawnObject != "4" || breakable.SpawnFlags != 1 || breakable.Delay != 0.25 {
 		t.Fatalf("breakable gameplay metadata = %+v", breakable)
 	}
+	if breakable.NavigationMode != content.LevelBreakableNavigationModeBlock {
+		t.Fatalf("expected HL1 breakable to block runtime nav until destroyed, got %+v", breakable)
+	}
 	if breakable.BoundsCenter != (content.Vec3{3, 4, 5}) || breakable.BoundsHalfExtents != (content.Vec3{2, 2, 2}) {
 		t.Fatalf("breakable bounds = %+v/%+v", breakable.BoundsCenter, breakable.BoundsHalfExtents)
 	}

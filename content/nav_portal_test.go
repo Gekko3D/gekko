@@ -57,6 +57,103 @@ func TestApplyNavTilePortalsConnectsPolygonsOverlappingChunkBoundary(t *testing.
 	}
 }
 
+func TestApplyNavTilePortalsRejectsNarrowBoundaryOverlap(t *testing.T) {
+	left := &NavTileDef{
+		NavID:          "nav-demo",
+		Coord:          TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		AgentProfileID: DefaultNavAgentProfileID,
+		BoundsMin:      [3]float32{0, 0, 0},
+		BoundsMax:      [3]float32{4, 2, 4},
+		Vertices: []Vec3{
+			{0, 0, 0},
+			{4, 0, 0},
+			{4, 0, 0.4},
+			{0, 0, 0.4},
+		},
+		Polygons: []NavPolygonDef{{
+			ID:       "left_narrow",
+			Vertices: []int{0, 1, 2, 3},
+			Area:     NavTraversalWalk,
+		}},
+	}
+	right := &NavTileDef{
+		NavID:          "nav-demo",
+		Coord:          TerrainChunkCoordDef{X: 1, Y: 0, Z: 0},
+		AgentProfileID: DefaultNavAgentProfileID,
+		BoundsMin:      [3]float32{4, 0, 0},
+		BoundsMax:      [3]float32{8, 2, 4},
+		Vertices: []Vec3{
+			{4, 0, 0},
+			{8, 0, 0},
+			{8, 0, 0.4},
+			{4, 0, 0.4},
+		},
+		Polygons: []NavPolygonDef{{
+			ID:       "right_narrow",
+			Vertices: []int{0, 1, 2, 3},
+			Area:     NavTraversalWalk,
+		}},
+	}
+
+	applyNavTilePortals([]*NavTileDef{left, right}, navPortalTestProfiles())
+
+	if len(left.Portals) != 0 || len(right.Portals) != 0 {
+		t.Fatalf("expected narrow seam to produce no portals, left=%+v right=%+v", left.Portals, right.Portals)
+	}
+}
+
+func TestApplyNavTilePortalsUsesAxisAlignedVerticalOverlapSegment(t *testing.T) {
+	lower := &NavTileDef{
+		NavID:          "nav-demo",
+		Coord:          TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		AgentProfileID: DefaultNavAgentProfileID,
+		BoundsMin:      [3]float32{0, 0, 0},
+		BoundsMax:      [3]float32{4, 4, 4},
+		Vertices: []Vec3{
+			{0, 4, 0},
+			{4, 4, 0},
+			{4, 4, 4},
+			{0, 4, 4},
+		},
+		Polygons: []NavPolygonDef{{
+			ID:       "lower",
+			Vertices: []int{0, 1, 2, 3},
+			Area:     NavTraversalWalk,
+		}},
+	}
+	upper := &NavTileDef{
+		NavID:          "nav-demo",
+		Coord:          TerrainChunkCoordDef{X: 0, Y: 1, Z: 0},
+		AgentProfileID: DefaultNavAgentProfileID,
+		BoundsMin:      [3]float32{0, 4, 0},
+		BoundsMax:      [3]float32{4, 8, 4},
+		Vertices: []Vec3{
+			{0, 4, 0},
+			{4, 4, 0},
+			{4, 4, 4},
+			{0, 4, 4},
+		},
+		Polygons: []NavPolygonDef{{
+			ID:       "upper",
+			Vertices: []int{0, 1, 2, 3},
+			Area:     NavTraversalWalk,
+		}},
+	}
+
+	applyNavTilePortals([]*NavTileDef{lower, upper}, navPortalTestProfiles())
+
+	if len(lower.Portals) != 1 || len(upper.Portals) != 1 {
+		t.Fatalf("expected vertical overlap portals, lower=%+v upper=%+v", lower.Portals, upper.Portals)
+	}
+	portal := lower.Portals[0]
+	if !navAlmostEqual(portal.Start[2], portal.End[2], 1e-4) || !navAlmostEqual(portal.Start[1], 4, 1e-4) || !navAlmostEqual(portal.End[1], 4, 1e-4) {
+		t.Fatalf("expected axis-aligned vertical-overlap portal at walk height, got %+v", portal)
+	}
+	if navVec2Length(portal.End[0]-portal.Start[0], portal.End[2]-portal.Start[2])+1e-4 < DefaultHL1NavAgentProfile().Radius*2 {
+		t.Fatalf("expected vertical-overlap portal to be agent-wide, got %+v", portal)
+	}
+}
+
 func TestApplyNavTilePortalsConnectsCrossTileRampBoundary(t *testing.T) {
 	left := &NavTileDef{
 		NavID:          "nav-demo",

@@ -31,6 +31,72 @@ type CharacterDepenetrationResult struct {
 	Hit          CharacterCollisionHit
 }
 
+type CharacterKinematicMoveOptions struct {
+	CollisionConfig      CharacterCollisionConfig
+	AcceptEntity         func(EntityId, bool) bool
+	DisableDepenetration bool
+	DisableSlide         bool
+}
+
+type CharacterKinematicMoveResult struct {
+	Start         mgl32.Vec3
+	Position      mgl32.Vec3
+	RequestedMove mgl32.Vec3
+	AppliedMove   mgl32.Vec3
+	Hit           CharacterCollisionHit
+	Depenetration CharacterDepenetrationResult
+	Blocked       bool
+	Slid          bool
+	Depenetrated  bool
+}
+
+func CharacterKinematicMove(voxRt *VoxelRtState, position, move mgl32.Vec3, opts CharacterKinematicMoveOptions) CharacterKinematicMoveResult {
+	move[1] = 0
+	result := CharacterKinematicMoveResult{
+		Start:         position,
+		Position:      position,
+		RequestedMove: move,
+	}
+	if move.LenSqr() <= 1e-8 {
+		return result
+	}
+	cfg := effectiveCharacterCollisionConfig(opts.CollisionConfig)
+	if !opts.DisableDepenetration {
+		depen := CharacterDepenetrateInitialContacts(voxRt, position, move, cfg, opts.AcceptEntity)
+		if depen.Depenetrated {
+			position = depen.Position
+			result.Position = position
+			result.Depenetration = depen
+			result.Depenetrated = true
+		}
+	}
+	if hit, blocked := CharacterMovementBlockHit(voxRt, position, move, cfg, opts.AcceptEntity); !blocked {
+		result.Position = position.Add(move)
+		result.AppliedMove = result.Position.Sub(result.Start)
+		return result
+	} else {
+		result.Hit = hit
+		result.Blocked = true
+		if opts.DisableSlide {
+			result.AppliedMove = result.Position.Sub(result.Start)
+			return result
+		}
+		slide, ok := characterKinematicSlideMove(move, hit.Normal)
+		if ok {
+			if slideHit, slideBlocked := CharacterMovementBlockHit(voxRt, position, slide, cfg, opts.AcceptEntity); !slideBlocked {
+				result.Position = position.Add(slide)
+				result.AppliedMove = result.Position.Sub(result.Start)
+				result.Slid = true
+				return result
+			} else if slideHit.Hit {
+				result.Hit = slideHit
+			}
+		}
+	}
+	result.AppliedMove = result.Position.Sub(result.Start)
+	return result
+}
+
 func CharacterMovementBlockHit(voxRt *VoxelRtState, basePos, move mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) (CharacterCollisionHit, bool) {
 	move[1] = 0
 	if voxRt == nil || move.Len() <= 0 {
@@ -43,7 +109,7 @@ func CharacterMovementBlockHit(voxRt *VoxelRtState, basePos, move mgl32.Vec3, cf
 		for _, offset := range CharacterCollisionSideOffsets(dir, cfg.Radius) {
 			origin := basePos.Add(offset).Add(mgl32.Vec3{0, sampleY, 0})
 			hit := voxRt.RaycastFiltered(origin, dir, dist, acceptEntity)
-			if hit.Hit && hit.T <= dist {
+			if hit.Hit && hit.T <= dist && characterHorizontalHitBlocksMovement(hit.Normal) {
 				return CharacterCollisionHit{
 					RaycastHit: hit,
 					SampleY:    sampleY,
@@ -53,6 +119,28 @@ func CharacterMovementBlockHit(voxRt *VoxelRtState, basePos, move mgl32.Vec3, cf
 		}
 	}
 	return CharacterCollisionHit{}, false
+}
+
+func characterHorizontalHitBlocksMovement(normal mgl32.Vec3) bool {
+	return normal.Y() <= 0.35
+}
+
+func characterKinematicSlideMove(move, normal mgl32.Vec3) (mgl32.Vec3, bool) {
+	move[1] = 0
+	normal[1] = 0
+	if move.LenSqr() <= 1e-8 || normal.LenSqr() <= 1e-8 {
+		return mgl32.Vec3{}, false
+	}
+	normal = normal.Normalize()
+	slide := move.Sub(normal.Mul(move.Dot(normal)))
+	slide[1] = 0
+	if slide.LenSqr() <= 1e-8 || slide.Dot(move) <= 0 {
+		return mgl32.Vec3{}, false
+	}
+	if slide.Len() > move.Len() {
+		slide = slide.Normalize().Mul(move.Len())
+	}
+	return slide, true
 }
 
 func CharacterDepenetrateInitialContacts(voxRt *VoxelRtState, basePos, intent mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) CharacterDepenetrationResult {

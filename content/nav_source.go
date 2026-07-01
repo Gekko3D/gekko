@@ -168,5 +168,9 @@ func EnsureNavBuildSurfaceDefaults(surface *NavBuildSurfaceDef) {
 
 func NavClearanceSourceCellSupportsAgent(cell NavClearanceSourceCellDef, profile NavAgentProfileDef) bool {
 	EnsureNavAgentProfileDefaults(&profile)
+	return navClearanceSourceCellSupportsNormalizedAgent(cell, profile)
+}
+
+func navClearanceSourceCellSupportsNormalizedAgent(cell NavClearanceSourceCellDef, profile NavAgentProfileDef) bool {
 	return cell.Headroom+1e-4 >= profile.Height && cell.ClearanceRadius+1e-4 >= profile.Radius && cell.SlopeDegrees <= profile.MaxSlopeDegrees+1e-4
 }

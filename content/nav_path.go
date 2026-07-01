@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"fmt"
 	"math"
+	"sort"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 	NavPathFailureStartPolygonMissing = "start_polygon_missing"
 	NavPathFailureEndPolygonMissing   = "end_polygon_missing"
 	NavPathFailureNoPath              = "no_path"
+	NavPathSourceClearance            = "clearance_source"
 )
 
 const (
@@ -32,6 +34,7 @@ type NavPathOptions struct {
 	MaxTileLoads         int
 	EndpointSnapDistance float32
 	AllowedTileCoords    map[TerrainChunkCoordDef]struct{}
+	QueryCache           *NavRuntimeQueryCache
 }
 
 type NavPathStep struct {
@@ -58,6 +61,7 @@ type NavPathResult struct {
 	Steps             []NavPathStep
 	Waypoints         []Vec3
 	Portals           []NavPathPortal
+	RegionPath        NavClearanceRegionPathResult
 	StartPoint        Vec3
 	EndPoint          Vec3
 	StartSnapped      bool
@@ -74,6 +78,30 @@ func FindEffectiveNavPath(baseNav *NavManifestDef, baseNavPath string, delta *Wo
 	}
 	EnsureNavManifestDefaults(baseNav)
 	opts = normalizeNavPathOptions(opts)
+	if navPathShouldUseClearanceSource(baseNav, delta) {
+		regionPath, ok, err := findEffectiveNavClearanceRegionPath(baseNav, baseNavPath, delta, deltaPath, start, end, opts)
+		if err != nil {
+			return NavPathResult{}, err
+		}
+		if ok && regionPath.Found && len(regionPath.Steps) > 0 {
+			return navPathResultFromClearanceRegionPath(regionPath), nil
+		}
+		path, err := FindEffectiveNavClearanceSourcePath(baseNav, baseNavPath, delta, deltaPath, start, end, NavClearancePathOptions{
+			AgentProfileID:       opts.AgentProfileID,
+			MaxTileSearchRadius:  opts.MaxTileSearchRadius,
+			MaxTileLoads:         opts.MaxTileLoads,
+			EndpointSnapDistance: opts.EndpointSnapDistance,
+			AllowedTileCoords:    opts.AllowedTileCoords,
+		})
+		if err != nil {
+			return NavPathResult{}, err
+		}
+		regionPath, err = buildNavRegionPathForClearancePath(baseNav, baseNavPath, delta, deltaPath, path, opts)
+		if err != nil {
+			return NavPathResult{}, err
+		}
+		return navPathResultFromClearancePath(path, regionPath), nil
+	}
 	startCoord, ok := navTileCoordForPoint(start, baseNav.ChunkSize, baseNav.VoxelResolution)
 	if !ok {
 		return NavPathResult{}, fmt.Errorf("invalid nav manifest chunk metrics")
@@ -139,6 +167,320 @@ func FindEffectiveNavPath(baseNav *NavManifestDef, baseNavPath string, delta *Wo
 		}
 	}
 	return ctx.noPathResult(), nil
+}
+
+func navPathShouldUseClearanceSource(baseNav *NavManifestDef, delta *WorldDeltaDef) bool {
+	if baseNav == nil {
+		return false
+	}
+	if delta == nil {
+		return len(baseNav.ClearanceSourceTiles) > 0
+	}
+	return len(baseNav.ClearanceSourceTiles) > 0 || len(delta.NavigationClearanceSourceTileOverrides) > 0
+}
+
+func navPathResultFromClearanceRegionPath(regionPath NavClearanceRegionPathResult) NavPathResult {
+	out := NavPathResult{
+		Found:             regionPath.Found,
+		RegionPath:        regionPath,
+		Waypoints:         append([]Vec3(nil), regionPath.Waypoints...),
+		StartPoint:        regionPath.StartPoint,
+		EndPoint:          regionPath.EndPoint,
+		StartSnapped:      regionPath.StartSnapped,
+		EndSnapped:        regionPath.EndSnapped,
+		StartSnapDistance: regionPath.StartSnapDistance,
+		EndSnapDistance:   regionPath.EndSnapDistance,
+	}
+	if out.StartPoint == (Vec3{}) && len(regionPath.Waypoints) > 0 {
+		out.StartPoint = regionPath.Waypoints[0]
+	}
+	if out.EndPoint == (Vec3{}) && len(regionPath.Waypoints) > 0 {
+		out.EndPoint = regionPath.Waypoints[len(regionPath.Waypoints)-1]
+	}
+	if len(regionPath.Steps) > 0 {
+		out.Steps = make([]NavPathStep, 0, len(regionPath.Steps))
+		for _, step := range regionPath.Steps {
+			out.Steps = append(out.Steps, NavPathStep{
+				Coord:     step.Coord,
+				PolygonID: step.RegionID,
+				Source:    NavPathSourceClearance,
+			})
+		}
+	}
+	return out
+}
+
+func navPathResultFromClearancePath(path NavClearancePathResult, regionPath NavClearanceRegionPathResult) NavPathResult {
+	out := NavPathResult{
+		Found:             path.Found,
+		Waypoints:         path.Waypoints,
+		RegionPath:        regionPath,
+		StartPoint:        path.StartPoint,
+		EndPoint:          path.EndPoint,
+		StartSnapped:      path.StartSnapped,
+		EndSnapped:        path.EndSnapped,
+		StartSnapDistance: path.StartSnapDistance,
+		EndSnapDistance:   path.EndSnapDistance,
+		FailureReason:     navPathFailureFromClearanceFailure(path.FailureReason),
+		FailureCoord:      path.FailureCoord,
+	}
+	if len(path.Steps) > 0 {
+		out.Steps = make([]NavPathStep, 0, len(path.Steps))
+		if regionPath.Found && len(regionPath.Steps) > 0 {
+			out.Steps = make([]NavPathStep, 0, len(regionPath.Steps))
+			for _, step := range regionPath.Steps {
+				out.Steps = append(out.Steps, NavPathStep{
+					Coord:     step.Coord,
+					PolygonID: step.RegionID,
+					Source:    NavPathSourceClearance,
+				})
+			}
+			if len(regionPath.Waypoints) > 0 {
+				out.Waypoints = append([]Vec3(nil), regionPath.Waypoints...)
+			}
+			return out
+		}
+		for _, step := range path.Steps {
+			out.Steps = append(out.Steps, NavPathStep{
+				Coord:     step.Coord,
+				PolygonID: fmt.Sprintf("cell:%d:%d:%d", step.X, step.Y, step.Z),
+				Source:    NavPathSourceClearance,
+			})
+		}
+	}
+	return out
+}
+
+func findEffectiveNavClearanceRegionPath(baseNav *NavManifestDef, baseNavPath string, delta *WorldDeltaDef, deltaPath string, start Vec3, end Vec3, opts NavPathOptions) (NavClearanceRegionPathResult, bool, error) {
+	normalized, err := normalizeNavClearancePathOptions(baseNav, NavClearancePathOptions{
+		AgentProfileID:       opts.AgentProfileID,
+		MaxTileSearchRadius:  opts.MaxTileSearchRadius,
+		MaxTileLoads:         opts.MaxTileLoads,
+		EndpointSnapDistance: opts.EndpointSnapDistance,
+		AllowedTileCoords:    opts.AllowedTileCoords,
+	})
+	if err != nil {
+		return NavClearanceRegionPathResult{}, false, err
+	}
+	ctx := newEffectiveNavClearancePathContext(baseNav, baseNavPath, delta, deltaPath, normalized)
+	startRef, startPoint, startDistance, startOK, err := ctx.nearestSupportedCell(start)
+	if err != nil || !startOK {
+		return NavClearanceRegionPathResult{}, false, err
+	}
+	endRef, endPoint, endDistance, endOK, err := ctx.nearestSupportedCell(end)
+	if err != nil || !endOK {
+		return NavClearanceRegionPathResult{}, false, err
+	}
+	coords := navClearanceRegionGraphCandidateCoords(ctx, startRef.Coord, endRef.Coord)
+	if len(coords) == 0 {
+		return NavClearanceRegionPathResult{}, false, nil
+	}
+	lookup, err := buildNavClearanceRegionGraphForCoords(baseNav, baseNavPath, delta, deltaPath, coords, normalized.AgentProfile, opts.QueryCache)
+	if err != nil {
+		return NavClearanceRegionPathResult{}, false, err
+	}
+	startStep, ok := navClearanceRegionStepForCell(lookup, startRef)
+	if !ok {
+		return NavClearanceRegionPathResult{}, false, nil
+	}
+	endStep, ok := navClearanceRegionStepForCell(lookup, endRef)
+	if !ok {
+		return NavClearanceRegionPathResult{}, false, nil
+	}
+	coarse := FindNavClearanceCoarseRegionPath(lookup.Graph, startStep.RegionID, endStep.RegionID, NavClearanceCoarseGraphOptions{
+		MaxRegionSearch: normalized.MaxTileLoads,
+	})
+	if !coarse.Found {
+		return NavClearanceRegionPathResult{}, false, nil
+	}
+	out := NavClearanceRegionPathResult{
+		Found:             true,
+		Steps:             append([]NavClearanceRegionPathStep(nil), coarse.Steps...),
+		Waypoints:         []Vec3{startPoint},
+		StartPoint:        startPoint,
+		EndPoint:          endPoint,
+		StartSnapped:      ctx.snapDistanceIsMeaningful(startDistance),
+		EndSnapped:        ctx.snapDistanceIsMeaningful(endDistance),
+		StartSnapDistance: startDistance,
+		EndSnapDistance:   endDistance,
+	}
+	for _, edge := range coarse.Edges {
+		out.Portals = append(out.Portals, edge.Portal)
+		out.Waypoints = append(out.Waypoints, edge.Position)
+	}
+	out.Waypoints = append(out.Waypoints, endPoint)
+	out.Waypoints = navDedupePathWaypoints(out.Waypoints)
+	return out, true, nil
+}
+
+func buildNavRegionPathForClearancePath(baseNav *NavManifestDef, baseNavPath string, delta *WorldDeltaDef, deltaPath string, path NavClearancePathResult, opts NavPathOptions) (NavClearanceRegionPathResult, error) {
+	if !path.Found || len(path.Steps) == 0 {
+		return NavClearanceRegionPathResult{}, nil
+	}
+	normalized, err := normalizeNavClearancePathOptions(baseNav, NavClearancePathOptions{
+		AgentProfileID:       opts.AgentProfileID,
+		MaxTileSearchRadius:  opts.MaxTileSearchRadius,
+		MaxTileLoads:         opts.MaxTileLoads,
+		EndpointSnapDistance: opts.EndpointSnapDistance,
+		AllowedTileCoords:    opts.AllowedTileCoords,
+	})
+	if err != nil {
+		return NavClearanceRegionPathResult{}, err
+	}
+	coords := make(map[TerrainChunkCoordDef]struct{})
+	for _, step := range path.Steps {
+		coords[step.Coord] = struct{}{}
+	}
+	orderedCoords := sortedNavRegionPathCoords(coords)
+	if opts.QueryCache != nil {
+		lookup, err := buildNavClearanceRegionGraphForCoords(baseNav, baseNavPath, delta, deltaPath, orderedCoords, normalized.AgentProfile, opts.QueryCache)
+		if err != nil {
+			return NavClearanceRegionPathResult{}, err
+		}
+		return ConvertNavClearancePathToRegionPath(path, lookup.Results)
+	}
+	results, tiles, err := buildNavClearanceRegionResultsForCoords(baseNav, baseNavPath, delta, deltaPath, orderedCoords, normalized.AgentProfile, nil)
+	if err != nil {
+		return NavClearanceRegionPathResult{}, err
+	}
+	if err := BuildNavClearanceCrossTileRegionPortals(results, tiles, NavClearanceRegionPortalBuildOptions{
+		AgentProfile: normalized.AgentProfile,
+		ChunkSize:    baseNav.ChunkSize,
+	}); err != nil {
+		return NavClearanceRegionPathResult{}, err
+	}
+	return ConvertNavClearancePathToRegionPath(path, results)
+}
+
+func buildNavClearanceRegionGraphForCoords(baseNav *NavManifestDef, baseNavPath string, delta *WorldDeltaDef, deltaPath string, coords []TerrainChunkCoordDef, profile NavAgentProfileDef, cache *NavRuntimeQueryCache) (navRuntimeClearanceRegionGraphCacheEntry, error) {
+	if cache != nil {
+		return cache.ClearanceRegionGraph(baseNav, baseNavPath, delta, deltaPath, coords, profile)
+	}
+	return buildNavClearanceRegionGraphForCoordsUncached(baseNav, baseNavPath, delta, deltaPath, coords, profile)
+}
+
+func buildNavClearanceRegionResultsForCoords(baseNav *NavManifestDef, baseNavPath string, delta *WorldDeltaDef, deltaPath string, coords []TerrainChunkCoordDef, profile NavAgentProfileDef, cache *NavRuntimeQueryCache) (map[TerrainChunkCoordDef]*NavClearanceLocalRegionBuildResult, map[TerrainChunkCoordDef]*NavClearanceSourceTileDef, error) {
+	if cache != nil {
+		lookup, err := cache.ClearanceRegionGraph(baseNav, baseNavPath, delta, deltaPath, coords, profile)
+		if err != nil {
+			return nil, nil, err
+		}
+		return lookup.Results, lookup.Tiles, nil
+	}
+	results := make(map[TerrainChunkCoordDef]*NavClearanceLocalRegionBuildResult, len(coords))
+	tiles := make(map[TerrainChunkCoordDef]*NavClearanceSourceTileDef, len(coords))
+	for _, coord := range coords {
+		lookup, err := LoadEffectiveNavClearanceSourceTile(baseNav, baseNavPath, delta, deltaPath, coord)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !lookup.Found || lookup.Empty || lookup.Tile == nil {
+			continue
+		}
+		result, err := BuildNavClearanceLocalRegions(lookup.Tile, NavClearanceRegionBuildOptions{AgentProfile: profile})
+		if err != nil {
+			return nil, nil, err
+		}
+		tiles[coord] = lookup.Tile
+		results[coord] = &result
+	}
+	return results, tiles, nil
+}
+
+func newEffectiveNavClearancePathContext(manifest *NavManifestDef, manifestPath string, delta *WorldDeltaDef, deltaPath string, opts NavClearancePathOptions) *navClearancePathContext {
+	ctx := &navClearancePathContext{
+		manifest:                 manifest,
+		manifestPath:             manifestPath,
+		delta:                    delta,
+		deltaPath:                deltaPath,
+		profile:                  opts.AgentProfile,
+		opts:                     opts,
+		sourceByKey:              make(map[string]NavClearanceSourceTileEntryDef, len(manifest.ClearanceSourceTiles)),
+		deltaSourceByKey:         make(map[string]NavigationClearanceSourceTileOverrideDef),
+		editedWithoutSourceByKey: map[string]struct{}{},
+		cache:                    map[TerrainChunkCoordDef]navClearanceLoadedTile{},
+		loaded:                   map[TerrainChunkCoordDef]struct{}{},
+	}
+	for _, entry := range manifest.ClearanceSourceTiles {
+		ctx.sourceByKey[TerrainChunkKey(entry.Coord)] = entry
+	}
+	if delta != nil {
+		for _, override := range delta.NavigationClearanceSourceTileOverrides {
+			if override.NavID == manifest.NavID {
+				ctx.deltaSourceByKey[TerrainChunkKey(override.ChunkCoord)] = override
+			}
+		}
+		for _, override := range delta.ImportedWorldChunkOverrides {
+			if manifest.SourceWorldID != "" && override.WorldID != "" && override.WorldID != manifest.SourceWorldID {
+				continue
+			}
+			key := TerrainChunkKey(override.ChunkCoord)
+			if _, ok := ctx.deltaSourceByKey[key]; !ok {
+				ctx.editedWithoutSourceByKey[key] = struct{}{}
+			}
+		}
+	}
+	return ctx
+}
+
+func navClearanceRegionGraphCandidateCoords(ctx *navClearancePathContext, start TerrainChunkCoordDef, end TerrainChunkCoordDef) []TerrainChunkCoordDef {
+	if ctx == nil {
+		return nil
+	}
+	bounds := navPathSearchBounds(start, end, ctx.opts.MaxTileSearchRadius)
+	seen := map[TerrainChunkCoordDef]struct{}{}
+	for _, entry := range ctx.sourceByKey {
+		if !ctx.coordAllowed(entry.Coord) || !navPathCoordInBounds(entry.Coord, bounds) {
+			continue
+		}
+		if _, stale := ctx.editedWithoutSourceByKey[TerrainChunkKey(entry.Coord)]; stale {
+			continue
+		}
+		seen[entry.Coord] = struct{}{}
+	}
+	for _, override := range ctx.deltaSourceByKey {
+		if !ctx.coordAllowed(override.ChunkCoord) || !navPathCoordInBounds(override.ChunkCoord, bounds) {
+			continue
+		}
+		seen[override.ChunkCoord] = struct{}{}
+	}
+	return sortedNavRegionPathCoords(seen)
+}
+
+func navClearanceRegionStepForCell(lookup navRuntimeClearanceRegionGraphCacheEntry, ref navClearanceCellRef) (NavClearanceRegionPathStep, bool) {
+	if lookup.RegionByCell == nil {
+		return NavClearanceRegionPathStep{}, false
+	}
+	step, ok := lookup.RegionByCell[navClearanceRegionCellRef{Coord: ref.Coord, X: ref.X, Y: ref.Y, Z: ref.Z}]
+	return step, ok
+}
+
+func sortedNavRegionPathCoords(coords map[TerrainChunkCoordDef]struct{}) []TerrainChunkCoordDef {
+	out := make([]TerrainChunkCoordDef, 0, len(coords))
+	for coord := range coords {
+		out = append(out, coord)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return terrainChunkCoordLess(out[i], out[j])
+	})
+	return out
+}
+
+func navPathFailureFromClearanceFailure(reason string) string {
+	switch reason {
+	case "":
+		return ""
+	case NavClearancePathFailureMissingSourceTile:
+		return NavPathFailureMissingTile
+	case NavClearancePathFailureStartCellMissing:
+		return NavPathFailureStartPolygonMissing
+	case NavClearancePathFailureEndCellMissing:
+		return NavPathFailureEndPolygonMissing
+	case NavClearancePathFailureNoPath:
+		return NavPathFailureNoPath
+	default:
+		return reason
+	}
 }
 
 type effectiveNavPathContext struct {
@@ -870,7 +1212,12 @@ func navPolygonBoundsForTile(tile *NavTileDef, polygon NavPolygonDef) (navPolygo
 }
 
 func navPolygonsConnectAcrossTileBoundary(tileA *NavTileDef, polygonA NavPolygonDef, tileB *NavTileDef, polygonB NavPolygonDef, dir TerrainChunkCoordDef, profile NavAgentProfileDef) bool {
-	return len(navPolygonsBoundaryPortalSegments(tileA, polygonA, tileB, polygonB, dir, profile)) > 0
+	for _, segment := range navPolygonsBoundaryPortalSegments(tileA, polygonA, tileB, polygonB, dir, profile) {
+		if navPortalSegmentHasAgentClearance(segment.Start, segment.End, profile) {
+			return true
+		}
+	}
+	return false
 }
 
 func navPolygonsSameSourceOverlapAcrossTiles(tileA *NavTileDef, polygonA NavPolygonDef, tileB *NavTileDef, polygonB NavPolygonDef, dir TerrainChunkCoordDef) bool {

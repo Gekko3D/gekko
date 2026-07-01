@@ -40,6 +40,15 @@ func TestWorldDeltaRoundTrip(t *testing.T) {
 			SourceOverrideKind: NavSourceOverrideKindImportedWorld,
 			Tags:               []string{"runtime_delta"},
 		}},
+		NavigationClearanceSourceTileOverrides: []NavigationClearanceSourceTileOverrideDef{{
+			NavID:              "nav-a",
+			ChunkCoord:         TerrainChunkCoordDef{X: 4, Y: 1, Z: -3},
+			TilePath:           "demo.gkworlddelta_data/nav/nav-a/sources/source_4_1_-3.gknavsource",
+			SourceDeltaHash:    "delta-hash",
+			NavBuildHash:       "source-build-hash",
+			SourceOverrideKind: NavSourceOverrideKindImportedWorld,
+			Tags:               []string{"runtime_delta"},
+		}},
 		VoxelObjectOverrides: []VoxelObjectOverrideDef{{
 			PlacementID:  "ship",
 			ItemID:       "hull",

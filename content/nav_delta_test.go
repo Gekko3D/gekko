@@ -99,6 +99,9 @@ func TestSaveNavDeltaTilesForImportedWorldChunksWritesOverrideTiles(t *testing.T
 	if len(result.Overrides) != 1 || len(result.Tiles) != 1 || len(delta.NavigationTileOverrides) != 1 {
 		t.Fatalf("expected one nav override and tile, result=%+v delta=%+v", result, delta.NavigationTileOverrides)
 	}
+	if len(result.ClearanceSourceOverrides) != 1 || len(result.ClearanceSourceTiles) != 1 || len(delta.NavigationClearanceSourceTileOverrides) != 1 {
+		t.Fatalf("expected one clearance source override and tile, result=%+v delta=%+v", result, delta.NavigationClearanceSourceTileOverrides)
+	}
 	override := delta.NavigationTileOverrides[0]
 	if override.NavID != "nav-demo" || override.AgentProfileID != "tiny" || override.Empty || override.TilePath == "" || override.SourceDeltaHash == "" || override.NavBuildHash == "" {
 		t.Fatalf("unexpected nav override: %+v", override)
@@ -106,12 +109,26 @@ func TestSaveNavDeltaTilesForImportedWorldChunksWritesOverrideTiles(t *testing.T
 	if override.TilePath != filepath.Join("demo.gkworlddelta_data", "nav", "nav-demo", "tiny", "tiny_0_0_0.gknavtile") {
 		t.Fatalf("unexpected relative tile path %q", override.TilePath)
 	}
+	sourceOverride := delta.NavigationClearanceSourceTileOverrides[0]
+	if sourceOverride.NavID != "nav-demo" || sourceOverride.ChunkCoord != chunk.Coord || sourceOverride.Empty || sourceOverride.TilePath == "" || sourceOverride.SourceDeltaHash == "" || sourceOverride.NavBuildHash == "" {
+		t.Fatalf("unexpected clearance source override: %+v", sourceOverride)
+	}
+	if sourceOverride.TilePath != filepath.Join("demo.gkworlddelta_data", "nav", "nav-demo", "sources", "source_0_0_0.gknavsource") {
+		t.Fatalf("unexpected relative clearance source path %q", sourceOverride.TilePath)
+	}
 	tile, err := LoadNavTile(ResolveNavigationTileOverridePath(override, deltaPath))
 	if err != nil {
 		t.Fatalf("LoadNavTile failed: %v", err)
 	}
 	if tile.NavID != "nav-demo" || tile.AgentProfileID != "tiny" || tile.SourceDeltaHash != override.SourceDeltaHash || len(tile.Polygons) == 0 {
 		t.Fatalf("unexpected delta nav tile: %+v", tile)
+	}
+	sourceTile, err := LoadNavClearanceSourceTile(ResolveNavigationClearanceSourceTileOverridePath(sourceOverride, deltaPath))
+	if err != nil {
+		t.Fatalf("LoadNavClearanceSourceTile failed: %v", err)
+	}
+	if sourceTile.NavID != "nav-demo" || sourceTile.SourceDeltaHash != sourceOverride.SourceDeltaHash || len(sourceTile.Cells) == 0 {
+		t.Fatalf("unexpected delta clearance source tile: %+v", sourceTile)
 	}
 	if err := SaveWorldDelta(deltaPath, delta); err != nil {
 		t.Fatalf("SaveWorldDelta failed: %v", err)
@@ -122,6 +139,9 @@ func TestSaveNavDeltaTilesForImportedWorldChunksWritesOverrideTiles(t *testing.T
 	}
 	if !reflect.DeepEqual(delta.NavigationTileOverrides, loaded.NavigationTileOverrides) {
 		t.Fatalf("expected nav override round-trip, want=%+v got=%+v", delta.NavigationTileOverrides, loaded.NavigationTileOverrides)
+	}
+	if !reflect.DeepEqual(delta.NavigationClearanceSourceTileOverrides, loaded.NavigationClearanceSourceTileOverrides) {
+		t.Fatalf("expected clearance source override round-trip, want=%+v got=%+v", delta.NavigationClearanceSourceTileOverrides, loaded.NavigationClearanceSourceTileOverrides)
 	}
 }
 
@@ -170,12 +190,17 @@ func TestSaveNavDeltaTilesForImportedWorldChunksUsesCompactSourceForUnevenEdits(
 	if len(result.Tiles) != 1 {
 		t.Fatalf("expected one delta tile, got %+v", result.Tiles)
 	}
+	if len(result.ClearanceSourceTiles) != 1 || len(delta.NavigationClearanceSourceTileOverrides) != 1 {
+		t.Fatalf("expected uneven edit to emit canonical clearance source, result=%+v delta=%+v", result, delta.NavigationClearanceSourceTileOverrides)
+	}
 	for _, tile := range result.Tiles {
-		if len(tile.Polygons) != 1 {
-			t.Fatalf("expected compact source-primary uneven edit nav, got %+v", tile.Polygons)
+		if len(tile.Polygons) == 0 {
+			t.Fatalf("expected derived uneven edit nav polygons, got %+v", tile.Polygons)
 		}
-		if strings.HasPrefix(tile.Polygons[0].ID, "raster_cell:") {
-			t.Fatalf("did not expect raster-cell islands from delta rebuild, got %+v", tile.Polygons[0])
+		for _, polygon := range tile.Polygons {
+			if strings.HasPrefix(polygon.ID, "raster_cell:") {
+				t.Fatalf("did not expect raster-cell islands from delta rebuild, got %+v", polygon)
+			}
 		}
 		if validation := ValidateNavTile(tile); validation.HasErrors() {
 			t.Fatalf("ValidateNavTile failed: %s", validation.Error())

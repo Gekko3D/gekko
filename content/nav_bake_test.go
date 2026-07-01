@@ -563,6 +563,7 @@ func TestBakeNavFromImportedWorldConnectsFourChunkFlatField(t *testing.T) {
 			t.Fatalf("SaveNavTile failed: %v", err)
 		}
 	}
+	navTestSaveClearanceSourceTiles(t, result)
 
 	path, err := FindEffectiveNavPath(result.Manifest, navPath, nil, "", Vec3{1.5, 1, 1.5}, Vec3{14.5, 1, 14.5}, NavPathOptions{
 		AgentProfileID:      profile.ID,
@@ -632,6 +633,7 @@ func TestBakeNavFromImportedWorldConnectsCrossChunkVoxelRamp(t *testing.T) {
 			t.Fatalf("SaveNavTile failed: %v", err)
 		}
 	}
+	navTestSaveClearanceSourceTiles(t, result)
 
 	path, err := FindEffectiveNavPath(result.Manifest, navPath, nil, "", Vec3{0.75, 0.5, 0.75}, Vec3{7.25, 2.0, 3.25}, NavPathOptions{
 		AgentProfileID:      profile.ID,
@@ -702,6 +704,7 @@ func TestBakeNavFromImportedWorldConnectsCrossChunkVoxelStairs(t *testing.T) {
 			t.Fatalf("SaveNavTile failed: %v", err)
 		}
 	}
+	navTestSaveClearanceSourceTiles(t, result)
 
 	path, err := FindEffectiveNavPath(result.Manifest, navPath, nil, "", Vec3{1.75, 0.5, 1.25}, Vec3{6.25, 2.0, 1.25}, NavPathOptions{
 		AgentProfileID:      profile.ID,
@@ -741,7 +744,7 @@ func TestBakeNavFromImportedWorldUsesNeighborChunksForBoundaryPath(t *testing.T)
 	}, navPath, NavBakeOptions{
 		NavID:          "nav-path",
 		BuilderVersion: DefaultNavBuilderVersion,
-		AgentProfiles:  []NavAgentProfileDef{navTestAgentProfileWithID("wide", 0.6, 1.0, 1.0)},
+		AgentProfiles:  []NavAgentProfileDef{navTestAgentProfileWithID("wide", 0.5, 1.0, 1.0)},
 	})
 	if err != nil {
 		t.Fatalf("BakeNavFromImportedWorld failed: %v", err)
@@ -759,6 +762,7 @@ func TestBakeNavFromImportedWorldUsesNeighborChunksForBoundaryPath(t *testing.T)
 			t.Fatalf("SaveNavTile failed: %v", err)
 		}
 	}
+	navTestSaveClearanceSourceTiles(t, result)
 
 	path, err := FindEffectiveNavPath(result.Manifest, navPath, nil, "", Vec3{3.5, 1, 1.5}, Vec3{4.5, 1, 1.5}, NavPathOptions{
 		AgentProfileID:      "wide",
@@ -815,4 +819,13 @@ func navTestAgentProfileWithID(id string, radius, height, stepHeight float32) Na
 	profile := navTestAgentProfile(radius, height, stepHeight)
 	profile.ID = id
 	return profile
+}
+
+func navTestSaveClearanceSourceTiles(t *testing.T, result NavBakeResult) {
+	t.Helper()
+	for path, tile := range result.ClearanceSourceTiles {
+		if err := SaveNavClearanceSourceTile(path, tile); err != nil {
+			t.Fatalf("SaveNavClearanceSourceTile failed: %v", err)
+		}
+	}
 }

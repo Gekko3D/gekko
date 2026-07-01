@@ -444,7 +444,7 @@ func appendRecastTileBorderSpans(tile *NavTileDef, profile NavAgentProfileDef) {
 		edge      string
 		area      string
 	}
-	tolerance := maxNavFloat32(profile.NavCellSize*1.5, 0.05)
+	tolerance := maxNavFloat32(navRecastCellSize(profile)*1.5, 0.05)
 	if tolerance <= 0 {
 		tolerance = DefaultNavCellSize * 1.5
 	}

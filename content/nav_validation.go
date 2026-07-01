@@ -519,6 +519,9 @@ func validateNavTilePortalTopology(result *NavValidationResult, tile *NavTileDef
 		if !navPortalSegmentTouchesTileBoundary(portal.Start, portal.End, tile, target, dir) {
 			result.addError("invalid_portal_boundary_segment", fmt.Sprintf("nav portal %s segment is not on the shared tile boundary", portal.ID))
 		}
+		if !navPortalSegmentHasAgentClearance(portal.Start, portal.End, profile) {
+			result.addError("portal_too_narrow", fmt.Sprintf("nav portal %s segment is narrower than the agent diameter", portal.ID))
+		}
 		if !navValidationPortalHeightsValid(tile, fromPolygon, target, targetPolygon, portal, dir, profile) {
 			result.addError("invalid_portal_height", fmt.Sprintf("nav portal %s segment height is not valid for both polygons/profile", portal.ID))
 		}
@@ -547,11 +550,8 @@ func navValidationPolygonsByID(tile *NavTileDef) map[string]NavPolygonDef {
 }
 
 func navValidationPortalHeightsValid(tile *NavTileDef, polygon NavPolygonDef, target *NavTileDef, targetPolygon NavPolygonDef, portal NavPortalDef, dir TerrainChunkCoordDef, profile NavAgentProfileDef) bool {
-	if dir.X == 0 && dir.Z == 0 {
-		return true
-	}
 	length := navVec2Length(portal.End[0]-portal.Start[0], portal.End[2]-portal.Start[2])
-	step := navPortalSampleStep(profile)
+	step := navPortalEffectiveSampleStep(tile, target, profile)
 	samples := 1
 	if step > 1e-4 && length > step {
 		samples = int(length / step)

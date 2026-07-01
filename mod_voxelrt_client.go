@@ -320,7 +320,7 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 }
 
 func (s *VoxelRtState) markRuntimeEditedVoxelEntity(eid EntityId) {
-	if s == nil || eid == 0 {
+	if s == nil {
 		return
 	}
 	if s.runtimeEditedVoxelEntities == nil {

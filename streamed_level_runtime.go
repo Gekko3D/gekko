@@ -146,20 +146,47 @@ type StreamedLevelRuntimeMetrics struct {
 	ObserverUpdateDuration time.Duration
 	CommitSystemDuration   time.Duration
 
-	NavigationRebuildCount                int
-	NavigationRebuildErrorCount           int
-	LastNavigationRebuildJobID            int64
-	LastCompletedNavigationRebuildJobID   int64
-	LastNavigationRebuildDirtyCoord       ChunkCoord
-	LastNavigationRebuildDirtyCoordValid  bool
-	LastNavigationRebuildDirtyCount       int
-	LastNavigationRebuildExpandedCount    int
-	LastNavigationRebuildOverrideCount    int
-	LastNavigationRebuildEmptyCount       int
-	LastNavigationRebuildWrittenTileCount int
-	LastNavigationRebuildDuration         time.Duration
-	TotalNavigationRebuildDuration        time.Duration
-	LastNavigationRebuildError            string
+	NavigationRebuildCount                 int
+	NavigationRebuildErrorCount            int
+	LastNavigationRebuildJobID             int64
+	LastCompletedNavigationRebuildJobID    int64
+	LastNavigationRebuildDirtyCoord        ChunkCoord
+	LastNavigationRebuildDirtyCoordValid   bool
+	LastNavigationRebuildDirtyCount        int
+	LastNavigationRebuildExpandedCount     int
+	LastNavigationRebuildOverrideCount     int
+	LastNavigationRebuildEmptyCount        int
+	LastNavigationRebuildWrittenTileCount  int
+	LastNavigationRebuildDuration          time.Duration
+	TotalNavigationRebuildDuration         time.Duration
+	LastNavigationRebuildError             string
+	NavigationRouteRequestCount            int
+	NavigationRouteReplanCount             int
+	NavigationRouteErrorCount              int
+	NavigationRouteCoarseOnlyCount         int
+	NavigationRouteNoRouteCount            int
+	NavigationRouteCorridorFallbackCount   int
+	NavigationRouteDeferredCount           int
+	LastNavigationRoutePriority            string
+	LastNavigationRouteDuration            time.Duration
+	TotalNavigationRouteDuration           time.Duration
+	LastNavigationRouteReason              string
+	NavigationSurfaceSampleCount           int
+	NavigationSurfaceSampleMissCount       int
+	LastNavigationSurfaceSampleDuration    time.Duration
+	TotalNavigationSurfaceSampleDuration   time.Duration
+	NavigationSourceTileLoadCount          int
+	NavigationSourceTileLoadMissCount      int
+	NavigationSourceTileLoadErrorCount     int
+	LastNavigationSourceTileLoadDuration   time.Duration
+	TotalNavigationSourceTileLoadDuration  time.Duration
+	NavigationLocalAvoidanceAttemptCount   int
+	NavigationLocalAvoidanceSuccessCount   int
+	NavigationLocalAvoidanceFailureCount   int
+	NavigationLocalAvoidanceCandidateCount int
+	LastNavigationLocalAvoidanceDuration   time.Duration
+	TotalNavigationLocalAvoidanceDuration  time.Duration
+	LastNavigationLocalAvoidanceReason     string
 
 	GPUVoxelSectorsUploaded           int
 	GPUVoxelBricksUploaded            int
@@ -177,7 +204,7 @@ type StreamedLevelRuntimeMetrics struct {
 
 func (m StreamedLevelRuntimeMetrics) LogLine() string {
 	return fmt.Sprintf(
-		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d nav_rebuild_queue=%d nav_rebuild_active=%t nav_runtime_edit_pending=%d prepared_geom_cache_entries=%d prepared_geom_cache_voxels=%d prepared_geom_cache_hits=%d prepared_geom_cache_misses=%d prepared_geom_cache_evictions=%d prepared_geom_asset_registers=%d prepared_geom_asset_reuses=%d aux_hits=%d aux_misses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_frame=%d proxy_committed_frame=%d full_committed_frame=%d collision_committed_frame=%d entities_frame=%d budget_hit=%t budget_reason=%s prepared_total=%d prepare_last_ms=%.3f prepare_total_ms=%.3f committed_total=%d proxy_committed_total=%d full_committed_total=%d collision_committed_total=%d commit_last_ms=%.3f commit_terrain_ms=%.3f commit_world_ms=%.3f commit_world_voxels=%d commit_world_build_ms=%.3f commit_world_register_ms=%.3f commit_world_entity_ms=%.3f commit_placements_ms=%.3f commit_flush_ms=%.3f commit_flushes=%d commit_total_ms=%.3f commit_system_ms=%.3f nav_rebuilds=%d nav_rebuild_errors=%d nav_rebuild_job=%d nav_rebuild_done_job=%d nav_rebuild_dirty=%d nav_rebuild_expanded=%d nav_rebuild_overrides=%d nav_rebuild_empty=%d nav_rebuild_tiles=%d nav_rebuild_last_ms=%.3f nav_rebuild_total_ms=%.3f nav_rebuild_error=%s gpu_voxel_sectors_up=%d gpu_voxel_bricks_up=%d gpu_voxel_dirty_sectors=%d gpu_voxel_dirty_bricks=%d runtime_normal_bake_ms=%.3f gpu_upload_revision=%d gpu_retained_maps=%d gpu_retained_sectors=%d gpu_retained_hits=%d gpu_retained_misses=%d gpu_retained_evictions=%d scene_structure_revision=%d",
+		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d nav_rebuild_queue=%d nav_rebuild_active=%t nav_runtime_edit_pending=%d prepared_geom_cache_entries=%d prepared_geom_cache_voxels=%d prepared_geom_cache_hits=%d prepared_geom_cache_misses=%d prepared_geom_cache_evictions=%d prepared_geom_asset_registers=%d prepared_geom_asset_reuses=%d aux_hits=%d aux_misses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_frame=%d proxy_committed_frame=%d full_committed_frame=%d collision_committed_frame=%d entities_frame=%d budget_hit=%t budget_reason=%s prepared_total=%d prepare_last_ms=%.3f prepare_total_ms=%.3f committed_total=%d proxy_committed_total=%d full_committed_total=%d collision_committed_total=%d commit_last_ms=%.3f commit_terrain_ms=%.3f commit_world_ms=%.3f commit_world_voxels=%d commit_world_build_ms=%.3f commit_world_register_ms=%.3f commit_world_entity_ms=%.3f commit_placements_ms=%.3f commit_flush_ms=%.3f commit_flushes=%d commit_total_ms=%.3f commit_system_ms=%.3f nav_rebuilds=%d nav_rebuild_errors=%d nav_rebuild_job=%d nav_rebuild_done_job=%d nav_rebuild_dirty=%d nav_rebuild_expanded=%d nav_rebuild_overrides=%d nav_rebuild_empty=%d nav_rebuild_tiles=%d nav_rebuild_last_ms=%.3f nav_rebuild_total_ms=%.3f nav_rebuild_error=%s nav_routes=%d nav_route_replans=%d nav_route_errors=%d nav_route_coarse=%d nav_route_no_route=%d nav_route_fallbacks=%d nav_route_deferred=%d nav_route_priority=%s nav_route_last_ms=%.3f nav_route_total_ms=%.3f nav_route_reason=%s nav_surface_samples=%d nav_surface_misses=%d nav_surface_last_ms=%.3f nav_surface_total_ms=%.3f nav_source_loads=%d nav_source_misses=%d nav_source_errors=%d nav_source_last_ms=%.3f nav_source_total_ms=%.3f nav_avoid_attempts=%d nav_avoid_successes=%d nav_avoid_failures=%d nav_avoid_candidates=%d nav_avoid_last_ms=%.3f nav_avoid_total_ms=%.3f nav_avoid_reason=%s gpu_voxel_sectors_up=%d gpu_voxel_bricks_up=%d gpu_voxel_dirty_sectors=%d gpu_voxel_dirty_bricks=%d runtime_normal_bake_ms=%.3f gpu_upload_revision=%d gpu_retained_maps=%d gpu_retained_sectors=%d gpu_retained_hits=%d gpu_retained_misses=%d gpu_retained_evictions=%d scene_structure_revision=%d",
 		m.DesiredChunkCount,
 		m.DesiredLoadableChunkCount,
 		m.KeepChunkCount,
@@ -253,6 +280,33 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 		durationMillis(m.LastNavigationRebuildDuration),
 		durationMillis(m.TotalNavigationRebuildDuration),
 		streamedMetricsToken(m.LastNavigationRebuildError),
+		m.NavigationRouteRequestCount,
+		m.NavigationRouteReplanCount,
+		m.NavigationRouteErrorCount,
+		m.NavigationRouteCoarseOnlyCount,
+		m.NavigationRouteNoRouteCount,
+		m.NavigationRouteCorridorFallbackCount,
+		m.NavigationRouteDeferredCount,
+		streamedMetricsToken(m.LastNavigationRoutePriority),
+		durationMillis(m.LastNavigationRouteDuration),
+		durationMillis(m.TotalNavigationRouteDuration),
+		streamedMetricsToken(m.LastNavigationRouteReason),
+		m.NavigationSurfaceSampleCount,
+		m.NavigationSurfaceSampleMissCount,
+		durationMillis(m.LastNavigationSurfaceSampleDuration),
+		durationMillis(m.TotalNavigationSurfaceSampleDuration),
+		m.NavigationSourceTileLoadCount,
+		m.NavigationSourceTileLoadMissCount,
+		m.NavigationSourceTileLoadErrorCount,
+		durationMillis(m.LastNavigationSourceTileLoadDuration),
+		durationMillis(m.TotalNavigationSourceTileLoadDuration),
+		m.NavigationLocalAvoidanceAttemptCount,
+		m.NavigationLocalAvoidanceSuccessCount,
+		m.NavigationLocalAvoidanceFailureCount,
+		m.NavigationLocalAvoidanceCandidateCount,
+		durationMillis(m.LastNavigationLocalAvoidanceDuration),
+		durationMillis(m.TotalNavigationLocalAvoidanceDuration),
+		streamedMetricsToken(m.LastNavigationLocalAvoidanceReason),
 		m.GPUVoxelSectorsUploaded,
 		m.GPUVoxelBricksUploaded,
 		m.GPUVoxelDirtySectorsPending,
@@ -328,6 +382,7 @@ type StreamedLevelRuntimeState struct {
 	BaseNavManifestPath        string
 	BaseNavManifest            *content.NavManifestDef
 	NavigationRevision         int64
+	NavigationQueryCache       *content.NavRuntimeQueryCache
 	MarkerEntities             map[string]EntityId
 	LightEntities              map[string]EntityId
 
@@ -346,9 +401,20 @@ type StreamedLevelRuntimeState struct {
 	NavigationRebuilds             []streamedNavigationRebuildJob
 	NavigationResults              chan streamedNavigationRebuildResult
 	NavigationRebuildActive        bool
+	NavigationRouteJobs            []streamedNavigationRouteJob
+	NavigationRouteResults         chan streamedNavigationRouteResult
+	NavigationRouteActive          bool
+	NavigationRoutePendingByOwner  map[EntityId]int64
+	NavigationPrewarmResults       chan streamedNavigationPrewarmResult
+	NavigationPrewarmActive        bool
+	NavigationPrewarmCompletedRev  int64
 	NavigationRuntimeEditRevisions map[EntityId]uint64
 	NavigationRuntimeEditPending   map[EntityId]streamedRuntimeNavigationEditPending
+	NavigationRouteBudgetFrame     uint64
+	NavigationRouteBudgetUsed      int
 	nextNavigationRebuildJobID     int64
+	nextNavigationRouteJobID       int64
+	nextNavigationPrewarmJobID     int64
 	PreparedGeometryCache          *streamedPreparedGeometryCache
 	activePrepareMu                sync.Mutex
 	activeChunkPrepares            int
@@ -463,14 +529,15 @@ type streamedNavigationRebuildJob struct {
 }
 
 type streamedNavigationRebuildResult struct {
-	ID                      int64
-	WorldDeltaPath          string
-	DirtyCoords             []content.TerrainChunkCoordDef
-	ExpandedCoords          []content.TerrainChunkCoordDef
-	Result                  content.NavDeltaBakeResult
-	NavigationTileOverrides []content.NavigationTileOverrideDef
-	Duration                time.Duration
-	Err                     error
+	ID                                     int64
+	WorldDeltaPath                         string
+	DirtyCoords                            []content.TerrainChunkCoordDef
+	ExpandedCoords                         []content.TerrainChunkCoordDef
+	Result                                 content.NavDeltaBakeResult
+	NavigationTileOverrides                []content.NavigationTileOverrideDef
+	NavigationClearanceSourceTileOverrides []content.NavigationClearanceSourceTileOverrideDef
+	Duration                               time.Duration
+	Err                                    error
 }
 
 type streamedRuntimeNavigationEditPending struct {
@@ -492,6 +559,10 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		PreparedLoads:                  make(chan streamedPreparedChunk, 256),
 		PreparedProxyLoads:             make(chan streamedPreparedSectorProxy, 256),
 		NavigationResults:              make(chan streamedNavigationRebuildResult, 16),
+		NavigationRouteResults:         make(chan streamedNavigationRouteResult, 16),
+		NavigationRoutePendingByOwner:  make(map[EntityId]int64),
+		NavigationPrewarmResults:       make(chan streamedNavigationPrewarmResult, 4),
+		NavigationQueryCache:           content.NewNavRuntimeQueryCache(),
 		NavigationRuntimeEditRevisions: make(map[EntityId]uint64),
 		NavigationRuntimeEditPending:   make(map[EntityId]streamedRuntimeNavigationEditPending),
 		PreparedGeometryCache:          newStreamedPreparedGeometryCache(defaultStreamedPreparedGeometryCacheEntries),
@@ -515,6 +586,7 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
 	app.UseSystem(System(commitPreparedStreamedChunksSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(streamedLevelNavigationRebuildSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelNavigationPrewarmSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(streamedLevelNPCNavigationSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(streamedLevelNPCNavigationMovementSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(streamedLevelRuntimeEditedNavigationRebuildSystem).InStage(PostUpdate).RunAlways())
@@ -638,6 +710,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.BaseNavManifestPath = ""
 	state.BaseNavManifest = nil
 	state.NavigationRevision = 0
+	state.NavigationQueryCache = content.NewNavRuntimeQueryCache()
 	state.MarkerEntities = make(map[string]EntityId)
 	state.LightEntities = make(map[string]EntityId)
 	state.DesiredChunks = make(map[ChunkCoord]struct{})
@@ -655,9 +728,22 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		state.NavigationResults = make(chan streamedNavigationRebuildResult, 16)
 	}
 	state.NavigationRebuildActive = false
+	state.NavigationRouteJobs = nil
+	if state.NavigationRouteResults == nil {
+		state.NavigationRouteResults = make(chan streamedNavigationRouteResult, 16)
+	}
+	state.NavigationRouteActive = false
+	state.NavigationRoutePendingByOwner = make(map[EntityId]int64)
+	if state.NavigationPrewarmResults == nil {
+		state.NavigationPrewarmResults = make(chan streamedNavigationPrewarmResult, 4)
+	}
+	state.NavigationPrewarmActive = false
+	state.NavigationPrewarmCompletedRev = 0
 	state.NavigationRuntimeEditRevisions = make(map[EntityId]uint64)
 	state.NavigationRuntimeEditPending = make(map[EntityId]streamedRuntimeNavigationEditPending)
 	state.nextNavigationRebuildJobID = 0
+	state.nextNavigationRouteJobID = 0
+	state.nextNavigationPrewarmJobID = 0
 	state.PreparedGeometryCache = newStreamedPreparedGeometryCache(streamedPreparedGeometryCacheMaxEntries(cfg.MaxPreparedGeometryCacheEntries))
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
 	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
@@ -1646,14 +1732,15 @@ func runStreamedNavigationRebuildJob(job streamedNavigationRebuildJob) streamedN
 		err = fmt.Errorf("precalculate imported-world navigation override: %w", err)
 	}
 	return streamedNavigationRebuildResult{
-		ID:                      job.ID,
-		WorldDeltaPath:          job.WorldDeltaPath,
-		DirtyCoords:             append([]content.TerrainChunkCoordDef(nil), job.DirtyCoords...),
-		ExpandedCoords:          append([]content.TerrainChunkCoordDef(nil), job.ExpandedCoords...),
-		Result:                  result,
-		NavigationTileOverrides: append([]content.NavigationTileOverrideDef(nil), delta.NavigationTileOverrides...),
-		Duration:                time.Since(started),
-		Err:                     err,
+		ID:                                     job.ID,
+		WorldDeltaPath:                         job.WorldDeltaPath,
+		DirtyCoords:                            append([]content.TerrainChunkCoordDef(nil), job.DirtyCoords...),
+		ExpandedCoords:                         append([]content.TerrainChunkCoordDef(nil), job.ExpandedCoords...),
+		Result:                                 result,
+		NavigationTileOverrides:                append([]content.NavigationTileOverrideDef(nil), delta.NavigationTileOverrides...),
+		NavigationClearanceSourceTileOverrides: append([]content.NavigationClearanceSourceTileOverrideDef(nil), delta.NavigationClearanceSourceTileOverrides...),
+		Duration:                               time.Since(started),
+		Err:                                    err,
 	}
 }
 
@@ -1674,6 +1761,7 @@ func applyStreamedNavigationRebuildResult(state *StreamedLevelRuntimeState, resu
 	}
 	if state.WorldDelta != nil {
 		state.WorldDelta.NavigationTileOverrides = append([]content.NavigationTileOverrideDef(nil), result.NavigationTileOverrides...)
+		state.WorldDelta.NavigationClearanceSourceTileOverrides = append([]content.NavigationClearanceSourceTileOverrideDef(nil), result.NavigationClearanceSourceTileOverrides...)
 		if err := content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta); err != nil {
 			recordImportedWorldNavigationRebuildMetrics(state, result.ID, result.DirtyCoords, result.ExpandedCoords, result.Result, result.Duration, err)
 			if state.InitErr == nil {
@@ -1687,6 +1775,7 @@ func applyStreamedNavigationRebuildResult(state *StreamedLevelRuntimeState, resu
 		log.Print(importedWorldNavigationRebuildLogLine(state.Metrics))
 	}
 	state.NavigationRevision++
+	cancelQueuedStreamedNavigationRouteJobs(state)
 }
 
 func streamedCommitFrameBudgetHit(state *StreamedLevelRuntimeState, start time.Time) bool {
@@ -2906,6 +2995,7 @@ func copyWorldDeltaForNavigationRebuild(delta *content.WorldDeltaDef) content.Wo
 	out.TerrainChunkOverrides = append([]content.TerrainChunkOverrideDef(nil), delta.TerrainChunkOverrides...)
 	out.ImportedWorldChunkOverrides = append([]content.ImportedWorldChunkOverrideDef(nil), delta.ImportedWorldChunkOverrides...)
 	out.NavigationTileOverrides = append([]content.NavigationTileOverrideDef(nil), delta.NavigationTileOverrides...)
+	out.NavigationClearanceSourceTileOverrides = append([]content.NavigationClearanceSourceTileOverrideDef(nil), delta.NavigationClearanceSourceTileOverrides...)
 	out.VoxelObjectOverrides = append([]content.VoxelObjectOverrideDef(nil), delta.VoxelObjectOverrides...)
 	return out
 }
@@ -2917,6 +3007,7 @@ func copyNavManifestForNavigationRebuild(manifest *content.NavManifestDef) *cont
 	out := *manifest
 	out.AgentProfiles = append([]content.NavAgentProfileDef(nil), manifest.AgentProfiles...)
 	out.Tiles = append([]content.NavTileEntryDef(nil), manifest.Tiles...)
+	out.ClearanceSourceTiles = append([]content.NavClearanceSourceTileEntryDef(nil), manifest.ClearanceSourceTiles...)
 	out.Sectors = append([]content.NavSectorEntryDef(nil), manifest.Sectors...)
 	out.Tags = append([]string(nil), manifest.Tags...)
 	return &out

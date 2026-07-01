@@ -224,6 +224,95 @@ func TestFindHierarchicalNavRouteCanFallbackOutsideSectorCorridor(t *testing.T) 
 	}
 }
 
+func TestFindHierarchicalNavRouteCanFallbackOutsideSectorCorridorAfterClearanceNoPath(t *testing.T) {
+	root := t.TempDir()
+	navPath := filepath.Join(root, "worlds", "route.gknav")
+	leftCoord := TerrainChunkCoordDef{X: 0, Y: 0, Z: 0}
+	middleCoord := TerrainChunkCoordDef{X: 1, Y: 0, Z: 0}
+	rightCoord := TerrainChunkCoordDef{X: 2, Y: 0, Z: 0}
+	manifest := &NavManifestDef{
+		NavID:           "nav-route-clearance",
+		SchemaVersion:   CurrentNavManifestSchemaVersion,
+		BuilderVersion:  DefaultNavBuilderVersion,
+		ChunkSize:       4,
+		VoxelResolution: 1,
+		AgentProfiles: []NavAgentProfileDef{
+			navTestAgentProfileWithID("small", 0.2, 1.0, 1.0),
+		},
+		Sectors: []NavSectorEntryDef{
+			{
+				Coord:     leftCoord,
+				BoundsMin: [3]float32{0, 0, 0},
+				BoundsMax: [3]float32{4, 4, 4},
+				Links: []NavSectorLinkDef{{
+					ID:   "coarse-shortcut",
+					To:   rightCoord,
+					Kind: NavTraversalWalk,
+					Cost: 1,
+				}},
+			},
+			{
+				Coord:     rightCoord,
+				BoundsMin: [3]float32{8, 0, 0},
+				BoundsMax: [3]float32{12, 4, 4},
+			},
+		},
+	}
+	for _, coord := range []TerrainChunkCoordDef{leftCoord, middleCoord, rightCoord} {
+		chunk := navTestChunk(4, 1.0, navTestFloorVoxels(0, 3, 1, 1, 0)...)
+		chunk.Coord = coord
+		source, err := BuildNavClearanceSourceTileFromImportedWorldChunk(chunk, NavClearanceSourceTileBuildOptions{
+			NavID:              manifest.NavID,
+			MaxClearanceRadius: 1.0,
+		})
+		if err != nil {
+			t.Fatalf("BuildNavClearanceSourceTileFromImportedWorldChunk failed: %v", err)
+		}
+		sourcePath := filepath.Join(root, "worlds", "route_navsources", TerrainChunkKey(coord)+".gknavsource")
+		if err := SaveNavClearanceSourceTile(sourcePath, source.Tile); err != nil {
+			t.Fatalf("SaveNavClearanceSourceTile failed: %v", err)
+		}
+		manifest.ClearanceSourceTiles = append(manifest.ClearanceSourceTiles, NavClearanceSourceTileEntryDef{
+			Coord:              coord,
+			TilePath:           AuthorDocumentPath(sourcePath, navPath),
+			PayloadKind:        source.Tile.PayloadKind,
+			BoundsMin:          source.Tile.BoundsMin,
+			BoundsMax:          source.Tile.BoundsMax,
+			MaxClearanceRadius: source.Tile.MaxClearanceRadius,
+		})
+	}
+	EnsureNavManifestDefaults(manifest)
+
+	restricted, err := FindEffectiveNavPath(manifest, navPath, nil, "", Vec3{3.5, 1, 1.5}, Vec3{8.5, 1, 1.5}, NavPathOptions{
+		AgentProfileID:      "small",
+		MaxTileSearchRadius: 2,
+		AllowedTileCoords: map[TerrainChunkCoordDef]struct{}{
+			leftCoord:  {},
+			rightCoord: {},
+		},
+	})
+	if err != nil {
+		t.Fatalf("FindEffectiveNavPath restricted failed: %v", err)
+	}
+	if restricted.Found || restricted.FailureReason != NavPathFailureNoPath {
+		t.Fatalf("expected restricted clearance path to fail with no_path, got %+v", restricted)
+	}
+
+	route, err := FindHierarchicalNavRoute(manifest, navPath, nil, "", Vec3{3.5, 1, 1.5}, Vec3{8.5, 1, 1.5}, NavHierarchicalRouteOptions{
+		AllowLocalCorridorFallback: true,
+		LocalPath:                  NavPathOptions{AgentProfileID: "small", MaxTileSearchRadius: 2},
+	})
+	if err != nil {
+		t.Fatalf("FindHierarchicalNavRoute failed: %v", err)
+	}
+	if !route.Found || !route.Refined || !route.LocalPath.Found || !route.LocalPathCorridorFallback {
+		t.Fatalf("expected clearance fallback-refined route, got %+v", route)
+	}
+	if len(route.LocalPath.Steps) < 3 || route.LocalPath.Steps[1].Coord != middleCoord {
+		t.Fatalf("expected fallback clearance path through middle tile, got %+v", route.LocalPath.Steps)
+	}
+}
+
 func navRouteTestManifest(navID string, profileID string, tilePaths map[TerrainChunkCoordDef]string) *NavManifestDef {
 	manifest := navPathTestManifest(navID, profileID, "route.gknav", tilePaths)
 	manifest.Sectors = []NavSectorEntryDef{

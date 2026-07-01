@@ -42,6 +42,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
 - Planning renderer quality or performance work:
   - [`roadmaps/renderer-lighting.md`](roadmaps/renderer-lighting.md)
   - [`roadmaps/npc-navigation-navmesh-plan.md`](roadmaps/npc-navigation-navmesh-plan.md)
+  - [`roadmaps/dynamic-shooter-navigation-plan.md`](roadmaps/dynamic-shooter-navigation-plan.md)
   - [`renderer/voxelrt-render-graph-migration-plan.md`](renderer/voxelrt-render-graph-migration-plan.md)
 
 ## Sections

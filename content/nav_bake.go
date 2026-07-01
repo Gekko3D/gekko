@@ -286,11 +286,7 @@ func BakeNavFromImportedWorld(world *ImportedWorldDef, chunks map[TerrainChunkCo
 	clearanceSourceTiles := make(map[string]*NavClearanceSourceTileDef)
 	buildCache := &NavTileBuildCache{TrustPayloadHash: true}
 	buildTotal := importedWorldBuildableCoordCount(entriesByCoord, coords, opts.BuildSource, world.ChunkSize, world.VoxelResolution) * len(opts.AgentProfiles)
-	buildsClearanceSource := opts.BuilderVersion != NavBuilderVersionVoxelRecastV1
-	sourceBuildTotal := 0
-	if buildsClearanceSource {
-		sourceBuildTotal = importedWorldNonEmptyCoordCount(entriesByCoord, coords)
-	}
+	sourceBuildTotal := importedWorldNonEmptyCoordCount(entriesByCoord, coords)
 	maxClearanceRadius := navBakeMaxAgentRadius(opts.AgentProfiles)
 	intermediateJobs := make([]navBakeIntermediateJob, 0, buildTotal)
 	for _, coord := range coords {
@@ -327,7 +323,7 @@ func BakeNavFromImportedWorld(world *ImportedWorldDef, chunks map[TerrainChunkCo
 		sourceHash := firstNonEmptyNavString(entry.PayloadHash, chunk.PayloadHash, importedWorldChunkNavSourceHash(chunk))
 		combinedSourceHash := navCombinedSourceHash(sourceHash, navBuildSourceHash(opts.BuildSource))
 		var clearanceSourceForCoord *NavClearanceSourceTileDef
-		if buildsClearanceSource && entry.NonEmptyVoxelCount > 0 {
+		if entry.NonEmptyVoxelCount > 0 {
 			sourceBuildStarted := time.Now()
 			sourceResult, err := BuildNavClearanceSourceTileFromImportedWorldChunk(chunk, NavClearanceSourceTileBuildOptions{
 				NavID:              opts.NavID,
