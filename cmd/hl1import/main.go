@@ -19,6 +19,7 @@ func main() {
 	var reportPath string
 	var emitDebugWorld bool
 	var emitLevel bool
+	var assetsOnly bool
 	var debugWorldMode string
 	var exportProfile string
 	var progress bool
@@ -39,6 +40,7 @@ func main() {
 	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize point lights from imported emissive surface clusters")
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
+	flag.BoolVar(&assetsOnly, "assets-only", false, "catalog player/weapon assets from -game-dir without loading a BSP; implies -emit-game-assets")
 	flag.BoolVar(&opts.ImportAllPlayerModels, "import-all-player-models", false, "catalog and voxelize player models from valve and valve_downloads")
 	flag.BoolVar(&opts.ImportAllWeaponWorldModels, "import-all-weapon-world-models", false, "catalog and voxelize w_ weapon world models from valve and valve_downloads")
 	flag.BoolVar(&opts.SkipNavigationBake, "skip-navigation-bake", false, "skip generated .gknav/.gknavtile sidecars during level save")
@@ -64,7 +66,7 @@ func main() {
 	if profileErr != nil {
 		fatalf("%v", profileErr)
 	}
-	if opts.MapName == "" && opts.BSPPath == "" {
+	if !assetsOnly && opts.MapName == "" && opts.BSPPath == "" {
 		fatalf("-map or -bsp is required")
 	}
 	if opts.GameDir == "" && opts.BSPPath == "" {
@@ -92,17 +94,35 @@ func main() {
 	if _, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind); err != nil {
 		fatalf("%v", err)
 	}
+	if assetsOnly {
+		if emitDebugWorld || emitLevel {
+			fatalf("-assets-only cannot be combined with -emit-debug-world or -emit-level")
+		}
+		if !opts.ImportAllPlayerModels && !opts.ImportAllWeaponWorldModels {
+			fatalf("-assets-only requires -import-all-player-models and/or -import-all-weapon-world-models")
+		}
+		opts.EmitGameAssets = true
+		if opts.MapName == "" {
+			opts.MapName = "catalog"
+		}
+	}
 	progressPrinter := newHL1ImportProgressPrinter(progress)
 	opts.Progress = progressPrinter.Event
 	if emitLevel {
 		emitDebugWorld = true
 	}
-	progressPrinter.Start(hl1.ImportProgressStageBuildSummary, "")
-	summary, err := hl1.BuildImportSummary(opts)
-	if err != nil {
-		fatalf("%v", err)
+	var summary hl1.ImportSummary
+	var err error
+	if assetsOnly {
+		summary.Report.Source = importcommon.SourceInfo{GameDir: opts.GameDir, MapName: opts.MapName}
+	} else {
+		progressPrinter.Start(hl1.ImportProgressStageBuildSummary, "")
+		summary, err = hl1.BuildImportSummary(opts)
+		if err != nil {
+			fatalf("%v", err)
+		}
+		progressPrinter.Done(hl1.ImportProgressStageBuildSummary, summary.Report.Source.BSPPath)
 	}
-	progressPrinter.Done(hl1.ImportProgressStageBuildSummary, summary.Report.Source.BSPPath)
 	var debugResult hl1.DebugWorldEmissionResult
 	if emitDebugWorld {
 		progressPrinter.Start(hl1.ImportProgressStageBuildDebugWorld, "")

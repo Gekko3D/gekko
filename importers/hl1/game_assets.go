@@ -26,7 +26,32 @@ type GameAssetManifest struct {
 	SchemaVersion int                       `json:"schema_version"`
 	Source        importcommon.SourceInfo   `json:"source"`
 	Assets        []GameAssetManifestEntry  `json:"assets,omitempty"`
+	Catalog       *GameAssetCatalog         `json:"catalog,omitempty"`
 	Diagnostics   []importcommon.Diagnostic `json:"diagnostics,omitempty"`
+}
+
+// GameAssetCatalog is ActionGame-facing. Asset entries retain importer detail;
+// this section exposes stable player, clip, anchor, and weapon IDs.
+type GameAssetCatalog struct {
+	Players           []GameAssetPlayerCatalogEntry `json:"players,omitempty"`
+	WeaponWorldModels []GameAssetWeaponCatalogEntry `json:"weapon_world_models,omitempty"`
+}
+
+type GameAssetPlayerCatalogEntry struct {
+	ID                string   `json:"id"`
+	SourceRef         string   `json:"source_ref"`
+	AssetPath         string   `json:"asset_path"`
+	BodygroupModels   []int    `json:"bodygroup_models"`
+	SkinFamily        int      `json:"skin_family"`
+	HeadMarkerID      string   `json:"head_marker_id"`
+	RightHandMarkerID string   `json:"right_hand_marker_id"`
+	ClipIDs           []string `json:"clip_ids,omitempty"`
+}
+
+type GameAssetWeaponCatalogEntry struct {
+	ID        string `json:"id"`
+	SourceRef string `json:"source_ref"`
+	AssetPath string `json:"asset_path"`
 }
 
 type GameAssetManifestEntry struct {
@@ -41,6 +66,11 @@ type GameAssetManifestEntry struct {
 	CompatibilityFallback            bool              `json:"compatibility_fallback,omitempty"`
 	CatalogKind                      string            `json:"catalog_kind,omitempty"`
 	CatalogID                        string            `json:"catalog_id,omitempty"`
+	BodygroupModels                  []int             `json:"bodygroup_models,omitempty"`
+	SkinFamily                       int               `json:"skin_family,omitempty"`
+	HeadMarkerID                     string            `json:"head_marker_id,omitempty"`
+	RightHandMarkerID                string            `json:"right_hand_marker_id,omitempty"`
+	ClipIDs                          []string          `json:"clip_ids,omitempty"`
 	SizeBytes                        int64             `json:"size_bytes,omitempty"`
 	SHA256                           string            `json:"sha256,omitempty"`
 	Resolved                         bool              `json:"resolved"`
@@ -111,6 +141,7 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		collector.addCatalogModels("weapon_world", hl1CatalogModelPaths(gameDir, false))
 	}
 	manifest.Assets, manifest.Diagnostics = collector.buildEntries()
+	manifest.Catalog = buildGameAssetCatalog(manifest.Assets)
 	return GameAssetImportResult{ManifestPath: manifestPath, Manifest: manifest}, nil
 }
 
@@ -121,16 +152,64 @@ func (c *hl1AssetCollector) addCatalogModels(kind string, paths []string) {
 			continue
 		}
 		ref = filepath.ToSlash(ref)
-		key := "model:" + strings.ToLower(ref)
-		entry := c.entries[key]
-		if entry == nil {
-			entry = &GameAssetManifestEntry{Kind: "model", SourceRef: ref, ConvertState: hl1AssetConvertState("model")}
-			c.entries[key] = entry
+		if kind != "player" {
+			id := safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref)))
+			c.addCatalogModel(kind, ref, path, id, nil, 0)
+			continue
 		}
-		entry.CatalogKind = kind
-		entry.CatalogID = safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref)))
-		c.add("model", ref, path, "catalog:"+kind+":"+entry.CatalogID)
+		info, err := LoadMDLInfo(path)
+		if err != nil {
+			c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_model_parse_failed", Subject: ref, Message: err.Error()})
+			continue
+		}
+		for _, variant := range hl1PlayerModelVariants(info) {
+			id := hl1PlayerCatalogID(ref, variant.bodygroupModels, variant.skinFamily)
+			c.addCatalogModel(kind, ref, path, id, variant.bodygroupModels, variant.skinFamily)
+		}
 	}
+}
+
+type hl1PlayerModelVariant struct {
+	bodygroupModels []int
+	skinFamily      int
+}
+
+func hl1PlayerModelVariants(info MDLInfo) []hl1PlayerModelVariant {
+	variants := []hl1PlayerModelVariant{{bodygroupModels: make([]int, len(info.BodyParts))}}
+	for partIndex, part := range info.BodyParts {
+		if part.ModelCount <= 0 {
+			return nil
+		}
+		next := make([]hl1PlayerModelVariant, 0, len(variants)*part.ModelCount)
+		for _, variant := range variants {
+			for model := 0; model < part.ModelCount; model++ {
+				selection := append([]int(nil), variant.bodygroupModels...)
+				selection[partIndex] = model
+				next = append(next, hl1PlayerModelVariant{bodygroupModels: selection})
+			}
+		}
+		variants = next
+	}
+	skinFamilies := info.SkinFamilyCount
+	if skinFamilies <= 0 {
+		skinFamilies = 1
+	}
+	out := make([]hl1PlayerModelVariant, 0, len(variants)*skinFamilies)
+	for _, variant := range variants {
+		for skin := 0; skin < skinFamilies; skin++ {
+			variant.skinFamily = skin
+			out = append(out, variant)
+		}
+	}
+	return out
+}
+
+func hl1PlayerCatalogID(sourceRef string, bodygroupModels []int, skinFamily int) string {
+	parts := []string{safeMDLAssetID(strings.TrimSuffix(sourceRef, filepath.Ext(sourceRef)))}
+	for _, model := range bodygroupModels {
+		parts = append(parts, fmt.Sprintf("b%d", model))
+	}
+	return strings.Join(append(parts, fmt.Sprintf("s%d", skinFamily)), "_")
 }
 
 func hl1CatalogModelPaths(gameDir string, players bool) []string {
@@ -276,7 +355,20 @@ func (c *hl1AssetCollector) addPickupModelRefs(refs []string, usedBy string) {
 }
 
 func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
-	key := kind + ":" + strings.ToLower(filepath.ToSlash(sourceRef))
+	c.addWithKey(kind, sourceRef, sourcePath, usedBy, kind+":"+strings.ToLower(filepath.ToSlash(sourceRef)), nil)
+}
+
+func (c *hl1AssetCollector) addCatalogModel(kind, sourceRef, sourcePath, catalogID string, bodygroupModels []int, skinFamily int) {
+	key := "model:" + strings.ToLower(filepath.ToSlash(sourceRef)) + "#" + catalogID
+	c.addWithKey("model", sourceRef, sourcePath, "catalog:"+kind+":"+catalogID, key, func(entry *GameAssetManifestEntry) {
+		entry.CatalogKind = kind
+		entry.CatalogID = catalogID
+		entry.BodygroupModels = append([]int(nil), bodygroupModels...)
+		entry.SkinFamily = skinFamily
+	})
+}
+
+func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key string, configure func(*GameAssetManifestEntry)) {
 	entry := c.entries[key]
 	if entry == nil {
 		entry = &GameAssetManifestEntry{
@@ -285,6 +377,9 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 			ConvertState: hl1AssetConvertState(kind),
 		}
 		c.entries[key] = entry
+	}
+	if configure != nil {
+		configure(entry)
 	}
 	entry.UsedBy = appendUniqueString(entry.UsedBy, usedBy)
 	if sourcePath == "" {
@@ -305,7 +400,7 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 	if kind == "model" {
 		category, voxelResolution := c.voxelResolutionForEntry(entry)
 		staticPose := category == HL1VoxelResolutionCategoryPickup
-		geometryOptions := MDLGeometryOptions{DefaultBodygroups: entry.CatalogKind == "player"}
+		geometryOptions := MDLGeometryOptions{BodygroupModels: entry.BodygroupModels, SkinFamily: entry.SkinFamily}
 		geometry, err := LoadMDLGeometryWithOptions(entry.SourcePath, geometryOptions)
 		if err != nil {
 			c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -318,14 +413,26 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 			entry.ModelInfo = &geometry.Info
 			assetName := safeHL1AssetBaseName(entry.SourceRef)
 			if entry.CatalogKind != "" {
-				assetName = safeHL1CatalogAssetBaseName(entry.SourceRef)
+				assetName = safeHL1CatalogAssetBaseName(entry.CatalogID)
 			}
 			assetPath := filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "generated", "models", assetName+".gkasset")
+			entry.GeneratedVoxelResolution = voxelResolution
+			entry.GeneratedVoxelResolutionCategory = string(category)
+			anchors := map[string]int(nil)
+			if entry.CatalogKind == "player" {
+				anchors = hl1PlayerSemanticAnchorBones(geometry.Info.Bones)
+				if len(anchors) != 2 {
+					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_required_anchor_missing", Subject: entry.CatalogID, Message: "missing verified Bip01 Head or Bip01 R Hand bone"})
+					entry.ConvertState = "unsupported_player_avatar"
+					return
+				}
+			}
 			asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
 				Name:            strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
 				SourceRef:       entry.SourceRef,
 				VoxelResolution: voxelResolution,
 				StaticPose:      staticPose,
+				SemanticAnchors: anchors,
 			})
 			if err != nil {
 				c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -335,12 +442,22 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 					Message:  err.Error(),
 				})
 			} else if asset != nil {
+				if entry.CatalogKind == "player" && (!assetHasMarker(asset, "head") || !assetHasMarker(asset, "right_hand")) {
+					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_anchor_unresolved", Subject: entry.CatalogID, Message: "verified player anchors could not resolve to generated bone parts"})
+					entry.ConvertState = "unsupported_player_avatar"
+					return
+				}
 				entry.GeneratedAssetPath = filepath.Clean(assetPath)
 				entry.GeneratedVoxelCount = voxelCount
-				entry.GeneratedVoxelResolution = voxelResolution
-				entry.GeneratedVoxelResolutionCategory = string(category)
 				entry.generatedAsset = asset
 				entry.ConvertState = "generated_voxel_asset"
+				for _, clip := range asset.AnimationClips {
+					entry.ClipIDs = append(entry.ClipIDs, clip.ID)
+				}
+				if entry.CatalogKind == "player" {
+					entry.HeadMarkerID = "head"
+					entry.RightHandMarkerID = "right_hand"
+				}
 			}
 		}
 	} else if kind == "sprite" {
@@ -378,6 +495,18 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 			}
 		}
 	}
+}
+
+func assetHasMarker(asset *content.AssetDef, markerID string) bool {
+	if asset == nil {
+		return false
+	}
+	for _, marker := range asset.Markers {
+		if marker.ID == markerID {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *hl1AssetCollector) voxelResolutionForEntry(entry *GameAssetManifestEntry) (HL1VoxelResolutionCategory, float32) {
@@ -441,12 +570,65 @@ func (c *hl1AssetCollector) buildEntries() ([]GameAssetManifestEntry, []importco
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
 		}
-		return out[i].SourceRef < out[j].SourceRef
+		if out[i].SourceRef != out[j].SourceRef {
+			return out[i].SourceRef < out[j].SourceRef
+		}
+		return out[i].CatalogID < out[j].CatalogID
 	})
 	sort.Slice(diagnostics, func(i, j int) bool {
 		return diagnostics[i].Subject < diagnostics[j].Subject
 	})
 	return out, diagnostics
+}
+
+func hl1PlayerSemanticAnchorBones(bones []MDLBoneInfo) map[string]int {
+	anchors := map[string]int{}
+	for index, bone := range bones {
+		switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", "")) {
+		case "bip01head":
+			anchors["head"] = index
+		case "bip01rhand":
+			anchors["right_hand"] = index
+		}
+	}
+	return anchors
+}
+
+func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
+	catalog := &GameAssetCatalog{}
+	for _, entry := range entries {
+		if entry.GeneratedAssetPath == "" || entry.CatalogID == "" {
+			continue
+		}
+		switch entry.CatalogKind {
+		case "player":
+			if entry.HeadMarkerID == "" || entry.RightHandMarkerID == "" {
+				continue
+			}
+			catalog.Players = append(catalog.Players, GameAssetPlayerCatalogEntry{
+				ID:                entry.CatalogID,
+				SourceRef:         entry.SourceRef,
+				AssetPath:         entry.GeneratedAssetPath,
+				BodygroupModels:   append([]int(nil), entry.BodygroupModels...),
+				SkinFamily:        entry.SkinFamily,
+				HeadMarkerID:      entry.HeadMarkerID,
+				RightHandMarkerID: entry.RightHandMarkerID,
+				ClipIDs:           append([]string(nil), entry.ClipIDs...),
+			})
+		case "weapon_world":
+			catalog.WeaponWorldModels = append(catalog.WeaponWorldModels, GameAssetWeaponCatalogEntry{
+				ID:        entry.CatalogID,
+				SourceRef: entry.SourceRef,
+				AssetPath: entry.GeneratedAssetPath,
+			})
+		}
+	}
+	sort.Slice(catalog.Players, func(i, j int) bool { return catalog.Players[i].ID < catalog.Players[j].ID })
+	sort.Slice(catalog.WeaponWorldModels, func(i, j int) bool { return catalog.WeaponWorldModels[i].ID < catalog.WeaponWorldModels[j].ID })
+	if len(catalog.Players) == 0 && len(catalog.WeaponWorldModels) == 0 {
+		return nil
+	}
+	return catalog
 }
 
 func extractHL1AssetRefs(value string) []string {

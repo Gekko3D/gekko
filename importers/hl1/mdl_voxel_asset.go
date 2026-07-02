@@ -19,6 +19,9 @@ type MDLVoxelAssetOptions struct {
 	// model uses (such as pickups) whose runtime contract is a static visual,
 	// regardless of the skeletal representation in the source MDL.
 	StaticPose bool
+	// SemanticAnchors maps stable marker IDs to verified source bone indices.
+	// Player catalog import supplies only known GoldSrc player-bone mappings.
+	SemanticAnchors map[string]int
 }
 
 func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*content.AssetDef, int, error) {
@@ -142,23 +145,15 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: false}
 
 	boneIDs := mdlAssetBoneIDs(geometry.Info.Bones)
-	boneIndices := sortedMDLBoneVoxelIndices(boneVoxels)
-	bindTargets := make([]mdlAnimationBindTarget, 0, len(boneIndices))
+	bindTargets := make([]mdlAnimationBindTarget, 0, len(geometry.Info.Bones))
 	voxelCount := 0
-	for _, boneIndex := range boneIndices {
+	for boneIndex := range geometry.Info.Bones {
 		voxels := boneVoxels[boneIndex]
-		if len(voxels) == 0 || boneIndex < 0 || boneIndex >= len(boneIDs) {
+		if boneIndex < 0 || boneIndex >= len(boneIDs) {
 			continue
 		}
 		boneID := boneIDs[boneIndex]
 		boneOrigin := mdlBoneGlobalOriginGekko(geometry.Info.Bones, boneIndex)
-		localVoxels, visualOrigin := localizeMDLVoxelsWithPalette(voxels, resolution, newMDLColorPalette(allVoxels))
-		voxelCount += len(localVoxels)
-		childOffset := importcommon.Vec3{
-			X: visualOrigin.X - boneOrigin.X,
-			Y: visualOrigin.Y - boneOrigin.Y,
-			Z: visualOrigin.Z - boneOrigin.Z,
-		}
 
 		asset.Parts = append(asset.Parts, content.AssetPartDef{
 			ID:     boneID,
@@ -171,25 +166,34 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 			},
 			Tags: []string{"source:hl1", "source_asset:mdl", "kind:mdl_bone", fmt.Sprintf("bone_index:%d", boneIndex)},
 		})
-		asset.Parts = append(asset.Parts, content.AssetPartDef{
-			ID:              boneID + "_voxels",
-			Name:            nonEmptyString(geometry.Info.Bones[boneIndex].Name, boneID) + " voxels",
-			ParentID:        boneID,
-			VoxelResolution: resolution,
-			Transform: content.AssetTransformDef{
-				Position: content.Vec3{childOffset.X, childOffset.Y, childOffset.Z},
-				Rotation: content.Quat{0, 0, 0, 1},
-				Scale:    content.Vec3{1, 1, 1},
-			},
-			Source: content.AssetSourceDef{
-				Kind: content.AssetSourceKindVoxelShape,
-				VoxelShape: &content.AssetVoxelShapeDef{
-					Palette: palette,
-					Voxels:  localVoxels,
+		if len(voxels) > 0 {
+			localVoxels, visualOrigin := localizeMDLVoxelsWithPalette(voxels, resolution, newMDLColorPalette(allVoxels))
+			voxelCount += len(localVoxels)
+			childOffset := importcommon.Vec3{
+				X: visualOrigin.X - boneOrigin.X,
+				Y: visualOrigin.Y - boneOrigin.Y,
+				Z: visualOrigin.Z - boneOrigin.Z,
+			}
+			asset.Parts = append(asset.Parts, content.AssetPartDef{
+				ID:              boneID + "_voxels",
+				Name:            nonEmptyString(geometry.Info.Bones[boneIndex].Name, boneID) + " voxels",
+				ParentID:        boneID,
+				VoxelResolution: resolution,
+				Transform: content.AssetTransformDef{
+					Position: content.Vec3{childOffset.X, childOffset.Y, childOffset.Z},
+					Rotation: content.Quat{0, 0, 0, 1},
+					Scale:    content.Vec3{1, 1, 1},
 				},
-			},
-			Tags: []string{"source:hl1", "source_asset:mdl", "generated:mdl_rigid_bone_part", fmt.Sprintf("bone_index:%d", boneIndex)},
-		})
+				Source: content.AssetSourceDef{
+					Kind: content.AssetSourceKindVoxelShape,
+					VoxelShape: &content.AssetVoxelShapeDef{
+						Palette: palette,
+						Voxels:  localVoxels,
+					},
+				},
+				Tags: []string{"source:hl1", "source_asset:mdl", "generated:mdl_rigid_bone_part", fmt.Sprintf("bone_index:%d", boneIndex)},
+			})
+		}
 		bindTargets = append(bindTargets, mdlAnimationBindTarget{
 			ID:        boneID,
 			BoneIndex: boneIndex,
@@ -200,6 +204,28 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 	}
 	if len(asset.Parts) == 0 || voxelCount == 0 {
 		return nil, 0, fmt.Errorf("mdl rigid bone voxelization produced no voxel parts")
+	}
+	markerIDs := make([]string, 0, len(opts.SemanticAnchors))
+	for markerID := range opts.SemanticAnchors {
+		markerIDs = append(markerIDs, markerID)
+	}
+	sort.Strings(markerIDs)
+	for _, markerID := range markerIDs {
+		boneIndex := opts.SemanticAnchors[markerID]
+		if boneIndex < 0 || boneIndex >= len(boneIDs) {
+			continue
+		}
+		asset.Markers = append(asset.Markers, content.AssetMarkerDef{
+			ID:       markerID,
+			Name:     markerID,
+			Kind:     content.AssetMarkerKindEffectAnchor,
+			ParentID: boneIDs[boneIndex],
+			Transform: content.AssetTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			Tags: []string{"source:hl1", "semantic:" + markerID},
+		})
 	}
 	asset.AnimationClips = mdlAnimationClips(geometry.Info.Sequences, geometry.Info.Bones, bindTargets)
 	if len(asset.AnimationClips) > 0 {

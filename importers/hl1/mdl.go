@@ -92,8 +92,14 @@ type MDLGeometry struct {
 }
 
 // MDLGeometryOptions selects source-model variants before voxelization.
-// GoldSrc bodygroups default to their first model.
 type MDLGeometryOptions struct {
+	// BodygroupModels holds one model index for every body part. A missing
+	// index keeps the historical behavior of decoding every model in that part.
+	BodygroupModels []int
+	// SkinFamily selects one GoldSrc skin family. Zero is the GoldSrc default.
+	SkinFamily int
+	// DefaultBodygroups is retained for existing callers that need first model
+	// from every bodygroup.
 	DefaultBodygroups bool
 }
 
@@ -252,13 +258,19 @@ func parseMDLGeometryWithExternalTexturesOptions(data []byte, externalTextures [
 		Textures: textures,
 	}
 	boneTransforms := parseMDLBoneTransforms(data, int(readInt32(data, 144)), info.BoneCount)
-	for _, part := range decodeMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount, boneTransforms) {
+	for partIndex, part := range decodeMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount, boneTransforms) {
 		models := part.models
-		if opts.DefaultBodygroups && len(models) > 1 {
+		if partIndex < len(opts.BodygroupModels) {
+			selected := opts.BodygroupModels[partIndex]
+			if selected < 0 || selected >= len(models) {
+				return MDLGeometry{}, fmt.Errorf("bodygroup %q model %d out of range", part.info.Name, selected)
+			}
+			models = models[selected : selected+1]
+		} else if opts.DefaultBodygroups && len(models) > 1 {
 			models = models[:1]
 		}
 		for _, model := range models {
-			geometry.Triangles = append(geometry.Triangles, decodeMDLModelTriangles(data, model, info, geometry.Textures)...)
+			geometry.Triangles = append(geometry.Triangles, decodeMDLModelTriangles(data, model, info, geometry.Textures, opts.SkinFamily)...)
 		}
 	}
 	geometry.Info.DecodedTriangleCount = len(geometry.Triangles)
@@ -757,10 +769,10 @@ func decodeMDLMeshes(data []byte, offset int, count int) []decodedMDLMesh {
 	return out
 }
 
-func decodeMDLModelTriangles(data []byte, model decodedMDLModel, info MDLInfo, textures []MDLTexturePixels) []MDLTriangle {
+func decodeMDLModelTriangles(data []byte, model decodedMDLModel, info MDLInfo, textures []MDLTexturePixels, skinFamily int) []MDLTriangle {
 	out := make([]MDLTriangle, 0)
 	for _, mesh := range model.meshes {
-		textureIndex := mdlTextureIndexForSkinRef(data, info, mesh.skinRef)
+		textureIndex := mdlTextureIndexForSkinRef(data, info, mesh.skinRef, skinFamily)
 		out = append(out, decodeMDLTriangleCommands(data, mesh.triangleCommandIndex, textureIndex, model.vertices, textures)...)
 	}
 	return out
@@ -834,10 +846,14 @@ func mdlTriangleVertex(vertexIndex int, normalIndex int, s int, t int, textureIn
 	return out
 }
 
-func mdlTextureIndexForSkinRef(data []byte, info MDLInfo, skinRef int) int {
+func mdlTextureIndexForSkinRef(data []byte, info MDLInfo, skinRef int, skinFamily int) int {
 	skinIndex := int(readInt32(data, 200))
-	if skinRef >= 0 && info.SkinRefCount > 0 && skinRef < info.SkinRefCount && skinIndex >= 0 && skinIndex+2 <= len(data) && skinRef < (len(data)-skinIndex)/2 {
-		textureIndex := int(readInt16(data, skinIndex+skinRef*2))
+	if skinFamily < 0 || skinFamily >= info.SkinFamilyCount {
+		skinFamily = 0
+	}
+	index := skinFamily*info.SkinRefCount + skinRef
+	if skinRef >= 0 && info.SkinRefCount > 0 && skinRef < info.SkinRefCount && skinIndex >= 0 && skinIndex+2 <= len(data) && index < (len(data)-skinIndex)/2 {
+		textureIndex := int(readInt16(data, skinIndex+index*2))
 		if textureIndex >= 0 && textureIndex < info.TextureCount {
 			return textureIndex
 		}

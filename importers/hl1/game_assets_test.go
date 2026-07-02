@@ -244,10 +244,11 @@ func TestBuildGameAssetImportCatalogsPlayerAndWeaponWorldModels(t *testing.T) {
 	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "w_shotgunt.mdl"), syntheticMDLWithBoneAndSequence())
 	result, err := BuildGameAssetImport(ImportOptions{
 		GameDir:                    gameDir,
+		MapName:                    "catalog",
 		OutputRoot:                 outDir,
 		ImportAllPlayerModels:      true,
 		ImportAllWeaponWorldModels: true,
-	}, ImportSummary{Report: importcommon.ImportReport{Source: importcommon.SourceInfo{MapName: "testmap"}}})
+	}, ImportSummary{})
 	if err != nil {
 		t.Fatalf("BuildGameAssetImport failed: %v", err)
 	}
@@ -271,6 +272,69 @@ func TestBuildGameAssetImportCatalogsPlayerAndWeaponWorldModels(t *testing.T) {
 	}
 	if players != 2 || weapons != 1 {
 		t.Fatalf("catalog kinds = players %d weapons %d, entries=%+v", players, weapons, result.Manifest.Assets)
+	}
+	if result.Manifest.Catalog == nil || len(result.Manifest.Catalog.Players) != 0 || len(result.Manifest.Catalog.WeaponWorldModels) != 1 {
+		t.Fatalf("expected only supported weapon in catalog, got %+v", result.Manifest.Catalog)
+	}
+	missingAnchors := false
+	for _, diagnostic := range result.Manifest.Diagnostics {
+		if diagnostic.Code == "hl1.player_required_anchor_missing" {
+			missingAnchors = true
+			break
+		}
+	}
+	if !missingAnchors {
+		t.Fatalf("expected deterministic missing-anchor diagnostic, got %+v", result.Manifest.Diagnostics)
+	}
+}
+
+func TestHL1PlayerModelVariantsChooseEveryBodygroupAndSkin(t *testing.T) {
+	variants := hl1PlayerModelVariants(MDLInfo{
+		BodyParts:       []MDLBodyPartInfo{{ModelCount: 2}, {ModelCount: 3}},
+		SkinFamilyCount: 2,
+	})
+	if len(variants) != 12 {
+		t.Fatalf("expected 12 explicit player variants, got %+v", variants)
+	}
+	for _, variant := range variants {
+		if len(variant.bodygroupModels) != 2 || variant.bodygroupModels[0] < 0 || variant.bodygroupModels[0] >= 2 || variant.bodygroupModels[1] < 0 || variant.bodygroupModels[1] >= 3 || variant.skinFamily < 0 || variant.skinFamily >= 2 {
+			t.Fatalf("invalid explicit variant %+v", variant)
+		}
+	}
+}
+
+func TestBuildMDLVoxelAssetEmitsVerifiedPlayerAnchorsAndCatalogLinks(t *testing.T) {
+	geometry := MDLGeometry{
+		Info: MDLInfo{Bones: []MDLBoneInfo{{Name: "Bip01 Head", Parent: -1}, {Name: "Bip01 R Hand", Parent: -1}}},
+		Triangles: []MDLTriangle{{Vertices: [3]MDLTriangleVertex{
+			{Position: importcommon.Vec3{X: 0, Y: 0, Z: 0}, BoneIndex: 0},
+			{Position: importcommon.Vec3{X: 1, Y: 0, Z: 0}, BoneIndex: 0},
+			{Position: importcommon.Vec3{X: 0, Y: 1, Z: 0}, BoneIndex: 0},
+		}}},
+	}
+	anchors := hl1PlayerSemanticAnchorBones(geometry.Info.Bones)
+	asset, _, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{VoxelResolution: 0.02, SemanticAnchors: anchors})
+	if err != nil {
+		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
+	}
+	if len(asset.Markers) != 2 || asset.Markers[0].ID != "head" || asset.Markers[0].ParentID != "bone_00_bip01_head" || asset.Markers[1].ID != "right_hand" || asset.Markers[1].ParentID != "bone_01_bip01_r_hand" {
+		t.Fatalf("expected verified bone markers, got %+v", asset.Markers)
+	}
+	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
+		t.Fatalf("expected anchored player asset to validate, got %+v", validation.Issues)
+	}
+	catalog := buildGameAssetCatalog([]GameAssetManifestEntry{{
+		CatalogKind:        "player",
+		CatalogID:          "player_b0_s0",
+		SourceRef:          "valve/models/player/gordon/gordon.mdl",
+		GeneratedAssetPath: "generated/gordon.gkasset",
+		BodygroupModels:    []int{0},
+		HeadMarkerID:       "head",
+		RightHandMarkerID:  "right_hand",
+		ClipIDs:            []string{"mdl_idle"},
+	}})
+	if catalog == nil || len(catalog.Players) != 1 || catalog.Players[0].HeadMarkerID != "head" || catalog.Players[0].RightHandMarkerID != "right_hand" || len(catalog.Players[0].ClipIDs) != 1 {
+		t.Fatalf("expected player catalog link, got %+v", catalog)
 	}
 }
 
