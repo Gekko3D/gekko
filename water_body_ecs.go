@@ -52,7 +52,8 @@ const (
 type WaterBodyComponent struct {
 	Disabled bool
 
-	Mode WaterBodyMode
+	Mode        WaterBodyMode
+	SurfaceMode WaterSurfaceMode
 
 	SurfaceY float32
 	Depth    float32
@@ -107,6 +108,13 @@ func (w *WaterBodyComponent) NormalizedMode() WaterBodyMode {
 		return WaterBodyModeFitBounds
 	}
 	return WaterBodyModeExplicitRect
+}
+
+func (w *WaterBodyComponent) NormalizedSurfaceMode() WaterSurfaceMode {
+	if w != nil && w.SurfaceMode == WaterSurfaceModeFootprint {
+		return WaterSurfaceModeFootprint
+	}
+	return WaterSurfaceModeVolume
 }
 
 func (w *WaterBodyComponent) NormalizedSurfaceY() float32 {
@@ -315,6 +323,9 @@ func (w *WaterBodyComponent) ValidationIssues() []string {
 	if w.MinCellSize < 0 {
 		issues = append(issues, "min cell size must be greater than or equal to zero")
 	}
+	if w.SurfaceMode != "" && w.SurfaceMode != WaterSurfaceModeVolume && w.SurfaceMode != WaterSurfaceModeFootprint {
+		issues = append(issues, "unsupported water surface mode")
+	}
 	return issues
 }
 
@@ -343,6 +354,7 @@ type ResolvedWaterPatchComponent struct {
 	VisualCellSize float32
 
 	Source          WaterFitSource
+	SurfaceMode     WaterSurfaceMode
 	ContinuityGroup string
 	DebugInset      float32
 	DebugOverlap    float32

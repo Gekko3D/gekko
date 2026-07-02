@@ -85,6 +85,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsWaterBody(t *testing.T) {
 		ID:              "water-1",
 		Name:            "pool",
 		Mode:            content.LevelWaterBodyModeExplicitRect,
+		SurfaceMode:     content.LevelWaterSurfaceModeFootprint,
 		SurfaceY:        3,
 		Depth:           1.5,
 		RectHalfExtents: content.Vec2{4, 6},
@@ -123,7 +124,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsWaterBody(t *testing.T) {
 		if tr.Position != (mgl32.Vec3{10, 3, 20}) {
 			t.Fatalf("water transform position = %v", tr.Position)
 		}
-		if water.Depth != 1.5 || water.RectHalfExtents != ([2]float32{4, 6}) || water.SurfaceY != 3 || water.ContinuityGroup != "pool-a" {
+		if water.Depth != 1.5 || water.RectHalfExtents != ([2]float32{4, 6}) || water.SurfaceY != 3 || water.SurfaceMode != WaterSurfaceModeFootprint || water.ContinuityGroup != "pool-a" {
 			t.Fatalf("water component = %+v", water)
 		}
 		return true

@@ -15,6 +15,10 @@ type MDLVoxelAssetOptions struct {
 	Name            string
 	SourceRef       string
 	VoxelResolution float32
+	// StaticPose emits a single, transform-baked voxel part. It is for world
+	// model uses (such as pickups) whose runtime contract is a static visual,
+	// regardless of the skeletal representation in the source MDL.
+	StaticPose bool
 }
 
 func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*content.AssetDef, int, error) {
@@ -24,6 +28,9 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 	}
 	if len(geometry.Triangles) == 0 {
 		return nil, 0, fmt.Errorf("mdl contains no decoded triangles")
+	}
+	if opts.StaticPose {
+		return buildMDLStaticPoseVoxelAsset(geometry, opts, resolution)
 	}
 	if boneVoxels := voxelizeMDLGeometryByBone(geometry, resolution); len(boneVoxels) > 0 {
 		return buildMDLRigidBoneVoxelAsset(geometry, opts, resolution, boneVoxels)
@@ -67,6 +74,35 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 		Tags: []string{"source:hl1", "source_asset:mdl", "generated:mdl_voxel_surface"},
 	}}
 	return asset, len(localVoxels), nil
+}
+
+func buildMDLStaticPoseVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32) (*content.AssetDef, int, error) {
+	voxels := voxelizeMDLGeometry(geometry, resolution)
+	if len(voxels) == 0 {
+		return nil, 0, fmt.Errorf("mdl voxelization produced no voxels")
+	}
+	materials, palette := mdlAssetMaterialsAndPalette(voxels)
+	asset := newMDLVoxelAssetBase(geometry, opts)
+	asset.Tags = append(asset.Tags, "generated:mdl_static_world_model")
+	asset.Materials = materials
+	asset.Parts = []content.AssetPartDef{{
+		ID:              "mdl_surface",
+		Name:            "mdl_surface",
+		VoxelResolution: resolution,
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxelShape,
+			VoxelShape: &content.AssetVoxelShapeDef{
+				Palette: palette,
+				Voxels:  mdlVoxelsAtSourceOrigin(voxels, newMDLColorPalette(voxels)),
+			},
+		},
+		Tags: []string{"source:hl1", "source_asset:mdl", "generated:mdl_static_world_model"},
+	}}
+	return asset, len(voxels), nil
 }
 
 type mdlAnimationBindTarget struct {
@@ -712,11 +748,10 @@ func localizeMDLVoxels(voxels map[[3]int]mdlVoxelSample, resolution float32) ([]
 }
 
 func localizeMDLVoxelsWithPalette(voxels map[[3]int]mdlVoxelSample, resolution float32, palette mdlColorPalette) ([]content.VoxelObjectVoxelDef, importcommon.Vec3) {
-	keys := make([][3]int, 0, len(voxels))
+	keys := sortedMDLVoxelKeys(voxels)
 	first := true
 	var minK [3]int
-	for key := range voxels {
-		keys = append(keys, key)
+	for _, key := range keys {
 		if first {
 			minK = key
 			first = false
@@ -726,15 +761,6 @@ func localizeMDLVoxelsWithPalette(voxels map[[3]int]mdlVoxelSample, resolution f
 		minK[1] = min(minK[1], key[1])
 		minK[2] = min(minK[2], key[2])
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i][0] != keys[j][0] {
-			return keys[i][0] < keys[j][0]
-		}
-		if keys[i][1] != keys[j][1] {
-			return keys[i][1] < keys[j][1]
-		}
-		return keys[i][2] < keys[j][2]
-	})
 	out := make([]content.VoxelObjectVoxelDef, 0, len(keys))
 	for _, key := range keys {
 		out = append(out, content.VoxelObjectVoxelDef{
@@ -745,6 +771,37 @@ func localizeMDLVoxelsWithPalette(voxels map[[3]int]mdlVoxelSample, resolution f
 		})
 	}
 	return out, importcommon.Vec3{X: float32(minK[0]) * resolution, Y: float32(minK[1]) * resolution, Z: float32(minK[2]) * resolution}
+}
+
+func mdlVoxelsAtSourceOrigin(voxels map[[3]int]mdlVoxelSample, palette mdlColorPalette) []content.VoxelObjectVoxelDef {
+	keys := sortedMDLVoxelKeys(voxels)
+	out := make([]content.VoxelObjectVoxelDef, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, content.VoxelObjectVoxelDef{
+			X:     key[0],
+			Y:     key[1],
+			Z:     key[2],
+			Value: palette.valueForColor(voxels[key].Color),
+		})
+	}
+	return out
+}
+
+func sortedMDLVoxelKeys(voxels map[[3]int]mdlVoxelSample) [][3]int {
+	keys := make([][3]int, 0, len(voxels))
+	for key := range voxels {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i][0] != keys[j][0] {
+			return keys[i][0] < keys[j][0]
+		}
+		if keys[i][1] != keys[j][1] {
+			return keys[i][1] < keys[j][1]
+		}
+		return keys[i][2] < keys[j][2]
+	})
+	return keys
 }
 
 func mdlAssetMaterialsAndPalette(voxels map[[3]int]mdlVoxelSample) ([]content.AssetMaterialDef, []content.AssetVoxelPaletteEntryDef) {

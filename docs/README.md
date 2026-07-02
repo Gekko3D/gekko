@@ -43,6 +43,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
   - [`roadmaps/renderer-lighting.md`](roadmaps/renderer-lighting.md)
   - [`roadmaps/npc-navigation-navmesh-plan.md`](roadmaps/npc-navigation-navmesh-plan.md)
   - [`roadmaps/dynamic-shooter-navigation-plan.md`](roadmaps/dynamic-shooter-navigation-plan.md)
+  - [`roadmaps/pure-go-voxel-navigation-generation-plan.md`](roadmaps/pure-go-voxel-navigation-generation-plan.md)
   - [`renderer/voxelrt-render-graph-migration-plan.md`](renderer/voxelrt-render-graph-migration-plan.md)
 
 ## Sections

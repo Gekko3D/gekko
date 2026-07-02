@@ -99,6 +99,31 @@ func TestVoxelizeFacesCPUSkipsLiquidFaces(t *testing.T) {
 	}
 }
 
+func TestVoxelizeFacesCPUCapturesLiquidTopCells(t *testing.T) {
+	face := Face{
+		TextureName: "!WATERBLUE",
+		Normal:      vec3(0, 0, 1),
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 64),
+			vec3(64, 0, 64),
+			vec3(64, 64, 64),
+			vec3(0, 64, 64),
+		},
+	}
+	result := VoxelizeFacesCPU([]Face{face}, VoxelizeOptions{VoxelResolution: 0.1})
+	if len(result.Voxels) != 0 {
+		t.Fatalf("liquid face produced solid voxels: %+v", result.Voxels)
+	}
+	if len(result.LiquidTopCells) == 0 {
+		t.Fatal("expected liquid top occupancy cells")
+	}
+	for _, cell := range result.LiquidTopCells {
+		if cell.Kind != "water" || cell.Depth <= 0 {
+			t.Fatalf("unexpected liquid top cell %+v", cell)
+		}
+	}
+}
+
 func TestVoxelizeFacesCPUBakesTextureSampleIntoPalette(t *testing.T) {
 	texture := TexturePixels{
 		Name:   "TESTWALL",
@@ -315,7 +340,7 @@ func TestVoxelizeFacesCPUBakesBrightLampTexelAsEmissive(t *testing.T) {
 	}
 }
 
-func TestVoxelizeFacesCPUBakedAnimatedTextureDoesNotCarryAnimationMetadata(t *testing.T) {
+func TestVoxelizeFacesCPUBakedAnimatedTexturePreservesAnimationMetadata(t *testing.T) {
 	texture := TexturePixels{
 		Name:   "+0LIGHT",
 		Width:  1,
@@ -345,8 +370,8 @@ func TestVoxelizeFacesCPUBakedAnimatedTextureDoesNotCarryAnimationMetadata(t *te
 		t.Fatal("no voxels")
 	}
 	for _, voxel := range result.Voxels {
-		if voxel.SourceTextureName != "" || voxel.AnimationID != "" || voxel.AnimationPhase != 0 {
-			t.Fatalf("baked voxel carried source animation metadata: %+v", voxel)
+		if voxel.SourceTextureName != "+0LIGHT" || voxel.AnimationID != "hl1.texture.light" || voxel.AnimationPhase != 0 {
+			t.Fatalf("baked voxel animation metadata = %+v", voxel)
 		}
 	}
 }

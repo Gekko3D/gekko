@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gekko3d/gekko/content"
@@ -21,7 +22,7 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	spritePath := filepath.Join(gameDir, "valve", "sprites", "glow01.spr")
 	soundPath := filepath.Join(gameDir, "valve", "sound", "buttons", "bell1.wav")
 	mustWriteFile(t, wadPath, []byte("wad"))
-	mustWriteFile(t, modelPath, syntheticMDL())
+	mustWriteFile(t, modelPath, syntheticMDLWithBoneAndSequence())
 	mustWriteFile(t, npcModelPath, syntheticMDL())
 	mustWriteFile(t, spritePath, syntheticSPR())
 	mustWriteFile(t, soundPath, []byte("sound"))
@@ -93,6 +94,13 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	}
 	if modelEntry.generatedAsset == nil || len(modelEntry.generatedAsset.Parts) != 1 || modelEntry.generatedAsset.Parts[0].VoxelResolution != 0.03 {
 		t.Fatalf("expected generated pickup model asset resolution 0.03, got %+v", modelEntry.generatedAsset)
+	}
+	staticTag := false
+	for _, tag := range modelEntry.generatedAsset.Tags {
+		staticTag = staticTag || tag == "generated:mdl_static_world_model"
+	}
+	if modelEntry.generatedAsset.Skeleton != nil || len(modelEntry.generatedAsset.AnimationClips) != 0 || !staticTag {
+		t.Fatalf("expected pickup model to use the static world-model profile, got %+v", modelEntry.generatedAsset)
 	}
 	npcModelEntry := assertHL1AssetEntry(t, result.Manifest.Assets, "model", npcModelPath, "generated_voxel_asset")
 	if npcModelEntry.GeneratedVoxelResolution != DefaultNPCVoxelResolution {
@@ -194,6 +202,75 @@ func TestBuildGameAssetImportReportsMissingReferences(t *testing.T) {
 	}
 	if len(result.Manifest.Diagnostics) != 1 || result.Manifest.Diagnostics[0].Code != "hl1.asset_missing" {
 		t.Fatalf("expected missing asset diagnostic, got %+v", result.Manifest.Diagnostics)
+	}
+}
+
+func TestBuildGameAssetImportUsesTripmineCompatibilityFallback(t *testing.T) {
+	dir := t.TempDir()
+	gameDir := filepath.Join(dir, "hl")
+	outDir := filepath.Join(dir, "out")
+	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "p_tripmine.mdl"), syntheticMDLWithBoneAndSequence())
+	summary := ImportSummary{
+		Map:    importcommon.MapImport{Entities: []importcommon.Entity{{ClassName: "weapon_tripmine"}}},
+		Report: importcommon.ImportReport{Source: importcommon.SourceInfo{Kind: "hl1", GameDir: gameDir, MapName: "testmap"}},
+	}
+	result, err := BuildGameAssetImport(ImportOptions{GameDir: gameDir, OutputRoot: outDir}, summary)
+	if err != nil {
+		t.Fatalf("BuildGameAssetImport failed: %v", err)
+	}
+	if len(result.Manifest.Assets) != 1 {
+		t.Fatalf("expected one fallback asset, got %+v", result.Manifest.Assets)
+	}
+	entry := result.Manifest.Assets[0]
+	if entry.SourceRef != "models/p_tripmine.mdl" || !entry.Resolved || !entry.CompatibilityFallback || entry.generatedAsset == nil {
+		t.Fatalf("expected resolved tripmine fallback asset, got %+v", entry)
+	}
+	if !strings.Contains(strings.Join(entry.generatedAsset.Tags, ","), "source:compatibility_fallback") {
+		t.Fatalf("expected generated fallback tag, got %+v", entry.generatedAsset.Tags)
+	}
+	pickups := buildHL1Pickups(summary.Map.Entities, filepath.Join(outDir, "levels", "testmap.gklevel"), &result)
+	if len(pickups) != 1 || !strings.Contains(pickups[0].AssetPath, "p_tripmine.gkasset") {
+		t.Fatalf("expected pickup to reference fallback asset, got %+v", pickups)
+	}
+}
+
+func TestBuildGameAssetImportCatalogsPlayerAndWeaponWorldModels(t *testing.T) {
+	dir := t.TempDir()
+	gameDir := filepath.Join(dir, "hl")
+	outDir := filepath.Join(dir, "out")
+	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "player", "gordon", "gordon.mdl"), syntheticMDLWithBoneAndSequence())
+	mustWriteFile(t, filepath.Join(gameDir, "valve_downloads", "models", "player", "alyx", "alyx.mdl"), syntheticMDLWithBoneAndSequence())
+	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "w_shotgun.mdl"), syntheticMDLWithBoneAndSequence())
+	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "w_shotgunt.mdl"), syntheticMDLWithBoneAndSequence())
+	result, err := BuildGameAssetImport(ImportOptions{
+		GameDir:                    gameDir,
+		OutputRoot:                 outDir,
+		ImportAllPlayerModels:      true,
+		ImportAllWeaponWorldModels: true,
+	}, ImportSummary{Report: importcommon.ImportReport{Source: importcommon.SourceInfo{MapName: "testmap"}}})
+	if err != nil {
+		t.Fatalf("BuildGameAssetImport failed: %v", err)
+	}
+	if len(result.Manifest.Assets) != 3 {
+		t.Fatalf("expected two players and one weapon world model, got %+v", result.Manifest.Assets)
+	}
+	var players, weapons int
+	for _, entry := range result.Manifest.Assets {
+		switch entry.CatalogKind {
+		case "player":
+			players++
+			if entry.GeneratedVoxelResolutionCategory != string(HL1VoxelResolutionCategoryNPC) {
+				t.Fatalf("expected player resolution category, got %+v", entry)
+			}
+		case "weapon_world":
+			weapons++
+			if entry.GeneratedVoxelResolutionCategory != string(HL1VoxelResolutionCategoryPickup) {
+				t.Fatalf("expected weapon resolution category, got %+v", entry)
+			}
+		}
+	}
+	if players != 2 || weapons != 1 {
+		t.Fatalf("catalog kinds = players %d weapons %d, entries=%+v", players, weapons, result.Manifest.Assets)
 	}
 }
 
@@ -381,6 +458,38 @@ func TestBuildMDLVoxelAssetEmitsDecodedSequenceClip(t *testing.T) {
 	}
 	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
 		t.Fatalf("expected decoded MDL asset to validate, got %+v", validation.Issues)
+	}
+}
+
+func TestBuildMDLVoxelAssetStaticPoseBakesWorldModelIntoSingleVoxelPart(t *testing.T) {
+	geometry, err := ParseMDLGeometry(syntheticMDLWithBoneSequenceAnimation())
+	if err != nil {
+		t.Fatalf("ParseMDLGeometry failed: %v", err)
+	}
+	asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
+		Name:            "w_shotgun",
+		SourceRef:       "models/w_shotgun.mdl",
+		VoxelResolution: 0.02,
+		StaticPose:      true,
+	})
+	if err != nil {
+		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
+	}
+	if voxelCount == 0 || asset.Skeleton != nil || len(asset.AnimationClips) != 0 {
+		t.Fatalf("expected static asset without skeleton or clips, got voxels=%d skeleton=%+v clips=%+v", voxelCount, asset.Skeleton, asset.AnimationClips)
+	}
+	if len(asset.Parts) != 1 || asset.Parts[0].Source.VoxelShape == nil {
+		t.Fatalf("expected one static voxel part, got %+v", asset.Parts)
+	}
+	part := asset.Parts[0]
+	if part.Transform.Position != (content.Vec3{}) || part.Transform.Rotation != (content.Quat{0, 0, 0, 1}) || part.Transform.Scale != (content.Vec3{1, 1, 1}) {
+		t.Fatalf("expected transform baked into voxels, got %+v", part.Transform)
+	}
+	if len(part.Source.VoxelShape.Voxels) != voxelCount {
+		t.Fatalf("expected %d baked voxels, got %d", voxelCount, len(part.Source.VoxelShape.Voxels))
+	}
+	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
+		t.Fatalf("expected static MDL asset to validate, got %+v", validation.Issues)
 	}
 }
 

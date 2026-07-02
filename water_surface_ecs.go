@@ -6,10 +6,18 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+type WaterSurfaceMode string
+
+const (
+	WaterSurfaceModeVolume    WaterSurfaceMode = "Volume"
+	WaterSurfaceModeFootprint WaterSurfaceMode = "Footprint"
+)
+
 // WaterSurfaceComponent describes a horizontal stylized water body rendered by
 // the dedicated water surface accumulation pass.
 type WaterSurfaceComponent struct {
 	Disabled        bool
+	SurfaceMode     WaterSurfaceMode
 	ContinuityGroup string
 
 	HalfExtents [2]float32
@@ -29,6 +37,13 @@ type WaterSurfaceComponent struct {
 	FlowSpeed      float32
 	WaveAmplitude  float32
 	VisualCellSize float32
+}
+
+func (w *WaterSurfaceComponent) NormalizedSurfaceMode() WaterSurfaceMode {
+	if w != nil && w.SurfaceMode == WaterSurfaceModeFootprint {
+		return WaterSurfaceModeFootprint
+	}
+	return WaterSurfaceModeVolume
 }
 
 func (w *WaterSurfaceComponent) Enabled() bool {

@@ -27,6 +27,7 @@ type waterPatchRect struct {
 
 type waterBodyResolutionSignature struct {
 	Mode                 WaterBodyMode
+	SurfaceMode          WaterSurfaceMode
 	SurfaceY             float32
 	Depth                float32
 	RectHalfExtents      [2]float32
@@ -205,6 +206,7 @@ func waterBodyResolutionSignatureFor(body *WaterBodyComponent, tr *TransformComp
 	}
 	sig := waterBodyResolutionSignature{
 		Mode:                 body.NormalizedMode(),
+		SurfaceMode:          body.NormalizedSurfaceMode(),
 		SurfaceY:             body.NormalizedSurfaceY(),
 		Depth:                body.NormalizedDepth(),
 		RectHalfExtents:      body.NormalizedRectHalfExtents(),
@@ -311,6 +313,7 @@ func makeResolvedWaterPatches(owner EntityId, body *WaterBodyComponent, tr *Tran
 			WaveAmplitude:        body.NormalizedWaveAmplitude(),
 			VisualCellSize:       body.NormalizedVisualCellSize(),
 			Source:               source,
+			SurfaceMode:          body.NormalizedSurfaceMode(),
 			ContinuityGroup:      strings.TrimSpace(body.ContinuityGroup),
 			DebugInset:           body.NormalizedInset(),
 			DebugOverlap:         body.NormalizedOverlap(),

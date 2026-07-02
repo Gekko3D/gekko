@@ -39,6 +39,8 @@ func main() {
 	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize point lights from imported emissive surface clusters")
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
+	flag.BoolVar(&opts.ImportAllPlayerModels, "import-all-player-models", false, "catalog and voxelize player models from valve and valve_downloads")
+	flag.BoolVar(&opts.ImportAllWeaponWorldModels, "import-all-weapon-world-models", false, "catalog and voxelize w_ weapon world models from valve and valve_downloads")
 	flag.BoolVar(&opts.SkipNavigationBake, "skip-navigation-bake", false, "skip generated .gknav/.gknavtile sidecars during level save")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
 	opts.VoxelResolutionPolicy = hl1.DefaultHL1VoxelResolutionPolicy()

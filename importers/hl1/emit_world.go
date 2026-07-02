@@ -62,6 +62,10 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	if len(summary.BakeFaces) > 0 {
 		faces = summary.BakeFaces
 	}
+	liquidFaces := summary.AllFaces
+	if len(liquidFaces) == 0 {
+		liquidFaces = faces
+	}
 	wads, wadDiagnostics := LoadResolvedWADs(summary.Report.Source.WADPaths)
 	if len(wadDiagnostics) > 0 {
 		summary.Report.Diagnostics = append(summary.Report.Diagnostics, wadDiagnostics...)
@@ -99,6 +103,9 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	default:
 		return DebugWorldEmissionResult{}, fmt.Errorf("unsupported debug world mode %q", mode)
 	}
+	// BakeFaces deliberately excludes liquid geometry from the solid world, but
+	// the level emitter still needs its top-surface occupancy for water patches.
+	voxelized.LiquidTopCells = collectLiquidTopCells(liquidFaces, VoxelizeOptions{VoxelResolution: opts.VoxelResolution})
 	tags = append(tags, HL1ExportProfileTags(opts.ExportProfile)...)
 	worldID := summary.Report.Source.MapName
 	if worldID == "" {

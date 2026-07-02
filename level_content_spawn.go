@@ -334,6 +334,7 @@ func spawnAuthoredLevelWaterBody(cmd *Commands, parent EntityId, levelID string,
 	transform := levelTransformToComponent(water.Transform)
 	body := &WaterBodyComponent{
 		Mode:                 WaterBodyMode(water.Mode),
+		SurfaceMode:          WaterSurfaceMode(water.SurfaceMode),
 		SurfaceY:             water.SurfaceY,
 		Depth:                water.Depth,
 		RectHalfExtents:      [2]float32{water.RectHalfExtents[0], water.RectHalfExtents[1]},

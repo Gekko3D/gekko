@@ -38,6 +38,9 @@ type GameAssetManifestEntry struct {
 	GeneratedVoxelCount              int               `json:"generated_voxel_count,omitempty"`
 	GeneratedVoxelResolution         float32           `json:"generated_voxel_resolution,omitempty"`
 	GeneratedVoxelResolutionCategory string            `json:"generated_voxel_resolution_category,omitempty"`
+	CompatibilityFallback            bool              `json:"compatibility_fallback,omitempty"`
+	CatalogKind                      string            `json:"catalog_kind,omitempty"`
+	CatalogID                        string            `json:"catalog_id,omitempty"`
 	SizeBytes                        int64             `json:"size_bytes,omitempty"`
 	SHA256                           string            `json:"sha256,omitempty"`
 	Resolved                         bool              `json:"resolved"`
@@ -84,9 +87,7 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		}
 		if _, ok := hl1PickupClass(entity.ClassName); ok {
 			usedBy = "pickup:" + strings.ToLower(strings.TrimSpace(entity.ClassName))
-			if modelRef := hl1PickupModelRef(entity.ClassName); modelRef != "" {
-				collector.addRef(modelRef, usedBy+".model")
-			}
+			collector.addPickupModelRefs(hl1PickupModelRefs(entity.ClassName), usedBy+".model")
 		}
 		if _, ok := hl1NPCClass(entity.ClassName); ok {
 			usedBy = "npc:" + strings.ToLower(strings.TrimSpace(entity.ClassName))
@@ -103,8 +104,66 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 			}
 		}
 	}
+	if opts.ImportAllPlayerModels {
+		collector.addCatalogModels("player", hl1CatalogModelPaths(gameDir, true))
+	}
+	if opts.ImportAllWeaponWorldModels {
+		collector.addCatalogModels("weapon_world", hl1CatalogModelPaths(gameDir, false))
+	}
 	manifest.Assets, manifest.Diagnostics = collector.buildEntries()
 	return GameAssetImportResult{ManifestPath: manifestPath, Manifest: manifest}, nil
+}
+
+func (c *hl1AssetCollector) addCatalogModels(kind string, paths []string) {
+	for _, path := range paths {
+		ref, err := filepath.Rel(c.gameDir, path)
+		if err != nil || strings.HasPrefix(ref, "..") {
+			continue
+		}
+		ref = filepath.ToSlash(ref)
+		key := "model:" + strings.ToLower(ref)
+		entry := c.entries[key]
+		if entry == nil {
+			entry = &GameAssetManifestEntry{Kind: "model", SourceRef: ref, ConvertState: hl1AssetConvertState("model")}
+			c.entries[key] = entry
+		}
+		entry.CatalogKind = kind
+		entry.CatalogID = safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref)))
+		c.add("model", ref, path, "catalog:"+kind+":"+entry.CatalogID)
+	}
+}
+
+func hl1CatalogModelPaths(gameDir string, players bool) []string {
+	var out []string
+	_ = filepath.WalkDir(gameDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry == nil || entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".mdl") {
+			return nil
+		}
+		clean := filepath.ToSlash(filepath.Clean(path))
+		isPlayer := strings.Contains(strings.ToLower(clean), "/models/player/")
+		if players != isPlayer {
+			return nil
+		}
+		if !players {
+			base := strings.ToLower(filepath.Base(path))
+			if !strings.HasPrefix(base, "w_") || hl1TextureCompanionModel(path) {
+				return nil
+			}
+		}
+		out = append(out, filepath.Clean(path))
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+func hl1TextureCompanionModel(path string) bool {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if !strings.HasSuffix(strings.ToLower(base), "t") {
+		return false
+	}
+	plain := base[:len(base)-1] + filepath.Ext(path)
+	return fileExists(filepath.Join(filepath.Dir(path), plain))
 }
 
 func SaveGameAssetImport(result GameAssetImportResult) error {
@@ -191,6 +250,31 @@ func (c *hl1AssetCollector) addRef(ref, usedBy string) {
 	c.add(kind, ref, sourcePath, usedBy)
 }
 
+func (c *hl1AssetCollector) addPickupModelRefs(refs []string, usedBy string) {
+	for index, ref := range refs {
+		sourcePath := c.resolveRef(ref, "model")
+		if sourcePath == "" || !fileExists(sourcePath) {
+			continue
+		}
+		c.add("model", ref, sourcePath, usedBy)
+		if index == 0 {
+			return
+		}
+		key := "model:" + strings.ToLower(filepath.ToSlash(ref))
+		entry := c.entries[key]
+		if entry != nil {
+			entry.CompatibilityFallback = true
+			if entry.generatedAsset != nil {
+				entry.generatedAsset.Tags = appendUniqueString(entry.generatedAsset.Tags, "source:compatibility_fallback")
+			}
+		}
+		return
+	}
+	if len(refs) > 0 {
+		c.addRef(refs[0], usedBy)
+	}
+}
+
 func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 	key := kind + ":" + strings.ToLower(filepath.ToSlash(sourceRef))
 	entry := c.entries[key]
@@ -220,7 +304,9 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 	entry.OutputPath = filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "files", hl1AssetOutputRelPath(entry.SourcePath, c.gameDir, kind, entry.SourceRef))
 	if kind == "model" {
 		category, voxelResolution := c.voxelResolutionForEntry(entry)
-		geometry, err := LoadMDLGeometry(entry.SourcePath)
+		staticPose := category == HL1VoxelResolutionCategoryPickup
+		geometryOptions := MDLGeometryOptions{DefaultBodygroups: entry.CatalogKind == "player"}
+		geometry, err := LoadMDLGeometryWithOptions(entry.SourcePath, geometryOptions)
 		if err != nil {
 			c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
 				Severity: importcommon.SeverityWarning,
@@ -230,11 +316,16 @@ func (c *hl1AssetCollector) add(kind, sourceRef, sourcePath, usedBy string) {
 			})
 		} else {
 			entry.ModelInfo = &geometry.Info
-			assetPath := filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "generated", "models", safeHL1AssetBaseName(entry.SourceRef)+".gkasset")
+			assetName := safeHL1AssetBaseName(entry.SourceRef)
+			if entry.CatalogKind != "" {
+				assetName = safeHL1CatalogAssetBaseName(entry.SourceRef)
+			}
+			assetPath := filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "generated", "models", assetName+".gkasset")
 			asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
 				Name:            strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
 				SourceRef:       entry.SourceRef,
 				VoxelResolution: voxelResolution,
+				StaticPose:      staticPose,
 			})
 			if err != nil {
 				c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -300,7 +391,13 @@ func hl1VoxelResolutionCategoryForGameAssetEntry(entry *GameAssetManifestEntry) 
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "pickup:") {
 				return HL1VoxelResolutionCategoryPickup
 			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "catalog:weapon_world:") {
+				return HL1VoxelResolutionCategoryPickup
+			}
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "npc:") {
+				return HL1VoxelResolutionCategoryNPC
+			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "catalog:player:") {
 				return HL1VoxelResolutionCategoryNPC
 			}
 		}
@@ -531,4 +628,9 @@ func safeHL1AssetBaseName(sourceRef string) string {
 		return "asset"
 	}
 	return b.String()
+}
+
+func safeHL1CatalogAssetBaseName(sourceRef string) string {
+	ref := strings.TrimSuffix(filepath.ToSlash(sourceRef), filepath.Ext(sourceRef))
+	return safeHL1AssetBaseName(strings.ReplaceAll(ref, "/", "_"))
 }

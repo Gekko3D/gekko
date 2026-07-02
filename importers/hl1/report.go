@@ -141,27 +141,29 @@ const (
 )
 
 type ImportOptions struct {
-	GameDir                   string
-	MapName                   string
-	BSPPath                   string
-	OutputRoot                string
-	ChunkSize                 int
-	VoxelResolution           float32
-	VoxelResolutionPolicy     HL1VoxelResolutionPolicy
-	GameAssetVoxelResolution  float32
-	PickupVoxelResolution     float32
-	MaxSolidSampleCells       int64
-	SolidBandDepth            int
-	ChunkPayloadKind          string
-	ExportProfile             HL1ExportProfile
-	LightMode                 HL1LightMode
-	BakeStaticLightmaps       bool
-	EmitLightFixtures         bool
-	EmitEmissiveSurfaceLights bool
-	MaxEmissiveSurfaceLights  int
-	EmitGameAssets            bool
-	SkipNavigationBake        bool
-	Progress                  ImportProgressFunc
+	GameDir                    string
+	MapName                    string
+	BSPPath                    string
+	OutputRoot                 string
+	ChunkSize                  int
+	VoxelResolution            float32
+	VoxelResolutionPolicy      HL1VoxelResolutionPolicy
+	GameAssetVoxelResolution   float32
+	PickupVoxelResolution      float32
+	MaxSolidSampleCells        int64
+	SolidBandDepth             int
+	ChunkPayloadKind           string
+	ExportProfile              HL1ExportProfile
+	LightMode                  HL1LightMode
+	BakeStaticLightmaps        bool
+	EmitLightFixtures          bool
+	EmitEmissiveSurfaceLights  bool
+	MaxEmissiveSurfaceLights   int
+	EmitGameAssets             bool
+	ImportAllPlayerModels      bool
+	ImportAllWeaponWorldModels bool
+	SkipNavigationBake         bool
+	Progress                   ImportProgressFunc
 }
 
 type ImportProgressFunc func(ImportProgress)

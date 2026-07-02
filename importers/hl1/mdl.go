@@ -91,6 +91,12 @@ type MDLGeometry struct {
 	Triangles []MDLTriangle
 }
 
+// MDLGeometryOptions selects source-model variants before voxelization.
+// GoldSrc bodygroups default to their first model.
+type MDLGeometryOptions struct {
+	DefaultBodygroups bool
+}
+
 type MDLTriangle struct {
 	TextureIndex int
 	Vertices     [3]MDLTriangleVertex
@@ -132,11 +138,15 @@ func LoadMDLInfo(path string) (MDLInfo, error) {
 }
 
 func LoadMDLGeometry(path string) (MDLGeometry, error) {
+	return LoadMDLGeometryWithOptions(path, MDLGeometryOptions{})
+}
+
+func LoadMDLGeometryWithOptions(path string, opts MDLGeometryOptions) (MDLGeometry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return MDLGeometry{}, err
 	}
-	geometry, err := ParseMDLGeometry(data)
+	geometry, err := ParseMDLGeometryWithOptions(data, opts)
 	if err != nil {
 		return MDLGeometry{}, err
 	}
@@ -155,7 +165,7 @@ func LoadMDLGeometry(path string) (MDLGeometry, error) {
 	if len(textures) == 0 {
 		return geometry, nil
 	}
-	return ParseMDLGeometryWithExternalTextures(data, textures, textureInfos)
+	return parseMDLGeometryWithExternalTexturesOptions(data, textures, textureInfos, opts)
 }
 
 func ParseMDLInfo(data []byte) (MDLInfo, error) {
@@ -208,10 +218,18 @@ func ParseMDLInfo(data []byte) (MDLInfo, error) {
 }
 
 func ParseMDLGeometry(data []byte) (MDLGeometry, error) {
-	return ParseMDLGeometryWithExternalTextures(data, nil, nil)
+	return ParseMDLGeometryWithOptions(data, MDLGeometryOptions{})
+}
+
+func ParseMDLGeometryWithOptions(data []byte, opts MDLGeometryOptions) (MDLGeometry, error) {
+	return parseMDLGeometryWithExternalTexturesOptions(data, nil, nil, opts)
 }
 
 func ParseMDLGeometryWithExternalTextures(data []byte, externalTextures []MDLTexturePixels, externalTextureInfos []MDLTextureInfo) (MDLGeometry, error) {
+	return parseMDLGeometryWithExternalTexturesOptions(data, externalTextures, externalTextureInfos, MDLGeometryOptions{})
+}
+
+func parseMDLGeometryWithExternalTexturesOptions(data []byte, externalTextures []MDLTexturePixels, externalTextureInfos []MDLTextureInfo, opts MDLGeometryOptions) (MDLGeometry, error) {
 	info, err := ParseMDLInfo(data)
 	if err != nil {
 		return MDLGeometry{}, err
@@ -235,7 +253,11 @@ func ParseMDLGeometryWithExternalTextures(data []byte, externalTextures []MDLTex
 	}
 	boneTransforms := parseMDLBoneTransforms(data, int(readInt32(data, 144)), info.BoneCount)
 	for _, part := range decodeMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount, boneTransforms) {
-		for _, model := range part.models {
+		models := part.models
+		if opts.DefaultBodygroups && len(models) > 1 {
+			models = models[:1]
+		}
+		for _, model := range models {
 			geometry.Triangles = append(geometry.Triangles, decodeMDLModelTriangles(data, model, info, geometry.Textures)...)
 		}
 	}

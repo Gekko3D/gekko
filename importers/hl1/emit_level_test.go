@@ -1222,20 +1222,21 @@ func TestBuildGeneratedLevelImportsHL1Pickups(t *testing.T) {
 	}
 }
 
-func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
+func TestBuildGeneratedLevelEmitsAnimatedFuncConveyorVoxelAssets(t *testing.T) {
 	dir := t.TempDir()
-	bspPath := filepath.Join(dir, "valve", "maps", "doormap.bsp")
+	bspPath := filepath.Join(dir, "valve", "maps", "conveyormap.bsp")
 	mustWriteFile(t, bspPath, syntheticBSP(t, syntheticBSPConfig{
 		Entities: `{
 "classname" "worldspawn"
 }
 {
-"classname" "func_door"
+"classname" "func_conveyor"
 "model" "*1"
-"targetname" "door_a"
+"targetname" "conveyor_a"
 "speed" "100"
+"angle" "0"
 }`,
-		Textures: []syntheticTexture{{Name: "TESTWALL", Width: 64, Height: 64}},
+		Textures: []syntheticTexture{{Name: "scroll_conv3", Width: 64, Height: 64}},
 		Planes:   []Plane{{Normal: vec3(0, 1, 0), Dist: 0}},
 		Vertices: []importcommon.Vec3{
 			vec3(0, 0, 0), vec3(16, 0, 0), vec3(16, 0, 16), vec3(0, 0, 16),
@@ -1258,7 +1259,7 @@ func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
 	}))
 	opts := ImportOptions{
 		GameDir:         dir,
-		MapName:         "doormap",
+		MapName:         "conveyormap",
 		OutputRoot:      filepath.Join(dir, "out"),
 		ChunkSize:       32,
 		VoxelResolution: 0.1,
@@ -1270,7 +1271,9 @@ func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildImportSummary failed: %v", err)
 	}
-	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "doormap.gkworld"))
+	summary.BSP.Textures[0].Pixels = scrollTestTexture()
+	summary.BSP.Textures[0].Pixels.Name = "scroll_conv3"
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "conveyormap.gkworld"))
 	if err != nil {
 		t.Fatalf("BuildGeneratedLevel failed: %v", err)
 	}
@@ -1292,6 +1295,9 @@ func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
 	}
 	if asset.Parts[0].VoxelResolution != 0.05 {
 		t.Fatalf("moving brush voxel resolution = %f", asset.Parts[0].VoxelResolution)
+	}
+	if len(asset.MaterialAnimations) != 1 || asset.MaterialAnimations[0].Kind != "palette_scroll" {
+		t.Fatalf("conveyor material animations = %+v", asset.MaterialAnimations)
 	}
 }
 

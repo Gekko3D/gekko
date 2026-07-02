@@ -213,11 +213,21 @@ const (
 	LevelWaterBodyModeFitBounds    LevelWaterBodyMode = "FitBounds"
 )
 
+type LevelWaterSurfaceMode string
+
+const (
+	LevelWaterSurfaceModeVolume    LevelWaterSurfaceMode = "Volume"
+	LevelWaterSurfaceModeFootprint LevelWaterSurfaceMode = "Footprint"
+)
+
 type LevelWaterBodyDef struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
 
 	Mode LevelWaterBodyMode `json:"mode,omitempty"`
+	// SurfaceMode selects the visual water representation independently of
+	// ContinuityGroup, which only controls shared-edge suppression.
+	SurfaceMode LevelWaterSurfaceMode `json:"surface_mode,omitempty"`
 
 	SurfaceY float32 `json:"surface_y"`
 	Depth    float32 `json:"depth"`
@@ -549,6 +559,9 @@ func EnsureLevelIDs(def *LevelDef) {
 		}
 		if def.WaterBodies[i].Mode == "" {
 			def.WaterBodies[i].Mode = LevelWaterBodyModeExplicitRect
+		}
+		if def.WaterBodies[i].SurfaceMode == "" {
+			def.WaterBodies[i].SurfaceMode = LevelWaterSurfaceModeVolume
 		}
 		if def.WaterBodies[i].Transform.Rotation == (Quat{}) {
 			def.WaterBodies[i].Transform.Rotation = Quat{0, 0, 0, 1}

@@ -2353,6 +2353,7 @@ func TestBuildWaterSurfaceInputsMasksInternalContinuityEdges(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{0, 2, 0}},
 		&WaterSurfaceComponent{
 			ContinuityGroup: "channel-a",
+			SurfaceMode:     WaterSurfaceModeFootprint,
 			HalfExtents:     [2]float32{2, 2},
 			Depth:           2,
 		},
@@ -2361,6 +2362,7 @@ func TestBuildWaterSurfaceInputsMasksInternalContinuityEdges(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{4, 2, 0}},
 		&WaterSurfaceComponent{
 			ContinuityGroup: "channel-a",
+			SurfaceMode:     WaterSurfaceModeFootprint,
 			HalfExtents:     [2]float32{2, 2},
 			Depth:           2,
 		},
@@ -2369,6 +2371,7 @@ func TestBuildWaterSurfaceInputsMasksInternalContinuityEdges(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{8, 2.2, 0}},
 		&WaterSurfaceComponent{
 			ContinuityGroup: "channel-a",
+			SurfaceMode:     WaterSurfaceModeFootprint,
 			HalfExtents:     [2]float32{2, 2},
 			Depth:           2,
 		},

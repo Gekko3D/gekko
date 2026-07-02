@@ -15,6 +15,9 @@ func TestWaterBodyComponentExplicitRectNormalization(t *testing.T) {
 	if got := nilBody.NormalizedMode(); got != WaterBodyModeExplicitRect {
 		t.Fatalf("expected default mode %q, got %q", WaterBodyModeExplicitRect, got)
 	}
+	if got := nilBody.NormalizedSurfaceMode(); got != WaterSurfaceModeVolume {
+		t.Fatalf("expected default surface mode %q, got %q", WaterSurfaceModeVolume, got)
+	}
 	if got := nilBody.NormalizedInset(); got != DefaultWaterBodyInset {
 		t.Fatalf("expected default inset %v, got %v", DefaultWaterBodyInset, got)
 	}
@@ -56,6 +59,10 @@ func TestWaterBodyComponentExplicitRectNormalization(t *testing.T) {
 	body.DirectLightOcclusion = 0.4
 	if got := body.NormalizedDirectLightOcclusion(); got != 0.4 {
 		t.Fatalf("expected direct light occlusion 0.4, got %v", got)
+	}
+	body.SurfaceMode = WaterSurfaceModeFootprint
+	if got := body.NormalizedSurfaceMode(); got != WaterSurfaceModeFootprint {
+		t.Fatalf("expected footprint surface mode, got %q", got)
 	}
 }
 

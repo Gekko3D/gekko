@@ -39,6 +39,18 @@ type VoxelizeResult struct {
 	UnreachableEmptyCount int
 	SampledCount          int64
 	FloodSkipped          bool
+	LiquidTopCells        []LiquidTopCell
+}
+
+// LiquidTopCell records one voxel-resolution cell on a liquid's horizontal
+// top surface. It is kept separately because liquid faces are excluded from
+// solid-world voxel geometry.
+type LiquidTopCell struct {
+	Kind     string
+	SurfaceY float32
+	Depth    float32
+	X        int
+	Z        int
 }
 
 func VoxelizeFacesCPU(faces []Face, opts VoxelizeOptions) VoxelizeResult {
@@ -61,10 +73,11 @@ func VoxelizeFacesCPU(faces []Face, opts VoxelizeOptions) VoxelizeResult {
 	}
 	out := voxelsToSortedSlice(voxels)
 	result := VoxelizeResult{
-		Voxels:       out,
-		Materials:    materials,
-		SurfaceCount: surfaceCount,
-		FilledCount:  len(voxels) - surfaceCount,
+		Voxels:         out,
+		Materials:      materials,
+		SurfaceCount:   surfaceCount,
+		FilledCount:    len(voxels) - surfaceCount,
+		LiquidTopCells: collectLiquidTopCells(faces, opts),
 	}
 	if len(out) > 0 {
 		result.BoundsMin = [3]int{out[0].X, out[0].Y, out[0].Z}
@@ -181,6 +194,7 @@ func VoxelizeBSPSolidCPU(bsp *BSP, faces []Face, entities []importcommon.Entity,
 		UnreachableEmptyCount: 0,
 		SampledCount:          sampled,
 		FloodSkipped:          floodSkipped || len(playableEmpty) == 0,
+		LiquidTopCells:        collectLiquidTopCells(faces, opts),
 	}
 	if len(out) > 0 {
 		result.BoundsMin = [3]int{out[0].X, out[0].Y, out[0].Z}
@@ -459,10 +473,7 @@ func voxelizeFaceSurface(face Face, opts VoxelizeOptions, voxels map[[3]int]impo
 				sampledColors[key] = sample.Color
 			}
 		}
-		sourceTexture, animationID, animationPhase := "", "", 0
-		if !textureBaked {
-			sourceTexture, animationID, animationPhase = hl1VoxelMaterialAnimation(face, key, opts)
-		}
+		sourceTexture, animationID, animationPhase := hl1VoxelMaterialAnimation(face, key, opts)
 		solidKind := materialKind(face.TextureName)
 		if textureBaked && solidKind == "emissive" {
 			if bakedEmissive {

@@ -787,6 +787,7 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 		ID:                   "water-1",
 		Name:                 "pool",
 		Mode:                 LevelWaterBodyModeExplicitRect,
+		SurfaceMode:          LevelWaterSurfaceModeFootprint,
 		SurfaceY:             2.5,
 		Depth:                1.25,
 		RectHalfExtents:      Vec2{4, 6},
@@ -812,6 +813,7 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
 	if len(loaded.WaterBodies) != 1 || loaded.WaterBodies[0].RectHalfExtents != (Vec2{4, 6}) ||
+		loaded.WaterBodies[0].SurfaceMode != LevelWaterSurfaceModeFootprint ||
 		loaded.WaterBodies[0].ContinuityGroup != "pool-a" ||
 		loaded.WaterBodies[0].DirectLightOcclusion == nil || *loaded.WaterBodies[0].DirectLightOcclusion != 0.75 {
 		t.Fatalf("water bodies did not round-trip: %+v", loaded.WaterBodies)
@@ -1203,6 +1205,7 @@ func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
 	def.WaterBodies = []LevelWaterBodyDef{{
 		ID:                   "bad-water",
 		Mode:                 LevelWaterBodyModeExplicitRect,
+		SurfaceMode:          "unsupported",
 		SurfaceY:             1,
 		Depth:                0,
 		RectHalfExtents:      Vec2{0, 4},
@@ -1215,6 +1218,7 @@ func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "invalid_water_body_depth")
 	assertHasLevelValidationCode(t, result, "invalid_water_body_rect")
 	assertHasLevelValidationCode(t, result, "invalid_water_body_direct_light_occlusion")
+	assertHasLevelValidationCode(t, result, "invalid_water_surface_mode")
 }
 
 func assertHasLevelValidationCode(t *testing.T, result LevelValidationResult, want string) {

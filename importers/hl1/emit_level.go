@@ -107,7 +107,12 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	if len(waterFaces) == 0 {
 		waterFaces = summary.WorldFaces
 	}
-	level.WaterBodies = buildHL1WaterBodies(summary.BSP, waterFaces, opts.VoxelResolution)
+	if len(voxelizedWorld) > 0 {
+		level.WaterBodies = buildHL1WaterBodiesFromTopCells(voxelizedWorld[0].LiquidTopCells, opts.VoxelResolution)
+	}
+	if len(level.WaterBodies) == 0 {
+		level.WaterBodies = buildHL1WaterBodies(summary.BSP, waterFaces, opts.VoxelResolution)
+	}
 	if spawn, ok := firstImportEntityByClass(summary.Map.Entities, "info_player_start"); ok {
 		level.Markers = append(level.Markers, content.LevelMarkerDef{
 			ID:   "hl1_player_spawn_0",
@@ -541,9 +546,10 @@ func buildHL1Pickups(entities []importcommon.Entity, levelPath string, gameAsset
 		}
 		className := strings.ToLower(entity.ClassName)
 		assetPath := ""
-		if modelRef := hl1PickupModelRef(className); modelRef != "" {
+		for _, modelRef := range hl1PickupModelRefs(className) {
 			if generatedPath := generatedByRef[normalizedHL1AssetRef(modelRef)]; generatedPath != "" {
 				assetPath = filepath.ToSlash(relativeOrBase(levelDir, generatedPath))
+				break
 			}
 		}
 		index := countsByClass[className]
@@ -651,6 +657,17 @@ func hl1PickupModelRef(className string) string {
 	default:
 		return ""
 	}
+}
+
+func hl1PickupModelRefs(className string) []string {
+	modelRef := hl1PickupModelRef(className)
+	if modelRef == "" {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(className), "weapon_tripmine") {
+		return []string{modelRef, "models/p_tripmine.mdl"}
+	}
+	return []string{modelRef}
 }
 
 func hl1PickupDefaultAmount(pickup hl1PickupInfo) int {

@@ -1,5 +1,12 @@
 # NPC Navigation And Navmesh Plan
 
+> Generation direction update (2026-07-01):
+> [`pure-go-voxel-navigation-generation-plan.md`](pure-go-voxel-navigation-generation-plan.md)
+> supersedes this document's builder-hardening implementation path. The content,
+> streaming, delta, query, and NPC ownership described here remain valid. Recast
+> remains the current production bake backend only until the pure-Go plan reaches
+> its cutover gate.
+
 This document defines the long-term navigation plan for NPCs in voxel-backed
 `gklevel` worlds.
 
