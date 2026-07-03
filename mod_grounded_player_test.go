@@ -49,6 +49,18 @@ func TestSpawnGroundedPlayerAtMarkerUsesModuleDefaults(t *testing.T) {
 	}
 }
 
+func TestGroundedPlayerBasePositionUsesControllerTransform(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	player := cmd.AddEntity(&TransformComponent{Position: mgl32.Vec3{1, 2, 3}})
+	app.FlushCommands()
+
+	base := groundedPlayerBasePosition(cmd, player, &CameraComponent{Position: mgl32.Vec3{10, 20, 30}}, &GroundedPlayerControllerComponent{EyeHeight: 1.7})
+	if base != (mgl32.Vec3{1, 2, 3}) {
+		t.Fatalf("base position = %v, want controller transform", base)
+	}
+}
+
 func TestGroundedMovementBlockedUsesPlayerRadiusAtDoorway(t *testing.T) {
 	state := newGroundedPlayerTestVoxelRtState()
 
@@ -69,8 +81,42 @@ func TestGroundedMovementBlockedUsesPlayerRadiusAtDoorway(t *testing.T) {
 		Radius:     0.35,
 		StepHeight: 0.6,
 	}
-	if !groundedMovementBlocked(state, basePos, move, ctrl) {
+	if !groundedMovementBlocked(state, basePos, move, ctrl, nil) {
 		t.Fatal("expected doorway side collision to block movement when player radius overlaps the jamb")
+	}
+}
+
+func TestGroundedMovementIgnoresConfiguredVisualSubtree(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	player := cmd.AddEntity()
+	visualRoot := cmd.AddEntity(&Parent{Entity: player})
+	visualPart := cmd.AddEntity(&Parent{Entity: visualRoot})
+	app.FlushCommands()
+
+	state := newGroundedPlayerTestVoxelRtState()
+	visual := core.NewVoxelObject()
+	visual.XBrickMap = volume.NewXBrickMap()
+	for y := 0; y < 3; y++ {
+		visual.XBrickMap.SetVoxel(1, y, 1, 1)
+	}
+	visual.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	visual.Transform.Dirty = true
+	visual.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(visual)
+	state.instanceMap[visualPart] = visual
+	state.objectToEntity[visual] = visualPart
+
+	ctrl := &GroundedPlayerControllerComponent{
+		Height:                 1.7,
+		Radius:                 0.35,
+		StepHeight:             0.6,
+		CollisionIgnoredEntity: visualRoot,
+	}
+	basePos := mgl32.Vec3{1.3, 0, 0}
+	move := mgl32.Vec3{0, 0, 0.8}
+	if groundedMovementBlocked(state, basePos, move, ctrl, groundedPlayerCollisionRaycastFilter(cmd, ctrl)) {
+		t.Fatal("expected visual subtree to be ignored by grounded movement")
 	}
 }
 
@@ -93,7 +139,7 @@ func TestGroundedPlayerVerticalUsesFootprintGroundProbe(t *testing.T) {
 		Grounded:    true,
 	}
 
-	resolveGroundedVertical(state, &basePos, ctrl, 1.0/60.0)
+	resolveGroundedVertical(state, &basePos, ctrl, 1.0/60.0, nil)
 
 	if !ctrl.Grounded {
 		t.Fatalf("expected player footprint to stay grounded on edge-supported floor, got %+v", *ctrl)

@@ -1047,6 +1047,43 @@ without losing source provenance.
 
 ### CLI Import
 
+#### Assets-Only Import
+
+Use `-assets-only` to build the reusable HL1 player and weapon-world-model
+catalog without loading a BSP or generating a world or level. It implies
+`-emit-game-assets`, requires `-game-dir`, and requires at least one of
+`-import-all-player-models` or `-import-all-weapon-world-models`.
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/gekko
+go run ./cmd/hl1import \
+  -assets-only \
+  -game-dir /path/to/Half-Life \
+  -out ../actiongame/assets/levels \
+  -import-all-player-models \
+  -import-all-weapon-world-models
+```
+
+With no `-map` value, output is written under `hl1_assets/catalog/`:
+
+- `manifest.gkhl1assets` records stable player variants, bodygroup/skin
+  selections, decoded clip IDs, `head`/`right_hand` marker IDs, and weapon
+  world-model IDs.
+- `generated/models/*.gkasset` contains voxelized player and weapon assets.
+- `files/` contains copied source models.
+- `worlds/catalog_import_report.json` records the asset-only import report.
+
+This mode does not import map-referenced props, sprites, sounds, WADs, NPCs,
+or pickups. Use normal map import with `-emit-game-assets` for those. It cannot
+be combined with `-emit-debug-world` or `-emit-level`.
+
+Player `.gkasset` files carry rigid `animation_clips` for source sequences the
+importer can decode. External GoldSrc sequence groups currently produce
+bind-pose clips rather than decoded motion. Weapon world models are static
+visual assets and have no animation clips.
+
+#### Map Import
+
 Suggested command:
 
 ```bash

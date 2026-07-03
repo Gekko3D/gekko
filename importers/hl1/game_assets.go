@@ -38,14 +38,43 @@ type GameAssetCatalog struct {
 }
 
 type GameAssetPlayerCatalogEntry struct {
-	ID                string   `json:"id"`
-	SourceRef         string   `json:"source_ref"`
-	AssetPath         string   `json:"asset_path"`
-	BodygroupModels   []int    `json:"bodygroup_models"`
-	SkinFamily        int      `json:"skin_family"`
-	HeadMarkerID      string   `json:"head_marker_id"`
-	RightHandMarkerID string   `json:"right_hand_marker_id"`
-	ClipIDs           []string `json:"clip_ids,omitempty"`
+	ID                    string                               `json:"id"`
+	SourceRef             string                               `json:"source_ref"`
+	AssetPath             string                               `json:"asset_path"`
+	BodygroupModels       []int                                `json:"bodygroup_models"`
+	SkinFamily            int                                  `json:"skin_family"`
+	HeadMarkerID          string                               `json:"head_marker_id"`
+	RightHandMarkerID     string                               `json:"right_hand_marker_id"`
+	UpperBodyMarkerID     string                               `json:"upper_body_marker_id"`
+	AimMarkerIDs          []string                             `json:"aim_marker_ids,omitempty"`
+	ClipIDs               []string                             `json:"clip_ids,omitempty"`
+	DirectionalLocomotion GameAssetPlayerDirectionalLocomotion `json:"directional_locomotion"`
+}
+
+const (
+	GameAssetPlayerLocomotionFallbackFaceTravel   = "face_travel"
+	GameAssetPlayerLocomotionFallbackUnsupported  = "unsupported"
+	GameAssetPlayerBackwardFallbackReverseForward = "reverse_forward"
+)
+
+// GameAssetPlayerDirectionalLocomotion is source-verified presentation data.
+// Empty directions require Fallback; ActionGame must not guess a strafe clip.
+type GameAssetPlayerDirectionalLocomotion struct {
+	Walk             GameAssetPlayerDirectionalClipSet `json:"walk,omitempty"`
+	Run              GameAssetPlayerDirectionalClipSet `json:"run,omitempty"`
+	Fallback         string                            `json:"fallback"`
+	BackwardFallback string                            `json:"backward_fallback,omitempty"`
+}
+
+type GameAssetPlayerDirectionalClipSet struct {
+	Forward       string `json:"forward,omitempty"`
+	Backward      string `json:"backward,omitempty"`
+	Left          string `json:"left,omitempty"`
+	Right         string `json:"right,omitempty"`
+	ForwardLeft   string `json:"forward_left,omitempty"`
+	ForwardRight  string `json:"forward_right,omitempty"`
+	BackwardLeft  string `json:"backward_left,omitempty"`
+	BackwardRight string `json:"backward_right,omitempty"`
 }
 
 type GameAssetWeaponCatalogEntry struct {
@@ -55,30 +84,49 @@ type GameAssetWeaponCatalogEntry struct {
 }
 
 type GameAssetManifestEntry struct {
-	Kind                             string            `json:"kind"`
-	SourceRef                        string            `json:"source_ref"`
-	SourcePath                       string            `json:"source_path,omitempty"`
-	OutputPath                       string            `json:"output_path,omitempty"`
-	GeneratedAssetPath               string            `json:"generated_asset_path,omitempty"`
-	GeneratedVoxelCount              int               `json:"generated_voxel_count,omitempty"`
-	GeneratedVoxelResolution         float32           `json:"generated_voxel_resolution,omitempty"`
-	GeneratedVoxelResolutionCategory string            `json:"generated_voxel_resolution_category,omitempty"`
-	CompatibilityFallback            bool              `json:"compatibility_fallback,omitempty"`
-	CatalogKind                      string            `json:"catalog_kind,omitempty"`
-	CatalogID                        string            `json:"catalog_id,omitempty"`
-	BodygroupModels                  []int             `json:"bodygroup_models,omitempty"`
-	SkinFamily                       int               `json:"skin_family,omitempty"`
-	HeadMarkerID                     string            `json:"head_marker_id,omitempty"`
-	RightHandMarkerID                string            `json:"right_hand_marker_id,omitempty"`
-	ClipIDs                          []string          `json:"clip_ids,omitempty"`
-	SizeBytes                        int64             `json:"size_bytes,omitempty"`
-	SHA256                           string            `json:"sha256,omitempty"`
-	Resolved                         bool              `json:"resolved"`
-	UsedBy                           []string          `json:"used_by,omitempty"`
-	ConvertState                     string            `json:"convert_state,omitempty"`
-	ModelInfo                        *MDLInfo          `json:"model_info,omitempty"`
-	SpriteInfo                       *SPRInfo          `json:"sprite_info,omitempty"`
-	generatedAsset                   *content.AssetDef `json:"-"`
+	Kind                             string                               `json:"kind"`
+	SourceRef                        string                               `json:"source_ref"`
+	SourcePath                       string                               `json:"source_path,omitempty"`
+	OutputPath                       string                               `json:"output_path,omitempty"`
+	GeneratedAssetPath               string                               `json:"generated_asset_path,omitempty"`
+	GeneratedVoxelCount              int                                  `json:"generated_voxel_count,omitempty"`
+	GeneratedVoxelResolution         float32                              `json:"generated_voxel_resolution,omitempty"`
+	GeneratedVoxelResolutionCategory string                               `json:"generated_voxel_resolution_category,omitempty"`
+	CompatibilityFallback            bool                                 `json:"compatibility_fallback,omitempty"`
+	CatalogKind                      string                               `json:"catalog_kind,omitempty"`
+	CatalogID                        string                               `json:"catalog_id,omitempty"`
+	BodygroupModels                  []int                                `json:"bodygroup_models,omitempty"`
+	SkinFamily                       int                                  `json:"skin_family,omitempty"`
+	HeadMarkerID                     string                               `json:"head_marker_id,omitempty"`
+	RightHandMarkerID                string                               `json:"right_hand_marker_id,omitempty"`
+	UpperBodyMarkerID                string                               `json:"upper_body_marker_id,omitempty"`
+	AimMarkerIDs                     []string                             `json:"aim_marker_ids,omitempty"`
+	ClipIDs                          []string                             `json:"clip_ids,omitempty"`
+	DirectionalLocomotion            GameAssetPlayerDirectionalLocomotion `json:"directional_locomotion,omitempty"`
+	SizeBytes                        int64                                `json:"size_bytes,omitempty"`
+	SHA256                           string                               `json:"sha256,omitempty"`
+	Resolved                         bool                                 `json:"resolved"`
+	UsedBy                           []string                             `json:"used_by,omitempty"`
+	ConvertState                     string                               `json:"convert_state,omitempty"`
+	ModelInfo                        *MDLInfo                             `json:"model_info,omitempty"`
+	SpriteInfo                       *SPRInfo                             `json:"sprite_info,omitempty"`
+	generatedAsset                   *content.AssetDef                    `json:"-"`
+}
+
+// LoadGameAssetManifest reads the ActionGame-facing HL1 asset catalog.
+func LoadGameAssetManifest(path string) (*GameAssetManifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var manifest GameAssetManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, err
+	}
+	if manifest.SchemaVersion != GameAssetManifestSchemaVersion {
+		return nil, fmt.Errorf("unsupported game asset manifest schema version %d", manifest.SchemaVersion)
+	}
+	return &manifest, nil
 }
 
 func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetImportResult, error) {
@@ -421,8 +469,8 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 			anchors := map[string]int(nil)
 			if entry.CatalogKind == "player" {
 				anchors = hl1PlayerSemanticAnchorBones(geometry.Info.Bones)
-				if len(anchors) != 2 {
-					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_required_anchor_missing", Subject: entry.CatalogID, Message: "missing verified Bip01 Head or Bip01 R Hand bone"})
+				if !hl1PlayerHasRequiredAnchors(anchors) {
+					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_required_anchor_missing", Subject: entry.CatalogID, Message: "missing verified HL1 player head, hand, or aim-chain bone"})
 					entry.ConvertState = "unsupported_player_avatar"
 					return
 				}
@@ -433,6 +481,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				VoxelResolution: voxelResolution,
 				StaticPose:      staticPose,
 				SemanticAnchors: anchors,
+				LockRootMotion:  entry.CatalogKind == "player",
 			})
 			if err != nil {
 				c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -442,7 +491,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					Message:  err.Error(),
 				})
 			} else if asset != nil {
-				if entry.CatalogKind == "player" && (!assetHasMarker(asset, "head") || !assetHasMarker(asset, "right_hand")) {
+				if entry.CatalogKind == "player" && !hl1PlayerAssetHasRequiredMarkers(asset) {
 					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_anchor_unresolved", Subject: entry.CatalogID, Message: "verified player anchors could not resolve to generated bone parts"})
 					entry.ConvertState = "unsupported_player_avatar"
 					return
@@ -457,6 +506,9 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				if entry.CatalogKind == "player" {
 					entry.HeadMarkerID = "head"
 					entry.RightHandMarkerID = "right_hand"
+					entry.UpperBodyMarkerID = "upper_body"
+					entry.AimMarkerIDs = append([]string(nil), hl1PlayerAimMarkerIDs...)
+					entry.DirectionalLocomotion = hl1PlayerDirectionalLocomotion(asset.AnimationClips)
 				}
 			}
 		}
@@ -581,17 +633,73 @@ func (c *hl1AssetCollector) buildEntries() ([]GameAssetManifestEntry, []importco
 	return out, diagnostics
 }
 
+var hl1PlayerAimMarkerIDs = []string{"aim_spine", "aim_spine1", "aim_spine2", "aim_spine3", "aim_neck", "head"}
+
 func hl1PlayerSemanticAnchorBones(bones []MDLBoneInfo) map[string]int {
-	anchors := map[string]int{}
+	anchors := map[string]int{"head": -1, "right_hand": -1, "upper_body": -1, "aim_spine": -1, "aim_spine1": -1, "aim_spine2": -1, "aim_spine3": -1, "aim_neck": -1}
 	for index, bone := range bones {
 		switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", "")) {
 		case "bip01head":
 			anchors["head"] = index
 		case "bip01rhand":
 			anchors["right_hand"] = index
+		case "bip01spine":
+			anchors["upper_body"] = index
+			anchors["aim_spine"] = index
+		case "bip01spine1":
+			anchors["aim_spine1"] = index
+		case "bip01spine2":
+			anchors["aim_spine2"] = index
+		case "bip01spine3":
+			anchors["aim_spine3"] = index
+		case "bip01neck":
+			anchors["aim_neck"] = index
 		}
 	}
 	return anchors
+}
+
+func hl1PlayerHasRequiredAnchors(anchors map[string]int) bool {
+	if anchors["right_hand"] < 0 || anchors["upper_body"] < 0 {
+		return false
+	}
+	for _, markerID := range hl1PlayerAimMarkerIDs {
+		if anchors[markerID] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func hl1PlayerAssetHasRequiredMarkers(asset *content.AssetDef) bool {
+	if !assetHasMarker(asset, "right_hand") || !assetHasMarker(asset, "upper_body") {
+		return false
+	}
+	for _, markerID := range hl1PlayerAimMarkerIDs {
+		if !assetHasMarker(asset, markerID) {
+			return false
+		}
+	}
+	return true
+}
+
+func hl1PlayerDirectionalLocomotion(clips []content.AssetAnimationClipDef) GameAssetPlayerDirectionalLocomotion {
+	locomotion := GameAssetPlayerDirectionalLocomotion{Fallback: GameAssetPlayerLocomotionFallbackUnsupported}
+	for _, clip := range clips {
+		// ponytail: only Crossfire-verified GoldSrc names become locomotion;
+		// extend after another player family is probed, never guess clip meaning.
+		switch strings.ToLower(strings.TrimSpace(clip.Name)) {
+		case "walk":
+			locomotion.Walk.Forward = clip.ID
+		case "run":
+			locomotion.Run.Forward = clip.ID
+		}
+	}
+	if locomotion.Walk.Forward != "" || locomotion.Run.Forward != "" {
+		locomotion.Fallback = GameAssetPlayerLocomotionFallbackFaceTravel
+		locomotion.BackwardFallback = GameAssetPlayerBackwardFallbackReverseForward
+	}
+	return locomotion
 }
 
 func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
@@ -602,18 +710,21 @@ func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
 		}
 		switch entry.CatalogKind {
 		case "player":
-			if entry.HeadMarkerID == "" || entry.RightHandMarkerID == "" {
+			if entry.HeadMarkerID == "" || entry.RightHandMarkerID == "" || entry.UpperBodyMarkerID == "" || len(entry.AimMarkerIDs) == 0 {
 				continue
 			}
 			catalog.Players = append(catalog.Players, GameAssetPlayerCatalogEntry{
-				ID:                entry.CatalogID,
-				SourceRef:         entry.SourceRef,
-				AssetPath:         entry.GeneratedAssetPath,
-				BodygroupModels:   append([]int(nil), entry.BodygroupModels...),
-				SkinFamily:        entry.SkinFamily,
-				HeadMarkerID:      entry.HeadMarkerID,
-				RightHandMarkerID: entry.RightHandMarkerID,
-				ClipIDs:           append([]string(nil), entry.ClipIDs...),
+				ID:                    entry.CatalogID,
+				SourceRef:             entry.SourceRef,
+				AssetPath:             entry.GeneratedAssetPath,
+				BodygroupModels:       append([]int(nil), entry.BodygroupModels...),
+				SkinFamily:            entry.SkinFamily,
+				HeadMarkerID:          entry.HeadMarkerID,
+				RightHandMarkerID:     entry.RightHandMarkerID,
+				UpperBodyMarkerID:     entry.UpperBodyMarkerID,
+				AimMarkerIDs:          append([]string(nil), entry.AimMarkerIDs...),
+				ClipIDs:               append([]string(nil), entry.ClipIDs...),
+				DirectionalLocomotion: entry.DirectionalLocomotion,
 			})
 		case "weapon_world":
 			catalog.WeaponWorldModels = append(catalog.WeaponWorldModels, GameAssetWeaponCatalogEntry{

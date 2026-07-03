@@ -10,6 +10,7 @@ import (
 
 	"github.com/gekko3d/gekko/content"
 	importcommon "github.com/gekko3d/gekko/importers/common"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
@@ -305,7 +306,7 @@ func TestHL1PlayerModelVariantsChooseEveryBodygroupAndSkin(t *testing.T) {
 
 func TestBuildMDLVoxelAssetEmitsVerifiedPlayerAnchorsAndCatalogLinks(t *testing.T) {
 	geometry := MDLGeometry{
-		Info: MDLInfo{Bones: []MDLBoneInfo{{Name: "Bip01 Head", Parent: -1}, {Name: "Bip01 R Hand", Parent: -1}}},
+		Info: MDLInfo{Bones: []MDLBoneInfo{{Name: "Bip01 Spine", Parent: -1}, {Name: "Bip01 Spine1", Parent: 0}, {Name: "Bip01 Spine2", Parent: 1}, {Name: "Bip01 Spine3", Parent: 2}, {Name: "Bip01 Neck", Parent: 3}, {Name: "Bip01 Head", Parent: 4}, {Name: "Bip01 R Hand", Parent: 4}}},
 		Triangles: []MDLTriangle{{Vertices: [3]MDLTriangleVertex{
 			{Position: importcommon.Vec3{X: 0, Y: 0, Z: 0}, BoneIndex: 0},
 			{Position: importcommon.Vec3{X: 1, Y: 0, Z: 0}, BoneIndex: 0},
@@ -317,8 +318,19 @@ func TestBuildMDLVoxelAssetEmitsVerifiedPlayerAnchorsAndCatalogLinks(t *testing.
 	if err != nil {
 		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
 	}
-	if len(asset.Markers) != 2 || asset.Markers[0].ID != "head" || asset.Markers[0].ParentID != "bone_00_bip01_head" || asset.Markers[1].ID != "right_hand" || asset.Markers[1].ParentID != "bone_01_bip01_r_hand" {
+	markerParents := map[string]string{}
+	for _, marker := range asset.Markers {
+		markerParents[marker.ID] = marker.ParentID
+	}
+	if len(markerParents) != 8 || markerParents["head"] != "bone_05_bip01_head" || markerParents["right_hand"] != "bone_06_bip01_r_hand" || markerParents["upper_body"] != "bone_00_bip01_spine" || markerParents["aim_spine3"] != "bone_03_bip01_spine3" || markerParents["aim_neck"] != "bone_04_bip01_neck" {
 		t.Fatalf("expected verified bone markers, got %+v", asset.Markers)
+	}
+	partParent := map[string]string{}
+	for _, part := range asset.Parts {
+		partParent[part.ID] = part.ParentID
+	}
+	if partParent["bone_05_bip01_head"] != "bone_04_bip01_neck" || partParent["bone_06_bip01_r_hand"] != "bone_04_bip01_neck" {
+		t.Fatalf("expected head and hand bones parented to neck, got %+v", asset.Parts)
 	}
 	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
 		t.Fatalf("expected anchored player asset to validate, got %+v", validation.Issues)
@@ -331,10 +343,37 @@ func TestBuildMDLVoxelAssetEmitsVerifiedPlayerAnchorsAndCatalogLinks(t *testing.
 		BodygroupModels:    []int{0},
 		HeadMarkerID:       "head",
 		RightHandMarkerID:  "right_hand",
+		UpperBodyMarkerID:  "upper_body",
+		AimMarkerIDs:       append([]string(nil), hl1PlayerAimMarkerIDs...),
 		ClipIDs:            []string{"mdl_idle"},
 	}})
-	if catalog == nil || len(catalog.Players) != 1 || catalog.Players[0].HeadMarkerID != "head" || catalog.Players[0].RightHandMarkerID != "right_hand" || len(catalog.Players[0].ClipIDs) != 1 {
+	if catalog == nil || len(catalog.Players) != 1 || catalog.Players[0].HeadMarkerID != "head" || catalog.Players[0].RightHandMarkerID != "right_hand" || catalog.Players[0].UpperBodyMarkerID != "upper_body" || len(catalog.Players[0].AimMarkerIDs) != len(hl1PlayerAimMarkerIDs) || len(catalog.Players[0].ClipIDs) != 1 {
 		t.Fatalf("expected player catalog link, got %+v", catalog)
+	}
+}
+
+func TestHL1PlayerDirectionalLocomotionUsesOnlyVerifiedSequences(t *testing.T) {
+	locomotion := hl1PlayerDirectionalLocomotion([]content.AssetAnimationClipDef{
+		{ID: "mdl_walk", Name: "walk"},
+		{ID: "mdl_run", Name: "run"},
+		{ID: "mdl_walk_sideways", Name: "walk_sideways"},
+	})
+	if locomotion.Walk.Forward != "mdl_walk" || locomotion.Run.Forward != "mdl_run" || locomotion.Walk.Left != "" || locomotion.Fallback != GameAssetPlayerLocomotionFallbackFaceTravel || locomotion.BackwardFallback != GameAssetPlayerBackwardFallbackReverseForward {
+		t.Fatalf("expected explicit forward clips and face-travel fallback, got %+v", locomotion)
+	}
+	unsupported := hl1PlayerDirectionalLocomotion([]content.AssetAnimationClipDef{{ID: "mdl_unknown", Name: "unknown"}})
+	if unsupported.Fallback != GameAssetPlayerLocomotionFallbackUnsupported {
+		t.Fatalf("expected unsupported unknown sequence set, got %+v", unsupported)
+	}
+}
+
+func TestMDLAnimationTracksUseBoneLocalSpace(t *testing.T) {
+	bones := []MDLBoneInfo{{Name: "root", Parent: -1}, {Name: "child", Parent: 0}}
+	bind := []mdlBoneFrameTransform{{Position: importcommon.Vec3{}, Rotation: mgl32.QuatIdent()}, {Position: importcommon.Vec3{X: 10}, Rotation: mgl32.QuatIdent()}}
+	frame := []mdlBoneFrameTransform{{Position: importcommon.Vec3{X: 5}, Rotation: mgl32.QuatIdent()}, {Position: importcommon.Vec3{X: 15}, Rotation: mgl32.QuatIdent()}}
+	position, _ := mdlLocalAnimationTransform(1, 0, false, bind, frame, bones)
+	if !approxContentVec3(position, content.Vec3{0.254, 0, 0}, 1e-5) {
+		t.Fatalf("child local position = %+v, want bind-local offset", position)
 	}
 }
 
@@ -522,6 +561,21 @@ func TestBuildMDLVoxelAssetEmitsDecodedSequenceClip(t *testing.T) {
 	}
 	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
 		t.Fatalf("expected decoded MDL asset to validate, got %+v", validation.Issues)
+	}
+}
+
+func TestBuildMDLVoxelAssetLocksPlayerRootMotion(t *testing.T) {
+	geometry, err := ParseMDLGeometry(syntheticMDLWithBoneSequenceAnimation())
+	if err != nil {
+		t.Fatalf("ParseMDLGeometry failed: %v", err)
+	}
+	asset, _, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{VoxelResolution: 0.02, LockRootMotion: true})
+	if err != nil {
+		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
+	}
+	keys := asset.AnimationClips[0].Tracks[0].PositionKeys
+	if len(keys) != 2 || !approxContentVec3(keys[0].Value, keys[1].Value, 1e-5) {
+		t.Fatalf("expected locked root motion, got %+v", keys)
 	}
 }
 

@@ -22,6 +22,9 @@ type MDLVoxelAssetOptions struct {
 	// SemanticAnchors maps stable marker IDs to verified source bone indices.
 	// Player catalog import supplies only known GoldSrc player-bone mappings.
 	SemanticAnchors map[string]int
+	// LockRootMotion keeps an animation-driven actor registered to its
+	// controller rather than applying source root translation twice.
+	LockRootMotion bool
 }
 
 func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*content.AssetDef, int, error) {
@@ -52,7 +55,7 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 		Position:  content.Vec3{origin.X, origin.Y, origin.Z},
 		Rotation:  content.Quat{0, 0, 0, 1},
 		Scale:     content.Vec3{1, 1, 1},
-	}})
+	}}, opts.LockRootMotion)
 	if len(asset.AnimationClips) > 0 {
 		asset.Tags = append(asset.Tags, "animation:bind_pose_clip")
 	}
@@ -154,13 +157,21 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 		}
 		boneID := boneIDs[boneIndex]
 		boneOrigin := mdlBoneGlobalOriginGekko(geometry.Info.Bones, boneIndex)
+		boneBindPosition := boneOrigin
+		parentID := ""
+		if parentIndex := geometry.Info.Bones[boneIndex].Parent; parentIndex >= 0 && parentIndex < len(boneIDs) && parentIndex != boneIndex {
+			parentID = boneIDs[parentIndex]
+			parentOrigin := mdlBoneGlobalOriginGekko(geometry.Info.Bones, parentIndex)
+			boneBindPosition = subVec3(boneOrigin, parentOrigin)
+		}
 
 		asset.Parts = append(asset.Parts, content.AssetPartDef{
-			ID:     boneID,
-			Name:   nonEmptyString(geometry.Info.Bones[boneIndex].Name, boneID),
-			Source: content.AssetSourceDef{Kind: content.AssetSourceKindGroup},
+			ID:       boneID,
+			Name:     nonEmptyString(geometry.Info.Bones[boneIndex].Name, boneID),
+			ParentID: parentID,
+			Source:   content.AssetSourceDef{Kind: content.AssetSourceKindGroup},
 			Transform: content.AssetTransformDef{
-				Position: content.Vec3{boneOrigin.X, boneOrigin.Y, boneOrigin.Z},
+				Position: content.Vec3{boneBindPosition.X, boneBindPosition.Y, boneBindPosition.Z},
 				Rotation: content.Quat{0, 0, 0, 1},
 				Scale:    content.Vec3{1, 1, 1},
 			},
@@ -197,7 +208,7 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 		bindTargets = append(bindTargets, mdlAnimationBindTarget{
 			ID:        boneID,
 			BoneIndex: boneIndex,
-			Position:  content.Vec3{boneOrigin.X, boneOrigin.Y, boneOrigin.Z},
+			Position:  content.Vec3{boneBindPosition.X, boneBindPosition.Y, boneBindPosition.Z},
 			Rotation:  content.Quat{0, 0, 0, 1},
 			Scale:     content.Vec3{1, 1, 1},
 		})
@@ -227,7 +238,7 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 			Tags: []string{"source:hl1", "semantic:" + markerID},
 		})
 	}
-	asset.AnimationClips = mdlAnimationClips(geometry.Info.Sequences, geometry.Info.Bones, bindTargets)
+	asset.AnimationClips = mdlAnimationClips(geometry.Info.Sequences, geometry.Info.Bones, bindTargets, opts.LockRootMotion)
 	if len(asset.AnimationClips) > 0 {
 		asset.Tags = append(asset.Tags, "animation:bind_pose_clip")
 	}
@@ -279,7 +290,7 @@ func mdlAssetBoneIDs(bones []MDLBoneInfo) []string {
 	return ids
 }
 
-func mdlAnimationClips(sequences []MDLSequenceInfo, bones []MDLBoneInfo, targets []mdlAnimationBindTarget) []content.AssetAnimationClipDef {
+func mdlAnimationClips(sequences []MDLSequenceInfo, bones []MDLBoneInfo, targets []mdlAnimationBindTarget, lockRootMotion bool) []content.AssetAnimationClipDef {
 	if len(sequences) == 0 || len(targets) == 0 {
 		return nil
 	}
@@ -292,7 +303,7 @@ func mdlAnimationClips(sequences []MDLSequenceInfo, bones []MDLBoneInfo, targets
 		var clip content.AssetAnimationClipDef
 		var ok bool
 		if len(seq.BoneAnimations) > 0 && len(bones) > 0 {
-			clip, ok = mdlDecodedAnimationClip(seq, bones, targets)
+			clip, ok = mdlDecodedAnimationClip(seq, bones, targets, lockRootMotion)
 		}
 		if !ok {
 			clip, ok = mdlBindPoseAnimationClip(seq, targets)
@@ -357,7 +368,7 @@ func mdlBindPoseAnimationClip(seq MDLSequenceInfo, targets []mdlAnimationBindTar
 	}, true
 }
 
-func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets []mdlAnimationBindTarget) (content.AssetAnimationClipDef, bool) {
+func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets []mdlAnimationBindTarget, lockRootMotion bool) (content.AssetAnimationClipDef, bool) {
 	fps := seq.FPS
 	if fps <= 0 {
 		fps = 30
@@ -374,6 +385,7 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 		return content.AssetAnimationClipDef{}, false
 	}
 	tracks := make([]content.AssetAnimationTrackDef, 0, len(targets))
+	rootBone := mdlRootBoneIndex(bones)
 	for _, target := range targets {
 		if target.BoneIndex < 0 || target.BoneIndex >= len(bones) {
 			tracks = append(tracks, mdlBindPoseTrack(target, duration))
@@ -382,18 +394,14 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 		positionKeys := make([]content.AssetVec3KeyDef, 0, seq.FrameCount)
 		rotationKeys := make([]content.AssetQuatKeyDef, 0, seq.FrameCount)
 		scaleKeys := make([]content.AssetVec3KeyDef, 0, 1)
-		bind := bindFrames[target.BoneIndex]
 		for frame := 0; frame < seq.FrameCount; frame++ {
 			frameTransforms := mdlGlobalBoneFrameTransforms(bones, seq.BoneAnimations, frame)
 			if target.BoneIndex >= len(frameTransforms) {
 				return content.AssetAnimationClipDef{}, false
 			}
-			frameTransform := frameTransforms[target.BoneIndex]
-			position := HammerToGekko(frameTransform.Position)
-			deltaRotation := frameTransform.Rotation.Mul(bind.Rotation.Inverse()).Normalize()
-			rotation := hammerQuatToContentQuat(deltaRotation)
+			position, rotation := mdlLocalAnimationTransform(target.BoneIndex, rootBone, lockRootMotion, bindFrames, frameTransforms, bones)
 			t := float32(frame) / fps
-			positionKeys = append(positionKeys, content.AssetVec3KeyDef{Time: t, Value: content.Vec3{position.X, position.Y, position.Z}})
+			positionKeys = append(positionKeys, content.AssetVec3KeyDef{Time: t, Value: position})
 			rotationKeys = append(rotationKeys, content.AssetQuatKeyDef{Time: t, Value: rotation})
 		}
 		scaleKeys = append(scaleKeys, content.AssetVec3KeyDef{Time: 0, Value: content.Vec3{1, 1, 1}})
@@ -413,6 +421,52 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 		Tracks:   tracks,
 		Tags:     []string{"source:hl1", "source_asset:mdl", "generated:sequence_clip"},
 	}, len(tracks) > 0
+}
+
+// mdlLocalAnimationTransform converts source global frames into local part
+// transforms. Rigid parts are parented by bone, so world-space tracks would
+// otherwise apply every ancestor transform twice.
+func mdlLocalAnimationTransform(boneIndex, rootBone int, lockRootMotion bool, bindFrames, frameTransforms []mdlBoneFrameTransform, bones []MDLBoneInfo) (content.Vec3, content.Quat) {
+	frame := frameTransforms[boneIndex]
+	if lockRootMotion && rootBone >= 0 && rootBone < len(frameTransforms) {
+		frame.Position = addVec3(frame.Position, subVec3(bindFrames[rootBone].Position, frameTransforms[rootBone].Position))
+	}
+	delta := hammerQuatToMgl(frame.Rotation.Mul(bindFrames[boneIndex].Rotation.Inverse()).Normalize())
+	position := HammerToGekko(frame.Position)
+	if boneIndex >= len(bones) {
+		return content.Vec3{position.X, position.Y, position.Z}, mglQuatToContent(delta)
+	}
+	parentIndex := bones[boneIndex].Parent
+	if parentIndex < 0 || parentIndex >= len(frameTransforms) || parentIndex == boneIndex {
+		return content.Vec3{position.X, position.Y, position.Z}, mglQuatToContent(delta)
+	}
+	parentFrame := frameTransforms[parentIndex]
+	if lockRootMotion && rootBone >= 0 && rootBone < len(frameTransforms) {
+		parentFrame.Position = addVec3(parentFrame.Position, subVec3(bindFrames[rootBone].Position, frameTransforms[rootBone].Position))
+	}
+	parentDelta := hammerQuatToMgl(parentFrame.Rotation.Mul(bindFrames[parentIndex].Rotation.Inverse()).Normalize())
+	parentPosition := HammerToGekko(parentFrame.Position)
+	localPosition := parentDelta.Inverse().Rotate(mgl32.Vec3{position.X, position.Y, position.Z}.Sub(mgl32.Vec3{parentPosition.X, parentPosition.Y, parentPosition.Z}))
+	localRotation := parentDelta.Inverse().Mul(delta).Normalize()
+	return content.Vec3{localPosition.X(), localPosition.Y(), localPosition.Z()}, mglQuatToContent(localRotation)
+}
+
+func hammerQuatToMgl(q mgl32.Quat) mgl32.Quat {
+	value := hammerQuatToContentQuat(q)
+	return mgl32.Quat{V: mgl32.Vec3{value[0], value[1], value[2]}, W: value[3]}.Normalize()
+}
+
+func mglQuatToContent(q mgl32.Quat) content.Quat {
+	return content.Quat{q.V.X(), q.V.Y(), q.V.Z(), q.W}
+}
+
+func mdlRootBoneIndex(bones []MDLBoneInfo) int {
+	for index, bone := range bones {
+		if bone.Parent < 0 || bone.Parent >= len(bones) {
+			return index
+		}
+	}
+	return -1
 }
 
 func mdlBindPoseTrack(target mdlAnimationBindTarget, duration float32) content.AssetAnimationTrackDef {
