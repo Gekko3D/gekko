@@ -149,6 +149,70 @@ func TestGroundedPlayerVerticalUsesFootprintGroundProbe(t *testing.T) {
 	}
 }
 
+func TestGroundedPlayerCrouchRestoresOnlyWhenClear(t *testing.T) {
+	ctrl := &GroundedPlayerControllerComponent{
+		Height:            1.8,
+		EyeHeight:         1.7,
+		StandingHeight:    1.8,
+		StandingEyeHeight: 1.7,
+		CrouchHeight:      1.0,
+		CrouchEyeHeight:   0.9,
+		Radius:            0.35,
+		CrouchRequested:   true,
+	}
+	basePos := mgl32.Vec3{}
+	groundedPlayerUpdateStance(nil, basePos, ctrl, nil)
+	if !ctrl.Crouching || ctrl.Height != 1.0 || ctrl.EyeHeight != 0.9 {
+		t.Fatalf("expected crouch dimensions, got %+v", *ctrl)
+	}
+
+	state := newGroundedPlayerTestVoxelRtState()
+	ceiling := core.NewVoxelObject()
+	ceiling.XBrickMap = volume.NewXBrickMap()
+	ceiling.XBrickMap.SetVoxel(0, 1, 0, 1)
+	ceiling.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	ceiling.Transform.Dirty = true
+	ceiling.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(ceiling)
+	ctrl.CrouchRequested = false
+	groundedPlayerUpdateStance(state, basePos, ctrl, nil)
+	if !ctrl.Crouching || ctrl.Height != 1.0 {
+		t.Fatalf("expected ceiling to keep player crouched, got %+v", *ctrl)
+	}
+
+	groundedPlayerUpdateStance(nil, basePos, ctrl, nil)
+	if ctrl.Crouching || ctrl.Height != 1.8 || ctrl.EyeHeight != 1.7 {
+		t.Fatalf("expected clear space to restore standing dimensions, got %+v", *ctrl)
+	}
+}
+
+func TestGroundedPlayerSwimsInsideWaterBody(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	player := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&LocalTransformComponent{Position: mgl32.Vec3{}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&CameraComponent{Position: mgl32.Vec3{0, 1.7, 0}, LookAt: mgl32.Vec3{0, 1.7, -1}, Up: mgl32.Vec3{0, 1, 0}},
+		&GroundedPlayerControllerComponent{Height: 1.8, EyeHeight: 1.7, Radius: 0.35, Speed: 5.5, SwimSpeed: 2, MoveInput: mgl32.Vec2{0, 1}, SwimUpRequested: true, Grounded: true},
+	)
+	water := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 1, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&WaterSurfaceComponent{HalfExtents: [2]float32{8, 8}, Depth: 4},
+	)
+	app.FlushCommands()
+
+	groundedPlayerControlSystem(cmd, &Time{Dt: 1}, nil, nil)
+	ctrl := cmd.GetComponent(player, reflect.TypeOf(GroundedPlayerControllerComponent{})).(*GroundedPlayerControllerComponent)
+	tr := cmd.GetComponent(player, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	cam := cmd.GetComponent(player, reflect.TypeOf(CameraComponent{})).(*CameraComponent)
+	if !ctrl.Swimming || ctrl.WaterEntity != water || ctrl.Grounded {
+		t.Fatalf("expected active swim state, got %+v", *ctrl)
+	}
+	if tr.Position != (mgl32.Vec3{0, 2, -2}) || cam.Position != (mgl32.Vec3{0, 3.7, -2}) {
+		t.Fatalf("expected swim movement and camera height, transform=%+v camera=%+v", tr.Position, cam.Position)
+	}
+}
+
 func TestGroundedPlayerClimbsOverlappingLadderVolume(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

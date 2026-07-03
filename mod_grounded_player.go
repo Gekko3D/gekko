@@ -11,8 +11,12 @@ import (
 type GroundedPlayerControllerConfig struct {
 	Height           float32
 	EyeHeight        float32
+	CrouchHeight     float32
+	CrouchEyeHeight  float32
+	CrouchSpeedScale float32
 	Radius           float32
 	Speed            float32
+	SwimSpeed        float32
 	SprintMultiplier float32
 	Sensitivity      float32
 	JumpSpeed        float32
@@ -30,20 +34,33 @@ type GroundedPlayerControllerModule struct {
 }
 
 type GroundedPlayerControllerComponent struct {
-	Height           float32
-	EyeHeight        float32
-	Radius           float32
-	Speed            float32
-	SprintMultiplier float32
-	Sensitivity      float32
-	JumpSpeed        float32
-	Gravity          float32
-	StepHeight       float32
-	GroundProbe      float32
+	// Height and EyeHeight are active capsule/camera dimensions. StandingHeight
+	// and StandingEyeHeight preserve the configured values while crouched.
+	Height            float32
+	EyeHeight         float32
+	StandingHeight    float32
+	StandingEyeHeight float32
+	CrouchHeight      float32
+	CrouchEyeHeight   float32
+	CrouchSpeedScale  float32
+	Radius            float32
+	Speed             float32
+	SwimSpeed         float32
+	SprintMultiplier  float32
+	Sensitivity       float32
+	JumpSpeed         float32
+	Gravity           float32
+	StepHeight        float32
+	GroundProbe       float32
 
 	MoveInput        mgl32.Vec2
 	LookInput        mgl32.Vec2
 	JumpQueued       bool
+	CrouchRequested  bool
+	SwimUpRequested  bool
+	Crouching        bool
+	Swimming         bool
+	WaterEntity      EntityId
 	VerticalVelocity float32
 	Grounded         bool
 	NeedsGroundSnap  bool
@@ -59,8 +76,12 @@ func DefaultGroundedPlayerControllerConfig() GroundedPlayerControllerConfig {
 	return GroundedPlayerControllerConfig{
 		Height:           1.8,
 		EyeHeight:        1.7,
+		CrouchHeight:     1.0,
+		CrouchEyeHeight:  0.9,
+		CrouchSpeedScale: 0.5,
 		Radius:           0.35,
 		Speed:            5.5,
+		SwimSpeed:        3.5,
 		SprintMultiplier: 1.6,
 		Sensitivity:      0.1,
 		JumpSpeed:        5.5,
@@ -78,11 +99,23 @@ func effectiveGroundedPlayerControllerConfig(cfg GroundedPlayerControllerConfig)
 	if cfg.EyeHeight != 0 {
 		defaults.EyeHeight = cfg.EyeHeight
 	}
+	if cfg.CrouchHeight != 0 {
+		defaults.CrouchHeight = cfg.CrouchHeight
+	}
+	if cfg.CrouchEyeHeight != 0 {
+		defaults.CrouchEyeHeight = cfg.CrouchEyeHeight
+	}
+	if cfg.CrouchSpeedScale != 0 {
+		defaults.CrouchSpeedScale = cfg.CrouchSpeedScale
+	}
 	if cfg.Radius != 0 {
 		defaults.Radius = cfg.Radius
 	}
 	if cfg.Speed != 0 {
 		defaults.Speed = cfg.Speed
+	}
+	if cfg.SwimSpeed != 0 {
+		defaults.SwimSpeed = cfg.SwimSpeed
 	}
 	if cfg.SprintMultiplier != 0 {
 		defaults.SprintMultiplier = cfg.SprintMultiplier
@@ -131,18 +164,24 @@ func SpawnGroundedPlayerAtMarkerWithConfig(cmd *Commands, marker content.LevelMa
 	forward := forwardFromYawPitch(0, 0)
 	cfg = effectiveGroundedPlayerControllerConfig(cfg)
 	ctrl := GroundedPlayerControllerComponent{
-		Height:           cfg.Height,
-		EyeHeight:        cfg.EyeHeight,
-		Radius:           cfg.Radius,
-		Speed:            cfg.Speed,
-		SprintMultiplier: cfg.SprintMultiplier,
-		Sensitivity:      cfg.Sensitivity,
-		JumpSpeed:        cfg.JumpSpeed,
-		Gravity:          cfg.Gravity,
-		StepHeight:       cfg.StepHeight,
-		GroundProbe:      cfg.GroundProbe,
-		Grounded:         true,
-		NeedsGroundSnap:  true,
+		Height:            cfg.Height,
+		EyeHeight:         cfg.EyeHeight,
+		StandingHeight:    cfg.Height,
+		StandingEyeHeight: cfg.EyeHeight,
+		CrouchHeight:      cfg.CrouchHeight,
+		CrouchEyeHeight:   cfg.CrouchEyeHeight,
+		CrouchSpeedScale:  cfg.CrouchSpeedScale,
+		Radius:            cfg.Radius,
+		Speed:             cfg.Speed,
+		SwimSpeed:         cfg.SwimSpeed,
+		SprintMultiplier:  cfg.SprintMultiplier,
+		Sensitivity:       cfg.Sensitivity,
+		JumpSpeed:         cfg.JumpSpeed,
+		Gravity:           cfg.Gravity,
+		StepHeight:        cfg.StepHeight,
+		GroundProbe:       cfg.GroundProbe,
+		Grounded:          true,
+		NeedsGroundSnap:   true,
 	}
 	local := LocalTransformComponent{
 		Position: transform.Position,
@@ -206,6 +245,8 @@ func groundedPlayerInputSystem(input *Input, cmd *Commands) {
 			ctrl.LookInput[1] = float32(input.MouseDeltaY)
 		}
 		ctrl.JumpQueued = input.JustPressed[KeySpace]
+		ctrl.CrouchRequested = input.Pressed[KeyControl]
+		ctrl.SwimUpRequested = input.Pressed[KeySpace]
 		return true
 	})
 }
@@ -222,15 +263,37 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 		applyGroundedLook(cam, ctrl)
 		basePos := groundedPlayerBasePosition(cmd, eid, cam, ctrl)
 		collisionFilter := groundedPlayerCollisionRaycastFilter(cmd, ctrl)
+		groundedPlayerUpdateStance(voxRt, basePos, ctrl, collisionFilter)
+		waterEntity, _, swimming := findGroundedPlayerWaterBody(cmd, basePos, ctrl)
+		ctrl.Swimming = swimming
+		if swimming {
+			ctrl.WaterEntity = waterEntity
+		} else {
+			ctrl.WaterEntity = 0
+		}
 
 		flatForward := forwardFromYawPitch(cam.Yaw, 0)
 		right := flatForward.Cross(mgl32.Vec3{0, 1, 0}).Normalize()
 		speed := defaulted(ctrl.Speed, 5.5)
-		if input != nil && input.Pressed[KeyShift] {
+		if ctrl.Swimming {
+			speed = defaulted(ctrl.SwimSpeed, 3.5)
+		} else if ctrl.Crouching {
+			speed *= defaulted(ctrl.CrouchSpeedScale, 0.5)
+		} else if input != nil && input.Pressed[KeyShift] {
 			speed *= defaulted(ctrl.SprintMultiplier, 1.6)
 		}
 
-		if ladderEntity, ladder, ok := findGroundedPlayerLadderVolume(cmd, basePos, ctrl); ok {
+		if ctrl.Swimming {
+			ctrl.OnLadder = false
+			ctrl.LadderEntity = 0
+			ctrl.LadderClimbSpeed = 0
+			move := right.Mul(ctrl.MoveInput[0]).Add(flatForward.Mul(ctrl.MoveInput[1]))
+			if move.Len() > 0 {
+				move = move.Normalize()
+			}
+			basePos = tryGroundedHorizontalMove(voxRt, basePos, move.Mul(speed*dt), ctrl, collisionFilter)
+			resolveGroundedSwimMovement(voxRt, &basePos, ctrl, dt, collisionFilter)
+		} else if ladderEntity, ladder, ok := findGroundedPlayerLadderVolume(cmd, basePos, ctrl); ok {
 			ctrl.OnLadder = true
 			ctrl.LadderEntity = ladderEntity
 			ctrl.LadderClimbSpeed = ladder.NormalizedClimbSpeed()
@@ -427,6 +490,72 @@ func findGroundedPlayerLadderVolume(cmd *Commands, basePos mgl32.Vec3, ctrl *Gro
 	return foundEntity, foundLadder, foundEntity != 0
 }
 
+func groundedPlayerUpdateStance(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) {
+	if ctrl == nil {
+		return
+	}
+	standingHeight := defaulted(ctrl.StandingHeight, ctrl.Height)
+	standingEyeHeight := defaulted(ctrl.StandingEyeHeight, ctrl.EyeHeight)
+	if ctrl.StandingHeight == 0 {
+		ctrl.StandingHeight = standingHeight
+	}
+	if ctrl.StandingEyeHeight == 0 {
+		ctrl.StandingEyeHeight = standingEyeHeight
+	}
+	if ctrl.CrouchRequested {
+		ctrl.Crouching = true
+		ctrl.Height = minf(defaulted(ctrl.CrouchHeight, standingHeight*0.5), standingHeight)
+		ctrl.EyeHeight = minf(defaulted(ctrl.CrouchEyeHeight, standingEyeHeight*0.5), standingEyeHeight)
+		return
+	}
+	if !ctrl.Crouching || !groundedPlayerCanStand(voxRt, basePos, ctrl, acceptEntity) {
+		return
+	}
+	ctrl.Crouching = false
+	ctrl.Height = standingHeight
+	ctrl.EyeHeight = standingEyeHeight
+}
+
+func groundedPlayerCanStand(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) bool {
+	if voxRt == nil || ctrl == nil {
+		return true
+	}
+	standingHeight := defaulted(ctrl.StandingHeight, ctrl.Height)
+	currentHeight := defaulted(ctrl.Height, standingHeight)
+	clearanceHeight := standingHeight - currentHeight
+	if clearanceHeight <= 1e-5 {
+		return true
+	}
+	for _, offset := range groundedVerticalCollisionOffsets(defaulted(ctrl.Radius, 0.35)) {
+		origin := basePos.Add(offset).Add(mgl32.Vec3{0, currentHeight, 0})
+		if hit := voxRt.RaycastFiltered(origin, mgl32.Vec3{0, 1, 0}, clearanceHeight+0.03, acceptEntity); hit.Hit && hit.T <= clearanceHeight+0.03 {
+			return false
+		}
+	}
+	return true
+}
+
+func findGroundedPlayerWaterBody(cmd *Commands, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent) (EntityId, waterInteractionBody, bool) {
+	if cmd == nil || ctrl == nil {
+		return 0, waterInteractionBody{}, false
+	}
+	radius := defaulted(ctrl.Radius, 0.35)
+	height := defaulted(ctrl.Height, 1.8)
+	for _, water := range collectWaterInteractionBodies(cmd) {
+		if basePos.X()+radius < water.Center.X()-water.HalfExtents[0] ||
+			basePos.X()-radius > water.Center.X()+water.HalfExtents[0] ||
+			basePos.Z()+radius < water.Center.Z()-water.HalfExtents[1] ||
+			basePos.Z()-radius > water.Center.Z()+water.HalfExtents[1] {
+			continue
+		}
+		if water.SurfaceY < basePos.Y()+height*0.5 || water.BottomY > basePos.Y()+height {
+			continue
+		}
+		return water.Entity, water, true
+	}
+	return 0, waterInteractionBody{}, false
+}
+
 func resolveGroundedLadderMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
 	if basePos == nil || ctrl == nil {
 		return
@@ -446,6 +575,24 @@ func resolveGroundedLadderMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctr
 		return
 	}
 	*basePos, _ = tryGroundedVerticalMove(voxRt, *basePos, ctrl.MoveInput[1]*defaulted(ctrl.LadderClimbSpeed, DefaultLadderClimbSpeed)*dt, ctrl, acceptEntity)
+	ctrl.VerticalVelocity = 0
+	ctrl.Grounded = false
+	ctrl.NeedsGroundSnap = false
+	ctrl.JumpQueued = false
+}
+
+func resolveGroundedSwimMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
+	if basePos == nil || ctrl == nil {
+		return
+	}
+	vertical := float32(0)
+	if ctrl.SwimUpRequested {
+		vertical += defaulted(ctrl.SwimSpeed, 3.5)
+	}
+	if ctrl.CrouchRequested {
+		vertical -= defaulted(ctrl.SwimSpeed, 3.5)
+	}
+	*basePos, _ = tryGroundedVerticalMove(voxRt, *basePos, vertical*dt, ctrl, acceptEntity)
 	ctrl.VerticalVelocity = 0
 	ctrl.Grounded = false
 	ctrl.NeedsGroundSnap = false

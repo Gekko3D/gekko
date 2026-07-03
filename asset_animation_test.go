@@ -97,6 +97,48 @@ func TestAuthoredAssetAnimationKeepsBindChannelsWhenTrackOmitsThem(t *testing.T)
 	}
 }
 
+func TestAuthoredAssetAnimationLayersPreserveMaskedStanceAndLockedRoot(t *testing.T) {
+	bind := map[string]LocalTransformComponent{
+		"root":  {Position: mgl32.Vec3{1, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		"upper": {Position: mgl32.Vec3{2, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		"lower": {Position: mgl32.Vec3{3, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+	}
+	targets := map[string]*LocalTransformComponent{}
+	for id, local := range bind {
+		copy := local
+		targets[id] = &copy
+	}
+	clip := func(id string, tracks ...content.AssetAnimationTrackDef) content.AssetAnimationClipDef {
+		return content.AssetAnimationClipDef{ID: id, Duration: 1, Loop: true, Tracks: tracks}
+	}
+	track := func(id string, x float32) content.AssetAnimationTrackDef {
+		return content.AssetAnimationTrackDef{TargetID: id, PositionKeys: []content.AssetVec3KeyDef{{Time: 0, Value: content.Vec3{x, 0, 0}}}}
+	}
+	set := &AuthoredAssetAnimationSetComponent{BindTransforms: bind, Clips: map[string]content.AssetAnimationClipDef{
+		"stance": clip("stance", track("root", 5), track("upper", 20), track("lower", 30)),
+		"gait":   clip("gait", track("root", 9), track("upper", 99), track("lower", 40)),
+		"kick":   clip("kick", track("lower", 2)),
+	}}
+	player := &AnimationPlayerComponent{
+		ClipID:           "stance",
+		RootMotionPolicy: AnimationRootMotionLocked,
+		Layers: []AnimationLayer{
+			{ClipID: "gait", Weight: 1, Mode: AnimationLayerOverride, BoneMask: []string{"root", "lower"}, RootMotionPolicy: AnimationRootMotionLocked},
+			{ClipID: "kick", Weight: 1, Mode: AnimationLayerAdditive, BoneMask: []string{"lower"}, RootMotionPolicy: AnimationRootMotionLocked},
+		},
+	}
+	applyAnimationLayers(player, set, targets, map[string]struct{}{"root": {}}, 0)
+	if got := targets["root"].Position.X(); got != 1 {
+		t.Fatalf("locked root position = %f, want bind 1", got)
+	}
+	if got := targets["upper"].Position.X(); got != 20 {
+		t.Fatalf("upper stance position = %f, want base 20", got)
+	}
+	if got := targets["lower"].Position.X(); got != 39 {
+		t.Fatalf("ordered override/additive lower position = %f, want 39", got)
+	}
+}
+
 func TestNPCAnimationSystemSelectsSemanticClip(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

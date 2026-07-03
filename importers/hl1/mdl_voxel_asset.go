@@ -364,7 +364,7 @@ func mdlBindPoseAnimationClip(seq MDLSequenceInfo, targets []mdlAnimationBindTar
 		Duration: duration,
 		Loop:     true,
 		Tracks:   tracks,
-		Tags:     []string{"source:hl1", "source_asset:mdl", "generated:bind_pose_clip"},
+		Tags:     mdlAnimationTags(seq, "generated:bind_pose_clip"),
 	}, true
 }
 
@@ -419,8 +419,12 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 		Duration: duration,
 		Loop:     true,
 		Tracks:   tracks,
-		Tags:     []string{"source:hl1", "source_asset:mdl", "generated:sequence_clip"},
+		Tags:     mdlAnimationTags(seq, "generated:sequence_clip"),
 	}, len(tracks) > 0
+}
+
+func mdlAnimationTags(seq MDLSequenceInfo, kind string) []string {
+	return []string{"source:hl1", "source_asset:mdl", kind, fmt.Sprintf("source:hl1_activity:%d", seq.Activity)}
 }
 
 // mdlLocalAnimationTransform converts source global frames into local part

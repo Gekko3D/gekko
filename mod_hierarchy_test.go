@@ -184,3 +184,23 @@ func TestTransformHierarchyIgnoresParentRenderPivot(t *testing.T) {
 		t.Fatalf("child world position = %v, expected %v", childWorld.Position, expected)
 	}
 }
+
+func TestTransformHierarchyResolvesDeepChainInOnePass(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	parent := cmd.AddEntity(&TransformComponent{Position: mgl32.Vec3{1, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	for range 13 {
+		parent = cmd.AddEntity(
+			&Parent{Entity: parent},
+			&LocalTransformComponent{Position: mgl32.Vec3{1, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+			&TransformComponent{},
+		)
+	}
+	app.FlushCommands()
+	TransformHierarchySystem(cmd)
+
+	world := cmd.GetComponent(parent, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if world.Position != (mgl32.Vec3{14, 0, 0}) {
+		t.Fatalf("deep child world position = %v, want [14 0 0]", world.Position)
+	}
+}

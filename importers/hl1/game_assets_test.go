@@ -367,6 +367,40 @@ func TestHL1PlayerDirectionalLocomotionUsesOnlyVerifiedSequences(t *testing.T) {
 	}
 }
 
+func TestHL1PlayerCrouchGaitUsesActivitiesAndAuthoredBoneMask(t *testing.T) {
+	asset := &content.AssetDef{
+		Skeleton: &content.AssetSkeletonDef{Bones: []content.AssetBoneDef{
+			{ID: "pelvis", Name: "Bip01 Pelvis"}, {ID: "left_leg", Name: "Bip01 L Leg"}, {ID: "left_calf", Name: "Bip01 L Leg1"}, {ID: "left_foot", Name: "Bip01 L Foot"},
+			{ID: "right_leg", Name: "Bip01 R Leg"}, {ID: "right_calf", Name: "Bip01 R Leg1"}, {ID: "right_foot", Name: "Bip01 R Foot"}, {ID: "spine", Name: "Bip01 Spine"},
+		}},
+		AnimationClips: []content.AssetAnimationClipDef{
+			{ID: "crouch", Name: "crawl", Tags: []string{"source:hl1_activity:17"}},
+			{ID: "crouch_idle", Name: "crouch_idle", Tags: []string{"source:hl1_activity:18"}},
+			{ID: "crouch_aim", Name: "crouch_aim_onehanded"},
+		},
+	}
+	gait := hl1PlayerCrouchGait(asset)
+	if gait.Status != GameAssetPlayerCrouchGaitSupported || gait.CrouchClipID != "crouch" || gait.CrouchIdleClipID != "crouch_idle" || gait.Locomotion != (GameAssetPlayerCrouchLocomotion{DefaultClipID: "crouch", Fallback: GameAssetPlayerLocomotionFallbackFaceTravel, BackwardFallback: GameAssetPlayerBackwardFallbackReverseForward}) || len(gait.BaseStances) != 1 || gait.BaseStances[0] != (GameAssetPlayerStanceClip{Stance: "onehanded", ClipID: "crouch_aim"}) || len(gait.BoneMask) != 7 {
+		t.Fatalf("expected verified crouch gait capability, got %+v", gait)
+	}
+	if unsupported := hl1PlayerCrouchGait(&content.AssetDef{}); unsupported.Status != GameAssetPlayerCrouchGaitUnsupported || unsupported.Diagnostic == "" {
+		t.Fatalf("expected explicit unsupported diagnostic, got %+v", unsupported)
+	}
+}
+
+func TestParseMDLSequenceActivity(t *testing.T) {
+	data := syntheticMDLWithBoneAndSequence()
+	sequenceOffset := int(readInt32(data, 168))
+	writeTestInt32(data, sequenceOffset+40, HL1ActivityCrouch)
+	info, err := ParseMDLInfo(data)
+	if err != nil {
+		t.Fatalf("ParseMDLInfo failed: %v", err)
+	}
+	if len(info.Sequences) != 1 || info.Sequences[0].Activity != HL1ActivityCrouch {
+		t.Fatalf("expected preserved crouch activity, got %+v", info.Sequences)
+	}
+}
+
 func TestMDLAnimationTracksUseBoneLocalSpace(t *testing.T) {
 	bones := []MDLBoneInfo{{Name: "root", Parent: -1}, {Name: "child", Parent: 0}}
 	bind := []mdlBoneFrameTransform{{Position: importcommon.Vec3{}, Rotation: mgl32.QuatIdent()}, {Position: importcommon.Vec3{X: 10}, Rotation: mgl32.QuatIdent()}}

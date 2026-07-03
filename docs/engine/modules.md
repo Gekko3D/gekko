@@ -128,12 +128,16 @@ These are not separate `Module` implementations, but they are major integration 
 - Owns:
   - semantic NPC animation state selection for attached authored asset visuals
   - authored asset clip playback for spawned `.gkasset` hierarchies
-  - local transform sampling for position, rotation, and scale keys
+  - bind-pose base-clip sampling plus ordered masked override/additive layers
+    for local position, rotation, and scale keys
 - Important:
   - NPC animation states such as `idle`, `walk`, `run`, `attack`, `pain`, and
     `death` resolve to the best available imported clip by stable name/tag
     matching, with fallback to the authored default clip
   - animation tracks are local-space authored transforms
+  - layers use authored item-ID masks and can lock root position keys for
+    controller-driven actors; they do not provide an animation graph or
+    runtime retargeting
   - omitted channels keep the asset's bind transform
   - `HierarchyModule` resolves the resulting local transforms to world
     transforms after animation has run
@@ -211,7 +215,9 @@ For their data model, see:
   - `groundedPlayerInputSystem`
   - `groundedPlayerControlSystem`
 - Owns:
-  - grounded first-person controller behavior
+  - grounded first-person controller behavior, including held `Ctrl` crouch
+    (clearance-checked standing recovery) and water-volume swimming (`Space`
+    rises, `Ctrl` descends)
 - Depends on:
   - `*Input`
   - `*Time`

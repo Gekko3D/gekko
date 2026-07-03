@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gekko3d/gekko/content"
@@ -48,7 +49,50 @@ type GameAssetPlayerCatalogEntry struct {
 	UpperBodyMarkerID     string                               `json:"upper_body_marker_id"`
 	AimMarkerIDs          []string                             `json:"aim_marker_ids,omitempty"`
 	ClipIDs               []string                             `json:"clip_ids,omitempty"`
+	SequenceActivities    []GameAssetPlayerSequenceActivity    `json:"sequence_activities,omitempty"`
+	CrouchGait            GameAssetPlayerCrouchGait            `json:"crouch_gait"`
 	DirectionalLocomotion GameAssetPlayerDirectionalLocomotion `json:"directional_locomotion"`
+}
+
+// GameAssetPlayerSequenceActivity preserves GoldSrc activity values from the
+// sequence descriptor. ActionGame consumes only cataloged values.
+type GameAssetPlayerSequenceActivity struct {
+	ClipID   string `json:"clip_id"`
+	Activity int    `json:"activity"`
+}
+
+const (
+	GameAssetPlayerCrouchGaitSupported   = "supported"
+	GameAssetPlayerCrouchGaitUnsupported = "unsupported"
+	HL1ActivityCrouch                    = 17
+	HL1ActivityCrouchIdle                = 18
+)
+
+// GameAssetPlayerCrouchGait is authored import output. BoneMask uses generated
+// asset item IDs, so consumers never derive a mask from source bone names.
+type GameAssetPlayerCrouchGait struct {
+	Status           string                          `json:"status"`
+	CrouchClipID     string                          `json:"crouch_clip_id,omitempty"`
+	CrouchIdleClipID string                          `json:"crouch_idle_clip_id,omitempty"`
+	Locomotion       GameAssetPlayerCrouchLocomotion `json:"locomotion,omitempty"`
+	BaseStances      []GameAssetPlayerStanceClip     `json:"base_stances,omitempty"`
+	BoneMask         []string                        `json:"bone_mask,omitempty"`
+	Diagnostic       string                          `json:"diagnostic,omitempty"`
+}
+
+type GameAssetPlayerStanceClip struct {
+	Stance string `json:"stance"`
+	ClipID string `json:"clip_id"`
+}
+
+// GameAssetPlayerCrouchLocomotion is a source-verified directional contract.
+// DefaultClipID plus face_travel is an explicit presentation fallback when a
+// source only supplies generic ACT_CROUCH gait, as vanilla Crossfire does.
+type GameAssetPlayerCrouchLocomotion struct {
+	Directional      GameAssetPlayerDirectionalClipSet `json:"directional,omitempty"`
+	DefaultClipID    string                            `json:"default_clip_id,omitempty"`
+	Fallback         string                            `json:"fallback"`
+	BackwardFallback string                            `json:"backward_fallback,omitempty"`
 }
 
 const (
@@ -102,6 +146,8 @@ type GameAssetManifestEntry struct {
 	UpperBodyMarkerID                string                               `json:"upper_body_marker_id,omitempty"`
 	AimMarkerIDs                     []string                             `json:"aim_marker_ids,omitempty"`
 	ClipIDs                          []string                             `json:"clip_ids,omitempty"`
+	SequenceActivities               []GameAssetPlayerSequenceActivity    `json:"sequence_activities,omitempty"`
+	CrouchGait                       GameAssetPlayerCrouchGait            `json:"crouch_gait,omitempty"`
 	DirectionalLocomotion            GameAssetPlayerDirectionalLocomotion `json:"directional_locomotion,omitempty"`
 	SizeBytes                        int64                                `json:"size_bytes,omitempty"`
 	SHA256                           string                               `json:"sha256,omitempty"`
@@ -508,6 +554,11 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					entry.RightHandMarkerID = "right_hand"
 					entry.UpperBodyMarkerID = "upper_body"
 					entry.AimMarkerIDs = append([]string(nil), hl1PlayerAimMarkerIDs...)
+					entry.SequenceActivities = hl1PlayerSequenceActivities(asset.AnimationClips)
+					entry.CrouchGait = hl1PlayerCrouchGait(asset)
+					if entry.CrouchGait.Status == GameAssetPlayerCrouchGaitUnsupported {
+						c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_crouch_gait_unsupported", Subject: entry.CatalogID, Message: entry.CrouchGait.Diagnostic})
+					}
 					entry.DirectionalLocomotion = hl1PlayerDirectionalLocomotion(asset.AnimationClips)
 				}
 			}
@@ -702,6 +753,118 @@ func hl1PlayerDirectionalLocomotion(clips []content.AssetAnimationClipDef) GameA
 	return locomotion
 }
 
+func hl1PlayerSequenceActivities(clips []content.AssetAnimationClipDef) []GameAssetPlayerSequenceActivity {
+	activities := make([]GameAssetPlayerSequenceActivity, 0, len(clips))
+	for _, clip := range clips {
+		for _, tag := range clip.Tags {
+			const prefix = "source:hl1_activity:"
+			if !strings.HasPrefix(tag, prefix) {
+				continue
+			}
+			activity, err := strconv.Atoi(strings.TrimPrefix(tag, prefix))
+			if err == nil {
+				activities = append(activities, GameAssetPlayerSequenceActivity{ClipID: clip.ID, Activity: activity})
+			}
+			break
+		}
+	}
+	sort.Slice(activities, func(i, j int) bool { return activities[i].ClipID < activities[j].ClipID })
+	return activities
+}
+
+func hl1PlayerCrouchGait(asset *content.AssetDef) GameAssetPlayerCrouchGait {
+	gait := GameAssetPlayerCrouchGait{Status: GameAssetPlayerCrouchGaitUnsupported}
+	if asset == nil {
+		gait.Diagnostic = "generated player asset is missing"
+		return gait
+	}
+	activities := hl1PlayerSequenceActivities(asset.AnimationClips)
+	for _, activity := range activities {
+		switch activity.Activity {
+		case HL1ActivityCrouch:
+			if gait.CrouchClipID == "" {
+				gait.CrouchClipID = activity.ClipID
+			}
+		case HL1ActivityCrouchIdle:
+			if gait.CrouchIdleClipID == "" {
+				gait.CrouchIdleClipID = activity.ClipID
+			}
+		}
+	}
+	for _, clip := range asset.AnimationClips {
+		if stance := hl1PlayerCrouchAimStance(clip.Name); stance != "" {
+			gait.BaseStances = append(gait.BaseStances, GameAssetPlayerStanceClip{Stance: stance, ClipID: clip.ID})
+		}
+	}
+	if gait.CrouchClipID != "" {
+		gait.Locomotion = GameAssetPlayerCrouchLocomotion{
+			DefaultClipID:    gait.CrouchClipID,
+			Fallback:         GameAssetPlayerLocomotionFallbackFaceTravel,
+			BackwardFallback: GameAssetPlayerBackwardFallbackReverseForward,
+		}
+	}
+	sort.Slice(gait.BaseStances, func(i, j int) bool { return gait.BaseStances[i].Stance < gait.BaseStances[j].Stance })
+	gait.BoneMask = hl1PlayerLowerBodyBoneMask(asset.Skeleton)
+	if gait.CrouchClipID == "" || gait.CrouchIdleClipID == "" || gait.Locomotion.DefaultClipID == "" || gait.Locomotion.Fallback == "" || gait.Locomotion.BackwardFallback == "" || len(gait.BaseStances) == 0 || len(gait.BoneMask) == 0 {
+		gait.Diagnostic = "requires ACT_CROUCH, ACT_CROUCHIDLE, explicit crouch locomotion and backward fallbacks, a verified crouch_aim stance, and the standard lower-body bone mask"
+		return gait
+	}
+	gait.Status = GameAssetPlayerCrouchGaitSupported
+	return gait
+}
+
+func hl1PlayerCrouchAimStance(name string) string {
+	// GoldSrc multiplayer's documented stance names; this importer allowlist is
+	// deliberately narrower than a runtime fuzzy-name match.
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "crouch_aim_crowbar":
+		return "crowbar"
+	case "crouch_aim_trip":
+		return "trip"
+	case "crouch_aim_onehanded":
+		return "onehanded"
+	case "crouch_aim_python":
+		return "python"
+	case "crouch_aim_shotgun":
+		return "shotgun"
+	case "crouch_aim_gauss":
+		return "gauss"
+	case "crouch_aim_mp5":
+		return "mp5"
+	case "crouch_aim_rpg":
+		return "rpg"
+	case "crouch_aim_egon":
+		return "egon"
+	case "crouch_aim_squeak":
+		return "squeak"
+	case "crouch_aim_hive":
+		return "hive"
+	case "crouch_aim_bow":
+		return "bow"
+	default:
+		return ""
+	}
+}
+
+func hl1PlayerLowerBodyBoneMask(skeleton *content.AssetSkeletonDef) []string {
+	if skeleton == nil {
+		return nil
+	}
+	known := map[string]struct{}{
+		"bip01pelvis": {}, "bip01lleg": {}, "bip01lleg1": {}, "bip01lfoot": {},
+		"bip01rleg": {}, "bip01rleg1": {}, "bip01rfoot": {},
+	}
+	mask := make([]string, 0, len(known))
+	for _, bone := range skeleton.Bones {
+		name := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", ""))
+		if _, ok := known[name]; ok {
+			mask = append(mask, bone.ID)
+		}
+	}
+	sort.Strings(mask)
+	return mask
+}
+
 func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
 	catalog := &GameAssetCatalog{}
 	for _, entry := range entries {
@@ -724,6 +887,8 @@ func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
 				UpperBodyMarkerID:     entry.UpperBodyMarkerID,
 				AimMarkerIDs:          append([]string(nil), entry.AimMarkerIDs...),
 				ClipIDs:               append([]string(nil), entry.ClipIDs...),
+				SequenceActivities:    append([]GameAssetPlayerSequenceActivity(nil), entry.SequenceActivities...),
+				CrouchGait:            entry.CrouchGait,
 				DirectionalLocomotion: entry.DirectionalLocomotion,
 			})
 		case "weapon_world":

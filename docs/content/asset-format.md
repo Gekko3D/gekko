@@ -65,6 +65,13 @@ directly.
 - omitted channels keep the target's bind transform from the spawned asset.
 - key values are local to the authored parent, not world-space values.
 
+Runtime playback starts from bind pose, applies one base clip, then applies
+ordered optional `AnimationLayer` overlays. A layer declares its clip, time,
+speed, weight, override or additive mode, authored item-ID mask, and root-motion
+policy. Masks use generated/authored item IDs; consumers must not derive them
+from display names at runtime. `locked` root motion ignores position keys on
+root targets, leaving controller movement authoritative.
+
 The current engine animation path is rigid-part animation. It does not skin or
 deform voxel geometry. To animate imported character models, split the source
 model into rigid voxel parts attached to transform-only `group` pivots, then

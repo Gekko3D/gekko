@@ -15,6 +15,14 @@ func (HierarchyModule) Install(app *App, cmd *Commands) {
 }
 
 func TransformHierarchySystem(cmd *Commands) {
+	if cmd == nil {
+		return
+	}
+	worlds := make(map[EntityId]*TransformComponent)
+	MakeQuery1[TransformComponent](cmd).Map(func(eid EntityId, world *TransformComponent) bool {
+		worlds[eid] = world
+		return true
+	})
 	// Root objects: have TransformComponent but NO Parent
 	MakeQuery2[LocalTransformComponent, TransformComponent](cmd).Without(Parent{}).Map(func(eid EntityId, local *LocalTransformComponent, tr *TransformComponent) bool {
 		// Roots use world transform as authoritative source
@@ -23,58 +31,54 @@ func TransformHierarchySystem(cmd *Commands) {
 		local.Scale = tr.Scale
 		return true
 	})
-	// Looking at ca_ecs.go and ecs_query.go, MakeQuery doesn't seem to have "Without".
-	// The manual check inside Map is correct.
-
-	// Children: have Parent, LocalTransformComponent, and TransformComponent
-	// We iterate multiple passes to handle deep hierarchies in a simple way.
-PassLoop:
-	for pass := 0; pass < 8; pass++ {
-		changed := false
-		MakeQuery3[LocalTransformComponent, Parent, TransformComponent](cmd).Map(func(eid EntityId, local *LocalTransformComponent, parent *Parent, world *TransformComponent) bool {
-			// Get parent's world transform
-			allComps := cmd.GetAllComponents(parent.Entity)
-			var parentWorld *TransformComponent
-			for _, c := range allComps {
-				if pw, ok := c.(*TransformComponent); ok {
-					parentWorld = pw
-				}
-				if pw, ok := c.(TransformComponent); ok {
-					tmp := pw
-					parentWorld = &tmp
-				}
-			}
-
-			if parentWorld != nil {
-				scaledLocalPos := mgl32.Vec3{
-					local.Position.X() * parentWorld.Scale.X(),
-					local.Position.Y() * parentWorld.Scale.Y(),
-					local.Position.Z() * parentWorld.Scale.Z(),
-				}
-
-				newPos := parentWorld.Position.Add(parentWorld.Rotation.Rotate(scaledLocalPos))
-
-				// WorldRot = ParentRot * LocalRot
-				newRot := parentWorld.Rotation.Mul(local.Rotation).Normalize()
-
-				// WorldScale = ParentScale * LocalScale
-				newScale := mgl32.Vec3{
-					parentWorld.Scale.X() * local.Scale.X(),
-					parentWorld.Scale.Y() * local.Scale.Y(),
-					parentWorld.Scale.Z() * local.Scale.Z(),
-				}
-
-				if newPos != world.Position || newRot != world.Rotation || newScale != world.Scale {
-					world.Position = newPos
-					world.Rotation = newRot
-					world.Scale = newScale
-					changed = true
-				}
-			}
+	type childTransform struct {
+		local  *LocalTransformComponent
+		parent EntityId
+		world  *TransformComponent
+	}
+	children := map[EntityId]childTransform{}
+	MakeQuery3[LocalTransformComponent, Parent, TransformComponent](cmd).Map(func(eid EntityId, local *LocalTransformComponent, parent *Parent, world *TransformComponent) bool {
+		children[eid] = childTransform{local: local, parent: parent.Entity, world: world}
+		return true
+	})
+	resolved := map[EntityId]bool{}
+	resolving := map[EntityId]bool{}
+	var resolve func(EntityId) bool
+	resolve = func(eid EntityId) bool {
+		if resolved[eid] {
 			return true
-		})
-		if !changed {
-			break PassLoop
 		}
+		child, ok := children[eid]
+		if !ok || resolving[eid] {
+			return false
+		}
+		resolving[eid] = true
+		if _, isChild := children[child.parent]; isChild && !resolve(child.parent) {
+			delete(resolving, eid)
+			return false
+		}
+		parentWorld := worlds[child.parent]
+		if parentWorld == nil {
+			delete(resolving, eid)
+			return false
+		}
+		scaledLocalPos := mgl32.Vec3{
+			child.local.Position.X() * parentWorld.Scale.X(),
+			child.local.Position.Y() * parentWorld.Scale.Y(),
+			child.local.Position.Z() * parentWorld.Scale.Z(),
+		}
+		child.world.Position = parentWorld.Position.Add(parentWorld.Rotation.Rotate(scaledLocalPos))
+		child.world.Rotation = parentWorld.Rotation.Mul(child.local.Rotation).Normalize()
+		child.world.Scale = mgl32.Vec3{
+			parentWorld.Scale.X() * child.local.Scale.X(),
+			parentWorld.Scale.Y() * child.local.Scale.Y(),
+			parentWorld.Scale.Z() * child.local.Scale.Z(),
+		}
+		delete(resolving, eid)
+		resolved[eid] = true
+		return true
+	}
+	for eid := range children {
+		resolve(eid)
 	}
 }

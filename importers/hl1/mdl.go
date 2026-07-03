@@ -57,6 +57,7 @@ type MDLBoneInfo struct {
 
 type MDLSequenceInfo struct {
 	Name           string                 `json:"name"`
+	Activity       int                    `json:"activity"`
 	FPS            float32                `json:"fps,omitempty"`
 	FrameCount     int                    `json:"frame_count,omitempty"`
 	NumBlends      int                    `json:"num_blends,omitempty"`
@@ -438,6 +439,7 @@ func parseMDLSequences(data []byte, offset int, count int, bones []MDLBoneInfo) 
 		seq := MDLSequenceInfo{
 			Name:       cString(data[base : base+32]),
 			FPS:        readFloat32(data, base+32),
+			Activity:   int(readInt32(data, base+40)),
 			FrameCount: int(readInt32(data, base+56)),
 			NumBlends:  int(readInt32(data, base+120)),
 			AnimIndex:  int(readInt32(data, base+124)),

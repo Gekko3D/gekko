@@ -26,11 +26,41 @@ func (AnimationModule) Install(app *App, cmd *Commands) {
 }
 
 type AnimationPlayerComponent struct {
-	ClipID  string
-	Time    float32
-	Speed   float32
-	Playing bool
-	Loop    bool
+	ClipID           string
+	Time             float32
+	Speed            float32
+	Playing          bool
+	Loop             bool
+	RootMotionPolicy AnimationRootMotionPolicy
+	Layers           []AnimationLayer
+}
+
+// AnimationRootMotionPolicy controls position keys on authored root targets.
+// Controller-driven actors use Locked so animation never moves gameplay state.
+type AnimationRootMotionPolicy string
+
+const (
+	AnimationRootMotionApply  AnimationRootMotionPolicy = "apply"
+	AnimationRootMotionLocked AnimationRootMotionPolicy = "locked"
+)
+
+type AnimationLayerMode string
+
+const (
+	AnimationLayerOverride AnimationLayerMode = "override"
+	AnimationLayerAdditive AnimationLayerMode = "additive"
+)
+
+// AnimationLayer is an ordered local-transform overlay. BoneMask contains
+// authored item IDs, never source-bone names resolved at runtime.
+type AnimationLayer struct {
+	ClipID           string
+	Time             float32
+	Speed            float32
+	Weight           float32
+	Mode             AnimationLayerMode
+	BoneMask         []string
+	RootMotionPolicy AnimationRootMotionPolicy
 }
 
 type AuthoredAssetAnimationSetComponent struct {
@@ -61,7 +91,8 @@ func assetAnimationSystem(time *Time, cmd *Commands) {
 
 			advanceAnimationPlayer(player, clip, dt)
 			targets := animationTargetsForRoot(cmd, parentByEntity, root, rootRef.AssetID)
-			applyAnimationClip(clip, player.Time, animationSet.BindTransforms, targets)
+			rootTargets := animationRootTargetIDs(cmd, parentByEntity, root, rootRef.AssetID)
+			applyAnimationLayers(player, animationSet, targets, rootTargets, dt)
 			return true
 		})
 }
@@ -85,6 +116,17 @@ func animationTargetsForRoot(cmd *Commands, parentByEntity map[EntityId]EntityId
 		return true
 	})
 	return targets
+}
+
+func animationRootTargetIDs(cmd *Commands, parentByEntity map[EntityId]EntityId, root EntityId, assetID string) map[string]struct{} {
+	roots := map[string]struct{}{}
+	MakeQuery1[AuthoredAssetRefComponent](cmd).Map(func(eid EntityId, ref *AuthoredAssetRefComponent) bool {
+		if ref.AssetID == assetID && parentByEntity[eid] == root {
+			roots[ref.ItemID] = struct{}{}
+		}
+		return true
+	})
+	return roots
 }
 
 func animationEntityDescendsFrom(parentByEntity map[EntityId]EntityId, entity EntityId, root EntityId) bool {
@@ -348,7 +390,72 @@ func positiveMod(value float32, divisor float32) float32 {
 }
 
 func applyAnimationClip(clip content.AssetAnimationClipDef, sampleTime float32, bindTransforms map[string]LocalTransformComponent, targets map[string]*LocalTransformComponent) {
+	resetAnimationTargets(bindTransforms, targets)
+	applyAnimationClipLayer(clip, sampleTime, 1, AnimationLayerOverride, nil, AnimationRootMotionApply, nil, bindTransforms, targets)
+}
+
+func applyAnimationLayers(player *AnimationPlayerComponent, animationSet *AuthoredAssetAnimationSetComponent, targets map[string]*LocalTransformComponent, rootTargets map[string]struct{}, dt float32) {
+	if player == nil || animationSet == nil {
+		return
+	}
+	resetAnimationTargets(animationSet.BindTransforms, targets)
+	if base, ok := animationSet.Clips[player.ClipID]; ok {
+		applyAnimationClipLayer(base, player.Time, 1, AnimationLayerOverride, nil, player.RootMotionPolicy, rootTargets, animationSet.BindTransforms, targets)
+	}
+	for i := range player.Layers {
+		layer := &player.Layers[i]
+		clip, ok := animationSet.Clips[layer.ClipID]
+		if !ok || layer.Weight <= 0 {
+			continue
+		}
+		advanceAnimationLayer(layer, clip, dt)
+		applyAnimationClipLayer(clip, layer.Time, layer.Weight, layer.Mode, layer.BoneMask, layer.RootMotionPolicy, rootTargets, animationSet.BindTransforms, targets)
+	}
+}
+
+func advanceAnimationLayer(layer *AnimationLayer, clip content.AssetAnimationClipDef, dt float32) {
+	if layer == nil || dt == 0 {
+		return
+	}
+	speed := layer.Speed
+	if speed == 0 {
+		speed = 1
+	}
+	layer.Time += dt * speed
+	if clip.Duration <= 0 {
+		return
+	}
+	if clip.Loop {
+		layer.Time = positiveMod(layer.Time, clip.Duration)
+		return
+	}
+	if layer.Time > clip.Duration {
+		layer.Time = clip.Duration
+	} else if layer.Time < 0 {
+		layer.Time = 0
+	}
+}
+
+func resetAnimationTargets(bindTransforms map[string]LocalTransformComponent, targets map[string]*LocalTransformComponent) {
+	for id, target := range targets {
+		if bind, ok := bindTransforms[id]; ok {
+			*target = bind
+		}
+	}
+}
+
+func applyAnimationClipLayer(clip content.AssetAnimationClipDef, sampleTime, weight float32, mode AnimationLayerMode, boneMask []string, rootMotion AnimationRootMotionPolicy, rootTargets map[string]struct{}, bindTransforms map[string]LocalTransformComponent, targets map[string]*LocalTransformComponent) {
+	weight = max(0, min(1, weight))
+	if weight == 0 {
+		return
+	}
+	mask := animationBoneMask(boneMask)
 	for _, track := range clip.Tracks {
+		if len(mask) > 0 {
+			if _, ok := mask[track.TargetID]; !ok {
+				continue
+			}
+		}
 		target, ok := targets[track.TargetID]
 		if !ok {
 			continue
@@ -357,20 +464,45 @@ func applyAnimationClip(clip content.AssetAnimationClipDef, sampleTime float32, 
 		if authoredBind, ok := bindTransforms[track.TargetID]; ok {
 			bind = authoredBind
 		}
-		target.Position = bind.Position
-		target.Rotation = bind.Rotation
-		target.Scale = bind.Scale
-
 		if len(track.PositionKeys) > 0 {
-			target.Position = sampleVec3Keys(track.PositionKeys, sampleTime)
+			if _, isRoot := rootTargets[track.TargetID]; !(isRoot && rootMotion == AnimationRootMotionLocked) {
+				sample := sampleVec3Keys(track.PositionKeys, sampleTime)
+				target.Position = animationBlendVec3(target.Position, sample, bind.Position, weight, mode)
+			}
 		}
 		if len(track.RotationKeys) > 0 {
-			target.Rotation = sampleQuatKeys(track.RotationKeys, sampleTime)
+			target.Rotation = animationBlendQuat(target.Rotation, sampleQuatKeys(track.RotationKeys, sampleTime), bind.Rotation, weight, mode)
 		}
 		if len(track.ScaleKeys) > 0 {
-			target.Scale = sampleVec3Keys(track.ScaleKeys, sampleTime)
+			target.Scale = animationBlendVec3(target.Scale, sampleVec3Keys(track.ScaleKeys, sampleTime), bind.Scale, weight, mode)
 		}
 	}
+}
+
+func animationBoneMask(ids []string) map[string]struct{} {
+	if len(ids) == 0 {
+		return nil
+	}
+	mask := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		mask[id] = struct{}{}
+	}
+	return mask
+}
+
+func animationBlendVec3(current, sample, bind mgl32.Vec3, weight float32, mode AnimationLayerMode) mgl32.Vec3 {
+	if mode == AnimationLayerAdditive {
+		return current.Add(sample.Sub(bind).Mul(weight))
+	}
+	return current.Mul(1 - weight).Add(sample.Mul(weight))
+}
+
+func animationBlendQuat(current, sample, bind mgl32.Quat, weight float32, mode AnimationLayerMode) mgl32.Quat {
+	if mode == AnimationLayerAdditive {
+		delta := sample.Mul(bind.Inverse()).Normalize()
+		return current.Mul(mgl32.QuatSlerp(mgl32.QuatIdent(), delta, weight)).Normalize()
+	}
+	return mgl32.QuatSlerp(current, sample, weight).Normalize()
 }
 
 func sampleVec3Keys(keys []content.AssetVec3KeyDef, t float32) mgl32.Vec3 {
