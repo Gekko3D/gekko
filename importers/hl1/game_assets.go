@@ -21,6 +21,8 @@ const GameAssetManifestSchemaVersion = 1
 type GameAssetImportResult struct {
 	ManifestPath string
 	Manifest     *GameAssetManifest
+	LibraryPath  string
+	Library      *content.AssetLibraryDef
 }
 
 type GameAssetManifest struct {
@@ -51,6 +53,7 @@ type GameAssetPlayerCatalogEntry struct {
 	ClipIDs               []string                             `json:"clip_ids,omitempty"`
 	SequenceActivities    []GameAssetPlayerSequenceActivity    `json:"sequence_activities,omitempty"`
 	CrouchGait            GameAssetPlayerCrouchGait            `json:"crouch_gait"`
+	WeaponPresentation    GameAssetPlayerWeaponPresentation    `json:"weapon_presentation"`
 	DirectionalLocomotion GameAssetPlayerDirectionalLocomotion `json:"directional_locomotion"`
 }
 
@@ -84,6 +87,28 @@ type GameAssetPlayerStanceClip struct {
 	Stance string `json:"stance"`
 	ClipID string `json:"clip_id"`
 }
+
+// GameAssetPlayerWeaponPresentation is a verified, source-name allowlisted
+// contract. Consumers select IDs here; they never infer animation meaning.
+type GameAssetPlayerWeaponPresentation struct {
+	Status        string                        `json:"status"`
+	Stances       []GameAssetPlayerWeaponStance `json:"stances,omitempty"`
+	UpperBodyMask []string                      `json:"upper_body_mask,omitempty"`
+	Diagnostic    string                        `json:"diagnostic,omitempty"`
+}
+
+type GameAssetPlayerWeaponStance struct {
+	Stance             string `json:"stance"`
+	AimClipID          string `json:"aim_clip_id,omitempty"`
+	RecoilClipID       string `json:"recoil_clip_id,omitempty"`
+	CrouchAimClipID    string `json:"crouch_aim_clip_id,omitempty"`
+	CrouchRecoilClipID string `json:"crouch_recoil_clip_id,omitempty"`
+}
+
+const (
+	GameAssetPlayerWeaponPresentationSupported   = "supported"
+	GameAssetPlayerWeaponPresentationUnsupported = "unsupported"
+)
 
 // GameAssetPlayerCrouchLocomotion is a source-verified directional contract.
 // DefaultClipID plus face_travel is an explicit presentation fallback when a
@@ -148,6 +173,7 @@ type GameAssetManifestEntry struct {
 	ClipIDs                          []string                             `json:"clip_ids,omitempty"`
 	SequenceActivities               []GameAssetPlayerSequenceActivity    `json:"sequence_activities,omitempty"`
 	CrouchGait                       GameAssetPlayerCrouchGait            `json:"crouch_gait,omitempty"`
+	WeaponPresentation               GameAssetPlayerWeaponPresentation    `json:"weapon_presentation,omitempty"`
 	DirectionalLocomotion            GameAssetPlayerDirectionalLocomotion `json:"directional_locomotion,omitempty"`
 	SizeBytes                        int64                                `json:"size_bytes,omitempty"`
 	SHA256                           string                               `json:"sha256,omitempty"`
@@ -195,6 +221,7 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		gameDir = InferGameDirFromBSPPath(summary.Report.Source.BSPPath)
 	}
 	manifestPath := filepath.Join(outputRoot, "hl1_assets", mapName, "manifest.gkhl1assets")
+	libraryPath := filepath.Join(outputRoot, "hl1_assets", mapName, "assets.gkassetlibrary")
 	manifest := &GameAssetManifest{
 		SchemaVersion: GameAssetManifestSchemaVersion,
 		Source:        summary.Report.Source,
@@ -236,7 +263,7 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 	}
 	manifest.Assets, manifest.Diagnostics = collector.buildEntries()
 	manifest.Catalog = buildGameAssetCatalog(manifest.Assets)
-	return GameAssetImportResult{ManifestPath: manifestPath, Manifest: manifest}, nil
+	return GameAssetImportResult{ManifestPath: manifestPath, Manifest: manifest, LibraryPath: libraryPath, Library: buildHL1AssetLibrary(manifest.Assets, libraryPath)}, nil
 }
 
 func (c *hl1AssetCollector) addCatalogModels(kind string, paths []string) {
@@ -374,6 +401,14 @@ func SaveGameAssetImport(result GameAssetImportResult) error {
 			}
 		}
 	}
+	if result.Library != nil && result.LibraryPath != "" {
+		if err := os.MkdirAll(filepath.Dir(result.LibraryPath), 0755); err != nil {
+			return err
+		}
+		if err := content.SaveAssetLibrary(result.LibraryPath, result.Library); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(result.ManifestPath), 0755); err != nil {
 		return err
 	}
@@ -383,6 +418,87 @@ func SaveGameAssetImport(result GameAssetImportResult) error {
 	}
 	data = append(data, '\n')
 	return os.WriteFile(result.ManifestPath, data, 0644)
+}
+
+func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) *content.AssetLibraryDef {
+	library := content.NewAssetLibraryDef("HL1 imported assets")
+	byKey := make(map[string]GameAssetManifestEntry)
+	for _, entry := range entries {
+		key := hl1GenericAssetKey(entry)
+		if key == "" || entry.GeneratedAssetPath == "" {
+			continue
+		}
+		if prior, ok := byKey[key]; ok && strings.ToLower(entry.SourceRef) >= strings.ToLower(prior.SourceRef) {
+			continue
+		}
+		byKey[key] = entry
+	}
+	for key, entry := range byKey {
+		path, err := filepath.Rel(filepath.Dir(libraryPath), entry.GeneratedAssetPath)
+		if err != nil {
+			continue
+		}
+		libraryEntry := content.AssetLibraryEntryDef{Key: key, AssetPath: filepath.ToSlash(path), Tags: []string{entry.CatalogKind}}
+		if entry.CatalogKind == "player" {
+			libraryEntry.Character = hl1CharacterPresentation(entry)
+		}
+		library.Entries = append(library.Entries, libraryEntry)
+	}
+	sort.Slice(library.Entries, func(i, j int) bool { return library.Entries[i].Key < library.Entries[j].Key })
+	return library
+}
+
+func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPresentationDef {
+	def := &content.CharacterPresentationDef{
+		HeadMarkerID: entry.HeadMarkerID, RightHandMarkerID: entry.RightHandMarkerID, UpperBodyMarkerID: entry.UpperBodyMarkerID,
+		AimMarkerIDs: append([]string(nil), entry.AimMarkerIDs...), ClipIDs: append([]string(nil), entry.ClipIDs...),
+		CrouchGait: content.CharacterCrouchGaitDef{Status: entry.CrouchGait.Status, CrouchClipID: entry.CrouchGait.CrouchClipID, CrouchIdleClipID: entry.CrouchGait.CrouchIdleClipID, BoneMask: append([]string(nil), entry.CrouchGait.BoneMask...), Diagnostic: entry.CrouchGait.Diagnostic,
+			Locomotion: content.CharacterCrouchLocomotionDef{DefaultClipID: entry.CrouchGait.Locomotion.DefaultClipID, Fallback: entry.CrouchGait.Locomotion.Fallback, BackwardFallback: entry.CrouchGait.Locomotion.BackwardFallback, Directional: hl1CharacterDirectionalClips(entry.CrouchGait.Locomotion.Directional)}},
+		WeaponPresentation:    content.CharacterWeaponPresentationDef{Status: entry.WeaponPresentation.Status, UpperBodyMask: append([]string(nil), entry.WeaponPresentation.UpperBodyMask...), Diagnostic: entry.WeaponPresentation.Diagnostic},
+		DirectionalLocomotion: content.CharacterDirectionalLocomotionDef{Walk: hl1CharacterDirectionalClips(entry.DirectionalLocomotion.Walk), Run: hl1CharacterDirectionalClips(entry.DirectionalLocomotion.Run), Fallback: entry.DirectionalLocomotion.Fallback, BackwardFallback: entry.DirectionalLocomotion.BackwardFallback},
+	}
+	for _, stance := range entry.CrouchGait.BaseStances {
+		def.CrouchGait.BaseStances = append(def.CrouchGait.BaseStances, content.CharacterStanceClipDef{Stance: stance.Stance, ClipID: stance.ClipID})
+	}
+	for _, stance := range entry.WeaponPresentation.Stances {
+		def.WeaponPresentation.Stances = append(def.WeaponPresentation.Stances, content.CharacterWeaponStanceDef{Stance: stance.Stance, AimClipID: stance.AimClipID, RecoilClipID: stance.RecoilClipID, CrouchAimClipID: stance.CrouchAimClipID, CrouchRecoilClipID: stance.CrouchRecoilClipID})
+	}
+	return def
+}
+
+func hl1CharacterDirectionalClips(in GameAssetPlayerDirectionalClipSet) content.CharacterDirectionalClipSetDef {
+	return content.CharacterDirectionalClipSetDef{Forward: in.Forward, Backward: in.Backward, Left: in.Left, Right: in.Right, ForwardLeft: in.ForwardLeft, ForwardRight: in.ForwardRight, BackwardLeft: in.BackwardLeft, BackwardRight: in.BackwardRight}
+}
+
+func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)))
+	switch entry.CatalogKind {
+	case "player":
+		if base == "" {
+			return ""
+		}
+		parts := []string{"characters", base}
+		for _, model := range entry.BodygroupModels {
+			parts = append(parts, fmt.Sprintf("b%d", model))
+		}
+		return strings.Join(append(parts, fmt.Sprintf("s%d", entry.SkinFamily)), ".")
+	case "weapon_world":
+		switch base {
+		case "w_9mmhandgun":
+			return "weapons.handgun"
+		case "w_357":
+			return "weapons.revolver"
+		case "w_9mmar":
+			return "weapons.assault_rifle"
+		case "w_shotgun":
+			return "weapons.shotgun"
+		default:
+			// Keep non-gameplay world-model variants distinct without exposing
+			// their source names to runtime profiles.
+			return "weapons.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
+		}
+	}
+	return ""
 }
 
 type hl1AssetCollector struct {
@@ -558,6 +674,10 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					entry.CrouchGait = hl1PlayerCrouchGait(asset)
 					if entry.CrouchGait.Status == GameAssetPlayerCrouchGaitUnsupported {
 						c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_crouch_gait_unsupported", Subject: entry.CatalogID, Message: entry.CrouchGait.Diagnostic})
+					}
+					entry.WeaponPresentation = hl1PlayerWeaponPresentation(asset)
+					if entry.WeaponPresentation.Status == GameAssetPlayerWeaponPresentationUnsupported {
+						c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_weapon_presentation_unsupported", Subject: entry.CatalogID, Message: entry.WeaponPresentation.Diagnostic})
 					}
 					entry.DirectionalLocomotion = hl1PlayerDirectionalLocomotion(asset.AnimationClips)
 				}
@@ -846,6 +966,54 @@ func hl1PlayerCrouchAimStance(name string) string {
 	}
 }
 
+func hl1PlayerWeaponPresentation(asset *content.AssetDef) GameAssetPlayerWeaponPresentation {
+	presentation := GameAssetPlayerWeaponPresentation{Status: GameAssetPlayerWeaponPresentationUnsupported}
+	if asset == nil {
+		presentation.Diagnostic = "generated player asset is missing"
+		return presentation
+	}
+	byName := make(map[string]string, len(asset.AnimationClips))
+	for _, clip := range asset.AnimationClips {
+		byName[strings.ToLower(strings.TrimSpace(clip.Name))] = clip.ID
+	}
+	for _, stance := range hl1PlayerWeaponStances {
+		entry := GameAssetPlayerWeaponStance{
+			Stance:             stance,
+			AimClipID:          byName["ref_aim_"+stance],
+			RecoilClipID:       byName["ref_shoot_"+stance],
+			CrouchAimClipID:    byName["crouch_aim_"+stance],
+			CrouchRecoilClipID: byName["crouch_shoot_"+stance],
+		}
+		if entry.AimClipID != "" && entry.RecoilClipID != "" && entry.CrouchAimClipID != "" && entry.CrouchRecoilClipID != "" {
+			presentation.Stances = append(presentation.Stances, entry)
+		}
+	}
+	presentation.UpperBodyMask = hl1PlayerUpperBodyBoneMask(asset.Skeleton)
+	if len(presentation.Stances) == 0 || len(presentation.UpperBodyMask) == 0 {
+		presentation.Diagnostic = "requires allowlisted ref_aim/ref_shoot/crouch_aim/crouch_shoot stance clips and the standard upper-body bone mask"
+		return presentation
+	}
+	presentation.Status = GameAssetPlayerWeaponPresentationSupported
+	return presentation
+}
+
+var hl1PlayerWeaponStances = []string{"crowbar", "trip", "onehanded", "python", "shotgun", "gauss", "mp5", "rpg", "egon", "squeak", "hive", "bow"}
+
+func hl1PlayerUpperBodyBoneMask(skeleton *content.AssetSkeletonDef) []string {
+	if skeleton == nil {
+		return nil
+	}
+	mask := make([]string, 0, len(skeleton.Bones))
+	for _, bone := range skeleton.Bones {
+		name := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", ""))
+		if strings.HasPrefix(name, "bip01spine") || name == "bip01neck" || name == "bip01head" || strings.HasPrefix(name, "bip01lclavicle") || strings.HasPrefix(name, "bip01rclavicle") || strings.HasPrefix(name, "bip01lupperarm") || strings.HasPrefix(name, "bip01rupperarm") || strings.HasPrefix(name, "bip01lforearm") || strings.HasPrefix(name, "bip01rforearm") || strings.HasPrefix(name, "bip01lhand") || strings.HasPrefix(name, "bip01rhand") || strings.HasPrefix(name, "bip01lfinger") || strings.HasPrefix(name, "bip01rfinger") {
+			mask = append(mask, bone.ID)
+		}
+	}
+	sort.Strings(mask)
+	return mask
+}
+
 func hl1PlayerLowerBodyBoneMask(skeleton *content.AssetSkeletonDef) []string {
 	if skeleton == nil {
 		return nil
@@ -889,6 +1057,7 @@ func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
 				ClipIDs:               append([]string(nil), entry.ClipIDs...),
 				SequenceActivities:    append([]GameAssetPlayerSequenceActivity(nil), entry.SequenceActivities...),
 				CrouchGait:            entry.CrouchGait,
+				WeaponPresentation:    entry.WeaponPresentation,
 				DirectionalLocomotion: entry.DirectionalLocomotion,
 			})
 		case "weapon_world":

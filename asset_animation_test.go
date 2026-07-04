@@ -139,6 +139,25 @@ func TestAuthoredAssetAnimationLayersPreserveMaskedStanceAndLockedRoot(t *testin
 	}
 }
 
+func TestAuthoredAssetAnimationOneShotLayerRemovesAtEnd(t *testing.T) {
+	bind := map[string]LocalTransformComponent{"upper": {Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}}}
+	target := bind["upper"]
+	set := &AuthoredAssetAnimationSetComponent{BindTransforms: bind, Clips: map[string]content.AssetAnimationClipDef{
+		"base":   {ID: "base", Loop: true, Tracks: []content.AssetAnimationTrackDef{{TargetID: "upper", PositionKeys: []content.AssetVec3KeyDef{{Value: content.Vec3{1, 0, 0}}}}}},
+		"recoil": {ID: "recoil", Duration: 1, Loop: true, Tracks: []content.AssetAnimationTrackDef{{TargetID: "upper", PositionKeys: []content.AssetVec3KeyDef{{Value: content.Vec3{2, 0, 0}}}}}},
+	}}
+	player := &AnimationPlayerComponent{ClipID: "base", Layers: []AnimationLayer{{Tag: "weapon_recoil", ClipID: "recoil", Weight: 1, Mode: AnimationLayerOverride, BoneMask: []string{"upper"}, LoopOverride: true}}}
+	targets := map[string]*LocalTransformComponent{"upper": &target}
+	applyAnimationLayers(player, set, targets, nil, 0.5)
+	if len(player.Layers) != 1 || target.Position.X() != 2 {
+		t.Fatalf("one-shot recoil should apply before end, layers=%+v position=%v", player.Layers, target.Position)
+	}
+	applyAnimationLayers(player, set, targets, nil, 0.6)
+	if len(player.Layers) != 0 || target.Position.X() != 1 {
+		t.Fatalf("finished recoil should be removed and expose base, layers=%+v position=%v", player.Layers, target.Position)
+	}
+}
+
 func TestNPCAnimationSystemSelectsSemanticClip(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

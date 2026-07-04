@@ -54,6 +54,8 @@ const (
 // AnimationLayer is an ordered local-transform overlay. BoneMask contains
 // authored item IDs, never source-bone names resolved at runtime.
 type AnimationLayer struct {
+	// Tag is consumer-owned identity for replacing a persistent overlay.
+	Tag              string
 	ClipID           string
 	Time             float32
 	Speed            float32
@@ -61,6 +63,8 @@ type AnimationLayer struct {
 	Mode             AnimationLayerMode
 	BoneMask         []string
 	RootMotionPolicy AnimationRootMotionPolicy
+	Loop             bool
+	LoopOverride     bool
 }
 
 type AuthoredAssetAnimationSetComponent struct {
@@ -402,20 +406,27 @@ func applyAnimationLayers(player *AnimationPlayerComponent, animationSet *Author
 	if base, ok := animationSet.Clips[player.ClipID]; ok {
 		applyAnimationClipLayer(base, player.Time, 1, AnimationLayerOverride, nil, player.RootMotionPolicy, rootTargets, animationSet.BindTransforms, targets)
 	}
+	activeLayers := player.Layers[:0]
 	for i := range player.Layers {
 		layer := &player.Layers[i]
 		clip, ok := animationSet.Clips[layer.ClipID]
 		if !ok || layer.Weight <= 0 {
 			continue
 		}
-		advanceAnimationLayer(layer, clip, dt)
+		if advanceAnimationLayer(layer, clip, dt) {
+			continue
+		}
 		applyAnimationClipLayer(clip, layer.Time, layer.Weight, layer.Mode, layer.BoneMask, layer.RootMotionPolicy, rootTargets, animationSet.BindTransforms, targets)
+		activeLayers = append(activeLayers, *layer)
 	}
+	player.Layers = activeLayers
 }
 
-func advanceAnimationLayer(layer *AnimationLayer, clip content.AssetAnimationClipDef, dt float32) {
+// advanceAnimationLayer reports a finished one-shot overlay. Looping clips
+// retain prior behavior; non-looping overlays disappear instead of freezing.
+func advanceAnimationLayer(layer *AnimationLayer, clip content.AssetAnimationClipDef, dt float32) bool {
 	if layer == nil || dt == 0 {
-		return
+		return false
 	}
 	speed := layer.Speed
 	if speed == 0 {
@@ -423,17 +434,22 @@ func advanceAnimationLayer(layer *AnimationLayer, clip content.AssetAnimationCli
 	}
 	layer.Time += dt * speed
 	if clip.Duration <= 0 {
-		return
+		return false
 	}
-	if clip.Loop {
+	loop := clip.Loop
+	if layer.LoopOverride {
+		loop = layer.Loop
+	}
+	if loop {
 		layer.Time = positiveMod(layer.Time, clip.Duration)
-		return
+		return false
 	}
 	if layer.Time > clip.Duration {
-		layer.Time = clip.Duration
+		return true
 	} else if layer.Time < 0 {
-		layer.Time = 0
+		return true
 	}
+	return false
 }
 
 func resetAnimationTargets(bindTransforms map[string]LocalTransformComponent, targets map[string]*LocalTransformComponent) {

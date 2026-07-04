@@ -3,6 +3,7 @@ package gekko
 import (
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/go-gl/mathgl/mgl32"
@@ -161,6 +162,58 @@ func LoadAndSpawnAuthoredAsset(path string, cmd *Commands, assets *AssetServer, 
 		return AuthoredAssetSpawnResult{}, err
 	}
 	return SpawnAuthoredAssetWithOptions(cmd, assets, def, rootTransform, AuthoredAssetSpawnOptions{DocumentPath: path})
+}
+
+func LoadAndSpawnAuthoredAssetFromLibrary(library *content.AssetLibraryDef, libraryPath, key string, cmd *Commands, assets *AssetServer, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
+	path, err := content.ResolveAssetLibraryPath(library, libraryPath, key)
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	return LoadAndSpawnAuthoredAsset(path, cmd, assets, rootTransform)
+}
+
+// AttachAuthoredAssetRoot mounts an already spawned asset root to a marker
+// using a transform authored in an external .gkattachments library.
+func AttachAuthoredAssetRoot(cmd *Commands, root, parentMarker EntityId, attachment content.AssetAttachmentDef) error {
+	if cmd == nil || root == 0 || parentMarker == 0 {
+		return fmt.Errorf("asset attachment requires a root and parent marker")
+	}
+	if attachment.ID == "" {
+		return fmt.Errorf("asset attachment id is required")
+	}
+	local, _ := cmd.GetComponent(root, reflect.TypeOf(LocalTransformComponent{})).(*LocalTransformComponent)
+	if local == nil {
+		return fmt.Errorf("asset attachment root %d has no local transform", root)
+	}
+	*local = AssetLocalTransformFromDef(attachment.Transform)
+	cmd.AddComponents(root,
+		&Parent{Entity: parentMarker},
+		&AuthoredAssetAttachmentComponent{AttachmentID: attachment.ID, ParentMarker: parentMarker},
+	)
+	cmd.app.FlushCommands()
+	TransformHierarchySystem(cmd)
+	return nil
+}
+
+// LoadAndAttachAuthoredAsset loads a child .gkasset, then mounts its root at
+// the supplied host marker. Callers resolve attachment asset refs to paths.
+func LoadAndAttachAuthoredAsset(path string, cmd *Commands, assets *AssetServer, parentMarker EntityId, attachment content.AssetAttachmentDef) (AuthoredAssetSpawnResult, error) {
+	spawned, err := LoadAndSpawnAuthoredAsset(path, cmd, assets, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	if err := AttachAuthoredAssetRoot(cmd, spawned.RootEntity, parentMarker, attachment); err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	return spawned, nil
+}
+
+func LoadAndAttachAuthoredAssetFromLibrary(library *content.AssetLibraryDef, libraryPath, key string, cmd *Commands, assets *AssetServer, parentMarker EntityId, attachment content.AssetAttachmentDef) (AuthoredAssetSpawnResult, error) {
+	path, err := content.ResolveAssetLibraryPath(library, libraryPath, key)
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	return LoadAndAttachAuthoredAsset(path, cmd, assets, parentMarker, attachment)
 }
 
 func ValidateAssetHierarchy(def *content.AssetDef) error {

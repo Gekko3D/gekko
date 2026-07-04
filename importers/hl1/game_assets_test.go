@@ -388,6 +388,26 @@ func TestHL1PlayerCrouchGaitUsesActivitiesAndAuthoredBoneMask(t *testing.T) {
 	}
 }
 
+func TestHL1PlayerWeaponPresentationUsesAllowlistedStanceAndUpperMask(t *testing.T) {
+	asset := &content.AssetDef{
+		Skeleton: &content.AssetSkeletonDef{Bones: []content.AssetBoneDef{
+			{ID: "spine", Name: "Bip01 Spine"}, {ID: "neck", Name: "Bip01 Neck"}, {ID: "head", Name: "Bip01 Head"},
+			{ID: "left_arm", Name: "Bip01 L UpperArm"}, {ID: "left_hand", Name: "Bip01 L Hand"}, {ID: "right_arm", Name: "Bip01 R UpperArm"}, {ID: "right_hand", Name: "Bip01 R Hand"},
+		}},
+		AnimationClips: []content.AssetAnimationClipDef{
+			{ID: "aim", Name: "ref_aim_onehanded"}, {ID: "shoot", Name: "ref_shoot_onehanded"}, {ID: "crouch_aim", Name: "crouch_aim_onehanded"}, {ID: "crouch_shoot", Name: "crouch_shoot_onehanded"},
+			{ID: "ignored", Name: "shoot_onehanded"},
+		},
+	}
+	presentation := hl1PlayerWeaponPresentation(asset)
+	if presentation.Status != GameAssetPlayerWeaponPresentationSupported || len(presentation.Stances) != 1 || presentation.Stances[0] != (GameAssetPlayerWeaponStance{Stance: "onehanded", AimClipID: "aim", RecoilClipID: "shoot", CrouchAimClipID: "crouch_aim", CrouchRecoilClipID: "crouch_shoot"}) || len(presentation.UpperBodyMask) != 7 {
+		t.Fatalf("expected verified stance presentation, got %+v", presentation)
+	}
+	if unsupported := hl1PlayerWeaponPresentation(&content.AssetDef{}); unsupported.Status != GameAssetPlayerWeaponPresentationUnsupported || unsupported.Diagnostic == "" {
+		t.Fatalf("expected unsupported diagnostic, got %+v", unsupported)
+	}
+}
+
 func TestParseMDLSequenceActivity(t *testing.T) {
 	data := syntheticMDLWithBoneAndSequence()
 	sequenceOffset := int(readInt32(data, 168))

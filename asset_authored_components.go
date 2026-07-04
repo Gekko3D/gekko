@@ -19,6 +19,14 @@ type AuthoredAssetRefComponent struct {
 	Kind    AuthoredItemKind
 }
 
+// AuthoredAssetAttachmentComponent records an external attachment-library
+// mount. It lives on the spawned child asset root; the existing hierarchy
+// system supplies the actual transform inheritance.
+type AuthoredAssetAttachmentComponent struct {
+	AttachmentID string
+	ParentMarker EntityId
+}
+
 type CollapsedAuthoredVoxelPartsComponent struct {
 	PartIDs []string
 }
