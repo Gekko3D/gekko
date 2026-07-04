@@ -1,5 +1,7 @@
 package gekko
 
+import "github.com/gekko3d/gekko/content"
+
 type AuthoredItemKind string
 
 const (
@@ -25,6 +27,8 @@ type AuthoredAssetRefComponent struct {
 type AuthoredAssetAttachmentComponent struct {
 	AttachmentID string
 	ParentMarker EntityId
+	AimMarker    EntityId
+	AimFrame     *content.AssetAttachmentAimFrameDef
 }
 
 type CollapsedAuthoredVoxelPartsComponent struct {

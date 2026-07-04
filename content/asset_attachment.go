@@ -14,13 +14,21 @@ type AssetAttachmentLibraryDef struct {
 }
 
 type AssetAttachmentDef struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	ParentAssetRef string            `json:"parent_asset_ref"`
-	ParentMarkerID string            `json:"parent_marker_id"`
-	ChildAssetRef  string            `json:"child_asset_ref"`
-	Transform      AssetTransformDef `json:"transform"`
-	Tags           []string          `json:"tags,omitempty"`
+	ID             string                      `json:"id"`
+	Name           string                      `json:"name"`
+	ParentAssetRef string                      `json:"parent_asset_ref"`
+	ParentMarkerID string                      `json:"parent_marker_id"`
+	ChildAssetRef  string                      `json:"child_asset_ref"`
+	Transform      AssetTransformDef           `json:"transform"`
+	Aim            *AssetAttachmentAimFrameDef `json:"aim,omitempty"`
+	Tags           []string                    `json:"tags,omitempty"`
+}
+
+// AssetAttachmentAimFrameDef is a calibrated aim frame relative to a stable
+// child marker. Its local -Z axis is the rendered aim direction.
+type AssetAttachmentAimFrameDef struct {
+	MarkerID string            `json:"marker_id"`
+	Frame    AssetTransformDef `json:"frame"`
 }
 
 func NewAssetAttachmentLibraryDef(name string) *AssetAttachmentLibraryDef {

@@ -181,6 +181,15 @@ func AttachAuthoredAssetRoot(cmd *Commands, root, parentMarker EntityId, attachm
 	if attachment.ID == "" {
 		return fmt.Errorf("asset attachment id is required")
 	}
+	attached := &AuthoredAssetAttachmentComponent{AttachmentID: attachment.ID, ParentMarker: parentMarker}
+	if attachment.Aim != nil {
+		marker, ok := FindAuthoredAssetMarkerByID(cmd, root, attachment.Aim.MarkerID)
+		if !ok {
+			return fmt.Errorf("asset attachment %q aim marker %q not found", attachment.ID, attachment.Aim.MarkerID)
+		}
+		aim := *attachment.Aim
+		attached.AimMarker, attached.AimFrame = marker.Entity, &aim
+	}
 	local, _ := cmd.GetComponent(root, reflect.TypeOf(LocalTransformComponent{})).(*LocalTransformComponent)
 	if local == nil {
 		return fmt.Errorf("asset attachment root %d has no local transform", root)
@@ -188,7 +197,7 @@ func AttachAuthoredAssetRoot(cmd *Commands, root, parentMarker EntityId, attachm
 	*local = AssetLocalTransformFromDef(attachment.Transform)
 	cmd.AddComponents(root,
 		&Parent{Entity: parentMarker},
-		&AuthoredAssetAttachmentComponent{AttachmentID: attachment.ID, ParentMarker: parentMarker},
+		attached,
 	)
 	cmd.app.FlushCommands()
 	TransformHierarchySystem(cmd)

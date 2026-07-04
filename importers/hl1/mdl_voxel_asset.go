@@ -18,7 +18,9 @@ type MDLVoxelAssetOptions struct {
 	// StaticPose emits a single, transform-baked voxel part. It is for world
 	// model uses (such as pickups) whose runtime contract is a static visual,
 	// regardless of the skeletal representation in the source MDL.
-	StaticPose bool
+	StaticPose      bool
+	RebaseBoneIndex int
+	RebaseToBone    bool
 	// SemanticAnchors maps stable marker IDs to verified source bone indices.
 	// Player catalog import supplies only known GoldSrc player-bone mappings.
 	SemanticAnchors map[string]int
@@ -34,6 +36,9 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 	}
 	if len(geometry.Triangles) == 0 {
 		return nil, 0, fmt.Errorf("mdl contains no decoded triangles")
+	}
+	if opts.RebaseToBone {
+		geometry = rebaseMDLGeometryToBoneOrigin(geometry, opts.RebaseBoneIndex)
 	}
 	if opts.StaticPose {
 		return buildMDLStaticPoseVoxelAsset(geometry, opts, resolution)
@@ -80,6 +85,20 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 		Tags: []string{"source:hl1", "source_asset:mdl", "generated:mdl_voxel_surface"},
 	}}
 	return asset, len(localVoxels), nil
+}
+
+func rebaseMDLGeometryToBoneOrigin(geometry MDLGeometry, boneIndex int) MDLGeometry {
+	if boneIndex < 0 || boneIndex >= len(geometry.Info.Bones) {
+		return geometry
+	}
+	frame := mdlGlobalBoneFrameTransforms(geometry.Info.Bones, nil, 0)[boneIndex]
+	inverse := frame.Rotation.Inverse()
+	for i := range geometry.Triangles {
+		for j := range geometry.Triangles[i].Vertices {
+			geometry.Triangles[i].Vertices[j].Position = quatRotateImportVec3(inverse, subVec3(geometry.Triangles[i].Vertices[j].Position, frame.Position))
+		}
+	}
+	return geometry
 }
 
 func buildMDLStaticPoseVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32) (*content.AssetDef, int, error) {

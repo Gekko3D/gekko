@@ -76,6 +76,24 @@ func FindAuthoredAssetMarkerByName(cmd *Commands, root EntityId, name string) (A
 	return found, ok
 }
 
+func FindAuthoredAssetMarkerByID(cmd *Commands, root EntityId, id string) (AuthoredAssetMarkerLookup, bool) {
+	if cmd == nil || strings.TrimSpace(id) == "" {
+		return AuthoredAssetMarkerLookup{}, false
+	}
+	want := strings.TrimSpace(id)
+	var found AuthoredAssetMarkerLookup
+	ok := false
+	MakeQuery1[TransformComponent](cmd).Map(func(eid EntityId, _ *TransformComponent) bool {
+		lookup, exists := AuthoredAssetMarkerLookupForEntity(cmd, eid)
+		if !exists || lookup.Ref.ItemID != want || !isEntityOrDescendantOf(cmd, eid, root) {
+			return true
+		}
+		found, ok = lookup, true
+		return false
+	})
+	return found, ok
+}
+
 func FindFirstAuthoredAssetMarkerByKind(cmd *Commands, root EntityId, kind string) (AuthoredAssetMarkerLookup, bool) {
 	if cmd == nil || strings.TrimSpace(kind) == "" {
 		return AuthoredAssetMarkerLookup{}, false

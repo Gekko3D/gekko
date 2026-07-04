@@ -57,6 +57,9 @@ func ValidateAssetAttachmentLibrary(def *AssetAttachmentLibraryDef) error {
 		if attachment.ID == "" || attachment.Name == "" || attachment.ParentAssetRef == "" || attachment.ParentMarkerID == "" || attachment.ChildAssetRef == "" {
 			return fmt.Errorf("attachment requires id, name, parent asset ref, parent marker id, and child asset ref")
 		}
+		if attachment.Aim != nil && attachment.Aim.MarkerID == "" {
+			return fmt.Errorf("attachment %q aim frame requires marker id", attachment.ID)
+		}
 		if _, ok := seen[attachment.ID]; ok {
 			return fmt.Errorf("duplicate attachment id %q", attachment.ID)
 		}

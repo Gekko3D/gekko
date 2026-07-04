@@ -15,10 +15,26 @@ type CharacterPresentationDef struct {
 	RightHandMarkerID     string                            `json:"right_hand_marker_id"`
 	UpperBodyMarkerID     string                            `json:"upper_body_marker_id"`
 	AimMarkerIDs          []string                          `json:"aim_marker_ids,omitempty"`
+	AimRig                CharacterAimRigDef                `json:"aim_rig,omitempty"`
 	ClipIDs               []string                          `json:"clip_ids,omitempty"`
 	CrouchGait            CharacterCrouchGaitDef            `json:"crouch_gait"`
 	WeaponPresentation    CharacterWeaponPresentationDef    `json:"weapon_presentation"`
 	DirectionalLocomotion CharacterDirectionalLocomotionDef `json:"directional_locomotion"`
+}
+
+// CharacterAimRigDef describes a character's camera-targeted upper-body rig.
+// ForwardAxis and UpAxis are expressed in the character-root authored basis;
+// pitch rotates around ForwardAxis × UpAxis. Runtime converts those axes into
+// each aim bone's current parent space. Markers identify the spine chain; held
+// assets provide the calibrated aim frame.
+type CharacterAimRigDef struct {
+	Status            string    `json:"status,omitempty"`
+	MuzzleMarkerKind  string    `json:"muzzle_marker_kind,omitempty"`
+	ForwardAxis       Vec3      `json:"forward_axis,omitempty"`
+	UpAxis            Vec3      `json:"up_axis,omitempty"`
+	YawLimitDegrees   float32   `json:"yaw_limit_degrees,omitempty"`
+	PitchLimitDegrees float32   `json:"pitch_limit_degrees,omitempty"`
+	BoneWeights       []float32 `json:"bone_weights,omitempty"`
 }
 
 type CharacterCrouchGaitDef struct {

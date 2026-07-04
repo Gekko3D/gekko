@@ -260,6 +260,7 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 	}
 	if opts.ImportAllWeaponWorldModels {
 		collector.addCatalogModels("weapon_world", hl1CatalogModelPaths(gameDir, false))
+		collector.addCatalogModels("weapon_held", hl1HeldWeaponModelPaths(gameDir))
 	}
 	manifest.Assets, manifest.Diagnostics = collector.buildEntries()
 	manifest.Catalog = buildGameAssetCatalog(manifest.Assets)
@@ -351,6 +352,22 @@ func hl1CatalogModelPaths(gameDir string, players bool) []string {
 			}
 		}
 		out = append(out, filepath.Clean(path))
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+func hl1HeldWeaponModelPaths(gameDir string) []string {
+	var out []string
+	_ = filepath.WalkDir(gameDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry == nil || entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".mdl") {
+			return nil
+		}
+		base := strings.ToLower(filepath.Base(path))
+		if strings.HasPrefix(base, "p_") && !hl1TextureCompanionModel(path) {
+			out = append(out, filepath.Clean(path))
+		}
 		return nil
 	})
 	sort.Strings(out)
@@ -452,6 +469,17 @@ func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPr
 	def := &content.CharacterPresentationDef{
 		HeadMarkerID: entry.HeadMarkerID, RightHandMarkerID: entry.RightHandMarkerID, UpperBodyMarkerID: entry.UpperBodyMarkerID,
 		AimMarkerIDs: append([]string(nil), entry.AimMarkerIDs...), ClipIDs: append([]string(nil), entry.ClipIDs...),
+		AimRig: content.CharacterAimRigDef{
+			Status:           content.CharacterPresentationSupported,
+			MuzzleMarkerKind: content.AssetMarkerKindMuzzle,
+			// HL1's player bind basis is +X forward, +Y up. This is adapted
+			// into generic authored aim data; no HL1 identity reaches runtime.
+			ForwardAxis:       content.Vec3{1, 0, 0},
+			UpAxis:            content.Vec3{0, 1, 0},
+			YawLimitDegrees:   60,
+			PitchLimitDegrees: 45,
+			BoneWeights:       []float32{0.08, 0.12, 0.16, 0.20, 0.24, 0.20},
+		},
 		CrouchGait: content.CharacterCrouchGaitDef{Status: entry.CrouchGait.Status, CrouchClipID: entry.CrouchGait.CrouchClipID, CrouchIdleClipID: entry.CrouchGait.CrouchIdleClipID, BoneMask: append([]string(nil), entry.CrouchGait.BoneMask...), Diagnostic: entry.CrouchGait.Diagnostic,
 			Locomotion: content.CharacterCrouchLocomotionDef{DefaultClipID: entry.CrouchGait.Locomotion.DefaultClipID, Fallback: entry.CrouchGait.Locomotion.Fallback, BackwardFallback: entry.CrouchGait.Locomotion.BackwardFallback, Directional: hl1CharacterDirectionalClips(entry.CrouchGait.Locomotion.Directional)}},
 		WeaponPresentation:    content.CharacterWeaponPresentationDef{Status: entry.WeaponPresentation.Status, UpperBodyMask: append([]string(nil), entry.WeaponPresentation.UpperBodyMask...), Diagnostic: entry.WeaponPresentation.Diagnostic},
@@ -468,6 +496,37 @@ func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPr
 
 func hl1CharacterDirectionalClips(in GameAssetPlayerDirectionalClipSet) content.CharacterDirectionalClipSetDef {
 	return content.CharacterDirectionalClipSetDef{Forward: in.Forward, Backward: in.Backward, Left: in.Left, Right: in.Right, ForwardLeft: in.ForwardLeft, ForwardRight: in.ForwardRight, BackwardLeft: in.BackwardLeft, BackwardRight: in.BackwardRight}
+}
+
+// hl1AddHeldWeaponMuzzleMarker maps the shared GoldSrc p_ model convention
+// (barrel at the negative local X extent) to Gekko's generic muzzle marker.
+func hl1AddHeldWeaponMuzzleMarker(asset *content.AssetDef) {
+	if asset == nil || len(asset.Parts) == 0 || asset.Parts[0].Source.VoxelShape == nil {
+		return
+	}
+	voxels := asset.Parts[0].Source.VoxelShape.Voxels
+	if len(voxels) == 0 {
+		return
+	}
+	minX, minY, maxY, minZ, maxZ := voxels[0].X, voxels[0].Y, voxels[0].Y, voxels[0].Z, voxels[0].Z
+	for _, voxel := range voxels[1:] {
+		minX = min(minX, voxel.X)
+		minY, maxY = min(minY, voxel.Y), max(maxY, voxel.Y)
+		minZ, maxZ = min(minZ, voxel.Z), max(maxZ, voxel.Z)
+	}
+	resolution := asset.Parts[0].VoxelResolution
+	if resolution <= 0 {
+		return
+	}
+	asset.Markers = append(asset.Markers, content.AssetMarkerDef{
+		ID: "muzzle", Name: "muzzle", ParentID: asset.Parts[0].ID, Kind: content.AssetMarkerKindMuzzle,
+		Transform: content.AssetTransformDef{
+			Position: content.Vec3{(float32(minX) - 0.5) * resolution, float32(minY+maxY) * resolution * 0.5, float32(minZ+maxZ) * resolution * 0.5},
+			Rotation: content.Quat{0, 0.70710677, 0, 0.70710677},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Tags: []string{"source:hl1", "generated:held_weapon_muzzle"},
+	})
 }
 
 func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
@@ -496,6 +555,19 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			// Keep non-gameplay world-model variants distinct without exposing
 			// their source names to runtime profiles.
 			return "weapons.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
+		}
+	case "weapon_held":
+		switch base {
+		case "p_9mmhandgun":
+			return "weapons.handgun.held"
+		case "p_357":
+			return "weapons.revolver.held"
+		case "p_9mmar":
+			return "weapons.assault_rifle.held"
+		case "p_shotgun":
+			return "weapons.shotgun.held"
+		default:
+			return "weapons.held.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
 		}
 	}
 	return ""
@@ -637,11 +709,21 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					return
 				}
 			}
+			rebaseToHand := false
+			rebaseBone := 0
+			if entry.CatalogKind == "weapon_held" {
+				anchors = hl1PlayerSemanticAnchorBones(geometry.Info.Bones)
+				if hand, ok := anchors["right_hand"]; ok {
+					rebaseToHand, rebaseBone = true, hand
+				}
+			}
 			asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
 				Name:            strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
 				SourceRef:       entry.SourceRef,
 				VoxelResolution: voxelResolution,
 				StaticPose:      staticPose,
+				RebaseBoneIndex: rebaseBone,
+				RebaseToBone:    rebaseToHand,
 				SemanticAnchors: anchors,
 				LockRootMotion:  entry.CatalogKind == "player",
 			})
@@ -653,6 +735,9 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					Message:  err.Error(),
 				})
 			} else if asset != nil {
+				if entry.CatalogKind == "weapon_held" {
+					hl1AddHeldWeaponMuzzleMarker(asset)
+				}
 				if entry.CatalogKind == "player" && !hl1PlayerAssetHasRequiredMarkers(asset) {
 					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_anchor_unresolved", Subject: entry.CatalogID, Message: "verified player anchors could not resolve to generated bone parts"})
 					entry.ConvertState = "unsupported_player_avatar"
@@ -744,6 +829,9 @@ func hl1VoxelResolutionCategoryForGameAssetEntry(entry *GameAssetManifestEntry) 
 				return HL1VoxelResolutionCategoryPickup
 			}
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "catalog:weapon_world:") {
+				return HL1VoxelResolutionCategoryPickup
+			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "catalog:weapon_held:") {
 				return HL1VoxelResolutionCategoryPickup
 			}
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "npc:") {
@@ -1006,7 +1094,7 @@ func hl1PlayerUpperBodyBoneMask(skeleton *content.AssetSkeletonDef) []string {
 	mask := make([]string, 0, len(skeleton.Bones))
 	for _, bone := range skeleton.Bones {
 		name := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", ""))
-		if strings.HasPrefix(name, "bip01spine") || name == "bip01neck" || name == "bip01head" || strings.HasPrefix(name, "bip01lclavicle") || strings.HasPrefix(name, "bip01rclavicle") || strings.HasPrefix(name, "bip01lupperarm") || strings.HasPrefix(name, "bip01rupperarm") || strings.HasPrefix(name, "bip01lforearm") || strings.HasPrefix(name, "bip01rforearm") || strings.HasPrefix(name, "bip01lhand") || strings.HasPrefix(name, "bip01rhand") || strings.HasPrefix(name, "bip01lfinger") || strings.HasPrefix(name, "bip01rfinger") {
+		if strings.HasPrefix(name, "bip01spine") || name == "bip01neck" || name == "bip01head" || strings.HasPrefix(name, "bip01lclavicle") || strings.HasPrefix(name, "bip01rclavicle") || strings.HasPrefix(name, "bip01lupperarm") || strings.HasPrefix(name, "bip01rupperarm") || strings.HasPrefix(name, "bip01lforearm") || strings.HasPrefix(name, "bip01rforearm") || strings.HasPrefix(name, "bip01larm") || strings.HasPrefix(name, "bip01rarm") || strings.HasPrefix(name, "bip01lhand") || strings.HasPrefix(name, "bip01rhand") || strings.HasPrefix(name, "bip01lfinger") || strings.HasPrefix(name, "bip01rfinger") {
 			mask = append(mask, bone.ID)
 		}
 	}
