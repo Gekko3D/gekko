@@ -181,7 +181,7 @@ func AttachAuthoredAssetRoot(cmd *Commands, root, parentMarker EntityId, attachm
 	if attachment.ID == "" {
 		return fmt.Errorf("asset attachment id is required")
 	}
-	attached := &AuthoredAssetAttachmentComponent{AttachmentID: attachment.ID, ParentMarker: parentMarker}
+	attached := &AuthoredAssetAttachmentComponent{AttachmentID: attachment.ID, ParentMarker: parentMarker, MountTransform: attachment.Transform, GripFrames: append([]content.AssetAttachmentGripFrameDef(nil), attachment.GripFrames...)}
 	if attachment.Aim != nil {
 		marker, ok := FindAuthoredAssetMarkerByID(cmd, root, attachment.Aim.MarkerID)
 		if !ok {

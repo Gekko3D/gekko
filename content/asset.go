@@ -49,6 +49,8 @@ const (
 const (
 	AssetMarkerKindMuzzle       = "muzzle"
 	AssetMarkerKindHandMount    = "hand_mount"
+	AssetMarkerKindRightGrip    = "right_grip"
+	AssetMarkerKindLeftGrip     = "left_grip"
 	AssetMarkerKindEffectAnchor = "effect_anchor"
 	AssetMarkerKindSpawnAnchor  = "spawn_anchor"
 	AssetMarkerKindDockPort     = "dock_port"
@@ -61,6 +63,8 @@ func KnownAssetMarkerKinds() []string {
 		AssetMarkerKindDockPort,
 		AssetMarkerKindWeaponSlot,
 		AssetMarkerKindHandMount,
+		AssetMarkerKindRightGrip,
+		AssetMarkerKindLeftGrip,
 		AssetMarkerKindEffectAnchor,
 		AssetMarkerKindSpawnAnchor,
 	}

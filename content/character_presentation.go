@@ -13,6 +13,7 @@ const (
 type CharacterPresentationDef struct {
 	HeadMarkerID          string                            `json:"head_marker_id"`
 	RightHandMarkerID     string                            `json:"right_hand_marker_id"`
+	LeftHandMarkerID      string                            `json:"left_hand_marker_id,omitempty"`
 	UpperBodyMarkerID     string                            `json:"upper_body_marker_id"`
 	AimMarkerIDs          []string                          `json:"aim_marker_ids,omitempty"`
 	AimRig                CharacterAimRigDef                `json:"aim_rig,omitempty"`

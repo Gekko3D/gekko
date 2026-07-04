@@ -48,6 +48,7 @@ type GameAssetPlayerCatalogEntry struct {
 	SkinFamily            int                                  `json:"skin_family"`
 	HeadMarkerID          string                               `json:"head_marker_id"`
 	RightHandMarkerID     string                               `json:"right_hand_marker_id"`
+	LeftHandMarkerID      string                               `json:"left_hand_marker_id,omitempty"`
 	UpperBodyMarkerID     string                               `json:"upper_body_marker_id"`
 	AimMarkerIDs          []string                             `json:"aim_marker_ids,omitempty"`
 	ClipIDs               []string                             `json:"clip_ids,omitempty"`
@@ -168,6 +169,7 @@ type GameAssetManifestEntry struct {
 	SkinFamily                       int                                  `json:"skin_family,omitempty"`
 	HeadMarkerID                     string                               `json:"head_marker_id,omitempty"`
 	RightHandMarkerID                string                               `json:"right_hand_marker_id,omitempty"`
+	LeftHandMarkerID                 string                               `json:"left_hand_marker_id,omitempty"`
 	UpperBodyMarkerID                string                               `json:"upper_body_marker_id,omitempty"`
 	AimMarkerIDs                     []string                             `json:"aim_marker_ids,omitempty"`
 	ClipIDs                          []string                             `json:"clip_ids,omitempty"`
@@ -467,18 +469,19 @@ func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) 
 
 func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPresentationDef {
 	def := &content.CharacterPresentationDef{
-		HeadMarkerID: entry.HeadMarkerID, RightHandMarkerID: entry.RightHandMarkerID, UpperBodyMarkerID: entry.UpperBodyMarkerID,
+		HeadMarkerID: entry.HeadMarkerID, RightHandMarkerID: entry.RightHandMarkerID, LeftHandMarkerID: entry.LeftHandMarkerID, UpperBodyMarkerID: entry.UpperBodyMarkerID,
 		AimMarkerIDs: append([]string(nil), entry.AimMarkerIDs...), ClipIDs: append([]string(nil), entry.ClipIDs...),
 		AimRig: content.CharacterAimRigDef{
 			Status:           content.CharacterPresentationSupported,
 			MuzzleMarkerKind: content.AssetMarkerKindMuzzle,
 			// HL1's player bind basis is +X forward, +Y up. This is adapted
 			// into generic authored aim data; no HL1 identity reaches runtime.
-			ForwardAxis:       content.Vec3{1, 0, 0},
-			UpAxis:            content.Vec3{0, 1, 0},
-			YawLimitDegrees:   60,
-			PitchLimitDegrees: 45,
-			BoneWeights:       []float32{0.08, 0.12, 0.16, 0.20, 0.24, 0.20},
+			// GoldSrc supplies bind transforms and animation keys, but no joint
+			// limits. Leave limits unconstrained rather than inventing them; a
+			// generic asset may author limits when it has that information.
+			ForwardAxis: content.Vec3{1, 0, 0},
+			UpAxis:      content.Vec3{0, 1, 0},
+			BoneWeights: []float32{0.08, 0.12, 0.16, 0.20, 0.24, 0.20},
 		},
 		CrouchGait: content.CharacterCrouchGaitDef{Status: entry.CrouchGait.Status, CrouchClipID: entry.CrouchGait.CrouchClipID, CrouchIdleClipID: entry.CrouchGait.CrouchIdleClipID, BoneMask: append([]string(nil), entry.CrouchGait.BoneMask...), Diagnostic: entry.CrouchGait.Diagnostic,
 			Locomotion: content.CharacterCrouchLocomotionDef{DefaultClipID: entry.CrouchGait.Locomotion.DefaultClipID, Fallback: entry.CrouchGait.Locomotion.Fallback, BackwardFallback: entry.CrouchGait.Locomotion.BackwardFallback, Directional: hl1CharacterDirectionalClips(entry.CrouchGait.Locomotion.Directional)}},
@@ -498,9 +501,9 @@ func hl1CharacterDirectionalClips(in GameAssetPlayerDirectionalClipSet) content.
 	return content.CharacterDirectionalClipSetDef{Forward: in.Forward, Backward: in.Backward, Left: in.Left, Right: in.Right, ForwardLeft: in.ForwardLeft, ForwardRight: in.ForwardRight, BackwardLeft: in.BackwardLeft, BackwardRight: in.BackwardRight}
 }
 
-// hl1AddHeldWeaponMuzzleMarker maps the shared GoldSrc p_ model convention
-// (barrel at the negative local X extent) to Gekko's generic muzzle marker.
-func hl1AddHeldWeaponMuzzleMarker(asset *content.AssetDef) {
+// hl1AddHeldWeaponPresentationMarkers adapts the shared GoldSrc p_ model
+// convention into generic gun aim and hand-grip anchors after hand rebasing.
+func hl1AddHeldWeaponPresentationMarkers(asset *content.AssetDef) {
 	if asset == nil || len(asset.Parts) == 0 || asset.Parts[0].Source.VoxelShape == nil {
 		return
 	}
@@ -508,9 +511,9 @@ func hl1AddHeldWeaponMuzzleMarker(asset *content.AssetDef) {
 	if len(voxels) == 0 {
 		return
 	}
-	minX, minY, maxY, minZ, maxZ := voxels[0].X, voxels[0].Y, voxels[0].Y, voxels[0].Z, voxels[0].Z
+	maxX, minY, maxY, minZ, maxZ := voxels[0].X, voxels[0].Y, voxels[0].Y, voxels[0].Z, voxels[0].Z
 	for _, voxel := range voxels[1:] {
-		minX = min(minX, voxel.X)
+		maxX = max(maxX, voxel.X)
 		minY, maxY = min(minY, voxel.Y), max(maxY, voxel.Y)
 		minZ, maxZ = min(minZ, voxel.Z), max(maxZ, voxel.Z)
 	}
@@ -518,14 +521,25 @@ func hl1AddHeldWeaponMuzzleMarker(asset *content.AssetDef) {
 	if resolution <= 0 {
 		return
 	}
+	center := content.Vec3{float32(minY+maxY) * resolution * 0.5, float32(minZ+maxZ) * resolution * 0.5}
 	asset.Markers = append(asset.Markers, content.AssetMarkerDef{
 		ID: "muzzle", Name: "muzzle", ParentID: asset.Parts[0].ID, Kind: content.AssetMarkerKindMuzzle,
 		Transform: content.AssetTransformDef{
-			Position: content.Vec3{(float32(minX) - 0.5) * resolution, float32(minY+maxY) * resolution * 0.5, float32(minZ+maxZ) * resolution * 0.5},
-			Rotation: content.Quat{0, 0.70710677, 0, 0.70710677},
+			Position: content.Vec3{(float32(maxX) + 0.5) * resolution, center[0], center[1]},
+			Rotation: content.Quat{0, -0.70710677, 0, 0.70710677},
 			Scale:    content.Vec3{1, 1, 1},
 		},
-		Tags: []string{"source:hl1", "generated:held_weapon_muzzle"},
+		// The p_ convention supplies a deterministic barrel axis, so this is a
+		// generic calibrated aim marker rather than an importer-only hint.
+		Tags: []string{"source:hl1", "generated:held_weapon_muzzle", "aim:calibrated"},
+	}, content.AssetMarkerDef{
+		ID: "right_grip", Name: "right_grip", ParentID: asset.Parts[0].ID, Kind: content.AssetMarkerKindRightGrip,
+		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+		Tags:      []string{"source:hl1", "generated:held_weapon_grip"},
+	}, content.AssetMarkerDef{
+		ID: "left_grip", Name: "left_grip", ParentID: asset.Parts[0].ID, Kind: content.AssetMarkerKindLeftGrip,
+		Transform: content.AssetTransformDef{Position: content.Vec3{float32(maxX) * resolution * 0.45, center[0], center[1]}, Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+		Tags:      []string{"source:hl1", "generated:held_weapon_grip"},
 	})
 }
 
@@ -736,7 +750,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				})
 			} else if asset != nil {
 				if entry.CatalogKind == "weapon_held" {
-					hl1AddHeldWeaponMuzzleMarker(asset)
+					hl1AddHeldWeaponPresentationMarkers(asset)
 				}
 				if entry.CatalogKind == "player" && !hl1PlayerAssetHasRequiredMarkers(asset) {
 					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_anchor_unresolved", Subject: entry.CatalogID, Message: "verified player anchors could not resolve to generated bone parts"})
@@ -753,6 +767,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				if entry.CatalogKind == "player" {
 					entry.HeadMarkerID = "head"
 					entry.RightHandMarkerID = "right_hand"
+					entry.LeftHandMarkerID = "left_hand"
 					entry.UpperBodyMarkerID = "upper_body"
 					entry.AimMarkerIDs = append([]string(nil), hl1PlayerAimMarkerIDs...)
 					entry.SequenceActivities = hl1PlayerSequenceActivities(asset.AnimationClips)
@@ -895,13 +910,15 @@ func (c *hl1AssetCollector) buildEntries() ([]GameAssetManifestEntry, []importco
 var hl1PlayerAimMarkerIDs = []string{"aim_spine", "aim_spine1", "aim_spine2", "aim_spine3", "aim_neck", "head"}
 
 func hl1PlayerSemanticAnchorBones(bones []MDLBoneInfo) map[string]int {
-	anchors := map[string]int{"head": -1, "right_hand": -1, "upper_body": -1, "aim_spine": -1, "aim_spine1": -1, "aim_spine2": -1, "aim_spine3": -1, "aim_neck": -1}
+	anchors := map[string]int{"head": -1, "right_hand": -1, "left_hand": -1, "upper_body": -1, "aim_spine": -1, "aim_spine1": -1, "aim_spine2": -1, "aim_spine3": -1, "aim_neck": -1}
 	for index, bone := range bones {
 		switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", "")) {
 		case "bip01head":
 			anchors["head"] = index
 		case "bip01rhand":
 			anchors["right_hand"] = index
+		case "bip01lhand":
+			anchors["left_hand"] = index
 		case "bip01spine":
 			anchors["upper_body"] = index
 			anchors["aim_spine"] = index
@@ -919,7 +936,7 @@ func hl1PlayerSemanticAnchorBones(bones []MDLBoneInfo) map[string]int {
 }
 
 func hl1PlayerHasRequiredAnchors(anchors map[string]int) bool {
-	if anchors["right_hand"] < 0 || anchors["upper_body"] < 0 {
+	if anchors["right_hand"] < 0 || anchors["left_hand"] < 0 || anchors["upper_body"] < 0 {
 		return false
 	}
 	for _, markerID := range hl1PlayerAimMarkerIDs {
@@ -931,7 +948,7 @@ func hl1PlayerHasRequiredAnchors(anchors map[string]int) bool {
 }
 
 func hl1PlayerAssetHasRequiredMarkers(asset *content.AssetDef) bool {
-	if !assetHasMarker(asset, "right_hand") || !assetHasMarker(asset, "upper_body") {
+	if !assetHasMarker(asset, "right_hand") || !assetHasMarker(asset, "left_hand") || !assetHasMarker(asset, "upper_body") {
 		return false
 	}
 	for _, markerID := range hl1PlayerAimMarkerIDs {
@@ -1129,7 +1146,7 @@ func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
 		}
 		switch entry.CatalogKind {
 		case "player":
-			if entry.HeadMarkerID == "" || entry.RightHandMarkerID == "" || entry.UpperBodyMarkerID == "" || len(entry.AimMarkerIDs) == 0 {
+			if entry.HeadMarkerID == "" || entry.RightHandMarkerID == "" || entry.LeftHandMarkerID == "" || entry.UpperBodyMarkerID == "" || len(entry.AimMarkerIDs) == 0 {
 				continue
 			}
 			catalog.Players = append(catalog.Players, GameAssetPlayerCatalogEntry{
@@ -1140,6 +1157,7 @@ func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
 				SkinFamily:            entry.SkinFamily,
 				HeadMarkerID:          entry.HeadMarkerID,
 				RightHandMarkerID:     entry.RightHandMarkerID,
+				LeftHandMarkerID:      entry.LeftHandMarkerID,
 				UpperBodyMarkerID:     entry.UpperBodyMarkerID,
 				AimMarkerIDs:          append([]string(nil), entry.AimMarkerIDs...),
 				ClipIDs:               append([]string(nil), entry.ClipIDs...),

@@ -17,7 +17,7 @@ func ApplyAuthoredAimRig(cmd *Commands, characterRoot, heldAssetRoot EntityId, r
 		return false
 	}
 	TransformHierarchySystem(cmd)
-	current, ok := authoredAimFrameDirection(cmd, heldAssetRoot, rig)
+	frame, ok := authoredAimFrame(cmd, heldAssetRoot, rig)
 	if !ok {
 		return false
 	}
@@ -25,9 +25,78 @@ func ApplyAuthoredAimRig(cmd *Commands, characterRoot, heldAssetRoot EntityId, r
 	if root == nil {
 		return false
 	}
+	return applyAuthoredAimDirections(cmd, characterRoot, heldAssetRoot, root, rig, aimBones, frame, targetDirection, targetDirection)
+}
+
+// ApplyAuthoredAimRigAtPoint turns an authored aim chain toward a world-space
+// target. Games choose that target from their camera, AI, or interaction ray;
+// the generic solver accounts for the held asset's actual muzzle position.
+func ApplyAuthoredAimRigAtPoint(cmd *Commands, characterRoot, heldAssetRoot EntityId, rig content.CharacterAimRigDef, aimBones []EntityId, targetPoint mgl32.Vec3) bool {
+	if cmd == nil || characterRoot == 0 || heldAssetRoot == 0 || len(aimBones) == 0 {
+		return false
+	}
+	TransformHierarchySystem(cmd)
+	frame, ok := authoredAimFrame(cmd, heldAssetRoot, rig)
+	if !ok {
+		return false
+	}
+	targetDirection := targetPoint.Sub(frame.Position)
+	if targetDirection.LenSqr() <= 1e-8 {
+		return false
+	}
+	root, _ := cmd.GetComponent(characterRoot, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if root == nil {
+		return false
+	}
+	return applyAuthoredAimDirections(cmd, characterRoot, heldAssetRoot, root, rig, aimBones, frame, targetDirection, targetDirection)
+}
+
+// ApplyAuthoredAimRigAtRay aims at a point on a world-space ray. Its pitch
+// follows the muzzle-to-point vector while its yaw follows the ray heading,
+// which remains stable when the point is nearly straight above or below.
+func ApplyAuthoredAimRigAtRay(cmd *Commands, characterRoot, heldAssetRoot EntityId, rig content.CharacterAimRigDef, aimBones []EntityId, targetPoint, rayDirection mgl32.Vec3) bool {
+	if cmd == nil || characterRoot == 0 || heldAssetRoot == 0 || len(aimBones) == 0 || rayDirection.LenSqr() <= 1e-8 {
+		return false
+	}
+	TransformHierarchySystem(cmd)
+	frame, ok := authoredAimFrame(cmd, heldAssetRoot, rig)
+	if !ok {
+		return false
+	}
+	targetDirection := targetPoint.Sub(frame.Position)
+	if targetDirection.LenSqr() <= 1e-8 {
+		return false
+	}
+	root, _ := cmd.GetComponent(characterRoot, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if root == nil {
+		return false
+	}
+	return applyAuthoredAimDirections(cmd, characterRoot, heldAssetRoot, root, rig, aimBones, frame, targetDirection, rayDirection)
+}
+
+func applyAuthoredAimDirections(cmd *Commands, characterRoot, heldAssetRoot EntityId, root *TransformComponent, rig content.CharacterAimRigDef, aimBones []EntityId, currentFrame authoredAimFrameState, targetDirection, yawDirection mgl32.Vec3) bool {
+	if root == nil || currentFrame.Direction.LenSqr() <= 1e-8 || targetDirection.LenSqr() <= 1e-8 {
+		return false
+	}
+	if rig.YawLimitDegrees <= 0 && rig.PitchLimitDegrees <= 0 {
+		_, authoredUp, _, ok := authoredAimAxes(rig)
+		if !ok {
+			return false
+		}
+		targetFrame, ok := authoredAimFrameForDirection(
+			targetDirection,
+			root.Rotation.Rotate(authoredUp),
+			currentFrame.Rotation.Rotate(mgl32.Vec3{0, 1, 0}),
+		)
+		if !ok {
+			return false
+		}
+		return applyAuthoredAimWorldDelta(cmd, heldAssetRoot, rig, aimBones, root, targetFrame.Mul(currentFrame.Rotation.Inverse()).Normalize())
+	}
 	toLocal := root.Rotation.Inverse()
-	current = toLocal.Rotate(current).Normalize()
+	current := toLocal.Rotate(currentFrame.Direction).Normalize()
 	target := toLocal.Rotate(targetDirection).Normalize()
+	yawTarget := toLocal.Rotate(yawDirection).Normalize()
 	forward, up, _, ok := authoredAimAxes(rig)
 	if !ok {
 		return false
@@ -35,9 +104,12 @@ func ApplyAuthoredAimRig(cmd *Commands, characterRoot, heldAssetRoot EntityId, r
 	// The horizontal reference points toward positive camera yaw. The pitch
 	// axis points the other way (forward × up), so keep the two distinct.
 	yawRight := up.Cross(forward).Normalize()
-	yaw := authoredAimNormalize(authoredAimYaw(target, forward, yawRight) - authoredAimYaw(current, forward, yawRight))
+	yaw := float32(0)
+	if yawTarget.Sub(up.Mul(yawTarget.Dot(up))).LenSqr() > 1e-8 {
+		yaw = authoredAimNormalize(authoredAimYaw(yawTarget, forward, yawRight) - authoredAimYaw(current, forward, yawRight))
+	}
 	pitch := authoredAimPitch(target, up) - authoredAimPitch(current, up)
-	return applyAuthoredAimOffset(cmd, characterRoot, rig, aimBones, yaw, pitch)
+	return applyAuthoredAimOffset(cmd, characterRoot, heldAssetRoot, rig, aimBones, yaw, pitch)
 }
 
 // ApplyAuthoredAimOffset applies camera-relative yaw and pitch in the
@@ -49,10 +121,10 @@ func ApplyAuthoredAimOffset(cmd *Commands, characterRoot EntityId, rig content.C
 		return false
 	}
 	TransformHierarchySystem(cmd)
-	return applyAuthoredAimOffset(cmd, characterRoot, rig, aimBones, yaw, pitch)
+	return applyAuthoredAimOffset(cmd, characterRoot, 0, rig, aimBones, yaw, pitch)
 }
 
-func applyAuthoredAimOffset(cmd *Commands, characterRoot EntityId, rig content.CharacterAimRigDef, aimBones []EntityId, yaw, pitch float32) bool {
+func applyAuthoredAimOffset(cmd *Commands, characterRoot, heldAssetRoot EntityId, rig content.CharacterAimRigDef, aimBones []EntityId, yaw, pitch float32) bool {
 	root, _ := cmd.GetComponent(characterRoot, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
 	if root == nil {
 		return false
@@ -65,17 +137,25 @@ func applyAuthoredAimOffset(cmd *Commands, characterRoot EntityId, rig content.C
 	pitch = authoredAimClamp(pitch, rig.PitchLimitDegrees)
 	worldYawAxis := root.Rotation.Rotate(up).Normalize()
 	worldPitchAxis := root.Rotation.Rotate(pitchAxis).Normalize()
+	worldDelta := mgl32.QuatRotate(mgl32.DegToRad(pitch), worldPitchAxis).
+		Mul(mgl32.QuatRotate(mgl32.DegToRad(yaw), worldYawAxis)).
+		Normalize()
+	return applyAuthoredAimWorldDelta(cmd, heldAssetRoot, rig, aimBones, root, worldDelta)
+}
+
+func applyAuthoredAimWorldDelta(cmd *Commands, heldAssetRoot EntityId, rig content.CharacterAimRigDef, aimBones []EntityId, root *TransformComponent, worldDelta mgl32.Quat) bool {
+	if root == nil {
+		return false
+	}
 	worldDeltas := make(map[EntityId]mgl32.Quat, len(aimBones))
+	weights := authoredAimWeights(cmd, heldAssetRoot, rig, aimBones)
 	applied := false
 	for index, bone := range aimBones {
 		local, _ := cmd.GetComponent(bone, reflect.TypeOf(LocalTransformComponent{})).(*LocalTransformComponent)
 		if local == nil {
 			continue
 		}
-		weight := float32(1) / float32(len(aimBones))
-		if index < len(rig.BoneWeights) {
-			weight = rig.BoneWeights[index]
-		}
+		weight := weights[index]
 		parentRotation := root.Rotation
 		parentDelta := mgl32.QuatIdent()
 		if parent, exists := parentForEntity(cmd, bone); exists {
@@ -87,26 +167,61 @@ func applyAuthoredAimOffset(cmd *Commands, characterRoot EntityId, rig content.C
 			}
 		}
 		parentRotation = parentDelta.Mul(parentRotation).Normalize()
-		yawAxis := parentRotation.Inverse().Rotate(worldYawAxis).Normalize()
-		pitchAxis := parentRotation.Inverse().Rotate(worldPitchAxis).Normalize()
-		yawRotation := mgl32.QuatRotate(mgl32.DegToRad(yaw*weight), yawAxis)
-		pitchRotation := mgl32.QuatRotate(mgl32.DegToRad(pitch*weight), pitchAxis)
-		local.Rotation = yawRotation.Mul(pitchRotation).Mul(local.Rotation).Normalize()
-		worldDeltas[bone] = mgl32.QuatRotate(mgl32.DegToRad(yaw*weight), worldYawAxis).
-			Mul(mgl32.QuatRotate(mgl32.DegToRad(pitch*weight), worldPitchAxis)).
-			Mul(parentDelta).
-			Normalize()
+		boneDelta := mgl32.QuatSlerp(mgl32.QuatIdent(), worldDelta, weight)
+		localDelta := parentRotation.Inverse().Mul(boneDelta).Mul(parentRotation).Normalize()
+		local.Rotation = localDelta.Mul(local.Rotation).Normalize()
+		worldDeltas[bone] = boneDelta.Mul(parentDelta).Normalize()
 		applied = true
 	}
 	return applied
 }
 
-func authoredAimFrameDirection(cmd *Commands, heldAssetRoot EntityId, rig content.CharacterAimRigDef) (mgl32.Vec3, bool) {
+func authoredAimWeights(cmd *Commands, heldAssetRoot EntityId, rig content.CharacterAimRigDef, aimBones []EntityId) []float32 {
+	weights := make([]float32, len(aimBones))
+	for index := range aimBones {
+		weights[index] = float32(1) / float32(len(aimBones))
+		if index < len(rig.BoneWeights) {
+			weights[index] = rig.BoneWeights[index]
+		}
+	}
+	if heldAssetRoot == 0 {
+		return weights
+	}
+	drivingWeight := float32(0)
+	for index, bone := range aimBones {
+		if isEntityOrDescendantOf(cmd, heldAssetRoot, bone) {
+			drivingWeight += weights[index]
+		}
+	}
+	if drivingWeight <= 1e-8 {
+		return weights
+	}
+	for index, bone := range aimBones {
+		if isEntityOrDescendantOf(cmd, heldAssetRoot, bone) {
+			weights[index] /= drivingWeight
+		}
+	}
+	return weights
+}
+
+type authoredAimFrameState struct {
+	Position  mgl32.Vec3
+	Rotation  mgl32.Quat
+	Direction mgl32.Vec3
+}
+
+func authoredAimFrame(cmd *Commands, heldAssetRoot EntityId, rig content.CharacterAimRigDef) (authoredAimFrameState, bool) {
 	if attachment, _ := cmd.GetComponent(heldAssetRoot, reflect.TypeOf(AuthoredAssetAttachmentComponent{})).(*AuthoredAssetAttachmentComponent); attachment != nil && attachment.AimMarker != 0 && attachment.AimFrame != nil {
 		marker, _ := cmd.GetComponent(attachment.AimMarker, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
 		if marker != nil {
-			frame := AssetLocalTransformFromDef(attachment.AimFrame.Frame)
-			return marker.Rotation.Mul(frame.Rotation).Rotate(mgl32.Vec3{0, 0, -1}), true
+			frame := attachment.AimFrame.Frame
+			position := marker.Position.Add(marker.Rotation.Rotate(mgl32.Vec3{
+				frame.Position[0] * marker.Scale.X(),
+				frame.Position[1] * marker.Scale.Y(),
+				frame.Position[2] * marker.Scale.Z(),
+			}))
+			rotation := marker.Rotation.Mul(contentQuat(frame.Rotation)).Normalize()
+			return authoredAimFrameState{Position: position, Rotation: rotation, Direction: rotation.Rotate(mgl32.Vec3{0, 0, -1}).Normalize()}, true
 		}
 	}
 	markerKind := rig.MuzzleMarkerKind
@@ -115,9 +230,35 @@ func authoredAimFrameDirection(cmd *Commands, heldAssetRoot EntityId, rig conten
 	}
 	marker, ok := FindFirstAuthoredAssetMarkerByKind(cmd, heldAssetRoot, markerKind)
 	if !ok || !authoredAimMarkerCalibrated(marker.Marker.Tags) {
-		return mgl32.Vec3{}, false
+		return authoredAimFrameState{}, false
 	}
-	return marker.Transform.Rotation.Rotate(mgl32.Vec3{0, 0, -1}), true
+	rotation := marker.Transform.Rotation.Normalize()
+	return authoredAimFrameState{Position: marker.Transform.Position, Rotation: rotation, Direction: rotation.Rotate(mgl32.Vec3{0, 0, -1}).Normalize()}, true
+}
+
+// authoredAimFrameForDirection preserves a complete orientation while aiming.
+// QuatBetweenVectors matches only forward and leaves roll arbitrary, which
+// twists authored weapon-hold poses when the target is off-axis.
+func authoredAimFrameForDirection(direction, referenceUp, fallbackUp mgl32.Vec3) (mgl32.Quat, bool) {
+	if direction.LenSqr() <= 1e-8 {
+		return mgl32.Quat{}, false
+	}
+	forward := direction.Normalize()
+	up := referenceUp.Sub(forward.Mul(referenceUp.Dot(forward)))
+	if up.LenSqr() <= 1e-8 {
+		up = fallbackUp.Sub(forward.Mul(fallbackUp.Dot(forward)))
+	}
+	if up.LenSqr() <= 1e-8 {
+		return mgl32.Quat{}, false
+	}
+	up = up.Normalize()
+	right := forward.Cross(up).Normalize()
+	return mgl32.Mat4ToQuat(mgl32.Mat4FromCols(
+		mgl32.Vec4{right.X(), right.Y(), right.Z(), 0},
+		mgl32.Vec4{up.X(), up.Y(), up.Z(), 0},
+		mgl32.Vec4{-forward.X(), -forward.Y(), -forward.Z(), 0},
+		mgl32.Vec4{0, 0, 0, 1},
+	)).Normalize(), true
 }
 
 func authoredAimAxes(rig content.CharacterAimRigDef) (mgl32.Vec3, mgl32.Vec3, mgl32.Vec3, bool) {

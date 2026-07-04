@@ -25,10 +25,12 @@ type AuthoredAssetRefComponent struct {
 // mount. It lives on the spawned child asset root; the existing hierarchy
 // system supplies the actual transform inheritance.
 type AuthoredAssetAttachmentComponent struct {
-	AttachmentID string
-	ParentMarker EntityId
-	AimMarker    EntityId
-	AimFrame     *content.AssetAttachmentAimFrameDef
+	AttachmentID   string
+	ParentMarker   EntityId
+	MountTransform content.AssetTransformDef
+	AimMarker      EntityId
+	AimFrame       *content.AssetAttachmentAimFrameDef
+	GripFrames     []content.AssetAttachmentGripFrameDef
 }
 
 type CollapsedAuthoredVoxelPartsComponent struct {

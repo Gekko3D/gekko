@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"unicode"
@@ -99,6 +100,29 @@ func assetAnimationSystem(time *Time, cmd *Commands) {
 			applyAnimationLayers(player, animationSet, targets, rootTargets, dt)
 			return true
 		})
+}
+
+// SampleAuthoredAssetAnimation applies an authored asset's current base clip
+// and layers without advancing time. Gameplay can use it after changing a
+// pose selection, before adding a procedural post-animation adjustment.
+func SampleAuthoredAssetAnimation(cmd *Commands, root EntityId) bool {
+	if cmd == nil || root == 0 {
+		return false
+	}
+	player, _ := cmd.GetComponent(root, reflect.TypeOf(AnimationPlayerComponent{})).(*AnimationPlayerComponent)
+	animationSet, _ := cmd.GetComponent(root, reflect.TypeOf(AuthoredAssetAnimationSetComponent{})).(*AuthoredAssetAnimationSetComponent)
+	rootRef, _ := cmd.GetComponent(root, reflect.TypeOf(AuthoredAssetRootComponent{})).(*AuthoredAssetRootComponent)
+	if player == nil || animationSet == nil || rootRef == nil || len(animationSet.Clips) == 0 {
+		return false
+	}
+	if player.ClipID == "" {
+		player.ClipID = animationSet.DefaultClipID
+	}
+	parentByEntity := animationParentIndex(cmd)
+	targets := animationTargetsForRoot(cmd, parentByEntity, root, rootRef.AssetID)
+	rootTargets := animationRootTargetIDs(cmd, parentByEntity, root, rootRef.AssetID)
+	applyAnimationLayers(player, animationSet, targets, rootTargets, 0)
+	return true
 }
 
 func animationParentIndex(cmd *Commands) map[EntityId]EntityId {

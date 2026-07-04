@@ -60,6 +60,16 @@ func ValidateAssetAttachmentLibrary(def *AssetAttachmentLibraryDef) error {
 		if attachment.Aim != nil && attachment.Aim.MarkerID == "" {
 			return fmt.Errorf("attachment %q aim frame requires marker id", attachment.ID)
 		}
+		grips := map[string]struct{}{}
+		for _, grip := range attachment.GripFrames {
+			if grip.MarkerID == "" {
+				return fmt.Errorf("attachment %q grip frame requires marker id", attachment.ID)
+			}
+			if _, exists := grips[grip.MarkerID]; exists {
+				return fmt.Errorf("attachment %q has duplicate grip frame marker %q", attachment.ID, grip.MarkerID)
+			}
+			grips[grip.MarkerID] = struct{}{}
+		}
 		if _, ok := seen[attachment.ID]; ok {
 			return fmt.Errorf("duplicate attachment id %q", attachment.ID)
 		}
