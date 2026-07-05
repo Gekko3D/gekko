@@ -24,6 +24,9 @@ type AssetAttachmentDef struct {
 	AssemblyRef string                        `json:"assembly_ref,omitempty"`
 	Transform   AssetTransformDef             `json:"transform"`
 	Aim         *AssetAttachmentAimFrameDef   `json:"aim,omitempty"`
+	// AimOffset is applied after a presentation asset has been aimed. Its
+	// local -Z direction is forward, matching AssetAttachmentAimFrameDef.
+	AimOffset   *Vec3                         `json:"aim_offset,omitempty"`
 	GripFrames  []AssetAttachmentGripFrameDef `json:"grip_frames,omitempty"`
 	Tags        []string                      `json:"tags,omitempty"`
 }

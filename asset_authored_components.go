@@ -30,6 +30,7 @@ type AuthoredAssetAttachmentComponent struct {
 	MountTransform content.AssetTransformDef
 	AimMarker      EntityId
 	AimFrame       *content.AssetAttachmentAimFrameDef
+	AimOffset      *content.Vec3
 	GripFrames     []content.AssetAttachmentGripFrameDef
 }
 

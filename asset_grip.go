@@ -37,6 +37,35 @@ func ResetAuthoredAssetAttachmentMount(cmd *Commands, root EntityId) bool {
 	return setEntityWorldTransform(cmd, root, world)
 }
 
+// ApplyAuthoredAssetAttachmentAimOffset shifts a procedurally aimed asset in
+// its authored aim-frame basis. It is applied after aiming, so forward stays
+// forward regardless of the host marker's local axes.
+func ApplyAuthoredAssetAttachmentAimOffset(cmd *Commands, root EntityId) bool {
+	if cmd == nil || root == 0 {
+		return false
+	}
+	attachment, _ := cmd.GetComponent(root, reflect.TypeOf(AuthoredAssetAttachmentComponent{})).(*AuthoredAssetAttachmentComponent)
+	if attachment == nil || attachment.AimOffset == nil {
+		return true
+	}
+	TransformHierarchySystem(cmd)
+	frame, ok := authoredAimFrame(cmd, root, content.CharacterAimRigDef{})
+	if !ok {
+		return false
+	}
+	rootWorld, _ := cmd.GetComponent(root, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if rootWorld == nil {
+		return false
+	}
+	offset := attachment.AimOffset
+	worldOffset := frame.Rotation.Rotate(mgl32.Vec3{offset[0], offset[1], offset[2]})
+	return setEntityWorldTransform(cmd, root, TransformComponent{
+		Position: rootWorld.Position.Add(worldOffset),
+		Rotation: rootWorld.Rotation,
+		Scale:    rootWorld.Scale,
+	})
+}
+
 // AimAuthoredAssetAtDirection turns a detached presentation asset toward a
 // direction while preserving the calibrated aim frame's position. It is
 // source-neutral: the asset supplies the frame through its attachment or
@@ -155,6 +184,12 @@ func ApplyAuthoredTwoBoneGripAt(cmd *Commands, handMarker EntityId, gripPosition
 	if rootWorld == nil || midWorld == nil || handWorld == nil {
 		return false
 	}
+	// A calibrated grip can already coincide with the animated hand. Avoid
+	// solving a zero-length correction, which would make the elbow rotation
+	// undefined and propagate NaNs through the presentation hierarchy.
+	if handWorld.Position.Sub(gripPosition).LenSqr() <= 1e-8 {
+		return true
+	}
 	first := midWorld.Position.Sub(rootWorld.Position)
 	second := handWorld.Position.Sub(midWorld.Position)
 	l1, l2 := first.Len(), second.Len()
@@ -183,7 +218,12 @@ func ApplyAuthoredTwoBoneGripAt(cmd *Commands, handMarker EntityId, gripPosition
 	if midWorld == nil || handWorld == nil {
 		return false
 	}
-	return setEntityWorldRotation(cmd, mid.Entity, mgl32.QuatBetweenVectors(handWorld.Position.Sub(midWorld.Position), gripPosition.Sub(midWorld.Position)).Mul(midWorld.Rotation).Normalize())
+	forearm := handWorld.Position.Sub(midWorld.Position)
+	targetForearm := gripPosition.Sub(midWorld.Position)
+	if forearm.LenSqr() <= 1e-8 || targetForearm.LenSqr() <= 1e-8 {
+		return false
+	}
+	return setEntityWorldRotation(cmd, mid.Entity, mgl32.QuatBetweenVectors(forearm, targetForearm).Mul(midWorld.Rotation).Normalize())
 }
 
 func setEntityWorldTransform(cmd *Commands, entity EntityId, world TransformComponent) bool {
