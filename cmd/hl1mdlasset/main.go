@@ -59,9 +59,10 @@ func main() {
 		fatalf("load mdl: %v", err)
 	}
 	asset, voxelCount, err := hl1.BuildMDLVoxelAsset(geometry, hl1.MDLVoxelAssetOptions{
-		Name:            name,
-		SourceRef:       sourceRef,
-		VoxelResolution: voxelResolution,
+		Name:                name,
+		SourceRef:           sourceRef,
+		VoxelResolution:     voxelResolution,
+		VoxelizationProfile: hl1.MDLVoxelizationProfileForCategory(hl1.HL1VoxelResolutionCategoryNPC),
 	})
 	if err != nil {
 		fatalf("build asset: %v", err)

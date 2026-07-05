@@ -59,11 +59,12 @@ type CharacterWeaponPresentationDef struct {
 	Diagnostic    string                     `json:"diagnostic,omitempty"`
 }
 type CharacterWeaponStanceDef struct {
-	Stance             string `json:"stance"`
-	AimClipID          string `json:"aim_clip_id,omitempty"`
-	RecoilClipID       string `json:"recoil_clip_id,omitempty"`
-	CrouchAimClipID    string `json:"crouch_aim_clip_id,omitempty"`
-	CrouchRecoilClipID string `json:"crouch_recoil_clip_id,omitempty"`
+	Stance             string   `json:"stance"`
+	AimClipID          string   `json:"aim_clip_id,omitempty"`
+	RecoilClipID       string   `json:"recoil_clip_id,omitempty"`
+	CrouchAimClipID    string   `json:"crouch_aim_clip_id,omitempty"`
+	CrouchRecoilClipID string   `json:"crouch_recoil_clip_id,omitempty"`
+	BoneMask           []string `json:"bone_mask,omitempty"`
 }
 type CharacterCrouchLocomotionDef struct {
 	Directional      CharacterDirectionalClipSetDef `json:"directional,omitempty"`

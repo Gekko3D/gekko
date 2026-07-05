@@ -12,9 +12,10 @@ import (
 )
 
 type MDLVoxelAssetOptions struct {
-	Name            string
-	SourceRef       string
-	VoxelResolution float32
+	Name                string
+	SourceRef           string
+	VoxelResolution     float32
+	VoxelizationProfile MDLVoxelizationProfile
 	// StaticPose emits a single, transform-baked voxel part. It is for world
 	// model uses (such as pickups) whose runtime contract is a static visual,
 	// regardless of the skeletal representation in the source MDL.
@@ -32,11 +33,71 @@ type MDLVoxelAssetOptions struct {
 	LockRootMotion bool
 }
 
+// MDLVoxelizationProfile owns import-time visual quality policy. Runtime keeps
+// consuming ordinary authored voxel parts and does not need source-format
+// knowledge.
+type MDLVoxelizationProfile struct {
+	ID                          string  `json:"id"`
+	CoverageSamples             int     `json:"coverage_samples"`
+	RespectMaskedTextures       bool    `json:"respect_masked_textures"`
+	FillClosedInterior          bool    `json:"fill_closed_interior,omitempty"`
+	PartitionBySkeletonSegments bool    `json:"partition_by_skeleton_segments,omitempty"`
+	JointCapVoxels              int     `json:"joint_cap_voxels,omitempty"`
+	MaxInteriorSampleCells      int     `json:"max_interior_sample_cells,omitempty"`
+	TargetMaxVoxelCount         int     `json:"target_max_voxel_count,omitempty"`
+	CoarsestResolution          float32 `json:"coarsest_resolution,omitempty"`
+}
+
+func DefaultMDLVoxelizationProfile() MDLVoxelizationProfile {
+	return MDLVoxelizationProfile{
+		ID:                    "hl1_mdl_surface_v1",
+		CoverageSamples:       7,
+		RespectMaskedTextures: true,
+	}
+}
+
+func MDLVoxelizationProfileForCategory(category HL1VoxelResolutionCategory) MDLVoxelizationProfile {
+	profile := DefaultMDLVoxelizationProfile()
+	if category == HL1VoxelResolutionCategoryNPC {
+		profile.ID = "hl1_npc_rigid_v3"
+		profile.FillClosedInterior = true
+		profile.PartitionBySkeletonSegments = true
+		profile.JointCapVoxels = 1
+		profile.MaxInteriorSampleCells = 4000000
+		profile.TargetMaxVoxelCount = 120000
+		profile.CoarsestResolution = 0.08
+	}
+	return profile
+}
+
+func effectiveMDLVoxelizationProfile(profile MDLVoxelizationProfile) MDLVoxelizationProfile {
+	if profile == (MDLVoxelizationProfile{}) {
+		return DefaultMDLVoxelizationProfile()
+	}
+	if profile.ID == "" {
+		profile.ID = "custom"
+	}
+	if profile.CoverageSamples <= 0 {
+		profile.CoverageSamples = 1
+	}
+	if profile.JointCapVoxels < 0 {
+		profile.JointCapVoxels = 0
+	}
+	if profile.MaxInteriorSampleCells < 0 {
+		profile.MaxInteriorSampleCells = 0
+	}
+	if profile.TargetMaxVoxelCount < 0 {
+		profile.TargetMaxVoxelCount = 0
+	}
+	return profile
+}
+
 func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*content.AssetDef, int, error) {
 	resolution := opts.VoxelResolution
 	if resolution <= 0 {
 		resolution = DefaultImportedVoxelResolution
 	}
+	opts.VoxelizationProfile = effectiveMDLVoxelizationProfile(opts.VoxelizationProfile)
 	if len(geometry.Triangles) == 0 {
 		return nil, 0, fmt.Errorf("mdl contains no decoded triangles")
 	}
@@ -50,12 +111,13 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 		geometry = rebaseMDLGeometryToBoneOrigin(geometry, opts.RebaseBoneIndex)
 	}
 	if opts.StaticPose {
-		return buildMDLStaticPoseVoxelAsset(geometry, opts, resolution)
+		voxels, effectiveResolution := voxelizeMDLGeometryToBudget(geometry, resolution, opts.VoxelizationProfile)
+		return buildMDLStaticPoseVoxelAsset(geometry, opts, effectiveResolution, voxels)
 	}
-	if boneVoxels := voxelizeMDLGeometryByBone(geometry, resolution); len(boneVoxels) > 0 {
-		return buildMDLRigidBoneVoxelAsset(geometry, opts, resolution, boneVoxels)
+	if boneVoxels, effectiveResolution := voxelizeMDLGeometryByBoneToBudget(geometry, resolution, opts.VoxelizationProfile); len(boneVoxels) > 0 {
+		return buildMDLRigidBoneVoxelAsset(geometry, opts, effectiveResolution, boneVoxels)
 	}
-	voxels := voxelizeMDLGeometry(geometry, resolution)
+	voxels, resolution := voxelizeMDLGeometryToBudget(geometry, resolution, opts.VoxelizationProfile)
 	if len(voxels) == 0 {
 		return nil, 0, fmt.Errorf("mdl voxelization produced no voxels")
 	}
@@ -125,8 +187,7 @@ func rebaseMDLGeometryToBoneOrigin(geometry MDLGeometry, boneIndex int) MDLGeome
 	return geometry
 }
 
-func buildMDLStaticPoseVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32) (*content.AssetDef, int, error) {
-	voxels := voxelizeMDLGeometry(geometry, resolution)
+func buildMDLStaticPoseVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32, voxels map[[3]int]mdlVoxelSample) (*content.AssetDef, int, error) {
 	if len(voxels) == 0 {
 		return nil, 0, fmt.Errorf("mdl voxelization produced no voxels")
 	}
@@ -172,6 +233,9 @@ func newMDLVoxelAssetBase(geometry MDLGeometry, opts MDLVoxelAssetOptions) *cont
 	}
 	asset := content.NewAssetDef(name)
 	asset.Tags = []string{"source:hl1", "source_asset:mdl", "generated:mdl_voxel_surface"}
+	if opts.VoxelizationProfile.ID != "" {
+		asset.Tags = append(asset.Tags, "voxelization_profile:"+opts.VoxelizationProfile.ID)
+	}
 	if opts.SourceRef != "" {
 		asset.Tags = append(asset.Tags, "source_ref:"+opts.SourceRef)
 	}
@@ -179,15 +243,19 @@ func newMDLVoxelAssetBase(geometry MDLGeometry, opts MDLVoxelAssetOptions) *cont
 }
 
 func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32, boneVoxels map[int]map[[3]int]mdlVoxelSample) (*content.AssetDef, int, error) {
-	allVoxels := mergeMDLVoxelMaps(boneVoxels)
-	if len(allVoxels) == 0 {
+	if mdlBoneVoxelCount(boneVoxels) == 0 {
 		return nil, 0, fmt.Errorf("mdl voxelization produced no voxels")
 	}
-	materials, palette := mdlAssetMaterialsAndPalette(allVoxels)
+	bonePalettes := make(map[int]mdlColorPalette, len(boneVoxels))
+	for boneIndex, voxels := range boneVoxels {
+		if len(voxels) > 0 {
+			bonePalettes[boneIndex] = newMDLColorPalette(voxels)
+		}
+	}
 	asset := newMDLVoxelAssetBase(geometry, opts)
 	asset.Tags = append(asset.Tags, "generated:mdl_rigid_bone_parts")
 	asset.Skeleton = mdlAssetSkeleton(geometry.Info.Bones)
-	asset.Materials = materials
+	asset.Materials = mdlAssetMaterialsForPalettes(bonePalettes)
 	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: false}
 
 	boneIDs := mdlAssetBoneIDs(geometry.Info.Bones)
@@ -221,7 +289,8 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 			Tags: []string{"source:hl1", "source_asset:mdl", "kind:mdl_bone", fmt.Sprintf("bone_index:%d", boneIndex)},
 		})
 		if len(voxels) > 0 {
-			localVoxels, visualOrigin := localizeMDLVoxelsWithPalette(voxels, resolution, newMDLColorPalette(allVoxels))
+			palette := bonePalettes[boneIndex]
+			localVoxels, visualOrigin := localizeMDLVoxelsWithPalette(voxels, resolution, palette)
 			voxelCount += len(localVoxels)
 			childOffset := importcommon.Vec3{
 				X: visualOrigin.X - boneOrigin.X,
@@ -241,7 +310,7 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 				Source: content.AssetSourceDef{
 					Kind: content.AssetSourceKindVoxelShape,
 					VoxelShape: &content.AssetVoxelShapeDef{
-						Palette: palette,
+						Palette: mdlAssetShapePalette(palette),
 						Voxels:  localVoxels,
 					},
 				},
@@ -671,6 +740,21 @@ func nonEmptyString(value string, fallback string) string {
 }
 
 func voxelizeMDLGeometry(geometry MDLGeometry, resolution float32) map[[3]int]mdlVoxelSample {
+	return voxelizeMDLGeometryWithProfile(geometry, resolution, DefaultMDLVoxelizationProfile())
+}
+
+func voxelizeMDLGeometryToBudget(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) (map[[3]int]mdlVoxelSample, float32) {
+	for attempt := 0; ; attempt++ {
+		voxels := voxelizeMDLGeometryWithProfile(geometry, resolution, profile)
+		next, retry := nextMDLVoxelResolution(resolution, int64(len(voxels)), profile, attempt)
+		if !retry {
+			return voxels, resolution
+		}
+		resolution = next
+	}
+}
+
+func voxelizeMDLGeometryWithProfile(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) map[[3]int]mdlVoxelSample {
 	out := map[[3]int]mdlVoxelSample{}
 	half := importcommon.Vec3{X: resolution * 0.5, Y: resolution * 0.5, Z: resolution * 0.5}
 	for _, tri := range geometry.Triangles {
@@ -687,7 +771,7 @@ func voxelizeMDLGeometry(geometry MDLGeometry, resolution float32) map[[3]int]md
 					if !triangleIntersectsVoxel(triWorld, key, half, resolution) {
 						continue
 					}
-					color := sampleMDLTriangleColor(geometry, tri, triWorld, voxelCenter(key, resolution))
+					color := sampleMDLTriangleVoxelColor(geometry, tri, triWorld, key, resolution, profile)
 					if color[3] == 0 {
 						continue
 					}
@@ -700,10 +784,44 @@ func voxelizeMDLGeometry(geometry MDLGeometry, resolution float32) map[[3]int]md
 }
 
 func voxelizeMDLGeometryByBone(geometry MDLGeometry, resolution float32) map[int]map[[3]int]mdlVoxelSample {
+	return voxelizeMDLGeometryByBoneWithProfile(geometry, resolution, DefaultMDLVoxelizationProfile())
+}
+
+func voxelizeMDLGeometryByBoneToBudget(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) (map[int]map[[3]int]mdlVoxelSample, float32) {
+	for attempt := 0; ; attempt++ {
+		boneVoxels := voxelizeMDLGeometryByBoneWithProfile(geometry, resolution, profile)
+		var interior map[[3]int]struct{}
+		if profile.FillClosedInterior {
+			boundsCells := mdlBoneVoxelBoundsCellCount(boneVoxels)
+			if profile.MaxInteriorSampleCells > 0 && boundsCells > int64(profile.MaxInteriorSampleCells) {
+				limitProfile := profile
+				limitProfile.TargetMaxVoxelCount = profile.MaxInteriorSampleCells
+				next, retry := nextMDLVoxelResolution(resolution, boundsCells, limitProfile, attempt)
+				if retry {
+					resolution = next
+					continue
+				}
+			}
+			interior = fillMDLClosedInterior(boneVoxels)
+		}
+		if profile.PartitionBySkeletonSegments {
+			partitionMDLVoxelsBySkeleton(boneVoxels, geometry.Info.Bones, interior, resolution)
+		}
+		applyMDLInteriorJointCaps(boneVoxels, geometry.Info.Bones, interior, profile.JointCapVoxels)
+		next, retry := nextMDLVoxelResolution(resolution, mdlBoneVoxelCount(boneVoxels), profile, attempt)
+		if !retry {
+			return boneVoxels, resolution
+		}
+		resolution = next
+	}
+}
+
+func voxelizeMDLGeometryByBoneWithProfile(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) map[int]map[[3]int]mdlVoxelSample {
 	if len(geometry.Info.Bones) == 0 {
 		return nil
 	}
 	out := map[int]map[[3]int]mdlVoxelSample{}
+	owners := map[[3]int]mdlBoneVoxelOwner{}
 	half := importcommon.Vec3{X: resolution * 0.5, Y: resolution * 0.5, Z: resolution * 0.5}
 	for _, tri := range geometry.Triangles {
 		fallbackBoneIndex := dominantMDLTriangleBone(tri, len(geometry.Info.Bones))
@@ -724,18 +842,24 @@ func voxelizeMDLGeometryByBone(geometry MDLGeometry, resolution float32) map[int
 						continue
 					}
 					center := voxelCenter(key, resolution)
-					boneIndex := mdlTriangleBoneAtPoint(tri, triWorld, center, len(geometry.Info.Bones), fallbackBoneIndex)
+					boneIndex, boneWeight := mdlTriangleBoneOwnershipAtPoint(tri, triWorld, center, len(geometry.Info.Bones), fallbackBoneIndex)
 					if boneIndex < 0 {
 						continue
 					}
-					color := sampleMDLTriangleColor(geometry, tri, triWorld, center)
+					color := sampleMDLTriangleVoxelColor(geometry, tri, triWorld, key, resolution, profile)
 					if color[3] == 0 {
 						continue
+					}
+					if owner, ok := owners[key]; ok && (owner.Weight > boneWeight || (owner.Weight == boneWeight && owner.BoneIndex <= boneIndex)) {
+						continue
+					} else if ok {
+						delete(out[owner.BoneIndex], key)
 					}
 					if out[boneIndex] == nil {
 						out[boneIndex] = map[[3]int]mdlVoxelSample{}
 					}
 					out[boneIndex][key] = mdlVoxelSample{Color: color}
+					owners[key] = mdlBoneVoxelOwner{BoneIndex: boneIndex, Weight: boneWeight}
 				}
 			}
 		}
@@ -743,26 +867,359 @@ func voxelizeMDLGeometryByBone(geometry MDLGeometry, resolution float32) map[int
 	return out
 }
 
+type mdlBoneVoxelOwner struct {
+	BoneIndex int
+	Weight    float32
+}
+
+func nextMDLVoxelResolution(resolution float32, voxelCount int64, profile MDLVoxelizationProfile, attempt int) (float32, bool) {
+	if profile.TargetMaxVoxelCount <= 0 || voxelCount <= int64(profile.TargetMaxVoxelCount) || attempt >= 3 {
+		return resolution, false
+	}
+	limit := profile.CoarsestResolution
+	if limit <= resolution {
+		return resolution, false
+	}
+	ratio := float64(voxelCount) / float64(profile.TargetMaxVoxelCount)
+	scale := float32(math.Sqrt(ratio))
+	if profile.FillClosedInterior {
+		scale = float32(math.Cbrt(ratio))
+	}
+	if scale < 1.1 {
+		scale = 1.1
+	}
+	next := minFloat32(limit, resolution*scale*1.02)
+	return next, next > resolution*1.001
+}
+
+func mdlBoneVoxelCount(boneVoxels map[int]map[[3]int]mdlVoxelSample) int64 {
+	count := int64(0)
+	for _, voxels := range boneVoxels {
+		count += int64(len(voxels))
+	}
+	return count
+}
+
+func mdlBoneVoxelBoundsCellCount(boneVoxels map[int]map[[3]int]mdlVoxelSample) int64 {
+	first := true
+	var minKey, maxKey [3]int
+	for _, voxels := range boneVoxels {
+		for key := range voxels {
+			if first {
+				minKey, maxKey, first = key, key, false
+				continue
+			}
+			for axis := range 3 {
+				minKey[axis] = min(minKey[axis], key[axis])
+				maxKey[axis] = max(maxKey[axis], key[axis])
+			}
+		}
+	}
+	if first {
+		return 0
+	}
+	return int64(maxKey[0]-minKey[0]+1) * int64(maxKey[1]-minKey[1]+1) * int64(maxKey[2]-minKey[2]+1)
+}
+
+func fillMDLClosedInterior(boneVoxels map[int]map[[3]int]mdlVoxelSample) map[[3]int]struct{} {
+	solid := make(map[[3]int]importcommon.Voxel)
+	surfaceKeys := make(map[[3]int]struct{})
+	owners := make(map[[3]int]int)
+	samples := make(map[[3]int]mdlVoxelSample)
+	for _, boneIndex := range sortedMDLBoneVoxelIndices(boneVoxels) {
+		for _, key := range sortedMDLVoxelKeys(boneVoxels[boneIndex]) {
+			solid[key] = importcommon.Voxel{X: key[0], Y: key[1], Z: key[2], Palette: 1}
+			surfaceKeys[key] = struct{}{}
+			if _, exists := owners[key]; !exists {
+				owners[key] = boneIndex
+				samples[key] = boneVoxels[boneIndex][key]
+			}
+		}
+	}
+	if len(solid) == 0 {
+		return nil
+	}
+	surfaceCount := len(solid)
+	fillClosedInterior(solid)
+	if len(solid) == surfaceCount {
+		return nil
+	}
+
+	queue := sortedMDLVoxelKeys(samples)
+	directions := [][3]int{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}
+	for head := 0; head < len(queue); head++ {
+		key := queue[head]
+		for _, direction := range directions {
+			next := [3]int{key[0] + direction[0], key[1] + direction[1], key[2] + direction[2]}
+			if _, occupied := solid[next]; !occupied {
+				continue
+			}
+			if _, assigned := owners[next]; assigned {
+				continue
+			}
+			owners[next] = owners[key]
+			samples[next] = samples[key]
+			queue = append(queue, next)
+		}
+	}
+
+	interior := make(map[[3]int]struct{}, len(solid)-surfaceCount)
+	for _, key := range sortedVoxelKeys(solid) {
+		if _, surface := surfaceKeys[key]; surface {
+			continue
+		}
+		boneIndex, assigned := owners[key]
+		if !assigned {
+			continue
+		}
+		if boneVoxels[boneIndex] == nil {
+			boneVoxels[boneIndex] = map[[3]int]mdlVoxelSample{}
+		}
+		boneVoxels[boneIndex][key] = samples[key]
+		interior[key] = struct{}{}
+	}
+	return interior
+}
+
+// partitionMDLVoxelsBySkeleton cuts the unified bind-pose volume along nearby
+// source-fitted skeleton capsules. Only skin-active bones can own voxels, so
+// control joints do not acquire visible chunks. Source skinning remains a
+// surface-only bias, so branch hips and bent ankles use the same rule while
+// flood-filled interiors cannot preserve accidental propagation seams.
+func partitionMDLVoxelsBySkeleton(boneVoxels map[int]map[[3]int]mdlVoxelSample, bones []MDLBoneInfo, interior map[[3]int]struct{}, resolution float32) int {
+	if resolution <= 0 || len(bones) == 0 {
+		return 0
+	}
+	children := make([][]int, len(bones))
+	for boneIndex, bone := range bones {
+		if bone.Parent >= 0 && bone.Parent < len(bones) && bone.Parent != boneIndex {
+			children[bone.Parent] = append(children[bone.Parent], boneIndex)
+		}
+	}
+	origins := make([]importcommon.Vec3, len(bones))
+	active := make([]bool, len(bones))
+	for boneIndex := range bones {
+		origins[boneIndex] = mdlBoneGlobalOriginGekko(bones, boneIndex)
+		active[boneIndex] = len(boneVoxels[boneIndex]) > 0
+	}
+	activeParent := make([]int, len(bones))
+	activeChildren := make([][]int, len(bones))
+	for boneIndex := range activeParent {
+		activeParent[boneIndex] = -1
+	}
+	for boneIndex := range bones {
+		if !active[boneIndex] {
+			continue
+		}
+		parent := bones[boneIndex].Parent
+		for depth := 0; parent >= 0 && parent < len(bones) && depth < len(bones); depth++ {
+			if active[parent] {
+				activeParent[boneIndex] = parent
+				activeChildren[parent] = append(activeChildren[parent], boneIndex)
+				break
+			}
+			parent = bones[parent].Parent
+		}
+	}
+	radiusSquared := mdlBoneCapsuleRadiiSquared(boneVoxels, bones, origins, children, active, interior, resolution)
+	repartitioned := make(map[int]map[[3]int]mdlVoxelSample)
+	moved := 0
+	bias := resolution * resolution
+	for _, sourceBone := range sortedMDLBoneVoxelIndices(boneVoxels) {
+		if sourceBone < 0 || sourceBone >= len(bones) {
+			continue
+		}
+		eligible := make([]bool, len(bones))
+		eligible[sourceBone] = true
+		parent := activeParent[sourceBone]
+		if parent >= 0 {
+			eligible[parent] = true
+		}
+		for _, child := range activeChildren[sourceBone] {
+			eligible[child] = true
+		}
+		for _, key := range sortedMDLVoxelKeys(boneVoxels[sourceBone]) {
+			point := voxelCenter(key, resolution)
+			owner := sourceBone
+			bestScore := float32(math.MaxFloat32)
+			_, isInterior := interior[key]
+			for candidate := range bones {
+				if !eligible[candidate] {
+					continue
+				}
+				score := mdlBoneSegmentDistanceSquared(point, candidate, bones, origins, children, active) / radiusSquared[candidate]
+				if candidate == sourceBone && !isInterior {
+					score -= min(1, bias/radiusSquared[candidate])
+				}
+				if score < bestScore || (score == bestScore && candidate < owner) {
+					owner, bestScore = candidate, score
+				}
+			}
+			if repartitioned[owner] == nil {
+				repartitioned[owner] = map[[3]int]mdlVoxelSample{}
+			}
+			repartitioned[owner][key] = boneVoxels[sourceBone][key]
+			if owner != sourceBone {
+				moved++
+			}
+		}
+	}
+	clear(boneVoxels)
+	for boneIndex, voxels := range repartitioned {
+		boneVoxels[boneIndex] = voxels
+	}
+	return moved
+}
+
+func mdlBoneCapsuleRadiiSquared(boneVoxels map[int]map[[3]int]mdlVoxelSample, bones []MDLBoneInfo, origins []importcommon.Vec3, children [][]int, active []bool, interior map[[3]int]struct{}, resolution float32) []float32 {
+	radii := make([]float32, len(bones))
+	minimum := resolution * resolution
+	for boneIndex := range bones {
+		if !active[boneIndex] {
+			continue
+		}
+		distances := make([]float32, 0, len(boneVoxels[boneIndex]))
+		for _, key := range sortedMDLVoxelKeys(boneVoxels[boneIndex]) {
+			if _, isInterior := interior[key]; isInterior {
+				continue
+			}
+			distances = append(distances, mdlBoneSegmentDistanceSquared(voxelCenter(key, resolution), boneIndex, bones, origins, children, active))
+		}
+		if len(distances) == 0 {
+			radii[boneIndex] = minimum
+			continue
+		}
+		sort.Slice(distances, func(i, j int) bool { return distances[i] < distances[j] })
+		radii[boneIndex] = max(minimum, distances[(len(distances)-1)*9/10])
+	}
+	return radii
+}
+
+func mdlBoneSegmentDistanceSquared(point importcommon.Vec3, boneIndex int, bones []MDLBoneInfo, origins []importcommon.Vec3, children [][]int, active []bool) float32 {
+	start := origins[boneIndex]
+	best := float32(math.MaxFloat32)
+	for _, child := range children[boneIndex] {
+		best = min(best, pointSegmentDistanceSquared(point, start, origins[child]))
+	}
+	parent := bones[boneIndex].Parent
+	if parent >= 0 && parent < len(bones) && !active[parent] {
+		ancestor := bones[parent].Parent
+		for depth := 0; ancestor >= 0 && ancestor < len(bones) && depth < len(bones); depth++ {
+			if active[ancestor] {
+				best = min(best, pointSegmentDistanceSquared(point, origins[parent], start))
+				break
+			}
+			ancestor = bones[ancestor].Parent
+		}
+	}
+	if best == float32(math.MaxFloat32) {
+		delta := subVec3(point, start)
+		return dotVec3(delta, delta)
+	}
+	return best
+}
+
+func pointSegmentDistanceSquared(point, start, end importcommon.Vec3) float32 {
+	segment := subVec3(end, start)
+	lengthSquared := dotVec3(segment, segment)
+	t := float32(0)
+	if lengthSquared > 0 {
+		t = max(0, min(1, dotVec3(subVec3(point, start), segment)/lengthSquared))
+	}
+	closest := addVec3(start, importcommon.Vec3{X: segment.X * t, Y: segment.Y * t, Z: segment.Z * t})
+	delta := subVec3(point, closest)
+	return dotVec3(delta, delta)
+}
+
+func applyMDLInteriorJointCaps(boneVoxels map[int]map[[3]int]mdlVoxelSample, bones []MDLBoneInfo, interior map[[3]int]struct{}, layers int) {
+	directions := [][3]int{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}
+	connections := mdlBoneVoxelConnections(boneVoxels, bones)
+	for layer := 0; layer < layers; layer++ {
+		owners := make(map[[3]int][]int)
+		for _, boneIndex := range sortedMDLBoneVoxelIndices(boneVoxels) {
+			for _, key := range sortedMDLVoxelKeys(boneVoxels[boneIndex]) {
+				owners[key] = append(owners[key], boneIndex)
+			}
+		}
+		additions := make(map[int]map[[3]int]mdlVoxelSample)
+		for _, boneIndex := range sortedMDLBoneVoxelIndices(boneVoxels) {
+			for _, key := range sortedMDLVoxelKeys(boneVoxels[boneIndex]) {
+				if _, isInterior := interior[key]; !isInterior {
+					continue
+				}
+				sample := boneVoxels[boneIndex][key]
+				for _, direction := range directions {
+					neighbor := [3]int{key[0] + direction[0], key[1] + direction[1], key[2] + direction[2]}
+					for _, otherBone := range owners[neighbor] {
+						if _, connected := connections[[2]int{boneIndex, otherBone}]; otherBone == boneIndex || !connected {
+							continue
+						}
+						if additions[otherBone] == nil {
+							additions[otherBone] = map[[3]int]mdlVoxelSample{}
+						}
+						additions[otherBone][key] = sample
+					}
+				}
+			}
+		}
+		if len(additions) == 0 {
+			return
+		}
+		for boneIndex, voxels := range additions {
+			for key, sample := range voxels {
+				boneVoxels[boneIndex][key] = sample
+			}
+		}
+	}
+}
+
+func mdlBoneVoxelConnections(boneVoxels map[int]map[[3]int]mdlVoxelSample, bones []MDLBoneInfo) map[[2]int]struct{} {
+	connections := make(map[[2]int]struct{})
+	for boneIndex := range bones {
+		if len(boneVoxels[boneIndex]) == 0 {
+			continue
+		}
+		parent := bones[boneIndex].Parent
+		for depth := 0; parent >= 0 && parent < len(bones) && depth < len(bones); depth++ {
+			if len(boneVoxels[parent]) > 0 {
+				connections[[2]int{boneIndex, parent}] = struct{}{}
+				connections[[2]int{parent, boneIndex}] = struct{}{}
+				break
+			}
+			parent = bones[parent].Parent
+		}
+	}
+	return connections
+}
+
 func mdlTriangleBoneAtPoint(tri MDLTriangle, triWorld [3]importcommon.Vec3, point importcommon.Vec3, boneCount int, fallback int) int {
+	boneIndex, _ := mdlTriangleBoneOwnershipAtPoint(tri, triWorld, point, boneCount, fallback)
+	return boneIndex
+}
+
+func mdlTriangleBoneOwnershipAtPoint(tri MDLTriangle, triWorld [3]importcommon.Vec3, point importcommon.Vec3, boneCount int, fallback int) (int, float32) {
 	if !mdlTriangleHasMixedBones(tri, boneCount) {
-		return fallback
+		return fallback, 1
 	}
 	bary, ok := barycentricPoint(triWorld, point)
 	if !ok {
-		return fallback
+		return fallback, 1
 	}
-	bestBone := fallback
-	bestWeight := float32(-math.MaxFloat32)
+	weights := make([]float32, boneCount)
 	for i, vertex := range tri.Vertices {
 		if vertex.BoneIndex < 0 || vertex.BoneIndex >= boneCount {
 			continue
 		}
-		if bary[i] > bestWeight {
-			bestBone = vertex.BoneIndex
-			bestWeight = bary[i]
+		weights[vertex.BoneIndex] += bary[i]
+	}
+	bestBone := fallback
+	bestWeight := float32(-math.MaxFloat32)
+	for boneIndex, weight := range weights {
+		if weight > bestWeight || (weight == bestWeight && boneIndex == fallback) {
+			bestBone, bestWeight = boneIndex, weight
 		}
 	}
-	return bestBone
+	return bestBone, bestWeight
 }
 
 func mdlTriangleHasMixedBones(tri MDLTriangle, boneCount int) bool {
@@ -799,16 +1256,6 @@ func dominantMDLTriangleBone(tri MDLTriangle, boneCount int) int {
 	return bestBone
 }
 
-func mergeMDLVoxelMaps(boneVoxels map[int]map[[3]int]mdlVoxelSample) map[[3]int]mdlVoxelSample {
-	out := map[[3]int]mdlVoxelSample{}
-	for _, voxels := range boneVoxels {
-		for key, sample := range voxels {
-			out[key] = sample
-		}
-	}
-	return out
-}
-
 func sortedMDLBoneVoxelIndices(boneVoxels map[int]map[[3]int]mdlVoxelSample) []int {
 	indices := make([]int, 0, len(boneVoxels))
 	for boneIndex, voxels := range boneVoxels {
@@ -839,18 +1286,68 @@ type mdlVoxelSample struct {
 	Color [4]uint8
 }
 
-func sampleMDLTriangleColor(geometry MDLGeometry, tri MDLTriangle, triWorld [3]importcommon.Vec3, point importcommon.Vec3) [4]uint8 {
-	bary, ok := barycentricPoint(triWorld, point)
-	if !ok {
-		return [4]uint8{180, 180, 180, 255}
+func sampleMDLTriangleVoxelColor(geometry MDLGeometry, tri MDLTriangle, triWorld [3]importcommon.Vec3, key [3]int, resolution float32, profile MDLVoxelizationProfile) [4]uint8 {
+	center := voxelCenter(key, resolution)
+	probes := []importcommon.Vec3{center}
+	if profile.CoverageSamples > 1 {
+		offset := resolution * 0.45
+		probes = append(probes,
+			importcommon.Vec3{X: center.X + offset, Y: center.Y, Z: center.Z},
+			importcommon.Vec3{X: center.X - offset, Y: center.Y, Z: center.Z},
+			importcommon.Vec3{X: center.X, Y: center.Y + offset, Z: center.Z},
+			importcommon.Vec3{X: center.X, Y: center.Y - offset, Z: center.Z},
+			importcommon.Vec3{X: center.X, Y: center.Y, Z: center.Z + offset},
+			importcommon.Vec3{X: center.X, Y: center.Y, Z: center.Z - offset},
+		)
 	}
+	counts := make(map[[4]uint8]int)
+	for _, probe := range probes {
+		bary, ok := barycentricPoint(triWorld, probe)
+		if !ok || !mdlBaryPointInsideVoxel(triWorld, bary, key, resolution) {
+			continue
+		}
+		color := sampleMDLTriangleColorAtBary(geometry, tri, bary, profile.RespectMaskedTextures)
+		if color[3] != 0 {
+			counts[color]++
+		}
+	}
+	if len(counts) == 0 {
+		bary, ok := barycentricPoint(triWorld, center)
+		if !ok {
+			return [4]uint8{180, 180, 180, 255}
+		}
+		return sampleMDLTriangleColorAtBary(geometry, tri, bary, profile.RespectMaskedTextures)
+	}
+	var best [4]uint8
+	bestCount := -1
+	for color, count := range counts {
+		if count > bestCount || (count == bestCount && colorKey(color) < colorKey(best)) {
+			best, bestCount = color, count
+		}
+	}
+	return best
+}
+
+func mdlBaryPointInsideVoxel(tri [3]importcommon.Vec3, bary [3]float32, key [3]int, resolution float32) bool {
+	point := importcommon.Vec3{
+		X: tri[0].X*bary[0] + tri[1].X*bary[1] + tri[2].X*bary[2],
+		Y: tri[0].Y*bary[0] + tri[1].Y*bary[1] + tri[2].Y*bary[2],
+		Z: tri[0].Z*bary[0] + tri[1].Z*bary[1] + tri[2].Z*bary[2],
+	}
+	epsilon := resolution * 1e-4
+	return point.X >= float32(key[0])*resolution-epsilon && point.X <= float32(key[0]+1)*resolution+epsilon &&
+		point.Y >= float32(key[1])*resolution-epsilon && point.Y <= float32(key[1]+1)*resolution+epsilon &&
+		point.Z >= float32(key[2])*resolution-epsilon && point.Z <= float32(key[2]+1)*resolution+epsilon
+}
+
+func sampleMDLTriangleColorAtBary(geometry MDLGeometry, tri MDLTriangle, bary [3]float32, respectMaskedTextures bool) [4]uint8 {
 	u := bary[0]*tri.Vertices[0].UV[0] + bary[1]*tri.Vertices[1].UV[0] + bary[2]*tri.Vertices[2].UV[0]
 	v := bary[0]*tri.Vertices[0].UV[1] + bary[1]*tri.Vertices[1].UV[1] + bary[2]*tri.Vertices[2].UV[1]
 	if tri.TextureIndex < 0 || tri.TextureIndex >= len(geometry.Textures) {
 		return [4]uint8{180, 180, 180, 255}
 	}
 	texture := geometry.Textures[tri.TextureIndex]
-	color, ok := sampleMDLTexture(texture, u, v)
+	color, ok := sampleMDLTextureWithMask(texture, u, v, respectMaskedTextures)
 	if !ok {
 		return [4]uint8{180, 180, 180, 255}
 	}
@@ -884,6 +1381,12 @@ func barycentricPoint(tri [3]importcommon.Vec3, point importcommon.Vec3) ([3]flo
 }
 
 func sampleMDLTexture(texture MDLTexturePixels, u float32, v float32) ([4]uint8, bool) {
+	return sampleMDLTextureWithMask(texture, u, v, true)
+}
+
+const mdlTextureFlagMasked = 0x0040
+
+func sampleMDLTextureWithMask(texture MDLTexturePixels, u float32, v float32, respectMaskedTextures bool) ([4]uint8, bool) {
 	width := texture.Info.Width
 	height := texture.Info.Height
 	if width <= 0 || height <= 0 || len(texture.Pixels) < width*height || len(texture.Palette) == 0 {
@@ -894,6 +1397,9 @@ func sampleMDLTexture(texture MDLTexturePixels, u float32, v float32) ([4]uint8,
 	paletteIndex := int(texture.Pixels[y*width+x])
 	if paletteIndex < 0 || paletteIndex >= len(texture.Palette) {
 		return [4]uint8{}, false
+	}
+	if respectMaskedTextures && texture.Info.Flags&mdlTextureFlagMasked != 0 && paletteIndex == 255 {
+		return [4]uint8{}, true
 	}
 	color := texture.Palette[paletteIndex]
 	return [4]uint8{color[0], color[1], color[2], 255}, true
@@ -977,6 +1483,45 @@ func mdlAssetMaterialsAndPalette(voxels map[[3]int]mdlVoxelSample) ([]content.As
 		shapePalette = append(shapePalette, content.AssetVoxelPaletteEntryDef{Value: entry.Value, MaterialID: materialID})
 	}
 	return materials, shapePalette
+}
+
+func mdlAssetMaterialsForPalettes(palettes map[int]mdlColorPalette) []content.AssetMaterialDef {
+	colors := make(map[[4]uint8]struct{})
+	for _, palette := range palettes {
+		for _, entry := range palette.colors {
+			colors[entry.Color] = struct{}{}
+		}
+	}
+	ordered := make([][4]uint8, 0, len(colors))
+	for color := range colors {
+		ordered = append(ordered, color)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return colorKey(ordered[i]) < colorKey(ordered[j]) })
+	materials := make([]content.AssetMaterialDef, 0, len(ordered))
+	for _, color := range ordered {
+		materialID := mdlMaterialIDForColor(color)
+		materials = append(materials, content.AssetMaterialDef{
+			ID:        materialID,
+			Name:      materialID,
+			BaseColor: color,
+			Roughness: 0.85,
+			IOR:       1.5,
+			Tags:      []string{"source:hl1", "source_asset:mdl", "material:texture_baked", "material:static_prop"},
+		})
+	}
+	return materials
+}
+
+func mdlAssetShapePalette(pal mdlColorPalette) []content.AssetVoxelPaletteEntryDef {
+	shapePalette := make([]content.AssetVoxelPaletteEntryDef, 0, len(pal.colors))
+	for _, entry := range pal.colors {
+		shapePalette = append(shapePalette, content.AssetVoxelPaletteEntryDef{Value: entry.Value, MaterialID: mdlMaterialIDForColor(entry.Color)})
+	}
+	return shapePalette
+}
+
+func mdlMaterialIDForColor(color [4]uint8) string {
+	return fmt.Sprintf("mat_%02x%02x%02x%02x", color[0], color[1], color[2], color[3])
 }
 
 type mdlPaletteColor struct {

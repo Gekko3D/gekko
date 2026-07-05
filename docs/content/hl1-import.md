@@ -1020,17 +1020,42 @@ between those extremes.
 
 Generated MDL assets use rigid voxel-part animation:
 
+- MDL conversion uses a recorded `generated_voxelization_profile`. The default
+  profile uses seven-point conservative surface coverage and honors GoldSrc
+  `STUDIO_NF_MASKED` palette-index-255 texels. NPC profiles fill closed model
+  interiors and add one-voxel interior-only caps between connected bones.
+- NPC profiles treat the configured NPC voxel resolution as preferred detail.
+  Assets over the `120000`-voxel target retry at a coarser resolution, capped
+  at `0.08`. The effective resolution remains recorded in
+  `generated_voxel_resolution` and in every generated voxel part.
 - GoldSrc bones and sequence metadata are decoded into `.gkasset` `skeleton`
   and `animation_clips` metadata.
-- Model triangles are voxelized per vertex bone. Mixed-bone triangles are split
-  by sampled barycentric ownership so arms, legs, and torso chunks do not
-  smear into one rigid part.
+- Model triangles first use summed barycentric bone weights as source hints,
+  and every surface voxel receives one deterministic owner.
+- Closed character shells are flood-filled. Interior colors and ownership
+  propagate from the nearest surface. NPC rigid profile `hl1_npc_rigid_v3`
+  then repartitions the unified volume by distance to nearby bind-pose skeleton
+  segments with source-fitted capsule radii. Only bones used by source skinning
+  can own a part; zero-weight
+  control joints are traversed but stay invisible. The source bone contributes
+  only a one-voxel surface bias, while filled interiors use pure capsule
+  distance. The same rule therefore cuts chain joints, branch hips, and bent
+  ankles without per-model joint planes. Connected bones finally share only a
+  thin interior cap; exterior surface voxels are never copied across bones.
 - Each visible bone chunk is emitted as explicit `voxel_shape` data under a
   transform-only bone group. The chunk's local voxel origin is preserved as the
   renderer pivot, so localized voxel bounds do not shift the body part.
 - Animation clips target bone group part IDs and write local rigid transforms.
   The current runtime does not skin or deform voxels.
 - Animated MDL assets keep voxel parts uncollapsed.
+- Rigid bone parts own local 255-entry palettes while sharing color-addressed
+  asset materials. This prevents one character-wide palette from discarding
+  colors merely because different bones use different source palettes.
+
+Actor-level animated LOD remains separate from MDL voxelization. Current
+entity LOD works per voxel object, so applying it independently to rigid bone
+parts would split one distant actor into unrelated proxies. Add grouped rig LOD
+only after the runtime has an atomic actor-level representation switch.
 
 Generated sprite assets are not true camera-facing billboards yet; they are
 placed voxel cards that preserve palette color and cutout/additive transparency

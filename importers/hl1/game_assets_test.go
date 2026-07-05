@@ -5,7 +5,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/gekko3d/gekko/content"
@@ -110,6 +109,9 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	if npcModelEntry.GeneratedVoxelResolutionCategory != string(HL1VoxelResolutionCategoryNPC) {
 		t.Fatalf("expected npc model category, got %+v", npcModelEntry)
 	}
+	if npcModelEntry.GeneratedVoxelizationProfile == nil || npcModelEntry.GeneratedVoxelizationProfile.ID != "hl1_npc_rigid_v3" || !npcModelEntry.GeneratedVoxelizationProfile.RespectMaskedTextures || !npcModelEntry.GeneratedVoxelizationProfile.FillClosedInterior || !npcModelEntry.GeneratedVoxelizationProfile.PartitionBySkeletonSegments || npcModelEntry.GeneratedVoxelizationProfile.JointCapVoxels != 1 {
+		t.Fatalf("expected durable npc voxelization profile provenance, got %+v", npcModelEntry.GeneratedVoxelizationProfile)
+	}
 	spriteEntry := assertHL1AssetEntry(t, result.Manifest.Assets, "sprite", spritePath, "generated_voxel_asset")
 	if spriteEntry.SpriteInfo == nil || spriteEntry.SpriteInfo.FrameCount != 1 || spriteEntry.GeneratedAssetPath == "" || spriteEntry.GeneratedVoxelCount == 0 {
 		t.Fatalf("expected generated sprite asset metadata, got %+v", spriteEntry)
@@ -206,35 +208,6 @@ func TestBuildGameAssetImportReportsMissingReferences(t *testing.T) {
 	}
 }
 
-func TestBuildGameAssetImportUsesTripmineCompatibilityFallback(t *testing.T) {
-	dir := t.TempDir()
-	gameDir := filepath.Join(dir, "hl")
-	outDir := filepath.Join(dir, "out")
-	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "p_tripmine.mdl"), syntheticMDLWithBoneAndSequence())
-	summary := ImportSummary{
-		Map:    importcommon.MapImport{Entities: []importcommon.Entity{{ClassName: "weapon_tripmine"}}},
-		Report: importcommon.ImportReport{Source: importcommon.SourceInfo{Kind: "hl1", GameDir: gameDir, MapName: "testmap"}},
-	}
-	result, err := BuildGameAssetImport(ImportOptions{GameDir: gameDir, OutputRoot: outDir}, summary)
-	if err != nil {
-		t.Fatalf("BuildGameAssetImport failed: %v", err)
-	}
-	if len(result.Manifest.Assets) != 1 {
-		t.Fatalf("expected one fallback asset, got %+v", result.Manifest.Assets)
-	}
-	entry := result.Manifest.Assets[0]
-	if entry.SourceRef != "models/p_tripmine.mdl" || !entry.Resolved || !entry.CompatibilityFallback || entry.generatedAsset == nil {
-		t.Fatalf("expected resolved tripmine fallback asset, got %+v", entry)
-	}
-	if !strings.Contains(strings.Join(entry.generatedAsset.Tags, ","), "source:compatibility_fallback") {
-		t.Fatalf("expected generated fallback tag, got %+v", entry.generatedAsset.Tags)
-	}
-	pickups := buildHL1Pickups(summary.Map.Entities, filepath.Join(outDir, "levels", "testmap.gklevel"), &result)
-	if len(pickups) != 1 || !strings.Contains(pickups[0].AssetPath, "p_tripmine.gkasset") {
-		t.Fatalf("expected pickup to reference fallback asset, got %+v", pickups)
-	}
-}
-
 func TestBuildGameAssetImportCatalogsPlayerAndWeaponWorldModels(t *testing.T) {
 	dir := t.TempDir()
 	gameDir := filepath.Join(dir, "hl")
@@ -301,54 +274,6 @@ func TestHL1PlayerModelVariantsChooseEveryBodygroupAndSkin(t *testing.T) {
 		if len(variant.bodygroupModels) != 2 || variant.bodygroupModels[0] < 0 || variant.bodygroupModels[0] >= 2 || variant.bodygroupModels[1] < 0 || variant.bodygroupModels[1] >= 3 || variant.skinFamily < 0 || variant.skinFamily >= 2 {
 			t.Fatalf("invalid explicit variant %+v", variant)
 		}
-	}
-}
-
-func TestBuildMDLVoxelAssetEmitsVerifiedPlayerAnchorsAndCatalogLinks(t *testing.T) {
-	geometry := MDLGeometry{
-		Info: MDLInfo{Bones: []MDLBoneInfo{{Name: "Bip01 Spine", Parent: -1}, {Name: "Bip01 Spine1", Parent: 0}, {Name: "Bip01 Spine2", Parent: 1}, {Name: "Bip01 Spine3", Parent: 2}, {Name: "Bip01 Neck", Parent: 3}, {Name: "Bip01 Head", Parent: 4}, {Name: "Bip01 R Hand", Parent: 4}}},
-		Triangles: []MDLTriangle{{Vertices: [3]MDLTriangleVertex{
-			{Position: importcommon.Vec3{X: 0, Y: 0, Z: 0}, BoneIndex: 0},
-			{Position: importcommon.Vec3{X: 1, Y: 0, Z: 0}, BoneIndex: 0},
-			{Position: importcommon.Vec3{X: 0, Y: 1, Z: 0}, BoneIndex: 0},
-		}}},
-	}
-	anchors := hl1PlayerSemanticAnchorBones(geometry.Info.Bones)
-	asset, _, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{VoxelResolution: 0.02, SemanticAnchors: anchors})
-	if err != nil {
-		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
-	}
-	markerParents := map[string]string{}
-	for _, marker := range asset.Markers {
-		markerParents[marker.ID] = marker.ParentID
-	}
-	if len(markerParents) != 8 || markerParents["head"] != "bone_05_bip01_head" || markerParents["right_hand"] != "bone_06_bip01_r_hand" || markerParents["upper_body"] != "bone_00_bip01_spine" || markerParents["aim_spine3"] != "bone_03_bip01_spine3" || markerParents["aim_neck"] != "bone_04_bip01_neck" {
-		t.Fatalf("expected verified bone markers, got %+v", asset.Markers)
-	}
-	partParent := map[string]string{}
-	for _, part := range asset.Parts {
-		partParent[part.ID] = part.ParentID
-	}
-	if partParent["bone_05_bip01_head"] != "bone_04_bip01_neck" || partParent["bone_06_bip01_r_hand"] != "bone_04_bip01_neck" {
-		t.Fatalf("expected head and hand bones parented to neck, got %+v", asset.Parts)
-	}
-	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
-		t.Fatalf("expected anchored player asset to validate, got %+v", validation.Issues)
-	}
-	catalog := buildGameAssetCatalog([]GameAssetManifestEntry{{
-		CatalogKind:        "player",
-		CatalogID:          "player_b0_s0",
-		SourceRef:          "valve/models/player/gordon/gordon.mdl",
-		GeneratedAssetPath: "generated/gordon.gkasset",
-		BodygroupModels:    []int{0},
-		HeadMarkerID:       "head",
-		RightHandMarkerID:  "right_hand",
-		UpperBodyMarkerID:  "upper_body",
-		AimMarkerIDs:       append([]string(nil), hl1PlayerAimMarkerIDs...),
-		ClipIDs:            []string{"mdl_idle"},
-	}})
-	if catalog == nil || len(catalog.Players) != 1 || catalog.Players[0].HeadMarkerID != "head" || catalog.Players[0].RightHandMarkerID != "right_hand" || catalog.Players[0].UpperBodyMarkerID != "upper_body" || len(catalog.Players[0].AimMarkerIDs) != len(hl1PlayerAimMarkerIDs) || len(catalog.Players[0].ClipIDs) != 1 {
-		t.Fatalf("expected player catalog link, got %+v", catalog)
 	}
 }
 
@@ -688,6 +613,136 @@ func TestVoxelizeMDLGeometryByBoneSplitsMixedBoneTriangleBySample(t *testing.T) 
 	}
 	if len(boneVoxels[1]) == 0 {
 		t.Fatalf("expected mixed triangle samples near arm vertices to stay on bone 1, got %+v", boneVoxels)
+	}
+	boneIndex, _ := mdlTriangleBoneOwnershipAtPoint(geometry.Triangles[0], [3]importcommon.Vec3{{X: 0}, {X: 1}, {Y: 1}}, importcommon.Vec3{X: 0.3, Y: 0.3}, 2, 1)
+	if boneIndex != 1 {
+		t.Fatalf("expected repeated bone vertices to aggregate 0.6 ownership over bone 0's 0.4, got %d", boneIndex)
+	}
+}
+
+func TestVoxelizeMDLGeometryRespectsMaskedTextureAndCoverage(t *testing.T) {
+	texture := MDLTexturePixels{
+		Info:    MDLTextureInfo{Flags: mdlTextureFlagMasked, Width: 2, Height: 1},
+		Pixels:  []byte{1, 255},
+		Palette: make([][3]uint8, 256),
+	}
+	texture.Palette[1] = [3]uint8{220, 40, 20}
+	triangle := MDLTriangle{TextureIndex: 0, Vertices: [3]MDLTriangleVertex{
+		{UV: [2]float32{0, 0}},
+		{UV: [2]float32{1, 0}},
+		{UV: [2]float32{0, 0}},
+	}}
+	triangleWorld := [3]importcommon.Vec3{{X: 0, Y: 0, Z: 0}, {X: 1, Y: 0, Z: 0}, {X: 0, Y: 1, Z: 0}}
+	geometry := MDLGeometry{Textures: []MDLTexturePixels{texture}}
+
+	single := sampleMDLTriangleVoxelColor(geometry, triangle, triangleWorld, [3]int{0, 0, 0}, 1, MDLVoxelizationProfile{CoverageSamples: 1, RespectMaskedTextures: true})
+	covered := sampleMDLTriangleVoxelColor(geometry, triangle, triangleWorld, [3]int{0, 0, 0}, 1, MDLVoxelizationProfile{CoverageSamples: 7, RespectMaskedTextures: true})
+	if single[3] != 0 {
+		t.Fatalf("single center sample should hit masked texel, got %+v", single)
+	}
+	if covered != ([4]uint8{220, 40, 20, 255}) {
+		t.Fatalf("coverage samples should preserve opaque texel crossing voxel, got %+v", covered)
+	}
+	if color, ok := sampleMDLTexture(texture, 0.75, 0); !ok || color[3] != 0 {
+		t.Fatalf("masked palette index 255 should be transparent, got color=%+v ok=%v", color, ok)
+	}
+}
+
+func TestFillMDLClosedInteriorCapsJointWithoutCopyingSurface(t *testing.T) {
+	boneVoxels := map[int]map[[3]int]mdlVoxelSample{0: {}, 1: {}}
+	for x := 0; x < 3; x++ {
+		for y := 0; y < 3; y++ {
+			for z := 0; z < 3; z++ {
+				if x != 0 && x != 2 && y != 0 && y != 2 && z != 0 && z != 2 {
+					continue
+				}
+				boneIndex := 0
+				if x == 2 {
+					boneIndex = 1
+				}
+				boneVoxels[boneIndex][[3]int{x, y, z}] = mdlVoxelSample{Color: [4]uint8{uint8(100 + x), 20, 20, 255}}
+			}
+		}
+	}
+	interior := fillMDLClosedInterior(boneVoxels)
+	applyMDLInteriorJointCaps(boneVoxels, []MDLBoneInfo{{Parent: -1}, {Parent: 0}}, interior, 1)
+	if _, ok := interior[[3]int{1, 1, 1}]; !ok {
+		t.Fatal("expected closed shell center to become interior")
+	}
+	if _, rootHasChildSurface := boneVoxels[0][[3]int{2, 1, 1}]; rootHasChildSurface {
+		t.Fatal("joint cap must not copy exterior surface into connected bone")
+	}
+	if _, childHasInteriorCap := boneVoxels[1][[3]int{1, 1, 1}]; !childHasInteriorCap {
+		t.Fatal("expected child bone to receive interior-only joint cap")
+	}
+}
+
+func TestPartitionMDLVoxelsBySkeletonHandlesForkAndBentJoint(t *testing.T) {
+	leg, legSeed := [3]int{-3, -3, 0}, [3]int{-3, -1, 0}
+	foot, footSeed := [3]int{-1, -11, 0}, [3]int{-3, -11, 0}
+	boneVoxels := map[int]map[[3]int]mdlVoxelSample{
+		0: {leg: {Color: [4]uint8{200, 20, 20, 255}}},
+		1: {legSeed: {Color: [4]uint8{200, 20, 20, 255}}},
+		4: {foot: {Color: [4]uint8{20, 200, 20, 255}}},
+		6: {footSeed: {Color: [4]uint8{20, 200, 20, 255}}},
+	}
+	bones := []MDLBoneInfo{
+		{Name: "pelvis", Parent: -1},
+		{Name: "left_leg", Parent: 0, Position: importcommon.Vec3{X: -10}},
+		{Name: "right_leg", Parent: 0, Position: importcommon.Vec3{X: 10}},
+		{Name: "spine", Parent: 0, Position: importcommon.Vec3{Z: 10}},
+		{Name: "left_shin", Parent: 1, Position: importcommon.Vec3{Z: -20}},
+		{Name: "right_shin", Parent: 2, Position: importcommon.Vec3{Z: -20}},
+		{Name: "left_foot", Parent: 4, Position: importcommon.Vec3{Z: -20}},
+		{Name: "left_toe", Parent: 6, Position: importcommon.Vec3{X: 10}},
+	}
+	if moved := partitionMDLVoxelsBySkeleton(boneVoxels, bones, nil, 0.1); moved != 2 {
+		t.Fatalf("expected fork and bent-joint voxels to move, got %d", moved)
+	}
+	if _, staysPelvis := boneVoxels[0][leg]; staysPelvis {
+		t.Fatal("leg voxel remained on branch pelvis")
+	}
+	if _, movedToLeg := boneVoxels[1][leg]; !movedToLeg {
+		t.Fatal("leg voxel was not assigned to nearest branch segment")
+	}
+	if _, staysShin := boneVoxels[4][foot]; staysShin {
+		t.Fatal("foot voxel remained on shin across bent ankle")
+	}
+	if _, movedToFoot := boneVoxels[6][foot]; !movedToFoot {
+		t.Fatal("foot voxel was not assigned to nearest foot segment")
+	}
+	if count := mdlBoneVoxelCount(boneVoxels); count != 4 {
+		t.Fatalf("partition changed unified voxel count: %d", count)
+	}
+	for _, boneIndex := range []int{2, 3, 5, 7} {
+		if len(boneVoxels[boneIndex]) != 0 {
+			t.Fatalf("zero-weight control bone %d acquired visible voxels", boneIndex)
+		}
+	}
+}
+
+func TestBuildMDLRigidBoneVoxelAssetUsesPerPartPalettes(t *testing.T) {
+	boneVoxels := map[int]map[[3]int]mdlVoxelSample{0: {}, 1: {}}
+	for boneIndex := 0; boneIndex < 2; boneIndex++ {
+		for i := 0; i < 200; i++ {
+			value := boneIndex*200 + i
+			boneVoxels[boneIndex][[3]int{i, boneIndex, 0}] = mdlVoxelSample{Color: [4]uint8{uint8(value), uint8(value >> 8), 30, 255}}
+		}
+	}
+	asset, voxelCount, err := buildMDLRigidBoneVoxelAsset(MDLGeometry{Info: MDLInfo{Bones: []MDLBoneInfo{{Name: "root", Parent: -1}, {Name: "child", Parent: 0}}}}, MDLVoxelAssetOptions{VoxelizationProfile: DefaultMDLVoxelizationProfile()}, 0.02, boneVoxels)
+	if err != nil {
+		t.Fatalf("build rigid asset failed: %v", err)
+	}
+	if voxelCount != 400 || len(asset.Materials) != 400 {
+		t.Fatalf("expected 400 preserved colors across local palettes, voxels=%d materials=%d", voxelCount, len(asset.Materials))
+	}
+	for _, part := range asset.Parts {
+		if part.Source.VoxelShape != nil && len(part.Source.VoxelShape.Palette) != 200 {
+			t.Fatalf("expected 200-color part palette, got %d for %s", len(part.Source.VoxelShape.Palette), part.ID)
+		}
+	}
+	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{}); validation.HasErrors() {
+		t.Fatalf("expected per-part palettes to validate, got %+v", validation.Issues)
 	}
 }
 

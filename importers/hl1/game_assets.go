@@ -99,11 +99,12 @@ type GameAssetPlayerWeaponPresentation struct {
 }
 
 type GameAssetPlayerWeaponStance struct {
-	Stance             string `json:"stance"`
-	AimClipID          string `json:"aim_clip_id,omitempty"`
-	RecoilClipID       string `json:"recoil_clip_id,omitempty"`
-	CrouchAimClipID    string `json:"crouch_aim_clip_id,omitempty"`
-	CrouchRecoilClipID string `json:"crouch_recoil_clip_id,omitempty"`
+	Stance             string   `json:"stance"`
+	AimClipID          string   `json:"aim_clip_id,omitempty"`
+	RecoilClipID       string   `json:"recoil_clip_id,omitempty"`
+	CrouchAimClipID    string   `json:"crouch_aim_clip_id,omitempty"`
+	CrouchRecoilClipID string   `json:"crouch_recoil_clip_id,omitempty"`
+	BoneMask           []string `json:"bone_mask,omitempty"`
 }
 
 const (
@@ -162,6 +163,7 @@ type GameAssetManifestEntry struct {
 	GeneratedVoxelCount              int                                  `json:"generated_voxel_count,omitempty"`
 	GeneratedVoxelResolution         float32                              `json:"generated_voxel_resolution,omitempty"`
 	GeneratedVoxelResolutionCategory string                               `json:"generated_voxel_resolution_category,omitempty"`
+	GeneratedVoxelizationProfile     *MDLVoxelizationProfile              `json:"generated_voxelization_profile,omitempty"`
 	CompatibilityFallback            bool                                 `json:"compatibility_fallback,omitempty"`
 	CatalogKind                      string                               `json:"catalog_kind,omitempty"`
 	CatalogID                        string                               `json:"catalog_id,omitempty"`
@@ -520,7 +522,7 @@ func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPr
 		def.CrouchGait.BaseStances = append(def.CrouchGait.BaseStances, content.CharacterStanceClipDef{Stance: stance.Stance, ClipID: stance.ClipID})
 	}
 	for _, stance := range entry.WeaponPresentation.Stances {
-		def.WeaponPresentation.Stances = append(def.WeaponPresentation.Stances, content.CharacterWeaponStanceDef{Stance: stance.Stance, AimClipID: stance.AimClipID, RecoilClipID: stance.RecoilClipID, CrouchAimClipID: stance.CrouchAimClipID, CrouchRecoilClipID: stance.CrouchRecoilClipID})
+		def.WeaponPresentation.Stances = append(def.WeaponPresentation.Stances, content.CharacterWeaponStanceDef{Stance: stance.Stance, AimClipID: stance.AimClipID, RecoilClipID: stance.RecoilClipID, CrouchAimClipID: stance.CrouchAimClipID, CrouchRecoilClipID: stance.CrouchRecoilClipID, BoneMask: append([]string(nil), stance.BoneMask...)})
 	}
 	return def
 }
@@ -772,6 +774,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 	entry.OutputPath = filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "files", hl1AssetOutputRelPath(entry.SourcePath, c.gameDir, kind, entry.SourceRef))
 	if kind == "model" {
 		category, voxelResolution := c.voxelResolutionForEntry(entry)
+		voxelizationProfile := MDLVoxelizationProfileForCategory(category)
 		staticPose := category == HL1VoxelResolutionCategoryPickup
 		geometryOptions := MDLGeometryOptions{BodygroupModels: entry.BodygroupModels, SkinFamily: entry.SkinFamily}
 		geometry, err := LoadMDLGeometryWithOptions(entry.SourcePath, geometryOptions)
@@ -797,6 +800,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 			assetPath := filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "generated", "models", assetName+".gkasset")
 			entry.GeneratedVoxelResolution = voxelResolution
 			entry.GeneratedVoxelResolutionCategory = string(category)
+			entry.GeneratedVoxelizationProfile = &voxelizationProfile
 			anchors := map[string]int(nil)
 			if entry.CatalogKind == "player" {
 				anchors = hl1PlayerSemanticAnchorBones(geometry.Info.Bones)
@@ -815,18 +819,19 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				}
 			}
 			if hl1IsEgonHeldModel(entry) {
-				c.buildEgonHeldPresentation(entry, geometry, voxelResolution, assetPath)
+				c.buildEgonHeldPresentation(entry, geometry, voxelResolution, voxelizationProfile, assetPath)
 				return
 			}
 			asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
-				Name:            strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
-				SourceRef:       entry.SourceRef,
-				VoxelResolution: voxelResolution,
-				StaticPose:      staticPose,
-				RebaseBoneIndex: rebaseBone,
-				RebaseToBone:    rebaseToHand,
-				SemanticAnchors: anchors,
-				LockRootMotion:  entry.CatalogKind == "player",
+				Name:                strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
+				SourceRef:           entry.SourceRef,
+				VoxelResolution:     voxelResolution,
+				VoxelizationProfile: voxelizationProfile,
+				StaticPose:          staticPose,
+				RebaseBoneIndex:     rebaseBone,
+				RebaseToBone:        rebaseToHand,
+				SemanticAnchors:     anchors,
+				LockRootMotion:      entry.CatalogKind == "player",
 			})
 			if err != nil {
 				c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -836,6 +841,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					Message:  err.Error(),
 				})
 			} else if asset != nil {
+				entry.GeneratedVoxelResolution = mdlAssetVoxelResolution(asset, voxelResolution)
 				if entry.CatalogKind == "weapon_held" {
 					twoHanded := hl1HeldWeaponUsesLeftGrip(entry)
 					hl1AddHeldWeaponPresentationMarkers(asset, twoHanded)
@@ -916,7 +922,7 @@ func hl1IsEgonHeldModel(entry *GameAssetManifestEntry) bool {
 	return strings.EqualFold(base, "p_egon")
 }
 
-func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEntry, geometry MDLGeometry, resolution float32, heldPath string) {
+func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEntry, geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile, heldPath string) {
 	bone := func(name string) int {
 		for index, info := range geometry.Info.Bones {
 			if strings.EqualFold(strings.ReplaceAll(info.Name, " ", ""), name) {
@@ -932,26 +938,28 @@ func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEn
 		return
 	}
 	held, heldVoxels, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
-		Name:               "egon held",
-		SourceRef:          entry.SourceRef,
-		VoxelResolution:    resolution,
-		StaticPose:         true,
-		RebaseBoneIndex:    terminalArm,
-		RebaseToBone:       true,
-		IncludeBoneIndices: []int{forearm, terminalArm},
+		Name:                "egon held",
+		SourceRef:           entry.SourceRef,
+		VoxelResolution:     resolution,
+		VoxelizationProfile: profile,
+		StaticPose:          true,
+		RebaseBoneIndex:     terminalArm,
+		RebaseToBone:        true,
+		IncludeBoneIndices:  []int{forearm, terminalArm},
 	})
 	if err != nil {
 		c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.egon_held_voxelize_failed", Subject: entry.SourceRef, Message: err.Error()})
 		return
 	}
 	pack, packVoxels, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
-		Name:               "egon backpack",
-		SourceRef:          entry.SourceRef,
-		VoxelResolution:    resolution,
-		StaticPose:         true,
-		RebaseBoneIndex:    upperBody,
-		RebaseToBone:       true,
-		IncludeBoneIndices: []int{backpack, neck},
+		Name:                "egon backpack",
+		SourceRef:           entry.SourceRef,
+		VoxelResolution:     resolution,
+		VoxelizationProfile: profile,
+		StaticPose:          true,
+		RebaseBoneIndex:     upperBody,
+		RebaseToBone:        true,
+		IncludeBoneIndices:  []int{backpack, neck},
 	})
 	if err != nil {
 		c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.egon_backpack_voxelize_failed", Subject: entry.SourceRef, Message: err.Error()})
@@ -960,6 +968,7 @@ func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEn
 	hl1AddHeldWeaponPresentationMarkersWithAimFrame(held, hl1BoneLocalMuzzleFrame(geometry.Info.Bones, terminalArm), true)
 	entry.GeneratedAssetPath = filepath.Clean(heldPath)
 	entry.GeneratedVoxelCount = heldVoxels
+	entry.GeneratedVoxelResolution = mdlAssetVoxelResolution(held, resolution)
 	entry.generatedAsset = held
 	entry.GeneratedExtras = []GameAssetGeneratedExtra{{
 		Key:        "equipment.egon.backpack",
@@ -968,6 +977,17 @@ func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEn
 		asset:      pack,
 	}}
 	entry.ConvertState = "generated_composite_presentation"
+}
+
+func mdlAssetVoxelResolution(asset *content.AssetDef, fallback float32) float32 {
+	if asset != nil {
+		for _, part := range asset.Parts {
+			if part.Source.Kind == content.AssetSourceKindVoxelShape && part.VoxelResolution > 0 {
+				return part.VoxelResolution
+			}
+		}
+	}
+	return fallback
 }
 
 func assetHasMarker(asset *content.AssetDef, markerID string) bool {
@@ -1239,6 +1259,7 @@ func hl1PlayerWeaponPresentation(asset *content.AssetDef) GameAssetPlayerWeaponP
 			CrouchAimClipID:    byName["crouch_aim_"+stance],
 			CrouchRecoilClipID: byName["crouch_shoot_"+stance],
 		}
+		entry.BoneMask = hl1PlayerArmBoneMask(asset.Skeleton)
 		if entry.AimClipID != "" && entry.RecoilClipID != "" && entry.CrouchAimClipID != "" && entry.CrouchRecoilClipID != "" {
 			presentation.Stances = append(presentation.Stances, entry)
 		}
@@ -1255,13 +1276,23 @@ func hl1PlayerWeaponPresentation(asset *content.AssetDef) GameAssetPlayerWeaponP
 var hl1PlayerWeaponStances = []string{"crowbar", "trip", "onehanded", "python", "shotgun", "gauss", "mp5", "rpg", "egon", "squeak", "hive", "bow"}
 
 func hl1PlayerUpperBodyBoneMask(skeleton *content.AssetSkeletonDef) []string {
+	return hl1PlayerWeaponBoneMask(skeleton, true)
+}
+
+func hl1PlayerArmBoneMask(skeleton *content.AssetSkeletonDef) []string {
+	return hl1PlayerWeaponBoneMask(skeleton, false)
+}
+
+func hl1PlayerWeaponBoneMask(skeleton *content.AssetSkeletonDef, includeTorso bool) []string {
 	if skeleton == nil {
 		return nil
 	}
 	mask := make([]string, 0, len(skeleton.Bones))
 	for _, bone := range skeleton.Bones {
 		name := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", ""))
-		if strings.HasPrefix(name, "bip01spine") || name == "bip01neck" || name == "bip01head" || strings.HasPrefix(name, "bip01lclavicle") || strings.HasPrefix(name, "bip01rclavicle") || strings.HasPrefix(name, "bip01lupperarm") || strings.HasPrefix(name, "bip01rupperarm") || strings.HasPrefix(name, "bip01lforearm") || strings.HasPrefix(name, "bip01rforearm") || strings.HasPrefix(name, "bip01larm") || strings.HasPrefix(name, "bip01rarm") || strings.HasPrefix(name, "bip01lhand") || strings.HasPrefix(name, "bip01rhand") || strings.HasPrefix(name, "bip01lfinger") || strings.HasPrefix(name, "bip01rfinger") {
+		arm := strings.HasPrefix(name, "bip01lclavicle") || strings.HasPrefix(name, "bip01rclavicle") || strings.HasPrefix(name, "bip01lupperarm") || strings.HasPrefix(name, "bip01rupperarm") || strings.HasPrefix(name, "bip01lforearm") || strings.HasPrefix(name, "bip01rforearm") || strings.HasPrefix(name, "bip01larm") || strings.HasPrefix(name, "bip01rarm") || strings.HasPrefix(name, "bip01lhand") || strings.HasPrefix(name, "bip01rhand") || strings.HasPrefix(name, "bip01lfinger") || strings.HasPrefix(name, "bip01rfinger")
+		torso := strings.HasPrefix(name, "bip01spine") || name == "bip01neck" || name == "bip01head"
+		if arm || includeTorso && torso {
 			mask = append(mask, bone.ID)
 		}
 	}
