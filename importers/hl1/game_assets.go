@@ -184,7 +184,17 @@ type GameAssetManifestEntry struct {
 	ConvertState                     string                               `json:"convert_state,omitempty"`
 	ModelInfo                        *MDLInfo                             `json:"model_info,omitempty"`
 	SpriteInfo                       *SPRInfo                             `json:"sprite_info,omitempty"`
+	GeneratedExtras                  []GameAssetGeneratedExtra            `json:"generated_extras,omitempty"`
 	generatedAsset                   *content.AssetDef                    `json:"-"`
+}
+
+// GameAssetGeneratedExtra is an additional generic asset emitted from one
+// source document, such as body-worn equipment separated from a held prop.
+type GameAssetGeneratedExtra struct {
+	Key        string `json:"key"`
+	AssetPath  string `json:"asset_path"`
+	VoxelCount int    `json:"voxel_count,omitempty"`
+	asset      *content.AssetDef
 }
 
 // LoadGameAssetManifest reads the ActionGame-facing HL1 asset catalog.
@@ -419,6 +429,16 @@ func SaveGameAssetImport(result GameAssetImportResult) error {
 				})
 			}
 		}
+		for _, extra := range entry.GeneratedExtras {
+			if extra.asset == nil || extra.AssetPath == "" {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(extra.AssetPath), 0755); err != nil {
+				result.Manifest.Diagnostics = append(result.Manifest.Diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.generated_asset_save_failed", Subject: extra.AssetPath, Message: err.Error()})
+			} else if err := content.SaveAsset(extra.AssetPath, extra.asset); err != nil {
+				result.Manifest.Diagnostics = append(result.Manifest.Diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.generated_asset_save_failed", Subject: extra.AssetPath, Message: err.Error()})
+			}
+		}
 	}
 	if result.Library != nil && result.LibraryPath != "" {
 		if err := os.MkdirAll(filepath.Dir(result.LibraryPath), 0755); err != nil {
@@ -444,13 +464,21 @@ func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) 
 	byKey := make(map[string]GameAssetManifestEntry)
 	for _, entry := range entries {
 		key := hl1GenericAssetKey(entry)
-		if key == "" || entry.GeneratedAssetPath == "" {
-			continue
+		if key != "" && entry.GeneratedAssetPath != "" {
+			if prior, ok := byKey[key]; !ok || strings.ToLower(entry.SourceRef) < strings.ToLower(prior.SourceRef) {
+				byKey[key] = entry
+			}
 		}
-		if prior, ok := byKey[key]; ok && strings.ToLower(entry.SourceRef) >= strings.ToLower(prior.SourceRef) {
-			continue
+		for _, extra := range entry.GeneratedExtras {
+			if extra.Key == "" || extra.AssetPath == "" {
+				continue
+			}
+			if prior, ok := byKey[extra.Key]; !ok || strings.ToLower(entry.SourceRef) < strings.ToLower(prior.SourceRef) {
+				extraEntry := entry
+				extraEntry.GeneratedAssetPath = extra.AssetPath
+				byKey[extra.Key] = extraEntry
+			}
 		}
-		byKey[key] = entry
 	}
 	for key, entry := range byKey {
 		path, err := filepath.Rel(filepath.Dir(libraryPath), entry.GeneratedAssetPath)
@@ -503,7 +531,13 @@ func hl1CharacterDirectionalClips(in GameAssetPlayerDirectionalClipSet) content.
 
 // hl1AddHeldWeaponPresentationMarkers adapts the shared GoldSrc p_ model
 // convention into generic gun aim and hand-grip anchors after hand rebasing.
-func hl1AddHeldWeaponPresentationMarkers(asset *content.AssetDef) {
+// A left-grip marker is opt-in: its presence is the generic authored signal
+// that runtime should solve a two-handed hold.
+func hl1AddHeldWeaponPresentationMarkers(asset *content.AssetDef, twoHanded bool) {
+	hl1AddHeldWeaponPresentationMarkersWithAimFrame(asset, content.Quat{}, twoHanded)
+}
+
+func hl1AddHeldWeaponPresentationMarkersWithAimFrame(asset *content.AssetDef, aimFrame content.Quat, twoHanded bool) {
 	if asset == nil || len(asset.Parts) == 0 || asset.Parts[0].Source.VoxelShape == nil {
 		return
 	}
@@ -521,12 +555,15 @@ func hl1AddHeldWeaponPresentationMarkers(asset *content.AssetDef) {
 	if resolution <= 0 {
 		return
 	}
+	if aimFrame == (content.Quat{}) {
+		aimFrame = content.Quat{0, -0.70710677, 0, 0.70710677}
+	}
 	center := content.Vec3{float32(minY+maxY) * resolution * 0.5, float32(minZ+maxZ) * resolution * 0.5}
 	asset.Markers = append(asset.Markers, content.AssetMarkerDef{
 		ID: "muzzle", Name: "muzzle", ParentID: asset.Parts[0].ID, Kind: content.AssetMarkerKindMuzzle,
 		Transform: content.AssetTransformDef{
 			Position: content.Vec3{(float32(maxX) + 0.5) * resolution, center[0], center[1]},
-			Rotation: content.Quat{0, -0.70710677, 0, 0.70710677},
+			Rotation: aimFrame,
 			Scale:    content.Vec3{1, 1, 1},
 		},
 		// The p_ convention supplies a deterministic barrel axis, so this is a
@@ -536,11 +573,31 @@ func hl1AddHeldWeaponPresentationMarkers(asset *content.AssetDef) {
 		ID: "right_grip", Name: "right_grip", ParentID: asset.Parts[0].ID, Kind: content.AssetMarkerKindRightGrip,
 		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
 		Tags:      []string{"source:hl1", "generated:held_weapon_grip"},
-	}, content.AssetMarkerDef{
+	})
+	if !twoHanded {
+		return
+	}
+	asset.Markers = append(asset.Markers, content.AssetMarkerDef{
 		ID: "left_grip", Name: "left_grip", ParentID: asset.Parts[0].ID, Kind: content.AssetMarkerKindLeftGrip,
 		Transform: content.AssetTransformDef{Position: content.Vec3{float32(maxX) * resolution * 0.45, center[0], center[1]}, Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
 		Tags:      []string{"source:hl1", "generated:held_weapon_grip"},
 	})
+}
+
+// hl1HeldWeaponUsesLeftGrip contains source-format knowledge only. Unknown
+// props default to one hand so importer guesses cannot pull an avatar arm to
+// a synthetic target; authors can add a left_grip marker later in the editor.
+func hl1HeldWeaponUsesLeftGrip(entry *GameAssetManifestEntry) bool {
+	if entry == nil {
+		return false
+	}
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)))
+	switch base {
+	case "p_9mmar", "p_shotgun", "p_rpg", "p_crossbow", "p_gauss":
+		return true
+	default:
+		return false
+	}
 }
 
 func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
@@ -571,6 +628,16 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			return "weapons.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
 		}
 	case "weapon_held":
+		// The importer catalog identity is authoritative when a source collection
+		// has aliases for the same held presentation.
+		switch {
+		case strings.HasSuffix(strings.ToLower(entry.CatalogID), "_p_crossbow"):
+			return "weapons.crossbow.held"
+		case strings.HasSuffix(strings.ToLower(entry.CatalogID), "_p_grenade"):
+			return "weapons.hand_grenade.held"
+		case strings.HasSuffix(strings.ToLower(entry.CatalogID), "_p_gauss"):
+			return "weapons.gauss.held"
+		}
 		switch base {
 		case "p_9mmhandgun":
 			return "weapons.handgun.held"
@@ -580,6 +647,16 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			return "weapons.assault_rifle.held"
 		case "p_shotgun":
 			return "weapons.shotgun.held"
+		case "p_rpg":
+			return "weapons.rpg.held"
+		case "p_crossbow":
+			return "weapons.crossbow.held"
+		case "p_grenade":
+			return "weapons.hand_grenade.held"
+		case "p_gauss":
+			return "weapons.gauss.held"
+		case "p_egon":
+			return "weapons.egon.held"
 		default:
 			return "weapons.held.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
 		}
@@ -710,6 +787,12 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 			assetName := safeHL1AssetBaseName(entry.SourceRef)
 			if entry.CatalogKind != "" {
 				assetName = safeHL1CatalogAssetBaseName(entry.CatalogID)
+			} else {
+				// A map reference and a catalog entry may name the same source MDL.
+				// Keep their generated documents distinct: catalog output carries the
+				// adapted presentation contract, while the map reference remains a
+				// source-faithful static asset.
+				assetName += "_uncataloged"
 			}
 			assetPath := filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "generated", "models", assetName+".gkasset")
 			entry.GeneratedVoxelResolution = voxelResolution
@@ -731,6 +814,10 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					rebaseToHand, rebaseBone = true, hand
 				}
 			}
+			if hl1IsEgonHeldModel(entry) {
+				c.buildEgonHeldPresentation(entry, geometry, voxelResolution, assetPath)
+				return
+			}
 			asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
 				Name:            strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
 				SourceRef:       entry.SourceRef,
@@ -750,7 +837,8 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				})
 			} else if asset != nil {
 				if entry.CatalogKind == "weapon_held" {
-					hl1AddHeldWeaponPresentationMarkers(asset)
+					twoHanded := hl1HeldWeaponUsesLeftGrip(entry)
+					hl1AddHeldWeaponPresentationMarkers(asset, twoHanded)
 				}
 				if entry.CatalogKind == "player" && !hl1PlayerAssetHasRequiredMarkers(asset) {
 					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_anchor_unresolved", Subject: entry.CatalogID, Message: "verified player anchors could not resolve to generated bone parts"})
@@ -818,6 +906,68 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 			}
 		}
 	}
+}
+
+func hl1IsEgonHeldModel(entry *GameAssetManifestEntry) bool {
+	if entry == nil || entry.CatalogKind != "weapon_held" {
+		return false
+	}
+	base := strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef))
+	return strings.EqualFold(base, "p_egon")
+}
+
+func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEntry, geometry MDLGeometry, resolution float32, heldPath string) {
+	bone := func(name string) int {
+		for index, info := range geometry.Info.Bones {
+			if strings.EqualFold(strings.ReplaceAll(info.Name, " ", ""), name) {
+				return index
+			}
+		}
+		return -1
+	}
+	upperBody, backpack, neck := bone("Bip01Spine"), bone("Bip01Spine1"), bone("Bip01Neck")
+	forearm, terminalArm := bone("Bip01RArm1"), bone("Bip01RArm2")
+	if upperBody < 0 || backpack < 0 || neck < 0 || forearm < 0 || terminalArm < 0 {
+		c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.egon_presentation_unsupported", Subject: entry.SourceRef, Message: "missing verified Egon backpack or terminal-arm bones"})
+		return
+	}
+	held, heldVoxels, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
+		Name:               "egon held",
+		SourceRef:          entry.SourceRef,
+		VoxelResolution:    resolution,
+		StaticPose:         true,
+		RebaseBoneIndex:    terminalArm,
+		RebaseToBone:       true,
+		IncludeBoneIndices: []int{forearm, terminalArm},
+	})
+	if err != nil {
+		c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.egon_held_voxelize_failed", Subject: entry.SourceRef, Message: err.Error()})
+		return
+	}
+	pack, packVoxels, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
+		Name:               "egon backpack",
+		SourceRef:          entry.SourceRef,
+		VoxelResolution:    resolution,
+		StaticPose:         true,
+		RebaseBoneIndex:    upperBody,
+		RebaseToBone:       true,
+		IncludeBoneIndices: []int{backpack, neck},
+	})
+	if err != nil {
+		c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.egon_backpack_voxelize_failed", Subject: entry.SourceRef, Message: err.Error()})
+		return
+	}
+	hl1AddHeldWeaponPresentationMarkersWithAimFrame(held, hl1BoneLocalMuzzleFrame(geometry.Info.Bones, terminalArm), true)
+	entry.GeneratedAssetPath = filepath.Clean(heldPath)
+	entry.GeneratedVoxelCount = heldVoxels
+	entry.generatedAsset = held
+	entry.GeneratedExtras = []GameAssetGeneratedExtra{{
+		Key:        "equipment.egon.backpack",
+		AssetPath:  strings.TrimSuffix(heldPath, filepath.Ext(heldPath)) + "_backpack.gkasset",
+		VoxelCount: packVoxels,
+		asset:      pack,
+	}}
+	entry.ConvertState = "generated_composite_presentation"
 }
 
 func assetHasMarker(asset *content.AssetDef, markerID string) bool {

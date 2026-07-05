@@ -11,6 +11,7 @@ import (
 
 type AuthoredAssetSpawnResult struct {
 	RootEntity         EntityId
+	Entities           []EntityId
 	AssetID            string
 	EntitiesByAssetID  map[string]EntityId
 	ItemKindsByAssetID map[string]AuthoredItemKind
@@ -63,12 +64,14 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		},
 		&AuthoredAssetRootComponent{AssetID: def.ID},
 	)
+	result.Entities = append(result.Entities, result.RootEntity)
 
 	for _, part := range def.Parts {
 		eid, err := spawnAuthoredPart(cmd, assets, def, part, opts.DocumentPath, shadowSettings)
 		if err != nil {
 			return result, err
 		}
+		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[part.ID] = eid
 		result.ItemKindsByAssetID[part.ID] = AuthoredItemKindPart
 		result.PartIDs[part.ID] = struct{}{}
@@ -78,6 +81,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		if err != nil {
 			return result, err
 		}
+		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[light.ID] = eid
 		result.ItemKindsByAssetID[light.ID] = AuthoredItemKindLight
 	}
@@ -86,6 +90,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		if err != nil {
 			return result, err
 		}
+		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[emitter.ID] = eid
 		result.ItemKindsByAssetID[emitter.ID] = AuthoredItemKindEmitter
 	}
@@ -94,6 +99,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		if err != nil {
 			return result, err
 		}
+		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[marker.ID] = eid
 		result.ItemKindsByAssetID[marker.ID] = AuthoredItemKindMarker
 	}

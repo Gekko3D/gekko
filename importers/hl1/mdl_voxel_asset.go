@@ -21,6 +21,9 @@ type MDLVoxelAssetOptions struct {
 	StaticPose      bool
 	RebaseBoneIndex int
 	RebaseToBone    bool
+	// IncludeBoneIndices retains geometry weighted to these source bones. It
+	// turns a composite source rig into independently mountable static props.
+	IncludeBoneIndices []int
 	// SemanticAnchors maps stable marker IDs to verified source bone indices.
 	// Player catalog import supplies only known GoldSrc player-bone mappings.
 	SemanticAnchors map[string]int
@@ -36,6 +39,12 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 	}
 	if len(geometry.Triangles) == 0 {
 		return nil, 0, fmt.Errorf("mdl contains no decoded triangles")
+	}
+	if len(opts.IncludeBoneIndices) > 0 {
+		geometry = filterMDLGeometryByBones(geometry, opts.IncludeBoneIndices)
+		if len(geometry.Triangles) == 0 {
+			return nil, 0, fmt.Errorf("mdl has no geometry for selected bones")
+		}
 	}
 	if opts.RebaseToBone {
 		geometry = rebaseMDLGeometryToBoneOrigin(geometry, opts.RebaseBoneIndex)
@@ -85,6 +94,21 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 		Tags: []string{"source:hl1", "source_asset:mdl", "generated:mdl_voxel_surface"},
 	}}
 	return asset, len(localVoxels), nil
+}
+
+func filterMDLGeometryByBones(geometry MDLGeometry, boneIndices []int) MDLGeometry {
+	include := make(map[int]struct{}, len(boneIndices))
+	for _, boneIndex := range boneIndices {
+		include[boneIndex] = struct{}{}
+	}
+	triangles := make([]MDLTriangle, 0, len(geometry.Triangles))
+	for _, triangle := range geometry.Triangles {
+		if _, ok := include[dominantMDLTriangleBone(triangle, len(geometry.Info.Bones))]; ok {
+			triangles = append(triangles, triangle)
+		}
+	}
+	geometry.Triangles = triangles
+	return geometry
 }
 
 func rebaseMDLGeometryToBoneOrigin(geometry MDLGeometry, boneIndex int) MDLGeometry {
@@ -481,6 +505,35 @@ func hammerQuatToMgl(q mgl32.Quat) mgl32.Quat {
 
 func mglQuatToContent(q mgl32.Quat) content.Quat {
 	return content.Quat{q.V.X(), q.V.Y(), q.V.Z(), q.W}
+}
+
+// hl1BoneLocalMuzzleFrame converts the source-up axis into the local frame of
+// a static p_ model rebased to boneIndex. Its -Z axis remains the imported
+// +X barrel direction; only the roll comes from the verified source rig.
+func hl1BoneLocalMuzzleFrame(bones []MDLBoneInfo, boneIndex int) content.Quat {
+	if boneIndex < 0 || boneIndex >= len(bones) {
+		return content.Quat{}
+	}
+	frames := mdlGlobalBoneFrameTransforms(bones, nil, 0)
+	if boneIndex >= len(frames) {
+		return content.Quat{}
+	}
+	boneRotation := hammerQuatToMgl(frames[boneIndex].Rotation)
+	forward := mgl32.Vec3{1, 0, 0}
+	up := boneRotation.Inverse().Rotate(mgl32.Vec3{0, 1, 0})
+	up = up.Sub(forward.Mul(forward.Dot(up)))
+	if up.LenSqr() <= 1e-8 {
+		return content.Quat{}
+	}
+	up = up.Normalize()
+	right := forward.Cross(up).Normalize()
+	rotation := mgl32.Mat4ToQuat(mgl32.Mat4FromCols(
+		mgl32.Vec4{right.X(), right.Y(), right.Z(), 0},
+		mgl32.Vec4{up.X(), up.Y(), up.Z(), 0},
+		mgl32.Vec4{-forward.X(), -forward.Y(), -forward.Z(), 0},
+		mgl32.Vec4{0, 0, 0, 1},
+	)).Normalize()
+	return mglQuatToContent(rotation)
 }
 
 func mdlRootBoneIndex(bones []MDLBoneInfo) int {

@@ -14,15 +14,18 @@ type AssetAttachmentLibraryDef struct {
 }
 
 type AssetAttachmentDef struct {
-	ID             string                        `json:"id"`
-	Name           string                        `json:"name"`
-	ParentAssetRef string                        `json:"parent_asset_ref"`
-	ParentMarkerID string                        `json:"parent_marker_id"`
-	ChildAssetRef  string                        `json:"child_asset_ref"`
-	Transform      AssetTransformDef             `json:"transform"`
-	Aim            *AssetAttachmentAimFrameDef   `json:"aim,omitempty"`
-	GripFrames     []AssetAttachmentGripFrameDef `json:"grip_frames,omitempty"`
-	Tags           []string                      `json:"tags,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	ParentAssetRef string `json:"parent_asset_ref"`
+	ParentMarkerID string `json:"parent_marker_id"`
+	ChildAssetRef  string `json:"child_asset_ref"`
+	// AssemblyRef links sibling mounts that make up one presentation assembly.
+	// A character may mount a held tool and body-worn support gear together.
+	AssemblyRef string                        `json:"assembly_ref,omitempty"`
+	Transform   AssetTransformDef             `json:"transform"`
+	Aim         *AssetAttachmentAimFrameDef   `json:"aim,omitempty"`
+	GripFrames  []AssetAttachmentGripFrameDef `json:"grip_frames,omitempty"`
+	Tags        []string                      `json:"tags,omitempty"`
 }
 
 // AssetAttachmentAimFrameDef is a calibrated aim frame relative to a stable
