@@ -12,10 +12,11 @@ const (
 	VoxelNormalValidBit    = 1 << 14
 	VoxelNormalTwoSidedBit = 1 << 15
 
-	VoxelNormalSurfaceFitRadius       = 2
-	VoxelNormalSurfaceFitMinSamples   = 4
-	VoxelNormalSurfaceFitMaxError     = 0.08
-	VoxelNormalDensityComponentCutoff = 0.28
+	VoxelNormalSurfaceFitRadius         = 2
+	VoxelNormalExtendedSurfaceFitRadius = 4 // Includes a full 3:1 staircase period at offset (3, 1).
+	VoxelNormalSurfaceFitMinSamples     = 4
+	VoxelNormalSurfaceFitMaxError       = 0.08
+	VoxelNormalDensityComponentCutoff   = 0.28
 
 	VoxelAuxRecordBytes = VoxelAuxWordCount * 4
 )
@@ -123,17 +124,21 @@ func BakedVoxelNormal(opts VoxelNormalBakeOptions, voxel [3]int) (mgl32.Vec3, bo
 
 	tx, ty, tz := 0, 0, 0
 	exposedAxisPairs := 0
+	exposedAxis := -1
 	if occPX == 0 || occNX == 0 {
 		tx = axisTieBreakSign(opts, voxel, 0)
 		exposedAxisPairs++
+		exposedAxis = 0
 	}
 	if occPY == 0 || occNY == 0 {
 		ty = axisTieBreakSign(opts, voxel, 1)
 		exposedAxisPairs++
+		exposedAxis = 1
 	}
 	if occPZ == 0 || occNZ == 0 {
 		tz = axisTieBreakSign(opts, voxel, 2)
 		exposedAxisPairs++
+		exposedAxis = 2
 	}
 	if normal, ok := DensityGradientVoxelNormal(opts, voxel); ok {
 		if twoSided && VoxelNormalHasMultipleComponents(normal) {
@@ -143,6 +148,11 @@ func BakedVoxelNormal(opts VoxelNormalBakeOptions, voxel [3]int) (mgl32.Vec3, bo
 	}
 	if nx != 0 || ny != 0 || nz != 0 {
 		return NormalizedVec3OrZero(mgl32.Vec3{float32(nx), float32(ny), float32(nz)}), true, twoSided
+	}
+	if twoSided && exposedAxisPairs == 1 && hasExtendedSurfaceFitSamples(sample, voxel, exposedAxis) {
+		if normal, ok := fittedSurfaceVoxelNormal(opts, voxel, mgl32.Vec3{float32(tx), float32(ty), float32(tz)}, VoxelNormalExtendedSurfaceFitRadius); ok {
+			return CanonicalVoxelNormalHemisphere(normal), true, true
+		}
 	}
 	if exposedAxisPairs <= 1 {
 		if tx != 0 || ty != 0 || tz != 0 {
@@ -164,19 +174,53 @@ func BakedVoxelNormal(opts VoxelNormalBakeOptions, voxel [3]int) (mgl32.Vec3, bo
 }
 
 func FittedSurfaceVoxelNormal(opts VoxelNormalBakeOptions, voxel [3]int, orient mgl32.Vec3) (mgl32.Vec3, bool) {
+	return fittedSurfaceVoxelNormal(opts, voxel, orient, VoxelNormalSurfaceFitRadius)
+}
+
+func hasExtendedSurfaceFitSamples(sample func([3]int) bool, voxel [3]int, normalAxis int) bool {
+	if sample == nil || normalAxis < 0 || normalAxis > 2 {
+		return false
+	}
+	for tangentAxis := 0; tangentAxis < 3; tangentAxis++ {
+		if tangentAxis == normalAxis {
+			continue
+		}
+		forward, backward := false, false
+		for normalOffset := -1; normalOffset <= 1; normalOffset += 2 {
+			forwardVoxel := voxel
+			forwardVoxel[tangentAxis] += 3
+			forwardVoxel[normalAxis] += normalOffset
+			forward = forward || sample(forwardVoxel)
+
+			backwardVoxel := voxel
+			backwardVoxel[tangentAxis] -= 3
+			backwardVoxel[normalAxis] += normalOffset
+			backward = backward || sample(backwardVoxel)
+		}
+		if forward && backward {
+			return true
+		}
+	}
+	return false
+}
+
+func fittedSurfaceVoxelNormal(opts VoxelNormalBakeOptions, voxel [3]int, orient mgl32.Vec3, radius int) (mgl32.Vec3, bool) {
+	if radius <= 0 {
+		return mgl32.Vec3{}, false
+	}
 	type weightedOffset struct {
 		x, y, z int
 		weight  float64
 	}
 	offsets := make([]weightedOffset, 0, 32)
-	for dz := -VoxelNormalSurfaceFitRadius; dz <= VoxelNormalSurfaceFitRadius; dz++ {
-		for dy := -VoxelNormalSurfaceFitRadius; dy <= VoxelNormalSurfaceFitRadius; dy++ {
-			for dx := -VoxelNormalSurfaceFitRadius; dx <= VoxelNormalSurfaceFitRadius; dx++ {
+	for dz := -radius; dz <= radius; dz++ {
+		for dy := -radius; dy <= radius; dy++ {
+			for dx := -radius; dx <= radius; dx++ {
 				if dx == 0 && dy == 0 && dz == 0 {
 					continue
 				}
 				dist2 := dx*dx + dy*dy + dz*dz
-				if dist2 > VoxelNormalSurfaceFitRadius*VoxelNormalSurfaceFitRadius {
+				if dist2 > radius*radius {
 					continue
 				}
 				if !opts.SampleOccupancy([3]int{voxel[0] + dx, voxel[1] + dy, voxel[2] + dz}) {

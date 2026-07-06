@@ -229,7 +229,8 @@ The voxel renderer intentionally keeps a blocky albedo/material look while allow
 - Do not use object-center or radial fallback normals for shading.
   - Those produce a blobby "inflated" read that is unrelated to the local voxel surface and drift badly on concave or thin shapes.
 - Degenerate gradients should still resolve to one per-voxel normal.
-  - If the occupancy gradient is degenerate, derive a deterministic fallback from the voxel's exposed-face mask so thin symmetric features do not become view-dependent.
+  - For a thin sheet with one exposed axis, fit a wider local occupancy neighborhood before using the deterministic exposed-face fallback; this preserves shallow voxelized ramps.
+  - If that fit is degenerate or rejected, derive a deterministic fallback from the voxel's exposed-face mask so thin symmetric features do not become view-dependent.
   - Use the hit face / ray entry direction only as a last resort when the occupancy-based fallback is still ambiguous.
 - Single-voxel-thick features need two-sided direct lighting.
   - When a voxel is exposed on both sides of an axis, keep its normal deterministic, but evaluate direct point and spot lighting as two-sided so planes and rods still react to local lights from either side.

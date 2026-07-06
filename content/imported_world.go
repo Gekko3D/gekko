@@ -17,7 +17,7 @@ const (
 	DefaultImportedWorldAuxDirName            = "aux"
 	CurrentImportedWorldChunkAuxSchemaVersion = 1
 	ImportedWorldChunkAuxPayloadBinaryV1      = "voxel_aux_binary_v1"
-	ImportedWorldNormalBakeVersion            = "voxel_normals_surface_fit_v1"
+	ImportedWorldNormalBakeVersion            = "voxel_normals_surface_fit_v2"
 )
 
 type ImportedWorldKind string
