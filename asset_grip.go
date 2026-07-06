@@ -37,6 +37,25 @@ func ResetAuthoredAssetAttachmentMount(cmd *Commands, root EntityId) bool {
 	return setEntityWorldTransform(cmd, root, world)
 }
 
+// RestoreAuthoredAssetAttachmentMount restores an attachment's authored
+// hierarchy and local mount. It is for an action that must keep a prop rigid
+// relative to its animated parent marker instead of procedurally aiming it.
+func RestoreAuthoredAssetAttachmentMount(cmd *Commands, root EntityId) bool {
+	if cmd == nil || root == 0 {
+		return false
+	}
+	attachment, _ := cmd.GetComponent(root, reflect.TypeOf(AuthoredAssetAttachmentComponent{})).(*AuthoredAssetAttachmentComponent)
+	parent, _ := cmd.GetComponent(root, reflect.TypeOf(Parent{})).(*Parent)
+	local, _ := cmd.GetComponent(root, reflect.TypeOf(LocalTransformComponent{})).(*LocalTransformComponent)
+	if attachment == nil || attachment.ParentMarker == 0 || parent == nil || local == nil {
+		return false
+	}
+	parent.Entity = attachment.ParentMarker
+	*local = AssetLocalTransformFromDef(attachment.MountTransform)
+	TransformHierarchySystem(cmd)
+	return true
+}
+
 // ApplyAuthoredAssetAttachmentAimOffset shifts a procedurally aimed asset in
 // its authored aim-frame basis. It is applied after aiming, so forward stays
 // forward regardless of the host marker's local axes.

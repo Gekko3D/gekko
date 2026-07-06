@@ -5,6 +5,8 @@ const (
 	CharacterPresentationUnsupported = "unsupported"
 	CharacterLocomotionFaceTravel    = "face_travel"
 	CharacterBackwardReverseForward  = "reverse_forward"
+	CharacterWeaponAttachmentAim     = "aim"
+	CharacterWeaponAttachmentMount   = "mount"
 )
 
 // CharacterPresentationDef is source-neutral animation and anchor metadata
@@ -65,6 +67,10 @@ type CharacterWeaponStanceDef struct {
 	CrouchAimClipID    string   `json:"crouch_aim_clip_id,omitempty"`
 	CrouchRecoilClipID string   `json:"crouch_recoil_clip_id,omitempty"`
 	BoneMask           []string `json:"bone_mask,omitempty"`
+	// AttachmentMode controls the held prop for this stance. "mount" keeps it
+	// rigid relative to its authored parent marker; the empty default uses
+	// procedural aiming.
+	AttachmentMode string `json:"attachment_mode,omitempty"`
 }
 type CharacterCrouchLocomotionDef struct {
 	Directional      CharacterDirectionalClipSetDef `json:"directional,omitempty"`

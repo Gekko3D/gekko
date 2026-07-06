@@ -24,6 +24,14 @@ func main() {
 	var exportProfile string
 	var progress bool
 	flag.StringVar(&opts.GameDir, "game-dir", "", "Half-Life game directory")
+	flag.Func("resource-dir", "additional HL1 resource directory; may be repeated", func(value string) error {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fmt.Errorf("resource directory is empty")
+		}
+		opts.ResourceDirs = append(opts.ResourceDirs, value)
+		return nil
+	})
 	flag.StringVar(&opts.MapName, "map", "", "HL1 map name, for example c1a0")
 	flag.StringVar(&opts.BSPPath, "bsp", "", "explicit BSP path; overrides -game-dir/-map lookup")
 	flag.StringVar(&opts.OutputRoot, "out", "../actiongame/assets/levels", "generated content output root")

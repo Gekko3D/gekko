@@ -17,8 +17,8 @@ func TestEcs_MakeEcs(t *testing.T) {
 		t.Errorf("Expected entityIndex to be empty, got %v", ecs.entityIndex)
 	}
 
-	if ecs.entityIdCounter != 0 {
-		t.Errorf("Expected entityIdCounter to be 0, got %v", ecs.entityIdCounter)
+	if ecs.entityIdCounter != InvalidEntityId+1 {
+		t.Errorf("Expected entityIdCounter to start after InvalidEntityId, got %v", ecs.entityIdCounter)
 	}
 
 	if ecs.componentIdCounter != 0 {

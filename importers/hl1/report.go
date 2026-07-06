@@ -142,6 +142,7 @@ const (
 
 type ImportOptions struct {
 	GameDir                    string
+	ResourceDirs               []string
 	MapName                    string
 	BSPPath                    string
 	OutputRoot                 string

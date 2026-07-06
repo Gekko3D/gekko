@@ -105,6 +105,7 @@ type GameAssetPlayerWeaponStance struct {
 	CrouchAimClipID    string   `json:"crouch_aim_clip_id,omitempty"`
 	CrouchRecoilClipID string   `json:"crouch_recoil_clip_id,omitempty"`
 	BoneMask           []string `json:"bone_mask,omitempty"`
+	AttachmentMode     string   `json:"attachment_mode,omitempty"`
 }
 
 const (
@@ -241,7 +242,7 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		Source:        summary.Report.Source,
 	}
 	manifest.Source.GameDir = gameDir
-	collector := newHL1AssetCollector(gameDir, outputRoot, mapName, EffectiveHL1VoxelResolutionPolicy(opts))
+	collector := newHL1AssetCollector(gameDir, opts.ResourceDirs, outputRoot, mapName, EffectiveHL1VoxelResolutionPolicy(opts))
 	for _, wadPath := range summary.Report.Source.WADPaths {
 		collector.addAbsolute("wad", wadPath, "worldspawn.wad")
 	}
@@ -270,24 +271,33 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		}
 	}
 	if opts.ImportAllPlayerModels {
-		collector.addCatalogModels("player", hl1CatalogModelPaths(gameDir, true))
+		for _, resourceDir := range collector.resourceDirs {
+			collector.addCatalogModels("player", resourceDir, hl1CatalogModelPaths(resourceDir, true))
+		}
 	}
 	if opts.ImportAllWeaponWorldModels {
-		collector.addCatalogModels("weapon_world", hl1CatalogModelPaths(gameDir, false))
-		collector.addCatalogModels("weapon_held", hl1HeldWeaponModelPaths(gameDir))
+		for _, resourceDir := range collector.resourceDirs {
+			collector.addCatalogModels("weapon_world", resourceDir, hl1CatalogModelPaths(resourceDir, false))
+			collector.addCatalogModels("weapon_held", resourceDir, hl1HeldWeaponModelPaths(resourceDir))
+		}
 	}
 	manifest.Assets, manifest.Diagnostics = collector.buildEntries()
 	manifest.Catalog = buildGameAssetCatalog(manifest.Assets)
 	return GameAssetImportResult{ManifestPath: manifestPath, Manifest: manifest, LibraryPath: libraryPath, Library: buildHL1AssetLibrary(manifest.Assets, libraryPath)}, nil
 }
 
-func (c *hl1AssetCollector) addCatalogModels(kind string, paths []string) {
+func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []string) {
 	for _, path := range paths {
-		ref, err := filepath.Rel(c.gameDir, path)
+		ref, err := filepath.Rel(resourceDir, path)
 		if err != nil || strings.HasPrefix(ref, "..") {
 			continue
 		}
 		ref = filepath.ToSlash(ref)
+		if kind == "weapon_world" || kind == "weapon_held" {
+			// Catalog identity is source-layout independent so an overlay fills a
+			// missing base-game model without creating a competing library key.
+			ref = filepath.ToSlash(filepath.Join("valve", "models", filepath.Base(path)))
+		}
 		if kind != "player" {
 			id := safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref)))
 			c.addCatalogModel(kind, ref, path, id, nil, 0)
@@ -522,7 +532,7 @@ func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPr
 		def.CrouchGait.BaseStances = append(def.CrouchGait.BaseStances, content.CharacterStanceClipDef{Stance: stance.Stance, ClipID: stance.ClipID})
 	}
 	for _, stance := range entry.WeaponPresentation.Stances {
-		def.WeaponPresentation.Stances = append(def.WeaponPresentation.Stances, content.CharacterWeaponStanceDef{Stance: stance.Stance, AimClipID: stance.AimClipID, RecoilClipID: stance.RecoilClipID, CrouchAimClipID: stance.CrouchAimClipID, CrouchRecoilClipID: stance.CrouchRecoilClipID, BoneMask: append([]string(nil), stance.BoneMask...)})
+		def.WeaponPresentation.Stances = append(def.WeaponPresentation.Stances, content.CharacterWeaponStanceDef{Stance: stance.Stance, AimClipID: stance.AimClipID, RecoilClipID: stance.RecoilClipID, CrouchAimClipID: stance.CrouchAimClipID, CrouchRecoilClipID: stance.CrouchRecoilClipID, BoneMask: append([]string(nil), stance.BoneMask...), AttachmentMode: stance.AttachmentMode})
 	}
 	return def
 }
@@ -624,6 +634,10 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			return "weapons.assault_rifle"
 		case "w_shotgun":
 			return "weapons.shotgun"
+		case "w_crowbar":
+			return "weapons.crowbar"
+		case "w_tripmine":
+			return "weapons.tripmine"
 		default:
 			// Keep non-gameplay world-model variants distinct without exposing
 			// their source names to runtime profiles.
@@ -645,6 +659,8 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			return "weapons.handgun.held"
 		case "p_357":
 			return "weapons.revolver.held"
+		case "p_crowbar":
+			return "weapons.crowbar.held"
 		case "p_9mmar":
 			return "weapons.assault_rifle.held"
 		case "p_shotgun":
@@ -659,6 +675,8 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			return "weapons.gauss.held"
 		case "p_egon":
 			return "weapons.egon.held"
+		case "p_tripmine":
+			return "weapons.tripmine.held"
 		default:
 			return "weapons.held.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
 		}
@@ -668,6 +686,7 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 
 type hl1AssetCollector struct {
 	gameDir               string
+	resourceDirs          []string
 	outputRoot            string
 	mapName               string
 	voxelResolutionPolicy HL1VoxelResolutionPolicy
@@ -675,17 +694,39 @@ type hl1AssetCollector struct {
 	diagnostics           []importcommon.Diagnostic
 }
 
-func newHL1AssetCollector(gameDir, outputRoot, mapName string, policy HL1VoxelResolutionPolicy) *hl1AssetCollector {
+func newHL1AssetCollector(gameDir string, resourceDirs []string, outputRoot, mapName string, policy HL1VoxelResolutionPolicy) *hl1AssetCollector {
 	if policy == (HL1VoxelResolutionPolicy{}) {
 		policy = DefaultHL1VoxelResolutionPolicy()
 	}
 	return &hl1AssetCollector{
 		gameDir:               filepath.Clean(gameDir),
+		resourceDirs:          hl1ResourceDirs(gameDir, resourceDirs),
 		outputRoot:            filepath.Clean(outputRoot),
 		mapName:               mapName,
 		voxelResolutionPolicy: policy,
 		entries:               map[string]*GameAssetManifestEntry{},
 	}
+}
+
+func hl1ResourceDirs(gameDir string, overlays []string) []string {
+	dirs := make([]string, 0, len(overlays)+1)
+	for _, dir := range append([]string{gameDir}, overlays...) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		dir = filepath.Clean(dir)
+		for _, existing := range dirs {
+			if existing == dir {
+				dir = ""
+				break
+			}
+		}
+		if dir != "" {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
 }
 
 func (c *hl1AssetCollector) addAbsolute(kind, path, usedBy string) {
@@ -758,6 +799,9 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 	}
 	entry.UsedBy = appendUniqueString(entry.UsedBy, usedBy)
 	if sourcePath == "" {
+		return
+	}
+	if entry.Resolved {
 		return
 	}
 	entry.SourcePath = filepath.Clean(sourcePath)
@@ -846,6 +890,9 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					twoHanded := hl1HeldWeaponUsesLeftGrip(entry)
 					hl1AddHeldWeaponPresentationMarkers(asset, twoHanded)
 				}
+				if hl1IsTripmineWorldModel(entry) {
+					hl1AddTripmineSurfaceMountMarker(asset)
+				}
 				if entry.CatalogKind == "player" && !hl1PlayerAssetHasRequiredMarkers(asset) {
 					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_anchor_unresolved", Subject: entry.CatalogID, Message: "verified player anchors could not resolve to generated bone parts"})
 					entry.ConvertState = "unsupported_player_avatar"
@@ -920,6 +967,25 @@ func hl1IsEgonHeldModel(entry *GameAssetManifestEntry) bool {
 	}
 	base := strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef))
 	return strings.EqualFold(base, "p_egon")
+}
+
+func hl1IsTripmineWorldModel(entry *GameAssetManifestEntry) bool {
+	if entry == nil || entry.CatalogKind != "weapon_world" {
+		return false
+	}
+	base := strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef))
+	return strings.EqualFold(base, "w_tripmine")
+}
+
+func hl1AddTripmineSurfaceMountMarker(asset *content.AssetDef) {
+	if asset == nil {
+		return
+	}
+	asset.Markers = append(asset.Markers, content.AssetMarkerDef{
+		ID: "surface_mount", Name: "surface mount", ParentID: "mdl_surface", Kind: content.AssetMarkerKindSurfaceMount,
+		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 1, 0, 0}, Scale: content.Vec3{1, 1, 1}},
+		Tags:      []string{"source:hl1", "generated:surface_mount"},
+	})
 }
 
 func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEntry, geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile, heldPath string) {
@@ -1035,7 +1101,11 @@ func (c *hl1AssetCollector) resolveRef(ref, kind string) string {
 	if cleaned == "." || cleaned == "" || strings.HasPrefix(cleaned, "*") {
 		return ""
 	}
-	candidates := hl1AssetPathCandidates(c.gameDir, cleaned, kind)
+	var candidates []string
+	for _, resourceDir := range c.resourceDirs {
+		candidates = append(candidates, hl1AssetPathCandidates(resourceDir, cleaned, kind)...)
+	}
+	candidates = uniqueCleanPaths(candidates)
 	for _, candidate := range candidates {
 		if fileExists(candidate) {
 			return candidate
@@ -1260,6 +1330,9 @@ func hl1PlayerWeaponPresentation(asset *content.AssetDef) GameAssetPlayerWeaponP
 			CrouchRecoilClipID: byName["crouch_shoot_"+stance],
 		}
 		entry.BoneMask = hl1PlayerArmBoneMask(asset.Skeleton)
+		if stance == "crowbar" {
+			entry.AttachmentMode = content.CharacterWeaponAttachmentMount
+		}
 		if entry.AimClipID != "" && entry.RecoilClipID != "" && entry.CrouchAimClipID != "" && entry.CrouchRecoilClipID != "" {
 			presentation.Stances = append(presentation.Stances, entry)
 		}
