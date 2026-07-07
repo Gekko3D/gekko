@@ -10,7 +10,7 @@ import (
 )
 
 const DefaultMaxSolidSampleCells int64 = 20_000_000
-const DefaultSolidBandDepth = 24
+const DefaultSolidBandDepth = 2
 
 type VoxelizeOptions struct {
 	VoxelResolution          float32

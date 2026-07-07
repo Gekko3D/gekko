@@ -115,6 +115,106 @@ func TestCharacterKinematicMoveDepenetratesImmediateContact(t *testing.T) {
 	}
 }
 
+func TestCharacterGroundedMoveStepsOntoWalkableVoxelRiser(t *testing.T) {
+	state := newCharacterControllerTestVoxelRtState()
+	ground := core.NewVoxelObject()
+	ground.XBrickMap = volume.NewXBrickMap()
+	for x := -4; x <= 0; x++ {
+		for z := -2; z <= 2; z++ {
+			ground.XBrickMap.SetVoxel(x, -1, z, 1)
+		}
+	}
+	for x := 1; x <= 4; x++ {
+		for z := -2; z <= 2; z++ {
+			ground.XBrickMap.SetVoxel(x, 0, z, 1)
+		}
+	}
+	ground.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	ground.Transform.Dirty = true
+	ground.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(ground)
+
+	result := CharacterGroundedMove(state, mgl32.Vec3{0, 0, 0}, mgl32.Vec3{1.1, 0, 0}, CharacterGroundedMoveOptions{
+		CollisionConfig: CharacterCollisionConfig{Radius: 0.25, Height: 1.7, StepHeight: 1.1},
+		GroundConfig:    CharacterGroundProbeConfig{Radius: 0.25, StepHeight: 1.1, GroundProbe: 0.15},
+	})
+
+	if !result.Stepped || result.Blocked {
+		t.Fatalf("expected walkable riser step, got %+v", result)
+	}
+	if result.Position.X() < 1 || result.Position.Y() < 0.99 || result.Position.Y() > 1.01 {
+		t.Fatalf("expected character on upper step, got %+v", result)
+	}
+}
+
+func TestCharacterGroundedMoveDoesNotStepOverTallVoxelWall(t *testing.T) {
+	state := newCharacterControllerTestVoxelRtState()
+	wall := core.NewVoxelObject()
+	wall.XBrickMap = volume.NewXBrickMap()
+	for x := -4; x <= 0; x++ {
+		for z := -2; z <= 2; z++ {
+			wall.XBrickMap.SetVoxel(x, -1, z, 1)
+		}
+	}
+	for x := 1; x <= 4; x++ {
+		for z := -2; z <= 2; z++ {
+			wall.XBrickMap.SetVoxel(x, 1, z, 1)
+		}
+	}
+	wall.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	wall.Transform.Dirty = true
+	wall.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(wall)
+
+	result := CharacterGroundedMove(state, mgl32.Vec3{0, 0, 0}, mgl32.Vec3{1.1, 0, 0}, CharacterGroundedMoveOptions{
+		CollisionConfig: CharacterCollisionConfig{Radius: 0.25, Height: 1.7, StepHeight: 1.1},
+		GroundConfig:    CharacterGroundProbeConfig{Radius: 0.25, StepHeight: 1.1, GroundProbe: 0.15},
+	})
+
+	if !result.Blocked || result.Position.X() > 0.01 {
+		t.Fatalf("expected tall wall to remain blocked, got %+v", result)
+	}
+}
+
+func TestCharacterVerticalMoveStopsOnThinVoxelFloor(t *testing.T) {
+	state := newCharacterControllerTestVoxelRtState()
+	floor := core.NewVoxelObject()
+	floor.XBrickMap = volume.NewXBrickMap()
+	for x := -2; x <= 2; x++ {
+		for z := -2; z <= 2; z++ {
+			floor.XBrickMap.SetVoxel(x, -1, z, 1)
+		}
+	}
+	floor.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	floor.Transform.Dirty = true
+	floor.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(floor)
+
+	next, blocked := CharacterVerticalMove(state, mgl32.Vec3{0, 2, 0}, -3, CharacterCollisionConfig{Radius: 0.25, Height: 1.7}, nil)
+	if !blocked || next.Y() < -0.001 || next.Y() > 0.03 {
+		t.Fatalf("expected thin floor to stop fall, got next=%v blocked=%t", next, blocked)
+	}
+}
+
+func TestCharacterGroundedMoveFindsFloorAcrossObjectSeam(t *testing.T) {
+	state := newCharacterControllerTestVoxelRtState()
+	for _, object := range []*core.VoxelObject{
+		characterControllerTestFloorObject(mgl32.Vec3{}, -1, 0),
+		characterControllerTestFloorObject(mgl32.Vec3{1, 0, 0}, 0, 1),
+	} {
+		state.RtApp.Scene.AddObject(object)
+	}
+
+	result := CharacterGroundedMove(state, mgl32.Vec3{0.25, 0.2, 0}, mgl32.Vec3{1, 0, 0}, CharacterGroundedMoveOptions{
+		CollisionConfig: CharacterCollisionConfig{Radius: 0.25, Height: 1.7, StepHeight: 0.6},
+		GroundConfig:    CharacterGroundProbeConfig{Radius: 0.25, StepHeight: 0.6, GroundProbe: 0.15},
+	})
+
+	if result.Position.Y() < -0.001 || result.Position.Y() > 0.01 {
+		t.Fatalf("expected seam floor to ground character, got %+v", result)
+	}
+}
+
 func TestCharacterDepenetrateInitialContactsPushesOutOfImmediateHit(t *testing.T) {
 	state := newCharacterControllerTestVoxelRtState()
 	wall := characterControllerTestVoxelWall(mgl32.Vec3{0, 0, 0})
@@ -169,6 +269,21 @@ func characterControllerTestVoxelWall(position mgl32.Vec3) *core.VoxelObject {
 	obj.XBrickMap = volume.NewXBrickMap()
 	for y := 0; y < 4; y++ {
 		obj.XBrickMap.SetVoxel(0, y, 0, 1)
+	}
+	obj.Transform.Position = position
+	obj.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	obj.Transform.Dirty = true
+	obj.UpdateWorldAABB()
+	return obj
+}
+
+func characterControllerTestFloorObject(position mgl32.Vec3, minX, maxX int) *core.VoxelObject {
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = volume.NewXBrickMap()
+	for x := minX; x <= maxX; x++ {
+		for z := -1; z <= 1; z++ {
+			obj.XBrickMap.SetVoxel(x, -1, z, 1)
+		}
 	}
 	obj.Transform.Position = position
 	obj.Transform.Scale = mgl32.Vec3{1, 1, 1}

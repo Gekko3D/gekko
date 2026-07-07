@@ -50,6 +50,25 @@ type CharacterKinematicMoveResult struct {
 	Depenetrated  bool
 }
 
+// CharacterGroundedMoveOptions describes the collision portion of a grounded
+// character move. Input, gravity, camera, and game policy remain with the
+// caller.
+type CharacterGroundedMoveOptions struct {
+	CollisionConfig CharacterCollisionConfig
+	GroundConfig    CharacterGroundProbeConfig
+	AcceptEntity    func(EntityId, bool) bool
+}
+
+type CharacterGroundedMoveResult struct {
+	Position      mgl32.Vec3
+	Hit           CharacterCollisionHit
+	Blocked       bool
+	Slid          bool
+	Stepped       bool
+	Depenetrated  bool
+	Depenetration CharacterDepenetrationResult
+}
+
 func CharacterKinematicMove(voxRt *VoxelRtState, position, move mgl32.Vec3, opts CharacterKinematicMoveOptions) CharacterKinematicMoveResult {
 	move[1] = 0
 	result := CharacterKinematicMoveResult{
@@ -95,6 +114,117 @@ func CharacterKinematicMove(voxRt *VoxelRtState, position, move mgl32.Vec3, opts
 	}
 	result.AppliedMove = result.Position.Sub(result.Start)
 	return result
+}
+
+// CharacterGroundedMove moves across walkable ground, including a single step
+// no higher than CollisionConfig.StepHeight. It does not apply gravity.
+func CharacterGroundedMove(voxRt *VoxelRtState, position, move mgl32.Vec3, opts CharacterGroundedMoveOptions) CharacterGroundedMoveResult {
+	move[1] = 0
+	result := CharacterGroundedMoveResult{Position: position}
+	if move.LenSqr() <= 1e-8 {
+		return result
+	}
+	cfg := effectiveCharacterCollisionConfig(opts.CollisionConfig)
+	if depen := CharacterDepenetrateInitialContacts(voxRt, position, move, cfg, opts.AcceptEntity); depen.Depenetrated {
+		position = depen.Position
+		result.Position = position
+		result.Depenetrated = true
+		result.Depenetration = depen
+	}
+	if hit, blocked := CharacterMovementBlockHit(voxRt, position, move, cfg, opts.AcceptEntity); !blocked {
+		result.Position = characterGroundedMoveLanding(voxRt, position, position.Add(move), cfg, opts)
+		return result
+	} else {
+		result.Hit = hit
+		if stepped, ok := characterGroundedStepMove(voxRt, position, move, cfg, opts); ok {
+			result.Position = stepped
+			result.Stepped = true
+			return result
+		}
+	}
+
+	kinematic := CharacterKinematicMove(voxRt, position, move, CharacterKinematicMoveOptions{
+		CollisionConfig:      cfg,
+		AcceptEntity:         opts.AcceptEntity,
+		DisableDepenetration: true,
+	})
+	if kinematic.Slid {
+		result.Position = characterGroundedMoveLanding(voxRt, position, kinematic.Position, cfg, opts)
+		result.Slid = true
+		return result
+	}
+	result.Blocked = true
+	return result
+}
+
+func characterGroundedStepMove(voxRt *VoxelRtState, position, move mgl32.Vec3, cfg CharacterCollisionConfig, opts CharacterGroundedMoveOptions) (mgl32.Vec3, bool) {
+	if voxRt == nil || cfg.StepHeight <= 0 {
+		return mgl32.Vec3{}, false
+	}
+	raised, blocked := CharacterVerticalMove(voxRt, position, cfg.StepHeight, cfg, opts.AcceptEntity)
+	if blocked || raised.Y() < position.Y()+cfg.StepHeight-1e-4 {
+		return mgl32.Vec3{}, false
+	}
+	if _, blocked := CharacterMovementBlockHit(voxRt, raised, move, cfg, opts.AcceptEntity); blocked {
+		return mgl32.Vec3{}, false
+	}
+	candidate := raised.Add(move)
+	ground, ok := CharacterGroundHitAtWithin(voxRt, candidate, opts.GroundConfig, cfg.StepHeight, cfg.StepHeight+defaultCharacterCollisionFloat(opts.GroundConfig.GroundProbe, 0.15), opts.AcceptEntity)
+	if !ok || !CharacterAcceptsGroundY(position.Y(), ground.Y, cfg.StepHeight, cfg.StepHeight+defaultCharacterCollisionFloat(opts.GroundConfig.GroundProbe, 0.15)) {
+		return mgl32.Vec3{}, false
+	}
+	candidate[1] = ground.Y
+	return candidate, true
+}
+
+func characterGroundedMoveLanding(voxRt *VoxelRtState, start, candidate mgl32.Vec3, cfg CharacterCollisionConfig, opts CharacterGroundedMoveOptions) mgl32.Vec3 {
+	if voxRt == nil {
+		return candidate
+	}
+	maxDown := cfg.StepHeight + defaultCharacterCollisionFloat(opts.GroundConfig.GroundProbe, 0.15)
+	ground, ok := CharacterGroundHitAtWithin(voxRt, candidate, opts.GroundConfig, cfg.StepHeight, maxDown, opts.AcceptEntity)
+	if ok && CharacterAcceptsGroundY(start.Y(), ground.Y, cfg.StepHeight, maxDown) {
+		candidate[1] = ground.Y
+	}
+	return candidate
+}
+
+// CharacterVerticalMove sweeps the character footprint along Y and returns
+// the reachable position. The collision flag reports a ceiling or floor hit.
+func CharacterVerticalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
+	if voxRt == nil || math.Abs(float64(deltaY)) <= 1e-5 {
+		return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
+	}
+	cfg = effectiveCharacterCollisionConfig(cfg)
+	dirY := float32(1)
+	originY := cfg.Height
+	if deltaY < 0 {
+		dirY = -1
+		originY = 0.02
+	}
+	distance := float32(math.Abs(float64(deltaY)))
+	const clearance = float32(0.03)
+	allowed := distance
+	for _, offset := range CharacterVerticalCollisionOffsets(cfg.Radius) {
+		origin := basePos.Add(offset).Add(mgl32.Vec3{0, originY, 0})
+		hit := voxRt.RaycastFiltered(origin, mgl32.Vec3{0, dirY, 0}, distance+clearance, acceptEntity)
+		if !hit.Hit || hit.T > distance+clearance {
+			continue
+		}
+		allowed = minCharacterCollisionFloat(allowed, maxCharacterCollisionFloat(hit.T-clearance, 0))
+	}
+	if allowed < distance {
+		return basePos.Add(mgl32.Vec3{0, dirY * allowed, 0}), true
+	}
+	return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
+}
+
+func CharacterVerticalCollisionOffsets(radius float32) []mgl32.Vec3 {
+	r := maxCharacterCollisionFloat(radius*0.85, 0)
+	if r <= 1e-5 {
+		return []mgl32.Vec3{{0, 0, 0}}
+	}
+	return []mgl32.Vec3{{0, 0, 0}, {r, 0, 0}, {-r, 0, 0}, {0, 0, r}, {0, 0, -r}}
 }
 
 func CharacterMovementBlockHit(voxRt *VoxelRtState, basePos, move mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) (CharacterCollisionHit, bool) {
@@ -303,4 +433,11 @@ func minCharacterCollisionFloat(a, b float32) float32 {
 
 func maxCharacterCollisionFloat(a, b float32) float32 {
 	return float32(math.Max(float64(a), float64(b)))
+}
+
+func defaultCharacterCollisionFloat(value, fallback float32) float32 {
+	if value == 0 {
+		return fallback
+	}
+	return value
 }

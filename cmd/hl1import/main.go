@@ -63,7 +63,7 @@ func main() {
 	flag.Var((*float32Flag)(&opts.GameAssetVoxelResolution), "game-asset-voxel-resolution", "deprecated alias for -static-prop-voxel-resolution")
 	flag.StringVar(&reportPath, "report", "", "report output path")
 	flag.BoolVar(&emitDebugWorld, "emit-debug-world", false, "write debug .gkworld/.gkchunk output")
-	flag.StringVar(&debugWorldMode, "debug-world-mode", string(hl1.DebugWorldModeSurface), "debug world mode: surface or solid")
+	flag.StringVar(&debugWorldMode, "debug-world-mode", string(hl1.DebugWorldModeSolid), "debug world mode: surface or solid")
 	flag.BoolVar(&emitLevel, "emit-level", false, "write generated .gklevel pointing at emitted debug world")
 	flag.BoolVar(&progress, "progress", false, "print timestamped import progress while running")
 	flag.Parse()

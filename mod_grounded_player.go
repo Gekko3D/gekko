@@ -309,7 +309,11 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 				move = move.Normalize()
 			}
 			horizontalMove := move.Mul(speed * dt)
-			basePos = tryGroundedHorizontalMove(voxRt, basePos, horizontalMove, ctrl, collisionFilter)
+			basePos = CharacterGroundedMove(voxRt, basePos, horizontalMove, CharacterGroundedMoveOptions{
+				CollisionConfig: groundedPlayerCharacterCollisionConfig(ctrl),
+				GroundConfig:    groundedPlayerGroundProbeConfig(ctrl),
+				AcceptEntity:    collisionFilter,
+			}).Position
 			resolveGroundedVertical(voxRt, &basePos, ctrl, dt, collisionFilter)
 		}
 
@@ -526,7 +530,7 @@ func groundedPlayerCanStand(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *Groun
 	if clearanceHeight <= 1e-5 {
 		return true
 	}
-	for _, offset := range groundedVerticalCollisionOffsets(defaulted(ctrl.Radius, 0.35)) {
+	for _, offset := range CharacterVerticalCollisionOffsets(defaulted(ctrl.Radius, 0.35)) {
 		origin := basePos.Add(offset).Add(mgl32.Vec3{0, currentHeight, 0})
 		if hit := voxRt.RaycastFiltered(origin, mgl32.Vec3{0, 1, 0}, clearanceHeight+0.03, acceptEntity); hit.Hit && hit.T <= clearanceHeight+0.03 {
 			return false
@@ -600,47 +604,10 @@ func resolveGroundedSwimMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl 
 }
 
 func tryGroundedVerticalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
-	if voxRt == nil || ctrl == nil || math.Abs(float64(deltaY)) <= 1e-5 {
+	if ctrl == nil {
 		return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
 	}
-	height := defaulted(ctrl.Height, 1.8)
-	radius := defaulted(ctrl.Radius, 0.35)
-	dirY := float32(1)
-	originY := height
-	if deltaY < 0 {
-		dirY = -1
-		originY = 0.02
-	}
-	dir := mgl32.Vec3{0, dirY, 0}
-	distance := float32(math.Abs(float64(deltaY)))
-	clearance := float32(0.03)
-	allowed := distance
-	for _, offset := range groundedVerticalCollisionOffsets(radius) {
-		origin := basePos.Add(offset).Add(mgl32.Vec3{0, originY, 0})
-		hit := voxRt.RaycastFiltered(origin, dir, distance+clearance, acceptEntity)
-		if !hit.Hit || hit.T > distance+clearance {
-			continue
-		}
-		allowed = minf(allowed, maxf(hit.T-clearance, 0))
-	}
-	if allowed < distance {
-		return basePos.Add(mgl32.Vec3{0, dirY * allowed, 0}), true
-	}
-	return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
-}
-
-func groundedVerticalCollisionOffsets(radius float32) []mgl32.Vec3 {
-	r := maxf(radius*0.85, 0)
-	if r <= 1e-5 {
-		return []mgl32.Vec3{{0, 0, 0}}
-	}
-	return []mgl32.Vec3{
-		{0, 0, 0},
-		{r, 0, 0},
-		{-r, 0, 0},
-		{0, 0, r},
-		{0, 0, -r},
-	}
+	return CharacterVerticalMove(voxRt, basePos, deltaY, groundedPlayerCharacterCollisionConfig(ctrl), acceptEntity)
 }
 
 func aabbOverlap(aMin, aMax, bMin, bMax mgl32.Vec3) bool {
@@ -739,7 +706,18 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 
 	if !ctrl.Grounded {
 		ctrl.VerticalVelocity -= defaulted(ctrl.Gravity, 18.0) * dt
-		basePos[1] += ctrl.VerticalVelocity * dt
+		deltaY := ctrl.VerticalVelocity * dt
+		if next, blocked := tryGroundedVerticalMove(voxRt, *basePos, deltaY, ctrl, acceptEntity); blocked {
+			*basePos = next
+			ctrl.VerticalVelocity = 0
+			if deltaY < 0 {
+				ctrl.Grounded = true
+				ctrl.NeedsGroundSnap = false
+				return
+			}
+		} else {
+			*basePos = next
+		}
 	}
 
 	if voxRt == nil {
@@ -764,6 +742,17 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 		}
 	}
 	ctrl.Grounded = false
+}
+
+func groundedPlayerCharacterCollisionConfig(ctrl *GroundedPlayerControllerComponent) CharacterCollisionConfig {
+	if ctrl == nil {
+		return CharacterCollisionConfig{}
+	}
+	return CharacterCollisionConfig{
+		Radius:     defaulted(ctrl.Radius, 0.35),
+		Height:     defaulted(ctrl.Height, 1.8),
+		StepHeight: defaulted(ctrl.StepHeight, 0.6),
+	}
 }
 
 func groundedPlayerGroundHitWithin(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, maxSnapUp, maxSnapDown float32, acceptEntity func(EntityId, bool) bool) (CharacterGroundHit, bool) {

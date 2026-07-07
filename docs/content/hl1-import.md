@@ -1127,7 +1127,7 @@ go run ./cmd/hl1import \
   -light-mode faithful \
   -emit-light-fixtures=false \
   -emit-game-assets \
-  -solid-band-depth 24 \
+  -solid-band-depth 2 \
   -max-solid-sample-cells 100000000 \
   -emit-level \
   -debug-world-mode solid
@@ -1326,7 +1326,7 @@ go run ./cmd/hl1import \
   -voxel-resolution 0.1 \
   -light-mode faithful \
   -emit-light-fixtures=false \
-  -solid-band-depth 24 \
+  -solid-band-depth 2 \
   -max-solid-sample-cells 100000000 \
   -emit-level \
   -debug-world-mode solid \
@@ -1356,7 +1356,7 @@ go run ./cmd/hl1import \
   -voxel-resolution 0.1 \
   -light-mode faithful \
   -emit-light-fixtures=false \
-  -solid-band-depth 24 \
+  -solid-band-depth 2 \
   -max-solid-sample-cells 100000000 \
   -emit-level \
   -debug-world-mode solid
@@ -1427,6 +1427,7 @@ Manual check list:
 
 Current debug world modes:
 
+- `solid`: the CLI default.
 - `surface`: visible BSP faces only. Useful for visual comparison and fast
   diagnostics, but hollow and not suitable for destruction.
 - `solid`: BSP leaf contents classify voxel cells, visible faces provide
@@ -1481,10 +1482,10 @@ Solid mode has a sample guard:
 Solid band depth is in voxels:
 
 ```bash
--solid-band-depth 24
+-solid-band-depth 2
 ```
 
-At the default `0.1m` voxel resolution, `24` means about `2.4m` of destructible
+At the default `0.1m` voxel resolution, `2` means about `0.2m` of destructible
 solid behind reachable surfaces.
 
 Suggested output:

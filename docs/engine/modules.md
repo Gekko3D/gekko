@@ -218,6 +218,8 @@ For their data model, see:
   - grounded first-person controller behavior, including held `Ctrl` crouch
     (clearance-checked standing recovery) and water-volume swimming (`Space`
     rises, `Ctrl` descends)
+  - walking contact through the shared kinematic character helpers: slide,
+    step-up, landing snap, and vertical sweep
 - Depends on:
   - `*Input`
   - `*Time`

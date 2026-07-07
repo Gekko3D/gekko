@@ -662,7 +662,6 @@ func TestVoxelizeBSPSolidCPUClassifiesAndFloodsPlayableEmpty(t *testing.T) {
 	result, err := VoxelizeBSPSolidCPU(bsp, nil, entities, VoxelizeOptions{
 		VoxelResolution:     1,
 		MaxSolidSampleCells: 1000,
-		SolidBandDepth:      2,
 	})
 	if err != nil {
 		t.Fatalf("VoxelizeBSPSolidCPU failed: %v", err)
