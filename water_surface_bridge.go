@@ -28,7 +28,7 @@ func buildWaterSurfaceInputs(cmd *Commands, interactions *WaterInteractionState)
 
 	hosts := make([]app_rt.WaterSurfaceInput, 0, 4)
 	MakeQuery2[TransformComponent, WaterSurfaceComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, water *WaterSurfaceComponent) bool {
-		if water == nil || tr == nil || !water.Enabled() {
+		if water == nil || tr == nil || !water.Enabled() || !water.SurfaceIsVisible() {
 			return true
 		}
 		hosts = append(hosts, app_rt.WaterSurfaceInput{
@@ -52,7 +52,7 @@ func buildWaterSurfaceInputs(cmd *Commands, interactions *WaterInteractionState)
 		return true
 	})
 	MakeQuery2[TransformComponent, ResolvedWaterPatchComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, patch *ResolvedWaterPatchComponent) bool {
-		if tr == nil || patch == nil || !patch.Enabled() || patch.Kind != WaterPatchKindSurface {
+		if tr == nil || patch == nil || !patch.Enabled() || !patch.SurfaceIsVisible() || patch.Kind != WaterPatchKindSurface {
 			return true
 		}
 		hosts = append(hosts, app_rt.WaterSurfaceInput{

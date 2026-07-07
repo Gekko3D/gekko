@@ -473,6 +473,15 @@ func isValidLevelWaterSurfaceMode(mode LevelWaterSurfaceMode) bool {
 	}
 }
 
+func isValidLevelWaterSurfaceVisibility(visibility LevelWaterSurfaceVisibility) bool {
+	switch visibility {
+	case LevelWaterSurfaceVisibilityVisible, LevelWaterSurfaceVisibilityHidden:
+		return true
+	default:
+		return false
+	}
+}
+
 func validatePlacementAssetPath(result *LevelValidationResult, placement LevelPlacementDef, opts LevelValidationOptions) {
 	if strings.TrimSpace(placement.AssetPath) == "" || opts.DocumentPath == "" {
 		return
@@ -497,6 +506,9 @@ func validateLevelWaterBody(result *LevelValidationResult, water LevelWaterBodyD
 	}
 	if water.SurfaceMode != "" && !isValidLevelWaterSurfaceMode(water.SurfaceMode) {
 		result.addError("invalid_water_surface_mode", fmt.Sprintf("unsupported water surface mode %q", water.SurfaceMode), "", "", "", "", "", "", "")
+	}
+	if water.SurfaceVisibility != "" && !isValidLevelWaterSurfaceVisibility(water.SurfaceVisibility) {
+		result.addError("invalid_water_surface_visibility", fmt.Sprintf("unsupported water surface visibility %q", water.SurfaceVisibility), "", "", "", "", "", "", "")
 	}
 	if water.Depth <= 0 {
 		result.addError("invalid_water_body_depth", "water body depth must be positive", "", "", "", "", "", "", "")

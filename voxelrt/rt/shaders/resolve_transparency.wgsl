@@ -57,6 +57,13 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VSOut {
 @group(0) @binding(8) var tCAColor : texture_2d<f32>;
 @group(0) @binding(9) var tCADepth : texture_2d<f32>;
 
+struct UnderwaterData {
+  color_strength: vec4<f32>,
+  absorption_distortion: vec4<f32>,
+  time: vec4<f32>,
+};
+@group(0) @binding(10) var<uniform> underwater: UnderwaterData;
+
 fn camera_far_t() -> f32 {
   return max(camera.distance_limits.y, 1.0);
 }
@@ -165,14 +172,29 @@ fn composite_two_layers(base: vec3<f32>, front: vec4<f32>, back: vec4<f32>) -> v
   return base * (front.a * back.a) + front.rgb + back.rgb * front.a;
 }
 
+fn underwater_uv(uv: vec2<f32>, dims: vec2<u32>) -> vec2<f32> {
+  let strength = underwater.color_strength.w;
+  if (strength <= 1e-4) {
+    return uv;
+  }
+  let time = underwater.time.x;
+  let wave = vec2<f32>(
+    sin(uv.y * 34.0 + time * 1.17) + sin(uv.y * 13.0 - time * 0.61),
+    sin(uv.x * 29.0 - time * 0.93) + sin(uv.x * 11.0 + time * 0.47),
+  ) * 0.5;
+  let pixels = underwater.absorption_distortion.w * strength * underwater.time.y;
+  return clamp(uv + wave * pixels / vec2<f32>(dims), vec2<f32>(0.0), vec2<f32>(1.0));
+}
+
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   // Fetch all inputs via textureLoad with integer pixel coords (no filtering)
   let finite_limit = finite_depth_limit();
   let dims = textureDimensions(tAccum);
+  let distorted_uv = underwater_uv(uv, dims);
   let ipos = vec2<i32>(
-    clamp(i32(frag_pos.x), 0, i32(dims.x) - 1),
-    clamp(i32(frag_pos.y), 0, i32(dims.y) - 1)
+    clamp(i32(distorted_uv.x * f32(dims.x)), 0, i32(dims.x) - 1),
+    clamp(i32(distorted_uv.y * f32(dims.y)), 0, i32(dims.y) - 1)
   );
   let copq = textureLoad(tOpaque,  ipos, 0).rgb;
   let current_depth = combined_opaque_depth(ipos);
@@ -204,6 +226,14 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let transp = acc / max(w, 1e-5);
   // Composite: attenuate background by T, add normalized transparent contribution
   var col = base * T + transp;
+
+  let underwater_strength = underwater.color_strength.w;
+  if (underwater_strength > 1e-4) {
+    let transmittance = exp(-underwater.absorption_distortion.rgb * current_depth * 0.18);
+    let ambient_scatter = underwater.color_strength.rgb * max(camera.ambient_color.rgb, vec3<f32>(0.02)) * underwater.time.z * (vec3<f32>(1.0) - transmittance);
+    let filtered = col * transmittance + ambient_scatter;
+    col = mix(col, filtered, underwater_strength);
+  }
   
   // Tone mapping
   col = aces_tonemap(col);

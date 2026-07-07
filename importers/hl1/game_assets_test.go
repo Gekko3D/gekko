@@ -325,7 +325,7 @@ func TestHL1PlayerWeaponPresentationUsesAllowlistedStanceAndUpperMask(t *testing
 		},
 	}
 	presentation := hl1PlayerWeaponPresentation(asset)
-	if presentation.Status != GameAssetPlayerWeaponPresentationSupported || len(presentation.Stances) != 1 || presentation.Stances[0] != (GameAssetPlayerWeaponStance{Stance: "onehanded", AimClipID: "aim", RecoilClipID: "shoot", CrouchAimClipID: "crouch_aim", CrouchRecoilClipID: "crouch_shoot"}) || len(presentation.UpperBodyMask) != 7 {
+	if presentation.Status != GameAssetPlayerWeaponPresentationSupported || len(presentation.Stances) != 1 || presentation.Stances[0].Stance != "onehanded" || presentation.Stances[0].AimClipID != "aim" || presentation.Stances[0].RecoilClipID != "shoot" || presentation.Stances[0].CrouchAimClipID != "crouch_aim" || presentation.Stances[0].CrouchRecoilClipID != "crouch_shoot" || len(presentation.UpperBodyMask) != 7 {
 		t.Fatalf("expected verified stance presentation, got %+v", presentation)
 	}
 	if unsupported := hl1PlayerWeaponPresentation(&content.AssetDef{}); unsupported.Status != GameAssetPlayerWeaponPresentationUnsupported || unsupported.Diagnostic == "" {

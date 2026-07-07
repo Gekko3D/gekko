@@ -52,8 +52,9 @@ const (
 type WaterBodyComponent struct {
 	Disabled bool
 
-	Mode        WaterBodyMode
-	SurfaceMode WaterSurfaceMode
+	Mode              WaterBodyMode
+	SurfaceMode       WaterSurfaceMode
+	SurfaceVisibility WaterSurfaceVisibility
 
 	SurfaceY float32
 	Depth    float32
@@ -67,14 +68,16 @@ type WaterBodyComponent struct {
 	MinCellSize float32
 
 	SourceTag       string
+	VolumeGroup     string
 	ContinuityGroup string
 
 	EnableSkirt   *bool
 	MaxPatchCount uint32
 	DebugName     string
 
-	Color           [3]float32
-	AbsorptionColor [3]float32
+	Color              [3]float32
+	AbsorptionColor    [3]float32
+	ScatteringStrength float32
 
 	Opacity    float32
 	Roughness  float32
@@ -115,6 +118,10 @@ func (w *WaterBodyComponent) NormalizedSurfaceMode() WaterSurfaceMode {
 		return WaterSurfaceModeFootprint
 	}
 	return WaterSurfaceModeVolume
+}
+
+func (w *WaterBodyComponent) SurfaceIsVisible() bool {
+	return w == nil || w.SurfaceVisibility != WaterSurfaceVisibilityHidden
 }
 
 func (w *WaterBodyComponent) NormalizedSurfaceY() float32 {
@@ -216,6 +223,13 @@ func (w *WaterBodyComponent) NormalizedAbsorptionColor() [3]float32 {
 		return (&WaterSurfaceComponent{}).NormalizedAbsorptionColor()
 	}
 	return (&WaterSurfaceComponent{AbsorptionColor: w.AbsorptionColor}).NormalizedAbsorptionColor()
+}
+
+func (w *WaterBodyComponent) NormalizedScatteringStrength() float32 {
+	if w == nil {
+		return (&WaterSurfaceComponent{}).NormalizedScatteringStrength()
+	}
+	return (&WaterSurfaceComponent{ScatteringStrength: w.ScatteringStrength}).NormalizedScatteringStrength()
 }
 
 func (w *WaterBodyComponent) NormalizedOpacity() float32 {
@@ -326,6 +340,9 @@ func (w *WaterBodyComponent) ValidationIssues() []string {
 	if w.SurfaceMode != "" && w.SurfaceMode != WaterSurfaceModeVolume && w.SurfaceMode != WaterSurfaceModeFootprint {
 		issues = append(issues, "unsupported water surface mode")
 	}
+	if w.SurfaceVisibility != "" && w.SurfaceVisibility != WaterSurfaceVisibilityVisible && w.SurfaceVisibility != WaterSurfaceVisibilityHidden {
+		issues = append(issues, "unsupported water surface visibility")
+	}
 	return issues
 }
 
@@ -340,8 +357,9 @@ type ResolvedWaterPatchComponent struct {
 	HalfExtents [2]float32
 	Depth       float32
 
-	Color           [3]float32
-	AbsorptionColor [3]float32
+	Color              [3]float32
+	AbsorptionColor    [3]float32
+	ScatteringStrength float32
 
 	Opacity              float32
 	Roughness            float32
@@ -353,11 +371,17 @@ type ResolvedWaterPatchComponent struct {
 	WaveAmplitude  float32
 	VisualCellSize float32
 
-	Source          WaterFitSource
-	SurfaceMode     WaterSurfaceMode
-	ContinuityGroup string
-	DebugInset      float32
-	DebugOverlap    float32
+	Source            WaterFitSource
+	SurfaceMode       WaterSurfaceMode
+	SurfaceVisibility WaterSurfaceVisibility
+	VolumeGroup       string
+	ContinuityGroup   string
+	DebugInset        float32
+	DebugOverlap      float32
+}
+
+func (p *ResolvedWaterPatchComponent) SurfaceIsVisible() bool {
+	return p == nil || p.SurfaceVisibility != WaterSurfaceVisibilityHidden
 }
 
 func (p *ResolvedWaterPatchComponent) Enabled() bool {

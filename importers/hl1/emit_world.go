@@ -105,7 +105,7 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	}
 	// BakeFaces deliberately excludes liquid geometry from the solid world, but
 	// the level emitter still needs its top-surface occupancy for water patches.
-	voxelized.LiquidTopCells = collectLiquidTopCells(liquidFaces, VoxelizeOptions{VoxelResolution: opts.VoxelResolution})
+	voxelized.LiquidTopCells = collectLiquidTopCells(bsp, liquidFaces, VoxelizeOptions{VoxelResolution: opts.VoxelResolution})
 	tags = append(tags, HL1ExportProfileTags(opts.ExportProfile)...)
 	worldID := summary.Report.Source.MapName
 	if worldID == "" {

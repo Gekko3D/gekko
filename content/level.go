@@ -220,6 +220,15 @@ const (
 	LevelWaterSurfaceModeFootprint LevelWaterSurfaceMode = "Footprint"
 )
 
+// LevelWaterSurfaceVisibility controls whether a water volume has a visible
+// air-water interface. Hidden volumes remain available to gameplay queries.
+type LevelWaterSurfaceVisibility string
+
+const (
+	LevelWaterSurfaceVisibilityVisible LevelWaterSurfaceVisibility = "Visible"
+	LevelWaterSurfaceVisibilityHidden  LevelWaterSurfaceVisibility = "Hidden"
+)
+
 type LevelWaterBodyDef struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
@@ -227,7 +236,8 @@ type LevelWaterBodyDef struct {
 	Mode LevelWaterBodyMode `json:"mode,omitempty"`
 	// SurfaceMode selects the visual water representation independently of
 	// ContinuityGroup, which only controls shared-edge suppression.
-	SurfaceMode LevelWaterSurfaceMode `json:"surface_mode,omitempty"`
+	SurfaceMode       LevelWaterSurfaceMode       `json:"surface_mode,omitempty"`
+	SurfaceVisibility LevelWaterSurfaceVisibility `json:"surface_visibility,omitempty"`
 
 	SurfaceY float32 `json:"surface_y"`
 	Depth    float32 `json:"depth"`
@@ -240,17 +250,20 @@ type LevelWaterBodyDef struct {
 	Overlap     float32 `json:"overlap,omitempty"`
 	MinCellSize float32 `json:"min_cell_size,omitempty"`
 
-	SourceTag       string `json:"source_tag,omitempty"`
+	SourceTag string `json:"source_tag,omitempty"`
+	// VolumeGroup identifies one gameplay liquid medium across render patches.
+	VolumeGroup     string `json:"volume_group,omitempty"`
 	ContinuityGroup string `json:"continuity_group,omitempty"`
 	EnableSkirt     *bool  `json:"enable_skirt,omitempty"`
 	MaxPatchCount   uint32 `json:"max_patch_count,omitempty"`
 	DebugName       string `json:"debug_name,omitempty"`
 
-	Color           Vec3    `json:"color,omitempty"`
-	AbsorptionColor Vec3    `json:"absorption_color,omitempty"`
-	Opacity         float32 `json:"opacity,omitempty"`
-	Roughness       float32 `json:"roughness,omitempty"`
-	Refraction      float32 `json:"refraction,omitempty"`
+	Color              Vec3    `json:"color,omitempty"`
+	AbsorptionColor    Vec3    `json:"absorption_color,omitempty"`
+	ScatteringStrength float32 `json:"scattering_strength,omitempty"`
+	Opacity            float32 `json:"opacity,omitempty"`
+	Roughness          float32 `json:"roughness,omitempty"`
+	Refraction         float32 `json:"refraction,omitempty"`
 	// DirectLightOcclusion attenuates global sun/moon lighting on water.
 	// 0 keeps full direct light; 1 fully removes direct-light sparkle.
 	DirectLightOcclusion *float32 `json:"direct_light_occlusion,omitempty"`
@@ -562,6 +575,9 @@ func EnsureLevelIDs(def *LevelDef) {
 		}
 		if def.WaterBodies[i].SurfaceMode == "" {
 			def.WaterBodies[i].SurfaceMode = LevelWaterSurfaceModeVolume
+		}
+		if def.WaterBodies[i].SurfaceVisibility == "" {
+			def.WaterBodies[i].SurfaceVisibility = LevelWaterSurfaceVisibilityVisible
 		}
 		if def.WaterBodies[i].Transform.Rotation == (Quat{}) {
 			def.WaterBodies[i].Transform.Rotation = Quat{0, 0, 0, 1}

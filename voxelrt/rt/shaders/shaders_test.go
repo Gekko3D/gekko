@@ -874,6 +874,17 @@ func TestWaterSurfaceUsesBoundedTiledLocalLightReflections(t *testing.T) {
 	}
 }
 
+func TestWaterSurfaceDoesNotDoubleCompositeOpaqueBackground(t *testing.T) {
+	for _, needle := range []string{
+		"let resolve_transmittance = exp(-2.0 * alpha);",
+		"let final_rgb = max(target_rgb - opaque_bg * resolve_transmittance, vec3<f32>(0.0));",
+	} {
+		if !strings.Contains(WaterSurfaceWGSL, needle) {
+			t.Fatalf("water shader missing WBOIT background compensation %q", needle)
+		}
+	}
+}
+
 func TestGBufferHitExposureAcceptsRayFacingBoundaryHits(t *testing.T) {
 	required := []string{
 		"the hit-position fallback can pick an internal side face",
@@ -1049,6 +1060,23 @@ func TestAnalyticMediumShaderHasPixelSteppedAtmosphereHaze(t *testing.T) {
 	for _, needle := range required {
 		if !strings.Contains(AnalyticMediumWGSL, needle) {
 			t.Fatalf("analytic medium shader missing pixel-stepped atmosphere haze path %q", needle)
+		}
+	}
+}
+
+func TestResolveShaderHasUnderwaterCompositePath(t *testing.T) {
+	for _, needle := range []string{
+		"@group(0) @binding(10) var<uniform> underwater",
+		"fn underwater_uv",
+		"let distorted_uv = underwater_uv(uv, dims);",
+		"* underwater.time.y;",
+		"let transmittance = exp(-underwater.absorption_distortion.rgb * current_depth * 0.18);",
+		"let ambient_scatter = underwater.color_strength.rgb",
+		"underwater.time.z",
+		"col = mix(col, filtered, underwater_strength);",
+	} {
+		if !strings.Contains(ResolveTransparencyWGSL, needle) {
+			t.Fatalf("resolve shader missing underwater path %q", needle)
 		}
 	}
 }

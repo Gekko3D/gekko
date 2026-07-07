@@ -51,6 +51,9 @@ type LiquidTopCell struct {
 	Depth    float32
 	X        int
 	Z        int
+	// SurfaceHidden marks a liquid volume that reaches solid geometry above it.
+	// It remains a gameplay volume but has no renderable air-water interface.
+	SurfaceHidden bool
 }
 
 func VoxelizeFacesCPU(faces []Face, opts VoxelizeOptions) VoxelizeResult {
@@ -77,7 +80,7 @@ func VoxelizeFacesCPU(faces []Face, opts VoxelizeOptions) VoxelizeResult {
 		Materials:      materials,
 		SurfaceCount:   surfaceCount,
 		FilledCount:    len(voxels) - surfaceCount,
-		LiquidTopCells: collectLiquidTopCells(faces, opts),
+		LiquidTopCells: collectLiquidTopCells(nil, faces, opts),
 	}
 	if len(out) > 0 {
 		result.BoundsMin = [3]int{out[0].X, out[0].Y, out[0].Z}
@@ -194,7 +197,7 @@ func VoxelizeBSPSolidCPU(bsp *BSP, faces []Face, entities []importcommon.Entity,
 		UnreachableEmptyCount: 0,
 		SampledCount:          sampled,
 		FloodSkipped:          floodSkipped || len(playableEmpty) == 0,
-		LiquidTopCells:        collectLiquidTopCells(faces, opts),
+		LiquidTopCells:        collectLiquidTopCells(bsp, faces, opts),
 	}
 	if len(out) > 0 {
 		result.BoundsMin = [3]int{out[0].X, out[0].Y, out[0].Z}

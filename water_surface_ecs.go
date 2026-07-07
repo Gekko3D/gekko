@@ -13,18 +13,28 @@ const (
 	WaterSurfaceModeFootprint WaterSurfaceMode = "Footprint"
 )
 
+type WaterSurfaceVisibility string
+
+const (
+	WaterSurfaceVisibilityVisible WaterSurfaceVisibility = "Visible"
+	WaterSurfaceVisibilityHidden  WaterSurfaceVisibility = "Hidden"
+)
+
 // WaterSurfaceComponent describes a horizontal stylized water body rendered by
 // the dedicated water surface accumulation pass.
 type WaterSurfaceComponent struct {
-	Disabled        bool
-	SurfaceMode     WaterSurfaceMode
-	ContinuityGroup string
+	Disabled          bool
+	SurfaceMode       WaterSurfaceMode
+	SurfaceVisibility WaterSurfaceVisibility
+	VolumeGroup       string
+	ContinuityGroup   string
 
 	HalfExtents [2]float32
 	Depth       float32
 
-	Color           [3]float32
-	AbsorptionColor [3]float32
+	Color              [3]float32
+	AbsorptionColor    [3]float32
+	ScatteringStrength float32
 
 	Opacity    float32
 	Roughness  float32
@@ -44,6 +54,10 @@ func (w *WaterSurfaceComponent) NormalizedSurfaceMode() WaterSurfaceMode {
 		return WaterSurfaceModeFootprint
 	}
 	return WaterSurfaceModeVolume
+}
+
+func (w *WaterSurfaceComponent) SurfaceIsVisible() bool {
+	return w == nil || w.SurfaceVisibility != WaterSurfaceVisibilityHidden
 }
 
 func (w *WaterSurfaceComponent) Enabled() bool {
@@ -101,6 +115,13 @@ func (w *WaterSurfaceComponent) NormalizedAbsorptionColor() [3]float32 {
 		color[i] = clampWaterFloat(color[i], 0, 4)
 	}
 	return color
+}
+
+func (w *WaterSurfaceComponent) NormalizedScatteringStrength() float32 {
+	if w == nil || w.ScatteringStrength <= 0 {
+		return 0.75
+	}
+	return clampWaterFloat(w.ScatteringStrength, 0, 4)
 }
 
 func (w *WaterSurfaceComponent) NormalizedOpacity() float32 {

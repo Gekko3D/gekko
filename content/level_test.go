@@ -788,6 +788,7 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 		Name:                 "pool",
 		Mode:                 LevelWaterBodyModeExplicitRect,
 		SurfaceMode:          LevelWaterSurfaceModeFootprint,
+		SurfaceVisibility:    LevelWaterSurfaceVisibilityHidden,
 		SurfaceY:             2.5,
 		Depth:                1.25,
 		RectHalfExtents:      Vec2{4, 6},
@@ -814,6 +815,7 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 	}
 	if len(loaded.WaterBodies) != 1 || loaded.WaterBodies[0].RectHalfExtents != (Vec2{4, 6}) ||
 		loaded.WaterBodies[0].SurfaceMode != LevelWaterSurfaceModeFootprint ||
+		loaded.WaterBodies[0].SurfaceVisibility != LevelWaterSurfaceVisibilityHidden ||
 		loaded.WaterBodies[0].ContinuityGroup != "pool-a" ||
 		loaded.WaterBodies[0].DirectLightOcclusion == nil || *loaded.WaterBodies[0].DirectLightOcclusion != 0.75 {
 		t.Fatalf("water bodies did not round-trip: %+v", loaded.WaterBodies)

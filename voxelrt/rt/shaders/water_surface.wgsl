@@ -355,7 +355,7 @@ fn water_foam_factor(pos: vec3<f32>, water: WaterRecord, thickness: f32, ndotv: 
   }
   let cell_size = water_cell_size(water);
   let edge_dist = water_edge_distance(pos, water);
-  let edge_band = 1.0 - saturate(edge_dist / (cell_size * 2.2));
+  let edge_band = 1.0 - saturate(edge_dist / cell_size);
   let shallow_band = 1.0 - saturate(thickness / (cell_size * 7.0));
   let grazing = pow(1.0 - saturate(ndotv), 2.0);
   let foam = max(edge_band, shallow_band * 0.45) * (0.72 + grazing * 0.28);
@@ -540,7 +540,7 @@ fn fs_main(in: VSOut) -> FSOut {
   let direct_light_exposure = clamp(water.lighting.x, 0.0, 1.0);
   let specular = pow(saturate(dot(normal, half_dir)), shininess) * mix(0.12, 0.7, 1.0 - roughness) * direct_light_exposure;
   let absorption = exp(-water.absorption.rgb * thickness * 0.18);
-  let tint_strength = mix(0.24, 0.42, saturate(thickness / (cell_size * 10.0)));
+  let tint_strength = mix(0.50, 0.76, saturate(thickness / (cell_size * 10.0)));
   let tint = mix(vec3<f32>(1.0), water.color.rgb * absorption, tint_strength);
 
   var refract_uv = uv_screen;
@@ -567,17 +567,21 @@ fn fs_main(in: VSOut) -> FSOut {
   let edge_highlight = vec3<f32>(0.14, 0.24, 0.34) * edge_factor * select(1.0, 0.35, !is_top);
   let local_reflection = select(vec3<f32>(0.0), local_light_reflection(hit.pos, normal, view_dir, roughness, fresnel, uv_screen), is_top);
   let foam_rgb = mix(vec3<f32>(0.58, 0.82, 0.94), vec3<f32>(0.92, 0.98, 1.0), fresnel);
-  let transmitted_bg = mix(opaque_bg, refracted_bg, refract_mix) * tint;
-  let surface_mix = select(0.18, 0.08, !is_top);
-  let shaded_surface = surface_rgb + vec3<f32>(specular) + local_reflection + water.color.rgb * fresnel * 0.12 + edge_highlight;
-  let water_rgb = mix(shaded_surface, foam_rgb, foam_factor * 0.42);
-  let final_rgb = mix(transmitted_bg, water_rgb, surface_mix + fresnel * 0.18 + edge_factor * 0.08 + foam_factor * 0.12) + local_reflection * mix(0.06, 0.14, fresnel);
 
-  var alpha = water.extents.z * mix(0.42, 0.62, saturate(thickness / (cell_size * 8.0)));
+  var alpha = water.extents.z * mix(0.65, 0.90, saturate(thickness / (cell_size * 8.0)));
   if (!is_top) {
     alpha *= 0.86;
   }
-  alpha = min(alpha + edge_factor * 0.06 + foam_factor * 0.04, 0.74);
+  alpha = min(alpha + edge_factor * 0.06 + foam_factor * 0.02, 0.88);
+
+  let transmitted_bg = mix(opaque_bg, refracted_bg, refract_mix) * tint;
+  let surface_mix = select(0.18, 0.30, is_top);
+  let shaded_surface = surface_rgb + vec3<f32>(specular) + local_reflection + water.color.rgb * fresnel * 0.12 + edge_highlight;
+  let water_rgb = mix(shaded_surface, foam_rgb, foam_factor * 0.22);
+  let target_rgb = mix(transmitted_bg, water_rgb, surface_mix + fresnel * 0.18 + edge_factor * 0.08 + foam_factor * 0.12) + local_reflection * mix(0.06, 0.14, fresnel);
+  // Resolve adds opaque_bg * exp(-2 * accumulated_alpha); do not add it twice here.
+  let resolve_transmittance = exp(-2.0 * alpha);
+  let final_rgb = max(target_rgb - opaque_bg * resolve_transmittance, vec3<f32>(0.0));
   let depth_norm = saturate(hit.t_enter / 90.0);
   let weight = max(1e-3, alpha) * pow(1.0 - depth_norm, 5.0);
 

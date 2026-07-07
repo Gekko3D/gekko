@@ -140,6 +140,8 @@ type VoxelRtState struct {
 	SunIntensity                   float32
 	lastParticleAtlas              AssetId
 	lastSpriteAtlas                AssetId
+	underwaterInput                app_rt.UnderwaterInput
+	underwaterStrength             float32
 	bridgeFeatures                 voxelRtBridgeRegistry
 }
 
