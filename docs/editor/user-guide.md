@@ -105,6 +105,12 @@ This toolbar appears when an item is selected.
 - Markers are shown with their marker kind, for example `[muzzle]`.
 - Hidden / locked / solo state is editor-only view state and is not serialized into `.gkasset`.
 
+### Animations Panel
+
+- Lists every `animation_clips` entry in the opened asset. Use the filter and choose a clip. While this panel is open, the active clip's playback controls appear in the bottom-right context panel: play, pause, step by frame, loop, change speed, or enter an exact time.
+- `Source MDL Import Preview` scans a Source MDL without changing the asset. Choose a supported sequence to retarget it temporarily onto the opened rig. Retargeting uses the donor and target bind skeletons automatically; there are no donor or target pose fields. Older generated HL1 assets must be regenerated once to add their explicit rest-basis metadata.
+- `add ... to asset` is the only operation in this panel that edits the asset. Save the document afterward. Sequences that use unsupported Source features remain listed with their reason.
+
 ### Asset Editor Shortcuts
 
 - `Shift+A`

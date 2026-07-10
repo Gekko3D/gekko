@@ -253,7 +253,7 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 		}
 	}
 	asset := newMDLVoxelAssetBase(geometry, opts)
-	asset.Tags = append(asset.Tags, "generated:mdl_rigid_bone_parts")
+	asset.Tags = append(asset.Tags, "generated:mdl_rigid_bone_parts", content.AssetTagSkeletonRestBasis)
 	asset.Skeleton = mdlAssetSkeleton(geometry.Info.Bones)
 	asset.Materials = mdlAssetMaterialsForPalettes(bonePalettes)
 	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: false}
@@ -375,7 +375,7 @@ func mdlAssetSkeleton(bones []MDLBoneInfo) *content.AssetSkeletonDef {
 			ParentID: parentID,
 			Transform: content.AssetTransformDef{
 				Position: content.Vec3{pos.X, pos.Y, pos.Z},
-				Rotation: content.Quat{0, 0, 0, 1},
+				Rotation: hammerQuatToContentQuat(mdlEulerXYZQuat(bone.Rotation)),
 				Scale:    content.Vec3{1, 1, 1},
 			},
 			Tags: []string{"source:hl1", "source_asset:mdl", fmt.Sprintf("bone_index:%d", i)},

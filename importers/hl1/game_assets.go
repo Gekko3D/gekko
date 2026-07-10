@@ -893,6 +893,9 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				if hl1IsTripmineWorldModel(entry) {
 					hl1AddTripmineSurfaceMountMarker(asset)
 				}
+				if entry.CatalogKind == "player" {
+					hl1ConfigurePlayerHolsterMarkers(asset)
+				}
 				if entry.CatalogKind == "player" && !hl1PlayerAssetHasRequiredMarkers(asset) {
 					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_anchor_unresolved", Subject: entry.CatalogID, Message: "verified player anchors could not resolve to generated bone parts"})
 					entry.ConvertState = "unsupported_player_avatar"
@@ -1150,9 +1153,11 @@ func (c *hl1AssetCollector) buildEntries() ([]GameAssetManifestEntry, []importco
 var hl1PlayerAimMarkerIDs = []string{"aim_spine", "aim_spine1", "aim_spine2", "aim_spine3", "aim_neck", "head"}
 
 func hl1PlayerSemanticAnchorBones(bones []MDLBoneInfo) map[string]int {
-	anchors := map[string]int{"head": -1, "right_hand": -1, "left_hand": -1, "upper_body": -1, "aim_spine": -1, "aim_spine1": -1, "aim_spine2": -1, "aim_spine3": -1, "aim_neck": -1}
+	anchors := map[string]int{"head": -1, "right_hand": -1, "left_hand": -1, "upper_body": -1, "aim_spine": -1, "aim_spine1": -1, "aim_spine2": -1, "aim_spine3": -1, "aim_neck": -1, "holster_back": -1, "holster_hip": -1}
 	for index, bone := range bones {
 		switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", "")) {
+		case "bip01pelvis":
+			anchors["holster_hip"] = index
 		case "bip01head":
 			anchors["head"] = index
 		case "bip01rhand":
@@ -1168,11 +1173,31 @@ func hl1PlayerSemanticAnchorBones(bones []MDLBoneInfo) map[string]int {
 			anchors["aim_spine2"] = index
 		case "bip01spine3":
 			anchors["aim_spine3"] = index
+			anchors["holster_back"] = index
 		case "bip01neck":
 			anchors["aim_neck"] = index
 		}
 	}
 	return anchors
+}
+
+func hl1ConfigurePlayerHolsterMarkers(asset *content.AssetDef) {
+	if asset == nil {
+		return
+	}
+	for i := range asset.Markers {
+		marker := &asset.Markers[i]
+		switch marker.ID {
+		case "holster_back":
+			marker.Kind = content.AssetMarkerKindWeaponSlot
+			marker.Name = "back holster"
+			marker.Transform = content.AssetTransformDef{Position: content.Vec3{0, -0.25, 0.24}, Rotation: content.Quat{0, 0, 0.9238795, 0.38268343}, Scale: content.Vec3{1, 1, 1}}
+		case "holster_hip":
+			marker.Kind = content.AssetMarkerKindWeaponSlot
+			marker.Name = "hip holster"
+			marker.Transform = content.AssetTransformDef{Position: content.Vec3{-0.18, -0.10, 0}, Rotation: content.Quat{-0.70710677, 0, 0, 0}, Scale: content.Vec3{1, 1, 1}}
+		}
+	}
 }
 
 func hl1PlayerHasRequiredAnchors(anchors map[string]int) bool {

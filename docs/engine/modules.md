@@ -220,6 +220,8 @@ For their data model, see:
     rises, `Ctrl` descends)
   - walking contact through the shared kinematic character helpers: slide,
     step-up, landing snap, and vertical sweep
+  - `ScriptedMovement` keeps controller camera/look ownership while a gameplay
+    traversal action advances the capsule through those same collision helpers
 - Depends on:
   - `*Input`
   - `*Time`

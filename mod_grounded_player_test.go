@@ -61,6 +61,29 @@ func TestGroundedPlayerBasePositionUsesControllerTransform(t *testing.T) {
 	}
 }
 
+func TestGroundedPlayerScriptedMovementKeepsControllerAndCameraAligned(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	player := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{1, 2, 3}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&LocalTransformComponent{Position: mgl32.Vec3{1, 2, 3}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&CameraComponent{},
+		&GroundedPlayerControllerComponent{EyeHeight: 1.5, ScriptedMovement: true, JumpQueued: true, SwimUpRequested: true, VerticalVelocity: -5},
+	)
+	app.FlushCommands()
+
+	groundedPlayerControlSystem(cmd, &Time{Dt: 1}, nil, nil)
+	ctrl := cmd.GetComponent(player, reflect.TypeOf(GroundedPlayerControllerComponent{})).(*GroundedPlayerControllerComponent)
+	tr := cmd.GetComponent(player, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	cam := cmd.GetComponent(player, reflect.TypeOf(CameraComponent{})).(*CameraComponent)
+	if tr.Position != (mgl32.Vec3{1, 2, 3}) || cam.Position != (mgl32.Vec3{1, 3.5, 3}) {
+		t.Fatalf("expected scripted controller to preserve transform and update camera, transform=%+v camera=%+v", tr.Position, cam.Position)
+	}
+	if ctrl.JumpQueued || ctrl.SwimUpRequested || ctrl.VerticalVelocity != 0 {
+		t.Fatalf("expected scripted controller to clear competing movement state, got %+v", *ctrl)
+	}
+}
+
 func TestGroundedMovementBlockedUsesPlayerRadiusAtDoorway(t *testing.T) {
 	state := newGroundedPlayerTestVoxelRtState()
 

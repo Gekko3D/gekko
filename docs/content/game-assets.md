@@ -81,6 +81,24 @@ Animated authored assets are rigid hierarchies. Runtime playback samples
 deform voxel geometry; importers should split characters and machinery into
 rigid voxel parts under transform-only `group` pivots.
 
+### Baking Source-Engine Animation
+
+`cmd/sourcemdlanim` imports Source MDL v48 animation data into an existing
+`.gkasset` rig. It is animation-only: meshes and materials remain owned by the
+target asset. Both the Source MDL bind skeleton and the target asset's explicit
+`skeleton:rest_basis` metadata are used to calculate bone-basis corrections;
+no idle clip or sequence frame is used as calibration. Regenerate older HL1
+rigid assets once so their previously flattened bind rotations are preserved.
+For unambiguous single-child chains, the baker also aligns source and target
+bind-segment directions to construct an automatic retarget rest pose. This
+handles differing limb rest poses without model-specific arm adjustments.
+Source sequence bone weights are applied before retargeting. The supported
+subset is deliberately explicit: blended,
+additive/delta, layered, IK-driven, local-hierarchy, and
+external-animation-block sequences are rejected instead of being approximated.
+Generated clips default to locked root translation, so a character controller
+stays authoritative.
+
 ## Source Kinds for Parts
 
 A part's `source.kind` controls how geometry is produced:

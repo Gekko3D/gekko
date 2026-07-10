@@ -67,6 +67,10 @@ type GroundedPlayerControllerComponent struct {
 	OnLadder         bool
 	LadderEntity     EntityId
 	LadderClimbSpeed float32
+	// ScriptedMovement lets a gameplay action drive the controller transform
+	// through the shared collision helpers while this controller retains camera
+	// look ownership. It prevents input/gravity from competing with that move.
+	ScriptedMovement bool
 	// CollisionIgnoredEntity is a presentation subtree excluded from this
 	// controller's movement and ground probes.
 	CollisionIgnoredEntity EntityId
@@ -262,6 +266,13 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(eid EntityId, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent) bool {
 		applyGroundedLook(cam, ctrl)
 		basePos := groundedPlayerBasePosition(cmd, eid, cam, ctrl)
+		if ctrl.ScriptedMovement {
+			ctrl.JumpQueued = false
+			ctrl.SwimUpRequested = false
+			ctrl.VerticalVelocity = 0
+			groundedPlayerApplyTransform(cmd, eid, cam, ctrl, basePos)
+			return true
+		}
 		collisionFilter := groundedPlayerCollisionRaycastFilter(cmd, ctrl)
 		groundedPlayerUpdateStance(voxRt, basePos, ctrl, collisionFilter)
 		waterEntity, _, swimming := findGroundedPlayerWaterBody(cmd, basePos, ctrl)
@@ -317,21 +328,28 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 			resolveGroundedVertical(voxRt, &basePos, ctrl, dt, collisionFilter)
 		}
 
-		cam.Position = basePos.Add(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
-		cam.LookAt = cam.Position.Add(forwardFromYawPitch(cam.Yaw, cam.Pitch))
-		cam.Up = mgl32.Vec3{0, 1, 0}
-		if tr, ok := transformForEntity(cmd, eid); ok {
-			tr.Position = basePos
-			tr.Rotation = mgl32.QuatIdent()
-			tr.Scale = mgl32.Vec3{1, 1, 1}
-		}
-		if local, ok := localTransformForEntity(cmd, eid); ok {
-			local.Position = basePos
-			local.Rotation = mgl32.QuatIdent()
-			local.Scale = mgl32.Vec3{1, 1, 1}
-		}
+		groundedPlayerApplyTransform(cmd, eid, cam, ctrl, basePos)
 		return true
 	})
+}
+
+func groundedPlayerApplyTransform(cmd *Commands, eid EntityId, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent, basePos mgl32.Vec3) {
+	if cmd == nil || cam == nil || ctrl == nil {
+		return
+	}
+	cam.Position = basePos.Add(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
+	cam.LookAt = cam.Position.Add(forwardFromYawPitch(cam.Yaw, cam.Pitch))
+	cam.Up = mgl32.Vec3{0, 1, 0}
+	if tr, ok := transformForEntity(cmd, eid); ok {
+		tr.Position = basePos
+		tr.Rotation = mgl32.QuatIdent()
+		tr.Scale = mgl32.Vec3{1, 1, 1}
+	}
+	if local, ok := localTransformForEntity(cmd, eid); ok {
+		local.Position = basePos
+		local.Rotation = mgl32.QuatIdent()
+		local.Scale = mgl32.Vec3{1, 1, 1}
+	}
 }
 
 // groundedPlayerBasePosition keeps physics owned by the controller transform.
@@ -770,6 +788,12 @@ func groundedPlayerCollisionRaycastFilter(cmd *Commands, ctrl *GroundedPlayerCon
 	return func(hitEntity EntityId, knownEntity bool) bool {
 		return !knownEntity || !groundedPlayerEntityDescendsFrom(cmd, hitEntity, ignoredRoot)
 	}
+}
+
+// GroundedPlayerCollisionRaycastFilter returns the controller's shared
+// collision filter for gameplay actions that use Character* movement helpers.
+func GroundedPlayerCollisionRaycastFilter(cmd *Commands, ctrl *GroundedPlayerControllerComponent) func(EntityId, bool) bool {
+	return groundedPlayerCollisionRaycastFilter(cmd, ctrl)
 }
 
 func groundedPlayerEntityDescendsFrom(cmd *Commands, entity, ancestor EntityId) bool {

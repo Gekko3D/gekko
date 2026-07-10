@@ -5,6 +5,7 @@ import "github.com/google/uuid"
 const (
 	CurrentAssetSchemaVersion = 3
 	DefaultAssetVoxelSize     = 0.1
+	AssetTagSkeletonRestBasis = "skeleton:rest_basis"
 )
 
 type Vec3 [3]float32

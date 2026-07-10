@@ -52,7 +52,9 @@ voxel parts uncollapsed so each part can move independently.
 `skeleton` is descriptive authored metadata. It records imported or authored
 bone IDs, names, parent IDs, bind transforms, and tags. Runtime animation does
 not require a separate skinning component: clips target authored item IDs
-directly.
+directly. Assets tagged `skeleton:rest_basis` preserve complete local bind
+rotations suitable for offline animation retargeting; importers must not add
+that tag when bone rotations have been flattened into render geometry.
 
 `animation_clips` contain local-space tracks:
 
