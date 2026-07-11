@@ -500,14 +500,14 @@ Likely owner files:
 
 Purpose: introduce only the minimal types needed by subsequent phases.
 
-- [ ] Define source span, span reference, directed transition, region, region
+- [x] Define source span, span reference, directed transition, region, region
   transition, graph tile, manifest, and route result.
-- [ ] Define agent profile fields actually required for walking.
-- [ ] Define validation for IDs, bounds, references, and numeric constraints.
-- [ ] Define new sidecar extensions/names only if generic `.gknav` naming is no
+- [x] Define agent profile fields actually required for walking.
+- [x] Define validation for IDs, bounds, references, and numeric constraints.
+- [x] Define new sidecar extensions/names only if generic `.gknav` naming is no
   longer clear; no compatibility requirement exists.
-- [ ] Add save/load only after the in-memory shape is accepted.
-- [ ] Add one persistence test because persisted schemas are stable contracts.
+- [x] Add save/load only after the in-memory shape is accepted.
+- [x] Add one persistence test because persisted schemas are stable contracts.
 
 Suggested files:
 
