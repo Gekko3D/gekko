@@ -20,9 +20,6 @@ type BreakableComponent struct {
 	TargetName        string
 	Target            string
 	Delay             float32
-	NavigationMode    string
-	NavigationCostAdd float32
-	NavigationCostMul float32
 	SourceTag         string
 	Tags              []string
 	Broken            bool

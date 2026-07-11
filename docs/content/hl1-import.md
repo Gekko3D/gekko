@@ -1172,146 +1172,12 @@ For live terminal progress, add:
 ```
 
 This prints timestamped stage lines while the import runs. High-level stages
-cover summary/build/save/report work, and navigation baking also reports chunk
-loads plus per-agent tile build/skip/save events. A typical nav section looks
-like:
-
-```text
-[12:34:56] progress progress stage=save_navigation_bake.load_chunk 3/12 coord=0:0:-1
-[12:34:58] progress progress stage=save_navigation_bake.build_tile 8/12 coord=0:0:-1 profile=hl1_standing polys=142 path=/tmp/out/worlds/map_navtiles/map_0_0_-1_hl1_standing.gknavtile
-[12:35:01] progress progress stage=save_navigation_bake.save_manifest 1/1 path=/tmp/out/worlds/map.gknav
-```
+cover summary, build, save, and report work.
 
 For long imports, keep the progress log:
 
 ```bash
 go run ./cmd/hl1import ... -progress 2>&1 | tee /tmp/hl1import.log
-```
-
-Generated levels bake navigation sidecars by default. This is the long-term
-path for NPC navigation and should be left enabled for normal actiongame tests.
-The generated bake is voxel-first: walkable nav source geometry is derived from
-the emitted `.gkworld/.gkchunk` voxel occupancy, while HL1 BSP face metadata is
-kept only as hints such as clearance blockers for rails, fences, clips, and
-non-walkable grates. This keeps imported HL1 levels on the same navigation
-pipeline as editor-authored and non-HL1 voxel worlds, and prevents nav from
-drifting away from runtime voxel edits or `.gkworlddelta` overrides.
-Builder version `voxel_recast_v1` makes the Recast-backed voxel path the
-production bake path. Voxel collision is converted to Recast input geometry,
-Recast performs the walkable-span/contour/polygon build, and the result is
-written back to Gekko nav tiles. Explicit source-primary polygonization remains
-available for diagnostic compatibility runs, and `voxel_nav_v28` remains
-available as the legacy custom voxel polygonizer, but generated HL1 levels no
-longer use either path for primary walkable topology.
-For a diagnostic compile where navigation is known to be irrelevant or is being
-baked separately, add:
-
-```bash
--skip-navigation-bake
-```
-
-This still writes the `.gklevel`, `.gkworld`, `.gkchunk`, `.gkaux`, and import
-report files, but leaves `LevelDef.Navigation` empty and skips `.gknav` /
-`.gknavtile` generation. Treat this as an explicit fallback, not the default
-path for NPC navigation validation.
-
-To validate baked navigation topology after an import, run:
-
-```bash
-go run ./cmd/navdiag \
-  -nav ../actiongame/assets/levels/gasworks/worlds/gasworks.gknav
-```
-
-For exploratory checks where you want a report even if the nav has issues, add:
-
-```bash
--fail-on-error=false
-```
-
-`navdiag` loads the manifest and tiles, validates tile files, and checks
-cross-tile portal topology: target tiles/polygons, reciprocal portals, shared
-boundary placement, and portal heights against the agent profile. It also
-reports stale builder versions when an old bake should be refreshed.
-
-To inspect the voxel heightfield input for one nav tile, add the imported world
-path, tile coordinate, and a dump path:
-
-```bash
-go run ./cmd/navdiag \
-  -nav ../actiongame/assets/levels/gasworks/worlds/gasworks.gknav \
-  -world ../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld \
-  -coord=-2:-1:-2 \
-  -profile hl1_standing \
-  -dump-heightfield /tmp/gasworks-heightfield-debug.json \
-  -fail-on-error=false
-```
-
-The heightfield dump is diagnostic JSON. It records candidate voxel spans,
-accepted/rejected span counts and reasons, compact cells, region traversal
-areas (`walk`, `ramp`, `stair`, `step`), and loaded neighbor context so nav bugs
-can be checked before polygonization.
-
-To rebuild navigation overrides from an existing `.gkworlddelta` after runtime
-or editor voxel changes, use `navdiag` with the imported world, base nav
-manifest, and delta file:
-
-```bash
-go run ./cmd/navdiag \
-  -rebuild-delta-nav \
-  -world ../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld \
-  -nav ../actiongame/assets/levels/gasworks/worlds/gasworks.gknav \
-  -delta ../actiongame/assets/levels/gasworks/gasworks.gkworlddelta \
-  -profile hl1_standing \
-  -fail-on-error=false
-```
-
-Without `-dirty-coords`, the command rebuilds nav for all imported-world chunk
-overrides recorded in the delta, including agent-reach neighbor expansion. To
-focus on known edited chunks, pass a semicolon-separated list:
-
-```bash
--dirty-coords "0:-2:1;1:-2:1"
-```
-
-The output reports dirty coord count, expanded coord count, regenerated
-navigation overrides, empty overrides, and written delta nav tile paths.
-
-To rebuild navigation from an existing imported voxel world without re-importing
-the original BSP, run:
-
-```bash
-go run ./cmd/navbake \
-  -world ../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld \
-  -nav ../actiongame/assets/levels/gasworks/worlds/gasworks.gknav \
-  -progress \
-  -cpuprofile /tmp/gasworks-navbake.pprof
-```
-
-`navbake -progress` prints per-tile duration and nav build stats, including
-occupied voxels, candidate spans, accepted spans, compact cells, regions,
-polygons, and portal count. Candidate spans are exposed solid/air surface
-spans before full agent clearance, so they should usually be much lower than
-occupied voxels in dense imported chunks. The `build_intermediate` stage is
-the voxel heightfield/clearance/region pass; `build_tile` is polygon emission
-from the cached intermediate. Imported-world full bakes use persisted chunk
-payload hashes as the build-cache identity, so cached polygon emission does
-not rescan and sort every voxel. The bake also caches per-chunk nav occupancy
-as a dense bitset plus exposed span data, so neighboring tile clearance checks
-can reuse the same fast voxel lookup data. The `build_intermediate` stage runs
-in parallel by default using `GOMAXPROCS`; use `-build-workers 1` when comparing
-single-threaded diagnostics. Because intermediate tile builds are parallel,
-`build_intermediate` progress events can arrive out of coordinate order. That is
-expected; saved tile order and manifest output remain deterministic.
-
-Validated Gasworks behavior: the optimized voxel nav bake is quick enough for
-normal testing and preserves the expected generated nav tile output. If a
-future map regresses, compare `build_intermediate` totals first, then inspect
-`candidate_spans / occupied` and the slowest tile durations.
-
-To collect a Go CPU profile for a slow bake, add:
-
-```bash
--cpuprofile /tmp/navbake.pprof
 ```
 
 Local developer smoke command:
@@ -1368,8 +1234,6 @@ This writes:
 ../actiongame/assets/levels/gasworks/gasworks.gklevel
 ../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld
 ../actiongame/assets/levels/gasworks/worlds/gasworks_import_report.json
-../actiongame/assets/levels/gasworks/worlds/gasworks.gknav
-../actiongame/assets/levels/gasworks/worlds/gasworks_navtiles/*.gknavtile
 ../actiongame/assets/levels/gasworks/worlds/chunks/*.gkchunk
 ../actiongame/assets/levels/gasworks/worlds/aux/*.gkaux
 ```
@@ -1852,8 +1716,8 @@ Recommended path:
   instead of applying gravity into unloaded space. Character grounding now keeps
   authoritative collision Y separate from a smoothed visual ground Y for
   attached NPC assets, with a small visual deadband to suppress voxelized
-  ramp/stair noise while preserving exact collision probes. Full navmesh/path
-  graph navigation, squad logic, use/follow commands, and hostile AI remain
+  ramp/stair noise while preserving exact collision probes. Full voxel-graph
+  navigation, squad logic, use/follow commands, and hostile AI remain
   deferred.
 - `trigger_once` and `trigger_multiple` become typed trigger volumes with
   target metadata.

@@ -163,35 +163,30 @@ type ImportOptions struct {
 	EmitGameAssets             bool
 	ImportAllPlayerModels      bool
 	ImportAllWeaponWorldModels bool
-	SkipNavigationBake         bool
 	Progress                   ImportProgressFunc
 }
 
 type ImportProgressFunc func(ImportProgress)
 
 type ImportProgress struct {
-	Stage          string
-	Current        int
-	Total          int
-	Path           string
-	Coord          content.TerrainChunkCoordDef
-	AgentProfileID string
-	Polygons       int
+	Stage   string
+	Current int
+	Total   int
+	Path    string
+	Coord   content.TerrainChunkCoordDef
 }
 
 const (
-	ImportProgressStageBuildSummary         = "build_summary"
-	ImportProgressStageBuildDebugWorld      = "build_debug_world"
-	ImportProgressStageBuildGameAssets      = "build_game_assets"
-	ImportProgressStageBuildLevel           = "build_level"
-	ImportProgressStageSaveDebugWorld       = "save_debug_world"
-	ImportProgressStageSaveLevel            = "save_level"
-	ImportProgressStageSaveLevelAssets      = "save_level_assets"
-	ImportProgressStageSaveAuxSidecars      = "save_aux_sidecars"
-	ImportProgressStageSaveNavigationSource = "save_navigation_source"
-	ImportProgressStageSaveNavigationBake   = "save_navigation_bake"
-	ImportProgressStageSaveGameAssets       = "save_game_assets"
-	ImportProgressStageSaveReport           = "save_report"
+	ImportProgressStageBuildSummary    = "build_summary"
+	ImportProgressStageBuildDebugWorld = "build_debug_world"
+	ImportProgressStageBuildGameAssets = "build_game_assets"
+	ImportProgressStageBuildLevel      = "build_level"
+	ImportProgressStageSaveDebugWorld  = "save_debug_world"
+	ImportProgressStageSaveLevel       = "save_level"
+	ImportProgressStageSaveLevelAssets = "save_level_assets"
+	ImportProgressStageSaveAuxSidecars = "save_aux_sidecars"
+	ImportProgressStageSaveGameAssets  = "save_game_assets"
+	ImportProgressStageSaveReport      = "save_report"
 )
 
 func reportImportProgress(progress ImportProgressFunc, event ImportProgress) {

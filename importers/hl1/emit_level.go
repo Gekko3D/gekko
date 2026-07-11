@@ -52,8 +52,6 @@ type GeneratedLevelResult struct {
 	MovingBrushAssets  []GeneratedAssetResult
 	ChargerAssets      []GeneratedAssetResult
 	BreakableAssets    []GeneratedAssetResult
-	NavBuildSurfaces   []content.NavBuildExplicitSurfaceInput
-	SkipNavigationBake bool
 	Progress           ImportProgressFunc
 }
 
@@ -174,21 +172,17 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 			MovingBrushAssets:  movingBrushAssets,
 			ChargerAssets:      chargerAssets,
 			BreakableAssets:    breakableAssets,
-			NavBuildSurfaces:   buildHL1NavBuildSurfaceInputs(summary.BakeFaces),
-			SkipNavigationBake: opts.SkipNavigationBake,
 			Progress:           opts.Progress,
 		}, nil
 	}
 	content.EnsureLevelIDs(level)
 	return GeneratedLevelResult{
-		LevelPath:          filepath.Clean(levelPath),
-		Level:              level,
-		MovingBrushAssets:  movingBrushAssets,
-		ChargerAssets:      chargerAssets,
-		BreakableAssets:    breakableAssets,
-		NavBuildSurfaces:   buildHL1NavBuildSurfaceInputs(summary.BakeFaces),
-		SkipNavigationBake: opts.SkipNavigationBake,
-		Progress:           opts.Progress,
+		LevelPath:         filepath.Clean(levelPath),
+		Level:             level,
+		MovingBrushAssets: movingBrushAssets,
+		ChargerAssets:     chargerAssets,
+		BreakableAssets:   breakableAssets,
+		Progress:          opts.Progress,
 	}, nil
 }
 
@@ -201,71 +195,6 @@ func hl1LevelPlayerDef() *content.LevelPlayerDef {
 		StepHeight: 18 * HammerUnitMeters,
 		Tags:       []string{"source:hl1", "hull:standing"},
 	}
-}
-
-func buildHL1NavBuildSurfaceInputs(faces []Face) []content.NavBuildExplicitSurfaceInput {
-	out := make([]content.NavBuildExplicitSurfaceInput, 0, len(faces))
-	for _, face := range faces {
-		kind, ok := hl1FaceNavBuildSurfaceKind(face)
-		if !ok {
-			continue
-		}
-		vertices := make([]content.Vec3, 0, len(face.Vertices))
-		for _, vertex := range face.Vertices {
-			converted := HammerToGekko(vertex)
-			vertices = append(vertices, content.Vec3{converted.X, converted.Y, converted.Z})
-		}
-		normal := hammerVectorToGekko(face.Normal)
-		id := fmt.Sprintf("hl1_model_%d_face_%d", face.ModelID, face.FaceID)
-		tags := []string{
-			"source:hl1",
-			fmt.Sprintf("model:%d", face.ModelID),
-			fmt.Sprintf("face:%d", face.FaceID),
-		}
-		if strings.TrimSpace(face.TextureName) != "" {
-			tags = append(tags, "source_texture:"+filepath.ToSlash(face.TextureName))
-		}
-		out = append(out, content.NavBuildExplicitSurfaceInput{
-			ID:        id,
-			Kind:      kind,
-			Vertices:  vertices,
-			Normal:    content.Vec3{normal.X, normal.Y, normal.Z},
-			Area:      content.NavTraversalWalk,
-			SourceTag: fmt.Sprintf("hl1:model:%d:face:%d", face.ModelID, face.FaceID),
-			Tags:      tags,
-		})
-	}
-	return out
-}
-
-func hl1FaceNavBuildSurfaceKind(face Face) (string, bool) {
-	if len(face.Vertices) < 3 {
-		return "", false
-	}
-	semantics := materialSemantics(face.TextureName)
-	if semantics.CollisionKind != "solid" {
-		return "", false
-	}
-	if hl1FaceAlwaysBlocksNavClearance(face, semantics) {
-		return content.NavBuildSurfaceClearanceBlocker, true
-	}
-	if semantics.Kind == "grate" && !hl1FaceNormalLooksWalkable(face) {
-		return content.NavBuildSurfaceClearanceBlocker, true
-	}
-	return content.NavBuildSurfaceWalkable, true
-}
-
-func hl1FaceCanContributeWalkableNavSource(face Face) bool {
-	kind, ok := hl1FaceNavBuildSurfaceKind(face)
-	return ok && kind == content.NavBuildSurfaceWalkable
-}
-
-func hl1FaceAlwaysBlocksNavClearance(face Face, semantics hl1MaterialSemantics) bool {
-	if semantics.Kind == "clip" {
-		return true
-	}
-	name := normalizedMaterialTextureName(face.TextureName)
-	return containsAny(name, "rail", "fence", "chain")
 }
 
 func hl1FaceNormalLooksWalkable(face Face) bool {
@@ -388,15 +317,6 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 	if err := ensureGeneratedLevelBaseWorldAuxSidecars(result); err != nil {
 		return err
 	}
-	if !result.SkipNavigationBake {
-		reportImportProgress(result.Progress, ImportProgress{
-			Stage: ImportProgressStageSaveNavigationBake,
-			Path:  result.LevelPath,
-		})
-		if err := ensureGeneratedLevelNavigationSidecars(result); err != nil {
-			return err
-		}
-	}
 	return content.SaveLevel(result.LevelPath, result.Level)
 }
 
@@ -415,73 +335,6 @@ func ensureGeneratedLevelBaseWorldAuxSidecars(result GeneratedLevelResult) error
 		return fmt.Errorf("precalculate base-world aux sidecars: %w", err)
 	}
 	return nil
-}
-
-func ensureGeneratedLevelNavigationSidecars(result GeneratedLevelResult) error {
-	if result.Level == nil || result.Level.BaseWorld == nil || strings.TrimSpace(result.Level.BaseWorld.ManifestPath) == "" || strings.TrimSpace(result.LevelPath) == "" {
-		return nil
-	}
-	manifestPath := content.ResolveDocumentPath(result.Level.BaseWorld.ManifestPath, result.LevelPath)
-	if _, err := os.Stat(manifestPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	navManifestPath := content.DefaultNavManifestPath(manifestPath)
-	navBuildSourcePath := content.DefaultNavBuildSourcePath(manifestPath)
-	reportImportProgress(result.Progress, ImportProgress{
-		Stage: ImportProgressStageSaveNavigationSource,
-		Path:  navBuildSourcePath,
-	})
-	navBuildSource, err := content.SaveNavBuildSourceForImportedWorldManifest(manifestPath, navBuildSourcePath, content.NavBuildSourceBuildOptions{
-		AgentProfile: content.DefaultHL1NavAgentProfile(),
-		SurfaceHints: hl1NavBuildSurfaceHints(result.NavBuildSurfaces),
-		Tags:         []string{"source:hl1", "voxel_first"},
-	})
-	if err != nil {
-		return fmt.Errorf("precalculate navigation source sidecar: %w", err)
-	}
-	if _, err := content.SaveNavBakeForImportedWorldManifest(manifestPath, navManifestPath, content.NavBakeOptions{
-		LevelID:        result.Level.ID,
-		BuilderVersion: content.DefaultNavBakeBuilderVersion,
-		BuildSource:    navBuildSource,
-		Progress:       navBakeProgressBridge(result.Progress),
-	}); err != nil {
-		return fmt.Errorf("precalculate navigation sidecars: %w", err)
-	}
-	result.Level.Navigation = &content.LevelNavigationDef{
-		ManifestPath: filepath.ToSlash(relativeOrBase(filepath.Dir(result.LevelPath), navManifestPath)),
-		Tags:         []string{"source:hl1", "generated"},
-	}
-	return nil
-}
-
-func hl1NavBuildSurfaceHints(inputs []content.NavBuildExplicitSurfaceInput) []content.NavBuildExplicitSurfaceInput {
-	hints := make([]content.NavBuildExplicitSurfaceInput, 0, len(inputs))
-	for _, input := range inputs {
-		if input.Kind == content.NavBuildSurfaceClearanceBlocker {
-			hints = append(hints, input)
-		}
-	}
-	return hints
-}
-
-func navBakeProgressBridge(progress ImportProgressFunc) content.NavBakeProgressFunc {
-	if progress == nil {
-		return nil
-	}
-	return func(event content.NavBakeProgress) {
-		progress(ImportProgress{
-			Stage:          ImportProgressStageSaveNavigationBake + "." + event.Stage,
-			Current:        event.Current,
-			Total:          event.Total,
-			Path:           event.TilePath,
-			Coord:          event.Coord,
-			AgentProfileID: event.AgentProfileID,
-			Polygons:       event.Polygons,
-		})
-	}
 }
 
 func buildHL1GameplayMarkers(entities []importcommon.Entity) []content.LevelMarkerDef {
@@ -1091,7 +944,6 @@ func buildHL1Breakables(opts ImportOptions, summary ImportSummary, levelPath str
 			TargetName:        hl1StringKey(entity, "targetname"),
 			Target:            hl1StringKey(entity, "target"),
 			Delay:             hl1FloatKey(entity, "delay"),
-			NavigationMode:    content.LevelBreakableNavigationModeBlock,
 			SourceTag:         "hl1:func_breakable",
 			Tags:              hl1BreakableTags(entity, bounds),
 		}

@@ -51,7 +51,6 @@ func main() {
 	flag.BoolVar(&assetsOnly, "assets-only", false, "catalog player/weapon assets from -game-dir without loading a BSP; implies -emit-game-assets")
 	flag.BoolVar(&opts.ImportAllPlayerModels, "import-all-player-models", false, "catalog and voxelize player models from valve and valve_downloads")
 	flag.BoolVar(&opts.ImportAllWeaponWorldModels, "import-all-weapon-world-models", false, "catalog and voxelize w_ weapon world models from valve and valve_downloads")
-	flag.BoolVar(&opts.SkipNavigationBake, "skip-navigation-bake", false, "skip generated .gknav/.gknavtile sidecars during level save")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
 	opts.VoxelResolutionPolicy = hl1.DefaultHL1VoxelResolutionPolicy()
 	flag.Var((*float32Flag)(&opts.VoxelResolution), "voxel-resolution", "world voxel resolution")
@@ -365,12 +364,6 @@ func (p *hl1ImportProgressPrinter) print(kind string, event hl1.ImportProgress) 
 	}
 	if progressEventHasCoord(event) {
 		parts = append(parts, "coord="+content.TerrainChunkKey(event.Coord))
-	}
-	if event.AgentProfileID != "" {
-		parts = append(parts, "profile="+event.AgentProfileID)
-	}
-	if event.Polygons > 0 {
-		parts = append(parts, fmt.Sprintf("polys=%d", event.Polygons))
 	}
 	if event.Path != "" {
 		parts = append(parts, "path="+event.Path)

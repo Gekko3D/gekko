@@ -523,7 +523,6 @@ func (s *VoxelRtState) RaycastSubstepped(origin, dir mgl32.Vec3, distance float3
 }
 
 type Profiler struct {
-	NavBakeTime   time.Duration
 	EditTime      time.Duration
 	StreamingTime time.Duration
 	AABBTime      time.Duration
@@ -531,7 +530,6 @@ type Profiler struct {
 }
 
 func (p *Profiler) Reset() {
-	p.NavBakeTime = 0
 	p.EditTime = 0
 	p.StreamingTime = 0
 	p.AABBTime = 0

@@ -876,9 +876,6 @@ func spawnAuthoredLevelBreakable(cmd *Commands, assets *AssetServer, loader *Run
 			TargetName:        breakable.TargetName,
 			Target:            breakable.Target,
 			Delay:             breakable.Delay,
-			NavigationMode:    authoredBreakableNavigationMode(breakable),
-			NavigationCostAdd: breakable.NavigationCostAdd,
-			NavigationCostMul: breakable.NavigationCostMul,
 			SourceTag:         breakable.SourceTag,
 			Tags:              append([]string(nil), breakable.Tags...),
 		},
@@ -912,17 +909,6 @@ func spawnAuthoredLevelBreakable(cmd *Commands, assets *AssetServer, loader *Run
 		}
 	}
 	return cmd.AddEntity(comps...), nil
-}
-
-func authoredBreakableNavigationMode(breakable content.LevelBreakableDef) string {
-	mode := strings.TrimSpace(breakable.NavigationMode)
-	if mode != "" {
-		return mode
-	}
-	if strings.EqualFold(breakable.Kind, "hl1_func_breakable") || strings.EqualFold(breakable.SourceTag, "hl1:func_breakable") {
-		return content.LevelBreakableNavigationModeBlock
-	}
-	return ""
 }
 
 func spawnAuthoredLevelPickup(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, pickup content.LevelPickupDef) (EntityId, error) {

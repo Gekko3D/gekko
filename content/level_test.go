@@ -75,10 +75,6 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 			CollisionEnabled:  true,
 			Tags:              []string{"imported"},
 		},
-		Navigation: &LevelNavigationDef{
-			ManifestPath: "nav/station.gknav",
-			Tags:         []string{"generated"},
-		},
 		Player: &LevelPlayerDef{
 			SpawnKind:        "hl1_player_spawn",
 			Height:           1.8288,
@@ -235,9 +231,6 @@ func TestLevelRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	}
 	if loaded.BaseWorld == nil || loaded.BaseWorld.Kind != ImportedWorldKindVoxelWorld || loaded.BaseWorld.ManifestPath != "worlds/station.gkworld" {
 		t.Fatalf("expected base world to round-trip, got %+v", loaded.BaseWorld)
-	}
-	if loaded.Navigation == nil || loaded.Navigation.ManifestPath != "nav/station.gknav" || len(loaded.Navigation.Tags) != 1 {
-		t.Fatalf("expected navigation to round-trip, got %+v", loaded.Navigation)
 	}
 }
 
@@ -555,87 +548,6 @@ func TestValidateLevelRejectsInvalidBaseWorld(t *testing.T) {
 	result = ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
 	assertHasLevelValidationCode(t, result, "invalid_base_world_kind")
 	assertHasLevelValidationCode(t, result, "invalid_base_world_manifest_path")
-}
-
-func TestValidateLevelAcceptsNavigationManifest(t *testing.T) {
-	root := t.TempDir()
-	levelPath := filepath.Join(root, "levels", "demo.gklevel")
-	navPath := filepath.Join(root, "nav", "demo.gknav")
-	tilePath := filepath.Join(root, "nav", "tiles", "0_0_0.gknavtile")
-
-	tile := &NavTileDef{
-		NavID:          "nav-demo",
-		Coord:          TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-		AgentProfileID: DefaultNavAgentProfileID,
-		BoundsMin:      [3]float32{0, 0, 0},
-		BoundsMax:      [3]float32{16, 16, 16},
-	}
-	if err := SaveNavTile(tilePath, tile); err != nil {
-		t.Fatalf("SaveNavTile failed: %v", err)
-	}
-	manifest := &NavManifestDef{
-		NavID:           "nav-demo",
-		LevelID:         "level-demo",
-		ChunkSize:       16,
-		VoxelResolution: 1,
-		AgentProfiles:   []NavAgentProfileDef{DefaultHL1NavAgentProfile()},
-		Tiles: []NavTileEntryDef{{
-			Coord:          TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
-			AgentProfileID: DefaultNavAgentProfileID,
-			TilePath:       AuthorDocumentPath(tilePath, navPath),
-			BoundsMin:      [3]float32{0, 0, 0},
-			BoundsMax:      [3]float32{16, 16, 16},
-		}},
-	}
-	if err := SaveNavManifest(navPath, manifest); err != nil {
-		t.Fatalf("SaveNavManifest failed: %v", err)
-	}
-
-	def := NewLevelDef("nav-level")
-	def.ID = "level-demo"
-	def.ChunkSize = 16
-	def.VoxelResolution = 1
-	def.Navigation = &LevelNavigationDef{
-		ManifestPath: filepath.Join("..", "nav", "demo.gknav"),
-	}
-
-	result := ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
-	if result.HasErrors() {
-		t.Fatalf("ValidateLevel failed: %s (%+v)", result.Error(), result.Issues)
-	}
-}
-
-func TestValidateLevelRejectsInvalidNavigationManifest(t *testing.T) {
-	root := t.TempDir()
-	levelPath := filepath.Join(root, "levels", "demo.gklevel")
-	navPath := filepath.Join(root, "nav", "demo.gknav")
-	if err := SaveNavManifest(navPath, &NavManifestDef{
-		NavID:           "nav-demo",
-		LevelID:         "other-level",
-		ChunkSize:       16,
-		VoxelResolution: 1,
-		AgentProfiles:   []NavAgentProfileDef{DefaultHL1NavAgentProfile()},
-	}); err != nil {
-		t.Fatalf("SaveNavManifest failed: %v", err)
-	}
-
-	def := NewLevelDef("nav-level")
-	def.ID = "level-demo"
-	def.ChunkSize = 8
-	def.Navigation = &LevelNavigationDef{
-		ManifestPath: filepath.Join("..", "nav", "demo.gknav"),
-	}
-
-	result := ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
-	if !result.HasErrors() {
-		t.Fatal("expected navigation validation errors")
-	}
-	assertHasLevelValidationCode(t, result, "navigation_level_id_mismatch")
-	assertHasLevelValidationCode(t, result, "navigation_chunk_size_mismatch")
-
-	def.Navigation.ManifestPath = "missing.txt"
-	result = ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
-	assertHasLevelValidationCode(t, result, "invalid_navigation_manifest_path")
 }
 
 func TestValidateLevelShooterRequiresPlayerSpawnAndClearMarkerPlacement(t *testing.T) {
@@ -997,9 +909,6 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		TargetName:        "crate_a",
 		Target:            "door_a",
 		Delay:             0.2,
-		NavigationMode:    LevelBreakableNavigationModeCost,
-		NavigationCostAdd: 4,
-		NavigationCostMul: 1.5,
 		SourceTag:         "hl1:func_breakable",
 	}}
 	def.Pickups = []LevelPickupDef{{
@@ -1074,9 +983,6 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	if len(loaded.Breakables) != 1 || loaded.Breakables[0].TargetName != "crate_a" || loaded.Breakables[0].Target != "door_a" || loaded.Breakables[0].Health != 25 {
 		t.Fatalf("breakables did not round-trip: %+v", loaded.Breakables)
 	}
-	if loaded.Breakables[0].NavigationMode != LevelBreakableNavigationModeCost || loaded.Breakables[0].NavigationCostAdd != 4 || loaded.Breakables[0].NavigationCostMul != 1.5 {
-		t.Fatalf("breakable navigation metadata did not round-trip: %+v", loaded.Breakables[0])
-	}
 	if len(loaded.Pickups) != 1 || loaded.Pickups[0].Category != "ammo" || loaded.Pickups[0].Item != "9mmclip" || loaded.Pickups[0].Amount != 17 {
 		t.Fatalf("pickups did not round-trip: %+v", loaded.Pickups)
 	}
@@ -1147,8 +1053,6 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 		BoundsHalfExtents: Vec3{1, 0, 1},
 		Health:            -1,
 		Delay:             -1,
-		NavigationMode:    "sideways",
-		NavigationCostMul: -1,
 	}}
 	def.Pickups = []LevelPickupDef{{
 		ID:     "bad-pickup",
@@ -1192,8 +1096,6 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "invalid_breakable_bounds")
 	assertHasLevelValidationCode(t, result, "invalid_breakable_health")
 	assertHasLevelValidationCode(t, result, "invalid_breakable_delay")
-	assertHasLevelValidationCode(t, result, "invalid_breakable_navigation_mode")
-	assertHasLevelValidationCode(t, result, "invalid_breakable_navigation_cost")
 	assertHasLevelValidationCode(t, result, "empty_pickup_category")
 	assertHasLevelValidationCode(t, result, "empty_pickup_item")
 	assertHasLevelValidationCode(t, result, "invalid_pickup_amount")

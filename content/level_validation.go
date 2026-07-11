@@ -15,17 +15,16 @@ const (
 )
 
 type LevelValidationIssue struct {
-	Severity       LevelValidationSeverity `json:"severity"`
-	Code           string                  `json:"code"`
-	Message        string                  `json:"message"`
-	PlacementID    string                  `json:"placement_id,omitempty"`
-	PlacementPath  string                  `json:"placement_path,omitempty"`
-	VolumeID       string                  `json:"volume_id,omitempty"`
-	VolumePath     string                  `json:"volume_path,omitempty"`
-	BrushID        string                  `json:"brush_id,omitempty"`
-	MarkerID       string                  `json:"marker_id,omitempty"`
-	BaseWorldPath  string                  `json:"base_world_path,omitempty"`
-	NavigationPath string                  `json:"navigation_path,omitempty"`
+	Severity      LevelValidationSeverity `json:"severity"`
+	Code          string                  `json:"code"`
+	Message       string                  `json:"message"`
+	PlacementID   string                  `json:"placement_id,omitempty"`
+	PlacementPath string                  `json:"placement_path,omitempty"`
+	VolumeID      string                  `json:"volume_id,omitempty"`
+	VolumePath    string                  `json:"volume_path,omitempty"`
+	BrushID       string                  `json:"brush_id,omitempty"`
+	MarkerID      string                  `json:"marker_id,omitempty"`
+	BaseWorldPath string                  `json:"base_world_path,omitempty"`
 }
 
 type LevelValidationOptions struct {
@@ -207,7 +206,6 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 
 	validateLevelTerrain(&result, def, opts)
 	validateLevelBaseWorld(&result, def, opts)
-	validateLevelNavigation(&result, def, opts)
 	validateShooterLevelRequirements(&result, def, opts)
 
 	return result
@@ -238,16 +236,6 @@ func (r *LevelValidationResult) addError(code string, message string, placementI
 		MarkerID:      markerID,
 		BrushID:       brushID,
 		BaseWorldPath: baseWorldPath,
-	})
-	r.HardErrorCount++
-}
-
-func (r *LevelValidationResult) addNavigationError(code string, message string, navigationPath string) {
-	r.Issues = append(r.Issues, LevelValidationIssue{
-		Severity:       LevelValidationSeverityError,
-		Code:           code,
-		Message:        message,
-		NavigationPath: navigationPath,
 	})
 	r.HardErrorCount++
 }
@@ -704,14 +692,6 @@ func validateLevelBreakable(result *LevelValidationResult, breakable LevelBreaka
 	if breakable.Delay < 0 {
 		result.addError("invalid_breakable_delay", "breakable delay must be non-negative", "", "", "", "", "", "", "")
 	}
-	switch strings.TrimSpace(breakable.NavigationMode) {
-	case "", LevelBreakableNavigationModeBlock, LevelBreakableNavigationModeCost, LevelBreakableNavigationModeIgnore:
-	default:
-		result.addError("invalid_breakable_navigation_mode", fmt.Sprintf("breakable navigation mode %q is invalid", breakable.NavigationMode), "", "", "", "", "", "", "")
-	}
-	if breakable.NavigationCostMul < 0 {
-		result.addError("invalid_breakable_navigation_cost", "breakable navigation cost multiplier must be non-negative", "", "", "", "", "", "", "")
-	}
 	if strings.TrimSpace(breakable.AssetPath) != "" && opts.DocumentPath != "" {
 		resolvedPath := ResolveDocumentPath(breakable.AssetPath, opts.DocumentPath)
 		if _, err := os.Stat(resolvedPath); err != nil {
@@ -999,53 +979,6 @@ func validateLevelBaseWorld(result *LevelValidationResult, def *LevelDef, opts L
 	}
 	if def.VoxelResolution > 0 && absLevelFloat32(importedWorld.VoxelResolution-def.VoxelResolution) > 1e-4 {
 		result.addError("base_world_voxel_resolution_mismatch", fmt.Sprintf("base world voxel size %.4f does not match level voxel size %.4f", importedWorld.VoxelResolution, def.VoxelResolution), "", "", "", "", "", "", baseWorld.ManifestPath)
-	}
-}
-
-func validateLevelNavigation(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions) {
-	if def == nil || def.Navigation == nil {
-		return
-	}
-	nav := def.Navigation
-	if strings.TrimSpace(nav.ManifestPath) == "" {
-		result.addNavigationError("empty_navigation_manifest_path", "navigation manifest_path is required", nav.ManifestPath)
-		return
-	}
-	resolvedPath := ResolveDocumentPath(nav.ManifestPath, opts.DocumentPath)
-	if strings.ToLower(filepath.Ext(resolvedPath)) != ".gknav" {
-		result.addNavigationError("invalid_navigation_manifest_path", fmt.Sprintf("navigation manifest_path must point to a .gknav: %s", nav.ManifestPath), nav.ManifestPath)
-		return
-	}
-	if opts.DocumentPath == "" {
-		return
-	}
-	if _, err := os.Stat(resolvedPath); err != nil {
-		result.addNavigationError("missing_navigation_manifest", fmt.Sprintf("missing navigation manifest %s", nav.ManifestPath), nav.ManifestPath)
-		return
-	}
-	manifest, err := LoadNavManifest(resolvedPath)
-	if err != nil {
-		result.addNavigationError("invalid_navigation_manifest", fmt.Sprintf("failed to load navigation manifest %s: %v", nav.ManifestPath, err), nav.ManifestPath)
-		return
-	}
-	validation := ValidateNavManifest(manifest, NavValidationOptions{DocumentPath: resolvedPath})
-	for _, issue := range validation.Issues {
-		result.addNavigationError(issue.Code, issue.Message, nav.ManifestPath)
-	}
-	if def.ID != "" && manifest.LevelID != "" && manifest.LevelID != def.ID {
-		result.addNavigationError("navigation_level_id_mismatch", fmt.Sprintf("navigation level id %q does not match level %q", manifest.LevelID, def.ID), nav.ManifestPath)
-	}
-	if def.BaseWorld != nil && manifest.SourceWorldID != "" {
-		baseWorldPath := ResolveDocumentPath(def.BaseWorld.ManifestPath, opts.DocumentPath)
-		if importedWorld, err := LoadImportedWorld(baseWorldPath); err == nil && importedWorld.WorldID != "" && importedWorld.WorldID != manifest.SourceWorldID {
-			result.addNavigationError("navigation_source_world_id_mismatch", fmt.Sprintf("navigation source world id %q does not match base world %q", manifest.SourceWorldID, importedWorld.WorldID), nav.ManifestPath)
-		}
-	}
-	if def.ChunkSize > 0 && manifest.ChunkSize != def.ChunkSize {
-		result.addNavigationError("navigation_chunk_size_mismatch", fmt.Sprintf("navigation chunk size %d does not match level chunk size %d", manifest.ChunkSize, def.ChunkSize), nav.ManifestPath)
-	}
-	if def.VoxelResolution > 0 && absLevelFloat32(manifest.VoxelResolution-def.VoxelResolution) > 1e-4 {
-		result.addNavigationError("navigation_voxel_resolution_mismatch", fmt.Sprintf("navigation voxel size %.4f does not match level voxel size %.4f", manifest.VoxelResolution, def.VoxelResolution), nav.ManifestPath)
 	}
 }
 

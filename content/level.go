@@ -45,12 +45,6 @@ const (
 	LevelMarkerKindExtract     = "extract_point"
 )
 
-const (
-	LevelBreakableNavigationModeBlock  = "block"
-	LevelBreakableNavigationModeCost   = "cost"
-	LevelBreakableNavigationModeIgnore = "ignore"
-)
-
 type LevelDef struct {
 	ID               string                  `json:"id"`
 	SchemaVersion    int                     `json:"schema_version"`
@@ -63,7 +57,6 @@ type LevelDef struct {
 	Brushes          []LevelBrushDef         `json:"brushes,omitempty"`
 	Terrain          *LevelTerrainDef        `json:"terrain,omitempty"`
 	BaseWorld        *LevelBaseWorldDef      `json:"base_world,omitempty"`
-	Navigation       *LevelNavigationDef     `json:"navigation,omitempty"`
 	Player           *LevelPlayerDef         `json:"player,omitempty"`
 	Placements       []LevelPlacementDef     `json:"placements,omitempty"`
 	PlacementVolumes []PlacementVolumeDef    `json:"placement_volumes,omitempty"`
@@ -167,11 +160,6 @@ type LevelBaseWorldDef struct {
 	ReadOnlyByDefault bool              `json:"read_only_by_default,omitempty"`
 	CollisionEnabled  bool              `json:"collision_enabled,omitempty"`
 	Tags              []string          `json:"tags,omitempty"`
-}
-
-type LevelNavigationDef struct {
-	ManifestPath string   `json:"manifest_path,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
 }
 
 type LevelPlayerDef struct {
@@ -449,9 +437,6 @@ type LevelBreakableDef struct {
 	TargetName        string   `json:"target_name,omitempty"`
 	Target            string   `json:"target,omitempty"`
 	Delay             float32  `json:"delay,omitempty"`
-	NavigationMode    string   `json:"navigation_mode,omitempty"`
-	NavigationCostAdd float32  `json:"navigation_cost_add,omitempty"`
-	NavigationCostMul float32  `json:"navigation_cost_multiplier,omitempty"`
 	SourceTag         string   `json:"source_tag,omitempty"`
 	Tags              []string `json:"tags,omitempty"`
 }

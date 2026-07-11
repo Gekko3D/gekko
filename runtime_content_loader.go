@@ -16,8 +16,6 @@ type RuntimeContentLoader struct {
 	importedWorlds   map[string]*content.ImportedWorldDef
 	importedChunks   map[string]*content.ImportedWorldChunkDef
 	importedAux      map[string]*content.ImportedWorldChunkAuxDef
-	navManifests     map[string]*content.NavManifestDef
-	navTiles         map[string]*content.NavTileDef
 }
 
 func NewRuntimeContentLoader() *RuntimeContentLoader {
@@ -29,8 +27,6 @@ func NewRuntimeContentLoader() *RuntimeContentLoader {
 		importedWorlds:   make(map[string]*content.ImportedWorldDef),
 		importedChunks:   make(map[string]*content.ImportedWorldChunkDef),
 		importedAux:      make(map[string]*content.ImportedWorldChunkAuxDef),
-		navManifests:     make(map[string]*content.NavManifestDef),
-		navTiles:         make(map[string]*content.NavTileDef),
 	}
 }
 
@@ -109,28 +105,6 @@ func (l *RuntimeContentLoader) LoadImportedWorldChunkAux(path string) (*content.
 		return def, nil
 	}
 	return loadRuntimeContentCached(&l.mu, path, l.importedAux, content.LoadImportedWorldChunkAux)
-}
-
-func (l *RuntimeContentLoader) LoadNavManifest(path string) (*content.NavManifestDef, error) {
-	if l == nil {
-		def, err := content.LoadNavManifest(path)
-		if err != nil {
-			return nil, err
-		}
-		return def, nil
-	}
-	return loadRuntimeContentCached(&l.mu, path, l.navManifests, content.LoadNavManifest)
-}
-
-func (l *RuntimeContentLoader) LoadNavTile(path string) (*content.NavTileDef, error) {
-	if l == nil {
-		def, err := content.LoadNavTile(path)
-		if err != nil {
-			return nil, err
-		}
-		return def, nil
-	}
-	return loadRuntimeContentCached(&l.mu, path, l.navTiles, content.LoadNavTile)
 }
 
 func loadRuntimeContentCached[T any](mu *sync.RWMutex, path string, cache map[string]*T, load func(string) (*T, error)) (*T, error) {
