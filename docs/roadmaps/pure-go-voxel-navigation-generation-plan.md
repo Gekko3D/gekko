@@ -621,14 +621,14 @@ rejects blocked/unknown seams.
 
 Purpose: replace the old polygon pathfinder with one graph route API.
 
-- [ ] Resolve start/end world points to supported spans.
-- [ ] Run region A* as the normal local route.
-- [ ] Refine start/end and a small active corridor through the span graph.
-- [ ] Add sector-graph restriction for long paths.
-- [ ] Return region steps, transitions, simple waypoints, actions, and reasons.
-- [ ] Add route budgets and cancellation only when runtime integration needs
+- [x] Resolve start/end world points to supported spans.
+- [x] Run region A* as the normal local route.
+- [x] Refine start/end and a small active corridor through the span graph.
+- [x] Add sector-graph restriction for long paths.
+- [x] Return region steps, transitions, simple waypoints, actions, and reasons.
+- [x] Add route budgets and cancellation only when runtime integration needs
   them.
-- [ ] Do not add polygon corridors or funnel smoothing.
+- [x] Do not add polygon corridors or funnel smoothing.
 
 Suggested files:
 
