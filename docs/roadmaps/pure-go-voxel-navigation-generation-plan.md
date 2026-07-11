@@ -543,12 +543,12 @@ and unknown halo. No graph regions or pathfinding exist yet.
 
 Purpose: determine which spans and local transitions support an agent.
 
-- [ ] Compute conservative horizontal clearance.
-- [ ] Filter by agent height and radius.
-- [ ] Apply blocker metadata as subtraction only.
-- [ ] Record stable rejection reasons.
-- [ ] Verify small/large profile monotonicity.
-- [ ] Keep the first algorithm simple and correct; optimize only after profiling.
+- [x] Compute conservative horizontal clearance.
+- [x] Filter by agent height and radius.
+- [x] Apply blocker metadata as subtraction only.
+- [x] Record stable rejection reasons.
+- [x] Verify small/large profile monotonicity.
+- [x] Keep the first algorithm simple and correct; optimize only after profiling.
 
 Suggested files:
 

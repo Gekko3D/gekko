@@ -24,7 +24,7 @@ func TestBuildNavSourceSpans(t *testing.T) {
 		return result
 	}
 	span := func(id uint32, x, y, z int, support, ceiling float32) NavSpanDef {
-		return NavSpanDef{ID: id, X: x, Y: y, Z: z, SupportHeight: support, CeilingHeight: ceiling, Headroom: ceiling - support}
+		return NavSpanDef{ID: id, X: x, Y: y, Z: z, SupportHeight: support, CeilingHeight: ceiling, Headroom: ceiling - support, ClearanceRadius: 0.25}
 	}
 
 	tests := []struct {

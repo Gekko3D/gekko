@@ -9,10 +9,12 @@ const (
 
 // NavSpanBuildChunk is effective occupancy for one chunk. Missing voxels in a
 // known chunk are empty; missing or explicitly unknown chunks stay unknown.
+// BlockedVoxels subtract clearance but never provide support.
 type NavSpanBuildChunk struct {
-	Coord       TerrainChunkCoordDef
-	Known       bool
-	SolidVoxels [][3]int
+	Coord         TerrainChunkCoordDef
+	Known         bool
+	SolidVoxels   [][3]int
+	BlockedVoxels [][3]int
 }
 
 type NavSpanBuildInput struct {
@@ -40,8 +42,9 @@ type NavSpanBuildResult struct {
 }
 
 type navSpanBuildOccupancy struct {
-	known bool
-	solid []bool
+	known   bool
+	solid   []bool
+	blocked []bool
 }
 
 // BuildNavSourceSpans extracts supported open intervals whose support voxel is
@@ -99,6 +102,7 @@ func BuildNavSourceSpans(input NavSpanBuildInput) (NavSpanBuildResult, error) {
 			}
 		}
 	}
+	calculateNavSpanClearance(input, chunks, result.Source.Spans)
 	if validation := ValidateNavSourceTile(&result.Source); validation.HasErrors() {
 		return NavSpanBuildResult{}, fmt.Errorf("invalid navigation source tile: %s", validation.Error())
 	}
@@ -134,13 +138,17 @@ func buildNavSpanOccupancy(input NavSpanBuildInput) (map[TerrainChunkCoordDef]na
 			return nil, fmt.Errorf("navigation span halo chunk %s is not adjacent to center", TerrainChunkKey(chunk.Coord))
 		}
 		if !chunk.Known {
-			if len(chunk.SolidVoxels) != 0 {
-				return nil, fmt.Errorf("unknown navigation span chunk %s cannot contain solid voxels", TerrainChunkKey(chunk.Coord))
+			if len(chunk.SolidVoxels) != 0 || len(chunk.BlockedVoxels) != 0 {
+				return nil, fmt.Errorf("unknown navigation span chunk %s cannot contain occupied voxels", TerrainChunkKey(chunk.Coord))
 			}
 			chunks[chunk.Coord] = navSpanBuildOccupancy{}
 			continue
 		}
-		occupancy := navSpanBuildOccupancy{known: true, solid: make([]bool, input.ChunkSize*input.ChunkSize*input.ChunkSize)}
+		occupancy := navSpanBuildOccupancy{
+			known:   true,
+			solid:   make([]bool, input.ChunkSize*input.ChunkSize*input.ChunkSize),
+			blocked: make([]bool, input.ChunkSize*input.ChunkSize*input.ChunkSize),
+		}
 		for _, voxel := range chunk.SolidVoxels {
 			x, y, z := voxel[0], voxel[1], voxel[2]
 			if x < 0 || y < 0 || z < 0 || x >= input.ChunkSize || y >= input.ChunkSize || z >= input.ChunkSize {
@@ -148,23 +156,42 @@ func buildNavSpanOccupancy(input NavSpanBuildInput) (map[TerrainChunkCoordDef]na
 			}
 			occupancy.solid[x+input.ChunkSize*(y+input.ChunkSize*z)] = true
 		}
+		for _, voxel := range chunk.BlockedVoxels {
+			x, y, z := voxel[0], voxel[1], voxel[2]
+			if x < 0 || y < 0 || z < 0 || x >= input.ChunkSize || y >= input.ChunkSize || z >= input.ChunkSize {
+				return nil, fmt.Errorf("navigation blocker voxel %v is outside chunk %s", voxel, TerrainChunkKey(chunk.Coord))
+			}
+			occupancy.blocked[x+input.ChunkSize*(y+input.ChunkSize*z)] = true
+		}
 		chunks[chunk.Coord] = occupancy
 	}
 	return chunks, nil
 }
 
 func sampleNavSpanOccupancy(chunks map[TerrainChunkCoordDef]navSpanBuildOccupancy, center TerrainChunkCoordDef, chunkSize, x, y, z int) navVoxelState {
-	coord := center
-	coord.Y += floorDivNavSpan(y, chunkSize)
-	chunk, exists := chunks[coord]
-	if !exists || !chunk.known {
+	chunk, index, known := sampleNavSpanBuildCell(chunks, center, chunkSize, x, y, z)
+	if !known {
 		return navVoxelUnknown
 	}
-	y = positiveModNavSpan(y, chunkSize)
-	if chunk.solid[x+chunkSize*(y+chunkSize*z)] {
+	if chunk.solid[index] {
 		return navVoxelSolid
 	}
 	return navVoxelEmpty
+}
+
+func sampleNavSpanBuildCell(chunks map[TerrainChunkCoordDef]navSpanBuildOccupancy, center TerrainChunkCoordDef, chunkSize, x, y, z int) (navSpanBuildOccupancy, int, bool) {
+	coord := center
+	coord.X += floorDivNavSpan(x, chunkSize)
+	coord.Y += floorDivNavSpan(y, chunkSize)
+	coord.Z += floorDivNavSpan(z, chunkSize)
+	chunk, exists := chunks[coord]
+	if !exists || !chunk.known {
+		return navSpanBuildOccupancy{}, 0, false
+	}
+	x = positiveModNavSpan(x, chunkSize)
+	y = positiveModNavSpan(y, chunkSize)
+	z = positiveModNavSpan(z, chunkSize)
+	return chunk, x + chunkSize*(y+chunkSize*z), true
 }
 
 func floorDivNavSpan(value, divisor int) int {
