@@ -1,0 +1,191 @@
+package content
+
+import "fmt"
+
+const (
+	NavSpanBuildUnknownOpenInterval   = "unknown_open_interval"
+	NavSpanBuildTruncatedOpenInterval = "truncated_open_interval"
+)
+
+// NavSpanBuildChunk is effective occupancy for one chunk. Missing voxels in a
+// known chunk are empty; missing or explicitly unknown chunks stay unknown.
+type NavSpanBuildChunk struct {
+	Coord       TerrainChunkCoordDef
+	Known       bool
+	SolidVoxels [][3]int
+}
+
+type NavSpanBuildInput struct {
+	NavID           string
+	BuilderVersion  string
+	SourceHash      string
+	DependencyHash  string
+	ChunkSize       int
+	VoxelResolution float32
+	Center          NavSpanBuildChunk
+	Halo            []NavSpanBuildChunk
+}
+
+type NavSpanBuildDiagnostic struct {
+	Code     string
+	Rejected bool
+	X        int
+	Y        int
+	Z        int
+}
+
+type NavSpanBuildResult struct {
+	Source      NavSourceTileDef
+	Diagnostics []NavSpanBuildDiagnostic
+}
+
+type navSpanBuildOccupancy struct {
+	known bool
+	solid []bool
+}
+
+// BuildNavSourceSpans extracts supported open intervals whose support voxel is
+// in Center. Unknown occupancy caps an interval and rejects zero-height spans.
+func BuildNavSourceSpans(input NavSpanBuildInput) (NavSpanBuildResult, error) {
+	chunks, err := buildNavSpanOccupancy(input)
+	if err != nil {
+		return NavSpanBuildResult{}, err
+	}
+
+	result := NavSpanBuildResult{Source: NavSourceTileDef{
+		NavID:          input.NavID,
+		SchemaVersion:  CurrentNavSourceTileSchemaVersion,
+		Coord:          input.Center.Coord,
+		BuilderVersion: input.BuilderVersion,
+		SourceHash:     input.SourceHash,
+		DependencyHash: input.DependencyHash,
+	}}
+	for x := 0; x < input.ChunkSize; x++ {
+		for z := 0; z < input.ChunkSize; z++ {
+			for y := 0; y < input.ChunkSize; y++ {
+				if sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, y, z) != navVoxelSolid {
+					continue
+				}
+				above := sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, y+1, z)
+				if above == navVoxelUnknown {
+					result.Diagnostics = append(result.Diagnostics, NavSpanBuildDiagnostic{Code: NavSpanBuildUnknownOpenInterval, Rejected: true, X: x, Y: y + 1, Z: z})
+					continue
+				}
+				if above == navVoxelSolid {
+					continue
+				}
+
+				ceilingY := y + 2
+				ceilingState := sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, ceilingY, z)
+				for ceilingState == navVoxelEmpty {
+					ceilingY++
+					ceilingState = sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, ceilingY, z)
+				}
+				if ceilingState == navVoxelUnknown {
+					result.Diagnostics = append(result.Diagnostics, NavSpanBuildDiagnostic{Code: NavSpanBuildTruncatedOpenInterval, X: x, Y: y + 1, Z: z})
+				}
+
+				supportHeight := float32((input.Center.Coord.Y*input.ChunkSize)+(y+1)) * input.VoxelResolution
+				ceilingHeight := float32((input.Center.Coord.Y*input.ChunkSize)+ceilingY) * input.VoxelResolution
+				result.Source.Spans = append(result.Source.Spans, NavSpanDef{
+					ID:            uint32(len(result.Source.Spans)),
+					X:             x,
+					Y:             y + 1,
+					Z:             z,
+					SupportHeight: supportHeight,
+					CeilingHeight: ceilingHeight,
+					Headroom:      ceilingHeight - supportHeight,
+				})
+			}
+		}
+	}
+	if validation := ValidateNavSourceTile(&result.Source); validation.HasErrors() {
+		return NavSpanBuildResult{}, fmt.Errorf("invalid navigation source tile: %s", validation.Error())
+	}
+	return result, nil
+}
+
+type navVoxelState uint8
+
+const (
+	navVoxelUnknown navVoxelState = iota
+	navVoxelEmpty
+	navVoxelSolid
+)
+
+func buildNavSpanOccupancy(input NavSpanBuildInput) (map[TerrainChunkCoordDef]navSpanBuildOccupancy, error) {
+	if input.ChunkSize <= 0 {
+		return nil, fmt.Errorf("navigation span chunk size must be positive")
+	}
+	if !finite(input.VoxelResolution) || input.VoxelResolution <= 0 {
+		return nil, fmt.Errorf("navigation span voxel resolution must be finite and positive")
+	}
+	if !input.Center.Known {
+		return nil, fmt.Errorf("navigation span center chunk must be known")
+	}
+
+	chunks := make(map[TerrainChunkCoordDef]navSpanBuildOccupancy, len(input.Halo)+1)
+	all := append([]NavSpanBuildChunk{input.Center}, input.Halo...)
+	for i, chunk := range all {
+		if _, exists := chunks[chunk.Coord]; exists {
+			return nil, fmt.Errorf("duplicate navigation span chunk %s", TerrainChunkKey(chunk.Coord))
+		}
+		if i > 0 && (absNavSpanInt(chunk.Coord.X-input.Center.Coord.X) > 1 || absNavSpanInt(chunk.Coord.Y-input.Center.Coord.Y) > 1 || absNavSpanInt(chunk.Coord.Z-input.Center.Coord.Z) > 1) {
+			return nil, fmt.Errorf("navigation span halo chunk %s is not adjacent to center", TerrainChunkKey(chunk.Coord))
+		}
+		if !chunk.Known {
+			if len(chunk.SolidVoxels) != 0 {
+				return nil, fmt.Errorf("unknown navigation span chunk %s cannot contain solid voxels", TerrainChunkKey(chunk.Coord))
+			}
+			chunks[chunk.Coord] = navSpanBuildOccupancy{}
+			continue
+		}
+		occupancy := navSpanBuildOccupancy{known: true, solid: make([]bool, input.ChunkSize*input.ChunkSize*input.ChunkSize)}
+		for _, voxel := range chunk.SolidVoxels {
+			x, y, z := voxel[0], voxel[1], voxel[2]
+			if x < 0 || y < 0 || z < 0 || x >= input.ChunkSize || y >= input.ChunkSize || z >= input.ChunkSize {
+				return nil, fmt.Errorf("navigation span voxel %v is outside chunk %s", voxel, TerrainChunkKey(chunk.Coord))
+			}
+			occupancy.solid[x+input.ChunkSize*(y+input.ChunkSize*z)] = true
+		}
+		chunks[chunk.Coord] = occupancy
+	}
+	return chunks, nil
+}
+
+func sampleNavSpanOccupancy(chunks map[TerrainChunkCoordDef]navSpanBuildOccupancy, center TerrainChunkCoordDef, chunkSize, x, y, z int) navVoxelState {
+	coord := center
+	coord.Y += floorDivNavSpan(y, chunkSize)
+	chunk, exists := chunks[coord]
+	if !exists || !chunk.known {
+		return navVoxelUnknown
+	}
+	y = positiveModNavSpan(y, chunkSize)
+	if chunk.solid[x+chunkSize*(y+chunkSize*z)] {
+		return navVoxelSolid
+	}
+	return navVoxelEmpty
+}
+
+func floorDivNavSpan(value, divisor int) int {
+	quotient := value / divisor
+	if value < 0 && value%divisor != 0 {
+		quotient--
+	}
+	return quotient
+}
+
+func positiveModNavSpan(value, divisor int) int {
+	result := value % divisor
+	if result < 0 {
+		result += divisor
+	}
+	return result
+}
+
+func absNavSpanInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}

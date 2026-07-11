@@ -523,13 +523,13 @@ or generator logic.
 Purpose: convert effective voxel occupancy into trustworthy supported open
 intervals.
 
-- [ ] Define build input with center chunk plus explicit known/unknown halo.
-- [ ] Build deterministic occupancy columns.
-- [ ] Extract every solid-to-empty support transition and open ceiling.
-- [ ] Preserve multiple vertical spans per X/Z column.
-- [ ] Calculate descriptive support position and headroom.
-- [ ] Sort spans and assign stable local IDs.
-- [ ] Expose rejection/unknown-context diagnostics.
+- [x] Define build input with center chunk plus explicit known/unknown halo.
+- [x] Build deterministic occupancy columns.
+- [x] Extract every solid-to-empty support transition and open ceiling.
+- [x] Preserve multiple vertical spans per X/Z column.
+- [x] Calculate descriptive support position and headroom.
+- [x] Sort spans and assign stable local IDs.
+- [x] Expose rejection/unknown-context diagnostics.
 
 Suggested files:
 
