@@ -562,13 +562,13 @@ capsule or conservative cylinder model.
 
 Purpose: establish correct local reachability before compression.
 
-- [ ] Create four-neighbor transition candidates.
-- [ ] Validate step delta, transition headroom, and clearance.
-- [ ] Emit directed `walk`, `step`, and `stair` transitions.
-- [ ] Keep drops, jumps, ladders, water, doors, and movers out of the first
+- [x] Create four-neighbor transition candidates.
+- [x] Validate step delta, transition headroom, and clearance.
+- [x] Emit directed `walk`, `step`, and `stair` transitions.
+- [x] Keep drops, jumps, ladders, water, doors, and movers out of the first
   graph.
-- [ ] Implement minimal span-graph A* for verification and later local repair.
-- [ ] Return explicit no-route/rejection diagnostics.
+- [x] Implement minimal span-graph A* for verification and later local repair.
+- [x] Return explicit no-route/rejection diagnostics.
 
 Suggested files:
 

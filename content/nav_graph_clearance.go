@@ -60,7 +60,7 @@ func navSpanColumnObstructed(input NavSpanBuildInput, chunks map[TerrainChunkCoo
 }
 
 // FilterNavSpansForProfile emits only source span IDs supported by profile.
-// Phase 4 adds transitions to returned graph tile.
+// BuildNavSpanGraph adds transitions to the returned graph shape.
 func FilterNavSpansForProfile(source NavSourceTileDef, profile NavAgentProfileDef) (NavSpanProfileResult, error) {
 	if validation := ValidateNavSourceTile(&source); validation.HasErrors() {
 		return NavSpanProfileResult{}, fmt.Errorf("invalid navigation source tile: %s", validation.Error())
