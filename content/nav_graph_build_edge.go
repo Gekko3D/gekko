@@ -99,6 +99,10 @@ func BuildNavSpanGraph(source NavSourceTileDef, profile NavAgentProfileDef, voxe
 			}
 		}
 	}
+	result.Graph, err = CompressNavGraphRegions(source, result.Graph, voxelResolution)
+	if err != nil {
+		return NavSpanGraphBuildResult{}, err
+	}
 	if validation := ValidateNavGraphTile(&result.Graph); validation.HasErrors() {
 		return NavSpanGraphBuildResult{}, fmt.Errorf("invalid navigation graph tile: %s", validation.Error())
 	}

@@ -583,12 +583,12 @@ or persistence.
 
 Purpose: make ordinary routing cheap without changing reachability.
 
-- [ ] Group only spans connected by already-valid compatible transitions.
-- [ ] Split regions when area or traversal class changes.
-- [ ] Retain compact span membership for local refinement.
-- [ ] Build contiguous transition runs between regions.
-- [ ] Compare region-graph components with span-graph components.
-- [ ] Store center, bounds, and height range for heuristic and locomotion hints.
+- [x] Group only spans connected by already-valid compatible transitions.
+- [x] Split regions when area or traversal class changes.
+- [x] Retain compact span membership for local refinement.
+- [x] Build contiguous transition runs between regions.
+- [x] Compare region-graph components with span-graph components.
+- [x] Store center, bounds, and height range for heuristic and locomotion hints.
 
 Suggested files:
 
