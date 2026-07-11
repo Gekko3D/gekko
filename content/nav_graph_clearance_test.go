@@ -51,7 +51,7 @@ func TestNavSpanClearanceAndProfileSupport(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			built, err := BuildNavSourceSpans(NavSpanBuildInput{
-				NavID: "test", BuilderVersion: "test", SourceHash: "source", DependencyHash: "dependencies",
+				NavID: "test", BuilderVersion: "test", SourceHash: "source",
 				ChunkSize: 5, VoxelResolution: 1,
 				Center: NavSpanBuildChunk{Known: true, SolidVoxels: test.solid, BlockedVoxels: test.blocked},
 			})

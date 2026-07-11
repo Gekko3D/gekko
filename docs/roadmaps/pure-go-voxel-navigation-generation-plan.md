@@ -602,12 +602,12 @@ reduces nodes on a flat field.
 
 Purpose: create deterministic graph transitions across chunk boundaries.
 
-- [ ] Match opposing boundary span facts in world-grid coordinates.
-- [ ] Validate height, headroom, clearance, and direction on both sides.
-- [ ] Merge contiguous compatible matches into region transitions.
-- [ ] Emit reciprocal transitions for bidirectional movement.
-- [ ] Fail closed for unknown neighbor context.
-- [ ] Include dependency halo in build hashes.
+- [x] Match opposing boundary span facts in world-grid coordinates.
+- [x] Validate height, headroom, clearance, and direction on both sides.
+- [x] Merge contiguous compatible matches into region transitions.
+- [x] Emit reciprocal transitions for bidirectional movement.
+- [x] Fail closed for unknown neighbor context.
+- [x] Include dependency halo in build hashes.
 
 Suggested files:
 

@@ -10,7 +10,7 @@ func TestBuildNavSourceSpans(t *testing.T) {
 	build := func(size int, center [][3]int, halo ...NavSpanBuildChunk) NavSpanBuildResult {
 		t.Helper()
 		result, err := BuildNavSourceSpans(NavSpanBuildInput{
-			NavID: "test", BuilderVersion: "test", SourceHash: "source", DependencyHash: "dependencies",
+			NavID: "test", BuilderVersion: "test", SourceHash: "source",
 			ChunkSize: size, VoxelResolution: 0.5,
 			Center: NavSpanBuildChunk{Coord: coord, Known: true, SolidVoxels: center},
 			Halo:   halo,
@@ -65,7 +65,7 @@ func TestBuildNavSourceSpans(t *testing.T) {
 			size:   2,
 			center: [][3]int{{0, 1, 0}},
 			halo: []NavSpanBuildChunk{{
-				Coord: TerrainChunkCoordDef{X: coord.X, Y: coord.Y + 1, Z: coord.Z}, Known: true,
+				Coord: TerrainChunkCoordDef{X: coord.X, Y: coord.Y + 1, Z: coord.Z}, Known: true, SourceHash: "upper",
 			}},
 			wantSpans:       []NavSpanDef{span(0, 0, 2, 0, 0, 1)},
 			wantDiagnostics: []NavSpanBuildDiagnostic{{Code: NavSpanBuildTruncatedOpenInterval, X: 0, Y: 2, Z: 0}},
@@ -91,5 +91,11 @@ func TestBuildNavSourceSpans(t *testing.T) {
 				t.Fatalf("diagnostics mismatch:\nwant: %+v\ngot:  %+v", test.wantDiagnostics, got.Diagnostics)
 			}
 		})
+	}
+
+	a := build(2, [][3]int{{0, 0, 0}}, NavSpanBuildChunk{Coord: TerrainChunkCoordDef{X: coord.X + 1, Y: coord.Y, Z: coord.Z}, Known: true, SourceHash: "east-a"})
+	b := build(2, [][3]int{{0, 0, 0}}, NavSpanBuildChunk{Coord: TerrainChunkCoordDef{X: coord.X + 1, Y: coord.Y, Z: coord.Z}, Known: true, SourceHash: "east-b"})
+	if a.Source.DependencyHash == b.Source.DependencyHash {
+		t.Fatal("halo source change did not affect dependency hash")
 	}
 }

@@ -9,10 +9,12 @@ const (
 
 // NavSpanBuildChunk is effective occupancy for one chunk. Missing voxels in a
 // known chunk are empty; missing or explicitly unknown chunks stay unknown.
-// BlockedVoxels subtract clearance but never provide support.
+// SourceHash is required for known halo chunks. BlockedVoxels subtract
+// clearance but never provide support.
 type NavSpanBuildChunk struct {
 	Coord         TerrainChunkCoordDef
 	Known         bool
+	SourceHash    string
 	SolidVoxels   [][3]int
 	BlockedVoxels [][3]int
 }
@@ -21,7 +23,6 @@ type NavSpanBuildInput struct {
 	NavID           string
 	BuilderVersion  string
 	SourceHash      string
-	DependencyHash  string
 	ChunkSize       int
 	VoxelResolution float32
 	Center          NavSpanBuildChunk
@@ -61,7 +62,7 @@ func BuildNavSourceSpans(input NavSpanBuildInput) (NavSpanBuildResult, error) {
 		Coord:          input.Center.Coord,
 		BuilderVersion: input.BuilderVersion,
 		SourceHash:     input.SourceHash,
-		DependencyHash: input.DependencyHash,
+		DependencyHash: navSpanBuildDependencyHash(input),
 	}}
 	for x := 0; x < input.ChunkSize; x++ {
 		for z := 0; z < input.ChunkSize; z++ {
@@ -138,11 +139,14 @@ func buildNavSpanOccupancy(input NavSpanBuildInput) (map[TerrainChunkCoordDef]na
 			return nil, fmt.Errorf("navigation span halo chunk %s is not adjacent to center", TerrainChunkKey(chunk.Coord))
 		}
 		if !chunk.Known {
-			if len(chunk.SolidVoxels) != 0 || len(chunk.BlockedVoxels) != 0 {
-				return nil, fmt.Errorf("unknown navigation span chunk %s cannot contain occupied voxels", TerrainChunkKey(chunk.Coord))
+			if chunk.SourceHash != "" || len(chunk.SolidVoxels) != 0 || len(chunk.BlockedVoxels) != 0 {
+				return nil, fmt.Errorf("unknown navigation span chunk %s cannot contain source data", TerrainChunkKey(chunk.Coord))
 			}
 			chunks[chunk.Coord] = navSpanBuildOccupancy{}
 			continue
+		}
+		if i > 0 && chunk.SourceHash == "" {
+			return nil, fmt.Errorf("known navigation span halo chunk %s requires source hash", TerrainChunkKey(chunk.Coord))
 		}
 		occupancy := navSpanBuildOccupancy{
 			known:   true,
@@ -166,6 +170,19 @@ func buildNavSpanOccupancy(input NavSpanBuildInput) (map[TerrainChunkCoordDef]na
 		chunks[chunk.Coord] = occupancy
 	}
 	return chunks, nil
+}
+
+func navSpanBuildDependencyHash(input NavSpanBuildInput) string {
+	hashes := make(map[TerrainChunkCoordDef]string, len(input.Halo))
+	for _, chunk := range input.Halo {
+		if chunk.Known {
+			hashes[chunk.Coord] = chunk.SourceHash
+		}
+	}
+	return navGraphDependencyHash(input.Center.Coord, func(coord TerrainChunkCoordDef) (string, bool) {
+		hash, known := hashes[coord]
+		return hash, known
+	})
 }
 
 func sampleNavSpanOccupancy(chunks map[TerrainChunkCoordDef]navSpanBuildOccupancy, center TerrainChunkCoordDef, chunkSize, x, y, z int) navVoxelState {

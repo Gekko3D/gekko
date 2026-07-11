@@ -24,7 +24,7 @@ type NavSpanGraphBuildResult struct {
 }
 
 // BuildNavSpanGraph filters source spans for profile, then connects supported
-// spans in four-neighbor columns. Cross-tile edges belong to Phase 6.
+// spans in four-neighbor columns within one tile.
 func BuildNavSpanGraph(source NavSourceTileDef, profile NavAgentProfileDef, voxelResolution float32) (NavSpanGraphBuildResult, error) {
 	if !finite(voxelResolution) || voxelResolution <= 0 {
 		return NavSpanGraphBuildResult{}, fmt.Errorf("navigation graph voxel resolution must be finite and positive")
@@ -57,19 +57,7 @@ func BuildNavSpanGraph(source NavSourceTileDef, profile NavAgentProfileDef, voxe
 		from := spans[fromID]
 		for _, direction := range directions {
 			for _, to := range columns[column{from.X + direction.x, from.Z + direction.z}] {
-				stepDelta := to.SupportHeight - from.SupportHeight
-				step := float32(math.Abs(float64(stepDelta)))
-				headroom := min(from.CeilingHeight, to.CeilingHeight) - max(from.SupportHeight, to.SupportHeight)
-				clearance := min(from.ClearanceRadius, to.ClearanceRadius)
-				code := ""
-				switch {
-				case step > profile.StepHeight:
-					code = NavSpanTransitionRejectedStep
-				case headroom < profile.Height:
-					code = NavSpanTransitionRejectedHeadroom
-				case clearance < profile.Radius:
-					code = NavSpanTransitionRejectedClearance
-				}
+				transition, code := buildNavSpanTransition(from, to, source.Coord, profile, voxelResolution)
 				if code != "" {
 					result.TransitionDiagnostics = append(result.TransitionDiagnostics, NavSpanTransitionDiagnostic{Code: code, From: from.ID, To: to.ID})
 					continue
@@ -77,25 +65,7 @@ func BuildNavSpanGraph(source NavSourceTileDef, profile NavAgentProfileDef, voxe
 				if _, ok := accepted[to.ID]; !ok {
 					continue
 				}
-
-				kind := NavTransitionWalk
-				if step > 0 {
-					slope := float32(math.Atan2(float64(step), float64(voxelResolution)) * 180 / math.Pi)
-					kind = NavTransitionStep
-					if slope <= profile.MaxSlopeDegrees {
-						kind = NavTransitionStair
-					}
-				}
-				result.Graph.SpanTransitions = append(result.Graph.SpanTransitions, NavSpanTransitionDef{
-					From:         from.ID,
-					To:           NavSpanRef{Tile: source.Coord, Span: to.ID},
-					Kind:         kind,
-					StepDelta:    stepDelta,
-					Width:        voxelResolution,
-					MinHeadroom:  headroom,
-					MinClearance: clearance,
-					Cost:         float32(math.Hypot(float64(voxelResolution), float64(step))),
-				})
+				result.Graph.SpanTransitions = append(result.Graph.SpanTransitions, transition)
 			}
 		}
 	}
@@ -107,4 +77,32 @@ func BuildNavSpanGraph(source NavSourceTileDef, profile NavAgentProfileDef, voxe
 		return NavSpanGraphBuildResult{}, fmt.Errorf("invalid navigation graph tile: %s", validation.Error())
 	}
 	return result, nil
+}
+
+func buildNavSpanTransition(from, to NavSpanDef, toTile TerrainChunkCoordDef, profile NavAgentProfileDef, voxelResolution float32) (NavSpanTransitionDef, string) {
+	stepDelta := to.SupportHeight - from.SupportHeight
+	step := float32(math.Abs(float64(stepDelta)))
+	headroom := min(from.CeilingHeight, to.CeilingHeight) - max(from.SupportHeight, to.SupportHeight)
+	clearance := min(from.ClearanceRadius, to.ClearanceRadius)
+	switch {
+	case step > profile.StepHeight:
+		return NavSpanTransitionDef{}, NavSpanTransitionRejectedStep
+	case headroom < profile.Height:
+		return NavSpanTransitionDef{}, NavSpanTransitionRejectedHeadroom
+	case clearance < profile.Radius:
+		return NavSpanTransitionDef{}, NavSpanTransitionRejectedClearance
+	}
+
+	kind := NavTransitionWalk
+	if step > 0 {
+		kind = NavTransitionStep
+		if float32(math.Atan2(float64(step), float64(voxelResolution))*180/math.Pi) <= profile.MaxSlopeDegrees {
+			kind = NavTransitionStair
+		}
+	}
+	return NavSpanTransitionDef{
+		From: from.ID, To: NavSpanRef{Tile: toTile, Span: to.ID}, Kind: kind, StepDelta: stepDelta,
+		Width: voxelResolution, MinHeadroom: headroom, MinClearance: clearance,
+		Cost: float32(math.Hypot(float64(voxelResolution), float64(step))),
+	}, ""
 }
