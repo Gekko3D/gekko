@@ -57,6 +57,7 @@ type LevelDef struct {
 	Brushes          []LevelBrushDef         `json:"brushes,omitempty"`
 	Terrain          *LevelTerrainDef        `json:"terrain,omitempty"`
 	BaseWorld        *LevelBaseWorldDef      `json:"base_world,omitempty"`
+	Navigation       *LevelNavigationDef     `json:"navigation,omitempty"`
 	Player           *LevelPlayerDef         `json:"player,omitempty"`
 	Placements       []LevelPlacementDef     `json:"placements,omitempty"`
 	PlacementVolumes []PlacementVolumeDef    `json:"placement_volumes,omitempty"`
@@ -160,6 +161,11 @@ type LevelBaseWorldDef struct {
 	ReadOnlyByDefault bool              `json:"read_only_by_default,omitempty"`
 	CollisionEnabled  bool              `json:"collision_enabled,omitempty"`
 	Tags              []string          `json:"tags,omitempty"`
+}
+
+type LevelNavigationDef struct {
+	ManifestPath string   `json:"manifest_path"`
+	Tags         []string `json:"tags,omitempty"`
 }
 
 type LevelPlayerDef struct {

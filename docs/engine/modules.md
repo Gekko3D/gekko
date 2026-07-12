@@ -80,11 +80,14 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
 - File: `streamed_level_runtime.go`
 - Resources:
   - `*StreamedLevelRuntimeState`
+  - `*VoxelWorldDirtyChunks`
 - Systems:
   - `updateStreamedLevelObserverSystem` in `PreUpdate`
   - `commitPreparedStreamedChunksSystem` in `Update`
+  - `streamedLevelNavigationSystem` in `Update`
+  - `streamedLevelRuntimeEditedNavigationSystem` in `PostUpdate`
 - Owns:
-  - chunked level loading, terrain streaming, imported base-world streaming, placement chunking, world-delta application
+  - chunked level loading, terrain streaming, imported base-world streaming, placement chunking, world-delta application, voxel graph residency, and revisioned delta rebuilds
 - Best paired with:
   - `ChunkObserverModule`
   - content-loading and authored-level code paths

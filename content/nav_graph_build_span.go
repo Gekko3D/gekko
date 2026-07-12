@@ -66,6 +66,9 @@ func BuildNavSourceSpans(input NavSpanBuildInput) (NavSpanBuildResult, error) {
 		BuilderVersion: input.BuilderVersion,
 		SourceHash:     input.SourceHash,
 		DependencyHash: navSpanBuildDependencyHash(input),
+		ChunkSize:      input.ChunkSize,
+		SolidRuns:      navVoxelRuns(input.Center.SolidVoxels),
+		BlockedRuns:    navVoxelRuns(input.Center.BlockedVoxels),
 	}}
 	centerSolids := append([][3]int(nil), input.Center.SolidVoxels...)
 	sort.Slice(centerSolids, func(i, j int) bool {
@@ -118,6 +121,37 @@ func BuildNavSourceSpans(input NavSpanBuildInput) (NavSpanBuildResult, error) {
 		return NavSpanBuildResult{}, fmt.Errorf("invalid navigation source tile: %s", validation.Error())
 	}
 	return result, nil
+}
+
+func navVoxelRuns(voxels [][3]int) []NavVoxelRunDef {
+	voxels = append([][3]int(nil), voxels...)
+	sort.Slice(voxels, func(i, j int) bool {
+		if voxels[i][0] != voxels[j][0] {
+			return voxels[i][0] < voxels[j][0]
+		}
+		if voxels[i][2] != voxels[j][2] {
+			return voxels[i][2] < voxels[j][2]
+		}
+		return voxels[i][1] < voxels[j][1]
+	})
+	var runs []NavVoxelRunDef
+	for _, voxel := range voxels {
+		x, y, z := voxel[0], voxel[1], voxel[2]
+		if len(runs) > 0 {
+			last := &runs[len(runs)-1]
+			if last.X == x && last.Z == z {
+				if y < last.Y+last.Count {
+					continue
+				}
+				if y == last.Y+last.Count {
+					last.Count++
+					continue
+				}
+			}
+		}
+		runs = append(runs, NavVoxelRunDef{X: x, Y: y, Z: z, Count: 1})
+	}
+	return runs
 }
 
 type navVoxelState uint8

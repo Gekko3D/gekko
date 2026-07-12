@@ -27,6 +27,12 @@ type navSpanClearanceInterval struct {
 	end   int
 }
 
+type navSpanProfileClearanceInterval struct {
+	solidStart   int
+	blockedStart int
+	end          int
+}
+
 const navSpanDistanceInfinity = int64(1 << 60)
 
 // Clearance is the largest conservative cylinder radius that stays outside
@@ -93,6 +99,156 @@ func navSpanIntervalColumnObstructed(input NavSpanBuildInput, chunks map[Terrain
 		count := min(endY-y, input.ChunkSize-localY)
 		start := localY + input.ChunkSize*(localX+input.ChunkSize*localZ)
 		if navSpanBitsAny(chunk.solid, start, start+count) || navSpanBitsAny(chunk.blocked, start, start+count) {
+			return true
+		}
+		y += count
+	}
+	return false
+}
+
+// navSourceWithProfileClearance recomputes clearance from persisted occupancy.
+// Solid support no higher than StepHeight is floor/step context, not a wall.
+// Explicit blockers still subtract from the agent's complete body interval.
+func navSourceWithProfileClearance(source NavSourceTileDef, context []NavSourceTileDef, profile NavAgentProfileDef, voxelResolution float32) (NavSourceTileDef, error) {
+	if source.ChunkSize <= 0 {
+		return NavSourceTileDef{}, fmt.Errorf("navigation source tile chunk_size must be positive")
+	}
+	chunks, err := navSourceOccupancy(source, context)
+	if err != nil {
+		return NavSourceTileDef{}, err
+	}
+	result := source
+	result.Spans = append([]NavSpanDef(nil), source.Spans...)
+	groups := make(map[navSpanProfileClearanceInterval][]int)
+	stepLayers := int(math.Floor(float64(profile.StepHeight / voxelResolution)))
+	heightLayers := int(math.Ceil(float64(profile.Height / voxelResolution)))
+	for i, span := range result.Spans {
+		interval := navSpanProfileClearanceInterval{
+			solidStart: span.Y + stepLayers, blockedStart: span.Y, end: span.Y + heightLayers,
+		}
+		groups[interval] = append(groups[interval], i)
+	}
+	intervals := make([]navSpanProfileClearanceInterval, 0, len(groups))
+	for interval := range groups {
+		intervals = append(intervals, interval)
+	}
+	sort.Slice(intervals, func(i, j int) bool {
+		a, b := intervals[i], intervals[j]
+		if a.solidStart != b.solidStart {
+			return a.solidStart < b.solidStart
+		}
+		if a.blockedStart != b.blockedStart {
+			return a.blockedStart < b.blockedStart
+		}
+		return a.end < b.end
+	})
+
+	width := 3*source.ChunkSize + 2
+	origin := source.ChunkSize + 1
+	field := make([]int64, width*width)
+	line := make([]int64, width)
+	transformed := make([]int64, width)
+	hull := make([]navSpanDistanceLine, width)
+	for _, interval := range intervals {
+		for z := range width {
+			for x := range width {
+				index := x + width*z
+				if navSpanProfileColumnObstructed(source.Coord, source.ChunkSize, chunks, x-origin, z-origin, interval) {
+					field[index] = 0
+				} else {
+					field[index] = navSpanDistanceInfinity
+				}
+			}
+		}
+		navSpanSquaredIntervalDistanceField(field, width, width, line, transformed, hull)
+		for _, spanIndex := range groups[interval] {
+			span := &result.Spans[spanIndex]
+			squared := field[(span.X+origin)+width*(span.Z+origin)]
+			span.ClearanceRadius = float32(math.Sqrt(float64(squared))*0.5) * voxelResolution
+		}
+	}
+	return result, nil
+}
+
+func navSourceOccupancy(source NavSourceTileDef, context []NavSourceTileDef) (map[TerrainChunkCoordDef]navSpanBuildOccupancy, error) {
+	maxInt := int(^uint(0) >> 1)
+	if source.ChunkSize <= 0 || source.ChunkSize > maxInt/source.ChunkSize || source.ChunkSize*source.ChunkSize > (maxInt-63)/source.ChunkSize {
+		return nil, fmt.Errorf("navigation source tile chunk_size is invalid")
+	}
+	cellCount := source.ChunkSize * source.ChunkSize * source.ChunkSize
+	chunks := make(map[TerrainChunkCoordDef]navSpanBuildOccupancy, len(context)+1)
+	add := func(tile NavSourceTileDef) error {
+		if validation := ValidateNavSourceTile(&tile); validation.HasErrors() {
+			return fmt.Errorf("invalid navigation source tile %s: %s", TerrainChunkKey(tile.Coord), validation.Error())
+		}
+		if tile.ChunkSize != source.ChunkSize {
+			return fmt.Errorf("navigation source tile %s has mismatched chunk_size", TerrainChunkKey(tile.Coord))
+		}
+		if _, exists := chunks[tile.Coord]; exists {
+			return fmt.Errorf("duplicate navigation source tile %s", TerrainChunkKey(tile.Coord))
+		}
+		occupancy := navSpanBuildOccupancy{known: true}
+		if len(tile.SolidRuns) > 0 {
+			occupancy.solid = make([]uint64, (cellCount+63)/64)
+		}
+		if len(tile.BlockedRuns) > 0 {
+			occupancy.blocked = make([]uint64, (cellCount+63)/64)
+		}
+		for _, run := range tile.SolidRuns {
+			for y := run.Y; y < run.Y+run.Count; y++ {
+				navSpanSetBit(occupancy.solid, y+source.ChunkSize*(run.X+source.ChunkSize*run.Z))
+			}
+		}
+		for _, run := range tile.BlockedRuns {
+			for y := run.Y; y < run.Y+run.Count; y++ {
+				navSpanSetBit(occupancy.blocked, y+source.ChunkSize*(run.X+source.ChunkSize*run.Z))
+			}
+		}
+		chunks[tile.Coord] = occupancy
+		return nil
+	}
+	for _, tile := range context {
+		if tile.Coord == source.Coord {
+			continue
+		}
+		if absNavSpanInt(tile.Coord.X-source.Coord.X) > 1 || absNavSpanInt(tile.Coord.Y-source.Coord.Y) > 1 || absNavSpanInt(tile.Coord.Z-source.Coord.Z) > 1 {
+			continue
+		}
+		if err := add(tile); err != nil {
+			return nil, err
+		}
+	}
+	if err := add(source); err != nil {
+		return nil, err
+	}
+	return chunks, nil
+}
+
+func navSpanProfileColumnObstructed(center TerrainChunkCoordDef, chunkSize int, chunks map[TerrainChunkCoordDef]navSpanBuildOccupancy, x, z int, interval navSpanProfileClearanceInterval) bool {
+	return navSpanColumnBitsObstructed(center, chunkSize, chunks, x, z, interval.solidStart, interval.end, false) ||
+		navSpanColumnBitsObstructed(center, chunkSize, chunks, x, z, interval.blockedStart, interval.end, true)
+}
+
+func navSpanColumnBitsObstructed(center TerrainChunkCoordDef, chunkSize int, chunks map[TerrainChunkCoordDef]navSpanBuildOccupancy, x, z, startY, endY int, blocked bool) bool {
+	coord := center
+	coord.X += floorDivNavSpan(x, chunkSize)
+	coord.Z += floorDivNavSpan(z, chunkSize)
+	localX := positiveModNavSpan(x, chunkSize)
+	localZ := positiveModNavSpan(z, chunkSize)
+	for y := startY; y < endY; {
+		coord.Y = center.Y + floorDivNavSpan(y, chunkSize)
+		chunk, exists := chunks[coord]
+		if !exists || !chunk.known {
+			return true
+		}
+		localY := positiveModNavSpan(y, chunkSize)
+		count := min(endY-y, chunkSize-localY)
+		start := localY + chunkSize*(localX+chunkSize*localZ)
+		bits := chunk.solid
+		if blocked {
+			bits = chunk.blocked
+		}
+		if navSpanBitsAny(bits, start, start+count) {
 			return true
 		}
 		y += count

@@ -139,7 +139,7 @@ func TestNavSpanGraphReachability(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			source := NavSourceTileDef{
 				NavID: "test", SchemaVersion: CurrentNavSourceTileSchemaVersion, BuilderVersion: "test",
-				SourceHash: "source", DependencyHash: "dependencies", Spans: test.spans,
+				SourceHash: "source", DependencyHash: "dependencies", ChunkSize: 8, Spans: test.spans,
 			}
 			built, err := BuildNavSpanGraph(source, test.profile, 1)
 			if err != nil {

@@ -17,6 +17,7 @@ func TestNavGraphContracts(t *testing.T) {
 		BuilderVersion: "voxel_graph_v1",
 		SourceHash:     "source",
 		DependencyHash: "dependencies",
+		ChunkSize:      32,
 		Spans: []NavSpanDef{
 			{ID: 0, X: 0, Y: 1, Z: 0, SupportHeight: 1, CeilingHeight: 4, Headroom: 3, ClearanceRadius: 1, Area: "ground"},
 			{ID: 1, X: 1, Y: 1, Z: 0, SupportHeight: 1, CeilingHeight: 4, Headroom: 3, ClearanceRadius: 1, Area: "ground"},

@@ -100,7 +100,7 @@ func ValidateNavGraphBake(bake *NavGraphBakeResult) NavGraphValidationResult {
 			result.addError("missing_source_tile", fmt.Sprintf("navigation manifest source tile %s was not provided", TerrainChunkKey(entry.Coord)))
 			continue
 		}
-		if source.NavID != bake.Manifest.NavID || source.BuilderVersion != bake.Manifest.BuilderVersion || source.SourceHash != entry.SourceHash || source.DependencyHash != entry.DependencyHash {
+		if source.NavID != bake.Manifest.NavID || source.BuilderVersion != bake.Manifest.BuilderVersion || source.ChunkSize != bake.Manifest.ChunkSize || source.SourceHash != entry.SourceHash || source.DependencyHash != entry.DependencyHash {
 			result.addError("source_tile_metadata_mismatch", fmt.Sprintf("navigation source tile %s does not match manifest", TerrainChunkKey(entry.Coord)))
 		}
 	}

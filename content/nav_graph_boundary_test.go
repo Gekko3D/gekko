@@ -22,7 +22,7 @@ func TestConnectNavGraphTiles(t *testing.T) {
 		}
 		return NavSourceTileDef{
 			NavID: "test", SchemaVersion: CurrentNavSourceTileSchemaVersion, Coord: coord,
-			BuilderVersion: "test", SourceHash: sourceHash, DependencyHash: "pending", Spans: spans,
+			BuilderVersion: "test", SourceHash: sourceHash, DependencyHash: "pending", ChunkSize: chunkSize, Spans: spans,
 		}
 	}
 	buildGraph := func(source NavSourceTileDef) NavGraphTileDef {

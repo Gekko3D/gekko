@@ -8,7 +8,7 @@ import (
 	"sort"
 )
 
-const CurrentNavGraphBuilderVersion = "voxel_graph_v2"
+const CurrentNavGraphBuilderVersion = "voxel_graph_v3"
 
 type NavGraphBakeDiagnosticCount struct {
 	Coord          TerrainChunkCoordDef `json:"coord"`
@@ -128,7 +128,7 @@ func BakeNavGraphWorld(world *ImportedWorldDef, chunks []ImportedWorldChunkDef, 
 	for profileIndex, profile := range profiles {
 		graphs := make([]NavGraphTileDef, 0, len(result.SourceTiles))
 		for _, source := range result.SourceTiles {
-			built, err := BuildNavSpanGraph(source, profile, world.VoxelResolution)
+			built, err := BuildNavSpanGraphWithContext(source, result.SourceTiles, profile, world.VoxelResolution)
 			if err != nil {
 				return NavGraphBakeResult{}, fmt.Errorf("build navigation graph tile %s for %q: %w", TerrainChunkKey(source.Coord), profile.ID, err)
 			}
@@ -144,7 +144,7 @@ func BakeNavGraphWorld(world *ImportedWorldDef, chunks []ImportedWorldChunkDef, 
 				}
 			})
 		}
-		_, graphs, err := ConnectNavGraphTiles(result.SourceTiles, graphs, profile, world.ChunkSize, world.VoxelResolution)
+		_, graphs, err := ConnectNavGraphTilesWithContext(result.SourceTiles, graphs, profile, world.ChunkSize, world.VoxelResolution)
 		if err != nil {
 			return NavGraphBakeResult{}, fmt.Errorf("connect navigation graph tiles for %q: %w", profile.ID, err)
 		}

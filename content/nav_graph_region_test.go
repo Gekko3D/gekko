@@ -8,7 +8,7 @@ func TestCompressNavGraphRegions(t *testing.T) {
 		t.Helper()
 		source := NavSourceTileDef{
 			NavID: "test", SchemaVersion: CurrentNavSourceTileSchemaVersion, BuilderVersion: "test",
-			SourceHash: "source", DependencyHash: "dependencies", Spans: spans,
+			SourceHash: "source", DependencyHash: "dependencies", ChunkSize: 4, Spans: spans,
 		}
 		built, err := BuildNavSpanGraph(source, profile, 1)
 		if err != nil {
@@ -74,7 +74,7 @@ func TestCompressNavGraphRegions(t *testing.T) {
 		graph.SpanTransitions = graph.SpanTransitions[:1]
 		source := NavSourceTileDef{
 			NavID: "test", SchemaVersion: CurrentNavSourceTileSchemaVersion, BuilderVersion: "test",
-			SourceHash: "source", DependencyHash: "dependencies", Spans: spans,
+			SourceHash: "source", DependencyHash: "dependencies", ChunkSize: 4, Spans: spans,
 		}
 		graph, err := CompressNavGraphRegions(source, graph, 1)
 		if err != nil {

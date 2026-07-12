@@ -12,6 +12,16 @@ import (
 // known graph tiles. Missing graph tiles stay disconnected. Sources may include
 // halo-only tiles; their source hashes participate in dependency hashes.
 func ConnectNavGraphTiles(sources []NavSourceTileDef, graphs []NavGraphTileDef, profile NavAgentProfileDef, chunkSize int, voxelResolution float32) ([]NavSourceTileDef, []NavGraphTileDef, error) {
+	return connectNavGraphTiles(sources, graphs, profile, chunkSize, voxelResolution, false)
+}
+
+// ConnectNavGraphTilesWithContext recomputes profile clearance from source
+// occupancy before validating cross-tile transitions.
+func ConnectNavGraphTilesWithContext(sources []NavSourceTileDef, graphs []NavGraphTileDef, profile NavAgentProfileDef, chunkSize int, voxelResolution float32) ([]NavSourceTileDef, []NavGraphTileDef, error) {
+	return connectNavGraphTiles(sources, graphs, profile, chunkSize, voxelResolution, true)
+}
+
+func connectNavGraphTiles(sources []NavSourceTileDef, graphs []NavGraphTileDef, profile NavAgentProfileDef, chunkSize int, voxelResolution float32, profileClearance bool) ([]NavSourceTileDef, []NavGraphTileDef, error) {
 	if chunkSize <= 0 {
 		return nil, nil, fmt.Errorf("navigation graph chunk size must be positive")
 	}
@@ -38,10 +48,24 @@ func ConnectNavGraphTiles(sources []NavSourceTileDef, graphs []NavGraphTileDef, 
 		if validation := ValidateNavSourceTile(&sources[i]); validation.HasErrors() {
 			return nil, nil, fmt.Errorf("invalid navigation source tile %s: %s", TerrainChunkKey(sources[i].Coord), validation.Error())
 		}
+		if sources[i].ChunkSize != chunkSize {
+			return nil, nil, fmt.Errorf("navigation source tile %s has mismatched chunk_size", TerrainChunkKey(sources[i].Coord))
+		}
 		for _, span := range sources[i].Spans {
 			if span.X < 0 || span.X >= chunkSize || span.Z < 0 || span.Z >= chunkSize {
 				return nil, nil, fmt.Errorf("navigation source span %d is outside tile %s", span.ID, TerrainChunkKey(sources[i].Coord))
 			}
+		}
+	}
+	boundarySources := sources
+	if profileClearance {
+		boundarySources = append([]NavSourceTileDef(nil), sources...)
+		for i := range sources {
+			profiled, err := navSourceWithProfileClearance(sources[i], sources, profile, voxelResolution)
+			if err != nil {
+				return nil, nil, fmt.Errorf("calculate navigation clearance for tile %s: %w", TerrainChunkKey(sources[i].Coord), err)
+			}
+			boundarySources[i] = profiled
 		}
 	}
 
@@ -96,7 +120,7 @@ func ConnectNavGraphTiles(sources []NavSourceTileDef, graphs []NavGraphTileDef, 
 			if graphs[i].NavID != graphs[neighbor].NavID || graphs[i].BuilderVersion != graphs[neighbor].BuilderVersion {
 				return nil, nil, fmt.Errorf("navigation graph tiles %s and %s have incompatible metadata", TerrainChunkKey(graphs[i].Coord), TerrainChunkKey(graphs[neighbor].Coord))
 			}
-			connectNavGraphBoundary(sources[sourceIndex[graphs[i].Coord]], sources[sourceIndex[neighborCoord]], &graphs[i], &graphs[neighbor], profile, chunkSize, voxelResolution, boundaryGroups[i], boundaryGroups[neighbor])
+			connectNavGraphBoundary(boundarySources[sourceIndex[graphs[i].Coord]], boundarySources[sourceIndex[neighborCoord]], &graphs[i], &graphs[neighbor], profile, chunkSize, voxelResolution, boundaryGroups[i], boundaryGroups[neighbor])
 		}
 	}
 

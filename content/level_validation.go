@@ -206,6 +206,7 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 
 	validateLevelTerrain(&result, def, opts)
 	validateLevelBaseWorld(&result, def, opts)
+	validateLevelNavigation(&result, def, opts)
 	validateShooterLevelRequirements(&result, def, opts)
 
 	return result
@@ -979,6 +980,42 @@ func validateLevelBaseWorld(result *LevelValidationResult, def *LevelDef, opts L
 	}
 	if def.VoxelResolution > 0 && absLevelFloat32(importedWorld.VoxelResolution-def.VoxelResolution) > 1e-4 {
 		result.addError("base_world_voxel_resolution_mismatch", fmt.Sprintf("base world voxel size %.4f does not match level voxel size %.4f", importedWorld.VoxelResolution, def.VoxelResolution), "", "", "", "", "", "", baseWorld.ManifestPath)
+	}
+}
+
+func validateLevelNavigation(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions) {
+	if def == nil || def.Navigation == nil {
+		return
+	}
+	path := strings.TrimSpace(def.Navigation.ManifestPath)
+	if path == "" {
+		result.addError("empty_navigation_manifest_path", "navigation manifest_path is required", "", "", "", "", "", "", path)
+		return
+	}
+	resolved := ResolveDocumentPath(path, opts.DocumentPath)
+	if strings.ToLower(filepath.Ext(resolved)) != NavGraphManifestExtension {
+		result.addError("invalid_navigation_manifest_path", fmt.Sprintf("navigation manifest_path must point to a %s: %s", NavGraphManifestExtension, path), "", "", "", "", "", "", path)
+		return
+	}
+	if opts.DocumentPath == "" {
+		return
+	}
+	manifest, err := LoadNavGraphManifest(resolved)
+	if err != nil {
+		result.addError("invalid_navigation_manifest", fmt.Sprintf("failed to load navigation manifest %s: %v", path, err), "", "", "", "", "", "", path)
+		return
+	}
+	if def.BaseWorld != nil {
+		worldPath := ResolveDocumentPath(def.BaseWorld.ManifestPath, opts.DocumentPath)
+		if world, err := LoadImportedWorld(worldPath); err == nil && manifest.SourceWorldID != "" && manifest.SourceWorldID != world.WorldID {
+			result.addError("navigation_source_world_id_mismatch", fmt.Sprintf("navigation source world id %q does not match base world %q", manifest.SourceWorldID, world.WorldID), "", "", "", "", "", "", path)
+		}
+	}
+	if def.ChunkSize > 0 && manifest.ChunkSize != def.ChunkSize {
+		result.addError("navigation_chunk_size_mismatch", fmt.Sprintf("navigation chunk size %d does not match level chunk size %d", manifest.ChunkSize, def.ChunkSize), "", "", "", "", "", "", path)
+	}
+	if def.VoxelResolution > 0 && absLevelFloat32(manifest.VoxelResolution-def.VoxelResolution) > 1e-4 {
+		result.addError("navigation_voxel_resolution_mismatch", fmt.Sprintf("navigation voxel size %.4f does not match level voxel size %.4f", manifest.VoxelResolution, def.VoxelResolution), "", "", "", "", "", "", path)
 	}
 }
 

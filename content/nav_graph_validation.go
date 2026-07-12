@@ -98,6 +98,11 @@ func ValidateNavSourceTile(def *NavSourceTileDef) NavGraphValidationResult {
 	}
 	validateNavHeader(&result, def.NavID, def.SchemaVersion, CurrentNavSourceTileSchemaVersion, def.BuilderVersion)
 	validateHashes(&result, def.SourceHash, def.DependencyHash)
+	if def.ChunkSize <= 0 {
+		result.addError("invalid_chunk_size", "navigation source tile chunk_size must be positive")
+	}
+	validateNavVoxelRuns(&result, "solid", def.SolidRuns, def.ChunkSize)
+	validateNavVoxelRuns(&result, "blocked", def.BlockedRuns, def.ChunkSize)
 	for i, span := range def.Spans {
 		if span.ID != uint32(i) {
 			result.addError("invalid_span_id", fmt.Sprintf("navigation span at index %d must have id %d", i, i))
@@ -112,6 +117,21 @@ func ValidateNavSourceTile(def *NavSourceTileDef) NavGraphValidationResult {
 		validateNonNegative(&result, "invalid_span_clearance", fmt.Sprintf("navigation span %d clearance_radius", span.ID), span.ClearanceRadius)
 	}
 	return result
+}
+
+func validateNavVoxelRuns(result *NavGraphValidationResult, label string, runs []NavVoxelRunDef, chunkSize int) {
+	for i, run := range runs {
+		if run.X < 0 || run.Y < 0 || run.Z < 0 || run.X >= chunkSize || run.Y >= chunkSize || run.Z >= chunkSize || run.Count <= 0 || run.Count > chunkSize-run.Y {
+			result.addError("invalid_voxel_run", fmt.Sprintf("navigation %s voxel run %d is outside chunk", label, i))
+		}
+		if i == 0 {
+			continue
+		}
+		previous := runs[i-1]
+		if run.X < previous.X || run.X == previous.X && (run.Z < previous.Z || run.Z == previous.Z && run.Y <= previous.Y+previous.Count) {
+			result.addError("unsorted_voxel_runs", fmt.Sprintf("navigation %s voxel runs must be sorted, disjoint, and merged", label))
+		}
+	}
 }
 
 func ValidateNavGraphTile(def *NavGraphTileDef) NavGraphValidationResult {

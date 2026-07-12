@@ -17,6 +17,7 @@ func TestFindNavGraphRoute(t *testing.T) {
 			}
 			sources[tile].NavID = "test"
 			sources[tile].SchemaVersion = CurrentNavSourceTileSchemaVersion
+			sources[tile].ChunkSize = chunkSize
 			sources[tile].Coord = TerrainChunkCoordDef{X: tile}
 			sources[tile].BuilderVersion = "test"
 			sources[tile].SourceHash = TerrainChunkKey(sources[tile].Coord)
@@ -72,6 +73,7 @@ func TestFindNavGraphRoute(t *testing.T) {
 		source := NavSourceTileDef{
 			NavID: "stacked", SchemaVersion: CurrentNavSourceTileSchemaVersion,
 			BuilderVersion: "test", SourceHash: "source", DependencyHash: "dependencies",
+			ChunkSize: chunkSize,
 			Spans: []NavSpanDef{
 				{ID: 0, X: 0, Z: 0, SupportHeight: 0, CeilingHeight: 2, Headroom: 2, ClearanceRadius: 1},
 				{ID: 1, X: 0, Y: 3, Z: 0, SupportHeight: 3, CeilingHeight: 6, Headroom: 3, ClearanceRadius: 1},

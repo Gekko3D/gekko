@@ -93,6 +93,107 @@ func TestNavSpanClearanceAndProfileSupport(t *testing.T) {
 	}
 }
 
+func TestProfileClearanceTreatsReachableRampAsSupport(t *testing.T) {
+	profile := NavAgentProfileDef{ID: "walker", Radius: 0.4, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 50}
+	for _, fixture := range []struct {
+		name                  string
+		resolution            float32
+		chunkSize, minX, maxX int
+		minZ, maxZ, routeZ    int
+	}{
+		{name: "fine", resolution: 0.1, chunkSize: 32, minX: 5, maxX: 24, minZ: 5, maxZ: 26, routeZ: 16},
+		{name: "coarse", resolution: 0.2, chunkSize: 16, minX: 3, maxX: 12, minZ: 3, maxZ: 12, routeZ: 8},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			var solids [][3]int
+			for x := fixture.minX; x <= fixture.maxX; x++ {
+				for z := fixture.minZ; z <= fixture.maxZ; z++ {
+					for y := 0; y <= (x-fixture.minX)/2; y++ {
+						solids = append(solids, [3]int{x, y, z})
+					}
+				}
+			}
+			built, err := BuildNavSourceSpans(NavSpanBuildInput{
+				NavID: "ramp", BuilderVersion: "test", SourceHash: "source",
+				ChunkSize: fixture.chunkSize, VoxelResolution: fixture.resolution,
+				Center: NavSpanBuildChunk{Known: true, SolidVoxels: solids},
+			})
+			if err != nil {
+				t.Fatalf("build source: %v", err)
+			}
+			spanAt := func(x int) NavSpanDef {
+				t.Helper()
+				for _, span := range built.Source.Spans {
+					if span.X == x && span.Z == fixture.routeZ {
+						return span
+					}
+				}
+				t.Fatalf("missing ramp span at %d,%d", x, fixture.routeZ)
+				return NavSpanDef{}
+			}
+			oldRejected := spanAt(fixture.minX + 5)
+			if oldRejected.ClearanceRadius >= profile.Radius {
+				t.Fatalf("fixture no longer reproduces raw-clearance bug: %+v", oldRejected)
+			}
+
+			graph, err := BuildNavSpanGraphWithContext(built.Source, []NavSourceTileDef{built.Source}, profile, fixture.resolution)
+			if err != nil {
+				t.Fatalf("build profile graph: %v", err)
+			}
+			start, goal := spanAt(fixture.minX+2), spanAt(fixture.maxX-2)
+			if !containsNavSpanID(graph.Graph.SpanIDs, oldRejected.ID) || !containsNavSpanID(graph.Graph.SpanIDs, start.ID) || !containsNavSpanID(graph.Graph.SpanIDs, goal.ID) {
+				t.Fatalf("reachable ramp spans rejected: old=%d start=%d goal=%d diagnostics=%+v", oldRejected.ID, start.ID, goal.ID, graph.SpanDiagnostics)
+			}
+			route, err := FindNavSpanRoute(built.Source, graph.Graph, fixture.resolution, start.ID, goal.ID)
+			if err != nil || !route.Found {
+				t.Fatalf("ramp route failed: route=%+v err=%v", route, err)
+			}
+		})
+	}
+
+	t.Run("tall wall still subtracts clearance", func(t *testing.T) {
+		const chunkSize = 24
+		var solids [][3]int
+		for x := range chunkSize {
+			for z := range chunkSize {
+				solids = append(solids, [3]int{x, 0, z})
+			}
+		}
+		for z := range chunkSize {
+			for y := 1; y < 20; y++ {
+				solids = append(solids, [3]int{12, y, z})
+			}
+		}
+		built, err := BuildNavSourceSpans(NavSpanBuildInput{
+			NavID: "wall", BuilderVersion: "test", SourceHash: "source", ChunkSize: chunkSize, VoxelResolution: 0.1,
+			Center: NavSpanBuildChunk{Known: true, SolidVoxels: solids},
+		})
+		if err != nil {
+			t.Fatalf("build source: %v", err)
+		}
+		graph, err := BuildNavSpanGraphWithContext(built.Source, []NavSourceTileDef{built.Source}, profile, 0.1)
+		if err != nil {
+			t.Fatalf("build profile graph: %v", err)
+		}
+		spanID := func(x int) uint32 {
+			t.Helper()
+			for _, span := range built.Source.Spans {
+				if span.X == x && span.Z == 12 && span.Y == 1 {
+					return span.ID
+				}
+			}
+			t.Fatalf("missing floor span at x=%d", x)
+			return 0
+		}
+		if containsNavSpanID(graph.Graph.SpanIDs, spanID(8)) {
+			t.Fatal("span whose cylinder overlaps tall wall was accepted")
+		}
+		if !containsNavSpanID(graph.Graph.SpanIDs, spanID(7)) {
+			t.Fatal("span outside wall radius was rejected")
+		}
+	})
+}
+
 func TestNavSpanSquaredIntervalDistanceField(t *testing.T) {
 	const width, height = 4, 3
 	for mask := 1; mask < 1<<(width*height); mask++ {

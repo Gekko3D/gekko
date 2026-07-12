@@ -45,6 +45,7 @@ type PostSpawnTerrainHook func(cmd *Commands, ctx PostSpawnTerrainContext)
 
 type StreamedLevelRuntimeConfig struct {
 	LevelPath                       string
+	NavigationManifestPath          string
 	Loader                          *RuntimeContentLoader
 	StreamingRadius                 int
 	StreamingKeepRadius             int
@@ -252,31 +253,44 @@ type StreamedLevelRuntimeState struct {
 	MarkerEntities             map[string]EntityId
 	LightEntities              map[string]EntityId
 
-	DesiredChunks         map[ChunkCoord]struct{}
-	KeepChunks            map[ChunkCoord]struct{}
-	CollisionChunks       map[ChunkCoord]struct{}
-	DestructionChunks     map[ChunkCoord]struct{}
-	DesiredSectors        map[ChunkCoord]struct{}
-	KeepSectors           map[ChunkCoord]struct{}
-	DesiredProxySectors   map[ChunkCoord]struct{}
-	KeepProxySectors      map[ChunkCoord]struct{}
-	PendingLoads          map[ChunkCoord]struct{}
-	PendingProxyLoads     map[ChunkCoord]struct{}
-	PreparedLoads         chan streamedPreparedChunk
-	PreparedProxyLoads    chan streamedPreparedSectorProxy
-	PreparedGeometryCache *streamedPreparedGeometryCache
-	activePrepareMu       sync.Mutex
-	activeChunkPrepares   int
-	activeProxyPrepares   int
-	LoadedChunks          map[ChunkCoord]*streamedLoadedChunk
-	LoadedSectorProxies   map[ChunkCoord]*streamedLoadedSectorProxy
-	PlacementsByChunk     map[ChunkCoord][]streamedPlacementInstance
-	PlacementChunk        map[string]ChunkCoord
-	ObjectChunk           map[string]ChunkCoord
-	TerrainEntries        map[ChunkCoord]content.TerrainChunkEntryDef
-	ImportedWorldSectors  map[ChunkCoord]content.ImportedWorldSectorDef
-	ImportedChunkSector   map[ChunkCoord]ChunkCoord
-	ImportedWorldEntries  map[ChunkCoord]content.ImportedWorldChunkEntryDef
+	DesiredChunks           map[ChunkCoord]struct{}
+	KeepChunks              map[ChunkCoord]struct{}
+	CollisionChunks         map[ChunkCoord]struct{}
+	DestructionChunks       map[ChunkCoord]struct{}
+	DesiredSectors          map[ChunkCoord]struct{}
+	KeepSectors             map[ChunkCoord]struct{}
+	DesiredProxySectors     map[ChunkCoord]struct{}
+	KeepProxySectors        map[ChunkCoord]struct{}
+	PendingLoads            map[ChunkCoord]struct{}
+	PendingProxyLoads       map[ChunkCoord]struct{}
+	PreparedLoads           chan streamedPreparedChunk
+	PreparedProxyLoads      chan streamedPreparedSectorProxy
+	PreparedGeometryCache   *streamedPreparedGeometryCache
+	activePrepareMu         sync.Mutex
+	activeChunkPrepares     int
+	activeProxyPrepares     int
+	LoadedChunks            map[ChunkCoord]*streamedLoadedChunk
+	LoadedSectorProxies     map[ChunkCoord]*streamedLoadedSectorProxy
+	PlacementsByChunk       map[ChunkCoord][]streamedPlacementInstance
+	PlacementChunk          map[string]ChunkCoord
+	ObjectChunk             map[string]ChunkCoord
+	TerrainEntries          map[ChunkCoord]content.TerrainChunkEntryDef
+	ImportedWorldSectors    map[ChunkCoord]content.ImportedWorldSectorDef
+	ImportedChunkSector     map[ChunkCoord]ChunkCoord
+	ImportedWorldEntries    map[ChunkCoord]content.ImportedWorldChunkEntryDef
+	BaseNavManifestPath     string
+	BaseNavManifest         *content.NavGraphManifestDef
+	NavigationSources       []content.NavSourceTileDef
+	NavigationGraphs        []content.NavGraphTileDef
+	NavigationRevision      uint64
+	navigationDesired       map[content.TerrainChunkCoordDef]struct{}
+	navigationLoadedGen     uint64
+	navigationRequestedGen  uint64
+	navigationLoadActive    bool
+	navigationLoads         chan streamedNavigationLoadResult
+	navigationRebuildActive bool
+	navigationRebuilds      chan streamedNavigationRebuildResult
+	navigationEditRevisions map[EntityId]uint64
 
 	WorldDeltaPath   string
 	WorldDataDir     string
@@ -367,6 +381,7 @@ type streamedPreparedSectorProxy struct {
 }
 
 func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
+	cmd.AddResources(&VoxelWorldDirtyChunks{Imported: make(map[voxelWorldDirtyChunkKey]*content.ImportedWorldChunkDef)})
 	cmd.AddResources(&StreamedLevelRuntimeState{
 		DesiredChunks:            make(map[ChunkCoord]struct{}),
 		KeepChunks:               make(map[ChunkCoord]struct{}),
@@ -396,9 +411,15 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		terrainOverrideMap:       make(map[string]content.TerrainChunkOverrideDef),
 		importedWorldOverrideMap: make(map[string]content.ImportedWorldChunkOverrideDef),
 		voxelOverrideMap:         make(map[string]content.VoxelObjectOverrideDef),
+		navigationDesired:        make(map[content.TerrainChunkCoordDef]struct{}),
+		navigationLoads:          make(chan streamedNavigationLoadResult, 2),
+		navigationRebuilds:       make(chan streamedNavigationRebuildResult, 2),
+		navigationEditRevisions:  make(map[EntityId]uint64),
 	})
 	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
 	app.UseSystem(System(commitPreparedStreamedChunksSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelNavigationSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelRuntimeEditedNavigationSystem).InStage(PostUpdate).RunAlways())
 }
 
 func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedLevelRuntimeConfig) error {
@@ -537,6 +558,17 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.terrainOverrideMap = make(map[string]content.TerrainChunkOverrideDef)
 	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
 	state.voxelOverrideMap = make(map[string]content.VoxelObjectOverrideDef)
+	state.BaseNavManifestPath = ""
+	state.BaseNavManifest = nil
+	state.NavigationSources = nil
+	state.NavigationGraphs = nil
+	state.NavigationRevision = 0
+	state.navigationDesired = make(map[content.TerrainChunkCoordDef]struct{})
+	state.navigationLoadedGen = 0
+	state.navigationRequestedGen = 0
+	state.navigationLoadActive = false
+	state.navigationRebuildActive = false
+	state.navigationEditRevisions = make(map[EntityId]uint64)
 
 	for _, override := range worldDelta.PlacementTransformOverrides {
 		state.placementOverrideMap[override.PlacementID] = override.Transform
@@ -625,6 +657,10 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 				state.BaseWorldPalette = assets.CreateSimplePalette([4]uint8{160, 160, 160, 255})
 			}
 		}
+	}
+	if err := configureStreamedNavigationManifest(state, level, cfg); err != nil {
+		state.InitErr = err
+		return err
 	}
 
 	placements, err := buildEffectiveStreamedPlacementIndex(level, cfg.LevelPath, state.placementOverrideMap, state.deletedPlacementIDs, cfg.MaxVolumeInstances)
@@ -854,6 +890,7 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 	state.KeepSectors = keepSectors
 	state.DesiredProxySectors = desiredProxySectors
 	state.KeepProxySectors = keepProxySectors
+	requestStreamedNavigationResidency(state, desired)
 	for coord := range state.LoadedChunks {
 		if _, ok := keep[coord]; ok {
 			continue

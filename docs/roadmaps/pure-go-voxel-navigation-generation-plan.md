@@ -197,6 +197,13 @@ Requirements:
 - topology uses integer coordinates
 - world-space floats are descriptive values, not connectivity keys
 
+Source schema v2 also persists deterministic vertical solid and blocker runs
+for each chunk. Profile graphs recompute clearance from those occupancy facts:
+solid support at or below the profile step envelope is traversable floor/step
+context, while taller solids, ceilings, blockers, and unknown halo remain
+obstructions. This keeps source geometry profile-independent without treating
+fine voxel ramps as walls.
+
 ### Span Reference
 
 ```go
@@ -379,6 +386,8 @@ surfaces are unnecessary.
 ### Agent Filtering
 
 - Accepted spans meet height and radius requirements.
+- Ramp/step support within `StepHeight` is floor context, not lateral wall
+  occupancy; taller solids and blockers still subtract clearance.
 - A larger compatible agent cannot gain clearance-only spans absent for a
   smaller agent.
 - Modifier hints may subtract ordinary traversal but cannot invent support.
@@ -543,7 +552,9 @@ and unknown halo. No graph regions or pathfinding exist yet.
 
 Purpose: determine which spans and local transitions support an agent.
 
-- [x] Compute conservative horizontal clearance.
+- [x] Compute conservative horizontal clearance from persisted occupancy.
+- [x] Exclude reachable support inside the profile step envelope from wall
+  clearance while preserving tall solids and full-height blockers.
 - [x] Filter by agent height and radius.
 - [x] Apply blocker metadata as subtraction only.
 - [x] Record stable rejection reasons.
@@ -657,13 +668,13 @@ manual graph coverage is accepted on the lab and representative maps.
 
 Purpose: make graph navigation follow streamed and edited voxel worlds.
 
-- [ ] Stream source/graph tiles near navigation observers.
-- [ ] Reuse world dirty-chunk notifications.
-- [ ] Expand dirty dependencies by required halo.
-- [ ] Run full bake and delta rebuild through the same generator.
-- [ ] Persist delta graph overrides beside world delta data.
-- [ ] Swap revisions atomically across affected neighboring transitions.
-- [ ] Suppress stale static data with explicit empty overrides.
+- [x] Stream source/graph tiles near navigation observers.
+- [x] Reuse world dirty-chunk notifications.
+- [x] Expand dirty dependencies by required halo.
+- [x] Run full bake and delta rebuild through the same generator.
+- [x] Persist delta graph overrides beside world delta data.
+- [x] Swap revisions atomically across affected neighboring transitions.
+- [x] Suppress stale static data with explicit empty overrides.
 
 Gate: removed floor, restored floor, blocker, and seam edits update routes after
 revision swap; full and delta generation agree for identical effective input.

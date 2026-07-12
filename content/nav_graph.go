@@ -2,7 +2,7 @@ package content
 
 const (
 	CurrentNavGraphManifestSchemaVersion = 1
-	CurrentNavSourceTileSchemaVersion    = 1
+	CurrentNavSourceTileSchemaVersion    = 2
 	CurrentNavGraphTileSchemaVersion     = 1
 
 	NavGraphManifestExtension = ".gknav"
@@ -57,6 +57,14 @@ type NavSpanRunDef struct {
 	Count uint32 `json:"count"`
 }
 
+// NavVoxelRunDef stores one vertical run of occupied source voxels.
+type NavVoxelRunDef struct {
+	X     int `json:"x"`
+	Y     int `json:"y"`
+	Z     int `json:"z"`
+	Count int `json:"count"`
+}
+
 type NavRegionDef struct {
 	ID        uint32          `json:"id"`
 	SpanRuns  []NavSpanRunDef `json:"span_runs,omitempty"`
@@ -90,6 +98,9 @@ type NavSourceTileDef struct {
 	BuilderVersion string               `json:"builder_version"`
 	SourceHash     string               `json:"source_hash"`
 	DependencyHash string               `json:"dependency_hash"`
+	ChunkSize      int                  `json:"chunk_size"`
+	SolidRuns      []NavVoxelRunDef     `json:"solid_runs,omitempty"`
+	BlockedRuns    []NavVoxelRunDef     `json:"blocked_runs,omitempty"`
 	Spans          []NavSpanDef         `json:"spans,omitempty"`
 }
 

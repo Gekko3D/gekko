@@ -55,6 +55,7 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 	voxObj.XBrickMap = editableMap
 	MarkVoxelEntityPersistenceDirty(cmd, event.Entity)
 	state.markRuntimeEditedVoxelEntity(event.Entity)
+	notifyImportedWorldChunkDirty(cmd, event.Entity, editableMap)
 
 	// 2. Detect disconnected components
 	components := editableMap.SplitDisconnectedComponents()

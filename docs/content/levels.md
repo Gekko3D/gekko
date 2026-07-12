@@ -13,6 +13,7 @@ A level describes:
 - procedural placement volumes
 - optional terrain
 - optional imported base-world data
+- optional voxel navigation graph manifest
 - optional player controller defaults
 - environment preset selection
 - authored lights and water bodies
@@ -36,6 +37,7 @@ The top-level `LevelDef` contains:
 - `voxel_resolution`
 - `terrain`
 - `base_world`
+- `navigation`
 - `player`
 - `placements`
 - `placement_volumes`
@@ -119,6 +121,19 @@ Important runtime distinction:
   - loads and streams imported base-world chunks from the referenced manifest
 
 So `base_world` is part of the authored level contract, but it is mainly consumed by the streamed-level runtime path.
+
+### Navigation
+
+`navigation.manifest_path` points to pure-Go voxel graph data in a `.gknav`
+manifest. Validation checks source-world identity, chunk size, and voxel
+resolution against level/base-world contracts. Streamed runtime loads source
+and profile graph tiles near existing level observers; no polygon data or
+fallback exists.
+
+Navigation source schema v2 / builder `voxel_graph_v3` stores compact solid and
+blocker runs so agent clearance is derived above each profile's reachable step
+envelope. Older graph bundles must be rebaked; this prevents walkable
+fine-voxel ramps from appearing as clearance-rejected spans.
 
 ### Player
 
@@ -291,6 +306,7 @@ That applies to:
 - `placement_volumes[].asset_set_path`
 - `terrain.source_path`
 - `base_world.manifest_path`
+- `navigation.manifest_path`
 
 Prefer keeping paths relative to the `.gklevel` file so levels remain portable across tools and modules.
 
@@ -312,6 +328,7 @@ Prefer keeping paths relative to the `.gklevel` file so levels remain portable a
 - referenced asset sets load and validate
 - terrain kind, extension, file existence, and chunk-size or voxel-size compatibility
 - base-world kind, extension, file existence, and chunk-size or voxel-size compatibility
+- navigation manifest extension, validity, source-world identity, and chunk-size or voxel-size compatibility
 
 There is also shooter-specific validation:
 
@@ -347,6 +364,7 @@ It uses the level to drive:
 - chunk-local placement spawning
 - terrain chunk streaming
 - imported base-world chunk streaming
+- voxel navigation source/graph tile streaming
 - world-delta and override application
 - optional automatic player spawning at markers
 

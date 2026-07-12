@@ -144,6 +144,8 @@ It extends authored levels with:
 - terrain streaming
 - imported base-world streaming
 - world-delta override application
+- observer-local voxel navigation graph residency
+- asynchronous navigation rebuilds after imported-world voxel edits
 
 Important state:
 
@@ -153,6 +155,7 @@ Important state:
 - imported-world entry map
 - placement chunk map
 - world-delta and override maps
+- resident navigation source/graph tiles and atomic navigation revision
 
 Important public entry point:
 
@@ -772,9 +775,21 @@ Main top-level fields:
 - placement deletions
 - terrain chunk overrides
 - imported-world chunk overrides
+- navigation source-tile overrides
+- navigation profile graph-tile overrides
 - voxel object overrides
 
 Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`.
+
+Navigation delta files live below `<delta file>_data/nav_graph`. Dirty imported
+world chunks expand through generator halo dependencies. Source and neighboring
+graph overrides publish together; explicit empty overrides suppress stale
+static tiles. Runtime keeps old resident graph until complete replacement set
+loads, then swaps slices and increments `NavigationRevision` once.
+
+`StreamedLevelRuntimeConfig.NavigationManifestPath` may override the level's
+`navigation.manifest_path` for development runs. Actiongame exposes this as
+`GEKKO_NAV_GRAPH`; authored levels should keep the path in the level document.
 
 Important helpers:
 
