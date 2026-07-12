@@ -1,6 +1,9 @@
 package content
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 const (
 	NavSpanBuildUnknownOpenInterval   = "unknown_open_interval"
@@ -44,8 +47,8 @@ type NavSpanBuildResult struct {
 
 type navSpanBuildOccupancy struct {
 	known   bool
-	solid   []bool
-	blocked []bool
+	solid   []uint64
+	blocked []uint64
 }
 
 // BuildNavSourceSpans extracts supported open intervals whose support voxel is
@@ -64,44 +67,51 @@ func BuildNavSourceSpans(input NavSpanBuildInput) (NavSpanBuildResult, error) {
 		SourceHash:     input.SourceHash,
 		DependencyHash: navSpanBuildDependencyHash(input),
 	}}
-	for x := 0; x < input.ChunkSize; x++ {
-		for z := 0; z < input.ChunkSize; z++ {
-			for y := 0; y < input.ChunkSize; y++ {
-				if sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, y, z) != navVoxelSolid {
-					continue
-				}
-				above := sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, y+1, z)
-				if above == navVoxelUnknown {
-					result.Diagnostics = append(result.Diagnostics, NavSpanBuildDiagnostic{Code: NavSpanBuildUnknownOpenInterval, Rejected: true, X: x, Y: y + 1, Z: z})
-					continue
-				}
-				if above == navVoxelSolid {
-					continue
-				}
-
-				ceilingY := y + 2
-				ceilingState := sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, ceilingY, z)
-				for ceilingState == navVoxelEmpty {
-					ceilingY++
-					ceilingState = sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, ceilingY, z)
-				}
-				if ceilingState == navVoxelUnknown {
-					result.Diagnostics = append(result.Diagnostics, NavSpanBuildDiagnostic{Code: NavSpanBuildTruncatedOpenInterval, X: x, Y: y + 1, Z: z})
-				}
-
-				supportHeight := float32((input.Center.Coord.Y*input.ChunkSize)+(y+1)) * input.VoxelResolution
-				ceilingHeight := float32((input.Center.Coord.Y*input.ChunkSize)+ceilingY) * input.VoxelResolution
-				result.Source.Spans = append(result.Source.Spans, NavSpanDef{
-					ID:            uint32(len(result.Source.Spans)),
-					X:             x,
-					Y:             y + 1,
-					Z:             z,
-					SupportHeight: supportHeight,
-					CeilingHeight: ceilingHeight,
-					Headroom:      ceilingHeight - supportHeight,
-				})
-			}
+	centerSolids := append([][3]int(nil), input.Center.SolidVoxels...)
+	sort.Slice(centerSolids, func(i, j int) bool {
+		if centerSolids[i][0] != centerSolids[j][0] {
+			return centerSolids[i][0] < centerSolids[j][0]
 		}
+		if centerSolids[i][2] != centerSolids[j][2] {
+			return centerSolids[i][2] < centerSolids[j][2]
+		}
+		return centerSolids[i][1] < centerSolids[j][1]
+	})
+	for i, voxel := range centerSolids {
+		if i > 0 && voxel == centerSolids[i-1] {
+			continue
+		}
+		x, y, z := voxel[0], voxel[1], voxel[2]
+		above := sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, y+1, z)
+		if above == navVoxelUnknown {
+			result.Diagnostics = append(result.Diagnostics, NavSpanBuildDiagnostic{Code: NavSpanBuildUnknownOpenInterval, Rejected: true, X: x, Y: y + 1, Z: z})
+			continue
+		}
+		if above == navVoxelSolid {
+			continue
+		}
+
+		ceilingY := y + 2
+		ceilingState := sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, ceilingY, z)
+		for ceilingState == navVoxelEmpty {
+			ceilingY++
+			ceilingState = sampleNavSpanOccupancy(chunks, input.Center.Coord, input.ChunkSize, x, ceilingY, z)
+		}
+		if ceilingState == navVoxelUnknown {
+			result.Diagnostics = append(result.Diagnostics, NavSpanBuildDiagnostic{Code: NavSpanBuildTruncatedOpenInterval, X: x, Y: y + 1, Z: z})
+		}
+
+		supportHeight := float32((input.Center.Coord.Y*input.ChunkSize)+(y+1)) * input.VoxelResolution
+		ceilingHeight := float32((input.Center.Coord.Y*input.ChunkSize)+ceilingY) * input.VoxelResolution
+		result.Source.Spans = append(result.Source.Spans, NavSpanDef{
+			ID:            uint32(len(result.Source.Spans)),
+			X:             x,
+			Y:             y + 1,
+			Z:             z,
+			SupportHeight: supportHeight,
+			CeilingHeight: ceilingHeight,
+			Headroom:      ceilingHeight - supportHeight,
+		})
 	}
 	calculateNavSpanClearance(input, chunks, result.Source.Spans)
 	if validation := ValidateNavSourceTile(&result.Source); validation.HasErrors() {
@@ -124,6 +134,10 @@ func buildNavSpanOccupancy(input NavSpanBuildInput) (map[TerrainChunkCoordDef]na
 	}
 	if !finite(input.VoxelResolution) || input.VoxelResolution <= 0 {
 		return nil, fmt.Errorf("navigation span voxel resolution must be finite and positive")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if input.ChunkSize > maxInt/input.ChunkSize || input.ChunkSize*input.ChunkSize > (maxInt-63)/input.ChunkSize {
+		return nil, fmt.Errorf("navigation span chunk size is too large")
 	}
 	if !input.Center.Known {
 		return nil, fmt.Errorf("navigation span center chunk must be known")
@@ -148,24 +162,27 @@ func buildNavSpanOccupancy(input NavSpanBuildInput) (map[TerrainChunkCoordDef]na
 		if i > 0 && chunk.SourceHash == "" {
 			return nil, fmt.Errorf("known navigation span halo chunk %s requires source hash", TerrainChunkKey(chunk.Coord))
 		}
-		occupancy := navSpanBuildOccupancy{
-			known:   true,
-			solid:   make([]bool, input.ChunkSize*input.ChunkSize*input.ChunkSize),
-			blocked: make([]bool, input.ChunkSize*input.ChunkSize*input.ChunkSize),
+		occupancy := navSpanBuildOccupancy{known: true}
+		cellCount := input.ChunkSize * input.ChunkSize * input.ChunkSize
+		if len(chunk.SolidVoxels) > 0 {
+			occupancy.solid = make([]uint64, (cellCount+63)/64)
+		}
+		if len(chunk.BlockedVoxels) > 0 {
+			occupancy.blocked = make([]uint64, (cellCount+63)/64)
 		}
 		for _, voxel := range chunk.SolidVoxels {
 			x, y, z := voxel[0], voxel[1], voxel[2]
 			if x < 0 || y < 0 || z < 0 || x >= input.ChunkSize || y >= input.ChunkSize || z >= input.ChunkSize {
 				return nil, fmt.Errorf("navigation span voxel %v is outside chunk %s", voxel, TerrainChunkKey(chunk.Coord))
 			}
-			occupancy.solid[x+input.ChunkSize*(y+input.ChunkSize*z)] = true
+			navSpanSetBit(occupancy.solid, y+input.ChunkSize*(x+input.ChunkSize*z))
 		}
 		for _, voxel := range chunk.BlockedVoxels {
 			x, y, z := voxel[0], voxel[1], voxel[2]
 			if x < 0 || y < 0 || z < 0 || x >= input.ChunkSize || y >= input.ChunkSize || z >= input.ChunkSize {
 				return nil, fmt.Errorf("navigation blocker voxel %v is outside chunk %s", voxel, TerrainChunkKey(chunk.Coord))
 			}
-			occupancy.blocked[x+input.ChunkSize*(y+input.ChunkSize*z)] = true
+			navSpanSetBit(occupancy.blocked, y+input.ChunkSize*(x+input.ChunkSize*z))
 		}
 		chunks[chunk.Coord] = occupancy
 	}
@@ -190,7 +207,7 @@ func sampleNavSpanOccupancy(chunks map[TerrainChunkCoordDef]navSpanBuildOccupanc
 	if !known {
 		return navVoxelUnknown
 	}
-	if chunk.solid[index] {
+	if navSpanHasBit(chunk.solid, index) {
 		return navVoxelSolid
 	}
 	return navVoxelEmpty
@@ -208,7 +225,7 @@ func sampleNavSpanBuildCell(chunks map[TerrainChunkCoordDef]navSpanBuildOccupanc
 	x = positiveModNavSpan(x, chunkSize)
 	y = positiveModNavSpan(y, chunkSize)
 	z = positiveModNavSpan(z, chunkSize)
-	return chunk, x + chunkSize*(y+chunkSize*z), true
+	return chunk, y + chunkSize*(x+chunkSize*z), true
 }
 
 func floorDivNavSpan(value, divisor int) int {
@@ -232,4 +249,12 @@ func absNavSpanInt(value int) int {
 		return -value
 	}
 	return value
+}
+
+func navSpanSetBit(bits []uint64, index int) {
+	bits[index/64] |= uint64(1) << uint(index%64)
+}
+
+func navSpanHasBit(bits []uint64, index int) bool {
+	return len(bits) != 0 && bits[index/64]&(uint64(1)<<uint(index%64)) != 0
 }

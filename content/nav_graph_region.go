@@ -149,6 +149,7 @@ func navRegionFlags(key string) []string {
 func buildNavRegion(id uint32, members []uint32, spans map[uint32]NavSpanDef, voxelResolution float32) NavRegionDef {
 	sort.Slice(members, func(i, j int) bool { return members[i] < members[j] })
 	region := NavRegionDef{ID: id, Area: spans[members[0]].Area}
+	var center [3]float64
 	for _, spanID := range members {
 		if len(region.SpanRuns) == 0 || spanID != region.SpanRuns[len(region.SpanRuns)-1].Start+region.SpanRuns[len(region.SpanRuns)-1].Count {
 			region.SpanRuns = append(region.SpanRuns, NavSpanRunDef{Start: spanID, Count: 1})
@@ -172,14 +173,12 @@ func buildNavRegion(id uint32, members []uint32, spans map[uint32]NavSpanDef, vo
 			region.HeightMin = min(region.HeightMin, span.SupportHeight)
 			region.HeightMax = max(region.HeightMax, span.SupportHeight)
 		}
-		region.Center[0] += (float32(span.X) + 0.5) * voxelResolution
-		region.Center[1] += span.SupportHeight
-		region.Center[2] += (float32(span.Z) + 0.5) * voxelResolution
+		center[0] += float64((float32(span.X) + 0.5) * voxelResolution)
+		center[1] += float64(span.SupportHeight)
+		center[2] += float64((float32(span.Z) + 0.5) * voxelResolution)
 	}
-	count := float32(len(members))
-	region.Center[0] /= count
-	region.Center[1] /= count
-	region.Center[2] /= count
+	count := float64(len(members))
+	region.Center = Vec3{float32(center[0] / count), float32(center[1] / count), float32(center[2] / count)}
 	return region
 }
 

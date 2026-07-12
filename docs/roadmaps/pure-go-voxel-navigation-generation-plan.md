@@ -642,13 +642,13 @@ search only in bounded local windows.
 
 Purpose: generate, inspect, save, and reload graph data.
 
-- [ ] Implement one pure-Go full-world graph bake.
-- [ ] Save source and graph tiles deterministically.
-- [ ] Validate before writing; do not save partial invalid graphs.
-- [ ] Replace `navbake` and `navdiag` around the new graph contracts.
-- [ ] Create `examples/navigation_graph_lab`.
-- [ ] Render spans, regions, transitions, routes, and failure reasons.
-- [ ] Bake Crossfire and Gasworks into temporary output.
+- [x] Implement one pure-Go full-world graph bake.
+- [x] Save source and graph tiles deterministically.
+- [x] Validate before writing; do not save partial invalid graphs.
+- [x] Replace `navbake` and `navdiag` around the new graph contracts.
+- [x] Create `examples/navigation_graph_lab`.
+- [x] Render spans, regions, transitions, routes, and failure reasons.
+- [x] Bake Crossfire and Gasworks into temporary output.
 
 Gate: save/load preserves topology, diagnostics show no hard graph errors, and
 manual graph coverage is accepted on the lab and representative maps.
@@ -701,15 +701,17 @@ rebuild static spans for a door opening or another NPC moving.
 
 ## Phase 12: Optimize Measured Bottlenecks
 
-Only after correctness and manual acceptance:
+Optimize only measured bottlenecks. Exact distance-field clearance was pulled
+forward because profiling showed it blocked the Phase 8 representative-map
+bake gate.
 
-- bitset or distance-field clearance
-- cached profile-independent source work
-- parallel tile builds with deterministic save order
-- compact/binary serialization
-- region clustering for very large open worlds
-- incremental within-tile rebuilds
-- flow fields for many NPCs sharing a goal
+- [x] Bitset occupancy and exact distance-field clearance.
+- [ ] Cached profile-independent source work.
+- [ ] Parallel tile builds with deterministic save order.
+- [ ] Compact/binary serialization.
+- [ ] Region clustering for very large open worlds.
+- [ ] Incremental within-tile rebuilds.
+- [ ] Flow fields for many NPCs sharing a goal.
 
 Every optimization must preserve the stable invariant tests and manual route
 behavior.

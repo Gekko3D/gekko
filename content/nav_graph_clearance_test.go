@@ -93,6 +93,41 @@ func TestNavSpanClearanceAndProfileSupport(t *testing.T) {
 	}
 }
 
+func TestNavSpanSquaredIntervalDistanceField(t *testing.T) {
+	const width, height = 4, 3
+	for mask := 1; mask < 1<<(width*height); mask++ {
+		field := make([]int64, width*height)
+		for i := range field {
+			field[i] = navSpanDistanceInfinity
+			if mask&(1<<i) != 0 {
+				field[i] = 0
+			}
+		}
+		line := make([]int64, width)
+		transformed := make([]int64, width)
+		hull := make([]navSpanDistanceLine, width)
+		navSpanSquaredIntervalDistanceField(field, width, height, line, transformed, hull)
+		for z := range height {
+			for x := range width {
+				want := navSpanDistanceInfinity
+				for obstacle := range width * height {
+					if mask&(1<<obstacle) == 0 {
+						continue
+					}
+					dx := absNavSpanInt(x - obstacle%width)
+					dz := absNavSpanInt(z - obstacle/width)
+					xDistance := max(2*dx-1, 0)
+					zDistance := max(2*dz-1, 0)
+					want = min(want, int64(xDistance*xDistance+zDistance*zDistance))
+				}
+				if got := field[x+width*z]; got != want {
+					t.Fatalf("mask %x cell %d,%d: want %d, got %d", mask, x, z, want, got)
+				}
+			}
+		}
+	}
+}
+
 func containsNavSpanID(ids []uint32, want uint32) bool {
 	for _, id := range ids {
 		if id == want {

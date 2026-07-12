@@ -87,6 +87,23 @@ func TestCompressNavGraphRegions(t *testing.T) {
 	})
 }
 
+func TestBuildNavRegionCenterStaysInsideBoundsForLargeRegion(t *testing.T) {
+	const count = 100_000
+	members := make([]uint32, count)
+	spans := make(map[uint32]NavSpanDef, count)
+	for i := range count {
+		id := uint32(i)
+		members[i] = id
+		spans[id] = NavSpanDef{ID: id, X: 7, Z: 9, SupportHeight: -51.1}
+	}
+	region := buildNavRegion(0, members, spans, 0.1)
+	validation := NavGraphValidationResult{}
+	validateRegionBounds(&validation, region)
+	if validation.HasErrors() {
+		t.Fatalf("large region center drifted outside bounds: center=%v bounds=%v..%v", region.Center, region.BoundsMin, region.BoundsMax)
+	}
+}
+
 func assertNavRegionReachability(t *testing.T, graph NavGraphTileDef) {
 	t.Helper()
 	spanRegion := make(map[uint32]uint32)
