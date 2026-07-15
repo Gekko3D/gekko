@@ -34,6 +34,15 @@ func TestStreamedNavigationResidencyRevisionSwapFollowsDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	query, err := buildRuntimeNavigationQuery(bake.SourceTiles, bake.GraphTiles, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := RuntimeNavigationService{NavigationRevision: 7, query: query}
+	preparedRoute, err := prepared.FindRoute(content.Vec3{0.5, 1, 0.5}, content.Vec3{7.5, 1, 0.5})
+	if err != nil || !preparedRoute.Found || preparedRoute.NavigationRevision != 7 {
+		t.Fatalf("prepared runtime query failed: route=%+v err=%v", preparedRoute, err)
+	}
 	basePath := filepath.Join(t.TempDir(), "base"+content.NavGraphManifestExtension)
 	if err := content.SaveNavGraphBake(basePath, &bake); err != nil {
 		t.Fatal(err)

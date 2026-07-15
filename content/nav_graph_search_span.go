@@ -19,6 +19,11 @@ type NavSpanSearchResult struct {
 	FailureReason string
 }
 
+type navSpanSearchEdge struct {
+	to   uint32
+	cost float32
+}
+
 // FindNavSpanRoute runs local A* over one graph tile.
 func FindNavSpanRoute(source NavSourceTileDef, graph NavGraphTileDef, voxelResolution float32, start, goal uint32) (NavSpanSearchResult, error) {
 	if validation := ValidateNavSourceTile(&source); validation.HasErrors() {
@@ -55,11 +60,11 @@ func FindNavSpanRoute(source NavSourceTileDef, graph NavGraphTileDef, voxelResol
 		return NavSpanSearchResult{Found: true, Spans: []uint32{start}}, nil
 	}
 
-	edges := make(map[uint32][]NavSpanTransitionDef)
+	edges := make(map[uint32][]navSpanSearchEdge)
 	heuristicScale := float32(math.Inf(1))
 	for _, transition := range graph.SpanTransitions {
 		if transition.To.Tile == graph.Coord {
-			edges[transition.From] = append(edges[transition.From], transition)
+			edges[transition.From] = append(edges[transition.From], navSpanSearchEdge{to: transition.To.Span, cost: transition.Cost})
 			distance := navSpanSearchDistance(spans[transition.From], spans[transition.To.Span], voxelResolution)
 			if distance > 0 {
 				heuristicScale = min(heuristicScale, transition.Cost/distance)
@@ -68,6 +73,30 @@ func FindNavSpanRoute(source NavSourceTileDef, graph NavGraphTileDef, voxelResol
 	}
 	if !finite(heuristicScale) {
 		heuristicScale = 0
+	}
+	return findNavSpanRouteIndexed(spans, edges, heuristicScale, voxelResolution, start, goal, func(id uint32) bool {
+		_, ok := accepted[id]
+		return ok
+	}), nil
+}
+
+func (q *navGraphQuery) findSpanRoute(tile TerrainChunkCoordDef, region, start, goal uint32) NavSpanSearchResult {
+	regions := q.spanRegions[tile]
+	return findNavSpanRouteIndexed(q.spans[tile], q.spanEdges[tile], q.spanScale[tile], q.voxelResolution, start, goal, func(id uint32) bool {
+		spanRegion, ok := regions[id]
+		return ok && spanRegion == region
+	})
+}
+
+func findNavSpanRouteIndexed(spans map[uint32]NavSpanDef, edges map[uint32][]navSpanSearchEdge, heuristicScale, voxelResolution float32, start, goal uint32, accepted func(uint32) bool) NavSpanSearchResult {
+	if !accepted(start) {
+		return NavSpanSearchResult{FailureReason: NavSpanSearchStartMissing}
+	}
+	if !accepted(goal) {
+		return NavSpanSearchResult{FailureReason: NavSpanSearchGoalMissing}
+	}
+	if start == goal {
+		return NavSpanSearchResult{Found: true, Spans: []uint32{start}}
 	}
 	frontier := navSpanSearchQueue{{span: start, estimate: heuristicScale * navSpanSearchDistance(spans[start], spans[goal], voxelResolution)}}
 	heap.Init(&frontier)
@@ -86,27 +115,27 @@ func FindNavSpanRoute(source NavSourceTileDef, graph NavGraphTileDef, voxelResol
 			for left, right := 0, len(path)-1; left < right; left, right = left+1, right-1 {
 				path[left], path[right] = path[right], path[left]
 			}
-			return NavSpanSearchResult{Found: true, Spans: path, Cost: costs[goal]}, nil
+			return NavSpanSearchResult{Found: true, Spans: path, Cost: costs[goal]}
 		}
 		for _, edge := range edges[current.span] {
-			if _, ok := accepted[edge.To.Span]; !ok {
+			if !accepted(edge.to) {
 				continue
 			}
-			cost := current.cost + edge.Cost
-			previous, seen := costs[edge.To.Span]
+			cost := current.cost + edge.cost
+			previous, seen := costs[edge.to]
 			if seen && cost >= previous {
 				continue
 			}
-			costs[edge.To.Span] = cost
-			parents[edge.To.Span] = current.span
+			costs[edge.to] = cost
+			parents[edge.to] = current.span
 			heap.Push(&frontier, navSpanSearchQueueItem{
-				span:     edge.To.Span,
+				span:     edge.to,
 				cost:     cost,
-				estimate: cost + heuristicScale*navSpanSearchDistance(spans[edge.To.Span], spans[goal], voxelResolution),
+				estimate: cost + heuristicScale*navSpanSearchDistance(spans[edge.to], spans[goal], voxelResolution),
 			})
 		}
 	}
-	return NavSpanSearchResult{FailureReason: NavSpanSearchNoRoute}, nil
+	return NavSpanSearchResult{FailureReason: NavSpanSearchNoRoute}
 }
 
 func navSpanSearchDistance(from, to NavSpanDef, voxelResolution float32) float32 {

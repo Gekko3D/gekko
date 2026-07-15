@@ -23,10 +23,10 @@
 - Actiongame F12 camera-local overlay for accepted/rejected spans, region
   bounds, and transitions. It refreshes on navigation revision swaps and
   supports a development manifest override through `GEKKO_NAV_GRAPH`.
-- Navigation source schema v2 persists compact solid/blocker runs. Builder
-  `voxel_graph_v3` derives per-profile clearance above the reachable step
-  envelope, so fine walkable ramps no longer classify uphill support as a
-  lateral wall. Full, delta, and cross-tile generation share this path.
+- Navigation source schema v2 persists compact solid/blocker runs. Current
+  builder `voxel_graph_v4` derives per-profile clearance above the reachable
+  step envelope and merges ordinary walk/stair/step surfaces into ground
+  regions. Full, delta, and cross-tile generation share these paths.
 
 ## Preserved Invariant
 
@@ -44,9 +44,9 @@
   revision swap.
 - Ramp regression covers the same physical slope at 0.1 m and 0.2 m voxel
   resolution, plus a tall-wall control that remains clearance-rejected.
-- Crossfire v3 rebake: 18 source/graph tiles, 966,299 spans, 783,595 accepted,
-  6,045 regions, 3,089,256 span transitions, 46,824 region transitions, and 0
-  hard errors. Output: `/tmp/crossfire-nav-v3/crossfire.gknav`.
+- Crossfire v4 rebake: 18 source/graph tiles, 966,299 spans, 783,595 accepted,
+  163 regions, 3,089,256 span transitions, 376 region transitions, and 0 hard
+  errors. Output: `/tmp/crossfire-nav-v4-ground-regions/crossfire.gknav`.
 - Actiongame suite passes when skipping one unrelated existing fixture failure:
   `TestShotgunProfileTurnsWorldModelForward` reports `missing shotgun attachment`.
 - F12 lifecycle fixture verifies show/hide, accepted/rejected span colors,
@@ -58,8 +58,7 @@ Bake a graph, run matching level with `GEKKO_NAV_GRAPH` pointing at the
 generated manifest, then press F12. Overlay is camera-local and refreshes after
 movement or a navigation revision swap:
 
-Existing `voxel_graph_v2` bundles are incompatible with source schema v2 and
-must be rebaked.
+Existing pre-v4 bundles and navigation delta overrides must be rebaked.
 
 - green: accepted spans
 - red: profile-rejected spans

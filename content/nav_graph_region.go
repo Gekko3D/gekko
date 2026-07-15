@@ -51,7 +51,11 @@ func CompressNavGraphRegions(source NavSourceTileDef, graph NavGraphTileDef, vox
 		if edge.To.Tile != graph.Coord {
 			continue
 		}
-		class := navRegionEdgeClass{kind: edge.Kind, flags: navRegionFlagsKey(edge.RequiresFlags)}
+		kind := edge.Kind
+		if kind == NavTransitionWalk || kind == NavTransitionStair || kind == NavTransitionStep {
+			kind = NavTransitionWalk
+		}
+		class := navRegionEdgeClass{kind: kind, flags: navRegionFlagsKey(edge.RequiresFlags)}
 		classes := edgeClasses[pair{edge.From, edge.To.Span}]
 		if classes == nil {
 			classes = make(map[navRegionEdgeClass]struct{})

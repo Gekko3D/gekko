@@ -29,6 +29,33 @@ type navGraphQuery struct {
 	graphs          map[TerrainChunkCoordDef]NavGraphTileDef
 	spans           map[TerrainChunkCoordDef]map[uint32]NavSpanDef
 	spanRegions     map[TerrainChunkCoordDef]map[uint32]uint32
+	spanEdges       map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge
+	spanScale       map[TerrainChunkCoordDef]float32
+	backing         map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef
+}
+
+type navBackingKey struct {
+	fromRegion, toRegion uint32
+	toTile               TerrainChunkCoordDef
+	kind, flags          string
+}
+
+type navBackingCandidate struct {
+	transition NavRegionTransitionDef
+	want       Vec3
+}
+
+// NavGraphQuery is an immutable, reusable index over resident graph tiles.
+type NavGraphQuery struct {
+	query *navGraphQuery
+}
+
+func NewNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chunkSize int, voxelResolution float32) (*NavGraphQuery, error) {
+	query, err := newNavGraphQuery(sources, graphs, chunkSize, voxelResolution)
+	if err != nil {
+		return nil, err
+	}
+	return &NavGraphQuery{query: query}, nil
 }
 
 func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chunkSize int, voxelResolution float32) (*navGraphQuery, error) {
@@ -48,6 +75,9 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 		graphs:      make(map[TerrainChunkCoordDef]NavGraphTileDef, len(graphs)),
 		spans:       make(map[TerrainChunkCoordDef]map[uint32]NavSpanDef, len(sources)),
 		spanRegions: make(map[TerrainChunkCoordDef]map[uint32]uint32, len(graphs)),
+		spanEdges:   make(map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge, len(graphs)),
+		spanScale:   make(map[TerrainChunkCoordDef]float32, len(graphs)),
+		backing:     make(map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef, len(graphs)),
 	}
 	for _, source := range sources {
 		if _, exists := query.sources[source.Coord]; exists {
@@ -94,8 +124,76 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 		}
 		query.graphs[graph.Coord] = graph
 		query.spanRegions[graph.Coord] = regions
+		edges := make(map[uint32][]navSpanSearchEdge)
+		scale := float32(math.Inf(1))
+		for _, transition := range graph.SpanTransitions {
+			if transition.To.Tile != graph.Coord {
+				continue
+			}
+			edges[transition.From] = append(edges[transition.From], navSpanSearchEdge{to: transition.To.Span, cost: transition.Cost})
+			distance := navSpanSearchDistance(query.spans[graph.Coord][transition.From], query.spans[graph.Coord][transition.To.Span], voxelResolution)
+			if distance > 0 {
+				scale = min(scale, transition.Cost/distance)
+			}
+		}
+		if !finite(scale) {
+			scale = 0
+		}
+		query.spanEdges[graph.Coord], query.spanScale[graph.Coord] = edges, scale
 	}
+	query.indexBackingTransitions()
 	return query, nil
+}
+
+func (q *navGraphQuery) indexBackingTransitions() {
+	for coord, graph := range q.graphs {
+		candidates := make(map[navBackingKey][]navBackingCandidate)
+		for _, transition := range graph.Transitions {
+			want := midpointVec3(transition.CrossingStart, transition.CrossingEnd)
+			if transition.ToTile == coord {
+				want[0] += float32(coord.X*q.chunkSize) * q.voxelResolution
+				want[2] += float32(coord.Z*q.chunkSize) * q.voxelResolution
+			}
+			key := navBackingKey{transition.FromRegion, transition.ToRegion, transition.ToTile, transition.Kind, navQueryFlagsKey(transition.RequiresFlags)}
+			candidates[key] = append(candidates[key], navBackingCandidate{transition, want})
+		}
+		best := make(map[uint32]NavSpanTransitionDef, len(graph.Transitions))
+		distances := make(map[uint32]float32, len(graph.Transitions))
+		for _, edge := range graph.SpanTransitions {
+			fromRegion, fromOK := q.spanRegions[coord][edge.From]
+			toRegions, tileOK := q.spanRegions[edge.To.Tile]
+			toRegion, toOK := toRegions[edge.To.Span]
+			if !fromOK || !tileOK || !toOK {
+				continue
+			}
+			key := navBackingKey{fromRegion, toRegion, edge.To.Tile, edge.Kind, navQueryFlagsKey(edge.RequiresFlags)}
+			matches := candidates[key]
+			if len(matches) == 0 {
+				continue
+			}
+			point := q.spanTransitionTarget(coord, edge)
+			for _, candidate := range matches {
+				distance := navVec3Distance(point, candidate.want)
+				previous, found := best[candidate.transition.ID]
+				if found && (distance > distances[candidate.transition.ID] || distance == distances[candidate.transition.ID] && !navBackingEdgeLess(edge, previous)) {
+					continue
+				}
+				best[candidate.transition.ID], distances[candidate.transition.ID] = edge, distance
+			}
+		}
+		q.backing[coord] = best
+	}
+}
+
+func navQueryFlagsKey(flags []string) string {
+	if len(flags) == 0 {
+		return ""
+	}
+	return navRegionFlagsKey(flags)
+}
+
+func navBackingEdgeLess(a, b NavSpanTransitionDef) bool {
+	return a.From < b.From || a.From == b.From && (terrainCoordLess(a.To.Tile, b.To.Tile) || a.To.Tile == b.To.Tile && a.To.Span < b.To.Span)
 }
 
 func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordDef, bool) {
@@ -136,6 +234,51 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 		}
 	}
 	return best, tile, found
+}
+
+// FindNearestNavGraphPoint projects a world point onto the nearest supported
+// span in the loaded graph, within maxDistance.
+func FindNearestNavGraphPoint(sources []NavSourceTileDef, graphs []NavGraphTileDef, chunkSize int, voxelResolution float32, point Vec3, maxDistance float32) (NavPointResult, error) {
+	query, err := NewNavGraphQuery(sources, graphs, chunkSize, voxelResolution)
+	if err != nil {
+		return NavPointResult{}, err
+	}
+	return query.ProjectPoint(point, maxDistance)
+}
+
+func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointResult, error) {
+	if !validVec3(point) || !finite(maxDistance) || maxDistance < 0 {
+		return NavPointResult{}, fmt.Errorf("navigation point and max distance must be finite, with non-negative max distance")
+	}
+	if q == nil || q.query == nil {
+		return NavPointResult{}, fmt.Errorf("navigation graph query is required")
+	}
+	// ponytail: linear resident-span scan; add a spatial index only if point
+	// projection becomes a measured hot path outside cursor/debug commands.
+	best := NavPointResult{Distance: float32(math.Inf(1))}
+	for coord, graph := range q.query.graphs {
+		for _, spanID := range graph.SpanIDs {
+			span := q.query.spans[coord][spanID]
+			minX := float32(coord.X*q.query.chunkSize+span.X) * q.query.voxelResolution
+			minZ := float32(coord.Z*q.query.chunkSize+span.Z) * q.query.voxelResolution
+			projected := Vec3{
+				min(max(point[0], minX), minX+q.query.voxelResolution),
+				span.SupportHeight,
+				min(max(point[2], minZ), minZ+q.query.voxelResolution),
+			}
+			distance := navVec3Distance(point, projected)
+			ref := NavSpanRef{Tile: coord, Span: spanID}
+			if distance > maxDistance || best.Found && (distance > best.Distance || distance == best.Distance && !navSpanRefLess(ref, best.Ref)) {
+				continue
+			}
+			best = NavPointResult{Found: true, Ref: ref, Region: q.query.spanRegions[coord][spanID], Point: projected, Distance: distance}
+		}
+	}
+	return best, nil
+}
+
+func navSpanRefLess(a, b NavSpanRef) bool {
+	return terrainCoordLess(a.Tile, b.Tile) || a.Tile == b.Tile && a.Span < b.Span
 }
 
 func (q *navGraphQuery) spanCenter(ref NavSpanRef) Vec3 {

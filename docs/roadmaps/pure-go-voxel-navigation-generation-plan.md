@@ -248,7 +248,10 @@ type NavRegionDef struct {
 ```
 
 A region compresses spans already connected by compatible transitions. It may
-never introduce connectivity missing from the span graph.
+never introduce connectivity missing from the span graph. Ordinary
+`walk`/`stair`/`step` edges share one ground-region class because character
+physics handles their height variation. Area, flags, and transitions requiring
+special actions remain region boundaries.
 
 ### Region Transition
 
@@ -595,7 +598,8 @@ or persistence.
 Purpose: make ordinary routing cheap without changing reachability.
 
 - [x] Group only spans connected by already-valid compatible transitions.
-- [x] Split regions when area or traversal class changes.
+- [x] Split regions when area, flags, or required-action class changes; merge
+  ordinary `walk`, `stair`, and `step` ground traversal.
 - [x] Retain compact span membership for local refinement.
 - [x] Build contiguous transition runs between regions.
 - [x] Compare region-graph components with span-graph components.
@@ -683,13 +687,17 @@ revision swap; full and delta generation agree for identical effective input.
 
 Purpose: move shooter NPCs using graph routes and physics.
 
-- [ ] Restore navigation intent against the new route API.
-- [ ] Follow region crossing/waypoint targets.
-- [ ] Use character-controller collision and support queries for unevenness.
-- [ ] Detect stalled, unsupported, or invalidated routes.
-- [ ] Request bounded local repair or replan.
-- [ ] Restore cursor targeting by collision hit -> nearest supported span.
-- [ ] Restore debug selection, teleport, and move commands without polygon IDs.
+- [x] Restore navigation intent against the new route API.
+- [x] Follow region crossing/waypoint targets.
+- [x] Use character-controller collision and support queries for unevenness.
+- [x] Detect stalled, unsupported, or invalidated routes.
+- [x] Request bounded local repair or replan.
+- [x] Restore cursor targeting by collision hit -> nearest supported span.
+- [x] Restore debug selection, teleport, and move commands without polygon IDs.
+
+Actiongame debug controls are F6 select, F7 clear, F8 teleport, F9 move, and
+F12 graph overlay. The implementation checklist is complete; the gate below
+still requires human visual acceptance.
 
 Gate: selected NPCs traverse flat ground, stairs, uneven surfaces, and tile
 seams on the lab, Crossfire, and Gasworks without polygon data.

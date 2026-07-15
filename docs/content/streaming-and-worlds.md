@@ -787,6 +787,12 @@ graph overrides publish together; explicit empty overrides suppress stale
 static tiles. Runtime keeps old resident graph until complete replacement set
 loads, then swaps slices and increments `NavigationRevision` once.
 
+`RuntimeNavigationService` snapshots resident graph data for `FindRoute` and
+`ProjectPoint`. Point projection returns the nearest supported span and region;
+runtime targeting does not reconstruct polygon IDs or filled navigation
+surfaces. Residency loads also prepare the immutable route-query indexes on the
+background loader; all requests for that navigation revision reuse them.
+
 `StreamedLevelRuntimeConfig.NavigationManifestPath` may override the level's
 `navigation.manifest_path` for development runs. Actiongame exposes this as
 `GEKKO_NAV_GRAPH`; authored levels should keep the path in the level document.

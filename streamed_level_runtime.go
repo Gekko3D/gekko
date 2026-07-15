@@ -283,6 +283,7 @@ type StreamedLevelRuntimeState struct {
 	NavigationSources       []content.NavSourceTileDef
 	NavigationGraphs        []content.NavGraphTileDef
 	NavigationRevision      uint64
+	navigationQuery         *content.NavGraphQuery
 	navigationDesired       map[content.TerrainChunkCoordDef]struct{}
 	navigationLoadedGen     uint64
 	navigationRequestedGen  uint64
@@ -563,6 +564,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.NavigationSources = nil
 	state.NavigationGraphs = nil
 	state.NavigationRevision = 0
+	state.navigationQuery = nil
 	state.navigationDesired = make(map[content.TerrainChunkCoordDef]struct{})
 	state.navigationLoadedGen = 0
 	state.navigationRequestedGen = 0

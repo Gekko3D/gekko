@@ -52,19 +52,39 @@ func TestCompressNavGraphRegions(t *testing.T) {
 		}
 	})
 
-	t.Run("traversal class splits regions", func(t *testing.T) {
+	t.Run("ordinary ground classes share region", func(t *testing.T) {
 		graph := build([]NavSpanDef{
 			span(0, 0, 0, 0, "ground"),
 			span(1, 1, 0, 0, "ground"),
 			span(2, 2, 0, 0.5, "ground"),
 		})
-		if len(graph.Regions) != 2 || len(graph.Transitions) != 2 {
-			t.Fatalf("walk/step boundary mismatch: regions=%+v transitions=%+v", graph.Regions, graph.Transitions)
+		if len(graph.Regions) != 1 || len(graph.Transitions) != 0 {
+			t.Fatalf("ordinary ground fragmented: regions=%+v transitions=%+v", graph.Regions, graph.Transitions)
 		}
-		for _, transition := range graph.Transitions {
-			if transition.Kind != NavTransitionStep {
-				t.Fatalf("want step region transition, got %+v", transition)
+	})
+
+	t.Run("required action splits regions", func(t *testing.T) {
+		spans := []NavSpanDef{
+			span(0, 0, 0, 0, "ground"),
+			span(1, 1, 0, 0, "ground"),
+			span(2, 2, 0, 0.5, "ground"),
+		}
+		graph := build(spans)
+		for i := range graph.SpanTransitions {
+			if graph.SpanTransitions[i].From == 2 || graph.SpanTransitions[i].To.Span == 2 {
+				graph.SpanTransitions[i].Kind = "jump"
 			}
+		}
+		source := NavSourceTileDef{
+			NavID: "test", SchemaVersion: CurrentNavSourceTileSchemaVersion, BuilderVersion: "test",
+			SourceHash: "source", DependencyHash: "dependencies", ChunkSize: 4, Spans: spans,
+		}
+		graph, err := CompressNavGraphRegions(source, graph, 1)
+		if err != nil {
+			t.Fatalf("compress failed: %v", err)
+		}
+		if len(graph.Regions) != 2 || len(graph.Transitions) != 2 || graph.Transitions[0].Kind != "jump" || graph.Transitions[1].Kind != "jump" {
+			t.Fatalf("required action boundary lost: regions=%+v transitions=%+v", graph.Regions, graph.Transitions)
 		}
 	})
 

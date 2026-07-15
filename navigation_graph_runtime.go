@@ -25,6 +25,7 @@ type streamedNavigationLoadResult struct {
 	Generation uint64
 	Sources    []content.NavSourceTileDef
 	Graphs     []content.NavGraphTileDef
+	Query      *content.NavGraphQuery
 	Err        error
 }
 
@@ -40,6 +41,7 @@ type RuntimeNavigationService struct {
 	ChunkSize          int
 	VoxelResolution    float32
 	NavigationRevision uint64
+	query              *content.NavGraphQuery
 }
 
 func configureStreamedNavigationManifest(state *StreamedLevelRuntimeState, level *content.LevelDef, cfg StreamedLevelRuntimeConfig) error {
@@ -80,10 +82,16 @@ func RuntimeNavigationServiceFromStreamedLevelState(state *StreamedLevelRuntimeS
 		Graphs:    append([]content.NavGraphTileDef(nil), state.NavigationGraphs...),
 		ChunkSize: state.BaseNavManifest.ChunkSize, VoxelResolution: state.BaseNavManifest.VoxelResolution,
 		NavigationRevision: state.NavigationRevision,
+		query:              state.navigationQuery,
 	}
 }
 
 func (s RuntimeNavigationService) FindRoute(start, goal content.Vec3) (content.NavRouteResult, error) {
+	if s.query != nil {
+		route, err := s.query.FindRoute(start, goal)
+		route.NavigationRevision = s.NavigationRevision
+		return route, err
+	}
 	if len(s.Sources) == 0 || len(s.Graphs) == 0 {
 		return content.NavRouteResult{FailureReason: "navigation_unavailable", NavigationRevision: s.NavigationRevision}, nil
 	}
@@ -97,6 +105,23 @@ func (s RuntimeNavigationService) FindRoute(start, goal content.Vec3) (content.N
 	route, err := content.FindNavGraphRoute(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, start, goal)
 	route.NavigationRevision = s.NavigationRevision
 	return route, err
+}
+
+func (s RuntimeNavigationService) ProjectPoint(point content.Vec3, maxDistance float32) (content.NavPointResult, error) {
+	if s.query != nil {
+		return s.query.ProjectPoint(point, maxDistance)
+	}
+	if len(s.Sources) == 0 || len(s.Graphs) == 0 {
+		return content.NavPointResult{}, nil
+	}
+	profileID := s.Graphs[0].AgentProfileID
+	graphs := make([]content.NavGraphTileDef, 0, len(s.Graphs))
+	for _, graph := range s.Graphs {
+		if graph.AgentProfileID == profileID {
+			graphs = append(graphs, graph)
+		}
+	}
+	return content.FindNearestNavGraphPoint(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, point, maxDistance)
 }
 
 func requestStreamedNavigationResidency(state *StreamedLevelRuntimeState, desired map[ChunkCoord]struct{}) {
@@ -150,8 +175,26 @@ func startStreamedNavigationLoad(state *StreamedLevelRuntimeState) {
 	state.navigationLoadActive = true
 	go func() {
 		sources, graphs, err := loadStreamedNavigationResidency(manifest, manifestPath, &delta, deltaPath, desired)
-		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Err: err}
+		var query *content.NavGraphQuery
+		if err == nil {
+			query, err = buildRuntimeNavigationQuery(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution)
+		}
+		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Query: query, Err: err}
 	}()
+}
+
+func buildRuntimeNavigationQuery(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32) (*content.NavGraphQuery, error) {
+	if len(sources) == 0 || len(graphs) == 0 {
+		return nil, nil
+	}
+	profileID := graphs[0].AgentProfileID
+	profileGraphs := make([]content.NavGraphTileDef, 0, len(graphs))
+	for _, graph := range graphs {
+		if graph.AgentProfileID == profileID {
+			profileGraphs = append(profileGraphs, graph)
+		}
+	}
+	return content.NewNavGraphQuery(sources, profileGraphs, chunkSize, voxelResolution)
 }
 
 func loadStreamedNavigationResidency(manifest *content.NavGraphManifestDef, manifestPath string, delta *content.WorldDeltaDef, deltaPath string, desired map[content.TerrainChunkCoordDef]struct{}) ([]content.NavSourceTileDef, []content.NavGraphTileDef, error) {
@@ -235,6 +278,7 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			state.mu.Lock()
 			state.NavigationSources = result.Sources
 			state.NavigationGraphs = result.Graphs
+			state.navigationQuery = result.Query
 			state.NavigationRevision++
 			state.navigationLoadedGen = result.Generation
 			state.mu.Unlock()

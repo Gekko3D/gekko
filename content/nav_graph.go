@@ -161,3 +161,11 @@ type NavRouteResult struct {
 	FailureTile        TerrainChunkCoordDef `json:"failure_tile"`
 	NavigationRevision uint64               `json:"navigation_revision"`
 }
+
+type NavPointResult struct {
+	Found    bool       `json:"found"`
+	Ref      NavSpanRef `json:"ref"`
+	Region   uint32     `json:"region"`
+	Point    Vec3       `json:"point"`
+	Distance float32    `json:"distance"`
+}
