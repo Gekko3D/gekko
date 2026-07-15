@@ -32,6 +32,8 @@ type navGraphQuery struct {
 	spanEdges       map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge
 	spanScale       map[TerrainChunkCoordDef]float32
 	backing         map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef
+	walkableCells   map[navSpanPathCell]navWalkableCell
+	spanClassIDs    map[string]uint32
 }
 
 type navBackingKey struct {
@@ -69,15 +71,21 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 		return nil, fmt.Errorf("navigation route requires graph tiles")
 	}
 
+	acceptedSpans := 0
+	for _, graph := range graphs {
+		acceptedSpans += len(graph.SpanIDs)
+	}
 	query := &navGraphQuery{
 		chunkSize: chunkSize, voxelResolution: voxelResolution,
-		sources:     make(map[TerrainChunkCoordDef]NavSourceTileDef, len(sources)),
-		graphs:      make(map[TerrainChunkCoordDef]NavGraphTileDef, len(graphs)),
-		spans:       make(map[TerrainChunkCoordDef]map[uint32]NavSpanDef, len(sources)),
-		spanRegions: make(map[TerrainChunkCoordDef]map[uint32]uint32, len(graphs)),
-		spanEdges:   make(map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge, len(graphs)),
-		spanScale:   make(map[TerrainChunkCoordDef]float32, len(graphs)),
-		backing:     make(map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef, len(graphs)),
+		sources:       make(map[TerrainChunkCoordDef]NavSourceTileDef, len(sources)),
+		graphs:        make(map[TerrainChunkCoordDef]NavGraphTileDef, len(graphs)),
+		spans:         make(map[TerrainChunkCoordDef]map[uint32]NavSpanDef, len(sources)),
+		spanRegions:   make(map[TerrainChunkCoordDef]map[uint32]uint32, len(graphs)),
+		spanEdges:     make(map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge, len(graphs)),
+		spanScale:     make(map[TerrainChunkCoordDef]float32, len(graphs)),
+		backing:       make(map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef, len(graphs)),
+		walkableCells: make(map[navSpanPathCell]navWalkableCell, acceptedSpans),
+		spanClassIDs:  make(map[string]uint32),
 	}
 	for _, source := range sources {
 		if _, exists := query.sources[source.Coord]; exists {
@@ -118,15 +126,18 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 			return nil, fmt.Errorf("navigation graph tile %s is not region-compressed", TerrainChunkKey(graph.Coord))
 		}
 		for _, spanID := range graph.SpanIDs {
-			if _, exists := query.spans[graph.Coord][spanID]; !exists {
+			span, exists := query.spans[graph.Coord][spanID]
+			if !exists {
 				return nil, fmt.Errorf("navigation graph tile %s references missing source span %d", TerrainChunkKey(graph.Coord), spanID)
 			}
+			query.indexWalkableCell(graph.Coord, span)
 		}
 		query.graphs[graph.Coord] = graph
 		query.spanRegions[graph.Coord] = regions
 		edges := make(map[uint32][]navSpanSearchEdge)
 		scale := float32(math.Inf(1))
 		for _, transition := range graph.SpanTransitions {
+			query.indexWalkableTransition(graph.Coord, transition)
 			if transition.To.Tile != graph.Coord {
 				continue
 			}
@@ -143,6 +154,48 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 	}
 	query.indexBackingTransitions()
 	return query, nil
+}
+
+func (q *navGraphQuery) indexWalkableCell(coord TerrainChunkCoordDef, span NavSpanDef) {
+	classKey := navRegionSpanClass(span)
+	classID := q.spanClassIDs[classKey]
+	if classID == 0 {
+		classID = uint32(len(q.spanClassIDs) + 1)
+		q.spanClassIDs[classKey] = classID
+	}
+	cell := navSpanPathCell{
+		x:      coord.X*q.chunkSize + span.X,
+		z:      coord.Z*q.chunkSize + span.Z,
+		height: math.Float32bits(span.SupportHeight),
+	}
+	entry := q.walkableCells[cell]
+	if entry.classID != 0 && entry.classID != classID {
+		q.walkableCells[cell] = navWalkableCell{}
+		return
+	}
+	entry.classID = classID
+	q.walkableCells[cell] = entry
+}
+
+func (q *navGraphQuery) indexWalkableTransition(fromTile TerrainChunkCoordDef, transition NavSpanTransitionDef) {
+	if transition.Kind != NavTransitionWalk {
+		return
+	}
+	from := q.spans[fromTile][transition.From]
+	to := q.spans[transition.To.Tile][transition.To.Span]
+	if math.Float32bits(from.SupportHeight) != math.Float32bits(to.SupportHeight) {
+		return
+	}
+	fromX, fromZ := fromTile.X*q.chunkSize+from.X, fromTile.Z*q.chunkSize+from.Z
+	toX, toZ := transition.To.Tile.X*q.chunkSize+to.X, transition.To.Tile.Z*q.chunkSize+to.Z
+	exit := navWalkableExit(toX-fromX, toZ-fromZ)
+	if exit == 0 {
+		return
+	}
+	cell := navSpanPathCell{x: fromX, z: fromZ, height: math.Float32bits(from.SupportHeight)}
+	entry := q.walkableCells[cell]
+	entry.exits |= exit
+	q.walkableCells[cell] = entry
 }
 
 func (q *navGraphQuery) indexBackingTransitions() {

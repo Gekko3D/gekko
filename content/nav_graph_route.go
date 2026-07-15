@@ -12,9 +12,17 @@ type navRegionRouteStep struct {
 	Transition NavRegionTransitionDef
 }
 
-type navRegionParent struct {
-	Node       navRouteNode
-	Transition NavRegionTransitionDef
+type navRegionPortalKey struct {
+	FromTile   TerrainChunkCoordDef
+	Transition uint32
+	Start      bool
+}
+
+type navRegionPortalState struct {
+	Node   navRouteNode
+	Point  Vec3
+	Via    NavRegionTransitionDef
+	Parent navRegionPortalKey
 }
 
 // FindNavGraphRoute resolves world points, restricts long searches through a
@@ -48,16 +56,13 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 	var allowed map[TerrainChunkCoordDef]struct{}
 	if start.Region.Tile != goal.Region.Tile {
 		if sectors, ok := findNavSectorRoute(query, start.Region.Tile, goal.Region.Tile); ok {
-			allowed = make(map[TerrainChunkCoordDef]struct{}, len(sectors))
-			for _, sector := range sectors {
-				allowed[sector] = struct{}{}
-			}
+			allowed = navSectorCorridor(query, sectors)
 		}
 	}
-	regionRoute, ok := findNavRegionRoute(query, start.Region, goal.Region, allowed)
+	regionRoute, ok := findNavRegionRoute(query, start.Region, goal.Region, start.Projected, goal.Projected, allowed)
 	if !ok && allowed != nil {
 		// A tile corridor can hide a valid region detour through another tile.
-		regionRoute, ok = findNavRegionRoute(query, start.Region, goal.Region, nil)
+		regionRoute, ok = findNavRegionRoute(query, start.Region, goal.Region, start.Projected, goal.Projected, nil)
 	}
 	if !ok {
 		return NavRouteResult{FailureReason: NavRouteNoRoute, FailureTile: goal.Ref.Tile}, nil
@@ -79,6 +84,10 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 			EnterTransition: regionRoute[i].Transition.ID, Target: crossing,
 			RequiredAction: regionRoute[i].Transition.Kind,
 		})
+	}
+	if navRouteWalkOnly(result.Steps) && query.waypointLineVisible(start.Projected, goal.Projected) {
+		result.Waypoints = []Vec3{goal.Projected}
+		return result, nil
 	}
 
 	if len(backing) == 0 {
@@ -112,6 +121,9 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		query.appendSpanPath(&result.Waypoints, goal.Ref.Tile, goalPath.Spans, 1)
 	}
 	query.appendWaypoint(&result.Waypoints, goal.Projected)
+	if navRouteWalkOnly(result.Steps) {
+		result.Waypoints = query.simplifyWaypoints(start.Projected, result.Waypoints)
+	}
 	return result, nil
 }
 
@@ -168,80 +180,75 @@ func findNavSectorRoute(query *navGraphQuery, start, goal TerrainChunkCoordDef) 
 	return nil, false
 }
 
-func findNavRegionRoute(query *navGraphQuery, start, goal navRouteNode, allowed map[TerrainChunkCoordDef]struct{}) ([]navRegionRouteStep, bool) {
+func navSectorCorridor(query *navGraphQuery, sectors []TerrainChunkCoordDef) map[TerrainChunkCoordDef]struct{} {
+	allowed := make(map[TerrainChunkCoordDef]struct{}, len(sectors)*3)
+	for coord := range query.graphs {
+		for _, sector := range sectors {
+			if absNavSpanInt(coord.X-sector.X)+absNavSpanInt(coord.Y-sector.Y)+absNavSpanInt(coord.Z-sector.Z) <= 1 {
+				allowed[coord] = struct{}{}
+				break
+			}
+		}
+	}
+	return allowed
+}
+
+func findNavRegionRoute(query *navGraphQuery, start, goal navRouteNode, startPoint, goalPoint Vec3, allowed map[TerrainChunkCoordDef]struct{}) ([]navRegionRouteStep, bool) {
 	if start == goal {
 		return []navRegionRouteStep{{Node: start}}, true
 	}
-	heuristicScale := navRegionHeuristicScale(query, allowed)
-	frontier := navRouteQueue{{node: start, estimate: heuristicScale * navVec3Distance(query.regionCenter(start), query.regionCenter(goal))}}
+	startKey := navRegionPortalKey{Start: true}
+	frontier := navRegionPortalQueue{{key: startKey, estimate: navVec3Distance(startPoint, goalPoint)}}
 	heap.Init(&frontier)
-	costs := map[navRouteNode]float32{start: 0}
-	parents := make(map[navRouteNode]navRegionParent)
+	costs := map[navRegionPortalKey]float32{startKey: 0}
+	states := map[navRegionPortalKey]navRegionPortalState{startKey: {Node: start, Point: startPoint}}
 	for frontier.Len() > 0 {
-		current := heap.Pop(&frontier).(navRouteQueueItem)
-		if current.cost != costs[current.node] {
+		current := heap.Pop(&frontier).(navRegionPortalQueueItem)
+		if current.cost != costs[current.key] {
 			continue
 		}
-		if current.node == goal {
-			path := []navRegionRouteStep{{Node: goal, Transition: parents[goal].Transition}}
-			for node := goal; node != start; {
-				parent := parents[node]
-				node = parent.Node
-				step := navRegionRouteStep{Node: node}
-				if node != start {
-					step.Transition = parents[node].Transition
-				}
-				path = append(path, step)
+		state := states[current.key]
+		if state.Node == goal {
+			path := []navRegionRouteStep{{Node: start}}
+			var reversed []navRegionPortalState
+			for key := current.key; key != startKey; {
+				entry := states[key]
+				reversed = append(reversed, entry)
+				key = entry.Parent
 			}
-			reverseRegionRoute(path)
+			for i := len(reversed) - 1; i >= 0; i-- {
+				path = append(path, navRegionRouteStep{Node: reversed[i].Node, Transition: reversed[i].Via})
+			}
 			return path, true
 		}
-		graph := query.graphs[current.node.Tile]
+		graph := query.graphs[state.Node.Tile]
 		for _, transition := range graph.Transitions {
-			if transition.FromRegion != current.node.Region {
+			if transition.FromRegion != state.Node.Region {
 				continue
 			}
 			next := navRouteNode{Tile: transition.ToTile, Region: transition.ToRegion}
 			if !query.hasRegion(next) || !tileAllowed(allowed, next.Tile) {
 				continue
 			}
-			cost := current.cost + transition.Cost
-			if previous, seen := costs[next]; seen && cost >= previous {
+			edge, ok := query.findBackingSpanTransition(state.Node, transition)
+			if !ok {
 				continue
 			}
-			costs[next] = cost
-			parents[next] = navRegionParent{Node: current.node, Transition: transition}
-			heap.Push(&frontier, navRouteQueueItem{
-				node: next, cost: cost,
-				estimate: cost + heuristicScale*navVec3Distance(query.regionCenter(next), query.regionCenter(goal)),
+			point := query.spanTransitionTarget(state.Node.Tile, edge)
+			cost := current.cost + navVec3Distance(state.Point, point) + transition.Cost
+			key := navRegionPortalKey{FromTile: state.Node.Tile, Transition: transition.ID}
+			if previous, seen := costs[key]; seen && cost >= previous {
+				continue
+			}
+			costs[key] = cost
+			states[key] = navRegionPortalState{Node: next, Point: point, Via: transition, Parent: current.key}
+			heap.Push(&frontier, navRegionPortalQueueItem{
+				key: key, cost: cost,
+				estimate: cost + navVec3Distance(point, goalPoint),
 			})
 		}
 	}
 	return nil, false
-}
-
-func navRegionHeuristicScale(query *navGraphQuery, allowed map[TerrainChunkCoordDef]struct{}) float32 {
-	scale := float32(math.Inf(1))
-	for coord, graph := range query.graphs {
-		if !tileAllowed(allowed, coord) {
-			continue
-		}
-		for _, transition := range graph.Transitions {
-			from := navRouteNode{Tile: coord, Region: transition.FromRegion}
-			to := navRouteNode{Tile: transition.ToTile, Region: transition.ToRegion}
-			if !query.hasRegion(to) || !tileAllowed(allowed, to.Tile) {
-				continue
-			}
-			distance := navVec3Distance(query.regionCenter(from), query.regionCenter(to))
-			if distance > 0 {
-				scale = min(scale, transition.Cost/distance)
-			}
-		}
-	}
-	if !finite(scale) {
-		return 0
-	}
-	return scale
 }
 
 func (q *navGraphQuery) hasRegion(node navRouteNode) bool {
@@ -294,6 +301,33 @@ type navSpanPathCell struct {
 	height uint32
 }
 
+type navWalkableCell struct {
+	classID uint32
+	exits   uint8
+}
+
+const (
+	navWalkableExitPositiveX uint8 = 1 << iota
+	navWalkableExitNegativeX
+	navWalkableExitPositiveZ
+	navWalkableExitNegativeZ
+)
+
+func navWalkableExit(dx, dz int) uint8 {
+	switch {
+	case dx == 1 && dz == 0:
+		return navWalkableExitPositiveX
+	case dx == -1 && dz == 0:
+		return navWalkableExitNegativeX
+	case dx == 0 && dz == 1:
+		return navWalkableExitPositiveZ
+	case dx == 0 && dz == -1:
+		return navWalkableExitNegativeZ
+	default:
+		return 0
+	}
+}
+
 func navSpanPathVisible(cells map[navSpanPathCell]struct{}, from, to NavSpanDef) bool {
 	height := math.Float32bits(from.SupportHeight)
 	if math.Float32bits(to.SupportHeight) != height {
@@ -317,6 +351,92 @@ func (*navGraphQuery) appendWaypoint(dst *[]Vec3, waypoint Vec3) {
 	if len(*dst) == 0 || (*dst)[len(*dst)-1] != waypoint {
 		*dst = append(*dst, waypoint)
 	}
+}
+
+func navRouteWalkOnly(steps []NavRouteStep) bool {
+	for _, step := range steps {
+		if step.RequiredAction != "" && step.RequiredAction != NavTransitionWalk {
+			return false
+		}
+	}
+	return true
+}
+
+func (q *navGraphQuery) simplifyWaypoints(start Vec3, waypoints []Vec3) []Vec3 {
+	if len(waypoints) < 2 {
+		return waypoints
+	}
+	result := make([]Vec3, 0, len(waypoints))
+	anchor := start
+	for first := 0; first < len(waypoints); {
+		next := first
+		for candidate := len(waypoints) - 1; candidate > first; candidate-- {
+			if q.waypointLineVisible(anchor, waypoints[candidate]) {
+				next = candidate
+				break
+			}
+		}
+		result = append(result, waypoints[next])
+		anchor = waypoints[next]
+		first = next + 1
+	}
+	return result
+}
+
+func (q *navGraphQuery) waypointLineVisible(from, to Vec3) bool {
+	if q == nil || math.Float32bits(from[1]) != math.Float32bits(to[1]) {
+		return false
+	}
+	fromX := int(math.Floor(float64(from[0] / q.voxelResolution)))
+	fromZ := int(math.Floor(float64(from[2] / q.voxelResolution)))
+	toX := int(math.Floor(float64(to[0] / q.voxelResolution)))
+	toZ := int(math.Floor(float64(to[2] / q.voxelResolution)))
+	height := math.Float32bits(from[1])
+	classID := q.walkableCells[navSpanPathCell{x: fromX, z: fromZ, height: height}].classID
+	if classID == 0 || q.walkableCells[navSpanPathCell{x: toX, z: toZ, height: height}].classID != classID {
+		return false
+	}
+	steps := 2 * max(absNavSpanInt(toX-fromX), absNavSpanInt(toZ-fromZ))
+	if steps == 0 {
+		return true
+	}
+	previousX, previousZ := fromX, fromZ
+	for i := 1; i <= steps; i++ {
+		x := ((2*fromX+1)*(steps-i) + (2*toX+1)*i) / (2 * steps)
+		z := ((2*fromZ+1)*(steps-i) + (2*toZ+1)*i) / (2 * steps)
+		if !q.walkableCellsConnected(previousX, previousZ, x, z, height, classID) {
+			return false
+		}
+		previousX, previousZ = x, z
+	}
+	return true
+}
+
+func (q *navGraphQuery) walkableCellsConnected(fromX, fromZ, toX, toZ int, height, classID uint32) bool {
+	dx, dz := toX-fromX, toZ-fromZ
+	if dx == 0 && dz == 0 {
+		return true
+	}
+	if navWalkableExit(dx, dz) != 0 {
+		return q.walkableCardinalExit(fromX, fromZ, toX, toZ, height, classID)
+	}
+	if absNavSpanInt(dx) != 1 || absNavSpanInt(dz) != 1 {
+		return false
+	}
+	return q.walkableCardinalExit(fromX, fromZ, toX, fromZ, height, classID) &&
+		q.walkableCardinalExit(toX, fromZ, toX, toZ, height, classID) ||
+		q.walkableCardinalExit(fromX, fromZ, fromX, toZ, height, classID) &&
+			q.walkableCardinalExit(fromX, toZ, toX, toZ, height, classID)
+}
+
+func (q *navGraphQuery) walkableCardinalExit(fromX, fromZ, toX, toZ int, height, classID uint32) bool {
+	exit := navWalkableExit(toX-fromX, toZ-fromZ)
+	if exit == 0 {
+		return false
+	}
+	from := q.walkableCells[navSpanPathCell{x: fromX, z: fromZ, height: height}]
+	to := q.walkableCells[navSpanPathCell{x: toX, z: toZ, height: height}]
+	return from.classID == classID && to.classID == classID && from.exits&exit != 0
 }
 
 func tileAllowed(allowed map[TerrainChunkCoordDef]struct{}, tile TerrainChunkCoordDef) bool {
@@ -372,4 +492,43 @@ func (q *navRouteQueue) Pop() any {
 	last := old[len(old)-1]
 	*q = old[:len(old)-1]
 	return last
+}
+
+type navRegionPortalQueueItem struct {
+	key      navRegionPortalKey
+	cost     float32
+	estimate float32
+}
+
+type navRegionPortalQueue []navRegionPortalQueueItem
+
+func (q navRegionPortalQueue) Len() int { return len(q) }
+func (q navRegionPortalQueue) Less(i, j int) bool {
+	if q[i].estimate != q[j].estimate {
+		return q[i].estimate < q[j].estimate
+	}
+	if q[i].cost != q[j].cost {
+		return q[i].cost < q[j].cost
+	}
+	return navRegionPortalKeyLess(q[i].key, q[j].key)
+}
+func (q navRegionPortalQueue) Swap(i, j int) { q[i], q[j] = q[j], q[i] }
+func (q *navRegionPortalQueue) Push(value any) {
+	*q = append(*q, value.(navRegionPortalQueueItem))
+}
+func (q *navRegionPortalQueue) Pop() any {
+	old := *q
+	last := old[len(old)-1]
+	*q = old[:len(old)-1]
+	return last
+}
+
+func navRegionPortalKeyLess(a, b navRegionPortalKey) bool {
+	if a.Start != b.Start {
+		return a.Start
+	}
+	if a.FromTile != b.FromTile {
+		return terrainCoordLess(a.FromTile, b.FromTile)
+	}
+	return a.Transition < b.Transition
 }

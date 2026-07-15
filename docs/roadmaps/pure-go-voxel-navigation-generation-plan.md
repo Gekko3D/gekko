@@ -356,9 +356,10 @@ sector graph
   static spans.
 - Voxel destruction/addition rebuilds affected source and graph tiles.
 
-Initial waypoint generation is deliberately simple: region crossing centers
-plus the final target. Add line-of-travel simplification only when movement
-shows a real need. Do not add a funnel algorithm without polygons.
+Waypoint generation starts with region crossings plus the final target. After
+the measured Crossfire flat-field detour, walk-only routes use greedy
+line-of-travel simplification only when every crossed accepted span and
+directed walk edge validates. Do not add a funnel algorithm without polygons.
 
 ## Debugging Without Polygons
 

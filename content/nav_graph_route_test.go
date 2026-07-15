@@ -94,8 +94,7 @@ func TestFindNavGraphRoute(t *testing.T) {
 		}
 	})
 
-	t.Run("intermediate region follows its spans", func(t *testing.T) {
-		areas := []string{"start", "middle", "middle", "middle", "middle", "middle", "goal"}
+	t.Run("string pulling stays on supported spans", func(t *testing.T) {
 		cells := [][2]int{{0, 0}, {1, 0}, {1, 1}, {2, 1}, {3, 0}, {3, 1}, {4, 0}}
 		source := NavSourceTileDef{
 			NavID: "turn", SchemaVersion: CurrentNavSourceTileSchemaVersion, BuilderVersion: "test",
@@ -104,7 +103,7 @@ func TestFindNavGraphRoute(t *testing.T) {
 		for i, cell := range cells {
 			source.Spans = append(source.Spans, NavSpanDef{
 				ID: uint32(i), X: cell[0], Z: cell[1], SupportHeight: 0, CeilingHeight: 3,
-				Headroom: 3, ClearanceRadius: 1, Area: areas[i],
+				Headroom: 3, ClearanceRadius: 1, Area: "ground",
 			})
 		}
 		built, err := BuildNavSpanGraph(source, profile, 1)
@@ -120,7 +119,7 @@ func TestFindNavGraphRoute(t *testing.T) {
 				return
 			}
 		}
-		t.Fatalf("route cut across unsupported middle region: %v", route.Waypoints)
+		t.Fatalf("route cut across unsupported cells: %v", route.Waypoints)
 	})
 
 	t.Run("clear diagonal stays direct", func(t *testing.T) {
@@ -144,8 +143,24 @@ func TestFindNavGraphRoute(t *testing.T) {
 		if err != nil || !route.Found {
 			t.Fatalf("route failed: route=%+v err=%v", route, err)
 		}
-		if len(route.Waypoints) != 2 || route.Waypoints[0] != (Vec3{4.5, 0, 4.5}) {
+		if len(route.Waypoints) != 1 || route.Waypoints[0] != (Vec3{4.9, 0, 4.9}) {
 			t.Fatalf("clear diagonal was not simplified: %v", route.Waypoints)
+		}
+	})
+
+	t.Run("cross tile diagonal chooses geometric corridor", func(t *testing.T) {
+		coords := []TerrainChunkCoordDef{{}, {X: -1}, {Z: 1}, {X: -1, Z: 1}}
+		sources, graphs := buildFlatNavRouteWorld(t, coords, 4, profile)
+		start, goal := Vec3{2.5, 0.2, 3.5}, Vec3{-2.5, 0.2, 5.5}
+		route, err := FindNavGraphRoute(sources, graphs, 4, 1, start, goal)
+		if err != nil || !route.Found {
+			t.Fatalf("route failed: route=%+v err=%v", route, err)
+		}
+		if len(route.Steps) != 3 || route.Steps[1].Tile != (TerrainChunkCoordDef{Z: 1}) {
+			t.Fatalf("route chose non-geometric equal-hop corridor: %+v", route.Steps)
+		}
+		if len(route.Waypoints) != 1 || route.Waypoints[0] != (Vec3{-2.5, 0, 5.5}) {
+			t.Fatalf("clear cross-tile route was not string-pulled: %v", route.Waypoints)
 		}
 	})
 
@@ -168,6 +183,46 @@ func TestFindNavGraphRoute(t *testing.T) {
 			t.Fatalf("disconnected route mismatch: route=%+v err=%v", route, err)
 		}
 	})
+}
+
+func buildFlatNavRouteWorld(t *testing.T, coords []TerrainChunkCoordDef, chunkSize int, profile NavAgentProfileDef) ([]NavSourceTileDef, []NavGraphTileDef) {
+	t.Helper()
+	sources := make([]NavSourceTileDef, len(coords))
+	hashes := make(map[TerrainChunkCoordDef]string, len(coords))
+	for i, coord := range coords {
+		source := NavSourceTileDef{
+			NavID: "flat", SchemaVersion: CurrentNavSourceTileSchemaVersion, BuilderVersion: "test",
+			Coord: coord, ChunkSize: chunkSize, SourceHash: TerrainChunkKey(coord),
+		}
+		for x := 0; x < chunkSize; x++ {
+			for z := 0; z < chunkSize; z++ {
+				source.Spans = append(source.Spans, NavSpanDef{
+					ID: uint32(len(source.Spans)), X: x, Z: z, SupportHeight: 0, CeilingHeight: 3,
+					Headroom: 3, ClearanceRadius: 1, Area: "ground",
+				})
+			}
+		}
+		sources[i], hashes[coord] = source, source.SourceHash
+	}
+	for i := range sources {
+		sources[i].DependencyHash = navGraphDependencyHash(sources[i].Coord, func(coord TerrainChunkCoordDef) (string, bool) {
+			hash, ok := hashes[coord]
+			return hash, ok
+		})
+	}
+	graphs := make([]NavGraphTileDef, len(sources))
+	for i, source := range sources {
+		built, err := BuildNavSpanGraph(source, profile, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		graphs[i] = built.Graph
+	}
+	connectedSources, connectedGraphs, err := ConnectNavGraphTiles(sources, graphs, profile, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connectedSources, connectedGraphs
 }
 
 func TestFindNearestNavGraphPointChoosesSupportedStackedSpan(t *testing.T) {
