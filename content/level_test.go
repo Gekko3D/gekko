@@ -797,6 +797,7 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		Speed:             3.5,
 		Wait:              1,
 		Lip:               0.1,
+		SpawnFlags:        1,
 		TargetName:        "door_a",
 		SourceTag:         "hl1:func_door",
 	}}
@@ -953,7 +954,7 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
-	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 || loaded.MovingBrushes[0].MotionKind != "rotate" || loaded.MovingBrushes[0].OpenAngle != -90 || loaded.MovingBrushes[0].PathTarget != "corner_a" {
+	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 || loaded.MovingBrushes[0].MotionKind != "rotate" || loaded.MovingBrushes[0].OpenAngle != -90 || loaded.MovingBrushes[0].PathTarget != "corner_a" || loaded.MovingBrushes[0].SpawnFlags != 1 {
 		t.Fatalf("moving brushes did not round-trip: %+v", loaded.MovingBrushes)
 	}
 	if len(loaded.PathNodes) != 1 || loaded.PathNodes[0].TargetName != "corner_a" || loaded.PathNodes[0].Target != "corner_b" || loaded.PathNodes[0].Speed != 1.5 {

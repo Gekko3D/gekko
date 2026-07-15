@@ -14,7 +14,14 @@ type CharacterCollisionConfig struct {
 	ContactEpsilon          float32
 	MaxDepenetration        float32
 	DepenetrationIterations int
+	// DynamicCollisionQuery supplements static voxel-world collision with
+	// runtime gameplay geometry such as moving brushes.
+	DynamicCollisionQuery CharacterCollisionQuery
 }
+
+// CharacterCollisionQuery returns the nearest hit against runtime collision
+// geometry. It follows the same filtering contract as VoxelRtState.RaycastFiltered.
+type CharacterCollisionQuery func(origin, dir mgl32.Vec3, maxDistance float32, acceptEntity func(EntityId, bool) bool) RaycastHit
 
 type CharacterCollisionHit struct {
 	RaycastHit
@@ -125,6 +132,9 @@ func CharacterGroundedMove(voxRt *VoxelRtState, position, move mgl32.Vec3, opts 
 		return result
 	}
 	cfg := effectiveCharacterCollisionConfig(opts.CollisionConfig)
+	if opts.GroundConfig.DynamicCollisionQuery == nil {
+		opts.GroundConfig.DynamicCollisionQuery = cfg.DynamicCollisionQuery
+	}
 	if depen := CharacterDepenetrateInitialContacts(voxRt, position, move, cfg, opts.AcceptEntity); depen.Depenetrated {
 		position = depen.Position
 		result.Position = position
@@ -158,7 +168,7 @@ func CharacterGroundedMove(voxRt *VoxelRtState, position, move mgl32.Vec3, opts 
 }
 
 func characterGroundedStepMove(voxRt *VoxelRtState, position, move mgl32.Vec3, cfg CharacterCollisionConfig, opts CharacterGroundedMoveOptions) (mgl32.Vec3, bool) {
-	if voxRt == nil || cfg.StepHeight <= 0 {
+	if !characterCollisionAvailable(voxRt, cfg.DynamicCollisionQuery) || cfg.StepHeight <= 0 {
 		return mgl32.Vec3{}, false
 	}
 	raised, blocked := CharacterVerticalMove(voxRt, position, cfg.StepHeight, cfg, opts.AcceptEntity)
@@ -178,7 +188,7 @@ func characterGroundedStepMove(voxRt *VoxelRtState, position, move mgl32.Vec3, c
 }
 
 func characterGroundedMoveLanding(voxRt *VoxelRtState, start, candidate mgl32.Vec3, cfg CharacterCollisionConfig, opts CharacterGroundedMoveOptions) mgl32.Vec3 {
-	if voxRt == nil {
+	if !characterCollisionAvailable(voxRt, opts.GroundConfig.DynamicCollisionQuery) {
 		return candidate
 	}
 	maxDown := cfg.StepHeight + defaultCharacterCollisionFloat(opts.GroundConfig.GroundProbe, 0.15)
@@ -192,7 +202,7 @@ func characterGroundedMoveLanding(voxRt *VoxelRtState, start, candidate mgl32.Ve
 // CharacterVerticalMove sweeps the character footprint along Y and returns
 // the reachable position. The collision flag reports a ceiling or floor hit.
 func CharacterVerticalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
-	if voxRt == nil || math.Abs(float64(deltaY)) <= 1e-5 {
+	if !characterCollisionAvailable(voxRt, cfg.DynamicCollisionQuery) || math.Abs(float64(deltaY)) <= 1e-5 {
 		return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
 	}
 	cfg = effectiveCharacterCollisionConfig(cfg)
@@ -207,7 +217,7 @@ func CharacterVerticalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float
 	allowed := distance
 	for _, offset := range CharacterVerticalCollisionOffsets(cfg.Radius) {
 		origin := basePos.Add(offset).Add(mgl32.Vec3{0, originY, 0})
-		hit := voxRt.RaycastFiltered(origin, mgl32.Vec3{0, dirY, 0}, distance+clearance, acceptEntity)
+		hit := characterRaycastFiltered(voxRt, origin, mgl32.Vec3{0, dirY, 0}, distance+clearance, acceptEntity, cfg.DynamicCollisionQuery)
 		if !hit.Hit || hit.T > distance+clearance {
 			continue
 		}
@@ -229,7 +239,7 @@ func CharacterVerticalCollisionOffsets(radius float32) []mgl32.Vec3 {
 
 func CharacterMovementBlockHit(voxRt *VoxelRtState, basePos, move mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) (CharacterCollisionHit, bool) {
 	move[1] = 0
-	if voxRt == nil || move.Len() <= 0 {
+	if !characterCollisionAvailable(voxRt, cfg.DynamicCollisionQuery) || move.Len() <= 0 {
 		return CharacterCollisionHit{}, false
 	}
 	cfg = effectiveCharacterCollisionConfig(cfg)
@@ -238,7 +248,7 @@ func CharacterMovementBlockHit(voxRt *VoxelRtState, basePos, move mgl32.Vec3, cf
 	for _, sampleY := range CharacterCollisionSampleHeights(cfg) {
 		for _, offset := range CharacterCollisionSideOffsets(dir, cfg.Radius) {
 			origin := basePos.Add(offset).Add(mgl32.Vec3{0, sampleY, 0})
-			hit := voxRt.RaycastFiltered(origin, dir, dist, acceptEntity)
+			hit := characterRaycastFiltered(voxRt, origin, dir, dist, acceptEntity, cfg.DynamicCollisionQuery)
 			if hit.Hit && hit.T <= dist && characterHorizontalHitBlocksMovement(hit.Normal) {
 				return CharacterCollisionHit{
 					RaycastHit: hit,
@@ -275,7 +285,7 @@ func characterKinematicSlideMove(move, normal mgl32.Vec3) (mgl32.Vec3, bool) {
 
 func CharacterDepenetrateInitialContacts(voxRt *VoxelRtState, basePos, intent mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) CharacterDepenetrationResult {
 	result := CharacterDepenetrationResult{Position: basePos}
-	if voxRt == nil {
+	if !characterCollisionAvailable(voxRt, cfg.DynamicCollisionQuery) {
 		return result
 	}
 	cfg = effectiveCharacterCollisionConfig(cfg)
@@ -425,6 +435,25 @@ func effectiveCharacterCollisionConfig(cfg CharacterCollisionConfig) CharacterCo
 		cfg.MaxDepenetration = maxCharacterCollisionFloat(cfg.Radius*0.5, cfg.SkinWidth)
 	}
 	return cfg
+}
+
+func characterCollisionAvailable(voxRt *VoxelRtState, query CharacterCollisionQuery) bool {
+	return voxRt != nil || query != nil
+}
+
+func characterRaycastFiltered(voxRt *VoxelRtState, origin, dir mgl32.Vec3, maxDistance float32, acceptEntity func(EntityId, bool) bool, query CharacterCollisionQuery) RaycastHit {
+	best := RaycastHit{}
+	if voxRt != nil {
+		best = voxRt.RaycastFiltered(origin, dir, maxDistance, acceptEntity)
+	}
+	if query == nil {
+		return best
+	}
+	dynamic := query(origin, dir, maxDistance, acceptEntity)
+	if dynamic.Hit && dynamic.T <= maxDistance && (!best.Hit || dynamic.T < best.T) {
+		return dynamic
+	}
+	return best
 }
 
 func minCharacterCollisionFloat(a, b float32) float32 {

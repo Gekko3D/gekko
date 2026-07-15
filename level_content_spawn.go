@@ -458,6 +458,7 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 			Speed:              brush.Speed,
 			Wait:               brush.Wait,
 			Lip:                brush.Lip,
+			SpawnFlags:         brush.SpawnFlags,
 			TargetName:         brush.TargetName,
 			Target:             brush.Target,
 			SourceTag:          brush.SourceTag,

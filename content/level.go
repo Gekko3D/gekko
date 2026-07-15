@@ -303,6 +303,7 @@ type LevelMovingBrushDef struct {
 	Speed             float32  `json:"speed,omitempty"`
 	Wait              float32  `json:"wait,omitempty"`
 	Lip               float32  `json:"lip,omitempty"`
+	SpawnFlags        int      `json:"spawn_flags,omitempty"`
 	TargetName        string   `json:"target_name,omitempty"`
 	Target            string   `json:"target,omitempty"`
 	SourceTag         string   `json:"source_tag,omitempty"`

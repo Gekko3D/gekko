@@ -274,7 +274,7 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 			return true
 		}
 		collisionFilter := groundedPlayerCollisionRaycastFilter(cmd, ctrl)
-		groundedPlayerUpdateStance(voxRt, basePos, ctrl, collisionFilter)
+		groundedPlayerUpdateStance(cmd, voxRt, basePos, ctrl, collisionFilter)
 		waterEntity, _, swimming := findGroundedPlayerWaterBody(cmd, basePos, ctrl)
 		ctrl.Swimming = swimming
 		if swimming {
@@ -302,15 +302,15 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 			if move.Len() > 0 {
 				move = move.Normalize()
 			}
-			basePos = tryGroundedHorizontalMove(voxRt, basePos, move.Mul(speed*dt), ctrl, collisionFilter)
-			resolveGroundedSwimMovement(voxRt, &basePos, ctrl, dt, collisionFilter)
+			basePos = tryGroundedHorizontalMove(cmd, voxRt, basePos, move.Mul(speed*dt), ctrl, collisionFilter)
+			resolveGroundedSwimMovement(cmd, voxRt, &basePos, ctrl, dt, collisionFilter)
 		} else if ladderEntity, ladder, ok := findGroundedPlayerLadderVolume(cmd, basePos, ctrl); ok {
 			ctrl.OnLadder = true
 			ctrl.LadderEntity = ladderEntity
 			ctrl.LadderClimbSpeed = ladder.NormalizedClimbSpeed()
 			lateralMove := right.Mul(ctrl.MoveInput[0] * speed * 0.5 * dt)
-			basePos = tryGroundedHorizontalMove(voxRt, basePos, lateralMove, ctrl, collisionFilter)
-			resolveGroundedLadderMovement(voxRt, &basePos, ctrl, dt, collisionFilter)
+			basePos = tryGroundedHorizontalMove(cmd, voxRt, basePos, lateralMove, ctrl, collisionFilter)
+			resolveGroundedLadderMovement(cmd, voxRt, &basePos, ctrl, dt, collisionFilter)
 		} else {
 			ctrl.OnLadder = false
 			ctrl.LadderEntity = 0
@@ -321,11 +321,11 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 			}
 			horizontalMove := move.Mul(speed * dt)
 			basePos = CharacterGroundedMove(voxRt, basePos, horizontalMove, CharacterGroundedMoveOptions{
-				CollisionConfig: groundedPlayerCharacterCollisionConfig(ctrl),
+				CollisionConfig: groundedPlayerCharacterCollisionConfig(cmd, ctrl),
 				GroundConfig:    groundedPlayerGroundProbeConfig(ctrl),
 				AcceptEntity:    collisionFilter,
 			}).Position
-			resolveGroundedVertical(voxRt, &basePos, ctrl, dt, collisionFilter)
+			resolveGroundedVertical(cmd, voxRt, &basePos, ctrl, dt, collisionFilter)
 		}
 
 		groundedPlayerApplyTransform(cmd, eid, cam, ctrl, basePos)
@@ -376,7 +376,9 @@ func groundedPlayerUseSystem(cmd *Commands, input *Input) {
 		}
 		if hit, ok := findMovingBrushUseHit(cmd, origin, dir, 2.2); ok {
 			hit.Brush.ActivationCount++
-			hit.Brush.Open = !hit.Brush.Open
+			if !hit.Brush.DoesNotMove() {
+				hit.Brush.Open = !hit.Brush.Open
+			}
 			if hit.Brush.Target != "" {
 				ActivateTarget(cmd, hit.Brush.Target, 0)
 			}
@@ -449,7 +451,9 @@ func activateMovingBrushAtBounds(cmd *Commands, center, halfExtents mgl32.Vec3) 
 		if !aabbOverlap(center.Sub(halfExtents), center.Add(halfExtents), brush.BoundsCenter.Sub(brush.BoundsHalfExtents), brush.BoundsCenter.Add(brush.BoundsHalfExtents)) {
 			return true
 		}
-		brush.Open = !brush.Open
+		if !brush.DoesNotMove() {
+			brush.Open = !brush.Open
+		}
 		brush.ActivationCount++
 		return false
 	})
@@ -512,7 +516,7 @@ func findGroundedPlayerLadderVolume(cmd *Commands, basePos mgl32.Vec3, ctrl *Gro
 	return foundEntity, foundLadder, foundEntity != 0
 }
 
-func groundedPlayerUpdateStance(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) {
+func groundedPlayerUpdateStance(cmd *Commands, voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) {
 	if ctrl == nil {
 		return
 	}
@@ -530,7 +534,7 @@ func groundedPlayerUpdateStance(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *G
 		ctrl.EyeHeight = minf(defaulted(ctrl.CrouchEyeHeight, standingEyeHeight*0.5), standingEyeHeight)
 		return
 	}
-	if !ctrl.Crouching || !groundedPlayerCanStand(voxRt, basePos, ctrl, acceptEntity) {
+	if !ctrl.Crouching || !groundedPlayerCanStand(cmd, voxRt, basePos, ctrl, acceptEntity) {
 		return
 	}
 	ctrl.Crouching = false
@@ -538,8 +542,8 @@ func groundedPlayerUpdateStance(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *G
 	ctrl.EyeHeight = standingEyeHeight
 }
 
-func groundedPlayerCanStand(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) bool {
-	if voxRt == nil || ctrl == nil {
+func groundedPlayerCanStand(cmd *Commands, voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) bool {
+	if ctrl == nil {
 		return true
 	}
 	standingHeight := defaulted(ctrl.StandingHeight, ctrl.Height)
@@ -550,7 +554,7 @@ func groundedPlayerCanStand(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *Groun
 	}
 	for _, offset := range CharacterVerticalCollisionOffsets(defaulted(ctrl.Radius, 0.35)) {
 		origin := basePos.Add(offset).Add(mgl32.Vec3{0, currentHeight, 0})
-		if hit := voxRt.RaycastFiltered(origin, mgl32.Vec3{0, 1, 0}, clearanceHeight+0.03, acceptEntity); hit.Hit && hit.T <= clearanceHeight+0.03 {
+		if hit := characterRaycastFiltered(voxRt, origin, mgl32.Vec3{0, 1, 0}, clearanceHeight+0.03, acceptEntity, MovingBrushCollisionQuery(cmd)); hit.Hit && hit.T <= clearanceHeight+0.03 {
 			return false
 		}
 	}
@@ -578,7 +582,7 @@ func findGroundedPlayerWaterBody(cmd *Commands, basePos mgl32.Vec3, ctrl *Ground
 	return 0, waterInteractionBody{}, false
 }
 
-func resolveGroundedLadderMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
+func resolveGroundedLadderMovement(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
 	if basePos == nil || ctrl == nil {
 		return
 	}
@@ -588,7 +592,7 @@ func resolveGroundedLadderMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctr
 		ctrl.Grounded = false
 		ctrl.NeedsGroundSnap = false
 		ctrl.VerticalVelocity = defaulted(ctrl.JumpSpeed, 5.5) * 0.5
-		nextBase, blocked := tryGroundedVerticalMove(voxRt, *basePos, ctrl.VerticalVelocity*dt, ctrl, acceptEntity)
+		nextBase, blocked := tryGroundedVerticalMove(cmd, voxRt, *basePos, ctrl.VerticalVelocity*dt, ctrl, acceptEntity)
 		*basePos = nextBase
 		if blocked {
 			ctrl.VerticalVelocity = 0
@@ -596,14 +600,14 @@ func resolveGroundedLadderMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctr
 		ctrl.JumpQueued = false
 		return
 	}
-	*basePos, _ = tryGroundedVerticalMove(voxRt, *basePos, ctrl.MoveInput[1]*defaulted(ctrl.LadderClimbSpeed, DefaultLadderClimbSpeed)*dt, ctrl, acceptEntity)
+	*basePos, _ = tryGroundedVerticalMove(cmd, voxRt, *basePos, ctrl.MoveInput[1]*defaulted(ctrl.LadderClimbSpeed, DefaultLadderClimbSpeed)*dt, ctrl, acceptEntity)
 	ctrl.VerticalVelocity = 0
 	ctrl.Grounded = false
 	ctrl.NeedsGroundSnap = false
 	ctrl.JumpQueued = false
 }
 
-func resolveGroundedSwimMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
+func resolveGroundedSwimMovement(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
 	if basePos == nil || ctrl == nil {
 		return
 	}
@@ -614,18 +618,18 @@ func resolveGroundedSwimMovement(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl 
 	if ctrl.CrouchRequested {
 		vertical -= defaulted(ctrl.SwimSpeed, 3.5)
 	}
-	*basePos, _ = tryGroundedVerticalMove(voxRt, *basePos, vertical*dt, ctrl, acceptEntity)
+	*basePos, _ = tryGroundedVerticalMove(cmd, voxRt, *basePos, vertical*dt, ctrl, acceptEntity)
 	ctrl.VerticalVelocity = 0
 	ctrl.Grounded = false
 	ctrl.NeedsGroundSnap = false
 	ctrl.JumpQueued = false
 }
 
-func tryGroundedVerticalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
+func tryGroundedVerticalMove(cmd *Commands, voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
 	if ctrl == nil {
 		return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
 	}
-	return CharacterVerticalMove(voxRt, basePos, deltaY, groundedPlayerCharacterCollisionConfig(ctrl), acceptEntity)
+	return CharacterVerticalMove(voxRt, basePos, deltaY, groundedPlayerCharacterCollisionConfig(cmd, ctrl), acceptEntity)
 }
 
 func aabbOverlap(aMin, aMax, bMin, bMax mgl32.Vec3) bool {
@@ -648,27 +652,32 @@ func applyGroundedLook(cam *CameraComponent, ctrl *GroundedPlayerControllerCompo
 	}
 }
 
-func tryGroundedHorizontalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, move mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) mgl32.Vec3 {
+func tryGroundedHorizontalMove(cmd *Commands, voxRt *VoxelRtState, basePos mgl32.Vec3, move mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) mgl32.Vec3 {
 	if move.Len() <= 0 {
 		return basePos
 	}
 	target := basePos.Add(mgl32.Vec3{move.X(), 0, move.Z()})
-	if !groundedMovementBlocked(voxRt, basePos, mgl32.Vec3{move.X(), 0, move.Z()}, ctrl, acceptEntity) {
+	query := MovingBrushCollisionQuery(cmd)
+	if !groundedMovementBlockedWithQuery(voxRt, basePos, mgl32.Vec3{move.X(), 0, move.Z()}, ctrl, acceptEntity, query) {
 		return target
 	}
 	xOnly := mgl32.Vec3{move.X(), 0, 0}
-	if math.Abs(float64(xOnly.X())) > 1e-5 && !groundedMovementBlocked(voxRt, basePos, xOnly, ctrl, acceptEntity) {
+	if math.Abs(float64(xOnly.X())) > 1e-5 && !groundedMovementBlockedWithQuery(voxRt, basePos, xOnly, ctrl, acceptEntity, query) {
 		basePos = basePos.Add(xOnly)
 	}
 	zOnly := mgl32.Vec3{0, 0, move.Z()}
-	if math.Abs(float64(zOnly.Z())) > 1e-5 && !groundedMovementBlocked(voxRt, basePos, zOnly, ctrl, acceptEntity) {
+	if math.Abs(float64(zOnly.Z())) > 1e-5 && !groundedMovementBlockedWithQuery(voxRt, basePos, zOnly, ctrl, acceptEntity, query) {
 		basePos = basePos.Add(zOnly)
 	}
 	return basePos
 }
 
 func groundedMovementBlocked(voxRt *VoxelRtState, basePos, move mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) bool {
-	if voxRt == nil || move.Len() <= 0 {
+	return groundedMovementBlockedWithQuery(voxRt, basePos, move, ctrl, acceptEntity, nil)
+}
+
+func groundedMovementBlockedWithQuery(voxRt *VoxelRtState, basePos, move mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool, query CharacterCollisionQuery) bool {
+	if !characterCollisionAvailable(voxRt, query) || move.Len() <= 0 {
 		return false
 	}
 	dir := move.Normalize()
@@ -689,7 +698,7 @@ func groundedMovementBlocked(voxRt *VoxelRtState, basePos, move mgl32.Vec3, ctrl
 	for _, sampleY := range samples {
 		for _, offset := range offsets {
 			origin := basePos.Add(offset).Add(mgl32.Vec3{0, sampleY, 0})
-			hit := voxRt.RaycastFiltered(origin, dir, dist, acceptEntity)
+			hit := characterRaycastFiltered(voxRt, origin, dir, dist, acceptEntity, query)
 			if hit.Hit && hit.T <= dist {
 				return true
 			}
@@ -698,13 +707,14 @@ func groundedMovementBlocked(voxRt *VoxelRtState, basePos, move mgl32.Vec3, ctrl
 	return false
 }
 
-func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
+func resolveGroundedVertical(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
 	if basePos == nil || ctrl == nil {
 		return
 	}
 	stepHeight := defaulted(ctrl.StepHeight, 0.6)
 	groundProbe := defaulted(ctrl.GroundProbe, 0.15)
 	maxSnapUp := groundedPlayerGroundSnapUpTolerance(ctrl)
+	dynamicQuery := MovingBrushCollisionQuery(cmd)
 
 	if ctrl.Grounded && ctrl.JumpQueued {
 		ctrl.Grounded = false
@@ -713,8 +723,8 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 	}
 	ctrl.JumpQueued = false
 
-	if voxRt != nil && ctrl.Grounded {
-		if hit, ok := groundedPlayerGroundHitWithin(voxRt, *basePos, ctrl, maxSnapUp, stepHeight+groundProbe, acceptEntity); ok && CharacterAcceptsGroundY(basePos.Y(), hit.Y, maxSnapUp, stepHeight+groundProbe) {
+	if characterCollisionAvailable(voxRt, dynamicQuery) && ctrl.Grounded {
+		if hit, ok := groundedPlayerGroundHitWithin(cmd, voxRt, *basePos, ctrl, maxSnapUp, stepHeight+groundProbe, acceptEntity); ok && CharacterAcceptsGroundY(basePos.Y(), hit.Y, maxSnapUp, stepHeight+groundProbe) {
 			basePos[1] = hit.Y
 			ctrl.VerticalVelocity = 0
 			return
@@ -725,7 +735,7 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 	if !ctrl.Grounded {
 		ctrl.VerticalVelocity -= defaulted(ctrl.Gravity, 18.0) * dt
 		deltaY := ctrl.VerticalVelocity * dt
-		if next, blocked := tryGroundedVerticalMove(voxRt, *basePos, deltaY, ctrl, acceptEntity); blocked {
+		if next, blocked := tryGroundedVerticalMove(cmd, voxRt, *basePos, deltaY, ctrl, acceptEntity); blocked {
 			*basePos = next
 			ctrl.VerticalVelocity = 0
 			if deltaY < 0 {
@@ -738,12 +748,12 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 		}
 	}
 
-	if voxRt == nil {
+	if !characterCollisionAvailable(voxRt, dynamicQuery) {
 		return
 	}
 	fallDistance := maxf(-ctrl.VerticalVelocity*dt, 0)
 	if ctrl.NeedsGroundSnap {
-		if hit, ok := groundedPlayerGroundHitWithin(voxRt, *basePos, ctrl, maxSnapUp, stepHeight+groundProbe+fallDistance, acceptEntity); ok {
+		if hit, ok := groundedPlayerGroundHitWithin(cmd, voxRt, *basePos, ctrl, maxSnapUp, stepHeight+groundProbe+fallDistance, acceptEntity); ok {
 			basePos[1] = hit.Y
 			ctrl.VerticalVelocity = 0
 			ctrl.Grounded = true
@@ -751,7 +761,7 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 		}
 		return
 	}
-	if hit, ok := groundedPlayerGroundHitWithin(voxRt, *basePos, ctrl, maxSnapUp+fallDistance, stepHeight+groundProbe+fallDistance, acceptEntity); ok {
+	if hit, ok := groundedPlayerGroundHitWithin(cmd, voxRt, *basePos, ctrl, maxSnapUp+fallDistance, stepHeight+groundProbe+fallDistance, acceptEntity); ok {
 		if ctrl.VerticalVelocity <= 0 && CharacterAcceptsGroundY(basePos.Y(), hit.Y, maxSnapUp+fallDistance, stepHeight+groundProbe+fallDistance) {
 			basePos[1] = hit.Y
 			ctrl.VerticalVelocity = 0
@@ -762,22 +772,25 @@ func resolveGroundedVertical(voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *Gro
 	ctrl.Grounded = false
 }
 
-func groundedPlayerCharacterCollisionConfig(ctrl *GroundedPlayerControllerComponent) CharacterCollisionConfig {
+func groundedPlayerCharacterCollisionConfig(cmd *Commands, ctrl *GroundedPlayerControllerComponent) CharacterCollisionConfig {
 	if ctrl == nil {
 		return CharacterCollisionConfig{}
 	}
 	return CharacterCollisionConfig{
-		Radius:     defaulted(ctrl.Radius, 0.35),
-		Height:     defaulted(ctrl.Height, 1.8),
-		StepHeight: defaulted(ctrl.StepHeight, 0.6),
+		Radius:                defaulted(ctrl.Radius, 0.35),
+		Height:                defaulted(ctrl.Height, 1.8),
+		StepHeight:            defaulted(ctrl.StepHeight, 0.6),
+		DynamicCollisionQuery: MovingBrushCollisionQuery(cmd),
 	}
 }
 
-func groundedPlayerGroundHitWithin(voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, maxSnapUp, maxSnapDown float32, acceptEntity func(EntityId, bool) bool) (CharacterGroundHit, bool) {
+func groundedPlayerGroundHitWithin(cmd *Commands, voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, maxSnapUp, maxSnapDown float32, acceptEntity func(EntityId, bool) bool) (CharacterGroundHit, bool) {
 	if ctrl == nil {
 		return CharacterGroundHit{}, false
 	}
-	return CharacterGroundHitAtWithin(voxRt, basePos, groundedPlayerGroundProbeConfig(ctrl), maxSnapUp, maxSnapDown, acceptEntity)
+	ground := groundedPlayerGroundProbeConfig(ctrl)
+	ground.DynamicCollisionQuery = MovingBrushCollisionQuery(cmd)
+	return CharacterGroundHitAtWithin(voxRt, basePos, ground, maxSnapUp, maxSnapDown, acceptEntity)
 }
 
 func groundedPlayerCollisionRaycastFilter(cmd *Commands, ctrl *GroundedPlayerControllerComponent) func(EntityId, bool) bool {

@@ -162,7 +162,7 @@ func TestGroundedPlayerVerticalUsesFootprintGroundProbe(t *testing.T) {
 		Grounded:    true,
 	}
 
-	resolveGroundedVertical(state, &basePos, ctrl, 1.0/60.0, nil)
+	resolveGroundedVertical(nil, state, &basePos, ctrl, 1.0/60.0, nil)
 
 	if !ctrl.Grounded {
 		t.Fatalf("expected player footprint to stay grounded on edge-supported floor, got %+v", *ctrl)
@@ -184,7 +184,7 @@ func TestGroundedPlayerCrouchRestoresOnlyWhenClear(t *testing.T) {
 		CrouchRequested:   true,
 	}
 	basePos := mgl32.Vec3{}
-	groundedPlayerUpdateStance(nil, basePos, ctrl, nil)
+	groundedPlayerUpdateStance(nil, nil, basePos, ctrl, nil)
 	if !ctrl.Crouching || ctrl.Height != 1.0 || ctrl.EyeHeight != 0.9 {
 		t.Fatalf("expected crouch dimensions, got %+v", *ctrl)
 	}
@@ -198,12 +198,12 @@ func TestGroundedPlayerCrouchRestoresOnlyWhenClear(t *testing.T) {
 	ceiling.UpdateWorldAABB()
 	state.RtApp.Scene.AddObject(ceiling)
 	ctrl.CrouchRequested = false
-	groundedPlayerUpdateStance(state, basePos, ctrl, nil)
+	groundedPlayerUpdateStance(nil, state, basePos, ctrl, nil)
 	if !ctrl.Crouching || ctrl.Height != 1.0 {
 		t.Fatalf("expected ceiling to keep player crouched, got %+v", *ctrl)
 	}
 
-	groundedPlayerUpdateStance(nil, basePos, ctrl, nil)
+	groundedPlayerUpdateStance(nil, nil, basePos, ctrl, nil)
 	if ctrl.Crouching || ctrl.Height != 1.8 || ctrl.EyeHeight != 1.7 {
 		t.Fatalf("expected clear space to restore standing dimensions, got %+v", *ctrl)
 	}
@@ -387,6 +387,26 @@ func TestGroundedPlayerUseActivatesLinkedMovingBrush(t *testing.T) {
 	if triggerCount != 1 || brushCount != 1 || !doorOpen {
 		t.Fatalf("expected linked button to open door, trigger=%d brush=%d open=%v", triggerCount, brushCount, doorOpen)
 	}
+}
+
+func TestStaticHL1ButtonActivatesTargetWithoutMoving(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	cmd.AddEntity(&MovingBrushComponent{
+		Kind:              "hl1_func_button",
+		SpawnFlags:        1,
+		BoundsCenter:      mgl32.Vec3{1, 1, 1},
+		BoundsHalfExtents: mgl32.Vec3{0.25, 0.25, 0.25},
+	})
+	app.FlushCommands()
+
+	activateMovingBrushAtBounds(cmd, mgl32.Vec3{1, 1, 1}, mgl32.Vec3{0.25, 0.25, 0.25})
+	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, button *MovingBrushComponent) bool {
+		if button.Open || button.ActivationCount != 1 {
+			t.Fatalf("expected static button to record use without moving, got %+v", button)
+		}
+		return false
+	})
 }
 
 func TestTriggerVolumeTouchActivatesLinkedMovingBrushOnce(t *testing.T) {
@@ -766,6 +786,29 @@ func TestMovingBrushMotionMovesTowardOpenOffset(t *testing.T) {
 	})
 	if brush == nil || brush.BoundsCenter != (mgl32.Vec3{4, 2, 3}) {
 		t.Fatalf("moving brush bounds center = %+v", brush)
+	}
+}
+
+func TestMovingBrushReturnsAfterOpenWait(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	closed := mgl32.Vec3{1, 1, 1}
+	eid := cmd.AddEntity(
+		&TransformComponent{Position: closed, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&MovingBrushComponent{ClosedPosition: closed, OpenOffset: mgl32.Vec3{0, 2, 0}, Speed: 2, Wait: 3, TargetName: "lift"},
+	)
+	app.FlushCommands()
+
+	ActivateTarget(cmd, "lift", 0)
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	if tr := transformForEntityMust(t, cmd, eid); tr.Position != (mgl32.Vec3{1, 3, 1}) {
+		t.Fatalf("expected lift at open position, got %v", tr.Position)
+	}
+	movingBrushMotionSystem(cmd, &Time{Dt: 2})
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	if tr := transformForEntityMust(t, cmd, eid); tr.Position != closed {
+		t.Fatalf("expected lift to return to closed position, got %v", tr.Position)
 	}
 }
 

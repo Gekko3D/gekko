@@ -346,8 +346,9 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 						Max: importcommon.Vec3{X: 12, Y: 4, Z: 5},
 					},
 					KeyValues: map[string]string{
-						"target": "door_a",
-						"wait":   "1",
+						"target":     "door_a",
+						"wait":       "1",
+						"spawnflags": "1",
 					},
 				},
 				{
@@ -468,7 +469,7 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 		t.Fatalf("use trigger = %+v", trigger)
 	}
 	buttonBrush := level.Level.MovingBrushes[1]
-	if buttonBrush.Kind != MovingBrushKindHL1Button || buttonBrush.Target != "door_a" {
+	if buttonBrush.Kind != MovingBrushKindHL1Button || buttonBrush.Target != "door_a" || buttonBrush.SpawnFlags != 1 {
 		t.Fatalf("button moving brush = %+v", buttonBrush)
 	}
 	path := level.Level.PathNodes[0]

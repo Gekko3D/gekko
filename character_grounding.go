@@ -11,6 +11,8 @@ type CharacterGroundProbeConfig struct {
 	StepHeight         float32
 	GroundProbe        float32
 	MinWalkableNormalY float32
+	// DynamicCollisionQuery supplements static voxel-world ground probes.
+	DynamicCollisionQuery CharacterCollisionQuery
 }
 
 type CharacterGroundHit struct {
@@ -44,7 +46,7 @@ func CharacterGroundHitAt(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg Character
 }
 
 func CharacterGroundHitAtWithin(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg CharacterGroundProbeConfig, maxSnapUp, maxSnapDown float32, acceptEntity func(EntityId, bool) bool) (CharacterGroundHit, bool) {
-	if voxRt == nil {
+	if !characterCollisionAvailable(voxRt, cfg.DynamicCollisionQuery) {
 		return CharacterGroundHit{}, false
 	}
 	radius := defaultCharacterGroundFloat(cfg.Radius, 0.35)
@@ -57,7 +59,7 @@ func CharacterGroundHitAtWithin(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg Cha
 	found := false
 	for _, offset := range CharacterGroundProbeOffsets(radius) {
 		probeOrigin := basePos.Add(offset).Add(mgl32.Vec3{0, probeHeight, 0})
-		hit := voxRt.RaycastFiltered(probeOrigin, mgl32.Vec3{0, -1, 0}, probeDistance, acceptEntity)
+		hit := characterRaycastFiltered(voxRt, probeOrigin, mgl32.Vec3{0, -1, 0}, probeDistance, acceptEntity, cfg.DynamicCollisionQuery)
 		if !hit.Hit || hit.Normal.Y() < minNormalY {
 			continue
 		}

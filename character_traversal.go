@@ -25,7 +25,7 @@ type CharacterTraversalTarget struct {
 // a blocking obstacle. It does not move the character. Callers must advance
 // through Start -> Lift -> Landing with the normal collision helpers.
 func CharacterFindTraversalTarget(voxRt *VoxelRtState, start, forward mgl32.Vec3, opts CharacterTraversalConfig, acceptEntity func(EntityId, bool) bool) (CharacterTraversalTarget, bool) {
-	if voxRt == nil {
+	if !characterCollisionAvailable(voxRt, opts.CollisionConfig.DynamicCollisionQuery) {
 		return CharacterTraversalTarget{}, false
 	}
 	forward[1] = 0
@@ -35,6 +35,9 @@ func CharacterFindTraversalTarget(voxRt *VoxelRtState, start, forward mgl32.Vec3
 	forward = forward.Normalize()
 	collision := effectiveCharacterCollisionConfig(opts.CollisionConfig)
 	ground := opts.GroundConfig
+	if ground.DynamicCollisionQuery == nil {
+		ground.DynamicCollisionQuery = collision.DynamicCollisionQuery
+	}
 	if ground.Radius <= 0 {
 		ground.Radius = collision.Radius
 	}
@@ -97,7 +100,7 @@ func CharacterFindTraversalTarget(voxRt *VoxelRtState, start, forward mgl32.Vec3
 // proposed base position. It deliberately uses the same radius samples as the
 // vertical controller sweep, so landing validation and movement agree.
 func CharacterHasStandingClearance(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) bool {
-	if voxRt == nil {
+	if !characterCollisionAvailable(voxRt, cfg.DynamicCollisionQuery) {
 		return true
 	}
 	cfg = effectiveCharacterCollisionConfig(cfg)
@@ -107,7 +110,7 @@ func CharacterHasStandingClearance(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg 
 	}
 	for _, offset := range CharacterVerticalCollisionOffsets(cfg.Radius) {
 		origin := basePos.Add(offset).Add(mgl32.Vec3{0, 0.03, 0})
-		hit := voxRt.RaycastFiltered(origin, mgl32.Vec3{0, 1, 0}, height, acceptEntity)
+		hit := characterRaycastFiltered(voxRt, origin, mgl32.Vec3{0, 1, 0}, height, acceptEntity, cfg.DynamicCollisionQuery)
 		if hit.Hit && hit.T <= height {
 			return false
 		}

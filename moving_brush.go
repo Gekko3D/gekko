@@ -18,15 +18,21 @@ type MovingBrushComponent struct {
 	CurrentAngle       float32
 	PathTarget         string
 	PathWaitRemaining  float32
+	OpenWaitRemaining  float32
 	Speed              float32
 	Wait               float32
 	Lip                float32
+	SpawnFlags         int
 	TargetName         string
 	Target             string
 	SourceTag          string
 	Tags               []string
 	Open               bool
 	ActivationCount    int
+}
+
+func (m *MovingBrushComponent) DoesNotMove() bool {
+	return m != nil && m.Kind == "hl1_func_button" && m.SpawnFlags&1 != 0
 }
 
 func (m *MovingBrushComponent) TargetPosition() mgl32.Vec3 {
@@ -214,13 +220,24 @@ func ActivateTargetWithState(cmd *Commands, target string, activator EntityId, t
 		if brush == nil || brush.TargetName != target {
 			return true
 		}
+		if brush.DoesNotMove() {
+			brush.ActivationCount++
+			return true
+		}
 		switch triggerState {
 		case 0:
 			brush.Open = false
+			brush.OpenWaitRemaining = 0
 		case 1:
 			brush.Open = true
+			brush.OpenWaitRemaining = 0
 		default:
-			brush.Open = !brush.Open
+			if brush.Wait > 0 {
+				brush.Open = true
+				brush.OpenWaitRemaining = 0
+			} else {
+				brush.Open = !brush.Open
+			}
 		}
 		brush.ActivationCount++
 		return true
@@ -442,6 +459,12 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 		if tr == nil || brush == nil {
 			return true
 		}
+		if brush.DoesNotMove() {
+			return true
+		}
+		previousPosition := tr.Position
+		previousCenter := brush.BoundsCenter
+		previousHalfExtents := brush.BoundsHalfExtents
 		if brush.ClosedPosition == (mgl32.Vec3{}) {
 			brush.ClosedPosition = tr.Position
 		}
@@ -462,6 +485,7 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 		default:
 			updateMovingBrushLinear(tr, brush, dt)
 		}
+		updateMovingBrushOpenWait(tr, brush, dt)
 		progress := tr.Position.Sub(brush.ClosedPosition)
 		brush.BoundsCenter = brush.ClosedBoundsCenter.Add(progress)
 		if local, ok := localTransformForEntity(cmd, eid); ok {
@@ -469,8 +493,31 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 			local.Rotation = tr.Rotation
 			local.Scale = tr.Scale
 		}
+		moveMovingBrushRiders(cmd, previousCenter, previousHalfExtents, tr.Position.Sub(previousPosition))
 		return true
 	})
+}
+
+func updateMovingBrushOpenWait(tr *TransformComponent, brush *MovingBrushComponent, dt float32) {
+	atOpenPosition := tr.Position.Sub(brush.TargetPosition()).LenSqr() <= 1e-8
+	if brush.MotionKind == "rotate" {
+		atOpenPosition = absf(brush.CurrentAngle-brush.TargetAngle()) <= 1e-4
+	}
+	if brush.PathTarget != "" || !brush.Open || brush.Wait <= 0 || !atOpenPosition {
+		if !brush.Open {
+			brush.OpenWaitRemaining = 0
+		}
+		return
+	}
+	if brush.OpenWaitRemaining <= 0 {
+		brush.OpenWaitRemaining = brush.Wait
+		return
+	}
+	brush.OpenWaitRemaining -= dt
+	if brush.OpenWaitRemaining <= 0 {
+		brush.Open = false
+		brush.OpenWaitRemaining = 0
+	}
 }
 
 func updateMovingBrushLinear(tr *TransformComponent, brush *MovingBrushComponent, dt float32) {

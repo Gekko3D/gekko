@@ -252,12 +252,17 @@ Moving brushes contain:
 - `bounds_half_extents`
 - optional `visual_origin`
 - optional `move_direction`, `move_distance`, `speed`, `wait`, and `lip`
+- optional `spawn_flags`
 - optional `target_name` and `target`
 - optional `source_tag` and tags
 
 `speed` and explicit `move_distance` are non-negative. `wait` and `lip` may be
 negative to preserve imported mover semantics from formats such as Half-Life 1,
 where negative wait usually means stay open and negative lip can mean overtravel.
+For non-path movers, a positive `wait` holds the open position for that many
+seconds before returning to the closed position; zero and negative waits stay open.
+Imported HL1 `func_button` records honor spawn flag `1` (`Don't move`) while
+still firing their target.
 
 Use triggers contain:
 
@@ -272,6 +277,8 @@ The grounded player controller can activate a nearby use trigger or moving brush
 with E. Activation toggles the matching `MovingBrushComponent` state through
 `target`/`target_name` links. If `asset_path` is present, runtime spawns that
 voxel asset on the moving-brush entity and moves it between closed/open targets.
+Moving-brush bounds also participate in character collision and ground probes;
+supported grounded players and authored NPCs inherit the brush's movement.
 
 ### Markers
 

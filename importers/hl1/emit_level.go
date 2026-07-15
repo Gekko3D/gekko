@@ -893,6 +893,7 @@ func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath 
 			Speed:             hl1MovingBrushSpeed(entity),
 			Wait:              hl1FloatKey(entity, "wait"),
 			Lip:               hl1FloatKey(entity, "lip") * HammerUnitMeters,
+			SpawnFlags:        hl1IntKey(entity, "spawnflags"),
 			TargetName:        hl1StringKey(entity, "targetname"),
 			Target:            hl1StringKey(entity, "target"),
 			SourceTag:         "hl1:" + className,
