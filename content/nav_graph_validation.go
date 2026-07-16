@@ -57,6 +57,31 @@ func ValidateNavGraphManifest(def *NavGraphManifestDef) NavGraphValidationResult
 		if !finite(profile.MaxSlopeDegrees) || profile.MaxSlopeDegrees < 0 || profile.MaxSlopeDegrees >= 90 {
 			result.addError("invalid_agent_max_slope", "navigation agent max_slope_degrees must be finite and in [0, 90)")
 		}
+		if !navCapabilitiesValid(profile.Capabilities) {
+			result.addError("invalid_agent_capabilities", "navigation agent capabilities must contain sorted, unique, non-empty values")
+		}
+	}
+	for i, ladder := range def.LadderVolumes {
+		if strings.TrimSpace(ladder.ID) == "" {
+			result.addError("empty_ladder_id", "navigation ladder id is required")
+		}
+		if i > 0 && def.LadderVolumes[i-1].ID >= ladder.ID {
+			result.addError("unsorted_ladders", "navigation ladders must be sorted by unique id")
+		}
+		if !validVec3(ladder.BoundsCenter) || !validVec3(ladder.BoundsHalfExtents) || ladder.BoundsHalfExtents[0] <= 0 || ladder.BoundsHalfExtents[1] <= 0 || ladder.BoundsHalfExtents[2] <= 0 {
+			result.addError("invalid_ladder_bounds", fmt.Sprintf("navigation ladder %q requires finite positive bounds", ladder.ID))
+		}
+		if !finite(ladder.ClimbSpeed) || ladder.ClimbSpeed < 0 {
+			result.addError("invalid_ladder_speed", fmt.Sprintf("navigation ladder %q climb_speed must be finite and non-negative", ladder.ID))
+		}
+		if !finite(ladder.Health) || ladder.Health < 0 {
+			result.addError("invalid_ladder_health", fmt.Sprintf("navigation ladder %q health must be finite and non-negative", ladder.ID))
+		}
+		if (ladder.MountBottom == nil) != (ladder.MountTop == nil) {
+			result.addError("incomplete_ladder_mounts", fmt.Sprintf("navigation ladder %q must provide both mounts", ladder.ID))
+		} else if ladder.MountBottom != nil && (!validVec3(*ladder.MountBottom) || !validVec3(*ladder.MountTop) || (*ladder.MountTop)[1] <= (*ladder.MountBottom)[1]) {
+			result.addError("invalid_ladder_mounts", fmt.Sprintf("navigation ladder %q top mount must be finite and above bottom mount", ladder.ID))
+		}
 	}
 
 	seenSources := map[TerrainChunkCoordDef]struct{}{}
@@ -163,6 +188,7 @@ func ValidateNavGraphTile(def *NavGraphTileDef) NavGraphValidationResult {
 			}
 		}
 		validateTransitionNumbers(&result, fmt.Sprintf("span transition %d", i), transition.Kind, transition.StepDelta, transition.Width, transition.MinHeadroom, transition.MinClearance, transition.Cost)
+		validateTransitionTraversal(&result, fmt.Sprintf("span transition %d", i), transition.Kind, transition.Traversal)
 	}
 
 	regions := make(map[uint32]struct{}, len(def.Regions))
@@ -209,8 +235,34 @@ func ValidateNavGraphTile(def *NavGraphTileDef) NavGraphValidationResult {
 			result.addError("invalid_transition_crossing", fmt.Sprintf("region transition %d crossing must be finite", transition.ID))
 		}
 		validateTransitionNumbers(&result, fmt.Sprintf("region transition %d", transition.ID), transition.Kind, 0, transition.Width, transition.MinHeadroom, transition.MinClearance, transition.Cost)
+		validateTransitionTraversal(&result, fmt.Sprintf("region transition %d", transition.ID), transition.Kind, transition.Traversal)
 	}
 	return result
+}
+
+func validateTransitionTraversal(result *NavGraphValidationResult, label, kind string, traversal *NavTraversalDef) {
+	if kind == NavTransitionLadder && traversal == nil {
+		result.addError("missing_transition_traversal", label+" ladder traversal is required")
+		return
+	}
+	if traversal == nil {
+		return
+	}
+	if strings.TrimSpace(traversal.ID) == "" {
+		result.addError("empty_transition_traversal_id", label+" traversal id is required")
+	}
+	if !validVec3(traversal.Start) || !validVec3(traversal.End) || traversal.Start == traversal.End {
+		result.addError("invalid_transition_traversal", label+" traversal endpoints must be finite and distinct")
+	}
+}
+
+func navCapabilitiesValid(capabilities []string) bool {
+	for i, capability := range capabilities {
+		if strings.TrimSpace(capability) == "" || i > 0 && capabilities[i-1] >= capability {
+			return false
+		}
+	}
+	return true
 }
 
 func validateNavHeader(result *NavGraphValidationResult, navID string, gotVersion, wantVersion int, builderVersion string) {

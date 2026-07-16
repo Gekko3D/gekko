@@ -28,7 +28,7 @@ func connectNavGraphTiles(sources []NavSourceTileDef, graphs []NavGraphTileDef, 
 	if !finite(voxelResolution) || voxelResolution <= 0 {
 		return nil, nil, fmt.Errorf("navigation graph voxel resolution must be finite and positive")
 	}
-	if profile.ID == "" || !finite(profile.Radius) || profile.Radius <= 0 || !finite(profile.Height) || profile.Height <= 0 || !finite(profile.StepHeight) || profile.StepHeight < 0 || !finite(profile.MaxSlopeDegrees) || profile.MaxSlopeDegrees < 0 || profile.MaxSlopeDegrees >= 90 {
+	if profile.ID == "" || !finite(profile.Radius) || profile.Radius <= 0 || !finite(profile.Height) || profile.Height <= 0 || !finite(profile.StepHeight) || profile.StepHeight < 0 || !finite(profile.MaxSlopeDegrees) || profile.MaxSlopeDegrees < 0 || profile.MaxSlopeDegrees >= 90 || !navCapabilitiesValid(profile.Capabilities) {
 		return nil, nil, fmt.Errorf("invalid navigation agent profile")
 	}
 

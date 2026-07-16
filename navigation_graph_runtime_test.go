@@ -10,6 +10,69 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+func TestBrokenLadderDisablesRuntimeTraversalWithoutRebake(t *testing.T) {
+	const chunkSize = 4
+	source := content.NavSourceTileDef{
+		NavID: "ladder-runtime", SchemaVersion: content.CurrentNavSourceTileSchemaVersion,
+		BuilderVersion: content.CurrentNavGraphBuilderVersion, ChunkSize: chunkSize,
+		SourceHash: "source", DependencyHash: "dependency",
+		Spans: []content.NavSpanDef{
+			{ID: 0, X: 0, Z: 0, SupportHeight: 0, CeilingHeight: 2, Headroom: 2, ClearanceRadius: 1, Area: "ground"},
+			{ID: 1, X: 0, Y: 3, Z: 0, SupportHeight: 3, CeilingHeight: 6, Headroom: 3, ClearanceRadius: 1, Area: "ground"},
+		},
+	}
+	profile := content.NavAgentProfileDef{
+		ID: "climber", Radius: 0.4, Height: 1.5, StepHeight: 0.5, MaxSlopeDegrees: 45,
+		Capabilities: []string{content.NavCapabilityClimbLadder},
+	}
+	built, err := content.BuildNavSpanGraph(source, profile, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bottom, top := content.Vec3{0.5, 0, 0.5}, content.Vec3{0.5, 3, 0.5}
+	ladder := content.LevelLadderVolumeDef{
+		ID: "ladder-1", BoundsCenter: content.Vec3{0.5, 1.5, 0.5}, BoundsHalfExtents: content.Vec3{0.5, 1.5, 0.5},
+		MountBottom: &bottom, MountTop: &top, Health: 50,
+	}
+	graphs, _, err := content.ConnectNavGraphLadders([]content.NavSourceTileDef{source}, []content.NavGraphTileDef{built.Graph}, []content.LevelLadderVolumeDef{ladder}, profile, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := buildRuntimeNavigationQuery([]content.NavSourceTileDef{source}, graphs, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &StreamedLevelRuntimeState{
+		Initialized: true, LevelID: "level", BaseNavManifest: &content.NavGraphManifestDef{
+			ChunkSize: chunkSize, VoxelResolution: 1, LadderVolumes: []content.LevelLadderVolumeDef{ladder},
+		},
+		NavigationSources: []content.NavSourceTileDef{source}, NavigationGraphs: graphs,
+		NavigationRevision: 1, navigationQuery: query, navigationDisabled: make(map[string]struct{}),
+	}
+	app := NewApp()
+	cmd := app.Commands()
+	entity := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0.5, 1.5, 0.5}},
+		&LadderVolumeComponent{},
+		&AuthoredLevelLadderVolumeRefComponent{LevelID: "level", LadderVolumeID: ladder.ID},
+		&BreakableComponent{Kind: "ladder", Health: ladder.Health, MaxHealth: ladder.Health},
+	)
+	app.FlushCommands()
+	before, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(bottom, top)
+	if err != nil || !before.Found {
+		t.Fatalf("expected live ladder route: route=%+v err=%v", before, err)
+	}
+	if handled, broken := DamageBreakableEntity(cmd, entity, 100, 0); !handled || !broken {
+		t.Fatalf("ladder damage was not handled: handled=%v broken=%v", handled, broken)
+	}
+	app.FlushCommands()
+	streamedLevelNavigationTraversalSystem(cmd, state)
+	after, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(bottom, top)
+	if err != nil || after.Found || after.FailureReason != content.NavRouteNoRoute || after.NavigationRevision != 2 {
+		t.Fatalf("broken ladder traversal remained enabled: route=%+v err=%v", after, err)
+	}
+}
+
 func TestStreamedNavigationResidencyRevisionSwapFollowsDelta(t *testing.T) {
 	const chunkSize = 4
 	coords := []content.TerrainChunkCoordDef{{}, {X: 1}}

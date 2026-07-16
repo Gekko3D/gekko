@@ -378,6 +378,8 @@ func npcAnimationClipCandidates(state string) []string {
 		return []string{"walk", "move", "run"}
 	case NPCAnimationStateRun:
 		return []string{"run", "walk", "move"}
+	case NPCAnimationStateLadder:
+		return []string{"ladder", "climb"}
 	case NPCAnimationStateAttack:
 		return []string{"attack", "shoot", "fire", "melee", "range"}
 	case NPCAnimationStatePain:

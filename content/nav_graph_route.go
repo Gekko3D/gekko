@@ -76,13 +76,14 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		backing[i] = edge
 	}
 	result := NavRouteResult{Found: true}
-	result.Steps = append(result.Steps, NavRouteStep{Tile: start.Region.Tile, Region: start.Region.Region, Target: start.Projected})
+	result.Steps = append(result.Steps, NavRouteStep{Tile: start.Region.Tile, Region: start.Region.Region, Target: start.Projected, TraversalWaypoint: -1})
 	for i := 1; i < len(regionRoute); i++ {
 		crossing := query.spanTransitionTarget(regionRoute[i-1].Node.Tile, backing[i-1])
 		result.Steps = append(result.Steps, NavRouteStep{
 			Tile: regionRoute[i].Node.Tile, Region: regionRoute[i].Node.Region,
 			EnterTransition: regionRoute[i].Transition.ID, Target: crossing,
 			RequiredAction: regionRoute[i].Transition.Kind,
+			Traversal:      cloneNavTraversal(regionRoute[i].Transition.Traversal), TraversalWaypoint: -1,
 		})
 	}
 	if navRouteWalkOnly(result.Steps) && query.waypointLineVisible(start.Projected, goal.Projected) {
@@ -103,7 +104,12 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		}
 		query.appendSpanPath(&result.Waypoints, start.Ref.Tile, startPath.Spans, 1)
 		for i, edge := range backing {
-			query.appendWaypoint(&result.Waypoints, query.spanTransitionTarget(regionRoute[i].Node.Tile, edge))
+			if edge.Traversal != nil {
+				result.Steps[i+1].TraversalWaypoint = query.appendWaypointIndex(&result.Waypoints, edge.Traversal.Start)
+				query.appendWaypoint(&result.Waypoints, edge.Traversal.End)
+			} else {
+				query.appendWaypoint(&result.Waypoints, query.spanTransitionTarget(regionRoute[i].Node.Tile, edge))
+			}
 			if i+1 < len(backing) {
 				node := regionRoute[i+1].Node
 				path := query.findSpanRoute(node.Tile, node.Region, edge.To.Span, backing[i+1].From)
@@ -234,17 +240,18 @@ func findNavRegionRoute(query *navGraphQuery, start, goal navRouteNode, startPoi
 			if !ok {
 				continue
 			}
-			point := query.spanTransitionTarget(state.Node.Tile, edge)
-			cost := current.cost + navVec3Distance(state.Point, point) + transition.Cost
+			entry := query.spanTransitionEntry(state.Node.Tile, edge)
+			exit := query.spanTransitionTarget(state.Node.Tile, edge)
+			cost := current.cost + navVec3Distance(state.Point, entry) + transition.Cost
 			key := navRegionPortalKey{FromTile: state.Node.Tile, Transition: transition.ID}
 			if previous, seen := costs[key]; seen && cost >= previous {
 				continue
 			}
 			costs[key] = cost
-			states[key] = navRegionPortalState{Node: next, Point: point, Via: transition, Parent: current.key}
+			states[key] = navRegionPortalState{Node: next, Point: exit, Via: transition, Parent: current.key}
 			heap.Push(&frontier, navRegionPortalQueueItem{
 				key: key, cost: cost,
-				estimate: cost + navVec3Distance(point, goalPoint),
+				estimate: cost + navVec3Distance(exit, goalPoint),
 			})
 		}
 	}
@@ -262,9 +269,19 @@ func (q *navGraphQuery) findBackingSpanTransition(from navRouteNode, transition 
 }
 
 func (q *navGraphQuery) spanTransitionTarget(fromTile TerrainChunkCoordDef, edge NavSpanTransitionDef) Vec3 {
+	if edge.Traversal != nil {
+		return edge.Traversal.End
+	}
 	from := q.spanCenter(NavSpanRef{Tile: fromTile, Span: edge.From})
 	to := q.spanCenter(edge.To)
 	return Vec3{(from[0] + to[0]) * 0.5, to[1], (from[2] + to[2]) * 0.5}
+}
+
+func (q *navGraphQuery) spanTransitionEntry(fromTile TerrainChunkCoordDef, edge NavSpanTransitionDef) Vec3 {
+	if edge.Traversal != nil {
+		return edge.Traversal.Start
+	}
+	return q.spanTransitionTarget(fromTile, edge)
 }
 
 func (q *navGraphQuery) appendSpanPath(dst *[]Vec3, tile TerrainChunkCoordDef, spans []uint32, skip int) {
@@ -351,6 +368,19 @@ func (*navGraphQuery) appendWaypoint(dst *[]Vec3, waypoint Vec3) {
 	if len(*dst) == 0 || (*dst)[len(*dst)-1] != waypoint {
 		*dst = append(*dst, waypoint)
 	}
+}
+
+func (q *navGraphQuery) appendWaypointIndex(dst *[]Vec3, waypoint Vec3) int {
+	q.appendWaypoint(dst, waypoint)
+	return len(*dst) - 1
+}
+
+func cloneNavTraversal(source *NavTraversalDef) *NavTraversalDef {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	return &copy
 }
 
 func navRouteWalkOnly(steps []NavRouteStep) bool {

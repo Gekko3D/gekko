@@ -696,7 +696,7 @@ Purpose: move shooter NPCs using graph routes and physics.
 - [x] Restore cursor targeting by collision hit -> nearest supported span.
 - [x] Restore debug selection, teleport, and move commands without polygon IDs.
 
-Actiongame debug controls are F6 select, F7 clear, F8 teleport, F9 move, and
+Actiongame debug controls are F6 select, F7 clear, F8 move, F9 teleport, and
 F12 graph overlay. The implementation checklist is complete; the gate below
 still requires human visual acceptance.
 
@@ -707,17 +707,26 @@ seams on the lab, Crossfire, and Gasworks without polygon data.
 
 Implement one observed gameplay need at a time:
 
-- drops
-- authored/validated jumps
-- ladders
-- water
-- doors
-- breakables
-- moving platforms
-- temporary blockers and local avoidance
+- [ ] drops
+- [ ] authored/validated jumps
+- [x] ladders
+- [ ] water
+- [ ] doors
+- [ ] breakables
+- [ ] moving platforms
+- [ ] temporary blockers and local avoidance
 
 Use explicit directed transitions and runtime state/cost overlays. Do not
 rebuild static spans for a door opening or another NPC moving.
+
+The ladder slice is level-owned and format-neutral: `.gklevel`
+`ladder_volumes` provide bounds plus optional explicit mounts, climb speed, and
+health. Capable agent profiles receive validated bidirectional `ladder`
+transitions with stable ladder IDs. Runtime removal of the ladder movement
+volume disables those transitions and increments the navigation revision; it
+does not rebuild static spans. Actiongame executes the bound climb through the
+shared character collision helpers. Positive health opts into the existing
+breakable/explosion damage path; zero health remains indestructible.
 
 ## Phase 12: Optimize Measured Bottlenecks
 

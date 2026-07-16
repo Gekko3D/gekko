@@ -284,6 +284,7 @@ type StreamedLevelRuntimeState struct {
 	NavigationGraphs        []content.NavGraphTileDef
 	NavigationRevision      uint64
 	navigationQuery         *content.NavGraphQuery
+	navigationDisabled      map[string]struct{}
 	navigationDesired       map[content.TerrainChunkCoordDef]struct{}
 	navigationLoadedGen     uint64
 	navigationRequestedGen  uint64
@@ -416,10 +417,12 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		navigationLoads:          make(chan streamedNavigationLoadResult, 2),
 		navigationRebuilds:       make(chan streamedNavigationRebuildResult, 2),
 		navigationEditRevisions:  make(map[EntityId]uint64),
+		navigationDisabled:       make(map[string]struct{}),
 	})
 	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
 	app.UseSystem(System(commitPreparedStreamedChunksSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(streamedLevelNavigationSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelNavigationTraversalSystem).InStage(PostUpdate).RunAlways())
 	app.UseSystem(System(streamedLevelRuntimeEditedNavigationSystem).InStage(PostUpdate).RunAlways())
 }
 
@@ -565,6 +568,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.NavigationGraphs = nil
 	state.NavigationRevision = 0
 	state.navigationQuery = nil
+	state.navigationDisabled = make(map[string]struct{})
 	state.navigationDesired = make(map[content.TerrainChunkCoordDef]struct{})
 	state.navigationLoadedGen = 0
 	state.navigationRequestedGen = 0

@@ -280,7 +280,10 @@ type LevelLadderVolumeDef struct {
 	Name              string   `json:"name,omitempty"`
 	BoundsCenter      Vec3     `json:"bounds_center"`
 	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	MountBottom       *Vec3    `json:"mount_bottom,omitempty"`
+	MountTop          *Vec3    `json:"mount_top,omitempty"`
 	ClimbSpeed        float32  `json:"climb_speed,omitempty"`
+	Health            float32  `json:"health,omitempty"`
 	SourceTag         string   `json:"source_tag,omitempty"`
 	Tags              []string `json:"tags,omitempty"`
 }

@@ -1,25 +1,29 @@
 package content
 
 const (
-	CurrentNavGraphManifestSchemaVersion = 1
+	CurrentNavGraphManifestSchemaVersion = 2
 	CurrentNavSourceTileSchemaVersion    = 2
-	CurrentNavGraphTileSchemaVersion     = 1
+	CurrentNavGraphTileSchemaVersion     = 2
 
 	NavGraphManifestExtension = ".gknav"
 	NavSourceTileExtension    = ".gknavsource"
 	NavGraphTileExtension     = ".gknavgraph"
 
-	NavTransitionWalk  = "walk"
-	NavTransitionStep  = "step"
-	NavTransitionStair = "stair"
+	NavTransitionWalk   = "walk"
+	NavTransitionStep   = "step"
+	NavTransitionStair  = "stair"
+	NavTransitionLadder = "ladder"
+
+	NavCapabilityClimbLadder = "climb_ladder"
 )
 
 type NavAgentProfileDef struct {
-	ID              string  `json:"id"`
-	Radius          float32 `json:"radius"`
-	Height          float32 `json:"height"`
-	StepHeight      float32 `json:"step_height"`
-	MaxSlopeDegrees float32 `json:"max_slope_degrees"`
+	ID              string   `json:"id"`
+	Radius          float32  `json:"radius"`
+	Height          float32  `json:"height"`
+	StepHeight      float32  `json:"step_height"`
+	MaxSlopeDegrees float32  `json:"max_slope_degrees"`
+	Capabilities    []string `json:"capabilities,omitempty"`
 }
 
 type NavSpanDef struct {
@@ -40,16 +44,25 @@ type NavSpanRef struct {
 	Span uint32               `json:"span"`
 }
 
+// NavTraversalDef binds a special transition to authored gameplay state and
+// gives locomotion explicit world-space entry and exit points.
+type NavTraversalDef struct {
+	ID    string `json:"id"`
+	Start Vec3   `json:"start"`
+	End   Vec3   `json:"end"`
+}
+
 type NavSpanTransitionDef struct {
-	From          uint32     `json:"from"`
-	To            NavSpanRef `json:"to"`
-	Kind          string     `json:"kind"`
-	StepDelta     float32    `json:"step_delta"`
-	Width         float32    `json:"width"`
-	MinHeadroom   float32    `json:"min_headroom"`
-	MinClearance  float32    `json:"min_clearance"`
-	Cost          float32    `json:"cost"`
-	RequiresFlags []string   `json:"requires_flags,omitempty"`
+	From          uint32           `json:"from"`
+	To            NavSpanRef       `json:"to"`
+	Kind          string           `json:"kind"`
+	StepDelta     float32          `json:"step_delta"`
+	Width         float32          `json:"width"`
+	MinHeadroom   float32          `json:"min_headroom"`
+	MinClearance  float32          `json:"min_clearance"`
+	Cost          float32          `json:"cost"`
+	RequiresFlags []string         `json:"requires_flags,omitempty"`
+	Traversal     *NavTraversalDef `json:"traversal,omitempty"`
 }
 
 type NavSpanRunDef struct {
@@ -89,6 +102,7 @@ type NavRegionTransitionDef struct {
 	MinClearance  float32              `json:"min_clearance"`
 	Cost          float32              `json:"cost"`
 	RequiresFlags []string             `json:"requires_flags,omitempty"`
+	Traversal     *NavTraversalDef     `json:"traversal,omitempty"`
 }
 
 type NavSourceTileDef struct {
@@ -141,16 +155,19 @@ type NavGraphManifestDef struct {
 	ChunkSize       int                     `json:"chunk_size"`
 	VoxelResolution float32                 `json:"voxel_resolution"`
 	AgentProfiles   []NavAgentProfileDef    `json:"agent_profiles,omitempty"`
+	LadderVolumes   []LevelLadderVolumeDef  `json:"ladder_volumes,omitempty"`
 	SourceTiles     []NavSourceTileEntryDef `json:"source_tiles,omitempty"`
 	GraphTiles      []NavGraphTileEntryDef  `json:"graph_tiles,omitempty"`
 }
 
 type NavRouteStep struct {
-	Tile            TerrainChunkCoordDef `json:"tile"`
-	Region          uint32               `json:"region"`
-	EnterTransition uint32               `json:"enter_transition"`
-	Target          Vec3                 `json:"target"`
-	RequiredAction  string               `json:"required_action,omitempty"`
+	Tile              TerrainChunkCoordDef `json:"tile"`
+	Region            uint32               `json:"region"`
+	EnterTransition   uint32               `json:"enter_transition"`
+	Target            Vec3                 `json:"target"`
+	RequiredAction    string               `json:"required_action,omitempty"`
+	Traversal         *NavTraversalDef     `json:"traversal,omitempty"`
+	TraversalWaypoint int                  `json:"traversal_waypoint,omitempty"`
 }
 
 type NavRouteResult struct {

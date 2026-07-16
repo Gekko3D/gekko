@@ -1,6 +1,9 @@
 package content
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestFindNavGraphRoute(t *testing.T) {
 	const chunkSize = 3
@@ -226,6 +229,10 @@ func buildFlatNavRouteWorld(t *testing.T, coords []TerrainChunkCoordDef, chunkSi
 }
 
 func TestFindNearestNavGraphPointChoosesSupportedStackedSpan(t *testing.T) {
+	resolution := float32(0.1)
+	if cell := int(math.Floor(float64(navClampToSpanAxis(-11.3, -11.3, resolution)) / float64(resolution))); cell != -113 {
+		t.Fatalf("negative projected cell = %d, want -113", cell)
+	}
 	source := NavSourceTileDef{
 		NavID: "nearest", SchemaVersion: CurrentNavSourceTileSchemaVersion, BuilderVersion: CurrentNavGraphBuilderVersion,
 		Coord: TerrainChunkCoordDef{}, ChunkSize: 2, SourceHash: "source", DependencyHash: "dependency",
@@ -243,7 +250,11 @@ func TestFindNearestNavGraphPointChoosesSupportedStackedSpan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !point.Found || point.Ref.Span != 1 || point.Point != (Vec3{1, 3, 0.5}) || point.Region != 1 {
+	if !point.Found || point.Ref.Span != 1 || point.Point[0] >= 1 || point.Point[1] != 3 || point.Point[2] != 0.5 || point.Region != 1 {
 		t.Fatalf("unexpected nearest supported point: %+v", point)
+	}
+	route, err := FindNavGraphRoute([]NavSourceTileDef{source}, []NavGraphTileDef{built.Graph}, 2, 1, point.Point, Vec3{0.5, 3, 0.5})
+	if err != nil || !route.Found {
+		t.Fatalf("projected point did not resolve back to its span: route=%+v err=%v", route, err)
 	}
 }

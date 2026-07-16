@@ -4,6 +4,7 @@ const (
 	NPCAnimationStateIdle   = "idle"
 	NPCAnimationStateWalk   = "walk"
 	NPCAnimationStateRun    = "run"
+	NPCAnimationStateLadder = "ladder"
 	NPCAnimationStateAttack = "attack"
 	NPCAnimationStatePain   = "pain"
 	NPCAnimationStateDeath  = "death"

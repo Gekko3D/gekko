@@ -521,11 +521,19 @@ func validateLevelLadderVolume(result *LevelValidationResult, ladder LevelLadder
 	if strings.TrimSpace(ladder.ID) == "" {
 		result.addError("empty_ladder_volume_id", "ladder volume id is required", "", "", "", "", "", "", "")
 	}
-	if ladder.BoundsHalfExtents[0] <= 0 || ladder.BoundsHalfExtents[1] <= 0 || ladder.BoundsHalfExtents[2] <= 0 {
+	if !validVec3(ladder.BoundsCenter) || !validVec3(ladder.BoundsHalfExtents) || ladder.BoundsHalfExtents[0] <= 0 || ladder.BoundsHalfExtents[1] <= 0 || ladder.BoundsHalfExtents[2] <= 0 {
 		result.addError("invalid_ladder_volume_bounds", "ladder volume requires positive bounds half extents", "", "", "", "", "", "", "")
 	}
-	if ladder.ClimbSpeed < 0 {
+	if !finite(ladder.ClimbSpeed) || ladder.ClimbSpeed < 0 {
 		result.addError("invalid_ladder_climb_speed", "ladder climb speed must be non-negative", "", "", "", "", "", "", "")
+	}
+	if !finite(ladder.Health) || ladder.Health < 0 {
+		result.addError("invalid_ladder_health", "ladder health must be non-negative", "", "", "", "", "", "", "")
+	}
+	if (ladder.MountBottom == nil) != (ladder.MountTop == nil) {
+		result.addError("incomplete_ladder_mounts", "ladder navigation mounts must provide both bottom and top", "", "", "", "", "", "", "")
+	} else if ladder.MountBottom != nil && (!validVec3(*ladder.MountBottom) || !validVec3(*ladder.MountTop) || (*ladder.MountTop)[1] <= (*ladder.MountBottom)[1]) {
+		result.addError("invalid_ladder_mounts", "ladder top mount must be finite and above bottom mount", "", "", "", "", "", "", "")
 	}
 }
 

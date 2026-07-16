@@ -389,7 +389,7 @@ func spawnAuthoredLevelLadderVolume(cmd *Commands, parent EntityId, levelID stri
 		Rotation: mgl32.QuatIdent(),
 		Scale:    mgl32.Vec3{1, 1, 1},
 	}
-	return cmd.AddEntity(
+	components := []any{
 		&transform,
 		&LocalTransformComponent{
 			Position: transform.Position,
@@ -409,7 +409,19 @@ func spawnAuthoredLevelLadderVolume(cmd *Commands, parent EntityId, levelID stri
 			LadderVolumeID: ladder.ID,
 			Name:           ladder.Name,
 		},
-	)
+	}
+	if ladder.Health > 0 {
+		components = append(components, &BreakableComponent{
+			Kind:              "ladder",
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			Health:            ladder.Health,
+			MaxHealth:         ladder.Health,
+			SourceTag:         ladder.SourceTag,
+			Tags:              append([]string(nil), ladder.Tags...),
+		})
+	}
+	return cmd.AddEntity(components...)
 }
 
 func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, brush content.LevelMovingBrushDef) (EntityId, error) {

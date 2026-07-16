@@ -106,6 +106,9 @@ func validateNavGraphProfile(profile NavAgentProfileDef, voxelResolution float32
 	if !finite(profile.MaxSlopeDegrees) || profile.MaxSlopeDegrees < 0 || profile.MaxSlopeDegrees >= 90 {
 		return fmt.Errorf("navigation agent max slope must be finite and in [0, 90)")
 	}
+	if !navCapabilitiesValid(profile.Capabilities) {
+		return fmt.Errorf("navigation agent capabilities must be non-empty, sorted, and unique")
+	}
 	return nil
 }
 

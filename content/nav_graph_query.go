@@ -37,9 +37,9 @@ type navGraphQuery struct {
 }
 
 type navBackingKey struct {
-	fromRegion, toRegion uint32
-	toTile               TerrainChunkCoordDef
-	kind, flags          string
+	fromRegion, toRegion   uint32
+	toTile                 TerrainChunkCoordDef
+	kind, flags, traversal string
 }
 
 type navBackingCandidate struct {
@@ -203,11 +203,15 @@ func (q *navGraphQuery) indexBackingTransitions() {
 		candidates := make(map[navBackingKey][]navBackingCandidate)
 		for _, transition := range graph.Transitions {
 			want := midpointVec3(transition.CrossingStart, transition.CrossingEnd)
-			if transition.ToTile == coord {
+			traversalID := ""
+			if transition.Traversal != nil {
+				traversalID = transition.Traversal.ID
+				want = midpointVec3(transition.Traversal.Start, transition.Traversal.End)
+			} else if transition.ToTile == coord {
 				want[0] += float32(coord.X*q.chunkSize) * q.voxelResolution
 				want[2] += float32(coord.Z*q.chunkSize) * q.voxelResolution
 			}
-			key := navBackingKey{transition.FromRegion, transition.ToRegion, transition.ToTile, transition.Kind, navQueryFlagsKey(transition.RequiresFlags)}
+			key := navBackingKey{transition.FromRegion, transition.ToRegion, transition.ToTile, transition.Kind, navQueryFlagsKey(transition.RequiresFlags), traversalID}
 			candidates[key] = append(candidates[key], navBackingCandidate{transition, want})
 		}
 		best := make(map[uint32]NavSpanTransitionDef, len(graph.Transitions))
@@ -219,12 +223,19 @@ func (q *navGraphQuery) indexBackingTransitions() {
 			if !fromOK || !tileOK || !toOK {
 				continue
 			}
-			key := navBackingKey{fromRegion, toRegion, edge.To.Tile, edge.Kind, navQueryFlagsKey(edge.RequiresFlags)}
+			traversalID := ""
+			if edge.Traversal != nil {
+				traversalID = edge.Traversal.ID
+			}
+			key := navBackingKey{fromRegion, toRegion, edge.To.Tile, edge.Kind, navQueryFlagsKey(edge.RequiresFlags), traversalID}
 			matches := candidates[key]
 			if len(matches) == 0 {
 				continue
 			}
 			point := q.spanTransitionTarget(coord, edge)
+			if edge.Traversal != nil {
+				point = midpointVec3(edge.Traversal.Start, edge.Traversal.End)
+			}
 			for _, candidate := range matches {
 				distance := navVec3Distance(point, candidate.want)
 				previous, found := best[candidate.transition.ID]
@@ -315,9 +326,9 @@ func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointR
 			minX := float32(coord.X*q.query.chunkSize+span.X) * q.query.voxelResolution
 			minZ := float32(coord.Z*q.query.chunkSize+span.Z) * q.query.voxelResolution
 			projected := Vec3{
-				min(max(point[0], minX), minX+q.query.voxelResolution),
+				navClampToSpanAxis(point[0], minX, q.query.voxelResolution),
 				span.SupportHeight,
-				min(max(point[2], minZ), minZ+q.query.voxelResolution),
+				navClampToSpanAxis(point[2], minZ, q.query.voxelResolution),
 			}
 			distance := navVec3Distance(point, projected)
 			ref := NavSpanRef{Tile: coord, Span: spanID}
@@ -328,6 +339,10 @@ func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointR
 		}
 	}
 	return best, nil
+}
+
+func navClampToSpanAxis(value, minimum, size float32) float32 {
+	return min(max(value, math.Nextafter32(minimum, minimum+size)), math.Nextafter32(minimum+size, minimum))
 }
 
 func navSpanRefLess(a, b NavSpanRef) bool {

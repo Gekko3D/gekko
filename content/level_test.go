@@ -738,12 +738,16 @@ func TestLevelLadderVolumeRoundTripAndValidate(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "ladder.gklevel")
 	def := NewLevelDef("ladder")
+	bottom, top := Vec3{1, 0, 3}, Vec3{1, 4, 3}
 	def.LadderVolumes = []LevelLadderVolumeDef{{
 		ID:                "ladder-1",
 		Name:              "ladder",
 		BoundsCenter:      Vec3{1, 2, 3},
 		BoundsHalfExtents: Vec3{0.25, 2, 0.4},
+		MountBottom:       &bottom,
+		MountTop:          &top,
 		ClimbSpeed:        3.5,
+		Health:            75,
 		SourceTag:         "hl1:func_ladder",
 		Tags:              []string{"source:hl1"},
 	}}
@@ -757,7 +761,7 @@ func TestLevelLadderVolumeRoundTripAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
-	if len(loaded.LadderVolumes) != 1 || loaded.LadderVolumes[0].BoundsHalfExtents != (Vec3{0.25, 2, 0.4}) || loaded.LadderVolumes[0].ClimbSpeed != 3.5 {
+	if len(loaded.LadderVolumes) != 1 || loaded.LadderVolumes[0].BoundsHalfExtents != (Vec3{0.25, 2, 0.4}) || loaded.LadderVolumes[0].ClimbSpeed != 3.5 || loaded.LadderVolumes[0].Health != 75 || loaded.LadderVolumes[0].MountBottom == nil || *loaded.LadderVolumes[0].MountBottom != bottom {
 		t.Fatalf("ladder volumes did not round-trip: %+v", loaded.LadderVolumes)
 	}
 }
@@ -768,6 +772,7 @@ func TestValidateLevelRejectsInvalidLadderVolume(t *testing.T) {
 		ID:                "bad-ladder",
 		BoundsHalfExtents: Vec3{0, 2, 0.4},
 		ClimbSpeed:        -1,
+		Health:            -1,
 	}}
 	result := ValidateLevel(def, LevelValidationOptions{})
 	if !result.HasErrors() {
@@ -775,6 +780,7 @@ func TestValidateLevelRejectsInvalidLadderVolume(t *testing.T) {
 	}
 	assertHasLevelValidationCode(t, result, "invalid_ladder_volume_bounds")
 	assertHasLevelValidationCode(t, result, "invalid_ladder_climb_speed")
+	assertHasLevelValidationCode(t, result, "invalid_ladder_health")
 }
 
 func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {

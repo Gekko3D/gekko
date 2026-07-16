@@ -162,7 +162,7 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		sourceCoords[coord] = struct{}{}
 	}
 
-	graphCoords := expandNavGraphHorizontal(sourceCoords)
+	graphCoords := expandNavGraphCoordsForLadders(expandNavGraphHorizontal(sourceCoords), base.LadderVolumes, base.ChunkSize, base.VoxelResolution)
 	contextGraphCoords := expandNavGraphHorizontal(graphCoords)
 	contextSourceCoords := expandNavGraphCube(contextGraphCoords)
 	sources := make(map[TerrainChunkCoordDef]NavSourceTileDef, len(contextSourceCoords))
@@ -230,6 +230,10 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 			}
 		}
 		_, connected, err := ConnectNavGraphTilesWithContext(sourceSlice, graphs, profile, base.ChunkSize, base.VoxelResolution)
+		if err != nil {
+			return NavGraphDeltaBakeResult{}, err
+		}
+		connected, _, err = connectNavGraphLadders(sourceSlice, connected, base.LadderVolumes, profile, base.ChunkSize, base.VoxelResolution, false)
 		if err != nil {
 			return NavGraphDeltaBakeResult{}, err
 		}

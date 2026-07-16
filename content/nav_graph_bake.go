@@ -8,7 +8,7 @@ import (
 	"sort"
 )
 
-const CurrentNavGraphBuilderVersion = "voxel_graph_v4"
+const CurrentNavGraphBuilderVersion = "voxel_graph_v5"
 
 type NavGraphBakeDiagnosticCount struct {
 	Coord          TerrainChunkCoordDef `json:"coord"`
@@ -23,6 +23,71 @@ type NavGraphBakeResult struct {
 	SourceTiles []NavSourceTileDef            `json:"source_tiles,omitempty"`
 	GraphTiles  []NavGraphTileDef             `json:"graph_tiles,omitempty"`
 	Diagnostics []NavGraphBakeDiagnosticCount `json:"diagnostics,omitempty"`
+}
+
+// BakeLevelNavGraph loads level-owned traversal metadata and the level's base
+// voxel world, then runs one deterministic graph bake.
+func BakeLevelNavGraph(levelPath string, profiles []NavAgentProfileDef) (NavGraphBakeResult, error) {
+	level, err := LoadLevel(levelPath)
+	if err != nil {
+		return NavGraphBakeResult{}, err
+	}
+	if validation := ValidateLevel(level, LevelValidationOptions{DocumentPath: levelPath}); validation.HasErrors() {
+		return NavGraphBakeResult{}, fmt.Errorf("invalid level: %s", validation.Error())
+	}
+	if level.BaseWorld == nil || level.BaseWorld.ManifestPath == "" {
+		return NavGraphBakeResult{}, fmt.Errorf("navigation graph level requires a base world manifest")
+	}
+	result, err := BakeImportedWorldNavGraph(ResolveDocumentPath(level.BaseWorld.ManifestPath, levelPath), profiles)
+	if err != nil {
+		return NavGraphBakeResult{}, err
+	}
+	if level.ChunkSize > 0 && level.ChunkSize != result.Manifest.ChunkSize || level.VoxelResolution > 0 && level.VoxelResolution != result.Manifest.VoxelResolution {
+		return NavGraphBakeResult{}, fmt.Errorf("level and base world chunk metrics do not match")
+	}
+	if err := ApplyNavGraphLadders(&result, level.LadderVolumes); err != nil {
+		return NavGraphBakeResult{}, err
+	}
+	return result, nil
+}
+
+// ApplyNavGraphLadders stores generic authored ladder facts in the manifest and
+// links each capable profile. Delta rebuilds reuse the same linker.
+func ApplyNavGraphLadders(bake *NavGraphBakeResult, ladders []LevelLadderVolumeDef) error {
+	if bake == nil {
+		return fmt.Errorf("navigation graph bake is required")
+	}
+	ladders = append([]LevelLadderVolumeDef(nil), ladders...)
+	sort.Slice(ladders, func(i, j int) bool { return ladders[i].ID < ladders[j].ID })
+	bake.Manifest.LadderVolumes = ladders
+	for _, profile := range bake.Manifest.AgentProfiles {
+		var graphs []NavGraphTileDef
+		for _, graph := range bake.GraphTiles {
+			if graph.AgentProfileID == profile.ID {
+				graphs = append(graphs, graph)
+			}
+		}
+		linked, diagnostics, err := ConnectNavGraphLadders(bake.SourceTiles, graphs, ladders, profile, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution)
+		if err != nil {
+			return err
+		}
+		byCoord := make(map[TerrainChunkCoordDef]NavGraphTileDef, len(linked))
+		for _, graph := range linked {
+			byCoord[graph.Coord] = graph
+		}
+		for i := range bake.GraphTiles {
+			if bake.GraphTiles[i].AgentProfileID == profile.ID {
+				bake.GraphTiles[i] = byCoord[bake.GraphTiles[i].Coord]
+			}
+		}
+		for _, diagnostic := range diagnostics {
+			bake.Diagnostics = append(bake.Diagnostics, NavGraphBakeDiagnosticCount{AgentProfileID: profile.ID, Stage: "ladder", Code: diagnostic.Code, Count: 1})
+		}
+	}
+	if validation := ValidateNavGraphBake(bake); validation.HasErrors() {
+		return fmt.Errorf("invalid ladder-linked navigation graph bake: %s", validation.Error())
+	}
+	return nil
 }
 
 // BakeImportedWorldNavGraph loads one complete imported voxel world and runs
@@ -53,6 +118,10 @@ func BakeNavGraphWorld(world *ImportedWorldDef, chunks []ImportedWorldChunkDef, 
 		return NavGraphBakeResult{}, fmt.Errorf("invalid imported world: %s", validation.Error())
 	}
 	profiles = append([]NavAgentProfileDef(nil), profiles...)
+	for i := range profiles {
+		profiles[i].Capabilities = append([]string(nil), profiles[i].Capabilities...)
+		sort.Strings(profiles[i].Capabilities)
+	}
 	sort.Slice(profiles, func(i, j int) bool { return profiles[i].ID < profiles[j].ID })
 	if len(profiles) == 0 {
 		return NavGraphBakeResult{}, fmt.Errorf("navigation graph bake requires an agent profile")

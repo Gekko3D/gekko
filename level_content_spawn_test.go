@@ -145,6 +145,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsLadderVolume(t *testing.T) {
 		BoundsCenter:      content.Vec3{10, 2, 20},
 		BoundsHalfExtents: content.Vec3{0.25, 2, 0.5},
 		ClimbSpeed:        3.5,
+		Health:            60,
 		SourceTag:         "hl1:func_ladder",
 	}}
 	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
@@ -181,6 +182,10 @@ func TestLoadAndSpawnAuthoredLevelSpawnsLadderVolume(t *testing.T) {
 	})
 	if !found {
 		t.Fatal("expected spawned ladder volume component")
+	}
+	breakable, ok := cmd.GetComponent(entity, reflect.TypeOf(BreakableComponent{})).(*BreakableComponent)
+	if !ok || breakable == nil || breakable.Kind != "ladder" || breakable.Health != 60 || breakable.MaxHealth != 60 {
+		t.Fatalf("expected breakable ladder, got %+v", breakable)
 	}
 }
 

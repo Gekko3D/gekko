@@ -22,11 +22,12 @@ type VoxelWorldDirtyChunks struct {
 }
 
 type streamedNavigationLoadResult struct {
-	Generation uint64
-	Sources    []content.NavSourceTileDef
-	Graphs     []content.NavGraphTileDef
-	Query      *content.NavGraphQuery
-	Err        error
+	Generation         uint64
+	Sources            []content.NavSourceTileDef
+	Graphs             []content.NavGraphTileDef
+	Query              *content.NavGraphQuery
+	DisabledTraversals map[string]struct{}
+	Err                error
 }
 
 type streamedNavigationRebuildResult struct {
@@ -171,19 +172,24 @@ func startStreamedNavigationLoad(state *StreamedLevelRuntimeState) {
 	desired := copyTerrainCoordSet(state.navigationDesired)
 	manifest := copyNavGraphManifest(state.BaseNavManifest)
 	delta := copyWorldDeltaForNav(state.WorldDelta)
+	disabledTraversals := copyNavigationTraversalSet(state.navigationDisabled)
 	manifestPath, deltaPath := state.BaseNavManifestPath, state.WorldDeltaPath
 	state.navigationLoadActive = true
 	go func() {
 		sources, graphs, err := loadStreamedNavigationResidency(manifest, manifestPath, &delta, deltaPath, desired)
 		var query *content.NavGraphQuery
 		if err == nil {
-			query, err = buildRuntimeNavigationQuery(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution)
+			query, err = buildRuntimeNavigationQueryWithDisabledTraversals(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution, disabledTraversals)
 		}
-		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Query: query, Err: err}
+		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Query: query, DisabledTraversals: disabledTraversals, Err: err}
 	}()
 }
 
 func buildRuntimeNavigationQuery(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32) (*content.NavGraphQuery, error) {
+	return buildRuntimeNavigationQueryWithDisabledTraversals(sources, graphs, chunkSize, voxelResolution, nil)
+}
+
+func buildRuntimeNavigationQueryWithDisabledTraversals(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, disabled map[string]struct{}) (*content.NavGraphQuery, error) {
 	if len(sources) == 0 || len(graphs) == 0 {
 		return nil, nil
 	}
@@ -191,10 +197,40 @@ func buildRuntimeNavigationQuery(sources []content.NavSourceTileDef, graphs []co
 	profileGraphs := make([]content.NavGraphTileDef, 0, len(graphs))
 	for _, graph := range graphs {
 		if graph.AgentProfileID == profileID {
-			profileGraphs = append(profileGraphs, graph)
+			profileGraphs = append(profileGraphs, navGraphWithoutDisabledTraversals(graph, disabled))
 		}
 	}
 	return content.NewNavGraphQuery(sources, profileGraphs, chunkSize, voxelResolution)
+}
+
+func navGraphWithoutDisabledTraversals(graph content.NavGraphTileDef, disabled map[string]struct{}) content.NavGraphTileDef {
+	if len(disabled) == 0 {
+		return graph
+	}
+	copy := graph
+	copy.SpanTransitions = make([]content.NavSpanTransitionDef, 0, len(graph.SpanTransitions))
+	for _, transition := range graph.SpanTransitions {
+		if !navTraversalDisabled(transition.Traversal, disabled) {
+			copy.SpanTransitions = append(copy.SpanTransitions, transition)
+		}
+	}
+	copy.Transitions = make([]content.NavRegionTransitionDef, 0, len(graph.Transitions))
+	for _, transition := range graph.Transitions {
+		if navTraversalDisabled(transition.Traversal, disabled) {
+			continue
+		}
+		transition.ID = uint32(len(copy.Transitions))
+		copy.Transitions = append(copy.Transitions, transition)
+	}
+	return copy
+}
+
+func navTraversalDisabled(traversal *content.NavTraversalDef, disabled map[string]struct{}) bool {
+	if traversal == nil {
+		return false
+	}
+	_, found := disabled[traversal.ID]
+	return found
 }
 
 func loadStreamedNavigationResidency(manifest *content.NavGraphManifestDef, manifestPath string, delta *content.WorldDeltaDef, deltaPath string, desired map[content.TerrainChunkCoordDef]struct{}) ([]content.NavSourceTileDef, []content.NavGraphTileDef, error) {
@@ -275,10 +311,18 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			return
 		}
 		if result.Generation == state.navigationRequestedGen {
+			query := result.Query
+			if !navigationTraversalSetsEqual(result.DisabledTraversals, state.navigationDisabled) {
+				query, result.Err = buildRuntimeNavigationQueryWithDisabledTraversals(result.Sources, result.Graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.navigationDisabled)
+				if result.Err != nil {
+					state.InitErr = result.Err
+					return
+				}
+			}
 			state.mu.Lock()
 			state.NavigationSources = result.Sources
 			state.NavigationGraphs = result.Graphs
-			state.navigationQuery = result.Query
+			state.navigationQuery = query
 			state.NavigationRevision++
 			state.navigationLoadedGen = result.Generation
 			state.mu.Unlock()
@@ -304,6 +348,49 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 	if !state.navigationLoadActive && state.navigationLoadedGen != state.navigationRequestedGen {
 		startStreamedNavigationLoad(state)
 	}
+}
+
+func streamedLevelNavigationTraversalSystem(cmd *Commands, state *StreamedLevelRuntimeState) {
+	if cmd == nil || state == nil || !state.Initialized || state.InitErr != nil || state.BaseNavManifest == nil {
+		return
+	}
+	expected := make(map[string]struct{}, len(state.BaseNavManifest.LadderVolumes))
+	for _, ladder := range state.BaseNavManifest.LadderVolumes {
+		expected[ladder.ID] = struct{}{}
+	}
+	if len(expected) == 0 && len(state.navigationDisabled) == 0 {
+		return
+	}
+	live := make(map[string]struct{}, len(expected))
+	MakeQuery2[LadderVolumeComponent, AuthoredLevelLadderVolumeRefComponent](cmd).Map(func(_ EntityId, _ *LadderVolumeComponent, ref *AuthoredLevelLadderVolumeRefComponent) bool {
+		if ref != nil && ref.LevelID == state.LevelID {
+			live[ref.LadderVolumeID] = struct{}{}
+		}
+		return true
+	})
+	disabled := make(map[string]struct{})
+	for id := range expected {
+		if _, found := live[id]; !found {
+			disabled[id] = struct{}{}
+		}
+	}
+	if navigationTraversalSetsEqual(disabled, state.navigationDisabled) {
+		return
+	}
+	state.mu.RLock()
+	sources := append([]content.NavSourceTileDef(nil), state.NavigationSources...)
+	graphs := append([]content.NavGraphTileDef(nil), state.NavigationGraphs...)
+	state.mu.RUnlock()
+	query, err := buildRuntimeNavigationQueryWithDisabledTraversals(sources, graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, disabled)
+	if err != nil {
+		state.InitErr = err
+		return
+	}
+	state.mu.Lock()
+	state.navigationDisabled = disabled
+	state.navigationQuery = query
+	state.NavigationRevision++
+	state.mu.Unlock()
 }
 
 func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLevelRuntimeState) {
@@ -505,6 +592,10 @@ func copyNavGraphManifest(source *content.NavGraphManifestDef) *content.NavGraph
 	}
 	copy := *source
 	copy.AgentProfiles = append([]content.NavAgentProfileDef(nil), source.AgentProfiles...)
+	for i := range copy.AgentProfiles {
+		copy.AgentProfiles[i].Capabilities = append([]string(nil), source.AgentProfiles[i].Capabilities...)
+	}
+	copy.LadderVolumes = append([]content.LevelLadderVolumeDef(nil), source.LadderVolumes...)
 	copy.SourceTiles = append([]content.NavSourceTileEntryDef(nil), source.SourceTiles...)
 	copy.GraphTiles = append([]content.NavGraphTileEntryDef(nil), source.GraphTiles...)
 	return &copy
@@ -526,6 +617,26 @@ func copyTerrainCoordSet(source map[content.TerrainChunkCoordDef]struct{}) map[c
 		copy[coord] = struct{}{}
 	}
 	return copy
+}
+
+func copyNavigationTraversalSet(source map[string]struct{}) map[string]struct{} {
+	copy := make(map[string]struct{}, len(source))
+	for id := range source {
+		copy[id] = struct{}{}
+	}
+	return copy
+}
+
+func navigationTraversalSetsEqual(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if _, found := b[id]; !found {
+			return false
+		}
+	}
+	return true
 }
 
 func sortedTerrainCoords(source map[content.TerrainChunkCoordDef]struct{}) []content.TerrainChunkCoordDef {
