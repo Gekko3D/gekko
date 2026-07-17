@@ -877,6 +877,8 @@ func spawnAuthoredLevelBreakable(cmd *Commands, assets *AssetServer, loader *Run
 			Scale:    transform.Scale,
 		},
 		&Parent{Entity: parent},
+		&AABBComponent{Min: center.Sub(halfExtents), Max: center.Add(halfExtents)},
+		&NavigationBlockerComponent{ID: "breakable:" + levelID + ":" + breakable.ID},
 		&BreakableComponent{
 			Kind:              breakable.Kind,
 			BoundsCenter:      center,

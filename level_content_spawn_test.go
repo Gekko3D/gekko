@@ -189,6 +189,33 @@ func TestLoadAndSpawnAuthoredLevelSpawnsLadderVolume(t *testing.T) {
 	}
 }
 
+func TestSpawnAuthoredBreakableOwnsNavigationBlocker(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	entity, err := spawnAuthoredLevelBreakable(cmd, nil, nil, 0, "level-a", "", content.LevelBreakableDef{
+		ID: "crate-1", BoundsCenter: content.Vec3{3, 2, 4}, BoundsHalfExtents: content.Vec3{1, 2, 0.5}, Health: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.FlushCommands()
+	marker, ok := cmd.GetComponent(entity, reflect.TypeOf(NavigationBlockerComponent{})).(*NavigationBlockerComponent)
+	if !ok || marker == nil || marker.ID != "breakable:level-a:crate-1" {
+		t.Fatalf("breakable navigation marker = %+v", marker)
+	}
+	bounds, ok := cmd.GetComponent(entity, reflect.TypeOf(AABBComponent{})).(*AABBComponent)
+	if !ok || bounds == nil || bounds.Min != (mgl32.Vec3{2, 0, 3.5}) || bounds.Max != (mgl32.Vec3{4, 4, 4.5}) {
+		t.Fatalf("breakable navigation bounds = %+v", bounds)
+	}
+	if handled, broken := DamageBreakableEntity(cmd, entity, 20, 0); !handled || !broken {
+		t.Fatalf("breakable damage = handled:%v broken:%v", handled, broken)
+	}
+	app.FlushCommands()
+	if components := cmd.GetAllComponents(entity); len(components) != 0 {
+		t.Fatalf("destroyed breakable retained navigation blocker: %+v", components)
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelSpawnsMovingBrushAndUseTrigger(t *testing.T) {
 	root := t.TempDir()
 	levelPath := filepath.Join(root, "levels", "moving.gklevel")

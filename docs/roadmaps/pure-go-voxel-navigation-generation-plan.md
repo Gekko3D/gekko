@@ -712,7 +712,7 @@ Implement one observed gameplay need at a time:
 - [x] ladders
 - [ ] water
 - [ ] doors
-- [ ] breakables
+- [x] breakables
 - [ ] moving platforms
 - [ ] temporary blockers and local avoidance
 
@@ -727,6 +727,12 @@ volume disables those transitions and increments the navigation revision; it
 does not rebuild static spans. Actiongame executes the bound climb through the
 shared character collision helpers. Positive health opts into the existing
 breakable/explosion damage path; zero health remains indestructible.
+
+Authored breakables are obstacle-only runtime blockers keyed by stable level
+and breakable IDs. Their bounds disable overlapping spans while the entity is
+alive; destruction removes the blocker and increments the navigation revision.
+This does not make a breakable top walkable or make NPCs intentionally attack
+it; those require support rebuilds or an explicit action transition.
 
 ## Phase 12: Optimize Measured Bottlenecks
 
