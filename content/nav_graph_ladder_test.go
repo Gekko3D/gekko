@@ -79,3 +79,56 @@ func TestConnectNavGraphLaddersAddsCapabilityGatedRoutes(t *testing.T) {
 		t.Fatalf("walker unexpectedly used ladder: route=%+v err=%v", route, err)
 	}
 }
+
+func TestResolveNavLadderMountAllowsAgentSizedLandingOffset(t *testing.T) {
+	profile := NavAgentProfileDef{ID: "climber", Radius: 0.4, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	source := NavSourceTileDef{
+		NavID: "offset", SchemaVersion: CurrentNavSourceTileSchemaVersion,
+		BuilderVersion: CurrentNavGraphBuilderVersion, ChunkSize: 4,
+		SourceHash: "source", DependencyHash: "dependency",
+		Spans: []NavSpanDef{{
+			ID: 0, X: 0, Z: 0, SupportHeight: 0, CeilingHeight: 3,
+			Headroom: 3, ClearanceRadius: 1, Area: "ground",
+		}},
+	}
+	built, err := BuildNavSpanGraph(source, profile, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := NewNavGraphQuery([]NavSourceTileDef{source}, []NavGraphTileDef{built.Graph}, 4, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	point, code := resolveNavLadderMount(query, Vec3{1.5, 1.5, 0.5}, profile, 1, NavLadderRejectedTop)
+	if code != "" || !point.Found || point.Distance <= profile.StepHeight+profile.Radius || point.Distance > profile.Height+profile.Radius {
+		t.Fatalf("agent-sized landing offset was rejected: point=%+v code=%q", point, code)
+	}
+}
+
+func TestResolveNavLadderMountIgnoresConnectedTileSeam(t *testing.T) {
+	profile := NavAgentProfileDef{ID: "climber", Radius: 0.4, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	sources, graphs := buildFlatNavRouteWorld(t, []TerrainChunkCoordDef{{Z: -1}, {}}, 2, profile)
+	for _, test := range []struct {
+		name      string
+		connected bool
+		wantCode  string
+	}{{"connected", true, ""}, {"disconnected", false, NavLadderRejectedAmbiguous}} {
+		t.Run(test.name, func(t *testing.T) {
+			candidateGraphs := append([]NavGraphTileDef(nil), graphs...)
+			if !test.connected {
+				for i := range candidateGraphs {
+					candidateGraphs[i].SpanTransitions = keepLocalNavSpanTransitions(candidateGraphs[i].Coord, candidateGraphs[i].SpanTransitions)
+					candidateGraphs[i].Transitions = keepLocalNavRegionTransitions(candidateGraphs[i].Coord, candidateGraphs[i].Transitions)
+				}
+			}
+			query, err := NewNavGraphQuery(sources, candidateGraphs, 2, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, code := resolveNavLadderMount(query, Vec3{0.5, 0, 0}, profile, 1, NavLadderRejectedTop)
+			if code != test.wantCode {
+				t.Fatalf("tile seam code=%q, want %q", code, test.wantCode)
+			}
+		})
+	}
+}

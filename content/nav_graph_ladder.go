@@ -123,7 +123,7 @@ func navLadderMountPoints(ladder LevelLadderVolumeDef) (Vec3, Vec3) {
 }
 
 func resolveNavLadderMount(query *NavGraphQuery, point Vec3, profile NavAgentProfileDef, voxelResolution float32, unsupportedCode string) (NavPointResult, string) {
-	maxDistance := max(voxelResolution*1.5, profile.StepHeight+profile.Radius)
+	maxDistance := max(voxelResolution*1.5, profile.StepHeight+profile.Radius, profile.Height+profile.Radius)
 	best := NavPointResult{Distance: float32(math.Inf(1))}
 	ambiguous := false
 	for coord, graph := range query.query.graphs {
@@ -146,7 +146,9 @@ func resolveNavLadderMount(query *NavGraphQuery, point Vec3, profile NavAgentPro
 				continue
 			}
 			if absFloat32(distance-best.Distance) <= 1e-4 {
-				if candidate.Ref.Tile != best.Ref.Tile || candidate.Region != best.Region {
+				candidateNode := navRouteNode{Tile: candidate.Ref.Tile, Region: candidate.Region}
+				bestNode := navRouteNode{Tile: best.Ref.Tile, Region: best.Region}
+				if !navLadderLandingRegionsConnected(query, candidateNode, bestNode) {
 					ambiguous = true
 				}
 				if navSpanRefLess(candidate.Ref, best.Ref) {
@@ -162,6 +164,24 @@ func resolveNavLadderMount(query *NavGraphQuery, point Vec3, profile NavAgentPro
 		return NavPointResult{}, NavLadderRejectedAmbiguous
 	}
 	return best, ""
+}
+
+func navLadderLandingRegionsConnected(query *NavGraphQuery, a, b navRouteNode) bool {
+	if a == b {
+		return true
+	}
+	for _, pair := range [][2]navRouteNode{{a, b}, {b, a}} {
+		graph, ok := query.query.graphs[pair[0].Tile]
+		if !ok {
+			continue
+		}
+		for _, transition := range graph.Transitions {
+			if transition.Kind != NavTransitionLadder && transition.FromRegion == pair[0].Region && transition.ToTile == pair[1].Tile && transition.ToRegion == pair[1].Region {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func navProfileHasCapability(profile NavAgentProfileDef, capability string) bool {
