@@ -4,11 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
-const CurrentNavGraphBuilderVersion = "voxel_graph_v5"
+const CurrentNavGraphBuilderVersion = "voxel_graph_v6"
 
 type NavGraphBakeDiagnosticCount struct {
 	Coord          TerrainChunkCoordDef `json:"coord"`
@@ -32,18 +34,29 @@ func BakeLevelNavGraph(levelPath string, profiles []NavAgentProfileDef) (NavGrap
 	if err != nil {
 		return NavGraphBakeResult{}, err
 	}
-	if validation := ValidateLevel(level, LevelValidationOptions{DocumentPath: levelPath}); validation.HasErrors() {
+	validationLevel := *level
+	validationLevel.Navigation = nil // Derived output may not exist before its bake.
+	if validation := ValidateLevel(&validationLevel, LevelValidationOptions{DocumentPath: levelPath}); validation.HasErrors() {
 		return NavGraphBakeResult{}, fmt.Errorf("invalid level: %s", validation.Error())
 	}
 	if level.BaseWorld == nil || level.BaseWorld.ManifestPath == "" {
 		return NavGraphBakeResult{}, fmt.Errorf("navigation graph level requires a base world manifest")
 	}
-	result, err := BakeImportedWorldNavGraph(ResolveDocumentPath(level.BaseWorld.ManifestPath, levelPath), profiles)
+	worldPath := ResolveDocumentPath(level.BaseWorld.ManifestPath, levelPath)
+	world, chunks, err := loadImportedWorldNavGraphInput(worldPath)
 	if err != nil {
 		return NavGraphBakeResult{}, err
 	}
-	if level.ChunkSize > 0 && level.ChunkSize != result.Manifest.ChunkSize || level.VoxelResolution > 0 && level.VoxelResolution != result.Manifest.VoxelResolution {
+	if level.ChunkSize > 0 && level.ChunkSize != world.ChunkSize || level.VoxelResolution > 0 && level.VoxelResolution != world.VoxelResolution {
 		return NavGraphBakeResult{}, fmt.Errorf("level and base world chunk metrics do not match")
+	}
+	chunks, err = addStationaryMovingBrushNavSupport(levelPath, level, world, chunks)
+	if err != nil {
+		return NavGraphBakeResult{}, err
+	}
+	result, err := BakeNavGraphWorld(world, chunks, profiles)
+	if err != nil {
+		return NavGraphBakeResult{}, err
 	}
 	if err := ApplyNavGraphLadders(&result, level.LadderVolumes); err != nil {
 		return NavGraphBakeResult{}, err
@@ -93,22 +106,194 @@ func ApplyNavGraphLadders(bake *NavGraphBakeResult, ladders []LevelLadderVolumeD
 // BakeImportedWorldNavGraph loads one complete imported voxel world and runs
 // the same pure-Go span and graph builders used by focused generation tests.
 func BakeImportedWorldNavGraph(worldPath string, profiles []NavAgentProfileDef) (NavGraphBakeResult, error) {
-	world, err := LoadImportedWorld(worldPath)
+	world, chunks, err := loadImportedWorldNavGraphInput(worldPath)
 	if err != nil {
 		return NavGraphBakeResult{}, err
 	}
+	return BakeNavGraphWorld(world, chunks, profiles)
+}
+
+func loadImportedWorldNavGraphInput(worldPath string) (*ImportedWorldDef, []ImportedWorldChunkDef, error) {
+	world, err := LoadImportedWorld(worldPath)
+	if err != nil {
+		return nil, nil, err
+	}
 	if validation := ValidateImportedWorld(world, ImportedWorldValidationOptions{DocumentPath: worldPath}); validation.HasErrors() {
-		return NavGraphBakeResult{}, fmt.Errorf("invalid imported world: %s", validation.Error())
+		return nil, nil, fmt.Errorf("invalid imported world: %s", validation.Error())
 	}
 	chunks := make([]ImportedWorldChunkDef, 0, len(world.Entries))
 	for _, entry := range world.Entries {
 		chunk, err := LoadImportedWorldChunk(ResolveImportedWorldChunkPath(entry, worldPath))
 		if err != nil {
-			return NavGraphBakeResult{}, fmt.Errorf("load imported world chunk %s: %w", TerrainChunkKey(entry.Coord), err)
+			return nil, nil, fmt.Errorf("load imported world chunk %s: %w", TerrainChunkKey(entry.Coord), err)
 		}
 		chunks = append(chunks, *chunk)
 	}
-	return BakeNavGraphWorld(world, chunks, profiles)
+	return world, chunks, nil
+}
+
+// addStationaryMovingBrushNavSupport contributes fixed brush geometry to the
+// normal voxel bake. Runtime-moving brushes need local navigation islands and
+// must not enter this static occupancy.
+func addStationaryMovingBrushNavSupport(levelPath string, level *LevelDef, world *ImportedWorldDef, chunks []ImportedWorldChunkDef) ([]ImportedWorldChunkDef, error) {
+	if level == nil || world == nil {
+		return nil, fmt.Errorf("stationary navigation support requires level and world definitions")
+	}
+	chunkVoxels := make(map[TerrainChunkCoordDef]map[[3]int]ImportedWorldVoxelDef, len(chunks))
+	chunkDefs := make(map[TerrainChunkCoordDef]ImportedWorldChunkDef, len(chunks))
+	for _, chunk := range chunks {
+		voxels := make(map[[3]int]ImportedWorldVoxelDef, len(chunk.Voxels))
+		for _, voxel := range chunk.Voxels {
+			if voxel.Value != 0 {
+				voxels[[3]int{voxel.X, voxel.Y, voxel.Z}] = voxel
+			}
+		}
+		chunkVoxels[chunk.Coord] = voxels
+		chunkDefs[chunk.Coord] = chunk
+	}
+
+	added := false
+	for _, brush := range level.MovingBrushes {
+		if !strings.EqualFold(strings.TrimSpace(brush.MotionKind), "static") || strings.TrimSpace(brush.AssetPath) == "" {
+			continue
+		}
+		assetPath := ResolveDocumentPath(brush.AssetPath, levelPath)
+		asset, err := LoadAsset(assetPath)
+		if err != nil {
+			return nil, fmt.Errorf("load stationary moving brush %s asset: %w", brush.ID, err)
+		}
+		if validation := ValidateAsset(asset, AssetValidationOptions{DocumentPath: assetPath}); validation.HasErrors() {
+			return nil, fmt.Errorf("invalid stationary moving brush %s asset: %s", brush.ID, validation.Error())
+		}
+		voxels, err := stationaryMovingBrushWorldVoxels(brush, asset, world.VoxelResolution)
+		if err != nil {
+			return nil, fmt.Errorf("stationary moving brush %s: %w", brush.ID, err)
+		}
+		for voxel := range voxels {
+			coord := TerrainChunkCoordDef{
+				X: floorDivNavSpan(voxel[0], world.ChunkSize),
+				Y: floorDivNavSpan(voxel[1], world.ChunkSize),
+				Z: floorDivNavSpan(voxel[2], world.ChunkSize),
+			}
+			local := [3]int{
+				positiveModNavSpan(voxel[0], world.ChunkSize),
+				positiveModNavSpan(voxel[1], world.ChunkSize),
+				positiveModNavSpan(voxel[2], world.ChunkSize),
+			}
+			if chunkVoxels[coord] == nil {
+				chunkVoxels[coord] = map[[3]int]ImportedWorldVoxelDef{}
+				chunkDefs[coord] = ImportedWorldChunkDef{
+					WorldID: world.WorldID, SchemaVersion: CurrentImportedWorldChunkSchemaVersion,
+					Coord: coord, ChunkSize: world.ChunkSize, VoxelResolution: world.VoxelResolution,
+				}
+			}
+			if _, exists := chunkVoxels[coord][local]; !exists {
+				chunkVoxels[coord][local] = ImportedWorldVoxelDef{X: local[0], Y: local[1], Z: local[2], Value: 1}
+				added = true
+			}
+		}
+	}
+	if !added {
+		return chunks, nil
+	}
+
+	coords := make([]TerrainChunkCoordDef, 0, len(chunkDefs))
+	for coord := range chunkDefs {
+		coords = append(coords, coord)
+	}
+	sort.Slice(coords, func(i, j int) bool { return terrainCoordLess(coords[i], coords[j]) })
+	entries := make(map[TerrainChunkCoordDef]ImportedWorldChunkEntryDef, len(world.Entries))
+	for _, entry := range world.Entries {
+		entries[entry.Coord] = entry
+	}
+	result := make([]ImportedWorldChunkDef, 0, len(coords))
+	world.Entries = world.Entries[:0]
+	for _, coord := range coords {
+		chunk := chunkDefs[coord]
+		chunk.Voxels = chunk.Voxels[:0]
+		for _, voxel := range chunkVoxels[coord] {
+			chunk.Voxels = append(chunk.Voxels, voxel)
+		}
+		sort.Slice(chunk.Voxels, func(i, j int) bool {
+			if chunk.Voxels[i].X != chunk.Voxels[j].X {
+				return chunk.Voxels[i].X < chunk.Voxels[j].X
+			}
+			if chunk.Voxels[i].Y != chunk.Voxels[j].Y {
+				return chunk.Voxels[i].Y < chunk.Voxels[j].Y
+			}
+			return chunk.Voxels[i].Z < chunk.Voxels[j].Z
+		})
+		chunk.NonEmptyVoxelCount = len(chunk.Voxels)
+		result = append(result, chunk)
+		entry, exists := entries[coord]
+		if !exists {
+			entry = ImportedWorldChunkEntryDef{Coord: coord, ChunkPath: "nav_support_" + navGraphCoordFilename(coord) + ".gkchunk"}
+		}
+		entry.NonEmptyVoxelCount = len(chunk.Voxels)
+		world.Entries = append(world.Entries, entry)
+	}
+	world.Sectors = BuildImportedWorldSectors(world.Entries, world.ChunkSize, world.VoxelResolution, DefaultImportedWorldSectorTargetWorldSize)
+	return result, nil
+}
+
+func stationaryMovingBrushWorldVoxels(brush LevelMovingBrushDef, asset *AssetDef, worldResolution float32) (map[[3]int]struct{}, error) {
+	origin := brush.VisualOrigin
+	if origin == (Vec3{}) {
+		origin = brush.BoundsCenter
+	}
+	result := map[[3]int]struct{}{}
+	found := false
+	for _, part := range asset.Parts {
+		if part.Source.Kind != AssetSourceKindVoxelShape || part.Source.VoxelShape == nil {
+			continue
+		}
+		found = true
+		if part.ParentID != "" || !stationaryNavIdentityTransform(part.Transform) || math.Abs(float64(part.ModelScale-1)) > 1e-5 {
+			return nil, fmt.Errorf("voxel part %s uses unsupported hierarchy or transform", part.ID)
+		}
+		if math.Abs(float64(part.VoxelResolution-worldResolution)) > 1e-5 {
+			return nil, fmt.Errorf("voxel part %s resolution %g does not match world resolution %g", part.ID, part.VoxelResolution, worldResolution)
+		}
+		base, err := stationaryNavGridCell(Vec3{
+			origin[0] + part.Transform.Position[0],
+			origin[1] + part.Transform.Position[1],
+			origin[2] + part.Transform.Position[2],
+		}, worldResolution)
+		if err != nil {
+			return nil, fmt.Errorf("voxel part %s: %w", part.ID, err)
+		}
+		for _, voxel := range part.Source.VoxelShape.Voxels {
+			if voxel.Value == 0 {
+				continue
+			}
+			coord := [3]int{base[0] + voxel.X, base[1] + voxel.Y, base[2] + voxel.Z}
+			if EffectiveAssetSourceOperation(part.Source) == AssetShapeOperationSubtract {
+				delete(result, coord)
+			} else {
+				result[coord] = struct{}{}
+			}
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("asset has no inline voxel-shape part")
+	}
+	return result, nil
+}
+
+func stationaryNavIdentityTransform(transform AssetTransformDef) bool {
+	return transform.Rotation == (Quat{0, 0, 0, 1}) && transform.Scale == (Vec3{1, 1, 1}) && transform.Pivot == (Vec3{})
+}
+
+func stationaryNavGridCell(position Vec3, resolution float32) ([3]int, error) {
+	result := [3]int{}
+	for axis := range position {
+		cell := math.Round(float64(position[axis] / resolution))
+		if math.Abs(float64(position[axis])-cell*float64(resolution)) > 1e-4 {
+			return [3]int{}, fmt.Errorf("origin %v is not aligned to world voxel grid", position)
+		}
+		result[axis] = int(cell)
+	}
+	return result, nil
 }
 
 // BakeNavGraphWorld builds deterministic source and profile graph tiles from
