@@ -27,6 +27,7 @@ type streamedNavigationLoadResult struct {
 	Graphs             []content.NavGraphTileDef
 	Query              *content.NavGraphQuery
 	DisabledTraversals map[string]struct{}
+	Blockers           map[string]content.NavBlockerDef
 	Err                error
 }
 
@@ -43,6 +44,13 @@ type RuntimeNavigationService struct {
 	VoxelResolution    float32
 	NavigationRevision uint64
 	query              *content.NavGraphQuery
+}
+
+// NavigationBlockerComponent opts an entity's world-space AABB into runtime
+// navigation blocking. ID must stay unique and stable while entity exists.
+type NavigationBlockerComponent struct {
+	ID       string
+	Disabled bool
 }
 
 func configureStreamedNavigationManifest(state *StreamedLevelRuntimeState, level *content.LevelDef, cfg StreamedLevelRuntimeConfig) error {
@@ -173,15 +181,16 @@ func startStreamedNavigationLoad(state *StreamedLevelRuntimeState) {
 	manifest := copyNavGraphManifest(state.BaseNavManifest)
 	delta := copyWorldDeltaForNav(state.WorldDelta)
 	disabledTraversals := copyNavigationTraversalSet(state.navigationDisabled)
+	blockers := copyNavigationBlockers(state.navigationBlockers)
 	manifestPath, deltaPath := state.BaseNavManifestPath, state.WorldDeltaPath
 	state.navigationLoadActive = true
 	go func() {
 		sources, graphs, err := loadStreamedNavigationResidency(manifest, manifestPath, &delta, deltaPath, desired)
 		var query *content.NavGraphQuery
 		if err == nil {
-			query, err = buildRuntimeNavigationQueryWithDisabledTraversals(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution, disabledTraversals)
+			query, err = buildRuntimeNavigationQueryWithOverlays(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution, manifest.AgentProfiles, disabledTraversals, blockers)
 		}
-		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Query: query, DisabledTraversals: disabledTraversals, Err: err}
+		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Query: query, DisabledTraversals: disabledTraversals, Blockers: blockers, Err: err}
 	}()
 }
 
@@ -190,6 +199,10 @@ func buildRuntimeNavigationQuery(sources []content.NavSourceTileDef, graphs []co
 }
 
 func buildRuntimeNavigationQueryWithDisabledTraversals(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, disabled map[string]struct{}) (*content.NavGraphQuery, error) {
+	return buildRuntimeNavigationQueryWithOverlays(sources, graphs, chunkSize, voxelResolution, nil, disabled, nil)
+}
+
+func buildRuntimeNavigationQueryWithOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled map[string]struct{}, blockers map[string]content.NavBlockerDef) (*content.NavGraphQuery, error) {
 	if len(sources) == 0 || len(graphs) == 0 {
 		return nil, nil
 	}
@@ -199,6 +212,14 @@ func buildRuntimeNavigationQueryWithDisabledTraversals(sources []content.NavSour
 		if graph.AgentProfileID == profileID {
 			profileGraphs = append(profileGraphs, navGraphWithoutDisabledTraversals(graph, disabled))
 		}
+	}
+	if len(blockers) != 0 {
+		for _, profile := range profiles {
+			if profile.ID == profileID {
+				return content.NewNavGraphQueryWithBlockers(sources, profileGraphs, chunkSize, voxelResolution, profile, sortedNavigationBlockers(blockers))
+			}
+		}
+		return nil, fmt.Errorf("navigation blocker overlay requires agent profile %q", profileID)
 	}
 	return content.NewNavGraphQuery(sources, profileGraphs, chunkSize, voxelResolution)
 }
@@ -312,8 +333,8 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		}
 		if result.Generation == state.navigationRequestedGen {
 			query := result.Query
-			if !navigationTraversalSetsEqual(result.DisabledTraversals, state.navigationDisabled) {
-				query, result.Err = buildRuntimeNavigationQueryWithDisabledTraversals(result.Sources, result.Graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.navigationDisabled)
+			if !navigationTraversalSetsEqual(result.DisabledTraversals, state.navigationDisabled) || !navigationBlockersEqual(result.Blockers, state.navigationBlockers) {
+				query, result.Err = buildRuntimeNavigationQueryWithOverlays(result.Sources, result.Graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.BaseNavManifest.AgentProfiles, state.navigationDisabled, state.navigationBlockers)
 				if result.Err != nil {
 					state.InitErr = result.Err
 					return
@@ -350,16 +371,13 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 	}
 }
 
-func streamedLevelNavigationTraversalSystem(cmd *Commands, state *StreamedLevelRuntimeState) {
+func streamedLevelNavigationOverlaySystem(cmd *Commands, state *StreamedLevelRuntimeState) {
 	if cmd == nil || state == nil || !state.Initialized || state.InitErr != nil || state.BaseNavManifest == nil {
 		return
 	}
 	expected := make(map[string]struct{}, len(state.BaseNavManifest.LadderVolumes))
 	for _, ladder := range state.BaseNavManifest.LadderVolumes {
 		expected[ladder.ID] = struct{}{}
-	}
-	if len(expected) == 0 && len(state.navigationDisabled) == 0 {
-		return
 	}
 	live := make(map[string]struct{}, len(expected))
 	MakeQuery2[LadderVolumeComponent, AuthoredLevelLadderVolumeRefComponent](cmd).Map(func(_ EntityId, _ *LadderVolumeComponent, ref *AuthoredLevelLadderVolumeRefComponent) bool {
@@ -374,23 +392,51 @@ func streamedLevelNavigationTraversalSystem(cmd *Commands, state *StreamedLevelR
 			disabled[id] = struct{}{}
 		}
 	}
-	if navigationTraversalSetsEqual(disabled, state.navigationDisabled) {
+	blockers, err := runtimeNavigationBlockers(cmd)
+	if err != nil {
+		state.InitErr = err
+		return
+	}
+	if navigationTraversalSetsEqual(disabled, state.navigationDisabled) && navigationBlockersEqual(blockers, state.navigationBlockers) {
 		return
 	}
 	state.mu.RLock()
 	sources := append([]content.NavSourceTileDef(nil), state.NavigationSources...)
 	graphs := append([]content.NavGraphTileDef(nil), state.NavigationGraphs...)
 	state.mu.RUnlock()
-	query, err := buildRuntimeNavigationQueryWithDisabledTraversals(sources, graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, disabled)
+	query, err := buildRuntimeNavigationQueryWithOverlays(sources, graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.BaseNavManifest.AgentProfiles, disabled, blockers)
 	if err != nil {
 		state.InitErr = err
 		return
 	}
 	state.mu.Lock()
 	state.navigationDisabled = disabled
+	state.navigationBlockers = blockers
 	state.navigationQuery = query
 	state.NavigationRevision++
 	state.mu.Unlock()
+}
+
+func runtimeNavigationBlockers(cmd *Commands) (map[string]content.NavBlockerDef, error) {
+	blockers := make(map[string]content.NavBlockerDef)
+	var scanErr error
+	MakeQuery2[AABBComponent, NavigationBlockerComponent](cmd).Map(func(_ EntityId, bounds *AABBComponent, marker *NavigationBlockerComponent) bool {
+		if bounds == nil || marker == nil || marker.Disabled {
+			return true
+		}
+		id := strings.TrimSpace(marker.ID)
+		if id == "" {
+			scanErr = fmt.Errorf("navigation blocker id is required")
+			return false
+		}
+		if _, exists := blockers[id]; exists {
+			scanErr = fmt.Errorf("duplicate navigation blocker id %q", id)
+			return false
+		}
+		blockers[id] = content.NavBlockerDef{ID: id, Min: content.Vec3(bounds.Min), Max: content.Vec3(bounds.Max)}
+		return true
+	})
+	return blockers, scanErr
 }
 
 func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLevelRuntimeState) {
@@ -637,6 +683,39 @@ func navigationTraversalSetsEqual(a, b map[string]struct{}) bool {
 		}
 	}
 	return true
+}
+
+func copyNavigationBlockers(source map[string]content.NavBlockerDef) map[string]content.NavBlockerDef {
+	copy := make(map[string]content.NavBlockerDef, len(source))
+	for id, blocker := range source {
+		copy[id] = blocker
+	}
+	return copy
+}
+
+func navigationBlockersEqual(a, b map[string]content.NavBlockerDef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id, blocker := range a {
+		if b[id] != blocker {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedNavigationBlockers(source map[string]content.NavBlockerDef) []content.NavBlockerDef {
+	ids := make([]string, 0, len(source))
+	for id := range source {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	blockers := make([]content.NavBlockerDef, 0, len(ids))
+	for _, id := range ids {
+		blockers = append(blockers, source[id])
+	}
+	return blockers
 }
 
 func sortedTerrainCoords(source map[content.TerrainChunkCoordDef]struct{}) []content.TerrainChunkCoordDef {

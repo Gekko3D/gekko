@@ -66,10 +66,74 @@ func TestBrokenLadderDisablesRuntimeTraversalWithoutRebake(t *testing.T) {
 		t.Fatalf("ladder damage was not handled: handled=%v broken=%v", handled, broken)
 	}
 	app.FlushCommands()
-	streamedLevelNavigationTraversalSystem(cmd, state)
+	streamedLevelNavigationOverlaySystem(cmd, state)
 	after, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(bottom, top)
 	if err != nil || after.Found || after.FailureReason != content.NavRouteNoRoute || after.NavigationRevision != 2 {
 		t.Fatalf("broken ladder traversal remained enabled: route=%+v err=%v", after, err)
+	}
+}
+
+func TestRuntimeNavigationBlockerAddMoveRemove(t *testing.T) {
+	const chunkSize = 7
+	profile := content.NavAgentProfileDef{ID: "walker", Radius: 0.1, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	source := content.NavSourceTileDef{
+		NavID: "blocker-runtime", SchemaVersion: content.CurrentNavSourceTileSchemaVersion,
+		BuilderVersion: content.CurrentNavGraphBuilderVersion, ChunkSize: chunkSize,
+		SourceHash: "source", DependencyHash: "dependency",
+	}
+	for x := 0; x < chunkSize; x++ {
+		for z := 0; z < chunkSize; z++ {
+			source.Spans = append(source.Spans, content.NavSpanDef{
+				ID: uint32(len(source.Spans)), X: x, Z: z, SupportHeight: 0, CeilingHeight: 3,
+				Headroom: 3, ClearanceRadius: 1, Area: "ground",
+			})
+		}
+	}
+	built, err := content.BuildNavSpanGraph(source, profile, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := buildRuntimeNavigationQuery([]content.NavSourceTileDef{source}, []content.NavGraphTileDef{built.Graph}, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &StreamedLevelRuntimeState{
+		Initialized: true, BaseNavManifest: &content.NavGraphManifestDef{
+			ChunkSize: chunkSize, VoxelResolution: 1, AgentProfiles: []content.NavAgentProfileDef{profile},
+		},
+		NavigationSources: []content.NavSourceTileDef{source}, NavigationGraphs: []content.NavGraphTileDef{built.Graph},
+		NavigationRevision: 1, navigationQuery: query, navigationDisabled: make(map[string]struct{}), navigationBlockers: make(map[string]content.NavBlockerDef),
+	}
+	start, goal := content.Vec3{0.1, 0.2, 2.5}, content.Vec3{6.9, 0.2, 2.5}
+	app := NewApp()
+	cmd := app.Commands()
+	entity := cmd.AddEntity(
+		&AABBComponent{Min: mgl32.Vec3{3.25, 0, 2.25}, Max: mgl32.Vec3{3.75, 1, 2.75}},
+		&NavigationBlockerComponent{ID: "crate"},
+	)
+	app.FlushCommands()
+	streamedLevelNavigationOverlaySystem(cmd, state)
+	route, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
+	if err != nil || !route.Found || route.NavigationRevision != 2 || len(route.Waypoints) < 2 {
+		t.Fatalf("placed blocker did not reroute: route=%+v err=%v", route, err)
+	}
+
+	MakeQuery1[AABBComponent](cmd).Map(func(_ EntityId, bounds *AABBComponent) bool {
+		bounds.Min, bounds.Max = mgl32.Vec3{3.25, 0, 0}, mgl32.Vec3{3.75, 1, 7}
+		return true
+	})
+	streamedLevelNavigationOverlaySystem(cmd, state)
+	route, err = RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
+	if err != nil || route.Found || route.FailureReason != content.NavRouteNoRoute || route.NavigationRevision != 3 {
+		t.Fatalf("moved blocker did not split route: route=%+v err=%v", route, err)
+	}
+
+	cmd.RemoveEntity(entity)
+	app.FlushCommands()
+	streamedLevelNavigationOverlaySystem(cmd, state)
+	route, err = RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
+	if err != nil || !route.Found || route.NavigationRevision != 4 || len(route.Waypoints) != 1 {
+		t.Fatalf("removed blocker did not restore route: route=%+v err=%v", route, err)
 	}
 }
 

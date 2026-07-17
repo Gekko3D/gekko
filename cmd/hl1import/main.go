@@ -48,7 +48,8 @@ func main() {
 	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize point lights from imported emissive surface clusters")
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
-	flag.BoolVar(&assetsOnly, "assets-only", false, "catalog player/weapon assets from -game-dir without loading a BSP; implies -emit-game-assets")
+	flag.BoolVar(&assetsOnly, "assets-only", false, "catalog selected prop/player/weapon assets from -game-dir without loading a BSP; implies -emit-game-assets")
+	flag.BoolVar(&opts.ImportAllStaticProps, "import-all-static-props", false, "catalog and solid-voxelize non-character prop MDLs from configured resource directories")
 	flag.BoolVar(&opts.ImportAllPlayerModels, "import-all-player-models", false, "catalog and voxelize player models from valve and valve_downloads")
 	flag.BoolVar(&opts.ImportAllWeaponWorldModels, "import-all-weapon-world-models", false, "catalog and voxelize w_ weapon world models from valve and valve_downloads")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
@@ -105,8 +106,8 @@ func main() {
 		if emitDebugWorld || emitLevel {
 			fatalf("-assets-only cannot be combined with -emit-debug-world or -emit-level")
 		}
-		if !opts.ImportAllPlayerModels && !opts.ImportAllWeaponWorldModels {
-			fatalf("-assets-only requires -import-all-player-models and/or -import-all-weapon-world-models")
+		if !opts.ImportAllStaticProps && !opts.ImportAllPlayerModels && !opts.ImportAllWeaponWorldModels {
+			fatalf("-assets-only requires at least one import-all model option")
 		}
 		opts.EmitGameAssets = true
 		if opts.MapName == "" {
@@ -164,6 +165,11 @@ func main() {
 		}
 		if err != nil {
 			fatalf("build level: %v", err)
+		}
+		if opts.EmitGameAssets {
+			if err := hl1.AddGeneratedLevelAssetsToLibrary(&gameAssets, levelResult); err != nil {
+				fatalf("catalog generated level assets: %v", err)
+			}
 		}
 		progressPrinter.Done(hl1.ImportProgressStageBuildLevel, levelResult.LevelPath)
 		summary.Report.GeneratedLevelPath = levelResult.LevelPath

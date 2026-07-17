@@ -11,6 +11,7 @@ func TestConnectNavGraphLaddersAddsCapabilityGatedRoutes(t *testing.T) {
 		Spans: []NavSpanDef{
 			{ID: 0, X: 0, Z: 0, SupportHeight: 0, CeilingHeight: 2, Headroom: 2, ClearanceRadius: 1, Area: "ground"},
 			{ID: 1, X: 0, Y: 3, Z: 0, SupportHeight: 3, CeilingHeight: 6, Headroom: 3, ClearanceRadius: 1, Area: "ground"},
+			{ID: 2, X: 3, Z: 3, SupportHeight: 0, CeilingHeight: 3, Headroom: 3, ClearanceRadius: 1, Area: "ground"},
 		},
 	}
 	profile := NavAgentProfileDef{
@@ -52,6 +53,16 @@ func TestConnectNavGraphLaddersAddsCapabilityGatedRoutes(t *testing.T) {
 			}
 		})
 	}
+	query, err := NewNavGraphQueryWithBlockers([]NavSourceTileDef{source}, graphs, chunkSize, 1, profile, []NavBlockerDef{{
+		ID: "remote-crate", Min: Vec3{3.4, 0, 3.4}, Max: Vec3{3.6, 1, 3.6},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := query.FindRoute(bottom, top)
+	if err != nil || !route.Found || len(route.Steps) != 2 || route.Steps[1].Traversal == nil || route.Steps[1].TraversalWaypoint < 0 {
+		t.Fatalf("blocker overlay lost ladder action binding: route=%+v err=%v", route, err)
+	}
 
 	walker := profile
 	walker.ID, walker.Capabilities = "walker", nil
@@ -63,7 +74,7 @@ func TestConnectNavGraphLaddersAddsCapabilityGatedRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route, err := FindNavGraphRoute([]NavSourceTileDef{source}, walkGraphs, chunkSize, 1, bottom, top)
+	route, err = FindNavGraphRoute([]NavSourceTileDef{source}, walkGraphs, chunkSize, 1, bottom, top)
 	if err != nil || route.Found || route.FailureReason != NavRouteNoRoute {
 		t.Fatalf("walker unexpectedly used ladder: route=%+v err=%v", route, err)
 	}

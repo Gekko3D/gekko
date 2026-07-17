@@ -936,8 +936,8 @@ Both paths use the same importer package and generate the same content shape:
 - `worlds/aux/*.gkaux`
 - `worlds/<map>_import_report.json`
 - generated helper `.gkasset` files for imported moving brush visuals
-- optional `hl1_assets/<map>/manifest.gkhl1assets` plus copied source game
-  assets referenced by the imported map
+- optional `hl1_assets/<map>/assets.gkassetlibrary`,
+  `manifest.gkhl1assets`, and copied source game assets referenced by the map
 
 The generated `.gklevel` is the file to open or run. It references the base
 world plus imported lights, water, ladders, moving brushes, use triggers, and
@@ -983,6 +983,8 @@ go run .
 - light mode: `faithful`
 - emit lights: `on`
 - game assets: `off` unless you want a local copied/cataloged asset library
+- prop library: `on` to scan local resource roots for reusable non-character
+  MDLs; this also enables game assets
 
 For a `rusty-voxelrt` source package, select `Rust interop`. This forces JSON
 chunks and enables generated game assets so Rust can compile base-world chunks,
@@ -1017,6 +1019,19 @@ static props, NPCs, and weapon/ammo/pickup assets intentionally have separate
 voxel-resolution buckets: small pickups and character silhouettes need finer
 voxels than BSP walls and floors, while props, fixtures, and chargers can sit
 between those extremes.
+
+With **prop library** enabled, the importer also catalogs non-character MDLs
+from the configured local HL1 resource roots. Closed components are
+flood-filled into solid voxel volumes; open source meshes remain open, and gaps
+between disconnected components are not filled. The generated material records
+retain exact GoldSrc texture names and raw texture flags. Filename-based
+material semantics and navigation groups are tagged `classification:inferred`.
+
+Entity-owned BSP brushes such as `func_wall` and `func_illusionary`, plus
+generated moving brushes, chargers, breakables, and fixtures, are added to the
+same `.gkassetlibrary`. Geometry already merged into BSP model 0 (`worldspawn`)
+cannot be recovered as individual props and is not guessed from spatial
+clusters.
 
 Generated MDL assets use rigid voxel-part animation:
 
@@ -1077,7 +1092,8 @@ without losing source provenance.
 Use `-assets-only` to build the reusable HL1 player and weapon-world-model
 catalog without loading a BSP or generating a world or level. It implies
 `-emit-game-assets`, requires `-game-dir`, and requires at least one of
-`-import-all-player-models` or `-import-all-weapon-world-models`.
+`-import-all-static-props`, `-import-all-player-models`, or
+`-import-all-weapon-world-models`.
 
 ```bash
 cd /Users/ddevidch/code/go/gekko3d/gekko
@@ -1085,6 +1101,7 @@ go run ./cmd/hl1import \
   -assets-only \
   -game-dir /path/to/Half-Life \
   -out ../actiongame/assets/levels \
+  -import-all-static-props \
   -import-all-player-models \
   -import-all-weapon-world-models
 ```
@@ -1094,13 +1111,16 @@ With no `-map` value, output is written under `hl1_assets/catalog/`:
 - `manifest.gkhl1assets` records stable player variants, bodygroup/skin
   selections, decoded clip IDs, `head`/`right_hand` marker IDs, and weapon
   world-model IDs.
-- `generated/models/*.gkasset` contains voxelized player and weapon assets.
+- `generated/models/*.gkasset` contains voxelized prop, player, and weapon
+  assets.
+- `assets.gkassetlibrary` groups reusable props, characters, and weapons under
+  stable keys for editor search and placement.
 - `files/` contains copied source models.
 - `worlds/catalog_import_report.json` records the asset-only import report.
 
-This mode does not import map-referenced props, sprites, sounds, WADs, NPCs,
-or pickups. Use normal map import with `-emit-game-assets` for those. It cannot
-be combined with `-emit-debug-world` or `-emit-level`.
+This mode does not import map-referenced sprites, sounds, WADs, NPCs, pickups,
+or entity-owned BSP brushes. Use normal map import with `-emit-game-assets` for
+those. It cannot be combined with `-emit-debug-world` or `-emit-level`.
 
 Player `.gkasset` files carry rigid `animation_clips` for source sequences the
 importer can decode. External GoldSrc sequence groups currently produce

@@ -880,6 +880,33 @@ func TestFillClosedInteriorDoesNotFillOpenShell(t *testing.T) {
 	}
 }
 
+func TestFillHL1ClosedAssetInteriorPreservesMaterial(t *testing.T) {
+	result := VoxelizeResult{Materials: []importcommon.Material{{ID: 7, PaletteIndex: 7, Kind: "wood", CollisionKind: "solid"}}}
+	for x := 0; x < 3; x++ {
+		for y := 0; y < 3; y++ {
+			for z := 0; z < 3; z++ {
+				if x == 0 || x == 2 || y == 0 || y == 2 || z == 0 || z == 2 {
+					result.Voxels = append(result.Voxels, importcommon.Voxel{X: x, Y: y, Z: z, Palette: 7, MaterialID: 7, SolidKind: "wood"})
+				}
+			}
+		}
+	}
+
+	fillHL1ClosedAssetInterior(&result)
+	if len(result.Voxels) != 27 || result.FilledCount != 1 {
+		t.Fatalf("filled asset = %+v", result)
+	}
+	for _, voxel := range result.Voxels {
+		if voxel.X == 1 && voxel.Y == 1 && voxel.Z == 1 {
+			if voxel.Palette != 7 || voxel.MaterialID != 7 || voxel.SolidKind != "interior_fill" {
+				t.Fatalf("center material = %+v", voxel)
+			}
+			return
+		}
+	}
+	t.Fatal("center voxel missing")
+}
+
 func TestHL1FaceScrollAxisPrefersConveyorDirection(t *testing.T) {
 	face := Face{
 		Vertices: []importcommon.Vec3{

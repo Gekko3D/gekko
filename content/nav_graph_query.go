@@ -34,6 +34,9 @@ type navGraphQuery struct {
 	backing         map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef
 	walkableCells   map[navSpanPathCell]navWalkableCell
 	spanClassIDs    map[string]uint32
+	blocked         map[NavSpanRef]struct{}
+	globalEdges     map[NavSpanRef][]NavSpanTransitionDef
+	globalScale     float32
 }
 
 type navBackingKey struct {
@@ -279,6 +282,10 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 			continue
 		}
 		for _, spanID := range graph.SpanIDs {
+			ref := NavSpanRef{Tile: coord, Span: spanID}
+			if _, blocked := q.blocked[ref]; blocked {
+				continue
+			}
 			span := q.spans[coord][spanID]
 			if span.X != localX || span.Z != localZ {
 				continue
@@ -322,6 +329,10 @@ func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointR
 	best := NavPointResult{Distance: float32(math.Inf(1))}
 	for coord, graph := range q.query.graphs {
 		for _, spanID := range graph.SpanIDs {
+			ref := NavSpanRef{Tile: coord, Span: spanID}
+			if _, blocked := q.query.blocked[ref]; blocked {
+				continue
+			}
 			span := q.query.spans[coord][spanID]
 			minX := float32(coord.X*q.query.chunkSize+span.X) * q.query.voxelResolution
 			minZ := float32(coord.Z*q.query.chunkSize+span.Z) * q.query.voxelResolution
@@ -331,7 +342,6 @@ func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointR
 				navClampToSpanAxis(point[2], minZ, q.query.voxelResolution),
 			}
 			distance := navVec3Distance(point, projected)
-			ref := NavSpanRef{Tile: coord, Span: spanID}
 			if distance > maxDistance || best.Found && (distance > best.Distance || distance == best.Distance && !navSpanRefLess(ref, best.Ref)) {
 				continue
 			}

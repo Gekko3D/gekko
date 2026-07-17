@@ -49,6 +49,7 @@ type GeneratedLevelResult struct {
 	LevelPath          string
 	Level              *content.LevelDef
 	LightFixtureAssets []GeneratedAssetResult
+	StaticBrushAssets  []GeneratedAssetResult
 	MovingBrushAssets  []GeneratedAssetResult
 	ChargerAssets      []GeneratedAssetResult
 	BreakableAssets    []GeneratedAssetResult
@@ -129,6 +130,10 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	level.NPCs = buildHL1NPCs(summary.Map.Entities, levelPath, gameAssets)
 	level.LadderVolumes = buildHL1LadderVolumes(summary.Map.Entities, opts.VoxelResolution)
 	level.PathNodes = buildHL1PathNodes(summary.Map.Entities)
+	staticBrushAssets, err := buildHL1StaticBrushAssets(opts, summary)
+	if err != nil {
+		return GeneratedLevelResult{}, err
+	}
 	movingBrushes, movingBrushAssets, err := buildHL1MovingBrushes(opts, summary, levelPath)
 	if err != nil {
 		return GeneratedLevelResult{}, err
@@ -169,6 +174,7 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 			LevelPath:          filepath.Clean(levelPath),
 			Level:              level,
 			LightFixtureAssets: assets,
+			StaticBrushAssets:  staticBrushAssets,
 			MovingBrushAssets:  movingBrushAssets,
 			ChargerAssets:      chargerAssets,
 			BreakableAssets:    breakableAssets,
@@ -179,6 +185,7 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	return GeneratedLevelResult{
 		LevelPath:         filepath.Clean(levelPath),
 		Level:             level,
+		StaticBrushAssets: staticBrushAssets,
 		MovingBrushAssets: movingBrushAssets,
 		ChargerAssets:     chargerAssets,
 		BreakableAssets:   breakableAssets,
@@ -284,7 +291,7 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 	if result.Level == nil {
 		return fmt.Errorf("level is nil")
 	}
-	generatedAssets := append(append(append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.MovingBrushAssets...), result.ChargerAssets...), result.BreakableAssets...)
+	generatedAssets := append(append(append(append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.StaticBrushAssets...), result.MovingBrushAssets...), result.ChargerAssets...), result.BreakableAssets...)
 	reportImportProgress(result.Progress, ImportProgress{
 		Stage: ImportProgressStageSaveLevelAssets,
 		Total: len(generatedAssets),
@@ -856,6 +863,47 @@ func buildHL1PathNodes(entities []importcommon.Entity) []content.LevelPathNodeDe
 	return out
 }
 
+func buildHL1StaticBrushAssets(opts ImportOptions, summary ImportSummary) ([]GeneratedAssetResult, error) {
+	if summary.BSP == nil {
+		return nil, nil
+	}
+	wads, _ := LoadResolvedWADs(summary.Report.Source.WADPaths)
+	textureStore := NewTextureStore(summary.BSP.Textures, wads)
+	materialColors := materialColorMap(summary.Map.Materials)
+	countsByClass := map[string]int{}
+	assets := make([]GeneratedAssetResult, 0)
+	for _, entity := range summary.Map.Entities {
+		if !visibleBrushEntityClass(entity.ClassName) || entity.BrushModelID <= 0 {
+			continue
+		}
+		className := strings.ToLower(strings.TrimSpace(entity.ClassName))
+		index := countsByClass[className]
+		countsByClass[className]++
+		assetID := fmt.Sprintf("hl1_static_%s_%d", className, index)
+		result, _, err := buildHL1MovingBrushAsset(opts, summary.BSP, textureStore, materialColors, entity, assetID)
+		if err != nil {
+			return nil, err
+		}
+		if result.Asset == nil {
+			continue
+		}
+		result.AssetPath = filepath.Clean(filepath.Join(opts.OutputRoot, "assets", "hl1", "static_brushes", assetID+".gkasset"))
+		result.Asset.Tags = []string{"source:hl1", "static_prop", "source_kind:bsp_brush", "classname:" + className}
+		for i := range result.Asset.Parts {
+			result.Asset.Parts[i].Tags = []string{"source:hl1", "static_prop", "source_kind:bsp_brush"}
+		}
+		for i := range result.Asset.Materials {
+			for j, tag := range result.Asset.Materials[i].Tags {
+				if tag == "source_asset:moving_brush" {
+					result.Asset.Materials[i].Tags[j] = "source_asset:bsp_brush"
+				}
+			}
+		}
+		assets = append(assets, result)
+	}
+	return assets, nil
+}
+
 func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath string) ([]content.LevelMovingBrushDef, []GeneratedAssetResult, error) {
 	entities := summary.Map.Entities
 	out := make([]content.LevelMovingBrushDef, 0)
@@ -1108,6 +1156,7 @@ func buildHL1ChargerAsset(opts ImportOptions, bsp *BSP, textureStore *TextureSto
 		BakeStaticLightmaps: opts.BakeStaticLightmaps,
 		MaterialColors:      materialColors,
 	})
+	fillHL1ClosedAssetInterior(&voxelized)
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}
@@ -1429,6 +1478,7 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 		ScrollDirectionHammer: hl1ConveyorDirectionHammer(entity),
 	})
 	materializeHL1ScrollAssetVoxels(&voxelized)
+	fillHL1ClosedAssetInterior(&voxelized)
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}
@@ -1457,6 +1507,58 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 	}}
 	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "moving_brushes", brushID+".gkasset")
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
+}
+
+func fillHL1ClosedAssetInterior(result *VoxelizeResult) {
+	if result == nil || len(result.Voxels) == 0 {
+		return
+	}
+	surface := make(map[[3]int]importcommon.Voxel, len(result.Voxels))
+	filled := make(map[[3]int]importcommon.Voxel, len(result.Voxels))
+	for _, voxel := range result.Voxels {
+		key := [3]int{voxel.X, voxel.Y, voxel.Z}
+		surface[key] = voxel
+		filled[key] = voxel
+	}
+	fillClosedInterior(filled)
+	candidates := make(map[[3]int]struct{}, len(filled)-len(surface))
+	for key := range filled {
+		if _, ok := surface[key]; !ok {
+			candidates[key] = struct{}{}
+		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	fallbackMaterialID := firstStructuralMaterialID(result.Materials)
+	fillMaterials := propagateStructuralFillMaterials(surface, candidates, fallbackMaterialID)
+	paletteByMaterialID := make(map[int]uint8, len(result.Materials))
+	for _, material := range result.Materials {
+		palette := material.PaletteIndex
+		if palette == 0 && material.ID > 0 && material.ID <= 255 {
+			palette = uint8(material.ID)
+		}
+		if material.ID > 0 && palette != 0 {
+			paletteByMaterialID[material.ID] = palette
+		}
+	}
+	for key := range candidates {
+		materialID := fillMaterials[key]
+		if materialID <= 0 {
+			materialID = fallbackMaterialID
+		}
+		palette := paletteByMaterialID[materialID]
+		if palette == 0 {
+			palette = uint8(min(max(materialID, 1), 255))
+		}
+		voxel := filled[key]
+		voxel.Palette = palette
+		voxel.MaterialID = materialID
+		voxel.SolidKind = "interior_fill"
+		filled[key] = voxel
+	}
+	result.Voxels = voxelsToSortedSlice(filled)
+	result.FilledCount += len(candidates)
 }
 
 type hl1ScrollAssetMaterialKey struct {
@@ -1555,6 +1657,7 @@ func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureS
 		BakeStaticLightmaps: opts.BakeStaticLightmaps,
 		MaterialColors:      materialColors,
 	})
+	fillHL1ClosedAssetInterior(&voxelized)
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}

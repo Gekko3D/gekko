@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gekko3d/gekko/content"
@@ -259,6 +260,97 @@ func TestBuildGameAssetImportCatalogsPlayerAndWeaponWorldModels(t *testing.T) {
 	}
 	if !missingAnchors {
 		t.Fatalf("expected deterministic missing-anchor diagnostic, got %+v", result.Manifest.Diagnostics)
+	}
+}
+
+func TestBuildGameAssetImportCatalogsStaticProps(t *testing.T) {
+	dir := t.TempDir()
+	gameDir := filepath.Join(dir, "hl")
+	outDir := filepath.Join(dir, "out")
+	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "office_table.mdl"), syntheticMDL())
+	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "barney.mdl"), syntheticMDL())
+	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "w_shotgun.mdl"), syntheticMDL())
+
+	result, err := BuildGameAssetImport(ImportOptions{
+		GameDir:              gameDir,
+		MapName:              "catalog",
+		OutputRoot:           outDir,
+		ImportAllStaticProps: true,
+	}, ImportSummary{})
+	if err != nil {
+		t.Fatalf("BuildGameAssetImport failed: %v", err)
+	}
+	if len(result.Manifest.Assets) != 1 {
+		t.Fatalf("expected only the static prop, got %+v", result.Manifest.Assets)
+	}
+	entry := result.Manifest.Assets[0]
+	if entry.CatalogKind != "static_prop" || entry.GeneratedVoxelizationProfile == nil || entry.GeneratedVoxelizationProfile.ID != "hl1_static_prop_solid_v1" {
+		t.Fatalf("unexpected static prop entry: %+v", entry)
+	}
+	if entry.generatedAsset == nil || entry.generatedAsset.Skeleton != nil || len(entry.generatedAsset.AnimationClips) != 0 {
+		t.Fatalf("expected a static-pose asset, got %+v", entry.generatedAsset)
+	}
+	if len(result.Library.Entries) != 1 {
+		t.Fatalf("expected one library entry, got %+v", result.Library.Entries)
+	}
+	libraryEntry := result.Library.Entries[0]
+	if !strings.HasPrefix(libraryEntry.Key, "props.imported.") || !hasTag(libraryEntry.Tags, "prop") || !hasTag(libraryEntry.Tags, "group:furniture") || !hasTag(libraryEntry.Tags, "classification:inferred") {
+		t.Fatalf("unexpected library entry: %+v", libraryEntry)
+	}
+}
+
+func TestFillMDLSurfaceClosedInteriorPreservesMaterialMetadata(t *testing.T) {
+	voxels := make(map[[3]int]mdlVoxelSample)
+	want := mdlVoxelSample{Color: [4]uint8{120, 80, 40, 255}, TextureName: "wood_crate", TextureFlags: mdlTextureFlagMasked}
+	for x := 0; x < 3; x++ {
+		for y := 0; y < 3; y++ {
+			for z := 0; z < 3; z++ {
+				if x == 0 || x == 2 || y == 0 || y == 2 || z == 0 || z == 2 {
+					voxels[[3]int{x, y, z}] = want
+				}
+			}
+		}
+	}
+
+	fillMDLSurfaceClosedInterior(voxels)
+	if len(voxels) != 27 || voxels[[3]int{1, 1, 1}] != want {
+		t.Fatalf("closed fill did not preserve the nearest source material: center=%+v count=%d", voxels[[3]int{1, 1, 1}], len(voxels))
+	}
+	materials, _ := mdlAssetMaterialsAndPalette(voxels)
+	if len(materials) != 1 || !hasTag(materials[0].Tags, "source_texture:wood_crate") || !hasTag(materials[0].Tags, "source_texture_flags:64") || !hasTag(materials[0].Tags, "alpha:masked") || !hasTag(materials[0].Tags, "kind:wood") {
+		t.Fatalf("source material metadata was not retained: %+v", materials)
+	}
+}
+
+func TestAddGeneratedLevelAssetsToLibraryGroupsBrushProps(t *testing.T) {
+	dir := t.TempDir()
+	result := GameAssetImportResult{
+		LibraryPath: filepath.Join(dir, "hl1_assets", "crossfire", "assets.gkassetlibrary"),
+		Library:     content.NewAssetLibraryDef("HL1 imported assets"),
+	}
+	generated := GeneratedLevelResult{
+		Level: content.NewLevelDef("crossfire"),
+		StaticBrushAssets: []GeneratedAssetResult{{
+			AssetPath: filepath.Join(dir, "assets", "hl1", "static_brushes", "hl1_static_func_wall_0.gkasset"),
+			Asset:     content.NewAssetDef("hl1_static_func_wall_0"),
+		}},
+	}
+	if err := AddGeneratedLevelAssetsToLibrary(&result, generated); err != nil {
+		t.Fatalf("AddGeneratedLevelAssetsToLibrary failed: %v", err)
+	}
+	if len(result.Library.Entries) != 1 {
+		t.Fatalf("library entries = %+v", result.Library.Entries)
+	}
+	entry := result.Library.Entries[0]
+	if entry.Key != "props.brushes.crossfire.hl1_static_func_wall_0" || !hasTag(entry.Tags, "group:brushes") || !hasTag(entry.Tags, "source_kind:bsp_brush") {
+		t.Fatalf("unexpected generated asset entry: %+v", entry)
+	}
+	got, err := content.ResolveAssetLibraryPath(result.Library, result.LibraryPath, entry.Key)
+	if err != nil {
+		t.Fatalf("ResolveAssetLibraryPath failed: %v", err)
+	}
+	if filepath.Clean(got) != filepath.Clean(generated.StaticBrushAssets[0].AssetPath) {
+		t.Fatalf("resolved asset path = %q", got)
 	}
 }
 

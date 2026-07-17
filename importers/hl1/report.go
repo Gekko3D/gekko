@@ -161,6 +161,7 @@ type ImportOptions struct {
 	EmitEmissiveSurfaceLights  bool
 	MaxEmissiveSurfaceLights   int
 	EmitGameAssets             bool
+	ImportAllStaticProps       bool
 	ImportAllPlayerModels      bool
 	ImportAllWeaponWorldModels bool
 	Progress                   ImportProgressFunc

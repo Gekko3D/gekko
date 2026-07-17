@@ -46,6 +46,14 @@ Each entry contains:
 
 Use this when a level should spawn one of several authored assets with deterministic weighted selection.
 
+### `.gkassetlibrary`
+
+A named catalog of stable keys mapped to document-relative `.gkasset` paths.
+Entries may carry tags for editor search and grouping; `group:<name>` is the
+standard navigation tag. Libraries organize authored files only: loading or
+placing an entry still uses the ordinary `.gkasset` path and runtime asset
+pipeline.
+
 ### Level Documents
 
 Levels reference assets rather than embedding them inline.

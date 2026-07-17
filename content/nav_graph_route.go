@@ -52,6 +52,9 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 	if !found {
 		return NavRouteResult{FailureReason: NavRouteGoalUnsupported, FailureTile: goalTile}, nil
 	}
+	if len(query.blocked) != 0 {
+		return query.findBlockerRoute(start, goal), nil
+	}
 
 	var allowed map[TerrainChunkCoordDef]struct{}
 	if start.Region.Tile != goal.Region.Tile {

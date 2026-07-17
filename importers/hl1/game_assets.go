@@ -275,6 +275,11 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 			collector.addCatalogModels("player", resourceDir, hl1CatalogModelPaths(resourceDir, true))
 		}
 	}
+	if opts.ImportAllStaticProps {
+		for _, resourceDir := range collector.resourceDirs {
+			collector.addCatalogModels("static_prop", resourceDir, hl1StaticPropModelPaths(resourceDir))
+		}
+	}
 	if opts.ImportAllWeaponWorldModels {
 		for _, resourceDir := range collector.resourceDirs {
 			collector.addCatalogModels("weapon_world", resourceDir, hl1CatalogModelPaths(resourceDir, false))
@@ -398,6 +403,34 @@ func hl1HeldWeaponModelPaths(gameDir string) []string {
 	return out
 }
 
+func hl1StaticPropModelPaths(gameDir string) []string {
+	var out []string
+	_ = filepath.WalkDir(gameDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry == nil || entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".mdl") {
+			return nil
+		}
+		clean := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+		base := strings.ToLower(filepath.Base(path))
+		if strings.Contains(clean, "/models/player/") || strings.HasPrefix(base, "p_") || strings.HasPrefix(base, "v_") || strings.HasPrefix(base, "w_") || hl1TextureCompanionModel(path) || hl1KnownActorModel(base) {
+			return nil
+		}
+		out = append(out, filepath.Clean(path))
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+func hl1KnownActorModel(base string) bool {
+	base = strings.TrimSuffix(strings.ToLower(base), ".mdl")
+	switch base {
+	case "agrunt", "apache", "baby_headcrab", "barnacle", "barney", "big_mom", "bullsquid", "cockroach", "controller", "garg", "gman", "hassassin", "headcrab", "hgrunt", "hornet", "houndeye", "icky", "islave", "leech", "miniturret", "nihilanth", "osprey", "scientist", "sentry", "snark", "tentacle2", "turret", "zombie":
+		return true
+	default:
+		return false
+	}
+}
+
 func hl1TextureCompanionModel(path string) bool {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if !strings.HasSuffix(strings.ToLower(base), "t") {
@@ -497,7 +530,7 @@ func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) 
 		if err != nil {
 			continue
 		}
-		libraryEntry := content.AssetLibraryEntryDef{Key: key, AssetPath: filepath.ToSlash(path), Tags: []string{entry.CatalogKind}}
+		libraryEntry := content.AssetLibraryEntryDef{Key: key, AssetPath: filepath.ToSlash(path), Tags: hl1AssetLibraryTags(entry)}
 		if entry.CatalogKind == "player" {
 			libraryEntry.Character = hl1CharacterPresentation(entry)
 		}
@@ -505,6 +538,116 @@ func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) 
 	}
 	sort.Slice(library.Entries, func(i, j int) bool { return library.Entries[i].Key < library.Entries[j].Key })
 	return library
+}
+
+func AddGeneratedLevelAssetsToLibrary(result *GameAssetImportResult, generated GeneratedLevelResult) error {
+	if result == nil || strings.TrimSpace(result.LibraryPath) == "" {
+		return nil
+	}
+	if result.Library == nil {
+		result.Library = content.NewAssetLibraryDef("HL1 imported assets")
+	}
+	mapName := "map"
+	if generated.Level != nil {
+		if name := safeMDLAssetID(generated.Level.Name); name != "" {
+			mapName = name
+		}
+	}
+	type assetGroup struct {
+		prefix     string
+		group      string
+		sourceKind string
+		assets     []GeneratedAssetResult
+	}
+	groups := []assetGroup{
+		{prefix: "props.brushes", group: "brushes", sourceKind: "bsp_brush", assets: generated.StaticBrushAssets},
+		{prefix: "props.moving", group: "moving", sourceKind: "bsp_brush", assets: generated.MovingBrushAssets},
+		{prefix: "props.fixtures", group: "fixtures", sourceKind: "bsp_brush", assets: generated.ChargerAssets},
+		{prefix: "props.breakables", group: "breakables", sourceKind: "bsp_brush", assets: generated.BreakableAssets},
+		{prefix: "props.fixtures", group: "fixtures", sourceKind: "generated_fixture", assets: generated.LightFixtureAssets},
+	}
+	byKey := make(map[string]content.AssetLibraryEntryDef, len(result.Library.Entries))
+	for _, entry := range result.Library.Entries {
+		byKey[entry.Key] = entry
+	}
+	for _, set := range groups {
+		for _, generatedAsset := range set.assets {
+			if generatedAsset.Asset == nil || strings.TrimSpace(generatedAsset.AssetPath) == "" {
+				continue
+			}
+			assetID := safeMDLAssetID(generatedAsset.Asset.Name)
+			if assetID == "" {
+				assetID = safeMDLAssetID(strings.TrimSuffix(filepath.Base(generatedAsset.AssetPath), filepath.Ext(generatedAsset.AssetPath)))
+			}
+			if assetID == "" {
+				continue
+			}
+			assetPath, err := filepath.Rel(filepath.Dir(result.LibraryPath), generatedAsset.AssetPath)
+			if err != nil {
+				return err
+			}
+			key := strings.Join([]string{set.prefix, mapName, assetID}, ".")
+			tags := append([]string(nil), generatedAsset.Asset.Tags...)
+			for _, material := range generatedAsset.Asset.Materials {
+				for _, tag := range material.Tags {
+					tags = appendUniqueString(tags, tag)
+				}
+			}
+			for _, tag := range []string{"source:hl1", "prop", "source_kind:" + set.sourceKind, "group:" + set.group} {
+				tags = appendUniqueString(tags, tag)
+			}
+			byKey[key] = content.AssetLibraryEntryDef{Key: key, AssetPath: filepath.ToSlash(assetPath), Tags: tags}
+		}
+	}
+	result.Library.Entries = result.Library.Entries[:0]
+	for _, entry := range byKey {
+		result.Library.Entries = append(result.Library.Entries, entry)
+	}
+	sort.Slice(result.Library.Entries, func(i, j int) bool { return result.Library.Entries[i].Key < result.Library.Entries[j].Key })
+	return nil
+}
+
+func hl1AssetLibraryTags(entry GameAssetManifestEntry) []string {
+	tags := []string{"source:hl1", "source_kind:mdl"}
+	if entry.CatalogKind != "" {
+		tags = append(tags, entry.CatalogKind)
+	}
+	if entry.CatalogKind != "static_prop" {
+		return tags
+	}
+	group := hl1StaticPropGroup(entry.SourceRef)
+	tags = append(tags, "prop", "group:"+group)
+	if group != "other" {
+		tags = append(tags, "classification:inferred")
+	}
+	if entry.generatedAsset != nil {
+		for _, material := range entry.generatedAsset.Materials {
+			for _, tag := range material.Tags {
+				tags = appendUniqueString(tags, tag)
+			}
+		}
+	}
+	return tags
+}
+
+func hl1StaticPropGroup(sourceRef string) string {
+	name := strings.ToLower(strings.TrimSuffix(filepath.Base(sourceRef), filepath.Ext(sourceRef)))
+	switch {
+	case containsAny(name, "table", "desk", "chair", "bench", "cabinet", "locker", "shelf"):
+		return "furniture"
+	case containsAny(name, "crate", "box", "barrel", "pallet", "container"):
+		return "containers"
+	case containsAny(name, "sandbag", "barricade", "barrier"):
+		return "cover"
+	case containsAny(name, "lamp", "light", "fixture"):
+		return "fixtures"
+	case containsAny(name, "pipe", "vent", "duct", "machine", "generator"):
+		return "industrial"
+	case containsAny(name, "plant", "tree", "cactus"):
+		return "vegetation"
+	default:
+		return "other"
+	}
 }
 
 func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPresentationDef {
@@ -680,6 +823,10 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 		default:
 			return "weapons.held.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
 		}
+	case "static_prop":
+		if id := safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef))); id != "" {
+			return "props.imported." + id
+		}
 	}
 	return ""
 }
@@ -819,8 +966,8 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 	if kind == "model" {
 		category, voxelResolution := c.voxelResolutionForEntry(entry)
 		voxelizationProfile := MDLVoxelizationProfileForCategory(category)
-		staticPose := category == HL1VoxelResolutionCategoryPickup
-		geometryOptions := MDLGeometryOptions{BodygroupModels: entry.BodygroupModels, SkinFamily: entry.SkinFamily}
+		staticPose := category == HL1VoxelResolutionCategoryPickup || entry.CatalogKind == "static_prop"
+		geometryOptions := MDLGeometryOptions{BodygroupModels: entry.BodygroupModels, SkinFamily: entry.SkinFamily, DefaultBodygroups: entry.CatalogKind == "static_prop"}
 		geometry, err := LoadMDLGeometryWithOptions(entry.SourcePath, geometryOptions)
 		if err != nil {
 			c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{

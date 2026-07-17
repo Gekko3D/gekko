@@ -148,7 +148,15 @@ The Level Editor is for authoring a `.gklevel` plus linked placements, brushes, 
 - `.gklevel`
   - Opens an existing level.
 - `.gkasset library`
-  - Starts placement preview for authored assets.
+  - Loads `.gkassetlibrary` documents, groups entries by their `group:*` tag,
+    and filters by key, group, filename, or tag.
+  - Expanding a group and choosing an entry starts the normal placement
+    preview. If no library document exists, the browser falls back to the flat
+    `.gkasset` file list.
+  - New asset previews start in surface-snap mode. Floor placement keeps the
+    asset upright and rests its voxel bounds on the hit surface; wall placement
+    turns its thinnest axis toward the wall. An authored `surface_mount` marker
+    overrides that bounds-based alignment when an asset needs an exact mount.
 - `.gkset library`
   - Selects authored sets for placement workflows.
 
@@ -160,6 +168,9 @@ The Level Editor is for authoring a `.gklevel` plus linked placements, brushes, 
   - Starts the corresponding brush authoring tool.
 - `mode: ...`
   - Cycles placement mode for level placements.
+  - `surface_snap` raycasts all visible level voxel geometry and ignores the
+    active preview itself. `plane_snap` uses the reference plane and `free_3d`
+    keeps the preview at a fixed camera distance.
   - This is for authored asset placement behavior, not for brush transform mode.
 - `xform: ...`
   - Cycles the transform gizmo mode for the currently selected editable object.

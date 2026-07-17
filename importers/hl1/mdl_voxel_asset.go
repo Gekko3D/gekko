@@ -58,7 +58,14 @@ func DefaultMDLVoxelizationProfile() MDLVoxelizationProfile {
 
 func MDLVoxelizationProfileForCategory(category HL1VoxelResolutionCategory) MDLVoxelizationProfile {
 	profile := DefaultMDLVoxelizationProfile()
-	if category == HL1VoxelResolutionCategoryNPC {
+	switch category {
+	case HL1VoxelResolutionCategoryStaticProp:
+		profile.ID = "hl1_static_prop_solid_v1"
+		profile.FillClosedInterior = true
+		profile.MaxInteriorSampleCells = 4000000
+		profile.TargetMaxVoxelCount = 120000
+		profile.CoarsestResolution = 0.1
+	case HL1VoxelResolutionCategoryNPC:
 		profile.ID = "hl1_npc_rigid_v3"
 		profile.FillClosedInterior = true
 		profile.PartitionBySkeletonSegments = true
@@ -255,7 +262,7 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 	asset := newMDLVoxelAssetBase(geometry, opts)
 	asset.Tags = append(asset.Tags, "generated:mdl_rigid_bone_parts", content.AssetTagSkeletonRestBasis)
 	asset.Skeleton = mdlAssetSkeleton(geometry.Info.Bones)
-	asset.Materials = mdlAssetMaterialsForPalettes(bonePalettes)
+	asset.Materials = mdlAssetMaterialsForPalettes(bonePalettes, boneVoxels)
 	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: false}
 
 	boneIDs := mdlAssetBoneIDs(geometry.Info.Bones)
@@ -746,6 +753,18 @@ func voxelizeMDLGeometry(geometry MDLGeometry, resolution float32) map[[3]int]md
 func voxelizeMDLGeometryToBudget(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) (map[[3]int]mdlVoxelSample, float32) {
 	for attempt := 0; ; attempt++ {
 		voxels := voxelizeMDLGeometryWithProfile(geometry, resolution, profile)
+		if profile.FillClosedInterior {
+			boundsCells := mdlVoxelBoundsCellCount(voxels)
+			if profile.MaxInteriorSampleCells > 0 && boundsCells > int64(profile.MaxInteriorSampleCells) {
+				limitProfile := profile
+				limitProfile.TargetMaxVoxelCount = profile.MaxInteriorSampleCells
+				if next, retry := nextMDLVoxelResolution(resolution, boundsCells, limitProfile, attempt); retry {
+					resolution = next
+					continue
+				}
+			}
+			fillMDLSurfaceClosedInterior(voxels)
+		}
 		next, retry := nextMDLVoxelResolution(resolution, int64(len(voxels)), profile, attempt)
 		if !retry {
 			return voxels, resolution
@@ -775,7 +794,7 @@ func voxelizeMDLGeometryWithProfile(geometry MDLGeometry, resolution float32, pr
 					if color[3] == 0 {
 						continue
 					}
-					out[key] = mdlVoxelSample{Color: color}
+					out[key] = mdlVoxelSampleForTriangle(geometry, tri, color)
 				}
 			}
 		}
@@ -858,7 +877,7 @@ func voxelizeMDLGeometryByBoneWithProfile(geometry MDLGeometry, resolution float
 					if out[boneIndex] == nil {
 						out[boneIndex] = map[[3]int]mdlVoxelSample{}
 					}
-					out[boneIndex][key] = mdlVoxelSample{Color: color}
+					out[boneIndex][key] = mdlVoxelSampleForTriangle(geometry, tri, color)
 					owners[key] = mdlBoneVoxelOwner{BoneIndex: boneIndex, Weight: boneWeight}
 				}
 			}
@@ -919,6 +938,14 @@ func mdlBoneVoxelBoundsCellCount(boneVoxels map[int]map[[3]int]mdlVoxelSample) i
 		return 0
 	}
 	return int64(maxKey[0]-minKey[0]+1) * int64(maxKey[1]-minKey[1]+1) * int64(maxKey[2]-minKey[2]+1)
+}
+
+func mdlVoxelBoundsCellCount(voxels map[[3]int]mdlVoxelSample) int64 {
+	return mdlBoneVoxelBoundsCellCount(map[int]map[[3]int]mdlVoxelSample{0: voxels})
+}
+
+func fillMDLSurfaceClosedInterior(voxels map[[3]int]mdlVoxelSample) {
+	fillMDLClosedInterior(map[int]map[[3]int]mdlVoxelSample{0: voxels})
 }
 
 func fillMDLClosedInterior(boneVoxels map[int]map[[3]int]mdlVoxelSample) map[[3]int]struct{} {
@@ -1283,7 +1310,18 @@ func mdlBoneGlobalOriginGekko(bones []MDLBoneInfo, boneIndex int) importcommon.V
 }
 
 type mdlVoxelSample struct {
-	Color [4]uint8
+	Color        [4]uint8
+	TextureName  string
+	TextureFlags int
+}
+
+func mdlVoxelSampleForTriangle(geometry MDLGeometry, tri MDLTriangle, color [4]uint8) mdlVoxelSample {
+	sample := mdlVoxelSample{Color: color}
+	if tri.TextureIndex >= 0 && tri.TextureIndex < len(geometry.Textures) {
+		sample.TextureName = geometry.Textures[tri.TextureIndex].Info.Name
+		sample.TextureFlags = geometry.Textures[tri.TextureIndex].Info.Flags
+	}
+	return sample
 }
 
 func sampleMDLTriangleVoxelColor(geometry MDLGeometry, tri MDLTriangle, triWorld [3]importcommon.Vec3, key [3]int, resolution float32, profile MDLVoxelizationProfile) [4]uint8 {
@@ -1472,20 +1510,13 @@ func mdlAssetMaterialsAndPalette(voxels map[[3]int]mdlVoxelSample) ([]content.As
 	shapePalette := make([]content.AssetVoxelPaletteEntryDef, 0, len(pal.colors))
 	for _, entry := range pal.colors {
 		materialID := fmt.Sprintf("mat_%d", entry.Value)
-		materials = append(materials, content.AssetMaterialDef{
-			ID:        materialID,
-			Name:      materialID,
-			BaseColor: entry.Color,
-			Roughness: 0.85,
-			IOR:       1.5,
-			Tags:      []string{"source:hl1", "source_asset:mdl", "material:texture_baked", "material:static_prop"},
-		})
+		materials = append(materials, mdlAssetMaterialDef(materialID, entry.Color, mdlSamplesForColor(voxels, entry.Color)))
 		shapePalette = append(shapePalette, content.AssetVoxelPaletteEntryDef{Value: entry.Value, MaterialID: materialID})
 	}
 	return materials, shapePalette
 }
 
-func mdlAssetMaterialsForPalettes(palettes map[int]mdlColorPalette) []content.AssetMaterialDef {
+func mdlAssetMaterialsForPalettes(palettes map[int]mdlColorPalette, boneVoxels map[int]map[[3]int]mdlVoxelSample) []content.AssetMaterialDef {
 	colors := make(map[[4]uint8]struct{})
 	for _, palette := range palettes {
 		for _, entry := range palette.colors {
@@ -1500,16 +1531,80 @@ func mdlAssetMaterialsForPalettes(palettes map[int]mdlColorPalette) []content.As
 	materials := make([]content.AssetMaterialDef, 0, len(ordered))
 	for _, color := range ordered {
 		materialID := mdlMaterialIDForColor(color)
-		materials = append(materials, content.AssetMaterialDef{
-			ID:        materialID,
-			Name:      materialID,
-			BaseColor: color,
-			Roughness: 0.85,
-			IOR:       1.5,
-			Tags:      []string{"source:hl1", "source_asset:mdl", "material:texture_baked", "material:static_prop"},
-		})
+		var samples []mdlVoxelSample
+		for _, voxels := range boneVoxels {
+			samples = append(samples, mdlSamplesForColor(voxels, color)...)
+		}
+		materials = append(materials, mdlAssetMaterialDef(materialID, color, samples))
 	}
 	return materials
+}
+
+func mdlSamplesForColor(voxels map[[3]int]mdlVoxelSample, color [4]uint8) []mdlVoxelSample {
+	out := make([]mdlVoxelSample, 0)
+	for _, sample := range voxels {
+		if sample.Color == color {
+			out = append(out, sample)
+		}
+	}
+	return out
+}
+
+func mdlAssetMaterialDef(id string, color [4]uint8, samples []mdlVoxelSample) content.AssetMaterialDef {
+	tags := []string{"source:hl1", "source_asset:mdl", "material:texture_baked", "material:static_prop"}
+	textureCounts := map[string]int{}
+	flagValues := map[int]struct{}{}
+	for _, sample := range samples {
+		if sample.TextureName != "" {
+			textureCounts[sample.TextureName]++
+		}
+		if sample.TextureFlags != 0 {
+			flagValues[sample.TextureFlags] = struct{}{}
+		}
+	}
+	textureNames := make([]string, 0, len(textureCounts))
+	bestTexture, bestCount := "", 0
+	for name, count := range textureCounts {
+		textureNames = append(textureNames, name)
+		if count > bestCount || (count == bestCount && strings.ToLower(name) < strings.ToLower(bestTexture)) {
+			bestTexture, bestCount = name, count
+		}
+	}
+	sort.Slice(textureNames, func(i, j int) bool { return strings.ToLower(textureNames[i]) < strings.ToLower(textureNames[j]) })
+	for _, name := range textureNames {
+		tags = appendUniqueString(tags, "source_texture:"+name)
+	}
+	flags := make([]int, 0, len(flagValues))
+	for value := range flagValues {
+		flags = append(flags, value)
+	}
+	sort.Ints(flags)
+	for _, value := range flags {
+		tags = append(tags, fmt.Sprintf("source_texture_flags:%d", value))
+		if value&mdlTextureFlagMasked != 0 {
+			tags = appendUniqueString(tags, "alpha:masked")
+		}
+	}
+	semantics := materialSemantics(bestTexture)
+	if bestTexture != "" {
+		tags = appendUniqueString(tags, "kind:"+semantics.Kind)
+		tags = appendUniqueString(tags, "classification:inferred")
+	}
+	roughness := semantics.Roughness
+	if roughness <= 0 {
+		roughness = 0.85
+	}
+	return content.AssetMaterialDef{
+		ID:           id,
+		Name:         id,
+		BaseColor:    color,
+		Roughness:    roughness,
+		Metallic:     semantics.Metallic,
+		Emissive:     semantics.Emissive,
+		IOR:          1.5,
+		Transparency: semantics.Transparency,
+		Tags:         tags,
+	}
 }
 
 func mdlAssetShapePalette(pal mdlColorPalette) []content.AssetVoxelPaletteEntryDef {

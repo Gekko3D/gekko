@@ -936,26 +936,35 @@ func TestBuildGeneratedLevelEmitsFuncPlatMovingBrushAsset(t *testing.T) {
 "targetname" "lift_a"
 "height" "128"
 "speed" "200"
+}
+{
+"classname" "func_wall"
+"model" "*2"
+"targetname" "wall_prop"
 }`,
 		Textures: []syntheticTexture{{Name: "TESTWALL", Width: 64, Height: 64}},
 		Planes:   []Plane{{Normal: vec3(0, 1, 0), Dist: 0}},
 		Vertices: []importcommon.Vec3{
 			vec3(0, 0, 0), vec3(16, 0, 0), vec3(16, 0, 16), vec3(0, 0, 16),
 			vec3(32, 0, 0), vec3(48, 0, 0), vec3(48, 0, 16), vec3(32, 0, 16),
+			vec3(64, 0, 0), vec3(80, 0, 0), vec3(80, 0, 16), vec3(64, 0, 16),
 		},
 		TexInfos: []TexInfo{{MipTex: 0}},
 		Faces: []FaceHeader{
 			{PlaneID: 0, FirstEdge: 0, EdgeCount: 4, TexInfoID: 0},
 			{PlaneID: 0, FirstEdge: 4, EdgeCount: 4, TexInfoID: 0},
+			{PlaneID: 0, FirstEdge: 8, EdgeCount: 4, TexInfoID: 0},
 		},
 		Edges: []Edge{
 			{A: 0, B: 1}, {A: 1, B: 2}, {A: 2, B: 3}, {A: 0, B: 3},
 			{A: 4, B: 5}, {A: 5, B: 6}, {A: 6, B: 7}, {A: 4, B: 7},
+			{A: 8, B: 9}, {A: 9, B: 10}, {A: 10, B: 11}, {A: 8, B: 11},
 		},
-		SurfEdges: []int32{0, 1, 2, -3, 4, 5, 6, -7},
+		SurfEdges: []int32{0, 1, 2, -3, 4, 5, 6, -7, 8, 9, 10, -11},
 		Models: []Model{
 			{FirstFace: 0, FaceCount: 1},
 			{FirstFace: 1, FaceCount: 1},
+			{FirstFace: 2, FaceCount: 1},
 		},
 	}))
 	opts := ImportOptions{
@@ -969,8 +978,8 @@ func TestBuildGeneratedLevelEmitsFuncPlatMovingBrushAsset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildImportSummary failed: %v", err)
 	}
-	if len(summary.BakeFaces) != 1 {
-		t.Fatalf("expected func_plat excluded from static bake, got %d bake faces", len(summary.BakeFaces))
+	if len(summary.BakeFaces) != 2 {
+		t.Fatalf("expected func_plat excluded and func_wall retained in static bake, got %d bake faces", len(summary.BakeFaces))
 	}
 	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "platmap.gkworld"))
 	if err != nil {
@@ -978,6 +987,9 @@ func TestBuildGeneratedLevelEmitsFuncPlatMovingBrushAsset(t *testing.T) {
 	}
 	if len(level.MovingBrushAssets) != 1 {
 		t.Fatalf("moving brush assets = %+v", level.MovingBrushAssets)
+	}
+	if len(level.StaticBrushAssets) != 1 || !hasTag(level.StaticBrushAssets[0].Asset.Tags, "source_kind:bsp_brush") {
+		t.Fatalf("static brush assets = %+v", level.StaticBrushAssets)
 	}
 	if len(level.Level.MovingBrushes) != 1 {
 		t.Fatalf("moving brushes = %+v", level.Level.MovingBrushes)

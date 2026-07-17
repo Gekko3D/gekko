@@ -188,6 +188,57 @@ func TestFindNavGraphRoute(t *testing.T) {
 	})
 }
 
+func TestNavGraphBlockerOverlay(t *testing.T) {
+	const chunkSize = 7
+	profile := NavAgentProfileDef{ID: "walker", Radius: 0.1, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	sources, graphs := buildFlatNavRouteWorld(t, []TerrainChunkCoordDef{{}}, chunkSize, profile)
+	start, goal := Vec3{0.1, 0.2, 2.5}, Vec3{6.9, 0.2, 2.5}
+
+	query, err := NewNavGraphQueryWithBlockers(sources, graphs, chunkSize, 1, profile, []NavBlockerDef{{
+		ID: "crate", Min: Vec3{3.25, 0, 2.25}, Max: Vec3{3.75, 1, 2.75},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := query.FindRoute(start, goal)
+	if err != nil || !route.Found {
+		t.Fatalf("route did not go around blocker: route=%+v err=%v", route, err)
+	}
+	detoured := false
+	for _, waypoint := range route.Waypoints {
+		if waypoint[2] != start[2] {
+			detoured = true
+		}
+	}
+	if !detoured {
+		t.Fatalf("route crossed blocked span: %v", route.Waypoints)
+	}
+	projected, err := query.ProjectPoint(Vec3{3.5, 0.2, 2.5}, 0.25)
+	if err != nil || projected.Found {
+		t.Fatalf("point projected onto blocked span: point=%+v err=%v", projected, err)
+	}
+
+	query, err = NewNavGraphQueryWithBlockers(sources, graphs, chunkSize, 1, profile, []NavBlockerDef{{
+		ID: "wall", Min: Vec3{3.25, 0, 0}, Max: Vec3{3.75, 1, 7},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err = query.FindRoute(start, goal)
+	if err != nil || route.Found || route.FailureReason != NavRouteNoRoute {
+		t.Fatalf("blocker did not split baked region: route=%+v err=%v", route, err)
+	}
+
+	query, err = NewNavGraphQuery(sources, graphs, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err = query.FindRoute(start, goal)
+	if err != nil || !route.Found || len(route.Waypoints) != 1 {
+		t.Fatalf("removing blocker did not restore route: route=%+v err=%v", route, err)
+	}
+}
+
 func buildFlatNavRouteWorld(t *testing.T, coords []TerrainChunkCoordDef, chunkSize int, profile NavAgentProfileDef) ([]NavSourceTileDef, []NavGraphTileDef) {
 	t.Helper()
 	sources := make([]NavSourceTileDef, len(coords))
