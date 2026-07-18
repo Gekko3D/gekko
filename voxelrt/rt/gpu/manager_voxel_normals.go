@@ -1,7 +1,6 @@
 package gpu
 
 import (
-	"encoding/binary"
 	"math"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -10,9 +9,9 @@ import (
 )
 
 const (
-	voxelNormalOctMax      = 127
-	voxelNormalValidBit    = 1 << 14
-	voxelNormalTwoSidedBit = 1 << 15
+	voxelNormalOctMax      = volume.VoxelNormalOctMax
+	voxelNormalValidBit    = volume.VoxelNormalValidBit
+	voxelNormalTwoSidedBit = volume.VoxelNormalTwoSidedBit
 
 	voxelNormalSurfaceFitRadius       = 2
 	voxelNormalSurfaceFitMinSamples   = 4
@@ -208,74 +207,32 @@ func voxelObjectAdjacencyMetadata(obj *core.VoxelObject) (uint32, [3]int, int, b
 }
 
 func buildVoxelAuxBytes(ctx voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, brickOrigin [3]int) []byte {
-	buf := make([]byte, VoxelAuxRecordBytes)
-	words := brick.DenseOccupancyWords()
-	for i, word := range words {
-		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], word)
+	if brick != nil && len(brick.PrecomputedAux) == VoxelAuxRecordBytes {
+		return brick.PrecomputedAux
 	}
-
-	normalBase := volume.DenseOccupancyWordCount * 4
-	for z := 0; z < volume.BrickSize; z++ {
-		for y := 0; y < volume.BrickSize; y++ {
-			for x := 0; x < volume.BrickSize; x++ {
-				if !brickVoxelOccupied(brick, x, y, z) {
-					continue
-				}
-				voxelIdx := denseOccupancyLinearIndexLocal(x, y, z)
-				global := [3]int{brickOrigin[0] + x, brickOrigin[1] + y, brickOrigin[2] + z}
-				normal, valid, twoSided := bakedVoxelNormal(ctx, obj, global)
-				if !valid {
-					continue
-				}
-				binary.LittleEndian.PutUint16(buf[normalBase+voxelIdx*2:normalBase+voxelIdx*2+2], encodeBakedVoxelNormal(normal, twoSided))
-			}
+	opts := volume.VoxelNormalBakeOptions{}
+	if obj != nil && obj.XBrickMap != nil {
+		minB, maxB := obj.XBrickMap.ComputeAABB()
+		opts.BoundsMin = minB
+		opts.BoundsMax = maxB
+		opts.HasBounds = true
+		opts.SampleOccupancy = func(voxel [3]int) bool {
+			return sampleOccupancyForBakedNormal(ctx, obj, voxel)
 		}
 	}
-	return buf
+	return volume.BuildVoxelAuxBytes(brick, brickOrigin, opts)
 }
 
 func brickVoxelOccupied(brick *volume.Brick, x, y, z int) bool {
-	if brick == nil {
-		return false
-	}
-	if brick.Flags&volume.BrickFlagSolid != 0 {
-		return true
-	}
-	return brick.Payload[x][y][z] != 0
+	return volume.BrickVoxelOccupied(brick, x, y, z)
 }
 
 func denseOccupancyLinearIndexLocal(x, y, z int) int {
-	return x + y*volume.BrickSize + z*volume.BrickSize*volume.BrickSize
+	return volume.DenseOccupancyLinearIndexLocal(x, y, z)
 }
 
 func encodeBakedVoxelNormal(normal mgl32.Vec3, twoSided bool) uint16 {
-	n := normalizedVec3OrZero(normal)
-	if n.LenSqr() <= 1e-8 {
-		return 0
-	}
-	denom := float32(math.Abs(float64(n.X())) + math.Abs(float64(n.Y())) + math.Abs(float64(n.Z())))
-	if denom <= 1e-8 {
-		return 0
-	}
-	ox := n.X() / denom
-	oy := n.Y() / denom
-	if n.Z() < 0 {
-		oldX, oldY := ox, oy
-		ox = (1 - float32(math.Abs(float64(oldY)))) * signNotZero(oldX)
-		oy = (1 - float32(math.Abs(float64(oldX)))) * signNotZero(oldY)
-	}
-	pack := func(v float32) uint16 {
-		v = clampFloat32(v*0.5+0.5, 0, 1)
-		return uint16(math.Round(float64(v * voxelNormalOctMax)))
-	}
-
-	b := uint16(voxelNormalValidBit)
-	b |= pack(ox)
-	b |= pack(oy) << 7
-	if twoSided {
-		b |= voxelNormalTwoSidedBit
-	}
-	return b
+	return volume.EncodeBakedVoxelNormal(normal, twoSided)
 }
 
 func bakedVoxelNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [3]int) (mgl32.Vec3, bool, bool) {

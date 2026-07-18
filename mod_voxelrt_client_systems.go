@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -41,6 +42,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		instanceGeometrySources:      make(map[EntityId]*volume.XBrickMap),
 		instanceObjectScopedGeometry: make(map[EntityId]bool),
 		runtimeEditedVoxelEntities:   make(map[EntityId]struct{}),
+		runtimeEditedVoxelRevisions:  make(map[EntityId]uint64),
 		entityLODSelections:          make(map[EntityId]EntityLODSelection),
 		lastMaterialKeys:             make(map[*core.VoxelObject]materialTableCacheKey),
 		materialTableCache:           make(map[materialTableCacheKey][]core.Material),
@@ -1284,6 +1286,7 @@ func syncVoxelRtWater(state *VoxelRtState, t *Time, cmd *Commands, waterInteract
 	}
 	waterHosts, rippleHosts := buildWaterSurfaceInputs(cmd, waterInteractions)
 	state.RtApp.ApplyWaterInput(waterHosts, rippleHosts, dt)
+	state.RtApp.ApplyUnderwaterInput(smoothUnderwaterInput(state, buildUnderwaterInput(cmd, state.RtApp.Camera.Position, t), dt))
 }
 
 func clearVoxelRtWater(state *VoxelRtState) {
@@ -1291,6 +1294,81 @@ func clearVoxelRtWater(state *VoxelRtState) {
 		return
 	}
 	state.RtApp.ClearWaterInput()
+	state.RtApp.ClearUnderwaterInput()
+	state.underwaterInput = app_rt.UnderwaterInput{}
+	state.underwaterStrength = 0
+}
+
+func buildUnderwaterInput(cmd *Commands, cameraPosition mgl32.Vec3, t *Time) app_rt.UnderwaterInput {
+	var best WaterVolumeHit
+	bestKey := ""
+	hits := WaterVolumesAt(cmd, cameraPosition, 0.2)
+	for _, hit := range hits {
+		key := hit.VolumeGroup
+		if key == "" {
+			key = fmt.Sprintf("entity:%d", hit.Entity)
+		}
+		if bestKey == "" || key < bestKey || (key == bestKey && hit.Entity < best.Entity) {
+			best, bestKey = hit, key
+		}
+	}
+	if bestKey == "" {
+		return app_rt.UnderwaterInput{}
+	}
+	nearSurface := float32(1)
+	nearestSurface := float32(math.MaxFloat32)
+	for _, hit := range hits {
+		key := hit.VolumeGroup
+		if key == "" {
+			key = fmt.Sprintf("entity:%d", hit.Entity)
+		}
+		if key == bestKey && hit.SurfaceVisible && hit.SurfaceY >= cameraPosition.Y() && hit.SurfaceY-cameraPosition.Y() < nearestSurface {
+			nearestSurface = hit.SurfaceY - cameraPosition.Y()
+		}
+	}
+	if nearestSurface != float32(math.MaxFloat32) {
+		nearSurface = underwaterNearSurfaceFactor(nearestSurface)
+	}
+	elapsed := float32(0)
+	if t != nil {
+		elapsed = float32(t.Elapsed)
+	}
+	return app_rt.UnderwaterInput{
+		Color:              best.Color,
+		AbsorptionColor:    best.AbsorptionColor,
+		Strength:           1,
+		DistortionPixels:   3,
+		NearSurface:        nearSurface,
+		ScatteringStrength: best.ScatteringStrength,
+		Time:               elapsed,
+	}
+}
+
+func underwaterNearSurfaceFactor(depth float32) float32 {
+	const start, end = float32(0.02), float32(0.75)
+	t := clampWaterFloat((depth-start)/(end-start), 0, 1)
+	return t * t * (3 - 2*t)
+}
+
+func smoothUnderwaterInput(state *VoxelRtState, input app_rt.UnderwaterInput, dt float32) app_rt.UnderwaterInput {
+	if state == nil {
+		return input
+	}
+	if input.Strength > 0 {
+		state.underwaterInput = input
+	}
+	if dt <= 0 {
+		dt = 1.0 / 60.0
+	}
+	state.underwaterStrength += (input.Strength - state.underwaterStrength) * clampWaterFloat(dt*8, 0, 1)
+	if state.underwaterStrength < 0.001 && input.Strength == 0 {
+		state.underwaterStrength = 0
+		state.underwaterInput = app_rt.UnderwaterInput{}
+	}
+	out := state.underwaterInput
+	out.Strength = state.underwaterStrength
+	out.Time = input.Time
+	return out
 }
 
 func voxelObjectAllowsOcclusion(cmd *Commands, entityId EntityId, vox *VoxelModelComponent) bool {
@@ -1846,8 +1924,9 @@ func buildGizmoBridgeItems(cmd *Commands, includeLightHelpers bool) []app_rt.Giz
 			}
 			color := [4]float32{l.Color[0], l.Color[1], l.Color[2], 0.8}
 			rtGizmo := app_rt.GizmoOverlayItem{
-				Type:  core.GizmoSphere,
-				Color: color,
+				Type:      core.GizmoSphere,
+				Color:     color,
+				DepthMode: core.GizmoDepthModeSceneOccluded,
 			}
 			modelMat := mgl32.Translate3D(tr.Position.X(), tr.Position.Y(), tr.Position.Z()).Mul4(mgl32.Scale3D(1.0, 1.0, 1.0))
 			rtGizmo.ModelMatrix = modelMat
@@ -1859,8 +1938,9 @@ func buildGizmoBridgeItems(cmd *Commands, includeLightHelpers bool) []app_rt.Giz
 	// Always sync user-defined GizmoComponents
 	MakeQuery2[GizmoComponent, TransformComponent](cmd).Map(func(eid EntityId, g *GizmoComponent, tr *TransformComponent) bool {
 		rtGizmo := app_rt.GizmoOverlayItem{
-			Type:  core.GizmoType(g.Type),
-			Color: g.Color,
+			Type:      core.GizmoType(g.Type),
+			Color:     g.Color,
+			DepthMode: core.GizmoDepthMode(g.DepthMode),
 		}
 
 		if g.Type == GizmoGrid {
@@ -1876,13 +1956,13 @@ func buildGizmoBridgeItems(cmd *Commands, includeLightHelpers bool) []app_rt.Giz
 
 				lx := mgl32.Translate3D(offset, 0, -halfSize)
 				sz := mgl32.Scale3D(1, 1, g.Size)
-				rtLineZ := app_rt.GizmoOverlayItem{Type: core.GizmoLine, Color: g.Color}
+				rtLineZ := app_rt.GizmoOverlayItem{Type: core.GizmoLine, Color: g.Color, DepthMode: core.GizmoDepthMode(g.DepthMode)}
 				rtLineZ.ModelMatrix = tr.ObjectToWorld().Mul4(lx).Mul4(sz)
 				items = append(items, rtLineZ)
 
 				lz := mgl32.Translate3D(-halfSize, 0, offset)
 				rx := mgl32.QuatRotate(mgl32.DegToRad(90), mgl32.Vec3{0, 1, 0}).Mat4()
-				rtLineX := app_rt.GizmoOverlayItem{Type: core.GizmoLine, Color: g.Color}
+				rtLineX := app_rt.GizmoOverlayItem{Type: core.GizmoLine, Color: g.Color, DepthMode: core.GizmoDepthMode(g.DepthMode)}
 				rtLineX.ModelMatrix = tr.ObjectToWorld().Mul4(lz).Mul4(rx).Mul4(sz)
 				items = append(items, rtLineX)
 			}

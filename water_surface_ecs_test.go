@@ -28,6 +28,13 @@ func TestWaterSurfaceComponentNormalizationAndEnablement(t *testing.T) {
 	if got := water.NormalizedOpacity(); got <= 0 || got >= 1 {
 		t.Fatalf("expected normalized opacity in (0,1), got %f", got)
 	}
+	if got := water.NormalizedScatteringStrength(); got != 0.75 {
+		t.Fatalf("expected default scattering strength, got %v", got)
+	}
+	water.ScatteringStrength = 1.25
+	if got := water.NormalizedScatteringStrength(); got != 1.25 {
+		t.Fatalf("expected authored scattering strength, got %v", got)
+	}
 	if got := water.NormalizedFlowDirection(); got != ([2]float32{1, 0}) {
 		t.Fatalf("expected default flow direction, got %v", got)
 	}
@@ -36,6 +43,13 @@ func TestWaterSurfaceComponentNormalizationAndEnablement(t *testing.T) {
 	}
 	if got := water.NormalizedDirectLightOcclusion(); got != 0 {
 		t.Fatalf("expected default direct light occlusion 0, got %v", got)
+	}
+	if !water.SurfaceIsVisible() {
+		t.Fatal("expected legacy surface visibility to default visible")
+	}
+	water.SurfaceVisibility = WaterSurfaceVisibilityHidden
+	if water.SurfaceIsVisible() {
+		t.Fatal("expected hidden surface visibility")
 	}
 	water.DirectLightOcclusion = 1.7
 	if got := water.NormalizedDirectLightOcclusion(); got != 1 {

@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"sync"
+	"time"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -507,27 +508,28 @@ type GpuBufferManager struct {
 	retainedVoxelMaps   map[*volume.XBrickMap]*retainedVoxelMapEntry
 
 	// Smooth streaming state
-	SectorsPerFrame               uint32
-	lastTotalSectors              int
-	lastSceneRevision             uint64
-	gridDataPool                  []byte
-	TileLightTilesX               uint32
-	TileLightTilesY               uint32
-	TileLightAvgCount             int
-	TileLightMaxCount             int
-	VoxelSectorsUploaded          int
-	VoxelBricksUploaded           int
-	VoxelDirtySectorsPending      int
-	VoxelDirtyBricksPending       int
-	VoxelUniformSparseBricks      int
-	VoxelPayloadSparseBricks      int
-	VoxelPayloadUploadsSkipped    int
-	VoxelPayloadBytesAvoided      int
-	RetainedVoxelMapBudgetSectors int
-	retainedVoxelMapClock         uint64
-	retainedVoxelMapStats         RetainedVoxelMapStats
-	retiredBuffers                []retiredBuffer
-	retiredBindGroups             []retiredBindGroup
+	SectorsPerFrame                uint32
+	lastTotalSectors               int
+	lastSceneRevision              uint64
+	gridDataPool                   []byte
+	TileLightTilesX                uint32
+	TileLightTilesY                uint32
+	TileLightAvgCount              int
+	TileLightMaxCount              int
+	VoxelSectorsUploaded           int
+	VoxelBricksUploaded            int
+	VoxelDirtySectorsPending       int
+	VoxelDirtyBricksPending        int
+	VoxelUniformSparseBricks       int
+	VoxelPayloadSparseBricks       int
+	VoxelPayloadUploadsSkipped     int
+	VoxelPayloadBytesAvoided       int
+	VoxelRuntimeNormalBakeDuration time.Duration
+	RetainedVoxelMapBudgetSectors  int
+	retainedVoxelMapClock          uint64
+	retainedVoxelMapStats          RetainedVoxelMapStats
+	retiredBuffers                 []retiredBuffer
+	retiredBindGroups              []retiredBindGroup
 }
 
 type retainedVoxelMapEntry struct {

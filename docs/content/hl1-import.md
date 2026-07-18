@@ -456,6 +456,18 @@ debugging while allowing imported maps to use a binary RLE chunk payload:
   available.
 - Keep a debug dump/report path so failures remain inspectable.
 
+For Rust runtime import through `rusty-voxelrt`, use the named export profile
+`rusty_voxelrt_interop_v1`. This is a source/interchange profile, not a Rust
+runtime packet format. It keeps `.gklevel` as the scene manifest, emits
+base-world chunks as readable `sparse_json_v1`, preserves material tables in
+the `.gkworld`, enables generated `.gkasset` files for referenced model/sprite
+assets, and tags generated source content with
+`export_profile:rusty_voxelrt_interop_v1`.
+
+The Rust side should still compile this source package into its own
+`.rvlevel/.rvgpu` runtime data. Do not make Rust depend on Gekko's compact
+binary chunk payload for shipping.
+
 ### `.gkasset`
 
 Do not use `.gkasset` for whole BSP maps.
@@ -921,14 +933,22 @@ Both paths use the same importer package and generate the same content shape:
 - `<map>.gklevel`
 - `worlds/<map>.gkworld`
 - `worlds/chunks/*.gkchunk`
+- `worlds/aux/*.gkaux`
 - `worlds/<map>_import_report.json`
 - generated helper `.gkasset` files for imported moving brush visuals
-- optional `hl1_assets/<map>/manifest.gkhl1assets` plus copied source game
-  assets referenced by the imported map
+- optional `hl1_assets/<map>/assets.gkassetlibrary`,
+  `manifest.gkhl1assets`, and copied source game assets referenced by the map
 
 The generated `.gklevel` is the file to open or run. It references the base
 world plus imported lights, water, ladders, moving brushes, use triggers, and
 player spawn metadata.
+
+Generated level saving also ensures the referenced base-world manifest has
+derived normal/aux sidecars before the `.gklevel` is written. Fresh imports emit
+those sidecars during world save; if a generated level points at an older
+manifest without aux refs, the level-save path backfills `worlds/aux/*.gkaux`
+and updates the `.gkworld` manifest. Runtime still falls back to live normal
+baking when a sidecar is missing or stale.
 
 ### Editor Import
 
@@ -952,15 +972,24 @@ go run .
 
 - output root: `assets`
 - voxel: `0.1` for world/base geometry
-- asset voxel: `0.08` for generic imported `.mdl`/`.spr` assets
-- item voxel: `0.04` for pickup/item assets
+- asset voxel: `0.05` for generic imported `.mdl`/`.spr` static prop assets
+- NPC voxel: `0.02` for imported monster/NPC model assets
+- item voxel: `0.01` for weapon, ammo, and pickup/item assets
 - chunk: `256`
 - band: `24`
 - cells: `100000000`
+- profile: `Gekko`
 - chunk payload: `RLE chunks`
 - light mode: `faithful`
 - emit lights: `on`
 - game assets: `off` unless you want a local copied/cataloged asset library
+- prop library: `on` to scan local resource roots for reusable non-character
+  MDLs; this also enables game assets
+
+For a `rusty-voxelrt` source package, select `Rust interop`. This forces JSON
+chunks and enables generated game assets so Rust can compile base-world chunks,
+moving brushes, props, pickups, NPC markers, and material metadata without
+parsing Gekko's compact binary payload.
 
 7. Click **import + open**.
 
@@ -977,20 +1006,75 @@ records:
 - `.wav` references from entity key-values
 
 WADs are already used for BSP texture baking. MDL files are copied, parsed, and
-voxelized into generated surface `.gkasset` files under
+voxelized into generated `.gkasset` files under
 `hl1_assets/<map>/generated/models/`. When a GoldSrc model stores geometry in
 `w_foo.mdl` and texture pixels in a companion `w_foot.mdl`, the importer loads
 that companion texture model before baking voxel colors. SPR files are copied,
-parsed, and converted from their first indexed frame into thin emissive voxel-card
-`.gkasset` files under `hl1_assets/<map>/generated/sprites/`. The manifest
-entries keep source provenance, decoded metadata, generated asset path, and
-generated voxel count/resolution. Imported world geometry, generic game assets,
-and pickup/item assets intentionally have separate voxel-resolution settings:
-small pickups need finer voxels than BSP walls and floors. Generated model
-assets currently use the default static pose and texture-baked surface voxels;
-they are not solid-filled or animated yet. Generated sprite assets are not true
-camera-facing billboards yet; they are placed voxel cards that preserve palette
-color and cutout/additive transparency well enough for first visual coverage.
+parsed, and converted from their first indexed frame into thin emissive
+voxel-card `.gkasset` files under `hl1_assets/<map>/generated/sprites/`. The
+manifest entries keep source provenance, decoded metadata, generated asset
+path, and generated voxel count, resolution, and resolution category. Imported
+world geometry, moving/breakable brush models, fixtures, charger visuals,
+static props, NPCs, and weapon/ammo/pickup assets intentionally have separate
+voxel-resolution buckets: small pickups and character silhouettes need finer
+voxels than BSP walls and floors, while props, fixtures, and chargers can sit
+between those extremes.
+
+With **prop library** enabled, the importer also catalogs non-character MDLs
+from the configured local HL1 resource roots. Closed components are
+flood-filled into solid voxel volumes; open source meshes remain open, and gaps
+between disconnected components are not filled. The generated material records
+retain exact GoldSrc texture names and raw texture flags. Filename-based
+material semantics and navigation groups are tagged `classification:inferred`.
+
+Entity-owned BSP brushes such as `func_wall` and `func_illusionary`, plus
+generated moving brushes, chargers, breakables, and fixtures, are added to the
+same `.gkassetlibrary`. Geometry already merged into BSP model 0 (`worldspawn`)
+cannot be recovered as individual props and is not guessed from spatial
+clusters.
+
+Generated MDL assets use rigid voxel-part animation:
+
+- MDL conversion uses a recorded `generated_voxelization_profile`. The default
+  profile uses seven-point conservative surface coverage and honors GoldSrc
+  `STUDIO_NF_MASKED` palette-index-255 texels. NPC profiles fill closed model
+  interiors and add one-voxel interior-only caps between connected bones.
+- NPC profiles treat the configured NPC voxel resolution as preferred detail.
+  Assets over the `120000`-voxel target retry at a coarser resolution, capped
+  at `0.08`. The effective resolution remains recorded in
+  `generated_voxel_resolution` and in every generated voxel part.
+- GoldSrc bones and sequence metadata are decoded into `.gkasset` `skeleton`
+  and `animation_clips` metadata.
+- Model triangles first use summed barycentric bone weights as source hints,
+  and every surface voxel receives one deterministic owner.
+- Closed character shells are flood-filled. Interior colors and ownership
+  propagate from the nearest surface. NPC rigid profile `hl1_npc_rigid_v3`
+  then repartitions the unified volume by distance to nearby bind-pose skeleton
+  segments with source-fitted capsule radii. Only bones used by source skinning
+  can own a part; zero-weight
+  control joints are traversed but stay invisible. The source bone contributes
+  only a one-voxel surface bias, while filled interiors use pure capsule
+  distance. The same rule therefore cuts chain joints, branch hips, and bent
+  ankles without per-model joint planes. Connected bones finally share only a
+  thin interior cap; exterior surface voxels are never copied across bones.
+- Each visible bone chunk is emitted as explicit `voxel_shape` data under a
+  transform-only bone group. The chunk's local voxel origin is preserved as the
+  renderer pivot, so localized voxel bounds do not shift the body part.
+- Animation clips target bone group part IDs and write local rigid transforms.
+  The current runtime does not skin or deform voxels.
+- Animated MDL assets keep voxel parts uncollapsed.
+- Rigid bone parts own local 255-entry palettes while sharing color-addressed
+  asset materials. This prevents one character-wide palette from discarding
+  colors merely because different bones use different source palettes.
+
+Actor-level animated LOD remains separate from MDL voxelization. Current
+entity LOD works per voxel object, so applying it independently to rigid bone
+parts would split one distant actor into unrelated proxies. Add grouped rig LOD
+only after the runtime has an atomic actor-level representation switch.
+
+Generated sprite assets are not true camera-facing billboards yet; they are
+placed voxel cards that preserve palette color and cutout/additive transparency
+well enough for first visual coverage.
 When **game assets** is enabled, typed pickups try to attach the generated HL1
 world model asset directly to `LevelPickupDef.AssetPath`; actiongame uses that
 model as the collectible visual and falls back to the colored placeholder cube
@@ -1003,6 +1087,48 @@ without losing source provenance.
 
 ### CLI Import
 
+#### Assets-Only Import
+
+Use `-assets-only` to build the reusable HL1 player and weapon-world-model
+catalog without loading a BSP or generating a world or level. It implies
+`-emit-game-assets`, requires `-game-dir`, and requires at least one of
+`-import-all-static-props`, `-import-all-player-models`, or
+`-import-all-weapon-world-models`.
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/gekko
+go run ./cmd/hl1import \
+  -assets-only \
+  -game-dir /path/to/Half-Life \
+  -out ../actiongame/assets/levels \
+  -import-all-static-props \
+  -import-all-player-models \
+  -import-all-weapon-world-models
+```
+
+With no `-map` value, output is written under `hl1_assets/catalog/`:
+
+- `manifest.gkhl1assets` records stable player variants, bodygroup/skin
+  selections, decoded clip IDs, `head`/`right_hand` marker IDs, and weapon
+  world-model IDs.
+- `generated/models/*.gkasset` contains voxelized prop, player, and weapon
+  assets.
+- `assets.gkassetlibrary` groups reusable props, characters, and weapons under
+  stable keys for editor search and placement.
+- `files/` contains copied source models.
+- `worlds/catalog_import_report.json` records the asset-only import report.
+
+This mode does not import map-referenced sprites, sounds, WADs, NPCs, pickups,
+or entity-owned BSP brushes. Use normal map import with `-emit-game-assets` for
+those. It cannot be combined with `-emit-debug-world` or `-emit-level`.
+
+Player `.gkasset` files carry rigid `animation_clips` for source sequences the
+importer can decode. External GoldSrc sequence groups currently produce
+bind-pose clips rather than decoded motion. Weapon world models are static
+visual assets and have no animation clips.
+
+#### Map Import
+
 Suggested command:
 
 ```bash
@@ -1013,12 +1139,15 @@ go run ./cmd/hl1import \
   -out ../actiongame/assets/levels \
   -chunk-size 256 \
   -voxel-resolution 0.1 \
-  -game-asset-voxel-resolution 0.08 \
-  -pickup-voxel-resolution 0.04 \
+  -brush-model-voxel-resolution 0.1 \
+  -fixture-voxel-resolution 0.05 \
+  -static-prop-voxel-resolution 0.05 \
+  -npc-voxel-resolution 0.02 \
+  -pickup-voxel-resolution 0.01 \
   -light-mode faithful \
   -emit-light-fixtures=false \
   -emit-game-assets \
-  -solid-band-depth 24 \
+  -solid-band-depth 2 \
   -max-solid-sample-cells 100000000 \
   -emit-level \
   -debug-world-mode solid
@@ -1029,6 +1158,17 @@ The CLI defaults to compact RLE binary chunks. For readable JSON chunks, add:
 ```bash
 -chunk-payload sparse_json_v1
 ```
+
+For the Rust interop profile, use:
+
+```bash
+-export-profile rusty_voxelrt_interop_v1
+```
+
+That profile currently forces `-chunk-payload sparse_json_v1` and enables
+generated game asset output. Use it when the next consumer is
+`rusty-voxelrt`'s `compile_gekko_level` tool rather than Gekko's own streamed
+runtime.
 
 For visual comparison against original GoldSrc baked lighting, add:
 
@@ -1045,6 +1185,21 @@ For explicit binary chunks, add:
 -chunk-payload dense_rle_binary_v1
 ```
 
+For live terminal progress, add:
+
+```bash
+-progress
+```
+
+This prints timestamped stage lines while the import runs. High-level stages
+cover summary, build, save, and report work.
+
+For long imports, keep the progress log:
+
+```bash
+go run ./cmd/hl1import ... -progress 2>&1 | tee /tmp/hl1import.log
+```
+
 Local developer smoke command:
 
 ```bash
@@ -1057,10 +1212,11 @@ go run ./cmd/hl1import \
   -voxel-resolution 0.1 \
   -light-mode faithful \
   -emit-light-fixtures=false \
-  -solid-band-depth 24 \
+  -solid-band-depth 2 \
   -max-solid-sample-cells 100000000 \
   -emit-level \
-  -debug-world-mode solid
+  -debug-world-mode solid \
+  -progress
 ```
 
 This writes:
@@ -1070,7 +1226,56 @@ This writes:
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/crossfire.gkworld
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/crossfire_import_report.json
 /tmp/gekko3d-hl1import-crossfire-rle/worlds/chunks/*.gkchunk
+/tmp/gekko3d-hl1import-crossfire-rle/worlds/aux/*.gkaux
 ```
+
+Actiongame large-map smoke command:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/gekko
+go run ./cmd/hl1import \
+  -game-dir /Users/ddevidch/code/other/hl \
+  -map gasworks \
+  -bsp /Users/ddevidch/code/other/hl/valve/maps/gasworks.bsp \
+  -out ../actiongame/assets/levels/gasworks \
+  -chunk-size 256 \
+  -voxel-resolution 0.1 \
+  -light-mode faithful \
+  -emit-light-fixtures=false \
+  -solid-band-depth 2 \
+  -max-solid-sample-cells 100000000 \
+  -emit-level \
+  -debug-world-mode solid
+```
+
+This writes:
+
+```text
+../actiongame/assets/levels/gasworks/gasworks.gklevel
+../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld
+../actiongame/assets/levels/gasworks/worlds/gasworks_import_report.json
+../actiongame/assets/levels/gasworks/worlds/chunks/*.gkchunk
+../actiongame/assets/levels/gasworks/worlds/aux/*.gkaux
+```
+
+### Voxel Resolution Policy
+
+HL1 imports use a per-category voxel resolution policy rather than one global
+asset resolution:
+
+- `world`: base BSP world chunks, default `0.1`
+- `brush_model`: generated moving brushes and breakables, default `0.1`
+- `fixture`: lamps, chargers, and similar fixtures, default `0.05`
+- `static_prop`: generic converted `.mdl` and `.spr` placements, default `0.05`
+- `npc`: converted monster/NPC `.mdl` assets, default `0.02`
+- `pickup`: weapons, ammo, batteries, medkits, and other pickup visuals,
+  default `0.01`
+
+The category is stored in the asset manifest entry and the chosen value is
+copied into each generated `.gkasset` part. This is the long-term policy: scene
+content can mix voxel resolutions as long as each runtime `VoxelModelComponent`
+receives the authored part resolution. Do not resample all imported assets to
+the base-world resolution just to simplify placement.
 
 ### Actiongame Smoke Test
 
@@ -1086,6 +1291,15 @@ go run .
 For editor-generated levels under `gekko-editor/assets`, point
 `GEKKO_ACTIONGAME_LEVEL` at that generated `.gklevel` instead.
 
+For the local gasworks smoke output above:
+
+```bash
+cd /Users/ddevidch/code/go/gekko3d/actiongame
+GEKKO_ACTIONGAME_LEVEL=assets/levels/gasworks/gasworks.gklevel \
+GEKKO_ACTIONGAME_PLAYER_SPAWN_KIND=hl1_player_spawn \
+go run .
+```
+
 Manual check list:
 
 - player spawns at an HL1 `info_player_start`
@@ -1097,6 +1311,7 @@ Manual check list:
 
 Current debug world modes:
 
+- `solid`: the CLI default.
 - `surface`: visible BSP faces only. Useful for visual comparison and fast
   diagnostics, but hollow and not suitable for destruction.
 - `solid`: BSP leaf contents classify voxel cells, visible faces provide
@@ -1151,10 +1366,10 @@ Solid mode has a sample guard:
 Solid band depth is in voxels:
 
 ```bash
--solid-band-depth 24
+-solid-band-depth 2
 ```
 
-At the default `0.1m` voxel resolution, `24` means about `2.4m` of destructible
+At the default `0.1m` voxel resolution, `2` means about `0.2m` of destructible
 solid behind reachable surfaces.
 
 Suggested output:
@@ -1495,6 +1710,35 @@ Recommended path:
   in the copied game assets: health charger 50 and suit charger 75. Deferred:
   exact difficulty selection, recharge timing, sounds, animated empty/active
   visual states, and global-state behavior.
+- Implemented first slice: selected HL1 `monster_*` point entities are emitted
+  as typed `content.LevelDef.NPCs` plus `ai_spawn` markers. Runtime spawns inert
+  `NPCComponent` entities and attaches generated `.mdl` voxel assets when game
+  assets are enabled. Generated MDL assets can play their default imported
+  rigid-body sequence, such as Barney idle. Runtime also has a semantic NPC
+  animation state bridge that can choose imported clips for states such as
+  idle, walk, run, attack, pain, and death when those clips exist. Deferred:
+  combat, schedules, animation blending, relationships, scripted sequences, and
+  exact skill configuration.
+- Implemented first actiongame behavior slice: friendly HL1 NPCs such as
+  `monster_barney` and `monster_scientist` can face the player, follow within a
+  short range, stop at conversational distance, and drive idle/walk animation
+  states. Actiongame NPCs now have an explicit brain/schedule component with
+  initial `idle`, `follow`, `alert`, and `dead` states; friendly follow is the
+  first schedule backed by that layer, and NPC damage/death can force the
+  `dead` schedule and death animation state. Follow behavior writes movement
+  intent into an actiongame NPC locomotion component instead of moving
+  transforms directly; the locomotion system applies the movement, performs
+  first-pass voxel-world blocking probes, records actual velocity/blocked
+  state, and drives idle/walk from actual movement. Active nearby NPCs become
+  small streamed-level observers so their local collision can load
+  independently of the player. Locomotion waits for a valid streamed collision
+  floor and freezes at the authored transform until that floor is available,
+  instead of applying gravity into unloaded space. Character grounding now keeps
+  authoritative collision Y separate from a smoothed visual ground Y for
+  attached NPC assets, with a small visual deadband to suppress voxelized
+  ramp/stair noise while preserving exact collision probes. Full voxel-graph
+  navigation, squad logic, use/follow commands, and hostile AI remain
+  deferred.
 - `trigger_once` and `trigger_multiple` become typed trigger volumes with
   target metadata.
 - Implemented first slice: `trigger_changelevel` is emitted as typed
@@ -1625,7 +1869,7 @@ Initial mapping order:
 6. `func_ladder`
 7. pickups and simple props
 8. doors/buttons/lifts/trains only after actiongame has matching systems
-9. NPC spawn markers, then real NPC behavior later
+9. NPC spawn markers and inert visuals, then real NPC behavior later
 
 Acceptance criteria:
 
@@ -1638,22 +1882,25 @@ Acceptance criteria:
 
 Engine/content:
 
-- [ ] HL1 importer package.
-- [ ] Import report schema.
-- [ ] Required WAD/BSP texture bake onto visible voxel surfaces.
+- [x] HL1 importer package.
+- [x] Import report schema.
+- [x] Required WAD/BSP texture bake onto visible voxel surfaces.
 - [x] Deterministic adaptive palette quantization for baked texture samples.
-- [ ] Structural fill material propagation from nearest visible source surface.
-- [ ] Optional `.gkworld` source material metadata.
+- [x] Structural fill material propagation from nearest visible source surface.
+- [x] Optional `.gkworld` source material metadata.
 - [x] Optional `.gkchunk` compact payload support.
-- [ ] Optional `.gklevel` light definitions.
-- [ ] Optional `.gklevel` trigger volume definitions.
+- [x] Optional `.gklevel` light definitions.
+- [x] Optional `.gklevel` trigger volume definitions.
+- [x] Generated HL1 game asset manifest with per-category voxel resolution.
+- [x] Generated MDL `.gkasset` rigid bone parts, skeleton metadata, and
+      sequence clips.
 - [ ] Richer `LevelEnvironmentDef`.
 
 Runtime:
 
-- [ ] Load selected generated HL1 level in `actiongame`.
-- [ ] Spawn/import level-owned lights.
-- [ ] Apply imported player spawn rotation.
+- [x] Load selected generated HL1 level in `actiongame`.
+- [x] Spawn/import level-owned lights.
+- [x] Apply imported player spawn rotation.
 - [x] Represent changelevel trigger volumes as typed transition metadata.
 - [x] Represent ladder volumes.
 - [x] Represent typed door/button moving-brush metadata and use activation.
@@ -1671,6 +1918,19 @@ Runtime:
       components with actiongame placeholder collection.
 - [x] Attach generated HL1 world-model pickup visuals when game assets are
       enabled, with placeholder fallback for missing assets.
+- [x] Attach generated HL1 NPC `.mdl` visuals with default rigid animation when
+      game assets are enabled.
+- [x] Select generated NPC animation clips from semantic NPC animation states
+      with imported-name fallbacks.
+- [x] First-pass friendly NPC follow behavior drives idle/walk animation states.
+- [x] Route friendly NPC follow movement through an actiongame locomotion
+      component with first-pass voxel-world blocking probes.
+- [x] Make active nearby NPCs request streamed collision and freeze locomotion
+      until their local floor is available.
+- [x] Smooth attached NPC visual roots over voxel stair/ramp ground samples
+      while keeping the NPC collision transform authoritative.
+- [x] Add first actiongame NPC brain/schedule state component for idle,
+      friendly-follow, alert, and dead behavior slices.
 - [ ] Import remaining target graph relay/action entities.
 - [ ] Implement exact HL1 pickup respawn/skill behavior and animated pickup
       presentation.

@@ -40,7 +40,13 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
 - Owns:
   - propagation from `LocalTransformComponent` plus `Parent` to `TransformComponent`
 - Important:
-  - parent voxel pivot and voxel resolution affect child world transforms
+  - hierarchy composition is pure entity transform math: parent position,
+    rotation, and scale affect children
+  - voxel renderer pivots do not affect child world transforms; pivots only
+    affect how a voxel model is drawn around its entity origin
+  - if a voxel-authored asset needs a separate visual origin, express it as a
+    child voxel part under a `group` pivot rather than relying on renderer pivot
+    side effects
 
 ## Spatial and Streaming Support
 
@@ -74,11 +80,14 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
 - File: `streamed_level_runtime.go`
 - Resources:
   - `*StreamedLevelRuntimeState`
+  - `*VoxelWorldDirtyChunks`
 - Systems:
   - `updateStreamedLevelObserverSystem` in `PreUpdate`
   - `commitPreparedStreamedChunksSystem` in `Update`
+  - `streamedLevelNavigationSystem` in `Update`
+  - `streamedLevelRuntimeEditedNavigationSystem` in `PostUpdate`
 - Owns:
-  - chunked level loading, terrain streaming, imported base-world streaming, placement chunking, world-delta application
+  - chunked level loading, terrain streaming, imported base-world streaming, placement chunking, world-delta application, voxel graph residency, and revisioned delta rebuilds
 - Best paired with:
   - `ChunkObserverModule`
   - content-loading and authored-level code paths
@@ -105,6 +114,36 @@ These are not separate `Module` implementations, but they are major integration 
   - eager whole-level spawn from `.gklevel`
 - `runtime_content_loader.go`
   - cached loading of authored content files
+- `asset_animation.go`
+  - advances authored `.gkasset` animation clips through
+    `AnimationPlayerComponent`
+  - applies sampled keys to `LocalTransformComponent` targets identified by
+    authored item IDs
+
+### `AnimationModule`
+
+- File: `asset_animation.go`
+- Resources:
+  - none
+- Systems:
+  - `npcAnimationSystem` in `Update`
+  - `assetAnimationSystem` in `Update`
+- Owns:
+  - semantic NPC animation state selection for attached authored asset visuals
+  - authored asset clip playback for spawned `.gkasset` hierarchies
+  - bind-pose base-clip sampling plus ordered masked override/additive layers
+    for local position, rotation, and scale keys
+- Important:
+  - NPC animation states such as `idle`, `walk`, `run`, `attack`, `pain`, and
+    `death` resolve to the best available imported clip by stable name/tag
+    matching, with fallback to the authored default clip
+  - animation tracks are local-space authored transforms
+  - layers use authored item-ID masks and can lock root position keys for
+    controller-driven actors; they do not provide an animation graph or
+    runtime retargeting
+  - omitted channels keep the asset's bind transform
+  - `HierarchyModule` resolves the resulting local transforms to world
+    transforms after animation has run
 
 For their data model, see:
 
@@ -179,7 +218,13 @@ For their data model, see:
   - `groundedPlayerInputSystem`
   - `groundedPlayerControlSystem`
 - Owns:
-  - grounded first-person controller behavior
+  - grounded first-person controller behavior, including held `Ctrl` crouch
+    (clearance-checked standing recovery) and water-volume swimming (`Space`
+    rises, `Ctrl` descends)
+  - walking contact through the shared kinematic character helpers: slide,
+    step-up, landing snap, and vertical sweep
+  - `ScriptedMovement` keeps controller camera/look ownership while a gameplay
+    traversal action advances the capsule through those same collision helpers
 - Depends on:
   - `*Input`
   - `*Time`

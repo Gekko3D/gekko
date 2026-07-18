@@ -95,6 +95,72 @@ func TestBuildHL1WaterBodiesMergesAdjacentRects(t *testing.T) {
 	}
 }
 
+func TestBuildHL1WaterBodiesFromTopCellsTilesExactFootprint(t *testing.T) {
+	bodies := buildHL1WaterBodiesFromTopCells([]LiquidTopCell{
+		{Kind: "water", SurfaceY: 2, Depth: 1, X: 0, Z: 0},
+		{Kind: "water", SurfaceY: 2, Depth: 1, X: 1, Z: 0},
+		{Kind: "water", SurfaceY: 2, Depth: 1, X: 0, Z: 1},
+	}, 1)
+	if len(bodies) != 2 {
+		t.Fatalf("expected L-shaped occupancy to tile into two rectangles, got %+v", bodies)
+	}
+	area := float32(0)
+	for _, body := range bodies {
+		if body.SurfaceMode != content.LevelWaterSurfaceModeFootprint || body.ContinuityGroup == "" {
+			t.Fatalf("expected grouped footprint water body, got %+v", body)
+		}
+		area += body.RectHalfExtents[0] * body.RectHalfExtents[1] * 4
+	}
+	if area != 3 {
+		t.Fatalf("tiled water area = %v, want 3", area)
+	}
+	if bodies[0].ContinuityGroup != bodies[1].ContinuityGroup {
+		t.Fatalf("tiled patches must share continuity group: %+v", bodies)
+	}
+}
+
+func TestCollectLiquidTopCellsHidesSealedCeiling(t *testing.T) {
+	faces := []Face{
+		{
+			TextureName: "!WATERBLUE", Normal: vec3(0, 0, 1),
+			Vertices: []importcommon.Vec3{vec3(0, 0, 64), vec3(64, 0, 64), vec3(64, 64, 64), vec3(0, 64, 64)},
+		},
+		{
+			TextureName: "CONCRETE", Normal: vec3(0, 0, -1),
+			Vertices: []importcommon.Vec3{vec3(0, 0, 64), vec3(0, 64, 64), vec3(64, 64, 64), vec3(64, 0, 64)},
+		},
+	}
+	cells := collectLiquidTopCells(nil, faces, VoxelizeOptions{VoxelResolution: 0.1})
+	if len(cells) == 0 {
+		t.Fatal("expected liquid top cells")
+	}
+	for _, cell := range cells {
+		if !cell.SurfaceHidden {
+			t.Fatalf("sealed liquid cell remained visible: %+v", cell)
+		}
+	}
+	bodies := buildHL1WaterBodiesFromTopCells(cells, 0.1)
+	if len(bodies) == 0 || bodies[0].SurfaceVisibility != content.LevelWaterSurfaceVisibilityHidden {
+		t.Fatalf("sealed liquid bodies = %+v", bodies)
+	}
+}
+
+func TestCollectLiquidTopCellsHidesWorldSealedVolume(t *testing.T) {
+	bsp := &BSP{
+		Models: []Model{{HeadNodes: [4]int32{-1}}},
+		Leafs:  []Leaf{{Contents: ContentsSolid}},
+	}
+	face := Face{
+		TextureName: "!WATERBLUE", Normal: vec3(0, 0, 1),
+		Vertices: []importcommon.Vec3{vec3(0, 0, 64), vec3(64, 0, 64), vec3(64, 64, 64), vec3(0, 64, 64)},
+	}
+	for _, cell := range collectLiquidTopCells(bsp, []Face{face}, VoxelizeOptions{VoxelResolution: 0.1}) {
+		if !cell.SurfaceHidden {
+			t.Fatalf("BSP-sealed liquid cell remained visible: %+v", cell)
+		}
+	}
+}
+
 func TestBuildHL1WaterBodiesPrefersLiquidLeafVolume(t *testing.T) {
 	bsp := &BSP{
 		Leafs: []Leaf{
@@ -158,7 +224,15 @@ func TestBuildHL1WaterBodyDefsAssignsContinuityGroupsForCoplanarConnectedRects(t
 	if bodies[0].ContinuityGroup == "" || bodies[0].ContinuityGroup != bodies[1].ContinuityGroup {
 		t.Fatalf("expected first two coplanar water rects to share group, got %q and %q", bodies[0].ContinuityGroup, bodies[1].ContinuityGroup)
 	}
+	if bodies[1].VolumeGroup == "" || bodies[1].VolumeGroup != bodies[2].VolumeGroup {
+		t.Fatalf("expected different-height touching volumes to share medium: %+v", bodies)
+	}
 	if bodies[2].ContinuityGroup != "" || bodies[3].ContinuityGroup != "" {
 		t.Fatalf("expected height/kind mismatches to stay ungrouped, got %q and %q", bodies[2].ContinuityGroup, bodies[3].ContinuityGroup)
+	}
+	for _, body := range bodies {
+		if body.SurfaceMode != content.LevelWaterSurfaceModeFootprint {
+			t.Fatalf("expected HL1 water to use footprint surface mode, got %+v", body)
+		}
 	}
 }

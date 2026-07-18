@@ -28,7 +28,8 @@ type App struct {
 	RenderPipeline  *wgpu.RenderPipeline
 	ResolvePipeline *wgpu.RenderPipeline
 
-	ResolveBG *wgpu.BindGroup
+	ResolveBG           *wgpu.BindGroup
+	UnderwaterParamsBuf *wgpu.Buffer
 
 	// Deferred Rendering Pipelines
 	GBufferPipeline        *wgpu.ComputePipeline

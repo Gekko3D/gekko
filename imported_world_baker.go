@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gekko3d/gekko/content"
+	contentderived "github.com/gekko3d/gekko/content/derived"
 	"github.com/go-gl/mathgl/mgl32"
 )
 
@@ -251,6 +252,27 @@ func SaveImportedWorldBakeWithProgress(manifestPath string, bake ImportedWorldBa
 		if err := content.SaveImportedWorldChunk(chunkPath, chunk); err != nil {
 			return err
 		}
+		updateImportedWorldBakeEntryPayloadMetadata(bake.Manifest.Entries, coord, chunk)
+	}
+	chunksByCoord := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(bake.Chunks))
+	for coord, chunk := range bake.Chunks {
+		chunksByCoord[content.TerrainChunkCoordDef{X: coord.X, Y: coord.Y, Z: coord.Z}] = chunk
+	}
+	for i := range bake.Manifest.Entries {
+		entry := &bake.Manifest.Entries[i]
+		chunk := chunksByCoord[entry.Coord]
+		if chunk == nil || chunk.NonEmptyVoxelCount == 0 {
+			continue
+		}
+		aux := contentderived.BuildImportedWorldChunkAux(chunk, chunksByCoord, entry.PayloadHash, entry.PayloadSizeBytes, true)
+		if aux == nil {
+			continue
+		}
+		auxPath := content.DefaultImportedWorldChunkAuxPath(entry.ChunkPath)
+		if err := content.SaveImportedWorldChunkAux(content.ResolveDocumentPath(auxPath, manifestPath), aux); err != nil {
+			return err
+		}
+		entry.Aux = content.ImportedWorldChunkAuxRef(auxPath, aux)
 	}
 	proxyPaths := make([]string, 0, len(bake.ProxyChunks))
 	for path := range bake.ProxyChunks {
@@ -265,6 +287,15 @@ func SaveImportedWorldBakeWithProgress(manifestPath string, bake ImportedWorldBa
 			return err
 		}
 		updateImportedWorldBakeSectorLODMetadata(bake.Manifest.Sectors, proxyPath, chunk)
+		aux := contentderived.BuildImportedWorldChunkAux(chunk, map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef{chunk.Coord: chunk}, chunk.PayloadHash, chunk.PayloadSizeBytes, false)
+		if aux == nil {
+			continue
+		}
+		auxPath := content.DefaultImportedWorldChunkAuxPath(proxyPath)
+		if err := content.SaveImportedWorldChunkAux(content.ResolveDocumentPath(auxPath, manifestPath), aux); err != nil {
+			return err
+		}
+		updateImportedWorldBakeSectorLODAuxMetadata(bake.Manifest.Sectors, proxyPath, content.ImportedWorldChunkAuxRef(auxPath, aux))
 	}
 	emitImportedWorldBakeProgress(progress, "save_manifest", "Saving world manifest", len(coords), len(coords)+1, progressFraction(len(coords), len(coords)+1))
 	if err := content.SaveImportedWorld(manifestPath, bake.Manifest); err != nil {
@@ -272,6 +303,18 @@ func SaveImportedWorldBakeWithProgress(manifestPath string, bake ImportedWorldBa
 	}
 	emitImportedWorldBakeProgress(progress, "save_complete", "Saved manifest and chunks", 1, 1, 1)
 	return nil
+}
+
+func updateImportedWorldBakeEntryPayloadMetadata(entries []content.ImportedWorldChunkEntryDef, coord ChunkCoord, chunk *content.ImportedWorldChunkDef) {
+	for i := range entries {
+		if entries[i].Coord != (content.TerrainChunkCoordDef{X: coord.X, Y: coord.Y, Z: coord.Z}) {
+			continue
+		}
+		entries[i].PayloadKind = chunk.PayloadKind
+		entries[i].PayloadHash = chunk.PayloadHash
+		entries[i].PayloadSizeBytes = chunk.PayloadSizeBytes
+		return
+	}
 }
 
 func BuildImportedWorldBakeReport(bake ImportedWorldBakeResult) importedWorldBakeReport {
@@ -333,6 +376,19 @@ func updateImportedWorldBakeSectorLODMetadata(sectors []content.ImportedWorldSec
 			lod.PayloadHash = chunk.PayloadHash
 			lod.PayloadSizeBytes = chunk.PayloadSizeBytes
 			lod.NonEmptyVoxelCount = chunk.NonEmptyVoxelCount
+			return
+		}
+	}
+}
+
+func updateImportedWorldBakeSectorLODAuxMetadata(sectors []content.ImportedWorldSectorDef, path string, aux *content.ImportedWorldChunkAuxRefDef) {
+	for i := range sectors {
+		for j := range sectors[i].LODs {
+			lod := &sectors[i].LODs[j]
+			if lod.ChunkPath != path {
+				continue
+			}
+			lod.Aux = aux
 			return
 		}
 	}

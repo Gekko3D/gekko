@@ -58,6 +58,9 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 	if !enabled {
 		return false, nil
 	}
+	if len(def.AnimationClips) > 0 {
+		return false, nil
+	}
 
 	build, err := buildCollapsedAuthoredVoxelAsset(assets, def, opts.DocumentPath)
 	if err != nil {
@@ -80,7 +83,8 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 			PartIDs: sortedCollapsedPartIDs(build.collapsedPartIDs),
 		},
 	)
-	cmd.AddEntity(
+	result.Entities = append(result.Entities, result.RootEntity)
+	composite := cmd.AddEntity(
 		&TransformComponent{
 			Rotation: mgl32.QuatIdent(),
 			Scale:    mgl32.Vec3{1, 1, 1},
@@ -101,6 +105,7 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 			ShadowCasterGroupLimit: shadowSettings.casterGroupLimit,
 		},
 	)
+	result.Entities = append(result.Entities, composite)
 	cmd.app.FlushCommands()
 	TransformHierarchySystem(cmd)
 

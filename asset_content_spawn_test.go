@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -70,6 +71,39 @@ func TestSpawnAuthoredAssetResolvesChildBeforeParent(t *testing.T) {
 	}
 	if got := childWorld.Position; got.Sub(mgl32.Vec3{5, 2, 0}).Len() > 1e-5 {
 		t.Fatalf("expected child world position [5 2 0], got %v", got)
+	}
+}
+
+func TestAttachAuthoredAssetRootUsesAttachmentTransform(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	host := content.NewAssetDef("host")
+	host.Markers = []content.AssetMarkerDef{{
+		ID: "mount", Name: "mount", Kind: content.AssetMarkerKindHandMount,
+		Transform: content.AssetTransformDef{Position: content.Vec3{4, 0, 0}, Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+	}}
+	hostSpawn, err := SpawnAuthoredAsset(cmd, nil, host, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		t.Fatalf("spawn host: %v", err)
+	}
+	childSpawn, err := SpawnAuthoredAsset(cmd, nil, content.NewAssetDef("child"), TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		t.Fatalf("spawn child: %v", err)
+	}
+	attachment := content.AssetAttachmentDef{
+		ID: "tool", Name: "Tool", ParentAssetRef: "host", ParentMarkerID: "mount", ChildAssetRef: "child",
+		Transform: content.AssetTransformDef{Position: content.Vec3{0, 2, 0}, Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+	}
+	if err := AttachAuthoredAssetRoot(cmd, childSpawn.RootEntity, hostSpawn.EntitiesByAssetID["mount"], attachment); err != nil {
+		t.Fatalf("attach child: %v", err)
+	}
+	parent := cmd.GetComponent(childSpawn.RootEntity, reflect.TypeOf(Parent{})).(*Parent)
+	if parent.Entity != hostSpawn.EntitiesByAssetID["mount"] {
+		t.Fatalf("child parent = %d, want mount", parent.Entity)
+	}
+	world := cmd.GetComponent(childSpawn.RootEntity, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if world.Position.Sub(mgl32.Vec3{4, 2, 0}).Len() > 1e-5 {
+		t.Fatalf("child world position = %v, want [4 2 0]", world.Position)
 	}
 }
 
@@ -170,6 +204,9 @@ func TestSpawnAuthoredAssetBuildsVoxelShapeGeometryAndPalette(t *testing.T) {
 	if vmc.EmitterLinkID != 33 {
 		t.Fatalf("expected emitter link 33, got %d", vmc.EmitterLinkID)
 	}
+	if vmc.PivotMode != PivotModeCustom || vmc.CustomPivot != (mgl32.Vec3{}) {
+		t.Fatalf("expected voxel_shape part to use authored zero pivot, got mode=%v pivot=%v", vmc.PivotMode, vmc.CustomPivot)
+	}
 	geometry, ok := assets.GetVoxelGeometry(vmc.GeometryAsset())
 	if !ok || geometry.XBrickMap == nil {
 		t.Fatal("expected voxel shape geometry asset")
@@ -183,6 +220,31 @@ func TestSpawnAuthoredAssetBuildsVoxelShapeGeometryAndPalette(t *testing.T) {
 	}
 	if palette.VoxPalette[1] != [4]uint8{255, 80, 80, 255} {
 		t.Fatalf("unexpected palette entry %+v", palette.VoxPalette[1])
+	}
+}
+
+func TestSpawnAuthoredAssetKeepsProceduralPrimitiveDefaultPivot(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+
+	def := content.NewAssetDef("procedural-pivot")
+	def.Parts = []content.AssetPartDef{{
+		ID:        "cube",
+		Name:      "cube",
+		Source:    testProceduralPartSource(),
+		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+	}}
+
+	result, err := SpawnAuthoredAsset(cmd, assets, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		t.Fatalf("SpawnAuthoredAsset returned error: %v", err)
+	}
+	app.FlushCommands()
+
+	vmc := mustVoxelModelForSpawnTest(t, cmd, result.EntitiesByAssetID["cube"])
+	if vmc.PivotMode != PivotModeCenter {
+		t.Fatalf("expected procedural primitive to keep center pivot default, got %v", vmc.PivotMode)
 	}
 }
 

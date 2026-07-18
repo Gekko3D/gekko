@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/gekko3d/gekko/content"
 	importcommon "github.com/gekko3d/gekko/importers/common"
@@ -17,13 +18,14 @@ const (
 )
 
 type hl1WaterRect struct {
-	Kind     string
-	SurfaceY float32
-	Depth    float32
-	MinX     float32
-	MaxX     float32
-	MinZ     float32
-	MaxZ     float32
+	Kind          string
+	SurfaceHidden bool
+	SurfaceY      float32
+	Depth         float32
+	MinX          float32
+	MaxX          float32
+	MinZ          float32
+	MaxZ          float32
 }
 
 type hl1LiquidFaceBounds struct {
@@ -36,6 +38,22 @@ type hl1WaterBox struct {
 	Kind string
 	Min  importcommon.Vec3
 	Max  importcommon.Vec3
+}
+
+type liquidTopCellKey struct {
+	Kind          string
+	SurfaceHidden bool
+	SurfaceY      int
+	Depth         int
+	X             int
+	Z             int
+}
+
+type liquidTopCellGroupKey struct {
+	Kind          string
+	SurfaceHidden bool
+	SurfaceY      int
+	Depth         int
 }
 
 func buildHL1WaterBodies(bsp *BSP, faces []Face, voxelResolution float32) []content.LevelWaterBodyDef {
@@ -87,6 +105,207 @@ func buildHL1WaterBodies(bsp *BSP, faces []Face, voxelResolution float32) []cont
 		})
 	}
 	return buildHL1WaterBodyDefs(mergeHL1WaterRects(rects))
+}
+
+func collectLiquidTopCells(bsp *BSP, faces []Face, opts VoxelizeOptions) []LiquidTopCell {
+	resolution := opts.VoxelResolution
+	if resolution <= 0 {
+		resolution = DefaultImportedVoxelResolution
+	}
+	liquidBounds := make([]hl1LiquidFaceBounds, 0)
+	for _, face := range faces {
+		kind := materialKind(face.TextureName)
+		if !isLiquidMaterialKind(kind) {
+			continue
+		}
+		bounds, ok := faceBoundsGekko(face)
+		if ok {
+			liquidBounds = append(liquidBounds, hl1LiquidFaceBounds{Kind: kind, Min: bounds.Min, Max: bounds.Max})
+		}
+	}
+	if len(liquidBounds) == 0 {
+		return nil
+	}
+
+	solidCeilingCells := collectSolidCeilingCells(faces, resolution)
+	cells := make(map[liquidTopCellKey]LiquidTopCell)
+	for _, face := range faces {
+		kind := materialKind(face.TextureName)
+		if !isLiquidMaterialKind(kind) || hammerVectorToGekko(face.Normal).Y < waterTopNormalYMin {
+			continue
+		}
+		bounds, ok := faceBoundsGekko(face)
+		if !ok {
+			continue
+		}
+		surfaceY := averageFaceY(face)
+		depth := liquidDepthForTopFace(kind, surfaceY, bounds, liquidBounds, resolution)
+		surfaceYKey := int(math.Round(float64(surfaceY / waterMergeEpsilon)))
+		depthKey := int(math.Round(float64(depth / waterMergeEpsilon)))
+		for _, voxel := range rasterizeFaceSurfaceKeys(face, VoxelizeOptions{VoxelResolution: resolution}) {
+			hidden := solidCeilingCells[voxel] || liquidTopCellSealedByBSP(bsp, surfaceY, voxel[0], voxel[2], resolution)
+			key := liquidTopCellKey{Kind: kind, SurfaceHidden: hidden, SurfaceY: surfaceYKey, Depth: depthKey, X: voxel[0], Z: voxel[2]}
+			cells[key] = LiquidTopCell{
+				Kind:          kind,
+				SurfaceY:      float32(surfaceYKey) * waterMergeEpsilon,
+				Depth:         float32(depthKey) * waterMergeEpsilon,
+				X:             voxel[0],
+				Z:             voxel[2],
+				SurfaceHidden: hidden,
+			}
+		}
+	}
+	if len(cells) == 0 {
+		return nil
+	}
+	keys := make([]liquidTopCellKey, 0, len(cells))
+	for key := range cells {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Kind != keys[j].Kind {
+			return keys[i].Kind < keys[j].Kind
+		}
+		if keys[i].SurfaceHidden != keys[j].SurfaceHidden {
+			return !keys[i].SurfaceHidden
+		}
+		if keys[i].SurfaceY != keys[j].SurfaceY {
+			return keys[i].SurfaceY < keys[j].SurfaceY
+		}
+		if keys[i].Depth != keys[j].Depth {
+			return keys[i].Depth < keys[j].Depth
+		}
+		if keys[i].X != keys[j].X {
+			return keys[i].X < keys[j].X
+		}
+		return keys[i].Z < keys[j].Z
+	})
+	out := make([]LiquidTopCell, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, cells[key])
+	}
+	return out
+}
+
+func collectSolidCeilingCells(faces []Face, resolution float32) map[[3]int]bool {
+	sealed := make(map[[3]int]bool)
+	for _, face := range faces {
+		kind := materialKind(face.TextureName)
+		if isLiquidMaterialKind(kind) || !shouldVoxelizeFaceKind(kind) || hammerVectorToGekko(face.Normal).Y > -waterTopNormalYMin {
+			continue
+		}
+		for _, voxel := range rasterizeFaceSurfaceKeys(face, VoxelizeOptions{VoxelResolution: resolution}) {
+			sealed[voxel] = true
+		}
+	}
+	return sealed
+}
+
+func liquidTopCellSealedByBSP(bsp *BSP, surfaceY float32, x, z int, resolution float32) bool {
+	if bsp == nil {
+		return false
+	}
+	probe := importcommon.Vec3{X: (float32(x) + 0.5) * resolution, Y: surfaceY + resolution*0.25, Z: (float32(z) + 0.5) * resolution}
+	contents, err := bsp.PointContentsGekko(0, probe)
+	return err == nil && IsSolidContent(contents)
+}
+
+func buildHL1WaterBodiesFromTopCells(cells []LiquidTopCell, voxelResolution float32) []content.LevelWaterBodyDef {
+	if voxelResolution <= 0 {
+		voxelResolution = DefaultImportedVoxelResolution
+	}
+	groups := make(map[liquidTopCellGroupKey]map[[2]int]struct{})
+	for _, cell := range cells {
+		kind := strings.TrimSpace(cell.Kind)
+		if !isLiquidMaterialKind(kind) || cell.Depth <= 0 {
+			continue
+		}
+		key := liquidTopCellGroupKey{
+			Kind:          kind,
+			SurfaceHidden: cell.SurfaceHidden,
+			SurfaceY:      int(math.Round(float64(cell.SurfaceY / waterMergeEpsilon))),
+			Depth:         int(math.Round(float64(cell.Depth / waterMergeEpsilon))),
+		}
+		if groups[key] == nil {
+			groups[key] = make(map[[2]int]struct{})
+		}
+		groups[key][[2]int{cell.X, cell.Z}] = struct{}{}
+	}
+	groupKeys := make([]liquidTopCellGroupKey, 0, len(groups))
+	for key := range groups {
+		groupKeys = append(groupKeys, key)
+	}
+	sort.Slice(groupKeys, func(i, j int) bool {
+		if groupKeys[i].Kind != groupKeys[j].Kind {
+			return groupKeys[i].Kind < groupKeys[j].Kind
+		}
+		if groupKeys[i].SurfaceHidden != groupKeys[j].SurfaceHidden {
+			return !groupKeys[i].SurfaceHidden
+		}
+		if groupKeys[i].SurfaceY != groupKeys[j].SurfaceY {
+			return groupKeys[i].SurfaceY < groupKeys[j].SurfaceY
+		}
+		return groupKeys[i].Depth < groupKeys[j].Depth
+	})
+
+	rects := make([]hl1WaterRect, 0)
+	for _, key := range groupKeys {
+		for _, rect := range greedyTileLiquidCells(groups[key]) {
+			rects = append(rects, hl1WaterRect{
+				Kind:          key.Kind,
+				SurfaceHidden: key.SurfaceHidden,
+				SurfaceY:      float32(key.SurfaceY) * waterMergeEpsilon,
+				Depth:         float32(key.Depth) * waterMergeEpsilon,
+				MinX:          float32(rect.minX) * voxelResolution,
+				MaxX:          float32(rect.maxX) * voxelResolution,
+				MinZ:          float32(rect.minZ) * voxelResolution,
+				MaxZ:          float32(rect.maxZ) * voxelResolution,
+			})
+		}
+	}
+	return buildHL1WaterBodyDefs(rects)
+}
+
+type liquidCellRect struct{ minX, maxX, minZ, maxZ int }
+
+func greedyTileLiquidCells(cells map[[2]int]struct{}) []liquidCellRect {
+	remaining := make(map[[2]int]struct{}, len(cells))
+	for key := range cells {
+		remaining[key] = struct{}{}
+	}
+	rects := make([]liquidCellRect, 0)
+	for len(remaining) > 0 {
+		first := [2]int{math.MaxInt, math.MaxInt}
+		for key := range remaining {
+			if key[0] < first[0] || (key[0] == first[0] && key[1] < first[1]) {
+				first = key
+			}
+		}
+		maxX := first[0] + 1
+		for {
+			if _, ok := remaining[[2]int{maxX, first[1]}]; !ok {
+				break
+			}
+			maxX++
+		}
+		maxZ := first[1] + 1
+		for {
+			for x := first[0]; x < maxX; x++ {
+				if _, ok := remaining[[2]int{x, maxZ}]; !ok {
+					goto tiled
+				}
+			}
+			maxZ++
+		}
+	tiled:
+		for x := first[0]; x < maxX; x++ {
+			for z := first[1]; z < maxZ; z++ {
+				delete(remaining, [2]int{x, z})
+			}
+		}
+		rects = append(rects, liquidCellRect{minX: first[0], maxX: maxX, minZ: first[1], maxZ: maxZ})
+	}
+	return rects
 }
 
 func buildHL1LiquidRectsFromLeafs(bsp *BSP, voxelResolution float32) []hl1WaterRect {
@@ -174,6 +393,7 @@ func waterBoxesOverlapOrTouch(a, b hl1WaterBox, eps float32) bool {
 func buildHL1WaterBodyDefs(rects []hl1WaterRect) []content.LevelWaterBodyDef {
 	bodies := make([]content.LevelWaterBodyDef, 0, len(rects))
 	continuityGroups := hl1WaterContinuityGroups(rects)
+	volumeGroups := hl1WaterVolumeGroups(rects)
 	for i, rect := range rects {
 		centerX := (rect.MinX + rect.MaxX) * 0.5
 		centerZ := (rect.MinZ + rect.MaxZ) * 0.5
@@ -182,10 +402,12 @@ func buildHL1WaterBodyDefs(rects []hl1WaterRect) []content.LevelWaterBodyDef {
 			ID:                   fmt.Sprintf("hl1_%s_%d", rect.Kind, i),
 			Name:                 rect.Kind,
 			Mode:                 content.LevelWaterBodyModeExplicitRect,
+			SurfaceMode:          content.LevelWaterSurfaceModeFootprint,
 			SurfaceY:             rect.SurfaceY,
 			Depth:                rect.Depth,
 			RectHalfExtents:      content.Vec2{(rect.MaxX - rect.MinX) * 0.5, (rect.MaxZ - rect.MinZ) * 0.5},
 			SourceTag:            "hl1:" + rect.Kind,
+			VolumeGroup:          volumeGroups[i],
 			ContinuityGroup:      continuityGroups[i],
 			DebugName:            rect.Kind,
 			Color:                liquidColor(rect.Kind),
@@ -204,9 +426,55 @@ func buildHL1WaterBodyDefs(rects []hl1WaterRect) []content.LevelWaterBodyDef {
 			},
 			Tags: []string{"source:hl1", "liquid:" + rect.Kind},
 		}
+		if rect.SurfaceHidden {
+			body.SurfaceVisibility = content.LevelWaterSurfaceVisibilityHidden
+		} else {
+			body.SurfaceVisibility = content.LevelWaterSurfaceVisibilityVisible
+		}
 		bodies = append(bodies, body)
 	}
 	return bodies
+}
+
+func hl1WaterVolumeGroups(rects []hl1WaterRect) []string {
+	groups := make([]string, len(rects))
+	visited := make([]bool, len(rects))
+	groupIndex := 0
+	for i := range rects {
+		if visited[i] {
+			continue
+		}
+		visited[i] = true
+		queue := []int{i}
+		component := make([]int, 0, 1)
+		for len(queue) > 0 {
+			next := queue[0]
+			queue = queue[1:]
+			component = append(component, next)
+			for j := range rects {
+				if visited[j] || !hl1WaterRectsShareVolume(rects[next], rects[j]) {
+					continue
+				}
+				visited[j] = true
+				queue = append(queue, j)
+			}
+		}
+		groupID := fmt.Sprintf("hl1:%s:water_volume:%d", rects[i].Kind, groupIndex)
+		groupIndex++
+		for _, idx := range component {
+			groups[idx] = groupID
+		}
+	}
+	return groups
+}
+
+func hl1WaterRectsShareVolume(a, b hl1WaterRect) bool {
+	if a.Kind != b.Kind || !rangesOverlapOrTouch(a.SurfaceY-a.Depth, a.SurfaceY, b.SurfaceY-b.Depth, b.SurfaceY, waterMergeEpsilon) || !rectsOverlapOrTouch(a.MinX, a.MaxX, a.MinZ, a.MaxZ, b.MinX, b.MaxX, b.MinZ, b.MaxZ, waterMergeEpsilon) {
+		return false
+	}
+	overlapX := minFloat32(a.MaxX, b.MaxX) - maxFloat32(a.MinX, b.MinX)
+	overlapZ := minFloat32(a.MaxZ, b.MaxZ) - maxFloat32(a.MinZ, b.MinZ)
+	return overlapX > waterMergeEpsilon || overlapZ > waterMergeEpsilon
 }
 
 func hl1WaterContinuityGroups(rects []hl1WaterRect) []string {

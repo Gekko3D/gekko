@@ -36,6 +36,11 @@ func BuildDebugSolidWorld(opts ImportOptions) (DebugWorldEmissionResult, error) 
 }
 
 func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissionResult, error) {
+	var profileErr error
+	opts, profileErr = ApplyHL1ExportProfile(opts)
+	if profileErr != nil {
+		return DebugWorldEmissionResult{}, profileErr
+	}
 	if opts.ChunkPayloadKind == "" {
 		opts.ChunkPayloadKind = DefaultChunkPayloadKind
 	}
@@ -56,6 +61,10 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	}
 	if len(summary.BakeFaces) > 0 {
 		faces = summary.BakeFaces
+	}
+	liquidFaces := summary.AllFaces
+	if len(liquidFaces) == 0 {
+		liquidFaces = faces
 	}
 	wads, wadDiagnostics := LoadResolvedWADs(summary.Report.Source.WADPaths)
 	if len(wadDiagnostics) > 0 {
@@ -94,6 +103,10 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	default:
 		return DebugWorldEmissionResult{}, fmt.Errorf("unsupported debug world mode %q", mode)
 	}
+	// BakeFaces deliberately excludes liquid geometry from the solid world, but
+	// the level emitter still needs its top-surface occupancy for water patches.
+	voxelized.LiquidTopCells = collectLiquidTopCells(bsp, liquidFaces, VoxelizeOptions{VoxelResolution: opts.VoxelResolution})
+	tags = append(tags, HL1ExportProfileTags(opts.ExportProfile)...)
 	worldID := summary.Report.Source.MapName
 	if worldID == "" {
 		worldID = "hl1_debug_world"
@@ -148,11 +161,16 @@ func SaveDebugSurfaceWorld(result DebugWorldEmissionResult) error {
 }
 
 func SaveDebugWorld(result DebugWorldEmissionResult) error {
+	_, err := SaveDebugWorldWithStats(result)
+	return err
+}
+
+func SaveDebugWorldWithStats(result DebugWorldEmissionResult) (importcommon.ImportedWorldSaveStats, error) {
 	payloadKind := result.PayloadKind
 	if payloadKind == "" {
 		payloadKind = DefaultChunkPayloadKind
 	}
-	return importcommon.SaveImportedWorldEmissionWithOptions(result.ManifestPath, result.Emission, importcommon.ImportedWorldSaveOptions{
+	return importcommon.SaveImportedWorldEmissionWithOptionsResult(result.ManifestPath, result.Emission, importcommon.ImportedWorldSaveOptions{
 		ChunkPayloadKind: payloadKind,
 	})
 }

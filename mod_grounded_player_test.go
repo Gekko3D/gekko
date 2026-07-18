@@ -49,6 +49,41 @@ func TestSpawnGroundedPlayerAtMarkerUsesModuleDefaults(t *testing.T) {
 	}
 }
 
+func TestGroundedPlayerBasePositionUsesControllerTransform(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	player := cmd.AddEntity(&TransformComponent{Position: mgl32.Vec3{1, 2, 3}})
+	app.FlushCommands()
+
+	base := groundedPlayerBasePosition(cmd, player, &CameraComponent{Position: mgl32.Vec3{10, 20, 30}}, &GroundedPlayerControllerComponent{EyeHeight: 1.7})
+	if base != (mgl32.Vec3{1, 2, 3}) {
+		t.Fatalf("base position = %v, want controller transform", base)
+	}
+}
+
+func TestGroundedPlayerScriptedMovementKeepsControllerAndCameraAligned(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	player := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{1, 2, 3}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&LocalTransformComponent{Position: mgl32.Vec3{1, 2, 3}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&CameraComponent{},
+		&GroundedPlayerControllerComponent{EyeHeight: 1.5, ScriptedMovement: true, JumpQueued: true, SwimUpRequested: true, VerticalVelocity: -5},
+	)
+	app.FlushCommands()
+
+	groundedPlayerControlSystem(cmd, &Time{Dt: 1}, nil, nil)
+	ctrl := cmd.GetComponent(player, reflect.TypeOf(GroundedPlayerControllerComponent{})).(*GroundedPlayerControllerComponent)
+	tr := cmd.GetComponent(player, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	cam := cmd.GetComponent(player, reflect.TypeOf(CameraComponent{})).(*CameraComponent)
+	if tr.Position != (mgl32.Vec3{1, 2, 3}) || cam.Position != (mgl32.Vec3{1, 3.5, 3}) {
+		t.Fatalf("expected scripted controller to preserve transform and update camera, transform=%+v camera=%+v", tr.Position, cam.Position)
+	}
+	if ctrl.JumpQueued || ctrl.SwimUpRequested || ctrl.VerticalVelocity != 0 {
+		t.Fatalf("expected scripted controller to clear competing movement state, got %+v", *ctrl)
+	}
+}
+
 func TestGroundedMovementBlockedUsesPlayerRadiusAtDoorway(t *testing.T) {
 	state := newGroundedPlayerTestVoxelRtState()
 
@@ -69,8 +104,135 @@ func TestGroundedMovementBlockedUsesPlayerRadiusAtDoorway(t *testing.T) {
 		Radius:     0.35,
 		StepHeight: 0.6,
 	}
-	if !groundedMovementBlocked(state, basePos, move, ctrl) {
+	if !groundedMovementBlocked(state, basePos, move, ctrl, nil) {
 		t.Fatal("expected doorway side collision to block movement when player radius overlaps the jamb")
+	}
+}
+
+func TestGroundedMovementIgnoresConfiguredVisualSubtree(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	player := cmd.AddEntity()
+	visualRoot := cmd.AddEntity(&Parent{Entity: player})
+	visualPart := cmd.AddEntity(&Parent{Entity: visualRoot})
+	app.FlushCommands()
+
+	state := newGroundedPlayerTestVoxelRtState()
+	visual := core.NewVoxelObject()
+	visual.XBrickMap = volume.NewXBrickMap()
+	for y := 0; y < 3; y++ {
+		visual.XBrickMap.SetVoxel(1, y, 1, 1)
+	}
+	visual.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	visual.Transform.Dirty = true
+	visual.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(visual)
+	state.instanceMap[visualPart] = visual
+	state.objectToEntity[visual] = visualPart
+
+	ctrl := &GroundedPlayerControllerComponent{
+		Height:                 1.7,
+		Radius:                 0.35,
+		StepHeight:             0.6,
+		CollisionIgnoredEntity: visualRoot,
+	}
+	basePos := mgl32.Vec3{1.3, 0, 0}
+	move := mgl32.Vec3{0, 0, 0.8}
+	if groundedMovementBlocked(state, basePos, move, ctrl, groundedPlayerCollisionRaycastFilter(cmd, ctrl)) {
+		t.Fatal("expected visual subtree to be ignored by grounded movement")
+	}
+}
+
+func TestGroundedPlayerVerticalUsesFootprintGroundProbe(t *testing.T) {
+	state := newGroundedPlayerTestVoxelRtState()
+	floor := core.NewVoxelObject()
+	floor.XBrickMap = volume.NewXBrickMap()
+	floor.XBrickMap.SetVoxel(1, 0, 0, 1)
+	floor.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	floor.Transform.Dirty = true
+	floor.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(floor)
+
+	basePos := mgl32.Vec3{0.7, 1, 0.5}
+	ctrl := &GroundedPlayerControllerComponent{
+		Height:      1.7,
+		Radius:      0.7,
+		StepHeight:  0.6,
+		GroundProbe: 0.15,
+		Grounded:    true,
+	}
+
+	resolveGroundedVertical(nil, state, &basePos, ctrl, 1.0/60.0, nil)
+
+	if !ctrl.Grounded {
+		t.Fatalf("expected player footprint to stay grounded on edge-supported floor, got %+v", *ctrl)
+	}
+	if absf(basePos.Y()-1) > 0.002 {
+		t.Fatalf("expected player base to remain on floor top, got %v", basePos)
+	}
+}
+
+func TestGroundedPlayerCrouchRestoresOnlyWhenClear(t *testing.T) {
+	ctrl := &GroundedPlayerControllerComponent{
+		Height:            1.8,
+		EyeHeight:         1.7,
+		StandingHeight:    1.8,
+		StandingEyeHeight: 1.7,
+		CrouchHeight:      1.0,
+		CrouchEyeHeight:   0.9,
+		Radius:            0.35,
+		CrouchRequested:   true,
+	}
+	basePos := mgl32.Vec3{}
+	groundedPlayerUpdateStance(nil, nil, basePos, ctrl, nil)
+	if !ctrl.Crouching || ctrl.Height != 1.0 || ctrl.EyeHeight != 0.9 {
+		t.Fatalf("expected crouch dimensions, got %+v", *ctrl)
+	}
+
+	state := newGroundedPlayerTestVoxelRtState()
+	ceiling := core.NewVoxelObject()
+	ceiling.XBrickMap = volume.NewXBrickMap()
+	ceiling.XBrickMap.SetVoxel(0, 1, 0, 1)
+	ceiling.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	ceiling.Transform.Dirty = true
+	ceiling.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(ceiling)
+	ctrl.CrouchRequested = false
+	groundedPlayerUpdateStance(nil, state, basePos, ctrl, nil)
+	if !ctrl.Crouching || ctrl.Height != 1.0 {
+		t.Fatalf("expected ceiling to keep player crouched, got %+v", *ctrl)
+	}
+
+	groundedPlayerUpdateStance(nil, nil, basePos, ctrl, nil)
+	if ctrl.Crouching || ctrl.Height != 1.8 || ctrl.EyeHeight != 1.7 {
+		t.Fatalf("expected clear space to restore standing dimensions, got %+v", *ctrl)
+	}
+}
+
+func TestGroundedPlayerSwimsInsideWaterBody(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	player := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&LocalTransformComponent{Position: mgl32.Vec3{}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&CameraComponent{Position: mgl32.Vec3{0, 1.7, 0}, LookAt: mgl32.Vec3{0, 1.7, -1}, Up: mgl32.Vec3{0, 1, 0}},
+		&GroundedPlayerControllerComponent{Height: 1.8, EyeHeight: 1.7, Radius: 0.35, Speed: 5.5, SwimSpeed: 2, MoveInput: mgl32.Vec2{0, 1}, SwimUpRequested: true, Grounded: true},
+	)
+	water := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0, 1, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&WaterSurfaceComponent{HalfExtents: [2]float32{8, 8}, Depth: 4},
+	)
+	app.FlushCommands()
+
+	groundedPlayerControlSystem(cmd, &Time{Dt: 1}, nil, nil)
+	ctrl := cmd.GetComponent(player, reflect.TypeOf(GroundedPlayerControllerComponent{})).(*GroundedPlayerControllerComponent)
+	tr := cmd.GetComponent(player, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	cam := cmd.GetComponent(player, reflect.TypeOf(CameraComponent{})).(*CameraComponent)
+	if !ctrl.Swimming || ctrl.WaterEntity != water || ctrl.Grounded {
+		t.Fatalf("expected active swim state, got %+v", *ctrl)
+	}
+	if tr.Position != (mgl32.Vec3{0, 2, -2}) || cam.Position != (mgl32.Vec3{0, 3.7, -2}) {
+		t.Fatalf("expected swim movement and camera height, transform=%+v camera=%+v", tr.Position, cam.Position)
 	}
 }
 
@@ -225,6 +387,26 @@ func TestGroundedPlayerUseActivatesLinkedMovingBrush(t *testing.T) {
 	if triggerCount != 1 || brushCount != 1 || !doorOpen {
 		t.Fatalf("expected linked button to open door, trigger=%d brush=%d open=%v", triggerCount, brushCount, doorOpen)
 	}
+}
+
+func TestStaticHL1ButtonActivatesTargetWithoutMoving(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	cmd.AddEntity(&MovingBrushComponent{
+		Kind:              "hl1_func_button",
+		SpawnFlags:        1,
+		BoundsCenter:      mgl32.Vec3{1, 1, 1},
+		BoundsHalfExtents: mgl32.Vec3{0.25, 0.25, 0.25},
+	})
+	app.FlushCommands()
+
+	activateMovingBrushAtBounds(cmd, mgl32.Vec3{1, 1, 1}, mgl32.Vec3{0.25, 0.25, 0.25})
+	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, button *MovingBrushComponent) bool {
+		if button.Open || button.ActivationCount != 1 {
+			t.Fatalf("expected static button to record use without moving, got %+v", button)
+		}
+		return false
+	})
 }
 
 func TestTriggerVolumeTouchActivatesLinkedMovingBrushOnce(t *testing.T) {
@@ -499,13 +681,15 @@ func TestMovingBrushRotatesToOpenAngle(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{1, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
 		&LocalTransformComponent{},
 		&MovingBrushComponent{
-			Kind:           "hl1_func_door_rotating",
-			MotionKind:     "rotate",
-			RotationOrigin: mgl32.Vec3{0, 0, 0},
-			RotationAxis:   mgl32.Vec3{0, 1, 0},
-			OpenAngle:      90,
-			Speed:          90,
-			Open:           true,
+			Kind:              "hl1_func_door_rotating",
+			MotionKind:        "rotate",
+			BoundsCenter:      mgl32.Vec3{1, 0, 0},
+			BoundsHalfExtents: mgl32.Vec3{0.5, 1, 0.1},
+			RotationOrigin:    mgl32.Vec3{0, 0, 0},
+			RotationAxis:      mgl32.Vec3{0, 1, 0},
+			OpenAngle:         90,
+			Speed:             90,
+			Open:              true,
 		},
 	)
 	app.FlushCommands()
@@ -514,7 +698,7 @@ func TestMovingBrushRotatesToOpenAngle(t *testing.T) {
 	app.FlushCommands()
 	tr := cmd.GetComponent(brush, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
 	moving := cmd.GetComponent(brush, reflect.TypeOf(MovingBrushComponent{})).(*MovingBrushComponent)
-	if absf(moving.CurrentAngle-90) > 0.001 || tr.Position.Sub(mgl32.Vec3{0, 0, -1}).Len() > 0.001 {
+	if absf(moving.CurrentAngle-90) > 0.001 || tr.Position.Sub(mgl32.Vec3{0, 0, -1}).Len() > 0.001 || moving.BoundsCenter.Sub(mgl32.Vec3{0, 0, -1}).Len() > 0.001 || moving.BoundsHalfExtents.Sub(mgl32.Vec3{0.1, 1, 0.5}).Len() > 0.001 || !MovingBrushFullyOpen(moving) {
 		t.Fatalf("expected rotating door to reach open angle, tr=%+v brush=%+v", tr, moving)
 	}
 }
@@ -604,6 +788,29 @@ func TestMovingBrushMotionMovesTowardOpenOffset(t *testing.T) {
 	})
 	if brush == nil || brush.BoundsCenter != (mgl32.Vec3{4, 2, 3}) {
 		t.Fatalf("moving brush bounds center = %+v", brush)
+	}
+}
+
+func TestMovingBrushReturnsAfterOpenWait(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	closed := mgl32.Vec3{1, 1, 1}
+	eid := cmd.AddEntity(
+		&TransformComponent{Position: closed, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&MovingBrushComponent{ClosedPosition: closed, OpenOffset: mgl32.Vec3{0, 2, 0}, Speed: 2, Wait: 3, TargetName: "lift"},
+	)
+	app.FlushCommands()
+
+	ActivateTarget(cmd, "lift", 0)
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	if tr := transformForEntityMust(t, cmd, eid); tr.Position != (mgl32.Vec3{1, 3, 1}) {
+		t.Fatalf("expected lift at open position, got %v", tr.Position)
+	}
+	movingBrushMotionSystem(cmd, &Time{Dt: 2})
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	movingBrushMotionSystem(cmd, &Time{Dt: 1})
+	if tr := transformForEntityMust(t, cmd, eid); tr.Position != closed {
+		t.Fatalf("expected lift to return to closed position, got %v", tr.Position)
 	}
 }
 

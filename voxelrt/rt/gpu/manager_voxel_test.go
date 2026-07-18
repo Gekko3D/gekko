@@ -526,6 +526,22 @@ func TestBuildVoxelAuxBytesMatchesFrozenOccupancyPacking(t *testing.T) {
 	}
 }
 
+func TestBuildVoxelAuxBytesUsesPrecomputedAuxWhenPresent(t *testing.T) {
+	brick := volume.NewBrick()
+	brick.SetVoxel(0, 0, 0, 1)
+	precomputed := make([]byte, VoxelAuxRecordBytes)
+	precomputed[len(precomputed)-1] = 99
+	brick.PrecomputedAux = precomputed
+
+	buf := buildVoxelAuxBytes(voxelNormalBakeContext{}, nil, brick, [3]int{})
+	if &buf[0] != &precomputed[0] {
+		t.Fatal("expected precomputed aux slice to be used directly")
+	}
+	if buf[len(buf)-1] != 99 {
+		t.Fatalf("expected precomputed aux payload, got trailing byte %d", buf[len(buf)-1])
+	}
+}
+
 func TestBuildVoxelAuxBytesBakesTerrainNeighborNormalsAcrossChunks(t *testing.T) {
 	leftMap := volume.NewXBrickMap()
 	leftMap.SetVoxel(31, 0, 0, 1)

@@ -105,6 +105,12 @@ This toolbar appears when an item is selected.
 - Markers are shown with their marker kind, for example `[muzzle]`.
 - Hidden / locked / solo state is editor-only view state and is not serialized into `.gkasset`.
 
+### Animations Panel
+
+- Lists every `animation_clips` entry in the opened asset. Use the filter and choose a clip. While this panel is open, the active clip's playback controls appear in the bottom-right context panel: play, pause, step by frame, loop, change speed, or enter an exact time.
+- `Source MDL Import Preview` scans a Source MDL without changing the asset. Choose a supported sequence to retarget it temporarily onto the opened rig. Retargeting uses the donor and target bind skeletons automatically; there are no donor or target pose fields. Older generated HL1 assets must be regenerated once to add their explicit rest-basis metadata.
+- `add ... to asset` is the only operation in this panel that edits the asset. Save the document afterward. Sequences that use unsupported Source features remain listed with their reason.
+
 ### Asset Editor Shortcuts
 
 - `Shift+A`
@@ -142,7 +148,15 @@ The Level Editor is for authoring a `.gklevel` plus linked placements, brushes, 
 - `.gklevel`
   - Opens an existing level.
 - `.gkasset library`
-  - Starts placement preview for authored assets.
+  - Loads `.gkassetlibrary` documents, groups entries by their `group:*` tag,
+    and filters by key, group, filename, or tag.
+  - Expanding a group and choosing an entry starts the normal placement
+    preview. If no library document exists, the browser falls back to the flat
+    `.gkasset` file list.
+  - New asset previews start in surface-snap mode. Floor placement keeps the
+    asset upright and rests its voxel bounds on the hit surface; wall placement
+    turns its thinnest axis toward the wall. An authored `surface_mount` marker
+    overrides that bounds-based alignment when an asset needs an exact mount.
 - `.gkset library`
   - Selects authored sets for placement workflows.
 
@@ -154,6 +168,9 @@ The Level Editor is for authoring a `.gklevel` plus linked placements, brushes, 
   - Starts the corresponding brush authoring tool.
 - `mode: ...`
   - Cycles placement mode for level placements.
+  - `surface_snap` raycasts all visible level voxel geometry and ignores the
+    active preview itself. `plane_snap` uses the reference plane and `free_3d`
+    keeps the preview at a fixed camera distance.
   - This is for authored asset placement behavior, not for brush transform mode.
 - `xform: ...`
   - Cycles the transform gizmo mode for the currently selected editable object.

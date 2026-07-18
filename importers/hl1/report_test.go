@@ -28,6 +28,10 @@ func TestBuildImportSummaryUsesSyntheticBSPAndWAD(t *testing.T) {
 "origin" "0 0 0"
 }
 {
+"classname" "monster_generic"
+"origin" "8 0 0"
+}
+{
 "classname" "weapon_9mmhandgun"
 "origin" "16 0 0"
 }
@@ -60,8 +64,11 @@ func TestBuildImportSummaryUsesSyntheticBSPAndWAD(t *testing.T) {
 	if len(summary.Report.MaterialKindCounts) != 1 || summary.Report.MaterialKindCounts[0].ClassName != "structural" {
 		t.Fatalf("material kind counts = %+v", summary.Report.MaterialKindCounts)
 	}
-	if len(summary.Report.UnsupportedEntityCounts) != 1 || summary.Report.UnsupportedEntityCounts[0].ClassName != "monster_barney" {
+	if len(summary.Report.UnsupportedEntityCounts) != 1 || summary.Report.UnsupportedEntityCounts[0].ClassName != "monster_generic" {
 		t.Fatalf("unsupported = %+v", summary.Report.UnsupportedEntityCounts)
+	}
+	if len(summary.Report.NPCEntityCounts) != 1 || summary.Report.NPCEntityCounts[0].ClassName != "monster_barney" {
+		t.Fatalf("npc counts = %+v", summary.Report.NPCEntityCounts)
 	}
 	if len(summary.Report.PickupEntityCounts) != 2 || summary.Report.PickupEntityCounts[0].ClassName != "item_healthkit" || summary.Report.PickupEntityCounts[1].ClassName != "weapon_9mmhandgun" {
 		t.Fatalf("pickup counts = %+v", summary.Report.PickupEntityCounts)
@@ -75,7 +82,7 @@ func TestBuildImportSummaryUsesSyntheticBSPAndWAD(t *testing.T) {
 	if len(summary.Report.DiagnosticCodeCounts) != 1 || summary.Report.DiagnosticCodeCounts[0].Name != "hl1.entity_unsupported" || summary.Report.DiagnosticCodeCounts[0].Count != 1 {
 		t.Fatalf("diagnostic code counts = %+v", summary.Report.DiagnosticCodeCounts)
 	}
-	if len(summary.Report.Diagnostics) != 1 || summary.Report.Diagnostics[0].Code != "hl1.entity_unsupported" || summary.Report.Diagnostics[0].Subject != "monster_barney" {
+	if len(summary.Report.Diagnostics) != 1 || summary.Report.Diagnostics[0].Code != "hl1.entity_unsupported" || summary.Report.Diagnostics[0].Subject != "monster_generic" {
 		t.Fatalf("diagnostics = %+v", summary.Report.Diagnostics)
 	}
 }
@@ -145,7 +152,7 @@ func TestAppendHL1ReviewDiagnosticsReportsImportCoverageProblems(t *testing.T) {
 				"targetname": "door_without_model",
 			},
 		},
-		{ClassName: "monster_scientist"},
+		{ClassName: "ambient_generic"},
 	})
 
 	assertHasDiagnosticCode(t, report.Diagnostics, "hl1.train_path_target_unresolved")
@@ -164,6 +171,7 @@ func TestHL1ReviewEntityCountsClassifyInteractiveImports(t *testing.T) {
 		{ClassName: "func_healthcharger"},
 		{ClassName: "func_recharge"},
 		{ClassName: "weapon_shotgun"},
+		{ClassName: "monster_barney"},
 	}
 	if got := importcommon.EntityCounts(hl1MovingBrushEntityClassNames(entities)); len(got) != 2 || got[0].ClassName != "func_door_rotating" || got[1].ClassName != "func_train" {
 		t.Fatalf("moving brush counts = %+v", got)
@@ -177,11 +185,17 @@ func TestHL1ReviewEntityCountsClassifyInteractiveImports(t *testing.T) {
 	if got := importcommon.EntityCounts(hl1ChargerEntityClassNames(entities)); len(got) != 2 || got[0].ClassName != "func_healthcharger" || got[1].ClassName != "func_recharge" {
 		t.Fatalf("charger counts = %+v", got)
 	}
+	if got := importcommon.EntityCounts(hl1NPCEntityClassNames(entities)); len(got) != 1 || got[0].ClassName != "monster_barney" {
+		t.Fatalf("npc counts = %+v", got)
+	}
 	if !supportedClass("func_ladder") {
 		t.Fatalf("func_ladder should be supported")
 	}
 	if !supportedClass("func_conveyor") {
 		t.Fatalf("func_conveyor should be supported")
+	}
+	if !supportedClass("monster_barney") {
+		t.Fatalf("monster_barney should be supported")
 	}
 }
 
@@ -329,6 +343,26 @@ func TestBuildImportSummaryExcludesDoorBrushFacesFromStaticBakeSet(t *testing.T)
 	}
 	if len(summary.AllFaces) != 3 {
 		t.Fatalf("all faces = %d", len(summary.AllFaces))
+	}
+}
+
+func TestVisibleBrushEntityClassOnlyKeepsStaticBrushesInBakeSet(t *testing.T) {
+	tests := []struct {
+		className string
+		want      bool
+	}{
+		{className: "func_wall", want: true},
+		{className: "func_illusionary", want: true},
+		{className: "func_breakable", want: false},
+		{className: "func_healthcharger", want: false},
+		{className: "func_recharge", want: false},
+		{className: "func_door", want: false},
+		{className: "trigger_multiple", want: false},
+	}
+	for _, tt := range tests {
+		if got := visibleBrushEntityClass(tt.className); got != tt.want {
+			t.Fatalf("visibleBrushEntityClass(%q) = %v, want %v", tt.className, got, tt.want)
+		}
 	}
 }
 

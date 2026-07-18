@@ -10,6 +10,9 @@ import (
 )
 
 type EntityId = rooteecs.EntityID
+
+const InvalidEntityId EntityId = rooteecs.InvalidEntityID
+
 type EntityGroupKey struct {
 	Kind string
 	ID   string
@@ -63,7 +66,7 @@ func MakeEcs() Ecs {
 		archetypes:  storage.archetypes,
 		entityIndex: storage.entityIndex,
 		//idGeneratorLock: make(sync.Mutex),
-		entityIdCounter: EntityId(0),
+		entityIdCounter: InvalidEntityId + 1,
 		//componentIdCounterLock: make(sync.Mutex),
 		componentIdCounter: componentId(0),
 		componentTypeIdMap: make(map[reflect.Type]componentId),

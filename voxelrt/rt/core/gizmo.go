@@ -12,9 +12,17 @@ const (
 	GizmoCircle
 )
 
+type GizmoDepthMode int
+
+const (
+	GizmoDepthModeSceneOccluded GizmoDepthMode = iota
+	GizmoDepthModeAlwaysVisible
+)
+
 // Gizmo represents a debug shape to be drawn.
 type Gizmo struct {
 	Type        GizmoType
 	Color       [4]float32
 	ModelMatrix mgl32.Mat4
+	DepthMode   GizmoDepthMode
 }

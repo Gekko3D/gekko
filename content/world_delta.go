@@ -14,6 +14,8 @@ type WorldDeltaDef struct {
 	PlacementDeletions          []PlacementDeletionDef          `json:"placement_deletions,omitempty"`
 	TerrainChunkOverrides       []TerrainChunkOverrideDef       `json:"terrain_chunk_overrides,omitempty"`
 	ImportedWorldChunkOverrides []ImportedWorldChunkOverrideDef `json:"imported_world_chunk_overrides,omitempty"`
+	NavigationSourceOverrides   []NavigationSourceOverrideDef   `json:"navigation_source_overrides,omitempty"`
+	NavigationGraphOverrides    []NavigationGraphOverrideDef    `json:"navigation_graph_overrides,omitempty"`
 	VoxelObjectOverrides        []VoxelObjectOverrideDef        `json:"voxel_object_overrides,omitempty"`
 }
 
@@ -36,6 +38,25 @@ type ImportedWorldChunkOverrideDef struct {
 	WorldID      string               `json:"world_id"`
 	ChunkCoord   TerrainChunkCoordDef `json:"chunk_coord"`
 	SnapshotPath string               `json:"snapshot_path"`
+}
+
+type NavigationSourceOverrideDef struct {
+	NavID          string               `json:"nav_id"`
+	ChunkCoord     TerrainChunkCoordDef `json:"chunk_coord"`
+	TilePath       string               `json:"tile_path,omitempty"`
+	SourceHash     string               `json:"source_hash"`
+	DependencyHash string               `json:"dependency_hash"`
+	Empty          bool                 `json:"empty,omitempty"`
+}
+
+type NavigationGraphOverrideDef struct {
+	NavID          string               `json:"nav_id"`
+	AgentProfileID string               `json:"agent_profile_id"`
+	ChunkCoord     TerrainChunkCoordDef `json:"chunk_coord"`
+	TilePath       string               `json:"tile_path,omitempty"`
+	SourceHash     string               `json:"source_hash"`
+	DependencyHash string               `json:"dependency_hash"`
+	Empty          bool                 `json:"empty,omitempty"`
 }
 
 type VoxelObjectOverrideDef struct {

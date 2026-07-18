@@ -5,6 +5,7 @@ import "github.com/google/uuid"
 const (
 	CurrentAssetSchemaVersion = 3
 	DefaultAssetVoxelSize     = 0.1
+	AssetTagSkeletonRestBasis = "skeleton:rest_basis"
 )
 
 type Vec3 [3]float32
@@ -49,6 +50,9 @@ const (
 const (
 	AssetMarkerKindMuzzle       = "muzzle"
 	AssetMarkerKindHandMount    = "hand_mount"
+	AssetMarkerKindSurfaceMount = "surface_mount"
+	AssetMarkerKindRightGrip    = "right_grip"
+	AssetMarkerKindLeftGrip     = "left_grip"
 	AssetMarkerKindEffectAnchor = "effect_anchor"
 	AssetMarkerKindSpawnAnchor  = "spawn_anchor"
 	AssetMarkerKindDockPort     = "dock_port"
@@ -61,6 +65,9 @@ func KnownAssetMarkerKinds() []string {
 		AssetMarkerKindDockPort,
 		AssetMarkerKindWeaponSlot,
 		AssetMarkerKindHandMount,
+		AssetMarkerKindSurfaceMount,
+		AssetMarkerKindRightGrip,
+		AssetMarkerKindLeftGrip,
 		AssetMarkerKindEffectAnchor,
 		AssetMarkerKindSpawnAnchor,
 	}
@@ -74,6 +81,8 @@ type AssetDef struct {
 	Materials          []AssetMaterialDef          `json:"materials,omitempty"`
 	MaterialAnimations []AssetMaterialAnimationDef `json:"material_animations,omitempty"`
 	Runtime            *AssetRuntimeDef            `json:"runtime,omitempty"`
+	Skeleton           *AssetSkeletonDef           `json:"skeleton,omitempty"`
+	AnimationClips     []AssetAnimationClipDef     `json:"animation_clips,omitempty"`
 	Parts              []AssetPartDef              `json:"parts,omitempty"`
 	Lights             []AssetLightDef             `json:"lights,omitempty"`
 	Emitters           []AssetEmitterDef           `json:"emitters,omitempty"`
@@ -120,6 +129,45 @@ type AssetRuntimeDef struct {
 	CollapseVoxelParts bool    `json:"collapse_voxel_parts,omitempty"`
 	CastsShadows       *bool   `json:"casts_shadows,omitempty"`
 	ShadowMaxDistance  float32 `json:"shadow_max_distance,omitempty"`
+}
+
+type AssetSkeletonDef struct {
+	Bones []AssetBoneDef `json:"bones,omitempty"`
+}
+
+type AssetBoneDef struct {
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	ParentID  string            `json:"parent_id,omitempty"`
+	Transform AssetTransformDef `json:"transform"`
+	Tags      []string          `json:"tags,omitempty"`
+}
+
+type AssetAnimationClipDef struct {
+	ID       string                   `json:"id"`
+	Name     string                   `json:"name"`
+	FPS      float32                  `json:"fps,omitempty"`
+	Duration float32                  `json:"duration,omitempty"`
+	Loop     bool                     `json:"loop,omitempty"`
+	Tracks   []AssetAnimationTrackDef `json:"tracks,omitempty"`
+	Tags     []string                 `json:"tags,omitempty"`
+}
+
+type AssetAnimationTrackDef struct {
+	TargetID     string            `json:"target_id"`
+	PositionKeys []AssetVec3KeyDef `json:"position_keys,omitempty"`
+	RotationKeys []AssetQuatKeyDef `json:"rotation_keys,omitempty"`
+	ScaleKeys    []AssetVec3KeyDef `json:"scale_keys,omitempty"`
+}
+
+type AssetVec3KeyDef struct {
+	Time  float32 `json:"time"`
+	Value Vec3    `json:"value"`
+}
+
+type AssetQuatKeyDef struct {
+	Time  float32 `json:"time"`
+	Value Quat    `json:"value"`
 }
 
 type AssetPartDef struct {

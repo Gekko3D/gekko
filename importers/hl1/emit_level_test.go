@@ -128,84 +128,64 @@ func TestBuildAndSaveGeneratedLevel(t *testing.T) {
 	if len(fixtureAsset.Parts) != 1 || fixtureAsset.Parts[0].EmitterLinkID != loaded.Lights[1].EmitterLinkID {
 		t.Fatalf("fixture part link mismatch: asset=%+v light=%+v", fixtureAsset.Parts, loaded.Lights[1])
 	}
+	if fixtureAsset.Parts[0].VoxelResolution != DefaultFixtureVoxelResolution {
+		t.Fatalf("fixture voxel resolution = %f", fixtureAsset.Parts[0].VoxelResolution)
+	}
 	if validation := content.ValidateLevel(loaded, content.LevelValidationOptions{DocumentPath: level.LevelPath}); validation.HasErrors() {
 		t.Fatalf("ValidateLevel failed: %s", validation.Error())
 	}
 }
 
-func TestBuildGeneratedLevelPlacesGeneratedMDLAssets(t *testing.T) {
+func TestSaveGeneratedLevelPrecalculatesBaseWorldAuxSidecars(t *testing.T) {
 	dir := t.TempDir()
-	gameDir := filepath.Join(dir, "hl")
-	outDir := filepath.Join(dir, "out")
-	modelPath := filepath.Join(gameDir, "valve", "models", "filecabinet.mdl")
-	spritePath := filepath.Join(gameDir, "valve", "sprites", "flare1.spr")
-	mustWriteFile(t, modelPath, syntheticMDL())
-	mustWriteFile(t, spritePath, syntheticSPR())
-	summary := ImportSummary{
-		Map: importcommon.MapImport{
-			Entities: []importcommon.Entity{
-				{
-					ClassName:     "monster_furniture",
-					WorldPosition: importcommon.Vec3{X: 1, Y: 2, Z: 3},
-					KeyValues: map[string]string{
-						"model": "models/filecabinet.mdl",
-						"angle": "90",
-					},
-				},
-				{
-					ClassName:     "env_sprite",
-					WorldPosition: importcommon.Vec3{X: 4, Y: 5, Z: 6},
-					KeyValues: map[string]string{
-						"model": "sprites/flare1.spr",
-					},
-				},
-			},
-		},
-		Report: importcommon.ImportReport{
-			Source: importcommon.SourceInfo{
-				Kind:    "hl1",
-				GameDir: gameDir,
-				MapName: "propmap",
-			},
-		},
+	levelPath := filepath.Join(dir, "out", "demo.gklevel")
+	manifestPath := filepath.Join(dir, "out", "worlds", "demo.gkworld")
+	chunkPath := filepath.Join(dir, "out", "worlds", "chunks", "demo_0_0_0.gkchunk")
+	chunk := &content.ImportedWorldChunkDef{
+		WorldID:            "demo",
+		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
+		ChunkSize:          32,
+		VoxelResolution:    1,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 2, Y: 2, Z: 2, Value: 1}},
+		NonEmptyVoxelCount: 1,
 	}
-	opts := ImportOptions{
-		GameDir:         gameDir,
-		MapName:         "propmap",
-		OutputRoot:      outDir,
+	if err := content.SaveImportedWorldChunk(chunkPath, chunk); err != nil {
+		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
+	}
+	manifest := &content.ImportedWorldDef{
+		WorldID:         "demo",
+		Kind:            content.ImportedWorldKindVoxelWorld,
 		ChunkSize:       32,
-		VoxelResolution: 0.1,
+		VoxelResolution: 1,
+		Entries: []content.ImportedWorldChunkEntryDef{{
+			Coord:              chunk.Coord,
+			ChunkPath:          content.AuthorDocumentPath(chunkPath, manifestPath),
+			NonEmptyVoxelCount: chunk.NonEmptyVoxelCount,
+		}},
 	}
-	gameAssets, err := BuildGameAssetImport(opts, summary)
+	if err := content.SaveImportedWorld(manifestPath, manifest); err != nil {
+		t.Fatalf("SaveImportedWorld failed: %v", err)
+	}
+	level := content.NewLevelDef("demo")
+	level.BaseWorld = &content.LevelBaseWorldDef{
+		Kind:              content.ImportedWorldKindVoxelWorld,
+		ManifestPath:      content.AuthorDocumentPath(manifestPath, levelPath),
+		ReadOnlyByDefault: true,
+		CollisionEnabled:  true,
+	}
+
+	if err := SaveGeneratedLevel(GeneratedLevelResult{LevelPath: levelPath, Level: level}); err != nil {
+		t.Fatalf("SaveGeneratedLevel failed: %v", err)
+	}
+	loadedManifest, err := content.LoadImportedWorld(manifestPath)
 	if err != nil {
-		t.Fatalf("BuildGameAssetImport failed: %v", err)
+		t.Fatalf("LoadImportedWorld failed: %v", err)
 	}
-	if err := SaveGameAssetImport(gameAssets); err != nil {
-		t.Fatalf("SaveGameAssetImport failed: %v", err)
+	if len(loadedManifest.Entries) != 1 || loadedManifest.Entries[0].Aux == nil || loadedManifest.Entries[0].Aux.AuxPath == "" {
+		t.Fatalf("expected SaveGeneratedLevel to backfill aux ref, got %+v", loadedManifest.Entries)
 	}
-	level, err := BuildGeneratedLevelWithGameAssets(opts, summary, filepath.Join(outDir, "worlds", "propmap.gkworld"), gameAssets)
-	if err != nil {
-		t.Fatalf("BuildGeneratedLevelWithGameAssets failed: %v", err)
-	}
-	if len(level.Level.Placements) != 2 {
-		t.Fatalf("placements = %+v", level.Level.Placements)
-	}
-	placement := level.Level.Placements[0]
-	if placement.AssetPath != filepath.ToSlash(filepath.Join("hl1_assets", "propmap", "generated", "models", "filecabinet.gkasset")) {
-		t.Fatalf("asset path = %q", placement.AssetPath)
-	}
-	if placement.PlacementMode != content.LevelPlacementModeFree3D || placement.Transform.Position != (content.Vec3{1, 2, 3}) {
-		t.Fatalf("placement = %+v", placement)
-	}
-	if placement.Transform.Rotation == (content.Quat{0, 0, 0, 1}) {
-		t.Fatalf("expected angle to produce non-identity rotation, got %+v", placement.Transform.Rotation)
-	}
-	spritePlacement := level.Level.Placements[1]
-	if spritePlacement.ID != "hl1_sprite_flare1_0" || spritePlacement.AssetPath != filepath.ToSlash(filepath.Join("hl1_assets", "propmap", "generated", "sprites", "flare1.gkasset")) {
-		t.Fatalf("sprite placement = %+v", spritePlacement)
-	}
-	if spritePlacement.Transform.Position != (content.Vec3{4, 5, 6}) {
-		t.Fatalf("sprite position = %+v", spritePlacement.Transform.Position)
+	if _, err := content.LoadImportedWorldChunkAux(content.ResolveDocumentPath(loadedManifest.Entries[0].Aux.AuxPath, manifestPath)); err != nil {
+		t.Fatalf("LoadImportedWorldChunkAux failed: %v", err)
 	}
 }
 
@@ -366,8 +346,9 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 						Max: importcommon.Vec3{X: 12, Y: 4, Z: 5},
 					},
 					KeyValues: map[string]string{
-						"target": "door_a",
-						"wait":   "1",
+						"target":     "door_a",
+						"wait":       "1",
+						"spawnflags": "1",
 					},
 				},
 				{
@@ -477,7 +458,7 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 		t.Fatalf("button marker = %+v", button)
 	}
 	moving := level.Level.MovingBrushes[0]
-	if moving.Kind != MovingBrushKindHL1Door || moving.TargetName != "door_a" || moving.Target != "button_a" {
+	if moving.Kind != MovingBrushKindHL1Door || moving.NavigationRole != content.NavigationRoleDoor || moving.TargetName != "door_a" || moving.Target != "button_a" {
 		t.Fatalf("moving brush = %+v", moving)
 	}
 	if math.Abs(float64(moving.Speed-120*HammerUnitMeters)) > 1e-5 || moving.MoveDirection != (content.Vec3{1, 0, 0}) {
@@ -488,7 +469,7 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 		t.Fatalf("use trigger = %+v", trigger)
 	}
 	buttonBrush := level.Level.MovingBrushes[1]
-	if buttonBrush.Kind != MovingBrushKindHL1Button || buttonBrush.Target != "door_a" {
+	if buttonBrush.Kind != MovingBrushKindHL1Button || buttonBrush.Target != "door_a" || buttonBrush.SpawnFlags != 1 {
 		t.Fatalf("button moving brush = %+v", buttonBrush)
 	}
 	path := level.Level.PathNodes[0]
@@ -500,7 +481,7 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 		t.Fatalf("train moving brush = %+v", train)
 	}
 	rotating := level.Level.MovingBrushes[3]
-	if rotating.Kind != MovingBrushKindHL1DoorRotating || rotating.MotionKind != "rotate" || rotating.OpenAngle != -120 || rotating.Speed != 90 || rotating.RotationAxis != (content.Vec3{0, 1, 0}) {
+	if rotating.Kind != MovingBrushKindHL1DoorRotating || rotating.NavigationRole != content.NavigationRoleDoor || rotating.MotionKind != "rotate" || rotating.OpenAngle != -120 || rotating.Speed != 90 || rotating.RotationAxis != (content.Vec3{0, 1, 0}) {
 		t.Fatalf("rotating moving brush = %+v", rotating)
 	}
 	health := level.Level.Chargers[0]
@@ -510,6 +491,78 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 	suit := level.Level.Chargers[1]
 	if suit.Kind != ChargerKindHL1Suit || suit.ChargeKind != "armor" || suit.Capacity != 75 || suit.Rate != 15 || suit.TargetName != "suit_a" {
 		t.Fatalf("suit charger = %+v", suit)
+	}
+}
+
+func TestBuildGeneratedLevelEmitsChargerVoxelAssetsAtFixtureResolution(t *testing.T) {
+	dir := t.TempDir()
+	bspPath := filepath.Join(dir, "valve", "maps", "chargermap.bsp")
+	mustWriteFile(t, bspPath, syntheticBSP(t, syntheticBSPConfig{
+		Entities: `{
+"classname" "worldspawn"
+}
+{
+"classname" "func_healthcharger"
+"model" "*1"
+"targetname" "health_a"
+}`,
+		Textures: []syntheticTexture{{Name: "CHARGER", Width: 64, Height: 64}},
+		Planes:   []Plane{{Normal: vec3(0, 1, 0), Dist: 0}},
+		Vertices: []importcommon.Vec3{
+			vec3(0, 0, 0), vec3(16, 0, 0), vec3(16, 0, 16), vec3(0, 0, 16),
+			vec3(32, 0, 0), vec3(48, 0, 0), vec3(48, 0, 16), vec3(32, 0, 16),
+		},
+		TexInfos: []TexInfo{{MipTex: 0}},
+		Faces: []FaceHeader{
+			{PlaneID: 0, FirstEdge: 0, EdgeCount: 4, TexInfoID: 0},
+			{PlaneID: 0, FirstEdge: 4, EdgeCount: 4, TexInfoID: 0},
+		},
+		Edges: []Edge{
+			{A: 0, B: 1}, {A: 1, B: 2}, {A: 2, B: 3}, {A: 0, B: 3},
+			{A: 4, B: 5}, {A: 5, B: 6}, {A: 6, B: 7}, {A: 4, B: 7},
+		},
+		SurfEdges: []int32{0, 1, 2, -3, 4, 5, 6, -7},
+		Models: []Model{
+			{FirstFace: 0, FaceCount: 1},
+			{FirstFace: 1, FaceCount: 1},
+		},
+	}))
+	opts := ImportOptions{
+		GameDir:         dir,
+		MapName:         "chargermap",
+		OutputRoot:      filepath.Join(dir, "out"),
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
+		VoxelResolutionPolicy: HL1VoxelResolutionPolicy{
+			Fixture: 0.05,
+		},
+	}
+	summary, err := BuildImportSummary(opts)
+	if err != nil {
+		t.Fatalf("BuildImportSummary failed: %v", err)
+	}
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "chargermap.gkworld"))
+	if err != nil {
+		t.Fatalf("BuildGeneratedLevel failed: %v", err)
+	}
+	if len(level.Level.Chargers) != 1 || level.Level.Chargers[0].AssetPath == "" {
+		t.Fatalf("charger missing asset path: %+v", level.Level.Chargers)
+	}
+	if len(level.ChargerAssets) != 1 {
+		t.Fatalf("charger assets = %+v", level.ChargerAssets)
+	}
+	if err := SaveGeneratedLevel(level); err != nil {
+		t.Fatalf("SaveGeneratedLevel failed: %v", err)
+	}
+	asset, err := content.LoadAsset(level.ChargerAssets[0].AssetPath)
+	if err != nil {
+		t.Fatalf("LoadAsset failed: %v", err)
+	}
+	if len(asset.Parts) != 1 || asset.Parts[0].Source.VoxelShape == nil || len(asset.Parts[0].Source.VoxelShape.Voxels) == 0 {
+		t.Fatalf("charger asset payload = %+v", asset.Parts)
+	}
+	if asset.Parts[0].VoxelResolution != 0.05 {
+		t.Fatalf("charger voxel resolution = %f", asset.Parts[0].VoxelResolution)
 	}
 }
 
@@ -791,20 +844,21 @@ func TestBuildGeneratedLevelImportsHL1Pickups(t *testing.T) {
 	}
 }
 
-func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
+func TestBuildGeneratedLevelEmitsAnimatedFuncConveyorVoxelAssets(t *testing.T) {
 	dir := t.TempDir()
-	bspPath := filepath.Join(dir, "valve", "maps", "doormap.bsp")
+	bspPath := filepath.Join(dir, "valve", "maps", "conveyormap.bsp")
 	mustWriteFile(t, bspPath, syntheticBSP(t, syntheticBSPConfig{
 		Entities: `{
 "classname" "worldspawn"
 }
 {
-"classname" "func_door"
+"classname" "func_conveyor"
 "model" "*1"
-"targetname" "door_a"
+"targetname" "conveyor_a"
 "speed" "100"
+"angle" "0"
 }`,
-		Textures: []syntheticTexture{{Name: "TESTWALL", Width: 64, Height: 64}},
+		Textures: []syntheticTexture{{Name: "scroll_conv3", Width: 64, Height: 64}},
 		Planes:   []Plane{{Normal: vec3(0, 1, 0), Dist: 0}},
 		Vertices: []importcommon.Vec3{
 			vec3(0, 0, 0), vec3(16, 0, 0), vec3(16, 0, 16), vec3(0, 0, 16),
@@ -827,16 +881,21 @@ func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
 	}))
 	opts := ImportOptions{
 		GameDir:         dir,
-		MapName:         "doormap",
+		MapName:         "conveyormap",
 		OutputRoot:      filepath.Join(dir, "out"),
 		ChunkSize:       32,
 		VoxelResolution: 0.1,
+		VoxelResolutionPolicy: HL1VoxelResolutionPolicy{
+			BrushModel: 0.05,
+		},
 	}
 	summary, err := BuildImportSummary(opts)
 	if err != nil {
 		t.Fatalf("BuildImportSummary failed: %v", err)
 	}
-	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "doormap.gkworld"))
+	summary.BSP.Textures[0].Pixels = scrollTestTexture()
+	summary.BSP.Textures[0].Pixels.Name = "scroll_conv3"
+	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "conveyormap.gkworld"))
 	if err != nil {
 		t.Fatalf("BuildGeneratedLevel failed: %v", err)
 	}
@@ -856,6 +915,12 @@ func TestBuildGeneratedLevelEmitsMovingBrushVoxelAssets(t *testing.T) {
 	if len(asset.Parts) != 1 || asset.Parts[0].Source.VoxelShape == nil || len(asset.Parts[0].Source.VoxelShape.Voxels) == 0 {
 		t.Fatalf("moving brush asset payload = %+v", asset.Parts)
 	}
+	if asset.Parts[0].VoxelResolution != 0.05 {
+		t.Fatalf("moving brush voxel resolution = %f", asset.Parts[0].VoxelResolution)
+	}
+	if len(asset.MaterialAnimations) != 1 || asset.MaterialAnimations[0].Kind != "palette_scroll" {
+		t.Fatalf("conveyor material animations = %+v", asset.MaterialAnimations)
+	}
 }
 
 func TestBuildGeneratedLevelEmitsFuncPlatMovingBrushAsset(t *testing.T) {
@@ -871,26 +936,35 @@ func TestBuildGeneratedLevelEmitsFuncPlatMovingBrushAsset(t *testing.T) {
 "targetname" "lift_a"
 "height" "128"
 "speed" "200"
+}
+{
+"classname" "func_wall"
+"model" "*2"
+"targetname" "wall_prop"
 }`,
 		Textures: []syntheticTexture{{Name: "TESTWALL", Width: 64, Height: 64}},
 		Planes:   []Plane{{Normal: vec3(0, 1, 0), Dist: 0}},
 		Vertices: []importcommon.Vec3{
 			vec3(0, 0, 0), vec3(16, 0, 0), vec3(16, 0, 16), vec3(0, 0, 16),
 			vec3(32, 0, 0), vec3(48, 0, 0), vec3(48, 0, 16), vec3(32, 0, 16),
+			vec3(64, 0, 0), vec3(80, 0, 0), vec3(80, 0, 16), vec3(64, 0, 16),
 		},
 		TexInfos: []TexInfo{{MipTex: 0}},
 		Faces: []FaceHeader{
 			{PlaneID: 0, FirstEdge: 0, EdgeCount: 4, TexInfoID: 0},
 			{PlaneID: 0, FirstEdge: 4, EdgeCount: 4, TexInfoID: 0},
+			{PlaneID: 0, FirstEdge: 8, EdgeCount: 4, TexInfoID: 0},
 		},
 		Edges: []Edge{
 			{A: 0, B: 1}, {A: 1, B: 2}, {A: 2, B: 3}, {A: 0, B: 3},
 			{A: 4, B: 5}, {A: 5, B: 6}, {A: 6, B: 7}, {A: 4, B: 7},
+			{A: 8, B: 9}, {A: 9, B: 10}, {A: 10, B: 11}, {A: 8, B: 11},
 		},
-		SurfEdges: []int32{0, 1, 2, -3, 4, 5, 6, -7},
+		SurfEdges: []int32{0, 1, 2, -3, 4, 5, 6, -7, 8, 9, 10, -11},
 		Models: []Model{
 			{FirstFace: 0, FaceCount: 1},
 			{FirstFace: 1, FaceCount: 1},
+			{FirstFace: 2, FaceCount: 1},
 		},
 	}))
 	opts := ImportOptions{
@@ -904,8 +978,8 @@ func TestBuildGeneratedLevelEmitsFuncPlatMovingBrushAsset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildImportSummary failed: %v", err)
 	}
-	if len(summary.BakeFaces) != 1 {
-		t.Fatalf("expected func_plat excluded from static bake, got %d bake faces", len(summary.BakeFaces))
+	if len(summary.BakeFaces) != 2 {
+		t.Fatalf("expected func_plat excluded and func_wall retained in static bake, got %d bake faces", len(summary.BakeFaces))
 	}
 	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "out", "worlds", "platmap.gkworld"))
 	if err != nil {
@@ -913,6 +987,9 @@ func TestBuildGeneratedLevelEmitsFuncPlatMovingBrushAsset(t *testing.T) {
 	}
 	if len(level.MovingBrushAssets) != 1 {
 		t.Fatalf("moving brush assets = %+v", level.MovingBrushAssets)
+	}
+	if len(level.StaticBrushAssets) != 1 || !hasTag(level.StaticBrushAssets[0].Asset.Tags, "source_kind:bsp_brush") {
+		t.Fatalf("static brush assets = %+v", level.StaticBrushAssets)
 	}
 	if len(level.Level.MovingBrushes) != 1 {
 		t.Fatalf("moving brushes = %+v", level.Level.MovingBrushes)

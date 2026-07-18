@@ -619,6 +619,22 @@ func TestValidateLevelShooterRequiresPlayerSpawnAndClearMarkerPlacement(t *testi
 	})
 	result = ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
 	assertHasLevelValidationCode(t, result, "marker_inside_solid")
+
+	def.Player = &LevelPlayerDef{SpawnKind: "hl1_player_spawn"}
+	def.Markers = []LevelMarkerDef{{
+		ID:   "hl1-player-spawn",
+		Name: "hl1-player",
+		Kind: "hl1_player_spawn",
+		Transform: LevelTransformDef{
+			Position: Vec3{0.4, 0.0, 0.4},
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+	}}
+	result = ValidateLevel(def, LevelValidationOptions{DocumentPath: levelPath})
+	if hasLevelValidationCode(result, "missing_player_spawn") {
+		t.Fatalf("custom player spawn kind should satisfy shooter spawn requirement: %+v", result.Issues)
+	}
 }
 
 func TestValidateLevelRejectsInvalidPlacementVolumeAndAssetSet(t *testing.T) {
@@ -683,6 +699,8 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 		ID:                   "water-1",
 		Name:                 "pool",
 		Mode:                 LevelWaterBodyModeExplicitRect,
+		SurfaceMode:          LevelWaterSurfaceModeFootprint,
+		SurfaceVisibility:    LevelWaterSurfaceVisibilityHidden,
 		SurfaceY:             2.5,
 		Depth:                1.25,
 		RectHalfExtents:      Vec2{4, 6},
@@ -708,6 +726,8 @@ func TestLevelWaterBodyRoundTripAndValidate(t *testing.T) {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
 	if len(loaded.WaterBodies) != 1 || loaded.WaterBodies[0].RectHalfExtents != (Vec2{4, 6}) ||
+		loaded.WaterBodies[0].SurfaceMode != LevelWaterSurfaceModeFootprint ||
+		loaded.WaterBodies[0].SurfaceVisibility != LevelWaterSurfaceVisibilityHidden ||
 		loaded.WaterBodies[0].ContinuityGroup != "pool-a" ||
 		loaded.WaterBodies[0].DirectLightOcclusion == nil || *loaded.WaterBodies[0].DirectLightOcclusion != 0.75 {
 		t.Fatalf("water bodies did not round-trip: %+v", loaded.WaterBodies)
@@ -718,12 +738,16 @@ func TestLevelLadderVolumeRoundTripAndValidate(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "ladder.gklevel")
 	def := NewLevelDef("ladder")
+	bottom, top := Vec3{1, 0, 3}, Vec3{1, 4, 3}
 	def.LadderVolumes = []LevelLadderVolumeDef{{
 		ID:                "ladder-1",
 		Name:              "ladder",
 		BoundsCenter:      Vec3{1, 2, 3},
 		BoundsHalfExtents: Vec3{0.25, 2, 0.4},
+		MountBottom:       &bottom,
+		MountTop:          &top,
 		ClimbSpeed:        3.5,
+		Health:            75,
 		SourceTag:         "hl1:func_ladder",
 		Tags:              []string{"source:hl1"},
 	}}
@@ -737,7 +761,7 @@ func TestLevelLadderVolumeRoundTripAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
-	if len(loaded.LadderVolumes) != 1 || loaded.LadderVolumes[0].BoundsHalfExtents != (Vec3{0.25, 2, 0.4}) || loaded.LadderVolumes[0].ClimbSpeed != 3.5 {
+	if len(loaded.LadderVolumes) != 1 || loaded.LadderVolumes[0].BoundsHalfExtents != (Vec3{0.25, 2, 0.4}) || loaded.LadderVolumes[0].ClimbSpeed != 3.5 || loaded.LadderVolumes[0].Health != 75 || loaded.LadderVolumes[0].MountBottom == nil || *loaded.LadderVolumes[0].MountBottom != bottom {
 		t.Fatalf("ladder volumes did not round-trip: %+v", loaded.LadderVolumes)
 	}
 }
@@ -748,6 +772,7 @@ func TestValidateLevelRejectsInvalidLadderVolume(t *testing.T) {
 		ID:                "bad-ladder",
 		BoundsHalfExtents: Vec3{0, 2, 0.4},
 		ClimbSpeed:        -1,
+		Health:            -1,
 	}}
 	result := ValidateLevel(def, LevelValidationOptions{})
 	if !result.HasErrors() {
@@ -755,6 +780,7 @@ func TestValidateLevelRejectsInvalidLadderVolume(t *testing.T) {
 	}
 	assertHasLevelValidationCode(t, result, "invalid_ladder_volume_bounds")
 	assertHasLevelValidationCode(t, result, "invalid_ladder_climb_speed")
+	assertHasLevelValidationCode(t, result, "invalid_ladder_health")
 }
 
 func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
@@ -766,6 +792,7 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		Name:              "door",
 		Kind:              "hl1_func_door",
 		MotionKind:        "rotate",
+		NavigationRole:    NavigationRoleDoor,
 		BoundsCenter:      Vec3{1, 2, 3},
 		BoundsHalfExtents: Vec3{0.5, 1, 0.25},
 		MoveDirection:     Vec3{1, 0, 0},
@@ -777,6 +804,7 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		Speed:             3.5,
 		Wait:              1,
 		Lip:               0.1,
+		SpawnFlags:        1,
 		TargetName:        "door_a",
 		SourceTag:         "hl1:func_door",
 	}}
@@ -907,6 +935,22 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		TargetName: "clip_a",
 		SourceTag:  "hl1:ammo_9mmclip",
 	}}
+	def.NPCs = []LevelNPCDef{{
+		ID:        "npc-1",
+		Name:      "barney",
+		Kind:      "hl1_monster",
+		ClassName: "monster_barney",
+		ModelRef:  "models/barney.mdl",
+		Transform: LevelTransformDef{
+			Position: Vec3{4, 5, 6},
+			Rotation: Quat{0, 0, 0, 1},
+			Scale:    Vec3{1, 1, 1},
+		},
+		Health:     35,
+		TargetName: "barney_a",
+		SquadName:  "security",
+		SourceTag:  "hl1:monster_barney",
+	}}
 	if result := ValidateLevel(def, LevelValidationOptions{DocumentPath: path}); result.HasErrors() {
 		t.Fatalf("expected valid moving brush/use trigger, got %+v", result.Issues)
 	}
@@ -917,7 +961,7 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
-	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 || loaded.MovingBrushes[0].MotionKind != "rotate" || loaded.MovingBrushes[0].OpenAngle != -90 || loaded.MovingBrushes[0].PathTarget != "corner_a" {
+	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].NavigationRole != NavigationRoleDoor || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 || loaded.MovingBrushes[0].MotionKind != "rotate" || loaded.MovingBrushes[0].OpenAngle != -90 || loaded.MovingBrushes[0].PathTarget != "corner_a" || loaded.MovingBrushes[0].SpawnFlags != 1 {
 		t.Fatalf("moving brushes did not round-trip: %+v", loaded.MovingBrushes)
 	}
 	if len(loaded.PathNodes) != 1 || loaded.PathNodes[0].TargetName != "corner_a" || loaded.PathNodes[0].Target != "corner_b" || loaded.PathNodes[0].Speed != 1.5 {
@@ -950,12 +994,16 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	if len(loaded.Pickups) != 1 || loaded.Pickups[0].Category != "ammo" || loaded.Pickups[0].Item != "9mmclip" || loaded.Pickups[0].Amount != 17 {
 		t.Fatalf("pickups did not round-trip: %+v", loaded.Pickups)
 	}
+	if len(loaded.NPCs) != 1 || loaded.NPCs[0].ClassName != "monster_barney" || loaded.NPCs[0].ModelRef != "models/barney.mdl" || loaded.NPCs[0].Health != 35 {
+		t.Fatalf("npcs did not round-trip: %+v", loaded.NPCs)
+	}
 }
 
 func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 	def := NewLevelDef("bad-moving")
 	def.MovingBrushes = []LevelMovingBrushDef{{
 		ID:                "bad-door",
+		NavigationRole:    "teleporter",
 		BoundsHalfExtents: Vec3{0, 1, 1},
 		MoveDistance:      -1,
 		Speed:             -1,
@@ -1019,11 +1067,16 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 		ID:     "bad-pickup",
 		Amount: -1,
 	}}
+	def.NPCs = []LevelNPCDef{{
+		ID:     "bad-npc",
+		Health: -1,
+	}}
 	result := ValidateLevel(def, LevelValidationOptions{})
 	if !result.HasErrors() {
 		t.Fatal("expected moving brush/use trigger validation errors")
 	}
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_moving_brush_navigation_role")
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_distance")
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_speed")
 	assertHasLevelValidationCode(t, result, "empty_path_node_target_name")
@@ -1056,6 +1109,8 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "empty_pickup_category")
 	assertHasLevelValidationCode(t, result, "empty_pickup_item")
 	assertHasLevelValidationCode(t, result, "invalid_pickup_amount")
+	assertHasLevelValidationCode(t, result, "empty_npc_class_name")
+	assertHasLevelValidationCode(t, result, "invalid_npc_health")
 }
 
 func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
@@ -1064,6 +1119,7 @@ func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
 	def.WaterBodies = []LevelWaterBodyDef{{
 		ID:                   "bad-water",
 		Mode:                 LevelWaterBodyModeExplicitRect,
+		SurfaceMode:          "unsupported",
 		SurfaceY:             1,
 		Depth:                0,
 		RectHalfExtents:      Vec2{0, 4},
@@ -1076,6 +1132,7 @@ func TestValidateLevelRejectsInvalidWaterBody(t *testing.T) {
 	assertHasLevelValidationCode(t, result, "invalid_water_body_depth")
 	assertHasLevelValidationCode(t, result, "invalid_water_body_rect")
 	assertHasLevelValidationCode(t, result, "invalid_water_body_direct_light_occlusion")
+	assertHasLevelValidationCode(t, result, "invalid_water_surface_mode")
 }
 
 func assertHasLevelValidationCode(t *testing.T, result LevelValidationResult, want string) {
@@ -1086,4 +1143,13 @@ func assertHasLevelValidationCode(t *testing.T, result LevelValidationResult, wa
 		}
 	}
 	t.Fatalf("expected validation code %q, got %+v", want, result.Issues)
+}
+
+func hasLevelValidationCode(result LevelValidationResult, want string) bool {
+	for _, issue := range result.Issues {
+		if issue.Code == want {
+			return true
+		}
+	}
+	return false
 }

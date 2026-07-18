@@ -6,17 +6,35 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+type WaterSurfaceMode string
+
+const (
+	WaterSurfaceModeVolume    WaterSurfaceMode = "Volume"
+	WaterSurfaceModeFootprint WaterSurfaceMode = "Footprint"
+)
+
+type WaterSurfaceVisibility string
+
+const (
+	WaterSurfaceVisibilityVisible WaterSurfaceVisibility = "Visible"
+	WaterSurfaceVisibilityHidden  WaterSurfaceVisibility = "Hidden"
+)
+
 // WaterSurfaceComponent describes a horizontal stylized water body rendered by
 // the dedicated water surface accumulation pass.
 type WaterSurfaceComponent struct {
-	Disabled        bool
-	ContinuityGroup string
+	Disabled          bool
+	SurfaceMode       WaterSurfaceMode
+	SurfaceVisibility WaterSurfaceVisibility
+	VolumeGroup       string
+	ContinuityGroup   string
 
 	HalfExtents [2]float32
 	Depth       float32
 
-	Color           [3]float32
-	AbsorptionColor [3]float32
+	Color              [3]float32
+	AbsorptionColor    [3]float32
+	ScatteringStrength float32
 
 	Opacity    float32
 	Roughness  float32
@@ -29,6 +47,17 @@ type WaterSurfaceComponent struct {
 	FlowSpeed      float32
 	WaveAmplitude  float32
 	VisualCellSize float32
+}
+
+func (w *WaterSurfaceComponent) NormalizedSurfaceMode() WaterSurfaceMode {
+	if w != nil && w.SurfaceMode == WaterSurfaceModeFootprint {
+		return WaterSurfaceModeFootprint
+	}
+	return WaterSurfaceModeVolume
+}
+
+func (w *WaterSurfaceComponent) SurfaceIsVisible() bool {
+	return w == nil || w.SurfaceVisibility != WaterSurfaceVisibilityHidden
 }
 
 func (w *WaterSurfaceComponent) Enabled() bool {
@@ -86,6 +115,13 @@ func (w *WaterSurfaceComponent) NormalizedAbsorptionColor() [3]float32 {
 		color[i] = clampWaterFloat(color[i], 0, 4)
 	}
 	return color
+}
+
+func (w *WaterSurfaceComponent) NormalizedScatteringStrength() float32 {
+	if w == nil || w.ScatteringStrength <= 0 {
+		return 0.75
+	}
+	return clampWaterFloat(w.ScatteringStrength, 0, 4)
 }
 
 func (w *WaterSurfaceComponent) NormalizedOpacity() float32 {

@@ -119,26 +119,30 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	RtApp                        *app_rt.App
-	loadedModels                 map[AssetId]*core.VoxelObject
-	instanceMap                  map[EntityId]*core.VoxelObject
-	instanceGeometrySources      map[EntityId]*volume.XBrickMap
-	instanceObjectScopedGeometry map[EntityId]bool
-	runtimeEditedVoxelEntities   map[EntityId]struct{}
-	entityLODSelections          map[EntityId]EntityLODSelection
-	runtimeSprites               []SpriteComponent
-	lastMaterialKeys             map[*core.VoxelObject]materialTableCacheKey
-	materialTableCache           map[materialTableCacheKey][]core.Material
-	particlePools                map[EntityId]*particlePool
-	caVolumeMap                  map[EntityId]*core.VoxelObject
-	objectToEntity               map[*core.VoxelObject]EntityId
-	skyboxLayers                 map[EntityId]SkyboxLayerComponent // Stored values to detect changes
-	skyboxSun                    SkyboxSunComponent
-	SunDirection                 mgl32.Vec3
-	SunIntensity                 float32
-	lastParticleAtlas            AssetId
-	lastSpriteAtlas              AssetId
-	bridgeFeatures               voxelRtBridgeRegistry
+	RtApp                          *app_rt.App
+	loadedModels                   map[AssetId]*core.VoxelObject
+	instanceMap                    map[EntityId]*core.VoxelObject
+	instanceGeometrySources        map[EntityId]*volume.XBrickMap
+	instanceObjectScopedGeometry   map[EntityId]bool
+	runtimeEditedVoxelEntities     map[EntityId]struct{}
+	runtimeEditedVoxelRevisions    map[EntityId]uint64
+	nextRuntimeEditedVoxelRevision uint64
+	entityLODSelections            map[EntityId]EntityLODSelection
+	runtimeSprites                 []SpriteComponent
+	lastMaterialKeys               map[*core.VoxelObject]materialTableCacheKey
+	materialTableCache             map[materialTableCacheKey][]core.Material
+	particlePools                  map[EntityId]*particlePool
+	caVolumeMap                    map[EntityId]*core.VoxelObject
+	objectToEntity                 map[*core.VoxelObject]EntityId
+	skyboxLayers                   map[EntityId]SkyboxLayerComponent // Stored values to detect changes
+	skyboxSun                      SkyboxSunComponent
+	SunDirection                   mgl32.Vec3
+	SunIntensity                   float32
+	lastParticleAtlas              AssetId
+	lastSpriteAtlas                AssetId
+	underwaterInput                app_rt.UnderwaterInput
+	underwaterStrength             float32
+	bridgeFeatures                 voxelRtBridgeRegistry
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -318,13 +322,18 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 }
 
 func (s *VoxelRtState) markRuntimeEditedVoxelEntity(eid EntityId) {
-	if s == nil || eid == 0 {
+	if s == nil {
 		return
 	}
 	if s.runtimeEditedVoxelEntities == nil {
 		s.runtimeEditedVoxelEntities = make(map[EntityId]struct{})
 	}
+	if s.runtimeEditedVoxelRevisions == nil {
+		s.runtimeEditedVoxelRevisions = make(map[EntityId]uint64)
+	}
+	s.nextRuntimeEditedVoxelRevision++
 	s.runtimeEditedVoxelEntities[eid] = struct{}{}
+	s.runtimeEditedVoxelRevisions[eid] = s.nextRuntimeEditedVoxelRevision
 }
 
 func (s *VoxelRtState) clearRuntimeEditedVoxelEntity(eid EntityId) {
@@ -332,6 +341,9 @@ func (s *VoxelRtState) clearRuntimeEditedVoxelEntity(eid EntityId) {
 		return
 	}
 	delete(s.runtimeEditedVoxelEntities, eid)
+	if s.runtimeEditedVoxelRevisions != nil {
+		delete(s.runtimeEditedVoxelRevisions, eid)
+	}
 }
 
 func (s *VoxelRtState) runtimeEditedVoxelEntity(eid EntityId) bool {
@@ -340,6 +352,14 @@ func (s *VoxelRtState) runtimeEditedVoxelEntity(eid EntityId) bool {
 	}
 	_, ok := s.runtimeEditedVoxelEntities[eid]
 	return ok
+}
+
+func (s *VoxelRtState) runtimeEditedVoxelRevision(eid EntityId) (uint64, bool) {
+	if s == nil || s.runtimeEditedVoxelRevisions == nil {
+		return 0, false
+	}
+	revision, ok := s.runtimeEditedVoxelRevisions[eid]
+	return revision, ok
 }
 
 func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {
@@ -426,35 +446,25 @@ func cameraStateFromComponent(camera *CameraComponent) core.CameraState {
 }
 
 func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit {
+	return s.RaycastFiltered(origin, dir, tMax, nil)
+}
+
+func (s *VoxelRtState) RaycastFiltered(origin, dir mgl32.Vec3, tMax float32, acceptEntity func(EntityId, bool) bool) RaycastHit {
 	if s == nil || s.RtApp == nil {
 		return RaycastHit{}
 	}
 
 	ray := core.Ray{Origin: origin, Direction: dir}
-	res := s.RtApp.Scene.Raycast(ray, tMax)
+	res := s.RtApp.Scene.RaycastFiltered(ray, tMax, func(obj *core.VoxelObject) bool {
+		if acceptEntity == nil {
+			return true
+		}
+		eid, ok := s.entityForVoxelObject(obj)
+		return acceptEntity(eid, ok)
+	})
 
 	if res != nil {
-		// Find EntityId for this object
-		var hitEid EntityId = 0
-		if eid, ok := s.objectToEntity[res.Object]; ok {
-			hitEid = eid
-		} else {
-			// Fallback: search instanceMap and caVolumeMap (defensive)
-			for eid, obj := range s.instanceMap {
-				if obj == res.Object {
-					hitEid = eid
-					break
-				}
-			}
-			if hitEid == 0 {
-				for eid, obj := range s.caVolumeMap {
-					if obj == res.Object {
-						hitEid = eid
-						break
-					}
-				}
-			}
-		}
+		hitEid, _ := s.entityForVoxelObject(res.Object)
 
 		paletteIndex := uint8(0)
 		if res.Object != nil && res.Object.XBrickMap != nil {
@@ -472,6 +482,26 @@ func (s *VoxelRtState) Raycast(origin, dir mgl32.Vec3, tMax float32) RaycastHit 
 	}
 
 	return RaycastHit{}
+}
+
+func (s *VoxelRtState) entityForVoxelObject(obj *core.VoxelObject) (EntityId, bool) {
+	if s == nil || obj == nil {
+		return 0, false
+	}
+	if eid, ok := s.objectToEntity[obj]; ok {
+		return eid, true
+	}
+	for eid, candidate := range s.instanceMap {
+		if candidate == obj {
+			return eid, true
+		}
+	}
+	for eid, candidate := range s.caVolumeMap {
+		if candidate == obj {
+			return eid, true
+		}
+	}
+	return 0, false
 }
 
 func (s *VoxelRtState) RaycastSubstepped(origin, dir mgl32.Vec3, distance float32, substeps int) RaycastHit {
@@ -493,7 +523,6 @@ func (s *VoxelRtState) RaycastSubstepped(origin, dir mgl32.Vec3, distance float3
 }
 
 type Profiler struct {
-	NavBakeTime   time.Duration
 	EditTime      time.Duration
 	StreamingTime time.Duration
 	AABBTime      time.Duration
@@ -501,7 +530,6 @@ type Profiler struct {
 }
 
 func (p *Profiler) Reset() {
-	p.NavBakeTime = 0
 	p.EditTime = 0
 	p.StreamingTime = 0
 	p.AABBTime = 0

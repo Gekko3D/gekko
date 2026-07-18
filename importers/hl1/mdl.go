@@ -2,6 +2,7 @@ package hl1
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,12 @@ const (
 	MDLIdentGoldSrc = "IDST"
 	MDLVersion10    = 10
 	mdlHeaderSize   = 244
+
+	maxMDLSequenceCount      = 2048
+	maxMDLSequenceFrameCount = 2048
+	maxMDLSequenceBlendCount = 4
+	mdlSequenceRecordSize176 = 176
+	mdlSequenceRecordSize180 = 180
 )
 
 type MDLInfo struct {
@@ -31,10 +38,38 @@ type MDLInfo struct {
 	SkinFamilyCount      int                 `json:"skin_family_count,omitempty"`
 	BodyPartCount        int                 `json:"body_part_count,omitempty"`
 	AttachmentCount      int                 `json:"attachment_count,omitempty"`
+	Bones                []MDLBoneInfo       `json:"bones,omitempty"`
+	Sequences            []MDLSequenceInfo   `json:"sequences,omitempty"`
 	Textures             []MDLTextureInfo    `json:"textures,omitempty"`
 	BodyParts            []MDLBodyPartInfo   `json:"body_parts,omitempty"`
 	DecodedTriangleCount int                 `json:"decoded_triangle_count,omitempty"`
 	DecodedTextureCount  int                 `json:"decoded_texture_count,omitempty"`
+}
+
+type MDLBoneInfo struct {
+	Name          string            `json:"name"`
+	Parent        int               `json:"parent"`
+	Position      importcommon.Vec3 `json:"position,omitempty"`
+	Rotation      importcommon.Vec3 `json:"rotation,omitempty"`
+	PositionScale importcommon.Vec3 `json:"position_scale,omitempty"`
+	RotationScale importcommon.Vec3 `json:"rotation_scale,omitempty"`
+}
+
+type MDLSequenceInfo struct {
+	Name           string                 `json:"name"`
+	Activity       int                    `json:"activity"`
+	FPS            float32                `json:"fps,omitempty"`
+	FrameCount     int                    `json:"frame_count,omitempty"`
+	NumBlends      int                    `json:"num_blends,omitempty"`
+	AnimIndex      int                    `json:"anim_index,omitempty"`
+	SeqGroup       int                    `json:"seq_group,omitempty"`
+	BoneAnimations []MDLBoneAnimationInfo `json:"bone_animations,omitempty"`
+}
+
+type MDLBoneAnimationInfo struct {
+	BoneIndex      int                 `json:"bone_index"`
+	PositionFrames []importcommon.Vec3 `json:"position_frames,omitempty"`
+	RotationFrames []importcommon.Vec3 `json:"rotation_frames,omitempty"`
 }
 
 type MDLTextureInfo struct {
@@ -57,16 +92,30 @@ type MDLGeometry struct {
 	Triangles []MDLTriangle
 }
 
+// MDLGeometryOptions selects source-model variants before voxelization.
+type MDLGeometryOptions struct {
+	// BodygroupModels holds one model index for every body part. A missing
+	// index keeps the historical behavior of decoding every model in that part.
+	BodygroupModels []int
+	// SkinFamily selects one GoldSrc skin family. Zero is the GoldSrc default.
+	SkinFamily int
+	// DefaultBodygroups is retained for existing callers that need first model
+	// from every bodygroup.
+	DefaultBodygroups bool
+}
+
 type MDLTriangle struct {
 	TextureIndex int
 	Vertices     [3]MDLTriangleVertex
 }
 
 type MDLTriangleVertex struct {
-	Position    importcommon.Vec3
-	NormalIndex int
-	Texel       [2]int
-	UV          [2]float32
+	Position      importcommon.Vec3
+	LocalPosition importcommon.Vec3
+	BoneIndex     int
+	NormalIndex   int
+	Texel         [2]int
+	UV            [2]float32
 }
 
 type MDLBodyPartInfo struct {
@@ -92,19 +141,19 @@ func LoadMDLInfo(path string) (MDLInfo, error) {
 	if err != nil {
 		return MDLInfo{}, err
 	}
-	geometry, err := ParseMDLGeometry(data)
-	if err != nil {
-		return MDLInfo{}, err
-	}
-	return geometry.Info, nil
+	return ParseMDLInfo(data)
 }
 
 func LoadMDLGeometry(path string) (MDLGeometry, error) {
+	return LoadMDLGeometryWithOptions(path, MDLGeometryOptions{})
+}
+
+func LoadMDLGeometryWithOptions(path string, opts MDLGeometryOptions) (MDLGeometry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return MDLGeometry{}, err
 	}
-	geometry, err := ParseMDLGeometry(data)
+	geometry, err := ParseMDLGeometryWithOptions(data, opts)
 	if err != nil {
 		return MDLGeometry{}, err
 	}
@@ -123,7 +172,7 @@ func LoadMDLGeometry(path string) (MDLGeometry, error) {
 	if len(textures) == 0 {
 		return geometry, nil
 	}
-	return ParseMDLGeometryWithExternalTextures(data, textures, textureInfos)
+	return parseMDLGeometryWithExternalTexturesOptions(data, textures, textureInfos, opts)
 }
 
 func ParseMDLInfo(data []byte) (MDLInfo, error) {
@@ -168,16 +217,26 @@ func ParseMDLInfo(data []byte) (MDLInfo, error) {
 	if info.Length <= 0 || info.Length > len(data) {
 		info.Length = len(data)
 	}
+	info.Bones = parseMDLBones(data, int(readInt32(data, 144)), info.BoneCount)
+	info.Sequences = parseMDLSequences(data, int(readInt32(data, 168)), info.SequenceCount, info.Bones)
 	info.Textures = parseMDLTextures(data, int(readInt32(data, 184)), info.TextureCount)
 	info.BodyParts = parseMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount)
 	return info, nil
 }
 
 func ParseMDLGeometry(data []byte) (MDLGeometry, error) {
-	return ParseMDLGeometryWithExternalTextures(data, nil, nil)
+	return ParseMDLGeometryWithOptions(data, MDLGeometryOptions{})
+}
+
+func ParseMDLGeometryWithOptions(data []byte, opts MDLGeometryOptions) (MDLGeometry, error) {
+	return parseMDLGeometryWithExternalTexturesOptions(data, nil, nil, opts)
 }
 
 func ParseMDLGeometryWithExternalTextures(data []byte, externalTextures []MDLTexturePixels, externalTextureInfos []MDLTextureInfo) (MDLGeometry, error) {
+	return parseMDLGeometryWithExternalTexturesOptions(data, externalTextures, externalTextureInfos, MDLGeometryOptions{})
+}
+
+func parseMDLGeometryWithExternalTexturesOptions(data []byte, externalTextures []MDLTexturePixels, externalTextureInfos []MDLTextureInfo, opts MDLGeometryOptions) (MDLGeometry, error) {
 	info, err := ParseMDLInfo(data)
 	if err != nil {
 		return MDLGeometry{}, err
@@ -199,9 +258,20 @@ func ParseMDLGeometryWithExternalTextures(data []byte, externalTextures []MDLTex
 		Info:     info,
 		Textures: textures,
 	}
-	for _, part := range decodeMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount) {
-		for _, model := range part.models {
-			geometry.Triangles = append(geometry.Triangles, decodeMDLModelTriangles(data, model, info, geometry.Textures)...)
+	boneTransforms := parseMDLBoneTransforms(data, int(readInt32(data, 144)), info.BoneCount)
+	for partIndex, part := range decodeMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount, boneTransforms) {
+		models := part.models
+		if partIndex < len(opts.BodygroupModels) {
+			selected := opts.BodygroupModels[partIndex]
+			if selected < 0 || selected >= len(models) {
+				return MDLGeometry{}, fmt.Errorf("bodygroup %q model %d out of range", part.info.Name, selected)
+			}
+			models = models[selected : selected+1]
+		} else if opts.DefaultBodygroups && len(models) > 1 {
+			models = models[:1]
+		}
+		for _, model := range models {
+			geometry.Triangles = append(geometry.Triangles, decodeMDLModelTriangles(data, model, info, geometry.Textures, opts.SkinFamily)...)
 		}
 	}
 	geometry.Info.DecodedTriangleCount = len(geometry.Triangles)
@@ -301,7 +371,7 @@ type decodedMDLBodyPart struct {
 type decodedMDLModel struct {
 	info        MDLModelInfo
 	vertexIndex int
-	vertices    []importcommon.Vec3
+	vertices    []decodedMDLVertex
 	meshes      []decodedMDLMesh
 }
 
@@ -310,7 +380,256 @@ type decodedMDLMesh struct {
 	skinRef              int
 }
 
-func decodeMDLBodyParts(data []byte, offset int, count int) []decodedMDLBodyPart {
+type decodedMDLVertex struct {
+	Position      importcommon.Vec3
+	LocalPosition importcommon.Vec3
+	BoneIndex     int
+}
+
+type mdlBoneTransform struct {
+	Parent   int
+	Position importcommon.Vec3
+	Rotation importcommon.Vec3
+}
+
+func parseMDLBones(data []byte, offset int, count int) []MDLBoneInfo {
+	const boneSize = 112
+	if count <= 0 || offset < mdlHeaderSize || offset > len(data) || count > (len(data)-offset)/boneSize {
+		return nil
+	}
+	out := make([]MDLBoneInfo, 0, count)
+	for i := 0; i < count; i++ {
+		base := offset + i*boneSize
+		out = append(out, MDLBoneInfo{
+			Name:   cString(data[base : base+32]),
+			Parent: int(readInt32(data, base+32)),
+			Position: importcommon.Vec3{
+				X: readFloat32(data, base+64),
+				Y: readFloat32(data, base+68),
+				Z: readFloat32(data, base+72),
+			},
+			Rotation: importcommon.Vec3{
+				X: readFloat32(data, base+76),
+				Y: readFloat32(data, base+80),
+				Z: readFloat32(data, base+84),
+			},
+			PositionScale: importcommon.Vec3{
+				X: readFloat32(data, base+88),
+				Y: readFloat32(data, base+92),
+				Z: readFloat32(data, base+96),
+			},
+			RotationScale: importcommon.Vec3{
+				X: readFloat32(data, base+100),
+				Y: readFloat32(data, base+104),
+				Z: readFloat32(data, base+108),
+			},
+		})
+	}
+	return out
+}
+
+func parseMDLSequences(data []byte, offset int, count int, bones []MDLBoneInfo) []MDLSequenceInfo {
+	sequenceSize := mdlSequenceRecordSize(data, offset, count)
+	if sequenceSize == 0 {
+		return nil
+	}
+	out := make([]MDLSequenceInfo, 0, count)
+	for i := 0; i < count; i++ {
+		base := offset + i*sequenceSize
+		seq := MDLSequenceInfo{
+			Name:       cString(data[base : base+32]),
+			FPS:        readFloat32(data, base+32),
+			Activity:   int(readInt32(data, base+40)),
+			FrameCount: int(readInt32(data, base+56)),
+			NumBlends:  int(readInt32(data, base+120)),
+			AnimIndex:  int(readInt32(data, base+124)),
+			SeqGroup:   int(readInt32(data, base+156)),
+		}
+		seq.BoneAnimations = decodeMDLSequenceAnimations(data, seq, bones)
+		out = append(out, seq)
+	}
+	return out
+}
+
+func mdlSequenceRecordSize(data []byte, offset int, count int) int {
+	if count <= 0 || count > maxMDLSequenceCount || offset < mdlHeaderSize || offset > len(data) {
+		return 0
+	}
+	bestSize := 0
+	bestScore := -1 << 30
+	for _, size := range []int{mdlSequenceRecordSize176, mdlSequenceRecordSize180} {
+		if count > (len(data)-offset)/size {
+			continue
+		}
+		score := mdlSequenceRecordScore(data, offset, count, size)
+		if score > bestScore {
+			bestScore = score
+			bestSize = size
+		}
+	}
+	if bestScore <= -count*4 {
+		return 0
+	}
+	return bestSize
+}
+
+func mdlSequenceRecordScore(data []byte, offset int, count int, size int) int {
+	score := 0
+	for i := 0; i < count; i++ {
+		base := offset + i*size
+		nameBytes := data[base : base+32]
+		if isLikelyMDLLabel(nameBytes) {
+			score += 2
+		} else {
+			score -= 4
+		}
+		fps := readFloat32(data, base+32)
+		if fps > 0 && fps <= 240 && !math.IsNaN(float64(fps)) && !math.IsInf(float64(fps), 0) {
+			score += 2
+		} else {
+			score -= 3
+		}
+		frameCount := int(readInt32(data, base+56))
+		if frameCount > 0 && frameCount <= maxMDLSequenceFrameCount {
+			score += 2
+		} else {
+			score -= 4
+		}
+		numBlends := int(readInt32(data, base+120))
+		if numBlends >= 0 && numBlends <= maxMDLSequenceBlendCount {
+			score += 1
+		} else {
+			score -= 3
+		}
+		animIndex := int(readInt32(data, base+124))
+		seqGroup := int(readInt32(data, base+156))
+		if seqGroup >= 0 && seqGroup <= 64 {
+			score += 1
+		} else {
+			score -= 2
+		}
+		if seqGroup == 0 && animIndex != 0 {
+			if animIndex >= mdlHeaderSize && animIndex < len(data) {
+				score += 1
+			} else {
+				score -= 2
+			}
+		}
+	}
+	return score
+}
+
+func isLikelyMDLLabel(data []byte) bool {
+	for _, b := range data {
+		if b == 0 {
+			return true
+		}
+		if b < 32 || b > 126 {
+			return false
+		}
+	}
+	return true
+}
+
+func decodeMDLSequenceAnimations(data []byte, seq MDLSequenceInfo, bones []MDLBoneInfo) []MDLBoneAnimationInfo {
+	if seq.SeqGroup != 0 || seq.AnimIndex <= 0 || seq.FrameCount <= 0 || seq.FrameCount > maxMDLSequenceFrameCount || len(bones) == 0 {
+		return nil
+	}
+	numBlends := seq.NumBlends
+	if numBlends <= 0 {
+		numBlends = 1
+	}
+	if numBlends > maxMDLSequenceBlendCount {
+		return nil
+	}
+	const animSize = 12
+	if seq.AnimIndex < 0 || seq.AnimIndex > len(data) || len(bones)*numBlends > (len(data)-seq.AnimIndex)/animSize {
+		return nil
+	}
+	out := make([]MDLBoneAnimationInfo, 0, len(bones))
+	for boneIndex, bone := range bones {
+		animBase := seq.AnimIndex + boneIndex*animSize
+		animation := MDLBoneAnimationInfo{
+			BoneIndex:      boneIndex,
+			PositionFrames: make([]importcommon.Vec3, 0, seq.FrameCount),
+			RotationFrames: make([]importcommon.Vec3, 0, seq.FrameCount),
+		}
+		for frame := 0; frame < seq.FrameCount; frame++ {
+			px := decodeMDLAnimationChannelValue(data, animBase, 0, frame, bone.Position.X, bone.PositionScale.X)
+			py := decodeMDLAnimationChannelValue(data, animBase, 1, frame, bone.Position.Y, bone.PositionScale.Y)
+			pz := decodeMDLAnimationChannelValue(data, animBase, 2, frame, bone.Position.Z, bone.PositionScale.Z)
+			rx := decodeMDLAnimationChannelValue(data, animBase, 3, frame, bone.Rotation.X, bone.RotationScale.X)
+			ry := decodeMDLAnimationChannelValue(data, animBase, 4, frame, bone.Rotation.Y, bone.RotationScale.Y)
+			rz := decodeMDLAnimationChannelValue(data, animBase, 5, frame, bone.Rotation.Z, bone.RotationScale.Z)
+			animation.PositionFrames = append(animation.PositionFrames, importcommon.Vec3{X: px, Y: py, Z: pz})
+			animation.RotationFrames = append(animation.RotationFrames, importcommon.Vec3{X: rx, Y: ry, Z: rz})
+		}
+		out = append(out, animation)
+	}
+	return out
+}
+
+func decodeMDLAnimationChannelValue(data []byte, animBase int, channel int, frame int, baseValue float32, scale float32) float32 {
+	if animBase < 0 || animBase+12 > len(data) || channel < 0 || channel >= 6 || frame < 0 {
+		return baseValue
+	}
+	offset := int(readUint16(data, animBase+channel*2))
+	if offset == 0 {
+		return baseValue
+	}
+	raw, ok := decodeMDLAnimationChannelRawValue(data, animBase+offset, frame)
+	if !ok {
+		return baseValue
+	}
+	return baseValue + float32(raw)*scale
+}
+
+func decodeMDLAnimationChannelRawValue(data []byte, offset int, frame int) (int16, bool) {
+	if offset < 0 || offset+2 > len(data) || frame < 0 {
+		return 0, false
+	}
+	cursor := offset
+	remaining := frame
+	for cursor+2 <= len(data) {
+		valid := int(data[cursor])
+		total := int(data[cursor+1])
+		cursor += 2
+		if total <= 0 || valid < 0 || valid > total {
+			return 0, false
+		}
+		if cursor+valid*2 > len(data) {
+			return 0, false
+		}
+		if remaining < total {
+			if valid == 0 {
+				return 0, true
+			}
+			valueIndex := remaining
+			if valueIndex >= valid {
+				valueIndex = valid - 1
+			}
+			return readInt16(data, cursor+valueIndex*2), true
+		}
+		remaining -= total
+		cursor += valid * 2
+	}
+	return 0, false
+}
+
+func parseMDLBoneTransforms(data []byte, offset int, count int) []mdlBoneTransform {
+	bones := parseMDLBones(data, offset, count)
+	out := make([]mdlBoneTransform, 0, len(bones))
+	for _, bone := range bones {
+		out = append(out, mdlBoneTransform{
+			Parent:   bone.Parent,
+			Position: bone.Position,
+			Rotation: bone.Rotation,
+		})
+	}
+	return out
+}
+
+func decodeMDLBodyParts(data []byte, offset int, count int, boneTransforms []mdlBoneTransform) []decodedMDLBodyPart {
 	const bodyPartSize = 76
 	if count <= 0 || offset < 0 || offset > len(data) || count > (len(data)-offset)/bodyPartSize {
 		return nil
@@ -327,13 +646,13 @@ func decodeMDLBodyParts(data []byte, offset int, count int) []decodedMDLBodyPart
 		}
 		out = append(out, decodedMDLBodyPart{
 			info:   info,
-			models: decodeMDLModels(data, modelIndex, modelCount),
+			models: decodeMDLModels(data, modelIndex, modelCount, boneTransforms),
 		})
 	}
 	return out
 }
 
-func decodeMDLModels(data []byte, offset int, count int) []decodedMDLModel {
+func decodeMDLModels(data []byte, offset int, count int, boneTransforms []mdlBoneTransform) []decodedMDLModel {
 	const modelSize = 112
 	if count <= 0 || offset < 0 || offset > len(data) || count > (len(data)-offset)/modelSize {
 		return nil
@@ -344,6 +663,7 @@ func decodeMDLModels(data []byte, offset int, count int) []decodedMDLModel {
 		meshCount := int(readInt32(data, base+72))
 		meshIndex := int(readInt32(data, base+76))
 		vertexCount := int(readInt32(data, base+80))
+		vertexInfoIndex := int(readInt32(data, base+84))
 		vertexIndex := int(readInt32(data, base+88))
 		model := decodedMDLModel{
 			info: MDLModelInfo{
@@ -356,7 +676,7 @@ func decodeMDLModels(data []byte, offset int, count int) []decodedMDLModel {
 				GroupCount:     int(readInt32(data, base+104)),
 			},
 			vertexIndex: vertexIndex,
-			vertices:    parseMDLVertices(data, vertexIndex, vertexCount),
+			vertices:    parseMDLVertices(data, vertexIndex, vertexInfoIndex, vertexCount, boneTransforms),
 			meshes:      decodeMDLMeshes(data, meshIndex, meshCount),
 		}
 		out = append(out, model)
@@ -364,20 +684,74 @@ func decodeMDLModels(data []byte, offset int, count int) []decodedMDLModel {
 	return out
 }
 
-func parseMDLVertices(data []byte, offset int, count int) []importcommon.Vec3 {
+func parseMDLVertices(data []byte, offset int, boneIndexOffset int, count int, boneTransforms []mdlBoneTransform) []decodedMDLVertex {
 	const vertexSize = 12
 	if count <= 0 || offset < 0 || offset > len(data) || count > (len(data)-offset)/vertexSize {
 		return nil
 	}
-	out := make([]importcommon.Vec3, 0, count)
+	boneIndices := parseMDLVertexBoneIndices(data, boneIndexOffset, count)
+	out := make([]decodedMDLVertex, 0, count)
 	for i := 0; i < count; i++ {
 		base := offset + i*vertexSize
-		out = append(out, importcommon.Vec3{
+		localPosition := importcommon.Vec3{
 			X: readFloat32(data, base),
 			Y: readFloat32(data, base+4),
 			Z: readFloat32(data, base+8),
+		}
+		position := localPosition
+		boneIndex := -1
+		if len(boneIndices) == count {
+			boneIndex = int(boneIndices[i])
+			position = transformMDLVertexByBone(position, boneIndex, boneTransforms)
+		}
+		out = append(out, decodedMDLVertex{
+			Position:      position,
+			LocalPosition: localPosition,
+			BoneIndex:     boneIndex,
 		})
 	}
+	return out
+}
+
+func parseMDLVertexBoneIndices(data []byte, offset int, count int) []byte {
+	if count <= 0 || offset < mdlHeaderSize || offset > len(data) || count > len(data)-offset {
+		return nil
+	}
+	return append([]byte(nil), data[offset:offset+count]...)
+}
+
+func transformMDLVertexByBone(position importcommon.Vec3, boneIndex int, boneTransforms []mdlBoneTransform) importcommon.Vec3 {
+	if boneIndex < 0 || boneIndex >= len(boneTransforms) {
+		return position
+	}
+	return transformMDLPointByBone(position, boneIndex, boneTransforms, 0)
+}
+
+func transformMDLPointByBone(point importcommon.Vec3, boneIndex int, boneTransforms []mdlBoneTransform, depth int) importcommon.Vec3 {
+	if boneIndex < 0 || boneIndex >= len(boneTransforms) || depth > len(boneTransforms) {
+		return point
+	}
+	bone := boneTransforms[boneIndex]
+	rotated := rotateMDLPointXYZ(point, bone.Rotation)
+	transformed := importcommon.Vec3{
+		X: rotated.X + bone.Position.X,
+		Y: rotated.Y + bone.Position.Y,
+		Z: rotated.Z + bone.Position.Z,
+	}
+	if bone.Parent >= 0 && bone.Parent < len(boneTransforms) && bone.Parent != boneIndex {
+		return transformMDLPointByBone(transformed, bone.Parent, boneTransforms, depth+1)
+	}
+	return transformed
+}
+
+func rotateMDLPointXYZ(point importcommon.Vec3, rotation importcommon.Vec3) importcommon.Vec3 {
+	cx, sx := float32(math.Cos(float64(rotation.X))), float32(math.Sin(float64(rotation.X)))
+	cy, sy := float32(math.Cos(float64(rotation.Y))), float32(math.Sin(float64(rotation.Y)))
+	cz, sz := float32(math.Cos(float64(rotation.Z))), float32(math.Sin(float64(rotation.Z)))
+
+	out := importcommon.Vec3{X: point.X, Y: point.Y*cx - point.Z*sx, Z: point.Y*sx + point.Z*cx}
+	out = importcommon.Vec3{X: out.X*cy + out.Z*sy, Y: out.Y, Z: -out.X*sy + out.Z*cy}
+	out = importcommon.Vec3{X: out.X*cz - out.Y*sz, Y: out.X*sz + out.Y*cz, Z: out.Z}
 	return out
 }
 
@@ -397,16 +771,16 @@ func decodeMDLMeshes(data []byte, offset int, count int) []decodedMDLMesh {
 	return out
 }
 
-func decodeMDLModelTriangles(data []byte, model decodedMDLModel, info MDLInfo, textures []MDLTexturePixels) []MDLTriangle {
+func decodeMDLModelTriangles(data []byte, model decodedMDLModel, info MDLInfo, textures []MDLTexturePixels, skinFamily int) []MDLTriangle {
 	out := make([]MDLTriangle, 0)
 	for _, mesh := range model.meshes {
-		textureIndex := mdlTextureIndexForSkinRef(data, info, mesh.skinRef)
+		textureIndex := mdlTextureIndexForSkinRef(data, info, mesh.skinRef, skinFamily)
 		out = append(out, decodeMDLTriangleCommands(data, mesh.triangleCommandIndex, textureIndex, model.vertices, textures)...)
 	}
 	return out
 }
 
-func decodeMDLTriangleCommands(data []byte, offset int, textureIndex int, vertices []importcommon.Vec3, textures []MDLTexturePixels) []MDLTriangle {
+func decodeMDLTriangleCommands(data []byte, offset int, textureIndex int, vertices []decodedMDLVertex, textures []MDLTexturePixels) []MDLTriangle {
 	if offset < 0 || offset+2 > len(data) {
 		return nil
 	}
@@ -451,13 +825,16 @@ func decodeMDLTriangleCommands(data []byte, offset int, textureIndex int, vertic
 	return out
 }
 
-func mdlTriangleVertex(vertexIndex int, normalIndex int, s int, t int, textureIndex int, vertices []importcommon.Vec3, textures []MDLTexturePixels) MDLTriangleVertex {
+func mdlTriangleVertex(vertexIndex int, normalIndex int, s int, t int, textureIndex int, vertices []decodedMDLVertex, textures []MDLTexturePixels) MDLTriangleVertex {
 	out := MDLTriangleVertex{
 		NormalIndex: normalIndex,
 		Texel:       [2]int{s, t},
+		BoneIndex:   -1,
 	}
 	if vertexIndex >= 0 && vertexIndex < len(vertices) {
-		out.Position = vertices[vertexIndex]
+		out.Position = vertices[vertexIndex].Position
+		out.LocalPosition = vertices[vertexIndex].LocalPosition
+		out.BoneIndex = vertices[vertexIndex].BoneIndex
 	}
 	if textureIndex >= 0 && textureIndex < len(textures) {
 		texture := textures[textureIndex].Info
@@ -471,10 +848,14 @@ func mdlTriangleVertex(vertexIndex int, normalIndex int, s int, t int, textureIn
 	return out
 }
 
-func mdlTextureIndexForSkinRef(data []byte, info MDLInfo, skinRef int) int {
+func mdlTextureIndexForSkinRef(data []byte, info MDLInfo, skinRef int, skinFamily int) int {
 	skinIndex := int(readInt32(data, 200))
-	if skinRef >= 0 && info.SkinRefCount > 0 && skinRef < info.SkinRefCount && skinIndex >= 0 && skinIndex+2 <= len(data) && skinRef < (len(data)-skinIndex)/2 {
-		textureIndex := int(readInt16(data, skinIndex+skinRef*2))
+	if skinFamily < 0 || skinFamily >= info.SkinFamilyCount {
+		skinFamily = 0
+	}
+	index := skinFamily*info.SkinRefCount + skinRef
+	if skinRef >= 0 && info.SkinRefCount > 0 && skinRef < info.SkinRefCount && skinIndex >= 0 && skinIndex+2 <= len(data) && index < (len(data)-skinIndex)/2 {
+		textureIndex := int(readInt16(data, skinIndex+index*2))
 		if textureIndex >= 0 && textureIndex < info.TextureCount {
 			return textureIndex
 		}

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"sort"
 )
 
@@ -55,7 +54,7 @@ func isImportedWorldChunkDenseRLEBinary(data []byte) bool {
 	return bytes.HasPrefix(data, importedWorldChunkDenseRLEMagic)
 }
 
-func saveImportedWorldChunkDenseRLEBinary(path string, def *ImportedWorldChunkDef) error {
+func saveImportedWorldChunkDenseRLEBinary(path string, def *ImportedWorldChunkDef) (ImportedWorldChunkSaveResult, error) {
 	payloadKind := ImportedWorldChunkPayloadDenseRLEBinaryV1
 	var payload []byte
 	var nonEmpty int
@@ -67,7 +66,7 @@ func saveImportedWorldChunkDenseRLEBinary(path string, def *ImportedWorldChunkDe
 		payload, nonEmpty, err = encodeImportedWorldChunkDenseRLEPayload(def)
 	}
 	if err != nil {
-		return err
+		return ImportedWorldChunkSaveResult{}, err
 	}
 	hash := sha256.Sum256(payload)
 	def.PayloadKind = payloadKind
@@ -88,10 +87,10 @@ func saveImportedWorldChunkDenseRLEBinary(path string, def *ImportedWorldChunkDe
 	}
 	metaData, err := json.Marshal(meta)
 	if err != nil {
-		return err
+		return ImportedWorldChunkSaveResult{}, err
 	}
 	if len(metaData) > math.MaxUint32 {
-		return fmt.Errorf("imported world chunk binary metadata is too large")
+		return ImportedWorldChunkSaveResult{}, fmt.Errorf("imported world chunk binary metadata is too large")
 	}
 	var out bytes.Buffer
 	out.Write(importedWorldChunkDenseRLEMagic)
@@ -100,7 +99,16 @@ func saveImportedWorldChunkDenseRLEBinary(path string, def *ImportedWorldChunkDe
 	out.Write(lenBuf[:])
 	out.Write(metaData)
 	out.Write(payload)
-	return os.WriteFile(path, out.Bytes(), 0644)
+	wrote, err := writeFileIfChanged(path, out.Bytes(), 0644)
+	if err != nil {
+		return ImportedWorldChunkSaveResult{}, err
+	}
+	return ImportedWorldChunkSaveResult{
+		Wrote:            wrote,
+		PayloadKind:      def.PayloadKind,
+		PayloadHash:      def.PayloadHash,
+		PayloadSizeBytes: def.PayloadSizeBytes,
+	}, nil
 }
 
 func loadImportedWorldChunkDenseRLEBinary(data []byte) (*ImportedWorldChunkDef, error) {

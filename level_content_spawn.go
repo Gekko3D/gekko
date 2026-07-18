@@ -41,6 +41,7 @@ type AuthoredLevelSpawnResult struct {
 	TargetRelayEntities     map[string]EntityId
 	BreakableEntities       map[string]EntityId
 	PickupEntities          map[string]EntityId
+	NPCEntities             map[string]EntityId
 	ExpandedVolumeInstances []content.PlacementVolumePreviewInstance
 }
 
@@ -100,6 +101,7 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		TargetRelayEntities:   make(map[string]EntityId),
 		BreakableEntities:     make(map[string]EntityId),
 		PickupEntities:        make(map[string]EntityId),
+		NPCEntities:           make(map[string]EntityId),
 	}
 	if cmd == nil {
 		return result, fmt.Errorf("commands is nil")
@@ -232,7 +234,10 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		result.ChangeLevelEntities[change.ID] = entity
 	}
 	for _, charger := range def.Chargers {
-		entity := spawnAuthoredLevelCharger(cmd, result.RootEntity, def.ID, charger)
+		entity, err := spawnAuthoredLevelCharger(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, charger)
+		if err != nil {
+			return result, err
+		}
 		result.ChargerEntities[charger.ID] = entity
 	}
 	for _, multi := range def.MultiTargets {
@@ -256,6 +261,13 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 			return result, err
 		}
 		result.PickupEntities[pickup.ID] = entity
+	}
+	for _, npc := range def.NPCs {
+		entity, err := spawnAuthoredLevelNPC(cmd, assets, loader, result.RootEntity, def.ID, opts.LevelPath, npc)
+		if err != nil {
+			return result, err
+		}
+		result.NPCEntities[npc.ID] = entity
 	}
 
 	if def.Terrain != nil && strings.TrimSpace(def.Terrain.ManifestPath) != "" {
@@ -322,6 +334,8 @@ func spawnAuthoredLevelWaterBody(cmd *Commands, parent EntityId, levelID string,
 	transform := levelTransformToComponent(water.Transform)
 	body := &WaterBodyComponent{
 		Mode:                 WaterBodyMode(water.Mode),
+		SurfaceMode:          WaterSurfaceMode(water.SurfaceMode),
+		SurfaceVisibility:    WaterSurfaceVisibility(water.SurfaceVisibility),
 		SurfaceY:             water.SurfaceY,
 		Depth:                water.Depth,
 		RectHalfExtents:      [2]float32{water.RectHalfExtents[0], water.RectHalfExtents[1]},
@@ -331,12 +345,14 @@ func spawnAuthoredLevelWaterBody(cmd *Commands, parent EntityId, levelID string,
 		Overlap:              water.Overlap,
 		MinCellSize:          water.MinCellSize,
 		SourceTag:            water.SourceTag,
+		VolumeGroup:          water.VolumeGroup,
 		ContinuityGroup:      water.ContinuityGroup,
 		EnableSkirt:          water.EnableSkirt,
 		MaxPatchCount:        water.MaxPatchCount,
 		DebugName:            water.DebugName,
 		Color:                [3]float32{water.Color[0], water.Color[1], water.Color[2]},
 		AbsorptionColor:      [3]float32{water.AbsorptionColor[0], water.AbsorptionColor[1], water.AbsorptionColor[2]},
+		ScatteringStrength:   water.ScatteringStrength,
 		Opacity:              water.Opacity,
 		Roughness:            water.Roughness,
 		Refraction:           water.Refraction,
@@ -373,7 +389,7 @@ func spawnAuthoredLevelLadderVolume(cmd *Commands, parent EntityId, levelID stri
 		Rotation: mgl32.QuatIdent(),
 		Scale:    mgl32.Vec3{1, 1, 1},
 	}
-	return cmd.AddEntity(
+	components := []any{
 		&transform,
 		&LocalTransformComponent{
 			Position: transform.Position,
@@ -393,7 +409,19 @@ func spawnAuthoredLevelLadderVolume(cmd *Commands, parent EntityId, levelID stri
 			LadderVolumeID: ladder.ID,
 			Name:           ladder.Name,
 		},
-	)
+	}
+	if ladder.Health > 0 {
+		components = append(components, &BreakableComponent{
+			Kind:              "ladder",
+			BoundsCenter:      center,
+			BoundsHalfExtents: halfExtents,
+			Health:            ladder.Health,
+			MaxHealth:         ladder.Health,
+			SourceTag:         ladder.SourceTag,
+			Tags:              append([]string(nil), ladder.Tags...),
+		})
+	}
+	return cmd.AddEntity(components...)
 }
 
 func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, brush content.LevelMovingBrushDef) (EntityId, error) {
@@ -428,8 +456,10 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 		&MovingBrushComponent{
 			Kind:               brush.Kind,
 			MotionKind:         brush.MotionKind,
+			NavigationRole:     brush.NavigationRole,
 			BoundsCenter:       center,
 			BoundsHalfExtents:  halfExtents,
+			ClosedHalfExtents:  halfExtents,
 			MoveDirection:      moveDirection,
 			ClosedPosition:     visualOrigin,
 			ClosedBoundsCenter: center,
@@ -442,6 +472,7 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 			Speed:              brush.Speed,
 			Wait:               brush.Wait,
 			Lip:                brush.Lip,
+			SpawnFlags:         brush.SpawnFlags,
 			TargetName:         brush.TargetName,
 			Target:             brush.Target,
 			SourceTag:          brush.SourceTag,
@@ -699,9 +730,13 @@ func spawnAuthoredLevelChangeLevel(cmd *Commands, parent EntityId, levelID strin
 	)
 }
 
-func spawnAuthoredLevelCharger(cmd *Commands, parent EntityId, levelID string, charger content.LevelChargerDef) EntityId {
+func spawnAuthoredLevelCharger(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, charger content.LevelChargerDef) (EntityId, error) {
 	center := mgl32.Vec3{charger.BoundsCenter[0], charger.BoundsCenter[1], charger.BoundsCenter[2]}
 	halfExtents := mgl32.Vec3{charger.BoundsHalfExtents[0], charger.BoundsHalfExtents[1], charger.BoundsHalfExtents[2]}
+	visualOrigin := mgl32.Vec3{charger.VisualOrigin[0], charger.VisualOrigin[1], charger.VisualOrigin[2]}
+	if visualOrigin == (mgl32.Vec3{}) {
+		visualOrigin = center
+	}
 	chargeKind := strings.TrimSpace(charger.ChargeKind)
 	if chargeKind == "" {
 		chargeKind = "health"
@@ -718,11 +753,11 @@ func spawnAuthoredLevelCharger(cmd *Commands, parent EntityId, levelID string, c
 		rate = 15
 	}
 	transform := TransformComponent{
-		Position: center,
+		Position: visualOrigin,
 		Rotation: mgl32.QuatIdent(),
 		Scale:    mgl32.Vec3{1, 1, 1},
 	}
-	return cmd.AddEntity(
+	comps := []any{
 		&transform,
 		&LocalTransformComponent{
 			Position: transform.Position,
@@ -749,7 +784,31 @@ func spawnAuthoredLevelCharger(cmd *Commands, parent EntityId, levelID string, c
 			ChargerID: charger.ID,
 			Name:      charger.Name,
 		},
-	)
+	}
+	if strings.TrimSpace(charger.AssetPath) != "" {
+		if loader == nil {
+			loader = NewRuntimeContentLoader()
+		}
+		assetPath := content.ResolveDocumentPath(charger.AssetPath, levelPath)
+		asset, err := loader.LoadAsset(assetPath)
+		if err != nil {
+			return 0, err
+		}
+		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		if err != nil {
+			return 0, err
+		}
+		if model != (AssetId{}) {
+			comps = append(comps, &VoxelModelComponent{
+				SharedGeometry:         model,
+				VoxelPalette:           palette,
+				VoxelResolution:        voxelResolution,
+				PivotMode:              PivotModeCorner,
+				ShadowSeamWorldEpsilon: voxelResolution,
+			})
+		}
+	}
+	return cmd.AddEntity(comps...), nil
 }
 
 func spawnAuthoredLevelMultiTarget(cmd *Commands, parent EntityId, levelID string, multi content.LevelMultiTargetDef) EntityId {
@@ -820,6 +879,8 @@ func spawnAuthoredLevelBreakable(cmd *Commands, assets *AssetServer, loader *Run
 			Scale:    transform.Scale,
 		},
 		&Parent{Entity: parent},
+		&AABBComponent{Min: center.Sub(halfExtents), Max: center.Add(halfExtents)},
+		&NavigationBlockerComponent{ID: "breakable:" + levelID + ":" + breakable.ID},
 		&BreakableComponent{
 			Kind:              breakable.Kind,
 			BoundsCenter:      center,
@@ -919,6 +980,69 @@ func spawnAuthoredLevelPickup(cmd *Commands, assets *AssetServer, loader *Runtim
 		}
 	}
 	return cmd.AddEntity(comps...), nil
+}
+
+func spawnAuthoredLevelNPC(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, npc content.LevelNPCDef) (EntityId, error) {
+	transform := levelTransformToComponent(npc.Transform)
+	health := npc.Health
+	if health <= 0 {
+		health = 1
+	}
+	comps := []any{
+		&transform,
+		&LocalTransformComponent{
+			Position: transform.Position,
+			Rotation: transform.Rotation,
+			Scale:    transform.Scale,
+		},
+		&Parent{Entity: parent},
+		&NPCComponent{
+			Kind:       npc.Kind,
+			AssetPath:  npc.AssetPath,
+			ClassName:  npc.ClassName,
+			ModelRef:   npc.ModelRef,
+			Health:     health,
+			MaxHealth:  health,
+			TargetName: npc.TargetName,
+			Target:     npc.Target,
+			SquadName:  npc.SquadName,
+			SpawnFlags: npc.SpawnFlags,
+			SourceTag:  npc.SourceTag,
+			Tags:       append([]string(nil), npc.Tags...),
+		},
+		&NPCAnimationComponent{
+			State: NPCAnimationStateIdle,
+		},
+		&AuthoredLevelNPCRefComponent{
+			LevelID: levelID,
+			NPCID:   npc.ID,
+			Name:    npc.Name,
+		},
+	}
+	entity := cmd.AddEntity(comps...)
+	if strings.TrimSpace(npc.AssetPath) != "" {
+		if loader == nil {
+			loader = NewRuntimeContentLoader()
+		}
+		assetPath := content.ResolveDocumentPath(npc.AssetPath, levelPath)
+		asset, err := loader.LoadAsset(assetPath)
+		if err != nil {
+			return 0, err
+		}
+		assetTransform := TransformComponent{
+			Position: mgl32.Vec3{0, 0, 0},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		}
+		spawnResult, err := SpawnAuthoredAssetWithOptions(cmd, assets, asset, assetTransform, AuthoredAssetSpawnOptions{DocumentPath: assetPath})
+		if err != nil {
+			return 0, err
+		}
+		if spawnResult.RootEntity != 0 {
+			cmd.AddComponents(spawnResult.RootEntity, &Parent{Entity: entity})
+		}
+	}
+	return entity, nil
 }
 
 func levelWaterDirectLightOcclusion(water content.LevelWaterBodyDef) float32 {

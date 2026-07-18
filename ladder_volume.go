@@ -1,8 +1,11 @@
 package gekko
 
-import "github.com/go-gl/mathgl/mgl32"
+import (
+	"github.com/gekko3d/gekko/content"
+	"github.com/go-gl/mathgl/mgl32"
+)
 
-const DefaultLadderClimbSpeed float32 = 3.0
+const DefaultLadderClimbSpeed = content.DefaultNavLadderClimbSpeed
 
 type LadderVolumeComponent struct {
 	BoundsCenter      mgl32.Vec3

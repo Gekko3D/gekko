@@ -57,6 +57,7 @@ type LevelDef struct {
 	Brushes          []LevelBrushDef         `json:"brushes,omitempty"`
 	Terrain          *LevelTerrainDef        `json:"terrain,omitempty"`
 	BaseWorld        *LevelBaseWorldDef      `json:"base_world,omitempty"`
+	Navigation       *LevelNavigationDef     `json:"navigation,omitempty"`
 	Player           *LevelPlayerDef         `json:"player,omitempty"`
 	Placements       []LevelPlacementDef     `json:"placements,omitempty"`
 	PlacementVolumes []PlacementVolumeDef    `json:"placement_volumes,omitempty"`
@@ -75,6 +76,7 @@ type LevelDef struct {
 	MultiTargets     []LevelMultiTargetDef   `json:"multi_targets,omitempty"`
 	Breakables       []LevelBreakableDef     `json:"breakables,omitempty"`
 	Pickups          []LevelPickupDef        `json:"pickups,omitempty"`
+	NPCs             []LevelNPCDef           `json:"npcs,omitempty"`
 	Markers          []LevelMarkerDef        `json:"markers,omitempty"`
 }
 
@@ -161,6 +163,11 @@ type LevelBaseWorldDef struct {
 	Tags              []string          `json:"tags,omitempty"`
 }
 
+type LevelNavigationDef struct {
+	ManifestPath string   `json:"manifest_path"`
+	Tags         []string `json:"tags,omitempty"`
+}
+
 type LevelPlayerDef struct {
 	SpawnKind        string   `json:"spawn_kind,omitempty"`
 	Height           float32  `json:"height,omitempty"`
@@ -200,11 +207,31 @@ const (
 	LevelWaterBodyModeFitBounds    LevelWaterBodyMode = "FitBounds"
 )
 
+type LevelWaterSurfaceMode string
+
+const (
+	LevelWaterSurfaceModeVolume    LevelWaterSurfaceMode = "Volume"
+	LevelWaterSurfaceModeFootprint LevelWaterSurfaceMode = "Footprint"
+)
+
+// LevelWaterSurfaceVisibility controls whether a water volume has a visible
+// air-water interface. Hidden volumes remain available to gameplay queries.
+type LevelWaterSurfaceVisibility string
+
+const (
+	LevelWaterSurfaceVisibilityVisible LevelWaterSurfaceVisibility = "Visible"
+	LevelWaterSurfaceVisibilityHidden  LevelWaterSurfaceVisibility = "Hidden"
+)
+
 type LevelWaterBodyDef struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
 
 	Mode LevelWaterBodyMode `json:"mode,omitempty"`
+	// SurfaceMode selects the visual water representation independently of
+	// ContinuityGroup, which only controls shared-edge suppression.
+	SurfaceMode       LevelWaterSurfaceMode       `json:"surface_mode,omitempty"`
+	SurfaceVisibility LevelWaterSurfaceVisibility `json:"surface_visibility,omitempty"`
 
 	SurfaceY float32 `json:"surface_y"`
 	Depth    float32 `json:"depth"`
@@ -217,17 +244,20 @@ type LevelWaterBodyDef struct {
 	Overlap     float32 `json:"overlap,omitempty"`
 	MinCellSize float32 `json:"min_cell_size,omitempty"`
 
-	SourceTag       string `json:"source_tag,omitempty"`
+	SourceTag string `json:"source_tag,omitempty"`
+	// VolumeGroup identifies one gameplay liquid medium across render patches.
+	VolumeGroup     string `json:"volume_group,omitempty"`
 	ContinuityGroup string `json:"continuity_group,omitempty"`
 	EnableSkirt     *bool  `json:"enable_skirt,omitempty"`
 	MaxPatchCount   uint32 `json:"max_patch_count,omitempty"`
 	DebugName       string `json:"debug_name,omitempty"`
 
-	Color           Vec3    `json:"color,omitempty"`
-	AbsorptionColor Vec3    `json:"absorption_color,omitempty"`
-	Opacity         float32 `json:"opacity,omitempty"`
-	Roughness       float32 `json:"roughness,omitempty"`
-	Refraction      float32 `json:"refraction,omitempty"`
+	Color              Vec3    `json:"color,omitempty"`
+	AbsorptionColor    Vec3    `json:"absorption_color,omitempty"`
+	ScatteringStrength float32 `json:"scattering_strength,omitempty"`
+	Opacity            float32 `json:"opacity,omitempty"`
+	Roughness          float32 `json:"roughness,omitempty"`
+	Refraction         float32 `json:"refraction,omitempty"`
 	// DirectLightOcclusion attenuates global sun/moon lighting on water.
 	// 0 keeps full direct light; 1 fully removes direct-light sparkle.
 	DirectLightOcclusion *float32 `json:"direct_light_occlusion,omitempty"`
@@ -250,7 +280,10 @@ type LevelLadderVolumeDef struct {
 	Name              string   `json:"name,omitempty"`
 	BoundsCenter      Vec3     `json:"bounds_center"`
 	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	MountBottom       *Vec3    `json:"mount_bottom,omitempty"`
+	MountTop          *Vec3    `json:"mount_top,omitempty"`
 	ClimbSpeed        float32  `json:"climb_speed,omitempty"`
+	Health            float32  `json:"health,omitempty"`
 	SourceTag         string   `json:"source_tag,omitempty"`
 	Tags              []string `json:"tags,omitempty"`
 }
@@ -260,6 +293,7 @@ type LevelMovingBrushDef struct {
 	Name              string   `json:"name,omitempty"`
 	Kind              string   `json:"kind,omitempty"`
 	MotionKind        string   `json:"motion_kind,omitempty"`
+	NavigationRole    string   `json:"navigation_role,omitempty"`
 	AssetPath         string   `json:"asset_path,omitempty"`
 	BoundsCenter      Vec3     `json:"bounds_center"`
 	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
@@ -273,6 +307,7 @@ type LevelMovingBrushDef struct {
 	Speed             float32  `json:"speed,omitempty"`
 	Wait              float32  `json:"wait,omitempty"`
 	Lip               float32  `json:"lip,omitempty"`
+	SpawnFlags        int      `json:"spawn_flags,omitempty"`
 	TargetName        string   `json:"target_name,omitempty"`
 	Target            string   `json:"target,omitempty"`
 	SourceTag         string   `json:"source_tag,omitempty"`
@@ -355,8 +390,10 @@ type LevelChargerDef struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name,omitempty"`
 	Kind              string   `json:"kind,omitempty"`
+	AssetPath         string   `json:"asset_path,omitempty"`
 	BoundsCenter      Vec3     `json:"bounds_center"`
 	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`
+	VisualOrigin      Vec3     `json:"visual_origin,omitempty"`
 	ChargeKind        string   `json:"charge_kind,omitempty"`
 	Capacity          float32  `json:"capacity,omitempty"`
 	Rate              float32  `json:"rate,omitempty"`
@@ -426,6 +463,23 @@ type LevelPickupDef struct {
 	ClassName  string            `json:"class_name,omitempty"`
 	Transform  LevelTransformDef `json:"transform"`
 	TargetName string            `json:"target_name,omitempty"`
+	SpawnFlags int               `json:"spawn_flags,omitempty"`
+	SourceTag  string            `json:"source_tag,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+}
+
+type LevelNPCDef struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name,omitempty"`
+	Kind       string            `json:"kind,omitempty"`
+	AssetPath  string            `json:"asset_path,omitempty"`
+	ClassName  string            `json:"class_name"`
+	ModelRef   string            `json:"model_ref,omitempty"`
+	Transform  LevelTransformDef `json:"transform"`
+	Health     float32           `json:"health,omitempty"`
+	TargetName string            `json:"target_name,omitempty"`
+	Target     string            `json:"target,omitempty"`
+	SquadName  string            `json:"squad_name,omitempty"`
 	SpawnFlags int               `json:"spawn_flags,omitempty"`
 	SourceTag  string            `json:"source_tag,omitempty"`
 	Tags       []string          `json:"tags,omitempty"`
@@ -515,6 +569,12 @@ func EnsureLevelIDs(def *LevelDef) {
 		if def.WaterBodies[i].Mode == "" {
 			def.WaterBodies[i].Mode = LevelWaterBodyModeExplicitRect
 		}
+		if def.WaterBodies[i].SurfaceMode == "" {
+			def.WaterBodies[i].SurfaceMode = LevelWaterSurfaceModeVolume
+		}
+		if def.WaterBodies[i].SurfaceVisibility == "" {
+			def.WaterBodies[i].SurfaceVisibility = LevelWaterSurfaceVisibilityVisible
+		}
 		if def.WaterBodies[i].Transform.Rotation == (Quat{}) {
 			def.WaterBodies[i].Transform.Rotation = Quat{0, 0, 0, 1}
 		}
@@ -586,6 +646,17 @@ func EnsureLevelIDs(def *LevelDef) {
 		}
 		if def.Pickups[i].Transform.Scale == (Vec3{}) {
 			def.Pickups[i].Transform.Scale = Vec3{1, 1, 1}
+		}
+	}
+	for i := range def.NPCs {
+		if def.NPCs[i].ID == "" {
+			def.NPCs[i].ID = newID()
+		}
+		if def.NPCs[i].Transform.Rotation == (Quat{}) {
+			def.NPCs[i].Transform.Rotation = Quat{0, 0, 0, 1}
+		}
+		if def.NPCs[i].Transform.Scale == (Vec3{}) {
+			def.NPCs[i].Transform.Scale = Vec3{1, 1, 1}
 		}
 	}
 	for i := range def.Lights {

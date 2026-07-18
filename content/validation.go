@@ -120,6 +120,8 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 			result.addError("empty_marker_kind", "marker kind is required", marker.ID, marker.Name, "marker")
 		}
 	}
+	validateSkeleton(&result, def.Skeleton)
+	validateAnimationClips(&result, def.AnimationClips, allItemIDs)
 
 	for _, part := range def.Parts {
 		if part.ParentID == "" {
@@ -252,6 +254,130 @@ func validatePartParent(result *AssetValidationResult, partIDs map[string]struct
 		return
 	}
 	result.addError("broken_parent_reference", fmt.Sprintf("missing parent %s", parentID), itemID, itemName, itemKind)
+}
+
+func validateSkeleton(result *AssetValidationResult, skeleton *AssetSkeletonDef) {
+	if skeleton == nil {
+		return
+	}
+	boneNames := make(map[string]string, len(skeleton.Bones))
+	boneParents := make(map[string]string, len(skeleton.Bones))
+	for _, bone := range skeleton.Bones {
+		validateName(result, bone.ID, bone.Name, "bone")
+		if bone.ID == "" {
+			result.addError("empty_id", "bone id is required", bone.ID, bone.Name, "bone")
+			continue
+		}
+		if _, exists := boneNames[bone.ID]; exists {
+			result.addError("duplicate_id", fmt.Sprintf("duplicate bone id %s", bone.ID), bone.ID, bone.Name, "bone")
+			continue
+		}
+		boneNames[bone.ID] = bone.Name
+		boneParents[bone.ID] = bone.ParentID
+	}
+	for _, bone := range skeleton.Bones {
+		if bone.ParentID == "" {
+			continue
+		}
+		if bone.ParentID == bone.ID {
+			result.addError("skeleton_cycle", fmt.Sprintf("bone %s cannot parent itself", bone.ID), bone.ID, bone.Name, "bone")
+			continue
+		}
+		if _, ok := boneNames[bone.ParentID]; !ok {
+			result.addError("broken_skeleton_parent_reference", fmt.Sprintf("missing parent bone %s", bone.ParentID), bone.ID, bone.Name, "bone")
+		}
+	}
+
+	visiting := make(map[string]bool, len(boneParents))
+	visited := make(map[string]bool, len(boneParents))
+	var visit func(string) bool
+	visit = func(id string) bool {
+		if id == "" || visited[id] {
+			return false
+		}
+		if visiting[id] {
+			return true
+		}
+		visiting[id] = true
+		parentID := boneParents[id]
+		if _, ok := boneParents[parentID]; ok && visit(parentID) {
+			return true
+		}
+		visiting[id] = false
+		visited[id] = true
+		return false
+	}
+	for _, bone := range skeleton.Bones {
+		if visit(bone.ID) {
+			result.addError("skeleton_cycle", fmt.Sprintf("skeleton cycle detected at %s", bone.ID), bone.ID, bone.Name, "bone")
+			break
+		}
+	}
+}
+
+func validateAnimationClips(result *AssetValidationResult, clips []AssetAnimationClipDef, allItemIDs map[string]string) {
+	seenClipIDs := map[string]struct{}{}
+	for _, clip := range clips {
+		if strings.TrimSpace(clip.ID) == "" {
+			result.addError("empty_animation_clip_id", "animation clip id is required", clip.ID, clip.Name, "animation_clip")
+		} else if _, exists := seenClipIDs[clip.ID]; exists {
+			result.addError("duplicate_animation_clip_id", fmt.Sprintf("duplicate animation clip id %s", clip.ID), clip.ID, clip.Name, "animation_clip")
+		} else {
+			seenClipIDs[clip.ID] = struct{}{}
+		}
+		validateName(result, clip.ID, clip.Name, "animation_clip")
+		if clip.FPS < 0 {
+			result.addError("invalid_animation_fps", "animation clip fps must be >= 0", clip.ID, clip.Name, "animation_clip")
+		}
+		if clip.Duration < 0 {
+			result.addError("invalid_animation_duration", "animation clip duration must be >= 0", clip.ID, clip.Name, "animation_clip")
+		}
+		if clip.Duration == 0 && len(clip.Tracks) > 0 {
+			result.addError("invalid_animation_duration", "animation clip duration is required when tracks are present", clip.ID, clip.Name, "animation_clip")
+		}
+		for _, track := range clip.Tracks {
+			if strings.TrimSpace(track.TargetID) == "" {
+				result.addError("empty_animation_target", "animation track target_id is required", clip.ID, clip.Name, "animation_track")
+				continue
+			}
+			if _, ok := allItemIDs[track.TargetID]; !ok {
+				result.addError("broken_animation_target_reference", fmt.Sprintf("missing animation target %s", track.TargetID), track.TargetID, clip.Name, "animation_track")
+			}
+			validateVec3Keys(result, clip, track.TargetID, "position", track.PositionKeys)
+			validateQuatKeys(result, clip, track.TargetID, track.RotationKeys)
+			validateVec3Keys(result, clip, track.TargetID, "scale", track.ScaleKeys)
+		}
+	}
+}
+
+func validateVec3Keys(result *AssetValidationResult, clip AssetAnimationClipDef, targetID string, channel string, keys []AssetVec3KeyDef) {
+	lastTime := float32(-1)
+	for _, key := range keys {
+		validateAnimationKeyTime(result, clip, targetID, channel, key.Time, &lastTime)
+	}
+}
+
+func validateQuatKeys(result *AssetValidationResult, clip AssetAnimationClipDef, targetID string, keys []AssetQuatKeyDef) {
+	lastTime := float32(-1)
+	for _, key := range keys {
+		validateAnimationKeyTime(result, clip, targetID, "rotation", key.Time, &lastTime)
+	}
+}
+
+func validateAnimationKeyTime(result *AssetValidationResult, clip AssetAnimationClipDef, targetID string, channel string, keyTime float32, lastTime *float32) {
+	if keyTime < 0 {
+		result.addError("invalid_animation_key_time", fmt.Sprintf("%s key time must be >= 0", channel), targetID, clip.Name, "animation_track")
+		return
+	}
+	if clip.Duration > 0 && keyTime > clip.Duration {
+		result.addError("invalid_animation_key_time", fmt.Sprintf("%s key time exceeds clip duration", channel), targetID, clip.Name, "animation_track")
+	}
+	if lastTime != nil && *lastTime >= 0 && keyTime < *lastTime {
+		result.addError("invalid_animation_key_order", fmt.Sprintf("%s key times must be sorted", channel), targetID, clip.Name, "animation_track")
+	}
+	if lastTime != nil {
+		*lastTime = keyTime
+	}
 }
 
 func validateSource(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef, materialIDs map[string]struct{}, opts AssetValidationOptions) {

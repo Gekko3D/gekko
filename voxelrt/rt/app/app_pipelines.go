@@ -606,6 +606,7 @@ func (a *App) setupTransparentOverlayPipeline() {
 // setupResolvePipeline creates a fullscreen resolve pass that composites the opaque lit
 // color (StorageTexture) with the accumulated transparent color/weight textures onto the swapchain.
 func (a *App) setupResolvePipeline() {
+	a.ensureUnderwaterParamsBuffer()
 	// Build shader module
 	resMod, err := a.Device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label:          "Resolve Transparency",
@@ -702,6 +703,15 @@ func (a *App) setupResolvePipeline() {
 					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
+			{
+				Binding:    10,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeUniform,
+					MinBindingSize:   underwaterParamsSize,
+					HasDynamicOffset: false,
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -753,7 +763,7 @@ func (a *App) createResolveBindGroup(layout *wgpu.BindGroupLayout) {
 	if a == nil || a.BufferManager == nil || layout == nil {
 		return
 	}
-	if a.BufferManager.CameraBuf == nil || a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil || a.BufferManager.CurrentVolumetricView() == nil || a.BufferManager.CurrentVolumetricDepthView() == nil || a.BufferManager.DepthView == nil || a.BufferManager.PlanetDepthView == nil || a.BufferManager.CAVolumeColorView == nil || a.BufferManager.CAVolumeDepthView == nil {
+	if a.BufferManager.CameraBuf == nil || a.StorageView == nil || a.BufferManager.TransparentAccumView == nil || a.BufferManager.TransparentWeightView == nil || a.BufferManager.CurrentVolumetricView() == nil || a.BufferManager.CurrentVolumetricDepthView() == nil || a.BufferManager.DepthView == nil || a.BufferManager.PlanetDepthView == nil || a.BufferManager.CAVolumeColorView == nil || a.BufferManager.CAVolumeDepthView == nil || a.UnderwaterParamsBuf == nil {
 		// Views not ready yet (e.g., during early init/resize), skip creating BG
 		return
 	}
@@ -771,6 +781,7 @@ func (a *App) createResolveBindGroup(layout *wgpu.BindGroupLayout) {
 			{Binding: 7, TextureView: a.BufferManager.PlanetDepthView},
 			{Binding: 8, TextureView: a.BufferManager.CAVolumeColorView},
 			{Binding: 9, TextureView: a.BufferManager.CAVolumeDepthView},
+			{Binding: 10, Buffer: a.UnderwaterParamsBuf, Size: underwaterParamsSize},
 		},
 	})
 	if err != nil {

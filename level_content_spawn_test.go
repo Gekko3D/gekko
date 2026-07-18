@@ -82,14 +82,16 @@ func TestLoadAndSpawnAuthoredLevelSpawnsWaterBody(t *testing.T) {
 	levelPath := filepath.Join(root, "levels", "water.gklevel")
 	level := content.NewLevelDef("water")
 	level.WaterBodies = []content.LevelWaterBodyDef{{
-		ID:              "water-1",
-		Name:            "pool",
-		Mode:            content.LevelWaterBodyModeExplicitRect,
-		SurfaceY:        3,
-		Depth:           1.5,
-		RectHalfExtents: content.Vec2{4, 6},
-		ContinuityGroup: "pool-a",
-		Color:           content.Vec3{0.1, 0.2, 0.8},
+		ID:                "water-1",
+		Name:              "pool",
+		Mode:              content.LevelWaterBodyModeExplicitRect,
+		SurfaceMode:       content.LevelWaterSurfaceModeFootprint,
+		SurfaceVisibility: content.LevelWaterSurfaceVisibilityHidden,
+		SurfaceY:          3,
+		Depth:             1.5,
+		RectHalfExtents:   content.Vec2{4, 6},
+		ContinuityGroup:   "pool-a",
+		Color:             content.Vec3{0.1, 0.2, 0.8},
 		Transform: content.LevelTransformDef{
 			Position: content.Vec3{10, 3, 20},
 			Rotation: content.Quat{0, 0, 0, 1},
@@ -123,7 +125,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsWaterBody(t *testing.T) {
 		if tr.Position != (mgl32.Vec3{10, 3, 20}) {
 			t.Fatalf("water transform position = %v", tr.Position)
 		}
-		if water.Depth != 1.5 || water.RectHalfExtents != ([2]float32{4, 6}) || water.SurfaceY != 3 || water.ContinuityGroup != "pool-a" {
+		if water.Depth != 1.5 || water.RectHalfExtents != ([2]float32{4, 6}) || water.SurfaceY != 3 || water.SurfaceMode != WaterSurfaceModeFootprint || water.SurfaceVisibility != WaterSurfaceVisibilityHidden || water.ContinuityGroup != "pool-a" {
 			t.Fatalf("water component = %+v", water)
 		}
 		return true
@@ -143,6 +145,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsLadderVolume(t *testing.T) {
 		BoundsCenter:      content.Vec3{10, 2, 20},
 		BoundsHalfExtents: content.Vec3{0.25, 2, 0.5},
 		ClimbSpeed:        3.5,
+		Health:            60,
 		SourceTag:         "hl1:func_ladder",
 	}}
 	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
@@ -180,6 +183,37 @@ func TestLoadAndSpawnAuthoredLevelSpawnsLadderVolume(t *testing.T) {
 	if !found {
 		t.Fatal("expected spawned ladder volume component")
 	}
+	breakable, ok := cmd.GetComponent(entity, reflect.TypeOf(BreakableComponent{})).(*BreakableComponent)
+	if !ok || breakable == nil || breakable.Kind != "ladder" || breakable.Health != 60 || breakable.MaxHealth != 60 {
+		t.Fatalf("expected breakable ladder, got %+v", breakable)
+	}
+}
+
+func TestSpawnAuthoredBreakableOwnsNavigationBlocker(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	entity, err := spawnAuthoredLevelBreakable(cmd, nil, nil, 0, "level-a", "", content.LevelBreakableDef{
+		ID: "crate-1", BoundsCenter: content.Vec3{3, 2, 4}, BoundsHalfExtents: content.Vec3{1, 2, 0.5}, Health: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.FlushCommands()
+	marker, ok := cmd.GetComponent(entity, reflect.TypeOf(NavigationBlockerComponent{})).(*NavigationBlockerComponent)
+	if !ok || marker == nil || marker.ID != "breakable:level-a:crate-1" {
+		t.Fatalf("breakable navigation marker = %+v", marker)
+	}
+	bounds, ok := cmd.GetComponent(entity, reflect.TypeOf(AABBComponent{})).(*AABBComponent)
+	if !ok || bounds == nil || bounds.Min != (mgl32.Vec3{2, 0, 3.5}) || bounds.Max != (mgl32.Vec3{4, 4, 4.5}) {
+		t.Fatalf("breakable navigation bounds = %+v", bounds)
+	}
+	if handled, broken := DamageBreakableEntity(cmd, entity, 20, 0); !handled || !broken {
+		t.Fatalf("breakable damage = handled:%v broken:%v", handled, broken)
+	}
+	app.FlushCommands()
+	if components := cmd.GetAllComponents(entity); len(components) != 0 {
+		t.Fatalf("destroyed breakable retained navigation blocker: %+v", components)
+	}
 }
 
 func TestLoadAndSpawnAuthoredLevelSpawnsMovingBrushAndUseTrigger(t *testing.T) {
@@ -190,6 +224,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsMovingBrushAndUseTrigger(t *testing.T) {
 		ID:                "door-1",
 		Name:              "door",
 		Kind:              "hl1_func_door",
+		NavigationRole:    content.NavigationRoleDoor,
 		BoundsCenter:      content.Vec3{10, 2, 20},
 		BoundsHalfExtents: content.Vec3{0.5, 1, 0.25},
 		MoveDirection:     content.Vec3{1, 0, 0},
@@ -227,7 +262,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsMovingBrushAndUseTrigger(t *testing.T) {
 	var foundBrush, foundTrigger bool
 	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent) bool {
 		foundBrush = true
-		if brush.TargetName != "door_a" || brush.Speed != 3 || brush.BoundsCenter != (mgl32.Vec3{10, 2, 20}) {
+		if brush.NavigationRole != content.NavigationRoleDoor || brush.TargetName != "door_a" || brush.Speed != 3 || brush.BoundsCenter != (mgl32.Vec3{10, 2, 20}) {
 			t.Fatalf("moving brush component = %+v", brush)
 		}
 		return true
@@ -1552,6 +1587,55 @@ func writeProceduralAssetForLevelTest(t *testing.T, path string, assetID string)
 			Rotation: content.Quat{0, 0, 0, 1},
 			Scale:    content.Vec3{1, 1, 1},
 		},
+	}}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveAsset(path, def); err != nil {
+		t.Fatalf("SaveAsset failed: %v", err)
+	}
+}
+
+func writeAnimatedNPCAssetForStreamedTest(t *testing.T, path string, assetID string) {
+	t.Helper()
+	def := content.NewAssetDef(assetID)
+	def.ID = assetID
+	def.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: false}
+	def.Parts = []content.AssetPartDef{
+		{
+			ID:     "body",
+			Name:   "body",
+			Source: testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+		{
+			ID:       "head",
+			Name:     "head",
+			ParentID: "body",
+			Source:   testProceduralPartSource(),
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{0, 1, 0},
+				Rotation: content.Quat{0, 0, 0, 1},
+				Scale:    content.Vec3{1, 1, 1},
+			},
+		},
+	}
+	def.AnimationClips = []content.AssetAnimationClipDef{{
+		ID:       "idle",
+		Name:     "idle",
+		FPS:      10,
+		Duration: 1,
+		Loop:     true,
+		Tracks: []content.AssetAnimationTrackDef{{
+			TargetID: "body",
+			RotationKeys: []content.AssetQuatKeyDef{
+				{Time: 0, Value: content.Quat{0, 0, 0, 1}},
+				{Time: 1, Value: content.Quat{0, 0, 0, 1}},
+			},
+		}},
 	}}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)

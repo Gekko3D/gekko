@@ -181,7 +181,7 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 	}
 	for _, charger := range def.Chargers {
 		validateLevelChargerUniqueID(&result, seenIDs, charger.ID)
-		validateLevelCharger(&result, charger)
+		validateLevelCharger(&result, charger, opts)
 	}
 	for _, relay := range def.TargetRelays {
 		validateLevelTargetRelayUniqueID(&result, seenIDs, relay.ID)
@@ -199,9 +199,14 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		validateLevelPickupUniqueID(&result, seenIDs, pickup.ID)
 		validateLevelPickup(&result, pickup, opts)
 	}
+	for _, npc := range def.NPCs {
+		validateLevelNPCUniqueID(&result, seenIDs, npc.ID)
+		validateLevelNPC(&result, npc, opts)
+	}
 
 	validateLevelTerrain(&result, def, opts)
 	validateLevelBaseWorld(&result, def, opts)
+	validateLevelNavigation(&result, def, opts)
 	validateShooterLevelRequirements(&result, def, opts)
 
 	return result
@@ -401,6 +406,17 @@ func validateLevelPickupUniqueID(result *LevelValidationResult, seen map[string]
 	seen[id] = struct{}{}
 }
 
+func validateLevelNPCUniqueID(result *LevelValidationResult, seen map[string]struct{}, id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := seen[id]; ok {
+		result.addError("duplicate_npc_id", fmt.Sprintf("duplicate npc id %s", id), "", "", "", "", "", "", "")
+		return
+	}
+	seen[id] = struct{}{}
+}
+
 func isValidPlacementMode(mode LevelPlacementMode) bool {
 	switch mode {
 	case LevelPlacementModeSurfaceSnap, LevelPlacementModePlaneSnap, LevelPlacementModeFree3D:
@@ -437,6 +453,24 @@ func isValidLevelWaterBodyMode(mode LevelWaterBodyMode) bool {
 	}
 }
 
+func isValidLevelWaterSurfaceMode(mode LevelWaterSurfaceMode) bool {
+	switch mode {
+	case LevelWaterSurfaceModeVolume, LevelWaterSurfaceModeFootprint:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidLevelWaterSurfaceVisibility(visibility LevelWaterSurfaceVisibility) bool {
+	switch visibility {
+	case LevelWaterSurfaceVisibilityVisible, LevelWaterSurfaceVisibilityHidden:
+		return true
+	default:
+		return false
+	}
+}
+
 func validatePlacementAssetPath(result *LevelValidationResult, placement LevelPlacementDef, opts LevelValidationOptions) {
 	if strings.TrimSpace(placement.AssetPath) == "" || opts.DocumentPath == "" {
 		return
@@ -458,6 +492,12 @@ func validateLevelWaterBody(result *LevelValidationResult, water LevelWaterBodyD
 	}
 	if !isValidLevelWaterBodyMode(mode) {
 		result.addError("invalid_water_body_mode", fmt.Sprintf("unsupported water body mode %q", water.Mode), "", "", "", "", "", "", "")
+	}
+	if water.SurfaceMode != "" && !isValidLevelWaterSurfaceMode(water.SurfaceMode) {
+		result.addError("invalid_water_surface_mode", fmt.Sprintf("unsupported water surface mode %q", water.SurfaceMode), "", "", "", "", "", "", "")
+	}
+	if water.SurfaceVisibility != "" && !isValidLevelWaterSurfaceVisibility(water.SurfaceVisibility) {
+		result.addError("invalid_water_surface_visibility", fmt.Sprintf("unsupported water surface visibility %q", water.SurfaceVisibility), "", "", "", "", "", "", "")
 	}
 	if water.Depth <= 0 {
 		result.addError("invalid_water_body_depth", "water body depth must be positive", "", "", "", "", "", "", "")
@@ -481,11 +521,19 @@ func validateLevelLadderVolume(result *LevelValidationResult, ladder LevelLadder
 	if strings.TrimSpace(ladder.ID) == "" {
 		result.addError("empty_ladder_volume_id", "ladder volume id is required", "", "", "", "", "", "", "")
 	}
-	if ladder.BoundsHalfExtents[0] <= 0 || ladder.BoundsHalfExtents[1] <= 0 || ladder.BoundsHalfExtents[2] <= 0 {
+	if !validVec3(ladder.BoundsCenter) || !validVec3(ladder.BoundsHalfExtents) || ladder.BoundsHalfExtents[0] <= 0 || ladder.BoundsHalfExtents[1] <= 0 || ladder.BoundsHalfExtents[2] <= 0 {
 		result.addError("invalid_ladder_volume_bounds", "ladder volume requires positive bounds half extents", "", "", "", "", "", "", "")
 	}
-	if ladder.ClimbSpeed < 0 {
+	if !finite(ladder.ClimbSpeed) || ladder.ClimbSpeed < 0 {
 		result.addError("invalid_ladder_climb_speed", "ladder climb speed must be non-negative", "", "", "", "", "", "", "")
+	}
+	if !finite(ladder.Health) || ladder.Health < 0 {
+		result.addError("invalid_ladder_health", "ladder health must be non-negative", "", "", "", "", "", "", "")
+	}
+	if (ladder.MountBottom == nil) != (ladder.MountTop == nil) {
+		result.addError("incomplete_ladder_mounts", "ladder navigation mounts must provide both bottom and top", "", "", "", "", "", "", "")
+	} else if ladder.MountBottom != nil && (!validVec3(*ladder.MountBottom) || !validVec3(*ladder.MountTop) || (*ladder.MountTop)[1] <= (*ladder.MountBottom)[1]) {
+		result.addError("invalid_ladder_mounts", "ladder top mount must be finite and above bottom mount", "", "", "", "", "", "", "")
 	}
 }
 
@@ -501,6 +549,9 @@ func validateLevelMovingBrush(result *LevelValidationResult, brush LevelMovingBr
 	}
 	if brush.MoveDistance < 0 {
 		result.addError("invalid_moving_brush_distance", "moving brush move distance must be non-negative", "", "", "", "", "", "", "")
+	}
+	if role := strings.TrimSpace(brush.NavigationRole); role != "" && role != NavigationRoleDoor {
+		result.addError("invalid_moving_brush_navigation_role", fmt.Sprintf("unsupported moving brush navigation role %q", role), "", "", "", "", "", "", "")
 	}
 	if strings.TrimSpace(brush.AssetPath) != "" && opts.DocumentPath != "" {
 		resolvedPath := ResolveDocumentPath(brush.AssetPath, opts.DocumentPath)
@@ -579,7 +630,7 @@ func validateLevelChangeLevel(result *LevelValidationResult, change LevelChangeL
 	}
 }
 
-func validateLevelCharger(result *LevelValidationResult, charger LevelChargerDef) {
+func validateLevelCharger(result *LevelValidationResult, charger LevelChargerDef, opts LevelValidationOptions) {
 	if strings.TrimSpace(charger.ID) == "" {
 		result.addError("empty_charger_id", "charger id is required", "", "", "", "", "", "", "")
 	}
@@ -596,6 +647,12 @@ func validateLevelCharger(result *LevelValidationResult, charger LevelChargerDef
 	}
 	if charger.Rate < 0 {
 		result.addError("invalid_charger_rate", "charger rate must be non-negative", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(charger.AssetPath) != "" && opts.DocumentPath != "" {
+		resolvedPath := ResolveDocumentPath(charger.AssetPath, opts.DocumentPath)
+		if _, err := os.Stat(resolvedPath); err != nil {
+			result.addError("missing_charger_asset", fmt.Sprintf("missing charger asset %s", charger.AssetPath), "", "", "", "", "", "", "")
+		}
 	}
 }
 
@@ -672,6 +729,24 @@ func validateLevelPickup(result *LevelValidationResult, pickup LevelPickupDef, o
 		resolvedPath := ResolveDocumentPath(pickup.AssetPath, opts.DocumentPath)
 		if _, err := os.Stat(resolvedPath); err != nil {
 			result.addError("missing_pickup_asset", fmt.Sprintf("missing pickup asset %s", pickup.AssetPath), "", "", "", "", "", "", "")
+		}
+	}
+}
+
+func validateLevelNPC(result *LevelValidationResult, npc LevelNPCDef, opts LevelValidationOptions) {
+	if strings.TrimSpace(npc.ID) == "" {
+		result.addError("empty_npc_id", "npc id is required", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(npc.ClassName) == "" {
+		result.addError("empty_npc_class_name", "npc class_name is required", "", "", "", "", "", "", "")
+	}
+	if npc.Health < 0 {
+		result.addError("invalid_npc_health", "npc health must be non-negative", "", "", "", "", "", "", "")
+	}
+	if strings.TrimSpace(npc.AssetPath) != "" && opts.DocumentPath != "" {
+		resolvedPath := ResolveDocumentPath(npc.AssetPath, opts.DocumentPath)
+		if _, err := os.Stat(resolvedPath); err != nil {
+			result.addError("missing_npc_asset", fmt.Sprintf("missing npc asset %s", npc.AssetPath), "", "", "", "", "", "", "")
 		}
 	}
 }
@@ -919,6 +994,42 @@ func validateLevelBaseWorld(result *LevelValidationResult, def *LevelDef, opts L
 	}
 }
 
+func validateLevelNavigation(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions) {
+	if def == nil || def.Navigation == nil {
+		return
+	}
+	path := strings.TrimSpace(def.Navigation.ManifestPath)
+	if path == "" {
+		result.addError("empty_navigation_manifest_path", "navigation manifest_path is required", "", "", "", "", "", "", path)
+		return
+	}
+	resolved := ResolveDocumentPath(path, opts.DocumentPath)
+	if strings.ToLower(filepath.Ext(resolved)) != NavGraphManifestExtension {
+		result.addError("invalid_navigation_manifest_path", fmt.Sprintf("navigation manifest_path must point to a %s: %s", NavGraphManifestExtension, path), "", "", "", "", "", "", path)
+		return
+	}
+	if opts.DocumentPath == "" {
+		return
+	}
+	manifest, err := LoadNavGraphManifest(resolved)
+	if err != nil {
+		result.addError("invalid_navigation_manifest", fmt.Sprintf("failed to load navigation manifest %s: %v", path, err), "", "", "", "", "", "", path)
+		return
+	}
+	if def.BaseWorld != nil {
+		worldPath := ResolveDocumentPath(def.BaseWorld.ManifestPath, opts.DocumentPath)
+		if world, err := LoadImportedWorld(worldPath); err == nil && manifest.SourceWorldID != "" && manifest.SourceWorldID != world.WorldID {
+			result.addError("navigation_source_world_id_mismatch", fmt.Sprintf("navigation source world id %q does not match base world %q", manifest.SourceWorldID, world.WorldID), "", "", "", "", "", "", path)
+		}
+	}
+	if def.ChunkSize > 0 && manifest.ChunkSize != def.ChunkSize {
+		result.addError("navigation_chunk_size_mismatch", fmt.Sprintf("navigation chunk size %d does not match level chunk size %d", manifest.ChunkSize, def.ChunkSize), "", "", "", "", "", "", path)
+	}
+	if def.VoxelResolution > 0 && absLevelFloat32(manifest.VoxelResolution-def.VoxelResolution) > 1e-4 {
+		result.addError("navigation_voxel_resolution_mismatch", fmt.Sprintf("navigation voxel size %.4f does not match level voxel size %.4f", manifest.VoxelResolution, def.VoxelResolution), "", "", "", "", "", "", path)
+	}
+}
+
 func validateShooterLevelRequirements(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions) {
 	if def == nil || !levelNeedsShooterValidation(def) {
 		return
@@ -927,10 +1038,20 @@ func validateShooterLevelRequirements(result *LevelValidationResult, def *LevelD
 		result.addError("missing_shooter_base_world", "shooter level requires an imported base world", "", "", "", "", "", "", "")
 		return
 	}
-	if _, ok := FindLevelMarkerByKind(def.Markers, LevelMarkerKindPlayerSpawn); !ok {
-		result.addError("missing_player_spawn", "shooter level requires a player_spawn marker", "", "", "", "", "", "", "")
+	spawnKind := shooterPlayerSpawnKind(def)
+	if _, ok := FindLevelMarkerByKind(def.Markers, spawnKind); !ok {
+		result.addError("missing_player_spawn", fmt.Sprintf("shooter level requires a %s marker", spawnKind), "", "", "", "", "", "", "")
 	}
 	validateShooterMarkerPlacement(result, def, opts)
+}
+
+func shooterPlayerSpawnKind(def *LevelDef) string {
+	if def != nil && def.Player != nil {
+		if spawnKind := strings.TrimSpace(def.Player.SpawnKind); spawnKind != "" {
+			return spawnKind
+		}
+	}
+	return LevelMarkerKindPlayerSpawn
 }
 
 func levelNeedsShooterValidation(def *LevelDef) bool {
@@ -971,6 +1092,9 @@ func validateShooterMarkerPlacement(result *LevelValidationResult, def *LevelDef
 	}
 	chunkCache := make(map[TerrainChunkCoordDef]*ImportedWorldChunkDef)
 	for _, marker := range def.Markers {
+		if !isShooterPlacementMarker(def, marker) {
+			continue
+		}
 		position := marker.Transform.Position
 		chunkCoord := TerrainChunkCoordDef{
 			X: int(floorLevelFloat32(position[0] / chunkWorldSize)),
@@ -1004,6 +1128,15 @@ func validateShooterMarkerPlacement(result *LevelValidationResult, def *LevelDef
 		if importedWorldChunkHasVoxel(chunk, localX, localY, localZ) {
 			result.addError("marker_inside_solid", fmt.Sprintf("marker %s is placed inside solid imported geometry", marker.ID), "", "", "", "", marker.ID, "", def.BaseWorld.ManifestPath)
 		}
+	}
+}
+
+func isShooterPlacementMarker(def *LevelDef, marker LevelMarkerDef) bool {
+	switch marker.Kind {
+	case LevelMarkerKindPlayerSpawn, LevelMarkerKindAISpawn:
+		return true
+	default:
+		return marker.Kind == shooterPlayerSpawnKind(def)
 	}
 }
 

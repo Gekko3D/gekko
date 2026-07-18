@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gekko3d/gekko/content"
+	contentderived "github.com/gekko3d/gekko/content/derived"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -21,6 +22,7 @@ const MarkerKindHL1DoorRotating = "hl1_func_door_rotating"
 const MarkerKindHL1Button = "hl1_func_button"
 const MarkerKindHL1MovingBrush = "hl1_moving_brush"
 const MarkerKindHL1Pickup = "hl1_pickup"
+const MarkerKindHL1NPC = "hl1_npc_spawn"
 const MovingBrushKindHL1Door = "hl1_func_door"
 const MovingBrushKindHL1DoorRotating = "hl1_func_door_rotating"
 const MovingBrushKindHL1Button = "hl1_func_button"
@@ -37,6 +39,7 @@ const ChangeLevelKindHL1TriggerChangeLevel = "hl1_trigger_changelevel"
 const MultiTargetKindHL1MultiManager = "hl1_multi_manager"
 const TargetRelayKindHL1TriggerRelay = "hl1_trigger_relay"
 const BreakableKindHL1FuncBreakable = "hl1_func_breakable"
+const NPCKindHL1Monster = "hl1_monster"
 const DefaultMaxEmissiveSurfaceLights = 64
 const DefaultHL1LadderClimbSpeed = 200 * HammerUnitMeters
 
@@ -46,8 +49,11 @@ type GeneratedLevelResult struct {
 	LevelPath          string
 	Level              *content.LevelDef
 	LightFixtureAssets []GeneratedAssetResult
+	StaticBrushAssets  []GeneratedAssetResult
 	MovingBrushAssets  []GeneratedAssetResult
+	ChargerAssets      []GeneratedAssetResult
 	BreakableAssets    []GeneratedAssetResult
+	Progress           ImportProgressFunc
 }
 
 type GeneratedAssetResult struct {
@@ -64,6 +70,11 @@ func BuildGeneratedLevelWithGameAssets(opts ImportOptions, summary ImportSummary
 }
 
 func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath string, gameAssets *GameAssetImportResult, voxelizedWorld ...VoxelizeResult) (GeneratedLevelResult, error) {
+	var profileErr error
+	opts, profileErr = ApplyHL1ExportProfile(opts)
+	if profileErr != nil {
+		return GeneratedLevelResult{}, profileErr
+	}
 	if manifestPath == "" {
 		return GeneratedLevelResult{}, fmt.Errorf("manifest path is empty")
 	}
@@ -75,6 +86,7 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	level.ChunkSize = opts.ChunkSize
 	level.VoxelResolution = opts.VoxelResolution
 	level.Tags = []string{"source:hl1", "debug:surface_voxel"}
+	level.Tags = append(level.Tags, HL1ExportProfileTags(opts.ExportProfile)...)
 	level.Player = hl1LevelPlayerDef()
 	directionalCastsShadows := true
 	level.Environment = &content.LevelEnvironmentDef{
@@ -89,11 +101,17 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 		CollisionEnabled:  true,
 		Tags:              []string{"source:hl1", "debug:surface_voxel"},
 	}
+	level.BaseWorld.Tags = append(level.BaseWorld.Tags, HL1ExportProfileTags(opts.ExportProfile)...)
 	waterFaces := summary.AllFaces
 	if len(waterFaces) == 0 {
 		waterFaces = summary.WorldFaces
 	}
-	level.WaterBodies = buildHL1WaterBodies(summary.BSP, waterFaces, opts.VoxelResolution)
+	if len(voxelizedWorld) > 0 {
+		level.WaterBodies = buildHL1WaterBodiesFromTopCells(voxelizedWorld[0].LiquidTopCells, opts.VoxelResolution)
+	}
+	if len(level.WaterBodies) == 0 {
+		level.WaterBodies = buildHL1WaterBodies(summary.BSP, waterFaces, opts.VoxelResolution)
+	}
 	if spawn, ok := firstImportEntityByClass(summary.Map.Entities, "info_player_start"); ok {
 		level.Markers = append(level.Markers, content.LevelMarkerDef{
 			ID:   "hl1_player_spawn_0",
@@ -109,15 +127,24 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 	}
 	level.Markers = append(level.Markers, buildHL1GameplayMarkers(summary.Map.Entities)...)
 	level.Pickups = buildHL1Pickups(summary.Map.Entities, levelPath, gameAssets)
+	level.NPCs = buildHL1NPCs(summary.Map.Entities, levelPath, gameAssets)
 	level.LadderVolumes = buildHL1LadderVolumes(summary.Map.Entities, opts.VoxelResolution)
 	level.PathNodes = buildHL1PathNodes(summary.Map.Entities)
+	staticBrushAssets, err := buildHL1StaticBrushAssets(opts, summary)
+	if err != nil {
+		return GeneratedLevelResult{}, err
+	}
 	movingBrushes, movingBrushAssets, err := buildHL1MovingBrushes(opts, summary, levelPath)
 	if err != nil {
 		return GeneratedLevelResult{}, err
 	}
 	level.MovingBrushes = movingBrushes
 	level.UseTriggers = buildHL1UseTriggers(summary.Map.Entities)
-	level.Chargers = buildHL1Chargers(summary.Map.Entities)
+	chargers, chargerAssets, err := buildHL1Chargers(opts, summary, levelPath)
+	if err != nil {
+		return GeneratedLevelResult{}, err
+	}
+	level.Chargers = chargers
 	level.TriggerVolumes = buildHL1TriggerVolumes(summary.Map.Entities)
 	level.DamageVolumes = buildHL1DamageVolumes(summary.Map.Entities)
 	level.ChangeLevels = buildHL1ChangeLevels(summary.Map.Entities)
@@ -143,10 +170,27 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 			return GeneratedLevelResult{}, err
 		}
 		content.EnsureLevelIDs(level)
-		return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, LightFixtureAssets: assets, MovingBrushAssets: movingBrushAssets, BreakableAssets: breakableAssets}, nil
+		return GeneratedLevelResult{
+			LevelPath:          filepath.Clean(levelPath),
+			Level:              level,
+			LightFixtureAssets: assets,
+			StaticBrushAssets:  staticBrushAssets,
+			MovingBrushAssets:  movingBrushAssets,
+			ChargerAssets:      chargerAssets,
+			BreakableAssets:    breakableAssets,
+			Progress:           opts.Progress,
+		}, nil
 	}
 	content.EnsureLevelIDs(level)
-	return GeneratedLevelResult{LevelPath: filepath.Clean(levelPath), Level: level, MovingBrushAssets: movingBrushAssets, BreakableAssets: breakableAssets}, nil
+	return GeneratedLevelResult{
+		LevelPath:         filepath.Clean(levelPath),
+		Level:             level,
+		StaticBrushAssets: staticBrushAssets,
+		MovingBrushAssets: movingBrushAssets,
+		ChargerAssets:     chargerAssets,
+		BreakableAssets:   breakableAssets,
+		Progress:          opts.Progress,
+	}, nil
 }
 
 func hl1LevelPlayerDef() *content.LevelPlayerDef {
@@ -158,6 +202,11 @@ func hl1LevelPlayerDef() *content.LevelPlayerDef {
 		StepHeight: 18 * HammerUnitMeters,
 		Tags:       []string{"source:hl1", "hull:standing"},
 	}
+}
+
+func hl1FaceNormalLooksWalkable(face Face) bool {
+	normal := hammerVectorToGekko(face.Normal)
+	return normal.Y >= 0.6
 }
 
 func buildHL1GeneratedAssetPlacements(entities []importcommon.Entity, levelPath string, gameAssets *GameAssetImportResult) []content.LevelPlacementDef {
@@ -173,6 +222,9 @@ func buildHL1GeneratedAssetPlacements(entities []importcommon.Entity, levelPath 
 	countsByBase := map[string]int{}
 	for _, entity := range entities {
 		if _, ok := hl1PickupClass(entity.ClassName); ok {
+			continue
+		}
+		if _, ok := hl1NPCClass(entity.ClassName); ok {
 			continue
 		}
 		if entity.KeyValues == nil {
@@ -239,7 +291,13 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 	if result.Level == nil {
 		return fmt.Errorf("level is nil")
 	}
-	for _, asset := range append(append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.MovingBrushAssets...), result.BreakableAssets...) {
+	generatedAssets := append(append(append(append(append([]GeneratedAssetResult(nil), result.LightFixtureAssets...), result.StaticBrushAssets...), result.MovingBrushAssets...), result.ChargerAssets...), result.BreakableAssets...)
+	reportImportProgress(result.Progress, ImportProgress{
+		Stage: ImportProgressStageSaveLevelAssets,
+		Total: len(generatedAssets),
+		Path:  result.LevelPath,
+	})
+	for i, asset := range generatedAssets {
 		if asset.Asset == nil {
 			return fmt.Errorf("generated asset is nil")
 		}
@@ -249,11 +307,41 @@ func SaveGeneratedLevel(result GeneratedLevelResult) error {
 		if err := content.SaveAsset(asset.AssetPath, asset.Asset); err != nil {
 			return err
 		}
+		reportImportProgress(result.Progress, ImportProgress{
+			Stage:   ImportProgressStageSaveLevelAssets,
+			Current: i + 1,
+			Total:   len(generatedAssets),
+			Path:    asset.AssetPath,
+		})
 	}
 	if err := os.MkdirAll(filepath.Dir(result.LevelPath), 0755); err != nil {
 		return err
 	}
+	reportImportProgress(result.Progress, ImportProgress{
+		Stage: ImportProgressStageSaveAuxSidecars,
+		Path:  result.LevelPath,
+	})
+	if err := ensureGeneratedLevelBaseWorldAuxSidecars(result); err != nil {
+		return err
+	}
 	return content.SaveLevel(result.LevelPath, result.Level)
+}
+
+func ensureGeneratedLevelBaseWorldAuxSidecars(result GeneratedLevelResult) error {
+	if result.Level == nil || result.Level.BaseWorld == nil || strings.TrimSpace(result.Level.BaseWorld.ManifestPath) == "" || strings.TrimSpace(result.LevelPath) == "" {
+		return nil
+	}
+	manifestPath := content.ResolveDocumentPath(result.Level.BaseWorld.ManifestPath, result.LevelPath)
+	if _, err := os.Stat(manifestPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := contentderived.EnsureImportedWorldAuxSidecarsForManifest(manifestPath); err != nil {
+		return fmt.Errorf("precalculate base-world aux sidecars: %w", err)
+	}
+	return nil
 }
 
 func buildHL1GameplayMarkers(entities []importcommon.Entity) []content.LevelMarkerDef {
@@ -318,9 +406,10 @@ func buildHL1Pickups(entities []importcommon.Entity, levelPath string, gameAsset
 		}
 		className := strings.ToLower(entity.ClassName)
 		assetPath := ""
-		if modelRef := hl1PickupModelRef(className); modelRef != "" {
+		for _, modelRef := range hl1PickupModelRefs(className) {
 			if generatedPath := generatedByRef[normalizedHL1AssetRef(modelRef)]; generatedPath != "" {
 				assetPath = filepath.ToSlash(relativeOrBase(levelDir, generatedPath))
+				break
 			}
 		}
 		index := countsByClass[className]
@@ -430,6 +519,17 @@ func hl1PickupModelRef(className string) string {
 	}
 }
 
+func hl1PickupModelRefs(className string) []string {
+	modelRef := hl1PickupModelRef(className)
+	if modelRef == "" {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(className), "weapon_tripmine") {
+		return []string{modelRef, "models/p_tripmine.mdl"}
+	}
+	return []string{modelRef}
+}
+
 func hl1PickupDefaultAmount(pickup hl1PickupInfo) int {
 	switch pickup.Category {
 	case "ammo":
@@ -473,6 +573,209 @@ func hl1PickupTags(entity importcommon.Entity, pickup hl1PickupInfo) []string {
 			break
 		}
 		value := strings.TrimSpace(entity.KeyValues[key])
+		if value == "" {
+			continue
+		}
+		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
+	}
+	return tags
+}
+
+type hl1NPCInfo struct {
+	ClassName string
+	Role      string
+}
+
+func hl1NPCClass(className string) (hl1NPCInfo, bool) {
+	className = strings.ToLower(strings.TrimSpace(className))
+	if !strings.HasPrefix(className, "monster_") {
+		return hl1NPCInfo{}, false
+	}
+	role := strings.TrimPrefix(className, "monster_")
+	switch className {
+	case "monster_scientist",
+		"monster_barney",
+		"monster_headcrab",
+		"monster_babycrab",
+		"monster_zombie",
+		"monster_houndeye",
+		"monster_bullsquid",
+		"monster_alien_slave",
+		"monster_alien_grunt",
+		"monster_human_grunt",
+		"monster_human_assassin",
+		"monster_alien_controller",
+		"monster_controller",
+		"monster_gargantua",
+		"monster_bigmomma",
+		"monster_tentacle",
+		"monster_ichthyosaur",
+		"monster_turret",
+		"monster_miniturret",
+		"monster_sentry",
+		"monster_apache",
+		"monster_osprey":
+		return hl1NPCInfo{ClassName: className, Role: role}, true
+	default:
+		return hl1NPCInfo{}, false
+	}
+}
+
+func buildHL1NPCs(entities []importcommon.Entity, levelPath string, gameAssets *GameAssetImportResult) []content.LevelNPCDef {
+	npcs := make([]content.LevelNPCDef, 0)
+	countsByClass := map[string]int{}
+	generatedByRef := generatedHL1AssetPathsByRef(nil)
+	if gameAssets != nil && gameAssets.Manifest != nil {
+		generatedByRef = generatedHL1AssetPathsByRef(gameAssets.Manifest.Assets)
+	}
+	levelDir := filepath.Dir(levelPath)
+	for _, entity := range entities {
+		npcInfo, ok := hl1NPCClass(entity.ClassName)
+		if !ok {
+			continue
+		}
+		className := npcInfo.ClassName
+		modelRef := hl1NPCModelRef(className, entity)
+		assetPath := ""
+		if modelRef != "" {
+			if generatedPath := generatedByRef[normalizedHL1AssetRef(modelRef)]; generatedPath != "" {
+				assetPath = filepath.ToSlash(relativeOrBase(levelDir, generatedPath))
+			}
+		}
+		index := countsByClass[className]
+		countsByClass[className]++
+		npcs = append(npcs, content.LevelNPCDef{
+			ID:         fmt.Sprintf("hl1_npc_%s_%d", className, index),
+			Name:       hl1EntityDisplayName(entity, className),
+			Kind:       NPCKindHL1Monster,
+			AssetPath:  assetPath,
+			ClassName:  className,
+			ModelRef:   modelRef,
+			Transform:  hl1PointEntityTransform(entity),
+			Health:     hl1NPCDefaultHealth(className),
+			TargetName: hl1StringKey(entity, "targetname"),
+			Target:     hl1StringKey(entity, "target"),
+			SquadName:  hl1NPCSquadName(entity),
+			SpawnFlags: hl1IntKey(entity, "spawnflags"),
+			SourceTag:  "hl1:" + className,
+			Tags:       hl1NPCTags(entity, npcInfo),
+		})
+	}
+	return npcs
+}
+
+func hl1PointEntityTransform(entity importcommon.Entity) content.LevelTransformDef {
+	return content.LevelTransformDef{
+		Position: content.Vec3{entity.WorldPosition.X, entity.WorldPosition.Y, entity.WorldPosition.Z},
+		Rotation: hl1StaticModelRotation(entity),
+		Scale:    content.Vec3{1, 1, 1},
+	}
+}
+
+func hl1NPCModelRef(className string, entity importcommon.Entity) string {
+	if entity.KeyValues != nil {
+		if modelRef := strings.TrimSpace(entity.KeyValues["model"]); modelRef != "" && !strings.HasPrefix(modelRef, "*") && hl1AssetKindForRef(modelRef) == "model" {
+			return filepath.ToSlash(modelRef)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(className)) {
+	case "monster_scientist":
+		return "models/scientist.mdl"
+	case "monster_barney":
+		return "models/barney.mdl"
+	case "monster_headcrab":
+		return "models/headcrab.mdl"
+	case "monster_babycrab":
+		return "models/baby_headcrab.mdl"
+	case "monster_zombie":
+		return "models/zombie.mdl"
+	case "monster_houndeye":
+		return "models/houndeye.mdl"
+	case "monster_bullsquid":
+		return "models/bullsquid.mdl"
+	case "monster_alien_slave":
+		return "models/islave.mdl"
+	case "monster_alien_grunt":
+		return "models/agrunt.mdl"
+	case "monster_human_grunt":
+		return "models/hgrunt.mdl"
+	case "monster_human_assassin":
+		return "models/hassassin.mdl"
+	case "monster_alien_controller", "monster_controller":
+		return "models/controller.mdl"
+	case "monster_gargantua":
+		return "models/garg.mdl"
+	case "monster_bigmomma":
+		return "models/big_mom.mdl"
+	case "monster_tentacle":
+		return "models/tentacle2.mdl"
+	case "monster_ichthyosaur":
+		return "models/icky.mdl"
+	case "monster_turret":
+		return "models/turret.mdl"
+	case "monster_miniturret":
+		return "models/miniturret.mdl"
+	case "monster_sentry":
+		return "models/sentry.mdl"
+	case "monster_apache":
+		return "models/apache.mdl"
+	case "monster_osprey":
+		return "models/osprey.mdl"
+	default:
+		return ""
+	}
+}
+
+func hl1NPCDefaultHealth(className string) float32 {
+	switch strings.ToLower(strings.TrimSpace(className)) {
+	case "monster_scientist":
+		return 20
+	case "monster_barney":
+		return 35
+	case "monster_headcrab", "monster_babycrab":
+		return 10
+	case "monster_zombie":
+		return 50
+	case "monster_houndeye":
+		return 20
+	case "monster_bullsquid":
+		return 40
+	case "monster_alien_slave":
+		return 30
+	case "monster_alien_grunt":
+		return 60
+	case "monster_human_grunt", "monster_human_assassin":
+		return 50
+	default:
+		return 1
+	}
+}
+
+func hl1NPCSquadName(entity importcommon.Entity) string {
+	if squad := hl1StringKey(entity, "squadname"); squad != "" {
+		return squad
+	}
+	return hl1StringKey(entity, "netname")
+}
+
+func hl1NPCTags(entity importcommon.Entity, npc hl1NPCInfo) []string {
+	className := strings.ToLower(strings.TrimSpace(entity.ClassName))
+	if npc.ClassName != "" {
+		className = npc.ClassName
+	}
+	tags := []string{
+		"source:hl1",
+		"classname:" + className,
+		"npc:hl1",
+	}
+	if npc.Role != "" {
+		tags = append(tags, "npc_role:"+npc.Role)
+	}
+	if modelRef := hl1NPCModelRef(className, entity); modelRef != "" {
+		tags = append(tags, "model:"+filepath.ToSlash(modelRef))
+	}
+	for _, key := range []string{"targetname", "target", "squadname", "netname", "spawnflags"} {
+		value := hl1StringKey(entity, key)
 		if value == "" {
 			continue
 		}
@@ -560,6 +863,47 @@ func buildHL1PathNodes(entities []importcommon.Entity) []content.LevelPathNodeDe
 	return out
 }
 
+func buildHL1StaticBrushAssets(opts ImportOptions, summary ImportSummary) ([]GeneratedAssetResult, error) {
+	if summary.BSP == nil {
+		return nil, nil
+	}
+	wads, _ := LoadResolvedWADs(summary.Report.Source.WADPaths)
+	textureStore := NewTextureStore(summary.BSP.Textures, wads)
+	materialColors := materialColorMap(summary.Map.Materials)
+	countsByClass := map[string]int{}
+	assets := make([]GeneratedAssetResult, 0)
+	for _, entity := range summary.Map.Entities {
+		if !visibleBrushEntityClass(entity.ClassName) || entity.BrushModelID <= 0 {
+			continue
+		}
+		className := strings.ToLower(strings.TrimSpace(entity.ClassName))
+		index := countsByClass[className]
+		countsByClass[className]++
+		assetID := fmt.Sprintf("hl1_static_%s_%d", className, index)
+		result, _, err := buildHL1MovingBrushAsset(opts, summary.BSP, textureStore, materialColors, entity, assetID)
+		if err != nil {
+			return nil, err
+		}
+		if result.Asset == nil {
+			continue
+		}
+		result.AssetPath = filepath.Clean(filepath.Join(opts.OutputRoot, "assets", "hl1", "static_brushes", assetID+".gkasset"))
+		result.Asset.Tags = []string{"source:hl1", "static_prop", "source_kind:bsp_brush", "classname:" + className}
+		for i := range result.Asset.Parts {
+			result.Asset.Parts[i].Tags = []string{"source:hl1", "static_prop", "source_kind:bsp_brush"}
+		}
+		for i := range result.Asset.Materials {
+			for j, tag := range result.Asset.Materials[i].Tags {
+				if tag == "source_asset:moving_brush" {
+					result.Asset.Materials[i].Tags[j] = "source_asset:bsp_brush"
+				}
+			}
+		}
+		assets = append(assets, result)
+	}
+	return assets, nil
+}
+
 func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath string) ([]content.LevelMovingBrushDef, []GeneratedAssetResult, error) {
 	entities := summary.Map.Entities
 	out := make([]content.LevelMovingBrushDef, 0)
@@ -597,10 +941,14 @@ func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath 
 			Speed:             hl1MovingBrushSpeed(entity),
 			Wait:              hl1FloatKey(entity, "wait"),
 			Lip:               hl1FloatKey(entity, "lip") * HammerUnitMeters,
+			SpawnFlags:        hl1IntKey(entity, "spawnflags"),
 			TargetName:        hl1StringKey(entity, "targetname"),
 			Target:            hl1StringKey(entity, "target"),
 			SourceTag:         "hl1:" + className,
 			Tags:              hl1GameplayMarkerTags(entity, bounds),
+		}
+		if kind == MovingBrushKindHL1Door || kind == MovingBrushKindHL1DoorRotating {
+			brush.NavigationRole = content.NavigationRoleDoor
 		}
 		if summary.BSP != nil && hl1MovingBrushHasSeparateVisual(className) {
 			asset, visualOrigin, err := buildHL1MovingBrushAsset(opts, summary.BSP, textureStore, materialColors, entity, brush.ID)
@@ -713,8 +1061,16 @@ func buildHL1UseTriggers(entities []importcommon.Entity) []content.LevelUseTrigg
 	return out
 }
 
-func buildHL1Chargers(entities []importcommon.Entity) []content.LevelChargerDef {
+func buildHL1Chargers(opts ImportOptions, summary ImportSummary, levelPath string) ([]content.LevelChargerDef, []GeneratedAssetResult, error) {
+	entities := summary.Map.Entities
 	out := make([]content.LevelChargerDef, 0)
+	assets := make([]GeneratedAssetResult, 0)
+	var textureStore *TextureStore
+	materialColors := materialColorMap(summary.Map.Materials)
+	if summary.BSP != nil {
+		wads, _ := LoadResolvedWADs(summary.Report.Source.WADPaths)
+		textureStore = NewTextureStore(summary.BSP.Textures, wads)
+	}
 	countsByClass := map[string]int{}
 	for _, entity := range entities {
 		kind, chargeKind, ok := hl1ChargerKind(entity.ClassName)
@@ -726,8 +1082,9 @@ func buildHL1Chargers(entities []importcommon.Entity) []content.LevelChargerDef 
 		countsByClass[className]++
 		bounds := entity.BrushWorldBounds
 		center, halfExtents := contentBoundsCenterHalfExtents(bounds)
-		out = append(out, content.LevelChargerDef{
-			ID:                fmt.Sprintf("hl1_charger_%s_%d", className, index),
+		chargerID := fmt.Sprintf("hl1_charger_%s_%d", className, index)
+		charger := content.LevelChargerDef{
+			ID:                chargerID,
 			Name:              hl1EntityDisplayName(entity, className),
 			Kind:              kind,
 			BoundsCenter:      center,
@@ -739,9 +1096,21 @@ func buildHL1Chargers(entities []importcommon.Entity) []content.LevelChargerDef 
 			SpawnFlags:        hl1IntKey(entity, "spawnflags"),
 			SourceTag:         "hl1:" + className,
 			Tags:              hl1ChargerTags(entity, bounds),
-		})
+		}
+		if summary.BSP != nil {
+			asset, visualOrigin, err := buildHL1ChargerAsset(opts, summary.BSP, textureStore, materialColors, entity, chargerID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if asset.Asset != nil {
+				charger.AssetPath = filepath.ToSlash(relativeOrBase(filepath.Dir(levelPath), asset.AssetPath))
+				charger.VisualOrigin = visualOrigin
+				assets = append(assets, asset)
+			}
+		}
+		out = append(out, charger)
 	}
-	return out
+	return out, assets, nil
 }
 
 func hl1ChargerKind(className string) (string, string, bool) {
@@ -772,6 +1141,52 @@ func hl1ChargerTags(entity importcommon.Entity, bounds importcommon.Bounds) []st
 		tags = append(tags, "hl1_"+key+":"+strings.ReplaceAll(value, " ", ","))
 	}
 	return tags
+}
+
+func buildHL1ChargerAsset(opts ImportOptions, bsp *BSP, textureStore *TextureStore, materialColors map[int][4]uint8, entity importcommon.Entity, chargerID string) (GeneratedAssetResult, content.Vec3, error) {
+	if bsp == nil || entity.BrushModelID <= 0 {
+		return GeneratedAssetResult{}, content.Vec3{}, nil
+	}
+	voxelResolution := EffectiveHL1VoxelResolutionPolicy(opts).Resolution(HL1VoxelResolutionCategoryFixture)
+	faces, err := bsp.ModelFaces(entity.BrushModelID)
+	if err != nil {
+		return GeneratedAssetResult{}, content.Vec3{}, fmt.Errorf("model %d charger faces: %w", entity.BrushModelID, err)
+	}
+	voxelized := VoxelizeFacesCPU(faces, VoxelizeOptions{
+		VoxelResolution:     voxelResolution,
+		TextureStore:        textureStore,
+		LightingData:        bsp.LightingData,
+		BakeStaticLightmaps: opts.BakeStaticLightmaps,
+		MaterialColors:      materialColors,
+	})
+	fillHL1ClosedAssetInterior(&voxelized)
+	if len(voxelized.Voxels) == 0 {
+		return GeneratedAssetResult{}, content.Vec3{}, nil
+	}
+	localVoxels, visualOrigin := localizeHL1MovingBrushVoxels(voxelized.Voxels, voxelResolution)
+	asset := content.NewAssetDef(chargerID)
+	asset.Tags = []string{"source:hl1", "charger", "classname:" + strings.ToLower(entity.ClassName)}
+	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
+	asset.Materials = assetMaterialsForHL1Voxels(voxelized.Materials, localVoxels)
+	asset.Parts = []content.AssetPartDef{{
+		ID:              "charger",
+		Name:            "charger",
+		VoxelResolution: voxelResolution,
+		Transform: content.AssetTransformDef{
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxelShape,
+			VoxelShape: &content.AssetVoxelShapeDef{
+				Palette: assetVoxelPaletteForMaterials(asset.Materials),
+				Voxels:  localVoxels,
+			},
+		},
+		Tags: []string{"source:hl1", "charger"},
+	}}
+	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "chargers", chargerID+".gkasset")
+	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
 }
 
 func buildHL1TriggerVolumes(entities []importcommon.Entity) []content.LevelTriggerVolumeDef {
@@ -1052,12 +1467,13 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 	if bsp == nil || entity.BrushModelID <= 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}
+	voxelResolution := EffectiveHL1VoxelResolutionPolicy(opts).Resolution(HL1VoxelResolutionCategoryBrushModel)
 	faces, err := bsp.ModelFaces(entity.BrushModelID)
 	if err != nil {
 		return GeneratedAssetResult{}, content.Vec3{}, fmt.Errorf("model %d moving brush faces: %w", entity.BrushModelID, err)
 	}
 	voxelized := VoxelizeFacesCPU(faces, VoxelizeOptions{
-		VoxelResolution:       opts.VoxelResolution,
+		VoxelResolution:       voxelResolution,
 		TextureStore:          textureStore,
 		LightingData:          bsp.LightingData,
 		BakeStaticLightmaps:   opts.BakeStaticLightmaps,
@@ -1065,10 +1481,11 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 		ScrollDirectionHammer: hl1ConveyorDirectionHammer(entity),
 	})
 	materializeHL1ScrollAssetVoxels(&voxelized)
+	fillHL1ClosedAssetInterior(&voxelized)
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}
-	localVoxels, visualOrigin := localizeHL1MovingBrushVoxels(voxelized.Voxels, opts.VoxelResolution)
+	localVoxels, visualOrigin := localizeHL1MovingBrushVoxels(voxelized.Voxels, voxelResolution)
 	asset := content.NewAssetDef(brushID)
 	asset.Tags = []string{"source:hl1", "moving_brush", "classname:" + strings.ToLower(entity.ClassName)}
 	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
@@ -1077,7 +1494,7 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 	asset.Parts = []content.AssetPartDef{{
 		ID:              "brush",
 		Name:            "brush",
-		VoxelResolution: opts.VoxelResolution,
+		VoxelResolution: voxelResolution,
 		Transform: content.AssetTransformDef{
 			Rotation: content.Quat{0, 0, 0, 1},
 			Scale:    content.Vec3{1, 1, 1},
@@ -1093,6 +1510,58 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 	}}
 	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "moving_brushes", brushID+".gkasset")
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
+}
+
+func fillHL1ClosedAssetInterior(result *VoxelizeResult) {
+	if result == nil || len(result.Voxels) == 0 {
+		return
+	}
+	surface := make(map[[3]int]importcommon.Voxel, len(result.Voxels))
+	filled := make(map[[3]int]importcommon.Voxel, len(result.Voxels))
+	for _, voxel := range result.Voxels {
+		key := [3]int{voxel.X, voxel.Y, voxel.Z}
+		surface[key] = voxel
+		filled[key] = voxel
+	}
+	fillClosedInterior(filled)
+	candidates := make(map[[3]int]struct{}, len(filled)-len(surface))
+	for key := range filled {
+		if _, ok := surface[key]; !ok {
+			candidates[key] = struct{}{}
+		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	fallbackMaterialID := firstStructuralMaterialID(result.Materials)
+	fillMaterials := propagateStructuralFillMaterials(surface, candidates, fallbackMaterialID)
+	paletteByMaterialID := make(map[int]uint8, len(result.Materials))
+	for _, material := range result.Materials {
+		palette := material.PaletteIndex
+		if palette == 0 && material.ID > 0 && material.ID <= 255 {
+			palette = uint8(material.ID)
+		}
+		if material.ID > 0 && palette != 0 {
+			paletteByMaterialID[material.ID] = palette
+		}
+	}
+	for key := range candidates {
+		materialID := fillMaterials[key]
+		if materialID <= 0 {
+			materialID = fallbackMaterialID
+		}
+		palette := paletteByMaterialID[materialID]
+		if palette == 0 {
+			palette = uint8(min(max(materialID, 1), 255))
+		}
+		voxel := filled[key]
+		voxel.Palette = palette
+		voxel.MaterialID = materialID
+		voxel.SolidKind = "interior_fill"
+		filled[key] = voxel
+	}
+	result.Voxels = voxelsToSortedSlice(filled)
+	result.FilledCount += len(candidates)
 }
 
 type hl1ScrollAssetMaterialKey struct {
@@ -1179,21 +1648,23 @@ func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureS
 	if bsp == nil || entity.BrushModelID <= 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}
+	voxelResolution := EffectiveHL1VoxelResolutionPolicy(opts).Resolution(HL1VoxelResolutionCategoryBrushModel)
 	faces, err := bsp.ModelFaces(entity.BrushModelID)
 	if err != nil {
 		return GeneratedAssetResult{}, content.Vec3{}, fmt.Errorf("model %d breakable faces: %w", entity.BrushModelID, err)
 	}
 	voxelized := VoxelizeFacesCPU(faces, VoxelizeOptions{
-		VoxelResolution:     opts.VoxelResolution,
+		VoxelResolution:     voxelResolution,
 		TextureStore:        textureStore,
 		LightingData:        bsp.LightingData,
 		BakeStaticLightmaps: opts.BakeStaticLightmaps,
 		MaterialColors:      materialColors,
 	})
+	fillHL1ClosedAssetInterior(&voxelized)
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}
-	localVoxels, visualOrigin := localizeHL1MovingBrushVoxels(voxelized.Voxels, opts.VoxelResolution)
+	localVoxels, visualOrigin := localizeHL1MovingBrushVoxels(voxelized.Voxels, voxelResolution)
 	asset := content.NewAssetDef(breakableID)
 	asset.Tags = []string{"source:hl1", "breakable", "classname:" + strings.ToLower(entity.ClassName)}
 	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: true}
@@ -1201,7 +1672,7 @@ func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureS
 	asset.Parts = []content.AssetPartDef{{
 		ID:              "breakable",
 		Name:            "breakable",
-		VoxelResolution: opts.VoxelResolution,
+		VoxelResolution: voxelResolution,
 		Transform: content.AssetTransformDef{
 			Rotation: content.Quat{0, 0, 0, 1},
 			Scale:    content.Vec3{1, 1, 1},
@@ -1548,7 +2019,7 @@ func attachHL1LightFixtures(opts ImportOptions, levelPath string, level *content
 		if assetPath == "" {
 			return nil, fmt.Errorf("output root and map name are required for light fixture asset emission")
 		}
-		asset := buildHL1LightFixtureAsset(mapName, *light, linkID)
+		asset := buildHL1LightFixtureAsset(mapName, *light, linkID, EffectiveHL1VoxelResolutionPolicy(opts).Resolution(HL1VoxelResolutionCategoryFixture))
 		assets = append(assets, GeneratedAssetResult{
 			AssetPath: filepath.Clean(assetPath),
 			Asset:     asset,
@@ -1568,7 +2039,10 @@ func attachHL1LightFixtures(opts ImportOptions, levelPath string, level *content
 	return assets, nil
 }
 
-func buildHL1LightFixtureAsset(mapName string, light content.LevelLightDef, linkID uint32) *content.AssetDef {
+func buildHL1LightFixtureAsset(mapName string, light content.LevelLightDef, linkID uint32, voxelResolution float32) *content.AssetDef {
+	if voxelResolution <= 0 {
+		voxelResolution = DefaultFixtureVoxelResolution
+	}
 	color := lightFixtureColorUint8(light.Color)
 	castsShadows := false
 	return &content.AssetDef{
@@ -1589,7 +2063,7 @@ func buildHL1LightFixtureAsset(mapName string, light content.LevelLightDef, link
 		Parts: []content.AssetPartDef{{
 			ID:              "bulb_part",
 			Name:            "bulb",
-			VoxelResolution: 0.08,
+			VoxelResolution: voxelResolution,
 			ModelScale:      1,
 			EmitterLinkID:   linkID,
 			Source: content.AssetSourceDef{

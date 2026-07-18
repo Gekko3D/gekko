@@ -1,5 +1,7 @@
 package gekko
 
+import "github.com/gekko3d/gekko/content"
+
 type AuthoredItemKind string
 
 const (
@@ -17,6 +19,19 @@ type AuthoredAssetRefComponent struct {
 	AssetID string
 	ItemID  string
 	Kind    AuthoredItemKind
+}
+
+// AuthoredAssetAttachmentComponent records an external attachment-library
+// mount. It lives on the spawned child asset root; the existing hierarchy
+// system supplies the actual transform inheritance.
+type AuthoredAssetAttachmentComponent struct {
+	AttachmentID   string
+	ParentMarker   EntityId
+	MountTransform content.AssetTransformDef
+	AimMarker      EntityId
+	AimFrame       *content.AssetAttachmentAimFrameDef
+	AimOffset      *content.Vec3
+	GripFrames     []content.AssetAttachmentGripFrameDef
 }
 
 type CollapsedAuthoredVoxelPartsComponent struct {
@@ -158,6 +173,12 @@ type AuthoredLevelPickupRefComponent struct {
 	Name     string
 }
 
+type AuthoredLevelNPCRefComponent struct {
+	LevelID string
+	NPCID   string
+	Name    string
+}
+
 func IsAuthoredAssetRootEntity(cmd *Commands, eid EntityId) bool {
 	if cmd == nil {
 		return false
@@ -264,14 +285,14 @@ func AuthoredImportedWorldChunkRefForEntity(cmd *Commands, eid EntityId) (Author
 }
 
 func MarkVoxelEntityPersistenceDirty(cmd *Commands, eid EntityId) {
-	if cmd == nil || eid == 0 {
+	if cmd == nil {
 		return
 	}
 	cmd.AddComponents(eid, &VoxelPersistenceDirtyComponent{})
 }
 
 func VoxelEntityPersistenceDirty(cmd *Commands, eid EntityId) bool {
-	if cmd == nil || eid == 0 {
+	if cmd == nil {
 		return false
 	}
 	for _, comp := range cmd.GetAllComponents(eid) {

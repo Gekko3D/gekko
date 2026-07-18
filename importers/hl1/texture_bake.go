@@ -95,7 +95,7 @@ func FixedBakedPaletteMaterials() []importcommon.Material {
 
 func AdaptiveBakedPaletteMaterials(colors [][4]uint8) ([]importcommon.Material, map[[4]uint8]uint8) {
 	palette := adaptiveBakedPalette(colors, bakedPaletteBinCount)
-	materials := make([]importcommon.Material, 0, len(palette)+emissiveToneCount*emissiveRampLevels)
+	materials := make([]importcommon.Material, 0, len(palette))
 	indexByColor := make(map[[4]uint8]uint8)
 	for i, color := range palette {
 		index := uint8(i + 1)
@@ -114,8 +114,32 @@ func AdaptiveBakedPaletteMaterials(colors [][4]uint8) ([]importcommon.Material, 
 		}
 		indexByColor[color] = nearestAdaptivePaletteIndex(color, palette)
 	}
-	for _, material := range fixedEmissivePaletteMaterials() {
-		materials = append(materials, material)
+	return materials, indexByColor
+}
+
+func AdaptiveEmissivePaletteMaterials(colors [][4]uint8) ([]importcommon.Material, map[[4]uint8]uint8) {
+	limit := emissiveToneCount * emissiveRampLevels
+	palette := adaptiveBakedPalette(colors, limit)
+	materials := make([]importcommon.Material, 0, len(palette))
+	indexByColor := make(map[[4]uint8]uint8)
+	for i, color := range palette {
+		index := uint8(int(emissivePaletteStart) + i)
+		materials = append(materials, importcommon.Material{
+			ID:           int(index),
+			PaletteIndex: index,
+			BaseColor:    color,
+			Kind:         "baked_texture_emissive",
+			EmitsLight:   true,
+			Emissive:     emissiveStrengthForColor(color),
+			Roughness:    0.45,
+			Tags:         []string{"source:hl1", "material:baked_texture", "material:emissive", "palette:adaptive_emissive"},
+		})
+	}
+	for _, color := range uniqueSortedColors(colors) {
+		if len(palette) == 0 {
+			break
+		}
+		indexByColor[color] = nearestAdaptivePaletteIndexWithOffset(color, palette, emissivePaletteStart)
 	}
 	return materials, indexByColor
 }
@@ -267,6 +291,10 @@ func adaptiveBoxAverageColor(box adaptiveColorBox) [4]uint8 {
 }
 
 func nearestAdaptivePaletteIndex(color [4]uint8, palette [][4]uint8) uint8 {
+	return nearestAdaptivePaletteIndexWithOffset(color, palette, 1)
+}
+
+func nearestAdaptivePaletteIndexWithOffset(color [4]uint8, palette [][4]uint8, firstIndex int) uint8 {
 	bestIndex := 0
 	bestDist := int(^uint(0) >> 1)
 	for i, candidate := range palette {
@@ -279,7 +307,7 @@ func nearestAdaptivePaletteIndex(color [4]uint8, palette [][4]uint8) uint8 {
 			bestDist = dist
 		}
 	}
-	return uint8(bestIndex + 1)
+	return uint8(bestIndex + firstIndex)
 }
 
 func countedSortedColors(colors [][4]uint8) []adaptiveColorCount {
@@ -401,6 +429,16 @@ func emissivePaletteIndexForToneLevel(tone, level int) uint8 {
 	tone = max(0, min(tone, emissiveToneCount-1))
 	level = max(0, min(level, emissiveRampLevels-1))
 	return uint8(emissivePaletteStart + tone*emissiveRampLevels + level)
+}
+
+func emissiveStrengthForColor(color [4]uint8) float32 {
+	r := int(color[0])
+	g := int(color[1])
+	b := int(color[2])
+	luma := (r*299 + g*587 + b*114) / 1000
+	level := min(emissiveRampLevels-1, max(0, (luma-105)*(emissiveRampLevels-1)/(255-105)))
+	f := float32(level) / float32(emissiveRampLevels-1)
+	return 0.6 + f*(2.8-0.6)
 }
 
 func lerpByte(low, high uint8, step, maxStep int) uint8 {

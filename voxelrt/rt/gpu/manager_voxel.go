@@ -3,6 +3,7 @@ package gpu
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -68,6 +69,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	m.VoxelPayloadSparseBricks = 0
 	m.VoxelPayloadUploadsSkipped = 0
 	m.VoxelPayloadBytesAvoided = 0
+	m.VoxelRuntimeNormalBakeDuration = 0
 	// Cleanup orphan allocations
 	activeMaps := make(map[*volume.XBrickMap]bool)
 	activeObjects := make(map[*core.VoxelObject]bool)
@@ -757,7 +759,15 @@ func (m *GpuBufferManager) uploadBrick(ctx voxelNormalBakeContext, obj *core.Vox
 			m.BrickToAuxSlot[brick] = auxSlot
 		}
 		auxWordBase = voxelAuxWordBase(auxSlot)
-		m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot*VoxelAuxRecordBytes), buildVoxelAuxBytes(ctx, obj, brick, brickOrigin))
+		var auxBytes []byte
+		if len(brick.PrecomputedAux) == VoxelAuxRecordBytes {
+			auxBytes = brick.PrecomputedAux
+		} else {
+			start := time.Now()
+			auxBytes = buildVoxelAuxBytes(ctx, obj, brick, brickOrigin)
+			m.VoxelRuntimeNormalBakeDuration += time.Since(start)
+		}
+		m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot*VoxelAuxRecordBytes), auxBytes)
 	} else {
 		m.releaseVoxelAuxSlot(brick)
 	}

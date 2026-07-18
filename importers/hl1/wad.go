@@ -269,9 +269,13 @@ func (texture TexturePixels) AverageColor() ([4]uint8, bool) {
 		return [4]uint8{}, false
 	}
 	var r, g, b, n int
+	skipTransparentCutout := isCutoutTexture(texture.Name)
 	for _, index := range texture.Pixels {
 		paletteIndex := int(index)
 		if paletteIndex >= len(texture.Colors) {
+			continue
+		}
+		if skipTransparentCutout && paletteIndex == 255 {
 			continue
 		}
 		color := texture.Colors[paletteIndex]

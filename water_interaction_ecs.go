@@ -3,6 +3,7 @@ package gekko
 import (
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -48,11 +49,51 @@ type waterOccupancyKey struct {
 }
 
 type waterInteractionBody struct {
-	Entity      EntityId
-	Center      mgl32.Vec3
-	HalfExtents [2]float32
-	SurfaceY    float32
-	BottomY     float32
+	Entity             EntityId
+	Center             mgl32.Vec3
+	HalfExtents        [2]float32
+	SurfaceY           float32
+	BottomY            float32
+	SurfaceVisible     bool
+	VolumeGroup        string
+	Color              [3]float32
+	AbsorptionColor    [3]float32
+	ScatteringStrength float32
+}
+
+// WaterVolumeHit describes one resolved water volume overlapping a probe.
+// Hidden-surface volumes are included because they remain gameplay volumes.
+type WaterVolumeHit struct {
+	Entity             EntityId
+	Center             mgl32.Vec3
+	HalfExtents        [2]float32
+	SurfaceY           float32
+	BottomY            float32
+	SurfaceVisible     bool
+	VolumeGroup        string
+	Color              [3]float32
+	AbsorptionColor    [3]float32
+	ScatteringStrength float32
+}
+
+// WaterVolumesAt returns every water volume intersecting a spherical probe.
+func WaterVolumesAt(cmd *Commands, position mgl32.Vec3, radius float32) []WaterVolumeHit {
+	if radius < 0 {
+		radius = 0
+	}
+	hits := make([]WaterVolumeHit, 0)
+	for _, water := range collectWaterInteractionBodies(cmd) {
+		if !waterInteractionBodyInside(position, radius, water) {
+			continue
+		}
+		hits = append(hits, WaterVolumeHit{
+			Entity: water.Entity, Center: water.Center, HalfExtents: water.HalfExtents,
+			SurfaceY: water.SurfaceY, BottomY: water.BottomY, SurfaceVisible: water.SurfaceVisible,
+			VolumeGroup: water.VolumeGroup,
+			Color:       water.Color, AbsorptionColor: water.AbsorptionColor, ScatteringStrength: water.ScatteringStrength,
+		})
+	}
+	return hits
 }
 
 type WaterInteractionState struct {
@@ -124,7 +165,7 @@ func waterInteractionSystem(cmd *Commands, time *Time, state *WaterInteractionSt
 			isInside := waterInteractionBodyInside(currentPos, probeRadius, water)
 			wasInside := state.occupancy[key]
 
-			if hadPrev && !wasInside {
+			if water.SurfaceVisible && hadPrev && !wasInside {
 				impactPos, entered := detectWaterInteractionImpact(prevPos, currentPos, probeRadius, water)
 				if entered {
 					speed := maxf(-rb.Velocity.Y(), 0)
@@ -148,7 +189,7 @@ func waterInteractionSystem(cmd *Commands, time *Time, state *WaterInteractionSt
 				}
 			}
 
-			if wasInside && isInside && horizontalSpeed > 1.2 {
+			if water.SurfaceVisible && wasInside && isInside && horizontalSpeed > 1.2 {
 				state.wakeTimers[key] += float32(time.Dt)
 				interval := clampWaterFloat(0.34-probeRadius*0.05, 0.16, 0.34)
 				if state.wakeTimers[key] >= interval {
@@ -265,11 +306,16 @@ func collectWaterInteractionBodies(cmd *Commands) []waterInteractionBody {
 		extents := water.WorldHalfExtents(tr)
 		depth := water.WorldDepth(tr)
 		bodies = append(bodies, waterInteractionBody{
-			Entity:      eid,
-			Center:      center,
-			HalfExtents: extents,
-			SurfaceY:    center.Y(),
-			BottomY:     center.Y() - depth,
+			Entity:             eid,
+			Center:             center,
+			HalfExtents:        extents,
+			SurfaceY:           center.Y(),
+			BottomY:            center.Y() - depth,
+			SurfaceVisible:     water.SurfaceIsVisible(),
+			VolumeGroup:        strings.TrimSpace(water.VolumeGroup),
+			Color:              water.NormalizedColor(),
+			AbsorptionColor:    water.NormalizedAbsorptionColor(),
+			ScatteringStrength: water.NormalizedScatteringStrength(),
 		})
 		return true
 	})
@@ -278,11 +324,16 @@ func collectWaterInteractionBodies(cmd *Commands) []waterInteractionBody {
 			return true
 		}
 		bodies = append(bodies, waterInteractionBody{
-			Entity:      eid,
-			Center:      patch.Center,
-			HalfExtents: patch.HalfExtents,
-			SurfaceY:    patch.Center.Y(),
-			BottomY:     patch.Center.Y() - patch.Depth,
+			Entity:             eid,
+			Center:             patch.Center,
+			HalfExtents:        patch.HalfExtents,
+			SurfaceY:           patch.Center.Y(),
+			BottomY:            patch.Center.Y() - patch.Depth,
+			SurfaceVisible:     patch.SurfaceIsVisible(),
+			VolumeGroup:        strings.TrimSpace(patch.VolumeGroup),
+			Color:              patch.Color,
+			AbsorptionColor:    patch.AbsorptionColor,
+			ScatteringStrength: patch.ScatteringStrength,
 		})
 		return true
 	})

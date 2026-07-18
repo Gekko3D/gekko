@@ -39,8 +39,34 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 			}},
 			UVScroll: &AssetMaterialUVScrollDef{Velocity: [2]float32{0, 1}},
 		}},
+		Skeleton: &AssetSkeletonDef{Bones: []AssetBoneDef{{
+			ID:        "bone_root",
+			Name:      "Root",
+			Transform: AssetTransformDef{Rotation: Quat{0, 0, 0, 1}, Scale: Vec3{1, 1, 1}},
+		}}},
+		AnimationClips: []AssetAnimationClipDef{{
+			ID:       "idle",
+			Name:     "Idle",
+			FPS:      30,
+			Duration: 1,
+			Loop:     true,
+			Tracks: []AssetAnimationTrackDef{{
+				TargetID: "part_animated",
+				PositionKeys: []AssetVec3KeyDef{
+					{Time: 0, Value: Vec3{0, 0, 0}},
+					{Time: 1, Value: Vec3{1, 0, 0}},
+				},
+				RotationKeys: []AssetQuatKeyDef{
+					{Time: 0, Value: Quat{0, 0, 0, 1}},
+				},
+				ScaleKeys: []AssetVec3KeyDef{
+					{Time: 0, Value: Vec3{1, 1, 1}},
+				},
+			}},
+		}},
 		Parts: []AssetPartDef{
 			{
+				ID:   "part_animated",
 				Name: "Part 1",
 				Source: AssetSourceDef{
 					Kind:       AssetSourceKindVoxModel,
@@ -149,6 +175,15 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	loadedMaterialFrame := loaded.MaterialAnimations[0].Frames[0]
 	if loaded.MaterialAnimations[0].UVScroll.Velocity != ([2]float32{0, 1}) || loadedMaterialFrame.EmissiveColors[0] != ([4]uint8{200, 180, 120, 255}) || loadedMaterialFrame.Emission[0] != 2.25 || loadedMaterialFrame.Roughness[0] != 0.35 || loadedMaterialFrame.Transparency[0] != 0.15 {
 		t.Fatalf("expected material animation frame overrides to round-trip, got animation=%+v frame=%+v", loaded.MaterialAnimations[0], loadedMaterialFrame)
+	}
+	if loaded.Skeleton == nil || len(loaded.Skeleton.Bones) != 1 || loaded.Skeleton.Bones[0].ID != "bone_root" {
+		t.Fatalf("expected skeleton to round-trip, got %+v", loaded.Skeleton)
+	}
+	if len(loaded.AnimationClips) != 1 || loaded.AnimationClips[0].ID != "idle" || !loaded.AnimationClips[0].Loop || len(loaded.AnimationClips[0].Tracks) != 1 {
+		t.Fatalf("expected animation clip to round-trip, got %+v", loaded.AnimationClips)
+	}
+	if loaded.AnimationClips[0].Tracks[0].TargetID != "part_animated" || len(loaded.AnimationClips[0].Tracks[0].PositionKeys) != 2 {
+		t.Fatalf("expected animation track keys to round-trip, got %+v", loaded.AnimationClips[0].Tracks[0])
 	}
 	if loaded.Parts[0].Source.Kind != AssetSourceKindVoxModel || loaded.Parts[0].Source.ModelIndex != 2 {
 		t.Fatalf("unexpected part source after round-trip: %+v", loaded.Parts[0].Source)

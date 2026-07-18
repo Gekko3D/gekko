@@ -27,6 +27,8 @@ type waterPatchRect struct {
 
 type waterBodyResolutionSignature struct {
 	Mode                 WaterBodyMode
+	SurfaceMode          WaterSurfaceMode
+	SurfaceVisibility    WaterSurfaceVisibility
 	SurfaceY             float32
 	Depth                float32
 	RectHalfExtents      [2]float32
@@ -36,11 +38,13 @@ type waterBodyResolutionSignature struct {
 	Overlap              float32
 	MinCellSize          float32
 	SourceTag            string
+	VolumeGroup          string
 	ContinuityGroup      string
 	EnableSkirt          bool
 	MaxPatchCount        uint32
 	Color                [3]float32
 	AbsorptionColor      [3]float32
+	ScatteringStrength   float32
 	Opacity              float32
 	Roughness            float32
 	Refraction           float32
@@ -205,6 +209,8 @@ func waterBodyResolutionSignatureFor(body *WaterBodyComponent, tr *TransformComp
 	}
 	sig := waterBodyResolutionSignature{
 		Mode:                 body.NormalizedMode(),
+		SurfaceMode:          body.NormalizedSurfaceMode(),
+		SurfaceVisibility:    body.SurfaceVisibility,
 		SurfaceY:             body.NormalizedSurfaceY(),
 		Depth:                body.NormalizedDepth(),
 		RectHalfExtents:      body.NormalizedRectHalfExtents(),
@@ -214,11 +220,13 @@ func waterBodyResolutionSignatureFor(body *WaterBodyComponent, tr *TransformComp
 		Overlap:              body.NormalizedOverlap(),
 		MinCellSize:          body.NormalizedMinCellSize(),
 		SourceTag:            strings.TrimSpace(body.SourceTag),
+		VolumeGroup:          strings.TrimSpace(body.VolumeGroup),
 		ContinuityGroup:      strings.TrimSpace(body.ContinuityGroup),
 		EnableSkirt:          body.NormalizedEnableSkirt(),
 		MaxPatchCount:        body.NormalizedMaxPatchCount(),
 		Color:                body.NormalizedColor(),
 		AbsorptionColor:      body.NormalizedAbsorptionColor(),
+		ScatteringStrength:   body.NormalizedScatteringStrength(),
 		Opacity:              body.NormalizedOpacity(),
 		Roughness:            body.NormalizedRoughness(),
 		Refraction:           body.NormalizedRefraction(),
@@ -302,6 +310,7 @@ func makeResolvedWaterPatches(owner EntityId, body *WaterBodyComponent, tr *Tran
 			Depth:                body.NormalizedDepth(),
 			Color:                body.NormalizedColor(),
 			AbsorptionColor:      body.NormalizedAbsorptionColor(),
+			ScatteringStrength:   body.NormalizedScatteringStrength(),
 			Opacity:              body.NormalizedOpacity(),
 			Roughness:            body.NormalizedRoughness(),
 			Refraction:           body.NormalizedRefraction(),
@@ -311,6 +320,9 @@ func makeResolvedWaterPatches(owner EntityId, body *WaterBodyComponent, tr *Tran
 			WaveAmplitude:        body.NormalizedWaveAmplitude(),
 			VisualCellSize:       body.NormalizedVisualCellSize(),
 			Source:               source,
+			SurfaceMode:          body.NormalizedSurfaceMode(),
+			SurfaceVisibility:    body.SurfaceVisibility,
+			VolumeGroup:          strings.TrimSpace(body.VolumeGroup),
 			ContinuityGroup:      strings.TrimSpace(body.ContinuityGroup),
 			DebugInset:           body.NormalizedInset(),
 			DebugOverlap:         body.NormalizedOverlap(),

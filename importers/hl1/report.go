@@ -12,16 +12,126 @@ import (
 )
 
 const (
-	ImporterName                    = "gekko-hl1import"
-	ImporterVersion                 = "hl1_import_report_v1"
-	DefaultImportedWorldChunkSize   = 256
-	DefaultImportedVoxelResolution  = 0.1
-	DefaultGameAssetVoxelResolution = 0.08
-	DefaultPickupVoxelResolution    = 0.04
-	DefaultImportedSolidBandDepth   = DefaultSolidBandDepth
-	DefaultImportedMaxSampledCells  = DefaultMaxSolidSampleCells
-	DefaultChunkPayloadKind         = content.ImportedWorldChunkPayloadDenseRLEBinaryV1
+	ImporterName                     = "gekko-hl1import"
+	ImporterVersion                  = "hl1_import_report_v1"
+	DefaultImportedWorldChunkSize    = 256
+	DefaultImportedVoxelResolution   = 0.1
+	DefaultBrushModelVoxelResolution = DefaultImportedVoxelResolution
+	DefaultFixtureVoxelResolution    = 0.05
+	DefaultStaticPropVoxelResolution = 0.05
+	DefaultNPCVoxelResolution        = 0.02
+	DefaultPickupVoxelResolution     = 0.01
+	DefaultGameAssetVoxelResolution  = DefaultStaticPropVoxelResolution
+	DefaultImportedSolidBandDepth    = DefaultSolidBandDepth
+	DefaultImportedMaxSampledCells   = DefaultMaxSolidSampleCells
+	DefaultChunkPayloadKind          = content.ImportedWorldChunkPayloadDenseRLEBinaryV1
 )
+
+type HL1ExportProfile string
+
+const (
+	HL1ExportProfileDefault                HL1ExportProfile = ""
+	HL1ExportProfileRustyVoxelRTInteropV1  HL1ExportProfile = "rusty_voxelrt_interop_v1"
+	HL1ExportProfileRustyVoxelRTInteropTag                  = "export_profile:rusty_voxelrt_interop_v1"
+)
+
+type HL1VoxelResolutionCategory string
+
+const (
+	HL1VoxelResolutionCategoryWorld      HL1VoxelResolutionCategory = "world"
+	HL1VoxelResolutionCategoryBrushModel HL1VoxelResolutionCategory = "brush_model"
+	HL1VoxelResolutionCategoryFixture    HL1VoxelResolutionCategory = "fixture"
+	HL1VoxelResolutionCategoryStaticProp HL1VoxelResolutionCategory = "static_prop"
+	HL1VoxelResolutionCategoryNPC        HL1VoxelResolutionCategory = "npc"
+	HL1VoxelResolutionCategoryPickup     HL1VoxelResolutionCategory = "pickup"
+)
+
+type HL1VoxelResolutionPolicy struct {
+	World      float32
+	BrushModel float32
+	Fixture    float32
+	StaticProp float32
+	NPC        float32
+	Pickup     float32
+}
+
+func DefaultHL1VoxelResolutionPolicy() HL1VoxelResolutionPolicy {
+	return HL1VoxelResolutionPolicy{
+		World:      DefaultImportedVoxelResolution,
+		BrushModel: DefaultBrushModelVoxelResolution,
+		Fixture:    DefaultFixtureVoxelResolution,
+		StaticProp: DefaultStaticPropVoxelResolution,
+		NPC:        DefaultNPCVoxelResolution,
+		Pickup:     DefaultPickupVoxelResolution,
+	}
+}
+
+func EffectiveHL1VoxelResolutionPolicy(opts ImportOptions) HL1VoxelResolutionPolicy {
+	policy := DefaultHL1VoxelResolutionPolicy()
+	if opts.VoxelResolutionPolicy.World > 0 {
+		policy.World = opts.VoxelResolutionPolicy.World
+	}
+	if opts.VoxelResolutionPolicy.BrushModel > 0 {
+		policy.BrushModel = opts.VoxelResolutionPolicy.BrushModel
+	}
+	if opts.VoxelResolutionPolicy.Fixture > 0 {
+		policy.Fixture = opts.VoxelResolutionPolicy.Fixture
+	}
+	if opts.VoxelResolutionPolicy.StaticProp > 0 {
+		policy.StaticProp = opts.VoxelResolutionPolicy.StaticProp
+	}
+	if opts.VoxelResolutionPolicy.NPC > 0 {
+		policy.NPC = opts.VoxelResolutionPolicy.NPC
+	}
+	if opts.VoxelResolutionPolicy.Pickup > 0 {
+		policy.Pickup = opts.VoxelResolutionPolicy.Pickup
+	}
+	if opts.VoxelResolution > 0 {
+		policy.World = opts.VoxelResolution
+	}
+	if opts.GameAssetVoxelResolution > 0 {
+		policy.StaticProp = opts.GameAssetVoxelResolution
+	}
+	if opts.PickupVoxelResolution > 0 {
+		policy.Pickup = opts.PickupVoxelResolution
+	}
+	return policy
+}
+
+func (p HL1VoxelResolutionPolicy) Resolution(category HL1VoxelResolutionCategory) float32 {
+	switch category {
+	case HL1VoxelResolutionCategoryWorld:
+		if p.World > 0 {
+			return p.World
+		}
+	case HL1VoxelResolutionCategoryBrushModel:
+		if p.BrushModel > 0 {
+			return p.BrushModel
+		}
+	case HL1VoxelResolutionCategoryFixture:
+		if p.Fixture > 0 {
+			return p.Fixture
+		}
+	case HL1VoxelResolutionCategoryPickup:
+		if p.Pickup > 0 {
+			return p.Pickup
+		}
+	case HL1VoxelResolutionCategoryStaticProp:
+		if p.StaticProp > 0 {
+			return p.StaticProp
+		}
+	case HL1VoxelResolutionCategoryNPC:
+		if p.NPC > 0 {
+			return p.NPC
+		}
+	default:
+		if p.StaticProp > 0 {
+			return p.StaticProp
+		}
+		return DefaultStaticPropVoxelResolution
+	}
+	return DefaultHL1VoxelResolutionPolicy().Resolution(category)
+}
 
 type HL1LightMode string
 
@@ -31,23 +141,59 @@ const (
 )
 
 type ImportOptions struct {
-	GameDir                   string
-	MapName                   string
-	BSPPath                   string
-	OutputRoot                string
-	ChunkSize                 int
-	VoxelResolution           float32
-	GameAssetVoxelResolution  float32
-	PickupVoxelResolution     float32
-	MaxSolidSampleCells       int64
-	SolidBandDepth            int
-	ChunkPayloadKind          string
-	LightMode                 HL1LightMode
-	BakeStaticLightmaps       bool
-	EmitLightFixtures         bool
-	EmitEmissiveSurfaceLights bool
-	MaxEmissiveSurfaceLights  int
-	EmitGameAssets            bool
+	GameDir                    string
+	ResourceDirs               []string
+	MapName                    string
+	BSPPath                    string
+	OutputRoot                 string
+	ChunkSize                  int
+	VoxelResolution            float32
+	VoxelResolutionPolicy      HL1VoxelResolutionPolicy
+	GameAssetVoxelResolution   float32
+	PickupVoxelResolution      float32
+	MaxSolidSampleCells        int64
+	SolidBandDepth             int
+	ChunkPayloadKind           string
+	ExportProfile              HL1ExportProfile
+	LightMode                  HL1LightMode
+	BakeStaticLightmaps        bool
+	EmitLightFixtures          bool
+	EmitEmissiveSurfaceLights  bool
+	MaxEmissiveSurfaceLights   int
+	EmitGameAssets             bool
+	ImportAllStaticProps       bool
+	ImportAllPlayerModels      bool
+	ImportAllWeaponWorldModels bool
+	Progress                   ImportProgressFunc
+}
+
+type ImportProgressFunc func(ImportProgress)
+
+type ImportProgress struct {
+	Stage   string
+	Current int
+	Total   int
+	Path    string
+	Coord   content.TerrainChunkCoordDef
+}
+
+const (
+	ImportProgressStageBuildSummary    = "build_summary"
+	ImportProgressStageBuildDebugWorld = "build_debug_world"
+	ImportProgressStageBuildGameAssets = "build_game_assets"
+	ImportProgressStageBuildLevel      = "build_level"
+	ImportProgressStageSaveDebugWorld  = "save_debug_world"
+	ImportProgressStageSaveLevel       = "save_level"
+	ImportProgressStageSaveLevelAssets = "save_level_assets"
+	ImportProgressStageSaveAuxSidecars = "save_aux_sidecars"
+	ImportProgressStageSaveGameAssets  = "save_game_assets"
+	ImportProgressStageSaveReport      = "save_report"
+)
+
+func reportImportProgress(progress ImportProgressFunc, event ImportProgress) {
+	if progress != nil {
+		progress(event)
+	}
 }
 
 type ImportSummary struct {
@@ -60,6 +206,11 @@ type ImportSummary struct {
 }
 
 func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
+	var profileErr error
+	opts, profileErr = ApplyHL1ExportProfile(opts)
+	if profileErr != nil {
+		return ImportSummary{}, profileErr
+	}
 	bspPath := opts.BSPPath
 	if bspPath == "" {
 		var err error
@@ -83,6 +234,7 @@ func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
 		BSPHash:         bsp.SHA256,
 		ImporterName:    ImporterName,
 		ImporterVersion: ImporterVersion,
+		ExportProfile:   string(opts.ExportProfile),
 	}
 	mapImport := importcommon.MapImport{
 		Source:      source,
@@ -159,6 +311,7 @@ func BuildImportSummary(opts ImportOptions) (ImportSummary, error) {
 		LadderEntityCounts:      importcommon.EntityCounts(hl1LadderEntityClassNames(mapImport.Entities)),
 		ChargerEntityCounts:     importcommon.EntityCounts(hl1ChargerEntityClassNames(mapImport.Entities)),
 		PickupEntityCounts:      importcommon.EntityCounts(hl1PickupClassNames(mapImport.Entities)),
+		NPCEntityCounts:         importcommon.EntityCounts(hl1NPCEntityClassNames(mapImport.Entities)),
 		TriggerEntityCounts:     importcommon.EntityCounts(hl1TriggerEntityClassNames(mapImport.Entities)),
 		BreakableEntityCounts:   importcommon.EntityCounts(hl1BreakableEntityClassNames(mapImport.Entities)),
 		Diagnostics:             append([]importcommon.Diagnostic(nil), mapImport.Diagnostics...),
@@ -194,10 +347,7 @@ func brushClassByModelID(entities []importcommon.Entity) map[int]string {
 func visibleBrushEntityClass(className string) bool {
 	switch strings.ToLower(className) {
 	case "func_wall",
-		"func_illusionary",
-		"func_breakable",
-		"func_healthcharger",
-		"func_recharge":
+		"func_illusionary":
 		return true
 	default:
 		return false
@@ -400,6 +550,16 @@ func hl1PickupClassNames(entities []importcommon.Entity) []string {
 	out := make([]string, 0)
 	for _, entity := range entities {
 		if _, ok := hl1PickupClass(entity.ClassName); ok {
+			out = append(out, strings.ToLower(entity.ClassName))
+		}
+	}
+	return out
+}
+
+func hl1NPCEntityClassNames(entities []importcommon.Entity) []string {
+	out := make([]string, 0)
+	for _, entity := range entities {
+		if _, ok := hl1NPCClass(entity.ClassName); ok {
 			out = append(out, strings.ToLower(entity.ClassName))
 		}
 	}
@@ -738,7 +898,10 @@ func supportedClass(className string) bool {
 		"momentary_door":
 		return true
 	default:
-		_, ok := hl1PickupClass(className)
+		if _, ok := hl1PickupClass(className); ok {
+			return true
+		}
+		_, ok := hl1NPCClass(className)
 		return ok
 	}
 }

@@ -92,3 +92,48 @@ func TestRaycastScaling(t *testing.T) {
 	dirDanger := mgl32.Vec3{-0.5e-8, 1.0, 0}
 	state.Raycast(mgl32.Vec3{0, 0, 0}, dirDanger, 100.0)
 }
+
+func TestRaycastFilteredSkipsRejectedEntity(t *testing.T) {
+	state := &VoxelRtState{
+		RtApp: &app.App{
+			Scene: core.NewScene(),
+		},
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
+	}
+
+	near := testRaycastVoxelObjectAt(mgl32.Vec3{0, 0, 4})
+	far := testRaycastVoxelObjectAt(mgl32.Vec3{0, 0, 8})
+	nearEntity := EntityId(10)
+	farEntity := EntityId(20)
+	state.instanceMap[nearEntity] = near
+	state.instanceMap[farEntity] = far
+	state.objectToEntity[near] = nearEntity
+	state.objectToEntity[far] = farEntity
+	state.RtApp.Scene.AddObject(near)
+	state.RtApp.Scene.AddObject(far)
+
+	unfiltered := state.Raycast(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 0, 1}, 20)
+	if !unfiltered.Hit || unfiltered.Entity != nearEntity {
+		t.Fatalf("expected unfiltered raycast to hit near entity, got %+v", unfiltered)
+	}
+
+	filtered := state.RaycastFiltered(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{0, 0, 1}, 20, func(eid EntityId, known bool) bool {
+		return !known || eid != nearEntity
+	})
+	if !filtered.Hit || filtered.Entity != farEntity {
+		t.Fatalf("expected filtered raycast to skip near entity and hit far entity, got %+v", filtered)
+	}
+}
+
+func testRaycastVoxelObjectAt(position mgl32.Vec3) *core.VoxelObject {
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = volume.NewXBrickMap()
+	obj.XBrickMap.SetVoxel(0, 0, 0, 1)
+	obj.Transform.Position = position
+	obj.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	obj.Transform.Dirty = true
+	obj.UpdateWorldAABB()
+	return obj
+}

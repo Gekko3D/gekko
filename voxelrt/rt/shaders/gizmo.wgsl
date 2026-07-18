@@ -8,6 +8,7 @@ struct VertexInput {
     @location(4) inst_mat_col2: vec4<f32>,
     @location(5) inst_mat_col3: vec4<f32>,
     @location(6) inst_color: vec4<f32>,
+    @location(7) inst_depth: vec4<f32>,
 }
 
 struct CameraUniform {
@@ -29,17 +30,27 @@ struct CameraUniform {
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 
-// Group 1: Depth Texture for occlusion
+// Group 1: Scene depth from the G-buffer. Gizmos are rendered in an overlay
+// pass, but still discard behind opaque scene geometry so dense debug views do
+// not become unreadable through walls and floors.
 @group(1) @binding(0) var depth_tex: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) dist: f32,
+    @location(2) depth_mode: f32,
 }
+
+const GIZMO_DEPTH_MODE_SCENE_OCCLUDED: f32 = 0.0;
+const GIZMO_DEPTH_MODE_ALWAYS_VISIBLE: f32 = 1.0;
 
 fn camera_far_t() -> f32 {
     return max(camera.distance_limits.y, 1.0);
+}
+
+fn visible_scene_depth(t: f32) -> bool {
+    return t > 0.0 && t < camera_far_t();
 }
 
 @vertex
@@ -60,6 +71,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     clip_pos.z = clip_pos.z * 0.5 + clip_pos.w * 0.5;
     out.position = clip_pos;
     out.color = in.inst_color;
+    out.depth_mode = in.inst_depth.x;
     // Calculate distance from camera for depth testing
     out.dist = distance(camera.cam_pos.xyz, world_pos.xyz);
     return out;
@@ -67,14 +79,13 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Manual depth test against G-Buffer
-    // in.position.xy are screen coordinates (pixels)
-    let depth_val = textureLoad(depth_tex, vec2<i32>(in.position.xy), 0).r;
-    
-    // If the G-Buffer has a finite hit and it's closer than us, discard.
-    if (depth_val > 0.0 && depth_val < camera_far_t() && depth_val < in.dist - 0.1) {
+    let dims = textureDimensions(depth_tex);
+    let max_pix = vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1);
+    let pix = clamp(vec2<i32>(in.position.xy), vec2<i32>(0, 0), max_pix);
+    let scene_t = textureLoad(depth_tex, pix, 0).r;
+    let slack = max(camera_far_t() * 0.00005, 0.05);
+    if (in.depth_mode < GIZMO_DEPTH_MODE_ALWAYS_VISIBLE && visible_scene_depth(scene_t) && in.dist > scene_t + slack) {
         discard;
     }
-
     return in.color;
 }

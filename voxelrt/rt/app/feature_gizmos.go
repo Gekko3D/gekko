@@ -16,6 +16,7 @@ type GizmoOverlayItem struct {
 	Type        core.GizmoType
 	Color       [4]float32
 	ModelMatrix mgl32.Mat4
+	DepthMode   core.GizmoDepthMode
 }
 
 type GizmoResources struct {
@@ -94,11 +95,19 @@ func (a *App) SetGizmoOverlayItems(items []GizmoOverlayItem) {
 		return
 	}
 	a.Scene.Gizmos = a.Scene.Gizmos[:0]
+	a.AppendGizmoOverlayItems(items)
+}
+
+func (a *App) AppendGizmoOverlayItems(items []GizmoOverlayItem) {
+	if a == nil || a.Scene == nil || len(items) == 0 {
+		return
+	}
 	for _, item := range items {
 		a.Scene.Gizmos = append(a.Scene.Gizmos, core.Gizmo{
 			Type:        item.Type,
 			Color:       item.Color,
 			ModelMatrix: item.ModelMatrix,
+			DepthMode:   item.DepthMode,
 		})
 	}
 }

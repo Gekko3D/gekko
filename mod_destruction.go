@@ -37,22 +37,25 @@ func destructionSystem(state *VoxelRtState, queue *DestructionQueue, cmd *Comman
 	queue.Events = queue.Events[:0]
 }
 
-func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *Commands, server *AssetServer) {
+func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *Commands, server *AssetServer) bool {
 	if !destructionEventAllowedForEntity(cmd, event.Entity) {
-		return
+		return false
 	}
 	voxObj := state.GetVoxelObject(event.Entity)
 	if voxObj == nil || voxObj.XBrickMap == nil {
-		return
+		return false
 	}
 
 	// 1. Carve voxels on a private geometry clone.
 	_, _, editableMap, err := EnsureEditableVoxelGeometry(cmd, server, event.Entity)
 	if err != nil || editableMap == nil {
-		return
+		return false
 	}
 	voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
+	voxObj.XBrickMap = editableMap
 	MarkVoxelEntityPersistenceDirty(cmd, event.Entity)
+	state.markRuntimeEditedVoxelEntity(event.Entity)
+	notifyImportedWorldChunkDirty(cmd, event.Entity, editableMap)
 
 	// 2. Detect disconnected components
 	components := editableMap.SplitDisconnectedComponents()
@@ -61,7 +64,7 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 		if editableMap.GetVoxelCount() == 0 {
 			cmd.RemoveEntity(event.Entity)
 		}
-		return
+		return true
 	}
 
 	// 3. Handle splitting
@@ -116,12 +119,13 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 	}
 
 	if !foundTransform || !foundVMC {
-		return
+		return true
 	}
 
 	// Keep largest in original, inherit original ID for rendering stability
 	newMap := components[largestIdx].Map
 	newMap.ID = editableMap.ID
+	voxObj.XBrickMap = newMap
 
 	// Replace the entity's override geometry with the largest surviving component.
 	originalVMC.OverrideGeometry = server.RegisterSharedVoxelGeometry(newMap, "")
@@ -202,6 +206,7 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 			},
 		)
 	}
+	return true
 }
 
 func destructionEventAllowedForEntity(cmd *Commands, eid EntityId) bool {

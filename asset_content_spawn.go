@@ -3,6 +3,7 @@ package gekko
 import (
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/go-gl/mathgl/mgl32"
@@ -10,6 +11,7 @@ import (
 
 type AuthoredAssetSpawnResult struct {
 	RootEntity         EntityId
+	Entities           []EntityId
 	AssetID            string
 	EntitiesByAssetID  map[string]EntityId
 	ItemKindsByAssetID map[string]AuthoredItemKind
@@ -62,12 +64,14 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		},
 		&AuthoredAssetRootComponent{AssetID: def.ID},
 	)
+	result.Entities = append(result.Entities, result.RootEntity)
 
 	for _, part := range def.Parts {
 		eid, err := spawnAuthoredPart(cmd, assets, def, part, opts.DocumentPath, shadowSettings)
 		if err != nil {
 			return result, err
 		}
+		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[part.ID] = eid
 		result.ItemKindsByAssetID[part.ID] = AuthoredItemKindPart
 		result.PartIDs[part.ID] = struct{}{}
@@ -77,6 +81,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		if err != nil {
 			return result, err
 		}
+		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[light.ID] = eid
 		result.ItemKindsByAssetID[light.ID] = AuthoredItemKindLight
 	}
@@ -85,6 +90,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		if err != nil {
 			return result, err
 		}
+		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[emitter.ID] = eid
 		result.ItemKindsByAssetID[emitter.ID] = AuthoredItemKindEmitter
 	}
@@ -93,6 +99,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		if err != nil {
 			return result, err
 		}
+		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[marker.ID] = eid
 		result.ItemKindsByAssetID[marker.ID] = AuthoredItemKindMarker
 	}
@@ -137,6 +144,20 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	}
 	cmd.app.FlushCommands()
 
+	if animationSet := newAuthoredAssetAnimationSetComponent(def, result, cmd); animationSet != nil {
+		defaultClip, ok := animationSet.Clips[animationSet.DefaultClipID]
+		cmd.AddComponents(result.RootEntity,
+			&AnimationPlayerComponent{
+				ClipID:  animationSet.DefaultClipID,
+				Speed:   1,
+				Playing: true,
+				Loop:    ok && defaultClip.Loop,
+			},
+			animationSet,
+		)
+		cmd.app.FlushCommands()
+	}
+
 	TransformHierarchySystem(cmd)
 	return result, nil
 }
@@ -147,6 +168,71 @@ func LoadAndSpawnAuthoredAsset(path string, cmd *Commands, assets *AssetServer, 
 		return AuthoredAssetSpawnResult{}, err
 	}
 	return SpawnAuthoredAssetWithOptions(cmd, assets, def, rootTransform, AuthoredAssetSpawnOptions{DocumentPath: path})
+}
+
+func LoadAndSpawnAuthoredAssetFromLibrary(library *content.AssetLibraryDef, libraryPath, key string, cmd *Commands, assets *AssetServer, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
+	path, err := content.ResolveAssetLibraryPath(library, libraryPath, key)
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	return LoadAndSpawnAuthoredAsset(path, cmd, assets, rootTransform)
+}
+
+// AttachAuthoredAssetRoot mounts an already spawned asset root to a marker
+// using a transform authored in an external .gkattachments library.
+func AttachAuthoredAssetRoot(cmd *Commands, root, parentMarker EntityId, attachment content.AssetAttachmentDef) error {
+	if cmd == nil || root == 0 || parentMarker == 0 {
+		return fmt.Errorf("asset attachment requires a root and parent marker")
+	}
+	if attachment.ID == "" {
+		return fmt.Errorf("asset attachment id is required")
+	}
+	attached := &AuthoredAssetAttachmentComponent{AttachmentID: attachment.ID, ParentMarker: parentMarker, MountTransform: attachment.Transform, GripFrames: append([]content.AssetAttachmentGripFrameDef(nil), attachment.GripFrames...)}
+	if attachment.AimOffset != nil {
+		offset := *attachment.AimOffset
+		attached.AimOffset = &offset
+	}
+	if attachment.Aim != nil {
+		marker, ok := FindAuthoredAssetMarkerByID(cmd, root, attachment.Aim.MarkerID)
+		if !ok {
+			return fmt.Errorf("asset attachment %q aim marker %q not found", attachment.ID, attachment.Aim.MarkerID)
+		}
+		aim := *attachment.Aim
+		attached.AimMarker, attached.AimFrame = marker.Entity, &aim
+	}
+	local, _ := cmd.GetComponent(root, reflect.TypeOf(LocalTransformComponent{})).(*LocalTransformComponent)
+	if local == nil {
+		return fmt.Errorf("asset attachment root %d has no local transform", root)
+	}
+	*local = AssetLocalTransformFromDef(attachment.Transform)
+	cmd.AddComponents(root,
+		&Parent{Entity: parentMarker},
+		attached,
+	)
+	cmd.app.FlushCommands()
+	TransformHierarchySystem(cmd)
+	return nil
+}
+
+// LoadAndAttachAuthoredAsset loads a child .gkasset, then mounts its root at
+// the supplied host marker. Callers resolve attachment asset refs to paths.
+func LoadAndAttachAuthoredAsset(path string, cmd *Commands, assets *AssetServer, parentMarker EntityId, attachment content.AssetAttachmentDef) (AuthoredAssetSpawnResult, error) {
+	spawned, err := LoadAndSpawnAuthoredAsset(path, cmd, assets, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	if err := AttachAuthoredAssetRoot(cmd, spawned.RootEntity, parentMarker, attachment); err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	return spawned, nil
+}
+
+func LoadAndAttachAuthoredAssetFromLibrary(library *content.AssetLibraryDef, libraryPath, key string, cmd *Commands, assets *AssetServer, parentMarker EntityId, attachment content.AssetAttachmentDef) (AuthoredAssetSpawnResult, error) {
+	path, err := content.ResolveAssetLibraryPath(library, libraryPath, key)
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	return LoadAndAttachAuthoredAsset(path, cmd, assets, parentMarker, attachment)
 }
 
 func ValidateAssetHierarchy(def *content.AssetDef) error {
@@ -174,7 +260,7 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, def *content.AssetDef
 		return 0, err
 	}
 	if model != (AssetId{}) {
-		comps = append(comps, &VoxelModelComponent{
+		voxelModel := &VoxelModelComponent{
 			SharedGeometry:         model,
 			VoxelPalette:           palette,
 			VoxelResolution:        part.VoxelResolution,
@@ -183,7 +269,12 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, def *content.AssetDef
 			ShadowMaxDistance:      shadowSettings.maxDistance,
 			ShadowCasterGroupID:    shadowSettings.casterGroupID,
 			ShadowCasterGroupLimit: shadowSettings.casterGroupLimit,
-		})
+		}
+		if part.Source.Kind == content.AssetSourceKindVoxelShape {
+			voxelModel.PivotMode = PivotModeCustom
+			voxelModel.CustomPivot = mgl32.Vec3{part.Transform.Pivot[0], part.Transform.Pivot[1], part.Transform.Pivot[2]}
+		}
+		comps = append(comps, voxelModel)
 	}
 
 	return cmd.AddEntity(comps...), nil

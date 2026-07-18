@@ -17,8 +17,9 @@ type GizmoVertex struct {
 
 // GizmoInstance matches the WGSL instance attributes
 type GizmoInstance struct {
-	ModelMat mgl32.Mat4
-	Color    [4]float32
+	ModelMat    mgl32.Mat4
+	Color       [4]float32
+	DepthParams [4]float32
 }
 
 type GizmoRenderPass struct {
@@ -63,7 +64,8 @@ func NewGizmoRenderPass(device *wgpu.Device, format wgpu.TextureFormat) (*GizmoR
 		return nil, err
 	}
 
-	// Create Bind Group Layout for Depth Texture (Group 1)
+	// Keep scene depth bound so the overlay shader can hide gizmos behind
+	// opaque geometry without requiring a hardware depth attachment.
 	depthBgl, err := device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "GizmoDepthBGL",
 		Entries: []wgpu.BindGroupLayoutEntry{
@@ -138,6 +140,11 @@ func NewGizmoRenderPass(device *wgpu.Device, format wgpu.TextureFormat) (*GizmoR
 							Format:         wgpu.VertexFormatFloat32x4,
 							Offset:         64,
 							ShaderLocation: 6,
+						},
+						{
+							Format:         wgpu.VertexFormatFloat32x4,
+							Offset:         80,
+							ShaderLocation: 7,
 						},
 					},
 				},
@@ -277,7 +284,8 @@ func (p *GizmoRenderPass) Update(queue *wgpu.Queue, gizmos []core.Gizmo) {
 
 	for _, g := range gizmos {
 		inst := GizmoInstance{
-			Color: g.Color,
+			Color:       g.Color,
+			DepthParams: [4]float32{float32(g.DepthMode), 0, 0, 0},
 		}
 
 		inst.ModelMat = g.ModelMatrix

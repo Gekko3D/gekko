@@ -13,6 +13,7 @@ A level describes:
 - procedural placement volumes
 - optional terrain
 - optional imported base-world data
+- optional voxel navigation graph manifest
 - optional player controller defaults
 - environment preset selection
 - authored lights and water bodies
@@ -36,6 +37,7 @@ The top-level `LevelDef` contains:
 - `voxel_resolution`
 - `terrain`
 - `base_world`
+- `navigation`
 - `player`
 - `placements`
 - `placement_volumes`
@@ -119,6 +121,19 @@ Important runtime distinction:
   - loads and streams imported base-world chunks from the referenced manifest
 
 So `base_world` is part of the authored level contract, but it is mainly consumed by the streamed-level runtime path.
+
+### Navigation
+
+`navigation.manifest_path` points to pure-Go voxel graph data in a `.gknav`
+manifest. Validation checks source-world identity, chunk size, and voxel
+resolution against level/base-world contracts. Streamed runtime loads source
+and profile graph tiles near existing level observers; no polygon data or
+fallback exists.
+
+Navigation source schema v2 stores compact solid and blocker runs so agent
+clearance is derived above each profile's reachable step envelope. Current
+builder `voxel_graph_v4` also merges ordinary walk/stair/step surfaces into
+ground regions. Older graph bundles must be rebaked.
 
 ### Player
 
@@ -237,12 +252,17 @@ Moving brushes contain:
 - `bounds_half_extents`
 - optional `visual_origin`
 - optional `move_direction`, `move_distance`, `speed`, `wait`, and `lip`
+- optional `spawn_flags`
 - optional `target_name` and `target`
 - optional `source_tag` and tags
 
 `speed` and explicit `move_distance` are non-negative. `wait` and `lip` may be
 negative to preserve imported mover semantics from formats such as Half-Life 1,
 where negative wait usually means stay open and negative lip can mean overtravel.
+For non-path movers, a positive `wait` holds the open position for that many
+seconds before returning to the closed position; zero and negative waits stay open.
+Imported HL1 `func_button` records honor spawn flag `1` (`Don't move`) while
+still firing their target.
 
 Use triggers contain:
 
@@ -257,6 +277,8 @@ The grounded player controller can activate a nearby use trigger or moving brush
 with E. Activation toggles the matching `MovingBrushComponent` state through
 `target`/`target_name` links. If `asset_path` is present, runtime spawns that
 voxel asset on the moving-brush entity and moves it between closed/open targets.
+Moving-brush bounds also participate in character collision and ground probes;
+supported grounded players and authored NPCs inherit the brush's movement.
 
 ### Markers
 
@@ -291,6 +313,7 @@ That applies to:
 - `placement_volumes[].asset_set_path`
 - `terrain.source_path`
 - `base_world.manifest_path`
+- `navigation.manifest_path`
 
 Prefer keeping paths relative to the `.gklevel` file so levels remain portable across tools and modules.
 
@@ -312,6 +335,7 @@ Prefer keeping paths relative to the `.gklevel` file so levels remain portable a
 - referenced asset sets load and validate
 - terrain kind, extension, file existence, and chunk-size or voxel-size compatibility
 - base-world kind, extension, file existence, and chunk-size or voxel-size compatibility
+- navigation manifest extension, validity, source-world identity, and chunk-size or voxel-size compatibility
 
 There is also shooter-specific validation:
 
@@ -347,6 +371,7 @@ It uses the level to drive:
 - chunk-local placement spawning
 - terrain chunk streaming
 - imported base-world chunk streaming
+- voxel navigation source/graph tile streaming
 - world-delta and override application
 - optional automatic player spawning at markers
 

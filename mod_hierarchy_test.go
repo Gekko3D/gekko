@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -146,5 +147,60 @@ func TestTransformHierarchy(t *testing.T) {
 	expectedPos := mgl32.Vec3{10, 0, -5}
 	if childWorld.Position.Sub(expectedPos).Len() > 0.001 {
 		t.Errorf("Child position after rotation incorrect: expected %v, got %v", expectedPos, childWorld.Position)
+	}
+}
+
+func TestTransformHierarchyIgnoresParentRenderPivot(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	parent := cmd.AddEntity(
+		&TransformComponent{
+			Position: mgl32.Vec3{10, 2, 3},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+			Pivot:    mgl32.Vec3{8, 4, 2},
+		},
+		&VoxelModelComponent{VoxelResolution: 0.5},
+	)
+	child := cmd.AddEntity(
+		&Parent{Entity: parent},
+		&LocalTransformComponent{
+			Position: mgl32.Vec3{1, 2, 3},
+			Rotation: mgl32.QuatIdent(),
+			Scale:    mgl32.Vec3{1, 1, 1},
+		},
+		&TransformComponent{},
+	)
+	app.FlushCommands()
+
+	TransformHierarchySystem(cmd)
+
+	childWorld, ok := cmd.GetComponent(child, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if !ok || childWorld == nil {
+		t.Fatalf("missing child TransformComponent")
+	}
+	expected := mgl32.Vec3{11, 4, 6}
+	if childWorld.Position.Sub(expected).Len() > 0.001 {
+		t.Fatalf("child world position = %v, expected %v", childWorld.Position, expected)
+	}
+}
+
+func TestTransformHierarchyResolvesDeepChainInOnePass(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	parent := cmd.AddEntity(&TransformComponent{Position: mgl32.Vec3{1, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	for range 13 {
+		parent = cmd.AddEntity(
+			&Parent{Entity: parent},
+			&LocalTransformComponent{Position: mgl32.Vec3{1, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+			&TransformComponent{},
+		)
+	}
+	app.FlushCommands()
+	TransformHierarchySystem(cmd)
+
+	world := cmd.GetComponent(parent, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if world.Position != (mgl32.Vec3{14, 0, 0}) {
+		t.Fatalf("deep child world position = %v, want [14 0 0]", world.Position)
 	}
 }

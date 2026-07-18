@@ -14,6 +14,10 @@ const (
 
 	DefaultImportedWorldSectorTargetWorldSize = 25.0
 	DefaultImportedWorldSectorProxyDownsample = 4
+	DefaultImportedWorldAuxDirName            = "aux"
+	CurrentImportedWorldChunkAuxSchemaVersion = 1
+	ImportedWorldChunkAuxPayloadBinaryV1      = "voxel_aux_binary_v1"
+	ImportedWorldNormalBakeVersion            = "voxel_normals_surface_fit_v2"
 )
 
 type ImportedWorldKind string
@@ -92,13 +96,24 @@ type ImportedWorldMaterialAnimationFrameDef struct {
 }
 
 type ImportedWorldChunkEntryDef struct {
-	Coord              TerrainChunkCoordDef `json:"coord"`
-	ChunkPath          string               `json:"chunk_path"`
-	NonEmptyVoxelCount int                  `json:"non_empty_voxel_count,omitempty"`
-	PayloadKind        string               `json:"payload_kind,omitempty"`
-	PayloadHash        string               `json:"payload_hash,omitempty"`
-	PayloadSizeBytes   int                  `json:"payload_size_bytes,omitempty"`
-	Tags               []string             `json:"tags,omitempty"`
+	Coord              TerrainChunkCoordDef         `json:"coord"`
+	ChunkPath          string                       `json:"chunk_path"`
+	NonEmptyVoxelCount int                          `json:"non_empty_voxel_count,omitempty"`
+	PayloadKind        string                       `json:"payload_kind,omitempty"`
+	PayloadHash        string                       `json:"payload_hash,omitempty"`
+	PayloadSizeBytes   int                          `json:"payload_size_bytes,omitempty"`
+	Aux                *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
+	Tags               []string                     `json:"tags,omitempty"`
+}
+
+type ImportedWorldChunkAuxRefDef struct {
+	AuxPath                string `json:"aux_path"`
+	PayloadKind            string `json:"payload_kind,omitempty"`
+	PayloadHash            string `json:"payload_hash,omitempty"`
+	PayloadSizeBytes       int    `json:"payload_size_bytes,omitempty"`
+	NormalBakeVersion      string `json:"normal_bake_version,omitempty"`
+	SourcePayloadHash      string `json:"source_payload_hash,omitempty"`
+	SourcePayloadSizeBytes int    `json:"source_payload_size_bytes,omitempty"`
 }
 
 type ImportedWorldSectorDef struct {
@@ -116,16 +131,17 @@ type ImportedWorldSectorDef struct {
 }
 
 type ImportedWorldLODDef struct {
-	Level              int      `json:"level"`
-	Kind               string   `json:"kind"`
-	ChunkPath          string   `json:"chunk_path"`
-	ChunkSize          int      `json:"chunk_size,omitempty"`
-	VoxelResolution    float32  `json:"voxel_resolution,omitempty"`
-	NonEmptyVoxelCount int      `json:"non_empty_voxel_count,omitempty"`
-	PayloadKind        string   `json:"payload_kind,omitempty"`
-	PayloadHash        string   `json:"payload_hash,omitempty"`
-	PayloadSizeBytes   int      `json:"payload_size_bytes,omitempty"`
-	Tags               []string `json:"tags,omitempty"`
+	Level              int                          `json:"level"`
+	Kind               string                       `json:"kind"`
+	ChunkPath          string                       `json:"chunk_path"`
+	ChunkSize          int                          `json:"chunk_size,omitempty"`
+	VoxelResolution    float32                      `json:"voxel_resolution,omitempty"`
+	NonEmptyVoxelCount int                          `json:"non_empty_voxel_count,omitempty"`
+	PayloadKind        string                       `json:"payload_kind,omitempty"`
+	PayloadHash        string                       `json:"payload_hash,omitempty"`
+	PayloadSizeBytes   int                          `json:"payload_size_bytes,omitempty"`
+	Aux                *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
+	Tags               []string                     `json:"tags,omitempty"`
 }
 
 type ImportedWorldChunkDef struct {
@@ -140,6 +156,26 @@ type ImportedWorldChunkDef struct {
 	Voxels             []ImportedWorldVoxelDef `json:"voxels,omitempty"`
 	NonEmptyVoxelCount int                     `json:"non_empty_voxel_count,omitempty"`
 	Tags               []string                `json:"tags,omitempty"`
+}
+
+type ImportedWorldChunkAuxDef struct {
+	WorldID                string                     `json:"world_id"`
+	SchemaVersion          int                        `json:"schema_version"`
+	Coord                  TerrainChunkCoordDef       `json:"coord"`
+	ChunkSize              int                        `json:"chunk_size"`
+	VoxelResolution        float32                    `json:"voxel_resolution"`
+	PayloadKind            string                     `json:"payload_kind,omitempty"`
+	PayloadHash            string                     `json:"payload_hash,omitempty"`
+	PayloadSizeBytes       int                        `json:"payload_size_bytes,omitempty"`
+	NormalBakeVersion      string                     `json:"normal_bake_version,omitempty"`
+	SourcePayloadHash      string                     `json:"source_payload_hash,omitempty"`
+	SourcePayloadSizeBytes int                        `json:"source_payload_size_bytes,omitempty"`
+	Records                []ImportedWorldBrickAuxDef `json:"records,omitempty"`
+}
+
+type ImportedWorldBrickAuxDef struct {
+	Origin [3]int `json:"origin"`
+	Bytes  []byte `json:"bytes"`
 }
 
 type ImportedWorldVoxelDef struct {
@@ -417,6 +453,48 @@ func EnsureImportedWorldChunkDefaults(def *ImportedWorldChunkDef) {
 	}
 	if def.NonEmptyVoxelCount == 0 {
 		def.NonEmptyVoxelCount = len(def.Voxels)
+	}
+}
+
+func EnsureImportedWorldChunkAuxDefaults(def *ImportedWorldChunkAuxDef) {
+	if def == nil {
+		return
+	}
+	if def.SchemaVersion == 0 {
+		def.SchemaVersion = CurrentImportedWorldChunkAuxSchemaVersion
+	}
+	if def.PayloadKind == "" {
+		def.PayloadKind = ImportedWorldChunkAuxPayloadBinaryV1
+	}
+	if def.NormalBakeVersion == "" {
+		def.NormalBakeVersion = ImportedWorldNormalBakeVersion
+	}
+}
+
+func DefaultImportedWorldChunkAuxPath(chunkPath string) string {
+	base := strings.TrimSpace(filepath.Base(filepath.FromSlash(chunkPath)))
+	if base == "" || base == "." {
+		base = "chunk.gkchunk"
+	}
+	ext := filepath.Ext(base)
+	if ext != "" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	return filepath.ToSlash(filepath.Join(DefaultImportedWorldAuxDirName, base+".gkaux"))
+}
+
+func ImportedWorldChunkAuxRef(path string, aux *ImportedWorldChunkAuxDef) *ImportedWorldChunkAuxRefDef {
+	if aux == nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return &ImportedWorldChunkAuxRefDef{
+		AuxPath:                filepath.ToSlash(path),
+		PayloadKind:            aux.PayloadKind,
+		PayloadHash:            aux.PayloadHash,
+		PayloadSizeBytes:       aux.PayloadSizeBytes,
+		NormalBakeVersion:      aux.NormalBakeVersion,
+		SourcePayloadHash:      aux.SourcePayloadHash,
+		SourcePayloadSizeBytes: aux.SourcePayloadSizeBytes,
 	}
 }
 

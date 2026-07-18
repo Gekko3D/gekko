@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -359,6 +360,19 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 			Scale:    content.Vec3{1, 1, 1},
 		},
 	}}
+	level.NPCs = []content.LevelNPCDef{{
+		ID:        "npc-1",
+		Kind:      "hl1_monster",
+		ClassName: "monster_barney",
+		ModelRef:  "models/barney.mdl",
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{8, 2, 6},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Health:     35,
+		TargetName: "barney_a",
+	}}
 	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +384,7 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
 	}
 	app.FlushCommands()
-	var brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount int
+	var brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount, npcCount int
 	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, _ *MovingBrushComponent) bool {
 		brushCount++
 		return true
@@ -415,8 +429,91 @@ func TestStreamedRuntimeSpawnsMovingBrushesAndUseTriggers(t *testing.T) {
 		pickupCount++
 		return true
 	})
-	if brushCount != 1 || pathNodeCount != 1 || triggerCount != 1 || touchTriggerCount != 1 || damageCount != 1 || changeCount != 1 || chargerCount != 1 || multiTargetCount != 1 || relayCount != 1 || breakableCount != 1 || pickupCount != 1 {
-		t.Fatalf("expected 1 brush/path/use/touch/damage/change/charger/multi/relay/breakable/pickup, got %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d", brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount)
+	MakeQuery1[NPCComponent](cmd).Map(func(_ EntityId, _ *NPCComponent) bool {
+		npcCount++
+		return true
+	})
+	if brushCount != 1 || pathNodeCount != 1 || triggerCount != 1 || touchTriggerCount != 1 || damageCount != 1 || changeCount != 1 || chargerCount != 1 || multiTargetCount != 1 || relayCount != 1 || breakableCount != 1 || pickupCount != 1 || npcCount != 1 {
+		t.Fatalf("expected 1 brush/path/use/touch/damage/change/charger/multi/relay/breakable/pickup/npc, got %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d", brushCount, pathNodeCount, triggerCount, touchTriggerCount, damageCount, changeCount, chargerCount, multiTargetCount, relayCount, breakableCount, pickupCount, npcCount)
+	}
+}
+
+func TestStreamedRuntimeSpawnsNPCAssetHierarchy(t *testing.T) {
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "assets", "barney.gkasset")
+	levelPath := filepath.Join(root, "levels", "npc.gklevel")
+	writeAnimatedNPCAssetForStreamedTest(t, assetPath, "barney-asset")
+
+	level := content.NewLevelDef("npc")
+	level.NPCs = []content.LevelNPCDef{{
+		ID:        "npc-1",
+		Kind:      "hl1_monster",
+		AssetPath: filepath.Join("..", "assets", "barney.gkasset"),
+		ClassName: "monster_barney",
+		ModelRef:  "models/barney.mdl",
+		Transform: content.LevelTransformDef{
+			Position: content.Vec3{8, 2, 6},
+			Rotation: content.Quat{0, 0, 0, 1},
+			Scale:    content.Vec3{1, 1, 1},
+		},
+		Health: 35,
+	}}
+	if err := os.MkdirAll(filepath.Dir(levelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatalf("SaveLevel failed: %v", err)
+	}
+
+	app, cmd, _ := newStreamedRuntimeHarness(t)
+	if err := StartStreamedLevelRuntime(cmd, newSpawnTestAssetServer(), StreamedLevelRuntimeConfig{LevelPath: levelPath, StreamingRadius: 0}); err != nil {
+		t.Fatalf("StartStreamedLevelRuntime failed: %v", err)
+	}
+	app.FlushCommands()
+	TransformHierarchySystem(cmd)
+
+	var npcEntity EntityId
+	MakeQuery1[NPCComponent](cmd).Map(func(eid EntityId, npc *NPCComponent) bool {
+		if npc.ClassName == "monster_barney" {
+			npcEntity = eid
+			return false
+		}
+		return true
+	})
+	if npcEntity == 0 {
+		t.Fatal("expected streamed runtime NPC entity")
+	}
+
+	var assetRoot EntityId
+	MakeQuery1[AuthoredAssetRootComponent](cmd).Map(func(eid EntityId, root *AuthoredAssetRootComponent) bool {
+		if root.AssetID != "barney-asset" {
+			return true
+		}
+		parent, _ := cmd.GetComponent(eid, reflect.TypeOf(Parent{})).(*Parent)
+		if parent == nil || parent.Entity != npcEntity {
+			t.Fatalf("expected NPC asset root to be parented to NPC %d, got %+v", npcEntity, parent)
+		}
+		assetRoot = eid
+		return false
+	})
+	if assetRoot == 0 {
+		t.Fatal("expected NPC authored asset root")
+	}
+
+	player, _ := cmd.GetComponent(assetRoot, reflect.TypeOf(AnimationPlayerComponent{})).(*AnimationPlayerComponent)
+	if player == nil || player.ClipID != "idle" || !player.Playing {
+		t.Fatalf("expected NPC asset root animation player, got %+v", player)
+	}
+
+	voxelPartCount := 0
+	MakeQuery1[VoxelModelComponent](cmd).Map(func(eid EntityId, _ *VoxelModelComponent) bool {
+		if isEntityOrDescendantOf(cmd, eid, assetRoot) {
+			voxelPartCount++
+		}
+		return true
+	})
+	if voxelPartCount != 2 {
+		t.Fatalf("expected two NPC asset voxel parts under asset root, got %d", voxelPartCount)
 	}
 }
 
@@ -1578,7 +1675,7 @@ func TestStreamedRuntimeRecordsStreamingObservability(t *testing.T) {
 	if !foundCommittedSnapshot {
 		t.Fatalf("expected metrics sink to receive committed snapshot, got %+v", metricSnapshots)
 	}
-	if line := metrics.LogLine(); line == "" || !strings.Contains(line, "streaming metrics:") || !strings.Contains(line, "committed_total=1") || !strings.Contains(line, "full_committed_total=1") || !strings.Contains(line, "commit_world_ms=") || !strings.Contains(line, "commit_world_register_ms=") || !strings.Contains(line, "commit_flushes=1") {
+	if line := metrics.LogLine(); line == "" || !strings.Contains(line, "streaming metrics:") || !strings.Contains(line, "committed_total=1") || !strings.Contains(line, "full_committed_total=1") || !strings.Contains(line, "commit_world_ms=") || !strings.Contains(line, "commit_world_register_ms=") || !strings.Contains(line, "commit_flushes=1") || !strings.Contains(line, "aux_hits=") || !strings.Contains(line, "aux_misses=") || !strings.Contains(line, "runtime_normal_bake_ms=") {
 		t.Fatalf("unexpected metrics log line: %q", line)
 	}
 }
@@ -2930,6 +3027,30 @@ func driveStreamedRuntimeUntil(t *testing.T, app *App, done func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for streamed runtime")
+}
+
+func streamedRuntimeTestFloorVoxels(minX, maxX, minZ, maxZ, y int) []content.ImportedWorldVoxelDef {
+	out := make([]content.ImportedWorldVoxelDef, 0, (maxX-minX+1)*(maxZ-minZ+1))
+	for x := minX; x <= maxX; x++ {
+		for z := minZ; z <= maxZ; z++ {
+			out = append(out, content.ImportedWorldVoxelDef{X: x, Y: y, Z: z, Value: 1})
+		}
+	}
+	return out
+}
+
+func streamedRuntimeTestUnevenFieldVoxels() []content.ImportedWorldVoxelDef {
+	out := make([]content.ImportedWorldVoxelDef, 0)
+	for x := 10; x <= 25; x++ {
+		for z := 10; z <= 25; z++ {
+			height := (x-10)/2 + (z-10)/8
+			height += int(math.Round(5 * math.Sin(float64(x-10)/15*math.Pi)))
+			for y := 0; y <= height; y++ {
+				out = append(out, content.ImportedWorldVoxelDef{X: x, Y: y, Z: z, Value: 1})
+			}
+		}
+	}
+	return out
 }
 
 func placementEntityByIDForStreamedTest(cmd *Commands, placementID string) EntityId {

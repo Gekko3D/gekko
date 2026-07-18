@@ -25,6 +25,7 @@ type Brick struct {
 	Payload         [BrickSize][BrickSize][BrickSize]uint8
 	AtlasOffset     uint32
 	Flags           uint32
+	PrecomputedAux  []byte
 }
 
 func NewBrick() *Brick {
@@ -33,10 +34,14 @@ func NewBrick() *Brick {
 
 func (b *Brick) Copy() *Brick {
 	newB := *b
+	if len(b.PrecomputedAux) > 0 {
+		newB.PrecomputedAux = append([]byte(nil), b.PrecomputedAux...)
+	}
 	return &newB
 }
 
 func (b *Brick) SetVoxel(bx, by, bz int, val uint8) {
+	b.PrecomputedAux = nil
 	b.Payload[bx][by][bz] = val
 
 	mx, my, mz := bx/MicroSize, by/MicroSize, bz/MicroSize
@@ -74,6 +79,7 @@ func (b *Brick) SetVoxel(bx, by, bz int, val uint8) {
 }
 
 func (b *Brick) Expand(paletteIdx uint8) {
+	b.PrecomputedAux = nil
 	b.Flags &^= BrickFlagSolid | BrickFlagUniformMaterial
 	b.OccupancyMask64 = 0xFFFFFFFFFFFFFFFF
 	for z := 0; z < BrickSize; z++ {
