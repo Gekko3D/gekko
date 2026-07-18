@@ -73,6 +73,88 @@ func TestBrokenLadderDisablesRuntimeTraversalWithoutRebake(t *testing.T) {
 	}
 }
 
+func TestRuntimeDoorOverlayChangesActionWithoutRebake(t *testing.T) {
+	const chunkSize = 6
+	profile := content.NavAgentProfileDef{ID: "walker", Radius: 0.4, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	source := content.NavSourceTileDef{
+		NavID: "door-runtime", SchemaVersion: content.CurrentNavSourceTileSchemaVersion,
+		BuilderVersion: content.CurrentNavGraphBuilderVersion, ChunkSize: chunkSize,
+		SourceHash: "source", DependencyHash: "dependency",
+	}
+	for x := range chunkSize {
+		source.Spans = append(source.Spans, content.NavSpanDef{
+			ID: uint32(x), X: x, Z: 0, SupportHeight: 0, CeilingHeight: 3,
+			Headroom: 3, ClearanceRadius: 1, Area: "ground",
+		})
+	}
+	built, err := content.BuildNavSpanGraph(source, profile, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	door := content.NavDoorDef{ID: "door-1", BoundsCenter: content.Vec3{3, 1, 0.5}, BoundsHalfExtents: content.Vec3{0.1, 1, 0.5}}
+	graphs, _, err := content.ConnectNavGraphDoors([]content.NavSourceTileDef{source}, []content.NavGraphTileDef{built.Graph}, []content.NavDoorDef{door}, profile, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := buildRuntimeNavigationQuery([]content.NavSourceTileDef{source}, graphs, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &StreamedLevelRuntimeState{
+		Initialized: true, LevelID: "level", BaseNavManifest: &content.NavGraphManifestDef{
+			ChunkSize: chunkSize, VoxelResolution: 1, AgentProfiles: []content.NavAgentProfileDef{profile}, Doors: []content.NavDoorDef{door},
+		},
+		NavigationSources: []content.NavSourceTileDef{source}, NavigationGraphs: graphs,
+		NavigationRevision: 1, navigationQuery: query, navigationDisabled: make(map[string]struct{}), navigationOpenDoors: make(map[string]struct{}), navigationBlockers: make(map[string]content.NavBlockerDef),
+	}
+	app := NewApp()
+	cmd := app.Commands()
+	entity := cmd.AddEntity(
+		&MovingBrushComponent{
+			NavigationRole: content.NavigationRoleDoor,
+			BoundsCenter:   mgl32.Vec3(door.BoundsCenter), ClosedBoundsCenter: mgl32.Vec3(door.BoundsCenter),
+			BoundsHalfExtents: mgl32.Vec3(door.BoundsHalfExtents), OpenOffset: mgl32.Vec3{0, 2, 0},
+		},
+		&AuthoredLevelMovingBrushRefComponent{LevelID: "level", MovingBrushID: door.ID},
+	)
+	app.FlushCommands()
+	start, goal := content.Vec3{0.5, 0, 0.5}, content.Vec3{5.5, 0, 0.5}
+	closed, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
+	if err != nil || !closed.Found || !routeRequiresGate(closed, content.NavGateDoor) {
+		t.Fatalf("closed door route = %+v err=%v", closed, err)
+	}
+	avoiding, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRouteAvoidingTraversal(start, goal, door.ID)
+	if err != nil || avoiding.Found || avoiding.FailureReason != content.NavRouteNoRoute {
+		t.Fatalf("door-avoiding route = %+v err=%v", avoiding, err)
+	}
+
+	brush := cmd.GetComponent(entity, reflect.TypeOf(MovingBrushComponent{})).(*MovingBrushComponent)
+	brush.Open = true
+	brush.BoundsCenter = brush.ClosedBoundsCenter.Add(brush.OpenOffset)
+	streamedLevelNavigationOverlaySystem(cmd, state)
+	open, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
+	if err != nil || !open.Found || routeRequiresGate(open, content.NavGateDoor) || open.NavigationRevision != 2 {
+		t.Fatalf("open door route = %+v err=%v", open, err)
+	}
+
+	cmd.RemoveEntity(entity)
+	app.FlushCommands()
+	streamedLevelNavigationOverlaySystem(cmd, state)
+	missing, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
+	if err != nil || missing.Found || missing.FailureReason != content.NavRouteNoRoute || missing.NavigationRevision != 3 {
+		t.Fatalf("missing door route = %+v err=%v", missing, err)
+	}
+}
+
+func routeRequiresGate(route content.NavRouteResult, kind string) bool {
+	for _, step := range route.Steps {
+		if step.Gate != nil && step.Gate.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRuntimeNavigationBlockerAddMoveRemove(t *testing.T) {
 	const chunkSize = 7
 	profile := content.NavAgentProfileDef{ID: "walker", Radius: 0.1, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}

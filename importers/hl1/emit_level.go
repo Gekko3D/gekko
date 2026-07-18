@@ -947,6 +947,9 @@ func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath 
 			SourceTag:         "hl1:" + className,
 			Tags:              hl1GameplayMarkerTags(entity, bounds),
 		}
+		if kind == MovingBrushKindHL1Door || kind == MovingBrushKindHL1DoorRotating {
+			brush.NavigationRole = content.NavigationRoleDoor
+		}
 		if summary.BSP != nil && hl1MovingBrushHasSeparateVisual(className) {
 			asset, visualOrigin, err := buildHL1MovingBrushAsset(opts, summary.BSP, textureStore, materialColors, entity, brush.ID)
 			if err != nil {

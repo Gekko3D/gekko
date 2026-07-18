@@ -293,6 +293,7 @@ type LevelMovingBrushDef struct {
 	Name              string   `json:"name,omitempty"`
 	Kind              string   `json:"kind,omitempty"`
 	MotionKind        string   `json:"motion_kind,omitempty"`
+	NavigationRole    string   `json:"navigation_role,omitempty"`
 	AssetPath         string   `json:"asset_path,omitempty"`
 	BoundsCenter      Vec3     `json:"bounds_center"`
 	BoundsHalfExtents Vec3     `json:"bounds_half_extents"`

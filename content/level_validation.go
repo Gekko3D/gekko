@@ -550,6 +550,9 @@ func validateLevelMovingBrush(result *LevelValidationResult, brush LevelMovingBr
 	if brush.MoveDistance < 0 {
 		result.addError("invalid_moving_brush_distance", "moving brush move distance must be non-negative", "", "", "", "", "", "", "")
 	}
+	if role := strings.TrimSpace(brush.NavigationRole); role != "" && role != NavigationRoleDoor {
+		result.addError("invalid_moving_brush_navigation_role", fmt.Sprintf("unsupported moving brush navigation role %q", role), "", "", "", "", "", "", "")
+	}
 	if strings.TrimSpace(brush.AssetPath) != "" && opts.DocumentPath != "" {
 		resolvedPath := ResolveDocumentPath(brush.AssetPath, opts.DocumentPath)
 		if _, err := os.Stat(resolvedPath); err != nil {

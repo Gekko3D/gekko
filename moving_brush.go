@@ -5,8 +5,10 @@ import "github.com/go-gl/mathgl/mgl32"
 type MovingBrushComponent struct {
 	Kind               string
 	MotionKind         string
+	NavigationRole     string
 	BoundsCenter       mgl32.Vec3
 	BoundsHalfExtents  mgl32.Vec3
+	ClosedHalfExtents  mgl32.Vec3
 	MoveDirection      mgl32.Vec3
 	ClosedPosition     mgl32.Vec3
 	ClosedBoundsCenter mgl32.Vec3
@@ -63,6 +65,17 @@ func (m *MovingBrushComponent) TargetAngle() float32 {
 		return m.OpenAngle
 	}
 	return 0
+}
+
+// MovingBrushFullyOpen reports physical clearance, not merely an open target.
+func MovingBrushFullyOpen(m *MovingBrushComponent) bool {
+	if m == nil || !m.Open {
+		return false
+	}
+	if m.MotionKind == "rotate" {
+		return absf(m.CurrentAngle-m.OpenAngle) <= 1e-3
+	}
+	return m.BoundsCenter.Sub(m.ClosedBoundsCenter.Add(m.OpenOffset)).LenSqr() <= 1e-6
 }
 
 type UseTriggerComponent struct {
@@ -468,8 +481,11 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 		if brush.ClosedPosition == (mgl32.Vec3{}) {
 			brush.ClosedPosition = tr.Position
 		}
-		if brush.ClosedBoundsCenter == (mgl32.Vec3{}) {
-			brush.ClosedBoundsCenter = brush.BoundsCenter
+		if brush.ClosedHalfExtents == (mgl32.Vec3{}) {
+			brush.ClosedHalfExtents = brush.BoundsHalfExtents
+			if brush.ClosedBoundsCenter == (mgl32.Vec3{}) {
+				brush.ClosedBoundsCenter = brush.BoundsCenter
+			}
 		}
 		if brush.ClosedRotation.W == 0 {
 			brush.ClosedRotation = tr.Rotation
@@ -486,8 +502,21 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 			updateMovingBrushLinear(tr, brush, dt)
 		}
 		updateMovingBrushOpenWait(tr, brush, dt)
-		progress := tr.Position.Sub(brush.ClosedPosition)
-		brush.BoundsCenter = brush.ClosedBoundsCenter.Add(progress)
+		if brush.MotionKind == "rotate" {
+			axis := brush.RotationAxis
+			if axis.LenSqr() <= 1e-6 {
+				axis = mgl32.Vec3{0, 1, 0}
+			} else {
+				axis = axis.Normalize()
+			}
+			rot := mgl32.QuatRotate(mgl32.DegToRad(brush.CurrentAngle), axis)
+			brush.BoundsCenter = brush.RotationOrigin.Add(rot.Rotate(brush.ClosedBoundsCenter.Sub(brush.RotationOrigin)))
+			brush.BoundsHalfExtents = rotatedAABBHalfExtents(brush.ClosedHalfExtents, rot)
+		} else {
+			progress := tr.Position.Sub(brush.ClosedPosition)
+			brush.BoundsCenter = brush.ClosedBoundsCenter.Add(progress)
+			brush.BoundsHalfExtents = brush.ClosedHalfExtents
+		}
 		if local, ok := localTransformForEntity(cmd, eid); ok {
 			local.Position = tr.Position
 			local.Rotation = tr.Rotation
@@ -496,6 +525,17 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 		moveMovingBrushRiders(cmd, previousCenter, previousHalfExtents, tr.Position.Sub(previousPosition))
 		return true
 	})
+}
+
+func rotatedAABBHalfExtents(half mgl32.Vec3, rotation mgl32.Quat) mgl32.Vec3 {
+	x := rotation.Rotate(mgl32.Vec3{half.X(), 0, 0})
+	y := rotation.Rotate(mgl32.Vec3{0, half.Y(), 0})
+	z := rotation.Rotate(mgl32.Vec3{0, 0, half.Z()})
+	return mgl32.Vec3{
+		absf(x.X()) + absf(y.X()) + absf(z.X()),
+		absf(x.Y()) + absf(y.Y()) + absf(z.Y()),
+		absf(x.Z()) + absf(y.Z()) + absf(z.Z()),
+	}
 }
 
 func updateMovingBrushOpenWait(tr *TransformComponent, brush *MovingBrushComponent, dt float32) {

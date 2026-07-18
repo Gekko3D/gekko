@@ -224,6 +224,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsMovingBrushAndUseTrigger(t *testing.T) {
 		ID:                "door-1",
 		Name:              "door",
 		Kind:              "hl1_func_door",
+		NavigationRole:    content.NavigationRoleDoor,
 		BoundsCenter:      content.Vec3{10, 2, 20},
 		BoundsHalfExtents: content.Vec3{0.5, 1, 0.25},
 		MoveDirection:     content.Vec3{1, 0, 0},
@@ -261,7 +262,7 @@ func TestLoadAndSpawnAuthoredLevelSpawnsMovingBrushAndUseTrigger(t *testing.T) {
 	var foundBrush, foundTrigger bool
 	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent) bool {
 		foundBrush = true
-		if brush.TargetName != "door_a" || brush.Speed != 3 || brush.BoundsCenter != (mgl32.Vec3{10, 2, 20}) {
+		if brush.NavigationRole != content.NavigationRoleDoor || brush.TargetName != "door_a" || brush.Speed != 3 || brush.BoundsCenter != (mgl32.Vec3{10, 2, 20}) {
 			t.Fatalf("moving brush component = %+v", brush)
 		}
 		return true

@@ -40,9 +40,9 @@ type navGraphQuery struct {
 }
 
 type navBackingKey struct {
-	fromRegion, toRegion   uint32
-	toTile                 TerrainChunkCoordDef
-	kind, flags, traversal string
+	fromRegion, toRegion         uint32
+	toTile                       TerrainChunkCoordDef
+	kind, flags, traversal, gate string
 }
 
 type navBackingCandidate struct {
@@ -214,7 +214,11 @@ func (q *navGraphQuery) indexBackingTransitions() {
 				want[0] += float32(coord.X*q.chunkSize) * q.voxelResolution
 				want[2] += float32(coord.Z*q.chunkSize) * q.voxelResolution
 			}
-			key := navBackingKey{transition.FromRegion, transition.ToRegion, transition.ToTile, transition.Kind, navQueryFlagsKey(transition.RequiresFlags), traversalID}
+			gateID := ""
+			if transition.Gate != nil {
+				gateID = transition.Gate.Kind + "\x00" + transition.Gate.ID
+			}
+			key := navBackingKey{transition.FromRegion, transition.ToRegion, transition.ToTile, transition.Kind, navQueryFlagsKey(transition.RequiresFlags), traversalID, gateID}
 			candidates[key] = append(candidates[key], navBackingCandidate{transition, want})
 		}
 		best := make(map[uint32]NavSpanTransitionDef, len(graph.Transitions))
@@ -230,7 +234,11 @@ func (q *navGraphQuery) indexBackingTransitions() {
 			if edge.Traversal != nil {
 				traversalID = edge.Traversal.ID
 			}
-			key := navBackingKey{fromRegion, toRegion, edge.To.Tile, edge.Kind, navQueryFlagsKey(edge.RequiresFlags), traversalID}
+			gateID := ""
+			if edge.Gate != nil {
+				gateID = edge.Gate.Kind + "\x00" + edge.Gate.ID
+			}
+			key := navBackingKey{fromRegion, toRegion, edge.To.Tile, edge.Kind, navQueryFlagsKey(edge.RequiresFlags), traversalID, gateID}
 			matches := candidates[key]
 			if len(matches) == 0 {
 				continue

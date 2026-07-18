@@ -20,6 +20,10 @@ type navRegionNeighbor struct {
 // CompressNavGraphRegions groups mutually reachable spans without crossing
 // area or traversal-class boundaries, then emits directed boundary runs.
 func CompressNavGraphRegions(source NavSourceTileDef, graph NavGraphTileDef, voxelResolution float32) (NavGraphTileDef, error) {
+	return compressNavGraphRegions(source, graph, voxelResolution, nil)
+}
+
+func compressNavGraphRegions(source NavSourceTileDef, graph NavGraphTileDef, voxelResolution float32, partition func(NavSpanDef) string) (NavGraphTileDef, error) {
 	if validation := ValidateNavSourceTile(&source); validation.HasErrors() {
 		return NavGraphTileDef{}, fmt.Errorf("invalid navigation source tile: %s", validation.Error())
 	}
@@ -38,11 +42,14 @@ func CompressNavGraphRegions(source NavSourceTileDef, graph NavGraphTileDef, vox
 		spans[span.ID] = span
 	}
 	accepted := make(map[uint32]struct{}, len(graph.SpanIDs))
+	spanClasses := make(map[uint32]string, len(graph.SpanIDs))
 	for _, id := range graph.SpanIDs {
-		if _, ok := spans[id]; !ok {
+		span, ok := spans[id]
+		if !ok {
 			return NavGraphTileDef{}, fmt.Errorf("navigation graph references missing source span %d", id)
 		}
 		accepted[id] = struct{}{}
+		spanClasses[id] = navRegionPartitionClass(span, partition)
 	}
 
 	type pair struct{ from, to uint32 }
@@ -96,12 +103,12 @@ func CompressNavGraphRegions(source NavSourceTileDef, graph NavGraphTileDef, vox
 		members := []uint32{seed}
 		queue := []uint32{seed}
 		var regionClass *navRegionEdgeClass
-		seedClass := navRegionSpanClass(spans[seed])
+		seedClass := spanClasses[seed]
 		for len(queue) > 0 {
 			current := queue[0]
 			queue = queue[1:]
 			for _, neighbor := range neighbors[current] {
-				if _, ok := accepted[neighbor.span]; !ok || navRegionSpanClass(spans[neighbor.span]) != seedClass {
+				if _, ok := accepted[neighbor.span]; !ok || spanClasses[neighbor.span] != seedClass {
 					continue
 				}
 				if regionClass != nil && neighbor.class != *regionClass {
@@ -131,6 +138,14 @@ func CompressNavGraphRegions(source NavSourceTileDef, graph NavGraphTileDef, vox
 		return NavGraphTileDef{}, fmt.Errorf("invalid compressed navigation graph tile: %s", validation.Error())
 	}
 	return graph, nil
+}
+
+func navRegionPartitionClass(span NavSpanDef, partition func(NavSpanDef) string) string {
+	class := navRegionSpanClass(span)
+	if partition != nil {
+		class += "\x00" + partition(span)
+	}
+	return class
 }
 
 func navRegionSpanClass(span NavSpanDef) string {

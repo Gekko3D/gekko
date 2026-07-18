@@ -285,6 +285,7 @@ type StreamedLevelRuntimeState struct {
 	NavigationRevision      uint64
 	navigationQuery         *content.NavGraphQuery
 	navigationDisabled      map[string]struct{}
+	navigationOpenDoors     map[string]struct{}
 	navigationBlockers      map[string]content.NavBlockerDef
 	navigationDesired       map[content.TerrainChunkCoordDef]struct{}
 	navigationLoadedGen     uint64
@@ -419,6 +420,7 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		navigationRebuilds:       make(chan streamedNavigationRebuildResult, 2),
 		navigationEditRevisions:  make(map[EntityId]uint64),
 		navigationDisabled:       make(map[string]struct{}),
+		navigationOpenDoors:      make(map[string]struct{}),
 		navigationBlockers:       make(map[string]content.NavBlockerDef),
 	})
 	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
@@ -571,6 +573,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.NavigationRevision = 0
 	state.navigationQuery = nil
 	state.navigationDisabled = make(map[string]struct{})
+	state.navigationOpenDoors = make(map[string]struct{})
 	state.navigationBlockers = make(map[string]content.NavBlockerDef)
 	state.navigationDesired = make(map[content.TerrainChunkCoordDef]struct{})
 	state.navigationLoadedGen = 0

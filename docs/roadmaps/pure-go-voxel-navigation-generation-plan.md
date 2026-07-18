@@ -226,11 +226,16 @@ type NavSpanTransitionDef struct {
     MinClearance    float32
     Cost            float32
     RequiresFlags   []string
+    Gate            *NavTransitionGateDef
 }
 ```
 
 Transitions are directed because step-up, drop, jump, door, and capability
 rules are not necessarily symmetric.
+
+Movement kind and gameplay gating are orthogonal. A `walk`, `drop`, `ladder`,
+or future jump transition may carry an optional stable-ID door gate; opening
+the gate does not change which locomotion executor owns the movement.
 
 ### Compact Region
 
@@ -711,7 +716,7 @@ Implement one observed gameplay need at a time:
 - [ ] authored/validated jumps
 - [x] ladders
 - [ ] water
-- [ ] doors
+- [x] doors
 - [x] breakables
 - [ ] moving platforms
 - [ ] temporary blockers and local avoidance
@@ -733,6 +738,23 @@ and breakable IDs. Their bounds disable overlapping spans while the entity is
 alive; destruction removes the blocker and increments the navigation revision.
 This does not make a breakable top walkable or make NPCs intentionally attack
 it; those require support rebuilds or an explicit action transition.
+
+The door slice is format-neutral: authored moving brushes opt in with
+`navigation_role: "door"`, and importers translate source-format door classes
+into that role. Baking cuts vertical closed footprints and emits ordinary
+movement transitions with optional stable-ID door gates. Horizontal hatches
+gate an intersecting authored movement transition such as a ladder; if none
+exists, baking may emit a directed downward drop to the highest supported
+landing below the opening. Runtime removes the gate when fully open and
+disables the transition if its authored brush is unavailable. Actiongame opens
+the bound brush directly when no authored controller exists. When a same-level
+use trigger targets the door group, actiongame instead finds a reachable point
+inside that trigger's use range without crossing the closed gate, activates the
+shared use-trigger behavior, waits for physical clearance, then replans the
+original goal and dispatches the unchanged movement kind. A closed moving hatch
+is not static walkable support. Door locks, keys, indirect relay/controller
+chains, intentional breaking, elevators, and general ledge-drop discovery
+remain separate slices.
 
 ## Phase 12: Optimize Measured Bottlenecks
 

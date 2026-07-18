@@ -162,7 +162,7 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		sourceCoords[coord] = struct{}{}
 	}
 
-	graphCoords := expandNavGraphCoordsForLadders(expandNavGraphHorizontal(sourceCoords), base.LadderVolumes, base.ChunkSize, base.VoxelResolution)
+	graphCoords := expandNavGraphCoordsForDoors(expandNavGraphCoordsForLadders(expandNavGraphHorizontal(sourceCoords), base.LadderVolumes, base.ChunkSize, base.VoxelResolution), base.Doors, base.ChunkSize, base.VoxelResolution)
 	contextGraphCoords := expandNavGraphHorizontal(graphCoords)
 	contextSourceCoords := expandNavGraphCube(contextGraphCoords)
 	sources := make(map[TerrainChunkCoordDef]NavSourceTileDef, len(contextSourceCoords))
@@ -233,7 +233,15 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		if err != nil {
 			return NavGraphDeltaBakeResult{}, err
 		}
+		connected, _, err = connectNavGraphDoors(sourceSlice, connected, base.Doors, profile, base.ChunkSize, base.VoxelResolution, false)
+		if err != nil {
+			return NavGraphDeltaBakeResult{}, err
+		}
 		connected, _, err = connectNavGraphLadders(sourceSlice, connected, base.LadderVolumes, profile, base.ChunkSize, base.VoxelResolution, false)
+		if err != nil {
+			return NavGraphDeltaBakeResult{}, err
+		}
+		connected, _, err = connectNavGraphDoorGates(sourceSlice, connected, base.Doors, profile, base.ChunkSize, base.VoxelResolution, false)
 		if err != nil {
 			return NavGraphDeltaBakeResult{}, err
 		}

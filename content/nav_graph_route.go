@@ -86,7 +86,8 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 			Tile: regionRoute[i].Node.Tile, Region: regionRoute[i].Node.Region,
 			EnterTransition: regionRoute[i].Transition.ID, Target: crossing,
 			RequiredAction: regionRoute[i].Transition.Kind,
-			Traversal:      cloneNavTraversal(regionRoute[i].Transition.Traversal), TraversalWaypoint: -1,
+			Traversal:      cloneNavTraversal(regionRoute[i].Transition.Traversal),
+			Gate:           cloneNavTransitionGate(regionRoute[i].Transition.Gate), TraversalWaypoint: -1,
 		})
 	}
 	if navRouteWalkOnly(result.Steps) && query.waypointLineVisible(start.Projected, goal.Projected) {
@@ -386,9 +387,17 @@ func cloneNavTraversal(source *NavTraversalDef) *NavTraversalDef {
 	return &copy
 }
 
+func cloneNavTransitionGate(source *NavTransitionGateDef) *NavTransitionGateDef {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	return &copy
+}
+
 func navRouteWalkOnly(steps []NavRouteStep) bool {
 	for _, step := range steps {
-		if step.RequiredAction != "" && step.RequiredAction != NavTransitionWalk {
+		if step.Gate != nil || step.RequiredAction != "" && step.RequiredAction != NavTransitionWalk {
 			return false
 		}
 	}

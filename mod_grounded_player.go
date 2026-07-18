@@ -369,9 +369,7 @@ func groundedPlayerUseSystem(cmd *Commands, input *Input) {
 		origin := cam.Position
 		dir := forwardFromYawPitch(cam.Yaw, cam.Pitch)
 		if hit, ok := findUseTriggerHit(cmd, origin, dir, 2.2); ok {
-			hit.Trigger.ActivationCount++
-			activateMovingBrushAtBounds(cmd, hit.Trigger.BoundsCenter, hit.Trigger.BoundsHalfExtents)
-			ActivateTarget(cmd, hit.Trigger.Target, 0)
+			ActivateUseTrigger(cmd, hit.Trigger, 0)
 			return false
 		}
 		if hit, ok := findMovingBrushUseHit(cmd, origin, dir, 2.2); ok {
@@ -386,6 +384,17 @@ func groundedPlayerUseSystem(cmd *Commands, input *Input) {
 		}
 		return true
 	})
+}
+
+// ActivateUseTrigger applies the same authored interaction for players, NPCs,
+// and other gameplay systems.
+func ActivateUseTrigger(cmd *Commands, trigger *UseTriggerComponent, activator EntityId) {
+	if cmd == nil || trigger == nil {
+		return
+	}
+	trigger.ActivationCount++
+	activateMovingBrushAtBounds(cmd, trigger.BoundsCenter, trigger.BoundsHalfExtents)
+	ActivateTarget(cmd, trigger.Target, activator)
 }
 
 type useTriggerHit struct {

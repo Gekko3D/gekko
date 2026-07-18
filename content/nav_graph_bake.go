@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const CurrentNavGraphBuilderVersion = "voxel_graph_v6"
+const CurrentNavGraphBuilderVersion = "voxel_graph_v8"
 
 type NavGraphBakeDiagnosticCount struct {
 	Coord          TerrainChunkCoordDef `json:"coord"`
@@ -58,10 +58,96 @@ func BakeLevelNavGraph(levelPath string, profiles []NavAgentProfileDef) (NavGrap
 	if err != nil {
 		return NavGraphBakeResult{}, err
 	}
+	if err := ApplyNavGraphDoors(&result, level.MovingBrushes); err != nil {
+		return NavGraphBakeResult{}, err
+	}
 	if err := ApplyNavGraphLadders(&result, level.LadderVolumes); err != nil {
 		return NavGraphBakeResult{}, err
 	}
+	if err := ApplyNavGraphDoorGates(&result); err != nil {
+		return NavGraphBakeResult{}, err
+	}
 	return result, nil
+}
+
+// ApplyNavGraphDoors derives format-neutral door footprints from authored
+// moving brushes and links each agent profile before other traversal types.
+func ApplyNavGraphDoors(bake *NavGraphBakeResult, brushes []LevelMovingBrushDef) error {
+	if bake == nil {
+		return fmt.Errorf("navigation graph bake is required")
+	}
+	doors := make([]NavDoorDef, 0)
+	for _, brush := range brushes {
+		if strings.TrimSpace(brush.NavigationRole) == NavigationRoleDoor {
+			doors = append(doors, NavDoorDef{ID: brush.ID, Group: brush.TargetName, BoundsCenter: brush.BoundsCenter, BoundsHalfExtents: brush.BoundsHalfExtents})
+		}
+	}
+	sort.Slice(doors, func(i, j int) bool { return doors[i].ID < doors[j].ID })
+	bake.Manifest.Doors = doors
+	for _, profile := range bake.Manifest.AgentProfiles {
+		var graphs []NavGraphTileDef
+		for _, graph := range bake.GraphTiles {
+			if graph.AgentProfileID == profile.ID {
+				graphs = append(graphs, graph)
+			}
+		}
+		linked, diagnostics, err := connectNavGraphDoors(bake.SourceTiles, graphs, doors, profile, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution, false)
+		if err != nil {
+			return err
+		}
+		byCoord := make(map[TerrainChunkCoordDef]NavGraphTileDef, len(linked))
+		for _, graph := range linked {
+			byCoord[graph.Coord] = graph
+		}
+		for i := range bake.GraphTiles {
+			if bake.GraphTiles[i].AgentProfileID == profile.ID {
+				bake.GraphTiles[i] = byCoord[bake.GraphTiles[i].Coord]
+			}
+		}
+		for _, diagnostic := range diagnostics {
+			bake.Diagnostics = append(bake.Diagnostics, NavGraphBakeDiagnosticCount{AgentProfileID: profile.ID, Stage: "door", Code: diagnostic.Code, Count: 1})
+		}
+	}
+	if validation := ValidateNavGraphBake(bake); validation.HasErrors() {
+		return fmt.Errorf("invalid door-linked navigation graph bake: %s", validation.Error())
+	}
+	return nil
+}
+
+// ApplyNavGraphDoorGates composes horizontal hatches after ladders and other
+// authored movement links have been added.
+func ApplyNavGraphDoorGates(bake *NavGraphBakeResult) error {
+	if bake == nil {
+		return fmt.Errorf("navigation graph bake is required")
+	}
+	for _, profile := range bake.Manifest.AgentProfiles {
+		var graphs []NavGraphTileDef
+		for _, graph := range bake.GraphTiles {
+			if graph.AgentProfileID == profile.ID {
+				graphs = append(graphs, graph)
+			}
+		}
+		linked, diagnostics, err := connectNavGraphDoorGates(bake.SourceTiles, graphs, bake.Manifest.Doors, profile, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution, false)
+		if err != nil {
+			return err
+		}
+		byCoord := make(map[TerrainChunkCoordDef]NavGraphTileDef, len(linked))
+		for _, graph := range linked {
+			byCoord[graph.Coord] = graph
+		}
+		for i := range bake.GraphTiles {
+			if bake.GraphTiles[i].AgentProfileID == profile.ID {
+				bake.GraphTiles[i] = byCoord[bake.GraphTiles[i].Coord]
+			}
+		}
+		for _, diagnostic := range diagnostics {
+			bake.Diagnostics = append(bake.Diagnostics, NavGraphBakeDiagnosticCount{AgentProfileID: profile.ID, Stage: "door", Code: diagnostic.Code, Count: 1})
+		}
+	}
+	if validation := ValidateNavGraphBake(bake); validation.HasErrors() {
+		return fmt.Errorf("invalid door-gated navigation graph bake: %s", validation.Error())
+	}
+	return nil
 }
 
 // ApplyNavGraphLadders stores generic authored ladder facts in the manifest and

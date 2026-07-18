@@ -456,8 +456,10 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 		&MovingBrushComponent{
 			Kind:               brush.Kind,
 			MotionKind:         brush.MotionKind,
+			NavigationRole:     brush.NavigationRole,
 			BoundsCenter:       center,
 			BoundsHalfExtents:  halfExtents,
+			ClosedHalfExtents:  halfExtents,
 			MoveDirection:      moveDirection,
 			ClosedPosition:     visualOrigin,
 			ClosedBoundsCenter: center,

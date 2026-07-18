@@ -186,7 +186,7 @@ func (q *navGraphQuery) findBlockerRoute(start, goal navResolvedSpan) NavRouteRe
 		edgeSteps[i] = len(result.Steps)
 		result.Steps = append(result.Steps, NavRouteStep{
 			Tile: toNode.Tile, Region: toNode.Region, Target: q.spanTransitionTarget(from.Tile, edge),
-			RequiredAction: edge.Kind, Traversal: cloneNavTraversal(edge.Traversal), TraversalWaypoint: -1,
+			RequiredAction: edge.Kind, Traversal: cloneNavTraversal(edge.Traversal), Gate: cloneNavTransitionGate(edge.Gate), TraversalWaypoint: -1,
 		})
 	}
 	for i, edge := range path.edges {

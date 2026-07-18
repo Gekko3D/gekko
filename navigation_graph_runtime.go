@@ -27,6 +27,7 @@ type streamedNavigationLoadResult struct {
 	Graphs             []content.NavGraphTileDef
 	Query              *content.NavGraphQuery
 	DisabledTraversals map[string]struct{}
+	OpenDoors          map[string]struct{}
 	Blockers           map[string]content.NavBlockerDef
 	Err                error
 }
@@ -44,6 +45,10 @@ type RuntimeNavigationService struct {
 	VoxelResolution    float32
 	NavigationRevision uint64
 	query              *content.NavGraphQuery
+	profiles           []content.NavAgentProfileDef
+	disabledTraversals map[string]struct{}
+	openDoors          map[string]struct{}
+	blockers           map[string]content.NavBlockerDef
 }
 
 // NavigationBlockerComponent opts an entity's world-space AABB into runtime
@@ -92,6 +97,10 @@ func RuntimeNavigationServiceFromStreamedLevelState(state *StreamedLevelRuntimeS
 		ChunkSize: state.BaseNavManifest.ChunkSize, VoxelResolution: state.BaseNavManifest.VoxelResolution,
 		NavigationRevision: state.NavigationRevision,
 		query:              state.navigationQuery,
+		profiles:           append([]content.NavAgentProfileDef(nil), state.BaseNavManifest.AgentProfiles...),
+		disabledTraversals: copyNavigationTraversalSet(state.navigationDisabled),
+		openDoors:          copyNavigationTraversalSet(state.navigationOpenDoors),
+		blockers:           copyNavigationBlockers(state.navigationBlockers),
 	}
 }
 
@@ -114,6 +123,33 @@ func (s RuntimeNavigationService) FindRoute(start, goal content.Vec3) (content.N
 	route, err := content.FindNavGraphRoute(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, start, goal)
 	route.NavigationRevision = s.NavigationRevision
 	return route, err
+}
+
+// FindRouteAvoidingTraversal resolves a temporary interaction detour without
+// changing global navigation state.
+func (s RuntimeNavigationService) FindRouteAvoidingTraversal(start, goal content.Vec3, traversalID string) (content.NavRouteResult, error) {
+	constrained, err := s.WithTraversalDisabled(traversalID)
+	if err != nil {
+		return content.NavRouteResult{}, err
+	}
+	return constrained.FindRoute(start, goal)
+}
+
+// WithTraversalDisabled returns an immutable query view for route detours.
+func (s RuntimeNavigationService) WithTraversalDisabled(traversalID string) (RuntimeNavigationService, error) {
+	if strings.TrimSpace(traversalID) == "" {
+		return s, nil
+	}
+	disabled := copyNavigationTraversalSet(s.disabledTraversals)
+	disabled[traversalID] = struct{}{}
+	// ponytail: rebuild once per interaction plan; cache constrained views only
+	// if controller-heavy maps make this measurable.
+	query, err := buildRuntimeNavigationQueryWithDoorOverlays(s.Sources, s.Graphs, s.ChunkSize, s.VoxelResolution, s.profiles, disabled, s.openDoors, s.blockers)
+	if err != nil {
+		return RuntimeNavigationService{}, err
+	}
+	s.query, s.disabledTraversals = query, disabled
+	return s, nil
 }
 
 func (s RuntimeNavigationService) ProjectPoint(point content.Vec3, maxDistance float32) (content.NavPointResult, error) {
@@ -181,6 +217,7 @@ func startStreamedNavigationLoad(state *StreamedLevelRuntimeState) {
 	manifest := copyNavGraphManifest(state.BaseNavManifest)
 	delta := copyWorldDeltaForNav(state.WorldDelta)
 	disabledTraversals := copyNavigationTraversalSet(state.navigationDisabled)
+	openDoors := copyNavigationTraversalSet(state.navigationOpenDoors)
 	blockers := copyNavigationBlockers(state.navigationBlockers)
 	manifestPath, deltaPath := state.BaseNavManifestPath, state.WorldDeltaPath
 	state.navigationLoadActive = true
@@ -188,9 +225,9 @@ func startStreamedNavigationLoad(state *StreamedLevelRuntimeState) {
 		sources, graphs, err := loadStreamedNavigationResidency(manifest, manifestPath, &delta, deltaPath, desired)
 		var query *content.NavGraphQuery
 		if err == nil {
-			query, err = buildRuntimeNavigationQueryWithOverlays(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution, manifest.AgentProfiles, disabledTraversals, blockers)
+			query, err = buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution, manifest.AgentProfiles, disabledTraversals, openDoors, blockers)
 		}
-		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Query: query, DisabledTraversals: disabledTraversals, Blockers: blockers, Err: err}
+		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Query: query, DisabledTraversals: disabledTraversals, OpenDoors: openDoors, Blockers: blockers, Err: err}
 	}()
 }
 
@@ -203,6 +240,10 @@ func buildRuntimeNavigationQueryWithDisabledTraversals(sources []content.NavSour
 }
 
 func buildRuntimeNavigationQueryWithOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled map[string]struct{}, blockers map[string]content.NavBlockerDef) (*content.NavGraphQuery, error) {
+	return buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, chunkSize, voxelResolution, profiles, disabled, nil, blockers)
+}
+
+func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled, openDoors map[string]struct{}, blockers map[string]content.NavBlockerDef) (*content.NavGraphQuery, error) {
 	if len(sources) == 0 || len(graphs) == 0 {
 		return nil, nil
 	}
@@ -210,7 +251,7 @@ func buildRuntimeNavigationQueryWithOverlays(sources []content.NavSourceTileDef,
 	profileGraphs := make([]content.NavGraphTileDef, 0, len(graphs))
 	for _, graph := range graphs {
 		if graph.AgentProfileID == profileID {
-			profileGraphs = append(profileGraphs, navGraphWithoutDisabledTraversals(graph, disabled))
+			profileGraphs = append(profileGraphs, navGraphWithRuntimeTraversals(graph, disabled, openDoors))
 		}
 	}
 	if len(blockers) != 0 {
@@ -225,33 +266,54 @@ func buildRuntimeNavigationQueryWithOverlays(sources []content.NavSourceTileDef,
 }
 
 func navGraphWithoutDisabledTraversals(graph content.NavGraphTileDef, disabled map[string]struct{}) content.NavGraphTileDef {
-	if len(disabled) == 0 {
+	return navGraphWithRuntimeTraversals(graph, disabled, nil)
+}
+
+func navGraphWithRuntimeTraversals(graph content.NavGraphTileDef, disabled, openDoors map[string]struct{}) content.NavGraphTileDef {
+	if len(disabled) == 0 && len(openDoors) == 0 {
 		return graph
 	}
 	copy := graph
 	copy.SpanTransitions = make([]content.NavSpanTransitionDef, 0, len(graph.SpanTransitions))
 	for _, transition := range graph.SpanTransitions {
-		if !navTraversalDisabled(transition.Traversal, disabled) {
+		if !navTransitionDisabled(transition.Traversal, transition.Gate, disabled) {
+			transition.Gate, transition.Cost = runtimeDoorGate(transition.Gate, transition.Cost, openDoors)
 			copy.SpanTransitions = append(copy.SpanTransitions, transition)
 		}
 	}
 	copy.Transitions = make([]content.NavRegionTransitionDef, 0, len(graph.Transitions))
 	for _, transition := range graph.Transitions {
-		if navTraversalDisabled(transition.Traversal, disabled) {
+		if navTransitionDisabled(transition.Traversal, transition.Gate, disabled) {
 			continue
 		}
+		transition.Gate, transition.Cost = runtimeDoorGate(transition.Gate, transition.Cost, openDoors)
 		transition.ID = uint32(len(copy.Transitions))
 		copy.Transitions = append(copy.Transitions, transition)
 	}
 	return copy
 }
 
-func navTraversalDisabled(traversal *content.NavTraversalDef, disabled map[string]struct{}) bool {
-	if traversal == nil {
-		return false
+func runtimeDoorGate(gate *content.NavTransitionGateDef, cost float32, openDoors map[string]struct{}) (*content.NavTransitionGateDef, float32) {
+	if gate == nil || gate.Kind != content.NavGateDoor {
+		return gate, cost
 	}
-	_, found := disabled[traversal.ID]
-	return found
+	if _, open := openDoors[gate.ID]; open {
+		return nil, maxf(cost-content.NavDoorClosedCostPenalty, 0.001)
+	}
+	return gate, cost
+}
+
+func navTransitionDisabled(traversal *content.NavTraversalDef, gate *content.NavTransitionGateDef, disabled map[string]struct{}) bool {
+	if traversal != nil {
+		if _, found := disabled[traversal.ID]; found {
+			return true
+		}
+	}
+	if gate != nil {
+		_, found := disabled[gate.ID]
+		return found
+	}
+	return false
 }
 
 func loadStreamedNavigationResidency(manifest *content.NavGraphManifestDef, manifestPath string, delta *content.WorldDeltaDef, deltaPath string, desired map[content.TerrainChunkCoordDef]struct{}) ([]content.NavSourceTileDef, []content.NavGraphTileDef, error) {
@@ -333,8 +395,8 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		}
 		if result.Generation == state.navigationRequestedGen {
 			query := result.Query
-			if !navigationTraversalSetsEqual(result.DisabledTraversals, state.navigationDisabled) || !navigationBlockersEqual(result.Blockers, state.navigationBlockers) {
-				query, result.Err = buildRuntimeNavigationQueryWithOverlays(result.Sources, result.Graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.BaseNavManifest.AgentProfiles, state.navigationDisabled, state.navigationBlockers)
+			if !navigationTraversalSetsEqual(result.DisabledTraversals, state.navigationDisabled) || !navigationTraversalSetsEqual(result.OpenDoors, state.navigationOpenDoors) || !navigationBlockersEqual(result.Blockers, state.navigationBlockers) {
+				query, result.Err = buildRuntimeNavigationQueryWithDoorOverlays(result.Sources, result.Graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.BaseNavManifest.AgentProfiles, state.navigationDisabled, state.navigationOpenDoors, state.navigationBlockers)
 				if result.Err != nil {
 					state.InitErr = result.Err
 					return
@@ -392,25 +454,50 @@ func streamedLevelNavigationOverlaySystem(cmd *Commands, state *StreamedLevelRun
 			disabled[id] = struct{}{}
 		}
 	}
+	expectedDoors := make(map[string]struct{}, len(state.BaseNavManifest.Doors))
+	for _, door := range state.BaseNavManifest.Doors {
+		expectedDoors[door.ID] = struct{}{}
+	}
+	liveDoors := make(map[string]struct{}, len(expectedDoors))
+	openDoors := make(map[string]struct{}, len(expectedDoors))
+	MakeQuery2[MovingBrushComponent, AuthoredLevelMovingBrushRefComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent, ref *AuthoredLevelMovingBrushRefComponent) bool {
+		if brush == nil || ref == nil || ref.LevelID != state.LevelID {
+			return true
+		}
+		if _, expected := expectedDoors[ref.MovingBrushID]; !expected {
+			return true
+		}
+		liveDoors[ref.MovingBrushID] = struct{}{}
+		if MovingBrushFullyOpen(brush) {
+			openDoors[ref.MovingBrushID] = struct{}{}
+		}
+		return true
+	})
+	for id := range expectedDoors {
+		if _, found := liveDoors[id]; !found {
+			disabled[id] = struct{}{}
+		}
+	}
 	blockers, err := runtimeNavigationBlockers(cmd)
 	if err != nil {
 		state.InitErr = err
 		return
 	}
-	if navigationTraversalSetsEqual(disabled, state.navigationDisabled) && navigationBlockersEqual(blockers, state.navigationBlockers) {
+	if navigationTraversalSetsEqual(disabled, state.navigationDisabled) && navigationTraversalSetsEqual(openDoors, state.navigationOpenDoors) && navigationBlockersEqual(blockers, state.navigationBlockers) {
 		return
 	}
 	state.mu.RLock()
 	sources := append([]content.NavSourceTileDef(nil), state.NavigationSources...)
 	graphs := append([]content.NavGraphTileDef(nil), state.NavigationGraphs...)
 	state.mu.RUnlock()
-	query, err := buildRuntimeNavigationQueryWithOverlays(sources, graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.BaseNavManifest.AgentProfiles, disabled, blockers)
+	query, err := buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.BaseNavManifest.AgentProfiles, disabled, openDoors, blockers)
 	if err != nil {
 		state.InitErr = err
 		return
 	}
 	state.mu.Lock()
 	state.navigationDisabled = disabled
+	state.navigationOpenDoors = openDoors
 	state.navigationBlockers = blockers
 	state.navigationQuery = query
 	state.NavigationRevision++
@@ -642,6 +729,7 @@ func copyNavGraphManifest(source *content.NavGraphManifestDef) *content.NavGraph
 		copy.AgentProfiles[i].Capabilities = append([]string(nil), source.AgentProfiles[i].Capabilities...)
 	}
 	copy.LadderVolumes = append([]content.LevelLadderVolumeDef(nil), source.LadderVolumes...)
+	copy.Doors = append([]content.NavDoorDef(nil), source.Doors...)
 	copy.SourceTiles = append([]content.NavSourceTileEntryDef(nil), source.SourceTiles...)
 	copy.GraphTiles = append([]content.NavGraphTileEntryDef(nil), source.GraphTiles...)
 	return &copy

@@ -458,7 +458,7 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 		t.Fatalf("button marker = %+v", button)
 	}
 	moving := level.Level.MovingBrushes[0]
-	if moving.Kind != MovingBrushKindHL1Door || moving.TargetName != "door_a" || moving.Target != "button_a" {
+	if moving.Kind != MovingBrushKindHL1Door || moving.NavigationRole != content.NavigationRoleDoor || moving.TargetName != "door_a" || moving.Target != "button_a" {
 		t.Fatalf("moving brush = %+v", moving)
 	}
 	if math.Abs(float64(moving.Speed-120*HammerUnitMeters)) > 1e-5 || moving.MoveDirection != (content.Vec3{1, 0, 0}) {
@@ -481,7 +481,7 @@ func TestBuildGeneratedLevelEmitsMovingBrushGameplayMarkers(t *testing.T) {
 		t.Fatalf("train moving brush = %+v", train)
 	}
 	rotating := level.Level.MovingBrushes[3]
-	if rotating.Kind != MovingBrushKindHL1DoorRotating || rotating.MotionKind != "rotate" || rotating.OpenAngle != -120 || rotating.Speed != 90 || rotating.RotationAxis != (content.Vec3{0, 1, 0}) {
+	if rotating.Kind != MovingBrushKindHL1DoorRotating || rotating.NavigationRole != content.NavigationRoleDoor || rotating.MotionKind != "rotate" || rotating.OpenAngle != -120 || rotating.Speed != 90 || rotating.RotationAxis != (content.Vec3{0, 1, 0}) {
 		t.Fatalf("rotating moving brush = %+v", rotating)
 	}
 	health := level.Level.Chargers[0]

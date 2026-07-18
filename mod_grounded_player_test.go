@@ -681,13 +681,15 @@ func TestMovingBrushRotatesToOpenAngle(t *testing.T) {
 		&TransformComponent{Position: mgl32.Vec3{1, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
 		&LocalTransformComponent{},
 		&MovingBrushComponent{
-			Kind:           "hl1_func_door_rotating",
-			MotionKind:     "rotate",
-			RotationOrigin: mgl32.Vec3{0, 0, 0},
-			RotationAxis:   mgl32.Vec3{0, 1, 0},
-			OpenAngle:      90,
-			Speed:          90,
-			Open:           true,
+			Kind:              "hl1_func_door_rotating",
+			MotionKind:        "rotate",
+			BoundsCenter:      mgl32.Vec3{1, 0, 0},
+			BoundsHalfExtents: mgl32.Vec3{0.5, 1, 0.1},
+			RotationOrigin:    mgl32.Vec3{0, 0, 0},
+			RotationAxis:      mgl32.Vec3{0, 1, 0},
+			OpenAngle:         90,
+			Speed:             90,
+			Open:              true,
 		},
 	)
 	app.FlushCommands()
@@ -696,7 +698,7 @@ func TestMovingBrushRotatesToOpenAngle(t *testing.T) {
 	app.FlushCommands()
 	tr := cmd.GetComponent(brush, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
 	moving := cmd.GetComponent(brush, reflect.TypeOf(MovingBrushComponent{})).(*MovingBrushComponent)
-	if absf(moving.CurrentAngle-90) > 0.001 || tr.Position.Sub(mgl32.Vec3{0, 0, -1}).Len() > 0.001 {
+	if absf(moving.CurrentAngle-90) > 0.001 || tr.Position.Sub(mgl32.Vec3{0, 0, -1}).Len() > 0.001 || moving.BoundsCenter.Sub(mgl32.Vec3{0, 0, -1}).Len() > 0.001 || moving.BoundsHalfExtents.Sub(mgl32.Vec3{0.1, 1, 0.5}).Len() > 0.001 || !MovingBrushFullyOpen(moving) {
 		t.Fatalf("expected rotating door to reach open angle, tr=%+v brush=%+v", tr, moving)
 	}
 }

@@ -792,6 +792,7 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 		Name:              "door",
 		Kind:              "hl1_func_door",
 		MotionKind:        "rotate",
+		NavigationRole:    NavigationRoleDoor,
 		BoundsCenter:      Vec3{1, 2, 3},
 		BoundsHalfExtents: Vec3{0.5, 1, 0.25},
 		MoveDirection:     Vec3{1, 0, 0},
@@ -960,7 +961,7 @@ func TestLevelMovingBrushAndUseTriggerRoundTripAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLevel failed: %v", err)
 	}
-	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 || loaded.MovingBrushes[0].MotionKind != "rotate" || loaded.MovingBrushes[0].OpenAngle != -90 || loaded.MovingBrushes[0].PathTarget != "corner_a" || loaded.MovingBrushes[0].SpawnFlags != 1 {
+	if len(loaded.MovingBrushes) != 1 || loaded.MovingBrushes[0].NavigationRole != NavigationRoleDoor || loaded.MovingBrushes[0].TargetName != "door_a" || loaded.MovingBrushes[0].Speed != 3.5 || loaded.MovingBrushes[0].MoveDistance != 2 || loaded.MovingBrushes[0].MotionKind != "rotate" || loaded.MovingBrushes[0].OpenAngle != -90 || loaded.MovingBrushes[0].PathTarget != "corner_a" || loaded.MovingBrushes[0].SpawnFlags != 1 {
 		t.Fatalf("moving brushes did not round-trip: %+v", loaded.MovingBrushes)
 	}
 	if len(loaded.PathNodes) != 1 || loaded.PathNodes[0].TargetName != "corner_a" || loaded.PathNodes[0].Target != "corner_b" || loaded.PathNodes[0].Speed != 1.5 {
@@ -1002,6 +1003,7 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 	def := NewLevelDef("bad-moving")
 	def.MovingBrushes = []LevelMovingBrushDef{{
 		ID:                "bad-door",
+		NavigationRole:    "teleporter",
 		BoundsHalfExtents: Vec3{0, 1, 1},
 		MoveDistance:      -1,
 		Speed:             -1,
@@ -1074,6 +1076,7 @@ func TestValidateLevelRejectsInvalidMovingBrushAndUseTrigger(t *testing.T) {
 		t.Fatal("expected moving brush/use trigger validation errors")
 	}
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_bounds")
+	assertHasLevelValidationCode(t, result, "invalid_moving_brush_navigation_role")
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_distance")
 	assertHasLevelValidationCode(t, result, "invalid_moving_brush_speed")
 	assertHasLevelValidationCode(t, result, "empty_path_node_target_name")
