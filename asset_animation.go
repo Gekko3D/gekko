@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"maps"
 	"math"
 	"reflect"
 	"sort"
@@ -72,6 +73,7 @@ type AuthoredAssetAnimationSetComponent struct {
 	DefaultClipID  string
 	Clips          map[string]content.AssetAnimationClipDef
 	BindTransforms map[string]LocalTransformComponent
+	JointTargets   map[string]string
 }
 
 func assetAnimationSystem(time *Time, cmd *Commands) {
@@ -604,16 +606,12 @@ func contentQuat(value content.Quat) mgl32.Quat {
 	return mgl32.Quat{V: mgl32.Vec3{value[0], value[1], value[2]}, W: value[3]}.Normalize()
 }
 
-func newAuthoredAssetAnimationSetComponent(def *content.AssetDef, result AuthoredAssetSpawnResult, cmd *Commands) *AuthoredAssetAnimationSetComponent {
-	if def == nil || len(def.AnimationClips) == 0 {
+func newAuthoredAssetAnimationSetComponent(resolved *content.ResolvedAssetAnimations, result AuthoredAssetSpawnResult, cmd *Commands) *AuthoredAssetAnimationSetComponent {
+	if resolved == nil || len(resolved.Clips) == 0 {
 		return nil
 	}
-	clips := make(map[string]content.AssetAnimationClipDef, len(def.AnimationClips))
-	defaultClipID := ""
-	for _, clip := range def.AnimationClips {
-		if defaultClipID == "" {
-			defaultClipID = clip.ID
-		}
+	clips := make(map[string]content.AssetAnimationClipDef, len(resolved.Clips))
+	for _, clip := range resolved.Clips {
 		clips[clip.ID] = cloneAssetAnimationClip(clip)
 	}
 	bindTransforms := make(map[string]LocalTransformComponent, len(result.EntitiesByAssetID))
@@ -624,9 +622,10 @@ func newAuthoredAssetAnimationSetComponent(def *content.AssetDef, result Authore
 		}
 	}
 	return &AuthoredAssetAnimationSetComponent{
-		DefaultClipID:  defaultClipID,
+		DefaultClipID:  resolved.DefaultClipID,
 		Clips:          clips,
 		BindTransforms: bindTransforms,
+		JointTargets:   maps.Clone(resolved.JointTargets),
 	}
 }
 

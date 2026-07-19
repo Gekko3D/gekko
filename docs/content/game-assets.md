@@ -5,7 +5,7 @@ This document explains how game-facing assets are authored, loaded, and turned i
 There are two layers to keep distinct:
 
 - authored content files in `gekko/content`
-  - JSON documents such as `.gkasset`, `.gkset`, and level files
+  - JSON documents such as `.gkasset`, `.gkanim`, `.gkrig`, `.gkset`, and level files
 - runtime assets in `AssetServer`
   - voxel models, palettes, textures, materials, samplers, and meshes stored under engine-owned `AssetID` values
 
@@ -23,8 +23,8 @@ It can contain:
   - visible voxel-backed parts or transform-only groups
 - `skeleton`
   - optional imported/authored bone metadata for tools and diagnostics
-- `animation_clips`
-  - optional local-space rigid animation tracks for spawned authored items
+- `animation_set_paths`
+  - ordered document-relative references to external `.gkanim` files
 - `lights`
   - point, directional, spot, or ambient lights
 - `emitters`
@@ -33,6 +33,12 @@ It can contain:
   - named attachment or gameplay anchor points such as `muzzle` or `spawn_anchor`
 
 See [`asset-format.md`](asset-format.md) for the exact schema.
+
+### `.gkrig` and `.gkanim`
+
+`.gkrig` defines a reusable semantic joint hierarchy and bind pose. `.gkanim`
+stores clips bound either to one rig or to one exact asset. Neither file is
+indexed by `.gkassetlibrary`; model assets reference animation sets directly.
 
 ### `.gkset`
 
@@ -75,25 +81,27 @@ An authored asset is a reusable ECS hierarchy template.
 
 At spawn time:
 
-1. the asset file is loaded and validated
-2. a root entity is created with `AuthoredAssetRootComponent`
-3. parts, lights, emitters, and markers are created as child entities
-4. parent-child links are attached from authored `parent_id` references
-5. transforms are resolved through the normal hierarchy system
+1. the asset and every referenced animation set/rig are loaded and validated
+2. rig joint tracks are bound once to model-local item IDs
+3. a root entity is created with `AuthoredAssetRootComponent`
+4. parts, lights, emitters, and markers are created as child entities
+5. parent-child links are attached from authored `parent_id` references
+6. transforms are resolved through the normal hierarchy system
 
 Each spawned item gets `AuthoredAssetRefComponent` so runtime code can map entities back to authored item IDs.
 
-Animated authored assets are rigid hierarchies. Runtime playback samples
-`animation_clips` into item `LocalTransformComponent` values, then
+Animated authored assets are rigid hierarchies. Runtime playback samples the
+resolved external clips into item `LocalTransformComponent` values, then
 `HierarchyModule` resolves the world transforms. The engine does not skin or
 deform voxel geometry; importers should split characters and machinery into
 rigid voxel parts under transform-only `group` pivots.
 
 ### Baking Source-Engine Animation
 
-`cmd/sourcemdlanim` imports Source MDL v48 animation data into an existing
-`.gkasset` rig. It is animation-only: meshes and materials remain owned by the
-target asset. Both the Source MDL bind skeleton and the target asset's explicit
+`cmd/sourcemdlanim` imports Source MDL v48 animation data into a `.gkrig` and
+`.gkanim`, then adds the set reference to an existing `.gkasset`. It is
+animation-only: meshes and materials remain owned by the target asset. Both
+the Source MDL bind skeleton and the target asset's explicit
 `skeleton:rest_basis` metadata are used to calculate bone-basis corrections;
 no idle clip or sequence frame is used as calibration. Regenerate older HL1
 rigid assets once so their previously flattened bind rotations are preserved.

@@ -1,8 +1,10 @@
 package content
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -29,17 +31,29 @@ func LoadAsset(path string) (*AssetDef, error) {
 	}
 
 	var def AssetDef
-	if err := json.Unmarshal(data, &def); err != nil {
+	if err := unmarshalStrictJSON(data, &def); err != nil {
 		return nil, err
 	}
 
-	if def.SchemaVersion == 0 {
-		def.SchemaVersion = CurrentAssetSchemaVersion
-	}
-	if def.SchemaVersion > CurrentAssetSchemaVersion {
+	if def.SchemaVersion != CurrentAssetSchemaVersion {
 		return nil, fmt.Errorf("unsupported schema version %d", def.SchemaVersion)
 	}
 	NormalizeAssetDef(&def)
 
 	return &def, nil
+}
+
+func unmarshalStrictJSON(data []byte, out any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON documents")
+		}
+		return err
+	}
+	return nil
 }

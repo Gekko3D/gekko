@@ -170,7 +170,7 @@ func TestValidateAssetAcceptsGroupPartSource(t *testing.T) {
 	}
 }
 
-func TestValidateAssetValidatesSkeletonAndAnimationClips(t *testing.T) {
+func TestValidateAssetValidatesSkeletonAndAnimationReferences(t *testing.T) {
 	def := NewAssetDef("animated")
 	def.Parts = []AssetPartDef{{
 		ID:        "bone_part",
@@ -183,31 +183,13 @@ func TestValidateAssetValidatesSkeletonAndAnimationClips(t *testing.T) {
 		{ID: "child", Name: "child", ParentID: "root", Transform: identityTransform()},
 		{ID: "orphan", Name: "orphan", ParentID: "missing", Transform: identityTransform()},
 	}}
-	def.AnimationClips = []AssetAnimationClipDef{
-		{
-			ID:       "idle",
-			Name:     "idle",
-			Duration: 0,
-			FPS:      -1,
-			Tracks: []AssetAnimationTrackDef{{
-				TargetID: "missing",
-				PositionKeys: []AssetVec3KeyDef{
-					{Time: 0.5, Value: Vec3{0, 0, 0}},
-					{Time: 0.25, Value: Vec3{1, 0, 0}},
-				},
-			}},
-		},
-		{ID: "idle", Name: "duplicate"},
-	}
+	def.AnimationSetPaths = []string{"walk.gkanim", "walk.gkanim"}
 
 	result := ValidateAsset(def, AssetValidationOptions{})
 	assertHasValidationCode(t, result, "skeleton_cycle")
 	assertHasValidationCode(t, result, "broken_skeleton_parent_reference")
-	assertHasValidationCode(t, result, "invalid_animation_fps")
-	assertHasValidationCode(t, result, "invalid_animation_duration")
-	assertHasValidationCode(t, result, "broken_animation_target_reference")
-	assertHasValidationCode(t, result, "invalid_animation_key_order")
-	assertHasValidationCode(t, result, "duplicate_animation_clip_id")
+	assertHasValidationCode(t, result, "duplicate_animation_set_path")
+	assertHasValidationCode(t, result, "missing_default_animation_clip")
 }
 
 func TestValidateAssetValidatesProceduralPrimitivePayload(t *testing.T) {

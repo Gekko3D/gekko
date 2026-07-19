@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/gekko3d/gekko/content"
@@ -17,7 +18,7 @@ func TestAuthoredAssetAnimationInterpolatesLocalTransform(t *testing.T) {
 		Source:    content.AssetSourceDef{Kind: content.AssetSourceKindGroup},
 		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
 	}}
-	def.AnimationClips = []content.AssetAnimationClipDef{{
+	clips := []content.AssetAnimationClipDef{{
 		ID:       "move",
 		Name:     "move",
 		Duration: 1,
@@ -31,10 +32,11 @@ func TestAuthoredAssetAnimationInterpolatesLocalTransform(t *testing.T) {
 		}},
 	}}
 
-	result, err := SpawnAuthoredAsset(cmd, nil, def, TransformComponent{
+	documentPath := attachTestAnimationSet(t, def, clips)
+	result, err := SpawnAuthoredAssetWithOptions(cmd, nil, def, TransformComponent{
 		Rotation: mgl32.QuatIdent(),
 		Scale:    mgl32.Vec3{1, 1, 1},
-	})
+	}, AuthoredAssetSpawnOptions{DocumentPath: documentPath})
 	if err != nil {
 		t.Fatalf("SpawnAuthoredAsset failed: %v", err)
 	}
@@ -63,7 +65,7 @@ func TestAuthoredAssetAnimationKeepsBindChannelsWhenTrackOmitsThem(t *testing.T)
 			Scale:    content.Vec3{2, 2, 2},
 		},
 	}}
-	def.AnimationClips = []content.AssetAnimationClipDef{{
+	clips := []content.AssetAnimationClipDef{{
 		ID:       "turn",
 		Name:     "turn",
 		Duration: 1,
@@ -76,10 +78,11 @@ func TestAuthoredAssetAnimationKeepsBindChannelsWhenTrackOmitsThem(t *testing.T)
 		}},
 	}}
 
-	result, err := SpawnAuthoredAsset(cmd, nil, def, TransformComponent{
+	documentPath := attachTestAnimationSet(t, def, clips)
+	result, err := SpawnAuthoredAssetWithOptions(cmd, nil, def, TransformComponent{
 		Rotation: mgl32.QuatIdent(),
 		Scale:    mgl32.Vec3{1, 1, 1},
-	})
+	}, AuthoredAssetSpawnOptions{DocumentPath: documentPath})
 	if err != nil {
 		t.Fatalf("SpawnAuthoredAsset failed: %v", err)
 	}
@@ -167,11 +170,11 @@ func TestNPCAnimationSystemSelectsSemanticClip(t *testing.T) {
 		&NPCComponent{ClassName: "monster_barney"},
 		&NPCAnimationComponent{State: NPCAnimationStateWalk},
 	)
-	def := npcAnimationTestAsset("barney-animation", []content.AssetAnimationClipDef{
+	def, documentPath := npcAnimationTestAsset(t, "barney-animation", []content.AssetAnimationClipDef{
 		npcAnimationTestClip("mdl_idle1", "idle1", true),
 		npcAnimationTestClip("mdl_walk", "walk", true),
 	})
-	result, err := SpawnAuthoredAsset(cmd, nil, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	result, err := SpawnAuthoredAssetWithOptions(cmd, nil, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}}, AuthoredAssetSpawnOptions{DocumentPath: documentPath})
 	if err != nil {
 		t.Fatalf("SpawnAuthoredAsset failed: %v", err)
 	}
@@ -199,11 +202,11 @@ func TestNPCAnimationSystemFallsBackWhenSemanticClipMissing(t *testing.T) {
 		&NPCComponent{ClassName: "monster_barney"},
 		&NPCAnimationComponent{State: NPCAnimationStateAttack, FallbackClipID: "mdl_idle1"},
 	)
-	def := npcAnimationTestAsset("barney-animation", []content.AssetAnimationClipDef{
+	def, documentPath := npcAnimationTestAsset(t, "barney-animation", []content.AssetAnimationClipDef{
 		npcAnimationTestClip("mdl_idle1", "idle1", true),
 		npcAnimationTestClip("mdl_walk", "walk", true),
 	})
-	result, err := SpawnAuthoredAsset(cmd, nil, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	result, err := SpawnAuthoredAssetWithOptions(cmd, nil, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}}, AuthoredAssetSpawnOptions{DocumentPath: documentPath})
 	if err != nil {
 		t.Fatalf("SpawnAuthoredAsset failed: %v", err)
 	}
@@ -231,12 +234,12 @@ func TestNPCAnimationSystemPrefersDecodedIdleOverBindPoseSubstring(t *testing.T)
 	bindPoseIdle.Tags = []string{"source:hl1", "source_asset:mdl", "generated:bind_pose_clip"}
 	decodedIdle := npcAnimationTestClip("mdl_idle1", "idle1", true)
 	decodedIdle.Tags = []string{"source:hl1", "source_asset:mdl", "generated:sequence_clip"}
-	def := npcAnimationTestAsset("barney-animation", []content.AssetAnimationClipDef{
+	def, documentPath := npcAnimationTestAsset(t, "barney-animation", []content.AssetAnimationClipDef{
 		bindPoseIdle,
 		decodedIdle,
 		npcAnimationTestClip("mdl_walk", "walk", true),
 	})
-	result, err := SpawnAuthoredAsset(cmd, nil, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	result, err := SpawnAuthoredAssetWithOptions(cmd, nil, def, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}}, AuthoredAssetSpawnOptions{DocumentPath: documentPath})
 	if err != nil {
 		t.Fatalf("SpawnAuthoredAsset failed: %v", err)
 	}
@@ -251,7 +254,7 @@ func TestNPCAnimationSystemPrefersDecodedIdleOverBindPoseSubstring(t *testing.T)
 	}
 }
 
-func npcAnimationTestAsset(id string, clips []content.AssetAnimationClipDef) *content.AssetDef {
+func npcAnimationTestAsset(t *testing.T, id string, clips []content.AssetAnimationClipDef) (*content.AssetDef, string) {
 	def := content.NewAssetDef(id)
 	def.Parts = []content.AssetPartDef{{
 		ID:        "root",
@@ -259,8 +262,20 @@ func npcAnimationTestAsset(id string, clips []content.AssetAnimationClipDef) *co
 		Source:    content.AssetSourceDef{Kind: content.AssetSourceKindGroup},
 		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
 	}}
-	def.AnimationClips = clips
-	return def
+	return def, attachTestAnimationSet(t, def, clips)
+}
+
+func attachTestAnimationSet(t *testing.T, def *content.AssetDef, clips []content.AssetAnimationClipDef) string {
+	t.Helper()
+	dir := t.TempDir()
+	documentPath := filepath.Join(dir, "asset.gkasset")
+	setPath := filepath.Join(dir, "asset.gkanim")
+	if err := content.SaveAnimationSet(setPath, &content.AnimationSetDef{ID: def.ID + ".animation", SchemaVersion: content.CurrentAnimationSetSchemaVersion, Name: def.Name + " animation", TargetAssetID: def.ID, Clips: clips}); err != nil {
+		t.Fatal(err)
+	}
+	def.AnimationSetPaths = []string{"asset.gkanim"}
+	def.DefaultAnimationClipID = clips[0].ID
+	return documentPath
 }
 
 func npcAnimationTestClip(id string, name string, loop bool) content.AssetAnimationClipDef {

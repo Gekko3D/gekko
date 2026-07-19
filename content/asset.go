@@ -3,7 +3,7 @@ package content
 import "github.com/google/uuid"
 
 const (
-	CurrentAssetSchemaVersion = 3
+	CurrentAssetSchemaVersion = 4
 	DefaultAssetVoxelSize     = 0.1
 	AssetTagSkeletonRestBasis = "skeleton:rest_basis"
 )
@@ -74,19 +74,20 @@ func KnownAssetMarkerKinds() []string {
 }
 
 type AssetDef struct {
-	ID                 string                      `json:"id"`
-	SchemaVersion      int                         `json:"schema_version"`
-	Name               string                      `json:"name"`
-	Tags               []string                    `json:"tags,omitempty"`
-	Materials          []AssetMaterialDef          `json:"materials,omitempty"`
-	MaterialAnimations []AssetMaterialAnimationDef `json:"material_animations,omitempty"`
-	Runtime            *AssetRuntimeDef            `json:"runtime,omitempty"`
-	Skeleton           *AssetSkeletonDef           `json:"skeleton,omitempty"`
-	AnimationClips     []AssetAnimationClipDef     `json:"animation_clips,omitempty"`
-	Parts              []AssetPartDef              `json:"parts,omitempty"`
-	Lights             []AssetLightDef             `json:"lights,omitempty"`
-	Emitters           []AssetEmitterDef           `json:"emitters,omitempty"`
-	Markers            []AssetMarkerDef            `json:"markers,omitempty"`
+	ID                     string                      `json:"id"`
+	SchemaVersion          int                         `json:"schema_version"`
+	Name                   string                      `json:"name"`
+	Tags                   []string                    `json:"tags,omitempty"`
+	Materials              []AssetMaterialDef          `json:"materials,omitempty"`
+	MaterialAnimations     []AssetMaterialAnimationDef `json:"material_animations,omitempty"`
+	Runtime                *AssetRuntimeDef            `json:"runtime,omitempty"`
+	Skeleton               *AssetSkeletonDef           `json:"skeleton,omitempty"`
+	AnimationSetPaths      []string                    `json:"animation_set_paths,omitempty"`
+	DefaultAnimationClipID string                      `json:"default_animation_clip_id,omitempty"`
+	Parts                  []AssetPartDef              `json:"parts,omitempty"`
+	Lights                 []AssetLightDef             `json:"lights,omitempty"`
+	Emitters               []AssetEmitterDef           `json:"emitters,omitempty"`
+	Markers                []AssetMarkerDef            `json:"markers,omitempty"`
 }
 
 type AssetMaterialDef struct {
@@ -137,6 +138,7 @@ type AssetSkeletonDef struct {
 
 type AssetBoneDef struct {
 	ID        string            `json:"id"`
+	JointID   string            `json:"joint_id"`
 	Name      string            `json:"name"`
 	ParentID  string            `json:"parent_id,omitempty"`
 	Transform AssetTransformDef `json:"transform"`

@@ -1,6 +1,6 @@
 {
   "id": "asset-composite",
-  "schema_version": 3,
+  "schema_version": 4,
   "name": "composite_authored_asset",
   "tags": [
     "golden",

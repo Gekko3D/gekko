@@ -324,19 +324,19 @@ func ParseMDLAnimations(data []byte, sequenceNames []string) (*AnimationSource, 
 	return source, nil
 }
 
-// AppendAnimations bakes selected Source clips into an existing authored rig.
+// BakeAnimations bakes selected Source clips against an existing authored rig.
 // Every animated target bone must resolve through same-named source bones and
 // matching mapped parents. Source-only helper leaves remain in bind pose; this
 // prevents a friendly humanoid label from being mistaken for a compatible rig.
-func AppendAnimations(asset *content.AssetDef, source *AnimationSource, opts BakeOptions) ([]string, error) {
+func BakeAnimations(asset *content.AssetDef, source *AnimationSource, opts BakeOptions) ([]content.AssetAnimationClipDef, []string, error) {
 	if asset == nil {
-		return nil, fmt.Errorf("target asset is nil")
+		return nil, nil, fmt.Errorf("target asset is nil")
 	}
 	if source == nil || len(source.Bones) == 0 || len(source.Clips) == 0 {
-		return nil, fmt.Errorf("source contains no animations")
+		return nil, nil, fmt.Errorf("source contains no animations")
 	}
 	if !containsString(asset.Tags, content.AssetTagSkeletonRestBasis) {
-		return nil, fmt.Errorf("target asset %q has no explicit skeleton rest basis; regenerate it with the current model importer", asset.Name)
+		return nil, nil, fmt.Errorf("target asset %q has no explicit skeleton rest basis; regenerate it with the current model importer", asset.Name)
 	}
 	prefix := safeID(opts.ClipPrefix)
 	if prefix == "" {
@@ -348,35 +348,24 @@ func AppendAnimations(asset *content.AssetDef, source *AnimationSource, opts Bak
 
 	selected, err := selectedSourceClips(source.Clips, opts.SequenceNames)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	bindings, err := targetBindings(asset, source.Bones, requiredSourceBones(source.Bones, selected))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	generated := make([]content.AssetAnimationClipDef, 0, len(selected))
 	ids := make([]string, 0, len(selected))
 	for _, sourceClip := range selected {
 		clip, err := bakeClip(source.Bones, bindings, sourceClip, prefix, opts.LockRootMotion)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		generated = append(generated, clip)
 		ids = append(ids, clip.ID)
 	}
 
-	generatedByID := make(map[string]content.AssetAnimationClipDef, len(generated))
-	for _, clip := range generated {
-		generatedByID[clip.ID] = clip
-	}
-	merged := make([]content.AssetAnimationClipDef, 0, len(asset.AnimationClips)+len(generated))
-	for _, clip := range asset.AnimationClips {
-		if _, replace := generatedByID[clip.ID]; !replace {
-			merged = append(merged, clip)
-		}
-	}
-	asset.AnimationClips = append(merged, generated...)
-	return ids, nil
+	return generated, ids, nil
 }
 
 func selectedSourceClips(clips []Clip, names []string) ([]Clip, error) {

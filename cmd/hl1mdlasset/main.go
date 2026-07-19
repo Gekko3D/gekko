@@ -58,7 +58,7 @@ func main() {
 	if err != nil {
 		fatalf("load mdl: %v", err)
 	}
-	asset, voxelCount, err := hl1.BuildMDLVoxelAsset(geometry, hl1.MDLVoxelAssetOptions{
+	built, err := hl1.BuildMDLVoxelAssetDocuments(geometry, hl1.MDLVoxelAssetOptions{
 		Name:                name,
 		SourceRef:           sourceRef,
 		VoxelResolution:     voxelResolution,
@@ -67,15 +67,45 @@ func main() {
 	if err != nil {
 		fatalf("build asset: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
-		fatalf("create output dir: %v", err)
+	asset, voxelCount := built.Asset, built.VoxelCount
+	animations, err := hl1.BuildMDLAnimationDocumentsAtRoot(asset, built.Clips, outPath, filepath.Dir(outPath))
+	if err != nil {
+		fatalf("build animation documents: %v", err)
 	}
 	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{DocumentPath: outPath}); validation.HasErrors() {
 		fatalf("generated asset validation failed: %s", validation.Error())
 	}
-	if err := content.SaveAsset(outPath, asset); err != nil {
-		fatalf("save asset: %v", err)
+	var staged []stagedOutput
+	defer func() {
+		for _, file := range staged {
+			_ = os.Remove(file.temporary)
+		}
+	}()
+	if animations.Rig != nil {
+		file, err := stageOutputFile(animations.RigPath, func(path string) error { return content.SaveAnimationRig(path, animations.Rig) })
+		if err != nil {
+			fatalf("stage rig: %v", err)
+		}
+		staged = append(staged, file)
 	}
+	if animations.Set != nil {
+		file, err := stageOutputFile(animations.SetPath, func(path string) error { return content.SaveAnimationSet(path, animations.Set) })
+		if err != nil {
+			fatalf("stage animation: %v", err)
+		}
+		staged = append(staged, file)
+	}
+	file, err := stageOutputFile(outPath, func(path string) error { return content.SaveAsset(path, asset) })
+	if err != nil {
+		fatalf("stage asset: %v", err)
+	}
+	staged = append(staged, file)
+	for _, file := range staged {
+		if err := os.Rename(file.temporary, file.target); err != nil {
+			fatalf("replace %s: %v", file.target, err)
+		}
+	}
+	staged = nil
 	fmt.Printf("MDL asset written: %s\n", outPath)
 	fmt.Printf("voxels: %d\n", voxelCount)
 	fmt.Printf("parts: %d\n", len(asset.Parts))
@@ -84,7 +114,29 @@ func main() {
 	} else {
 		fmt.Printf("bones: 0\n")
 	}
-	fmt.Printf("clips: %d\n", len(asset.AnimationClips))
+	fmt.Printf("clips: %d\n", len(built.Clips))
+}
+
+type stagedOutput struct{ temporary, target string }
+
+func stageOutputFile(path string, save func(string) error) (stagedOutput, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return stagedOutput{}, err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return stagedOutput{}, err
+	}
+	temporary := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temporary)
+		return stagedOutput{}, err
+	}
+	if err := save(temporary); err != nil {
+		_ = os.Remove(temporary)
+		return stagedOutput{}, err
+	}
+	return stagedOutput{temporary: temporary, target: path}, nil
 }
 
 type float32Flag float32

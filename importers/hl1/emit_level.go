@@ -94,6 +94,10 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 		return GeneratedLevelResult{}, fmt.Errorf("output root and map name are required for level emission")
 	}
 	level := content.NewLevelDef(summary.Report.Source.MapName)
+	level.ID = deterministicHL1ID("level", strings.ToLower(summary.Report.Source.MapName))
+	for i := range level.BrushLayers {
+		level.BrushLayers[i].ID = deterministicHL1ID("level-layer", level.ID, strconv.Itoa(i))
+	}
 	if err := preserveGeneratedLevelNavigation(levelPath, level); err != nil {
 		return GeneratedLevelResult{}, err
 	}
@@ -1211,6 +1215,9 @@ func buildHL1ChargerAsset(opts ImportOptions, bsp *BSP, textureStore *TextureSto
 		},
 		Tags: []string{"source:hl1", "charger"},
 	}}
+	if err := assignDeterministicHL1AssetID(asset); err != nil {
+		return GeneratedAssetResult{}, content.Vec3{}, err
+	}
 	path := generatedHL1LevelAssetPath(opts, "chargers", chargerID)
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
 }
@@ -1534,6 +1541,9 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 		},
 		Tags: []string{"source:hl1", "moving_brush"},
 	}}
+	if err := assignDeterministicHL1AssetID(asset); err != nil {
+		return GeneratedAssetResult{}, content.Vec3{}, err
+	}
 	path := generatedHL1LevelAssetPath(opts, "moving_brushes", brushID)
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
 }
@@ -1712,6 +1722,9 @@ func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureS
 		},
 		Tags: []string{"source:hl1", "breakable"},
 	}}
+	if err := assignDeterministicHL1AssetID(asset); err != nil {
+		return GeneratedAssetResult{}, content.Vec3{}, err
+	}
 	path := generatedHL1LevelAssetPath(opts, "breakables", breakableID)
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
 }
@@ -2258,13 +2271,23 @@ func buildHL1EmissiveSurfaceLights(opts ImportOptions, voxelized VoxelizeResult,
 			emissive: material.Emissive,
 		}
 	}
+	seeds := make([][3]int, 0, len(pending))
+	for key := range pending {
+		seeds = append(seeds, key)
+	}
+	sort.Slice(seeds, func(i, j int) bool {
+		for axis := 0; axis < 3; axis++ {
+			if seeds[i][axis] != seeds[j][axis] {
+				return seeds[i][axis] < seeds[j][axis]
+			}
+		}
+		return false
+	})
 	clusters := make([]hl1EmissiveSurfaceCluster, 0)
 	queue := make([][3]int, 0, 256)
-	for len(pending) > 0 {
-		var seed [3]int
-		for key := range pending {
-			seed = key
-			break
+	for _, seed := range seeds {
+		if _, ok := pending[seed]; !ok {
+			continue
 		}
 		cluster := hl1EmissiveSurfaceCluster{min: seed, max: seed}
 		queue = append(queue[:0], seed)
@@ -2287,7 +2310,7 @@ func buildHL1EmissiveSurfaceLights(opts ImportOptions, voxelized VoxelizeResult,
 			clusters = append(clusters, cluster)
 		}
 	}
-	sort.Slice(clusters, func(i, j int) bool {
+	sort.SliceStable(clusters, func(i, j int) bool {
 		if clusters[i].voxels != clusters[j].voxels {
 			return clusters[i].voxels > clusters[j].voxels
 		}

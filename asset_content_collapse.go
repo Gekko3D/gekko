@@ -58,7 +58,7 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 	if !enabled {
 		return false, nil
 	}
-	if len(def.AnimationClips) > 0 {
+	if len(def.AnimationSetPaths) > 0 {
 		return false, nil
 	}
 

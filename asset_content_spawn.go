@@ -46,6 +46,10 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	if validation := content.ValidateAsset(def, content.AssetValidationOptions{DocumentPath: opts.DocumentPath}); validation.HasErrors() {
 		return result, fmt.Errorf("asset validation failed: %s", validation.Error())
 	}
+	animations, err := content.ResolveAssetAnimations(def, opts.DocumentPath)
+	if err != nil {
+		return result, fmt.Errorf("asset animation resolution failed: %w", err)
+	}
 	content.NormalizeAssetDef(def)
 	if err := ValidateAssetHierarchy(def); err != nil {
 		return result, err
@@ -144,7 +148,7 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	}
 	cmd.app.FlushCommands()
 
-	if animationSet := newAuthoredAssetAnimationSetComponent(def, result, cmd); animationSet != nil {
+	if animationSet := newAuthoredAssetAnimationSetComponent(animations, result, cmd); animationSet != nil {
 		defaultClip, ok := animationSet.Clips[animationSet.DefaultClipID]
 		cmd.AddComponents(result.RootEntity,
 			&AnimationPlayerComponent{

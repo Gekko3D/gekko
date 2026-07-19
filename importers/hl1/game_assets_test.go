@@ -100,7 +100,7 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	for _, tag := range modelEntry.generatedAsset.Tags {
 		staticTag = staticTag || tag == "generated:mdl_static_world_model"
 	}
-	if modelEntry.generatedAsset.Skeleton != nil || len(modelEntry.generatedAsset.AnimationClips) != 0 || !staticTag {
+	if modelEntry.generatedAsset.Skeleton != nil || len(modelEntry.generatedAsset.AnimationSetPaths) != 0 || !staticTag {
 		t.Fatalf("expected pickup model to use the static world-model profile, got %+v", modelEntry.generatedAsset)
 	}
 	npcModelEntry := assertHL1AssetEntry(t, result.Manifest.Assets, "model", npcModelPath, "generated_voxel_asset")
@@ -133,13 +133,17 @@ func TestBuildGameAssetImportCatalogsAndCopiesMapAssets(t *testing.T) {
 	if _, err := os.Stat(result.ManifestPath); err != nil {
 		t.Fatalf("expected manifest %s: %v", result.ManifestPath, err)
 	}
+	manifestData, err := os.ReadFile(result.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(manifestData), `"output_path"`) {
+		t.Fatal("manifest retained obsolete copied-source output paths")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "hl1_assets", "testmap", "files")); !os.IsNotExist(err) {
+		t.Fatalf("import created an obsolete copied-source directory: %v", err)
+	}
 	for _, entry := range result.Manifest.Assets {
-		if !entry.Resolved {
-			continue
-		}
-		if _, err := os.Stat(entry.OutputPath); err != nil {
-			t.Fatalf("expected copied asset %s: %v", entry.OutputPath, err)
-		}
 		if entry.GeneratedAssetPath != "" {
 			if _, err := os.Stat(entry.GeneratedAssetPath); err != nil {
 				t.Fatalf("expected generated asset %s: %v", entry.GeneratedAssetPath, err)
@@ -270,6 +274,7 @@ func TestBuildGameAssetImportCatalogsStaticProps(t *testing.T) {
 	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "office_table.mdl"), syntheticMDL())
 	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "barney.mdl"), syntheticMDL())
 	mustWriteFile(t, filepath.Join(gameDir, "valve", "models", "w_shotgun.mdl"), syntheticMDL())
+	mustWriteFile(t, filepath.Join(gameDir, "gearbox", "models", "unrelated_prop.mdl"), syntheticMDL())
 
 	result, err := BuildGameAssetImport(ImportOptions{
 		GameDir:              gameDir,
@@ -287,7 +292,7 @@ func TestBuildGameAssetImportCatalogsStaticProps(t *testing.T) {
 	if entry.CatalogKind != "static_prop" || entry.GeneratedVoxelizationProfile == nil || entry.GeneratedVoxelizationProfile.ID != "hl1_static_prop_solid_v1" {
 		t.Fatalf("unexpected static prop entry: %+v", entry)
 	}
-	if entry.generatedAsset == nil || entry.generatedAsset.Skeleton != nil || len(entry.generatedAsset.AnimationClips) != 0 {
+	if entry.generatedAsset == nil || entry.generatedAsset.Skeleton != nil || len(entry.generatedAsset.AnimationSetPaths) != 0 {
 		t.Fatalf("expected a static-pose asset, got %+v", entry.generatedAsset)
 	}
 	if len(result.Library.Entries) != 1 {
@@ -381,6 +386,22 @@ func TestMergeHL1AssetLibrariesIsIdempotentAndRejectsPathConflicts(t *testing.T)
 	}
 }
 
+func TestPruneHL1CatalogEntriesOnlyReplacesSelectedKinds(t *testing.T) {
+	library := content.NewAssetLibraryDef("game")
+	library.Entries = []content.AssetLibraryEntryDef{
+		{Key: "characters.old", Tags: []string{"player"}},
+		{Key: "props.old", Tags: []string{"static_prop"}},
+		{Key: "maps.crossfire.door", Tags: []string{"scope:crossfire"}},
+	}
+	pruned := pruneHL1CatalogEntries(library, ImportOptions{ImportAllPlayerModels: true})
+	if len(pruned.Entries) != 2 || pruned.Entries[0].Key != "props.old" || pruned.Entries[1].Key != "maps.crossfire.door" {
+		t.Fatalf("pruned entries = %+v", pruned.Entries)
+	}
+	if len(library.Entries) != 3 {
+		t.Fatal("pruning mutated the loaded catalog")
+	}
+}
+
 func TestCentralHL1GeneratedAssetPathsStayOutsideLevelOutput(t *testing.T) {
 	opts := ImportOptions{MapName: "crossfire", OutputRoot: filepath.Join("levels", "crossfire"), AssetOutputRoot: filepath.Join("assets", "content")}
 	got := generatedHL1LevelAssetPath(opts, "moving_brushes", "door")
@@ -393,6 +414,13 @@ func TestCentralHL1GeneratedAssetPathsStayOutsideLevelOutput(t *testing.T) {
 func TestReuseExistingHL1PlayerAssetForMapReference(t *testing.T) {
 	dir := t.TempDir()
 	libraryPath := filepath.Join(dir, "game.gkassetlibrary")
+	assetPath := filepath.Join(dir, "content", "robo.gkasset")
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveAsset(assetPath, content.NewAssetDef("robo")); err != nil {
+		t.Fatal(err)
+	}
 	library := content.NewAssetLibraryDef("game")
 	library.Entries = []content.AssetLibraryEntryDef{{
 		Key: "characters.robo.b0.s0", AssetPath: "content/robo.gkasset",
@@ -409,6 +437,13 @@ func TestReuseExistingHL1PlayerAssetForMapReference(t *testing.T) {
 func TestReuseExistingHL1AssetRequiresMatchingSourceAndImportConfig(t *testing.T) {
 	dir := t.TempDir()
 	libraryPath := filepath.Join(dir, "game.gkassetlibrary")
+	assetPath := filepath.Join(dir, "content", "shared.gkasset")
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SaveAsset(assetPath, content.NewAssetDef("shared")); err != nil {
+		t.Fatal(err)
+	}
 	config := GameAssetManifestEntry{Kind: "model", SHA256: "same", GeneratedVoxelResolutionCategory: "pickup", GeneratedVoxelResolution: 0.01, GeneratedVoxelizationProfile: &MDLVoxelizationProfile{ID: "surface"}}
 	library := content.NewAssetLibraryDef("game")
 	library.Entries = []content.AssetLibraryEntryDef{{
@@ -491,20 +526,16 @@ func TestHL1PlayerDirectionalLocomotionUsesOnlyVerifiedSequences(t *testing.T) {
 func TestHL1PlayerCrouchGaitUsesActivitiesAndAuthoredBoneMask(t *testing.T) {
 	asset := &content.AssetDef{
 		Skeleton: &content.AssetSkeletonDef{Bones: []content.AssetBoneDef{
-			{ID: "pelvis", Name: "Bip01 Pelvis"}, {ID: "left_leg", Name: "Bip01 L Leg"}, {ID: "left_calf", Name: "Bip01 L Leg1"}, {ID: "left_foot", Name: "Bip01 L Foot"},
-			{ID: "right_leg", Name: "Bip01 R Leg"}, {ID: "right_calf", Name: "Bip01 R Leg1"}, {ID: "right_foot", Name: "Bip01 R Foot"}, {ID: "spine", Name: "Bip01 Spine"},
+			{ID: "pelvis", JointID: "pelvis", Name: "Bip01 Pelvis"}, {ID: "left_leg", JointID: "left_leg", Name: "Bip01 L Leg"}, {ID: "left_calf", JointID: "left_calf", Name: "Bip01 L Leg1"}, {ID: "left_foot", JointID: "left_foot", Name: "Bip01 L Foot"},
+			{ID: "right_leg", JointID: "right_leg", Name: "Bip01 R Leg"}, {ID: "right_calf", JointID: "right_calf", Name: "Bip01 R Leg1"}, {ID: "right_foot", JointID: "right_foot", Name: "Bip01 R Foot"}, {ID: "spine", JointID: "spine", Name: "Bip01 Spine"},
 		}},
-		AnimationClips: []content.AssetAnimationClipDef{
-			{ID: "crouch", Name: "crawl", Tags: []string{"source:hl1_activity:17"}},
-			{ID: "crouch_idle", Name: "crouch_idle", Tags: []string{"source:hl1_activity:18"}},
-			{ID: "crouch_aim", Name: "crouch_aim_onehanded"},
-		},
 	}
-	gait := hl1PlayerCrouchGait(asset)
+	clips := []content.AssetAnimationClipDef{{ID: "crouch", Name: "crawl", Tags: []string{"source:hl1_activity:17"}}, {ID: "crouch_idle", Name: "crouch_idle", Tags: []string{"source:hl1_activity:18"}}, {ID: "crouch_aim", Name: "crouch_aim_onehanded"}}
+	gait := hl1PlayerCrouchGait(asset, clips)
 	if gait.Status != GameAssetPlayerCrouchGaitSupported || gait.CrouchClipID != "crouch" || gait.CrouchIdleClipID != "crouch_idle" || gait.Locomotion != (GameAssetPlayerCrouchLocomotion{DefaultClipID: "crouch", Fallback: GameAssetPlayerLocomotionFallbackFaceTravel, BackwardFallback: GameAssetPlayerBackwardFallbackReverseForward}) || len(gait.BaseStances) != 1 || gait.BaseStances[0] != (GameAssetPlayerStanceClip{Stance: "onehanded", ClipID: "crouch_aim"}) || len(gait.BoneMask) != 7 {
 		t.Fatalf("expected verified crouch gait capability, got %+v", gait)
 	}
-	if unsupported := hl1PlayerCrouchGait(&content.AssetDef{}); unsupported.Status != GameAssetPlayerCrouchGaitUnsupported || unsupported.Diagnostic == "" {
+	if unsupported := hl1PlayerCrouchGait(&content.AssetDef{}, nil); unsupported.Status != GameAssetPlayerCrouchGaitUnsupported || unsupported.Diagnostic == "" {
 		t.Fatalf("expected explicit unsupported diagnostic, got %+v", unsupported)
 	}
 }
@@ -512,19 +543,16 @@ func TestHL1PlayerCrouchGaitUsesActivitiesAndAuthoredBoneMask(t *testing.T) {
 func TestHL1PlayerWeaponPresentationUsesAllowlistedStanceAndUpperMask(t *testing.T) {
 	asset := &content.AssetDef{
 		Skeleton: &content.AssetSkeletonDef{Bones: []content.AssetBoneDef{
-			{ID: "spine", Name: "Bip01 Spine"}, {ID: "neck", Name: "Bip01 Neck"}, {ID: "head", Name: "Bip01 Head"},
-			{ID: "left_arm", Name: "Bip01 L UpperArm"}, {ID: "left_hand", Name: "Bip01 L Hand"}, {ID: "right_arm", Name: "Bip01 R UpperArm"}, {ID: "right_hand", Name: "Bip01 R Hand"},
+			{ID: "spine", JointID: "spine", Name: "Bip01 Spine"}, {ID: "neck", JointID: "neck", Name: "Bip01 Neck"}, {ID: "head", JointID: "head", Name: "Bip01 Head"},
+			{ID: "left_arm", JointID: "left_arm", Name: "Bip01 L UpperArm"}, {ID: "left_hand", JointID: "left_hand", Name: "Bip01 L Hand"}, {ID: "right_arm", JointID: "right_arm", Name: "Bip01 R UpperArm"}, {ID: "right_hand", JointID: "right_hand", Name: "Bip01 R Hand"},
 		}},
-		AnimationClips: []content.AssetAnimationClipDef{
-			{ID: "aim", Name: "ref_aim_onehanded"}, {ID: "shoot", Name: "ref_shoot_onehanded"}, {ID: "crouch_aim", Name: "crouch_aim_onehanded"}, {ID: "crouch_shoot", Name: "crouch_shoot_onehanded"},
-			{ID: "ignored", Name: "shoot_onehanded"},
-		},
 	}
-	presentation := hl1PlayerWeaponPresentation(asset)
+	clips := []content.AssetAnimationClipDef{{ID: "aim", Name: "ref_aim_onehanded"}, {ID: "shoot", Name: "ref_shoot_onehanded"}, {ID: "crouch_aim", Name: "crouch_aim_onehanded"}, {ID: "crouch_shoot", Name: "crouch_shoot_onehanded"}, {ID: "ignored", Name: "shoot_onehanded"}}
+	presentation := hl1PlayerWeaponPresentation(asset, clips)
 	if presentation.Status != GameAssetPlayerWeaponPresentationSupported || len(presentation.Stances) != 1 || presentation.Stances[0].Stance != "onehanded" || presentation.Stances[0].AimClipID != "aim" || presentation.Stances[0].RecoilClipID != "shoot" || presentation.Stances[0].CrouchAimClipID != "crouch_aim" || presentation.Stances[0].CrouchRecoilClipID != "crouch_shoot" || len(presentation.UpperBodyMask) != 7 {
 		t.Fatalf("expected verified stance presentation, got %+v", presentation)
 	}
-	if unsupported := hl1PlayerWeaponPresentation(&content.AssetDef{}); unsupported.Status != GameAssetPlayerWeaponPresentationUnsupported || unsupported.Diagnostic == "" {
+	if unsupported := hl1PlayerWeaponPresentation(&content.AssetDef{}, nil); unsupported.Status != GameAssetPlayerWeaponPresentationUnsupported || unsupported.Diagnostic == "" {
 		t.Fatalf("expected unsupported diagnostic, got %+v", unsupported)
 	}
 }
@@ -681,10 +709,11 @@ func TestBuildMDLVoxelAssetEmitsSkeletonAndBindPoseClip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseMDLGeometry failed: %v", err)
 	}
-	asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{Name: "barney", SourceRef: "models/barney.mdl", VoxelResolution: 0.02})
+	built, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{Name: "barney", SourceRef: "models/barney.mdl", VoxelResolution: 0.02})
 	if err != nil {
 		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
 	}
+	asset, voxelCount := built.Asset, built.VoxelCount
 	if voxelCount == 0 {
 		t.Fatal("expected generated voxels")
 	}
@@ -697,11 +726,11 @@ func TestBuildMDLVoxelAssetEmitsSkeletonAndBindPoseClip(t *testing.T) {
 	if !approxContentVec3(asset.Parts[0].Transform.Position, content.Vec3{0.254, 0.762, -0.508}, 1e-5) {
 		t.Fatalf("unexpected bone group position: %+v", asset.Parts[0].Transform.Position)
 	}
-	if len(asset.AnimationClips) != 1 || asset.AnimationClips[0].ID != "mdl_idle" || len(asset.AnimationClips[0].Tracks) != 1 {
-		t.Fatalf("expected bind-pose animation clip, got %+v", asset.AnimationClips)
+	if len(built.Clips) != 1 || built.Clips[0].ID != "mdl_idle" || len(built.Clips[0].Tracks) != 1 {
+		t.Fatalf("expected external bind-pose animation clip, got %+v", built.Clips)
 	}
-	if asset.AnimationClips[0].Tracks[0].TargetID != "bone_00_root" {
-		t.Fatalf("expected clip to target bone group, got %+v", asset.AnimationClips[0].Tracks[0])
+	if built.Clips[0].Tracks[0].TargetID != "bone_00_root" {
+		t.Fatalf("expected clip to target bone group, got %+v", built.Clips[0].Tracks[0])
 	}
 	if asset.Runtime == nil || asset.Runtime.CollapseVoxelParts {
 		t.Fatalf("expected animated mdl asset to keep voxel parts uncollapsed, got %+v", asset.Runtime)
@@ -716,14 +745,15 @@ func TestBuildMDLVoxelAssetEmitsDecodedSequenceClip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseMDLGeometry failed: %v", err)
 	}
-	asset, _, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{Name: "barney", SourceRef: "models/barney.mdl", VoxelResolution: 0.02})
+	built, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{Name: "barney", SourceRef: "models/barney.mdl", VoxelResolution: 0.02})
 	if err != nil {
 		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
 	}
-	if len(asset.AnimationClips) != 1 || len(asset.AnimationClips[0].Tracks) != 1 {
-		t.Fatalf("expected one decoded clip track, got %+v", asset.AnimationClips)
+	asset := built.Asset
+	if len(built.Clips) != 1 || len(built.Clips[0].Tracks) != 1 {
+		t.Fatalf("expected one decoded clip track, got %+v", built.Clips)
 	}
-	track := asset.AnimationClips[0].Tracks[0]
+	track := built.Clips[0].Tracks[0]
 	if len(track.PositionKeys) != 2 || len(track.RotationKeys) != 2 {
 		t.Fatalf("expected per-frame keys, got %+v", track)
 	}
@@ -744,11 +774,11 @@ func TestBuildMDLVoxelAssetLocksPlayerRootMotion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseMDLGeometry failed: %v", err)
 	}
-	asset, _, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{VoxelResolution: 0.02, LockRootMotion: true})
+	built, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{VoxelResolution: 0.02, LockRootMotion: true})
 	if err != nil {
 		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
 	}
-	keys := asset.AnimationClips[0].Tracks[0].PositionKeys
+	keys := built.Clips[0].Tracks[0].PositionKeys
 	if len(keys) != 2 || !approxContentVec3(keys[0].Value, keys[1].Value, 1e-5) {
 		t.Fatalf("expected locked root motion, got %+v", keys)
 	}
@@ -759,7 +789,7 @@ func TestBuildMDLVoxelAssetStaticPoseBakesWorldModelIntoSingleVoxelPart(t *testi
 	if err != nil {
 		t.Fatalf("ParseMDLGeometry failed: %v", err)
 	}
-	asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
+	built, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{
 		Name:            "w_shotgun",
 		SourceRef:       "models/w_shotgun.mdl",
 		VoxelResolution: 0.02,
@@ -768,8 +798,9 @@ func TestBuildMDLVoxelAssetStaticPoseBakesWorldModelIntoSingleVoxelPart(t *testi
 	if err != nil {
 		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
 	}
-	if voxelCount == 0 || asset.Skeleton != nil || len(asset.AnimationClips) != 0 {
-		t.Fatalf("expected static asset without skeleton or clips, got voxels=%d skeleton=%+v clips=%+v", voxelCount, asset.Skeleton, asset.AnimationClips)
+	asset, voxelCount := built.Asset, built.VoxelCount
+	if voxelCount == 0 || asset.Skeleton != nil {
+		t.Fatalf("expected static asset without skeleton, got voxels=%d skeleton=%+v", voxelCount, asset.Skeleton)
 	}
 	if len(asset.Parts) != 1 || asset.Parts[0].Source.VoxelShape == nil {
 		t.Fatalf("expected one static voxel part, got %+v", asset.Parts)
@@ -925,7 +956,7 @@ func TestBuildMDLRigidBoneVoxelAssetUsesPerPartPalettes(t *testing.T) {
 			boneVoxels[boneIndex][[3]int{i, boneIndex, 0}] = mdlVoxelSample{Color: [4]uint8{uint8(value), uint8(value >> 8), 30, 255}}
 		}
 	}
-	asset, voxelCount, err := buildMDLRigidBoneVoxelAsset(MDLGeometry{Info: MDLInfo{Bones: []MDLBoneInfo{{Name: "root", Parent: -1}, {Name: "child", Parent: 0}}}}, MDLVoxelAssetOptions{VoxelizationProfile: DefaultMDLVoxelizationProfile()}, 0.02, boneVoxels)
+	asset, _, voxelCount, err := buildMDLRigidBoneVoxelAsset(MDLGeometry{Info: MDLInfo{Bones: []MDLBoneInfo{{Name: "root", Parent: -1}, {Name: "child", Parent: 0}}}}, MDLVoxelAssetOptions{VoxelizationProfile: DefaultMDLVoxelizationProfile()}, 0.02, boneVoxels)
 	if err != nil {
 		t.Fatalf("build rigid asset failed: %v", err)
 	}
@@ -959,10 +990,11 @@ func TestLoadMDLGeometryUsesCompanionTextureModel(t *testing.T) {
 	if len(geometry.Triangles) != 1 || geometry.Triangles[0].Vertices[1].UV[0] == 0 {
 		t.Fatalf("expected companion texture dimensions to drive UV decode, got %+v", geometry.Triangles)
 	}
-	asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{Name: "w_test", SourceRef: "models/w_test.mdl", VoxelResolution: 0.005})
+	built, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{Name: "w_test", SourceRef: "models/w_test.mdl", VoxelResolution: 0.005})
 	if err != nil {
 		t.Fatalf("BuildMDLVoxelAsset failed: %v", err)
 	}
+	asset, voxelCount := built.Asset, built.VoxelCount
 	if voxelCount == 0 || len(asset.Materials) < 2 {
 		t.Fatalf("expected texture-colored model voxels, voxels=%d materials=%+v", voxelCount, asset.Materials)
 	}
@@ -1000,6 +1032,13 @@ func TestBuildSPRVoxelAssetBuildsVisibleCard(t *testing.T) {
 	if asset.Parts[0].Source.VoxelShape == nil || len(asset.Parts[0].Source.VoxelShape.Voxels) != voxelCount {
 		t.Fatalf("missing voxel shape: %+v", asset.Parts[0].Source)
 	}
+	rebuilt, _, err := BuildSPRVoxelAsset(geometry, SPRVoxelAssetOptions{Name: "glow", SourceRef: "sprites/glow01.spr", VoxelResolution: 0.1})
+	if err != nil {
+		t.Fatalf("rebuild sprite asset: %v", err)
+	}
+	if rebuilt.ID != asset.ID {
+		t.Fatalf("sprite asset ID changed across identical imports: %q != %q", asset.ID, rebuilt.ID)
+	}
 }
 
 func assertHL1AssetEntry(t *testing.T, entries []GameAssetManifestEntry, kind string, sourcePath string, convertState string) GameAssetManifestEntry {
@@ -1012,8 +1051,8 @@ func assertHL1AssetEntry(t *testing.T, entries []GameAssetManifestEntry, kind st
 			if entry.ConvertState != convertState {
 				t.Fatalf("%s convert state = %q, want %q", kind, entry.ConvertState, convertState)
 			}
-			if entry.SizeBytes == 0 || entry.SHA256 == "" || entry.OutputPath == "" {
-				t.Fatalf("%s entry missing copied-file metadata: %+v", kind, entry)
+			if entry.SizeBytes == 0 || entry.SHA256 == "" {
+				t.Fatalf("%s entry missing source provenance: %+v", kind, entry)
 			}
 			return entry
 		}

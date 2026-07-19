@@ -13,12 +13,13 @@ For the broader authored-asset model, asset sets, level references, and runtime 
   - `tags`
   - `runtime`
   - `skeleton`
-  - `animation_clips`
+  - `animation_set_paths`
+  - `default_animation_clip_id`
   - `parts`
   - `lights`
   - `emitters`
   - `markers`
-- Current schema version: `3`
+- Current schema version: `4` (required exactly; older schemas are unsupported)
 - Authored IDs are stable UUID-like strings serialized directly in JSON.
 - Root transforms are authored relative to the asset root.
 - Child transforms are authored relative to the parent part.
@@ -49,19 +50,33 @@ For the broader authored-asset model, asset sets, level references, and runtime 
 voxel model when the asset is eligible. Animated assets must keep authored
 voxel parts uncollapsed so each part can move independently.
 
-`skeleton` is descriptive authored metadata. It records imported or authored
-bone IDs, names, parent IDs, bind transforms, and tags. Runtime animation does
-not require a separate skinning component: clips target authored item IDs
-directly. Assets tagged `skeleton:rest_basis` preserve complete local bind
-rotations suitable for offline animation retargeting; importers must not add
-that tag when bone rotations have been flattened into render geometry.
+`skeleton` records model-local bone IDs and stable semantic `joint_id` values,
+plus names, parents, bind transforms, and tags. Every skeleton bone requires a
+unique `joint_id`. Assets tagged `skeleton:rest_basis` preserve complete local
+bind rotations suitable for offline animation baking.
 
-`animation_clips` contain local-space tracks:
+Animation clips never live in `.gkasset`. `animation_set_paths` is an ordered
+list of document-relative `.gkanim` files. `default_animation_clip_id` is
+required when that list is non-empty. Duplicate clip IDs across referenced
+sets are rejected.
 
-- `target_id` references a spawned authored item ID such as a part, light,
-  emitter, or marker. Skeleton bones are metadata; importers that want bone
-  tracks to play should emit matching transform-only `group` parts for the
-  animated bone pivots.
+`.gkanim` schema v1 stores clips and uses exactly one binding mode:
+
+- `rig_path` targets semantic joint IDs from one `.gkrig` document.
+- `target_asset_id` targets item IDs of one exact asset, for machinery,
+  lights, emitters, or markers.
+
+`.gkrig` schema v1 contains an ordered semantic joint hierarchy and bind
+transforms. A model may contain extra joints, but every rig joint must map once
+with matching parent and bind transform. The spawn path loads and validates all
+references, then rewrites rig joint targets to model-local item IDs once before
+creating entities. Playback performs no retargeting.
+
+Animation tracks contain local-space channels:
+
+- `target_id` references a rig joint ID in reusable sets or an authored item ID
+  in asset-local sets. Animated skeleton bones have matching transform-only
+  `group` parts for runtime playback.
 - `position_keys`, `rotation_keys`, and `scale_keys` replace the target's local
   channel when present.
 - omitted channels keep the target's bind transform from the spawned asset.

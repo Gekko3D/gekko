@@ -99,19 +99,25 @@ func effectiveMDLVoxelizationProfile(profile MDLVoxelizationProfile) MDLVoxeliza
 	return profile
 }
 
-func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*content.AssetDef, int, error) {
+type MDLVoxelAssetDocuments struct {
+	Asset      *content.AssetDef
+	Clips      []content.AssetAnimationClipDef
+	VoxelCount int
+}
+
+func BuildMDLVoxelAssetDocuments(geometry MDLGeometry, opts MDLVoxelAssetOptions) (MDLVoxelAssetDocuments, error) {
 	resolution := opts.VoxelResolution
 	if resolution <= 0 {
 		resolution = DefaultImportedVoxelResolution
 	}
 	opts.VoxelizationProfile = effectiveMDLVoxelizationProfile(opts.VoxelizationProfile)
 	if len(geometry.Triangles) == 0 {
-		return nil, 0, fmt.Errorf("mdl contains no decoded triangles")
+		return MDLVoxelAssetDocuments{}, fmt.Errorf("mdl contains no decoded triangles")
 	}
 	if len(opts.IncludeBoneIndices) > 0 {
 		geometry = filterMDLGeometryByBones(geometry, opts.IncludeBoneIndices)
 		if len(geometry.Triangles) == 0 {
-			return nil, 0, fmt.Errorf("mdl has no geometry for selected bones")
+			return MDLVoxelAssetDocuments{}, fmt.Errorf("mdl has no geometry for selected bones")
 		}
 	}
 	if opts.RebaseToBone {
@@ -119,30 +125,32 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 	}
 	if opts.StaticPose {
 		voxels, effectiveResolution := voxelizeMDLGeometryToBudget(geometry, resolution, opts.VoxelizationProfile)
-		return buildMDLStaticPoseVoxelAsset(geometry, opts, effectiveResolution, voxels)
+		asset, count, err := buildMDLStaticPoseVoxelAsset(geometry, opts, effectiveResolution, voxels)
+		return finishMDLVoxelAssetDocuments(asset, nil, count, err)
 	}
 	if boneVoxels, effectiveResolution := voxelizeMDLGeometryByBoneToBudget(geometry, resolution, opts.VoxelizationProfile); len(boneVoxels) > 0 {
-		return buildMDLRigidBoneVoxelAsset(geometry, opts, effectiveResolution, boneVoxels)
+		asset, clips, count, err := buildMDLRigidBoneVoxelAsset(geometry, opts, effectiveResolution, boneVoxels)
+		return finishMDLVoxelAssetDocuments(asset, clips, count, err)
 	}
 	voxels, resolution := voxelizeMDLGeometryToBudget(geometry, resolution, opts.VoxelizationProfile)
 	if len(voxels) == 0 {
-		return nil, 0, fmt.Errorf("mdl voxelization produced no voxels")
+		return MDLVoxelAssetDocuments{}, fmt.Errorf("mdl voxelization produced no voxels")
 	}
 	localVoxels, origin := localizeMDLVoxels(voxels, resolution)
 	materials, palette := mdlAssetMaterialsAndPalette(voxels)
 	asset := newMDLVoxelAssetBase(geometry, opts)
 	asset.Skeleton = mdlAssetSkeleton(geometry.Info.Bones)
-	asset.AnimationClips = mdlAnimationClips(geometry.Info.Sequences, geometry.Info.Bones, []mdlAnimationBindTarget{{
+	clips := mdlAnimationClips(geometry.Info.Sequences, geometry.Info.Bones, []mdlAnimationBindTarget{{
 		ID:        "mdl_surface",
 		BoneIndex: -1,
 		Position:  content.Vec3{origin.X, origin.Y, origin.Z},
 		Rotation:  content.Quat{0, 0, 0, 1},
 		Scale:     content.Vec3{1, 1, 1},
 	}}, opts.LockRootMotion)
-	if len(asset.AnimationClips) > 0 {
+	if len(clips) > 0 {
 		asset.Tags = append(asset.Tags, "animation:bind_pose_clip")
 	}
-	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: len(asset.AnimationClips) == 0}
+	asset.Runtime = &content.AssetRuntimeDef{CollapseVoxelParts: len(clips) == 0}
 	asset.Materials = materials
 	asset.Parts = []content.AssetPartDef{{
 		ID:              "mdl_surface",
@@ -162,7 +170,17 @@ func BuildMDLVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions) (*conte
 		},
 		Tags: []string{"source:hl1", "source_asset:mdl", "generated:mdl_voxel_surface"},
 	}}
-	return asset, len(localVoxels), nil
+	return finishMDLVoxelAssetDocuments(asset, clips, len(localVoxels), nil)
+}
+
+func finishMDLVoxelAssetDocuments(asset *content.AssetDef, clips []content.AssetAnimationClipDef, voxelCount int, buildErr error) (MDLVoxelAssetDocuments, error) {
+	if buildErr != nil {
+		return MDLVoxelAssetDocuments{}, buildErr
+	}
+	if err := assignDeterministicHL1AssetID(asset); err != nil {
+		return MDLVoxelAssetDocuments{}, err
+	}
+	return MDLVoxelAssetDocuments{Asset: asset, Clips: clips, VoxelCount: voxelCount}, nil
 }
 
 func filterMDLGeometryByBones(geometry MDLGeometry, boneIndices []int) MDLGeometry {
@@ -249,9 +267,9 @@ func newMDLVoxelAssetBase(geometry MDLGeometry, opts MDLVoxelAssetOptions) *cont
 	return asset
 }
 
-func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32, boneVoxels map[int]map[[3]int]mdlVoxelSample) (*content.AssetDef, int, error) {
+func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32, boneVoxels map[int]map[[3]int]mdlVoxelSample) (*content.AssetDef, []content.AssetAnimationClipDef, int, error) {
 	if mdlBoneVoxelCount(boneVoxels) == 0 {
-		return nil, 0, fmt.Errorf("mdl voxelization produced no voxels")
+		return nil, nil, 0, fmt.Errorf("mdl voxelization produced no voxels")
 	}
 	bonePalettes := make(map[int]mdlColorPalette, len(boneVoxels))
 	for boneIndex, voxels := range boneVoxels {
@@ -333,7 +351,7 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 		})
 	}
 	if len(asset.Parts) == 0 || voxelCount == 0 {
-		return nil, 0, fmt.Errorf("mdl rigid bone voxelization produced no voxel parts")
+		return nil, nil, 0, fmt.Errorf("mdl rigid bone voxelization produced no voxel parts")
 	}
 	markerIDs := make([]string, 0, len(opts.SemanticAnchors))
 	for markerID := range opts.SemanticAnchors {
@@ -357,11 +375,11 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 			Tags: []string{"source:hl1", "semantic:" + markerID},
 		})
 	}
-	asset.AnimationClips = mdlAnimationClips(geometry.Info.Sequences, geometry.Info.Bones, bindTargets, opts.LockRootMotion)
-	if len(asset.AnimationClips) > 0 {
+	clips := mdlAnimationClips(geometry.Info.Sequences, geometry.Info.Bones, bindTargets, opts.LockRootMotion)
+	if len(clips) > 0 {
 		asset.Tags = append(asset.Tags, "animation:bind_pose_clip")
 	}
-	return asset, voxelCount, nil
+	return asset, clips, voxelCount, nil
 }
 
 func mdlAssetSkeleton(bones []MDLBoneInfo) *content.AssetSkeletonDef {
@@ -369,6 +387,7 @@ func mdlAssetSkeleton(bones []MDLBoneInfo) *content.AssetSkeletonDef {
 		return nil
 	}
 	boneIDs := mdlAssetBoneIDs(bones)
+	jointIDs := mdlAssetJointIDs(bones)
 	out := &content.AssetSkeletonDef{Bones: make([]content.AssetBoneDef, 0, len(bones))}
 	for i, bone := range bones {
 		pos := HammerToGekko(bone.Position)
@@ -378,6 +397,7 @@ func mdlAssetSkeleton(bones []MDLBoneInfo) *content.AssetSkeletonDef {
 		}
 		out.Bones = append(out.Bones, content.AssetBoneDef{
 			ID:       boneIDs[i],
+			JointID:  jointIDs[i],
 			Name:     nonEmptyString(bone.Name, fmt.Sprintf("bone_%02d", i)),
 			ParentID: parentID,
 			Transform: content.AssetTransformDef{
@@ -389,6 +409,46 @@ func mdlAssetSkeleton(bones []MDLBoneInfo) *content.AssetSkeletonDef {
 		})
 	}
 	return out
+}
+
+func mdlAssetJointIDs(bones []MDLBoneInfo) []string {
+	ids := make([]string, len(bones))
+	seen := map[string]int{}
+	for i, bone := range bones {
+		id := mdlSemanticJointID(bone.Name)
+		if id == "" {
+			id = fmt.Sprintf("bone.%02d", i)
+		}
+		if seen[id] > 0 && bone.Parent >= 0 && bone.Parent < i {
+			id = ids[bone.Parent] + "." + id
+		}
+		seen[id]++
+		if seen[id] > 1 {
+			id = fmt.Sprintf("%s.%d", id, seen[id])
+		}
+		ids[i] = id
+	}
+	return ids
+}
+
+func mdlSemanticJointID(name string) string {
+	key := strings.ToLower(strings.Join(strings.Fields(name), " "))
+	aliases := map[string]string{
+		"bip01 l leg": "bip01.left.thigh", "bip01 l thigh": "bip01.left.thigh",
+		"bip01 l leg1": "bip01.left.calf", "bip01 l calf": "bip01.left.calf",
+		"bip01 r leg": "bip01.right.thigh", "bip01 r thigh": "bip01.right.thigh",
+		"bip01 r leg1": "bip01.right.calf", "bip01 r calf": "bip01.right.calf",
+		"bip01 l arm": "bip01.left.clavicle", "bip01 l clavicle": "bip01.left.clavicle",
+		"bip01 l arm1": "bip01.left.upper_arm", "bip01 l upperarm": "bip01.left.upper_arm",
+		"bip01 l arm2": "bip01.left.forearm", "bip01 l forearm": "bip01.left.forearm",
+		"bip01 r arm": "bip01.right.clavicle", "bip01 r clavicle": "bip01.right.clavicle",
+		"bip01 r arm1": "bip01.right.upper_arm", "bip01 r upperarm": "bip01.right.upper_arm",
+		"bip01 r arm2": "bip01.right.forearm", "bip01 r forearm": "bip01.right.forearm",
+	}
+	if alias := aliases[key]; alias != "" {
+		return alias
+	}
+	return strings.ReplaceAll(safeMDLAssetID(name), "_", ".")
 }
 
 func mdlAssetBoneIDs(bones []MDLBoneInfo) []string {

@@ -16,7 +16,7 @@ import (
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
 
-const GameAssetManifestSchemaVersion = 1
+const GameAssetManifestSchemaVersion = 2
 
 type GameAssetImportResult struct {
 	ManifestPath string
@@ -51,7 +51,6 @@ type GameAssetPlayerCatalogEntry struct {
 	LeftHandMarkerID      string                               `json:"left_hand_marker_id,omitempty"`
 	UpperBodyMarkerID     string                               `json:"upper_body_marker_id"`
 	AimMarkerIDs          []string                             `json:"aim_marker_ids,omitempty"`
-	ClipIDs               []string                             `json:"clip_ids,omitempty"`
 	SequenceActivities    []GameAssetPlayerSequenceActivity    `json:"sequence_activities,omitempty"`
 	CrouchGait            GameAssetPlayerCrouchGait            `json:"crouch_gait"`
 	WeaponPresentation    GameAssetPlayerWeaponPresentation    `json:"weapon_presentation"`
@@ -159,7 +158,6 @@ type GameAssetManifestEntry struct {
 	Kind                             string                               `json:"kind"`
 	SourceRef                        string                               `json:"source_ref"`
 	SourcePath                       string                               `json:"source_path,omitempty"`
-	OutputPath                       string                               `json:"output_path,omitempty"`
 	GeneratedAssetPath               string                               `json:"generated_asset_path,omitempty"`
 	GeneratedVoxelCount              int                                  `json:"generated_voxel_count,omitempty"`
 	GeneratedVoxelResolution         float32                              `json:"generated_voxel_resolution,omitempty"`
@@ -175,7 +173,6 @@ type GameAssetManifestEntry struct {
 	LeftHandMarkerID                 string                               `json:"left_hand_marker_id,omitempty"`
 	UpperBodyMarkerID                string                               `json:"upper_body_marker_id,omitempty"`
 	AimMarkerIDs                     []string                             `json:"aim_marker_ids,omitempty"`
-	ClipIDs                          []string                             `json:"clip_ids,omitempty"`
 	SequenceActivities               []GameAssetPlayerSequenceActivity    `json:"sequence_activities,omitempty"`
 	CrouchGait                       GameAssetPlayerCrouchGait            `json:"crouch_gait,omitempty"`
 	WeaponPresentation               GameAssetPlayerWeaponPresentation    `json:"weapon_presentation,omitempty"`
@@ -189,6 +186,7 @@ type GameAssetManifestEntry struct {
 	SpriteInfo                       *SPRInfo                             `json:"sprite_info,omitempty"`
 	GeneratedExtras                  []GameAssetGeneratedExtra            `json:"generated_extras,omitempty"`
 	generatedAsset                   *content.AssetDef                    `json:"-"`
+	generatedAnimations              []MDLAnimationDocuments              `json:"-"`
 }
 
 // GameAssetGeneratedExtra is an additional generic asset emitted from one
@@ -263,6 +261,7 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		}
 	}
 	collector := newHL1AssetCollector(gameDir, opts.ResourceDirs, assetOutputRoot, mapName, centralAssets, EffectiveHL1VoxelResolutionPolicy(opts))
+	catalogDirs := hl1CatalogResourceDirs(gameDir, opts.ResourceDirs)
 	for _, wadPath := range summary.Report.Source.WADPaths {
 		collector.addAbsolute("wad", wadPath, "worldspawn.wad")
 	}
@@ -291,17 +290,17 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		}
 	}
 	if opts.ImportAllPlayerModels {
-		for _, resourceDir := range collector.resourceDirs {
+		for _, resourceDir := range catalogDirs {
 			collector.addCatalogModels("player", resourceDir, hl1CatalogModelPaths(resourceDir, true))
 		}
 	}
 	if opts.ImportAllStaticProps {
-		for _, resourceDir := range collector.resourceDirs {
+		for _, resourceDir := range catalogDirs {
 			collector.addCatalogModels("static_prop", resourceDir, hl1StaticPropModelPaths(resourceDir))
 		}
 	}
 	if opts.ImportAllWeaponWorldModels {
-		for _, resourceDir := range collector.resourceDirs {
+		for _, resourceDir := range catalogDirs {
 			collector.addCatalogModels("weapon_world", resourceDir, hl1CatalogModelPaths(resourceDir, false))
 			collector.addCatalogModels("weapon_held", resourceDir, hl1HeldWeaponModelPaths(resourceDir))
 		}
@@ -314,12 +313,29 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 	library := buildHL1AssetLibrary(manifest.Assets, libraryPath)
 	if existingLibrary != nil {
 		var err error
-		library, err = mergeHL1AssetLibraries(existingLibrary, library)
+		library, err = mergeHL1AssetLibraries(pruneHL1CatalogEntries(existingLibrary, opts), library)
 		if err != nil {
 			return GameAssetImportResult{}, err
 		}
 	}
 	return GameAssetImportResult{ManifestPath: manifestPath, Manifest: manifest, LibraryPath: libraryPath, Library: library}, nil
+}
+
+func pruneHL1CatalogEntries(library *content.AssetLibraryDef, opts ImportOptions) *content.AssetLibraryDef {
+	if library == nil {
+		return nil
+	}
+	pruned := *library
+	pruned.Entries = make([]content.AssetLibraryEntryDef, 0, len(library.Entries))
+	for _, entry := range library.Entries {
+		selected := opts.ImportAllPlayerModels && hasAnyString(entry.Tags, "player")
+		selected = selected || opts.ImportAllStaticProps && hasAnyString(entry.Tags, "static_prop")
+		selected = selected || opts.ImportAllWeaponWorldModels && hasAnyString(entry.Tags, "weapon_world", "weapon_held")
+		if !selected {
+			pruned.Entries = append(pruned.Entries, entry)
+		}
+	}
+	return &pruned
 }
 
 func reuseExistingHL1Assets(entries []GameAssetManifestEntry, library *content.AssetLibraryDef, libraryPath string) {
@@ -339,6 +355,9 @@ func reuseExistingHL1Assets(entries []GameAssetManifestEntry, library *content.A
 		}
 		path, err := content.ResolveAssetLibraryPath(library, libraryPath, entry.Key)
 		if err == nil {
+			if _, err := content.LoadAsset(path); err != nil {
+				continue
+			}
 			for _, identity := range []string{sourceRef, sourceHash} {
 				if identity == "" {
 					continue
@@ -415,7 +434,11 @@ func mergeHL1AssetLibraries(existing, incoming *content.AssetLibraryDef) (*conte
 
 func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []string) {
 	for _, path := range paths {
-		ref, err := filepath.Rel(resourceDir, path)
+		refRoot := resourceDir
+		if rel, err := filepath.Rel(c.gameDir, path); err == nil && !strings.HasPrefix(rel, "..") {
+			refRoot = c.gameDir
+		}
+		ref, err := filepath.Rel(refRoot, path)
 		if err != nil || strings.HasPrefix(ref, "..") {
 			continue
 		}
@@ -590,64 +613,87 @@ func SaveGameAssetImport(result GameAssetImportResult) error {
 	if result.Manifest == nil {
 		return fmt.Errorf("game asset manifest is nil")
 	}
+	type stagedFile struct{ temporary, target string }
+	var staged []stagedFile
+	stagedTargets := map[string]struct{}{}
+	defer func() {
+		for _, file := range staged {
+			_ = os.Remove(file.temporary)
+		}
+	}()
+	stage := func(target string, save func(string) error) error {
+		target = filepath.Clean(target)
+		if _, exists := stagedTargets[target]; exists {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		file, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".tmp-*")
+		if err != nil {
+			return err
+		}
+		temporary := file.Name()
+		if err := file.Close(); err != nil {
+			_ = os.Remove(temporary)
+			return err
+		}
+		if err := save(temporary); err != nil {
+			_ = os.Remove(temporary)
+			return err
+		}
+		staged = append(staged, stagedFile{temporary: temporary, target: target})
+		stagedTargets[target] = struct{}{}
+		return nil
+	}
 	for i := range result.Manifest.Assets {
 		entry := &result.Manifest.Assets[i]
-		if !entry.Resolved || entry.SourcePath == "" || entry.OutputPath == "" {
-			continue
-		}
-		if err := copyHL1AssetFile(entry.SourcePath, entry.OutputPath); err != nil {
-			result.Manifest.Diagnostics = append(result.Manifest.Diagnostics, importcommon.Diagnostic{
-				Severity: importcommon.SeverityWarning,
-				Code:     "hl1.asset_copy_failed",
-				Subject:  entry.SourcePath,
-				Message:  err.Error(),
-			})
-		}
 		if entry.generatedAsset != nil && entry.GeneratedAssetPath != "" {
-			if err := os.MkdirAll(filepath.Dir(entry.GeneratedAssetPath), 0755); err != nil {
-				result.Manifest.Diagnostics = append(result.Manifest.Diagnostics, importcommon.Diagnostic{
-					Severity: importcommon.SeverityWarning,
-					Code:     "hl1.generated_asset_save_failed",
-					Subject:  entry.GeneratedAssetPath,
-					Message:  err.Error(),
-				})
-			} else if err := content.SaveAsset(entry.GeneratedAssetPath, entry.generatedAsset); err != nil {
-				result.Manifest.Diagnostics = append(result.Manifest.Diagnostics, importcommon.Diagnostic{
-					Severity: importcommon.SeverityWarning,
-					Code:     "hl1.generated_asset_save_failed",
-					Subject:  entry.GeneratedAssetPath,
-					Message:  err.Error(),
-				})
+			for _, generated := range entry.generatedAnimations {
+				if generated.Rig != nil {
+					if err := stage(generated.RigPath, func(path string) error { return content.SaveAnimationRig(path, generated.Rig) }); err != nil {
+						return err
+					}
+				}
+				if generated.Set != nil {
+					if err := stage(generated.SetPath, func(path string) error { return content.SaveAnimationSet(path, generated.Set) }); err != nil {
+						return err
+					}
+				}
+			}
+			if err := stage(entry.GeneratedAssetPath, func(path string) error { return content.SaveAsset(path, entry.generatedAsset) }); err != nil {
+				return fmt.Errorf("stage generated asset %s: %w", entry.GeneratedAssetPath, err)
 			}
 		}
 		for _, extra := range entry.GeneratedExtras {
 			if extra.asset == nil || extra.AssetPath == "" {
 				continue
 			}
-			if err := os.MkdirAll(filepath.Dir(extra.AssetPath), 0755); err != nil {
-				result.Manifest.Diagnostics = append(result.Manifest.Diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.generated_asset_save_failed", Subject: extra.AssetPath, Message: err.Error()})
-			} else if err := content.SaveAsset(extra.AssetPath, extra.asset); err != nil {
-				result.Manifest.Diagnostics = append(result.Manifest.Diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.generated_asset_save_failed", Subject: extra.AssetPath, Message: err.Error()})
+			if err := stage(extra.AssetPath, func(path string) error { return content.SaveAsset(path, extra.asset) }); err != nil {
+				return fmt.Errorf("stage generated asset %s: %w", extra.AssetPath, err)
 			}
 		}
 	}
 	if result.Library != nil && result.LibraryPath != "" {
-		if err := os.MkdirAll(filepath.Dir(result.LibraryPath), 0755); err != nil {
+		if err := stage(result.LibraryPath, func(path string) error { return content.SaveAssetLibrary(path, result.Library) }); err != nil {
 			return err
 		}
-		if err := content.SaveAssetLibrary(result.LibraryPath, result.Library); err != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(result.ManifestPath), 0755); err != nil {
-		return err
 	}
 	data, err := json.MarshalIndent(result.Manifest, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(result.ManifestPath, data, 0644)
+	if err := stage(result.ManifestPath, func(path string) error { return os.WriteFile(path, data, 0644) }); err != nil {
+		return err
+	}
+	for _, file := range staged {
+		if err := os.Rename(file.temporary, file.target); err != nil {
+			return fmt.Errorf("replace %s: %w", file.target, err)
+		}
+	}
+	staged = nil
+	return nil
 }
 
 func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) *content.AssetLibraryDef {
@@ -844,7 +890,7 @@ func hl1StaticPropGroup(sourceRef string) string {
 func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPresentationDef {
 	def := &content.CharacterPresentationDef{
 		HeadMarkerID: entry.HeadMarkerID, RightHandMarkerID: entry.RightHandMarkerID, LeftHandMarkerID: entry.LeftHandMarkerID, UpperBodyMarkerID: entry.UpperBodyMarkerID,
-		AimMarkerIDs: append([]string(nil), entry.AimMarkerIDs...), ClipIDs: append([]string(nil), entry.ClipIDs...),
+		AimMarkerIDs: append([]string(nil), entry.AimMarkerIDs...),
 		AimRig: content.CharacterAimRigDef{
 			Status:           content.CharacterPresentationSupported,
 			MuzzleMarkerKind: content.AssetMarkerKindMuzzle,
@@ -1045,6 +1091,16 @@ func hl1AssetImportConfig(entry GameAssetManifestEntry) string {
 	}, "/")
 }
 
+func deterministicHL1ID(kind string, identity ...string) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(kind))
+	for _, value := range identity {
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(value))
+	}
+	return kind + "." + hex.EncodeToString(h.Sum(nil)[:8])
+}
+
 type hl1AssetCollector struct {
 	gameDir               string
 	resourceDirs          []string
@@ -1090,6 +1146,25 @@ func hl1ResourceDirs(gameDir string, overlays []string) []string {
 		}
 	}
 	return dirs
+}
+
+func hl1CatalogResourceDirs(gameDir string, overlays []string) []string {
+	gameDir = filepath.Clean(strings.TrimSpace(gameDir))
+	var roots []string
+	if strings.EqualFold(filepath.Base(gameDir), "valve") || strings.EqualFold(filepath.Base(gameDir), "valve_downloads") {
+		roots = append(roots, gameDir)
+	} else {
+		for _, name := range []string{"valve", "valve_downloads"} {
+			path := filepath.Join(gameDir, name)
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				roots = append(roots, path)
+			}
+		}
+		if len(roots) == 0 && gameDir != "." {
+			roots = append(roots, gameDir)
+		}
+	}
+	return hl1ResourceDirs("", append(roots, overlays...))
 }
 
 func (c *hl1AssetCollector) addAbsolute(kind, path, usedBy string) {
@@ -1178,10 +1253,6 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 	entry.Resolved = true
 	entry.SizeBytes = info.Size()
 	entry.SHA256 = fileSHA256(entry.SourcePath)
-	entry.OutputPath = filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "files", hl1AssetOutputRelPath(entry.SourcePath, c.gameDir, kind, entry.SourceRef))
-	if c.centralAssets {
-		entry.OutputPath = filepath.Join(c.outputRoot, "hl1", "sources", hl1AssetOutputRelPath(entry.SourcePath, c.gameDir, kind, entry.SourceRef))
-	}
 	if kind == "model" {
 		category, voxelResolution := c.voxelResolutionForEntry(entry)
 		voxelizationProfile := MDLVoxelizationProfileForCategory(category)
@@ -1235,7 +1306,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				c.buildEgonHeldPresentation(entry, geometry, voxelResolution, voxelizationProfile, assetPath)
 				return
 			}
-			asset, voxelCount, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
+			built, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{
 				Name:                strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
 				SourceRef:           entry.SourceRef,
 				VoxelResolution:     voxelResolution,
@@ -1253,7 +1324,8 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					Subject:  entry.SourceRef,
 					Message:  err.Error(),
 				})
-			} else if asset != nil {
+			} else if built.Asset != nil {
+				asset, voxelCount, clips := built.Asset, built.VoxelCount, built.Clips
 				entry.GeneratedVoxelResolution = mdlAssetVoxelResolution(asset, voxelResolution)
 				if entry.CatalogKind == "weapon_held" {
 					twoHanded := hl1HeldWeaponUsesLeftGrip(entry)
@@ -1270,29 +1342,35 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 					entry.ConvertState = "unsupported_player_avatar"
 					return
 				}
+				generatedAnimations, err := BuildMDLAnimationDocuments(asset, clips, assetPath)
+				if err != nil {
+					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.mdl_animation_externalize_failed", Subject: entry.SourceRef, Message: err.Error()})
+					entry.ConvertState = "animation_externalize_failed"
+					return
+				}
+				if generatedAnimations.Set != nil {
+					entry.generatedAnimations = append(entry.generatedAnimations, generatedAnimations)
+				}
 				entry.GeneratedAssetPath = filepath.Clean(assetPath)
 				entry.GeneratedVoxelCount = voxelCount
 				entry.generatedAsset = asset
 				entry.ConvertState = "generated_voxel_asset"
-				for _, clip := range asset.AnimationClips {
-					entry.ClipIDs = append(entry.ClipIDs, clip.ID)
-				}
 				if entry.CatalogKind == "player" {
 					entry.HeadMarkerID = "head"
 					entry.RightHandMarkerID = "right_hand"
 					entry.LeftHandMarkerID = "left_hand"
 					entry.UpperBodyMarkerID = "upper_body"
 					entry.AimMarkerIDs = append([]string(nil), hl1PlayerAimMarkerIDs...)
-					entry.SequenceActivities = hl1PlayerSequenceActivities(asset.AnimationClips)
-					entry.CrouchGait = hl1PlayerCrouchGait(asset)
+					entry.SequenceActivities = hl1PlayerSequenceActivities(clips)
+					entry.CrouchGait = hl1PlayerCrouchGait(asset, clips)
 					if entry.CrouchGait.Status == GameAssetPlayerCrouchGaitUnsupported {
 						c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_crouch_gait_unsupported", Subject: entry.CatalogID, Message: entry.CrouchGait.Diagnostic})
 					}
-					entry.WeaponPresentation = hl1PlayerWeaponPresentation(asset)
+					entry.WeaponPresentation = hl1PlayerWeaponPresentation(asset, clips)
 					if entry.WeaponPresentation.Status == GameAssetPlayerWeaponPresentationUnsupported {
 						c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_weapon_presentation_unsupported", Subject: entry.CatalogID, Message: entry.WeaponPresentation.Diagnostic})
 					}
-					entry.DirectionalLocomotion = hl1PlayerDirectionalLocomotion(asset.AnimationClips)
+					entry.DirectionalLocomotion = hl1PlayerDirectionalLocomotion(clips)
 				}
 			}
 		}
@@ -1379,7 +1457,7 @@ func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEn
 		c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.egon_presentation_unsupported", Subject: entry.SourceRef, Message: "missing verified Egon backpack or terminal-arm bones"})
 		return
 	}
-	held, heldVoxels, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
+	heldBuilt, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{
 		Name:                "egon held",
 		SourceRef:           entry.SourceRef,
 		VoxelResolution:     resolution,
@@ -1393,7 +1471,8 @@ func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEn
 		c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.egon_held_voxelize_failed", Subject: entry.SourceRef, Message: err.Error()})
 		return
 	}
-	pack, packVoxels, err := BuildMDLVoxelAsset(geometry, MDLVoxelAssetOptions{
+	held, heldVoxels := heldBuilt.Asset, heldBuilt.VoxelCount
+	packBuilt, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{
 		Name:                "egon backpack",
 		SourceRef:           entry.SourceRef,
 		VoxelResolution:     resolution,
@@ -1407,6 +1486,7 @@ func (c *hl1AssetCollector) buildEgonHeldPresentation(entry *GameAssetManifestEn
 		c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.egon_backpack_voxelize_failed", Subject: entry.SourceRef, Message: err.Error()})
 		return
 	}
+	pack, packVoxels := packBuilt.Asset, packBuilt.VoxelCount
 	hl1AddHeldWeaponPresentationMarkersWithAimFrame(held, hl1BoneLocalMuzzleFrame(geometry.Info.Bones, terminalArm), true)
 	entry.GeneratedAssetPath = filepath.Clean(heldPath)
 	entry.GeneratedVoxelCount = heldVoxels
@@ -1635,13 +1715,13 @@ func hl1PlayerSequenceActivities(clips []content.AssetAnimationClipDef) []GameAs
 	return activities
 }
 
-func hl1PlayerCrouchGait(asset *content.AssetDef) GameAssetPlayerCrouchGait {
+func hl1PlayerCrouchGait(asset *content.AssetDef, clips []content.AssetAnimationClipDef) GameAssetPlayerCrouchGait {
 	gait := GameAssetPlayerCrouchGait{Status: GameAssetPlayerCrouchGaitUnsupported}
 	if asset == nil {
 		gait.Diagnostic = "generated player asset is missing"
 		return gait
 	}
-	activities := hl1PlayerSequenceActivities(asset.AnimationClips)
+	activities := hl1PlayerSequenceActivities(clips)
 	for _, activity := range activities {
 		switch activity.Activity {
 		case HL1ActivityCrouch:
@@ -1654,7 +1734,7 @@ func hl1PlayerCrouchGait(asset *content.AssetDef) GameAssetPlayerCrouchGait {
 			}
 		}
 	}
-	for _, clip := range asset.AnimationClips {
+	for _, clip := range clips {
 		if stance := hl1PlayerCrouchAimStance(clip.Name); stance != "" {
 			gait.BaseStances = append(gait.BaseStances, GameAssetPlayerStanceClip{Stance: stance, ClipID: clip.ID})
 		}
@@ -1709,14 +1789,14 @@ func hl1PlayerCrouchAimStance(name string) string {
 	}
 }
 
-func hl1PlayerWeaponPresentation(asset *content.AssetDef) GameAssetPlayerWeaponPresentation {
+func hl1PlayerWeaponPresentation(asset *content.AssetDef, clips []content.AssetAnimationClipDef) GameAssetPlayerWeaponPresentation {
 	presentation := GameAssetPlayerWeaponPresentation{Status: GameAssetPlayerWeaponPresentationUnsupported}
 	if asset == nil {
 		presentation.Diagnostic = "generated player asset is missing"
 		return presentation
 	}
-	byName := make(map[string]string, len(asset.AnimationClips))
-	for _, clip := range asset.AnimationClips {
+	byName := make(map[string]string, len(clips))
+	for _, clip := range clips {
 		byName[strings.ToLower(strings.TrimSpace(clip.Name))] = clip.ID
 	}
 	for _, stance := range hl1PlayerWeaponStances {
@@ -1764,7 +1844,7 @@ func hl1PlayerWeaponBoneMask(skeleton *content.AssetSkeletonDef, includeTorso bo
 		arm := strings.HasPrefix(name, "bip01lclavicle") || strings.HasPrefix(name, "bip01rclavicle") || strings.HasPrefix(name, "bip01lupperarm") || strings.HasPrefix(name, "bip01rupperarm") || strings.HasPrefix(name, "bip01lforearm") || strings.HasPrefix(name, "bip01rforearm") || strings.HasPrefix(name, "bip01larm") || strings.HasPrefix(name, "bip01rarm") || strings.HasPrefix(name, "bip01lhand") || strings.HasPrefix(name, "bip01rhand") || strings.HasPrefix(name, "bip01lfinger") || strings.HasPrefix(name, "bip01rfinger")
 		torso := strings.HasPrefix(name, "bip01spine") || name == "bip01neck" || name == "bip01head"
 		if arm || includeTorso && torso {
-			mask = append(mask, bone.ID)
+			mask = append(mask, bone.JointID)
 		}
 	}
 	sort.Strings(mask)
@@ -1783,7 +1863,7 @@ func hl1PlayerLowerBodyBoneMask(skeleton *content.AssetSkeletonDef) []string {
 	for _, bone := range skeleton.Bones {
 		name := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(bone.Name), " ", ""))
 		if _, ok := known[name]; ok {
-			mask = append(mask, bone.ID)
+			mask = append(mask, bone.JointID)
 		}
 	}
 	sort.Strings(mask)
@@ -1812,7 +1892,6 @@ func buildGameAssetCatalog(entries []GameAssetManifestEntry) *GameAssetCatalog {
 				LeftHandMarkerID:      entry.LeftHandMarkerID,
 				UpperBodyMarkerID:     entry.UpperBodyMarkerID,
 				AimMarkerIDs:          append([]string(nil), entry.AimMarkerIDs...),
-				ClipIDs:               append([]string(nil), entry.ClipIDs...),
 				SequenceActivities:    append([]GameAssetPlayerSequenceActivity(nil), entry.SequenceActivities...),
 				CrouchGait:            entry.CrouchGait,
 				WeaponPresentation:    entry.WeaponPresentation,
@@ -1912,38 +1991,6 @@ func hl1AssetPathCandidates(gameDir, ref, kind string) []string {
 		}
 	}
 	return uniqueCleanPaths(out)
-}
-
-func hl1AssetOutputRelPath(sourcePath, gameDir, kind, sourceRef string) string {
-	if gameDir != "" {
-		if rel, err := filepath.Rel(gameDir, sourcePath); err == nil && !strings.HasPrefix(rel, "..") {
-			return rel
-		}
-	}
-	return filepath.Join(kind, filepath.Base(sourceRef))
-}
-
-func copyHL1AssetFile(src, dst string) error {
-	if filepath.Clean(src) == filepath.Clean(dst) {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 func appendUniqueString(values []string, value string) []string {

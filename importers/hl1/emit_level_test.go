@@ -91,6 +91,13 @@ func TestBuildAndSaveGeneratedLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildGeneratedLevel failed: %v", err)
 	}
+	rebuilt, err := BuildGeneratedLevel(opts, summary, world.ManifestPath)
+	if err != nil {
+		t.Fatalf("rebuild generated level: %v", err)
+	}
+	if rebuilt.Level.ID != level.Level.ID || rebuilt.Level.BrushLayers[0].ID != level.Level.BrushLayers[0].ID {
+		t.Fatalf("generated level IDs changed across identical imports: %q/%q != %q/%q", level.Level.ID, level.Level.BrushLayers[0].ID, rebuilt.Level.ID, rebuilt.Level.BrushLayers[0].ID)
+	}
 	if err := SaveGeneratedLevel(level); err != nil {
 		t.Fatalf("SaveGeneratedLevel failed: %v", err)
 	}
@@ -288,6 +295,22 @@ func TestBuildGeneratedLevelCanEmitEmissiveSurfaceLights(t *testing.T) {
 	}
 	if light.Intensity <= 0 || light.Range <= 0 || light.CastsShadows {
 		t.Fatalf("unexpected emissive light params = %+v", light)
+	}
+}
+
+func TestEmissiveSurfaceLightTiesHaveStableOrder(t *testing.T) {
+	palette := emissivePaletteIndexForToneLevel(emissiveWarmTone, emissiveRampLevels-1)
+	voxelized := VoxelizeResult{Materials: []importcommon.Material{{
+		ID: int(palette), PaletteIndex: palette, BaseColor: [4]uint8{255, 224, 132, 255}, EmitsLight: true, Emissive: 3,
+	}}}
+	for _, z := range []int{20, 10} {
+		for x := 0; x < minEmissiveSurfaceLightVoxels; x++ {
+			voxelized.Voxels = append(voxelized.Voxels, importcommon.Voxel{X: x, Z: z, Palette: palette, SolidKind: "emissive"})
+		}
+	}
+	lights := buildHL1EmissiveSurfaceLights(ImportOptions{VoxelResolution: 0.1}, voxelized, 0)
+	if len(lights) != 2 || lights[0].Transform.Position[2] >= lights[1].Transform.Position[2] {
+		t.Fatalf("emissive light tie order = %+v", lights)
 	}
 }
 

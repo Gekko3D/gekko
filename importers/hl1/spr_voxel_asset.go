@@ -68,6 +68,9 @@ func BuildSPRVoxelAsset(geometry SPRGeometry, opts SPRVoxelAssetOptions) (*conte
 		Tags: []string{"source:hl1", "kind:sprite_card"},
 	}}
 	content.EnsureAssetIDs(asset)
+	if err := assignDeterministicHL1AssetID(asset); err != nil {
+		return nil, 0, err
+	}
 	return asset, len(voxels), nil
 }
 

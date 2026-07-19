@@ -41,29 +41,12 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 		}},
 		Skeleton: &AssetSkeletonDef{Bones: []AssetBoneDef{{
 			ID:        "bone_root",
+			JointID:   "root",
 			Name:      "Root",
 			Transform: AssetTransformDef{Rotation: Quat{0, 0, 0, 1}, Scale: Vec3{1, 1, 1}},
 		}}},
-		AnimationClips: []AssetAnimationClipDef{{
-			ID:       "idle",
-			Name:     "Idle",
-			FPS:      30,
-			Duration: 1,
-			Loop:     true,
-			Tracks: []AssetAnimationTrackDef{{
-				TargetID: "part_animated",
-				PositionKeys: []AssetVec3KeyDef{
-					{Time: 0, Value: Vec3{0, 0, 0}},
-					{Time: 1, Value: Vec3{1, 0, 0}},
-				},
-				RotationKeys: []AssetQuatKeyDef{
-					{Time: 0, Value: Quat{0, 0, 0, 1}},
-				},
-				ScaleKeys: []AssetVec3KeyDef{
-					{Time: 0, Value: Vec3{1, 1, 1}},
-				},
-			}},
-		}},
+		AnimationSetPaths:      []string{"animations/test.gkanim"},
+		DefaultAnimationClipID: "idle",
 		Parts: []AssetPartDef{
 			{
 				ID:   "part_animated",
@@ -176,14 +159,11 @@ func TestAssetRoundTripPreservesSchemaAndIDs(t *testing.T) {
 	if loaded.MaterialAnimations[0].UVScroll.Velocity != ([2]float32{0, 1}) || loadedMaterialFrame.EmissiveColors[0] != ([4]uint8{200, 180, 120, 255}) || loadedMaterialFrame.Emission[0] != 2.25 || loadedMaterialFrame.Roughness[0] != 0.35 || loadedMaterialFrame.Transparency[0] != 0.15 {
 		t.Fatalf("expected material animation frame overrides to round-trip, got animation=%+v frame=%+v", loaded.MaterialAnimations[0], loadedMaterialFrame)
 	}
-	if loaded.Skeleton == nil || len(loaded.Skeleton.Bones) != 1 || loaded.Skeleton.Bones[0].ID != "bone_root" {
+	if loaded.Skeleton == nil || len(loaded.Skeleton.Bones) != 1 || loaded.Skeleton.Bones[0].ID != "bone_root" || loaded.Skeleton.Bones[0].JointID != "root" {
 		t.Fatalf("expected skeleton to round-trip, got %+v", loaded.Skeleton)
 	}
-	if len(loaded.AnimationClips) != 1 || loaded.AnimationClips[0].ID != "idle" || !loaded.AnimationClips[0].Loop || len(loaded.AnimationClips[0].Tracks) != 1 {
-		t.Fatalf("expected animation clip to round-trip, got %+v", loaded.AnimationClips)
-	}
-	if loaded.AnimationClips[0].Tracks[0].TargetID != "part_animated" || len(loaded.AnimationClips[0].Tracks[0].PositionKeys) != 2 {
-		t.Fatalf("expected animation track keys to round-trip, got %+v", loaded.AnimationClips[0].Tracks[0])
+	if !reflect.DeepEqual(loaded.AnimationSetPaths, []string{"animations/test.gkanim"}) || loaded.DefaultAnimationClipID != "idle" {
+		t.Fatalf("expected animation references to round-trip, got paths=%v default=%q", loaded.AnimationSetPaths, loaded.DefaultAnimationClipID)
 	}
 	if loaded.Parts[0].Source.Kind != AssetSourceKindVoxModel || loaded.Parts[0].Source.ModelIndex != 2 {
 		t.Fatalf("unexpected part source after round-trip: %+v", loaded.Parts[0].Source)
@@ -250,7 +230,7 @@ func TestAssetJSONUsesStringEnums(t *testing.T) {
 	}
 
 	jsonText := string(data)
-	for _, want := range []string{`"schema_version":3`, `"kind":"vox_model"`, `"type":"ambient"`, `"alpha_mode":"texture"`, `"material_id":"mat_0"`, `"operation":"subtract"`} {
+	for _, want := range []string{`"schema_version":4`, `"kind":"vox_model"`, `"type":"ambient"`, `"alpha_mode":"texture"`, `"material_id":"mat_0"`, `"operation":"subtract"`} {
 		if !contains(jsonText, want) {
 			t.Fatalf("expected JSON to contain %s, got %s", want, jsonText)
 		}
@@ -319,7 +299,7 @@ func TestLoadAssetRejectsUnknownSchemaVersion(t *testing.T) {
 	}
 }
 
-func TestLoadAssetNormalizesLegacyV1SourceScaleDefaults(t *testing.T) {
+func TestLoadAssetRejectsLegacySchema(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "content_asset_legacy_v1")
 	if err != nil {
 		t.Fatal(err)
@@ -343,18 +323,18 @@ func TestLoadAssetNormalizesLegacyV1SourceScaleDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := LoadAsset(path)
-	if err != nil {
-		t.Fatalf("LoadAsset failed: %v", err)
+	if _, err := LoadAsset(path); err == nil {
+		t.Fatal("expected legacy schema to be rejected")
 	}
-	if loaded.SchemaVersion != CurrentAssetSchemaVersion {
-		t.Fatalf("expected schema version %d, got %d", CurrentAssetSchemaVersion, loaded.SchemaVersion)
+}
+
+func TestLoadAssetRejectsEmbeddedAnimationClips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "embedded.gkasset")
+	if err := os.WriteFile(path, []byte(`{"id":"asset","schema_version":4,"name":"asset","animation_clips":[]}`), 0644); err != nil {
+		t.Fatal(err)
 	}
-	if got := loaded.Parts[0].VoxelResolution; got != DefaultAssetVoxelSize {
-		t.Fatalf("expected voxel resolution %.2f, got %.4f", DefaultAssetVoxelSize, got)
-	}
-	if got := loaded.Parts[0].ModelScale; got != 1.0 {
-		t.Fatalf("expected model scale 1.0, got %.4f", got)
+	if _, err := LoadAsset(path); err == nil || !strings.Contains(err.Error(), "animation_clips") {
+		t.Fatalf("embedded animation error = %v", err)
 	}
 }
 

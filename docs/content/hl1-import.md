@@ -936,8 +936,8 @@ Both paths use the same importer package and generate the same content shape:
 - `worlds/aux/*.gkaux`
 - `worlds/<map>_import_report.json`
 - generated helper `.gkasset` files for imported moving brush visuals
-- optional `hl1_assets/<map>/assets.gkassetlibrary`,
-  `manifest.gkhl1assets`, and copied source game assets referenced by the map
+- optional `hl1_assets/<map>/assets.gkassetlibrary` and
+  `manifest.gkhl1assets`
 
 The generated `.gklevel` is the file to open or run. It references the base
 world plus imported lights, water, ladders, moving brushes, use triggers, and
@@ -1043,8 +1043,10 @@ Generated MDL assets use rigid voxel-part animation:
   Assets over the `120000`-voxel target retry at a coarser resolution, capped
   at `0.08`. The effective resolution remains recorded in
   `generated_voxel_resolution` and in every generated voxel part.
-- GoldSrc bones and sequence metadata are decoded into `.gkasset` `skeleton`
-  and `animation_clips` metadata.
+- GoldSrc bones are decoded into `.gkasset` skeletons with deterministic
+  semantic joint IDs. Native sequences are emitted into central `.gkanim`
+  files bound to central `.gkrig` contracts; model variants with identical
+  source/configuration reuse the same documents.
 - Model triangles first use summed barycentric bone weights as source hints,
   and every surface voxel receives one deterministic owner.
 - Closed character shells are flood-filled. Interior colors and ownership
@@ -1060,8 +1062,9 @@ Generated MDL assets use rigid voxel-part animation:
 - Each visible bone chunk is emitted as explicit `voxel_shape` data under a
   transform-only bone group. The chunk's local voxel origin is preserved as the
   renderer pivot, so localized voxel bounds do not shift the body part.
-- Animation clips target bone group part IDs and write local rigid transforms.
-  The current runtime does not skin or deform voxels.
+- Rig animation clips target semantic joint IDs. Asset spawn validates the rig
+  hierarchy/bind pose and rewrites those targets once to the model's bone group
+  part IDs. The current runtime does not skin or deform voxels.
 - Animated MDL assets keep voxel parts uncollapsed.
 - Rigid bone parts own local 255-entry palettes while sharing color-addressed
   asset materials. This prevents one character-wide palette from discarding
@@ -1115,17 +1118,22 @@ With no `-map` value, output is written under `hl1_assets/catalog/`:
   assets.
 - `assets.gkassetlibrary` groups reusable props, characters, and weapons under
   stable keys for editor search and placement.
-- `files/` contains copied source models.
 - `worlds/catalog_import_report.json` records the asset-only import report.
 
 This mode does not import map-referenced sprites, sounds, WADs, NPCs, pickups,
 or entity-owned BSP brushes. Use normal map import with `-emit-game-assets` for
 those. It cannot be combined with `-emit-debug-world` or `-emit-level`.
 
-Player `.gkasset` files carry rigid `animation_clips` for source sequences the
-importer can decode. External GoldSrc sequence groups currently produce
-bind-pose clips rather than decoded motion. Weapon world models are static
-visual assets and have no animation clips.
+Catalog-wide model discovery is limited to the base `valve` and
+`valve_downloads` trees below `-game-dir`. Additional mods are scanned only
+when their directories are passed explicitly with `-resource-dir`; sibling
+game/mod directories are never imported implicitly.
+
+Player `.gkasset` files reference central rig-bound `.gkanim` documents for
+source sequences the importer can decode; clips are never embedded. External
+GoldSrc sequence groups currently produce bind-pose clips rather than decoded
+motion. Weapon world models are static visual assets and reference no animation
+sets.
 
 #### Map Import
 
@@ -1381,7 +1389,6 @@ assets/levels/worlds/c1a0_import_report.json
 assets/levels/worlds/chunks/c1a0_0_0_0.gkchunk
 assets/levels/worlds/chunks/...
 assets/levels/hl1_assets/c1a0/manifest.gkhl1assets
-assets/levels/hl1_assets/c1a0/files/...
 ```
 
 Import report fields:

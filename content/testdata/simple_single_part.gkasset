@@ -1,6 +1,6 @@
 {
   "id": "asset-simple",
-  "schema_version": 3,
+  "schema_version": 4,
   "name": "simple_single_part",
   "tags": [
     "golden",

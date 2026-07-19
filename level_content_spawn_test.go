@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gekko3d/gekko/content"
@@ -1638,7 +1639,7 @@ func writeAnimatedNPCAssetForStreamedTest(t *testing.T, path string, assetID str
 			},
 		},
 	}
-	def.AnimationClips = []content.AssetAnimationClipDef{{
+	clips := []content.AssetAnimationClipDef{{
 		ID:       "idle",
 		Name:     "idle",
 		FPS:      10,
@@ -1655,6 +1656,12 @@ func writeAnimatedNPCAssetForStreamedTest(t *testing.T, path string, assetID str
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
+	animationPath := strings.TrimSuffix(path, filepath.Ext(path)) + ".gkanim"
+	if err := content.SaveAnimationSet(animationPath, &content.AnimationSetDef{ID: assetID + ".animation", SchemaVersion: content.CurrentAnimationSetSchemaVersion, Name: assetID + " animation", TargetAssetID: assetID, Clips: clips}); err != nil {
+		t.Fatal(err)
+	}
+	def.AnimationSetPaths = []string{filepath.Base(animationPath)}
+	def.DefaultAnimationClipID = "idle"
 	if err := content.SaveAsset(path, def); err != nil {
 		t.Fatalf("SaveAsset failed: %v", err)
 	}

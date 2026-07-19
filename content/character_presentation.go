@@ -19,7 +19,6 @@ type CharacterPresentationDef struct {
 	UpperBodyMarkerID     string                            `json:"upper_body_marker_id"`
 	AimMarkerIDs          []string                          `json:"aim_marker_ids,omitempty"`
 	AimRig                CharacterAimRigDef                `json:"aim_rig,omitempty"`
-	ClipIDs               []string                          `json:"clip_ids,omitempty"`
 	CrouchGait            CharacterCrouchGaitDef            `json:"crouch_gait"`
 	WeaponPresentation    CharacterWeaponPresentationDef    `json:"weapon_presentation"`
 	DirectionalLocomotion CharacterDirectionalLocomotionDef `json:"directional_locomotion"`

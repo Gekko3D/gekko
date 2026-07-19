@@ -121,7 +121,7 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 		}
 	}
 	validateSkeleton(&result, def.Skeleton)
-	validateAnimationClips(&result, def.AnimationClips, allItemIDs)
+	validateAnimationReferences(&result, def)
 
 	for _, part := range def.Parts {
 		if part.ParentID == "" {
@@ -262,6 +262,7 @@ func validateSkeleton(result *AssetValidationResult, skeleton *AssetSkeletonDef)
 	}
 	boneNames := make(map[string]string, len(skeleton.Bones))
 	boneParents := make(map[string]string, len(skeleton.Bones))
+	jointIDs := make(map[string]string, len(skeleton.Bones))
 	for _, bone := range skeleton.Bones {
 		validateName(result, bone.ID, bone.Name, "bone")
 		if bone.ID == "" {
@@ -274,6 +275,13 @@ func validateSkeleton(result *AssetValidationResult, skeleton *AssetSkeletonDef)
 		}
 		boneNames[bone.ID] = bone.Name
 		boneParents[bone.ID] = bone.ParentID
+		if strings.TrimSpace(bone.JointID) == "" {
+			result.addError("empty_joint_id", "bone joint_id is required", bone.ID, bone.Name, "bone")
+		} else if previous, exists := jointIDs[bone.JointID]; exists {
+			result.addError("duplicate_joint_id", fmt.Sprintf("joint_id %s is already mapped by bone %s", bone.JointID, previous), bone.ID, bone.Name, "bone")
+		} else {
+			jointIDs[bone.JointID] = bone.ID
+		}
 	}
 	for _, bone := range skeleton.Bones {
 		if bone.ParentID == "" {
@@ -315,7 +323,28 @@ func validateSkeleton(result *AssetValidationResult, skeleton *AssetSkeletonDef)
 	}
 }
 
-func validateAnimationClips(result *AssetValidationResult, clips []AssetAnimationClipDef, allItemIDs map[string]string) {
+func validateAnimationReferences(result *AssetValidationResult, def *AssetDef) {
+	seen := map[string]struct{}{}
+	for _, path := range def.AnimationSetPaths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			result.addError("empty_animation_set_path", "animation set path is required", def.ID, def.Name, "asset")
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			result.addError("duplicate_animation_set_path", fmt.Sprintf("duplicate animation set path %s", path), def.ID, def.Name, "asset")
+		}
+		seen[path] = struct{}{}
+	}
+	if len(def.AnimationSetPaths) == 0 && def.DefaultAnimationClipID != "" {
+		result.addError("orphan_default_animation_clip", "default animation clip requires an animation set", def.ID, def.Name, "asset")
+	}
+	if len(def.AnimationSetPaths) > 0 && strings.TrimSpace(def.DefaultAnimationClipID) == "" {
+		result.addError("missing_default_animation_clip", "animated asset requires default_animation_clip_id", def.ID, def.Name, "asset")
+	}
+}
+
+func validateAnimationClips(result *AssetValidationResult, clips []AssetAnimationClipDef, targetIDs map[string]string, requireTargets bool) {
 	seenClipIDs := map[string]struct{}{}
 	for _, clip := range clips {
 		if strings.TrimSpace(clip.ID) == "" {
@@ -335,13 +364,20 @@ func validateAnimationClips(result *AssetValidationResult, clips []AssetAnimatio
 		if clip.Duration == 0 && len(clip.Tracks) > 0 {
 			result.addError("invalid_animation_duration", "animation clip duration is required when tracks are present", clip.ID, clip.Name, "animation_clip")
 		}
+		seenTargets := map[string]struct{}{}
 		for _, track := range clip.Tracks {
 			if strings.TrimSpace(track.TargetID) == "" {
 				result.addError("empty_animation_target", "animation track target_id is required", clip.ID, clip.Name, "animation_track")
 				continue
 			}
-			if _, ok := allItemIDs[track.TargetID]; !ok {
-				result.addError("broken_animation_target_reference", fmt.Sprintf("missing animation target %s", track.TargetID), track.TargetID, clip.Name, "animation_track")
+			if _, ok := seenTargets[track.TargetID]; ok {
+				result.addError("duplicate_animation_target", fmt.Sprintf("duplicate animation target %s", track.TargetID), track.TargetID, clip.Name, "animation_track")
+			}
+			seenTargets[track.TargetID] = struct{}{}
+			if requireTargets {
+				if _, ok := targetIDs[track.TargetID]; !ok {
+					result.addError("broken_animation_target_reference", fmt.Sprintf("missing animation target %s", track.TargetID), track.TargetID, clip.Name, "animation_track")
+				}
 			}
 			validateVec3Keys(result, clip, track.TargetID, "position", track.PositionKeys)
 			validateQuatKeys(result, clip, track.TargetID, track.RotationKeys)
