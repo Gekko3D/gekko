@@ -84,6 +84,82 @@ func TestGroundedPlayerScriptedMovementKeepsControllerAndCameraAligned(t *testin
 	}
 }
 
+func TestGroundedCharacterMotorMovesWithoutCameraAndConsumesJump(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	actor := cmd.AddEntity(
+		&TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&LocalTransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&GroundedCharacterMotorComponent{Height: 1.8, EyeHeight: 1.7, Radius: 0.35, Speed: 2, Grounded: true},
+		&GroundedCharacterIntentComponent{MoveDirection: mgl32.Vec3{1, 0, 0}, AimDirection: mgl32.Vec3{1, 0, 0}, Jump: true},
+	)
+	app.FlushCommands()
+
+	groundedPlayerControlSystem(cmd, &Time{Dt: 0.5}, nil, nil)
+	motor := cmd.GetComponent(actor, reflect.TypeOf(GroundedCharacterMotorComponent{})).(*GroundedCharacterMotorComponent)
+	intent := cmd.GetComponent(actor, reflect.TypeOf(GroundedCharacterIntentComponent{})).(*GroundedCharacterIntentComponent)
+	tr := cmd.GetComponent(actor, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if tr.Position.X() != 1 || motor.ActualVelocity.X() != 2 {
+		t.Fatalf("camera-free motor position=%v velocity=%v", tr.Position, motor.ActualVelocity)
+	}
+	if intent.Jump {
+		t.Fatal("camera-free motor did not consume one-frame jump")
+	}
+	if cmd.GetComponent(actor, reflect.TypeOf(CameraComponent{})) != nil {
+		t.Fatal("camera-free motor acquired a render camera")
+	}
+}
+
+func TestGroundedCharacterIntentForcesLadderOnlyExplicitly(t *testing.T) {
+	tests := []struct {
+		name     string
+		intent   GroundedCharacterIntentComponent
+		wantX    float32
+		wantY    float32
+		wantZ    float32
+		onLadder bool
+	}{
+		{
+			name:   "forward input stays grounded",
+			intent: GroundedCharacterIntentComponent{MoveDirection: mgl32.Vec3{0, 0, -1}, LadderMovement: 1},
+			wantZ:  -1,
+		},
+		{
+			name:     "authored traversal forces climb",
+			intent:   GroundedCharacterIntentComponent{LadderMovement: 1, ForceLadder: true},
+			wantY:    1.5,
+			onLadder: true,
+		},
+		{
+			name:     "authored traversal bounds lateral travel",
+			intent:   GroundedCharacterIntentComponent{MoveDirection: mgl32.Vec3{1, 0, 0}, MaxDistance: 0.2, LadderMovement: 1, ForceLadder: true},
+			wantX:    0.2,
+			wantY:    1.5,
+			onLadder: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := NewApp()
+			cmd := app.Commands()
+			actor := cmd.AddEntity(
+				&TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+				&LocalTransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+				&GroundedCharacterMotorComponent{Height: 1.8, Radius: 0.35, Speed: 2, Gravity: 0.0001, Grounded: true},
+				&tt.intent,
+			)
+			app.FlushCommands()
+
+			groundedPlayerControlSystem(cmd, &Time{Dt: 0.5}, nil, nil)
+			tr := cmd.GetComponent(actor, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+			motor := cmd.GetComponent(actor, reflect.TypeOf(GroundedCharacterMotorComponent{})).(*GroundedCharacterMotorComponent)
+			if absf(tr.Position.X()-tt.wantX) > 0.001 || absf(tr.Position.Y()-tt.wantY) > 0.001 || absf(tr.Position.Z()-tt.wantZ) > 0.001 || motor.OnLadder != tt.onLadder {
+				t.Fatalf("position=%v onLadder=%t, want x=%v y=%v z=%v onLadder=%t", tr.Position, motor.OnLadder, tt.wantX, tt.wantY, tt.wantZ, tt.onLadder)
+			}
+		})
+	}
+}
+
 func TestGroundedMovementBlockedUsesPlayerRadiusAtDoorway(t *testing.T) {
 	state := newGroundedPlayerTestVoxelRtState()
 
@@ -486,6 +562,33 @@ func TestMultiTargetDispatchQueuesDelayedOutputs(t *testing.T) {
 	})
 	if !doorOpen {
 		t.Fatal("expected delayed multi-target output to open door")
+	}
+}
+
+func TestTargetEventDoesNotCrossStreamedRuntimeGeneration(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	runtime := &StreamedLevelRuntimeState{Initialized: true, Generation: 1}
+	cmd.AddResources(runtime)
+	cmd.AddEntity(&MovingBrushComponent{TargetName: "door_a"})
+	app.FlushCommands()
+
+	QueueTargetEvent(cmd, "door_a", 0.25, 0, "test")
+	app.FlushCommands()
+	runtime.Generation++
+	targetEventSystem(cmd, &Time{Dt: 1})
+	app.FlushCommands()
+
+	MakeQuery1[MovingBrushComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent) bool {
+		if brush.Open || brush.ActivationCount != 0 {
+			t.Fatalf("stale target event activated new runtime: %+v", brush)
+		}
+		return true
+	})
+	count := 0
+	MakeQuery1[TargetEventComponent](cmd).Map(func(_ EntityId, _ *TargetEventComponent) bool { count++; return true })
+	if count != 0 {
+		t.Fatalf("expected stale target event removal, got %d", count)
 	}
 }
 

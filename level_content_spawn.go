@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -962,21 +963,23 @@ func spawnAuthoredLevelPickup(cmd *Commands, assets *AssetServer, loader *Runtim
 		}
 		assetPath := content.ResolveDocumentPath(pickup.AssetPath, levelPath)
 		asset, err := loader.LoadAsset(assetPath)
-		if err != nil {
+		if err != nil && !os.IsNotExist(err) {
 			return 0, err
 		}
-		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
-		if err != nil {
-			return 0, err
-		}
-		if model != (AssetId{}) {
-			comps = append(comps, &VoxelModelComponent{
-				SharedGeometry:         model,
-				VoxelPalette:           palette,
-				VoxelResolution:        voxelResolution,
-				PivotMode:              PivotModeCorner,
-				ShadowSeamWorldEpsilon: voxelResolution,
-			})
+		if err == nil {
+			model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+			if err != nil {
+				return 0, err
+			}
+			if model != (AssetId{}) {
+				comps = append(comps, &VoxelModelComponent{
+					SharedGeometry:         model,
+					VoxelPalette:           palette,
+					VoxelResolution:        voxelResolution,
+					PivotMode:              PivotModeCorner,
+					ShadowSeamWorldEpsilon: voxelResolution,
+				})
+			}
 		}
 	}
 	return cmd.AddEntity(comps...), nil

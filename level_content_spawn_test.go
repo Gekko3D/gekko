@@ -135,6 +135,21 @@ func TestLoadAndSpawnAuthoredLevelSpawnsWaterBody(t *testing.T) {
 	}
 }
 
+func TestSpawnAuthoredPickupAllowsMissingOptionalVisual(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	entity, err := spawnAuthoredLevelPickup(cmd, newSpawnTestAssetServer(), NewRuntimeContentLoader(), 0, "level-a", t.TempDir(), content.LevelPickupDef{
+		ID: "pickup-a", Kind: "hl1_pickup", AssetPath: "missing.gkasset", Category: "ammo", Item: "9mmclip", Amount: 17,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.FlushCommands()
+	if cmd.GetComponent(entity, reflect.TypeOf(PickupComponent{})) == nil || cmd.GetComponent(entity, reflect.TypeOf(VoxelModelComponent{})) != nil {
+		t.Fatal("missing optional visual should leave a logical pickup for the game fallback")
+	}
+}
+
 func TestLoadAndSpawnAuthoredLevelSpawnsLadderVolume(t *testing.T) {
 	root := t.TempDir()
 	levelPath := filepath.Join(root, "levels", "ladder.gklevel")

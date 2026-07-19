@@ -9,6 +9,22 @@ import (
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
 
+func TestGeneratedLevelReimportPreservesNavigationOwnership(t *testing.T) {
+	levelPath := filepath.Join(t.TempDir(), "map.gklevel")
+	existing := content.NewLevelDef("map")
+	existing.Navigation = &content.LevelNavigationDef{ManifestPath: "worlds/map-nav/map.gknav"}
+	if err := content.SaveLevel(levelPath, existing); err != nil {
+		t.Fatal(err)
+	}
+	replacement := content.NewLevelDef("map")
+	if err := preserveGeneratedLevelNavigation(levelPath, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Navigation == nil || replacement.Navigation.ManifestPath != existing.Navigation.ManifestPath {
+		t.Fatalf("navigation = %+v", replacement.Navigation)
+	}
+}
+
 func TestBuildAndSaveGeneratedLevel(t *testing.T) {
 	dir := t.TempDir()
 	bspPath := filepath.Join(dir, "valve", "maps", "levelmap.bsp")

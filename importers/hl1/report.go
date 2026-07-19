@@ -146,6 +146,8 @@ type ImportOptions struct {
 	MapName                    string
 	BSPPath                    string
 	OutputRoot                 string
+	AssetOutputRoot            string
+	AssetLibraryPath           string
 	ChunkSize                  int
 	VoxelResolution            float32
 	VoxelResolutionPolicy      HL1VoxelResolutionPolicy
@@ -974,6 +976,9 @@ func generatedLightFixtureAssetPath(opts ImportOptions, lightID string) string {
 		return ""
 	}
 	base := trimKnownExt(filepath.Base(opts.MapName), ".bsp")
+	if root := strings.TrimSpace(opts.AssetOutputRoot); root != "" {
+		return filepath.Join(root, "hl1", "maps", base, "light_emitters", base+"_"+lightID+".gkasset")
+	}
 	return filepath.Join(opts.OutputRoot, "assets", "hl1_light_emitters", base+"_"+lightID+".gkasset")
 }
 

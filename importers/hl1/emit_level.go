@@ -61,6 +61,17 @@ type GeneratedAssetResult struct {
 	Asset     *content.AssetDef
 }
 
+func generatedHL1LevelAssetPath(opts ImportOptions, group, assetID string) string {
+	if root := strings.TrimSpace(opts.AssetOutputRoot); root != "" {
+		mapName := trimMapName(opts.MapName, opts.BSPPath)
+		if mapName == "" {
+			mapName = "hl1_map"
+		}
+		return filepath.Clean(filepath.Join(root, "hl1", "maps", mapName, group, assetID+".gkasset"))
+	}
+	return filepath.Clean(filepath.Join(opts.OutputRoot, "assets", "hl1", group, assetID+".gkasset"))
+}
+
 func BuildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath string, voxelizedWorld ...VoxelizeResult) (GeneratedLevelResult, error) {
 	return buildGeneratedLevel(opts, summary, manifestPath, nil, voxelizedWorld...)
 }
@@ -83,6 +94,9 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 		return GeneratedLevelResult{}, fmt.Errorf("output root and map name are required for level emission")
 	}
 	level := content.NewLevelDef(summary.Report.Source.MapName)
+	if err := preserveGeneratedLevelNavigation(levelPath, level); err != nil {
+		return GeneratedLevelResult{}, err
+	}
 	level.ChunkSize = opts.ChunkSize
 	level.VoxelResolution = opts.VoxelResolution
 	level.Tags = []string{"source:hl1", "debug:surface_voxel"}
@@ -191,6 +205,18 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 		BreakableAssets:   breakableAssets,
 		Progress:          opts.Progress,
 	}, nil
+}
+
+func preserveGeneratedLevelNavigation(levelPath string, level *content.LevelDef) error {
+	existing, err := content.LoadLevel(levelPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("load existing generated level: %w", err)
+	}
+	level.Navigation = existing.Navigation
+	return nil
 }
 
 func hl1LevelPlayerDef() *content.LevelPlayerDef {
@@ -887,7 +913,7 @@ func buildHL1StaticBrushAssets(opts ImportOptions, summary ImportSummary) ([]Gen
 		if result.Asset == nil {
 			continue
 		}
-		result.AssetPath = filepath.Clean(filepath.Join(opts.OutputRoot, "assets", "hl1", "static_brushes", assetID+".gkasset"))
+		result.AssetPath = generatedHL1LevelAssetPath(opts, "static_brushes", assetID)
 		result.Asset.Tags = []string{"source:hl1", "static_prop", "source_kind:bsp_brush", "classname:" + className}
 		for i := range result.Asset.Parts {
 			result.Asset.Parts[i].Tags = []string{"source:hl1", "static_prop", "source_kind:bsp_brush"}
@@ -1185,7 +1211,7 @@ func buildHL1ChargerAsset(opts ImportOptions, bsp *BSP, textureStore *TextureSto
 		},
 		Tags: []string{"source:hl1", "charger"},
 	}}
-	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "chargers", chargerID+".gkasset")
+	path := generatedHL1LevelAssetPath(opts, "chargers", chargerID)
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
 }
 
@@ -1508,7 +1534,7 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 		},
 		Tags: []string{"source:hl1", "moving_brush"},
 	}}
-	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "moving_brushes", brushID+".gkasset")
+	path := generatedHL1LevelAssetPath(opts, "moving_brushes", brushID)
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
 }
 
@@ -1686,7 +1712,7 @@ func buildHL1BreakableAsset(opts ImportOptions, bsp *BSP, textureStore *TextureS
 		},
 		Tags: []string{"source:hl1", "breakable"},
 	}}
-	path := filepath.Join(opts.OutputRoot, "assets", "hl1", "breakables", breakableID+".gkasset")
+	path := generatedHL1LevelAssetPath(opts, "breakables", breakableID)
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
 }
 

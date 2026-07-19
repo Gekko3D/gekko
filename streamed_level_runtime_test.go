@@ -73,6 +73,112 @@ func TestBuildEffectiveStreamedPlacementIndexPreservesTags(t *testing.T) {
 	}
 }
 
+func TestStreamedRuntimeRestartIsolatesFreshDeltaAndDropsStaleJobs(t *testing.T) {
+	root := t.TempDir()
+	levelPath := filepath.Join(root, "arena.gklevel")
+	level := content.NewLevelDef("arena")
+	if err := content.SaveLevel(levelPath, level); err != nil {
+		t.Fatal(err)
+	}
+	persistentPath := content.DefaultWorldDeltaPath(levelPath)
+	persistent := &content.WorldDeltaDef{
+		SchemaVersion:      content.CurrentWorldDeltaSchemaVersion,
+		LevelID:            level.ID,
+		PlacementDeletions: []content.PlacementDeletionDef{{PlacementID: "user-edit"}},
+	}
+	if err := content.SaveWorldDelta(persistentPath, persistent); err != nil {
+		t.Fatal(err)
+	}
+
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	assets := newSpawnTestAssetServer()
+	cfg := StreamedLevelRuntimeConfig{LevelPath: levelPath, DeltaMode: StreamedLevelDeltaFresh}
+	if err := StartStreamedLevelRuntime(cmd, assets, cfg); err != nil {
+		t.Fatal(err)
+	}
+	firstSessionDir := state.sessionDeltaDir
+	if state.WorldDeltaPath == persistentPath || len(state.WorldDelta.PlacementDeletions) != 0 {
+		t.Fatalf("fresh session loaded persistent delta: path=%q delta=%+v", state.WorldDeltaPath, state.WorldDelta)
+	}
+	state.PreparedLoads <- streamedPreparedChunk{Generation: state.Generation - 1, Err: fmt.Errorf("stale chunk")}
+	state.navigationLoads <- streamedNavigationLoadResult{RuntimeGeneration: state.Generation - 1, Err: fmt.Errorf("stale navigation")}
+	commitPreparedStreamedChunksSystem(cmd, assets, state)
+	streamedLevelNavigationSystem(state)
+	if state.InitErr != nil {
+		t.Fatalf("stale job committed: %v", state.InitErr)
+	}
+
+	if err := RestartStreamedLevelRuntime(cmd, assets, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(firstSessionDir); !os.IsNotExist(err) {
+		t.Fatalf("old fresh-session directory survived restart: %v", err)
+	}
+	loaded, err := content.LoadWorldDelta(persistentPath)
+	if err != nil || len(loaded.PlacementDeletions) != 1 || loaded.PlacementDeletions[0].PlacementID != "user-edit" {
+		t.Fatalf("persistent delta changed during fresh restart: delta=%+v err=%v", loaded, err)
+	}
+	secondSessionDir := state.sessionDeltaDir
+	if err := StopStreamedLevelRuntime(cmd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(secondSessionDir); !os.IsNotExist(err) {
+		t.Fatalf("fresh-session directory survived stop: %v", err)
+	}
+
+	if err := StartStreamedLevelRuntime(cmd, assets, StreamedLevelRuntimeConfig{LevelPath: levelPath, DeltaMode: StreamedLevelDeltaPersistent}); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.WorldDelta.PlacementDeletions) != 1 {
+		t.Fatalf("persistent mode did not load user delta: %+v", state.WorldDelta)
+	}
+}
+
+func TestStreamedRuntimeStopDrainsFullPreparedQueue(t *testing.T) {
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	state.Initialized = true
+	state.PreparedLoads = make(chan streamedPreparedChunk, 1)
+	state.jobs.Add(2)
+	for range 2 {
+		go func() {
+			defer state.jobs.Done()
+			state.PreparedLoads <- streamedPreparedChunk{}
+		}()
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- StopStreamedLevelRuntime(cmd) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("streamed runtime stop blocked on a full prepared queue")
+	}
+}
+
+func TestStreamedRuntimeStopFailureKeepsRunningGeneration(t *testing.T) {
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state.Initialized = true
+	state.Generation = 7
+	state.WorldDataDir = filepath.Join(blocker, "data")
+	state.WorldDeltaPath = filepath.Join(t.TempDir(), "world.gkworlddelta")
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "arena"}
+	state.LoadedChunks[ChunkCoord{}] = &streamedLoadedChunk{ObjectEntities: map[string]EntityId{"placement:item": 999}}
+
+	if err := StopStreamedLevelRuntime(cmd); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if !state.Initialized || state.Generation != 7 {
+		t.Fatalf("failed stop changed live runtime: initialized=%t generation=%d", state.Initialized, state.Generation)
+	}
+}
+
 func TestStreamedRuntimeLoadsOnlyDesiredChunk(t *testing.T) {
 	root := t.TempDir()
 	assetPath := filepath.Join(root, "assets", "asteroid.gkasset")

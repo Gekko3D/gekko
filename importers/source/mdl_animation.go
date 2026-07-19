@@ -338,10 +338,6 @@ func AppendAnimations(asset *content.AssetDef, source *AnimationSource, opts Bak
 	if !containsString(asset.Tags, content.AssetTagSkeletonRestBasis) {
 		return nil, fmt.Errorf("target asset %q has no explicit skeleton rest basis; regenerate it with the current model importer", asset.Name)
 	}
-	bindings, err := targetBindings(asset, source.Bones)
-	if err != nil {
-		return nil, err
-	}
 	prefix := safeID(opts.ClipPrefix)
 	if prefix == "" {
 		prefix = "source"
@@ -351,6 +347,10 @@ func AppendAnimations(asset *content.AssetDef, source *AnimationSource, opts Bak
 	}
 
 	selected, err := selectedSourceClips(source.Clips, opts.SequenceNames)
+	if err != nil {
+		return nil, err
+	}
+	bindings, err := targetBindings(asset, source.Bones, requiredSourceBones(source.Bones, selected))
 	if err != nil {
 		return nil, err
 	}
@@ -858,7 +858,7 @@ type targetBinding struct {
 	Rest     transform
 }
 
-func targetBindings(asset *content.AssetDef, bones []Bone) ([]targetBinding, error) {
+func targetBindings(asset *content.AssetDef, bones []Bone, required []bool) ([]targetBinding, error) {
 	if asset.Skeleton == nil || len(asset.Skeleton.Bones) == 0 {
 		return nil, fmt.Errorf("target asset %q has no skeleton", asset.Name)
 	}
@@ -867,7 +867,9 @@ func targetBindings(asset *content.AssetDef, bones []Bone) ([]targetBinding, err
 		parts[part.ID] = part
 	}
 	byName := make(map[string]content.AssetBoneDef, len(asset.Skeleton.Bones))
+	byID := make(map[string]content.AssetBoneDef, len(asset.Skeleton.Bones))
 	for _, bone := range asset.Skeleton.Bones {
+		byID[bone.ID] = bone
 		key := normalizedName(bone.Name)
 		if key != "" {
 			byName[key] = bone
@@ -875,7 +877,17 @@ func targetBindings(asset *content.AssetDef, bones []Bone) ([]targetBinding, err
 	}
 	bindings := make([]targetBinding, len(bones))
 	for i, sourceBone := range bones {
+		if len(required) == len(bones) && !required[i] {
+			continue
+		}
 		target, ok := byName[normalizedName(sourceBone.Name)]
+		if !ok {
+			for _, alias := range goldSrcBipedBoneAliases[normalizedName(sourceBone.Name)] {
+				if target, ok = byName[alias]; ok {
+					break
+				}
+			}
+		}
 		if !ok {
 			continue
 		}
@@ -884,6 +896,7 @@ func targetBindings(asset *content.AssetDef, bones []Bone) ([]targetBinding, err
 		}
 		bindings[i] = targetBinding{TargetID: target.ID, Parent: sourceBone.Parent, Rest: assetTransform(target.Transform)}
 	}
+	skippedHelpers := make([]bool, len(bones))
 	for i, sourceBone := range bones {
 		binding := bindings[i]
 		if binding.TargetID == "" {
@@ -892,20 +905,62 @@ func targetBindings(asset *content.AssetDef, bones []Bone) ([]targetBinding, err
 		if sourceBone.Parent < 0 {
 			continue
 		}
+		if skippedHelpers[sourceBone.Parent] {
+			bindings[i] = targetBinding{}
+			skippedHelpers[i] = true
+			continue
+		}
 		parent := bindings[sourceBone.Parent]
 		if parent.TargetID == "" {
 			continue
 		}
 		part := parts[binding.TargetID]
-		if part.ParentID != parent.TargetID {
-			return nil, fmt.Errorf("target bone %q parent %q does not match donor parent %q", sourceBone.Name, part.ParentID, bones[sourceBone.Parent].Name)
-		}
-		target := byName[normalizedName(sourceBone.Name)]
-		if target.ParentID != parent.TargetID {
+		target := byID[binding.TargetID]
+		if part.ParentID != parent.TargetID || target.ParentID != parent.TargetID {
+			if !strings.HasPrefix(normalizedName(sourceBone.Name), "bip01") {
+				// Generic helper names collide often across GoldSrc models; they do
+				// not define locomotion compatibility, so omit their whole subtree.
+				bindings[i] = targetBinding{}
+				skippedHelpers[i] = true
+				continue
+			}
+			if part.ParentID != parent.TargetID {
+				return nil, fmt.Errorf("target bone %q parent %q does not match donor parent %q", sourceBone.Name, part.ParentID, bones[sourceBone.Parent].Name)
+			}
 			return nil, fmt.Errorf("target rest bone %q parent %q does not match donor parent %q", sourceBone.Name, target.ParentID, bones[sourceBone.Parent].Name)
 		}
 	}
 	return bindings, nil
+}
+
+func requiredSourceBones(bones []Bone, clips []Clip) []bool {
+	required := make([]bool, len(bones))
+	for _, clip := range clips {
+		for bone, animated := range clip.Animated {
+			if !animated || bone >= len(required) {
+				continue
+			}
+			for current := bone; current >= 0 && current < len(bones) && !required[current]; current = bones[current].Parent {
+				required[current] = true
+			}
+		}
+	}
+	return required
+}
+
+// GoldSrc player models use two common names for the same biped hierarchy.
+// Prefer exact matches, then bridge the naming-only Valve/Gearbox variants.
+var goldSrcBipedBoneAliases = map[string][]string{
+	"bip01 l leg":  {"bip01 l thigh"},
+	"bip01 l leg1": {"bip01 l calf"},
+	"bip01 r leg":  {"bip01 r thigh"},
+	"bip01 r leg1": {"bip01 r calf"},
+	"bip01 l arm":  {"bip01 l clavicle"},
+	"bip01 l arm1": {"bip01 l upperarm"},
+	"bip01 l arm2": {"bip01 l forearm"},
+	"bip01 r arm":  {"bip01 r clavicle"},
+	"bip01 r arm1": {"bip01 r upperarm"},
+	"bip01 r arm2": {"bip01 r forearm"},
 }
 
 func bakeClip(bones []Bone, bindings []targetBinding, sourceClip Clip, prefix string, lockRoot bool) (content.AssetAnimationClipDef, error) {

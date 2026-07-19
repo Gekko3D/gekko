@@ -725,12 +725,6 @@ func validateLevelPickup(result *LevelValidationResult, pickup LevelPickupDef, o
 	if pickup.Amount < 0 {
 		result.addError("invalid_pickup_amount", "pickup amount must be non-negative", "", "", "", "", "", "", "")
 	}
-	if strings.TrimSpace(pickup.AssetPath) != "" && opts.DocumentPath != "" {
-		resolvedPath := ResolveDocumentPath(pickup.AssetPath, opts.DocumentPath)
-		if _, err := os.Stat(resolvedPath); err != nil {
-			result.addError("missing_pickup_asset", fmt.Sprintf("missing pickup asset %s", pickup.AssetPath), "", "", "", "", "", "", "")
-		}
-	}
 }
 
 func validateLevelNPC(result *LevelValidationResult, npc LevelNPCDef, opts LevelValidationOptions) {

@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"math"
+	"reflect"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -73,17 +74,18 @@ func moveMovingBrushRiders(cmd *Commands, previousCenter, previousHalfExtents, d
 	if cmd == nil || delta.LenSqr() <= 1e-8 {
 		return
 	}
-	MakeQuery3[TransformComponent, CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent) bool {
-		if tr == nil || cam == nil || ctrl == nil || !movingBrushSupportsBase(previousCenter, previousHalfExtents, tr.Position, defaulted(ctrl.Radius, 0.35)) {
+	MakeQuery2[TransformComponent, GroundedCharacterMotorComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, ctrl *GroundedCharacterMotorComponent) bool {
+		if tr == nil || ctrl == nil || !movingBrushSupportsBase(previousCenter, previousHalfExtents, tr.Position, defaulted(ctrl.Radius, 0.35)) {
 			return true
 		}
+		cam, _ := cmd.GetComponent(eid, reflect.TypeOf(CameraComponent{})).(*CameraComponent)
 		ctrl.Grounded = true
 		ctrl.NeedsGroundSnap = false
 		ctrl.VerticalVelocity = 0
 		groundedPlayerApplyTransform(cmd, eid, cam, ctrl, tr.Position.Add(delta))
 		return true
 	})
-	MakeQuery2[TransformComponent, NPCComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, _ *NPCComponent) bool {
+	MakeQuery2[TransformComponent, NPCComponent](cmd).Without(GroundedCharacterMotorComponent{}).Map(func(eid EntityId, tr *TransformComponent, _ *NPCComponent) bool {
 		if tr == nil || !movingBrushSupportsBase(previousCenter, previousHalfExtents, tr.Position, 0.3) {
 			return true
 		}

@@ -193,11 +193,12 @@ type TargetRelayComponent struct {
 }
 
 type TargetEventComponent struct {
-	Target         string
-	DelayRemaining float32
-	Activator      EntityId
-	SourceTag      string
-	TriggerState   int
+	Target            string
+	DelayRemaining    float32
+	Activator         EntityId
+	SourceTag         string
+	TriggerState      int
+	RuntimeGeneration uint64
 }
 
 func QueueTargetEvent(cmd *Commands, target string, delay float32, activator EntityId, sourceTag string) {
@@ -212,12 +213,17 @@ func QueueTargetEventWithState(cmd *Commands, target string, delay float32, acti
 		ActivateTargetWithState(cmd, target, activator, triggerState)
 		return
 	}
+	generation := uint64(0)
+	if runtime := streamedLevelRuntimeStateFromApp(cmd.app); runtime != nil && runtime.Initialized {
+		generation = runtime.Generation
+	}
 	cmd.AddEntity(&TargetEventComponent{
-		Target:         target,
-		DelayRemaining: delay,
-		Activator:      activator,
-		SourceTag:      sourceTag,
-		TriggerState:   triggerState,
+		Target:            target,
+		DelayRemaining:    delay,
+		Activator:         activator,
+		SourceTag:         sourceTag,
+		TriggerState:      triggerState,
+		RuntimeGeneration: generation,
 	})
 }
 
@@ -395,6 +401,13 @@ func targetEventSystem(cmd *Commands, time *Time) {
 	MakeQuery1[TargetEventComponent](cmd).Map(func(eid EntityId, event *TargetEventComponent) bool {
 		if event == nil {
 			return true
+		}
+		if event.RuntimeGeneration != 0 {
+			runtime := streamedLevelRuntimeStateFromApp(cmd.app)
+			if runtime == nil || !runtime.Initialized || runtime.Generation != event.RuntimeGeneration {
+				cmd.RemoveEntity(eid)
+				return true
+			}
 		}
 		event.DelayRemaining -= dt
 		if event.DelayRemaining > 0 {

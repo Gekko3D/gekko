@@ -8,7 +8,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-type GroundedPlayerControllerConfig struct {
+type GroundedCharacterMotorConfig struct {
 	Height           float32
 	EyeHeight        float32
 	CrouchHeight     float32
@@ -25,15 +25,38 @@ type GroundedPlayerControllerConfig struct {
 	GroundProbe      float32
 }
 
-type GroundedPlayerControllerDefaults struct {
-	Config GroundedPlayerControllerConfig
+type GroundedPlayerControllerConfig = GroundedCharacterMotorConfig
+
+type GroundedCharacterMotorDefaults struct {
+	Config GroundedCharacterMotorConfig
+}
+
+type GroundedPlayerControllerDefaults = GroundedCharacterMotorDefaults
+
+// GroundedCharacterMotorModule installs camera-free character movement.
+// Games write GroundedCharacterIntentComponent from human or bot intent.
+type GroundedCharacterMotorModule struct {
+	Config GroundedCharacterMotorConfig
 }
 
 type GroundedPlayerControllerModule struct {
 	Config GroundedPlayerControllerConfig
 }
 
-type GroundedPlayerControllerComponent struct {
+type GroundedCharacterIntentComponent struct {
+	MoveDirection  mgl32.Vec3
+	MaxDistance    float32
+	AimDirection   mgl32.Vec3
+	LadderMovement float32
+	// ForceLadder allows authored traversal to climb before reaching a ladder volume.
+	ForceLadder bool
+	Jump        bool
+	Crouch      bool
+	Sprint      bool
+	SwimUp      bool
+}
+
+type GroundedCharacterMotorComponent struct {
 	// Height and EyeHeight are active capsule/camera dimensions. StandingHeight
 	// and StandingEyeHeight preserve the configured values while crouched.
 	Height            float32
@@ -57,6 +80,7 @@ type GroundedPlayerControllerComponent struct {
 	LookInput        mgl32.Vec2
 	JumpQueued       bool
 	CrouchRequested  bool
+	SprintRequested  bool
 	SwimUpRequested  bool
 	Crouching        bool
 	Swimming         bool
@@ -67,6 +91,7 @@ type GroundedPlayerControllerComponent struct {
 	OnLadder         bool
 	LadderEntity     EntityId
 	LadderClimbSpeed float32
+	ActualVelocity   mgl32.Vec3
 	// ScriptedMovement lets a gameplay action drive the controller transform
 	// through the shared collision helpers while this controller retains camera
 	// look ownership. It prevents input/gravity from competing with that move.
@@ -76,8 +101,10 @@ type GroundedPlayerControllerComponent struct {
 	CollisionIgnoredEntity EntityId
 }
 
-func DefaultGroundedPlayerControllerConfig() GroundedPlayerControllerConfig {
-	return GroundedPlayerControllerConfig{
+type GroundedPlayerControllerComponent = GroundedCharacterMotorComponent
+
+func DefaultGroundedCharacterMotorConfig() GroundedCharacterMotorConfig {
+	return GroundedCharacterMotorConfig{
 		Height:           1.8,
 		EyeHeight:        1.7,
 		CrouchHeight:     1.0,
@@ -93,6 +120,10 @@ func DefaultGroundedPlayerControllerConfig() GroundedPlayerControllerConfig {
 		StepHeight:       0.6,
 		GroundProbe:      0.15,
 	}
+}
+
+func DefaultGroundedPlayerControllerConfig() GroundedPlayerControllerConfig {
+	return DefaultGroundedCharacterMotorConfig()
 }
 
 func effectiveGroundedPlayerControllerConfig(cfg GroundedPlayerControllerConfig) GroundedPlayerControllerConfig {
@@ -142,20 +173,28 @@ func effectiveGroundedPlayerControllerConfig(cfg GroundedPlayerControllerConfig)
 	return defaults
 }
 
-func (mod GroundedPlayerControllerModule) Install(app *App, cmd *Commands) {
+func installGroundedCharacterMotor(app *App, cmd *Commands, cfg GroundedCharacterMotorConfig) {
 	if app != nil {
 		if _, ok := app.resources[reflect.TypeOf(GroundedPlayerControllerDefaults{})]; !ok {
 			cmd.AddResources(&GroundedPlayerControllerDefaults{
-				Config: effectiveGroundedPlayerControllerConfig(mod.Config),
+				Config: effectiveGroundedPlayerControllerConfig(cfg),
 			})
 		}
 	}
-	app.UseSystem(System(groundedPlayerInputSystem).InStage(Update).RunAlways())
-	app.UseSystem(System(groundedPlayerControlSystem).InStage(Update).RunAlways())
-	app.UseSystem(System(groundedPlayerUseSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(groundedCharacterMotorSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(triggerVolumeTouchSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(targetEventSystem).InStage(Update).RunAlways())
 	app.UseSystem(System(movingBrushMotionSystem).InStage(Update).RunAlways())
+}
+
+func (mod GroundedCharacterMotorModule) Install(app *App, cmd *Commands) {
+	installGroundedCharacterMotor(app, cmd, mod.Config)
+}
+
+func (mod GroundedPlayerControllerModule) Install(app *App, cmd *Commands) {
+	app.UseSystem(System(groundedPlayerInputSystem).InStage(Update).RunAlways())
+	installGroundedCharacterMotor(app, cmd, mod.Config)
+	app.UseSystem(System(groundedPlayerUseSystem).InStage(Update).RunAlways())
 }
 
 func SpawnGroundedPlayerAtMarker(cmd *Commands, marker content.LevelMarkerDef) EntityId {
@@ -229,7 +268,7 @@ func groundedPlayerInputSystem(input *Input, cmd *Commands) {
 	if input.JustPressed[KeyTab] {
 		input.MouseCaptured = !input.MouseCaptured
 	}
-	MakeQuery1[GroundedPlayerControllerComponent](cmd).Map(func(_ EntityId, ctrl *GroundedPlayerControllerComponent) bool {
+	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(_ EntityId, _ *CameraComponent, ctrl *GroundedPlayerControllerComponent) bool {
 		ctrl.MoveInput = mgl32.Vec2{}
 		if input.Pressed[KeyA] {
 			ctrl.MoveInput[0] -= 1
@@ -250,9 +289,14 @@ func groundedPlayerInputSystem(input *Input, cmd *Commands) {
 		}
 		ctrl.JumpQueued = input.JustPressed[KeySpace]
 		ctrl.CrouchRequested = input.Pressed[KeyControl]
+		ctrl.SprintRequested = input.Pressed[KeyShift]
 		ctrl.SwimUpRequested = input.Pressed[KeySpace]
 		return true
 	})
+}
+
+func groundedCharacterMotorSystem(cmd *Commands, time *Time, voxRt *VoxelRtState) {
+	groundedPlayerControlSystem(cmd, time, nil, voxRt)
 }
 
 func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt *VoxelRtState) {
@@ -263,15 +307,29 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 	if dt <= 0 {
 		return
 	}
-	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(eid EntityId, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent) bool {
-		applyGroundedLook(cam, ctrl)
+	MakeQuery1[GroundedCharacterMotorComponent](cmd).Map(func(eid EntityId, ctrl *GroundedCharacterMotorComponent) bool {
+		cam, _ := cmd.GetComponent(eid, reflect.TypeOf(CameraComponent{})).(*CameraComponent)
+		intent, _ := cmd.GetComponent(eid, reflect.TypeOf(GroundedCharacterIntentComponent{})).(*GroundedCharacterIntentComponent)
+		if cam != nil && intent == nil {
+			applyGroundedLook(cam, ctrl)
+		}
 		basePos := groundedPlayerBasePosition(cmd, eid, cam, ctrl)
+		startPos := basePos
 		if ctrl.ScriptedMovement {
 			ctrl.JumpQueued = false
 			ctrl.SwimUpRequested = false
 			ctrl.VerticalVelocity = 0
+			ctrl.ActualVelocity = mgl32.Vec3{}
+			if intent != nil {
+				intent.Jump = false
+			}
 			groundedPlayerApplyTransform(cmd, eid, cam, ctrl, basePos)
 			return true
+		}
+		if intent != nil {
+			ctrl.JumpQueued = ctrl.JumpQueued || intent.Jump
+			ctrl.CrouchRequested = intent.Crouch
+			ctrl.SwimUpRequested = intent.SwimUp
 		}
 		collisionFilter := groundedPlayerCollisionRaycastFilter(cmd, ctrl)
 		groundedPlayerUpdateStance(cmd, voxRt, basePos, ctrl, collisionFilter)
@@ -283,43 +341,68 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 			ctrl.WaterEntity = 0
 		}
 
-		flatForward := forwardFromYawPitch(cam.Yaw, 0)
+		flatForward := mgl32.Vec3{0, 0, -1}
+		if cam != nil {
+			flatForward = forwardFromYawPitch(cam.Yaw, 0)
+		} else if intent != nil && intent.AimDirection.LenSqr() > 1e-8 {
+			flatForward = intent.AimDirection
+			flatForward[1] = 0
+			if flatForward.LenSqr() > 1e-8 {
+				flatForward = flatForward.Normalize()
+			} else {
+				flatForward = mgl32.Vec3{0, 0, -1}
+			}
+		}
 		right := flatForward.Cross(mgl32.Vec3{0, 1, 0}).Normalize()
 		speed := defaulted(ctrl.Speed, 5.5)
 		if ctrl.Swimming {
 			speed = defaulted(ctrl.SwimSpeed, 3.5)
 		} else if ctrl.Crouching {
 			speed *= defaulted(ctrl.CrouchSpeedScale, 0.5)
-		} else if input != nil && input.Pressed[KeyShift] {
+		} else if (intent != nil && intent.Sprint) || (intent == nil && ctrl.SprintRequested) {
 			speed *= defaulted(ctrl.SprintMultiplier, 1.6)
 		}
+		move := right.Mul(ctrl.MoveInput[0]).Add(flatForward.Mul(ctrl.MoveInput[1]))
+		ladderMovement := ctrl.MoveInput[1]
+		if intent != nil {
+			move = intent.MoveDirection
+			move[1] = 0
+			ladderMovement = intent.LadderMovement
+		}
+		if move.Len() > 1 {
+			move = move.Normalize()
+		}
+		horizontalMove := move.Mul(speed * dt)
+		if intent != nil && intent.MaxDistance > 0 && horizontalMove.Len() > intent.MaxDistance {
+			horizontalMove = horizontalMove.Normalize().Mul(intent.MaxDistance)
+		}
+		ladderEntity, ladder, onLadder := findGroundedPlayerLadderVolume(cmd, basePos, ctrl)
+		forcedLadder := intent != nil && intent.ForceLadder && intent.LadderMovement != 0
 
 		if ctrl.Swimming {
 			ctrl.OnLadder = false
 			ctrl.LadderEntity = 0
 			ctrl.LadderClimbSpeed = 0
-			move := right.Mul(ctrl.MoveInput[0]).Add(flatForward.Mul(ctrl.MoveInput[1]))
-			if move.Len() > 0 {
-				move = move.Normalize()
-			}
-			basePos = tryGroundedHorizontalMove(cmd, voxRt, basePos, move.Mul(speed*dt), ctrl, collisionFilter)
+			basePos = tryGroundedHorizontalMove(cmd, voxRt, basePos, horizontalMove, ctrl, collisionFilter)
 			resolveGroundedSwimMovement(cmd, voxRt, &basePos, ctrl, dt, collisionFilter)
-		} else if ladderEntity, ladder, ok := findGroundedPlayerLadderVolume(cmd, basePos, ctrl); ok {
+		} else if onLadder || forcedLadder {
 			ctrl.OnLadder = true
-			ctrl.LadderEntity = ladderEntity
-			ctrl.LadderClimbSpeed = ladder.NormalizedClimbSpeed()
+			if onLadder {
+				ctrl.LadderEntity = ladderEntity
+				ctrl.LadderClimbSpeed = ladder.NormalizedClimbSpeed()
+			} else {
+				ctrl.LadderEntity = 0
+			}
 			lateralMove := right.Mul(ctrl.MoveInput[0] * speed * 0.5 * dt)
+			if intent != nil {
+				lateralMove = horizontalMove
+			}
 			basePos = tryGroundedHorizontalMove(cmd, voxRt, basePos, lateralMove, ctrl, collisionFilter)
-			resolveGroundedLadderMovement(cmd, voxRt, &basePos, ctrl, dt, collisionFilter)
+			resolveGroundedLadderMovement(cmd, voxRt, &basePos, ctrl, ladderMovement, dt, collisionFilter)
 		} else {
 			ctrl.OnLadder = false
 			ctrl.LadderEntity = 0
 			ctrl.LadderClimbSpeed = 0
-			move := right.Mul(ctrl.MoveInput[0]).Add(flatForward.Mul(ctrl.MoveInput[1]))
-			if move.Len() > 0 {
-				move = move.Normalize()
-			}
-			horizontalMove := move.Mul(speed * dt)
 			basePos = CharacterGroundedMove(voxRt, basePos, horizontalMove, CharacterGroundedMoveOptions{
 				CollisionConfig: groundedPlayerCharacterCollisionConfig(cmd, ctrl),
 				GroundConfig:    groundedPlayerGroundProbeConfig(ctrl),
@@ -328,18 +411,24 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 			resolveGroundedVertical(cmd, voxRt, &basePos, ctrl, dt, collisionFilter)
 		}
 
+		ctrl.ActualVelocity = basePos.Sub(startPos).Mul(1 / dt)
+		if intent != nil {
+			intent.Jump = false
+		}
 		groundedPlayerApplyTransform(cmd, eid, cam, ctrl, basePos)
 		return true
 	})
 }
 
 func groundedPlayerApplyTransform(cmd *Commands, eid EntityId, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent, basePos mgl32.Vec3) {
-	if cmd == nil || cam == nil || ctrl == nil {
+	if cmd == nil || ctrl == nil {
 		return
 	}
-	cam.Position = basePos.Add(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
-	cam.LookAt = cam.Position.Add(forwardFromYawPitch(cam.Yaw, cam.Pitch))
-	cam.Up = mgl32.Vec3{0, 1, 0}
+	if cam != nil {
+		cam.Position = basePos.Add(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
+		cam.LookAt = cam.Position.Add(forwardFromYawPitch(cam.Yaw, cam.Pitch))
+		cam.Up = mgl32.Vec3{0, 1, 0}
+	}
 	if tr, ok := transformForEntity(cmd, eid); ok {
 		tr.Position = basePos
 		tr.Rotation = mgl32.QuatIdent()
@@ -358,32 +447,48 @@ func groundedPlayerBasePosition(cmd *Commands, eid EntityId, cam *CameraComponen
 	if tr, ok := transformForEntity(cmd, eid); ok && tr != nil {
 		return tr.Position
 	}
-	return cam.Position.Sub(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
+	if cam != nil {
+		return cam.Position.Sub(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
+	}
+	return mgl32.Vec3{}
 }
 
 func groundedPlayerUseSystem(cmd *Commands, input *Input) {
 	if cmd == nil || input == nil || !input.JustPressed[KeyE] {
 		return
 	}
-	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(_ EntityId, cam *CameraComponent, _ *GroundedPlayerControllerComponent) bool {
-		origin := cam.Position
-		dir := forwardFromYawPitch(cam.Yaw, cam.Pitch)
-		if hit, ok := findUseTriggerHit(cmd, origin, dir, 2.2); ok {
-			ActivateUseTrigger(cmd, hit.Trigger, 0)
-			return false
+	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(entity EntityId, cam *CameraComponent, _ *GroundedPlayerControllerComponent) bool {
+		return !GroundedCharacterUse(cmd, entity, cam.Position, forwardFromYawPitch(cam.Yaw, cam.Pitch), 2.2)
+	})
+}
+
+// GroundedCharacterUse activates the nearest authored interaction along an
+// actor-owned aim ray. It does not require or create a render camera.
+func GroundedCharacterUse(cmd *Commands, activator EntityId, origin, direction mgl32.Vec3, maxDistance float32) bool {
+	if cmd == nil || direction.LenSqr() <= 1e-8 || maxDistance <= 0 {
+		return false
+	}
+	if hit, ok := findUseTriggerHit(cmd, origin, direction, maxDistance); ok {
+		ActivateUseTrigger(cmd, hit.Trigger, activator)
+		return true
+	}
+	if hit, ok := findMovingBrushUseHit(cmd, origin, direction, maxDistance); ok {
+		hit.Brush.ActivationCount++
+		if !hit.Brush.DoesNotMove() {
+			hit.Brush.Open = !hit.Brush.Open
 		}
-		if hit, ok := findMovingBrushUseHit(cmd, origin, dir, 2.2); ok {
-			hit.Brush.ActivationCount++
-			if !hit.Brush.DoesNotMove() {
-				hit.Brush.Open = !hit.Brush.Open
-			}
-			if hit.Brush.Target != "" {
-				ActivateTarget(cmd, hit.Brush.Target, 0)
-			}
-			return false
+		if hit.Brush.Target != "" {
+			ActivateTarget(cmd, hit.Brush.Target, activator)
 		}
 		return true
-	})
+	}
+	return false
+}
+
+// GroundedLocalPlayerUseSystem preserves camera-aimed authored interaction for
+// games that provide their own actor input adapter around the shared motor.
+func GroundedLocalPlayerUseSystem(cmd *Commands, input *Input) {
+	groundedPlayerUseSystem(cmd, input)
 }
 
 // ActivateUseTrigger applies the same authored interaction for players, NPCs,
@@ -591,7 +696,7 @@ func findGroundedPlayerWaterBody(cmd *Commands, basePos mgl32.Vec3, ctrl *Ground
 	return 0, waterInteractionBody{}, false
 }
 
-func resolveGroundedLadderMovement(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
+func resolveGroundedLadderMovement(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, movement, dt float32, acceptEntity func(EntityId, bool) bool) {
 	if basePos == nil || ctrl == nil {
 		return
 	}
@@ -609,7 +714,7 @@ func resolveGroundedLadderMovement(cmd *Commands, voxRt *VoxelRtState, basePos *
 		ctrl.JumpQueued = false
 		return
 	}
-	*basePos, _ = tryGroundedVerticalMove(cmd, voxRt, *basePos, ctrl.MoveInput[1]*defaulted(ctrl.LadderClimbSpeed, DefaultLadderClimbSpeed)*dt, ctrl, acceptEntity)
+	*basePos, _ = tryGroundedVerticalMove(cmd, voxRt, *basePos, movement*defaulted(ctrl.LadderClimbSpeed, DefaultLadderClimbSpeed)*dt, ctrl, acceptEntity)
 	ctrl.VerticalVelocity = 0
 	ctrl.Grounded = false
 	ctrl.NeedsGroundSnap = false

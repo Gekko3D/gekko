@@ -88,6 +88,12 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
   - `streamedLevelRuntimeEditedNavigationSystem` in `PostUpdate`
 - Owns:
   - chunked level loading, terrain streaming, imported base-world streaming, placement chunking, world-delta application, voxel graph residency, and revisioned delta rebuilds
+    - explicit `StartStreamedLevelRuntime`, `StopStreamedLevelRuntime`, and
+      `RestartStreamedLevelRuntime` lifecycle; stop drains background prepare and
+      navigation work before owned entities are removed
+  - `StreamedLevelDeltaPersistent` for the level's normal `.gkworlddelta`, or
+    `StreamedLevelDeltaFresh` for an engine-owned temporary session delta that
+    is removed on stop without touching persistent user data
 - Best paired with:
   - `ChunkObserverModule`
   - content-loading and authored-level code paths
@@ -209,16 +215,22 @@ For their data model, see:
 - Owns:
   - time-based cleanup and entity lifetime expiration
 
-### `GroundedPlayerControllerModule`
+### `GroundedCharacterMotorModule` and `GroundedPlayerControllerModule`
 
 - File: `mod_grounded_player.go`
 - Resources:
   - optional `*GroundedPlayerControllerDefaults`
 - Systems:
-  - `groundedPlayerInputSystem`
-  - `groundedPlayerControlSystem`
+  - `GroundedCharacterMotorModule`: camera-free grounded motor and authored
+    trigger/brush integration
+  - `GroundedPlayerControllerModule`: compatibility keyboard/mouse and local
+    camera adapter around the same motor
 - Owns:
-  - grounded first-person controller behavior, including held `Ctrl` crouch
+  - actor-neutral movement from `GroundedCharacterIntentComponent`; a motor
+    entity does not require or acquire a `CameraComponent`
+  - ladder movement requires volume overlap unless authored traversal sets
+    `ForceLadder`; ordinary forward/back input never forces vertical movement
+  - local first-person input behavior, including held `Ctrl` crouch
     (clearance-checked standing recovery) and water-volume swimming (`Space`
     rises, `Ctrl` descends)
   - walking contact through the shared kinematic character helpers: slide,
@@ -226,9 +238,9 @@ For their data model, see:
   - `ScriptedMovement` keeps controller camera/look ownership while a gameplay
     traversal action advances the capsule through those same collision helpers
 - Depends on:
-  - `*Input`
   - `*Time`
   - `*VoxelRtState`
+  - `*Input` only for `GroundedPlayerControllerModule`
 
 ### `FlyingCameraModule`
 

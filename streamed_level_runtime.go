@@ -43,9 +43,17 @@ type PostSpawnTerrainContext struct {
 
 type PostSpawnTerrainHook func(cmd *Commands, ctx PostSpawnTerrainContext)
 
+type StreamedLevelDeltaMode string
+
+const (
+	StreamedLevelDeltaPersistent StreamedLevelDeltaMode = "persistent"
+	StreamedLevelDeltaFresh      StreamedLevelDeltaMode = "fresh"
+)
+
 type StreamedLevelRuntimeConfig struct {
 	LevelPath                       string
 	NavigationManifestPath          string
+	DeltaMode                       StreamedLevelDeltaMode
 	Loader                          *RuntimeContentLoader
 	StreamingRadius                 int
 	StreamingKeepRadius             int
@@ -226,10 +234,12 @@ func firstPositiveInt(values ...int) int {
 type StreamedLevelRuntimeModule struct{}
 
 type StreamedLevelRuntimeState struct {
-	mu sync.RWMutex
+	mu   sync.RWMutex
+	jobs sync.WaitGroup
 
 	Initialized bool
 	InitErr     error
+	Generation  uint64
 
 	Config                     StreamedLevelRuntimeConfig
 	Loader                     *RuntimeContentLoader
@@ -237,6 +247,7 @@ type StreamedLevelRuntimeState struct {
 	LevelID                    string
 	LevelPath                  string
 	LevelRoot                  EntityId
+	PlayerEntity               EntityId
 	ChunkSize                  float32
 	StreamingRadius            int
 	StreamingKeepRadius        int
@@ -299,6 +310,7 @@ type StreamedLevelRuntimeState struct {
 	WorldDeltaPath   string
 	WorldDataDir     string
 	WorldDelta       *content.WorldDeltaDef
+	sessionDeltaDir  string
 	Metrics          StreamedLevelRuntimeMetrics
 	nextMetricsLogAt time.Time
 
@@ -333,6 +345,7 @@ type streamedLoadedSectorProxy struct {
 }
 
 type streamedPreparedChunk struct {
+	Generation                            uint64
 	Coord                                 ChunkCoord
 	TerrainChunk                          *content.TerrainChunkDef
 	ImportedWorldChunk                    *content.ImportedWorldChunkDef
@@ -348,6 +361,7 @@ type streamedPreparedChunk struct {
 }
 
 type streamedChunkLoadJob struct {
+	Generation                uint64
 	Coord                     ChunkCoord
 	LevelPath                 string
 	Loader                    *RuntimeContentLoader
@@ -364,6 +378,7 @@ type streamedChunkLoadJob struct {
 }
 
 type streamedSectorProxyLoadJob struct {
+	Generation            uint64
 	SectorCoord           ChunkCoord
 	ManifestPath          string
 	LOD                   content.ImportedWorldLODDef
@@ -372,6 +387,7 @@ type streamedSectorProxyLoadJob struct {
 }
 
 type streamedPreparedSectorProxy struct {
+	Generation               uint64
 	SectorCoord              ChunkCoord
 	LOD                      content.ImportedWorldLODDef
 	Chunk                    *content.ImportedWorldChunkDef
@@ -461,17 +477,10 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		return err
 	}
 
-	worldDeltaPath := content.DefaultWorldDeltaPath(cfg.LevelPath)
-	worldDelta, err := content.LoadWorldDelta(worldDeltaPath)
+	worldDeltaPath, sessionDeltaDir, worldDelta, err := streamedLevelWorldDelta(cfg, level)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			state.InitErr = err
-			return err
-		}
-		worldDelta = &content.WorldDeltaDef{
-			SchemaVersion: content.CurrentWorldDeltaSchemaVersion,
-			LevelID:       level.ID,
-		}
+		state.InitErr = err
+		return err
 	}
 	if worldDelta.LevelID == "" {
 		worldDelta.LevelID = level.ID
@@ -515,6 +524,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 
 	state.Initialized = true
 	state.InitErr = nil
+	state.Generation++
 	state.Config = cfg
 	state.Loader = loader
 	state.Level = level
@@ -530,6 +540,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.WorldDeltaPath = worldDeltaPath
 	state.WorldDataDir = content.DefaultWorldDeltaDataDir(worldDeltaPath)
 	state.WorldDelta = worldDelta
+	state.sessionDeltaDir = sessionDeltaDir
 	state.Metrics = StreamedLevelRuntimeMetrics{}
 	state.nextMetricsLogAt = time.Time{}
 	state.TerrainID = ""
@@ -769,17 +780,196 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 				return err
 			}
 			if cfg.PlayerConfig != nil {
-				SpawnGroundedPlayerAtMarkerWithConfig(cmd, marker, *cfg.PlayerConfig)
+				state.PlayerEntity = SpawnGroundedPlayerAtMarkerWithConfig(cmd, marker, *cfg.PlayerConfig)
 			} else if level.Player != nil {
-				SpawnGroundedPlayerAtMarkerWithConfig(cmd, marker, groundedPlayerConfigFromLevelPlayer(level.Player))
+				state.PlayerEntity = SpawnGroundedPlayerAtMarkerWithConfig(cmd, marker, groundedPlayerConfigFromLevelPlayer(level.Player))
 			} else {
-				SpawnGroundedPlayerAtMarker(cmd, marker)
+				state.PlayerEntity = SpawnGroundedPlayerAtMarker(cmd, marker)
 			}
 		}
 	}
 	cmd.app.FlushCommands()
 	TransformHierarchySystem(cmd)
 	return nil
+}
+
+func RestartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedLevelRuntimeConfig) error {
+	if err := StopStreamedLevelRuntime(cmd); err != nil {
+		return err
+	}
+	if err := StartStreamedLevelRuntime(cmd, assets, cfg); err != nil {
+		_ = StopStreamedLevelRuntime(cmd)
+		return err
+	}
+	return nil
+}
+
+func StopStreamedLevelRuntime(cmd *Commands) error {
+	if cmd == nil || cmd.app == nil {
+		return fmt.Errorf("commands is nil")
+	}
+	state := streamedLevelRuntimeStateFromApp(cmd.app)
+	if state == nil {
+		return fmt.Errorf("streamed level runtime resource is missing")
+	}
+	if !state.Initialized {
+		return nil
+	}
+
+	waitForStreamedJobsAndDrain(state)
+	for coord, loaded := range state.LoadedChunks {
+		if err := persistChunkOverrides(cmd, state, coord, loaded); err != nil {
+			state.PendingLoads = make(map[ChunkCoord]struct{})
+			state.PendingProxyLoads = make(map[ChunkCoord]struct{})
+			state.navigationLoadActive, state.navigationRebuildActive = false, false
+			return err
+		}
+	}
+	state.Generation++
+	state.Initialized = false
+
+	var stopErr error
+	removed := make(map[EntityId]struct{})
+	for coord := range state.LoadedChunks {
+		for eid := range state.LoadedChunks[coord].OwnedEntities {
+			removed[eid] = struct{}{}
+		}
+		removeStreamedChunk(cmd, state, coord)
+	}
+	for coord := range state.LoadedSectorProxies {
+		removed[state.LoadedSectorProxies[coord].Entity] = struct{}{}
+		unloadStreamedSectorProxy(cmd, state, coord)
+	}
+	root, player := state.LevelRoot, state.PlayerEntity
+	MakeQuery1[Parent](cmd).Map(func(eid EntityId, _ *Parent) bool {
+		if _, alreadyRemoved := removed[eid]; !alreadyRemoved && isEntityOrDescendantOf(cmd, eid, root) {
+			cmd.RemoveEntity(eid)
+			removed[eid] = struct{}{}
+		}
+		return true
+	})
+	if root != 0 {
+		cmd.RemoveEntity(root)
+	}
+	if player != 0 {
+		cmd.RemoveEntity(player)
+	}
+	cmd.app.FlushCommands()
+
+	clearVoxelWorldDirtyChunks(cmd.app, state.BaseWorldID)
+	if state.sessionDeltaDir != "" {
+		if err := os.RemoveAll(state.sessionDeltaDir); err != nil && stopErr == nil {
+			stopErr = err
+		}
+	}
+	drainStreamedPreparedResults(state)
+	state.InitErr = nil
+	state.Level, state.Loader, state.WorldDelta = nil, nil, nil
+	state.LevelID, state.LevelPath, state.WorldDeltaPath, state.WorldDataDir, state.sessionDeltaDir = "", "", "", "", ""
+	state.LevelRoot, state.PlayerEntity = 0, 0
+	state.BaseNavManifest, state.navigationQuery = nil, nil
+	state.NavigationSources, state.NavigationGraphs = nil, nil
+	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
+	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
+	state.PendingLoads = make(map[ChunkCoord]struct{})
+	state.PendingProxyLoads = make(map[ChunkCoord]struct{})
+	state.navigationLoadActive, state.navigationRebuildActive = false, false
+	return stopErr
+}
+
+func clearVoxelWorldDirtyChunks(app *App, worldID string) {
+	dirty := voxelWorldDirtyChunksFromApp(app)
+	if dirty == nil {
+		return
+	}
+	dirty.mu.Lock()
+	defer dirty.mu.Unlock()
+	for key := range dirty.Imported {
+		if worldID == "" || key.WorldID == worldID {
+			delete(dirty.Imported, key)
+		}
+	}
+}
+
+func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
+	for {
+		select {
+		case <-state.PreparedLoads:
+			continue
+		default:
+		}
+		break
+	}
+	for {
+		select {
+		case <-state.PreparedProxyLoads:
+			continue
+		default:
+		}
+		break
+	}
+	for {
+		select {
+		case <-state.navigationLoads:
+			continue
+		default:
+		}
+		break
+	}
+	for {
+		select {
+		case <-state.navigationRebuilds:
+			continue
+		default:
+		}
+		break
+	}
+}
+
+func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
+	done := make(chan struct{})
+	go func() {
+		state.jobs.Wait()
+		close(done)
+	}()
+	for {
+		select {
+		case <-state.PreparedLoads:
+		case <-state.PreparedProxyLoads:
+		case <-state.navigationLoads:
+		case <-state.navigationRebuilds:
+		case <-done:
+			drainStreamedPreparedResults(state)
+			return
+		}
+	}
+}
+
+func streamedLevelWorldDelta(cfg StreamedLevelRuntimeConfig, level *content.LevelDef) (string, string, *content.WorldDeltaDef, error) {
+	mode := cfg.DeltaMode
+	if mode == "" {
+		mode = StreamedLevelDeltaPersistent
+	}
+	delta := &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: level.ID}
+	if mode == StreamedLevelDeltaFresh {
+		dir, err := os.MkdirTemp("", "gekko-streamed-level-")
+		if err != nil {
+			return "", "", nil, err
+		}
+		return filepath.Join(dir, "session.gkworlddelta"), dir, delta, nil
+	}
+	if mode != StreamedLevelDeltaPersistent {
+		return "", "", nil, fmt.Errorf("unsupported streamed level delta mode %q", mode)
+	}
+	path := content.DefaultWorldDeltaPath(cfg.LevelPath)
+	loaded, err := content.LoadWorldDelta(path)
+	if err == nil {
+		return path, "", loaded, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", "", nil, err
+	}
+	return path, "", delta, nil
 }
 
 func groundedPlayerConfigFromLevelPlayer(player *content.LevelPlayerDef) GroundedPlayerControllerConfig {
@@ -1005,7 +1195,9 @@ func startStreamedChunkPrepareJob(state *StreamedLevelRuntimeState, job streamed
 	state.activePrepareMu.Lock()
 	state.activeChunkPrepares++
 	state.activePrepareMu.Unlock()
+	state.jobs.Add(1)
 	go func() {
+		defer state.jobs.Done()
 		result := prepareStreamedChunkLoad(job)
 		state.PreparedLoads <- result
 		state.activePrepareMu.Lock()
@@ -1021,7 +1213,9 @@ func startStreamedSectorProxyPrepareJob(state *StreamedLevelRuntimeState, job st
 	state.activePrepareMu.Lock()
 	state.activeProxyPrepares++
 	state.activePrepareMu.Unlock()
+	state.jobs.Add(1)
 	go func() {
+		defer state.jobs.Done()
 		result := prepareStreamedSectorProxyLoad(job)
 		state.PreparedProxyLoads <- result
 		state.activePrepareMu.Lock()
@@ -1267,6 +1461,9 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		}
 		select {
 		case prepared := <-state.PreparedProxyLoads:
+			if prepared.Generation != state.Generation {
+				continue
+			}
 			delete(state.PendingProxyLoads, prepared.SectorCoord)
 			recordPreparedStreamedSectorProxyAuxMetrics(state, prepared)
 			if prepared.Err != nil {
@@ -1304,6 +1501,9 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		}
 		select {
 		case prepared := <-state.PreparedLoads:
+			if prepared.Generation != state.Generation {
+				continue
+			}
 			delete(state.PendingLoads, prepared.Coord)
 			recordPreparedStreamedChunkMetrics(state, prepared)
 			if prepared.Err != nil {
@@ -1689,6 +1889,7 @@ func buildEffectiveStreamedPlacementIndex(level *content.LevelDef, levelPath str
 
 func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoord) streamedChunkLoadJob {
 	job := streamedChunkLoadJob{
+		Generation:            state.Generation,
 		Coord:                 coord,
 		LevelPath:             state.LevelPath,
 		Loader:                state.Loader,
@@ -1726,6 +1927,7 @@ func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoor
 
 func buildStreamedSectorProxyLoadJob(state *StreamedLevelRuntimeState, sectorCoord ChunkCoord, lod content.ImportedWorldLODDef) streamedSectorProxyLoadJob {
 	job := streamedSectorProxyLoadJob{
+		Generation:            state.Generation,
 		SectorCoord:           sectorCoord,
 		LOD:                   lod,
 		Loader:                state.Loader,
@@ -1767,6 +1969,7 @@ func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, st
 func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result streamedPreparedSectorProxy) {
 	start := time.Now()
 	result = streamedPreparedSectorProxy{
+		Generation:  job.Generation,
 		SectorCoord: job.SectorCoord,
 		LOD:         job.LOD,
 	}
@@ -1800,6 +2003,7 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPreparedChunk) {
 	start := time.Now()
 	result = streamedPreparedChunk{
+		Generation:      job.Generation,
 		Coord:           job.Coord,
 		PlacementItems:  append([]streamedPlacementInstance(nil), job.Placements...),
 		ObjectSnapshots: make(map[string]*content.VoxelObjectSnapshotDef),
@@ -2252,6 +2456,15 @@ func unloadStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 	if err := persistChunkOverrides(cmd, state, coord, loaded); err != nil {
 		return err
 	}
+	removeStreamedChunk(cmd, state, coord)
+	return nil
+}
+
+func removeStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord) {
+	loaded := state.LoadedChunks[coord]
+	if loaded == nil {
+		return
+	}
 	for eid := range loaded.OwnedEntities {
 		retainStreamedRendererGeometryForEntity(cmd, eid)
 		if rt := voxelRtStateFromApp(cmd.app); rt != nil {
@@ -2267,7 +2480,6 @@ func unloadStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 		delete(state.ObjectChunk, objectKey)
 	}
 	delete(state.LoadedChunks, coord)
-	return nil
 }
 
 func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord, loaded *streamedLoadedChunk) error {

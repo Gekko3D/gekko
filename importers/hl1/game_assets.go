@@ -228,6 +228,12 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 	if outputRoot == "" {
 		return GameAssetImportResult{}, fmt.Errorf("output root is required")
 	}
+	assetOutputRoot := strings.TrimSpace(opts.AssetOutputRoot)
+	libraryPath := strings.TrimSpace(opts.AssetLibraryPath)
+	centralAssets := assetOutputRoot != "" || libraryPath != ""
+	if centralAssets && (assetOutputRoot == "" || libraryPath == "") {
+		return GameAssetImportResult{}, fmt.Errorf("central asset output requires both asset output root and asset library path")
+	}
 	gameDir := strings.TrimSpace(opts.GameDir)
 	if gameDir == "" {
 		gameDir = strings.TrimSpace(summary.Report.Source.GameDir)
@@ -236,13 +242,27 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		gameDir = InferGameDirFromBSPPath(summary.Report.Source.BSPPath)
 	}
 	manifestPath := filepath.Join(outputRoot, "hl1_assets", mapName, "manifest.gkhl1assets")
-	libraryPath := filepath.Join(outputRoot, "hl1_assets", mapName, "assets.gkassetlibrary")
+	if centralAssets {
+		manifestPath = filepath.Join(assetOutputRoot, "hl1", "manifests", mapName+".gkhl1assets")
+	} else {
+		assetOutputRoot = outputRoot
+		libraryPath = filepath.Join(outputRoot, "hl1_assets", mapName, "assets.gkassetlibrary")
+	}
 	manifest := &GameAssetManifest{
 		SchemaVersion: GameAssetManifestSchemaVersion,
 		Source:        summary.Report.Source,
 	}
 	manifest.Source.GameDir = gameDir
-	collector := newHL1AssetCollector(gameDir, opts.ResourceDirs, outputRoot, mapName, EffectiveHL1VoxelResolutionPolicy(opts))
+	var existingLibrary *content.AssetLibraryDef
+	if centralAssets {
+		loaded, err := content.LoadAssetLibrary(libraryPath)
+		if err == nil {
+			existingLibrary = loaded
+		} else if !os.IsNotExist(err) {
+			return GameAssetImportResult{}, err
+		}
+	}
+	collector := newHL1AssetCollector(gameDir, opts.ResourceDirs, assetOutputRoot, mapName, centralAssets, EffectiveHL1VoxelResolutionPolicy(opts))
 	for _, wadPath := range summary.Report.Source.WADPaths {
 		collector.addAbsolute("wad", wadPath, "worldspawn.wad")
 	}
@@ -287,8 +307,110 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 		}
 	}
 	manifest.Assets, manifest.Diagnostics = collector.buildEntries()
+	if existingLibrary != nil {
+		reuseExistingHL1Assets(manifest.Assets, existingLibrary, libraryPath)
+	}
 	manifest.Catalog = buildGameAssetCatalog(manifest.Assets)
-	return GameAssetImportResult{ManifestPath: manifestPath, Manifest: manifest, LibraryPath: libraryPath, Library: buildHL1AssetLibrary(manifest.Assets, libraryPath)}, nil
+	library := buildHL1AssetLibrary(manifest.Assets, libraryPath)
+	if existingLibrary != nil {
+		var err error
+		library, err = mergeHL1AssetLibraries(existingLibrary, library)
+		if err != nil {
+			return GameAssetImportResult{}, err
+		}
+	}
+	return GameAssetImportResult{ManifestPath: manifestPath, Manifest: manifest, LibraryPath: libraryPath, Library: library}, nil
+}
+
+func reuseExistingHL1Assets(entries []GameAssetManifestEntry, library *content.AssetLibraryDef, libraryPath string) {
+	if library == nil {
+		return
+	}
+	byIdentity := make(map[string]string)
+	for _, entry := range library.Entries {
+		if !hasAnyString(entry.Tags, "player", "static_prop", "weapon_world") {
+			continue
+		}
+		sourceRef := strings.TrimPrefix(firstStringWithPrefix(entry.Tags, "source_ref:"), "source_ref:")
+		sourceHash := strings.TrimPrefix(firstStringWithPrefix(entry.Tags, "source_sha256:"), "source_sha256:")
+		config := strings.TrimPrefix(firstStringWithPrefix(entry.Tags, "import_config:"), "import_config:")
+		if config == "" {
+			continue
+		}
+		path, err := content.ResolveAssetLibraryPath(library, libraryPath, entry.Key)
+		if err == nil {
+			for _, identity := range []string{sourceRef, sourceHash} {
+				if identity == "" {
+					continue
+				}
+				key := identity + "\x00" + config
+				if _, exists := byIdentity[key]; !exists {
+					byIdentity[key] = path
+				}
+			}
+		}
+	}
+	for index := range entries {
+		entry := &entries[index]
+		if entry.CatalogKind != "" || entry.GeneratedAssetPath == "" {
+			continue
+		}
+		config := hl1AssetImportConfig(*entry)
+		path := byIdentity[strings.ToLower(filepath.ToSlash(entry.SourceRef))+"\x00"+config]
+		if path == "" && entry.SHA256 != "" {
+			path = byIdentity[entry.SHA256+"\x00"+config]
+		}
+		if path != "" {
+			entry.GeneratedAssetPath = path
+			entry.generatedAsset = nil
+			entry.ConvertState = "reused_catalog_asset"
+		}
+	}
+}
+
+func firstStringWithPrefix(values []string, prefix string) string {
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			return value
+		}
+	}
+	return ""
+}
+
+func hasAnyString(values []string, wanted ...string) bool {
+	for _, value := range values {
+		for _, candidate := range wanted {
+			if value == candidate {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mergeHL1AssetLibraries(existing, incoming *content.AssetLibraryDef) (*content.AssetLibraryDef, error) {
+	if existing == nil {
+		return incoming, nil
+	}
+	if incoming == nil {
+		return existing, nil
+	}
+	byKey := make(map[string]content.AssetLibraryEntryDef, len(existing.Entries)+len(incoming.Entries))
+	for _, entry := range existing.Entries {
+		byKey[entry.Key] = entry
+	}
+	for _, entry := range incoming.Entries {
+		if prior, ok := byKey[entry.Key]; ok && filepath.Clean(prior.AssetPath) != filepath.Clean(entry.AssetPath) {
+			return nil, fmt.Errorf("asset library key %q conflicts: %q != %q", entry.Key, prior.AssetPath, entry.AssetPath)
+		}
+		byKey[entry.Key] = entry
+	}
+	existing.Entries = existing.Entries[:0]
+	for _, entry := range byKey {
+		existing.Entries = append(existing.Entries, entry)
+	}
+	sort.Slice(existing.Entries, func(i, j int) bool { return existing.Entries[i].Key < existing.Entries[j].Key })
+	return existing, nil
 }
 
 func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []string) {
@@ -383,8 +505,26 @@ func hl1CatalogModelPaths(gameDir string, players bool) []string {
 		out = append(out, filepath.Clean(path))
 		return nil
 	})
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		left, right := hl1CatalogModelSourcePriority(out[i]), hl1CatalogModelSourcePriority(out[j])
+		if left != right {
+			return left < right
+		}
+		return out[i] < out[j]
+	})
 	return out
+}
+
+func hl1CatalogModelSourcePriority(path string) int {
+	clean := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	switch {
+	case strings.HasPrefix(clean, "valve/models/") || strings.Contains(clean, "/valve/models/"):
+		return 0
+	case strings.HasPrefix(clean, "valve_downloads/models/") || strings.Contains(clean, "/valve_downloads/models/"):
+		return 1
+	default:
+		return 2
+	}
 }
 
 func hl1HeldWeaponModelPaths(gameDir string) []string {
@@ -399,7 +539,13 @@ func hl1HeldWeaponModelPaths(gameDir string) []string {
 		}
 		return nil
 	})
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		left, right := hl1CatalogModelSourcePriority(out[i]), hl1CatalogModelSourcePriority(out[j])
+		if left != right {
+			return left < right
+		}
+		return out[i] < out[j]
+	})
 	return out
 }
 
@@ -506,23 +652,33 @@ func SaveGameAssetImport(result GameAssetImportResult) error {
 
 func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) *content.AssetLibraryDef {
 	library := content.NewAssetLibraryDef("HL1 imported assets")
-	byKey := make(map[string]GameAssetManifestEntry)
+	byBaseKey := make(map[string][]GameAssetManifestEntry)
 	for _, entry := range entries {
 		key := hl1GenericAssetKey(entry)
 		if key != "" && entry.GeneratedAssetPath != "" {
-			if prior, ok := byKey[key]; !ok || strings.ToLower(entry.SourceRef) < strings.ToLower(prior.SourceRef) {
-				byKey[key] = entry
-			}
+			byBaseKey[key] = append(byBaseKey[key], entry)
 		}
 		for _, extra := range entry.GeneratedExtras {
 			if extra.Key == "" || extra.AssetPath == "" {
 				continue
 			}
-			if prior, ok := byKey[extra.Key]; !ok || strings.ToLower(entry.SourceRef) < strings.ToLower(prior.SourceRef) {
-				extraEntry := entry
-				extraEntry.GeneratedAssetPath = extra.AssetPath
-				byKey[extra.Key] = extraEntry
+			extraEntry := entry
+			extraEntry.GeneratedAssetPath = extra.AssetPath
+			byBaseKey[extra.Key] = append(byBaseKey[extra.Key], extraEntry)
+		}
+	}
+	byKey := make(map[string]GameAssetManifestEntry)
+	for baseKey, candidates := range byBaseKey {
+		sort.Slice(candidates, func(i, j int) bool { return hl1LibraryEntryLess(candidates[i], candidates[j]) })
+		for index, entry := range candidates {
+			key := baseKey
+			if index > 0 {
+				key += ".source." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
 			}
+			if prior, exists := byKey[key]; exists && filepath.Clean(prior.GeneratedAssetPath) != filepath.Clean(entry.GeneratedAssetPath) {
+				continue
+			}
+			byKey[key] = entry
 		}
 	}
 	for key, entry := range byKey {
@@ -540,6 +696,24 @@ func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) 
 	return library
 }
 
+func hl1LibraryEntryLess(left, right GameAssetManifestEntry) bool {
+	leftPath, rightPath := left.SourcePath, right.SourcePath
+	if leftPath == "" {
+		leftPath = left.SourceRef
+	}
+	if rightPath == "" {
+		rightPath = right.SourceRef
+	}
+	leftPriority, rightPriority := hl1CatalogModelSourcePriority(leftPath), hl1CatalogModelSourcePriority(rightPath)
+	if leftPriority != rightPriority {
+		return leftPriority < rightPriority
+	}
+	if strings.ToLower(left.SourceRef) != strings.ToLower(right.SourceRef) {
+		return strings.ToLower(left.SourceRef) < strings.ToLower(right.SourceRef)
+	}
+	return left.GeneratedAssetPath < right.GeneratedAssetPath
+}
+
 func AddGeneratedLevelAssetsToLibrary(result *GameAssetImportResult, generated GeneratedLevelResult) error {
 	if result == nil || strings.TrimSpace(result.LibraryPath) == "" {
 		return nil
@@ -554,17 +728,16 @@ func AddGeneratedLevelAssetsToLibrary(result *GameAssetImportResult, generated G
 		}
 	}
 	type assetGroup struct {
-		prefix     string
 		group      string
 		sourceKind string
 		assets     []GeneratedAssetResult
 	}
 	groups := []assetGroup{
-		{prefix: "props.brushes", group: "brushes", sourceKind: "bsp_brush", assets: generated.StaticBrushAssets},
-		{prefix: "props.moving", group: "moving", sourceKind: "bsp_brush", assets: generated.MovingBrushAssets},
-		{prefix: "props.fixtures", group: "fixtures", sourceKind: "bsp_brush", assets: generated.ChargerAssets},
-		{prefix: "props.breakables", group: "breakables", sourceKind: "bsp_brush", assets: generated.BreakableAssets},
-		{prefix: "props.fixtures", group: "fixtures", sourceKind: "generated_fixture", assets: generated.LightFixtureAssets},
+		{group: "brushes", sourceKind: "bsp_brush", assets: generated.StaticBrushAssets},
+		{group: "moving", sourceKind: "bsp_brush", assets: generated.MovingBrushAssets},
+		{group: "fixtures", sourceKind: "bsp_brush", assets: generated.ChargerAssets},
+		{group: "breakables", sourceKind: "bsp_brush", assets: generated.BreakableAssets},
+		{group: "fixtures", sourceKind: "generated_fixture", assets: generated.LightFixtureAssets},
 	}
 	byKey := make(map[string]content.AssetLibraryEntryDef, len(result.Library.Entries))
 	for _, entry := range result.Library.Entries {
@@ -586,17 +759,21 @@ func AddGeneratedLevelAssetsToLibrary(result *GameAssetImportResult, generated G
 			if err != nil {
 				return err
 			}
-			key := strings.Join([]string{set.prefix, mapName, assetID}, ".")
+			key := strings.Join([]string{"maps", mapName, set.group, assetID}, ".")
 			tags := append([]string(nil), generatedAsset.Asset.Tags...)
 			for _, material := range generatedAsset.Asset.Materials {
 				for _, tag := range material.Tags {
 					tags = appendUniqueString(tags, tag)
 				}
 			}
-			for _, tag := range []string{"source:hl1", "prop", "source_kind:" + set.sourceKind, "group:" + set.group} {
+			for _, tag := range []string{"source:hl1", "prop", "source_kind:" + set.sourceKind, "group:" + set.group, "scope:" + mapName} {
 				tags = appendUniqueString(tags, tag)
 			}
-			byKey[key] = content.AssetLibraryEntryDef{Key: key, AssetPath: filepath.ToSlash(assetPath), Tags: tags}
+			entry := content.AssetLibraryEntryDef{Key: key, AssetPath: filepath.ToSlash(assetPath), Tags: tags}
+			if prior, ok := byKey[key]; ok && filepath.Clean(prior.AssetPath) != filepath.Clean(entry.AssetPath) {
+				return fmt.Errorf("asset library key %q conflicts: %q != %q", key, prior.AssetPath, entry.AssetPath)
+			}
+			byKey[key] = entry
 		}
 	}
 	result.Library.Entries = result.Library.Entries[:0]
@@ -608,9 +785,23 @@ func AddGeneratedLevelAssetsToLibrary(result *GameAssetImportResult, generated G
 }
 
 func hl1AssetLibraryTags(entry GameAssetManifestEntry) []string {
-	tags := []string{"source:hl1", "source_kind:mdl"}
+	tags := []string{"source:hl1", "source_kind:" + entry.Kind, "scope:global", "import_config:" + hl1AssetImportConfig(entry)}
+	if entry.SourceRef != "" {
+		tags = append(tags, "source_ref:"+strings.ToLower(filepath.ToSlash(entry.SourceRef)))
+	}
+	if entry.SHA256 != "" {
+		tags = append(tags, "source_sha256:"+entry.SHA256)
+	}
 	if entry.CatalogKind != "" {
 		tags = append(tags, entry.CatalogKind)
+	}
+	switch entry.CatalogKind {
+	case "player":
+		tags = append(tags, "group:characters")
+	case "weapon_world", "weapon_held":
+		tags = append(tags, "group:weapons")
+	case "":
+		tags = append(tags, "group:environment")
 	}
 	if entry.CatalogKind != "static_prop" {
 		return tags
@@ -828,7 +1019,30 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			return "props.imported." + id
 		}
 	}
+	if entry.CatalogKind == "" && entry.GeneratedAssetPath != "" {
+		if id := safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef))); id != "" {
+			return entry.Kind + "s.imported." + id
+		}
+	}
 	return ""
+}
+
+func hl1AssetImportConfig(entry GameAssetManifestEntry) string {
+	profile := ""
+	if entry.GeneratedVoxelizationProfile != nil {
+		profile = entry.GeneratedVoxelizationProfile.ID
+	}
+	models := make([]string, len(entry.BodygroupModels))
+	for index, model := range entry.BodygroupModels {
+		models[index] = strconv.Itoa(model)
+	}
+	return strings.Join([]string{
+		entry.GeneratedVoxelResolutionCategory,
+		strconv.FormatFloat(float64(entry.GeneratedVoxelResolution), 'g', -1, 32),
+		profile,
+		strings.Join(models, ","),
+		strconv.Itoa(entry.SkinFamily),
+	}, "/")
 }
 
 type hl1AssetCollector struct {
@@ -836,12 +1050,13 @@ type hl1AssetCollector struct {
 	resourceDirs          []string
 	outputRoot            string
 	mapName               string
+	centralAssets         bool
 	voxelResolutionPolicy HL1VoxelResolutionPolicy
 	entries               map[string]*GameAssetManifestEntry
 	diagnostics           []importcommon.Diagnostic
 }
 
-func newHL1AssetCollector(gameDir string, resourceDirs []string, outputRoot, mapName string, policy HL1VoxelResolutionPolicy) *hl1AssetCollector {
+func newHL1AssetCollector(gameDir string, resourceDirs []string, outputRoot, mapName string, centralAssets bool, policy HL1VoxelResolutionPolicy) *hl1AssetCollector {
 	if policy == (HL1VoxelResolutionPolicy{}) {
 		policy = DefaultHL1VoxelResolutionPolicy()
 	}
@@ -850,6 +1065,7 @@ func newHL1AssetCollector(gameDir string, resourceDirs []string, outputRoot, map
 		resourceDirs:          hl1ResourceDirs(gameDir, resourceDirs),
 		outputRoot:            filepath.Clean(outputRoot),
 		mapName:               mapName,
+		centralAssets:         centralAssets,
 		voxelResolutionPolicy: policy,
 		entries:               map[string]*GameAssetManifestEntry{},
 	}
@@ -963,6 +1179,9 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 	entry.SizeBytes = info.Size()
 	entry.SHA256 = fileSHA256(entry.SourcePath)
 	entry.OutputPath = filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "files", hl1AssetOutputRelPath(entry.SourcePath, c.gameDir, kind, entry.SourceRef))
+	if c.centralAssets {
+		entry.OutputPath = filepath.Join(c.outputRoot, "hl1", "sources", hl1AssetOutputRelPath(entry.SourcePath, c.gameDir, kind, entry.SourceRef))
+	}
 	if kind == "model" {
 		category, voxelResolution := c.voxelResolutionForEntry(entry)
 		voxelizationProfile := MDLVoxelizationProfileForCategory(category)
@@ -986,9 +1205,12 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				// Keep their generated documents distinct: catalog output carries the
 				// adapted presentation contract, while the map reference remains a
 				// source-faithful static asset.
-				assetName += "_uncataloged"
+				assetName = safeHL1CatalogAssetBaseName(entry.SourceRef) + "_uncataloged"
 			}
 			assetPath := filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "generated", "models", assetName+".gkasset")
+			if c.centralAssets {
+				assetPath = filepath.Join(c.outputRoot, "hl1", "models", assetName+".gkasset")
+			}
 			entry.GeneratedVoxelResolution = voxelResolution
 			entry.GeneratedVoxelResolutionCategory = string(category)
 			entry.GeneratedVoxelizationProfile = &voxelizationProfile
@@ -1086,7 +1308,11 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 			})
 		} else {
 			entry.SpriteInfo = &geometry.Info
+			assetName := safeHL1CatalogAssetBaseName(entry.SourceRef) + ".gkasset"
 			assetPath := filepath.Join(c.outputRoot, "hl1_assets", c.mapName, "generated", "sprites", safeHL1AssetBaseName(entry.SourceRef)+".gkasset")
+			if c.centralAssets {
+				assetPath = filepath.Join(c.outputRoot, "hl1", "sprites", assetName)
+			}
 			asset, voxelCount, err := BuildSPRVoxelAsset(geometry, SPRVoxelAssetOptions{
 				Name:            strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
 				SourceRef:       entry.SourceRef,

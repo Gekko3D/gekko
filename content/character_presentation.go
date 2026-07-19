@@ -81,6 +81,7 @@ type CharacterCrouchLocomotionDef struct {
 type CharacterDirectionalLocomotionDef struct {
 	Walk             CharacterDirectionalClipSetDef `json:"walk,omitempty"`
 	Run              CharacterDirectionalClipSetDef `json:"run,omitempty"`
+	Sprint           CharacterDirectionalClipSetDef `json:"sprint,omitempty"`
 	Fallback         string                         `json:"fallback"`
 	BackwardFallback string                         `json:"backward_fallback,omitempty"`
 }

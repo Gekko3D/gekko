@@ -22,6 +22,7 @@ type VoxelWorldDirtyChunks struct {
 }
 
 type streamedNavigationLoadResult struct {
+	RuntimeGeneration  uint64
 	Generation         uint64
 	Sources            []content.NavSourceTileDef
 	Graphs             []content.NavGraphTileDef
@@ -33,9 +34,10 @@ type streamedNavigationLoadResult struct {
 }
 
 type streamedNavigationRebuildResult struct {
-	Delta  content.WorldDeltaDef
-	Result content.NavGraphDeltaBakeResult
-	Err    error
+	RuntimeGeneration uint64
+	Delta             content.WorldDeltaDef
+	Result            content.NavGraphDeltaBakeResult
+	Err               error
 }
 
 type RuntimeNavigationService struct {
@@ -220,14 +222,17 @@ func startStreamedNavigationLoad(state *StreamedLevelRuntimeState) {
 	openDoors := copyNavigationTraversalSet(state.navigationOpenDoors)
 	blockers := copyNavigationBlockers(state.navigationBlockers)
 	manifestPath, deltaPath := state.BaseNavManifestPath, state.WorldDeltaPath
+	runtimeGeneration := state.Generation
 	state.navigationLoadActive = true
+	state.jobs.Add(1)
 	go func() {
+		defer state.jobs.Done()
 		sources, graphs, err := loadStreamedNavigationResidency(manifest, manifestPath, &delta, deltaPath, desired)
 		var query *content.NavGraphQuery
 		if err == nil {
 			query, err = buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution, manifest.AgentProfiles, disabledTraversals, openDoors, blockers)
 		}
-		state.navigationLoads <- streamedNavigationLoadResult{Generation: generation, Sources: sources, Graphs: graphs, Query: query, DisabledTraversals: disabledTraversals, OpenDoors: openDoors, Blockers: blockers, Err: err}
+		state.navigationLoads <- streamedNavigationLoadResult{RuntimeGeneration: runtimeGeneration, Generation: generation, Sources: sources, Graphs: graphs, Query: query, DisabledTraversals: disabledTraversals, OpenDoors: openDoors, Blockers: blockers, Err: err}
 	}()
 }
 
@@ -388,6 +393,9 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 	}
 	select {
 	case result := <-state.navigationLoads:
+		if result.RuntimeGeneration != state.Generation {
+			break
+		}
 		state.navigationLoadActive = false
 		if result.Err != nil {
 			state.InitErr = result.Err
@@ -414,6 +422,9 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 	}
 	select {
 	case result := <-state.navigationRebuilds:
+		if result.RuntimeGeneration != state.Generation {
+			break
+		}
 		state.navigationRebuildActive = false
 		if result.Err != nil {
 			state.InitErr = result.Err
@@ -567,13 +578,17 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 	}
 	delta := copyWorldDeltaForNav(state.WorldDelta)
 	manifest := copyNavGraphManifest(state.BaseNavManifest)
+	runtimeGeneration := state.Generation
+	deltaPath, manifestPath := state.WorldDeltaPath, state.BaseNavManifestPath
 	state.navigationRebuildActive = true
+	state.jobs.Add(1)
 	go func() {
-		result, err := content.SaveNavGraphDeltaForImportedWorldChunks(state.WorldDeltaPath, &delta, manifest, state.BaseNavManifestPath, chunks, dirty)
+		defer state.jobs.Done()
+		result, err := content.SaveNavGraphDeltaForImportedWorldChunks(deltaPath, &delta, manifest, manifestPath, chunks, dirty)
 		if err != nil {
 			err = fmt.Errorf("rebuild navigation graph delta: %w", err)
 		}
-		state.navigationRebuilds <- streamedNavigationRebuildResult{Delta: delta, Result: result, Err: err}
+		state.navigationRebuilds <- streamedNavigationRebuildResult{RuntimeGeneration: runtimeGeneration, Delta: delta, Result: result, Err: err}
 	}()
 }
 

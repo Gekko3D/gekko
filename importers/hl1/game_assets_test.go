@@ -342,7 +342,7 @@ func TestAddGeneratedLevelAssetsToLibraryGroupsBrushProps(t *testing.T) {
 		t.Fatalf("library entries = %+v", result.Library.Entries)
 	}
 	entry := result.Library.Entries[0]
-	if entry.Key != "props.brushes.crossfire.hl1_static_func_wall_0" || !hasTag(entry.Tags, "group:brushes") || !hasTag(entry.Tags, "source_kind:bsp_brush") {
+	if entry.Key != "maps.crossfire.brushes.hl1_static_func_wall_0" || !hasTag(entry.Tags, "group:brushes") || !hasTag(entry.Tags, "source_kind:bsp_brush") || !hasTag(entry.Tags, "scope:crossfire") {
 		t.Fatalf("unexpected generated asset entry: %+v", entry)
 	}
 	got, err := content.ResolveAssetLibraryPath(result.Library, result.LibraryPath, entry.Key)
@@ -351,6 +351,110 @@ func TestAddGeneratedLevelAssetsToLibraryGroupsBrushProps(t *testing.T) {
 	}
 	if filepath.Clean(got) != filepath.Clean(generated.StaticBrushAssets[0].AssetPath) {
 		t.Fatalf("resolved asset path = %q", got)
+	}
+}
+
+func TestMergeHL1AssetLibrariesIsIdempotentAndRejectsPathConflicts(t *testing.T) {
+	existing := content.NewAssetLibraryDef("game assets")
+	existing.Entries = []content.AssetLibraryEntryDef{{Key: "characters.robo", AssetPath: "content/robo.gkasset"}}
+	incoming := content.NewAssetLibraryDef("import")
+	incoming.Entries = []content.AssetLibraryEntryDef{{Key: "characters.robo", AssetPath: "content/robo.gkasset"}, {Key: "maps.crossfire.moving.door", AssetPath: "content/maps/crossfire/door.gkasset"}}
+
+	merged, err := mergeHL1AssetLibraries(existing, incoming)
+	if err != nil || len(merged.Entries) != 2 || merged.Entries[0].Key != "characters.robo" || merged.Entries[1].Key != "maps.crossfire.moving.door" {
+		t.Fatalf("merged library = %+v, err=%v", merged, err)
+	}
+	secondMap := content.NewAssetLibraryDef("gasworks")
+	secondMap.Entries = []content.AssetLibraryEntryDef{{Key: "maps.gasworks.moving.door", AssetPath: "content/maps/gasworks/door.gkasset"}}
+	merged, err = mergeHL1AssetLibraries(merged, secondMap)
+	if err != nil || len(merged.Entries) != 3 {
+		t.Fatalf("multi-map merge = %+v, err=%v", merged, err)
+	}
+	merged, err = mergeHL1AssetLibraries(merged, incoming)
+	if err != nil || len(merged.Entries) != 3 {
+		t.Fatalf("repeated import changed catalog = %+v, err=%v", merged, err)
+	}
+	conflict := content.NewAssetLibraryDef("conflict")
+	conflict.Entries = []content.AssetLibraryEntryDef{{Key: "maps.crossfire.moving.door", AssetPath: "other/door.gkasset"}}
+	if _, err := mergeHL1AssetLibraries(merged, conflict); err == nil {
+		t.Fatal("conflicting key was accepted")
+	}
+}
+
+func TestCentralHL1GeneratedAssetPathsStayOutsideLevelOutput(t *testing.T) {
+	opts := ImportOptions{MapName: "crossfire", OutputRoot: filepath.Join("levels", "crossfire"), AssetOutputRoot: filepath.Join("assets", "content")}
+	got := generatedHL1LevelAssetPath(opts, "moving_brushes", "door")
+	want := filepath.Join("assets", "content", "hl1", "maps", "crossfire", "moving_brushes", "door.gkasset")
+	if got != want {
+		t.Fatalf("generated asset path = %q, want %q", got, want)
+	}
+}
+
+func TestReuseExistingHL1PlayerAssetForMapReference(t *testing.T) {
+	dir := t.TempDir()
+	libraryPath := filepath.Join(dir, "game.gkassetlibrary")
+	library := content.NewAssetLibraryDef("game")
+	library.Entries = []content.AssetLibraryEntryDef{{
+		Key: "characters.robo.b0.s0", AssetPath: "content/robo.gkasset",
+		Tags: []string{"player", "source_ref:models/player/robo/robo.mdl", "import_config:/0///0"},
+	}}
+	entries := []GameAssetManifestEntry{{SourceRef: "MODELS/PLAYER/ROBO/ROBO.MDL", GeneratedAssetPath: filepath.Join(dir, "unused.gkasset"), generatedAsset: content.NewAssetDef("unused")}}
+	reuseExistingHL1Assets(entries, library, libraryPath)
+	want := filepath.Join(dir, "content", "robo.gkasset")
+	if entries[0].GeneratedAssetPath != want || entries[0].generatedAsset != nil || entries[0].ConvertState != "reused_catalog_asset" {
+		t.Fatalf("reused entry = %+v", entries[0])
+	}
+}
+
+func TestReuseExistingHL1AssetRequiresMatchingSourceAndImportConfig(t *testing.T) {
+	dir := t.TempDir()
+	libraryPath := filepath.Join(dir, "game.gkassetlibrary")
+	config := GameAssetManifestEntry{Kind: "model", SHA256: "same", GeneratedVoxelResolutionCategory: "pickup", GeneratedVoxelResolution: 0.01, GeneratedVoxelizationProfile: &MDLVoxelizationProfile{ID: "surface"}}
+	library := content.NewAssetLibraryDef("game")
+	library.Entries = []content.AssetLibraryEntryDef{{
+		Key: "weapons.shared", AssetPath: "content/shared.gkasset",
+		Tags: []string{"weapon_world", "source_ref:overlay/models/w_test.mdl", "source_sha256:same", "import_config:" + hl1AssetImportConfig(config)},
+	}}
+	matching := config
+	matching.SourceRef = "models/w_test.mdl"
+	matching.GeneratedAssetPath = filepath.Join(dir, "unused.gkasset")
+	matching.generatedAsset = content.NewAssetDef("unused")
+	different := matching
+	different.GeneratedVoxelResolution = 0.02
+	different.GeneratedAssetPath = filepath.Join(dir, "different.gkasset")
+	different.generatedAsset = content.NewAssetDef("different")
+	entries := []GameAssetManifestEntry{matching, different}
+	reuseExistingHL1Assets(entries, library, libraryPath)
+	if entries[0].ConvertState != "reused_catalog_asset" || entries[0].GeneratedAssetPath != filepath.Join(dir, "content", "shared.gkasset") {
+		t.Fatalf("matching entry = %+v", entries[0])
+	}
+	if entries[1].ConvertState == "reused_catalog_asset" || entries[1].GeneratedAssetPath != different.GeneratedAssetPath {
+		t.Fatalf("different-config entry = %+v", entries[1])
+	}
+}
+
+func TestUncatalogedGeneratedAssetsReceiveCentralLibraryKeys(t *testing.T) {
+	entry := GameAssetManifestEntry{Kind: "model", SourceRef: "models/barney.mdl", GeneratedAssetPath: "barney.gkasset"}
+	if key := hl1GenericAssetKey(entry); key != "models.imported.models_barney" {
+		t.Fatalf("key = %q", key)
+	}
+}
+
+func TestAssetLibraryKeepsCollidingPlayerSources(t *testing.T) {
+	dir := t.TempDir()
+	entries := []GameAssetManifestEntry{
+		{Kind: "model", CatalogKind: "player", SourceRef: "gearbox/models/player/zombie/zombie.mdl", SourcePath: filepath.Join(dir, "gearbox", "models", "player", "zombie", "zombie.mdl"), CatalogID: "zombie_b0_s0", BodygroupModels: []int{0}, GeneratedAssetPath: filepath.Join(dir, "gearbox-zombie.gkasset")},
+		{Kind: "model", CatalogKind: "player", SourceRef: "valve/models/player/zombie/zombie.mdl", SourcePath: filepath.Join(dir, "valve", "models", "player", "zombie", "zombie.mdl"), CatalogID: "zombie_b0_s0", BodygroupModels: []int{0}, GeneratedAssetPath: filepath.Join(dir, "valve-zombie.gkasset")},
+	}
+	library := buildHL1AssetLibrary(entries, filepath.Join(dir, "game.gkassetlibrary"))
+	if len(library.Entries) != 2 {
+		t.Fatalf("entries = %+v", library.Entries)
+	}
+	if library.Entries[0].Key != "characters.zombie.b0.s0" || library.Entries[0].AssetPath != "valve-zombie.gkasset" {
+		t.Fatalf("canonical entry = %+v", library.Entries[0])
+	}
+	if !strings.Contains(library.Entries[1].Key, ".source.gearbox_models_player_zombie_zombie") {
+		t.Fatalf("disambiguated entry = %+v", library.Entries[1])
 	}
 }
 

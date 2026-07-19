@@ -35,6 +35,8 @@ func main() {
 	flag.StringVar(&opts.MapName, "map", "", "HL1 map name, for example c1a0")
 	flag.StringVar(&opts.BSPPath, "bsp", "", "explicit BSP path; overrides -game-dir/-map lookup")
 	flag.StringVar(&opts.OutputRoot, "out", "../actiongame/assets/levels", "generated content output root")
+	flag.StringVar(&opts.AssetOutputRoot, "asset-out", "", "central generated asset root; defaults to the legacy layout under -out")
+	flag.StringVar(&opts.AssetLibraryPath, "asset-library", "", "central .gkassetlibrary path; defaults to the legacy per-map catalog")
 	flag.IntVar(&opts.ChunkSize, "chunk-size", hl1.DefaultImportedWorldChunkSize, "imported-world chunk size")
 	opts.ChunkPayloadKind = hl1.DefaultChunkPayloadKind
 	flag.StringVar(&opts.ChunkPayloadKind, "chunk-payload", hl1.DefaultChunkPayloadKind, "imported-world chunk payload: sparse_json_v1, dense_rle_binary_v1, or dense_rle_material_binary_v1")
