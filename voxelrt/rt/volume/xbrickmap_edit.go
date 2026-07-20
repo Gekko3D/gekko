@@ -43,6 +43,15 @@ func (x *XBrickMap) markVoxelNormalHaloDirty(gx, gy, gz int) {
 }
 
 func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
+	found, current := x.GetVoxel(gx, gy, gz)
+	if !found {
+		current = 0
+	}
+	if current == val {
+		return
+	}
+	x.Revision++
+
 	// GPU-first mode: queue edit on GPU instead of CPU update
 	if x.GPUEditMode && x.gpuManager != nil {
 		type EditQueuer interface {
@@ -75,6 +84,10 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 
 	sKey := [3]int{sx, sy, sz}
 	bKey := [6]int{sx, sy, sz, bx, by, bz}
+	if x.SectorRevisions == nil {
+		x.SectorRevisions = make(map[[3]int]uint64)
+	}
+	x.SectorRevisions[sKey] = x.Revision
 
 	if val == 0 {
 		if sector, ok := x.Sectors[sKey]; ok {
@@ -87,7 +100,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 				brick.SetVoxel(vx, vy, vz, 0)
 				brick.RefreshMaterialFlags()
 				if !x.GPUEditMode {
-					x.DirtySectors[sKey] = true
 					x.DirtyBricks[bKey] = true
 					x.markVoxelNormalHaloDirty(gx, gy, gz)
 				}
@@ -101,7 +113,11 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 					}
 				}
 
+				brickRemoved := brick.IsEmpty()
 				sector.RemoveBrickIfEmpty(bx, by, bz)
+				if brickRemoved && !x.GPUEditMode {
+					x.DirtySectors[sKey] = true
+				}
 				if sector.IsEmpty() {
 					delete(x.Sectors, sKey)
 					x.StructureDirty = true
@@ -136,7 +152,9 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		brick.SetVoxel(vx, vy, vz, val)
 		brick.RefreshMaterialFlags()
 		if !x.GPUEditMode {
-			x.DirtySectors[sKey] = true
+			if isNew {
+				x.DirtySectors[sKey] = true
+			}
 			x.DirtyBricks[bKey] = true
 			x.markVoxelNormalHaloDirty(gx, gy, gz)
 		}
@@ -216,8 +234,49 @@ func (x *XBrickMap) Copy() *XBrickMap {
 	newMap.CachedMin = x.CachedMin
 	newMap.CachedMax = x.CachedMax
 	newMap.AABBDirty = x.AABBDirty
+	newMap.Revision = x.Revision
+	for key, revision := range x.SectorRevisions {
+		newMap.SectorRevisions[key] = revision
+	}
 
 	return newMap
+}
+
+// CopyChangedSectors creates an immutable derivative of a previous copy by
+// replacing only sectors changed after sinceRevision. Unchanged sectors remain
+// safely shared between immutable copies; none are shared with the mutable map.
+func (x *XBrickMap) CopyChangedSectors(previous *XBrickMap, sinceRevision uint64) *XBrickMap {
+	if x == nil || previous == nil {
+		if x == nil {
+			return nil
+		}
+		copy := x.Copy()
+		copy.ClearDirty()
+		return copy
+	}
+	result := NewXBrickMap()
+	for key, sector := range previous.Sectors {
+		result.Sectors[key] = sector
+	}
+	for key, revision := range x.SectorRevisions {
+		if revision <= sinceRevision {
+			continue
+		}
+		if sector := x.Sectors[key]; sector != nil {
+			result.Sectors[key] = sector.Copy()
+		} else {
+			delete(result.Sectors, key)
+		}
+	}
+	result.CachedMin = x.CachedMin
+	result.CachedMax = x.CachedMax
+	result.AABBDirty = x.AABBDirty
+	result.Revision = x.Revision
+	for key, revision := range x.SectorRevisions {
+		result.SectorRevisions[key] = revision
+	}
+	result.ClearDirty()
+	return result
 }
 
 func (x *XBrickMap) ComputeAABB() (mgl32.Vec3, mgl32.Vec3) {

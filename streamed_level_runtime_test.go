@@ -762,7 +762,8 @@ func TestStartStreamedRuntimeCanAutoSpawnGroundedPlayerFromMarker(t *testing.T) 
 		Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
 		ChunkSize:          16,
 		VoxelResolution:    1,
-		NonEmptyVoxelCount: 0,
+		Voxels:             []content.ImportedWorldVoxelDef{{X: 5, Y: 0, Z: 0, Value: 1}},
+		NonEmptyVoxelCount: 1,
 	}); err != nil {
 		t.Fatalf("SaveImportedWorldChunk failed: %v", err)
 	}
@@ -775,7 +776,7 @@ func TestStartStreamedRuntimeCanAutoSpawnGroundedPlayerFromMarker(t *testing.T) 
 		Entries: []content.ImportedWorldChunkEntryDef{{
 			Coord:              content.TerrainChunkCoordDef{X: 0, Y: 0, Z: 0},
 			ChunkPath:          content.AuthorDocumentPath(chunkPath, worldPath),
-			NonEmptyVoxelCount: 0,
+			NonEmptyVoxelCount: 1,
 		}},
 	}); err != nil {
 		t.Fatalf("SaveImportedWorld failed: %v", err)
@@ -822,6 +823,18 @@ func TestStartStreamedRuntimeCanAutoSpawnGroundedPlayerFromMarker(t *testing.T) 
 	}
 	if _, ok := state.LoadedChunks[ChunkCoord{X: 0, Y: 0, Z: 0}]; !ok {
 		t.Fatalf("expected loaded chunk at player spawn coord, got %+v", state.LoadedChunks)
+	}
+	if _, ok := state.DestructionChunks[ChunkCoord{X: 0, Y: 0, Z: 0}]; !ok {
+		t.Fatal("expected synchronously loaded player chunk to be destruction-resident")
+	}
+	loaded := state.LoadedChunks[ChunkCoord{X: 0, Y: 0, Z: 0}]
+	if len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected one imported-world entity in player chunk, got %+v", loaded.ImportedWorldEntities)
+	}
+	for entity := range loaded.ImportedWorldEntities {
+		if !hasComponentOfType[StreamedDestructionResidentComponent](cmd, entity) {
+			t.Fatal("expected synchronously loaded player chunk entity to accept destruction")
+		}
 	}
 	playerCount := 0
 	MakeQuery2[CameraComponent, GroundedPlayerControllerComponent](cmd).Map(func(_ EntityId, cam *CameraComponent, ctrl *GroundedPlayerControllerComponent) bool {

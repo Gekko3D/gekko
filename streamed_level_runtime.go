@@ -1948,6 +1948,10 @@ func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, st
 		state.CollisionChunks = make(map[ChunkCoord]struct{})
 	}
 	state.CollisionChunks[coord] = struct{}{}
+	if state.DestructionChunks == nil {
+		state.DestructionChunks = make(map[ChunkCoord]struct{})
+	}
+	state.DestructionChunks[coord] = struct{}{}
 	if _, ok := state.LoadedChunks[coord]; ok {
 		return nil
 	}

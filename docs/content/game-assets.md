@@ -181,6 +181,13 @@ The main runtime record types are:
 - `MeshAsset`
 - `SamplerAsset`
 
+`VoxelPaletteAsset.SurfaceMaterials` preserves optional source-neutral `kind`
+and `tags` by palette value. `SurfaceMaterialForRaycastHit(...)` resolves those
+facts from the hit entity and palette value for imported worlds, authored
+voxel shapes, and authored material overrides. Missing semantic metadata
+returns `ok == false`; runtime consumers must use a safe default rather than
+guessing from asset paths or source names.
+
 These are not authored documents. They are created at runtime from authored content, imported voxel data, or procedural generation helpers.
 
 Examples:

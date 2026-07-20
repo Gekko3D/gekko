@@ -38,6 +38,7 @@ type VoxelFileAsset = rootassets.VoxelFileAsset
 type VoxelGeometryAsset = rootassets.VoxelGeometryAsset
 type VoxelModelAsset = rootassets.VoxelModelAsset
 type VoxelPaletteAsset = rootassets.VoxelPaletteAsset
+type VoxelSurfaceMaterial = rootassets.VoxelSurfaceMaterial
 type VoxelPaletteAnimation = rootassets.VoxelPaletteAnimation
 type VoxelPaletteAnimationFrame = rootassets.VoxelPaletteAnimationFrame
 type VoxelPaletteUVScroll = rootassets.VoxelPaletteUVScroll

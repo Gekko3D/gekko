@@ -149,6 +149,63 @@ func TestSetVoxelMarksNormalHaloBricksDirty(t *testing.T) {
 	}
 }
 
+func TestSetVoxelRevisionTracksContentChanges(t *testing.T) {
+	xbm := NewXBrickMap()
+	initial := xbm.Revision
+	xbm.SetVoxel(1, 2, 3, 4)
+	if xbm.Revision != initial+1 {
+		t.Fatalf("first content change revision = %d, want %d", xbm.Revision, initial+1)
+	}
+	xbm.SetVoxel(1, 2, 3, 4)
+	if xbm.Revision != initial+1 {
+		t.Fatalf("no-op write changed revision to %d", xbm.Revision)
+	}
+	copy := xbm.Copy()
+	if copy.Revision != xbm.Revision {
+		t.Fatalf("copy revision = %d, want %d", copy.Revision, xbm.Revision)
+	}
+}
+
+func TestSetVoxelOnlyMarksSectorDirtyWhenBrickTopologyChanges(t *testing.T) {
+	xbm := NewXBrickMap()
+	xbm.SetVoxel(0, 0, 0, 1)
+	xbm.SetVoxel(1, 0, 0, 1)
+	xbm.ClearDirty()
+
+	xbm.SetVoxel(0, 0, 0, 0)
+	if len(xbm.DirtySectors) != 0 || len(xbm.DirtyBricks) == 0 {
+		t.Fatalf("sub-brick edit dirtied sectors=%d bricks=%d", len(xbm.DirtySectors), len(xbm.DirtyBricks))
+	}
+	xbm.ClearDirty()
+
+	xbm.SetVoxel(1, 0, 0, 0)
+	if len(xbm.DirtySectors) != 1 {
+		t.Fatalf("brick removal dirtied %d sectors, want 1", len(xbm.DirtySectors))
+	}
+}
+
+func TestCopyChangedSectorsReusesOnlyImmutableUnchangedSectors(t *testing.T) {
+	source := NewXBrickMap()
+	source.SetVoxel(0, 0, 0, 1)
+	source.SetVoxel(SectorSize, 0, 0, 1)
+	previous := source.CopyChangedSectors(nil, 0)
+	previousRevision := source.Revision
+
+	source.SetVoxel(0, 0, 0, 0)
+	next := source.CopyChangedSectors(previous, previousRevision)
+	if next.Sectors[[3]int{1, 0, 0}] != previous.Sectors[[3]int{1, 0, 0}] {
+		t.Fatal("unchanged immutable sector was copied")
+	}
+	if next.Sectors[[3]int{0, 0, 0}] != nil {
+		t.Fatal("removed changed sector survived incremental copy")
+	}
+
+	source.SetVoxel(SectorSize, 0, 0, 2)
+	if _, value := next.GetVoxel(SectorSize, 0, 0); value != 1 {
+		t.Fatalf("immutable snapshot changed with mutable source: value=%d", value)
+	}
+}
+
 func TestNewXBrickMapAssignsUniqueIDsConcurrently(t *testing.T) {
 	const workers = 16
 	const perWorker = 256

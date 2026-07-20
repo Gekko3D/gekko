@@ -9,7 +9,7 @@ import (
 type ParticleEmitterComponent struct {
 	Enabled bool
 
-	MaxParticles int
+	MaxParticles int // Conservative per-emitter live cap; <=0 is unlimited.
 
 	SpawnRate        float32    // particles per second
 	LifetimeRange    [2]float32 // seconds (min,max)
@@ -29,6 +29,27 @@ type ParticleEmitterComponent struct {
 
 type particlePool struct {
 	spawnAcc float32
+	live     uint32
+	batches  []particleBatch
+	seen     bool
+}
+
+type particleBatch struct {
+	count     uint32
+	remaining float32
+}
+
+func (pool *particlePool) expire(dt float32) {
+	active := pool.batches[:0]
+	for _, batch := range pool.batches {
+		batch.remaining -= dt
+		if batch.remaining > 0 {
+			active = append(active, batch)
+			continue
+		}
+		pool.live -= batch.count
+	}
+	pool.batches = active
 }
 
 // particlesSync collects emitter data and generates spawn requests for the GPU.
@@ -46,13 +67,15 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app
 
 	emitterParams := make([]app_rt.ParticleEmitterInput, 0, 32)
 	spawnRequests := make([]uint32, 0, 128)
+	for _, pool := range state.particlePools {
+		pool.seen = false
+	}
 	var firstAtlas AssetId
 
 	MakeQuery2[TransformComponent, ParticleEmitterComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, em *ParticleEmitterComponent) bool {
 		if em == nil || !em.Enabled {
 			return true
 		}
-
 		if firstAtlas == (AssetId{}) && em.Texture != (AssetId{}) {
 			firstAtlas = em.Texture
 		}
@@ -71,6 +94,8 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app
 			es = &particlePool{}
 			state.particlePools[eid] = es
 		}
+		es.seen = true
+		es.expire(dt)
 
 		es.spawnAcc += em.SpawnRate * dt
 		spawnCount := uint32(es.spawnAcc)
@@ -79,6 +104,21 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app
 			// Cap spawn count to avoid GPU spikes per frame if needed
 			if spawnCount > 1024 {
 				spawnCount = 1024
+			}
+			if em.MaxParticles > 0 {
+				limit := uint32(em.MaxParticles)
+				if es.live >= limit {
+					spawnCount = 0
+				} else if remaining := limit - es.live; spawnCount > remaining {
+					spawnCount = remaining
+				}
+			}
+			if spawnCount > 0 {
+				maxLife := max(em.LifetimeRange[0], em.LifetimeRange[1])
+				if maxLife > 0 {
+					es.live += spawnCount
+					es.batches = append(es.batches, particleBatch{count: spawnCount, remaining: maxLife})
+				}
 			}
 
 			emitterIdx := uint32(len(emitterParams))
@@ -121,6 +161,11 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app
 
 		return true
 	})
+	for eid, pool := range state.particlePools {
+		if !pool.seen {
+			delete(state.particlePools, eid)
+		}
+	}
 
 	return spawnRequests, emitterParams, firstAtlas
 }

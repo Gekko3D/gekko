@@ -248,6 +248,10 @@ type XBrickMap struct {
 	Sectors      map[[3]int]*Sector
 	DirtySectors map[[3]int]bool
 	DirtyBricks  map[[6]int]bool
+	// Revision changes whenever voxel contents change. Non-render consumers
+	// observe this instead of consuming renderer dirty markers.
+	Revision        uint64
+	SectorRevisions map[[3]int]uint64
 
 	AABBDirty      bool
 	StructureDirty bool // True if bricks were added or removed
@@ -262,12 +266,13 @@ type XBrickMap struct {
 func NewXBrickMap() *XBrickMap {
 	id := atomic.AddUint32(&NextMapID, 1) - 1
 	return &XBrickMap{
-		ID:             id,
-		Sectors:        make(map[[3]int]*Sector),
-		DirtySectors:   make(map[[3]int]bool),
-		DirtyBricks:    make(map[[6]int]bool),
-		AABBDirty:      true,
-		StructureDirty: true, // Initial state needs build
+		ID:              id,
+		Sectors:         make(map[[3]int]*Sector),
+		DirtySectors:    make(map[[3]int]bool),
+		DirtyBricks:     make(map[[6]int]bool),
+		SectorRevisions: make(map[[3]int]uint64),
+		AABBDirty:       true,
+		StructureDirty:  true, // Initial state needs build
 	}
 }
 

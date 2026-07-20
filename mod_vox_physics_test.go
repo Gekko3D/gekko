@@ -117,6 +117,15 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	if len(pm2.Boxes) != 1 {
 		t.Errorf("Expected 1 box after carving one of two bricks, got %d", len(pm2.Boxes))
 	}
+	if !xbm.StructureDirty || len(xbm.DirtyBricks) == 0 {
+		t.Fatal("voxel physics consumed renderer dirty markers")
+	}
+	if pm2.Grid == nil || cache.Snapshots[eid] == nil || cache.Snapshots[eid].xbm == xbm {
+		t.Fatal("runtime collision grid should use an immutable derivative of the authoritative voxel map")
+	}
+	if found, _ := cache.Snapshots[eid].xbm.GetVoxel(8, 0, 0); found {
+		t.Fatal("incremental collision snapshot missed carved voxel")
+	}
 
 	// 6. Remove the LAST brick completely
 	xbm.SetVoxel(0, 0, 0, 0)
@@ -160,6 +169,8 @@ func TestVoxPhysicsPreCalcSystem_DynamicRebuild(t *testing.T) {
 	if len(pm2.Boxes) != 1 {
 		t.Fatalf("Expected 1 box for 3-voxel line, got %d", len(pm2.Boxes))
 	}
+	// Renderer owns these markers; simulate its upload before the next edit.
+	xbm.ClearDirty()
 
 	// Remove middle voxel (1,0,0)
 	// This should leave (0,0,0) and (2,0,0) -> 2 separate boxes

@@ -1426,14 +1426,7 @@ func authoredLevelBrushPalette(assets *AssetServer, level *content.LevelDef, bru
 	if !ok {
 		return AssetId{}, fmt.Errorf("missing material %s", brush.MaterialID)
 	}
-	return assets.CreatePBRPaletteWithTransparency(
-		material.BaseColor,
-		material.Roughness,
-		material.Metallic,
-		material.Emissive,
-		material.IOR,
-		material.Transparency,
-	), nil
+	return createAuthoredMaterialVoxelPalette(assets, material), nil
 }
 
 func authoredLevelBrushVoxelShapeGeometry(assets *AssetServer, brush content.LevelBrushDef) (AssetId, error) {
@@ -1480,6 +1473,7 @@ func authoredLevelBrushVoxelShapePalette(assets *AssetServer, level *content.Lev
 		}
 		asset.VoxPalette[entry.Value] = material.BaseColor
 		asset.Materials = append(asset.Materials, authoredMaterialToVoxMaterial(int(entry.Value), material))
+		asset.SurfaceMaterials = addVoxelSurfaceMaterial(asset.SurfaceMaterials, entry.Value, "", material.Tags)
 	}
 	return assets.CreateVoxelPaletteAsset(asset), nil
 }

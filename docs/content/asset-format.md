@@ -11,6 +11,7 @@ For the broader authored-asset model, asset sets, level references, and runtime 
   - `schema_version`
   - `name`
   - `tags`
+  - `materials`
   - `runtime`
   - `skeleton`
   - `animation_set_paths`
@@ -43,6 +44,15 @@ For the broader authored-asset model, asset sets, level references, and runtime 
   - the part's `transform.pivot` is used as the renderer pivot; if omitted, the pivot is the local voxel origin `[0, 0, 0]`
 - `procedural_primitive`
   - authored primitive with `primitive` and flat numeric `params`
+
+## Surface Material Semantics
+
+Material `tags` are the source-neutral gameplay metadata for authored voxel
+surfaces. Use `kind:<value>` for the optional normalized kind and
+`material:<value>` tags for response categories. Runtime lookups lowercase,
+trim, and deduplicate these values. A material without semantic tags remains
+valid but resolves as unknown for gameplay; source filenames are never used as
+a fallback.
 
 ## Runtime And Animation Contracts
 

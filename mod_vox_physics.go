@@ -166,23 +166,28 @@ const (
 )
 
 type voxelPhysicsBuildStamp struct {
-	Source voxelPhysicsSourceKind
-	Asset  AssetId
-	Scale  mgl32.Vec3
-	MapPtr *volume.XBrickMap
+	Source      voxelPhysicsSourceKind
+	Asset       AssetId
+	Scale       mgl32.Vec3
+	MapPtr      *volume.XBrickMap
+	MapRevision uint64
 }
 
-func currentVoxelPhysicsBuildStamp(tr *TransformComponent, geometry AssetId, runtimeMap *volume.XBrickMap) voxelPhysicsBuildStamp {
+func currentVoxelPhysicsBuildStamp(tr *TransformComponent, geometry AssetId, runtimeMap, geometryMap *volume.XBrickMap) voxelPhysicsBuildStamp {
 	stamp := voxelPhysicsBuildStamp{
 		Scale: tr.Scale,
 	}
 	if runtimeMap != nil {
 		stamp.Source = voxelPhysicsSourceRuntime
 		stamp.MapPtr = runtimeMap
+		stamp.MapRevision = runtimeMap.Revision
 		return stamp
 	}
 	stamp.Source = voxelPhysicsSourceGeometry
 	stamp.Asset = geometry
+	if geometryMap != nil {
+		stamp.MapRevision = geometryMap.Revision
+	}
 	return stamp
 }
 
@@ -475,14 +480,9 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 
 		// 2. Determine if we need to (re)build
 		found := pm != nil
-		stamp := currentVoxelPhysicsBuildStamp(tr, geometryID, runtimeMap)
+		stamp := currentVoxelPhysicsBuildStamp(tr, geometryID, runtimeMap, xbm)
 		previousStamp, hasStamp := cache.BuildStamps[eid]
 		needsBuild := !found || !hasStamp || previousStamp != stamp
-
-		// Structural dirty check
-		if xbm != nil && (xbm.StructureDirty || len(xbm.DirtyBricks) > 0 || len(xbm.DirtySectors) > 0) {
-			needsBuild = true
-		}
 		if found && pm.Grid == nil {
 			if xbm != nil {
 				needsBuild = true
@@ -500,7 +500,6 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 
 		if runtimeMap != nil && xbm != nil {
 			vMin, vMax := xbm.ComputeAABB()
-			xbm.ClearDirty()
 
 			if vMin != vMax {
 				minW := vec3MulComponents(vMin, voxelScale)
@@ -514,8 +513,14 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 				}
 			}
 
+			var collisionMap *volume.XBrickMap
+			if previous := cache.Snapshots[eid]; previous != nil && hasStamp && previousStamp.MapPtr == xbm {
+				collisionMap = xbm.CopyChangedSectors(previous.xbm, previousStamp.MapRevision)
+			} else {
+				collisionMap = xbm.CopyChangedSectors(nil, 0)
+			}
 			grid = &voxelGridSnapshot{
-				xbm:        xbm.Copy(),
+				xbm:        collisionMap,
 				vSize:      voxelScale.X(),
 				voxelScale: voxelScale,
 				cachedMin:  xbm.GetAABBMin(),
@@ -533,11 +538,8 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			}
 
 			assetGrid := cache.AssetGrids[geometryID]
-			if assetGrid == nil || (geometryAsset.XBrickMap != nil && (geometryAsset.XBrickMap.StructureDirty || len(geometryAsset.XBrickMap.DirtyBricks) > 0 || len(geometryAsset.XBrickMap.DirtySectors) > 0)) {
+			if assetGrid == nil || !hasStamp || previousStamp != stamp {
 				gMin, gMax := geometryAsset.LocalMin, geometryAsset.LocalMax
-				if geometryAsset.XBrickMap != nil {
-					geometryAsset.XBrickMap.ClearDirty()
-				}
 				assetGrid = &voxelGridAssetCache{
 					xbm:       geometryAsset.XBrickMap,
 					cachedMin: gMin,

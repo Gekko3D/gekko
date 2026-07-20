@@ -57,6 +57,7 @@ func authoredVoxelShapePalette(assets *AssetServer, def *content.AssetDef, part 
 		}
 		asset.VoxPalette[entry.Value] = material.BaseColor
 		asset.Materials = append(asset.Materials, authoredMaterialToVoxMaterial(int(entry.Value), material))
+		asset.SurfaceMaterials = addVoxelSurfaceMaterial(asset.SurfaceMaterials, entry.Value, "", material.Tags)
 	}
 	asset.Animations = authoredAssetVoxelPaletteAnimations(def.MaterialAnimations)
 	return assets.CreateVoxelPaletteAsset(asset), nil

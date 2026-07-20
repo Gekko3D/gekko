@@ -24,6 +24,7 @@ type VoxelModelAsset = VoxelGeometryAsset
 type VoxelPaletteAsset struct {
 	VoxPalette             VoxPalette
 	Materials              []VoxMaterial
+	SurfaceMaterials       map[uint8]VoxelSurfaceMaterial
 	Animations             []VoxelPaletteAnimation
 	MaterialFrameOverrides map[uint8]VoxelPaletteMaterialFrameOverride
 	IsPBR                  bool
@@ -33,6 +34,11 @@ type VoxelPaletteAsset struct {
 	IOR                    float32
 	Transparency           float32
 	SourcePath             string
+}
+
+type VoxelSurfaceMaterial struct {
+	Kind string
+	Tags []string
 }
 
 type VoxelPaletteAnimation struct {

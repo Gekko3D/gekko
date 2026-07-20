@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"reflect"
 	"testing"
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
@@ -105,6 +106,41 @@ func TestDestructionSystem_Split(t *testing.T) {
 	}
 }
 
+func TestDestructionSystemCarveOnlyPreservesDisconnectedGeometry(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	state := newDestructionTestVoxelRtState()
+	server := newDestructionTestAssetServer()
+	entity, xbm := addImportedDestructionTestEntity(app, cmd, server, state, true)
+	xbm.SetVoxel(10, 0, 0, 1)
+	vmc, _ := cmd.GetComponent(entity, reflect.TypeOf(VoxelModelComponent{})).(*VoxelModelComponent)
+	registered, ok := ResolveVoxelGeometryMap(server, vmc)
+	if !ok {
+		t.Fatal("test setup expected registered voxel geometry")
+	}
+	registered.SetVoxel(10, 0, 0, 1)
+
+	if edited := processDestructionEvent(state, DestructionEvent{
+		Entity: entity, Center: mgl32.Vec3{5, 0, 0}, Radius: 0.1, CarveOnly: true,
+	}, cmd, server); !edited {
+		t.Fatal("expected carve-only event to edit resident geometry")
+	}
+	app.FlushCommands()
+
+	obj := state.GetVoxelObject(entity)
+	if obj == nil || obj.XBrickMap == nil || obj.XBrickMap.GetVoxelCount() != 2 {
+		t.Fatalf("carve-only event split disconnected geometry: %+v", obj)
+	}
+	if len(cmd.GetAllComponents(entity)) == 0 {
+		t.Fatal("carve-only event removed source entity")
+	}
+	debris := 0
+	MakeQuery1[DebrisComponent](cmd).Map(func(EntityId, *DebrisComponent) bool { debris++; return true })
+	if debris != 0 {
+		t.Fatalf("carve-only event spawned %d debris entities", debris)
+	}
+}
+
 func TestDestructionSystemSkipsImportedWorldChunkOutsideDestructionResidency(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
@@ -146,13 +182,14 @@ func TestDestructionSystemAllowsImportedWorldChunkInsideDestructionResidency(t *
 	}
 }
 
-func TestDestructionSystemMarksResidentImportedWorldChunkRuntimeEdited(t *testing.T) {
+func TestDestructionSystemBatchesResidentImportedWorldChunkEditsInPlace(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
 	state := newDestructionTestVoxelRtState()
 	server := newDestructionTestAssetServer()
 	entity, xbm := addImportedDestructionTestEntity(app, cmd, server, state, true)
-	xbm.SetVoxel(2, 0, 0, 1)
+	xbm.SetVoxel(4, 0, 0, 1)
+	xbm.SetVoxel(8, 0, 0, 1)
 	state.instanceMap[entity].XBrickMap = xbm
 	if !destructionEventAllowedForEntity(cmd, entity) {
 		t.Fatal("test setup expected resident imported-world entity to allow destruction")
@@ -161,27 +198,64 @@ func TestDestructionSystemMarksResidentImportedWorldChunkRuntimeEdited(t *testin
 		t.Fatal("test setup expected live voxel object")
 	}
 
-	if edited := processDestructionEvent(state, DestructionEvent{
-		Entity: entity,
-		Center: mgl32.Vec3{0, 0, 0},
-		Radius: 0.75,
-	}, cmd, server); !edited {
-		t.Fatal("expected destruction event to edit resident imported-world geometry")
-	}
+	liveMap := state.GetVoxelObject(entity).XBrickMap
+	queue := &DestructionQueue{Events: []DestructionEvent{
+		{Entity: entity, Center: mgl32.Vec3{0, 0, 0}, Radius: 1, CarveOnly: true},
+		{Entity: entity, Center: mgl32.Vec3{4, 0, 0}, Radius: 1, CarveOnly: true},
+	}}
+	destructionSystem(state, queue, cmd, server)
 
 	if !state.runtimeEditedVoxelEntity(entity) {
 		t.Fatal("expected destruction edit to mark imported-world entity as runtime-edited for nav rebuild")
+	}
+	if state.nextRuntimeEditedVoxelRevision != 1 {
+		t.Fatalf("shotgun-style edit batch produced %d revisions, want 1", state.nextRuntimeEditedVoxelRevision)
 	}
 	app.FlushCommands()
 	if !VoxelEntityPersistenceDirty(cmd, entity) {
 		t.Fatal("expected destruction edit to mark entity persistence dirty")
 	}
 	obj := state.GetVoxelObject(entity)
-	if obj == nil || obj.XBrickMap == nil || obj.XBrickMap.GetVoxelCount() != 1 {
+	if obj == nil || obj.XBrickMap != liveMap || obj.XBrickMap.GetVoxelCount() != 1 {
 		t.Fatalf("expected live runtime voxel object to point at edited geometry, got %+v", obj)
 	}
 	if len(cmd.GetAllComponents(entity)) == 0 {
 		t.Fatal("expected partially destroyed entity to remain for runtime nav snapshot")
+	}
+}
+
+func TestDestructionSystemEditsRendererScopedImportedGeometry(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	server := newVoxelRtAssetServerTest(t)
+	state := newVoxelRtStateTest()
+	xbm := volume.NewXBrickMap()
+	xbm.SetVoxel(0, 0, 0, 1)
+	xbm.SetVoxel(4, 0, 0, 1)
+	geometry := server.RegisterSharedVoxelGeometry(xbm, "")
+	entity := cmd.AddEntity(
+		&TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&VoxelModelComponent{OverrideGeometry: geometry, VoxelResolution: 1, PivotMode: PivotModeCorner, IsTerrainChunk: true, TerrainGroupID: 1, TerrainChunkSize: 16},
+		&AuthoredImportedWorldChunkRefComponent{WorldID: "world"},
+		&StreamedDestructionResidentComponent{WorldID: "world"},
+	)
+	app.FlushCommands()
+	voxelRtSystem(nil, state, server, &Time{}, cmd, nil)
+
+	liveMap := state.GetVoxelObject(entity).XBrickMap
+	if liveMap == xbm {
+		t.Fatal("test setup expected renderer-scoped geometry")
+	}
+	if !processDestructionEvent(state, DestructionEvent{
+		Entity: entity, Center: mgl32.Vec3{0.5, 0.5, 0.5}, Radius: 0.9, CarveOnly: true,
+	}, cmd, server) {
+		t.Fatalf("resident imported-world edit was rejected: entity=%d allowed=%t", entity, destructionEventAllowedForEntity(cmd, entity))
+	}
+	voxelRtSystem(nil, state, server, &Time{}, cmd, nil)
+
+	obj := state.GetVoxelObject(entity)
+	if obj.XBrickMap != liveMap || obj.XBrickMap.GetVoxelCount() != 1 {
+		t.Fatalf("renderer sync lost imported-world edit: map_changed=%t voxels=%d", obj.XBrickMap != liveMap, obj.XBrickMap.GetVoxelCount())
 	}
 }
 

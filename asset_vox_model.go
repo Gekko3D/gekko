@@ -83,6 +83,7 @@ func voxelPaletteAssetCacheKey(asset VoxelPaletteAsset) string {
 	payload, _ := json.Marshal(struct {
 		Palette                VoxPalette
 		Materials              []VoxMaterial
+		SurfaceMaterials       map[uint8]VoxelSurfaceMaterial
 		Animations             []VoxelPaletteAnimation
 		MaterialFrameOverrides map[uint8]VoxelPaletteMaterialFrameOverride
 		IsPBR                  bool
@@ -95,6 +96,7 @@ func voxelPaletteAssetCacheKey(asset VoxelPaletteAsset) string {
 	}{
 		Palette:                asset.VoxPalette,
 		Materials:              asset.Materials,
+		SurfaceMaterials:       asset.SurfaceMaterials,
 		Animations:             asset.Animations,
 		MaterialFrameOverrides: asset.MaterialFrameOverrides,
 		IsPBR:                  asset.IsPBR,

@@ -109,6 +109,7 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
   - none
 - Owns:
   - runtime asset registries for voxel models, palettes, textures, materials, meshes, samplers, and VOX files
+  - palette-owned source-neutral surface metadata used by raycast material lookup
 
 ### Authored Asset and Level Spawn Paths
 
@@ -189,6 +190,8 @@ For their data model, see:
   - voxel-aware physics preparation and collision helpers
 - Important:
   - remains the authoritative cached voxel-physics preparation path
+  - runtime collision grids rebuild immutable copy-on-write sector snapshots
+    from map revisions; physics must not clear renderer dirty-brick markers
   - the physics bridge can bootstrap fallback voxel models/pivots on first tick, but that is a robustness path, not a replacement for the cache
 
 ### `DestructionModule`
@@ -200,6 +203,8 @@ For their data model, see:
   - `destructionSystem`
 - Owns:
   - queued voxel destruction operations
+  - batches same-entity edits so pellet weapons produce one runtime revision
+  - carves streamed imported chunks without whole-chunk connectivity splitting
 - Depends heavily on:
   - `*VoxelRtState`
   - `*AssetServer`

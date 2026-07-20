@@ -351,7 +351,10 @@ func modelAndPaletteFromSource(assets *AssetServer, def *content.AssetDef, part 
 			return AssetId{}, AssetId{}, fmt.Errorf("model index %d out of range for %s", part.Source.ModelIndex, part.Source.Path)
 		}
 		model := assets.CreateVoxelModelFromSource(voxFile.Models[part.Source.ModelIndex], part.ModelScale, sourcePath)
-		palette := assets.CreateVoxelPaletteFromSource(voxFile.Palette, voxFile.VoxMaterials, sourcePath)
+		palette, err := authoredVoxFilePalette(assets, def, part, voxFile.Palette, voxFile.VoxMaterials, voxFile.Models[part.Source.ModelIndex], sourcePath)
+		if err != nil {
+			return AssetId{}, AssetId{}, err
+		}
 		return model, palette, nil
 	case content.AssetSourceKindProceduralPrimitive:
 		model := AssetId{}
@@ -402,7 +405,10 @@ func modelAndPaletteFromSource(assets *AssetServer, def *content.AssetDef, part 
 			return AssetId{}, AssetId{}, fmt.Errorf("%s (%s): resolved model index %d out of range", part.Name, part.Source.Path, resolved.ModelIndex)
 		}
 		model := assets.CreateVoxelModelFromSource(voxFile.Models[resolved.ModelIndex], part.ModelScale, sourcePath)
-		palette := assets.CreateVoxelPaletteFromSource(voxFile.Palette, voxFile.VoxMaterials, sourcePath)
+		palette, err := authoredVoxFilePalette(assets, def, part, voxFile.Palette, voxFile.VoxMaterials, voxFile.Models[resolved.ModelIndex], sourcePath)
+		if err != nil {
+			return AssetId{}, AssetId{}, err
+		}
 		return model, palette, nil
 	default:
 		return AssetId{}, AssetId{}, fmt.Errorf("unsupported asset source kind %q", part.Source.Kind)
@@ -420,14 +426,23 @@ func authoredProceduralPalette(assets *AssetServer, def *content.AssetDef, part 
 	if !ok {
 		return AssetId{}, fmt.Errorf("missing material %s for part %s", part.Source.MaterialID, part.ID)
 	}
-	return assets.CreatePBRPaletteWithTransparency(
-		material.BaseColor,
-		material.Roughness,
-		material.Metallic,
-		material.Emissive,
-		material.IOR,
-		material.Transparency,
-	), nil
+	return createAuthoredMaterialVoxelPalette(assets, material), nil
+}
+
+func authoredVoxFilePalette(assets *AssetServer, def *content.AssetDef, part content.AssetPartDef, palette VoxPalette, materials []VoxMaterial, model VoxModel, sourcePath string) (AssetId, error) {
+	if part.Source.MaterialID == "" {
+		return assets.CreateVoxelPaletteFromSource(palette, materials, sourcePath), nil
+	}
+	material, ok := content.FindAssetMaterialByID(def, part.Source.MaterialID)
+	if !ok {
+		return AssetId{}, fmt.Errorf("missing material %s for part %s", part.Source.MaterialID, part.ID)
+	}
+	return assets.CreateVoxelPaletteAsset(VoxelPaletteAsset{
+		VoxPalette:       palette,
+		Materials:        materials,
+		SurfaceMaterials: authoredVoxelSurfaceMaterialsForModel(model, material),
+		SourcePath:       sourcePath,
+	}), nil
 }
 
 func LocalTransformToWorld(parentWorld TransformComponent, parentIsVoxel bool, parentVoxelResolution float32, local LocalTransformComponent) TransformComponent {

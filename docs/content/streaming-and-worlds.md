@@ -127,6 +127,8 @@ The streamed runtime:
 - loads chunk files on demand
 - spawns chunk entities with optional collision
 - reuses palette data from the imported-world manifest
+- carries manifest material kind/tags into the runtime voxel palette, allowing
+  the same raycast surface-material query used by ordinary authored assets
 
 Spawn helpers live in:
 
@@ -498,6 +500,9 @@ Implementation note, 2026-06-08:
 - Full imported-world chunks outside destruction residency ignore destruction
   events. Full imported-world chunks inside destruction residency receive an
   explicit residency marker and use the existing voxel destruction path.
+- Weapon carves edit the renderer-active private chunk map in place. Collision
+  observes the map revision without consuming GPU dirty markers, and sub-brick
+  edits upload only touched bricks/normal halos rather than whole sectors.
 - Streaming logs include `collision_loadable`, `proxy_committed_frame`,
   `destruction_loadable`, `proxy_committed_frame`, `full_committed_frame`,
   `collision_committed_frame`, and matching total counters so visual, proxy,

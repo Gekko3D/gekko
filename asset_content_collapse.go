@@ -315,7 +315,8 @@ func paletteAssetsEquivalent(left, right VoxelPaletteAsset) bool {
 		left.IOR == right.IOR &&
 		left.Transparency == right.Transparency &&
 		left.VoxPalette == right.VoxPalette &&
-		reflect.DeepEqual(left.Materials, right.Materials)
+		reflect.DeepEqual(left.Materials, right.Materials) &&
+		reflect.DeepEqual(left.SurfaceMaterials, right.SurfaceMaterials)
 }
 
 func collapseGeometryCacheKey(def *content.AssetDef, documentPath string, voxelResolution float32) (string, error) {

@@ -3,9 +3,10 @@ package gekko
 import "github.com/go-gl/mathgl/mgl32"
 
 type DestructionEvent struct {
-	Entity EntityId
-	Center mgl32.Vec3 // World-space center of destruction
-	Radius float32    // Destruction radius in world units
+	Entity    EntityId
+	Center    mgl32.Vec3 // World-space center of destruction
+	Radius    float32    // Destruction radius in world units
+	CarveOnly bool       // Edit geometry without scanning/splitting disconnected components.
 }
 
 type DestructionQueue struct {
@@ -29,8 +30,16 @@ func destructionSystem(state *VoxelRtState, queue *DestructionQueue, cmd *Comman
 		return
 	}
 
+	byEntity := make(map[EntityId][]DestructionEvent, len(queue.Events))
+	order := make([]EntityId, 0, len(queue.Events))
 	for _, event := range queue.Events {
-		processDestructionEvent(state, event, cmd, server)
+		if _, exists := byEntity[event.Entity]; !exists {
+			order = append(order, event.Entity)
+		}
+		byEntity[event.Entity] = append(byEntity[event.Entity], event)
+	}
+	for _, entity := range order {
+		processDestructionEvents(state, byEntity[entity], cmd, server)
 	}
 
 	// Clear the queue
@@ -38,31 +47,52 @@ func destructionSystem(state *VoxelRtState, queue *DestructionQueue, cmd *Comman
 }
 
 func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *Commands, server *AssetServer) bool {
-	if !destructionEventAllowedForEntity(cmd, event.Entity) {
+	return processDestructionEvents(state, []DestructionEvent{event}, cmd, server)
+}
+
+func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cmd *Commands, server *AssetServer) bool {
+	if len(events) == 0 || !destructionEventAllowedForEntity(cmd, events[0].Entity) {
 		return false
 	}
-	voxObj := state.GetVoxelObject(event.Entity)
+	entity := events[0].Entity
+	voxObj := state.GetVoxelObject(entity)
 	if voxObj == nil || voxObj.XBrickMap == nil {
 		return false
 	}
 
-	// 1. Carve voxels on a private geometry clone.
-	_, _, editableMap, err := EnsureEditableVoxelGeometry(cmd, server, event.Entity)
-	if err != nil || editableMap == nil {
-		return false
+	// Streamed destruction-resident chunks already own a private live map. Keep
+	// its renderer allocation and upload only the edited bricks.
+	editableMap := voxObj.XBrickMap
+	if _, imported := AuthoredImportedWorldChunkRefForEntity(cmd, entity); !imported {
+		_, _, clonedMap, err := EnsureEditableVoxelGeometry(cmd, server, entity)
+		if err != nil || clonedMap == nil {
+			return false
+		}
+		editableMap = clonedMap
+		voxObj.XBrickMap = editableMap
 	}
-	voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
-	voxObj.XBrickMap = editableMap
-	MarkVoxelEntityPersistenceDirty(cmd, event.Entity)
-	state.markRuntimeEditedVoxelEntity(event.Entity)
-	notifyImportedWorldChunkDirty(cmd, event.Entity, editableMap)
+	carveOnly := true
+	for _, event := range events {
+		voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
+		carveOnly = carveOnly && event.CarveOnly
+	}
+	MarkVoxelEntityPersistenceDirty(cmd, entity)
+	state.markRuntimeEditedVoxelEntity(entity)
+	if carveOnly {
+		if editableMap.GetVoxelCount() == 0 {
+			notifyImportedWorldChunkDirty(cmd, entity, editableMap)
+			cmd.RemoveEntity(entity)
+		}
+		return true
+	}
 
 	// 2. Detect disconnected components
 	components := editableMap.SplitDisconnectedComponents()
 	if len(components) <= 1 {
 		// If the entity is empty now, remove it
 		if editableMap.GetVoxelCount() == 0 {
-			cmd.RemoveEntity(event.Entity)
+			notifyImportedWorldChunkDirty(cmd, entity, editableMap)
+			cmd.RemoveEntity(entity)
 		}
 		return true
 	}
@@ -87,7 +117,7 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 	foundTransform := false
 	foundVMC := false
 
-	for _, c := range cmd.GetAllComponents(event.Entity) {
+	for _, c := range cmd.GetAllComponents(entity) {
 		switch t := c.(type) {
 		case *VoxelModelComponent:
 			originalVMC = *t
@@ -129,12 +159,12 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 
 	// Replace the entity's override geometry with the largest surviving component.
 	originalVMC.OverrideGeometry = server.RegisterSharedVoxelGeometry(newMap, "")
-	cmd.AddComponents(event.Entity, &originalVMC)
+	cmd.AddComponents(entity, &originalVMC)
 
 	// Update original entity's mass
 	if originalRB != nil {
 		originalRB.Mass = float32(components[largestIdx].VoxelCount) * 0.1
-		cmd.AddComponents(event.Entity, originalRB)
+		cmd.AddComponents(entity, originalRB)
 	}
 
 	friction := float32(0.5)
@@ -201,7 +231,7 @@ func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *C
 			},
 			&DebrisComponent{
 				Age:        0,
-				MaxAge:     15.0 + float32(event.Entity%50)/10.0, // 15-20s lifetime
+				MaxAge:     15.0 + float32(entity%50)/10.0, // 15-20s lifetime
 				VoxelCount: comp.VoxelCount,
 			},
 		)

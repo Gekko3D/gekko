@@ -505,6 +505,37 @@ func TestParticlesSyncMapsEmittersToRendererInput(t *testing.T) {
 	}
 }
 
+func TestParticlesSyncCapsEmitterAndReclaimsRemovedPool(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	entity := cmd.AddEntity(
+		&TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&ParticleEmitterComponent{Enabled: true, MaxParticles: 3, SpawnRate: 10, LifetimeRange: [2]float32{1, 1}},
+	)
+	app.FlushCommands()
+	state := newVoxelRtStateTest()
+
+	spawn, _, _ := particlesSync(state, &Time{Dt: 1}, cmd)
+	if len(spawn) != 3 {
+		t.Fatalf("first spawn count = %d, want capped 3", len(spawn))
+	}
+	spawn, _, _ = particlesSync(state, &Time{Dt: 0.5}, cmd)
+	if len(spawn) != 0 {
+		t.Fatalf("spawn count while cap is live = %d, want 0", len(spawn))
+	}
+	spawn, _, _ = particlesSync(state, &Time{Dt: 0.5}, cmd)
+	if len(spawn) != 3 {
+		t.Fatalf("spawn count after expiry = %d, want 3", len(spawn))
+	}
+
+	cmd.RemoveEntity(entity)
+	app.FlushCommands()
+	particlesSync(state, &Time{Dt: 0.1}, cmd)
+	if len(state.particlePools) != 0 {
+		t.Fatalf("removed emitter left %d particle pools", len(state.particlePools))
+	}
+}
+
 func TestVoxelRtSystemGatesWaterBridgeSyncByRegisteredFeature(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
