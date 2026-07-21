@@ -30,6 +30,24 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
 - Depends on:
   - `*WindowState` from a rendering/window module
 
+### `AudioModule`
+
+- File: `mod_audio.go`
+- Resources:
+  - `*AudioState`
+- Systems:
+  - queued one-shot playback in `PreRender`
+- Owns:
+  - cached PCM WAV decoding and sample-rate conversion
+  - camera-listener distance attenuation
+  - optional voxel line-of-sight attenuation
+- Important:
+  - install after `VoxelRtModule` when `Occlusion` is enabled
+  - the engine accepts source-neutral paths, positions, and gains; games own
+    cue selection, event timing, and material-to-sound policy
+  - playback failures disable only the affected clip or audio device; gameplay
+    and AI sensing must not depend on audible output
+
 ### `HierarchyModule`
 
 - File: `mod_hierarchy.go`
