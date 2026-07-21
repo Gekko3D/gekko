@@ -24,6 +24,9 @@ type AuthoredImportedWorldSpawnDef struct {
 	RetainRendererGeometry  bool
 	PreparedGeometry        *volume.XBrickMap
 	PreparedGeometryAsset   AssetId
+	BackingProvider         VoxelBackingProvider
+	BackingSourceHash       string
+	BackingRemoval          *content.VoxelBackingRemovalDef
 	Timing                  *AuthoredImportedWorldSpawnTiming
 }
 
@@ -94,7 +97,21 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 			def.Timing.VoxelCount = len(def.Chunk.Voxels)
 		}
 	}
+	backing := NewVoxelBackingComponent(
+		content.VoxelBackingOwnerImportedWorld,
+		def.WorldID,
+		def.BackingSourceHash,
+		[3]int{def.Chunk.Coord.X, def.Chunk.Coord.Y, def.Chunk.Coord.Z},
+		def.Chunk.ChunkSize,
+		def.BackingProvider,
+		def.BackingRemoval,
+	)
 	overrideGeometry := def.PreparedGeometryAsset
+	if backing != nil {
+		// Prepared geometry can be shared by untouched chunks. A backed chunk is
+		// private because materialization mutates it in place.
+		overrideGeometry = AssetId{}
+	}
 	if assets := assetServerFromApp(cmd.app); assets != nil {
 		if overrideGeometry == (AssetId{}) {
 			xbm := def.PreparedGeometry
@@ -104,6 +121,10 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 				if def.Timing != nil {
 					def.Timing.GeometryBuildDuration += time.Since(buildStart)
 				}
+			}
+			if backing != nil {
+				xbm = xbm.Copy()
+				backing.ApplyRemovals(xbm)
 			}
 			registerStart := time.Now()
 			overrideGeometry = assets.RegisterSharedVoxelGeometry(xbm, "")
@@ -180,6 +201,9 @@ func spawnAuthoredImportedWorldChunkEntity(cmd *Commands, parent EntityId, palet
 			WorldID:    def.WorldID,
 			ChunkCoord: [3]int{def.Chunk.Coord.X, def.Chunk.Coord.Y, def.Chunk.Coord.Z},
 		})
+	}
+	if backing != nil {
+		comps = append(comps, backing)
 	}
 	entityStart := time.Now()
 	entity := cmd.AddEntity(comps...)

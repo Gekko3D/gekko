@@ -14,6 +14,7 @@ type WorldDeltaDef struct {
 	PlacementDeletions          []PlacementDeletionDef          `json:"placement_deletions,omitempty"`
 	TerrainChunkOverrides       []TerrainChunkOverrideDef       `json:"terrain_chunk_overrides,omitempty"`
 	ImportedWorldChunkOverrides []ImportedWorldChunkOverrideDef `json:"imported_world_chunk_overrides,omitempty"`
+	VoxelBackingRemovals        []VoxelBackingRemovalDef        `json:"voxel_backing_removals,omitempty"`
 	NavigationSourceOverrides   []NavigationSourceOverrideDef   `json:"navigation_source_overrides,omitempty"`
 	NavigationGraphOverrides    []NavigationGraphOverrideDef    `json:"navigation_graph_overrides,omitempty"`
 	VoxelObjectOverrides        []VoxelObjectOverrideDef        `json:"voxel_object_overrides,omitempty"`

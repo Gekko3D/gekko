@@ -1628,6 +1628,90 @@ func TestStreamedRuntimePersistsDirtyImportedWorldChunkOverrideOnUnload(t *testi
 	}
 }
 
+func TestStreamedRuntimePersistsBackedChunkAsSparseRemovals(t *testing.T) {
+	root := t.TempDir()
+	deltaPath := filepath.Join(root, "levels", "backed.gkworlddelta")
+	_, cmd, state := newStreamedRuntimeHarness(t)
+	provider, err := NewPlaneTreeVoxelBacking(testPlaneTreeBackingDef())
+	if err != nil {
+		t.Fatalf("NewPlaneTreeVoxelBacking failed: %v", err)
+	}
+	state.Initialized = true
+	state.LevelID = "backed"
+	state.Level = content.NewLevelDef("backed")
+	state.Level.ChunkSize = 16
+	state.BaseWorldID = "world-a"
+	state.BaseWorldBacking = provider
+	state.BaseWorldBackingSourceHash = "source"
+	coord := ChunkCoord{}
+	state.DestructionChunks = map[ChunkCoord]struct{}{coord: {}}
+	state.WorldDeltaPath = deltaPath
+	state.WorldDataDir = content.DefaultWorldDeltaDataDir(deltaPath)
+	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "backed"}
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "backed"})
+	prepared := streamedPreparedChunk{
+		Coord: coord,
+		ImportedWorldChunk: &content.ImportedWorldChunkDef{
+			WorldID:         "world-a",
+			Coord:           content.TerrainChunkCoordDef{},
+			ChunkSize:       16,
+			VoxelResolution: 1,
+		},
+	}
+	_, err = commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, prepared)
+	if err != nil {
+		t.Fatalf("commitPreparedStreamedChunk failed: %v", err)
+	}
+	loaded := state.LoadedChunks[coord]
+	if loaded == nil || len(loaded.ImportedWorldEntities) != 1 {
+		t.Fatalf("expected backing-only imported chunk, got %+v", state.LoadedChunks)
+	}
+	for entity := range loaded.ImportedWorldEntities {
+		vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+		xbm, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+		if !ok {
+			t.Fatal("expected backed chunk geometry")
+		}
+		backing, ok := voxelBackingForEntity(cmd, entity)
+		if !ok {
+			t.Fatal("expected voxel backing component")
+		}
+		backing.MaterializeSphere(xbm, mgl32.Vec3{5, 2, 2}, 1)
+		volume.Sphere(xbm, mgl32.Vec3{5, 2, 2}, 1, 0)
+		MarkVoxelEntityPersistenceDirty(cmd, entity)
+	}
+	cmd.app.FlushCommands()
+
+	if err := unloadStreamedChunk(cmd, state, coord); err != nil {
+		t.Fatalf("unloadStreamedChunk failed: %v", err)
+	}
+	loadedDelta, err := content.LoadWorldDelta(deltaPath)
+	if err != nil {
+		t.Fatalf("LoadWorldDelta failed: %v", err)
+	}
+	if len(loadedDelta.ImportedWorldChunkOverrides) != 0 || len(loadedDelta.VoxelBackingRemovals) != 1 {
+		t.Fatalf("expected sparse backing removal only, got %+v", loadedDelta)
+	}
+
+	cmd.app.FlushCommands()
+	if _, err := commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, prepared); err != nil {
+		t.Fatalf("reload commitPreparedStreamedChunk failed: %v", err)
+	}
+	for entity := range state.LoadedChunks[coord].ImportedWorldEntities {
+		vmc := mustVoxelModelComponentForLevelTest(t, cmd, entity)
+		reloadedMap, ok := ResolveVoxelGeometryMap(assetServerFromApp(cmd.app), &vmc)
+		if !ok {
+			t.Fatal("expected reloaded backed chunk geometry")
+		}
+		if found, _ := reloadedMap.GetVoxel(5, 2, 2); found {
+			t.Fatal("persisted removal was restored as solid")
+		}
+		if _, value := reloadedMap.GetVoxel(7, 2, 2); value != 7 {
+			t.Fatalf("persisted backing brick was not reconstructed, got %d", value)
+		}
+	}
+}
+
 func TestStreamedRuntimePersistsRuntimeEditedImportedWorldChunkAfterDirtyFlagsClear(t *testing.T) {
 	root := t.TempDir()
 	deltaPath := filepath.Join(root, "levels", "runtime-edit.gkworlddelta")
@@ -3012,6 +3096,66 @@ func TestStreamedRuntimeOmitsImportedWorldDestructionMarkerOutsideRadius(t *test
 			t.Fatalf("expected far imported chunk %d to commit without destruction residency marker", entity)
 		}
 	}
+}
+
+func TestStreamedRuntimeUpgradesLoadedImportedWorldResidency(t *testing.T) {
+	root := t.TempDir()
+	chunkPath := filepath.Join(root, "worlds", "chunks", "world_2_0_0.gkchunk")
+	chunk := &content.ImportedWorldChunkDef{
+		WorldID: "world", Coord: content.TerrainChunkCoordDef{X: 2}, ChunkSize: 16, VoxelResolution: 1,
+		Voxels: []content.ImportedWorldVoxelDef{{X: 0, Y: 0, Z: 0, Value: 1}}, NonEmptyVoxelCount: 1,
+	}
+	writeImportedWorldChunkForStreamedTest(t, chunkPath, chunk)
+
+	app, cmd, state := newStreamedRuntimeHarness(t)
+	provider, err := NewPlaneTreeVoxelBacking(testPlaneTreeBackingDef())
+	if err != nil {
+		t.Fatalf("NewPlaneTreeVoxelBacking failed: %v", err)
+	}
+	coord := ChunkCoord{X: 2}
+	state.Initialized = true
+	state.Loader = NewRuntimeContentLoader()
+	state.LevelID = "level"
+	state.LevelPath = filepath.Join(root, "levels", "level.gklevel")
+	state.Level = content.NewLevelDef("level")
+	state.Level.BaseWorld = &content.LevelBaseWorldDef{ManifestPath: filepath.Join(root, "worlds", "world.gkworld")}
+	state.LevelRoot = cmd.AddEntity(&AuthoredLevelRootComponent{LevelID: "level"})
+	state.ChunkSize = 16
+	state.StreamingRadius, state.StreamingKeepRadius, state.StreamingPrefetchRadius = 2, 2, 2
+	state.StreamingCollisionRadius, state.StreamingDestructionRadius = 1, 1
+	state.BaseWorldID = "world"
+	state.BaseWorldCollisionEnabled = true
+	state.BaseWorldBacking = provider
+	state.BaseWorldBackingSourceHash = "source"
+	state.ImportedWorldEntries[coord] = content.ImportedWorldChunkEntryDef{
+		Coord: chunk.Coord, ChunkPath: chunkPath, NonEmptyVoxelCount: 1,
+	}
+	prepared := streamedPreparedChunk{Coord: coord, ImportedWorldChunk: chunk, PreparedImportedWorldGeometry: prepareImportedWorldChunkGeometry(chunk)}
+	if _, err := commitPreparedStreamedChunk(cmd, assetServerFromApp(cmd.app), state, prepared); err != nil {
+		t.Fatalf("initial commitPreparedStreamedChunk failed: %v", err)
+	}
+	cmd.app.FlushCommands()
+	for entity := range state.LoadedChunks[coord].ImportedWorldEntities {
+		if hasComponentOfType[StreamedDestructionResidentComponent](cmd, entity) || hasComponentOfType[VoxelBackingComponent](cmd, entity) || hasComponentOfType[ColliderComponent](cmd, entity) {
+			t.Fatalf("prefetched chunk %d started with near residency", entity)
+		}
+	}
+	cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{32, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&StreamedLevelObserverComponent{Radius: 2, KeepRadius: 2, PrefetchRadius: 2, CollisionRadius: 1, DestructionRadius: 1},
+	)
+	cmd.app.FlushCommands()
+
+	driveStreamedRuntimeUntil(t, app, func() bool {
+		loaded := state.LoadedChunks[coord]
+		if loaded == nil {
+			return false
+		}
+		for entity := range loaded.ImportedWorldEntities {
+			return hasComponentOfType[RigidBodyComponent](cmd, entity) && hasComponentOfType[ColliderComponent](cmd, entity) && hasComponentOfType[AABBComponent](cmd, entity) && hasComponentOfType[StreamedDestructionResidentComponent](cmd, entity) && hasComponentOfType[VoxelBackingComponent](cmd, entity)
+		}
+		return false
+	})
 }
 
 func TestStreamedRuntimeKeepRadiusRetainsLoadedChunks(t *testing.T) {

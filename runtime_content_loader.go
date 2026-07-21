@@ -16,6 +16,7 @@ type RuntimeContentLoader struct {
 	importedWorlds   map[string]*content.ImportedWorldDef
 	importedChunks   map[string]*content.ImportedWorldChunkDef
 	importedAux      map[string]*content.ImportedWorldChunkAuxDef
+	voxelBackings    map[string]*content.VoxelBackingDef
 }
 
 func NewRuntimeContentLoader() *RuntimeContentLoader {
@@ -27,7 +28,15 @@ func NewRuntimeContentLoader() *RuntimeContentLoader {
 		importedWorlds:   make(map[string]*content.ImportedWorldDef),
 		importedChunks:   make(map[string]*content.ImportedWorldChunkDef),
 		importedAux:      make(map[string]*content.ImportedWorldChunkAuxDef),
+		voxelBackings:    make(map[string]*content.VoxelBackingDef),
 	}
+}
+
+func (l *RuntimeContentLoader) LoadVoxelBacking(path string) (*content.VoxelBackingDef, error) {
+	if l == nil {
+		return content.LoadVoxelBacking(path)
+	}
+	return loadRuntimeContentCached(&l.mu, path, l.voxelBackings, content.LoadVoxelBacking)
 }
 
 func (l *RuntimeContentLoader) LoadAsset(path string) (*content.AssetDef, error) {

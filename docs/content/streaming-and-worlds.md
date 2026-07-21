@@ -510,10 +510,19 @@ Implementation note, 2026-06-08:
 - Already-loaded full chunks are not promoted/demoted in place yet; mutating
   renderer-active chunk entities caused stale GPU bind-group validation failures
   during visual testing.
-- Imported-world destruction persistence writes dirty imported chunks to
+- Imported-world destruction without a voxel backing persists dirty chunks to
   `ImportedWorldChunkOverrides` in the world delta. The imported source world
   remains immutable; runtime loads the saved override chunk before falling back
   to the imported manifest entry.
+- Imported worlds with an immutable voxel backing and terrain column chunks use
+  `VoxelBackingRemovals` instead. Destruction materializes only touched 8x8x8
+  bricks into the live `XBrickMap`, then stores one 512-bit removal mask per
+  edited brick. Repeated materialization applies the mask before publishing the
+  brick, so unloaded or previously implicit matter is never restored.
+- The backing provider contract is source-neutral. HL1 imports emit a compact
+  plane-tree `.gkvoxelbacking`; terrain columns implement the same runtime
+  provider directly. The renderer, collision, raycast, and navigation paths
+  continue to consume `XBrickMap` rather than the backing.
 
 #### Step 8: Add HL1/BSP Visibility Provider
 
@@ -659,8 +668,10 @@ The current implemented baseline is:
   resident.
 - Full chunks are not unloaded until a sector proxy is available when the
   sector has proxy LOD metadata.
-- Runtime edits to streamed imported chunks persist into world-delta imported
-  chunk overrides. The imported source world remains immutable.
+- Runtime edits to streamed imported chunks persist into full world-delta chunk
+  overrides when no backing exists, or sparse `VoxelBackingRemovals` when the
+  imported world has immutable backing support. Terrain removals use the same
+  sparse contract, preserving caves that cannot be represented as columns.
 - `actiongame` exposes runtime tuning through environment variables:
   - `GEKKO_STREAMING_RADIUS`
   - `GEKKO_STREAMING_PREFETCH_RADIUS`
@@ -783,8 +794,15 @@ Main top-level fields:
 - navigation source-tile overrides
 - navigation profile graph-tile overrides
 - voxel object overrides
+- voxel backing removals
 
 Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`.
+
+`VoxelBackingRemovals` are inline removal-only deltas relative to a provider's
+`source_hash`. Each record identifies the generic owner kind/id and chunk, then
+stores 16 `uint32` words per edited 8x8x8 brick. Additive edits still require an
+explicit snapshot; this backing contract intentionally covers digging and
+tunnelling through immutable base matter.
 
 Navigation delta files live below `<delta file>_data/nav_graph`. Dirty imported
 world chunks expand through generator halo dependencies. Source and neighboring

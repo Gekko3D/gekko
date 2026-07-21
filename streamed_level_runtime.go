@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -258,6 +259,8 @@ type StreamedLevelRuntimeState struct {
 	TerrainPalette             AssetId
 	BaseWorldID                string
 	BaseWorldManifest          *content.ImportedWorldDef
+	BaseWorldBacking           VoxelBackingProvider
+	BaseWorldBackingSourceHash string
 	BaseWorldPalette           AssetId
 	BaseWorldMaterialLookup    ImportedWorldMaterialLookup
 	BaseWorldCollisionEnabled  bool
@@ -319,6 +322,7 @@ type StreamedLevelRuntimeState struct {
 	terrainOverrideMap       map[string]content.TerrainChunkOverrideDef
 	importedWorldOverrideMap map[string]content.ImportedWorldChunkOverrideDef
 	voxelOverrideMap         map[string]content.VoxelObjectOverrideDef
+	voxelBackingRemovalMap   map[string]content.VoxelBackingRemovalDef
 }
 
 type streamedPlacementInstance struct {
@@ -371,6 +375,7 @@ type streamedChunkLoadJob struct {
 	ImportedWorldManifestPath string
 	ImportedWorldEntry        *content.ImportedWorldChunkEntryDef
 	ImportedWorldOverride     *content.ImportedWorldChunkOverrideDef
+	HasImportedWorldBacking   bool
 	Placements                []streamedPlacementInstance
 	VoxelOverrides            map[string]content.VoxelObjectOverrideDef
 	WorldDeltaPath            string
@@ -431,6 +436,7 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		terrainOverrideMap:       make(map[string]content.TerrainChunkOverrideDef),
 		importedWorldOverrideMap: make(map[string]content.ImportedWorldChunkOverrideDef),
 		voxelOverrideMap:         make(map[string]content.VoxelObjectOverrideDef),
+		voxelBackingRemovalMap:   make(map[string]content.VoxelBackingRemovalDef),
 		navigationDesired:        make(map[content.TerrainChunkCoordDef]struct{}),
 		navigationLoads:          make(chan streamedNavigationLoadResult, 2),
 		navigationRebuilds:       make(chan streamedNavigationRebuildResult, 2),
@@ -547,6 +553,8 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.TerrainPalette = AssetId{}
 	state.BaseWorldID = ""
 	state.BaseWorldManifest = nil
+	state.BaseWorldBacking = nil
+	state.BaseWorldBackingSourceHash = ""
 	state.BaseWorldPalette = AssetId{}
 	state.BaseWorldMaterialLookup = ImportedWorldMaterialLookup{}
 	state.BaseWorldCollisionEnabled = false
@@ -577,6 +585,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.terrainOverrideMap = make(map[string]content.TerrainChunkOverrideDef)
 	state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
 	state.voxelOverrideMap = make(map[string]content.VoxelObjectOverrideDef)
+	state.voxelBackingRemovalMap = make(map[string]content.VoxelBackingRemovalDef)
 	state.BaseNavManifestPath = ""
 	state.BaseNavManifest = nil
 	state.NavigationSources = nil
@@ -607,6 +616,15 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	}
 	for _, override := range worldDelta.VoxelObjectOverrides {
 		state.voxelOverrideMap[voxelObjectRuntimeKey(override.PlacementID, override.ItemID)] = override
+	}
+	for _, removal := range worldDelta.VoxelBackingRemovals {
+		state.voxelBackingRemovalMap[voxelBackingRemovalRuntimeKey(removal.OwnerKind, removal.OwnerID, removal.ChunkCoord)] = removal
+		switch removal.OwnerKind {
+		case content.VoxelBackingOwnerTerrain:
+			delete(state.terrainOverrideMap, terrainChunkRuntimeKey(removal.OwnerID, removal.ChunkCoord))
+		case content.VoxelBackingOwnerImportedWorld:
+			delete(state.importedWorldOverrideMap, importedWorldChunkRuntimeKey(removal.OwnerID, removal.ChunkCoord))
+		}
 	}
 
 	if level.Terrain != nil && level.Terrain.ManifestPath != "" {
@@ -653,6 +671,25 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		}
 		state.BaseWorldID = manifest.WorldID
 		state.BaseWorldManifest = manifest
+		if manifest.Backing != nil {
+			backingPath := content.ResolveDocumentPath(manifest.Backing.Path, manifestPath)
+			backingDef, loadErr := loader.LoadVoxelBacking(backingPath)
+			if loadErr != nil {
+				state.InitErr = loadErr
+				return loadErr
+			}
+			if backingDef.Kind != manifest.Backing.Kind || backingDef.SourceHash != manifest.Backing.SourceHash || backingDef.BoundsMin != manifest.Backing.BoundsMin || backingDef.BoundsMax != manifest.Backing.BoundsMax {
+				err = fmt.Errorf("base world voxel backing metadata does not match manifest")
+				state.InitErr = err
+				return err
+			}
+			state.BaseWorldBacking, err = NewPlaneTreeVoxelBacking(backingDef)
+			if err != nil {
+				state.InitErr = err
+				return err
+			}
+			state.BaseWorldBackingSourceHash = backingDef.SourceHash
+		}
 		state.BaseWorldMaterialLookup = NewImportedWorldMaterialLookup(manifest)
 		state.BaseWorldCollisionEnabled = level.BaseWorld.CollisionEnabled
 		entriesByCoord := make(map[content.TerrainChunkCoordDef]content.ImportedWorldChunkEntryDef, len(manifest.Entries))
@@ -868,6 +905,8 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	state.LevelID, state.LevelPath, state.WorldDeltaPath, state.WorldDataDir, state.sessionDeltaDir = "", "", "", "", ""
 	state.LevelRoot, state.PlayerEntity = 0, 0
 	state.BaseNavManifest, state.navigationQuery = nil, nil
+	state.BaseWorldManifest, state.BaseWorldBacking = nil, nil
+	state.BaseWorldBackingSourceHash = ""
 	state.NavigationSources, state.NavigationGraphs = nil, nil
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
 	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
@@ -1094,6 +1133,14 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 	state.KeepProxySectors = keepProxySectors
 	requestStreamedNavigationResidency(state, desired)
 	for coord := range state.LoadedChunks {
+		if streamedLoadedChunkNeedsResidencyUpgrade(cmd, state, coord) {
+			// ponytail: reload once instead of duplicating the commit path; switch to
+			// in-place upgrades only if transition latency is measurable.
+			if err := unloadStreamedChunk(cmd, state, coord); err != nil && state.InitErr == nil {
+				state.InitErr = err
+			}
+			continue
+		}
 		if _, ok := keep[coord]; ok {
 			continue
 		}
@@ -1332,7 +1379,7 @@ func streamedAddImportedSectorChunks(state *StreamedLevelRuntimeState, chunks ma
 		for _, ref := range sector.FullChunkRefs {
 			chunkCoord := chunkCoordFromTerrain(ref)
 			entry, ok := state.ImportedWorldEntries[chunkCoord]
-			if !ok || entry.NonEmptyVoxelCount <= 0 {
+			if !ok || (entry.NonEmptyVoxelCount <= 0 && state.BaseWorldBacking == nil) {
 				continue
 			}
 			chunks[chunkCoord] = struct{}{}
@@ -1422,7 +1469,7 @@ func streamedChunkHasLoadableContent(state *StreamedLevelRuntimeState, coord Chu
 			return true
 		}
 	}
-	if entry, ok := state.ImportedWorldEntries[coord]; ok && entry.NonEmptyVoxelCount > 0 {
+	if entry, ok := state.ImportedWorldEntries[coord]; ok && (entry.NonEmptyVoxelCount > 0 || state.BaseWorldBacking != nil) {
 		return true
 	}
 	if state.BaseWorldID != "" {
@@ -1677,7 +1724,7 @@ func streamedLoadableChunkCount(state *StreamedLevelRuntimeState, chunks map[Chu
 		}
 	}
 	for coord, entry := range state.ImportedWorldEntries {
-		if entry.NonEmptyVoxelCount > 0 {
+		if entry.NonEmptyVoxelCount > 0 || state.BaseWorldBacking != nil {
 			add(coord)
 		}
 	}
@@ -1889,14 +1936,15 @@ func buildEffectiveStreamedPlacementIndex(level *content.LevelDef, levelPath str
 
 func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoord) streamedChunkLoadJob {
 	job := streamedChunkLoadJob{
-		Generation:            state.Generation,
-		Coord:                 coord,
-		LevelPath:             state.LevelPath,
-		Loader:                state.Loader,
-		PreparedGeometryCache: state.PreparedGeometryCache,
-		Placements:            append([]streamedPlacementInstance(nil), state.PlacementsByChunk[coord]...),
-		VoxelOverrides:        make(map[string]content.VoxelObjectOverrideDef),
-		WorldDeltaPath:        state.WorldDeltaPath,
+		Generation:              state.Generation,
+		Coord:                   coord,
+		LevelPath:               state.LevelPath,
+		Loader:                  state.Loader,
+		PreparedGeometryCache:   state.PreparedGeometryCache,
+		Placements:              append([]streamedPlacementInstance(nil), state.PlacementsByChunk[coord]...),
+		VoxelOverrides:          make(map[string]content.VoxelObjectOverrideDef),
+		WorldDeltaPath:          state.WorldDeltaPath,
+		HasImportedWorldBacking: state.BaseWorldBacking != nil,
 	}
 	if entry, ok := state.TerrainEntries[coord]; ok {
 		job.TerrainEntry = &entry
@@ -2044,7 +2092,7 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		result.PreparedImportedWorldGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedImportedWorldGeometryCacheKey, func() *volume.XBrickMap {
 			return prepareImportedWorldChunkGeometry(chunk, nil)
 		})
-	} else if job.ImportedWorldEntry != nil && job.ImportedWorldEntry.NonEmptyVoxelCount > 0 {
+	} else if job.ImportedWorldEntry != nil && (job.ImportedWorldEntry.NonEmptyVoxelCount > 0 || job.HasImportedWorldBacking) {
 		chunkPath := content.ResolveImportedWorldChunkPath(*job.ImportedWorldEntry, job.ImportedWorldManifestPath)
 		chunk, err := job.Loader.LoadImportedWorldChunk(chunkPath)
 		if err != nil {
@@ -2215,6 +2263,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 			TerrainID:      terrainIDForPreparedChunk(state, prepared.TerrainChunk),
 			TerrainGroupID: terrainGroupIDForStreamedState(state),
 			Chunk:          prepared.TerrainChunk,
+			BackingRemoval: state.voxelBackingRemovalFor(content.VoxelBackingOwnerTerrain, terrainIDForPreparedChunk(state, prepared.TerrainChunk), prepared.TerrainChunk.Coord),
 		})
 		state.Metrics.LastCommitTerrainDuration += time.Since(terrainStart)
 		recordStreamedCommitFlush(cmd, state)
@@ -2232,13 +2281,22 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		}
 	}
 
-	if prepared.ImportedWorldChunk != nil && prepared.ImportedWorldChunk.NonEmptyVoxelCount > 0 {
+	if prepared.ImportedWorldChunk != nil && (prepared.ImportedWorldChunk.NonEmptyVoxelCount > 0 || state.BaseWorldBacking != nil) {
 		worldStart := time.Now()
 		collisionEnabled := state.streamedImportedWorldChunkCollisionEnabled(prepared.Coord)
 		destructionEnabled := state.streamedImportedWorldChunkDestructionEnabled(prepared.Coord)
+		backingRemoval := state.voxelBackingRemovalFor(content.VoxelBackingOwnerImportedWorld, importedWorldIDForPreparedChunk(state, prepared.ImportedWorldChunk), prepared.ImportedWorldChunk.Coord)
+		var backingProvider VoxelBackingProvider
+		if destructionEnabled || backingRemoval != nil {
+			backingProvider = state.BaseWorldBacking
+		}
+		privateGeometry := destructionEnabled || backingProvider != nil
 		spawnTiming := AuthoredImportedWorldSpawnTiming{}
 		geometryAssetStart := time.Now()
-		preparedGeometryAsset, _ := state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry)
+		preparedGeometryAsset := AssetId{}
+		if backingProvider == nil {
+			preparedGeometryAsset, _ = state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry)
+		}
 		geometryAssetDuration := time.Since(geometryAssetStart)
 		entity := spawnAuthoredImportedWorldChunkEntity(cmd, state.LevelRoot, state.BaseWorldPalette, AuthoredImportedWorldSpawnDef{
 			LevelID:                state.LevelID,
@@ -2247,10 +2305,13 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 			Chunk:                  prepared.ImportedWorldChunk,
 			CollisionEnabled:       collisionEnabled,
 			DestructionEnabled:     destructionEnabled,
-			ShareTerrainGeometry:   !destructionEnabled,
-			RetainRendererGeometry: !destructionEnabled,
+			ShareTerrainGeometry:   !privateGeometry,
+			RetainRendererGeometry: !privateGeometry,
 			PreparedGeometry:       prepared.PreparedImportedWorldGeometry,
 			PreparedGeometryAsset:  preparedGeometryAsset,
+			BackingProvider:        backingProvider,
+			BackingSourceHash:      state.BaseWorldBackingSourceHash,
+			BackingRemoval:         backingRemoval,
 			Timing:                 &spawnTiming,
 		})
 		recordImportedWorldSpawnTiming(state, spawnTiming)
@@ -2261,7 +2322,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		importedWorldCollisionCommitted = collisionEnabled
 		clearEntityVoxelDirty(cmd, entity)
 		chunk.ImportedWorldEntities[entity] = struct{}{}
-		if prepared.PreparedImportedWorldGeometryCacheKey != "" {
+		if preparedGeometryAsset != (AssetId{}) && prepared.PreparedImportedWorldGeometryCacheKey != "" {
 			chunk.ImportedWorldGeometryKeys[prepared.PreparedImportedWorldGeometryCacheKey] = struct{}{}
 		}
 		chunk.OwnedEntities[entity] = struct{}{}
@@ -2452,6 +2513,32 @@ func (state *StreamedLevelRuntimeState) streamedImportedWorldChunkDestructionEna
 	return ok
 }
 
+func streamedLoadedChunkNeedsResidencyUpgrade(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord) bool {
+	if cmd == nil || state == nil {
+		return false
+	}
+	loaded := state.LoadedChunks[coord]
+	if loaded == nil {
+		return false
+	}
+	wantCollision := state.streamedImportedWorldChunkCollisionEnabled(coord)
+	wantDestruction := state.streamedImportedWorldChunkDestructionEnabled(coord)
+	for entity := range loaded.ImportedWorldEntities {
+		if wantCollision && (cmd.GetComponent(entity, reflect.TypeOf(RigidBodyComponent{})) == nil || cmd.GetComponent(entity, reflect.TypeOf(ColliderComponent{})) == nil || cmd.GetComponent(entity, reflect.TypeOf(AABBComponent{})) == nil) {
+			return true
+		}
+		if wantDestruction && cmd.GetComponent(entity, reflect.TypeOf(StreamedDestructionResidentComponent{})) == nil {
+			return true
+		}
+		if wantDestruction && state.BaseWorldBacking != nil {
+			if _, backed := voxelBackingForEntity(cmd, entity); !backed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func unloadStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord) error {
 	loaded := state.LoadedChunks[coord]
 	if loaded == nil {
@@ -2500,6 +2587,11 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 		if !dirty {
 			continue
 		}
+		if backing, ok := voxelBackingForEntity(cmd, eid); ok && backing.Dirty {
+			state.recordVoxelBackingRemoval(backing)
+			manifestDirty = true
+			continue
+		}
 		vmc, ok := voxelModelComponentForEntity(cmd, eid)
 		if !ok {
 			continue
@@ -2528,6 +2620,11 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 		}
 		xbm, dirty, _ := currentVoxelMapForEntity(cmd, eid)
 		if !dirty {
+			continue
+		}
+		if backing, ok := voxelBackingForEntity(cmd, eid); ok && backing.Dirty {
+			state.recordVoxelBackingRemoval(backing)
+			manifestDirty = true
 			continue
 		}
 		vmc, ok := voxelModelComponentForEntity(cmd, eid)
@@ -2572,6 +2669,7 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 	state.WorldDelta.PlacementDeletions = mapPlacementDeletions(state.deletedPlacementIDs)
 	state.WorldDelta.TerrainChunkOverrides = mapTerrainOverrides(state.terrainOverrideMap)
 	state.WorldDelta.ImportedWorldChunkOverrides = mapImportedWorldOverrides(state.importedWorldOverrideMap)
+	state.WorldDelta.VoxelBackingRemovals = mapVoxelBackingRemovals(state.voxelBackingRemovalMap)
 	state.WorldDelta.VoxelObjectOverrides = mapVoxelOverrides(state.voxelOverrideMap)
 	return content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta)
 }
@@ -2586,6 +2684,9 @@ func persistImportedWorldRuntimeEditSnapshots(state *StreamedLevelRuntimeState, 
 	changed := false
 	for _, snapshot := range snapshots {
 		if snapshot == nil || strings.TrimSpace(snapshot.WorldID) == "" {
+			continue
+		}
+		if _, backed := state.voxelBackingRemovalMap[voxelBackingRemovalRuntimeKey(content.VoxelBackingOwnerImportedWorld, snapshot.WorldID, snapshot.Coord)]; backed {
 			continue
 		}
 		snapshotPath := filepath.Join(state.WorldDataDir, fmt.Sprintf("imported_%s_%d_%d_%d.gkchunk", sanitizePathSegment(snapshot.WorldID), snapshot.Coord.X, snapshot.Coord.Y, snapshot.Coord.Z))
@@ -2607,6 +2708,7 @@ func persistImportedWorldRuntimeEditSnapshots(state *StreamedLevelRuntimeState, 
 	state.WorldDelta.PlacementDeletions = mapPlacementDeletions(state.deletedPlacementIDs)
 	state.WorldDelta.TerrainChunkOverrides = mapTerrainOverrides(state.terrainOverrideMap)
 	state.WorldDelta.ImportedWorldChunkOverrides = mapImportedWorldOverrides(state.importedWorldOverrideMap)
+	state.WorldDelta.VoxelBackingRemovals = mapVoxelBackingRemovals(state.voxelBackingRemovalMap)
 	state.WorldDelta.VoxelObjectOverrides = mapVoxelOverrides(state.voxelOverrideMap)
 	return content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta)
 }
@@ -2787,6 +2889,38 @@ func voxelObjectRuntimeKey(placementID string, itemID string) string {
 	return placementID + "\x00" + itemID
 }
 
+func voxelBackingRemovalRuntimeKey(ownerKind, ownerID string, coord content.TerrainChunkCoordDef) string {
+	return ownerKind + "|" + ownerID + "|" + content.TerrainChunkKey(coord)
+}
+
+func (state *StreamedLevelRuntimeState) voxelBackingRemovalFor(ownerKind, ownerID string, coord content.TerrainChunkCoordDef) *content.VoxelBackingRemovalDef {
+	if state == nil {
+		return nil
+	}
+	removal, ok := state.voxelBackingRemovalMap[voxelBackingRemovalRuntimeKey(ownerKind, ownerID, coord)]
+	if !ok {
+		return nil
+	}
+	copy := removal
+	copy.Bricks = append([]content.VoxelBackingRemovalBrickDef(nil), removal.Bricks...)
+	return &copy
+}
+
+func (state *StreamedLevelRuntimeState) recordVoxelBackingRemoval(backing *VoxelBackingComponent) {
+	if state == nil || backing == nil {
+		return
+	}
+	def := backing.RemovalDef()
+	coord := def.ChunkCoord
+	state.voxelBackingRemovalMap[voxelBackingRemovalRuntimeKey(def.OwnerKind, def.OwnerID, coord)] = def
+	switch def.OwnerKind {
+	case content.VoxelBackingOwnerTerrain:
+		delete(state.terrainOverrideMap, terrainChunkRuntimeKey(def.OwnerID, coord))
+	case content.VoxelBackingOwnerImportedWorld:
+		delete(state.importedWorldOverrideMap, importedWorldChunkRuntimeKey(def.OwnerID, coord))
+	}
+}
+
 func splitVoxelObjectRuntimeKey(key string) (string, string) {
 	for i := 0; i < len(key); i++ {
 		if key[i] == 0 {
@@ -2872,6 +3006,25 @@ func mapVoxelOverrides(src map[string]content.VoxelObjectOverrideDef) []content.
 	for _, override := range src {
 		out = append(out, override)
 	}
+	return out
+}
+
+func mapVoxelBackingRemovals(src map[string]content.VoxelBackingRemovalDef) []content.VoxelBackingRemovalDef {
+	out := make([]content.VoxelBackingRemovalDef, 0, len(src))
+	for _, removal := range src {
+		if len(removal.Bricks) > 0 {
+			out = append(out, removal)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].OwnerKind != out[j].OwnerKind {
+			return out[i].OwnerKind < out[j].OwnerKind
+		}
+		if out[i].OwnerID != out[j].OwnerID {
+			return out[i].OwnerID < out[j].OwnerID
+		}
+		return terrainChunkCoordLessForRuntime(out[i].ChunkCoord, out[j].ChunkCoord)
+	})
 	return out
 }
 

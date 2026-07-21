@@ -53,6 +53,23 @@ func ValidateImportedWorld(def *ImportedWorldDef, opts ImportedWorldValidationOp
 	if _, err := NormalizeImportedWorldChunkPayloadKind(def.ChunkPayloadKind); err != nil {
 		result.addError("invalid_chunk_payload_kind", err.Error())
 	}
+	if backing := def.Backing; backing != nil {
+		if strings.TrimSpace(backing.Path) == "" {
+			result.addError("empty_voxel_backing_path", "imported world voxel backing path is required")
+		} else if strings.ToLower(filepath.Ext(backing.Path)) != ".gkvoxelbacking" {
+			result.addError("invalid_voxel_backing_path", fmt.Sprintf("imported world voxel backing path must point to a .gkvoxelbacking: %s", backing.Path))
+		} else if backing.Kind != VoxelBackingKindPlaneTreeV1 {
+			result.addError("invalid_voxel_backing_kind", fmt.Sprintf("unsupported imported world voxel backing kind %q", backing.Kind))
+		} else if opts.DocumentPath != "" {
+			resolvedPath := ResolveDocumentPath(backing.Path, opts.DocumentPath)
+			backingDef, err := LoadVoxelBacking(resolvedPath)
+			if err != nil {
+				result.addError("invalid_voxel_backing", fmt.Sprintf("invalid imported world voxel backing %s: %v", backing.Path, err))
+			} else if backingDef.Kind != backing.Kind || backingDef.SourceHash != backing.SourceHash || backingDef.BoundsMin != backing.BoundsMin || backingDef.BoundsMax != backing.BoundsMax {
+				result.addError("voxel_backing_metadata_mismatch", "imported world voxel backing metadata does not match its sidecar")
+			}
+		}
+	}
 	seenCoords := map[TerrainChunkCoordDef]ImportedWorldChunkEntryDef{}
 	for _, entry := range def.Entries {
 		key := TerrainChunkKey(entry.Coord)

@@ -63,6 +63,7 @@ type AuthoredTerrainSpawnDef struct {
 	TerrainID      string
 	TerrainGroupID uint32
 	Chunk          *content.TerrainChunkDef
+	BackingRemoval *content.VoxelBackingRemovalDef
 }
 
 func LoadAndSpawnAuthoredLevel(path string, cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, opts AuthoredLevelSpawnOptions) (AuthoredLevelSpawnResult, error) {
@@ -1674,11 +1675,23 @@ func optionalPositiveIntPointer(value int) *int {
 
 func spawnAuthoredTerrainChunkEntity(cmd *Commands, assets *AssetServer, parent EntityId, palette AssetId, terrain AuthoredTerrainSpawnDef) EntityId {
 	chunkMap := terrainChunkToXBrickMap(terrain.Chunk)
+	backing := NewVoxelBackingComponent(
+		content.VoxelBackingOwnerTerrain,
+		terrain.TerrainID,
+		terrain.Chunk.SourceHash,
+		[3]int{terrain.Chunk.Coord.X, terrain.Chunk.Coord.Y, terrain.Chunk.Coord.Z},
+		terrain.Chunk.ChunkSize,
+		NewTerrainColumnVoxelBacking(terrain.Chunk),
+		terrain.BackingRemoval,
+	)
+	if backing != nil {
+		backing.ApplyRemovals(chunkMap)
+	}
 	overrideGeometry := AssetId{}
 	if assets != nil {
 		overrideGeometry = assets.RegisterSharedVoxelGeometry(chunkMap, "")
 	}
-	return cmd.AddEntity(
+	components := []any{
 		&TransformComponent{
 			Position: terrainChunkPosition(terrain.Chunk),
 			Rotation: mgl32.QuatIdent(),
@@ -1707,7 +1720,11 @@ func spawnAuthoredTerrainChunkEntity(cmd *Commands, assets *AssetServer, parent 
 			TerrainID:  terrain.TerrainID,
 			ChunkCoord: [3]int{terrain.Chunk.Coord.X, terrain.Chunk.Coord.Y, terrain.Chunk.Coord.Z},
 		},
-	)
+	}
+	if backing != nil {
+		components = append(components, backing)
+	}
+	return cmd.AddEntity(components...)
 }
 
 func terrainChunkToXBrickMap(chunk *content.TerrainChunkDef) *volume.XBrickMap {

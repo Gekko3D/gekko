@@ -30,9 +30,10 @@ func destructionSystem(state *VoxelRtState, queue *DestructionQueue, cmd *Comman
 		return
 	}
 
-	byEntity := make(map[EntityId][]DestructionEvent, len(queue.Events))
+	events := expandVoxelBackingDestructionEvents(state, queue.Events, cmd)
+	byEntity := make(map[EntityId][]DestructionEvent, len(events))
 	order := make([]EntityId, 0, len(queue.Events))
-	for _, event := range queue.Events {
+	for _, event := range events {
 		if _, exists := byEntity[event.Entity]; !exists {
 			order = append(order, event.Entity)
 		}
@@ -44,6 +45,39 @@ func destructionSystem(state *VoxelRtState, queue *DestructionQueue, cmd *Comman
 
 	// Clear the queue
 	queue.Events = queue.Events[:0]
+}
+
+func expandVoxelBackingDestructionEvents(state *VoxelRtState, events []DestructionEvent, cmd *Commands) []DestructionEvent {
+	if state == nil || cmd == nil || len(events) == 0 {
+		return events
+	}
+	expanded := make([]DestructionEvent, 0, len(events))
+	for _, event := range events {
+		target, backed := voxelBackingForEntity(cmd, event.Entity)
+		if !backed {
+			expanded = append(expanded, event)
+			continue
+		}
+		matched := false
+		MakeQuery1[VoxelBackingComponent](cmd).Map(func(eid EntityId, candidate *VoxelBackingComponent) bool {
+			if candidate == nil || candidate.OwnerKind != target.OwnerKind || candidate.OwnerID != target.OwnerID || candidate.SourceHash != target.SourceHash {
+				return true
+			}
+			object := state.GetVoxelObject(eid)
+			if object == nil || !voxelBackingEventIntersects(candidate, object.Transform, event.Center, event.Radius) {
+				return true
+			}
+			routed := event
+			routed.Entity = eid
+			expanded = append(expanded, routed)
+			matched = true
+			return true
+		})
+		if !matched {
+			expanded = append(expanded, event)
+		}
+	}
+	return expanded
 }
 
 func processDestructionEvent(state *VoxelRtState, event DestructionEvent, cmd *Commands, server *AssetServer) bool {
@@ -71,15 +105,24 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 		editableMap = clonedMap
 		voxObj.XBrickMap = editableMap
 	}
+	backing, backed := voxelBackingForEntity(cmd, entity)
 	carveOnly := true
 	for _, event := range events {
+		if backed {
+			center, radius := voxelBackingLocalSphere(voxObj.Transform, event.Center, event.Radius)
+			backing.MaterializeSphere(editableMap, center, radius)
+		}
 		voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
 		carveOnly = carveOnly && event.CarveOnly
+	}
+	if backed {
+		// Connectivity splitting is invalid for a partially materialized base.
+		carveOnly = true
 	}
 	MarkVoxelEntityPersistenceDirty(cmd, entity)
 	state.markRuntimeEditedVoxelEntity(entity)
 	if carveOnly {
-		if editableMap.GetVoxelCount() == 0 {
+		if !backed && editableMap.GetVoxelCount() == 0 {
 			notifyImportedWorldChunkDirty(cmd, entity, editableMap)
 			cmd.RemoveEntity(entity)
 		}
@@ -90,7 +133,7 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	components := editableMap.SplitDisconnectedComponents()
 	if len(components) <= 1 {
 		// If the entity is empty now, remove it
-		if editableMap.GetVoxelCount() == 0 {
+		if !backed && editableMap.GetVoxelCount() == 0 {
 			notifyImportedWorldChunkDirty(cmd, entity, editableMap)
 			cmd.RemoveEntity(entity)
 		}

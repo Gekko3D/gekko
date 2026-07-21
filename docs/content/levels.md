@@ -122,6 +122,13 @@ Important runtime distinction:
 
 So `base_world` is part of the authored level contract, but it is mainly consumed by the streamed-level runtime path.
 
+An imported-world manifest may also reference an optional immutable
+`.gkvoxelbacking` classifier. Backing-only chunks contain no eager volume;
+destruction materializes touched bricks into their normal `XBrickMap` and saves
+sparse removal masks. The same runtime contract is used by authored terrain
+columns, so future destructive terrain renderers do not need an imported-world
+or HL1-specific editing path.
+
 ### Navigation
 
 `navigation.manifest_path` points to pure-Go voxel graph data in a `.gknav`

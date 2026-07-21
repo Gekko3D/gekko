@@ -45,6 +45,7 @@ type ImportedWorldDef struct {
 	SourceHash         string                              `json:"source_hash,omitempty"`
 	ChunkPayloadKind   string                              `json:"chunk_payload_kind,omitempty"`
 	Tags               []string                            `json:"tags,omitempty"`
+	Backing            *VoxelBackingRefDef                 `json:"backing,omitempty"`
 	Entries            []ImportedWorldChunkEntryDef        `json:"entries,omitempty"`
 	Sectors            []ImportedWorldSectorDef            `json:"sectors,omitempty"`
 }

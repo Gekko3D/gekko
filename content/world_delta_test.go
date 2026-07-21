@@ -30,6 +30,16 @@ func TestWorldDeltaRoundTrip(t *testing.T) {
 			ChunkCoord:   TerrainChunkCoordDef{X: 4, Y: 1, Z: -3},
 			SnapshotPath: "demo.gkworlddelta_data/imported_world-a_4_1_-3.gkchunk",
 		}},
+		VoxelBackingRemovals: []VoxelBackingRemovalDef{{
+			OwnerKind:  VoxelBackingOwnerImportedWorld,
+			OwnerID:    "world-a",
+			SourceHash: "source-a",
+			ChunkCoord: TerrainChunkCoordDef{X: 4, Y: 1, Z: -3},
+			Bricks: []VoxelBackingRemovalBrickDef{{
+				Coord: [3]int{1, 2, 3},
+				Bits:  [16]uint32{0: 5, 15: 8},
+			}},
+		}},
 		VoxelObjectOverrides: []VoxelObjectOverrideDef{{
 			PlacementID:  "ship",
 			ItemID:       "hull",

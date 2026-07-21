@@ -542,6 +542,7 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 		return
 	}
 	snapshots := takeVoxelWorldDirtyChunks(cmd.app, state.BaseWorldID)
+	backingDeltaDirty := false
 	rt := voxelRtStateFromApp(cmd.app)
 	if rt != nil {
 		for _, loaded := range state.LoadedChunks {
@@ -550,11 +551,24 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 				if !edited || revision == 0 || state.navigationEditRevisions[eid] >= revision {
 					continue
 				}
+				if backing, ok := voxelBackingForEntity(cmd, eid); ok && backing.Dirty {
+					state.recordVoxelBackingRemoval(backing)
+					backingDeltaDirty = true
+				}
 				if snapshot := loadedImportedWorldChunkSnapshotForNavigation(cmd, state, eid); snapshot != nil {
 					snapshots = append(snapshots, snapshot)
 					state.navigationEditRevisions[eid] = revision
 				}
 			}
+		}
+	}
+	if backingDeltaDirty {
+		state.WorldDelta.TerrainChunkOverrides = mapTerrainOverrides(state.terrainOverrideMap)
+		state.WorldDelta.ImportedWorldChunkOverrides = mapImportedWorldOverrides(state.importedWorldOverrideMap)
+		state.WorldDelta.VoxelBackingRemovals = mapVoxelBackingRemovals(state.voxelBackingRemovalMap)
+		if err := content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta); err != nil {
+			state.InitErr = err
+			return
 		}
 	}
 	if len(snapshots) == 0 {

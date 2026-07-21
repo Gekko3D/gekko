@@ -382,6 +382,14 @@ Use `.gkworld` for:
 - Chunk size.
 - Palette table.
 - Chunk manifest entries.
+- Optional source-neutral voxel backing reference for digging/tunnelling.
+
+Current HL1 world emission writes a sibling `.gkvoxelbacking` when the BSP has
+a usable plane/node/leaf solid classifier. The sidecar stores planes in global
+voxel coordinates plus the compact decision tree; it does not store a dense
+solid volume. The manifest also catalogs empty backing-only chunks inside the
+finite BSP world bounds so destruction can cross a chunk that had no original
+surface voxels.
 
 Phase 1 should use the existing schema and add metadata through `Tags`,
 `SourceBuildVersion`, `SourceHash`, and the import report.
