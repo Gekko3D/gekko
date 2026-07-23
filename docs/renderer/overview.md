@@ -44,7 +44,7 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 - `voxelrt/rt/app/`
   - WebGPU app lifetime, pass scheduling, resize handling, and render loop orchestration
 - `voxelrt/rt/gpu/`
-  - GPU buffers, textures, bind groups, paged voxel payload atlases, shadows, Hi-Z, particles, sprites, analytic media, and CA volumes
+  - GPU buffers, textures, bind groups, paged voxel payload atlases, shadows, Hi-Z, particles, sprites, and analytic media
 - `voxelrt/rt/core/`
   - scene model, camera, lights, culling, raycast, gizmos, and text primitives
 - `voxelrt/rt/volume/`

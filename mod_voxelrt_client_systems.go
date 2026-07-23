@@ -9,7 +9,6 @@ import (
 
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
-	gpu_rt "github.com/gekko3d/gekko/voxelrt/rt/gpu"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
@@ -46,7 +45,6 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		entityLODSelections:          make(map[EntityId]EntityLODSelection),
 		lastMaterialKeys:             make(map[*core.VoxelObject]materialTableCacheKey),
 		materialTableCache:           make(map[materialTableCacheKey][]core.Material),
-		caVolumeMap:                  make(map[EntityId]*core.VoxelObject),
 		objectToEntity:               make(map[*core.VoxelObject]EntityId),
 		skyboxLayers:                 make(map[EntityId]SkyboxLayerComponent),
 		bridgeFeatures:               mod.bridgeFeatureRegistry(),
@@ -63,13 +61,6 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 			RunAlways(),
 	)
 	// Voxel edit application system (M3) REMOVED - moved to client
-
-	// Cellular automaton step system (low Hz via TickRate in component)
-	app.UseSystem(
-		System(caStepSystem).
-			InStage(Update).
-			RunAlways(),
-	)
 
 	app.UseSystem(
 		System(waterBodyResolutionSystem).
@@ -252,27 +243,6 @@ func (state *VoxelRtState) bridgeFeatureEnabled(feature VoxelRtBridgeFeature) bo
 	return state.ensureBridgeFeatures().enabled(state.RtApp, feature)
 }
 
-type caBudgetCameraView struct {
-	Position mgl32.Vec3
-	Forward  mgl32.Vec3
-	Valid    bool
-}
-
-type caVolumeBudgetCandidate struct {
-	host              app_rt.CAVolumeInput
-	volume            *CellularVolumeComponent
-	rawSteps          uint32
-	scheduledSteps    uint32
-	distance          float32
-	visible           bool
-	behindCamera      bool
-	resolutionClamped bool
-	stepDeferred      bool
-	suspended         bool
-	dropped           bool
-	priority          float32
-}
-
 func readEntityLODCameraPosition(cmd *Commands, fallback *core.CameraState) (mgl32.Vec3, bool) {
 	if cmd != nil {
 		found := false
@@ -316,346 +286,6 @@ func entityLODSelectionSystem(cmd *Commands, state *VoxelRtState) {
 		lod.ApplySelection(selection)
 		return true
 	})
-}
-
-func readCAVolumeBudgetCamera(cmd *Commands, fallback *core.CameraState) caBudgetCameraView {
-	view := caBudgetCameraView{}
-	if cmd != nil {
-		MakeQuery1[CameraComponent](cmd).Map(func(entityId EntityId, camera *CameraComponent) bool {
-			if camera == nil {
-				return true
-			}
-			view.Position = camera.Position
-			forward := camera.LookAt.Sub(camera.Position)
-			if forward.LenSqr() <= 1e-6 {
-				yaw := mgl32.DegToRad(camera.Yaw)
-				pitch := mgl32.DegToRad(camera.Pitch)
-				forward = mgl32.Vec3{
-					float32(math.Sin(float64(yaw)) * math.Cos(float64(pitch))),
-					float32(math.Sin(float64(pitch))),
-					float32(-math.Cos(float64(yaw)) * math.Cos(float64(pitch))),
-				}
-			}
-			if forward.LenSqr() > 1e-6 {
-				view.Forward = forward.Normalize()
-				view.Valid = true
-				return false
-			}
-			return true
-		})
-	}
-	if !view.Valid && fallback != nil {
-		view.Position = fallback.Position
-		forward := fallback.GetForward()
-		if forward.LenSqr() > 1e-6 {
-			view.Forward = forward.Normalize()
-			view.Valid = true
-		}
-	}
-	return view
-}
-
-func caVolumeCellCount(resolution [3]uint32) uint64 {
-	return uint64(resolution[0]) * uint64(resolution[1]) * uint64(resolution[2])
-}
-
-func clampCAVolumeResolution(resolution [3]uint32, cfg gpu_rt.CAVolumeBudgetConfig) ([3]uint32, bool) {
-	clamped := false
-	for axis := range resolution {
-		if resolution[axis] == 0 {
-			resolution[axis] = 1
-			clamped = true
-		}
-		if resolution[axis] > uint32(cfg.MaxResolutionAxis) {
-			resolution[axis] = uint32(cfg.MaxResolutionAxis)
-			clamped = true
-		}
-	}
-	if caVolumeCellCount(resolution) <= uint64(cfg.MaxCellsPerVolume) {
-		return resolution, clamped
-	}
-
-	scale := math.Cbrt(float64(cfg.MaxCellsPerVolume) / float64(caVolumeCellCount(resolution)))
-	for axis := range resolution {
-		scaled := uint32(math.Floor(float64(resolution[axis]) * scale))
-		if scaled < 1 {
-			scaled = 1
-		}
-		if scaled != resolution[axis] {
-			clamped = true
-			resolution[axis] = scaled
-		}
-	}
-	for caVolumeCellCount(resolution) > uint64(cfg.MaxCellsPerVolume) {
-		largestAxis := 0
-		for axis := 1; axis < len(resolution); axis++ {
-			if resolution[axis] > resolution[largestAxis] {
-				largestAxis = axis
-			}
-		}
-		if resolution[largestAxis] <= 1 {
-			break
-		}
-		resolution[largestAxis]--
-		clamped = true
-	}
-	return resolution, clamped
-}
-
-func scheduleCAVolumeSteps(raw uint32, distance float32, behindCamera bool, cfg gpu_rt.CAVolumeBudgetConfig) (scheduled uint32, deferred bool, suspended bool) {
-	scheduled = min(raw, uint32(cfg.MaxStepsPerVolume))
-	deferred = scheduled < raw
-	if scheduled == 0 {
-		return 0, deferred, false
-	}
-
-	if behindCamera && distance >= cfg.StepSuspendDistance {
-		return 0, true, true
-	}
-	if distance >= cfg.StepSuspendDistance {
-		scheduled = min(scheduled, 1)
-	}
-	if distance >= cfg.StepReduceDistance {
-		scheduled = min(scheduled, 1)
-	}
-	if behindCamera {
-		scheduled = min(scheduled, 1)
-	}
-	if scheduled < raw {
-		deferred = true
-	}
-	suspended = raw > 0 && scheduled == 0
-	return scheduled, deferred, suspended
-}
-
-func caVolumeBudgetPriority(candidate caVolumeBudgetCandidate) float32 {
-	priority := candidate.host.Intensity * 100.0
-	if candidate.visible {
-		priority += 1000.0
-	}
-	if !candidate.behindCamera {
-		priority += 500.0
-	}
-	priority += max(0.0, 256.0-candidate.distance)
-	priority += float32(candidate.rawSteps) * 16.0
-	return priority
-}
-
-func budgetCAVolumes(candidates []caVolumeBudgetCandidate, cfg gpu_rt.CAVolumeBudgetConfig) ([]app_rt.CAVolumeInput, uint32, uint32, uint32, uint32) {
-	cfg = cfg.WithDefaults()
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].priority == candidates[j].priority {
-			return candidates[i].host.EntityID < candidates[j].host.EntityID
-		}
-		return candidates[i].priority > candidates[j].priority
-	})
-
-	selected := make([]*caVolumeBudgetCandidate, 0, min(len(candidates), cfg.MaxManagedVolumes))
-	currentMaxX := uint32(1)
-	currentMaxY := uint32(1)
-	currentDepth := uint32(1)
-	dropped := uint32(0)
-
-	for i := range candidates {
-		candidate := &candidates[i]
-		if len(selected) >= cfg.MaxManagedVolumes {
-			candidate.dropped = true
-			dropped++
-			continue
-		}
-		nextMaxX := max(currentMaxX, candidate.host.Resolution[0])
-		nextMaxY := max(currentMaxY, candidate.host.Resolution[1])
-		nextDepth := currentDepth + candidate.host.Resolution[2]
-		nextCells := uint64(nextMaxX) * uint64(nextMaxY) * uint64(nextDepth)
-		if nextCells > uint64(cfg.MaxAtlasCells) {
-			candidate.dropped = true
-			dropped++
-			continue
-		}
-		selected = append(selected, candidate)
-		currentMaxX = nextMaxX
-		currentMaxY = nextMaxY
-		currentDepth = nextDepth
-	}
-
-	remainingSteps := cfg.MaxTotalStepsPerFrame
-	deferredCount := uint32(0)
-	suspendedCount := uint32(0)
-	totalSteps := uint32(0)
-	for _, candidate := range selected {
-		if candidate.scheduledSteps == 0 {
-			candidate.host.StepsPending = 0
-			if candidate.stepDeferred {
-				deferredCount++
-			}
-			if candidate.suspended {
-				suspendedCount++
-			}
-			continue
-		}
-		allowed := min(int(candidate.scheduledSteps), remainingSteps)
-		if allowed < int(candidate.scheduledSteps) {
-			candidate.stepDeferred = true
-			if allowed == 0 && candidate.rawSteps > 0 {
-				candidate.suspended = true
-			}
-		}
-		candidate.scheduledSteps = uint32(allowed)
-		candidate.host.StepsPending = float32(candidate.scheduledSteps)
-		remainingSteps -= allowed
-		totalSteps += candidate.scheduledSteps
-		if candidate.stepDeferred {
-			deferredCount++
-		}
-		if candidate.suspended {
-			suspendedCount++
-		}
-	}
-
-	for i := range candidates {
-		remaining := candidates[i].rawSteps
-		if !candidates[i].dropped && candidates[i].scheduledSteps < remaining {
-			remaining -= candidates[i].scheduledSteps
-		} else if !candidates[i].dropped {
-			remaining = 0
-		}
-		candidates[i].volume._gpuStepsPending = remaining
-	}
-
-	hosts := make([]app_rt.CAVolumeInput, 0, len(selected))
-	for _, candidate := range selected {
-		hosts = append(hosts, candidate.host)
-	}
-	sort.Slice(hosts, func(i, j int) bool {
-		return hosts[i].EntityID < hosts[j].EntityID
-	})
-	return hosts, dropped, deferredCount, suspendedCount, totalSteps
-}
-
-func buildCAVolumeFrameInput(cmd *Commands, camera *core.CameraState, cfg gpu_rt.CAVolumeBudgetConfig, dt float32) app_rt.CAVolumeFrameInput {
-	cameraView := readCAVolumeBudgetCamera(cmd, camera)
-	caBudget := cfg.WithDefaults()
-	caCandidates := make([]caVolumeBudgetCandidate, 0, 8)
-	resolutionClampedCount := uint32(0)
-	MakeQuery2[TransformComponent, CellularVolumeComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent) bool {
-		if cv == nil || !cv.UsesGPUVolume() {
-			return true
-		}
-		candidate, resolutionClamped, ok := buildCAVolumeBudgetCandidate(eid, tr, cv, cameraView, caBudget)
-		if !ok {
-			return true
-		}
-		if resolutionClamped {
-			resolutionClampedCount++
-		}
-		caCandidates = append(caCandidates, candidate)
-		cv._dirty = false
-		return true
-	})
-
-	caVolumes, droppedCount, deferredCount, suspendedCount, totalSteps := budgetCAVolumes(caCandidates, caBudget)
-	return app_rt.CAVolumeFrameInput{
-		Volumes:                caVolumes,
-		DeltaTime:              dt,
-		UpdatePresets:          true,
-		RequestedVolumeCount:   uint32(len(caCandidates)),
-		ResolutionClampedCount: resolutionClampedCount,
-		DeferredStepCount:      deferredCount,
-		SuspendedVolumeCount:   suspendedCount,
-		DroppedVolumeCount:     droppedCount,
-		TotalScheduledSteps:    totalSteps,
-	}
-}
-
-func buildCAVolumeBudgetCandidate(eid EntityId, tr *TransformComponent, cv *CellularVolumeComponent, cameraView caBudgetCameraView, cfg gpu_rt.CAVolumeBudgetConfig) (caVolumeBudgetCandidate, bool, bool) {
-	if tr == nil || cv == nil || !cv.UsesGPUVolume() {
-		return caVolumeBudgetCandidate{}, false, false
-	}
-	renderDefaults := gpu_rt.CAVolumeRenderDefaultsFor(uint32(cv.Preset), uint32(cv.Type))
-	scatterColor := renderDefaults.ScatterColor
-	shadowTint := renderDefaults.ShadowTint
-	absorptionColor := renderDefaults.AbsorptionColor
-	extinction := renderDefaults.Extinction
-	emission := renderDefaults.Emission
-	if cv.UseAppearanceOverride {
-		scatterColor = cv.ScatterColor
-		extinction = cv.Extinction
-		emission = cv.Emission
-	}
-	if cv.UseShadowTintOverride {
-		shadowTint = cv.ShadowTint
-	}
-	if cv.UseAbsorptionOverride {
-		absorptionColor = cv.AbsorptionColor
-	}
-
-	resolution := [3]uint32{
-		uint32(max(1, cv.Resolution[0])),
-		uint32(max(1, cv.Resolution[1])),
-		uint32(max(1, cv.Resolution[2])),
-	}
-	resolution, resolutionClamped := clampCAVolumeResolution(resolution, cfg)
-	host := app_rt.CAVolumeInput{
-		EntityID:        uint32(eid),
-		Type:            uint32(cv.Type),
-		Preset:          uint32(cv.Preset),
-		Resolution:      resolution,
-		Position:        cv.VolumeOrigin(tr),
-		Rotation:        tr.Rotation,
-		VoxelScale:      mgl32.Vec3{VoxelSize * tr.Scale.X(), VoxelSize * tr.Scale.Y(), VoxelSize * tr.Scale.Z()},
-		Intensity:       cv.CurrentIntensity(),
-		Diffusion:       cv.Diffusion,
-		Buoyancy:        cv.Buoyancy,
-		Cooling:         cv.Cooling,
-		Dissipation:     cv.Dissipation,
-		Extinction:      extinction,
-		Emission:        emission,
-		StepsPending:    float32(cv._gpuStepsPending),
-		StepDt:          1.0 / max(cv.TickRate, 1.0),
-		ScatterColor:    scatterColor,
-		ShadowTint:      shadowTint,
-		AbsorptionColor: absorptionColor,
-	}
-	rawSteps := cv._gpuStepsPending
-	scheduledSteps, stepDeferred, suspended := scheduleCAVolumeSteps(rawSteps, 0, false, cfg)
-	distance := float32(0)
-	behindCamera := false
-	if cameraView.Valid {
-		offset := host.Position.Sub(cameraView.Position)
-		distance = offset.Len()
-		if distance > 0.001 {
-			behindCamera = offset.Normalize().Dot(cameraView.Forward) < cfg.BehindCameraDot
-		}
-		scheduledSteps, stepDeferred, suspended = scheduleCAVolumeSteps(rawSteps, distance, behindCamera, cfg)
-	}
-
-	candidate := caVolumeBudgetCandidate{
-		host:              host,
-		volume:            cv,
-		rawSteps:          rawSteps,
-		scheduledSteps:    scheduledSteps,
-		distance:          distance,
-		visible:           host.Intensity > 0.001,
-		behindCamera:      behindCamera,
-		resolutionClamped: resolutionClamped,
-		stepDeferred:      stepDeferred,
-		suspended:         suspended,
-	}
-	candidate.priority = caVolumeBudgetPriority(candidate)
-	return candidate, resolutionClamped, true
-}
-
-func clearVoxelRtCAVolumeSceneObjects(state *VoxelRtState) {
-	if state == nil || state.RtApp == nil {
-		return
-	}
-	for eid, obj := range state.caVolumeMap {
-		if state.RtApp.Scene != nil {
-			state.RtApp.Scene.RemoveObject(obj)
-		}
-		delete(state.caVolumeMap, eid)
-		delete(state.objectToEntity, obj)
-	}
 }
 
 func voxelModelNeedsObjectScopedGeometry(vox *VoxelModelComponent) bool {
@@ -995,17 +625,6 @@ func voxelRtAnalyticMediaBridgeSystem(state *VoxelRtState, t *Time, cmd *Command
 	}
 }
 
-func voxelRtCAVolumeBridgeSystem(state *VoxelRtState, t *Time, cmd *Commands) {
-	if state == nil || state.RtApp == nil {
-		return
-	}
-	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureCAVolumes) {
-		syncVoxelRtCAVolumes(state, t, cmd)
-	} else {
-		clearVoxelRtCAVolumes(state)
-	}
-}
-
 func voxelRtParticlesBridgeSystem(state *VoxelRtState, server *AssetServer, t *Time, cmd *Commands) {
 	if state == nil || state.RtApp == nil {
 		return
@@ -1113,31 +732,6 @@ func voxelRtBeamsBridgeSystem(state *VoxelRtState, cmd *Commands) {
 	} else {
 		state.RtApp.ClearBeamInput()
 	}
-}
-
-func syncVoxelRtCAVolumes(state *VoxelRtState, t *Time, cmd *Commands) {
-	if state == nil || state.RtApp == nil {
-		return
-	}
-
-	state.RtApp.Profiler.BeginScope("Sync CA")
-	defer state.RtApp.Profiler.EndScope("Sync CA")
-
-	dt := float32(0)
-	if t != nil {
-		dt = float32(t.Dt)
-	}
-	input := buildCAVolumeFrameInput(cmd, state.RtApp.Camera, state.RtApp.FeatureConfig.CAVolumes, dt)
-	clearVoxelRtCAVolumeSceneObjects(state)
-	state.RtApp.ApplyCAVolumeInput(input)
-}
-
-func clearVoxelRtCAVolumes(state *VoxelRtState) {
-	if state == nil || state.RtApp == nil {
-		return
-	}
-	clearVoxelRtCAVolumeSceneObjects(state)
-	state.RtApp.ClearCAVolumeInput()
 }
 
 func syncVoxelRtAnalyticMedia(state *VoxelRtState, t *Time, cmd *Commands) {

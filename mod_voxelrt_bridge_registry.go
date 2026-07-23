@@ -14,7 +14,6 @@ const (
 	VoxelRtBridgeFeatureDebrisMidfield VoxelRtBridgeFeature = "debris-midfield"
 	VoxelRtBridgeFeaturePlanetBodies   VoxelRtBridgeFeature = "planet-bodies"
 	VoxelRtBridgeFeatureAstronomical   VoxelRtBridgeFeature = "astronomical"
-	VoxelRtBridgeFeatureCAVolumes      VoxelRtBridgeFeature = "ca-volumes"
 	VoxelRtBridgeFeatureSprites        VoxelRtBridgeFeature = "sprites"
 	VoxelRtBridgeFeatureBeams          VoxelRtBridgeFeature = "beams"
 	VoxelRtBridgeFeatureSkybox         VoxelRtBridgeFeature = "skybox"
@@ -30,7 +29,6 @@ const (
 	voxelRtBridgeFeatureDebrisMidfield = VoxelRtBridgeFeatureDebrisMidfield
 	voxelRtBridgeFeaturePlanetBodies   = VoxelRtBridgeFeaturePlanetBodies
 	voxelRtBridgeFeatureAstronomical   = VoxelRtBridgeFeatureAstronomical
-	voxelRtBridgeFeatureCAVolumes      = VoxelRtBridgeFeatureCAVolumes
 	voxelRtBridgeFeatureSprites        = VoxelRtBridgeFeatureSprites
 	voxelRtBridgeFeatureBeams          = VoxelRtBridgeFeatureBeams
 	voxelRtBridgeFeatureSkybox         = VoxelRtBridgeFeatureSkybox
@@ -62,7 +60,6 @@ func DefaultVoxelRtBridgeFeatureRegistrations() []VoxelRtBridgeFeatureRegistrati
 		{Feature: VoxelRtBridgeFeatureDebrisMidfield, AppFeatureName: "debris_midfield", RequiredGraphNodes: []string{app_rt.RenderNodeCoreAccumulation}, PreRenderBatchedSystem: voxelRtDebrisMidfieldBridgeSystem},
 		{Feature: VoxelRtBridgeFeaturePlanetBodies, AppFeatureName: "planet-bodies", RequiredGraphNodes: []string{app_rt.RenderNodeFeaturePlanetBodies}, PreRenderBatchedSystem: voxelRtPlanetBodyBridgeSystem},
 		{Feature: VoxelRtBridgeFeatureAstronomical, AppFeatureName: "astronomical", RequiredGraphNodes: []string{app_rt.RenderNodeFeatureAstronomical}, PreRenderBatchedSystem: voxelRtAstronomicalBridgeSystem},
-		{Feature: VoxelRtBridgeFeatureCAVolumes, AppFeatureName: "ca-volumes", RequiredGraphNodes: []string{app_rt.RenderNodeFeatureCAVolumesSim, app_rt.RenderNodeFeatureCAVolumesRender}, PreRenderBatchedSystem: voxelRtCAVolumeBridgeSystem},
 		{Feature: VoxelRtBridgeFeatureSprites, AppFeatureName: "sprites", RequiredGraphNodes: []string{app_rt.RenderNodeCoreAccumulation}, PreRenderAfterBatchSystem: voxelRtSpritesBridgeSystem},
 		{Feature: VoxelRtBridgeFeatureBeams, AppFeatureName: "beams", RequiredGraphNodes: []string{app_rt.RenderNodeCoreAccumulation}, PreRenderAfterBatchSystem: voxelRtBeamsBridgeSystem},
 		{Feature: VoxelRtBridgeFeatureSkybox, AppFeatureName: "skybox", RequiredGraphNodes: []string{app_rt.RenderNodeFeatureSkyboxUpdate}, PreRenderSystem: voxelRtSkyboxBridgeSystem},

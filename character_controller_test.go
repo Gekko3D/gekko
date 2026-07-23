@@ -259,7 +259,6 @@ func newCharacterControllerTestVoxelRtState() *VoxelRtState {
 			Scene: core.NewScene(),
 		},
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 }

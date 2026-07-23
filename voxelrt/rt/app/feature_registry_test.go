@@ -710,18 +710,6 @@ func TestAstronomicalFeatureIsGraphOwnedByPostLightingNode(t *testing.T) {
 	}
 }
 
-func TestCAVolumeFeatureIsGraphOwnedBySimulationAndRenderNodes(t *testing.T) {
-	feature := &CAVolumeFeature{}
-	wantNodes := []string{RenderNodeFeatureCAVolumesSim, RenderNodeFeatureCAVolumesRender}
-	if !sameStrings(feature.GraphNodeNames(), wantNodes) {
-		t.Fatalf("CA volume graph nodes = %v, want %v", feature.GraphNodeNames(), wantNodes)
-	}
-	wantStages := []FeatureCommandStage{FeatureCommandStagePreGBufferVolumes, FeatureCommandStagePostLighting}
-	if !sameCommandStages(feature.GraphCommandStages(), wantStages) {
-		t.Fatalf("CA volume graph command stages = %v, want %v", feature.GraphCommandStages(), wantStages)
-	}
-}
-
 func TestAppRenderGraphLifecycleDispatch(t *testing.T) {
 	var calls []string
 	graph := NewRenderGraph()

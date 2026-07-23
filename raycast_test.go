@@ -16,7 +16,6 @@ func TestRaycastScaling(t *testing.T) {
 			Scene: core.NewScene(),
 		},
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 
@@ -99,7 +98,6 @@ func TestRaycastFilteredSkipsRejectedEntity(t *testing.T) {
 			Scene: core.NewScene(),
 		},
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 

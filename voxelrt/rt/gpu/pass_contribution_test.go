@@ -104,32 +104,11 @@ func TestHasContributionHelpersReflectBoundState(t *testing.T) {
 	if manager.HasSpriteContribution() {
 		t.Fatal("expected empty sprite state to skip accumulation")
 	}
-	if manager.HasCAVolumeContribution() {
-		t.Fatal("expected empty CA volume state to skip accumulation")
-	}
 	if manager.HasAnalyticMediumContribution() {
 		t.Fatal("expected empty analytic medium state to skip accumulation")
 	}
 	if manager.HasWaterContribution() {
 		t.Fatal("expected empty water state to skip accumulation")
-	}
-}
-
-func TestHasCAVolumeContributionRequiresVisibleVolumes(t *testing.T) {
-	manager := &GpuBufferManager{
-		CAVolumeCount:        1,
-		CAVolumeVisibleCount: 0,
-		CAVolumeRenderBG0:    &wgpu.BindGroup{},
-		CAVolumeRenderBG1A:   &wgpu.BindGroup{},
-		CAVolumeRenderBG2:    &wgpu.BindGroup{},
-	}
-	if manager.HasCAVolumeContribution() {
-		t.Fatal("expected invisible resident CA volumes to skip the render contribution")
-	}
-
-	manager.CAVolumeVisibleCount = 1
-	if !manager.HasCAVolumeContribution() {
-		t.Fatal("expected visible CA volume state to require contribution")
 	}
 }
 

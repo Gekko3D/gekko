@@ -90,28 +90,6 @@ type SpriteRenderBatch struct {
 	BindGroup0    *wgpu.BindGroup
 }
 
-type CAVolumeHost struct {
-	EntityID        uint32
-	Type            uint32
-	Preset          uint32
-	Resolution      [3]uint32
-	Position        mgl32.Vec3
-	Rotation        mgl32.Quat
-	VoxelScale      mgl32.Vec3
-	Intensity       float32
-	Diffusion       float32
-	Buoyancy        float32
-	Cooling         float32
-	Dissipation     float32
-	Extinction      float32
-	Emission        float32
-	StepsPending    float32
-	StepDt          float32
-	ScatterColor    [3]float32
-	ShadowTint      [3]float32
-	AbsorptionColor [3]float32
-}
-
 type AnalyticMediumHost struct {
 	EntityID                  uint32
 	Shape                     uint32
@@ -182,29 +160,6 @@ type WaterRippleHost struct {
 	DisturbanceKind    uint32
 }
 
-type CAPresetData struct {
-	SmokeSeed        float32
-	FireSeed         float32
-	SmokeInject      float32
-	FireInject       float32
-	Diffusion        float32
-	Buoyancy         float32
-	Cooling          float32
-	Dissipation      float32
-	SmokeDensityCut  float32
-	FireHeatCut      float32
-	SigmaTSmoke      float32
-	SigmaTFire       float32
-	AlphaScaleSmoke  float32
-	AlphaScaleFire   float32
-	AbsorptionScale  float32
-	ScatterScale     float32
-	EmberTint        [4]float32
-	FireCoreTint     [4]float32
-	Flags            uint32
-	Pad1, Pad2, Pad3 uint32
-}
-
 type GpuBufferManager struct {
 	Device   *wgpu.Device
 	Profiler *core.Profiler
@@ -255,8 +210,6 @@ type GpuBufferManager struct {
 	TransparentWeightTex *wgpu.Texture // R16Float, accum weight
 	VolumetricTex        [2]*wgpu.Texture
 	VolumetricDepthTex   [2]*wgpu.Texture
-	CAVolumeColorTex     *wgpu.Texture
-	CAVolumeDepthTex     *wgpu.Texture
 
 	// G-Buffer Views
 	DepthView       *wgpu.TextureView
@@ -269,8 +222,6 @@ type GpuBufferManager struct {
 	TransparentWeightView  *wgpu.TextureView
 	VolumetricView         [2]*wgpu.TextureView
 	VolumetricDepthView    [2]*wgpu.TextureView
-	CAVolumeColorView      *wgpu.TextureView
-	CAVolumeDepthView      *wgpu.TextureView
 	VolumetricWidth        uint32
 	VolumetricHeight       uint32
 	VolumetricHistoryIdx   int
@@ -405,11 +356,7 @@ type GpuBufferManager struct {
 	transparentBG0Lights           *wgpu.Buffer
 	transparentBG0ShadowLayerParam *wgpu.Buffer
 
-	// GPU cellular automata + volumetric rendering
-	CAVolumeBuf                 *wgpu.Buffer
-	CABoundsBuf                 *wgpu.Buffer
-	CAParamsBuf                 *wgpu.Buffer
-	CAPresetBuf                 *wgpu.Buffer
+	// Optional volumetric and surface features
 	AnalyticMediumBuf           *wgpu.Buffer
 	AnalyticMediumParamsBuf     *wgpu.Buffer
 	AstronomicalBodyBuf         *wgpu.Buffer
@@ -426,23 +373,6 @@ type GpuBufferManager struct {
 	WaterSurfaceParamsBuf       *wgpu.Buffer
 	WaterRippleBuf              *wgpu.Buffer
 	VolumetricHistoryParamsBuf  *wgpu.Buffer
-	CAFieldTexA                 *wgpu.Texture
-	CAFieldTexB                 *wgpu.Texture
-	CAFieldViewA                *wgpu.TextureView
-	CAFieldViewB                *wgpu.TextureView
-	CAVolumeSimPipeline         *wgpu.ComputePipeline
-	CAVolumeBoundsPipeline      *wgpu.ComputePipeline
-	CAVolumeSimBG0              *wgpu.BindGroup
-	CAVolumeSimBG1A             *wgpu.BindGroup
-	CAVolumeSimBG1B             *wgpu.BindGroup
-	CAVolumeBoundsBG0           *wgpu.BindGroup
-	CAVolumeBoundsBG1A          *wgpu.BindGroup
-	CAVolumeBoundsBG1B          *wgpu.BindGroup
-	CAVolumeRenderBG0           *wgpu.BindGroup
-	CAVolumeRenderBG1A          *wgpu.BindGroup
-	CAVolumeRenderBG1B          *wgpu.BindGroup
-	CAVolumeRenderBG2           *wgpu.BindGroup
-	CAVolumeCount               uint32
 	AnalyticMediumBG0           *wgpu.BindGroup
 	AnalyticMediumBG1           *wgpu.BindGroup
 	AnalyticMediumBG2           *wgpu.BindGroup
@@ -473,30 +403,12 @@ type GpuBufferManager struct {
 	WaterRippleDroppedCount     uint32
 	WaterElapsedTime            float32
 	WaterSurfaces               []WaterSurfaceHost
-	CAAtlasWidth                uint32
-	CAAtlasHeight               uint32
-	CAAtlasDepth                uint32
-	CAAtlasCellCount            uint64
-	CAAtlasByteCount            uint64
-	CAFieldIndex                int
-	CAElapsedTime               float32
-	CARequestedVolumeCount      uint32
-	CAVolumeVisibleCount        uint32
-	CAResolutionClampedCount    uint32
-	CADeferredStepVolumeCount   uint32
-	CASuspendedVolumeCount      uint32
-	CADroppedVolumeCount        uint32
-	CATotalScheduledSteps       uint32
-	CAVolumeBindingsDirty       bool
 	AnalyticMediumBindingsDirty bool
 	AstronomicalBindingsDirty   bool
 	FarPlanetRingBindingsDirty  bool
 	DebrisMidfieldBindingsDirty bool
 	PlanetBodyBindingsDirty     bool
 	WaterBindingsDirty          bool
-	caLayout                    []caVolumeLayout
-	caVolumes                   []CAVolumeHost
-
 	// Batch update tracking
 	BatchMode      bool                       // Enable batching of updates within a frame
 	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
@@ -556,12 +468,6 @@ type RetainedVoxelMapStats struct {
 	RetainRequests          int
 	RetainRequestsAllocated int
 	Evictions               int
-}
-
-type caVolumeLayout struct {
-	EntityID   uint32
-	Type       uint32
-	Resolution [3]uint32
 }
 
 type retiredBuffer struct {
@@ -671,8 +577,6 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("TileLightParamsBuf", &m.TileLightParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("TileLightHeadersBuf", &m.TileLightHeadersBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("TileLightIndicesBuf", &m.TileLightIndicesBuf, nil, wgpu.BufferUsageStorage, 1024)
-	m.ensureBuffer("CABoundsBuf", &m.CABoundsBuf, nil, wgpu.BufferUsageStorage, 1024)
-	m.ensureBuffer("CAPresetBuf", &m.CAPresetBuf, nil, wgpu.BufferUsageStorage, 4096)
 	m.ensureBuffer("AnalyticMediumBuf", &m.AnalyticMediumBuf, nil, wgpu.BufferUsageStorage, 1024)
 	m.ensureBuffer("AnalyticMediumParamsBuf", &m.AnalyticMediumParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("AstronomicalBodyBuf", &m.AstronomicalBodyBuf, nil, wgpu.BufferUsageStorage, 1024)

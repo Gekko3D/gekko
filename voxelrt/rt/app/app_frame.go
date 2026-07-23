@@ -193,19 +193,6 @@ func (a *App) Update() {
 	a.Profiler.SetCount("ShadowGrouped", shadowGroupedVisible)
 	a.Profiler.SetCount("ShadowCasters", len(a.Scene.ShadowObjects))
 	a.Profiler.SetCount("TerrainChunks", visibleTerrainChunks)
-	a.Profiler.SetCount("CAVolumes", int(a.BufferManager.CAVolumeCount))
-	a.Profiler.SetCount("CARequested", int(a.BufferManager.CARequestedVolumeCount))
-	a.Profiler.SetCount("CAVisible", int(a.BufferManager.CAVolumeVisibleCount))
-	a.Profiler.SetCount("CADropped", int(a.BufferManager.CADroppedVolumeCount))
-	a.Profiler.SetCount("CASuspended", int(a.BufferManager.CASuspendedVolumeCount))
-	a.Profiler.SetCount("CAResClamp", int(a.BufferManager.CAResolutionClampedCount))
-	a.Profiler.SetCount("CAStepDefer", int(a.BufferManager.CADeferredStepVolumeCount))
-	a.Profiler.SetCount("CASteps", int(a.BufferManager.CATotalScheduledSteps))
-	a.Profiler.SetCount("CAAtlasW", int(a.BufferManager.CAAtlasWidth))
-	a.Profiler.SetCount("CAAtlasH", int(a.BufferManager.CAAtlasHeight))
-	a.Profiler.SetCount("CAAtlasD", int(a.BufferManager.CAAtlasDepth))
-	a.Profiler.SetCount("CAAtlasCells", int(a.BufferManager.CAAtlasCellCount))
-	a.Profiler.SetCount("CAAtlasBytes", int(a.BufferManager.CAAtlasByteCount))
 
 	// Update Buffers
 	lightingQuality := a.EffectiveLightingQuality()
@@ -489,8 +476,6 @@ func runtimeRenderGraphNodesBeforeLightingMetrics() []string {
 	return []string{
 		RenderNodeFeatureParticlesSim,
 		RenderNodeFeaturePreGBuffer,
-		RenderNodeFeatureCAVolumesSim,
-		RenderNodeFeaturePreGBufferVolumes,
 		RenderNodeCoreGBuffer,
 		RenderNodeCoreHiZ,
 		RenderNodeFeaturePostGBuffer,
@@ -505,7 +490,6 @@ func runtimeRenderGraphNodesAfterLightingMetrics() []string {
 		RenderNodeCoreTiledLightCull,
 		RenderNodeCoreLighting,
 		RenderNodeFeaturePostLighting,
-		RenderNodeFeatureCAVolumesRender,
 		RenderNodeFeatureAstronomical,
 		RenderNodeFeaturePlanetBodies,
 		RenderNodeFeatureAnalyticMedia,
@@ -533,12 +517,6 @@ func (a *App) runLegacyRenderGraphFeatureNode(name string, encoder *wgpu.Command
 		}
 	case RenderNodeFeaturePreGBuffer:
 		a.runFeatureCommandStage("Feature Pre-GBuffer", FeatureCommandStagePreGBuffer, encoder)
-	case RenderNodeFeatureCAVolumesSim:
-		if err := a.recordCAVolumeSimulationPass(encoder); err != nil {
-			fmt.Printf("ERROR: CA volume simulation pass failed: %v\n", err)
-		}
-	case RenderNodeFeaturePreGBufferVolumes:
-		a.runFeatureCommandStage("Feature Pre-GBuffer Volumes", FeatureCommandStagePreGBufferVolumes, encoder)
 	case RenderNodeCoreGBuffer:
 		if err := a.recordGBufferPass(encoder, frame); err != nil {
 			fmt.Printf("ERROR: G-Buffer pass failed: %v\n", err)
@@ -567,10 +545,6 @@ func (a *App) runLegacyRenderGraphFeatureNode(name string, encoder *wgpu.Command
 		}
 	case RenderNodeFeaturePostLighting:
 		a.runFeatureCommandStage("Feature Post-Lighting", FeatureCommandStagePostLighting, encoder)
-	case RenderNodeFeatureCAVolumesRender:
-		if err := a.recordCAVolumeRenderPass(encoder); err != nil {
-			fmt.Printf("ERROR: CA volume render pass failed: %v\n", err)
-		}
 	case RenderNodeFeatureAstronomical:
 		if err := a.recordAstronomicalPass(encoder); err != nil {
 			fmt.Printf("ERROR: Astronomical pass failed: %v\n", err)

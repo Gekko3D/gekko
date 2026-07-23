@@ -212,7 +212,6 @@ func TestVoxelRtSystemOnlyRunsCoreBridgeScopes(t *testing.T) {
 	state.RtApp.RegisterFeature(&app_rt.ParticlesFeature{})
 	state.RtApp.RegisterFeature(&app_rt.WaterFeature{})
 	state.RtApp.RegisterFeature(&app_rt.AnalyticMediumFeature{})
-	state.RtApp.RegisterFeature(&app_rt.CAVolumeFeature{})
 	state.RtApp.RegisterFeature(&app_rt.PlanetBodyFeature{})
 	state.RtApp.RegisterFeature(&app_rt.AstronomicalFeature{})
 	state.RtApp.RegisterFeature(&app_rt.FarPlanetRingFeature{})
@@ -228,7 +227,6 @@ func TestVoxelRtSystemOnlyRunsCoreBridgeScopes(t *testing.T) {
 		}
 	}
 	for _, scope := range []string{
-		"Sync CA",
 		"Sync Media",
 		"Sync Planet Bodies",
 		"Sync Astronomical",
@@ -805,98 +803,6 @@ func TestVoxelRtSystemGatesDebrisMidfieldBridgeSyncByRegisteredFeature(t *testin
 	}
 }
 
-func TestVoxelRtSystemGatesCAVolumeBridgeSyncByRegisteredFeature(t *testing.T) {
-	app := NewApp()
-	cmd := app.Commands()
-	volume := &CellularVolumeComponent{
-		Resolution:       [3]int{8, 8, 8},
-		Type:             CellularSmoke,
-		UseIntensity:     true,
-		Intensity:        1,
-		TickRate:         10,
-		_gpuStepsPending: 3,
-		_dirty:           true,
-	}
-	cmd.AddEntity(
-		&TransformComponent{
-			Position: mgl32.Vec3{0, 0, 0},
-			Rotation: mgl32.QuatIdent(),
-			Scale:    mgl32.Vec3{1, 1, 1},
-		},
-		volume,
-	)
-	app.FlushCommands()
-
-	disabledState := newVoxelRtStateTest()
-	voxelRtSystem(nil, disabledState, nil, &Time{Dt: 1.0 / 60.0}, cmd, nil)
-	voxelRtCAVolumeBridgeSystem(disabledState, &Time{Dt: 1.0 / 60.0}, cmd)
-	if _, ok := disabledState.RtApp.Profiler.ScopeTimes["Sync CA"]; ok {
-		t.Fatal("expected missing CA volume feature to skip CA sync scope")
-	}
-
-	enabledState := newVoxelRtStateTest()
-	enabledState.RtApp.RegisterFeature(&app_rt.CAVolumeFeature{})
-	if !enabledState.bridgeFeatureEnabled(voxelRtBridgeFeatureCAVolumes) {
-		t.Fatal("expected registered CA volume feature to enable CA bridge")
-	}
-	voxelRtSystem(nil, enabledState, nil, &Time{Dt: 1.0 / 60.0}, cmd, nil)
-	if _, ok := enabledState.RtApp.Profiler.ScopeTimes["Sync CA"]; ok {
-		t.Fatal("expected broad voxelRtSystem to leave CA sync to the registered bridge system")
-	}
-	voxelRtCAVolumeBridgeSystem(enabledState, &Time{Dt: 1.0 / 60.0}, cmd)
-	if _, ok := enabledState.RtApp.Profiler.ScopeTimes["Sync CA"]; !ok {
-		t.Fatal("expected enabled CA bridge to record sync scope")
-	}
-
-	clearState := newVoxelRtStateTest()
-	clearState.RtApp.BufferManager = &gpu_rt.GpuBufferManager{
-		CAVolumeCount:             2,
-		CAVolumeVisibleCount:      1,
-		CARequestedVolumeCount:    2,
-		CAResolutionClampedCount:  1,
-		CADeferredStepVolumeCount: 1,
-		CASuspendedVolumeCount:    1,
-		CADroppedVolumeCount:      1,
-		CATotalScheduledSteps:     4,
-		CAAtlasCellCount:          512,
-		CAAtlasByteCount:          2048,
-		CAVolumeBindingsDirty:     false,
-	}
-	clearState.RtApp.SetHadCAVolumePass(true)
-	staleObject := core.NewVoxelObject()
-	clearState.RtApp.Scene.AddObject(staleObject)
-	clearState.caVolumeMap[EntityId(42)] = staleObject
-	clearState.objectToEntity[staleObject] = EntityId(42)
-
-	clearVoxelRtCAVolumes(clearState)
-
-	if clearState.RtApp.HadCAVolumePass() {
-		t.Fatal("expected disabled CA bridge to clear stale pass state")
-	}
-	if len(clearState.caVolumeMap) != 0 {
-		t.Fatalf("expected disabled CA bridge to clear stale scene object map, got %d", len(clearState.caVolumeMap))
-	}
-	if _, ok := clearState.objectToEntity[staleObject]; ok {
-		t.Fatal("expected disabled CA bridge to clear stale object entity lookup")
-	}
-	if len(clearState.RtApp.Scene.Objects) != 0 {
-		t.Fatalf("expected disabled CA bridge to remove stale scene object, got %d objects", len(clearState.RtApp.Scene.Objects))
-	}
-	if bm := clearState.RtApp.BufferManager; bm.CAVolumeCount != 0 ||
-		bm.CAVolumeVisibleCount != 0 ||
-		bm.CARequestedVolumeCount != 0 ||
-		bm.CAResolutionClampedCount != 0 ||
-		bm.CADeferredStepVolumeCount != 0 ||
-		bm.CASuspendedVolumeCount != 0 ||
-		bm.CADroppedVolumeCount != 0 ||
-		bm.CATotalScheduledSteps != 0 ||
-		bm.CAAtlasCellCount != 0 ||
-		bm.CAAtlasByteCount != 0 ||
-		!bm.CAVolumeBindingsDirty {
-		t.Fatalf("expected disabled CA bridge to clear stale buffer manager counters, got %+v", bm)
-	}
-}
-
 func TestVoxelRtSystemGatesSpriteBridgeSyncByRegisteredFeature(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
@@ -1181,7 +1087,7 @@ func TestBuildSkyboxBridgeInputMapsRendererDtoDeterministically(t *testing.T) {
 func TestVoxelRtBridgeRegistrySupportsModuleRegistrations(t *testing.T) {
 	var textSystemRegistered, gizmoSystemRegistered, analyticBatchedSystemRegistered, waterBatchedSystemRegistered bool
 	var planetBatchedSystemRegistered, astronomicalBatchedSystemRegistered bool
-	var farRingBatchedSystemRegistered, debrisBatchedSystemRegistered, caBatchedSystemRegistered bool
+	var farRingBatchedSystemRegistered, debrisBatchedSystemRegistered bool
 	var particleAfterBatchSystemRegistered, spriteAfterBatchSystemRegistered, beamAfterBatchSystemRegistered, skyboxSystemRegistered bool
 	var skyboxRequiresGraphNode bool
 	for _, registration := range DefaultVoxelRtBridgeFeatureRegistrations() {
@@ -1202,8 +1108,6 @@ func TestVoxelRtBridgeRegistrySupportsModuleRegistrations(t *testing.T) {
 			farRingBatchedSystemRegistered = registration.PreRenderBatchedSystem != nil
 		case VoxelRtBridgeFeatureDebrisMidfield:
 			debrisBatchedSystemRegistered = registration.PreRenderBatchedSystem != nil
-		case VoxelRtBridgeFeatureCAVolumes:
-			caBatchedSystemRegistered = registration.PreRenderBatchedSystem != nil
 		case VoxelRtBridgeFeatureParticles:
 			particleAfterBatchSystemRegistered = registration.PreRenderAfterBatchSystem != nil
 		case VoxelRtBridgeFeatureSprites:
@@ -1218,12 +1122,12 @@ func TestVoxelRtBridgeRegistrySupportsModuleRegistrations(t *testing.T) {
 	}
 	if !textSystemRegistered || !gizmoSystemRegistered || !analyticBatchedSystemRegistered || !waterBatchedSystemRegistered ||
 		!planetBatchedSystemRegistered || !astronomicalBatchedSystemRegistered || !farRingBatchedSystemRegistered ||
-		!debrisBatchedSystemRegistered || !caBatchedSystemRegistered || !particleAfterBatchSystemRegistered ||
+		!debrisBatchedSystemRegistered || !particleAfterBatchSystemRegistered ||
 		!spriteAfterBatchSystemRegistered || !beamAfterBatchSystemRegistered || !skyboxSystemRegistered || !skyboxRequiresGraphNode {
-		t.Fatalf("expected default bridge registrations to install systems, got text=%v gizmos=%v analyticBatched=%v waterBatched=%v planetBatched=%v astronomicalBatched=%v farRingBatched=%v debrisBatched=%v caBatched=%v particleAfterBatch=%v spriteAfterBatch=%v beamAfterBatch=%v skyboxSystem=%v skyboxRequiresGraphNode=%v",
+		t.Fatalf("expected default bridge registrations to install systems, got text=%v gizmos=%v analyticBatched=%v waterBatched=%v planetBatched=%v astronomicalBatched=%v farRingBatched=%v debrisBatched=%v particleAfterBatch=%v spriteAfterBatch=%v beamAfterBatch=%v skyboxSystem=%v skyboxRequiresGraphNode=%v",
 			textSystemRegistered, gizmoSystemRegistered, analyticBatchedSystemRegistered, waterBatchedSystemRegistered,
 			planetBatchedSystemRegistered, astronomicalBatchedSystemRegistered, farRingBatchedSystemRegistered,
-			debrisBatchedSystemRegistered, caBatchedSystemRegistered, particleAfterBatchSystemRegistered,
+			debrisBatchedSystemRegistered, particleAfterBatchSystemRegistered,
 			spriteAfterBatchSystemRegistered, beamAfterBatchSystemRegistered, skyboxSystemRegistered, skyboxRequiresGraphNode)
 	}
 
@@ -2544,7 +2448,6 @@ func newVoxelRtStateTest() *VoxelRtState {
 		lastMaterialKeys:             make(map[*core.VoxelObject]materialTableCacheKey),
 		materialTableCache:           make(map[materialTableCacheKey][]core.Material),
 		particlePools:                make(map[EntityId]*particlePool),
-		caVolumeMap:                  make(map[EntityId]*core.VoxelObject),
 		objectToEntity:               make(map[*core.VoxelObject]EntityId),
 		skyboxLayers:                 make(map[EntityId]SkyboxLayerComponent),
 		bridgeFeatures:               voxelRtBridgeRegistryFrom(DefaultVoxelRtBridgeFeatureRegistrations()),

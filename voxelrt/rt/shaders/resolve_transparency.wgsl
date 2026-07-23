@@ -44,8 +44,7 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VSOut {
 //  - 5: volumetric scene depth history (R16Float)
 //  - 6: full-resolution scene depth
 //  - 7: analytic planet depth
-//  - 8: half-resolution CA color (rgb=radiance, a=transmittance)
-//  - 9: half-resolution CA front depth
+//  - 8: underwater parameters
 @group(0) @binding(0) var<uniform> camera : CameraData;
 @group(0) @binding(1) var tOpaque : texture_2d<f32>;
 @group(0) @binding(2) var tAccum  : texture_2d<f32>;
@@ -54,15 +53,13 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VSOut {
 @group(0) @binding(5) var tVolumeDepth : texture_2d<f32>;
 @group(0) @binding(6) var tSceneDepth : texture_2d<f32>;
 @group(0) @binding(7) var tPlanetDepth : texture_2d<f32>;
-@group(0) @binding(8) var tCAColor : texture_2d<f32>;
-@group(0) @binding(9) var tCADepth : texture_2d<f32>;
 
 struct UnderwaterData {
   color_strength: vec4<f32>,
   absorption_distortion: vec4<f32>,
   time: vec4<f32>,
 };
-@group(0) @binding(10) var<uniform> underwater: UnderwaterData;
+@group(0) @binding(8) var<uniform> underwater: UnderwaterData;
 
 fn camera_far_t() -> f32 {
   return max(camera.distance_limits.y, 1.0);
@@ -168,10 +165,6 @@ fn sample_halfres_bilateral(
   return BilateralSample(accum / total_w, accum_depth / total_w);
 }
 
-fn composite_two_layers(base: vec3<f32>, front: vec4<f32>, back: vec4<f32>) -> vec3<f32> {
-  return base * (front.a * back.a) + front.rgb + back.rgb * front.a;
-}
-
 fn underwater_uv(uv: vec2<f32>, dims: vec2<u32>) -> vec2<f32> {
   let strength = underwater.color_strength.w;
   if (strength <= 1e-4) {
@@ -189,7 +182,6 @@ fn underwater_uv(uv: vec2<f32>, dims: vec2<u32>) -> vec2<f32> {
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   // Fetch all inputs via textureLoad with integer pixel coords (no filtering)
-  let finite_limit = finite_depth_limit();
   let dims = textureDimensions(tAccum);
   let distorted_uv = underwater_uv(uv, dims);
   let ipos = vec2<i32>(
@@ -203,20 +195,10 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   let accA = acc4.a;
   let w    = textureLoad(tWeight,  ipos, 0).r;
   let vol = sample_halfres_bilateral(ipos, current_depth, tVolume, tVolumeDepth);
-  let ca = sample_halfres_bilateral(ipos, current_depth, tCAColor, tCADepth);
   let vol_valid = any(vol.color.rgb > vec3<f32>(1e-4)) || vol.color.a < 0.999;
-  let ca_valid = ca.depth > 0.0 && ca.depth < finite_limit;
   var base = copq;
-  if (vol_valid && ca_valid) {
-    if (ca.depth <= vol.depth) {
-      base = composite_two_layers(copq, ca.color, vol.color);
-    } else {
-      base = composite_two_layers(copq, vol.color, ca.color);
-    }
-  } else if (vol_valid) {
+  if (vol_valid) {
     base = copq * vol.color.a + vol.color.rgb;
-  } else if (ca_valid) {
-    base = copq * ca.color.a + ca.color.rgb;
   }
 
   // Use unweighted accumulated alpha (from accum.a) for revealage to reduce distance dependence

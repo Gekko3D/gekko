@@ -21,9 +21,6 @@ type FeatureCommandStage uint8
 const (
 	// FeatureCommandStagePreGBuffer runs before the G-buffer compute pass.
 	FeatureCommandStagePreGBuffer FeatureCommandStage = iota
-	// FeatureCommandStagePreGBufferVolumes is reserved for volume prepasses that
-	// historically ran as a separate block before G-buffer.
-	FeatureCommandStagePreGBufferVolumes
 	// FeatureCommandStagePostGBuffer runs after the core G-buffer and Hi-Z work.
 	FeatureCommandStagePostGBuffer
 	// FeatureCommandStagePreLighting runs after shadows but before tiled cull/lighting.

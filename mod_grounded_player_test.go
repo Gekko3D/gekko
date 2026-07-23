@@ -933,7 +933,6 @@ func newGroundedPlayerTestVoxelRtState() *VoxelRtState {
 			Profiler: core.NewProfiler(),
 		},
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 	}
 }

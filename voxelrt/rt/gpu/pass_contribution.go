@@ -62,14 +62,6 @@ func (m *GpuBufferManager) HasParticleContribution() bool {
 	return m != nil && m.ParticleSystemActive && m.ParticlesBindGroup0 != nil && m.ParticlesBindGroup1 != nil
 }
 
-func (m *GpuBufferManager) HasCAVolumeContribution() bool {
-	return m != nil &&
-		m.CAVolumeVisibleCount > 0 &&
-		m.CAVolumeRenderBG0 != nil &&
-		m.CurrentCAVolumeRenderBG1() != nil &&
-		m.CAVolumeRenderBG2 != nil
-}
-
 func (m *GpuBufferManager) HasAnalyticMediumContribution() bool {
 	return m != nil &&
 		m.AnalyticMediumCount > 0 &&

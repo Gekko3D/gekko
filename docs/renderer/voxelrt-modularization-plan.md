@@ -61,7 +61,6 @@ Examples of feature candidates:
 - sprites
 - particles
 - transparent overlay
-- CA volumes
 - gizmos
 - text overlay
 
@@ -142,8 +141,7 @@ Recommended extraction order:
 3. sprites
 4. particles
 5. transparent overlay
-6. CA volumes
-7. skybox
+6. skybox
 
 Tasks per feature:
 
@@ -274,7 +272,7 @@ Milestone 2:
 
 Milestone 3:
 
-- transparent overlay, CA volumes, and skybox extracted
+- transparent overlay and skybox extracted
 
 Milestone 4:
 

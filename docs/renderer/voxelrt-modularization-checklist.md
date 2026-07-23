@@ -268,33 +268,6 @@ Definition of done:
 
 - transparency is no longer wired inline through core app code
 
-## Phase 9: Extract CA Volumes
-
-Goal:
-
-- move cellular volume rendering/simulation into a feature
-
-New files to add:
-
-- `gekko/voxelrt/rt/app/feature_ca_volumes.go`
-
-Files to edit:
-
-- `gekko/voxelrt/rt/app/app_ca.go`
-- `gekko/voxelrt/rt/app/app.go`
-- `gekko/voxelrt/rt/app/app_frame.go`
-- `gekko/voxelrt/rt/gpu/manager_ca.go`
-
-Tasks:
-
-- move CA sim/bounds/render setup into the feature
-- move CA update/render scheduling into the feature
-- keep CA-specific GPU manager logic behind feature-owned calls
-
-Definition of done:
-
-- CA volumes are removable without editing core frame logic
-
 ## Phase 10: Extract Skybox
 
 Goal:
@@ -352,7 +325,6 @@ type VoxelRtFeatureFlags struct {
     Sprites      bool
     Particles    bool
     Transparency bool
-    CAVolumes    bool
     Skybox       bool
 }
 ```

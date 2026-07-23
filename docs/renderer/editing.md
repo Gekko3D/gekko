@@ -58,5 +58,4 @@ Text and gizmos are frame-lifetime data:
 ## Notes
 
 - Long-range picking should prefer `RaycastSubstepped`.
-- CA volume bridging lives in `mod_voxelrt_client_systems.go`.
 - GPU buffer reallocation and bind-group rebuilds happen in `App.Update()` and `GpuBufferManager`; edit helpers only change CPU-side scene data.

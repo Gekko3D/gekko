@@ -9,7 +9,6 @@ type SceneDef struct {
 	VoxelObjects     []VoxelObjectDef
 	Lights           []LightDef
 	ParticleEmitters []ParticleEmitterDef
-	CellularVolumes  []CellularVolumeDef
 	// Generic extensions can be added here if needed, or composed in higher level structs
 }
 
@@ -83,16 +82,6 @@ type ParticleEmitterDef struct {
 	Emitter  ParticleEmitterComponent
 }
 
-// CellularVolumeDef defines a supported cellular volume spawn.
-//
-// Supported volume types are CellularSmoke and CellularFire.
-type CellularVolumeDef struct {
-	Position mgl32.Vec3
-	Rotation mgl32.Quat
-	Scale    mgl32.Vec3
-	Volume   CellularVolumeComponent
-}
-
 // LoadScene iterates through the SceneDef and spawns entities.
 func LoadScene(cmd *Commands, assets *AssetServer, scene *SceneDef) {
 	for _, obj := range scene.VoxelObjects {
@@ -107,9 +96,6 @@ func LoadScene(cmd *Commands, assets *AssetServer, scene *SceneDef) {
 		spawnParticleEmitter(cmd, emitter)
 	}
 
-	for _, volume := range scene.CellularVolumes {
-		spawnCellularVolume(cmd, volume)
-	}
 }
 
 func spawnVoxelObject(cmd *Commands, assets *AssetServer, def VoxelObjectDef) {
@@ -241,17 +227,5 @@ func spawnParticleEmitter(cmd *Commands, def ParticleEmitterDef) {
 			Scale:    def.Scale,
 		},
 		&def.Emitter,
-	)
-}
-
-func spawnCellularVolume(cmd *Commands, def CellularVolumeDef) {
-	mustValidateCellularVolumeComponent(&def.Volume)
-	cmd.AddEntity(
-		&TransformComponent{
-			Position: def.Position,
-			Rotation: def.Rotation,
-			Scale:    def.Scale,
-		},
-		&def.Volume,
 	)
 }

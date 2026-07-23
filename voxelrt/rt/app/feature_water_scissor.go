@@ -74,10 +74,10 @@ func projectedWaterScissor(camera *core.CameraState, width, height uint32, water
 			continue
 		}
 		ndc := clip.Mul(1.0 / clip.W())
-		minNDCX = minf(minNDCX, ndc.X())
-		minNDCY = minf(minNDCY, ndc.Y())
-		maxNDCX = maxf(maxNDCX, ndc.X())
-		maxNDCY = maxf(maxNDCY, ndc.Y())
+		minNDCX = min(minNDCX, ndc.X())
+		minNDCY = min(minNDCY, ndc.Y())
+		maxNDCX = max(maxNDCX, ndc.X())
+		maxNDCY = max(maxNDCY, ndc.Y())
 		visible = true
 	}
 
@@ -88,10 +88,10 @@ func projectedWaterScissor(camera *core.CameraState, width, height uint32, water
 		return full, false
 	}
 
-	minNDCX = clampf(minNDCX, -1, 1)
-	minNDCY = clampf(minNDCY, -1, 1)
-	maxNDCX = clampf(maxNDCX, -1, 1)
-	maxNDCY = clampf(maxNDCY, -1, 1)
+	minNDCX = min(max(minNDCX, -1), 1)
+	minNDCY = min(max(minNDCY, -1), 1)
+	maxNDCX = min(max(maxNDCX, -1), 1)
+	maxNDCY = min(max(maxNDCY, -1), 1)
 
 	minX := uint32(math.Floor(float64((minNDCX + 1) * 0.5 * float32(width))))
 	maxX := uint32(math.Ceil(float64((maxNDCX + 1) * 0.5 * float32(width))))
@@ -149,7 +149,7 @@ func waterBounds(water gpu_rt.WaterSurfaceHost) (mgl32.Vec3, mgl32.Vec3) {
 	if cell <= 0 {
 		cell = 0.2
 	}
-	wavePad := maxf(cell*3, water.WaveAmplitude*8)
+	wavePad := max(cell*3, water.WaveAmplitude*8)
 	xzPad := wavePad + 0.25
 	yPad := wavePad + 0.15
 	center := water.Position

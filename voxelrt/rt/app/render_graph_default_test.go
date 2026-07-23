@@ -20,8 +20,6 @@ func TestDefaultRenderGraphOrderMatchesRuntimeFrameSequence(t *testing.T) {
 	want := []string{
 		RenderNodeFeatureParticlesSim,
 		RenderNodeFeaturePreGBuffer,
-		RenderNodeFeatureCAVolumesSim,
-		RenderNodeFeaturePreGBufferVolumes,
 		RenderNodeCoreGBuffer,
 		RenderNodeCoreHiZ,
 		RenderNodeFeaturePostGBuffer,
@@ -31,7 +29,6 @@ func TestDefaultRenderGraphOrderMatchesRuntimeFrameSequence(t *testing.T) {
 		RenderNodeCoreTiledLightCull,
 		RenderNodeCoreLighting,
 		RenderNodeFeaturePostLighting,
-		RenderNodeFeatureCAVolumesRender,
 		RenderNodeFeatureAstronomical,
 		RenderNodeFeaturePlanetBodies,
 		RenderNodeFeatureAnalyticMedia,
@@ -305,62 +302,6 @@ func TestDefaultRenderGraphAstronomicalNodeGating(t *testing.T) {
 	}
 }
 
-func TestDefaultRenderGraphCAVolumeRenderNodeGating(t *testing.T) {
-	node := defaultRenderGraphNode(RenderNodeFeatureCAVolumesRender)
-	if node.Enabled(nil) {
-		t.Fatal("expected CA volume render node to be disabled without app")
-	}
-
-	app := &App{}
-	if node.Enabled(app) {
-		t.Fatal("expected CA volume render node to be disabled without feature and resources")
-	}
-
-	app.features = []Feature{&CAVolumeFeature{}}
-	if node.Enabled(app) {
-		t.Fatal("expected CA volume render node to be disabled without CA volume render targets")
-	}
-
-	app.BufferManager = &gpu.GpuBufferManager{
-		CAVolumeColorView:    &wgpu.TextureView{},
-		CAVolumeDepthView:    &wgpu.TextureView{},
-		CAVolumeVisibleCount: 1,
-	}
-	if !node.Enabled(app) {
-		t.Fatal("expected CA volume render node to be enabled with feature and visible CA volume")
-	}
-
-	app.BufferManager.CAVolumeVisibleCount = 0
-	app.SetHadCAVolumePass(true)
-	if !node.Enabled(app) {
-		t.Fatal("expected CA volume render node to be enabled to clear stale prior pass")
-	}
-}
-
-func TestRecordCAVolumeRenderPassRequiresEncoder(t *testing.T) {
-	app := &App{
-		Profiler: core.NewProfiler(),
-		features: []Feature{&CAVolumeFeature{}},
-		BufferManager: &gpu.GpuBufferManager{
-			CAVolumeColorView:    &wgpu.TextureView{},
-			CAVolumeDepthView:    &wgpu.TextureView{},
-			CAVolumeVisibleCount: 1,
-		},
-	}
-
-	if app.hasCommandStageWork(FeatureCommandStagePostLighting) {
-		t.Fatal("expected legacy post-lighting command stage to skip graph-owned CA volume render")
-	}
-
-	err := app.recordCAVolumeRenderPass(nil)
-	if err == nil || !strings.Contains(err.Error(), "command encoder is nil") {
-		t.Fatalf("expected nil-encoder error, got %v", err)
-	}
-	if got := app.Profiler.Counts["CAVolumeRenderGraphNode"]; got != 1 {
-		t.Fatalf("CAVolumeRenderGraphNode = %d, want 1", got)
-	}
-}
-
 func TestRecordAstronomicalPassRequiresEncoder(t *testing.T) {
 	app := &App{
 		Profiler:              core.NewProfiler(),
@@ -438,57 +379,6 @@ func TestRecordAnalyticMediumPassRequiresEncoder(t *testing.T) {
 
 func testReadyAnalyticMediumResources() *AnalyticMediumResources {
 	return &AnalyticMediumResources{Pipeline: &wgpu.RenderPipeline{}}
-}
-
-func TestDefaultRenderGraphCAVolumeSimulationNodeGating(t *testing.T) {
-	node := defaultRenderGraphNode(RenderNodeFeatureCAVolumesSim)
-	if node.Enabled(nil) {
-		t.Fatal("expected CA volume simulation node to be disabled without app")
-	}
-
-	app := &App{}
-	if node.Enabled(app) {
-		t.Fatal("expected CA volume simulation node to be disabled without feature and resources")
-	}
-
-	app.features = []Feature{&CAVolumeFeature{}}
-	if node.Enabled(app) {
-		t.Fatal("expected CA volume simulation node to be disabled without CA volume resources")
-	}
-
-	app.CAVolumeResources = testReadyCAVolumeResources()
-	app.BufferManager = &gpu.GpuBufferManager{CAVolumeCount: 1}
-	if !node.Enabled(app) {
-		t.Fatal("expected CA volume simulation node to be enabled with feature and ready resources")
-	}
-}
-
-func TestRecordCAVolumeSimulationPassRequiresEncoder(t *testing.T) {
-	app := &App{
-		Profiler:          core.NewProfiler(),
-		features:          []Feature{&CAVolumeFeature{}},
-		CAVolumeResources: testReadyCAVolumeResources(),
-		BufferManager:     &gpu.GpuBufferManager{CAVolumeCount: 1},
-	}
-
-	if app.hasCommandStageWork(FeatureCommandStagePreGBufferVolumes) {
-		t.Fatal("expected legacy pre-gbuffer-volumes command stage to skip graph-owned CA simulation")
-	}
-
-	err := app.recordCAVolumeSimulationPass(nil)
-	if err == nil || !strings.Contains(err.Error(), "command encoder is nil") {
-		t.Fatalf("expected nil-encoder error, got %v", err)
-	}
-	if got := app.Profiler.Counts["CAVolumeSimGraphNode"]; got != 1 {
-		t.Fatalf("CAVolumeSimGraphNode = %d, want 1", got)
-	}
-}
-
-func testReadyCAVolumeResources() *CAVolumeResources {
-	return &CAVolumeResources{
-		SimPipeline:    &wgpu.ComputePipeline{},
-		BoundsPipeline: &wgpu.ComputePipeline{},
-	}
 }
 
 func TestDefaultRenderGraphPostResolveNodeRequiresSwapchainView(t *testing.T) {

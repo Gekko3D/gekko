@@ -3,30 +3,27 @@ package app
 import "github.com/cogentcore/webgpu/wgpu"
 
 const (
-	RenderNodeFeatureParticlesSim      = "feature-particles-sim"
-	RenderNodeFeaturePreGBuffer        = "feature-pre-gbuffer"
-	RenderNodeFeatureCAVolumesSim      = "feature-ca-volumes-sim"
-	RenderNodeFeaturePreGBufferVolumes = "feature-pre-gbuffer-volumes"
-	RenderNodeCoreGBuffer              = "core-gbuffer"
-	RenderNodeCoreHiZ                  = "core-hiz"
-	RenderNodeFeaturePostGBuffer       = "feature-post-gbuffer"
-	RenderNodeCoreShadows              = "core-shadows"
-	RenderNodeFeaturePreLighting       = "feature-pre-lighting"
-	RenderNodeFeatureSkyboxUpdate      = "feature-skybox-update"
-	RenderNodeCoreTiledLightCull       = "core-tiled-light-cull"
-	RenderNodeCoreLighting             = "core-lighting"
-	RenderNodeFeaturePostLighting      = "feature-post-lighting"
-	RenderNodeFeatureCAVolumesRender   = "feature-ca-volumes-render"
-	RenderNodeFeatureAstronomical      = "feature-astronomical"
-	RenderNodeFeaturePlanetBodies      = "feature-planet-bodies"
-	RenderNodeFeatureAnalyticMedia     = "feature-analytic-media"
-	RenderNodeCoreDebugScene           = "core-debug-scene"
-	RenderNodeCoreAccumulation         = "core-accumulation"
-	RenderNodeFeaturePreResolve        = "feature-pre-resolve"
-	RenderNodeCoreResolve              = "core-resolve"
-	RenderNodeFeatureTextOverlay       = "feature-text-overlay"
-	RenderNodeFeatureGizmosOverlay     = "feature-gizmos-overlay"
-	RenderNodeFeaturePostResolve       = "feature-post-resolve"
+	RenderNodeFeatureParticlesSim  = "feature-particles-sim"
+	RenderNodeFeaturePreGBuffer    = "feature-pre-gbuffer"
+	RenderNodeCoreGBuffer          = "core-gbuffer"
+	RenderNodeCoreHiZ              = "core-hiz"
+	RenderNodeFeaturePostGBuffer   = "feature-post-gbuffer"
+	RenderNodeCoreShadows          = "core-shadows"
+	RenderNodeFeaturePreLighting   = "feature-pre-lighting"
+	RenderNodeFeatureSkyboxUpdate  = "feature-skybox-update"
+	RenderNodeCoreTiledLightCull   = "core-tiled-light-cull"
+	RenderNodeCoreLighting         = "core-lighting"
+	RenderNodeFeaturePostLighting  = "feature-post-lighting"
+	RenderNodeFeatureAstronomical  = "feature-astronomical"
+	RenderNodeFeaturePlanetBodies  = "feature-planet-bodies"
+	RenderNodeFeatureAnalyticMedia = "feature-analytic-media"
+	RenderNodeCoreDebugScene       = "core-debug-scene"
+	RenderNodeCoreAccumulation     = "core-accumulation"
+	RenderNodeFeaturePreResolve    = "feature-pre-resolve"
+	RenderNodeCoreResolve          = "core-resolve"
+	RenderNodeFeatureTextOverlay   = "feature-text-overlay"
+	RenderNodeFeatureGizmosOverlay = "feature-gizmos-overlay"
+	RenderNodeFeaturePostResolve   = "feature-post-resolve"
 )
 
 // NewDefaultRenderGraph declares the current App.Render order as graph nodes.
@@ -44,9 +41,7 @@ func defaultRenderGraphSpecs() []RenderNodeSpec {
 	return []RenderNodeSpec{
 		defaultRenderGraphSpec(RenderNodeFeatureParticlesSim),
 		defaultRenderGraphSpec(RenderNodeFeaturePreGBuffer, RenderNodeFeatureParticlesSim),
-		defaultRenderGraphSpec(RenderNodeFeatureCAVolumesSim, RenderNodeFeaturePreGBuffer),
-		defaultRenderGraphSpec(RenderNodeFeaturePreGBufferVolumes, RenderNodeFeatureCAVolumesSim),
-		defaultRenderGraphSpec(RenderNodeCoreGBuffer, RenderNodeFeaturePreGBufferVolumes),
+		defaultRenderGraphSpec(RenderNodeCoreGBuffer, RenderNodeFeaturePreGBuffer),
 		defaultRenderGraphSpec(RenderNodeCoreHiZ, RenderNodeCoreGBuffer),
 		defaultRenderGraphSpec(RenderNodeFeaturePostGBuffer, RenderNodeCoreHiZ),
 		defaultRenderGraphSpec(RenderNodeCoreShadows, RenderNodeFeaturePostGBuffer),
@@ -55,8 +50,7 @@ func defaultRenderGraphSpecs() []RenderNodeSpec {
 		defaultRenderGraphSpec(RenderNodeCoreTiledLightCull, RenderNodeFeatureSkyboxUpdate),
 		defaultRenderGraphSpec(RenderNodeCoreLighting, RenderNodeCoreTiledLightCull),
 		defaultRenderGraphSpec(RenderNodeFeaturePostLighting, RenderNodeCoreLighting),
-		defaultRenderGraphSpec(RenderNodeFeatureCAVolumesRender, RenderNodeFeaturePostLighting),
-		defaultRenderGraphSpec(RenderNodeFeatureAstronomical, RenderNodeFeatureCAVolumesRender),
+		defaultRenderGraphSpec(RenderNodeFeatureAstronomical, RenderNodeFeaturePostLighting),
 		defaultRenderGraphSpec(RenderNodeFeaturePlanetBodies, RenderNodeFeatureAstronomical),
 		defaultRenderGraphSpec(RenderNodeFeatureAnalyticMedia, RenderNodeFeaturePlanetBodies),
 		defaultRenderGraphSpec(RenderNodeCoreDebugScene, RenderNodeFeatureAnalyticMedia),
@@ -86,14 +80,6 @@ func defaultRenderGraphNode(name string) RenderNode {
 			name:  name,
 			scope: "Feature Pre-GBuffer",
 			stage: FeatureCommandStagePreGBuffer,
-		}
-	case RenderNodeFeatureCAVolumesSim:
-		return caVolumesSimulationRenderNode{name: name}
-	case RenderNodeFeaturePreGBufferVolumes:
-		return featureCommandStageRenderNode{
-			name:  name,
-			scope: "Feature Pre-GBuffer Volumes",
-			stage: FeatureCommandStagePreGBufferVolumes,
 		}
 	case RenderNodeCoreGBuffer:
 		return coreGBufferRenderNode{name: name}
@@ -125,8 +111,6 @@ func defaultRenderGraphNode(name string) RenderNode {
 			scope: "Feature Post-Lighting",
 			stage: FeatureCommandStagePostLighting,
 		}
-	case RenderNodeFeatureCAVolumesRender:
-		return caVolumesRenderNode{name: name}
 	case RenderNodeFeatureAstronomical:
 		return astronomicalRenderNode{name: name}
 	case RenderNodeFeaturePlanetBodies:
@@ -603,40 +587,6 @@ func (n particlesSimulationRenderNode) Record(a *App, encoder *wgpu.CommandEncod
 
 func (n particlesSimulationRenderNode) Shutdown(*App) {}
 
-type caVolumesSimulationRenderNode struct {
-	name string
-}
-
-func (n caVolumesSimulationRenderNode) Name() string {
-	return n.name
-}
-
-func (n caVolumesSimulationRenderNode) Enabled(a *App) bool {
-	return a.caVolumesSimulationGraphNodeEnabled()
-}
-
-func (n caVolumesSimulationRenderNode) Setup(*App) error {
-	return nil
-}
-
-func (n caVolumesSimulationRenderNode) Resize(*App, uint32, uint32) error {
-	return nil
-}
-
-func (n caVolumesSimulationRenderNode) OnSceneBuffersRecreated(*App) error {
-	return nil
-}
-
-func (n caVolumesSimulationRenderNode) Update(*App) error {
-	return nil
-}
-
-func (n caVolumesSimulationRenderNode) Record(a *App, encoder *wgpu.CommandEncoder, _ *FrameContext) error {
-	return a.recordCAVolumeSimulationPass(encoder)
-}
-
-func (n caVolumesSimulationRenderNode) Shutdown(*App) {}
-
 type analyticMediumRenderNode struct {
 	name string
 }
@@ -738,40 +688,6 @@ func (n astronomicalRenderNode) Record(a *App, encoder *wgpu.CommandEncoder, _ *
 }
 
 func (n astronomicalRenderNode) Shutdown(*App) {}
-
-type caVolumesRenderNode struct {
-	name string
-}
-
-func (n caVolumesRenderNode) Name() string {
-	return n.name
-}
-
-func (n caVolumesRenderNode) Enabled(a *App) bool {
-	return a.caVolumesRenderGraphNodeEnabled()
-}
-
-func (n caVolumesRenderNode) Setup(*App) error {
-	return nil
-}
-
-func (n caVolumesRenderNode) Resize(*App, uint32, uint32) error {
-	return nil
-}
-
-func (n caVolumesRenderNode) OnSceneBuffersRecreated(*App) error {
-	return nil
-}
-
-func (n caVolumesRenderNode) Update(*App) error {
-	return nil
-}
-
-func (n caVolumesRenderNode) Record(a *App, encoder *wgpu.CommandEncoder, _ *FrameContext) error {
-	return a.recordCAVolumeRenderPass(encoder)
-}
-
-func (n caVolumesRenderNode) Shutdown(*App) {}
 
 type featureCommandStageRenderNode struct {
 	name  string

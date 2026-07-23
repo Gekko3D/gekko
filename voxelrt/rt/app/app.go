@@ -57,7 +57,6 @@ type App struct {
 	SpriteResources         *SpriteResources
 	BeamResources           *BeamResources
 	ParticleResources       *ParticleResources
-	CAVolumeResources       *CAVolumeResources
 	AnalyticMediumResources *AnalyticMediumResources
 	AstronomicalResources   *AstronomicalResources
 	PlanetBodyResources     *PlanetBodyResources
@@ -102,7 +101,6 @@ type AppFeatureFlags struct {
 	Text          bool
 	Gizmos        bool
 	Skybox        bool
-	CAVolumes     bool
 	AnalyticMedia bool
 	Astronomical  bool
 	PlanetBodies  bool
@@ -118,7 +116,6 @@ type AppFeatureConfig struct {
 	// When false, the app starts with no default features and callers can register their own.
 	AutoRegisterDefaults bool
 	Defaults             AppFeatureFlags
-	CAVolumes            gpu.CAVolumeBudgetConfig
 }
 
 func DefaultFeatureFlags() AppFeatureFlags {
@@ -126,7 +123,6 @@ func DefaultFeatureFlags() AppFeatureFlags {
 		Text:          true,
 		Gizmos:        true,
 		Skybox:        true,
-		CAVolumes:     true,
 		AnalyticMedia: true,
 		Astronomical:  true,
 		PlanetBodies:  true,
@@ -142,7 +138,6 @@ func DefaultFeatureConfig() AppFeatureConfig {
 	return AppFeatureConfig{
 		AutoRegisterDefaults: true,
 		Defaults:             DefaultFeatureFlags(),
-		CAVolumes:            gpu.DefaultCAVolumeBudgetConfig(),
 	}
 }
 

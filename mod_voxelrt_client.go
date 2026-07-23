@@ -132,7 +132,6 @@ type VoxelRtState struct {
 	lastMaterialKeys               map[*core.VoxelObject]materialTableCacheKey
 	materialTableCache             map[materialTableCacheKey][]core.Material
 	particlePools                  map[EntityId]*particlePool
-	caVolumeMap                    map[EntityId]*core.VoxelObject
 	objectToEntity                 map[*core.VoxelObject]EntityId
 	skyboxLayers                   map[EntityId]SkyboxLayerComponent // Stored values to detect changes
 	skyboxSun                      SkyboxSunComponent
@@ -303,9 +302,6 @@ func (s *VoxelRtState) GetVoxelObject(eid EntityId) *core.VoxelObject {
 		return obj
 	}
 
-	if obj, ok := s.caVolumeMap[eid]; ok {
-		return obj
-	}
 	return nil
 }
 
@@ -492,11 +488,6 @@ func (s *VoxelRtState) entityForVoxelObject(obj *core.VoxelObject) (EntityId, bo
 		return eid, true
 	}
 	for eid, candidate := range s.instanceMap {
-		if candidate == obj {
-			return eid, true
-		}
-	}
-	for eid, candidate := range s.caVolumeMap {
 		if candidate == obj {
 			return eid, true
 		}

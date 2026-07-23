@@ -11,7 +11,7 @@ The live renderer currently does all of the following:
 - renders shadows
 - bakes a capped batch of dirty probe-GI probes
 - runs deferred lighting into an `RGBA16Float` storage target
-- composites CA volumes, transparent voxels, particles, and sprites through WBOIT
+- composites transparent voxels, particles, and sprites through WBOIT
 - resolves to the swapchain with text and gizmos layered at the end
 
 Probe GI is no longer hypothetical. The engine already has:

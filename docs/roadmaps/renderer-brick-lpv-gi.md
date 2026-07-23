@@ -51,7 +51,7 @@ Not supported in the first shipping LPV path:
 - non-uniformly scaled GI contributors
 - dynamic/moving GI contributors
 - dynamic/moving GI occluders in LPV traversal
-- skeletal meshes, sprites, particles, or CA volumes injecting into LPV
+- skeletal meshes, sprites, or particles injecting into LPV
 - soft temporal denoising or multi-frame GI crawl
 
 Dynamic objects still receive GI in deferred lighting. They simply do not inject
@@ -799,15 +799,14 @@ ambient model.
 `App.Render()`:
 
 1. particle sim
-2. CA sim
-3. G-buffer
-4. Hi-Z
-5. shadows
-6. tile light cull
-7. upload LPV config
-8. LPV inject
-9. LPV propagate `N` steps
-10. deferred lighting
+2. G-buffer
+3. Hi-Z
+4. shadows
+5. tile light cull
+6. upload LPV config
+7. LPV inject
+8. LPV propagate `N` steps
+9. deferred lighting
 11. debug / accumulation / resolve
 
 Insert LPV after tile-light cull and before deferred lighting.

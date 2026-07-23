@@ -211,7 +211,7 @@ Avoid command recording and GPU execution for passes whose inputs are empty.
 
 ### Implementation outline
 
-- skip accumulation when there are no CA volumes, transparent voxel overlays, particles, or sprites
+- skip accumulation when there are no transparent voxel overlays, particles, or sprites
 - skip tiled-light cull when only directional lights are present or when there are no local lights
 - keep resolve because it composites opaque output and overlays
 - ensure debug and overlay behavior remains intact

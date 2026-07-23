@@ -63,8 +63,6 @@ func (m *GpuBufferManager) CreateGBufferTextures(w, h uint32) {
 		setupTexture(&m.VolumetricTex[i], &m.VolumetricView[i], "Volumetric Color", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
 		setupTexture(&m.VolumetricDepthTex[i], &m.VolumetricDepthView[i], "Volumetric Depth", wgpu.TextureFormatR32Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
 	}
-	setupTexture(&m.CAVolumeColorTex, &m.CAVolumeColorView, "CA Volume Color", wgpu.TextureFormatRGBA16Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
-	setupTexture(&m.CAVolumeDepthTex, &m.CAVolumeDepthView, "CA Volume Depth", wgpu.TextureFormatR32Float, wgpu.TextureUsageRenderAttachment|wgpu.TextureUsageTextureBinding, volW, volH)
 	m.VolumetricWidth = volW
 	m.VolumetricHeight = volH
 	m.VolumetricHistoryIdx = 0

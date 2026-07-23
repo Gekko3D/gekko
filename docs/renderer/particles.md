@@ -88,15 +88,14 @@ If scene buffers are recreated, particle sim bindings may need to be recreated t
 Particles run inside the renderer frame as:
 
 1. particle sim
-2. CA sim
-3. G-buffer
-4. Hi-Z
-5. shadows
-6. probe GI bake
-7. deferred lighting
-8. optional debug
-9. accumulation
-10. resolve
+2. G-buffer
+3. Hi-Z
+4. shadows
+5. probe GI bake
+6. deferred lighting
+7. optional debug
+8. accumulation
+9. resolve
 
 Particles write weighted contributions into:
 
@@ -107,4 +106,3 @@ Particles write weighted contributions into:
 
 - Per-particle simulation is GPU-driven.
 - Atlas selection is currently one-atlas-per-frame through the bridge.
-- `BridgeToParticles` fields in CA components exist, but the production path is emitter-driven GPU simulation.

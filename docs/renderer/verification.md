@@ -60,4 +60,4 @@ Only use a windowed run when the change needs visual confirmation:
 
 These need a real desktop session.
 
-Global illumination verification steps were removed. The renderer currently verifies direct lighting, shadows, voxel edits, particles, CA volumes, gizmos, and overlay paths only.
+Global illumination verification steps were removed. The renderer currently verifies direct lighting, shadows, voxel edits, particles, gizmos, and overlay paths only.

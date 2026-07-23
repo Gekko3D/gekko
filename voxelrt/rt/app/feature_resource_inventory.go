@@ -61,17 +61,6 @@ func DefaultFeatureResourceInventory() []FeatureResourceInventoryItem {
 			NextStep:           "renderer-side input handoff moved behind a resource holder; GPU application is graph-owned while texture/pipeline resources remain in BufferManager",
 		},
 		{
-			FeatureName: "ca-volumes",
-			Owner:       FeatureResourceOwnerFeatureHooks,
-			AppFields:   []string{"CAVolumeResources"},
-			BufferManagerState: []string{
-				"CAVolumeSimPipeline",
-				"CAVolumeBoundsPipeline",
-				"CAVolume* buffers/textures/bind groups",
-			},
-			NextStep: "render/sim/bounds pipelines and previous-pass state moved behind a resource holder; buffers, targets, counters, bind groups, and mirrored compute pipelines remain in BufferManager",
-		},
-		{
 			FeatureName:        "analytic-media",
 			Owner:              FeatureResourceOwnerFeatureHooks,
 			AppFields:          []string{"AnalyticMediumResources"},

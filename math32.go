@@ -27,6 +27,8 @@ func maxf(a, b float32) float32 {
 	return b
 }
 
+func clamp01(v float32) float32 { return min(max(v, 0), 1) }
+
 func powf(a, b float32) float32 {
 	return float32(math.Pow(float64(a), float64(b)))
 }

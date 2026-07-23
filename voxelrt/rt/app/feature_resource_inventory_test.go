@@ -55,7 +55,6 @@ func TestDefaultFeatureResourceInventoryDocumentsBroadAppFields(t *testing.T) {
 		"SkyboxResources",
 		"WaterResources",
 		"AccumulationResources",
-		"CAVolumeResources",
 		"AnalyticMediumResources",
 		"AstronomicalResources",
 		"PlanetBodyResources",

@@ -5,7 +5,7 @@ This page documents the bounded volumetric media path used by `gekko` for analyt
 Use this document when you need to understand:
 
 - which ECS-facing types author bounded media
-- how analytic media differs from transparent voxels, CA volumes, and water
+- how analytic media differs from transparent voxels and water
 - where the half-resolution temporal volumetric path lives
 - what is generic versus what is still atmosphere-oriented
 
@@ -143,11 +143,7 @@ There are now three different categories to keep straight:
 - analytic media:
   - bounded volumetric fog/atmosphere
   - half-resolution temporal volumetric path
-- CA volumes:
-  - simulated volumetrics
-  - separate half-resolution volume path and resolve integration
-
-Do not force all four through the same abstraction. They solve different rendering problems.
+Do not force all three through the same abstraction. They solve different rendering problems.
 
 ## Current Quality Model
 

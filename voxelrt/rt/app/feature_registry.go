@@ -61,9 +61,6 @@ func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
 	if flags.Skybox {
 		defaults = append(defaults, &SkyboxFeature{})
 	}
-	if flags.CAVolumes {
-		defaults = append(defaults, &CAVolumeFeature{})
-	}
 	if flags.Astronomical {
 		defaults = append(defaults, &AstronomicalFeature{})
 	}

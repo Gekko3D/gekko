@@ -828,7 +828,6 @@ func TestRayReconstructionGuardsFarPlaneW(t *testing.T) {
 		{name: "gbuffer", code: GBufferWGSL},
 		{name: "deferred lighting", code: DeferredLightingWGSL},
 		{name: "transparent overlay", code: TransparentOverlayWGSL},
-		{name: "ca volume render", code: CAVolumeRenderWGSL},
 		{name: "debug", code: DebugWGSL},
 		{name: "water surface", code: WaterSurfaceWGSL},
 		{name: "astronomical", code: AstronomicalWGSL},
@@ -1083,7 +1082,7 @@ func TestAnalyticMediumShaderHasPixelSteppedAtmosphereHaze(t *testing.T) {
 
 func TestResolveShaderHasUnderwaterCompositePath(t *testing.T) {
 	for _, needle := range []string{
-		"@group(0) @binding(10) var<uniform> underwater",
+		"@group(0) @binding(8) var<uniform> underwater",
 		"fn underwater_uv",
 		"let distorted_uv = underwater_uv(uv, dims);",
 		"* underwater.time.y;",

@@ -144,7 +144,6 @@ Feature nodes should only exist when the feature is enabled. Disabled features s
 | Feature | Likely Nodes | Notes |
 | --- | --- | --- |
 | particles | `particles-sim`, `particles-accumulation` | Keep GPU simulation separate from draw contribution. |
-| CA volumes | `ca-sim`, `ca-bounds`, `ca-render` | Half-resolution render after lighting; resolve consumes output. |
 | analytic media | `analytic-media-render` | Half-resolution temporal path after lighting. |
 | planet bodies | `planet-bodies` | SpaceSim feature; should not exist in action-oriented presets. |
 | astronomical | `astronomical` | SpaceSim feature; also owns far rings/debris until split further. |
@@ -183,7 +182,6 @@ Feature bridge systems move out of the monolithic sync path over time:
 - particles
 - sprites
 - water
-- CA volumes
 - analytic media
 - astronomical visuals
 - planet bodies
@@ -200,7 +198,7 @@ Add named presets after graph registration is stable enough to benefit from them
   - preserves current behavior.
 - `VoxelRtFeaturePresetActionGame()`
   - core voxels, lighting, shadows, text/gizmos as needed.
-  - disables celestial, planet-body, far-ring, debris-midfield, analytic-media, water, CA, particles, or sprites unless the game opts back in.
+  - disables celestial, planet-body, far-ring, debris-midfield, analytic-media, water, particles, or sprites unless the game opts back in.
 - `VoxelRtFeaturePresetSpaceSim()`
   - enables celestial and large-scale visual features.
 - `VoxelRtFeaturePresetMinimal()`
@@ -267,7 +265,6 @@ Current status:
 - `feature-astronomical` is an explicit optional feature node after post-lighting compatibility work and before planet bodies.
 - `feature-planet-bodies` is an explicit optional feature node after post-lighting compatibility work and before analytic media.
 - `feature-analytic-media` is an explicit optional feature node after post-lighting compatibility work and before debug/accumulation/resolve.
-- `feature-ca-volumes-sim` and `feature-ca-volumes-render` are explicit optional feature nodes for CA simulation/bounds and half-resolution CA volume rendering.
 - `transparency`, `sprites`, `water`, far planet rings, debris midfield, and particle drawing are graph-owned by `core-accumulation` and draw through the render-graph pass-stage dispatch path, preserving the single WBOIT pass shell.
 - `feature-particles-sim` is an explicit optional feature node for particle simulation/spawn before generic pre-G-buffer compatibility work.
 - Graph-owned features are skipped by compatibility command/pass/screen stage dispatchers to prevent duplicate rendering during incremental migration.
@@ -304,7 +301,7 @@ Tasks:
 
 - Migrate low-risk features first: text, gizmos, sprites. Text and gizmos are explicit post-resolve graph nodes; sprites are graph-owned in-pass accumulation contributors.
 - Migrate accumulation contributors: transparency, water, far rings, debris midfield, particles. Particle drawing and simulation are migrated, with simulation kept as a separate pre-G-buffer graph node.
-- Migrate half-resolution or post-lighting features: analytic media, CA volumes, planet bodies, astronomical, far rings, debris midfield. Analytic media, CA volumes, astronomical bodies, and planet bodies are migrated.
+- Migrate half-resolution or post-lighting features: analytic media, planet bodies, astronomical, far rings, debris midfield. Analytic media, astronomical bodies, and planet bodies are migrated.
 - Remove feature-stage enums only after no feature depends on them.
 
 Acceptance criteria:
@@ -321,14 +318,14 @@ Goal:
 
 Tasks:
 
-- Add a feature bridge registration surface to `VoxelRtModule`. Initial `BridgeFeatures` registration now exists; text/gizmo/skybox bridge bodies are installed before renderer update, analytic media, CA volumes, water, planet bodies, astronomical, far rings, and debris use the batched bridge slot before `GPU Batch`, and particles/sprites use the after-batch slot.
+- Add a feature bridge registration surface to `VoxelRtModule`. Initial `BridgeFeatures` registration now exists; text/gizmo/skybox bridge bodies are installed before renderer update, analytic media, water, planet bodies, astronomical, far rings, and debris use the batched bridge slot before `GPU Batch`, and particles/sprites use the after-batch slot.
 - Move optional sync blocks out of the broad `voxelRtSystem` flow one feature at a time.
 - Keep core voxel object sync centralized until the graph migration is stable.
 - Add tests proving disabled feature sync does not call the corresponding `GpuBufferManager.Update*` path.
 
 Acceptance criteria:
 
-- Action-oriented games can run without celestial, planet-body, ring/debris, media, CA, water, particle, or sprite sync.
+- Action-oriented games can run without celestial, planet-body, ring/debris, media, water, particle, or sprite sync.
 - SpaceSim keeps its current feature set through a preset.
 - The remaining core bridge is smaller and clearly documented.
 
@@ -342,7 +339,6 @@ Current status:
 - Astronomical ECS bridge sync is gated by registered `feature-astronomical` graph ownership and installed as a batched bridge system before `GPU Batch`, clearing stale astronomical body count when the feature is not registered. Astronomical sync now hands typed `AstronomicalBodyInput` to the renderer app; GPU manager packing remains behind the app feature boundary.
 - Far planet-ring ECS bridge sync is gated by registered far-ring feature ownership plus `core-accumulation` graph ownership and installed as a batched bridge system before `GPU Batch`; stale far-ring contribution count is cleared when the feature is not registered. Far-ring sync now hands typed `FarPlanetRingInput` to the renderer app; GPU manager packing remains behind the app feature boundary.
 - Debris-midfield ECS bridge sync is gated by registered debris feature ownership plus `core-accumulation` graph ownership and installed as a batched bridge system before `GPU Batch`; stale debris contribution count is cleared when the feature is not registered. Debris sync now hands typed `DebrisMidfieldInput` to the renderer app; GPU manager packing remains behind the app feature boundary.
-- CA volume ECS bridge sync and preset upload are gated by registered `feature-ca-volumes-sim` and `feature-ca-volumes-render` graph ownership and installed as a batched bridge system before `GPU Batch`; CA sync now hands typed `CAVolumeInput` / `CAVolumeFrameInput` to the renderer app, which owns preset upload, counter application, GPU host packing, and CA param upload. Stale CA contribution and budget counters, previous-pass state, and bridge-owned CA scene objects are cleared when the feature is not registered.
 - Sprite ECS bridge sync is gated by registered sprite feature ownership plus `core-accumulation` graph ownership and installed as an after-batch bridge system; stale sprite counts and batches are cleared when the feature is not registered, and entity-LOD sprite proxies fall back to voxel object sync when sprites are disabled. Sprite sync now hands typed `SpriteInstanceInput` / `SpriteBatchInput` to the renderer app, which owns byte packing and GPU batch-desc conversion; atlas texture lookup remains in the bridge for now.
 - Skybox ECS bridge sync is gated by registered skybox feature ownership plus `feature-skybox-update` graph ownership and installed as a pre-update bridge system, clearing cached skybox layer/sun bridge state and pending renderer input when the feature is not registered. A pure bridge adapter builds `SkyboxResources` input with renderer-level `SkyboxLayerInput` records; `feature-skybox-update` packs GPU layers and applies pending input during render graph update.
 - `VoxelRtModule.BridgeFeatures` provides the first declarative bridge registration surface. Built-in defaults preserve the current gates, and module registrations can add or override bridge requirements without changing the central sync systems yet.
@@ -378,7 +374,6 @@ Current status:
 - Debris midfield now follows the same accumulation-contributor resource-holder pattern: the raw broad `App.DebrisMidfieldPipeline` field moved behind `App.DebrisMidfieldResources`; typed debris input application now lives at the renderer app feature boundary, while debris bind groups, GPU record packing, and contribution readiness remain in `GpuBufferManager`.
 - Sprites now follow the resource-holder pattern: the raw broad `App.SpritesPipeline` field moved behind `App.SpriteResources`, with a narrow public pipeline accessor for the ECS bridge while atlas, batches, bind groups, and contribution readiness remain in `GpuBufferManager`.
 - Particles now use `App.ParticleResources` for render and simulation pipelines, spawn count, typed renderer input application, and atlas bootstrap state. Particle buffers, simulation bind groups, render bind groups, and contribution readiness remain in `GpuBufferManager`.
-- CA volumes now use `App.CAVolumeResources` for render, simulation, bounds pipelines, previous-pass state, and typed renderer input application. CA buffers, targets, counters, bind groups, and mirrored compute pipeline layout state remain in `GpuBufferManager`.
 - Analytic media now uses `App.AnalyticMediumResources` for its render pipeline and typed renderer input application, while media buffers, volumetric targets, bind groups, GPU record packing, and contribution readiness remain in `GpuBufferManager`.
 - Astronomical bodies now use `App.AstronomicalResources` for their render pipeline and typed renderer input application, while astronomical buffers, bind groups, GPU record packing, and contribution readiness remain in `GpuBufferManager`.
 - Planet bodies now use `App.PlanetBodyResources` for their render pipeline and typed renderer input application, while planet-body buffers, bind groups, depth target, baked-surface GPU packing/signature handling, and contribution readiness remain in `GpuBufferManager`.
@@ -450,7 +445,7 @@ Manual visual/GPU checks that automated tests cannot replace:
 - All default features enabled.
 - Window resize after scene load.
 - Transparent voxel overlay plus sprites/particles/water.
-- CA volume and analytic-media scenes.
+- analytic-media scenes.
 - SpaceSim celestial scene with planet bodies, astronomical visuals, rings, and debris.
 
 ## Risks

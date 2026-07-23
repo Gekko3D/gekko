@@ -19,7 +19,6 @@ func TestDestructionSystem_Split(t *testing.T) {
 	state := &VoxelRtState{
 		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 		RtApp: &app_rt.App{
@@ -267,7 +266,6 @@ func TestDestructionSystem_SpawnDebris(t *testing.T) {
 	state := &VoxelRtState{
 		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 		RtApp: &app_rt.App{
@@ -583,7 +581,6 @@ func TestDestructionSystem_MomentumInheritance(t *testing.T) {
 	state := &VoxelRtState{
 		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 		RtApp: &app_rt.App{
@@ -719,7 +716,6 @@ func newDestructionTestVoxelRtState() *VoxelRtState {
 	return &VoxelRtState{
 		loadedModels:   make(map[AssetId]*core.VoxelObject),
 		instanceMap:    make(map[EntityId]*core.VoxelObject),
-		caVolumeMap:    make(map[EntityId]*core.VoxelObject),
 		objectToEntity: make(map[*core.VoxelObject]EntityId),
 		skyboxLayers:   make(map[EntityId]SkyboxLayerComponent),
 		RtApp: &app_rt.App{
