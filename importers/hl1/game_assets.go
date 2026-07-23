@@ -1018,6 +1018,10 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			return "weapons.crowbar"
 		case "w_tripmine":
 			return "weapons.tripmine"
+		case "w_hgun":
+			return "weapons.hivegun"
+		case "w_satchel":
+			return "weapons.satchel"
 		default:
 			// Keep non-gameplay world-model variants distinct without exposing
 			// their source names to runtime profiles.
@@ -1057,6 +1061,12 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 			return "weapons.egon.held"
 		case "p_tripmine":
 			return "weapons.tripmine.held"
+		case "p_hgun":
+			return "weapons.hivegun.held"
+		case "p_satchel":
+			return "weapons.satchel.held"
+		case "p_satchel_radio":
+			return "weapons.satchel.radio.held"
 		default:
 			return "weapons.held.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
 		}

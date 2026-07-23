@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
@@ -182,6 +183,34 @@ func TestTransformHierarchyIgnoresParentRenderPivot(t *testing.T) {
 	expected := mgl32.Vec3{11, 4, 6}
 	if childWorld.Position.Sub(expected).Len() > 0.001 {
 		t.Fatalf("child world position = %v, expected %v", childWorld.Position, expected)
+	}
+}
+
+func TestReparentPreservingWorldTransform(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	first := cmd.AddEntity(&TransformComponent{Position: mgl32.Vec3{2, 0, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	second := cmd.AddEntity(&TransformComponent{
+		Position: mgl32.Vec3{-3, 1, 4},
+		Rotation: mgl32.QuatRotate(mgl32.DegToRad(45), mgl32.Vec3{0, 1, 0}),
+		Scale:    mgl32.Vec3{2, 2, 2},
+	})
+	child := cmd.AddEntity(
+		&Parent{Entity: first},
+		&LocalTransformComponent{Position: mgl32.Vec3{1, 2, 3}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&TransformComponent{},
+	)
+	app.FlushCommands()
+	TransformHierarchySystem(cmd)
+	before := *cmd.GetComponent(child, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+
+	if !ReparentPreservingWorldTransform(cmd, child, second) {
+		t.Fatal("reparent failed")
+	}
+	after := cmd.GetComponent(child, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	parent := cmd.GetComponent(child, reflect.TypeOf(Parent{})).(*Parent)
+	if parent.Entity != second || after.Position.Sub(before.Position).Len() > 1e-5 || 1-float32(math.Abs(float64(after.Rotation.Dot(before.Rotation)))) > 1e-5 || after.Scale.Sub(before.Scale).Len() > 1e-5 {
+		t.Fatalf("reparent changed world transform: before=%+v after=%+v parent=%d", before, *after, parent.Entity)
 	}
 }
 

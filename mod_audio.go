@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -24,16 +25,18 @@ const (
 	defaultAudioRaycastEndMargin = float32(0.05)
 )
 
-// AudioModule installs cached one-shot PCM WAV playback. Occlusion requires a
+// AudioModule installs cached PCM WAV playback. Occlusion requires a
 // VoxelRtModule in the same app; distance falloff works without it.
 type AudioModule struct {
 	SampleRate int
 	Occlusion  bool
 }
 
-// AudioPlayback is a source-neutral request for a short sound effect.
+// AudioPlayback is a source-neutral sound request. A non-empty LoopKey keeps
+// one loop alive while the same key is requested each frame.
 type AudioPlayback struct {
 	Path            string
+	LoopKey         string
 	Position        mgl32.Vec3
 	Volume          float32
 	MinDistance     float32
@@ -44,7 +47,7 @@ type AudioPlayback struct {
 }
 
 // AudioState owns the process-wide Oto context, decoded clip cache, and the
-// short queue consumed during PreRender.
+// queue consumed during PreRender.
 type AudioState struct {
 	context    *oto.Context
 	ready      <-chan struct{}
@@ -55,6 +58,13 @@ type AudioState struct {
 	clips      map[string][]byte
 	failed     map[string]struct{}
 	players    []*oto.Player
+	loops      map[string]*audioLoop
+}
+
+type audioLoop struct {
+	path      string
+	player    *oto.Player
+	refreshed bool
 }
 
 func (mod AudioModule) Install(app *App, cmd *Commands) {
@@ -66,6 +76,7 @@ func (mod AudioModule) Install(app *App, cmd *Commands) {
 		sampleRate: sampleRate,
 		clips:      make(map[string][]byte),
 		failed:     make(map[string]struct{}),
+		loops:      make(map[string]*audioLoop),
 	}
 	state.context, state.ready, state.initErr = oto.NewContext(&oto.NewContextOptions{
 		SampleRate:   sampleRate,
@@ -96,7 +107,7 @@ func (state *AudioState) Err() error {
 	return nil
 }
 
-// Play queues a one-shot sound. It returns false when the request is invalid
+// Play queues a sound. It returns false when the request is invalid
 // or the per-frame safety bound is full.
 func (state *AudioState) Play(playback AudioPlayback) bool {
 	if state == nil || state.context == nil || playback.Path == "" || playback.Volume <= 0 || len(state.queued) >= defaultAudioMaxQueuedSounds {
@@ -147,10 +158,13 @@ func processSpatialAudio(cmd *Commands, state *AudioState, voxRt *VoxelRtState) 
 				gain *= clampAudioGain(occlusion)
 			}
 		}
-		if gain > 0 {
+		if playback.LoopKey != "" {
+			state.playLoop(playback, gain)
+		} else if gain > 0 {
 			state.play(playback.Path, gain)
 		}
 	}
+	state.expireAudioLoops()
 }
 
 func audioListener(cmd *Commands) (EntityId, mgl32.Vec3, bool) {
@@ -222,7 +236,7 @@ func (state *AudioState) prunePlayers() {
 }
 
 func (state *AudioState) play(path string, gain float32) {
-	if state == nil || state.context == nil || len(state.players) >= defaultAudioMaxVoices {
+	if state == nil || state.context == nil || len(state.players)+len(state.loops) >= defaultAudioMaxVoices {
 		return
 	}
 	pcm := state.load(path)
@@ -233,6 +247,61 @@ func (state *AudioState) play(path string, gain float32) {
 	player.SetVolume(float64(clampAudioGain(gain)))
 	player.Play()
 	state.players = append(state.players, player)
+}
+
+func (state *AudioState) playLoop(playback AudioPlayback, gain float32) {
+	if state.loops == nil {
+		state.loops = make(map[string]*audioLoop)
+	}
+	if loop := state.loops[playback.LoopKey]; loop != nil && loop.path == playback.Path {
+		loop.refreshed = true
+		loop.player.SetVolume(float64(clampAudioGain(gain)))
+		return
+	} else if loop != nil {
+		loop.player.Pause()
+		delete(state.loops, playback.LoopKey)
+	}
+	if len(state.players)+len(state.loops) >= defaultAudioMaxVoices {
+		return
+	}
+	pcm := state.load(playback.Path)
+	if len(pcm) == 0 {
+		return
+	}
+	player := state.context.NewPlayer(&loopingPCMReader{pcm: pcm})
+	player.SetVolume(float64(clampAudioGain(gain)))
+	player.Play()
+	state.loops[playback.LoopKey] = &audioLoop{path: playback.Path, player: player, refreshed: true}
+}
+
+func (state *AudioState) expireAudioLoops() {
+	for key, loop := range state.loops {
+		if loop.refreshed {
+			loop.refreshed = false
+			continue
+		}
+		if loop.player != nil {
+			loop.player.Pause()
+		}
+		delete(state.loops, key)
+	}
+}
+
+type loopingPCMReader struct {
+	pcm    []byte
+	offset int
+}
+
+func (reader *loopingPCMReader) Read(buffer []byte) (int, error) {
+	if len(reader.pcm) == 0 {
+		return 0, io.EOF
+	}
+	for written := 0; written < len(buffer); {
+		copied := copy(buffer[written:], reader.pcm[reader.offset:])
+		written += copied
+		reader.offset = (reader.offset + copied) % len(reader.pcm)
+	}
+	return len(buffer), nil
 }
 
 func (state *AudioState) load(path string) []byte {

@@ -433,6 +433,9 @@ func mdlAssetJointIDs(bones []MDLBoneInfo) []string {
 
 func mdlSemanticJointID(name string) string {
 	key := strings.ToLower(strings.Join(strings.Fields(name), " "))
+	if strings.HasPrefix(key, "xbow biped ") {
+		key = "bip01 " + strings.TrimPrefix(key, "xbow biped ")
+	}
 	aliases := map[string]string{
 		"bip01 l leg": "bip01.left.thigh", "bip01 l thigh": "bip01.left.thigh",
 		"bip01 l leg1": "bip01.left.calf", "bip01 l calf": "bip01.left.calf",
@@ -448,7 +451,7 @@ func mdlSemanticJointID(name string) string {
 	if alias := aliases[key]; alias != "" {
 		return alias
 	}
-	return strings.ReplaceAll(safeMDLAssetID(name), "_", ".")
+	return strings.ReplaceAll(safeMDLAssetID(key), "_", ".")
 }
 
 func mdlAssetBoneIDs(bones []MDLBoneInfo) []string {

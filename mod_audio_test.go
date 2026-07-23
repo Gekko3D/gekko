@@ -52,6 +52,21 @@ func TestAudioPCMConversionAndSpatialGain(t *testing.T) {
 	if !audioSourceOccluded(nil, voxRt, 1, mgl32.Vec3{}, AudioPlayback{Position: mgl32.Vec3{0, 0, 8}, Source: 2}) {
 		t.Fatal("expected wall between listener and source to occlude sound")
 	}
+
+	reader := &loopingPCMReader{pcm: []byte{1, 2, 3}}
+	looped := make([]byte, 8)
+	if n, err := reader.Read(looped); err != nil || n != len(looped) || string(looped) != string([]byte{1, 2, 3, 1, 2, 3, 1, 2}) {
+		t.Fatalf("loop read = %v, %d, %v", looped, n, err)
+	}
+	loops := &AudioState{loops: map[string]*audioLoop{"kept": {refreshed: true}, "expired": {}}}
+	loops.expireAudioLoops()
+	if loops.loops["kept"] == nil || loops.loops["kept"].refreshed || loops.loops["expired"] != nil {
+		t.Fatalf("loop leases = %+v", loops.loops)
+	}
+	loops.expireAudioLoops()
+	if len(loops.loops) != 0 {
+		t.Fatalf("unrefreshed loop survived = %+v", loops.loops)
+	}
 }
 
 func testPCM16WAV(sampleRate, channels, bits int, samples []byte) []byte {

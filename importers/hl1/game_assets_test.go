@@ -473,6 +473,20 @@ func TestUncatalogedGeneratedAssetsReceiveCentralLibraryKeys(t *testing.T) {
 	if key := hl1GenericAssetKey(entry); key != "models.imported.models_barney" {
 		t.Fatalf("key = %q", key)
 	}
+	for _, test := range []struct {
+		kind, source, want string
+	}{
+		{"weapon_world", "valve/models/w_hgun.mdl", "weapons.hivegun"},
+		{"weapon_held", "valve/models/p_hgun.mdl", "weapons.hivegun.held"},
+		{"weapon_world", "valve/models/w_satchel.mdl", "weapons.satchel"},
+		{"weapon_held", "valve/models/p_satchel.mdl", "weapons.satchel.held"},
+		{"weapon_held", "valve/models/p_satchel_radio.mdl", "weapons.satchel.radio.held"},
+	} {
+		entry := GameAssetManifestEntry{Kind: "model", CatalogKind: test.kind, SourceRef: test.source, GeneratedAssetPath: "hgun.gkasset"}
+		if key := hl1GenericAssetKey(entry); key != test.want {
+			t.Errorf("%s key = %q, want %q", test.kind, key, test.want)
+		}
+	}
 }
 
 func TestAssetLibraryKeepsCollidingPlayerSources(t *testing.T) {
@@ -701,6 +715,51 @@ func TestParseMDLInfoDecodesSequenceAnimationFrames(t *testing.T) {
 	}
 	if animation.RotationFrames[0].Z != 0 || animation.RotationFrames[1].Z != 1 {
 		t.Fatalf("unexpected decoded rotation frames: %+v", animation.RotationFrames)
+	}
+}
+
+func TestParseMDLAnimationClipsUsesSemanticJointTracks(t *testing.T) {
+	clips, err := ParseMDLAnimationClips(syntheticMDLWithBoneSequenceAnimation(), []string{"idle"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clips) != 1 || clips[0].ID != "mdl_idle" || len(clips[0].Tracks) != 1 {
+		t.Fatalf("unexpected clips: %+v", clips)
+	}
+	track := clips[0].Tracks[0]
+	if track.TargetID != "root" || len(track.RotationKeys) != 2 || track.RotationKeys[0].Value == track.RotationKeys[1].Value {
+		t.Fatalf("unexpected semantic animation track: %+v", track)
+	}
+	if _, err := ParseMDLAnimationClips(syntheticMDLWithBoneSequenceAnimation(), []string{"missing"}, true); err == nil {
+		t.Fatal("missing requested sequence was accepted")
+	}
+}
+
+func TestMDLSemanticJointIDRecognizesCrossbowBiped(t *testing.T) {
+	for source, want := range map[string]string{
+		"Xbow biped Spine2": "bip01.spine2",
+		"Xbow biped L Arm1": "bip01.left.upper_arm",
+		"Xbow biped R Hand": "bip01.r.hand",
+	} {
+		if got := mdlSemanticJointID(source); got != want {
+			t.Fatalf("mdlSemanticJointID(%q) = %q, want %q", source, got, want)
+		}
+	}
+}
+
+func TestLoadMDLAnimationClipsReadsExternalSequenceGroup(t *testing.T) {
+	mainData, groupData := syntheticMDLWithExternalBoneSequenceAnimation()
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "hgrunt.mdl")
+	mustWriteFile(t, mainPath, mainData)
+	mustWriteFile(t, filepath.Join(dir, "hgrunt01.mdl"), groupData)
+
+	clips, err := LoadMDLAnimationClips(mainPath, []string{"reload_shotgun"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clips) != 1 || clips[0].Name != "reload_shotgun" || len(clips[0].Tracks) != 1 || clips[0].Tracks[0].RotationKeys[0].Value == clips[0].Tracks[0].RotationKeys[1].Value {
+		t.Fatalf("unexpected external sequence clip: %+v", clips)
 	}
 }
 
@@ -1255,6 +1314,51 @@ func syntheticMDLWithBoneSequenceAnimation() []byte {
 	writeTestInt16(out, rotationStreamOffset+2, 0)
 	writeTestInt16(out, rotationStreamOffset+4, 10)
 	return out
+}
+
+func syntheticMDLWithExternalBoneSequenceAnimation() ([]byte, []byte) {
+	data := syntheticMDLWithBoneTranslation(10, 20, 30)
+	const (
+		sequenceSize = mdlSequenceRecordSize176
+		groupSize    = 104
+		groupHeader  = 76
+	)
+	sequenceOffset := len(data)
+	groupOffset := sequenceOffset + sequenceSize
+	out := append(data, make([]byte, sequenceSize+groupSize*2)...)
+	writeTestInt32(out, 72, len(out))
+	writeTestInt32(out, 164, 1)
+	writeTestInt32(out, 168, sequenceOffset)
+	writeTestInt32(out, 172, 2)
+	writeTestInt32(out, 176, groupOffset)
+	writeTestCString(out[sequenceOffset:sequenceOffset+32], "reload_shotgun")
+	writeTestFloat32(out, sequenceOffset+32, 10)
+	writeTestInt32(out, sequenceOffset+56, 2)
+	writeTestInt32(out, sequenceOffset+120, 1)
+	writeTestInt32(out, sequenceOffset+124, groupHeader)
+	writeTestInt32(out, sequenceOffset+156, 1)
+	writeTestCString(out[groupOffset+groupSize+32:groupOffset+groupSize+96], `models\hgrunt01.mdl`)
+
+	boneOffset := len(syntheticMDL())
+	writeTestFloat32(out, boneOffset+88, 0.5)
+	writeTestFloat32(out, boneOffset+108, 0.1)
+
+	positionStreamOffset := groupHeader + 12
+	rotationStreamOffset := positionStreamOffset + 6
+	group := make([]byte, rotationStreamOffset+6)
+	copy(group[:4], "IDSQ")
+	writeTestInt32(group, 4, MDLVersion10)
+	writeTestCString(group[8:72], `models\hgrunt01.mdl`)
+	writeTestInt32(group, 72, len(group))
+	writeTestInt16(group, groupHeader, positionStreamOffset-groupHeader)
+	writeTestInt16(group, groupHeader+10, rotationStreamOffset-groupHeader)
+	group[positionStreamOffset], group[positionStreamOffset+1] = 2, 2
+	writeTestInt16(group, positionStreamOffset+2, 0)
+	writeTestInt16(group, positionStreamOffset+4, 4)
+	group[rotationStreamOffset], group[rotationStreamOffset+1] = 2, 2
+	writeTestInt16(group, rotationStreamOffset+2, 0)
+	writeTestInt16(group, rotationStreamOffset+4, 10)
+	return out, group
 }
 
 func syntheticSPR() []byte {
