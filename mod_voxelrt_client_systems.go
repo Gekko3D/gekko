@@ -721,14 +721,18 @@ func clearVoxelRtSprites(state *VoxelRtState) {
 	state.RtApp.ClearSpriteInput()
 }
 
-func voxelRtBeamsBridgeSystem(state *VoxelRtState, cmd *Commands) {
+func voxelRtBeamsBridgeSystem(state *VoxelRtState, t *Time, cmd *Commands) {
 	if state == nil || state.RtApp == nil {
 		return
 	}
 	if state.bridgeFeatureEnabled(voxelRtBridgeFeatureBeams) {
 		state.RtApp.Profiler.BeginScope("Sync Beams")
 		defer state.RtApp.Profiler.EndScope("Sync Beams")
-		state.RtApp.ApplyBeamInput(beamsSync(cmd))
+		elapsed := float32(0)
+		if t != nil {
+			elapsed = float32(t.Elapsed)
+		}
+		state.RtApp.ApplyBeamInput(beamsSyncAtTime(cmd, elapsed))
 	} else {
 		state.RtApp.ClearBeamInput()
 	}

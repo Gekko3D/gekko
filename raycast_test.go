@@ -125,6 +125,32 @@ func TestRaycastFilteredSkipsRejectedEntity(t *testing.T) {
 	}
 }
 
+func TestRaycastVoxelExitMeasuresScaledSolidThickness(t *testing.T) {
+	state := &VoxelRtState{
+		RtApp:          &app.App{Scene: core.NewScene()},
+		instanceMap:    make(map[EntityId]*core.VoxelObject),
+		objectToEntity: make(map[*core.VoxelObject]EntityId),
+	}
+	entity := EntityId(10)
+	wall := core.NewVoxelObject()
+	wall.XBrickMap = volume.NewXBrickMap()
+	wall.XBrickMap.SetVoxel(0, 0, 0, 1)
+	wall.XBrickMap.SetVoxel(0, 0, 1, 1)
+	wall.Transform.Scale = mgl32.Vec3{0.25, 0.25, 0.25}
+	wall.Transform.Dirty = true
+	wall.UpdateWorldAABB()
+	state.instanceMap[entity] = wall
+	state.objectToEntity[wall] = entity
+
+	exit, thickness, ok := state.RaycastVoxelExit(entity, mgl32.Vec3{0.125, 0.125, -0.001}, mgl32.Vec3{0, 0, 1}, 1)
+	if !ok || thickness < 0.49 || thickness > 0.51 || exit.Z() < 0.49 || exit.Z() > 0.51 {
+		t.Fatalf("voxel exit = %v thickness %.4f ok=%v, want about 0.5", exit, thickness, ok)
+	}
+	if _, _, ok := state.RaycastVoxelExit(entity, mgl32.Vec3{0.125, 0.125, -0.001}, mgl32.Vec3{0, 0, 1}, 0.25); ok {
+		t.Fatal("voxel exit ignored the maximum punch distance")
+	}
+}
+
 func testRaycastVoxelObjectAt(position mgl32.Vec3) *core.VoxelObject {
 	obj := core.NewVoxelObject()
 	obj.XBrickMap = volume.NewXBrickMap()

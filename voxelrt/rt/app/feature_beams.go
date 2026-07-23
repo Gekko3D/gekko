@@ -16,12 +16,17 @@ type BeamResources struct {
 	Pipeline *wgpu.RenderPipeline
 }
 
+const MaxBeamSegments uint32 = 24
+
 // BeamInstanceInput matches BeamInstance in beams.wgsl.
 type BeamInstanceInput struct {
 	StartWidth      [4]float32
 	EndCoreFraction [4]float32
 	CoreColor       [4]float32
 	HaloColor       [4]float32
+	Motion          [4]float32
+	Render          [4]float32
+	Pixelation      [4]float32
 }
 
 func (*BeamFeature) Name() string { return "beams" }
@@ -86,7 +91,7 @@ func (*BeamFeature) RenderPassStage(a *App, stage FeaturePassStage, pass *wgpu.R
 	pass.SetPipeline(pipeline)
 	pass.SetBindGroup(0, a.BufferManager.BeamsBindGroup0, nil)
 	pass.SetBindGroup(1, a.BufferManager.BeamsBindGroup1, nil)
-	pass.Draw(6, a.BufferManager.BeamCount, 0, 0)
+	pass.Draw(6*MaxBeamSegments, a.BufferManager.BeamCount, 0, 0)
 	return nil
 }
 

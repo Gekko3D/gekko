@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"math"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -478,6 +479,62 @@ func (s *VoxelRtState) RaycastFiltered(origin, dir mgl32.Vec3, tMax float32, acc
 	}
 
 	return RaycastHit{}
+}
+
+// RaycastVoxelExit finds where a ray that entered one voxel object returns to
+// empty space. The returned distance is measured in world units from entry.
+func (s *VoxelRtState) RaycastVoxelExit(entity EntityId, entry, direction mgl32.Vec3, maxDistance float32) (mgl32.Vec3, float32, bool) {
+	if s == nil || direction.LenSqr() <= 1e-8 || maxDistance <= 0 {
+		return mgl32.Vec3{}, 0, false
+	}
+	obj := s.GetVoxelObject(entity)
+	if obj == nil || obj.XBrickMap == nil || obj.Transform == nil {
+		return mgl32.Vec3{}, 0, false
+	}
+	direction = direction.Normalize()
+	worldToObject := obj.Transform.WorldToObject()
+	localEntry := worldToObject.Mul4x1(entry.Vec4(1)).Vec3()
+	localDirection := worldToObject.Mul4x1(direction.Vec4(0)).Vec3()
+	localPerWorldUnit := localDirection.Len()
+	if localPerWorldUnit <= 1e-8 {
+		return mgl32.Vec3{}, 0, false
+	}
+	// ponytail: quarter-voxel stepping is sufficient for rare penetration shots;
+	// replace it with empty-boundary DDA only if profiling makes this measurable.
+	step := min(maxDistance, 0.25/localPerWorldUnit)
+	solidAt := func(distance float32) bool {
+		point := localEntry.Add(localDirection.Mul(distance))
+		solid, _ := obj.XBrickMap.GetVoxel(
+			int(math.Floor(float64(point.X()))),
+			int(math.Floor(float64(point.Y()))),
+			int(math.Floor(float64(point.Z()))),
+		)
+		return solid
+	}
+
+	enteredSolid := false
+	lastSolidDistance := float32(0)
+	for distance := step; ; distance = min(maxDistance, distance+step) {
+		if solidAt(distance) {
+			enteredSolid = true
+			lastSolidDistance = distance
+		} else if enteredSolid {
+			low, high := lastSolidDistance, distance
+			for range 8 {
+				mid := (low + high) * 0.5
+				if solidAt(mid) {
+					low = mid
+				} else {
+					high = mid
+				}
+			}
+			return entry.Add(direction.Mul(high)), high, true
+		}
+		if distance >= maxDistance {
+			break
+		}
+	}
+	return mgl32.Vec3{}, 0, false
 }
 
 func (s *VoxelRtState) entityForVoxelObject(obj *core.VoxelObject) (EntityId, bool) {
