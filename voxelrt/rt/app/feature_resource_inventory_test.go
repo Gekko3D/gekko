@@ -63,6 +63,7 @@ func TestDefaultFeatureResourceInventoryDocumentsBroadAppFields(t *testing.T) {
 		"DebrisMidfieldResources",
 		"ParticleResources",
 		"SpriteResources",
+		"BeamResources",
 	} {
 		if owner, ok := fields[field]; !ok {
 			t.Fatalf("expected inventory owner for broad app field %q", field)

@@ -1182,7 +1182,7 @@ func TestVoxelRtBridgeRegistrySupportsModuleRegistrations(t *testing.T) {
 	var textSystemRegistered, gizmoSystemRegistered, analyticBatchedSystemRegistered, waterBatchedSystemRegistered bool
 	var planetBatchedSystemRegistered, astronomicalBatchedSystemRegistered bool
 	var farRingBatchedSystemRegistered, debrisBatchedSystemRegistered, caBatchedSystemRegistered bool
-	var particleAfterBatchSystemRegistered, spriteAfterBatchSystemRegistered, skyboxSystemRegistered bool
+	var particleAfterBatchSystemRegistered, spriteAfterBatchSystemRegistered, beamAfterBatchSystemRegistered, skyboxSystemRegistered bool
 	var skyboxRequiresGraphNode bool
 	for _, registration := range DefaultVoxelRtBridgeFeatureRegistrations() {
 		switch registration.Feature {
@@ -1208,6 +1208,8 @@ func TestVoxelRtBridgeRegistrySupportsModuleRegistrations(t *testing.T) {
 			particleAfterBatchSystemRegistered = registration.PreRenderAfterBatchSystem != nil
 		case VoxelRtBridgeFeatureSprites:
 			spriteAfterBatchSystemRegistered = registration.PreRenderAfterBatchSystem != nil
+		case VoxelRtBridgeFeatureBeams:
+			beamAfterBatchSystemRegistered = registration.PreRenderAfterBatchSystem != nil
 		case VoxelRtBridgeFeatureSkybox:
 			skyboxSystemRegistered = registration.PreRenderSystem != nil
 			skyboxRequiresGraphNode = len(registration.RequiredGraphNodes) == 1 &&
@@ -1217,12 +1219,12 @@ func TestVoxelRtBridgeRegistrySupportsModuleRegistrations(t *testing.T) {
 	if !textSystemRegistered || !gizmoSystemRegistered || !analyticBatchedSystemRegistered || !waterBatchedSystemRegistered ||
 		!planetBatchedSystemRegistered || !astronomicalBatchedSystemRegistered || !farRingBatchedSystemRegistered ||
 		!debrisBatchedSystemRegistered || !caBatchedSystemRegistered || !particleAfterBatchSystemRegistered ||
-		!spriteAfterBatchSystemRegistered || !skyboxSystemRegistered || !skyboxRequiresGraphNode {
-		t.Fatalf("expected default bridge registrations to install systems, got text=%v gizmos=%v analyticBatched=%v waterBatched=%v planetBatched=%v astronomicalBatched=%v farRingBatched=%v debrisBatched=%v caBatched=%v particleAfterBatch=%v spriteAfterBatch=%v skyboxSystem=%v skyboxRequiresGraphNode=%v",
+		!spriteAfterBatchSystemRegistered || !beamAfterBatchSystemRegistered || !skyboxSystemRegistered || !skyboxRequiresGraphNode {
+		t.Fatalf("expected default bridge registrations to install systems, got text=%v gizmos=%v analyticBatched=%v waterBatched=%v planetBatched=%v astronomicalBatched=%v farRingBatched=%v debrisBatched=%v caBatched=%v particleAfterBatch=%v spriteAfterBatch=%v beamAfterBatch=%v skyboxSystem=%v skyboxRequiresGraphNode=%v",
 			textSystemRegistered, gizmoSystemRegistered, analyticBatchedSystemRegistered, waterBatchedSystemRegistered,
 			planetBatchedSystemRegistered, astronomicalBatchedSystemRegistered, farRingBatchedSystemRegistered,
 			debrisBatchedSystemRegistered, caBatchedSystemRegistered, particleAfterBatchSystemRegistered,
-			spriteAfterBatchSystemRegistered, skyboxSystemRegistered, skyboxRequiresGraphNode)
+			spriteAfterBatchSystemRegistered, beamAfterBatchSystemRegistered, skyboxSystemRegistered, skyboxRequiresGraphNode)
 	}
 
 	customBridge := VoxelRtBridgeFeature("custom-water-like")

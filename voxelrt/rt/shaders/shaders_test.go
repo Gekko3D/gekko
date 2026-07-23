@@ -18,11 +18,28 @@ func TestBillboardShadersApplyWebGPUClipZConversion(t *testing.T) {
 	}{
 		{name: "particles", code: ParticlesBillboardWGSL},
 		{name: "sprites", code: SpritesWGSL},
+		{name: "beams", code: BeamsWGSL},
 	} {
 		for _, needle := range required {
 			if !strings.Contains(tc.code, needle) {
 				t.Fatalf("%s shader missing reverse-z raster clip conversion: %q", tc.name, needle)
 			}
+		}
+	}
+}
+
+func TestBeamShaderUsesDepthAwareCoreHaloWBOIT(t *testing.T) {
+	for _, needle := range []string{
+		"struct BeamInstance",
+		"@group(1) @binding(0) var gbuf_depth",
+		"textureLoad(gbuf_depth",
+		"core_fraction",
+		"halo_color",
+		"out.accum",
+		"out.weight",
+	} {
+		if !strings.Contains(BeamsWGSL, needle) {
+			t.Fatalf("beam shader missing %q", needle)
 		}
 	}
 }

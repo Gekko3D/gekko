@@ -54,6 +54,10 @@ func (m *GpuBufferManager) HasSpriteContribution() bool {
 	return false
 }
 
+func (m *GpuBufferManager) HasBeamContribution() bool {
+	return m != nil && m.BeamCount > 0 && m.BeamsBindGroup0 != nil && m.BeamsBindGroup1 != nil
+}
+
 func (m *GpuBufferManager) HasParticleContribution() bool {
 	return m != nil && m.ParticleSystemActive && m.ParticlesBindGroup0 != nil && m.ParticlesBindGroup1 != nil
 }

@@ -548,6 +548,34 @@ func testSpriteReadyManager() *gpu.GpuBufferManager {
 	}
 }
 
+func TestBeamFeatureIsGraphOwnedByAccumulationNode(t *testing.T) {
+	feature := &BeamFeature{}
+	nodes := feature.GraphNodeNames()
+	if !sameStrings(nodes, []string{RenderNodeCoreAccumulation}) {
+		t.Fatalf("beam graph nodes = %v, want %v", nodes, []string{RenderNodeCoreAccumulation})
+	}
+}
+
+func TestBeamFeaturePassStageGating(t *testing.T) {
+	feature := &BeamFeature{}
+	app := &App{}
+	if feature.HasPassStage(app, FeaturePassStageAccumulation) {
+		t.Fatal("expected beam feature to gate off without renderer resources")
+	}
+	app.BufferManager = &gpu.GpuBufferManager{
+		BeamCount:       1,
+		BeamsBindGroup0: &wgpu.BindGroup{},
+		BeamsBindGroup1: &wgpu.BindGroup{},
+	}
+	if feature.HasPassStage(app, FeaturePassStageAccumulation) {
+		t.Fatal("expected beam feature to gate off without beam resources")
+	}
+	app.BeamResources = &BeamResources{Pipeline: &wgpu.RenderPipeline{}}
+	if !feature.HasPassStage(app, FeaturePassStageAccumulation) {
+		t.Fatal("expected beam feature to gate on with resources and contribution")
+	}
+}
+
 func TestTransparencyFeatureIsGraphOwnedByAccumulationNode(t *testing.T) {
 	feature := &TransparencyFeature{}
 	nodes := feature.GraphNodeNames()

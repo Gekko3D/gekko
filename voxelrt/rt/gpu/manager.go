@@ -382,6 +382,16 @@ type GpuBufferManager struct {
 	spritesBG1Depth    *wgpu.TextureView
 	spritesBG1Pipeline *wgpu.RenderPipeline
 
+	// Beams (camera-facing world-space ribbons)
+	BeamBuf         *wgpu.Buffer
+	BeamCount       uint32
+	BeamsBindGroup0 *wgpu.BindGroup // camera + beam instances
+	BeamsBindGroup1 *wgpu.BindGroup // gbuffer depth
+	beamsBGCamera   *wgpu.Buffer
+	beamsBGBuffer   *wgpu.Buffer
+	beamsBGDepth    *wgpu.TextureView
+	beamsBGPipeline *wgpu.RenderPipeline
+
 	// Transparent overlay (single-layer transparency over lit image)
 	TransparentBG0 *wgpu.BindGroup // camera + instances + BVH
 	TransparentBG1 *wgpu.BindGroup // voxel data buffers
@@ -678,6 +688,7 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 	m.ensureBuffer("WaterSurfaceParamsBuf", &m.WaterSurfaceParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("VolumetricHistoryParamsBuf", &m.VolumetricHistoryParamsBuf, nil, wgpu.BufferUsageUniform, 256)
 	m.ensureBuffer("SpriteBuf", &m.SpriteBuf, nil, wgpu.BufferUsageStorage, 1024)
+	m.ensureBuffer("BeamBuf", &m.BeamBuf, nil, wgpu.BufferUsageStorage, 1024)
 
 	return m
 }

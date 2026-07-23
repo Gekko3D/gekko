@@ -134,5 +134,12 @@ func DefaultFeatureResourceInventory() []FeatureResourceInventoryItem {
 			BufferManagerState: []string{"Sprite atlas/cache/batches/bind groups"},
 			NextStep:           "pipeline moved behind a resource holder; atlas, batches, and contribution readiness remain in BufferManager",
 		},
+		{
+			FeatureName:        "beams",
+			Owner:              FeatureResourceOwnerFeatureHooks,
+			AppFields:          []string{"BeamResources"},
+			BufferManagerState: []string{"Beam instance buffer/bind groups"},
+			NextStep:           "pipeline stays behind a resource holder; instance data and bind groups remain in BufferManager",
+		},
 	}
 }

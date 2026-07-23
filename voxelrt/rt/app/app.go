@@ -55,6 +55,7 @@ type App struct {
 	FarPlanetRingResources  *FarPlanetRingResources
 	DebrisMidfieldResources *DebrisMidfieldResources
 	SpriteResources         *SpriteResources
+	BeamResources           *BeamResources
 	ParticleResources       *ParticleResources
 	CAVolumeResources       *CAVolumeResources
 	AnalyticMediumResources *AnalyticMediumResources
@@ -109,6 +110,7 @@ type AppFeatureFlags struct {
 	Transparency  bool
 	Particles     bool
 	Sprites       bool
+	Beams         bool
 }
 
 type AppFeatureConfig struct {
@@ -132,6 +134,7 @@ func DefaultFeatureFlags() AppFeatureFlags {
 		Transparency:  true,
 		Particles:     true,
 		Sprites:       true,
+		Beams:         true,
 	}
 }
 

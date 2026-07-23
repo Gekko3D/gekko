@@ -51,7 +51,7 @@ func (a *App) ensureDefaultFeatures() {
 }
 
 func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
-	defaults := make([]Feature, 0, 9)
+	defaults := make([]Feature, 0, 16)
 	if flags.Text {
 		defaults = append(defaults, &TextFeature{})
 	}
@@ -88,6 +88,9 @@ func (a *App) defaultFeatureList(flags AppFeatureFlags) []Feature {
 	}
 	if flags.Sprites {
 		defaults = append(defaults, &SpriteFeature{})
+	}
+	if flags.Beams {
+		defaults = append(defaults, &BeamFeature{})
 	}
 	defaults = append(defaults, noOpFeature{name: "lifecycle-noop"})
 	return defaults
