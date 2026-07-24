@@ -31,14 +31,14 @@ func TestSurfaceMaterialForRaycastHitResolvesImportedWorldMaterial(t *testing.T)
 	}
 }
 
-func TestImportedWorldSurfaceMaterialPrefersSourceFactsOverAdaptiveRenderFacts(t *testing.T) {
+func TestImportedWorldSurfaceMaterialPrefersRuntimeFactsOverSourceProvenance(t *testing.T) {
 	materials := importedWorldSurfaceMaterials(&content.ImportedWorldDef{
 		SourceMaterials: []content.ImportedWorldMaterialDef{{PaletteIndex: 7, Kind: "metal", Tags: []string{"material:metal"}}},
-		Materials:       []content.ImportedWorldMaterialDef{{PaletteIndex: 7, Kind: "baked_texture", Tags: []string{"material:baked_texture", "palette:adaptive"}}},
+		Materials:       []content.ImportedWorldMaterialDef{{PaletteIndex: 7, Kind: "computer", Tags: []string{"material:computer"}}},
 	})
 
-	if got := materials[7]; got.Kind != "metal" || !reflect.DeepEqual(got.Tags, []string{"material:metal"}) {
-		t.Fatalf("adaptive render material replaced source gameplay facts: %+v", got)
+	if got := materials[7]; got.Kind != "computer" || !reflect.DeepEqual(got.Tags, []string{"material:computer"}) {
+		t.Fatalf("source palette provenance replaced runtime gameplay facts: %+v", got)
 	}
 }
 

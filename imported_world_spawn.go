@@ -270,9 +270,9 @@ func ImportedWorldPaletteAsset(assets *AssetServer, def *content.ImportedWorldDe
 
 func importedWorldSurfaceMaterials(def *content.ImportedWorldDef) map[uint8]VoxelSurfaceMaterial {
 	var result map[uint8]VoxelSurfaceMaterial
-	// Adaptive render colors can reuse a source-material palette index. Apply
-	// source facts last so gameplay keeps semantic metal/concrete/etc. data.
-	for _, materials := range [][]content.ImportedWorldMaterialDef{def.Materials, def.SourceMaterials} {
+	// Source palette indices are provenance, while runtime materials match the
+	// material_value stored in chunk geometry.
+	for _, materials := range [][]content.ImportedWorldMaterialDef{def.SourceMaterials, def.Materials} {
 		for _, material := range materials {
 			result = addVoxelSurfaceMaterial(result, material.PaletteIndex, material.Kind, material.Tags)
 		}

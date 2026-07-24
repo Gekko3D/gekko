@@ -163,6 +163,38 @@ func TestBuildImportedWorldEmissionPrefersMatchingRuntimeMaterialValue(t *testin
 	}
 }
 
+func TestBuildImportedWorldEmissionPreservesImpactSurfaceKinds(t *testing.T) {
+	emission, err := BuildImportedWorldEmission([]Voxel{
+		{X: 0, Y: 0, Z: 0, Palette: 4, SolidKind: "metal"},
+		{X: 1, Y: 0, Z: 0, Palette: 5, SolidKind: "computer"},
+		{X: 2, Y: 0, Z: 0, Palette: 6, SolidKind: "wood"},
+	}, []Material{
+		{ID: 4, PaletteIndex: 4, BaseColor: [4]uint8{120, 80, 40, 255}, Kind: "baked_texture"},
+		{ID: 5, PaletteIndex: 5, BaseColor: [4]uint8{80, 120, 40, 255}, Kind: "baked_texture"},
+		{ID: 6, PaletteIndex: 6, BaseColor: [4]uint8{40, 80, 120, 255}, Kind: "baked_texture"},
+	}, ImportedWorldEmitOptions{WorldID: "test_world", ChunkSize: 32, VoxelResolution: 0.1})
+	if err != nil {
+		t.Fatalf("BuildImportedWorldEmission failed: %v", err)
+	}
+	chunk := emission.Chunks[[3]int{0, 0, 0}]
+	for i, want := range []string{"metal", "computer", "wood"} {
+		value := content.ImportedWorldVoxelMaterialValue(chunk.Voxels[i])
+		material, ok := content.FindImportedWorldMaterialByPaletteIndex(emission.Manifest, value)
+		if !ok || material.Kind != want {
+			t.Fatalf("voxel %d material = %+v, ok=%t, want %q", i, material, ok, want)
+		}
+	}
+}
+
+func TestImportedWorldMaterialPriorityKeepsBaseRenderMaterialsFirst(t *testing.T) {
+	base := importedWorldMaterialPriority(importedWorldMaterialKey{Kind: "baked_texture"})
+	computer := importedWorldMaterialPriority(importedWorldMaterialKey{Kind: "computer"})
+	glass := importedWorldMaterialPriority(importedWorldMaterialKey{Kind: "glass", Transparent: true})
+	if base >= glass || glass >= computer {
+		t.Fatalf("material priorities base=%d glass=%d computer=%d", base, glass, computer)
+	}
+}
+
 func TestBuildImportedWorldEmissionSeedsMaterialPaletteFromColorPalette(t *testing.T) {
 	emission, err := BuildImportedWorldEmission([]Voxel{
 		{X: 0, Y: 0, Z: 0, Palette: 4},

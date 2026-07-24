@@ -535,7 +535,12 @@ func importedWorldMaterializedVoxels(voxels []Voxel, colorMaterials []Material) 
 	usedValues := map[uint8]struct{}{}
 	out := make([]Voxel, 0, len(voxels))
 	nextValue := uint8(1)
-	for _, voxel := range voxels {
+	orderedVoxels := append([]Voxel(nil), voxels...)
+	sort.SliceStable(orderedVoxels, func(i, j int) bool {
+		return importedWorldMaterialPriority(importedWorldMaterialKeyForVoxel(orderedVoxels[i], materialByPalette[orderedVoxels[i].Palette])) <
+			importedWorldMaterialPriority(importedWorldMaterialKeyForVoxel(orderedVoxels[j], materialByPalette[orderedVoxels[j].Palette]))
+	})
+	for _, voxel := range orderedVoxels {
 		if voxel.Palette == 0 {
 			continue
 		}
@@ -560,6 +565,26 @@ func importedWorldMaterializedVoxels(voxels []Voxel, colorMaterials []Material) 
 		out = append(out, voxel)
 	}
 	return out, materialPalette, materials
+}
+
+func importedWorldMaterialPriority(key importedWorldMaterialKey) int {
+	// ponytail: render-safe base materials own the 8-bit slots first; wider
+	// material IDs are the upgrade path for lossless mixed semantics.
+	if key.Transparent || key.EmitsLight || key.AnimationID != "" {
+		return 1
+	}
+	switch key.Kind {
+	case "computer":
+		return 2
+	case "metal":
+		return 3
+	case "wood":
+		return 4
+	case "grate", "ladder", "cutout":
+		return 5
+	default:
+		return 0
+	}
 }
 
 func nextImportedWorldRuntimeMaterialValue(key importedWorldMaterialKey, used map[uint8]struct{}, next *uint8) (uint8, bool) {
@@ -589,6 +614,8 @@ func importedWorldMaterialKeyForVoxel(voxel Voxel, source Material) importedWorl
 	case "grate", "ladder", "cutout":
 		kind = voxel.SolidKind
 		transparent = false
+	case "metal", "wood", "computer":
+		kind = voxel.SolidKind
 	case "emissive":
 		emitsLight = true
 	}
@@ -671,6 +698,27 @@ func importedWorldRuntimeMaterialForVoxel(value uint8, voxel Voxel, source Mater
 		material.Transparent = false
 		material.Transparency = 0
 		material.Tags = appendUniqueString(material.Tags, "material:cutout")
+	case "metal":
+		material.Kind = "metal"
+		material.Metallic = maxFloat32(material.Metallic, 0.85)
+		material.Roughness = 0.48
+		material.Tags = appendUniqueString(material.Tags, "material:metal")
+	case "concrete":
+		material.Kind = "concrete"
+		material.Roughness = 0.95
+		material.Tags = appendUniqueString(material.Tags, "material:masonry")
+	case "wood":
+		material.Kind = "wood"
+		material.Roughness = 0.8
+		material.Tags = appendUniqueString(material.Tags, "material:wood")
+	case "terrain":
+		material.Kind = "terrain"
+		material.Roughness = 1
+		material.Tags = appendUniqueString(material.Tags, "material:terrain")
+	case "computer":
+		material.Kind = "computer"
+		material.Roughness = 0.35
+		material.Tags = appendUniqueString(material.Tags, "material:computer")
 	case "emissive":
 		material.EmitsLight = true
 		if material.Emissive <= 0 {

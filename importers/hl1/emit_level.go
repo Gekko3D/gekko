@@ -1515,6 +1515,7 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 	})
 	materializeHL1ScrollAssetVoxels(&voxelized)
 	fillHL1ClosedAssetInterior(&voxelized)
+	applyHL1MovingBrushSurfaceSemantics(&voxelized, entity.ClassName)
 	if len(voxelized.Voxels) == 0 {
 		return GeneratedAssetResult{}, content.Vec3{}, nil
 	}
@@ -1546,6 +1547,44 @@ func buildHL1MovingBrushAsset(opts ImportOptions, bsp *BSP, textureStore *Textur
 	}
 	path := generatedHL1LevelAssetPath(opts, "moving_brushes", brushID)
 	return GeneratedAssetResult{AssetPath: filepath.Clean(path), Asset: asset}, visualOrigin, nil
+}
+
+func applyHL1MovingBrushSurfaceSemantics(result *VoxelizeResult, className string) {
+	if result == nil {
+		return
+	}
+	counts := make(map[uint8]map[string]int)
+	for _, voxel := range result.Voxels {
+		kind := voxel.SolidKind
+		if kind == "" || kind == "interior_fill" {
+			continue
+		}
+		if kind == "structural" && (strings.EqualFold(className, "func_door") ||
+			strings.EqualFold(className, "momentary_door") ||
+			strings.EqualFold(className, "func_door_rotating")) {
+			kind = "metal"
+		}
+		if counts[voxel.Palette] == nil {
+			counts[voxel.Palette] = make(map[string]int)
+		}
+		counts[voxel.Palette][kind]++
+	}
+	for i := range result.Materials {
+		palette := result.Materials[i].PaletteIndex
+		bestKind, bestCount := "", 0
+		for kind, count := range counts[palette] {
+			if count > bestCount || count == bestCount && kind < bestKind {
+				bestKind, bestCount = kind, count
+			}
+		}
+		if bestKind == "" || bestKind == "structural" {
+			continue
+		}
+		// ponytail: one semantic per 8-bit color slot; split palette values if
+		// mixed-material moving brushes need exact per-voxel impact semantics.
+		result.Materials[i].Kind = bestKind
+		result.Materials[i].Tags = appendUniqueString(result.Materials[i].Tags, "material:"+bestKind)
+	}
 }
 
 func fillHL1ClosedAssetInterior(result *VoxelizeResult) {

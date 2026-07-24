@@ -9,6 +9,28 @@ import (
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
 
+func TestMovingBrushSurfaceSemanticsUseDoorFallbackAndTextureKind(t *testing.T) {
+	result := VoxelizeResult{
+		Materials: []importcommon.Material{
+			{ID: 4, PaletteIndex: 4, Kind: "baked_texture"},
+			{ID: 5, PaletteIndex: 5, Kind: "baked_texture"},
+		},
+		Voxels: []importcommon.Voxel{
+			{Palette: 4, SolidKind: "structural"},
+			{Palette: 5, SolidKind: "wood"},
+		},
+	}
+
+	applyHL1MovingBrushSurfaceSemantics(&result, "func_door")
+
+	if result.Materials[0].Kind != "metal" || !hasTag(result.Materials[0].Tags, "material:metal") {
+		t.Fatalf("door fallback material = %+v", result.Materials[0])
+	}
+	if result.Materials[1].Kind != "wood" || !hasTag(result.Materials[1].Tags, "material:wood") {
+		t.Fatalf("classified door material = %+v", result.Materials[1])
+	}
+}
+
 func TestGeneratedLevelReimportPreservesNavigationOwnership(t *testing.T) {
 	levelPath := filepath.Join(t.TempDir(), "map.gklevel")
 	existing := content.NewLevelDef("map")

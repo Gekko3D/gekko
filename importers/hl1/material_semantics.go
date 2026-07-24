@@ -108,6 +108,10 @@ func materialSemantics(textureName string) hl1MaterialSemantics {
 	case strings.HasPrefix(rawLower, "{"):
 		kind = "cutout"
 		addTag("material:cutout")
+	case containsAny(name, "lab1_comp", "lab1_cmp", "monitor", "screen", "recharge"):
+		kind = "computer"
+		roughness = 0.35
+		addTag("material:computer")
 	case containsAny(name, "metal", "metl", "steel", "pipe", "vent", "duct", "rail", "trim"):
 		kind = "metal"
 		metallic = 0.85
