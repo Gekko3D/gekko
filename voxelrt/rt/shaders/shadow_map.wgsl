@@ -269,6 +269,13 @@ fn brick_is_uniform_material(flags: u32) -> bool {
     return (flags & BRICK_FLAG_UNIFORM_MATERIAL) != 0u;
 }
 
+fn load_brick_material(brick: BrickRecord, voxel_idx: u32) -> u32 {
+    if (brick_is_uniform_material(brick.flags)) {
+        return brick.material_index;
+    }
+    return load_u8(brick.payload_offset, brick.payload_page, voxel_idx);
+}
+
 var<private> g_cached_sector_id: i32 = -1;
 var<private> g_cached_sector_coords: vec3<i32> = vec3<i32>(-999, -999, -999);
 var<private> g_cached_sector_base: u32 = 0xFFFFFFFFu;
@@ -491,7 +498,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                                 let b_mask_lo = brick.occupancy_mask_lo;
                                 let b_mask_hi = brick.occupancy_mask_hi;
                                 if (bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.voxel_aux_word_base, voxel_idx)) {
-                                    let palette_idx = select(load_u8(brick.payload_offset, brick.payload_page, voxel_idx), b_material, brick_is_uniform_material(b_flags));
+                                    let palette_idx = load_brick_material(brick, voxel_idx);
                                     if (palette_idx != EMPTY_VOXEL) {
                                         let mat_idx_v = params.material_table_base + palette_idx * 4u;
                                         let pbr_v = materials[mat_idx_v + 2u];

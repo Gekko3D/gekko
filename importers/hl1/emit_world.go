@@ -133,7 +133,7 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	if err != nil {
 		return DebugWorldEmissionResult{}, err
 	}
-	backing, err := buildDebugWorldVoxelBacking(bsp, emission.Manifest, opts.VoxelResolution)
+	backing, err := buildDebugWorldVoxelBacking(bsp, emission.Manifest, opts.VoxelResolution, faces)
 	if err != nil {
 		return DebugWorldEmissionResult{}, err
 	}
@@ -217,7 +217,7 @@ func SaveDebugWorldWithStats(result DebugWorldEmissionResult) (importcommon.Impo
 	return stats, nil
 }
 
-func buildDebugWorldVoxelBacking(bsp *BSP, manifest *content.ImportedWorldDef, voxelResolution float32) (*content.VoxelBackingDef, error) {
+func buildDebugWorldVoxelBacking(bsp *BSP, manifest *content.ImportedWorldDef, voxelResolution float32, surfaceFaces ...[]Face) (*content.VoxelBackingDef, error) {
 	if bsp == nil || len(bsp.Models) == 0 {
 		return nil, fmt.Errorf("world BSP model is missing")
 	}
@@ -279,10 +279,62 @@ func buildDebugWorldVoxelBacking(bsp *BSP, manifest *content.ImportedWorldDef, v
 	for _, leaf := range bsp.Leafs {
 		def.PlaneTree.Leaves = append(def.PlaneTree.Leaves, content.VoxelBackingPlaneLeafDef{Solid: IsSolidContent(leaf.Contents)})
 	}
+	if len(surfaceFaces) > 0 {
+		def.SurfaceSupports = buildDebugWorldSurfaceSupports(surfaceFaces[0], voxelResolution)
+	}
 	if err := content.ValidateVoxelBacking(def); err != nil {
 		return nil, err
 	}
 	return def, nil
+}
+
+const DefaultDestructionSurfaceSupportDepth = float32(1.5)
+
+func buildDebugWorldSurfaceSupports(faces []Face, voxelResolution float32) []content.VoxelBackingSurfaceSupportDef {
+	if voxelResolution <= 0 {
+		return nil
+	}
+	depth := DefaultDestructionSurfaceSupportDepth / voxelResolution
+	supports := make([]content.VoxelBackingSurfaceSupportDef, 0, len(faces)*2)
+	for _, face := range faces {
+		semantics := materialSemantics(face.TextureName)
+		if len(face.Vertices) < 3 || semantics.CollisionKind != "solid" || semantics.Transparent || isCutoutTexture(face.TextureName) {
+			continue
+		}
+		normal := hammerVectorToGekko(face.Normal)
+		normalLength := float32(math.Sqrt(float64(dotVec3(normal, normal))))
+		if normalLength <= 1e-6 {
+			continue
+		}
+		normal = importcommon.Vec3{X: normal.X / normalLength, Y: normal.Y / normalLength, Z: normal.Z / normalLength}
+		// Ground needs artificial depth; exact BSP occupancy remains authoritative
+		// for walls and ceilings without consuming playable space on both sides.
+		if normal.Y < 0.5 {
+			continue
+		}
+		vertices := make([]importcommon.Vec3, len(face.Vertices))
+		for i, vertex := range face.Vertices {
+			world := HammerToGekko(vertex)
+			vertices[i] = importcommon.Vec3{X: world.X / voxelResolution, Y: world.Y / voxelResolution, Z: world.Z / voxelResolution}
+		}
+		for i := 1; i < len(vertices)-1; i++ {
+			triangle := [3]importcommon.Vec3{vertices[0], vertices[i], vertices[i+1]}
+			triangleNormal := crossVec3(subVec3(triangle[1], triangle[0]), subVec3(triangle[2], triangle[0]))
+			if dotVec3(triangleNormal, triangleNormal) <= 1e-8 {
+				continue
+			}
+			supports = append(supports, content.VoxelBackingSurfaceSupportDef{
+				Vertices: [3][3]float32{
+					{triangle[0].X, triangle[0].Y, triangle[0].Z},
+					{triangle[1].X, triangle[1].Y, triangle[1].Z},
+					{triangle[2].X, triangle[2].Y, triangle[2].Z},
+				},
+				Normal: [3]float32{normal.X, normal.Y, normal.Z},
+				Depth:  depth,
+			})
+		}
+	}
+	return supports
 }
 
 func debugWorldBackingSolidValue(manifest *content.ImportedWorldDef) uint8 {

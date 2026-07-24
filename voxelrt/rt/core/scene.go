@@ -88,6 +88,8 @@ type VoxelObject struct {
 	PlanetTileLevel          int
 	PlanetTileX              int
 	PlanetTileY              int
+	worldAABBMap             *volume.XBrickMap
+	worldAABBMapRevision     uint64
 }
 
 func (obj *VoxelObject) HasTransparency() bool {
@@ -116,7 +118,11 @@ func NewVoxelObject() *VoxelObject {
 }
 
 func (obj *VoxelObject) UpdateWorldAABB() bool {
-	if !obj.XBrickMap.AABBDirty && !obj.Transform.Dirty && obj.WorldAABB != nil {
+	if obj.worldAABBMap == obj.XBrickMap &&
+		obj.worldAABBMapRevision == obj.XBrickMap.Revision &&
+		!obj.XBrickMap.AABBDirty &&
+		!obj.Transform.Dirty &&
+		obj.WorldAABB != nil {
 		return false
 	}
 
@@ -155,6 +161,8 @@ func (obj *VoxelObject) UpdateWorldAABB() bool {
 	}
 
 	obj.Transform.Dirty = false
+	obj.worldAABBMap = obj.XBrickMap
+	obj.worldAABBMapRevision = obj.XBrickMap.Revision
 	return true
 }
 

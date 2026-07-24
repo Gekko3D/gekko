@@ -27,6 +27,37 @@ func TestBuildDebugWorldVoxelBackingClassifiesInGlobalVoxelSpace(t *testing.T) {
 	}
 }
 
+func TestBuildDebugWorldVoxelBackingAddsGroundSupportWithoutExplicitFill(t *testing.T) {
+	bsp := &BSP{
+		SHA256: "source",
+		Planes: []Plane{{Normal: vec3(1, 0, 0)}},
+		Nodes:  []Node{{PlaneID: 0, Children: [2]int16{-1, -2}}},
+		Leafs:  []Leaf{{Contents: ContentsSolid}, {Contents: ContentsEmpty}},
+		Models: []Model{{
+			Min: vec3(-200, -200, -200), Max: vec3(200, 200, 200), HeadNodes: [4]int32{0},
+		}},
+	}
+	ground := Face{
+		TextureName: "concrete",
+		Normal:      vec3(0, 0, 1),
+		Vertices:    []importcommon.Vec3{vec3(0, 0, 0), vec3(100, 0, 0), vec3(100, 100, 0), vec3(0, 100, 0)},
+	}
+	ceiling := ground
+	ceiling.Normal = vec3(0, 0, -1)
+	def, err := buildDebugWorldVoxelBacking(bsp, &content.ImportedWorldDef{ChunkSize: 16, VoxelResolution: 1}, 1, []Face{ground, ceiling})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(def.SurfaceSupports) != 2 {
+		t.Fatalf("ground support triangles = %d, want 2", len(def.SurfaceSupports))
+	}
+	for _, support := range def.SurfaceSupports {
+		if support.Normal != ([3]float32{0, 1, 0}) || support.Depth != DefaultDestructionSurfaceSupportDepth {
+			t.Fatalf("unexpected ground support: %+v", support)
+		}
+	}
+}
+
 func TestEnsureDebugWorldBackingChunksCatalogsImplicitVolume(t *testing.T) {
 	emission := importcommon.ImportedWorldEmission{
 		Manifest: &content.ImportedWorldDef{

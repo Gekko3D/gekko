@@ -20,6 +20,11 @@ func TestVoxelBackingRoundTrip(t *testing.T) {
 			Nodes:  []VoxelBackingPlaneNodeDef{{Plane: 0, Children: [2]int32{-1, -2}}},
 			Leaves: []VoxelBackingPlaneLeafDef{{Solid: true}, {Solid: false}},
 		},
+		SurfaceSupports: []VoxelBackingSurfaceSupportDef{{
+			Vertices: [3][3]float32{{0, 4, 0}, {4, 4, 0}, {0, 4, 4}},
+			Normal:   [3]float32{0, 1, 0},
+			Depth:    3,
+		}},
 	}
 	if err := SaveVoxelBacking(path, def); err != nil {
 		t.Fatalf("SaveVoxelBacking failed: %v", err)

@@ -3,6 +3,7 @@ package content
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -31,13 +32,14 @@ type VoxelBackingRefDef struct {
 // compact point classifier; runtime-generated terrain uses the same provider
 // contract without needing a sidecar.
 type VoxelBackingDef struct {
-	SchemaVersion int                       `json:"schema_version"`
-	Kind          string                    `json:"kind"`
-	SourceHash    string                    `json:"source_hash,omitempty"`
-	BoundsMin     [3]int                    `json:"bounds_min"`
-	BoundsMax     [3]int                    `json:"bounds_max"`
-	SolidValue    uint8                     `json:"solid_value"`
-	PlaneTree     *VoxelBackingPlaneTreeDef `json:"plane_tree,omitempty"`
+	SchemaVersion   int                             `json:"schema_version"`
+	Kind            string                          `json:"kind"`
+	SourceHash      string                          `json:"source_hash,omitempty"`
+	BoundsMin       [3]int                          `json:"bounds_min"`
+	BoundsMax       [3]int                          `json:"bounds_max"`
+	SolidValue      uint8                           `json:"solid_value"`
+	PlaneTree       *VoxelBackingPlaneTreeDef       `json:"plane_tree,omitempty"`
+	SurfaceSupports []VoxelBackingSurfaceSupportDef `json:"surface_supports,omitempty"`
 }
 
 type VoxelBackingPlaneTreeDef struct {
@@ -59,6 +61,14 @@ type VoxelBackingPlaneNodeDef struct {
 
 type VoxelBackingPlaneLeafDef struct {
 	Solid bool `json:"solid"`
+}
+
+// VoxelBackingSurfaceSupportDef adds a finite inward solid band behind an
+// authored surface. Coordinates and depth are in global voxel units.
+type VoxelBackingSurfaceSupportDef struct {
+	Vertices [3][3]float32 `json:"vertices"`
+	Normal   [3]float32    `json:"normal"`
+	Depth    float32       `json:"depth"`
 }
 
 // VoxelBackingRemovalDef is a removal-only overlay on an immutable backing.
@@ -145,7 +155,33 @@ func ValidateVoxelBacking(def *VoxelBackingDef) error {
 			}
 		}
 	}
+	for i, support := range def.SurfaceSupports {
+		if !voxelBackingFinite(support.Depth) || support.Depth <= 0 {
+			return fmt.Errorf("voxel backing surface support %d depth must be positive and finite", i)
+		}
+		normalLength2 := float32(0)
+		for axis, value := range support.Normal {
+			if !voxelBackingFinite(value) {
+				return fmt.Errorf("voxel backing surface support %d normal axis %d is not finite", i, axis)
+			}
+			normalLength2 += value * value
+		}
+		if normalLength2 <= 1e-8 {
+			return fmt.Errorf("voxel backing surface support %d normal is degenerate", i)
+		}
+		for vertex, values := range support.Vertices {
+			for axis, value := range values {
+				if !voxelBackingFinite(value) {
+					return fmt.Errorf("voxel backing surface support %d vertex %d axis %d is not finite", i, vertex, axis)
+				}
+			}
+		}
+	}
 	return nil
+}
+
+func voxelBackingFinite(value float32) bool {
+	return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0)
 }
 
 func validateVoxelBackingChild(child int32, nodes, leaves int) error {

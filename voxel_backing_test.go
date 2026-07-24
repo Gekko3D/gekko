@@ -55,8 +55,8 @@ func TestVoxelBackingDestructionRoutesAcrossChunks(t *testing.T) {
 	if found, _ := secondMap.GetVoxel(0, 2, 2); found {
 		t.Fatal("expected carve to cross into adjacent backed chunk")
 	}
-	if _, value := secondMap.GetVoxel(7, 2, 2); value != 7 {
-		t.Fatalf("expected adjacent touched brick to materialize, got %d", value)
+	if _, value := secondMap.GetVoxel(1, 2, 2); value != 7 {
+		t.Fatalf("expected adjacent carve shell to materialize, got %d", value)
 	}
 	if len(firstBacking.Removals) == 0 || len(secondBacking.Removals) == 0 {
 		t.Fatal("expected removal masks in both crossed chunks")
@@ -113,6 +113,39 @@ func TestVoxelBackingMaterializationPreservesRemoval(t *testing.T) {
 	}
 }
 
+func TestVoxelBackingMaterializesExposedShellAcrossBrickBoundary(t *testing.T) {
+	def := testPlaneTreeBackingDef()
+	def.BoundsMax = [3]int{24, 16, 16}
+	def.PlaneTree.Leaves[1].Solid = true
+	provider, err := NewPlaneTreeVoxelBacking(def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	component := NewVoxelBackingComponent(content.VoxelBackingOwnerImportedWorld, "world", "source", [3]int{}, 24, provider, nil)
+	xbm := volume.NewXBrickMap()
+	component.MaterializeSphere(xbm, mgl32.Vec3{8.5, 4.5, 4.5}, 0.1)
+	if _, value := xbm.GetVoxel(7, 4, 4); value != 7 {
+		t.Fatalf("expected backing shell beyond carve brick, got %d", value)
+	}
+	if found, _ := xbm.GetVoxel(0, 0, 0); found {
+		t.Fatal("carve shell materialized an unrelated voxel from the same brick")
+	}
+
+	removal := component.RemovalDef()
+	restored := NewVoxelBackingComponent(content.VoxelBackingOwnerImportedWorld, "world", "source", [3]int{}, 24, provider, &removal)
+	reloadedMap := volume.NewXBrickMap()
+	restored.ApplyRemovals(reloadedMap)
+	if found, _ := reloadedMap.GetVoxel(8, 4, 4); found {
+		t.Fatal("restored carved voxel is not empty")
+	}
+	if _, value := reloadedMap.GetVoxel(7, 4, 4); value != 7 {
+		t.Fatalf("expected restored backing shell beyond carve brick, got %d", value)
+	}
+	if found, _ := reloadedMap.GetVoxel(0, 0, 0); found {
+		t.Fatal("restored carve shell materialized an unrelated voxel from the same brick")
+	}
+}
+
 func TestTerrainColumnsUseVoxelBackingMaterializer(t *testing.T) {
 	chunk := &content.TerrainChunkDef{
 		TerrainID:       "terrain",
@@ -136,11 +169,39 @@ func TestTerrainColumnsUseVoxelBackingMaterializer(t *testing.T) {
 	)
 	xbm := volume.NewXBrickMap()
 	component.MaterializeSphere(xbm, mgl32.Vec3{2, 18, 2}, 1)
-	if _, value := xbm.GetVoxel(2, 23, 2); value != 3 {
+	if _, value := xbm.GetVoxel(2, 19, 2); value != 3 {
 		t.Fatalf("expected terrain column backing to materialize through generic path, got %d", value)
 	}
-	if found, _ := xbm.GetVoxel(3, 23, 2); found {
+	if found, _ := xbm.GetVoxel(3, 19, 2); found {
 		t.Fatal("terrain backing filled outside authored column")
+	}
+}
+
+func TestPlaneTreeBackingSurfaceSupportExtendsOnlyBehindSurface(t *testing.T) {
+	def := testPlaneTreeBackingDef()
+	def.PlaneTree.Leaves[0].Solid = false
+	def.SurfaceSupports = []content.VoxelBackingSurfaceSupportDef{{
+		Vertices: [3][3]float32{{2, 8, 2}, {12, 8, 2}, {2, 8, 12}},
+		Normal:   [3]float32{0, 1, 0},
+		Depth:    4,
+	}}
+	provider, err := NewPlaneTreeVoxelBacking(def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		voxel [3]int
+		solid bool
+	}{
+		{voxel: [3]int{3, 7, 3}, solid: true},
+		{voxel: [3]int{3, 4, 3}, solid: true},
+		{voxel: [3]int{3, 2, 3}, solid: false},
+		{voxel: [3]int{3, 9, 3}, solid: false},
+		{voxel: [3]int{14, 7, 14}, solid: false},
+	} {
+		if solid := provider.VoxelValue(test.voxel) != 0; solid != test.solid {
+			t.Fatalf("surface support voxel %v solid=%t, want %t", test.voxel, solid, test.solid)
+		}
 	}
 }
 

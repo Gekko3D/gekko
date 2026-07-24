@@ -38,7 +38,9 @@ func NewPlaneTreeVoxelBacking(def *content.VoxelBackingDef) (VoxelBackingProvide
 	if err := content.ValidateVoxelBacking(def); err != nil {
 		return nil, err
 	}
-	return &planeTreeVoxelBacking{def: def}, nil
+	backing := &planeTreeVoxelBacking{def: def}
+	backing.indexSurfaceSupports()
+	return backing, nil
 }
 
 func NewTerrainColumnVoxelBacking(chunk *content.TerrainChunkDef) VoxelBackingProvider {
@@ -124,24 +126,25 @@ func (component *VoxelBackingComponent) RemovalDef() content.VoxelBackingRemoval
 	return def
 }
 
-// ApplyRemovals reconstructs touched backing bricks and reapplies saved holes.
+// ApplyRemovals reconstructs removed voxels and their exposed face neighbors.
 func (component *VoxelBackingComponent) ApplyRemovals(xbm *volume.XBrickMap) {
 	if component == nil || xbm == nil {
 		return
 	}
 	for brickCoord, words := range component.Removals {
-		component.materializeBrick(xbm, brickCoord)
 		for index := 0; index < volume.BrickSize*volume.BrickSize*volume.BrickSize; index++ {
 			if words[index/32]&(uint32(1)<<uint(index%32)) == 0 {
 				continue
 			}
-			local := voxelIndexInBrick(index)
-			xbm.SetVoxel(
-				brickCoord[0]*volume.BrickSize+local[0],
-				brickCoord[1]*volume.BrickSize+local[1],
-				brickCoord[2]*volume.BrickSize+local[2],
-				0,
-			)
+			within := voxelIndexInBrick(index)
+			local := [3]int{
+				brickCoord[0]*volume.BrickSize + within[0],
+				brickCoord[1]*volume.BrickSize + within[1],
+				brickCoord[2]*volume.BrickSize + within[2],
+			}
+			for _, offset := range voxelBackingCarveShellOffsets {
+				component.materializeVoxel(xbm, [3]int{local[0] + offset[0], local[1] + offset[1], local[2] + offset[2]})
+			}
 		}
 	}
 }
@@ -151,27 +154,6 @@ func (component *VoxelBackingComponent) MaterializeSphere(xbm *volume.XBrickMap,
 		return false
 	}
 	minVoxel, maxVoxel := voxelSphereIntegerBounds(center, radius)
-	minBrick := [3]int{
-		floorDivVoxelBacking(minVoxel[0], volume.BrickSize),
-		floorDivVoxelBacking(minVoxel[1], volume.BrickSize),
-		floorDivVoxelBacking(minVoxel[2], volume.BrickSize),
-	}
-	maxBrick := [3]int{
-		floorDivVoxelBacking(maxVoxel[0], volume.BrickSize),
-		floorDivVoxelBacking(maxVoxel[1], volume.BrickSize),
-		floorDivVoxelBacking(maxVoxel[2], volume.BrickSize),
-	}
-	for axis := 0; axis < 3; axis++ {
-		minBrick[axis] = max(floorDivVoxelBacking(component.BoundsMin[axis], volume.BrickSize), minBrick[axis])
-		maxBrick[axis] = min(floorDivVoxelBacking(component.BoundsMax[axis]-1, volume.BrickSize), maxBrick[axis])
-	}
-	for bx := minBrick[0]; bx <= maxBrick[0]; bx++ {
-		for by := minBrick[1]; by <= maxBrick[1]; by++ {
-			for bz := minBrick[2]; bz <= maxBrick[2]; bz++ {
-				component.materializeBrick(xbm, [3]int{bx, by, bz})
-			}
-		}
-	}
 
 	changed := false
 	radius2 := radius * radius
@@ -184,7 +166,11 @@ func (component *VoxelBackingComponent) MaterializeSphere(xbm *volume.XBrickMap,
 				if dx*dx+dy*dy+dz*dz > radius2 {
 					continue
 				}
-				changed = component.markRemoved([3]int{x, y, z}) || changed
+				local := [3]int{x, y, z}
+				for _, offset := range voxelBackingCarveShellOffsets {
+					component.materializeVoxel(xbm, [3]int{x + offset[0], y + offset[1], z + offset[2]})
+				}
+				changed = component.markRemoved(local) || changed
 			}
 		}
 	}
@@ -192,39 +178,38 @@ func (component *VoxelBackingComponent) MaterializeSphere(xbm *volume.XBrickMap,
 	return changed
 }
 
-func (component *VoxelBackingComponent) materializeBrick(xbm *volume.XBrickMap, brickCoord [3]int) {
+var voxelBackingCarveShellOffsets = [...][3]int{
+	{0, 0, 0},
+	{-1, 0, 0},
+	{1, 0, 0},
+	{0, -1, 0},
+	{0, 1, 0},
+	{0, 0, -1},
+	{0, 0, 1},
+}
+
+func (component *VoxelBackingComponent) materializeVoxel(xbm *volume.XBrickMap, local [3]int) {
+	if component == nil || component.Provider == nil || xbm == nil {
+		return
+	}
+	for axis := 0; axis < 3; axis++ {
+		if local[axis] < component.BoundsMin[axis] || local[axis] >= component.BoundsMax[axis] {
+			return
+		}
+	}
+	if component.removed(local) {
+		xbm.SetVoxel(local[0], local[1], local[2], 0)
+		return
+	}
 	chunkOrigin := [3]int{
 		component.ChunkCoord[0] * component.ChunkSize,
 		component.ChunkCoord[1] * component.ChunkSize,
 		component.ChunkCoord[2] * component.ChunkSize,
 	}
-	for x := 0; x < volume.BrickSize; x++ {
-		localX := brickCoord[0]*volume.BrickSize + x
-		if localX < component.BoundsMin[0] || localX >= component.BoundsMax[0] {
-			continue
-		}
-		for y := 0; y < volume.BrickSize; y++ {
-			localY := brickCoord[1]*volume.BrickSize + y
-			if localY < component.BoundsMin[1] || localY >= component.BoundsMax[1] {
-				continue
-			}
-			for z := 0; z < volume.BrickSize; z++ {
-				localZ := brickCoord[2]*volume.BrickSize + z
-				if localZ < component.BoundsMin[2] || localZ >= component.BoundsMax[2] {
-					continue
-				}
-				local := [3]int{localX, localY, localZ}
-				if component.removed(local) {
-					xbm.SetVoxel(localX, localY, localZ, 0)
-					continue
-				}
-				value := component.Provider.VoxelValue([3]int{chunkOrigin[0] + localX, chunkOrigin[1] + localY, chunkOrigin[2] + localZ})
-				if value != 0 {
-					if found, _ := xbm.GetVoxel(localX, localY, localZ); !found {
-						xbm.SetVoxel(localX, localY, localZ, value)
-					}
-				}
-			}
+	value := component.Provider.VoxelValue([3]int{chunkOrigin[0] + local[0], chunkOrigin[1] + local[1], chunkOrigin[2] + local[2]})
+	if value != 0 {
+		if found, _ := xbm.GetVoxel(local[0], local[1], local[2]); !found {
+			xbm.SetVoxel(local[0], local[1], local[2], value)
 		}
 	}
 }
@@ -278,7 +263,16 @@ func voxelBackingLocalSphere(tr *core.Transform, worldCenter mgl32.Vec3, radius 
 }
 
 type planeTreeVoxelBacking struct {
-	def *content.VoxelBackingDef
+	def             *content.VoxelBackingDef
+	surfaceSupports []voxelBackingSurfaceSupport
+	supportCells    map[[3]int][]int
+}
+
+type voxelBackingSurfaceSupport struct {
+	vertices  [3]mgl32.Vec3
+	normal    mgl32.Vec3
+	depth     float32
+	tolerance [3]float32
 }
 
 func (backing *planeTreeVoxelBacking) Bounds() ([3]int, [3]int) {
@@ -292,6 +286,13 @@ func (backing *planeTreeVoxelBacking) VoxelValue(global [3]int) uint8 {
 			return 0
 		}
 	}
+	if backing.planeTreeSolid(global) || backing.surfaceSupportSolid(global) {
+		return backing.def.SolidValue
+	}
+	return 0
+}
+
+func (backing *planeTreeVoxelBacking) planeTreeSolid(global [3]int) bool {
 	point := [3]float32{float32(global[0]) + 0.5, float32(global[1]) + 0.5, float32(global[2]) + 0.5}
 	tree := backing.def.PlaneTree
 	nodeID := tree.Root
@@ -299,16 +300,16 @@ func (backing *planeTreeVoxelBacking) VoxelValue(global [3]int) uint8 {
 		if nodeID < 0 {
 			leafID := int(^nodeID)
 			if leafID >= 0 && leafID < len(tree.Leaves) && tree.Leaves[leafID].Solid {
-				return backing.def.SolidValue
+				return true
 			}
-			return 0
+			return false
 		}
 		if int(nodeID) >= len(tree.Nodes) {
-			return 0
+			return false
 		}
 		node := tree.Nodes[nodeID]
 		if int(node.Plane) >= len(tree.Planes) {
-			return 0
+			return false
 		}
 		plane := tree.Planes[node.Plane]
 		distance := point[0]*plane.Normal[0] + point[1]*plane.Normal[1] + point[2]*plane.Normal[2] - plane.Distance
@@ -318,7 +319,100 @@ func (backing *planeTreeVoxelBacking) VoxelValue(global [3]int) uint8 {
 		}
 		nodeID = node.Children[child]
 	}
-	return 0
+	return false
+}
+
+func (backing *planeTreeVoxelBacking) indexSurfaceSupports() {
+	if backing == nil || backing.def == nil || len(backing.def.SurfaceSupports) == 0 {
+		return
+	}
+	const cellSize = 16
+	backing.supportCells = make(map[[3]int][]int)
+	for _, authored := range backing.def.SurfaceSupports {
+		support := voxelBackingSurfaceSupport{
+			vertices: [3]mgl32.Vec3{
+				{authored.Vertices[0][0], authored.Vertices[0][1], authored.Vertices[0][2]},
+				{authored.Vertices[1][0], authored.Vertices[1][1], authored.Vertices[1][2]},
+				{authored.Vertices[2][0], authored.Vertices[2][1], authored.Vertices[2][2]},
+			},
+			normal: mgl32.Vec3{authored.Normal[0], authored.Normal[1], authored.Normal[2]}.Normalize(),
+			depth:  authored.Depth,
+		}
+		area2 := support.vertices[1].Sub(support.vertices[0]).Cross(support.vertices[2].Sub(support.vertices[0])).Len()
+		for vertex := range support.tolerance {
+			opposite := support.vertices[(vertex+2)%3].Sub(support.vertices[(vertex+1)%3]).Len()
+			altitude := area2 / max(opposite, 1e-6)
+			support.tolerance[vertex] = min(1, 0.75/max(altitude, 1e-6))
+		}
+		index := len(backing.surfaceSupports)
+		backing.surfaceSupports = append(backing.surfaceSupports, support)
+
+		minVoxel := mgl32.Vec3{float32(math.MaxFloat32), float32(math.MaxFloat32), float32(math.MaxFloat32)}
+		maxVoxel := mgl32.Vec3{-float32(math.MaxFloat32), -float32(math.MaxFloat32), -float32(math.MaxFloat32)}
+		inward := support.normal.Mul(-support.depth)
+		for _, vertex := range support.vertices {
+			extruded := vertex.Add(inward)
+			for axis := 0; axis < 3; axis++ {
+				minVoxel[axis] = min(minVoxel[axis], vertex[axis], extruded[axis])
+				maxVoxel[axis] = max(maxVoxel[axis], vertex[axis], extruded[axis])
+			}
+		}
+		minCell := [3]int{}
+		maxCell := [3]int{}
+		for axis := 0; axis < 3; axis++ {
+			minCell[axis] = floorDivVoxelBacking(int(math.Floor(float64(minVoxel[axis]-1))), cellSize)
+			maxCell[axis] = floorDivVoxelBacking(int(math.Floor(float64(maxVoxel[axis]+1))), cellSize)
+		}
+		for x := minCell[0]; x <= maxCell[0]; x++ {
+			for y := minCell[1]; y <= maxCell[1]; y++ {
+				for z := minCell[2]; z <= maxCell[2]; z++ {
+					cell := [3]int{x, y, z}
+					backing.supportCells[cell] = append(backing.supportCells[cell], index)
+				}
+			}
+		}
+	}
+}
+
+func (backing *planeTreeVoxelBacking) surfaceSupportSolid(global [3]int) bool {
+	if len(backing.surfaceSupports) == 0 {
+		return false
+	}
+	const cellSize = 16
+	cell := [3]int{
+		floorDivVoxelBacking(global[0], cellSize),
+		floorDivVoxelBacking(global[1], cellSize),
+		floorDivVoxelBacking(global[2], cellSize),
+	}
+	point := mgl32.Vec3{float32(global[0]) + 0.5, float32(global[1]) + 0.5, float32(global[2]) + 0.5}
+	for _, index := range backing.supportCells[cell] {
+		if backing.surfaceSupports[index].contains(point) {
+			return true
+		}
+	}
+	return false
+}
+
+func (support voxelBackingSurfaceSupport) contains(point mgl32.Vec3) bool {
+	normalMargin := 0.5 * (absf(support.normal.X()) + absf(support.normal.Y()) + absf(support.normal.Z()))
+	signedDistance := point.Sub(support.vertices[0]).Dot(support.normal)
+	if signedDistance > normalMargin || signedDistance < -support.depth-normalMargin {
+		return false
+	}
+	projected := point.Sub(support.normal.Mul(signedDistance))
+	v0 := support.vertices[1].Sub(support.vertices[0])
+	v1 := support.vertices[2].Sub(support.vertices[0])
+	v2 := projected.Sub(support.vertices[0])
+	d00, d01, d11 := v0.Dot(v0), v0.Dot(v1), v1.Dot(v1)
+	d20, d21 := v2.Dot(v0), v2.Dot(v1)
+	denominator := d00*d11 - d01*d01
+	if absf(denominator) <= 1e-8 {
+		return false
+	}
+	v := (d11*d20 - d01*d21) / denominator
+	w := (d00*d21 - d01*d20) / denominator
+	u := 1 - v - w
+	return u >= -support.tolerance[0] && v >= -support.tolerance[1] && w >= -support.tolerance[2]
 }
 
 type terrainColumnVoxelBacking struct {

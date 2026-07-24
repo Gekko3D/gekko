@@ -28,6 +28,24 @@ func TestBillboardShadersApplyWebGPUClipZConversion(t *testing.T) {
 	}
 }
 
+func TestUniformSparseBricksDoNotReadPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code string
+	}{
+		{name: "gbuffer", code: GBufferWGSL},
+		{name: "shadow map", code: ShadowMapWGSL},
+		{name: "transparent overlay", code: TransparentOverlayWGSL},
+	} {
+		if !strings.Contains(tc.code, "let palette_idx = load_brick_material(brick, voxel_idx);") {
+			t.Fatalf("%s shader does not route sparse material lookup through the shared branch", tc.name)
+		}
+		if strings.Contains(tc.code, "select(load_u8") {
+			t.Fatalf("%s shader eagerly reads payload for uniform sparse bricks", tc.name)
+		}
+	}
+}
+
 func TestBeamShaderUsesDepthAwareCoreHaloWBOIT(t *testing.T) {
 	for _, needle := range []string{
 		"struct BeamInstance",

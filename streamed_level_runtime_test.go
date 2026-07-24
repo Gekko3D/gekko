@@ -1706,8 +1706,11 @@ func TestStreamedRuntimePersistsBackedChunkAsSparseRemovals(t *testing.T) {
 		if found, _ := reloadedMap.GetVoxel(5, 2, 2); found {
 			t.Fatal("persisted removal was restored as solid")
 		}
-		if _, value := reloadedMap.GetVoxel(7, 2, 2); value != 7 {
-			t.Fatalf("persisted backing brick was not reconstructed, got %d", value)
+		if _, value := reloadedMap.GetVoxel(6, 2, 2); value != 7 {
+			t.Fatalf("persisted backing shell was not reconstructed, got %d", value)
+		}
+		if found, _ := reloadedMap.GetVoxel(7, 2, 2); found {
+			t.Fatal("persisted backing shell materialized an unrelated voxel")
 		}
 	}
 }

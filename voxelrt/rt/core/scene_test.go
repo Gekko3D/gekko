@@ -198,6 +198,23 @@ func TestSceneCommitSkipsBVHRebuildOnStableFrame(t *testing.T) {
 	}
 }
 
+func TestVoxelObjectWorldAABBTracksIncrementalMapExpansion(t *testing.T) {
+	obj := NewVoxelObject()
+	obj.XBrickMap.SetVoxel(0, 32, 0, 1)
+	obj.UpdateWorldAABB()
+
+	obj.XBrickMap.SetVoxel(0, 31, 0, 1)
+	if obj.XBrickMap.AABBDirty {
+		t.Fatal("test requires the incrementally maintained AABB path")
+	}
+	if !obj.UpdateWorldAABB() {
+		t.Fatal("expected voxel map revision to refresh the world AABB")
+	}
+	if got := obj.WorldAABB[0].Y(); got != 31 {
+		t.Fatalf("world AABB minimum Y = %v, want 31", got)
+	}
+}
+
 func TestSceneCommitRebuildsBVHWhenVisibleObjectChangesAABB(t *testing.T) {
 	scene := NewScene()
 	scene.Lights = []Light{testShadowCastingDirectionalLight()}

@@ -101,7 +101,7 @@ release gate for this feature.
 
 - Added optional `.gkvoxelbacking` plane-tree content and manifest references.
 - Added the generic runtime `VoxelBackingProvider` / `VoxelBackingComponent`
-  contract with finite local bounds, touched-brick materialization, authored
+  contract with finite local bounds, sparse carve-shell materialization, authored
   material preservation, and removal-mask replay.
 - Routed one destruction event across all intersecting loaded chunks belonging
   to the same backing owner/source.
@@ -111,6 +111,16 @@ release gate for this feature.
 - HL1 emission converts BSP planes to global voxel coordinates, emits a sibling
   sidecar, and catalogs finite backing-only chunks so tunnels can cross chunks
   without authored surface voxels.
+- Backing sidecars can also carry compact, source-neutral surface-support
+  triangles. HL1 imports add a 1.5 m inward band behind opaque upward-facing
+  structural surfaces, preventing one explosive crater from crossing a thin
+  floor while repeated removal still permits tunnelling.
+- Runtime carving materializes an explicit one-voxel shell beyond the edit,
+  including when removal persistence is restored, so an untouched adjacent
+  backing brick cannot appear as sky or missing collision.
+- Voxel-object world bounds track the live map revision, keeping BVH traversal
+  valid when sparse backing materialization expands geometry beyond the
+  previously explicit shell.
 - Existing worlds without backing remain on their previous explicit snapshot
   and destruction paths.
 
@@ -138,8 +148,23 @@ Real import smoke:
   sidecar is about 1.2 MiB, independent of solid voxel volume.
 - Incremental reimport skipped all 288 unchanged chunks and all 18 proxies.
 
-Not run:
+Crossfire thin-floor follow-up:
 
-- Interactive Crossfire renderer/physics/GPU validation. The checked-in
-  Crossfire bundle was intentionally not regenerated; it still needs reimport
-  before the new backing path is present in that authored level.
+- Reproduced the low central RPG field failure: exact BSP backing ended after
+  about 0.25 m and the next surface was 3.6 m below.
+- Reimport added 2,103 compact surface-support triangles; the backing sidecar
+  grew from about 1.2 MiB to 1.9 MiB without adding explicit voxels.
+- Runtime diagnostics verified generated material in both render and physics
+  maps 1.1 m below the original field, plus the corresponding GPU sector,
+  brick, occupancy, and material upload.
+- User-run interactive validation on the low central RPG field passed after
+  fixing stale world-AABB/BVH bounds; the crater now renders generated backing
+  instead of the skybox.
+
+Remaining manual stress checks:
+
+- Shoot a backed vertical wall and verify no brick-shaped geometry appears
+  beside the crater.
+- Continue a tunnel across brick and chunk boundaries.
+- Restart after destruction and verify the persisted removal shape.
+- Inspect GPU memory/upload pressure during prolonged digging.

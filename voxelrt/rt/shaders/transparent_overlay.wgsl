@@ -369,6 +369,13 @@ fn brick_is_uniform_material(flags: u32) -> bool {
   return (flags & BRICK_FLAG_UNIFORM_MATERIAL) != 0u;
 }
 
+fn load_brick_material(brick: BrickRecord, voxel_idx: u32) -> u32 {
+  if (brick_is_uniform_material(brick.flags)) {
+    return brick.material_index;
+  }
+  return load_u8(brick.payload_offset, brick.payload_page, voxel_idx);
+}
+
 fn get_ray_from_uv(uv: vec2<f32>) -> Ray {
   let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
   let clip = vec4<f32>(ndc, 1.0, 1.0);
@@ -1427,7 +1434,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                           let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
                           let process = bit_test64(b_mask_lo, b_mask_hi, micro_idx) && dense_occupancy_test(brick.voxel_aux_word_base, voxel_idx);
                           if (process) {
-                            let palette_idx = select(load_u8(brick.payload_offset, brick.payload_page, voxel_idx), b_material, brick_is_uniform_material(b_flags));
+                            let palette_idx = load_brick_material(brick, voxel_idx);
                             if (palette_idx != 0u) {
                               let mat_base = params.material_table_base;
                               let mat_idx = mat_base + palette_idx * 4u;
