@@ -339,6 +339,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 	if m == nil || scene == nil {
 		return
 	}
+	topologyChanged := false
 	if m.Allocations == nil {
 		m.Allocations = make(map[*volume.XBrickMap]*ObjectGpuAllocation)
 	}
@@ -377,6 +378,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			if stillExists && newSector == oldSector {
 				continue
 			}
+			topologyChanged = true
 			if info, ok := m.SectorToInfo[oldSector]; ok {
 				if bPtrs, has := alloc.Bricks[k]; has {
 					for i := 0; i < 64; i++ {
@@ -400,6 +402,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			if _, ok := alloc.Sectors[sKey]; ok {
 				continue
 			}
+			topologyChanged = true
 			info, hasInfo := m.SectorToInfo[sector]
 			if !hasInfo {
 				sSlot := m.SectorAlloc.Alloc()
@@ -422,6 +425,9 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			}
 		}
 		xbm.StructureDirty = false
+	}
+	if topologyChanged {
+		m.sectorTopologyRevision++
 	}
 }
 

@@ -27,18 +27,51 @@ func (x *XBrickMap) markVoxelNormalHaloDirty(gx, gy, gz int) {
 		return
 	}
 
-	dirs := [][3]int{
-		{0, 0, 0},
-		{1, 0, 0},
-		{-1, 0, 0},
-		{0, 1, 0},
-		{0, -1, 0},
-		{0, 0, 1},
-		{0, 0, -1},
+	_, minKey := sectorBrickKeyForVoxel(
+		gx-VoxelNormalExtendedSurfaceFitRadius,
+		gy-VoxelNormalExtendedSurfaceFitRadius,
+		gz-VoxelNormalExtendedSurfaceFitRadius,
+	)
+	_, maxKey := sectorBrickKeyForVoxel(
+		gx+VoxelNormalExtendedSurfaceFitRadius,
+		gy+VoxelNormalExtendedSurfaceFitRadius,
+		gz+VoxelNormalExtendedSurfaceFitRadius,
+	)
+	minBrick := [3]int{
+		minKey[0]*SectorBricks + minKey[3],
+		minKey[1]*SectorBricks + minKey[4],
+		minKey[2]*SectorBricks + minKey[5],
 	}
-	for _, dir := range dirs {
-		_, bKey := sectorBrickKeyForVoxel(gx+dir[0], gy+dir[1], gz+dir[2])
-		x.DirtyBricks[bKey] = true
+	maxBrick := [3]int{
+		maxKey[0]*SectorBricks + maxKey[3],
+		maxKey[1]*SectorBricks + maxKey[4],
+		maxKey[2]*SectorBricks + maxKey[5],
+	}
+	for bx := minBrick[0]; bx <= maxBrick[0]; bx++ {
+		for by := minBrick[1]; by <= maxBrick[1]; by++ {
+			for bz := minBrick[2]; bz <= maxBrick[2]; bz++ {
+				_, bKey := sectorBrickKeyForVoxel(bx*BrickSize, by*BrickSize, bz*BrickSize)
+				x.MarkBrickNormalDirty(bKey)
+			}
+		}
+	}
+}
+
+// MarkBrickNormalDirty invalidates authored auxiliary normals before upload.
+func (x *XBrickMap) MarkBrickNormalDirty(bKey [6]int) {
+	if x == nil {
+		return
+	}
+	if x.DirtyBricks == nil {
+		x.DirtyBricks = make(map[[6]int]bool)
+	}
+	x.DirtyBricks[bKey] = true
+	sector := x.Sectors[[3]int{bKey[0], bKey[1], bKey[2]}]
+	if sector == nil {
+		return
+	}
+	if brick := sector.GetBrick(bKey[3], bKey[4], bKey[5]); brick != nil {
+		brick.PrecomputedAux = nil
 	}
 }
 
@@ -83,7 +116,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 	vx, vy, vz := slx%BrickSize, sly%BrickSize, slz%BrickSize
 
 	sKey := [3]int{sx, sy, sz}
-	bKey := [6]int{sx, sy, sz, bx, by, bz}
 	if x.SectorRevisions == nil {
 		x.SectorRevisions = make(map[[3]int]uint64)
 	}
@@ -100,7 +132,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 				brick.SetVoxel(vx, vy, vz, 0)
 				brick.RefreshMaterialFlags()
 				if !x.GPUEditMode {
-					x.DirtyBricks[bKey] = true
 					x.markVoxelNormalHaloDirty(gx, gy, gz)
 				}
 
@@ -155,7 +186,6 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 			if isNew {
 				x.DirtySectors[sKey] = true
 			}
-			x.DirtyBricks[bKey] = true
 			x.markVoxelNormalHaloDirty(gx, gy, gz)
 		}
 

@@ -36,8 +36,9 @@ func TestWorldDeltaRoundTrip(t *testing.T) {
 			SourceHash: "source-a",
 			ChunkCoord: TerrainChunkCoordDef{X: 4, Y: 1, Z: -3},
 			Bricks: []VoxelBackingRemovalBrickDef{{
-				Coord: [3]int{1, 2, 3},
-				Bits:  [16]uint32{0: 5, 15: 8},
+				Coord:    [3]int{1, 2, 3},
+				Bits:     [16]uint32{0: 5, 15: 8},
+				Material: 3,
 			}},
 		}},
 		VoxelObjectOverrides: []VoxelObjectOverrideDef{{

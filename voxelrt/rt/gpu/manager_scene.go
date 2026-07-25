@@ -819,14 +819,16 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		}
 	}
 
-	// Optimization: Skip rebuild if nothing structurally changed and count is the same
-	// We use the new Scene.StructureRevision to detect any Add/Remove object operations,
-	// even if the exact number of sectors happens to exactly offset between despawn & spawn.
-	if totalSectors == m.lastTotalSectors && uint64(scene.StructureRevision) == m.lastSceneRevision && m.SectorGridBuf != nil {
+	// Skip only when object and sector-allocation topology are unchanged.
+	if totalSectors == m.lastTotalSectors &&
+		uint64(scene.StructureRevision) == m.lastSceneRevision &&
+		m.sectorTopologyRevision == m.lastSectorGridTopologyRevision &&
+		m.SectorGridBuf != nil {
 		return false
 	}
 	m.lastTotalSectors = totalSectors
 	m.lastSceneRevision = uint64(scene.StructureRevision)
+	m.lastSectorGridTopologyRevision = m.sectorTopologyRevision
 	// Always ensure buffers exist even if empty to avoid bind group panics
 	if totalSectors == 0 {
 		recreated := false

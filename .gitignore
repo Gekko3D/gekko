@@ -7,3 +7,5 @@
 /.ai.local/
 .DS_Store
 **/.DS_Store
+hl1import
+.idea/go.imports.xml

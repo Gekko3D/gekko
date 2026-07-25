@@ -3,10 +3,11 @@ package gekko
 import "github.com/go-gl/mathgl/mgl32"
 
 type DestructionEvent struct {
-	Entity    EntityId
-	Center    mgl32.Vec3 // World-space center of destruction
-	Radius    float32    // Destruction radius in world units
-	CarveOnly bool       // Edit geometry without scanning/splitting disconnected components.
+	Entity          EntityId
+	Center          mgl32.Vec3 // World-space center of destruction
+	Radius          float32    // Destruction radius in world units
+	CarveOnly       bool       // Edit geometry without scanning/splitting disconnected components.
+	backingMaterial uint8
 }
 
 type DestructionQueue struct {
@@ -57,6 +58,11 @@ func expandVoxelBackingDestructionEvents(state *VoxelRtState, events []Destructi
 		if !backed {
 			expanded = append(expanded, event)
 			continue
+		}
+		if object := state.GetVoxelObject(event.Entity); object != nil && object.XBrickMap != nil {
+			localCenter, _ := voxelBackingLocalSphere(object.Transform, event.Center, event.Radius)
+			local, _ := voxelSphereIntegerBounds(localCenter, 0)
+			event.backingMaterial = voxelBackingMaterialHint(object.XBrickMap, local)
 		}
 		matched := false
 		MakeQuery1[VoxelBackingComponent](cmd).Map(func(eid EntityId, candidate *VoxelBackingComponent) bool {
@@ -110,7 +116,7 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	for _, event := range events {
 		if backed {
 			center, radius := voxelBackingLocalSphere(voxObj.Transform, event.Center, event.Radius)
-			backing.MaterializeSphere(editableMap, center, radius)
+			backing.materializeSphere(editableMap, center, radius, event.backingMaterial)
 		}
 		voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
 		carveOnly = carveOnly && event.CarveOnly

@@ -503,6 +503,36 @@ func TestParticlesSyncMapsEmittersToRendererInput(t *testing.T) {
 	}
 }
 
+func TestParticlesSyncInterpolatesTrailEmitterMotion(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	transform := &TransformComponent{Rotation: mgl32.QuatRotate(math.Pi, mgl32.Vec3{0, 1, 0}), Scale: mgl32.Vec3{1, 1, 1}}
+	cmd.AddEntity(transform, &ParticleEmitterComponent{
+		Enabled: true, SpawnRate: 4, LifetimeRange: [2]float32{2, 2},
+		InterpolateSpawnMotion: true, SpawnOffset: mgl32.Vec3{0, 0, -1},
+	})
+	app.FlushCommands()
+	MakeQuery1[TransformComponent](cmd).Map(func(_ EntityId, stored *TransformComponent) bool {
+		transform = stored
+		return false
+	})
+	state := newVoxelRtStateTest()
+
+	particlesSync(state, &Time{Dt: 0.25}, cmd)
+	transform.Position = mgl32.Vec3{4, 0, 0}
+	spawn, emitters, _ := particlesSync(state, &Time{Dt: 1}, cmd)
+
+	if len(spawn) != 4 || len(emitters) != 4 {
+		t.Fatalf("trail motion produced %d requests and %d emitters", len(spawn), len(emitters))
+	}
+	for i := range emitters {
+		if spawn[i] != uint32(i) || emitters[i].SpawnCount != 1 ||
+			mgl32.Vec3(emitters[i].Pos).Sub(mgl32.Vec3{float32(i + 1), 0, 1}).Len() > 1e-5 {
+			t.Fatalf("trail particle %d = request %d emitter %+v", i, spawn[i], emitters[i])
+		}
+	}
+}
+
 func TestParticlesSyncCapsEmitterAndReclaimsRemovedPool(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

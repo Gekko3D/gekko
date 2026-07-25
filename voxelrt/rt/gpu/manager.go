@@ -433,6 +433,8 @@ type GpuBufferManager struct {
 	SectorsPerFrame                uint32
 	lastTotalSectors               int
 	lastSceneRevision              uint64
+	sectorTopologyRevision         uint64
+	lastSectorGridTopologyRevision uint64
 	gridDataPool                   []byte
 	TileLightTilesX                uint32
 	TileLightTilesY                uint32

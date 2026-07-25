@@ -750,6 +750,40 @@ func TestMarkCrossObjectNormalHaloDirtyMarksAdjacentVoxelAdjacencyBrick(t *testi
 	}
 }
 
+func TestMarkCrossObjectNormalHaloDirtyWrapsChunkCornerAndInvalidatesAux(t *testing.T) {
+	sourceMap := volume.NewXBrickMap()
+	sourceMap.SetVoxel(28, 28, 28, 1)
+	neighborMap := volume.NewXBrickMap()
+	neighborMap.SetVoxel(0, 0, 0, 1)
+	sourceMap.ClearDirty()
+	neighborMap.ClearDirty()
+	neighborBrick := neighborMap.Sectors[[3]int{}].GetBrick(0, 0, 0)
+	neighborBrick.PrecomputedAux = make([]byte, volume.VoxelAuxRecordBytes)
+
+	source := core.NewVoxelObject()
+	source.XBrickMap = sourceMap
+	source.VoxelAdjacencyGroupID = 12
+	source.VoxelAdjacencyChunkCoord = [3]int{0, 0, 0}
+	source.VoxelAdjacencyChunkSize = 32
+
+	neighbor := core.NewVoxelObject()
+	neighbor.XBrickMap = neighborMap
+	neighbor.VoxelAdjacencyGroupID = 12
+	neighbor.VoxelAdjacencyChunkCoord = [3]int{1, 1, 1}
+	neighbor.VoxelAdjacencyChunkSize = 32
+
+	sourceMap.SetVoxel(28, 28, 28, 0)
+	scene := &core.Scene{Objects: []*core.VoxelObject{source, neighbor}}
+	markCrossObjectNormalHaloDirty(scene, newVoxelNormalBakeContext(scene))
+
+	if !neighborMap.DirtyBricks[[6]int{}] {
+		t.Fatal("expected diagonal chunk corner brick to be dirtied")
+	}
+	if neighborBrick.PrecomputedAux != nil {
+		t.Fatal("expected diagonal chunk corner precomputed aux to be invalidated")
+	}
+}
+
 func TestPrepareVoxelStructureDirtyStateLetsNewChunkDirtyExistingAdjacencyHalo(t *testing.T) {
 	leftMap := volume.NewXBrickMap()
 	leftMap.SetVoxel(31, 0, 0, 1)
@@ -788,6 +822,29 @@ func TestPrepareVoxelStructureDirtyStateLetsNewChunkDirtyExistingAdjacencyHalo(t
 	}
 	if !leftMap.DirtyBricks[[6]int{0, 0, 0, 3, 0, 0}] {
 		t.Fatal("expected new right chunk to dirty existing left chunk normal halo")
+	}
+}
+
+func TestPrepareVoxelStructureDirtyStateInvalidatesSameCountSectorSwap(t *testing.T) {
+	xbm := volume.NewXBrickMap()
+	xbm.SetVoxel(0, 0, 0, 1)
+	obj := core.NewVoxelObject()
+	obj.XBrickMap = xbm
+	scene := &core.Scene{Objects: []*core.VoxelObject{obj}}
+	m := &GpuBufferManager{}
+
+	m.prepareVoxelStructureDirtyState(scene)
+	firstRevision := m.sectorTopologyRevision
+
+	xbm.SetVoxel(0, 0, 0, 0)
+	xbm.SetVoxel(volume.SectorSize, 0, 0, 1)
+	if got := len(xbm.Sectors); got != 1 {
+		t.Fatalf("expected unchanged sector count 1, got %d", got)
+	}
+	m.prepareVoxelStructureDirtyState(scene)
+
+	if got := m.sectorTopologyRevision; got != firstRevision+1 {
+		t.Fatalf("expected sector topology revision %d after same-count swap, got %d", firstRevision+1, got)
 	}
 }
 

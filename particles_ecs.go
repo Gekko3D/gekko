@@ -2,6 +2,7 @@ package gekko
 
 import (
 	app_rt "github.com/gekko3d/gekko/voxelrt/rt/app"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 // ParticleEmitterComponent controls a CPU-simulated particle emitter.
@@ -11,20 +12,22 @@ type ParticleEmitterComponent struct {
 
 	MaxParticles int // Conservative per-emitter live cap; <=0 is unlimited.
 
-	SpawnRate        float32    // particles per second
-	LifetimeRange    [2]float32 // seconds (min,max)
-	StartSpeedRange  [2]float32 // units/sec (min,max)
-	StartSizeRange   [2]float32 // world units (min,max)
-	StartColorMin    [4]float32 // RGBA min (0..1)
-	StartColorMax    [4]float32 // RGBA max (0..1)
-	Gravity          float32    // positive acceleration downward (m/s^2)
-	Drag             float32    // per-second linear drag (0..inf)
-	ConeAngleDegrees float32    // 0=along emitter up axis; larger spreads
-	SpriteIndex      uint32
-	AtlasCols        uint32          // Number of columns in the atlas
-	AtlasRows        uint32          // Number of rows in the atlas
-	Texture          AssetId         // Asset ID of the texture atlas
-	AlphaMode        SpriteAlphaMode // How to derive transparency from the atlas
+	SpawnRate              float32    // particles per second
+	LifetimeRange          [2]float32 // seconds (min,max)
+	StartSpeedRange        [2]float32 // units/sec (min,max)
+	StartSizeRange         [2]float32 // world units (min,max)
+	StartColorMin          [4]float32 // RGBA min (0..1)
+	StartColorMax          [4]float32 // RGBA max (0..1)
+	Gravity                float32    // positive acceleration downward (m/s^2)
+	Drag                   float32    // per-second linear drag (0..inf)
+	ConeAngleDegrees       float32    // 0=along emitter up axis; larger spreads
+	InterpolateSpawnMotion bool       // spread new particles between previous and current emitter positions
+	SpawnOffset            mgl32.Vec3 // local-space offset from the entity transform
+	SpriteIndex            uint32
+	AtlasCols              uint32          // Number of columns in the atlas
+	AtlasRows              uint32          // Number of rows in the atlas
+	Texture                AssetId         // Asset ID of the texture atlas
+	AlphaMode              SpriteAlphaMode // How to derive transparency from the atlas
 }
 
 type particlePool struct {
@@ -32,6 +35,8 @@ type particlePool struct {
 	live     uint32
 	batches  []particleBatch
 	seen     bool
+	lastPos  mgl32.Vec3
+	hasLast  bool
 }
 
 type particleBatch struct {
@@ -80,8 +85,10 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app
 			firstAtlas = em.Texture
 		}
 
+		emitterPosition := tr.Position.Add(tr.Rotation.Rotate(em.SpawnOffset))
+
 		// Optional distance cull
-		distSq := tr.Position.Sub(camPos).LenSqr()
+		distSq := emitterPosition.Sub(camPos).LenSqr()
 		if distSq > 40000.0 { // 200m
 			return true
 		}
@@ -120,11 +127,6 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app
 					es.batches = append(es.batches, particleBatch{count: spawnCount, remaining: maxLife})
 				}
 			}
-
-			emitterIdx := uint32(len(emitterParams))
-			for i := uint32(0); i < spawnCount; i++ {
-				spawnRequests = append(spawnRequests, emitterIdx)
-			}
 		}
 
 		cols := em.AtlasCols
@@ -138,7 +140,7 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app
 
 		// Pack Params
 		p := app_rt.ParticleEmitterInput{
-			Pos:         [3]float32{tr.Position.X(), tr.Position.Y(), tr.Position.Z()},
+			Pos:         [3]float32{emitterPosition.X(), emitterPosition.Y(), emitterPosition.Z()},
 			SpawnCount:  spawnCount,
 			Rot:         [4]float32{tr.Rotation.V[0], tr.Rotation.V[1], tr.Rotation.V[2], tr.Rotation.W},
 			LifeMin:     em.LifetimeRange[0],
@@ -157,7 +159,26 @@ func particlesSync(state *VoxelRtState, t *Time, cmd *Commands) ([]uint32, []app
 			AtlasRows:   rows,
 			AlphaMode:   uint32(em.AlphaMode),
 		}
-		emitterParams = append(emitterParams, p)
+		if em.InterpolateSpawnMotion && es.hasLast && spawnCount > 0 {
+			for i := uint32(0); i < spawnCount; i++ {
+				position := es.lastPos.Add(emitterPosition.Sub(es.lastPos).Mul(float32(i+1) / float32(spawnCount)))
+				p.Pos = [3]float32{position.X(), position.Y(), position.Z()}
+				p.SpawnCount = 1
+				spawnRequests = append(spawnRequests, uint32(len(emitterParams)))
+				emitterParams = append(emitterParams, p)
+			}
+		} else {
+			emitterIdx := uint32(len(emitterParams))
+			for i := uint32(0); i < spawnCount; i++ {
+				spawnRequests = append(spawnRequests, emitterIdx)
+			}
+			emitterParams = append(emitterParams, p)
+		}
+		if em.InterpolateSpawnMotion {
+			es.lastPos, es.hasLast = emitterPosition, true
+		} else {
+			es.hasLast = false
+		}
 
 		return true
 	})

@@ -35,6 +35,24 @@ func TestBrickDenseOccupancyWordsPackVoxelOrder(t *testing.T) {
 	}
 }
 
+func TestSetVoxelInvalidatesPrecomputedAuxAcrossNormalHalo(t *testing.T) {
+	xbm := NewXBrickMap()
+	xbm.SetVoxel(4, 0, 0, 1)
+	xbm.SetVoxel(8, 0, 0, 1)
+	xbm.ClearDirty()
+	neighbor := xbm.Sectors[[3]int{}].GetBrick(1, 0, 0)
+	neighbor.PrecomputedAux = make([]byte, VoxelAuxRecordBytes)
+
+	xbm.SetVoxel(4, 0, 0, 0)
+
+	if !xbm.DirtyBricks[[6]int{0, 0, 0, 1, 0, 0}] {
+		t.Fatal("expected normal halo to dirty brick four voxels from edit")
+	}
+	if neighbor.PrecomputedAux != nil {
+		t.Fatal("expected normal halo to invalidate neighboring precomputed aux")
+	}
+}
+
 func TestRefreshMaterialFlagsMarksSolidBrick(t *testing.T) {
 	brick := NewBrick()
 	for z := 0; z < BrickSize; z++ {

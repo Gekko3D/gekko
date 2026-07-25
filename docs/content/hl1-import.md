@@ -386,10 +386,14 @@ Use `.gkworld` for:
 
 Current HL1 world emission writes a sibling `.gkvoxelbacking` when the BSP has
 a usable plane/node/leaf solid classifier. The sidecar stores planes in global
-voxel coordinates plus the compact decision tree; it does not store a dense
-solid volume. The manifest also catalogs empty backing-only chunks inside the
-finite BSP world bounds so destruction can cross a chunk that had no original
-surface voxels.
+voxel coordinates plus bounded roots for the world model and every static BSP
+brush model baked into the imported world; it does not store a dense solid
+volume. Thin upward surfaces may also carry finite inward support bands.
+Runtime activates a band only when an edit reaches its authored surface or
+continues within a band whose removal history was seeded at that surface, so a
+side hit cannot create an unrelated vertical column. The manifest also catalogs
+empty backing-only chunks inside the finite BSP world bounds so destruction can
+cross a chunk that had no original surface voxels.
 
 Phase 1 should use the existing schema and add metadata through `Tags`,
 `SourceBuildVersion`, `SourceHash`, and the import report.

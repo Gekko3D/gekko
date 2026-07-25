@@ -520,9 +520,12 @@ Implementation note, 2026-06-08:
   edited brick. Repeated materialization applies the mask before publishing the
   brick, so unloaded or previously implicit matter is never restored.
 - The backing provider contract is source-neutral. HL1 imports emit a compact
-  plane-tree `.gkvoxelbacking`; terrain columns implement the same runtime
-  provider directly. The renderer, collision, raycast, and navigation paths
-  continue to consume `XBrickMap` rather than the backing.
+  plane-tree `.gkvoxelbacking` containing bounded exact classifiers for the
+  world and baked static brush models; terrain columns implement the same
+  runtime provider directly. Optional thin-surface support is edit-scoped: it
+  activates only from the authored surface or after that band's removal history
+  was seeded at the surface. The renderer, collision, raycast, and navigation
+  paths continue to consume `XBrickMap` rather than the backing.
 
 #### Step 8: Add HL1/BSP Visibility Provider
 

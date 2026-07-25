@@ -133,7 +133,7 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	if err != nil {
 		return DebugWorldEmissionResult{}, err
 	}
-	backing, err := buildDebugWorldVoxelBacking(bsp, emission.Manifest, opts.VoxelResolution, faces)
+	backing, err := buildDebugWorldVoxelBacking(bsp, emission.Manifest, opts.VoxelResolution, faces, summary.Map.Entities)
 	if err != nil {
 		return DebugWorldEmissionResult{}, err
 	}
@@ -217,7 +217,7 @@ func SaveDebugWorldWithStats(result DebugWorldEmissionResult) (importcommon.Impo
 	return stats, nil
 }
 
-func buildDebugWorldVoxelBacking(bsp *BSP, manifest *content.ImportedWorldDef, voxelResolution float32, surfaceFaces ...[]Face) (*content.VoxelBackingDef, error) {
+func buildDebugWorldVoxelBacking(bsp *BSP, manifest *content.ImportedWorldDef, voxelResolution float32, surfaceFaces []Face, entities []importcommon.Entity) (*content.VoxelBackingDef, error) {
 	if bsp == nil || len(bsp.Models) == 0 {
 		return nil, fmt.Errorf("world BSP model is missing")
 	}
@@ -279,9 +279,34 @@ func buildDebugWorldVoxelBacking(bsp *BSP, manifest *content.ImportedWorldDef, v
 	for _, leaf := range bsp.Leafs {
 		def.PlaneTree.Leaves = append(def.PlaneTree.Leaves, content.VoxelBackingPlaneLeafDef{Solid: IsSolidContent(leaf.Contents)})
 	}
-	if len(surfaceFaces) > 0 {
-		def.SurfaceSupports = buildDebugWorldSurfaceSupports(surfaceFaces[0], voxelResolution)
+	modelClasses := brushClassByModelID(entities)
+	for modelID, model := range bsp.Models {
+		if modelID != 0 && !visibleBrushEntityClass(modelClasses[modelID]) {
+			continue
+		}
+		bounds := HammerBoundsToGekko(model.Min, model.Max)
+		volume := content.VoxelBackingPlaneVolumeDef{
+			Root: model.HeadNodes[0],
+			BoundsMin: [3]int{
+				int(math.Floor(float64(bounds.Min.X / voxelResolution))),
+				int(math.Floor(float64(bounds.Min.Y / voxelResolution))),
+				int(math.Floor(float64(bounds.Min.Z / voxelResolution))),
+			},
+			BoundsMax: [3]int{
+				int(math.Ceil(float64(bounds.Max.X / voxelResolution))),
+				int(math.Ceil(float64(bounds.Max.Y / voxelResolution))),
+				int(math.Ceil(float64(bounds.Max.Z / voxelResolution))),
+			},
+		}
+		validBounds := true
+		for axis := 0; axis < 3; axis++ {
+			validBounds = validBounds && volume.BoundsMax[axis] > volume.BoundsMin[axis]
+		}
+		if validBounds {
+			def.PlaneTree.Volumes = append(def.PlaneTree.Volumes, volume)
+		}
 	}
+	def.SurfaceSupports = buildDebugWorldSurfaceSupports(surfaceFaces, voxelResolution)
 	if err := content.ValidateVoxelBacking(def); err != nil {
 		return nil, err
 	}
@@ -307,8 +332,6 @@ func buildDebugWorldSurfaceSupports(faces []Face, voxelResolution float32) []con
 			continue
 		}
 		normal = importcommon.Vec3{X: normal.X / normalLength, Y: normal.Y / normalLength, Z: normal.Z / normalLength}
-		// Ground needs artificial depth; exact BSP occupancy remains authoritative
-		// for walls and ceilings without consuming playable space on both sides.
 		if normal.Y < 0.5 {
 			continue
 		}

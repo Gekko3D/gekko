@@ -113,22 +113,48 @@ func markVoxelAdjacencyNormalHaloDirty(ctx voxelNormalBakeContext, obj *core.Vox
 			bKey[1]*volume.SectorBricks + bKey[4],
 			bKey[2]*volume.SectorBricks + bKey[5],
 		}
+		var offsets [3][3]int
+		counts := [3]int{1, 1, 1}
 		for axis := 0; axis < 3; axis++ {
+			if localBrick[axis] < 0 || localBrick[axis] >= chunkBricks {
+				offsets[axis][0] = floorDivInt(localBrick[axis], chunkBricks)
+				continue
+			}
 			if localBrick[axis] == 0 {
-				neighborCoord := chunkCoord
-				neighborCoord[axis]--
-				neighbor := ctx.adjacency[voxelAdjacencyBakeKey{group: group, coord: neighborCoord}]
-				neighborBrick := localBrick
-				neighborBrick[axis] = chunkBricks - 1
-				markObjectBrickDirty(neighbor, neighborBrick)
+				offsets[axis][counts[axis]] = -1
+				counts[axis]++
 			}
 			if localBrick[axis] == chunkBricks-1 {
-				neighborCoord := chunkCoord
-				neighborCoord[axis]++
-				neighbor := ctx.adjacency[voxelAdjacencyBakeKey{group: group, coord: neighborCoord}]
-				neighborBrick := localBrick
-				neighborBrick[axis] = 0
-				markObjectBrickDirty(neighbor, neighborBrick)
+				offsets[axis][counts[axis]] = 1
+				counts[axis]++
+			}
+		}
+		for xi := 0; xi < counts[0]; xi++ {
+			for yi := 0; yi < counts[1]; yi++ {
+				for zi := 0; zi < counts[2]; zi++ {
+					offset := [3]int{offsets[0][xi], offsets[1][yi], offsets[2][zi]}
+					if offset == ([3]int{}) {
+						continue
+					}
+					neighborCoord := [3]int{
+						chunkCoord[0] + offset[0],
+						chunkCoord[1] + offset[1],
+						chunkCoord[2] + offset[2],
+					}
+					neighborBrick := localBrick
+					for axis := 0; axis < 3; axis++ {
+						switch {
+						case localBrick[axis] < 0 || localBrick[axis] >= chunkBricks:
+							neighborBrick[axis] = positiveModInt(localBrick[axis], chunkBricks)
+						case offset[axis] < 0:
+							neighborBrick[axis] = chunkBricks - 1
+						case offset[axis] > 0:
+							neighborBrick[axis] = 0
+						}
+					}
+					neighbor := ctx.adjacency[voxelAdjacencyBakeKey{group: group, coord: neighborCoord}]
+					markObjectBrickDirty(neighbor, neighborBrick)
+				}
 			}
 		}
 	}
@@ -172,7 +198,7 @@ func markObjectBrickDirty(obj *core.VoxelObject, localBrick [3]int) {
 	if sector := obj.XBrickMap.Sectors[sKey]; sector == nil || sector.GetBrick(bx, by, bz) == nil {
 		return
 	}
-	obj.XBrickMap.DirtyBricks[[6]int{sKey[0], sKey[1], sKey[2], bx, by, bz}] = true
+	obj.XBrickMap.MarkBrickNormalDirty([6]int{sKey[0], sKey[1], sKey[2], bx, by, bz})
 }
 
 func markAllObjectBricksDirty(obj *core.VoxelObject) {
@@ -188,7 +214,7 @@ func markAllObjectBricksDirty(obj *core.VoxelObject) {
 				continue
 			}
 			bx, by, bz := i%4, (i/4)%4, i/16
-			obj.XBrickMap.DirtyBricks[[6]int{sKey[0], sKey[1], sKey[2], bx, by, bz}] = true
+			obj.XBrickMap.MarkBrickNormalDirty([6]int{sKey[0], sKey[1], sKey[2], bx, by, bz})
 		}
 	}
 }

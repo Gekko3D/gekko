@@ -43,10 +43,19 @@ type VoxelBackingDef struct {
 }
 
 type VoxelBackingPlaneTreeDef struct {
-	Root   int32                      `json:"root"`
-	Planes []VoxelBackingPlaneDef     `json:"planes"`
-	Nodes  []VoxelBackingPlaneNodeDef `json:"nodes"`
-	Leaves []VoxelBackingPlaneLeafDef `json:"leaves"`
+	Root    int32                        `json:"root"`
+	Volumes []VoxelBackingPlaneVolumeDef `json:"volumes,omitempty"`
+	Planes  []VoxelBackingPlaneDef       `json:"planes"`
+	Nodes   []VoxelBackingPlaneNodeDef   `json:"nodes"`
+	Leaves  []VoxelBackingPlaneLeafDef   `json:"leaves"`
+}
+
+// VoxelBackingPlaneVolumeDef references one exact solid classifier in the
+// shared plane tree. Bounds are global voxel coordinates with an exclusive max.
+type VoxelBackingPlaneVolumeDef struct {
+	Root      int32  `json:"root"`
+	BoundsMin [3]int `json:"bounds_min"`
+	BoundsMax [3]int `json:"bounds_max"`
 }
 
 type VoxelBackingPlaneDef struct {
@@ -82,8 +91,9 @@ type VoxelBackingRemovalDef struct {
 }
 
 type VoxelBackingRemovalBrickDef struct {
-	Coord [3]int     `json:"coord"`
-	Bits  [16]uint32 `json:"bits"`
+	Coord    [3]int     `json:"coord"`
+	Bits     [16]uint32 `json:"bits"`
+	Material uint8      `json:"material,omitempty"`
 }
 
 func SaveVoxelBacking(path string, def *VoxelBackingDef) error {
@@ -144,6 +154,16 @@ func ValidateVoxelBacking(def *VoxelBackingDef) error {
 	}
 	if err := validateVoxelBackingChild(def.PlaneTree.Root, len(def.PlaneTree.Nodes), len(def.PlaneTree.Leaves)); err != nil {
 		return fmt.Errorf("voxel backing root: %w", err)
+	}
+	for i, volume := range def.PlaneTree.Volumes {
+		if err := validateVoxelBackingChild(volume.Root, len(def.PlaneTree.Nodes), len(def.PlaneTree.Leaves)); err != nil {
+			return fmt.Errorf("voxel backing volume %d root: %w", i, err)
+		}
+		for axis := 0; axis < 3; axis++ {
+			if volume.BoundsMax[axis] <= volume.BoundsMin[axis] {
+				return fmt.Errorf("voxel backing volume %d bounds are invalid", i)
+			}
+		}
 	}
 	for i, node := range def.PlaneTree.Nodes {
 		if int(node.Plane) >= len(def.PlaneTree.Planes) {
