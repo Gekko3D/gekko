@@ -193,12 +193,17 @@ func TestNavGraphBlockerOverlay(t *testing.T) {
 	profile := NavAgentProfileDef{ID: "walker", Radius: 0.1, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
 	sources, graphs := buildFlatNavRouteWorld(t, []TerrainChunkCoordDef{{}}, chunkSize, profile)
 	start, goal := Vec3{0.1, 0.2, 2.5}, Vec3{6.9, 0.2, 2.5}
+	startRef, goalRef := NavSpanRef{Span: 2}, NavSpanRef{Span: 6*chunkSize + 2}
 
 	query, err := NewNavGraphQueryWithBlockers(sources, graphs, chunkSize, 1, profile, []NavBlockerDef{{
 		ID: "crate", Min: Vec3{3.25, 0, 2.25}, Max: Vec3{3.75, 1, 2.75},
 	}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if blocked := (NavSpanRef{Span: 3*chunkSize + 2}); !query.IsSpanBlocked(blocked) || query.IsSpanBlocked(NavSpanRef{}) ||
+		query.IsSpanActive(blocked) || !query.IsSpanActive(NavSpanRef{}) || query.IsSpanActive(NavSpanRef{Span: uint32(chunkSize * chunkSize)}) {
+		t.Fatalf("span activity mismatch: blocked=%t open=%t", query.IsSpanActive(blocked), query.IsSpanActive(NavSpanRef{}))
 	}
 	route, err := query.FindRoute(start, goal)
 	if err != nil || !route.Found {
@@ -212,6 +217,14 @@ func TestNavGraphBlockerOverlay(t *testing.T) {
 	}
 	if !detoured {
 		t.Fatalf("route crossed blocked span: %v", route.Waypoints)
+	}
+	if _, ok := query.ReachableSpans(startRef, []NavSpanRef{goalRef})[goalRef]; !ok {
+		t.Fatal("reachable span query did not follow blocker detour")
+	}
+	startComponent, startOK := query.query.spanComponent(startRef)
+	goalComponent, goalOK := query.query.spanComponent(goalRef)
+	if !startOK || !goalOK || startComponent != goalComponent {
+		t.Fatalf("blocker detour was not compacted: start=%d/%t goal=%d/%t", startComponent, startOK, goalComponent, goalOK)
 	}
 	projected, err := query.ProjectPoint(Vec3{3.5, 0.2, 2.5}, 0.25)
 	if err != nil || projected.Found {
@@ -228,6 +241,14 @@ func TestNavGraphBlockerOverlay(t *testing.T) {
 	if err != nil || route.Found || route.FailureReason != NavRouteNoRoute {
 		t.Fatalf("blocker did not split baked region: route=%+v err=%v", route, err)
 	}
+	if _, ok := query.ReachableSpans(startRef, []NavSpanRef{goalRef})[goalRef]; ok {
+		t.Fatal("reachable span query crossed blocker wall")
+	}
+	startComponent, startOK = query.query.spanComponent(startRef)
+	goalComponent, goalOK = query.query.spanComponent(goalRef)
+	if !startOK || !goalOK || startComponent == goalComponent {
+		t.Fatalf("blocker split was not compacted: start=%d/%t goal=%d/%t", startComponent, startOK, goalComponent, goalOK)
+	}
 
 	query, err = NewNavGraphQuery(sources, graphs, chunkSize, 1)
 	if err != nil {
@@ -236,6 +257,47 @@ func TestNavGraphBlockerOverlay(t *testing.T) {
 	route, err = query.FindRoute(start, goal)
 	if err != nil || !route.Found || len(route.Waypoints) != 1 {
 		t.Fatalf("removing blocker did not restore route: route=%+v err=%v", route, err)
+	}
+	if _, ok := query.ReachableSpans(startRef, []NavSpanRef{goalRef})[goalRef]; !ok {
+		t.Fatal("reachable span query did not recover after blocker removal")
+	}
+}
+
+func TestNavGraphActiveExitCountUsesBlockerOverlay(t *testing.T) {
+	const chunkSize = 3
+	profile := NavAgentProfileDef{ID: "walker", Radius: 0.1, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	source := NavSourceTileDef{
+		NavID: "exit-count", SchemaVersion: CurrentNavSourceTileSchemaVersion,
+		BuilderVersion: CurrentNavGraphBuilderVersion, ChunkSize: chunkSize,
+		SourceHash: "source", DependencyHash: "dependency",
+	}
+	for x := range chunkSize {
+		source.Spans = append(source.Spans, NavSpanDef{
+			ID: uint32(x), X: x, Z: 0, SupportHeight: 0, CeilingHeight: 3,
+			Headroom: 3, ClearanceRadius: 1, Area: "ground",
+		})
+	}
+	built, err := BuildNavSpanGraph(source, profile, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := NewNavGraphQuery([]NavSourceTileDef{source}, []NavGraphTileDef{built.Graph}, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := NavSpanRef{Span: 0}
+	if exits, ok := base.ReachableSpans(start, []NavSpanRef{start})[start]; !ok || exits != 1 {
+		t.Fatalf("base exit count = %d/%t", exits, ok)
+	}
+	blocked, err := NewNavGraphQueryWithBlockers(
+		[]NavSourceTileDef{source}, []NavGraphTileDef{built.Graph}, chunkSize, 1, profile,
+		[]NavBlockerDef{{ID: "wall", Min: Vec3{1.25, 0, 0}, Max: Vec3{1.75, 2, 1}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exits, ok := blocked.ReachableSpans(start, []NavSpanRef{start})[start]; !ok || exits != 0 {
+		t.Fatalf("reachable exit count = %d/%t", exits, ok)
 	}
 }
 

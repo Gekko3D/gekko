@@ -37,6 +37,9 @@ type navGraphQuery struct {
 	blocked         map[NavSpanRef]struct{}
 	globalEdges     map[NavSpanRef][]NavSpanTransitionDef
 	globalScale     float32
+	spanComponents  map[TerrainChunkCoordDef][]uint32
+	componentEdges  map[uint32][]uint32
+	activeDegrees   map[TerrainChunkCoordDef][]uint8
 }
 
 type navBackingKey struct {
@@ -156,6 +159,7 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 		query.spanEdges[graph.Coord], query.spanScale[graph.Coord] = edges, scale
 	}
 	query.indexBackingTransitions()
+	query.indexActiveDegrees()
 	return query, nil
 }
 
@@ -357,6 +361,143 @@ func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointR
 		}
 	}
 	return best, nil
+}
+
+// IsSpanBlocked reports whether a runtime blocker removed a baked span.
+func (q *NavGraphQuery) IsSpanBlocked(ref NavSpanRef) bool {
+	if q == nil || q.query == nil {
+		return false
+	}
+	_, blocked := q.query.blocked[ref]
+	return blocked
+}
+
+// IsSpanActive reports whether a span belongs to the resident graph and is not
+// removed by the runtime overlay.
+func (q *NavGraphQuery) IsSpanActive(ref NavSpanRef) bool {
+	if q == nil || q.query == nil {
+		return false
+	}
+	if _, accepted := q.query.spanRegions[ref.Tile][ref.Span]; !accepted {
+		return false
+	}
+	_, blocked := q.query.blocked[ref]
+	return !blocked
+}
+
+// ReachableSpans returns target spans reachable from start through the active
+// traversal and blocker overlay. Unknown, blocked, and unreachable targets are
+// omitted. Values are active outgoing span counts, capped at two.
+func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) map[NavSpanRef]uint8 {
+	result := make(map[NavSpanRef]uint8, len(targets))
+	if q == nil || q.query == nil || len(targets) == 0 {
+		return result
+	}
+	query := q.query
+	startRegion, ok := query.spanRegions[start.Tile][start.Span]
+	if !ok {
+		return result
+	}
+	if _, blocked := query.blocked[start]; blocked {
+		return result
+	}
+	wanted := make(map[NavSpanRef]struct{}, len(targets))
+	for _, target := range targets {
+		if _, ok := query.spanRegions[target.Tile][target.Span]; !ok {
+			continue
+		}
+		if _, blocked := query.blocked[target]; !blocked {
+			wanted[target] = struct{}{}
+		}
+	}
+	if len(query.blocked) == 0 {
+		reachable := map[navRouteNode]struct{}{{Tile: start.Tile, Region: startRegion}: {}}
+		queue := []navRouteNode{{Tile: start.Tile, Region: startRegion}}
+		for head := 0; head < len(queue); head++ {
+			current := queue[head]
+			for _, transition := range query.graphs[current.Tile].Transitions {
+				if transition.FromRegion != current.Region {
+					continue
+				}
+				next := navRouteNode{Tile: transition.ToTile, Region: transition.ToRegion}
+				if _, seen := reachable[next]; seen || !query.hasRegion(next) {
+					continue
+				}
+				reachable[next] = struct{}{}
+				queue = append(queue, next)
+			}
+		}
+		for target := range wanted {
+			region := navRouteNode{Tile: target.Tile, Region: query.spanRegions[target.Tile][target.Span]}
+			if _, ok := reachable[region]; ok {
+				result[target] = query.spanExitCount(target)
+			}
+		}
+		return result
+	}
+
+	startComponent, ok := query.spanComponent(start)
+	if !ok {
+		return result
+	}
+	wantedComponents := make(map[uint32]struct{}, len(wanted))
+	for target := range wanted {
+		if component, ok := query.spanComponent(target); ok {
+			wantedComponents[component] = struct{}{}
+		}
+	}
+	reachable := map[uint32]struct{}{startComponent: {}}
+	found := make(map[uint32]struct{}, len(wantedComponents))
+	queue := []uint32{startComponent}
+	for head := 0; head < len(queue) && len(found) < len(wantedComponents); head++ {
+		current := queue[head]
+		if _, wanted := wantedComponents[current]; wanted {
+			found[current] = struct{}{}
+		}
+		for _, next := range query.componentEdges[current] {
+			if _, seen := reachable[next]; seen {
+				continue
+			}
+			reachable[next] = struct{}{}
+			queue = append(queue, next)
+		}
+	}
+	for target := range wanted {
+		if component, ok := query.spanComponent(target); ok {
+			if _, ok := reachable[component]; ok {
+				result[target] = query.spanExitCount(target)
+			}
+		}
+	}
+	return result
+}
+
+func (q *navGraphQuery) indexActiveDegrees() {
+	q.activeDegrees = make(map[TerrainChunkCoordDef][]uint8, len(q.graphs))
+	for coord, graph := range q.graphs {
+		degrees := make([]uint8, len(q.sources[coord].Spans))
+		for _, edge := range graph.SpanTransitions {
+			from := NavSpanRef{Tile: coord, Span: edge.From}
+			if _, blocked := q.blocked[from]; blocked {
+				continue
+			}
+			if _, blocked := q.blocked[edge.To]; blocked {
+				continue
+			}
+			if int(edge.From) < len(degrees) && degrees[edge.From] < 2 {
+				degrees[edge.From]++
+			}
+		}
+		q.activeDegrees[coord] = degrees
+	}
+}
+
+func (q *navGraphQuery) spanExitCount(ref NavSpanRef) uint8 {
+	degrees := q.activeDegrees[ref.Tile]
+	if int(ref.Span) >= len(degrees) {
+		return 0
+	}
+	return degrees[ref.Span]
 }
 
 func navClampToSpanAxis(value, minimum, size float32) float32 {

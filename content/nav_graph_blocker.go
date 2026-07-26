@@ -88,6 +88,88 @@ func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []Na
 	if !finite(q.globalScale) {
 		q.globalScale = 0
 	}
+	q.indexBlockerComponents()
+	q.indexActiveDegrees()
+}
+
+const navUnassignedComponent = ^uint32(0)
+
+func (q *navGraphQuery) indexBlockerComponents() {
+	q.spanComponents = make(map[TerrainChunkCoordDef][]uint32, len(q.graphs))
+	for coord := range q.graphs {
+		components := make([]uint32, len(q.sources[coord].Spans))
+		for id := range components {
+			components[id] = navUnassignedComponent
+		}
+		q.spanComponents[coord] = components
+	}
+
+	component := uint32(0)
+	for coord, graph := range q.graphs {
+		for _, spanID := range graph.SpanIDs {
+			ref := NavSpanRef{Tile: coord, Span: spanID}
+			if _, blocked := q.blocked[ref]; blocked {
+				continue
+			}
+			if _, assigned := q.spanComponent(ref); assigned {
+				continue
+			}
+			q.spanComponents[coord][spanID] = component
+			queue := []NavSpanRef{ref}
+			for head := 0; head < len(queue); head++ {
+				current := queue[head]
+				for _, edge := range q.globalEdges[current] {
+					if _, blocked := q.blocked[edge.To]; blocked {
+						continue
+					}
+					if _, assigned := q.spanComponent(edge.To); assigned || !q.hasGlobalEdge(edge.To, current) {
+						continue
+					}
+					q.spanComponents[edge.To.Tile][edge.To.Span] = component
+					queue = append(queue, edge.To)
+				}
+			}
+			component++
+		}
+	}
+
+	seen := make(map[[2]uint32]struct{})
+	q.componentEdges = make(map[uint32][]uint32)
+	for from, edges := range q.globalEdges {
+		fromComponent, ok := q.spanComponent(from)
+		if !ok {
+			continue
+		}
+		for _, edge := range edges {
+			toComponent, ok := q.spanComponent(edge.To)
+			if !ok || fromComponent == toComponent {
+				continue
+			}
+			key := [2]uint32{fromComponent, toComponent}
+			if _, duplicate := seen[key]; duplicate {
+				continue
+			}
+			seen[key] = struct{}{}
+			q.componentEdges[fromComponent] = append(q.componentEdges[fromComponent], toComponent)
+		}
+	}
+}
+
+func (q *navGraphQuery) spanComponent(ref NavSpanRef) (uint32, bool) {
+	components := q.spanComponents[ref.Tile]
+	if int(ref.Span) >= len(components) || components[ref.Span] == navUnassignedComponent {
+		return 0, false
+	}
+	return components[ref.Span], true
+}
+
+func (q *navGraphQuery) hasGlobalEdge(from, to NavSpanRef) bool {
+	for _, edge := range q.globalEdges[from] {
+		if edge.To == to {
+			return true
+		}
+	}
+	return false
 }
 
 func navBlockerOverlapsSpan(blocker NavBlockerDef, profile NavAgentProfileDef, coord TerrainChunkCoordDef, chunkSize int, voxelResolution float32, span NavSpanDef) bool {

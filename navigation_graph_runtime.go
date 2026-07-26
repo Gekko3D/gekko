@@ -22,8 +22,18 @@ type VoxelWorldDirtyChunks struct {
 }
 
 type streamedNavigationLoadResult struct {
+	RuntimeGeneration uint64
+	Generation        uint64
+	Sources           []content.NavSourceTileDef
+	Graphs            []content.NavGraphTileDef
+	Err               error
+}
+
+type streamedNavigationOverlayResult struct {
 	RuntimeGeneration  uint64
-	Generation         uint64
+	GraphRevision      uint64
+	LoadGeneration     uint64
+	OverlayGeneration  uint64
 	Sources            []content.NavSourceTileDef
 	Graphs             []content.NavGraphTileDef
 	Query              *content.NavGraphQuery
@@ -41,16 +51,17 @@ type streamedNavigationRebuildResult struct {
 }
 
 type RuntimeNavigationService struct {
-	Sources            []content.NavSourceTileDef
-	Graphs             []content.NavGraphTileDef
-	ChunkSize          int
-	VoxelResolution    float32
-	NavigationRevision uint64
-	query              *content.NavGraphQuery
-	profiles           []content.NavAgentProfileDef
-	disabledTraversals map[string]struct{}
-	openDoors          map[string]struct{}
-	blockers           map[string]content.NavBlockerDef
+	Sources                 []content.NavSourceTileDef
+	Graphs                  []content.NavGraphTileDef
+	ChunkSize               int
+	VoxelResolution         float32
+	NavigationRevision      uint64
+	NavigationGraphRevision uint64
+	query                   *content.NavGraphQuery
+	profiles                []content.NavAgentProfileDef
+	disabledTraversals      map[string]struct{}
+	openDoors               map[string]struct{}
+	blockers                map[string]content.NavBlockerDef
 }
 
 // NavigationBlockerComponent opts an entity's world-space AABB into runtime
@@ -97,12 +108,13 @@ func RuntimeNavigationServiceFromStreamedLevelState(state *StreamedLevelRuntimeS
 		Sources:   append([]content.NavSourceTileDef(nil), state.NavigationSources...),
 		Graphs:    append([]content.NavGraphTileDef(nil), state.NavigationGraphs...),
 		ChunkSize: state.BaseNavManifest.ChunkSize, VoxelResolution: state.BaseNavManifest.VoxelResolution,
-		NavigationRevision: state.NavigationRevision,
-		query:              state.navigationQuery,
-		profiles:           append([]content.NavAgentProfileDef(nil), state.BaseNavManifest.AgentProfiles...),
-		disabledTraversals: copyNavigationTraversalSet(state.navigationDisabled),
-		openDoors:          copyNavigationTraversalSet(state.navigationOpenDoors),
-		blockers:           copyNavigationBlockers(state.navigationBlockers),
+		NavigationRevision:      state.NavigationRevision,
+		NavigationGraphRevision: state.navigationLoadedGen,
+		query:                   state.navigationQuery,
+		profiles:                append([]content.NavAgentProfileDef(nil), state.BaseNavManifest.AgentProfiles...),
+		disabledTraversals:      copyNavigationTraversalSet(state.navigationDisabled),
+		openDoors:               copyNavigationTraversalSet(state.navigationOpenDoors),
+		blockers:                copyNavigationBlockers(state.navigationBlockers),
 	}
 }
 
@@ -171,6 +183,49 @@ func (s RuntimeNavigationService) ProjectPoint(point content.Vec3, maxDistance f
 	return content.FindNearestNavGraphPoint(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, point, maxDistance)
 }
 
+// IsSpanBlocked reports whether a runtime blocker removed a baked span.
+func (s RuntimeNavigationService) IsSpanBlocked(ref content.NavSpanRef) bool {
+	return s.query != nil && s.query.IsSpanBlocked(ref)
+}
+
+// IsSpanActive reports whether a span remains in the resident runtime graph.
+func (s RuntimeNavigationService) IsSpanActive(ref content.NavSpanRef) bool {
+	if s.query != nil {
+		return s.query.IsSpanActive(ref)
+	}
+	for _, graph := range s.Graphs {
+		if graph.Coord != ref.Tile {
+			continue
+		}
+		for _, span := range graph.SpanIDs {
+			if span == ref.Span {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ReachableSpans returns target spans reachable through the current runtime
+// navigation overlay.
+func (s RuntimeNavigationService) ReachableSpans(start content.NavSpanRef, targets []content.NavSpanRef) map[content.NavSpanRef]uint8 {
+	if s.query != nil {
+		return s.query.ReachableSpans(start, targets)
+	}
+	result := make(map[content.NavSpanRef]uint8, len(targets))
+	if len(s.Sources) == 0 || len(s.Graphs) == 0 {
+		return result
+	}
+	query, err := buildRuntimeNavigationQueryWithDoorOverlays(
+		s.Sources, s.Graphs, s.ChunkSize, s.VoxelResolution,
+		s.profiles, s.disabledTraversals, s.openDoors, s.blockers,
+	)
+	if err != nil {
+		return result
+	}
+	return query.ReachableSpans(start, targets)
+}
+
 func requestStreamedNavigationResidency(state *StreamedLevelRuntimeState, desired map[ChunkCoord]struct{}) {
 	if state == nil || state.BaseNavManifest == nil {
 		return
@@ -218,9 +273,6 @@ func startStreamedNavigationLoad(state *StreamedLevelRuntimeState) {
 	desired := copyTerrainCoordSet(state.navigationDesired)
 	manifest := copyNavGraphManifest(state.BaseNavManifest)
 	delta := copyWorldDeltaForNav(state.WorldDelta)
-	disabledTraversals := copyNavigationTraversalSet(state.navigationDisabled)
-	openDoors := copyNavigationTraversalSet(state.navigationOpenDoors)
-	blockers := copyNavigationBlockers(state.navigationBlockers)
 	manifestPath, deltaPath := state.BaseNavManifestPath, state.WorldDeltaPath
 	runtimeGeneration := state.Generation
 	state.navigationLoadActive = true
@@ -228,11 +280,10 @@ func startStreamedNavigationLoad(state *StreamedLevelRuntimeState) {
 	go func() {
 		defer state.jobs.Done()
 		sources, graphs, err := loadStreamedNavigationResidency(manifest, manifestPath, &delta, deltaPath, desired)
-		var query *content.NavGraphQuery
-		if err == nil {
-			query, err = buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, manifest.ChunkSize, manifest.VoxelResolution, manifest.AgentProfiles, disabledTraversals, openDoors, blockers)
+		state.navigationLoads <- streamedNavigationLoadResult{
+			RuntimeGeneration: runtimeGeneration, Generation: generation,
+			Sources: sources, Graphs: graphs, Err: err,
 		}
-		state.navigationLoads <- streamedNavigationLoadResult{RuntimeGeneration: runtimeGeneration, Generation: generation, Sources: sources, Graphs: graphs, Query: query, DisabledTraversals: disabledTraversals, OpenDoors: openDoors, Blockers: blockers, Err: err}
 	}()
 }
 
@@ -397,27 +448,16 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			break
 		}
 		state.navigationLoadActive = false
+		if result.Generation != state.navigationRequestedGen {
+			break
+		}
 		if result.Err != nil {
 			state.InitErr = result.Err
 			return
 		}
-		if result.Generation == state.navigationRequestedGen {
-			query := result.Query
-			if !navigationTraversalSetsEqual(result.DisabledTraversals, state.navigationDisabled) || !navigationTraversalSetsEqual(result.OpenDoors, state.navigationOpenDoors) || !navigationBlockersEqual(result.Blockers, state.navigationBlockers) {
-				query, result.Err = buildRuntimeNavigationQueryWithDoorOverlays(result.Sources, result.Graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.BaseNavManifest.AgentProfiles, state.navigationDisabled, state.navigationOpenDoors, state.navigationBlockers)
-				if result.Err != nil {
-					state.InitErr = result.Err
-					return
-				}
-			}
-			state.mu.Lock()
-			state.NavigationSources = result.Sources
-			state.NavigationGraphs = result.Graphs
-			state.navigationQuery = query
-			state.NavigationRevision++
-			state.navigationLoadedGen = result.Generation
-			state.mu.Unlock()
-		}
+		state.navigationPendingSources = result.Sources
+		state.navigationPendingGraphs = result.Graphs
+		state.navigationPendingGen = result.Generation
 	default:
 	}
 	select {
@@ -439,9 +479,118 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		reloadStreamedNavigationResidency(state)
 	default:
 	}
-	if !state.navigationLoadActive && state.navigationLoadedGen != state.navigationRequestedGen {
+	select {
+	case result := <-state.navigationOverlays:
+		state.navigationOverlayActive = false
+		if result.RuntimeGeneration != state.Generation {
+			break
+		}
+		if result.LoadGeneration != 0 {
+			if result.LoadGeneration != state.navigationRequestedGen {
+				break
+			}
+			if result.Err != nil {
+				if result.OverlayGeneration == state.navigationOverlayRequestedGen {
+					state.InitErr = result.Err
+					return
+				}
+				break
+			}
+			state.mu.Lock()
+			state.NavigationSources = result.Sources
+			state.NavigationGraphs = result.Graphs
+			state.navigationQuery = result.Query
+			state.navigationDisabled = result.DisabledTraversals
+			state.navigationOpenDoors = result.OpenDoors
+			state.navigationBlockers = result.Blockers
+			state.NavigationRevision++
+			state.navigationLoadedGen = result.LoadGeneration
+			state.mu.Unlock()
+			state.navigationPendingSources = nil
+			state.navigationPendingGraphs = nil
+			state.navigationPendingGen = 0
+			break
+		}
+		if result.GraphRevision != state.navigationLoadedGen {
+			break
+		}
+		if result.Err != nil {
+			if result.OverlayGeneration == state.navigationOverlayRequestedGen {
+				state.InitErr = result.Err
+				return
+			}
+			break
+		}
+		state.mu.Lock()
+		state.navigationQuery = result.Query
+		state.navigationDisabled = result.DisabledTraversals
+		state.navigationOpenDoors = result.OpenDoors
+		state.navigationBlockers = result.Blockers
+		state.NavigationRevision++
+		state.mu.Unlock()
+	default:
+	}
+	if !state.navigationLoadActive &&
+		state.navigationLoadedGen != state.navigationRequestedGen &&
+		state.navigationPendingGen != state.navigationRequestedGen {
 		startStreamedNavigationLoad(state)
 	}
+	startStreamedNavigationOverlayBuild(state)
+}
+
+func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
+	if state == nil || state.BaseNavManifest == nil || state.navigationOverlayActive {
+		return
+	}
+	pending := state.navigationPendingGen != 0 && state.navigationPendingGen == state.navigationRequestedGen
+	if !pending &&
+		navigationTraversalSetsEqual(state.navigationDisabled, state.navigationOverlayDisabled) &&
+		navigationTraversalSetsEqual(state.navigationOpenDoors, state.navigationOverlayOpenDoors) &&
+		navigationBlockersEqual(state.navigationBlockers, state.navigationOverlayBlockers) {
+		return
+	}
+	var sources []content.NavSourceTileDef
+	var graphs []content.NavGraphTileDef
+	var graphRevision, loadGeneration uint64
+	if pending {
+		sources = state.navigationPendingSources
+		graphs = state.navigationPendingGraphs
+		loadGeneration = state.navigationPendingGen
+	} else {
+		state.mu.RLock()
+		sources = state.NavigationSources
+		graphs = state.NavigationGraphs
+		graphRevision = state.navigationLoadedGen
+		state.mu.RUnlock()
+		if len(sources) == 0 || len(graphs) == 0 {
+			return
+		}
+	}
+	// Resident navigation data is immutable, and runtime shutdown waits for jobs.
+	manifest := state.BaseNavManifest
+	disabled := copyNavigationTraversalSet(state.navigationOverlayDisabled)
+	openDoors := copyNavigationTraversalSet(state.navigationOverlayOpenDoors)
+	blockers := copyNavigationBlockers(state.navigationOverlayBlockers)
+	runtimeGeneration := state.Generation
+	overlayGeneration := state.navigationOverlayRequestedGen
+	if state.navigationOverlays == nil {
+		state.navigationOverlays = make(chan streamedNavigationOverlayResult, 1)
+	}
+	state.navigationOverlayActive = true
+	state.jobs.Add(1)
+	go func() {
+		defer state.jobs.Done()
+		query, err := buildRuntimeNavigationQueryWithDoorOverlays(
+			sources, graphs, manifest.ChunkSize, manifest.VoxelResolution,
+			manifest.AgentProfiles, disabled, openDoors, blockers,
+		)
+		state.navigationOverlays <- streamedNavigationOverlayResult{
+			RuntimeGeneration: runtimeGeneration, GraphRevision: graphRevision, LoadGeneration: loadGeneration,
+			OverlayGeneration: overlayGeneration,
+			Sources:           sources, Graphs: graphs,
+			Query: query, DisabledTraversals: disabled, OpenDoors: openDoors, Blockers: blockers, Err: err,
+		}
+	}()
 }
 
 func streamedLevelNavigationOverlaySystem(cmd *Commands, state *StreamedLevelRuntimeState) {
@@ -494,25 +643,21 @@ func streamedLevelNavigationOverlaySystem(cmd *Commands, state *StreamedLevelRun
 		state.InitErr = err
 		return
 	}
-	if navigationTraversalSetsEqual(disabled, state.navigationDisabled) && navigationTraversalSetsEqual(openDoors, state.navigationOpenDoors) && navigationBlockersEqual(blockers, state.navigationBlockers) {
+	setStreamedNavigationOverlayDesired(state, disabled, openDoors, blockers)
+	startStreamedNavigationOverlayBuild(state)
+}
+
+func setStreamedNavigationOverlayDesired(state *StreamedLevelRuntimeState, disabled, openDoors map[string]struct{}, blockers map[string]content.NavBlockerDef) {
+	if state == nil ||
+		navigationTraversalSetsEqual(disabled, state.navigationOverlayDisabled) &&
+			navigationTraversalSetsEqual(openDoors, state.navigationOverlayOpenDoors) &&
+			navigationBlockersEqual(blockers, state.navigationOverlayBlockers) {
 		return
 	}
-	state.mu.RLock()
-	sources := append([]content.NavSourceTileDef(nil), state.NavigationSources...)
-	graphs := append([]content.NavGraphTileDef(nil), state.NavigationGraphs...)
-	state.mu.RUnlock()
-	query, err := buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, state.BaseNavManifest.ChunkSize, state.BaseNavManifest.VoxelResolution, state.BaseNavManifest.AgentProfiles, disabled, openDoors, blockers)
-	if err != nil {
-		state.InitErr = err
-		return
-	}
-	state.mu.Lock()
-	state.navigationDisabled = disabled
-	state.navigationOpenDoors = openDoors
-	state.navigationBlockers = blockers
-	state.navigationQuery = query
-	state.NavigationRevision++
-	state.mu.Unlock()
+	state.navigationOverlayDisabled = disabled
+	state.navigationOverlayOpenDoors = openDoors
+	state.navigationOverlayBlockers = blockers
+	state.navigationOverlayRequestedGen++
 }
 
 func runtimeNavigationBlockers(cmd *Commands) (map[string]content.NavBlockerDef, error) {

@@ -170,12 +170,18 @@ func TestStreamedRuntimeStopFailureKeepsRunningGeneration(t *testing.T) {
 	state.WorldDeltaPath = filepath.Join(t.TempDir(), "world.gkworlddelta")
 	state.WorldDelta = &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, LevelID: "arena"}
 	state.LoadedChunks[ChunkCoord{}] = &streamedLoadedChunk{ObjectEntities: map[string]EntityId{"placement:item": 999}}
+	state.navigationOverlayActive = true
+	state.jobs.Add(1)
+	go func() {
+		defer state.jobs.Done()
+		state.navigationOverlays <- streamedNavigationOverlayResult{}
+	}()
 
 	if err := StopStreamedLevelRuntime(cmd); err == nil {
 		t.Fatal("expected persistence failure")
 	}
-	if !state.Initialized || state.Generation != 7 {
-		t.Fatalf("failed stop changed live runtime: initialized=%t generation=%d", state.Initialized, state.Generation)
+	if !state.Initialized || state.Generation != 7 || state.navigationOverlayActive {
+		t.Fatalf("failed stop changed live runtime: initialized=%t generation=%d overlay_active=%t", state.Initialized, state.Generation, state.navigationOverlayActive)
 	}
 }
 

@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -9,6 +10,113 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 )
+
+func finishStreamedNavigationOverlay(t *testing.T, state *StreamedLevelRuntimeState) {
+	t.Helper()
+	state.jobs.Wait()
+	streamedLevelNavigationSystem(state)
+	if state.InitErr != nil {
+		t.Fatal(state.InitErr)
+	}
+}
+
+func TestStreamedNavigationPublishesResidencyWhileOverlayMoves(t *testing.T) {
+	profile := content.NavAgentProfileDef{ID: "walker", Radius: 0.4, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	source := content.NavSourceTileDef{
+		NavID: "pending", SchemaVersion: content.CurrentNavSourceTileSchemaVersion,
+		BuilderVersion: content.CurrentNavGraphBuilderVersion, ChunkSize: 4,
+		SourceHash: "source", DependencyHash: "dependency",
+		Spans: []content.NavSpanDef{{
+			ID: 0, X: 0, Z: 0, SupportHeight: 0, CeilingHeight: 2,
+			Headroom: 2, ClearanceRadius: 1, Area: "ground",
+		}},
+	}
+	built, err := content.BuildNavSpanGraph(source, profile, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &StreamedLevelRuntimeState{
+		Initialized: true, Generation: 3,
+		BaseNavManifest:    &content.NavGraphManifestDef{ChunkSize: 4, VoxelResolution: 1, AgentProfiles: []content.NavAgentProfileDef{profile}},
+		NavigationRevision: 5, navigationLoadedGen: 1, navigationRequestedGen: 2, navigationLoadActive: true,
+		navigationDesired:          make(map[content.TerrainChunkCoordDef]struct{}),
+		navigationLoads:            make(chan streamedNavigationLoadResult, 2),
+		navigationDisabled:         make(map[string]struct{}),
+		navigationOpenDoors:        make(map[string]struct{}),
+		navigationBlockers:         make(map[string]content.NavBlockerDef),
+		navigationOverlayDisabled:  map[string]struct{}{"broken-ladder": {}},
+		navigationOverlayOpenDoors: make(map[string]struct{}),
+		navigationOverlayBlockers:  make(map[string]content.NavBlockerDef),
+	}
+	state.navigationLoads <- streamedNavigationLoadResult{
+		RuntimeGeneration: 3, Generation: 2,
+		Sources: []content.NavSourceTileDef{source}, Graphs: []content.NavGraphTileDef{built.Graph},
+	}
+
+	streamedLevelNavigationSystem(state)
+	if state.navigationPendingGen != 2 || state.navigationLoadActive || !state.navigationOverlayActive {
+		t.Fatalf("residency was not retained for overlay build: pending=%d load=%t overlay=%t", state.navigationPendingGen, state.navigationLoadActive, state.navigationOverlayActive)
+	}
+	setStreamedNavigationOverlayDesired(
+		state,
+		map[string]struct{}{"moving-ladder": {}},
+		make(map[string]struct{}),
+		make(map[string]content.NavBlockerDef),
+	)
+	state.jobs.Wait()
+	streamedLevelNavigationSystem(state)
+	if state.navigationPendingGen != 0 || state.navigationLoadedGen != 2 || state.navigationLoadActive || !state.navigationOverlayActive {
+		t.Fatalf("moving overlay starved residency: pending=%d loaded=%d load=%t overlay=%t", state.navigationPendingGen, state.navigationLoadedGen, state.navigationLoadActive, state.navigationOverlayActive)
+	}
+	setStreamedNavigationOverlayDesired(
+		state,
+		map[string]struct{}{"latest-ladder": {}},
+		make(map[string]struct{}),
+		make(map[string]content.NavBlockerDef),
+	)
+	state.jobs.Wait()
+	streamedLevelNavigationSystem(state)
+	if state.NavigationRevision != 7 || state.navigationLoadActive || !state.navigationOverlayActive {
+		t.Fatalf("second moving overlay was not published and coalesced: revision=%d load=%t overlay=%t", state.NavigationRevision, state.navigationLoadActive, state.navigationOverlayActive)
+	}
+	finishStreamedNavigationOverlay(t, state)
+	if state.NavigationRevision != 8 || state.navigationLoadedGen != 2 || state.navigationPendingGen != 0 {
+		t.Fatalf("latest residency was not published: revision=%d graph=%d pending=%d", state.NavigationRevision, state.navigationLoadedGen, state.navigationPendingGen)
+	}
+	if _, installed := state.navigationDisabled["latest-ladder"]; !installed {
+		t.Fatal("latest overlay was not installed")
+	}
+}
+
+func TestStreamedNavigationIgnoresStaleLoadError(t *testing.T) {
+	state := &StreamedLevelRuntimeState{
+		Initialized: true, Generation: 3,
+		BaseNavManifest:     &content.NavGraphManifestDef{ChunkSize: 4, VoxelResolution: 1},
+		navigationLoadedGen: 1, navigationRequestedGen: 2, navigationLoadActive: true,
+		navigationDesired:          make(map[content.TerrainChunkCoordDef]struct{}),
+		navigationLoads:            make(chan streamedNavigationLoadResult, 2),
+		navigationDisabled:         make(map[string]struct{}),
+		navigationOpenDoors:        make(map[string]struct{}),
+		navigationBlockers:         make(map[string]content.NavBlockerDef),
+		navigationOverlayDisabled:  make(map[string]struct{}),
+		navigationOverlayOpenDoors: make(map[string]struct{}),
+		navigationOverlayBlockers:  make(map[string]content.NavBlockerDef),
+	}
+	state.navigationLoads <- streamedNavigationLoadResult{
+		RuntimeGeneration: 3, Generation: 1, Err: errors.New("stale load failed"),
+	}
+
+	streamedLevelNavigationSystem(state)
+	if state.InitErr != nil || !state.navigationLoadActive {
+		t.Fatalf("stale error became fatal or current load was not started: err=%v active=%t", state.InitErr, state.navigationLoadActive)
+	}
+	state.jobs.Wait()
+	streamedLevelNavigationSystem(state)
+	finishStreamedNavigationOverlay(t, state)
+	if state.navigationLoadedGen != 2 {
+		t.Fatalf("current empty residency was not published: %d", state.navigationLoadedGen)
+	}
+}
 
 func TestBrokenLadderDisablesRuntimeTraversalWithoutRebake(t *testing.T) {
 	const chunkSize = 4
@@ -47,7 +155,7 @@ func TestBrokenLadderDisablesRuntimeTraversalWithoutRebake(t *testing.T) {
 			ChunkSize: chunkSize, VoxelResolution: 1, LadderVolumes: []content.LevelLadderVolumeDef{ladder},
 		},
 		NavigationSources: []content.NavSourceTileDef{source}, NavigationGraphs: graphs,
-		NavigationRevision: 1, navigationQuery: query, navigationDisabled: make(map[string]struct{}),
+		NavigationRevision: 1, navigationQuery: query, navigationDisabled: make(map[string]struct{}), navigationLoadedGen: 7,
 	}
 	app := NewApp()
 	cmd := app.Commands()
@@ -58,18 +166,37 @@ func TestBrokenLadderDisablesRuntimeTraversalWithoutRebake(t *testing.T) {
 		&BreakableComponent{Kind: "ladder", Health: ladder.Health, MaxHealth: ladder.Health},
 	)
 	app.FlushCommands()
-	before, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(bottom, top)
+	service := RuntimeNavigationServiceFromStreamedLevelState(state)
+	if service.NavigationGraphRevision != 7 {
+		t.Fatalf("navigation graph revision = %d", service.NavigationGraphRevision)
+	}
+	before, err := service.FindRoute(bottom, top)
 	if err != nil || !before.Found {
 		t.Fatalf("expected live ladder route: route=%+v err=%v", before, err)
+	}
+	bottomRef, topRef := content.NavSpanRef{Span: 0}, content.NavSpanRef{Span: 1}
+	if _, ok := service.ReachableSpans(bottomRef, []content.NavSpanRef{topRef})[topRef]; !ok {
+		t.Fatal("live ladder traversal was not reachable")
 	}
 	if handled, broken := DamageBreakableEntity(cmd, entity, 100, 0); !handled || !broken {
 		t.Fatalf("ladder damage was not handled: handled=%v broken=%v", handled, broken)
 	}
 	app.FlushCommands()
 	streamedLevelNavigationOverlaySystem(cmd, state)
-	after, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(bottom, top)
+	if !state.navigationOverlayActive || state.NavigationRevision != 1 {
+		t.Fatalf("overlay was not deferred: active=%t revision=%d", state.navigationOverlayActive, state.NavigationRevision)
+	}
+	finishStreamedNavigationOverlay(t, state)
+	service = RuntimeNavigationServiceFromStreamedLevelState(state)
+	if service.NavigationGraphRevision != 7 {
+		t.Fatalf("overlay changed navigation graph revision: %d", service.NavigationGraphRevision)
+	}
+	after, err := service.FindRoute(bottom, top)
 	if err != nil || after.Found || after.FailureReason != content.NavRouteNoRoute || after.NavigationRevision != 2 {
 		t.Fatalf("broken ladder traversal remained enabled: route=%+v err=%v", after, err)
+	}
+	if _, ok := service.ReachableSpans(bottomRef, []content.NavSpanRef{topRef})[topRef]; ok {
+		t.Fatal("reachable span query crossed broken ladder traversal")
 	}
 }
 
@@ -132,6 +259,7 @@ func TestRuntimeDoorOverlayChangesActionWithoutRebake(t *testing.T) {
 	brush.Open = true
 	brush.BoundsCenter = brush.ClosedBoundsCenter.Add(brush.OpenOffset)
 	streamedLevelNavigationOverlaySystem(cmd, state)
+	finishStreamedNavigationOverlay(t, state)
 	open, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
 	if err != nil || !open.Found || routeRequiresGate(open, content.NavGateDoor) || open.NavigationRevision != 2 {
 		t.Fatalf("open door route = %+v err=%v", open, err)
@@ -140,6 +268,7 @@ func TestRuntimeDoorOverlayChangesActionWithoutRebake(t *testing.T) {
 	cmd.RemoveEntity(entity)
 	app.FlushCommands()
 	streamedLevelNavigationOverlaySystem(cmd, state)
+	finishStreamedNavigationOverlay(t, state)
 	missing, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
 	if err != nil || missing.Found || missing.FailureReason != content.NavRouteNoRoute || missing.NavigationRevision != 3 {
 		t.Fatalf("missing door route = %+v err=%v", missing, err)
@@ -195,6 +324,7 @@ func TestRuntimeNavigationBlockerAddMoveRemove(t *testing.T) {
 	)
 	app.FlushCommands()
 	streamedLevelNavigationOverlaySystem(cmd, state)
+	finishStreamedNavigationOverlay(t, state)
 	route, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
 	if err != nil || !route.Found || route.NavigationRevision != 2 || len(route.Waypoints) < 2 {
 		t.Fatalf("placed blocker did not reroute: route=%+v err=%v", route, err)
@@ -205,6 +335,7 @@ func TestRuntimeNavigationBlockerAddMoveRemove(t *testing.T) {
 		return true
 	})
 	streamedLevelNavigationOverlaySystem(cmd, state)
+	finishStreamedNavigationOverlay(t, state)
 	route, err = RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
 	if err != nil || route.Found || route.FailureReason != content.NavRouteNoRoute || route.NavigationRevision != 3 {
 		t.Fatalf("moved blocker did not split route: route=%+v err=%v", route, err)
@@ -213,6 +344,7 @@ func TestRuntimeNavigationBlockerAddMoveRemove(t *testing.T) {
 	cmd.RemoveEntity(entity)
 	app.FlushCommands()
 	streamedLevelNavigationOverlaySystem(cmd, state)
+	finishStreamedNavigationOverlay(t, state)
 	route, err = RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
 	if err != nil || !route.Found || route.NavigationRevision != 4 || len(route.Waypoints) != 1 {
 		t.Fatalf("removed blocker did not restore route: route=%+v err=%v", route, err)
@@ -269,6 +401,7 @@ func TestStreamedNavigationResidencyRevisionSwapFollowsDelta(t *testing.T) {
 	}
 	state.navigationLoads <- streamedNavigationLoadResult{Generation: 1, Sources: sources, Graphs: graphs}
 	streamedLevelNavigationSystem(state)
+	finishStreamedNavigationOverlay(t, state)
 	before := RuntimeNavigationServiceFromStreamedLevelState(state)
 	route, err := before.FindRoute(content.Vec3{0.5, 1, 0.5}, content.Vec3{7.5, 1, 0.5})
 	if err != nil || !route.Found || route.NavigationRevision != 1 {
@@ -288,6 +421,7 @@ func TestStreamedNavigationResidencyRevisionSwapFollowsDelta(t *testing.T) {
 	state.navigationLoadActive = true
 	state.navigationLoads <- streamedNavigationLoadResult{Generation: 2, Sources: sources, Graphs: graphs}
 	streamedLevelNavigationSystem(state)
+	finishStreamedNavigationOverlay(t, state)
 	after := RuntimeNavigationServiceFromStreamedLevelState(state)
 	route, err = after.FindRoute(content.Vec3{0.5, 1, 0.5}, content.Vec3{7.5, 1, 0.5})
 	if err != nil || route.Found || route.NavigationRevision != 2 {

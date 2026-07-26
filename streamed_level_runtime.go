@@ -267,48 +267,57 @@ type StreamedLevelRuntimeState struct {
 	MarkerEntities             map[string]EntityId
 	LightEntities              map[string]EntityId
 
-	DesiredChunks           map[ChunkCoord]struct{}
-	KeepChunks              map[ChunkCoord]struct{}
-	CollisionChunks         map[ChunkCoord]struct{}
-	DestructionChunks       map[ChunkCoord]struct{}
-	DesiredSectors          map[ChunkCoord]struct{}
-	KeepSectors             map[ChunkCoord]struct{}
-	DesiredProxySectors     map[ChunkCoord]struct{}
-	KeepProxySectors        map[ChunkCoord]struct{}
-	PendingLoads            map[ChunkCoord]struct{}
-	PendingProxyLoads       map[ChunkCoord]struct{}
-	PreparedLoads           chan streamedPreparedChunk
-	PreparedProxyLoads      chan streamedPreparedSectorProxy
-	PreparedGeometryCache   *streamedPreparedGeometryCache
-	activePrepareMu         sync.Mutex
-	activeChunkPrepares     int
-	activeProxyPrepares     int
-	LoadedChunks            map[ChunkCoord]*streamedLoadedChunk
-	LoadedSectorProxies     map[ChunkCoord]*streamedLoadedSectorProxy
-	PlacementsByChunk       map[ChunkCoord][]streamedPlacementInstance
-	PlacementChunk          map[string]ChunkCoord
-	ObjectChunk             map[string]ChunkCoord
-	TerrainEntries          map[ChunkCoord]content.TerrainChunkEntryDef
-	ImportedWorldSectors    map[ChunkCoord]content.ImportedWorldSectorDef
-	ImportedChunkSector     map[ChunkCoord]ChunkCoord
-	ImportedWorldEntries    map[ChunkCoord]content.ImportedWorldChunkEntryDef
-	BaseNavManifestPath     string
-	BaseNavManifest         *content.NavGraphManifestDef
-	NavigationSources       []content.NavSourceTileDef
-	NavigationGraphs        []content.NavGraphTileDef
-	NavigationRevision      uint64
-	navigationQuery         *content.NavGraphQuery
-	navigationDisabled      map[string]struct{}
-	navigationOpenDoors     map[string]struct{}
-	navigationBlockers      map[string]content.NavBlockerDef
-	navigationDesired       map[content.TerrainChunkCoordDef]struct{}
-	navigationLoadedGen     uint64
-	navigationRequestedGen  uint64
-	navigationLoadActive    bool
-	navigationLoads         chan streamedNavigationLoadResult
-	navigationRebuildActive bool
-	navigationRebuilds      chan streamedNavigationRebuildResult
-	navigationEditRevisions map[EntityId]uint64
+	DesiredChunks                 map[ChunkCoord]struct{}
+	KeepChunks                    map[ChunkCoord]struct{}
+	CollisionChunks               map[ChunkCoord]struct{}
+	DestructionChunks             map[ChunkCoord]struct{}
+	DesiredSectors                map[ChunkCoord]struct{}
+	KeepSectors                   map[ChunkCoord]struct{}
+	DesiredProxySectors           map[ChunkCoord]struct{}
+	KeepProxySectors              map[ChunkCoord]struct{}
+	PendingLoads                  map[ChunkCoord]struct{}
+	PendingProxyLoads             map[ChunkCoord]struct{}
+	PreparedLoads                 chan streamedPreparedChunk
+	PreparedProxyLoads            chan streamedPreparedSectorProxy
+	PreparedGeometryCache         *streamedPreparedGeometryCache
+	activePrepareMu               sync.Mutex
+	activeChunkPrepares           int
+	activeProxyPrepares           int
+	LoadedChunks                  map[ChunkCoord]*streamedLoadedChunk
+	LoadedSectorProxies           map[ChunkCoord]*streamedLoadedSectorProxy
+	PlacementsByChunk             map[ChunkCoord][]streamedPlacementInstance
+	PlacementChunk                map[string]ChunkCoord
+	ObjectChunk                   map[string]ChunkCoord
+	TerrainEntries                map[ChunkCoord]content.TerrainChunkEntryDef
+	ImportedWorldSectors          map[ChunkCoord]content.ImportedWorldSectorDef
+	ImportedChunkSector           map[ChunkCoord]ChunkCoord
+	ImportedWorldEntries          map[ChunkCoord]content.ImportedWorldChunkEntryDef
+	BaseNavManifestPath           string
+	BaseNavManifest               *content.NavGraphManifestDef
+	NavigationSources             []content.NavSourceTileDef
+	NavigationGraphs              []content.NavGraphTileDef
+	NavigationRevision            uint64
+	navigationQuery               *content.NavGraphQuery
+	navigationDisabled            map[string]struct{}
+	navigationOpenDoors           map[string]struct{}
+	navigationBlockers            map[string]content.NavBlockerDef
+	navigationOverlayDisabled     map[string]struct{}
+	navigationOverlayOpenDoors    map[string]struct{}
+	navigationOverlayBlockers     map[string]content.NavBlockerDef
+	navigationOverlayRequestedGen uint64
+	navigationOverlayActive       bool
+	navigationOverlays            chan streamedNavigationOverlayResult
+	navigationDesired             map[content.TerrainChunkCoordDef]struct{}
+	navigationLoadedGen           uint64
+	navigationRequestedGen        uint64
+	navigationPendingGen          uint64
+	navigationPendingSources      []content.NavSourceTileDef
+	navigationPendingGraphs       []content.NavGraphTileDef
+	navigationLoadActive          bool
+	navigationLoads               chan streamedNavigationLoadResult
+	navigationRebuildActive       bool
+	navigationRebuilds            chan streamedNavigationRebuildResult
+	navigationEditRevisions       map[EntityId]uint64
 
 	WorldDeltaPath   string
 	WorldDataDir     string
@@ -408,42 +417,46 @@ type streamedPreparedSectorProxy struct {
 func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 	cmd.AddResources(&VoxelWorldDirtyChunks{Imported: make(map[voxelWorldDirtyChunkKey]*content.ImportedWorldChunkDef)})
 	cmd.AddResources(&StreamedLevelRuntimeState{
-		DesiredChunks:            make(map[ChunkCoord]struct{}),
-		KeepChunks:               make(map[ChunkCoord]struct{}),
-		CollisionChunks:          make(map[ChunkCoord]struct{}),
-		DesiredSectors:           make(map[ChunkCoord]struct{}),
-		KeepSectors:              make(map[ChunkCoord]struct{}),
-		DesiredProxySectors:      make(map[ChunkCoord]struct{}),
-		KeepProxySectors:         make(map[ChunkCoord]struct{}),
-		PendingLoads:             make(map[ChunkCoord]struct{}),
-		PendingProxyLoads:        make(map[ChunkCoord]struct{}),
-		PreparedLoads:            make(chan streamedPreparedChunk, 256),
-		PreparedProxyLoads:       make(chan streamedPreparedSectorProxy, 256),
-		PreparedGeometryCache:    newStreamedPreparedGeometryCache(defaultStreamedPreparedGeometryCacheEntries),
-		LoadedChunks:             make(map[ChunkCoord]*streamedLoadedChunk),
-		LoadedSectorProxies:      make(map[ChunkCoord]*streamedLoadedSectorProxy),
-		PlacementsByChunk:        make(map[ChunkCoord][]streamedPlacementInstance),
-		PlacementChunk:           make(map[string]ChunkCoord),
-		ObjectChunk:              make(map[string]ChunkCoord),
-		TerrainEntries:           make(map[ChunkCoord]content.TerrainChunkEntryDef),
-		ImportedWorldSectors:     make(map[ChunkCoord]content.ImportedWorldSectorDef),
-		ImportedChunkSector:      make(map[ChunkCoord]ChunkCoord),
-		ImportedWorldEntries:     make(map[ChunkCoord]content.ImportedWorldChunkEntryDef),
-		MarkerEntities:           make(map[string]EntityId),
-		LightEntities:            make(map[string]EntityId),
-		placementOverrideMap:     make(map[string]content.LevelTransformDef),
-		deletedPlacementIDs:      make(map[string]struct{}),
-		terrainOverrideMap:       make(map[string]content.TerrainChunkOverrideDef),
-		importedWorldOverrideMap: make(map[string]content.ImportedWorldChunkOverrideDef),
-		voxelOverrideMap:         make(map[string]content.VoxelObjectOverrideDef),
-		voxelBackingRemovalMap:   make(map[string]content.VoxelBackingRemovalDef),
-		navigationDesired:        make(map[content.TerrainChunkCoordDef]struct{}),
-		navigationLoads:          make(chan streamedNavigationLoadResult, 2),
-		navigationRebuilds:       make(chan streamedNavigationRebuildResult, 2),
-		navigationEditRevisions:  make(map[EntityId]uint64),
-		navigationDisabled:       make(map[string]struct{}),
-		navigationOpenDoors:      make(map[string]struct{}),
-		navigationBlockers:       make(map[string]content.NavBlockerDef),
+		DesiredChunks:              make(map[ChunkCoord]struct{}),
+		KeepChunks:                 make(map[ChunkCoord]struct{}),
+		CollisionChunks:            make(map[ChunkCoord]struct{}),
+		DesiredSectors:             make(map[ChunkCoord]struct{}),
+		KeepSectors:                make(map[ChunkCoord]struct{}),
+		DesiredProxySectors:        make(map[ChunkCoord]struct{}),
+		KeepProxySectors:           make(map[ChunkCoord]struct{}),
+		PendingLoads:               make(map[ChunkCoord]struct{}),
+		PendingProxyLoads:          make(map[ChunkCoord]struct{}),
+		PreparedLoads:              make(chan streamedPreparedChunk, 256),
+		PreparedProxyLoads:         make(chan streamedPreparedSectorProxy, 256),
+		PreparedGeometryCache:      newStreamedPreparedGeometryCache(defaultStreamedPreparedGeometryCacheEntries),
+		LoadedChunks:               make(map[ChunkCoord]*streamedLoadedChunk),
+		LoadedSectorProxies:        make(map[ChunkCoord]*streamedLoadedSectorProxy),
+		PlacementsByChunk:          make(map[ChunkCoord][]streamedPlacementInstance),
+		PlacementChunk:             make(map[string]ChunkCoord),
+		ObjectChunk:                make(map[string]ChunkCoord),
+		TerrainEntries:             make(map[ChunkCoord]content.TerrainChunkEntryDef),
+		ImportedWorldSectors:       make(map[ChunkCoord]content.ImportedWorldSectorDef),
+		ImportedChunkSector:        make(map[ChunkCoord]ChunkCoord),
+		ImportedWorldEntries:       make(map[ChunkCoord]content.ImportedWorldChunkEntryDef),
+		MarkerEntities:             make(map[string]EntityId),
+		LightEntities:              make(map[string]EntityId),
+		placementOverrideMap:       make(map[string]content.LevelTransformDef),
+		deletedPlacementIDs:        make(map[string]struct{}),
+		terrainOverrideMap:         make(map[string]content.TerrainChunkOverrideDef),
+		importedWorldOverrideMap:   make(map[string]content.ImportedWorldChunkOverrideDef),
+		voxelOverrideMap:           make(map[string]content.VoxelObjectOverrideDef),
+		voxelBackingRemovalMap:     make(map[string]content.VoxelBackingRemovalDef),
+		navigationDesired:          make(map[content.TerrainChunkCoordDef]struct{}),
+		navigationLoads:            make(chan streamedNavigationLoadResult, 2),
+		navigationOverlays:         make(chan streamedNavigationOverlayResult, 2),
+		navigationRebuilds:         make(chan streamedNavigationRebuildResult, 2),
+		navigationEditRevisions:    make(map[EntityId]uint64),
+		navigationDisabled:         make(map[string]struct{}),
+		navigationOpenDoors:        make(map[string]struct{}),
+		navigationBlockers:         make(map[string]content.NavBlockerDef),
+		navigationOverlayDisabled:  make(map[string]struct{}),
+		navigationOverlayOpenDoors: make(map[string]struct{}),
+		navigationOverlayBlockers:  make(map[string]content.NavBlockerDef),
 	})
 	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
 	app.UseSystem(System(commitPreparedStreamedChunksSystem).InStage(Update).RunAlways())
@@ -595,9 +608,17 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.navigationDisabled = make(map[string]struct{})
 	state.navigationOpenDoors = make(map[string]struct{})
 	state.navigationBlockers = make(map[string]content.NavBlockerDef)
+	state.navigationOverlayDisabled = make(map[string]struct{})
+	state.navigationOverlayOpenDoors = make(map[string]struct{})
+	state.navigationOverlayBlockers = make(map[string]content.NavBlockerDef)
+	state.navigationOverlayRequestedGen = 0
+	state.navigationOverlayActive = false
 	state.navigationDesired = make(map[content.TerrainChunkCoordDef]struct{})
 	state.navigationLoadedGen = 0
 	state.navigationRequestedGen = 0
+	state.navigationPendingGen = 0
+	state.navigationPendingSources = nil
+	state.navigationPendingGraphs = nil
 	state.navigationLoadActive = false
 	state.navigationRebuildActive = false
 	state.navigationEditRevisions = make(map[EntityId]uint64)
@@ -858,7 +879,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 		if err := persistChunkOverrides(cmd, state, coord, loaded); err != nil {
 			state.PendingLoads = make(map[ChunkCoord]struct{})
 			state.PendingProxyLoads = make(map[ChunkCoord]struct{})
-			state.navigationLoadActive, state.navigationRebuildActive = false, false
+			state.navigationLoadActive, state.navigationOverlayActive, state.navigationRebuildActive = false, false, false
 			return err
 		}
 	}
@@ -908,6 +929,8 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	state.BaseWorldManifest, state.BaseWorldBacking = nil, nil
 	state.BaseWorldBackingSourceHash = ""
 	state.NavigationSources, state.NavigationGraphs = nil, nil
+	state.navigationPendingSources, state.navigationPendingGraphs = nil, nil
+	state.navigationPendingGen = 0
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
 	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
 	state.PendingLoads = make(map[ChunkCoord]struct{})
@@ -957,6 +980,14 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 	}
 	for {
 		select {
+		case <-state.navigationOverlays:
+			continue
+		default:
+		}
+		break
+	}
+	for {
+		select {
 		case <-state.navigationRebuilds:
 			continue
 		default:
@@ -976,6 +1007,7 @@ func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 		case <-state.PreparedLoads:
 		case <-state.PreparedProxyLoads:
 		case <-state.navigationLoads:
+		case <-state.navigationOverlays:
 		case <-state.navigationRebuilds:
 		case <-done:
 			drainStreamedPreparedResults(state)
