@@ -394,14 +394,16 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		materialKey, hasKey := frameMaterialKeys[vox.VoxelPalette]
 		gekkoPalette, hasPalette := frameVoxelPalettes[vox.VoxelPalette]
 		if !hasKey {
-			gekkoPalette = effectiveVoxelPaletteAt(server.voxPalettes[vox.VoxelPalette], elapsed)
+			gekkoPalette, _ = server.GetVoxelPalette(vox.VoxelPalette)
+			gekkoPalette = effectiveVoxelPaletteAt(gekkoPalette, elapsed)
 			frameVoxelPalettes[vox.VoxelPalette] = gekkoPalette
 			hasPalette = true
 			materialKey = state.materialTableKey(vox.VoxelPalette, &gekkoPalette)
 			frameMaterialKeys[vox.VoxelPalette] = materialKey
 		}
 		if !hasPalette {
-			gekkoPalette = effectiveVoxelPaletteAt(server.voxPalettes[vox.VoxelPalette], elapsed)
+			gekkoPalette, _ = server.GetVoxelPalette(vox.VoxelPalette)
+			gekkoPalette = effectiveVoxelPaletteAt(gekkoPalette, elapsed)
 			frameVoxelPalettes[vox.VoxelPalette] = gekkoPalette
 		}
 

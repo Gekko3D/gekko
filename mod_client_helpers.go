@@ -212,12 +212,12 @@ func findVoxelModelAsset(entityId EntityId, cmd *Commands, server *AssetServer) 
 				}
 				assetId := AssetId{UUID: u}
 				if "model" == field.Tag.Get("usage") {
-					model, ok := server.voxModels[assetId]
+					model, ok := server.GetVoxelModel(assetId)
 					if ok {
 						voxModel = &model
 					}
 				} else if "palette" == field.Tag.Get("usage") {
-					p, ok := server.voxPalettes[assetId]
+					p, ok := server.GetVoxelPalette(assetId)
 					if ok {
 						palette = &p
 						paletteId = assetId

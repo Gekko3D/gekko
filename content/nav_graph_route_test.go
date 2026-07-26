@@ -169,7 +169,7 @@ func TestFindNavGraphRoute(t *testing.T) {
 
 	t.Run("explicit failures", func(t *testing.T) {
 		sources, graphs := buildWorld(1)
-		route, err := FindNavGraphRoute(sources, graphs, chunkSize, 1, Vec3{-0.1, 0, 0}, Vec3{1, 0, 0})
+		route, err := FindNavGraphRoute(sources, graphs, chunkSize, 1, Vec3{-1.1, 0, 0}, Vec3{1, 0, 0})
 		if err != nil || route.Found || route.FailureReason != NavRouteStartUnsupported || route.FailureTile.X != -1 {
 			t.Fatalf("unsupported start mismatch: route=%+v err=%v", route, err)
 		}
@@ -186,6 +186,35 @@ func TestFindNavGraphRoute(t *testing.T) {
 			t.Fatalf("disconnected route mismatch: route=%+v err=%v", route, err)
 		}
 	})
+}
+
+func TestFindNavGraphRouteProjectsSmallStartDriftOnly(t *testing.T) {
+	const chunkSize = 3
+	profile := NavAgentProfileDef{ID: "walker", Radius: 0.25, Height: 1.5, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	source := NavSourceTileDef{
+		NavID: "start-drift", SchemaVersion: CurrentNavSourceTileSchemaVersion, BuilderVersion: CurrentNavGraphBuilderVersion,
+		ChunkSize: chunkSize, SourceHash: "source", DependencyHash: "dependency",
+		Spans: []NavSpanDef{
+			{ID: 0, X: 0, Z: 0, SupportHeight: 0, CeilingHeight: 2, Headroom: 2, ClearanceRadius: 1},
+			{ID: 1, X: 1, Z: 0, SupportHeight: 0, CeilingHeight: 2, Headroom: 2, ClearanceRadius: 1},
+		},
+	}
+	built, err := BuildNavSpanGraph(source, profile, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := NewNavGraphQuery([]NavSourceTileDef{source}, []NavGraphTileDef{built.Graph}, chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := query.FindRoute(Vec3{-0.05, 0, 0.5}, Vec3{1.5, 0, 0.5})
+	if err != nil || !route.Found || route.Steps[0].Target[0] < 0 {
+		t.Fatalf("small route-start drift was not projected: route=%+v err=%v", route, err)
+	}
+	route, err = query.FindRoute(Vec3{0.5, 0, 0.5}, Vec3{-0.05, 0, 0.5})
+	if err != nil || route.Found || route.FailureReason != NavRouteGoalUnsupported {
+		t.Fatalf("unsupported goal was projected: route=%+v err=%v", route, err)
+	}
 }
 
 func TestNavGraphBlockerOverlay(t *testing.T) {

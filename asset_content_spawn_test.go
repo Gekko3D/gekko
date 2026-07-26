@@ -223,6 +223,40 @@ func TestSpawnAuthoredAssetBuildsVoxelShapeGeometryAndPalette(t *testing.T) {
 	}
 }
 
+func TestPrepareAuthoredAssetWarmsSharedGeometryForSpawn(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	assets := newSpawnTestAssetServer()
+	def := content.NewAssetDef("prepared")
+	def.Materials = []content.AssetMaterialDef{{ID: "mat", Name: "Material", BaseColor: [4]uint8{255, 255, 255, 255}, Roughness: 1, IOR: 1.5}}
+	def.Parts = []content.AssetPartDef{{
+		ID: "shape", Name: "Shape",
+		Source: content.AssetSourceDef{
+			Kind: content.AssetSourceKindVoxelShape,
+			VoxelShape: &content.AssetVoxelShapeDef{
+				Palette: []content.AssetVoxelPaletteEntryDef{{Value: 1, MaterialID: "mat"}},
+				Voxels:  []content.VoxelObjectVoxelDef{{X: 1, Y: 2, Z: 3, Value: 1}},
+			},
+		},
+		Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}},
+	}}
+
+	prepared, err := PrepareAuthoredAsset(assets, def, "prepared.gkasset")
+	if err != nil {
+		t.Fatalf("PrepareAuthoredAsset failed: %v", err)
+	}
+	preparedGeometryCount := len(assets.voxModels)
+	if preparedGeometryCount != 1 {
+		t.Fatalf("prepared geometry count = %d", preparedGeometryCount)
+	}
+	if _, err := SpawnPreparedAuthoredAsset(cmd, assets, prepared, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}}); err != nil {
+		t.Fatalf("prepared spawn failed: %v", err)
+	}
+	if len(assets.voxModels) != preparedGeometryCount {
+		t.Fatalf("spawn rebuilt prepared geometry: before=%d after=%d", preparedGeometryCount, len(assets.voxModels))
+	}
+}
+
 func TestSpawnAuthoredAssetKeepsProceduralPrimitiveDefaultPivot(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

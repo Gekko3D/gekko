@@ -46,7 +46,10 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 	query := q.query
 	start, startTile, found := query.resolve(startPoint)
 	if !found {
-		return NavRouteResult{FailureReason: NavRouteStartUnsupported, FailureTile: startTile}, nil
+		start, found = query.resolveNearby(startPoint, query.voxelResolution)
+		if !found {
+			return NavRouteResult{FailureReason: NavRouteStartUnsupported, FailureTile: startTile}, nil
+		}
 	}
 	goal, goalTile, found := query.resolve(goalPoint)
 	if !found {

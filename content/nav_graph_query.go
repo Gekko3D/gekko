@@ -22,6 +22,10 @@ type navResolvedSpan struct {
 	Projected Vec3
 }
 
+type navSpanColumn struct {
+	x, z int
+}
+
 type navGraphQuery struct {
 	chunkSize       int
 	voxelResolution float32
@@ -32,6 +36,7 @@ type navGraphQuery struct {
 	spanEdges       map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge
 	spanScale       map[TerrainChunkCoordDef]float32
 	backing         map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef
+	spanColumns     map[navSpanColumn][]NavSpanRef
 	walkableCells   map[navSpanPathCell]navWalkableCell
 	spanClassIDs    map[string]uint32
 	blocked         map[NavSpanRef]struct{}
@@ -90,6 +95,7 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 		spanEdges:     make(map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge, len(graphs)),
 		spanScale:     make(map[TerrainChunkCoordDef]float32, len(graphs)),
 		backing:       make(map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef, len(graphs)),
+		spanColumns:   make(map[navSpanColumn][]NavSpanRef, acceptedSpans),
 		walkableCells: make(map[navSpanPathCell]navWalkableCell, acceptedSpans),
 		spanClassIDs:  make(map[string]uint32),
 	}
@@ -136,6 +142,8 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 			if !exists {
 				return nil, fmt.Errorf("navigation graph tile %s references missing source span %d", TerrainChunkKey(graph.Coord), spanID)
 			}
+			column := navSpanColumn{x: graph.Coord.X*chunkSize + span.X, z: graph.Coord.Z*chunkSize + span.Z}
+			query.spanColumns[column] = append(query.spanColumns[column], NavSpanRef{Tile: graph.Coord, Span: spanID})
 			query.indexWalkableCell(graph.Coord, span)
 		}
 		query.graphs[graph.Coord] = graph
@@ -284,39 +292,70 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 		Y: floorDivNavSpan(cellY, q.chunkSize),
 		Z: floorDivNavSpan(cellZ, q.chunkSize),
 	}
-	localX, localZ := positiveModNavSpan(cellX, q.chunkSize), positiveModNavSpan(cellZ, q.chunkSize)
-
 	bestDistance := float32(math.Inf(1))
 	var best navResolvedSpan
 	found := false
-	for coord, graph := range q.graphs {
-		if coord.X != tile.X || coord.Z != tile.Z {
+	for _, ref := range q.spanColumns[navSpanColumn{x: cellX, z: cellZ}] {
+		if _, blocked := q.blocked[ref]; blocked {
 			continue
 		}
-		for _, spanID := range graph.SpanIDs {
-			ref := NavSpanRef{Tile: coord, Span: spanID}
-			if _, blocked := q.blocked[ref]; blocked {
-				continue
-			}
-			span := q.spans[coord][spanID]
-			if span.X != localX || span.Z != localZ {
-				continue
-			}
-			distance := absFloat32(span.SupportHeight - point[1])
-			better := !found || distance < bestDistance || distance == bestDistance && (terrainCoordLess(coord, best.Ref.Tile) || coord == best.Ref.Tile && spanID < best.Ref.Span)
-			if !better {
-				continue
-			}
-			bestDistance = distance
-			best = navResolvedSpan{
-				Ref:       NavSpanRef{Tile: coord, Span: spanID},
-				Region:    navRouteNode{Tile: coord, Region: q.spanRegions[coord][spanID]},
-				Projected: Vec3{point[0], span.SupportHeight, point[2]},
-			}
-			found = true
+		span := q.spans[ref.Tile][ref.Span]
+		distance := absFloat32(span.SupportHeight - point[1])
+		if found && (distance > bestDistance || distance == bestDistance && !navSpanRefLess(ref, best.Ref)) {
+			continue
 		}
+		bestDistance = distance
+		best = navResolvedSpan{
+			Ref:       ref,
+			Region:    navRouteNode{Tile: ref.Tile, Region: q.spanRegions[ref.Tile][ref.Span]},
+			Projected: Vec3{point[0], span.SupportHeight, point[2]},
+		}
+		found = true
 	}
 	return best, tile, found
+}
+
+func (q *navGraphQuery) resolveNearby(point Vec3, maxHorizontalDistance float32) (navResolvedSpan, bool) {
+	cellX := int(math.Floor(float64(point[0]) / float64(q.voxelResolution)))
+	cellZ := int(math.Floor(float64(point[2]) / float64(q.voxelResolution)))
+	radius := int(math.Ceil(float64(maxHorizontalDistance / q.voxelResolution)))
+	maxHorizontalDistanceSqr := maxHorizontalDistance * maxHorizontalDistance
+	bestDistance := float32(math.Inf(1))
+	var best navResolvedSpan
+	found := false
+	for dz := -radius; dz <= radius; dz++ {
+		for dx := -radius; dx <= radius; dx++ {
+			for _, ref := range q.spanColumns[navSpanColumn{x: cellX + dx, z: cellZ + dz}] {
+				if _, blocked := q.blocked[ref]; blocked {
+					continue
+				}
+				span := q.spans[ref.Tile][ref.Span]
+				minX := float32(ref.Tile.X*q.chunkSize+span.X) * q.voxelResolution
+				minZ := float32(ref.Tile.Z*q.chunkSize+span.Z) * q.voxelResolution
+				projected := Vec3{
+					navClampToSpanAxis(point[0], minX, q.voxelResolution),
+					span.SupportHeight,
+					navClampToSpanAxis(point[2], minZ, q.voxelResolution),
+				}
+				offsetX, offsetZ := point[0]-projected[0], point[2]-projected[2]
+				if offsetX*offsetX+offsetZ*offsetZ > maxHorizontalDistanceSqr {
+					continue
+				}
+				distance := navVec3Distance(point, projected)
+				if found && (distance > bestDistance || distance == bestDistance && !navSpanRefLess(ref, best.Ref)) {
+					continue
+				}
+				bestDistance = distance
+				best = navResolvedSpan{
+					Ref:       ref,
+					Region:    navRouteNode{Tile: ref.Tile, Region: q.spanRegions[ref.Tile][ref.Span]},
+					Projected: projected,
+				}
+				found = true
+			}
+		}
+	}
+	return best, found
 }
 
 // FindNearestNavGraphPoint projects a world point onto the nearest supported

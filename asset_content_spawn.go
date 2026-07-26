@@ -29,11 +29,34 @@ type AuthoredAssetSpawnOptions struct {
 	OverrideShadowCasterGroupLimit *int
 }
 
+type PreparedAuthoredAsset struct {
+	def          *content.AssetDef
+	documentPath string
+	animations   *content.ResolvedAssetAnimations
+	parts        map[string]preparedAuthoredPart
+}
+
+type preparedAuthoredPart struct {
+	model   AssetId
+	palette AssetId
+}
+
 func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
 	return SpawnAuthoredAssetWithOptions(cmd, assets, def, rootTransform, AuthoredAssetSpawnOptions{})
 }
 
 func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions) (AuthoredAssetSpawnResult, error) {
+	return spawnAuthoredAssetWithOptions(cmd, assets, def, nil, rootTransform, opts)
+}
+
+func SpawnPreparedAuthoredAsset(cmd *Commands, assets *AssetServer, prepared *PreparedAuthoredAsset, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
+	if prepared == nil {
+		return AuthoredAssetSpawnResult{}, fmt.Errorf("prepared asset is nil")
+	}
+	return spawnAuthoredAssetWithOptions(cmd, assets, prepared.def, prepared, rootTransform, AuthoredAssetSpawnOptions{DocumentPath: prepared.documentPath})
+}
+
+func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *content.AssetDef, prepared *PreparedAuthoredAsset, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions) (AuthoredAssetSpawnResult, error) {
 	result := AuthoredAssetSpawnResult{
 		EntitiesByAssetID:  make(map[string]EntityId),
 		ItemKindsByAssetID: make(map[string]AuthoredItemKind),
@@ -43,16 +66,22 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		return result, fmt.Errorf("asset definition is nil")
 	}
 	result.AssetID = def.ID
-	if validation := content.ValidateAsset(def, content.AssetValidationOptions{DocumentPath: opts.DocumentPath}); validation.HasErrors() {
-		return result, fmt.Errorf("asset validation failed: %s", validation.Error())
-	}
-	animations, err := content.ResolveAssetAnimations(def, opts.DocumentPath)
-	if err != nil {
-		return result, fmt.Errorf("asset animation resolution failed: %w", err)
-	}
-	content.NormalizeAssetDef(def)
-	if err := ValidateAssetHierarchy(def); err != nil {
-		return result, err
+	var animations *content.ResolvedAssetAnimations
+	if prepared == nil {
+		if validation := content.ValidateAsset(def, content.AssetValidationOptions{DocumentPath: opts.DocumentPath}); validation.HasErrors() {
+			return result, fmt.Errorf("asset validation failed: %s", validation.Error())
+		}
+		var err error
+		animations, err = content.ResolveAssetAnimations(def, opts.DocumentPath)
+		if err != nil {
+			return result, fmt.Errorf("asset animation resolution failed: %w", err)
+		}
+		content.NormalizeAssetDef(def)
+		if err := ValidateAssetHierarchy(def); err != nil {
+			return result, err
+		}
+	} else {
+		animations = prepared.animations
 	}
 	if collapsed, err := trySpawnCollapsedAuthoredAsset(cmd, assets, def, rootTransform, opts, &result); collapsed || err != nil {
 		return result, err
@@ -71,7 +100,17 @@ func SpawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	result.Entities = append(result.Entities, result.RootEntity)
 
 	for _, part := range def.Parts {
-		eid, err := spawnAuthoredPart(cmd, assets, def, part, opts.DocumentPath, shadowSettings)
+		var (
+			eid EntityId
+			err error
+		)
+		if prepared == nil {
+			eid, err = spawnAuthoredPart(cmd, assets, def, part, opts.DocumentPath, shadowSettings)
+		} else if preparedPart, ok := prepared.parts[part.ID]; ok {
+			eid, err = spawnAuthoredPartWithAssets(cmd, def, part, shadowSettings, preparedPart.model, preparedPart.palette)
+		} else {
+			err = fmt.Errorf("prepared asset missing part %s", part.ID)
+		}
 		if err != nil {
 			return result, err
 		}
@@ -174,6 +213,48 @@ func LoadAndSpawnAuthoredAsset(path string, cmd *Commands, assets *AssetServer, 
 	return SpawnAuthoredAssetWithOptions(cmd, assets, def, rootTransform, AuthoredAssetSpawnOptions{DocumentPath: path})
 }
 
+// PrepareAuthoredAsset validates content and builds shared CPU-side resources
+// without creating ECS entities. Treat the returned asset as immutable.
+func PrepareAuthoredAsset(assets *AssetServer, def *content.AssetDef, documentPath string) (*PreparedAuthoredAsset, error) {
+	if def == nil {
+		return nil, fmt.Errorf("asset definition is nil")
+	}
+	if validation := content.ValidateAsset(def, content.AssetValidationOptions{DocumentPath: documentPath}); validation.HasErrors() {
+		return nil, fmt.Errorf("asset validation failed: %s", validation.Error())
+	}
+	animations, err := content.ResolveAssetAnimations(def, documentPath)
+	if err != nil {
+		return nil, fmt.Errorf("asset animation resolution failed: %w", err)
+	}
+	content.NormalizeAssetDef(def)
+	if err := ValidateAssetHierarchy(def); err != nil {
+		return nil, err
+	}
+	prepared := &PreparedAuthoredAsset{
+		def: def, documentPath: documentPath, animations: animations,
+		parts: make(map[string]preparedAuthoredPart, len(def.Parts)),
+	}
+	for _, part := range def.Parts {
+		model, palette, err := modelAndPaletteFromSource(assets, def, part, documentPath)
+		if err != nil {
+			return nil, err
+		}
+		prepared.parts[part.ID] = preparedAuthoredPart{model: model, palette: palette}
+	}
+	return prepared, nil
+}
+
+func LoadAndPrepareAuthoredAsset(path string, assets *AssetServer, loader *RuntimeContentLoader) (*PreparedAuthoredAsset, error) {
+	if loader == nil {
+		loader = NewRuntimeContentLoader()
+	}
+	def, err := loader.LoadAsset(path)
+	if err != nil {
+		return nil, err
+	}
+	return PrepareAuthoredAsset(assets, def, path)
+}
+
 func LoadAndSpawnAuthoredAssetFromLibrary(library *content.AssetLibraryDef, libraryPath, key string, cmd *Commands, assets *AssetServer, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
 	path, err := content.ResolveAssetLibraryPath(library, libraryPath, key)
 	if err != nil {
@@ -231,6 +312,17 @@ func LoadAndAttachAuthoredAsset(path string, cmd *Commands, assets *AssetServer,
 	return spawned, nil
 }
 
+func AttachPreparedAuthoredAsset(prepared *PreparedAuthoredAsset, cmd *Commands, assets *AssetServer, parentMarker EntityId, attachment content.AssetAttachmentDef) (AuthoredAssetSpawnResult, error) {
+	spawned, err := SpawnPreparedAuthoredAsset(cmd, assets, prepared, TransformComponent{Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}})
+	if err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	if err := AttachAuthoredAssetRoot(cmd, spawned.RootEntity, parentMarker, attachment); err != nil {
+		return AuthoredAssetSpawnResult{}, err
+	}
+	return spawned, nil
+}
+
 func LoadAndAttachAuthoredAssetFromLibrary(library *content.AssetLibraryDef, libraryPath, key string, cmd *Commands, assets *AssetServer, parentMarker EntityId, attachment content.AssetAttachmentDef) (AuthoredAssetSpawnResult, error) {
 	path, err := content.ResolveAssetLibraryPath(library, libraryPath, key)
 	if err != nil {
@@ -251,6 +343,14 @@ func ValidateAssetHierarchy(def *content.AssetDef) error {
 }
 
 func spawnAuthoredPart(cmd *Commands, assets *AssetServer, def *content.AssetDef, part content.AssetPartDef, documentPath string, shadowSettings voxelShadowSettings) (EntityId, error) {
+	model, palette, err := modelAndPaletteFromSource(assets, def, part, documentPath)
+	if err != nil {
+		return 0, err
+	}
+	return spawnAuthoredPartWithAssets(cmd, def, part, shadowSettings, model, palette)
+}
+
+func spawnAuthoredPartWithAssets(cmd *Commands, def *content.AssetDef, part content.AssetPartDef, shadowSettings voxelShadowSettings, model, palette AssetId) (EntityId, error) {
 	tr := AssetTransformFromDef(part.Transform)
 	local := AssetLocalTransformFromDef(part.Transform)
 	comps := []any{
@@ -259,10 +359,6 @@ func spawnAuthoredPart(cmd *Commands, assets *AssetServer, def *content.AssetDef
 		&AuthoredAssetRefComponent{AssetID: def.ID, ItemID: part.ID, Kind: AuthoredItemKindPart},
 	}
 
-	model, palette, err := modelAndPaletteFromSource(assets, def, part, documentPath)
-	if err != nil {
-		return 0, err
-	}
 	if model != (AssetId{}) {
 		voxelModel := &VoxelModelComponent{
 			SharedGeometry:         model,

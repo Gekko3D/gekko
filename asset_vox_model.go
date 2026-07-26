@@ -137,6 +137,17 @@ func (server *AssetServer) RegisterSharedVoxelGeometry(xbm *volume.XBrickMap, so
 	return server.RegisterSharedVoxelGeometryWithCacheKey("", xbm, sourcePath)
 }
 
+func (server *AssetServer) SharedVoxelGeometryByCacheKey(cacheKey string) (AssetId, bool) {
+	if server == nil || cacheKey == "" {
+		return AssetId{}, false
+	}
+	server.ensureVoxelStorage()
+	server.mu.RLock()
+	id, ok := server.voxModelKeys[cacheKey]
+	server.mu.RUnlock()
+	return id, ok
+}
+
 func (server *AssetServer) RegisterSharedVoxelGeometryWithCacheKey(cacheKey string, xbm *volume.XBrickMap, sourcePath string) AssetId {
 	if xbm == nil {
 		return AssetId{}

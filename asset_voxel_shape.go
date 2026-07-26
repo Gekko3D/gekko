@@ -26,6 +26,10 @@ func authoredVoxelShapeGeometry(assets *AssetServer, part content.AssetPartDef) 
 	if err != nil {
 		return AssetId{}, err
 	}
+	cacheKey := string(cachePayload)
+	if id, ok := assets.SharedVoxelGeometryByCacheKey(cacheKey); ok {
+		return id, nil
+	}
 
 	xbm := XBrickMapFromVoxelObjectSnapshot(&content.VoxelObjectSnapshotDef{
 		SchemaVersion: content.CurrentVoxelObjectSnapshotSchemaVersion,
@@ -37,7 +41,6 @@ func authoredVoxelShapeGeometry(assets *AssetServer, part content.AssetPartDef) 
 	xbm.ComputeAABB()
 	xbm.ClearDirty()
 
-	cacheKey := string(cachePayload)
 	return assets.RegisterSharedVoxelGeometryWithCacheKey(cacheKey, xbm, cacheKey), nil
 }
 
