@@ -183,6 +183,25 @@ func (s RuntimeNavigationService) ProjectPoint(point content.Vec3, maxDistance f
 	return content.FindNearestNavGraphPoint(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, point, maxDistance)
 }
 
+// Locate binds an actor world position to the same span contract used by
+// route starts. It repairs at most one voxel of 3D drift.
+func (s RuntimeNavigationService) Locate(point content.Vec3) (content.NavPointResult, error) {
+	if s.query != nil {
+		return s.query.Locate(point)
+	}
+	if len(s.Sources) == 0 || len(s.Graphs) == 0 {
+		return content.NavPointResult{}, nil
+	}
+	profileID := s.Graphs[0].AgentProfileID
+	graphs := make([]content.NavGraphTileDef, 0, len(s.Graphs))
+	for _, graph := range s.Graphs {
+		if graph.AgentProfileID == profileID {
+			graphs = append(graphs, graph)
+		}
+	}
+	return content.FindNavGraphLocation(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, point)
+}
+
 // IsSpanBlocked reports whether a runtime blocker removed a baked span.
 func (s RuntimeNavigationService) IsSpanBlocked(ref content.NavSpanRef) bool {
 	return s.query != nil && s.query.IsSpanBlocked(ref)

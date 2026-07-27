@@ -301,6 +301,9 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 		}
 		span := q.spans[ref.Tile][ref.Span]
 		distance := absFloat32(span.SupportHeight - point[1])
+		if distance > q.voxelResolution {
+			continue
+		}
 		if found && (distance > bestDistance || distance == bestDistance && !navSpanRefLess(ref, best.Ref)) {
 			continue
 		}
@@ -315,11 +318,11 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 	return best, tile, found
 }
 
-func (q *navGraphQuery) resolveNearby(point Vec3, maxHorizontalDistance float32) (navResolvedSpan, bool) {
+func (q *navGraphQuery) resolveNearby(point Vec3, maxDistance float32) (navResolvedSpan, bool) {
 	cellX := int(math.Floor(float64(point[0]) / float64(q.voxelResolution)))
 	cellZ := int(math.Floor(float64(point[2]) / float64(q.voxelResolution)))
-	radius := int(math.Ceil(float64(maxHorizontalDistance / q.voxelResolution)))
-	maxHorizontalDistanceSqr := maxHorizontalDistance * maxHorizontalDistance
+	radius := int(math.Ceil(float64(maxDistance / q.voxelResolution)))
+	maxDistanceSqr := maxDistance * maxDistance
 	bestDistance := float32(math.Inf(1))
 	var best navResolvedSpan
 	found := false
@@ -338,7 +341,8 @@ func (q *navGraphQuery) resolveNearby(point Vec3, maxHorizontalDistance float32)
 					navClampToSpanAxis(point[2], minZ, q.voxelResolution),
 				}
 				offsetX, offsetZ := point[0]-projected[0], point[2]-projected[2]
-				if offsetX*offsetX+offsetZ*offsetZ > maxHorizontalDistanceSqr {
+				offsetY := point[1] - projected[1]
+				if offsetX*offsetX+offsetY*offsetY+offsetZ*offsetZ > maxDistanceSqr {
 					continue
 				}
 				distance := navVec3Distance(point, projected)
@@ -356,6 +360,49 @@ func (q *navGraphQuery) resolveNearby(point Vec3, maxHorizontalDistance float32)
 		}
 	}
 	return best, found
+}
+
+func (q *NavGraphQuery) locate(point Vec3) (navResolvedSpan, TerrainChunkCoordDef, bool) {
+	result, tile, found := q.query.resolve(point)
+	if !found {
+		result, found = q.query.resolveNearby(point, q.query.voxelResolution)
+	}
+	return result, tile, found
+}
+
+func navPointResult(resolved navResolvedSpan) NavPointResult {
+	return NavPointResult{
+		Found: true, Ref: resolved.Ref, Region: resolved.Region.Region,
+		Point: resolved.Projected, Distance: 0,
+	}
+}
+
+// FindNavGraphLocation binds a world point to its canonical resident span.
+// Localization repairs at most one voxel of 3D drift.
+func FindNavGraphLocation(sources []NavSourceTileDef, graphs []NavGraphTileDef, chunkSize int, voxelResolution float32, point Vec3) (NavPointResult, error) {
+	query, err := NewNavGraphQuery(sources, graphs, chunkSize, voxelResolution)
+	if err != nil {
+		return NavPointResult{}, err
+	}
+	return query.Locate(point)
+}
+
+// Locate binds a world point to its canonical resident span. Route starts and
+// actor navigation state must use this instead of caller-specific projection.
+func (q *NavGraphQuery) Locate(point Vec3) (NavPointResult, error) {
+	if !validVec3(point) {
+		return NavPointResult{}, fmt.Errorf("navigation point must be finite")
+	}
+	if q == nil || q.query == nil {
+		return NavPointResult{}, fmt.Errorf("navigation graph query is required")
+	}
+	resolved, _, found := q.locate(point)
+	if !found {
+		return NavPointResult{}, nil
+	}
+	result := navPointResult(resolved)
+	result.Distance = navVec3Distance(point, resolved.Projected)
+	return result, nil
 }
 
 // FindNearestNavGraphPoint projects a world point onto the nearest supported

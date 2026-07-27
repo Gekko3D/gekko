@@ -15,9 +15,20 @@ type CharacterGroundProbeConfig struct {
 	DynamicCollisionQuery CharacterCollisionQuery
 }
 
-type CharacterGroundHit struct {
-	Y      float32
+const CharacterGroundContactCapacity = 5
+
+type CharacterGroundContact struct {
+	Point  mgl32.Vec3
 	Normal mgl32.Vec3
+	Entity EntityId
+}
+
+type CharacterGroundHit struct {
+	Point        mgl32.Vec3
+	Y            float32
+	Normal       mgl32.Vec3
+	Contacts     [CharacterGroundContactCapacity]CharacterGroundContact
+	ContactCount int
 }
 
 type CharacterGroundVisualConfig struct {
@@ -56,6 +67,8 @@ func CharacterGroundHitAtWithin(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg Cha
 	probeDistance := probeHeight + maxCharacterGroundFloat(maxSnapDown, groundProbe)
 	minNormalY := CharacterMinWalkableNormalY(cfg)
 	best := CharacterGroundHit{}
+	contacts := [CharacterGroundContactCapacity]CharacterGroundContact{}
+	contactCount := 0
 	found := false
 	for _, offset := range CharacterGroundProbeOffsets(radius) {
 		probeOrigin := basePos.Add(offset).Add(mgl32.Vec3{0, probeHeight, 0})
@@ -67,10 +80,26 @@ func CharacterGroundHitAtWithin(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg Cha
 		if y > basePos.Y()+maxSnapUp {
 			continue
 		}
+		contact := CharacterGroundContact{
+			Point:  mgl32.Vec3{probeOrigin.X(), y, probeOrigin.Z()},
+			Normal: hit.Normal,
+			Entity: hit.Entity,
+		}
+		if contactCount < len(contacts) {
+			contacts[contactCount] = contact
+			contactCount++
+		}
 		if !found || y > best.Y {
-			best = CharacterGroundHit{Y: y, Normal: hit.Normal}
+			best.Point, best.Y, best.Normal = contact.Point, y, hit.Normal
 			found = true
 		}
+	}
+	for index := 0; index < contactCount; index++ {
+		if float32(math.Abs(float64(contacts[index].Point.Y()-best.Y))) > 1e-4 {
+			continue
+		}
+		best.Contacts[best.ContactCount] = contacts[index]
+		best.ContactCount++
 	}
 	return best, found
 }
@@ -95,11 +124,11 @@ func CharacterAcceptsGroundY(baseY, floorY, maxSnapUp, maxSnapDown float32) bool
 func CharacterGroundProbeOffsets(radius float32) []mgl32.Vec3 {
 	r := maxCharacterGroundFloat(radius*0.5, 0.05)
 	return []mgl32.Vec3{
+		{0, 0, 0},
 		{r, 0, r},
 		{-r, 0, r},
 		{r, 0, -r},
 		{-r, 0, -r},
-		{0, 0, 0},
 	}
 }
 

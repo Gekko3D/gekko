@@ -273,18 +273,18 @@ func (q *navGraphQuery) findBlockerRoute(start, goal navResolvedSpan) NavRouteRe
 	}
 	for i, edge := range path.edges {
 		if edge.Traversal != nil {
-			waypoint := q.appendWaypointIndex(&result.Waypoints, edge.Traversal.Start)
-			q.appendWaypoint(&result.Waypoints, edge.Traversal.End)
+			waypoint := q.appendWaypointIndex(&result, edge.Traversal.Start, path.refs[i])
+			q.appendWaypoint(&result, edge.Traversal.End, path.refs[i+1])
 			if edgeSteps[i] >= 0 {
 				result.Steps[edgeSteps[i]].TraversalWaypoint = waypoint
 			}
 			continue
 		}
-		q.appendWaypoint(&result.Waypoints, q.spanCenter(path.refs[i+1]))
+		q.appendWaypoint(&result, q.spanCenter(path.refs[i+1]), path.refs[i+1])
 	}
-	q.appendWaypoint(&result.Waypoints, goal.Projected)
+	q.appendWaypoint(&result, goal.Projected, goal.Ref)
 	if navRouteWalkOnly(result.Steps) {
-		result.Waypoints = q.simplifyWaypoints(start.Projected, result.Waypoints)
+		q.simplifyWaypoints(start.Projected, &result)
 	}
 	return result
 }

@@ -535,7 +535,7 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 			local.Rotation = tr.Rotation
 			local.Scale = tr.Scale
 		}
-		moveMovingBrushRiders(cmd, previousCenter, previousHalfExtents, tr.Position.Sub(previousPosition))
+		moveMovingBrushRiders(cmd, eid, previousCenter, previousHalfExtents, tr.Position.Sub(previousPosition))
 		return true
 	})
 }

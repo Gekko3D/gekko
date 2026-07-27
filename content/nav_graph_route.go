@@ -44,19 +44,20 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		return NavRouteResult{}, fmt.Errorf("navigation graph query is required")
 	}
 	query := q.query
-	start, startTile, found := query.resolve(startPoint)
+	start, startTile, found := q.locate(startPoint)
 	if !found {
-		start, found = query.resolveNearby(startPoint, query.voxelResolution)
-		if !found {
-			return NavRouteResult{FailureReason: NavRouteStartUnsupported, FailureTile: startTile}, nil
-		}
+		return NavRouteResult{FailureReason: NavRouteStartUnsupported, FailureTile: startTile}, nil
 	}
 	goal, goalTile, found := query.resolve(goalPoint)
 	if !found {
 		return NavRouteResult{FailureReason: NavRouteGoalUnsupported, FailureTile: goalTile}, nil
 	}
 	if len(query.blocked) != 0 {
-		return query.findBlockerRoute(start, goal), nil
+		result := query.findBlockerRoute(start, goal)
+		if result.Found {
+			result.StartLocation, result.GoalLocation = navPointResult(start), navPointResult(goal)
+		}
+		return result, nil
 	}
 
 	var allowed map[TerrainChunkCoordDef]struct{}
@@ -81,7 +82,9 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		}
 		backing[i] = edge
 	}
-	result := NavRouteResult{Found: true}
+	result := NavRouteResult{
+		Found: true, StartLocation: navPointResult(start), GoalLocation: navPointResult(goal),
+	}
 	result.Steps = append(result.Steps, NavRouteStep{Tile: start.Region.Tile, Region: start.Region.Region, Target: start.Projected, TraversalWaypoint: -1})
 	for i := 1; i < len(regionRoute); i++ {
 		crossing := query.spanTransitionTarget(regionRoute[i-1].Node.Tile, backing[i-1])
@@ -95,6 +98,7 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 	}
 	if navRouteWalkOnly(result.Steps) && query.waypointLineVisible(start.Projected, goal.Projected) {
 		result.Waypoints = []Vec3{goal.Projected}
+		result.WaypointSpans = []NavSpanRef{goal.Ref}
 		return result, nil
 	}
 
@@ -103,19 +107,20 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		if !path.Found {
 			return NavRouteResult{}, fmt.Errorf("navigation region %s/%d does not preserve span reachability", TerrainChunkKey(start.Region.Tile), start.Region.Region)
 		}
-		query.appendSpanPath(&result.Waypoints, start.Ref.Tile, path.Spans, 1)
+		query.appendSpanPath(&result, start.Ref.Tile, path.Spans, 1)
 	} else {
 		startPath := query.findSpanRoute(start.Ref.Tile, start.Region.Region, start.Ref.Span, backing[0].From)
 		if !startPath.Found {
 			return NavRouteResult{}, fmt.Errorf("navigation start region %s/%d cannot reach route transition", TerrainChunkKey(start.Region.Tile), start.Region.Region)
 		}
-		query.appendSpanPath(&result.Waypoints, start.Ref.Tile, startPath.Spans, 1)
+		query.appendSpanPath(&result, start.Ref.Tile, startPath.Spans, 1)
 		for i, edge := range backing {
 			if edge.Traversal != nil {
-				result.Steps[i+1].TraversalWaypoint = query.appendWaypointIndex(&result.Waypoints, edge.Traversal.Start)
-				query.appendWaypoint(&result.Waypoints, edge.Traversal.End)
+				from := NavSpanRef{Tile: regionRoute[i].Node.Tile, Span: edge.From}
+				result.Steps[i+1].TraversalWaypoint = query.appendWaypointIndex(&result, edge.Traversal.Start, from)
+				query.appendWaypoint(&result, edge.Traversal.End, edge.To)
 			} else {
-				query.appendWaypoint(&result.Waypoints, query.spanTransitionTarget(regionRoute[i].Node.Tile, edge))
+				query.appendWaypoint(&result, query.spanTransitionTarget(regionRoute[i].Node.Tile, edge), edge.To)
 			}
 			if i+1 < len(backing) {
 				node := regionRoute[i+1].Node
@@ -123,7 +128,7 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 				if !path.Found {
 					return NavRouteResult{}, fmt.Errorf("navigation intermediate region %s/%d does not preserve span reachability", TerrainChunkKey(node.Tile), node.Region)
 				}
-				query.appendSpanPath(&result.Waypoints, node.Tile, path.Spans, 1)
+				query.appendSpanPath(&result, node.Tile, path.Spans, 1)
 			}
 		}
 		last := backing[len(backing)-1].To
@@ -131,11 +136,11 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		if !goalPath.Found {
 			return NavRouteResult{}, fmt.Errorf("navigation goal region %s/%d cannot reach goal span", TerrainChunkKey(goal.Region.Tile), goal.Region.Region)
 		}
-		query.appendSpanPath(&result.Waypoints, goal.Ref.Tile, goalPath.Spans, 1)
+		query.appendSpanPath(&result, goal.Ref.Tile, goalPath.Spans, 1)
 	}
-	query.appendWaypoint(&result.Waypoints, goal.Projected)
+	query.appendWaypoint(&result, goal.Projected, goal.Ref)
 	if navRouteWalkOnly(result.Steps) {
-		result.Waypoints = query.simplifyWaypoints(start.Projected, result.Waypoints)
+		query.simplifyWaypoints(start.Projected, &result)
 	}
 	return result, nil
 }
@@ -291,14 +296,15 @@ func (q *navGraphQuery) spanTransitionEntry(fromTile TerrainChunkCoordDef, edge 
 	return q.spanTransitionTarget(fromTile, edge)
 }
 
-func (q *navGraphQuery) appendSpanPath(dst *[]Vec3, tile TerrainChunkCoordDef, spans []uint32, skip int) {
+func (q *navGraphQuery) appendSpanPath(route *NavRouteResult, tile TerrainChunkCoordDef, spans []uint32, skip int) {
 	if skip >= len(spans) {
 		return
 	}
 	anchor := skip - 1
 	if anchor < 0 {
 		anchor = 0
-		q.appendWaypoint(dst, q.spanCenter(NavSpanRef{Tile: tile, Span: spans[anchor]}))
+		ref := NavSpanRef{Tile: tile, Span: spans[anchor]}
+		q.appendWaypoint(route, q.spanCenter(ref), ref)
 	}
 	region := q.spanRegions[tile][spans[anchor]]
 	cells := make(map[navSpanPathCell]struct{})
@@ -315,7 +321,8 @@ func (q *navGraphQuery) appendSpanPath(dst *[]Vec3, tile TerrainChunkCoordDef, s
 		for next+1 < len(spans) && navSpanPathVisible(cells, q.spans[tile][spans[anchor]], q.spans[tile][spans[next+1]]) {
 			next++
 		}
-		q.appendWaypoint(dst, q.spanCenter(NavSpanRef{Tile: tile, Span: spans[next]}))
+		ref := NavSpanRef{Tile: tile, Span: spans[next]}
+		q.appendWaypoint(route, q.spanCenter(ref), ref)
 		anchor = next
 	}
 }
@@ -371,15 +378,18 @@ func navSpanPathVisible(cells map[navSpanPathCell]struct{}, from, to NavSpanDef)
 	return true
 }
 
-func (*navGraphQuery) appendWaypoint(dst *[]Vec3, waypoint Vec3) {
-	if len(*dst) == 0 || (*dst)[len(*dst)-1] != waypoint {
-		*dst = append(*dst, waypoint)
+func (*navGraphQuery) appendWaypoint(route *NavRouteResult, waypoint Vec3, span NavSpanRef) {
+	if len(route.Waypoints) > 0 && route.Waypoints[len(route.Waypoints)-1] == waypoint {
+		route.WaypointSpans[len(route.WaypointSpans)-1] = span
+		return
 	}
+	route.Waypoints = append(route.Waypoints, waypoint)
+	route.WaypointSpans = append(route.WaypointSpans, span)
 }
 
-func (q *navGraphQuery) appendWaypointIndex(dst *[]Vec3, waypoint Vec3) int {
-	q.appendWaypoint(dst, waypoint)
-	return len(*dst) - 1
+func (q *navGraphQuery) appendWaypointIndex(route *NavRouteResult, waypoint Vec3, span NavSpanRef) int {
+	q.appendWaypoint(route, waypoint, span)
+	return len(route.Waypoints) - 1
 }
 
 func cloneNavTraversal(source *NavTraversalDef) *NavTraversalDef {
@@ -407,25 +417,27 @@ func navRouteWalkOnly(steps []NavRouteStep) bool {
 	return true
 }
 
-func (q *navGraphQuery) simplifyWaypoints(start Vec3, waypoints []Vec3) []Vec3 {
-	if len(waypoints) < 2 {
-		return waypoints
+func (q *navGraphQuery) simplifyWaypoints(start Vec3, route *NavRouteResult) {
+	if len(route.Waypoints) < 2 {
+		return
 	}
-	result := make([]Vec3, 0, len(waypoints))
+	waypoints := make([]Vec3, 0, len(route.Waypoints))
+	spans := make([]NavSpanRef, 0, len(route.WaypointSpans))
 	anchor := start
-	for first := 0; first < len(waypoints); {
+	for first := 0; first < len(route.Waypoints); {
 		next := first
-		for candidate := len(waypoints) - 1; candidate > first; candidate-- {
-			if q.waypointLineVisible(anchor, waypoints[candidate]) {
+		for candidate := len(route.Waypoints) - 1; candidate > first; candidate-- {
+			if q.waypointLineVisible(anchor, route.Waypoints[candidate]) {
 				next = candidate
 				break
 			}
 		}
-		result = append(result, waypoints[next])
-		anchor = waypoints[next]
+		waypoints = append(waypoints, route.Waypoints[next])
+		spans = append(spans, route.WaypointSpans[next])
+		anchor = route.Waypoints[next]
 		first = next + 1
 	}
-	return result
+	route.Waypoints, route.WaypointSpans = waypoints, spans
 }
 
 func (q *navGraphQuery) waypointLineVisible(from, to Vec3) bool {

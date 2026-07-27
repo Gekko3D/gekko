@@ -818,6 +818,12 @@ loads, then swaps slices and increments `NavigationRevision` once.
 runtime targeting does not reconstruct polygon IDs or filled navigation
 surfaces. Residency loads also prepare the immutable route-query indexes on the
 background loader; all requests for that navigation revision reuse them.
+`FindRoute` accepts endpoint support only within one navigation voxel
+vertically. A route start may additionally project within one voxel in 3D to
+absorb motor drift; an exact destination never binds to another stacked floor.
+Each returned waypoint has a same-index `WaypointSpans` entry. Route followers
+must use that span identity, not horizontal proximity alone, when advancing
+across stacked or stepped support.
 
 `StreamedLevelRuntimeConfig.NavigationManifestPath` may override the level's
 `navigation.manifest_path` for development runs. Actiongame exposes this as

@@ -500,7 +500,7 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 		if err != nil {
 			return 0, err
 		}
-		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		model, palette, voxelResolution, err := VoxelModelFromAsset(assets, asset, assetPath)
 		if err != nil {
 			return 0, err
 		}
@@ -558,16 +558,17 @@ func movingBrushExtentAlongDirection(halfExtents mgl32.Vec3, direction mgl32.Vec
 	return absf(d.X())*halfExtents.X() + absf(d.Y())*halfExtents.Y() + absf(d.Z())*halfExtents.Z()
 }
 
-func movingBrushVoxelModelFromAsset(assets *AssetServer, asset *content.AssetDef, assetPath string) (AssetId, AssetId, float32, error) {
+// VoxelModelFromAsset loads the first voxel part of a static authored asset.
+func VoxelModelFromAsset(assets *AssetServer, asset *content.AssetDef, assetPath string) (AssetId, AssetId, float32, error) {
 	if assets == nil || asset == nil {
 		return AssetId{}, AssetId{}, 0, nil
 	}
 	content.NormalizeAssetDef(asset)
 	if validation := content.ValidateAsset(asset, content.AssetValidationOptions{DocumentPath: assetPath}); validation.HasErrors() {
-		return AssetId{}, AssetId{}, 0, fmt.Errorf("moving brush asset validation failed: %s", validation.Error())
+		return AssetId{}, AssetId{}, 0, fmt.Errorf("asset validation failed: %s", validation.Error())
 	}
 	if len(asset.Parts) == 0 {
-		return AssetId{}, AssetId{}, 0, fmt.Errorf("moving brush asset %s has no parts", assetPath)
+		return AssetId{}, AssetId{}, 0, fmt.Errorf("asset %s has no parts", assetPath)
 	}
 	part := asset.Parts[0]
 	model, palette, err := modelAndPaletteFromSource(assets, asset, part, assetPath)
@@ -796,7 +797,7 @@ func spawnAuthoredLevelCharger(cmd *Commands, assets *AssetServer, loader *Runti
 		if err != nil {
 			return 0, err
 		}
-		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		model, palette, voxelResolution, err := VoxelModelFromAsset(assets, asset, assetPath)
 		if err != nil {
 			return 0, err
 		}
@@ -913,7 +914,7 @@ func spawnAuthoredLevelBreakable(cmd *Commands, assets *AssetServer, loader *Run
 		if err != nil {
 			return 0, err
 		}
-		model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+		model, palette, voxelResolution, err := VoxelModelFromAsset(assets, asset, assetPath)
 		if err != nil {
 			return 0, err
 		}
@@ -968,7 +969,7 @@ func spawnAuthoredLevelPickup(cmd *Commands, assets *AssetServer, loader *Runtim
 			return 0, err
 		}
 		if err == nil {
-			model, palette, voxelResolution, err := movingBrushVoxelModelFromAsset(assets, asset, assetPath)
+			model, palette, voxelResolution, err := VoxelModelFromAsset(assets, asset, assetPath)
 			if err != nil {
 				return 0, err
 			}

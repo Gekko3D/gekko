@@ -195,9 +195,13 @@ type NavRouteStep struct {
 }
 
 type NavRouteResult struct {
-	Found              bool                 `json:"found"`
-	Steps              []NavRouteStep       `json:"steps,omitempty"`
-	Waypoints          []Vec3               `json:"waypoints,omitempty"`
+	Found         bool           `json:"found"`
+	StartLocation NavPointResult `json:"start_location"`
+	GoalLocation  NavPointResult `json:"goal_location"`
+	Steps         []NavRouteStep `json:"steps,omitempty"`
+	Waypoints     []Vec3         `json:"waypoints,omitempty"`
+	// WaypointSpans has the same order and length as Waypoints.
+	WaypointSpans      []NavSpanRef         `json:"waypoint_spans,omitempty"`
 	FailureReason      string               `json:"failure_reason,omitempty"`
 	FailureTile        TerrainChunkCoordDef `json:"failure_tile"`
 	NavigationRevision uint64               `json:"navigation_revision"`

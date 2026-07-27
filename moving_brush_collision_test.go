@@ -43,7 +43,7 @@ func TestMovingBrushCollisionQueryBlocksAndSupportsCharacter(t *testing.T) {
 func TestMovingBrushCarriesSupportedPlayerAndNPC(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
-	cmd.AddEntity(
+	brush := cmd.AddEntity(
 		&TransformComponent{Position: mgl32.Vec3{}},
 		&MovingBrushComponent{
 			BoundsCenter:       mgl32.Vec3{},
@@ -86,6 +86,12 @@ func TestMovingBrushCarriesSupportedPlayerAndNPC(t *testing.T) {
 	ctrl := cmd.GetComponent(player, reflect.TypeOf(GroundedPlayerControllerComponent{})).(*GroundedPlayerControllerComponent)
 	if !ctrl.Grounded || ctrl.VerticalVelocity != 0 {
 		t.Fatalf("expected carried player to remain grounded, got %+v", *ctrl)
+	}
+	if !ctrl.HasGroundPoint || ctrl.GroundPoint != (mgl32.Vec3{0, 1.1, 0}) {
+		t.Fatalf("expected carried player support to move with brush, got %+v", *ctrl)
+	}
+	if ctrl.GroundContactCount != 1 || ctrl.GroundContacts[0].Entity != brush {
+		t.Fatalf("expected carried player to retain moving support identity, got %+v", *ctrl)
 	}
 }
 

@@ -76,22 +76,26 @@ type GroundedCharacterMotorComponent struct {
 	StepHeight        float32
 	GroundProbe       float32
 
-	MoveInput        mgl32.Vec2
-	LookInput        mgl32.Vec2
-	JumpQueued       bool
-	CrouchRequested  bool
-	SprintRequested  bool
-	SwimUpRequested  bool
-	Crouching        bool
-	Swimming         bool
-	WaterEntity      EntityId
-	VerticalVelocity float32
-	Grounded         bool
-	NeedsGroundSnap  bool
-	OnLadder         bool
-	LadderEntity     EntityId
-	LadderClimbSpeed float32
-	ActualVelocity   mgl32.Vec3
+	MoveInput          mgl32.Vec2
+	LookInput          mgl32.Vec2
+	JumpQueued         bool
+	CrouchRequested    bool
+	SprintRequested    bool
+	SwimUpRequested    bool
+	Crouching          bool
+	Swimming           bool
+	WaterEntity        EntityId
+	VerticalVelocity   float32
+	Grounded           bool
+	GroundPoint        mgl32.Vec3
+	HasGroundPoint     bool
+	GroundContacts     [CharacterGroundContactCapacity]CharacterGroundContact
+	GroundContactCount int
+	NeedsGroundSnap    bool
+	OnLadder           bool
+	LadderEntity       EntityId
+	LadderClimbSpeed   float32
+	ActualVelocity     mgl32.Vec3
 	// ScriptedMovement lets a gameplay action drive the controller transform
 	// through the shared collision helpers while this controller retains camera
 	// look ownership. It prevents input/gravity from competing with that move.
@@ -704,6 +708,7 @@ func resolveGroundedLadderMovement(cmd *Commands, voxRt *VoxelRtState, basePos *
 		ctrl.OnLadder = false
 		ctrl.LadderEntity = 0
 		ctrl.Grounded = false
+		groundedPlayerClearGroundSupport(ctrl)
 		ctrl.NeedsGroundSnap = false
 		ctrl.VerticalVelocity = defaulted(ctrl.JumpSpeed, 5.5) * 0.5
 		nextBase, blocked := tryGroundedVerticalMove(cmd, voxRt, *basePos, ctrl.VerticalVelocity*dt, ctrl, acceptEntity)
@@ -717,6 +722,7 @@ func resolveGroundedLadderMovement(cmd *Commands, voxRt *VoxelRtState, basePos *
 	*basePos, _ = tryGroundedVerticalMove(cmd, voxRt, *basePos, movement*defaulted(ctrl.LadderClimbSpeed, DefaultLadderClimbSpeed)*dt, ctrl, acceptEntity)
 	ctrl.VerticalVelocity = 0
 	ctrl.Grounded = false
+	groundedPlayerClearGroundSupport(ctrl)
 	ctrl.NeedsGroundSnap = false
 	ctrl.JumpQueued = false
 }
@@ -735,6 +741,7 @@ func resolveGroundedSwimMovement(cmd *Commands, voxRt *VoxelRtState, basePos *mg
 	*basePos, _ = tryGroundedVerticalMove(cmd, voxRt, *basePos, vertical*dt, ctrl, acceptEntity)
 	ctrl.VerticalVelocity = 0
 	ctrl.Grounded = false
+	groundedPlayerClearGroundSupport(ctrl)
 	ctrl.NeedsGroundSnap = false
 	ctrl.JumpQueued = false
 }
@@ -832,6 +839,7 @@ func resolveGroundedVertical(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.
 
 	if ctrl.Grounded && ctrl.JumpQueued {
 		ctrl.Grounded = false
+		groundedPlayerClearGroundSupport(ctrl)
 		ctrl.NeedsGroundSnap = false
 		ctrl.VerticalVelocity = defaulted(ctrl.JumpSpeed, 5.5)
 	}
@@ -841,9 +849,11 @@ func resolveGroundedVertical(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.
 		if hit, ok := groundedPlayerGroundHitWithin(cmd, voxRt, *basePos, ctrl, maxSnapUp, stepHeight+groundProbe, acceptEntity); ok && CharacterAcceptsGroundY(basePos.Y(), hit.Y, maxSnapUp, stepHeight+groundProbe) {
 			basePos[1] = hit.Y
 			ctrl.VerticalVelocity = 0
+			groundedPlayerSetGroundSupport(ctrl, hit)
 			return
 		}
 		ctrl.Grounded = false
+		groundedPlayerClearGroundSupport(ctrl)
 	}
 
 	if !ctrl.Grounded {
@@ -855,6 +865,9 @@ func resolveGroundedVertical(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.
 			if deltaY < 0 {
 				ctrl.Grounded = true
 				ctrl.NeedsGroundSnap = false
+				if hit, ok := groundedPlayerGroundHitWithin(cmd, voxRt, *basePos, ctrl, maxSnapUp, stepHeight+groundProbe, acceptEntity); ok {
+					groundedPlayerSetGroundSupport(ctrl, hit)
+				}
 				return
 			}
 		} else {
@@ -871,6 +884,7 @@ func resolveGroundedVertical(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.
 			basePos[1] = hit.Y
 			ctrl.VerticalVelocity = 0
 			ctrl.Grounded = true
+			groundedPlayerSetGroundSupport(ctrl, hit)
 			ctrl.NeedsGroundSnap = false
 		}
 		return
@@ -880,10 +894,28 @@ func resolveGroundedVertical(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.
 			basePos[1] = hit.Y
 			ctrl.VerticalVelocity = 0
 			ctrl.Grounded = true
+			groundedPlayerSetGroundSupport(ctrl, hit)
 			return
 		}
 	}
 	ctrl.Grounded = false
+	groundedPlayerClearGroundSupport(ctrl)
+}
+
+func groundedPlayerSetGroundSupport(ctrl *GroundedCharacterMotorComponent, hit CharacterGroundHit) {
+	if ctrl == nil {
+		return
+	}
+	ctrl.GroundPoint, ctrl.HasGroundPoint = hit.Point, true
+	ctrl.GroundContacts, ctrl.GroundContactCount = hit.Contacts, hit.ContactCount
+}
+
+func groundedPlayerClearGroundSupport(ctrl *GroundedCharacterMotorComponent) {
+	if ctrl == nil {
+		return
+	}
+	ctrl.HasGroundPoint = false
+	ctrl.GroundContactCount = 0
 }
 
 func groundedPlayerCharacterCollisionConfig(cmd *Commands, ctrl *GroundedPlayerControllerComponent) CharacterCollisionConfig {

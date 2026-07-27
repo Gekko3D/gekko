@@ -70,6 +70,10 @@ func TestFindNavGraphRoute(t *testing.T) {
 		if len(route.Waypoints) >= 4*chunkSize {
 			t.Fatalf("long route expanded every span: %d waypoints", len(route.Waypoints))
 		}
+		if len(route.WaypointSpans) != len(route.Waypoints) ||
+			route.WaypointSpans[len(route.WaypointSpans)-1] != route.GoalLocation.Ref {
+			t.Fatalf("waypoints lost canonical spans: %+v", route)
+		}
 	})
 
 	t.Run("stacked floor resolution", func(t *testing.T) {
@@ -197,6 +201,7 @@ func TestFindNavGraphRouteProjectsSmallStartDriftOnly(t *testing.T) {
 		Spans: []NavSpanDef{
 			{ID: 0, X: 0, Z: 0, SupportHeight: 0, CeilingHeight: 2, Headroom: 2, ClearanceRadius: 1},
 			{ID: 1, X: 1, Z: 0, SupportHeight: 0, CeilingHeight: 2, Headroom: 2, ClearanceRadius: 1},
+			{ID: 2, X: 2, Y: 4, Z: 0, SupportHeight: 4, CeilingHeight: 6, Headroom: 2, ClearanceRadius: 1},
 		},
 	}
 	built, err := BuildNavSpanGraph(source, profile, 1)
@@ -211,9 +216,22 @@ func TestFindNavGraphRouteProjectsSmallStartDriftOnly(t *testing.T) {
 	if err != nil || !route.Found || route.Steps[0].Target[0] < 0 {
 		t.Fatalf("small route-start drift was not projected: route=%+v err=%v", route, err)
 	}
+	location, err := query.Locate(Vec3{-0.05, 0, 0.5})
+	if err != nil || !location.Found || route.StartLocation.Ref != location.Ref ||
+		route.StartLocation.Point != location.Point || !route.GoalLocation.Found {
+		t.Fatalf("route endpoints did not preserve canonical locations: location=%+v route=%+v err=%v", location, route, err)
+	}
 	route, err = query.FindRoute(Vec3{0.5, 0, 0.5}, Vec3{-0.05, 0, 0.5})
 	if err != nil || route.Found || route.FailureReason != NavRouteGoalUnsupported {
 		t.Fatalf("unsupported goal was projected: route=%+v err=%v", route, err)
+	}
+	route, err = query.FindRoute(Vec3{2.05, 0, 0.5}, Vec3{0.5, 0, 0.5})
+	if err != nil || !route.Found || route.Steps[0].Target[1] != 0 {
+		t.Fatalf("nearby floor lost to distant stacked span: route=%+v err=%v", route, err)
+	}
+	route, err = query.FindRoute(Vec3{0.5, 0, 0.5}, Vec3{2.5, 0, 0.5})
+	if err != nil || route.Found || route.FailureReason != NavRouteGoalUnsupported {
+		t.Fatalf("distant stacked goal was accepted: route=%+v err=%v", route, err)
 	}
 }
 
@@ -246,6 +264,9 @@ func TestNavGraphBlockerOverlay(t *testing.T) {
 	}
 	if !detoured {
 		t.Fatalf("route crossed blocked span: %v", route.Waypoints)
+	}
+	if len(route.WaypointSpans) != len(route.Waypoints) {
+		t.Fatalf("blocker route lost waypoint spans: %+v", route)
 	}
 	if _, ok := query.ReachableSpans(startRef, []NavSpanRef{goalRef})[goalRef]; !ok {
 		t.Fatal("reachable span query did not follow blocker detour")

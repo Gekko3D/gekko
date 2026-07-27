@@ -246,6 +246,12 @@ func TestGroundedPlayerVerticalUsesFootprintGroundProbe(t *testing.T) {
 	if absf(basePos.Y()-1) > 0.002 {
 		t.Fatalf("expected player base to remain on floor top, got %v", basePos)
 	}
+	if !ctrl.HasGroundPoint || absf(ctrl.GroundPoint.X()-basePos.X()) < 0.01 {
+		t.Fatalf("expected motor to retain offset footprint support, base=%v support=%v found=%t", basePos, ctrl.GroundPoint, ctrl.HasGroundPoint)
+	}
+	if ctrl.GroundContactCount == 0 {
+		t.Fatalf("expected motor to publish footprint contacts: %+v", *ctrl)
+	}
 }
 
 func TestGroundedPlayerCrouchRestoresOnlyWhenClear(t *testing.T) {

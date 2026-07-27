@@ -258,6 +258,12 @@ For their data model, see:
     rises, `Ctrl` descends)
   - walking contact through the shared kinematic character helpers: slide,
     step-up, landing snap, and vertical sweep
+  - `GroundPoint` is the motor's selected physical support under the capsule
+    footprint; equal-height support prefers the centre probe
+  - `GroundContacts[:GroundContactCount]` publishes every live footprint probe
+    at the selected bearing height, including normal and support entity;
+    discrete-space consumers may tie-break among these contacts but must not
+    invent support from lower ray hits or stale route state
   - `ScriptedMovement` keeps controller camera/look ownership while a gameplay
     traversal action advances the capsule through those same collision helpers
 - Depends on:

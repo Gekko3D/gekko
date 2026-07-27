@@ -70,7 +70,7 @@ func rayAABBHit(origin, dir, minB, maxB mgl32.Vec3, maxDistance float32) (float3
 	return tMin, normal, true
 }
 
-func moveMovingBrushRiders(cmd *Commands, previousCenter, previousHalfExtents, delta mgl32.Vec3) {
+func moveMovingBrushRiders(cmd *Commands, brush EntityId, previousCenter, previousHalfExtents, delta mgl32.Vec3) {
 	if cmd == nil || delta.LenSqr() <= 1e-8 {
 		return
 	}
@@ -80,9 +80,14 @@ func moveMovingBrushRiders(cmd *Commands, previousCenter, previousHalfExtents, d
 		}
 		cam, _ := cmd.GetComponent(eid, reflect.TypeOf(CameraComponent{})).(*CameraComponent)
 		ctrl.Grounded = true
+		moved := tr.Position.Add(delta)
+		point := movingBrushSupportPoint(previousCenter.Add(delta), previousHalfExtents, moved)
+		hit := CharacterGroundHit{Point: point, Y: point.Y(), Normal: mgl32.Vec3{0, 1, 0}, ContactCount: 1}
+		hit.Contacts[0] = CharacterGroundContact{Point: point, Normal: hit.Normal, Entity: brush}
+		groundedPlayerSetGroundSupport(ctrl, hit)
 		ctrl.NeedsGroundSnap = false
 		ctrl.VerticalVelocity = 0
-		groundedPlayerApplyTransform(cmd, eid, cam, ctrl, tr.Position.Add(delta))
+		groundedPlayerApplyTransform(cmd, eid, cam, ctrl, moved)
 		return true
 	})
 	MakeQuery2[TransformComponent, NPCComponent](cmd).Without(GroundedCharacterMotorComponent{}).Map(func(eid EntityId, tr *TransformComponent, _ *NPCComponent) bool {
@@ -95,6 +100,14 @@ func moveMovingBrushRiders(cmd *Commands, previousCenter, previousHalfExtents, d
 		}
 		return true
 	})
+}
+
+func movingBrushSupportPoint(center, halfExtents, basePos mgl32.Vec3) mgl32.Vec3 {
+	return mgl32.Vec3{
+		maxf(center.X()-halfExtents.X(), minf(center.X()+halfExtents.X(), basePos.X())),
+		center.Y() + halfExtents.Y(),
+		maxf(center.Z()-halfExtents.Z(), minf(center.Z()+halfExtents.Z(), basePos.Z())),
+	}
 }
 
 func movingBrushSupportsBase(center, halfExtents, basePos mgl32.Vec3, radius float32) bool {
