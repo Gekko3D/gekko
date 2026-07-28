@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
@@ -202,6 +203,61 @@ func (s RuntimeNavigationService) Locate(point content.Vec3) (content.NavPointRe
 	return content.FindNavGraphLocation(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, point)
 }
 
+// IsRouteSupport reports whether live motor support remains inside the swept
+// active route segment or its capsule-scale recent tail. WaypointSpans are
+// steering checkpoint identities, not a complete list of traversed spans.
+func (s RuntimeNavigationService) IsRouteSupport(route content.NavRouteResult, waypoint int, support content.NavPointResult, radius, waypointTolerance float32) bool {
+	if !route.Found || !route.StartLocation.Found || !support.Found ||
+		waypoint < 0 || waypoint >= len(route.Waypoints) ||
+		route.NavigationRevision != 0 && route.NavigationRevision != s.NavigationRevision ||
+		!runtimeNavigationFinite(radius) || radius < 0 ||
+		!runtimeNavigationFinite(waypointTolerance) || waypointTolerance < 0 ||
+		!s.IsSpanActive(support.Ref) {
+		return false
+	}
+	tolerance := radius + waypointTolerance + max(s.VoxelResolution, 0.05)
+	backtrack := float32(0)
+	for segment := waypoint; segment >= 0; segment-- {
+		start := route.StartLocation.Point
+		if segment > 0 {
+			start = route.Waypoints[segment-1]
+		}
+		end := route.Waypoints[segment]
+		if runtimeNavigationPointSegmentDistance(support.Point, start, end) <= tolerance {
+			return true
+		}
+		if segment == 0 {
+			break
+		}
+		backtrack += runtimeNavigationVecDistance(start, end)
+		if backtrack > tolerance {
+			break
+		}
+	}
+	return false
+}
+
+func runtimeNavigationPointSegmentDistance(point, start, end content.Vec3) float32 {
+	segment := content.Vec3{end[0] - start[0], end[1] - start[1], end[2] - start[2]}
+	offset := content.Vec3{point[0] - start[0], point[1] - start[1], point[2] - start[2]}
+	lengthSquared := segment[0]*segment[0] + segment[1]*segment[1] + segment[2]*segment[2]
+	t := float32(0)
+	if lengthSquared > 0 {
+		t = max(float32(0), min(float32(1), (offset[0]*segment[0]+offset[1]*segment[1]+offset[2]*segment[2])/lengthSquared))
+	}
+	closest := content.Vec3{start[0] + segment[0]*t, start[1] + segment[1]*t, start[2] + segment[2]*t}
+	return runtimeNavigationVecDistance(point, closest)
+}
+
+func runtimeNavigationVecDistance(a, b content.Vec3) float32 {
+	x, y, z := a[0]-b[0], a[1]-b[1], a[2]-b[2]
+	return float32(math.Sqrt(float64(x*x + y*y + z*z)))
+}
+
+func runtimeNavigationFinite(value float32) bool {
+	return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0)
+}
+
 // IsSpanBlocked reports whether a runtime blocker removed a baked span.
 func (s RuntimeNavigationService) IsSpanBlocked(ref content.NavSpanRef) bool {
 	return s.query != nil && s.query.IsSpanBlocked(ref)
@@ -323,17 +379,25 @@ func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTile
 		return nil, nil
 	}
 	profileID := graphs[0].AgentProfileID
+	var profile *content.NavAgentProfileDef
+	for i := range profiles {
+		if profiles[i].ID == profileID {
+			profile = &profiles[i]
+			break
+		}
+	}
+	if len(profiles) != 0 && profile == nil {
+		return nil, fmt.Errorf("navigation runtime requires agent profile %q", profileID)
+	}
 	profileGraphs := make([]content.NavGraphTileDef, 0, len(graphs))
 	for _, graph := range graphs {
 		if graph.AgentProfileID == profileID {
-			profileGraphs = append(profileGraphs, navGraphWithRuntimeTraversals(graph, disabled, openDoors))
+			profileGraphs = append(profileGraphs, navGraphWithRuntimeTraversals(graph, disabled, openDoors, profile))
 		}
 	}
 	if len(blockers) != 0 {
-		for _, profile := range profiles {
-			if profile.ID == profileID {
-				return content.NewNavGraphQueryWithBlockers(sources, profileGraphs, chunkSize, voxelResolution, profile, sortedNavigationBlockers(blockers))
-			}
+		if profile != nil {
+			return content.NewNavGraphQueryWithBlockers(sources, profileGraphs, chunkSize, voxelResolution, *profile, sortedNavigationBlockers(blockers))
 		}
 		return nil, fmt.Errorf("navigation blocker overlay requires agent profile %q", profileID)
 	}
@@ -341,24 +405,26 @@ func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTile
 }
 
 func navGraphWithoutDisabledTraversals(graph content.NavGraphTileDef, disabled map[string]struct{}) content.NavGraphTileDef {
-	return navGraphWithRuntimeTraversals(graph, disabled, nil)
+	return navGraphWithRuntimeTraversals(graph, disabled, nil, nil)
 }
 
-func navGraphWithRuntimeTraversals(graph content.NavGraphTileDef, disabled, openDoors map[string]struct{}) content.NavGraphTileDef {
-	if len(disabled) == 0 && len(openDoors) == 0 {
+func navGraphWithRuntimeTraversals(graph content.NavGraphTileDef, disabled, openDoors map[string]struct{}, profile *content.NavAgentProfileDef) content.NavGraphTileDef {
+	if len(disabled) == 0 && len(openDoors) == 0 && profile == nil {
 		return graph
 	}
 	copy := graph
 	copy.SpanTransitions = make([]content.NavSpanTransitionDef, 0, len(graph.SpanTransitions))
 	for _, transition := range graph.SpanTransitions {
-		if !navTransitionDisabled(transition.Traversal, transition.Gate, disabled) {
+		if !navTransitionDisabled(transition.Traversal, transition.Gate, disabled) &&
+			(profile == nil || content.NavTraversalSupportedByProfile(*profile, transition.Kind, transition.Traversal)) {
 			transition.Gate, transition.Cost = runtimeDoorGate(transition.Gate, transition.Cost, openDoors)
 			copy.SpanTransitions = append(copy.SpanTransitions, transition)
 		}
 	}
 	copy.Transitions = make([]content.NavRegionTransitionDef, 0, len(graph.Transitions))
 	for _, transition := range graph.Transitions {
-		if navTransitionDisabled(transition.Traversal, transition.Gate, disabled) {
+		if navTransitionDisabled(transition.Traversal, transition.Gate, disabled) ||
+			profile != nil && !content.NavTraversalSupportedByProfile(*profile, transition.Kind, transition.Traversal) {
 			continue
 		}
 		transition.Gate, transition.Cost = runtimeDoorGate(transition.Gate, transition.Cost, openDoors)
@@ -380,7 +446,10 @@ func runtimeDoorGate(gate *content.NavTransitionGateDef, cost float32, openDoors
 
 func navTransitionDisabled(traversal *content.NavTraversalDef, gate *content.NavTransitionGateDef, disabled map[string]struct{}) bool {
 	if traversal != nil {
-		if _, found := disabled[traversal.ID]; found {
+		if _, found := disabled[traversal.StableLinkID()]; found {
+			return true
+		}
+		if _, found := disabled[traversal.Owner()]; found {
 			return true
 		}
 	}

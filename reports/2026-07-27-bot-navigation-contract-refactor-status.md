@@ -18,6 +18,13 @@ retrying the same failed destination after every plan restart.
 - Logs show an unblocked motor reaching the exact waypoint at
   `(16.25, -43.00, 14.35)`, followed by
   `waypoint_support_mismatch`.
+- The latest trace contains 251 such repair cycles with zero physical
+  `blocked` or stalled events. The route descends in 10 cm spans while the
+  capsule remains physically supported by the immediately preceding span.
+- A later trace exposed the inverse route shape: 27 false
+  `recovering_off_nav` transitions with 141 `blocked=false` samples. The
+  pathfinder had string-pulled a valid flat route to one distant waypoint, so
+  intermediate live spans were absent from `WaypointSpans`.
 - Equal-height ground selected the first corner probe because corners were
   sampled before the centre.
 - Generic plan cleanup also erased the retreat candidate set, so the next plan
@@ -38,6 +45,13 @@ retrying the same failed destination after every plan restart.
 - Declare navigation dependency on each plan step; remove executor allowlist.
 - Version navigation commands and retain one terminal result until the matching
   plan step consumes it.
+- Keep support validation in `RuntimeNavigationService`: accept only current
+  motor contacts inside the swept active steering segment or its
+  capsule-scale recent tail. `WaypointSpans` are checkpoint identities, not a
+  full corridor; require the exact goal span for arrival.
+- Reset the route-repair budget only after capsule-scale horizontal movement;
+  crossing a 10 cm waypoint is not meaningful recovery.
+- Stop steering stale route revisions before replanning.
 
 ## Alternatives rejected
 
@@ -55,6 +69,8 @@ retrying the same failed destination after every plan restart.
 - ActionGame regressions: a live centre contact completes a route when the
   selected corner belongs to the previous span; one-frame misses do not
   recover.
+- Per user constraint, no new unit tests were added. The obsolete test that
+  required exact intermediate waypoint support was removed.
 - Retreat regression: generic plan reset preserves attempted destination refs.
 - Plan regression: duplicate and stale navigation results are rejected; an
   active required-navigation step consumes its matching result after mutable
@@ -81,6 +97,10 @@ Replay the logged Crossfire stair route and confirm no
   only at span boundaries or mismatches.
 - Failed retreat destinations survive plan restarts.
 - Route localization tolerates two transient misses before bounded recovery.
+- Sparse string-pulled and dense steering segments share engine-owned
+  geometric support validation; exact support remains mandatory at the final
+  goal.
+- Repair allowance resets only after capsule-scale movement.
 - Generated and single-action plans share one explicit navigation-dependency
   contract.
 - Plans consume one matching terminal result instead of polling mutable

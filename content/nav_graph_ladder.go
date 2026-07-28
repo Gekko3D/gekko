@@ -95,14 +95,15 @@ func connectNavGraphLadders(sources []NavSourceTileDef, graphs []NavGraphTileDef
 }
 
 func appendNavLadderDirection(graph *NavGraphTileDef, ladderID string, from, to NavPointResult, width, headroom, clearance, cost float32) {
-	spanTraversal := &NavTraversalDef{ID: ladderID, Start: from.Point, End: to.Point}
+	linkID := navTraversalLinkID(NavTransitionLadder, ladderID, from.Ref, to.Ref)
+	spanTraversal := &NavTraversalDef{ID: ladderID, LinkID: linkID, OwnerID: ladderID, Start: from.Point, End: to.Point}
 	graph.SpanTransitions = append(graph.SpanTransitions, NavSpanTransitionDef{
 		From: from.Ref.Span, To: to.Ref, Kind: NavTransitionLadder,
 		StepDelta: to.Point[1] - from.Point[1], Width: width,
 		MinHeadroom: headroom, MinClearance: clearance, Cost: cost,
 		RequiresFlags: []string{NavCapabilityClimbLadder}, Traversal: spanTraversal,
 	})
-	regionTraversal := &NavTraversalDef{ID: ladderID, Start: from.Point, End: to.Point}
+	regionTraversal := &NavTraversalDef{ID: ladderID, LinkID: linkID, OwnerID: ladderID, Start: from.Point, End: to.Point}
 	graph.Transitions = append(graph.Transitions, NavRegionTransitionDef{
 		ID: uint32(len(graph.Transitions)), FromRegion: from.Region,
 		ToTile: to.Ref.Tile, ToRegion: to.Region, Kind: NavTransitionLadder,

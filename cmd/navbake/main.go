@@ -12,7 +12,7 @@ import (
 
 func main() {
 	var levelPath, worldPath, outputPath, profileID, capabilities string
-	var radius, height, stepHeight, maxSlope float64
+	var radius, height, stepHeight, maxSlope, maxDrop, maxJump, maxJumpRise, maxVault, maxMantle, jumpSpeed, gravity float64
 	flag.StringVar(&levelPath, "level", "", "input .gklevel with authored traversal")
 	flag.StringVar(&worldPath, "world", "", "input .gkworld manifest")
 	flag.StringVar(&outputPath, "out", "", "output .gknav manifest")
@@ -21,13 +21,23 @@ func main() {
 	flag.Float64Var(&height, "height", 1.8, "agent height")
 	flag.Float64Var(&stepHeight, "step-height", 0.5, "agent step height")
 	flag.Float64Var(&maxSlope, "max-slope", 50, "agent maximum slope in degrees")
-	flag.StringVar(&capabilities, "capabilities", content.NavCapabilityClimbLadder, "comma-separated traversal capabilities")
+	flag.Float64Var(&maxDrop, "max-drop-height", 3, "agent maximum safe drop")
+	flag.Float64Var(&maxJump, "max-jump-distance", 3, "agent maximum jump distance")
+	flag.Float64Var(&maxJumpRise, "max-jump-rise", 1, "agent maximum jump rise")
+	flag.Float64Var(&maxVault, "max-vault-height", 0.8, "agent maximum vault height")
+	flag.Float64Var(&maxMantle, "max-mantle-height", 1.4, "agent maximum mantle height")
+	flag.Float64Var(&jumpSpeed, "jump-speed", 5.5, "agent jump launch speed")
+	flag.Float64Var(&gravity, "gravity", 18, "agent gravity")
+	flag.StringVar(&capabilities, "capabilities", strings.Join([]string{content.NavCapabilityClimbLadder, content.NavCapabilityJump, content.NavCapabilityMantle, content.NavCapabilityVault}, ","), "comma-separated traversal capabilities")
 	flag.Parse()
 	if outputPath == "" || (levelPath == "") == (worldPath == "") {
 		fatalf("-out and exactly one of -level or -world are required")
 	}
 	profile := content.NavAgentProfileDef{
 		ID: profileID, Radius: float32(radius), Height: float32(height), StepHeight: float32(stepHeight), MaxSlopeDegrees: float32(maxSlope),
+		MaxDropHeight: float32(maxDrop), MaxJumpDistance: float32(maxJump), MaxJumpRise: float32(maxJumpRise),
+		MaxVaultHeight: float32(maxVault), MaxMantleHeight: float32(maxMantle),
+		JumpSpeed: float32(jumpSpeed), Gravity: float32(gravity),
 		Capabilities: splitCapabilities(capabilities),
 	}
 	var bake content.NavGraphBakeResult

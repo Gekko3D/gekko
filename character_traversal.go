@@ -2,9 +2,153 @@ package gekko
 
 import "github.com/go-gl/mathgl/mgl32"
 
-// CharacterTraversalConfig describes a validated climb over an obstacle. The
-// caller owns input, action policy, and presentation; this helper owns only
-// the collision queries shared by character controllers.
+type CharacterMotionMode string
+
+const (
+	CharacterMotionNormal    CharacterMotionMode = "normal"
+	CharacterMotionBallistic CharacterMotionMode = "ballistic"
+	CharacterMotionLadder    CharacterMotionMode = "ladder"
+	CharacterMotionKinematic CharacterMotionMode = "kinematic"
+)
+
+type CharacterTraversalKind string
+
+const (
+	CharacterTraversalDrop   CharacterTraversalKind = "drop"
+	CharacterTraversalJump   CharacterTraversalKind = "jump"
+	CharacterTraversalLadder CharacterTraversalKind = "ladder"
+	CharacterTraversalVault  CharacterTraversalKind = "vault"
+	CharacterTraversalMantle CharacterTraversalKind = "mantle"
+)
+
+type CharacterTraversalPhase string
+
+const (
+	CharacterTraversalPhaseAlign    CharacterTraversalPhase = "align"
+	CharacterTraversalPhaseTraverse CharacterTraversalPhase = "traverse"
+	CharacterTraversalPhaseLift     CharacterTraversalPhase = "lift"
+	CharacterTraversalPhaseCross    CharacterTraversalPhase = "cross"
+	CharacterTraversalPhaseLand     CharacterTraversalPhase = "land"
+	CharacterTraversalPhaseClimb    CharacterTraversalPhase = "climb"
+	CharacterTraversalPhaseDismount CharacterTraversalPhase = "dismount"
+	CharacterTraversalPhaseSettle   CharacterTraversalPhase = "settle"
+)
+
+type CharacterTraversalStatus string
+
+const (
+	CharacterTraversalInactive  CharacterTraversalStatus = ""
+	CharacterTraversalActive    CharacterTraversalStatus = "active"
+	CharacterTraversalSucceeded CharacterTraversalStatus = "succeeded"
+	CharacterTraversalFailed    CharacterTraversalStatus = "failed"
+)
+
+type CharacterTraversalRequest struct {
+	RequestID    uint64
+	LinkID       string
+	OwnerID      string
+	Kind         CharacterTraversalKind
+	Start        mgl32.Vec3
+	Entry        mgl32.Vec3
+	Apex         mgl32.Vec3
+	End          mgl32.Vec3
+	Speed        float32
+	Duration     float32
+	Acceptance   float32
+	LaunchSpeed  float32
+	MaxDuration  float32
+	LadderEntity EntityId
+	Manual       bool
+}
+
+// CharacterTraversalComponent is embedded by the grounded motor. It is the
+// sole owner of special movement and retains one terminal result until the
+// next request.
+type CharacterTraversalComponent struct {
+	Request        CharacterTraversalRequest
+	Sequence       uint64
+	Phase          CharacterTraversalPhase
+	Status         CharacterTraversalStatus
+	Reason         string
+	PendingReason  string
+	Elapsed        float32
+	PhaseElapsed   float32
+	BlockedElapsed float32
+	Committed      bool
+	WasAirborne    bool
+	Blocked        bool
+}
+
+func (traversal CharacterTraversalComponent) Running() bool {
+	return traversal.Status == CharacterTraversalActive
+}
+
+func CharacterBeginTraversal(ctrl *GroundedCharacterMotorComponent, request CharacterTraversalRequest) bool {
+	if ctrl == nil || ctrl.Traversal.Running() {
+		return false
+	}
+	switch request.Kind {
+	case CharacterTraversalDrop, CharacterTraversalJump, CharacterTraversalLadder, CharacterTraversalVault, CharacterTraversalMantle:
+	default:
+		return false
+	}
+	if request.Kind == CharacterTraversalJump && !ctrl.Grounded {
+		return false
+	}
+	sequence := ctrl.Traversal.Sequence + 1
+	if sequence == 0 {
+		sequence++
+	}
+	if request.RequestID == 0 {
+		request.RequestID = sequence
+	}
+	if request.Acceptance <= 0 {
+		request.Acceptance = maxCharacterCollisionFloat(ctrl.Radius, 0.25)
+		if request.Kind == CharacterTraversalLadder {
+			request.Acceptance = 0.01
+		}
+	}
+	if request.Speed <= 0 {
+		request.Speed = defaultCharacterCollisionFloat(ctrl.Speed, 1.8)
+	}
+	if request.MaxDuration <= 0 && !request.Manual {
+		request.MaxDuration = maxCharacterCollisionFloat(8, request.End.Sub(request.Start).Len()/request.Speed*3+2)
+	}
+	if request.Kind == CharacterTraversalJump && request.LaunchSpeed <= 0 {
+		request.LaunchSpeed = defaultCharacterCollisionFloat(ctrl.JumpSpeed, 5.5)
+	}
+	ctrl.Traversal = CharacterTraversalComponent{
+		Request: request, Sequence: sequence, Phase: CharacterTraversalPhaseAlign,
+		Status: CharacterTraversalActive,
+	}
+	switch request.Kind {
+	case CharacterTraversalDrop, CharacterTraversalJump:
+		ctrl.MotionMode = CharacterMotionBallistic
+	case CharacterTraversalLadder:
+		ctrl.MotionMode = CharacterMotionLadder
+	default:
+		ctrl.MotionMode = CharacterMotionKinematic
+	}
+	return true
+}
+
+// CharacterAbortTraversal is reserved for hard ownership changes such as
+// death, teleport, or pausing the actor.
+func CharacterAbortTraversal(ctrl *GroundedCharacterMotorComponent, reason string) {
+	if ctrl == nil || !ctrl.Traversal.Running() {
+		return
+	}
+	if reason == "" {
+		reason = "aborted"
+	}
+	ctrl.Traversal.Status = CharacterTraversalFailed
+	ctrl.Traversal.Reason = reason
+	ctrl.MotionMode = CharacterMotionNormal
+	ctrl.OnLadder = false
+	ctrl.LadderEntity = 0
+}
+
+// CharacterTraversalConfig describes a validated climb over an obstacle.
 type CharacterTraversalConfig struct {
 	CollisionConfig CharacterCollisionConfig
 	GroundConfig    CharacterGroundProbeConfig
@@ -22,8 +166,7 @@ type CharacterTraversalTarget struct {
 }
 
 // CharacterFindTraversalTarget finds a walkable, standing-clear landing past
-// a blocking obstacle. It does not move the character. Callers must advance
-// through Start -> Lift -> Landing with the normal collision helpers.
+// a blocking obstacle. CharacterBeginTraversal executes the returned target.
 func CharacterFindTraversalTarget(voxRt *VoxelRtState, start, forward mgl32.Vec3, opts CharacterTraversalConfig, acceptEntity func(EntityId, bool) bool) (CharacterTraversalTarget, bool) {
 	if !characterCollisionAvailable(voxRt, opts.CollisionConfig.DynamicCollisionQuery) {
 		return CharacterTraversalTarget{}, false

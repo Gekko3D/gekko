@@ -1,5 +1,10 @@
 package content
 
+import (
+	"fmt"
+	"math"
+)
+
 const (
 	CurrentNavGraphManifestSchemaVersion = 3
 	CurrentNavSourceTileSchemaVersion    = 2
@@ -13,12 +18,18 @@ const (
 	NavTransitionStep   = "step"
 	NavTransitionStair  = "stair"
 	NavTransitionDrop   = "drop"
+	NavTransitionJump   = "jump"
 	NavTransitionLadder = "ladder"
+	NavTransitionVault  = "vault"
+	NavTransitionMantle = "mantle"
 	NavGateDoor         = "door"
 
 	NavigationRoleDoor = "door"
 
 	NavCapabilityClimbLadder = "climb_ladder"
+	NavCapabilityJump        = "jump"
+	NavCapabilityVault       = "vault"
+	NavCapabilityMantle      = "mantle"
 )
 
 type NavAgentProfileDef struct {
@@ -27,6 +38,13 @@ type NavAgentProfileDef struct {
 	Height          float32  `json:"height"`
 	StepHeight      float32  `json:"step_height"`
 	MaxSlopeDegrees float32  `json:"max_slope_degrees"`
+	MaxDropHeight   float32  `json:"max_drop_height,omitempty"`
+	MaxJumpDistance float32  `json:"max_jump_distance,omitempty"`
+	MaxJumpRise     float32  `json:"max_jump_rise,omitempty"`
+	MaxVaultHeight  float32  `json:"max_vault_height,omitempty"`
+	MaxMantleHeight float32  `json:"max_mantle_height,omitempty"`
+	JumpSpeed       float32  `json:"jump_speed,omitempty"`
+	Gravity         float32  `json:"gravity,omitempty"`
 	Capabilities    []string `json:"capabilities,omitempty"`
 }
 
@@ -51,9 +69,72 @@ type NavSpanRef struct {
 // NavTraversalDef binds special movement to its authored owner and gives
 // locomotion explicit world-space entry and exit points.
 type NavTraversalDef struct {
-	ID    string `json:"id"`
-	Start Vec3   `json:"start"`
-	End   Vec3   `json:"end"`
+	// ID remains the legacy owner ID for old graph bundles.
+	ID       string  `json:"id,omitempty"`
+	LinkID   string  `json:"link_id,omitempty"`
+	OwnerID  string  `json:"owner_id,omitempty"`
+	Start    Vec3    `json:"start"`
+	Apex     Vec3    `json:"apex,omitempty"`
+	End      Vec3    `json:"end"`
+	Duration float32 `json:"duration,omitempty"`
+}
+
+func (traversal NavTraversalDef) StableLinkID() string {
+	if traversal.LinkID != "" {
+		return traversal.LinkID
+	}
+	return traversal.ID
+}
+
+func (traversal NavTraversalDef) Owner() string {
+	if traversal.OwnerID != "" {
+		return traversal.OwnerID
+	}
+	return traversal.ID
+}
+
+func navTraversalLinkID(kind, owner string, from, to NavSpanRef) string {
+	return fmt.Sprintf("%s:%s:%s/%d>%s/%d", kind, owner, TerrainChunkKey(from.Tile), from.Span, TerrainChunkKey(to.Tile), to.Span)
+}
+
+// NavTraversalSupportedByProfile is the shared physical eligibility check
+// used by bakers, validators, and runtime overlays.
+func NavTraversalSupportedByProfile(profile NavAgentProfileDef, kind string, traversal *NavTraversalDef) bool {
+	if traversal == nil {
+		return !navTransitionRequiresTraversal(kind)
+	}
+	const epsilon = float32(1e-4)
+	rise := traversal.End[1] - traversal.Start[1]
+	horizontal := float32(math.Hypot(
+		float64(traversal.End[0]-traversal.Start[0]),
+		float64(traversal.End[2]-traversal.Start[2]),
+	))
+	switch kind {
+	case NavTransitionDrop:
+		drop := -rise
+		return drop > epsilon && (profile.MaxDropHeight <= 0 || drop <= profile.MaxDropHeight+epsilon)
+	case NavTransitionJump:
+		if !navProfileHasCapability(profile, NavCapabilityJump) ||
+			profile.MaxJumpDistance > 0 && horizontal > profile.MaxJumpDistance+epsilon ||
+			profile.MaxJumpRise > 0 && rise > profile.MaxJumpRise+epsilon ||
+			profile.MaxDropHeight > 0 && -rise > profile.MaxDropHeight+epsilon {
+			return false
+		}
+		return profile.JumpSpeed <= 0 || profile.Gravity <= 0 ||
+			rise <= profile.JumpSpeed*profile.JumpSpeed/(2*profile.Gravity)+epsilon
+	case NavTransitionVault, NavTransitionMantle:
+		capability, limit := NavCapabilityVault, profile.MaxVaultHeight
+		if kind == NavTransitionMantle {
+			capability, limit = NavCapabilityMantle, profile.MaxMantleHeight
+		}
+		if !navProfileHasCapability(profile, capability) || traversal.Apex == (Vec3{}) {
+			return false
+		}
+		height := max(float32(0), traversal.End[1]-traversal.Start[1], traversal.Apex[1]-traversal.Start[1])
+		return limit <= 0 || height <= limit+epsilon
+	default:
+		return true
+	}
 }
 
 // NavTransitionGateDef binds a movement transition to gameplay state that

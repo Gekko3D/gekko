@@ -44,6 +44,7 @@ const DefaultMaxEmissiveSurfaceLights = 64
 const DefaultHL1LadderClimbSpeed = 200 * HammerUnitMeters
 
 const minEmissiveSurfaceLightVoxels = 8
+const emissiveSurfaceLightConeAngle = 150
 
 type GeneratedLevelResult struct {
 	LevelPath          string
@@ -2277,6 +2278,7 @@ type hl1EmissiveSurfaceCluster struct {
 	min         [3]int
 	max         [3]int
 	sum         [3]int64
+	normalSum   [3]int64
 	colorSum    [3]float64
 	emissiveSum float64
 }
@@ -2292,6 +2294,10 @@ func buildHL1EmissiveSurfaceLights(opts ImportOptions, voxelized VoxelizeResult,
 	materials := emissiveMaterialLookup(voxelized.Materials)
 	if len(materials) == 0 {
 		return nil
+	}
+	occupied := make(map[[3]int]struct{}, len(voxelized.Voxels))
+	for _, voxel := range voxelized.Voxels {
+		occupied[[3]int{voxel.X, voxel.Y, voxel.Z}] = struct{}{}
 	}
 	pending := make(map[[3]int]hl1EmissiveSurfaceVoxel)
 	for _, voxel := range voxelized.Voxels {
@@ -2338,7 +2344,7 @@ func buildHL1EmissiveSurfaceLights(opts ImportOptions, voxelized VoxelizeResult,
 				continue
 			}
 			delete(pending, key)
-			cluster.add(voxel)
+			cluster.add(voxel, occupied)
 			for _, neighbor := range sixNeighborKeys(key) {
 				if _, ok := pending[neighbor]; ok {
 					queue = append(queue, neighbor)
@@ -2379,7 +2385,7 @@ func emissiveMaterialLookup(materials []importcommon.Material) map[uint8]importc
 	return out
 }
 
-func (cluster *hl1EmissiveSurfaceCluster) add(voxel hl1EmissiveSurfaceVoxel) {
+func (cluster *hl1EmissiveSurfaceCluster) add(voxel hl1EmissiveSurfaceVoxel, occupied map[[3]int]struct{}) {
 	if cluster.voxels == 0 {
 		cluster.min = voxel.key
 		cluster.max = voxel.key
@@ -2389,6 +2395,15 @@ func (cluster *hl1EmissiveSurfaceCluster) add(voxel hl1EmissiveSurfaceVoxel) {
 		cluster.min[axis] = min(cluster.min[axis], voxel.key[axis])
 		cluster.max[axis] = max(cluster.max[axis], voxel.key[axis])
 		cluster.sum[axis] += int64(voxel.key[axis])
+		neighbor := voxel.key
+		neighbor[axis]--
+		if _, ok := occupied[neighbor]; !ok {
+			cluster.normalSum[axis]--
+		}
+		neighbor[axis] += 2
+		if _, ok := occupied[neighbor]; !ok {
+			cluster.normalSum[axis]++
+		}
 	}
 	cluster.colorSum[0] += float64(voxel.color[0])
 	cluster.colorSum[1] += float64(voxel.color[1])
@@ -2413,19 +2428,34 @@ func (cluster hl1EmissiveSurfaceCluster) toLight(resolution float32, index int) 
 	intensity := minFloat32(3.5, maxFloat32(0.8, avgEmission*0.45+float32(math.Sqrt(float64(count)))*0.025))
 	rangeMeters := minFloat32(14, maxFloat32(4, float32(maxExtent)*resolution*3.0+2.5))
 	sourceRadius := minFloat32(0.8, maxFloat32(0.18, float32(maxExtent)*resolution*0.18))
+	lightType := content.LevelLightTypePoint
+	rotation := content.Quat{0, 0, 0, 1}
+	coneAngle := float32(0)
+	castsShadows := false
+	direction := mgl32.Vec3{float32(cluster.normalSum[0]), float32(cluster.normalSum[1]), float32(cluster.normalSum[2])}
+	if direction.LenSqr() > 1e-8 {
+		direction = direction.Normalize()
+		position := nudgeHL1LightPosition(importcommon.Vec3{X: center[0], Y: center[1], Z: center[2]}, direction, "light_spot")
+		center = content.Vec3{position.X(), position.Y(), position.Z()}
+		lightType = content.LevelLightTypeSpot
+		rotation = quatDefFromMGL(spotRotationFromDirection(direction))
+		coneAngle = emissiveSurfaceLightConeAngle
+		castsShadows = true
+	}
 	return content.LevelLightDef{
 		ID:   fmt.Sprintf("hl1_emissive_light_%d", index),
 		Name: "hl1_emissive_surface_light",
 		Transform: content.LevelTransformDef{
 			Position: center,
-			Rotation: content.Quat{0, 0, 0, 1},
+			Rotation: rotation,
 			Scale:    content.Vec3{1, 1, 1},
 		},
-		Type:         content.LevelLightTypePoint,
+		Type:         lightType,
 		Color:        color,
 		Intensity:    intensity,
 		Range:        rangeMeters,
-		CastsShadows: false,
+		ConeAngle:    coneAngle,
+		CastsShadows: castsShadows,
 		SourceRadius: sourceRadius,
 		SourceTag:    "hl1:emissive_surface",
 		Tags:         []string{"source:hl1", "source:emissive_surface", "synthetic:surface_light"},

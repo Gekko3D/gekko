@@ -251,8 +251,12 @@ For their data model, see:
 - Owns:
   - actor-neutral movement from `GroundedCharacterIntentComponent`; a motor
     entity does not require or acquire a `CameraComponent`
-  - ladder movement requires volume overlap unless authored traversal sets
-    `ForceLadder`; ordinary forward/back input never forces vertical movement
+  - one embedded `CharacterTraversalComponent` owns drop, jump, ladder,
+    mantle, and vault movement until physical settlement
+  - exclusive `MotionMode` values (`normal`, `ballistic`, `ladder`,
+    `kinematic`) prevent movement systems from competing
+  - ladder overlap publishes availability; climb input or an authored ladder
+    traversal must explicitly enter ladder mode
   - local first-person input behavior, including held `Ctrl` crouch
     (clearance-checked standing recovery) and water-volume swimming (`Space`
     rises, `Ctrl` descends)
@@ -264,8 +268,9 @@ For their data model, see:
     at the selected bearing height, including normal and support entity;
     discrete-space consumers may tie-break among these contacts but must not
     invent support from lower ray hits or stale route state
-  - `ScriptedMovement` keeps controller camera/look ownership while a gameplay
-    traversal action advances the capsule through those same collision helpers
+  - traversal results persist as `succeeded` or `failed` with a reason until
+    the next request; committed traversal failures keep gravity active until
+    grounded
 - Depends on:
   - `*Time`
   - `*VoxelRtState`

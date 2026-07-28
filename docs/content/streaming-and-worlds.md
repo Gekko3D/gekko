@@ -822,8 +822,11 @@ background loader; all requests for that navigation revision reuse them.
 vertically. A route start may additionally project within one voxel in 3D to
 absorb motor drift; an exact destination never binds to another stacked floor.
 Each returned waypoint has a same-index `WaypointSpans` entry. Route followers
-must use that span identity, not horizontal proximity alone, when advancing
-across stacked or stepped support.
+must treat these as checkpoint identities, not as every span crossed by a
+string-pulled route. `RuntimeNavigationService.IsRouteSupport` validates live
+motor support against the swept active steering segment and its
+capsule-scale recent tail. Final arrival still requires the exact goal span,
+which prevents horizontal proximity from binding a stacked surface.
 
 `StreamedLevelRuntimeConfig.NavigationManifestPath` may override the level's
 `navigation.manifest_path` for development runs. Actiongame exposes this as

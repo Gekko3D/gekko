@@ -82,6 +82,10 @@ func ValidateNavGraphBake(bake *NavGraphBakeResult) NavGraphValidationResult {
 		return result
 	}
 	appendNavGraphValidation(&result, ValidateNavGraphManifest(&bake.Manifest))
+	profiles := make(map[string]NavAgentProfileDef, len(bake.Manifest.AgentProfiles))
+	for _, profile := range bake.Manifest.AgentProfiles {
+		profiles[profile.ID] = profile
+	}
 
 	sources := make(map[TerrainChunkCoordDef]NavSourceTileDef, len(bake.SourceTiles))
 	for _, source := range bake.SourceTiles {
@@ -134,16 +138,23 @@ func ValidateNavGraphBake(bake *NavGraphBakeResult) NavGraphValidationResult {
 		}
 	}
 	for key, graph := range graphs {
-		for _, transition := range graph.SpanTransitions {
+		profile, hasProfile := profiles[key.Profile]
+		for i, transition := range graph.SpanTransitions {
 			target, exists := graphs[graphKey{Coord: transition.To.Tile, Profile: key.Profile}]
 			if !exists || !navGraphContainsSpan(target, transition.To.Span) {
 				result.addError("missing_remote_span", fmt.Sprintf("navigation span transition from %s/%d references missing %s/%d for %q", TerrainChunkKey(key.Coord), transition.From, TerrainChunkKey(transition.To.Tile), transition.To.Span, key.Profile))
 			}
+			if hasProfile && !NavTraversalSupportedByProfile(profile, transition.Kind, transition.Traversal) {
+				result.addError("profile_traversal_unsupported", fmt.Sprintf("navigation span transition %s/%d[%d] exceeds agent profile %q", TerrainChunkKey(key.Coord), transition.From, i, key.Profile))
+			}
 		}
-		for _, transition := range graph.Transitions {
+		for i, transition := range graph.Transitions {
 			target, exists := graphs[graphKey{Coord: transition.ToTile, Profile: key.Profile}]
 			if !exists || int(transition.ToRegion) >= len(target.Regions) {
 				result.addError("missing_remote_region", fmt.Sprintf("navigation region transition from %s/%d references missing %s/%d for %q", TerrainChunkKey(key.Coord), transition.FromRegion, TerrainChunkKey(transition.ToTile), transition.ToRegion, key.Profile))
+			}
+			if hasProfile && !NavTraversalSupportedByProfile(profile, transition.Kind, transition.Traversal) {
+				result.addError("profile_traversal_unsupported", fmt.Sprintf("navigation region transition %s/%d[%d] exceeds agent profile %q", TerrainChunkKey(key.Coord), transition.FromRegion, i, key.Profile))
 			}
 		}
 	}

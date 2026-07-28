@@ -7,6 +7,7 @@ import (
 
 	"github.com/gekko3d/gekko/content"
 	importcommon "github.com/gekko3d/gekko/importers/common"
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 func TestMovingBrushSurfaceSemanticsUseDoorFallbackAndTextureKind(t *testing.T) {
@@ -303,6 +304,9 @@ func TestBuildGeneratedLevelCanEmitEmissiveSurfaceLights(t *testing.T) {
 		voxelized.Voxels = append(voxelized.Voxels, importcommon.Voxel{
 			X: x, Y: 10, Z: 20, Palette: palette, MaterialID: int(palette), SolidKind: "emissive",
 		})
+		voxelized.Voxels = append(voxelized.Voxels, importcommon.Voxel{
+			X: x, Y: 10, Z: 19, Palette: 1, MaterialID: 1, SolidKind: "structural",
+		})
 	}
 	level, err := BuildGeneratedLevel(opts, summary, filepath.Join(dir, "worlds", "emissivemap.gkworld"), voxelized)
 	if err != nil {
@@ -312,11 +316,16 @@ func TestBuildGeneratedLevelCanEmitEmissiveSurfaceLights(t *testing.T) {
 		t.Fatalf("lights = %+v", level.Level.Lights)
 	}
 	light := level.Level.Lights[1]
-	if light.Type != content.LevelLightTypePoint || light.SourceTag != "hl1:emissive_surface" {
+	if light.Type != content.LevelLightTypeSpot || light.SourceTag != "hl1:emissive_surface" {
 		t.Fatalf("emissive light = %+v", light)
 	}
-	if light.Intensity <= 0 || light.Range <= 0 || light.CastsShadows {
+	if light.Intensity <= 0 || light.Range <= 0 || light.ConeAngle != emissiveSurfaceLightConeAngle || !light.CastsShadows {
 		t.Fatalf("unexpected emissive light params = %+v", light)
+	}
+	rotation := light.Transform.Rotation
+	direction := mgl32.Quat{V: mgl32.Vec3{rotation[0], rotation[1], rotation[2]}, W: rotation[3]}.Rotate(mgl32.Vec3{0, -1, 0})
+	if direction.Sub(mgl32.Vec3{0, 0, 1}).Len() > 1e-5 {
+		t.Fatalf("emissive light direction = %v", direction)
 	}
 }
 

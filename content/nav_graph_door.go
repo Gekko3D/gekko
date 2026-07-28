@@ -333,14 +333,15 @@ func navDoorAppendExternalRegionTransitions(graphs []NavGraphTileDef, spans map[
 }
 
 func appendNavDoorDirection(graph *NavGraphTileDef, doorID string, from navDoorSpan, fromRegion uint32, to navDoorSpan, toRegion uint32, width, headroom, clearance, cost float32) {
-	spanTraversal := &NavTraversalDef{ID: doorID, Start: from.Point, End: to.Point}
+	linkID := navTraversalLinkID(NavTransitionWalk, doorID, from.Ref, to.Ref)
+	spanTraversal := &NavTraversalDef{ID: doorID, LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
 	graph.SpanTransitions = append(graph.SpanTransitions, NavSpanTransitionDef{
 		From: from.Ref.Span, To: to.Ref, Kind: NavTransitionWalk,
 		StepDelta: to.Point[1] - from.Point[1], Width: width,
 		MinHeadroom: headroom, MinClearance: clearance, Cost: cost, Traversal: spanTraversal,
 		Gate: &NavTransitionGateDef{Kind: NavGateDoor, ID: doorID},
 	})
-	regionTraversal := &NavTraversalDef{ID: doorID, Start: from.Point, End: to.Point}
+	regionTraversal := &NavTraversalDef{ID: doorID, LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
 	graph.Transitions = append(graph.Transitions, NavRegionTransitionDef{
 		ID: uint32(len(graph.Transitions)), FromRegion: fromRegion,
 		ToTile: to.Ref.Tile, ToRegion: toRegion, Kind: NavTransitionWalk,
@@ -432,7 +433,7 @@ func connectNavGraphDoorGates(sources []NavSourceTileDef, graphs []NavGraphTileD
 				}
 				gate := NavTransitionGateDef{Kind: NavGateDoor, ID: door.ID}
 				transition.Gate, transition.Cost = &gate, transition.Cost+NavDoorClosedCostPenalty
-				gated[navDoorMovementKey{Kind: transition.Kind, Traversal: transition.Traversal.ID, Start: transition.Traversal.Start, End: transition.Traversal.End}] = gate
+				gated[navDoorMovementKey{Kind: transition.Kind, Traversal: transition.Traversal.StableLinkID(), Start: transition.Traversal.Start, End: transition.Traversal.End}] = gate
 			}
 		}
 		if len(gated) != 0 {
@@ -442,7 +443,7 @@ func connectNavGraphDoorGates(sources []NavSourceTileDef, graphs []NavGraphTileD
 					if transition.Traversal == nil {
 						continue
 					}
-					key := navDoorMovementKey{Kind: transition.Kind, Traversal: transition.Traversal.ID, Start: transition.Traversal.Start, End: transition.Traversal.End}
+					key := navDoorMovementKey{Kind: transition.Kind, Traversal: transition.Traversal.StableLinkID(), Start: transition.Traversal.Start, End: transition.Traversal.End}
 					if gate, found := gated[key]; found {
 						transition.Gate, transition.Cost = &NavTransitionGateDef{Kind: gate.Kind, ID: gate.ID}, transition.Cost+NavDoorClosedCostPenalty
 					}
@@ -565,7 +566,7 @@ func resetHorizontalDoorSpanGates(transitions []NavSpanTransitionDef, doorIDs ma
 			result = append(result, transition)
 			continue
 		}
-		if transition.Kind == NavTransitionDrop && transition.Traversal != nil && transition.Traversal.ID == transition.Gate.ID {
+		if transition.Kind == NavTransitionDrop && transition.Traversal != nil && transition.Traversal.Owner() == transition.Gate.ID {
 			continue
 		}
 		transition.Gate = nil
@@ -580,7 +581,7 @@ func resetHorizontalDoorRegionGates(transitions []NavRegionTransitionDef, doorID
 	for _, transition := range transitions {
 		if transition.Gate != nil {
 			if _, horizontal := doorIDs[transition.Gate.ID]; horizontal {
-				if transition.Kind == NavTransitionDrop && transition.Traversal != nil && transition.Traversal.ID == transition.Gate.ID {
+				if transition.Kind == NavTransitionDrop && transition.Traversal != nil && transition.Traversal.Owner() == transition.Gate.ID {
 					continue
 				}
 				transition.Gate = nil
@@ -638,6 +639,9 @@ func navHorizontalDoorDropLanes(door NavDoorDef, spans map[NavSpanRef]navDoorSpa
 					continue
 				}
 				entry := upper[key].Span
+				if !NavTraversalSupportedByProfile(profile, NavTransitionDrop, &NavTraversalDef{Start: entry.Point, End: landing.Span.Point}) {
+					continue
+				}
 				pair := [2]NavSpanRef{entry.Ref, landing.Span.Ref}
 				if _, duplicate := seen[pair]; duplicate || navVec3Distance(entry.Point, landing.Span.Point) <= profile.StepHeight {
 					continue
@@ -651,7 +655,8 @@ func navHorizontalDoorDropLanes(door NavDoorDef, spans map[NavSpanRef]navDoorSpa
 }
 
 func appendNavDoorDropDirection(graph *NavGraphTileDef, doorID string, from navDoorSpan, fromRegion uint32, to navDoorSpan, toRegion uint32, width, headroom, clearance, cost float32) {
-	traversal := &NavTraversalDef{ID: doorID, Start: from.Point, End: to.Point}
+	linkID := navTraversalLinkID(NavTransitionDrop, doorID, from.Ref, to.Ref)
+	traversal := &NavTraversalDef{ID: doorID, LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
 	graph.SpanTransitions = append(graph.SpanTransitions, NavSpanTransitionDef{
 		From: from.Ref.Span, To: to.Ref, Kind: NavTransitionDrop,
 		StepDelta: to.Point[1] - from.Point[1], Width: width,
@@ -663,7 +668,7 @@ func appendNavDoorDropDirection(graph *NavGraphTileDef, doorID string, from navD
 		ToTile: to.Ref.Tile, ToRegion: toRegion, Kind: NavTransitionDrop,
 		CrossingStart: from.Point, CrossingEnd: to.Point, Width: width,
 		MinHeadroom: headroom, MinClearance: clearance, Cost: cost,
-		Traversal: &NavTraversalDef{ID: doorID, Start: from.Point, End: to.Point},
+		Traversal: &NavTraversalDef{ID: doorID, LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point},
 		Gate:      &NavTransitionGateDef{Kind: NavGateDoor, ID: doorID},
 	})
 }

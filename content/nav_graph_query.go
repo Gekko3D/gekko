@@ -220,7 +220,7 @@ func (q *navGraphQuery) indexBackingTransitions() {
 			want := midpointVec3(transition.CrossingStart, transition.CrossingEnd)
 			traversalID := ""
 			if transition.Traversal != nil {
-				traversalID = transition.Traversal.ID
+				traversalID = transition.Traversal.StableLinkID()
 				want = midpointVec3(transition.Traversal.Start, transition.Traversal.End)
 			} else if transition.ToTile == coord {
 				want[0] += float32(coord.X*q.chunkSize) * q.voxelResolution
@@ -244,7 +244,7 @@ func (q *navGraphQuery) indexBackingTransitions() {
 			}
 			traversalID := ""
 			if edge.Traversal != nil {
-				traversalID = edge.Traversal.ID
+				traversalID = edge.Traversal.StableLinkID()
 			}
 			gateID := ""
 			if edge.Gate != nil {

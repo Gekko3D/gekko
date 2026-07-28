@@ -57,6 +57,20 @@ func ValidateNavGraphManifest(def *NavGraphManifestDef) NavGraphValidationResult
 		if !finite(profile.MaxSlopeDegrees) || profile.MaxSlopeDegrees < 0 || profile.MaxSlopeDegrees >= 90 {
 			result.addError("invalid_agent_max_slope", "navigation agent max_slope_degrees must be finite and in [0, 90)")
 		}
+		for _, limit := range []struct {
+			label string
+			value float32
+		}{
+			{"max_drop_height", profile.MaxDropHeight},
+			{"max_jump_distance", profile.MaxJumpDistance},
+			{"max_jump_rise", profile.MaxJumpRise},
+			{"max_vault_height", profile.MaxVaultHeight},
+			{"max_mantle_height", profile.MaxMantleHeight},
+			{"jump_speed", profile.JumpSpeed},
+			{"gravity", profile.Gravity},
+		} {
+			validateNonNegative(&result, "invalid_agent_"+limit.label, "navigation agent "+limit.label, limit.value)
+		}
 		if !navCapabilitiesValid(profile.Capabilities) {
 			result.addError("invalid_agent_capabilities", "navigation agent capabilities must contain sorted, unique, non-empty values")
 		}
@@ -254,18 +268,33 @@ func ValidateNavGraphTile(def *NavGraphTileDef) NavGraphValidationResult {
 }
 
 func validateTransitionTraversal(result *NavGraphValidationResult, label, kind string, traversal *NavTraversalDef) {
-	if (kind == NavTransitionLadder || kind == NavTransitionDrop) && traversal == nil {
+	if navTransitionRequiresTraversal(kind) && traversal == nil {
 		result.addError("missing_transition_traversal", label+" "+kind+" traversal is required")
 		return
 	}
 	if traversal == nil {
 		return
 	}
-	if strings.TrimSpace(traversal.ID) == "" {
+	if strings.TrimSpace(traversal.StableLinkID()) == "" {
 		result.addError("empty_transition_traversal_id", label+" traversal id is required")
 	}
 	if !validVec3(traversal.Start) || !validVec3(traversal.End) || traversal.Start == traversal.End {
 		result.addError("invalid_transition_traversal", label+" traversal endpoints must be finite and distinct")
+	}
+	if traversal.Apex != (Vec3{}) && !validVec3(traversal.Apex) {
+		result.addError("invalid_transition_traversal_apex", label+" traversal apex must be finite")
+	}
+	if !finite(traversal.Duration) || traversal.Duration < 0 {
+		result.addError("invalid_transition_traversal_duration", label+" traversal duration must be finite and non-negative")
+	}
+}
+
+func navTransitionRequiresTraversal(kind string) bool {
+	switch kind {
+	case NavTransitionDrop, NavTransitionJump, NavTransitionLadder, NavTransitionVault, NavTransitionMantle:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -47,7 +47,7 @@ func main() {
 	flag.BoolVar(&opts.BakeStaticLightmaps, "bake-static-lightmaps", false, "diagnostic: bake HL1 static face lightmaps into voxel albedo")
 	flag.BoolVar(&opts.EmitLightFixtures, "emit-light-fixtures", false, "write tiny emissive fixture assets and placements for imported HL1 lights")
 	opts.EmitEmissiveSurfaceLights = true
-	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize point lights from imported emissive surface clusters")
+	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize lights from imported emissive surface clusters")
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
 	flag.BoolVar(&assetsOnly, "assets-only", false, "catalog selected prop/player/weapon assets from -game-dir without loading a BSP; implies -emit-game-assets")

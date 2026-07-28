@@ -139,8 +139,15 @@ fallback exists.
 
 Navigation source schema v2 stores compact solid and blocker runs so agent
 clearance is derived above each profile's reachable step envelope. Current
-builder `voxel_graph_v4` also merges ordinary walk/stair/step surfaces into
+builder `voxel_graph_v9` also merges ordinary walk/stair/step surfaces into
 ground regions. Older graph bundles must be rebaked.
+
+Special graph links use explicit `drop`, `jump`, `ladder`, `vault`, or
+`mantle` transitions. Each link separates stable `link_id` from optional
+gameplay `owner_id`, carries entry/exit points, and may carry an apex and
+duration. Agent profiles can store drop, jump, vault, mantle, launch-speed,
+and gravity limits enforced during link generation, bake validation, and
+runtime graph filtering.
 
 ### Player
 
@@ -241,9 +248,9 @@ Each ladder volume contains:
 - optional `source_tag`
 - optional tags
 
-The current controller behavior is intentionally simple: when the player capsule
-overlaps a ladder volume, W/S climb vertically, A/D can move sideways, gravity is
-paused, and jump exits the ladder.
+Overlap only reports ladder availability. W/S explicitly enters ladder
+traversal, A/D can move sideways, and jump exits. An active drop, jump,
+mantle, or vault cannot be captured by an overlapping ladder volume.
 
 ### Moving Brushes And Use Triggers
 

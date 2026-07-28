@@ -48,7 +48,8 @@ type GroundedCharacterIntentComponent struct {
 	MaxDistance    float32
 	AimDirection   mgl32.Vec3
 	LadderMovement float32
-	// ForceLadder allows authored traversal to climb before reaching a ladder volume.
+	// ForceLadder is a compatibility bridge. New authored traversal starts a
+	// CharacterTraversalLadder request instead.
 	ForceLadder bool
 	Jump        bool
 	Crouch      bool
@@ -96,9 +97,12 @@ type GroundedCharacterMotorComponent struct {
 	LadderEntity       EntityId
 	LadderClimbSpeed   float32
 	ActualVelocity     mgl32.Vec3
-	// ScriptedMovement lets a gameplay action drive the controller transform
-	// through the shared collision helpers while this controller retains camera
-	// look ownership. It prevents input/gravity from competing with that move.
+	MotionMode         CharacterMotionMode
+	Traversal          CharacterTraversalComponent
+	LadderAvailable    bool
+	AvailableLadder    EntityId
+	// ScriptedMovement is a compatibility bridge for consumers not yet moved
+	// to CharacterMotionKinematic.
 	ScriptedMovement bool
 	// CollisionIgnoredEntity is a presentation subtree excluded from this
 	// controller's movement and ground probes.
@@ -319,7 +323,7 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 		}
 		basePos := groundedPlayerBasePosition(cmd, eid, cam, ctrl)
 		startPos := basePos
-		if ctrl.ScriptedMovement {
+		if !ctrl.Traversal.Running() && (ctrl.ScriptedMovement || ctrl.MotionMode == CharacterMotionKinematic) {
 			ctrl.JumpQueued = false
 			ctrl.SwimUpRequested = false
 			ctrl.VerticalVelocity = 0
@@ -329,6 +333,9 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 			}
 			groundedPlayerApplyTransform(cmd, eid, cam, ctrl, basePos)
 			return true
+		}
+		if !ctrl.Traversal.Running() && ctrl.MotionMode != CharacterMotionNormal {
+			ctrl.MotionMode = CharacterMotionNormal
 		}
 		if intent != nil {
 			ctrl.JumpQueued = ctrl.JumpQueued || intent.Jump
@@ -380,8 +387,35 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 		if intent != nil && intent.MaxDistance > 0 && horizontalMove.Len() > intent.MaxDistance {
 			horizontalMove = horizontalMove.Normalize().Mul(intent.MaxDistance)
 		}
+		ladderHorizontalMove := right.Mul(move.Dot(right) * speed * 0.5 * dt)
+		if intent != nil && intent.MaxDistance > 0 && ladderHorizontalMove.Len() > intent.MaxDistance {
+			ladderHorizontalMove = ladderHorizontalMove.Normalize().Mul(intent.MaxDistance)
+		}
 		ladderEntity, ladder, onLadder := findGroundedPlayerLadderVolume(cmd, basePos, ctrl)
 		forcedLadder := intent != nil && intent.ForceLadder && intent.LadderMovement != 0
+		ctrl.LadderAvailable, ctrl.AvailableLadder = onLadder, ladderEntity
+		if !ctrl.Traversal.Running() && !ctrl.Swimming && ladderMovement != 0 && (onLadder || forcedLadder) {
+			speed := DefaultLadderClimbSpeed
+			if onLadder {
+				speed = ladder.NormalizedClimbSpeed()
+			}
+			CharacterBeginTraversal(ctrl, CharacterTraversalRequest{
+				Kind: CharacterTraversalLadder, Start: basePos, Entry: basePos,
+				Speed: speed, LadderEntity: ladderEntity, Manual: true,
+			})
+		}
+		if ctrl.Traversal.Running() {
+			advanceGroundedCharacterTraversal(
+				cmd, voxRt, &basePos, ctrl, ladderHorizontalMove, ladderMovement, dt,
+				collisionFilter, ladderEntity, onLadder, forcedLadder,
+			)
+			ctrl.ActualVelocity = basePos.Sub(startPos).Mul(1 / dt)
+			if intent != nil {
+				intent.Jump = false
+			}
+			groundedPlayerApplyTransform(cmd, eid, cam, ctrl, basePos)
+			return true
+		}
 
 		if ctrl.Swimming {
 			ctrl.OnLadder = false
@@ -389,20 +423,6 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 			ctrl.LadderClimbSpeed = 0
 			basePos = tryGroundedHorizontalMove(cmd, voxRt, basePos, horizontalMove, ctrl, collisionFilter)
 			resolveGroundedSwimMovement(cmd, voxRt, &basePos, ctrl, dt, collisionFilter)
-		} else if onLadder || forcedLadder {
-			ctrl.OnLadder = true
-			if onLadder {
-				ctrl.LadderEntity = ladderEntity
-				ctrl.LadderClimbSpeed = ladder.NormalizedClimbSpeed()
-			} else {
-				ctrl.LadderEntity = 0
-			}
-			lateralMove := right.Mul(ctrl.MoveInput[0] * speed * 0.5 * dt)
-			if intent != nil {
-				lateralMove = horizontalMove
-			}
-			basePos = tryGroundedHorizontalMove(cmd, voxRt, basePos, lateralMove, ctrl, collisionFilter)
-			resolveGroundedLadderMovement(cmd, voxRt, &basePos, ctrl, ladderMovement, dt, collisionFilter)
 		} else {
 			ctrl.OnLadder = false
 			ctrl.LadderEntity = 0
@@ -744,6 +764,466 @@ func resolveGroundedSwimMovement(cmd *Commands, voxRt *VoxelRtState, basePos *mg
 	groundedPlayerClearGroundSupport(ctrl)
 	ctrl.NeedsGroundSnap = false
 	ctrl.JumpQueued = false
+}
+
+func advanceGroundedCharacterTraversal(
+	cmd *Commands,
+	voxRt *VoxelRtState,
+	basePos *mgl32.Vec3,
+	ctrl *GroundedCharacterMotorComponent,
+	horizontalMove mgl32.Vec3,
+	ladderMovement, dt float32,
+	acceptEntity func(EntityId, bool) bool,
+	availableLadder EntityId,
+	onLadder, forceLadder bool,
+) {
+	if basePos == nil || ctrl == nil || !ctrl.Traversal.Running() {
+		return
+	}
+	traversal := &ctrl.Traversal
+	traversal.Elapsed += dt
+	traversal.Blocked = false
+	if traversal.Request.MaxDuration > 0 && traversal.Elapsed > traversal.Request.MaxDuration && traversal.PendingReason == "" {
+		if traversal.Committed || !ctrl.Grounded {
+			traversal.PendingReason = "traversal_timeout"
+			traversal.Phase = CharacterTraversalPhaseSettle
+		} else {
+			finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "traversal_timeout")
+			return
+		}
+	}
+	switch traversal.Request.Kind {
+	case CharacterTraversalDrop, CharacterTraversalJump:
+		advanceGroundedBallisticTraversal(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+	case CharacterTraversalLadder:
+		advanceGroundedLadderTraversal(cmd, voxRt, basePos, ctrl, horizontalMove, ladderMovement, dt, acceptEntity, availableLadder, onLadder, forceLadder)
+	case CharacterTraversalVault, CharacterTraversalMantle:
+		advanceGroundedKinematicTraversal(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+	default:
+		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "unsupported_traversal")
+	}
+}
+
+func advanceGroundedBallisticTraversal(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedCharacterMotorComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
+	traversal := &ctrl.Traversal
+	request := traversal.Request
+	ctrl.MotionMode = CharacterMotionBallistic
+	ctrl.OnLadder = false
+	ctrl.LadderEntity = 0
+
+	if traversal.Phase == CharacterTraversalPhaseSettle {
+		settleGroundedCharacterTraversal(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+		return
+	}
+	if traversal.Phase == CharacterTraversalPhaseAlign {
+		delta := request.Start.Sub(*basePos)
+		delta[1] = 0
+		if delta.Len() > request.Acceptance {
+			next, blocked := moveGroundedTraversalHorizontal(cmd, voxRt, *basePos, request.Start, request.Speed*dt, ctrl, acceptEntity)
+			*basePos = next
+			resolveGroundedVertical(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+			if updateGroundedTraversalBlocked(traversal, blocked, dt) {
+				finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "entry_blocked")
+			}
+			return
+		}
+		traversal.Phase = CharacterTraversalPhaseTraverse
+		traversal.PhaseElapsed = 0
+		if !CharacterHasStandingClearance(voxRt, request.End, groundedPlayerCharacterCollisionConfig(cmd, ctrl), acceptEntity) {
+			finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "landing_blocked")
+			return
+		}
+		if request.Kind == CharacterTraversalJump {
+			if !groundedCharacterJumpReachable(request, defaulted(ctrl.Gravity, 18)) {
+				finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "jump_unreachable")
+				return
+			}
+			ctrl.Grounded = false
+			groundedPlayerClearGroundSupport(ctrl)
+			ctrl.NeedsGroundSnap = false
+			ctrl.VerticalVelocity = request.LaunchSpeed
+			traversal.Committed = true
+			traversal.WasAirborne = true
+		}
+	}
+
+	next, blocked := moveGroundedTraversalHorizontal(cmd, voxRt, *basePos, request.End, request.Speed*dt, ctrl, acceptEntity)
+	*basePos = next
+	resolveGroundedVertical(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+	if !ctrl.Grounded {
+		traversal.Committed = true
+		traversal.WasAirborne = true
+	}
+	if blocked && !traversal.Committed && updateGroundedTraversalBlocked(traversal, true, dt) {
+		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "entry_blocked")
+		return
+	}
+	if !blocked {
+		updateGroundedTraversalBlocked(traversal, false, dt)
+	}
+	if !traversal.WasAirborne || !ctrl.Grounded {
+		return
+	}
+	horizontal := request.End.Sub(*basePos)
+	horizontal[1] = 0
+	verticalTolerance := maxf(defaulted(ctrl.StepHeight, 0.6)+defaulted(ctrl.GroundProbe, 0.15), request.Acceptance)
+	if traversal.PendingReason != "" {
+		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, traversal.PendingReason)
+	} else if horizontal.Len() <= request.Acceptance && float32(math.Abs(float64(request.End.Y()-basePos.Y()))) <= verticalTolerance {
+		finishGroundedCharacterTraversal(ctrl, CharacterTraversalSucceeded, "")
+	} else {
+		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "missed_landing")
+	}
+}
+
+func advanceGroundedLadderTraversal(
+	cmd *Commands,
+	voxRt *VoxelRtState,
+	basePos *mgl32.Vec3,
+	ctrl *GroundedCharacterMotorComponent,
+	horizontalMove mgl32.Vec3,
+	ladderMovement, dt float32,
+	acceptEntity func(EntityId, bool) bool,
+	availableLadder EntityId,
+	onLadder, forceLadder bool,
+) {
+	traversal := &ctrl.Traversal
+	request := traversal.Request
+	ctrl.MotionMode = CharacterMotionLadder
+	ctrl.OnLadder = true
+	ctrl.LadderEntity = request.LadderEntity
+	ctrl.LadderClimbSpeed = request.Speed
+	if traversal.Phase == CharacterTraversalPhaseSettle {
+		settleGroundedCharacterTraversal(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+		return
+	}
+	if request.Manual {
+		sameLadder := request.LadderEntity == 0 || request.LadderEntity == availableLadder
+		if ctrl.JumpQueued {
+			finishGroundedCharacterTraversal(ctrl, CharacterTraversalSucceeded, "")
+			ctrl.Grounded = false
+			groundedPlayerClearGroundSupport(ctrl)
+			ctrl.NeedsGroundSnap = false
+			ctrl.VerticalVelocity = defaulted(ctrl.JumpSpeed, 5.5) * 0.5
+			*basePos, _ = tryGroundedVerticalMove(cmd, voxRt, *basePos, ctrl.VerticalVelocity*dt, ctrl, acceptEntity)
+			ctrl.JumpQueued = false
+			return
+		}
+		if (!onLadder || !sameLadder) && !forceLadder {
+			finishGroundedCharacterTraversal(ctrl, CharacterTraversalSucceeded, "")
+			ctrl.Grounded = false
+			resolveGroundedVertical(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+			return
+		}
+		*basePos = tryGroundedHorizontalMove(cmd, voxRt, *basePos, horizontalMove, ctrl, acceptEntity)
+		*basePos, _ = tryGroundedVerticalMove(cmd, voxRt, *basePos, ladderMovement*request.Speed*dt, ctrl, acceptEntity)
+		ctrl.VerticalVelocity = 0
+		ctrl.Grounded = false
+		groundedPlayerClearGroundSupport(ctrl)
+		ctrl.NeedsGroundSnap = false
+		ctrl.JumpQueued = false
+		return
+	}
+
+	remaining := request.Speed * dt
+	for remaining > 1e-5 && traversal.Running() {
+		switch traversal.Phase {
+		case CharacterTraversalPhaseAlign:
+			if request.Start.Y() > request.End.Y() && basePos.Y() < request.Start.Y()+defaulted(ctrl.StepHeight, 0.6)-0.01 {
+				next, used, reached, blocked := moveGroundedTraversalVertical(cmd, voxRt, *basePos, request.Start.Y()+defaulted(ctrl.StepHeight, 0.6), remaining, ctrl, acceptEntity)
+				*basePos, remaining = next, maxf(0, remaining-used)
+				if blocked && !reached {
+					failOrSettleGroundedCharacterTraversal(ctrl, "mount_blocked")
+					return
+				}
+				if !reached {
+					return
+				}
+			}
+			target := request.Entry
+			target[1] = basePos.Y()
+			next, used, reached, blocked := moveGroundedTraversalHorizontalDistance(cmd, voxRt, *basePos, target, remaining, ctrl, acceptEntity)
+			*basePos, remaining = next, maxf(0, remaining-used)
+			if blocked {
+				failOrSettleGroundedCharacterTraversal(ctrl, "mount_blocked")
+				return
+			}
+			if !reached {
+				return
+			}
+			traversal.Phase = CharacterTraversalPhaseClimb
+			traversal.Committed = true
+			ctrl.Grounded = false
+			groundedPlayerClearGroundSupport(ctrl)
+			continue
+		case CharacterTraversalPhaseClimb:
+			targetY := request.End.Y()
+			if request.End.Y() > request.Start.Y() {
+				targetY += defaulted(ctrl.StepHeight, 0.6)
+			}
+			next, used, reached, blocked := moveGroundedTraversalVertical(cmd, voxRt, *basePos, targetY, remaining, ctrl, acceptEntity)
+			*basePos, remaining = next, maxf(0, remaining-used)
+			if blocked && !reached {
+				failOrSettleGroundedCharacterTraversal(ctrl, "climb_blocked")
+				return
+			}
+			if !reached {
+				return
+			}
+			traversal.Phase = CharacterTraversalPhaseDismount
+		case CharacterTraversalPhaseDismount:
+			next, used, reached, blocked := moveGroundedTraversalHorizontalDistance(cmd, voxRt, *basePos, request.End, remaining, ctrl, acceptEntity)
+			*basePos, remaining = next, maxf(0, remaining-used)
+			if blocked {
+				failOrSettleGroundedCharacterTraversal(ctrl, "dismount_blocked")
+				return
+			}
+			if !reached {
+				return
+			}
+			next, _, reached, blocked = moveGroundedTraversalVertical(cmd, voxRt, *basePos, request.End.Y(), remaining, ctrl, acceptEntity)
+			*basePos = next
+			if blocked && !reached {
+				failOrSettleGroundedCharacterTraversal(ctrl, "dismount_blocked")
+				return
+			}
+			if !reached {
+				return
+			}
+			*basePos = request.End
+			traversal.Phase = CharacterTraversalPhaseSettle
+			ctrl.Grounded = false
+			ctrl.NeedsGroundSnap = true
+			settleGroundedCharacterTraversal(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+			return
+		}
+	}
+	ctrl.VerticalVelocity = 0
+	ctrl.NeedsGroundSnap = false
+	ctrl.JumpQueued = false
+}
+
+func advanceGroundedKinematicTraversal(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedCharacterMotorComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
+	traversal := &ctrl.Traversal
+	request := traversal.Request
+	ctrl.MotionMode = CharacterMotionKinematic
+	ctrl.OnLadder = false
+	if traversal.Phase == CharacterTraversalPhaseSettle {
+		settleGroundedCharacterTraversal(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+		return
+	}
+	if traversal.Phase == CharacterTraversalPhaseAlign {
+		next, blocked := moveGroundedTraversalHorizontal(cmd, voxRt, *basePos, request.Start, request.Speed*dt, ctrl, acceptEntity)
+		*basePos = next
+		delta := request.Start.Sub(*basePos)
+		delta[1] = 0
+		if blocked {
+			finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "entry_blocked")
+			return
+		}
+		if delta.Len() > request.Acceptance {
+			return
+		}
+		traversal.Phase = CharacterTraversalPhaseLift
+		traversal.PhaseElapsed = 0
+	}
+	if request.Duration <= 0 {
+		request.Duration = 0.75
+	}
+	apex := request.Apex
+	if apex == (mgl32.Vec3{}) {
+		apex = request.Start
+		apex[1] = maxf(request.Start.Y(), request.End.Y()) + maxf(defaulted(ctrl.StepHeight, 0.6), 0.5)
+	}
+	phaseDuration := request.Duration * 0.5
+	start, target := request.Start, apex
+	switch traversal.Phase {
+	case CharacterTraversalPhaseLift:
+		phaseDuration = request.Duration * 0.25
+	case CharacterTraversalPhaseCross:
+		start = apex
+		target = mgl32.Vec3{request.End.X(), apex.Y(), request.End.Z()}
+	case CharacterTraversalPhaseLand:
+		phaseDuration = request.Duration * 0.25
+		start = mgl32.Vec3{request.End.X(), apex.Y(), request.End.Z()}
+		target = request.End
+	}
+	traversal.PhaseElapsed = minf(traversal.PhaseElapsed+dt, phaseDuration)
+	progress := traversal.PhaseElapsed / maxf(phaseDuration, 0.001)
+	progress = progress * progress * (3 - 2*progress)
+	desired := start.Mul(1 - progress).Add(target.Mul(progress))
+	next, blocked := moveGroundedTraversalSegment(cmd, voxRt, *basePos, desired, ctrl, acceptEntity)
+	*basePos = next
+	traversal.Committed = traversal.Committed || traversal.Phase != CharacterTraversalPhaseLift || progress > 0
+	ctrl.Grounded = false
+	groundedPlayerClearGroundSupport(ctrl)
+	ctrl.VerticalVelocity = 0
+	if blocked || next.Sub(desired).LenSqr() > 1e-5 {
+		failOrSettleGroundedCharacterTraversal(ctrl, "traversal_blocked")
+		return
+	}
+	if traversal.PhaseElapsed < phaseDuration {
+		return
+	}
+	*basePos = target
+	traversal.PhaseElapsed = 0
+	switch traversal.Phase {
+	case CharacterTraversalPhaseLift:
+		traversal.Phase = CharacterTraversalPhaseCross
+	case CharacterTraversalPhaseCross:
+		traversal.Phase = CharacterTraversalPhaseLand
+	default:
+		traversal.Phase = CharacterTraversalPhaseSettle
+		ctrl.NeedsGroundSnap = true
+		settleGroundedCharacterTraversal(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+	}
+}
+
+func settleGroundedCharacterTraversal(cmd *Commands, voxRt *VoxelRtState, basePos *mgl32.Vec3, ctrl *GroundedCharacterMotorComponent, dt float32, acceptEntity func(EntityId, bool) bool) {
+	ctrl.MotionMode = CharacterMotionBallistic
+	ctrl.OnLadder = false
+	resolveGroundedVertical(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
+	if !ctrl.Grounded {
+		return
+	}
+	if ctrl.Traversal.PendingReason != "" {
+		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, ctrl.Traversal.PendingReason)
+	} else {
+		finishGroundedCharacterTraversal(ctrl, CharacterTraversalSucceeded, "")
+	}
+}
+
+func failOrSettleGroundedCharacterTraversal(ctrl *GroundedCharacterMotorComponent, reason string) {
+	if ctrl == nil {
+		return
+	}
+	if ctrl.Traversal.Committed || !ctrl.Grounded {
+		ctrl.Traversal.PendingReason = reason
+		ctrl.Traversal.Phase = CharacterTraversalPhaseSettle
+		ctrl.MotionMode = CharacterMotionBallistic
+		ctrl.OnLadder = false
+		return
+	}
+	finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, reason)
+}
+
+func finishGroundedCharacterTraversal(ctrl *GroundedCharacterMotorComponent, status CharacterTraversalStatus, reason string) {
+	if ctrl == nil {
+		return
+	}
+	ctrl.Traversal.Status = status
+	ctrl.Traversal.Reason = reason
+	ctrl.Traversal.PendingReason = ""
+	ctrl.MotionMode = CharacterMotionNormal
+	ctrl.OnLadder = false
+	ctrl.LadderEntity = 0
+	ctrl.LadderClimbSpeed = 0
+	ctrl.JumpQueued = false
+}
+
+func updateGroundedTraversalBlocked(traversal *CharacterTraversalComponent, blocked bool, dt float32) bool {
+	if traversal == nil {
+		return false
+	}
+	traversal.Blocked = blocked
+	if blocked {
+		traversal.BlockedElapsed += dt
+	} else {
+		traversal.BlockedElapsed = 0
+	}
+	return traversal.BlockedElapsed >= 0.25
+}
+
+func moveGroundedTraversalHorizontal(cmd *Commands, voxRt *VoxelRtState, current, target mgl32.Vec3, maxDistance float32, ctrl *GroundedCharacterMotorComponent, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
+	next, _, _, blocked := moveGroundedTraversalHorizontalDistance(cmd, voxRt, current, target, maxDistance, ctrl, acceptEntity)
+	return next, blocked
+}
+
+func moveGroundedTraversalHorizontalDistance(cmd *Commands, voxRt *VoxelRtState, current, target mgl32.Vec3, maxDistance float32, ctrl *GroundedCharacterMotorComponent, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, float32, bool, bool) {
+	delta := target.Sub(current)
+	delta[1] = 0
+	distance := delta.Len()
+	acceptance := maxf(ctrl.Traversal.Request.Acceptance, 0.01)
+	if distance <= acceptance {
+		return current, 0, true, false
+	}
+	move := delta.Normalize().Mul(minf(distance, maxf(maxDistance, 0)))
+	result := CharacterKinematicMove(voxRt, current, move, CharacterKinematicMoveOptions{
+		CollisionConfig: groundedPlayerCharacterCollisionConfig(cmd, ctrl),
+		AcceptEntity:    acceptEntity, DisableSlide: true,
+	})
+	used := result.Position.Sub(current)
+	used[1] = 0
+	reached := !result.Blocked && actionHorizontalDistance(result.Position, target) <= acceptance
+	return result.Position, used.Len(), reached, result.Blocked
+}
+
+func moveGroundedTraversalVertical(cmd *Commands, voxRt *VoxelRtState, current mgl32.Vec3, targetY, maxDistance float32, ctrl *GroundedCharacterMotorComponent, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, float32, bool, bool) {
+	delta := targetY - current.Y()
+	if float32(math.Abs(float64(delta))) <= 0.04 {
+		current[1] = targetY
+		return current, 0, true, false
+	}
+	move := minf(float32(math.Abs(float64(delta))), maxf(maxDistance, 0))
+	if delta < 0 {
+		move = -move
+	}
+	next, blocked := tryGroundedVerticalMove(cmd, voxRt, current, move, ctrl, acceptEntity)
+	used := float32(math.Abs(float64(next.Y() - current.Y())))
+	reached := float32(math.Abs(float64(targetY-next.Y()))) <= 0.04
+	if reached && (!blocked || delta < 0) {
+		next[1] = targetY
+		return next, used, true, false
+	}
+	return next, used, false, blocked
+}
+
+func moveGroundedTraversalSegment(cmd *Commands, voxRt *VoxelRtState, current, desired mgl32.Vec3, ctrl *GroundedCharacterMotorComponent, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
+	delta := desired.Sub(current)
+	if delta.Y() > 1e-5 {
+		next, _, _, blocked := moveGroundedTraversalVertical(cmd, voxRt, current, desired.Y(), delta.Y(), ctrl, acceptEntity)
+		current = next
+		if blocked {
+			return current, true
+		}
+	}
+	horizontal := desired.Sub(current)
+	horizontal[1] = 0
+	if horizontal.LenSqr() > 1e-8 {
+		result := CharacterKinematicMove(voxRt, current, horizontal, CharacterKinematicMoveOptions{
+			CollisionConfig: groundedPlayerCharacterCollisionConfig(cmd, ctrl),
+			AcceptEntity:    acceptEntity, DisableDepenetration: true, DisableSlide: true,
+		})
+		current = result.Position
+		if result.Blocked {
+			return current, true
+		}
+	}
+	deltaY := desired.Y() - current.Y()
+	if deltaY < -1e-5 {
+		next, _, _, blocked := moveGroundedTraversalVertical(cmd, voxRt, current, desired.Y(), -deltaY, ctrl, acceptEntity)
+		return next, blocked
+	}
+	return current, false
+}
+
+func actionHorizontalDistance(a, b mgl32.Vec3) float32 {
+	delta := b.Sub(a)
+	delta[1] = 0
+	return delta.Len()
+}
+
+func groundedCharacterJumpReachable(request CharacterTraversalRequest, gravity float32) bool {
+	if gravity <= 0 || request.LaunchSpeed <= 0 || request.Speed <= 0 {
+		return false
+	}
+	dy := request.End.Y() - request.Start.Y()
+	discriminant := request.LaunchSpeed*request.LaunchSpeed - 2*gravity*dy
+	if discriminant < 0 {
+		return false
+	}
+	flightTime := (request.LaunchSpeed + float32(math.Sqrt(float64(discriminant)))) / gravity
+	return actionHorizontalDistance(request.Start, request.End) <= request.Speed*flightTime+request.Acceptance
 }
 
 func tryGroundedVerticalMove(cmd *Commands, voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, ctrl *GroundedPlayerControllerComponent, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
