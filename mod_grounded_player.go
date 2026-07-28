@@ -518,12 +518,18 @@ func GroundedLocalPlayerUseSystem(cmd *Commands, input *Input) {
 // ActivateUseTrigger applies the same authored interaction for players, NPCs,
 // and other gameplay systems.
 func ActivateUseTrigger(cmd *Commands, trigger *UseTriggerComponent, activator EntityId) {
+	ActivateUseTriggerWithState(cmd, trigger, activator, 2)
+}
+
+// ActivateUseTriggerWithState preserves trigger/button side effects while
+// requesting an idempotent target state instead of blind toggling.
+func ActivateUseTriggerWithState(cmd *Commands, trigger *UseTriggerComponent, activator EntityId, triggerState int) {
 	if cmd == nil || trigger == nil {
 		return
 	}
 	trigger.ActivationCount++
 	activateMovingBrushAtBounds(cmd, trigger.BoundsCenter, trigger.BoundsHalfExtents)
-	ActivateTarget(cmd, trigger.Target, activator)
+	ActivateTargetWithState(cmd, trigger.Target, activator, triggerState)
 }
 
 type useTriggerHit struct {

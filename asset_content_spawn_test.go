@@ -315,7 +315,7 @@ func TestSpawnAuthoredAssetSpawnsPartLightEmitterAndMarkerHierarchy(t *testing.T
 		if result.ItemKindsByAssetID[assetID] != wantKind {
 			t.Fatalf("expected kind %q for %s, got %q", wantKind, assetID, result.ItemKindsByAssetID[assetID])
 		}
-		assertAuthoredRefForTest(t, cmd, eid, def.ID, assetID, wantKind)
+		assertAuthoredRefForTest(t, cmd, eid, result.RootEntity, def.ID, assetID, wantKind)
 	}
 
 	rootPartEntity := result.EntitiesByAssetID["root-part"]
@@ -955,13 +955,13 @@ func parentEntityForTest(cmd *Commands, eid EntityId) (EntityId, bool) {
 	return 0, false
 }
 
-func assertAuthoredRefForTest(t *testing.T, cmd *Commands, eid EntityId, assetID string, itemID string, kind AuthoredItemKind) {
+func assertAuthoredRefForTest(t *testing.T, cmd *Commands, eid, root EntityId, assetID string, itemID string, kind AuthoredItemKind) {
 	t.Helper()
 	ref, ok := AuthoredAssetRefForEntity(cmd, eid)
 	if !ok {
 		t.Fatalf("expected authored ref on entity %d", eid)
 	}
-	if ref.AssetID != assetID || ref.ItemID != itemID || ref.Kind != kind {
+	if ref.RootEntity != root || ref.AssetID != assetID || ref.ItemID != itemID || ref.Kind != kind {
 		t.Fatalf("unexpected authored ref %+v", ref)
 	}
 }

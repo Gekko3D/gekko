@@ -16,9 +16,12 @@ type AuthoredAssetRootComponent struct {
 }
 
 type AuthoredAssetRefComponent struct {
+	// AssetID identifies the authored document and is shared by every spawn.
 	AssetID string
-	ItemID  string
-	Kind    AuthoredItemKind
+	// RootEntity identifies the runtime spawn that owns this item.
+	RootEntity EntityId
+	ItemID     string
+	Kind       AuthoredItemKind
 }
 
 // AuthoredAssetAttachmentComponent records an external attachment-library
@@ -207,6 +210,26 @@ func AuthoredAssetRefForEntity(cmd *Commands, eid EntityId) (AuthoredAssetRefCom
 		}
 	}
 	return AuthoredAssetRefComponent{}, false
+}
+
+// AuthoredAssetOwnsEntity reports whether entity belongs to exactly one
+// spawned authored-asset instance. The hierarchy fallback supports manually
+// constructed refs that predate RootEntity.
+func AuthoredAssetOwnsEntity(cmd *Commands, root, entity EntityId) bool {
+	if cmd == nil || root == 0 || entity == 0 {
+		return false
+	}
+	if entity == root {
+		return IsAuthoredAssetRootEntity(cmd, root)
+	}
+	ref, ok := AuthoredAssetRefForEntity(cmd, entity)
+	if !ok {
+		return false
+	}
+	if ref.RootEntity != 0 {
+		return ref.RootEntity == root
+	}
+	return isEntityOrDescendantOf(cmd, entity, root)
 }
 
 func AuthoredMarkerForEntity(cmd *Commands, eid EntityId) (AuthoredMarkerComponent, bool) {

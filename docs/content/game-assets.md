@@ -88,7 +88,11 @@ At spawn time:
 5. parent-child links are attached from authored `parent_id` references
 6. transforms are resolved through the normal hierarchy system
 
-Each spawned item gets `AuthoredAssetRefComponent` so runtime code can map entities back to authored item IDs.
+Each spawned item gets `AuthoredAssetRefComponent` so runtime code can map
+entities back to authored item IDs. Its `AssetID` identifies the authored
+document and is intentionally shared by every spawn; `RootEntity` identifies
+the owning runtime instance. Code selecting items from one spawn should use
+`AuthoredAssetOwnsEntity(...)`, not compare `AssetID` alone.
 
 Animated authored assets are rigid hierarchies. Runtime playback samples the
 resolved external clips into item `LocalTransformComponent` values, then
@@ -218,7 +222,7 @@ Important components include:
 - `AuthoredAssetRootComponent`
   - identifies the root entity for one spawned authored asset
 - `AuthoredAssetRefComponent`
-  - maps an entity back to an authored asset item ID and kind
+  - maps an entity to its authored document, item ID, kind, and owning spawned root
 - `AuthoredLevelPlacementRefComponent`
   - tracks which level placement produced the spawned asset root
 - `AuthoredLevelItemRefComponent`

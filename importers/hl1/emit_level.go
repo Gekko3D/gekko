@@ -978,9 +978,7 @@ func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath 
 			SourceTag:         "hl1:" + className,
 			Tags:              hl1GameplayMarkerTags(entity, bounds),
 		}
-		if kind == MovingBrushKindHL1Door || kind == MovingBrushKindHL1DoorRotating {
-			brush.NavigationRole = content.NavigationRoleDoor
-		}
+		brush.NavigationRole = hl1MovingBrushNavigationRole(entity, kind)
 		if summary.BSP != nil && hl1MovingBrushHasSeparateVisual(className) {
 			asset, visualOrigin, err := buildHL1MovingBrushAsset(opts, summary.BSP, textureStore, materialColors, entity, brush.ID)
 			if err != nil {
@@ -995,6 +993,27 @@ func buildHL1MovingBrushes(opts ImportOptions, summary ImportSummary, levelPath 
 		out = append(out, brush)
 	}
 	return out, assets, nil
+}
+
+func hl1MovingBrushNavigationRole(entity importcommon.Entity, kind string) string {
+	if kind == MovingBrushKindHL1Plat {
+		return content.NavigationRoleCarrier
+	}
+	if kind != MovingBrushKindHL1Door && kind != MovingBrushKindHL1DoorRotating {
+		return ""
+	}
+	if kind == MovingBrushKindHL1Door {
+		direction := hl1MoveDirection(entity)
+		name := strings.ToLower(strings.Join([]string{
+			hl1StringKey(entity, "targetname"),
+			hl1StringKey(entity, "name"),
+		}, " "))
+		if absFloat32(direction[1]) > 0.9 &&
+			(strings.Contains(name, "lift") || strings.Contains(name, "elevator") || strings.Contains(name, "platform")) {
+			return content.NavigationRoleCarrier
+		}
+	}
+	return content.NavigationRoleDoor
 }
 
 func buildHL1Breakables(opts ImportOptions, summary ImportSummary, levelPath string) ([]content.LevelBreakableDef, []GeneratedAssetResult, error) {

@@ -142,12 +142,13 @@ clearance is derived above each profile's reachable step envelope. Current
 builder `voxel_graph_v9` also merges ordinary walk/stair/step surfaces into
 ground regions. Older graph bundles must be rebaked.
 
-Special graph links use explicit `drop`, `jump`, `ladder`, `vault`, or
-`mantle` transitions. Each link separates stable `link_id` from optional
+Special graph links use explicit `drop`, `jump`, `ladder`, `vault`, `mantle`,
+or `carrier` transitions. Each link separates stable `link_id` from optional
 gameplay `owner_id`, carries entry/exit points, and may carry an apex and
-duration. Agent profiles can store drop, jump, vault, mantle, launch-speed,
-and gravity limits enforced during link generation, bake validation, and
-runtime graph filtering.
+duration. Carrier links additionally name the moving support, directed source
+and destination stops, boarding point, and controller. Agent profiles can
+store drop, jump, vault, mantle, launch-speed, and gravity limits enforced
+during link generation, bake validation, and runtime graph filtering.
 
 ### Player
 
@@ -254,7 +255,8 @@ mantle, or vault cannot be captured by an overlapping ladder volume.
 
 ### Moving Brushes And Use Triggers
 
-`moving_brushes[]` describe level-owned dynamic brush intent, such as doors.
+`moving_brushes[]` describe level-owned dynamic brush intent, such as doors
+and discrete-stop carriers.
 `use_triggers[]` describe player-use volumes, such as buttons.
 
 Moving brushes contain:
@@ -305,6 +307,15 @@ Each marker contains:
 - `kind`
 - `transform`
 - optional tags
+
+`navigation_role: "door"` treats the closed brush footprint as a dynamic gate.
+`navigation_role: "carrier"` keeps the moving brush out of static occupancy
+and bakes directed station-to-station links. A carrier route remains owned by
+the carrier traversal while the actor is supported by the moving brush, then
+returns to static localization only after the actor reaches the destination
+span. The current moving-brush adapter emits `closed` and `open` stops; the
+navigation manifest and route contract support additional named stops for
+future path movers.
 
 Markers are useful for:
 

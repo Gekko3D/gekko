@@ -68,7 +68,26 @@ func main() {
 				graphs = append(graphs, graph)
 			}
 		}
-		result, err := content.FindNavGraphRoute(bake.SourceTiles, graphs, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution, start.value, end.value)
+		var result content.NavRouteResult
+		if len(bake.Manifest.Carriers) != 0 {
+			var profile content.NavAgentProfileDef
+			for _, candidate := range bake.Manifest.AgentProfiles {
+				if candidate.ID == profileID {
+					profile = candidate
+					break
+				}
+			}
+			query, queryErr := content.NewNavGraphQueryWithBlockers(
+				bake.SourceTiles, graphs, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution,
+				profile, content.NavCarrierBlockers(bake.Manifest.Carriers, profile),
+			)
+			if queryErr != nil {
+				fatalf("route query: %v", queryErr)
+			}
+			result, err = query.FindRoute(start.value, end.value)
+		} else {
+			result, err = content.FindNavGraphRoute(bake.SourceTiles, graphs, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution, start.value, end.value)
+		}
 		if err != nil {
 			fatalf("route: %v", err)
 		}

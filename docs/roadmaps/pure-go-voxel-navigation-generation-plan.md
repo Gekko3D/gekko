@@ -718,7 +718,8 @@ Implement one observed gameplay need at a time:
 - [ ] water
 - [x] doors
 - [x] breakables
-- [ ] moving platforms
+- [x] discrete-stop moving carriers/lifts
+- [ ] continuously routed moving platforms and path-train stop authoring
 - [ ] temporary blockers and local avoidance
 
 Use explicit directed transitions and runtime state/cost overlays. Do not

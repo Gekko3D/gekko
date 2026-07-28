@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const CurrentNavGraphBuilderVersion = "voxel_graph_v9"
+const CurrentNavGraphBuilderVersion = "voxel_graph_v10"
 
 type NavGraphBakeDiagnosticCount struct {
 	Coord          TerrainChunkCoordDef `json:"coord"`
@@ -61,6 +61,9 @@ func BakeLevelNavGraph(levelPath string, profiles []NavAgentProfileDef) (NavGrap
 	if err := ApplyNavGraphDoors(&result, level.MovingBrushes); err != nil {
 		return NavGraphBakeResult{}, err
 	}
+	if err := ApplyNavGraphCarriers(&result, level.MovingBrushes, level.UseTriggers); err != nil {
+		return NavGraphBakeResult{}, err
+	}
 	if err := ApplyNavGraphLadders(&result, level.LadderVolumes); err != nil {
 		return NavGraphBakeResult{}, err
 	}
@@ -68,6 +71,44 @@ func BakeLevelNavGraph(levelPath string, profiles []NavAgentProfileDef) (NavGrap
 		return NavGraphBakeResult{}, err
 	}
 	return result, nil
+}
+
+// ApplyNavGraphCarriers stores discrete moving supports in the manifest and
+// links their static stations for each agent profile.
+func ApplyNavGraphCarriers(bake *NavGraphBakeResult, brushes []LevelMovingBrushDef, triggers []LevelUseTriggerDef) error {
+	if bake == nil {
+		return fmt.Errorf("navigation graph bake is required")
+	}
+	carriers := BuildNavCarriers(brushes, triggers)
+	bake.Manifest.Carriers = carriers
+	for _, profile := range bake.Manifest.AgentProfiles {
+		var graphs []NavGraphTileDef
+		for _, graph := range bake.GraphTiles {
+			if graph.AgentProfileID == profile.ID {
+				graphs = append(graphs, graph)
+			}
+		}
+		linked, diagnostics, err := connectNavGraphCarriers(bake.SourceTiles, graphs, carriers, profile, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution, true)
+		if err != nil {
+			return err
+		}
+		byCoord := make(map[TerrainChunkCoordDef]NavGraphTileDef, len(linked))
+		for _, graph := range linked {
+			byCoord[graph.Coord] = graph
+		}
+		for i := range bake.GraphTiles {
+			if bake.GraphTiles[i].AgentProfileID == profile.ID {
+				bake.GraphTiles[i] = byCoord[bake.GraphTiles[i].Coord]
+			}
+		}
+		for _, diagnostic := range diagnostics {
+			bake.Diagnostics = append(bake.Diagnostics, NavGraphBakeDiagnosticCount{AgentProfileID: profile.ID, Stage: "carrier", Code: diagnostic.Code, Count: 1})
+		}
+	}
+	if validation := ValidateNavGraphBake(bake); validation.HasErrors() {
+		return fmt.Errorf("invalid carrier-linked navigation graph bake: %s", validation.Error())
+	}
+	return nil
 }
 
 // ApplyNavGraphDoors derives format-neutral door footprints from authored

@@ -75,6 +75,9 @@ func TestFindAuthoredAssetMarkersByKindScopesToRequestedRoot(t *testing.T) {
 	if !ok {
 		t.Fatal("expected first marker by kind under right root")
 	}
+	if !AuthoredAssetOwnsEntity(cmd, right.RootEntity, rightMarker.Entity) || AuthoredAssetOwnsEntity(cmd, left.RootEntity, rightMarker.Entity) {
+		t.Fatal("marker runtime ownership crossed identical asset instances")
+	}
 	if rightMarker.Entity != right.EntitiesByAssetID["marker"] {
 		t.Fatalf("expected right marker entity %d, got %d", right.EntitiesByAssetID["marker"], rightMarker.Entity)
 	}

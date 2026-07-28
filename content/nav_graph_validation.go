@@ -108,6 +108,40 @@ func ValidateNavGraphManifest(def *NavGraphManifestDef) NavGraphValidationResult
 			result.addError("invalid_door_bounds", fmt.Sprintf("navigation door %q requires finite positive bounds", door.ID))
 		}
 	}
+	for i, carrier := range def.Carriers {
+		if strings.TrimSpace(carrier.ID) == "" {
+			result.addError("empty_carrier_id", "navigation carrier id is required")
+		}
+		if i > 0 && def.Carriers[i-1].ID >= carrier.ID {
+			result.addError("unsorted_carriers", "navigation carriers must be sorted by unique id")
+		}
+		if !validVec3(carrier.BoundsHalfExtents) || carrier.BoundsHalfExtents[0] <= 0 || carrier.BoundsHalfExtents[1] <= 0 || carrier.BoundsHalfExtents[2] <= 0 {
+			result.addError("invalid_carrier_bounds", fmt.Sprintf("navigation carrier %q requires finite positive bounds", carrier.ID))
+		}
+		if !finite(carrier.Speed) || carrier.Speed < 0 {
+			result.addError("invalid_carrier_speed", fmt.Sprintf("navigation carrier %q speed must be finite and non-negative", carrier.ID))
+		}
+		if len(carrier.Stops) < 2 {
+			result.addError("invalid_carrier_stops", fmt.Sprintf("navigation carrier %q requires at least two stops", carrier.ID))
+		}
+		for stopIndex, stop := range carrier.Stops {
+			if strings.TrimSpace(stop.ID) == "" || stopIndex > 0 && carrier.Stops[stopIndex-1].ID >= stop.ID {
+				result.addError("invalid_carrier_stop_id", fmt.Sprintf("navigation carrier %q stops must have sorted unique ids", carrier.ID))
+			}
+			if !validVec3(stop.BoundsCenter) {
+				result.addError("invalid_carrier_stop", fmt.Sprintf("navigation carrier %q stop %q requires a finite position", carrier.ID, stop.ID))
+			}
+			for controllerIndex, controller := range stop.Controllers {
+				if strings.TrimSpace(controller.ID) == "" || controllerIndex > 0 && stop.Controllers[controllerIndex-1].ID >= controller.ID {
+					result.addError("invalid_carrier_controller_id", fmt.Sprintf("navigation carrier %q stop %q controllers must have sorted unique ids", carrier.ID, stop.ID))
+				}
+				if !validVec3(controller.BoundsCenter) || !validVec3(controller.BoundsHalfExtents) ||
+					controller.BoundsHalfExtents[0] <= 0 || controller.BoundsHalfExtents[1] <= 0 || controller.BoundsHalfExtents[2] <= 0 {
+					result.addError("invalid_carrier_controller", fmt.Sprintf("navigation carrier %q controller %q requires finite positive bounds", carrier.ID, controller.ID))
+				}
+			}
+		}
+	}
 
 	seenSources := map[TerrainChunkCoordDef]struct{}{}
 	for _, entry := range def.SourceTiles {
@@ -287,11 +321,23 @@ func validateTransitionTraversal(result *NavGraphValidationResult, label, kind s
 	if !finite(traversal.Duration) || traversal.Duration < 0 {
 		result.addError("invalid_transition_traversal_duration", label+" traversal duration must be finite and non-negative")
 	}
+	if kind == NavTransitionCarrier {
+		carrier := traversal.Carrier
+		if carrier == nil {
+			result.addError("missing_carrier_traversal", label+" carrier traversal metadata is required")
+		} else if strings.TrimSpace(carrier.CarrierID) == "" || strings.TrimSpace(carrier.FromStop) == "" ||
+			strings.TrimSpace(carrier.ToStop) == "" || carrier.FromStop == carrier.ToStop ||
+			!validVec3(carrier.Board) {
+			result.addError("invalid_carrier_traversal", label+" carrier traversal requires a carrier, distinct stops, and a finite boarding point")
+		}
+	} else if traversal.Carrier != nil {
+		result.addError("unexpected_carrier_traversal", label+" carrier metadata requires a carrier transition")
+	}
 }
 
 func navTransitionRequiresTraversal(kind string) bool {
 	switch kind {
-	case NavTransitionDrop, NavTransitionJump, NavTransitionLadder, NavTransitionVault, NavTransitionMantle:
+	case NavTransitionDrop, NavTransitionJump, NavTransitionLadder, NavTransitionVault, NavTransitionMantle, NavTransitionCarrier:
 		return true
 	default:
 		return false

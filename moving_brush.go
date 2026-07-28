@@ -78,6 +78,56 @@ func MovingBrushFullyOpen(m *MovingBrushComponent) bool {
 	return m.BoundsCenter.Sub(m.ClosedBoundsCenter.Add(m.OpenOffset)).LenSqr() <= 1e-6
 }
 
+// MovingBrushAtNavigationStop reports physical arrival at one of the
+// discrete stops exposed by the current two-state moving-brush contract.
+func MovingBrushAtNavigationStop(m *MovingBrushComponent, stop string) bool {
+	if m == nil {
+		return false
+	}
+	switch stop {
+	case "closed":
+		return !m.Open && m.BoundsCenter.Sub(m.ClosedBoundsCenter).LenSqr() <= 1e-6
+	case "open":
+		return MovingBrushFullyOpen(m)
+	default:
+		return false
+	}
+}
+
+// RequestMovingBrushNavigationStop is idempotent: repeated calls cannot
+// reverse a carrier while another system is waiting for the same stop.
+func RequestMovingBrushNavigationStop(m *MovingBrushComponent, stop string) bool {
+	if m == nil {
+		return false
+	}
+	open := false
+	switch stop {
+	case "closed":
+	case "open":
+		open = true
+	default:
+		return false
+	}
+	if m.Open != open {
+		m.Open = open
+		m.OpenWaitRemaining = 0
+		m.ActivationCount++
+	}
+	return true
+}
+
+// HoldMovingBrushNavigationStop keeps an auto-return carrier at its
+// destination while a traversal is still exiting.
+func HoldMovingBrushNavigationStop(m *MovingBrushComponent, stop string) bool {
+	if !RequestMovingBrushNavigationStop(m, stop) {
+		return false
+	}
+	if stop == "open" && m.Wait > 0 && MovingBrushFullyOpen(m) {
+		m.OpenWaitRemaining = m.Wait
+	}
+	return true
+}
+
 type UseTriggerComponent struct {
 	Kind              string
 	BoundsCenter      mgl32.Vec3

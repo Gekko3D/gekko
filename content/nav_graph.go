@@ -14,17 +14,19 @@ const (
 	NavSourceTileExtension    = ".gknavsource"
 	NavGraphTileExtension     = ".gknavgraph"
 
-	NavTransitionWalk   = "walk"
-	NavTransitionStep   = "step"
-	NavTransitionStair  = "stair"
-	NavTransitionDrop   = "drop"
-	NavTransitionJump   = "jump"
-	NavTransitionLadder = "ladder"
-	NavTransitionVault  = "vault"
-	NavTransitionMantle = "mantle"
-	NavGateDoor         = "door"
+	NavTransitionWalk    = "walk"
+	NavTransitionStep    = "step"
+	NavTransitionStair   = "stair"
+	NavTransitionDrop    = "drop"
+	NavTransitionJump    = "jump"
+	NavTransitionLadder  = "ladder"
+	NavTransitionVault   = "vault"
+	NavTransitionMantle  = "mantle"
+	NavTransitionCarrier = "carrier"
+	NavGateDoor          = "door"
 
-	NavigationRoleDoor = "door"
+	NavigationRoleDoor    = "door"
+	NavigationRoleCarrier = "carrier"
 
 	NavCapabilityClimbLadder = "climb_ladder"
 	NavCapabilityJump        = "jump"
@@ -70,13 +72,25 @@ type NavSpanRef struct {
 // locomotion explicit world-space entry and exit points.
 type NavTraversalDef struct {
 	// ID remains the legacy owner ID for old graph bundles.
-	ID       string  `json:"id,omitempty"`
-	LinkID   string  `json:"link_id,omitempty"`
-	OwnerID  string  `json:"owner_id,omitempty"`
-	Start    Vec3    `json:"start"`
-	Apex     Vec3    `json:"apex,omitempty"`
-	End      Vec3    `json:"end"`
-	Duration float32 `json:"duration,omitempty"`
+	ID       string                  `json:"id,omitempty"`
+	LinkID   string                  `json:"link_id,omitempty"`
+	OwnerID  string                  `json:"owner_id,omitempty"`
+	Start    Vec3                    `json:"start"`
+	Apex     Vec3                    `json:"apex,omitempty"`
+	End      Vec3                    `json:"end"`
+	Duration float32                 `json:"duration,omitempty"`
+	Carrier  *NavCarrierTraversalDef `json:"carrier,omitempty"`
+}
+
+// NavCarrierTraversalDef describes the moving-support portion of one directed
+// station-to-station traversal. Start and End remain static graph points.
+type NavCarrierTraversalDef struct {
+	CarrierID        string `json:"carrier_id"`
+	FromStop         string `json:"from_stop"`
+	ToStop           string `json:"to_stop"`
+	Board            Vec3   `json:"board"`
+	CallControllerID string `json:"call_controller_id,omitempty"`
+	ControllerID     string `json:"controller_id,omitempty"`
 }
 
 func (traversal NavTraversalDef) StableLinkID() string {
@@ -250,6 +264,30 @@ type NavDoorDef struct {
 	BoundsHalfExtents Vec3   `json:"bounds_half_extents"`
 }
 
+type NavCarrierControllerDef struct {
+	ID                string `json:"id"`
+	BoundsCenter      Vec3   `json:"bounds_center"`
+	BoundsHalfExtents Vec3   `json:"bounds_half_extents"`
+}
+
+type NavCarrierStopDef struct {
+	ID           string                    `json:"id"`
+	BoundsCenter Vec3                      `json:"bounds_center"`
+	Controllers  []NavCarrierControllerDef `json:"controllers,omitempty"`
+}
+
+// NavCarrierDef is a format-neutral moving support with discrete stops.
+// Current moving brushes emit closed/open stops; the graph and runtime contract
+// intentionally supports more stops without changing route execution.
+type NavCarrierDef struct {
+	ID                string              `json:"id"`
+	Group             string              `json:"group,omitempty"`
+	BoundsHalfExtents Vec3                `json:"bounds_half_extents"`
+	Speed             float32             `json:"speed,omitempty"`
+	Wait              float32             `json:"wait,omitempty"`
+	Stops             []NavCarrierStopDef `json:"stops"`
+}
+
 type NavGraphManifestDef struct {
 	NavID           string                  `json:"nav_id"`
 	SchemaVersion   int                     `json:"schema_version"`
@@ -260,6 +298,7 @@ type NavGraphManifestDef struct {
 	AgentProfiles   []NavAgentProfileDef    `json:"agent_profiles,omitempty"`
 	LadderVolumes   []LevelLadderVolumeDef  `json:"ladder_volumes,omitempty"`
 	Doors           []NavDoorDef            `json:"doors,omitempty"`
+	Carriers        []NavCarrierDef         `json:"carriers,omitempty"`
 	SourceTiles     []NavSourceTileEntryDef `json:"source_tiles,omitempty"`
 	GraphTiles      []NavGraphTileEntryDef  `json:"graph_tiles,omitempty"`
 }

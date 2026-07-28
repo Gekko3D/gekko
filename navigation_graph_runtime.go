@@ -60,6 +60,7 @@ type RuntimeNavigationService struct {
 	NavigationGraphRevision uint64
 	query                   *content.NavGraphQuery
 	profiles                []content.NavAgentProfileDef
+	carriers                []content.NavCarrierDef
 	disabledTraversals      map[string]struct{}
 	openDoors               map[string]struct{}
 	blockers                map[string]content.NavBlockerDef
@@ -113,6 +114,7 @@ func RuntimeNavigationServiceFromStreamedLevelState(state *StreamedLevelRuntimeS
 		NavigationGraphRevision: state.navigationLoadedGen,
 		query:                   state.navigationQuery,
 		profiles:                append([]content.NavAgentProfileDef(nil), state.BaseNavManifest.AgentProfiles...),
+		carriers:                append([]content.NavCarrierDef(nil), state.BaseNavManifest.Carriers...),
 		disabledTraversals:      copyNavigationTraversalSet(state.navigationDisabled),
 		openDoors:               copyNavigationTraversalSet(state.navigationOpenDoors),
 		blockers:                copyNavigationBlockers(state.navigationBlockers),
@@ -159,12 +161,58 @@ func (s RuntimeNavigationService) WithTraversalDisabled(traversalID string) (Run
 	disabled[traversalID] = struct{}{}
 	// ponytail: rebuild once per interaction plan; cache constrained views only
 	// if controller-heavy maps make this measurable.
-	query, err := buildRuntimeNavigationQueryWithDoorOverlays(s.Sources, s.Graphs, s.ChunkSize, s.VoxelResolution, s.profiles, disabled, s.openDoors, s.blockers)
+	query, err := buildRuntimeNavigationQueryWithDoorOverlays(s.Sources, s.Graphs, s.ChunkSize, s.VoxelResolution, s.profiles, disabled, s.openDoors, s.blockers, s.carriers)
 	if err != nil {
 		return RuntimeNavigationService{}, err
 	}
 	s.query, s.disabledTraversals = query, disabled
 	return s, nil
+}
+
+// WithSpanTransitionDisabled returns an immutable query view that avoids one
+// directed walk edge.
+func (s RuntimeNavigationService) WithSpanTransitionDisabled(from, to content.NavSpanRef) (RuntimeNavigationService, error) {
+	graphs := append([]content.NavGraphTileDef(nil), s.Graphs...)
+	found := false
+	for i := range graphs {
+		if graphs[i].Coord != from.Tile {
+			continue
+		}
+		kept := make([]content.NavSpanTransitionDef, 0, len(graphs[i].SpanTransitions))
+		for _, transition := range graphs[i].SpanTransitions {
+			if transition.From == from.Span && transition.To == to && transition.Kind == content.NavTransitionWalk {
+				found = true
+				continue
+			}
+			kept = append(kept, transition)
+		}
+		graphs[i].SpanTransitions = kept
+	}
+	if !found {
+		return s, nil
+	}
+	query, err := buildRuntimeNavigationQueryWithDoorOverlays(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, s.profiles, s.disabledTraversals, s.openDoors, s.blockers, s.carriers)
+	if err != nil {
+		return RuntimeNavigationService{}, err
+	}
+	s.Graphs, s.query = graphs, query
+	return s, nil
+}
+
+// RequiresSupportHandoff reports whether a directed route edge changes the
+// walkable support height without invoking an explicit traversal action.
+func (s RuntimeNavigationService) RequiresSupportHandoff(from, to content.NavSpanRef) bool {
+	for _, graph := range s.Graphs {
+		if graph.Coord != from.Tile {
+			continue
+		}
+		for _, transition := range graph.SpanTransitions {
+			if transition.From == from.Span && transition.To == to {
+				return transition.Kind == content.NavTransitionWalk && absf(transition.StepDelta) > 1e-4
+			}
+		}
+	}
+	return false
 }
 
 func (s RuntimeNavigationService) ProjectPoint(point content.Vec3, maxDistance float32) (content.NavPointResult, error) {
@@ -293,7 +341,7 @@ func (s RuntimeNavigationService) ReachableSpans(start content.NavSpanRef, targe
 	}
 	query, err := buildRuntimeNavigationQueryWithDoorOverlays(
 		s.Sources, s.Graphs, s.ChunkSize, s.VoxelResolution,
-		s.profiles, s.disabledTraversals, s.openDoors, s.blockers,
+		s.profiles, s.disabledTraversals, s.openDoors, s.blockers, s.carriers,
 	)
 	if err != nil {
 		return result
@@ -371,10 +419,10 @@ func buildRuntimeNavigationQueryWithDisabledTraversals(sources []content.NavSour
 }
 
 func buildRuntimeNavigationQueryWithOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled map[string]struct{}, blockers map[string]content.NavBlockerDef) (*content.NavGraphQuery, error) {
-	return buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, chunkSize, voxelResolution, profiles, disabled, nil, blockers)
+	return buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, chunkSize, voxelResolution, profiles, disabled, nil, blockers, nil)
 }
 
-func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled, openDoors map[string]struct{}, blockers map[string]content.NavBlockerDef) (*content.NavGraphQuery, error) {
+func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled, openDoors map[string]struct{}, blockers map[string]content.NavBlockerDef, carriers []content.NavCarrierDef) (*content.NavGraphQuery, error) {
 	if len(sources) == 0 || len(graphs) == 0 {
 		return nil, nil
 	}
@@ -395,11 +443,12 @@ func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTile
 			profileGraphs = append(profileGraphs, navGraphWithRuntimeTraversals(graph, disabled, openDoors, profile))
 		}
 	}
-	if len(blockers) != 0 {
+	if len(blockers) != 0 || len(carriers) != 0 {
 		if profile != nil {
-			return content.NewNavGraphQueryWithBlockers(sources, profileGraphs, chunkSize, voxelResolution, *profile, sortedNavigationBlockers(blockers))
+			carrierBlockers := content.NavCarrierBlockers(carriers, *profile)
+			return content.NewNavGraphQueryWithBlockers(sources, profileGraphs, chunkSize, voxelResolution, *profile, append(sortedNavigationBlockers(blockers), carrierBlockers...))
 		}
-		return nil, fmt.Errorf("navigation blocker overlay requires agent profile %q", profileID)
+		return nil, fmt.Errorf("navigation blocker or carrier overlay requires agent profile %q", profileID)
 	}
 	return content.NewNavGraphQuery(sources, profileGraphs, chunkSize, voxelResolution)
 }
@@ -670,7 +719,7 @@ func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
 		defer state.jobs.Done()
 		query, err := buildRuntimeNavigationQueryWithDoorOverlays(
 			sources, graphs, manifest.ChunkSize, manifest.VoxelResolution,
-			manifest.AgentProfiles, disabled, openDoors, blockers,
+			manifest.AgentProfiles, disabled, openDoors, blockers, manifest.Carriers,
 		)
 		state.navigationOverlays <- streamedNavigationOverlayResult{
 			RuntimeGeneration: runtimeGeneration, GraphRevision: graphRevision, LoadGeneration: loadGeneration,
@@ -723,6 +772,25 @@ func streamedLevelNavigationOverlaySystem(cmd *Commands, state *StreamedLevelRun
 	})
 	for id := range expectedDoors {
 		if _, found := liveDoors[id]; !found {
+			disabled[id] = struct{}{}
+		}
+	}
+	expectedCarriers := make(map[string]struct{}, len(state.BaseNavManifest.Carriers))
+	for _, carrier := range state.BaseNavManifest.Carriers {
+		expectedCarriers[carrier.ID] = struct{}{}
+	}
+	liveCarriers := make(map[string]struct{}, len(expectedCarriers))
+	MakeQuery2[MovingBrushComponent, AuthoredLevelMovingBrushRefComponent](cmd).Map(func(_ EntityId, brush *MovingBrushComponent, ref *AuthoredLevelMovingBrushRefComponent) bool {
+		if brush == nil || ref == nil || ref.LevelID != state.LevelID {
+			return true
+		}
+		if _, expected := expectedCarriers[ref.MovingBrushID]; expected {
+			liveCarriers[ref.MovingBrushID] = struct{}{}
+		}
+		return true
+	})
+	for id := range expectedCarriers {
+		if _, found := liveCarriers[id]; !found {
 			disabled[id] = struct{}{}
 		}
 	}
@@ -992,6 +1060,13 @@ func copyNavGraphManifest(source *content.NavGraphManifestDef) *content.NavGraph
 	}
 	copy.LadderVolumes = append([]content.LevelLadderVolumeDef(nil), source.LadderVolumes...)
 	copy.Doors = append([]content.NavDoorDef(nil), source.Doors...)
+	copy.Carriers = append([]content.NavCarrierDef(nil), source.Carriers...)
+	for i := range copy.Carriers {
+		copy.Carriers[i].Stops = append([]content.NavCarrierStopDef(nil), source.Carriers[i].Stops...)
+		for stop := range copy.Carriers[i].Stops {
+			copy.Carriers[i].Stops[stop].Controllers = append([]content.NavCarrierControllerDef(nil), source.Carriers[i].Stops[stop].Controllers...)
+		}
+	}
 	copy.SourceTiles = append([]content.NavSourceTileEntryDef(nil), source.SourceTiles...)
 	copy.GraphTiles = append([]content.NavGraphTileEntryDef(nil), source.GraphTiles...)
 	return &copy

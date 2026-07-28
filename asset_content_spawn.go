@@ -147,6 +147,11 @@ func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		result.ItemKindsByAssetID[marker.ID] = AuthoredItemKindMarker
 	}
 	cmd.app.FlushCommands()
+	for _, entity := range result.EntitiesByAssetID {
+		if ref, _ := cmd.GetComponent(entity, reflect.TypeOf(AuthoredAssetRefComponent{})).(*AuthoredAssetRefComponent); ref != nil {
+			ref.RootEntity = result.RootEntity
+		}
+	}
 
 	attachToParent := func(itemID, parentID string) error {
 		eid, ok := result.EntitiesByAssetID[itemID]
