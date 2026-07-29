@@ -84,6 +84,25 @@ func TestConnectNavGraphDoorsComposesHorizontalHatchWithMovement(t *testing.T) {
 	}
 }
 
+func TestConnectNavGraphDoorsRejectsDropBlockedByOpenHatch(t *testing.T) {
+	source, graph, profile, door := buildHorizontalHatchGraph(t)
+	door.OpenOffset = Vec3{0, -2.5, 0}
+	linked, diagnostics, err := connectNavGraphDoorGates(
+		[]NavSourceTileDef{source}, []NavGraphTileDef{graph}, []NavDoorDef{door}, profile, 8, 1, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range linked[0].SpanTransitions {
+		if transition.Kind == NavTransitionDrop {
+			t.Fatalf("open hatch blocks inferred landing: %+v", transition)
+		}
+	}
+	if len(diagnostics) != 1 || diagnostics[0] != (NavDoorDiagnostic{DoorID: door.ID, Code: NavDoorSkippedUnsupported}) {
+		t.Fatalf("hatch diagnostics = %+v", diagnostics)
+	}
+}
+
 func TestConnectNavGraphDoorsGatesLadderInsteadOfInferringDrop(t *testing.T) {
 	source, graph, profile, door := buildHorizontalHatchGraph(t)
 	regions := navGraphSpanRegions(graph)

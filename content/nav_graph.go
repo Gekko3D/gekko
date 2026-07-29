@@ -262,6 +262,7 @@ type NavDoorDef struct {
 	Group             string `json:"group,omitempty"`
 	BoundsCenter      Vec3   `json:"bounds_center"`
 	BoundsHalfExtents Vec3   `json:"bounds_half_extents"`
+	OpenOffset        Vec3   `json:"open_offset,omitempty"`
 }
 
 type NavCarrierControllerDef struct {

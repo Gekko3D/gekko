@@ -309,6 +309,8 @@ Each marker contains:
 - optional tags
 
 `navigation_role: "door"` treats the closed brush footprint as a dynamic gate.
+Navigation bakes also retain the linear open offset so inferred hatch drops are
+omitted when the fully open brush would obstruct the destination actor capsule.
 `navigation_role: "carrier"` keeps the moving brush out of static occupancy
 and bakes directed station-to-station links. A carrier route remains owned by
 the carrier traversal while the actor is supported by the moving brush, then

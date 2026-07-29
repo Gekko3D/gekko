@@ -107,6 +107,9 @@ func ValidateNavGraphManifest(def *NavGraphManifestDef) NavGraphValidationResult
 		if !validVec3(door.BoundsCenter) || !validVec3(door.BoundsHalfExtents) || door.BoundsHalfExtents[0] <= 0 || door.BoundsHalfExtents[1] <= 0 || door.BoundsHalfExtents[2] <= 0 {
 			result.addError("invalid_door_bounds", fmt.Sprintf("navigation door %q requires finite positive bounds", door.ID))
 		}
+		if !validVec3(door.OpenOffset) {
+			result.addError("invalid_door_open_offset", fmt.Sprintf("navigation door %q requires a finite open offset", door.ID))
+		}
 	}
 	for i, carrier := range def.Carriers {
 		if strings.TrimSpace(carrier.ID) == "" {

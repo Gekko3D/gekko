@@ -120,7 +120,10 @@ func ApplyNavGraphDoors(bake *NavGraphBakeResult, brushes []LevelMovingBrushDef)
 	doors := make([]NavDoorDef, 0)
 	for _, brush := range brushes {
 		if strings.TrimSpace(brush.NavigationRole) == NavigationRoleDoor {
-			doors = append(doors, NavDoorDef{ID: brush.ID, Group: brush.TargetName, BoundsCenter: brush.BoundsCenter, BoundsHalfExtents: brush.BoundsHalfExtents})
+			doors = append(doors, NavDoorDef{
+				ID: brush.ID, Group: brush.TargetName, BoundsCenter: brush.BoundsCenter,
+				BoundsHalfExtents: brush.BoundsHalfExtents, OpenOffset: navCarrierOpenOffset(brush),
+			})
 		}
 	}
 	sort.Slice(doors, func(i, j int) bool { return doors[i].ID < doors[j].ID })

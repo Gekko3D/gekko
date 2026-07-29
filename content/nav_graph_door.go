@@ -456,6 +456,9 @@ func connectNavGraphDoorGates(sources []NavSourceTileDef, graphs []NavGraphTileD
 		seen := make(map[[2]NavSpanRef]struct{})
 		for _, door := range group.Doors {
 			for _, lane := range navHorizontalDoorDropLanes(door, spanIndex, accepted, profile, chunkSize, voxelResolution) {
+				if navDoorOpenPoseBlocksStanding(group.Doors, lane.Positive.Point, profile) {
+					continue
+				}
 				pair := [2]NavSpanRef{lane.Negative.Ref, lane.Positive.Ref}
 				if _, duplicate := seen[pair]; duplicate {
 					continue
@@ -652,6 +655,29 @@ func navHorizontalDoorDropLanes(door NavDoorDef, spans map[NavSpanRef]navDoorSpa
 		}
 	}
 	return result
+}
+
+func navDoorOpenPoseBlocksStanding(doors []NavDoorDef, point Vec3, profile NavAgentProfileDef) bool {
+	for _, door := range doors {
+		if door.OpenOffset == (Vec3{}) {
+			continue
+		}
+		center := Vec3{
+			door.BoundsCenter[0] + door.OpenOffset[0],
+			door.BoundsCenter[1] + door.OpenOffset[1],
+			door.BoundsCenter[2] + door.OpenOffset[2],
+		}
+		if point[1]+profile.Height <= center[1]-door.BoundsHalfExtents[1] ||
+			point[1] >= center[1]+door.BoundsHalfExtents[1] {
+			continue
+		}
+		dx := max(absFloat32(point[0]-center[0])-door.BoundsHalfExtents[0], 0)
+		dz := max(absFloat32(point[2]-center[2])-door.BoundsHalfExtents[2], 0)
+		if dx*dx+dz*dz < profile.Radius*profile.Radius {
+			return true
+		}
+	}
+	return false
 }
 
 func appendNavDoorDropDirection(graph *NavGraphTileDef, doorID string, from navDoorSpan, fromRegion uint32, to navDoorSpan, toRegion uint32, width, headroom, clearance, cost float32) {
