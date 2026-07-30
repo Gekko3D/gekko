@@ -4,7 +4,6 @@ import (
 	"container/heap"
 	"fmt"
 	"math"
-	"sort"
 )
 
 type navRegionRouteStep struct {
@@ -149,22 +148,6 @@ func findNavSectorRoute(query *navGraphQuery, start, goal TerrainChunkCoordDef) 
 	if start == goal {
 		return []TerrainChunkCoordDef{start}, true
 	}
-	edges := make(map[TerrainChunkCoordDef][]TerrainChunkCoordDef)
-	for coord, graph := range query.graphs {
-		seen := map[TerrainChunkCoordDef]struct{}{}
-		for _, transition := range graph.Transitions {
-			if transition.ToTile == coord {
-				continue
-			}
-			if _, loaded := query.graphs[transition.ToTile]; loaded {
-				seen[transition.ToTile] = struct{}{}
-			}
-		}
-		for next := range seen {
-			edges[coord] = append(edges[coord], next)
-		}
-		sort.Slice(edges[coord], func(i, j int) bool { return terrainCoordLess(edges[coord][i], edges[coord][j]) })
-	}
 
 	startNode, goalNode := navRouteNode{Tile: start}, navRouteNode{Tile: goal}
 	frontier := navRouteQueue{{node: startNode, estimate: navSectorDistance(start, goal)}}
@@ -185,7 +168,7 @@ func findNavSectorRoute(query *navGraphQuery, start, goal TerrainChunkCoordDef) 
 			reverseTerrainCoords(path)
 			return path, true
 		}
-		for _, nextTile := range edges[current.node.Tile] {
+		for _, nextTile := range query.sectorEdges[current.node.Tile] {
 			next := navRouteNode{Tile: nextTile}
 			cost := current.cost + 1
 			if previous, seen := costs[next]; seen && cost >= previous {
@@ -239,11 +222,7 @@ func findNavRegionRoute(query *navGraphQuery, start, goal navRouteNode, startPoi
 			}
 			return path, true
 		}
-		graph := query.graphs[state.Node.Tile]
-		for _, transition := range graph.Transitions {
-			if transition.FromRegion != state.Node.Region {
-				continue
-			}
+		for _, transition := range query.regionEdges[state.Node] {
 			next := navRouteNode{Tile: transition.ToTile, Region: transition.ToRegion}
 			if !query.hasRegion(next) || !tileAllowed(allowed, next.Tile) {
 				continue

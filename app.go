@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,6 +30,9 @@ type App struct {
 	fixedTimestep      time.Duration
 	accumulator        time.Duration
 	lastFrameTime      time.Time
+	slowFrameThreshold time.Duration
+	profileStage       string
+	profileSystems     []appSystemTiming
 
 	// Command Buffering
 	cmdMutex            sync.Mutex
@@ -35,6 +40,12 @@ type App struct {
 	pendingRemovals     []EntityId
 	pendingCompAdds     []pendingCompAdd
 	pendingCompRemovals []pendingCompRemoval
+}
+
+type appSystemTiming struct {
+	stage    string
+	systemPC uintptr
+	duration time.Duration
 }
 
 type pendingAdd struct {
@@ -78,6 +89,9 @@ func (app *App) Run() {
 		frameStart := time.Now()
 		dt := frameStart.Sub(app.lastFrameTime)
 		app.lastFrameTime = frameStart
+		if app.slowFrameThreshold > 0 {
+			app.profileSystems = app.profileSystems[:0]
+		}
 
 		// Dynamic Dt clamping for safety
 		dynamicDt := dt.Seconds()
@@ -144,7 +158,9 @@ func (app *App) Run() {
 			}
 		}
 
-		app.sleepForFramePacing(time.Since(frameStart))
+		frameElapsed := time.Since(frameStart)
+		app.reportSlowFrame(frameElapsed, dt)
+		app.sleepForFramePacing(frameElapsed)
 
 		if app.stateful && app.state == app.finalState {
 			app.callSystems(app.state, exit, DynamicUpdate)
@@ -189,6 +205,10 @@ func (app *App) callStagesExcluding(state State, phase statePhase, updateType Up
 }
 
 func (app *App) callStage(state State, phase statePhase, stage Stage) {
+	if app.slowFrameThreshold > 0 {
+		app.profileStage = stage.Name
+	}
+
 	// On execute, call stateless/always run systems first
 	if execute == phase {
 		for _, system := range app.systemsStateless[stage.Name] {
@@ -216,6 +236,9 @@ func (app *App) callSystems(state State, phase statePhase, updateType UpdateType
 	for _, stage := range app.stages {
 		if stage.UpdateType != updateType {
 			continue
+		}
+		if app.slowFrameThreshold > 0 {
+			app.profileStage = stage.Name
 		}
 
 		// On execute, call stateless/always run systems first
@@ -267,17 +290,71 @@ func (app *App) addResources(resources ...any) *App {
 }
 
 func (app *App) callSystem(system systemFn) {
-	// start := time.Now()
-
+	if app.slowFrameThreshold == 0 {
+		app.callSystemInternal(system)
+		return
+	}
+	start := time.Now()
 	app.callSystemInternal(system)
+	app.profileSystems = append(app.profileSystems, appSystemTiming{
+		stage:    app.profileStage,
+		systemPC: reflect.ValueOf(system).Pointer(),
+		duration: time.Since(start),
+	})
+}
 
-	// fmt.Println(
-	// 	"system ",
-	// 	runtime.FuncForPC(reflect.ValueOf(system).Pointer()).Name(),
-	// 	": ",
-	// 	time.Since(start).Milliseconds(),
-	// 	"ms",
-	// )
+func (app *App) reportSlowFrame(work, rawDt time.Duration) {
+	if app.slowFrameThreshold == 0 || work < app.slowFrameThreshold {
+		return
+	}
+
+	samples := append([]appSystemTiming(nil), app.profileSystems...)
+	sort.Slice(samples, func(i, j int) bool { return samples[i].duration > samples[j].duration })
+
+	var total time.Duration
+	for _, sample := range samples {
+		total += sample.duration
+	}
+	unattributed := work - total
+	if unattributed < 0 {
+		unattributed = 0
+	}
+
+	topCount := min(5, len(samples))
+	top := make([]string, 0, topCount)
+	for _, sample := range samples[:topCount] {
+		name := "unknown"
+		if fn := runtime.FuncForPC(sample.systemPC); fn != nil {
+			name = fn.Name()
+		}
+		top = append(top, fmt.Sprintf("%s:%s=%.2fms", sample.stage, name, float64(sample.duration)/float64(time.Millisecond)))
+	}
+
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	var elapsed float64
+	var fixedSteps int
+	if value, ok := app.resources[reflect.TypeOf(Time{})]; ok {
+		timeResource := value.(*Time)
+		elapsed = timeResource.Elapsed
+		fixedSteps = timeResource.FixedStepCount
+	}
+	var lastGCPause uint64
+	if memory.NumGC > 0 {
+		lastGCPause = memory.PauseNs[(memory.NumGC-1)%uint32(len(memory.PauseNs))]
+	}
+	fmt.Printf(
+		"GEKKO_SLOW_FRAME t=%.3f work_ms=%.2f raw_dt_ms=%.2f fixed_steps=%d unattributed_ms=%.2f heap_mb=%.1f gc=%d last_gc_pause_ms=%.2f top=%q\n",
+		elapsed,
+		float64(work)/float64(time.Millisecond),
+		float64(rawDt)/float64(time.Millisecond),
+		fixedSteps,
+		float64(unattributed)/float64(time.Millisecond),
+		float64(memory.HeapAlloc)/(1024*1024),
+		memory.NumGC,
+		float64(lastGCPause)/float64(time.Millisecond),
+		strings.Join(top, ","),
+	)
 }
 
 var typeOfCommands = reflect.TypeOf(Commands{})

@@ -1,7 +1,9 @@
 package gekko
 
 import (
+	"os"
 	"reflect"
+	"strconv"
 	"time"
 )
 
@@ -47,6 +49,7 @@ func (app *App) UseFixedTimestep(hz int) *App {
 }
 
 func (app *App) build() {
+	app.slowFrameThreshold = slowFrameThresholdFromEnv()
 	app.stages = append(app.stages, PhysicsUpdate)
 	app.stages = append(app.stages, Prelude)
 	app.stages = append(app.stages, PreUpdate)
@@ -65,4 +68,12 @@ func (app *App) build() {
 	for _, module := range app.modules {
 		module.Install(app, commands)
 	}
+}
+
+func slowFrameThresholdFromEnv() time.Duration {
+	milliseconds, err := strconv.ParseFloat(os.Getenv("GEKKO_SLOW_FRAME_MS"), 64)
+	if err != nil || milliseconds <= 0 {
+		return 0
+	}
+	return time.Duration(milliseconds * float64(time.Millisecond))
 }

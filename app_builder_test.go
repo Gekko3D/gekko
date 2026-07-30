@@ -117,3 +117,15 @@ func TestAppBuilding_UseTargetFPS_DisablesFramePacingForZeroOrNegative(t *testin
 		}
 	}
 }
+
+func TestSlowFrameThresholdFromEnv(t *testing.T) {
+	t.Setenv("GEKKO_SLOW_FRAME_MS", "12.5")
+	if got := slowFrameThresholdFromEnv(); got != 12500*time.Microsecond {
+		t.Fatalf("expected 12.5ms, got %v", got)
+	}
+
+	t.Setenv("GEKKO_SLOW_FRAME_MS", "off")
+	if got := slowFrameThresholdFromEnv(); got != 0 {
+		t.Fatalf("expected invalid threshold to disable profiling, got %v", got)
+	}
+}

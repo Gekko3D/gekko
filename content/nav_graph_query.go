@@ -3,6 +3,7 @@ package content
 import (
 	"fmt"
 	"math"
+	"sort"
 )
 
 const (
@@ -39,6 +40,8 @@ type navGraphQuery struct {
 	spanColumns     map[navSpanColumn][]NavSpanRef
 	walkableCells   map[navSpanPathCell]navWalkableCell
 	spanClassIDs    map[string]uint32
+	sectorEdges     map[TerrainChunkCoordDef][]TerrainChunkCoordDef
+	regionEdges     map[navRouteNode][]NavRegionTransitionDef
 	blocked         map[NavSpanRef]struct{}
 	globalEdges     map[NavSpanRef][]NavSpanTransitionDef
 	globalScale     float32
@@ -167,8 +170,39 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 		query.spanEdges[graph.Coord], query.spanScale[graph.Coord] = edges, scale
 	}
 	query.indexBackingTransitions()
+	query.indexRouteEdges()
 	query.indexActiveDegrees()
 	return query, nil
+}
+
+func (q *navGraphQuery) indexRouteEdges() {
+	q.sectorEdges = make(map[TerrainChunkCoordDef][]TerrainChunkCoordDef, len(q.graphs))
+	q.regionEdges = make(map[navRouteNode][]NavRegionTransitionDef)
+	for coord, graph := range q.graphs {
+		seen := make(map[TerrainChunkCoordDef]struct{})
+		for _, transition := range graph.Transitions {
+			from := navRouteNode{Tile: coord, Region: transition.FromRegion}
+			q.regionEdges[from] = append(q.regionEdges[from], transition)
+			if transition.ToTile == coord {
+				continue
+			}
+			if _, loaded := q.graphs[transition.ToTile]; loaded {
+				seen[transition.ToTile] = struct{}{}
+			}
+		}
+		for region := range graph.Regions {
+			from := navRouteNode{Tile: coord, Region: uint32(region)}
+			sort.Slice(q.regionEdges[from], func(i, j int) bool {
+				return q.regionEdges[from][i].ID < q.regionEdges[from][j].ID
+			})
+		}
+		for next := range seen {
+			q.sectorEdges[coord] = append(q.sectorEdges[coord], next)
+		}
+		sort.Slice(q.sectorEdges[coord], func(i, j int) bool {
+			return terrainCoordLess(q.sectorEdges[coord][i], q.sectorEdges[coord][j])
+		})
+	}
 }
 
 func (q *navGraphQuery) indexWalkableCell(coord TerrainChunkCoordDef, span NavSpanDef) {
@@ -497,14 +531,19 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 		}
 	}
 	if len(query.blocked) == 0 {
+		wantedRegions := make(map[navRouteNode]struct{}, len(wanted))
+		for target := range wanted {
+			wantedRegions[navRouteNode{Tile: target.Tile, Region: query.spanRegions[target.Tile][target.Span]}] = struct{}{}
+		}
 		reachable := map[navRouteNode]struct{}{{Tile: start.Tile, Region: startRegion}: {}}
 		queue := []navRouteNode{{Tile: start.Tile, Region: startRegion}}
-		for head := 0; head < len(queue); head++ {
+		found := make(map[navRouteNode]struct{}, len(wantedRegions))
+		for head := 0; head < len(queue) && len(found) < len(wantedRegions); head++ {
 			current := queue[head]
-			for _, transition := range query.graphs[current.Tile].Transitions {
-				if transition.FromRegion != current.Region {
-					continue
-				}
+			if _, wanted := wantedRegions[current]; wanted {
+				found[current] = struct{}{}
+			}
+			for _, transition := range query.regionEdges[current] {
 				next := navRouteNode{Tile: transition.ToTile, Region: transition.ToRegion}
 				if _, seen := reachable[next]; seen || !query.hasRegion(next) {
 					continue
