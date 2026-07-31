@@ -505,6 +505,8 @@ func uiLayoutNodeFor(node UiNode, path string, x, y, width float32, ctx uiLayout
 		return uiLayoutNumberField(typed, path, x, y, ctx)
 	case *UiNumberField:
 		return uiLayoutNumberField(*typed, path, x, y, ctx)
+	case UiSelectCycle:
+		return uiLayoutSelectCycle(typed, path, x, y, ctx)
 	case *UiSelectCycle:
 		return uiLayoutSelectCycle(*typed, path, x, y, ctx)
 	case UiZStack:

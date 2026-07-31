@@ -49,6 +49,7 @@ type AudioPlayback struct {
 // AudioState owns the process-wide Oto context, decoded clip cache, and the
 // queue consumed during PreRender.
 type AudioState struct {
+	Muted      bool
 	context    *oto.Context
 	ready      <-chan struct{}
 	readyNow   bool
@@ -110,7 +111,7 @@ func (state *AudioState) Err() error {
 // Play queues a sound. It returns false when the request is invalid
 // or the per-frame safety bound is full.
 func (state *AudioState) Play(playback AudioPlayback) bool {
-	if state == nil || state.context == nil || playback.Path == "" || playback.Volume <= 0 || len(state.queued) >= defaultAudioMaxQueuedSounds {
+	if state == nil || state.Muted || state.context == nil || playback.Path == "" || playback.Volume <= 0 || len(state.queued) >= defaultAudioMaxQueuedSounds {
 		return false
 	}
 	state.queued = append(state.queued, playback)
@@ -127,6 +128,22 @@ func spatialAudioOcclusionSystem(cmd *Commands, state *AudioState, voxRt *VoxelR
 
 func processSpatialAudio(cmd *Commands, state *AudioState, voxRt *VoxelRtState) {
 	if state == nil || state.context == nil {
+		return
+	}
+	if state.Muted {
+		state.queued = state.queued[:0]
+		for _, player := range state.players {
+			if player != nil {
+				_ = player.Close()
+			}
+		}
+		state.players = nil
+		for _, loop := range state.loops {
+			if loop.player != nil {
+				_ = loop.player.Close()
+			}
+		}
+		clear(state.loops)
 		return
 	}
 	state.prunePlayers()
