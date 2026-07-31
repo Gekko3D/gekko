@@ -138,6 +138,18 @@ func connectNavGraphCarriers(sources []NavSourceTileDef, graphs []NavGraphTileDe
 					continue
 				}
 				for _, from := range fromMounts {
+					if dropBoard, drop := navCarrierDropBoard(carrier, fromStop, toStop, from, profile, voxelResolution); drop {
+						for _, to := range mounts[toStop.ID] {
+							fromNode := navRouteNode{Tile: from.Point.Ref.Tile, Region: from.Point.Region}
+							toNode := navRouteNode{Tile: to.Point.Ref.Tile, Region: to.Point.Region}
+							if fromNode == toNode {
+								continue
+							}
+							appendNavCarrierDirection(&graphs[graphIndex[from.Point.Ref.Tile]], carrier, fromStop, toStop, from, to, "", "", NavCarrierBoardDrop, dropBoard, query)
+							linked = true
+						}
+						continue
+					}
 					controllerID := navCarrierControllerAtPoint(fromStop, from.Board, profile.Height)
 					callControllerID := navCarrierControllerAtPoint(fromStop, from.Point.Point, profile.Height)
 					autoServed := fromStop.ID == "closed" && carrier.Wait > 0
@@ -152,7 +164,7 @@ func connectNavGraphCarriers(sources []NavSourceTileDef, graphs []NavGraphTileDe
 							diagnostics = append(diagnostics, NavCarrierDiagnostic{CarrierID: carrier.ID, Code: NavCarrierSkippedRegion})
 							continue
 						}
-						appendNavCarrierDirection(&graphs[graphIndex[from.Point.Ref.Tile]], carrier, fromStop, toStop, from, to, callControllerID, controllerID, query)
+						appendNavCarrierDirection(&graphs[graphIndex[from.Point.Ref.Tile]], carrier, fromStop, toStop, from, to, callControllerID, controllerID, "", from.Board, query)
 						linked = true
 					}
 				}
@@ -233,21 +245,25 @@ func resolveNavCarrierMounts(query *NavGraphQuery, carrier NavCarrierDef, stop N
 	return result
 }
 
-func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fromStop, toStop NavCarrierStopDef, from, to navCarrierMount, callControllerID, controllerID string, query *NavGraphQuery) {
+func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fromStop, toStop NavCarrierStopDef, from, to navCarrierMount, callControllerID, controllerID, boardMode string, board Vec3, query *NavGraphQuery) {
 	linkID := navTraversalLinkID(NavTransitionCarrier, carrier.ID, from.Point.Ref, to.Point.Ref)
 	duration := navVec3Distance(fromStop.BoundsCenter, toStop.BoundsCenter) / navCarrierSpeed(carrier.Speed)
 	carrierTraversal := &NavCarrierTraversalDef{
 		CarrierID: carrier.ID, FromStop: fromStop.ID, ToStop: toStop.ID,
-		Board: from.Board, CallControllerID: callControllerID, ControllerID: controllerID,
+		Board: board, BoardMode: boardMode, CallControllerID: callControllerID, ControllerID: controllerID,
 	}
 	fromSpan := query.query.spans[from.Point.Ref.Tile][from.Point.Ref.Span]
 	toSpan := query.query.spans[to.Point.Ref.Tile][to.Point.Ref.Span]
 	width := 2 * min(carrier.BoundsHalfExtents[0], carrier.BoundsHalfExtents[2])
 	headroom := min(fromSpan.Headroom, toSpan.Headroom)
 	clearance := min(fromSpan.ClearanceRadius, toSpan.ClearanceRadius)
-	cost := navVec3Distance(from.Point.Point, from.Board) +
+	cost := navVec3Distance(from.Point.Point, board) +
 		navVec3Distance(fromStop.BoundsCenter, toStop.BoundsCenter)*max(float32(1), DefaultNavCarrierSpeed/navCarrierSpeed(carrier.Speed)) +
 		navVec3Distance(Vec3{toStop.BoundsCenter[0], toStop.BoundsCenter[1] + carrier.BoundsHalfExtents[1], toStop.BoundsCenter[2]}, to.Point.Point)
+	if boardMode == NavCarrierBoardDrop {
+		duration = 0
+		cost = navVec3Distance(from.Point.Point, board) + navVec3Distance(board, to.Point.Point) + (from.Point.Point[1]-board[1])*0.5
+	}
 	spanTraversal := &NavTraversalDef{
 		ID: carrier.ID, LinkID: linkID, OwnerID: carrier.ID,
 		Start: from.Point.Point, End: to.Point.Point, Duration: duration,
@@ -270,6 +286,30 @@ func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fr
 			Carrier: &regionCarrier,
 		},
 	})
+}
+
+func navCarrierDropBoard(carrier NavCarrierDef, fromStop, toStop NavCarrierStopDef, from navCarrierMount, profile NavAgentProfileDef, voxelResolution float32) (Vec3, bool) {
+	if carrier.Wait <= 0 || toStop.ID != "closed" {
+		return Vec3{}, false
+	}
+	fromTop := fromStop.BoundsCenter[1] + carrier.BoundsHalfExtents[1]
+	toTop := toStop.BoundsCenter[1] + carrier.BoundsHalfExtents[1]
+	if fromTop-toTop <= profile.StepHeight ||
+		absFloat32(fromStop.BoundsCenter[0]-toStop.BoundsCenter[0]) > voxelResolution ||
+		absFloat32(fromStop.BoundsCenter[2]-toStop.BoundsCenter[2]) > voxelResolution {
+		return Vec3{}, false
+	}
+	insetX := max(carrier.BoundsHalfExtents[0]-profile.Radius-voxelResolution, 0)
+	insetZ := max(carrier.BoundsHalfExtents[2]-profile.Radius-voxelResolution, 0)
+	board := Vec3{
+		navCarrierClamp(from.Point.Point[0], toStop.BoundsCenter[0]-insetX, toStop.BoundsCenter[0]+insetX),
+		toTop,
+		navCarrierClamp(from.Point.Point[2], toStop.BoundsCenter[2]-insetZ, toStop.BoundsCenter[2]+insetZ),
+	}
+	if !NavTraversalSupportedByProfile(profile, NavTransitionDrop, &NavTraversalDef{Start: from.Point.Point, End: board}) {
+		return Vec3{}, false
+	}
+	return board, true
 }
 
 func navCarrierOpenOffset(brush LevelMovingBrushDef) Vec3 {

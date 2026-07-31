@@ -111,6 +111,10 @@ type GroundedCharacterMotorComponent struct {
 
 type GroundedPlayerControllerComponent = GroundedCharacterMotorComponent
 
+// CharacterControllerIgnoredComponent excludes an entity from grounded
+// character-controller raycasts without changing its rendering or physics use.
+type CharacterControllerIgnoredComponent struct{}
+
 func DefaultGroundedCharacterMotorConfig() GroundedCharacterMotorConfig {
 	return GroundedCharacterMotorConfig{
 		Height:           1.8,
@@ -1426,12 +1430,13 @@ func groundedPlayerGroundHitWithin(cmd *Commands, voxRt *VoxelRtState, basePos m
 }
 
 func groundedPlayerCollisionRaycastFilter(cmd *Commands, ctrl *GroundedPlayerControllerComponent) func(EntityId, bool) bool {
-	if cmd == nil || ctrl == nil || ctrl.CollisionIgnoredEntity == 0 {
+	if cmd == nil || ctrl == nil {
 		return nil
 	}
 	ignoredRoot := ctrl.CollisionIgnoredEntity
 	return func(hitEntity EntityId, knownEntity bool) bool {
-		return !knownEntity || !groundedPlayerEntityDescendsFrom(cmd, hitEntity, ignoredRoot)
+		return !knownEntity || (cmd.GetComponent(hitEntity, reflect.TypeOf(CharacterControllerIgnoredComponent{})) == nil &&
+			(ignoredRoot == 0 || !groundedPlayerEntityDescendsFrom(cmd, hitEntity, ignoredRoot)))
 	}
 }
 

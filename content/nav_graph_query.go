@@ -335,7 +335,7 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 		}
 		span := q.spans[ref.Tile][ref.Span]
 		distance := absFloat32(span.SupportHeight - point[1])
-		if distance > q.voxelResolution {
+		if distance > q.voxelResolution+1e-4 {
 			continue
 		}
 		if found && (distance > bestDistance || distance == bestDistance && !navSpanRefLess(ref, best.Ref)) {
@@ -376,7 +376,7 @@ func (q *navGraphQuery) resolveNearby(point Vec3, maxDistance float32) (navResol
 				}
 				offsetX, offsetZ := point[0]-projected[0], point[2]-projected[2]
 				offsetY := point[1] - projected[1]
-				if offsetX*offsetX+offsetY*offsetY+offsetZ*offsetZ > maxDistanceSqr {
+				if offsetX*offsetX+offsetY*offsetY+offsetZ*offsetZ > maxDistanceSqr+1e-4 {
 					continue
 				}
 				distance := navVec3Distance(point, projected)

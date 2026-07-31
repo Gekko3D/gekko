@@ -712,8 +712,8 @@ seams on the lab, Crossfire, and Gasworks without polygon data.
 
 Implement one observed gameplay need at a time:
 
-- [ ] drops
-- [ ] authored/validated jumps
+- [x] drops
+- [x] validated jumps
 - [x] ladders
 - [ ] water
 - [x] doors
@@ -724,6 +724,22 @@ Implement one observed gameplay need at a time:
 
 Use explicit directed transitions and runtime state/cost overlays. Do not
 rebuild static spans for a door opening or another NPC moving.
+
+General drops are discovered only at exposed graph boundaries, bounded by the
+agent profile's finite `max_drop_height`, and capsule-swept horizontally off
+the ledge then vertically to the landing. Full and dirty-tile delta builds run
+the same linker. Links use stable per-lane IDs, and ActionGame disables a
+physically unrealizable link before its bounded replan. Auto-returning vertical
+carriers also emit upper-to-lower carrier links with `board_mode: "drop"`;
+execution waits for the lower stop, lands on live carrier support, then exits
+onto the lower static span without rebuilding navigation as the carrier moves.
+
+Gap and upward jumps are discovered in eight directions from exposed graph
+boundaries. Each candidate uses the profile's launch speed, horizontal speed,
+gravity, distance, and rise limits; its sampled capsule arc must remain inside
+known source tiles and clear sparse solid/blocker occupancy. One deterministic
+link per directed region pair bounds route-graph growth. Full and dirty-tile
+builds use the same linker, and locomotion executes the baked speeds directly.
 
 The ladder slice is level-owned and format-neutral: `.gklevel`
 `ladder_volumes` provide bounds plus optional explicit mounts, climb speed, and
@@ -754,8 +770,7 @@ inside that trigger's use range without crossing the closed gate, activates the
 shared use-trigger behavior, waits for physical clearance, then replans the
 original goal and dispatches the unchanged movement kind. A closed moving hatch
 is not static walkable support. Door locks, keys, indirect relay/controller
-chains, intentional breaking, elevators, and general ledge-drop discovery
-remain separate slices.
+chains and intentional breaking remain separate slices.
 
 ## Phase 12: Optimize Measured Bottlenecks
 

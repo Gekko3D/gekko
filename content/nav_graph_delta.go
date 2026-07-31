@@ -243,6 +243,14 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		if err != nil {
 			return NavGraphDeltaBakeResult{}, err
 		}
+		connected, err = ConnectNavGraphDrops(sourceSlice, connected, profile, base.ChunkSize, base.VoxelResolution)
+		if err != nil {
+			return NavGraphDeltaBakeResult{}, err
+		}
+		connected, err = ConnectNavGraphJumps(sourceSlice, connected, profile, base.ChunkSize, base.VoxelResolution)
+		if err != nil {
+			return NavGraphDeltaBakeResult{}, err
+		}
 		connected, _, err = connectNavGraphLadders(sourceSlice, connected, base.LadderVolumes, profile, base.ChunkSize, base.VoxelResolution, false)
 		if err != nil {
 			return NavGraphDeltaBakeResult{}, err

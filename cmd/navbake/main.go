@@ -12,7 +12,7 @@ import (
 
 func main() {
 	var levelPath, worldPath, outputPath, profileID, capabilities string
-	var radius, height, stepHeight, maxSlope, maxDrop, maxJump, maxJumpRise, maxVault, maxMantle, jumpSpeed, gravity float64
+	var radius, height, stepHeight, maxSlope, maxDrop, maxJump, maxJumpRise, maxVault, maxMantle, jumpSpeed, jumpHorizontalSpeed, gravity float64
 	flag.StringVar(&levelPath, "level", "", "input .gklevel with authored traversal")
 	flag.StringVar(&worldPath, "world", "", "input .gkworld manifest")
 	flag.StringVar(&outputPath, "out", "", "output .gknav manifest")
@@ -27,6 +27,7 @@ func main() {
 	flag.Float64Var(&maxVault, "max-vault-height", 0.8, "agent maximum vault height")
 	flag.Float64Var(&maxMantle, "max-mantle-height", 1.4, "agent maximum mantle height")
 	flag.Float64Var(&jumpSpeed, "jump-speed", 5.5, "agent jump launch speed")
+	flag.Float64Var(&jumpHorizontalSpeed, "jump-horizontal-speed", 4.5, "agent maximum horizontal jump speed")
 	flag.Float64Var(&gravity, "gravity", 18, "agent gravity")
 	flag.StringVar(&capabilities, "capabilities", strings.Join([]string{content.NavCapabilityClimbLadder, content.NavCapabilityJump, content.NavCapabilityMantle, content.NavCapabilityVault}, ","), "comma-separated traversal capabilities")
 	flag.Parse()
@@ -37,7 +38,7 @@ func main() {
 		ID: profileID, Radius: float32(radius), Height: float32(height), StepHeight: float32(stepHeight), MaxSlopeDegrees: float32(maxSlope),
 		MaxDropHeight: float32(maxDrop), MaxJumpDistance: float32(maxJump), MaxJumpRise: float32(maxJumpRise),
 		MaxVaultHeight: float32(maxVault), MaxMantleHeight: float32(maxMantle),
-		JumpSpeed: float32(jumpSpeed), Gravity: float32(gravity),
+		JumpSpeed: float32(jumpSpeed), JumpHorizontalSpeed: float32(jumpHorizontalSpeed), Gravity: float32(gravity),
 		Capabilities: splitCapabilities(capabilities),
 	}
 	var bake content.NavGraphBakeResult

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const CurrentNavGraphBuilderVersion = "voxel_graph_v10"
+const CurrentNavGraphBuilderVersion = "voxel_graph_v13"
 
 type NavGraphBakeDiagnosticCount struct {
 	Coord          TerrainChunkCoordDef `json:"coord"`
@@ -61,6 +61,12 @@ func BakeLevelNavGraph(levelPath string, profiles []NavAgentProfileDef) (NavGrap
 	if err := ApplyNavGraphDoors(&result, level.MovingBrushes); err != nil {
 		return NavGraphBakeResult{}, err
 	}
+	if err := ApplyNavGraphDrops(&result); err != nil {
+		return NavGraphBakeResult{}, err
+	}
+	if err := ApplyNavGraphJumps(&result); err != nil {
+		return NavGraphBakeResult{}, err
+	}
 	if err := ApplyNavGraphCarriers(&result, level.MovingBrushes, level.UseTriggers); err != nil {
 		return NavGraphBakeResult{}, err
 	}
@@ -71,6 +77,71 @@ func BakeLevelNavGraph(levelPath string, profiles []NavAgentProfileDef) (NavGrap
 		return NavGraphBakeResult{}, err
 	}
 	return result, nil
+}
+
+// ApplyNavGraphJumps adds profile-bounded, voxel-validated gap/upward jumps.
+func ApplyNavGraphJumps(bake *NavGraphBakeResult) error {
+	if bake == nil {
+		return fmt.Errorf("navigation graph bake is required")
+	}
+	for _, profile := range bake.Manifest.AgentProfiles {
+		var graphs []NavGraphTileDef
+		for _, graph := range bake.GraphTiles {
+			if graph.AgentProfileID == profile.ID {
+				graphs = append(graphs, graph)
+			}
+		}
+		linked, err := ConnectNavGraphJumps(bake.SourceTiles, graphs, profile, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution)
+		if err != nil {
+			return err
+		}
+		byCoord := make(map[TerrainChunkCoordDef]NavGraphTileDef, len(linked))
+		for _, graph := range linked {
+			byCoord[graph.Coord] = graph
+		}
+		for i := range bake.GraphTiles {
+			if bake.GraphTiles[i].AgentProfileID == profile.ID {
+				bake.GraphTiles[i] = byCoord[bake.GraphTiles[i].Coord]
+			}
+		}
+	}
+	if validation := ValidateNavGraphBake(bake); validation.HasErrors() {
+		return fmt.Errorf("invalid jump-linked navigation graph bake: %s", validation.Error())
+	}
+	return nil
+}
+
+// ApplyNavGraphDrops adds profile-bounded ledge drops after doors have cut
+// static regions and before authored traversal gates are composed.
+func ApplyNavGraphDrops(bake *NavGraphBakeResult) error {
+	if bake == nil {
+		return fmt.Errorf("navigation graph bake is required")
+	}
+	for _, profile := range bake.Manifest.AgentProfiles {
+		var graphs []NavGraphTileDef
+		for _, graph := range bake.GraphTiles {
+			if graph.AgentProfileID == profile.ID {
+				graphs = append(graphs, graph)
+			}
+		}
+		linked, err := ConnectNavGraphDrops(bake.SourceTiles, graphs, profile, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution)
+		if err != nil {
+			return err
+		}
+		byCoord := make(map[TerrainChunkCoordDef]NavGraphTileDef, len(linked))
+		for _, graph := range linked {
+			byCoord[graph.Coord] = graph
+		}
+		for i := range bake.GraphTiles {
+			if bake.GraphTiles[i].AgentProfileID == profile.ID {
+				bake.GraphTiles[i] = byCoord[bake.GraphTiles[i].Coord]
+			}
+		}
+	}
+	if validation := ValidateNavGraphBake(bake); validation.HasErrors() {
+		return fmt.Errorf("invalid drop-linked navigation graph bake: %s", validation.Error())
+	}
+	return nil
 }
 
 // ApplyNavGraphCarriers stores discrete moving supports in the manifest and
@@ -240,7 +311,17 @@ func BakeImportedWorldNavGraph(worldPath string, profiles []NavAgentProfileDef) 
 	if err != nil {
 		return NavGraphBakeResult{}, err
 	}
-	return BakeNavGraphWorld(world, chunks, profiles)
+	bake, err := BakeNavGraphWorld(world, chunks, profiles)
+	if err != nil {
+		return NavGraphBakeResult{}, err
+	}
+	if err := ApplyNavGraphDrops(&bake); err != nil {
+		return NavGraphBakeResult{}, err
+	}
+	if err := ApplyNavGraphJumps(&bake); err != nil {
+		return NavGraphBakeResult{}, err
+	}
+	return bake, nil
 }
 
 func loadImportedWorldNavGraphInput(worldPath string) (*ImportedWorldDef, []ImportedWorldChunkDef, error) {

@@ -109,6 +109,7 @@ func validateNavGraphProfile(profile NavAgentProfileDef, voxelResolution float32
 	for _, value := range []float32{
 		profile.MaxDropHeight, profile.MaxJumpDistance, profile.MaxJumpRise,
 		profile.MaxVaultHeight, profile.MaxMantleHeight, profile.JumpSpeed, profile.Gravity,
+		profile.JumpHorizontalSpeed,
 	} {
 		if !finite(value) || value < 0 {
 			return fmt.Errorf("navigation agent traversal limits must be finite and non-negative")

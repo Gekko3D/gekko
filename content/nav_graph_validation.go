@@ -67,6 +67,7 @@ func ValidateNavGraphManifest(def *NavGraphManifestDef) NavGraphValidationResult
 			{"max_vault_height", profile.MaxVaultHeight},
 			{"max_mantle_height", profile.MaxMantleHeight},
 			{"jump_speed", profile.JumpSpeed},
+			{"jump_horizontal_speed", profile.JumpHorizontalSpeed},
 			{"gravity", profile.Gravity},
 		} {
 			validateNonNegative(&result, "invalid_agent_"+limit.label, "navigation agent "+limit.label, limit.value)
@@ -324,13 +325,19 @@ func validateTransitionTraversal(result *NavGraphValidationResult, label, kind s
 	if !finite(traversal.Duration) || traversal.Duration < 0 {
 		result.addError("invalid_transition_traversal_duration", label+" traversal duration must be finite and non-negative")
 	}
+	if !finite(traversal.Speed) || traversal.Speed < 0 {
+		result.addError("invalid_transition_traversal_speed", label+" traversal speed must be finite and non-negative")
+	}
+	if !finite(traversal.LaunchSpeed) || traversal.LaunchSpeed < 0 {
+		result.addError("invalid_transition_traversal_launch_speed", label+" traversal launch speed must be finite and non-negative")
+	}
 	if kind == NavTransitionCarrier {
 		carrier := traversal.Carrier
 		if carrier == nil {
 			result.addError("missing_carrier_traversal", label+" carrier traversal metadata is required")
 		} else if strings.TrimSpace(carrier.CarrierID) == "" || strings.TrimSpace(carrier.FromStop) == "" ||
 			strings.TrimSpace(carrier.ToStop) == "" || carrier.FromStop == carrier.ToStop ||
-			!validVec3(carrier.Board) {
+			!validVec3(carrier.Board) || carrier.BoardMode != "" && carrier.BoardMode != NavCarrierBoardDrop {
 			result.addError("invalid_carrier_traversal", label+" carrier traversal requires a carrier, distinct stops, and a finite boarding point")
 		}
 	} else if traversal.Carrier != nil {

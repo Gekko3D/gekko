@@ -27,6 +27,7 @@ const (
 
 	NavigationRoleDoor    = "door"
 	NavigationRoleCarrier = "carrier"
+	NavCarrierBoardDrop   = "drop"
 
 	NavCapabilityClimbLadder = "climb_ladder"
 	NavCapabilityJump        = "jump"
@@ -35,19 +36,20 @@ const (
 )
 
 type NavAgentProfileDef struct {
-	ID              string   `json:"id"`
-	Radius          float32  `json:"radius"`
-	Height          float32  `json:"height"`
-	StepHeight      float32  `json:"step_height"`
-	MaxSlopeDegrees float32  `json:"max_slope_degrees"`
-	MaxDropHeight   float32  `json:"max_drop_height,omitempty"`
-	MaxJumpDistance float32  `json:"max_jump_distance,omitempty"`
-	MaxJumpRise     float32  `json:"max_jump_rise,omitempty"`
-	MaxVaultHeight  float32  `json:"max_vault_height,omitempty"`
-	MaxMantleHeight float32  `json:"max_mantle_height,omitempty"`
-	JumpSpeed       float32  `json:"jump_speed,omitempty"`
-	Gravity         float32  `json:"gravity,omitempty"`
-	Capabilities    []string `json:"capabilities,omitempty"`
+	ID                  string   `json:"id"`
+	Radius              float32  `json:"radius"`
+	Height              float32  `json:"height"`
+	StepHeight          float32  `json:"step_height"`
+	MaxSlopeDegrees     float32  `json:"max_slope_degrees"`
+	MaxDropHeight       float32  `json:"max_drop_height,omitempty"`
+	MaxJumpDistance     float32  `json:"max_jump_distance,omitempty"`
+	MaxJumpRise         float32  `json:"max_jump_rise,omitempty"`
+	MaxVaultHeight      float32  `json:"max_vault_height,omitempty"`
+	MaxMantleHeight     float32  `json:"max_mantle_height,omitempty"`
+	JumpSpeed           float32  `json:"jump_speed,omitempty"`
+	JumpHorizontalSpeed float32  `json:"jump_horizontal_speed,omitempty"`
+	Gravity             float32  `json:"gravity,omitempty"`
+	Capabilities        []string `json:"capabilities,omitempty"`
 }
 
 type NavSpanDef struct {
@@ -72,14 +74,16 @@ type NavSpanRef struct {
 // locomotion explicit world-space entry and exit points.
 type NavTraversalDef struct {
 	// ID remains the legacy owner ID for old graph bundles.
-	ID       string                  `json:"id,omitempty"`
-	LinkID   string                  `json:"link_id,omitempty"`
-	OwnerID  string                  `json:"owner_id,omitempty"`
-	Start    Vec3                    `json:"start"`
-	Apex     Vec3                    `json:"apex,omitempty"`
-	End      Vec3                    `json:"end"`
-	Duration float32                 `json:"duration,omitempty"`
-	Carrier  *NavCarrierTraversalDef `json:"carrier,omitempty"`
+	ID          string                  `json:"id,omitempty"`
+	LinkID      string                  `json:"link_id,omitempty"`
+	OwnerID     string                  `json:"owner_id,omitempty"`
+	Start       Vec3                    `json:"start"`
+	Apex        Vec3                    `json:"apex,omitempty"`
+	End         Vec3                    `json:"end"`
+	Speed       float32                 `json:"speed,omitempty"`
+	LaunchSpeed float32                 `json:"launch_speed,omitempty"`
+	Duration    float32                 `json:"duration,omitempty"`
+	Carrier     *NavCarrierTraversalDef `json:"carrier,omitempty"`
 }
 
 // NavCarrierTraversalDef describes the moving-support portion of one directed
@@ -89,6 +93,7 @@ type NavCarrierTraversalDef struct {
 	FromStop         string `json:"from_stop"`
 	ToStop           string `json:"to_stop"`
 	Board            Vec3   `json:"board"`
+	BoardMode        string `json:"board_mode,omitempty"`
 	CallControllerID string `json:"call_controller_id,omitempty"`
 	ControllerID     string `json:"controller_id,omitempty"`
 }
@@ -134,8 +139,24 @@ func NavTraversalSupportedByProfile(profile NavAgentProfileDef, kind string, tra
 			profile.MaxDropHeight > 0 && -rise > profile.MaxDropHeight+epsilon {
 			return false
 		}
-		return profile.JumpSpeed <= 0 || profile.Gravity <= 0 ||
-			rise <= profile.JumpSpeed*profile.JumpSpeed/(2*profile.Gravity)+epsilon
+		launchSpeed := profile.JumpSpeed
+		if traversal.LaunchSpeed > 0 {
+			if profile.JumpSpeed > 0 && traversal.LaunchSpeed > profile.JumpSpeed+epsilon {
+				return false
+			}
+			launchSpeed = traversal.LaunchSpeed
+		}
+		if launchSpeed <= 0 || profile.Gravity <= 0 {
+			return true
+		}
+		discriminant := launchSpeed*launchSpeed - 2*profile.Gravity*rise
+		if discriminant < 0 {
+			return false
+		}
+		duration := (launchSpeed + float32(math.Sqrt(float64(discriminant)))) / profile.Gravity
+		requiredSpeed := horizontal / duration
+		return (profile.JumpHorizontalSpeed <= 0 || requiredSpeed <= profile.JumpHorizontalSpeed+epsilon) &&
+			(traversal.Speed <= 0 || profile.JumpHorizontalSpeed <= 0 || traversal.Speed <= profile.JumpHorizontalSpeed+epsilon)
 	case NavTransitionVault, NavTransitionMantle:
 		capability, limit := NavCapabilityVault, profile.MaxVaultHeight
 		if kind == NavTransitionMantle {

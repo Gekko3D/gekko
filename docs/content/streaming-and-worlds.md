@@ -812,6 +812,9 @@ world chunks expand through generator halo dependencies. Source and neighboring
 graph overrides publish together; explicit empty overrides suppress stale
 static tiles. Runtime keeps old resident graph until complete replacement set
 loads, then swaps slices and increments `NavigationRevision` once.
+Profile-bounded, voxel-validated automatic drop and jump links are regenerated
+in that same background delta build; moving carrier position only affects
+traversal execution and does not dirty graph tiles.
 
 `RuntimeNavigationService` snapshots resident graph data for `FindRoute` and
 `ProjectPoint`. Point projection returns the nearest supported span and region;
@@ -819,8 +822,9 @@ runtime targeting does not reconstruct polygon IDs or filled navigation
 surfaces. Residency loads also prepare the immutable route-query indexes on the
 background loader; all requests for that navigation revision reuse them.
 `FindRoute` accepts endpoint support only within one navigation voxel
-vertically. A route start may additionally project within one voxel in 3D to
-absorb motor drift; an exact destination never binds to another stacked floor.
+vertically, with a small floating-point boundary epsilon. A route start may
+additionally project within one voxel in 3D to absorb motor drift; an exact
+destination never binds to another stacked floor.
 Each returned waypoint has a same-index `WaypointSpans` entry. Route followers
 must treat these as checkpoint identities, not as every span crossed by a
 string-pulled route. `RuntimeNavigationService.IsRouteSupport` validates live

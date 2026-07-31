@@ -82,7 +82,8 @@ func connectNavGraphDoors(sources []NavSourceTileDef, graphs []NavGraphTileDef, 
 	for i := range graphs {
 		kept := make([]NavSpanTransitionDef, 0, len(graphs[i].SpanTransitions))
 		for _, edge := range graphs[i].SpanTransitions {
-			if edge.Kind == NavTransitionLadder || edge.Kind == NavTransitionDrop || edge.Gate != nil {
+			if edge.Kind == NavTransitionLadder || edge.Kind == NavTransitionDrop || edge.Gate != nil ||
+				edge.Traversal != nil && edge.Traversal.Owner() == AutoNavJumpOwnerID {
 				continue
 			}
 			from, fromOK := spanIndex[NavSpanRef{Tile: graphs[i].Coord, Span: edge.From}]
