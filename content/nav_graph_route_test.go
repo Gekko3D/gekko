@@ -413,8 +413,13 @@ func TestFindNearestNavGraphPointChoosesSupportedStackedSpan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !point.Found || point.Ref.Span != 1 || point.Point[0] >= 1 || point.Point[1] != 3 || point.Point[2] != 0.5 || point.Region != 1 {
+	if !point.Found || point.Ref.Span != 1 || point.Point[0] >= 1 || point.Point[1] != 3 || point.Point[2] != 0.5 || point.Region != 1 ||
+		math.Abs(float64(point.Distance-float32(math.Sqrt(0.05)))) > 1e-6 {
 		t.Fatalf("unexpected nearest supported point: %+v", point)
+	}
+	tooFar, err := FindNearestNavGraphPoint([]NavSourceTileDef{source}, []NavGraphTileDef{built.Graph}, 2, 1, Vec3{1.2, 2.9, 0.5}, 0.2)
+	if err != nil || tooFar.Found {
+		t.Fatalf("point projected beyond max distance: point=%+v err=%v", tooFar, err)
 	}
 	route, err := FindNavGraphRoute([]NavSourceTileDef{source}, []NavGraphTileDef{built.Graph}, 2, 1, point.Point, Vec3{0.5, 3, 0.5})
 	if err != nil || !route.Found {

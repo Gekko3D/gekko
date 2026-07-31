@@ -456,31 +456,13 @@ func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointR
 	if q == nil || q.query == nil {
 		return NavPointResult{}, fmt.Errorf("navigation graph query is required")
 	}
-	// ponytail: linear resident-span scan; add a spatial index only if point
-	// projection becomes a measured hot path outside cursor/debug commands.
-	best := NavPointResult{Distance: float32(math.Inf(1))}
-	for coord, graph := range q.query.graphs {
-		for _, spanID := range graph.SpanIDs {
-			ref := NavSpanRef{Tile: coord, Span: spanID}
-			if _, blocked := q.query.blocked[ref]; blocked {
-				continue
-			}
-			span := q.query.spans[coord][spanID]
-			minX := float32(coord.X*q.query.chunkSize+span.X) * q.query.voxelResolution
-			minZ := float32(coord.Z*q.query.chunkSize+span.Z) * q.query.voxelResolution
-			projected := Vec3{
-				navClampToSpanAxis(point[0], minX, q.query.voxelResolution),
-				span.SupportHeight,
-				navClampToSpanAxis(point[2], minZ, q.query.voxelResolution),
-			}
-			distance := navVec3Distance(point, projected)
-			if distance > maxDistance || best.Found && (distance > best.Distance || distance == best.Distance && !navSpanRefLess(ref, best.Ref)) {
-				continue
-			}
-			best = NavPointResult{Found: true, Ref: ref, Region: q.query.spanRegions[coord][spanID], Point: projected, Distance: distance}
-		}
+	resolved, found := q.query.resolveNearby(point, maxDistance)
+	if !found {
+		return NavPointResult{}, nil
 	}
-	return best, nil
+	result := navPointResult(resolved)
+	result.Distance = navVec3Distance(point, resolved.Projected)
+	return result, nil
 }
 
 // IsSpanBlocked reports whether a runtime blocker removed a baked span.
