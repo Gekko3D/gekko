@@ -90,6 +90,15 @@ type SpriteRenderBatch struct {
 	BindGroup0    *wgpu.BindGroup
 }
 
+// DecalRenderBatch is one atlas-backed range in the shared decal instance buffer.
+type DecalRenderBatch struct {
+	FirstInstance uint32
+	InstanceCount uint32
+	AtlasKey      string
+	AtlasView     *wgpu.TextureView
+	BindGroup0    *wgpu.BindGroup
+}
+
 type AnalyticMediumHost struct {
 	EntityID                  uint32
 	Shape                     uint32
@@ -332,6 +341,22 @@ type GpuBufferManager struct {
 	SpritesBindGroup1  *wgpu.BindGroup // gbuffer depth
 	spritesBG1Depth    *wgpu.TextureView
 	spritesBG1Pipeline *wgpu.RenderPipeline
+
+	// Deferred decals are opt-in. Their full-resolution target is allocated by
+	// DecalFeature, never by the default renderer.
+	DecalBuf          *wgpu.Buffer
+	DecalCount        uint32
+	DecalBatches      []DecalRenderBatch
+	DecalBindGroup1   *wgpu.BindGroup
+	DecalTex          *wgpu.Texture
+	DecalView         *wgpu.TextureView
+	DecalFallbackTex  *wgpu.Texture
+	DecalFallbackView *wgpu.TextureView
+	decalBGCamera     *wgpu.Buffer
+	decalBGBuf        *wgpu.Buffer
+	decalBGDepth      *wgpu.TextureView
+	decalBGNormal     *wgpu.TextureView
+	decalBGPipeline   *wgpu.RenderPipeline
 
 	// Beams (camera-facing world-space ribbons)
 	BeamBuf         *wgpu.Buffer

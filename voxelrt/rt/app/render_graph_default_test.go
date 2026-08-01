@@ -27,6 +27,7 @@ func TestDefaultRenderGraphOrderMatchesRuntimeFrameSequence(t *testing.T) {
 		RenderNodeFeaturePreLighting,
 		RenderNodeFeatureSkyboxUpdate,
 		RenderNodeCoreTiledLightCull,
+		RenderNodeFeatureDecals,
 		RenderNodeCoreLighting,
 		RenderNodeFeaturePostLighting,
 		RenderNodeFeatureAstronomical,

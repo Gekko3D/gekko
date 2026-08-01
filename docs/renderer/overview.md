@@ -13,6 +13,7 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 | Plan long-term render graph migration | [`voxelrt-render-graph-migration-plan.md`](voxelrt-render-graph-migration-plan.md) | [`voxelrt-modularization-plan.md`](voxelrt-modularization-plan.md), `voxelrt/rt/app/feature*.go` |
 | Change voxel normals, voxel lighting style, or shaded voxel look | [`runtime.md`](runtime.md) | [`change-guide.md`](change-guide.md), `voxelrt/rt/shaders/gbuffer.wgsl`, `voxelrt/rt/shaders/deferred_lighting.wgsl` |
 | Change ECS-to-renderer sync or picking/edit APIs | [`editing.md`](editing.md) | `mod_voxelrt_client.go`, `mod_voxelrt_client_systems.go` |
+| Change deferred decals or persistent surface marks | [`runtime.md`](runtime.md) | `decal_runtime.go`, `voxelrt/rt/app/feature_decals.go`, `voxelrt/rt/gpu/manager_decals.go`, `voxelrt/rt/shaders/decals.wgsl` |
 | Change atmosphere, fog, or bounded volumetric media | [`media.md`](media.md) | `analytic_medium_ecs.go`, `analytic_medium_presets.go`, `mod_voxelrt_client_systems.go`, `voxelrt/rt/app/feature_analytic_medium.go` |
 | Change particles, atlases, or emitter upload | [`particles.md`](particles.md) | `voxelrt/rt/app/app_particles.go`, `voxelrt/rt/gpu/manager_particles.go` |
 | Verify a renderer change | [`verification.md`](verification.md) | package tests under `voxelrt/rt/core`, `voxelrt/rt/gpu`, `voxelrt/rt/volume`, `voxelrt/rt/bvh` |
@@ -34,17 +35,19 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
   - bounded volumetric atmosphere and fog path, presets, limits, and integration points
 - [`particles.md`](particles.md)
   - current hybrid particle pipeline and bridge/runtime constraints
+- [`deferred-decals-plan.md`](deferred-decals-plan.md)
+  - deferred-decal design, ActionGame ownership policy, acceptance checks, and measurement plan
 - [`verification.md`](verification.md)
   - targeted test and smoke-check commands
 
 ## Code Layout
 
 - `mod_voxelrt_client*.go`
-  - ECS bridge, renderer-facing APIs, identity maps, and per-frame sync
+  - ECS bridge, renderer-facing APIs, identity maps, and per-frame sync; `decal_runtime.go` owns the retained runtime decal contract
 - `voxelrt/rt/app/`
   - WebGPU app lifetime, pass scheduling, resize handling, and render loop orchestration
 - `voxelrt/rt/gpu/`
-  - GPU buffers, textures, bind groups, paged voxel payload atlases, shadows, Hi-Z, particles, sprites, and analytic media
+  - GPU buffers, textures, bind groups, paged voxel payload atlases, shadows, Hi-Z, particles, sprites, analytic media, and opt-in deferred decals
 - `voxelrt/rt/core/`
   - scene model, camera, lights, culling, raycast, gizmos, and text primitives
 - `voxelrt/rt/volume/`
@@ -58,6 +61,7 @@ This page is the renderer landing page. For current runtime behavior, use [`runt
 
 - The opaque lighting target is `RGBA16Float`.
 - The live compositor is the resolve path, not the legacy fullscreen blit pipeline.
+- Deferred decals are opt-in: `DecalFeature` records `feature-decals` after tiled light culling and before deferred lighting; it modifies opaque base color, not voxel data.
 - Picking and voxel edits are still CPU-authoritative through `Scene` and `XBrickMap`.
 - Probe GI has object metadata, but no live scheduled render pass in the current frame graph.
 - Bounded atmosphere and fog use the analytic media path, not transparent voxels.

@@ -488,6 +488,7 @@ func runtimeRenderGraphNodesAfterLightingMetrics() []string {
 		RenderNodeFeaturePreLighting,
 		RenderNodeFeatureSkyboxUpdate,
 		RenderNodeCoreTiledLightCull,
+		RenderNodeFeatureDecals,
 		RenderNodeCoreLighting,
 		RenderNodeFeaturePostLighting,
 		RenderNodeFeatureAstronomical,
@@ -538,6 +539,10 @@ func (a *App) runLegacyRenderGraphFeatureNode(name string, encoder *wgpu.Command
 	case RenderNodeCoreTiledLightCull:
 		if err := a.recordTiledLightCullPass(encoder); err != nil {
 			fmt.Printf("ERROR: Tile light cull failed: %v\n", err)
+		}
+	case RenderNodeFeatureDecals:
+		if err := a.recordDecalPass(encoder); err != nil {
+			fmt.Printf("ERROR: Decal pass failed: %v\n", err)
 		}
 	case RenderNodeCoreLighting:
 		if err := a.recordLightingPass(encoder, frame); err != nil {

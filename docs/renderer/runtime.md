@@ -81,20 +81,21 @@ The current live frame sequence is scheduled by the default render graph. `App.R
 | 8 | `FeatureCommandStagePreLighting` | render graph compatibility node / feature registry | optional | Reserved stage; no default feature currently owns required work here. |
 | 9 | skybox update | render graph feature node / skybox feature | optional | Consumes pending `SkyboxResources` input before light-list and lighting work; the registered pre-update bridge only collects ECS input. |
 | 10 | tiled light cull | render graph core node / `GpuBufferManager` | core conditional | Dispatches only when local point or spot lights exist; otherwise clears light-list state. The graph node records readiness counters for diagnostics. |
-| 11 | deferred lighting | render graph core node / `GpuBufferManager` | core | Writes the HDR opaque lighting target. The graph node records pipeline, bind-group, and workgroup readiness counters for diagnostics. |
-| 12 | `FeatureCommandStagePostLighting` | render graph compatibility node / feature registry | optional | Reserved compatibility slot; graph-owned astronomical bodies, planet bodies, and analytic media are skipped by this dispatcher. |
-| 13 | astronomical render pass | render graph feature node / astronomical feature | optional | Renders far-field celestial bodies after lighting. |
-| 14 | planet bodies render pass | render graph feature node / planet body feature | optional | Renders far-body planet surfaces after astronomical bodies. |
-| 15 | analytic media render pass | render graph feature node / analytic media feature | optional | Renders or clears the half-resolution analytic-media targets after planet bodies. |
-| 16 | debug scene compute | render graph core node | optional | Runs only when renderer debug mode and scene debug overlay are active. |
-| 17 | accumulation render pass | render graph core node + feature registry | optional pass shell | Opens when a legacy or graph-owned accumulation contributor exists, or when the previous frame had one, so stale WBOIT contents can be cleared. |
-| 18 | `FeaturePassStageAccumulation` | graph-owned in-pass contributors | optional | Current built-in contributors: transparent overlay, sprites, water, far planet rings, debris midfield, and particles. |
-| 19 | `FeatureCommandStagePreResolve` | render graph compatibility node / feature registry | optional | Reserved stage; no default feature currently owns required work here. |
-| 20 | resolve render pass | render graph core node | core | Composites opaque lighting, WBOIT, and analytic media to the swapchain. |
-| 21 | text overlay | render graph feature node / text feature | optional | First feature-owned graph node migrated out of the post-resolve compatibility stage. |
-| 22 | gizmos overlay | render graph feature node / gizmo feature | optional | Feature-owned graph node migrated out of the post-resolve compatibility stage. |
-| 23 | `FeatureScreenStagePostResolve` | render graph compatibility node / feature registry | optional | Reserved compatibility slot; graph-owned features are skipped by this dispatcher. |
-| 24 | submit, present, readback handoff, frame bookkeeping | `App.Render()` | core | Submits the command buffer, presents, resolves Hi-Z readback, commits volumetric history, records camera state, and advances the frame index. |
+| 11 | deferred decal overlay | render graph feature node / decals feature | opt-in | Clears and, when input is present, rasterizes instanced projector volumes into a full-resolution premultiplied `RGBA8Unorm` overlay. It is after tiled light culling and before deferred lighting. |
+| 12 | deferred lighting | render graph core node / `GpuBufferManager` | core | Composites the decal overlay into base color before BRDF evaluation, then writes the HDR opaque lighting target. The graph node records pipeline, bind-group, and workgroup readiness counters for diagnostics. |
+| 13 | `FeatureCommandStagePostLighting` | render graph compatibility node / feature registry | optional | Reserved compatibility slot; graph-owned astronomical bodies, planet bodies, and analytic media are skipped by this dispatcher. |
+| 14 | astronomical render pass | render graph feature node / astronomical feature | optional | Renders far-field celestial bodies after lighting. |
+| 15 | planet bodies render pass | render graph feature node / planet body feature | optional | Renders far-body planet surfaces after astronomical bodies. |
+| 16 | analytic media render pass | render graph feature node / analytic media feature | optional | Renders or clears the half-resolution analytic-media targets after planet bodies. |
+| 17 | debug scene compute | render graph core node | optional | Runs only when renderer debug mode and scene debug overlay are active. |
+| 18 | accumulation render pass | render graph core node + feature registry | optional pass shell | Opens when a legacy or graph-owned accumulation contributor exists, or when the previous frame had one, so stale WBOIT contents can be cleared. |
+| 19 | `FeaturePassStageAccumulation` | graph-owned in-pass contributors | optional | Current built-in contributors: transparent overlay, sprites, water, far planet rings, debris midfield, and particles. |
+| 20 | `FeatureCommandStagePreResolve` | render graph compatibility node / feature registry | optional | Reserved stage; no default feature currently owns required work here. |
+| 21 | resolve render pass | render graph core node | core | Composites opaque lighting, WBOIT, and analytic media to the swapchain. |
+| 22 | text overlay | render graph feature node / text feature | optional | First feature-owned graph node migrated out of the post-resolve compatibility stage. |
+| 23 | gizmos overlay | render graph feature node / gizmo feature | optional | Feature-owned graph node migrated out of the post-resolve compatibility stage. |
+| 24 | `FeatureScreenStagePostResolve` | render graph compatibility node / feature registry | optional | Reserved compatibility slot; graph-owned features are skipped by this dispatcher. |
+| 25 | submit, present, readback handoff, frame bookkeeping | `App.Render()` | core | Submits the command buffer, presents, resolves Hi-Z readback, commits volumetric history, records camera state, and advances the frame index. |
 
 The feature-stage sequence is now the compatibility layer between the old feature registry and the render-graph migration. It is intentionally less expressive than final feature-owned graph nodes: any new feature that does not fit an existing stage still has to add another stage or register an explicit graph node. Features that implement graph-owned nodes are skipped by the compatibility command/pass/screen dispatchers so they do not render twice while migration is incremental. Graph-owned features that still draw inside renderer-owned passes use the render-graph pass-stage dispatch path; this keeps shared pass shells such as WBOIT accumulation intact while individual contributors migrate.
 
@@ -121,21 +122,22 @@ Equivalent high-level sequence:
 3. Hi-Z generation compute pass
 4. shadow pass
 5. skybox update marker through explicit `feature-skybox-update`
-6. deferred lighting compute pass
-7. astronomical and planet-body post-lighting passes
-8. analytic media half-resolution render pass
+6. deferred decal overlay through explicit `feature-decals` when `DecalFeature` is registered
+7. deferred lighting compute pass
+8. astronomical and planet-body post-lighting passes
+9. analytic media half-resolution render pass
    - renders bounded atmosphere/fog media into dedicated half-resolution color and front-depth history/render targets
    - reprojects previous analytic-media history in shader
-9. optional debug compute pass
-10. accumulation render pass
+10. optional debug compute pass
+11. accumulation render pass
    - transparent voxel overlay through graph-owned accumulation contribution
    - particles through graph-owned accumulation contribution
    - sprites through graph-owned accumulation contribution
    - water through graph-owned accumulation contribution
    - far planet rings and debris midfield through graph-owned accumulation contribution
-11. resolve render pass
+12. resolve render pass
    - composites opaque lighting, WBOIT transparency, and half-resolution analytic media
-12. post-resolve overlay passes
+13. post-resolve overlay passes
    - text overlay through explicit `feature-text-overlay`
    - gizmos through explicit `feature-gizmos-overlay`
 
@@ -150,6 +152,7 @@ Built-in features are registered from `voxelrt/rt/app/feature_registry.go`. This
 | text | `feature_text.go` | explicit `feature-text-overlay` graph node after resolve; owns shared text overlay resources for immediate `DrawText` UI/debug output plus ECS `TextOverlayItem` handoff | registered bridge system / `TextComponent` query through `buildTextBridgeItems` adapter appended after immediate UI text | optional overlay |
 | gizmos | `feature_gizmos.go` | explicit `feature-gizmos-overlay` graph node after text overlay; owns renderer-side `GizmoOverlayItem` handoff | registered bridge system / `syncVoxelRtGizmos` through `buildGizmoBridgeItems` adapter | optional overlay |
 | skybox | `feature_skybox.go` | explicit `feature-skybox-update` graph node before tiled light culling; owns renderer-side `SkyboxResources` / `SkyboxLayerInput` handoff while GPU texture/pipeline state remains in `GpuBufferManager` | registered pre-update bridge system / `syncSkybox` | optional lighting/background input |
+| decals | `feature_decals.go` | explicit `feature-decals` graph node after tiled light culling and before deferred lighting; projects retained `DecalInstanceInput` volumes into the decal overlay | registered after-batch bridge system / `SetRuntimeDecals` → atlas-grouped `ApplyDecalInput` | opt-in surface overlay |
 | astronomical | `feature_astronomical.go` | explicit `feature-astronomical` graph node after post-lighting compatibility work; owns typed `AstronomicalBodyInput` application before GPU manager record packing | registered batched bridge system / `buildAstronomicalBodyInputs` adapter | optional SpaceSim feature |
 | planet bodies | `feature_planet_body.go` | explicit `feature-planet-bodies` graph node after post-lighting compatibility work; owns typed `PlanetBodyInput` / `PlanetBodySurfaceInput` application before GPU manager record packing | registered batched bridge system / `buildPlanetBodyInputs` / `buildPlanetBodySurfacePreloadInputs` adapters | optional SpaceSim feature |
 | far planet rings | `feature_far_planet_ring.go` | graph-owned contribution inside `core-accumulation`; owns typed `FarPlanetRingInput` application before GPU manager record packing | registered batched bridge system / `buildFarPlanetRingInputs` adapter | optional SpaceSim feature |
@@ -160,7 +163,7 @@ Built-in features are registered from `voxelrt/rt/app/feature_registry.go`. This
 | particles | `feature_particles.go` | explicit `feature-particles-sim` graph node for simulation/spawn; graph-owned contribution inside `core-accumulation` for draw; owns typed `ParticleEmitterInput` / `ParticleFrameInput` application, GPU byte packing, params upload, spawn upload, and bind-group refresh | registered-feature-gated `particlesSync` in `particles_ecs.go` | optional simulation/draw feature |
 | sprites | `feature_sprites.go` | graph-owned contribution inside `core-accumulation`; owns typed `SpriteInstanceInput` / `SpriteBatchInput` application and GPU byte packing | registered-feature-gated `spritesSync` in `sprite_ecs.go`; entity-LOD sprite proxies are only produced when the sprite bridge is enabled | optional draw feature |
 
-The current feature config can prevent disabled features from registering app-side feature objects and allocating their pipelines during `Setup()`. `VoxelRtModule.BridgeFeatures` declares the feature and graph-node requirements for optional ECS bridge sync, and defaults cover the built-in bridges. Text, gizmo, analytic-media, water, planet-body, astronomical, far-ring, debris, particle, sprite, and skybox bridge bodies are installed through this registration surface; core voxel-object sync still consults the sprite bridge gate only to decide whether entity-LOD impostor proxies may be emitted as runtime sprites. Features that share `core-accumulation` as their graph node still need feature-name bridge gates because a node-name-only gate would confuse water, sprites, transparency, particles, rings, and debris.
+The current feature config can prevent disabled features from registering app-side feature objects and allocating their pipelines during `Setup()`. Decals deliberately are not a default feature: a consumer registers `DecalFeature` through `VoxelRtModule.RenderFeatures`, which enables the `decals` bridge gate and `feature-decals` node. `VoxelRtModule.BridgeFeatures` declares the feature and graph-node requirements for optional ECS bridge sync, and defaults cover the built-in bridges. Text, gizmo, analytic-media, water, planet-body, astronomical, far-ring, debris, particle, sprite, skybox, and decal bridge bodies are installed through this registration surface; core voxel-object sync still consults the sprite bridge gate only to decide whether entity-LOD impostor proxies may be emitted as runtime sprites. Features that share `core-accumulation` as their graph node still need feature-name bridge gates because a node-name-only gate would confuse water, sprites, transparency, particles, rings, and debris.
 
 ## Bridge Sync Inventory
 
@@ -181,6 +184,7 @@ The remaining broad `voxelRtSystem` bridge is now core-only: it syncs voxel scen
 | `GPU Batch` | `voxelRtBatchEndSystem` | flushes batched GPU data uploads | explicit boundary between batched and after-batch bridge systems |
 | `Sync Particles` | registered after-batch bridge system / `particlesSync` | particle atlas lookup plus typed `ParticleEmitterInput` / `ParticleFrameInput` handoff | renderer app owns particle byte packing, params upload, emitter/spawn GPU updates, and bind-group refresh; keep after `GPU Batch` unless particle uploads are made batch-safe |
 | `Sync Sprites` | registered after-batch bridge system / `spritesSync` | sprite atlas lookup plus typed `SpriteInstanceInput` / `SpriteBatchInput` handoff | renderer app owns sprite byte packing and GPU batch-desc conversion; keep after `GPU Batch` unless sprite uploads are made batch-safe |
+| `Sync Decals` | registered after-batch bridge system / `voxelRtDecalsBridgeSystem` | retained `DecalInstance` values converted to 80-byte GPU records and grouped by existing sprite-atlas key | skipped and cleared unless the consumer registered `DecalFeature`; one instance buffer and one draw per non-empty atlas batch |
 | `Sync Skybox` | registered pre-update bridge system / `syncSkybox` plus `buildSkyboxBridgeInput` adapter | `SkyboxResources` / `SkyboxLayerInput` input | GPU application and GPU-layer packing are now owned by `feature-skybox-update`; the remaining ECS-to-renderer conversion is isolated in a tested bridge helper |
 
 ## Render Targets and Formats
@@ -293,6 +297,10 @@ Current transparency modes:
 
 ### Other major resources
 
+- deferred decals (only when `DecalFeature` is registered):
+  - `DecalResources.Pipeline` in `app.App`
+  - one full-resolution `RGBA8Unorm` premultiplied overlay, a transparent 1×1 fallback, the shared 80-byte instance buffer, and atlas batch bind groups in `GpuBufferManager`
+  - the lighting bind group always samples the active overlay or fallback; non-participating consumers allocate neither the full-resolution target nor the decal pipeline
 - shadow maps: 2D array textures managed by `GpuBufferManager`
 - Hi-Z: `R32Float` mip chain built from the G-buffer depth texture at half resolution
 - voxel payload atlas:
@@ -322,6 +330,15 @@ Current transparency modes:
 - ECS sync hands typed particle frame input to the renderer app; renderer-side code owns the WGSL emitter packing and GPU buffer updates
 - rendering happens in the accumulation pass
 - details are in [`particles.md`](particles.md)
+
+### Deferred decals
+
+- opt-in retained surface overlays submitted through `VoxelRtState.SetRuntimeDecals`; the bridge copies, validates, and groups records by the existing sprite-atlas key
+- local `+Z` points at the receiver; a shallow volume and receiver-normal cutoff keep projection from wrapping around nearby corners
+- the pass clears its overlay every recorded frame, draws one instanced cube batch per non-empty atlas, and composites premultiplied linear color before deferred BRDF evaluation
+- receivers are limited to opaque G-buffer surfaces; transparent geometry, sprites, particles, sky, and analytic bodies do not receive decals
+- `DecalCount`, `DecalAtlasBatches`, `DecalDrawCalls`, `DecalTargetReady`, `DecalBindingsReady`, and `DecalPassRecorded` describe the pass state
+- ActionGame currently owns its 4096-mark blood/soot pool; the generic renderer owns no gameplay retention or voxel edits
 
 ### Analytic media
 
@@ -370,6 +387,7 @@ Current transparency modes:
 - G-buffer textures
 - debug and fullscreen bind groups
 - G-buffer, lighting, and shadow bind groups
+- decal overlay target, decal pass bind groups, and the lighting binding that samples the active overlay or transparent fallback when decals are registered
 - transparent-overlay bind groups
 - particle, sprite, analytic-medium, and resolve pipelines
 
@@ -421,5 +439,6 @@ Hybrid sector lookup is now part of that same contract. `ObjectParams` is 128 by
 - changing scene-buffer layouts without rebuilding dependent bind groups
 - changing half-resolution volumetric resolve inputs without updating resolve bind groups and shader bindings together
 - changing analytic-media history or half-resolution target bindings without updating `feature_analytic_medium.go`, `app_medium.go`, `manager_medium.go`, and `resolve_transparency.wgsl` together
+- changing decal target, G-buffer, or lighting bindings without updating `feature_decals.go`, `manager_decals.go`, `manager_render_setup.go`, and both decal shaders together
 - changing voxel payload page bindings, dense-occupancy bindings, hybrid-lookup metadata, or `BrickRecord` layout in one pass but not the other voxel consumers
 - changing a shader resource list without updating the corresponding hand-written pipeline layout in `voxelrt/rt/app/`

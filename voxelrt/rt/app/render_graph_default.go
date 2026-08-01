@@ -12,6 +12,7 @@ const (
 	RenderNodeFeaturePreLighting   = "feature-pre-lighting"
 	RenderNodeFeatureSkyboxUpdate  = "feature-skybox-update"
 	RenderNodeCoreTiledLightCull   = "core-tiled-light-cull"
+	RenderNodeFeatureDecals        = "feature-decals"
 	RenderNodeCoreLighting         = "core-lighting"
 	RenderNodeFeaturePostLighting  = "feature-post-lighting"
 	RenderNodeFeatureAstronomical  = "feature-astronomical"
@@ -48,7 +49,8 @@ func defaultRenderGraphSpecs() []RenderNodeSpec {
 		defaultRenderGraphSpec(RenderNodeFeaturePreLighting, RenderNodeCoreShadows),
 		defaultRenderGraphSpec(RenderNodeFeatureSkyboxUpdate, RenderNodeFeaturePreLighting),
 		defaultRenderGraphSpec(RenderNodeCoreTiledLightCull, RenderNodeFeatureSkyboxUpdate),
-		defaultRenderGraphSpec(RenderNodeCoreLighting, RenderNodeCoreTiledLightCull),
+		defaultRenderGraphSpec(RenderNodeFeatureDecals, RenderNodeCoreTiledLightCull),
+		defaultRenderGraphSpec(RenderNodeCoreLighting, RenderNodeFeatureDecals),
 		defaultRenderGraphSpec(RenderNodeFeaturePostLighting, RenderNodeCoreLighting),
 		defaultRenderGraphSpec(RenderNodeFeatureAstronomical, RenderNodeFeaturePostLighting),
 		defaultRenderGraphSpec(RenderNodeFeaturePlanetBodies, RenderNodeFeatureAstronomical),
@@ -103,6 +105,8 @@ func defaultRenderGraphNode(name string) RenderNode {
 		return skyboxUpdateRenderNode{name: name}
 	case RenderNodeCoreTiledLightCull:
 		return coreTiledLightCullRenderNode{name: name}
+	case RenderNodeFeatureDecals:
+		return decalsRenderNode{name: name}
 	case RenderNodeCoreLighting:
 		return coreLightingRenderNode{name: name}
 	case RenderNodeFeaturePostLighting:
@@ -249,6 +253,25 @@ func (n coreGBufferRenderNode) Shutdown(*App) {}
 
 type coreTiledLightCullRenderNode struct {
 	name string
+}
+
+type decalsRenderNode struct {
+	name string
+}
+
+func (n decalsRenderNode) Name() string { return n.name }
+
+func (n decalsRenderNode) Enabled(a *App) bool {
+	return a != nil && a.hasFeatureGraphNode(RenderNodeFeatureDecals)
+}
+
+func (n decalsRenderNode) Setup(*App) error                   { return nil }
+func (n decalsRenderNode) Resize(*App, uint32, uint32) error  { return nil }
+func (n decalsRenderNode) OnSceneBuffersRecreated(*App) error { return nil }
+func (n decalsRenderNode) Update(*App) error                  { return nil }
+func (n decalsRenderNode) Shutdown(*App)                      {}
+func (n decalsRenderNode) Record(a *App, encoder *wgpu.CommandEncoder, _ *FrameContext) error {
+	return a.recordDecalPass(encoder)
 }
 
 func (n coreTiledLightCullRenderNode) Name() string {

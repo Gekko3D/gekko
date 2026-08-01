@@ -160,6 +160,7 @@ func (m *GpuBufferManager) GBufferSceneBindGroupCurrent() bool {
 }
 
 func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputePipeline, outputView *wgpu.TextureView) {
+	m.CreateDecalFallback()
 	var err error
 	m.LightingBindGroup2, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{
 		Label:  "Lighting GBuffer BG1",
@@ -172,6 +173,7 @@ func (m *GpuBufferManager) CreateLightingBindGroups(lightPipeline *wgpu.ComputeP
 			{Binding: 4, TextureView: m.ShadowMapView},
 			{Binding: 5, TextureView: m.getSkyboxView()},
 			{Binding: 6, Sampler: m.getSkyboxSampler()},
+			{Binding: 7, TextureView: m.decalLightingView()},
 		},
 	})
 	if err != nil {

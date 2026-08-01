@@ -71,3 +71,6 @@ var SpritesWGSL string
 
 //go:embed beams.wgsl
 var BeamsWGSL string
+
+//go:embed decals.wgsl
+var DecalsWGSL string

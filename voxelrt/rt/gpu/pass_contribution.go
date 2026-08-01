@@ -58,6 +58,18 @@ func (m *GpuBufferManager) HasBeamContribution() bool {
 	return m != nil && m.BeamCount > 0 && m.BeamsBindGroup0 != nil && m.BeamsBindGroup1 != nil
 }
 
+func (m *GpuBufferManager) HasDecalContribution() bool {
+	if m == nil || m.DecalCount == 0 || m.DecalView == nil {
+		return false
+	}
+	for _, batch := range m.DecalBatches {
+		if batch.BindGroup0 != nil && batch.InstanceCount > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *GpuBufferManager) HasParticleContribution() bool {
 	return m != nil && m.ParticleSystemActive && m.ParticlesBindGroup0 != nil && m.ParticlesBindGroup1 != nil
 }

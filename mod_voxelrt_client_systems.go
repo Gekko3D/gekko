@@ -723,6 +723,34 @@ func clearVoxelRtSprites(state *VoxelRtState) {
 	state.RtApp.ClearSpriteInput()
 }
 
+func voxelRtDecalsBridgeSystem(state *VoxelRtState, server *AssetServer) {
+	if state == nil || state.RtApp == nil {
+		return
+	}
+	if !state.bridgeFeatureEnabled(voxelRtBridgeFeatureDecals) {
+		state.RtApp.ClearDecalInput()
+		return
+	}
+
+	instances, batches := runtimeDecalInputs(state.runtimeDecals)
+	seenAtlases := make(map[string]struct{}, len(batches))
+	for _, batch := range batches {
+		if batch.AtlasKey == "" {
+			continue
+		}
+		if _, seen := seenAtlases[batch.AtlasKey]; seen {
+			continue
+		}
+		seenAtlases[batch.AtlasKey] = struct{}{}
+		if texture, ok := spriteAtlasTexture(server, batch.AtlasKey); ok && state.RtApp.BufferManager != nil {
+			state.RtApp.BufferManager.SetSpriteAtlas(
+				batch.AtlasKey, texture.Texels, texture.Width, texture.Height, texture.Version, assetTextureFormatToWGPU(texture.Format),
+			)
+		}
+	}
+	state.RtApp.ApplyDecalInput(instances, batches)
+}
+
 func voxelRtBeamsBridgeSystem(state *VoxelRtState, t *Time, cmd *Commands) {
 	if state == nil || state.RtApp == nil {
 		return

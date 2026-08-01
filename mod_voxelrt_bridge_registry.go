@@ -17,6 +17,7 @@ const (
 	VoxelRtBridgeFeatureSprites        VoxelRtBridgeFeature = "sprites"
 	VoxelRtBridgeFeatureBeams          VoxelRtBridgeFeature = "beams"
 	VoxelRtBridgeFeatureSkybox         VoxelRtBridgeFeature = "skybox"
+	VoxelRtBridgeFeatureDecals         VoxelRtBridgeFeature = "decals"
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 	voxelRtBridgeFeatureSprites        = VoxelRtBridgeFeatureSprites
 	voxelRtBridgeFeatureBeams          = VoxelRtBridgeFeatureBeams
 	voxelRtBridgeFeatureSkybox         = VoxelRtBridgeFeatureSkybox
+	voxelRtBridgeFeatureDecals         = VoxelRtBridgeFeatureDecals
 )
 
 // VoxelRtBridgeFeatureRegistration declares when an ECS-to-renderer bridge is owned
@@ -63,6 +65,7 @@ func DefaultVoxelRtBridgeFeatureRegistrations() []VoxelRtBridgeFeatureRegistrati
 		{Feature: VoxelRtBridgeFeatureSprites, AppFeatureName: "sprites", RequiredGraphNodes: []string{app_rt.RenderNodeCoreAccumulation}, PreRenderAfterBatchSystem: voxelRtSpritesBridgeSystem},
 		{Feature: VoxelRtBridgeFeatureBeams, AppFeatureName: "beams", RequiredGraphNodes: []string{app_rt.RenderNodeCoreAccumulation}, PreRenderAfterBatchSystem: voxelRtBeamsBridgeSystem},
 		{Feature: VoxelRtBridgeFeatureSkybox, AppFeatureName: "skybox", RequiredGraphNodes: []string{app_rt.RenderNodeFeatureSkyboxUpdate}, PreRenderSystem: voxelRtSkyboxBridgeSystem},
+		{Feature: VoxelRtBridgeFeatureDecals, AppFeatureName: "decals", RequiredGraphNodes: []string{app_rt.RenderNodeFeatureDecals}, PreRenderAfterBatchSystem: voxelRtDecalsBridgeSystem},
 	}
 }
 

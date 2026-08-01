@@ -112,6 +112,7 @@ struct LightingContribution {
 // Skybox
 @group(1) @binding(5) var in_skybox: texture_2d<f32>;
 @group(1) @binding(6) var skybox_sampler: sampler;
+@group(1) @binding(7) var in_decals: texture_2d<f32>;
 
 // Group 2: Voxel Data (reuse)
 @group(2) @binding(3) var<storage, read> materials: array<vec4<f32>>;
@@ -613,7 +614,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mat_idx = u32(mat_data.w + 0.5);
     
     let mat_packed = materials[mat_idx];
-    let base_color = srgb_to_linear(mat_packed.xyz);
+    let material_base_color = srgb_to_linear(mat_packed.xyz);
+    let decal = textureLoad(in_decals, global_id.xy, 0);
+    var base_color = decal.rgb + material_base_color * (1.0 - decal.a);
     let emissive_linear = srgb_to_linear(materials[mat_idx + 1u].xyz);
     let pbr_params = materials[mat_idx + 2u];
     let material_extra = materials[mat_idx + 3u];
@@ -689,7 +692,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 dbg = clamp(hit_pos_ws * 0.01 + vec3<f32>(0.5), vec3<f32>(0.0), vec3<f32>(1.0));
             } else {
                 // Bottom-right: albedo
-                dbg = base_color;
+                dbg = material_base_color;
             }
         }
         textureStore(out_color, global_id.xy, vec4<f32>(dbg, 1.0));

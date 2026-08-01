@@ -55,6 +55,7 @@ type App struct {
 	FarPlanetRingResources  *FarPlanetRingResources
 	DebrisMidfieldResources *DebrisMidfieldResources
 	SpriteResources         *SpriteResources
+	DecalResources          *DecalResources
 	BeamResources           *BeamResources
 	ParticleResources       *ParticleResources
 	AnalyticMediumResources *AnalyticMediumResources
@@ -475,6 +476,15 @@ func (a *App) Init() error {
 				Visibility: wgpu.ShaderStageCompute,
 				Sampler: wgpu.SamplerBindingLayout{
 					Type: wgpu.SamplerBindingTypeFiltering,
+				},
+			},
+			// Premultiplied linear decal overlay (RGBA8Unorm).
+			{
+				Binding:    7,
+				Visibility: wgpu.ShaderStageCompute,
+				Texture: wgpu.TextureBindingLayout{
+					SampleType:    wgpu.TextureSampleTypeFloat,
+					ViewDimension: wgpu.TextureViewDimension2D,
 				},
 			},
 		},

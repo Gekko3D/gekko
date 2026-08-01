@@ -130,6 +130,7 @@ type VoxelRtState struct {
 	nextRuntimeEditedVoxelRevision uint64
 	entityLODSelections            map[EntityId]EntityLODSelection
 	runtimeSprites                 []SpriteComponent
+	runtimeDecals                  []DecalInstance
 	lastMaterialKeys               map[*core.VoxelObject]materialTableCacheKey
 	materialTableCache             map[materialTableCacheKey][]core.Material
 	particlePools                  map[EntityId]*particlePool
