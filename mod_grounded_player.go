@@ -97,6 +97,7 @@ type GroundedCharacterMotorComponent struct {
 	LadderEntity       EntityId
 	LadderClimbSpeed   float32
 	ActualVelocity     mgl32.Vec3
+	ExternalVelocity   mgl32.Vec3 // Decaying horizontal velocity from gameplay impulses.
 	MotionMode         CharacterMotionMode
 	Traversal          CharacterTraversalComponent
 	LadderAvailable    bool
@@ -391,6 +392,9 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 		if intent != nil && intent.MaxDistance > 0 && horizontalMove.Len() > intent.MaxDistance {
 			horizontalMove = horizontalMove.Normalize().Mul(intent.MaxDistance)
 		}
+		horizontalMove = horizontalMove.Add(mgl32.Vec3{ctrl.ExternalVelocity.X(), 0, ctrl.ExternalVelocity.Z()}.Mul(dt))
+		ctrl.ExternalVelocity[0] *= maxf(0, 1-6*dt)
+		ctrl.ExternalVelocity[2] *= maxf(0, 1-6*dt)
 		ladderHorizontalMove := right.Mul(move.Dot(right) * speed * 0.5 * dt)
 		if intent != nil && intent.MaxDistance > 0 && ladderHorizontalMove.Len() > intent.MaxDistance {
 			ladderHorizontalMove = ladderHorizontalMove.Normalize().Mul(intent.MaxDistance)

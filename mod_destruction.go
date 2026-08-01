@@ -7,6 +7,7 @@ type DestructionEvent struct {
 	Center          mgl32.Vec3 // World-space center of destruction
 	Radius          float32    // Destruction radius in world units
 	CarveOnly       bool       // Edit geometry without scanning/splitting disconnected components.
+	RetainEntity    bool       // Keep an empty entity so its owner can restore its source geometry.
 	backingMaterial uint8
 }
 
@@ -113,6 +114,7 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	}
 	backing, backed := voxelBackingForEntity(cmd, entity)
 	carveOnly := true
+	retainEntity := false
 	for _, event := range events {
 		if backed {
 			center, radius := voxelBackingLocalSphere(voxObj.Transform, event.Center, event.Radius)
@@ -120,6 +122,7 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 		}
 		voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
 		carveOnly = carveOnly && event.CarveOnly
+		retainEntity = retainEntity || event.RetainEntity
 	}
 	if backed {
 		// Connectivity splitting is invalid for a partially materialized base.
@@ -128,7 +131,7 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	MarkVoxelEntityPersistenceDirty(cmd, entity)
 	state.markRuntimeEditedVoxelEntity(entity)
 	if carveOnly {
-		if !backed && editableMap.GetVoxelCount() == 0 {
+		if !backed && !retainEntity && editableMap.GetVoxelCount() == 0 {
 			notifyImportedWorldChunkDirty(cmd, entity, editableMap)
 			cmd.RemoveEntity(entity)
 		}
@@ -139,7 +142,7 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	components := editableMap.SplitDisconnectedComponents()
 	if len(components) <= 1 {
 		// If the entity is empty now, remove it
-		if !backed && editableMap.GetVoxelCount() == 0 {
+		if !backed && !retainEntity && editableMap.GetVoxelCount() == 0 {
 			notifyImportedWorldChunkDirty(cmd, entity, editableMap)
 			cmd.RemoveEntity(entity)
 		}
