@@ -318,6 +318,10 @@ type StreamedLevelRuntimeState struct {
 	navigationRebuildActive       bool
 	navigationRebuilds            chan streamedNavigationRebuildResult
 	navigationEditRevisions       map[EntityId]uint64
+	navigationEditGeneration      uint64
+	navigationQueuedEdits         map[content.TerrainChunkCoordDef]navigationQueuedEdit
+	navigationEditBlockers        map[string]navigationEditBlocker
+	navigationRetireAtLoad        map[uint64]uint64
 
 	WorldDeltaPath   string
 	WorldDataDir     string
@@ -451,6 +455,9 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		navigationOverlays:         make(chan streamedNavigationOverlayResult, 2),
 		navigationRebuilds:         make(chan streamedNavigationRebuildResult, 2),
 		navigationEditRevisions:    make(map[EntityId]uint64),
+		navigationQueuedEdits:      make(map[content.TerrainChunkCoordDef]navigationQueuedEdit),
+		navigationEditBlockers:     make(map[string]navigationEditBlocker),
+		navigationRetireAtLoad:     make(map[uint64]uint64),
 		navigationDisabled:         make(map[string]struct{}),
 		navigationOpenDoors:        make(map[string]struct{}),
 		navigationBlockers:         make(map[string]content.NavBlockerDef),
@@ -622,6 +629,10 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.navigationLoadActive = false
 	state.navigationRebuildActive = false
 	state.navigationEditRevisions = make(map[EntityId]uint64)
+	state.navigationEditGeneration = 0
+	state.navigationQueuedEdits = make(map[content.TerrainChunkCoordDef]navigationQueuedEdit)
+	state.navigationEditBlockers = make(map[string]navigationEditBlocker)
+	state.navigationRetireAtLoad = make(map[uint64]uint64)
 
 	for _, override := range worldDelta.PlacementTransformOverrides {
 		state.placementOverrideMap[override.PlacementID] = override.Transform

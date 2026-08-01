@@ -24,7 +24,7 @@ func SaveWorldDelta(path string, def *WorldDeltaDef) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return saveFileAtomically(path, data, 0644)
 }
 
 func LoadWorldDelta(path string) (*WorldDeltaDef, error) {

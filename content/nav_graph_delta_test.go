@@ -4,8 +4,24 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestExpandNavGraphDirtyTileCoordsUsesLargestProfileDependency(t *testing.T) {
+	coords := ExpandNavGraphDirtyTileCoordsForProfiles(
+		[]TerrainChunkCoordDef{{}},
+		[]NavAgentProfileDef{{Radius: 1, Height: 2, MaxJumpDistance: 9, MaxDropHeight: 5}},
+		4, 1,
+	)
+	want := map[TerrainChunkCoordDef]struct{}{{X: -3}: {}, {X: 3}: {}, {Y: -2}: {}, {Y: 2}: {}}
+	for _, coord := range coords {
+		delete(want, coord)
+	}
+	if len(want) != 0 {
+		t.Fatalf("profile dependency halo omitted coordinates: %+v", want)
+	}
+}
 
 func TestNavGraphDeltaRebuildMatchesFullBakeAndSuppressesEmptyStaticTile(t *testing.T) {
 	const chunkSize = 4
@@ -124,5 +140,89 @@ func TestNavGraphDeltaRebuildMatchesFullBakeAndSuppressesEmptyStaticTile(t *test
 	}
 	if route := findRoute(); route.Found {
 		t.Fatalf("voxel blocker did not remove route: %+v", route)
+	}
+}
+
+func TestNavGraphDeltaBatchUsesImmutableGenerationPaths(t *testing.T) {
+	const chunkSize = 2
+	coord := TerrainChunkCoordDef{}
+	world := &ImportedWorldDef{WorldID: "batch", SchemaVersion: CurrentImportedWorldSchemaVersion, Kind: ImportedWorldKindVoxelWorld, ChunkSize: chunkSize, VoxelResolution: 1}
+	chunk := ImportedWorldChunkDef{WorldID: world.WorldID, Coord: coord, ChunkSize: chunkSize, VoxelResolution: 1, Voxels: []ImportedWorldVoxelDef{{Value: 1}}}
+	world.Entries = []ImportedWorldChunkEntryDef{{Coord: coord, ChunkPath: "0.gkchunk", NonEmptyVoxelCount: 1}}
+	EnsureImportedWorldSectors(world)
+	profile := NavAgentProfileDef{ID: "walker", Radius: .4, Height: 1.8, StepHeight: .5, MaxSlopeDegrees: 45}
+	base, err := BakeNavGraphWorld(world, []ImportedWorldChunkDef{chunk}, []NavAgentProfileDef{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	basePath := filepath.Join(t.TempDir(), "base"+NavGraphManifestExtension)
+	if err := SaveNavGraphBake(basePath, &base); err != nil {
+		t.Fatal(err)
+	}
+	deltaPath := filepath.Join(t.TempDir(), "level.gkworlddelta")
+	delta := &WorldDeltaDef{SchemaVersion: CurrentWorldDeltaSchemaVersion, LevelID: "level"}
+	result, err := SaveNavGraphDeltaBatchForImportedWorldChunks(deltaPath, delta, &base.Manifest, basePath, map[TerrainChunkCoordDef]*ImportedWorldChunkDef{coord: &chunk}, []TerrainChunkCoordDef{coord}, "edit-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, override := range result.SourceOverrides {
+		if !override.Empty && !strings.Contains(override.TilePath, ".edit-7"+NavSourceTileExtension) {
+			t.Fatalf("source override is not generation-qualified: %q", override.TilePath)
+		}
+	}
+	for _, override := range result.GraphOverrides {
+		if !override.Empty && !strings.Contains(override.TilePath, ".edit-7"+NavGraphTileExtension) {
+			t.Fatalf("graph override is not generation-qualified: %q", override.TilePath)
+		}
+	}
+}
+
+func TestNavGraphDeltaRemovedWallOpensRoute(t *testing.T) {
+	const chunkSize = 5
+	coord := TerrainChunkCoordDef{}
+	world := &ImportedWorldDef{WorldID: "wall", SchemaVersion: CurrentImportedWorldSchemaVersion, Kind: ImportedWorldKindVoxelWorld, ChunkSize: chunkSize, VoxelResolution: 1}
+	chunk := ImportedWorldChunkDef{WorldID: world.WorldID, Coord: coord, ChunkSize: chunkSize, VoxelResolution: 1}
+	for x := range chunkSize {
+		for z := range chunkSize {
+			chunk.Voxels = append(chunk.Voxels, ImportedWorldVoxelDef{X: x, Z: z, Value: 1})
+		}
+	}
+	for y := 1; y <= 2; y++ {
+		for z := range chunkSize {
+			chunk.Voxels = append(chunk.Voxels, ImportedWorldVoxelDef{X: 2, Y: y, Z: z, Value: 1})
+		}
+	}
+	world.Entries = []ImportedWorldChunkEntryDef{{Coord: coord, ChunkPath: "0.gkchunk", NonEmptyVoxelCount: len(chunk.Voxels)}}
+	EnsureImportedWorldSectors(world)
+	profile := NavAgentProfileDef{ID: "walker", Radius: .4, Height: 1.8, StepHeight: .5, MaxSlopeDegrees: 45}
+	base, err := BakeNavGraphWorld(world, []ImportedWorldChunkDef{chunk}, []NavAgentProfileDef{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, goal := Vec3{.5, 1, 2.5}, Vec3{4.5, 1, 2.5}
+	if route, _ := FindNavGraphRoute(base.SourceTiles, base.GraphTiles, chunkSize, 1, start, goal); route.Found {
+		t.Fatal("base wall did not block route")
+	}
+	basePath := filepath.Join(t.TempDir(), "base"+NavGraphManifestExtension)
+	if err := SaveNavGraphBake(basePath, &base); err != nil {
+		t.Fatal(err)
+	}
+	effective := chunk
+	effective.Voxels = effective.Voxels[:chunkSize*chunkSize]
+	deltaPath := filepath.Join(t.TempDir(), "level.gkworlddelta")
+	delta := &WorldDeltaDef{SchemaVersion: CurrentWorldDeltaSchemaVersion, LevelID: "level"}
+	if _, err := SaveNavGraphDeltaBatchForImportedWorldChunks(deltaPath, delta, &base.Manifest, basePath, map[TerrainChunkCoordDef]*ImportedWorldChunkDef{coord: &effective}, []TerrainChunkCoordDef{coord}, "remove-wall"); err != nil {
+		t.Fatal(err)
+	}
+	source, err := LoadEffectiveNavSourceTile(&base.Manifest, basePath, delta, deltaPath, coord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := LoadEffectiveNavGraphTile(&base.Manifest, basePath, delta, deltaPath, coord, profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route, err := FindNavGraphRoute([]NavSourceTileDef{*source.Tile}, []NavGraphTileDef{*graph.Tile}, chunkSize, 1, start, goal); err != nil || !route.Found {
+		t.Fatalf("removed wall did not open route: route=%+v err=%v", route, err)
 	}
 }

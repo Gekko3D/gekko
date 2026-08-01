@@ -524,15 +524,22 @@ resident budget.
 
 ### Phase 4: Transactional Destruction Rebuilds
 
-- [ ] Define edit generations and profile-aware dirty-bound expansion.
-- [ ] Install conservative temporary blockers before scheduling work.
-- [ ] Coalesce edits and snapshot complete dependency batches.
-- [ ] Build and validate source, graph, and boundary replacements off-thread.
-- [ ] Persist delta sidecars transactionally.
-- [ ] Publish a complete immutable batch and retire covered blockers.
-- [ ] Reject every stale rebuild result.
+- [x] Define edit generations and profile-aware dirty-bound expansion.
+- [x] Install conservative temporary blockers before scheduling work.
+- [x] Coalesce edits and snapshot complete dependency batches.
+- [x] Build and validate source, graph, and boundary replacements off-thread.
+- [x] Persist delta sidecars transactionally.
+- [x] Publish a complete immutable batch and retire covered blockers.
+- [x] Reject every stale rebuild result.
 
 Gate: removed floor, removed wall, added obstruction, repeated edit, seam edit, and edit-during-build tests never expose unsafe or mixed topology.
+
+Result: streamed destruction now installs generation-tagged conservative chunk
+blockers, coalesces newer snapshots while one rebuild runs, and rejects stale
+runtime or edit generations. Rebuilt sidecars use immutable generation-qualified
+paths and temp-write, sync, close, and rename persistence; the world delta and
+resident query publish only after the complete batch succeeds, and covered
+blockers retire only after that residency revision is installed.
 
 ### Phase 5: Route Dependency Epochs
 

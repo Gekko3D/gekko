@@ -808,10 +808,15 @@ explicit snapshot; this backing contract intentionally covers digging and
 tunnelling through immutable base matter.
 
 Navigation delta files live below `<delta file>_data/nav_graph`. Dirty imported
-world chunks expand through generator halo dependencies. Source and neighboring
-graph overrides publish together; explicit empty overrides suppress stale
-static tiles. Runtime keeps old resident graph until complete replacement set
-loads, then swaps slices and increments `NavigationRevision` once.
+world chunks expand through profile and generator halo dependencies. An edit
+installs a conservative, generation-tagged blocker before its background build;
+newer edits coalesce and make older results ineligible to publish. Source and
+neighboring graph overrides use immutable generation-qualified paths and publish
+together only after temp-write, sync, close, rename, and reciprocal seam
+validation; explicit empty overrides suppress stale static tiles. Runtime keeps
+the old resident graph plus the blocker until the complete replacement set
+loads, then swaps the immutable query, retires only covered blockers, and
+increments `NavigationRevision` once.
 Profile-bounded, voxel-validated automatic drop and jump links are regenerated
 in that same background delta build; moving carrier position only affects
 traversal execution and does not dirty graph tiles.

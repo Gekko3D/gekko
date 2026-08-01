@@ -118,6 +118,46 @@ func TestStreamedNavigationIgnoresStaleLoadError(t *testing.T) {
 	}
 }
 
+func TestStreamedNavigationRejectsStaleDestructionBatch(t *testing.T) {
+	state := &StreamedLevelRuntimeState{
+		Initialized: true, Generation: 4,
+		BaseNavManifest:          &content.NavGraphManifestDef{ChunkSize: 4, VoxelResolution: 1},
+		WorldDelta:               &content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion},
+		navigationEditGeneration: 2, navigationRebuildActive: true,
+		navigationRebuilds: make(chan streamedNavigationRebuildResult, 1),
+		navigationLoads:    make(chan streamedNavigationLoadResult, 1),
+		navigationOverlays: make(chan streamedNavigationOverlayResult, 1),
+	}
+	state.navigationRebuilds <- streamedNavigationRebuildResult{
+		RuntimeGeneration: 4, EditGeneration: 1,
+		Delta: content.WorldDeltaDef{SchemaVersion: content.CurrentWorldDeltaSchemaVersion, NavigationSourceOverrides: []content.NavigationSourceOverrideDef{{NavID: "stale"}}},
+	}
+	streamedLevelNavigationSystem(state)
+	if state.navigationRebuildActive || len(state.WorldDelta.NavigationSourceOverrides) != 0 || state.navigationRequestedGen != 0 {
+		t.Fatalf("stale rebuild published: active=%t delta=%+v load=%d", state.navigationRebuildActive, state.WorldDelta.NavigationSourceOverrides, state.navigationRequestedGen)
+	}
+}
+
+func TestNavigationEditBlockersRetireOnlyCoveredGenerations(t *testing.T) {
+	manifest := &content.NavGraphManifestDef{ChunkSize: 4, VoxelResolution: 1, AgentProfiles: []content.NavAgentProfileDef{{Radius: .5, Height: 2}}}
+	state := &StreamedLevelRuntimeState{
+		BaseNavManifest:           manifest,
+		navigationEditBlockers:    map[string]navigationEditBlocker{},
+		navigationOverlayDisabled: map[string]struct{}{}, navigationOverlayOpenDoors: map[string]struct{}{}, navigationOverlayBlockers: map[string]content.NavBlockerDef{},
+	}
+	first := navigationEditBlockerForChunk(manifest, content.TerrainChunkCoordDef{}, 1)
+	second := navigationEditBlockerForChunk(manifest, content.TerrainChunkCoordDef{X: 1}, 2)
+	state.navigationEditBlockers[first.Blocker.ID] = first
+	state.navigationEditBlockers[second.Blocker.ID] = second
+	retireNavigationEditBlockers(state, 1)
+	if _, exists := state.navigationEditBlockers[first.Blocker.ID]; exists {
+		t.Fatal("covered edit blocker was retained")
+	}
+	if _, exists := state.navigationEditBlockers[second.Blocker.ID]; !exists {
+		t.Fatal("newer edit blocker was retired by an older batch")
+	}
+}
+
 func TestBrokenLadderDisablesRuntimeTraversalWithoutRebake(t *testing.T) {
 	const chunkSize = 4
 	source := content.NavSourceTileDef{

@@ -2,6 +2,7 @@ package content
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -29,11 +30,28 @@ type NavGraphDeltaBakeResult struct {
 }
 
 func ExpandNavGraphDirtyTileCoords(modified []TerrainChunkCoordDef) []TerrainChunkCoordDef {
+	return ExpandNavGraphDirtyTileCoordsForProfiles(modified, nil, 1, 1)
+}
+
+// ExpandNavGraphDirtyTileCoordsForProfiles returns every tile whose generated
+// support, clearance, or exceptional traversal can depend on a modified tile.
+func ExpandNavGraphDirtyTileCoordsForProfiles(modified []TerrainChunkCoordDef, profiles []NavAgentProfileDef, chunkSize int, voxelResolution float32) []TerrainChunkCoordDef {
+	tileSize := float32(chunkSize) * voxelResolution
+	if tileSize <= 0 || math.IsNaN(float64(tileSize)) || math.IsInf(float64(tileSize), 0) {
+		tileSize = 1
+	}
+	horizontal, vertical := tileSize, tileSize
+	for _, profile := range profiles {
+		horizontal = maxNavDeltaFloat(horizontal, profile.Radius, profile.MaxJumpDistance)
+		vertical = maxNavDeltaFloat(vertical, profile.Height, profile.StepHeight, profile.MaxDropHeight, profile.MaxJumpRise, profile.MaxVaultHeight, profile.MaxMantleHeight)
+	}
+	horizontalTiles := maxNavDeltaInt(1, int(math.Ceil(float64(horizontal/tileSize))))
+	verticalTiles := maxNavDeltaInt(1, int(math.Ceil(float64(vertical/tileSize))))
 	seen := make(map[TerrainChunkCoordDef]struct{}, len(modified)*27)
 	for _, coord := range modified {
-		for y := -1; y <= 1; y++ {
-			for x := -1; x <= 1; x++ {
-				for z := -1; z <= 1; z++ {
+		for y := -verticalTiles; y <= verticalTiles; y++ {
+			for x := -horizontalTiles; x <= horizontalTiles; x++ {
+				for z := -horizontalTiles; z <= horizontalTiles; z++ {
 					seen[TerrainChunkCoordDef{X: coord.X + x, Y: coord.Y + y, Z: coord.Z + z}] = struct{}{}
 				}
 			}
@@ -42,12 +60,37 @@ func ExpandNavGraphDirtyTileCoords(modified []TerrainChunkCoordDef) []TerrainChu
 	return sortedNavGraphCoords(seen)
 }
 
+func maxNavDeltaFloat(values ...float32) float32 {
+	var result float32
+	for _, value := range values {
+		if value > result {
+			result = value
+		}
+	}
+	return result
+}
+
+func maxNavDeltaInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func DefaultWorldDeltaNavSourceTilePath(deltaPath, navID string, coord TerrainChunkCoordDef) string {
 	return filepath.Join(DefaultWorldDeltaDataDir(deltaPath), DefaultWorldDeltaNavGraphDirName, navGraphPathToken(navID), "sources", navGraphCoordFilename(coord)+NavSourceTileExtension)
 }
 
 func DefaultWorldDeltaNavGraphTilePath(deltaPath, navID, profileID string, coord TerrainChunkCoordDef) string {
 	return filepath.Join(DefaultWorldDeltaDataDir(deltaPath), DefaultWorldDeltaNavGraphDirName, navGraphPathToken(navID), "graphs", navGraphPathToken(profileID), navGraphCoordFilename(coord)+NavGraphTileExtension)
+}
+
+func worldDeltaNavBatchPath(path, batchID string) string {
+	if batchID == "" {
+		return path
+	}
+	ext := filepath.Ext(path)
+	return strings.TrimSuffix(path, ext) + "." + navGraphPathToken(batchID) + ext
 }
 
 func LoadEffectiveNavSourceTile(manifest *NavGraphManifestDef, manifestPath string, delta *WorldDeltaDef, deltaPath string, coord TerrainChunkCoordDef) (NavSourceTileLookupResult, error) {
@@ -111,6 +154,13 @@ func LoadEffectiveNavGraphTile(manifest *NavGraphManifestDef, manifestPath strin
 // graph edge as one override revision. chunks must contain effective occupancy
 // for rebuilt centers and their known halo.
 func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDeltaDef, base *NavGraphManifestDef, basePath string, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, dirty []TerrainChunkCoordDef) (NavGraphDeltaBakeResult, error) {
+	return SaveNavGraphDeltaBatchForImportedWorldChunks(deltaPath, delta, base, basePath, chunks, dirty, "")
+}
+
+// SaveNavGraphDeltaBatchForImportedWorldChunks writes one generation-qualified
+// replacement batch. Its sidecars are immutable once written, so a stale build
+// cannot overwrite files referenced by the currently published world delta.
+func SaveNavGraphDeltaBatchForImportedWorldChunks(deltaPath string, delta *WorldDeltaDef, base *NavGraphManifestDef, basePath string, chunks map[TerrainChunkCoordDef]*ImportedWorldChunkDef, dirty []TerrainChunkCoordDef, batchID string) (NavGraphDeltaBakeResult, error) {
 	if strings.TrimSpace(deltaPath) == "" || delta == nil || base == nil {
 		return NavGraphDeltaBakeResult{}, fmt.Errorf("navigation graph delta requires delta path, world delta, and base manifest")
 	}
@@ -162,9 +212,13 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		sourceCoords[coord] = struct{}{}
 	}
 
+	profileCoords := make(map[TerrainChunkCoordDef]struct{})
+	for _, coord := range ExpandNavGraphDirtyTileCoordsForProfiles(dirty, base.AgentProfiles, base.ChunkSize, base.VoxelResolution) {
+		profileCoords[coord] = struct{}{}
+	}
 	graphCoords := expandNavGraphCoordsForDoors(
 		expandNavGraphCoordsForCarriers(
-			expandNavGraphCoordsForLadders(expandNavGraphHorizontal(sourceCoords), base.LadderVolumes, base.ChunkSize, base.VoxelResolution),
+			expandNavGraphCoordsForLadders(expandNavGraphHorizontal(profileCoords), base.LadderVolumes, base.ChunkSize, base.VoxelResolution),
 			base.Carriers, base.ChunkSize, base.VoxelResolution,
 		),
 		base.Doors, base.ChunkSize, base.VoxelResolution,
@@ -196,11 +250,6 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		source := newSources[coord]
 		override := NavigationSourceOverrideDef{NavID: base.NavID, ChunkCoord: coord, SourceHash: source.SourceHash, DependencyHash: source.DependencyHash, Empty: len(source.Spans) == 0}
 		if !override.Empty {
-			path := DefaultWorldDeltaNavSourceTilePath(deltaPath, base.NavID, coord)
-			if err := SaveNavSourceTile(path, &source); err != nil {
-				return NavGraphDeltaBakeResult{}, err
-			}
-			override.TilePath = AuthorDocumentPath(path, deltaPath)
 			result.SourceTiles = append(result.SourceTiles, source)
 		}
 		result.SourceOverrides = append(result.SourceOverrides, override)
@@ -263,6 +312,9 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 		if err != nil {
 			return NavGraphDeltaBakeResult{}, err
 		}
+		if err := validateNavGraphConnectedBatch(sources, connected); err != nil {
+			return NavGraphDeltaBakeResult{}, err
+		}
 		for _, graph := range connected {
 			if _, output := graphCoords[graph.Coord]; !output {
 				continue
@@ -273,20 +325,87 @@ func SaveNavGraphDeltaForImportedWorldChunks(deltaPath string, delta *WorldDelta
 				Empty: len(graph.SpanIDs) == 0,
 			}
 			if !override.Empty {
-				path := DefaultWorldDeltaNavGraphTilePath(deltaPath, base.NavID, profile.ID, graph.Coord)
-				if err := SaveNavGraphTile(path, &graph); err != nil {
-					return NavGraphDeltaBakeResult{}, err
-				}
-				override.TilePath = AuthorDocumentPath(path, deltaPath)
 				result.GraphTiles = append(result.GraphTiles, graph)
 			}
 			result.GraphOverrides = append(result.GraphOverrides, override)
 		}
 	}
+	for i := range result.SourceOverrides {
+		override := &result.SourceOverrides[i]
+		if override.Empty {
+			continue
+		}
+		path := worldDeltaNavBatchPath(DefaultWorldDeltaNavSourceTilePath(deltaPath, base.NavID, override.ChunkCoord), batchID)
+		source := newSources[override.ChunkCoord]
+		if err := SaveNavSourceTile(path, &source); err != nil {
+			return NavGraphDeltaBakeResult{}, err
+		}
+		override.TilePath = AuthorDocumentPath(path, deltaPath)
+	}
+	type graphKey struct {
+		coord   TerrainChunkCoordDef
+		profile string
+	}
+	graphByKey := make(map[graphKey]*NavGraphTileDef, len(result.GraphTiles))
+	for i := range result.GraphTiles {
+		graph := &result.GraphTiles[i]
+		graphByKey[graphKey{graph.Coord, graph.AgentProfileID}] = graph
+	}
+	for i := range result.GraphOverrides {
+		override := &result.GraphOverrides[i]
+		if override.Empty {
+			continue
+		}
+		graph := graphByKey[graphKey{override.ChunkCoord, override.AgentProfileID}]
+		if graph == nil {
+			return NavGraphDeltaBakeResult{}, fmt.Errorf("navigation graph replacement %s for profile %q is missing", TerrainChunkKey(override.ChunkCoord), override.AgentProfileID)
+		}
+		path := worldDeltaNavBatchPath(DefaultWorldDeltaNavGraphTilePath(deltaPath, base.NavID, override.AgentProfileID, override.ChunkCoord), batchID)
+		if err := SaveNavGraphTile(path, graph); err != nil {
+			return NavGraphDeltaBakeResult{}, err
+		}
+		override.TilePath = AuthorDocumentPath(path, deltaPath)
+	}
 
 	delta.NavigationSourceOverrides = mergeNavigationSourceOverrides(delta.NavigationSourceOverrides, result.SourceOverrides)
 	delta.NavigationGraphOverrides = mergeNavigationGraphOverrides(delta.NavigationGraphOverrides, result.GraphOverrides)
 	return result, nil
+}
+
+func validateNavGraphConnectedBatch(sources map[TerrainChunkCoordDef]NavSourceTileDef, graphs []NavGraphTileDef) error {
+	graphByCoord := make(map[TerrainChunkCoordDef]NavGraphTileDef, len(graphs))
+	for _, graph := range graphs {
+		if validation := ValidateNavGraphTile(&graph); validation.HasErrors() {
+			return fmt.Errorf("invalid navigation graph replacement %s: %s", TerrainChunkKey(graph.Coord), validation.Error())
+		}
+		source, ok := sources[graph.Coord]
+		if !ok || source.NavID != graph.NavID || source.BuilderVersion != graph.BuilderVersion || source.SourceHash != graph.SourceHash || source.DependencyHash != graph.DependencyHash {
+			return fmt.Errorf("navigation source and graph replacement metadata do not match at %s", TerrainChunkKey(graph.Coord))
+		}
+		graphByCoord[graph.Coord] = graph
+	}
+	for _, graph := range graphs {
+		for _, transition := range graph.SpanTransitions {
+			if transition.To.Tile == graph.Coord || transition.Kind != NavTransitionWalk && transition.Kind != NavTransitionStep && transition.Kind != NavTransitionStair {
+				continue
+			}
+			target, ok := graphByCoord[transition.To.Tile]
+			if !ok {
+				return fmt.Errorf("navigation seam %s/%d targets missing tile %s", TerrainChunkKey(graph.Coord), transition.From, TerrainChunkKey(transition.To.Tile))
+			}
+			reciprocal := false
+			for _, reverse := range target.SpanTransitions {
+				if reverse.From == transition.To.Span && reverse.To.Tile == graph.Coord && reverse.To.Span == transition.From {
+					reciprocal = true
+					break
+				}
+			}
+			if !reciprocal {
+				return fmt.Errorf("navigation seam %s/%d to %s/%d is not reciprocal", TerrainChunkKey(graph.Coord), transition.From, TerrainChunkKey(transition.To.Tile), transition.To.Span)
+			}
+		}
+	}
+	return nil
 }
 
 func navGraphBuildChunk(chunk ImportedWorldChunkDef, chunkSize int) (NavSpanBuildChunk, error) {

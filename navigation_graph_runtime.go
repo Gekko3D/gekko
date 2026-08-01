@@ -46,9 +46,20 @@ type streamedNavigationOverlayResult struct {
 
 type streamedNavigationRebuildResult struct {
 	RuntimeGeneration uint64
+	EditGeneration    uint64
 	Delta             content.WorldDeltaDef
 	Result            content.NavGraphDeltaBakeResult
 	Err               error
+}
+
+type navigationQueuedEdit struct {
+	Generation uint64
+	Snapshot   *content.ImportedWorldChunkDef
+}
+
+type navigationEditBlocker struct {
+	Generation uint64
+	Blocker    content.NavBlockerDef
 }
 
 type RuntimeNavigationService struct {
@@ -603,17 +614,32 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			break
 		}
 		state.navigationRebuildActive = false
+		if result.EditGeneration != state.navigationEditGeneration {
+			break
+		}
 		if result.Err != nil {
 			state.InitErr = result.Err
 			return
 		}
-		state.WorldDelta.NavigationSourceOverrides = append([]content.NavigationSourceOverrideDef(nil), result.Delta.NavigationSourceOverrides...)
-		state.WorldDelta.NavigationGraphOverrides = append([]content.NavigationGraphOverrideDef(nil), result.Delta.NavigationGraphOverrides...)
-		if err := content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta); err != nil {
+		candidate := copyWorldDeltaForNav(state.WorldDelta)
+		candidate.NavigationSourceOverrides = append([]content.NavigationSourceOverrideDef(nil), result.Delta.NavigationSourceOverrides...)
+		candidate.NavigationGraphOverrides = append([]content.NavigationGraphOverrideDef(nil), result.Delta.NavigationGraphOverrides...)
+		if err := content.SaveWorldDelta(state.WorldDeltaPath, &candidate); err != nil {
 			state.InitErr = err
 			return
 		}
+		state.WorldDelta.NavigationSourceOverrides = append([]content.NavigationSourceOverrideDef(nil), result.Delta.NavigationSourceOverrides...)
+		state.WorldDelta.NavigationGraphOverrides = append([]content.NavigationGraphOverrideDef(nil), result.Delta.NavigationGraphOverrides...)
+		for coord, edit := range state.navigationQueuedEdits {
+			if edit.Generation <= result.EditGeneration {
+				delete(state.navigationQueuedEdits, coord)
+			}
+		}
 		reloadStreamedNavigationResidency(state)
+		if state.navigationRetireAtLoad == nil {
+			state.navigationRetireAtLoad = make(map[uint64]uint64)
+		}
+		state.navigationRetireAtLoad[state.navigationRequestedGen] = result.EditGeneration
 	default:
 	}
 	select {
@@ -646,6 +672,10 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			state.navigationPendingSources = nil
 			state.navigationPendingGraphs = nil
 			state.navigationPendingGen = 0
+			if generation := state.navigationRetireAtLoad[result.LoadGeneration]; generation != 0 {
+				retireNavigationEditBlockers(state, generation)
+				delete(state.navigationRetireAtLoad, result.LoadGeneration)
+			}
 			break
 		}
 		if result.GraphRevision != state.navigationLoadedGen {
@@ -799,6 +829,9 @@ func streamedLevelNavigationOverlaySystem(cmd *Commands, state *StreamedLevelRun
 		state.InitErr = err
 		return
 	}
+	for id, blocker := range state.navigationEditBlockers {
+		blockers[id] = blocker.Blocker
+	}
 	setStreamedNavigationOverlayDesired(state, disabled, openDoors, blockers)
 	startStreamedNavigationOverlayBuild(state)
 }
@@ -839,7 +872,7 @@ func runtimeNavigationBlockers(cmd *Commands) (map[string]content.NavBlockerDef,
 }
 
 func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLevelRuntimeState) {
-	if cmd == nil || state == nil || !state.Initialized || state.InitErr != nil || state.BaseNavManifest == nil || state.navigationRebuildActive {
+	if cmd == nil || state == nil || !state.Initialized || state.InitErr != nil || state.BaseNavManifest == nil {
 		return
 	}
 	snapshots := takeVoxelWorldDirtyChunks(cmd.app, state.BaseWorldID)
@@ -873,6 +906,9 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 		}
 	}
 	if len(snapshots) == 0 {
+		if !state.navigationRebuildActive && len(state.navigationQueuedEdits) != 0 {
+			startStreamedNavigationRebuild(cmd, state)
+		}
 		return
 	}
 	snapshots = uniqueImportedWorldSnapshots(snapshots)
@@ -880,12 +916,35 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 		state.InitErr = err
 		return
 	}
-	dirty := make([]content.TerrainChunkCoordDef, 0, len(snapshots))
-	overrides := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(snapshots))
+	state.navigationEditGeneration++
+	generation := state.navigationEditGeneration
 	for _, snapshot := range snapshots {
-		dirty = append(dirty, snapshot.Coord)
-		overrides[snapshot.Coord] = snapshot
+		state.navigationQueuedEdits[snapshot.Coord] = navigationQueuedEdit{Generation: generation, Snapshot: snapshot}
+		blocker := navigationEditBlockerForChunk(state.BaseNavManifest, snapshot.Coord, generation)
+		state.navigationEditBlockers[blocker.Blocker.ID] = blocker
 	}
+	installNavigationEditBlockers(state)
+	if !state.navigationRebuildActive {
+		startStreamedNavigationRebuild(cmd, state)
+	}
+}
+
+func startStreamedNavigationRebuild(cmd *Commands, state *StreamedLevelRuntimeState) {
+	dirty := make([]content.TerrainChunkCoordDef, 0, len(state.navigationQueuedEdits))
+	overrides := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(state.navigationQueuedEdits))
+	for coord, edit := range state.navigationQueuedEdits {
+		dirty = append(dirty, coord)
+		overrides[coord] = edit.Snapshot
+	}
+	sort.Slice(dirty, func(i, j int) bool {
+		if dirty[i].Y != dirty[j].Y {
+			return dirty[i].Y < dirty[j].Y
+		}
+		if dirty[i].X != dirty[j].X {
+			return dirty[i].X < dirty[j].X
+		}
+		return dirty[i].Z < dirty[j].Z
+	})
 	chunks, err := loadNavigationRebuildChunks(cmd, state, dirty, overrides)
 	if err != nil {
 		state.InitErr = err
@@ -894,17 +953,64 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 	delta := copyWorldDeltaForNav(state.WorldDelta)
 	manifest := copyNavGraphManifest(state.BaseNavManifest)
 	runtimeGeneration := state.Generation
+	editGeneration := state.navigationEditGeneration
 	deltaPath, manifestPath := state.WorldDeltaPath, state.BaseNavManifestPath
 	state.navigationRebuildActive = true
 	state.jobs.Add(1)
 	go func() {
 		defer state.jobs.Done()
-		result, err := content.SaveNavGraphDeltaForImportedWorldChunks(deltaPath, &delta, manifest, manifestPath, chunks, dirty)
+		batchID := fmt.Sprintf("%d-%d", runtimeGeneration, editGeneration)
+		result, err := content.SaveNavGraphDeltaBatchForImportedWorldChunks(deltaPath, &delta, manifest, manifestPath, chunks, dirty, batchID)
 		if err != nil {
 			err = fmt.Errorf("rebuild navigation graph delta: %w", err)
 		}
-		state.navigationRebuilds <- streamedNavigationRebuildResult{RuntimeGeneration: runtimeGeneration, Delta: delta, Result: result, Err: err}
+		state.navigationRebuilds <- streamedNavigationRebuildResult{RuntimeGeneration: runtimeGeneration, EditGeneration: editGeneration, Delta: delta, Result: result, Err: err}
 	}()
+}
+
+func navigationEditBlockerForChunk(manifest *content.NavGraphManifestDef, coord content.TerrainChunkCoordDef, generation uint64) navigationEditBlocker {
+	tileSize := float32(manifest.ChunkSize) * manifest.VoxelResolution
+	horizontal, vertical := float32(0), float32(0)
+	for _, profile := range manifest.AgentProfiles {
+		horizontal = maxf(horizontal, profile.Radius)
+		for _, extent := range [...]float32{profile.Height, profile.StepHeight, profile.MaxDropHeight, profile.MaxJumpRise, profile.MaxVaultHeight, profile.MaxMantleHeight} {
+			vertical = maxf(vertical, extent)
+		}
+	}
+	minimum := content.Vec3{float32(coord.X)*tileSize - horizontal, float32(coord.Y)*tileSize - vertical, float32(coord.Z)*tileSize - horizontal}
+	maximum := content.Vec3{float32(coord.X+1)*tileSize + horizontal, float32(coord.Y+1)*tileSize + vertical, float32(coord.Z+1)*tileSize + horizontal}
+	id := fmt.Sprintf("__nav_edit:%d:%d:%d", coord.X, coord.Y, coord.Z)
+	return navigationEditBlocker{Generation: generation, Blocker: content.NavBlockerDef{ID: id, Min: minimum, Max: maximum}}
+}
+
+func installNavigationEditBlockers(state *StreamedLevelRuntimeState) {
+	if state.navigationEditBlockers == nil {
+		state.navigationEditBlockers = make(map[string]navigationEditBlocker)
+	}
+	blockers := copyNavigationBlockers(state.navigationOverlayBlockers)
+	for id, blocker := range state.navigationEditBlockers {
+		blockers[id] = blocker.Blocker
+	}
+	setStreamedNavigationOverlayDesired(state, copyNavigationTraversalSet(state.navigationOverlayDisabled), copyNavigationTraversalSet(state.navigationOverlayOpenDoors), blockers)
+	startStreamedNavigationOverlayBuild(state)
+}
+
+func retireNavigationEditBlockers(state *StreamedLevelRuntimeState, generation uint64) {
+	for id, blocker := range state.navigationEditBlockers {
+		if blocker.Generation <= generation {
+			delete(state.navigationEditBlockers, id)
+		}
+	}
+	blockers := copyNavigationBlockers(state.navigationOverlayBlockers)
+	for id := range blockers {
+		if strings.HasPrefix(id, "__nav_edit:") {
+			delete(blockers, id)
+		}
+	}
+	for id, blocker := range state.navigationEditBlockers {
+		blockers[id] = blocker.Blocker
+	}
+	setStreamedNavigationOverlayDesired(state, copyNavigationTraversalSet(state.navigationOverlayDisabled), copyNavigationTraversalSet(state.navigationOverlayOpenDoors), blockers)
 }
 
 func loadNavigationRebuildChunks(cmd *Commands, state *StreamedLevelRuntimeState, dirty []content.TerrainChunkCoordDef, snapshots map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef) (map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, error) {
