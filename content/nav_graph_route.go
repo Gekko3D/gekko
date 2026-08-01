@@ -502,7 +502,7 @@ func (q *navGraphQuery) walkableCell(x, z int, height uint32) navWalkableCell {
 		}
 		for _, id := range tile.column(localX, localZ, q.chunkSize) {
 			ref := NavSpanRef{Tile: coord, Span: id}
-			if _, blocked := q.blocked[ref]; blocked || math.Float32bits(tile.spans[id].SupportHeight) != height {
+			if q.isBlocked(ref) || math.Float32bits(tile.spans[id].SupportHeight) != height {
 				continue
 			}
 			entry := navWalkableCell{classID: tile.classIDs[id], exits: tile.walkExits[id]}

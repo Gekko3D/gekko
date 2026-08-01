@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -50,18 +51,46 @@ func NewNavGraphQueryWithBlockers(sources []NavSourceTileDef, graphs []NavGraphT
 }
 
 func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []NavBlockerDef) {
-	q.blocked = make(map[NavSpanRef]struct{})
-	for coord, tile := range q.tiles {
-		for spanIndex, span := range tile.spans {
-			spanID := uint32(spanIndex)
-			if !bitHas(tile.accepted, spanID) {
-				continue
-			}
-			for _, blocker := range blockers {
-				if navBlockerOverlapsSpan(blocker, profile, coord, q.chunkSize, q.voxelResolution, span) {
-					ref := NavSpanRef{Tile: coord, Span: spanID}
-					q.blocked[ref] = struct{}{}
-					break
+	q.blocked = make(map[TerrainChunkCoordDef][]uint64)
+	affected := make(map[navRouteNode]struct{})
+	tilesByColumn := make(map[[2]int][]TerrainChunkCoordDef)
+	for coord := range q.tiles {
+		key := [2]int{coord.X, coord.Z}
+		tilesByColumn[key] = append(tilesByColumn[key], coord)
+	}
+	tileSize := float32(q.chunkSize) * q.voxelResolution
+	for _, blocker := range blockers {
+		minTileX := int(math.Floor(float64((blocker.Min[0] - profile.Radius) / tileSize)))
+		minTileZ := int(math.Floor(float64((blocker.Min[2] - profile.Radius) / tileSize)))
+		maxTileX := int(math.Ceil(float64((blocker.Max[0]+profile.Radius)/tileSize))) - 1
+		maxTileZ := int(math.Ceil(float64((blocker.Max[2]+profile.Radius)/tileSize))) - 1
+		for tileZ := minTileZ; tileZ <= maxTileZ; tileZ++ {
+			for tileX := minTileX; tileX <= maxTileX; tileX++ {
+				for _, coord := range tilesByColumn[[2]int{tileX, tileZ}] {
+					tile := q.tiles[coord]
+					tileMinX := float32(coord.X*q.chunkSize) * q.voxelResolution
+					tileMinZ := float32(coord.Z*q.chunkSize) * q.voxelResolution
+					minX := max(0, int(math.Floor(float64((blocker.Min[0]-profile.Radius-tileMinX)/q.voxelResolution))))
+					minZ := max(0, int(math.Floor(float64((blocker.Min[2]-profile.Radius-tileMinZ)/q.voxelResolution))))
+					maxX := min(q.chunkSize-1, int(math.Ceil(float64((blocker.Max[0]+profile.Radius-tileMinX)/q.voxelResolution)))-1)
+					maxZ := min(q.chunkSize-1, int(math.Ceil(float64((blocker.Max[2]+profile.Radius-tileMinZ)/q.voxelResolution)))-1)
+					for z := minZ; z <= maxZ; z++ {
+						for x := minX; x <= maxX; x++ {
+							for _, spanID := range tile.column(x, z, q.chunkSize) {
+								span := tile.spans[spanID]
+								if !navBlockerOverlapsSpan(blocker, profile, coord, q.chunkSize, q.voxelResolution, span) {
+									continue
+								}
+								words := q.blocked[coord]
+								if words == nil {
+									words = make([]uint64, (len(tile.spans)+63)/64)
+									q.blocked[coord] = words
+								}
+								bitSet(words, spanID)
+								affected[navRouteNode{Tile: coord, Region: tile.spanRegions[spanID]}] = struct{}{}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -69,98 +98,104 @@ func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []Na
 	if len(q.blocked) == 0 {
 		return
 	}
-	q.globalEdges = make(map[NavSpanRef][]NavSpanTransitionDef)
-	q.globalScale = float32(math.Inf(1))
-	for coord, tile := range q.tiles {
-		for fromID := range tile.spans {
-			q.visitSpanEdges(NavSpanRef{Tile: coord, Span: uint32(fromID)}, func(edge NavSpanTransitionDef) {
-				from := NavSpanRef{Tile: coord, Span: edge.From}
-				if _, ok := q.spanRegion(from); !ok {
-					return
-				}
-				if _, ok := q.spanRegion(edge.To); !ok {
-					return
-				}
-				q.globalEdges[from] = append(q.globalEdges[from], edge)
-				distance := navVec3Distance(q.spanCenter(from), q.spanCenter(edge.To))
-				if distance > 0 {
-					q.globalScale = min(q.globalScale, edge.Cost/distance)
-				}
-			})
-		}
-	}
-	if !finite(q.globalScale) {
-		q.globalScale = 0
-	}
-	q.indexBlockerComponents()
+	q.indexBlockerComponents(affected)
 	q.indexActiveDegrees()
 }
 
 const navUnassignedComponent = ^uint32(0)
 
-func (q *navGraphQuery) indexBlockerComponents() {
+type navOverlayEdge struct {
+	id   uint32
+	from NavSpanRef
+	edge NavSpanTransitionDef
+}
+
+func (q *navGraphQuery) indexBlockerComponents(affected map[navRouteNode]struct{}) {
 	q.spanComponents = make(map[TerrainChunkCoordDef][]uint32, len(q.tiles))
+	coords := make([]TerrainChunkCoordDef, 0, len(q.tiles))
 	for coord, tile := range q.tiles {
 		components := make([]uint32, len(tile.spans))
 		for id := range components {
 			components[id] = navUnassignedComponent
 		}
 		q.spanComponents[coord] = components
+		coords = append(coords, coord)
 	}
+	sort.Slice(coords, func(i, j int) bool { return terrainCoordLess(coords[i], coords[j]) })
 
-	component := uint32(0)
-	for coord, tile := range q.tiles {
+	baseline := make(map[navRouteNode]uint32)
+	nextComponent := uint32(0)
+	for _, coord := range coords {
+		tile := q.tiles[coord]
 		for spanIndex := range tile.spans {
-			spanID := uint32(spanIndex)
-			if !bitHas(tile.accepted, spanID) {
+			ref := NavSpanRef{Tile: coord, Span: uint32(spanIndex)}
+			if !bitHas(tile.accepted, ref.Span) || q.isBlocked(ref) {
 				continue
 			}
-			ref := NavSpanRef{Tile: coord, Span: spanID}
-			if _, blocked := q.blocked[ref]; blocked {
+			region := navRouteNode{Tile: coord, Region: tile.spanRegions[ref.Span]}
+			if _, split := affected[region]; !split {
+				component, ok := baseline[region]
+				if !ok {
+					component, nextComponent = nextComponent, nextComponent+1
+					baseline[region] = component
+				}
+				q.spanComponents[coord][ref.Span] = component
 				continue
 			}
 			if _, assigned := q.spanComponent(ref); assigned {
 				continue
 			}
-			q.spanComponents[coord][spanID] = component
+			component := nextComponent
+			nextComponent++
+			q.spanComponents[coord][ref.Span] = component
 			queue := []NavSpanRef{ref}
 			for head := 0; head < len(queue); head++ {
 				current := queue[head]
-				for _, edge := range q.globalEdges[current] {
-					if _, blocked := q.blocked[edge.To]; blocked {
-						continue
+				q.visitSpanEdges(current, func(edge NavSpanTransitionDef) {
+					toRegion, ok := q.spanRegion(edge.To)
+					if !ok || edge.To.Tile != coord || toRegion != region.Region || q.isBlocked(edge.To) {
+						return
 					}
-					if _, assigned := q.spanComponent(edge.To); assigned || !q.hasGlobalEdge(edge.To, current) {
-						continue
+					if _, assigned := q.spanComponent(edge.To); assigned || !q.hasActiveEdge(edge.To, current) {
+						return
 					}
-					q.spanComponents[edge.To.Tile][edge.To.Span] = component
+					q.spanComponents[coord][edge.To.Span] = component
 					queue = append(queue, edge.To)
-				}
+				})
 			}
-			component++
 		}
 	}
 
-	seen := make(map[[2]uint32]struct{})
 	q.componentEdges = make(map[uint32][]uint32)
-	for from, edges := range q.globalEdges {
-		fromComponent, ok := q.spanComponent(from)
-		if !ok {
-			continue
-		}
-		for _, edge := range edges {
-			toComponent, ok := q.spanComponent(edge.To)
-			if !ok || fromComponent == toComponent {
+	q.componentRoutes = make(map[uint32][]navOverlayEdge)
+	seen := make(map[[2]uint32]struct{})
+	edgeID := uint32(0)
+	for _, coord := range coords {
+		for fromID := range q.tiles[coord].spans {
+			from := NavSpanRef{Tile: coord, Span: uint32(fromID)}
+			fromComponent, ok := q.spanComponent(from)
+			if !ok {
 				continue
 			}
-			key := [2]uint32{fromComponent, toComponent}
-			if _, duplicate := seen[key]; duplicate {
-				continue
-			}
-			seen[key] = struct{}{}
-			q.componentEdges[fromComponent] = append(q.componentEdges[fromComponent], toComponent)
+			q.visitSpanEdges(from, func(edge NavSpanTransitionDef) {
+				toComponent, ok := q.spanComponent(edge.To)
+				if !ok || fromComponent == toComponent {
+					return
+				}
+				q.componentRoutes[fromComponent] = append(q.componentRoutes[fromComponent], navOverlayEdge{id: edgeID, from: from, edge: edge})
+				edgeID++
+				key := [2]uint32{fromComponent, toComponent}
+				if _, ok := seen[key]; !ok {
+					seen[key] = struct{}{}
+					q.componentEdges[fromComponent] = append(q.componentEdges[fromComponent], toComponent)
+				}
+			})
 		}
 	}
+}
+
+func (q *navGraphQuery) isBlocked(ref NavSpanRef) bool {
+	return bitHas(q.blocked[ref.Tile], ref.Span)
 }
 
 func (q *navGraphQuery) spanComponent(ref NavSpanRef) (uint32, bool) {
@@ -171,13 +206,10 @@ func (q *navGraphQuery) spanComponent(ref NavSpanRef) (uint32, bool) {
 	return components[ref.Span], true
 }
 
-func (q *navGraphQuery) hasGlobalEdge(from, to NavSpanRef) bool {
-	for _, edge := range q.globalEdges[from] {
-		if edge.To == to {
-			return true
-		}
-	}
-	return false
+func (q *navGraphQuery) hasActiveEdge(from, to NavSpanRef) bool {
+	found := false
+	q.visitSpanEdges(from, func(edge NavSpanTransitionDef) { found = found || edge.To == to })
+	return found
 }
 
 func navBlockerOverlapsSpan(blocker NavBlockerDef, profile NavAgentProfileDef, coord TerrainChunkCoordDef, chunkSize int, voxelResolution float32, span NavSpanDef) bool {
@@ -191,107 +223,109 @@ func navBlockerOverlapsSpan(blocker NavBlockerDef, profile NavAgentProfileDef, c
 
 func (q *navGraphQuery) spanPathCell(ref NavSpanRef) navSpanPathCell {
 	span, _ := q.span(ref)
-	return navSpanPathCell{
-		x:      ref.Tile.X*q.chunkSize + span.X,
-		z:      ref.Tile.Z*q.chunkSize + span.Z,
-		height: math.Float32bits(span.SupportHeight),
-	}
+	return navSpanPathCell{x: ref.Tile.X*q.chunkSize + span.X, z: ref.Tile.Z*q.chunkSize + span.Z, height: math.Float32bits(span.SupportHeight)}
 }
 
-type navBlockerRoute struct {
-	refs  []NavSpanRef
-	edges []NavSpanTransitionDef
-}
-
-type navBlockerParent struct {
-	from NavSpanRef
-	edge NavSpanTransitionDef
-}
-
-func (q *navGraphQuery) findBlockerSpanRoute(start, goal NavSpanRef) navBlockerRoute {
-	// ponytail: global resident-span A* only while blockers overlap graph; add
-	// overlay-aware region refinement if blocker-heavy worlds make this hot.
-	if start == goal {
-		return navBlockerRoute{refs: []NavSpanRef{start}}
-	}
-	frontier := navBlockerQueue{{ref: start, estimate: q.globalScale * navVec3Distance(q.spanCenter(start), q.spanCenter(goal))}}
-	heap.Init(&frontier)
-	costs := map[NavSpanRef]float32{start: 0}
-	parents := make(map[NavSpanRef]navBlockerParent)
-	for frontier.Len() > 0 {
-		current := heap.Pop(&frontier).(navBlockerQueueItem)
-		if current.cost != costs[current.ref] {
-			continue
-		}
-		if current.ref == goal {
-			refs := []NavSpanRef{goal}
-			var edges []NavSpanTransitionDef
-			for refs[len(refs)-1] != start {
-				parent := parents[refs[len(refs)-1]]
-				refs = append(refs, parent.from)
-				edges = append(edges, parent.edge)
-			}
-			reverseNavSpanRefs(refs)
-			reverseNavSpanTransitions(edges)
-			return navBlockerRoute{refs: refs, edges: edges}
-		}
-		for _, edge := range q.globalEdges[current.ref] {
-			if _, blocked := q.blocked[edge.To]; blocked {
-				continue
-			}
-			cost := current.cost + edge.Cost
-			if previous, seen := costs[edge.To]; seen && cost >= previous {
-				continue
-			}
-			costs[edge.To] = cost
-			parents[edge.To] = navBlockerParent{from: current.ref, edge: edge}
-			heap.Push(&frontier, navBlockerQueueItem{
-				ref: edge.To, cost: cost,
-				estimate: cost + q.globalScale*navVec3Distance(q.spanCenter(edge.To), q.spanCenter(goal)),
-			})
-		}
-	}
-	return navBlockerRoute{}
+type navOverlayState struct {
+	component uint32
+	point     Vec3
+	via       navOverlayEdge
+	parent    uint32
 }
 
 func (q *navGraphQuery) findBlockerRoute(start, goal navResolvedSpan) NavRouteResult {
-	path := q.findBlockerSpanRoute(start.Ref, goal.Ref)
-	if len(path.refs) == 0 {
+	startComponent, startOK := q.spanComponent(start.Ref)
+	goalComponent, goalOK := q.spanComponent(goal.Ref)
+	if !startOK || !goalOK {
 		return NavRouteResult{FailureReason: NavRouteNoRoute, FailureTile: goal.Ref.Tile}
 	}
+	states := map[uint32]navOverlayState{0: {component: startComponent, point: start.Projected}}
+	costs := map[uint32]float32{0: 0}
+	frontier := navOverlayQueue{{key: 0, estimate: navVec3Distance(start.Projected, goal.Projected)}}
+	heap.Init(&frontier)
+	goalKey := uint32(0)
+	found := false
+	for frontier.Len() > 0 {
+		current := heap.Pop(&frontier).(navOverlayQueueItem)
+		if current.cost != costs[current.key] {
+			continue
+		}
+		state := states[current.key]
+		if state.component == goalComponent {
+			goalKey, found = current.key, true
+			break
+		}
+		for _, edge := range q.componentRoutes[state.component] {
+			toComponent, ok := q.spanComponent(edge.edge.To)
+			if !ok {
+				continue
+			}
+			entry := q.spanTransitionEntry(edge.from.Tile, edge.edge)
+			exit := q.spanTransitionTarget(edge.from.Tile, edge.edge)
+			cost := current.cost + navVec3Distance(state.point, entry) + edge.edge.Cost
+			key := edge.id + 1
+			if previous, seen := costs[key]; seen && cost >= previous {
+				continue
+			}
+			costs[key] = cost
+			states[key] = navOverlayState{component: toComponent, point: exit, via: edge, parent: current.key}
+			heap.Push(&frontier, navOverlayQueueItem{key: key, cost: cost, estimate: cost + navVec3Distance(exit, goal.Projected)})
+		}
+	}
+	if !found {
+		return NavRouteResult{FailureReason: NavRouteNoRoute, FailureTile: goal.Ref.Tile}
+	}
+	var crossings []navOverlayEdge
+	for key := goalKey; key != 0; key = states[key].parent {
+		crossings = append(crossings, states[key].via)
+	}
+	for left, right := 0, len(crossings)-1; left < right; left, right = left+1, right-1 {
+		crossings[left], crossings[right] = crossings[right], crossings[left]
+	}
+	return q.refineBlockerRoute(start, goal, startComponent, crossings)
+}
+
+func (q *navGraphQuery) refineBlockerRoute(start, goal navResolvedSpan, component uint32, crossings []navOverlayEdge) NavRouteResult {
 	result := NavRouteResult{Found: true, Steps: []NavRouteStep{{
 		Tile: start.Region.Tile, Region: start.Region.Region, Target: start.Projected, TraversalWaypoint: -1,
 	}}}
-	edgeSteps := make([]int, len(path.edges))
-	for i := range edgeSteps {
-		edgeSteps[i] = -1
-	}
-	for i, edge := range path.edges {
-		from, to := path.refs[i], path.refs[i+1]
-		fromRegion, _ := q.spanRegion(from)
-		toRegion, _ := q.spanRegion(to)
-		fromNode := navRouteNode{Tile: from.Tile, Region: fromRegion}
-		toNode := navRouteNode{Tile: to.Tile, Region: toRegion}
-		if fromNode == toNode && edge.Traversal == nil {
-			continue
+	current := start.Ref
+	for _, crossing := range crossings {
+		path := q.findComponentSpanRoute(component, current, crossing.from)
+		if !path.Found {
+			return NavRouteResult{FailureReason: NavRouteNoRoute, FailureTile: crossing.from.Tile}
 		}
-		edgeSteps[i] = len(result.Steps)
-		result.Steps = append(result.Steps, NavRouteStep{
-			Tile: toNode.Tile, Region: toNode.Region, Target: q.spanTransitionTarget(from.Tile, edge),
-			RequiredAction: edge.Kind, Traversal: cloneNavTraversal(edge.Traversal), Gate: cloneNavTransitionGate(edge.Gate), TraversalWaypoint: -1,
-		})
-	}
-	for i, edge := range path.edges {
-		if edge.Traversal != nil {
-			waypoint := q.appendWaypointIndex(&result, edge.Traversal.Start, path.refs[i])
-			q.appendWaypoint(&result, edge.Traversal.End, path.refs[i+1])
-			if edgeSteps[i] >= 0 {
-				result.Steps[edgeSteps[i]].TraversalWaypoint = waypoint
+		q.appendOverlaySpanPath(&result, current.Tile, path.Spans, 1)
+		fromRegion, _ := q.spanRegion(crossing.from)
+		toRegion, _ := q.spanRegion(crossing.edge.To)
+		fromNode := navRouteNode{Tile: crossing.from.Tile, Region: fromRegion}
+		toNode := navRouteNode{Tile: crossing.edge.To.Tile, Region: toRegion}
+		step := -1
+		if fromNode != toNode || crossing.edge.Traversal != nil || crossing.edge.Kind != NavTransitionWalk {
+			step = len(result.Steps)
+			result.Steps = append(result.Steps, NavRouteStep{
+				Tile: toNode.Tile, Region: toNode.Region, Target: q.spanTransitionTarget(crossing.from.Tile, crossing.edge),
+				RequiredAction: crossing.edge.Kind, Traversal: cloneNavTraversal(crossing.edge.Traversal),
+				Gate: cloneNavTransitionGate(crossing.edge.Gate), TraversalWaypoint: -1,
+			})
+		}
+		if crossing.edge.Traversal != nil {
+			waypoint := q.appendWaypointIndex(&result, crossing.edge.Traversal.Start, crossing.from)
+			q.appendWaypoint(&result, crossing.edge.Traversal.End, crossing.edge.To)
+			if step >= 0 {
+				result.Steps[step].TraversalWaypoint = waypoint
 			}
-			continue
+		} else {
+			q.appendWaypoint(&result, q.spanTransitionTarget(crossing.from.Tile, crossing.edge), crossing.edge.To)
 		}
-		q.appendWaypoint(&result, q.spanCenter(path.refs[i+1]), path.refs[i+1])
+		current = crossing.edge.To
+		component, _ = q.spanComponent(current)
 	}
+	path := q.findComponentSpanRoute(component, current, goal.Ref)
+	if !path.Found {
+		return NavRouteResult{FailureReason: NavRouteNoRoute, FailureTile: goal.Ref.Tile}
+	}
+	q.appendOverlaySpanPath(&result, current.Tile, path.Spans, 1)
 	q.appendWaypoint(&result, goal.Projected, goal.Ref)
 	if navRouteWalkOnly(result.Steps) {
 		q.simplifyWaypoints(start.Projected, &result)
@@ -299,41 +333,37 @@ func (q *navGraphQuery) findBlockerRoute(start, goal navResolvedSpan) NavRouteRe
 	return result
 }
 
-func reverseNavSpanRefs(values []NavSpanRef) {
-	for left, right := 0, len(values)-1; left < right; left, right = left+1, right-1 {
-		values[left], values[right] = values[right], values[left]
+func (q *navGraphQuery) appendOverlaySpanPath(route *NavRouteResult, tile TerrainChunkCoordDef, spans []uint32, skip int) {
+	if skip >= len(spans) {
+		return
+	}
+	for _, span := range spans[skip:] {
+		ref := NavSpanRef{Tile: tile, Span: span}
+		q.appendWaypoint(route, q.spanCenter(ref), ref)
 	}
 }
 
-func reverseNavSpanTransitions(values []NavSpanTransitionDef) {
-	for left, right := 0, len(values)-1; left < right; left, right = left+1, right-1 {
-		values[left], values[right] = values[right], values[left]
-	}
-}
-
-type navBlockerQueueItem struct {
-	ref      NavSpanRef
+type navOverlayQueueItem struct {
+	key      uint32
 	cost     float32
 	estimate float32
 }
 
-type navBlockerQueue []navBlockerQueueItem
+type navOverlayQueue []navOverlayQueueItem
 
-func (q navBlockerQueue) Len() int { return len(q) }
-func (q navBlockerQueue) Less(i, j int) bool {
+func (q navOverlayQueue) Len() int { return len(q) }
+func (q navOverlayQueue) Less(i, j int) bool {
 	if q[i].estimate != q[j].estimate {
 		return q[i].estimate < q[j].estimate
 	}
 	if q[i].cost != q[j].cost {
 		return q[i].cost < q[j].cost
 	}
-	return navSpanRefLess(q[i].ref, q[j].ref)
+	return q[i].key < q[j].key
 }
-func (q navBlockerQueue) Swap(i, j int) { q[i], q[j] = q[j], q[i] }
-func (q *navBlockerQueue) Push(value any) {
-	*q = append(*q, value.(navBlockerQueueItem))
-}
-func (q *navBlockerQueue) Pop() any {
+func (q navOverlayQueue) Swap(i, j int)   { q[i], q[j] = q[j], q[i] }
+func (q *navOverlayQueue) Push(value any) { *q = append(*q, value.(navOverlayQueueItem)) }
+func (q *navOverlayQueue) Pop() any {
 	old := *q
 	last := old[len(old)-1]
 	*q = old[:len(old)-1]

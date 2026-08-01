@@ -89,6 +89,27 @@ func BenchmarkNavGraphPhase0(b *testing.B) {
 			navGraphBenchmarkRoute = route
 		}
 	})
+	for _, test := range []struct {
+		name    string
+		blocker NavBlockerDef
+	}{
+		{"small", NavBlockerDef{ID: "crate", Min: Vec3{23.25, 0, 23.25}, Max: Vec3{23.75, 1, 23.75}}},
+		{"large", NavBlockerDef{ID: "wall", Min: Vec3{23.25, 0, 0}, Max: Vec3{23.75, 1, 48}}},
+	} {
+		b.Run("blocker_overlay_"+test.name+"/rebuild", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				query, err := NewNavGraphQueryWithBlockers(
+					[]NavSourceTileDef{denseSource}, []NavGraphTileDef{denseGraph}, denseSource.ChunkSize, 1, profile,
+					[]NavBlockerDef{test.blocker},
+				)
+				if err != nil {
+					b.Fatal(err)
+				}
+				navGraphBenchmarkQuery = query
+			}
+		})
+	}
 	b.Run("local_destruction/rebuild", func(b *testing.B) {
 		basePath, base, effective, dirty := benchmarkNavDeltaFixture(b, profile)
 		deltaPath := filepath.Join(b.TempDir(), "benchmark.gkworlddelta")

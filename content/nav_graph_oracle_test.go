@@ -145,3 +145,30 @@ func TestNavGraphRouteReachabilityMatchesDijkstra(t *testing.T) {
 		}
 	})
 }
+
+func TestNavGraphBlockerRoutesMatchDijkstraGeneratedCases(t *testing.T) {
+	const chunkSize = 9
+	profile := NavAgentProfileDef{ID: "walker", Radius: 0.1, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	sources, graphs := buildFlatNavRouteWorld(t, []TerrainChunkCoordDef{{}}, chunkSize, profile)
+	start, goal := NavSpanRef{}, NavSpanRef{Span: chunkSize*chunkSize - 1}
+	for x := 1; x < chunkSize-1; x++ {
+		for z := 0; z < chunkSize; z += 2 {
+			blockers := []NavBlockerDef{{
+				ID: "generated", Min: Vec3{float32(x) + 0.25, 0, float32(z) + 0.25},
+				Max: Vec3{float32(x) + 0.75, 1, float32(min(z+2, chunkSize)) - 0.25},
+			}}
+			query, err := NewNavGraphQueryWithBlockers(sources, graphs, chunkSize, 1, profile, blockers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			route, err := query.FindRoute(Vec3{0.5, 0, 0.5}, Vec3{8.5, 0, 8.5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, found := navDijkstraReachability(sources, graphs, chunkSize, 1, profile, blockers, start, goal)
+			if route.Found != found {
+				t.Fatalf("blocker x=%d z=%d route=%t oracle=%t", x, z, route.Found, found)
+			}
+		}
+	}
+}

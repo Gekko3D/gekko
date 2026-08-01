@@ -506,15 +506,21 @@ Dijkstra oracle. Blocker and carrier overlay storage remains Phase 3 scope.
 
 ### Phase 3: Replace Blocker Routing
 
-- [ ] Build blocker overlap from tile/column ranges.
-- [ ] Split only affected baked regions into overlay components.
-- [ ] Route over baseline regions plus overlay components.
-- [ ] Refine locally through active CSR edges.
-- [ ] Move carriers, breakables, and runtime blockers to the shared overlay.
-- [ ] Delete production global resident-span A* and its global edge index.
-- [ ] Move active-degree and reachability queries to overlay components.
+- [x] Build blocker overlap from tile/column ranges.
+- [x] Split only affected baked regions into overlay components.
+- [x] Route over baseline regions plus overlay components.
+- [x] Refine locally through active CSR edges.
+- [x] Move carriers, breakables, and runtime blockers to the shared overlay.
+- [x] Delete production global resident-span A* and its global edge index.
+- [x] Move active-degree and reachability queries to overlay components.
 
 Gate: blocker/carrier routes match the oracle on generated cases and meet the route budget on Crossfire.
+
+Result: generated blocker routes match the independent Dijkstra oracle. A
+Crossfire `lift2` carrier route measures `0.018667 ms` p50, `0.027084 ms` p95,
+and `0.048042 ms` p99 on the reference Apple M4 Pro, below the `5 ms` gate.
+The carrier-overlay snapshot retains `225,413,800` bytes, below the `256 MB`
+resident budget.
 
 ### Phase 4: Transactional Destruction Rebuilds
 

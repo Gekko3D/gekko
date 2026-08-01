@@ -57,11 +57,10 @@ type navGraphQuery struct {
 	chunkSize       int
 	voxelResolution float32
 	tiles           map[TerrainChunkCoordDef]*navResidentTile
-	blocked         map[NavSpanRef]struct{}
-	globalEdges     map[NavSpanRef][]NavSpanTransitionDef
-	globalScale     float32
+	blocked         map[TerrainChunkCoordDef][]uint64
 	spanComponents  map[TerrainChunkCoordDef][]uint32
 	componentEdges  map[uint32][]uint32
+	componentRoutes map[uint32][]navOverlayEdge
 }
 
 type navBackingKey struct {
@@ -560,7 +559,7 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 	var best navResolvedSpan
 	found := false
 	for _, ref := range q.columnSpans(cellX, cellY, cellZ, 1) {
-		if _, blocked := q.blocked[ref]; blocked {
+		if q.isBlocked(ref) {
 			continue
 		}
 		span, _ := q.span(ref)
@@ -595,7 +594,7 @@ func (q *navGraphQuery) resolveNearby(point Vec3, maxDistance float32) (navResol
 	for dz := -radius; dz <= radius; dz++ {
 		for dx := -radius; dx <= radius; dx++ {
 			for _, ref := range q.columnSpans(cellX+dx, cellY, cellZ+dz, verticalTiles) {
-				if _, blocked := q.blocked[ref]; blocked {
+				if q.isBlocked(ref) {
 					continue
 				}
 				span, _ := q.span(ref)
@@ -703,8 +702,7 @@ func (q *NavGraphQuery) IsSpanBlocked(ref NavSpanRef) bool {
 	if q == nil || q.resident() == nil {
 		return false
 	}
-	_, blocked := q.resident().blocked[ref]
-	return blocked
+	return q.resident().isBlocked(ref)
 }
 
 // IsSpanActive reports whether a span belongs to the resident graph and is not
@@ -717,8 +715,7 @@ func (q *NavGraphQuery) IsSpanActive(ref NavSpanRef) bool {
 	if _, accepted := query.spanRegion(ref); !accepted {
 		return false
 	}
-	_, blocked := query.blocked[ref]
-	return !blocked
+	return !query.isBlocked(ref)
 }
 
 // ReachableSpans returns target spans reachable from start through the active
@@ -734,7 +731,7 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 	if !ok {
 		return result
 	}
-	if _, blocked := query.blocked[start]; blocked {
+	if query.isBlocked(start) {
 		return result
 	}
 	wanted := make(map[NavSpanRef]struct{}, len(targets))
@@ -742,7 +739,7 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 		if _, ok := query.spanRegion(target); !ok {
 			continue
 		}
-		if _, blocked := query.blocked[target]; !blocked {
+		if !query.isBlocked(target) {
 			wanted[target] = struct{}{}
 		}
 	}
@@ -821,10 +818,10 @@ func (q *navGraphQuery) indexActiveDegrees() {
 		for from := range tile.spans {
 			q.visitSpanEdges(NavSpanRef{Tile: coord, Span: uint32(from)}, func(edge NavSpanTransitionDef) {
 				from := NavSpanRef{Tile: coord, Span: edge.From}
-				if _, blocked := q.blocked[from]; blocked {
+				if q.isBlocked(from) {
 					return
 				}
-				if _, blocked := q.blocked[edge.To]; blocked {
+				if q.isBlocked(edge.To) {
 					return
 				}
 				if int(edge.From) < len(degrees) && degrees[edge.From] < 2 {

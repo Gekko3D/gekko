@@ -66,6 +66,20 @@ func (q *navGraphQuery) findSpanRoute(tile TerrainChunkCoordDef, region, start, 
 		func(id uint32) bool { return int(id) < len(resident.spanRegions) && resident.spanRegions[id] == region })
 }
 
+func (q *navGraphQuery) findComponentSpanRoute(component uint32, start, goal NavSpanRef) NavSpanSearchResult {
+	if start.Tile != goal.Tile {
+		return NavSpanSearchResult{FailureReason: NavSpanSearchNoRoute}
+	}
+	resident := q.tile(start.Tile)
+	if resident == nil {
+		return NavSpanSearchResult{FailureReason: NavSpanSearchStartMissing}
+	}
+	return findNavSpanRouteIndexed(resident, q.voxelResolution, start.Span, goal.Span, func(id uint32) bool {
+		value, ok := q.spanComponent(NavSpanRef{Tile: start.Tile, Span: id})
+		return ok && value == component
+	})
+}
+
 func findNavSpanRouteIndexed(tile *navResidentTile, voxelResolution float32, start, goal uint32, accepted func(uint32) bool) NavSpanSearchResult {
 	spans, heuristicScale := tile.spans, tile.spanScale
 	if !accepted(start) {
