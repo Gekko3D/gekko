@@ -562,14 +562,24 @@ replan reasons.
 
 ### Phase 6: Rebuild Consumers And Assets
 
-- [ ] Update `navbake`, `navdiag`, navigation graph lab, and debug overlays.
-- [ ] Update Actiongame route solving, tactical reachability, carrier planning, and failure tracing.
-- [ ] Update streamed world-delta save/load paths.
-- [ ] Rebuild Crossfire, Gasworks, and navigation lab bundles.
-- [ ] Delete dead compatibility types, loaders, and generated assets.
-- [ ] Update canonical content/runtime documentation.
+- [x] Update `navbake`, `navdiag`, navigation graph lab, and debug overlays.
+- [x] Update Actiongame route solving, tactical reachability, carrier planning, and failure tracing.
+- [x] Update streamed world-delta save/load paths.
+- [x] Rebuild Crossfire, Gasworks, and navigation lab bundles.
+- [x] Delete dead compatibility types, loaders, and generated assets.
+- [x] Update canonical content/runtime documentation.
 
 Gate: the engine and Actiongame compile and all automatic and manual acceptance cases pass using only the new formats and query path.
+
+Result: graph manifest/tile schema v5 and builder `voxel_graph_v14` remove the
+legacy traversal `id` field; special traversals now use only stable `link_id`
+and optional `owner_id`. Crossfire, Gasworks, and the navigation lab were
+rebaked to `.gkns`/`.gkng` with zero hard validation errors. The lab has a
+headless bake command and automatic binary/dependency coverage, while
+Actiongame's overlay distinguishes runtime-blocked spans. Content, Actiongame,
+and lab tests pass; the engine root gate remains blocked by the unrelated
+renderer-bridge audit at `mod_voxelrt_client_systems.go:745`, and windowed
+Crossfire/Gasworks/lab acceptance remains manual.
 
 ### Phase 7: Tune Only Measured Bottlenecks
 

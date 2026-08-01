@@ -128,7 +128,7 @@ func ConnectNavGraphDrops(sources []NavSourceTileDef, graphs []NavGraphTileDef, 
 		headroom := min(candidate.From.Span.Headroom, candidate.To.Span.Headroom)
 		clearance := min(candidate.From.Span.ClearanceRadius, candidate.To.Span.ClearanceRadius)
 		traversal := candidate.Traversal
-		traversal.ID, traversal.LinkID, traversal.OwnerID = AutoNavDropOwnerID, linkID, AutoNavDropOwnerID
+		traversal.LinkID, traversal.OwnerID = linkID, AutoNavDropOwnerID
 		graph.SpanTransitions = append(graph.SpanTransitions, NavSpanTransitionDef{
 			From: candidate.From.Ref.Span, To: candidate.To.Ref, Kind: NavTransitionDrop,
 			StepDelta: candidate.To.Point[1] - candidate.From.Point[1], Width: width,

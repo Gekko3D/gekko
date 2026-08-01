@@ -331,7 +331,6 @@ func collectNavGraphStrings(def *NavGraphTileDef) navStrings {
 		if v == nil {
 			return
 		}
-		set[v.ID] = struct{}{}
 		set[v.LinkID] = struct{}{}
 		set[v.OwnerID] = struct{}{}
 		if v.Carrier != nil {
@@ -588,7 +587,6 @@ func writeNavTraversal(w *navBinaryWriter, s navStrings, v *NavTraversalDef) {
 		return
 	}
 	w.u8(1)
-	s.ref(w, v.ID)
 	s.ref(w, v.LinkID)
 	s.ref(w, v.OwnerID)
 	w.vec3(v.Start)
@@ -615,7 +613,7 @@ func readNavTraversal(r *navBinaryReader, s []string) *NavTraversalDef {
 	if r.u8() == 0 {
 		return nil
 	}
-	v := &NavTraversalDef{ID: navStringRef(r, s), LinkID: navStringRef(r, s), OwnerID: navStringRef(r, s), Start: r.vec3(), Apex: r.vec3(), End: r.vec3(), Speed: r.f32(), LaunchSpeed: r.f32(), Duration: r.f32()}
+	v := &NavTraversalDef{LinkID: navStringRef(r, s), OwnerID: navStringRef(r, s), Start: r.vec3(), Apex: r.vec3(), End: r.vec3(), Speed: r.f32(), LaunchSpeed: r.f32(), Duration: r.f32()}
 	if r.u8() != 0 {
 		v.Carrier = &NavCarrierTraversalDef{CarrierID: navStringRef(r, s), FromStop: navStringRef(r, s), ToStop: navStringRef(r, s), Board: r.vec3(), BoardMode: navStringRef(r, s), CallControllerID: navStringRef(r, s), ControllerID: navStringRef(r, s)}
 	}

@@ -335,14 +335,14 @@ func navDoorAppendExternalRegionTransitions(graphs []NavGraphTileDef, spans map[
 
 func appendNavDoorDirection(graph *NavGraphTileDef, doorID string, from navDoorSpan, fromRegion uint32, to navDoorSpan, toRegion uint32, width, headroom, clearance, cost float32) {
 	linkID := navTraversalLinkID(NavTransitionWalk, doorID, from.Ref, to.Ref)
-	spanTraversal := &NavTraversalDef{ID: doorID, LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
+	spanTraversal := &NavTraversalDef{LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
 	graph.SpanTransitions = append(graph.SpanTransitions, NavSpanTransitionDef{
 		From: from.Ref.Span, To: to.Ref, Kind: NavTransitionWalk,
 		StepDelta: to.Point[1] - from.Point[1], Width: width,
 		MinHeadroom: headroom, MinClearance: clearance, Cost: cost, Traversal: spanTraversal,
 		Gate: &NavTransitionGateDef{Kind: NavGateDoor, ID: doorID},
 	})
-	regionTraversal := &NavTraversalDef{ID: doorID, LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
+	regionTraversal := &NavTraversalDef{LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
 	graph.Transitions = append(graph.Transitions, NavRegionTransitionDef{
 		ID: uint32(len(graph.Transitions)), FromRegion: fromRegion,
 		ToTile: to.Ref.Tile, ToRegion: toRegion, Kind: NavTransitionWalk,
@@ -683,7 +683,7 @@ func navDoorOpenPoseBlocksStanding(doors []NavDoorDef, point Vec3, profile NavAg
 
 func appendNavDoorDropDirection(graph *NavGraphTileDef, doorID string, from navDoorSpan, fromRegion uint32, to navDoorSpan, toRegion uint32, width, headroom, clearance, cost float32) {
 	linkID := navTraversalLinkID(NavTransitionDrop, doorID, from.Ref, to.Ref)
-	traversal := &NavTraversalDef{ID: doorID, LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
+	traversal := &NavTraversalDef{LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point}
 	graph.SpanTransitions = append(graph.SpanTransitions, NavSpanTransitionDef{
 		From: from.Ref.Span, To: to.Ref, Kind: NavTransitionDrop,
 		StepDelta: to.Point[1] - from.Point[1], Width: width,
@@ -695,7 +695,7 @@ func appendNavDoorDropDirection(graph *NavGraphTileDef, doorID string, from navD
 		ToTile: to.Ref.Tile, ToRegion: toRegion, Kind: NavTransitionDrop,
 		CrossingStart: from.Point, CrossingEnd: to.Point, Width: width,
 		MinHeadroom: headroom, MinClearance: clearance, Cost: cost,
-		Traversal: &NavTraversalDef{ID: doorID, LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point},
+		Traversal: &NavTraversalDef{LinkID: linkID, OwnerID: doorID, Start: from.Point, End: to.Point},
 		Gate:      &NavTransitionGateDef{Kind: NavGateDoor, ID: doorID},
 	})
 }

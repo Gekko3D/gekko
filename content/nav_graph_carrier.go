@@ -269,7 +269,7 @@ func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fr
 		cost = navVec3Distance(from.Point.Point, board) + navVec3Distance(board, to.Point.Point) + (from.Point.Point[1]-board[1])*0.5
 	}
 	spanTraversal := &NavTraversalDef{
-		ID: carrier.ID, LinkID: linkID, OwnerID: carrier.ID,
+		LinkID: linkID, OwnerID: carrier.ID,
 		Start: from.Point.Point, End: to.Point.Point, Duration: duration,
 		Carrier: carrierTraversal,
 	}
@@ -285,7 +285,7 @@ func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fr
 		CrossingStart: from.Point.Point, CrossingEnd: to.Point.Point, Width: width,
 		MinHeadroom: headroom, MinClearance: clearance, Cost: cost,
 		Traversal: &NavTraversalDef{
-			ID: carrier.ID, LinkID: linkID, OwnerID: carrier.ID,
+			LinkID: linkID, OwnerID: carrier.ID,
 			Start: from.Point.Point, End: to.Point.Point, Duration: duration,
 			Carrier: &regionCarrier,
 		},

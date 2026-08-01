@@ -48,7 +48,7 @@ func TestConnectNavGraphLaddersAddsCapabilityGatedRoutes(t *testing.T) {
 				t.Fatalf("ladder route failed: route=%+v err=%v", route, err)
 			}
 			step := route.Steps[1]
-			if step.RequiredAction != NavTransitionLadder || step.Traversal == nil || step.Traversal.ID != ladder.ID || step.TraversalWaypoint < 0 {
+			if step.RequiredAction != NavTransitionLadder || step.Traversal == nil || step.Traversal.OwnerID != ladder.ID || step.TraversalWaypoint < 0 {
 				t.Fatalf("route lost ladder action binding: %+v", step)
 			}
 		})

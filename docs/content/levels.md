@@ -137,9 +137,9 @@ resolution against level/base-world contracts. Streamed runtime loads source
 and profile graph tiles near existing level observers; no polygon data or
 fallback exists.
 
-Navigation source schema v2 stores compact solid and blocker runs so agent
+Navigation source schema v3 stores compact solid and blocker runs so agent
 clearance is derived above each profile's reachable step envelope. Current
-builder `voxel_graph_v13` merges ordinary walk/stair/step surfaces into ground
+builder `voxel_graph_v14` merges ordinary walk/stair/step surfaces into ground
 regions and adds bounded directed drops plus gap/upward jumps at exposed region
 boundaries. Drop paths and jump arcs are checked against sparse source occupancy
 before links are emitted. Older graph bundles must be rebaked.

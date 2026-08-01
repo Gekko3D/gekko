@@ -151,7 +151,6 @@ func ConnectNavGraphJumps(sources []NavSourceTileDef, graphs []NavGraphTileDef, 
 	for _, candidate := range candidates {
 		graph := &graphs[graphIndex[candidate.From.Ref.Tile]]
 		linkID := navTraversalLinkID(NavTransitionJump, AutoNavJumpOwnerID, candidate.From.Ref, candidate.To.Ref)
-		candidate.Traversal.ID = AutoNavJumpOwnerID
 		candidate.Traversal.LinkID = linkID
 		candidate.Traversal.OwnerID = AutoNavJumpOwnerID
 		width := min(voxelResolution, 2*min(candidate.From.Span.ClearanceRadius, candidate.To.Span.ClearanceRadius))

@@ -29,7 +29,7 @@ func TestConnectNavGraphDoorsCreatesExplicitCrossing(t *testing.T) {
 		if step.RequiredAction != NavTransitionWalk || step.Gate == nil || step.Gate.Kind != NavGateDoor || step.Gate.ID != door.ID {
 			continue
 		}
-		foundDoor = step.Traversal != nil && step.Traversal.ID == door.ID && step.Traversal.Start[0] < door.BoundsCenter[0] && step.Traversal.End[0] > door.BoundsCenter[0]
+		foundDoor = step.Traversal != nil && step.Traversal.OwnerID == door.ID && step.Traversal.Start[0] < door.BoundsCenter[0] && step.Traversal.End[0] > door.BoundsCenter[0]
 	}
 	if !foundDoor {
 		t.Fatalf("route omitted explicit door traversal: %+v", route)

@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	CurrentNavGraphManifestSchemaVersion = 4
+	CurrentNavGraphManifestSchemaVersion = 5
 	CurrentNavSourceTileSchemaVersion    = 3
-	CurrentNavGraphTileSchemaVersion     = 4
+	CurrentNavGraphTileSchemaVersion     = 5
 
 	NavGraphManifestExtension = ".gknav"
 	NavSourceTileExtension    = ".gkns"
@@ -73,8 +73,6 @@ type NavSpanRef struct {
 // NavTraversalDef binds special movement to its authored owner and gives
 // locomotion explicit world-space entry and exit points.
 type NavTraversalDef struct {
-	// ID remains the legacy owner ID for old graph bundles.
-	ID          string                  `json:"id,omitempty"`
 	LinkID      string                  `json:"link_id,omitempty"`
 	OwnerID     string                  `json:"owner_id,omitempty"`
 	Start       Vec3                    `json:"start"`
@@ -99,17 +97,11 @@ type NavCarrierTraversalDef struct {
 }
 
 func (traversal NavTraversalDef) StableLinkID() string {
-	if traversal.LinkID != "" {
-		return traversal.LinkID
-	}
-	return traversal.ID
+	return traversal.LinkID
 }
 
 func (traversal NavTraversalDef) Owner() string {
-	if traversal.OwnerID != "" {
-		return traversal.OwnerID
-	}
-	return traversal.ID
+	return traversal.OwnerID
 }
 
 func navTraversalLinkID(kind, owner string, from, to NavSpanRef) string {
