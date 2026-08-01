@@ -36,6 +36,20 @@ type PreparedAuthoredAsset struct {
 	parts        map[string]preparedAuthoredPart
 }
 
+// PreparedAuthoredAssetHasMarkerKind reports whether an authored asset
+// declares a marker required by a presentation consumer.
+func PreparedAuthoredAssetHasMarkerKind(prepared *PreparedAuthoredAsset, kind string) bool {
+	if prepared == nil || prepared.def == nil || kind == "" {
+		return false
+	}
+	for _, marker := range prepared.def.Markers {
+		if marker.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 type preparedAuthoredPart struct {
 	model   AssetId
 	palette AssetId
