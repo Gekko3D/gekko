@@ -817,6 +817,12 @@ validation; explicit empty overrides suppress stale static tiles. Runtime keeps
 the old resident graph plus the blocker until the complete replacement set
 loads, then swaps the immutable query, retires only covered blockers, and
 increments `NavigationRevision` once.
+Each immutable query snapshot also carries a topology epoch per resident tile.
+Routes record the sorted tile/epoch dependencies selected by their region and
+span corridor. A later publication retains routes whose dependency epochs still
+match, while an unloaded or changed dependency stops locomotion immediately and
+requests a prioritized replan. Asynchronous results are accepted only when the
+actor request still matches and the result's dependency epochs remain current.
 Profile-bounded, voxel-validated automatic drop and jump links are regenerated
 in that same background delta build; moving carrier position only affects
 traversal execution and does not dirty graph tiles.

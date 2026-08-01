@@ -341,6 +341,11 @@ type NavRouteStep struct {
 	TraversalWaypoint int                   `json:"traversal_waypoint,omitempty"`
 }
 
+type NavRouteTileDependency struct {
+	Tile  TerrainChunkCoordDef `json:"tile"`
+	Epoch uint64               `json:"epoch"`
+}
+
 type NavRouteResult struct {
 	Found         bool           `json:"found"`
 	StartLocation NavPointResult `json:"start_location"`
@@ -348,10 +353,11 @@ type NavRouteResult struct {
 	Steps         []NavRouteStep `json:"steps,omitempty"`
 	Waypoints     []Vec3         `json:"waypoints,omitempty"`
 	// WaypointSpans has the same order and length as Waypoints.
-	WaypointSpans      []NavSpanRef         `json:"waypoint_spans,omitempty"`
-	FailureReason      string               `json:"failure_reason,omitempty"`
-	FailureTile        TerrainChunkCoordDef `json:"failure_tile"`
-	NavigationRevision uint64               `json:"navigation_revision"`
+	WaypointSpans      []NavSpanRef             `json:"waypoint_spans,omitempty"`
+	FailureReason      string                   `json:"failure_reason,omitempty"`
+	FailureTile        TerrainChunkCoordDef     `json:"failure_tile"`
+	NavigationRevision uint64                   `json:"navigation_revision"`
+	TileDependencies   []NavRouteTileDependency `json:"tile_dependencies,omitempty"`
 }
 
 type NavPointResult struct {

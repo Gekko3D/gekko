@@ -35,7 +35,12 @@ func FindNavGraphRoute(sources []NavSourceTileDef, graphs []NavGraphTileDef, chu
 	return query.FindRoute(startPoint, goalPoint)
 }
 
-func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, error) {
+func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (result NavRouteResult, err error) {
+	defer func() {
+		if err == nil {
+			q.attachRouteDependencies(&result)
+		}
+	}()
 	if !validVec3(startPoint) || !validVec3(goalPoint) {
 		return NavRouteResult{}, fmt.Errorf("navigation route points must be finite")
 	}
@@ -52,7 +57,7 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		return NavRouteResult{FailureReason: NavRouteGoalUnsupported, FailureTile: goalTile}, nil
 	}
 	if len(query.blocked) != 0 {
-		result := query.findBlockerRoute(start, goal)
+		result = query.findBlockerRoute(start, goal)
 		if result.Found {
 			result.StartLocation, result.GoalLocation = navPointResult(start), navPointResult(goal)
 		}
@@ -81,7 +86,7 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 		}
 		backing[i] = edge
 	}
-	result := NavRouteResult{
+	result = NavRouteResult{
 		Found: true, StartLocation: navPointResult(start), GoalLocation: navPointResult(goal),
 	}
 	result.Steps = append(result.Steps, NavRouteStep{Tile: start.Region.Tile, Region: start.Region.Region, Target: start.Projected, TraversalWaypoint: -1})

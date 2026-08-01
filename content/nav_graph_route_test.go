@@ -76,6 +76,55 @@ func TestFindNavGraphRoute(t *testing.T) {
 		}
 	})
 
+	t.Run("route epochs invalidate only affected tiles", func(t *testing.T) {
+		sources, graphs := buildWorld(3)
+		before, err := NewNavGraphQuery(sources, graphs, chunkSize, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		local, err := before.FindRoute(Vec3{0.1, 0.2, 0.1}, Vec3{2.9, 0.2, 0.1})
+		if err != nil || !local.Found {
+			t.Fatalf("local route failed: route=%+v err=%v", local, err)
+		}
+		crossing, err := before.FindRoute(Vec3{0.1, 0.2, 0.1}, Vec3{8.9, 0.2, 0.1})
+		if err != nil || !crossing.Found {
+			t.Fatalf("cross-tile route failed: route=%+v err=%v", crossing, err)
+		}
+		remote, err := before.FindRoute(Vec3{6.1, 0.2, 0.1}, Vec3{8.9, 0.2, 0.1})
+		if err != nil || !remote.Found {
+			t.Fatalf("remote route failed: route=%+v err=%v", remote, err)
+		}
+		after, err := NewNavGraphQueryWithBlockers(sources, graphs, chunkSize, 1, profile, []NavBlockerDef{{
+			ID: "tile-2", Min: Vec3{7, -1, 0}, Max: Vec3{8, 2, 1},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		after = after.WithUpdatedTileEpochs(before)
+		if valid, reason := after.RouteDependencyStatus(local); !valid {
+			t.Fatalf("unaffected route invalidated: %s", reason)
+		}
+		if valid, reason := after.RouteDependencyStatus(crossing); valid || reason != "dependency_epoch_changed" {
+			t.Fatalf("affected route status = %t/%q", valid, reason)
+		}
+		unloaded, err := NewNavGraphQuery(sources[:2], graphs[:2], chunkSize, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		unloaded = unloaded.WithUpdatedTileEpochs(before)
+		if valid, reason := unloaded.RouteDependencyStatus(remote); valid || reason != "dependency_tile_unloaded" {
+			t.Fatalf("unloaded route status = %t/%q", valid, reason)
+		}
+		reloaded, err := NewNavGraphQuery(sources, graphs, chunkSize, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reloaded = reloaded.WithUpdatedTileEpochs(unloaded)
+		if valid, reason := reloaded.RouteDependencyStatus(remote); valid || reason != "dependency_epoch_changed" {
+			t.Fatalf("reloaded route reused an old epoch: %t/%q", valid, reason)
+		}
+	})
+
 	t.Run("stacked floor resolution", func(t *testing.T) {
 		source := NavSourceTileDef{
 			NavID: "stacked", SchemaVersion: CurrentNavSourceTileSchemaVersion,

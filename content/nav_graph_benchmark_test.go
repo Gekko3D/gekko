@@ -42,6 +42,22 @@ func BenchmarkNavGraphPhase0(b *testing.B) {
 			navGraphBenchmarkRoute = route
 		}
 	})
+	b.Run("dense_flat/route_dependency_validation", func(b *testing.B) {
+		query, err := NewNavGraphQuery([]NavSourceTileDef{denseSource}, []NavGraphTileDef{denseGraph}, denseSource.ChunkSize, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		route, err := query.FindRoute(Vec3{0.5, 0, 0.5}, Vec3{47.5, 0, 47.5})
+		if err != nil || !route.Found {
+			b.Fatalf("route=%+v err=%v", route, err)
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			if valid, reason := query.RouteDependencyStatus(route); !valid {
+				b.Fatal(reason)
+			}
+		}
+	})
 	b.Run("stacked/query_index", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {

@@ -23,7 +23,7 @@ func NewNavGraphQueryWithBlockers(sources []NavSourceTileDef, graphs []NavGraphT
 		return nil, err
 	}
 	if len(blockers) == 0 {
-		return &NavGraphQuery{snapshot: &NavSnapshot{query: query}}, nil
+		return newPublishedNavGraphQuery(query, nil), nil
 	}
 	if !finite(profile.Radius) || profile.Radius <= 0 || !finite(profile.Height) || profile.Height <= 0 {
 		return nil, fmt.Errorf("navigation blocker agent radius and height must be finite and positive")
@@ -47,7 +47,7 @@ func NewNavGraphQueryWithBlockers(sources []NavSourceTileDef, graphs []NavGraphT
 		}
 	}
 	query.enableBlockers(profile, blockers)
-	return &NavGraphQuery{snapshot: &NavSnapshot{query: query}}, nil
+	return newPublishedNavGraphQuery(query, nil), nil
 }
 
 func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []NavBlockerDef) {

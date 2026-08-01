@@ -543,14 +543,22 @@ blockers retire only after that residency revision is installed.
 
 ### Phase 5: Route Dependency Epochs
 
-- [ ] Add per-tile topology epochs to snapshots.
-- [ ] Record route tile dependencies and epochs.
-- [ ] Retain unaffected routes across global publications.
-- [ ] Prioritize hard-invalid routes and budget soft replans.
-- [ ] Drop stale asynchronous route results by request and dependency version.
-- [ ] Update Actiongame traces and debug HUD with dependency/replan reasons.
+- [x] Add per-tile topology epochs to snapshots.
+- [x] Record route tile dependencies and epochs.
+- [x] Retain unaffected routes across global publications.
+- [x] Prioritize hard-invalid routes and budget soft replans.
+- [x] Drop stale asynchronous route results by request and dependency version.
+- [x] Update Actiongame traces and debug HUD with dependency/replan reasons.
 
 Gate: a localized Crossfire edit replans only affected routes and locomotion never follows a newly blocked segment.
+
+Result: immutable query publication now advances epochs only for tiles whose
+effective resident topology changed, including seam degrees and runtime
+overlays. Routes carry sorted tile/epoch dependencies; Actiongame retains
+unaffected routes, stops and prioritizes hard-invalid routes before traversal,
+budgets ordinary replans, and rejects stale async results by actor request plus
+dependency status. Navigation HUD and bot traces expose dependency counts and
+replan reasons.
 
 ### Phase 6: Rebuild Consumers And Assets
 

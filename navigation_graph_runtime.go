@@ -176,7 +176,7 @@ func (s RuntimeNavigationService) WithTraversalDisabled(traversalID string) (Run
 	if err != nil {
 		return RuntimeNavigationService{}, err
 	}
-	s.query, s.disabledTraversals = query, disabled
+	s.query, s.disabledTraversals = query.WithInheritedTileEpochs(s.query), disabled
 	return s, nil
 }
 
@@ -206,7 +206,7 @@ func (s RuntimeNavigationService) WithSpanTransitionDisabled(from, to content.Na
 	if err != nil {
 		return RuntimeNavigationService{}, err
 	}
-	s.Graphs, s.query = graphs, query
+	s.Graphs, s.query = graphs, query.WithInheritedTileEpochs(s.query)
 	return s, nil
 }
 
@@ -268,7 +268,7 @@ func (s RuntimeNavigationService) Locate(point content.Vec3) (content.NavPointRe
 func (s RuntimeNavigationService) IsRouteSupport(route content.NavRouteResult, waypoint int, support content.NavPointResult, radius, waypointTolerance float32) bool {
 	if !route.Found || !route.StartLocation.Found || !support.Found ||
 		waypoint < 0 || waypoint >= len(route.Waypoints) ||
-		route.NavigationRevision != 0 && route.NavigationRevision != s.NavigationRevision ||
+		!s.IsRouteCurrent(route) ||
 		!runtimeNavigationFinite(radius) || radius < 0 ||
 		!runtimeNavigationFinite(waypointTolerance) || waypointTolerance < 0 ||
 		!s.IsSpanActive(support.Ref) {
@@ -294,6 +294,24 @@ func (s RuntimeNavigationService) IsRouteSupport(route content.NavRouteResult, w
 		}
 	}
 	return false
+}
+
+// RouteDependencyStatus validates a route against the current per-tile
+// topology epochs. Routes without dependency metadata retain legacy revision
+// behavior for callers constructing results by hand.
+func (s RuntimeNavigationService) RouteDependencyStatus(route content.NavRouteResult) (bool, string) {
+	if len(route.TileDependencies) != 0 && s.query != nil {
+		return s.query.RouteDependencyStatus(route)
+	}
+	if route.NavigationRevision != 0 && route.NavigationRevision != s.NavigationRevision {
+		return false, "navigation_revision_changed"
+	}
+	return true, ""
+}
+
+func (s RuntimeNavigationService) IsRouteCurrent(route content.NavRouteResult) bool {
+	valid, _ := s.RouteDependencyStatus(route)
+	return valid
 }
 
 func runtimeNavigationPointSegmentDistance(point, start, end content.Vec3) float32 {
@@ -662,7 +680,7 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			state.mu.Lock()
 			state.NavigationSources = result.Sources
 			state.NavigationGraphs = result.Graphs
-			state.navigationQuery = result.Query
+			state.navigationQuery = result.Query.WithUpdatedTileEpochs(state.navigationQuery)
 			state.navigationDisabled = result.DisabledTraversals
 			state.navigationOpenDoors = result.OpenDoors
 			state.navigationBlockers = result.Blockers
@@ -689,7 +707,7 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			break
 		}
 		state.mu.Lock()
-		state.navigationQuery = result.Query
+		state.navigationQuery = result.Query.WithUpdatedTileEpochs(state.navigationQuery)
 		state.navigationDisabled = result.DisabledTraversals
 		state.navigationOpenDoors = result.OpenDoors
 		state.navigationBlockers = result.Blockers

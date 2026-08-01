@@ -3,6 +3,7 @@ package content
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 )
 
@@ -77,7 +78,8 @@ type navBackingCandidate struct {
 // NavSnapshot is immutable resident navigation state. Its storage is private so
 // published slices and bitsets cannot be mutated by callers.
 type NavSnapshot struct {
-	query *navGraphQuery
+	query      *navGraphQuery
+	tileEpochs map[TerrainChunkCoordDef]uint64
 }
 
 // NavGraphQuery reads one immutable resident snapshot. Runtime publication
@@ -91,7 +93,110 @@ func NewNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 	if err != nil {
 		return nil, err
 	}
-	return &NavGraphQuery{snapshot: &NavSnapshot{query: query}}, nil
+	return newPublishedNavGraphQuery(query, nil), nil
+}
+
+func newPublishedNavGraphQuery(query *navGraphQuery, previous *NavGraphQuery) *NavGraphQuery {
+	epochs := make(map[TerrainChunkCoordDef]uint64, len(query.tiles))
+	if previous != nil && previous.snapshot != nil {
+		for coord, epoch := range previous.snapshot.tileEpochs {
+			epochs[coord] = epoch
+		}
+	}
+	for coord, tile := range query.tiles {
+		epoch := uint64(1)
+		if previous != nil && previous.snapshot != nil {
+			if previousEpoch := previous.snapshot.tileEpochs[coord]; previousEpoch != 0 {
+				epoch = previousEpoch
+			}
+			if old := previous.resident(); old != nil {
+				if oldTile := old.tiles[coord]; oldTile != nil {
+					if !reflect.DeepEqual(oldTile, tile) || !reflect.DeepEqual(old.blocked[coord], query.blocked[coord]) {
+						epoch++
+					}
+				} else if previous.snapshot.tileEpochs[coord] != 0 {
+					epoch++
+				}
+			}
+		}
+		if epoch == 0 {
+			epoch = 1
+		}
+		epochs[coord] = epoch
+	}
+	return &NavGraphQuery{snapshot: &NavSnapshot{query: query, tileEpochs: epochs}}
+}
+
+// WithUpdatedTileEpochs publishes q against the previous immutable snapshot.
+// Unchanged resident tiles retain their epoch; changed and newly resident tiles
+// receive a new epoch.
+func (q *NavGraphQuery) WithUpdatedTileEpochs(previous *NavGraphQuery) *NavGraphQuery {
+	if q == nil || q.resident() == nil {
+		return q
+	}
+	return newPublishedNavGraphQuery(q.resident(), previous)
+}
+
+// WithInheritedTileEpochs gives a temporary constrained view the publication
+// epochs of its base snapshot.
+func (q *NavGraphQuery) WithInheritedTileEpochs(base *NavGraphQuery) *NavGraphQuery {
+	if q == nil || q.resident() == nil || base == nil || base.snapshot == nil {
+		return q
+	}
+	epochs := make(map[TerrainChunkCoordDef]uint64, len(q.resident().tiles))
+	for coord := range q.resident().tiles {
+		epochs[coord] = base.snapshot.tileEpochs[coord]
+		if epochs[coord] == 0 {
+			epochs[coord] = 1
+		}
+	}
+	return &NavGraphQuery{snapshot: &NavSnapshot{query: q.resident(), tileEpochs: epochs}}
+}
+
+// RouteDependencyStatus reports whether every tile used by route still has the
+// same topology epoch in this snapshot.
+func (q *NavGraphQuery) RouteDependencyStatus(route NavRouteResult) (bool, string) {
+	if q == nil || q.snapshot == nil || q.resident() == nil {
+		return false, "navigation_unavailable"
+	}
+	if len(route.TileDependencies) == 0 {
+		return false, "route_dependencies_missing"
+	}
+	for _, dependency := range route.TileDependencies {
+		if q.resident().tiles[dependency.Tile] == nil {
+			return false, "dependency_tile_unloaded"
+		}
+		epoch := q.snapshot.tileEpochs[dependency.Tile]
+		if epoch != dependency.Epoch {
+			return false, "dependency_epoch_changed"
+		}
+	}
+	return true, ""
+}
+
+func (q *NavGraphQuery) attachRouteDependencies(route *NavRouteResult) {
+	if route == nil || !route.Found || q == nil || q.snapshot == nil {
+		return
+	}
+	tiles := map[TerrainChunkCoordDef]struct{}{
+		route.StartLocation.Ref.Tile: {},
+		route.GoalLocation.Ref.Tile:  {},
+	}
+	for _, step := range route.Steps {
+		tiles[step.Tile] = struct{}{}
+	}
+	for _, ref := range route.WaypointSpans {
+		tiles[ref.Tile] = struct{}{}
+	}
+	coords := make([]TerrainChunkCoordDef, 0, len(tiles))
+	for coord := range tiles {
+		coords = append(coords, coord)
+	}
+	sort.Slice(coords, func(i, j int) bool { return terrainCoordLess(coords[i], coords[j]) })
+	route.TileDependencies = make([]NavRouteTileDependency, 0, len(coords))
+	for _, coord := range coords {
+		route.TileDependencies = append(route.TileDependencies, NavRouteTileDependency{Tile: coord, Epoch: q.snapshot.tileEpochs[coord]})
+	}
 }
 
 func (q *NavGraphQuery) resident() *navGraphQuery {
