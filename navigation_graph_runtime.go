@@ -677,16 +677,7 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 				}
 				break
 			}
-			state.mu.Lock()
-			state.NavigationSources = result.Sources
-			state.NavigationGraphs = result.Graphs
-			state.navigationQuery = result.Query.WithUpdatedTileEpochs(state.navigationQuery)
-			state.navigationDisabled = result.DisabledTraversals
-			state.navigationOpenDoors = result.OpenDoors
-			state.navigationBlockers = result.Blockers
-			state.NavigationRevision++
-			state.navigationLoadedGen = result.LoadGeneration
-			state.mu.Unlock()
+			commitStreamedNavigationOverlay(state, result)
 			state.navigationPendingSources = nil
 			state.navigationPendingGraphs = nil
 			state.navigationPendingGen = 0
@@ -706,13 +697,7 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			}
 			break
 		}
-		state.mu.Lock()
-		state.navigationQuery = result.Query.WithUpdatedTileEpochs(state.navigationQuery)
-		state.navigationDisabled = result.DisabledTraversals
-		state.navigationOpenDoors = result.OpenDoors
-		state.navigationBlockers = result.Blockers
-		state.NavigationRevision++
-		state.mu.Unlock()
+		commitStreamedNavigationOverlay(state, result)
 	default:
 	}
 	if !state.navigationLoadActive &&
@@ -721,6 +706,21 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		startStreamedNavigationLoad(state)
 	}
 	startStreamedNavigationOverlayBuild(state)
+}
+
+func commitStreamedNavigationOverlay(state *StreamedLevelRuntimeState, result streamedNavigationOverlayResult) {
+	state.mu.Lock()
+	if result.LoadGeneration != 0 {
+		state.NavigationSources = result.Sources
+		state.NavigationGraphs = result.Graphs
+		state.navigationLoadedGen = result.LoadGeneration
+	}
+	state.navigationQuery = result.Query
+	state.navigationDisabled = result.DisabledTraversals
+	state.navigationOpenDoors = result.OpenDoors
+	state.navigationBlockers = result.Blockers
+	state.NavigationRevision++
+	state.mu.Unlock()
 }
 
 func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
@@ -737,19 +737,20 @@ func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
 	var sources []content.NavSourceTileDef
 	var graphs []content.NavGraphTileDef
 	var graphRevision, loadGeneration uint64
+	state.mu.RLock()
+	previousQuery := state.navigationQuery
 	if pending {
 		sources = state.navigationPendingSources
 		graphs = state.navigationPendingGraphs
 		loadGeneration = state.navigationPendingGen
 	} else {
-		state.mu.RLock()
 		sources = state.NavigationSources
 		graphs = state.NavigationGraphs
 		graphRevision = state.navigationLoadedGen
-		state.mu.RUnlock()
-		if len(sources) == 0 || len(graphs) == 0 {
-			return
-		}
+	}
+	state.mu.RUnlock()
+	if !pending && (len(sources) == 0 || len(graphs) == 0) {
+		return
 	}
 	// Resident navigation data is immutable, and runtime shutdown waits for jobs.
 	manifest := state.BaseNavManifest
@@ -769,6 +770,9 @@ func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
 			sources, graphs, manifest.ChunkSize, manifest.VoxelResolution,
 			manifest.AgentProfiles, disabled, openDoors, blockers, manifest.Carriers,
 		)
+		if err == nil {
+			query = query.WithUpdatedTileEpochs(previousQuery)
+		}
 		state.navigationOverlays <- streamedNavigationOverlayResult{
 			RuntimeGeneration: runtimeGeneration, GraphRevision: graphRevision, LoadGeneration: loadGeneration,
 			OverlayGeneration: overlayGeneration,

@@ -26,6 +26,7 @@ type navMeasurement struct {
 	GraphBytes           int64   `json:"graph_bytes"`
 	LoadMilliseconds     float64 `json:"load_milliseconds"`
 	IndexMilliseconds    float64 `json:"index_milliseconds"`
+	EpochMilliseconds    float64 `json:"epoch_milliseconds"`
 	RetainedHeapBytes    uint64  `json:"retained_heap_bytes"`
 	RouteSamples         int     `json:"route_samples,omitempty"`
 	RouteP50Milliseconds float64 `json:"route_p50_milliseconds,omitempty"`
@@ -61,7 +62,7 @@ func main() {
 	flag.StringVar(&navPath, "nav", "", "input .gknav manifest")
 	flag.StringVar(&profileID, "profile", "", "agent profile id; defaults to first profile")
 	flag.BoolVar(&jsonOutput, "json", false, "print JSON")
-	flag.IntVar(&measureRuns, "measure-runs", 0, "measure load/index and repeat an optional route this many times")
+	flag.IntVar(&measureRuns, "measure-runs", 0, "measure load/index/epoch preparation and repeat an optional route this many times")
 	flag.Var(&start, "start", "optional route start x,y,z")
 	flag.Var(&end, "end", "optional route end x,y,z")
 	flag.Parse()
@@ -117,9 +118,9 @@ func main() {
 		fmt.Printf("route_found=%t steps=%d waypoints=%d failure=%q failure_tile=%s\n", route.Found, len(route.Steps), len(route.Waypoints), route.FailureReason, content.TerrainChunkKey(route.FailureTile))
 	}
 	if measurement != nil {
-		fmt.Printf("bundle_bytes=%d source_bytes=%d graph_bytes=%d load_ms=%.3f index_ms=%.3f retained_heap_bytes=%d route_samples=%d route_p50_ms=%.3f route_p95_ms=%.3f route_p99_ms=%.3f\n",
+		fmt.Printf("bundle_bytes=%d source_bytes=%d graph_bytes=%d load_ms=%.3f index_ms=%.3f epoch_ms=%.3f retained_heap_bytes=%d route_samples=%d route_p50_ms=%.3f route_p95_ms=%.3f route_p99_ms=%.3f\n",
 			measurement.BundleBytes, measurement.SourceBytes, measurement.GraphBytes, measurement.LoadMilliseconds,
-			measurement.IndexMilliseconds, measurement.RetainedHeapBytes, measurement.RouteSamples,
+			measurement.IndexMilliseconds, measurement.EpochMilliseconds, measurement.RetainedHeapBytes, measurement.RouteSamples,
 			measurement.RouteP50Milliseconds, measurement.RouteP95Milliseconds, measurement.RouteP99Milliseconds,
 		)
 	}
@@ -145,6 +146,10 @@ func measureNavGraphBake(navPath, profileID string, start, end vec3Flag, runs in
 		return nil, nil, err
 	}
 	measurement.IndexMilliseconds = millisecondsSince(indexStart)
+	query, measurement.EpochMilliseconds, err = measureNavGraphEpochPreparation(bake, profileID, query)
+	if err != nil {
+		return nil, nil, err
+	}
 	if start.set {
 		durations := make([]float64, 0, runs)
 		for range runs {
@@ -173,6 +178,15 @@ func measureNavGraphBake(navPath, profileID string, start, end vec3Flag, runs in
 	}
 	bake, err = content.LoadNavGraphBake(navPath)
 	return bake, measurement, err
+}
+
+func measureNavGraphEpochPreparation(bake *content.NavGraphBakeResult, profileID string, previous *content.NavGraphQuery) (*content.NavGraphQuery, float64, error) {
+	replacement, err := navGraphDiagnosticQuery(bake, profileID)
+	if err != nil {
+		return nil, 0, err
+	}
+	start := time.Now()
+	return replacement.WithUpdatedTileEpochs(previous), millisecondsSince(start), nil
 }
 
 func navGraphDiagnosticQuery(bake *content.NavGraphBakeResult, profileID string) (*content.NavGraphQuery, error) {

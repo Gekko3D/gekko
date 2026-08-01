@@ -20,6 +20,20 @@ func finishStreamedNavigationOverlay(t *testing.T, state *StreamedLevelRuntimeSt
 	}
 }
 
+func BenchmarkStreamedNavigationCommit(b *testing.B) {
+	state := &StreamedLevelRuntimeState{}
+	result := streamedNavigationOverlayResult{
+		LoadGeneration:     1,
+		DisabledTraversals: map[string]struct{}{},
+		OpenDoors:          map[string]struct{}{},
+		Blockers:           map[string]content.NavBlockerDef{},
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		commitStreamedNavigationOverlay(state, result)
+	}
+}
+
 func TestStreamedNavigationPublishesResidencyWhileOverlayMoves(t *testing.T) {
 	profile := content.NavAgentProfileDef{ID: "walker", Radius: 0.4, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
 	source := content.NavSourceTileDef{
@@ -356,6 +370,10 @@ func TestRuntimeNavigationBlockerAddMoveRemove(t *testing.T) {
 		NavigationRevision: 1, navigationQuery: query, navigationDisabled: make(map[string]struct{}), navigationBlockers: make(map[string]content.NavBlockerDef),
 	}
 	start, goal := content.Vec3{0.1, 0.2, 2.5}, content.Vec3{6.9, 0.2, 2.5}
+	baseline, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
+	if err != nil || !baseline.Found {
+		t.Fatalf("baseline route=%+v err=%v", baseline, err)
+	}
 	app := NewApp()
 	cmd := app.Commands()
 	entity := cmd.AddEntity(
@@ -368,6 +386,9 @@ func TestRuntimeNavigationBlockerAddMoveRemove(t *testing.T) {
 	route, err := RuntimeNavigationServiceFromStreamedLevelState(state).FindRoute(start, goal)
 	if err != nil || !route.Found || route.NavigationRevision != 2 || len(route.Waypoints) < 2 {
 		t.Fatalf("placed blocker did not reroute: route=%+v err=%v", route, err)
+	}
+	if valid, reason := RuntimeNavigationServiceFromStreamedLevelState(state).RouteDependencyStatus(baseline); valid || reason != "dependency_epoch_changed" {
+		t.Fatalf("blocked baseline route status=%t/%q", valid, reason)
 	}
 
 	MakeQuery1[AABBComponent](cmd).Map(func(_ EntityId, bounds *AABBComponent) bool {

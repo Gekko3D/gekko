@@ -583,13 +583,24 @@ Crossfire/Gasworks/lab acceptance remains manual.
 
 ### Phase 7: Tune Only Measured Bottlenecks
 
-- [ ] Compare budgets with recorded baselines.
-- [ ] Increase route workers only if queue wait, not solve time, misses budget.
-- [ ] Tune gzip level only if bake/load trade-offs are measurable.
-- [ ] Pool route scratch slices only if allocation profiles show material GC cost.
-- [ ] Consider coarser navigation resolution only if packed storage and indexes still miss budgets.
+- [x] Compare budgets with recorded baselines.
+- [x] Increase route workers only if queue wait, not solve time, misses budget.
+- [x] Tune gzip level only if bake/load trade-offs are measurable.
+- [x] Pool route scratch slices only if allocation profiles show material GC cost.
+- [x] Consider coarser navigation resolution only if packed storage and indexes still miss budgets.
 
 Gate: every retained optimization has a benchmark demonstrating its value.
+
+Result: schema v5 Crossfire measures `28,887,737` bundle bytes and
+`225,428,592` retained heap bytes. Ordinary route p95 is `0.001250 ms`; a live
+carrier route p95 is `0.027666 ms`. All remain far below their gates, so the
+single route worker, default gzip level, unpooled route scratch, and `0.1 m`
+navigation resolution remain unchanged. Measurement exposed one real miss:
+exact per-tile epoch preparation took `282.821 ms` on the main thread. It now
+runs in the existing overlay worker against the immutable previous snapshot;
+the main-thread pointer commit benchmarks at `7.893 ns/op` with zero
+allocations, while exact epoch preparation remains observable through
+`navdiag` as `epoch_milliseconds`.
 
 ## Expected File Ownership
 

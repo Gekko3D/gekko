@@ -58,6 +58,20 @@ func BenchmarkNavGraphPhase0(b *testing.B) {
 			}
 		}
 	})
+	b.Run("dense_flat/epoch_preparation", func(b *testing.B) {
+		before, err := NewNavGraphQuery([]NavSourceTileDef{denseSource}, []NavGraphTileDef{denseGraph}, denseSource.ChunkSize, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		replacement, err := NewNavGraphQuery([]NavSourceTileDef{denseSource}, []NavGraphTileDef{denseGraph}, denseSource.ChunkSize, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			navGraphBenchmarkQuery = replacement.WithUpdatedTileEpochs(before)
+		}
+	})
 	b.Run("stacked/query_index", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
