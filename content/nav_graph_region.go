@@ -202,16 +202,19 @@ func buildNavRegion(id uint32, members []uint32, spans map[uint32]NavSpanDef, vo
 }
 
 type navRegionTransitionKey struct {
-	from, to    uint32
-	kind, flags string
-	axis        uint8
-	line        int
-	height      float32
+	from, to               uint32
+	kind, flags, traversal string
+	gateKind, gateID       string
+	axis                   uint8
+	line                   int
+	height                 float32
 }
 
 type navRegionTransitionSegment struct {
 	start, end                int
 	headroom, clearance, cost float32
+	traversal                 *NavTraversalDef
+	gate                      *NavTransitionGateDef
 }
 
 func buildNavRegionTransitions(graph NavGraphTileDef, spans map[uint32]NavSpanDef, spanRegions map[uint32]uint32, voxelResolution float32) ([]NavRegionTransitionDef, error) {
@@ -228,7 +231,16 @@ func buildNavRegionTransitions(graph NavGraphTileDef, spans map[uint32]NavSpanDe
 		from, to := spans[edge.From], spans[edge.To.Span]
 		dx, dz := to.X-from.X, to.Z-from.Z
 		key := navRegionTransitionKey{from: fromRegion, to: toRegion, kind: edge.Kind, flags: navRegionFlagsKey(edge.RequiresFlags), height: to.SupportHeight}
-		segment := navRegionTransitionSegment{headroom: edge.MinHeadroom, clearance: edge.MinClearance, cost: edge.Cost}
+		if edge.Traversal != nil {
+			key.traversal = edge.Traversal.StableLinkID()
+		}
+		if edge.Gate != nil {
+			key.gateKind, key.gateID = edge.Gate.Kind, edge.Gate.ID
+		}
+		segment := navRegionTransitionSegment{
+			headroom: edge.MinHeadroom, clearance: edge.MinClearance, cost: edge.Cost,
+			traversal: cloneNavTraversal(edge.Traversal), gate: cloneNavTransitionGate(edge.Gate),
+		}
 		switch {
 		case (dx == -1 || dx == 1) && dz == 0:
 			key.line = max(from.X, to.X)
@@ -261,6 +273,15 @@ func buildNavRegionTransitions(graph NavGraphTileDef, spans map[uint32]NavSpanDe
 		if a.flags != b.flags {
 			return a.flags < b.flags
 		}
+		if a.traversal != b.traversal {
+			return a.traversal < b.traversal
+		}
+		if a.gateKind != b.gateKind {
+			return a.gateKind < b.gateKind
+		}
+		if a.gateID != b.gateID {
+			return a.gateID < b.gateID
+		}
 		if a.axis != b.axis {
 			return a.axis < b.axis
 		}
@@ -288,7 +309,7 @@ func buildNavRegionTransitions(graph NavGraphTileDef, spans map[uint32]NavSpanDe
 				ID: uint32(len(result)), FromRegion: key.from, ToTile: graph.Coord, ToRegion: key.to,
 				Kind: key.kind, Width: float32(run.end-run.start) * voxelResolution,
 				MinHeadroom: run.headroom, MinClearance: run.clearance, Cost: run.cost,
-				RequiresFlags: navRegionFlags(key.flags),
+				RequiresFlags: navRegionFlags(key.flags), Traversal: cloneNavTraversal(run.traversal), Gate: cloneNavTransitionGate(run.gate),
 			}
 			if key.axis == 0 {
 				transition.CrossingStart = Vec3{float32(key.line) * voxelResolution, key.height, float32(run.start) * voxelResolution}

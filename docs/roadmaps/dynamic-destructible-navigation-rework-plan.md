@@ -465,10 +465,10 @@ and map state with every benchmark result.
 
 ### Phase 0: Baseline And Correctness Gate
 
-- [ ] Fix the current `TestCompressNavGraphRegions/required_action_splits_regions` fixture so the content suite is green.
-- [ ] Add synthetic benchmarks for dense flat, stacked, multi-region, carrier-blocked, and locally destroyed graphs.
-- [ ] Record Crossfire bundle size, load/decode/index heap, route latency, rebuild latency, and replan counts.
-- [ ] Add the slow small-graph Dijkstra oracle.
+- [x] Fix the current `TestCompressNavGraphRegions/required_action_splits_regions` fixture so the content suite is green.
+- [x] Add synthetic benchmarks for dense flat, stacked, multi-region, carrier-blocked, and locally destroyed graphs.
+- [x] Record Crossfire bundle size, load/decode/index heap, route latency, rebuild latency, and replan counts.
+- [x] Add the slow small-graph Dijkstra oracle.
 
 Gate: all current navigation correctness tests pass and the baseline report is reproducible.
 

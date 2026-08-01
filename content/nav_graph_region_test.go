@@ -1,6 +1,9 @@
 package content
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestCompressNavGraphRegions(t *testing.T) {
 	profile := NavAgentProfileDef{ID: "walker", Radius: 0.5, Height: 1.5, StepHeight: 0.6, MaxSlopeDegrees: 20}
@@ -72,7 +75,14 @@ func TestCompressNavGraphRegions(t *testing.T) {
 		graph := build(spans)
 		for i := range graph.SpanTransitions {
 			if graph.SpanTransitions[i].From == 2 || graph.SpanTransitions[i].To.Span == 2 {
-				graph.SpanTransitions[i].Kind = "jump"
+				edge := &graph.SpanTransitions[i]
+				from, to := spans[edge.From], spans[edge.To.Span]
+				edge.Kind = NavTransitionJump
+				edge.Traversal = &NavTraversalDef{
+					LinkID: fmt.Sprintf("test-jump-%d", i),
+					Start:  Vec3{float32(from.X) + 0.5, from.SupportHeight, float32(from.Z) + 0.5},
+					End:    Vec3{float32(to.X) + 0.5, to.SupportHeight, float32(to.Z) + 0.5},
+				}
 			}
 		}
 		source := NavSourceTileDef{
