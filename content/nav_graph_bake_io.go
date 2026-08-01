@@ -1,7 +1,9 @@
 package content
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"os"
 	"sort"
 )
 
@@ -20,6 +22,12 @@ type NavGraphBakeSummary struct {
 // SaveNavGraphBake validates the complete bundle before creating any output.
 // Tile files are written first and the manifest is published last.
 func SaveNavGraphBake(manifestPath string, bake *NavGraphBakeResult) error {
+	if bake == nil {
+		return fmt.Errorf("invalid navigation graph bake: navigation graph bake is nil")
+	}
+	if err := populateNavGraphContentMetadata(bake); err != nil {
+		return err
+	}
 	if validation := ValidateNavGraphBake(bake); validation.HasErrors() {
 		return fmt.Errorf("invalid navigation graph bake: %s", validation.Error())
 	}
@@ -37,16 +45,70 @@ func SaveNavGraphBake(manifestPath string, bake *NavGraphBakeResult) error {
 		graphs[graphKey{Coord: graph.Coord, Profile: graph.AgentProfileID}] = graph
 	}
 	for _, entry := range bake.Manifest.SourceTiles {
-		if err := SaveNavSourceTile(ResolveDocumentPath(entry.TilePath, manifestPath), sources[entry.Coord]); err != nil {
+		data, err := encodeNavSourceTile(sources[entry.Coord])
+		if err != nil {
+			return err
+		}
+		if err := saveNavBinary(ResolveDocumentPath(entry.TilePath, manifestPath), data); err != nil {
 			return err
 		}
 	}
 	for _, entry := range bake.Manifest.GraphTiles {
-		if err := SaveNavGraphTile(ResolveDocumentPath(entry.TilePath, manifestPath), graphs[graphKey{Coord: entry.Coord, Profile: entry.AgentProfileID}]); err != nil {
+		data, err := encodeNavGraphTile(graphs[graphKey{Coord: entry.Coord, Profile: entry.AgentProfileID}])
+		if err != nil {
+			return err
+		}
+		if err := saveNavBinary(ResolveDocumentPath(entry.TilePath, manifestPath), data); err != nil {
 			return err
 		}
 	}
 	return SaveNavGraphManifest(manifestPath, &bake.Manifest)
+}
+
+func navTileContentMetadata(data []byte) (string, int64) {
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf("%x", hash), int64(len(data))
+}
+
+func populateNavGraphContentMetadata(bake *NavGraphBakeResult) error {
+	for i := range bake.Manifest.SourceTiles {
+		entry := &bake.Manifest.SourceTiles[i]
+		var tile *NavSourceTileDef
+		for j := range bake.SourceTiles {
+			if bake.SourceTiles[j].Coord == entry.Coord {
+				tile = &bake.SourceTiles[j]
+				break
+			}
+		}
+		if tile == nil {
+			return fmt.Errorf("navigation source tile %s is missing", TerrainChunkKey(entry.Coord))
+		}
+		data, err := encodeNavSourceTile(tile)
+		if err != nil {
+			return err
+		}
+		entry.ContentHash, entry.ByteSize = navTileContentMetadata(data)
+	}
+	for i := range bake.Manifest.GraphTiles {
+		entry := &bake.Manifest.GraphTiles[i]
+		var tile *NavGraphTileDef
+		for j := range bake.GraphTiles {
+			candidate := &bake.GraphTiles[j]
+			if candidate.Coord == entry.Coord && candidate.AgentProfileID == entry.AgentProfileID {
+				tile = candidate
+				break
+			}
+		}
+		if tile == nil {
+			return fmt.Errorf("navigation graph tile %s for %q is missing", TerrainChunkKey(entry.Coord), entry.AgentProfileID)
+		}
+		data, err := encodeNavGraphTile(tile)
+		if err != nil {
+			return err
+		}
+		entry.ContentHash, entry.ByteSize = navTileContentMetadata(data)
+	}
+	return nil
 }
 
 func LoadNavGraphBake(manifestPath string) (*NavGraphBakeResult, error) {
@@ -56,14 +118,22 @@ func LoadNavGraphBake(manifestPath string) (*NavGraphBakeResult, error) {
 	}
 	result := &NavGraphBakeResult{Manifest: *manifest}
 	for _, entry := range manifest.SourceTiles {
-		tile, err := LoadNavSourceTile(ResolveDocumentPath(entry.TilePath, manifestPath))
+		path := ResolveDocumentPath(entry.TilePath, manifestPath)
+		if err := validateNavTileContent(path, entry.ContentHash, entry.ByteSize); err != nil {
+			return nil, err
+		}
+		tile, err := LoadNavSourceTile(path)
 		if err != nil {
 			return nil, fmt.Errorf("load navigation source tile %s: %w", TerrainChunkKey(entry.Coord), err)
 		}
 		result.SourceTiles = append(result.SourceTiles, *tile)
 	}
 	for _, entry := range manifest.GraphTiles {
-		tile, err := LoadNavGraphTile(ResolveDocumentPath(entry.TilePath, manifestPath))
+		path := ResolveDocumentPath(entry.TilePath, manifestPath)
+		if err := validateNavTileContent(path, entry.ContentHash, entry.ByteSize); err != nil {
+			return nil, err
+		}
+		tile, err := LoadNavGraphTile(path)
 		if err != nil {
 			return nil, fmt.Errorf("load navigation graph tile %s for %q: %w", TerrainChunkKey(entry.Coord), entry.AgentProfileID, err)
 		}
@@ -73,6 +143,18 @@ func LoadNavGraphBake(manifestPath string) (*NavGraphBakeResult, error) {
 		return nil, fmt.Errorf("invalid navigation graph bake: %s", validation.Error())
 	}
 	return result, nil
+}
+
+func validateNavTileContent(path, wantHash string, wantSize int64) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	gotHash, gotSize := navTileContentMetadata(data)
+	if gotSize != wantSize || gotHash != wantHash {
+		return fmt.Errorf("navigation tile content mismatch: %s", path)
+	}
+	return nil
 }
 
 func ValidateNavGraphBake(bake *NavGraphBakeResult) NavGraphValidationResult {

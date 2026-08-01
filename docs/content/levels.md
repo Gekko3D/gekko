@@ -353,6 +353,20 @@ That applies to:
 
 Prefer keeping paths relative to the `.gklevel` file so levels remain portable across tools and modules.
 
+### Navigation bundle files
+
+Navigation bundles use one inspectable `.gknav` JSON manifest plus compact
+gzip-compressed binary sidecars:
+
+- `.gkns` for profile-independent source occupancy and integer surface spans
+- `.gkng` for profile acceptance bitsets, CSR local edges, regions, and
+  exceptional transitions
+
+Each sidecar has fixed magic, format and schema versions, an endian marker,
+and an uncompressed payload length. The manifest records its exact SHA-256 and
+byte size. Loads reject old extensions, incompatible versions, truncation,
+gzip checksum failures, and manifest content mismatches.
+
 ## Validation Rules
 
 `content.ValidateLevel(...)` currently checks:

@@ -474,15 +474,19 @@ Gate: all current navigation correctness tests pass and the baseline report is r
 
 ### Phase 1: Replace Persistent Sidecars
 
-- [ ] Define the `.gkns` and `.gkng` binary contracts and hard version checks.
-- [ ] Implement deterministic streaming writers and readers with `encoding/binary` and `compress/gzip`.
-- [ ] Store source spans as integer records with per-tile string tables.
-- [ ] Store profile acceptance bitsets, CSR local edges, regions, and explicit exceptional transitions.
-- [ ] Change bake, delta, diagnostics, and manifest validation to the new files.
-- [ ] Delete JSON source/graph tile readers, writers, extensions, and tests.
-- [ ] Delete every generated old navigation bundle.
+- [x] Define the `.gkns` and `.gkng` binary contracts and hard version checks.
+- [x] Implement deterministic streaming writers and readers with `encoding/binary` and `compress/gzip`.
+- [x] Store source spans as integer records with per-tile string tables.
+- [x] Store profile acceptance bitsets, CSR local edges, regions, and explicit exceptional transitions.
+- [x] Change bake, delta, diagnostics, and manifest validation to the new files.
+- [x] Delete JSON source/graph tile readers, writers, extensions, and tests.
+- [x] Delete every generated old navigation bundle.
 
 Gate: deterministic byte round-trips, corruption rejection, and Crossfire bundle size at or below budget.
+
+Result: Crossfire rebaked deterministically to `30 MB` (`5,778,340` source
+bytes, `22,844,964` graph bytes, and a `264,603` byte manifest), below the
+`150 MB` gate.
 
 ### Phase 2: Replace Resident Query Indexes
 

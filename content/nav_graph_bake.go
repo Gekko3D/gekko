@@ -628,6 +628,9 @@ func BakeNavGraphWorld(world *ImportedWorldDef, chunks []ImportedWorldChunkDef, 
 			SourceHash: source.SourceHash, DependencyHash: source.DependencyHash,
 		})
 	}
+	if err := populateNavGraphContentMetadata(&result); err != nil {
+		return NavGraphBakeResult{}, err
+	}
 	if validation := ValidateNavGraphBake(&result); validation.HasErrors() {
 		return NavGraphBakeResult{}, fmt.Errorf("invalid navigation graph bake: %s", validation.Error())
 	}

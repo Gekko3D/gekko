@@ -68,6 +68,18 @@ func TestBakeNavGraphWorld(t *testing.T) {
 	if !reflect.DeepEqual(bake.Manifest, loaded.Manifest) || !reflect.DeepEqual(bake.SourceTiles, loaded.SourceTiles) || !reflect.DeepEqual(bake.GraphTiles, loaded.GraphTiles) {
 		t.Fatal("saved navigation bake did not preserve topology")
 	}
+	tilePath := ResolveDocumentPath(bake.Manifest.SourceTiles[0].TilePath, manifestPath)
+	tileBytes, err := os.ReadFile(tilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tileBytes[len(tileBytes)-1] ^= 0xff
+	if err := os.WriteFile(tilePath, tileBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadNavGraphBake(manifestPath); err == nil {
+		t.Fatal("navigation bake accepted a sidecar that did not match its manifest hash")
+	}
 
 	bad := bake
 	bad.Manifest.NavID = ""

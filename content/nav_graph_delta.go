@@ -62,7 +62,7 @@ func LoadEffectiveNavSourceTile(manifest *NavGraphManifestDef, manifestPath stri
 			return NavSourceTileLookupResult{Found: true, Empty: true, Tile: &NavSourceTileDef{
 				NavID: manifest.NavID, SchemaVersion: CurrentNavSourceTileSchemaVersion, Coord: coord,
 				BuilderVersion: manifest.BuilderVersion, SourceHash: override.SourceHash, DependencyHash: override.DependencyHash,
-				ChunkSize: manifest.ChunkSize,
+				ChunkSize: manifest.ChunkSize, VoxelResolution: manifest.VoxelResolution,
 			}}, nil
 		}
 		tile, err := LoadNavSourceTile(ResolveDocumentPath(override.TilePath, deltaPath))

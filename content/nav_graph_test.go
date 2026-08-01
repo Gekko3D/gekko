@@ -1,9 +1,12 @@
 package content
 
 import (
+	"bytes"
 	"math"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -11,13 +14,14 @@ func TestNavGraphContracts(t *testing.T) {
 	coord := TerrainChunkCoordDef{X: 2, Z: -1}
 	profile := NavAgentProfileDef{ID: "walker", Radius: 0.4, Height: 1.8, StepHeight: 0.45, MaxSlopeDegrees: 45}
 	source := &NavSourceTileDef{
-		NavID:          "demo",
-		SchemaVersion:  CurrentNavSourceTileSchemaVersion,
-		Coord:          coord,
-		BuilderVersion: "voxel_graph_v1",
-		SourceHash:     "source",
-		DependencyHash: "dependencies",
-		ChunkSize:      32,
+		NavID:           "demo",
+		SchemaVersion:   CurrentNavSourceTileSchemaVersion,
+		Coord:           coord,
+		BuilderVersion:  "voxel_graph_v1",
+		SourceHash:      "source",
+		DependencyHash:  "dependencies",
+		ChunkSize:       32,
+		VoxelResolution: 0.1,
 		Spans: []NavSpanDef{
 			{ID: 0, X: 0, Y: 1, Z: 0, SupportHeight: 1, CeilingHeight: 4, Headroom: 3, ClearanceRadius: 1, Area: "ground"},
 			{ID: 1, X: 1, Y: 1, Z: 0, SupportHeight: 1, CeilingHeight: 4, Headroom: 3, ClearanceRadius: 1, Area: "ground"},
@@ -40,8 +44,8 @@ func TestNavGraphContracts(t *testing.T) {
 	manifest := &NavGraphManifestDef{
 		NavID: "demo", SchemaVersion: CurrentNavGraphManifestSchemaVersion, SourceWorldID: "world", BuilderVersion: "voxel_graph_v1", ChunkSize: 32, VoxelResolution: 0.1,
 		AgentProfiles: []NavAgentProfileDef{profile},
-		SourceTiles:   []NavSourceTileEntryDef{{Coord: coord, TilePath: "tiles/2_-1" + NavSourceTileExtension, SourceHash: source.SourceHash, DependencyHash: source.DependencyHash}},
-		GraphTiles:    []NavGraphTileEntryDef{{Coord: coord, AgentProfileID: profile.ID, TilePath: "tiles/2_-1_walker" + NavGraphTileExtension, SourceHash: source.SourceHash, DependencyHash: source.DependencyHash}},
+		SourceTiles:   []NavSourceTileEntryDef{{Coord: coord, TilePath: "tiles/2_-1" + NavSourceTileExtension, SourceHash: source.SourceHash, DependencyHash: source.DependencyHash, ContentHash: strings.Repeat("0", 64), ByteSize: 1}},
+		GraphTiles:    []NavGraphTileEntryDef{{Coord: coord, AgentProfileID: profile.ID, TilePath: "tiles/2_-1_walker" + NavGraphTileExtension, SourceHash: source.SourceHash, DependencyHash: source.DependencyHash, ContentHash: strings.Repeat("0", 64), ByteSize: 1}},
 	}
 
 	tests := []struct {
@@ -59,6 +63,17 @@ func TestNavGraphContracts(t *testing.T) {
 		t.Run(test.name+" round trip", func(t *testing.T) {
 			if err := test.save(test.path); err != nil {
 				t.Fatalf("save failed: %v", err)
+			}
+			first, err := os.ReadFile(test.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.save(test.path); err != nil {
+				t.Fatalf("repeated save failed: %v", err)
+			}
+			second, err := os.ReadFile(test.path)
+			if err != nil || !bytes.Equal(first, second) {
+				t.Fatalf("save is not deterministic: %v", err)
 			}
 			got, err := test.load(test.path)
 			if err != nil {
@@ -97,4 +112,34 @@ func TestNavGraphContracts(t *testing.T) {
 			t.Fatalf("expected profile and extension errors, got %+v", got)
 		}
 	})
+}
+
+func TestNavBinaryContractRejectsCorruptionAndWrongVersion(t *testing.T) {
+	source := &NavSourceTileDef{
+		NavID: "binary", SchemaVersion: CurrentNavSourceTileSchemaVersion,
+		BuilderVersion: "test", SourceHash: "source", DependencyHash: "dependency",
+		ChunkSize: 4, VoxelResolution: 1,
+		Spans: []NavSpanDef{{ID: 0, Y: 1, SupportHeight: 1, CeilingHeight: 4, Headroom: 3, Area: "ground"}},
+	}
+	first, err := encodeNavSourceTile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := encodeNavSourceTile(source)
+	if err != nil || !bytes.Equal(first, second) {
+		t.Fatalf("navigation binary output is not deterministic: %v", err)
+	}
+
+	for name, mutate := range map[string]func([]byte) []byte{
+		"binary version": func(data []byte) []byte { data[8]++; return data },
+		"schema version": func(data []byte) []byte { data[14]++; return data },
+		"truncated gzip": func(data []byte) []byte { return data[:len(data)-1] },
+		"gzip checksum":  func(data []byte) []byte { data[len(data)-1] ^= 0xff; return data },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeNavSourceTile(mutate(append([]byte(nil), first...))); err == nil {
+				t.Fatal("corrupt navigation binary was accepted")
+			}
+		})
+	}
 }

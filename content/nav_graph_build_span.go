@@ -60,15 +60,16 @@ func BuildNavSourceSpans(input NavSpanBuildInput) (NavSpanBuildResult, error) {
 	}
 
 	result := NavSpanBuildResult{Source: NavSourceTileDef{
-		NavID:          input.NavID,
-		SchemaVersion:  CurrentNavSourceTileSchemaVersion,
-		Coord:          input.Center.Coord,
-		BuilderVersion: input.BuilderVersion,
-		SourceHash:     input.SourceHash,
-		DependencyHash: navSpanBuildDependencyHash(input),
-		ChunkSize:      input.ChunkSize,
-		SolidRuns:      navVoxelRuns(input.Center.SolidVoxels),
-		BlockedRuns:    navVoxelRuns(input.Center.BlockedVoxels),
+		NavID:           input.NavID,
+		SchemaVersion:   CurrentNavSourceTileSchemaVersion,
+		Coord:           input.Center.Coord,
+		BuilderVersion:  input.BuilderVersion,
+		SourceHash:      input.SourceHash,
+		DependencyHash:  navSpanBuildDependencyHash(input),
+		ChunkSize:       input.ChunkSize,
+		VoxelResolution: input.VoxelResolution,
+		SolidRuns:       navVoxelRuns(input.Center.SolidVoxels),
+		BlockedRuns:     navVoxelRuns(input.Center.BlockedVoxels),
 	}}
 	centerSolids := append([][3]int(nil), input.Center.SolidVoxels...)
 	sort.Slice(centerSolids, func(i, j int) bool {

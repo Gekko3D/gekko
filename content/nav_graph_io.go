@@ -14,12 +14,12 @@ func SaveNavGraphManifest(path string, def *NavGraphManifestDef) error {
 	if result := ValidateNavGraphManifest(def); result.HasErrors() {
 		return fmt.Errorf("invalid navigation graph manifest: %s", result.Error())
 	}
-	return saveNavGraphJSON(path, def)
+	return saveNavManifestJSON(path, def)
 }
 
 func LoadNavGraphManifest(path string) (*NavGraphManifestDef, error) {
 	var def NavGraphManifestDef
-	if err := loadNavGraphJSON(path, &def); err != nil {
+	if err := loadNavManifestJSON(path, &def); err != nil {
 		return nil, err
 	}
 	if result := ValidateNavGraphManifest(&def); result.HasErrors() {
@@ -35,18 +35,26 @@ func SaveNavSourceTile(path string, def *NavSourceTileDef) error {
 	if result := ValidateNavSourceTile(def); result.HasErrors() {
 		return fmt.Errorf("invalid navigation source tile: %s", result.Error())
 	}
-	return saveNavGraphJSON(path, def)
+	data, err := encodeNavSourceTile(def)
+	if err != nil {
+		return err
+	}
+	return saveNavBinary(path, data)
 }
 
 func LoadNavSourceTile(path string) (*NavSourceTileDef, error) {
-	var def NavSourceTileDef
-	if err := loadNavGraphJSON(path, &def); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return nil, err
 	}
-	if result := ValidateNavSourceTile(&def); result.HasErrors() {
+	def, err := decodeNavSourceTile(data)
+	if err != nil {
+		return nil, err
+	}
+	if result := ValidateNavSourceTile(def); result.HasErrors() {
 		return nil, fmt.Errorf("invalid navigation source tile: %s", result.Error())
 	}
-	return &def, nil
+	return def, nil
 }
 
 func SaveNavGraphTile(path string, def *NavGraphTileDef) error {
@@ -56,21 +64,36 @@ func SaveNavGraphTile(path string, def *NavGraphTileDef) error {
 	if result := ValidateNavGraphTile(def); result.HasErrors() {
 		return fmt.Errorf("invalid navigation graph tile: %s", result.Error())
 	}
-	return saveNavGraphJSON(path, def)
+	data, err := encodeNavGraphTile(def)
+	if err != nil {
+		return err
+	}
+	return saveNavBinary(path, data)
 }
 
 func LoadNavGraphTile(path string) (*NavGraphTileDef, error) {
-	var def NavGraphTileDef
-	if err := loadNavGraphJSON(path, &def); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return nil, err
 	}
-	if result := ValidateNavGraphTile(&def); result.HasErrors() {
+	def, err := decodeNavGraphTile(data)
+	if err != nil {
+		return nil, err
+	}
+	if result := ValidateNavGraphTile(def); result.HasErrors() {
 		return nil, fmt.Errorf("invalid navigation graph tile: %s", result.Error())
 	}
-	return &def, nil
+	return def, nil
 }
 
-func saveNavGraphJSON(path string, def any) error {
+func saveNavBinary(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func saveNavManifestJSON(path string, def any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -81,7 +104,7 @@ func saveNavGraphJSON(path string, def any) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-func loadNavGraphJSON(path string, def any) error {
+func loadNavManifestJSON(path string, def any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err

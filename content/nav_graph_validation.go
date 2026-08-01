@@ -1,6 +1,8 @@
 package content
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -153,7 +155,7 @@ func ValidateNavGraphManifest(def *NavGraphManifestDef) NavGraphValidationResult
 			result.addError("duplicate_source_tile", fmt.Sprintf("duplicate navigation source tile %s", TerrainChunkKey(entry.Coord)))
 		}
 		seenSources[entry.Coord] = struct{}{}
-		validateNavEntry(&result, entry.TilePath, NavSourceTileExtension, entry.SourceHash, entry.DependencyHash)
+		validateNavEntry(&result, entry.TilePath, NavSourceTileExtension, entry.SourceHash, entry.DependencyHash, entry.ContentHash, entry.ByteSize)
 	}
 
 	type graphKey struct {
@@ -173,7 +175,7 @@ func ValidateNavGraphManifest(def *NavGraphManifestDef) NavGraphValidationResult
 		if _, exists := seenSources[entry.Coord]; !exists {
 			result.addError("missing_source_tile", fmt.Sprintf("navigation graph tile references missing source tile %s", TerrainChunkKey(entry.Coord)))
 		}
-		validateNavEntry(&result, entry.TilePath, NavGraphTileExtension, entry.SourceHash, entry.DependencyHash)
+		validateNavEntry(&result, entry.TilePath, NavGraphTileExtension, entry.SourceHash, entry.DependencyHash, entry.ContentHash, entry.ByteSize)
 	}
 	return result
 }
@@ -188,6 +190,9 @@ func ValidateNavSourceTile(def *NavSourceTileDef) NavGraphValidationResult {
 	validateHashes(&result, def.SourceHash, def.DependencyHash)
 	if def.ChunkSize <= 0 {
 		result.addError("invalid_chunk_size", "navigation source tile chunk_size must be positive")
+	}
+	if def.VoxelResolution != 0 {
+		validatePositive(&result, "invalid_voxel_resolution", "navigation source tile voxel_resolution", def.VoxelResolution)
 	}
 	validateNavVoxelRuns(&result, "solid", def.SolidRuns, def.ChunkSize)
 	validateNavVoxelRuns(&result, "blocked", def.BlockedRuns, def.ChunkSize)
@@ -390,13 +395,19 @@ func validateNavHeader(result *NavGraphValidationResult, navID string, gotVersio
 	}
 }
 
-func validateNavEntry(result *NavGraphValidationResult, path, extension, sourceHash, dependencyHash string) {
+func validateNavEntry(result *NavGraphValidationResult, path, extension, sourceHash, dependencyHash, contentHash string, byteSize int64) {
 	if strings.TrimSpace(path) == "" {
 		result.addError("empty_tile_path", "navigation tile_path is required")
 	} else if !strings.EqualFold(filepath.Ext(path), extension) {
 		result.addError("invalid_tile_path", fmt.Sprintf("navigation tile_path must end in %s: %s", extension, path))
 	}
 	validateHashes(result, sourceHash, dependencyHash)
+	if decoded, err := hex.DecodeString(contentHash); err != nil || len(decoded) != sha256.Size {
+		result.addError("invalid_content_hash", "navigation tile content_hash must be a SHA-256 hex digest")
+	}
+	if byteSize <= 0 {
+		result.addError("invalid_byte_size", "navigation tile byte_size must be positive")
+	}
 }
 
 func validateHashes(result *NavGraphValidationResult, sourceHash, dependencyHash string) {

@@ -6,13 +6,13 @@ import (
 )
 
 const (
-	CurrentNavGraphManifestSchemaVersion = 3
-	CurrentNavSourceTileSchemaVersion    = 2
-	CurrentNavGraphTileSchemaVersion     = 3
+	CurrentNavGraphManifestSchemaVersion = 4
+	CurrentNavSourceTileSchemaVersion    = 3
+	CurrentNavGraphTileSchemaVersion     = 4
 
 	NavGraphManifestExtension = ".gknav"
-	NavSourceTileExtension    = ".gknavsource"
-	NavGraphTileExtension     = ".gknavgraph"
+	NavSourceTileExtension    = ".gkns"
+	NavGraphTileExtension     = ".gkng"
 
 	NavTransitionWalk    = "walk"
 	NavTransitionStep    = "step"
@@ -235,16 +235,17 @@ type NavRegionTransitionDef struct {
 }
 
 type NavSourceTileDef struct {
-	NavID          string               `json:"nav_id"`
-	SchemaVersion  int                  `json:"schema_version"`
-	Coord          TerrainChunkCoordDef `json:"coord"`
-	BuilderVersion string               `json:"builder_version"`
-	SourceHash     string               `json:"source_hash"`
-	DependencyHash string               `json:"dependency_hash"`
-	ChunkSize      int                  `json:"chunk_size"`
-	SolidRuns      []NavVoxelRunDef     `json:"solid_runs,omitempty"`
-	BlockedRuns    []NavVoxelRunDef     `json:"blocked_runs,omitempty"`
-	Spans          []NavSpanDef         `json:"spans,omitempty"`
+	NavID           string               `json:"nav_id"`
+	SchemaVersion   int                  `json:"schema_version"`
+	Coord           TerrainChunkCoordDef `json:"coord"`
+	BuilderVersion  string               `json:"builder_version"`
+	SourceHash      string               `json:"source_hash"`
+	DependencyHash  string               `json:"dependency_hash"`
+	ChunkSize       int                  `json:"chunk_size"`
+	VoxelResolution float32              `json:"voxel_resolution"`
+	SolidRuns       []NavVoxelRunDef     `json:"solid_runs,omitempty"`
+	BlockedRuns     []NavVoxelRunDef     `json:"blocked_runs,omitempty"`
+	Spans           []NavSpanDef         `json:"spans,omitempty"`
 }
 
 type NavGraphTileDef struct {
@@ -266,6 +267,8 @@ type NavSourceTileEntryDef struct {
 	TilePath       string               `json:"tile_path"`
 	SourceHash     string               `json:"source_hash"`
 	DependencyHash string               `json:"dependency_hash"`
+	ContentHash    string               `json:"content_hash"`
+	ByteSize       int64                `json:"byte_size"`
 }
 
 type NavGraphTileEntryDef struct {
@@ -274,6 +277,8 @@ type NavGraphTileEntryDef struct {
 	TilePath       string               `json:"tile_path"`
 	SourceHash     string               `json:"source_hash"`
 	DependencyHash string               `json:"dependency_hash"`
+	ContentHash    string               `json:"content_hash"`
+	ByteSize       int64                `json:"byte_size"`
 }
 
 // NavDoorDef is the baked, format-neutral closed footprint for one authored
