@@ -75,8 +75,9 @@ func connectNavGraphLadders(sources []NavSourceTileDef, graphs []NavGraphTileDef
 			continue
 		}
 		width := 2 * max(ladder.BoundsHalfExtents[0], ladder.BoundsHalfExtents[2])
-		bottomSpan := query.query.spans[bottom.Ref.Tile][bottom.Ref.Span]
-		topSpan := query.query.spans[top.Ref.Tile][top.Ref.Span]
+		resident := query.resident()
+		bottomSpan, _ := resident.span(bottom.Ref)
+		topSpan, _ := resident.span(top.Ref)
 		headroom := min(bottomSpan.Headroom, topSpan.Headroom)
 		clearance := min(bottomSpan.ClearanceRadius, topSpan.ClearanceRadius)
 		cost := navLadderTraversalCost(bottom.Point, top.Point, ladder.ClimbSpeed)
@@ -127,21 +128,25 @@ func resolveNavLadderMount(query *NavGraphQuery, point Vec3, profile NavAgentPro
 	maxDistance := max(voxelResolution*1.5, profile.StepHeight+profile.Radius, profile.Height+profile.Radius)
 	best := NavPointResult{Distance: float32(math.Inf(1))}
 	ambiguous := false
-	for coord, graph := range query.query.graphs {
-		for _, spanID := range graph.SpanIDs {
-			span := query.query.spans[coord][spanID]
-			minX := float32(coord.X*query.query.chunkSize+span.X) * query.query.voxelResolution
-			minZ := float32(coord.Z*query.query.chunkSize+span.Z) * query.query.voxelResolution
+	resident := query.resident()
+	for coord, tile := range resident.tiles {
+		for spanIndex, span := range tile.spans {
+			spanID := uint32(spanIndex)
+			if !bitHas(tile.accepted, spanID) {
+				continue
+			}
+			minX := float32(coord.X*resident.chunkSize+span.X) * resident.voxelResolution
+			minZ := float32(coord.Z*resident.chunkSize+span.Z) * resident.voxelResolution
 			projected := Vec3{
-				navClampToSpanAxis(point[0], minX, query.query.voxelResolution),
+				navClampToSpanAxis(point[0], minX, resident.voxelResolution),
 				span.SupportHeight,
-				navClampToSpanAxis(point[2], minZ, query.query.voxelResolution),
+				navClampToSpanAxis(point[2], minZ, resident.voxelResolution),
 			}
 			distance := navVec3Distance(point, projected)
 			if distance > maxDistance {
 				continue
 			}
-			candidate := NavPointResult{Found: true, Ref: NavSpanRef{Tile: coord, Span: spanID}, Region: query.query.spanRegions[coord][spanID], Point: projected, Distance: distance}
+			candidate := NavPointResult{Found: true, Ref: NavSpanRef{Tile: coord, Span: spanID}, Region: tile.spanRegions[spanID], Point: projected, Distance: distance}
 			if !best.Found || distance < best.Distance-1e-4 {
 				best, ambiguous = candidate, false
 				continue
@@ -172,11 +177,11 @@ func navLadderLandingRegionsConnected(query *NavGraphQuery, a, b navRouteNode) b
 		return true
 	}
 	for _, pair := range [][2]navRouteNode{{a, b}, {b, a}} {
-		graph, ok := query.query.graphs[pair[0].Tile]
-		if !ok {
+		tile := query.resident().tile(pair[0].Tile)
+		if tile == nil {
 			continue
 		}
-		for _, transition := range graph.Transitions {
+		for _, transition := range tile.regionTransitions(pair[0].Region) {
 			if transition.Kind != NavTransitionLadder && transition.FromRegion == pair[0].Region && transition.ToTile == pair[1].Tile && transition.ToRegion == pair[1].Region {
 				return true
 			}

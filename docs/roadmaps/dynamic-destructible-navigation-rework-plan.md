@@ -490,14 +490,19 @@ bytes, `22,844,964` graph bytes, and a `264,603` byte manifest), below the
 
 ### Phase 2: Replace Resident Query Indexes
 
-- [ ] Introduce immutable resident tile and snapshot types.
-- [ ] Replace nested span/region maps with dense slices, bitsets, dense column offsets, and CSR adjacency.
-- [ ] Build world/tile lookup once per published snapshot.
-- [ ] Move ordinary edge properties to deterministic derivation from spans and profile.
-- [ ] Remove query-time reconstruction of per-region visibility maps.
-- [ ] Publish snapshots by pointer swap.
+- [x] Introduce immutable resident tile and snapshot types.
+- [x] Replace nested span/region maps with dense slices, bitsets, dense column offsets, and CSR adjacency.
+- [x] Build world/tile lookup once per published snapshot.
+- [x] Move ordinary edge properties to deterministic derivation from spans and profile.
+- [x] Remove query-time reconstruction of per-region visibility maps.
+- [x] Publish snapshots by pointer swap.
 
 Gate: route results match the small-graph oracle and dense-center resident heap meets budget.
+
+Result: the Crossfire baseline snapshot retains `217,517,928` bytes on the
+reference Apple M4 Pro, below the `256 MB` gate. Its resident index builds in
+`1,224.642 ms`; ordinary route reachability matches the independent small-graph
+Dijkstra oracle. Blocker and carrier overlay storage remains Phase 3 scope.
 
 ### Phase 3: Replace Blocker Routing
 

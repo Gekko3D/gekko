@@ -271,8 +271,8 @@ func TestNavGraphBlockerOverlay(t *testing.T) {
 	if _, ok := query.ReachableSpans(startRef, []NavSpanRef{goalRef})[goalRef]; !ok {
 		t.Fatal("reachable span query did not follow blocker detour")
 	}
-	startComponent, startOK := query.query.spanComponent(startRef)
-	goalComponent, goalOK := query.query.spanComponent(goalRef)
+	startComponent, startOK := query.resident().spanComponent(startRef)
+	goalComponent, goalOK := query.resident().spanComponent(goalRef)
 	if !startOK || !goalOK || startComponent != goalComponent {
 		t.Fatalf("blocker detour was not compacted: start=%d/%t goal=%d/%t", startComponent, startOK, goalComponent, goalOK)
 	}
@@ -294,8 +294,8 @@ func TestNavGraphBlockerOverlay(t *testing.T) {
 	if _, ok := query.ReachableSpans(startRef, []NavSpanRef{goalRef})[goalRef]; ok {
 		t.Fatal("reachable span query crossed blocker wall")
 	}
-	startComponent, startOK = query.query.spanComponent(startRef)
-	goalComponent, goalOK = query.query.spanComponent(goalRef)
+	startComponent, startOK = query.resident().spanComponent(startRef)
+	goalComponent, goalOK = query.resident().spanComponent(goalRef)
 	if !startOK || !goalOK || startComponent == goalComponent {
 		t.Fatalf("blocker split was not compacted: start=%d/%t goal=%d/%t", startComponent, startOK, goalComponent, goalOK)
 	}
@@ -348,6 +348,25 @@ func TestNavGraphActiveExitCountUsesBlockerOverlay(t *testing.T) {
 	}
 	if exits, ok := blocked.ReachableSpans(start, []NavSpanRef{start})[start]; !ok || exits != 0 {
 		t.Fatalf("reachable exit count = %d/%t", exits, ok)
+	}
+}
+
+func TestNavGraphQueryPublishesImmutableDenseSnapshot(t *testing.T) {
+	profile := NavAgentProfileDef{ID: "walker", Radius: 0.2, Height: 1.8, StepHeight: 0.5, MaxSlopeDegrees: 45}
+	sources, graphs := buildFlatNavRouteWorld(t, []TerrainChunkCoordDef{{}}, 4, profile)
+	query, err := NewNavGraphQuery(sources, graphs, 4, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tile := query.resident().tile(TerrainChunkCoordDef{})
+	if tile == nil || len(tile.localOffsets) != len(tile.spans)+1 || len(tile.columnOffsets) != 4*4+1 || !bitHas(tile.accepted, 0) {
+		t.Fatalf("resident tile is not densely indexed: %+v", tile)
+	}
+	sources[0].Spans[0].SupportHeight = 99
+	graphs[0].SpanTransitions = nil
+	route, err := query.FindRoute(Vec3{0.5, 0, 0.5}, Vec3{3.5, 0, 0.5})
+	if err != nil || !route.Found {
+		t.Fatalf("published snapshot changed with input slices: route=%+v err=%v", route, err)
 	}
 }
 

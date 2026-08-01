@@ -23,31 +23,45 @@ type navResolvedSpan struct {
 	Projected Vec3
 }
 
-type navSpanColumn struct {
-	x, z int
+const navUnassignedRegion = ^uint32(0)
+
+type navLocalEdge struct {
+	to       uint32
+	movement uint8
+}
+
+type navResidentTile struct {
+	coord              TerrainChunkCoordDef
+	spans              []NavSpanDef
+	accepted           []uint64
+	spanRegions        []uint32
+	localOffsets       []uint32
+	localEdges         []navLocalEdge
+	exceptionalOffsets []uint32
+	exceptional        []NavSpanTransitionDef
+	regions            []NavRegionDef
+	regionOffsets      []uint32
+	regionEdges        []NavRegionTransitionDef
+	backing            []NavSpanTransitionDef
+	backingSet         []uint64
+	columnOffsets      []uint32
+	columnSpans        []uint32
+	spanScale          float32
+	classIDs           []uint32
+	walkExits          []uint8
+	activeDegrees      []uint8
+	sectorEdges        []TerrainChunkCoordDef
 }
 
 type navGraphQuery struct {
 	chunkSize       int
 	voxelResolution float32
-	sources         map[TerrainChunkCoordDef]NavSourceTileDef
-	graphs          map[TerrainChunkCoordDef]NavGraphTileDef
-	spans           map[TerrainChunkCoordDef]map[uint32]NavSpanDef
-	spanRegions     map[TerrainChunkCoordDef]map[uint32]uint32
-	spanEdges       map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge
-	spanScale       map[TerrainChunkCoordDef]float32
-	backing         map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef
-	spanColumns     map[navSpanColumn][]NavSpanRef
-	walkableCells   map[navSpanPathCell]navWalkableCell
-	spanClassIDs    map[string]uint32
-	sectorEdges     map[TerrainChunkCoordDef][]TerrainChunkCoordDef
-	regionEdges     map[navRouteNode][]NavRegionTransitionDef
+	tiles           map[TerrainChunkCoordDef]*navResidentTile
 	blocked         map[NavSpanRef]struct{}
 	globalEdges     map[NavSpanRef][]NavSpanTransitionDef
 	globalScale     float32
 	spanComponents  map[TerrainChunkCoordDef][]uint32
 	componentEdges  map[uint32][]uint32
-	activeDegrees   map[TerrainChunkCoordDef][]uint8
 }
 
 type navBackingKey struct {
@@ -61,9 +75,16 @@ type navBackingCandidate struct {
 	want       Vec3
 }
 
-// NavGraphQuery is an immutable, reusable index over resident graph tiles.
-type NavGraphQuery struct {
+// NavSnapshot is immutable resident navigation state. Its storage is private so
+// published slices and bitsets cannot be mutated by callers.
+type NavSnapshot struct {
 	query *navGraphQuery
+}
+
+// NavGraphQuery reads one immutable resident snapshot. Runtime publication
+// replaces this pointer rather than patching resident tiles in place.
+type NavGraphQuery struct {
+	snapshot *NavSnapshot
 }
 
 func NewNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chunkSize int, voxelResolution float32) (*NavGraphQuery, error) {
@@ -71,7 +92,14 @@ func NewNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 	if err != nil {
 		return nil, err
 	}
-	return &NavGraphQuery{query: query}, nil
+	return &NavGraphQuery{snapshot: &NavSnapshot{query: query}}, nil
+}
+
+func (q *NavGraphQuery) resident() *navGraphQuery {
+	if q == nil || q.snapshot == nil {
+		return nil
+	}
+	return q.snapshot.query
 }
 
 func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chunkSize int, voxelResolution float32) (*navGraphQuery, error) {
@@ -85,46 +113,30 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 		return nil, fmt.Errorf("navigation route requires graph tiles")
 	}
 
-	acceptedSpans := 0
-	for _, graph := range graphs {
-		acceptedSpans += len(graph.SpanIDs)
-	}
 	query := &navGraphQuery{
 		chunkSize: chunkSize, voxelResolution: voxelResolution,
-		sources:       make(map[TerrainChunkCoordDef]NavSourceTileDef, len(sources)),
-		graphs:        make(map[TerrainChunkCoordDef]NavGraphTileDef, len(graphs)),
-		spans:         make(map[TerrainChunkCoordDef]map[uint32]NavSpanDef, len(sources)),
-		spanRegions:   make(map[TerrainChunkCoordDef]map[uint32]uint32, len(graphs)),
-		spanEdges:     make(map[TerrainChunkCoordDef]map[uint32][]navSpanSearchEdge, len(graphs)),
-		spanScale:     make(map[TerrainChunkCoordDef]float32, len(graphs)),
-		backing:       make(map[TerrainChunkCoordDef]map[uint32]NavSpanTransitionDef, len(graphs)),
-		spanColumns:   make(map[navSpanColumn][]NavSpanRef, acceptedSpans),
-		walkableCells: make(map[navSpanPathCell]navWalkableCell, acceptedSpans),
-		spanClassIDs:  make(map[string]uint32),
+		tiles: make(map[TerrainChunkCoordDef]*navResidentTile, len(graphs)),
 	}
+	sourceByCoord := make(map[TerrainChunkCoordDef]NavSourceTileDef, len(sources))
 	for _, source := range sources {
-		if _, exists := query.sources[source.Coord]; exists {
+		if _, exists := sourceByCoord[source.Coord]; exists {
 			return nil, fmt.Errorf("duplicate navigation source tile %s", TerrainChunkKey(source.Coord))
 		}
 		if validation := ValidateNavSourceTile(&source); validation.HasErrors() {
 			return nil, fmt.Errorf("invalid navigation source tile %s: %s", TerrainChunkKey(source.Coord), validation.Error())
 		}
-		query.sources[source.Coord] = source
-		query.spans[source.Coord] = make(map[uint32]NavSpanDef, len(source.Spans))
-		for _, span := range source.Spans {
-			query.spans[source.Coord][span.ID] = span
-		}
+		sourceByCoord[source.Coord] = source
 	}
 
 	var navID, builderVersion, profileID string
 	for _, graph := range graphs {
-		if _, exists := query.graphs[graph.Coord]; exists {
+		if _, exists := query.tiles[graph.Coord]; exists {
 			return nil, fmt.Errorf("duplicate navigation graph tile %s", TerrainChunkKey(graph.Coord))
 		}
 		if validation := ValidateNavGraphTile(&graph); validation.HasErrors() {
 			return nil, fmt.Errorf("invalid navigation graph tile %s: %s", TerrainChunkKey(graph.Coord), validation.Error())
 		}
-		source, exists := query.sources[graph.Coord]
+		source, exists := sourceByCoord[graph.Coord]
 		if !exists {
 			return nil, fmt.Errorf("navigation graph tile %s has no source tile", TerrainChunkKey(graph.Coord))
 		}
@@ -136,121 +148,283 @@ func newNavGraphQuery(sources []NavSourceTileDef, graphs []NavGraphTileDef, chun
 		} else if graph.NavID != navID || graph.BuilderVersion != builderVersion || graph.AgentProfileID != profileID {
 			return nil, fmt.Errorf("navigation route graph tiles have incompatible metadata")
 		}
-		regions := navGraphSpanRegions(graph)
-		if len(regions) != len(graph.SpanIDs) {
-			return nil, fmt.Errorf("navigation graph tile %s is not region-compressed", TerrainChunkKey(graph.Coord))
+		tile, err := newNavResidentTile(source, graph, chunkSize, voxelResolution)
+		if err != nil {
+			return nil, err
 		}
-		for _, spanID := range graph.SpanIDs {
-			span, exists := query.spans[graph.Coord][spanID]
-			if !exists {
-				return nil, fmt.Errorf("navigation graph tile %s references missing source span %d", TerrainChunkKey(graph.Coord), spanID)
-			}
-			column := navSpanColumn{x: graph.Coord.X*chunkSize + span.X, z: graph.Coord.Z*chunkSize + span.Z}
-			query.spanColumns[column] = append(query.spanColumns[column], NavSpanRef{Tile: graph.Coord, Span: spanID})
-			query.indexWalkableCell(graph.Coord, span)
-		}
-		query.graphs[graph.Coord] = graph
-		query.spanRegions[graph.Coord] = regions
-		edges := make(map[uint32][]navSpanSearchEdge)
-		scale := float32(math.Inf(1))
-		for _, transition := range graph.SpanTransitions {
-			query.indexWalkableTransition(graph.Coord, transition)
-			if transition.To.Tile != graph.Coord {
-				continue
-			}
-			edges[transition.From] = append(edges[transition.From], navSpanSearchEdge{to: transition.To.Span, cost: transition.Cost})
-			distance := navSpanSearchDistance(query.spans[graph.Coord][transition.From], query.spans[graph.Coord][transition.To.Span], voxelResolution)
-			if distance > 0 {
-				scale = min(scale, transition.Cost/distance)
-			}
-		}
-		if !finite(scale) {
-			scale = 0
-		}
-		query.spanEdges[graph.Coord], query.spanScale[graph.Coord] = edges, scale
+		query.tiles[graph.Coord] = tile
 	}
+	query.indexWalkableTransitions()
 	query.indexBackingTransitions()
 	query.indexRouteEdges()
 	query.indexActiveDegrees()
 	return query, nil
 }
 
+func newNavResidentTile(source NavSourceTileDef, graph NavGraphTileDef, chunkSize int, voxelResolution float32) (*navResidentTile, error) {
+	tile := &navResidentTile{
+		coord: graph.Coord, spans: append([]NavSpanDef(nil), source.Spans...),
+		accepted:    make([]uint64, (len(source.Spans)+63)/64),
+		spanRegions: make([]uint32, len(source.Spans)),
+		regions:     append([]NavRegionDef(nil), graph.Regions...),
+		classIDs:    make([]uint32, len(source.Spans)), walkExits: make([]uint8, len(source.Spans)),
+	}
+	for i := range tile.spanRegions {
+		tile.spanRegions[i] = navUnassignedRegion
+	}
+	for _, id := range graph.SpanIDs {
+		if int(id) >= len(tile.spans) {
+			return nil, fmt.Errorf("navigation graph tile %s references missing source span %d", TerrainChunkKey(graph.Coord), id)
+		}
+		bitSet(tile.accepted, id)
+	}
+	for _, region := range graph.Regions {
+		for _, run := range region.SpanRuns {
+			for id := run.Start; id < run.Start+run.Count; id++ {
+				tile.spanRegions[id] = region.ID
+			}
+		}
+	}
+	for _, id := range graph.SpanIDs {
+		if tile.spanRegions[id] == navUnassignedRegion {
+			return nil, fmt.Errorf("navigation graph tile %s is not region-compressed", TerrainChunkKey(graph.Coord))
+		}
+		span := tile.spans[id]
+		if span.X < 0 || span.X >= chunkSize || span.Z < 0 || span.Z >= chunkSize {
+			return nil, fmt.Errorf("navigation span %d is outside tile %s", id, TerrainChunkKey(graph.Coord))
+		}
+	}
+	tile.buildColumns(chunkSize)
+	tile.buildLocalEdges(graph.SpanTransitions, voxelResolution)
+	tile.buildRegionEdges(graph.Transitions)
+	return tile, nil
+}
+
+func bitSet(words []uint64, id uint32) { words[id/64] |= 1 << (id % 64) }
+func bitHas(words []uint64, id uint32) bool {
+	return int(id/64) < len(words) && words[id/64]&(1<<(id%64)) != 0
+}
+
+func (t *navResidentTile) buildColumns(chunkSize int) {
+	counts := make([]uint32, chunkSize*chunkSize)
+	for id := range t.spans {
+		if bitHas(t.accepted, uint32(id)) {
+			span := t.spans[id]
+			counts[span.Z*chunkSize+span.X]++
+		}
+	}
+	t.columnOffsets = make([]uint32, len(counts)+1)
+	for i, count := range counts {
+		t.columnOffsets[i+1] = t.columnOffsets[i] + count
+	}
+	t.columnSpans = make([]uint32, t.columnOffsets[len(counts)])
+	next := append([]uint32(nil), t.columnOffsets[:len(counts)]...)
+	for id := range t.spans {
+		if bitHas(t.accepted, uint32(id)) {
+			span := t.spans[id]
+			column := span.Z*chunkSize + span.X
+			t.columnSpans[next[column]] = uint32(id)
+			next[column]++
+		}
+	}
+}
+
+func (t *navResidentTile) column(x, z, chunkSize int) []uint32 {
+	if x < 0 || x >= chunkSize || z < 0 || z >= chunkSize {
+		return nil
+	}
+	column := z*chunkSize + x
+	return t.columnSpans[t.columnOffsets[column]:t.columnOffsets[column+1]]
+}
+
+func (t *navResidentTile) buildLocalEdges(transitions []NavSpanTransitionDef, voxelResolution float32) {
+	counts := make([]uint32, len(t.spans))
+	exceptionalCounts := make([]uint32, len(t.spans))
+	for _, edge := range transitions {
+		if navBinaryOrdinaryLocalEdge(t.coord, edge) {
+			counts[edge.From]++
+		} else {
+			exceptionalCounts[edge.From]++
+		}
+	}
+	t.localOffsets = make([]uint32, len(t.spans)+1)
+	for i, count := range counts {
+		t.localOffsets[i+1] = t.localOffsets[i] + count
+	}
+	t.localEdges = make([]navLocalEdge, t.localOffsets[len(t.spans)])
+	t.exceptionalOffsets = make([]uint32, len(t.spans)+1)
+	for i, count := range exceptionalCounts {
+		t.exceptionalOffsets[i+1] = t.exceptionalOffsets[i] + count
+	}
+	t.exceptional = make([]NavSpanTransitionDef, t.exceptionalOffsets[len(t.spans)])
+	next := append([]uint32(nil), t.localOffsets[:len(t.spans)]...)
+	exceptionalNext := append([]uint32(nil), t.exceptionalOffsets[:len(t.spans)]...)
+	t.spanScale = float32(math.Inf(1))
+	for _, edge := range transitions {
+		if !navBinaryOrdinaryLocalEdge(t.coord, edge) {
+			t.exceptional[exceptionalNext[edge.From]] = cloneNavSpanTransition(edge)
+			exceptionalNext[edge.From]++
+			continue
+		}
+		index := next[edge.From]
+		t.localEdges[index] = navLocalEdge{to: edge.To.Span, movement: navMovementClass(edge.Kind)}
+		next[edge.From]++
+		cost := navDerivedLocalCost(t.spans[edge.From], t.spans[edge.To.Span], voxelResolution)
+		distance := navSpanSearchDistance(t.spans[edge.From], t.spans[edge.To.Span], voxelResolution)
+		if distance > 0 {
+			t.spanScale = min(t.spanScale, cost/distance)
+		}
+	}
+	for _, edge := range t.exceptional {
+		if edge.To.Tile != t.coord {
+			continue
+		}
+		distance := navSpanSearchDistance(t.spans[edge.From], t.spans[edge.To.Span], voxelResolution)
+		if distance > 0 {
+			t.spanScale = min(t.spanScale, edge.Cost/distance)
+		}
+	}
+	if !finite(t.spanScale) {
+		t.spanScale = 0
+	}
+}
+
+func (t *navResidentTile) buildRegionEdges(transitions []NavRegionTransitionDef) {
+	counts := make([]uint32, len(t.regions))
+	for _, edge := range transitions {
+		counts[edge.FromRegion]++
+	}
+	t.regionOffsets = make([]uint32, len(t.regions)+1)
+	for i, count := range counts {
+		t.regionOffsets[i+1] = t.regionOffsets[i] + count
+	}
+	t.regionEdges = make([]NavRegionTransitionDef, len(transitions))
+	next := append([]uint32(nil), t.regionOffsets[:len(t.regions)]...)
+	for _, edge := range transitions {
+		t.regionEdges[next[edge.FromRegion]] = cloneNavRegionTransition(edge)
+		next[edge.FromRegion]++
+	}
+	for region := range t.regions {
+		edges := t.regionTransitions(uint32(region))
+		sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	}
+}
+
+func (t *navResidentTile) regionTransitions(region uint32) []NavRegionTransitionDef {
+	if int(region)+1 >= len(t.regionOffsets) {
+		return nil
+	}
+	return t.regionEdges[t.regionOffsets[region]:t.regionOffsets[region+1]]
+}
+
+func navMovementClass(kind string) uint8 {
+	switch kind {
+	case NavTransitionStep:
+		return 1
+	case NavTransitionStair:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func navMovementKind(class uint8) string {
+	if class == 1 {
+		return NavTransitionStep
+	}
+	if class == 2 {
+		return NavTransitionStair
+	}
+	return NavTransitionWalk
+}
+
+func navDerivedLocalCost(from, to NavSpanDef, voxelResolution float32) float32 {
+	return float32(math.Hypot(float64(voxelResolution), float64(to.SupportHeight-from.SupportHeight)))
+}
+
+func cloneNavSpanTransition(edge NavSpanTransitionDef) NavSpanTransitionDef {
+	edge.RequiresFlags = append([]string(nil), edge.RequiresFlags...)
+	edge.Traversal = cloneNavTraversal(edge.Traversal)
+	edge.Gate = cloneNavTransitionGate(edge.Gate)
+	return edge
+}
+
+func cloneNavRegionTransition(edge NavRegionTransitionDef) NavRegionTransitionDef {
+	edge.RequiresFlags = append([]string(nil), edge.RequiresFlags...)
+	edge.Traversal = cloneNavTraversal(edge.Traversal)
+	edge.Gate = cloneNavTransitionGate(edge.Gate)
+	return edge
+}
+
 func (q *navGraphQuery) indexRouteEdges() {
-	q.sectorEdges = make(map[TerrainChunkCoordDef][]TerrainChunkCoordDef, len(q.graphs))
-	q.regionEdges = make(map[navRouteNode][]NavRegionTransitionDef)
-	for coord, graph := range q.graphs {
+	for coord, tile := range q.tiles {
 		seen := make(map[TerrainChunkCoordDef]struct{})
-		for _, transition := range graph.Transitions {
-			from := navRouteNode{Tile: coord, Region: transition.FromRegion}
-			q.regionEdges[from] = append(q.regionEdges[from], transition)
+		for _, transition := range tile.regionEdges {
 			if transition.ToTile == coord {
 				continue
 			}
-			if _, loaded := q.graphs[transition.ToTile]; loaded {
+			if _, loaded := q.tiles[transition.ToTile]; loaded {
 				seen[transition.ToTile] = struct{}{}
 			}
 		}
-		for region := range graph.Regions {
-			from := navRouteNode{Tile: coord, Region: uint32(region)}
-			sort.Slice(q.regionEdges[from], func(i, j int) bool {
-				return q.regionEdges[from][i].ID < q.regionEdges[from][j].ID
-			})
-		}
 		for next := range seen {
-			q.sectorEdges[coord] = append(q.sectorEdges[coord], next)
+			tile.sectorEdges = append(tile.sectorEdges, next)
 		}
-		sort.Slice(q.sectorEdges[coord], func(i, j int) bool {
-			return terrainCoordLess(q.sectorEdges[coord][i], q.sectorEdges[coord][j])
+		sort.Slice(tile.sectorEdges, func(i, j int) bool {
+			return terrainCoordLess(tile.sectorEdges[i], tile.sectorEdges[j])
 		})
 	}
 }
 
-func (q *navGraphQuery) indexWalkableCell(coord TerrainChunkCoordDef, span NavSpanDef) {
-	classKey := navRegionSpanClass(span)
-	classID := q.spanClassIDs[classKey]
-	if classID == 0 {
-		classID = uint32(len(q.spanClassIDs) + 1)
-		q.spanClassIDs[classKey] = classID
+func (q *navGraphQuery) indexWalkableTransitions() {
+	classSet := make(map[string]struct{})
+	for _, tile := range q.tiles {
+		for id, span := range tile.spans {
+			if !bitHas(tile.accepted, uint32(id)) {
+				continue
+			}
+			classSet[navRegionSpanClass(span)] = struct{}{}
+		}
 	}
-	cell := navSpanPathCell{
-		x:      coord.X*q.chunkSize + span.X,
-		z:      coord.Z*q.chunkSize + span.Z,
-		height: math.Float32bits(span.SupportHeight),
+	classKeys := make([]string, 0, len(classSet))
+	for key := range classSet {
+		classKeys = append(classKeys, key)
 	}
-	entry := q.walkableCells[cell]
-	if entry.classID != 0 && entry.classID != classID {
-		q.walkableCells[cell] = navWalkableCell{}
-		return
+	sort.Strings(classKeys)
+	classes := make(map[string]uint32, len(classKeys))
+	for i, key := range classKeys {
+		classes[key] = uint32(i + 1)
 	}
-	entry.classID = classID
-	q.walkableCells[cell] = entry
-}
-
-func (q *navGraphQuery) indexWalkableTransition(fromTile TerrainChunkCoordDef, transition NavSpanTransitionDef) {
-	if transition.Kind != NavTransitionWalk {
-		return
+	for _, tile := range q.tiles {
+		for id, span := range tile.spans {
+			if bitHas(tile.accepted, uint32(id)) {
+				tile.classIDs[id] = classes[navRegionSpanClass(span)]
+			}
+		}
 	}
-	from := q.spans[fromTile][transition.From]
-	to := q.spans[transition.To.Tile][transition.To.Span]
-	if math.Float32bits(from.SupportHeight) != math.Float32bits(to.SupportHeight) {
-		return
+	for _, tile := range q.tiles {
+		for from := range tile.spans {
+			q.visitSpanEdges(NavSpanRef{Tile: tile.coord, Span: uint32(from)}, func(edge NavSpanTransitionDef) {
+				if edge.Kind != NavTransitionWalk {
+					return
+				}
+				fromSpan, fromOK := q.span(NavSpanRef{Tile: tile.coord, Span: edge.From})
+				toSpan, toOK := q.span(edge.To)
+				if !fromOK || !toOK || math.Float32bits(fromSpan.SupportHeight) != math.Float32bits(toSpan.SupportHeight) {
+					return
+				}
+				fromX, fromZ := tile.coord.X*q.chunkSize+fromSpan.X, tile.coord.Z*q.chunkSize+fromSpan.Z
+				toX, toZ := edge.To.Tile.X*q.chunkSize+toSpan.X, edge.To.Tile.Z*q.chunkSize+toSpan.Z
+				tile.walkExits[from] |= navWalkableExit(toX-fromX, toZ-fromZ)
+			})
+		}
 	}
-	fromX, fromZ := fromTile.X*q.chunkSize+from.X, fromTile.Z*q.chunkSize+from.Z
-	toX, toZ := transition.To.Tile.X*q.chunkSize+to.X, transition.To.Tile.Z*q.chunkSize+to.Z
-	exit := navWalkableExit(toX-fromX, toZ-fromZ)
-	if exit == 0 {
-		return
-	}
-	cell := navSpanPathCell{x: fromX, z: fromZ, height: math.Float32bits(from.SupportHeight)}
-	entry := q.walkableCells[cell]
-	entry.exits |= exit
-	q.walkableCells[cell] = entry
 }
 
 func (q *navGraphQuery) indexBackingTransitions() {
-	for coord, graph := range q.graphs {
+	for coord, tile := range q.tiles {
 		candidates := make(map[navBackingKey][]navBackingCandidate)
-		for _, transition := range graph.Transitions {
+		for _, transition := range tile.regionEdges {
 			want := midpointVec3(transition.CrossingStart, transition.CrossingEnd)
 			traversalID := ""
 			if transition.Traversal != nil {
@@ -267,42 +441,44 @@ func (q *navGraphQuery) indexBackingTransitions() {
 			key := navBackingKey{transition.FromRegion, transition.ToRegion, transition.ToTile, transition.Kind, navQueryFlagsKey(transition.RequiresFlags), traversalID, gateID}
 			candidates[key] = append(candidates[key], navBackingCandidate{transition, want})
 		}
-		best := make(map[uint32]NavSpanTransitionDef, len(graph.Transitions))
-		distances := make(map[uint32]float32, len(graph.Transitions))
-		for _, edge := range graph.SpanTransitions {
-			fromRegion, fromOK := q.spanRegions[coord][edge.From]
-			toRegions, tileOK := q.spanRegions[edge.To.Tile]
-			toRegion, toOK := toRegions[edge.To.Span]
-			if !fromOK || !tileOK || !toOK {
-				continue
-			}
-			traversalID := ""
-			if edge.Traversal != nil {
-				traversalID = edge.Traversal.StableLinkID()
-			}
-			gateID := ""
-			if edge.Gate != nil {
-				gateID = edge.Gate.Kind + "\x00" + edge.Gate.ID
-			}
-			key := navBackingKey{fromRegion, toRegion, edge.To.Tile, edge.Kind, navQueryFlagsKey(edge.RequiresFlags), traversalID, gateID}
-			matches := candidates[key]
-			if len(matches) == 0 {
-				continue
-			}
-			point := q.spanTransitionTarget(coord, edge)
-			if edge.Traversal != nil {
-				point = midpointVec3(edge.Traversal.Start, edge.Traversal.End)
-			}
-			for _, candidate := range matches {
-				distance := navVec3Distance(point, candidate.want)
-				previous, found := best[candidate.transition.ID]
-				if found && (distance > distances[candidate.transition.ID] || distance == distances[candidate.transition.ID] && !navBackingEdgeLess(edge, previous)) {
-					continue
+		tile.backing = make([]NavSpanTransitionDef, len(tile.regionEdges))
+		tile.backingSet = make([]uint64, (len(tile.regionEdges)+63)/64)
+		distances := make([]float32, len(tile.regionEdges))
+		for from := range tile.spans {
+			q.visitSpanEdges(NavSpanRef{Tile: coord, Span: uint32(from)}, func(edge NavSpanTransitionDef) {
+				fromRegion, fromOK := q.spanRegion(NavSpanRef{Tile: coord, Span: edge.From})
+				toRegion, toOK := q.spanRegion(edge.To)
+				if !fromOK || !toOK {
+					return
 				}
-				best[candidate.transition.ID], distances[candidate.transition.ID] = edge, distance
-			}
+				traversalID := ""
+				if edge.Traversal != nil {
+					traversalID = edge.Traversal.StableLinkID()
+				}
+				gateID := ""
+				if edge.Gate != nil {
+					gateID = edge.Gate.Kind + "\x00" + edge.Gate.ID
+				}
+				key := navBackingKey{fromRegion, toRegion, edge.To.Tile, edge.Kind, navQueryFlagsKey(edge.RequiresFlags), traversalID, gateID}
+				matches := candidates[key]
+				if len(matches) == 0 {
+					return
+				}
+				point := q.spanTransitionTarget(coord, edge)
+				if edge.Traversal != nil {
+					point = midpointVec3(edge.Traversal.Start, edge.Traversal.End)
+				}
+				for _, candidate := range matches {
+					distance := navVec3Distance(point, candidate.want)
+					previous, found := tile.backing[candidate.transition.ID], bitHas(tile.backingSet, candidate.transition.ID)
+					if found && (distance > distances[candidate.transition.ID] || distance == distances[candidate.transition.ID] && !navBackingEdgeLess(edge, previous)) {
+						continue
+					}
+					tile.backing[candidate.transition.ID], distances[candidate.transition.ID] = edge, distance
+					bitSet(tile.backingSet, candidate.transition.ID)
+				}
+			})
 		}
-		q.backing[coord] = best
 	}
 }
 
@@ -317,6 +493,60 @@ func navBackingEdgeLess(a, b NavSpanTransitionDef) bool {
 	return a.From < b.From || a.From == b.From && (terrainCoordLess(a.To.Tile, b.To.Tile) || a.To.Tile == b.To.Tile && a.To.Span < b.To.Span)
 }
 
+func (q *navGraphQuery) tile(coord TerrainChunkCoordDef) *navResidentTile { return q.tiles[coord] }
+
+func (q *navGraphQuery) span(ref NavSpanRef) (NavSpanDef, bool) {
+	tile := q.tile(ref.Tile)
+	if tile == nil || int(ref.Span) >= len(tile.spans) || !bitHas(tile.accepted, ref.Span) {
+		return NavSpanDef{}, false
+	}
+	return tile.spans[ref.Span], true
+}
+
+func (q *navGraphQuery) spanRegion(ref NavSpanRef) (uint32, bool) {
+	tile := q.tile(ref.Tile)
+	if tile == nil || int(ref.Span) >= len(tile.spanRegions) || tile.spanRegions[ref.Span] == navUnassignedRegion {
+		return 0, false
+	}
+	return tile.spanRegions[ref.Span], true
+}
+
+func (q *navGraphQuery) visitSpanEdges(from NavSpanRef, visit func(NavSpanTransitionDef)) {
+	tile := q.tile(from.Tile)
+	if tile == nil || int(from.Span)+1 >= len(tile.localOffsets) {
+		return
+	}
+	local := tile.localEdges[tile.localOffsets[from.Span]:tile.localOffsets[from.Span+1]]
+	for _, edge := range local {
+		to := tile.spans[edge.to]
+		fromSpan := tile.spans[from.Span]
+		visit(NavSpanTransitionDef{
+			From: from.Span, To: NavSpanRef{Tile: from.Tile, Span: edge.to}, Kind: navMovementKind(edge.movement),
+			StepDelta: to.SupportHeight - fromSpan.SupportHeight, Width: q.voxelResolution,
+			MinHeadroom:  min(fromSpan.CeilingHeight, to.CeilingHeight) - max(fromSpan.SupportHeight, to.SupportHeight),
+			MinClearance: min(fromSpan.ClearanceRadius, to.ClearanceRadius), Cost: navDerivedLocalCost(fromSpan, to, q.voxelResolution),
+		})
+	}
+	for _, edge := range tile.exceptional[tile.exceptionalOffsets[from.Span]:tile.exceptionalOffsets[from.Span+1]] {
+		visit(edge)
+	}
+}
+
+func (q *navGraphQuery) columnSpans(cellX, cellY, cellZ, verticalTiles int) []NavSpanRef {
+	tileX, tileY, tileZ := floorDivNavSpan(cellX, q.chunkSize), floorDivNavSpan(cellY, q.chunkSize), floorDivNavSpan(cellZ, q.chunkSize)
+	localX, localZ := cellX-tileX*q.chunkSize, cellZ-tileZ*q.chunkSize
+	var refs []NavSpanRef
+	for y := tileY - verticalTiles; y <= tileY+verticalTiles; y++ {
+		coord := TerrainChunkCoordDef{X: tileX, Y: y, Z: tileZ}
+		if tile := q.tile(coord); tile != nil {
+			for _, id := range tile.column(localX, localZ, q.chunkSize) {
+				refs = append(refs, NavSpanRef{Tile: coord, Span: id})
+			}
+		}
+	}
+	return refs
+}
+
 func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordDef, bool) {
 	cellX := int(math.Floor(float64(point[0]) / float64(q.voxelResolution)))
 	cellY := int(math.Floor(float64(point[1]) / float64(q.voxelResolution)))
@@ -329,11 +559,11 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 	bestDistance := float32(math.Inf(1))
 	var best navResolvedSpan
 	found := false
-	for _, ref := range q.spanColumns[navSpanColumn{x: cellX, z: cellZ}] {
+	for _, ref := range q.columnSpans(cellX, cellY, cellZ, 1) {
 		if _, blocked := q.blocked[ref]; blocked {
 			continue
 		}
-		span := q.spans[ref.Tile][ref.Span]
+		span, _ := q.span(ref)
 		distance := absFloat32(span.SupportHeight - point[1])
 		if distance > q.voxelResolution+1e-4 {
 			continue
@@ -344,7 +574,7 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 		bestDistance = distance
 		best = navResolvedSpan{
 			Ref:       ref,
-			Region:    navRouteNode{Tile: ref.Tile, Region: q.spanRegions[ref.Tile][ref.Span]},
+			Region:    navRouteNode{Tile: ref.Tile, Region: q.tile(ref.Tile).spanRegions[ref.Span]},
 			Projected: Vec3{point[0], span.SupportHeight, point[2]},
 		}
 		found = true
@@ -354,19 +584,21 @@ func (q *navGraphQuery) resolve(point Vec3) (navResolvedSpan, TerrainChunkCoordD
 
 func (q *navGraphQuery) resolveNearby(point Vec3, maxDistance float32) (navResolvedSpan, bool) {
 	cellX := int(math.Floor(float64(point[0]) / float64(q.voxelResolution)))
+	cellY := int(math.Floor(float64(point[1]) / float64(q.voxelResolution)))
 	cellZ := int(math.Floor(float64(point[2]) / float64(q.voxelResolution)))
 	radius := int(math.Ceil(float64(maxDistance / q.voxelResolution)))
+	verticalTiles := radius/q.chunkSize + 1
 	maxDistanceSqr := maxDistance * maxDistance
 	bestDistance := float32(math.Inf(1))
 	var best navResolvedSpan
 	found := false
 	for dz := -radius; dz <= radius; dz++ {
 		for dx := -radius; dx <= radius; dx++ {
-			for _, ref := range q.spanColumns[navSpanColumn{x: cellX + dx, z: cellZ + dz}] {
+			for _, ref := range q.columnSpans(cellX+dx, cellY, cellZ+dz, verticalTiles) {
 				if _, blocked := q.blocked[ref]; blocked {
 					continue
 				}
-				span := q.spans[ref.Tile][ref.Span]
+				span, _ := q.span(ref)
 				minX := float32(ref.Tile.X*q.chunkSize+span.X) * q.voxelResolution
 				minZ := float32(ref.Tile.Z*q.chunkSize+span.Z) * q.voxelResolution
 				projected := Vec3{
@@ -386,7 +618,7 @@ func (q *navGraphQuery) resolveNearby(point Vec3, maxDistance float32) (navResol
 				bestDistance = distance
 				best = navResolvedSpan{
 					Ref:       ref,
-					Region:    navRouteNode{Tile: ref.Tile, Region: q.spanRegions[ref.Tile][ref.Span]},
+					Region:    navRouteNode{Tile: ref.Tile, Region: q.tile(ref.Tile).spanRegions[ref.Span]},
 					Projected: projected,
 				}
 				found = true
@@ -397,9 +629,10 @@ func (q *navGraphQuery) resolveNearby(point Vec3, maxDistance float32) (navResol
 }
 
 func (q *NavGraphQuery) locate(point Vec3) (navResolvedSpan, TerrainChunkCoordDef, bool) {
-	result, tile, found := q.query.resolve(point)
+	query := q.resident()
+	result, tile, found := query.resolve(point)
 	if !found {
-		result, found = q.query.resolveNearby(point, q.query.voxelResolution)
+		result, found = query.resolveNearby(point, query.voxelResolution)
 	}
 	return result, tile, found
 }
@@ -427,7 +660,7 @@ func (q *NavGraphQuery) Locate(point Vec3) (NavPointResult, error) {
 	if !validVec3(point) {
 		return NavPointResult{}, fmt.Errorf("navigation point must be finite")
 	}
-	if q == nil || q.query == nil {
+	if q == nil || q.resident() == nil {
 		return NavPointResult{}, fmt.Errorf("navigation graph query is required")
 	}
 	resolved, _, found := q.locate(point)
@@ -453,10 +686,10 @@ func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointR
 	if !validVec3(point) || !finite(maxDistance) || maxDistance < 0 {
 		return NavPointResult{}, fmt.Errorf("navigation point and max distance must be finite, with non-negative max distance")
 	}
-	if q == nil || q.query == nil {
+	if q == nil || q.resident() == nil {
 		return NavPointResult{}, fmt.Errorf("navigation graph query is required")
 	}
-	resolved, found := q.query.resolveNearby(point, maxDistance)
+	resolved, found := q.resident().resolveNearby(point, maxDistance)
 	if !found {
 		return NavPointResult{}, nil
 	}
@@ -467,23 +700,24 @@ func (q *NavGraphQuery) ProjectPoint(point Vec3, maxDistance float32) (NavPointR
 
 // IsSpanBlocked reports whether a runtime blocker removed a baked span.
 func (q *NavGraphQuery) IsSpanBlocked(ref NavSpanRef) bool {
-	if q == nil || q.query == nil {
+	if q == nil || q.resident() == nil {
 		return false
 	}
-	_, blocked := q.query.blocked[ref]
+	_, blocked := q.resident().blocked[ref]
 	return blocked
 }
 
 // IsSpanActive reports whether a span belongs to the resident graph and is not
 // removed by the runtime overlay.
 func (q *NavGraphQuery) IsSpanActive(ref NavSpanRef) bool {
-	if q == nil || q.query == nil {
+	if q == nil || q.resident() == nil {
 		return false
 	}
-	if _, accepted := q.query.spanRegions[ref.Tile][ref.Span]; !accepted {
+	query := q.resident()
+	if _, accepted := query.spanRegion(ref); !accepted {
 		return false
 	}
-	_, blocked := q.query.blocked[ref]
+	_, blocked := query.blocked[ref]
 	return !blocked
 }
 
@@ -492,11 +726,11 @@ func (q *NavGraphQuery) IsSpanActive(ref NavSpanRef) bool {
 // omitted. Values are active outgoing span counts, capped at two.
 func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) map[NavSpanRef]uint8 {
 	result := make(map[NavSpanRef]uint8, len(targets))
-	if q == nil || q.query == nil || len(targets) == 0 {
+	if q == nil || q.resident() == nil || len(targets) == 0 {
 		return result
 	}
-	query := q.query
-	startRegion, ok := query.spanRegions[start.Tile][start.Span]
+	query := q.resident()
+	startRegion, ok := query.spanRegion(start)
 	if !ok {
 		return result
 	}
@@ -505,7 +739,7 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 	}
 	wanted := make(map[NavSpanRef]struct{}, len(targets))
 	for _, target := range targets {
-		if _, ok := query.spanRegions[target.Tile][target.Span]; !ok {
+		if _, ok := query.spanRegion(target); !ok {
 			continue
 		}
 		if _, blocked := query.blocked[target]; !blocked {
@@ -515,7 +749,8 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 	if len(query.blocked) == 0 {
 		wantedRegions := make(map[navRouteNode]struct{}, len(wanted))
 		for target := range wanted {
-			wantedRegions[navRouteNode{Tile: target.Tile, Region: query.spanRegions[target.Tile][target.Span]}] = struct{}{}
+			region, _ := query.spanRegion(target)
+			wantedRegions[navRouteNode{Tile: target.Tile, Region: region}] = struct{}{}
 		}
 		reachable := map[navRouteNode]struct{}{{Tile: start.Tile, Region: startRegion}: {}}
 		queue := []navRouteNode{{Tile: start.Tile, Region: startRegion}}
@@ -525,7 +760,7 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 			if _, wanted := wantedRegions[current]; wanted {
 				found[current] = struct{}{}
 			}
-			for _, transition := range query.regionEdges[current] {
+			for _, transition := range query.regionTransitions(current) {
 				next := navRouteNode{Tile: transition.ToTile, Region: transition.ToRegion}
 				if _, seen := reachable[next]; seen || !query.hasRegion(next) {
 					continue
@@ -535,7 +770,8 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 			}
 		}
 		for target := range wanted {
-			region := navRouteNode{Tile: target.Tile, Region: query.spanRegions[target.Tile][target.Span]}
+			regionID, _ := query.spanRegion(target)
+			region := navRouteNode{Tile: target.Tile, Region: regionID}
 			if _, ok := reachable[region]; ok {
 				result[target] = query.spanExitCount(target)
 			}
@@ -580,31 +816,44 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 }
 
 func (q *navGraphQuery) indexActiveDegrees() {
-	q.activeDegrees = make(map[TerrainChunkCoordDef][]uint8, len(q.graphs))
-	for coord, graph := range q.graphs {
-		degrees := make([]uint8, len(q.sources[coord].Spans))
-		for _, edge := range graph.SpanTransitions {
-			from := NavSpanRef{Tile: coord, Span: edge.From}
-			if _, blocked := q.blocked[from]; blocked {
-				continue
-			}
-			if _, blocked := q.blocked[edge.To]; blocked {
-				continue
-			}
-			if int(edge.From) < len(degrees) && degrees[edge.From] < 2 {
-				degrees[edge.From]++
-			}
+	for coord, tile := range q.tiles {
+		degrees := make([]uint8, len(tile.spans))
+		for from := range tile.spans {
+			q.visitSpanEdges(NavSpanRef{Tile: coord, Span: uint32(from)}, func(edge NavSpanTransitionDef) {
+				from := NavSpanRef{Tile: coord, Span: edge.From}
+				if _, blocked := q.blocked[from]; blocked {
+					return
+				}
+				if _, blocked := q.blocked[edge.To]; blocked {
+					return
+				}
+				if int(edge.From) < len(degrees) && degrees[edge.From] < 2 {
+					degrees[edge.From]++
+				}
+			})
 		}
-		q.activeDegrees[coord] = degrees
+		tile.activeDegrees = degrees
 	}
 }
 
 func (q *navGraphQuery) spanExitCount(ref NavSpanRef) uint8 {
-	degrees := q.activeDegrees[ref.Tile]
+	tile := q.tile(ref.Tile)
+	if tile == nil {
+		return 0
+	}
+	degrees := tile.activeDegrees
 	if int(ref.Span) >= len(degrees) {
 		return 0
 	}
 	return degrees[ref.Span]
+}
+
+func (q *navGraphQuery) regionTransitions(node navRouteNode) []NavRegionTransitionDef {
+	tile := q.tile(node.Tile)
+	if tile == nil {
+		return nil
+	}
+	return tile.regionTransitions(node.Region)
 }
 
 func navClampToSpanAxis(value, minimum, size float32) float32 {
@@ -616,7 +865,7 @@ func navSpanRefLess(a, b NavSpanRef) bool {
 }
 
 func (q *navGraphQuery) spanCenter(ref NavSpanRef) Vec3 {
-	span := q.spans[ref.Tile][ref.Span]
+	span, _ := q.span(ref)
 	return Vec3{
 		(float32(ref.Tile.X*q.chunkSize+span.X) + 0.5) * q.voxelResolution,
 		span.SupportHeight,
@@ -625,7 +874,7 @@ func (q *navGraphQuery) spanCenter(ref NavSpanRef) Vec3 {
 }
 
 func (q *navGraphQuery) regionCenter(node navRouteNode) Vec3 {
-	center := q.graphs[node.Tile].Regions[node.Region].Center
+	center := q.tile(node.Tile).regions[node.Region].Center
 	center[0] += float32(node.Tile.X*q.chunkSize) * q.voxelResolution
 	center[2] += float32(node.Tile.Z*q.chunkSize) * q.voxelResolution
 	return center

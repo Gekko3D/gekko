@@ -186,7 +186,7 @@ func connectNavGraphCarriers(sources []NavSourceTileDef, graphs []NavGraphTileDe
 }
 
 func resolveNavCarrierMounts(query *NavGraphQuery, carrier NavCarrierDef, stop NavCarrierStopDef, profile NavAgentProfileDef, voxelResolution float32) []navCarrierMount {
-	if query == nil || query.query == nil {
+	if query == nil || query.resident() == nil {
 		return nil
 	}
 	top := stop.BoundsCenter[1] + carrier.BoundsHalfExtents[1]
@@ -197,15 +197,19 @@ func resolveNavCarrierMounts(query *NavGraphQuery, carrier NavCarrierDef, stop N
 		distance float32
 	}
 	byRegion := make(map[navRouteNode]mountChoice)
-	for coord, graph := range query.query.graphs {
-		for _, spanID := range graph.SpanIDs {
-			span := query.query.spans[coord][spanID]
+	resident := query.resident()
+	for coord, tile := range resident.tiles {
+		for spanIndex, span := range tile.spans {
+			spanID := uint32(spanIndex)
+			if !bitHas(tile.accepted, spanID) {
+				continue
+			}
 			if absFloat32(span.SupportHeight-top) > maxVertical {
 				continue
 			}
-			minX := float32(coord.X*query.query.chunkSize+span.X) * query.query.voxelResolution
-			minZ := float32(coord.Z*query.query.chunkSize+span.Z) * query.query.voxelResolution
-			maxX, maxZ := minX+query.query.voxelResolution, minZ+query.query.voxelResolution
+			minX := float32(coord.X*resident.chunkSize+span.X) * resident.voxelResolution
+			minZ := float32(coord.Z*resident.chunkSize+span.Z) * resident.voxelResolution
+			maxX, maxZ := minX+resident.voxelResolution, minZ+resident.voxelResolution
 			centerX, centerZ := (minX+maxX)*0.5, (minZ+maxZ)*0.5
 			if navCarrierInsideFootprint(centerX, centerZ, stop.BoundsCenter, carrier.BoundsHalfExtents) {
 				continue
@@ -223,7 +227,7 @@ func resolveNavCarrierMounts(query *NavGraphQuery, carrier NavCarrierDef, stop N
 				navCarrierClamp(stop.BoundsCenter[2], minZ, maxZ),
 			}
 			ref := NavSpanRef{Tile: coord, Span: spanID}
-			node := navRouteNode{Tile: coord, Region: query.query.spanRegions[coord][spanID]}
+			node := navRouteNode{Tile: coord, Region: tile.spanRegions[spanID]}
 			choice := mountChoice{
 				mount: navCarrierMount{
 					Point: NavPointResult{Found: true, Ref: ref, Region: node.Region, Point: point},
@@ -252,8 +256,8 @@ func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fr
 		CarrierID: carrier.ID, FromStop: fromStop.ID, ToStop: toStop.ID,
 		Board: board, BoardMode: boardMode, CallControllerID: callControllerID, ControllerID: controllerID,
 	}
-	fromSpan := query.query.spans[from.Point.Ref.Tile][from.Point.Ref.Span]
-	toSpan := query.query.spans[to.Point.Ref.Tile][to.Point.Ref.Span]
+	fromSpan, _ := query.resident().span(from.Point.Ref)
+	toSpan, _ := query.resident().span(to.Point.Ref)
 	width := 2 * min(carrier.BoundsHalfExtents[0], carrier.BoundsHalfExtents[2])
 	headroom := min(fromSpan.Headroom, toSpan.Headroom)
 	clearance := min(fromSpan.ClearanceRadius, toSpan.ClearanceRadius)

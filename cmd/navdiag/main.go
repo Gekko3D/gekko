@@ -140,7 +140,7 @@ func measureNavGraphBake(navPath, profileID string, start, end vec3Flag, runs in
 		return nil, nil, err
 	}
 	indexStart := time.Now()
-	query, err := navGraphDiagnosticQuery(bake, profileID)
+	query, err := navGraphResidentQuery(bake, profileID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -163,15 +163,37 @@ func measureNavGraphBake(navPath, profileID string, start, end vec3Flag, runs in
 		measurement.RouteP95Milliseconds = navPercentile(durations, 0.95)
 		measurement.RouteP99Milliseconds = navPercentile(durations, 0.99)
 	}
+	bake.SourceTiles, bake.GraphTiles = nil, nil
 	runtime.GC()
-	runtime.KeepAlive(bake)
 	runtime.KeepAlive(query)
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
 	if after.HeapAlloc > before.HeapAlloc {
 		measurement.RetainedHeapBytes = after.HeapAlloc - before.HeapAlloc
 	}
-	return bake, measurement, nil
+	bake, err = content.LoadNavGraphBake(navPath)
+	return bake, measurement, err
+}
+
+// navGraphResidentQuery excludes Phase 3 blocker/carrier overlays so the
+// retained heap measurement covers the immutable Phase 2 baseline snapshot.
+func navGraphResidentQuery(bake *content.NavGraphBakeResult, profileID string) (*content.NavGraphQuery, error) {
+	if bake == nil || len(bake.Manifest.AgentProfiles) == 0 {
+		return nil, fmt.Errorf("navigation manifest has no agent profiles")
+	}
+	if profileID == "" {
+		profileID = bake.Manifest.AgentProfiles[0].ID
+	}
+	graphs := make([]content.NavGraphTileDef, 0, len(bake.SourceTiles))
+	for _, graph := range bake.GraphTiles {
+		if graph.AgentProfileID == profileID {
+			graphs = append(graphs, graph)
+		}
+	}
+	if len(graphs) == 0 {
+		return nil, fmt.Errorf("navigation profile %q is not present", profileID)
+	}
+	return content.NewNavGraphQuery(bake.SourceTiles, graphs, bake.Manifest.ChunkSize, bake.Manifest.VoxelResolution)
 }
 
 func navGraphDiagnosticQuery(bake *content.NavGraphBakeResult, profileID string) (*content.NavGraphQuery, error) {

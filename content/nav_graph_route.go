@@ -39,10 +39,10 @@ func (q *NavGraphQuery) FindRoute(startPoint, goalPoint Vec3) (NavRouteResult, e
 	if !validVec3(startPoint) || !validVec3(goalPoint) {
 		return NavRouteResult{}, fmt.Errorf("navigation route points must be finite")
 	}
-	if q == nil || q.query == nil {
+	if q == nil || q.resident() == nil {
 		return NavRouteResult{}, fmt.Errorf("navigation graph query is required")
 	}
-	query := q.query
+	query := q.resident()
 	start, startTile, found := q.locate(startPoint)
 	if !found {
 		return NavRouteResult{FailureReason: NavRouteStartUnsupported, FailureTile: startTile}, nil
@@ -168,7 +168,11 @@ func findNavSectorRoute(query *navGraphQuery, start, goal TerrainChunkCoordDef) 
 			reverseTerrainCoords(path)
 			return path, true
 		}
-		for _, nextTile := range query.sectorEdges[current.node.Tile] {
+		tile := query.tile(current.node.Tile)
+		if tile == nil {
+			continue
+		}
+		for _, nextTile := range tile.sectorEdges {
 			next := navRouteNode{Tile: nextTile}
 			cost := current.cost + 1
 			if previous, seen := costs[next]; seen && cost >= previous {
@@ -183,7 +187,7 @@ func findNavSectorRoute(query *navGraphQuery, start, goal TerrainChunkCoordDef) 
 
 func navSectorCorridor(query *navGraphQuery, sectors []TerrainChunkCoordDef) map[TerrainChunkCoordDef]struct{} {
 	allowed := make(map[TerrainChunkCoordDef]struct{}, len(sectors)*3)
-	for coord := range query.graphs {
+	for coord := range query.tiles {
 		for _, sector := range sectors {
 			if absNavSpanInt(coord.X-sector.X)+absNavSpanInt(coord.Y-sector.Y)+absNavSpanInt(coord.Z-sector.Z) <= 1 {
 				allowed[coord] = struct{}{}
@@ -222,7 +226,7 @@ func findNavRegionRoute(query *navGraphQuery, start, goal navRouteNode, startPoi
 			}
 			return path, true
 		}
-		for _, transition := range query.regionEdges[state.Node] {
+		for _, transition := range query.regionTransitions(state.Node) {
 			next := navRouteNode{Tile: transition.ToTile, Region: transition.ToRegion}
 			if !query.hasRegion(next) || !tileAllowed(allowed, next.Tile) {
 				continue
@@ -250,13 +254,16 @@ func findNavRegionRoute(query *navGraphQuery, start, goal navRouteNode, startPoi
 }
 
 func (q *navGraphQuery) hasRegion(node navRouteNode) bool {
-	graph, ok := q.graphs[node.Tile]
-	return ok && int(node.Region) < len(graph.Regions) && graph.Regions[node.Region].ID == node.Region
+	tile := q.tile(node.Tile)
+	return tile != nil && int(node.Region) < len(tile.regions) && tile.regions[node.Region].ID == node.Region
 }
 
 func (q *navGraphQuery) findBackingSpanTransition(from navRouteNode, transition NavRegionTransitionDef) (NavSpanTransitionDef, bool) {
-	edge, ok := q.backing[from.Tile][transition.ID]
-	return edge, ok
+	tile := q.tile(from.Tile)
+	if tile == nil || int(transition.ID) >= len(tile.backing) || !bitHas(tile.backingSet, transition.ID) {
+		return NavSpanTransitionDef{}, false
+	}
+	return tile.backing[transition.ID], true
 }
 
 func (q *navGraphQuery) spanTransitionTarget(fromTile TerrainChunkCoordDef, edge NavSpanTransitionDef) Vec3 {
@@ -285,19 +292,13 @@ func (q *navGraphQuery) appendSpanPath(route *NavRouteResult, tile TerrainChunkC
 		ref := NavSpanRef{Tile: tile, Span: spans[anchor]}
 		q.appendWaypoint(route, q.spanCenter(ref), ref)
 	}
-	region := q.spanRegions[tile][spans[anchor]]
-	cells := make(map[navSpanPathCell]struct{})
-	for id, spanRegion := range q.spanRegions[tile] {
-		if spanRegion == region {
-			span := q.spans[tile][id]
-			cells[navSpanPathCell{span.X, span.Z, math.Float32bits(span.SupportHeight)}] = struct{}{}
-		}
-	}
+	resident := q.tile(tile)
+	region := resident.spanRegions[spans[anchor]]
 	// ponytail: greedy string pulling is not globally minimal; replace it only
 	// if measured route quality needs a full visibility-graph optimizer.
 	for anchor+1 < len(spans) {
 		next := anchor + 1
-		for next+1 < len(spans) && navSpanPathVisible(cells, q.spans[tile][spans[anchor]], q.spans[tile][spans[next+1]]) {
+		for next+1 < len(spans) && q.navSpanPathVisible(resident, region, resident.spans[spans[anchor]], resident.spans[spans[next+1]]) {
 			next++
 		}
 		ref := NavSpanRef{Tile: tile, Span: spans[next]}
@@ -338,7 +339,7 @@ func navWalkableExit(dx, dz int) uint8 {
 	}
 }
 
-func navSpanPathVisible(cells map[navSpanPathCell]struct{}, from, to NavSpanDef) bool {
+func (q *navGraphQuery) navSpanPathVisible(tile *navResidentTile, region uint32, from, to NavSpanDef) bool {
 	height := math.Float32bits(from.SupportHeight)
 	if math.Float32bits(to.SupportHeight) != height {
 		return false
@@ -350,7 +351,14 @@ func navSpanPathVisible(cells map[navSpanPathCell]struct{}, from, to NavSpanDef)
 	for i := 0; i <= steps; i++ {
 		x := ((2*from.X+1)*(steps-i) + (2*to.X+1)*i) / (2 * steps)
 		z := ((2*from.Z+1)*(steps-i) + (2*to.Z+1)*i) / (2 * steps)
-		if _, ok := cells[navSpanPathCell{x, z, height}]; !ok {
+		found := false
+		for _, id := range tile.column(x, z, q.chunkSize) {
+			if tile.spanRegions[id] == region && math.Float32bits(tile.spans[id].SupportHeight) == height {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}
@@ -432,8 +440,10 @@ func (q *navGraphQuery) waypointLineVisible(from, to Vec3) bool {
 	toX := int(math.Floor(float64(to[0] / q.voxelResolution)))
 	toZ := int(math.Floor(float64(to[2] / q.voxelResolution)))
 	height := math.Float32bits(from[1])
-	classID := q.walkableCells[navSpanPathCell{x: fromX, z: fromZ, height: height}].classID
-	if classID == 0 || q.walkableCells[navSpanPathCell{x: toX, z: toZ, height: height}].classID != classID {
+	fromCell := q.walkableCell(fromX, fromZ, height)
+	toCell := q.walkableCell(toX, toZ, height)
+	classID := fromCell.classID
+	if classID == 0 || toCell.classID != classID {
 		return false
 	}
 	steps := 2 * max(absNavSpanInt(toX-fromX), absNavSpanInt(toZ-fromZ))
@@ -474,9 +484,35 @@ func (q *navGraphQuery) walkableCardinalExit(fromX, fromZ, toX, toZ int, height,
 	if exit == 0 {
 		return false
 	}
-	from := q.walkableCells[navSpanPathCell{x: fromX, z: fromZ, height: height}]
-	to := q.walkableCells[navSpanPathCell{x: toX, z: toZ, height: height}]
+	from := q.walkableCell(fromX, fromZ, height)
+	to := q.walkableCell(toX, toZ, height)
 	return from.classID == classID && to.classID == classID && from.exits&exit != 0
+}
+
+func (q *navGraphQuery) walkableCell(x, z int, height uint32) navWalkableCell {
+	cellY := int(math.Floor(float64(math.Float32frombits(height) / q.voxelResolution)))
+	tileX, tileY, tileZ := floorDivNavSpan(x, q.chunkSize), floorDivNavSpan(cellY, q.chunkSize), floorDivNavSpan(z, q.chunkSize)
+	localX, localZ := x-tileX*q.chunkSize, z-tileZ*q.chunkSize
+	var result navWalkableCell
+	for y := tileY - 1; y <= tileY+1; y++ {
+		coord := TerrainChunkCoordDef{X: tileX, Y: y, Z: tileZ}
+		tile := q.tile(coord)
+		if tile == nil {
+			continue
+		}
+		for _, id := range tile.column(localX, localZ, q.chunkSize) {
+			ref := NavSpanRef{Tile: coord, Span: id}
+			if _, blocked := q.blocked[ref]; blocked || math.Float32bits(tile.spans[id].SupportHeight) != height {
+				continue
+			}
+			entry := navWalkableCell{classID: tile.classIDs[id], exits: tile.walkExits[id]}
+			if result.classID != 0 && result.classID != entry.classID {
+				return navWalkableCell{}
+			}
+			result = entry
+		}
+	}
+	return result
 }
 
 func tileAllowed(allowed map[TerrainChunkCoordDef]struct{}, tile TerrainChunkCoordDef) bool {

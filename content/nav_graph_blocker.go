@@ -22,7 +22,7 @@ func NewNavGraphQueryWithBlockers(sources []NavSourceTileDef, graphs []NavGraphT
 		return nil, err
 	}
 	if len(blockers) == 0 {
-		return &NavGraphQuery{query: query}, nil
+		return &NavGraphQuery{snapshot: &NavSnapshot{query: query}}, nil
 	}
 	if !finite(profile.Radius) || profile.Radius <= 0 || !finite(profile.Height) || profile.Height <= 0 {
 		return nil, fmt.Errorf("navigation blocker agent radius and height must be finite and positive")
@@ -46,19 +46,21 @@ func NewNavGraphQueryWithBlockers(sources []NavSourceTileDef, graphs []NavGraphT
 		}
 	}
 	query.enableBlockers(profile, blockers)
-	return &NavGraphQuery{query: query}, nil
+	return &NavGraphQuery{snapshot: &NavSnapshot{query: query}}, nil
 }
 
 func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []NavBlockerDef) {
 	q.blocked = make(map[NavSpanRef]struct{})
-	for coord, graph := range q.graphs {
-		for _, spanID := range graph.SpanIDs {
-			span := q.spans[coord][spanID]
+	for coord, tile := range q.tiles {
+		for spanIndex, span := range tile.spans {
+			spanID := uint32(spanIndex)
+			if !bitHas(tile.accepted, spanID) {
+				continue
+			}
 			for _, blocker := range blockers {
 				if navBlockerOverlapsSpan(blocker, profile, coord, q.chunkSize, q.voxelResolution, span) {
 					ref := NavSpanRef{Tile: coord, Span: spanID}
 					q.blocked[ref] = struct{}{}
-					delete(q.walkableCells, q.spanPathCell(ref))
 					break
 				}
 			}
@@ -69,20 +71,22 @@ func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []Na
 	}
 	q.globalEdges = make(map[NavSpanRef][]NavSpanTransitionDef)
 	q.globalScale = float32(math.Inf(1))
-	for coord, graph := range q.graphs {
-		for _, edge := range graph.SpanTransitions {
-			from := NavSpanRef{Tile: coord, Span: edge.From}
-			if _, ok := q.spanRegions[coord][edge.From]; !ok {
-				continue
-			}
-			if _, ok := q.spanRegions[edge.To.Tile][edge.To.Span]; !ok {
-				continue
-			}
-			q.globalEdges[from] = append(q.globalEdges[from], edge)
-			distance := navVec3Distance(q.spanCenter(from), q.spanCenter(edge.To))
-			if distance > 0 {
-				q.globalScale = min(q.globalScale, edge.Cost/distance)
-			}
+	for coord, tile := range q.tiles {
+		for fromID := range tile.spans {
+			q.visitSpanEdges(NavSpanRef{Tile: coord, Span: uint32(fromID)}, func(edge NavSpanTransitionDef) {
+				from := NavSpanRef{Tile: coord, Span: edge.From}
+				if _, ok := q.spanRegion(from); !ok {
+					return
+				}
+				if _, ok := q.spanRegion(edge.To); !ok {
+					return
+				}
+				q.globalEdges[from] = append(q.globalEdges[from], edge)
+				distance := navVec3Distance(q.spanCenter(from), q.spanCenter(edge.To))
+				if distance > 0 {
+					q.globalScale = min(q.globalScale, edge.Cost/distance)
+				}
+			})
 		}
 	}
 	if !finite(q.globalScale) {
@@ -95,9 +99,9 @@ func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []Na
 const navUnassignedComponent = ^uint32(0)
 
 func (q *navGraphQuery) indexBlockerComponents() {
-	q.spanComponents = make(map[TerrainChunkCoordDef][]uint32, len(q.graphs))
-	for coord := range q.graphs {
-		components := make([]uint32, len(q.sources[coord].Spans))
+	q.spanComponents = make(map[TerrainChunkCoordDef][]uint32, len(q.tiles))
+	for coord, tile := range q.tiles {
+		components := make([]uint32, len(tile.spans))
 		for id := range components {
 			components[id] = navUnassignedComponent
 		}
@@ -105,8 +109,12 @@ func (q *navGraphQuery) indexBlockerComponents() {
 	}
 
 	component := uint32(0)
-	for coord, graph := range q.graphs {
-		for _, spanID := range graph.SpanIDs {
+	for coord, tile := range q.tiles {
+		for spanIndex := range tile.spans {
+			spanID := uint32(spanIndex)
+			if !bitHas(tile.accepted, spanID) {
+				continue
+			}
 			ref := NavSpanRef{Tile: coord, Span: spanID}
 			if _, blocked := q.blocked[ref]; blocked {
 				continue
@@ -182,7 +190,7 @@ func navBlockerOverlapsSpan(blocker NavBlockerDef, profile NavAgentProfileDef, c
 }
 
 func (q *navGraphQuery) spanPathCell(ref NavSpanRef) navSpanPathCell {
-	span := q.spans[ref.Tile][ref.Span]
+	span, _ := q.span(ref)
 	return navSpanPathCell{
 		x:      ref.Tile.X*q.chunkSize + span.X,
 		z:      ref.Tile.Z*q.chunkSize + span.Z,
@@ -260,8 +268,10 @@ func (q *navGraphQuery) findBlockerRoute(start, goal navResolvedSpan) NavRouteRe
 	}
 	for i, edge := range path.edges {
 		from, to := path.refs[i], path.refs[i+1]
-		fromNode := navRouteNode{Tile: from.Tile, Region: q.spanRegions[from.Tile][from.Span]}
-		toNode := navRouteNode{Tile: to.Tile, Region: q.spanRegions[to.Tile][to.Span]}
+		fromRegion, _ := q.spanRegion(from)
+		toRegion, _ := q.spanRegion(to)
+		fromNode := navRouteNode{Tile: from.Tile, Region: fromRegion}
+		toNode := navRouteNode{Tile: to.Tile, Region: toRegion}
 		if fromNode == toNode && edge.Traversal == nil {
 			continue
 		}
