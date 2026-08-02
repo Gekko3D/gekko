@@ -11,10 +11,11 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
-func voxelSphereEditWithTransform(xbm *volume.XBrickMap, tr *core.Transform, worldCenter mgl32.Vec3, radius float32, val uint8) {
+func voxelSphereEditWithTransform(xbm *volume.XBrickMap, tr *core.Transform, worldCenter mgl32.Vec3, radius float32, val uint8) bool {
 	if xbm == nil || tr == nil {
-		return
+		return false
 	}
+	revision := xbm.Revision
 	w2o := tr.WorldToObject()
 	voxelCenter := w2o.Mul4x1(worldCenter.Vec4(1.0)).Vec3()
 
@@ -24,6 +25,7 @@ func voxelSphereEditWithTransform(xbm *volume.XBrickMap, tr *core.Transform, wor
 		avgScale = 1.0
 	}
 	volume.Sphere(xbm, voxelCenter, radius/avgScale, val)
+	return xbm.Revision != revision
 }
 
 type RaycastHit struct {
@@ -315,8 +317,9 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 	if obj == nil || obj.XBrickMap == nil {
 		return
 	}
-	voxelSphereEditWithTransform(obj.XBrickMap, obj.Transform, worldCenter, radius, val)
-	s.markRuntimeEditedVoxelEntity(eid)
+	if voxelSphereEditWithTransform(obj.XBrickMap, obj.Transform, worldCenter, radius, val) {
+		s.markRuntimeEditedVoxelEntity(eid)
+	}
 }
 
 func (s *VoxelRtState) markRuntimeEditedVoxelEntity(eid EntityId) {

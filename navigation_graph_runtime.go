@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -61,6 +62,11 @@ type navigationEditBlocker struct {
 	Generation uint64
 	Blocker    content.NavBlockerDef
 }
+
+const (
+	navigationRebuildQuietPeriod = 100 * time.Millisecond
+	navigationRebuildMaxDelay    = 250 * time.Millisecond
+)
 
 type RuntimeNavigationService struct {
 	Sources                 []content.NavSourceTileDef
@@ -653,6 +659,14 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 				delete(state.navigationQueuedEdits, coord)
 			}
 		}
+		if len(state.navigationQueuedEdits) == 0 {
+			state.navigationEditQueuedSince = time.Time{}
+			state.navigationEditLastQueuedAt = time.Time{}
+		}
+		if !navigationRebuildChangesResidentTopology(state, result.Result) {
+			retireNavigationEditBlockers(state, result.EditGeneration)
+			break
+		}
 		reloadStreamedNavigationResidency(state)
 		if state.navigationRetireAtLoad == nil {
 			state.navigationRetireAtLoad = make(map[uint64]uint64)
@@ -928,7 +942,7 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 		}
 	}
 	if len(snapshots) == 0 {
-		if !state.navigationRebuildActive && len(state.navigationQueuedEdits) != 0 {
+		if !state.navigationRebuildActive && navigationRebuildReady(state, time.Now()) {
 			startStreamedNavigationRebuild(cmd, state)
 		}
 		return
@@ -940,15 +954,145 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 	}
 	state.navigationEditGeneration++
 	generation := state.navigationEditGeneration
+	now := time.Now()
+	if state.navigationEditQueuedSince.IsZero() {
+		state.navigationEditQueuedSince = now
+	}
+	state.navigationEditLastQueuedAt = now
 	for _, snapshot := range snapshots {
 		state.navigationQueuedEdits[snapshot.Coord] = navigationQueuedEdit{Generation: generation, Snapshot: snapshot}
 		blocker := navigationEditBlockerForChunk(state.BaseNavManifest, snapshot.Coord, generation)
 		state.navigationEditBlockers[blocker.Blocker.ID] = blocker
 	}
 	installNavigationEditBlockers(state)
-	if !state.navigationRebuildActive {
+	if !state.navigationRebuildActive && navigationRebuildReady(state, now) {
 		startStreamedNavigationRebuild(cmd, state)
 	}
+}
+
+func navigationRebuildReady(state *StreamedLevelRuntimeState, now time.Time) bool {
+	if state == nil || len(state.navigationQueuedEdits) == 0 {
+		return false
+	}
+	if state.navigationEditQueuedSince.IsZero() || state.navigationEditLastQueuedAt.IsZero() {
+		return true
+	}
+	return now.Sub(state.navigationEditLastQueuedAt) >= navigationRebuildQuietPeriod || now.Sub(state.navigationEditQueuedSince) >= navigationRebuildMaxDelay
+}
+
+type navigationRuntimeGraphKey struct {
+	Coord   content.TerrainChunkCoordDef
+	Profile string
+}
+
+func navigationRebuildChangesResidentTopology(state *StreamedLevelRuntimeState, result content.NavGraphDeltaBakeResult) bool {
+	if state == nil || state.navigationLoadActive || state.navigationPendingGen != 0 || state.navigationLoadedGen != state.navigationRequestedGen {
+		return true
+	}
+
+	sources := make(map[content.TerrainChunkCoordDef]content.NavSourceTileDef, len(state.NavigationSources))
+	for _, source := range state.NavigationSources {
+		sources[source.Coord] = source
+	}
+	newSources := make(map[content.TerrainChunkCoordDef]content.NavSourceTileDef, len(result.SourceTiles))
+	for _, source := range result.SourceTiles {
+		newSources[source.Coord] = source
+	}
+	for _, override := range result.SourceOverrides {
+		if _, resident := state.navigationDesired[override.ChunkCoord]; !resident {
+			continue
+		}
+		if override.Empty {
+			delete(sources, override.ChunkCoord)
+			continue
+		}
+		source, ok := newSources[override.ChunkCoord]
+		if !ok {
+			return true
+		}
+		sources[override.ChunkCoord] = source
+	}
+
+	graphs := make(map[navigationRuntimeGraphKey]content.NavGraphTileDef, len(state.NavigationGraphs))
+	for _, graph := range state.NavigationGraphs {
+		graphs[navigationRuntimeGraphKey{graph.Coord, graph.AgentProfileID}] = graph
+	}
+	newGraphs := make(map[navigationRuntimeGraphKey]content.NavGraphTileDef, len(result.GraphTiles))
+	for _, graph := range result.GraphTiles {
+		newGraphs[navigationRuntimeGraphKey{graph.Coord, graph.AgentProfileID}] = graph
+	}
+	for _, override := range result.GraphOverrides {
+		if _, resident := state.navigationDesired[override.ChunkCoord]; !resident {
+			continue
+		}
+		key := navigationRuntimeGraphKey{override.ChunkCoord, override.AgentProfileID}
+		if override.Empty {
+			delete(graphs, key)
+			continue
+		}
+		graph, ok := newGraphs[key]
+		if !ok {
+			return true
+		}
+		graphs[key] = graph
+	}
+
+	if len(sources) != len(state.NavigationSources) || len(graphs) != len(state.NavigationGraphs) {
+		return true
+	}
+	for _, old := range state.NavigationSources {
+		candidate, ok := sources[old.Coord]
+		if !ok || !navigationSliceEqual(old.Spans, candidate.Spans) {
+			return true
+		}
+	}
+	resident := make(map[navigationRuntimeGraphKey]struct{}, len(graphs))
+	for key := range graphs {
+		resident[key] = struct{}{}
+	}
+	for _, old := range state.NavigationGraphs {
+		candidate, ok := graphs[navigationRuntimeGraphKey{old.Coord, old.AgentProfileID}]
+		if !ok || !navigationRuntimeGraphsEqual(old, trimNavigationRuntimeGraph(candidate, resident)) {
+			return true
+		}
+	}
+	return false
+}
+
+func trimNavigationRuntimeGraph(graph content.NavGraphTileDef, resident map[navigationRuntimeGraphKey]struct{}) content.NavGraphTileDef {
+	spans := make([]content.NavSpanTransitionDef, 0, len(graph.SpanTransitions))
+	for _, transition := range graph.SpanTransitions {
+		if transition.To.Tile == graph.Coord {
+			spans = append(spans, transition)
+			continue
+		}
+		if _, ok := resident[navigationRuntimeGraphKey{transition.To.Tile, graph.AgentProfileID}]; ok {
+			spans = append(spans, transition)
+		}
+	}
+	regions := make([]content.NavRegionTransitionDef, 0, len(graph.Transitions))
+	for _, transition := range graph.Transitions {
+		if transition.ToTile != graph.Coord {
+			if _, ok := resident[navigationRuntimeGraphKey{transition.ToTile, graph.AgentProfileID}]; !ok {
+				continue
+			}
+		}
+		transition.ID = uint32(len(regions))
+		regions = append(regions, transition)
+	}
+	graph.SpanTransitions, graph.Transitions = spans, regions
+	return graph
+}
+
+func navigationRuntimeGraphsEqual(a, b content.NavGraphTileDef) bool {
+	return navigationSliceEqual(a.SpanIDs, b.SpanIDs) &&
+		navigationSliceEqual(a.SpanTransitions, b.SpanTransitions) &&
+		navigationSliceEqual(a.Regions, b.Regions) &&
+		navigationSliceEqual(a.Transitions, b.Transitions)
+}
+
+func navigationSliceEqual[T any](a, b []T) bool {
+	return len(a) == len(b) && (len(a) == 0 || reflect.DeepEqual(a, b))
 }
 
 func startStreamedNavigationRebuild(cmd *Commands, state *StreamedLevelRuntimeState) {
@@ -978,6 +1122,8 @@ func startStreamedNavigationRebuild(cmd *Commands, state *StreamedLevelRuntimeSt
 	editGeneration := state.navigationEditGeneration
 	deltaPath, manifestPath := state.WorldDeltaPath, state.BaseNavManifestPath
 	state.navigationRebuildActive = true
+	state.navigationEditQueuedSince = time.Time{}
+	state.navigationEditLastQueuedAt = time.Time{}
 	state.jobs.Add(1)
 	go func() {
 		defer state.jobs.Done()

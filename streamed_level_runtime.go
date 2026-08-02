@@ -320,6 +320,8 @@ type StreamedLevelRuntimeState struct {
 	navigationEditRevisions       map[EntityId]uint64
 	navigationEditGeneration      uint64
 	navigationQueuedEdits         map[content.TerrainChunkCoordDef]navigationQueuedEdit
+	navigationEditQueuedSince     time.Time
+	navigationEditLastQueuedAt    time.Time
 	navigationEditBlockers        map[string]navigationEditBlocker
 	navigationRetireAtLoad        map[uint64]uint64
 
@@ -631,6 +633,8 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.navigationEditRevisions = make(map[EntityId]uint64)
 	state.navigationEditGeneration = 0
 	state.navigationQueuedEdits = make(map[content.TerrainChunkCoordDef]navigationQueuedEdit)
+	state.navigationEditQueuedSince = time.Time{}
+	state.navigationEditLastQueuedAt = time.Time{}
 	state.navigationEditBlockers = make(map[string]navigationEditBlocker)
 	state.navigationRetireAtLoad = make(map[uint64]uint64)
 

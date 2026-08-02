@@ -373,9 +373,10 @@ The rebuild job:
 6. writes replacement delta sidecars to temporary paths
 7. returns one publishable batch tagged with runtime and edit generations
 
-Multiple edits coalesce before work begins. Edits arriving during a build
-advance the requested generation; stale results are discarded and never
-published.
+Multiple edits coalesce behind a short quiet window and a hard maximum delay.
+Edits arriving during a build advance the requested generation; stale results
+are discarded and never published. A batch whose resident spans and graph
+topology are unchanged persists its new source data but skips residency reload.
 
 ### Atomic Commit
 

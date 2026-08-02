@@ -115,12 +115,13 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	backing, backed := voxelBackingForEntity(cmd, entity)
 	carveOnly := true
 	retainEntity := false
+	changed := false
 	for _, event := range events {
 		if backed {
 			center, radius := voxelBackingLocalSphere(voxObj.Transform, event.Center, event.Radius)
-			backing.materializeSphere(editableMap, center, radius, event.backingMaterial)
+			changed = backing.materializeSphere(editableMap, center, radius, event.backingMaterial) || changed
 		}
-		voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
+		changed = voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0) || changed
 		carveOnly = carveOnly && event.CarveOnly
 		retainEntity = retainEntity || event.RetainEntity
 	}
@@ -128,8 +129,10 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 		// Connectivity splitting is invalid for a partially materialized base.
 		carveOnly = true
 	}
-	MarkVoxelEntityPersistenceDirty(cmd, entity)
-	state.markRuntimeEditedVoxelEntity(entity)
+	if changed {
+		MarkVoxelEntityPersistenceDirty(cmd, entity)
+		state.markRuntimeEditedVoxelEntity(entity)
+	}
 	if carveOnly {
 		if !backed && !retainEntity && editableMap.GetVoxelCount() == 0 {
 			notifyImportedWorldChunkDirty(cmd, entity, editableMap)
@@ -147,6 +150,10 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 			cmd.RemoveEntity(entity)
 		}
 		return true
+	}
+	if !changed {
+		MarkVoxelEntityPersistenceDirty(cmd, entity)
+		state.markRuntimeEditedVoxelEntity(entity)
 	}
 
 	// 3. Handle splitting
