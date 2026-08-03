@@ -42,6 +42,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 		instanceObjectScopedGeometry: make(map[EntityId]bool),
 		runtimeEditedVoxelEntities:   make(map[EntityId]struct{}),
 		runtimeEditedVoxelRevisions:  make(map[EntityId]uint64),
+		runtimeEditedVoxelEdits:      make(map[EntityId]runtimeVoxelEdit),
 		entityLODSelections:          make(map[EntityId]EntityLODSelection),
 		lastMaterialKeys:             make(map[*core.VoxelObject]materialTableCacheKey),
 		materialTableCache:           make(map[materialTableCacheKey][]core.Material),

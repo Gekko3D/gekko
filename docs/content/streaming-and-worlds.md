@@ -808,20 +808,23 @@ explicit snapshot; this backing contract intentionally covers digging and
 tunnelling through immutable base matter.
 
 Navigation delta files live below `<delta file>_data/nav_graph`. Dirty imported
-world chunks expand through profile and generator halo dependencies. An edit
-installs a conservative, generation-tagged blocker before its background build;
-newer edits coalesce behind a 100 ms quiet window, with a 250 ms maximum wait so
-continuous destruction cannot starve publication, and make older results
-ineligible to publish. Source and
+world chunks expand through profile and generator halo dependencies. While its
+background build runs, a removal keeps the last valid graph and disables only
+old spans whose physical support voxel disappeared; an addition installs a
+generation-tagged blocker over the edited world bounds. Wall and detail removals
+therefore do not pause bots or invalidate unrelated paths. Newer edits coalesce
+behind a 100 ms quiet window, with a 250 ms maximum wait so continuous
+destruction cannot starve publication, and make older results ineligible to
+publish. Source and
 neighboring graph overrides use immutable generation-qualified paths and publish
 together only after temp-write, sync, close, rename, and reciprocal seam
 validation; explicit empty overrides suppress stale static tiles. If rebuilt
 resident spans and graph topology are unchanged, runtime keeps the existing
-query and retires the covered blocker without a residency reload. Otherwise it
-keeps the old resident graph plus the blocker until the complete replacement
-set loads, then swaps the immutable query, retires only covered blockers, and
-increments `NavigationRevision` once. Voxel edits that change no voxel value do
-not enqueue a navigation revision.
+query and retires the covered edit overlays without a residency reload.
+Otherwise it keeps the old resident graph plus those local overlays until the
+complete replacement set loads, then swaps the immutable query, retires only
+covered overlays, and increments `NavigationRevision` once. Voxel edits that
+change no voxel value do not enqueue a navigation revision.
 Each immutable query snapshot also carries a topology epoch per resident tile.
 Routes record the sorted tile/epoch dependencies selected by their region and
 span corridor. A later publication retains routes whose dependency epochs still

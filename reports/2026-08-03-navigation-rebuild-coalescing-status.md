@@ -8,11 +8,12 @@
 
 ## Summary
 - Goal: prevent small or rapid voxel edits from causing redundant navigation publication work.
-- Scope: shared no-op voxel edit detection, bounded rebuild coalescing, and resident topology equality before reload.
-- Non-scope: coarser navigation resolution, cancellation of an already-running bake, and navigation schema changes.
+- Scope: shared no-op voxel edit detection, edit-local safety overlays, bounded rebuild coalescing, and resident topology equality before reload.
+- Non-scope: coarser navigation resolution and cancellation of an already-running bake.
 
 ## Invariants
-- Pending edits install conservative blockers immediately.
+- Removed support disables only the matching physical span; wall/detail removals keep the old graph fully usable.
+- Additions install blockers only over their edited world bounds.
 - A rebuild starts after 100 ms without another edit or after 250 ms total, whichever comes first.
 - Stale generations never publish.
 - Rebuilt delta sidecars remain authoritative even when equal resident topology lets runtime skip its reload.
@@ -22,5 +23,7 @@
 - Engine root suite passes except the pre-existing renderer architecture audit at `mod_voxelrt_client_systems.go:745`.
 - Content and ActionGame suites pass.
 - Existing local-destruction benchmark: 41.774 ms/op, 5.40 MB/op, 24,708 allocs/op for one rebuild on Apple M4 Pro.
+- Support invalidation checks only intersecting old spans and binary-searches the sparse voxel snapshot; it does not build a chunk-sized lookup table.
+- Immutable navigation publication remains allocation-free: 240.4 ns/op, 0 B/op, 0 allocs/op on Apple M4 Pro.
 
 # END_STATUS_REPORT

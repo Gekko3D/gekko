@@ -116,12 +116,17 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	carveOnly := true
 	retainEntity := false
 	changed := false
+	edit := runtimeVoxelEdit{}
 	for _, event := range events {
 		if backed {
 			center, radius := voxelBackingLocalSphere(voxObj.Transform, event.Center, event.Radius)
 			changed = backing.materializeSphere(editableMap, center, radius, event.backingMaterial) || changed
 		}
-		changed = voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0) || changed
+		eventChanged := voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
+		changed = eventChanged || changed
+		if eventChanged {
+			edit.include(runtimeVoxelSphereEdit(event.Center, event.Radius, 0))
+		}
 		carveOnly = carveOnly && event.CarveOnly
 		retainEntity = retainEntity || event.RetainEntity
 	}
@@ -131,7 +136,7 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	}
 	if changed {
 		MarkVoxelEntityPersistenceDirty(cmd, entity)
-		state.markRuntimeEditedVoxelEntity(entity)
+		state.markRuntimeEditedVoxelEntity(entity, edit)
 	}
 	if carveOnly {
 		if !backed && !retainEntity && editableMap.GetVoxelCount() == 0 {

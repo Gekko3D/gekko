@@ -301,9 +301,11 @@ type StreamedLevelRuntimeState struct {
 	navigationDisabled            map[string]struct{}
 	navigationOpenDoors           map[string]struct{}
 	navigationBlockers            map[string]content.NavBlockerDef
+	navigationHazards             map[string]content.NavSupportHazardDef
 	navigationOverlayDisabled     map[string]struct{}
 	navigationOverlayOpenDoors    map[string]struct{}
 	navigationOverlayBlockers     map[string]content.NavBlockerDef
+	navigationOverlayHazards      map[string]content.NavSupportHazardDef
 	navigationOverlayRequestedGen uint64
 	navigationOverlayActive       bool
 	navigationOverlays            chan streamedNavigationOverlayResult
@@ -323,6 +325,7 @@ type StreamedLevelRuntimeState struct {
 	navigationEditQueuedSince     time.Time
 	navigationEditLastQueuedAt    time.Time
 	navigationEditBlockers        map[string]navigationEditBlocker
+	navigationEditHazards         map[string]navigationEditSupportHazard
 	navigationRetireAtLoad        map[uint64]uint64
 
 	WorldDeltaPath   string
@@ -459,13 +462,16 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		navigationEditRevisions:    make(map[EntityId]uint64),
 		navigationQueuedEdits:      make(map[content.TerrainChunkCoordDef]navigationQueuedEdit),
 		navigationEditBlockers:     make(map[string]navigationEditBlocker),
+		navigationEditHazards:      make(map[string]navigationEditSupportHazard),
 		navigationRetireAtLoad:     make(map[uint64]uint64),
 		navigationDisabled:         make(map[string]struct{}),
 		navigationOpenDoors:        make(map[string]struct{}),
 		navigationBlockers:         make(map[string]content.NavBlockerDef),
+		navigationHazards:          make(map[string]content.NavSupportHazardDef),
 		navigationOverlayDisabled:  make(map[string]struct{}),
 		navigationOverlayOpenDoors: make(map[string]struct{}),
 		navigationOverlayBlockers:  make(map[string]content.NavBlockerDef),
+		navigationOverlayHazards:   make(map[string]content.NavSupportHazardDef),
 	})
 	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
 	app.UseSystem(System(commitPreparedStreamedChunksSystem).InStage(Update).RunAlways())
@@ -617,9 +623,11 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.navigationDisabled = make(map[string]struct{})
 	state.navigationOpenDoors = make(map[string]struct{})
 	state.navigationBlockers = make(map[string]content.NavBlockerDef)
+	state.navigationHazards = make(map[string]content.NavSupportHazardDef)
 	state.navigationOverlayDisabled = make(map[string]struct{})
 	state.navigationOverlayOpenDoors = make(map[string]struct{})
 	state.navigationOverlayBlockers = make(map[string]content.NavBlockerDef)
+	state.navigationOverlayHazards = make(map[string]content.NavSupportHazardDef)
 	state.navigationOverlayRequestedGen = 0
 	state.navigationOverlayActive = false
 	state.navigationDesired = make(map[content.TerrainChunkCoordDef]struct{})
@@ -636,6 +644,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.navigationEditQueuedSince = time.Time{}
 	state.navigationEditLastQueuedAt = time.Time{}
 	state.navigationEditBlockers = make(map[string]navigationEditBlocker)
+	state.navigationEditHazards = make(map[string]navigationEditSupportHazard)
 	state.navigationRetireAtLoad = make(map[uint64]uint64)
 
 	for _, override := range worldDelta.PlacementTransformOverrides {

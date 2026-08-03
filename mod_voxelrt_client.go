@@ -129,6 +129,7 @@ type VoxelRtState struct {
 	instanceObjectScopedGeometry   map[EntityId]bool
 	runtimeEditedVoxelEntities     map[EntityId]struct{}
 	runtimeEditedVoxelRevisions    map[EntityId]uint64
+	runtimeEditedVoxelEdits        map[EntityId]runtimeVoxelEdit
 	nextRuntimeEditedVoxelRevision uint64
 	entityLODSelections            map[EntityId]EntityLODSelection
 	runtimeSprites                 []SpriteComponent
@@ -146,6 +147,31 @@ type VoxelRtState struct {
 	underwaterInput                app_rt.UnderwaterInput
 	underwaterStrength             float32
 	bridgeFeatures                 voxelRtBridgeRegistry
+}
+
+type runtimeVoxelEdit struct {
+	Valid, Added, Removed bool
+	Min, Max              mgl32.Vec3
+}
+
+func runtimeVoxelSphereEdit(center mgl32.Vec3, radius float32, val uint8) runtimeVoxelEdit {
+	extent := mgl32.Vec3{radius, radius, radius}
+	return runtimeVoxelEdit{Valid: true, Added: val != 0, Removed: val == 0, Min: center.Sub(extent), Max: center.Add(extent)}
+}
+
+func (e *runtimeVoxelEdit) include(other runtimeVoxelEdit) {
+	if !other.Valid {
+		return
+	}
+	if !e.Valid {
+		*e = other
+		return
+	}
+	e.Added, e.Removed = e.Added || other.Added, e.Removed || other.Removed
+	for axis := 0; axis < 3; axis++ {
+		e.Min[axis] = min(e.Min[axis], other.Min[axis])
+		e.Max[axis] = max(e.Max[axis], other.Max[axis])
+	}
 }
 
 func (s *VoxelRtState) WindowSize() (int, int) {
@@ -318,11 +344,11 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 		return
 	}
 	if voxelSphereEditWithTransform(obj.XBrickMap, obj.Transform, worldCenter, radius, val) {
-		s.markRuntimeEditedVoxelEntity(eid)
+		s.markRuntimeEditedVoxelEntity(eid, runtimeVoxelSphereEdit(worldCenter, radius, val))
 	}
 }
 
-func (s *VoxelRtState) markRuntimeEditedVoxelEntity(eid EntityId) {
+func (s *VoxelRtState) markRuntimeEditedVoxelEntity(eid EntityId, edits ...runtimeVoxelEdit) {
 	if s == nil {
 		return
 	}
@@ -332,6 +358,14 @@ func (s *VoxelRtState) markRuntimeEditedVoxelEntity(eid EntityId) {
 	if s.runtimeEditedVoxelRevisions == nil {
 		s.runtimeEditedVoxelRevisions = make(map[EntityId]uint64)
 	}
+	if s.runtimeEditedVoxelEdits == nil {
+		s.runtimeEditedVoxelEdits = make(map[EntityId]runtimeVoxelEdit)
+	}
+	edit := s.runtimeEditedVoxelEdits[eid]
+	for _, next := range edits {
+		edit.include(next)
+	}
+	s.runtimeEditedVoxelEdits[eid] = edit
 	s.nextRuntimeEditedVoxelRevision++
 	s.runtimeEditedVoxelEntities[eid] = struct{}{}
 	s.runtimeEditedVoxelRevisions[eid] = s.nextRuntimeEditedVoxelRevision
@@ -345,6 +379,7 @@ func (s *VoxelRtState) clearRuntimeEditedVoxelEntity(eid EntityId) {
 	if s.runtimeEditedVoxelRevisions != nil {
 		delete(s.runtimeEditedVoxelRevisions, eid)
 	}
+	delete(s.runtimeEditedVoxelEdits, eid)
 }
 
 func (s *VoxelRtState) runtimeEditedVoxelEntity(eid EntityId) bool {
@@ -361,6 +396,20 @@ func (s *VoxelRtState) runtimeEditedVoxelRevision(eid EntityId) (uint64, bool) {
 	}
 	revision, ok := s.runtimeEditedVoxelRevisions[eid]
 	return revision, ok
+}
+
+func (s *VoxelRtState) runtimeEditedVoxelEdit(eid EntityId) (uint64, runtimeVoxelEdit, bool) {
+	revision, ok := s.runtimeEditedVoxelRevision(eid)
+	if !ok {
+		return 0, runtimeVoxelEdit{}, false
+	}
+	return revision, s.runtimeEditedVoxelEdits[eid], true
+}
+
+func (s *VoxelRtState) clearRuntimeEditedVoxelEdit(eid EntityId, revision uint64) {
+	if current, ok := s.runtimeEditedVoxelRevision(eid); ok && current == revision {
+		delete(s.runtimeEditedVoxelEdits, eid)
+	}
 }
 
 func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {
