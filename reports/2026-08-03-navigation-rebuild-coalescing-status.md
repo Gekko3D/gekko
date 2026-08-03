@@ -12,7 +12,7 @@
 - Non-scope: coarser navigation resolution and cancellation of an already-running bake.
 
 ## Invariants
-- Removed support disables only the matching physical span; wall/detail removals keep the old graph fully usable.
+- Removals keep the previous immutable graph fully usable while grounded NPC movement validates the live voxel world.
 - Additions install blockers only over their edited world bounds.
 - A rebuild starts after 100 ms without another edit or after 250 ms total, whichever comes first.
 - Stale generations never publish.
@@ -23,7 +23,8 @@
 - Engine root suite passes except the pre-existing renderer architecture audit at `mod_voxelrt_client_systems.go:745`.
 - Content and ActionGame suites pass.
 - Existing local-destruction benchmark: 41.774 ms/op, 5.40 MB/op, 24,708 allocs/op for one rebuild on Apple M4 Pro.
-- Support invalidation checks only intersecting old spans and binary-searches the sparse voxel snapshot; it does not build a chunk-sized lookup table.
+- Removal edits do not build or publish a navigation overlay.
+- Rebuilt tiles retain the existing profile-bounded gap-jump connections for crossable holes.
 - Immutable navigation publication remains allocation-free: 240.4 ns/op, 0 B/op, 0 allocs/op on Apple M4 Pro.
 
 # END_STATUS_REPORT

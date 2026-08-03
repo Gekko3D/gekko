@@ -15,29 +15,14 @@ type NavBlockerDef struct {
 	Max Vec3
 }
 
-// NavSupportHazardDef removes one physical walkable support from a query
-// without depending on transient span IDs.
-type NavSupportHazardDef struct {
-	ID            string
-	Tile          TerrainChunkCoordDef
-	X, Z          int
-	SupportHeight float32
-}
-
 // NewNavGraphQueryWithBlockers builds a query overlay for one agent profile.
 // Blockers remove overlapping spans; they do not mutate or rebake graph tiles.
 func NewNavGraphQueryWithBlockers(sources []NavSourceTileDef, graphs []NavGraphTileDef, chunkSize int, voxelResolution float32, profile NavAgentProfileDef, blockers []NavBlockerDef) (*NavGraphQuery, error) {
-	return NewNavGraphQueryWithBlockersAndSupportHazards(sources, graphs, chunkSize, voxelResolution, profile, blockers, nil)
-}
-
-// NewNavGraphQueryWithBlockersAndSupportHazards builds a query overlay for
-// obstacles and removed walkable supports.
-func NewNavGraphQueryWithBlockersAndSupportHazards(sources []NavSourceTileDef, graphs []NavGraphTileDef, chunkSize int, voxelResolution float32, profile NavAgentProfileDef, blockers []NavBlockerDef, hazards []NavSupportHazardDef) (*NavGraphQuery, error) {
 	query, err := newNavGraphQuery(sources, graphs, chunkSize, voxelResolution)
 	if err != nil {
 		return nil, err
 	}
-	if len(blockers) == 0 && len(hazards) == 0 {
+	if len(blockers) == 0 {
 		return newPublishedNavGraphQuery(query, nil), nil
 	}
 	if !finite(profile.Radius) || profile.Radius <= 0 || !finite(profile.Height) || profile.Height <= 0 {
@@ -61,23 +46,11 @@ func NewNavGraphQueryWithBlockersAndSupportHazards(sources []NavSourceTileDef, g
 			return nil, fmt.Errorf("navigation blocker %q requires finite ordered bounds", blocker.ID)
 		}
 	}
-	for _, hazard := range hazards {
-		if strings.TrimSpace(hazard.ID) == "" {
-			return nil, fmt.Errorf("navigation support hazard id is required")
-		}
-		if _, exists := seen[hazard.ID]; exists {
-			return nil, fmt.Errorf("duplicate navigation overlay id %q", hazard.ID)
-		}
-		seen[hazard.ID] = struct{}{}
-		if hazard.X < 0 || hazard.X >= chunkSize || hazard.Z < 0 || hazard.Z >= chunkSize || !finite(hazard.SupportHeight) {
-			return nil, fmt.Errorf("navigation support hazard %q requires a valid cell and height", hazard.ID)
-		}
-	}
-	query.enableBlockers(profile, blockers, hazards)
+	query.enableBlockers(profile, blockers)
 	return newPublishedNavGraphQuery(query, nil), nil
 }
 
-func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []NavBlockerDef, hazards []NavSupportHazardDef) {
+func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []NavBlockerDef) {
 	q.blocked = make(map[TerrainChunkCoordDef][]uint64)
 	affected := make(map[navRouteNode]struct{})
 	block := func(coord TerrainChunkCoordDef, spanID uint32) {
@@ -123,18 +96,6 @@ func (q *navGraphQuery) enableBlockers(profile NavAgentProfileDef, blockers []Na
 						}
 					}
 				}
-			}
-		}
-	}
-	for _, hazard := range hazards {
-		tile := q.tiles[hazard.Tile]
-		if tile == nil {
-			continue
-		}
-		for _, spanID := range tile.column(hazard.X, hazard.Z, q.chunkSize) {
-			span := tile.spans[spanID]
-			if bitHas(tile.accepted, spanID) && absFloat32(span.SupportHeight-hazard.SupportHeight) <= 1e-4 {
-				block(hazard.Tile, spanID)
 			}
 		}
 	}

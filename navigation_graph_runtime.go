@@ -42,7 +42,6 @@ type streamedNavigationOverlayResult struct {
 	DisabledTraversals map[string]struct{}
 	OpenDoors          map[string]struct{}
 	Blockers           map[string]content.NavBlockerDef
-	SupportHazards     map[string]content.NavSupportHazardDef
 	Err                error
 }
 
@@ -64,11 +63,6 @@ type navigationEditBlocker struct {
 	Blocker    content.NavBlockerDef
 }
 
-type navigationEditSupportHazard struct {
-	Generation uint64
-	Hazard     content.NavSupportHazardDef
-}
-
 const (
 	navigationRebuildQuietPeriod = 100 * time.Millisecond
 	navigationRebuildMaxDelay    = 250 * time.Millisecond
@@ -87,7 +81,6 @@ type RuntimeNavigationService struct {
 	disabledTraversals      map[string]struct{}
 	openDoors               map[string]struct{}
 	blockers                map[string]content.NavBlockerDef
-	supportHazards          map[string]content.NavSupportHazardDef
 }
 
 // NavigationBlockerComponent opts an entity's world-space AABB into runtime
@@ -142,7 +135,6 @@ func RuntimeNavigationServiceFromStreamedLevelState(state *StreamedLevelRuntimeS
 		disabledTraversals:      copyNavigationTraversalSet(state.navigationDisabled),
 		openDoors:               copyNavigationTraversalSet(state.navigationOpenDoors),
 		blockers:                copyNavigationBlockers(state.navigationBlockers),
-		supportHazards:          copyNavigationSupportHazards(state.navigationHazards),
 	}
 }
 
@@ -186,7 +178,7 @@ func (s RuntimeNavigationService) WithTraversalDisabled(traversalID string) (Run
 	disabled[traversalID] = struct{}{}
 	// ponytail: rebuild once per interaction plan; cache constrained views only
 	// if controller-heavy maps make this measurable.
-	query, err := buildRuntimeNavigationQueryWithDoorOverlays(s.Sources, s.Graphs, s.ChunkSize, s.VoxelResolution, s.profiles, disabled, s.openDoors, s.blockers, s.supportHazards, s.carriers)
+	query, err := buildRuntimeNavigationQueryWithDoorOverlays(s.Sources, s.Graphs, s.ChunkSize, s.VoxelResolution, s.profiles, disabled, s.openDoors, s.blockers, s.carriers)
 	if err != nil {
 		return RuntimeNavigationService{}, err
 	}
@@ -216,7 +208,7 @@ func (s RuntimeNavigationService) WithSpanTransitionDisabled(from, to content.Na
 	if !found {
 		return s, nil
 	}
-	query, err := buildRuntimeNavigationQueryWithDoorOverlays(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, s.profiles, s.disabledTraversals, s.openDoors, s.blockers, s.supportHazards, s.carriers)
+	query, err := buildRuntimeNavigationQueryWithDoorOverlays(s.Sources, graphs, s.ChunkSize, s.VoxelResolution, s.profiles, s.disabledTraversals, s.openDoors, s.blockers, s.carriers)
 	if err != nil {
 		return RuntimeNavigationService{}, err
 	}
@@ -384,7 +376,7 @@ func (s RuntimeNavigationService) ReachableSpans(start content.NavSpanRef, targe
 	}
 	query, err := buildRuntimeNavigationQueryWithDoorOverlays(
 		s.Sources, s.Graphs, s.ChunkSize, s.VoxelResolution,
-		s.profiles, s.disabledTraversals, s.openDoors, s.blockers, s.supportHazards, s.carriers,
+		s.profiles, s.disabledTraversals, s.openDoors, s.blockers, s.carriers,
 	)
 	if err != nil {
 		return result
@@ -462,10 +454,10 @@ func buildRuntimeNavigationQueryWithDisabledTraversals(sources []content.NavSour
 }
 
 func buildRuntimeNavigationQueryWithOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled map[string]struct{}, blockers map[string]content.NavBlockerDef) (*content.NavGraphQuery, error) {
-	return buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, chunkSize, voxelResolution, profiles, disabled, nil, blockers, nil, nil)
+	return buildRuntimeNavigationQueryWithDoorOverlays(sources, graphs, chunkSize, voxelResolution, profiles, disabled, nil, blockers, nil)
 }
 
-func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled, openDoors map[string]struct{}, blockers map[string]content.NavBlockerDef, hazards map[string]content.NavSupportHazardDef, carriers []content.NavCarrierDef) (*content.NavGraphQuery, error) {
+func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTileDef, graphs []content.NavGraphTileDef, chunkSize int, voxelResolution float32, profiles []content.NavAgentProfileDef, disabled, openDoors map[string]struct{}, blockers map[string]content.NavBlockerDef, carriers []content.NavCarrierDef) (*content.NavGraphQuery, error) {
 	if len(sources) == 0 || len(graphs) == 0 {
 		return nil, nil
 	}
@@ -486,12 +478,12 @@ func buildRuntimeNavigationQueryWithDoorOverlays(sources []content.NavSourceTile
 			profileGraphs = append(profileGraphs, navGraphWithRuntimeTraversals(graph, disabled, openDoors, profile))
 		}
 	}
-	if len(blockers) != 0 || len(hazards) != 0 || len(carriers) != 0 {
+	if len(blockers) != 0 || len(carriers) != 0 {
 		if profile != nil {
 			carrierBlockers := content.NavCarrierBlockers(carriers, *profile)
-			return content.NewNavGraphQueryWithBlockersAndSupportHazards(sources, profileGraphs, chunkSize, voxelResolution, *profile, append(sortedNavigationBlockers(blockers), carrierBlockers...), sortedNavigationSupportHazards(hazards))
+			return content.NewNavGraphQueryWithBlockers(sources, profileGraphs, chunkSize, voxelResolution, *profile, append(sortedNavigationBlockers(blockers), carrierBlockers...))
 		}
-		return nil, fmt.Errorf("navigation overlay requires agent profile %q", profileID)
+		return nil, fmt.Errorf("navigation blocker or carrier overlay requires agent profile %q", profileID)
 	}
 	return content.NewNavGraphQuery(sources, profileGraphs, chunkSize, voxelResolution)
 }
@@ -741,7 +733,6 @@ func commitStreamedNavigationOverlay(state *StreamedLevelRuntimeState, result st
 	state.navigationDisabled = result.DisabledTraversals
 	state.navigationOpenDoors = result.OpenDoors
 	state.navigationBlockers = result.Blockers
-	state.navigationHazards = result.SupportHazards
 	state.NavigationRevision++
 	state.mu.Unlock()
 }
@@ -754,8 +745,7 @@ func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
 	if !pending &&
 		navigationTraversalSetsEqual(state.navigationDisabled, state.navigationOverlayDisabled) &&
 		navigationTraversalSetsEqual(state.navigationOpenDoors, state.navigationOverlayOpenDoors) &&
-		navigationBlockersEqual(state.navigationBlockers, state.navigationOverlayBlockers) &&
-		navigationSupportHazardsEqual(state.navigationHazards, state.navigationOverlayHazards) {
+		navigationBlockersEqual(state.navigationBlockers, state.navigationOverlayBlockers) {
 		return
 	}
 	var sources []content.NavSourceTileDef
@@ -781,7 +771,6 @@ func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
 	disabled := copyNavigationTraversalSet(state.navigationOverlayDisabled)
 	openDoors := copyNavigationTraversalSet(state.navigationOverlayOpenDoors)
 	blockers := copyNavigationBlockers(state.navigationOverlayBlockers)
-	hazards := copyNavigationSupportHazards(state.navigationOverlayHazards)
 	runtimeGeneration := state.Generation
 	overlayGeneration := state.navigationOverlayRequestedGen
 	if state.navigationOverlays == nil {
@@ -793,7 +782,7 @@ func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
 		defer state.jobs.Done()
 		query, err := buildRuntimeNavigationQueryWithDoorOverlays(
 			sources, graphs, manifest.ChunkSize, manifest.VoxelResolution,
-			manifest.AgentProfiles, disabled, openDoors, blockers, hazards, manifest.Carriers,
+			manifest.AgentProfiles, disabled, openDoors, blockers, manifest.Carriers,
 		)
 		if err == nil {
 			query = query.WithUpdatedTileEpochs(previousQuery)
@@ -802,7 +791,7 @@ func startStreamedNavigationOverlayBuild(state *StreamedLevelRuntimeState) {
 			RuntimeGeneration: runtimeGeneration, GraphRevision: graphRevision, LoadGeneration: loadGeneration,
 			OverlayGeneration: overlayGeneration,
 			Sources:           sources, Graphs: graphs,
-			Query: query, DisabledTraversals: disabled, OpenDoors: openDoors, Blockers: blockers, SupportHazards: hazards, Err: err,
+			Query: query, DisabledTraversals: disabled, OpenDoors: openDoors, Blockers: blockers, Err: err,
 		}
 	}()
 }
@@ -879,21 +868,8 @@ func streamedLevelNavigationOverlaySystem(cmd *Commands, state *StreamedLevelRun
 	for id, blocker := range state.navigationEditBlockers {
 		blockers[id] = blocker.Blocker
 	}
-	hazards := make(map[string]content.NavSupportHazardDef, len(state.navigationEditHazards))
-	for id, hazard := range state.navigationEditHazards {
-		hazards[id] = hazard.Hazard
-	}
 	setStreamedNavigationOverlayDesired(state, disabled, openDoors, blockers)
-	setStreamedNavigationSupportHazardsDesired(state, hazards)
 	startStreamedNavigationOverlayBuild(state)
-}
-
-func setStreamedNavigationSupportHazardsDesired(state *StreamedLevelRuntimeState, hazards map[string]content.NavSupportHazardDef) {
-	if state == nil || navigationSupportHazardsEqual(hazards, state.navigationOverlayHazards) {
-		return
-	}
-	state.navigationOverlayHazards = hazards
-	state.navigationOverlayRequestedGen++
 }
 
 func setStreamedNavigationOverlayDesired(state *StreamedLevelRuntimeState, disabled, openDoors map[string]struct{}, blockers map[string]content.NavBlockerDef) {
@@ -996,11 +972,6 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 			if edit.Added {
 				blocker := navigationEditBlockerForBounds(edit, generation)
 				state.navigationEditBlockers[blocker.Blocker.ID] = blocker
-			}
-			if edit.Removed {
-				for _, hazard := range navigationSupportHazardsForEdit(state, snapshot, edit, generation) {
-					state.navigationEditHazards[hazard.Hazard.ID] = hazard
-				}
 			}
 		} else {
 			blocker := navigationEditBlockerForChunk(state.BaseNavManifest, snapshot.Coord, generation)
@@ -1201,48 +1172,6 @@ func navigationEditBlockerForBounds(edit runtimeVoxelEdit, generation uint64) na
 	return navigationEditBlocker{Generation: generation, Blocker: content.NavBlockerDef{ID: id, Min: content.Vec3(edit.Min), Max: content.Vec3(edit.Max)}}
 }
 
-func navigationSupportHazardsForEdit(state *StreamedLevelRuntimeState, snapshot *content.ImportedWorldChunkDef, edit runtimeVoxelEdit, generation uint64) []navigationEditSupportHazard {
-	if state == nil || snapshot == nil || !edit.Valid || !edit.Removed {
-		return nil
-	}
-	var hazards []navigationEditSupportHazard
-	for _, source := range state.NavigationSources {
-		if source.Coord != snapshot.Coord {
-			continue
-		}
-		tileMinX := float32(source.Coord.X*source.ChunkSize) * source.VoxelResolution
-		minLocalX := max(0, int(math.Floor(float64((edit.Min[0]-tileMinX)/source.VoxelResolution))))
-		maxLocalX := min(source.ChunkSize-1, int(math.Ceil(float64((edit.Max[0]-tileMinX)/source.VoxelResolution)))-1)
-		first := sort.Search(len(source.Spans), func(i int) bool { return source.Spans[i].X >= minLocalX })
-		last := sort.Search(len(source.Spans), func(i int) bool { return source.Spans[i].X > maxLocalX })
-		for _, span := range source.Spans[first:last] {
-			minX := tileMinX + float32(span.X)*source.VoxelResolution
-			minZ := float32(source.Coord.Z*source.ChunkSize+span.Z) * source.VoxelResolution
-			if minX+source.VoxelResolution <= edit.Min[0] || minX >= edit.Max[0] ||
-				span.SupportHeight <= edit.Min[1] || span.SupportHeight-source.VoxelResolution >= edit.Max[1] ||
-				minZ+source.VoxelResolution <= edit.Min[2] || minZ >= edit.Max[2] {
-				continue
-			}
-			if importedWorldVoxelSolid(snapshot.Voxels, span.X, span.Y-1, span.Z) {
-				continue
-			}
-			id := fmt.Sprintf("__nav_support:%d:%d:%d:%d:%d:%08x", source.Coord.X, source.Coord.Y, source.Coord.Z, span.X, span.Z, math.Float32bits(span.SupportHeight))
-			hazards = append(hazards, navigationEditSupportHazard{Generation: generation, Hazard: content.NavSupportHazardDef{
-				ID: id, Tile: source.Coord, X: span.X, Z: span.Z, SupportHeight: span.SupportHeight,
-			}})
-		}
-	}
-	return hazards
-}
-
-func importedWorldVoxelSolid(voxels []content.ImportedWorldVoxelDef, x, y, z int) bool {
-	i := sort.Search(len(voxels), func(i int) bool {
-		voxel := voxels[i]
-		return voxel.X > x || voxel.X == x && (voxel.Y > y || voxel.Y == y && voxel.Z >= z)
-	})
-	return i < len(voxels) && voxels[i].X == x && voxels[i].Y == y && voxels[i].Z == z && voxels[i].Value != 0
-}
-
 func installNavigationEditBlockers(state *StreamedLevelRuntimeState) {
 	if state.navigationEditBlockers == nil {
 		state.navigationEditBlockers = make(map[string]navigationEditBlocker)
@@ -1251,12 +1180,7 @@ func installNavigationEditBlockers(state *StreamedLevelRuntimeState) {
 	for id, blocker := range state.navigationEditBlockers {
 		blockers[id] = blocker.Blocker
 	}
-	hazards := make(map[string]content.NavSupportHazardDef, len(state.navigationEditHazards))
-	for id, hazard := range state.navigationEditHazards {
-		hazards[id] = hazard.Hazard
-	}
 	setStreamedNavigationOverlayDesired(state, copyNavigationTraversalSet(state.navigationOverlayDisabled), copyNavigationTraversalSet(state.navigationOverlayOpenDoors), blockers)
-	setStreamedNavigationSupportHazardsDesired(state, hazards)
 	startStreamedNavigationOverlayBuild(state)
 }
 
@@ -1264,11 +1188,6 @@ func retireNavigationEditBlockers(state *StreamedLevelRuntimeState, generation u
 	for id, blocker := range state.navigationEditBlockers {
 		if blocker.Generation <= generation {
 			delete(state.navigationEditBlockers, id)
-		}
-	}
-	for id, hazard := range state.navigationEditHazards {
-		if hazard.Generation <= generation {
-			delete(state.navigationEditHazards, id)
 		}
 	}
 	blockers := copyNavigationBlockers(state.navigationOverlayBlockers)
@@ -1280,12 +1199,7 @@ func retireNavigationEditBlockers(state *StreamedLevelRuntimeState, generation u
 	for id, blocker := range state.navigationEditBlockers {
 		blockers[id] = blocker.Blocker
 	}
-	hazards := make(map[string]content.NavSupportHazardDef, len(state.navigationEditHazards))
-	for id, hazard := range state.navigationEditHazards {
-		hazards[id] = hazard.Hazard
-	}
 	setStreamedNavigationOverlayDesired(state, copyNavigationTraversalSet(state.navigationOverlayDisabled), copyNavigationTraversalSet(state.navigationOverlayOpenDoors), blockers)
-	setStreamedNavigationSupportHazardsDesired(state, hazards)
 }
 
 func loadNavigationRebuildChunks(cmd *Commands, state *StreamedLevelRuntimeState, dirty []content.TerrainChunkCoordDef, snapshots map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef) (map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, error) {
@@ -1499,32 +1413,12 @@ func copyNavigationBlockers(source map[string]content.NavBlockerDef) map[string]
 	return copy
 }
 
-func copyNavigationSupportHazards(source map[string]content.NavSupportHazardDef) map[string]content.NavSupportHazardDef {
-	copy := make(map[string]content.NavSupportHazardDef, len(source))
-	for id, hazard := range source {
-		copy[id] = hazard
-	}
-	return copy
-}
-
 func navigationBlockersEqual(a, b map[string]content.NavBlockerDef) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for id, blocker := range a {
 		if b[id] != blocker {
-			return false
-		}
-	}
-	return true
-}
-
-func navigationSupportHazardsEqual(a, b map[string]content.NavSupportHazardDef) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for id, hazard := range a {
-		if b[id] != hazard {
 			return false
 		}
 	}
@@ -1542,19 +1436,6 @@ func sortedNavigationBlockers(source map[string]content.NavBlockerDef) []content
 		blockers = append(blockers, source[id])
 	}
 	return blockers
-}
-
-func sortedNavigationSupportHazards(source map[string]content.NavSupportHazardDef) []content.NavSupportHazardDef {
-	ids := make([]string, 0, len(source))
-	for id := range source {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	hazards := make([]content.NavSupportHazardDef, 0, len(ids))
-	for _, id := range ids {
-		hazards = append(hazards, source[id])
-	}
-	return hazards
 }
 
 func sortedTerrainCoords(source map[content.TerrainChunkCoordDef]struct{}) []content.TerrainChunkCoordDef {

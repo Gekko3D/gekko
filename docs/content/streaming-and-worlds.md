@@ -809,13 +809,15 @@ tunnelling through immutable base matter.
 
 Navigation delta files live below `<delta file>_data/nav_graph`. Dirty imported
 world chunks expand through profile and generator halo dependencies. While its
-background build runs, a removal keeps the last valid graph and disables only
-old spans whose physical support voxel disappeared; an addition installs a
-generation-tagged blocker over the edited world bounds. Wall and detail removals
-therefore do not pause bots or invalidate unrelated paths. Newer edits coalesce
+background build runs, a removal keeps the last valid graph unchanged; grounded
+NPC movement continues to validate collision, landing support, and step height
+against the live voxel world. An addition installs a generation-tagged blocker
+over the edited world bounds. Ground, wall, and detail removals therefore do not
+pause bots or invalidate paths speculatively. Newer edits coalesce
 behind a 100 ms quiet window, with a 250 ms maximum wait so continuous
 destruction cannot starve publication, and make older results ineligible to
-publish. Source and
+publish. The rebuilt graph's existing profile-bounded gap-jump generation keeps
+crossable holes connected; wider holes become real topology changes. Source and
 neighboring graph overrides use immutable generation-qualified paths and publish
 together only after temp-write, sync, close, rename, and reciprocal seam
 validation; explicit empty overrides suppress stale static tiles. If rebuilt

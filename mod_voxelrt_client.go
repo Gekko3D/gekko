@@ -150,24 +150,32 @@ type VoxelRtState struct {
 }
 
 type runtimeVoxelEdit struct {
-	Valid, Added, Removed bool
-	Min, Max              mgl32.Vec3
+	Valid, Added bool
+	Min, Max     mgl32.Vec3
 }
 
 func runtimeVoxelSphereEdit(center mgl32.Vec3, radius float32, val uint8) runtimeVoxelEdit {
+	edit := runtimeVoxelEdit{Valid: true, Added: val != 0}
+	if !edit.Added {
+		return edit
+	}
 	extent := mgl32.Vec3{radius, radius, radius}
-	return runtimeVoxelEdit{Valid: true, Added: val != 0, Removed: val == 0, Min: center.Sub(extent), Max: center.Add(extent)}
+	edit.Min, edit.Max = center.Sub(extent), center.Add(extent)
+	return edit
 }
 
 func (e *runtimeVoxelEdit) include(other runtimeVoxelEdit) {
 	if !other.Valid {
 		return
 	}
-	if !e.Valid {
-		*e = other
+	e.Valid = true
+	if !other.Added {
 		return
 	}
-	e.Added, e.Removed = e.Added || other.Added, e.Removed || other.Removed
+	if !e.Added {
+		e.Added, e.Min, e.Max = true, other.Min, other.Max
+		return
+	}
 	for axis := 0; axis < 3; axis++ {
 		e.Min[axis] = min(e.Min[axis], other.Min[axis])
 		e.Max[axis] = max(e.Max[axis], other.Max[axis])
