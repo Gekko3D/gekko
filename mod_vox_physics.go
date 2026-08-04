@@ -15,6 +15,7 @@ func (m VoxPhysicsModule) Install(app *App, cmd *Commands) {
 	})
 	app.UseSystem(
 		System(VoxPhysicsPreCalcSystem).
+			ProfileCategory("motor_collision").
 			InStage(Update).
 			RunAlways(),
 	)

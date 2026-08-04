@@ -17,11 +17,13 @@ type AnimationModule struct{}
 func (AnimationModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
 		System(npcAnimationSystem).
+			ProfileCategory("animation").
 			InStage(Update).
 			RunAlways(),
 	)
 	app.UseSystem(
 		System(assetAnimationSystem).
+			ProfileCategory("animation").
 			InStage(Update).
 			RunAlways(),
 	)

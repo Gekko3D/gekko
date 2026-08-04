@@ -13,6 +13,7 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
 - File: `mod_time.go`
 - Resources:
   - `*Time`
+  - `*FrameProfile` (previous completed frame when slow-frame profiling is enabled)
 - Systems:
   - `timeSystem` in `Prelude`
 - Owns:

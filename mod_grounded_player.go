@@ -194,10 +194,10 @@ func installGroundedCharacterMotor(app *App, cmd *Commands, cfg GroundedCharacte
 			})
 		}
 	}
-	app.UseSystem(System(groundedCharacterMotorSystem).InStage(Update).RunAlways())
-	app.UseSystem(System(triggerVolumeTouchSystem).InStage(Update).RunAlways())
-	app.UseSystem(System(targetEventSystem).InStage(Update).RunAlways())
-	app.UseSystem(System(movingBrushMotionSystem).InStage(Update).RunAlways())
+	app.UseSystem(System(groundedCharacterMotorSystem).ProfileCategory("motor_collision").InStage(Update).RunAlways())
+	app.UseSystem(System(triggerVolumeTouchSystem).ProfileCategory("motor_collision").InStage(Update).RunAlways())
+	app.UseSystem(System(targetEventSystem).ProfileCategory("motor_collision").InStage(Update).RunAlways())
+	app.UseSystem(System(movingBrushMotionSystem).ProfileCategory("motor_collision").InStage(Update).RunAlways())
 }
 
 func (mod GroundedCharacterMotorModule) Install(app *App, cmd *Commands) {

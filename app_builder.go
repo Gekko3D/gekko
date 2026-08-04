@@ -10,12 +10,13 @@ import (
 func NewApp() *App {
 	ecs := MakeEcs()
 	return &App{
-		resources:        make(map[reflect.Type]any),
-		stateful:         false,
-		systems:          make(map[string]map[State]map[statePhase][]systemFn),
-		systemsStateless: make(map[string][]systemFn),
-		ecs:              &ecs,
-		modules:          make([]Module, 0),
+		resources:         make(map[reflect.Type]any),
+		stateful:          false,
+		systems:           make(map[string]map[State]map[statePhase][]systemFn),
+		systemsStateless:  make(map[string][]systemFn),
+		profileCategories: make(map[uintptr]string),
+		ecs:               &ecs,
+		modules:           make([]Module, 0),
 	}
 }
 

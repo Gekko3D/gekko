@@ -82,3 +82,28 @@ func TestComputeFramePacingSleep(t *testing.T) {
 	assert.Equal(t, time.Duration(0), computeFramePacingSleep(20*time.Millisecond, targetFrameTime))
 	assert.Equal(t, targetFrameTime-5*time.Millisecond, computeFramePacingSleep(5*time.Millisecond, targetFrameTime))
 }
+
+func TestAppProfileCategorySummary(t *testing.T) {
+	got := appProfileCategorySummary([]appSystemTiming{
+		{category: "ai", duration: time.Millisecond},
+		{category: "motor_collision", duration: 2 * time.Millisecond},
+		{category: "ai", duration: 500 * time.Microsecond},
+		{duration: 250 * time.Microsecond},
+	})
+	assert.Equal(t, "ai=1.50ms,motor_collision=2.00ms,other=0.25ms", got)
+}
+
+func TestAppPublishesCompletedFrameProfile(t *testing.T) {
+	profile := &FrameProfile{Categories: map[string]time.Duration{"stale": time.Second}}
+	app := NewApp()
+	app.slowFrameThreshold = 10 * time.Millisecond
+	app.addResources(profile)
+	app.profileSystems = []appSystemTiming{
+		{category: "ai", duration: 2 * time.Millisecond},
+		{category: "ai", duration: time.Millisecond},
+	}
+	app.reportSlowFrame(4*time.Millisecond, 5*time.Millisecond)
+	assert.Equal(t, 4*time.Millisecond, profile.Work)
+	assert.Equal(t, 5*time.Millisecond, profile.RawDelta)
+	assert.Equal(t, map[string]time.Duration{"ai": 3 * time.Millisecond}, profile.Categories)
+}

@@ -11,6 +11,7 @@ type HierarchyModule struct{}
 func (HierarchyModule) Install(app *App, cmd *Commands) {
 	app.UseSystem(
 		System(TransformHierarchySystem).
+			ProfileCategory("animation").
 			InStage(PostUpdate).
 			RunAlways(),
 	)

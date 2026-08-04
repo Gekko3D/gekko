@@ -68,6 +68,7 @@ func (m PhysicsModule) Install(app *App, cmd *Commands) {
 
 		app.UseSystem(
 			System(SynchronousPhysicsSystem).
+				ProfileCategory("motor_collision").
 				InStage(PhysicsUpdate).
 				RunAlways(),
 		)
@@ -77,6 +78,7 @@ func (m PhysicsModule) Install(app *App, cmd *Commands) {
 
 		app.UseSystem(
 			System(PhysicsPushSystem).
+				ProfileCategory("motor_collision").
 				InStage(PostUpdate).
 				RunAlways(),
 		)
@@ -84,6 +86,7 @@ func (m PhysicsModule) Install(app *App, cmd *Commands) {
 
 	app.UseSystem(
 		System(PhysicsPullSystem).
+			ProfileCategory("motor_collision").
 			InStage(PreUpdate).
 			RunAlways(),
 	)

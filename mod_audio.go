@@ -89,10 +89,10 @@ func (mod AudioModule) Install(app *App, cmd *Commands) {
 	}
 	cmd.AddResources(state)
 	if mod.Occlusion {
-		app.UseSystem(System(spatialAudioOcclusionSystem).InStage(PreRender).RunAlways())
+		app.UseSystem(System(spatialAudioOcclusionSystem).ProfileCategory("audio").InStage(PreRender).RunAlways())
 		return
 	}
-	app.UseSystem(System(spatialAudioSystem).InStage(PreRender).RunAlways())
+	app.UseSystem(System(spatialAudioSystem).ProfileCategory("audio").InStage(PreRender).RunAlways())
 }
 
 func (state *AudioState) Err() error {

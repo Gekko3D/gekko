@@ -58,6 +58,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 
 	app.UseSystem(
 		System(voxelRtDebugSystem).
+			ProfileCategory("rendering").
 			InStage(Update).
 			RunAlways(),
 	)
@@ -65,42 +66,49 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 
 	app.UseSystem(
 		System(waterBodyResolutionSystem).
+			ProfileCategory("rendering").
 			InStage(Update).
 			RunAlways(),
 	)
 
 	app.UseSystem(
 		System(waterInteractionSystem).
+			ProfileCategory("rendering").
 			InStage(Update).
 			RunAlways(),
 	)
 
 	app.UseSystem(
 		System(entityLODSelectionSystem).
+			ProfileCategory("rendering").
 			InStage(PostUpdate).
 			RunAlways(),
 	)
 
 	app.UseSystem(
 		System(waterInteractionCleanupSystem).
+			ProfileCategory("rendering").
 			InStage(PreRender).
 			RunAlways(),
 	)
 
 	app.UseSystem(
 		System(voxelRtPreludeSystem).
+			ProfileCategory("rendering").
 			InStage(Prelude).
 			RunAlways(),
 	)
 
 	app.UseSystem(
 		System(voxelRtSystem).
+			ProfileCategory("rendering").
 			InStage(PreRender).
 			RunAlways(),
 	)
 	mod.installBatchedBridgeSystems(app)
 	app.UseSystem(
 		System(voxelRtBatchEndSystem).
+			ProfileCategory("rendering").
 			InStage(PreRender).
 			RunAlways(),
 	)
@@ -109,6 +117,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 
 	app.UseSystem(
 		System(voxelRtUpdateSystem).
+			ProfileCategory("rendering").
 			InStage(PreRender).
 			RunAlways(),
 	)
@@ -116,6 +125,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 
 	app.UseSystem(
 		System(voxelRtRenderSystem).
+			ProfileCategory("rendering").
 			InStage(Render).
 			RunAlways(),
 	)
@@ -173,6 +183,7 @@ func (mod VoxelRtModule) installBridgeSystems(app *App) {
 		}
 		app.UseSystem(
 			System(registration.PreRenderSystem).
+				ProfileCategory("rendering").
 				InStage(PreRender).
 				RunAlways(),
 		)
@@ -189,6 +200,7 @@ func (mod VoxelRtModule) installBatchedBridgeSystems(app *App) {
 		}
 		app.UseSystem(
 			System(registration.PreRenderBatchedSystem).
+				ProfileCategory("rendering").
 				InStage(PreRender).
 				RunAlways(),
 		)
@@ -205,6 +217,7 @@ func (mod VoxelRtModule) installBridgeSystemsAfterBatch(app *App) {
 		}
 		app.UseSystem(
 			System(registration.PreRenderAfterBatchSystem).
+				ProfileCategory("rendering").
 				InStage(PreRender).
 				RunAlways(),
 		)
@@ -221,6 +234,7 @@ func (mod VoxelRtModule) installBridgeSystemsAfterUpdate(app *App) {
 		}
 		app.UseSystem(
 			System(registration.PreRenderAfterUpdateSystem).
+				ProfileCategory("rendering").
 				InStage(PreRender).
 				RunAlways(),
 		)

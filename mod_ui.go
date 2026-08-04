@@ -16,8 +16,8 @@ type UiModule struct{}
 
 func (UiModule) Install(app *App, cmd *Commands) {
 	cmd.AddResources(newUiRuntime())
-	app.UseSystem(System(uiPanelInputSystem).InStage(PreUpdate).RunAlways())
-	app.UseSystem(System(uiPanelRenderSystem).InStage(PostUpdate).RunAlways())
+	app.UseSystem(System(uiPanelInputSystem).ProfileCategory("rendering").InStage(PreUpdate).RunAlways())
+	app.UseSystem(System(uiPanelRenderSystem).ProfileCategory("rendering").InStage(PostUpdate).RunAlways())
 }
 
 func resolveUiPosition(anchor UiAnchor, offset [2]float32, width, height float32, winW, winH int) (float32, float32) {

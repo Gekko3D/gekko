@@ -467,11 +467,11 @@ func (StreamedLevelRuntimeModule) Install(app *App, cmd *Commands) {
 		navigationOverlayOpenDoors: make(map[string]struct{}),
 		navigationOverlayBlockers:  make(map[string]content.NavBlockerDef),
 	})
-	app.UseSystem(System(updateStreamedLevelObserverSystem).InStage(PreUpdate).RunAlways())
-	app.UseSystem(System(commitPreparedStreamedChunksSystem).InStage(Update).RunAlways())
-	app.UseSystem(System(streamedLevelNavigationSystem).InStage(Update).RunAlways())
-	app.UseSystem(System(streamedLevelNavigationOverlaySystem).InStage(PostUpdate).RunAlways())
-	app.UseSystem(System(streamedLevelRuntimeEditedNavigationSystem).InStage(PostUpdate).RunAlways())
+	app.UseSystem(System(updateStreamedLevelObserverSystem).ProfileCategory("streaming").InStage(PreUpdate).RunAlways())
+	app.UseSystem(System(commitPreparedStreamedChunksSystem).ProfileCategory("streaming").InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelNavigationSystem).ProfileCategory("streaming").InStage(Update).RunAlways())
+	app.UseSystem(System(streamedLevelNavigationOverlaySystem).ProfileCategory("streaming").InStage(PostUpdate).RunAlways())
+	app.UseSystem(System(streamedLevelRuntimeEditedNavigationSystem).ProfileCategory("streaming").InStage(PostUpdate).RunAlways())
 }
 
 func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedLevelRuntimeConfig) error {

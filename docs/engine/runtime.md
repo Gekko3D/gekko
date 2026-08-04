@@ -85,6 +85,11 @@ Behavior:
 - physics still runs on its own fixed ticker
 - if both vsync and target FPS are active, the slower limiter wins in practice
 
+When `GEKKO_SLOW_FRAME_MS` enables system profiling, `TimeModule` also exposes
+`FrameProfile`. It contains the previous completed frame's work, raw delta, and
+profile-category totals. The category map is reused each frame and is read-only
+to consumers; frame pacing sleep is not included in `Work`.
+
 ## System Registration Rules
 
 Systems are registered through:

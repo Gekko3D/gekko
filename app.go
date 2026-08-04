@@ -33,6 +33,7 @@ type App struct {
 	slowFrameThreshold time.Duration
 	profileStage       string
 	profileSystems     []appSystemTiming
+	profileCategories  map[uintptr]string
 
 	// Command Buffering
 	cmdMutex            sync.Mutex
@@ -45,6 +46,7 @@ type App struct {
 type appSystemTiming struct {
 	stage    string
 	systemPC uintptr
+	category string
 	duration time.Duration
 }
 
@@ -296,15 +298,65 @@ func (app *App) callSystem(system systemFn) {
 	}
 	start := time.Now()
 	app.callSystemInternal(system)
+	pc := reflect.ValueOf(system).Pointer()
 	app.profileSystems = append(app.profileSystems, appSystemTiming{
 		stage:    app.profileStage,
-		systemPC: reflect.ValueOf(system).Pointer(),
+		systemPC: pc,
+		category: app.profileCategories[pc],
 		duration: time.Since(start),
 	})
 }
 
+func (app *App) registerSystemProfileCategory(system systemFn, category string) {
+	if category == "" {
+		return
+	}
+	if app.profileCategories == nil {
+		app.profileCategories = make(map[uintptr]string)
+	}
+	app.profileCategories[reflect.ValueOf(system).Pointer()] = category
+}
+
+func appProfileCategorySummary(samples []appSystemTiming) string {
+	totals := appProfileCategoryTotals(samples, nil)
+	names := make([]string, 0, len(totals))
+	for name := range totals {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s=%.2fms", name, float64(totals[name])/float64(time.Millisecond)))
+	}
+	return strings.Join(parts, ",")
+}
+
+func appProfileCategoryTotals(samples []appSystemTiming, totals map[string]time.Duration) map[string]time.Duration {
+	if totals == nil {
+		totals = make(map[string]time.Duration)
+	} else {
+		clear(totals)
+	}
+	for _, sample := range samples {
+		category := sample.category
+		if category == "" {
+			category = "other"
+		}
+		totals[category] += sample.duration
+	}
+	return totals
+}
+
 func (app *App) reportSlowFrame(work, rawDt time.Duration) {
-	if app.slowFrameThreshold == 0 || work < app.slowFrameThreshold {
+	if app.slowFrameThreshold == 0 {
+		return
+	}
+	if value, ok := app.resources[reflect.TypeOf(FrameProfile{})]; ok {
+		profile := value.(*FrameProfile)
+		profile.Work, profile.RawDelta = work, rawDt
+		profile.Categories = appProfileCategoryTotals(app.profileSystems, profile.Categories)
+	}
+	if work < app.slowFrameThreshold {
 		return
 	}
 
@@ -344,7 +396,7 @@ func (app *App) reportSlowFrame(work, rawDt time.Duration) {
 		lastGCPause = memory.PauseNs[(memory.NumGC-1)%uint32(len(memory.PauseNs))]
 	}
 	fmt.Printf(
-		"GEKKO_SLOW_FRAME t=%.3f work_ms=%.2f raw_dt_ms=%.2f fixed_steps=%d unattributed_ms=%.2f heap_mb=%.1f gc=%d last_gc_pause_ms=%.2f top=%q\n",
+		"GEKKO_SLOW_FRAME t=%.3f work_ms=%.2f raw_dt_ms=%.2f fixed_steps=%d unattributed_ms=%.2f heap_mb=%.1f gc=%d last_gc_pause_ms=%.2f categories=%q top=%q\n",
 		elapsed,
 		float64(work)/float64(time.Millisecond),
 		float64(rawDt)/float64(time.Millisecond),
@@ -353,6 +405,7 @@ func (app *App) reportSlowFrame(work, rawDt time.Duration) {
 		float64(memory.HeapAlloc)/(1024*1024),
 		memory.NumGC,
 		float64(lastGCPause)/float64(time.Millisecond),
+		appProfileCategorySummary(samples),
 		strings.Join(top, ","),
 	)
 }

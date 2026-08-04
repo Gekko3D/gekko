@@ -32,12 +32,13 @@ var (
 )
 
 type systemScheduleBuilder struct {
-	inStage       Stage
-	runAlways     bool
-	inState       State
-	inStatePhase  statePhase
-	system        systemFn
-	stateProvided bool
+	inStage         Stage
+	runAlways       bool
+	inState         State
+	inStatePhase    statePhase
+	system          systemFn
+	profileCategory string
+	stateProvided   bool
 }
 
 type stateScheduleBuilder struct {
@@ -72,35 +73,44 @@ func Always() stateScheduleBuilder {
 
 func (sched systemScheduleBuilder) InStage(s Stage) systemScheduleBuilder {
 	return systemScheduleBuilder{
-		system:        sched.system,
-		inStage:       s,
-		runAlways:     sched.runAlways,
-		inState:       sched.inState,
-		inStatePhase:  sched.inStatePhase,
-		stateProvided: sched.stateProvided,
+		system:          sched.system,
+		inStage:         s,
+		runAlways:       sched.runAlways,
+		inState:         sched.inState,
+		inStatePhase:    sched.inStatePhase,
+		profileCategory: sched.profileCategory,
+		stateProvided:   sched.stateProvided,
 	}
 }
 
 func (sched systemScheduleBuilder) InState(s stateScheduleBuilder) systemScheduleBuilder {
 	return systemScheduleBuilder{
-		system:        sched.system,
-		inStage:       sched.inStage,
-		runAlways:     s.always,
-		inState:       s.state,
-		inStatePhase:  s.phase,
-		stateProvided: true,
+		system:          sched.system,
+		inStage:         sched.inStage,
+		runAlways:       s.always,
+		inState:         s.state,
+		inStatePhase:    s.phase,
+		profileCategory: sched.profileCategory,
+		stateProvided:   true,
 	}
 }
 
 func (sched systemScheduleBuilder) RunAlways() systemScheduleBuilder {
 	return systemScheduleBuilder{
-		system:        sched.system,
-		inStage:       sched.inStage,
-		runAlways:     true,
-		inState:       sched.inState,
-		inStatePhase:  sched.inStatePhase,
-		stateProvided: sched.stateProvided,
+		system:          sched.system,
+		inStage:         sched.inStage,
+		runAlways:       true,
+		inState:         sched.inState,
+		inStatePhase:    sched.inStatePhase,
+		profileCategory: sched.profileCategory,
+		stateProvided:   sched.stateProvided,
 	}
+}
+
+// ProfileCategory groups this system in GEKKO_SLOW_FRAME_MS reports.
+func (sched systemScheduleBuilder) ProfileCategory(category string) systemScheduleBuilder {
+	sched.profileCategory = category
+	return sched
 }
 
 func (sched systemScheduleBuilder) InAnyState() systemScheduleBuilder {
@@ -171,6 +181,7 @@ func (app *App) UseStage(stage Stage, where stagePositionBuilder) *App {
 }
 
 func (app *App) UseSystem(system systemScheduleBuilder) *App {
+	app.registerSystemProfileCategory(system.system, system.profileCategory)
 	if system.runAlways || !system.stateProvided {
 		if _, ok := app.systemsStateless[system.inStage.Name]; ok {
 			app.systemsStateless[system.inStage.Name] = append(app.systemsStateless[system.inStage.Name], system.system)
