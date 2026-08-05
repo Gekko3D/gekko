@@ -82,6 +82,7 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
 - Important:
   - install this module whenever ECS systems need `*SpatialHashGrid` through dependency injection
   - `PhysicsModule` also uses a spatial grid internally, but that simulator-owned grid is not registered as an ECS resource
+  - bounded consumers should use `VisitAABBInto`; it visits center-out in stable entity order and stops when the callback returns false
   - if game code performs same-frame local-space rebases after `PreUpdate`, it may need to refresh AABBs/grid state immediately after the reprojected transform jump instead of waiting for the next frame
 
 ### `ChunkObserverModule`

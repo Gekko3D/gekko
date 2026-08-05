@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"math"
+	"sort"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -16,6 +17,7 @@ const maxFreeSpatialBuckets = 4096
 type SpatialHashGrid struct {
 	cellSize    float32
 	cells       map[uint64][]EntityId
+	sorted      map[uint64]bool
 	freeBuckets [][]EntityId
 }
 
@@ -23,6 +25,7 @@ func NewSpatialHashGrid(cellSize float32) *SpatialHashGrid {
 	return &SpatialHashGrid{
 		cellSize:    cellSize,
 		cells:       make(map[uint64][]EntityId),
+		sorted:      make(map[uint64]bool),
 		freeBuckets: make([][]EntityId, 0, 64),
 	}
 }
@@ -33,6 +36,7 @@ func (grid *SpatialHashGrid) Clear() {
 			grid.freeBuckets = append(grid.freeBuckets, bucket[:0])
 		}
 		delete(grid.cells, key)
+		delete(grid.sorted, key)
 	}
 }
 
@@ -68,6 +72,7 @@ func (grid *SpatialHashGrid) Insert(id EntityId, aabb AABBComponent) {
 				}
 				bucket = append(bucket, id)
 				grid.cells[key] = bucket
+				grid.sorted[key] = false
 			}
 		}
 	}
@@ -78,19 +83,32 @@ func (grid *SpatialHashGrid) QueryAABB(aabb AABBComponent) []EntityId {
 }
 
 func (grid *SpatialHashGrid) QueryAABBInto(aabb AABBComponent, unique map[EntityId]struct{}, results []EntityId) []EntityId {
+	results = results[:0]
+	grid.VisitAABBInto(aabb, unique, func(id EntityId) bool {
+		results = append(results, id)
+		return true
+	})
+	return results
+}
+
+// VisitAABBInto visits unique broadphase candidates in stable cell/entity order.
+// Returning false stops the query without materializing the remaining results.
+func (grid *SpatialHashGrid) VisitAABBInto(aabb AABBComponent, unique map[EntityId]struct{}, visit func(EntityId) bool) {
 	minX, maxX := grid.getCellIndex(aabb.Min.X()), grid.getCellIndex(aabb.Max.X())
 	minY, maxY := grid.getCellIndex(aabb.Min.Y()), grid.getCellIndex(aabb.Max.Y())
 	minZ, maxZ := grid.getCellIndex(aabb.Min.Z()), grid.getCellIndex(aabb.Max.Z())
 
-	clear(unique)
-	results = results[:0]
-
+	if unique == nil {
+		unique = make(map[EntityId]struct{})
+	} else {
+		clear(unique)
+	}
 	spanX := maxX - minX + 1
 	spanY := maxY - minY + 1
 	spanZ := maxZ - minZ + 1
 
 	if spanX <= 0 || spanY <= 0 || spanZ <= 0 {
-		return results
+		return
 	}
 
 	// Uniform grid query explosion guard:
@@ -98,35 +116,54 @@ func (grid *SpatialHashGrid) QueryAABBInto(aabb AABBComponent, unique map[Entity
 		if spanX > 16 {
 			centerX := (minX + maxX) / 2
 			minX = centerX - 8
-			maxX = centerX + 8
+			maxX = minX + 15
 		}
 		if spanY > 16 {
 			centerY := (minY + maxY) / 2
 			minY = centerY - 8
-			maxY = centerY + 8
+			maxY = minY + 15
 		}
 		if spanZ > 16 {
 			centerZ := (minZ + maxZ) / 2
 			minZ = centerZ - 8
-			maxZ = centerZ + 8
+			maxZ = minZ + 15
 		}
 	}
 
-	for x := minX; x <= maxX; x++ {
-		for y := minY; y <= maxY; y++ {
-			for z := minZ; z <= maxZ; z++ {
-				key := grid.hashKey(x, y, z)
-				for _, id := range grid.cells[key] {
-					if _, ok := unique[id]; ok {
+	centerX, centerY, centerZ := (minX+maxX)/2, (minY+maxY)/2, (minZ+maxZ)/2
+	absInt := func(value int) int {
+		if value < 0 {
+			return -value
+		}
+		return value
+	}
+	maxRadius := max(max(centerX-minX, maxX-centerX), max(centerY-minY, maxY-centerY), max(centerZ-minZ, maxZ-centerZ))
+	for radius := 0; radius <= maxRadius; radius++ {
+		for x := max(minX, centerX-radius); x <= min(maxX, centerX+radius); x++ {
+			for y := max(minY, centerY-radius); y <= min(maxY, centerY+radius); y++ {
+				for z := max(minZ, centerZ-radius); z <= min(maxZ, centerZ+radius); z++ {
+					if max(absInt(x-centerX), absInt(y-centerY), absInt(z-centerZ)) != radius {
 						continue
 					}
-					unique[id] = struct{}{}
-					results = append(results, id)
+					key := grid.hashKey(x, y, z)
+					bucket := grid.cells[key]
+					if len(bucket) > 1 && !grid.sorted[key] {
+						sort.Slice(bucket, func(i, j int) bool { return bucket[i] < bucket[j] })
+						grid.sorted[key] = true
+					}
+					for _, id := range bucket {
+						if _, ok := unique[id]; ok {
+							continue
+						}
+						unique[id] = struct{}{}
+						if visit != nil && !visit(id) {
+							return
+						}
+					}
 				}
 			}
 		}
 	}
-	return results
 }
 
 func (grid *SpatialHashGrid) QueryRadius(center mgl32.Vec3, radius float32) []EntityId {
