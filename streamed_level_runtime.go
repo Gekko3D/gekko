@@ -120,6 +120,14 @@ type StreamedLevelRuntimeMetrics struct {
 	EntitiesCommittedLastFrame        int
 	CommitBudgetHitLastFrame          bool
 	CommitBudgetReason                string
+	NavigationRebuildActive           bool
+	NavigationRebuildQueuedTileCount  int
+	NavigationEditIgnoredCount        uint64
+	NavigationRebuildStartedCount     uint64
+	NavigationRebuildCompletedCount   uint64
+	NavigationRebuildPublishedCount   uint64
+	NavigationRebuildLastReason       string
+	NavigationRebuildLastDirtyCount   int
 
 	PreparedChunkCount   int
 	PrepareErrorCount    int
@@ -320,6 +328,7 @@ type StreamedLevelRuntimeState struct {
 	navigationEditRevisions       map[EntityId]uint64
 	navigationEditGeneration      uint64
 	navigationQueuedEdits         map[content.TerrainChunkCoordDef]navigationQueuedEdit
+	navigationIgnoredRemovals     map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{}
 	navigationEditQueuedSince     time.Time
 	navigationEditLastQueuedAt    time.Time
 	navigationEditBlockers        map[string]navigationEditBlocker
@@ -633,6 +642,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.navigationEditRevisions = make(map[EntityId]uint64)
 	state.navigationEditGeneration = 0
 	state.navigationQueuedEdits = make(map[content.TerrainChunkCoordDef]navigationQueuedEdit)
+	state.navigationIgnoredRemovals = make(map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{})
 	state.navigationEditQueuedSince = time.Time{}
 	state.navigationEditLastQueuedAt = time.Time{}
 	state.navigationEditBlockers = make(map[string]navigationEditBlocker)
@@ -950,6 +960,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
 	state.PendingLoads = make(map[ChunkCoord]struct{})
 	state.PendingProxyLoads = make(map[ChunkCoord]struct{})
+	state.navigationIgnoredRemovals = nil
 	state.navigationLoadActive, state.navigationRebuildActive = false, false
 	return stopErr
 }
@@ -1530,6 +1541,39 @@ func streamedChunkHasLoadableContent(state *StreamedLevelRuntimeState, coord Chu
 	return false
 }
 
+// StreamedLevelCollisionReadyInBounds reports whether all loadable chunks
+// intersecting bounds are resident with their requested collision state. It is
+// a main-thread readiness check; it never requests or synchronously loads data.
+func StreamedLevelCollisionReadyInBounds(cmd *Commands, state *StreamedLevelRuntimeState, boundsMin, boundsMax mgl32.Vec3) bool {
+	if cmd == nil || state == nil || !state.Initialized || state.InitErr != nil || state.ChunkSize <= 0 {
+		return false
+	}
+	for axis := 0; axis < 3; axis++ {
+		if !isFiniteFloat32(boundsMin[axis]) || !isFiniteFloat32(boundsMax[axis]) {
+			return false
+		}
+		if boundsMin[axis] > boundsMax[axis] {
+			boundsMin[axis], boundsMax[axis] = boundsMax[axis], boundsMin[axis]
+		}
+	}
+	minCoord := ChunkCoordFromPosition(boundsMin, state.ChunkSize)
+	maxCoord := ChunkCoordFromPosition(boundsMax, state.ChunkSize)
+	for x := minCoord.X; x <= maxCoord.X; x++ {
+		for y := minCoord.Y; y <= maxCoord.Y; y++ {
+			for z := minCoord.Z; z <= maxCoord.Z; z++ {
+				coord := ChunkCoord{X: x, Y: y, Z: z}
+				if !streamedChunkHasLoadableContent(state, coord) {
+					continue
+				}
+				if _, requested := state.CollisionChunks[coord]; !requested || state.LoadedChunks[coord] == nil || streamedLoadedChunkNeedsResidencyUpgrade(cmd, state, coord) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
 func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState) {
 	if state == nil || !state.Initialized || state.InitErr != nil {
 		return
@@ -1672,6 +1716,8 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 	state.Metrics.KeepSectorFullLoadedCount = streamedFullLoadedSectorCount(state, state.KeepSectors)
 	state.Metrics.PendingLoadCount = len(state.PendingLoads)
 	state.Metrics.PendingProxyLoadCount = len(state.PendingProxyLoads)
+	state.Metrics.NavigationRebuildActive = state.navigationRebuildActive
+	state.Metrics.NavigationRebuildQueuedTileCount = len(state.navigationQueuedEdits)
 	state.Metrics.ActiveChunkPrepareJobCount, state.Metrics.ActiveProxyPrepareJobCount = streamedActivePrepareJobBreakdown(state)
 	state.Metrics.ActivePrepareJobCount = state.Metrics.ActiveChunkPrepareJobCount + state.Metrics.ActiveProxyPrepareJobCount
 	if state.PreparedLoads != nil {

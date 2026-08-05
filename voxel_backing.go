@@ -180,6 +180,14 @@ func (component *VoxelBackingComponent) materializeSphere(xbm *volume.XBrickMap,
 					continue
 				}
 				local := [3]int{x, y, z}
+				global := [3]int{
+					component.ChunkCoord[0]*component.ChunkSize + x,
+					component.ChunkCoord[1]*component.ChunkSize + y,
+					component.ChunkCoord[2]*component.ChunkSize + z,
+				}
+				if component.removed(local) || component.Provider.VoxelValue(global) == 0 {
+					continue
+				}
 				carveVoxels = append(carveVoxels, local)
 				for _, offset := range voxelBackingCarveShellOffsets {
 					neighbor := [3]int{local[0] + offset[0], local[1] + offset[1], local[2] + offset[2]}

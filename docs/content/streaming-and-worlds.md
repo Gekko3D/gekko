@@ -813,7 +813,21 @@ background build runs, a removal keeps the last valid graph unchanged; grounded
 NPC movement continues to validate collision, landing support, and step height
 against the live voxel world. An addition installs a generation-tagged blocker
 over the edited world bounds. Ground, wall, and detail removals therefore do not
-pause bots or invalidate paths speculatively. Newer edits coalesce
+pause bots or invalidate paths speculatively. Before queueing a removal, the
+runtime compares the removed source solids with effective live occupancy
+(explicit voxels plus immutable backing minus removals) for every agent profile.
+A removal queues navigation work only when a formerly accepted span loses the
+grounded motor's radius-and-step support footprint, or when locally re-evaluated
+capsule clearance produces a walkable bridge between graph spans that are not
+already mutually reachable. Boundary erosion that only expands an existing
+reachable area keeps the old graph, even if the new fringe touches it on
+multiple sides.
+Removing one body voxel is not itself sufficient. This is cumulative: repeated
+small holes retain their exact removed cells, but each new edit evaluates only
+the connected damage component it touches. They keep using the old graph while
+physically supported, then queue one exact rebuild when the combined live edit
+changes traversal.
+Newer edits coalesce
 behind a 100 ms quiet window, with a 250 ms maximum wait so continuous
 destruction cannot starve publication, and make older results ineligible to
 publish. The rebuilt graph's existing profile-bounded gap-jump generation keeps

@@ -118,13 +118,15 @@ func processDestructionEvents(state *VoxelRtState, events []DestructionEvent, cm
 	changed := false
 	edit := runtimeVoxelEdit{}
 	for _, event := range events {
+		backingChanged := false
 		if backed {
 			center, radius := voxelBackingLocalSphere(voxObj.Transform, event.Center, event.Radius)
-			changed = backing.materializeSphere(editableMap, center, radius, event.backingMaterial) || changed
+			backingChanged = backing.materializeSphere(editableMap, center, radius, event.backingMaterial)
+			changed = backingChanged || changed
 		}
 		eventChanged := voxelSphereEditWithTransform(editableMap, voxObj.Transform, event.Center, event.Radius, 0)
 		changed = eventChanged || changed
-		if eventChanged {
+		if backingChanged || eventChanged {
 			edit.include(runtimeVoxelSphereEdit(event.Center, event.Radius, 0))
 		}
 		carveOnly = carveOnly && event.CarveOnly

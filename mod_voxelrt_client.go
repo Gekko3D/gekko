@@ -156,9 +156,6 @@ type runtimeVoxelEdit struct {
 
 func runtimeVoxelSphereEdit(center mgl32.Vec3, radius float32, val uint8) runtimeVoxelEdit {
 	edit := runtimeVoxelEdit{Valid: true, Added: val != 0}
-	if !edit.Added {
-		return edit
-	}
 	extent := mgl32.Vec3{radius, radius, radius}
 	edit.Min, edit.Max = center.Sub(extent), center.Add(extent)
 	return edit
@@ -168,12 +165,17 @@ func (e *runtimeVoxelEdit) include(other runtimeVoxelEdit) {
 	if !other.Valid {
 		return
 	}
-	e.Valid = true
-	if !other.Added {
+	if !e.Valid {
+		*e = other
 		return
 	}
-	if !e.Added {
-		e.Added, e.Min, e.Max = true, other.Min, other.Max
+	// Additions need an immediate blocker and a rebuild. When a batch mixes
+	// additions and removals, retain only the addition bounds used by that
+	// blocker; removal-only batches retain their bounds for nav-impact checks.
+	if e.Added != other.Added {
+		if other.Added {
+			*e = other
+		}
 		return
 	}
 	for axis := 0; axis < 3; axis++ {

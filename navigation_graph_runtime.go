@@ -638,9 +638,11 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			break
 		}
 		state.navigationRebuildActive = false
+		state.Metrics.NavigationRebuildActive = false
 		if result.EditGeneration != state.navigationEditGeneration {
 			break
 		}
+		state.Metrics.NavigationRebuildCompletedCount++
 		if result.Err != nil {
 			state.InitErr = result.Err
 			return
@@ -659,6 +661,7 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 				delete(state.navigationQueuedEdits, coord)
 			}
 		}
+		state.Metrics.NavigationRebuildQueuedTileCount = len(state.navigationQueuedEdits)
 		if len(state.navigationQueuedEdits) == 0 {
 			state.navigationEditQueuedSince = time.Time{}
 			state.navigationEditLastQueuedAt = time.Time{}
@@ -666,6 +669,10 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		if !navigationRebuildChangesResidentTopology(state, result.Result) {
 			retireNavigationEditBlockers(state, result.EditGeneration)
 			break
+		}
+		state.Metrics.NavigationRebuildPublishedCount++
+		for _, override := range result.Result.SourceOverrides {
+			delete(state.navigationIgnoredRemovals, override.ChunkCoord)
 		}
 		reloadStreamedNavigationResidency(state)
 		if state.navigationRetireAtLoad == nil {
@@ -913,6 +920,7 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 	}
 	snapshots := takeVoxelWorldDirtyChunks(cmd.app, state.BaseWorldID)
 	editsByCoord := make(map[content.TerrainChunkCoordDef]runtimeVoxelEdit)
+	var backingsByCoord map[content.TerrainChunkCoordDef]*VoxelBackingComponent
 	backingDeltaDirty := false
 	rt := voxelRtStateFromApp(cmd.app)
 	if rt != nil {
@@ -924,6 +932,10 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 				}
 				if backing, ok := voxelBackingForEntity(cmd, eid); ok && backing.Dirty {
 					state.recordVoxelBackingRemoval(backing)
+					if backingsByCoord == nil {
+						backingsByCoord = make(map[content.TerrainChunkCoordDef]*VoxelBackingComponent)
+					}
+					backingsByCoord[terrainCoordFromChunk(chunkCoord)] = backing
 					backingDeltaDirty = true
 				}
 				if snapshot := loadedImportedWorldChunkSnapshotForNavigation(cmd, state, eid); snapshot != nil {
@@ -958,7 +970,45 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 		state.InitErr = err
 		return
 	}
+	impactful := snapshots[:0]
+	lastReason := ""
+	for _, snapshot := range snapshots {
+		edit := editsByCoord[snapshot.Coord]
+		_, alreadyQueued := state.navigationQueuedEdits[snapshot.Coord]
+		reason := ""
+		switch {
+		case alreadyQueued:
+			reason = state.Metrics.NavigationRebuildLastReason
+			if reason == "" {
+				reason = "coalesced_edit"
+			}
+		case !edit.Valid:
+			reason = "unknown_edit"
+		case edit.Added:
+			reason = "voxel_addition"
+		default:
+			reason = navigationRemovalImpact(state, snapshot, backingsByCoord[snapshot.Coord], edit)
+			if reason == "" {
+				state.Metrics.NavigationEditIgnoredCount++
+			}
+		}
+		if reason != "" {
+			impactful = append(impactful, snapshot)
+			lastReason = reason
+			if !edit.Valid || edit.Added {
+				delete(state.navigationIgnoredRemovals, snapshot.Coord)
+			}
+		}
+	}
+	snapshots = impactful
+	if len(snapshots) == 0 {
+		if !state.navigationRebuildActive && navigationRebuildReady(state, time.Now()) {
+			startStreamedNavigationRebuild(cmd, state)
+		}
+		return
+	}
 	state.navigationEditGeneration++
+	state.Metrics.NavigationRebuildLastReason = lastReason
 	generation := state.navigationEditGeneration
 	now := time.Now()
 	if state.navigationEditQueuedSince.IsZero() {
@@ -978,10 +1028,451 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 			state.navigationEditBlockers[blocker.Blocker.ID] = blocker
 		}
 	}
+	state.Metrics.NavigationRebuildQueuedTileCount = len(state.navigationQueuedEdits)
 	installNavigationEditBlockers(state)
 	if !state.navigationRebuildActive && navigationRebuildReady(state, now) {
 		startStreamedNavigationRebuild(cmd, state)
 	}
+}
+
+type navigationRemovedVoxel struct{ X, Y, Z int }
+type navigationRemovalColumn struct{ X, Z int }
+type navigationAcceptedSpan struct {
+	cell navigationRemovedVoxel
+	ref  content.NavSpanRef
+}
+
+type navigationRemovalOccupancy struct {
+	chunkSize int
+	edited    content.TerrainChunkCoordDef
+	snapshot  *content.ImportedWorldChunkDef
+	backing   *VoxelBackingComponent
+	sources   map[content.TerrainChunkCoordDef]content.NavSourceTileDef
+	removed   map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{}
+}
+
+func newNavigationRemovalOccupancy(sources []content.NavSourceTileDef, snapshot *content.ImportedWorldChunkDef, backing *VoxelBackingComponent, removed map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{}) navigationRemovalOccupancy {
+	byCoord := make(map[content.TerrainChunkCoordDef]content.NavSourceTileDef, len(sources))
+	for _, source := range sources {
+		byCoord[source.Coord] = source
+	}
+	return navigationRemovalOccupancy{chunkSize: snapshot.ChunkSize, edited: snapshot.Coord, snapshot: snapshot, backing: backing, sources: byCoord, removed: removed}
+}
+
+func (occupancy navigationRemovalOccupancy) voxel(x, y, z int, blocked bool) (bool, bool) {
+	coord := content.TerrainChunkCoordDef{
+		X: floorDivVoxelBacking(x, occupancy.chunkSize),
+		Y: floorDivVoxelBacking(y, occupancy.chunkSize),
+		Z: floorDivVoxelBacking(z, occupancy.chunkSize),
+	}
+	source, known := occupancy.sources[coord]
+	if !known {
+		return false, false
+	}
+	localX, localY, localZ := x-coord.X*occupancy.chunkSize, y-coord.Y*occupancy.chunkSize, z-coord.Z*occupancy.chunkSize
+	if !blocked {
+		if _, removed := occupancy.removed[coord][navigationRemovedVoxel{x, y, z}]; removed {
+			return false, true
+		}
+	}
+	if !blocked && coord == occupancy.edited {
+		return navigationSnapshotSolid(occupancy.snapshot, occupancy.backing, localX, localY, localZ), true
+	}
+	runs := source.SolidRuns
+	if blocked {
+		runs = source.BlockedRuns
+	}
+	return navigationVoxelRunsContain(runs, localX, localY, localZ), true
+}
+
+func navigationVoxelRunsContain(runs []content.NavVoxelRunDef, x, y, z int) bool {
+	start := sort.Search(len(runs), func(i int) bool { return runs[i].X >= x })
+	for _, run := range runs[start:] {
+		if run.X != x {
+			break
+		}
+		if run.Z < z {
+			continue
+		}
+		if run.Z > z {
+			break
+		}
+		if y >= run.Y && y < run.Y+run.Count {
+			return true
+		}
+	}
+	return false
+}
+
+// navigationRemovalImpact keeps removal-only edits out of the bake
+// queue while old spans retain footprint support and no capsule-sized local
+// bridge connects previously unreachable graph areas.
+func navigationRemovalImpact(state *StreamedLevelRuntimeState, snapshot *content.ImportedWorldChunkDef, backing *VoxelBackingComponent, edit runtimeVoxelEdit) string {
+	if state == nil || state.BaseNavManifest == nil || snapshot == nil || !edit.Valid || edit.Added {
+		return "removal_unknown"
+	}
+	for axis := range 3 {
+		if !runtimeNavigationFinite(edit.Min[axis]) || !runtimeNavigationFinite(edit.Max[axis]) || edit.Min[axis] > edit.Max[axis] {
+			return "removal_unknown"
+		}
+	}
+	manifest := state.BaseNavManifest
+	if manifest.ChunkSize <= 0 || manifest.VoxelResolution <= 0 || snapshot.ChunkSize != manifest.ChunkSize ||
+		math.Abs(float64(snapshot.VoxelResolution-manifest.VoxelResolution)) > 1e-6 {
+		return "removal_unknown"
+	}
+	var editedSource *content.NavSourceTileDef
+	for i := range state.NavigationSources {
+		if state.NavigationSources[i].Coord == snapshot.Coord {
+			editedSource = &state.NavigationSources[i]
+			break
+		}
+	}
+	if editedSource == nil {
+		return "removal_unknown"
+	}
+	removed := navigationRemovedVoxels(*editedSource, snapshot, backing, edit)
+	if len(removed) == 0 {
+		return ""
+	}
+	if state.navigationIgnoredRemovals == nil {
+		state.navigationIgnoredRemovals = make(map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{})
+	}
+	allRemoved := state.navigationIgnoredRemovals[snapshot.Coord]
+	if allRemoved == nil {
+		allRemoved = make(map[navigationRemovedVoxel]struct{}, len(removed))
+		state.navigationIgnoredRemovals[snapshot.Coord] = allRemoved
+	}
+	for _, voxel := range removed {
+		allRemoved[voxel] = struct{}{}
+	}
+	removed = navigationConnectedRemovedVoxels(state.navigationIgnoredRemovals, snapshot.ChunkSize, removed)
+	occupancy := newNavigationRemovalOccupancy(state.NavigationSources, snapshot, backing, state.navigationIgnoredRemovals)
+	graphs := make(map[navigationRuntimeGraphKey]*content.NavGraphTileDef, len(state.NavigationGraphs))
+	for i := range state.NavigationGraphs {
+		graph := &state.NavigationGraphs[i]
+		graphs[navigationRuntimeGraphKey{graph.Coord, graph.AgentProfileID}] = graph
+	}
+	for _, profile := range manifest.AgentProfiles {
+		if navigationRemovalBreaksSupport(state.NavigationSources, graphs, occupancy, removed, profile, manifest.VoxelResolution) {
+			return "removal_support_lost"
+		}
+		if navigationRemovalOpensTraversal(state.NavigationSources, graphs, state.navigationQuery, occupancy, removed, profile, manifest.VoxelResolution) {
+			return "removal_new_connection"
+		}
+	}
+	if len(manifest.AgentProfiles) == 0 {
+		return "removal_unknown"
+	}
+	return ""
+}
+
+func navigationConnectedRemovedVoxels(all map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{}, chunkSize int, seeds []navigationRemovedVoxel) []navigationRemovedVoxel {
+	directions := [...]navigationRemovedVoxel{{X: -1}, {X: 1}, {Y: -1}, {Y: 1}, {Z: -1}, {Z: 1}}
+	visited := make(map[navigationRemovedVoxel]struct{}, len(seeds))
+	queue := append([]navigationRemovedVoxel(nil), seeds...)
+	for _, seed := range queue {
+		visited[seed] = struct{}{}
+	}
+	for len(queue) > 0 {
+		voxel := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		for _, direction := range directions {
+			neighbor := navigationRemovedVoxel{voxel.X + direction.X, voxel.Y + direction.Y, voxel.Z + direction.Z}
+			coord := content.TerrainChunkCoordDef{
+				X: floorDivVoxelBacking(neighbor.X, chunkSize),
+				Y: floorDivVoxelBacking(neighbor.Y, chunkSize),
+				Z: floorDivVoxelBacking(neighbor.Z, chunkSize),
+			}
+			if _, removed := all[coord][neighbor]; !removed {
+				continue
+			}
+			if _, seen := visited[neighbor]; seen {
+				continue
+			}
+			visited[neighbor] = struct{}{}
+			queue = append(queue, neighbor)
+		}
+	}
+	result := make([]navigationRemovedVoxel, 0, len(visited))
+	for voxel := range visited {
+		result = append(result, voxel)
+	}
+	return result
+}
+
+func navigationRemovedVoxels(source content.NavSourceTileDef, snapshot *content.ImportedWorldChunkDef, backing *VoxelBackingComponent, edit runtimeVoxelEdit) []navigationRemovedVoxel {
+	resolution := source.VoxelResolution
+	origin := [3]float32{
+		float32(source.Coord.X*source.ChunkSize) * resolution,
+		float32(source.Coord.Y*source.ChunkSize) * resolution,
+		float32(source.Coord.Z*source.ChunkSize) * resolution,
+	}
+	localMin, localMax := [3]int{}, [3]int{}
+	for axis := range 3 {
+		localMin[axis] = max(0, int(math.Floor(float64((edit.Min[axis]-origin[axis])/resolution)))-1)
+		localMax[axis] = min(source.ChunkSize-1, int(math.Ceil(float64((edit.Max[axis]-origin[axis])/resolution)))+1)
+	}
+	removed := make([]navigationRemovedVoxel, 0, 16)
+	first := sort.Search(len(source.SolidRuns), func(i int) bool { return source.SolidRuns[i].X >= localMin[0] })
+	for _, run := range source.SolidRuns[first:] {
+		if run.X > localMax[0] {
+			break
+		}
+		if run.Z < localMin[2] || run.Z > localMax[2] {
+			continue
+		}
+		start, end := max(run.Y, localMin[1]), min(run.Y+run.Count-1, localMax[1])
+		for y := start; y <= end; y++ {
+			if navigationSnapshotSolid(snapshot, backing, run.X, y, run.Z) {
+				continue
+			}
+			removed = append(removed, navigationRemovedVoxel{
+				X: source.Coord.X*source.ChunkSize + run.X,
+				Y: source.Coord.Y*source.ChunkSize + y,
+				Z: source.Coord.Z*source.ChunkSize + run.Z,
+			})
+		}
+	}
+	return removed
+}
+
+func navigationRemovalBreaksSupport(sources []content.NavSourceTileDef, graphs map[navigationRuntimeGraphKey]*content.NavGraphTileDef, occupancy navigationRemovalOccupancy, removed []navigationRemovedVoxel, profile content.NavAgentProfileDef, resolution float32) bool {
+	probeRadius := max(profile.Radius*0.5, float32(0.05))
+	margin := int(math.Ceil(float64(probeRadius/resolution))) + 1
+	minX, maxX, minY, maxY, minZ, maxZ := removed[0].X, removed[0].X, removed[0].Y, removed[0].Y, removed[0].Z, removed[0].Z
+	for _, voxel := range removed[1:] {
+		minX, maxX = min(minX, voxel.X), max(maxX, voxel.X)
+		minY, maxY = min(minY, voxel.Y), max(maxY, voxel.Y)
+		minZ, maxZ = min(minZ, voxel.Z), max(maxZ, voxel.Z)
+	}
+	stepLayers := int(math.Floor(float64(profile.StepHeight / resolution)))
+	for _, source := range sources {
+		graph := graphs[navigationRuntimeGraphKey{source.Coord, profile.ID}]
+		if graph == nil {
+			continue
+		}
+		originX, originY, originZ := source.Coord.X*source.ChunkSize, source.Coord.Y*source.ChunkSize, source.Coord.Z*source.ChunkSize
+		for _, span := range navigationSourceSpansInX(source, minX-margin, maxX+margin) {
+			spanX, spanY, spanZ := originX+span.X, originY+span.Y, originZ+span.Z
+			if spanX < minX-margin || spanX > maxX+margin || spanZ < minZ-margin || spanZ > maxZ+margin ||
+				spanY-1 < minY-stepLayers || spanY-1 > maxY+stepLayers || !navigationGraphAcceptsSpan(*graph, span.ID) {
+				continue
+			}
+			if solid, known := occupancy.voxel(spanX, spanY-1, spanZ, false); !known || solid {
+				continue
+			}
+			supported := false
+			for _, offset := range CharacterGroundProbeOffsets(profile.Radius) {
+				x := int(math.Floor(float64(float32(spanX) + 0.5 + offset.X()/resolution)))
+				z := int(math.Floor(float64(float32(spanZ) + 0.5 + offset.Z()/resolution)))
+				for y := spanY - 1; y >= spanY-1-stepLayers; y-- {
+					if solid, known := occupancy.voxel(x, y, z, false); known && solid {
+						supported = true
+						break
+					}
+				}
+				if supported {
+					break
+				}
+			}
+			if !supported {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func navigationRemovalOpensTraversal(sources []content.NavSourceTileDef, graphs map[navigationRuntimeGraphKey]*content.NavGraphTileDef, query *content.NavGraphQuery, occupancy navigationRemovalOccupancy, removed []navigationRemovedVoxel, profile content.NavAgentProfileDef, resolution float32) bool {
+	radiusCells := int(math.Ceil(float64(profile.Radius/resolution))) + 1
+	heightLayers := int(math.Ceil(float64(profile.Height / resolution)))
+	stepLayers := int(math.Floor(float64(profile.StepHeight / resolution)))
+	minX, maxX, minY, maxY, minZ, maxZ := removed[0].X, removed[0].X, removed[0].Y, removed[0].Y, removed[0].Z, removed[0].Z
+	for _, voxel := range removed[1:] {
+		minX, maxX = min(minX, voxel.X), max(maxX, voxel.X)
+		minY, maxY = min(minY, voxel.Y), max(maxY, voxel.Y)
+		minZ, maxZ = min(minZ, voxel.Z), max(maxZ, voxel.Z)
+	}
+
+	accepted := make(map[navigationRemovalColumn][]navigationAcceptedSpan)
+	candidates := make(map[navigationRemovedVoxel]struct{}, len(removed)*2)
+	for _, source := range sources {
+		graph := graphs[navigationRuntimeGraphKey{source.Coord, profile.ID}]
+		originX, originY, originZ := source.Coord.X*source.ChunkSize, source.Coord.Y*source.ChunkSize, source.Coord.Z*source.ChunkSize
+		for _, span := range navigationSourceSpansInX(source, minX-radiusCells-1, maxX+radiusCells+1) {
+			cell := navigationRemovedVoxel{X: originX + span.X, Y: originY + span.Y, Z: originZ + span.Z}
+			if graph != nil && navigationGraphAcceptsSpan(*graph, span.ID) {
+				if cell.X >= minX-radiusCells-1 && cell.X <= maxX+radiusCells+1 && cell.Z >= minZ-radiusCells-1 && cell.Z <= maxZ+radiusCells+1 &&
+					cell.Y >= minY-heightLayers-stepLayers && cell.Y <= maxY+stepLayers {
+					column := navigationRemovalColumn{cell.X, cell.Z}
+					accepted[column] = append(accepted[column], navigationAcceptedSpan{cell: cell, ref: content.NavSpanRef{Tile: source.Coord, Span: span.ID}})
+				}
+				continue
+			}
+			if cell.X >= minX-radiusCells && cell.X <= maxX+radiusCells && cell.Z >= minZ-radiusCells && cell.Z <= maxZ+radiusCells &&
+				cell.Y >= minY-heightLayers && cell.Y <= maxY {
+				candidates[cell] = struct{}{}
+			}
+		}
+	}
+	for _, voxel := range removed {
+		candidates[voxel] = struct{}{}
+	}
+
+	novel := make([]navigationRemovedVoxel, 0, len(candidates))
+	byColumn := make(map[navigationRemovalColumn][]navigationRemovedVoxel)
+	for cell := range candidates {
+		if !navigationRemovalCellWalkable(occupancy, cell, profile, resolution) || navigationRemovalCoveredByAcceptedSpan(accepted[navigationRemovalColumn{cell.X, cell.Z}], cell.Y, stepLayers) {
+			continue
+		}
+		novel = append(novel, cell)
+		column := navigationRemovalColumn{cell.X, cell.Z}
+		byColumn[column] = append(byColumn[column], cell)
+	}
+	if len(novel) == 0 {
+		return false
+	}
+
+	directions := [...]navigationRemovalColumn{{X: -1}, {X: 1}, {Z: -1}, {Z: 1}}
+	visited := make(map[navigationRemovedVoxel]struct{}, len(novel))
+	for _, seed := range novel {
+		if _, seen := visited[seed]; seen {
+			continue
+		}
+		queue := []navigationRemovedVoxel{seed}
+		visited[seed] = struct{}{}
+		contacts := make(map[content.NavSpanRef]struct{})
+		for len(queue) > 0 {
+			cell := queue[len(queue)-1]
+			queue = queue[:len(queue)-1]
+			for _, direction := range directions {
+				column := navigationRemovalColumn{cell.X + direction.X, cell.Z + direction.Z}
+				for _, other := range byColumn[column] {
+					if navigationAbsInt(other.Y-cell.Y) > stepLayers {
+						continue
+					}
+					if _, seen := visited[other]; !seen {
+						visited[other] = struct{}{}
+						queue = append(queue, other)
+					}
+				}
+				for _, old := range accepted[column] {
+					if navigationAbsInt(old.cell.Y-cell.Y) <= stepLayers {
+						contacts[old.ref] = struct{}{}
+					}
+				}
+			}
+		}
+		if navigationRemovalConnectsSeparatedSpans(query, contacts) {
+			return true
+		}
+	}
+	return false
+}
+
+func navigationRemovalCellWalkable(occupancy navigationRemovalOccupancy, cell navigationRemovedVoxel, profile content.NavAgentProfileDef, resolution float32) bool {
+	heightLayers := int(math.Ceil(float64(profile.Height / resolution)))
+	stepLayers := int(math.Floor(float64(profile.StepHeight / resolution)))
+	if solid, known := occupancy.voxel(cell.X, cell.Y-1, cell.Z, false); !known || !solid {
+		return false
+	}
+	for y := cell.Y; y < cell.Y+heightLayers; y++ {
+		if solid, known := occupancy.voxel(cell.X, y, cell.Z, false); !known || solid {
+			return false
+		}
+	}
+	radiusCells := int(math.Ceil(float64(profile.Radius/resolution))) + 1
+	radiusSquared := profile.Radius * profile.Radius
+	for dx := -radiusCells; dx <= radiusCells; dx++ {
+		for dz := -radiusCells; dz <= radiusCells; dz++ {
+			axisX, axisZ := max(0, 2*navigationAbsInt(dx)-1), max(0, 2*navigationAbsInt(dz)-1)
+			distanceSquared := float32(axisX*axisX+axisZ*axisZ) * resolution * resolution * 0.25
+			if distanceSquared+1e-6 >= radiusSquared {
+				continue
+			}
+			for y := cell.Y + stepLayers; y < cell.Y+heightLayers; y++ {
+				if solid, known := occupancy.voxel(cell.X+dx, y, cell.Z+dz, false); !known || solid {
+					return false
+				}
+			}
+			for y := cell.Y; y < cell.Y+heightLayers; y++ {
+				if blocked, known := occupancy.voxel(cell.X+dx, y, cell.Z+dz, true); !known || blocked {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func navigationRemovalConnectsSeparatedSpans(query *content.NavGraphQuery, contacts map[content.NavSpanRef]struct{}) bool {
+	if len(contacts) < 2 {
+		return false
+	}
+	refs := make([]content.NavSpanRef, 0, len(contacts))
+	for ref := range contacts {
+		refs = append(refs, ref)
+	}
+	if query == nil || len(query.ReachableSpansIgnoringBlockers(refs[0], refs)) != len(refs) {
+		return true
+	}
+	for _, ref := range refs[1:] {
+		if _, reachable := query.ReachableSpansIgnoringBlockers(ref, refs[:1])[refs[0]]; !reachable {
+			return true
+		}
+	}
+	return false
+}
+
+func navigationRemovalCoveredByAcceptedSpan(spans []navigationAcceptedSpan, y, stepLayers int) bool {
+	for _, span := range spans {
+		if navigationAbsInt(span.cell.Y-y) <= stepLayers {
+			return true
+		}
+	}
+	return false
+}
+
+func navigationAbsInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func navigationSourceSpansInX(source content.NavSourceTileDef, globalMin, globalMax int) []content.NavSpanDef {
+	originX := source.Coord.X * source.ChunkSize
+	localMin, localMax := globalMin-originX, globalMax-originX
+	start := sort.Search(len(source.Spans), func(i int) bool { return source.Spans[i].X >= localMin })
+	end := start + sort.Search(len(source.Spans)-start, func(i int) bool { return source.Spans[start+i].X > localMax })
+	return source.Spans[start:end]
+}
+
+func navigationGraphAcceptsSpan(graph content.NavGraphTileDef, id uint32) bool {
+	index := sort.Search(len(graph.SpanIDs), func(i int) bool { return graph.SpanIDs[i] >= id })
+	return index < len(graph.SpanIDs) && graph.SpanIDs[index] == id
+}
+
+func navigationSnapshotSolid(snapshot *content.ImportedWorldChunkDef, backing *VoxelBackingComponent, x, y, z int) bool {
+	if snapshot == nil || x < 0 || y < 0 || z < 0 || x >= snapshot.ChunkSize || y >= snapshot.ChunkSize || z >= snapshot.ChunkSize {
+		return false
+	}
+	if backing != nil && backing.removed([3]int{x, y, z}) {
+		return false
+	}
+	index := sort.Search(len(snapshot.Voxels), func(i int) bool {
+		voxel := snapshot.Voxels[i]
+		return voxel.X > x || voxel.X == x && (voxel.Y > y || voxel.Y == y && voxel.Z >= z)
+	})
+	if index < len(snapshot.Voxels) && snapshot.Voxels[index].X == x && snapshot.Voxels[index].Y == y && snapshot.Voxels[index].Z == z && snapshot.Voxels[index].Value != 0 {
+		return true
+	}
+	if backing == nil || backing.Provider == nil {
+		return false
+	}
+	origin := [3]int{backing.ChunkCoord[0] * backing.ChunkSize, backing.ChunkCoord[1] * backing.ChunkSize, backing.ChunkCoord[2] * backing.ChunkSize}
+	return backing.Provider.VoxelValue([3]int{origin[0] + x, origin[1] + y, origin[2] + z}) != 0
 }
 
 func navigationRebuildReady(state *StreamedLevelRuntimeState, now time.Time) bool {
@@ -1136,6 +1627,9 @@ func startStreamedNavigationRebuild(cmd *Commands, state *StreamedLevelRuntimeSt
 	editGeneration := state.navigationEditGeneration
 	deltaPath, manifestPath := state.WorldDeltaPath, state.BaseNavManifestPath
 	state.navigationRebuildActive = true
+	state.Metrics.NavigationRebuildActive = true
+	state.Metrics.NavigationRebuildStartedCount++
+	state.Metrics.NavigationRebuildLastDirtyCount = len(dirty)
 	state.navigationEditQueuedSince = time.Time{}
 	state.navigationEditLastQueuedAt = time.Time{}
 	state.jobs.Add(1)

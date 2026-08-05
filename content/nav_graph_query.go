@@ -827,6 +827,17 @@ func (q *NavGraphQuery) IsSpanActive(ref NavSpanRef) bool {
 // traversal and blocker overlay. Unknown, blocked, and unreachable targets are
 // omitted. Values are active outgoing span counts, capped at two.
 func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) map[NavSpanRef]uint8 {
+	return q.reachableSpans(start, targets, false)
+}
+
+// ReachableSpansIgnoringBlockers reports baked-graph reachability while retaining
+// runtime traversal and gate filtering. It is intended for topology comparisons
+// that must not depend on transient obstacle placement.
+func (q *NavGraphQuery) ReachableSpansIgnoringBlockers(start NavSpanRef, targets []NavSpanRef) map[NavSpanRef]uint8 {
+	return q.reachableSpans(start, targets, true)
+}
+
+func (q *NavGraphQuery) reachableSpans(start NavSpanRef, targets []NavSpanRef, ignoreBlockers bool) map[NavSpanRef]uint8 {
 	result := make(map[NavSpanRef]uint8, len(targets))
 	if q == nil || q.resident() == nil || len(targets) == 0 {
 		return result
@@ -836,7 +847,7 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 	if !ok {
 		return result
 	}
-	if query.isBlocked(start) {
+	if !ignoreBlockers && query.isBlocked(start) {
 		return result
 	}
 	wanted := make(map[NavSpanRef]struct{}, len(targets))
@@ -844,11 +855,11 @@ func (q *NavGraphQuery) ReachableSpans(start NavSpanRef, targets []NavSpanRef) m
 		if _, ok := query.spanRegion(target); !ok {
 			continue
 		}
-		if !query.isBlocked(target) {
+		if ignoreBlockers || !query.isBlocked(target) {
 			wanted[target] = struct{}{}
 		}
 	}
-	if len(query.blocked) == 0 {
+	if ignoreBlockers || len(query.blocked) == 0 {
 		wantedRegions := make(map[navRouteNode]struct{}, len(wanted))
 		for target := range wanted {
 			region, _ := query.spanRegion(target)
