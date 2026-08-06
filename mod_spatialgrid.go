@@ -17,7 +17,6 @@ const maxFreeSpatialBuckets = 4096
 type SpatialHashGrid struct {
 	cellSize    float32
 	cells       map[uint64][]EntityId
-	sorted      map[uint64]bool
 	freeBuckets [][]EntityId
 }
 
@@ -25,7 +24,6 @@ func NewSpatialHashGrid(cellSize float32) *SpatialHashGrid {
 	return &SpatialHashGrid{
 		cellSize:    cellSize,
 		cells:       make(map[uint64][]EntityId),
-		sorted:      make(map[uint64]bool),
 		freeBuckets: make([][]EntityId, 0, 64),
 	}
 }
@@ -36,7 +34,6 @@ func (grid *SpatialHashGrid) Clear() {
 			grid.freeBuckets = append(grid.freeBuckets, bucket[:0])
 		}
 		delete(grid.cells, key)
-		delete(grid.sorted, key)
 	}
 }
 
@@ -70,9 +67,15 @@ func (grid *SpatialHashGrid) Insert(id EntityId, aabb AABBComponent) {
 					bucket = grid.freeBuckets[last]
 					grid.freeBuckets = grid.freeBuckets[:last]
 				}
-				bucket = append(bucket, id)
+				if len(bucket) == 0 || bucket[len(bucket)-1] <= id {
+					bucket = append(bucket, id)
+				} else {
+					index := sort.Search(len(bucket), func(index int) bool { return bucket[index] >= id })
+					bucket = append(bucket, 0)
+					copy(bucket[index+1:], bucket[index:])
+					bucket[index] = id
+				}
 				grid.cells[key] = bucket
-				grid.sorted[key] = false
 			}
 		}
 	}
@@ -147,10 +150,6 @@ func (grid *SpatialHashGrid) VisitAABBInto(aabb AABBComponent, unique map[Entity
 					}
 					key := grid.hashKey(x, y, z)
 					bucket := grid.cells[key]
-					if len(bucket) > 1 && !grid.sorted[key] {
-						sort.Slice(bucket, func(i, j int) bool { return bucket[i] < bucket[j] })
-						grid.sorted[key] = true
-					}
 					for _, id := range bucket {
 						if _, ok := unique[id]; ok {
 							continue
