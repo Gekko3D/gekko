@@ -3,6 +3,7 @@ package gekko
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -53,6 +54,45 @@ type streamedNavigationRebuildResult struct {
 	Err               error
 }
 
+type streamedNavigationEditAnalysisItem struct {
+	Edit            runtimeVoxelEdit
+	WorldID         string
+	Coord           content.TerrainChunkCoordDef
+	ChunkSize       int
+	VoxelResolution float32
+	VoxelMap        *volume.XBrickMap
+	Snapshot        *content.ImportedWorldChunkDef
+	Backing         *VoxelBackingComponent
+}
+
+type streamedNavigationEditAnalysisResultItem struct {
+	Input    streamedNavigationEditAnalysisItem
+	Snapshot *content.ImportedWorldChunkDef
+	Override content.ImportedWorldChunkOverrideDef
+	Reason   string
+}
+
+type streamedNavigationEditAnalysisResult struct {
+	RuntimeGeneration      uint64
+	GraphGeneration        uint64
+	GraphRequestGeneration uint64
+	Items                  []streamedNavigationEditAnalysisResultItem
+	IgnoredRemovals        map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{}
+	Err                    error
+}
+
+type streamedWorldDeltaSaveResult struct {
+	RuntimeGeneration uint64
+	Generation        uint64
+	Err               error
+}
+
+type navigationVoxelSnapshot struct {
+	Source   *volume.XBrickMap
+	Revision uint64
+	Snapshot *volume.XBrickMap
+}
+
 type navigationQueuedEdit struct {
 	Generation uint64
 	Snapshot   *content.ImportedWorldChunkDef
@@ -66,6 +106,8 @@ type navigationEditBlocker struct {
 const (
 	navigationRebuildQuietPeriod = 100 * time.Millisecond
 	navigationRebuildMaxDelay    = 250 * time.Millisecond
+	navigationEditAnalysisDelay  = 50 * time.Millisecond
+	navigationEditAnalysisMaxAge = 250 * time.Millisecond
 )
 
 type RuntimeNavigationService struct {
@@ -611,7 +653,11 @@ func trimNavGraphResidency(graphs []content.NavGraphTileDef) {
 }
 
 func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
-	if state == nil || !state.Initialized || state.InitErr != nil {
+	if state == nil || !state.Initialized {
+		return
+	}
+	commitStreamedWorldDeltaSave(state)
+	if state.InitErr != nil {
 		return
 	}
 	select {
@@ -647,15 +693,9 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			state.InitErr = result.Err
 			return
 		}
-		candidate := copyWorldDeltaForNav(state.WorldDelta)
-		candidate.NavigationSourceOverrides = append([]content.NavigationSourceOverrideDef(nil), result.Delta.NavigationSourceOverrides...)
-		candidate.NavigationGraphOverrides = append([]content.NavigationGraphOverrideDef(nil), result.Delta.NavigationGraphOverrides...)
-		if err := content.SaveWorldDelta(state.WorldDeltaPath, &candidate); err != nil {
-			state.InitErr = err
-			return
-		}
 		state.WorldDelta.NavigationSourceOverrides = append([]content.NavigationSourceOverrideDef(nil), result.Delta.NavigationSourceOverrides...)
 		state.WorldDelta.NavigationGraphOverrides = append([]content.NavigationGraphOverrideDef(nil), result.Delta.NavigationGraphOverrides...)
+		requestStreamedWorldDeltaSave(state)
 		for coord, edit := range state.navigationQueuedEdits {
 			if edit.Generation <= result.EditGeneration {
 				delete(state.navigationQueuedEdits, coord)
@@ -727,6 +767,77 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		startStreamedNavigationLoad(state)
 	}
 	startStreamedNavigationOverlayBuild(state)
+}
+
+func requestStreamedWorldDeltaSave(state *StreamedLevelRuntimeState) {
+	if state == nil || state.WorldDelta == nil || strings.TrimSpace(state.WorldDeltaPath) == "" {
+		return
+	}
+	state.worldDeltaSaveRequestedGen++
+	copy := copyWorldDeltaForNav(state.WorldDelta)
+	state.worldDeltaSavePending = &copy
+	if !state.worldDeltaSaveActive {
+		startStreamedWorldDeltaSave(state)
+	}
+}
+
+func startStreamedWorldDeltaSave(state *StreamedLevelRuntimeState) {
+	if state == nil || state.worldDeltaSaveActive || state.worldDeltaSavePending == nil {
+		return
+	}
+	if state.worldDeltaSaves == nil {
+		state.worldDeltaSaves = make(chan streamedWorldDeltaSaveResult, 2)
+	}
+	generation, runtimeGeneration := state.worldDeltaSaveRequestedGen, state.Generation
+	delta, path := state.worldDeltaSavePending, state.WorldDeltaPath
+	state.worldDeltaSavePending = nil
+	state.worldDeltaSaveActive = true
+	state.worldDeltaSaveActiveGen = generation
+	state.jobs.Add(1)
+	go func() {
+		defer state.jobs.Done()
+		state.worldDeltaSaves <- streamedWorldDeltaSaveResult{
+			RuntimeGeneration: runtimeGeneration, Generation: generation, Err: content.SaveWorldDelta(path, delta),
+		}
+	}()
+}
+
+func commitStreamedWorldDeltaSave(state *StreamedLevelRuntimeState) {
+	if state == nil {
+		return
+	}
+	select {
+	case result := <-state.worldDeltaSaves:
+		if result.RuntimeGeneration != state.Generation {
+			return
+		}
+		if result.Generation == state.worldDeltaSaveActiveGen {
+			state.worldDeltaSaveActive = false
+			state.worldDeltaSaveActiveGen = 0
+		}
+		if result.Err != nil {
+			state.InitErr = result.Err
+			return
+		}
+		startStreamedWorldDeltaSave(state)
+	default:
+	}
+}
+
+func saveStreamedWorldDeltaNow(state *StreamedLevelRuntimeState) error {
+	if state == nil || state.WorldDelta == nil || strings.TrimSpace(state.WorldDeltaPath) == "" {
+		return nil
+	}
+	if state.worldDeltaSaveActive {
+		result := <-state.worldDeltaSaves
+		state.worldDeltaSaveActive = false
+		state.worldDeltaSaveActiveGen = 0
+		if result.RuntimeGeneration == state.Generation && result.Err != nil {
+			return result.Err
+		}
+	}
+	state.worldDeltaSavePending = nil
+	return content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta)
 }
 
 func commitStreamedNavigationOverlay(state *StreamedLevelRuntimeState, result streamedNavigationOverlayResult) {
@@ -918,13 +1029,22 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 	if cmd == nil || state == nil || !state.Initialized || state.InitErr != nil || state.BaseNavManifest == nil {
 		return
 	}
-	snapshots := takeVoxelWorldDirtyChunks(cmd.app, state.BaseWorldID)
-	editsByCoord := make(map[content.TerrainChunkCoordDef]runtimeVoxelEdit)
-	var backingsByCoord map[content.TerrainChunkCoordDef]*VoxelBackingComponent
+	commitStreamedNavigationEditAnalysis(state)
+	if state.InitErr != nil {
+		return
+	}
+	for _, snapshot := range takeVoxelWorldDirtyChunks(cmd.app, state.BaseWorldID) {
+		if snapshot != nil {
+			queueStreamedNavigationEditAnalysis(state, streamedNavigationEditAnalysisItem{
+				WorldID: snapshot.WorldID, Coord: snapshot.Coord, ChunkSize: snapshot.ChunkSize,
+				VoxelResolution: snapshot.VoxelResolution, Snapshot: snapshot,
+			})
+		}
+	}
 	backingDeltaDirty := false
 	rt := voxelRtStateFromApp(cmd.app)
 	if rt != nil {
-		for chunkCoord, loaded := range state.LoadedChunks {
+		for _, loaded := range state.LoadedChunks {
 			for eid := range loaded.ImportedWorldEntities {
 				revision, edit, edited := rt.runtimeEditedVoxelEdit(eid)
 				if !edited || revision == 0 || state.navigationEditRevisions[eid] >= revision {
@@ -932,19 +1052,11 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 				}
 				if backing, ok := voxelBackingForEntity(cmd, eid); ok && backing.Dirty {
 					state.recordVoxelBackingRemoval(backing)
-					if backingsByCoord == nil {
-						backingsByCoord = make(map[content.TerrainChunkCoordDef]*VoxelBackingComponent)
-					}
-					backingsByCoord[terrainCoordFromChunk(chunkCoord)] = backing
 					backingDeltaDirty = true
 				}
-				if snapshot := loadedImportedWorldChunkSnapshotForNavigation(cmd, state, eid); snapshot != nil {
-					snapshots = append(snapshots, snapshot)
+				if item, ok := captureStreamedNavigationEdit(cmd, state, eid, edit); ok {
+					queueStreamedNavigationEditAnalysis(state, item)
 					state.navigationEditRevisions[eid] = revision
-					coord := terrainCoordFromChunk(chunkCoord)
-					merged := editsByCoord[coord]
-					merged.include(edit)
-					editsByCoord[coord] = merged
 					rt.clearRuntimeEditedVoxelEdit(eid, revision)
 				}
 			}
@@ -954,85 +1066,270 @@ func streamedLevelRuntimeEditedNavigationSystem(cmd *Commands, state *StreamedLe
 		state.WorldDelta.TerrainChunkOverrides = mapTerrainOverrides(state.terrainOverrideMap)
 		state.WorldDelta.ImportedWorldChunkOverrides = mapImportedWorldOverrides(state.importedWorldOverrideMap)
 		state.WorldDelta.VoxelBackingRemovals = mapVoxelBackingRemovals(state.voxelBackingRemovalMap)
-		if err := content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta); err != nil {
-			state.InitErr = err
-			return
-		}
 	}
-	if len(snapshots) == 0 {
-		if !state.navigationRebuildActive && navigationRebuildReady(state, time.Now()) {
-			startStreamedNavigationRebuild(cmd, state)
-		}
-		return
-	}
-	snapshots = uniqueImportedWorldSnapshots(snapshots)
-	if err := persistImportedWorldRuntimeEditSnapshots(state, snapshots); err != nil {
-		state.InitErr = err
-		return
-	}
-	impactful := snapshots[:0]
-	lastReason := ""
-	for _, snapshot := range snapshots {
-		edit := editsByCoord[snapshot.Coord]
-		_, alreadyQueued := state.navigationQueuedEdits[snapshot.Coord]
-		reason := ""
-		switch {
-		case alreadyQueued:
-			reason = state.Metrics.NavigationRebuildLastReason
-			if reason == "" {
-				reason = "coalesced_edit"
-			}
-		case !edit.Valid:
-			reason = "unknown_edit"
-		case edit.Added:
-			reason = "voxel_addition"
-		default:
-			reason = navigationRemovalImpact(state, snapshot, backingsByCoord[snapshot.Coord], edit)
-			if reason == "" {
-				state.Metrics.NavigationEditIgnoredCount++
-			}
-		}
-		if reason != "" {
-			impactful = append(impactful, snapshot)
-			lastReason = reason
-			if !edit.Valid || edit.Added {
-				delete(state.navigationIgnoredRemovals, snapshot.Coord)
-			}
-		}
-	}
-	snapshots = impactful
-	if len(snapshots) == 0 {
-		if !state.navigationRebuildActive && navigationRebuildReady(state, time.Now()) {
-			startStreamedNavigationRebuild(cmd, state)
-		}
-		return
-	}
-	state.navigationEditGeneration++
-	state.Metrics.NavigationRebuildLastReason = lastReason
-	generation := state.navigationEditGeneration
 	now := time.Now()
-	if state.navigationEditQueuedSince.IsZero() {
-		state.navigationEditQueuedSince = now
+	if !state.navigationEditAnalysisActive && len(state.navigationEditAnalysisPending) > 0 &&
+		(state.navigationEditAnalysisAt.IsZero() || now.Sub(state.navigationEditAnalysisAt) >= navigationEditAnalysisDelay ||
+			!state.navigationEditAnalysisSince.IsZero() && now.Sub(state.navigationEditAnalysisSince) >= navigationEditAnalysisMaxAge) {
+		startStreamedNavigationEditAnalysis(state)
 	}
-	state.navigationEditLastQueuedAt = now
-	for _, snapshot := range snapshots {
-		state.navigationQueuedEdits[snapshot.Coord] = navigationQueuedEdit{Generation: generation, Snapshot: snapshot}
-		edit := editsByCoord[snapshot.Coord]
-		if edit.Valid {
-			if edit.Added {
-				blocker := navigationEditBlockerForBounds(edit, generation)
-				state.navigationEditBlockers[blocker.Blocker.ID] = blocker
-			}
-		} else {
-			blocker := navigationEditBlockerForChunk(state.BaseNavManifest, snapshot.Coord, generation)
-			state.navigationEditBlockers[blocker.Blocker.ID] = blocker
-		}
-	}
-	state.Metrics.NavigationRebuildQueuedTileCount = len(state.navigationQueuedEdits)
-	installNavigationEditBlockers(state)
 	if !state.navigationRebuildActive && navigationRebuildReady(state, now) {
 		startStreamedNavigationRebuild(cmd, state)
 	}
+}
+
+func captureStreamedNavigationEdit(cmd *Commands, state *StreamedLevelRuntimeState, eid EntityId, edit runtimeVoxelEdit) (streamedNavigationEditAnalysisItem, bool) {
+	ref, ok := AuthoredImportedWorldChunkRefForEntity(cmd, eid)
+	if !ok {
+		return streamedNavigationEditAnalysisItem{}, false
+	}
+	xbm, _, exists := currentVoxelMapForEntity(cmd, eid)
+	vmc, vmcOK := voxelModelComponentForEntity(cmd, eid)
+	if !exists || !vmcOK || vmc.TerrainChunkSize <= 0 || xbm == nil {
+		return streamedNavigationEditAnalysisItem{}, false
+	}
+	immutable := immutableNavigationVoxelMap(cmd, state, eid, xbm)
+	if immutable == nil {
+		return streamedNavigationEditAnalysisItem{}, false
+	}
+	var backing *VoxelBackingComponent
+	if live, backed := voxelBackingForEntity(cmd, eid); backed {
+		backing = copyNavigationVoxelBacking(live)
+	}
+	return streamedNavigationEditAnalysisItem{
+		Edit: edit, WorldID: ref.WorldID,
+		Coord: terrainCoordFromArray(ref.ChunkCoord), ChunkSize: vmc.TerrainChunkSize,
+		VoxelResolution: voxelResolutionForEntity(cmd, eid), VoxelMap: immutable, Backing: backing,
+	}, true
+}
+
+func immutableNavigationVoxelMap(cmd *Commands, state *StreamedLevelRuntimeState, eid EntityId, source *volume.XBrickMap) *volume.XBrickMap {
+	if state.navigationVoxelSnapshots == nil {
+		state.navigationVoxelSnapshots = make(map[EntityId]navigationVoxelSnapshot)
+	}
+	if cmd != nil && cmd.app != nil {
+		if resource, ok := cmd.app.resources[reflect.TypeOf(VoxelGridCache{})]; ok {
+			if cache, ok := resource.(*VoxelGridCache); ok {
+				stamp, stamped := cache.BuildStamps[eid]
+				if snapshot := cache.Snapshots[eid]; stamped && snapshot != nil && stamp.MapPtr == source && stamp.MapRevision == source.Revision {
+					state.navigationVoxelSnapshots[eid] = navigationVoxelSnapshot{Source: source, Revision: source.Revision, Snapshot: snapshot.xbm}
+					return snapshot.xbm
+				}
+			}
+		}
+	}
+	previous := state.navigationVoxelSnapshots[eid]
+	var snapshot *volume.XBrickMap
+	if previous.Source == source {
+		snapshot = source.CopyChangedSectors(previous.Snapshot, previous.Revision)
+	} else {
+		snapshot = source.CopyChangedSectors(nil, 0)
+	}
+	state.navigationVoxelSnapshots[eid] = navigationVoxelSnapshot{Source: source, Revision: source.Revision, Snapshot: snapshot}
+	return snapshot
+}
+
+func copyNavigationVoxelBacking(source *VoxelBackingComponent) *VoxelBackingComponent {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	copy.Removals = make(map[[3]int][16]uint32, len(source.Removals))
+	for coord, bits := range source.Removals {
+		copy.Removals[coord] = bits
+	}
+	copy.Materials = make(map[[3]int]uint8, len(source.Materials))
+	for coord, material := range source.Materials {
+		copy.Materials[coord] = material
+	}
+	copy.surfaceSupportSeeds = nil
+	return &copy
+}
+
+func queueStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState, item streamedNavigationEditAnalysisItem) {
+	if state == nil || strings.TrimSpace(item.WorldID) == "" {
+		return
+	}
+	if state.navigationEditAnalysisPending == nil {
+		state.navigationEditAnalysisPending = make(map[content.TerrainChunkCoordDef]streamedNavigationEditAnalysisItem)
+	}
+	if previous, found := state.navigationEditAnalysisPending[item.Coord]; found {
+		merged := previous.Edit
+		merged.include(item.Edit)
+		item.Edit = merged
+	}
+	state.navigationEditAnalysisPending[item.Coord] = item
+	now := time.Now()
+	if state.navigationEditAnalysisSince.IsZero() {
+		state.navigationEditAnalysisSince = now
+	}
+	state.navigationEditAnalysisAt = now
+}
+
+func startStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState) {
+	if state == nil || state.navigationEditAnalysisActive || len(state.navigationEditAnalysisPending) == 0 {
+		return
+	}
+	if state.navigationEditAnalyses == nil {
+		state.navigationEditAnalyses = make(chan streamedNavigationEditAnalysisResult, 2)
+	}
+	coords := make([]content.TerrainChunkCoordDef, 0, len(state.navigationEditAnalysisPending))
+	for coord := range state.navigationEditAnalysisPending {
+		coords = append(coords, coord)
+	}
+	sort.Slice(coords, func(i, j int) bool { return terrainChunkCoordLessForRuntime(coords[i], coords[j]) })
+	items := make([]streamedNavigationEditAnalysisItem, 0, len(coords))
+	for _, coord := range coords {
+		items = append(items, state.navigationEditAnalysisPending[coord])
+	}
+	state.navigationEditAnalysisPending = make(map[content.TerrainChunkCoordDef]streamedNavigationEditAnalysisItem)
+	state.navigationEditAnalysisSince = time.Time{}
+	state.navigationEditAnalysisAt = time.Time{}
+	ignored := copyNavigationIgnoredRemovals(state.navigationIgnoredRemovals)
+	runtimeGeneration, graphGeneration, graphRequestGeneration := state.Generation, state.navigationLoadedGen, state.navigationRequestedGen
+	manifest, sources, graphs, query := state.BaseNavManifest, state.NavigationSources, state.NavigationGraphs, state.navigationQuery
+	worldDataDir, worldDeltaPath := state.WorldDataDir, state.WorldDeltaPath
+	persistenceMu := &state.runtimeEditPersistenceMu
+	state.navigationEditAnalysisActive = true
+	state.jobs.Add(1)
+	go func() {
+		defer state.jobs.Done()
+		analysisState := &StreamedLevelRuntimeState{
+			BaseNavManifest: manifest, NavigationSources: sources, NavigationGraphs: graphs,
+			navigationQuery: query, navigationIgnoredRemovals: ignored,
+		}
+		result := streamedNavigationEditAnalysisResult{
+			RuntimeGeneration: runtimeGeneration, GraphGeneration: graphGeneration, GraphRequestGeneration: graphRequestGeneration,
+		}
+		for _, item := range items {
+			snapshot := item.Snapshot
+			if snapshot == nil {
+				snapshot = importedWorldChunkDefFromXBrickMap(item.WorldID, item.Coord, item.ChunkSize, item.VoxelResolution, item.VoxelMap)
+			}
+			override := content.ImportedWorldChunkOverrideDef{}
+			if item.Backing == nil || item.Backing.OwnerKind != content.VoxelBackingOwnerImportedWorld {
+				snapshotPath := filepath.Join(worldDataDir, fmt.Sprintf("imported_%s_%d_%d_%d.gkchunk", sanitizePathSegment(item.WorldID), item.Coord.X, item.Coord.Y, item.Coord.Z))
+				persistenceMu.Lock()
+				if err := content.SaveImportedWorldChunk(snapshotPath, snapshot); err != nil {
+					persistenceMu.Unlock()
+					result.Err = err
+					break
+				}
+				persistenceMu.Unlock()
+				override = content.ImportedWorldChunkOverrideDef{WorldID: item.WorldID, ChunkCoord: item.Coord, SnapshotPath: content.AuthorDocumentPath(snapshotPath, worldDeltaPath)}
+			}
+			reason := ""
+			switch {
+			case !item.Edit.Valid:
+				reason = "unknown_edit"
+			case item.Edit.Added:
+				reason = "voxel_addition"
+			default:
+				reason = navigationRemovalImpact(analysisState, snapshot, item.Backing, item.Edit)
+			}
+			if reason != "" && (!item.Edit.Valid || item.Edit.Added) {
+				delete(analysisState.navigationIgnoredRemovals, item.Coord)
+			}
+			result.Items = append(result.Items, streamedNavigationEditAnalysisResultItem{
+				Input: item, Snapshot: snapshot, Reason: reason, Override: override,
+			})
+		}
+		result.IgnoredRemovals = analysisState.navigationIgnoredRemovals
+		state.navigationEditAnalyses <- result
+	}()
+}
+
+func commitStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState) {
+	if state == nil {
+		return
+	}
+	select {
+	case result := <-state.navigationEditAnalyses:
+		if result.RuntimeGeneration != state.Generation {
+			return
+		}
+		state.navigationEditAnalysisActive = false
+		if result.Err != nil {
+			state.InitErr = result.Err
+			return
+		}
+		if state.importedWorldOverrideMap == nil {
+			state.importedWorldOverrideMap = make(map[string]content.ImportedWorldChunkOverrideDef)
+		}
+		for _, item := range result.Items {
+			if item.Override.WorldID != "" {
+				state.importedWorldOverrideMap[importedWorldChunkRuntimeKey(item.Override.WorldID, item.Override.ChunkCoord)] = item.Override
+			}
+		}
+		if state.WorldDelta != nil {
+			state.WorldDelta.ImportedWorldChunkOverrides = mapImportedWorldOverrides(state.importedWorldOverrideMap)
+			requestStreamedWorldDeltaSave(state)
+		}
+		if result.GraphGeneration != state.navigationLoadedGen || result.GraphRequestGeneration != state.navigationRequestedGen {
+			for _, item := range result.Items {
+				input := item.Input
+				input.VoxelMap, input.Snapshot = nil, item.Snapshot
+				queueStreamedNavigationEditAnalysis(state, input)
+			}
+			return
+		}
+		state.navigationIgnoredRemovals = result.IgnoredRemovals
+		impactful := make([]streamedNavigationEditAnalysisResultItem, 0, len(result.Items))
+		lastReason := ""
+		for _, item := range result.Items {
+			reason := item.Reason
+			if _, alreadyQueued := state.navigationQueuedEdits[item.Snapshot.Coord]; alreadyQueued {
+				reason = state.Metrics.NavigationRebuildLastReason
+				if reason == "" {
+					reason = "coalesced_edit"
+				}
+			}
+			if reason == "" {
+				state.Metrics.NavigationEditIgnoredCount++
+				continue
+			}
+			item.Reason = reason
+			impactful = append(impactful, item)
+			lastReason = reason
+		}
+		if len(impactful) == 0 {
+			return
+		}
+		state.navigationEditGeneration++
+		state.Metrics.NavigationRebuildLastReason = lastReason
+		generation, now := state.navigationEditGeneration, time.Now()
+		if state.navigationEditQueuedSince.IsZero() {
+			state.navigationEditQueuedSince = now
+		}
+		state.navigationEditLastQueuedAt = now
+		for _, item := range impactful {
+			state.navigationQueuedEdits[item.Snapshot.Coord] = navigationQueuedEdit{Generation: generation, Snapshot: item.Snapshot}
+			if item.Input.Edit.Valid {
+				if item.Input.Edit.Added {
+					blocker := navigationEditBlockerForBounds(item.Input.Edit, generation)
+					state.navigationEditBlockers[blocker.Blocker.ID] = blocker
+				}
+			} else {
+				blocker := navigationEditBlockerForChunk(state.BaseNavManifest, item.Snapshot.Coord, generation)
+				state.navigationEditBlockers[blocker.Blocker.ID] = blocker
+			}
+		}
+		state.Metrics.NavigationRebuildQueuedTileCount = len(state.navigationQueuedEdits)
+		installNavigationEditBlockers(state)
+	default:
+	}
+}
+
+func copyNavigationIgnoredRemovals(source map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{}) map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{} {
+	copy := make(map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{}, len(source))
+	for coord, voxels := range source {
+		set := make(map[navigationRemovedVoxel]struct{}, len(voxels))
+		for voxel := range voxels {
+			set[voxel] = struct{}{}
+		}
+		copy[coord] = set
+	}
+	return copy
 }
 
 type navigationRemovedVoxel struct{ X, Y, Z int }
