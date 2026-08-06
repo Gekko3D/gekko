@@ -11,7 +11,14 @@ invalid.
 - Expose a read-only streamed-collision readiness query for a small world-space
   bounds.
 - Let ActionGame distinguish ready, retryable, and invalid recovery anchors.
-- Reuse the existing bounded off-navigation recovery timeout.
+- Separate collision waiting from locomotion stall accounting, poll recovery
+  collision at 10 Hz, and use a three-second game-time watchdog.
+- On watchdog expiry, validate and replan from the bot's current grounded
+  support before reporting `actor_off_nav`.
+- Prefer verified current grounded support before falling back to a previous
+  graph anchor, and finish recovery before requesting a route.
+- Bound collision-readiness scans to 4096 chunks so malformed or stale recovery
+  bounds cannot create unbounded main-thread work.
 
 Non-scope: new tests, synchronous chunk loading, worker-side ECS access, or a
 new retry scheduler.
@@ -23,6 +30,9 @@ new retry scheduler.
 - Route workers remain immutable and navigation-only; streamed collision and
   live obstruction checks remain on the main thread.
 - ActionGame never plans from or moves toward an unvalidated recovery anchor.
+- Collision residency waiting never consumes locomotion blocked/stalled frames.
+- A graph revision or target refresh does not restart an active recovery
+  watchdog.
 
 ## Verification
 

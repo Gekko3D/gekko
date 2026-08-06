@@ -1558,6 +1558,13 @@ func StreamedLevelCollisionReadyInBounds(cmd *Commands, state *StreamedLevelRunt
 	}
 	minCoord := ChunkCoordFromPosition(boundsMin, state.ChunkSize)
 	maxCoord := ChunkCoordFromPosition(boundsMax, state.ChunkSize)
+	const maxReadinessChunks = 4096
+	spanX, spanY, spanZ := maxCoord.X-minCoord.X+1, maxCoord.Y-minCoord.Y+1, maxCoord.Z-minCoord.Z+1
+	// ponytail: readiness probes are local; add a spatial content index if a
+	// caller ever needs to validate larger bounds.
+	if spanX <= 0 || spanY <= 0 || spanZ <= 0 || spanX > maxReadinessChunks || spanY > maxReadinessChunks/spanX || spanZ > maxReadinessChunks/(spanX*spanY) {
+		return false
+	}
 	for x := minCoord.X; x <= maxCoord.X; x++ {
 		for y := minCoord.Y; y <= maxCoord.Y; y++ {
 			for z := minCoord.Z; z <= maxCoord.Z; z++ {
