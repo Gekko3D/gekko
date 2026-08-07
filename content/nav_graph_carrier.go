@@ -145,7 +145,7 @@ func connectNavGraphCarriers(sources []NavSourceTileDef, graphs []NavGraphTileDe
 							if fromNode == toNode {
 								continue
 							}
-							appendNavCarrierDirection(&graphs[graphIndex[from.Point.Ref.Tile]], carrier, fromStop, toStop, from, to, "", "", NavCarrierBoardDrop, dropBoard, query)
+							appendNavCarrierDrop(&graphs[graphIndex[from.Point.Ref.Tile]], carrier, toStop, from, to, dropBoard, query)
 							linked = true
 						}
 						continue
@@ -164,7 +164,7 @@ func connectNavGraphCarriers(sources []NavSourceTileDef, graphs []NavGraphTileDe
 							diagnostics = append(diagnostics, NavCarrierDiagnostic{CarrierID: carrier.ID, Code: NavCarrierSkippedRegion})
 							continue
 						}
-						appendNavCarrierDirection(&graphs[graphIndex[from.Point.Ref.Tile]], carrier, fromStop, toStop, from, to, callControllerID, controllerID, "", from.Board, query)
+						appendNavCarrierDirection(&graphs[graphIndex[from.Point.Ref.Tile]], carrier, fromStop, toStop, from, to, callControllerID, controllerID, query)
 						linked = true
 					}
 				}
@@ -249,25 +249,21 @@ func resolveNavCarrierMounts(query *NavGraphQuery, carrier NavCarrierDef, stop N
 	return result
 }
 
-func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fromStop, toStop NavCarrierStopDef, from, to navCarrierMount, callControllerID, controllerID, boardMode string, board Vec3, query *NavGraphQuery) {
+func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fromStop, toStop NavCarrierStopDef, from, to navCarrierMount, callControllerID, controllerID string, query *NavGraphQuery) {
 	linkID := navTraversalLinkID(NavTransitionCarrier, carrier.ID, from.Point.Ref, to.Point.Ref)
 	duration := navVec3Distance(fromStop.BoundsCenter, toStop.BoundsCenter) / navCarrierSpeed(carrier.Speed)
 	carrierTraversal := &NavCarrierTraversalDef{
 		CarrierID: carrier.ID, FromStop: fromStop.ID, ToStop: toStop.ID,
-		Board: board, BoardMode: boardMode, CallControllerID: callControllerID, ControllerID: controllerID,
+		Board: from.Board, CallControllerID: callControllerID, ControllerID: controllerID,
 	}
 	fromSpan, _ := query.resident().span(from.Point.Ref)
 	toSpan, _ := query.resident().span(to.Point.Ref)
 	width := 2 * min(carrier.BoundsHalfExtents[0], carrier.BoundsHalfExtents[2])
 	headroom := min(fromSpan.Headroom, toSpan.Headroom)
 	clearance := min(fromSpan.ClearanceRadius, toSpan.ClearanceRadius)
-	cost := navVec3Distance(from.Point.Point, board) +
+	cost := navVec3Distance(from.Point.Point, from.Board) +
 		navVec3Distance(fromStop.BoundsCenter, toStop.BoundsCenter)*max(float32(1), DefaultNavCarrierSpeed/navCarrierSpeed(carrier.Speed)) +
 		navVec3Distance(Vec3{toStop.BoundsCenter[0], toStop.BoundsCenter[1] + carrier.BoundsHalfExtents[1], toStop.BoundsCenter[2]}, to.Point.Point)
-	if boardMode == NavCarrierBoardDrop {
-		duration = 0
-		cost = navVec3Distance(from.Point.Point, board) + navVec3Distance(board, to.Point.Point) + (from.Point.Point[1]-board[1])*0.5
-	}
 	spanTraversal := &NavTraversalDef{
 		LinkID: linkID, OwnerID: carrier.ID,
 		Start: from.Point.Point, End: to.Point.Point, Duration: duration,
@@ -289,6 +285,31 @@ func appendNavCarrierDirection(graph *NavGraphTileDef, carrier NavCarrierDef, fr
 			Start: from.Point.Point, End: to.Point.Point, Duration: duration,
 			Carrier: &regionCarrier,
 		},
+	})
+}
+
+func appendNavCarrierDrop(graph *NavGraphTileDef, carrier NavCarrierDef, toStop NavCarrierStopDef, from, to navCarrierMount, landing Vec3, query *NavGraphQuery) {
+	linkID := navTraversalLinkID(NavTransitionDrop, carrier.ID, from.Point.Ref, to.Point.Ref)
+	fromSpan, _ := query.resident().span(from.Point.Ref)
+	toSpan, _ := query.resident().span(to.Point.Ref)
+	width := 2 * min(carrier.BoundsHalfExtents[0], carrier.BoundsHalfExtents[2])
+	headroom := min(fromSpan.Headroom, toSpan.Headroom)
+	clearance := min(fromSpan.ClearanceRadius, toSpan.ClearanceRadius)
+	cost := navVec3Distance(from.Point.Point, landing) + navVec3Distance(landing, to.Point.Point) + (from.Point.Point[1]-landing[1])*0.5
+	support := &NavLandingSupportDef{ID: carrier.ID, Stop: toStop.ID, Point: landing}
+	spanTraversal := &NavTraversalDef{LinkID: linkID, OwnerID: carrier.ID, Start: from.Point.Point, End: to.Point.Point, LandingSupport: support}
+	graph.SpanTransitions = append(graph.SpanTransitions, NavSpanTransitionDef{
+		From: from.Point.Ref.Span, To: to.Point.Ref, Kind: NavTransitionDrop,
+		StepDelta: to.Point.Point[1] - from.Point.Point[1], Width: width,
+		MinHeadroom: headroom, MinClearance: clearance, Cost: cost, Traversal: spanTraversal,
+	})
+	regionSupport := *support
+	graph.Transitions = append(graph.Transitions, NavRegionTransitionDef{
+		ID: uint32(len(graph.Transitions)), FromRegion: from.Point.Region,
+		ToTile: to.Point.Ref.Tile, ToRegion: to.Point.Region, Kind: NavTransitionDrop,
+		CrossingStart: from.Point.Point, CrossingEnd: to.Point.Point, Width: width,
+		MinHeadroom: headroom, MinClearance: clearance, Cost: cost,
+		Traversal: &NavTraversalDef{LinkID: linkID, OwnerID: carrier.ID, Start: from.Point.Point, End: to.Point.Point, LandingSupport: &regionSupport},
 	})
 }
 
@@ -418,7 +439,7 @@ func NavCarrierBlockers(carriers []NavCarrierDef, profile NavAgentProfileDef) []
 func removeNavCarrierSpanTransitions(transitions []NavSpanTransitionDef) []NavSpanTransitionDef {
 	result := make([]NavSpanTransitionDef, 0, len(transitions))
 	for _, transition := range transitions {
-		if transition.Kind != NavTransitionCarrier {
+		if transition.Kind != NavTransitionCarrier && (transition.Traversal == nil || transition.Traversal.LandingSupport == nil) {
 			result = append(result, transition)
 		}
 	}
@@ -428,7 +449,7 @@ func removeNavCarrierSpanTransitions(transitions []NavSpanTransitionDef) []NavSp
 func removeNavCarrierRegionTransitions(transitions []NavRegionTransitionDef) []NavRegionTransitionDef {
 	result := make([]NavRegionTransitionDef, 0, len(transitions))
 	for _, transition := range transitions {
-		if transition.Kind != NavTransitionCarrier {
+		if transition.Kind != NavTransitionCarrier && (transition.Traversal == nil || transition.Traversal.LandingSupport == nil) {
 			transition.ID = uint32(len(result))
 			result = append(result, transition)
 		}

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const CurrentNavGraphBuilderVersion = "voxel_graph_v14"
+const CurrentNavGraphBuilderVersion = "voxel_graph_v15"
 
 type NavGraphBakeDiagnosticCount struct {
 	Coord          TerrainChunkCoordDef `json:"coord"`

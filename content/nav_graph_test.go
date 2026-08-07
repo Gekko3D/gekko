@@ -143,3 +143,21 @@ func TestNavBinaryContractRejectsCorruptionAndWrongVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestNavTraversalLandingSupportBinaryRoundTrip(t *testing.T) {
+	want := &NavTraversalDef{
+		LinkID: "drop:lift", OwnerID: "lift", Start: Vec3{1, 4, 2}, End: Vec3{3, 0, 2},
+		LandingSupport: &NavLandingSupportDef{ID: "lift", Stop: "closed", Point: Vec3{2, 0, 2}},
+	}
+	strings := makeNavStrings(map[string]struct{}{"drop:lift": {}, "lift": {}, "closed": {}})
+	w := &navBinaryWriter{}
+	writeNavTraversal(w, strings, want)
+	r := newNavBinaryReader(w.Bytes())
+	got := readNavTraversal(r, strings.values)
+	if err := r.done(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("landing support round trip mismatch: got=%+v want=%+v", got, want)
+	}
+}

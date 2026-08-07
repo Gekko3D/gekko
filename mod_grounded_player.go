@@ -843,7 +843,16 @@ func advanceGroundedBallisticTraversal(cmd *Commands, voxRt *VoxelRtState, baseP
 		}
 		traversal.Phase = CharacterTraversalPhaseTraverse
 		traversal.PhaseElapsed = 0
-		if !CharacterHasStandingClearance(voxRt, request.End, groundedPlayerCharacterCollisionConfig(cmd, ctrl), acceptEntity) {
+		collision := groundedPlayerCharacterCollisionConfig(cmd, ctrl)
+		if request.LandingSupportEntity != 0 && !characterHasLandingSupport(voxRt, request.End, collision, acceptEntity, request.LandingSupportEntity) {
+			finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "landing_support_unavailable")
+			return
+		}
+		footClearance := float32(0.03)
+		if request.LandingSupportEntity != 0 {
+			footClearance = characterLandingSupportTolerance(collision)
+		}
+		if !characterHasStandingClearance(voxRt, request.End, collision, acceptEntity, footClearance) {
 			finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "landing_blocked")
 			return
 		}
@@ -878,16 +887,38 @@ func advanceGroundedBallisticTraversal(cmd *Commands, voxRt *VoxelRtState, baseP
 	if !traversal.WasAirborne || !ctrl.Grounded {
 		return
 	}
-	horizontal := request.End.Sub(*basePos)
+	finishGroundedBallisticLanding(ctrl, *basePos)
+}
+
+func finishGroundedBallisticLanding(ctrl *GroundedCharacterMotorComponent, basePos mgl32.Vec3) {
+	traversal := &ctrl.Traversal
+	request := traversal.Request
+	horizontal := request.End.Sub(basePos)
 	horizontal[1] = 0
 	verticalTolerance := maxf(defaulted(ctrl.StepHeight, 0.6)+defaulted(ctrl.GroundProbe, 0.15), request.Acceptance)
+	landingSupportOK := request.LandingSupportEntity == 0 || groundedCharacterSupportedBy(ctrl, request.LandingSupportEntity)
 	if traversal.PendingReason != "" {
 		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, traversal.PendingReason)
-	} else if horizontal.Len() <= request.Acceptance && float32(math.Abs(float64(request.End.Y()-basePos.Y()))) <= verticalTolerance {
+	} else if horizontal.Len() <= request.Acceptance && float32(math.Abs(float64(request.End.Y()-basePos.Y()))) <= verticalTolerance && landingSupportOK {
 		finishGroundedCharacterTraversal(ctrl, CharacterTraversalSucceeded, "")
+	} else if !landingSupportOK {
+		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "wrong_landing_support")
 	} else {
 		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "missed_landing")
 	}
+}
+
+func groundedCharacterSupportedBy(ctrl *GroundedCharacterMotorComponent, entity EntityId) bool {
+	if ctrl == nil || entity == 0 || !ctrl.Grounded {
+		return false
+	}
+	count := min(ctrl.GroundContactCount, len(ctrl.GroundContacts))
+	for index := 0; index < count; index++ {
+		if ctrl.GroundContacts[index].Entity == entity {
+			return true
+		}
+	}
+	return false
 }
 
 func advanceGroundedLadderTraversal(

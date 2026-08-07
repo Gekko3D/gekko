@@ -58,7 +58,10 @@ type CharacterTraversalRequest struct {
 	LaunchSpeed  float32
 	MaxDuration  float32
 	LadderEntity EntityId
-	Manual       bool
+	// LandingSupportEntity is the dynamic entity expected directly under End.
+	// It is optional; ordinary static drops leave it zero.
+	LandingSupportEntity EntityId
+	Manual               bool
 }
 
 // CharacterTraversalComponent is embedded by the grounded motor. It is the
@@ -243,20 +246,51 @@ func CharacterFindTraversalTarget(voxRt *VoxelRtState, start, forward mgl32.Vec3
 // proposed base position. It deliberately uses the same radius samples as the
 // vertical controller sweep, so landing validation and movement agree.
 func CharacterHasStandingClearance(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) bool {
+	return characterHasStandingClearance(voxRt, basePos, cfg, acceptEntity, 0.03)
+}
+
+func characterHasStandingClearance(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool, footClearance float32) bool {
 	if !characterCollisionAvailable(voxRt, cfg.DynamicCollisionQuery) {
 		return true
 	}
 	cfg = effectiveCharacterCollisionConfig(cfg)
-	height := cfg.Height - 0.05
+	footClearance = maxCharacterCollisionFloat(footClearance, 0.03)
+	height := cfg.Height - 0.02 - footClearance
 	if height <= 0 {
 		return true
 	}
 	for _, offset := range CharacterVerticalCollisionOffsets(cfg.Radius) {
-		origin := basePos.Add(offset).Add(mgl32.Vec3{0, 0.03, 0})
+		origin := basePos.Add(offset).Add(mgl32.Vec3{0, footClearance, 0})
 		hit := characterRaycastFiltered(voxRt, origin, mgl32.Vec3{0, 1, 0}, height, acceptEntity, cfg.DynamicCollisionQuery)
 		if hit.Hit && hit.T <= height {
 			return false
 		}
 	}
 	return true
+}
+
+func characterHasLandingSupport(voxRt *VoxelRtState, basePos mgl32.Vec3, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool, landingSupport EntityId) bool {
+	if landingSupport == 0 {
+		return true
+	}
+	cfg = effectiveCharacterCollisionConfig(cfg)
+	tolerance := characterLandingSupportTolerance(cfg)
+	hit, found := CharacterGroundHitAtWithin(voxRt, basePos, CharacterGroundProbeConfig{
+		Radius: cfg.Radius, StepHeight: cfg.StepHeight, GroundProbe: tolerance,
+		DynamicCollisionQuery: cfg.DynamicCollisionQuery,
+	}, tolerance, tolerance, acceptEntity)
+	if !found {
+		return false
+	}
+	for index := 0; index < hit.ContactCount; index++ {
+		if hit.Contacts[index].Entity == landingSupport && absf(hit.Contacts[index].Point.Y()-basePos.Y()) <= tolerance {
+			return true
+		}
+	}
+	return false
+}
+
+func characterLandingSupportTolerance(cfg CharacterCollisionConfig) float32 {
+	cfg = effectiveCharacterCollisionConfig(cfg)
+	return maxCharacterCollisionFloat(cfg.SkinWidth*2, 0.08)
 }

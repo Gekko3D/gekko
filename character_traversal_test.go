@@ -42,6 +42,45 @@ func TestCharacterFindTraversalTargetRejectsWallWithoutLanding(t *testing.T) {
 	}
 }
 
+func TestCharacterDropAcceptsAndSettlesOnExpectedDynamicSupport(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	support := cmd.AddEntity(
+		&TransformComponent{},
+		&MovingBrushComponent{BoundsCenter: mgl32.Vec3{0, -0.48, 0}, BoundsHalfExtents: mgl32.Vec3{1, 0.52, 1}},
+	)
+	app.FlushCommands()
+	base := mgl32.Vec3{}
+	collision := CharacterCollisionConfig{Radius: 0.25, Height: 1.7, StepHeight: 0.6, DynamicCollisionQuery: MovingBrushCollisionQuery(cmd)}
+	if CharacterHasStandingClearance(nil, base, collision, nil) {
+		t.Fatal("ordinary clearance unexpectedly accepted support inside the foot band")
+	}
+	if !characterHasLandingSupport(nil, base, collision, nil, support) ||
+		!characterHasStandingClearance(nil, base, collision, nil, characterLandingSupportTolerance(collision)) {
+		t.Fatal("expected dynamic landing support was rejected")
+	}
+
+	ctrl := GroundedCharacterMotorComponent{Grounded: true, GroundContactCount: 1}
+	CharacterBeginTraversal(&ctrl, CharacterTraversalRequest{Kind: CharacterTraversalDrop, End: base, LandingSupportEntity: support})
+	ctrl.Traversal.WasAirborne = true
+	ctrl.GroundContacts[0] = CharacterGroundContact{Entity: support}
+	finishGroundedBallisticLanding(&ctrl, base)
+	if ctrl.Traversal.Status != CharacterTraversalSucceeded {
+		t.Fatalf("expected landing support did not settle traversal: %+v", ctrl.Traversal)
+	}
+}
+
+func TestCharacterDropRejectsWrongDynamicSupport(t *testing.T) {
+	ctrl := GroundedCharacterMotorComponent{Grounded: true, GroundContactCount: 1}
+	CharacterBeginTraversal(&ctrl, CharacterTraversalRequest{Kind: CharacterTraversalDrop, End: mgl32.Vec3{}, LandingSupportEntity: 1})
+	ctrl.Traversal.WasAirborne = true
+	ctrl.GroundContacts[0] = CharacterGroundContact{Entity: 2}
+	finishGroundedBallisticLanding(&ctrl, mgl32.Vec3{})
+	if ctrl.Traversal.Status != CharacterTraversalFailed || ctrl.Traversal.Reason != "wrong_landing_support" {
+		t.Fatalf("wrong landing support was accepted: %+v", ctrl.Traversal)
+	}
+}
+
 func characterTraversalTestLedge(withLanding bool) *core.VoxelObject {
 	obj := core.NewVoxelObject()
 	obj.XBrickMap = volume.NewXBrickMap()

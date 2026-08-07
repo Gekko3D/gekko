@@ -342,11 +342,18 @@ func validateTransitionTraversal(result *NavGraphValidationResult, label, kind s
 			result.addError("missing_carrier_traversal", label+" carrier traversal metadata is required")
 		} else if strings.TrimSpace(carrier.CarrierID) == "" || strings.TrimSpace(carrier.FromStop) == "" ||
 			strings.TrimSpace(carrier.ToStop) == "" || carrier.FromStop == carrier.ToStop ||
-			!validVec3(carrier.Board) || carrier.BoardMode != "" && carrier.BoardMode != NavCarrierBoardDrop {
+			!validVec3(carrier.Board) {
 			result.addError("invalid_carrier_traversal", label+" carrier traversal requires a carrier, distinct stops, and a finite boarding point")
 		}
 	} else if traversal.Carrier != nil {
 		result.addError("unexpected_carrier_traversal", label+" carrier metadata requires a carrier transition")
+	}
+	if support := traversal.LandingSupport; support != nil {
+		if kind != NavTransitionDrop {
+			result.addError("unexpected_landing_support", label+" landing support metadata requires a drop transition")
+		} else if strings.TrimSpace(support.ID) == "" || strings.TrimSpace(support.Stop) == "" || !validVec3(support.Point) {
+			result.addError("invalid_landing_support", label+" landing support requires an id, stop, and finite landing point")
+		}
 	}
 }
 

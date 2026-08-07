@@ -139,7 +139,7 @@ fallback exists.
 
 Navigation source schema v3 stores compact solid and blocker runs so agent
 clearance is derived above each profile's reachable step envelope. Current
-builder `voxel_graph_v14` merges ordinary walk/stair/step surfaces into ground
+builder `voxel_graph_v15` merges ordinary walk/stair/step surfaces into ground
 regions and adds bounded directed drops plus gap/upward jumps at exposed region
 boundaries. Drop paths and jump arcs are checked against sparse source occupancy
 before links are emitted. Older graph bundles must be rebaked.
@@ -148,10 +148,12 @@ Special graph links use explicit `drop`, `jump`, `ladder`, `vault`, `mantle`,
 or `carrier` transitions. Each link separates stable `link_id` from optional
 gameplay `owner_id`, carries entry/exit points, and may carry an apex,
 horizontal speed, launch speed, and duration. Carrier links additionally name
-the moving support, directed source and destination stops, boarding point,
-boarding mode, and controller. A
-`drop` boarding mode waits for an auto-returning carrier at its lower stop,
-drops onto that live support, then exits onto the destination static span.
+the moving support, directed source and destination stops, boarding point, and
+controller. Drop links may name a dynamic landing support, required stop, and
+landing point. Runtime waits for and holds that support, executes the normal
+ballistic drop, verifies live motor contact with the support entity, then exits
+onto the destination static span. This keeps auto-return shaft drops separate
+from ordinary elevators that are boarded and ridden.
 Carrier exit handoff accepts any active static span in the intended destination
 region; an off-lane landing completes the handoff and replans from the actual
 span instead of steering against the carrier edge.

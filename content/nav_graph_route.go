@@ -393,6 +393,10 @@ func cloneNavTraversal(source *NavTraversalDef) *NavTraversalDef {
 		carrier := *source.Carrier
 		copy.Carrier = &carrier
 	}
+	if source.LandingSupport != nil {
+		support := *source.LandingSupport
+		copy.LandingSupport = &support
+	}
 	return &copy
 }
 

@@ -8,7 +8,7 @@ import (
 const (
 	CurrentNavGraphManifestSchemaVersion = 5
 	CurrentNavSourceTileSchemaVersion    = 3
-	CurrentNavGraphTileSchemaVersion     = 5
+	CurrentNavGraphTileSchemaVersion     = 6
 
 	NavGraphManifestExtension = ".gknav"
 	NavSourceTileExtension    = ".gkns"
@@ -27,7 +27,6 @@ const (
 
 	NavigationRoleDoor    = "door"
 	NavigationRoleCarrier = "carrier"
-	NavCarrierBoardDrop   = "drop"
 
 	NavCapabilityClimbLadder = "climb_ladder"
 	NavCapabilityJump        = "jump"
@@ -82,6 +81,9 @@ type NavTraversalDef struct {
 	LaunchSpeed float32                 `json:"launch_speed,omitempty"`
 	Duration    float32                 `json:"duration,omitempty"`
 	Carrier     *NavCarrierTraversalDef `json:"carrier,omitempty"`
+	// LandingSupport makes an ordinary drop wait for and settle on dynamic
+	// support before continuing to End on the static graph.
+	LandingSupport *NavLandingSupportDef `json:"landing_support,omitempty"`
 }
 
 // NavCarrierTraversalDef describes the moving-support portion of one directed
@@ -91,9 +93,14 @@ type NavCarrierTraversalDef struct {
 	FromStop         string `json:"from_stop"`
 	ToStop           string `json:"to_stop"`
 	Board            Vec3   `json:"board"`
-	BoardMode        string `json:"board_mode,omitempty"`
 	CallControllerID string `json:"call_controller_id,omitempty"`
 	ControllerID     string `json:"controller_id,omitempty"`
+}
+
+type NavLandingSupportDef struct {
+	ID    string `json:"id"`
+	Stop  string `json:"stop"`
+	Point Vec3   `json:"point"`
 }
 
 func (traversal NavTraversalDef) StableLinkID() string {

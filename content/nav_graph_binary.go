@@ -337,9 +337,12 @@ func collectNavGraphStrings(def *NavGraphTileDef) navStrings {
 			set[v.Carrier.CarrierID] = struct{}{}
 			set[v.Carrier.FromStop] = struct{}{}
 			set[v.Carrier.ToStop] = struct{}{}
-			set[v.Carrier.BoardMode] = struct{}{}
 			set[v.Carrier.CallControllerID] = struct{}{}
 			set[v.Carrier.ControllerID] = struct{}{}
+		}
+		if v.LandingSupport != nil {
+			set[v.LandingSupport.ID] = struct{}{}
+			set[v.LandingSupport.Stop] = struct{}{}
 		}
 	}
 	for _, v := range def.SpanTransitions {
@@ -597,17 +600,24 @@ func writeNavTraversal(w *navBinaryWriter, s navStrings, v *NavTraversalDef) {
 	w.f32(v.Duration)
 	if v.Carrier == nil {
 		w.u8(0)
+	} else {
+		w.u8(1)
+		c := v.Carrier
+		s.ref(w, c.CarrierID)
+		s.ref(w, c.FromStop)
+		s.ref(w, c.ToStop)
+		w.vec3(c.Board)
+		s.ref(w, c.CallControllerID)
+		s.ref(w, c.ControllerID)
+	}
+	if v.LandingSupport == nil {
+		w.u8(0)
 		return
 	}
 	w.u8(1)
-	c := v.Carrier
-	s.ref(w, c.CarrierID)
-	s.ref(w, c.FromStop)
-	s.ref(w, c.ToStop)
-	w.vec3(c.Board)
-	s.ref(w, c.BoardMode)
-	s.ref(w, c.CallControllerID)
-	s.ref(w, c.ControllerID)
+	s.ref(w, v.LandingSupport.ID)
+	s.ref(w, v.LandingSupport.Stop)
+	w.vec3(v.LandingSupport.Point)
 }
 func readNavTraversal(r *navBinaryReader, s []string) *NavTraversalDef {
 	if r.u8() == 0 {
@@ -615,7 +625,10 @@ func readNavTraversal(r *navBinaryReader, s []string) *NavTraversalDef {
 	}
 	v := &NavTraversalDef{LinkID: navStringRef(r, s), OwnerID: navStringRef(r, s), Start: r.vec3(), Apex: r.vec3(), End: r.vec3(), Speed: r.f32(), LaunchSpeed: r.f32(), Duration: r.f32()}
 	if r.u8() != 0 {
-		v.Carrier = &NavCarrierTraversalDef{CarrierID: navStringRef(r, s), FromStop: navStringRef(r, s), ToStop: navStringRef(r, s), Board: r.vec3(), BoardMode: navStringRef(r, s), CallControllerID: navStringRef(r, s), ControllerID: navStringRef(r, s)}
+		v.Carrier = &NavCarrierTraversalDef{CarrierID: navStringRef(r, s), FromStop: navStringRef(r, s), ToStop: navStringRef(r, s), Board: r.vec3(), CallControllerID: navStringRef(r, s), ControllerID: navStringRef(r, s)}
+	}
+	if r.u8() != 0 {
+		v.LandingSupport = &NavLandingSupportDef{ID: navStringRef(r, s), Stop: navStringRef(r, s), Point: r.vec3()}
 	}
 	return v
 }
