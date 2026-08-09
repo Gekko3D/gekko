@@ -74,15 +74,47 @@ func connectNavGraphLadders(sources []NavSourceTileDef, graphs []NavGraphTileDef
 			diagnostics = append(diagnostics, NavLadderDiagnostic{LadderID: ladder.ID, Code: NavLadderSkippedSameRegion})
 			continue
 		}
+		mounts := append([]NavPointResult{bottom}, navLadderPlatformMounts(query, ladder, profile)...)
+		mounts = append(mounts, top)
+		sort.Slice(mounts, func(i, j int) bool {
+			if mounts[i].Point[1] != mounts[j].Point[1] {
+				return mounts[i].Point[1] < mounts[j].Point[1]
+			}
+			return navSpanRefLess(mounts[i].Ref, mounts[j].Ref)
+		})
 		width := 2 * max(ladder.BoundsHalfExtents[0], ladder.BoundsHalfExtents[2])
 		resident := query.resident()
-		bottomSpan, _ := resident.span(bottom.Ref)
-		topSpan, _ := resident.span(top.Ref)
-		headroom := min(bottomSpan.Headroom, topSpan.Headroom)
-		clearance := min(bottomSpan.ClearanceRadius, topSpan.ClearanceRadius)
-		cost := navLadderTraversalCost(bottom.Point, top.Point, ladder.ClimbSpeed)
-		appendNavLadderDirection(&graphs[graphIndex[bottom.Ref.Tile]], ladder.ID, bottom, top, width, headroom, clearance, cost)
-		appendNavLadderDirection(&graphs[graphIndex[top.Ref.Tile]], ladder.ID, top, bottom, width, headroom, clearance, cost)
+		for start := 0; start < len(mounts); {
+			end := start + 1
+			for end < len(mounts) && mounts[end].Point[1]-mounts[start].Point[1] <= 1e-4 {
+				end++
+			}
+			if end == len(mounts) {
+				break
+			}
+			nextEnd := end + 1
+			for nextEnd < len(mounts) && mounts[nextEnd].Point[1]-mounts[end].Point[1] <= 1e-4 {
+				nextEnd++
+			}
+			for i := start; i < end; i++ {
+				for j := end; j < nextEnd; j++ {
+					from, to := mounts[i], mounts[j]
+					fromRegion := navRouteNode{Tile: from.Ref.Tile, Region: from.Region}
+					toRegion := navRouteNode{Tile: to.Ref.Tile, Region: to.Region}
+					if from.Ref == to.Ref || fromRegion == toRegion {
+						continue
+					}
+					fromSpan, _ := resident.span(from.Ref)
+					toSpan, _ := resident.span(to.Ref)
+					headroom := min(fromSpan.Headroom, toSpan.Headroom)
+					clearance := min(fromSpan.ClearanceRadius, toSpan.ClearanceRadius)
+					cost := navLadderTraversalCost(from.Point, to.Point, ladder.ClimbSpeed)
+					appendNavLadderDirection(&graphs[graphIndex[from.Ref.Tile]], ladder.ID, from, to, width, headroom, clearance, cost)
+					appendNavLadderDirection(&graphs[graphIndex[to.Ref.Tile]], ladder.ID, to, from, width, headroom, clearance, cost)
+				}
+			}
+			start = end
+		}
 	}
 	for i := range graphs {
 		for id := range graphs[i].Transitions {
@@ -93,6 +125,52 @@ func connectNavGraphLadders(sources []NavSourceTileDef, graphs []NavGraphTileDef
 		}
 	}
 	return graphs, diagnostics, nil
+}
+
+// navLadderPlatformMounts finds baked walkable spans beside a ladder at an
+// intermediate height. The runtime controller validates the final side-step.
+func navLadderPlatformMounts(query *NavGraphQuery, ladder LevelLadderVolumeDef, profile NavAgentProfileDef) []NavPointResult {
+	if query == nil {
+		return nil
+	}
+	resident := query.resident()
+	normalAxis, tangentAxis := 2, 0
+	if ladder.BoundsHalfExtents[0] < ladder.BoundsHalfExtents[2] {
+		normalAxis, tangentAxis = 0, 2
+	}
+	bottomY := ladder.BoundsCenter[1] - ladder.BoundsHalfExtents[1] + profile.StepHeight
+	topY := ladder.BoundsCenter[1] + ladder.BoundsHalfExtents[1] - profile.StepHeight
+	maxGap := profile.Radius + resident.voxelResolution*1.5
+	best := map[navRouteNode]NavPointResult{}
+	for coord, tile := range resident.tiles {
+		for spanIndex, span := range tile.spans {
+			spanID := uint32(spanIndex)
+			if !bitHas(tile.accepted, spanID) || span.SupportHeight <= bottomY || span.SupportHeight >= topY {
+				continue
+			}
+			minX := float32(coord.X*resident.chunkSize+span.X) * resident.voxelResolution
+			minZ := float32(coord.Z*resident.chunkSize+span.Z) * resident.voxelResolution
+			point := Vec3{
+				navClampToSpanAxis(ladder.BoundsCenter[0], minX, resident.voxelResolution),
+				span.SupportHeight,
+				navClampToSpanAxis(ladder.BoundsCenter[2], minZ, resident.voxelResolution),
+			}
+			gap := absFloat32(point[normalAxis]-ladder.BoundsCenter[normalAxis]) - ladder.BoundsHalfExtents[normalAxis]
+			if gap < profile.Radius || gap > maxGap || absFloat32(point[tangentAxis]-ladder.BoundsCenter[tangentAxis]) > ladder.BoundsHalfExtents[tangentAxis]+resident.voxelResolution {
+				continue
+			}
+			candidate := NavPointResult{Found: true, Ref: NavSpanRef{Tile: coord, Span: spanID}, Region: tile.spanRegions[spanID], Point: point, Distance: absFloat32(gap - profile.Radius)}
+			node := navRouteNode{Tile: candidate.Ref.Tile, Region: candidate.Region}
+			if current, ok := best[node]; !ok || candidate.Distance < current.Distance || candidate.Distance == current.Distance && navSpanRefLess(candidate.Ref, current.Ref) {
+				best[node] = candidate
+			}
+		}
+	}
+	mounts := make([]NavPointResult, 0, len(best))
+	for _, mount := range best {
+		mounts = append(mounts, mount)
+	}
+	return mounts
 }
 
 func appendNavLadderDirection(graph *NavGraphTileDef, ladderID string, from, to NavPointResult, width, headroom, clearance, cost float32) {

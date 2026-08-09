@@ -146,13 +146,14 @@ type AssetBoneDef struct {
 }
 
 type AssetAnimationClipDef struct {
-	ID       string                   `json:"id"`
-	Name     string                   `json:"name"`
-	FPS      float32                  `json:"fps,omitempty"`
-	Duration float32                  `json:"duration,omitempty"`
-	Loop     bool                     `json:"loop,omitempty"`
-	Tracks   []AssetAnimationTrackDef `json:"tracks,omitempty"`
-	Tags     []string                 `json:"tags,omitempty"`
+	ID              string                   `json:"id"`
+	Name            string                   `json:"name"`
+	FPS             float32                  `json:"fps,omitempty"`
+	Duration        float32                  `json:"duration,omitempty"`
+	Loop            bool                     `json:"loop,omitempty"`
+	Tracks          []AssetAnimationTrackDef `json:"tracks,omitempty"`
+	TraversalMotion []AssetVec3KeyDef        `json:"traversal_motion,omitempty"`
+	Tags            []string                 `json:"tags,omitempty"`
 }
 
 type AssetAnimationTrackDef struct {

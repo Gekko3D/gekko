@@ -646,6 +646,7 @@ func localTransformForAnimationBind(cmd *Commands, eid EntityId) (LocalTransform
 func cloneAssetAnimationClip(clip content.AssetAnimationClipDef) content.AssetAnimationClipDef {
 	clone := clip
 	clone.Tags = append([]string(nil), clip.Tags...)
+	clone.TraversalMotion = append([]content.AssetVec3KeyDef(nil), clip.TraversalMotion...)
 	clone.Tracks = append([]content.AssetAnimationTrackDef(nil), clip.Tracks...)
 	for i := range clone.Tracks {
 		clone.Tracks[i].PositionKeys = append([]content.AssetVec3KeyDef(nil), clip.Tracks[i].PositionKeys...)

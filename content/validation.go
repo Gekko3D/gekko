@@ -364,6 +364,7 @@ func validateAnimationClips(result *AssetValidationResult, clips []AssetAnimatio
 		if clip.Duration == 0 && len(clip.Tracks) > 0 {
 			result.addError("invalid_animation_duration", "animation clip duration is required when tracks are present", clip.ID, clip.Name, "animation_clip")
 		}
+		validateVec3Keys(result, clip, "$traversal", "traversal motion", clip.TraversalMotion)
 		seenTargets := map[string]struct{}{}
 		for _, track := range clip.Tracks {
 			if strings.TrimSpace(track.TargetID) == "" {

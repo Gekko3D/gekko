@@ -42,6 +42,20 @@ func TestCharacterFindTraversalTargetRejectsWallWithoutLanding(t *testing.T) {
 	}
 }
 
+func TestCharacterMantleMotionDoesNotReplaceCollisionSafePath(t *testing.T) {
+	ctrl := GroundedCharacterMotorComponent{Radius: 0.25, Height: 1.7, StepHeight: 0.6}
+	CharacterBeginTraversal(&ctrl, CharacterTraversalRequest{
+		Kind: CharacterTraversalMantle, Apex: mgl32.Vec3{0, 1, 0}, End: mgl32.Vec3{1, 1, 0}, Duration: 1,
+		Motion: []CharacterTraversalMotionKey{{Progress: 0}, {Progress: 1, Position: mgl32.Vec3{10, 0, 0}}},
+	})
+	ctrl.Traversal.Phase = CharacterTraversalPhaseLift
+	base := mgl32.Vec3{}
+	advanceGroundedKinematicTraversal(nil, newCharacterControllerTestVoxelRtState(), &base, &ctrl, 0.125, nil)
+	if base.Sub(mgl32.Vec3{0, 0.5, 0}).Len() > 0.001 {
+		t.Fatalf("mantle collision path followed presentation motion: %v", base)
+	}
+}
+
 func TestCharacterDropAcceptsAndSettlesOnExpectedDynamicSupport(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

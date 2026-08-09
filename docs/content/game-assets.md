@@ -119,6 +119,12 @@ external-animation-block sequences are rejected instead of being approximated.
 Generated clips default to locked root translation, so a character controller
 stays authoritative.
 
+Clips may also store `traversal_motion`: local displacement keys extracted
+before controller-owned bones are flattened. Gameplay converts these keys to
+normalized motor motion, collision-validates that path, and samples the visual
+clip from the motor's phase clock. This keeps authored mount/dismount motion
+without giving the render hierarchy authority over actor position.
+
 ## Source Kinds for Parts
 
 A part's `source.kind` controls how geometry is produced:

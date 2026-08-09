@@ -426,6 +426,60 @@ func TestGroundedPlayerLadderClimbStopsAtCeiling(t *testing.T) {
 	}
 }
 
+func TestGroundedPlayerStartsTopDismountBelowPlatform(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	ladder := cmd.AddEntity(&LadderVolumeComponent{
+		BoundsCenter:      mgl32.Vec3{0, 2, 0},
+		BoundsHalfExtents: mgl32.Vec3{0.1, 2, 0.4},
+		ClimbSpeed:        3,
+	})
+	player := cmd.AddEntity(
+		&TransformComponent{Position: mgl32.Vec3{0.48, 2, 0}, Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}},
+		&GroundedCharacterMotorComponent{Height: 1.8, EyeHeight: 1.6, Radius: 0.35, StepHeight: 0.6, GroundProbe: 0.15},
+		&GroundedCharacterIntentComponent{
+			LadderMovement: 1, ForceLadder: true, LadderEntity: ladder, LadderTopExitDuration: 1,
+			LadderTopExitMotion: []CharacterTraversalMotionKey{{Progress: 0}, {Progress: 1, Position: mgl32.Vec3{0.8, 1.658, 0}}},
+		},
+	)
+	app.FlushCommands()
+	state := newGroundedPlayerTestVoxelRtState()
+	platform := core.NewVoxelObject()
+	platform.XBrickMap = volume.NewXBrickMap()
+	for x := 1; x <= 2; x++ {
+		for z := -1; z <= 1; z++ {
+			platform.XBrickMap.SetVoxel(x, 3, z, 1)
+		}
+	}
+	platform.Transform.Scale = mgl32.Vec3{1, 1, 1}
+	platform.Transform.Dirty = true
+	platform.UpdateWorldAABB()
+	state.RtApp.Scene.AddObject(platform)
+
+	var dismountY float32
+	for frame := 0; frame < 200; frame++ {
+		groundedPlayerControlSystem(cmd, &Time{Dt: 0.05}, nil, state)
+		intent := cmd.GetComponent(player, reflect.TypeOf(GroundedCharacterIntentComponent{})).(*GroundedCharacterIntentComponent)
+		intent.ForceLadder = false
+		motor := cmd.GetComponent(player, reflect.TypeOf(GroundedCharacterMotorComponent{})).(*GroundedCharacterMotorComponent)
+		transform := cmd.GetComponent(player, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+		if dismountY == 0 && motor.Traversal.Phase == CharacterTraversalPhaseDismount {
+			dismountY = transform.Position.Y()
+		}
+		if !motor.Traversal.Running() {
+			break
+		}
+	}
+	motor := cmd.GetComponent(player, reflect.TypeOf(GroundedCharacterMotorComponent{})).(*GroundedCharacterMotorComponent)
+	transform := cmd.GetComponent(player, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if dismountY > 2.5 {
+		t.Fatalf("top dismount started above pull-up height: y=%v, platform=4", dismountY)
+	}
+	if dismountY == 0 || motor.Traversal.Status != CharacterTraversalSucceeded || transform.Position.Sub(motor.Traversal.Request.End).Len() > 0.1 {
+		t.Fatalf("top dismount did not land: startY=%v traversal=%+v position=%v", dismountY, motor.Traversal, transform.Position)
+	}
+}
+
 func TestGroundedPlayerUseActivatesLinkedMovingBrush(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()
