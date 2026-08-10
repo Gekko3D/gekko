@@ -291,6 +291,12 @@ func npcAnimationSystem(cmd *Commands) {
 				return true
 			}
 			if _, ok := animationSet.Clips[clipID]; !ok {
+				if anim.ExplicitClipID != "" && (anim.FailedRequestID != anim.RequestID || anim.FailedClipID != clipID) {
+					anim.AppliedRequestID = anim.RequestID
+					anim.FailedRequestID, anim.FailedClipID, anim.FailureReason = anim.RequestID, clipID, "exact_clip_missing"
+					anim.ActiveClipID, anim.Completed = "", true
+					player.Playing, player.Completed = false, true
+				}
 				return true
 			}
 			if player.ClipID != clipID || anim.RequestID != anim.AppliedRequestID {
@@ -299,6 +305,7 @@ func npcAnimationSystem(cmd *Commands) {
 				player.Playing = true
 				player.Completed = false
 				anim.AppliedRequestID = anim.RequestID
+				anim.FailedRequestID, anim.FailedClipID, anim.FailureReason = 0, "", ""
 			}
 			if player.Speed == 0 {
 				player.Speed = 1

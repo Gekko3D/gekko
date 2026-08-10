@@ -113,6 +113,7 @@ const (
 type RuntimeNavigationService struct {
 	Sources                 []content.NavSourceTileDef
 	Graphs                  []content.NavGraphTileDef
+	ResidencyPending        bool
 	ChunkSize               int
 	VoxelResolution         float32
 	NavigationRevision      uint64
@@ -166,8 +167,10 @@ func RuntimeNavigationServiceFromStreamedLevelState(state *StreamedLevelRuntimeS
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 	return RuntimeNavigationService{
-		Sources:   append([]content.NavSourceTileDef(nil), state.NavigationSources...),
-		Graphs:    append([]content.NavGraphTileDef(nil), state.NavigationGraphs...),
+		Sources: append([]content.NavSourceTileDef(nil), state.NavigationSources...),
+		Graphs:  append([]content.NavGraphTileDef(nil), state.NavigationGraphs...),
+		ResidencyPending: state.navigationLoadedGen != state.navigationRequestedGen ||
+			state.navigationLoadActive || state.navigationPendingGen != 0,
 		ChunkSize: state.BaseNavManifest.ChunkSize, VoxelResolution: state.BaseNavManifest.VoxelResolution,
 		NavigationRevision:      state.NavigationRevision,
 		NavigationGraphRevision: state.navigationLoadedGen,

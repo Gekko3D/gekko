@@ -31,6 +31,9 @@ type NPCAnimationComponent struct {
 	ExplicitClipID   string
 	RequestID        uint64
 	AppliedRequestID uint64
+	FailedRequestID  uint64
+	FailedClipID     string
+	FailureReason    string
 	ActiveClipID     string
 	Completed        bool
 	CrossedEvents    []AnimationEvent
