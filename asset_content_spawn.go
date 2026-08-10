@@ -55,6 +55,14 @@ type preparedAuthoredPart struct {
 	palette AssetId
 }
 
+func PreparedAuthoredAssetPartGeometry(prepared *PreparedAuthoredAsset, partID string) (AssetId, bool) {
+	if prepared == nil {
+		return AssetId{}, false
+	}
+	part, ok := prepared.parts[partID]
+	return part.model, ok && part.model != (AssetId{})
+}
+
 func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
 	return SpawnAuthoredAssetWithOptions(cmd, assets, def, rootTransform, AuthoredAssetSpawnOptions{})
 }
