@@ -544,7 +544,8 @@ func mdlBindPoseAnimationClip(seq MDLSequenceInfo, targets []mdlAnimationBindTar
 		Name:     name,
 		FPS:      fps,
 		Duration: duration,
-		Loop:     true,
+		Loop:     seq.Loop,
+		Events:   mdlAnimationEvents(seq, fps),
 		Tracks:   tracks,
 		Tags:     mdlAnimationTags(seq, "generated:bind_pose_clip"),
 	}, true
@@ -599,10 +600,28 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 		Name:     name,
 		FPS:      fps,
 		Duration: duration,
-		Loop:     true,
+		Loop:     seq.Loop,
+		Events:   mdlAnimationEvents(seq, fps),
 		Tracks:   tracks,
 		Tags:     mdlAnimationTags(seq, "generated:sequence_clip"),
 	}, len(tracks) > 0
+}
+
+func mdlAnimationEvents(seq MDLSequenceInfo, fps float32) []content.AssetAnimationEventDef {
+	if len(seq.Events) == 0 {
+		return nil
+	}
+	if fps <= 0 {
+		fps = 30
+	}
+	events := make([]content.AssetAnimationEventDef, 0, len(seq.Events))
+	for _, event := range seq.Events {
+		if event.Frame < 0 {
+			continue
+		}
+		events = append(events, content.AssetAnimationEventDef{Frame: event.Frame, Time: float32(event.Frame) / fps, ID: event.ID, Type: event.Type, Options: event.Options})
+	}
+	return events
 }
 
 func mdlAnimationTags(seq MDLSequenceInfo, kind string) []string {
@@ -775,7 +794,7 @@ func mdlSequenceDuration(seq MDLSequenceInfo, fps float32) float32 {
 	if fps <= 0 {
 		fps = 30
 	}
-	duration := float32(seq.FrameCount) / fps
+	duration := float32(seq.FrameCount-1) / fps
 	if duration <= 0 {
 		duration = 1.0 / fps
 	}

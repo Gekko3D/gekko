@@ -27,6 +27,12 @@ func (AnimationModule) Install(app *App, cmd *Commands) {
 			InStage(Update).
 			RunAlways(),
 	)
+	app.UseSystem(
+		System(npcAnimationEventDeliverySystem).
+			ProfileCategory("animation").
+			InStage(Update).
+			RunAlways(),
+	)
 }
 
 type AnimationPlayerComponent struct {
@@ -35,8 +41,19 @@ type AnimationPlayerComponent struct {
 	Speed            float32
 	Playing          bool
 	Loop             bool
+	Completed        bool
+	CrossedEvents    []AnimationEvent
 	RootMotionPolicy AnimationRootMotionPolicy
 	Layers           []AnimationLayer
+}
+
+// AnimationEvent is a crossed authored event for one sampled clip.
+type AnimationEvent struct {
+	ClipID  string
+	Frame   int
+	ID      int
+	Type    int
+	Options string
 }
 
 // AnimationRootMotionPolicy controls position keys on authored root targets.
@@ -176,27 +193,85 @@ func animationEntityDescendsFrom(parentByEntity map[EntityId]EntityId, entity En
 }
 
 func advanceAnimationPlayer(player *AnimationPlayerComponent, clip content.AssetAnimationClipDef, dt float32) {
-	if player == nil || !player.Playing || dt == 0 {
+	if player == nil {
+		return
+	}
+	player.CrossedEvents = player.CrossedEvents[:0]
+	if !player.Playing || dt == 0 {
 		return
 	}
 	speed := player.Speed
 	if speed == 0 {
 		speed = 1
 	}
+	previous := player.Time
 	player.Time += dt * speed
 	if clip.Duration <= 0 {
 		return
 	}
 	if player.Loop {
+		appendCrossedAnimationEvents(player, clip, previous, player.Time, true)
 		player.Time = positiveMod(player.Time, clip.Duration)
 		return
 	}
-	if player.Time > clip.Duration {
+	if player.Time >= clip.Duration {
 		player.Time = clip.Duration
 		player.Playing = false
-	} else if player.Time < 0 {
+		player.Completed = true
+	} else if player.Time <= 0 {
 		player.Time = 0
 		player.Playing = false
+		player.Completed = true
+	}
+	appendCrossedAnimationEvents(player, clip, previous, player.Time, false)
+}
+
+func appendCrossedAnimationEvents(player *AnimationPlayerComponent, clip content.AssetAnimationClipDef, start, end float32, loop bool) {
+	if player == nil || len(clip.Events) == 0 || clip.Duration <= 0 || end == start {
+		return
+	}
+	if end > start {
+		if !loop {
+			appendForwardAnimationEvents(player, clip, start, end)
+			return
+		}
+		for current := start; current < end; {
+			cycle := float32(math.Floor(float64(current / clip.Duration)))
+			cycleEnd := (cycle + 1) * clip.Duration
+			limit := min(end, cycleEnd)
+			appendForwardAnimationEvents(player, clip, current-cycle*clip.Duration, limit-cycle*clip.Duration)
+			current = limit
+		}
+		return
+	}
+	if !loop {
+		appendReverseAnimationEvents(player, clip, end, start, false)
+		return
+	}
+	for current := start; current > end; {
+		cycle := float32(math.Ceil(float64(current/clip.Duration))) - 1
+		cycleStart := cycle * clip.Duration
+		limit := max(end, cycleStart)
+		appendReverseAnimationEvents(player, clip, limit-cycleStart, current-cycleStart, limit == cycleStart)
+		current = limit
+	}
+}
+
+// Forward crossings use (start, end]; reverse crossings use [start, end).
+func appendForwardAnimationEvents(player *AnimationPlayerComponent, clip content.AssetAnimationClipDef, start, end float32) {
+	for _, event := range clip.Events {
+		if (event.Time > start || (start == 0 && event.Time == 0)) && event.Time <= end {
+			player.CrossedEvents = append(player.CrossedEvents, AnimationEvent{ClipID: player.ClipID, Frame: event.Frame, ID: event.ID, Type: event.Type, Options: event.Options})
+		}
+	}
+}
+
+func appendReverseAnimationEvents(player *AnimationPlayerComponent, clip content.AssetAnimationClipDef, start, end float32, includeDurationAtStart bool) {
+	for i := len(clip.Events) - 1; i >= 0; i-- {
+		event := clip.Events[i]
+		if (event.Time >= start && event.Time < end) || (includeDurationAtStart && event.Time == clip.Duration) {
+			player.CrossedEvents = append(player.CrossedEvents, AnimationEvent{ClipID: player.ClipID, Frame: event.Frame, ID: event.ID, Type: event.Type, Options: event.Options})
+		}
 	}
 }
 
@@ -208,22 +283,46 @@ func npcAnimationSystem(cmd *Commands) {
 			if !ok || assetRoot == 0 || player == nil || animationSet == nil {
 				return true
 			}
-			clipID := selectNPCAnimationClipID(animationSet, anim.State, anim.FallbackClipID)
+			clipID := anim.ExplicitClipID
+			if clipID == "" {
+				clipID = selectNPCAnimationClipID(animationSet, anim.State, anim.FallbackClipID)
+			}
 			if clipID == "" {
 				return true
 			}
-			if player.ClipID != clipID {
+			if _, ok := animationSet.Clips[clipID]; !ok {
+				return true
+			}
+			if player.ClipID != clipID || anim.RequestID != anim.AppliedRequestID {
 				player.ClipID = clipID
 				player.Time = 0
+				player.Playing = true
+				player.Completed = false
+				anim.AppliedRequestID = anim.RequestID
 			}
 			if player.Speed == 0 {
 				player.Speed = 1
 			}
-			player.Playing = true
 			if clip, ok := animationSet.Clips[clipID]; ok {
 				player.Loop = clip.Loop
 			}
+			player.RootMotionPolicy = AnimationRootMotionLocked
 			anim.ActiveClipID = clipID
+			return true
+		})
+}
+
+func npcAnimationEventDeliverySystem(cmd *Commands) {
+	parentByEntity := animationParentIndex(cmd)
+	MakeQuery2[NPCComponent, NPCAnimationComponent](cmd).
+		Map(func(npcEntity EntityId, _ *NPCComponent, anim *NPCAnimationComponent) bool {
+			_, player, _, ok := npcAnimationAssetRoot(cmd, parentByEntity, npcEntity)
+			if !ok || player == nil || anim == nil {
+				return true
+			}
+			anim.CrossedEvents = append(anim.CrossedEvents[:0], player.CrossedEvents...)
+			player.CrossedEvents = player.CrossedEvents[:0]
+			anim.Completed = player.Completed
 			return true
 		})
 }
@@ -474,9 +573,9 @@ func advanceAnimationLayer(layer *AnimationLayer, clip content.AssetAnimationCli
 		layer.Time = positiveMod(layer.Time, clip.Duration)
 		return false
 	}
-	if layer.Time > clip.Duration {
+	if layer.Time >= clip.Duration {
 		return true
-	} else if layer.Time < 0 {
+	} else if layer.Time <= 0 {
 		return true
 	}
 	return false
@@ -646,6 +745,7 @@ func localTransformForAnimationBind(cmd *Commands, eid EntityId) (LocalTransform
 func cloneAssetAnimationClip(clip content.AssetAnimationClipDef) content.AssetAnimationClipDef {
 	clone := clip
 	clone.Tags = append([]string(nil), clip.Tags...)
+	clone.Events = append([]content.AssetAnimationEventDef(nil), clip.Events...)
 	clone.TraversalMotion = append([]content.AssetVec3KeyDef(nil), clip.TraversalMotion...)
 	clone.Tracks = append([]content.AssetAnimationTrackDef(nil), clip.Tracks...)
 	for i := range clone.Tracks {

@@ -364,6 +364,16 @@ func validateAnimationClips(result *AssetValidationResult, clips []AssetAnimatio
 		if clip.Duration == 0 && len(clip.Tracks) > 0 {
 			result.addError("invalid_animation_duration", "animation clip duration is required when tracks are present", clip.ID, clip.Name, "animation_clip")
 		}
+		lastEventTime := float32(-1)
+		for _, event := range clip.Events {
+			if event.Frame < 0 || event.Time < 0 || (clip.Duration > 0 && event.Time > clip.Duration) {
+				result.addError("invalid_animation_event_time", "animation event time must be inside clip duration", clip.ID, clip.Name, "animation_event")
+			}
+			if lastEventTime >= 0 && event.Time < lastEventTime {
+				result.addError("invalid_animation_event_order", "animation event times must be sorted", clip.ID, clip.Name, "animation_event")
+			}
+			lastEventTime = event.Time
+		}
 		validateVec3Keys(result, clip, "$traversal", "traversal motion", clip.TraversalMotion)
 		seenTargets := map[string]struct{}{}
 		for _, track := range clip.Tracks {

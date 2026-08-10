@@ -20,6 +20,8 @@ const (
 	maxMDLSequenceBlendCount = 4
 	mdlSequenceRecordSize176 = 176
 	mdlSequenceRecordSize180 = 180
+	mdlSequenceEventSize     = 76
+	mdlSequenceFlagLooping   = 1
 )
 
 type MDLInfo struct {
@@ -57,13 +59,23 @@ type MDLBoneInfo struct {
 
 type MDLSequenceInfo struct {
 	Name           string                 `json:"name"`
+	Flags          int                    `json:"flags,omitempty"`
+	Loop           bool                   `json:"loop,omitempty"`
 	Activity       int                    `json:"activity"`
 	FPS            float32                `json:"fps,omitempty"`
 	FrameCount     int                    `json:"frame_count,omitempty"`
 	NumBlends      int                    `json:"num_blends,omitempty"`
 	AnimIndex      int                    `json:"anim_index,omitempty"`
 	SeqGroup       int                    `json:"seq_group,omitempty"`
+	Events         []MDLSequenceEventInfo `json:"events,omitempty"`
 	BoneAnimations []MDLBoneAnimationInfo `json:"bone_animations,omitempty"`
+}
+
+type MDLSequenceEventInfo struct {
+	Frame   int    `json:"frame"`
+	ID      int    `json:"id"`
+	Type    int    `json:"type,omitempty"`
+	Options string `json:"options,omitempty"`
 }
 
 type MDLBoneAnimationInfo struct {
@@ -439,14 +451,34 @@ func parseMDLSequences(data []byte, offset int, count int, bones []MDLBoneInfo) 
 		seq := MDLSequenceInfo{
 			Name:       cString(data[base : base+32]),
 			FPS:        readFloat32(data, base+32),
+			Flags:      int(readInt32(data, base+36)),
 			Activity:   int(readInt32(data, base+40)),
 			FrameCount: int(readInt32(data, base+56)),
 			NumBlends:  int(readInt32(data, base+120)),
 			AnimIndex:  int(readInt32(data, base+124)),
 			SeqGroup:   int(readInt32(data, base+156)),
 		}
+		seq.Loop = seq.Flags&mdlSequenceFlagLooping != 0
+		seq.Events = parseMDLSequenceEvents(data, int(readInt32(data, base+52)), int(readInt32(data, base+48)))
 		seq.BoneAnimations = decodeMDLSequenceAnimations(data, seq, bones)
 		out = append(out, seq)
+	}
+	return out
+}
+
+func parseMDLSequenceEvents(data []byte, offset, count int) []MDLSequenceEventInfo {
+	if count <= 0 || offset < mdlHeaderSize || offset > len(data) || count > (len(data)-offset)/mdlSequenceEventSize {
+		return nil
+	}
+	out := make([]MDLSequenceEventInfo, 0, count)
+	for i := 0; i < count; i++ {
+		base := offset + i*mdlSequenceEventSize
+		out = append(out, MDLSequenceEventInfo{
+			Frame:   int(readInt32(data, base)),
+			ID:      int(readInt32(data, base+4)),
+			Type:    int(readInt32(data, base+8)),
+			Options: cString(data[base+12 : base+76]),
+		})
 	}
 	return out
 }

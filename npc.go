@@ -26,7 +26,32 @@ type NPCComponent struct {
 }
 
 type NPCAnimationComponent struct {
-	State          string
-	FallbackClipID string
-	ActiveClipID   string
+	State            string
+	FallbackClipID   string
+	ExplicitClipID   string
+	RequestID        uint64
+	AppliedRequestID uint64
+	ActiveClipID     string
+	Completed        bool
+	CrossedEvents    []AnimationEvent
+}
+
+// RequestNPCAnimationClip selects an exact authored clip. Set restart when a
+// same-clip replay is intentional.
+func RequestNPCAnimationClip(animation *NPCAnimationComponent, clipID string, restart bool) bool {
+	if animation == nil || clipID == "" {
+		return false
+	}
+	if animation.ExplicitClipID != clipID || restart {
+		animation.ExplicitClipID = clipID
+		animation.RequestID++
+	}
+	return true
+}
+
+func ClearNPCAnimationClip(animation *NPCAnimationComponent) {
+	if animation != nil && animation.ExplicitClipID != "" {
+		animation.ExplicitClipID = ""
+		animation.RequestID++
+	}
 }

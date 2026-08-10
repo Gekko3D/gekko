@@ -151,9 +151,20 @@ type AssetAnimationClipDef struct {
 	FPS             float32                  `json:"fps,omitempty"`
 	Duration        float32                  `json:"duration,omitempty"`
 	Loop            bool                     `json:"loop,omitempty"`
+	Events          []AssetAnimationEventDef `json:"events,omitempty"`
 	Tracks          []AssetAnimationTrackDef `json:"tracks,omitempty"`
 	TraversalMotion []AssetVec3KeyDef        `json:"traversal_motion,omitempty"`
 	Tags            []string                 `json:"tags,omitempty"`
+}
+
+// AssetAnimationEventDef is authored timing metadata. Gameplay consumes it;
+// animation playback only reports crossed events.
+type AssetAnimationEventDef struct {
+	Frame   int     `json:"frame"`
+	Time    float32 `json:"time"`
+	ID      int     `json:"id"`
+	Type    int     `json:"type"`
+	Options string  `json:"options,omitempty"`
 }
 
 type AssetAnimationTrackDef struct {

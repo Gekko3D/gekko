@@ -233,6 +233,7 @@ func cloneAnimationClips(clips []AssetAnimationClipDef) []AssetAnimationClipDef 
 	for i, clip := range clips {
 		out[i] = clip
 		out[i].Tags = append([]string(nil), clip.Tags...)
+		out[i].Events = append([]AssetAnimationEventDef(nil), clip.Events...)
 		out[i].TraversalMotion = append([]AssetVec3KeyDef(nil), clip.TraversalMotion...)
 		out[i].Tracks = append([]AssetAnimationTrackDef(nil), clip.Tracks...)
 		for j := range out[i].Tracks {

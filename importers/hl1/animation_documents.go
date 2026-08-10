@@ -109,6 +109,7 @@ func cloneMDLAnimationClips(clips []content.AssetAnimationClipDef) []content.Ass
 	for i, clip := range clips {
 		out[i] = clip
 		out[i].Tags = append([]string(nil), clip.Tags...)
+		out[i].Events = append([]content.AssetAnimationEventDef(nil), clip.Events...)
 		out[i].TraversalMotion = append([]content.AssetVec3KeyDef(nil), clip.TraversalMotion...)
 		out[i].Tracks = append([]content.AssetAnimationTrackDef(nil), clip.Tracks...)
 		for j := range out[i].Tracks {
