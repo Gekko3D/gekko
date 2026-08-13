@@ -83,8 +83,17 @@ type CharacterDirectionalLocomotionDef struct {
 	Walk             CharacterDirectionalClipSetDef `json:"walk,omitempty"`
 	Run              CharacterDirectionalClipSetDef `json:"run,omitempty"`
 	Sprint           CharacterDirectionalClipSetDef `json:"sprint,omitempty"`
+	TurnInPlace      *CharacterTurnInPlaceDef       `json:"turn_in_place,omitempty"`
 	Fallback         string                         `json:"fallback"`
 	BackwardFallback string                         `json:"backward_fallback,omitempty"`
+}
+type CharacterTurnInPlaceDef struct {
+	LeftClipID               string  `json:"left_clip_id,omitempty"`
+	RightClipID              string  `json:"right_clip_id,omitempty"`
+	StartAngleDegrees        float32 `json:"start_angle_degrees,omitempty"`
+	StopAngleDegrees         float32 `json:"stop_angle_degrees,omitempty"`
+	TurnRateDegreesPerSecond float32 `json:"turn_rate_degrees_per_second,omitempty"`
+	PlaybackSpeed            float32 `json:"playback_speed,omitempty"`
 }
 type CharacterDirectionalClipSetDef struct {
 	Forward       string `json:"forward,omitempty"`

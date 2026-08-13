@@ -99,6 +99,12 @@ policy. Masks use generated/authored item IDs; consumers must not derive them
 from display names at runtime. `locked` root motion ignores position keys on
 root targets, leaving controller movement authoritative.
 
+For NPCs, an exact requested clip has priority over a locomotion presentation
+clip, which in turn has priority over semantic state selection. Locomotion may
+set a negative playback rate to reuse a forward loop for an authored
+reverse-forward fallback. These presentation inputs do not own actor movement,
+root motion, action completion, or gameplay events.
+
 The current engine animation path is rigid-part animation. It does not skin or
 deform voxel geometry. To animate imported character models, split the source
 model into rigid voxel parts attached to transform-only `group` pivots, then

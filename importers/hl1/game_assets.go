@@ -133,8 +133,18 @@ const (
 type GameAssetPlayerDirectionalLocomotion struct {
 	Walk             GameAssetPlayerDirectionalClipSet `json:"walk,omitempty"`
 	Run              GameAssetPlayerDirectionalClipSet `json:"run,omitempty"`
+	TurnInPlace      *GameAssetPlayerTurnInPlace       `json:"turn_in_place,omitempty"`
 	Fallback         string                            `json:"fallback"`
 	BackwardFallback string                            `json:"backward_fallback,omitempty"`
+}
+
+type GameAssetPlayerTurnInPlace struct {
+	LeftClipID               string  `json:"left_clip_id,omitempty"`
+	RightClipID              string  `json:"right_clip_id,omitempty"`
+	StartAngleDegrees        float32 `json:"start_angle_degrees,omitempty"`
+	StopAngleDegrees         float32 `json:"stop_angle_degrees,omitempty"`
+	TurnRateDegreesPerSecond float32 `json:"turn_rate_degrees_per_second,omitempty"`
+	PlaybackSpeed            float32 `json:"playback_speed,omitempty"`
 }
 
 type GameAssetPlayerDirectionalClipSet struct {
@@ -906,7 +916,7 @@ func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPr
 		CrouchGait: content.CharacterCrouchGaitDef{Status: entry.CrouchGait.Status, CrouchClipID: entry.CrouchGait.CrouchClipID, CrouchIdleClipID: entry.CrouchGait.CrouchIdleClipID, BoneMask: append([]string(nil), entry.CrouchGait.BoneMask...), Diagnostic: entry.CrouchGait.Diagnostic,
 			Locomotion: content.CharacterCrouchLocomotionDef{DefaultClipID: entry.CrouchGait.Locomotion.DefaultClipID, Fallback: entry.CrouchGait.Locomotion.Fallback, BackwardFallback: entry.CrouchGait.Locomotion.BackwardFallback, Directional: hl1CharacterDirectionalClips(entry.CrouchGait.Locomotion.Directional)}},
 		WeaponPresentation:    content.CharacterWeaponPresentationDef{Status: entry.WeaponPresentation.Status, UpperBodyMask: append([]string(nil), entry.WeaponPresentation.UpperBodyMask...), Diagnostic: entry.WeaponPresentation.Diagnostic},
-		DirectionalLocomotion: content.CharacterDirectionalLocomotionDef{Walk: hl1CharacterDirectionalClips(entry.DirectionalLocomotion.Walk), Run: hl1CharacterDirectionalClips(entry.DirectionalLocomotion.Run), Fallback: entry.DirectionalLocomotion.Fallback, BackwardFallback: entry.DirectionalLocomotion.BackwardFallback},
+		DirectionalLocomotion: content.CharacterDirectionalLocomotionDef{Walk: hl1CharacterDirectionalClips(entry.DirectionalLocomotion.Walk), Run: hl1CharacterDirectionalClips(entry.DirectionalLocomotion.Run), TurnInPlace: hl1CharacterTurnInPlace(entry.DirectionalLocomotion.TurnInPlace), Fallback: entry.DirectionalLocomotion.Fallback, BackwardFallback: entry.DirectionalLocomotion.BackwardFallback},
 	}
 	for _, stance := range entry.CrouchGait.BaseStances {
 		def.CrouchGait.BaseStances = append(def.CrouchGait.BaseStances, content.CharacterStanceClipDef{Stance: stance.Stance, ClipID: stance.ClipID})
@@ -919,6 +929,13 @@ func hl1CharacterPresentation(entry GameAssetManifestEntry) *content.CharacterPr
 
 func hl1CharacterDirectionalClips(in GameAssetPlayerDirectionalClipSet) content.CharacterDirectionalClipSetDef {
 	return content.CharacterDirectionalClipSetDef{Forward: in.Forward, Backward: in.Backward, Left: in.Left, Right: in.Right, ForwardLeft: in.ForwardLeft, ForwardRight: in.ForwardRight, BackwardLeft: in.BackwardLeft, BackwardRight: in.BackwardRight}
+}
+
+func hl1CharacterTurnInPlace(in *GameAssetPlayerTurnInPlace) *content.CharacterTurnInPlaceDef {
+	if in == nil {
+		return nil
+	}
+	return &content.CharacterTurnInPlaceDef{LeftClipID: in.LeftClipID, RightClipID: in.RightClipID, StartAngleDegrees: in.StartAngleDegrees, StopAngleDegrees: in.StopAngleDegrees, TurnRateDegreesPerSecond: in.TurnRateDegreesPerSecond, PlaybackSpeed: in.PlaybackSpeed}
 }
 
 // hl1AddHeldWeaponPresentationMarkers adapts the shared GoldSrc p_ model

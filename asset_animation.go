@@ -287,7 +287,12 @@ func npcAnimationSystem(cmd *Commands) {
 			if !ok || assetRoot == 0 || player == nil || animationSet == nil {
 				return true
 			}
-			clipID := anim.ExplicitClipID
+			clipID, playbackSpeed := anim.ExplicitClipID, float32(1)
+			if clipID == "" && anim.LocomotionClipID != "" {
+				if _, ok := animationSet.Clips[anim.LocomotionClipID]; ok {
+					clipID, playbackSpeed = anim.LocomotionClipID, anim.LocomotionPlaybackSpeed
+				}
+			}
 			if clipID == "" {
 				clipID = selectNPCAnimationClipID(animationSet, anim.State, anim.FallbackClipID)
 			}
@@ -311,9 +316,10 @@ func npcAnimationSystem(cmd *Commands) {
 				anim.AppliedRequestID = anim.RequestID
 				anim.FailedRequestID, anim.FailedClipID, anim.FailureReason = 0, "", ""
 			}
-			if player.Speed == 0 {
-				player.Speed = 1
+			if playbackSpeed == 0 {
+				playbackSpeed = 1
 			}
+			player.Speed = playbackSpeed
 			if clip, ok := animationSet.Clips[clipID]; ok {
 				player.Loop = clip.Loop
 			}

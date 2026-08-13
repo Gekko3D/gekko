@@ -26,19 +26,21 @@ type NPCComponent struct {
 }
 
 type NPCAnimationComponent struct {
-	State            string
-	FallbackClipID   string
-	ExplicitClipID   string
-	RequestID        uint64
-	AppliedRequestID uint64
-	FailedRequestID  uint64
-	FailedClipID     string
-	FailureReason    string
-	ActiveClipID     string
-	BlendValue       float32
-	HasBlendValue    bool
-	Completed        bool
-	CrossedEvents    []AnimationEvent
+	State                   string
+	FallbackClipID          string
+	ExplicitClipID          string
+	LocomotionClipID        string
+	LocomotionPlaybackSpeed float32
+	RequestID               uint64
+	AppliedRequestID        uint64
+	FailedRequestID         uint64
+	FailedClipID            string
+	FailureReason           string
+	ActiveClipID            string
+	BlendValue              float32
+	HasBlendValue           bool
+	Completed               bool
+	CrossedEvents           []AnimationEvent
 }
 
 // SetNPCAnimationBlend changes the current clip pose without restarting its

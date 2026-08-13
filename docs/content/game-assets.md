@@ -60,6 +60,13 @@ standard navigation tag. Libraries organize authored files only: loading or
 placing an entry still uses the ordinary `.gkasset` path and runtime asset
 pipeline.
 
+Character entries may also declare source-neutral presentation metadata. The
+directional locomotion contract supports walk/run/sprint clips, eight movement
+directions, explicit face-travel and reverse-forward fallbacks, and optional
+left/right turn-in-place clips with angle hysteresis and playback tuning. Games
+own the stance policy that chooses between travel-facing and aim-facing; the
+content contract only names authored capabilities.
+
 ### Level Documents
 
 Levels reference assets rather than embedding them inline.
