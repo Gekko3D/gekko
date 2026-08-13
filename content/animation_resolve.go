@@ -25,7 +25,7 @@ func BuildRigAnimationDocuments(asset *AssetDef, clips []AssetAnimationClipDef) 
 	}
 	included := map[string]struct{}{}
 	for _, clip := range clips {
-		for _, track := range clip.Tracks {
+		for _, track := range animationClipTracks(clip) {
 			bone, ok := bones[track.TargetID]
 			if !ok || bone.JointID == "" {
 				return nil, nil, fmt.Errorf("animation target %q has no semantic joint", track.TargetID)
@@ -58,9 +58,7 @@ func BuildRigAnimationDocuments(asset *AssetDef, clips []AssetAnimationClipDef) 
 	}
 	converted := cloneAnimationClips(clips)
 	for i := range converted {
-		for j := range converted[i].Tracks {
-			converted[i].Tracks[j].TargetID = bones[converted[i].Tracks[j].TargetID].JointID
-		}
+		mapAnimationClipTargets(&converted[i], func(id string) string { return bones[id].JointID })
 	}
 	return rig, converted, nil
 }
@@ -154,9 +152,7 @@ func resolveAnimationSetForAsset(def *AssetDef, set *AnimationSetDef, setPath st
 	}
 	clips := cloneAnimationClips(set.Clips)
 	for i := range clips {
-		for j := range clips[i].Tracks {
-			clips[i].Tracks[j].TargetID = rigTargets[clips[i].Tracks[j].TargetID]
-		}
+		mapAnimationClipTargets(&clips[i], func(id string) string { return rigTargets[id] })
 	}
 	return clips, nil
 }
@@ -236,11 +232,43 @@ func cloneAnimationClips(clips []AssetAnimationClipDef) []AssetAnimationClipDef 
 		out[i].Events = append([]AssetAnimationEventDef(nil), clip.Events...)
 		out[i].TraversalMotion = append([]AssetVec3KeyDef(nil), clip.TraversalMotion...)
 		out[i].Tracks = append([]AssetAnimationTrackDef(nil), clip.Tracks...)
-		for j := range out[i].Tracks {
-			out[i].Tracks[j].PositionKeys = append([]AssetVec3KeyDef(nil), clip.Tracks[j].PositionKeys...)
-			out[i].Tracks[j].RotationKeys = append([]AssetQuatKeyDef(nil), clip.Tracks[j].RotationKeys...)
-			out[i].Tracks[j].ScaleKeys = append([]AssetVec3KeyDef(nil), clip.Tracks[j].ScaleKeys...)
+		cloneAnimationTracks(out[i].Tracks, clip.Tracks)
+		if clip.Blend1D != nil {
+			out[i].Blend1D = &AssetAnimationBlend1DDef{Parameter: clip.Blend1D.Parameter, Default: clip.Blend1D.Default, Samples: append([]AssetAnimationBlendSampleDef(nil), clip.Blend1D.Samples...)}
+			for sample := range out[i].Blend1D.Samples {
+				tracks := append([]AssetAnimationTrackDef(nil), clip.Blend1D.Samples[sample].Tracks...)
+				cloneAnimationTracks(tracks, clip.Blend1D.Samples[sample].Tracks)
+				out[i].Blend1D.Samples[sample].Tracks = tracks
+			}
 		}
 	}
 	return out
+}
+
+func animationClipTracks(clip AssetAnimationClipDef) []AssetAnimationTrackDef {
+	if clip.Blend1D != nil && len(clip.Blend1D.Samples) > 0 {
+		return clip.Blend1D.Samples[0].Tracks
+	}
+	return clip.Tracks
+}
+
+func mapAnimationClipTargets(clip *AssetAnimationClipDef, mapID func(string) string) {
+	for index := range clip.Tracks {
+		clip.Tracks[index].TargetID = mapID(clip.Tracks[index].TargetID)
+	}
+	if clip.Blend1D != nil {
+		for sample := range clip.Blend1D.Samples {
+			for index := range clip.Blend1D.Samples[sample].Tracks {
+				clip.Blend1D.Samples[sample].Tracks[index].TargetID = mapID(clip.Blend1D.Samples[sample].Tracks[index].TargetID)
+			}
+		}
+	}
+}
+
+func cloneAnimationTracks(out, source []AssetAnimationTrackDef) {
+	for index := range out {
+		out[index].PositionKeys = append([]AssetVec3KeyDef(nil), source[index].PositionKeys...)
+		out[index].RotationKeys = append([]AssetQuatKeyDef(nil), source[index].RotationKeys...)
+		out[index].ScaleKeys = append([]AssetVec3KeyDef(nil), source[index].ScaleKeys...)
+	}
 }

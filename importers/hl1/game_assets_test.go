@@ -718,6 +718,16 @@ func TestParseMDLInfoDecodesSequenceAnimationFrames(t *testing.T) {
 	}
 }
 
+func TestGoldSrcSequenceBuildsOneDimensionalBlendClip(t *testing.T) {
+	sequence := MDLSequenceInfo{Name: "shootgun", FPS: 25, FrameCount: 1, NumBlends: 2, BlendType: [2]int{8, 0}, BlendStart: [2]float32{-50, 0}, BlendEnd: [2]float32{50, 0}, AnimIndex: 1}
+	bones := []MDLBoneInfo{{Name: "root"}}
+	setMDLSequenceAnimations(&sequence, decodeMDLSequenceAnimationBlends(make([]byte, 25), sequence, bones))
+	clip, ok := mdlDecodedAnimationClip(sequence, bones, []mdlAnimationBindTarget{{ID: "root", BoneIndex: 0, Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}}}, true)
+	if !ok || clip.Blend1D == nil || clip.Blend1D.Parameter != "pitch" || clip.Blend1D.Default != 0 || len(clip.Blend1D.Samples) != 2 || clip.Blend1D.Samples[0].Value != -50 || clip.Blend1D.Samples[1].Value != 50 {
+		t.Fatalf("unexpected blended clip: %+v", clip)
+	}
+}
+
 func TestParseMDLAnimationClipsUsesSemanticJointTracks(t *testing.T) {
 	clips, err := ParseMDLAnimationClips(syntheticMDLWithBoneSequenceAnimation(), []string{"idle"}, true)
 	if err != nil {

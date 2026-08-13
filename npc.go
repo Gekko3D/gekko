@@ -35,8 +35,18 @@ type NPCAnimationComponent struct {
 	FailedClipID     string
 	FailureReason    string
 	ActiveClipID     string
+	BlendValue       float32
+	HasBlendValue    bool
 	Completed        bool
 	CrossedEvents    []AnimationEvent
+}
+
+// SetNPCAnimationBlend changes the current clip pose without restarting its
+// timeline. Clips without a one-dimensional blend ignore the value.
+func SetNPCAnimationBlend(animation *NPCAnimationComponent, value float32) {
+	if animation != nil {
+		animation.BlendValue, animation.HasBlendValue = value, true
+	}
 }
 
 // RequestNPCAnimationClip selects an exact authored clip. Set restart when a
@@ -53,8 +63,11 @@ func RequestNPCAnimationClip(animation *NPCAnimationComponent, clipID string, re
 }
 
 func ClearNPCAnimationClip(animation *NPCAnimationComponent) {
-	if animation != nil && animation.ExplicitClipID != "" {
-		animation.ExplicitClipID = ""
-		animation.RequestID++
+	if animation != nil {
+		animation.HasBlendValue = false
+		if animation.ExplicitClipID != "" {
+			animation.ExplicitClipID = ""
+			animation.RequestID++
+		}
 	}
 }

@@ -361,8 +361,11 @@ func validateAnimationClips(result *AssetValidationResult, clips []AssetAnimatio
 		if clip.Duration < 0 {
 			result.addError("invalid_animation_duration", "animation clip duration must be >= 0", clip.ID, clip.Name, "animation_clip")
 		}
-		if clip.Duration == 0 && len(clip.Tracks) > 0 {
+		if clip.Duration == 0 && (len(clip.Tracks) > 0 || clip.Blend1D != nil) {
 			result.addError("invalid_animation_duration", "animation clip duration is required when tracks are present", clip.ID, clip.Name, "animation_clip")
+		}
+		if len(clip.Tracks) > 0 && clip.Blend1D != nil {
+			result.addError("ambiguous_animation_pose", "animation clip cannot contain both tracks and blend_1d", clip.ID, clip.Name, "animation_clip")
 		}
 		lastEventTime := float32(-1)
 		for _, event := range clip.Events {
@@ -375,25 +378,66 @@ func validateAnimationClips(result *AssetValidationResult, clips []AssetAnimatio
 			lastEventTime = event.Time
 		}
 		validateVec3Keys(result, clip, "$traversal", "traversal motion", clip.TraversalMotion)
-		seenTargets := map[string]struct{}{}
-		for _, track := range clip.Tracks {
-			if strings.TrimSpace(track.TargetID) == "" {
-				result.addError("empty_animation_target", "animation track target_id is required", clip.ID, clip.Name, "animation_track")
-				continue
-			}
-			if _, ok := seenTargets[track.TargetID]; ok {
-				result.addError("duplicate_animation_target", fmt.Sprintf("duplicate animation target %s", track.TargetID), track.TargetID, clip.Name, "animation_track")
-			}
-			seenTargets[track.TargetID] = struct{}{}
-			if requireTargets {
-				if _, ok := targetIDs[track.TargetID]; !ok {
-					result.addError("broken_animation_target_reference", fmt.Sprintf("missing animation target %s", track.TargetID), track.TargetID, clip.Name, "animation_track")
+		validateAnimationTracks(result, clip, clip.Tracks, targetIDs, requireTargets)
+		validateAnimationBlend1D(result, clip, targetIDs, requireTargets)
+	}
+}
+
+func validateAnimationBlend1D(result *AssetValidationResult, clip AssetAnimationClipDef, targetIDs map[string]string, requireTargets bool) {
+	blend := clip.Blend1D
+	if blend == nil {
+		return
+	}
+	if strings.TrimSpace(blend.Parameter) == "" {
+		result.addError("empty_animation_blend_parameter", "animation blend parameter is required", clip.ID, clip.Name, "animation_blend")
+	}
+	if len(blend.Samples) < 2 || len(blend.Samples) > 4 {
+		result.addError("invalid_animation_blend_samples", "animation blend requires two to four samples", clip.ID, clip.Name, "animation_blend")
+		return
+	}
+	if blend.Default < blend.Samples[0].Value || blend.Default > blend.Samples[len(blend.Samples)-1].Value {
+		result.addError("invalid_animation_blend_default", "animation blend default must be inside the sample range", clip.ID, clip.Name, "animation_blend")
+	}
+	for index, sample := range blend.Samples {
+		if index > 0 && sample.Value <= blend.Samples[index-1].Value {
+			result.addError("invalid_animation_blend_order", "animation blend sample values must increase", clip.ID, clip.Name, "animation_blend")
+		}
+		if index > 0 {
+			first := blend.Samples[0].Tracks
+			if len(sample.Tracks) != len(first) {
+				result.addError("mismatched_animation_blend_targets", "animation blend samples must have matching ordered targets", clip.ID, clip.Name, "animation_blend")
+			} else {
+				for trackIndex := range first {
+					if sample.Tracks[trackIndex].TargetID != first[trackIndex].TargetID {
+						result.addError("mismatched_animation_blend_targets", "animation blend samples must have matching ordered targets", clip.ID, clip.Name, "animation_blend")
+						break
+					}
 				}
 			}
-			validateVec3Keys(result, clip, track.TargetID, "position", track.PositionKeys)
-			validateQuatKeys(result, clip, track.TargetID, track.RotationKeys)
-			validateVec3Keys(result, clip, track.TargetID, "scale", track.ScaleKeys)
 		}
+		validateAnimationTracks(result, clip, sample.Tracks, targetIDs, requireTargets)
+	}
+}
+
+func validateAnimationTracks(result *AssetValidationResult, clip AssetAnimationClipDef, tracks []AssetAnimationTrackDef, targetIDs map[string]string, requireTargets bool) {
+	seenTargets := map[string]struct{}{}
+	for _, track := range tracks {
+		if strings.TrimSpace(track.TargetID) == "" {
+			result.addError("empty_animation_target", "animation track target_id is required", clip.ID, clip.Name, "animation_track")
+			continue
+		}
+		if _, ok := seenTargets[track.TargetID]; ok {
+			result.addError("duplicate_animation_target", fmt.Sprintf("duplicate animation target %s", track.TargetID), track.TargetID, clip.Name, "animation_track")
+		}
+		seenTargets[track.TargetID] = struct{}{}
+		if requireTargets {
+			if _, ok := targetIDs[track.TargetID]; !ok {
+				result.addError("broken_animation_target_reference", fmt.Sprintf("missing animation target %s", track.TargetID), track.TargetID, clip.Name, "animation_track")
+			}
+		}
+		validateVec3Keys(result, clip, track.TargetID, "position", track.PositionKeys)
+		validateQuatKeys(result, clip, track.TargetID, track.RotationKeys)
+		validateVec3Keys(result, clip, track.TargetID, "scale", track.ScaleKeys)
 	}
 }
 

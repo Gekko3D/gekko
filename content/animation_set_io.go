@@ -37,7 +37,7 @@ func ValidateAnimationSet(def *AnimationSetDef) error {
 	if def == nil {
 		return fmt.Errorf("animation set is nil")
 	}
-	if def.SchemaVersion != CurrentAnimationSetSchemaVersion {
+	if def.SchemaVersion < 1 || def.SchemaVersion > CurrentAnimationSetSchemaVersion {
 		return fmt.Errorf("unsupported animation set schema version %d", def.SchemaVersion)
 	}
 	if strings.TrimSpace(def.ID) == "" || strings.TrimSpace(def.Name) == "" {
@@ -51,6 +51,13 @@ func ValidateAnimationSet(def *AnimationSetDef) error {
 	}
 	result := AssetValidationResult{}
 	validateAnimationClips(&result, def.Clips, nil, false)
+	if def.SchemaVersion == 1 {
+		for _, clip := range def.Clips {
+			if clip.Blend1D != nil {
+				return fmt.Errorf("animation set %q schema v1 cannot contain blend_1d", def.Name)
+			}
+		}
+	}
 	if result.HasErrors() {
 		return fmt.Errorf("animation set %q is invalid: %s", def.Name, result.Error())
 	}

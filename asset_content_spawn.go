@@ -63,6 +63,24 @@ func PreparedAuthoredAssetPartGeometry(prepared *PreparedAuthoredAsset, partID s
 	return part.model, ok && part.model != (AssetId{})
 }
 
+// PreparedAuthoredAssetPartLocalTransform returns the authored local transform
+// that belongs to a prepared geometry variant.
+func PreparedAuthoredAssetPartLocalTransform(prepared *PreparedAuthoredAsset, partID string) (LocalTransformComponent, bool) {
+	if prepared == nil || prepared.def == nil {
+		return LocalTransformComponent{}, false
+	}
+	for _, part := range prepared.def.Parts {
+		if part.ID == partID {
+			return LocalTransformComponent{
+				Position: mgl32.Vec3(part.Transform.Position),
+				Rotation: mgl32.Quat{V: mgl32.Vec3(part.Transform.Rotation[:3]), W: part.Transform.Rotation[3]},
+				Scale:    mgl32.Vec3(part.Transform.Scale),
+			}, true
+		}
+	}
+	return LocalTransformComponent{}, false
+}
+
 func SpawnAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
 	return SpawnAuthoredAssetWithOptions(cmd, assets, def, rootTransform, AuthoredAssetSpawnOptions{})
 }

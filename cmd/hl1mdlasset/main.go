@@ -49,7 +49,7 @@ func main() {
 		fmt.Printf("bones: %d\n", len(info.Bones))
 		fmt.Printf("sequences: %d\n", len(info.Sequences))
 		for i, seq := range info.Sequences {
-			fmt.Printf("sequence[%d]: name=%s fps=%g frames=%d blends=%d seqgroup=%d anim_index=%d decoded_bones=%d\n", i, seq.Name, seq.FPS, seq.FrameCount, seq.NumBlends, seq.SeqGroup, seq.AnimIndex, len(seq.BoneAnimations))
+			fmt.Printf("sequence[%d]: name=%s fps=%g frames=%d blends=%d seqgroup=%d anim_index=%d decoded_bones=%d\n", i, seq.Name, seq.FPS, seq.FrameCount, seq.NumBlends, seq.SeqGroup, seq.AnimIndex, len(seq.BoneAnimations)+len(seq.BlendAnimations)*len(info.Bones))
 		}
 		fmt.Printf("body_parts: %d\n", len(info.BodyParts))
 		return
@@ -68,7 +68,7 @@ func main() {
 		fatalf("build asset: %v", err)
 	}
 	asset, voxelCount := built.Asset, built.VoxelCount
-	animations, err := hl1.BuildMDLAnimationDocumentsAtRoot(asset, built.Clips, outPath, filepath.Dir(outPath))
+	animations, err := hl1.BuildMDLAnimationDocumentsAtRoot(asset, built.Clips, outPath, filepath.Dir(filepath.Dir(outPath)))
 	if err != nil {
 		fatalf("build animation documents: %v", err)
 	}

@@ -51,6 +51,60 @@ func TestAuthoredAssetAnimationInterpolatesLocalTransform(t *testing.T) {
 	}
 }
 
+func TestAuthoredAssetAnimationInterpolatesOneDimensionalBlend(t *testing.T) {
+	track := func(x float32) content.AssetAnimationTrackDef {
+		return content.AssetAnimationTrackDef{TargetID: "arm", PositionKeys: []content.AssetVec3KeyDef{{Value: content.Vec3{x, 0, 0}}}}
+	}
+	clip := content.AssetAnimationClipDef{Blend1D: &content.AssetAnimationBlend1DDef{
+		Parameter: "pitch", Default: 50,
+		Samples: []content.AssetAnimationBlendSampleDef{{Value: 0, Tracks: []content.AssetAnimationTrackDef{track(0)}}, {Value: 100, Tracks: []content.AssetAnimationTrackDef{track(10)}}},
+	}}
+	bind := map[string]LocalTransformComponent{"arm": {Rotation: mgl32.QuatIdent(), Scale: mgl32.Vec3{1, 1, 1}}}
+	target := bind["arm"]
+	targets := map[string]*LocalTransformComponent{"arm": &target}
+	applyAnimationClipPose(clip, 0, 25, true, 1, AnimationLayerOverride, nil, AnimationRootMotionApply, nil, bind, targets)
+	if got := target.Position.X(); got != 2.5 {
+		t.Fatalf("blend at 25 = %g, want 2.5", got)
+	}
+	applyAnimationClipPose(clip, 0, 0, false, 1, AnimationLayerOverride, nil, AnimationRootMotionApply, nil, bind, targets)
+	if got := target.Position.X(); got != 5 {
+		t.Fatalf("default blend = %g, want 5", got)
+	}
+	applyAnimationClipPose(clip, 0, 200, true, 1, AnimationLayerOverride, nil, AnimationRootMotionApply, nil, bind, targets)
+	if got := target.Position.X(); got != 10 {
+		t.Fatalf("clamped blend = %g, want 10", got)
+	}
+}
+
+func TestNPCAnimationBlendDoesNotRestartClip(t *testing.T) {
+	animation := &NPCAnimationComponent{}
+	RequestNPCAnimationClip(animation, "shoot", true)
+	requestID := animation.RequestID
+	SetNPCAnimationBlend(animation, 25)
+	if animation.RequestID != requestID || animation.BlendValue != 25 || !animation.HasBlendValue {
+		t.Fatalf("blend update restarted or was lost: %+v", animation)
+	}
+}
+
+func TestNPCAnimationEventDeliveryCopiesEachEventOnce(t *testing.T) {
+	app := NewApp()
+	cmd := app.Commands()
+	npc := cmd.AddEntity(&NPCComponent{}, &NPCAnimationComponent{})
+	root := cmd.AddEntity(
+		&AuthoredAssetRootComponent{},
+		&Parent{Entity: npc},
+		&AnimationPlayerComponent{CrossedEvents: []AnimationEvent{{ClipID: "shoot", ID: 3}}},
+		&AuthoredAssetAnimationSetComponent{},
+	)
+	app.FlushCommands()
+	npcAnimationEventDeliverySystem(cmd)
+	animation := npcAnimationForTest(t, cmd, npc)
+	player := animationPlayerForTest(t, cmd, root)
+	if len(animation.CrossedEvents) != 1 || animation.CrossedEvents[0].ID != 3 || len(player.CrossedEvents) != 0 {
+		t.Fatalf("event delivery duplicated or retained event: animation=%+v player=%+v", animation.CrossedEvents, player.CrossedEvents)
+	}
+}
+
 func TestAuthoredAssetAnimationKeepsBindChannelsWhenTrackOmitsThem(t *testing.T) {
 	app := NewApp()
 	cmd := app.Commands()

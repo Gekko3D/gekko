@@ -114,3 +114,28 @@ func TestAnimationDocumentValidationRejectsAmbiguousOrDuplicateContracts(t *test
 		})
 	}
 }
+
+func TestAnimationSetOneDimensionalBlendRoundTrip(t *testing.T) {
+	track := AssetAnimationTrackDef{TargetID: "arm", RotationKeys: []AssetQuatKeyDef{{Value: Quat{0, 0, 0, 1}}}}
+	set := &AnimationSetDef{ID: "aim", SchemaVersion: CurrentAnimationSetSchemaVersion, Name: "Aim", TargetAssetID: "barney", Clips: []AssetAnimationClipDef{{
+		ID: "shoot", Name: "Shoot", Duration: 1,
+		Blend1D: &AssetAnimationBlend1DDef{Parameter: "pitch", Default: 0, Samples: []AssetAnimationBlendSampleDef{{Value: -50, Tracks: []AssetAnimationTrackDef{track}}, {Value: 50, Tracks: []AssetAnimationTrackDef{track}}}},
+	}}}
+	path := filepath.Join(t.TempDir(), "aim.gkanim")
+	if err := SaveAnimationSet(path, set); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadAnimationSet(path)
+	if err != nil || loaded.Clips[0].Blend1D == nil || len(loaded.Clips[0].Blend1D.Samples) != 2 {
+		t.Fatalf("blend round trip failed: %+v, %v", loaded, err)
+	}
+	set.SchemaVersion = 1
+	if err := ValidateAnimationSet(set); err == nil {
+		t.Fatal("schema v1 accepted blend_1d")
+	}
+	set.SchemaVersion = CurrentAnimationSetSchemaVersion
+	set.Clips[0].Blend1D.Samples[1].Value = -50
+	if err := ValidateAnimationSet(set); err == nil {
+		t.Fatal("unordered blend samples were accepted")
+	}
+}

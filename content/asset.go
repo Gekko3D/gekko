@@ -146,15 +146,29 @@ type AssetBoneDef struct {
 }
 
 type AssetAnimationClipDef struct {
-	ID              string                   `json:"id"`
-	Name            string                   `json:"name"`
-	FPS             float32                  `json:"fps,omitempty"`
-	Duration        float32                  `json:"duration,omitempty"`
-	Loop            bool                     `json:"loop,omitempty"`
-	Events          []AssetAnimationEventDef `json:"events,omitempty"`
-	Tracks          []AssetAnimationTrackDef `json:"tracks,omitempty"`
-	TraversalMotion []AssetVec3KeyDef        `json:"traversal_motion,omitempty"`
-	Tags            []string                 `json:"tags,omitempty"`
+	ID              string                    `json:"id"`
+	Name            string                    `json:"name"`
+	FPS             float32                   `json:"fps,omitempty"`
+	Duration        float32                   `json:"duration,omitempty"`
+	Loop            bool                      `json:"loop,omitempty"`
+	Events          []AssetAnimationEventDef  `json:"events,omitempty"`
+	Tracks          []AssetAnimationTrackDef  `json:"tracks,omitempty"`
+	Blend1D         *AssetAnimationBlend1DDef `json:"blend_1d,omitempty"`
+	TraversalMotion []AssetVec3KeyDef         `json:"traversal_motion,omitempty"`
+	Tags            []string                  `json:"tags,omitempty"`
+}
+
+// AssetAnimationBlend1DDef stores ordered poses sampled on one authored
+// parameter. The parent clip owns time, events, looping, and completion.
+type AssetAnimationBlend1DDef struct {
+	Parameter string                         `json:"parameter"`
+	Default   float32                        `json:"default"`
+	Samples   []AssetAnimationBlendSampleDef `json:"samples"`
+}
+
+type AssetAnimationBlendSampleDef struct {
+	Value  float32                  `json:"value"`
+	Tracks []AssetAnimationTrackDef `json:"tracks"`
 }
 
 // AssetAnimationEventDef is authored timing metadata. Gameplay consumes it;

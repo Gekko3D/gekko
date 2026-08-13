@@ -484,8 +484,11 @@ func mdlAnimationClips(sequences []MDLSequenceInfo, bones []MDLBoneInfo, targets
 		}
 		var clip content.AssetAnimationClipDef
 		var ok bool
-		if len(seq.BoneAnimations) > 0 && len(bones) > 0 {
+		if (len(seq.BoneAnimations) > 0 || len(seq.BlendAnimations) > 0) && len(bones) > 0 {
 			clip, ok = mdlDecodedAnimationClip(seq, bones, targets, lockRootMotion)
+		}
+		if seq.NumBlends > 1 && !ok {
+			continue
 		}
 		if !ok {
 			clip, ok = mdlBindPoseAnimationClip(seq, targets)
@@ -563,9 +566,43 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 		id = "mdl_animation"
 	}
 
+	clip := content.AssetAnimationClipDef{
+		ID: id, Name: name, FPS: fps, Duration: duration, Loop: seq.Loop,
+		Events: mdlAnimationEvents(seq, fps), Tags: mdlAnimationTags(seq, "generated:sequence_clip"),
+	}
+	if len(seq.BlendAnimations) > 0 {
+		if mdlUnsupportedBlendReason(seq) != "" || len(seq.BlendAnimations) != 2 {
+			return content.AssetAnimationClipDef{}, false
+		}
+		values := []float32{seq.BlendStart[0], seq.BlendEnd[0]}
+		animations := seq.BlendAnimations
+		if values[1] < values[0] {
+			values[0], values[1] = values[1], values[0]
+			animations = [][]MDLBoneAnimationInfo{animations[1], animations[0]}
+		}
+		blend := &content.AssetAnimationBlend1DDef{Parameter: mdlBlendParameter(seq.BlendType[0]), Default: max(values[0], min(values[1], 0))}
+		for index, animation := range animations {
+			tracks, ok := mdlDecodedAnimationTracks(seq, bones, targets, animation, duration, fps, lockRootMotion)
+			if !ok {
+				return content.AssetAnimationClipDef{}, false
+			}
+			blend.Samples = append(blend.Samples, content.AssetAnimationBlendSampleDef{Value: values[index], Tracks: tracks})
+		}
+		clip.Blend1D = blend
+		return clip, true
+	}
+	tracks, ok := mdlDecodedAnimationTracks(seq, bones, targets, seq.BoneAnimations, duration, fps, lockRootMotion)
+	if !ok {
+		return content.AssetAnimationClipDef{}, false
+	}
+	clip.Tracks = tracks
+	return clip, true
+}
+
+func mdlDecodedAnimationTracks(seq MDLSequenceInfo, bones []MDLBoneInfo, targets []mdlAnimationBindTarget, animations []MDLBoneAnimationInfo, duration, fps float32, lockRootMotion bool) ([]content.AssetAnimationTrackDef, bool) {
 	bindFrames := mdlGlobalBoneFrameTransforms(bones, nil, 0)
 	if len(bindFrames) != len(bones) {
-		return content.AssetAnimationClipDef{}, false
+		return nil, false
 	}
 	tracks := make([]content.AssetAnimationTrackDef, 0, len(targets))
 	rootBone := mdlRootBoneIndex(bones)
@@ -578,9 +615,9 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 		rotationKeys := make([]content.AssetQuatKeyDef, 0, seq.FrameCount)
 		scaleKeys := make([]content.AssetVec3KeyDef, 0, 1)
 		for frame := 0; frame < seq.FrameCount; frame++ {
-			frameTransforms := mdlGlobalBoneFrameTransforms(bones, seq.BoneAnimations, frame)
+			frameTransforms := mdlGlobalBoneFrameTransforms(bones, animations, frame)
 			if target.BoneIndex >= len(frameTransforms) {
-				return content.AssetAnimationClipDef{}, false
+				return nil, false
 			}
 			position, rotation := mdlLocalAnimationTransform(target.BoneIndex, rootBone, lockRootMotion, bindFrames, frameTransforms, bones)
 			t := float32(frame) / fps
@@ -595,16 +632,24 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 			ScaleKeys:    scaleKeys,
 		})
 	}
-	return content.AssetAnimationClipDef{
-		ID:       id,
-		Name:     name,
-		FPS:      fps,
-		Duration: duration,
-		Loop:     seq.Loop,
-		Events:   mdlAnimationEvents(seq, fps),
-		Tracks:   tracks,
-		Tags:     mdlAnimationTags(seq, "generated:sequence_clip"),
-	}, len(tracks) > 0
+	return tracks, len(tracks) > 0
+}
+
+func mdlUnsupportedBlendReason(seq MDLSequenceInfo) string {
+	if seq.NumBlends <= 1 {
+		return ""
+	}
+	if seq.NumBlends != 2 || seq.BlendType[1] != 0 {
+		return fmt.Sprintf("%d-sample two-dimensional blend grid unsupported", seq.NumBlends)
+	}
+	if mdlBlendParameter(seq.BlendType[0]) == "" || seq.BlendStart[0] == seq.BlendEnd[0] {
+		return "one-dimensional blend has no usable parameter range"
+	}
+	return ""
+}
+
+func mdlBlendParameter(blendType int) string {
+	return map[int]string{1: "x", 2: "y", 4: "z", 8: "pitch", 16: "yaw", 32: "roll"}[blendType]
 }
 
 func mdlAnimationEvents(seq MDLSequenceInfo, fps float32) []content.AssetAnimationEventDef {

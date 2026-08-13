@@ -58,17 +58,21 @@ type MDLBoneInfo struct {
 }
 
 type MDLSequenceInfo struct {
-	Name           string                 `json:"name"`
-	Flags          int                    `json:"flags,omitempty"`
-	Loop           bool                   `json:"loop,omitempty"`
-	Activity       int                    `json:"activity"`
-	FPS            float32                `json:"fps,omitempty"`
-	FrameCount     int                    `json:"frame_count,omitempty"`
-	NumBlends      int                    `json:"num_blends,omitempty"`
-	AnimIndex      int                    `json:"anim_index,omitempty"`
-	SeqGroup       int                    `json:"seq_group,omitempty"`
-	Events         []MDLSequenceEventInfo `json:"events,omitempty"`
-	BoneAnimations []MDLBoneAnimationInfo `json:"bone_animations,omitempty"`
+	Name            string                   `json:"name"`
+	Flags           int                      `json:"flags,omitempty"`
+	Loop            bool                     `json:"loop,omitempty"`
+	Activity        int                      `json:"activity"`
+	FPS             float32                  `json:"fps,omitempty"`
+	FrameCount      int                      `json:"frame_count,omitempty"`
+	NumBlends       int                      `json:"num_blends,omitempty"`
+	BlendType       [2]int                   `json:"blend_type,omitempty"`
+	BlendStart      [2]float32               `json:"blend_start,omitempty"`
+	BlendEnd        [2]float32               `json:"blend_end,omitempty"`
+	AnimIndex       int                      `json:"anim_index,omitempty"`
+	SeqGroup        int                      `json:"seq_group,omitempty"`
+	Events          []MDLSequenceEventInfo   `json:"events,omitempty"`
+	BoneAnimations  []MDLBoneAnimationInfo   `json:"bone_animations,omitempty"`
+	BlendAnimations [][]MDLBoneAnimationInfo `json:"blend_animations,omitempty"`
 }
 
 type MDLSequenceEventInfo struct {
@@ -455,12 +459,15 @@ func parseMDLSequences(data []byte, offset int, count int, bones []MDLBoneInfo) 
 			Activity:   int(readInt32(data, base+40)),
 			FrameCount: int(readInt32(data, base+56)),
 			NumBlends:  int(readInt32(data, base+120)),
+			BlendType:  [2]int{int(readInt32(data, base+128)), int(readInt32(data, base+132))},
+			BlendStart: [2]float32{readFloat32(data, base+136), readFloat32(data, base+140)},
+			BlendEnd:   [2]float32{readFloat32(data, base+144), readFloat32(data, base+148)},
 			AnimIndex:  int(readInt32(data, base+124)),
 			SeqGroup:   int(readInt32(data, base+156)),
 		}
 		seq.Loop = seq.Flags&mdlSequenceFlagLooping != 0
 		seq.Events = parseMDLSequenceEvents(data, int(readInt32(data, base+52)), int(readInt32(data, base+48)))
-		seq.BoneAnimations = decodeMDLSequenceAnimations(data, seq, bones)
+		setMDLSequenceAnimations(&seq, decodeMDLSequenceAnimationBlends(data, seq, bones))
 		out = append(out, seq)
 	}
 	return out
@@ -563,7 +570,7 @@ func isLikelyMDLLabel(data []byte) bool {
 	return true
 }
 
-func decodeMDLSequenceAnimations(data []byte, seq MDLSequenceInfo, bones []MDLBoneInfo) []MDLBoneAnimationInfo {
+func decodeMDLSequenceAnimationBlends(data []byte, seq MDLSequenceInfo, bones []MDLBoneInfo) [][]MDLBoneAnimationInfo {
 	if seq.SeqGroup != 0 || seq.AnimIndex <= 0 || seq.FrameCount <= 0 || seq.FrameCount > maxMDLSequenceFrameCount || len(bones) == 0 {
 		return nil
 	}
@@ -578,27 +585,39 @@ func decodeMDLSequenceAnimations(data []byte, seq MDLSequenceInfo, bones []MDLBo
 	if seq.AnimIndex < 0 || seq.AnimIndex > len(data) || len(bones)*numBlends > (len(data)-seq.AnimIndex)/animSize {
 		return nil
 	}
-	out := make([]MDLBoneAnimationInfo, 0, len(bones))
-	for boneIndex, bone := range bones {
-		animBase := seq.AnimIndex + boneIndex*animSize
-		animation := MDLBoneAnimationInfo{
-			BoneIndex:      boneIndex,
-			PositionFrames: make([]importcommon.Vec3, 0, seq.FrameCount),
-			RotationFrames: make([]importcommon.Vec3, 0, seq.FrameCount),
+	out := make([][]MDLBoneAnimationInfo, numBlends)
+	for blend := 0; blend < numBlends; blend++ {
+		out[blend] = make([]MDLBoneAnimationInfo, 0, len(bones))
+		for boneIndex, bone := range bones {
+			animBase := seq.AnimIndex + (blend*len(bones)+boneIndex)*animSize
+			animation := MDLBoneAnimationInfo{
+				BoneIndex:      boneIndex,
+				PositionFrames: make([]importcommon.Vec3, 0, seq.FrameCount),
+				RotationFrames: make([]importcommon.Vec3, 0, seq.FrameCount),
+			}
+			for frame := 0; frame < seq.FrameCount; frame++ {
+				px := decodeMDLAnimationChannelValue(data, animBase, 0, frame, bone.Position.X, bone.PositionScale.X)
+				py := decodeMDLAnimationChannelValue(data, animBase, 1, frame, bone.Position.Y, bone.PositionScale.Y)
+				pz := decodeMDLAnimationChannelValue(data, animBase, 2, frame, bone.Position.Z, bone.PositionScale.Z)
+				rx := decodeMDLAnimationChannelValue(data, animBase, 3, frame, bone.Rotation.X, bone.RotationScale.X)
+				ry := decodeMDLAnimationChannelValue(data, animBase, 4, frame, bone.Rotation.Y, bone.RotationScale.Y)
+				rz := decodeMDLAnimationChannelValue(data, animBase, 5, frame, bone.Rotation.Z, bone.RotationScale.Z)
+				animation.PositionFrames = append(animation.PositionFrames, importcommon.Vec3{X: px, Y: py, Z: pz})
+				animation.RotationFrames = append(animation.RotationFrames, importcommon.Vec3{X: rx, Y: ry, Z: rz})
+			}
+			out[blend] = append(out[blend], animation)
 		}
-		for frame := 0; frame < seq.FrameCount; frame++ {
-			px := decodeMDLAnimationChannelValue(data, animBase, 0, frame, bone.Position.X, bone.PositionScale.X)
-			py := decodeMDLAnimationChannelValue(data, animBase, 1, frame, bone.Position.Y, bone.PositionScale.Y)
-			pz := decodeMDLAnimationChannelValue(data, animBase, 2, frame, bone.Position.Z, bone.PositionScale.Z)
-			rx := decodeMDLAnimationChannelValue(data, animBase, 3, frame, bone.Rotation.X, bone.RotationScale.X)
-			ry := decodeMDLAnimationChannelValue(data, animBase, 4, frame, bone.Rotation.Y, bone.RotationScale.Y)
-			rz := decodeMDLAnimationChannelValue(data, animBase, 5, frame, bone.Rotation.Z, bone.RotationScale.Z)
-			animation.PositionFrames = append(animation.PositionFrames, importcommon.Vec3{X: px, Y: py, Z: pz})
-			animation.RotationFrames = append(animation.RotationFrames, importcommon.Vec3{X: rx, Y: ry, Z: rz})
-		}
-		out = append(out, animation)
 	}
 	return out
+}
+
+func setMDLSequenceAnimations(seq *MDLSequenceInfo, blends [][]MDLBoneAnimationInfo) {
+	seq.BoneAnimations, seq.BlendAnimations = nil, nil
+	if len(blends) == 1 {
+		seq.BoneAnimations = blends[0]
+	} else if len(blends) > 1 {
+		seq.BlendAnimations = blends
+	}
 }
 
 func decodeMDLAnimationChannelValue(data []byte, animBase int, channel int, frame int, baseValue float32, scale float32) float32 {

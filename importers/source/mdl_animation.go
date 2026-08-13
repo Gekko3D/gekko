@@ -48,10 +48,19 @@ type Bone struct {
 }
 
 type Clip struct {
-	Name     string
-	FPS      float32
-	Loop     bool
-	Frames   [][]transform // Global, in Gekko coordinates.
+	Name           string
+	FPS            float32
+	Loop           bool
+	Frames         [][]transform // Global, in Gekko coordinates.
+	Animated       []bool
+	BlendParameter string
+	BlendDefault   float32
+	BlendSamples   []ClipBlendSample
+}
+
+type ClipBlendSample struct {
+	Value    float32
+	Frames   [][]transform
 	Animated []bool
 }
 
@@ -74,7 +83,7 @@ type SequenceInfo struct {
 
 type BakeOptions struct {
 	// SequenceNames selects Source sequence labels. An empty list imports all
-	// local, non-blended sequences.
+	// supported local sequences, including one-dimensional blends.
 	SequenceNames []string
 	// ClipPrefix is prepended to stable generated IDs. It defaults to source_.
 	ClipPrefix string
@@ -102,12 +111,17 @@ type mdlAnimationDesc struct {
 }
 
 type mdlSequence struct {
-	name       string
-	flags      int
-	anims      []int
-	weights    []float32
-	autoLayers int
-	ikLocks    int
+	name         string
+	flags        int
+	anims        []int
+	weights      []float32
+	groupSize    [2]int
+	paramIndex   [2]int
+	paramStart   [2]float32
+	paramEnd     [2]float32
+	poseKeyIndex int
+	autoLayers   int
+	ikLocks      int
 }
 
 type mdlAnimRecord struct {
@@ -184,25 +198,15 @@ func ListMDLAnimationSequences(data []byte) ([]SequenceInfo, error) {
 	infos := make([]SequenceInfo, 0, len(sequences))
 	for _, sequence := range sequences {
 		info := SequenceInfo{Name: sequence.name, Loop: sequence.flags&studioSequenceLooping != 0}
-		if len(sequence.anims) != 1 {
-			info.Reason = fmt.Sprintf("%d blend animations unsupported", len(sequence.anims))
-			infos = append(infos, info)
-			continue
-		}
-		anim := sequence.anims[0]
-		if anim < 0 || anim >= len(anims) {
-			info.Reason = "animation reference is invalid"
-			infos = append(infos, info)
-			continue
-		}
-		desc := anims[anim]
-		info.FPS = desc.fps
-		info.Frames = desc.frames
-		if reason := unsupportedSequenceReason(sequence, desc); reason != "" {
+		descs, reason := sourceSequenceAnimationDescs(sequence, anims)
+		if reason != "" {
 			info.Reason = reason
 			infos = append(infos, info)
 			continue
 		}
+		desc := descs[0]
+		info.FPS = desc.fps
+		info.Frames = desc.frames
 		switch {
 		case desc.frames <= 0 || desc.frames > 8192:
 			info.Reason = "frame count is invalid"
@@ -285,25 +289,33 @@ func ParseMDLAnimations(data []byte, sequenceNames []string) (*AnimationSource, 
 				continue
 			}
 		}
-		if len(sequence.anims) != 1 {
-			if len(wanted) == 0 {
-				continue
-			}
-			return nil, fmt.Errorf("source sequence %q has %d blend animations; blended sequences are unsupported", sequence.name, len(sequence.anims))
-		}
-		animIndex := sequence.anims[0]
-		if animIndex < 0 || animIndex >= len(anims) {
-			return nil, fmt.Errorf("source sequence %q references animation %d outside %d local animations", sequence.name, animIndex, len(anims))
-		}
-		if reason := unsupportedSequenceReason(sequence, anims[animIndex]); reason != "" {
+		descs, reason := sourceSequenceAnimationDescs(sequence, anims)
+		if reason != "" {
 			if len(wanted) == 0 {
 				continue
 			}
 			return nil, fmt.Errorf("source sequence %q: %s", sequence.name, reason)
 		}
-		clip, err := decodeClip(r, bones, anims[animIndex], sequence)
-		if err != nil {
-			return nil, err
+		clip := Clip{Name: sequence.name, FPS: descs[0].fps, Loop: sequence.flags&studioSequenceLooping != 0}
+		for index, desc := range descs {
+			decoded, err := decodeClip(r, bones, desc, sequence)
+			if err != nil {
+				return nil, err
+			}
+			if len(descs) == 1 {
+				clip = decoded
+				break
+			}
+			clip.BlendSamples = append(clip.BlendSamples, ClipBlendSample{Value: sourceSequenceBlendValue(r, sequence, index), Frames: decoded.Frames, Animated: decoded.Animated})
+		}
+		if len(clip.BlendSamples) > 0 {
+			if clip.BlendSamples[len(clip.BlendSamples)-1].Value < clip.BlendSamples[0].Value {
+				for left, right := 0, len(clip.BlendSamples)-1; left < right; left, right = left+1, right-1 {
+					clip.BlendSamples[left], clip.BlendSamples[right] = clip.BlendSamples[right], clip.BlendSamples[left]
+				}
+			}
+			clip.BlendParameter = fmt.Sprintf("pose_parameter_%d", sequence.paramIndex[0])
+			clip.BlendDefault = max(clip.BlendSamples[0].Value, min(clip.BlendSamples[len(clip.BlendSamples)-1].Value, 0))
 		}
 		source.Clips = append(source.Clips, clip)
 	}
@@ -595,9 +607,67 @@ func parseSequences(r mdlReader, offset, count, boneCount int) ([]mdlSequence, e
 		if err != nil {
 			return nil, err
 		}
-		out[i] = mdlSequence{name: strings.TrimPrefix(name, "@"), flags: flags, anims: ids, weights: weights, autoLayers: autoLayers, ikLocks: ikLocks}
+		sequence := mdlSequence{name: strings.TrimPrefix(name, "@"), flags: flags, anims: ids, weights: weights, autoLayers: autoLayers, ikLocks: ikLocks}
+		for axis := 0; axis < 2; axis++ {
+			sequence.groupSize[axis], err = r.i32(base + 68 + axis*4)
+			if err != nil {
+				return nil, err
+			}
+			sequence.paramIndex[axis], err = r.i32(base + 76 + axis*4)
+			if err != nil {
+				return nil, err
+			}
+			sequence.paramStart[axis], err = r.f32(base + 84 + axis*4)
+			if err != nil {
+				return nil, err
+			}
+			sequence.paramEnd[axis], err = r.f32(base + 92 + axis*4)
+			if err != nil {
+				return nil, err
+			}
+		}
+		sequence.poseKeyIndex, err = r.i32(base + 160)
+		if err != nil {
+			return nil, err
+		}
+		if sequence.poseKeyIndex > 0 {
+			sequence.poseKeyIndex += base
+		}
+		out[i] = sequence
 	}
 	return out, nil
+}
+
+func sourceSequenceAnimationDescs(sequence mdlSequence, animations []mdlAnimationDesc) ([]mdlAnimationDesc, string) {
+	if len(sequence.anims) > 1 && (sequence.groupSize[0] != len(sequence.anims) || sequence.groupSize[1] != 1 || len(sequence.anims) > 4) {
+		return nil, fmt.Sprintf("%d-sample two-dimensional blend grid unsupported", len(sequence.anims))
+	}
+	descs := make([]mdlAnimationDesc, len(sequence.anims))
+	for index, animation := range sequence.anims {
+		if animation < 0 || animation >= len(animations) {
+			return nil, "animation reference is invalid"
+		}
+		descs[index] = animations[animation]
+		if reason := unsupportedSequenceReason(sequence, descs[index]); reason != "" {
+			return nil, reason
+		}
+		if index > 0 && (descs[index].fps != descs[0].fps || descs[index].frames != descs[0].frames) {
+			return nil, "blend samples have mismatched timing"
+		}
+	}
+	return descs, ""
+}
+
+func sourceSequenceBlendValue(r mdlReader, sequence mdlSequence, sample int) float32 {
+	if sequence.poseKeyIndex > 0 {
+		if value, err := r.f32(sequence.poseKeyIndex + sample*4); err == nil {
+			return value
+		}
+	}
+	if len(sequence.anims) <= 1 {
+		return sequence.paramStart[0]
+	}
+	return sequence.paramStart[0] + (sequence.paramEnd[0]-sequence.paramStart[0])*float32(sample)/float32(len(sequence.anims)-1)
 }
 
 func unsupportedSequenceReason(sequence mdlSequence, desc mdlAnimationDesc) string {
@@ -925,12 +995,18 @@ func targetBindings(asset *content.AssetDef, bones []Bone, required []bool) ([]t
 func requiredSourceBones(bones []Bone, clips []Clip) []bool {
 	required := make([]bool, len(bones))
 	for _, clip := range clips {
-		for bone, animated := range clip.Animated {
-			if !animated || bone >= len(required) {
-				continue
-			}
-			for current := bone; current >= 0 && current < len(bones) && !required[current]; current = bones[current].Parent {
-				required[current] = true
+		animatedSets := [][]bool{clip.Animated}
+		for _, sample := range clip.BlendSamples {
+			animatedSets = append(animatedSets, sample.Animated)
+		}
+		for _, animatedSet := range animatedSets {
+			for bone, animated := range animatedSet {
+				if !animated || bone >= len(required) {
+					continue
+				}
+				for current := bone; current >= 0 && current < len(bones) && !required[current]; current = bones[current].Parent {
+					required[current] = true
+				}
 			}
 		}
 	}
@@ -953,6 +1029,25 @@ var goldSrcBipedBoneAliases = map[string][]string{
 }
 
 func bakeClip(bones []Bone, bindings []targetBinding, sourceClip Clip, prefix string, lockRoot bool) (content.AssetAnimationClipDef, error) {
+	if len(sourceClip.BlendSamples) > 0 {
+		var parent content.AssetAnimationClipDef
+		blend := &content.AssetAnimationBlend1DDef{Parameter: sourceClip.BlendParameter, Default: sourceClip.BlendDefault}
+		for _, sample := range sourceClip.BlendSamples {
+			plain := sourceClip
+			plain.Frames, plain.Animated, plain.BlendSamples = sample.Frames, sample.Animated, nil
+			baked, err := bakeClip(bones, bindings, plain, prefix, lockRoot)
+			if err != nil {
+				return content.AssetAnimationClipDef{}, err
+			}
+			if parent.ID == "" {
+				parent = baked
+				parent.Tracks = nil
+			}
+			blend.Samples = append(blend.Samples, content.AssetAnimationBlendSampleDef{Value: sample.Value, Tracks: baked.Tracks})
+		}
+		parent.Blend1D = blend
+		return parent, nil
+	}
 	if len(sourceClip.Frames) == 0 || len(sourceClip.Frames[0]) != len(bones) {
 		return content.AssetAnimationClipDef{}, fmt.Errorf("source clip %q has no complete frames", sourceClip.Name)
 	}

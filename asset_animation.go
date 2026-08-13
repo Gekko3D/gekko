@@ -42,6 +42,8 @@ type AnimationPlayerComponent struct {
 	Playing          bool
 	Loop             bool
 	Completed        bool
+	BlendValue       float32
+	HasBlendValue    bool
 	CrossedEvents    []AnimationEvent
 	RootMotionPolicy AnimationRootMotionPolicy
 	Layers           []AnimationLayer
@@ -86,6 +88,8 @@ type AnimationLayer struct {
 	RootMotionPolicy AnimationRootMotionPolicy
 	Loop             bool
 	LoopOverride     bool
+	BlendValue       float32
+	HasBlendValue    bool
 }
 
 type AuthoredAssetAnimationSetComponent struct {
@@ -314,6 +318,10 @@ func npcAnimationSystem(cmd *Commands) {
 				player.Loop = clip.Loop
 			}
 			player.RootMotionPolicy = AnimationRootMotionLocked
+			if anim.State == NPCAnimationStateDeath {
+				player.RootMotionPolicy = AnimationRootMotionApply
+			}
+			player.BlendValue, player.HasBlendValue = anim.BlendValue, anim.HasBlendValue
 			anim.ActiveClipID = clipID
 			return true
 		})
@@ -531,7 +539,7 @@ func positiveMod(value float32, divisor float32) float32 {
 
 func applyAnimationClip(clip content.AssetAnimationClipDef, sampleTime float32, bindTransforms map[string]LocalTransformComponent, targets map[string]*LocalTransformComponent) {
 	resetAnimationTargets(bindTransforms, targets)
-	applyAnimationClipLayer(clip, sampleTime, 1, AnimationLayerOverride, nil, AnimationRootMotionApply, nil, bindTransforms, targets)
+	applyAnimationClipPose(clip, sampleTime, 0, false, 1, AnimationLayerOverride, nil, AnimationRootMotionApply, nil, bindTransforms, targets)
 }
 
 func applyAnimationLayers(player *AnimationPlayerComponent, animationSet *AuthoredAssetAnimationSetComponent, targets map[string]*LocalTransformComponent, rootTargets map[string]struct{}, dt float32) {
@@ -540,7 +548,7 @@ func applyAnimationLayers(player *AnimationPlayerComponent, animationSet *Author
 	}
 	resetAnimationTargets(animationSet.BindTransforms, targets)
 	if base, ok := animationSet.Clips[player.ClipID]; ok {
-		applyAnimationClipLayer(base, player.Time, 1, AnimationLayerOverride, nil, player.RootMotionPolicy, rootTargets, animationSet.BindTransforms, targets)
+		applyAnimationClipPose(base, player.Time, player.BlendValue, player.HasBlendValue, 1, AnimationLayerOverride, nil, player.RootMotionPolicy, rootTargets, animationSet.BindTransforms, targets)
 	}
 	activeLayers := player.Layers[:0]
 	for i := range player.Layers {
@@ -552,10 +560,97 @@ func applyAnimationLayers(player *AnimationPlayerComponent, animationSet *Author
 		if advanceAnimationLayer(layer, clip, dt) {
 			continue
 		}
-		applyAnimationClipLayer(clip, layer.Time, layer.Weight, layer.Mode, layer.BoneMask, layer.RootMotionPolicy, rootTargets, animationSet.BindTransforms, targets)
+		applyAnimationClipPose(clip, layer.Time, layer.BlendValue, layer.HasBlendValue, layer.Weight, layer.Mode, layer.BoneMask, layer.RootMotionPolicy, rootTargets, animationSet.BindTransforms, targets)
 		activeLayers = append(activeLayers, *layer)
 	}
 	player.Layers = activeLayers
+}
+
+func applyAnimationClipPose(clip content.AssetAnimationClipDef, sampleTime, blendValue float32, hasBlendValue bool, weight float32, mode AnimationLayerMode, boneMask []string, rootMotion AnimationRootMotionPolicy, rootTargets map[string]struct{}, bindTransforms map[string]LocalTransformComponent, targets map[string]*LocalTransformComponent) {
+	if clip.Blend1D == nil || len(clip.Blend1D.Samples) < 2 {
+		applyAnimationClipLayer(clip, sampleTime, weight, mode, boneMask, rootMotion, rootTargets, bindTransforms, targets)
+		return
+	}
+	if !hasBlendValue {
+		blendValue = clip.Blend1D.Default
+	}
+	left, right, alpha := animationBlendSamples(clip.Blend1D.Samples, blendValue)
+	applyAnimationTrackBlend(left.Tracks, right.Tracks, sampleTime, alpha, weight, mode, boneMask, rootMotion, rootTargets, bindTransforms, targets)
+}
+
+func animationBlendSamples(samples []content.AssetAnimationBlendSampleDef, value float32) (content.AssetAnimationBlendSampleDef, content.AssetAnimationBlendSampleDef, float32) {
+	if value <= samples[0].Value {
+		return samples[0], samples[0], 0
+	}
+	last := samples[len(samples)-1]
+	if value >= last.Value {
+		return last, last, 0
+	}
+	for index := 0; index < len(samples)-1; index++ {
+		left, right := samples[index], samples[index+1]
+		if value <= right.Value {
+			return left, right, (value - left.Value) / (right.Value - left.Value)
+		}
+	}
+	return last, last, 0
+}
+
+func applyAnimationTrackBlend(left, right []content.AssetAnimationTrackDef, sampleTime, alpha, weight float32, mode AnimationLayerMode, boneMask []string, rootMotion AnimationRootMotionPolicy, rootTargets map[string]struct{}, bindTransforms map[string]LocalTransformComponent, targets map[string]*LocalTransformComponent) {
+	weight = max(0, min(1, weight))
+	if weight == 0 || len(left) != len(right) {
+		return
+	}
+	for index := range left {
+		if left[index].TargetID != right[index].TargetID {
+			return
+		}
+	}
+	mask := animationBoneMask(boneMask)
+	for index := range left {
+		leftTrack, rightTrack := left[index], right[index]
+		if len(mask) > 0 {
+			if _, ok := mask[leftTrack.TargetID]; !ok {
+				continue
+			}
+		}
+		target, ok := targets[leftTrack.TargetID]
+		if !ok {
+			continue
+		}
+		bind := *target
+		if authoredBind, ok := bindTransforms[leftTrack.TargetID]; ok {
+			bind = authoredBind
+		}
+		if _, isRoot := rootTargets[leftTrack.TargetID]; !(isRoot && rootMotion == AnimationRootMotionLocked) && (len(leftTrack.PositionKeys) > 0 || len(rightTrack.PositionKeys) > 0) {
+			leftValue := sampleVec3KeysOr(leftTrack.PositionKeys, sampleTime, bind.Position)
+			rightValue := sampleVec3KeysOr(rightTrack.PositionKeys, sampleTime, bind.Position)
+			target.Position = animationBlendVec3(target.Position, leftValue.Mul(1-alpha).Add(rightValue.Mul(alpha)), bind.Position, weight, mode)
+		}
+		if len(leftTrack.RotationKeys) > 0 || len(rightTrack.RotationKeys) > 0 {
+			leftValue := sampleQuatKeysOr(leftTrack.RotationKeys, sampleTime, bind.Rotation)
+			rightValue := sampleQuatKeysOr(rightTrack.RotationKeys, sampleTime, bind.Rotation)
+			target.Rotation = animationBlendQuat(target.Rotation, mgl32.QuatSlerp(leftValue, rightValue, alpha).Normalize(), bind.Rotation, weight, mode)
+		}
+		if len(leftTrack.ScaleKeys) > 0 || len(rightTrack.ScaleKeys) > 0 {
+			leftValue := sampleVec3KeysOr(leftTrack.ScaleKeys, sampleTime, bind.Scale)
+			rightValue := sampleVec3KeysOr(rightTrack.ScaleKeys, sampleTime, bind.Scale)
+			target.Scale = animationBlendVec3(target.Scale, leftValue.Mul(1-alpha).Add(rightValue.Mul(alpha)), bind.Scale, weight, mode)
+		}
+	}
+}
+
+func sampleVec3KeysOr(keys []content.AssetVec3KeyDef, time float32, fallback mgl32.Vec3) mgl32.Vec3 {
+	if len(keys) == 0 {
+		return fallback
+	}
+	return sampleVec3Keys(keys, time)
+}
+
+func sampleQuatKeysOr(keys []content.AssetQuatKeyDef, time float32, fallback mgl32.Quat) mgl32.Quat {
+	if len(keys) == 0 {
+		return fallback
+	}
+	return sampleQuatKeys(keys, time)
 }
 
 // advanceAnimationLayer reports a finished one-shot overlay. Looping clips
@@ -759,6 +854,19 @@ func cloneAssetAnimationClip(clip content.AssetAnimationClipDef) content.AssetAn
 		clone.Tracks[i].PositionKeys = append([]content.AssetVec3KeyDef(nil), clip.Tracks[i].PositionKeys...)
 		clone.Tracks[i].RotationKeys = append([]content.AssetQuatKeyDef(nil), clip.Tracks[i].RotationKeys...)
 		clone.Tracks[i].ScaleKeys = append([]content.AssetVec3KeyDef(nil), clip.Tracks[i].ScaleKeys...)
+	}
+	if clip.Blend1D != nil {
+		clone.Blend1D = &content.AssetAnimationBlend1DDef{Parameter: clip.Blend1D.Parameter, Default: clip.Blend1D.Default, Samples: append([]content.AssetAnimationBlendSampleDef(nil), clip.Blend1D.Samples...)}
+		for sample := range clone.Blend1D.Samples {
+			clone.Blend1D.Samples[sample].Tracks = append([]content.AssetAnimationTrackDef(nil), clip.Blend1D.Samples[sample].Tracks...)
+			for index := range clone.Blend1D.Samples[sample].Tracks {
+				track := &clone.Blend1D.Samples[sample].Tracks[index]
+				source := clip.Blend1D.Samples[sample].Tracks[index]
+				track.PositionKeys = append([]content.AssetVec3KeyDef(nil), source.PositionKeys...)
+				track.RotationKeys = append([]content.AssetQuatKeyDef(nil), source.RotationKeys...)
+				track.ScaleKeys = append([]content.AssetVec3KeyDef(nil), source.ScaleKeys...)
+			}
+		}
 	}
 	return clone
 }

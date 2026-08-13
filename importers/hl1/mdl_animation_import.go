@@ -47,7 +47,7 @@ func LoadMDLAnimationClips(path string, sequenceNames []string, lockRootMotion b
 		}
 		external := *sequence
 		external.SeqGroup = 0
-		sequence.BoneAnimations = decodeMDLSequenceAnimations(groupData, external, info.Bones)
+		setMDLSequenceAnimations(sequence, decodeMDLSequenceAnimationBlends(groupData, external, info.Bones))
 	}
 	return buildMDLAnimationClips(info, sequenceNames, lockRootMotion)
 }
@@ -81,10 +81,10 @@ func buildMDLAnimationClips(info MDLInfo, sequenceNames []string, lockRootMotion
 		if !containsFold(sequenceNames, name) {
 			continue
 		}
-		if sequence.NumBlends > 1 {
-			return nil, fmt.Errorf("GoldSrc sequence %q has %d blends", sequence.Name, sequence.NumBlends)
+		if reason := mdlUnsupportedBlendReason(sequence); reason != "" {
+			return nil, fmt.Errorf("GoldSrc sequence %q: %s", sequence.Name, reason)
 		}
-		if len(sequence.BoneAnimations) == 0 {
+		if len(sequence.BoneAnimations) == 0 && len(sequence.BlendAnimations) == 0 {
 			if sequence.SeqGroup != 0 {
 				return nil, fmt.Errorf("GoldSrc sequence %q requires external group %d; use LoadMDLAnimationClips", sequence.Name, sequence.SeqGroup)
 			}

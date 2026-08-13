@@ -1,6 +1,6 @@
 package content
 
-const CurrentAnimationSetSchemaVersion = 1
+const CurrentAnimationSetSchemaVersion = 2
 
 type AnimationSetDef struct {
 	ID            string                  `json:"id"`

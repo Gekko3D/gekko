@@ -59,3 +59,15 @@ func TestTargetBindingsIgnoreGenericHelperNameCollisions(t *testing.T) {
 		t.Fatalf("bindings = %+v", bindings)
 	}
 }
+
+func TestSourceSequenceAcceptsOneDimensionalBlendAndRejectsGrid(t *testing.T) {
+	animations := []mdlAnimationDesc{{fps: 25, frames: 16}, {fps: 25, frames: 16}}
+	sequence := mdlSequence{anims: []int{0, 1}, groupSize: [2]int{2, 1}}
+	if descs, reason := sourceSequenceAnimationDescs(sequence, animations); reason != "" || len(descs) != 2 {
+		t.Fatalf("1D blend rejected: %q", reason)
+	}
+	sequence.groupSize = [2]int{1, 2}
+	if _, reason := sourceSequenceAnimationDescs(sequence, animations); reason == "" {
+		t.Fatal("2D blend grid was accepted")
+	}
+}
