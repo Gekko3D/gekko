@@ -29,6 +29,7 @@ type NPCAnimationComponent struct {
 	State                   string
 	FallbackClipID          string
 	ExplicitClipID          string
+	ExplicitPlaybackSpeed   float32
 	LocomotionClipID        string
 	LocomotionPlaybackSpeed float32
 	RequestID               uint64
@@ -54,19 +55,28 @@ func SetNPCAnimationBlend(animation *NPCAnimationComponent, value float32) {
 // RequestNPCAnimationClip selects an exact authored clip. Set restart when a
 // same-clip replay is intentional.
 func RequestNPCAnimationClip(animation *NPCAnimationComponent, clipID string, restart bool) bool {
+	return RequestNPCAnimationClipSpeed(animation, clipID, 1, restart)
+}
+
+// RequestNPCAnimationClipSpeed selects an exact authored clip at a specific
+// speed. Negative playback begins at the end, which lets authored one-shots
+// serve as their own reverse transition.
+func RequestNPCAnimationClipSpeed(animation *NPCAnimationComponent, clipID string, speed float32, restart bool) bool {
 	if animation == nil || clipID == "" {
 		return false
 	}
 	if animation.ExplicitClipID != clipID || restart {
-		animation.ExplicitClipID = clipID
+		animation.ExplicitClipID, animation.ExplicitPlaybackSpeed = clipID, speed
 		animation.RequestID++
+	} else {
+		animation.ExplicitPlaybackSpeed = speed
 	}
 	return true
 }
 
 func ClearNPCAnimationClip(animation *NPCAnimationComponent) {
 	if animation != nil {
-		animation.HasBlendValue = false
+		animation.HasBlendValue, animation.ExplicitPlaybackSpeed = false, 1
 		if animation.ExplicitClipID != "" {
 			animation.ExplicitClipID = ""
 			animation.RequestID++

@@ -24,7 +24,10 @@ func ResetAuthoredAssetAttachmentMount(cmd *Commands, root EntityId) bool {
 	if marker == nil {
 		return false
 	}
-	mount := AssetTransformFromDef(attachment.MountTransform)
+	mount, ok := authoredAttachmentMountedRootTransform(cmd, root, attachment)
+	if !ok {
+		return false
+	}
 	world := TransformComponent{
 		Position: marker.Position.Add(marker.Rotation.Rotate(mgl32.Vec3{
 			mount.Position.X() * marker.Scale.X(),
@@ -50,10 +53,101 @@ func RestoreAuthoredAssetAttachmentMount(cmd *Commands, root EntityId) bool {
 	if attachment == nil || attachment.ParentMarker == 0 || parent == nil || local == nil {
 		return false
 	}
+	mount, ok := authoredAttachmentMountedRootTransform(cmd, root, attachment)
+	if !ok {
+		return false
+	}
 	parent.Entity = attachment.ParentMarker
-	*local = AssetLocalTransformFromDef(attachment.MountTransform)
+	*local = LocalTransformComponent{Position: mount.Position, Rotation: mount.Rotation, Scale: mount.Scale}
 	TransformHierarchySystem(cmd)
 	return true
+}
+
+// AuthoredAssetAttachmentMountTransform returns the saved mount transform for
+// an attachment's current root pose. A right-grip frame is folded back in so
+// callers edit the weapon independently of its hand-contact point.
+func AuthoredAssetAttachmentMountTransform(cmd *Commands, root EntityId) (content.AssetTransformDef, bool) {
+	if cmd == nil || root == 0 {
+		return content.AssetTransformDef{}, false
+	}
+	attachment, _ := cmd.GetComponent(root, reflect.TypeOf(AuthoredAssetAttachmentComponent{})).(*AuthoredAssetAttachmentComponent)
+	local, _ := cmd.GetComponent(root, reflect.TypeOf(LocalTransformComponent{})).(*LocalTransformComponent)
+	if attachment == nil || local == nil {
+		return content.AssetTransformDef{}, false
+	}
+	mount := TransformComponent{Position: local.Position, Rotation: local.Rotation, Scale: local.Scale}
+	if grip, ok := authoredAttachmentRightGripTransform(cmd, root, attachment); ok {
+		mount = composeAttachmentTransform(mount, grip)
+	}
+	return AssetTransformDefFromComponent(mount), true
+}
+
+func authoredAttachmentMountedRootTransform(cmd *Commands, root EntityId, attachment *AuthoredAssetAttachmentComponent) (TransformComponent, bool) {
+	if attachment == nil {
+		return TransformComponent{}, false
+	}
+	mount := AssetTransformFromDef(attachment.MountTransform)
+	if grip, ok := authoredAttachmentRightGripTransform(cmd, root, attachment); ok {
+		return composeAttachmentTransform(mount, inverseAttachmentTransform(grip)), true
+	}
+	return mount, true
+}
+
+func authoredAttachmentRightGripTransform(cmd *Commands, root EntityId, attachment *AuthoredAssetAttachmentComponent) (TransformComponent, bool) {
+	if cmd == nil || root == 0 || attachment == nil {
+		return TransformComponent{}, false
+	}
+	TransformHierarchySystem(cmd)
+	marker, ok := FindFirstAuthoredAssetMarkerByKind(cmd, root, content.AssetMarkerKindRightGrip)
+	if !ok {
+		return TransformComponent{}, false
+	}
+	var frame *content.AssetAttachmentGripFrameDef
+	for index := range attachment.GripFrames {
+		if attachment.GripFrames[index].MarkerID == marker.Ref.ItemID {
+			frame = &attachment.GripFrames[index]
+			break
+		}
+	}
+	if frame == nil {
+		return TransformComponent{}, false
+	}
+	rootWorld, _ := cmd.GetComponent(root, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	if rootWorld == nil {
+		return TransformComponent{}, false
+	}
+	markerLocal := attachmentTransformRelativeTo(*rootWorld, marker.Transform)
+	return composeAttachmentTransform(markerLocal, AssetTransformFromDef(frame.Frame)), true
+}
+
+func attachmentTransformRelativeTo(parent, world TransformComponent) TransformComponent {
+	rotation := parent.Rotation.Inverse().Mul(world.Rotation).Normalize()
+	position := parent.Rotation.Inverse().Rotate(world.Position.Sub(parent.Position))
+	for axis := 0; axis < 3; axis++ {
+		if parent.Scale[axis] != 0 {
+			position[axis] /= parent.Scale[axis]
+		}
+	}
+	return TransformComponent{
+		Position: position,
+		Rotation: rotation,
+		Scale:    mgl32.Vec3{world.Scale.X() / parent.Scale.X(), world.Scale.Y() / parent.Scale.Y(), world.Scale.Z() / parent.Scale.Z()},
+	}
+}
+
+func composeAttachmentTransform(parent, child TransformComponent) TransformComponent {
+	return TransformComponent{
+		Position: parent.Position.Add(parent.Rotation.Rotate(mgl32.Vec3{child.Position.X() * parent.Scale.X(), child.Position.Y() * parent.Scale.Y(), child.Position.Z() * parent.Scale.Z()})),
+		Rotation: parent.Rotation.Mul(child.Rotation).Normalize(),
+		Scale:    mgl32.Vec3{parent.Scale.X() * child.Scale.X(), parent.Scale.Y() * child.Scale.Y(), parent.Scale.Z() * child.Scale.Z()},
+	}
+}
+
+func inverseAttachmentTransform(transform TransformComponent) TransformComponent {
+	rotation := transform.Rotation.Inverse().Normalize()
+	scale := mgl32.Vec3{1 / transform.Scale.X(), 1 / transform.Scale.Y(), 1 / transform.Scale.Z()}
+	position := rotation.Rotate(transform.Position.Mul(-1))
+	return TransformComponent{Position: mgl32.Vec3{position.X() * scale.X(), position.Y() * scale.Y(), position.Z() * scale.Z()}, Rotation: rotation, Scale: scale}
 }
 
 // ApplyAuthoredAssetAttachmentAimOffset shifts a procedurally aimed asset in

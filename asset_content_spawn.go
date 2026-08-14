@@ -340,7 +340,9 @@ func AttachAuthoredAssetRoot(cmd *Commands, root, parentMarker EntityId, attachm
 		attached,
 	)
 	cmd.app.FlushCommands()
-	TransformHierarchySystem(cmd)
+	if !RestoreAuthoredAssetAttachmentMount(cmd, root) {
+		return fmt.Errorf("asset attachment %q could not resolve mount", attachment.ID)
+	}
 	return nil
 }
 
