@@ -72,8 +72,10 @@ func MDLVoxelizationProfileForCategory(category HL1VoxelResolutionCategory) MDLV
 		profile.TargetMaxVoxelCount = 120000
 		profile.CoarsestResolution = 0.1
 	case HL1VoxelResolutionCategoryNPC:
-		profile.ID = "hl1_npc_rigid_local_v1"
+		profile.ID = "hl1_npc_rigid_v3"
 		profile.FillClosedInterior = true
+		profile.PartitionBySkeletonSegments = true
+		profile.JointCapVoxels = 1
 		profile.MaxInteriorSampleCells = 4000000
 		profile.TargetMaxVoxelCount = 120000
 		profile.CoarsestResolution = 0.08
@@ -992,7 +994,8 @@ func voxelizeMDLGeometryByBoneToBudget(geometry MDLGeometry, resolution float32,
 	for attempt := 0; ; attempt++ {
 		boneVoxels := voxelizeMDLGeometryByBoneWithProfile(geometry, resolution, profile)
 		if profile.FillClosedInterior {
-			boundsCells := mdlBoneLocalVoxelBoundsCellCount(boneVoxels)
+			bindPoseVoxels := voxelizeMDLGeometryByBoneInBindPoseWithProfile(geometry, resolution, profile)
+			boundsCells := mdlBoneVoxelBoundsCellCount(bindPoseVoxels)
 			if profile.MaxInteriorSampleCells > 0 && boundsCells > int64(profile.MaxInteriorSampleCells) {
 				limitProfile := profile
 				limitProfile.TargetMaxVoxelCount = profile.MaxInteriorSampleCells
@@ -1002,9 +1005,14 @@ func voxelizeMDLGeometryByBoneToBudget(geometry MDLGeometry, resolution float32,
 					continue
 				}
 			}
-			for _, voxels := range boneVoxels {
-				fillMDLSurfaceClosedInterior(voxels)
+			interior := fillMDLClosedInterior(bindPoseVoxels)
+			if profile.PartitionBySkeletonSegments {
+				partitionMDLVoxelsBySkeleton(bindPoseVoxels, geometry.Info.Bones, interior, resolution)
 			}
+			if profile.JointCapVoxels > 0 {
+				applyMDLInteriorJointCaps(bindPoseVoxels, geometry.Info.Bones, interior, profile.JointCapVoxels)
+			}
+			fillMDLBoneLocalInteriors(boneVoxels, bindPoseVoxels, geometry.Info.Bones, interior, resolution)
 		}
 		next, retry := nextMDLVoxelResolution(resolution, mdlBoneVoxelCount(boneVoxels), profile, attempt)
 		if !retry {
@@ -1062,6 +1070,140 @@ func voxelizeMDLGeometryByBoneWithProfile(geometry MDLGeometry, resolution float
 		}
 	}
 	return out
+}
+
+// voxelizeMDLGeometryByBoneInBindPoseWithProfile records surface ownership on
+// one shared lattice. It is used only to classify safe interior fill; rendered
+// surfaces stay on their artifact-free bone-local lattices.
+func voxelizeMDLGeometryByBoneInBindPoseWithProfile(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) map[int]map[[3]int]mdlVoxelSample {
+	out := map[int]map[[3]int]mdlVoxelSample{}
+	owners := map[[3]int]int{}
+	weights := map[[3]int]float32{}
+	half := importcommon.Vec3{X: resolution * 0.5, Y: resolution * 0.5, Z: resolution * 0.5}
+	for _, tri := range geometry.Triangles {
+		fallbackBoneIndex := dominantMDLTriangleBone(tri, len(geometry.Info.Bones))
+		if fallbackBoneIndex < 0 {
+			continue
+		}
+		triWorld := [3]importcommon.Vec3{
+			HammerToGekko(tri.Vertices[0].Position),
+			HammerToGekko(tri.Vertices[1].Position),
+			HammerToGekko(tri.Vertices[2].Position),
+		}
+		minB, maxB := triangleVoxelBounds(triWorld, resolution)
+		for x := minB[0]; x <= maxB[0]; x++ {
+			for y := minB[1]; y <= maxB[1]; y++ {
+				for z := minB[2]; z <= maxB[2]; z++ {
+					key := [3]int{x, y, z}
+					if !triangleIntersectsVoxel(triWorld, key, half, resolution) {
+						continue
+					}
+					color := sampleMDLTriangleVoxelColor(geometry, tri, triWorld, key, resolution, profile)
+					if color[3] == 0 {
+						continue
+					}
+					owner, weight := mdlTriangleBoneOwnershipAtPoint(tri, triWorld, voxelCenter(key, resolution), len(geometry.Info.Bones), fallbackBoneIndex)
+					previous, claimed := owners[key]
+					if claimed && (weights[key] > weight || weights[key] == weight && previous <= owner) {
+						continue
+					}
+					if claimed {
+						delete(out[previous], key)
+					}
+					if out[owner] == nil {
+						out[owner] = map[[3]int]mdlVoxelSample{}
+					}
+					out[owner][key] = mdlVoxelSampleForTriangle(geometry, tri, color)
+					owners[key], weights[key] = owner, weight
+				}
+			}
+		}
+	}
+	return out
+}
+
+func fillMDLBoneLocalInteriors(localVoxels, bindPoseVoxels map[int]map[[3]int]mdlVoxelSample, bones []MDLBoneInfo, interior map[[3]int]struct{}, resolution float32) {
+	if len(interior) == 0 || resolution <= 0 {
+		return
+	}
+	frames := mdlGlobalBoneBindFramesGekko(bones)
+	solid := make(map[[3]int]struct{})
+	for _, voxels := range bindPoseVoxels {
+		for key := range voxels {
+			solid[key] = struct{}{}
+		}
+	}
+	for boneIndex, voxels := range bindPoseVoxels {
+		if boneIndex < 0 || boneIndex >= len(frames) {
+			continue
+		}
+		localSurface := localVoxels[boneIndex]
+		if len(localSurface) == 0 {
+			continue
+		}
+		first := true
+		var minLocal, maxLocal [3]int
+		for key := range localSurface {
+			if first {
+				minLocal, maxLocal, first = key, key, false
+				continue
+			}
+			for axis := range 3 {
+				minLocal[axis] = min(minLocal[axis], key[axis])
+				maxLocal[axis] = max(maxLocal[axis], key[axis])
+			}
+		}
+		frame := frames[boneIndex]
+		candidates := make(map[[3]int]struct{})
+		for worldKey := range voxels {
+			if _, inside := interior[worldKey]; !inside {
+				continue
+			}
+			localCenter := mdlBoneWorldPointToLocal(voxelCenter(worldKey, resolution), frame)
+			base := keyForPosition(localCenter, resolution)
+			for x := base[0] - 1; x <= base[0]+1; x++ {
+				for y := base[1] - 1; y <= base[1]+1; y++ {
+					for z := base[2] - 1; z <= base[2]+1; z++ {
+						candidates[[3]int{x, y, z}] = struct{}{}
+					}
+				}
+			}
+		}
+		for localKey := range candidates {
+			// A filled rigid part must not outgrow its imported surface bounds;
+			// otherwise the added volume becomes a protrusion when the bone moves.
+			if localKey[0] < minLocal[0] || localKey[0] > maxLocal[0] ||
+				localKey[1] < minLocal[1] || localKey[1] > maxLocal[1] ||
+				localKey[2] < minLocal[2] || localKey[2] > maxLocal[2] {
+				continue
+			}
+			if _, surface := localSurface[localKey]; surface {
+				continue
+			}
+			worldKey := keyForPosition(mdlBoneLocalPointToWorld(voxelCenter(localKey, resolution), frame), resolution)
+			sample, owned := voxels[worldKey]
+			if _, inside := interior[worldKey]; !inside || !owned || !mdlBoneLocalVoxelInsideMask(localKey, frame, resolution, solid) {
+				continue
+			}
+			localSurface[localKey] = sample
+		}
+	}
+}
+
+func mdlBoneLocalVoxelInsideMask(key [3]int, frame mdlBoneVoxelFrame, resolution float32, solid map[[3]int]struct{}) bool {
+	center := voxelCenter(key, resolution)
+	offset := resolution * 0.49
+	for _, x := range []float32{-offset, offset} {
+		for _, y := range []float32{-offset, offset} {
+			for _, z := range []float32{-offset, offset} {
+				point := mdlBoneLocalPointToWorld(addVec3(center, importcommon.Vec3{X: x, Y: y, Z: z}), frame)
+				if _, inside := solid[keyForPosition(point, resolution)]; !inside {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 type mdlBoneVoxelFrame struct {
