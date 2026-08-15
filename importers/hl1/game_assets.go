@@ -1446,16 +1446,19 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				c.buildEgonHeldPresentation(entry, geometry, voxelResolution, voxelizationProfile, assetPath)
 				return
 			}
+			voxelFrameBone := hl1WeaponVoxelFrameBone(entry, geometry.Info.Bones)
 			built, err := BuildMDLVoxelAssetDocuments(geometry, MDLVoxelAssetOptions{
-				Name:                strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
-				SourceRef:           entry.SourceRef,
-				VoxelResolution:     voxelResolution,
-				VoxelizationProfile: voxelizationProfile,
-				StaticPose:          staticPose,
-				RebaseBoneIndex:     rebaseBone,
-				RebaseToBone:        rebaseToHand,
-				SemanticAnchors:     anchors,
-				LockRootMotion:      entry.CatalogKind == "player",
+				Name:                  strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)),
+				SourceRef:             entry.SourceRef,
+				VoxelResolution:       voxelResolution,
+				VoxelizationProfile:   voxelizationProfile,
+				StaticPose:            staticPose,
+				RebaseBoneIndex:       rebaseBone,
+				RebaseToBone:          rebaseToHand,
+				AlignStaticVoxelFrame: voxelFrameBone >= 0,
+				VoxelFrameBoneIndex:   voxelFrameBone,
+				SemanticAnchors:       anchors,
+				LockRootMotion:        entry.CatalogKind == "player",
 			})
 			if err != nil {
 				c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -1553,6 +1556,23 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 			}
 		}
 	}
+}
+
+func hl1WeaponVoxelFrameBone(entry *GameAssetManifestEntry, bones []MDLBoneInfo) int {
+	if entry == nil || len(bones) == 0 {
+		return -1
+	}
+	switch entry.CatalogKind {
+	case "weapon_world":
+		return 0
+	case "weapon_held":
+		for index := len(bones) - 1; index >= 0; index-- {
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(bones[index].Name)), "bip01") {
+				return index
+			}
+		}
+	}
+	return -1
 }
 
 func hl1IsEgonHeldModel(entry *GameAssetManifestEntry) bool {

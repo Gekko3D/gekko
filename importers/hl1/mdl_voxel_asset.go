@@ -22,6 +22,12 @@ type MDLVoxelAssetOptions struct {
 	StaticPose      bool
 	RebaseBoneIndex int
 	RebaseToBone    bool
+	// AlignStaticVoxelFrame rotates a static model into the nearest cardinal
+	// frame of VoxelFrameBoneIndex while sampling, then restores its original
+	// pose on the emitted part. It avoids stair-stepping on nearly axis-aligned
+	// source geometry without changing its runtime orientation.
+	AlignStaticVoxelFrame bool
+	VoxelFrameBoneIndex   int
 	// IncludeBoneIndices retains geometry weighted to these source bones. It
 	// turns a composite source rig into independently mountable static props.
 	IncludeBoneIndices []int
@@ -123,8 +129,9 @@ func BuildMDLVoxelAssetDocuments(geometry MDLGeometry, opts MDLVoxelAssetOptions
 		geometry = rebaseMDLGeometryToBoneOrigin(geometry, opts.RebaseBoneIndex)
 	}
 	if opts.StaticPose {
-		voxels, effectiveResolution := voxelizeMDLGeometryToBudget(geometry, resolution, opts.VoxelizationProfile)
-		asset, count, err := buildMDLStaticPoseVoxelAsset(geometry, opts, effectiveResolution, voxels)
+		alignment := mdlStaticVoxelFrameAlignment(geometry.Info.Bones, opts)
+		voxels, effectiveResolution := voxelizeMDLGeometryToBudgetInFrame(geometry, resolution, opts.VoxelizationProfile, alignment)
+		asset, count, err := buildMDLStaticPoseVoxelAsset(geometry, opts, effectiveResolution, voxels, alignment.Inverse())
 		return finishMDLVoxelAssetDocuments(asset, nil, count, err)
 	}
 	if boneVoxels, effectiveResolution := voxelizeMDLGeometryByBoneToBudget(geometry, resolution, opts.VoxelizationProfile); len(boneVoxels) > 0 {
@@ -211,7 +218,45 @@ func rebaseMDLGeometryToBoneOrigin(geometry MDLGeometry, boneIndex int) MDLGeome
 	return geometry
 }
 
-func buildMDLStaticPoseVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32, voxels map[[3]int]mdlVoxelSample) (*content.AssetDef, int, error) {
+func mdlStaticVoxelFrameAlignment(bones []MDLBoneInfo, opts MDLVoxelAssetOptions) mgl32.Quat {
+	if !opts.AlignStaticVoxelFrame || opts.VoxelFrameBoneIndex < 0 || opts.VoxelFrameBoneIndex >= len(bones) {
+		return mgl32.QuatIdent()
+	}
+	frames := mdlGlobalBoneFrameTransforms(bones, nil, 0)
+	frame := frames[opts.VoxelFrameBoneIndex].Rotation
+	if opts.RebaseToBone && opts.RebaseBoneIndex >= 0 && opts.RebaseBoneIndex < len(frames) {
+		frame = frames[opts.RebaseBoneIndex].Rotation.Inverse().Mul(frame).Normalize()
+	}
+	frame = hammerQuatToMgl(frame)
+	return mdlNearestVoxelAxisFrame(frame).Mul(frame.Inverse()).Normalize()
+}
+
+func mdlNearestVoxelAxisFrame(frame mgl32.Quat) mgl32.Quat {
+	x := mdlNearestVoxelAxis(frame.Rotate(mgl32.Vec3{1, 0, 0}), mgl32.Vec3{})
+	y := mdlNearestVoxelAxis(frame.Rotate(mgl32.Vec3{0, 1, 0}), x)
+	z := x.Cross(y)
+	return mgl32.Mat4ToQuat(mgl32.Mat3FromCols(x, y, z).Mat4()).Normalize()
+}
+
+func mdlNearestVoxelAxis(direction, excluded mgl32.Vec3) mgl32.Vec3 {
+	axes := [3]mgl32.Vec3{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
+	bestAxis, bestDot := mgl32.Vec3{}, float32(-1)
+	for _, axis := range axes {
+		if excluded != (mgl32.Vec3{}) && axis.Dot(excluded) != 0 {
+			continue
+		}
+		dot := direction.Dot(axis)
+		if abs := float32(math.Abs(float64(dot))); abs > bestDot {
+			bestAxis, bestDot = axis, abs
+			if dot < 0 {
+				bestAxis = bestAxis.Mul(-1)
+			}
+		}
+	}
+	return bestAxis
+}
+
+func buildMDLStaticPoseVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions, resolution float32, voxels map[[3]int]mdlVoxelSample, rotation mgl32.Quat) (*content.AssetDef, int, error) {
 	if len(voxels) == 0 {
 		return nil, 0, fmt.Errorf("mdl voxelization produced no voxels")
 	}
@@ -224,7 +269,7 @@ func buildMDLStaticPoseVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOption
 		Name:            "mdl_surface",
 		VoxelResolution: resolution,
 		Transform: content.AssetTransformDef{
-			Rotation: content.Quat{0, 0, 0, 1},
+			Rotation: mglQuatToContent(rotation),
 			Scale:    content.Vec3{1, 1, 1},
 		},
 		Source: content.AssetSourceDef{
@@ -878,8 +923,12 @@ func voxelizeMDLGeometry(geometry MDLGeometry, resolution float32) map[[3]int]md
 }
 
 func voxelizeMDLGeometryToBudget(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) (map[[3]int]mdlVoxelSample, float32) {
+	return voxelizeMDLGeometryToBudgetInFrame(geometry, resolution, profile, mgl32.QuatIdent())
+}
+
+func voxelizeMDLGeometryToBudgetInFrame(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile, frame mgl32.Quat) (map[[3]int]mdlVoxelSample, float32) {
 	for attempt := 0; ; attempt++ {
-		voxels := voxelizeMDLGeometryWithProfile(geometry, resolution, profile)
+		voxels := voxelizeMDLGeometryWithProfileInFrame(geometry, resolution, profile, frame)
 		if profile.FillClosedInterior {
 			boundsCells := mdlVoxelBoundsCellCount(voxels)
 			if profile.MaxInteriorSampleCells > 0 && boundsCells > int64(profile.MaxInteriorSampleCells) {
@@ -901,13 +950,17 @@ func voxelizeMDLGeometryToBudget(geometry MDLGeometry, resolution float32, profi
 }
 
 func voxelizeMDLGeometryWithProfile(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) map[[3]int]mdlVoxelSample {
+	return voxelizeMDLGeometryWithProfileInFrame(geometry, resolution, profile, mgl32.QuatIdent())
+}
+
+func voxelizeMDLGeometryWithProfileInFrame(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile, frame mgl32.Quat) map[[3]int]mdlVoxelSample {
 	out := map[[3]int]mdlVoxelSample{}
 	half := importcommon.Vec3{X: resolution * 0.5, Y: resolution * 0.5, Z: resolution * 0.5}
 	for _, tri := range geometry.Triangles {
 		triWorld := [3]importcommon.Vec3{
-			HammerToGekko(tri.Vertices[0].Position),
-			HammerToGekko(tri.Vertices[1].Position),
-			HammerToGekko(tri.Vertices[2].Position),
+			mdlVoxelFramePoint(frame, tri.Vertices[0].Position),
+			mdlVoxelFramePoint(frame, tri.Vertices[1].Position),
+			mdlVoxelFramePoint(frame, tri.Vertices[2].Position),
 		}
 		minB, maxB := triangleVoxelBounds(triWorld, resolution)
 		for x := minB[0]; x <= maxB[0]; x++ {
@@ -927,6 +980,12 @@ func voxelizeMDLGeometryWithProfile(geometry MDLGeometry, resolution float32, pr
 		}
 	}
 	return out
+}
+
+func mdlVoxelFramePoint(frame mgl32.Quat, position importcommon.Vec3) importcommon.Vec3 {
+	position = HammerToGekko(position)
+	rotated := frame.Rotate(mgl32.Vec3{position.X, position.Y, position.Z})
+	return importcommon.Vec3{X: rotated.X(), Y: rotated.Y(), Z: rotated.Z()}
 }
 
 func voxelizeMDLGeometryByBone(geometry MDLGeometry, resolution float32) map[int]map[[3]int]mdlVoxelSample {
