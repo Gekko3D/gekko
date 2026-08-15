@@ -40,7 +40,6 @@ Start with these repo-local sources of truth:
 
 - [`base/skills-manifest.md`](/Users/ddevidch/code/go/gekko3d/gekko/base/skills-manifest.md): request normalization, routing rules, confidence thresholds, and expected artifacts
 - [`docs/workflows/agent-task-loop.md`](/Users/ddevidch/code/go/gekko3d/gekko/docs/workflows/agent-task-loop.md): what to read first, which invariants to name, and how to pick verification
-- [`docs/workflows/status-report.md`](/Users/ddevidch/code/go/gekko3d/gekko/docs/workflows/status-report.md): when to write a status report and the canonical template
 
 ### Confidence Gate
 
@@ -49,11 +48,11 @@ Run a quick confidence gate before broad edits.
 - High:
   - proceed after reading the owning docs and selecting the smallest verification command
 - Medium:
-  - narrow the scope, write down assumptions, and create a status report before broad changes
+  - narrow the scope and write down assumptions before broad changes
 - Low:
   - stop and ask for alignment before implementation
 
-Use this template in notes, a status report, or the task handoff:
+Use this template in notes or the task handoff:
 
 - Confidence: `High | Medium | Low`
 - Why:
@@ -64,19 +63,6 @@ Use this template in notes, a status report, or the task handoff:
   - docs to read, tests to run, or files to inspect
 - SME alignment required?:
   - `Yes | No`
-
-### When A Status Report Is Required
-
-Write a report under `reports/` when any of these apply:
-
-- the task crosses engine and consumer modules
-- the change affects shared schemas, runtime contracts, or verification policy
-- the direction is still ambiguous after the first doc/code read
-- the work may be paused, handed off, or reviewed asynchronously before merge
-
-Use the naming convention:
-
-- `reports/<YYYY-MM-DD>-<topic>-status.md`
 
 ### Expected Handoff
 
