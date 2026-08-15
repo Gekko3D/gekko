@@ -50,9 +50,10 @@ func main() {
 	flag.BoolVar(&opts.EmitEmissiveSurfaceLights, "emit-emissive-surface-lights", true, "synthesize lights from imported emissive surface clusters")
 	flag.IntVar(&opts.MaxEmissiveSurfaceLights, "max-emissive-surface-lights", hl1.DefaultMaxEmissiveSurfaceLights, "maximum synthesized emissive surface lights")
 	flag.BoolVar(&opts.EmitGameAssets, "emit-game-assets", false, "copy/catalog HL1 WAD/model/sprite/sound assets referenced by the map")
-	flag.BoolVar(&assetsOnly, "assets-only", false, "catalog selected prop/player/weapon assets from -game-dir without loading a BSP; implies -emit-game-assets")
+	flag.BoolVar(&assetsOnly, "assets-only", false, "catalog selected prop/player/NPC/weapon assets from -game-dir without loading a BSP; implies -emit-game-assets")
 	flag.BoolVar(&opts.ImportAllStaticProps, "import-all-static-props", false, "catalog and solid-voxelize non-character prop MDLs from configured resource directories")
 	flag.BoolVar(&opts.ImportAllPlayerModels, "import-all-player-models", false, "catalog and voxelize player models from valve and valve_downloads")
+	flag.BoolVar(&opts.ImportAllNPCModels, "import-all-npc-models", false, "catalog and voxelize known NPC models from configured resource directories")
 	flag.BoolVar(&opts.ImportAllWeaponWorldModels, "import-all-weapon-world-models", false, "catalog and voxelize w_ weapon world models from valve and valve_downloads")
 	opts.VoxelResolution = hl1.DefaultImportedVoxelResolution
 	opts.VoxelResolutionPolicy = hl1.DefaultHL1VoxelResolutionPolicy()
@@ -108,7 +109,7 @@ func main() {
 		if emitDebugWorld || emitLevel {
 			fatalf("-assets-only cannot be combined with -emit-debug-world or -emit-level")
 		}
-		if !opts.ImportAllStaticProps && !opts.ImportAllPlayerModels && !opts.ImportAllWeaponWorldModels {
+		if !opts.ImportAllStaticProps && !opts.ImportAllPlayerModels && !opts.ImportAllNPCModels && !opts.ImportAllWeaponWorldModels {
 			fatalf("-assets-only requires at least one import-all model option")
 		}
 		opts.EmitGameAssets = true

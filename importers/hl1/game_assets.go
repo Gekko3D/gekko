@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -304,6 +305,11 @@ func BuildGameAssetImport(opts ImportOptions, summary ImportSummary) (GameAssetI
 			collector.addCatalogModels("player", resourceDir, hl1CatalogModelPaths(resourceDir, true))
 		}
 	}
+	if opts.ImportAllNPCModels {
+		for _, resourceDir := range catalogDirs {
+			collector.addCatalogModels("npc", resourceDir, hl1NPCModelPaths(resourceDir))
+		}
+	}
 	if opts.ImportAllStaticProps {
 		for _, resourceDir := range catalogDirs {
 			collector.addCatalogModels("static_prop", resourceDir, hl1StaticPropModelPaths(resourceDir))
@@ -339,6 +345,7 @@ func pruneHL1CatalogEntries(library *content.AssetLibraryDef, opts ImportOptions
 	pruned.Entries = make([]content.AssetLibraryEntryDef, 0, len(library.Entries))
 	for _, entry := range library.Entries {
 		selected := opts.ImportAllPlayerModels && hasAnyString(entry.Tags, "player")
+		selected = selected || opts.ImportAllNPCModels && hl1AssetLibraryEntryIsNPC(entry)
 		selected = selected || opts.ImportAllStaticProps && hasAnyString(entry.Tags, "static_prop")
 		selected = selected || opts.ImportAllWeaponWorldModels && hasAnyString(entry.Tags, "weapon_world", "weapon_held")
 		if !selected {
@@ -353,8 +360,9 @@ func reuseExistingHL1Assets(entries []GameAssetManifestEntry, library *content.A
 		return
 	}
 	byIdentity := make(map[string]string)
+	npcByIdentity := make(map[string]string)
 	for _, entry := range library.Entries {
-		if !hasAnyString(entry.Tags, "player", "static_prop", "weapon_world") {
+		if !hasAnyString(entry.Tags, "player", "npc", "static_prop", "weapon_world", "weapon_held") {
 			continue
 		}
 		sourceRef := strings.TrimPrefix(firstStringWithPrefix(entry.Tags, "source_ref:"), "source_ref:")
@@ -376,6 +384,9 @@ func reuseExistingHL1Assets(entries []GameAssetManifestEntry, library *content.A
 				if _, exists := byIdentity[key]; !exists {
 					byIdentity[key] = path
 				}
+				if hasAnyString(entry.Tags, "npc") {
+					npcByIdentity[identity] = path
+				}
 			}
 		}
 	}
@@ -389,12 +400,27 @@ func reuseExistingHL1Assets(entries []GameAssetManifestEntry, library *content.A
 		if path == "" && entry.SHA256 != "" {
 			path = byIdentity[entry.SHA256+"\x00"+config]
 		}
+		if path == "" && gameAssetEntryUsedByNPC(*entry) {
+			path = npcByIdentity[strings.ToLower(filepath.ToSlash(entry.SourceRef))]
+			if path == "" && entry.SHA256 != "" {
+				path = npcByIdentity[entry.SHA256]
+			}
+		}
 		if path != "" {
 			entry.GeneratedAssetPath = path
 			entry.generatedAsset = nil
 			entry.ConvertState = "reused_catalog_asset"
 		}
 	}
+}
+
+func gameAssetEntryUsedByNPC(entry GameAssetManifestEntry) bool {
+	for _, usedBy := range entry.UsedBy {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "npc:") {
+			return true
+		}
+	}
+	return false
 }
 
 func firstStringWithPrefix(values []string, prefix string) string {
@@ -415,6 +441,17 @@ func hasAnyString(values []string, wanted ...string) bool {
 		}
 	}
 	return false
+}
+
+func hl1AssetLibraryEntryIsNPC(entry content.AssetLibraryEntryDef) bool {
+	if hasAnyString(entry.Tags, "player") {
+		return false
+	}
+	if hasAnyString(entry.Tags, "npc") {
+		return true
+	}
+	sourceRef := strings.TrimPrefix(firstStringWithPrefix(entry.Tags, "source_ref:"), "source_ref:")
+	return sourceRef != "" && hl1KnownActorModel(filepath.Base(sourceRef))
 }
 
 func mergeHL1AssetLibraries(existing, incoming *content.AssetLibraryDef) (*content.AssetLibraryDef, error) {
@@ -453,10 +490,26 @@ func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []s
 			continue
 		}
 		ref = filepath.ToSlash(ref)
+		if kind == "npc" {
+			if rel, err := filepath.Rel(resourceDir, path); err == nil && !strings.HasPrefix(rel, "..") {
+				ref = filepath.ToSlash(rel)
+			}
+		}
 		if kind == "weapon_world" || kind == "weapon_held" {
 			// Catalog identity is source-layout independent so an overlay fills a
 			// missing base-game model without creating a competing library key.
 			ref = filepath.ToSlash(filepath.Join("valve", "models", filepath.Base(path)))
+		}
+		if kind == "npc" {
+			info, err := LoadMDLInfo(path)
+			if err != nil {
+				c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.npc_model_parse_failed", Subject: ref, Message: err.Error()})
+				continue
+			}
+			models, suffix := hl1NPCBodygroupModels(ref, info)
+			id := safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref))) + suffix
+			c.addCatalogModel(kind, ref, path, id, models, 0)
+			continue
 		}
 		if kind != "player" {
 			id := safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref)))
@@ -473,6 +526,20 @@ func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []s
 			c.addCatalogModel(kind, ref, path, id, variant.bodygroupModels, variant.skinFamily)
 		}
 	}
+}
+
+func hl1NPCBodygroupModels(sourceRef string, info MDLInfo) ([]int, string) {
+	models := make([]int, len(info.BodyParts))
+	if !strings.EqualFold(strings.TrimSuffix(filepath.Base(sourceRef), filepath.Ext(sourceRef)), "barney") {
+		return models, ""
+	}
+	for index, part := range info.BodyParts {
+		if strings.EqualFold(strings.TrimSpace(part.Name), "gun") && part.ModelCount >= 3 {
+			models[index] = 2
+			return models, "_gone"
+		}
+	}
+	return models, ""
 }
 
 type hl1PlayerModelVariant struct {
@@ -600,6 +667,23 @@ func hl1StaticPropModelPaths(gameDir string) []string {
 	return out
 }
 
+func hl1NPCModelPaths(gameDir string) []string {
+	var out []string
+	_ = filepath.WalkDir(gameDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry == nil || entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".mdl") {
+			return nil
+		}
+		clean := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+		if strings.Contains(clean, "/models/player/") || hl1TextureCompanionModel(path) || !hl1KnownActorModel(filepath.Base(path)) {
+			return nil
+		}
+		out = append(out, filepath.Clean(path))
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
 func hl1KnownActorModel(base string) bool {
 	base = strings.TrimSuffix(strings.ToLower(base), ".mdl")
 	switch base {
@@ -659,6 +743,7 @@ func SaveGameAssetImport(result GameAssetImportResult) error {
 	for i := range result.Manifest.Assets {
 		entry := &result.Manifest.Assets[i]
 		if entry.generatedAsset != nil && entry.GeneratedAssetPath != "" {
+			preserveCompatibleAnimationSetPaths(entry.GeneratedAssetPath, entry.generatedAsset)
 			for _, generated := range entry.generatedAnimations {
 				if generated.Rig != nil {
 					if err := stage(generated.RigPath, func(path string) error { return content.SaveAnimationRig(path, generated.Rig) }); err != nil {
@@ -706,10 +791,30 @@ func SaveGameAssetImport(result GameAssetImportResult) error {
 	return nil
 }
 
+func preserveCompatibleAnimationSetPaths(path string, generated *content.AssetDef) {
+	if generated == nil || generated.Skeleton == nil {
+		return
+	}
+	existing, err := content.LoadAsset(path)
+	if err != nil || !reflect.DeepEqual(existing.Skeleton, generated.Skeleton) {
+		return
+	}
+	for _, ref := range existing.AnimationSetPaths {
+		name := filepath.Base(filepath.ToSlash(ref))
+		if strings.HasPrefix(name, "animation.") && strings.HasSuffix(name, ".gkanim") {
+			continue
+		}
+		generated.AnimationSetPaths = appendUniqueString(generated.AnimationSetPaths, ref)
+	}
+}
+
 func buildHL1AssetLibrary(entries []GameAssetManifestEntry, libraryPath string) *content.AssetLibraryDef {
 	library := content.NewAssetLibraryDef("HL1 imported assets")
 	byBaseKey := make(map[string][]GameAssetManifestEntry)
 	for _, entry := range entries {
+		if entry.ConvertState == "reused_catalog_asset" {
+			continue
+		}
 		key := hl1GenericAssetKey(entry)
 		if key != "" && entry.GeneratedAssetPath != "" {
 			byBaseKey[key] = append(byBaseKey[key], entry)
@@ -853,6 +958,8 @@ func hl1AssetLibraryTags(entry GameAssetManifestEntry) []string {
 	}
 	switch entry.CatalogKind {
 	case "player":
+		tags = append(tags, "group:characters")
+	case "npc":
 		tags = append(tags, "group:characters")
 	case "weapon_world", "weapon_held":
 		tags = append(tags, "group:weapons")
@@ -1087,6 +1194,10 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 		default:
 			return "weapons.held.imported." + safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef)))
 		}
+	case "npc":
+		if id := safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef))); id != "" {
+			return "models.imported." + id
+		}
 	case "static_prop":
 		if id := safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef))); id != "" {
 			return "props.imported." + id
@@ -1284,7 +1395,7 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 		category, voxelResolution := c.voxelResolutionForEntry(entry)
 		voxelizationProfile := MDLVoxelizationProfileForCategory(category)
 		staticPose := category == HL1VoxelResolutionCategoryPickup || entry.CatalogKind == "static_prop"
-		geometryOptions := MDLGeometryOptions{BodygroupModels: entry.BodygroupModels, SkinFamily: entry.SkinFamily, DefaultBodygroups: entry.CatalogKind == "static_prop"}
+		geometryOptions := MDLGeometryOptions{BodygroupModels: entry.BodygroupModels, SkinFamily: entry.SkinFamily, DefaultBodygroups: entry.CatalogKind == "static_prop" || entry.CatalogKind == "npc" || entry.CatalogKind == "weapon_world" || entry.CatalogKind == "weapon_held"}
 		geometry, err := LoadMDLGeometryWithOptions(entry.SourcePath, geometryOptions)
 		if err != nil {
 			c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{
@@ -1313,8 +1424,10 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 			entry.GeneratedVoxelResolutionCategory = string(category)
 			entry.GeneratedVoxelizationProfile = &voxelizationProfile
 			anchors := map[string]int(nil)
-			if entry.CatalogKind == "player" {
+			if entry.CatalogKind == "player" || entry.CatalogKind == "npc" {
 				anchors = hl1PlayerSemanticAnchorBones(geometry.Info.Bones)
+			}
+			if entry.CatalogKind == "player" {
 				if !hl1PlayerHasRequiredAnchors(anchors) {
 					c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.player_required_anchor_missing", Subject: entry.CatalogID, Message: "missing verified HL1 player head, hand, or aim-chain bone"})
 					entry.ConvertState = "unsupported_player_avatar"
@@ -1572,6 +1685,9 @@ func hl1VoxelResolutionCategoryForGameAssetEntry(entry *GameAssetManifestEntry) 
 				return HL1VoxelResolutionCategoryNPC
 			}
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "catalog:player:") {
+				return HL1VoxelResolutionCategoryNPC
+			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(usedBy)), "catalog:npc:") {
 				return HL1VoxelResolutionCategoryNPC
 			}
 		}

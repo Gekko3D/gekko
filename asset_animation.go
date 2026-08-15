@@ -88,8 +88,10 @@ type AnimationLayer struct {
 	RootMotionPolicy AnimationRootMotionPolicy
 	Loop             bool
 	LoopOverride     bool
-	BlendValue       float32
-	HasBlendValue    bool
+	// Paused keeps the layer sampled at Time until its consumer removes it.
+	Paused        bool
+	BlendValue    float32
+	HasBlendValue bool
 }
 
 type AuthoredAssetAnimationSetComponent struct {
@@ -668,7 +670,7 @@ func sampleQuatKeysOr(keys []content.AssetQuatKeyDef, time float32, fallback mgl
 // advanceAnimationLayer reports a finished one-shot overlay. Looping clips
 // retain prior behavior; non-looping overlays disappear instead of freezing.
 func advanceAnimationLayer(layer *AnimationLayer, clip content.AssetAnimationClipDef, dt float32) bool {
-	if layer == nil || dt == 0 {
+	if layer == nil || dt == 0 || layer.Paused {
 		return false
 	}
 	speed := layer.Speed

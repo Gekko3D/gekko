@@ -165,6 +165,7 @@ type ImportOptions struct {
 	EmitGameAssets             bool
 	ImportAllStaticProps       bool
 	ImportAllPlayerModels      bool
+	ImportAllNPCModels         bool
 	ImportAllWeaponWorldModels bool
 	Progress                   ImportProgressFunc
 }

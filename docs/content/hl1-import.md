@@ -1104,11 +1104,11 @@ without losing source provenance.
 
 #### Assets-Only Import
 
-Use `-assets-only` to build the reusable HL1 player and weapon-world-model
+Use `-assets-only` to build the reusable HL1 player, NPC, and weapon-model
 catalog without loading a BSP or generating a world or level. It implies
 `-emit-game-assets`, requires `-game-dir`, and requires at least one of
 `-import-all-static-props`, `-import-all-player-models`, or
-`-import-all-weapon-world-models`.
+`-import-all-npc-models`, or `-import-all-weapon-world-models`.
 
 ```bash
 cd /Users/ddevidch/code/go/gekko3d/gekko
@@ -1118,6 +1118,7 @@ go run ./cmd/hl1import \
   -out ../actiongame/assets/levels \
   -import-all-static-props \
   -import-all-player-models \
+  -import-all-npc-models \
   -import-all-weapon-world-models
 ```
 
@@ -1141,11 +1142,15 @@ Catalog-wide model discovery is limited to the base `valve` and
 when their directories are passed explicitly with `-resource-dir`; sibling
 game/mod directories are never imported implicitly.
 
-Player `.gkasset` files reference central rig-bound `.gkanim` documents for
+Player and NPC `.gkasset` files reference central rig-bound `.gkanim` documents for
 source sequences the importer can decode; clips are never embedded. External
 GoldSrc sequence groups currently produce bind-pose clips rather than decoded
 motion. Weapon world models are static visual assets and reference no animation
 sets.
+
+Known NPC models are cataloged once under stable `models.imported.*` keys. Map
+imports reuse those entries and only import a map-specific NPC model when no
+matching catalog asset exists.
 
 #### Map Import
 

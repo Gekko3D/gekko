@@ -69,7 +69,6 @@ func MDLVoxelizationProfileForCategory(category HL1VoxelResolutionCategory) MDLV
 		profile.ID = "hl1_npc_rigid_v3"
 		profile.FillClosedInterior = true
 		profile.PartitionBySkeletonSegments = true
-		profile.JointCapVoxels = 1
 		profile.MaxInteriorSampleCells = 4000000
 		profile.TargetMaxVoxelCount = 120000
 		profile.CoarsestResolution = 0.08
@@ -666,6 +665,7 @@ func mdlAnimationEvents(seq MDLSequenceInfo, fps float32) []content.AssetAnimati
 		}
 		events = append(events, content.AssetAnimationEventDef{Frame: event.Frame, Time: float32(event.Frame) / fps, ID: event.ID, Type: event.Type, Options: event.Options})
 	}
+	sort.SliceStable(events, func(i, j int) bool { return events[i].Frame < events[j].Frame })
 	return events
 }
 
@@ -1218,10 +1218,60 @@ func partitionMDLVoxelsBySkeleton(boneVoxels map[int]map[[3]int]mdlVoxelSample, 
 			}
 		}
 	}
+	moved += planarizeMDLLinearJointCuts(repartitioned, origins, children, activeParent, radiusSquared, resolution)
 	clear(boneVoxels)
 	for boneIndex, voxels := range repartitioned {
 		boneVoxels[boneIndex] = voxels
 	}
+	return moved
+}
+
+// planarizeMDLLinearJointCuts replaces capsule-distance seams near simple
+// chain joints with a plane through the child pivot, perpendicular to the
+// incoming bone. This gives rigid elbows and knees flat mating faces.
+func planarizeMDLLinearJointCuts(boneVoxels map[int]map[[3]int]mdlVoxelSample, origins []importcommon.Vec3, children [][]int, activeParent []int, radiusSquared []float32, resolution float32) int {
+	moved := 0
+	for child, parent := range activeParent {
+		if parent < 0 || len(children[parent]) != 1 || len(boneVoxels[parent]) == 0 || len(boneVoxels[child]) == 0 {
+			continue
+		}
+		axis := subVec3(origins[child], origins[parent])
+		axisLengthSquared := dotVec3(axis, axis)
+		if axisLengthSquared <= 1e-8 {
+			continue
+		}
+		axisScale := 1 / float32(math.Sqrt(float64(axisLengthSquared)))
+		axis = importcommon.Vec3{X: axis.X * axisScale, Y: axis.Y * axisScale, Z: axis.Z * axisScale}
+		joint := origins[child]
+		jointRadiusSquared := max(radiusSquared[parent], radiusSquared[child])
+
+		toChild := make(map[[3]int]mdlVoxelSample)
+		for _, key := range sortedMDLVoxelKeys(boneVoxels[parent]) {
+			delta := subVec3(voxelCenter(key, resolution), joint)
+			if dotVec3(delta, delta) <= jointRadiusSquared && dotVec3(delta, axis) >= 0 {
+				toChild[key] = boneVoxels[parent][key]
+			}
+		}
+		toParent := make(map[[3]int]mdlVoxelSample)
+		for _, key := range sortedMDLVoxelKeys(boneVoxels[child]) {
+			delta := subVec3(voxelCenter(key, resolution), joint)
+			if dotVec3(delta, delta) <= jointRadiusSquared && dotVec3(delta, axis) < 0 {
+				toParent[key] = boneVoxels[child][key]
+			}
+		}
+		for key, sample := range toChild {
+			delete(boneVoxels[parent], key)
+			boneVoxels[child][key] = sample
+			moved++
+		}
+		for key, sample := range toParent {
+			delete(boneVoxels[child], key)
+			boneVoxels[parent][key] = sample
+			moved++
+		}
+	}
+	// ponytail: branch joints keep capsule cuts; add conflict resolution only
+	// if shoulders or hips visibly need competing planar cuts.
 	return moved
 }
 
