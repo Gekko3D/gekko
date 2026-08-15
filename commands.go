@@ -75,6 +75,7 @@ func (cmd *Commands) RemoveComponents(entityId EntityId, components ...any) {
 }
 
 func (cmd *Commands) RemoveEntity(entityId EntityId) {
+	cmd.cancelTraversalForRemoval(entityId)
 	cmd.app.cmdMutex.Lock()
 	defer cmd.app.cmdMutex.Unlock()
 	cmd.app.pendingRemovals = append(cmd.app.pendingRemovals, entityId)
@@ -85,11 +86,22 @@ func (cmd *Commands) RemoveEntitiesInGroup(key EntityGroupKey) []EntityId {
 	if len(entities) == 0 {
 		return nil
 	}
+	for _, entity := range entities {
+		cmd.cancelTraversalForRemoval(entity)
+	}
 
 	cmd.app.cmdMutex.Lock()
 	defer cmd.app.cmdMutex.Unlock()
 	cmd.app.pendingRemovals = append(cmd.app.pendingRemovals, entities...)
 	return entities
+}
+
+func (cmd *Commands) cancelTraversalForRemoval(entity EntityId) {
+	if cmd == nil || cmd.app == nil {
+		return
+	}
+	motor, _ := cmd.app.ecs.getComponent(entity, reflect.TypeOf(GroundedCharacterMotorComponent{})).(*GroundedCharacterMotorComponent)
+	CharacterAbortTraversal(motor, "entity_removed")
 }
 
 func (cmd *Commands) GetAllComponents(entityId EntityId) []any {
