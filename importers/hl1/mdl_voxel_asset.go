@@ -72,9 +72,8 @@ func MDLVoxelizationProfileForCategory(category HL1VoxelResolutionCategory) MDLV
 		profile.TargetMaxVoxelCount = 120000
 		profile.CoarsestResolution = 0.1
 	case HL1VoxelResolutionCategoryNPC:
-		profile.ID = "hl1_npc_rigid_v3"
+		profile.ID = "hl1_npc_rigid_local_v1"
 		profile.FillClosedInterior = true
-		profile.PartitionBySkeletonSegments = true
 		profile.MaxInteriorSampleCells = 4000000
 		profile.TargetMaxVoxelCount = 120000
 		profile.CoarsestResolution = 0.08
@@ -337,6 +336,7 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 		}
 		boneID := boneIDs[boneIndex]
 		boneOrigin := mdlBoneGlobalOriginGekko(geometry.Info.Bones, boneIndex)
+		boneRotation := mdlBoneGlobalRotationGekko(geometry.Info.Bones, boneIndex)
 		boneBindPosition := boneOrigin
 		parentID := ""
 		if parentIndex := geometry.Info.Bones[boneIndex].Parent; parentIndex >= 0 && parentIndex < len(boneIDs) && parentIndex != boneIndex {
@@ -361,19 +361,15 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 			palette := bonePalettes[boneIndex]
 			localVoxels, visualOrigin := localizeMDLVoxelsWithPalette(voxels, resolution, palette)
 			voxelCount += len(localVoxels)
-			childOffset := importcommon.Vec3{
-				X: visualOrigin.X - boneOrigin.X,
-				Y: visualOrigin.Y - boneOrigin.Y,
-				Z: visualOrigin.Z - boneOrigin.Z,
-			}
+			childOffset := boneRotation.Rotate(mgl32.Vec3{visualOrigin.X, visualOrigin.Y, visualOrigin.Z})
 			asset.Parts = append(asset.Parts, content.AssetPartDef{
 				ID:              boneID + "_voxels",
 				Name:            nonEmptyString(geometry.Info.Bones[boneIndex].Name, boneID) + " voxels",
 				ParentID:        boneID,
 				VoxelResolution: resolution,
 				Transform: content.AssetTransformDef{
-					Position: content.Vec3{childOffset.X, childOffset.Y, childOffset.Z},
-					Rotation: content.Quat{0, 0, 0, 1},
+					Position: content.Vec3{childOffset.X(), childOffset.Y(), childOffset.Z()},
+					Rotation: mglQuatToContent(boneRotation),
 					Scale:    content.Vec3{1, 1, 1},
 				},
 				Source: content.AssetSourceDef{
@@ -995,9 +991,8 @@ func voxelizeMDLGeometryByBone(geometry MDLGeometry, resolution float32) map[int
 func voxelizeMDLGeometryByBoneToBudget(geometry MDLGeometry, resolution float32, profile MDLVoxelizationProfile) (map[int]map[[3]int]mdlVoxelSample, float32) {
 	for attempt := 0; ; attempt++ {
 		boneVoxels := voxelizeMDLGeometryByBoneWithProfile(geometry, resolution, profile)
-		var interior map[[3]int]struct{}
 		if profile.FillClosedInterior {
-			boundsCells := mdlBoneVoxelBoundsCellCount(boneVoxels)
+			boundsCells := mdlBoneLocalVoxelBoundsCellCount(boneVoxels)
 			if profile.MaxInteriorSampleCells > 0 && boundsCells > int64(profile.MaxInteriorSampleCells) {
 				limitProfile := profile
 				limitProfile.TargetMaxVoxelCount = profile.MaxInteriorSampleCells
@@ -1007,12 +1002,10 @@ func voxelizeMDLGeometryByBoneToBudget(geometry MDLGeometry, resolution float32,
 					continue
 				}
 			}
-			interior = fillMDLClosedInterior(boneVoxels)
+			for _, voxels := range boneVoxels {
+				fillMDLSurfaceClosedInterior(voxels)
+			}
 		}
-		if profile.PartitionBySkeletonSegments {
-			partitionMDLVoxelsBySkeleton(boneVoxels, geometry.Info.Bones, interior, resolution)
-		}
-		applyMDLInteriorJointCaps(boneVoxels, geometry.Info.Bones, interior, profile.JointCapVoxels)
 		next, retry := nextMDLVoxelResolution(resolution, mdlBoneVoxelCount(boneVoxels), profile, attempt)
 		if !retry {
 			return boneVoxels, resolution
@@ -1026,7 +1019,7 @@ func voxelizeMDLGeometryByBoneWithProfile(geometry MDLGeometry, resolution float
 		return nil
 	}
 	out := map[int]map[[3]int]mdlVoxelSample{}
-	owners := map[[3]int]mdlBoneVoxelOwner{}
+	boneFrames := mdlGlobalBoneBindFramesGekko(geometry.Info.Bones)
 	half := importcommon.Vec3{X: resolution * 0.5, Y: resolution * 0.5, Z: resolution * 0.5}
 	for _, tri := range geometry.Triangles {
 		fallbackBoneIndex := dominantMDLTriangleBone(tri, len(geometry.Info.Bones))
@@ -1038,33 +1031,32 @@ func voxelizeMDLGeometryByBoneWithProfile(geometry MDLGeometry, resolution float
 			HammerToGekko(tri.Vertices[1].Position),
 			HammerToGekko(tri.Vertices[2].Position),
 		}
-		minB, maxB := triangleVoxelBounds(triWorld, resolution)
-		for x := minB[0]; x <= maxB[0]; x++ {
-			for y := minB[1]; y <= maxB[1]; y++ {
-				for z := minB[2]; z <= maxB[2]; z++ {
-					key := [3]int{x, y, z}
-					if !triangleIntersectsVoxel(triWorld, key, half, resolution) {
-						continue
+		for _, boneIndex := range mdlTriangleBoneIndices(tri, len(geometry.Info.Bones), fallbackBoneIndex) {
+			frame := boneFrames[boneIndex]
+			triLocal := mdlTriangleInBoneLocalFrame(triWorld, frame)
+			minB, maxB := triangleVoxelBounds(triLocal, resolution)
+			for x := minB[0]; x <= maxB[0]; x++ {
+				for y := minB[1]; y <= maxB[1]; y++ {
+					for z := minB[2]; z <= maxB[2]; z++ {
+						key := [3]int{x, y, z}
+						if !triangleIntersectsVoxel(triLocal, key, half, resolution) {
+							continue
+						}
+						localCenter := voxelCenter(key, resolution)
+						worldCenter := mdlBoneLocalPointToWorld(localCenter, frame)
+						owner, _ := mdlTriangleBoneOwnershipAtPoint(tri, triWorld, worldCenter, len(geometry.Info.Bones), fallbackBoneIndex)
+						if owner != boneIndex {
+							continue
+						}
+						color := sampleMDLTriangleVoxelColor(geometry, tri, triLocal, key, resolution, profile)
+						if color[3] == 0 {
+							continue
+						}
+						if out[boneIndex] == nil {
+							out[boneIndex] = map[[3]int]mdlVoxelSample{}
+						}
+						out[boneIndex][key] = mdlVoxelSampleForTriangle(geometry, tri, color)
 					}
-					center := voxelCenter(key, resolution)
-					boneIndex, boneWeight := mdlTriangleBoneOwnershipAtPoint(tri, triWorld, center, len(geometry.Info.Bones), fallbackBoneIndex)
-					if boneIndex < 0 {
-						continue
-					}
-					color := sampleMDLTriangleVoxelColor(geometry, tri, triWorld, key, resolution, profile)
-					if color[3] == 0 {
-						continue
-					}
-					if owner, ok := owners[key]; ok && (owner.Weight > boneWeight || (owner.Weight == boneWeight && owner.BoneIndex <= boneIndex)) {
-						continue
-					} else if ok {
-						delete(out[owner.BoneIndex], key)
-					}
-					if out[boneIndex] == nil {
-						out[boneIndex] = map[[3]int]mdlVoxelSample{}
-					}
-					out[boneIndex][key] = mdlVoxelSampleForTriangle(geometry, tri, color)
-					owners[key] = mdlBoneVoxelOwner{BoneIndex: boneIndex, Weight: boneWeight}
 				}
 			}
 		}
@@ -1072,9 +1064,54 @@ func voxelizeMDLGeometryByBoneWithProfile(geometry MDLGeometry, resolution float
 	return out
 }
 
-type mdlBoneVoxelOwner struct {
-	BoneIndex int
-	Weight    float32
+type mdlBoneVoxelFrame struct {
+	Position importcommon.Vec3
+	Rotation mgl32.Quat
+}
+
+func mdlGlobalBoneBindFramesGekko(bones []MDLBoneInfo) []mdlBoneVoxelFrame {
+	frames := mdlGlobalBoneFrameTransforms(bones, nil, 0)
+	out := make([]mdlBoneVoxelFrame, len(frames))
+	for index, frame := range frames {
+		out[index] = mdlBoneVoxelFrame{Position: HammerToGekko(frame.Position), Rotation: hammerQuatToMgl(frame.Rotation)}
+	}
+	return out
+}
+
+func mdlTriangleBoneIndices(tri MDLTriangle, boneCount, fallback int) []int {
+	seen := make(map[int]struct{}, len(tri.Vertices))
+	for _, vertex := range tri.Vertices {
+		if vertex.BoneIndex >= 0 && vertex.BoneIndex < boneCount {
+			seen[vertex.BoneIndex] = struct{}{}
+		}
+	}
+	if len(seen) == 0 && fallback >= 0 && fallback < boneCount {
+		seen[fallback] = struct{}{}
+	}
+	out := make([]int, 0, len(seen))
+	for boneIndex := range seen {
+		out = append(out, boneIndex)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func mdlTriangleInBoneLocalFrame(tri [3]importcommon.Vec3, frame mdlBoneVoxelFrame) [3]importcommon.Vec3 {
+	return [3]importcommon.Vec3{
+		mdlBoneWorldPointToLocal(tri[0], frame),
+		mdlBoneWorldPointToLocal(tri[1], frame),
+		mdlBoneWorldPointToLocal(tri[2], frame),
+	}
+}
+
+func mdlBoneWorldPointToLocal(point importcommon.Vec3, frame mdlBoneVoxelFrame) importcommon.Vec3 {
+	local := frame.Rotation.Inverse().Rotate(mgl32.Vec3{point.X - frame.Position.X, point.Y - frame.Position.Y, point.Z - frame.Position.Z})
+	return importcommon.Vec3{X: local.X(), Y: local.Y(), Z: local.Z()}
+}
+
+func mdlBoneLocalPointToWorld(point importcommon.Vec3, frame mdlBoneVoxelFrame) importcommon.Vec3 {
+	world := frame.Rotation.Rotate(mgl32.Vec3{point.X, point.Y, point.Z})
+	return importcommon.Vec3{X: world.X() + frame.Position.X, Y: world.Y() + frame.Position.Y, Z: world.Z() + frame.Position.Z}
 }
 
 func nextMDLVoxelResolution(resolution float32, voxelCount int64, profile MDLVoxelizationProfile, attempt int) (float32, bool) {
@@ -1124,6 +1161,14 @@ func mdlBoneVoxelBoundsCellCount(boneVoxels map[int]map[[3]int]mdlVoxelSample) i
 		return 0
 	}
 	return int64(maxKey[0]-minKey[0]+1) * int64(maxKey[1]-minKey[1]+1) * int64(maxKey[2]-minKey[2]+1)
+}
+
+func mdlBoneLocalVoxelBoundsCellCount(boneVoxels map[int]map[[3]int]mdlVoxelSample) int64 {
+	var total int64
+	for _, voxels := range boneVoxels {
+		total += mdlBoneVoxelBoundsCellCount(map[int]map[[3]int]mdlVoxelSample{0: voxels})
+	}
+	return total
 }
 
 func mdlVoxelBoundsCellCount(voxels map[[3]int]mdlVoxelSample) int64 {
@@ -1531,18 +1576,30 @@ func sortedMDLBoneVoxelIndices(boneVoxels map[int]map[[3]int]mdlVoxelSample) []i
 }
 
 func mdlBoneGlobalOriginGekko(bones []MDLBoneInfo, boneIndex int) importcommon.Vec3 {
-	if boneIndex < 0 || boneIndex >= len(bones) {
+	frame, ok := mdlBoneGlobalFrameGekko(bones, boneIndex)
+	if !ok {
 		return importcommon.Vec3{}
 	}
-	transforms := make([]mdlBoneTransform, 0, len(bones))
-	for _, bone := range bones {
-		transforms = append(transforms, mdlBoneTransform{
-			Parent:   bone.Parent,
-			Position: bone.Position,
-			Rotation: bone.Rotation,
-		})
+	return frame.Position
+}
+
+func mdlBoneGlobalRotationGekko(bones []MDLBoneInfo, boneIndex int) mgl32.Quat {
+	frame, ok := mdlBoneGlobalFrameGekko(bones, boneIndex)
+	if !ok {
+		return mgl32.QuatIdent()
 	}
-	return HammerToGekko(transformMDLPointByBone(importcommon.Vec3{}, boneIndex, transforms, 0))
+	return frame.Rotation
+}
+
+func mdlBoneGlobalFrameGekko(bones []MDLBoneInfo, boneIndex int) (mdlBoneVoxelFrame, bool) {
+	if boneIndex < 0 || boneIndex >= len(bones) {
+		return mdlBoneVoxelFrame{}, false
+	}
+	frames := mdlGlobalBoneBindFramesGekko(bones)
+	if boneIndex >= len(frames) {
+		return mdlBoneVoxelFrame{}, false
+	}
+	return frames[boneIndex], true
 }
 
 type mdlVoxelSample struct {

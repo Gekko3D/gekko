@@ -1562,10 +1562,11 @@ func hl1WeaponVoxelFrameBone(entry *GameAssetManifestEntry, bones []MDLBoneInfo)
 	if entry == nil || len(bones) == 0 {
 		return -1
 	}
-	switch entry.CatalogKind {
-	case "weapon_world":
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)))
+	switch {
+	case entry.CatalogKind == "weapon_world" || strings.HasPrefix(base, "w_"):
 		return 0
-	case "weapon_held":
+	case entry.CatalogKind == "weapon_held" || strings.HasPrefix(base, "p_"):
 		for index := len(bones) - 1; index >= 0; index-- {
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(bones[index].Name)), "bip01") {
 				return index
