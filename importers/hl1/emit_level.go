@@ -687,6 +687,7 @@ func buildHL1NPCs(entities []importcommon.Entity, levelPath string, gameAssets *
 			TargetName: hl1StringKey(entity, "targetname"),
 			Target:     hl1StringKey(entity, "target"),
 			SquadName:  hl1NPCSquadName(entity),
+			Weapons:    hl1IntKey(entity, "weapons"),
 			SpawnFlags: hl1IntKey(entity, "spawnflags"),
 			SourceTag:  "hl1:" + className,
 			Tags:       hl1NPCTags(entity, npcInfo),

@@ -20,6 +20,7 @@ type NPCComponent struct {
 	TargetName string
 	Target     string
 	SquadName  string
+	Weapons    int
 	SpawnFlags int
 	SourceTag  string
 	Tags       []string

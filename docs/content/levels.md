@@ -44,6 +44,7 @@ The top-level `LevelDef` contains:
 - `environment`
 - `lights`
 - `water_bodies`
+- `npcs`
 - `markers`
 
 Schema version is currently `3`.
@@ -306,6 +307,14 @@ with E. Activation toggles the matching `MovingBrushComponent` state through
 voxel asset on the moving-brush entity and moves it between closed/open targets.
 Moving-brush bounds also participate in character collision and ground probes;
 supported grounded players and authored NPCs inherit the brush's movement.
+
+### NPCs
+
+`npcs[]` preserves imported NPC identity and spawn data for the game runtime.
+Along with class, model, transform, health, target, and spawn flags, an NPC may
+carry its source `squad_name` and integer `weapons` bitmask. The engine copies
+those source-neutral values into `NPCComponent`; each game owns their concrete
+squad and equipment semantics.
 
 ### Markers
 

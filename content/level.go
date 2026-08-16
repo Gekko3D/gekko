@@ -480,6 +480,7 @@ type LevelNPCDef struct {
 	TargetName string            `json:"target_name,omitempty"`
 	Target     string            `json:"target,omitempty"`
 	SquadName  string            `json:"squad_name,omitempty"`
+	Weapons    int               `json:"weapons,omitempty"`
 	SpawnFlags int               `json:"spawn_flags,omitempty"`
 	SourceTag  string            `json:"source_tag,omitempty"`
 	Tags       []string          `json:"tags,omitempty"`

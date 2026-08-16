@@ -1011,6 +1011,7 @@ func spawnAuthoredLevelNPC(cmd *Commands, assets *AssetServer, loader *RuntimeCo
 			TargetName: npc.TargetName,
 			Target:     npc.Target,
 			SquadName:  npc.SquadName,
+			Weapons:    npc.Weapons,
 			SpawnFlags: npc.SpawnFlags,
 			SourceTag:  npc.SourceTag,
 			Tags:       append([]string(nil), npc.Tags...),
