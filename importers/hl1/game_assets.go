@@ -19,6 +19,13 @@ import (
 
 const GameAssetManifestSchemaVersion = 2
 
+const (
+	hl1HGruntWeaponMP5             = 1
+	hl1HGruntWeaponHandGrenade     = 2
+	hl1HGruntWeaponGrenadeLauncher = 4
+	hl1HGruntWeaponShotgun         = 8
+)
+
 type GameAssetImportResult struct {
 	ManifestPath string
 	Manifest     *GameAssetManifest
@@ -506,9 +513,10 @@ func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []s
 				c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.npc_model_parse_failed", Subject: ref, Message: err.Error()})
 				continue
 			}
-			models, suffix := hl1NPCBodygroupModels(ref, info)
-			id := safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref))) + suffix
-			c.addCatalogModel(kind, ref, path, id, models, 0)
+			for _, variant := range hl1NPCModelVariants(ref, info) {
+				id := safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref))) + variant.suffix
+				c.addCatalogModel(kind, ref, path, id, variant.bodygroupModels, 0)
+			}
 			continue
 		}
 		if kind != "player" {
@@ -528,18 +536,70 @@ func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []s
 	}
 }
 
-func hl1NPCBodygroupModels(sourceRef string, info MDLInfo) ([]int, string) {
+type hl1NPCModelVariant struct {
+	bodygroupModels []int
+	suffix          string
+}
+
+func hl1NPCModelVariants(sourceRef string, info MDLInfo) []hl1NPCModelVariant {
 	models := make([]int, len(info.BodyParts))
-	if !strings.EqualFold(strings.TrimSuffix(filepath.Base(sourceRef), filepath.Ext(sourceRef)), "barney") {
-		return models, ""
-	}
-	for index, part := range info.BodyParts {
-		if strings.EqualFold(strings.TrimSpace(part.Name), "gun") && part.ModelCount >= 3 {
-			models[index] = 2
-			return models, "_gone"
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(sourceRef), filepath.Ext(sourceRef)))
+	if base == "barney" {
+		for index, part := range info.BodyParts {
+			if strings.EqualFold(strings.TrimSpace(part.Name), "gun") && part.ModelCount >= 3 {
+				models[index] = 2
+				return []hl1NPCModelVariant{{bodygroupModels: models, suffix: "_gone"}}
+			}
 		}
 	}
-	return models, ""
+	if base != "hgrunt" {
+		return []hl1NPCModelVariant{{bodygroupModels: models}}
+	}
+	headGroup, gunGroup := -1, -1
+	for index, part := range info.BodyParts {
+		switch strings.ToLower(strings.TrimSpace(part.Name)) {
+		case "heads":
+			if part.ModelCount >= 4 {
+				headGroup = index
+			}
+		case "weapons":
+			if part.ModelCount >= 3 {
+				gunGroup = index
+			}
+		}
+	}
+	if headGroup < 0 || gunGroup < 0 {
+		return []hl1NPCModelVariant{{bodygroupModels: models}}
+	}
+	variant := func(head, gun int, suffix string) hl1NPCModelVariant {
+		selection := append([]int(nil), models...)
+		selection[headGroup], selection[gunGroup] = head, gun
+		return hl1NPCModelVariant{bodygroupModels: selection, suffix: suffix}
+	}
+	return []hl1NPCModelVariant{
+		variant(0, 0, ""),
+		variant(3, 0, "_m203"),
+		variant(2, 1, "_shotgun"),
+		variant(0, 2, "_nogun"),
+		variant(3, 2, "_m203_nogun"),
+		variant(2, 2, "_shotgun_nogun"),
+	}
+}
+
+func hl1HGruntCatalogSuffixForWeapons(weapons int) string {
+	if weapons == 0 {
+		weapons = hl1HGruntWeaponMP5 | hl1HGruntWeaponHandGrenade
+	}
+	if weapons&hl1HGruntWeaponShotgun != 0 {
+		return "_shotgun"
+	}
+	if weapons&hl1HGruntWeaponMP5 == 0 {
+		return "_nogun"
+	}
+	if weapons&hl1HGruntWeaponGrenadeLauncher != 0 {
+		return "_m203"
+	}
+	return ""
 }
 
 type hl1PlayerModelVariant struct {
@@ -1196,7 +1256,15 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 		}
 	case "npc":
 		if id := safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef))); id != "" {
-			return "models.imported." + id
+			key := "models.imported." + id
+			if strings.EqualFold(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)), "hgrunt") {
+				suffix := strings.TrimPrefix(entry.CatalogID, id)
+				suffix = strings.TrimPrefix(suffix, "_")
+				if suffix != "" {
+					key += "." + strings.ReplaceAll(suffix, "_", ".")
+				}
+			}
+			return key
 		}
 	case "static_prop":
 		if id := safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef))); id != "" {
@@ -1469,6 +1537,40 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				})
 			} else if built.Asset != nil {
 				asset, voxelCount, clips := built.Asset, built.VoxelCount, built.Clips
+				if entry.CatalogKind == "npc" && strings.EqualFold(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)), "hgrunt") {
+					standing, loadErr := LoadMDLAnimationClips(entry.SourcePath, []string{"standing_mp5", "standing_shotgun"}, false)
+					bonesByJoint := map[string]string{}
+					if asset.Skeleton == nil {
+						loadErr = fmt.Errorf("HGrunt asset has no skeleton")
+					} else {
+						for _, bone := range asset.Skeleton.Bones {
+							bonesByJoint[bone.JointID] = bone.ID
+						}
+					}
+					remapTracks := func(tracks []content.AssetAnimationTrackDef) {
+						for trackIndex := range tracks {
+							boneID, ok := bonesByJoint[tracks[trackIndex].TargetID]
+							if !ok {
+								loadErr = fmt.Errorf("standing animation joint %q has no asset bone", tracks[trackIndex].TargetID)
+								return
+							}
+							tracks[trackIndex].TargetID = boneID
+						}
+					}
+					for clipIndex := range standing {
+						remapTracks(standing[clipIndex].Tracks)
+						if standing[clipIndex].Blend1D != nil {
+							for sampleIndex := range standing[clipIndex].Blend1D.Samples {
+								remapTracks(standing[clipIndex].Blend1D.Samples[sampleIndex].Tracks)
+							}
+						}
+					}
+					if loadErr == nil {
+						clips = append(clips, standing...)
+					} else {
+						c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.hgrunt_standing_animation_missing", Subject: entry.CatalogID, Message: loadErr.Error()})
+					}
+				}
 				entry.GeneratedVoxelResolution = mdlAssetVoxelResolution(asset, voxelResolution)
 				if entry.CatalogKind == "weapon_held" {
 					twoHanded := hl1HeldWeaponUsesLeftGrip(entry)

@@ -299,9 +299,22 @@ func generatedHL1AssetPathsByRef(entries []GameAssetManifestEntry) map[string]st
 		if (entry.Kind != "model" && entry.Kind != "sprite") || entry.GeneratedAssetPath == "" || entry.ConvertState != "generated_voxel_asset" {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)), "hgrunt") && entry.CatalogKind == "npc" && entry.CatalogID != safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef))) {
+			continue
+		}
 		out[normalizedHL1AssetRef(entry.SourceRef)] = entry.GeneratedAssetPath
 	}
 	return out
+}
+
+func generatedHL1HGruntAssetPath(entries []GameAssetManifestEntry, sourceRef string, weapons int) string {
+	catalogID := safeMDLAssetID(strings.TrimSuffix(sourceRef, filepath.Ext(sourceRef))) + hl1HGruntCatalogSuffixForWeapons(weapons)
+	for _, entry := range entries {
+		if entry.CatalogKind == "npc" && entry.CatalogID == catalogID && normalizedHL1AssetRef(entry.SourceRef) == normalizedHL1AssetRef(sourceRef) && entry.GeneratedAssetPath != "" && entry.ConvertState == "generated_voxel_asset" {
+			return entry.GeneratedAssetPath
+		}
+	}
+	return ""
 }
 
 func normalizedHL1AssetRef(ref string) string {
@@ -669,7 +682,11 @@ func buildHL1NPCs(entities []importcommon.Entity, levelPath string, gameAssets *
 		modelRef := hl1NPCModelRef(className, entity)
 		assetPath := ""
 		if modelRef != "" {
-			if generatedPath := generatedByRef[normalizedHL1AssetRef(modelRef)]; generatedPath != "" {
+			generatedPath := generatedByRef[normalizedHL1AssetRef(modelRef)]
+			if className == "monster_human_grunt" && gameAssets != nil && gameAssets.Manifest != nil {
+				generatedPath = generatedHL1HGruntAssetPath(gameAssets.Manifest.Assets, modelRef, hl1IntKey(entity, "weapons"))
+			}
+			if generatedPath != "" {
 				assetPath = filepath.ToSlash(relativeOrBase(levelDir, generatedPath))
 			}
 		}
