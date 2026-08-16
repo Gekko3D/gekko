@@ -34,6 +34,7 @@ type RaycastHit struct {
 	Pos          [3]int
 	Normal       mgl32.Vec3
 	Entity       EntityId
+	HitGroup     int
 	PaletteIndex uint8
 }
 

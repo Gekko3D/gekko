@@ -417,6 +417,56 @@ func buildMDLRigidBoneVoxelAsset(geometry MDLGeometry, opts MDLVoxelAssetOptions
 			Tags: []string{"source:hl1", "semantic:" + markerID},
 		})
 	}
+	for index, hitbox := range geometry.Info.Hitboxes {
+		if hitbox.Bone < 0 || hitbox.Bone >= len(boneIDs) {
+			continue
+		}
+		bounds := HammerBoundsToGekko(hitbox.Bounds.Min, hitbox.Bounds.Max)
+		center := mgl32.Vec3{
+			(bounds.Min.X + bounds.Max.X) * 0.5,
+			(bounds.Min.Y + bounds.Max.Y) * 0.5,
+			(bounds.Min.Z + bounds.Max.Z) * 0.5,
+		}
+		half := mgl32.Vec3{
+			(bounds.Max.X - bounds.Min.X) * 0.5,
+			(bounds.Max.Y - bounds.Min.Y) * 0.5,
+			(bounds.Max.Z - bounds.Min.Z) * 0.5,
+		}
+		rotation := mdlBoneGlobalRotationGekko(geometry.Info.Bones, hitbox.Bone)
+		center = rotation.Rotate(center)
+		asset.Markers = append(asset.Markers, content.AssetMarkerDef{
+			ID:       fmt.Sprintf("mdl_hitbox_%02d", index),
+			Name:     fmt.Sprintf("hitbox %d", index),
+			Kind:     content.AssetMarkerKindEffectAnchor,
+			ParentID: boneIDs[hitbox.Bone],
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{center.X(), center.Y(), center.Z()},
+				Rotation: mglQuatToContent(rotation),
+				Scale:    content.Vec3{half.X(), half.Y(), half.Z()},
+			},
+			Tags: []string{"source:hl1", fmt.Sprintf("source:hl1_hitbox:%d", index), fmt.Sprintf("source:hl1_hitgroup:%d", hitbox.Group)},
+		})
+	}
+	for index, attachment := range geometry.Info.Attachments {
+		if attachment.Bone < 0 || attachment.Bone >= len(boneIDs) {
+			continue
+		}
+		rotation := mdlBoneGlobalRotationGekko(geometry.Info.Bones, attachment.Bone)
+		origin := HammerToGekko(attachment.Origin)
+		position := rotation.Rotate(mgl32.Vec3{origin.X, origin.Y, origin.Z})
+		asset.Markers = append(asset.Markers, content.AssetMarkerDef{
+			ID:       fmt.Sprintf("mdl_attachment_%02d", index),
+			Name:     nonEmptyString(attachment.Name, fmt.Sprintf("attachment %d", index)),
+			Kind:     content.AssetMarkerKindEffectAnchor,
+			ParentID: boneIDs[attachment.Bone],
+			Transform: content.AssetTransformDef{
+				Position: content.Vec3{position.X(), position.Y(), position.Z()},
+				Rotation: mglQuatToContent(rotation),
+				Scale:    content.Vec3{1, 1, 1},
+			},
+			Tags: []string{"source:hl1", fmt.Sprintf("source:hl1_attachment:%d", index)},
+		})
+	}
 	clips := mdlAnimationClips(geometry.Info.Sequences, geometry.Info.Bones, bindTargets, opts.LockRootMotion)
 	if len(clips) > 0 {
 		asset.Tags = append(asset.Tags, "animation:bind_pose_clip")

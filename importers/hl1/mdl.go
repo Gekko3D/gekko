@@ -44,6 +44,8 @@ type MDLInfo struct {
 	Sequences            []MDLSequenceInfo   `json:"sequences,omitempty"`
 	Textures             []MDLTextureInfo    `json:"textures,omitempty"`
 	BodyParts            []MDLBodyPartInfo   `json:"body_parts,omitempty"`
+	Hitboxes             []MDLHitboxInfo     `json:"hitboxes,omitempty"`
+	Attachments          []MDLAttachmentInfo `json:"attachments,omitempty"`
 	DecodedTriangleCount int                 `json:"decoded_triangle_count,omitempty"`
 	DecodedTextureCount  int                 `json:"decoded_texture_count,omitempty"`
 }
@@ -55,6 +57,20 @@ type MDLBoneInfo struct {
 	Rotation      importcommon.Vec3 `json:"rotation,omitempty"`
 	PositionScale importcommon.Vec3 `json:"position_scale,omitempty"`
 	RotationScale importcommon.Vec3 `json:"rotation_scale,omitempty"`
+}
+
+type MDLHitboxInfo struct {
+	Bone   int                 `json:"bone"`
+	Group  int                 `json:"group"`
+	Bounds importcommon.Bounds `json:"bounds"`
+}
+
+type MDLAttachmentInfo struct {
+	Name    string               `json:"name,omitempty"`
+	Type    int                  `json:"type,omitempty"`
+	Bone    int                  `json:"bone"`
+	Origin  importcommon.Vec3    `json:"origin,omitempty"`
+	Vectors [3]importcommon.Vec3 `json:"vectors,omitempty"`
 }
 
 type MDLSequenceInfo struct {
@@ -234,9 +250,11 @@ func ParseMDLInfo(data []byte) (MDLInfo, error) {
 		info.Length = len(data)
 	}
 	info.Bones = parseMDLBones(data, int(readInt32(data, 144)), info.BoneCount)
+	info.Hitboxes = parseMDLHitboxes(data, int(readInt32(data, 160)), info.HitboxCount)
 	info.Sequences = parseMDLSequences(data, int(readInt32(data, 168)), info.SequenceCount, info.Bones)
 	info.Textures = parseMDLTextures(data, int(readInt32(data, 184)), info.TextureCount)
 	info.BodyParts = parseMDLBodyParts(data, int(readInt32(data, 208)), info.BodyPartCount)
+	info.Attachments = parseMDLAttachments(data, int(readInt32(data, 216)), info.AttachmentCount)
 	return info, nil
 }
 
@@ -440,6 +458,47 @@ func parseMDLBones(data []byte, offset int, count int) []MDLBoneInfo {
 				Z: readFloat32(data, base+108),
 			},
 		})
+	}
+	return out
+}
+
+func parseMDLHitboxes(data []byte, offset int, count int) []MDLHitboxInfo {
+	const hitboxSize = 32
+	if count <= 0 || offset < mdlHeaderSize || offset > len(data) || count > (len(data)-offset)/hitboxSize {
+		return nil
+	}
+	out := make([]MDLHitboxInfo, 0, count)
+	for i := 0; i < count; i++ {
+		base := offset + i*hitboxSize
+		out = append(out, MDLHitboxInfo{
+			Bone:  int(readInt32(data, base)),
+			Group: int(readInt32(data, base+4)),
+			Bounds: importcommon.Bounds{
+				Min: importcommon.Vec3{X: readFloat32(data, base+8), Y: readFloat32(data, base+12), Z: readFloat32(data, base+16)},
+				Max: importcommon.Vec3{X: readFloat32(data, base+20), Y: readFloat32(data, base+24), Z: readFloat32(data, base+28)},
+			},
+		})
+	}
+	return out
+}
+
+func parseMDLAttachments(data []byte, offset int, count int) []MDLAttachmentInfo {
+	const attachmentSize = 88
+	if count <= 0 || offset < mdlHeaderSize || offset > len(data) || count > (len(data)-offset)/attachmentSize {
+		return nil
+	}
+	out := make([]MDLAttachmentInfo, 0, count)
+	for i := 0; i < count; i++ {
+		base := offset + i*attachmentSize
+		attachment := MDLAttachmentInfo{
+			Name: cString(data[base : base+32]), Type: int(readInt32(data, base+32)), Bone: int(readInt32(data, base+36)),
+			Origin: importcommon.Vec3{X: readFloat32(data, base+40), Y: readFloat32(data, base+44), Z: readFloat32(data, base+48)},
+		}
+		for axis := range attachment.Vectors {
+			vector := base + 52 + axis*12
+			attachment.Vectors[axis] = importcommon.Vec3{X: readFloat32(data, vector), Y: readFloat32(data, vector+4), Z: readFloat32(data, vector+8)}
+		}
+		out = append(out, attachment)
 	}
 	return out
 }
