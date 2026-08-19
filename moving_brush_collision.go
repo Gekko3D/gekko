@@ -10,6 +10,12 @@ import (
 // MovingBrushCollisionQuery exposes all runtime moving-brush bounds to the
 // shared character-controller collision path.
 func MovingBrushCollisionQuery(cmd *Commands) CharacterCollisionQuery {
+	if environment := activeGroundedCharacterEnvironment(cmd); environment != nil {
+		if len(environment.movingBrushes) == 0 {
+			return nil
+		}
+		return environment.movingBrushQuery
+	}
 	if cmd == nil {
 		return nil
 	}
@@ -31,6 +37,48 @@ func MovingBrushCollisionQuery(cmd *Commands) CharacterCollisionQuery {
 		})
 		return best
 	}
+}
+
+type movingBrushCollisionBounds struct {
+	Entity EntityId
+	Min    mgl32.Vec3
+	Max    mgl32.Vec3
+}
+
+func collectMovingBrushCollisionBounds(cmd *Commands, bounds []movingBrushCollisionBounds) []movingBrushCollisionBounds {
+	bounds = bounds[:0]
+	if cmd == nil {
+		return bounds
+	}
+	MakeQuery2[TransformComponent, MovingBrushComponent](cmd).Map(func(eid EntityId, _ *TransformComponent, brush *MovingBrushComponent) bool {
+		if brush != nil {
+			bounds = append(bounds, movingBrushCollisionBounds{
+				Entity: eid,
+				Min:    brush.BoundsCenter.Sub(brush.BoundsHalfExtents),
+				Max:    brush.BoundsCenter.Add(brush.BoundsHalfExtents),
+			})
+		}
+		return true
+	})
+	return bounds
+}
+
+func raycastMovingBrushCollisionBounds(bounds []movingBrushCollisionBounds, origin, dir mgl32.Vec3, maxDistance float32, acceptEntity func(EntityId, bool) bool) RaycastHit {
+	if maxDistance <= 0 {
+		return RaycastHit{}
+	}
+	best := RaycastHit{}
+	for _, brush := range bounds {
+		if acceptEntity != nil && !acceptEntity(brush.Entity, true) {
+			continue
+		}
+		t, normal, ok := rayAABBHit(origin, dir, brush.Min, brush.Max, maxDistance)
+		if !ok || (best.Hit && best.T <= t) {
+			continue
+		}
+		best = RaycastHit{Hit: true, T: t, Normal: normal, Entity: brush.Entity}
+	}
+	return best
 }
 
 func rayAABBHit(origin, dir, minB, maxB mgl32.Vec3, maxDistance float32) (float32, mgl32.Vec3, bool) {

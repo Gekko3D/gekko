@@ -3,6 +3,7 @@ package gekko
 import (
 	"math"
 	"reflect"
+	"sort"
 
 	"github.com/gekko3d/gekko/content"
 	"github.com/go-gl/mathgl/mgl32"
@@ -32,6 +33,34 @@ type GroundedCharacterMotorDefaults struct {
 }
 
 type GroundedPlayerControllerDefaults = GroundedCharacterMotorDefaults
+
+type groundedCharacterEnvironmentState struct {
+	active           bool
+	waters           []waterInteractionBody
+	ladders          []groundedCharacterLadder
+	movingBrushes    []movingBrushCollisionBounds
+	movingBrushQuery CharacterCollisionQuery
+}
+
+type groundedCharacterLadder struct {
+	Entity EntityId
+	Volume LadderVolumeComponent
+}
+
+func (state *groundedCharacterEnvironmentState) raycastMovingBrushes(origin, dir mgl32.Vec3, maxDistance float32, acceptEntity func(EntityId, bool) bool) RaycastHit {
+	return raycastMovingBrushCollisionBounds(state.movingBrushes, origin, dir, maxDistance, acceptEntity)
+}
+
+func activeGroundedCharacterEnvironment(cmd *Commands) *groundedCharacterEnvironmentState {
+	if cmd == nil || cmd.app == nil {
+		return nil
+	}
+	resource, _ := cmd.app.resources[reflect.TypeOf(groundedCharacterEnvironmentState{})].(*groundedCharacterEnvironmentState)
+	if resource == nil || !resource.active {
+		return nil
+	}
+	return resource
+}
 
 // GroundedCharacterMotorModule installs camera-free character movement.
 // Games write GroundedCharacterIntentComponent from human or bot intent.
@@ -201,6 +230,11 @@ func installGroundedCharacterMotor(app *App, cmd *Commands, cfg GroundedCharacte
 				Config: effectiveGroundedPlayerControllerConfig(cfg),
 			})
 		}
+		if _, ok := app.resources[reflect.TypeOf(groundedCharacterEnvironmentState{})]; !ok {
+			environment := &groundedCharacterEnvironmentState{}
+			environment.movingBrushQuery = environment.raycastMovingBrushes
+			cmd.AddResources(environment)
+		}
 	}
 	app.UseSystem(System(groundedCharacterMotorSystem).ProfileCategory("motor_collision").InStage(Update).RunAlways())
 	app.UseSystem(System(triggerVolumeTouchSystem).ProfileCategory("motor_collision").InStage(Update).RunAlways())
@@ -316,7 +350,17 @@ func groundedPlayerInputSystem(input *Input, cmd *Commands) {
 	})
 }
 
-func groundedCharacterMotorSystem(cmd *Commands, time *Time, voxRt *VoxelRtState) {
+func groundedCharacterMotorSystem(cmd *Commands, time *Time, voxRt *VoxelRtState, environment *groundedCharacterEnvironmentState) {
+	if time == nil || time.Dt <= 0 || environment == nil {
+		return
+	}
+	// movingBrushMotionSystem is registered after this system, so these bounds
+	// remain current until every motor below has consumed them.
+	environment.waters = collectWaterInteractionBodiesInto(cmd, environment.waters)
+	environment.ladders = collectGroundedCharacterLadders(cmd, environment.ladders)
+	environment.movingBrushes = collectMovingBrushCollisionBounds(cmd, environment.movingBrushes)
+	environment.active = true
+	defer func() { environment.active = false }()
 	groundedPlayerControlSystem(cmd, time, nil, voxRt)
 }
 
@@ -713,6 +757,21 @@ func rayAABB(origin, dir, minB, maxB mgl32.Vec3, maxDistance float32) (float32, 
 	return tMin, true
 }
 
+func collectGroundedCharacterLadders(cmd *Commands, ladders []groundedCharacterLadder) []groundedCharacterLadder {
+	ladders = ladders[:0]
+	if cmd == nil {
+		return ladders
+	}
+	MakeQuery1[LadderVolumeComponent](cmd).Map(func(eid EntityId, ladder *LadderVolumeComponent) bool {
+		if ladder != nil {
+			ladders = append(ladders, groundedCharacterLadder{Entity: eid, Volume: *ladder})
+		}
+		return true
+	})
+	sort.Slice(ladders, func(i, j int) bool { return ladders[i].Entity < ladders[j].Entity })
+	return ladders
+}
+
 func findGroundedPlayerLadderVolume(cmd *Commands, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent) (EntityId, LadderVolumeComponent, bool) {
 	if cmd == nil || ctrl == nil {
 		return 0, LadderVolumeComponent{}, false
@@ -721,24 +780,22 @@ func findGroundedPlayerLadderVolume(cmd *Commands, basePos mgl32.Vec3, ctrl *Gro
 	height := defaulted(ctrl.Height, 1.8)
 	playerMin := basePos.Add(mgl32.Vec3{-radius, 0, -radius})
 	playerMax := basePos.Add(mgl32.Vec3{radius, height, radius})
-	var foundEntity EntityId
-	var foundLadder LadderVolumeComponent
-	MakeQuery1[LadderVolumeComponent](cmd).Map(func(eid EntityId, ladder *LadderVolumeComponent) bool {
-		if ladder == nil {
-			return true
-		}
-		center := ladder.BoundsCenter
-		extents := ladder.BoundsHalfExtents.Add(mgl32.Vec3{0.05, 0.05, 0.05})
+	var ladders []groundedCharacterLadder
+	if environment := activeGroundedCharacterEnvironment(cmd); environment != nil {
+		ladders = environment.ladders
+	} else {
+		ladders = collectGroundedCharacterLadders(cmd, nil)
+	}
+	for _, ladder := range ladders {
+		center := ladder.Volume.BoundsCenter
+		extents := ladder.Volume.BoundsHalfExtents.Add(mgl32.Vec3{0.05, 0.05, 0.05})
 		ladderMin := center.Sub(extents)
 		ladderMax := center.Add(extents)
 		if aabbOverlap(playerMin, playerMax, ladderMin, ladderMax) {
-			foundEntity = eid
-			foundLadder = *ladder
-			return false
+			return ladder.Entity, ladder.Volume, true
 		}
-		return true
-	})
-	return foundEntity, foundLadder, foundEntity != 0
+	}
+	return 0, LadderVolumeComponent{}, false
 }
 
 func groundedLadderMountEntry(basePos mgl32.Vec3, ladder LadderVolumeComponent, radius float32, mountFromTop bool) mgl32.Vec3 {
@@ -820,7 +877,13 @@ func findGroundedPlayerWaterBody(cmd *Commands, basePos mgl32.Vec3, ctrl *Ground
 	}
 	radius := defaulted(ctrl.Radius, 0.35)
 	height := defaulted(ctrl.Height, 1.8)
-	for _, water := range collectWaterInteractionBodies(cmd) {
+	var waters []waterInteractionBody
+	if environment := activeGroundedCharacterEnvironment(cmd); environment != nil {
+		waters = environment.waters
+	} else {
+		waters = collectWaterInteractionBodies(cmd)
+	}
+	for _, water := range waters {
 		if basePos.X()+radius < water.Center.X()-water.HalfExtents[0] ||
 			basePos.X()-radius > water.Center.X()+water.HalfExtents[0] ||
 			basePos.Z()+radius < water.Center.Z()-water.HalfExtents[1] ||

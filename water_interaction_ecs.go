@@ -292,11 +292,15 @@ func classifyWaterDisturbance(verticalSpeed, horizontalSpeed float32) WaterDistu
 }
 
 func collectWaterInteractionBodies(cmd *Commands) []waterInteractionBody {
+	return collectWaterInteractionBodiesInto(cmd, nil)
+}
+
+func collectWaterInteractionBodiesInto(cmd *Commands, bodies []waterInteractionBody) []waterInteractionBody {
+	bodies = bodies[:0]
 	if cmd == nil {
-		return nil
+		return bodies
 	}
 
-	bodies := make([]waterInteractionBody, 0, 4)
 	MakeQuery2[TransformComponent, WaterSurfaceComponent](cmd).Map(func(eid EntityId, tr *TransformComponent, water *WaterSurfaceComponent) bool {
 		if tr == nil || water == nil || !water.Enabled() {
 			return true
