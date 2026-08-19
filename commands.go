@@ -108,6 +108,10 @@ func (cmd *Commands) GetAllComponents(entityId EntityId) []any {
 	return cmd.app.ecs.getAllComponents(entityId)
 }
 
+func (cmd *Commands) EntityExists(entityId EntityId) bool {
+	return cmd != nil && cmd.app != nil && cmd.app.ecs != nil && cmd.app.ecs.entityExists(entityId)
+}
+
 func (cmd *Commands) GetComponent(entityId EntityId, componentType reflect.Type) any {
 	return cmd.app.ecs.getComponent(entityId, componentType)
 }

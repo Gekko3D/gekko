@@ -1,6 +1,9 @@
 package gekko
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 type AuthoredAssetMarkerLookup struct {
 	Entity         EntityId
@@ -15,45 +18,14 @@ func AuthoredAssetMarkerLookupForEntity(cmd *Commands, eid EntityId) (AuthoredAs
 		return AuthoredAssetMarkerLookup{}, false
 	}
 
-	lookup := AuthoredAssetMarkerLookup{Entity: eid}
-	hasRef := false
-	hasMarker := false
-	hasTransform := false
-	hasLocal := false
-
-	for _, comp := range cmd.GetAllComponents(eid) {
-		switch typed := comp.(type) {
-		case *AuthoredAssetRefComponent:
-			lookup.Ref = *typed
-			hasRef = true
-		case AuthoredAssetRefComponent:
-			lookup.Ref = typed
-			hasRef = true
-		case *AuthoredMarkerComponent:
-			lookup.Marker = *typed
-			hasMarker = true
-		case AuthoredMarkerComponent:
-			lookup.Marker = typed
-			hasMarker = true
-		case *TransformComponent:
-			lookup.Transform = *typed
-			hasTransform = true
-		case TransformComponent:
-			lookup.Transform = typed
-			hasTransform = true
-		case *LocalTransformComponent:
-			lookup.LocalTransform = *typed
-			hasLocal = true
-		case LocalTransformComponent:
-			lookup.LocalTransform = typed
-			hasLocal = true
-		}
-	}
-
-	if !hasRef || !hasMarker || lookup.Ref.Kind != AuthoredItemKindMarker || !hasTransform || !hasLocal {
+	ref, _ := cmd.GetComponent(eid, reflect.TypeOf(AuthoredAssetRefComponent{})).(*AuthoredAssetRefComponent)
+	marker, _ := cmd.GetComponent(eid, reflect.TypeOf(AuthoredMarkerComponent{})).(*AuthoredMarkerComponent)
+	transform, _ := cmd.GetComponent(eid, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
+	local, _ := cmd.GetComponent(eid, reflect.TypeOf(LocalTransformComponent{})).(*LocalTransformComponent)
+	if ref == nil || marker == nil || ref.Kind != AuthoredItemKindMarker || transform == nil || local == nil {
 		return AuthoredAssetMarkerLookup{}, false
 	}
-	return lookup, true
+	return AuthoredAssetMarkerLookup{Entity: eid, Ref: *ref, Marker: *marker, Transform: *transform, LocalTransform: *local}, true
 }
 
 func FindAuthoredAssetMarkerByName(cmd *Commands, root EntityId, name string) (AuthoredAssetMarkerLookup, bool) {
@@ -144,13 +116,9 @@ func parentForEntity(cmd *Commands, eid EntityId) (Parent, bool) {
 	if cmd == nil || eid == 0 {
 		return Parent{}, false
 	}
-	for _, comp := range cmd.GetAllComponents(eid) {
-		if parent, ok := comp.(*Parent); ok {
-			return *parent, true
-		}
-		if parent, ok := comp.(Parent); ok {
-			return parent, true
-		}
+	parent, _ := cmd.GetComponent(eid, reflect.TypeOf(Parent{})).(*Parent)
+	if parent == nil {
+		return Parent{}, false
 	}
-	return Parent{}, false
+	return *parent, true
 }

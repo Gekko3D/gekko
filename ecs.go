@@ -509,6 +509,11 @@ func (ecs *Ecs) getAllComponents(entityId EntityId) []any {
 	return res
 }
 
+func (ecs *Ecs) entityExists(entityId EntityId) bool {
+	_, ok := ecs.storage.entityIndex[entityId]
+	return ok
+}
+
 func (ecs *Ecs) getComponent(entityId EntityId, componentType reflect.Type) any {
 	archID, ok := ecs.storage.entityIndex[entityId]
 	if !ok {
