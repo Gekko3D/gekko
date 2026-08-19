@@ -30,8 +30,11 @@ type row int
 type set[T comparable] = map[T]struct{}
 
 type ecsStorage struct {
-	archetypes  map[archetypeId]*archetype
-	entityIndex map[EntityId]archetypeId
+	archetypes              map[archetypeId]*archetype
+	entityIndex             map[EntityId]archetypeId
+	archetypeGeneration     uint64
+	archetypeViewGeneration uint64
+	archetypeViews          []rooteecs.ArchetypeView
 }
 
 type Ecs struct {
@@ -266,6 +269,7 @@ func (ecs *Ecs) getOrMakeArchetype(key archetypeKey) (archetypeId, *archetype) {
 	}
 
 	ecs.storage.archetypes[id] = arch
+	ecs.storage.archetypeGeneration++
 	return id, arch
 }
 
@@ -552,9 +556,15 @@ func (ecs *Ecs) hasComponent(entityId EntityId, componentType reflect.Type) bool
 }
 
 func (ecs *Ecs) archetypeViews() []rooteecs.ArchetypeView {
+	if ecs.storage.archetypeViewGeneration == ecs.storage.archetypeGeneration {
+		return ecs.storage.archetypeViews
+	}
+
 	res := make([]rooteecs.ArchetypeView, 0, len(ecs.storage.archetypes))
 	for _, arch := range ecs.storage.archetypes {
 		res = append(res, rootArchetypeView{arch: arch})
 	}
+	ecs.storage.archetypeViews = res
+	ecs.storage.archetypeViewGeneration = ecs.storage.archetypeGeneration
 	return res
 }

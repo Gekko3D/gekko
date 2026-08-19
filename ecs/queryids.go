@@ -3,6 +3,9 @@ package ecs
 import "reflect"
 
 func IdentifyOptionals(getID func(reflect.Type) uint32, components ...any) map[uint32]struct{} {
+	if len(components) == 0 {
+		return nil
+	}
 	res := make(map[uint32]struct{})
 	for _, c := range components {
 		cType := reflect.TypeOf(c)

@@ -101,14 +101,6 @@ func (v rootArchetypeView) EachEntity(fn func(rooteecs.EntityID, int) bool) {
 	}
 }
 
-func toOptionalIDs(opt set[componentId]) map[uint32]struct{} {
-	res := make(map[uint32]struct{}, len(opt))
-	for id := range opt {
-		res[uint32(id)] = struct{}{}
-	}
-	return res
-}
-
 func filterViewsForExcludes(views []rooteecs.ArchetypeView, ecs *Ecs, excludes []any) []rooteecs.ArchetypeView {
 	if len(excludes) == 0 {
 		return views
@@ -119,7 +111,7 @@ func filterViewsForExcludes(views []rooteecs.ArchetypeView, ecs *Ecs, excludes [
 		archView := v.(rootArchetypeView)
 		excluded := false
 		for excID := range excIDs {
-			if _, ok := archView.arch.componentData[excID]; ok {
+			if _, ok := archView.arch.componentData[componentId(excID)]; ok {
 				excluded = true
 				break
 			}
@@ -135,83 +127,59 @@ func (q Query1[A]) Map(m func(EntityId, *A) bool, optionals ...any) {
 	id1 := identifyComponents1[A](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
 	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
-	rooteecs.Map1(views, uint32(id1), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A) bool {
-		return m(EntityId(id), a)
-	})
+	rooteecs.Map1(views, uint32(id1), opt, m)
 }
 
 func (q Query2[A, B]) Map(m func(EntityId, *A, *B) bool, optionals ...any) {
 	id1, id2 := identifyComponents2[A, B](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
 	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
-	rooteecs.Map2(views, uint32(id1), uint32(id2), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B) bool {
-		return m(EntityId(id), a, b)
-	})
+	rooteecs.Map2(views, uint32(id1), uint32(id2), opt, m)
 }
 
 func (q Query3[A, B, C]) Map(m func(EntityId, *A, *B, *C) bool, optionals ...any) {
 	id1, id2, id3 := identifyComponents3[A, B, C](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
 	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
-	rooteecs.Map3(views, uint32(id1), uint32(id2), uint32(id3), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C) bool {
-		return m(EntityId(id), a, b, c)
-	})
+	rooteecs.Map3(views, uint32(id1), uint32(id2), uint32(id3), opt, m)
 }
 
 func (q Query4[A, B, C, D]) Map(m func(EntityId, *A, *B, *C, *D) bool, optionals ...any) {
 	id1, id2, id3, id4 := identifyComponents4[A, B, C, D](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
 	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
-	rooteecs.Map4(views, uint32(id1), uint32(id2), uint32(id3), uint32(id4), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C, d *D) bool {
-		return m(EntityId(id), a, b, c, d)
-	})
+	rooteecs.Map4(views, uint32(id1), uint32(id2), uint32(id3), uint32(id4), opt, m)
 }
 
 func (q Query5[A, B, C, D, E]) Map(m func(EntityId, *A, *B, *C, *D, *E) bool, optionals ...any) {
 	id1, id2, id3, id4, id5 := identifyComponents5[A, B, C, D, E](q.ecs)
 	opt := identifyOptionals(q.ecs, optionals...)
 	views := filterViewsForExcludes(q.ecs.archetypeViews(), q.ecs, q.excludes)
-	rooteecs.Map5(views, uint32(id1), uint32(id2), uint32(id3), uint32(id4), uint32(id5), toOptionalIDs(opt), func(id rooteecs.EntityID, a *A, b *B, c *C, d *D, e *E) bool {
-		return m(EntityId(id), a, b, c, d, e)
-	})
+	rooteecs.Map5(views, uint32(id1), uint32(id2), uint32(id3), uint32(id4), uint32(id5), opt, m)
 }
 
-func identifyOptionals(ecs *Ecs, components ...any) set[componentId] {
-	raw := rooteecs.IdentifyOptionals(func(t reflect.Type) uint32 {
+func identifyOptionals(ecs *Ecs, components ...any) map[uint32]struct{} {
+	return rooteecs.IdentifyOptionals(func(t reflect.Type) uint32 {
 		return uint32(ecs.getComponentId(t))
 	}, components...)
-	res := make(set[componentId], len(raw))
-	for id := range raw {
-		res[componentId(id)] = struct{}{}
-	}
-	return res
 }
 
 func identifyComponents1[A any](ecs *Ecs) componentId {
 	var a A
-	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
-		return uint32(ecs.getComponentId(t))
-	}, reflect.TypeOf(a))
-	return componentId(ids[0])
+	return ecs.getComponentId(reflect.TypeOf(a))
 }
 
 func identifyComponents2[A, B any](ecs *Ecs) (componentId, componentId) {
 	var a A
 	var b B
-	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
-		return uint32(ecs.getComponentId(t))
-	}, reflect.TypeOf(a), reflect.TypeOf(b))
-	return componentId(ids[0]), componentId(ids[1])
+	return ecs.getComponentId(reflect.TypeOf(a)), ecs.getComponentId(reflect.TypeOf(b))
 }
 
 func identifyComponents3[A, B, C any](ecs *Ecs) (componentId, componentId, componentId) {
 	var a A
 	var b B
 	var c C
-	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
-		return uint32(ecs.getComponentId(t))
-	}, reflect.TypeOf(a), reflect.TypeOf(b), reflect.TypeOf(c))
-	return componentId(ids[0]), componentId(ids[1]), componentId(ids[2])
+	return ecs.getComponentId(reflect.TypeOf(a)), ecs.getComponentId(reflect.TypeOf(b)), ecs.getComponentId(reflect.TypeOf(c))
 }
 
 func identifyComponents4[A, B, C, D any](ecs *Ecs) (componentId, componentId, componentId, componentId) {
@@ -219,10 +187,7 @@ func identifyComponents4[A, B, C, D any](ecs *Ecs) (componentId, componentId, co
 	var b B
 	var c C
 	var d D
-	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
-		return uint32(ecs.getComponentId(t))
-	}, reflect.TypeOf(a), reflect.TypeOf(b), reflect.TypeOf(c), reflect.TypeOf(d))
-	return componentId(ids[0]), componentId(ids[1]), componentId(ids[2]), componentId(ids[3])
+	return ecs.getComponentId(reflect.TypeOf(a)), ecs.getComponentId(reflect.TypeOf(b)), ecs.getComponentId(reflect.TypeOf(c)), ecs.getComponentId(reflect.TypeOf(d))
 }
 
 func identifyComponents5[A, B, C, D, E any](ecs *Ecs) (componentId, componentId, componentId, componentId, componentId) {
@@ -231,10 +196,7 @@ func identifyComponents5[A, B, C, D, E any](ecs *Ecs) (componentId, componentId,
 	var c C
 	var d D
 	var e E
-	ids := rooteecs.IdentifyComponents(func(t reflect.Type) uint32 {
-		return uint32(ecs.getComponentId(t))
-	}, reflect.TypeOf(a), reflect.TypeOf(b), reflect.TypeOf(c), reflect.TypeOf(d), reflect.TypeOf(e))
-	return componentId(ids[0]), componentId(ids[1]), componentId(ids[2]), componentId(ids[3]), componentId(ids[4])
+	return ecs.getComponentId(reflect.TypeOf(a)), ecs.getComponentId(reflect.TypeOf(b)), ecs.getComponentId(reflect.TypeOf(c)), ecs.getComponentId(reflect.TypeOf(d)), ecs.getComponentId(reflect.TypeOf(e))
 }
 
 /*
