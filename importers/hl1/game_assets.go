@@ -1473,6 +1473,9 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				Message:  err.Error(),
 			})
 		} else {
+			for _, message := range geometry.AnimationDiagnostics {
+				c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.mdl_external_animation_missing", Subject: entry.SourceRef, Message: message})
+			}
 			entry.ModelInfo = &geometry.Info
 			assetName := safeHL1AssetBaseName(entry.SourceRef)
 			if entry.CatalogKind != "" {
@@ -1537,40 +1540,6 @@ func (c *hl1AssetCollector) addWithKey(kind, sourceRef, sourcePath, usedBy, key 
 				})
 			} else if built.Asset != nil {
 				asset, voxelCount, clips := built.Asset, built.VoxelCount, built.Clips
-				if entry.CatalogKind == "npc" && strings.EqualFold(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)), "hgrunt") {
-					standing, loadErr := LoadMDLAnimationClips(entry.SourcePath, []string{"standing_mp5", "standing_shotgun"}, false)
-					bonesByJoint := map[string]string{}
-					if asset.Skeleton == nil {
-						loadErr = fmt.Errorf("HGrunt asset has no skeleton")
-					} else {
-						for _, bone := range asset.Skeleton.Bones {
-							bonesByJoint[bone.JointID] = bone.ID
-						}
-					}
-					remapTracks := func(tracks []content.AssetAnimationTrackDef) {
-						for trackIndex := range tracks {
-							boneID, ok := bonesByJoint[tracks[trackIndex].TargetID]
-							if !ok {
-								loadErr = fmt.Errorf("standing animation joint %q has no asset bone", tracks[trackIndex].TargetID)
-								return
-							}
-							tracks[trackIndex].TargetID = boneID
-						}
-					}
-					for clipIndex := range standing {
-						remapTracks(standing[clipIndex].Tracks)
-						if standing[clipIndex].Blend1D != nil {
-							for sampleIndex := range standing[clipIndex].Blend1D.Samples {
-								remapTracks(standing[clipIndex].Blend1D.Samples[sampleIndex].Tracks)
-							}
-						}
-					}
-					if loadErr == nil {
-						clips = append(clips, standing...)
-					} else {
-						c.diagnostics = append(c.diagnostics, importcommon.Diagnostic{Severity: importcommon.SeverityWarning, Code: "hl1.hgrunt_standing_animation_missing", Subject: entry.CatalogID, Message: loadErr.Error()})
-					}
-				}
 				entry.GeneratedVoxelResolution = mdlAssetVoxelResolution(asset, voxelResolution)
 				if entry.CatalogKind == "weapon_held" {
 					twoHanded := hl1HeldWeaponUsesLeftGrip(entry)

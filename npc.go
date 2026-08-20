@@ -39,6 +39,9 @@ type NPCAnimationComponent struct {
 	FailedClipID            string
 	FailureReason           string
 	ActiveClipID            string
+	IdleVariantClipID       string
+	IdleVariantAnchorClipID string
+	IdleVariantSequence     uint64
 	BlendValue              float32
 	HasBlendValue           bool
 	Completed               bool

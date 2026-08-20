@@ -4,6 +4,7 @@ import (
 	"maps"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -121,12 +122,165 @@ func assetAnimationSystem(time *Time, cmd *Commands) {
 				return true
 			}
 
-			advanceAnimationPlayer(player, clip, dt)
+			if !advanceNPCIdleVariantSequenceAtBoundary(cmd, parentByEntity, root, player, animationSet, clip, dt) {
+				advanceAnimationPlayer(player, clip, dt)
+			}
 			targets := animationTargetsForRoot(cmd, parentByEntity, root, rootRef.AssetID)
 			rootTargets := animationRootTargetIDs(cmd, parentByEntity, root, rootRef.AssetID)
 			applyAnimationLayers(player, animationSet, targets, rootTargets, dt)
 			return true
 		})
+}
+
+func advanceNPCIdleVariantSequenceAtBoundary(cmd *Commands, parentByEntity map[EntityId]EntityId, root EntityId, player *AnimationPlayerComponent, animationSet *AuthoredAssetAnimationSetComponent, clip content.AssetAnimationClipDef, dt float32) bool {
+	if player == nil || !player.Playing || clip.Duration <= 0 {
+		return false
+	}
+	speed := player.Speed
+	if speed == 0 {
+		speed = 1
+	}
+	step := dt * speed
+	if step <= 0 || player.Time+step < clip.Duration {
+		return false
+	}
+	npcEntity, animation, ok := npcAnimationAncestor(cmd, parentByEntity, root)
+	if !ok || animation.ActiveClipID != player.ClipID || !npcAnimationUsesAutomaticIdle(animation, animationSet) {
+		return false
+	}
+	controlledRoot, _, _, controlled := npcAnimationAssetRoot(cmd, parentByEntity, npcEntity)
+	if !controlled || controlledRoot != root {
+		return false
+	}
+	variants := npcIdleAnimationClipIDs(animationSet, animation.IdleVariantAnchorClipID)
+	if len(variants) < 2 || !slices.Contains(variants, player.ClipID) {
+		return false
+	}
+
+	player.CrossedEvents = player.CrossedEvents[:0]
+	player.Completed = false
+	remaining := step
+	for remaining > 0 {
+		clip = animationSet.Clips[player.ClipID]
+		end := min(player.Time+remaining, clip.Duration)
+		appendForwardAnimationEvents(player, clip, player.Time, end)
+		remaining -= end - player.Time
+		player.Time = end
+		if player.Time < clip.Duration {
+			break
+		}
+
+		animation.IdleVariantSequence++
+		player.ClipID = nextNPCIdleAnimationClipID(variants, player.ClipID, npcEntity, animation.IdleVariantSequence)
+		animation.IdleVariantClipID = player.ClipID
+		player.Time = 0
+		player.Playing = true
+		player.Completed = false
+		player.Loop = animationSet.Clips[player.ClipID].Loop
+		animation.ActiveClipID = player.ClipID
+	}
+	return true
+}
+
+func npcAnimationAncestor(cmd *Commands, parentByEntity map[EntityId]EntityId, root EntityId) (EntityId, *NPCAnimationComponent, bool) {
+	for entity, i := root, 0; i < 64; i++ {
+		parent, ok := parentByEntity[entity]
+		if !ok {
+			break
+		}
+		if npc, _ := cmd.GetComponent(parent, reflect.TypeOf(NPCComponent{})).(*NPCComponent); npc != nil {
+			animation, _ := cmd.GetComponent(parent, reflect.TypeOf(NPCAnimationComponent{})).(*NPCAnimationComponent)
+			return parent, animation, animation != nil
+		}
+		entity = parent
+	}
+	return 0, nil, false
+}
+
+func npcAnimationUsesAutomaticIdle(animation *NPCAnimationComponent, animationSet *AuthoredAssetAnimationSetComponent) bool {
+	if animation == nil || animationSet == nil || animation.ExplicitClipID != "" {
+		return false
+	}
+	state := normalizeNPCAnimationToken(animation.State)
+	if state != "" && state != NPCAnimationStateIdle {
+		return false
+	}
+	if animation.LocomotionClipID != "" {
+		if _, ok := animationSet.Clips[animation.LocomotionClipID]; ok {
+			return animation.LocomotionPlaybackSpeed >= 0
+		}
+	}
+	return true
+}
+
+func npcIdleAnimationAnchorClipID(animation *NPCAnimationComponent, animationSet *AuthoredAssetAnimationSetComponent) string {
+	if animation == nil || animationSet == nil || animation.LocomotionClipID == "" {
+		return ""
+	}
+	if _, ok := animationSet.Clips[animation.LocomotionClipID]; ok {
+		return animation.LocomotionClipID
+	}
+	return ""
+}
+
+func npcIdleAnimationClipIDs(animationSet *AuthoredAssetAnimationSetComponent, anchorClipID string) []string {
+	if animationSet == nil {
+		return nil
+	}
+	if anchorClipID != "" {
+		anchor, ok := animationSet.Clips[anchorClipID]
+		if !ok {
+			return nil
+		}
+		family := npcAnimationClipFamily(anchor)
+		var variants []string
+		for _, clipID := range sortedAnimationClipIDs(animationSet.Clips) {
+			clip := animationSet.Clips[clipID]
+			if clip.Duration > 0 && !npcAnimationClipHasTag(clip, "generated:bind_pose_clip") && npcAnimationClipFamily(clip) == family {
+				variants = append(variants, clipID)
+			}
+		}
+		return variants
+	}
+	bestScore := 0
+	var variants []string
+	for _, clipID := range sortedAnimationClipIDs(animationSet.Clips) {
+		clip := animationSet.Clips[clipID]
+		if clip.Duration <= 0 || npcAnimationClipHasTag(clip, "generated:bind_pose_clip") {
+			continue
+		}
+		candidateClip := clip
+		candidateClip.ID = strings.TrimRightFunc(candidateClip.ID, unicode.IsDigit)
+		candidateClip.Name = strings.TrimRightFunc(candidateClip.Name, unicode.IsDigit)
+		score := 0
+		for _, candidate := range npcAnimationClipCandidates(NPCAnimationStateIdle) {
+			score = maxNPCAnimationScore(score, npcAnimationClipMatchScore(candidateClip, candidate))
+		}
+		switch {
+		case score > bestScore:
+			bestScore = score
+			variants = []string{clipID}
+		case score > 0 && score == bestScore:
+			variants = append(variants, clipID)
+		}
+	}
+	return variants
+}
+
+func npcAnimationClipFamily(clip content.AssetAnimationClipDef) string {
+	value := clip.ID
+	if value == "" {
+		value = clip.Name
+	}
+	return strings.TrimRightFunc(normalizeNPCAnimationToken(value), unicode.IsDigit)
+}
+
+func nextNPCIdleAnimationClipID(variants []string, current string, npcEntity EntityId, sequence uint64) string {
+	currentIndex := slices.Index(variants, current)
+	value := uint64(npcEntity)*6364136223846793005 + sequence*1442695040888963407
+	value ^= value >> 32
+	offset := 1 + int(value%uint64(len(variants)-1))
+	return variants[(currentIndex+offset)%len(variants)]
 }
 
 // SampleAuthoredAssetAnimation applies an authored asset's current base clip
@@ -290,8 +444,26 @@ func npcAnimationSystem(cmd *Commands) {
 				return true
 			}
 			clipID, playbackSpeed := anim.ExplicitClipID, anim.ExplicitPlaybackSpeed
+			automaticIdle := npcAnimationUsesAutomaticIdle(anim, animationSet)
+			if !automaticIdle {
+				anim.IdleVariantClipID, anim.IdleVariantAnchorClipID = "", ""
+			} else {
+				anchorClipID := npcIdleAnimationAnchorClipID(anim, animationSet)
+				if anim.IdleVariantAnchorClipID != anchorClipID {
+					anim.IdleVariantClipID = ""
+					anim.IdleVariantAnchorClipID = anchorClipID
+				}
+			}
 			if clipID != "" && playbackSpeed == 0 {
 				playbackSpeed = 1
+			}
+			if clipID == "" && automaticIdle && anim.IdleVariantClipID != "" {
+				if _, ok := animationSet.Clips[anim.IdleVariantClipID]; ok {
+					clipID = anim.IdleVariantClipID
+					if anim.IdleVariantAnchorClipID != "" {
+						playbackSpeed = anim.LocomotionPlaybackSpeed
+					}
+				}
 			}
 			if clipID == "" && anim.LocomotionClipID != "" {
 				if _, ok := animationSet.Clips[anim.LocomotionClipID]; ok {
@@ -303,6 +475,9 @@ func npcAnimationSystem(cmd *Commands) {
 			}
 			if clipID == "" {
 				return true
+			}
+			if automaticIdle {
+				anim.IdleVariantClipID = clipID
 			}
 			if _, ok := animationSet.Clips[clipID]; !ok {
 				if anim.ExplicitClipID != "" && (anim.FailedRequestID != anim.RequestID || anim.FailedClipID != clipID) {

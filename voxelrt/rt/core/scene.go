@@ -290,15 +290,15 @@ func (s *Scene) RaycastFiltered(ray Ray, tMax float32, accept func(*VoxelObject)
 	var bestHit *HitResult
 
 	for _, obj := range s.Objects {
-		if accept != nil && !accept(obj) {
-			continue
-		}
 		// 1. Broad phase: World AABB
 		if obj.WorldAABB == nil {
 			continue
 		}
 		tMin, tMaxAABB := intersectAABB(ray, obj.WorldAABB[0], obj.WorldAABB[1])
 		if tMin > tMaxAABB || tMaxAABB < 0 || tMin > closestT {
+			continue
+		}
+		if accept != nil && !accept(obj) {
 			continue
 		}
 

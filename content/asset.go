@@ -151,6 +151,7 @@ type AssetAnimationClipDef struct {
 	FPS             float32                   `json:"fps,omitempty"`
 	Duration        float32                   `json:"duration,omitempty"`
 	Loop            bool                      `json:"loop,omitempty"`
+	ActivityWeight  *int                      `json:"activity_weight,omitempty"`
 	Events          []AssetAnimationEventDef  `json:"events,omitempty"`
 	Tracks          []AssetAnimationTrackDef  `json:"tracks,omitempty"`
 	Blend1D         *AssetAnimationBlend1DDef `json:"blend_1d,omitempty"`

@@ -58,6 +58,9 @@ func main() {
 	if err != nil {
 		fatalf("load mdl: %v", err)
 	}
+	for _, diagnostic := range geometry.AnimationDiagnostics {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", diagnostic)
+	}
 	built, err := hl1.BuildMDLVoxelAssetDocuments(geometry, hl1.MDLVoxelAssetOptions{
 		Name:                name,
 		SourceRef:           sourceRef,

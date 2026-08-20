@@ -635,14 +635,15 @@ func mdlBindPoseAnimationClip(seq MDLSequenceInfo, targets []mdlAnimationBindTar
 		})
 	}
 	return content.AssetAnimationClipDef{
-		ID:       id,
-		Name:     name,
-		FPS:      fps,
-		Duration: duration,
-		Loop:     seq.Loop,
-		Events:   mdlAnimationEvents(seq, fps),
-		Tracks:   tracks,
-		Tags:     mdlAnimationTags(seq, "generated:bind_pose_clip"),
+		ID:             id,
+		Name:           name,
+		FPS:            fps,
+		Duration:       duration,
+		Loop:           seq.Loop,
+		ActivityWeight: &seq.ActivityWeight,
+		Events:         mdlAnimationEvents(seq, fps),
+		Tracks:         tracks,
+		Tags:           mdlAnimationTags(seq, "generated:bind_pose_clip"),
 	}, true
 }
 
@@ -659,7 +660,7 @@ func mdlDecodedAnimationClip(seq MDLSequenceInfo, bones []MDLBoneInfo, targets [
 	}
 
 	clip := content.AssetAnimationClipDef{
-		ID: id, Name: name, FPS: fps, Duration: duration, Loop: seq.Loop,
+		ID: id, Name: name, FPS: fps, Duration: duration, Loop: seq.Loop, ActivityWeight: &seq.ActivityWeight,
 		Events: mdlAnimationEvents(seq, fps), Tags: mdlAnimationTags(seq, "generated:sequence_clip"),
 	}
 	if len(seq.BlendAnimations) > 0 {

@@ -1142,11 +1142,11 @@ Catalog-wide model discovery is limited to the base `valve` and
 when their directories are passed explicitly with `-resource-dir`; sibling
 game/mod directories are never imported implicitly.
 
-Player and NPC `.gkasset` files reference central rig-bound `.gkanim` documents for
-source sequences the importer can decode; clips are never embedded. External
-GoldSrc sequence groups currently produce bind-pose clips rather than decoded
-motion. Weapon world models are static visual assets and reference no animation
-sets.
+Player and NPC `.gkasset` files reference central rig-bound `.gkanim` documents;
+clips are never embedded. External GoldSrc sequence groups are loaded from their
+companion MDL files and decoded with the base model's skeleton. Missing or invalid
+group files emit import diagnostics and retain the existing safe fallback. Weapon
+world models are static visual assets and reference no animation sets.
 
 Known NPC models are cataloged once under stable `models.imported.*` keys. Map
 imports reuse those entries and only import a map-specific NPC model when no

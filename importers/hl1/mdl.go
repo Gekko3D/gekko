@@ -78,6 +78,7 @@ type MDLSequenceInfo struct {
 	Flags           int                      `json:"flags,omitempty"`
 	Loop            bool                     `json:"loop,omitempty"`
 	Activity        int                      `json:"activity"`
+	ActivityWeight  int                      `json:"activity_weight"`
 	FPS             float32                  `json:"fps,omitempty"`
 	FrameCount      int                      `json:"frame_count,omitempty"`
 	NumBlends       int                      `json:"num_blends,omitempty"`
@@ -119,9 +120,10 @@ type MDLTexturePixels struct {
 }
 
 type MDLGeometry struct {
-	Info      MDLInfo
-	Textures  []MDLTexturePixels
-	Triangles []MDLTriangle
+	Info                 MDLInfo
+	Textures             []MDLTexturePixels
+	Triangles            []MDLTriangle
+	AnimationDiagnostics []string
 }
 
 // MDLGeometryOptions selects source-model variants before voxelization.
@@ -189,22 +191,20 @@ func LoadMDLGeometryWithOptions(path string, opts MDLGeometryOptions) (MDLGeomet
 	if err != nil {
 		return MDLGeometry{}, err
 	}
-	if len(geometry.Textures) > 0 {
-		return geometry, nil
+	if len(geometry.Textures) == 0 {
+		if companionPath := mdlTextureCompanionPath(path); companionPath != "" {
+			if companionData, readErr := os.ReadFile(companionPath); readErr == nil {
+				if textures, textureInfos := parseMDLExternalTexturePixels(companionData); len(textures) > 0 {
+					geometry, err = parseMDLGeometryWithExternalTexturesOptions(data, textures, textureInfos, opts)
+					if err != nil {
+						return MDLGeometry{}, err
+					}
+				}
+			}
+		}
 	}
-	companionPath := mdlTextureCompanionPath(path)
-	if companionPath == "" {
-		return geometry, nil
-	}
-	companionData, err := os.ReadFile(companionPath)
-	if err != nil {
-		return geometry, nil
-	}
-	textures, textureInfos := parseMDLExternalTexturePixels(companionData)
-	if len(textures) == 0 {
-		return geometry, nil
-	}
-	return parseMDLGeometryWithExternalTexturesOptions(data, textures, textureInfos, opts)
+	geometry.AnimationDiagnostics = decodeMDLExternalSequenceGroups(data, path, &geometry.Info, nil)
+	return geometry, nil
 }
 
 func ParseMDLInfo(data []byte) (MDLInfo, error) {
@@ -512,17 +512,18 @@ func parseMDLSequences(data []byte, offset int, count int, bones []MDLBoneInfo) 
 	for i := 0; i < count; i++ {
 		base := offset + i*sequenceSize
 		seq := MDLSequenceInfo{
-			Name:       cString(data[base : base+32]),
-			FPS:        readFloat32(data, base+32),
-			Flags:      int(readInt32(data, base+36)),
-			Activity:   int(readInt32(data, base+40)),
-			FrameCount: int(readInt32(data, base+56)),
-			NumBlends:  int(readInt32(data, base+120)),
-			BlendType:  [2]int{int(readInt32(data, base+128)), int(readInt32(data, base+132))},
-			BlendStart: [2]float32{readFloat32(data, base+136), readFloat32(data, base+140)},
-			BlendEnd:   [2]float32{readFloat32(data, base+144), readFloat32(data, base+148)},
-			AnimIndex:  int(readInt32(data, base+124)),
-			SeqGroup:   int(readInt32(data, base+156)),
+			Name:           cString(data[base : base+32]),
+			FPS:            readFloat32(data, base+32),
+			Flags:          int(readInt32(data, base+36)),
+			Activity:       int(readInt32(data, base+40)),
+			ActivityWeight: int(readInt32(data, base+44)),
+			FrameCount:     int(readInt32(data, base+56)),
+			NumBlends:      int(readInt32(data, base+120)),
+			BlendType:      [2]int{int(readInt32(data, base+128)), int(readInt32(data, base+132))},
+			BlendStart:     [2]float32{readFloat32(data, base+136), readFloat32(data, base+140)},
+			BlendEnd:       [2]float32{readFloat32(data, base+144), readFloat32(data, base+148)},
+			AnimIndex:      int(readInt32(data, base+124)),
+			SeqGroup:       int(readInt32(data, base+156)),
 		}
 		seq.Loop = seq.Flags&mdlSequenceFlagLooping != 0
 		seq.Events = parseMDLSequenceEvents(data, int(readInt32(data, base+52)), int(readInt32(data, base+48)))

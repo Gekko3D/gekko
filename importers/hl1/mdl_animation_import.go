@@ -9,9 +9,9 @@ import (
 	"github.com/gekko3d/gekko/content"
 )
 
-// LoadMDLAnimationClips decodes selected in-file GoldSrc sequences into
-// semantic-joint tracks. Consumers can bake those tracks onto a target rig;
-// runtime playback remains source-format agnostic.
+// LoadMDLAnimationClips decodes selected GoldSrc sequences into semantic-joint
+// tracks. Consumers can bake those tracks onto a target rig; runtime playback
+// remains source-format agnostic.
 func LoadMDLAnimationClips(path string, sequenceNames []string, lockRootMotion bool) ([]content.AssetAnimationClipDef, error) {
 	if len(sequenceNames) == 0 {
 		return nil, fmt.Errorf("at least one GoldSrc sequence is required")
@@ -24,32 +24,58 @@ func LoadMDLAnimationClips(path string, sequenceNames []string, lockRootMotion b
 	if err != nil {
 		return nil, err
 	}
+	if diagnostics := decodeMDLExternalSequenceGroups(data, path, &info, sequenceNames); len(diagnostics) > 0 {
+		return nil, fmt.Errorf("%s", strings.Join(diagnostics, "; "))
+	}
+	return buildMDLAnimationClips(info, sequenceNames, lockRootMotion)
+}
+
+func decodeMDLExternalSequenceGroups(data []byte, path string, info *MDLInfo, sequenceNames []string) []string {
+	if info == nil {
+		return nil
+	}
 	groups := map[int][]byte{}
+	failedGroups := map[int]bool{}
+	var diagnostics []string
 	for index := range info.Sequences {
 		sequence := &info.Sequences[index]
-		if sequence.SeqGroup == 0 || !containsFold(sequenceNames, sequence.Name) {
+		if sequence.SeqGroup <= 0 || (len(sequenceNames) > 0 && !containsFold(sequenceNames, sequence.Name)) {
+			continue
+		}
+		if failedGroups[sequence.SeqGroup] {
 			continue
 		}
 		groupData := groups[sequence.SeqGroup]
 		if groupData == nil {
 			groupPath, err := mdlSequenceGroupPath(data, path, sequence.SeqGroup)
 			if err != nil {
-				return nil, err
+				diagnostics = append(diagnostics, err.Error())
+				failedGroups[sequence.SeqGroup] = true
+				continue
 			}
 			groupData, err = os.ReadFile(groupPath)
 			if err != nil {
-				return nil, fmt.Errorf("read GoldSrc sequence group %d: %w", sequence.SeqGroup, err)
+				diagnostics = append(diagnostics, fmt.Sprintf("read GoldSrc sequence group %d (%s): %v", sequence.SeqGroup, filepath.Base(groupPath), err))
+				failedGroups[sequence.SeqGroup] = true
+				continue
 			}
 			if err := validateMDLSequenceGroup(groupData); err != nil {
-				return nil, fmt.Errorf("GoldSrc sequence group %d: %w", sequence.SeqGroup, err)
+				diagnostics = append(diagnostics, fmt.Sprintf("GoldSrc sequence group %d (%s): %v", sequence.SeqGroup, filepath.Base(groupPath), err))
+				failedGroups[sequence.SeqGroup] = true
+				continue
 			}
 			groups[sequence.SeqGroup] = groupData
 		}
 		external := *sequence
 		external.SeqGroup = 0
-		setMDLSequenceAnimations(sequence, decodeMDLSequenceAnimationBlends(groupData, external, info.Bones))
+		blends := decodeMDLSequenceAnimationBlends(groupData, external, info.Bones)
+		if len(blends) == 0 {
+			diagnostics = append(diagnostics, fmt.Sprintf("GoldSrc sequence %q in external group %d has no decodable animation", sequence.Name, sequence.SeqGroup))
+			continue
+		}
+		setMDLSequenceAnimations(sequence, blends)
 	}
-	return buildMDLAnimationClips(info, sequenceNames, lockRootMotion)
+	return diagnostics
 }
 
 func ParseMDLAnimationClips(data []byte, sequenceNames []string, lockRootMotion bool) ([]content.AssetAnimationClipDef, error) {
