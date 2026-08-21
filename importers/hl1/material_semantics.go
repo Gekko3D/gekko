@@ -125,7 +125,7 @@ func materialSemantics(textureName string) hl1MaterialSemantics {
 		kind = "wood"
 		roughness = 0.8
 		addTag("material:wood")
-	case containsAny(name, "dirt", "mud", "sand", "grass", "ground"):
+	case containsAny(name, "dirt", "mud", "sand", "grass", "ground", "grnd"):
 		kind = "terrain"
 		roughness = 1
 		addTag("material:terrain")
