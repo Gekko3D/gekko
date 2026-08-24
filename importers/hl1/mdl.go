@@ -175,7 +175,19 @@ func LoadMDLInfo(path string) (MDLInfo, error) {
 	if err != nil {
 		return MDLInfo{}, err
 	}
-	return ParseMDLInfo(data)
+	info, err := ParseMDLInfo(data)
+	if err != nil || info.TextureCount != 0 {
+		return info, err
+	}
+	if companionPath := mdlTextureCompanionPath(path); companionPath != "" {
+		if companionData, readErr := os.ReadFile(companionPath); readErr == nil {
+			if companion, parseErr := ParseMDLInfo(companionData); parseErr == nil {
+				info.TextureCount, info.Textures = companion.TextureCount, companion.Textures
+				info.SkinRefCount, info.SkinFamilyCount = companion.SkinRefCount, companion.SkinFamilyCount
+			}
+		}
+	}
+	return info, nil
 }
 
 func LoadMDLGeometry(path string) (MDLGeometry, error) {
@@ -195,7 +207,11 @@ func LoadMDLGeometryWithOptions(path string, opts MDLGeometryOptions) (MDLGeomet
 		if companionPath := mdlTextureCompanionPath(path); companionPath != "" {
 			if companionData, readErr := os.ReadFile(companionPath); readErr == nil {
 				if textures, textureInfos := parseMDLExternalTexturePixels(companionData); len(textures) > 0 {
-					geometry, err = parseMDLGeometryWithExternalTexturesOptions(data, textures, textureInfos, opts)
+					companionInfo, infoErr := ParseMDLInfo(companionData)
+					if infoErr != nil {
+						return MDLGeometry{}, infoErr
+					}
+					geometry, err = parseMDLGeometryWithExternalTexturesOptions(data, textures, textureInfos, companionData, &companionInfo, opts)
 					if err != nil {
 						return MDLGeometry{}, err
 					}
@@ -263,14 +279,14 @@ func ParseMDLGeometry(data []byte) (MDLGeometry, error) {
 }
 
 func ParseMDLGeometryWithOptions(data []byte, opts MDLGeometryOptions) (MDLGeometry, error) {
-	return parseMDLGeometryWithExternalTexturesOptions(data, nil, nil, opts)
+	return parseMDLGeometryWithExternalTexturesOptions(data, nil, nil, nil, nil, opts)
 }
 
 func ParseMDLGeometryWithExternalTextures(data []byte, externalTextures []MDLTexturePixels, externalTextureInfos []MDLTextureInfo) (MDLGeometry, error) {
-	return parseMDLGeometryWithExternalTexturesOptions(data, externalTextures, externalTextureInfos, MDLGeometryOptions{})
+	return parseMDLGeometryWithExternalTexturesOptions(data, externalTextures, externalTextureInfos, nil, nil, MDLGeometryOptions{})
 }
 
-func parseMDLGeometryWithExternalTexturesOptions(data []byte, externalTextures []MDLTexturePixels, externalTextureInfos []MDLTextureInfo, opts MDLGeometryOptions) (MDLGeometry, error) {
+func parseMDLGeometryWithExternalTexturesOptions(data []byte, externalTextures []MDLTexturePixels, externalTextureInfos []MDLTextureInfo, externalSkinData []byte, externalSkinInfo *MDLInfo, opts MDLGeometryOptions) (MDLGeometry, error) {
 	info, err := ParseMDLInfo(data)
 	if err != nil {
 		return MDLGeometry{}, err
@@ -287,6 +303,11 @@ func parseMDLGeometryWithExternalTexturesOptions(data []byte, externalTextures [
 				info.Textures = append(info.Textures, texture.Info)
 			}
 		}
+	}
+	skinData, skinInfo := data, info
+	if externalSkinInfo != nil && len(externalSkinData) > 0 {
+		skinData, skinInfo = externalSkinData, *externalSkinInfo
+		info.SkinRefCount, info.SkinFamilyCount = skinInfo.SkinRefCount, skinInfo.SkinFamilyCount
 	}
 	geometry := MDLGeometry{
 		Info:     info,
@@ -305,7 +326,7 @@ func parseMDLGeometryWithExternalTexturesOptions(data []byte, externalTextures [
 			models = models[:1]
 		}
 		for _, model := range models {
-			geometry.Triangles = append(geometry.Triangles, decodeMDLModelTriangles(data, model, info, geometry.Textures, opts.SkinFamily)...)
+			geometry.Triangles = append(geometry.Triangles, decodeMDLModelTriangles(data, model, skinData, skinInfo, geometry.Textures, opts.SkinFamily)...)
 		}
 	}
 	geometry.Info.DecodedTriangleCount = len(geometry.Triangles)
@@ -882,10 +903,10 @@ func decodeMDLMeshes(data []byte, offset int, count int) []decodedMDLMesh {
 	return out
 }
 
-func decodeMDLModelTriangles(data []byte, model decodedMDLModel, info MDLInfo, textures []MDLTexturePixels, skinFamily int) []MDLTriangle {
+func decodeMDLModelTriangles(data []byte, model decodedMDLModel, skinData []byte, skinInfo MDLInfo, textures []MDLTexturePixels, skinFamily int) []MDLTriangle {
 	out := make([]MDLTriangle, 0)
 	for _, mesh := range model.meshes {
-		textureIndex := mdlTextureIndexForSkinRef(data, info, mesh.skinRef, skinFamily)
+		textureIndex := mdlTextureIndexForSkinRef(skinData, skinInfo, mesh.skinRef, skinFamily)
 		out = append(out, decodeMDLTriangleCommands(data, mesh.triangleCommandIndex, textureIndex, model.vertices, textures)...)
 	}
 	return out

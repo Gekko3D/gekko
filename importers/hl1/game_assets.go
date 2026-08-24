@@ -515,7 +515,7 @@ func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []s
 			}
 			for _, variant := range hl1NPCModelVariants(ref, info) {
 				id := safeMDLAssetID(strings.TrimSuffix(ref, filepath.Ext(ref))) + variant.suffix
-				c.addCatalogModel(kind, ref, path, id, variant.bodygroupModels, 0)
+				c.addCatalogModel(kind, ref, path, id, variant.bodygroupModels, variant.skinFamily)
 			}
 			continue
 		}
@@ -538,6 +538,7 @@ func (c *hl1AssetCollector) addCatalogModels(kind, resourceDir string, paths []s
 
 type hl1NPCModelVariant struct {
 	bodygroupModels []int
+	skinFamily      int
 	suffix          string
 }
 
@@ -550,6 +551,13 @@ func hl1NPCModelVariants(sourceRef string, info MDLInfo) []hl1NPCModelVariant {
 				models[index] = 2
 				return []hl1NPCModelVariant{{bodygroupModels: models, suffix: "_gone"}}
 			}
+		}
+	}
+	if base == "houndeye" && info.SkinFamilyCount >= 3 {
+		return []hl1NPCModelVariant{
+			{bodygroupModels: models},
+			{bodygroupModels: append([]int(nil), models...), skinFamily: 1, suffix: "_eye_1"},
+			{bodygroupModels: append([]int(nil), models...), skinFamily: 2, suffix: "_eye_2"},
 		}
 	}
 	if base != "hgrunt" {
@@ -1257,7 +1265,8 @@ func hl1GenericAssetKey(entry GameAssetManifestEntry) string {
 	case "npc":
 		if id := safeMDLAssetID(strings.TrimSuffix(entry.SourceRef, filepath.Ext(entry.SourceRef))); id != "" {
 			key := "models.imported." + id
-			if strings.EqualFold(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)), "hgrunt") {
+			base := strings.ToLower(strings.TrimSuffix(filepath.Base(entry.SourceRef), filepath.Ext(entry.SourceRef)))
+			if base == "hgrunt" || base == "houndeye" {
 				suffix := strings.TrimPrefix(entry.CatalogID, id)
 				suffix = strings.TrimPrefix(suffix, "_")
 				if suffix != "" {

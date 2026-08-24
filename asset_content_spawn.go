@@ -63,6 +63,14 @@ func PreparedAuthoredAssetPartGeometry(prepared *PreparedAuthoredAsset, partID s
 	return part.model, ok && part.model != (AssetId{})
 }
 
+func PreparedAuthoredAssetPartPalette(prepared *PreparedAuthoredAsset, partID string) (AssetId, bool) {
+	if prepared == nil {
+		return AssetId{}, false
+	}
+	part, ok := prepared.parts[partID]
+	return part.palette, ok && part.palette != (AssetId{})
+}
+
 // PreparedAuthoredAssetPartLocalTransform returns the authored local transform
 // that belongs to a prepared geometry variant.
 func PreparedAuthoredAssetPartLocalTransform(prepared *PreparedAuthoredAsset, partID string) (LocalTransformComponent, bool) {
