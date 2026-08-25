@@ -11,6 +11,11 @@ Use it when working on:
 
 For the top-level level format, see [`levels.md`](levels.md).
 
+For the 15 km island target, use the
+[`island-streaming.md`](island-streaming.md) implementation plan. Its global
+squad/offline-to-tactical navigation companion is
+[`actiongame/docs/island-strategy-navigation.md`](../../../actiongame/docs/island-strategy-navigation.md).
+
 ## World Data Layers
 
 The current stack has four related layers:
@@ -164,6 +169,10 @@ Important public entry point:
 - `StartStreamedLevelRuntime(...)`
 
 ## Long-Term Streaming Plan
+
+The finite open-world implementation sequence and terrain/`.gkworld` v3 page
+contracts are defined in [Island Streaming](island-streaming.md). This section
+records the general streaming model and the existing sector/proxy baseline.
 
 The current streamed runtime is chunk-radius based:
 

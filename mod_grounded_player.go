@@ -36,6 +36,7 @@ type GroundedPlayerControllerDefaults = GroundedCharacterMotorDefaults
 
 type groundedCharacterEnvironmentState struct {
 	active           bool
+	voxelRuntime     *VoxelRtState
 	waters           []waterInteractionBody
 	ladders          []groundedCharacterLadder
 	movingBrushes    []movingBrushCollisionBounds
@@ -354,6 +355,7 @@ func groundedCharacterMotorSystem(cmd *Commands, time *Time, voxRt *VoxelRtState
 	if time == nil || time.Dt <= 0 || environment == nil {
 		return
 	}
+	environment.voxelRuntime = voxRt
 	// movingBrushMotionSystem is registered after this system, so these bounds
 	// remain current until every motor below has consumed them.
 	environment.waters = collectWaterInteractionBodiesInto(cmd, environment.waters)

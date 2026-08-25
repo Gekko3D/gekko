@@ -1,6 +1,9 @@
 package gekko
 
-import "github.com/go-gl/mathgl/mgl32"
+import (
+	"github.com/gekko3d/gekko/content"
+	"github.com/go-gl/mathgl/mgl32"
+)
 
 type MovingBrushComponent struct {
 	Kind               string
@@ -556,38 +559,54 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 				brush.ClosedRotation = mgl32.QuatIdent()
 			}
 		}
+		nextTransform, nextBrush := *tr, *brush
 		switch {
-		case brush.PathTarget != "":
-			updateMovingBrushPath(cmd, tr, brush, dt)
-		case brush.MotionKind == "rotate":
-			updateMovingBrushRotation(tr, brush, dt)
+		case nextBrush.PathTarget != "":
+			updateMovingBrushPath(cmd, &nextTransform, &nextBrush, dt)
+		case nextBrush.MotionKind == "rotate":
+			updateMovingBrushRotation(&nextTransform, &nextBrush, dt)
 		default:
-			updateMovingBrushLinear(tr, brush, dt)
+			updateMovingBrushLinear(&nextTransform, &nextBrush, dt)
 		}
-		updateMovingBrushOpenWait(tr, brush, dt)
-		if brush.MotionKind == "rotate" {
-			axis := brush.RotationAxis
-			if axis.LenSqr() <= 1e-6 {
-				axis = mgl32.Vec3{0, 1, 0}
-			} else {
-				axis = axis.Normalize()
-			}
-			rot := mgl32.QuatRotate(mgl32.DegToRad(brush.CurrentAngle), axis)
-			brush.BoundsCenter = brush.RotationOrigin.Add(rot.Rotate(brush.ClosedBoundsCenter.Sub(brush.RotationOrigin)))
-			brush.BoundsHalfExtents = rotatedAABBHalfExtents(brush.ClosedHalfExtents, rot)
+		updateMovingBrushOpenWait(&nextTransform, &nextBrush, dt)
+		if nextBrush.MotionKind == "rotate" {
+			nextBrush.BoundsCenter, nextBrush.BoundsHalfExtents = movingBrushRotatedBounds(&nextBrush, nextBrush.CurrentAngle)
 		} else {
-			progress := tr.Position.Sub(brush.ClosedPosition)
-			brush.BoundsCenter = brush.ClosedBoundsCenter.Add(progress)
-			brush.BoundsHalfExtents = brush.ClosedHalfExtents
+			progress := nextTransform.Position.Sub(nextBrush.ClosedPosition)
+			nextBrush.BoundsCenter = nextBrush.ClosedBoundsCenter.Add(progress)
+			nextBrush.BoundsHalfExtents = nextBrush.ClosedHalfExtents
 		}
+		delta := nextTransform.Position.Sub(previousPosition)
+		if brush.NavigationRole == content.NavigationRoleDoor && movingBrushDoorObstructed(cmd, brush, &nextBrush) {
+			if !brush.Open {
+				RequestMovingBrushNavigationStop(brush, "open")
+			}
+			return true
+		}
+		if brush.NavigationRole == content.NavigationRoleCarrier && !movingBrushRidersCanMove(cmd, eid, delta) {
+			return true
+		}
+		*tr, *brush = nextTransform, nextBrush
 		if local, ok := localTransformForEntity(cmd, eid); ok {
 			local.Position = tr.Position
 			local.Rotation = tr.Rotation
 			local.Scale = tr.Scale
 		}
-		moveMovingBrushRiders(cmd, eid, previousCenter, previousHalfExtents, tr.Position.Sub(previousPosition))
+		moveMovingBrushRiders(cmd, eid, previousCenter, previousHalfExtents, delta)
 		return true
 	})
+}
+
+func movingBrushRotatedBounds(brush *MovingBrushComponent, angle float32) (mgl32.Vec3, mgl32.Vec3) {
+	axis := brush.RotationAxis
+	if axis.LenSqr() <= 1e-6 {
+		axis = mgl32.Vec3{0, 1, 0}
+	} else {
+		axis = axis.Normalize()
+	}
+	rotation := mgl32.QuatRotate(mgl32.DegToRad(angle), axis)
+	center := brush.RotationOrigin.Add(rotation.Rotate(brush.ClosedBoundsCenter.Sub(brush.RotationOrigin)))
+	return center, rotatedAABBHalfExtents(brush.ClosedHalfExtents, rotation)
 }
 
 func rotatedAABBHalfExtents(half mgl32.Vec3, rotation mgl32.Quat) mgl32.Vec3 {
