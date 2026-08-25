@@ -170,15 +170,9 @@ func (e *runtimeVoxelEdit) include(other runtimeVoxelEdit) {
 		*e = other
 		return
 	}
-	// Additions need an immediate blocker and a rebuild. When a batch mixes
-	// additions and removals, retain only the addition bounds used by that
-	// blocker; removal-only batches retain their bounds for nav-impact checks.
-	if e.Added != other.Added {
-		if other.Added {
-			*e = other
-		}
-		return
-	}
+	// Any addition needs an immediate blocker and a rebuild, while the full
+	// coalesced bounds are still needed to rebuild mixed edit batches.
+	e.Added = e.Added || other.Added
 	for axis := 0; axis < 3; axis++ {
 		e.Min[axis] = min(e.Min[axis], other.Min[axis])
 		e.Max[axis] = max(e.Max[axis], other.Max[axis])

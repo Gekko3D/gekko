@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	AutoNavJumpOwnerID  = "__auto_jump"
-	AutoNavClimbOwnerID = "__auto_climb"
+	AutoNavJumpOwnerID        = "__auto_jump"
+	AutoNavClimbOwnerID       = "__auto_climb"
+	autoNavClimbCrossingExtra = float32(0.45)
 )
 
 type navJumpSpan struct {
@@ -245,7 +246,7 @@ func connectNavGraphClimbs(sources []NavSourceTileDef, graphs []NavGraphTileDef,
 	type direction struct{ X, Z int }
 	directions := [...]direction{{X: -1}, {X: -1, Z: -1}, {Z: -1}, {X: 1, Z: -1}, {X: 1}, {X: 1, Z: 1}, {Z: 1}, {X: -1, Z: 1}}
 	insetSteps := max(1, int(math.Ceil(float64((profile.Radius+voxelResolution*0.5)/voxelResolution))))
-	maxDistance := profile.Radius*2 + 0.45
+	maxDistance := profile.Radius*2 + autoNavClimbCrossingExtra
 	maxSteps := max(1, int(math.Ceil(float64(maxDistance/voxelResolution))))
 	best := make(map[navJumpRegionPair]navClimbCandidate)
 	for boundaryColumn, boundarySpans := range columns {

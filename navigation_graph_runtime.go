@@ -697,7 +697,7 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		state.Metrics.NavigationRebuildCompletedCount++
 		state.Metrics.NavigationRebuildCompletedRevision = result.EditGeneration
 		if result.Err != nil {
-			state.Metrics.NavigationRebuildTerminalReason = "error"
+			state.Metrics.NavigationRebuildTerminalReason = "failed"
 			state.InitErr = result.Err
 			return
 		}
@@ -717,7 +717,7 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		if !navigationRebuildChangesResidentTopology(state, result.Result) {
 			state.Metrics.NavigationRebuildDiscardedCount++
 			state.Metrics.NavigationRebuildDiscardedRevision = result.EditGeneration
-			state.Metrics.NavigationRebuildTerminalReason = "topology_unchanged"
+			state.Metrics.NavigationRebuildTerminalReason = "unchanged"
 			retireNavigationEditBlockers(state, result.EditGeneration)
 			break
 		}
@@ -736,8 +736,11 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 	}
 	select {
 	case result := <-state.navigationOverlays:
-		state.navigationOverlayActive = false
 		if result.RuntimeGeneration != state.Generation {
+			break
+		}
+		state.navigationOverlayActive = false
+		if result.OverlayGeneration != state.navigationOverlayRequestedGen {
 			break
 		}
 		if result.LoadGeneration != 0 {
@@ -745,11 +748,8 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 				break
 			}
 			if result.Err != nil {
-				if result.OverlayGeneration == state.navigationOverlayRequestedGen {
-					state.InitErr = result.Err
-					return
-				}
-				break
+				state.InitErr = result.Err
+				return
 			}
 			commitStreamedNavigationOverlay(state, result)
 			state.navigationPendingSources = nil
@@ -765,11 +765,8 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			break
 		}
 		if result.Err != nil {
-			if result.OverlayGeneration == state.navigationOverlayRequestedGen {
-				state.InitErr = result.Err
-				return
-			}
-			break
+			state.InitErr = result.Err
+			return
 		}
 		commitStreamedNavigationOverlay(state, result)
 	default:

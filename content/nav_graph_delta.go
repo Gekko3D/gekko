@@ -42,7 +42,7 @@ func ExpandNavGraphDirtyTileCoordsForProfiles(modified []TerrainChunkCoordDef, p
 	}
 	horizontal, vertical := tileSize, tileSize
 	for _, profile := range profiles {
-		horizontal = maxNavDeltaFloat(horizontal, profile.Radius, profile.MaxJumpDistance)
+		horizontal = maxNavDeltaFloat(horizontal, profile.Radius, profile.MaxJumpDistance, profile.Radius*2+autoNavClimbCrossingExtra)
 		vertical = maxNavDeltaFloat(vertical, profile.Height, profile.StepHeight, profile.MaxDropHeight, profile.MaxJumpRise, profile.MaxVaultHeight, profile.MaxMantleHeight)
 	}
 	horizontalTiles := maxNavDeltaInt(1, int(math.Ceil(float64(horizontal/tileSize))))
