@@ -689,10 +689,15 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 		state.navigationRebuildActive = false
 		state.Metrics.NavigationRebuildActive = false
 		if result.EditGeneration != state.navigationEditGeneration {
+			state.Metrics.NavigationRebuildDiscardedCount++
+			state.Metrics.NavigationRebuildDiscardedRevision = result.EditGeneration
+			state.Metrics.NavigationRebuildTerminalReason = "superseded"
 			break
 		}
 		state.Metrics.NavigationRebuildCompletedCount++
+		state.Metrics.NavigationRebuildCompletedRevision = result.EditGeneration
 		if result.Err != nil {
+			state.Metrics.NavigationRebuildTerminalReason = "error"
 			state.InitErr = result.Err
 			return
 		}
@@ -710,10 +715,15 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			state.navigationEditLastQueuedAt = time.Time{}
 		}
 		if !navigationRebuildChangesResidentTopology(state, result.Result) {
+			state.Metrics.NavigationRebuildDiscardedCount++
+			state.Metrics.NavigationRebuildDiscardedRevision = result.EditGeneration
+			state.Metrics.NavigationRebuildTerminalReason = "topology_unchanged"
 			retireNavigationEditBlockers(state, result.EditGeneration)
 			break
 		}
 		state.Metrics.NavigationRebuildPublishedCount++
+		state.Metrics.NavigationRebuildPublishedRevision = result.EditGeneration
+		state.Metrics.NavigationRebuildTerminalReason = "published"
 		for _, override := range result.Result.SourceOverrides {
 			delete(state.navigationIgnoredRemovals, override.ChunkCoord)
 		}
@@ -1299,6 +1309,7 @@ func commitStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState) {
 			return
 		}
 		state.navigationEditGeneration++
+		state.Metrics.NavigationRebuildRequestedRevision = state.navigationEditGeneration
 		state.Metrics.NavigationRebuildLastReason = lastReason
 		generation, now := state.navigationEditGeneration, time.Now()
 		if state.navigationEditQueuedSince.IsZero() {

@@ -113,6 +113,10 @@ type CharacterTraversalComponent struct {
 	Committed      bool
 	WasAirborne    bool
 	Blocked        bool
+	CollisionTest  string
+	CollisionStart mgl32.Vec3
+	CollisionMove  mgl32.Vec3
+	CollisionHit   CharacterCollisionHit
 }
 
 func (traversal CharacterTraversalComponent) Running() bool {
@@ -322,7 +326,7 @@ func CharacterFindTraversalTarget(voxRt *VoxelRtState, start, forward mgl32.Vec3
 		if !CharacterHasStandingClearance(voxRt, landing, collision, acceptEntity) {
 			continue
 		}
-		return CharacterTraversalTarget{Start: start, Lift: lift, Landing: landing, Height: height}, true
+		return CharacterTraversalTarget{Start: start, Lift: lift, Landing: landing, Height: rise}, true
 	}
 	return CharacterTraversalTarget{}, false
 }

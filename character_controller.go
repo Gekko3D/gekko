@@ -202,8 +202,13 @@ func characterGroundedMoveLanding(voxRt *VoxelRtState, start, candidate mgl32.Ve
 // CharacterVerticalMove sweeps the character footprint along Y and returns
 // the reachable position. The collision flag reports a ceiling or floor hit.
 func CharacterVerticalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, bool) {
+	next, _, blocked := characterVerticalMoveHit(voxRt, basePos, deltaY, cfg, acceptEntity)
+	return next, blocked
+}
+
+func characterVerticalMoveHit(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float32, cfg CharacterCollisionConfig, acceptEntity func(EntityId, bool) bool) (mgl32.Vec3, CharacterCollisionHit, bool) {
 	if !characterCollisionAvailable(voxRt, cfg.DynamicCollisionQuery) || math.Abs(float64(deltaY)) <= 1e-5 {
-		return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
+		return basePos.Add(mgl32.Vec3{0, deltaY, 0}), CharacterCollisionHit{}, false
 	}
 	cfg = effectiveCharacterCollisionConfig(cfg)
 	dirY := float32(1)
@@ -215,18 +220,23 @@ func CharacterVerticalMove(voxRt *VoxelRtState, basePos mgl32.Vec3, deltaY float
 	distance := float32(math.Abs(float64(deltaY)))
 	const clearance = float32(0.03)
 	allowed := distance
+	var nearest CharacterCollisionHit
 	for _, offset := range CharacterVerticalCollisionOffsets(cfg.Radius) {
 		origin := basePos.Add(offset).Add(mgl32.Vec3{0, originY, 0})
 		hit := characterRaycastFiltered(voxRt, origin, mgl32.Vec3{0, dirY, 0}, distance+clearance, acceptEntity, cfg.DynamicCollisionQuery)
 		if !hit.Hit || hit.T > distance+clearance {
 			continue
 		}
-		allowed = minCharacterCollisionFloat(allowed, maxCharacterCollisionFloat(hit.T-clearance, 0))
+		candidate := maxCharacterCollisionFloat(hit.T-clearance, 0)
+		if candidate < allowed {
+			allowed = candidate
+			nearest = CharacterCollisionHit{RaycastHit: hit, SampleY: originY, Offset: offset, Stage: "vertical"}
+		}
 	}
 	if allowed < distance {
-		return basePos.Add(mgl32.Vec3{0, dirY * allowed, 0}), true
+		return basePos.Add(mgl32.Vec3{0, dirY * allowed, 0}), nearest, true
 	}
-	return basePos.Add(mgl32.Vec3{0, deltaY, 0}), false
+	return basePos.Add(mgl32.Vec3{0, deltaY, 0}), CharacterCollisionHit{}, false
 }
 
 func CharacterVerticalCollisionOffsets(radius float32) []mgl32.Vec3 {

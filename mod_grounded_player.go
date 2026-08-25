@@ -1620,6 +1620,9 @@ func moveGroundedTraversalHorizontalDistance(cmd *Commands, voxRt *VoxelRtState,
 		CollisionConfig: groundedPlayerCharacterCollisionConfig(cmd, ctrl),
 		AcceptEntity:    acceptEntity, DisableSlide: true,
 	})
+	if result.Blocked {
+		recordGroundedTraversalCollision(ctrl, "horizontal", current, move, result.Hit)
+	}
 	used := result.Position.Sub(current)
 	used[1] = 0
 	reached := !result.Blocked && actionHorizontalDistance(result.Position, target) <= acceptance
@@ -1636,7 +1639,10 @@ func moveGroundedTraversalVertical(cmd *Commands, voxRt *VoxelRtState, current m
 	if delta < 0 {
 		move = -move
 	}
-	next, blocked := tryGroundedVerticalMove(cmd, voxRt, current, move, ctrl, acceptEntity)
+	next, hit, blocked := characterVerticalMoveHit(voxRt, current, move, groundedPlayerCharacterCollisionConfig(cmd, ctrl), acceptEntity)
+	if blocked {
+		recordGroundedTraversalCollision(ctrl, "vertical", current, mgl32.Vec3{0, move, 0}, hit)
+	}
 	used := float32(math.Abs(float64(next.Y() - current.Y())))
 	reached := float32(math.Abs(float64(targetY-next.Y()))) <= 0.04
 	if reached && (!blocked || delta < 0) {
@@ -1662,6 +1668,9 @@ func moveGroundedTraversalSegment(cmd *Commands, voxRt *VoxelRtState, current, d
 			CollisionConfig: groundedPlayerCharacterCollisionConfig(cmd, ctrl),
 			AcceptEntity:    acceptEntity, DisableDepenetration: true, DisableSlide: true,
 		})
+		if result.Blocked {
+			recordGroundedTraversalCollision(ctrl, "segment_horizontal", current, horizontal, result.Hit)
+		}
 		current = result.Position
 		if result.Blocked {
 			return current, true
@@ -1673,6 +1682,13 @@ func moveGroundedTraversalSegment(cmd *Commands, voxRt *VoxelRtState, current, d
 		return next, blocked
 	}
 	return current, false
+}
+
+func recordGroundedTraversalCollision(ctrl *GroundedCharacterMotorComponent, test string, start, move mgl32.Vec3, hit CharacterCollisionHit) {
+	if ctrl == nil {
+		return
+	}
+	ctrl.Traversal.CollisionTest, ctrl.Traversal.CollisionStart, ctrl.Traversal.CollisionMove, ctrl.Traversal.CollisionHit = test, start, move, hit
 }
 
 func CharacterTraversalMotionPosition(start, end mgl32.Vec3, keys []CharacterTraversalMotionKey, progress float32) mgl32.Vec3 {
