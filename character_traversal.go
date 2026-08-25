@@ -121,6 +121,18 @@ type CharacterTraversalComponent struct {
 	CollisionHit      CharacterCollisionHit
 }
 
+// CharacterDropLaunchTarget extends a drop past its landing point just enough
+// for the character capsule to leave support before ordinary arrival tolerance
+// can stop horizontal movement.
+func CharacterDropLaunchTarget(start, end mgl32.Vec3, radius float32) mgl32.Vec3 {
+	direction := end.Sub(start)
+	direction[1] = 0
+	if direction.LenSqr() <= 1e-8 {
+		return end
+	}
+	return end.Add(direction.Normalize().Mul(maxCharacterCollisionFloat(defaultCharacterCollisionFloat(radius, 0.35)*0.5, 0.05)))
+}
+
 func (traversal CharacterTraversalComponent) Running() bool {
 	return traversal.Status == CharacterTraversalActive
 }

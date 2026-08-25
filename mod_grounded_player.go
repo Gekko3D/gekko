@@ -1038,12 +1038,31 @@ func advanceGroundedBallisticTraversal(cmd *Commands, voxRt *VoxelRtState, baseP
 		}
 	}
 
-	next, blocked := moveGroundedTraversalHorizontal(cmd, voxRt, *basePos, request.End, request.Speed*dt, ctrl, acceptEntity)
+	launchingDrop := request.Kind == CharacterTraversalDrop && !traversal.WasAirborne
+	target := request.End
+	if launchingDrop {
+		target = CharacterDropLaunchTarget(request.Start, request.End, ctrl.Radius)
+	}
+	next, _, reached, blocked := moveGroundedTraversalHorizontalDistance(cmd, voxRt, *basePos, target, request.Speed*dt, ctrl, acceptEntity)
 	*basePos = next
 	resolveGroundedVertical(cmd, voxRt, basePos, ctrl, dt, acceptEntity)
 	if !ctrl.Grounded {
 		traversal.Committed = true
 		traversal.WasAirborne = true
+	}
+	if launchingDrop && !traversal.WasAirborne {
+		directLandingTolerance := maxf(defaulted(ctrl.GroundProbe, 0.15), 0.05)
+		if request.Start.Y()-basePos.Y() > groundedPlayerGroundSnapUpTolerance(ctrl) &&
+			float32(math.Abs(float64(request.End.Y()-basePos.Y()))) <= directLandingTolerance &&
+			groundedBallisticLandingMatches(ctrl, *basePos) {
+			traversal.Committed = true
+			finishGroundedCharacterTraversal(ctrl, CharacterTraversalSucceeded, "")
+			return
+		}
+		if updateGroundedTraversalBlocked(traversal, blocked || reached, dt) {
+			finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "drop_launch_blocked")
+		}
+		return
 	}
 	if blocked && !traversal.Committed && updateGroundedTraversalBlocked(traversal, true, dt) {
 		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "entry_blocked")
@@ -1060,20 +1079,29 @@ func advanceGroundedBallisticTraversal(cmd *Commands, voxRt *VoxelRtState, baseP
 
 func finishGroundedBallisticLanding(ctrl *GroundedCharacterMotorComponent, basePos mgl32.Vec3) {
 	traversal := &ctrl.Traversal
-	request := traversal.Request
-	horizontal := request.End.Sub(basePos)
-	horizontal[1] = 0
-	verticalTolerance := maxf(defaulted(ctrl.StepHeight, 0.6)+defaulted(ctrl.GroundProbe, 0.15), request.Acceptance)
-	landingSupportOK := request.LandingSupportEntity == 0 || groundedCharacterSupportedBy(ctrl, request.LandingSupportEntity)
+	landingSupportOK := traversal.Request.LandingSupportEntity == 0 || groundedCharacterSupportedBy(ctrl, traversal.Request.LandingSupportEntity)
 	if traversal.PendingReason != "" {
 		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, traversal.PendingReason)
-	} else if horizontal.Len() <= request.Acceptance && float32(math.Abs(float64(request.End.Y()-basePos.Y()))) <= verticalTolerance && landingSupportOK {
+	} else if groundedBallisticLandingMatches(ctrl, basePos) {
 		finishGroundedCharacterTraversal(ctrl, CharacterTraversalSucceeded, "")
 	} else if !landingSupportOK {
 		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "wrong_landing_support")
 	} else {
 		finishGroundedCharacterTraversal(ctrl, CharacterTraversalFailed, "missed_landing")
 	}
+}
+
+func groundedBallisticLandingMatches(ctrl *GroundedCharacterMotorComponent, basePos mgl32.Vec3) bool {
+	if ctrl == nil || !ctrl.Grounded {
+		return false
+	}
+	request := ctrl.Traversal.Request
+	horizontal := request.End.Sub(basePos)
+	horizontal[1] = 0
+	verticalTolerance := maxf(defaulted(ctrl.StepHeight, 0.6)+defaulted(ctrl.GroundProbe, 0.15), request.Acceptance)
+	return horizontal.Len() <= request.Acceptance &&
+		float32(math.Abs(float64(request.End.Y()-basePos.Y()))) <= verticalTolerance &&
+		(request.LandingSupportEntity == 0 || groundedCharacterSupportedBy(ctrl, request.LandingSupportEntity))
 }
 
 func groundedCharacterSupportedBy(ctrl *GroundedCharacterMotorComponent, entity EntityId) bool {
@@ -1719,6 +1747,9 @@ func moveGroundedTraversalHorizontalDistance(cmd *Commands, voxRt *VoxelRtState,
 	delta[1] = 0
 	distance := delta.Len()
 	acceptance := maxf(ctrl.Traversal.Request.Acceptance, 0.01)
+	if ctrl.Traversal.Request.Kind == CharacterTraversalDrop && !ctrl.Traversal.WasAirborne {
+		acceptance = 0.01
+	}
 	if distance <= acceptance {
 		return current, 0, true, false
 	}
@@ -2056,6 +2087,12 @@ func groundedPlayerCharacterCollisionConfig(cmd *Commands, ctrl *GroundedPlayerC
 		StepHeight:            defaulted(ctrl.StepHeight, 0.6),
 		DynamicCollisionQuery: MovingBrushCollisionQuery(cmd),
 	}
+}
+
+// GroundedCharacterCollisionConfig returns the collision shape and runtime
+// geometry query used by the grounded motor.
+func GroundedCharacterCollisionConfig(cmd *Commands, ctrl *GroundedCharacterMotorComponent) CharacterCollisionConfig {
+	return groundedPlayerCharacterCollisionConfig(cmd, ctrl)
 }
 
 func groundedPlayerGroundHitWithin(cmd *Commands, voxRt *VoxelRtState, basePos mgl32.Vec3, ctrl *GroundedPlayerControllerComponent, maxSnapUp, maxSnapDown float32, acceptEntity func(EntityId, bool) bool) (CharacterGroundHit, bool) {
