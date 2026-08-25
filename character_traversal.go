@@ -98,25 +98,27 @@ type CharacterTraversalRequest struct {
 // sole owner of special movement and retains one terminal result until the
 // next request.
 type CharacterTraversalComponent struct {
-	Request        CharacterTraversalRequest
-	Sequence       uint64
-	Phase          CharacterTraversalPhase
-	Status         CharacterTraversalStatus
-	Reason         string
-	PendingReason  string
-	Exit           CharacterTraversalExit
-	PendingExit    CharacterTraversalExit
-	Elapsed        float32
-	PhaseElapsed   float32
-	LadderDistance float32
-	BlockedElapsed float32
-	Committed      bool
-	WasAirborne    bool
-	Blocked        bool
-	CollisionTest  string
-	CollisionStart mgl32.Vec3
-	CollisionMove  mgl32.Vec3
-	CollisionHit   CharacterCollisionHit
+	Request           CharacterTraversalRequest
+	Sequence          uint64
+	Phase             CharacterTraversalPhase
+	Status            CharacterTraversalStatus
+	Reason            string
+	PendingReason     string
+	Exit              CharacterTraversalExit
+	PendingExit       CharacterTraversalExit
+	Elapsed           float32
+	PhaseElapsed      float32
+	LadderDistance    float32
+	BlockedElapsed    float32
+	LadderApproach    mgl32.Vec3
+	HasLadderApproach bool
+	Committed         bool
+	WasAirborne       bool
+	Blocked           bool
+	CollisionTest     string
+	CollisionStart    mgl32.Vec3
+	CollisionMove     mgl32.Vec3
+	CollisionHit      CharacterCollisionHit
 }
 
 func (traversal CharacterTraversalComponent) Running() bool {

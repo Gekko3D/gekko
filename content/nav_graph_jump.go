@@ -6,7 +6,10 @@ import (
 	"sort"
 )
 
-const AutoNavJumpOwnerID = "__auto_jump"
+const (
+	AutoNavJumpOwnerID  = "__auto_jump"
+	AutoNavClimbOwnerID = "__auto_climb"
+)
 
 type navJumpSpan struct {
 	Ref    NavSpanRef
@@ -29,6 +32,14 @@ type navJumpCandidate struct {
 	Cost      float32
 }
 
+type navClimbCandidate struct {
+	From      navJumpSpan
+	To        navJumpSpan
+	Kind      string
+	Traversal NavTraversalDef
+	Cost      float32
+}
+
 type navJumpVoxelInterval struct{ Start, End int }
 
 type navJumpOccupancy struct {
@@ -37,14 +48,15 @@ type navJumpOccupancy struct {
 	Columns   map[navJumpColumn][]navJumpVoxelInterval
 }
 
-// ConnectNavGraphJumps discovers gap and upward jumps from exposed
-// graph boundaries. Candidates are deduplicated before sparse voxel arc checks.
+// ConnectNavGraphJumps discovers gap jumps and obstacle climbs from exposed
+// graph boundaries. Candidates are deduplicated before sparse voxel checks.
 func ConnectNavGraphJumps(sources []NavSourceTileDef, graphs []NavGraphTileDef, profile NavAgentProfileDef, chunkSize int, voxelResolution float32) ([]NavGraphTileDef, error) {
 	graphs = append([]NavGraphTileDef(nil), graphs...)
 	for i := range graphs {
 		graphs[i].SpanTransitions = removeAutoNavJumpSpanTransitions(graphs[i].SpanTransitions)
 		graphs[i].Transitions = removeAutoNavJumpRegionTransitions(graphs[i].Transitions)
 	}
+	graphs = connectNavGraphClimbs(sources, graphs, profile, chunkSize, voxelResolution)
 	if !navProfileHasCapability(profile, NavCapabilityJump) || profile.MaxJumpDistance <= 0 ||
 		profile.JumpSpeed <= 0 || profile.JumpHorizontalSpeed <= 0 || profile.Gravity <= 0 ||
 		voxelResolution <= 0 || chunkSize <= 0 {
@@ -184,6 +196,197 @@ func ConnectNavGraphJumps(sources []NavSourceTileDef, graphs []NavGraphTileDef, 
 		}
 	}
 	return graphs, nil
+}
+
+func connectNavGraphClimbs(sources []NavSourceTileDef, graphs []NavGraphTileDef, profile NavAgentProfileDef, chunkSize int, voxelResolution float32) []NavGraphTileDef {
+	maxHeight := float32(0)
+	if navProfileHasCapability(profile, NavCapabilityVault) {
+		maxHeight = profile.MaxVaultHeight
+	}
+	if navProfileHasCapability(profile, NavCapabilityMantle) {
+		maxHeight = max(maxHeight, profile.MaxMantleHeight)
+	}
+	if maxHeight <= profile.StepHeight || voxelResolution <= 0 || chunkSize <= 0 {
+		return graphs
+	}
+
+	graphIndex := make(map[TerrainChunkCoordDef]int, len(graphs))
+	regions := make(map[TerrainChunkCoordDef]map[uint32]uint32, len(graphs))
+	accepted := make(map[NavSpanRef]struct{})
+	for i := range graphs {
+		graphIndex[graphs[i].Coord] = i
+		regions[graphs[i].Coord] = navGraphSpanRegions(graphs[i])
+		for _, spanID := range graphs[i].SpanIDs {
+			accepted[NavSpanRef{Tile: graphs[i].Coord, Span: spanID}] = struct{}{}
+		}
+	}
+	columns := make(map[navJumpColumn][]navJumpSpan)
+	for _, source := range sources {
+		for _, span := range source.Spans {
+			ref := NavSpanRef{Tile: source.Coord, Span: span.ID}
+			if _, ok := accepted[ref]; !ok {
+				continue
+			}
+			region, ok := regions[ref.Tile][ref.Span]
+			if !ok {
+				continue
+			}
+			key := navJumpColumn{ref.Tile.X*chunkSize + span.X, ref.Tile.Z*chunkSize + span.Z}
+			columns[key] = append(columns[key], navJumpSpan{
+				Ref: ref, Span: span, Region: region,
+				Point: Vec3{(float32(key.X) + 0.5) * voxelResolution, span.SupportHeight, (float32(key.Z) + 0.5) * voxelResolution},
+			})
+		}
+	}
+	for key := range columns {
+		sort.Slice(columns[key], func(i, j int) bool { return navSpanRefLess(columns[key][i].Ref, columns[key][j].Ref) })
+	}
+
+	type direction struct{ X, Z int }
+	directions := [...]direction{{X: -1}, {X: -1, Z: -1}, {Z: -1}, {X: 1, Z: -1}, {X: 1}, {X: 1, Z: 1}, {Z: 1}, {X: -1, Z: 1}}
+	insetSteps := max(1, int(math.Ceil(float64((profile.Radius+voxelResolution*0.5)/voxelResolution))))
+	maxDistance := profile.Radius*2 + 0.45
+	maxSteps := max(1, int(math.Ceil(float64(maxDistance/voxelResolution))))
+	best := make(map[navJumpRegionPair]navClimbCandidate)
+	for boundaryColumn, boundarySpans := range columns {
+		for _, boundary := range boundarySpans {
+			fromNode := navRouteNode{Tile: boundary.Ref.Tile, Region: boundary.Region}
+			for _, direction := range directions {
+				if navJumpHasSupportNear(columns[navJumpColumn{boundaryColumn.X + direction.X, boundaryColumn.Z + direction.Z}], boundary.Span.SupportHeight, profile.StepHeight) {
+					continue
+				}
+				startColumn := navJumpColumn{boundaryColumn.X - direction.X*insetSteps, boundaryColumn.Z - direction.Z*insetSteps}
+				from, ok := navJumpSpanInNode(columns[startColumn], fromNode, boundary.Span.SupportHeight, profile.StepHeight)
+				if !ok {
+					continue
+				}
+				for distance := 1; distance+insetSteps <= maxSteps; distance++ {
+					landingColumn := navJumpColumn{boundaryColumn.X + direction.X*distance, boundaryColumn.Z + direction.Z*distance}
+					landing, found := navClimbLanding(columns[landingColumn], from.Span.SupportHeight, profile)
+					if !found {
+						continue
+					}
+					toNode := navRouteNode{Tile: landing.Ref.Tile, Region: landing.Region}
+					if fromNode == toNode {
+						continue
+					}
+					endColumn := navJumpColumn{landingColumn.X + direction.X*insetSteps, landingColumn.Z + direction.Z*insetSteps}
+					to, found := navJumpSpanInNode(columns[endColumn], toNode, landing.Span.SupportHeight, profile.StepHeight)
+					if !found {
+						continue
+					}
+					dx, dz := to.Point[0]-from.Point[0], to.Point[2]-from.Point[2]
+					if float32(math.Hypot(float64(dx), float64(dz))) > maxDistance+1e-4 {
+						continue
+					}
+					rise := to.Point[1] - from.Point[1]
+					kind := NavTransitionMantle
+					if navProfileHasCapability(profile, NavCapabilityVault) && profile.MaxVaultHeight > 0 && rise <= profile.MaxVaultHeight+1e-4 {
+						kind = NavTransitionVault
+					} else if !navProfileHasCapability(profile, NavCapabilityMantle) || profile.MaxMantleHeight <= 0 || rise > profile.MaxMantleHeight+1e-4 {
+						continue
+					}
+					traversal := NavTraversalDef{
+						Start: from.Point, Apex: Vec3{from.Point[0], to.Point[1], from.Point[2]}, End: to.Point,
+						Speed: profile.JumpHorizontalSpeed,
+					}
+					if !NavTraversalSupportedByProfile(profile, kind, &traversal) {
+						continue
+					}
+					cost := navVec3Distance(from.Point, to.Point) + 2 + rise*2
+					key := navJumpRegionPair{From: fromNode, To: toNode}
+					candidate := navClimbCandidate{From: from, To: to, Kind: kind, Traversal: traversal, Cost: cost}
+					if previous, exists := best[key]; !exists || navClimbCandidateLess(candidate, previous) {
+						best[key] = candidate
+					}
+					break
+				}
+			}
+		}
+	}
+
+	occupancy := buildNavJumpOccupancy(sources, chunkSize)
+	candidates := make([]navClimbCandidate, 0, len(best))
+	for _, candidate := range best {
+		if navKinematicTraversalClear(occupancy, candidate.Traversal, profile, voxelResolution) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return navClimbCandidateLess(candidates[i], candidates[j]) })
+	for _, candidate := range candidates {
+		graph := &graphs[graphIndex[candidate.From.Ref.Tile]]
+		linkID := navTraversalLinkID(candidate.Kind, AutoNavClimbOwnerID, candidate.From.Ref, candidate.To.Ref)
+		candidate.Traversal.LinkID, candidate.Traversal.OwnerID = linkID, AutoNavClimbOwnerID
+		width := min(voxelResolution, 2*min(candidate.From.Span.ClearanceRadius, candidate.To.Span.ClearanceRadius))
+		if width <= 0 {
+			width = voxelResolution
+		}
+		headroom := min(candidate.From.Span.Headroom, candidate.To.Span.Headroom)
+		clearance := min(candidate.From.Span.ClearanceRadius, candidate.To.Span.ClearanceRadius)
+		traversal := candidate.Traversal
+		graph.SpanTransitions = append(graph.SpanTransitions, NavSpanTransitionDef{
+			From: candidate.From.Ref.Span, To: candidate.To.Ref, Kind: candidate.Kind,
+			StepDelta: candidate.To.Point[1] - candidate.From.Point[1], Width: width,
+			MinHeadroom: headroom, MinClearance: clearance, Cost: candidate.Cost, Traversal: &traversal,
+		})
+		regionTraversal := candidate.Traversal
+		graph.Transitions = append(graph.Transitions, NavRegionTransitionDef{
+			ID: uint32(len(graph.Transitions)), FromRegion: candidate.From.Region,
+			ToTile: candidate.To.Ref.Tile, ToRegion: candidate.To.Region, Kind: candidate.Kind,
+			CrossingStart: candidate.From.Point, CrossingEnd: candidate.To.Point, Width: width,
+			MinHeadroom: headroom, MinClearance: clearance, Cost: candidate.Cost, Traversal: &regionTraversal,
+		})
+	}
+	return graphs
+}
+
+func navClimbLanding(spans []navJumpSpan, fromHeight float32, profile NavAgentProfileDef) (navJumpSpan, bool) {
+	var result navJumpSpan
+	found := false
+	maxHeight := max(profile.MaxVaultHeight, profile.MaxMantleHeight)
+	for _, candidate := range spans {
+		rise := candidate.Span.SupportHeight - fromHeight
+		if rise <= profile.StepHeight+1e-4 || rise > maxHeight+1e-4 {
+			continue
+		}
+		if !found || rise < result.Span.SupportHeight-fromHeight || rise == result.Span.SupportHeight-fromHeight && navSpanRefLess(candidate.Ref, result.Ref) {
+			result, found = candidate, true
+		}
+	}
+	return result, found
+}
+
+func navKinematicTraversalClear(occupancy navJumpOccupancy, traversal NavTraversalDef, profile NavAgentProfileDef, voxelResolution float32) bool {
+	clearSegment := func(start, end Vec3) bool {
+		distance := navVec3Distance(start, end)
+		samples := max(1, int(math.Ceil(float64(distance/(voxelResolution*0.5)))))
+		for sample := 0; sample <= samples; sample++ {
+			fraction := float32(sample) / float32(samples)
+			base := Vec3{
+				start[0] + (end[0]-start[0])*fraction,
+				start[1] + (end[1]-start[1])*fraction,
+				start[2] + (end[2]-start[2])*fraction,
+			}
+			if !navJumpCapsuleClear(occupancy, base, profile.Radius, profile.Height, voxelResolution) {
+				return false
+			}
+		}
+		return true
+	}
+	return clearSegment(traversal.Start, traversal.Apex) && clearSegment(traversal.Apex, traversal.End)
+}
+
+func navClimbCandidateLess(a, b navClimbCandidate) bool {
+	if a.Cost != b.Cost {
+		return a.Cost < b.Cost
+	}
+	if a.Kind != b.Kind {
+		return a.Kind < b.Kind
+	}
+	if a.From.Ref != b.From.Ref {
+		return navSpanRefLess(a.From.Ref, b.From.Ref)
+	}
+	return navSpanRefLess(a.To.Ref, b.To.Ref)
 }
 
 func navJumpHasSupportNear(spans []navJumpSpan, height, tolerance float32) bool {
@@ -362,7 +565,7 @@ func navJumpCandidateLess(a, b navJumpCandidate) bool {
 func removeAutoNavJumpSpanTransitions(transitions []NavSpanTransitionDef) []NavSpanTransitionDef {
 	result := make([]NavSpanTransitionDef, 0, len(transitions))
 	for _, transition := range transitions {
-		if transition.Traversal == nil || transition.Traversal.Owner() != AutoNavJumpOwnerID {
+		if transition.Traversal == nil || transition.Traversal.Owner() != AutoNavJumpOwnerID && transition.Traversal.Owner() != AutoNavClimbOwnerID {
 			result = append(result, transition)
 		}
 	}
@@ -372,7 +575,7 @@ func removeAutoNavJumpSpanTransitions(transitions []NavSpanTransitionDef) []NavS
 func removeAutoNavJumpRegionTransitions(transitions []NavRegionTransitionDef) []NavRegionTransitionDef {
 	result := make([]NavRegionTransitionDef, 0, len(transitions))
 	for _, transition := range transitions {
-		if transition.Traversal == nil || transition.Traversal.Owner() != AutoNavJumpOwnerID {
+		if transition.Traversal == nil || transition.Traversal.Owner() != AutoNavJumpOwnerID && transition.Traversal.Owner() != AutoNavClimbOwnerID {
 			transition.ID = uint32(len(result))
 			result = append(result, transition)
 		}
