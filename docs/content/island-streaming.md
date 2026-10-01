@@ -450,6 +450,11 @@ coarser parent. The failure mode is reduced detail, never a hole. LOD snapping
 is acceptable for the first version; add dither/cross-fade only if the completed
 handoff is still visually distracting.
 
+[S1c](../roadmaps/streamed-rendering-s1c.md) applies this readiness handoff to the
+existing v2 imported sector/proxy runtime. Its cohort uses `FullChunkRefs`; the
+v3 forest, startup root gate and cross-layer groups described here remain future
+work. CPU-only runtimes retain their existing residency behavior.
+
 ## Renderer Residency Contract
 
 ### Why The Current Hidden State Is Insufficient

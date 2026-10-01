@@ -319,7 +319,9 @@ Implementation starts with [S1a: staged voxel residency and upload readiness](st
 S1a is implemented: hidden residency, scheduling metadata and revision-qualified tickets.
 [S1b](streamed-rendering-s1b.md) is implemented: global voxel content budgets,
 deterministic ordering/aging, shared-map deduplication and atlas backpressure.
-Streaming owners still need to adopt the tickets for automatic coverage handoff.
+[S1c](streamed-rendering-s1c.md) integrates those tickets with existing v2
+sector/proxy refinement and distance unloading. CPU collision/navigation stay
+independent. V3 page selection and cross-layer groups remain separate work.
 Cache/worker byte bounds and the remaining proposals keep the delivery order above.
 
 Decisions to settle before dependent implementation:
@@ -335,10 +337,11 @@ Decisions to settle before dependent implementation:
 
 The proposal review checked source symbols, existing plans, byte-layout arithmetic,
 and document links. Implementation verification is recorded per slice, starting
-with [S1a](streamed-rendering-s1a.md#execution-record) and
-[S1b](streamed-rendering-s1b.md#verification-and-execution-record). S1b includes
-a physical GPU smoke check; it does not establish performance gains or rendered
-pixel parity.
+with [S1a](streamed-rendering-s1a.md#execution-record),
+[S1b](streamed-rendering-s1b.md#verification-and-execution-record) and
+[S1c](streamed-rendering-s1c.md#execution-record). Native smoke checks establish
+the recorded rendering/streaming contracts; they do not establish performance
+gains or rendered pixel parity.
 
 Implementation slices should use the smallest existing build/check and manual scene relevant to their changed contract: fixed-view render parity, edited chunk seams, shared-instance isolation, delayed parent/child handoff, save/reload, and locomotion after edits. The user explicitly authorized functionality tests and the tests-first subagent workflow for this implementation. Other test changes still follow [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
 

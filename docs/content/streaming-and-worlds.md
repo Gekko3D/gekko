@@ -141,7 +141,8 @@ Spawn helpers live in:
 
 ## Streamed Level Runtime
 
-The streamed runtime is implemented in `streamed_level_runtime.go`.
+The streamed runtime is implemented in `streamed_level_runtime.go`, with renderer
+ticket ownership and visibility handoff in `streamed_level_render_residency.go`.
 
 It extends authored levels with:
 
@@ -444,11 +445,12 @@ Implementation note, 2026-06-08:
 - Sector `lod1` proxy chunks are prepared and committed as visual-only entities
   before full chunk commits when available.
 - Proxy entities do not get collision components.
-- A sector proxy is hidden after all full non-empty chunks referenced by the
-  sector are loaded.
+- With a renderer installed, a sector proxy is hidden only after all required
+  imported full targets have current renderer-ready tickets. CPU-only runtimes
+  retain the original loaded-chunk behavior. See the S1c update below.
 - Sector proxy visual residency is now separate from full chunk visual
   residency. Proxy sectors can be kept as a cheap far-world fallback, hidden
-  while all full chunks for the sector are resident, and shown before full
+  while all full targets for the sector are renderer-ready, and shown before full
   chunks unload so the base world does not disappear at distance.
 - Streaming metrics now include loadable desired/keep chunk counts,
   collision-resident chunk counts, desired/keep sector counts, proxy pending
@@ -456,6 +458,41 @@ Implementation note, 2026-06-08:
   `keep` counters still include empty radius coordinates for compatibility.
 - Runtime visibility can consume imported-world sector metadata; radius
   streaming remains the fallback when sector visibility metadata is absent.
+
+Renderer readiness update, S1c:
+
+- Runtime-owned terrain, imported full chunks and sector proxies receive
+  generation-qualified tickets and a hidden marker before their first spawn
+  flush. Hidden targets remain renderer-resident and upload within global GPU
+  content budgets. Authored placement visuals keep their existing owner.
+- A ready proxy covers the sector while any required full target is unfinished.
+  All required full targets reveal together and the proxy hides in one completed
+  ECS flush. A hidden ready proxy stays resident as fallback. Proxy-less terrain
+  and imported targets reveal independently after their own tickets settle.
+- Distance unloading retains full coverage until the required proxy has a
+  matching ready ticket. Missing, failed or stale status is not readiness.
+  Marker recovery renews only the affected target; externally removed proxies
+  can be prepared again instead of blocking replacement with a stale load entry.
+- Required coverage honors imported backing and overrides. A current, explicitly
+  empty prepared result can complete coverage without an entity; a missing entity
+  or a zero payload count with effective backing cannot supply that proof.
+  That proof applies to the resident full cohort. Baked proxies still use their
+  source geometry; propagating fine edits to coarse proxies remains D2 in the
+  [optimization roadmap](../roadmaps/streamed-rendering-content-optimization.md).
+- Streaming owns tickets and retires them after marker removal has flushed.
+  Unfinished tickets wait for renderer cancellation; terminal retirement sweeps
+  also run while streaming is stopped or has a preparation error.
+- Without a `VoxelRtState` resource, CPU-only behavior remains available. Late
+  renderer installation stages existing managed targets. Once managed, resource
+  disappearance cannot authorize CPU-ready handoff.
+- Collision/destruction components and CPU readiness do not wait for GPU uploads.
+  Existing residency upgrades still use unload/reload. Render handoff does not
+  modify published navigation data or revisions.
+
+This applies to the existing v2 sector/proxy index, not the future v3 page forest,
+root startup gate or cross-layer coverage groups. V2 still requests usable sector
+proxies globally. Implementation scope and verification:
+[S1c](../roadmaps/streamed-rendering-s1c.md).
 
 #### Step 7: Split Render, Collision, And Destruction Residency
 
@@ -676,10 +713,10 @@ The current implemented baseline is:
 - Runtime visual residency has separate full and proxy paths.
 - Runtime collision and destruction residency are separate from visual
   residency.
-- Proxies are visual-only and are hidden when their referenced full chunks are
-  resident.
-- Full chunks are not unloaded until a sector proxy is available when the
-  sector has proxy LOD metadata.
+- Proxies are visual-only and hide when their required full cohort is
+  renderer-ready. CPU-only runtimes use loaded-chunk readiness.
+- Full chunks are not distance-unloaded until a sector proxy is renderer-ready
+  when the sector has usable proxy LOD metadata.
 - Runtime edits to streamed imported chunks persist into full world-delta chunk
   overrides when no backing exists, or sparse `VoxelBackingRemovals` when the
   imported world has immutable backing support. Terrain removals use the same

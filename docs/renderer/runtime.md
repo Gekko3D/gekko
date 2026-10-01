@@ -338,10 +338,17 @@ Terminal states remain latched. Later edits use the ordinary dirty-upload path.
 The owner removes or changes the terminal marker before calling
 `ForgetStreamedVoxel`; that method deletes only terminal records. Terminal
 records retain status metadata without retaining captured geometry handles.
-Priority and ticket order are copied to scheduling metadata. Automatic
-parent/child selection remains a subsequent implementation step. See
+Priority and ticket order are copied to scheduling metadata. The existing v2
+streamed runtime now stages its terrain, imported full chunks and sector proxies
+through these tickets. It reveals an imported sector only when every required
+full target is ready, and waits for a ready proxy before distance unloading.
+Visibility publishes once after each observer/commit stage, before the later
+renderer bridge. CPU collision/destruction residency and navigation remain
+independent of GPU readiness. V3 page selection and cross-layer coverage groups
+remain separate work. See
 [S1a scope and verification](../roadmaps/streamed-rendering-s1a.md) and
-the [island residency contract](../content/island-streaming.md#renderer-residency-contract).
+[S1c integration](../roadmaps/streamed-rendering-s1c.md), plus the
+[island residency contract](../content/island-streaming.md#renderer-residency-contract).
 
 ### Global voxel upload scheduling
 

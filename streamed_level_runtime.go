@@ -256,6 +256,12 @@ type StreamedLevelRuntimeState struct {
 	InitErr     error
 	Generation  uint64
 
+	renderManaged     bool
+	nextRenderTicket  uint64
+	renderTicketBatch streamedRenderTicketBatch
+	renderTargets     map[EntityId]streamedRenderTarget
+	retiredRenderIDs  map[uint64]struct{}
+
 	Config                     StreamedLevelRuntimeConfig
 	Loader                     *RuntimeContentLoader
 	Level                      *content.LevelDef
@@ -376,6 +382,7 @@ type streamedPlacementInstance struct {
 }
 
 type streamedLoadedChunk struct {
+	importedEmptyGeneration   uint64
 	TerrainEntities           map[EntityId]struct{}
 	ImportedWorldEntities     map[EntityId]struct{}
 	ImportedWorldGeometryKeys map[string]struct{}
@@ -948,6 +955,12 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	}
 	state.Generation++
 	state.Initialized = false
+	// Include targets flushed by a commit that later failed before LoadedChunks
+	// publication. The level-root descendant cleanup below removes their CPU
+	// entities; their tickets have the same retirement rules as completed chunks.
+	for entity := range state.renderTargets {
+		retireStreamedRenderTarget(cmd, state, entity)
+	}
 
 	var stopErr error
 	removed := make(map[EntityId]struct{})
@@ -1147,9 +1160,12 @@ func groundedPlayerConfigFromLevelPlayer(player *content.LevelPlayerDef) Grounde
 }
 
 func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntimeState) {
+	defer beginStreamedRenderTicketBatch(state)()
+	refreshStreamedRenderResidency(cmd, state)
 	if state == nil || !state.Initialized || state.InitErr != nil {
 		return
 	}
+	defer reconcileStreamedRenderResidency(cmd, state)
 	start := time.Now()
 	defer func() {
 		state.Metrics.ObserverUpdateDuration = time.Since(start)
@@ -1261,14 +1277,14 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 		if _, ok := keep[coord]; ok {
 			continue
 		}
-		if streamedChunkNeedsProxyBeforeUnload(state, coord) {
+		if streamedChunkNeedsRenderProxyBeforeUnload(cmd, state, coord) {
 			if sectorCoord, ok := state.ImportedChunkSector[coord]; ok {
 				state.DesiredProxySectors[sectorCoord] = struct{}{}
 				state.KeepProxySectors[sectorCoord] = struct{}{}
 			}
 			continue
 		}
-		if sectorCoord, ok := state.ImportedChunkSector[coord]; ok {
+		if sectorCoord, ok := state.ImportedChunkSector[coord]; ok && !state.renderManaged {
 			setStreamedSectorProxyHidden(cmd, state, sectorCoord, false)
 		}
 		if err := unloadStreamedChunk(cmd, state, coord); err != nil && state.InitErr == nil {
@@ -1280,6 +1296,9 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 	}
 	for sectorCoord := range state.LoadedSectorProxies {
 		if _, ok := state.KeepProxySectors[sectorCoord]; ok {
+			continue
+		}
+		if state.renderManaged && streamedRenderSectorHasProxy(state, sectorCoord) && !streamedRenderSectorReady(cmd, state, sectorCoord) {
 			continue
 		}
 		if state.streamedSectorProxyUnloadEnabled() {
@@ -1641,9 +1660,12 @@ func StreamedLevelCollisionReadyInBounds(cmd *Commands, state *StreamedLevelRunt
 }
 
 func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState) {
+	defer beginStreamedRenderTicketBatch(state)()
+	refreshStreamedRenderResidency(cmd, state)
 	if state == nil || !state.Initialized || state.InitErr != nil {
 		return
 	}
+	defer reconcileStreamedRenderResidency(cmd, state)
 	start := time.Now()
 	state.Metrics.ChunksCommittedLastFrame = 0
 	state.Metrics.ProxyChunksCommittedLastFrame = 0
@@ -1986,6 +2008,7 @@ func recordStreamedCommitFlush(cmd *Commands, state *StreamedLevelRuntimeState) 
 	start := time.Now()
 	cmd.app.FlushCommands()
 	if state != nil {
+		state.renderTicketBatch.pendingEntities, state.renderTicketBatch.pendingComponents = 0, 0
 		state.Metrics.LastCommitFlushDuration += time.Since(start)
 		state.Metrics.LastCommitFlushCount++
 	}
@@ -2325,6 +2348,10 @@ func streamedImportedWorldPayloadAndAuxHash(payloadHash string, aux *content.Imp
 }
 
 func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedSectorProxy) (int, error) {
+	defer beginStreamedRenderTicketBatch(state)()
+	if cmd != nil && state != nil && voxelRtStateFromApp(cmd.app) != nil {
+		state.renderManaged = true
+	}
 	start := time.Now()
 	resetLastStreamedCommitBreakdown(state)
 	entityCount := 0
@@ -2370,7 +2397,7 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 	recordImportedWorldSpawnTiming(state, spawnTiming)
 	state.Metrics.LastCommitWorldRegisterDuration += geometryAssetDuration
 	state.Metrics.LastCommitWorldDuration += time.Since(worldStart)
-	if streamedSectorProxyShouldBeHidden(state, prepared.SectorCoord) {
+	if !stageStreamedRenderTarget(cmd, state, entity, prepared.SectorCoord, streamedRenderProxy) && streamedSectorProxyShouldBeHidden(state, prepared.SectorCoord) {
 		cmd.AddComponents(entity, &VoxelRenderHiddenComponent{})
 	}
 	recordStreamedCommitFlush(cmd, state)
@@ -2387,6 +2414,7 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 }
 
 func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedChunk) (int, error) {
+	defer beginStreamedRenderTicketBatch(state)()
 	start := time.Now()
 	resetLastStreamedCommitBreakdown(state)
 	entityCount := 0
@@ -2425,18 +2453,21 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 			BackingRemoval: state.voxelBackingRemovalFor(content.VoxelBackingOwnerTerrain, terrainIDForPreparedChunk(state, prepared.TerrainChunk), prepared.TerrainChunk.Coord),
 		})
 		state.Metrics.LastCommitTerrainDuration += time.Since(terrainStart)
+		stageStreamedRenderTarget(cmd, state, entity, prepared.Coord, streamedRenderTerrain)
 		recordStreamedCommitFlush(cmd, state)
 		entityCount++
 		clearEntityVoxelDirty(cmd, entity)
 		chunk.TerrainEntities[entity] = struct{}{}
 		chunk.OwnedEntities[entity] = struct{}{}
 		for _, hook := range state.Config.TerrainHooks {
+			invalidateStreamedRenderTicketFloor(state)
 			hook(cmd, PostSpawnTerrainContext{
 				ChunkCoord: prepared.Coord,
 				LevelID:    state.LevelID,
 				TerrainID:  terrainIDForPreparedChunk(state, prepared.TerrainChunk),
 				RootEntity: entity,
 			})
+			invalidateStreamedRenderTicketFloor(state)
 		}
 	}
 
@@ -2476,6 +2507,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		recordImportedWorldSpawnTiming(state, spawnTiming)
 		state.Metrics.LastCommitWorldRegisterDuration += geometryAssetDuration
 		state.Metrics.LastCommitWorldDuration += time.Since(worldStart)
+		stageStreamedRenderTarget(cmd, state, entity, prepared.Coord, streamedRenderImported)
 		recordStreamedCommitFlush(cmd, state)
 		entityCount++
 		importedWorldCollisionCommitted = collisionEnabled
@@ -2485,6 +2517,9 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 			chunk.ImportedWorldGeometryKeys[prepared.PreparedImportedWorldGeometryCacheKey] = struct{}{}
 		}
 		chunk.OwnedEntities[entity] = struct{}{}
+	}
+	if prepared.ImportedWorldChunk != nil && prepared.ImportedWorldChunk.NonEmptyVoxelCount == 0 && len(prepared.ImportedWorldChunk.Voxels) == 0 && state.BaseWorldBacking == nil && prepared.Generation == state.Generation {
+		chunk.importedEmptyGeneration = prepared.Generation
 	}
 
 	for _, placement := range prepared.PlacementItems {
@@ -2525,6 +2560,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		}
 		clearEntityVoxelDirty(cmd, spawnResult.RootEntity)
 		for _, hook := range state.Config.PlacementHooks {
+			invalidateStreamedRenderTicketFloor(state)
 			hook(cmd, PostSpawnPlacementContext{
 				ChunkCoord:  prepared.Coord,
 				LevelID:     state.LevelID,
@@ -2532,6 +2568,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 				RootEntity:  spawnResult.RootEntity,
 				SpawnResult: spawnResult,
 			})
+			invalidateStreamedRenderTicketFloor(state)
 		}
 	}
 
@@ -2541,7 +2578,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 }
 
 func reconcileStreamedSectorProxyAfterFullCommit(cmd *Commands, state *StreamedLevelRuntimeState, sectorCoord ChunkCoord) {
-	if state == nil {
+	if state == nil || state.renderManaged {
 		return
 	}
 	setStreamedSectorProxyHidden(cmd, state, sectorCoord, streamedSectorProxyShouldBeHidden(state, sectorCoord))
@@ -2550,6 +2587,10 @@ func reconcileStreamedSectorProxyAfterFullCommit(cmd *Commands, state *StreamedL
 func streamedSectorProxyCommitNeeded(state *StreamedLevelRuntimeState, sectorCoord ChunkCoord) bool {
 	if state == nil {
 		return false
+	}
+	// Managed fallbacks remain resident even after full CPU coverage arrives.
+	if state.renderManaged {
+		return true
 	}
 	if !streamedSectorFullChunksLoaded(state, sectorCoord) {
 		return true
@@ -2614,6 +2655,7 @@ func unloadStreamedSectorProxy(cmd *Commands, state *StreamedLevelRuntimeState, 
 		return
 	}
 	if loaded.Entity != 0 {
+		retireStreamedRenderTarget(cmd, state, loaded.Entity)
 		retainStreamedRendererGeometryForEntity(cmd, loaded.Entity)
 		cmd.RemoveEntity(loaded.Entity)
 	}
@@ -2716,6 +2758,7 @@ func removeStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 		return
 	}
 	for eid := range loaded.OwnedEntities {
+		retireStreamedRenderTarget(cmd, state, eid)
 		retainStreamedRendererGeometryForEntity(cmd, eid)
 		if rt := voxelRtStateFromApp(cmd.app); rt != nil {
 			rt.clearRuntimeEditedVoxelEntity(eid)
