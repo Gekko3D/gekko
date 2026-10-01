@@ -331,6 +331,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		return
 	}
 	state.ensureMaterialCaches()
+	streamedMarkers := state.beginStreamedVoxelSync(cmd)
 	state.runtimeSprites = state.runtimeSprites[:0]
 	// Sync instances
 	state.RtApp.Profiler.BeginScope("Sync Instances")
@@ -345,15 +346,22 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 	// Collect instances from models
 	MakeQuery2[TransformComponent, VoxelModelComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent) bool {
-		if server == nil {
+		marker, streamed := streamedMarkers[entityId]
+		if transform == nil || vox == nil {
+			state.failStreamedVoxelAdoption(entityId, marker, "streamed voxel requires transform and voxel model components")
 			return true
 		}
-		if VoxelEntityRenderHidden(cmd, entityId) {
+		if server == nil {
+			state.failStreamedVoxelAdoption(entityId, marker, "streamed voxel asset server is unavailable")
+			return true
+		}
+		hidden := VoxelEntityRenderHidden(cmd, entityId)
+		if hidden && !streamed {
 			delete(state.entityLODSelections, entityId)
 			return true
 		}
 		currentVoxelEntities[entityId] = true
-		if lod, ok := entityLODComponentForEntity(cmd, entityId); ok && lod.SelectionValid {
+		if lod, ok := entityLODComponentForEntity(cmd, entityId); !streamed && ok && lod.SelectionValid {
 			state.entityLODSelections[entityId] = EntityLODSelection{
 				Distance:       lod.ActiveDistance,
 				BandIndex:      lod.ActiveBandIndex,
@@ -367,7 +375,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 		geometryID, geometryAsset, ok := ResolveVoxelGeometry(server, vox)
 		if !ok || geometryAsset == nil || geometryAsset.XBrickMap == nil {
+			state.failStreamedVoxelAdoption(entityId, marker, "streamed voxel geometry is missing")
 			return true
+		}
+		if streamed && vox.VoxelPalette != (AssetId{}) {
+			if _, ok := server.GetVoxelPalette(vox.VoxelPalette); !ok {
+				state.failStreamedVoxelAdoption(entityId, marker, "streamed voxel palette is missing")
+				return true
+			}
 		}
 
 		displayGeometryID := geometryID
@@ -495,6 +510,14 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			state.lastMaterialKeys[obj] = materialKey
 		}
 
+		obj.RenderEnabled = !hidden
+		obj.VoxelUploadPriority = uint8(StreamedVoxelPriorityVisible)
+		obj.VoxelUploadOrder = uint64(obj.XBrickMap.ID)
+		if streamed {
+			obj.VoxelUploadPriority = uint8(marker.Priority)
+			obj.VoxelUploadOrder = marker.Ticket
+			state.adoptStreamedVoxel(entityId, marker, obj)
+		}
 		obj.CastsShadows = !vox.DisableShadows
 		obj.ShadowMaxDistance = vox.ShadowMaxDistance
 		obj.ShadowCasterGroupID = vox.ShadowCasterGroupID
@@ -542,6 +565,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			delete(state.entityLODSelections, eid)
 		}
 	}
+	state.endStreamedVoxelSync()
 	state.RtApp.Profiler.EndScope("Sync Instances")
 
 	state.RtApp.Profiler.BeginScope("Sync Lights")
@@ -1475,6 +1499,7 @@ func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *C
 
 	state.RtApp.Profiler.BeginScope("RT Update")
 	state.RtApp.Update()
+	state.refreshStreamedVoxelStatuses()
 	state.RtApp.Profiler.EndScope("RT Update")
 }
 

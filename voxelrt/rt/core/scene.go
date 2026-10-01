@@ -58,6 +58,9 @@ type HitResult struct {
 }
 
 type VoxelObject struct {
+	RenderEnabled            bool
+	VoxelUploadPriority      uint8
+	VoxelUploadOrder         uint64
 	Transform                *Transform
 	XBrickMap                *volume.XBrickMap
 	MaterialTable            []Material
@@ -109,6 +112,7 @@ func (obj *VoxelObject) HasTransparency() bool {
 
 func NewVoxelObject() *VoxelObject {
 	return &VoxelObject{
+		RenderEnabled:         true,
 		Transform:             NewTransform(),
 		XBrickMap:             volume.NewXBrickMap(),
 		LODThreshold:          50.0,
@@ -417,7 +421,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	}
 
 	for _, obj := range s.Objects {
-		if obj.WorldAABB == nil {
+		if obj == nil || !obj.RenderEnabled || obj.WorldAABB == nil {
 			s.lastVisibility[obj] = false
 			continue
 		}
@@ -531,7 +535,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	grouped := make(map[uint64][]groupedShadowCandidate)
 	groupLimits := make(map[uint64]int)
 	for _, obj := range s.Objects {
-		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil || !obj.CastsShadows {
+		if obj == nil || !obj.RenderEnabled || obj.WorldAABB == nil || obj.XBrickMap == nil || !obj.CastsShadows {
 			continue
 		}
 		distance := distancePointToAABB(opts.CameraPosition, *obj.WorldAABB)

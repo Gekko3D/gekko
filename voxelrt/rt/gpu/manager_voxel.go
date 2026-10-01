@@ -235,8 +235,8 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 
 			// Also upload all bricks of this sector if it's considered "new/dirty structure"
 			for i := 0; i < 64; i++ {
+				bx, by, bz := i%4, (i/4)%4, i/16
 				if (sector.BrickMask64 & (1 << i)) != 0 {
-					bx, by, bz := i%4, (i/4)%4, i/16
 					brick := sector.GetBrick(bx, by, bz)
 					if bPtrs, has := alloc.Bricks[sKey]; has {
 						bPtrs[i] = brick // Sync pointer
@@ -253,6 +253,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 					}
 					m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(i))*BrickRecordSize), make([]byte, BrickRecordSize))
 				}
+				// The whole-sector write already covered this brick, including
+				// cleared records. Do not leave duplicate work in the queue.
+				delete(xbm.DirtyBricks, [6]int{sKey[0], sKey[1], sKey[2], bx, by, bz})
 			}
 			delete(xbm.DirtySectors, sKey)
 			sectorsInFrame++

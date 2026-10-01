@@ -40,6 +40,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
 - Debugging GPU buffer layout issues:
   - [`reference/gpu-alignment.md`](reference/gpu-alignment.md)
 - Planning renderer quality or performance work:
+  - [`roadmaps/streamed-rendering-content-optimization.md`](roadmaps/streamed-rendering-content-optimization.md) — Rust roadmap applicability, compact storage, streaming, compression, and destruction proposals
   - [`roadmaps/renderer-lighting.md`](roadmaps/renderer-lighting.md)
   - [`roadmaps/pure-go-voxel-navigation-generation-plan.md`](roadmaps/pure-go-voxel-navigation-generation-plan.md) — authoritative navigation replacement plan
   - [`renderer/voxelrt-render-graph-migration-plan.md`](renderer/voxelrt-render-graph-migration-plan.md)

@@ -315,6 +315,34 @@ Current transparency modes:
 - `VisibleObjects` drives main scene buffers and the camera-facing BVH.
 - `ShadowObjects` drives a broader shadow BVH so off-screen casters can still affect visible receivers.
 
+### Streamed voxel residency
+
+Ordinary `VoxelRenderHiddenComponent` entities leave renderer residency. Adding
+`StreamedVoxelRenderComponent` keeps the requested voxel geometry in
+`Scene.Objects` while hidden, allowing GPU uploads to continue. The bridge sets
+`RenderEnabled = false`; scene commit excludes the object from visible,
+transparent, shadow and render BVH lists and visibility statistics. CPU ray
+queries still use resident authoritative geometry. Automatic entity proxy and
+impostor LOD are bypassed for marked entities.
+
+The streaming owner supplies a unique nonzero ticket and its generation.
+`VoxelRtState.StreamedVoxelStatus(ticket)` becomes known when the bridge observes
+the marker and captures the actual runtime map/revision. Unfinished target or
+ownership changes cancel the ticket; missing adoption data fails diagnostically.
+After `RtApp.Update()`, the bridge checks allocation coverage, dirty work,
+material state and sector lookup topology in constant time per uploading ticket.
+`Ready` means required writes have been queued before a later visibility change,
+without waiting for a GPU completion fence.
+
+Terminal states remain latched. Later edits use the ordinary dirty-upload path.
+The owner removes or changes the terminal marker before calling
+`ForgetStreamedVoxel`; that method deletes only terminal records. Terminal
+records retain status metadata without retaining captured geometry handles.
+Priority and ticket order are copied to scheduling metadata. Global upload
+budgets and automatic parent/child selection remain subsequent implementation
+steps. See [S1a scope and verification](../roadmaps/streamed-rendering-s1a.md) and
+the [island residency contract](../content/island-streaming.md#renderer-residency-contract).
+
 ## Specialized Subsystems
 
 ### Shadows

@@ -128,6 +128,7 @@ type VoxelRtState struct {
 	instanceMap                    map[EntityId]*core.VoxelObject
 	instanceGeometrySources        map[EntityId]*volume.XBrickMap
 	instanceObjectScopedGeometry   map[EntityId]bool
+	streamedVoxelTickets           map[uint64]*streamedVoxelTicket
 	runtimeEditedVoxelEntities     map[EntityId]struct{}
 	runtimeEditedVoxelRevisions    map[EntityId]uint64
 	runtimeEditedVoxelEdits        map[EntityId]runtimeVoxelEdit
