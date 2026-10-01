@@ -306,7 +306,14 @@ with E. Activation toggles the matching `MovingBrushComponent` state through
 `target`/`target_name` links. If `asset_path` is present, runtime spawns that
 voxel asset on the moving-brush entity and moves it between closed/open targets.
 Moving-brush bounds also participate in character collision and ground probes;
-supported grounded players and authored NPCs inherit the brush's movement.
+characters with `GroundedCharacterMotorComponent` inherit the brush's movement
+only while their grounded contacts identify that brush as their support. The
+motor probes support before brush motion; carrying updates the character's
+transform, support contact, and player camera when present. Airborne characters,
+characters outside the support, and characters supported by another entity do
+not become riders through nearby coordinates. Players and NPCs share this motor
+ownership; `NPCComponent` alone supplies identity and spawn metadata, without
+locomotion or carrying.
 
 ### NPCs
 

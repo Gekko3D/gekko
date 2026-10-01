@@ -976,6 +976,27 @@ traversal execution and does not dirty graph tiles.
 runtime targeting does not reconstruct polygon IDs or filled navigation
 surfaces. Residency loads also prepare the immutable route-query indexes on the
 background loader; all requests for that navigation revision reuse them.
+
+Runtime overlays for blockers, doors, and disabled traversals build one complete
+immutable query snapshot at a time in the background. A successful build
+publishes its query, captured restrictions, residency, and revision together when
+its runtime generation and topology are still current, even if newer overlay
+intent arrived during the build. Desired overlay maps remain independent from
+the published maps, so the next build captures the latest intent. This lets
+residency and overlay publications progress while overlay requests continue to
+change.
+Published snapshots can lag newer intent until a later build completes; physical
+movement continues to check live collision. Previously returned service values
+retain their captured query and restrictions.
+
+Results from an obsolete runtime generation, residency load generation, or
+resident graph revision cannot replace the published snapshot. A failed build
+whose overlay request has been superseded is ignored and the latest desired
+overlay is retried; a failure for the current request sets the runtime's
+initialization error. A replacement residency publication retires only edit
+blockers whose generation is covered by that load, leaving newer edit blockers
+queued. Query indexes remain background work throughout this process.
+
 `FindRoute` accepts endpoint support only within one navigation voxel
 vertically, with a small floating-point boundary epsilon. A route start may
 additionally project within one voxel in 3D to absorb motor drift; an exact

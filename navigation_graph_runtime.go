@@ -391,7 +391,8 @@ func (s RuntimeNavigationService) IsSpanBlocked(ref content.NavSpanRef) bool {
 	return s.query != nil && s.query.IsSpanBlocked(ref)
 }
 
-// IsSpanActive reports whether a span remains in the resident runtime graph.
+// IsSpanActive reports whether a span belongs to the resident graph and is not
+// removed by the published blocker overlay.
 func (s RuntimeNavigationService) IsSpanActive(ref content.NavSpanRef) bool {
 	if s.query != nil {
 		return s.query.IsSpanActive(ref)
@@ -740,7 +741,10 @@ func streamedLevelNavigationSystem(state *StreamedLevelRuntimeState) {
 			break
 		}
 		state.navigationOverlayActive = false
-		if result.OverlayGeneration != state.navigationOverlayRequestedGen {
+		// Successful snapshots make progress even while overlay intent changes.
+		// Desired maps remain queued for the next build; only superseded errors
+		// are discarded here. Runtime and topology generation fences still apply.
+		if result.Err != nil && result.OverlayGeneration != state.navigationOverlayRequestedGen {
 			break
 		}
 		if result.LoadGeneration != 0 {
