@@ -494,6 +494,39 @@ root startup gate or cross-layer coverage groups. V2 still requests usable secto
 proxies globally. Implementation scope and verification:
 [S1c](../roadmaps/streamed-rendering-s1c.md).
 
+Prepared geometry cache update, S2a:
+
+- Imported full chunks and sector proxies reuse immutable worker-prepared maps.
+  Registration creates a separate AssetServer copy. This describes the current
+  path; the earlier disabled-staging note records a historical investigation.
+- `MaxPreparedGeometryCacheBytes` bounds the estimated CPU geometry storage
+  owned by this cache. Zero selects 128 MiB; negative disables warm retention.
+  `MaxPreparedGeometryCacheEntries` remains a secondary ceiling: zero selects
+  256, negative disables warm retention. Both ceilings apply together.
+- The charge includes geometry structs, logical map entries, packed-brick
+  pointer capacity and auxiliary byte capacity. Shared immutable maps, sectors
+  and bricks count once across cache keys. Registered copies count separately.
+  Charges are captured at admission. Go map bucket slack, allocator overhead,
+  cache bookkeeping and later renderer dirty-map churn are excluded.
+- Live full/proxy users pin their assets, including hidden fallbacks and CPU
+  collision users. Their bytes may exceed the ceiling; metrics expose total,
+  prepared, asset-copy, pinned, maximum and over-budget bytes. Eviction cannot
+  invalidate an acquired user. Unreferenced LRU entries leave first.
+- Oversized results remain usable without warm retention. Final release drops
+  oversized/disabled entries and their assets. Empty keys also have exact asset
+  lifetime tracking. Stop joins workers, removes users and closes cache ownership;
+  restart creates a fresh cache. Failed persistence preserves live ownership.
+- Same-key overlapping builds share one result, even when warm retention is
+  disabled or the result is oversized. Failure wakes waiters and allows retry.
+  Distinct keys proceed independently. Workers never delete AssetServer assets;
+  engine-thread maintenance trims deferred victims even on no-commit frames.
+- This is a cache ownership budget, not a process memory ceiling. Decoded
+  RuntimeContentLoader data, pending results, editable/collision copies,
+  navigation snapshots and renderer-retained data still have separate owners.
+  Their byte bounds remain later S2 slices. Formats, compression and collision
+  algorithms are unchanged. Scope and verification:
+  [S2a](../roadmaps/streamed-rendering-s2a.md).
+
 #### Step 7: Split Render, Collision, And Destruction Residency
 
 A sector can have separate residency for:

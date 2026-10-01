@@ -8,34 +8,62 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
-const defaultStreamedPreparedGeometryCacheEntries = 256
+const (
+	defaultStreamedPreparedGeometryCacheEntries       = 256
+	defaultStreamedPreparedGeometryCacheBytes   int64 = 128 << 20
+)
 
 type streamedPreparedGeometryCache struct {
 	mu         sync.Mutex
 	enabled    bool
+	closed     bool
 	maxEntries int
+	maxBytes   int64
 	clock      uint64
 	entries    map[string]*streamedPreparedGeometryCacheEntry
+	owned      map[*streamedPreparedGeometryCacheEntry]struct{}
+	assets     map[AssetId]*streamedPreparedGeometryCacheEntry
+	builds     map[string]*streamedPreparedGeometryBuild
+	storage    streamedGeometryStorageLedger
 	stats      streamedPreparedGeometryCacheStats
 }
 
 type streamedPreparedGeometryCacheEntry struct {
-	key        string
+	key             string
+	geometry        *volume.XBrickMap
+	preparedStorage *streamedGeometryStorageNode
+	assetStorage    *streamedGeometryStorageNode
+	asset           AssetId
+	assetServer     *AssetServer
+	refCount        int
+	voxelCount      int
+	lastUse         uint64
+	noWarm          bool
+}
+
+type streamedPreparedGeometryBuild struct {
+	done       chan struct{}
 	geometry   *volume.XBrickMap
-	asset      AssetId
-	refCount   int
-	voxelCount int
-	lastUse    uint64
+	panicValue any
+	hit        bool
 }
 
 type streamedPreparedGeometryCacheStats struct {
-	Entries        int
-	Voxels         int
-	Hits           int
-	Misses         int
-	Evictions      int
-	AssetRegisters int
-	AssetReuses    int
+	Entries           int
+	Voxels            int
+	Hits              int
+	Misses            int
+	Evictions         int
+	AssetRegisters    int
+	AssetReuses       int
+	Bytes             int64
+	PreparedBytes     int64
+	AssetBytes        int64
+	PinnedBytes       int64
+	MaxBytes          int64
+	OverBudgetBytes   int64
+	BuildWaits        int
+	OversizedBypasses int
 }
 
 func streamedPreparedGeometryCacheMaxEntries(configured int) int {
@@ -48,112 +76,205 @@ func streamedPreparedGeometryCacheMaxEntries(configured int) int {
 	return configured
 }
 
-func newStreamedPreparedGeometryCache(maxEntries int) *streamedPreparedGeometryCache {
-	cache := &streamedPreparedGeometryCache{
-		enabled:    maxEntries > 0,
-		maxEntries: maxEntries,
-		entries:    make(map[string]*streamedPreparedGeometryCacheEntry),
+func newStreamedPreparedGeometryCache(maxEntries int, byteBudget ...int64) *streamedPreparedGeometryCache {
+	maxEntries = streamedPreparedGeometryCacheMaxEntries(maxEntries)
+	maxBytes := defaultStreamedPreparedGeometryCacheBytes
+	if len(byteBudget) > 0 {
+		if byteBudget[0] < 0 {
+			maxBytes = 0
+		} else if byteBudget[0] > 0 {
+			maxBytes = byteBudget[0]
+		}
 	}
-	return cache
+	return &streamedPreparedGeometryCache{
+		enabled:    maxEntries > 0 && maxBytes > 0,
+		maxEntries: maxEntries, maxBytes: maxBytes,
+		entries: make(map[string]*streamedPreparedGeometryCacheEntry),
+		owned:   make(map[*streamedPreparedGeometryCacheEntry]struct{}),
+		assets:  make(map[AssetId]*streamedPreparedGeometryCacheEntry),
+		builds:  make(map[string]*streamedPreparedGeometryBuild),
+	}
 }
 
 func (c *streamedPreparedGeometryCache) getOrBuild(key string, build func() *volume.XBrickMap) (*volume.XBrickMap, bool) {
 	key = strings.TrimSpace(key)
-	if c == nil || !c.enabled || key == "" {
+	if c == nil || key == "" {
 		if build == nil {
 			return nil, false
 		}
 		return build(), false
 	}
-
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		if build == nil {
+			return nil, false
+		}
+		return build(), false
+	}
 	c.clock++
-	if entry := c.entries[key]; entry != nil && entry.geometry != nil {
+	if entry := c.entries[key]; c.enabled && entry != nil {
 		entry.lastUse = c.clock
 		c.stats.Hits++
 		c.mu.Unlock()
 		return entry.geometry, true
 	}
+	if pending := c.builds[key]; pending != nil {
+		c.stats.BuildWaits++
+		c.mu.Unlock()
+		<-pending.done
+		if pending.panicValue != nil {
+			panic(pending.panicValue)
+		}
+		return pending.geometry, pending.hit
+	}
 	c.stats.Misses++
-	c.mu.Unlock()
 	if build == nil {
+		c.mu.Unlock()
 		return nil, false
 	}
-	geometry := build()
-	if geometry == nil {
-		return nil, false
-	}
+	pending := &streamedPreparedGeometryBuild{done: make(chan struct{})}
+	c.builds[key] = pending
+	c.mu.Unlock()
 
+	// Builders and same-key waits run outside the mutex. Every outcome is
+	// published to all joined callers before the in-flight slot is removed.
+	func() {
+		defer func() { pending.panicValue = recover() }()
+		pending.geometry = build()
+	}()
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.clock++
-	if entry := c.entries[key]; entry != nil && entry.geometry != nil {
-		entry.lastUse = c.clock
-		c.stats.Hits++
-		return entry.geometry, true
+	if pending.geometry != nil && pending.panicValue == nil && c.enabled && !c.closed {
+		c.clock++
+		if entry := c.entries[key]; entry != nil {
+			entry.lastUse = c.clock
+			pending.geometry, pending.hit = entry.geometry, true
+			c.stats.Hits++
+		} else {
+			entry := c.admitLocked(key, pending.geometry)
+			if streamedGeometryStorageCharge(entry.preparedStorage) > c.maxBytes {
+				c.stats.OversizedBypasses++
+				c.removeLocked(entry, false)
+			} else {
+				// Workers can drop prepared-only storage. An older asset victim must
+				// wait for engine-thread maintenance rather than evicting newer data.
+				c.evictLocked(false)
+			}
+		}
 	}
-	entry := &streamedPreparedGeometryCacheEntry{
-		key:        key,
-		geometry:   geometry,
-		voxelCount: geometry.GetVoxelCount(),
-		lastUse:    c.clock,
+	delete(c.builds, key)
+	close(pending.done)
+	c.mu.Unlock()
+	if pending.panicValue != nil {
+		panic(pending.panicValue)
 	}
-	c.entries[key] = entry
-	c.evictLocked(nil, key)
-	return geometry, false
+	return pending.geometry, pending.hit
 }
 
+func (c *streamedPreparedGeometryCache) admitLocked(key string, geometry *volume.XBrickMap) *streamedPreparedGeometryCacheEntry {
+	entry := &streamedPreparedGeometryCacheEntry{
+		key: key, geometry: geometry, voxelCount: geometry.GetVoxelCount(),
+		lastUse: c.clock, noWarm: !c.enabled || key == "",
+	}
+	entry.preparedStorage = c.storage.admit(geometry, streamedGeometryPrepared)
+	if key != "" {
+		c.entries[key] = entry
+	}
+	c.owned[entry] = struct{}{}
+	c.stats.Entries++
+	c.stats.Voxels += entry.voxelCount
+	return entry
+}
+
+// acquireAsset, releaseAssetID, trim and close are engine-thread operations.
+// Cleanup uses the registering AssetServer even if a direct caller supplies
+// a different server later.
 func (c *streamedPreparedGeometryCache) acquireAsset(assets *AssetServer, key string, geometry *volume.XBrickMap) (AssetId, bool) {
-	key = strings.TrimSpace(key)
-	if assets == nil || geometry == nil || c == nil || !c.enabled || key == "" {
-		if assets == nil || geometry == nil {
-			return AssetId{}, false
-		}
+	if assets == nil || geometry == nil {
+		return AssetId{}, false
+	}
+	if c == nil {
 		return assets.RegisterSharedVoxelGeometry(geometry, ""), false
 	}
-
+	key = strings.TrimSpace(key)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return AssetId{}, false
+	}
 	c.clock++
-	entry := c.entries[key]
+	var entry *streamedPreparedGeometryCacheEntry
+	if key != "" {
+		entry = c.entries[key]
+	}
 	if entry == nil {
-		entry = &streamedPreparedGeometryCacheEntry{
-			key:        key,
-			geometry:   geometry,
-			voxelCount: geometry.GetVoxelCount(),
-		}
-		c.entries[key] = entry
-	} else if entry.geometry == nil {
-		entry.geometry = geometry
-		entry.voxelCount = geometry.GetVoxelCount()
+		entry = c.admitLocked(key, geometry)
 	}
 	entry.lastUse = c.clock
+	if entry.refCount == 0 {
+		c.storage.adjust(entry.preparedStorage, streamedGeometryPinned, 1)
+		c.storage.adjust(entry.assetStorage, streamedGeometryPinned, 1)
+	}
 	entry.refCount++
 	if entry.asset != (AssetId{}) {
 		c.stats.AssetReuses++
+		c.evictLocked(true)
 		return entry.asset, true
 	}
 	entry.asset = assets.RegisterSharedVoxelGeometry(entry.geometry, "")
+	entry.assetServer = assets
+	registered, _ := assets.GetVoxelGeometry(entry.asset)
+	entry.assetStorage = c.storage.admit(registered.XBrickMap, streamedGeometryAsset)
+	c.storage.adjust(entry.assetStorage, streamedGeometryPinned, 1)
+	c.assets[entry.asset] = entry
 	c.stats.AssetRegisters++
-	c.evictLocked(assets, key)
+	if c.enabled && streamedGeometryStorageCharge(entry.preparedStorage, entry.assetStorage) > c.maxBytes {
+		entry.noWarm = true
+	}
+	c.evictLocked(true)
 	return entry.asset, false
 }
 
+// Preserve the keyed release seam for callers that already balance by key.
 func (c *streamedPreparedGeometryCache) releaseAsset(assets *AssetServer, key string) {
-	key = strings.TrimSpace(key)
-	if c == nil || !c.enabled || key == "" {
+	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.clock++
-	if entry := c.entries[key]; entry != nil {
-		if entry.refCount > 0 {
-			entry.refCount--
-		}
-		entry.lastUse = c.clock
+	c.releaseLocked(c.entries[strings.TrimSpace(key)])
+}
+
+func (c *streamedPreparedGeometryCache) releaseAssetID(assets *AssetServer, id AssetId) {
+	if id == (AssetId{}) {
+		return
 	}
-	c.evictLocked(assets, "")
+	if c == nil {
+		if assets != nil {
+			assets.DeleteVoxelGeometry(id)
+		}
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releaseLocked(c.assets[id])
+}
+
+func (c *streamedPreparedGeometryCache) releaseLocked(entry *streamedPreparedGeometryCacheEntry) {
+	if entry == nil || entry.refCount == 0 {
+		return
+	}
+	c.clock++
+	entry.lastUse = c.clock
+	entry.refCount--
+	if entry.refCount == 0 {
+		c.storage.adjust(entry.preparedStorage, streamedGeometryPinned, -1)
+		c.storage.adjust(entry.assetStorage, streamedGeometryPinned, -1)
+		if entry.noWarm {
+			c.removeLocked(entry, true)
+		}
+	}
+	c.evictLocked(true)
 }
 
 func (c *streamedPreparedGeometryCache) snapshot() streamedPreparedGeometryCacheStats {
@@ -163,41 +284,73 @@ func (c *streamedPreparedGeometryCache) snapshot() streamedPreparedGeometryCache
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	stats := c.stats
-	for _, entry := range c.entries {
-		stats.Entries++
-		stats.Voxels += entry.voxelCount
+	stats.Bytes = c.storage.bytes
+	stats.PreparedBytes = c.storage.preparedBytes
+	stats.AssetBytes = c.storage.assetBytes
+	stats.PinnedBytes = c.storage.pinnedBytes
+	stats.MaxBytes = c.maxBytes
+	if stats.Bytes > c.maxBytes {
+		stats.OverBudgetBytes = stats.Bytes - c.maxBytes
 	}
 	return stats
 }
 
-func (c *streamedPreparedGeometryCache) evictLocked(assets *AssetServer, protectedKey string) {
-	if c == nil || !c.enabled || c.maxEntries <= 0 {
-		return
-	}
-	for len(c.entries) > c.maxEntries {
+func (c *streamedPreparedGeometryCache) evictLocked(canDeleteAssets bool) {
+	for len(c.owned) > c.maxEntries || c.storage.bytes > c.maxBytes {
 		var victim *streamedPreparedGeometryCacheEntry
-		for _, entry := range c.entries {
-			if entry == nil || entry.refCount > 0 {
-				continue
-			}
-			if protectedKey != "" && entry.key == protectedKey {
-				continue
-			}
-			if assets == nil && entry.asset != (AssetId{}) {
+		for entry := range c.owned {
+			if entry.refCount > 0 {
 				continue
 			}
 			if victim == nil || entry.lastUse < victim.lastUse {
 				victim = entry
 			}
 		}
-		if victim == nil {
+		if victim == nil || (!canDeleteAssets && victim.asset != (AssetId{})) {
 			return
 		}
-		if assets != nil && victim.asset != (AssetId{}) {
-			assets.DeleteVoxelGeometry(victim.asset)
-		}
-		delete(c.entries, victim.key)
+		c.removeLocked(victim, true)
+	}
+}
+
+func (c *streamedPreparedGeometryCache) removeLocked(entry *streamedPreparedGeometryCacheEntry, eviction bool) {
+	if entry.asset != (AssetId{}) {
+		entry.assetServer.DeleteVoxelGeometry(entry.asset)
+		delete(c.assets, entry.asset)
+	}
+	if entry.refCount > 0 {
+		c.storage.adjust(entry.preparedStorage, streamedGeometryPinned, -1)
+		c.storage.adjust(entry.assetStorage, streamedGeometryPinned, -1)
+	}
+	c.storage.adjust(entry.preparedStorage, streamedGeometryPrepared, -1)
+	c.storage.adjust(entry.assetStorage, streamedGeometryAsset, -1)
+	delete(c.entries, entry.key)
+	delete(c.owned, entry)
+	c.stats.Entries--
+	c.stats.Voxels -= entry.voxelCount
+	if eviction {
 		c.stats.Evictions++
+	}
+}
+
+func (c *streamedPreparedGeometryCache) trim(assets *AssetServer) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.evictLocked(true)
+}
+
+func (c *streamedPreparedGeometryCache) close(assets *AssetServer) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	for entry := range c.owned {
+		c.removeLocked(entry, false)
 	}
 }
 

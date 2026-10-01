@@ -64,6 +64,7 @@ type StreamedLevelRuntimeConfig struct {
 	MaxVolumeInstances              int
 	MaxPrepareJobs                  int
 	MaxPreparedGeometryCacheEntries int
+	MaxPreparedGeometryCacheBytes   int64
 	MaxChunkCommitsPerFrame         int
 	MaxStreamingCommitMillis        int
 	MetricsLogInterval              time.Duration
@@ -79,61 +80,69 @@ type StreamedLevelRuntimeConfig struct {
 }
 
 type StreamedLevelRuntimeMetrics struct {
-	DesiredChunkCount                  int
-	DesiredLoadableChunkCount          int
-	KeepChunkCount                     int
-	KeepLoadableChunkCount             int
-	CollisionChunkCount                int
-	CollisionLoadableChunkCount        int
-	DestructionChunkCount              int
-	DestructionLoadableChunkCount      int
-	DesiredSectorCount                 int
-	KeepSectorCount                    int
-	DesiredSectorFullLoadedCount       int
-	KeepSectorFullLoadedCount          int
-	PendingLoadCount                   int
-	PendingProxyLoadCount              int
-	ActivePrepareJobCount              int
-	ActiveChunkPrepareJobCount         int
-	ActiveProxyPrepareJobCount         int
-	PreparedQueueDepth                 int
-	PreparedChunkQueueDepth            int
-	PreparedProxyQueueDepth            int
-	PreparedGeometryCacheEntries       int
-	PreparedGeometryCacheVoxels        int
-	PreparedGeometryCacheHits          int
-	PreparedGeometryCacheMisses        int
-	PreparedGeometryCacheEvictions     int
-	PreparedGeometryAssetRegisters     int
-	PreparedGeometryAssetReuses        int
-	AuxSidecarHitCount                 int
-	AuxSidecarMissCount                int
-	LoadedChunkCount                   int
-	LoadedSectorProxyCount             int
-	LoadedSectorProxyFullReadyCount    int
-	LoadedSectorProxyFullPendingCount  int
-	LoadedSectorProxyOutOfKeepCount    int
-	ChunksCommittedLastFrame           int
-	ProxyChunksCommittedLastFrame      int
-	FullChunksCommittedLastFrame       int
-	CollisionChunksCommittedLastFrame  int
-	EntitiesCommittedLastFrame         int
-	CommitBudgetHitLastFrame           bool
-	CommitBudgetReason                 string
-	NavigationRebuildActive            bool
-	NavigationRebuildQueuedTileCount   int
-	NavigationEditIgnoredCount         uint64
-	NavigationRebuildStartedCount      uint64
-	NavigationRebuildCompletedCount    uint64
-	NavigationRebuildDiscardedCount    uint64
-	NavigationRebuildPublishedCount    uint64
-	NavigationRebuildRequestedRevision uint64
-	NavigationRebuildCompletedRevision uint64
-	NavigationRebuildDiscardedRevision uint64
-	NavigationRebuildPublishedRevision uint64
-	NavigationRebuildLastReason        string
-	NavigationRebuildTerminalReason    string
-	NavigationRebuildLastDirtyCount    int
+	DesiredChunkCount                      int
+	DesiredLoadableChunkCount              int
+	KeepChunkCount                         int
+	KeepLoadableChunkCount                 int
+	CollisionChunkCount                    int
+	CollisionLoadableChunkCount            int
+	DestructionChunkCount                  int
+	DestructionLoadableChunkCount          int
+	DesiredSectorCount                     int
+	KeepSectorCount                        int
+	DesiredSectorFullLoadedCount           int
+	KeepSectorFullLoadedCount              int
+	PendingLoadCount                       int
+	PendingProxyLoadCount                  int
+	ActivePrepareJobCount                  int
+	ActiveChunkPrepareJobCount             int
+	ActiveProxyPrepareJobCount             int
+	PreparedQueueDepth                     int
+	PreparedChunkQueueDepth                int
+	PreparedProxyQueueDepth                int
+	PreparedGeometryCacheEntries           int
+	PreparedGeometryCacheBytes             int64
+	PreparedGeometryCachePreparedBytes     int64
+	PreparedGeometryCacheAssetBytes        int64
+	PreparedGeometryCachePinnedBytes       int64
+	PreparedGeometryCacheMaxBytes          int64
+	PreparedGeometryCacheOverBudgetBytes   int64
+	PreparedGeometryCacheBuildWaits        int
+	PreparedGeometryCacheOversizedBypasses int
+	PreparedGeometryCacheVoxels            int
+	PreparedGeometryCacheHits              int
+	PreparedGeometryCacheMisses            int
+	PreparedGeometryCacheEvictions         int
+	PreparedGeometryAssetRegisters         int
+	PreparedGeometryAssetReuses            int
+	AuxSidecarHitCount                     int
+	AuxSidecarMissCount                    int
+	LoadedChunkCount                       int
+	LoadedSectorProxyCount                 int
+	LoadedSectorProxyFullReadyCount        int
+	LoadedSectorProxyFullPendingCount      int
+	LoadedSectorProxyOutOfKeepCount        int
+	ChunksCommittedLastFrame               int
+	ProxyChunksCommittedLastFrame          int
+	FullChunksCommittedLastFrame           int
+	CollisionChunksCommittedLastFrame      int
+	EntitiesCommittedLastFrame             int
+	CommitBudgetHitLastFrame               bool
+	CommitBudgetReason                     string
+	NavigationRebuildActive                bool
+	NavigationRebuildQueuedTileCount       int
+	NavigationEditIgnoredCount             uint64
+	NavigationRebuildStartedCount          uint64
+	NavigationRebuildCompletedCount        uint64
+	NavigationRebuildDiscardedCount        uint64
+	NavigationRebuildPublishedCount        uint64
+	NavigationRebuildRequestedRevision     uint64
+	NavigationRebuildCompletedRevision     uint64
+	NavigationRebuildDiscardedRevision     uint64
+	NavigationRebuildPublishedRevision     uint64
+	NavigationRebuildLastReason            string
+	NavigationRebuildTerminalReason        string
+	NavigationRebuildLastDirtyCount        int
 
 	PreparedChunkCount   int
 	PrepareErrorCount    int
@@ -382,19 +391,30 @@ type streamedPlacementInstance struct {
 }
 
 type streamedLoadedChunk struct {
-	importedEmptyGeneration   uint64
-	TerrainEntities           map[EntityId]struct{}
-	ImportedWorldEntities     map[EntityId]struct{}
-	ImportedWorldGeometryKeys map[string]struct{}
-	PlacementRoots            map[string]EntityId
-	OwnedEntities             map[EntityId]struct{}
-	ObjectEntities            map[string]EntityId
+	importedEmptyGeneration     uint64
+	TerrainEntities             map[EntityId]struct{}
+	ImportedWorldEntities       map[EntityId]struct{}
+	ImportedWorldGeometryAssets []streamedGeometryAssetLease
+	PlacementRoots              map[string]EntityId
+	OwnedEntities               map[EntityId]struct{}
+	ObjectEntities              map[string]EntityId
 }
 
 type streamedLoadedSectorProxy struct {
-	Entity           EntityId
-	LOD              content.ImportedWorldLODDef
-	GeometryCacheKey string
+	Entity        EntityId
+	LOD           content.ImportedWorldLODDef
+	GeometryAsset streamedGeometryAssetLease
+}
+
+// Keep the registering server with every acquired ID so nil-cache cleanup
+// releases the exact asset owned by this runtime load.
+type streamedGeometryAssetLease struct {
+	ID     AssetId
+	Server *AssetServer
+}
+
+func (lease streamedGeometryAssetLease) release(cache *streamedPreparedGeometryCache) {
+	cache.releaseAssetID(lease.Server, lease.ID)
 }
 
 type streamedPreparedChunk struct {
@@ -630,7 +650,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.KeepProxySectors = make(map[ChunkCoord]struct{})
 	state.PendingLoads = make(map[ChunkCoord]struct{})
 	state.PendingProxyLoads = make(map[ChunkCoord]struct{})
-	state.PreparedGeometryCache = newStreamedPreparedGeometryCache(streamedPreparedGeometryCacheMaxEntries(cfg.MaxPreparedGeometryCacheEntries))
+	state.PreparedGeometryCache = newStreamedPreparedGeometryCache(cfg.MaxPreparedGeometryCacheEntries, cfg.MaxPreparedGeometryCacheBytes)
 	state.LoadedChunks = make(map[ChunkCoord]*streamedLoadedChunk)
 	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
 	state.PlacementsByChunk = make(map[ChunkCoord][]streamedPlacementInstance)
@@ -989,6 +1009,8 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 		cmd.RemoveEntity(player)
 	}
 	cmd.app.FlushCommands()
+	state.PreparedGeometryCache.close(assetServerFromApp(cmd.app))
+	refreshStreamedRuntimeMetricsCounts(state)
 
 	clearVoxelWorldDirtyChunks(cmd.app, state.BaseWorldID)
 	if state.sessionDeltaDir != "" {
@@ -1660,6 +1682,14 @@ func StreamedLevelCollisionReadyInBounds(cmd *Commands, state *StreamedLevelRunt
 }
 
 func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState) {
+	// Cache maintenance also runs on frames with no queued commits or an
+	// initialization error. Workers never delete AssetServer registrations.
+	if state != nil && state.Initialized {
+		state.PreparedGeometryCache.trim(assets)
+		if state.InitErr != nil {
+			refreshStreamedRuntimeMetricsCounts(state)
+		}
+	}
 	defer beginStreamedRenderTicketBatch(state)()
 	refreshStreamedRenderResidency(cmd, state)
 	if state == nil || !state.Initialized || state.InitErr != nil {
@@ -1822,6 +1852,14 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 	cacheStats := state.PreparedGeometryCache.snapshot()
 	state.Metrics.PreparedGeometryCacheEntries = cacheStats.Entries
 	state.Metrics.PreparedGeometryCacheVoxels = cacheStats.Voxels
+	state.Metrics.PreparedGeometryCacheBytes = cacheStats.Bytes
+	state.Metrics.PreparedGeometryCachePreparedBytes = cacheStats.PreparedBytes
+	state.Metrics.PreparedGeometryCacheAssetBytes = cacheStats.AssetBytes
+	state.Metrics.PreparedGeometryCachePinnedBytes = cacheStats.PinnedBytes
+	state.Metrics.PreparedGeometryCacheMaxBytes = cacheStats.MaxBytes
+	state.Metrics.PreparedGeometryCacheOverBudgetBytes = cacheStats.OverBudgetBytes
+	state.Metrics.PreparedGeometryCacheBuildWaits = cacheStats.BuildWaits
+	state.Metrics.PreparedGeometryCacheOversizedBypasses = cacheStats.OversizedBypasses
 	state.Metrics.PreparedGeometryCacheHits = cacheStats.Hits
 	state.Metrics.PreparedGeometryCacheMisses = cacheStats.Misses
 	state.Metrics.PreparedGeometryCacheEvictions = cacheStats.Evictions
@@ -2403,9 +2441,9 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 	recordStreamedCommitFlush(cmd, state)
 	clearEntityVoxelDirty(cmd, entity)
 	state.LoadedSectorProxies[prepared.SectorCoord] = &streamedLoadedSectorProxy{
-		Entity:           entity,
-		LOD:              prepared.LOD,
-		GeometryCacheKey: prepared.PreparedGeometryCacheKey,
+		Entity:        entity,
+		LOD:           prepared.LOD,
+		GeometryAsset: streamedGeometryAssetLease{ID: preparedGeometryAsset, Server: assets},
 	}
 	reconcileStreamedSectorProxyAfterFullCommit(cmd, state, prepared.SectorCoord)
 	entityCount = 1
@@ -2435,12 +2473,11 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		}
 	}()
 	chunk := &streamedLoadedChunk{
-		TerrainEntities:           make(map[EntityId]struct{}),
-		ImportedWorldEntities:     make(map[EntityId]struct{}),
-		ImportedWorldGeometryKeys: make(map[string]struct{}),
-		PlacementRoots:            make(map[string]EntityId),
-		OwnedEntities:             make(map[EntityId]struct{}),
-		ObjectEntities:            make(map[string]EntityId),
+		TerrainEntities:       make(map[EntityId]struct{}),
+		ImportedWorldEntities: make(map[EntityId]struct{}),
+		PlacementRoots:        make(map[string]EntityId),
+		OwnedEntities:         make(map[EntityId]struct{}),
+		ObjectEntities:        make(map[string]EntityId),
 	}
 
 	if prepared.TerrainChunk != nil && prepared.TerrainChunk.NonEmptyVoxelCount > 0 {
@@ -2513,8 +2550,8 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		importedWorldCollisionCommitted = collisionEnabled
 		clearEntityVoxelDirty(cmd, entity)
 		chunk.ImportedWorldEntities[entity] = struct{}{}
-		if preparedGeometryAsset != (AssetId{}) && prepared.PreparedImportedWorldGeometryCacheKey != "" {
-			chunk.ImportedWorldGeometryKeys[prepared.PreparedImportedWorldGeometryCacheKey] = struct{}{}
+		if preparedGeometryAsset != (AssetId{}) {
+			chunk.ImportedWorldGeometryAssets = append(chunk.ImportedWorldGeometryAssets, streamedGeometryAssetLease{ID: preparedGeometryAsset, Server: assets})
 		}
 		chunk.OwnedEntities[entity] = struct{}{}
 	}
@@ -2659,10 +2696,7 @@ func unloadStreamedSectorProxy(cmd *Commands, state *StreamedLevelRuntimeState, 
 		retainStreamedRendererGeometryForEntity(cmd, loaded.Entity)
 		cmd.RemoveEntity(loaded.Entity)
 	}
-	if loaded.GeometryCacheKey != "" {
-		assets := assetServerFromApp(cmd.app)
-		state.PreparedGeometryCache.releaseAsset(assets, loaded.GeometryCacheKey)
-	}
+	loaded.GeometryAsset.release(state.PreparedGeometryCache)
 	delete(state.LoadedSectorProxies, sectorCoord)
 }
 
@@ -2767,9 +2801,8 @@ func removeStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 		delete(state.navigationVoxelSnapshots, eid)
 		delete(state.navigationEditRevisions, eid)
 	}
-	assets := assetServerFromApp(cmd.app)
-	for key := range loaded.ImportedWorldGeometryKeys {
-		state.PreparedGeometryCache.releaseAsset(assets, key)
+	for _, lease := range loaded.ImportedWorldGeometryAssets {
+		lease.release(state.PreparedGeometryCache)
 	}
 	for objectKey := range loaded.ObjectEntities {
 		delete(state.ObjectChunk, objectKey)

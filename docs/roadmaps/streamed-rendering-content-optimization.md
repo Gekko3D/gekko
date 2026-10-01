@@ -322,7 +322,11 @@ deterministic ordering/aging, shared-map deduplication and atlas backpressure.
 [S1c](streamed-rendering-s1c.md) integrates those tickets with existing v2
 sector/proxy refinement and distance unloading. CPU collision/navigation stay
 independent. V3 page selection and cross-layer groups remain separate work.
-Cache/worker byte bounds and the remaining proposals keep the delivery order above.
+[S2a](streamed-rendering-s2a.md) is implemented for prepared geometry and
+its registered asset copies: byte accounting, pinned users, LRU eviction,
+per-key build suppression and Stop cleanup. Decoded-content/pending-result and
+other owner byte bounds remain later S2 slices. The remaining proposals keep
+the delivery order above.
 
 Decisions to settle before dependent implementation:
 
@@ -339,7 +343,8 @@ The proposal review checked source symbols, existing plans, byte-layout arithmet
 and document links. Implementation verification is recorded per slice, starting
 with [S1a](streamed-rendering-s1a.md#execution-record),
 [S1b](streamed-rendering-s1b.md#verification-and-execution-record) and
-[S1c](streamed-rendering-s1c.md#execution-record). Native smoke checks establish
+[S1c](streamed-rendering-s1c.md#execution-record) and
+[S2a](streamed-rendering-s2a.md#execution-record). Native smoke checks establish
 the recorded rendering/streaming contracts; they do not establish performance
 gains or rendered pixel parity.
 

@@ -145,6 +145,24 @@ That field is useful for:
 
 It is metadata only. It is not a canonical deduplication key.
 
+## Streamed Prepared Geometry Lifetime
+
+The streamed runtime owns a bounded cache for imported full/proxy geometry.
+`RegisterSharedVoxelGeometry` deep-copies the prepared map; the cache charges
+both its prepared backing and the actual registered copy. Acquired runtime
+users pin that copy. Warm entries share an LRU byte/entry policy; live users may
+exceed the byte ceiling and expose pressure metrics. Oversized or disabled warm
+entries delete their registered assets after the final release.
+
+Cleanup uses the original registering AssetServer and exact acquired asset ID,
+including uncached/empty-key registrations. Successful streamed Stop releases
+all assets owned by that cache and preserves unrelated server assets. Renderer
+retention and private mutable geometry have separate lifetime owners. This
+policy does not add eviction to authored models, palettes, textures or all
+other AssetServer records. See
+[S2a](../roadmaps/streamed-rendering-s2a.md) for the storage-charge definition,
+defaults and remaining memory bounds.
+
 ## Important Constraints
 
 - `AssetID` values are process-local identities, not stable authored references.
@@ -170,7 +188,8 @@ If a bug is “the right runtime asset rendered incorrectly,” start in the ren
 
 Agents should be aware of the current limitations:
 
-- there is no documented eviction or lifetime policy for runtime assets
+- runtime asset eviction is scoped to the streamed prepared-geometry cache;
+  other asset creation paths have no general eviction policy
 - there is no central deduplication layer for repeated authored references
 - material and texture workflows are thinner and less documented than voxel asset workflows
 
