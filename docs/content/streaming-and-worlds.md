@@ -141,8 +141,9 @@ Spawn helpers live in:
 
 ## Streamed Level Runtime
 
-The streamed runtime is implemented in `streamed_level_runtime.go`, with renderer
-ticket ownership and visibility handoff in `streamed_level_render_residency.go`.
+The streamed runtime is implemented in `streamed_level_runtime.go`, with observer
+demand selection in `streamed_level_selection.go` and renderer ticket ownership
+and visibility handoff in `streamed_level_render_residency.go`.
 
 It extends authored levels with:
 
@@ -168,6 +169,43 @@ Important state:
 Important public entry point:
 
 - `StartStreamedLevelRuntime(...)`
+
+Observer selection is owned by the main thread. Each tick scans live ECS
+observers, keyed by entity, world-space chunk coordinate, effective radii, chunk
+size, runtime generation, and selection revision. Unchanged keys reuse demand.
+Changed cubes update disjoint entering/exiting slabs; teleports visit bounded
+footprints. Overlap counts preserve the other observers' demand when one moves
+or disappears. Raw prefetch/keep demand and sector demand are unioned across all
+observers before imported filtering and full-sector expansion. Collision and
+destruction remain raw radius cubes. The existing PVS/adjacency, non-imported
+content exceptions, backed empty-entry expansion, and global proxy fallback
+policies are preserved.
+
+Call `state.InvalidateObserverSelection()` on the main thread after changing
+selection metadata in place: imported membership/PVS/adjacency, placements,
+terrain occupancy/overrides, backing availability, or a future layer transform
+that changes selection coordinates. Exported maps do not detect such edits.
+Runtime terrain override publication/removal invalidates at the mutation;
+generation, radii, chunk size, and proxy enablement are checked directly. Start
+resets selection; Stop releases it when teardown begins, including late cleanup
+errors. Persistence failures before teardown retain resumable state.
+
+Published demand maps are runtime-owned read-only views. Startup gameplay demand
+and temporary proxy pins are tracked as working additions and cleared on the
+next tick without copying the whole base selection. Reusing selection still
+runs render refresh/reconciliation, navigation demand, unloads/upgrades, hint
+pruning, and prepare scheduling/retry/admission. Manifest visibility, valid
+full-chunk expansion, and fallback derivations are cached until invalidated.
+
+`ObserverSelectionBuildCount` counts changed observer demand evaluations,
+including additions/removals; `ObserverSelectionChunkVisitCount` counts actual
+coordinates visited while building/updating radius volumes. Both are cumulative
+`uint64` metrics reset at Start. Live histories/count memberships are bounded by
+active observer footprints and indexed metadata, with no historical input keys.
+Empty count/history maps and Stop release their capacity; nonempty Go maps may
+retain peak capacity. This is not a selection byte budget or measured frame-time
+gain. [S3a is complete](../roadmaps/streamed-rendering-s3a.md); renderer scene
+gathering and future layer selection remain separate S3 work.
 
 ## Long-Term Streaming Plan
 

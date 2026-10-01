@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-01. Status: design proposal; no engine implementation.
+Date: 2026-10-01. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). This review covers optimization proposals, excluding the measurement phase and its status records. Gekko code inspected at `1f7a281`, including current working-tree content. Rust performance targets and compression ratios are not Gekko predictions.
 
@@ -19,8 +19,8 @@ Primary owners: renderer storage/upload and streamed content runtime. Consumers:
 - [CPU brick storage](../../voxelrt/rt/volume/xbrickmap.go): 8³ bricks, 32³ sectors, 2³ micro masks. `Sector.PackedBricks` already uses popcount indexing. `Brick.Payload` still stores 512 bytes for every allocated brick, including uniform bricks.
 - [GPU upload](../../voxelrt/rt/gpu/manager_voxel.go): each sector reserves 64 brick records. Shader indexing uses `sector.brick_table_index + brick_idx_local`, not CPU popcount indexing. Mixed bricks use a paged `R8Uint` atlas; uniform bricks already skip the color payload.
 - [Auxiliary data](../../voxelrt/rt/volume/voxel_aux.go): 64 bytes of occupancy plus 1,024 bytes of encoded normals per brick. The normal encoding includes validity and two-sided lighting. [G-buffer traversal](../../voxelrt/rt/shaders/gbuffer.wgsl) already rejects empty voxels before loading their material.
-- [Streaming](../../streamed_level_runtime.go): worker preparation, generation checks, indexed chunk maps, proxy/full handoff, and separate collision/destruction interest already exist. Observer selection reconstructs many sets each update. Commit limits count chunks and elapsed time; GPU brick limits reset per object.
-- [Caching](../../runtime_content_loader.go): definitions are cached by path, but caches have no eviction. Concurrent misses can load the same file more than once. [Prepared geometry](../../streamed_level_geometry_cache.go) has an entry limit; GPU retention has a sector limit. Neither represents total resident bytes.
+- [Streaming](../../streamed_level_runtime.go): worker preparation, generation checks, indexed chunk maps, proxy/full handoff, and separate collision/destruction interest already exist. [S3a selection](../../streamed_level_selection.go) caches idle demand and updates cube differences. Commit limits count chunks and elapsed time; global GPU content budgets are implemented in S1b.
+- [Caching](../../runtime_content_loader.go): S2b adds decoded-content byte budgets, scoped leases, in-flight suppression, and shared pending-result admission. [Prepared geometry](../../streamed_level_geometry_cache.go) has S2a byte accounting and pinned users. Live decoded leases and one sole oversized pending result expose pressure exceptions; GPU retention and other owner budgets remain further S2 work. These are not total process memory limits.
 - [Imported payloads](../../content/imported_world_chunk_binary.go): binary RLE already exists, with JSON metadata and SHA-256 verification. Decoding expands into voxel records, then [spawning](../../imported_world_spawn.go) builds `XBrickMap` through per-voxel writes. Terrain chunks remain JSON.
 - [Assets](../../assets/voxel_assets.go): geometry and palette assets are separate; shared geometry and copy-on-edit already exist. There is no equivalent to Rust's compiled fragment package in this path. [Geometry registration](../../asset_vox_model.go) deep-copies prepared maps. [Inline shapes](../../asset_voxel_shape.go) serialize geometry into a JSON cache key. [Entity LOD assets](../../entity_lod_runtime_assets.go) already generate simplified geometry and impostors at runtime; offline compilation can remove that work.
 - [Physics](../../mod_vox_physics.go): collision already reads voxel geometry; asset grids are shared. `CopyChangedSectors` supplies immutable changed-sector snapshots to physics and [navigation](../../navigation_graph_runtime.go). There is no equivalent bulk JSON collision-box package to eliminate.
@@ -148,6 +148,16 @@ Keep explicit empty-page metadata. Current empty-chunk skipping must still honor
 Acceptance: total cache/pending memory stays bounded while traveling; concurrent requests reuse one result; gameplay-only chunks need no GPU admission.
 
 ### S3. Incremental selection and scene gathering
+
+Status: partial. [S3a](streamed-rendering-s3a.md) completes current v2 observer
+demand selection: entity/chunk/effective-radius keys, overlap counts, disjoint
+cube differences, cached imported visibility/full-sector/fallback derivation,
+explicit main-thread metadata invalidation, and transient working-demand
+cleanup. Idle selection reuse preserves per-frame streaming progress. Live
+selection entries track active observer footprints and indexed metadata; empty
+maps release capacity, while nonempty Go maps may retain peak capacity. No byte
+ceiling or frame-time speedup is claimed. Renderer scene gathering and future
+layer/transform selection remain unimplemented S3 work.
 
 Cache observer selection by spatial bucket, radii, layer transform/topology, and PVS state. Update entering/exiting shells instead of constructing all radius sets every frame. Recompute on teleports, observer additions/removals, radius changes, edits, and visibility changes. Merge multiple observers with demand counts so one observer cannot evict another's content.
 
@@ -333,6 +343,9 @@ pressure exceptions. Temporary decode/build memory and other owner byte bounds,
 queue partitioning and mid-decode cancellation remain S2 work. These are owner
 budgets, not a total process memory ceiling. The remaining proposals keep the
 delivery order above.
+[S3a](streamed-rendering-s3a.md) is complete for current v2 observer selection.
+It preserves existing policy and main-thread stage ownership; renderer scene
+gathering and future layer selection keep S3 partial.
 
 Decisions to settle before dependent implementation:
 
@@ -351,7 +364,8 @@ with [S1a](streamed-rendering-s1a.md#execution-record),
 [S1b](streamed-rendering-s1b.md#verification-and-execution-record) and
 [S1c](streamed-rendering-s1c.md#execution-record) and
 [S2a](streamed-rendering-s2a.md#execution-record) and
-[S2b](streamed-rendering-s2b.md#execution-record). Native smoke checks establish
+[S2b](streamed-rendering-s2b.md#execution-record) and
+[S3a](streamed-rendering-s3a.md#execution-record). Native smoke checks establish
 the recorded rendering/streaming contracts; they do not establish performance
 gains or rendered pixel parity.
 

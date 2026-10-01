@@ -82,6 +82,8 @@ type StreamedLevelRuntimeConfig struct {
 }
 
 type StreamedLevelRuntimeMetrics struct {
+	ObserverSelectionBuildCount            uint64
+	ObserverSelectionChunkVisitCount       uint64
 	DecodedContentCacheEntries             int
 	DecodedContentCacheBytes               int64
 	DecodedContentCachePinnedBytes         int64
@@ -205,7 +207,7 @@ type StreamedLevelRuntimeMetrics struct {
 
 func (m StreamedLevelRuntimeMetrics) LogLine() string {
 	return fmt.Sprintf(
-		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d aux_hits=%d aux_misses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_total=%d full_committed_total=%d commit_world_ms=%.3f commit_world_register_ms=%.3f commit_flushes=%d runtime_normal_bake_ms=%.3f",
+		"streaming metrics: desired=%d desired_loadable=%d keep=%d keep_loadable=%d collision=%d collision_loadable=%d destruction=%d destruction_loadable=%d desired_sectors=%d desired_sectors_full=%d keep_sectors=%d keep_sectors_full=%d pending=%d pending_proxy=%d active_prepare=%d active_prepare_chunks=%d active_prepare_proxies=%d prepared_queue=%d prepared_chunks=%d prepared_proxies=%d aux_hits=%d aux_misses=%d loaded=%d loaded_proxies=%d proxy_full_ready=%d proxy_full_pending=%d proxy_out_of_keep=%d committed_total=%d full_committed_total=%d commit_world_ms=%.3f commit_world_register_ms=%.3f commit_flushes=%d runtime_normal_bake_ms=%.3f observer_selection_builds=%d observer_selection_chunk_visits=%d",
 		m.DesiredChunkCount,
 		m.DesiredLoadableChunkCount,
 		m.KeepChunkCount,
@@ -239,6 +241,8 @@ func (m StreamedLevelRuntimeMetrics) LogLine() string {
 		durationMillis(m.LastCommitWorldRegisterDuration),
 		m.LastCommitFlushCount,
 		durationMillis(m.GPUVoxelRuntimeNormalBakeDuration),
+		m.ObserverSelectionBuildCount,
+		m.ObserverSelectionChunkVisitCount,
 	)
 }
 
@@ -282,6 +286,9 @@ type StreamedLevelRuntimeState struct {
 	InitErr     error
 	Generation  uint64
 
+	observerSelection         *streamedObserverSelectionOwner
+	observerSelectionRevision uint64
+
 	renderManaged     bool
 	nextRenderTicket  uint64
 	renderTicketBatch streamedRenderTicketBatch
@@ -318,6 +325,8 @@ type StreamedLevelRuntimeState struct {
 	MarkerEntities             map[string]EntityId
 	LightEntities              map[string]EntityId
 
+	// Demand maps are runtime-owned read-only views. Consumers must not mutate
+	// them or assume that a view remains current across selection updates.
 	DesiredChunks                 map[ChunkCoord]struct{}
 	KeepChunks                    map[ChunkCoord]struct{}
 	CollisionChunks               map[ChunkCoord]struct{}
@@ -672,6 +681,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.WorldDataDir = content.DefaultWorldDeltaDataDir(worldDeltaPath)
 	state.WorldDelta = worldDelta
 	state.sessionDeltaDir = sessionDeltaDir
+	state.releaseObserverSelection()
 	state.Metrics = StreamedLevelRuntimeMetrics{}
 	state.nextMetricsLogAt = time.Time{}
 	state.TerrainID = ""
@@ -1020,6 +1030,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	}
 	state.Generation++
 	state.Initialized = false
+	state.releaseObserverSelection()
 	// Include targets flushed by a commit that later failed before LoadedChunks
 	// publication. The level-root descendant cleanup below removes their CPU
 	// entities; their tickets have the same retirement rules as completed chunks.
@@ -1271,95 +1282,8 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 		maybeEmitStreamedRuntimeMetrics(state, time.Now())
 	}()
 
-	desired := make(map[ChunkCoord]struct{})
-	keep := make(map[ChunkCoord]struct{})
-	collision := make(map[ChunkCoord]struct{})
-	destruction := make(map[ChunkCoord]struct{})
-	desiredSectors := make(map[ChunkCoord]struct{})
-	keepSectors := make(map[ChunkCoord]struct{})
-	MakeQuery2[TransformComponent, StreamedLevelObserverComponent](cmd).Map(func(id EntityId, transform *TransformComponent, observer *StreamedLevelObserverComponent) bool {
-		if transform == nil || observer == nil {
-			return true
-		}
-		loadRadius := observer.Radius
-		if loadRadius <= 0 {
-			loadRadius = state.StreamingRadius
-		}
-		keepRadius := observer.KeepRadius
-		if keepRadius <= 0 {
-			keepRadius = state.StreamingKeepRadius
-		}
-		if keepRadius < loadRadius {
-			keepRadius = loadRadius
-		}
-		prefetchRadius := observer.PrefetchRadius
-		if prefetchRadius <= 0 {
-			prefetchRadius = state.StreamingPrefetchRadius
-		}
-		if prefetchRadius < loadRadius {
-			prefetchRadius = loadRadius
-		}
-		collisionRadius := observer.CollisionRadius
-		if collisionRadius <= 0 {
-			collisionRadius = state.StreamingCollisionRadius
-		}
-		if collisionRadius <= 0 {
-			collisionRadius = loadRadius
-		}
-		destructionRadius := observer.DestructionRadius
-		if destructionRadius <= 0 {
-			destructionRadius = state.StreamingDestructionRadius
-		}
-		if destructionRadius <= 0 {
-			destructionRadius = collisionRadius
-		}
-		center := ChunkCoordFromPosition(transform.Position, state.ChunkSize)
-		currentChunks := make(map[ChunkCoord]struct{})
-		prefetchChunks := make(map[ChunkCoord]struct{})
-		keepChunks := make(map[ChunkCoord]struct{})
-		for _, coord := range center.NeighborsWithin(loadRadius) {
-			currentChunks[coord] = struct{}{}
-		}
-		for _, coord := range center.NeighborsWithin(collisionRadius) {
-			collision[coord] = struct{}{}
-		}
-		for _, coord := range center.NeighborsWithin(destructionRadius) {
-			destruction[coord] = struct{}{}
-		}
-		for _, coord := range center.NeighborsWithin(prefetchRadius) {
-			desired[coord] = struct{}{}
-			prefetchChunks[coord] = struct{}{}
-		}
-		for _, coord := range center.NeighborsWithin(keepRadius) {
-			keep[coord] = struct{}{}
-			keepChunks[coord] = struct{}{}
-		}
-		observerDesiredSectors, observerKeepSectors := streamedObserverImportedSectorSets(state, currentChunks, prefetchChunks, keepChunks)
-		mergeChunkCoordSet(desiredSectors, observerDesiredSectors)
-		mergeChunkCoordSet(keepSectors, observerKeepSectors)
-		return true
-	})
-
-	desired = streamedFilterImportedChunksBySectors(state, desired, desiredSectors)
-	keep = streamedFilterImportedChunksBySectors(state, keep, keepSectors)
-	streamedAddImportedSectorChunks(state, desired, desiredSectors)
-	streamedAddImportedSectorChunks(state, keep, keepSectors)
-	desiredProxySectors := copyChunkCoordSet(desiredSectors)
-	keepProxySectors := copyChunkCoordSet(keepSectors)
-	if !state.Config.DisableSectorProxies {
-		proxyFallbackSectors := streamedProxyFallbackSectors(state)
-		mergeChunkCoordSet(desiredProxySectors, proxyFallbackSectors)
-		mergeChunkCoordSet(keepProxySectors, proxyFallbackSectors)
-	}
-
-	state.DesiredChunks = desired
-	state.KeepChunks = keep
-	state.CollisionChunks = collision
-	state.DestructionChunks = destruction
-	state.DesiredSectors = desiredSectors
-	state.KeepSectors = keepSectors
-	state.DesiredProxySectors = desiredProxySectors
-	state.KeepProxySectors = keepProxySectors
+	updateStreamedObserverSelection(cmd, state)
+	desired, keep := state.DesiredChunks, state.KeepChunks
 	pruneStreamedPendingCostHints(state)
 	requestStreamedNavigationResidency(state, desired)
 	for coord := range state.LoadedChunks {
@@ -1376,8 +1300,7 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 		}
 		if streamedChunkNeedsRenderProxyBeforeUnload(cmd, state, coord) {
 			if sectorCoord, ok := state.ImportedChunkSector[coord]; ok {
-				state.DesiredProxySectors[sectorCoord] = struct{}{}
-				state.KeepProxySectors[sectorCoord] = struct{}{}
+				addStreamedTemporaryProxyDemand(state, sectorCoord)
 			}
 			continue
 		}
@@ -1522,149 +1445,6 @@ func startStreamedSectorProxyPrepareJob(state *StreamedLevelRuntimeState, job st
 	}()
 }
 
-func streamedObserverImportedSectorSets(state *StreamedLevelRuntimeState, currentChunks, prefetchChunks, keepChunks map[ChunkCoord]struct{}) (map[ChunkCoord]struct{}, map[ChunkCoord]struct{}) {
-	desired := make(map[ChunkCoord]struct{})
-	keep := make(map[ChunkCoord]struct{})
-	if state == nil {
-		return desired, keep
-	}
-	currentSectors := streamedSectorsForChunks(state, currentChunks)
-	prefetchSectors := streamedSectorsForChunks(state, prefetchChunks)
-	keepSectors := streamedSectorsForChunks(state, keepChunks)
-	if streamedSectorsHaveVisibilityMetadata(state, currentSectors) {
-		for sectorCoord := range currentSectors {
-			mergeChunkCoordSet(desired, streamedVisibleImportedSectorsForCurrentSector(state, sectorCoord))
-		}
-		mergeChunkCoordSet(keep, keepSectors)
-		mergeChunkCoordSet(keep, desired)
-		return desired, keep
-	}
-	mergeChunkCoordSet(desired, prefetchSectors)
-	mergeChunkCoordSet(keep, keepSectors)
-	return desired, keep
-}
-
-func streamedSectorsHaveVisibilityMetadata(state *StreamedLevelRuntimeState, sectors map[ChunkCoord]struct{}) bool {
-	if state == nil {
-		return false
-	}
-	for sectorCoord := range sectors {
-		sector, ok := state.ImportedWorldSectors[sectorCoord]
-		if !ok {
-			continue
-		}
-		if len(sector.VisibleSectorRefs) > 0 || len(sector.AdjacentSectorRefs) > 0 || len(sector.SourceLeafIDs) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func streamedVisibleImportedSectorsForCurrentSector(state *StreamedLevelRuntimeState, sectorCoord ChunkCoord) map[ChunkCoord]struct{} {
-	out := map[ChunkCoord]struct{}{sectorCoord: {}}
-	if state == nil {
-		return out
-	}
-	sector, ok := state.ImportedWorldSectors[sectorCoord]
-	if !ok {
-		return out
-	}
-	for _, ref := range sector.VisibleSectorRefs {
-		out[chunkCoordFromTerrain(ref)] = struct{}{}
-	}
-	for _, ref := range sector.AdjacentSectorRefs {
-		out[chunkCoordFromTerrain(ref)] = struct{}{}
-	}
-	return out
-}
-
-func streamedFilterImportedChunksBySectors(state *StreamedLevelRuntimeState, chunks map[ChunkCoord]struct{}, sectors map[ChunkCoord]struct{}) map[ChunkCoord]struct{} {
-	if state == nil || len(chunks) == 0 || len(state.ImportedChunkSector) == 0 {
-		return chunks
-	}
-	out := make(map[ChunkCoord]struct{}, len(chunks))
-	for coord := range chunks {
-		sectorCoord, isImportedWorldChunk := state.ImportedChunkSector[coord]
-		if !isImportedWorldChunk {
-			out[coord] = struct{}{}
-			continue
-		}
-		if _, ok := sectors[sectorCoord]; ok {
-			out[coord] = struct{}{}
-			continue
-		}
-		if streamedChunkHasNonImportedLoadableContent(state, coord) {
-			out[coord] = struct{}{}
-		}
-	}
-	return out
-}
-
-func streamedChunkHasNonImportedLoadableContent(state *StreamedLevelRuntimeState, coord ChunkCoord) bool {
-	if state == nil {
-		return false
-	}
-	if entry, ok := state.TerrainEntries[coord]; ok && entry.NonEmptyVoxelCount > 0 {
-		return true
-	}
-	if state.TerrainID != "" {
-		if _, ok := state.terrainOverrideMap[terrainChunkRuntimeKey(state.TerrainID, terrainCoordFromChunk(coord))]; ok {
-			return true
-		}
-	}
-	if len(state.PlacementsByChunk[coord]) > 0 {
-		return true
-	}
-	return false
-}
-
-func streamedAddImportedSectorChunks(state *StreamedLevelRuntimeState, chunks map[ChunkCoord]struct{}, sectors map[ChunkCoord]struct{}) {
-	if state == nil {
-		return
-	}
-	for sectorCoord := range sectors {
-		sector, ok := state.ImportedWorldSectors[sectorCoord]
-		if !ok {
-			continue
-		}
-		for _, ref := range sector.FullChunkRefs {
-			chunkCoord := chunkCoordFromTerrain(ref)
-			entry, ok := state.ImportedWorldEntries[chunkCoord]
-			if !ok || (entry.NonEmptyVoxelCount <= 0 && state.BaseWorldBacking == nil) {
-				continue
-			}
-			chunks[chunkCoord] = struct{}{}
-		}
-	}
-}
-
-func mergeChunkCoordSet(dst, src map[ChunkCoord]struct{}) {
-	for coord := range src {
-		dst[coord] = struct{}{}
-	}
-}
-
-func copyChunkCoordSet(src map[ChunkCoord]struct{}) map[ChunkCoord]struct{} {
-	out := make(map[ChunkCoord]struct{}, len(src))
-	for coord := range src {
-		out[coord] = struct{}{}
-	}
-	return out
-}
-
-func streamedProxyFallbackSectors(state *StreamedLevelRuntimeState) map[ChunkCoord]struct{} {
-	out := make(map[ChunkCoord]struct{})
-	if state == nil {
-		return out
-	}
-	for sectorCoord, sector := range state.ImportedWorldSectors {
-		if len(sector.LODs) > 0 {
-			out[sectorCoord] = struct{}{}
-		}
-	}
-	return out
-}
-
 func streamedProxySectorDesired(state *StreamedLevelRuntimeState, sectorCoord ChunkCoord) bool {
 	if state == nil {
 		return false
@@ -1675,19 +1455,6 @@ func streamedProxySectorDesired(state *StreamedLevelRuntimeState, sectorCoord Ch
 	}
 	_, ok := state.DesiredSectors[sectorCoord]
 	return ok
-}
-
-func streamedSectorsForChunks(state *StreamedLevelRuntimeState, chunks map[ChunkCoord]struct{}) map[ChunkCoord]struct{} {
-	out := make(map[ChunkCoord]struct{})
-	if state == nil {
-		return out
-	}
-	for coord := range chunks {
-		if sectorCoord, ok := state.ImportedChunkSector[coord]; ok {
-			out[sectorCoord] = struct{}{}
-		}
-	}
-	return out
 }
 
 func streamedChunkNeedsProxyBeforeUnload(state *StreamedLevelRuntimeState, coord ChunkCoord) bool {
@@ -2330,14 +2097,7 @@ func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, st
 		return nil
 	}
 	coord := ChunkCoordFromPosition(mgl32.Vec3{position[0], position[1], position[2]}, state.ChunkSize)
-	if state.CollisionChunks == nil {
-		state.CollisionChunks = make(map[ChunkCoord]struct{})
-	}
-	state.CollisionChunks[coord] = struct{}{}
-	if state.DestructionChunks == nil {
-		state.DestructionChunks = make(map[ChunkCoord]struct{})
-	}
-	state.DestructionChunks[coord] = struct{}{}
+	addStreamedTemporaryGameplayDemand(state, coord)
 	if _, ok := state.LoadedChunks[coord]; ok {
 		return nil
 	}
@@ -2998,6 +2758,7 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 			SnapshotPath: content.AuthorDocumentPath(snapshotPath, state.WorldDeltaPath),
 		}
 		state.terrainOverrideMap[terrainChunkRuntimeKey(ref.TerrainID, override.ChunkCoord)] = override
+		state.InvalidateObserverSelection()
 		manifestDirty = true
 	}
 
@@ -3310,6 +3071,7 @@ func (state *StreamedLevelRuntimeState) recordVoxelBackingRemoval(backing *Voxel
 	switch def.OwnerKind {
 	case content.VoxelBackingOwnerTerrain:
 		delete(state.terrainOverrideMap, terrainChunkRuntimeKey(def.OwnerID, coord))
+		state.InvalidateObserverSelection()
 	case content.VoxelBackingOwnerImportedWorld:
 		delete(state.importedWorldOverrideMap, importedWorldChunkRuntimeKey(def.OwnerID, coord))
 	}
