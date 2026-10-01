@@ -463,45 +463,12 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	recreated := false
 	m.RenderOrigin = renderOrigin
 
-	// 1. Instances
-	m.Profiler.BeginScope("Scene: Instances")
-	instData := buildInstanceData(scene.VisibleObjects, renderOrigin)
-	transparentInstData := buildInstanceData(scene.TransparentVisibleObjects, renderOrigin)
-	if m.ensureBuffer("InstancesBuf", &m.InstancesBuf, instData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	if m.ensureBuffer("TransparentInstancesBuf", &m.TransparentInstancesBuf, transparentInstData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	m.Profiler.EndScope("Scene: Instances")
-
-	// 2. BVH
-	bvhData := buildRenderBVHData(scene.VisibleObjects, renderOrigin)
-	transparentBVHData := buildRenderBVHData(scene.TransparentVisibleObjects, renderOrigin)
-	if m.ensureBuffer("BVHNodesBuf", &m.BVHNodesBuf, bvhData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	if m.ensureBuffer("TransparentBVHNodesBuf", &m.TransparentBVHNodesBuf, transparentBVHData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-
-	// 3. Light metadata drives shadow-only caster selection.
+	// Light metadata drives shadow-only caster selection on every frame.
 	m.Profiler.BeginScope("Scene: Lights")
 	m.UpdateLights(scene, camera, aspect)
 	m.Profiler.EndScope("Scene: Lights")
 
-	// Update shadow acceleration structures from scene data.
-	shadowInstData := buildInstanceData(scene.ShadowObjects, renderOrigin)
-	if m.ensureBuffer("ShadowInstancesBuf", &m.ShadowInstancesBuf, shadowInstData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-
-	shadowBVHData := buildRenderBVHData(scene.ShadowObjects, renderOrigin)
-	if m.ensureBuffer("ShadowBVHNodesBuf", &m.ShadowBVHNodesBuf, shadowBVHData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-
-	// 4. Lights
+	// Lights
 	if m.EnsureShadowMapCapacity(totalShadowLayers(scene.Lights)) {
 		m.invalidateShadowCache()
 		recreated = true
@@ -514,14 +481,14 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 		recreated = true
 	}
 
-	// 5. Voxel Data (Incremental / Paged)
+	// Voxel Data (Incremental / Paged)
 	m.Profiler.BeginScope("Scene: Voxel")
 	if m.UpdateVoxelData(scene) {
 		recreated = true
 	}
 	m.Profiler.EndScope("Scene: Voxel")
 
-	// 6. Sector lookup structures
+	// Sector lookup structures
 	m.Profiler.BeginScope("Scene: Grid")
 	if m.updateSectorGrid(scene) {
 		recreated = true
@@ -534,18 +501,14 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 	m.Profiler.EndScope("Scene: Grid")
 
-	m.Profiler.BeginScope("Scene: Params")
-	if m.ensureBuffer("ObjectParamsBuf", &m.ObjectParamsBuf, buildObjectParamsData(scene.VisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
+	// Record inputs now include admitted material offsets and current lookup
+	// metadata. Earlier maintenance does not consume these nine buffers.
+	m.Profiler.BeginScope("Scene: Records")
+	m.prepareSceneRecords(scene, renderOrigin)
+	if m.publishSceneRecords() {
 		recreated = true
 	}
-	if m.ensureBuffer("TransparentObjectParamsBuf", &m.TransparentObjectParamsBuf, buildObjectParamsData(scene.TransparentVisibleObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	if m.ensureBuffer("ShadowObjectParamsBuf", &m.ShadowObjectParamsBuf, buildObjectParamsData(scene.ShadowObjects, m.Allocations, m.MaterialAllocations), wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	m.Profiler.EndScope("Scene: Params")
-	_ = recreated
+	m.Profiler.EndScope("Scene: Records")
 	return recreated
 }
 

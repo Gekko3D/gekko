@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-01. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-01. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). This review covers optimization proposals, excluding the measurement phase and its status records. Gekko code inspected at `1f7a281`, including current working-tree content. Rust performance targets and compression ratios are not Gekko predictions.
 
@@ -156,8 +156,21 @@ explicit main-thread metadata invalidation, and transient working-demand
 cleanup. Idle selection reuse preserves per-frame streaming progress. Live
 selection entries track active observer footprints and indexed metadata; empty
 maps release capacity, while nonempty Go maps may retain peak capacity. No byte
-ceiling or frame-time speedup is claimed. Renderer scene gathering and future
-layer/transform selection remain unimplemented S3 work.
+ceiling or frame-time speedup is claimed.
+
+[S3b](streamed-rendering-s3b.md) completes manager-owned incremental scene record
+preparation and publication. Stable object templates feed separate ordered
+visible, transparent and shadow arrays; exact input snapshots track actual
+matrices/bounds, origin, encoded metadata and allocation/direct lookup state.
+Idle geometry reuses compiled rows and relative BVHs, and unchanged record
+buffers skip successful queue writes at the same published destination.
+Preparation follows voxel/lookup maintenance. Replacement destinations refresh
+bindings even with sufficient capacity; explicit invalidation forces preparation
+and publication again. Ownership follows the current pass union, with removed
+references and obsolete tails cleared and empty caches released. Nonempty cache
+maps/slices can retain peak capacity, and no byte ceiling or frame-time gain is
+claimed. Bridge scanning and scene culling/LOD keep their current behavior;
+ECS dirty extraction and future layer/transform selection remain S3 work.
 
 Cache observer selection by spatial bucket, radii, layer transform/topology, and PVS state. Update entering/exiting shells instead of constructing all radius sets every frame. Recompute on teleports, observer additions/removals, radius changes, edits, and visibility changes. Merge multiple observers with demand counts so one observer cannot evict another's content.
 
@@ -344,8 +357,10 @@ queue partitioning and mid-decode cancellation remain S2 work. These are owner
 budgets, not a total process memory ceiling. The remaining proposals keep the
 delivery order above.
 [S3a](streamed-rendering-s3a.md) is complete for current v2 observer selection.
-It preserves existing policy and main-thread stage ownership; renderer scene
-gathering and future layer selection keep S3 partial.
+It preserves existing policy and main-thread stage ownership.
+[S3b](streamed-rendering-s3b.md) completes incremental GPU scene records at the
+manager boundary. ECS dirty extraction and future layer selection keep S3
+partial.
 
 Decisions to settle before dependent implementation:
 
@@ -365,7 +380,8 @@ with [S1a](streamed-rendering-s1a.md#execution-record),
 [S1c](streamed-rendering-s1c.md#execution-record) and
 [S2a](streamed-rendering-s2a.md#execution-record) and
 [S2b](streamed-rendering-s2b.md#execution-record) and
-[S3a](streamed-rendering-s3a.md#execution-record). Native smoke checks establish
+[S3a](streamed-rendering-s3a.md#execution-record) and
+[S3b](streamed-rendering-s3b.md#execution-record). Native smoke checks establish
 the recorded rendering/streaming contracts; they do not establish performance
 gains or rendered pixel parity.
 

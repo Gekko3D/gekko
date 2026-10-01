@@ -315,6 +315,51 @@ Current transparency modes:
 - `VisibleObjects` drives main scene buffers and the camera-facing BVH.
 - `ShadowObjects` drives a broader shadow BVH so off-screen casters can still affect visible receivers.
 
+### Incremental scene records
+
+`GpuBufferManager` retains one compiled instance and parameter template per
+object in the union of visible, transparent and shadow pass lists. Each pass
+keeps its ordered arrays and render-relative BVH. Exact value snapshots cover
+the actual transform matrices, local/world bounds, render origin, encoded
+object metadata, allocation presence, material offsets and direct lookup data;
+float comparisons use bits, including signed zero and NaN payloads. This remains
+compatible with public in-place mutations and transforms whose dirty flags
+were consumed by scene commit.
+
+Idle inputs reuse their prepared records. Changes encode only affected unique
+object templates, then rebuild affected aggregate arrays; assembly patches each
+pass's instance index. A pass BVH rebuilds only when its ordered object identities,
+world bounds or render origin change. Metadata-only parameter changes preserve
+instance and BVH work. Existing 208-byte instance rows, 128-byte parameter rows,
+BVH layout and empty zero sentinels remain the shader contract.
+
+Preparation and publication run after voxel admission and all sector, terrain
+and planet lookup maintenance, so material offsets and direct lookup metadata
+reflect the current service frame. A CPU preparation does not acknowledge an
+upload. Each record buffer remembers its successfully uploaded revision and
+destination; unchanged bytes skip queue writes only at that same destination.
+Nil, replaced or undersized buffers receive cached bytes, and a destination
+replacement reports resource recreation even if its capacity is sufficient.
+Queue write errors fail before advancing that record's publication latch.
+
+`SceneInstanceRecordBuildCount` and `SceneObjectParamRecordBuildCount` count
+encoded unique object templates; `SceneBVHBuildCount` counts actual nonempty
+relative BVH builds. `SceneRecordUploadCount` counts successful queue writes to
+the nine record buffers. All four are cumulative manager-lifetime counters.
+`SceneRecordObjectCount` reports current pass-union ownership, including
+shadow-only casters and excluding hidden resident objects. Removed references
+and obsolete slice tails are cleared; empty passes release their aggregate
+capacity and empty ownership maps are dropped. Nonempty Go maps and slices can
+retain peak capacity; there is no scene-record byte ceiling.
+
+Main-thread `InvalidateSceneRecords()` is nil-safe and discards preparation and
+publication ownership after an explicit reset or external record overwrite,
+while preserving cumulative counters. A new manager starts empty. Internal
+prepared views are borrowed until the next preparation/reset. Lights, voxel
+service, lookups, camera/feature updates, scene culling and bridge extraction
+continue at their existing frame boundaries. ECS dirty extraction and future
+layer selection remain separate S3 work. See [S3b](../roadmaps/streamed-rendering-s3b.md).
+
 ### Streamed voxel residency
 
 Ordinary `VoxelRenderHiddenComponent` entities leave renderer residency. Adding
@@ -459,7 +504,10 @@ records. Pending counters count physical shared-map queues once. See
 
 ### Scene-resource growth
 
-When `UpdateScene(...)` recreates buffers, `App.Update()` must rebuild dependent bind groups. Renderer bugs after object-count growth or shadow-capacity growth are usually stale-bind-group issues.
+When `UpdateScene(...)` recreates buffers or detects a replaced scene-record
+destination, `App.Update()` must rebuild dependent bind groups and advance
+`SceneBindingRevision`. Renderer bugs after object-count growth, destination
+replacement or shadow-capacity growth are usually stale-bind-group issues.
 
 Voxel payload uploads follow the same rule. `BrickRecord` is now 32 bytes and uses explicit fields rather than overloaded payload/material storage:
 

@@ -251,6 +251,14 @@ type GpuBufferManager struct {
 	MaterialBufferGeneration uint64
 	VoxelUploadRevision      uint64
 	SceneBindingRevision     uint64
+	// Cumulative scene-record compilation and successful queue publication work.
+	SceneInstanceRecordBuildCount    uint64
+	SceneObjectParamRecordBuildCount uint64
+	SceneBVHBuildCount               uint64
+	SceneRecordUploadCount           uint64
+	// Current object-template ownership across all three render passes.
+	SceneRecordObjectCount   int
+	sceneRecords             sceneRecordOwner
 	RenderOrigin             mgl32.Vec3
 	shadowDirectionalVolumes []directionalShadowCullVolume
 	shadowSpotVolumes        []spotShadowCullVolume
