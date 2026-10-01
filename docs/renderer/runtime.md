@@ -169,6 +169,34 @@ The current feature config can prevent disabled features from registering app-si
 
 The remaining broad `voxelRtSystem` bridge is now core-only: it syncs voxel scene objects/materials, camera state, and scene lights. Optional feature bridges are installed through `VoxelRtModule.BridgeFeatures` around the `GPU Batch` and `RT Update` boundaries; sprite feature ownership is still consulted inside core instance sync only to decide whether entity-LOD impostor/dot proxies may become runtime sprites.
 
+Core instance membership is owned by the private inventory in
+`mod_voxelrt_client_inventory.go`. It caches every live entity with both
+`TransformComponent` and `VoxelModelComponent`, grouped by archetype with
+entity-ID/row locations, and rebuilds when the ECS storage owner or committed
+structural revision changes. Hidden, unresolved, streamed and sprite-LOD
+candidates remain members even when they have no renderer object. Equal stamps
+from different storage owners cannot reuse membership or component IDs.
+
+The inventory retains no component pointers or typed column aliases. Each pass
+reacquires both exact typed columns once per archetype batch and runs the full
+existing bridge body on live values: geometry normalization/resolution
+(including same-ID source-map replacement), transforms and metadata,
+elapsed-time materials, LOD/sprite selection, hidden residency and streamed
+ticket adoption. Streamed begin/end sync and camera/light extraction still run
+every pass, including empty inventories. Animation stays in `Update` and
+hierarchy in `PostUpdate`; their results reach extraction at the existing
+`PreRender` boundary after normal command flushes.
+
+`VoxelRtState.VoxelCandidateInventoryBuildCount` counts actual membership
+rebuilds, including first or changed empty inventories;
+`VoxelRtState.VoxelCandidateCount` reports raw Transform+VoxelModel membership.
+These counters describe discovery work, not extraction cost or measured
+performance. Rebuilds clear obsolete IDs and archetype references through
+capacity tails. Empty inventories release aggregate slices; nonempty capacity
+may retain its peak, with no byte ceiling. The helper is private and main-thread
+owned, following query rules: field writes and buffered commands are supported;
+immediate structural mutation or manual flush during iteration is unsupported.
+
 | Sync scope | Current owner | Renderer data updated | Future graph migration direction |
 | --- | --- | --- | --- |
 | `Sync Instances` | `voxelRtSystem` | core scene voxel objects, material tables, sprite-gated LOD impostor proxy selection | centralized core bridge |

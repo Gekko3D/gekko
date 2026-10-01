@@ -123,32 +123,38 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
-	RtApp                          *app_rt.App
-	loadedModels                   map[AssetId]*core.VoxelObject
-	instanceMap                    map[EntityId]*core.VoxelObject
-	instanceGeometrySources        map[EntityId]*volume.XBrickMap
-	instanceObjectScopedGeometry   map[EntityId]bool
-	streamedVoxelTickets           map[uint64]*streamedVoxelTicket
-	runtimeEditedVoxelEntities     map[EntityId]struct{}
-	runtimeEditedVoxelRevisions    map[EntityId]uint64
-	runtimeEditedVoxelEdits        map[EntityId]runtimeVoxelEdit
-	nextRuntimeEditedVoxelRevision uint64
-	entityLODSelections            map[EntityId]EntityLODSelection
-	runtimeSprites                 []SpriteComponent
-	runtimeDecals                  []DecalInstance
-	lastMaterialKeys               map[*core.VoxelObject]materialTableCacheKey
-	materialTableCache             map[materialTableCacheKey][]core.Material
-	particlePools                  map[EntityId]*particlePool
-	objectToEntity                 map[*core.VoxelObject]EntityId
-	skyboxLayers                   map[EntityId]SkyboxLayerComponent // Stored values to detect changes
-	skyboxSun                      SkyboxSunComponent
-	SunDirection                   mgl32.Vec3
-	SunIntensity                   float32
-	lastParticleAtlas              AssetId
-	lastSpriteAtlas                AssetId
-	underwaterInput                app_rt.UnderwaterInput
-	underwaterStrength             float32
-	bridgeFeatures                 voxelRtBridgeRegistry
+	// VoxelCandidateInventoryBuildCount counts actual membership rebuilds,
+	// including empty inventories. VoxelCandidateCount includes hidden and
+	// unresolved Transform+VoxelModel candidates, regardless of residency.
+	VoxelCandidateInventoryBuildCount uint64
+	VoxelCandidateCount               int
+	voxelCandidates                   voxelCandidateInventory
+	RtApp                             *app_rt.App
+	loadedModels                      map[AssetId]*core.VoxelObject
+	instanceMap                       map[EntityId]*core.VoxelObject
+	instanceGeometrySources           map[EntityId]*volume.XBrickMap
+	instanceObjectScopedGeometry      map[EntityId]bool
+	streamedVoxelTickets              map[uint64]*streamedVoxelTicket
+	runtimeEditedVoxelEntities        map[EntityId]struct{}
+	runtimeEditedVoxelRevisions       map[EntityId]uint64
+	runtimeEditedVoxelEdits           map[EntityId]runtimeVoxelEdit
+	nextRuntimeEditedVoxelRevision    uint64
+	entityLODSelections               map[EntityId]EntityLODSelection
+	runtimeSprites                    []SpriteComponent
+	runtimeDecals                     []DecalInstance
+	lastMaterialKeys                  map[*core.VoxelObject]materialTableCacheKey
+	materialTableCache                map[materialTableCacheKey][]core.Material
+	particlePools                     map[EntityId]*particlePool
+	objectToEntity                    map[*core.VoxelObject]EntityId
+	skyboxLayers                      map[EntityId]SkyboxLayerComponent // Stored values to detect changes
+	skyboxSun                         SkyboxSunComponent
+	SunDirection                      mgl32.Vec3
+	SunIntensity                      float32
+	lastParticleAtlas                 AssetId
+	lastSpriteAtlas                   AssetId
+	underwaterInput                   app_rt.UnderwaterInput
+	underwaterStrength                float32
+	bridgeFeatures                    voxelRtBridgeRegistry
 }
 
 type runtimeVoxelEdit struct {

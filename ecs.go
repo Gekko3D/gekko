@@ -32,6 +32,7 @@ type set[T comparable] = map[T]struct{}
 type ecsStorage struct {
 	archetypes              map[archetypeId]*archetype
 	entityIndex             map[EntityId]archetypeId
+	structuralRevision      uint64
 	archetypeGeneration     uint64
 	archetypeViewGeneration uint64
 	archetypeViews          []rooteecs.ArchetypeView
@@ -87,6 +88,15 @@ type archetype struct {
 	recycled      []row
 }
 
+// StructuralRevision is the main-thread invalidation stamp for committed
+// entity membership and row locations. Component field writes do not advance it.
+func (ecs *Ecs) StructuralRevision() uint64 {
+	if ecs == nil || ecs.storage == nil {
+		return 0
+	}
+	return ecs.storage.structuralRevision
+}
+
 func (ecs *Ecs) addEntity(components ...any) EntityId {
 	entityId := ecs.nextEntityId()
 	return ecs.insertEntity(entityId, components...)
@@ -103,12 +113,17 @@ func (ecs *Ecs) insertEntity(entityId EntityId, components ...any) EntityId {
 
 	ecs.storage.entityIndex[entityId] = archId
 	ecs.syncEntityGroupIndex(entityId)
+	ecs.storage.structuralRevision++
 
 	return entityId
 }
 
 func (ecs *Ecs) removeEntity(entityId EntityId) {
+	if _, ok := ecs.storage.entityIndex[entityId]; !ok {
+		return
+	}
 	ecs.recycleEntity(entityId)
+	ecs.storage.structuralRevision++
 }
 
 func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
@@ -135,6 +150,7 @@ func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
 	dstArch.entities[entityId] = dstRow
 	ecs.storage.entityIndex[entityId] = dstArchId
 	ecs.syncEntityGroupIndex(entityId)
+	ecs.storage.structuralRevision++
 }
 
 func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
@@ -174,6 +190,7 @@ func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
 	dstArch.entities[entityId] = dstRow
 	ecs.storage.entityIndex[entityId] = dstArchId
 	ecs.syncEntityGroupIndex(entityId)
+	ecs.storage.structuralRevision++
 }
 
 func (ecs *Ecs) moveComponents(srcArch *archetype, srcRow row, dstArch *archetype, dstRow row) {

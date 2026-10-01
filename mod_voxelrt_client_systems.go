@@ -345,7 +345,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	}
 
 	// Collect instances from models
-	MakeQuery2[TransformComponent, VoxelModelComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent) bool {
+	state.eachVoxelCandidate(cmd, func(entityId EntityId, transform *TransformComponent, vox *VoxelModelComponent) bool {
 		marker, streamed := streamedMarkers[entityId]
 		if transform == nil || vox == nil {
 			state.failStreamedVoxelAdoption(entityId, marker, "streamed voxel requires transform and voxel model components")

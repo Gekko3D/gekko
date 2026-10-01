@@ -6,6 +6,15 @@ type Commands struct {
 	app *App
 }
 
+// StructuralRevision reads the main-thread committed ECS invalidation stamp.
+// Enqueued commands become visible at the existing stage flush boundary.
+func (cmd *Commands) StructuralRevision() uint64 {
+	if cmd == nil || cmd.app == nil {
+		return 0
+	}
+	return cmd.app.ecs.StructuralRevision()
+}
+
 func (cmd *Commands) ChangeState(newState State) *Commands {
 	cmd.app.changeState(newState)
 	return cmd
