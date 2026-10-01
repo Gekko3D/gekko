@@ -58,13 +58,7 @@ func buildMaterialData(table []core.Material) []byte {
 
 func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	recreated := false
-	uploadedAny := false
-	materialBufRecreated := false
 	m.ensureRetainedVoxelMaps()
-	m.VoxelSectorsUploaded = 0
-	m.VoxelBricksUploaded = 0
-	m.VoxelDirtySectorsPending = 0
-	m.VoxelDirtyBricksPending = 0
 	m.VoxelUniformSparseBricks = 0
 	m.VoxelPayloadSparseBricks = 0
 	m.VoxelPayloadUploadsSkipped = 0
@@ -105,7 +99,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	// Only scan if any object has structural changes or is new.
 	needsScan := false
 	for _, obj := range scene.Objects {
-		if obj.XBrickMap == nil {
+		if obj == nil || obj.XBrickMap == nil {
 			continue
 		}
 		_, exists := m.Allocations[obj.XBrickMap]
@@ -117,15 +111,22 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 
 	if needsScan {
 		newSectors := 0
+		seenMaps := make(map[*volume.XBrickMap]bool)
+		seenSectors := make(map[*volume.Sector]bool)
 		for _, obj := range scene.Objects {
-			xbm := obj.XBrickMap
-			if xbm == nil {
+			if obj == nil {
 				continue
 			}
+			xbm := obj.XBrickMap
+			if xbm == nil || seenMaps[xbm] {
+				continue
+			}
+			seenMaps[xbm] = true
 			alloc := m.Allocations[xbm]
 			for sKey, sector := range xbm.Sectors {
 				if alloc == nil || alloc.Sectors[sKey] != sector {
-					if _, hasInfo := m.SectorToInfo[sector]; !hasInfo {
+					if _, hasInfo := m.SectorToInfo[sector]; !hasInfo && !seenSectors[sector] {
+						seenSectors[sector] = true
 						newSectors++
 					}
 				}
@@ -158,7 +159,6 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	}
 	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(maxMaterialSlots(requiredMaterialBlocks, 1)*materialBlockCapacity*64)) {
 		recreated = true
-		materialBufRecreated = true
 		m.MaterialBufferGeneration++
 	}
 	if m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 64) {
@@ -169,171 +169,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	normalBakeContext := newVoxelNormalBakeContext(scene)
 	markCrossObjectNormalHaloDirty(scene, normalBakeContext)
 
-	for _, obj := range scene.Objects {
-		xbm := obj.XBrickMap
-		alloc := m.Allocations[xbm]
-		if alloc == nil {
-			continue
-		}
-
-		// Update per-object materials independently from shared geometry.
-		matAlloc, hasMatAlloc := m.MaterialAllocations[obj]
-		if !hasMatAlloc {
-			matAlloc = &MaterialGpuAllocation{}
-			m.MaterialAllocations[obj] = matAlloc
-		}
-		tablePtr, tableLen := materialTableIdentity(obj.MaterialTable)
-		materialCount := uint32(tableLen)
-		if materialCount == 0 {
-			materialCount = materialBlockCapacity
-		}
-		if !hasMatAlloc || materialCount > matAlloc.MaterialCapacity {
-			if hasMatAlloc && matAlloc.MaterialCapacity > 0 {
-				m.MaterialAlloc.FreeSlot(matAlloc.MaterialOffset / 256)
-			}
-			pSlot := m.MaterialAlloc.Alloc()
-			matAlloc.MaterialOffset = pSlot * materialBlockCapacity
-			matAlloc.MaterialCapacity = materialBlockCapacity
-			if materialCount > materialBlockCapacity {
-				// Special case: if object needs more than 256 materials, we'd need a multi-block allocator.
-				// For now, we cap at 256 as it's the standard for this engine.
-				fmt.Printf("WARNING: Object has %d materials, capping to 256\n", materialCount)
-			}
-		}
-		needsMaterialUpload := materialBufRecreated ||
-			!hasMatAlloc ||
-			matAlloc.BufferGeneration != m.MaterialBufferGeneration ||
-			matAlloc.MaterialTablePtr != tablePtr ||
-			matAlloc.MaterialTableLen != tableLen
-
-		if needsMaterialUpload {
-			materials := buildMaterialData(obj.MaterialTable)
-			m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(matAlloc.MaterialOffset*64), materials)
-			matAlloc.MaterialTablePtr = tablePtr
-			matAlloc.MaterialTableLen = tableLen
-			matAlloc.BufferGeneration = m.MaterialBufferGeneration
-		}
-		matAlloc.HasTransparency = materialTableHasTransparency(obj.MaterialTable)
-
-		// Upload dirty sectors with budgeting
-		sectorsInFrame := uint32(0)
-		for sKey, isDirty := range xbm.DirtySectors {
-			if !isDirty {
-				delete(xbm.DirtySectors, sKey)
-				continue
-			}
-			if sectorsInFrame >= m.SectorsPerFrame {
-				break
-			}
-			sector, ok := xbm.Sectors[sKey]
-			if !ok {
-				delete(xbm.DirtySectors, sKey)
-				continue
-			}
-			info := m.SectorToInfo[sector]
-			m.writeSectorRecord(sector, info)
-
-			// Also upload all bricks of this sector if it's considered "new/dirty structure"
-			for i := 0; i < 64; i++ {
-				bx, by, bz := i%4, (i/4)%4, i/16
-				if (sector.BrickMask64 & (1 << i)) != 0 {
-					brick := sector.GetBrick(bx, by, bz)
-					if bPtrs, has := alloc.Bricks[sKey]; has {
-						bPtrs[i] = brick // Sync pointer
-					}
-					m.uploadBrick(normalBakeContext, obj, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(sKey, i))
-				} else {
-					// Clear brick record in GPU to 0
-					if bPtrs, has := alloc.Bricks[sKey]; has {
-						if oldBrick := bPtrs[i]; oldBrick != nil {
-							m.releaseBrickSlot(oldBrick)
-							m.releaseVoxelAuxSlot(oldBrick)
-						}
-						bPtrs[i] = nil
-					}
-					m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(i))*BrickRecordSize), make([]byte, BrickRecordSize))
-				}
-				// The whole-sector write already covered this brick, including
-				// cleared records. Do not leave duplicate work in the queue.
-				delete(xbm.DirtyBricks, [6]int{sKey[0], sKey[1], sKey[2], bx, by, bz})
-			}
-			delete(xbm.DirtySectors, sKey)
-			sectorsInFrame++
-			m.VoxelSectorsUploaded++
-			uploadedAny = true
-		}
-
-		// Upload individual dirty bricks (e.g. from small edits)
-		maxBricks := m.SectorsPerFrame * 4 // Loose budget for individual bricks
-		bricksInFrame := uint32(0)
-		for bKey, isDirty := range xbm.DirtyBricks {
-			if !isDirty {
-				delete(xbm.DirtyBricks, bKey)
-				continue
-			}
-			if bricksInFrame >= maxBricks {
-				break
-			}
-			sx, sy, sz := bKey[0], bKey[1], bKey[2]
-			bx, by, bz := bKey[3], bKey[4], bKey[5]
-			sector, ok := xbm.Sectors[[3]int{sx, sy, sz}]
-			if !ok {
-				delete(xbm.DirtyBricks, bKey)
-				continue
-			}
-			info := m.SectorToInfo[sector]
-			brick := sector.GetBrick(bx, by, bz)
-			bPtrs, hasPtrs := alloc.Bricks[[3]int{sx, sy, sz}]
-			if brick != nil {
-				if hasPtrs {
-					oldBrick := bPtrs[bx+by*4+bz*16]
-					if oldBrick != nil && oldBrick != brick {
-						// Brick changed! Release old one
-						m.releaseBrickSlot(oldBrick)
-						m.releaseVoxelAuxSlot(oldBrick)
-					}
-					bPtrs[bx+by*4+bz*16] = brick
-				}
-				origin := [3]int{
-					sx*volume.SectorSize + bx*volume.BrickSize,
-					sy*volume.SectorSize + by*volume.BrickSize,
-					sz*volume.SectorSize + bz*volume.BrickSize,
-				}
-				m.uploadBrick(normalBakeContext, obj, brick, info.BrickTableIndex+uint32(bx+by*4+bz*16), origin)
-			} else {
-				// Clear brick record in GPU to 0
-				if hasPtrs {
-					if oldBrick := bPtrs[bx+by*4+bz*16]; oldBrick != nil {
-						m.releaseBrickSlot(oldBrick)
-						m.releaseVoxelAuxSlot(oldBrick)
-					}
-					bPtrs[bx+by*4+bz*16] = nil
-				}
-				m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64((info.BrickTableIndex+uint32(bx+by*4+bz*16))*BrickRecordSize), make([]byte, BrickRecordSize))
-			}
-			delete(xbm.DirtyBricks, bKey)
-			bricksInFrame++
-			m.VoxelBricksUploaded++
-			uploadedAny = true
-		}
-
-		for _, isDirty := range xbm.DirtySectors {
-			if isDirty {
-				m.VoxelDirtySectorsPending++
-			}
-		}
-		for _, isDirty := range xbm.DirtyBricks {
-			if isDirty {
-				m.VoxelDirtyBricksPending++
-			}
-		}
-
-		// Materials: For now, re-upload if new.
-	}
-
-	if uploadedAny {
-		m.VoxelUploadRevision++
-	}
+	m.serviceVoxelUploads(scene, func(work voxelUploadWork) bool {
+		return m.executeVoxelUpload(normalBakeContext, work)
+	})
 
 	return recreated
 }
@@ -355,11 +193,13 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 	if m.BrickToAuxSlot == nil {
 		m.BrickToAuxSlot = make(map[*volume.Brick]uint32)
 	}
+	seenMaps := make(map[*volume.XBrickMap]bool)
 	for _, obj := range scene.Objects {
-		if obj == nil || obj.XBrickMap == nil {
+		if obj == nil || obj.XBrickMap == nil || seenMaps[obj.XBrickMap] {
 			continue
 		}
 		xbm := obj.XBrickMap
+		seenMaps[xbm] = true
 		alloc, exists := m.Allocations[xbm]
 		if !exists {
 			alloc = &ObjectGpuAllocation{
@@ -695,7 +535,7 @@ func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorG
 	binary.LittleEndian.PutUint32(sData[24:28], uint32(sector.BrickMask64>>32))
 	// 28:32 padding
 
-	m.Device.GetQueue().WriteBuffer(m.SectorTableBuf, uint64(info.SlotIndex*32), sData)
+	mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.SectorTableBuf, uint64(info.SlotIndex)*32, sData))
 }
 
 func (m *GpuBufferManager) uploadBrick(ctx voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int) {
@@ -740,7 +580,7 @@ func (m *GpuBufferManager) uploadBrick(ctx voxelNormalBakeContext, obj *core.Vox
 			}
 		}
 
-		m.Device.GetQueue().WriteTexture(
+		mustQueueVoxelWrite(m.Device.GetQueue().WriteTexture(
 			&wgpu.ImageCopyTexture{
 				Texture:  m.VoxelPayloadTex[payloadPage],
 				MipLevel: 0,
@@ -758,7 +598,7 @@ func (m *GpuBufferManager) uploadBrick(ctx voxelNormalBakeContext, obj *core.Vox
 				Height:             8,
 				DepthOrArrayLayers: 8,
 			},
-		)
+		))
 	}
 
 	if mode.usesAux {
@@ -776,14 +616,14 @@ func (m *GpuBufferManager) uploadBrick(ctx voxelNormalBakeContext, obj *core.Vox
 			auxBytes = buildVoxelAuxBytes(ctx, obj, brick, brickOrigin)
 			m.VoxelRuntimeNormalBakeDuration += time.Since(start)
 		}
-		m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot*VoxelAuxRecordBytes), auxBytes)
+		mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot)*VoxelAuxRecordBytes, auxBytes))
 	} else {
 		m.releaseVoxelAuxSlot(brick)
 	}
 
 	record := buildGpuBrickRecord(brick, mode, payloadOffset, payloadPage, auxWordBase)
 	bbuf := encodeGpuBrickRecord(record)
-	m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(slotIdx*BrickRecordSize), bbuf)
+	mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(slotIdx)*BrickRecordSize, bbuf))
 }
 
 func (m *GpuBufferManager) ensureVoxelPayloadPages() bool {

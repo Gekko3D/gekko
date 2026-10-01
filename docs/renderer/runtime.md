@@ -338,10 +338,41 @@ Terminal states remain latched. Later edits use the ordinary dirty-upload path.
 The owner removes or changes the terminal marker before calling
 `ForgetStreamedVoxel`; that method deletes only terminal records. Terminal
 records retain status metadata without retaining captured geometry handles.
-Priority and ticket order are copied to scheduling metadata. Global upload
-budgets and automatic parent/child selection remain subsequent implementation
-steps. See [S1a scope and verification](../roadmaps/streamed-rendering-s1a.md) and
+Priority and ticket order are copied to scheduling metadata. Automatic
+parent/child selection remains a subsequent implementation step. See
+[S1a scope and verification](../roadmaps/streamed-rendering-s1a.md) and
 the [island residency contract](../content/island-streaming.md#renderer-residency-contract).
+
+### Global voxel upload scheduling
+
+`GpuBufferManager.UpdateVoxelData` schedules voxel content across all resident
+objects, including hidden streamed objects. `SetVoxelUploadBudget` configures
+bytes, sectors and brick records per service frame. Defaults are 4 MiB, 1,024
+sectors and 65,536 brick records. Existing `SectorsPerFrame` callers configure
+the same global sector cap. Zero pauses the corresponding resource; zero bytes
+pauses every content write.
+
+The byte cap covers material rows, sector/brick records, auxiliary
+occupancy/normals and mixed payloads. A full sector consumes 64 brick records,
+including empty clears. Allocation/migration copies, lookup rebuilding, scene
+buffers and CPU queue/normal-halo preparation remain outside this cap.
+
+Shared maps upload geometry once, using their best instance priority/order.
+Materials remain per object. Work sorts by priority, order, map ID, kind and
+signed coordinates. Waiting work gains one priority level every eight service
+frames; older work wins equal effective priority. Removed work loses its age.
+New core objects default to visible priority.
+
+An atomic sector that cannot fit the configured frame limits stays dirty while
+smaller eligible work proceeds. Atlas capacity is checked before execution;
+replacement/clear work can reclaim obsolete slots within the same unit. Material
+metadata becomes current only after its write is queued, preserving readiness
+while content is deferred. Ordinary visible objects still upload progressively.
+
+`VoxelUploadBytes`, `VoxelMaterialsUploaded`, `VoxelSectorsUploaded` and
+`VoxelBricksUploaded` report admitted content. Brick counts include full-sector
+records. Pending counters count physical shared-map queues once. See
+[S1b scope and verification](../roadmaps/streamed-rendering-s1b.md).
 
 ## Specialized Subsystems
 

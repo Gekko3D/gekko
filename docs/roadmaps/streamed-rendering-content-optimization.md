@@ -125,7 +125,7 @@ Acceptance: runtime admission registers prepared geometry without rebuilding it 
 
 ### S1. Global budgets, priority queues, and renderer readiness
 
-Finish the existing island plan's upload/readiness contract before adding more detail. Use global per-frame upload bytes and changed-brick/record limits across all objects. Current `SectorsPerFrame` and dirty-brick counters reset inside the object loop, allowing work to grow with object count.
+Finish the existing island plan's upload/readiness contract before adding more detail. Use global per-frame upload bytes and changed-brick/record limits across all objects. S1b implements these content-write limits, replacing per-object limits that allowed work to grow with object count. Allocation/migration and lookup work remain outside this cap.
 
 Budget commits by estimated bytes and bounded work units as well as elapsed time. A timer checked between chunks cannot prevent one huge commit from stalling. Stage large chunks hidden and resume their uploads across frames.
 
@@ -317,8 +317,10 @@ Use expanded bounds/occupancy and subtract a conservative margin before primary 
 
 Implementation starts with [S1a: staged voxel residency and upload readiness](streamed-rendering-s1a.md).
 S1a is implemented: hidden residency, scheduling metadata and revision-qualified tickets.
-S1b follows with global upload budgets and deterministic queue ordering. The
-remaining proposals keep the delivery order above.
+[S1b](streamed-rendering-s1b.md) is implemented: global voxel content budgets,
+deterministic ordering/aging, shared-map deduplication and atlas backpressure.
+Streaming owners still need to adopt the tickets for automatic coverage handoff.
+Cache/worker byte bounds and the remaining proposals keep the delivery order above.
 
 Decisions to settle before dependent implementation:
 
@@ -333,8 +335,10 @@ Decisions to settle before dependent implementation:
 
 The proposal review checked source symbols, existing plans, byte-layout arithmetic,
 and document links. Implementation verification is recorded per slice, starting
-with [S1a](streamed-rendering-s1a.md#execution-record). No GPU demo or performance
-benchmark establishes the proposed gains.
+with [S1a](streamed-rendering-s1a.md#execution-record) and
+[S1b](streamed-rendering-s1b.md#verification-and-execution-record). S1b includes
+a physical GPU smoke check; it does not establish performance gains or rendered
+pixel parity.
 
 Implementation slices should use the smallest existing build/check and manual scene relevant to their changed contract: fixed-view render parity, edited chunk seams, shared-instance isolation, delayed parent/child handoff, save/reload, and locomotion after edits. The user explicitly authorized functionality tests and the tests-first subagent workflow for this implementation. Other test changes still follow [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
 

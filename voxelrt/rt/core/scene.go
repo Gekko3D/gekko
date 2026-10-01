@@ -113,6 +113,7 @@ func (obj *VoxelObject) HasTransparency() bool {
 func NewVoxelObject() *VoxelObject {
 	return &VoxelObject{
 		RenderEnabled:         true,
+		VoxelUploadPriority:   VoxelUploadPriorityVisible,
 		Transform:             NewTransform(),
 		XBrickMap:             volume.NewXBrickMap(),
 		LODThreshold:          50.0,

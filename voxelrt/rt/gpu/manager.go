@@ -456,6 +456,10 @@ type GpuBufferManager struct {
 
 	// Smooth streaming state
 	SectorsPerFrame                uint32
+	VoxelUploadBytesPerFrame       uint64
+	VoxelUploadBricksPerFrame      uint32
+	voxelUploadFrame               uint64
+	voxelUploadAges                map[voxelUploadIdentity]uint64
 	lastTotalSectors               int
 	lastSceneRevision              uint64
 	sectorTopologyRevision         uint64
@@ -467,6 +471,8 @@ type GpuBufferManager struct {
 	TileLightMaxCount              int
 	VoxelSectorsUploaded           int
 	VoxelBricksUploaded            int
+	VoxelUploadBytes               uint64
+	VoxelMaterialsUploaded         int
 	VoxelDirtySectorsPending       int
 	VoxelDirtyBricksPending        int
 	VoxelUniformSparseBricks       int
@@ -566,6 +572,8 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 		LightingQuality:               core.DefaultLightingQualityConfig(),
 		BatchMode:                     false,
 		SectorsPerFrame:               MaxUpdatesPerFrame,
+		VoxelUploadBytesPerFrame:      DefaultVoxelUploadBudget().MaxBytes,
+		VoxelUploadBricksPerFrame:     DefaultVoxelUploadBudget().MaxBricks,
 		RetainedVoxelMapBudgetSectors: DefaultRetainedVoxelMapBudgetSectors,
 		VoxelPayloadPageSize:          pageSize,
 		VoxelPayloadPageCount:         MaxVoxelAtlasPages,

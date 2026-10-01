@@ -9,11 +9,11 @@ import (
 type StreamedVoxelPriority uint8
 
 const (
-	StreamedVoxelPriorityFallback StreamedVoxelPriority = iota
-	StreamedVoxelPriorityCollision
-	StreamedVoxelPriorityVisible
-	StreamedVoxelPriorityPrefetch
-	StreamedVoxelPriorityKeep
+	StreamedVoxelPriorityFallback  StreamedVoxelPriority = StreamedVoxelPriority(core.VoxelUploadPriorityFallback)
+	StreamedVoxelPriorityCollision StreamedVoxelPriority = StreamedVoxelPriority(core.VoxelUploadPriorityCollision)
+	StreamedVoxelPriorityVisible   StreamedVoxelPriority = StreamedVoxelPriority(core.VoxelUploadPriorityVisible)
+	StreamedVoxelPriorityPrefetch  StreamedVoxelPriority = StreamedVoxelPriority(core.VoxelUploadPriorityPrefetch)
+	StreamedVoxelPriorityKeep      StreamedVoxelPriority = StreamedVoxelPriority(core.VoxelUploadPriorityKeep)
 )
 
 // StreamedVoxelRenderComponent keeps an entity resident while hidden. Its owner

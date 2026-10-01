@@ -148,7 +148,7 @@ geometry, wait for readiness and reveal it while retaining parent coverage.
   One lifetime finding was fixed: terminal records release captured geometry.
 - Final review: no remaining S1a blockers. Global budgeting and page-runtime
   adoption remain S1b and later work.
-- Status: S1a complete, ready to commit.
+- Status: S1a complete, committed as `e3f11cf`.
 
 Final commands from `gekko/`:
 

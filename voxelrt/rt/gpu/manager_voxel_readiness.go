@@ -28,10 +28,7 @@ func (m *GpuBufferManager) VoxelObjectReady(obj *core.VoxelObject, xbm *volume.X
 		return false, pendingSectors, pendingBricks
 	}
 	ptr, length := materialTableIdentity(obj.MaterialTable)
-	capacity := length
-	if capacity == 0 {
-		capacity = materialBlockCapacity
-	}
+	capacity := materialUploadRows(length)
 	ready = matAlloc.MaterialTablePtr == ptr && matAlloc.MaterialTableLen == length &&
 		matAlloc.BufferGeneration == m.MaterialBufferGeneration && uint64(matAlloc.MaterialCapacity) >= uint64(capacity)
 	return ready, pendingSectors, pendingBricks

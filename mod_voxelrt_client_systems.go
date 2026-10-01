@@ -511,7 +511,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		}
 
 		obj.RenderEnabled = !hidden
-		obj.VoxelUploadPriority = uint8(StreamedVoxelPriorityVisible)
+		obj.VoxelUploadPriority = core.VoxelUploadPriorityVisible
 		obj.VoxelUploadOrder = uint64(obj.XBrickMap.ID)
 		if streamed {
 			obj.VoxelUploadPriority = uint8(marker.Priority)
