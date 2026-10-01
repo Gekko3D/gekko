@@ -65,6 +65,8 @@ type StreamedLevelRuntimeConfig struct {
 	MaxPrepareJobs                  int
 	MaxPreparedGeometryCacheEntries int
 	MaxPreparedGeometryCacheBytes   int64
+	MaxDecodedContentCacheBytes     int64
+	MaxPendingPreparedBytes         int64
 	MaxChunkCommitsPerFrame         int
 	MaxStreamingCommitMillis        int
 	MetricsLogInterval              time.Duration
@@ -80,6 +82,21 @@ type StreamedLevelRuntimeConfig struct {
 }
 
 type StreamedLevelRuntimeMetrics struct {
+	DecodedContentCacheEntries             int
+	DecodedContentCacheBytes               int64
+	DecodedContentCachePinnedBytes         int64
+	DecodedContentCacheMaxBytes            int64
+	DecodedContentCacheOverBudgetBytes     int64
+	DecodedContentCacheHits                int
+	DecodedContentCacheMisses              int
+	DecodedContentCacheEvictions           int
+	DecodedContentCacheLoadWaits           int
+	DecodedContentCacheOversizedBypasses   int
+	PendingPreparedBytes                   int64
+	PendingPreparedMaxBytes                int64
+	PendingPreparedOverBudgetBytes         int64
+	PendingPreparedAdmissionRetries        int
+	PendingPreparedOversizedAdmissions     int
 	DesiredChunkCount                      int
 	DesiredLoadableChunkCount              int
 	KeepChunkCount                         int
@@ -273,6 +290,11 @@ type StreamedLevelRuntimeState struct {
 
 	Config                     StreamedLevelRuntimeConfig
 	Loader                     *RuntimeContentLoader
+	metadataScope              *RuntimeContentLoadScope
+	ownsLoader                 bool
+	pendingPrepared            *streamedPendingPreparedOwner
+	pendingChunkCostHints      map[ChunkCoord]int64
+	pendingProxyCostHints      map[ChunkCoord]int64
 	Level                      *content.LevelDef
 	LevelID                    string
 	LevelPath                  string
@@ -418,6 +440,9 @@ func (lease streamedGeometryAssetLease) release(cache *streamedPreparedGeometryC
 }
 
 type streamedPreparedChunk struct {
+	loadScope                             *RuntimeContentLoadScope
+	pendingCredit                         *streamedPendingPreparedCredit
+	retryCost                             int64
 	Generation                            uint64
 	Coord                                 ChunkCoord
 	TerrainChunk                          *content.TerrainChunkDef
@@ -461,6 +486,9 @@ type streamedSectorProxyLoadJob struct {
 }
 
 type streamedPreparedSectorProxy struct {
+	loadScope                *RuntimeContentLoadScope
+	pendingCredit            *streamedPendingPreparedCredit
+	retryCost                int64
 	Generation               uint64
 	SectorCoord              ChunkCoord
 	LOD                      content.ImportedWorldLODDef
@@ -547,10 +575,21 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		return fmt.Errorf("level path is empty")
 	}
 
-	loader := cfg.Loader
-	if loader == nil {
-		loader = NewRuntimeContentLoader()
+	if cfg.MaxPendingPreparedBytes < 0 {
+		return fmt.Errorf("pending prepared byte budget is negative")
 	}
+	baseLoader := cfg.Loader
+	if baseLoader == nil {
+		baseLoader = NewRuntimeContentLoader(RuntimeContentLoaderOptions{MaxCacheBytes: cfg.MaxDecodedContentCacheBytes})
+	}
+	metadataScope := baseLoader.NewScope()
+	published := false
+	defer func() {
+		if !published {
+			metadataScope.Close()
+		}
+	}()
+	loader := metadataScope.Loader()
 
 	level, err := loader.LoadLevel(cfg.LevelPath)
 	if err != nil {
@@ -612,7 +651,13 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.InitErr = nil
 	state.Generation++
 	state.Config = cfg
-	state.Loader = loader
+	state.Loader = baseLoader
+	state.metadataScope = metadataScope
+	state.ownsLoader = cfg.Loader == nil
+	published = true
+	state.pendingPrepared = newStreamedPendingPreparedOwner(cfg.MaxPendingPreparedBytes)
+	state.pendingChunkCostHints = make(map[ChunkCoord]int64)
+	state.pendingProxyCostHints = make(map[ChunkCoord]int64)
 	state.Level = level
 	state.LevelID = level.ID
 	state.LevelPath = cfg.LevelPath
@@ -961,15 +1006,15 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 		return err
 	}
 	waitForStreamedJobsAndDrain(state)
+	resetStreamedDrainedScheduling(state)
 	for coord, loaded := range state.LoadedChunks {
 		if err := persistChunkOverrides(cmd, state, coord, loaded); err != nil {
-			state.PendingLoads = make(map[ChunkCoord]struct{})
-			state.PendingProxyLoads = make(map[ChunkCoord]struct{})
-			state.navigationLoadActive, state.navigationOverlayActive, state.navigationRebuildActive = false, false, false
+			resetStreamedDrainedScheduling(state)
 			return err
 		}
 	}
 	waitForStreamedJobsAndDrain(state)
+	resetStreamedDrainedScheduling(state)
 	if err := saveStreamedWorldDeltaNow(state); err != nil {
 		return err
 	}
@@ -1020,12 +1065,37 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	}
 	drainStreamedPreparedResults(state)
 	state.InitErr = nil
-	state.Level, state.Loader, state.WorldDelta = nil, nil, nil
+	// Remove every shallow decoded reference before releasing the session scope.
+	clear(state.MarkerEntities)
+	clear(state.LightEntities)
+	state.TerrainID, state.BaseWorldID, state.BaseWorldBackingSourceHash = "", "", ""
+	clear(state.TerrainEntries)
+	clear(state.ImportedWorldEntries)
+	clear(state.ImportedWorldSectors)
+	clear(state.ImportedChunkSector)
+	clear(state.PlacementsByChunk)
+	clear(state.PlacementChunk)
+	clear(state.ObjectChunk)
+	clear(state.placementOverrideMap)
+	clear(state.deletedPlacementIDs)
+	clear(state.terrainOverrideMap)
+	clear(state.importedWorldOverrideMap)
+	clear(state.voxelOverrideMap)
+	clear(state.voxelBackingRemovalMap)
+	state.Level, state.WorldDelta = nil, nil
+	state.BaseWorldManifest, state.BaseWorldBacking = nil, nil
+	state.BaseWorldMaterialLookup = ImportedWorldMaterialLookup{}
+	state.metadataScope.Close()
+	state.metadataScope = nil
+	if state.ownsLoader {
+		state.Loader.Clear()
+	}
+	state.Loader = nil
+	refreshStreamedContentOwnerMetrics(state)
 	state.LevelID, state.LevelPath, state.WorldDeltaPath, state.WorldDataDir, state.sessionDeltaDir = "", "", "", "", ""
 	state.LevelRoot, state.PlayerEntity = 0, 0
 	state.BaseNavManifest, state.navigationQuery = nil, nil
 	state.BaseWorldManifest, state.BaseWorldBacking = nil, nil
-	state.BaseWorldBackingSourceHash = ""
 	state.NavigationSources, state.NavigationGraphs = nil, nil
 	state.navigationPendingSources, state.navigationPendingGraphs = nil, nil
 	state.navigationPendingGen = 0
@@ -1058,7 +1128,8 @@ func clearVoxelWorldDirtyChunks(app *App, worldID string) {
 func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 	for {
 		select {
-		case <-state.PreparedLoads:
+		case prepared := <-state.PreparedLoads:
+			prepared.release()
 			continue
 		default:
 		}
@@ -1066,7 +1137,8 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 	}
 	for {
 		select {
-		case <-state.PreparedProxyLoads:
+		case prepared := <-state.PreparedProxyLoads:
+			prepared.release()
 			continue
 		default:
 		}
@@ -1122,8 +1194,10 @@ func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 	}()
 	for {
 		select {
-		case <-state.PreparedLoads:
-		case <-state.PreparedProxyLoads:
+		case prepared := <-state.PreparedLoads:
+			prepared.release()
+		case prepared := <-state.PreparedProxyLoads:
+			prepared.release()
 		case <-state.navigationLoads:
 		case <-state.navigationOverlays:
 		case <-state.navigationRebuilds:
@@ -1286,6 +1360,7 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 	state.KeepSectors = keepSectors
 	state.DesiredProxySectors = desiredProxySectors
 	state.KeepProxySectors = keepProxySectors
+	pruneStreamedPendingCostHints(state)
 	requestStreamedNavigationResidency(state, desired)
 	for coord := range state.LoadedChunks {
 		if streamedLoadedChunkNeedsResidencyUpgrade(cmd, state, coord) {
@@ -1348,6 +1423,10 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 			if !ok || len(sector.LODs) == 0 {
 				continue
 			}
+			if cost := state.pendingProxyCostHints[sectorCoord]; cost > 0 && !state.pendingPrepared.canReserve(cost) {
+				continue
+			}
+			delete(state.pendingProxyCostHints, sectorCoord)
 			state.PendingProxyLoads[sectorCoord] = struct{}{}
 			job := buildStreamedSectorProxyLoadJob(state, sectorCoord, sector.LODs[0])
 			startStreamedSectorProxyPrepareJob(state, job)
@@ -1367,6 +1446,10 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 		if !streamedChunkHasLoadableContent(state, coord) {
 			continue
 		}
+		if cost := state.pendingChunkCostHints[coord]; cost > 0 && !state.pendingPrepared.canReserve(cost) {
+			continue
+		}
+		delete(state.pendingChunkCostHints, coord)
 		state.PendingLoads[coord] = struct{}{}
 		job := buildStreamedChunkLoadJob(state, coord)
 		startStreamedChunkPrepareJob(state, job)
@@ -1403,11 +1486,16 @@ func startStreamedChunkPrepareJob(state *StreamedLevelRuntimeState, job streamed
 	state.jobs.Add(1)
 	go func() {
 		defer state.jobs.Done()
+		defer func() {
+			state.activePrepareMu.Lock()
+			state.activeChunkPrepares--
+			state.activePrepareMu.Unlock()
+		}()
 		result := prepareStreamedChunkLoad(job)
+		job = streamedChunkLoadJob{}
+		result = admitStreamedPreparedChunk(state.pendingPrepared, result)
 		state.PreparedLoads <- result
-		state.activePrepareMu.Lock()
-		state.activeChunkPrepares--
-		state.activePrepareMu.Unlock()
+
 	}()
 }
 
@@ -1421,11 +1509,16 @@ func startStreamedSectorProxyPrepareJob(state *StreamedLevelRuntimeState, job st
 	state.jobs.Add(1)
 	go func() {
 		defer state.jobs.Done()
+		defer func() {
+			state.activePrepareMu.Lock()
+			state.activeProxyPrepares--
+			state.activePrepareMu.Unlock()
+		}()
 		result := prepareStreamedSectorProxyLoad(job)
+		job = streamedSectorProxyLoadJob{}
+		result = admitStreamedPreparedProxy(state.pendingPrepared, result)
 		state.PreparedProxyLoads <- result
-		state.activePrepareMu.Lock()
-		state.activeProxyPrepares--
-		state.activePrepareMu.Unlock()
+
 	}()
 }
 
@@ -1717,38 +1810,50 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		}
 		select {
 		case prepared := <-state.PreparedProxyLoads:
-			if prepared.Generation != state.Generation {
-				continue
-			}
-			delete(state.PendingProxyLoads, prepared.SectorCoord)
-			recordPreparedStreamedSectorProxyAuxMetrics(state, prepared)
-			if prepared.Err != nil {
-				state.Metrics.PrepareErrorCount++
-				if state.InitErr == nil {
-					state.InitErr = prepared.Err
+			func() {
+				defer prepared.release()
+				if prepared.Generation != state.Generation {
+					return
 				}
-				continue
-			}
-			if !streamedProxySectorDesired(state, prepared.SectorCoord) {
-				continue
-			}
-			if _, alreadyLoaded := state.LoadedSectorProxies[prepared.SectorCoord]; alreadyLoaded {
-				continue
-			}
-			if !streamedSectorProxyCommitNeeded(state, prepared.SectorCoord) {
-				continue
-			}
-			entityCount, err := commitPreparedStreamedSectorProxy(cmd, assets, state, prepared)
-			if err != nil {
-				state.Metrics.CommitErrorCount++
-				if state.InitErr == nil {
-					state.InitErr = err
+				delete(state.PendingProxyLoads, prepared.SectorCoord)
+				if prepared.retryCost > 0 {
+					if state.pendingProxyCostHints == nil {
+						state.pendingProxyCostHints = make(map[ChunkCoord]int64)
+					}
+					state.pendingProxyCostHints[prepared.SectorCoord] = prepared.retryCost
+					return
 				}
-				continue
-			}
-			state.Metrics.ChunksCommittedLastFrame++
-			state.Metrics.ProxyChunksCommittedLastFrame++
-			state.Metrics.EntitiesCommittedLastFrame += entityCount
+				delete(state.pendingProxyCostHints, prepared.SectorCoord)
+				recordPreparedStreamedSectorProxyAuxMetrics(state, prepared)
+				if prepared.Err != nil {
+					state.Metrics.PrepareErrorCount++
+					if state.InitErr == nil {
+						state.InitErr = prepared.Err
+					}
+					return
+				}
+				if !streamedProxySectorDesired(state, prepared.SectorCoord) {
+					return
+				}
+				if _, alreadyLoaded := state.LoadedSectorProxies[prepared.SectorCoord]; alreadyLoaded {
+					return
+				}
+				if !streamedSectorProxyCommitNeeded(state, prepared.SectorCoord) {
+					return
+				}
+				entityCount, err := commitPreparedStreamedSectorProxy(cmd, assets, state, prepared)
+				if err != nil {
+					state.Metrics.CommitErrorCount++
+					if state.InitErr == nil {
+						state.InitErr = err
+					}
+					return
+				}
+				state.Metrics.ChunksCommittedLastFrame++
+				state.Metrics.ProxyChunksCommittedLastFrame++
+				state.Metrics.EntitiesCommittedLastFrame += entityCount
+				return
+			}()
 			continue
 		default:
 		}
@@ -1757,42 +1862,54 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		}
 		select {
 		case prepared := <-state.PreparedLoads:
-			if prepared.Generation != state.Generation {
-				continue
-			}
-			delete(state.PendingLoads, prepared.Coord)
-			recordPreparedStreamedChunkMetrics(state, prepared)
-			if prepared.Err != nil {
-				state.Metrics.PrepareErrorCount++
-				if state.InitErr == nil {
-					state.InitErr = prepared.Err
+			func() {
+				defer prepared.release()
+				if prepared.Generation != state.Generation {
+					return
 				}
-				continue
-			}
-			if _, stillDesired := state.DesiredChunks[prepared.Coord]; !stillDesired {
-				continue
-			}
-			if _, alreadyLoaded := state.LoadedChunks[prepared.Coord]; alreadyLoaded {
-				continue
-			}
-			collisionCommitCountBefore := state.Metrics.CollisionChunkCommitCount
-			entityCount, err := commitPreparedStreamedChunk(cmd, assets, state, prepared)
-			if err != nil {
-				state.Metrics.CommitErrorCount++
-				if state.InitErr == nil {
-					state.InitErr = err
+				delete(state.PendingLoads, prepared.Coord)
+				if prepared.retryCost > 0 {
+					if state.pendingChunkCostHints == nil {
+						state.pendingChunkCostHints = make(map[ChunkCoord]int64)
+					}
+					state.pendingChunkCostHints[prepared.Coord] = prepared.retryCost
+					return
 				}
-				continue
-			}
-			state.Metrics.ChunksCommittedLastFrame++
-			state.Metrics.FullChunksCommittedLastFrame++
-			if state.Metrics.CollisionChunkCommitCount > collisionCommitCountBefore {
-				state.Metrics.CollisionChunksCommittedLastFrame++
-			}
-			state.Metrics.EntitiesCommittedLastFrame += entityCount
-			if sectorCoord, ok := state.ImportedChunkSector[prepared.Coord]; ok {
-				reconcileStreamedSectorProxyAfterFullCommit(cmd, state, sectorCoord)
-			}
+				delete(state.pendingChunkCostHints, prepared.Coord)
+				recordPreparedStreamedChunkMetrics(state, prepared)
+				if prepared.Err != nil {
+					state.Metrics.PrepareErrorCount++
+					if state.InitErr == nil {
+						state.InitErr = prepared.Err
+					}
+					return
+				}
+				if _, stillDesired := state.DesiredChunks[prepared.Coord]; !stillDesired {
+					return
+				}
+				if _, alreadyLoaded := state.LoadedChunks[prepared.Coord]; alreadyLoaded {
+					return
+				}
+				collisionCommitCountBefore := state.Metrics.CollisionChunkCommitCount
+				entityCount, err := commitPreparedStreamedChunk(cmd, assets, state, prepared)
+				if err != nil {
+					state.Metrics.CommitErrorCount++
+					if state.InitErr == nil {
+						state.InitErr = err
+					}
+					return
+				}
+				state.Metrics.ChunksCommittedLastFrame++
+				state.Metrics.FullChunksCommittedLastFrame++
+				if state.Metrics.CollisionChunkCommitCount > collisionCommitCountBefore {
+					state.Metrics.CollisionChunksCommittedLastFrame++
+				}
+				state.Metrics.EntitiesCommittedLastFrame += entityCount
+				if sectorCoord, ok := state.ImportedChunkSector[prepared.Coord]; ok {
+					reconcileStreamedSectorProxyAfterFullCommit(cmd, state, sectorCoord)
+				}
+			}()
+			continue
 		default:
 			return
 		}
@@ -1820,6 +1937,7 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 	if state == nil {
 		return
 	}
+	refreshStreamedContentOwnerMetrics(state)
 	state.Metrics.DesiredChunkCount = len(state.DesiredChunks)
 	state.Metrics.DesiredLoadableChunkCount = streamedLoadableChunkCount(state, state.DesiredChunks)
 	state.Metrics.KeepChunkCount = len(state.KeepChunks)
@@ -2224,6 +2342,7 @@ func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, st
 		return nil
 	}
 	prepared := prepareStreamedChunkLoad(buildStreamedChunkLoadJob(state, coord))
+	defer prepared.release()
 	recordPreparedStreamedChunkMetrics(state, prepared)
 	if prepared.Err != nil {
 		state.Metrics.PrepareErrorCount++
@@ -2233,6 +2352,7 @@ func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, st
 	if err != nil {
 		state.Metrics.CommitErrorCount++
 	}
+	prepared.release()
 	refreshStreamedRuntimeMetricsCounts(state)
 	recordStreamingRendererPressure(cmd, state)
 	return err
@@ -2240,6 +2360,19 @@ func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, st
 
 func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result streamedPreparedSectorProxy) {
 	start := time.Now()
+	var scope *RuntimeContentLoadScope
+	if job.Loader != nil {
+		scope = job.Loader.NewScope()
+		job.Loader = scope.Loader()
+	}
+	defer func() {
+		if result.Err != nil {
+			scope.Close()
+			result = streamedPreparedSectorProxy{Generation: result.Generation, SectorCoord: result.SectorCoord, Err: result.Err, PrepareDuration: result.PrepareDuration}
+		} else {
+			result.loadScope = scope
+		}
+	}()
 	result = streamedPreparedSectorProxy{
 		Generation:  job.Generation,
 		SectorCoord: job.SectorCoord,
@@ -2274,6 +2407,19 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 
 func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPreparedChunk) {
 	start := time.Now()
+	var scope *RuntimeContentLoadScope
+	if job.Loader != nil {
+		scope = job.Loader.NewScope()
+		job.Loader = scope.Loader()
+	}
+	defer func() {
+		if result.Err != nil {
+			scope.Close()
+			result = streamedPreparedChunk{Generation: result.Generation, Coord: result.Coord, Err: result.Err, PrepareDuration: result.PrepareDuration}
+		} else {
+			result.loadScope = scope
+		}
+	}()
 	result = streamedPreparedChunk{
 		Generation:      job.Generation,
 		Coord:           job.Coord,
@@ -2361,15 +2507,19 @@ func loadStreamedImportedWorldAux(loader *RuntimeContentLoader, ref *content.Imp
 		return nil, false
 	}
 	if ref.NormalBakeVersion != "" && aux.NormalBakeVersion != ref.NormalBakeVersion {
+		loader.releaseScopedValue(aux)
 		return nil, false
 	}
 	if ref.PayloadHash != "" && aux.PayloadHash != ref.PayloadHash {
+		loader.releaseScopedValue(aux)
 		return nil, false
 	}
 	if ref.SourcePayloadHash != "" && aux.SourcePayloadHash != ref.SourcePayloadHash {
+		loader.releaseScopedValue(aux)
 		return nil, false
 	}
 	if ref.SourcePayloadSizeBytes > 0 && aux.SourcePayloadSizeBytes != ref.SourcePayloadSizeBytes {
+		loader.releaseScopedValue(aux)
 		return nil, false
 	}
 	return aux, true
@@ -2455,6 +2605,10 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 	defer beginStreamedRenderTicketBatch(state)()
 	start := time.Now()
 	resetLastStreamedCommitBreakdown(state)
+	loader := state.Loader
+	if prepared.loadScope != nil {
+		loader = prepared.loadScope.Loader()
+	}
 	entityCount := 0
 	committed := false
 	importedWorldCollisionCommitted := false
@@ -2561,7 +2715,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 
 	for _, placement := range prepared.PlacementItems {
 		placementStart := time.Now()
-		spawnResult, err := spawnAuthoredLevelPlacement(cmd, assets, state.Loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
+		spawnResult, err := spawnAuthoredLevelPlacement(cmd, assets, loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
 			PlacementID: placement.PlacementID,
 			VolumeID:    placement.VolumeID,
 			AssetPath:   placement.AssetPath,

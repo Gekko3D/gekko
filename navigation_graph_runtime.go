@@ -1924,8 +1924,10 @@ func startStreamedNavigationRebuild(cmd *Commands, state *StreamedLevelRuntimeSt
 		}
 		return dirty[i].Z < dirty[j].Z
 	})
-	chunks, err := loadNavigationRebuildChunks(cmd, state, dirty, overrides)
+	scope := state.Loader.NewScope()
+	chunks, err := loadNavigationRebuildChunks(cmd, state, dirty, overrides, scope.Loader())
 	if err != nil {
+		scope.Close()
 		state.InitErr = err
 		return
 	}
@@ -1943,11 +1945,15 @@ func startStreamedNavigationRebuild(cmd *Commands, state *StreamedLevelRuntimeSt
 	state.jobs.Add(1)
 	go func() {
 		defer state.jobs.Done()
+		defer scope.Close()
 		batchID := fmt.Sprintf("%d-%d", runtimeGeneration, editGeneration)
 		result, err := content.SaveNavGraphDeltaBatchForImportedWorldChunks(deltaPath, &delta, manifest, manifestPath, chunks, dirty, batchID)
 		if err != nil {
 			err = fmt.Errorf("rebuild navigation graph delta: %w", err)
 		}
+		// The decoded source batch ends at bake completion, before channel backpressure.
+		chunks = nil
+		scope.Close()
 		state.navigationRebuilds <- streamedNavigationRebuildResult{RuntimeGeneration: runtimeGeneration, EditGeneration: editGeneration, Delta: delta, Result: result, Err: err}
 	}()
 }
@@ -2004,7 +2010,7 @@ func retireNavigationEditBlockers(state *StreamedLevelRuntimeState, generation u
 	setStreamedNavigationOverlayDesired(state, copyNavigationTraversalSet(state.navigationOverlayDisabled), copyNavigationTraversalSet(state.navigationOverlayOpenDoors), blockers)
 }
 
-func loadNavigationRebuildChunks(cmd *Commands, state *StreamedLevelRuntimeState, dirty []content.TerrainChunkCoordDef, snapshots map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef) (map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, error) {
+func loadNavigationRebuildChunks(cmd *Commands, state *StreamedLevelRuntimeState, dirty []content.TerrainChunkCoordDef, snapshots map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, loader *RuntimeContentLoader) (map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, error) {
 	coords := make(map[content.TerrainChunkCoordDef]struct{})
 	for _, first := range content.ExpandNavGraphDirtyTileCoords(dirty) {
 		for _, second := range content.ExpandNavGraphDirtyTileCoords([]content.TerrainChunkCoordDef{first}) {
@@ -2022,7 +2028,7 @@ func loadNavigationRebuildChunks(cmd *Commands, state *StreamedLevelRuntimeState
 			continue
 		}
 		if override, ok := state.importedWorldOverrideMap[importedWorldChunkRuntimeKey(state.BaseWorldID, coord)]; ok {
-			chunk, err := state.Loader.LoadImportedWorldChunk(content.ResolveDocumentPath(override.SnapshotPath, state.WorldDeltaPath))
+			chunk, err := loader.LoadImportedWorldChunk(content.ResolveDocumentPath(override.SnapshotPath, state.WorldDeltaPath))
 			if err != nil {
 				return nil, err
 			}
@@ -2038,7 +2044,7 @@ func loadNavigationRebuildChunks(cmd *Commands, state *StreamedLevelRuntimeState
 			continue
 		}
 		worldPath := content.ResolveDocumentPath(state.Level.BaseWorld.ManifestPath, state.LevelPath)
-		chunk, err := state.Loader.LoadImportedWorldChunk(content.ResolveImportedWorldChunkPath(entry, worldPath))
+		chunk, err := loader.LoadImportedWorldChunk(content.ResolveImportedWorldChunkPath(entry, worldPath))
 		if err != nil {
 			return nil, err
 		}

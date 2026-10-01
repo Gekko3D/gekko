@@ -325,8 +325,14 @@ independent. V3 page selection and cross-layer groups remain separate work.
 [S2a](streamed-rendering-s2a.md) is implemented for prepared geometry and
 its registered asset copies: byte accounting, pinned users, LRU eviction,
 per-key build suppression and Stop cleanup. Decoded-content/pending-result and
-other owner byte bounds remain later S2 slices. The remaining proposals keep
-the delivery order above.
+other owner byte bounds are split into further S2 slices.
+[S2b](streamed-rendering-s2b.md) bounds decoded warm content and retained full/proxy
+results with scoped leases, shared byte admission and deferred retry hints.
+Live decoded leases and one sole oversized pending result expose explicit
+pressure exceptions. Temporary decode/build memory and other owner byte bounds,
+queue partitioning and mid-decode cancellation remain S2 work. These are owner
+budgets, not a total process memory ceiling. The remaining proposals keep the
+delivery order above.
 
 Decisions to settle before dependent implementation:
 
@@ -344,7 +350,8 @@ and document links. Implementation verification is recorded per slice, starting
 with [S1a](streamed-rendering-s1a.md#execution-record),
 [S1b](streamed-rendering-s1b.md#verification-and-execution-record) and
 [S1c](streamed-rendering-s1c.md#execution-record) and
-[S2a](streamed-rendering-s2a.md#execution-record). Native smoke checks establish
+[S2a](streamed-rendering-s2a.md#execution-record) and
+[S2b](streamed-rendering-s2b.md#execution-record). Native smoke checks establish
 the recorded rendering/streaming contracts; they do not establish performance
 gains or rendered pixel parity.
 

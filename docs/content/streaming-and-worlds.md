@@ -521,11 +521,52 @@ Prepared geometry cache update, S2a:
   Distinct keys proceed independently. Workers never delete AssetServer assets;
   engine-thread maintenance trims deferred victims even on no-commit frames.
 - This is a cache ownership budget, not a process memory ceiling. Decoded
-  RuntimeContentLoader data, pending results, editable/collision copies,
-  navigation snapshots and renderer-retained data still have separate owners.
-  Their byte bounds remain later S2 slices. Formats, compression and collision
-  algorithms are unchanged. Scope and verification:
+  RuntimeContentLoader data and pending results have separate S2b owners below.
+  Editable/collision copies, navigation snapshots and renderer-retained data
+  remain later S2 work. Formats, compression and collision algorithms are
+  unchanged. Scope and verification:
   [S2a](../roadmaps/streamed-rendering-s2a.md).
+
+Decoded content and pending preparation, S2b:
+
+- `RuntimeContentLoader` uses one LRU byte budget across its eight decoded content
+  kinds. `RuntimeContentLoaderOptions.MaxCacheBytes` defaults to 128 MiB when
+  zero; negative disables warm retention. Kind plus cleaned absolute path is
+  identity; lexical aliases coalesce, symlinks remain distinct. Concurrent loads
+  of one identity share decoding, including uncached oversized results.
+- Charge is estimated decoded storage at admission: structs, slice capacity,
+  nested references, string bytes and logical map entries. Encoded RLE size does
+  not substitute for decoded voxel capacity. Allocator/map bucket overhead,
+  temporary decode buffers and derived indexes are excluded. Public `Load*`
+  pointers remain valid after eviction; their external lifetime and later
+  mutation are outside owned-cache accounting.
+- `NewScope().Loader()` declares a decoded lease. Close the scope after use;
+  repeated loads within one scope share a pin. Active scopes survive eviction
+  pressure and `Clear()`. Final release trims warm storage; pinned data can
+  exceed the ceiling, exposed by `Stats()`.
+- `MaxDecodedContentCacheBytes` config applies to runtime-created loaders.
+  Supplied loaders keep their own budget. World level/manifests/backing data
+  stay leased until successful Stop. Each preparation leases its decoded data
+  through commit/discard; entities retain independent geometry/heightmaps.
+  Synchronous collision startup and navigation source baking use transient
+  scopes. Failed persistence keeps live world ownership usable.
+- `MaxPendingPreparedBytes` defaults to 128 MiB when zero; negative is invalid.
+  Full/proxy workers share one payload budget, including blocked publication.
+  Rejected payloads release their leases and send a small retry completion;
+  required-cost hints delay rebuilding until capacity returns. One oversized
+  payload can proceed alone. Existing count/time commit budgets still apply.
+- Pending charge is per-result admission cost, including decoded records,
+  snapshots, placements and prepared geometry. Shared data may also be charged
+  by its loader or geometry-cache owner; do not sum these metrics as physical
+  memory. Retry envelopes remain bounded by existing queue/job counts. Active
+  decode/build allocations remain outside the pending ceiling and are bounded
+  by `MaxPrepareJobs` in count.
+- Metrics expose `DecodedContentCache*` and `PendingPrepared*` bytes, budgets,
+  pressure and reuse/retry counts. Stop drains and releases every result,
+  clears shallow metadata references and clears a runtime-created loader's
+  warm ownership. Supplied/shared loader leases survive. Restart creates fresh
+  pending credits. Scope, review and verification:
+  [S2b](../roadmaps/streamed-rendering-s2b.md).
 
 #### Step 7: Split Render, Collision, And Destruction Residency
 

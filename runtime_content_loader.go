@@ -1,143 +1,340 @@
 package gekko
 
 import (
+	"container/list"
 	"fmt"
+	"path/filepath"
 	"sync"
 
 	"github.com/gekko3d/gekko/content"
 )
 
+const defaultRuntimeContentCacheBytes int64 = 128 << 20
+
+// RuntimeContentLoaderOptions configures shared decoded warm retention.
+// Zero selects 128 MiB; a negative limit disables unscoped warm retention.
+type RuntimeContentLoaderOptions struct{ MaxCacheBytes int64 }
+
+// RuntimeContentLoaderStats reports admission-time decoded storage estimates.
+// Bytes includes pinned entries; external borrowers and decoder temporaries are
+// not tracked. These numbers are not a total process memory measurement.
+type RuntimeContentLoaderStats struct {
+	Entries                                               int
+	Bytes, PinnedBytes, MaxBytes, OverBudgetBytes         int64
+	Hits, Misses, Evictions, LoadWaits, OversizedBypasses int
+}
+
+// Derived loaders share one owner. The scope declares decoded-data lifetime;
+// eviction never changes a returned definition or reuses its storage.
 type RuntimeContentLoader struct {
-	mu               sync.RWMutex
-	assets           map[string]*content.AssetDef
-	levels           map[string]*content.LevelDef
-	terrainManifests map[string]*content.TerrainChunkManifestDef
-	terrainChunks    map[string]*content.TerrainChunkDef
-	importedWorlds   map[string]*content.ImportedWorldDef
-	importedChunks   map[string]*content.ImportedWorldChunkDef
-	importedAux      map[string]*content.ImportedWorldChunkAuxDef
-	voxelBackings    map[string]*content.VoxelBackingDef
+	owner *runtimeContentCache
+	scope *RuntimeContentLoadScope
+}
+type runtimeContentKey struct{ kind, path string }
+type runtimeContentEntry struct {
+	key   runtimeContentKey
+	value any
+	bytes int64
+	pins  int
+	lru   *list.Element
+}
+type runtimeContentFlight struct {
+	done       chan struct{}
+	scopes     map[*RuntimeContentLoadScope]struct{}
+	rawEpoch   uint64
+	hasRaw     bool
+	value      any
+	err        error
+	panicValue any
+}
+type runtimeContentCache struct {
+	mu      sync.Mutex
+	entries map[runtimeContentKey]*runtimeContentEntry
+	flights map[runtimeContentKey]*runtimeContentFlight
+	lru     list.List
+	epoch   uint64
+	stats   RuntimeContentLoaderStats
 }
 
-func NewRuntimeContentLoader() *RuntimeContentLoader {
-	return &RuntimeContentLoader{
-		assets:           make(map[string]*content.AssetDef),
-		levels:           make(map[string]*content.LevelDef),
-		terrainManifests: make(map[string]*content.TerrainChunkManifestDef),
-		terrainChunks:    make(map[string]*content.TerrainChunkDef),
-		importedWorlds:   make(map[string]*content.ImportedWorldDef),
-		importedChunks:   make(map[string]*content.ImportedWorldChunkDef),
-		importedAux:      make(map[string]*content.ImportedWorldChunkAuxDef),
-		voxelBackings:    make(map[string]*content.VoxelBackingDef),
+// RuntimeContentLoadScope leases each loaded decoded entry once until Close.
+// Derived loaders share the base cache and fail loads after the scope closes.
+type RuntimeContentLoadScope struct {
+	owner   *runtimeContentCache
+	loader  *RuntimeContentLoader
+	closed  bool // all scope state is protected by owner.mu
+	entries map[*runtimeContentEntry]struct{}
+}
+
+// NewRuntimeContentLoader creates one LRU shared by all content kinds.
+func NewRuntimeContentLoader(options ...RuntimeContentLoaderOptions) *RuntimeContentLoader {
+	max := defaultRuntimeContentCacheBytes
+	if len(options) > 0 && options[0].MaxCacheBytes != 0 {
+		max = options[0].MaxCacheBytes
 	}
+	return &RuntimeContentLoader{owner: &runtimeContentCache{
+		entries: make(map[runtimeContentKey]*runtimeContentEntry), flights: make(map[runtimeContentKey]*runtimeContentFlight),
+		stats: RuntimeContentLoaderStats{MaxBytes: max},
+	}}
 }
 
-func (l *RuntimeContentLoader) LoadVoxelBacking(path string) (*content.VoxelBackingDef, error) {
+// NewScope creates an independent lease. A nil loader creates a private cache.
+func (l *RuntimeContentLoader) NewScope() *RuntimeContentLoadScope {
 	if l == nil {
-		return content.LoadVoxelBacking(path)
+		l = NewRuntimeContentLoader()
 	}
-	return loadRuntimeContentCached(&l.mu, path, l.voxelBackings, content.LoadVoxelBacking)
+	s := &RuntimeContentLoadScope{owner: l.owner, entries: make(map[*runtimeContentEntry]struct{})}
+	s.loader = &RuntimeContentLoader{owner: l.owner, scope: s}
+	return s
 }
 
-func (l *RuntimeContentLoader) LoadAsset(path string) (*content.AssetDef, error) {
-	if l == nil {
-		def, err := content.LoadAsset(path)
-		if err != nil {
-			return nil, err
+// Loader returns the derived loader that pins successful loads in this scope.
+func (s *RuntimeContentLoadScope) Loader() *RuntimeContentLoader {
+	if s == nil {
+		return nil
+	}
+	return s.loader
+}
+
+// Close releases pins once. Closing a nil scope is harmless.
+func (s *RuntimeContentLoadScope) Close() {
+	if s == nil {
+		return
+	}
+	c := s.owner
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	for e := range s.entries {
+		e.pins--
+		if e.pins == 0 {
+			c.stats.PinnedBytes -= e.bytes
 		}
-		return def, nil
 	}
-	return loadRuntimeContentCached(&l.mu, path, l.assets, content.LoadAsset)
+	s.entries = nil
+	c.trim()
 }
 
-func (l *RuntimeContentLoader) LoadLevel(path string) (*content.LevelDef, error) {
-	if l == nil {
-		def, err := content.LoadLevel(path)
-		if err != nil {
-			return nil, err
+// releaseScopedValue ends this scope's lease when a loaded definition is
+// rejected before becoming consumer data. Other entries and scopes keep their
+// pins; unscoped warm retention remains subject to the owner's normal budget.
+func (l *RuntimeContentLoader) releaseScopedValue(value any) {
+	if l == nil || l.scope == nil {
+		return
+	}
+	s := l.scope
+	c := s.owner
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for e := range s.entries {
+		if e.value != value {
+			continue
 		}
-		return def, nil
-	}
-	return loadRuntimeContentCached(&l.mu, path, l.levels, content.LoadLevel)
-}
-
-func (l *RuntimeContentLoader) LoadTerrainChunkManifest(path string) (*content.TerrainChunkManifestDef, error) {
-	if l == nil {
-		def, err := content.LoadTerrainChunkManifest(path)
-		if err != nil {
-			return nil, err
+		delete(s.entries, e)
+		e.pins--
+		if e.pins == 0 {
+			c.stats.PinnedBytes -= e.bytes
 		}
-		return def, nil
+		c.trim()
+		return
 	}
-	return loadRuntimeContentCached(&l.mu, path, l.terrainManifests, content.LoadTerrainChunkManifest)
 }
 
-func (l *RuntimeContentLoader) LoadTerrainChunk(path string) (*content.TerrainChunkDef, error) {
+// Stats snapshots shared cache ownership. A nil loader reports zero values.
+func (l *RuntimeContentLoader) Stats() RuntimeContentLoaderStats {
 	if l == nil {
-		def, err := content.LoadTerrainChunk(path)
-		if err != nil {
-			return nil, err
-		}
-		return def, nil
+		return RuntimeContentLoaderStats{}
 	}
-	return loadRuntimeContentCached(&l.mu, path, l.terrainChunks, content.LoadTerrainChunk)
+	c := l.owner
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	stats := c.stats
+	stats.Entries = len(c.entries)
+	if stats.MaxBytes >= 0 && stats.Bytes > stats.MaxBytes {
+		stats.OverBudgetBytes = stats.Bytes - stats.MaxBytes
+	}
+	if stats.MaxBytes < 0 {
+		stats.OverBudgetBytes = stats.Bytes
+	}
+	return stats
 }
 
-func (l *RuntimeContentLoader) LoadImportedWorld(path string) (*content.ImportedWorldDef, error) {
+// Clear drops unpinned warm entries and revokes earlier raw in-flight warm
+// requests. Live scopes remain protected. A nil loader is harmless.
+func (l *RuntimeContentLoader) Clear() {
 	if l == nil {
-		def, err := content.LoadImportedWorld(path)
-		if err != nil {
-			return nil, err
-		}
-		return def, nil
+		return
 	}
-	return loadRuntimeContentCached(&l.mu, path, l.importedWorlds, content.LoadImportedWorld)
+	c := l.owner
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.epoch++
+	for _, e := range c.entries {
+		if e.pins == 0 {
+			c.remove(e)
+		}
+	}
+}
+func (c *runtimeContentCache) pin(s *RuntimeContentLoadScope, e *runtimeContentEntry) {
+	if _, exists := s.entries[e]; exists {
+		return
+	}
+	s.entries[e] = struct{}{}
+	if e.pins == 0 {
+		c.stats.PinnedBytes += e.bytes
+	}
+	e.pins++
+}
+func (c *runtimeContentCache) remove(e *runtimeContentEntry) {
+	delete(c.entries, e.key)
+	c.lru.Remove(e.lru)
+	c.stats.Bytes -= e.bytes
+	c.stats.Evictions++
+}
+func (c *runtimeContentCache) trim() {
+	for p := c.lru.Back(); p != nil && (c.stats.MaxBytes < 0 || c.stats.Bytes > c.stats.MaxBytes); {
+		prev := p.Prev()
+		e := p.Value.(*runtimeContentEntry)
+		if e.pins == 0 {
+			c.remove(e)
+		}
+		p = prev
+	}
 }
 
-func (l *RuntimeContentLoader) LoadImportedWorldChunk(path string) (*content.ImportedWorldChunkDef, error) {
+// Singleflight tracks all requesters before publication so a waiter cannot lose
+// its pin to an eviction between completion and waking up. Decode and waits run
+// without the cache mutex. A Clear epoch revokes only prior raw warm requests.
+func loadRuntimeContent[T any](l *RuntimeContentLoader, kind, path string, decode func(string) (*T, error)) (*T, error) {
 	if l == nil {
-		def, err := content.LoadImportedWorldChunk(path)
-		if err != nil {
-			return nil, err
-		}
-		return def, nil
+		return decode(path)
 	}
-	return loadRuntimeContentCached(&l.mu, path, l.importedChunks, content.LoadImportedWorldChunk)
-}
-
-func (l *RuntimeContentLoader) LoadImportedWorldChunkAux(path string) (*content.ImportedWorldChunkAuxDef, error) {
-	if l == nil {
-		def, err := content.LoadImportedWorldChunkAux(path)
-		if err != nil {
-			return nil, err
-		}
-		return def, nil
-	}
-	return loadRuntimeContentCached(&l.mu, path, l.importedAux, content.LoadImportedWorldChunkAux)
-}
-
-func loadRuntimeContentCached[T any](mu *sync.RWMutex, path string, cache map[string]*T, load func(string) (*T, error)) (*T, error) {
 	if path == "" {
 		return nil, fmt.Errorf("content path is empty")
 	}
-
-	mu.RLock()
-	cached := cache[path]
-	mu.RUnlock()
-	if cached != nil {
-		return cached, nil
-	}
-
-	loaded, err := load(path)
+	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if cached = cache[path]; cached != nil {
-		return cached, nil
+	key := runtimeContentKey{kind, filepath.Clean(absolute)}
+	c := l.owner
+	c.mu.Lock()
+	if l.scope != nil && l.scope.closed {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("content load scope is closed")
 	}
-	cache[path] = loaded
-	return loaded, nil
+	if e := c.entries[key]; e != nil {
+		c.stats.Hits++
+		c.lru.MoveToFront(e.lru)
+		if l.scope != nil {
+			c.pin(l.scope, e)
+		}
+		c.mu.Unlock()
+		return e.value.(*T), nil
+	}
+	c.stats.Misses++
+	f := c.flights[key]
+	leader := f == nil
+	if leader {
+		f = &runtimeContentFlight{done: make(chan struct{}), scopes: make(map[*RuntimeContentLoadScope]struct{})}
+		c.flights[key] = f
+	} else {
+		c.stats.LoadWaits++
+	}
+	if l.scope != nil {
+		f.scopes[l.scope] = struct{}{}
+	} else {
+		f.hasRaw = true
+		f.rawEpoch = c.epoch
+	}
+	c.mu.Unlock()
+	if leader {
+		var loaded *T
+		var failure error
+		var panicValue any
+		var bytes int64
+		func() {
+			defer func() { panicValue = recover() }()
+			loaded, failure = decode(key.path)
+			// Both decoding and estimation must wake every flight on panic.
+			if loaded != nil && failure == nil {
+				bytes = runtimeContentGraphCharge(loaded)
+			}
+		}()
+		c.mu.Lock()
+		f.value, f.err, f.panicValue = loaded, failure, panicValue
+		if loaded != nil && failure == nil && panicValue == nil {
+			live := false
+			for s := range f.scopes {
+				if !s.closed {
+					live = true
+					break
+				}
+			}
+			warm := f.hasRaw && f.rawEpoch == c.epoch && c.stats.MaxBytes >= 0 && bytes <= c.stats.MaxBytes
+			if c.stats.MaxBytes > 0 && bytes > c.stats.MaxBytes && f.hasRaw {
+				c.stats.OversizedBypasses++
+			}
+			if live || warm {
+				e := &runtimeContentEntry{key: key, value: loaded, bytes: bytes}
+				e.lru = c.lru.PushFront(e)
+				c.entries[key] = e
+				c.stats.Bytes += bytes
+				for s := range f.scopes {
+					if !s.closed {
+						c.pin(s, e)
+					}
+				}
+				c.trim()
+			}
+		}
+		delete(c.flights, key)
+		close(f.done)
+		c.mu.Unlock()
+	} else {
+		<-f.done
+	}
+	c.mu.Lock()
+	closed := l.scope != nil && l.scope.closed
+	c.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("content load scope is closed")
+	}
+	if f.panicValue != nil {
+		panic(f.panicValue)
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	if value, ok := f.value.(*T); ok {
+		return value, nil
+	}
+	return nil, nil
+}
+
+func (l *RuntimeContentLoader) LoadVoxelBacking(path string) (*content.VoxelBackingDef, error) {
+	return loadRuntimeContent(l, "backing", path, content.LoadVoxelBacking)
+}
+func (l *RuntimeContentLoader) LoadAsset(path string) (*content.AssetDef, error) {
+	return loadRuntimeContent(l, "asset", path, content.LoadAsset)
+}
+func (l *RuntimeContentLoader) LoadLevel(path string) (*content.LevelDef, error) {
+	return loadRuntimeContent(l, "level", path, content.LoadLevel)
+}
+func (l *RuntimeContentLoader) LoadTerrainChunkManifest(path string) (*content.TerrainChunkManifestDef, error) {
+	return loadRuntimeContent(l, "terrain-manifest", path, content.LoadTerrainChunkManifest)
+}
+func (l *RuntimeContentLoader) LoadTerrainChunk(path string) (*content.TerrainChunkDef, error) {
+	return loadRuntimeContent(l, "terrain-chunk", path, content.LoadTerrainChunk)
+}
+func (l *RuntimeContentLoader) LoadImportedWorld(path string) (*content.ImportedWorldDef, error) {
+	return loadRuntimeContent(l, "imported-world", path, content.LoadImportedWorld)
+}
+func (l *RuntimeContentLoader) LoadImportedWorldChunk(path string) (*content.ImportedWorldChunkDef, error) {
+	return loadRuntimeContent(l, "imported-chunk", path, content.LoadImportedWorldChunk)
+}
+func (l *RuntimeContentLoader) LoadImportedWorldChunkAux(path string) (*content.ImportedWorldChunkAuxDef, error) {
+	return loadRuntimeContent(l, "aux", path, content.LoadImportedWorldChunkAux)
 }

@@ -163,6 +163,24 @@ other AssetServer records. See
 [S2a](../roadmaps/streamed-rendering-s2a.md) for the storage-charge definition,
 defaults and remaining memory bounds.
 
+## Decoded Content Lifetime
+
+`RuntimeContentLoader` bounds warm decoded definitions across all eight content
+kinds with one byte LRU and per-path concurrent decode suppression. Its charge
+estimates decoded structs and referenced storage at admission. Raw `Load*`
+pointers remain usable after eviction; arbitrary external borrowers and later
+normalization are outside cache-owned accounting. Eviction never clears or
+recycles returned definitions.
+
+Use `loader.NewScope()`, load through `scope.Loader()` and call `scope.Close()`
+when the consumer releases decoded data. Active scopes pin each shared entry
+once and may exceed the budget. Streaming metadata/backing providers hold a
+world-session scope; prepared results and navigation source batches use shorter
+scopes. Live entity geometry/heightmaps have their own storage after commit.
+Successful Stop clears runtime-created loader ownership and preserves supplied
+loader users. See [S2b](../roadmaps/streamed-rendering-s2b.md) for defaults,
+pending-result admission and accounting limits.
+
 ## Important Constraints
 
 - `AssetID` values are process-local identities, not stable authored references.
