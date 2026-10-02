@@ -288,18 +288,26 @@ func entityLODSelectionSystem(cmd *Commands, state *VoxelRtState) {
 	}
 	cameraPosition, ok := readEntityLODCameraPosition(cmd, cameraState)
 	MakeQuery2[TransformComponent, EntityLODComponent](cmd).Map(func(entityId EntityId, transform *TransformComponent, lod *EntityLODComponent) bool {
-		if lod == nil || !lod.Enabled() || !ok {
-			if lod != nil {
-				lod.ClearRuntimeSelection()
-			}
+		if lod == nil {
 			return true
 		}
-		selection, err := SelectEntityLOD(cameraPosition, transform, lod)
-		if err != nil {
+		previous := *lod
+		if !lod.Enabled() || !ok {
 			lod.ClearRuntimeSelection()
-			return true
+		} else {
+			selection, err := SelectEntityLOD(cameraPosition, transform, lod)
+			if err != nil {
+				lod.ClearRuntimeSelection()
+			} else {
+				lod.ApplySelection(selection)
+			}
 		}
-		lod.ApplySelection(selection)
+		if lod.SelectionValid != previous.SelectionValid || lod.ActiveBandIndex != previous.ActiveBandIndex ||
+			lod.ActiveRepresentation != previous.ActiveRepresentation ||
+			math.Float32bits(lod.ActiveDistance) != math.Float32bits(previous.ActiveDistance) ||
+			math.Float32bits(lod.ActiveMaxDistance) != math.Float32bits(previous.ActiveMaxDistance) {
+			cmd.MarkComponentChanged(entityId, reflect.TypeOf(EntityLODComponent{}))
+		}
 		return true
 	})
 }

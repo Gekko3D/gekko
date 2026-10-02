@@ -1,6 +1,8 @@
 package gekko
 
 import (
+	"math"
+
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/go-gl/mathgl/mgl32"
 
@@ -140,6 +142,21 @@ type CameraComponent struct {
 	Near      float32
 	Far       float32
 	DepthMode core.DepthMode
+}
+
+// Camera control owners publish only their pose and look inputs. Projection
+// fields remain outside these writes, including nonfinite projection values.
+func cameraPoseBits(cam *CameraComponent) [11]uint32 {
+	values := [11]float32{
+		cam.Position[0], cam.Position[1], cam.Position[2],
+		cam.LookAt[0], cam.LookAt[1], cam.LookAt[2],
+		cam.Up[0], cam.Up[1], cam.Up[2], cam.Yaw, cam.Pitch,
+	}
+	var bits [11]uint32
+	for i, value := range values {
+		bits[i] = math.Float32bits(value)
+	}
+	return bits
 }
 
 type renderState struct {

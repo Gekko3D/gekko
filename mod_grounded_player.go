@@ -378,7 +378,11 @@ func groundedPlayerControlSystem(cmd *Commands, time *Time, input *Input, voxRt 
 		cam, _ := cmd.GetComponent(eid, reflect.TypeOf(CameraComponent{})).(*CameraComponent)
 		intent, _ := cmd.GetComponent(eid, reflect.TypeOf(GroundedCharacterIntentComponent{})).(*GroundedCharacterIntentComponent)
 		if cam != nil && intent == nil {
+			previousCamera := cameraPoseBits(cam)
 			applyGroundedLook(cam, ctrl)
+			if cameraPoseBits(cam) != previousCamera {
+				cmd.MarkComponentChanged(eid, reflect.TypeOf(CameraComponent{}))
+			}
 		}
 		basePos := groundedPlayerBasePosition(cmd, eid, cam, ctrl)
 		startPos := basePos
@@ -563,9 +567,13 @@ func groundedPlayerApplyTransform(cmd *Commands, eid EntityId, cam *CameraCompon
 		return
 	}
 	if cam != nil {
+		previousCamera := cameraPoseBits(cam)
 		cam.Position = basePos.Add(mgl32.Vec3{0, maxf(ctrl.EyeHeight, 0.01), 0})
 		cam.LookAt = cam.Position.Add(forwardFromYawPitch(cam.Yaw, cam.Pitch))
 		cam.Up = mgl32.Vec3{0, 1, 0}
+		if cameraPoseBits(cam) != previousCamera && cmd.GetComponent(eid, reflect.TypeOf(CameraComponent{})) == cam {
+			cmd.MarkComponentChanged(eid, reflect.TypeOf(CameraComponent{}))
+		}
 	}
 	if tr, ok := transformForEntity(cmd, eid); ok {
 		previousWorld := hierarchyBits(tr.Position, tr.Rotation, tr.Scale)

@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"math"
+	"reflect"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -73,6 +74,7 @@ func FlyingCameraControlSystem(cmd *Commands, time *Time) {
 	}
 
 	MakeQuery2[CameraComponent, FlyingCameraComponent](cmd).Map(func(eid EntityId, cam *CameraComponent, fly *FlyingCameraComponent) bool {
+		previousCamera := cameraPoseBits(cam)
 		// 1. Rotation
 		if fly.Sensitivity == 0 {
 			fly.Sensitivity = 0.1
@@ -120,6 +122,9 @@ func FlyingCameraControlSystem(cmd *Commands, time *Time) {
 		// 3. LookAt Sync
 		cam.LookAt = cam.Position.Add(forward)
 		cam.Up = mgl32.Vec3{0, 1, 0}
+		if cameraPoseBits(cam) != previousCamera {
+			cmd.MarkComponentChanged(eid, reflect.TypeOf(CameraComponent{}))
+		}
 
 		return true
 	})

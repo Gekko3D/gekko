@@ -194,6 +194,12 @@ collision, renderer object comparisons or command timing. See the
 [voxel bridge publication contract](../engine/ecs.md#voxel-bridge-publication).
 Live inputs still run through the bridge every pass.
 
+Core flying/grounded camera controllers publish changed camera pose/look inputs;
+the camera-dependent EntityLOD system publishes changed selection outputs. Their
+math, policy and stage placement are unchanged. These are publication owners,
+not extraction invalidation guarantees; see
+[the ECS contract](../engine/ecs.md#camera-and-entitylod-publication).
+
 Hierarchy now reuses storage-owned topology and skips child composition when
 exact live parent/local/output TRS bits match. Every invocation still reads
 current values, detects direct Parent edits before composition and repairs

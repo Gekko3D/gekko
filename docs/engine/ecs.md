@@ -144,6 +144,7 @@ actor writer publishes its changed World and Local poses for motors and riders.
 The ground visual helper publishes changed direct-child Local Y offsets.
 Renderer/physics bridges publish changed geometry-reference normalization;
 the renderer bridge publishes its changed derived Pivot.
+Core camera controllers and EntityLOD selection publish their changed outputs.
 Other transform and renderer-input producers remain incompletely migrated.
 Hierarchy and the voxel bridge continue their live reads.
 These sequences establish an ownership API, not a complete dirty contract,
@@ -388,6 +389,32 @@ Neither annotation flushes or changes membership. Pending additions stay invisib
 pending removal/replacement remains current until flush. PhysicsModel output
 commands retain their separate structural publication at flush. Collision data,
 snapshot ownership and cache policy are unchanged.
+
+### Camera and EntityLOD Publication
+
+`FlyingCameraControlSystem` publishes changed committed CameraComponent pose,
+Yaw and Pitch after its complete control write. The grounded control system
+publishes changed legacy look inputs immediately after `applyGroundedLook`,
+before later pose application. Its existing intent filter and time guards remain.
+`groundedPlayerApplyTransform` publishes changed camera pose only when the supplied
+pointer is the target entity's current committed CameraComponent. Detached,
+wrong-entity or missing-target pointers retain their existing writes without
+publishing an unrelated target. No writer creates a Camera.
+
+Comparisons use exact bits of Position, LookAt, Up, Yaw and Pitch. Equal NaN bits
+are quiet; signed-zero and NaN-payload changes publish. Projection fields are
+preserved and excluded, so nonfinite Fov/Aspect/Near/Far cannot dirty a pose write.
+Camera math, defaults, pitch clamping and grounded update order are unchanged.
+Flying control-state and grounded motor/intent publication remain separate.
+
+`entityLODSelectionSystem` publishes EntityLODComponent only when its complete
+selection or clear changes SelectionValid, ActiveDistance, ActiveBandIndex,
+ActiveMaxDistance or ActiveRepresentation. Distance fields compare exact bits.
+Camera motion within a band can publish distance alone; repeated selection/clear
+is quiet. Disabled, missing-camera and invalid-band clearing, camera precedence
+over renderer fallback, authored bands/metric and ownerless selection helpers
+retain their behavior. Neither publication flushes, changes membership or invokes
+hierarchy; queued component mutations keep their existing visibility boundary.
 
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.
