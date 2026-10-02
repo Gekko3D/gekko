@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g/S3h/S3i/S3j/S3k/S3l/S3m/S3n/S3o/S3p complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a–S3q complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -149,7 +149,7 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3p implement selection, GPU records, ECS inventories, hierarchy reuse and component publication in hierarchy, helpers, animation, physics World, accepted brush motion, grounded actors/visuals, voxel bridge normalization/Pivot and core camera/EntityLOD outputs. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3q implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication and a bounded publication journal. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
 Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
@@ -376,15 +376,16 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3m | `11af4d9` | Shared grounded actor World/Local publication | [ECS contract](../engine/ecs.md#grounded-actor-publication) |
 | S3n | `1c702e8` | Direct-child ground visual Local publication | [ECS contract](../engine/ecs.md#ground-visual-publication) |
 | S3o | `a1e315b` | Geometry-reference normalization and derived Pivot publication | [ECS contract](../engine/ecs.md#voxel-bridge-publication) |
-| S3p | `feat(ecs): publish camera and LOD outputs` | Core Camera and derived EntityLOD publication | [ECS contract](../engine/ecs.md#camera-and-entitylod-publication) |
+| S3p | `65f4ac5` | Core Camera and derived EntityLOD publication | [ECS contract](../engine/ecs.md#camera-and-entitylod-publication) |
+| S3q | `feat(ecs): add bounded publication journal` | Entity/type invalidations, independent cursors and explicit resync | [ECS contract](../engine/ecs.md#bounded-component-publication-journal) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: implement a bounded metadata-only ECS publication journal using shared
-storage ownership, independent opaque cursors and explicit full-rescan overflow.
-Retain aggregate revisions, structural invalidation and live extraction. Use the
-full architecture workflow. Incremental extraction and mutable asset ownership
-remain separate architecture steps; no dirty-only extraction is approved.
+Next: remove repeated effective-palette fingerprint work using bounded, independently
+owned input snapshots and live comparison. Resolve cache ownership before tests
+using the full architecture workflow. Preserve mutable asset aliases, elapsed-time
+animation and live renderer repair. Incremental extraction remains a separate
+architecture step; no dirty-only extraction is approved.
 
 Decisions to settle before dependent implementation:
 
@@ -589,7 +590,7 @@ and ownerless pointer normalization remain; no performance claim.
 
 ### S3p: Core camera and EntityLOD publication
 
-Commit subject `feat(ecs): publish camera and LOD outputs`. Core camera controllers
+Commit `65f4ac5`. Core camera controllers
 and EntityLOD selection publish changed outputs; the
 [ECS contract](../engine/ecs.md#camera-and-entitylod-publication) owns the details.
 Sol 6.1 RED/GREEN and root coverage/code reviews completed. Six focused test
@@ -609,6 +610,28 @@ Existing tests preserved. Main-thread notification changes needed no new race
 or visual/GPU check. Editor's module stat-cache warning exited successfully.
 Consumer writers and mutable asset aliases remain untracked; live extraction
 continues and no performance gain is claimed.
+
+### S3q: Bounded component publication journal
+
+Commit subject `feat(ecs): add bounded publication journal`. The
+[ECS contract](../engine/ecs.md#bounded-component-publication-journal) owns the API;
+[S3q decision](streamed-rendering-s3e.md#s3q-bounded-publication-journal-decision)
+owns the rationale. Separate Sol 6.1 test/implementation agents, root reviews and
+independent pre/post adversarial reviews completed. Six focused test groups,
+existing ECS/publication checks, full engine tests, focused race, ActionGame,
+SpaceGame and voxel sample compilation, and editor build passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(S3q|S3e|Ecs_|EcsReflect_|Query_|S3c|S3d)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3q|S3e|Ecs_|EcsReflect_|Query_|S3c|S3d)' -count=1
+```
+
+Existing tests preserved. macOS linker/module stat-cache warnings exited
+successfully. Metadata-only main-thread changes needed no visual/GPU check.
+History cap excludes returned batches and total ECS memory; structural fallback
+and live extraction remain required. No frame-time gain claimed.
 
 Consumer commands for these steps:
 

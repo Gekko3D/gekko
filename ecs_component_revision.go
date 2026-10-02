@@ -39,7 +39,7 @@ func (ecs *Ecs) MarkComponentChanged(entityId EntityId, componentType reflect.Ty
 	if _, present := arch.componentData[compId]; !present {
 		return false
 	}
-	ecs.publishComponentType(componentType)
+	ecs.publishComponentType(entityId, componentType)
 	return true
 }
 
@@ -56,22 +56,23 @@ func canonicalPublicationType(componentType reflect.Type) reflect.Type {
 	return componentType
 }
 
-func (ecs *Ecs) publishComponentType(componentType reflect.Type) {
+func (ecs *Ecs) publishComponentType(entityId EntityId, componentType reflect.Type) {
 	if ecs.storage.componentRevisions == nil {
 		ecs.storage.componentRevisions = make(map[reflect.Type]uint64)
 	}
 	ecs.storage.componentRevisions[componentType]++
+	ecs.storage.componentPublications.append(ComponentPublication{Entity: entityId, ComponentType: componentType})
 }
 
 // Archetype keys already contain each present type once. No row data or
 // archetype references are retained by the publication owner.
-func (ecs *Ecs) publishComponentKey(key archetypeKey) {
+func (ecs *Ecs) publishComponentKey(entityId EntityId, key archetypeKey) {
 	for _, compId := range key {
-		ecs.publishComponentType(ecs.componentIdTypeMap[compId])
+		ecs.publishComponentType(entityId, ecs.componentIdTypeMap[compId])
 	}
 }
 
-func (ecs *Ecs) publishSuppliedComponents(components []any) {
+func (ecs *Ecs) publishSuppliedComponents(entityId EntityId, components []any) {
 	seen := make(set[reflect.Type], len(components))
 	for _, component := range components {
 		componentType := canonicalPublicationType(reflect.TypeOf(component))
@@ -79,6 +80,6 @@ func (ecs *Ecs) publishSuppliedComponents(components []any) {
 			continue
 		}
 		seen[componentType] = struct{}{}
-		ecs.publishComponentType(componentType)
+		ecs.publishComponentType(entityId, componentType)
 	}
 }

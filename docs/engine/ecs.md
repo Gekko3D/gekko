@@ -147,6 +147,40 @@ the renderer bridge publishes its changed derived Pivot.
 Core camera controllers and EntityLOD selection publish their changed outputs.
 Other transform and renderer-input producers remain incompletely migrated.
 Hierarchy and the voxel bridge continue their live reads.
+
+## Bounded Component Publication Journal
+
+`Ecs.ComponentPublicationCursor()` and its `Commands` forwarder capture an
+opaque comparable watermark for the shared storage owner. Copied ECS wrappers
+share that owner; independent worlds do not. Cursors retain a separate identity
+token, never the ECS storage or component data. These APIs are main-thread only.
+
+`ComponentPublicationsSince(cursor)` returns a `ComponentPublicationBatch` with
+independently owned `Publications`, the read-time `Cursor` and `Resync`. Each
+record identifies an `Entity` and canonical struct `ComponentType` at the same
+publication points as the aggregate revisions above. Order across publications
+is retained; type order within one structural operation is unspecified. Records
+are invalidations: resolve current committed state, which may already lack the
+entity or component. Direct unmarked writes generate no records.
+
+`ComponentPublicationHistoryLimit` is 1,024 records globally across entity/type
+pairs. The ring allocates lazily; reads never flush, drain or acknowledge it.
+Exactly 1,024 unseen publications remain recoverable; a further publication
+requires resync. Zero/unbound, foreign, future and expired cursors return
+`Resync: true`, no partial suffix, and the current watermark. Nil/zero owners
+return resync with a zero cursor. An owner-bound sequence-zero cursor is valid.
+Sequence wrap rotates the identity token and clears prior history.
+
+Advance to the returned cursor only after successful processing or a committed
+full rescan. Use the returned read-time watermark for resync: publications during
+the rescan remain available on the next read. Reacquiring a cursor after the
+rescan could skip those publications. Independent readers can replay history.
+
+Keep `StructuralRevision` checks for membership/row changes that publish no type,
+including absent-type removal and zero-component entities. The journal bounds
+only its retained records, not caller-owned batches, tokens or total ECS memory.
+It does not establish complete producer notifications; live extraction remains
+required. Rationale: [S3q ownership decision](../roadmaps/streamed-rendering-s3e.md#s3q-bounded-publication-journal-decision).
 These sequences establish an ownership API, not a complete dirty contract,
 entity worklist or performance gain. Remaining producer migration and any bounded
 change journal need subsequent designs. Consumers must not skip existing live

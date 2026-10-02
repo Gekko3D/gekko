@@ -6,6 +6,24 @@ type Commands struct {
 	app *App
 }
 
+// ComponentPublicationCursor reads the main-thread committed journal watermark
+// without flushing pending commands or allocating publication history.
+func (cmd *Commands) ComponentPublicationCursor() ComponentPublicationCursor {
+	if cmd == nil || cmd.app == nil {
+		return ComponentPublicationCursor{}
+	}
+	return cmd.app.ecs.ComponentPublicationCursor()
+}
+
+// ComponentPublicationsSince copies retained invalidations since cursor. Resync
+// requests a committed rescan; acknowledge its watermark after successful work.
+func (cmd *Commands) ComponentPublicationsSince(cursor ComponentPublicationCursor) ComponentPublicationBatch {
+	if cmd == nil || cmd.app == nil {
+		return ComponentPublicationBatch{Resync: true}
+	}
+	return cmd.app.ecs.ComponentPublicationsSince(cursor)
+}
+
 // ComponentRevision reads the main-thread committed component publication
 // sequence. Enqueued mutations publish at the existing stage flush boundary.
 func (cmd *Commands) ComponentRevision(componentType reflect.Type) uint64 {

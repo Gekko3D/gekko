@@ -35,6 +35,7 @@ type ecsStorage struct {
 	entityIndex             map[EntityId]archetypeId
 	structuralRevision      uint64
 	componentRevisions      map[reflect.Type]uint64
+	componentPublications   componentPublicationJournal
 	archetypeGeneration     uint64
 	archetypeViewGeneration uint64
 	archetypeViews          []rooteecs.ArchetypeView
@@ -61,8 +62,9 @@ type Ecs struct {
 
 func MakeEcs() Ecs {
 	storage := &ecsStorage{
-		archetypes:  make(map[archetypeId]*archetype),
-		entityIndex: make(map[EntityId]archetypeId),
+		archetypes:            make(map[archetypeId]*archetype),
+		entityIndex:           make(map[EntityId]archetypeId),
+		componentPublications: componentPublicationJournal{owner: &componentPublicationOwner{}},
 	}
 
 	return Ecs{
@@ -125,7 +127,7 @@ func (ecs *Ecs) insertEntity(entityId EntityId, components ...any) EntityId {
 	ecs.storage.entityIndex[entityId] = archId
 	ecs.syncEntityGroupIndex(entityId)
 	ecs.storage.structuralRevision++
-	ecs.publishComponentKey(arch.key)
+	ecs.publishComponentKey(entityId, arch.key)
 
 	return entityId
 }
@@ -141,7 +143,7 @@ func (ecs *Ecs) removeEntity(entityId EntityId) {
 	}
 	ecs.recycleEntity(entityId)
 	ecs.storage.structuralRevision++
-	ecs.publishComponentKey(removedKey)
+	ecs.publishComponentKey(entityId, removedKey)
 }
 
 func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
@@ -169,7 +171,7 @@ func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
 	ecs.storage.entityIndex[entityId] = dstArchId
 	ecs.syncEntityGroupIndex(entityId)
 	ecs.storage.structuralRevision++
-	ecs.publishSuppliedComponents(components)
+	ecs.publishSuppliedComponents(entityId, components)
 }
 
 func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
@@ -212,7 +214,7 @@ func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
 	ecs.storage.entityIndex[entityId] = dstArchId
 	ecs.syncEntityGroupIndex(entityId)
 	ecs.storage.structuralRevision++
-	ecs.publishComponentKey(removedKey)
+	ecs.publishComponentKey(entityId, removedKey)
 }
 
 func (ecs *Ecs) moveComponents(srcArch *archetype, srcRow row, dstArch *archetype, dstRow row) {
