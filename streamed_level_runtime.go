@@ -153,6 +153,7 @@ type StreamedLevelRuntimeMetrics struct {
 	PreparedGeometryCacheMisses            int
 	PreparedGeometryCacheEvictions         int
 	PreparedGeometryAssetRegisters         int
+	PreparedGeometryAssetAdoptions         int
 	PreparedGeometryAssetReuses            int
 	AuxSidecarHitCount                     int
 	AuxSidecarMissCount                    int
@@ -484,6 +485,7 @@ type streamedPreparedChunk struct {
 	prepareCancel                         <-chan struct{}
 	loadScope                             *RuntimeContentLoadScope
 	pendingCredit                         *streamedPendingPreparedCredit
+	registration                          *streamedGeometryRegistration
 	retryCost                             int64
 	Generation                            uint64
 	Coord                                 ChunkCoord
@@ -533,6 +535,7 @@ type streamedPreparedSectorProxy struct {
 	prepareCancel            <-chan struct{}
 	loadScope                *RuntimeContentLoadScope
 	pendingCredit            *streamedPendingPreparedCredit
+	registration             *streamedGeometryRegistration
 	retryCost                int64
 	Generation               uint64
 	SectorCoord              ChunkCoord
@@ -2126,6 +2129,9 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 	result.PreparedGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedGeometryCacheKey, func() *volume.XBrickMap {
 		return prepareImportedWorldChunkGeometry(chunk, result.Aux)
 	})
+	if !streamedPreparationCancelled(job.prepareCancel) {
+		result.registration = prepareStreamedGeometryRegistration(result.PreparedGeometry)
+	}
 	return result
 }
 
@@ -2217,6 +2223,9 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		}
 		result.ObjectSnapshots[key] = snapshot
 	}
+	if !job.HasImportedWorldBacking && !streamedPreparationCancelled(job.prepareCancel) {
+		result.registration = prepareStreamedGeometryRegistration(result.PreparedImportedWorldGeometry)
+	}
 	return result
 }
 
@@ -2271,6 +2280,7 @@ func streamedImportedWorldPayloadAndAuxHash(payloadHash string, aux *content.Imp
 }
 
 func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedSectorProxy) (int, error) {
+	defer prepared.registration.release()
 	defer beginStreamedWorkCommit(state, prepared.Generation, prepared.prepareCancel)()
 	defer beginStreamedRenderTicketBatch(state)()
 	if cmd != nil && state != nil && voxelRtStateFromApp(cmd.app) != nil {
@@ -2300,7 +2310,10 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 	worldStart := time.Now()
 	spawnTiming := AuthoredImportedWorldSpawnTiming{}
 	geometryAssetStart := time.Now()
-	preparedGeometryAsset, _ := state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedGeometryCacheKey, prepared.PreparedGeometry)
+	preparedGeometryAsset, _, adopted := state.PreparedGeometryCache.acquirePreparedAsset(assets, prepared.PreparedGeometryCacheKey, prepared.PreparedGeometry, prepared.registration)
+	if adopted {
+		state.Metrics.PreparedGeometryAssetAdoptions++
+	}
 	geometryAssetDuration := time.Since(geometryAssetStart)
 	entity := spawnAuthoredImportedWorldChunkEntity(cmd, state.LevelRoot, state.BaseWorldPalette, AuthoredImportedWorldSpawnDef{
 		LevelID:                 state.LevelID,
@@ -2339,6 +2352,7 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 }
 
 func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedChunk) (int, error) {
+	defer prepared.registration.release()
 	defer beginStreamedWorkCommit(state, prepared.Generation, prepared.prepareCancel)()
 	defer beginStreamedRenderTicketBatch(state)()
 	start := time.Now()
@@ -2413,8 +2427,21 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 		spawnTiming := AuthoredImportedWorldSpawnTiming{}
 		geometryAssetStart := time.Now()
 		preparedGeometryAsset := AssetId{}
+		if state.BaseWorldBacking != nil {
+			// Backing may have changed since the worker captured its job. Keep the
+			// existing registration/spawn path whenever live backing is present.
+			prepared.registration.release()
+		}
 		if backingProvider == nil {
-			preparedGeometryAsset, _ = state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry)
+			if state.BaseWorldBacking == nil {
+				var adopted bool
+				preparedGeometryAsset, _, adopted = state.PreparedGeometryCache.acquirePreparedAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry, prepared.registration)
+				if adopted {
+					state.Metrics.PreparedGeometryAssetAdoptions++
+				}
+			} else {
+				preparedGeometryAsset, _ = state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry)
+			}
 		}
 		geometryAssetDuration := time.Since(geometryAssetStart)
 		entity := spawnAuthoredImportedWorldChunkEntity(cmd, state.LevelRoot, state.BaseWorldPalette, AuthoredImportedWorldSpawnDef{

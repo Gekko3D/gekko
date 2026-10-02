@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3r and S4a–S4c complete. S1/S2/S3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3r, S4a–S4c and P5a complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -120,6 +120,29 @@ Add immutable-adoption registration. `RegisterSharedVoxelGeometryWithCacheKey` c
 Keep `XBrickMap`, CPU snapshots, GPU allocations and dirty queues separately owned. Targeted ownership change, not Bevy parallel ECS replacement. Workers never mutate ECS or call WebGPU.
 
 Acceptance: runtime admission registers prepared geometry without rebuilding it voxel by voxel; no duplicate source representation remains pinned after its consumers release it.
+
+#### P5a: Worker-owned registration copies
+
+First prerequisite for smaller main-thread commits: imported full/proxy workers
+prepare an independent registration copy, bounds and byte charge. Each result
+owns a private single-use handle. Main-thread asset registration adopts that
+copy; shared prepared source maps remain immutable and separate from renderer
+mutation. Existing registration APIs retain defensive copying. Cache reuse drops
+the unused handle. Cancellation, retries, deferred commits and Stop retain or
+release its S2b pending charge with the envelope.
+
+Files: `asset_vox_model.go`, `streamed_level_runtime.go`,
+`streamed_level_geometry_cache.go`, `streamed_level_pending.go` and a focused
+payload owner. Preserve cache accounting, auxiliary bytes, source geometry,
+chunk publication and synchronous gameplay readiness. Workers never register
+assets, access live backing/removal maps, mutate ECS or call WebGPU.
+
+Confidence is High after ownership review; no SME alignment is needed. Use the
+full separate-agent workflow. Cover actual full/proxy adoption and isolation,
+warm reuse, deferred byte ownership/cancellation and the unchanged defensive
+registration contract. Run focused race, engine/consumer checks and native
+handoff verification. Terrain/backed removals, placements, cache ledger scans
+and renderer staging remain later work; this batch does not bound all commits.
 
 ## 5. Streaming changes
 
@@ -392,12 +415,18 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2e | `d425c88` | Terminal dispatch cancellation, shared leases and failed Stop recovery | [Cancellation decision](streamed-rendering-s2b.md#s2e-obsolete-preparation-cancellation) |
 | S1d | `e07dba5` | Shared full/proxy ordering, waiting age and current/PVS classification | [Priority decision](streamed-rendering-s1b.md#s1d-deterministic-preparation-priority) |
 | S1e | `1c72078` | Combined CPU/GPU admission, compatibility pressure and separate retirement debt | [Admission decision](streamed-rendering-s1b.md#s1e-combined-streaming-admission) |
+| S1f | `953c577` | Bounded ready ownership, live commit ordering and aging | [Ready-queue decision](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
 Next: remaining S1 scheduling/commit bounds, then S2 queues/cache owners and S3 notifications/extraction
 in delivery order. No dirty-only extraction is approved. Preserve public mutation
 compatibility and conditional proposals.
+
+On 2026-10-03, the user prioritized large single-chunk stalls and recurring CPU
+scans. [P5a](#p5a-worker-owned-registration-copies) removes main-thread
+registration copying first; recurring emitter scans are next. Further scheduling
+cleanup remains S1.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
 On 2026-10-03, the user authorized its ownership decision and migration of existing
@@ -903,7 +932,7 @@ exited successfully.
 
 ### S1f: Deterministic ready commits
 
-Completed 2026-10-03 after approved ready-owner alignment. Bounded capture,
+Commit `953c577`, completed 2026-10-03 after approved ready-owner alignment. Bounded capture,
 live priority/aging, deferred ownership and hook-Stop invalidation passed separate
 Sol 6.1 tests/implementation and independent/root reviews. Only the approved
 physical-depth assertions were migrated; S1e lifetime assertions remain intact.
@@ -924,6 +953,33 @@ Unchanged native fixture passed in 41 frames/1.413s: allowance one, 30-frame
 upload pause, visible fallback, hidden Ready child, complete refinement and Stop.
 No pixel parity or performance claim. One large CPU commit remains unbounded.
 Unrelated changes preserved; macOS warnings exited successfully.
+
+### P5a: Worker-owned registration copies
+
+Completed 2026-10-03. Independent worker copies transfer once into assets;
+immutable sources, public defensive registration, warm reuse and deferred/cancelled
+byte ownership remain intact. Separate tests/implementation and independent/root
+reviews passed. Focused checks, full engine (root 14.239s), focused race (5.038s)
+and five consumer builds passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestP5a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestP5a|TestS1fCommit|TestS1eStreamingWork|TestS1dPrepare|TestS2a|TestS2b|TestS2e|TestStreamedRuntime|TestStreamedRender|TestStreamedVoxel|TestOrdinaryHiddenVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestP5a|TestS1fCommit|TestS1eStreamingWork|TestS1dPrepare|TestS2a|TestS2b|TestS2e|TestStreamedRuntime|TestStreamedRender|TestStreamedVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke /tmp/gekko-s1e-smoke.go
+/bin/zsh -c '/tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke > /tmp/gekko-s1e-smoke.log 2>&1'
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke /tmp/gekko-p5a-smoke.go
+/bin/zsh -c '/tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke > /tmp/gekko-s1e-smoke.log 2>&1'
+```
+
+Unchanged two-child native check passed (41 frames/1.384s). The 64-child check
+passed (132 frames/4.549s), with 65 adoptions, allowance eight, 30-frame upload
+pause, fallback coverage, atomic handoff and clean Stop.
+No FPS, pixel-parity or historical `gasworks_128` crash-resolution claim.
+Terrain/backing edits, placements, storage-ledger traversal and renderer staging
+remain; one large commit is still not fully bounded. Unrelated changes preserved.
 
 Consumer commands for these steps:
 

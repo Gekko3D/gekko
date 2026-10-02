@@ -171,9 +171,15 @@ func (c *streamedPreparedGeometryCache) getOrBuild(key string, build func() *vol
 	return pending.geometry, pending.hit
 }
 
-func (c *streamedPreparedGeometryCache) admitLocked(key string, geometry *volume.XBrickMap) *streamedPreparedGeometryCacheEntry {
+func (c *streamedPreparedGeometryCache) admitLocked(key string, geometry *volume.XBrickMap, preparedVoxelCount ...int) *streamedPreparedGeometryCacheEntry {
+	var voxelCount int
+	if len(preparedVoxelCount) > 0 {
+		voxelCount = preparedVoxelCount[0]
+	} else {
+		voxelCount = geometry.GetVoxelCount()
+	}
 	entry := &streamedPreparedGeometryCacheEntry{
-		key: key, geometry: geometry, voxelCount: geometry.GetVoxelCount(),
+		key: key, geometry: geometry, voxelCount: voxelCount,
 		lastUse: c.clock, noWarm: !c.enabled || key == "",
 	}
 	entry.preparedStorage = c.storage.admit(geometry, streamedGeometryPrepared)
@@ -190,17 +196,26 @@ func (c *streamedPreparedGeometryCache) admitLocked(key string, geometry *volume
 // Cleanup uses the registering AssetServer even if a direct caller supplies
 // a different server later.
 func (c *streamedPreparedGeometryCache) acquireAsset(assets *AssetServer, key string, geometry *volume.XBrickMap) (AssetId, bool) {
+	id, reused, _ := c.acquirePreparedAsset(assets, key, geometry, nil)
+	return id, reused
+}
+
+func (c *streamedPreparedGeometryCache) acquirePreparedAsset(assets *AssetServer, key string, geometry *volume.XBrickMap, registration *streamedGeometryRegistration) (AssetId, bool, bool) {
+	defer registration.release()
 	if assets == nil || geometry == nil {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	if c == nil {
-		return assets.RegisterSharedVoxelGeometry(geometry, ""), false
+		if id, adopted := assets.adoptStreamedVoxelGeometry(registration, geometry); adopted {
+			return id, false, true
+		}
+		return assets.RegisterSharedVoxelGeometry(geometry, ""), false, false
 	}
 	key = strings.TrimSpace(key)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	c.clock++
 	var entry *streamedPreparedGeometryCacheEntry
@@ -208,7 +223,11 @@ func (c *streamedPreparedGeometryCache) acquireAsset(assets *AssetServer, key st
 		entry = c.entries[key]
 	}
 	if entry == nil {
-		entry = c.admitLocked(key, geometry)
+		if count, matches := registration.countFor(geometry); matches {
+			entry = c.admitLocked(key, geometry, count)
+		} else {
+			entry = c.admitLocked(key, geometry)
+		}
 	}
 	entry.lastUse = c.clock
 	if entry.refCount == 0 {
@@ -219,9 +238,13 @@ func (c *streamedPreparedGeometryCache) acquireAsset(assets *AssetServer, key st
 	if entry.asset != (AssetId{}) {
 		c.stats.AssetReuses++
 		c.evictLocked(true)
-		return entry.asset, true
+		return entry.asset, true, false
 	}
-	entry.asset = assets.RegisterSharedVoxelGeometry(entry.geometry, "")
+	var adopted bool
+	entry.asset, adopted = assets.adoptStreamedVoxelGeometry(registration, entry.geometry)
+	if !adopted {
+		entry.asset = assets.RegisterSharedVoxelGeometry(entry.geometry, "")
+	}
 	entry.assetServer = assets
 	registered, _ := assets.GetVoxelGeometry(entry.asset)
 	entry.assetStorage = c.storage.admit(registered.XBrickMap, streamedGeometryAsset)
@@ -232,7 +255,7 @@ func (c *streamedPreparedGeometryCache) acquireAsset(assets *AssetServer, key st
 		entry.noWarm = true
 	}
 	c.evictLocked(true)
-	return entry.asset, false
+	return entry.asset, false, adopted
 }
 
 // Preserve the keyed release seam for callers that already balance by key.

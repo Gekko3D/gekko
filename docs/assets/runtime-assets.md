@@ -155,9 +155,20 @@ It is metadata only. It is not a canonical deduplication key.
 ## Streamed Prepared Geometry Lifetime
 
 The streamed runtime owns a bounded cache for imported full/proxy geometry.
-`RegisterSharedVoxelGeometry` deep-copies the prepared map; the cache charges
-both its prepared backing and the actual registered copy. Acquired runtime
-users pin that copy. Warm entries share an LRU byte/entry policy; live users may
+The cache charges both its prepared backing and the actual registered copy.
+`RegisterSharedVoxelGeometry` retains defensive copying for mutable callers.
+P5a workers create a separate registration copy behind a private single-use
+handle; eligible main-thread commits adopt it without another deep copy.
+Workers never register assets. Cached source maps remain immutable and separate
+from live renderer geometry. Warm reuse and ineligible/live-backed commits drop
+unused handles; the cache's current source remains authoritative.
+
+S2b pending admission charges the extra copy until consumption or drain, including
+deferred/cancelled results. `PreparedGeometryAssetAdoptions` counts successful
+worker-payload registrations; ordinary registrations and warm reuse do not
+increment it. Cache ledger traversal remains main-thread work.
+
+Acquired runtime users pin that copy. Warm entries share an LRU byte/entry policy; live users may
 exceed the byte ceiling and expose pressure metrics. Oversized or disabled warm
 entries delete their registered assets after the final release.
 

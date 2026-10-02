@@ -137,6 +137,24 @@ func (server *AssetServer) RegisterSharedVoxelGeometry(xbm *volume.XBrickMap, so
 	return server.RegisterSharedVoxelGeometryWithCacheKey("", xbm, sourcePath)
 }
 
+// Engine-thread adoption consumes only a worker-owned independent copy.
+// Public registration methods keep their defensive-copy contract.
+func (server *AssetServer) adoptStreamedVoxelGeometry(registration *streamedGeometryRegistration, source *volume.XBrickMap) (AssetId, bool) {
+	if server == nil {
+		return AssetId{}, false
+	}
+	asset, taken := registration.take(source)
+	if !taken {
+		return AssetId{}, false
+	}
+	server.ensureVoxelStorage()
+	id := makeAssetId()
+	server.mu.Lock()
+	server.voxModels[id] = asset
+	server.mu.Unlock()
+	return id, true
+}
+
 func (server *AssetServer) SharedVoxelGeometryByCacheKey(cacheKey string) (AssetId, bool) {
 	if server == nil || cacheKey == "" {
 		return AssetId{}, false

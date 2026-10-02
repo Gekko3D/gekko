@@ -351,14 +351,22 @@ Implementation note, 2026-06-08:
 - A copied prepared-map registration path and then atomic `XBrickMap` ID
   allocation were also tested; both still crashed under the same
   `gasworks_128` renderer load.
-- Prepared imported-world geometry staging is disabled. Imported-world full
-  chunks and sector proxies again build their voxel geometry during entity
-  spawn on the stable renderer path.
+- Prepared imported-world geometry staging was disabled at that point. Full
+  chunks and sector proxies returned to geometry construction during entity
+  spawn.
 - Atomic `XBrickMap` ID allocation remains because concurrent map construction
   is independently possible and IDs are uploaded into GPU scene data.
-- The next commit/upload optimization should be renderer-owned staging or GPU
-  upload scheduling, not publishing worker-built `XBrickMap` instances into
-  live voxel model assets.
+- The recommendation then was renderer-owned staging or GPU upload scheduling.
+
+Current path, 2026-10-03: S2a restored immutable worker preparation with defensive
+asset copies. P5a moves that independent copy and its bounds calculation onto
+workers, then transfers it once through a private handle. Cached source maps
+remain separate from renderer mutation; public registration remains defensive.
+See [prepared geometry ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime).
+Native two-child and 64-child pressure checks passed. The historical
+`gasworks_128` scene was not available for re-verification; those checks do not
+establish that its crash is resolved. Renderer staging and upload scheduling
+remain necessary to bound all work in a large commit.
 
 #### Step 3: Add Hysteresis And Prefetch Rings
 
