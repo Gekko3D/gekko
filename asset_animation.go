@@ -125,9 +125,7 @@ func assetAnimationSystem(time *Time, cmd *Commands) {
 			if !advanceNPCIdleVariantSequenceAtBoundary(cmd, parentByEntity, root, player, animationSet, clip, dt) {
 				advanceAnimationPlayer(player, clip, dt)
 			}
-			targets := animationTargetsForRoot(cmd, parentByEntity, root, rootRef.AssetID)
-			rootTargets := animationRootTargetIDs(cmd, parentByEntity, root, rootRef.AssetID)
-			applyAnimationLayers(player, animationSet, targets, rootTargets, dt)
+			sampleAuthoredAssetAnimationPose(cmd, parentByEntity, root, rootRef.AssetID, player, animationSet, dt)
 			return true
 		})
 }
@@ -300,10 +298,20 @@ func SampleAuthoredAssetAnimation(cmd *Commands, root EntityId) bool {
 		player.ClipID = animationSet.DefaultClipID
 	}
 	parentByEntity := animationParentIndex(cmd)
-	targets := animationTargetsForRoot(cmd, parentByEntity, root, rootRef.AssetID)
-	rootTargets := animationRootTargetIDs(cmd, parentByEntity, root, rootRef.AssetID)
-	applyAnimationLayers(player, animationSet, targets, rootTargets, 0)
+	sampleAuthoredAssetAnimationPose(cmd, parentByEntity, root, rootRef.AssetID, player, animationSet, 0)
 	return true
+}
+
+func sampleAuthoredAssetAnimationPose(cmd *Commands, parentByEntity map[EntityId]EntityId, root EntityId, assetID string, player *AnimationPlayerComponent, animationSet *AuthoredAssetAnimationSetComponent, dt float32) {
+	targets, selected := animationTargetsForRoot(cmd, parentByEntity, root, assetID)
+	rootTargets := animationRootTargetIDs(cmd, parentByEntity, root, assetID)
+	applyAnimationLayers(player, animationSet, targets, rootTargets, dt)
+	for itemID, target := range targets {
+		before := selected[itemID]
+		if hierarchyBits(target.Position, target.Rotation, target.Scale) != before.bits {
+			cmd.MarkComponentChanged(before.entity, reflect.TypeOf(LocalTransformComponent{}))
+		}
+	}
 }
 
 func animationParentIndex(cmd *Commands) map[EntityId]EntityId {
@@ -315,16 +323,23 @@ func animationParentIndex(cmd *Commands) map[EntityId]EntityId {
 	return parentByEntity
 }
 
-func animationTargetsForRoot(cmd *Commands, parentByEntity map[EntityId]EntityId, root EntityId, assetID string) map[string]*LocalTransformComponent {
+type animationTargetBeforeSample struct {
+	entity EntityId
+	bits   hierarchyTRSBits
+}
+
+func animationTargetsForRoot(cmd *Commands, parentByEntity map[EntityId]EntityId, root EntityId, assetID string) (map[string]*LocalTransformComponent, map[string]animationTargetBeforeSample) {
 	targets := make(map[string]*LocalTransformComponent)
+	selected := make(map[string]animationTargetBeforeSample)
 	MakeQuery2[AuthoredAssetRefComponent, LocalTransformComponent](cmd).Map(func(eid EntityId, ref *AuthoredAssetRefComponent, local *LocalTransformComponent) bool {
 		if ref.AssetID != assetID || !animationEntityDescendsFrom(parentByEntity, eid, root) {
 			return true
 		}
 		targets[ref.ItemID] = local
+		selected[ref.ItemID] = animationTargetBeforeSample{entity: eid, bits: hierarchyBits(local.Position, local.Rotation, local.Scale)}
 		return true
 	})
-	return targets
+	return targets, selected
 }
 
 func animationRootTargetIDs(cmd *Commands, parentByEntity map[EntityId]EntityId, root EntityId, assetID string) map[string]struct{} {

@@ -137,12 +137,13 @@ only and retain no component values, pointers, queries or entity tombstones.
 Direct public-field writes remain live but require their owner to explicitly
 mark them for publication. Hierarchy publishes its changed derived world and
 root-local TRS outputs; reparent, grip, attach, surface and authored aim helpers
-publish their changed transform inputs. Other asset writers, animation, brushes
-and further producers remain incompletely migrated. Hierarchy and the voxel
-bridge continue their live reads. These sequences establish an ownership API,
-not a complete dirty contract, entity worklist or performance gain. Remaining
-producer migration and any bounded change journal need subsequent designs;
-consumers must not skip existing live reads based on these sequences yet.
+publish their changed transform inputs. Authored animation publishes changed
+final Local poses. Other asset writers, brushes and further producers remain
+incompletely migrated. Hierarchy and the voxel bridge continue their live reads.
+These sequences establish an ownership API, not a complete dirty contract,
+entity worklist or performance gain. Remaining producer migration and any bounded
+change journal need subsequent designs. Consumers must not skip existing live
+reads based on these sequences yet.
 
 ## Hierarchy Ownership
 
@@ -252,7 +253,30 @@ used as an aim bone still has authoritative World restored into Local by the nex
 hierarchy invocation. Weighting, frame resolution, position/scale, Pivot and command
 boundaries retain their existing behavior; aiming does not flush or create Local.
 
-Animation and other producers still need migration.
+### Authored Animation Publication
+
+`assetAnimationSystem` and `SampleAuthoredAssetAnimation` publish changed committed
+LocalTransform values after the complete pose sample. They compare each selected
+target's actual TRS bits before sampling with its final bits after bind reset,
+base clip and ordered layers. Equal final poses publish nothing, even when
+intermediate writes differ. Bind-only restoration and layer removal publish when
+the final pose changes. Equal NaN payloads compare quiet; signed-zero changes
+publish.
+
+Target selection retains the existing asset-ID and ancestor filters. Local-only
+descendants remain accepted; missing Local components are not created. Duplicate
+item IDs retain the existing unspecified winner, with publication attached to
+the selected destination.
+
+The system skips an invalid base clip before sampling. The public sampler still
+accepts an eligible nonempty animation set with a missing base clip, resets bind
+transforms and applies valid layers without advancing time. Player state, layer
+policy, masks and root-position key locks retain their existing behavior.
+
+Sampling publishes Local only and leaves World propagation to hierarchy. It does
+not flush commands or change membership. Animation-player and NPC state changes
+are outside this Local publication contract. Other transform and renderer-input
+producers still need migration.
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.
 
