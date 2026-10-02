@@ -156,6 +156,10 @@ type VoxelRtState struct {
 	underwaterStrength                float32
 	bridgeFeatures                    voxelRtBridgeRegistry
 
+	// VoxelEmitterRadiusObjectVisitsLastSync counts instance entries visited
+	// for automatic linked-light radius derivation during the latest light sync.
+	VoxelEmitterRadiusObjectVisitsLastSync int
+
 	// Fingerprint counters measure original hash executions and accounted,
 	// state-owned snapshot data; they do not measure total bridge work or memory.
 	VoxelMaterialFingerprintBuildCount uint64

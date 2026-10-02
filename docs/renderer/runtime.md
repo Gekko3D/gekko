@@ -237,6 +237,22 @@ immediate structural mutation or manual flush during iteration is unsupported.
 | `Sync Decals` | registered after-batch bridge system / `voxelRtDecalsBridgeSystem` | retained `DecalInstance` values converted to 80-byte GPU records and grouped by existing sprite-atlas key | skipped and cleared unless the consumer registered `DecalFeature`; one instance buffer and one draw per non-empty atlas batch |
 | `Sync Skybox` | registered pre-update bridge system / `syncSkybox` plus `buildSkyboxBridgeInput` adapter | `SkyboxResources` / `SkyboxLayerInput` input | GPU application and GPU-layer packing are now owned by `feature-skybox-update`; the remaining ECS-to-renderer conversion is isolated in a tested bridge helper |
 
+## Linked Emitter Source Radii
+
+Light sync derives a source radius when `EmitterLinkID` is nonzero and
+`SourceRadius` is zero after the existing negative-radius clamp. All requested
+groups share one object scan per invocation. Each group uses the largest
+matching object's world-AABB half-diagonal; absent groups remain zero. Only
+requested groups update bounds. Explicit positive and NaN radii, light ordering,
+ambient and Sun extraction keep their existing behavior.
+
+The aggregate lasts for that sync only. Normal core passes still observe direct
+scale, geometry, emitter-link and light edits and committed removals.
+`VoxelRtState.VoxelEmitterRadiusObjectVisitsLastSync` counts object entries
+visited for radius derivation, including unrelated entries. It is zero without
+eligible requests or available sync inputs. This measures scan work, not FPS or
+total bridge cost; it does not authorize dirty-only extraction.
+
 ## Effective Palette Fingerprints
 
 Core instance sync reads each used object palette and evaluates its animations

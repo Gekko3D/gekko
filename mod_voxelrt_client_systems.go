@@ -1360,7 +1360,11 @@ func spriteAtlasTexture(server *AssetServer, atlasKey string) (TextureAsset, boo
 }
 
 func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
-	if state == nil || state.RtApp == nil || state.RtApp.Scene == nil || cmd == nil {
+	if state == nil {
+		return
+	}
+	state.VoxelEmitterRadiusObjectVisitsLastSync = 0
+	if state.RtApp == nil || state.RtApp.Scene == nil || cmd == nil {
 		return
 	}
 
@@ -1390,6 +1394,7 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 		gpu       core.Light
 	}
 	pendingLights := make([]pendingLight, 0, 8)
+	var emitterRadii map[uint32]float32
 
 	MakeQuery1[LightComponent](cmd).Map(func(_ EntityId, light *LightComponent) bool {
 		if light.Type != LightTypeAmbient {
@@ -1414,7 +1419,10 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 			sourceRadius = 0
 		}
 		if sourceRadius == 0 && light.EmitterLinkID != 0 {
-			sourceRadius = derivedEmitterSourceRadius(state, light.EmitterLinkID)
+			if emitterRadii == nil {
+				emitterRadii = make(map[uint32]float32)
+			}
+			emitterRadii[light.EmitterLinkID] = 0
 		}
 		gpuLight.Position = [4]float32{pos.X(), pos.Y(), pos.Z(), sourceRadius}
 
@@ -1453,6 +1461,34 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 		return true
 	})
 
+	if len(emitterRadii) != 0 {
+		for _, obj := range state.instanceMap {
+			state.VoxelEmitterRadiusObjectVisitsLastSync++
+			if obj == nil || obj.XBrickMap == nil {
+				continue
+			}
+			radius, requested := emitterRadii[obj.EmitterLinkID]
+			if !requested {
+				continue
+			}
+			obj.UpdateWorldAABB()
+			if obj.WorldAABB == nil {
+				continue
+			}
+			extent := obj.WorldAABB[1].Sub(obj.WorldAABB[0])
+			candidate := extent.Len() * 0.5
+			if candidate > radius {
+				emitterRadii[obj.EmitterLinkID] = candidate
+			}
+		}
+		for index := range pendingLights {
+			light := &pendingLights[index].gpu
+			if light.Position[3] == 0 && light.ShadowMeta[3] != 0 {
+				light.Position[3] = emitterRadii[light.ShadowMeta[3]]
+			}
+		}
+	}
+
 	sort.Slice(pendingLights, func(i, j int) bool {
 		li := pendingLights[i]
 		lj := pendingLights[j]
@@ -1489,29 +1525,6 @@ func syncVoxelRtLights(state *VoxelRtState, cmd *Commands) {
 		state.RtApp.Scene.AmbientLight = defaultAmbient
 	}
 	state.RtApp.Scene.SkyAmbientMix = skyAmbientMix
-}
-
-func derivedEmitterSourceRadius(state *VoxelRtState, emitterLinkID uint32) float32 {
-	if state == nil || emitterLinkID == 0 {
-		return 0
-	}
-
-	var radius float32
-	for _, obj := range state.instanceMap {
-		if obj == nil || obj.EmitterLinkID != emitterLinkID || obj.XBrickMap == nil {
-			continue
-		}
-		obj.UpdateWorldAABB()
-		if obj.WorldAABB == nil {
-			continue
-		}
-		extent := obj.WorldAABB[1].Sub(obj.WorldAABB[0])
-		candidate := extent.Len() * 0.5
-		if candidate > radius {
-			radius = candidate
-		}
-	}
-	return radius
 }
 
 func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *Commands) {

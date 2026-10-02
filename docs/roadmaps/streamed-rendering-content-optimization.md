@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3r, S4a–S4c and P5a complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3s, S4a–S4c and P5a complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -172,7 +172,7 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3r implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal and live-validated material fingerprint reuse. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3s implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal, live-validated material fingerprint reuse and one-pass linked-emitter aggregation. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
 Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
@@ -183,6 +183,22 @@ Stable entity/object table: extend comparisons with dirty registration, hierarch
 No automatic Bevy `Changed<T>` in Gekko. Publish versions/events at mutation owners before incremental extraction. Preserve hierarchy/flush order for animation/brushes. Rebuild GPU records/BVH only for relevant changes.
 
 Acceptance: idle observers do not rebuild residency sets; idle geometry does not rebuild records; movement and ancestor changes appear at current stage boundary.
+
+#### S3s: Aggregate linked emitter radii per sync
+
+Replace repeated object scans for automatic linked-light radii with one
+invocation-local aggregate over requested emitter groups. Preserve maximum
+world-AABB half-diagonal, explicit radii, light order and same-pass live inputs.
+Update bounds only for requested groups. Retain no cross-frame cache or component
+pointers; this does not authorize dirty-only extraction.
+
+Files: `mod_voxelrt_client.go`, `mod_voxelrt_client_systems.go` and focused tests.
+Confidence is High: the light sync owns current inputs and aggregation changes
+no lifetime boundary. Use the routine tests-first workflow. Cover shared/distinct
+groups, direct scale/link/geometry changes, removal and zero work without eligible
+lights. A public last-sync object-visit counter verifies the scan bound. Run
+focused bridge checks, full engine tests and affected consumer builds. No shader
+or GPU allocation changes require a new native check.
 
 ### S4. Remove synchronous persistence from unload
 
@@ -416,6 +432,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1d | `e07dba5` | Shared full/proxy ordering, waiting age and current/PVS classification | [Priority decision](streamed-rendering-s1b.md#s1d-deterministic-preparation-priority) |
 | S1e | `1c72078` | Combined CPU/GPU admission, compatibility pressure and separate retirement debt | [Admission decision](streamed-rendering-s1b.md#s1e-combined-streaming-admission) |
 | S1f | `953c577` | Bounded ready ownership, live commit ordering and aging | [Ready-queue decision](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue) |
+| P5a | `33bc039` | Independent worker registration copies with single-use adoption | [Asset ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -425,7 +442,8 @@ compatibility and conditional proposals.
 
 On 2026-10-03, the user prioritized large single-chunk stalls and recurring CPU
 scans. [P5a](#p5a-worker-owned-registration-copies) removes main-thread
-registration copying first; recurring emitter scans are next. Further scheduling
+registration copying first; S3s reduces recurring emitter scans. Terrain
+construction and remaining renderer/commit work are next. Further scheduling
 cleanup remains S1.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
@@ -956,7 +974,7 @@ Unrelated changes preserved; macOS warnings exited successfully.
 
 ### P5a: Worker-owned registration copies
 
-Completed 2026-10-03. Independent worker copies transfer once into assets;
+Commit `33bc039`, completed 2026-10-03. Independent worker copies transfer once into assets;
 immutable sources, public defensive registration, warm reuse and deferred/cancelled
 byte ownership remain intact. Separate tests/implementation and independent/root
 reviews passed. Focused checks, full engine (root 14.239s), focused race (5.038s)
@@ -980,6 +998,26 @@ pause, fallback coverage, atomic handoff and clean Stop.
 No FPS, pixel-parity or historical `gasworks_128` crash-resolution claim.
 Terrain/backing edits, placements, storage-ledger traversal and renderer staging
 remain; one large commit is still not fully bounded. Unrelated changes preserved.
+
+### S3s: One-pass linked emitter aggregation
+
+Completed 2026-10-03. Automatic linked-light radii share one current object scan,
+with no scan when no eligible group exists. Direct unmarked scale/link/geometry
+edits, removal, overrides and existing light/ambient/Sun outputs passed frozen
+functionality tests and root review. Focused checks, full engine (root 14.826s)
+and five consumer builds passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3s' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS3s|TestSyncVoxelRtLights|TestVoxelRtSystem|TestS3cVoxelInventory|TestS3o|TestS3r)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+```
+
+The visit diagnostic confirms one pass instead of one pass per linked light.
+No measured frame-time gain or dirty-only extraction claim. Local aggregation
+changes no concurrency, GPU allocation or shader contract; no new race/native
+check was needed. Existing tests and unrelated changes preserved.
 
 Consumer commands for these steps:
 
