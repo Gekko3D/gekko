@@ -63,6 +63,7 @@ type StreamedLevelRuntimeConfig struct {
 	StreamingDestructionRadius      int
 	MaxVolumeInstances              int
 	MaxPrepareJobs                  int
+	MaxStreamingWorkItems           int
 	MaxPreparedGeometryCacheEntries int
 	MaxPreparedGeometryCacheBytes   int64
 	MaxDecodedContentCacheBytes     int64
@@ -94,6 +95,11 @@ type StreamedLevelRuntimeMetrics struct {
 	PersistenceLastError                   string
 	ObserverSelectionBuildCount            uint64
 	ObserverSelectionChunkVisitCount       uint64
+	StreamingWorkCount                     int
+	StreamingWorkMaxCount                  int
+	StreamingWorkOverBudgetCount           int
+	StreamingWorkCarryoverCount            int
+	StreamingWorkAdmissionBlockedCount     uint64
 	PrepareDispatchCount                   uint64
 	LastPrepareDispatchCoord               ChunkCoord
 	LastPrepareDispatchKind                string
@@ -303,6 +309,7 @@ type StreamedLevelRuntimeState struct {
 	observerSelection         *streamedObserverSelectionOwner
 	observerSelectionRevision uint64
 	prepareScheduler          streamedPrepareScheduler
+	streamingWork             streamedWorkOwner
 
 	renderManaged     bool
 	nextRenderTicket  uint64
@@ -611,6 +618,9 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		return fmt.Errorf("level path is empty")
 	}
 
+	if cfg.MaxStreamingWorkItems < 0 {
+		return fmt.Errorf("streaming work item budget is negative")
+	}
 	if cfg.MaxPendingPersistenceBytes < 0 {
 		return fmt.Errorf("pending persistence byte budget is negative")
 	}
@@ -687,6 +697,8 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	}
 
 	state.prepareScheduler = streamedPrepareScheduler{}
+	state.renderManaged = voxelRtStateFromApp(cmd.app) != nil
+	state.streamingWork.blocked = 0
 	state.Initialized = true
 	state.InitErr = nil
 	state.Generation++
@@ -1110,6 +1122,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	}
 	cmd.app.FlushCommands()
 	state.PreparedGeometryCache.close(assetServerFromApp(cmd.app))
+	carryStreamedWorkAfterStop(state)
 	refreshStreamedRuntimeMetricsCounts(state)
 
 	clearVoxelWorldDirtyChunks(cmd.app, state.BaseWorldID)
@@ -1189,6 +1202,7 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 		select {
 		case prepared := <-state.PreparedLoads:
 			acknowledgeStreamedChunkPreparation(state, prepared)
+			finishStreamedWorkAttempt(state, prepared.Generation, prepared.prepareCancel)
 			prepared.release()
 			continue
 		default:
@@ -1199,6 +1213,7 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 		select {
 		case prepared := <-state.PreparedProxyLoads:
 			acknowledgeStreamedProxyPreparation(state, prepared)
+			finishStreamedWorkAttempt(state, prepared.Generation, prepared.prepareCancel)
 			prepared.release()
 			continue
 		default:
@@ -1251,9 +1266,11 @@ func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 		select {
 		case prepared := <-state.PreparedLoads:
 			acknowledgeStreamedChunkPreparation(state, prepared)
+			finishStreamedWorkAttempt(state, prepared.Generation, prepared.prepareCancel)
 			prepared.release()
 		case prepared := <-state.PreparedProxyLoads:
 			acknowledgeStreamedProxyPreparation(state, prepared)
+			finishStreamedWorkAttempt(state, prepared.Generation, prepared.prepareCancel)
 			prepared.release()
 		case <-state.navigationLoads:
 		case <-state.navigationOverlays:
@@ -1421,6 +1438,7 @@ func startStreamedChunkPrepareJob(state *StreamedLevelRuntimeState, job streamed
 	cancel := make(chan struct{})
 	state.chunkPrepareCancels[job.Coord] = cancel
 	job.prepareCancel = cancel
+	acquireStreamedWorkAttempt(state, job.Generation, cancel)
 	recordStreamedPreparationDispatch(state, job.Coord, "full")
 	owner, results, jobs := state.pendingPrepared, state.PreparedLoads, &state.jobs
 	activeMu, active := &state.activePrepareMu, &state.activeChunkPrepares
@@ -1456,6 +1474,7 @@ func startStreamedSectorProxyPrepareJob(state *StreamedLevelRuntimeState, job st
 	cancel := make(chan struct{})
 	state.proxyPrepareCancels[job.SectorCoord] = cancel
 	job.prepareCancel = cancel
+	acquireStreamedWorkAttempt(state, job.Generation, cancel)
 	recordStreamedPreparationDispatch(state, job.SectorCoord, "proxy")
 	owner, results, jobs := state.pendingPrepared, state.PreparedProxyLoads, &state.jobs
 	activeMu, active := &state.activePrepareMu, &state.activeProxyPrepares
@@ -1614,6 +1633,7 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		case prepared := <-state.PreparedProxyLoads:
 			func() {
 				defer prepared.release()
+				defer finishStreamedWorkAttempt(state, prepared.Generation, prepared.prepareCancel)
 				if !acknowledgeStreamedProxyPreparation(state, prepared) {
 					return
 				}
@@ -1665,6 +1685,7 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		case prepared := <-state.PreparedLoads:
 			func() {
 				defer prepared.release()
+				defer finishStreamedWorkAttempt(state, prepared.Generation, prepared.prepareCancel)
 				if !acknowledgeStreamedChunkPreparation(state, prepared) {
 					return
 				}
@@ -1737,6 +1758,7 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 	if state == nil {
 		return
 	}
+	refreshStreamedWorkMetrics(state)
 	refreshStreamedContentOwnerMetrics(state)
 	state.Metrics.DesiredChunkCount = len(state.DesiredChunks)
 	state.Metrics.DesiredLoadableChunkCount = streamedLoadableChunkCount(state, state.DesiredChunks)
@@ -2340,6 +2362,7 @@ func streamedImportedWorldPayloadAndAuxHash(payloadHash string, aux *content.Imp
 }
 
 func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedSectorProxy) (int, error) {
+	defer beginStreamedWorkCommit(state, prepared.Generation, prepared.prepareCancel)()
 	defer beginStreamedRenderTicketBatch(state)()
 	if cmd != nil && state != nil && voxelRtStateFromApp(cmd.app) != nil {
 		state.renderManaged = true
@@ -2407,6 +2430,7 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 }
 
 func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedChunk) (int, error) {
+	defer beginStreamedWorkCommit(state, prepared.Generation, prepared.prepareCancel)()
 	defer beginStreamedRenderTicketBatch(state)()
 	start := time.Now()
 	resetLastStreamedCommitBreakdown(state)

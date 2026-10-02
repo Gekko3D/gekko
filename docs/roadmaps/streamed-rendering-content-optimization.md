@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a–S1d, S2a–S2e, S3a–S3r and S4a–S4c complete. S1/S2/S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a–S1e, S2a–S2e, S3a–S3r and S4a–S4c complete. S1/S2/S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -390,12 +390,12 @@ This workflow does not independently authorize tests, delegation or commits.
 | S4b | `6a9f3b7` | Capture-order publication and conservative navigation progress | [Persistence decision](streamed-rendering-s4.md#s4b-imported-capture-order-publication) |
 | S4c | `f045d01` | Exclusive byte-accounted transactions, dirty pins and durable checkpoints | [Persistence decision](streamed-rendering-s4.md#s4c-bounded-asynchronous-normal-unload) |
 | S2e | `d425c88` | Terminal dispatch cancellation, shared leases and failed Stop recovery | [Cancellation decision](streamed-rendering-s2b.md#s2e-obsolete-preparation-cancellation) |
-| S1d | `feat(streaming): prioritize preparation deterministically` | Shared full/proxy ordering, waiting age and current/PVS classification | [Priority decision](streamed-rendering-s1b.md#s1d-deterministic-preparation-priority) |
+| S1d | `e07dba5` | Shared full/proxy ordering, waiting age and current/PVS classification | [Priority decision](streamed-rendering-s1b.md#s1d-deterministic-preparation-priority) |
+| S1e | This delivery commit | Combined CPU/GPU admission, compatibility pressure and separate retirement debt | [Admission decision](streamed-rendering-s1b.md#s1e-combined-streaming-admission) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: resolve combined running/CPU-ready/GPU-uploading admission, then remaining
-S1 scheduling/commit bounds, S2 queues/cache owners and S3 notifications/extraction
+Next: remaining S1 scheduling/commit bounds, then S2 queues/cache owners and S3 notifications/extraction
 in delivery order. No dirty-only extraction is approved. Preserve public mutation
 compatibility and conditional proposals.
 
@@ -839,7 +839,7 @@ preserved; macOS warnings exited successfully.
 
 ### S1d: Deterministic preparation dispatch
 
-Commit `feat(streaming): prioritize preparation deterministically`. Separate
+Commit `e07dba5`. Separate
 Sol 6.1 test/implementation agents and root/independent pre/post reviews completed.
 One shared heap orders full/proxy admission with aging, stable ties and cached
 current/PVS classification. Known byte-blocked work permits smaller work; renewed
@@ -866,6 +866,36 @@ ordering; native checks establish usability, not pixel parity or speed. Active
 worker semantics and GPU priority remain; combined stage admission and other S1
 queues are separate. Existing tests and unrelated changes preserved; macOS
 warnings exited successfully.
+
+### S1e: Combined streaming admission
+
+Commit: this S1e delivery. Separate Sol 6.1 test/implementation agents and
+root/independent pre/post reviews completed. Admission spans actual full/proxy
+dispatch, queued result and initial qualified renderer completion. Hidden Ready
+children permit limit-one refinement. Compatibility work exposes pressure;
+Stop/restart keeps retiring GPU debt separate. Review fixed captured-generation
+cleanup and repeated accounting scans. Existing tests remain unchanged.
+Canonical behavior: [streaming](../content/streaming-and-worlds.md).
+
+Focused checks, full engine tests (root 14.375s), focused race (7.514s) and five
+consumer checks passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS1eStreamingWork' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS1dPrepare|TestS2b|TestS2e|TestS3aSelection|TestStreamedRuntimeStop|TestStreamedRender|TestStreamedVoxel|TestOrdinaryHiddenVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS1eStreamingWork|TestS1dPrepare|TestS2b|TestS2e|TestS3aSelection|TestS4c|TestStreamedRuntimeStop|TestStreamedRender|TestStreamedVoxel|TestOrdinaryHiddenVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke /tmp/gekko-s1e-smoke.go
+/bin/zsh -c '/tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke > /tmp/gekko-s1e-smoke.log 2>&1'
+```
+
+Disposable native check passed in 41 frames/1.407s: allowance one, 30-frame upload
+pause, visible fallback, hidden Ready child, complete two-child handoff and clean
+Stop. No pixel parity, speed or total-memory claim. Synchronous gameplay/late
+adoption/repair can exceed the allowance; main-thread commit units and remaining
+stage queues still need bounds. Unrelated changes preserved; macOS warnings
+exited successfully.
 
 Consumer commands for these steps:
 

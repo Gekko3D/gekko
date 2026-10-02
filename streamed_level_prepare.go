@@ -182,6 +182,10 @@ func scheduleStreamedPreparation(cmd *Commands, state *StreamedLevelRuntimeState
 		if !streamedPreparationDispatchEligible(state, identity) {
 			continue
 		}
+		if state.streamingWork.currentCount >= streamedWorkLimit(state) {
+			state.streamingWork.blocked++
+			break
+		}
 		coord := identity.coord
 		if identity.kind == streamedPrepareFull {
 			delete(state.pendingChunkCostHints, coord)

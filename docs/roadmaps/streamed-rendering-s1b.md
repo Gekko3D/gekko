@@ -190,6 +190,84 @@ unchanged. Focused checks and independent reviews precede full engine/consumer
 and race checks at the batch boundary. Native fallback/readiness verification
 supplements CPU scheduling checks; no frame-time or total-memory claim.
 
+## S1e: Combined streaming admission
+
+Add `MaxStreamingWorkItems`: zero selects 32, positive values including one are
+valid, negative is invalid. One main-thread admission owner spans asynchronous
+full/proxy dispatch, queued CPU result and initial renderer completion. Preserve
+the separate active-worker and pending-byte limits. A work item is one full chunk
+or proxy attempt; a full chunk can own both terrain and imported render targets.
+The owner retains scalar identities and tickets, never ECS rows or payloads.
+
+Acquire before dispatch. Cancellation holds the item through matching terminal
+acknowledgement; retries, obsolete results and preparation errors release it.
+Successful commit transfers the item to its actual staged runtime-owned targets,
+including targets flushed before a later commit failure. CPU-only commits and
+proven empty results release immediately. A GPU item finishes after every initial
+target is individually Ready or terminally Failed, or safely retired. Ready must
+match live marker/entity/generation ownership. Cohort visibility is independent:
+a Ready child can release its item while a sibling still keeps the cohort hidden.
+Failure releases admission without proving coverage or changing error policy.
+Observe qualified terminal completion before automatic reticketing, and latch
+each initial target's completion so delayed siblings cannot recharge it.
+
+Live stale/cancelled targets follow their replacement ticket within the same
+unfinished item. Scalar fences for old unfinished tickets remain in that item
+until the existing retirement owner proves completion; a new Ready ticket cannot
+hide an older Uploading capture. After terminal failure, a repaired-source reticket is new
+compatibility work. Removed unfinished targets hold their item until the old
+marker is absent and renderer retirement proves terminal or forgotten status.
+Polling/reticket integration must preserve that fence and qualify current-world
+readiness independently from older tickets.
+
+Synchronous gameplay commits, late renderer adoption and repaired sources retain
+their existing latency/lifetime behavior. Their initial GPU work is accounted but
+can exceed the admission ceiling; expose that pressure and stop new asynchronous
+dispatch until capacity returns. Ordinary edits of already Ready geometry remain
+with renderer upload budgets and do not recharge a completed load. Authored
+placement rendering remains with its existing owner. This bounds the admitted
+streaming frontier, not total renderer work or process memory.
+
+Keep current-world GPU items through failed Stop. Successful Stop drains CPU
+items and moves unfinished retiring GPU items to scalar carryover debt. Expose
+that debt separately until the existing retirement sweep proves completion; it
+cannot block a new generation or establish its readiness. Missing renderer
+resources cannot prove old retirement. Current-world managed targets retain
+their existing renderer-required behavior.
+At successful Start, determine managed residency anew from the installed renderer.
+Resource disappearance within an active world cannot downgrade that world;
+the previous world's latch cannot force a fresh headless world into GPU staging.
+
+One shared allowance, including limit one, follows current readiness topology:
+individual targets upload independently of cohort members or fallback preparation.
+A working renderer frees capacity before coarsening needs a new fallback. A
+stalled renderer backpressures asynchronous work; S1d aging restores waiting
+detail priority when capacity returns. No extra partition or recovery overflow
+is needed. Preserve synchronous collision readiness and existing proxy coverage.
+
+Publish `StreamingWorkCount`, `StreamingWorkMaxCount`,
+`StreamingWorkOverBudgetCount`, `StreamingWorkCarryoverCount` and cumulative
+`StreamingWorkAdmissionBlockedCount`. The first four are `int`; the last is
+`uint64` and counts observer updates with otherwise eligible dispatch blocked by
+this allowance. Private accounting owns admission; diagnostics never control it.
+
+Owners/files: a private admission owner, preparation dispatch and result/commit
+lifecycle in `streamed_level_runtime.go`, and ticket staging/retirement in
+`streamed_level_render_residency.go`. Workers, codecs, collision algorithms,
+ordinary placement visibility and the renderer readiness predicate stay owned by
+their existing systems. Explicit attempt records preserve initial completion and
+retirement; a derived pending/target union would recharge edits or lose removed
+unfinished targets. Confidence: High after runtime and independent topology
+review; no SME alignment required.
+
+Minimal tests protect actual running/queued/GPU backpressure, shared full/proxy
+credit and hidden-cohort progress at limit one, qualified readiness, cancellation
+and retry release, compatibility pressure/diagnostic independence, failure repair
+and retirement across Stop/restart. Use existing cancellation, readiness, pending
+byte and failed-Stop coverage where it already protects the contract. Separate
+Sol 6.1 test/implementation agents and independent pre/post reviews precede focused
+race, full engine/consumer checks and a native paused-upload/resume fixture.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

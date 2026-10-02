@@ -135,6 +135,7 @@ func stageStreamedRenderTarget(cmd *Commands, state *StreamedLevelRuntimeState, 
 	target := streamedRenderTarget{coord: coord, kind: kind, generation: state.Generation}
 	target.ticket = nextStreamedRenderTicket(cmd, state)
 	state.renderTargets[entity] = target
+	attachStreamedWorkTarget(state, entity, target)
 	cmd.AddComponents(entity, &StreamedVoxelRenderComponent{
 		Ticket: target.ticket, Generation: target.generation, Priority: streamedRenderPriority(state, target),
 	}, &VoxelRenderHiddenComponent{})
@@ -154,6 +155,7 @@ func queueStreamedRenderRetirement(state *StreamedLevelRuntimeState, ticket uint
 func retireStreamedRenderTarget(cmd *Commands, state *StreamedLevelRuntimeState, entity EntityId) {
 	if target, owned := state.renderTargets[entity]; owned {
 		queueStreamedRenderRetirement(state, target.ticket)
+		retireStreamedWorkTarget(state, entity)
 		cmd.RemoveComponents(entity, &StreamedVoxelRenderComponent{})
 		delete(state.renderTargets, entity)
 	}
@@ -216,9 +218,11 @@ func refreshStreamedRenderResidency(cmd *Commands, state *StreamedLevelRuntimeSt
 		return true
 	})
 	state.renderTicketBatch.floorValid = true
+	observeStreamedWorkTargets(cmd, state, markers)
 	for entity, target := range state.renderTargets {
 		if !cmd.EntityExists(entity) {
 			queueStreamedRenderRetirement(state, target.ticket)
+			retireStreamedWorkTarget(state, entity)
 			delete(state.renderTargets, entity)
 		}
 	}
@@ -232,6 +236,8 @@ func refreshStreamedRenderResidency(cmd *Commands, state *StreamedLevelRuntimeSt
 		}
 	}
 	sweepStreamedRenderRetirement(cmd, state, markers)
+	reapStreamedWorkRetirement(cmd, state, markers)
+	refreshStreamedWorkMetrics(state)
 	if !state.Initialized || state.InitErr != nil {
 		return
 	}
@@ -248,9 +254,11 @@ func refreshStreamedRenderResidency(cmd *Commands, state *StreamedLevelRuntimeSt
 			(known && status.State == StreamedVoxelRenderFailed && streamedRenderSourceValid(cmd, entity))
 		if retry {
 			queueStreamedRenderRetirement(state, target.ticket)
+			previous := target
 			target.ticket = nextStreamedRenderTicket(cmd, state)
 			target.generation = state.Generation
 			state.renderTargets[entity] = target
+			replaceStreamedWorkTarget(state, entity, previous, target)
 			cmd.AddComponents(entity, &StreamedVoxelRenderComponent{
 				Ticket: target.ticket, Generation: target.generation, Priority: streamedRenderPriority(state, target),
 			})
@@ -261,6 +269,7 @@ func refreshStreamedRenderResidency(cmd *Commands, state *StreamedLevelRuntimeSt
 		// only completed runtime-owned voxel targets; placement ownership and
 		// partial failed commits remain with their existing lifecycle.
 		for coord, chunk := range state.LoadedChunks {
+			finish := beginStreamedWorkCommit(state, state.Generation, nil)
 			for entity := range chunk.TerrainEntities {
 				if _, owned := state.renderTargets[entity]; !owned && cmd.EntityExists(entity) {
 					stageStreamedRenderTarget(cmd, state, entity, coord, streamedRenderTerrain)
@@ -271,6 +280,7 @@ func refreshStreamedRenderResidency(cmd *Commands, state *StreamedLevelRuntimeSt
 					stageStreamedRenderTarget(cmd, state, entity, coord, streamedRenderImported)
 				}
 			}
+			finish()
 		}
 		for coord, proxy := range state.LoadedSectorProxies {
 			if _, owned := state.renderTargets[proxy.Entity]; !owned && cmd.EntityExists(proxy.Entity) {

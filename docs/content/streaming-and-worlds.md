@@ -522,7 +522,8 @@ Renderer readiness update, S1c:
   also run while streaming is stopped or has a preparation error.
 - Without a `VoxelRtState` resource, CPU-only behavior remains available. Late
   renderer installation stages existing managed targets. Once managed, resource
-  disappearance cannot authorize CPU-ready handoff.
+  disappearance cannot authorize CPU-ready handoff within that world. A new
+  world determines managed residency from its installed renderer.
 - Collision/destruction components and CPU readiness do not wait for GPU uploads.
   Existing residency upgrades still use unload/reload. Render handoff does not
   modify published navigation data or revisions.
@@ -621,8 +622,38 @@ erase renewed demand's age. Known byte-blocked work does not block fitting work.
 `PrepareDispatchCount`, `LastPrepareDispatchCoord` and `LastPrepareDispatchKind`
 (`full` or `proxy`) report actual dispatch independently of completion timing.
 `MaxPrepareJobs` continues to bound active workers and S2b bounds pending payload
-bytes. CPU-ready/GPU-uploading allowance and remaining stage queues are separate.
+bytes. S1e below adds combined admission; remaining stage queues are separate.
 [S1d decision](../roadmaps/streamed-rendering-s1b.md#s1d-deterministic-preparation-priority).
+
+Combined streaming admission, S1e:
+
+`MaxStreamingWorkItems` bounds current-world asynchronous full/proxy work from
+dispatch through queued CPU results and initial GPU completion. Zero selects 32;
+positive values including one are valid; negative is invalid. Worker count and
+pending bytes retain their separate limits. One full item covers its terrain and
+imported targets. Individually Ready targets can finish an item while a larger
+cohort stays hidden. Qualified terminal failure finishes initial work without
+proving coverage. CPU-only and proven empty commits finish immediately.
+
+Cancelled preparation holds its item through acknowledgement. Live stale or
+cancelled render targets follow their replacement ticket; removed unfinished
+targets wait for marker removal and renderer retirement. Partial commit failures
+retain already staged work. Synchronous gameplay, late renderer adoption and
+failed-source repair remain usable under pressure; their GPU work is accounted
+and can exceed the ceiling, preventing further asynchronous dispatch. Ordinary
+edits after initial Ready remain with renderer budgets. Placement rendering and
+total process memory are outside this allowance.
+
+`StreamingWorkCount`, `StreamingWorkMaxCount`, `StreamingWorkOverBudgetCount` and
+`StreamingWorkCarryoverCount` expose current admission and old retirement debt.
+`StreamingWorkAdmissionBlockedCount` counts observer updates with otherwise
+eligible dispatch blocked by the allowance. Diagnostics do not control admission.
+Failed Stop preserves current GPU work. Successful Stop drains CPU work and moves
+unfinished retiring GPU work to separately reported carryover; old debt cannot
+block a new generation or prove its readiness. A paused renderer backpressures
+asynchronous preparation; existing fallback coverage and synchronous collision
+behavior remain.
+[S1e decision](../roadmaps/streamed-rendering-s1b.md#s1e-combined-streaming-admission).
 
 Obsolete preparation cancellation, S2e:
 

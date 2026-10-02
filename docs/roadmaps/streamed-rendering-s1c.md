@@ -23,7 +23,9 @@ Invariant: ready fallback stays visible until complete required full cohort is r
 - If resource exists, even without initialized renderer app/GPU manager,
   use ticket staging. Unknown status never means ready. Once runtime has
   entered renderer-managed residency, missing renderer state cannot silently
-  revert it to CPU-ready behavior.
+  revert that active world to CPU-ready behavior. S1e determines this latch anew
+  at successful Start; previous-world retirement does not force a new headless
+  world into GPU staging.
 - If renderer is installed after CPU-only loading, adopt already resident
   runtime-owned terrain/imported/proxy targets before its first bridge pass.
   Stage them hidden until their new tickets qualify coverage.
