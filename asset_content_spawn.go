@@ -342,7 +342,11 @@ func AttachAuthoredAssetRoot(cmd *Commands, root, parentMarker EntityId, attachm
 	if local == nil {
 		return fmt.Errorf("asset attachment root %d has no local transform", root)
 	}
+	previousLocal := hierarchyBits(local.Position, local.Rotation, local.Scale)
 	*local = AssetLocalTransformFromDef(attachment.Transform)
+	if hierarchyBits(local.Position, local.Rotation, local.Scale) != previousLocal {
+		cmd.MarkComponentChanged(root, reflect.TypeOf(LocalTransformComponent{}))
+	}
 	cmd.AddComponents(root,
 		&Parent{Entity: parentMarker},
 		attached,

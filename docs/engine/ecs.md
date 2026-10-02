@@ -136,10 +136,10 @@ only and retain no component values, pointers, queries or entity tombstones.
 
 Direct public-field writes remain live but require their owner to explicitly
 mark them for publication. Hierarchy publishes its changed derived world and
-root-local TRS outputs; reparent and grip transform helpers publish their changed
-Parent/local inputs. Other asset writers, animation, brushes and further producers
-remain incompletely migrated. Hierarchy and the voxel bridge continue their live
-reads. These sequences establish an ownership API, not a complete dirty contract,
+root-local TRS outputs; reparent, grip, attach and surface helpers publish their
+changed transform inputs. Other asset writers, animation, brushes and further
+producers remain incompletely migrated. Hierarchy and the voxel bridge continue
+their live reads. These sequences establish an ownership API, not a complete dirty contract,
 entity worklist or performance gain. Remaining producer migration and any bounded
 change journal need subsequent designs; consumers must not skip existing live
 reads based on these sequences yet.
@@ -211,9 +211,27 @@ host cannot resolve and hierarchy retains world output. A helper's boolean
 reports its outcome, not a publication transaction: a completed inner setter
 remains published when a later IK step fails.
 
-These helpers neither flush commands nor change the structural stamp. Independent
-writers in `AttachAuthoredAssetRoot` and `AlignAuthoredAssetSurfaceMount` still need
-publication migration, along with independent authored aim and other producers.
+Reparent and grip helpers neither flush commands nor change the structural stamp.
+
+### Authored Attach and Surface Publication
+
+`AttachAuthoredAssetRoot` publishes its direct LocalTransform assignment only when
+the actual destination TRS bits change. It marks before its existing structural
+flush. That flush publishes supplied Parent/attachment components, including
+equal replacements; carrying LocalTransform through migration does not publish
+it. Later mount restoration owns any further input changes separately. Equal
+reattachment keeps LocalTransform quiet when restoration and hierarchy are also
+unchanged. Early validation errors neither write inputs nor flush queued work.
+
+`AlignAuthoredAssetSurfaceMount` evaluates hierarchy and the marker first, then
+publishes changed world TRS and optional local TRS independently. Each comparison
+uses actual destination bits, including copied scale; unchanged NaN payloads are
+quiet and signed zero differs. Scale and Pivot retain their existing semantics.
+It does not create a missing LocalTransform, flush commands or change membership.
+The final hierarchy call owns descendant outputs. A failed lookup can still
+follow legitimate initial hierarchy publications; false is not a rollback signal.
+
+Independent authored aim, animation and other producers still need migration.
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.
 

@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g/S3h complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -149,9 +149,9 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3f implement selection, GPU records, ECS inventories, hierarchy reuse and component/hierarchy publication. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3h implement selection, GPU records, ECS inventories, hierarchy reuse and component/hierarchy/helper publication. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
-Helper/input, animation, physics, gameplay and asset notifications, entity worklists and incremental extraction remain S3 work. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
+Authored aim, animation, physics, gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
 Cache by spatial bucket, radii, layer transform/topology and PVS. Update shells; recompute after teleports, observer/radius changes, edits and visibility. Count overlapping demand so one observer cannot evict another's content.
 
@@ -334,9 +334,10 @@ Use expanded bounds/occupancy minus conservative margin. Include required dynami
 | S3d | `f0e7726` | Incremental hierarchy propagation | [Design](streamed-rendering-s3d.md) |
 | S3e | `782ca99` | Aggregate component publication API | [Ownership decision](streamed-rendering-s3e.md) |
 | S3f | `53e8203` | Hierarchy output publication | [ECS contract](../engine/ecs.md#hierarchy-ownership) |
-| S3g | This commit | Reparent/grip helper input publication | [ECS contract](../engine/ecs.md#transform-helper-publication) |
+| S3g | `e6d40e8` | Reparent/grip helper input publication | [ECS contract](../engine/ecs.md#transform-helper-publication) |
+| S3h | This commit | Independent attach/surface publication | [ECS contract](../engine/ecs.md#authored-attach-and-surface-publication) |
 
-S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3. Next: independent authored-asset writes in `AttachAuthoredAssetRoot` and `AlignAuthoredAssetSurfaceMount`.
+S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3. Next: authored aim Local rotation publication in `asset_aim.go`.
 
 Decisions to settle before dependent implementation:
 
@@ -393,7 +394,7 @@ env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3c|S3d|S3e|S3f|Tra
 
 ### S3g: Helper input publication
 
-This commit: `feat(hierarchy): publish helper transform changes`. Sol 6.1 TDD
+Commit `e6d40e8`. Sol 6.1 TDD
 and both adversarial reviews completed. Sixteen focused tests protect committed
 input publication, rollback, exact bits, unresolved/cyclic hosts, partial IK
 failure and explicit flush boundaries. Focused checks, root tests, focused race,
@@ -405,6 +406,20 @@ env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3g' -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestTransformHierarchy|TestReparentPreservingWorldTransform|TestS3dHierarchy|TestAttachAuthoredAssetRootUsesAttachmentTransform)' -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3c|S3d|S3e|S3f|S3g|TransformHierarchy|ReparentPreservingWorldTransform|AuthoredAsset|AttachAuthoredAsset)' -count=1
+```
+
+### S3h: Authored attach and surface publication
+
+This commit: `feat(assets): publish attach and surface transforms`. Sol 6.1 TDD
+and both adversarial reviews completed. Eleven focused tests, root tests,
+focused race, ActionGame compilation and editor build passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3h' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS3g|TestAttachAuthoredAssetRootUsesAttachmentTransform$|TestTransformHierarchy$|TestTransformHierarchyIgnoresParentRenderPivot$|TestTransformHierarchyResolvesDeepChainInOnePass$)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3f|S3g|S3h|TransformHierarchy|ReparentPreservingWorldTransform|AuthoredAsset|AttachAuthoredAsset)' -count=1
 ```
 
 Consumer commands for these steps:

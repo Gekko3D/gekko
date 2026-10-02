@@ -25,10 +25,18 @@ func AlignAuthoredAssetSurfaceMount(cmd *Commands, root EntityId, position, norm
 	relativePosition := rootTransform.Rotation.Inverse().Rotate(mount.Transform.Position.Sub(rootTransform.Position))
 	relativeRotation := rootTransform.Rotation.Inverse().Mul(mount.Transform.Rotation).Normalize()
 	rotation := mgl32.QuatBetweenVectors(mgl32.Vec3{0, 0, 1}, normal.Normalize()).Mul(relativeRotation.Inverse()).Normalize()
+	previousWorld := hierarchyBits(rootTransform.Position, rootTransform.Rotation, rootTransform.Scale)
 	rootTransform.Position = position.Sub(rotation.Rotate(relativePosition))
 	rootTransform.Rotation = rotation
+	if hierarchyBits(rootTransform.Position, rootTransform.Rotation, rootTransform.Scale) != previousWorld {
+		cmd.MarkComponentChanged(root, reflect.TypeOf(TransformComponent{}))
+	}
 	if local, _ := cmd.GetComponent(root, reflect.TypeOf(LocalTransformComponent{})).(*LocalTransformComponent); local != nil {
+		previousLocal := hierarchyBits(local.Position, local.Rotation, local.Scale)
 		local.Position, local.Rotation, local.Scale = rootTransform.Position, rootTransform.Rotation, rootTransform.Scale
+		if hierarchyBits(local.Position, local.Rotation, local.Scale) != previousLocal {
+			cmd.MarkComponentChanged(root, reflect.TypeOf(LocalTransformComponent{}))
+		}
 	}
 	TransformHierarchySystem(cmd)
 	return true
