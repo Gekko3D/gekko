@@ -295,6 +295,41 @@ accounting owns retention. Nil state returns zero stats. Temporary construction,
 external borrowers, assets and GPU allocations are excluded; this is not a process
 or GPU memory limit. [Ownership rationale](../roadmaps/streamed-rendering-s2a.md#s2c-cpu-material-table-cache-ownership-decision).
 
+## Retained GPU Geometry Budget
+
+`GpuBufferManager.RetainedVoxelMapBudgetBytes` caps retained assigned geometry
+slots alongside `RetainedVoxelMapBudgetSectors`. The constructor uses
+`DefaultRetainedVoxelMapBudgetBytes` (128 MiB, initially unmeasured). Nonpositive
+values disable only the byte cap; the legacy sector cap remains independent.
+Configuration takes effect during the next complete voxel update.
+
+Each exact retained `XBrickMap` charges once: 256 bytes of entry metadata, actual
+32-byte sector slots, 64-record brick-table blocks, and actual auxiliary/payload
+slots. Slot identities are deduplicated within that map. Charge uses allocated
+snapshots rather than current CPU contents or flags; uniform bricks without a
+payload slot pay no payload charge. Empty/unallocated entries still pay metadata.
+Distinct maps sharing nested sector/brick pointers gain no new ownership guarantee.
+
+Complete updates pin every retained map in `Scene.Objects`, including hidden
+staged uploads, and refresh active LRU age without counting hits. Trim runs before
+orphan cleanup and after uploads. Either enabled cap can evict inactive LRU maps
+through the existing slot-release path. Active excess remains pinned. Retention
+map capacity is pruned; eviction preserves CPU geometry and object materials.
+
+`RetainedVoxelMapStats()` adds `Bytes`, `PinnedBytes`, `MaxBytes` and
+`PressureBytes` to existing counters. Reads sum private scalar accounting without
+slot scans, allocation, trimming or work-counter changes. Retain captures charge
+immediately; touched structure/uploads invalidate only that map and maintenance
+refreshes its completed assigned-slot charge. Arbitrary direct GPU-plumbing map
+writes are not tracked producers. Pins reflect the last maintenance boundary;
+maximum reflects current configuration. Pressure is pinned bytes above an enabled
+maximum, or zero when disabled. Nil manager returns zero stats.
+
+This budget excludes physical buffer/atlas capacity, free/headroom slots, retired
+resources, lookup/object/material buffers, CPU geometry/allocation snapshots and
+temporary accounting. Eviction does not shrink GPU buffers or atlas pages; no
+VRAM/process ceiling is claimed. [Ownership rationale](../roadmaps/streamed-rendering-s2a.md#s2d-retained-gpu-map-byte-ownership-decision).
+
 ## Render Targets and Formats
 
 ### Opaque lighting output

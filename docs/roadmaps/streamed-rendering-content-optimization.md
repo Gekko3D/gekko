@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2c, and S3a–S3r complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2d, and S3a–S3r complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -379,14 +379,15 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3p | `65f4ac5` | Core Camera and derived EntityLOD publication | [ECS contract](../engine/ecs.md#camera-and-entitylod-publication) |
 | S3q | `d748040` | Entity/type invalidations, independent cursors and explicit resync | [ECS contract](../engine/ecs.md#bounded-component-publication-journal) |
 | S3r | `195575d` | Bounded owned snapshots with exact live input comparison | [Renderer contract](../renderer/runtime.md#effective-palette-fingerprints) |
-| S2c | `perf(renderer): bound retained CPU material tables` | Capacity accounting, live pins and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
+| S2c | `60b4477` | Capacity accounting, live pins and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
+| S2d | `perf(renderer): budget retained GPU geometry slots` | Assigned-byte accounting, active pressure and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: account retained GPU allocations by bytes alongside the existing sector cap.
-Resolve assigned-slot ownership and active pressure before implementation. Other
-cache owners and S4 persistence need separate ownership designs. Incremental
-extraction remains separate; no dirty-only extraction is approved.
+Next: resolve bounded persistence transactions for S4, including immutable payload
+paths, complete snapshot ownership and ordering with navigation saves. Other live
+cache owners and incremental extraction remain separate; no dirty-only extraction
+is approved. Preserve public mutation compatibility and conditional proposals.
 
 Decisions to settle before dependent implementation:
 
@@ -666,7 +667,7 @@ outside the new snapshot budget.
 
 ### S2c: Retained CPU material tables
 
-Commit `perf(renderer): bound retained CPU material tables`. Separate Sol 6.1
+Commit `60b4477`. Separate Sol 6.1
 test/implementation agents and root/independent pre/post reviews completed. Five
 focused groups protect configuration, shared pins/pressure, recent-use eviction,
 animated history, borrowed backing and hidden streamed users. Full engine tests,
@@ -688,6 +689,36 @@ uploads reached Ready in two resumed frames, and reveal retained object/map.
 These verify continuity and ownership, not pixel parity or a GPU/process ceiling.
 Existing tests and unrelated changes preserved; macOS warnings exited successfully.
 
+### S2d: Retained GPU geometry slots
+
+Commit `perf(renderer): budget retained GPU geometry slots`. Separate Sol 6.1
+test/implementation agents and root/independent pre/post reviews completed. Five
+groups protect actual slot charge/release, mutable CPU snapshots, shared/hidden
+pins, pressure/LRU and independent caps. Review caught repeated accounting scans:
+private invalidated charges now preserve dedup and avoid idle stats allocation.
+Full engine tests, GPU race, ActionGame/SpaceGame/SpaceSim/voxel sample compilation
+and editor build passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^Test(S2d|RetainedVoxelMap|ReleaseVoxelAuxSlot|PrepareVoxelStructureDirtyState)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -count=1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-s2d-accounting.go
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS2dSmoke.app/Contents/MacOS/gekko-s2d-smoke /tmp/gekko-s2d-smoke.go
+/tmp/GekkoS2dSmoke.app/Contents/MacOS/gekko-s2d-smoke > /tmp/gekko-s2d-smoke.log 2>&1
+```
+
+Manual accounting probe: 100 stats reads for 100 sectors/6,400 aux slots retained
+the same 7,171,456-byte charge; allocation fell from 156,961 bytes/read to zero.
+This narrow observation establishes no frame-time gain. Native smoke exited 0:
+198 frames/6.801s; one-byte cap retained two active maps/13,280 bytes under pressure.
+Hidden uploads refreshed charge by five aux slots, then reached Ready. Removal
+evicted one map without changing CPU geometry; activation missed and two real
+reupload frames reached Ready again. Physical buffers/pages remain outside budget.
+Existing tests and unrelated changes preserved; macOS warnings exited successfully.
+
 Consumer commands for these steps:
 
 ```sh
@@ -695,6 +726,8 @@ Consumer commands for these steps:
 env GOCACHE=/tmp/gekko3d-gocache go test ./... -run '^$'
 # gekko-editor/
 env GOCACHE=/tmp/gekko3d-gocache go build ./...
+# spacegame_go/, spacesim/, examples/testing-vox/
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -run '^$'
 ```
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.

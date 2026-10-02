@@ -172,6 +172,8 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	m.serviceVoxelUploads(scene, func(work voxelUploadWork) bool {
 		return m.executeVoxelUpload(normalBakeContext, work)
 	})
+	// Upload completion can assign new sectors, aux records and payload slots.
+	m.evictRetainedVoxelMaps(activeMaps)
 
 	return recreated
 }
@@ -214,6 +216,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 		if !xbm.StructureDirty && exists {
 			continue
 		}
+		m.markRetainedVoxelMapAccountingDirty(xbm)
 
 		// 1. Detect removed sectors or pointer changes.
 		for k, oldSector := range alloc.Sectors {
@@ -288,10 +291,10 @@ func (m *GpuBufferManager) ActivateRetainedVoxelMap(xbm *volume.XBrickMap) bool 
 		return false
 	}
 	m.ensureRetainedVoxelMaps()
-	m.retainedVoxelMapClock++
+	stamp := m.nextRetainedVoxelMapUse()
 	m.retainedVoxelMapStats.Activations++
 	if entry := m.retainedVoxelMaps[xbm]; entry != nil {
-		entry.LastUse = m.retainedVoxelMapClock
+		entry.LastUse = stamp
 		if _, ok := m.Allocations[xbm]; ok {
 			m.retainedVoxelMapStats.Hits++
 			return true
@@ -308,7 +311,7 @@ func (m *GpuBufferManager) RetainVoxelMap(xbm *volume.XBrickMap) bool {
 		return false
 	}
 	m.ensureRetainedVoxelMaps()
-	m.retainedVoxelMapClock++
+	stamp := m.nextRetainedVoxelMapUse()
 	m.retainedVoxelMapStats.RetainRequests++
 	allocated := false
 	if _, ok := m.Allocations[xbm]; ok {
@@ -321,7 +324,9 @@ func (m *GpuBufferManager) RetainVoxelMap(xbm *volume.XBrickMap) bool {
 		m.retainedVoxelMaps[xbm] = entry
 	}
 	entry.SectorCount = len(xbm.Sectors)
-	entry.LastUse = m.retainedVoxelMapClock
+	entry.LastUse = stamp
+	entry.Bytes = m.retainedVoxelMapBytes(xbm)
+	entry.AccountingDirty = false
 	return allocated
 }
 
@@ -330,56 +335,37 @@ func (m *GpuBufferManager) ReleaseRetainedVoxelMap(xbm *volume.XBrickMap) {
 		return
 	}
 	delete(m.retainedVoxelMaps, xbm)
+	m.retainedVoxelMapPruned = true
+	if len(m.retainedVoxelMaps) == 0 {
+		m.compactRetainedVoxelMaps()
+	}
 }
 
 func (m *GpuBufferManager) RetainedVoxelMapStats() RetainedVoxelMapStats {
 	if m == nil {
 		return RetainedVoxelMapStats{}
 	}
-	m.ensureRetainedVoxelMaps()
 	stats := m.retainedVoxelMapStats
+	stats.Entries, stats.Sectors = 0, 0
+	stats.Bytes, stats.PinnedBytes, stats.MaxBytes, stats.PressureBytes = 0, 0, 0, 0
+	if m.RetainedVoxelMapBudgetBytes > 0 {
+		stats.MaxBytes = uint64(m.RetainedVoxelMapBudgetBytes)
+	}
 	for _, entry := range m.retainedVoxelMaps {
 		if entry == nil {
 			continue
 		}
 		stats.Entries++
 		stats.Sectors += entry.SectorCount
+		stats.Bytes = addRetainedVoxelBytes(stats.Bytes, entry.Bytes)
+		if entry.Pinned {
+			stats.PinnedBytes = addRetainedVoxelBytes(stats.PinnedBytes, entry.Bytes)
+		}
+	}
+	if stats.MaxBytes != 0 && stats.PinnedBytes > stats.MaxBytes {
+		stats.PressureBytes = stats.PinnedBytes - stats.MaxBytes
 	}
 	return stats
-}
-
-func (m *GpuBufferManager) evictRetainedVoxelMaps(activeMaps map[*volume.XBrickMap]bool) {
-	if m == nil || len(m.retainedVoxelMaps) == 0 || m.RetainedVoxelMapBudgetSectors <= 0 {
-		return
-	}
-	for {
-		stats := m.RetainedVoxelMapStats()
-		if stats.Sectors <= m.RetainedVoxelMapBudgetSectors {
-			return
-		}
-		var victimMap *volume.XBrickMap
-		var victimEntry *retainedVoxelMapEntry
-		for xbm, entry := range m.retainedVoxelMaps {
-			if xbm == nil || entry == nil {
-				continue
-			}
-			if activeMaps != nil && activeMaps[xbm] {
-				continue
-			}
-			if victimEntry == nil || entry.LastUse < victimEntry.LastUse {
-				victimMap = xbm
-				victimEntry = entry
-			}
-		}
-		if victimMap == nil {
-			return
-		}
-		delete(m.retainedVoxelMaps, victimMap)
-		if alloc := m.Allocations[victimMap]; alloc != nil && (activeMaps == nil || !activeMaps[victimMap]) {
-			m.releaseVoxelMapAllocation(victimMap, alloc)
-		}
-		m.retainedVoxelMapStats.Evictions++
-	}
 }
 
 const objectParamsSizeBytes = 128
@@ -431,6 +417,9 @@ func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, allo
 		}
 	}
 	delete(m.Allocations, xbm)
+	if _, retained := m.retainedVoxelMaps[xbm]; retained {
+		m.retainedVoxelMapPruned = true
+	}
 	delete(m.retainedVoxelMaps, xbm)
 }
 

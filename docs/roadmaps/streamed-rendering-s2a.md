@@ -175,3 +175,47 @@ Pinning follows S2's existing live-user policy while bounding historical phases.
 Hash semantics, mutable asset compatibility, streaming readiness, GPU allocation
 and table mutation behavior remain unchanged. Use the full cache-ownership workflow;
 canonical behavior belongs in renderer runtime docs.
+
+## S2d: Retained GPU map byte ownership decision
+
+Extend the existing `GpuBufferManager` retained-map owner with
+`RetainedVoxelMapBudgetBytes int64`. The constructor selects
+`DefaultRetainedVoxelMapBudgetBytes` (128 MiB, initially unmeasured). Nonpositive
+values disable this cap independently of the existing sector cap. Keep legacy
+sector configuration and request/hit/miss/eviction semantics.
+
+Charge each retained map once: 256 bytes of retention-entry metadata, assigned
+32-byte sector records, assigned 64-record brick-table blocks, and actual assigned
+auxiliary/payload slots. Use allocation snapshots and slot mappings, not mutable
+CPU sector/brick counts. Uniform bricks without payload slots cost no payload
+bytes. Unallocated/empty retained maps still have metadata charge. Exact shared
+`XBrickMap` users reuse one allocation and entry. Sharing nested sector/brick
+pointers across distinct maps gains no new ownership guarantee.
+
+During complete voxel updates, pin retained maps present in all `Scene.Objects`,
+including hidden staged uploads. Refresh active use without incrementing cache
+hits. Evict inactive LRU entries when either enabled cap is exceeded; preserve
+active excess and expose byte pressure. Trim before orphan cleanup to reclaim
+slots before uploads, and after uploads to account newly assigned active slots.
+Reuse the existing allocation release path and rebuild pruned retention maps.
+
+Add value stats `Bytes`, `PinnedBytes`, `MaxBytes` and `PressureBytes`; private
+ownership controls policy. Stats reads never trim or advance work counters.
+`MaxBytes` follows current configuration; pins describe the last maintenance
+boundary. Disabled byte caps report zero maximum
+and pressure. Configuration applies at the next update. Retention eviction does
+not shrink GPU buffers or atlas pages. Buffer headroom/free capacity, lookup and
+object/material buffers, CPU geometry/snapshots and temporary accounting are
+excluded. This is an assigned-slot retention budget, not a VRAM/process ceiling.
+
+Capture private per-entry charges on retain. Structure processing and geometry
+uploads invalidate the touched map's charge; completed maintenance refreshes it
+once using exact assigned-slot deduplication. Inactive and unchanged active maps
+reuse their charge. Stats observe completed manager assignments through scalar
+accounting; arbitrary direct writes to GPU plumbing maps are not tracked producers.
+This avoids rescanning all warm bricks and allocating accounting sets on reads.
+
+This additive owner policy follows S2 live-user pinning. Capping physical buffer
+capacity would require different allocation/admission architecture. Shader layouts,
+normal bytes, upload readiness, collision and content formats remain unchanged.
+Use separate test/implementation agents and independent pre/post reviews.

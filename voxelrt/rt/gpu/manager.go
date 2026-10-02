@@ -489,15 +489,20 @@ type GpuBufferManager struct {
 	VoxelPayloadBytesAvoided       int
 	VoxelRuntimeNormalBakeDuration time.Duration
 	RetainedVoxelMapBudgetSectors  int
+	RetainedVoxelMapBudgetBytes    int64
 	retainedVoxelMapClock          uint64
+	retainedVoxelMapPruned         bool
 	retainedVoxelMapStats          RetainedVoxelMapStats
 	retiredBuffers                 []retiredBuffer
 	retiredBindGroups              []retiredBindGroup
 }
 
 type retainedVoxelMapEntry struct {
-	SectorCount int
-	LastUse     uint64
+	SectorCount     int
+	LastUse         uint64
+	Pinned          bool
+	Bytes           uint64
+	AccountingDirty bool
 }
 
 type RetainedVoxelMapStats struct {
@@ -509,6 +514,10 @@ type RetainedVoxelMapStats struct {
 	RetainRequests          int
 	RetainRequestsAllocated int
 	Evictions               int
+	Bytes                   uint64
+	PinnedBytes             uint64
+	MaxBytes                uint64
+	PressureBytes           uint64
 }
 
 type retiredBuffer struct {
@@ -583,6 +592,7 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 		VoxelUploadBytesPerFrame:      DefaultVoxelUploadBudget().MaxBytes,
 		VoxelUploadBricksPerFrame:     DefaultVoxelUploadBudget().MaxBricks,
 		RetainedVoxelMapBudgetSectors: DefaultRetainedVoxelMapBudgetSectors,
+		RetainedVoxelMapBudgetBytes:   DefaultRetainedVoxelMapBudgetBytes,
 		VoxelPayloadPageSize:          pageSize,
 		VoxelPayloadPageCount:         MaxVoxelAtlasPages,
 		VoxelPayloadBricks:            pageSize / volume.BrickSize,

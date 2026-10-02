@@ -11,6 +11,7 @@ func (m *GpuBufferManager) executeVoxelUpload(ctx voxelNormalBakeContext, work v
 	}
 	key := work.sectorCoordinate()
 	xbm := work.object.XBrickMap
+	m.markRetainedVoxelMapAccountingDirty(xbm)
 	sector := xbm.Sectors[key]
 	info := m.SectorToInfo[sector]
 	pointers := m.Allocations[xbm].Bricks[key]
