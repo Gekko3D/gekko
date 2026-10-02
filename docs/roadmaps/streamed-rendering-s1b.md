@@ -268,6 +268,47 @@ byte and failed-Stop coverage where it already protects the contract. Separate
 Sol 6.1 test/implementation agents and independent pre/post reviews precede focused
 race, full engine/consumer checks and a native paused-upload/resume fixture.
 
+## S1f: Commit queue ownership decision pending
+
+The remaining proxy-first channel drain can starve full detail and inherits
+worker completion order. The next batch should order the ready frontier by live
+S1d priority, first queued age and signed coordinate/kind ties, while retaining
+count/time budgets, exact cancellation acknowledgements and payload leases.
+Arrivals after the captured frontier wait for the next update. This does not
+bound one large chunk's main-thread commit.
+
+Recommended architecture: transfer completed results into one main-thread owned
+ready queue. Workers retain their existing buffered publication channels; queued
+results keep pending-byte and S1e admission ownership until consumed or drained.
+Stop drains both channels and the ready queue. Public prepared-depth metrics count
+both owners. Queue records never retain ECS rows; workers never mutate the queue.
+This also provides an owner for later resumable commit work.
+
+Alignment is required before implementation. Existing tests explicitly require
+uncommitted results to remain in `PreparedLoads`, including
+`TestStreamedRuntimeCommitBudgetLeavesPreparedChunksQueued` and S2b/S1d pressure
+fixtures. A private ready queue would require replacing those physical channel
+depth assertions with total prepared-depth, retained-credit and actual residency
+assertions. The current task requires preserving existing tests.
+
+Alternative: keep payloads in the channels and reorder a fixed buffered frontier
+under a publication mutex. A condition variable can preserve queue depths and
+wake runtime publishers after consumption, but it requires restricting direct
+channel access to quiescent main-thread use. Arbitrary direct receives do not
+notify blocked publishers; unbuffered replacements cannot supply a sortable
+frontier. No repository consumer currently accesses these channels, but their
+public exposure leaves that compatibility boundary unspecified. Introducing the
+restriction without alignment would turn an implementation choice into a new
+API contract.
+
+Root confidence is Medium until the channel compatibility and permitted test
+migration are settled; the Human Alignment Gate applies. No S1f production or
+tests have changed. After alignment, use separate Sol 6.1
+test/implementation agents and independent pre/post reviews. Minimal coverage
+should protect real full/proxy ordering, sustained-fallback fairness, cancellation
+and ownership through deferred commits/Stop, followed by focused race and the
+usual engine/consumer boundary checks.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

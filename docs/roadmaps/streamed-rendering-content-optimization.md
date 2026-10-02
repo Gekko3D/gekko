@@ -391,13 +391,17 @@ This workflow does not independently authorize tests, delegation or commits.
 | S4c | `f045d01` | Exclusive byte-accounted transactions, dirty pins and durable checkpoints | [Persistence decision](streamed-rendering-s4.md#s4c-bounded-asynchronous-normal-unload) |
 | S2e | `d425c88` | Terminal dispatch cancellation, shared leases and failed Stop recovery | [Cancellation decision](streamed-rendering-s2b.md#s2e-obsolete-preparation-cancellation) |
 | S1d | `e07dba5` | Shared full/proxy ordering, waiting age and current/PVS classification | [Priority decision](streamed-rendering-s1b.md#s1d-deterministic-preparation-priority) |
-| S1e | This delivery commit | Combined CPU/GPU admission, compatibility pressure and separate retirement debt | [Admission decision](streamed-rendering-s1b.md#s1e-combined-streaming-admission) |
+| S1e | `1c72078` | Combined CPU/GPU admission, compatibility pressure and separate retirement debt | [Admission decision](streamed-rendering-s1b.md#s1e-combined-streaming-admission) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
 Next: remaining S1 scheduling/commit bounds, then S2 queues/cache owners and S3 notifications/extraction
 in delivery order. No dirty-only extraction is approved. Preserve public mutation
 compatibility and conditional proposals.
+
+S1f is held at the [commit queue ownership decision](streamed-rendering-s1b.md#s1f-commit-queue-ownership-decision-pending):
+choose private ready ownership with an explicitly authorized migration of channel
+depth assertions, or settle the exposed completion-channel compatibility contract.
 
 Decisions to settle before dependent implementation:
 
@@ -869,7 +873,7 @@ warnings exited successfully.
 
 ### S1e: Combined streaming admission
 
-Commit: this S1e delivery. Separate Sol 6.1 test/implementation agents and
+Commit `1c72078`. Separate Sol 6.1 test/implementation agents and
 root/independent pre/post reviews completed. Admission spans actual full/proxy
 dispatch, queued result and initial qualified renderer completion. Hidden Ready
 children permit limit-one refinement. Compatibility work exposes pressure;
