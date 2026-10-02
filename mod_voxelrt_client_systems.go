@@ -3,6 +3,7 @@ package gekko
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"time"
 	"unsafe"
@@ -371,7 +372,11 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		} else {
 			delete(state.entityLODSelections, entityId)
 		}
+		previousSharedGeometry := vox.SharedGeometry
 		vox.NormalizeGeometryRefs()
+		if vox.SharedGeometry != previousSharedGeometry {
+			cmd.MarkComponentChanged(entityId, reflect.TypeOf(VoxelModelComponent{}))
+		}
 
 		geometryID, geometryAsset, ok := ResolveVoxelGeometry(server, vox)
 		if !ok || geometryAsset == nil || geometryAsset.XBrickMap == nil {
@@ -482,7 +487,13 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 		// Compute and apply Pivot
 		pivot := entityLODRenderPivot(vox, geometryAsset, scaleAdjustX, scaleAdjustY, scaleAdjustZ)
+		previousPivot := transform.Pivot
 		transform.Pivot = pivot
+		if math.Float32bits(transform.Pivot[0]) != math.Float32bits(previousPivot[0]) ||
+			math.Float32bits(transform.Pivot[1]) != math.Float32bits(previousPivot[1]) ||
+			math.Float32bits(transform.Pivot[2]) != math.Float32bits(previousPivot[2]) {
+			cmd.MarkComponentChanged(entityId, reflect.TypeOf(TransformComponent{}))
+		}
 
 		transformChanged := false
 		if obj.Transform.Position != transform.Position {

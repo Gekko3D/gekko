@@ -142,6 +142,8 @@ final Local poses; physics publishes changed World poses. Accepted moving-brush
 motion publishes its changed World and existing Local poses. The shared grounded
 actor writer publishes its changed World and Local poses for motors and riders.
 The ground visual helper publishes changed direct-child Local Y offsets.
+Renderer/physics bridges publish changed geometry-reference normalization;
+the renderer bridge publishes its changed derived Pivot.
 Other transform and renderer-input producers remain incompletely migrated.
 Hierarchy and the voxel bridge continue their live reads.
 These sequences establish an ownership API, not a complete dirty contract,
@@ -362,6 +364,30 @@ The helper creates no components, invokes no hierarchy and does not flush or
 change membership. Pending additions remain invisible; pending removal or
 replacement leaves the current component writable until flush. Later hierarchy
 owns World propagation. Ground probes and smoothing retain their behavior.
+
+### Voxel Bridge Publication
+
+`voxelRtSystem` and `VoxPhysicsPreCalcSystem` immediately publish
+VoxelModelComponent when their existing normalization changes committed
+SharedGeometry. Compare the actual destination before normalization. Publication
+precedes asset-resolution failure, LOD return or physics build reuse when those
+paths follow normalization. Existing nil-server and renderer hidden-entity
+filters remain; already-normalized and zero references publish nothing. Geometry
+precedence and copy-only edit/destruction normalization retain their behavior.
+`ResolveVoxelGeometry` has no ECS owner and does not publish supplied pointers.
+
+At its existing derived Pivot assignment, `voxelRtSystem` publishes TransformComponent
+only when actual destination Pivot bits change. Equal NaN payloads are quiet;
+signed-zero and changed NaN payloads publish. Unchanged TRS does not affect that
+comparison. Source-space center/custom/corner and LOD adjustment formulas, effective
+scale, renderer object comparisons and hierarchy Pivot exclusion are unchanged.
+Failed geometry and sprite LOD returns that precede Pivot assignment do not write
+or publish Pivot.
+
+Neither annotation flushes or changes membership. Pending additions stay invisible;
+pending removal/replacement remains current until flush. PhysicsModel output
+commands retain their separate structural publication at flush. Collision data,
+snapshot ownership and cache policy are unchanged.
 
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.

@@ -1,6 +1,8 @@
 package gekko
 
 import (
+	"reflect"
+
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -471,7 +473,11 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 				runtimeMap = obj.XBrickMap
 			}
 		}
+		previousSharedGeometry := vmc.SharedGeometry
 		geometryID, geometryAsset, hasGeometry := ResolveVoxelGeometry(server, vmc)
+		if vmc.SharedGeometry != previousSharedGeometry {
+			cmd.MarkComponentChanged(eid, reflect.TypeOf(VoxelModelComponent{}))
+		}
 		var xbm *volume.XBrickMap
 		if runtimeMap != nil {
 			xbm = runtimeMap

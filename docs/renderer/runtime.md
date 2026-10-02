@@ -187,6 +187,13 @@ every pass, including empty inventories. Animation stays in `Update` and
 hierarchy in `PostUpdate`; their results reach extraction at the existing
 `PreRender` boundary after normal command flushes.
 
+Core sync publishes changed committed geometry-reference normalization and
+derived Transform Pivot at their existing assignments. Physics preparation also
+publishes its committed normalization; neither changes geometry precedence,
+collision, renderer object comparisons or command timing. See the
+[voxel bridge publication contract](../engine/ecs.md#voxel-bridge-publication).
+Live inputs still run through the bridge every pass.
+
 Hierarchy now reuses storage-owned topology and skips child composition when
 exact live parent/local/output TRS bits match. Every invocation still reads
 current values, detects direct Parent edits before composition and repairs
