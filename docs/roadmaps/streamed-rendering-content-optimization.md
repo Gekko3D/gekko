@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a–S3q complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a–S3r complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -149,7 +149,7 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3q implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication and a bounded publication journal. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3r implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal and live-validated material fingerprint reuse. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
 Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
@@ -377,15 +377,16 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3n | `1c702e8` | Direct-child ground visual Local publication | [ECS contract](../engine/ecs.md#ground-visual-publication) |
 | S3o | `a1e315b` | Geometry-reference normalization and derived Pivot publication | [ECS contract](../engine/ecs.md#voxel-bridge-publication) |
 | S3p | `65f4ac5` | Core Camera and derived EntityLOD publication | [ECS contract](../engine/ecs.md#camera-and-entitylod-publication) |
-| S3q | `feat(ecs): add bounded publication journal` | Entity/type invalidations, independent cursors and explicit resync | [ECS contract](../engine/ecs.md#bounded-component-publication-journal) |
+| S3q | `d748040` | Entity/type invalidations, independent cursors and explicit resync | [ECS contract](../engine/ecs.md#bounded-component-publication-journal) |
+| S3r | `perf(renderer): reuse effective palette fingerprints` | Bounded owned snapshots with exact live input comparison | [Renderer contract](../renderer/runtime.md#effective-palette-fingerprints) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: remove repeated effective-palette fingerprint work using bounded, independently
-owned input snapshots and live comparison. Resolve cache ownership before tests
-using the full architecture workflow. Preserve mutable asset aliases, elapsed-time
-animation and live renderer repair. Incremental extraction remains a separate
-architecture step; no dirty-only extraction is approved.
+Next: bound the existing historical CPU material-table cache by accounted bytes,
+pin live object keys and evict inactive LRU tables after complete sync. Use the full
+architecture workflow; preserve table backing, sharing and live input compatibility.
+Remaining GPU retention accounting and S4 persistence have separate ownership
+designs. Incremental extraction remains separate; no dirty-only extraction is approved.
 
 Decisions to settle before dependent implementation:
 
@@ -613,7 +614,7 @@ continues and no performance gain is claimed.
 
 ### S3q: Bounded component publication journal
 
-Commit subject `feat(ecs): add bounded publication journal`. The
+Commit `d748040`. The
 [ECS contract](../engine/ecs.md#bounded-component-publication-journal) owns the API;
 [S3q decision](streamed-rendering-s3e.md#s3q-bounded-publication-journal-decision)
 owns the rationale. Separate Sol 6.1 test/implementation agents, root reviews and
@@ -632,6 +633,36 @@ Existing tests preserved. macOS linker/module stat-cache warnings exited
 successfully. Metadata-only main-thread changes needed no visual/GPU check.
 History cap excludes returned batches and total ECS memory; structural fallback
 and live extraction remain required. No frame-time gain claimed.
+
+### S3r: Effective-palette fingerprint reuse
+
+Commit subject `perf(renderer): reuse effective palette fingerprints`.
+[Renderer contract](../renderer/runtime.md#effective-palette-fingerprints) owns the
+behavior; [S3r decision](streamed-rendering-s3c.md#s3r-effective-palette-fingerprint-reuse-decision)
+owns the rationale. Separate Sol 6.1 test/implementation agents, root and
+independent pre/post reviews completed. Review caught public diagnostics controlling
+admission; private accounting now owns it. Eight focused groups, existing bridge,
+material/LOD/streamed checks, full engine tests, focused race, ActionGame, SpaceGame
+and voxel sample compilation, and editor build passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(S3r|S3c|VoxelRtSystem|StreamedVoxel|EntityLOD|BuildMaterialTable|EffectiveVoxelPaletteAt)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3r|S3c|VoxelRtSystem|StreamedVoxel|EntityLOD|BuildMaterialTable|EffectiveVoxelPaletteAt)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS3rSmoke.app/Contents/MacOS/gekko-s3r-smoke /tmp/gekko-s3r-smoke.go
+/tmp/GekkoS3rSmoke.app/Contents/MacOS/gekko-s3r-smoke > /tmp/gekko-s3r-smoke.log 2>&1
+```
+
+Native smoke exited 0: 193 frames/6.632s; three 60-frame idle holds at two snapshots,
+9,459 accounted bytes, no additional idle hashes. Aliased property/frame edits,
+elapsed animation, hierarchy/destination repair and diagnostic reset passed.
+Zero upload budget held a hidden streamed target; two resumed upload frames reached
+Ready, then reveal preserved object/map. CUA showed the rendered colored scene.
+These establish continuity/work contracts, not pixel parity or measured speedup.
+Existing tests preserved; macOS linker/module stat-cache warnings exited successfully.
+Live extraction remains; the original material-table cache and other owners remain
+outside the new snapshot budget.
 
 Consumer commands for these steps:
 

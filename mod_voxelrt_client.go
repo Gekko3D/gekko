@@ -155,6 +155,16 @@ type VoxelRtState struct {
 	underwaterInput                   app_rt.UnderwaterInput
 	underwaterStrength                float32
 	bridgeFeatures                    voxelRtBridgeRegistry
+
+	// Fingerprint counters measure original hash executions and accounted,
+	// state-owned snapshot data; they do not measure total bridge work or memory.
+	VoxelMaterialFingerprintBuildCount uint64
+	VoxelMaterialFingerprintCount      int
+	VoxelMaterialFingerprintBytes      uint64
+	materialFingerprintServer          *AssetServer
+	materialFingerprints               map[AssetId]voxelMaterialFingerprint
+	materialFingerprintBytes           uint64
+	materialFingerprintsPruned         bool
 }
 
 type runtimeVoxelEdit struct {

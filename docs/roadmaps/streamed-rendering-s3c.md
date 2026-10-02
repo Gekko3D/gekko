@@ -145,3 +145,34 @@ Real-GPU `/tmp/gekko-s3c-smoke.go`, `/tmp/GekkoS3cSmoke.app`: exit 0, 909 frames
 Native checks: ancestor motion, 64 same-archetype additions, replacement/removal/recycled rows, direct writes, late geometry, hiding, destination replacement and invalidation. Value changes update objects without inventory rebuilds. Growth: 8→72 candidates, one rebuild. Streamed proxy refined/coarsened; final revision 97, builds 12, candidates 69. Buffer replacement republishes/refreshes bindings without CPU rebuild; invalidation rebuilds/publishes without membership changes. CUA showed final coarsened rendering. Log: `/tmp/gekko-s3c-smoke.log`.
 
 Established membership/value compatibility and native continuity, not pixel parity, frame-time gain or memory ceiling. All candidates still process live values. Complete value notifications, incremental extraction and future layer/transform selection remain S3 work.
+
+## S3r: Effective-palette fingerprint reuse decision
+
+Extend bridge reuse to derived material keys while retaining every candidate's
+live geometry, transform, visibility, LOD and streamed-ticket processing. Per-frame
+asset reads and elapsed-time palette evaluation remain. Reuse the original
+fingerprint only after exact comparison with an independently owned snapshot of
+all fingerprint inputs. Compare floating-point bits; deeply copy primitive
+property maps, animation arrays/metadata, overrides and string backing.
+`SurfaceMaterials` is excluded because it is not a material-table input.
+
+`VoxelRtState` owns snapshots by palette ID and current `AssetServer` identity.
+Remove unused snapshots after each sync, rebuild maps when pruning, release empty
+ownership and clear on server replacement. Ordinary hidden and successful sprite
+LOD candidates do not use object materials; hidden streamed objects still do.
+The existing per-frame palette deduplication remains.
+
+Charge retained snapshot data and conservative metadata against an 8 MiB budget
+before copying, with bounded arithmetic. Oversized, over-budget or unsupported
+property values use the original per-frame fingerprint path without snapshots.
+Do not retain arbitrary mutable interface values. No oversized exception or new
+asset immutability restriction is introduced. The budget excludes original assets,
+temporary effective palettes, the existing material-table cache and GPU memory.
+
+Notification-only reuse cannot preserve untracked public writes. Mandatory asset
+setters or immutable getters need consumer migration and are separate ownership
+decisions. Exact live comparison permits this permanent derived-key optimization
+within the existing API. Hash semantics, material-table construction, collision
+semantics and shader/upload behavior remain unchanged. Operational counters measure
+actual fingerprint computations and accounted snapshot ownership; no frame-time
+or pixel-parity claim follows. Canonical contract belongs in renderer runtime docs.

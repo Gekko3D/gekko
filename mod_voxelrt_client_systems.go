@@ -339,6 +339,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	if state == nil || state.RtApp == nil {
 		return
 	}
+	state.beginMaterialFingerprintSync(server)
 	state.ensureMaterialCaches()
 	streamedMarkers := state.beginStreamedVoxelSync(cmd)
 	state.runtimeSprites = state.runtimeSprites[:0]
@@ -568,6 +569,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		return true
 	})
 
+	state.pruneMaterialFingerprints(frameMaterialKeys)
 	for eid, obj := range state.instanceMap {
 		if !currentObjectEntities[eid] {
 			state.RtApp.Scene.RemoveObject(obj)

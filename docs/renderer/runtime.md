@@ -237,6 +237,40 @@ immediate structural mutation or manual flush during iteration is unsupported.
 | `Sync Decals` | registered after-batch bridge system / `voxelRtDecalsBridgeSystem` | retained `DecalInstance` values converted to 80-byte GPU records and grouped by existing sprite-atlas key | skipped and cleared unless the consumer registered `DecalFeature`; one instance buffer and one draw per non-empty atlas batch |
 | `Sync Skybox` | registered pre-update bridge system / `syncSkybox` plus `buildSkyboxBridgeInput` adapter | `SkyboxResources` / `SkyboxLayerInput` input | GPU application and GPU-layer packing are now owned by `feature-skybox-update`; the remaining ECS-to-renderer conversion is isolated in a tested bridge helper |
 
+## Effective Palette Fingerprints
+
+Core instance sync reads each used object palette and evaluates its animations
+for current elapsed time every frame. Per-frame palette deduplication remains.
+`VoxelRtState` reuses the original material fingerprint only when all effective
+fingerprint inputs exactly match an independently owned previous snapshot.
+Floating-point comparisons preserve bits; property comparisons preserve dynamic
+types and map membership. Same-ID edits through aliased material/animation data
+remain visible. `SurfaceMaterials` is not a material-table input.
+
+Snapshots belong to the current state and `AssetServer` identity. They own their
+maps, slices and string backing. Server replacement clears them; complete sync
+prunes unused palettes and releases empty ownership. Ordinary hidden and
+successful sprite-LOD entities do not use object material snapshots; hidden
+streamed objects do. Geometry, transforms, metadata, LOD, camera/lights, streamed
+adoption and existing destination repair still run on live inputs.
+
+`VoxelMaterialFingerprintBudgetBytes` is 8 MiB of conservatively accounted
+retained snapshot data/metadata. Support and charge are checked before copying.
+Oversized, over-budget or unsupported property inputs use the original per-frame
+hash path and release any prior snapshot for that ID. Supported property values
+are `float32`, `float64`, `int` and `string`. Admission has no fairness guarantee;
+unused entries can delay new admission until pruning at the end of that frame.
+The budget excludes assets, temporary effective palettes, historical material
+tables and GPU allocations; it is not a process-memory ceiling.
+
+Diagnostics: `VoxelMaterialFingerprintBuildCount` counts actual original hash
+executions through the state key path, including fallback;
+`VoxelMaterialFingerprintCount` and `VoxelMaterialFingerprintBytes` report current
+retained snapshots and accounted bytes. Private accounting controls admission.
+Exact comparison remains proportional to palette data; fewer hashes establish
+no measured frame-time gain. Hash semantics and material-table construction are
+unchanged. Rationale: [S3r decision](../roadmaps/streamed-rendering-s3c.md#s3r-effective-palette-fingerprint-reuse-decision).
+
 ## Render Targets and Formats
 
 ### Opaque lighting output

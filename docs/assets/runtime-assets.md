@@ -60,6 +60,13 @@ The most important record types are:
 
 Public handles such as `Mesh` and `Material` are thin wrappers around `AssetID`.
 
+`GetVoxelPalette` returns a value whose nested maps, slices and animation pointers
+can alias server storage. Palette IDs alone therefore establish no immutable
+content revision. Core renderer sync preserves these mutable inputs with live
+comparison against independently owned, bounded fingerprint snapshots; see
+[renderer ownership](../renderer/runtime.md#effective-palette-fingerprints).
+Mutate aliased palette data on the main thread, not concurrently with extraction.
+
 ## Common Creation Paths
 
 ### Voxel models and palettes

@@ -486,7 +486,7 @@ func voxelPaletteAnimationFrameAt(animation VoxelPaletteAnimation, elapsed float
 func (s *VoxelRtState) materialTableKey(paletteID AssetId, gekkoPalette *VoxelPaletteAsset) materialTableCacheKey {
 	return materialTableCacheKey{
 		PaletteID:   paletteID,
-		Fingerprint: materialTableFingerprint(gekkoPalette),
+		Fingerprint: s.materialFingerprint(paletteID, gekkoPalette),
 	}
 }
 
