@@ -319,6 +319,39 @@ Use expanded bounds/occupancy minus conservative margin. Include required dynami
 6. **Remaining frame work:** R2 and E4. R1 is independently opt-in; R3/E5 remain later experiments.
 7. **Packaging:** C2 only when current manifest/file organization demonstrably limits scale and its architecture decision changes.
 
+### Implementation workflow
+
+From 2026-10-02, use this workflow for remaining delivery. It replaces the earlier
+separate-agent review sequence for routine changes; technical order and acceptance
+criteria above remain unchanged.
+
+- Scope one coherent batch around a shared observable contract and ownership
+  boundary. Group related publication writers that use the established pattern.
+  Keep extraction architecture and other ownership changes in separate batches.
+- Root names the design, affected files, invariants, corner cases and smallest
+  useful coverage before editing. Read the owning docs and inspect current code.
+- With explicit test and delegation authorization, use one `gpt-6.1-sol` subagent.
+  It writes minimal functionality tests and stops at a relevant RED result with
+  production unchanged. Root reviews coverage and assumptions, then resumes the
+  same agent to implement against the reviewed, frozen tests until GREEN.
+- Root reviews the final diff for missed behavior, ownership violations and
+  compatibility. Iterate on concrete findings; do not require a second agent for
+  routine application of an established pattern.
+- Retain the full workflow for changes to cache ownership, concurrency, streaming
+  cancellation, codecs/format compatibility, collision behavior or extraction
+  architecture: separate test and implementation agents, with independent
+  adversarial reviews before and after implementation. Use `gpt-6.1-sol` for all
+  subagents.
+- Run focused checks while developing. Run full root tests and affected consumer
+  builds once at the batch boundary. Add race or visual/GPU checks when the changed
+  contract warrants them; repeat broader checks only after relevant changes.
+- Update lasting contracts once in canonical docs. Add a brief roadmap entry with
+  the commit, result, commands and limits, then commit the completed batch. Do not
+  create per-writer reports or duplicate test matrices/review transcripts.
+
+Test changes remain subject to [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
+This workflow does not independently authorize tests, delegation or commits.
+
 ### Completed work
 
 | Step | Commit | Change | Design or canonical contract |
@@ -340,9 +373,16 @@ Use expanded bounds/occupancy minus conservative margin. Include required dynami
 | S3j | `977786e` | Authored animation final pose publication | [ECS contract](../engine/ecs.md#authored-animation-publication) |
 | S3k | `e825681` | Physics World publication | [ECS contract](../engine/ecs.md#physics-world-publication) |
 | S3l | `21aff15` | Accepted moving brush World/Local publication | [ECS contract](../engine/ecs.md#moving-brush-motion-publication) |
-| S3m | This commit | Shared grounded actor World/Local publication | [ECS contract](../engine/ecs.md#grounded-actor-publication) |
+| S3m | `11af4d9` | Shared grounded actor World/Local publication | [ECS contract](../engine/ecs.md#grounded-actor-publication) |
 
-S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3. Next: direct-child ground visual Local publication in `ApplyCharacterVisualGroundOffsetToChildren` (`character_grounding.go`).
+S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
+
+Next: scope a batch of remaining related S3 publication writers, starting with
+direct-child ground visual Local publication in
+`ApplyCharacterVisualGroundOffsetToChildren` (`character_grounding.go`). Include
+other writers only when code inspection confirms the same contract and ownership
+boundary. Live extraction remains required; incremental extraction is a separate
+architecture step.
 
 Decisions to settle before dependent implementation:
 
@@ -489,7 +529,7 @@ env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3k|S3l|MovingBrush
 
 ### S3m: Shared grounded actor publication
 
-This commit: `feat(grounding): publish actor poses`. The shared writer publishes
+Commit `11af4d9`: `feat(grounding): publish actor poses`. The shared writer publishes
 changed actor World and existing Local independently; the
 [ECS contract](../engine/ecs.md#grounded-actor-publication) owns the details.
 Six focused test groups, root tests, focused race, ActionGame compilation and
@@ -514,6 +554,10 @@ env GOCACHE=/tmp/gekko3d-gocache go build ./...
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 
-Verify each slice with smallest relevant build/check and manual scene: fixed-view parity, edited seams, instance isolation, delayed handoff, save/reload and edited locomotion. User authorized functionality tests/tests-first subagents for implementation. Other test changes follow [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
+Verify each batch with the smallest relevant checks. Select manual scenes for the
+changed contract: fixed-view parity, edited seams, instance isolation, delayed
+handoff, save/reload or edited locomotion. Apply the [implementation workflow](#implementation-workflow).
+User authorized functionality tests/tests-first subagents for this implementation.
+Other test changes follow [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
 
 Related Gekko plans: [island streaming](../content/island-streaming.md), [XBrickMap hot path](../renderer/xbrickmap-hotpath-optimization-plan.md), [uniform materials](../renderer/xbrickmap-uniform-material-plan.md), [quality-preserving optimization](../renderer/quality-preserving-optimization-plan.md), and [renderer change guide](../renderer/change-guide.md).
