@@ -61,6 +61,8 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
   - incremental topology and exact TRS comparisons owned by shared ECS storage
   - immediate propagation for direct calls as well as the scheduled stage
   - immediate component publication for changed root-local and derived world TRS
+  - committed Parent/local publication in reparent helpers; grip helpers own
+    their input writes under the [ECS helper contract](ecs.md#transform-helper-publication)
 - Important:
   - every invocation reads current Parent and TRS values; unchanged child inputs
     and outputs reuse composition, while direct child-world edits are repaired

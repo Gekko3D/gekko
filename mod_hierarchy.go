@@ -41,6 +41,9 @@ func ReparentPreservingWorldTransform(cmd *Commands, entity, newParent EntityId)
 		parent.Entity = previousParent
 		return false
 	}
+	if parent.Entity != previousParent {
+		cmd.MarkComponentChanged(entity, reflect.TypeOf(Parent{}))
+	}
 	TransformHierarchySystem(cmd)
 	return true
 }

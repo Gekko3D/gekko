@@ -136,7 +136,8 @@ only and retain no component values, pointers, queries or entity tombstones.
 
 Direct public-field writes remain live but require their owner to explicitly
 mark them for publication. Hierarchy publishes its changed derived world and
-root-local TRS outputs; its input owners, animation, brushes and other producers
+root-local TRS outputs; reparent and grip transform helpers publish their changed
+Parent/local inputs. Other asset writers, animation, brushes and further producers
 remain incompletely migrated. Hierarchy and the voxel bridge continue their live
 reads. These sequences establish an ownership API, not a complete dirty contract,
 entity worklist or performance gain. Remaining producer migration and any bounded
@@ -175,15 +176,8 @@ nothing, including initial correct values, structural recomposition, equivalent
 inputs and identical NaN bits; signed zero changes count. Pivot is excluded.
 Input reads do not mark Parent, child LocalTransform or source world Transform.
 Invalid branches retain their output and publish nothing. Output publication
-does not flush commands, migrate rows or advance the structural stamp. This
-migrates hierarchy outputs only; live extraction remains authoritative until
-the remaining producers are covered.
-
-`ReparentPreservingWorldTransform` remains a separate input owner. Its initial
-hierarchy invocation can publish legitimate output changes before reparenting
-fails. Its boolean reports the reparent outcome; failure does not guarantee
-unchanged publication revisions. Parent/local writes in reparent and world
-transform helpers still need their own publication migration.
+does not flush commands, migrate rows or advance the structural stamp. Helper
+input publication is owned separately, as described below.
 
 Nil-safe `Ecs.TransformHierarchyStats()` and `Commands.TransformHierarchyStats()`
 return cumulative `TopologyBuildCount` and `CompositionCount` plus the last
@@ -193,6 +187,35 @@ count as composition. These are main-thread diagnostic counters, not a
 concurrent access API or a measured performance claim. Removed references and
 backing-array tails are cleared. Empty membership releases aggregate storage;
 nonempty maps and slices may retain peak capacity without a byte ceiling.
+
+### Transform Helper Publication
+
+`ReparentPreservingWorldTransform` publishes a changed Parent only after local
+conversion succeeds. Failed conversion restores the old Parent and publishes
+no attempted input write. Its initial hierarchy invocation can still publish
+legitimate output changes before failure. Existing graph validation is unchanged;
+an accepted descendant reparent can create a cycle whose world outputs are retained.
+
+`setEntityWorldTransform` publishes LocalTransform only when the actual committed
+destination TRS bits change. `setEntityWorldRotation` and grip/reset/aim/IK callers
+of these setters in `asset_grip.go` inherit that publication. Equal bits,
+including identical NaN payloads, publish nothing; signed zero and changed NaN
+payloads count. Quaternion conversion keeps
+its existing normalization. Without Parent, the setter changes only local TRS;
+the next hierarchy invocation mirrors authoritative world TRS back into local.
+World and Pivot semantics remain unchanged.
+
+`RestoreAuthoredAssetAttachmentMount` evaluates the mount before comparing and
+writing Parent/local values. It publishes each changed input even when the new
+host cannot resolve and hierarchy retains world output. A helper's boolean
+reports its outcome, not a publication transaction: a completed inner setter
+remains published when a later IK step fails.
+
+These helpers neither flush commands nor change the structural stamp. Independent
+writers in `AttachAuthoredAssetRoot` and `AlignAuthoredAssetSurfaceMount` still need
+publication migration, along with independent authored aim and other producers.
+Live extraction remains authoritative; consumers cannot yet skip reads using
+publication revisions.
 
 ## Query Model
 

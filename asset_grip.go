@@ -57,8 +57,16 @@ func RestoreAuthoredAssetAttachmentMount(cmd *Commands, root EntityId) bool {
 	if !ok {
 		return false
 	}
+	previousParent := parent.Entity
+	previousLocal := hierarchyBits(local.Position, local.Rotation, local.Scale)
 	parent.Entity = attachment.ParentMarker
 	*local = LocalTransformComponent{Position: mount.Position, Rotation: mount.Rotation, Scale: mount.Scale}
+	if parent.Entity != previousParent {
+		cmd.MarkComponentChanged(root, reflect.TypeOf(Parent{}))
+	}
+	if hierarchyBits(local.Position, local.Rotation, local.Scale) != previousLocal {
+		cmd.MarkComponentChanged(root, reflect.TypeOf(LocalTransformComponent{}))
+	}
 	TransformHierarchySystem(cmd)
 	return true
 }
@@ -344,6 +352,7 @@ func setEntityWorldTransform(cmd *Commands, entity EntityId, world TransformComp
 	if local == nil {
 		return false
 	}
+	previousLocal := hierarchyBits(local.Position, local.Rotation, local.Scale)
 	if parent, ok := parentForEntity(cmd, entity); ok {
 		parentWorld, _ := cmd.GetComponent(parent.Entity, reflect.TypeOf(TransformComponent{})).(*TransformComponent)
 		if parentWorld == nil || parentWorld.Scale.X() == 0 || parentWorld.Scale.Y() == 0 || parentWorld.Scale.Z() == 0 {
@@ -353,9 +362,12 @@ func setEntityWorldTransform(cmd *Commands, entity EntityId, world TransformComp
 		local.Position = mgl32.Vec3{local.Position.X() / parentWorld.Scale.X(), local.Position.Y() / parentWorld.Scale.Y(), local.Position.Z() / parentWorld.Scale.Z()}
 		local.Rotation = parentWorld.Rotation.Inverse().Mul(world.Rotation).Normalize()
 		local.Scale = mgl32.Vec3{world.Scale.X() / parentWorld.Scale.X(), world.Scale.Y() / parentWorld.Scale.Y(), world.Scale.Z() / parentWorld.Scale.Z()}
-		return true
+	} else {
+		local.Position, local.Rotation, local.Scale = world.Position, world.Rotation, world.Scale
 	}
-	local.Position, local.Rotation, local.Scale = world.Position, world.Rotation, world.Scale
+	if hierarchyBits(local.Position, local.Rotation, local.Scale) != previousLocal {
+		cmd.MarkComponentChanged(entity, reflect.TypeOf(LocalTransformComponent{}))
+	}
 	return true
 }
 
