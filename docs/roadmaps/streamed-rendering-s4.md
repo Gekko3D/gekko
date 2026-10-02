@@ -101,20 +101,104 @@ items, newer queued edits, graph retries and backing removals through durable
 payload/reference roundtrips and latest navigation rebuild progress. No rendering
 change requires a native GPU check in this prerequisite.
 
-## S4c ownership requirements
+## S4c: Bounded asynchronous normal unload
 
-The next design must serialize navigation and unload manifest publication,
-preflight snapshot admission before cloning, and retain dirty chunks when the
-queue is full or unsafe. Completed saves must validate runtime/chunk/entity/map
-ownership and live edit content before removal; revisions alone cannot detect
-untracked public payload writes. Newer edits remain dirty and pinned. A failed
-payload/manifest keeps previous references and supports retry.
+Extend the existing streamed runtime with one admitted transaction and one IO
+worker phase at a time. Busy unload requests retain small main-thread dirty
+intents keyed by loaded-chunk ownership; they capture no geometry. Remember dirty
+entity/classes until a matching durable checkpoint, even if the observer returns
+or the renderer consumes its upload dirty queues. Intent does not authorize
+removal. Existing chunk/cache/renderer ownership remains the residency owner.
+Normal admission and retries require current unload or residency-upgrade demand;
+keep demand defers successor captures. An admitted checkpoint still completes.
+Blocking helpers and Stop save the latest edits regardless of observer demand.
 
-Normal observer unload requests persistence and completes later. Blocking private
-helpers and Stop can join/drain the same owner. Successful Stop publishes latest
-edits before teardown; failed Stop preserves live ownership. Bound snapshots,
-pending results and worker count without adding a parallel residency service.
-Resolve concrete queue/configuration/publication rules before S4c implementation.
+Add `StreamedLevelRuntimeConfig.MaxPendingPersistenceBytes`: zero selects 128 MiB,
+negative is rejected at Start, positive selects the retained snapshot budget.
+Preflight finite byte counts before cloning. Capture exact-size owned brick
+coordinate/payload arrays, entity/content metadata and backing-removal values;
+never carry live ECS, geometry maps, asset handles or GPU managers into workers.
+Terrain capture preserves the serializer's observed AABB inputs and existing
+column semantics. Imported/object captures preserve current sparse voxel semantics.
+Reuse existing codecs/readers and the S4a unique durable writer.
+
+Charge retained captures, result paths and the complete candidate manifest clone
+through acknowledgement/discard. Ordinary asynchronous manifest captures use the
+same exclusive admission/accounting owner; synchronous barriers retain their
+blocking contract. With one admitted transaction, finite sole-owner
+oversized capture or candidate growth can proceed as visible pressure; unsafe
+arithmetic/allocation counts hold live dirty data without allocation. Worker
+serializer tables, encoded buffers and IO temporaries are separate transient
+allocations from one producer. Navigation caches/analysis and physical allocator
+overhead are other owners; this is not a process-memory ceiling.
+Any reconstructed map or serializer table retained in a phase result is charged
+until release or explicit handoff to navigation; only worker-local temporaries
+are excluded. Shared array backings transfer once without duplicate accounting.
+
+Use two phases under exclusive manifest publication ownership:
+
+1. Worker builds and durably publishes unique payloads from owned captures.
+2. Main thread validates capture ordering and current entity/map/content ownership,
+   then preflights and clones a fresh complete manifest with the durable patches.
+   Worker atomically saves that candidate. Success acknowledges a durable
+   checkpoint; payload/manifest failure keeps prior reference publication and
+   live dirty intents for retry.
+
+Normal transaction failures are reported in persistence metrics and retry through
+observer processing; they do not set a global error that blocks their own retry.
+Unrelated runtime/navigation errors retain existing behavior. Blocking barriers
+return persistence errors to the caller without tearing down live ownership.
+
+Existing ordinary manifest IO must be idle before admission, and starts remain
+gated until this transaction acknowledges or fails. Coalesced ordinary requests
+retain intent rather than an additional full clone and capture fresh state when
+admitted. Dirty unload demand has priority after an existing manifest completes,
+so repeated navigation saves cannot starve persistence. Navigation payload and
+graph analysis keep their scheduling and immutable generation contracts. Imported
+unload captures share S4b capture-order ownership with those analysis items.
+Route all runtime manifest writes through one private IO dependency:
+`worldDeltaWriter func(string, *content.WorldDeltaDef) error`, with nil selecting
+`content.SaveWorldDelta`. Capture it before worker dispatch. Controlled IO can
+hold publication while still using the real atomic serializer, verifying
+exclusivity and acknowledgement without imposing frame/helper call order.
+
+Durable checkpoint publication and removal are separate decisions. At manifest
+acknowledgement, install each saved reference only where current RAM reference
+and backing-removal fields still match the fields captured before manifest IO.
+Preserve any newer published fields. Otherwise, acknowledge the saved checkpoint
+as the baseline even if the observer returns or newer untracked live edits arrive.
+Never rebuild the next manifest from pre-edit RAM references and revert a durable
+checkpoint while its successor has no payload reference yet. Queue latest saved
+navigation analysis only without superseding a newer capture.
+
+Revalidate runtime/chunk/entity/map identity, relevant persisted metadata and
+exact current payload/removal contents before removal; revision alone misses
+public alias writes. New edits or ownership changes retain dirty intents and
+recapture. Fresh keep/upgrade/proxy demand gates normal removal, never checkpoint
+publication. Do not clear renderer/physics dirty queues or their persistence flag.
+Process outstanding completions before existing runtime error early returns.
+
+Blocking private helpers and Stop join the same publication owner, retain their
+immediate durable save/reload contract and save the latest captured edits before
+teardown. Private capture helpers also support the existing detached loaded-chunk
+fixtures. Failed Stop preserves initialized state, generation, entities and
+leases; successful Stop drains acknowledgements before releasing ownership.
+Capture/results cannot be discarded by the existing generic job-drain barrier.
+
+Expose `PendingPersistenceCount`, `PendingPersistenceBytes`,
+`PendingPersistenceMaxBytes`, `PendingPersistenceOverBudgetBytes`,
+`PendingPersistenceAdmissionRetries`, `PendingPersistenceOversizedAdmissions`,
+`DirtyPinnedChunkCount`, `PersistenceFailureCount` and `PersistenceLastError` in
+runtime metrics. Private ownership accounting remains authoritative.
+
+Owners/files: streamed persistence capture/coordinator, `streamed_level_runtime.go`,
+`streamed_level_persistence.go`, `navigation_graph_runtime.go`, and shared terrain
+snapshot conversion in `world_delta_voxel_snapshot.go`. New private files may
+separate capture/accounting from scheduling. Confidence: High after source and
+independent architecture review. No SME alignment required within S4. A queued
+second captured snapshot adds retention and progress priority without a measured
+need; keep admission fixed at one. Single-phase manifest IO before validation
+can publish stale candidates; select the two-phase protocol above.
 
 ## Verification boundary
 

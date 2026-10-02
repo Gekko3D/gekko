@@ -67,6 +67,7 @@ type StreamedLevelRuntimeConfig struct {
 	MaxPreparedGeometryCacheBytes   int64
 	MaxDecodedContentCacheBytes     int64
 	MaxPendingPreparedBytes         int64
+	MaxPendingPersistenceBytes      int64
 	MaxChunkCommitsPerFrame         int
 	MaxStreamingCommitMillis        int
 	MetricsLogInterval              time.Duration
@@ -82,6 +83,15 @@ type StreamedLevelRuntimeConfig struct {
 }
 
 type StreamedLevelRuntimeMetrics struct {
+	PendingPersistenceCount                int
+	PendingPersistenceBytes                int64
+	PendingPersistenceMaxBytes             int64
+	PendingPersistenceOverBudgetBytes      int64
+	PendingPersistenceAdmissionRetries     int
+	PendingPersistenceOversizedAdmissions  int
+	DirtyPinnedChunkCount                  int
+	PersistenceFailureCount                int
+	PersistenceLastError                   string
 	ObserverSelectionBuildCount            uint64
 	ObserverSelectionChunkVisitCount       uint64
 	DecodedContentCacheEntries             int
@@ -391,6 +401,11 @@ type StreamedLevelRuntimeState struct {
 	navigationEditLastQueuedAt    time.Time
 	navigationEditBlockers        map[string]navigationEditBlocker
 	navigationRetireAtLoad        map[uint64]uint64
+	worldDeltaWriter              func(string, *content.WorldDeltaDef) error
+	persistenceTransaction        *streamedPersistenceTransaction
+	persistenceIntents            map[ChunkCoord]*streamedPersistenceIntent
+	persistenceBytes              int64
+	persistenceCmd                *Commands
 	worldDeltaSaveActive          bool
 	worldDeltaSaveRequestedGen    uint64
 	worldDeltaSaveActiveGen       uint64
@@ -585,6 +600,9 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		return fmt.Errorf("level path is empty")
 	}
 
+	if cfg.MaxPendingPersistenceBytes < 0 {
+		return fmt.Errorf("pending persistence byte budget is negative")
+	}
 	if cfg.MaxPendingPreparedBytes < 0 {
 		return fmt.Errorf("pending prepared byte budget is negative")
 	}
@@ -684,6 +702,11 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.sessionDeltaDir = sessionDeltaDir
 	state.releaseObserverSelection()
 	state.Metrics = StreamedLevelRuntimeMetrics{}
+	state.persistenceTransaction = nil
+	state.persistenceIntents = nil
+	state.persistenceBytes = 0
+	state.persistenceCmd = cmd
+	refreshStreamedPersistenceMetrics(state)
 	state.nextMetricsLogAt = time.Time{}
 	state.TerrainID = ""
 	state.TerrainPalette = AssetId{}
@@ -1014,6 +1037,9 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 		return nil
 	}
 
+	if err := joinStreamedPersistence(cmd, state); err != nil {
+		return err
+	}
 	if err := saveStreamedWorldDeltaNow(state); err != nil {
 		return err
 	}
@@ -1121,6 +1147,9 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	state.importedEditCaptures = nil
 	state.navigationVoxelSnapshots = nil
 	state.worldDeltaSavePending = nil
+	state.persistenceIntents = nil
+	state.persistenceBytes = 0
+	refreshStreamedPersistenceMetrics(state)
 	state.navigationLoadActive, state.navigationRebuildActive, state.navigationEditAnalysisActive, state.worldDeltaSaveActive = false, false, false, false
 	return stopErr
 }
@@ -1191,14 +1220,6 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 		}
 		break
 	}
-	for {
-		select {
-		case <-state.worldDeltaSaves:
-			continue
-		default:
-		}
-		break
-	}
 }
 
 func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
@@ -1218,7 +1239,6 @@ func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 		case <-state.navigationRebuilds:
 		case result := <-state.navigationEditAnalyses:
 			finishStreamedImportedAnalysis(state, result)
-		case <-state.worldDeltaSaves:
 		case <-done:
 			drainStreamedPreparedResults(state)
 			return
@@ -1274,6 +1294,13 @@ func groundedPlayerConfigFromLevelPlayer(player *content.LevelPlayerDef) Grounde
 func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntimeState) {
 	defer beginStreamedRenderTicketBatch(state)()
 	refreshStreamedRenderResidency(cmd, state)
+	if state != nil {
+		state.persistenceCmd = cmd
+		commitStreamedWorldDeltaSave(state)
+		if state.InitErr != nil {
+			_ = commitStreamedPersistence(cmd, state, false)
+		}
+	}
 	if state == nil || !state.Initialized || state.InitErr != nil {
 		return
 	}
@@ -1288,6 +1315,13 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 	}()
 
 	updateStreamedObserverSelection(cmd, state)
+	_ = commitStreamedPersistence(cmd, state, true)
+	for coord, intent := range state.persistenceIntents {
+		if state.LoadedChunks[coord] != intent.Loaded {
+			delete(state.persistenceIntents, coord)
+		}
+	}
+	refreshStreamedPersistenceMetrics(state)
 	desired, keep := state.DesiredChunks, state.KeepChunks
 	pruneStreamedPendingCostHints(state)
 	requestStreamedNavigationResidency(state, desired)
@@ -1295,9 +1329,7 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 		if streamedLoadedChunkNeedsResidencyUpgrade(cmd, state, coord) {
 			// ponytail: reload once instead of duplicating the commit path; switch to
 			// in-place upgrades only if transition latency is measurable.
-			if err := unloadStreamedChunk(cmd, state, coord); err != nil && state.InitErr == nil {
-				state.InitErr = err
-			}
+			requestStreamedChunkPersistence(cmd, state, coord)
 			continue
 		}
 		if _, ok := keep[coord]; ok {
@@ -1312,10 +1344,10 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 		if sectorCoord, ok := state.ImportedChunkSector[coord]; ok && !state.renderManaged {
 			setStreamedSectorProxyHidden(cmd, state, sectorCoord, false)
 		}
-		if err := unloadStreamedChunk(cmd, state, coord); err != nil && state.InitErr == nil {
-			state.InitErr = err
-		}
+		requestStreamedChunkPersistence(cmd, state, coord)
 	}
+	refreshStreamedPersistenceMetrics(state)
+	startStreamedWorldDeltaSave(state)
 	if state.InitErr != nil {
 		return
 	}
@@ -2730,6 +2762,10 @@ func removeStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 }
 
 func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord, loaded *streamedLoadedChunk) error {
+	state.persistenceCmd = cmd
+	if err := joinStreamedPersistence(cmd, state); err != nil {
+		return err
+	}
 	manifestDirty := false
 	for eid := range loaded.TerrainEntities {
 		if len(cmd.GetAllComponents(eid)) == 0 {
@@ -2740,6 +2776,11 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 			continue
 		}
 		xbm, dirty, _ := currentVoxelMapForEntity(cmd, eid)
+		if intent := state.persistenceIntents[coord]; intent != nil && intent.Loaded == loaded {
+			if _, remembered := intent.Entities[eid]; remembered {
+				dirty = true
+			}
+		}
 		if !dirty {
 			continue
 		}
@@ -2782,6 +2823,11 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 			continue
 		}
 		xbm, dirty, _ := currentVoxelMapForEntity(cmd, eid)
+		if intent := state.persistenceIntents[coord]; intent != nil && intent.Loaded == loaded {
+			if _, remembered := intent.Entities[eid]; remembered {
+				dirty = true
+			}
+		}
 		if !dirty {
 			continue
 		}
@@ -2811,6 +2857,11 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 	for objectKey, eid := range loaded.ObjectEntities {
 		placementID, itemID := splitVoxelObjectRuntimeKey(objectKey)
 		xbm, dirty, exists := currentVoxelMapForEntity(cmd, eid)
+		if intent := state.persistenceIntents[coord]; intent != nil && intent.Loaded == loaded {
+			if _, remembered := intent.Entities[eid]; remembered {
+				dirty = true
+			}
+		}
 		if !dirty && exists {
 			continue
 		}

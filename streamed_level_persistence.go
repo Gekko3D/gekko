@@ -149,3 +149,22 @@ func writeStreamedLevelPayload(dir, name string, serialize func(string) error) (
 	}
 	return finalPath, nil
 }
+
+// queueOwnedSavedStreamedImportedAnalysis transfers worker-owned arrays without
+// cloning their shared backings. Removal lookup maps are created for navigation,
+// never retained by the persistence result or reconstructed as voxel geometry.
+func queueOwnedSavedStreamedImportedAnalysis(state *StreamedLevelRuntimeState, snapshot *content.ImportedWorldChunkDef, removal *content.VoxelBackingRemovalDef, chunkSize int, edit runtimeVoxelEdit) {
+	if !streamedPersistenceNeedsNavigation(state, snapshot.WorldID) {
+		return
+	}
+	var backing *VoxelBackingComponent
+	if removal != nil {
+		coord := removal.ChunkCoord
+		backing = &VoxelBackingComponent{OwnerKind: removal.OwnerKind, OwnerID: removal.OwnerID, SourceHash: removal.SourceHash, ChunkSize: chunkSize, ChunkCoord: [3]int{coord.X, coord.Y, coord.Z}, Removals: make(map[[3]int][16]uint32, len(removal.Bricks)), Materials: make(map[[3]int]uint8, len(removal.Bricks))}
+		for _, brick := range removal.Bricks {
+			backing.Removals[brick.Coord] = brick.Bits
+			backing.Materials[brick.Coord] = brick.Material
+		}
+	}
+	queueStreamedNavigationEditAnalysis(state, streamedNavigationEditAnalysisItem{Edit: edit, WorldID: snapshot.WorldID, Coord: snapshot.Coord, ChunkSize: snapshot.ChunkSize, VoxelResolution: snapshot.VoxelResolution, Snapshot: snapshot, Backing: backing})
+}

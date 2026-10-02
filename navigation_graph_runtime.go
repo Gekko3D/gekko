@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -790,34 +789,44 @@ func requestStreamedWorldDeltaSave(state *StreamedLevelRuntimeState) {
 		return
 	}
 	state.worldDeltaSaveRequestedGen++
-	copy := copyWorldDeltaForNav(state.WorldDelta)
-	state.worldDeltaSavePending = &copy
-	if !state.worldDeltaSaveActive {
-		startStreamedWorldDeltaSave(state)
-	}
+	// A descriptor coalesces requests; capture latest state only upon admission.
+	state.worldDeltaSavePending = &content.WorldDeltaDef{}
+	startStreamedWorldDeltaSave(state)
 }
-
 func startStreamedWorldDeltaSave(state *StreamedLevelRuntimeState) {
-	if state == nil || state.worldDeltaSaveActive || state.worldDeltaSavePending == nil {
+	if state == nil || state.worldDeltaSaveActive || state.persistenceTransaction != nil || state.worldDeltaSavePending == nil {
+		return
+	}
+	// Dirty unload gets the next admission ahead of coalesced navigation saves.
+	if state.persistenceCmd != nil {
+		for coord, intent := range state.persistenceIntents {
+			if state.LoadedChunks[coord] == intent.Loaded && persistenceNormalDemand(state.persistenceCmd, state, coord) {
+				return
+			}
+		}
+	}
+	n, err := persistenceManifestBytes(state.WorldDelta)
+	if err != nil {
+		state.InitErr = err
 		return
 	}
 	if state.worldDeltaSaves == nil {
 		state.worldDeltaSaves = make(chan streamedWorldDeltaSaveResult, 2)
 	}
+	copy := copyWorldDeltaForNav(state.WorldDelta)
 	generation, runtimeGeneration := state.worldDeltaSaveRequestedGen, state.Generation
-	delta, path := state.worldDeltaSavePending, state.WorldDeltaPath
+	path, writer := state.WorldDeltaPath, streamedPersistenceWriter(state)
 	state.worldDeltaSavePending = nil
 	state.worldDeltaSaveActive = true
 	state.worldDeltaSaveActiveGen = generation
+	admitStreamedPersistenceBytes(state, n)
+	results, jobs := state.worldDeltaSaves, &state.jobs
 	state.jobs.Add(1)
 	go func() {
-		defer state.jobs.Done()
-		state.worldDeltaSaves <- streamedWorldDeltaSaveResult{
-			RuntimeGeneration: runtimeGeneration, Generation: generation, Err: content.SaveWorldDelta(path, delta),
-		}
+		defer jobs.Done()
+		results <- streamedWorldDeltaSaveResult{RuntimeGeneration: runtimeGeneration, Generation: generation, Err: writer(path, &copy)}
 	}()
 }
-
 func commitStreamedWorldDeltaSave(state *StreamedLevelRuntimeState) {
 	if state == nil {
 		return
@@ -830,30 +839,37 @@ func commitStreamedWorldDeltaSave(state *StreamedLevelRuntimeState) {
 		if result.Generation == state.worldDeltaSaveActiveGen {
 			state.worldDeltaSaveActive = false
 			state.worldDeltaSaveActiveGen = 0
+			state.persistenceBytes = 0
+			refreshStreamedPersistenceMetrics(state)
 		}
 		if result.Err != nil {
 			state.InitErr = result.Err
 			return
 		}
-		startStreamedWorldDeltaSave(state)
 	default:
 	}
 }
-
 func saveStreamedWorldDeltaNow(state *StreamedLevelRuntimeState) error {
 	if state == nil || state.WorldDelta == nil || strings.TrimSpace(state.WorldDeltaPath) == "" {
 		return nil
+	}
+	if state.persistenceTransaction != nil {
+		if err := joinStreamedPersistence(state.persistenceCmd, state); err != nil {
+			return err
+		}
 	}
 	if state.worldDeltaSaveActive {
 		result := <-state.worldDeltaSaves
 		state.worldDeltaSaveActive = false
 		state.worldDeltaSaveActiveGen = 0
+		state.persistenceBytes = 0
+		refreshStreamedPersistenceMetrics(state)
 		if result.RuntimeGeneration == state.Generation && result.Err != nil {
 			return result.Err
 		}
 	}
 	state.worldDeltaSavePending = nil
-	return content.SaveWorldDelta(state.WorldDeltaPath, state.WorldDelta)
+	return streamedPersistenceWriter(state)(state.WorldDeltaPath, state.WorldDelta)
 }
 
 func commitStreamedNavigationOverlay(state *StreamedLevelRuntimeState, result streamedNavigationOverlayResult) {
@@ -2240,17 +2256,17 @@ func copyWorldDeltaForNav(source *content.WorldDeltaDef) content.WorldDeltaDef {
 		return content.WorldDeltaDef{}
 	}
 	copy := *source
-	copy.PlacementTransformOverrides = slices.Clone(source.PlacementTransformOverrides)
-	copy.PlacementDeletions = slices.Clone(source.PlacementDeletions)
-	copy.TerrainChunkOverrides = slices.Clone(source.TerrainChunkOverrides)
-	copy.ImportedWorldChunkOverrides = slices.Clone(source.ImportedWorldChunkOverrides)
-	copy.VoxelBackingRemovals = slices.Clone(source.VoxelBackingRemovals)
+	copy.PlacementTransformOverrides = clonePersistenceSlice(source.PlacementTransformOverrides)
+	copy.PlacementDeletions = clonePersistenceSlice(source.PlacementDeletions)
+	copy.TerrainChunkOverrides = clonePersistenceSlice(source.TerrainChunkOverrides)
+	copy.ImportedWorldChunkOverrides = clonePersistenceSlice(source.ImportedWorldChunkOverrides)
+	copy.VoxelBackingRemovals = clonePersistenceSlice(source.VoxelBackingRemovals)
 	for i := range copy.VoxelBackingRemovals {
-		copy.VoxelBackingRemovals[i].Bricks = slices.Clone(source.VoxelBackingRemovals[i].Bricks)
+		copy.VoxelBackingRemovals[i].Bricks = clonePersistenceSlice(source.VoxelBackingRemovals[i].Bricks)
 	}
-	copy.NavigationSourceOverrides = slices.Clone(source.NavigationSourceOverrides)
-	copy.NavigationGraphOverrides = slices.Clone(source.NavigationGraphOverrides)
-	copy.VoxelObjectOverrides = slices.Clone(source.VoxelObjectOverrides)
+	copy.NavigationSourceOverrides = clonePersistenceSlice(source.NavigationSourceOverrides)
+	copy.NavigationGraphOverrides = clonePersistenceSlice(source.NavigationGraphOverrides)
+	copy.VoxelObjectOverrides = clonePersistenceSlice(source.VoxelObjectOverrides)
 	return copy
 }
 

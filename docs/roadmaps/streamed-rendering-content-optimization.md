@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2d, S3a–S3r and S4a/S4b complete. S2/S3/S4 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2d, S3a–S3r and S4a–S4c complete. S2/S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -163,10 +163,10 @@ Acceptance: idle observers do not rebuild residency sets; idle geometry does not
 
 ### S4. Remove synchronous persistence from unload
 
-Status: S4a completes immutable manifest capture and unique durable runtime
-payload publication. S4b orders imported capture publication and preserves
-navigation impact through successors. Normal unload remains synchronous; bounded
-transactions and dirty publication pins are S4c. [Ownership decision](streamed-rendering-s4.md).
+Status: complete. S4a captures immutable manifests and publishes unique durable
+payloads; S4b orders imported captures and preserves navigation impact. S4c adds
+bounded asynchronous normal unload, dirty pins and durable acknowledgements.
+[Ownership decision](streamed-rendering-s4.md).
 
 `persistChunkOverrides` saves whole snapshots during unload. Main thread snapshots immutable edits; bounded worker encodes/compresses/writes. Publish override references only after successful atomic replacement.
 
@@ -387,14 +387,15 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2c | `60b4477` | Capacity accounting, live pins and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
 | S2d | `7ccd9ca` | Assigned-byte accounting, active pressure and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
 | S4a | `13a9e1e` | Complete worker captures and unique durable payload paths | [Persistence decision](streamed-rendering-s4.md) |
-| S4b | `fix(streaming): fence imported edit publication` | Capture-order publication and conservative navigation progress | [Persistence decision](streamed-rendering-s4.md#s4b-imported-capture-order-publication) |
+| S4b | `6a9f3b7` | Capture-order publication and conservative navigation progress | [Persistence decision](streamed-rendering-s4.md#s4b-imported-capture-order-publication) |
+| S4c | `feat(streaming): persist dirty unloads asynchronously` | Exclusive byte-accounted transactions, dirty pins and durable checkpoints | [Persistence decision](streamed-rendering-s4.md#s4c-bounded-asynchronous-normal-unload) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: implement S4c bounded persistence transactions, including preflighted snapshot
-credits, dirty pins, durable acknowledgements and navigation ordering. Other live
-cache owners and incremental extraction remain separate; no dirty-only extraction
-is approved. Preserve public mutation compatibility and conditional proposals.
+Next: scope remaining S2 worker admission/cancellation and live cache owners, then
+remaining S3 notifications and extraction according to delivery order. No
+dirty-only extraction is approved. Preserve public mutation compatibility and
+conditional proposals.
 
 Decisions to settle before dependent implementation:
 
@@ -752,7 +753,7 @@ Existing tests and unrelated changes preserved; macOS warnings exited successful
 
 ### S4b: Imported capture-order safety
 
-Commit `fix(streaming): fence imported edit publication`. Separate Sol 6.1
+Commit `6a9f3b7`. Separate Sol 6.1
 test/implementation agents and root/independent pre/post reviews completed.
 Delayed navigation results cannot replace newer imported saves or backing
 removals. Latest saved snapshots retain navigation progress after unload;
@@ -772,6 +773,36 @@ Real-worker and disk roundtrips verify latest references, owned captures and
 navigation rebuild inputs. Normal unload IO/byte admission remain S4c; graph
 scheduling and error behavior remain. No rendering change required a windowed
 check. Unrelated changes preserved; macOS warnings exited successfully.
+
+### S4c: Bounded asynchronous persistence
+
+Commit `feat(streaming): persist dirty unloads asynchronously`. Separate Sol 6.1
+test/implementation agents, root reviews and independent pre/post reviews
+completed. One exclusive byte-accounted owner covers normal dirty captures and
+ordinary manifest saves. Dirty ownership survives delayed IO, upload clearing,
+new sibling edits and retry; durable checkpoints preserve newer RAM publications.
+Stop retains its blocking durability and failed-stop lifetime contracts.
+Canonical behavior: [world deltas](../content/streaming-and-worlds.md#world-deltas).
+
+Focused checks, full engine tests (root 14.061s), focused race (4.731s) and all
+five consumer checks passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(S4[abc]|StreamedRuntime(Persists|Stop|Restart)|S2aRuntime(FailedPersistence|Stop)|S2bRuntimeFailedStop|StreamedNavigation|NavigationEditBlockers|RuntimeNavigationBlocker|ConfigureStreamedNavigation)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S4[abc]|StreamedRuntime(Persists|Stop|Restart)|S2aRuntime(FailedPersistence|Stop)|S2bRuntimeFailedStop|StreamedNavigation|NavigationEditBlockers|RuntimeNavigationBlocker|ConfigureStreamedNavigation)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS4cSmoke.app/Contents/MacOS/gekko-s4c-smoke /tmp/gekko-s4c-smoke.go
+/bin/zsh -lc '/tmp/GekkoS4cSmoke.app/Contents/MacOS/gekko-s4c-smoke > /tmp/gekko-s4c-smoke.log 2>&1'
+```
+
+Disposable native smoke passed in 16 frames: real GPU Ready, dirty publication
+pin, durable unload and latest reload Ready; one-byte budget exposed 2,048 retained
+bytes. An initial harness schema error was corrected before the successful run.
+This verifies lifetime/save-reload behavior, not pixel parity or speed. Worker
+temporaries, navigation caches, allocator overhead and orphan payload collection
+remain separate. Existing tests and unrelated changes preserved; macOS warnings
+exited successfully.
 
 Consumer commands for these steps:
 

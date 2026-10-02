@@ -968,10 +968,12 @@ returning a reference. Imported writers keep their existing serialization mutex.
 Previously referenced payloads are never overwritten or removed by a new save.
 
 Asynchronous manifest/navigation captures own all `WorldDeltaDef` slices and
-nested backing-removal brick slices. The existing single manifest writer and
-pending-save coalescing remain; synchronous saves join it before saving latest
-state. Failed manifest publication preserves the previous durable manifest and
-its payloads. In-memory override staging can still precede that failure.
+nested backing-removal brick slices. Ordinary manifest requests coalesce as
+uncaptured intent and clone the latest state upon admission. Synchronous saves
+join publication before saving the latest state. Failed manifest publication
+preserves the previous durable manifest and its payloads. Existing navigation
+and standalone payload helpers can still stage RAM references before ordinary
+manifest publication.
 
 Imported navigation analysis shares capture-order ownership with blocking saves
 and backing removals. New captures invalidate older pending/active captures;
@@ -983,17 +985,59 @@ preserving successors.
 Successors inherit conservative uncommitted edit impact from pending and active
 captures until current analysis commits; rejecting older captures loses no impact.
 
-Blocking imported persistence queues its latest owned snapshot for the configured
-navigation source world before unload removes the entity. Backed imports queue
-latest removal analysis without a competing full-snapshot override. Saved voxel
-and tag slices are copied. Coalesced unknown impact remains conservative so later
-bounded edits cannot suppress the required rebuild.
+Imported persistence queues its latest owned snapshot for the configured
+navigation source world before unload removes the entity, without superseding
+newer capture ownership. Backed imports queue latest removal analysis without a
+competing full-snapshot override. Blocking helpers copy caller voxel/tag slices;
+normal transactions transfer worker-owned arrays at acknowledgement. Coalesced
+unknown impact remains conservative so later bounded edits cannot suppress the
+required rebuild.
 
-Blocking unload helpers and Stop retain current save/reload behavior. Normal
-dirty unload still writes synchronously; bounded asynchronous transactions and
-dirty publication pins remain S4c. Old successful payloads, successful unpublished
-attempts and post-rename sync failures can leave unreferenced files. Garbage
-collection has separate reference ownership. [Persistence decision](../roadmaps/streamed-rendering-s4.md).
+Normal dirty unload and residency upgrades use one asynchronous persistence
+transaction. Main-thread capture owns compact brick payloads, metadata and
+backing removals. Workers convert and durably write unique payloads. Main-thread
+validation then creates a fresh complete candidate manifest; an exclusive worker
+publishes it atomically. Only successful acknowledgement publishes normal
+transaction references in RAM. Reference and related backing-removal fields must
+still match their captured baseline; newer publications survive. A saved checkpoint
+becomes the baseline even if the observer returns or newer live edits have no
+reference yet, so a later ordinary save cannot restore pre-edit references.
+
+Dirty unload intent pins existing live chunk/entity/geometry ownership while
+publication is pending. Busy requests retain uncaptured entity/class intent.
+Already observed dirtiness survives upload queue clearing. Exact live payload,
+geometry identity and persisted metadata checks reject changed captures; newly
+dirty siblings cannot be discarded by another entity's checkpoint. Admission and
+retry require current unload or residency-upgrade demand. Keep demand defers
+successor captures; an admitted checkpoint still completes. Fresh keep, upgrade
+and proxy coverage gate removal. Persistence never clears renderer/physics dirty
+queues or the explicit persistence flag.
+Disappeared or unowned terrain/imported entities release obsolete capture intent,
+matching blocking helper semantics. A missing object whose key remains owned
+still saves an explicit empty snapshot, preventing base geometry resurrection.
+
+`MaxPendingPersistenceBytes` defaults to 128 MiB when zero; negative is invalid.
+One exclusive owner covers ordinary asynchronous manifest clones and transaction
+captures/results/candidate baselines through acknowledgement. Finite sole-owner
+oversized work may proceed as visible pressure; unsafe counts retain dirty data
+without allocation. Retained navigation result arrays remain charged until
+handoff. Worker-local conversion/codec/IO temporaries, navigation caches and
+allocator overhead are separate owners; this is not a process-memory ceiling.
+Metrics expose `PendingPersistenceCount`, `PendingPersistenceBytes`,
+`PendingPersistenceMaxBytes`, `PendingPersistenceOverBudgetBytes`,
+`PendingPersistenceAdmissionRetries`, `PendingPersistenceOversizedAdmissions`,
+`DirtyPinnedChunkCount`, `PersistenceFailureCount` and `PersistenceLastError`.
+Private accounting remains authoritative.
+
+Normal transaction failures retain prior references and dirty intent for retry;
+they report persistence metrics without setting a self-blocking runtime error.
+Other runtime/navigation errors keep their existing behavior. Blocking unload
+helpers and Stop join publication and retain immediate durable save/reload
+contracts. Stop saves latest edits before teardown; failure preserves the running
+generation, entities and leases. Successful Stop drains acknowledgements before
+releasing ownership. Old successful payloads, successful unpublished attempts
+and post-rename sync failures can leave unreferenced files. Garbage collection has
+separate reference ownership. [Persistence decision](../roadmaps/streamed-rendering-s4.md).
 
 `VoxelBackingRemovals` are inline removal-only deltas relative to a provider's
 `source_hash`. Each record identifies the generic owner kind/id and chunk, then
