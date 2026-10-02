@@ -5,38 +5,15 @@ Prerequisite: [S2a](streamed-rendering-s2a.md).
 
 ## Scope and confidence
 
-Primary owners: RuntimeContentLoader and the streamed runtime's full/proxy
-preparation queues. Consumers: world metadata/backing providers, chunk and
-proxy preparation, synchronous collision startup, navigation source batches.
-This is a long-term ownership step using the current runtime boundaries.
+Owners: RuntimeContentLoader and full/proxy preparation queues. Consumers: world metadata/backing, chunk/proxy preparation, synchronous collision startup and navigation source batches. Long-term ownership step at current runtime boundaries.
 
-Known: the loader has eight unbounded decoded maps, duplicates concurrent
-decodes and keys by raw path. Full/proxy channels each hold 256 results with
-heterogeneous payloads. Commit/discard/drain currently have no release handles.
-Geometry preparation already has a separate byte budget. Commit copies chunk
-data into geometry/heightmaps; entities do not retain decoded chunk/aux records.
-Level/manifests/backing providers and shallow metadata maps retain decoded data
-for the world session. Navigation source batches retain it through baking.
+Known: eight unbounded decoded maps; duplicate concurrent decodes; raw-path keys. Full/proxy channels each hold 256 heterogeneous results. Commit/discard/drain lack release handles. Geometry preparation already has byte budget. Commit copies into geometry/heightmaps; entities retain no decoded chunk/aux records. Level/manifests/backing and shallow metadata retain decoded data for session; navigation batches retain it through baking.
 
-Unknown: scene-specific budget tuning and temporary decoder/build allocation
-peaks. Public Load methods return Go pointers with no lifetime declaration;
-external callers may keep or normalize them after cache eviction. Cache charge
-cannot track those borrowers or promise total process memory. No buffer reuse
-or mutation of evicted definitions is permitted.
+Unknown: scene tuning and temporary decode/build allocation peaks. Public Load pointers declare no lifetime; external callers may retain/normalize after eviction. Charge cannot track borrowers or promise total process memory. Never reuse buffers or mutate evicted definitions.
 
-Confidence: High after tracing these consumers and Stop/error paths. No SME
-alignment required. Entry-only bounds cannot handle heterogeneous data. A new
-global residency service would duplicate current owners. Extend the loader and
-queue owners with explicit leases/admission instead. A worker waiting for byte
-credit while retaining its completed payload defeats queue bounds; reject its
-payload and publish a small retry completion instead.
+Confidence: High after consumer and Stop/error inspection. No SME alignment required. Entry-only limits cannot bound heterogeneous data; new residency service duplicates owners. Add leases/admission to existing loader/queues. Byte-credit wait retaining completed payload defeats bounds; release payload and publish small retry completion.
 
-Files: runtime_content_loader.go, focused content charge/cache files, streamed
-runtime and focused pending-admission files, navigation_graph_runtime.go, new
-functional test files, this roadmap, canonical streaming/runtime-assets docs.
-No content codecs, collision algorithms, renderer shaders, GPU residency budget
-or navigation publication algorithm changes. Separate IO/navigation queues,
-mid-decode cancellation and global physical backing accounting remain S2 work.
+Files: runtime_content_loader.go, focused content charge/cache, streamed runtime/pending admission, navigation_graph_runtime.go, new functional tests, roadmap and canonical streaming/runtime-assets docs. No codec, collision algorithm, shader, GPU residency budget or navigation publication changes. Separate IO/navigation queues, mid-decode cancellation and physical backing accounting remain S2 work.
 
 ## Decoded loader contract
 
@@ -46,114 +23,92 @@ zero selects 128 MiB; negative disables warm retention. Add Stats() returning
 RuntimeContentLoaderStats with Entries, Bytes, PinnedBytes, MaxBytes,
 OverBudgetBytes, Hits, Misses, Evictions, LoadWaits and OversizedBypasses.
 
-One budget/LRU covers all content kinds. Identity includes content kind and a
+One budget/LRU covers all content kinds. Identity includes content kind and
 lexically cleaned absolute path; relative aliases coalesce. Do not resolve
-symlinks or require a cache-hit file to still exist. Type kinds stay separate.
+symlinks or require cache-hit file to still exist. Type kinds stay separate.
 Charge decoded graph storage at admission: struct sizes, slice capacity,
 nested pointers/slices/maps, string bytes and logical map entries. Deduplicate
-identical backing identities within a graph; conservatively charge arbitrary
+identical backing identities within graph; conservatively charge arbitrary
 overlapping slice/string views. Skip element traversal when their types contain
-no referenced storage. RLE payload size is not a decoded-memory estimate.
+no referenced storage. RLE payload size is not decoded-memory estimate.
 Exclude allocator/map-bucket/cache bookkeeping, decoder temporary buffers,
-derived backing/navigation indexes and separate prepared geometry. This is an
+derived backing/navigation indexes and separate prepared geometry. This is
 admission-time estimate, since public definitions can be normalized by callers.
 
-Unpinned LRU entries must fit the byte ceiling. Oversized/disabled warm results
-remain usable and may still share a concurrent decode. Add NewScope(), returning
-a RuntimeContentLoadScope with Loader() and idempotent Close(). Its derived
-loader shares the cache and pins every loaded entry atomically on publication.
+Unpinned LRU entries must fit byte ceiling. Oversized/disabled warm results
+remain usable and may still share concurrent decode. Add NewScope(), returning
+RuntimeContentLoadScope with Loader() and idempotent Close(). Its derived
+loader shares cache and pins every loaded entry atomically on publication.
 Repeated loads in one scope acquire one pin; distinct scopes balance separately.
 Pinned bytes count each entry once, even with multiple scopes. Pins may exceed
-the ceiling, reported as pressure; final release trims unpinned storage. Closing
-a scope during decode must prevent late pinning; loads on closed scopes fail.
+ceiling, reported as pressure; final release trims unpinned storage. Closing
+scope during decode must prevent late pinning; loads on closed scopes fail.
 If all scoped requesters close before decode completes and no raw requester
 remains, completion must not create warm ownership on their behalf. Other live
-requesters still receive and retain the shared result normally.
+requesters still receive and retain shared result normally.
 Returned pointers remain valid after release/eviction. Clear() drops unpinned
-warm ownership and preserves active scopes; it must not let an earlier in-flight
-raw load repopulate warm ownership without a new request. An active scope may
+warm ownership and preserves active scopes; it must not let earlier in-flight
+raw load repopulate warm ownership without new request. Active scope may
 still acquire its in-flight result; that declared lease remains protected.
 
-Per kind/path singleflight runs decoding outside the cache mutex. Same-key
-waiters share success, including uncached results. Different keys progress
-independently. Errors/nil results are not cached; panics wake waiters and permit
-retry. Avoid locks across decode or waiting and avoid lost waiter pins.
+Per kind/path singleflight decodes outside mutex. Same-key waiters share success, including uncached results; different keys progress independently. Errors/nil results are uncached. Panic wakes waiters and allows retry. No locks across decode/wait; no lost waiter pins.
 
 ## Runtime lease lifetimes
 
-MaxDecodedContentCacheBytes config applies when the runtime creates its loader;
-a supplied Loader keeps its own options. A metadata scope leases the level,
-terrain/world manifests and voxel backing through the world session. Publish
-the scope with runtime ownership: failures before publication close it, while
-partially initialized sessions retain it until successful Stop. State.Loader is
-the base loader, so worker loads cannot accidentally join the metadata scope.
+MaxDecodedContentCacheBytes config applies to runtime-created loader; supplied Loader retains own options. Metadata scope leases level, terrain/world manifests and voxel backing for session. Publish scope with runtime ownership. Pre-publication failures close scope; published partial sessions retain it until successful Stop. State.Loader remains base loader; workers cannot accidentally join metadata scope.
 
 Each full/proxy preparation uses its own scope, transferred with its result and
 closed after commit or every discard/drain path. Synchronous collision startup
-uses a transient scope through immediate commit. Committed geometry/heightmaps
-stay valid after decoded leases release. A sidecar rejected by version/hash/
+uses transient scope through immediate commit. Committed geometry/heightmaps
+stay valid after decoded leases release. Sidecar rejected by version/hash/
 source metadata releases its unused preparation lease immediately; it cannot
-hide behind a release handle excluded from pending payload charge. Other scopes
-on the same sidecar remain protected. Navigation uses a batch scope through
+hide behind release handle excluded from pending payload charge. Other scopes
+on same sidecar remain protected. Navigation uses batch scope through
 source loading and baking, releasing it before blocking result publication;
 errors release it too. Navigation snapshots already owned elsewhere stay with
 their current owner.
 
-Successful Stop joins/drains workers, removes entities and clears all shallow
-metadata maps before releasing metadata leases. Clear a runtime-created loader's
-warm ownership; preserve supplied/shared loader users. Failed persistence keeps
-the current generation and metadata ownership usable. Restart has fresh queue
-credits; stale results cannot remove a new generation's pending marker. Keep
-S1c ticket retirement and fallback handoff ordering unchanged.
+Successful Stop joins/drains workers, removes entities, clears shallow metadata, then releases metadata leases. Clear runtime-created warm ownership; preserve supplied/shared loader users. Persistence failure retains usable generation/metadata. Restart gets fresh credits; stale results cannot clear new generation pending markers. Preserve S1c ticket retirement/fallback ordering.
 
 ## Pending full/proxy admission
 
 Add MaxPendingPreparedBytes: zero selects 128 MiB, negative is invalid. One
-thread-safe owner covers both channels for a session. Preserve public channel
+thread-safe owner covers both channels for session. Preserve public channel
 types, entry capacities, existing count/time commit budgets and optional result
 handles so existing synthetic channel fixtures remain usable.
 
-After preparation, charge the result's decoded records/aux, snapshot and
-placement graphs, geometry and envelope/key strings. Deduplicate within the
-result. This is a per-result admission cost; separate results and loader/cache
+After preparation, charge result's decoded records/aux, snapshot and
+placement graphs, geometry and envelope/key strings. Deduplicate within
+result. This is per-result admission cost; separate results and loader/cache
 owners may conservatively charge shared data again. Do not add these metrics
 together as physical memory. No estimator may follow borrowed GPU managers,
-cache owners, errors or release handles. Reuse the geometry storage estimator
-through a temporary ledger rather than retaining roots in the live cache ledger.
+cache owners, errors or release handles. Reuse geometry storage estimator
+through temporary ledger rather than retaining roots in live cache ledger.
 
 Admit fitting results by reserving bytes before channel publication. Credit
-covers blocked publication as well as queued payload. If it cannot fit, release
-the decoded scope and all large payload references; publish only a small retry
-completion carrying generation/coordinate/required cost. Keep a cost hint so
-the observer waits for sufficient capacity before rebuilding that demand.
-Clear hints when demand/session ends. A single oversized payload may be admitted
+covers blocked publication and queued payload. If it cannot fit, release
+decoded scope and all large payload references; publish only small retry
+completion carrying generation/coordinate/required cost. Keep cost hint so
+observer waits for sufficient capacity before rebuilding that demand.
+Clear hints when demand/session ends. Single oversized payload may be admitted
 when no other charged payload is outstanding, preventing valid large pages from
 starving. Report over-budget/oversized admission explicitly. Every consumption
 branch and Stop drain releases credit exactly once. Retry metadata is bounded
 by existing channel/job counts and excluded from payload byte charge.
 
-Active decoding/building is outside this retained-result ceiling and remains
-bounded by MaxPrepareJobs. This slice does not claim hard decode allocation or
-RSS limits. Main-thread obsolete-demand checks discard results safely; true IO
-cancellation and queue partitioning are later S2 work.
+Active decode/build is outside retained-result ceiling, bounded by MaxPrepareJobs. No hard decode allocation or RSS limit claimed. Main thread safely discards obsolete demand; IO cancellation and queue partitioning remain later S2 work.
 
-Expose decoded cache and pending payload bytes/budget/pressure plus admission
-retry/oversized counts in StreamedLevelRuntimeMetrics. Update them without
-rescanning decoded/geometry payloads every frame. Existing queue-depth and
-commit-count semantics remain unchanged.
+Expose decoded/pending bytes, budget and pressure plus admission retry/oversized counts in StreamedLevelRuntimeMetrics. Read totals without per-frame payload rescans. Queue-depth/commit-count semantics unchanged.
 
-Metric prefixes: DecodedContentCache with the loader Stats suffixes above;
+Metric prefixes: DecodedContentCache with loader Stats suffixes above;
 PendingPrepared with Bytes, MaxBytes, OverBudgetBytes, AdmissionRetries and
 OversizedAdmissions.
 
 ## Functionality tests and adversarial review
 
-Use the user-authorized GPT-6.1 sol RED/review/GREEN/review/commit workflow.
-Add new tests; preserve existing test files. Protect externally observable
-loader, budget, lease and runtime contracts rather than container layout or
-helper call order. Relative measured fixture charges avoid ABI assumptions.
+Use user-authorized GPT-6.1 sol RED/review/GREEN/review/commit workflow. Add tests; preserve existing files. Protect observable loader, budget, lease and runtime contracts; avoid private layout/helper order. Relative fixture charges avoid ABI assumptions.
 
-- All eight content kinds share a byte ceiling; nested aux/backing/asset/level
+- All eight content kinds share byte ceiling; nested aux/backing/asset/level
   storage and decoded RLE data contribute. LRU, exact boundary, disabled warm
   retention, oversized bypass and returned-pointer survival after eviction.
 - Path aliases, deleted-file cache hits, kind separation, nil compatibility;
@@ -165,34 +120,20 @@ helper call order. Relative measured fixture charges avoid ABI assumptions.
   release on commit/error/obsolete/duplicate/stale/drain paths.
 - World metadata/backing lifetime, transient chunk leases after commit,
   supplied-loader options and external scope survival, Stop/restart and failed
-  persistence preserving the usable world. Navigation source batch lifetime.
+  persistence preserving usable world. Navigation source batch lifetime.
 - Rejected auxiliary sidecars release their unused leases before publication,
   retaining fallback geometry, chunk/terrain leases and independently scoped
   sidecar users.
 
-Root reviews tests for missing ownership branches, unsupported fixtures,
-concurrency determinism and architectural fit before production delegation.
-Review GREEN code for scope/credit leaks, lock ordering, idle-worker accounting,
-stale pending-marker deletion, queue retries, Stop failures and hot-path scans.
-Concrete missing contracts return through RED tests and another review.
+Root reviews ownership branches, fixture validity, deterministic concurrency and architecture before delegation. Review GREEN for scope/credit leaks, lock order, idle-worker accounting, stale marker deletion, retries, Stop failures and scans. Contract gaps repeat RED and review.
 
 ## Verification
 
-Baseline owner tests passed before changes. Run new functional tests, existing
-streamed/loader/renderer owner tests, targeted races and engine sweep. Compare
-the two recorded pre-existing root failures. Compile actiongame/editor/voxel
-example consumers. Native GPU smoke with small loader/pending budgets verifies
-fallback/full handoff and Stop lifetime; CPU tests cannot certify pixels.
+Owner baseline passed. Verify new/existing streamed, loader and renderer contracts, focused races and engine sweep; compare two recorded root failures. Build actiongame/editor/voxel consumers. Native smoke with small loader/pending budgets checks handoff/Stop lifetime; CPU tests cannot certify pixels.
 
 ## Execution record
 
-Implemented by GPT-6.1 sol after root's narrow design and adversarial RED test
-review. Twenty-one new functional test functions protect the contracts above;
-original tests were unchanged. Initial RED lacked the new options/Stats/scope
-API. Test review corrected a sparse-JSON fixture labeled RLE, a proxy no-op
-labeled commit error, invalid content paths/terrain source, a startup fixture
-that failed after publication, and vacuous query/entity assertions. Valid
-runtime fixtures explicitly pass content validation before testing budgets.
+GPT-6.1 sol implemented after narrow design and adversarial RED review. Twenty-one new test functions; originals unchanged. Initial RED: missing options/Stats/scope API. Review fixed sparse-JSON fixture mislabeled RLE, proxy no-op mislabeled commit error, invalid paths/terrain, post-publication startup failure and vacuous query/entity assertions. Runtime fixtures pass content validation before budget checks.
 
 Root's post-GREEN review returned three concrete gaps through behavioral RED
 tests and separate sol implementation turns:
@@ -202,17 +143,12 @@ tests and separate sol implementation turns:
   zero runtime decoded ownership while preserving external users.
 - Ended-session marker/light indexes and terrain/world IDs survived entity
   removal. Successful Stop now clears them; failed persistence preserves them.
-- A rejected binary auxiliary sidecar remained pinned through queue residence,
-  adding 1,048,914 bytes although the result's Aux field was nil. Full/proxy
+- Rejected binary auxiliary sidecar remained pinned through queue residence,
+  adding 1,048,914 bytes although result's Aux field was nil. Full/proxy
   version/hash mismatch tests reached RED. All four metadata rejection branches
   now release only that preparation's unused lease. Independent users survive.
 
-Final review checked singleflight publication/Close/Clear races, source graph
-accounting and overflow handling, full/proxy shared credit, blocked publication,
-discard/drain branches, retry hints, synchronous collision preparation, shallow
-metadata teardown and supplied-loader ownership. Navigation source loading and
-baking use one batch scope, released on error and before blocked publication.
-Metrics read accumulated owner totals rather than scanning payloads per frame.
+Final review: singleflight/Close/Clear races, graph charge/overflow, shared full/proxy credit, blocked publication, discard/drain, retry hints, collision preparation, shallow teardown and supplied-loader ownership. Navigation uses one batch scope for loading/baking; releases on error and before blocked publication. Metrics read totals, not payload scans.
 
 Passed from `gekko/` with `GOCACHE=/tmp/gekko3d-gocache`:
 
@@ -223,34 +159,15 @@ go test . -run '^Test(S2b|S2a|Streamed|StartStreamed|RuntimeContentLoader|VoxelR
 git diff --check
 ```
 
-`go test ./...` passed every other engine package and failed only the two
+`go test ./...` passed every other engine package and failed only two
 previously recorded root failures:
 
 - TestMovingBrushCarriesSupportedPlayerAndNPC: player `[0 0.1 0]`, missing carry.
 - TestStreamedNavigationPublishesResidencyWhileOverlayMoves: pending=2,
   loaded=1, load=false, overlay=true.
 
-Actiongame, editor and testing-vox consumer `go build ./...` checks passed.
-The first two emitted sandbox module stat-cache warnings; exit status was zero.
-Race builds emitted the existing macOS linker LC_DYSYMTAB warning.
-Verification used Go 1.25.4 on darwin/arm64. Reflection identity APIs were also
-checked against the module's declared Go 1.24 minimum in the
-[Go 1.24 standard-library source](https://github.com/golang/go/blob/go1.24.0/src/reflect/value.go#L1816).
+Actiongame, editor and testing-vox `go build ./...` passed. First two emitted sandbox module stat-cache warnings; exit zero. Race builds emitted existing macOS LC_DYSYMTAB linker warning. Go 1.25.4, darwin/arm64. Reflection identity APIs checked against declared Go 1.24 minimum: [Go 1.24 standard-library source](https://github.com/golang/go/blob/go1.24.0/src/reflect/value.go#L1816).
 
-Native GPU smoke passed on the final source: 415 frames / 14.245 seconds, exit
-zero, one-byte prepared-geometry/decoded/pending budgets, two prepare workers
-and one commit per frame. It observed a ready visible proxy through four seconds
-of paused uploads, hidden partial full readiness, atomic full refinement,
-distance coarsening and Stop cleanup. The pending owner recorded three sole
-oversized admissions and one retry; retained metadata pressure was 2086 bytes.
-Stop removed owned source asset IDs, reported zero decoded/pending ownership,
-and left no world renderer objects after two seconds. Diagnostic source/log:
-`/tmp/gekko-s2b-smoke.go`, `/tmp/gekko-s2b-native-smoke.log`. These are temporary
-diagnostics, not committed tests. No pixel parity or performance gain claim.
+Final native smoke: 415 frames / 14.245 seconds, exit zero; one-byte prepared-geometry/decoded/pending budgets, two workers, one commit/frame. Verified ready visible proxy through four-second upload pause, hidden partial readiness, atomic refinement, distance coarsening and Stop cleanup. Three sole oversized admissions, one retry; metadata pressure 2086 bytes. Stop removed source asset IDs and reported zero decoded/pending ownership; no world renderer objects after two seconds. Temporary source/log: `/tmp/gekko-s2b-smoke.go`, `/tmp/gekko-s2b-native-smoke.log`; no committed tests. No pixel parity or performance gain claimed.
 
-Navigation batch lease paths and post-drain persistence recovery were reviewed
-in production code and existing owner checks. Dedicated deterministic fixtures
-for those two timings were not added. Pending graph lower bounds cover real
-decoded records and geometry; generic nested-graph tests cover referenced
-capacity/alias accounting. No heap/RSS ceiling, codec change, global physical
-accounting or remaining S2 owner/queue completion is claimed.
+Navigation batch leases/post-drain persistence recovery verified by production review and existing owner checks; no dedicated deterministic fixtures for those two timings. Pending lower bounds cover real decoded records/geometry; generic graph tests cover capacity/aliases. No heap/RSS ceiling, codec, physical accounting or remaining S2 owner/queue completion claimed.

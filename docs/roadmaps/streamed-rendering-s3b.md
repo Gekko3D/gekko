@@ -6,36 +6,17 @@ Prerequisites: S1a/S1b/S1c and S3a.
 
 ## Scope and confidence
 
-Primary owner: `GpuBufferManager` scene record preparation/publication.
-Consumers: opaque, transparent, and shadow voxel passes; engine bridge and
-renderer app. Confidence: High after tracing bridge identity/transform/material
-comparisons, scene culling/BVH reuse, GPU preparation, allocation mutation,
-and binding recreation. SME alignment required: No. This is a permanent owner
-improvement within the existing scene/ABI contract. `base/skills-manifest.md`
-is absent; workflow and renderer owning documentation were read.
+Owner: `GpuBufferManager` scene record preparation/publication. Consumers: opaque/transparent/shadow voxel passes, bridge and renderer app. Confidence: High after comparisons, culling/BVH reuse, GPU preparation, allocations and bindings inspection. SME alignment: No. Permanent step within scene/ABI contract. Missing `base/skills-manifest.md`; workflow/renderer docs read.
 
-Known: the bridge already retains stable `VoxelObject` identities and compares
-transforms/material keys. `Scene.Commit` already caches world-space BVHs, but
-`UpdateScene` rebuilds three render-relative BVHs and all instance/parameter
-arrays every frame. `ensureBuffer` also writes unchanged arrays. Transform dirty
-flags can be consumed by Commit before record gathering. Public object metadata
-and allocation fields can change in place without changing pointer identities.
+Known: bridge retains `VoxelObject` identities and compares transforms/material keys. `Scene.Commit` caches world BVHs; `UpdateScene` rebuilds three relative BVHs and all instance/parameter arrays each frame. `ensureBuffer` writes unchanged arrays. Commit may consume transform dirty flags; metadata/allocations mutate without pointer changes.
 
-Unknown: workload-dependent gains and retained record capacity. Live cache
-entries must follow current render-pass objects without historical memberships;
-there is no new byte budget or promised frame-time gain.
+Unknown: gains and retained capacity. Cache follows current pass objects, retaining no historical membership. No byte budget or frame-time gain promised.
 
-Cache compiled instance rows, object parameter rows, and render-relative BVHs.
-Preserve existing GPU layouts (208-byte instances, 128-byte parameters, current
-BVH bytes), empty sentinels, object ordering, render-origin arithmetic, and
-resource recreation behavior. This slice does not introduce ECS change events,
-skip bridge scanning or scene culling, change LOD/Hi-Z/shadow policy, optimize
-light records, change voxel upload budgets, or alter shaders. Future ECS dirty
-extraction and layer selection keep parent S3 partial.
+Cache instance/parameter rows and relative BVHs. Preserve 208-byte instances, 128-byte parameters, BVH bytes, empty sentinels, ordering, origin arithmetic and recreation. No ECS events, bridge/culling bypass, LOD/Hi-Z/shadow changes, light optimization, upload budget or shader changes. ECS dirty extraction/layer selection remain S3 work.
 
 ## Architecture and invariants
 
-1. Add a focused manager-owned record preparation file. Reuse stable object
+1. Add focused manager-owned record preparation file. Reuse stable object
    identities to retain compiled row templates; compare actual inputs each
    preparation. Snapshot values, never mutable input pointers alone. Compare
    encoded float bits for matrices, bounds, origins, and float parameters;
@@ -44,21 +25,21 @@ extraction and layer selection keep parent S3 partial.
 2. Instance inputs include actual forward/inverse matrices, local/world bounds,
    world-bound presence, and render origin. Matrix comparison preserves rotation,
    scale, and pivot changes even when world bounds happen to match and Commit
-   cleared `Transform.Dirty`. The existing transform Dirty protocol remains.
+   cleared `Transform.Dirty`. Existing transform Dirty protocol remains.
 3. Parameter inputs cover every field encoded by `writeObjectParamsData`, map ID,
    sector count, geometry allocation presence, direct lookup values, and material
-   allocation presence/offset. Material payload upload remains a separate owner;
+   allocation presence/offset. Material payload upload remains separate owner;
    S3b does not repair existing in-place MaterialTable payload edit semantics.
-   Missing geometry allocation produces the existing zero parameter record;
+   Missing geometry allocation produces existing zero parameter record;
    later admission must replace it with fresh values on unchanged visibility.
 4. Preserve each pass's ordered membership separately. Instance row index, BVH
-   leaves, and parameter row order must refer to the same object. Per-object
-   templates may be shared across passes; assembly patches the pass index.
+   leaves, and parameter row order must refer to same object. Per-object
+   templates may be shared across passes; assembly patches pass index.
    Changes rebuild only affected row templates. Aggregate arrays may reassemble
-   after a row/order/origin change; idle arrays are reused.
+   after row/order/origin change; idle arrays are reused.
 5. BVH inputs are ordered object identity, world bounds/presence, and origin.
    Run `TLASBuilder.Build` only for changed nonempty pass inputs. Metadata-only
-   parameter changes must not rebuild BVHs. Keep the existing relative builder
+   parameter changes must not rebuild BVHs. Keep existing relative builder
    rather than translating world-space BVH bytes, which could change floating
    point split behavior. Camera movement changes origin; culling/Hi-Z can change
    pass membership independently even when content is stationary.
@@ -66,24 +47,24 @@ extraction and layer selection keep parent S3 partial.
    maintenance. Allocation/material offsets and direct lookup metadata can
    change there. Move instance/BVH writes to this same boundary; preceding
    update functions do not consume those buffers. Rendering and binding
-   recreation happen after the complete `UpdateScene` call.
+   recreation happen after complete `UpdateScene` call.
 7. Track compilation revision and last-uploaded revision/destination per record
    buffer. Reuse CPU arrays independently of upload state: inspecting prepared
-   records must not falsely mark them uploaded. Skip an unchanged write only
-   when the destination buffer is still the published destination. A nil,
-   replaced, or insufficient buffer must receive retained bytes. A changed
+   records must not falsely mark them uploaded. Skip unchanged write only
+   when destination buffer is still published destination. Nil,
+   replaced, or insufficient buffer must receive retained bytes. Changed
    destination identity must propagate through `UpdateScene`'s recreation
-   result even when the replacement has enough capacity, so bindings refresh.
-   Queue write failure must not mark a record published. Existing `ensureBuffer`
-   ignores write errors; the new publication helper must explicitly check the
+   result even when replacement has enough capacity, so bindings refresh.
+   Queue write failure must not mark record published. Existing `ensureBuffer`
+   ignores write errors; new publication helper must explicitly check
    record write before advancing its revision/destination latch and counter.
 8. Keep lights, shadow metadata/capacity, voxel upload scheduling, all lookups,
-   culling, and camera/feature updates running each frame. A scene-record hit is
-   not an early return from `UpdateScene` or app Update.
-9. Drop removed object references and obsolete pass snapshots/byte tails. The
-   owner tracks only the union of current pass objects, including shadow-only
+   culling, and camera/feature updates running each frame. Scene-record hit is
+   not early return from `UpdateScene` or app Update.
+9. Drop removed object references and obsolete pass snapshots/byte tails.
+   owner tracks only union of current pass objects, including shadow-only
    casters. Hidden resident geometry still receives voxel uploads. Empty passes
-   publish the existing zero sentinels rather than stale previous arrays.
+   publish existing zero sentinels rather than stale previous arrays.
 10. Add nil-safe main-thread `InvalidateSceneRecords()` to discard retained
     preparation/publication ownership, for explicit reset or external record
     buffer overwrite. This forces the next preparation/upload even if content
@@ -91,7 +72,7 @@ extraction and layer selection keep parent S3 partial.
     manager starts empty. Prepared data is a read-only borrowed view valid until
     the next preparation/reset; it is not an immutable historical snapshot.
 
-Use a headless production preparation boundary:
+Use headless production preparation boundary:
 
 ```go
 type sceneRecordBatch struct { instances, bvh, params []byte }
@@ -99,27 +80,15 @@ type sceneRecordBatches struct { visible, transparent, shadow sceneRecordBatch }
 func (m *GpuBufferManager) prepareSceneRecords(scene *core.Scene, origin mgl32.Vec3) sceneRecordBatches
 ```
 
-This private boundary feeds the real GPU upload path. Tests inspect actual shader
-records and public operational counters, not cache keys/layout or helper order.
+Private boundary feeds native upload path. Assert actual shader records/public counters, not cache keys/layout or helper order.
 
-Add cumulative `uint64` counters: `SceneInstanceRecordBuildCount` and
-`SceneObjectParamRecordBuildCount` count encoded unique object row templates;
-`SceneBVHBuildCount` counts actual nonempty relative BVH builds;
-`SceneRecordUploadCount` counts successfully queued writes for these nine record
-buffers. `SceneRecordObjectCount` reports currently retained object templates.
-Pass index patching/aggregate assembly is not row-template encoding. These are
-operational work/ownership contracts, not a benchmark or total renderer cost.
+Cumulative `uint64`: `SceneInstanceRecordBuildCount` and `SceneObjectParamRecordBuildCount` count encoded unique templates; `SceneBVHBuildCount` counts nonempty relative builds; `SceneRecordUploadCount` counts successful queued writes across nine record buffers. `SceneRecordObjectCount` reports retained templates. Index patching/assembly is not row encoding. Operational work/ownership contracts, not benchmarks or total cost.
 
-Alternatives: relying on `StructureRevision`/dirty flags misses metadata and
-consumed transform changes; hashing serialized arrays still repeats packing;
-making ECS event tracking complete would expand this slice across engine and
-editor mutation boundaries. Exact input snapshots at the current owner preserve
-public mutation compatibility while removing repeated compilation and writes.
+`StructureRevision`/dirty flags miss metadata and consumed transform changes; serialized hashing repeats packing. Complete ECS events require broad engine/editor mutation migration. Exact input snapshots preserve public mutation compatibility while avoiding repeated compilation/writes.
 
 ## TDD coverage by functionality
 
-The user's continuing Sol 6.1 tests-first/review/implementation/review/commit
-workflow explicitly authorizes functionality tests for this slice.
+User-authorized Sol 6.1 tests-first/review/implementation/review/commit workflow applies.
 
 - First/idle preparation: bytes equal fresh existing builders for all passes;
   repeated unchanged preparation adds no row/BVH builds. No timing, allocation,
@@ -143,75 +112,38 @@ workflow explicitly authorizes functionality tests for this slice.
 - Existing bridge hierarchy/animation/moving-brush, scene culling/shadows,
   upload/readiness, packing, and render-origin tests remain unchanged.
 
-Missing declarations may make test-only RED a compile failure. Root reviews the
-test contracts before production implementation. Native verification, rather
-than device-mocking tests, checks actual idle record writes, replacement-buffer
-publication, binding recreation, and visible scene continuity.
+Missing declarations may cause compile RED; root reviews contracts before production. Native verification checks idle writes, replacement publication, binding recreation and continuity; no device-mocking tests.
 
 ## Expected files and verification
 
-Files: new `voxelrt/rt/gpu/manager_scene_records.go` and focused S3b tests;
-`manager_scene.go`/`manager.go` integration; canonical renderer runtime docs;
-parent roadmap and this execution record. Bridge/core/transform code changes
-require a concrete discovered gap rather than broader extraction work.
+Files: new `voxelrt/rt/gpu/manager_scene_records.go`, focused S3b tests, `manager_scene.go`/`manager.go`, canonical renderer runtime docs and roadmaps. Bridge/core/transform changes require concrete discovered gap; no broader extraction work.
 
-Run focused S3b tests at RED/GREEN, GPU/core/BVH/app tests, engine sweep, focused
-race, affected ActionGame/example compilation, and a small physical GPU smoke.
-Use a disposable local public-API harness to exercise unchanged frames, motion,
-transparency/hidden handoff, object removal, and a replaced destination buffer.
-Observe native write/build counters, `SceneBindingRevision`, and resource recreation; inspect screenshots
-where available. No pixel-perfect or performance claim follows from a smoke.
+Verify S3b RED/GREEN, GPU/core/BVH/app, engine sweep, races, ActionGame/example compilation and physical smoke. Disposable public-API harness covers idle, motion, transparency/hidden handoff, removal and destination replacement. Observe write/build counters, `SceneBindingRevision` and recreation; inspect available screenshots. No pixel parity or performance claim.
 
 ## Execution record
 
 ### Design and tests
 
-Root extracted the manager-owned scope and contracts above. Sol 6.1 read-only
-architecture review confirmed the boundary and clarified bitwise float
-snapshots, checked queue publication, and sufficient-capacity destination
-replacement requiring binding refresh.
+Root scoped manager contracts. Sol 6.1 architecture review confirmed bitwise snapshots, checked publication and binding refresh for sufficient-capacity replacement.
 
-Sol 6.1 authored eleven focused `TestS3b` tests, including thirty per-field
-parameter mutations with reset checks. Root and an independent Sol 6.1 reviewer
-found one work-contract gap: a pure pass reorder must reuse row templates. The
-author added that public-counter assertion and repeated RED. No existing tests
-or production declarations were changed during this phase.
+Sol 6.1 authored eleven `TestS3b` tests with thirty per-field mutations/reset checks. Root/independent Sol 6.1 review found one gap: reorder must reuse templates; author added counter assertion and repeated RED. Existing tests/production declarations unchanged.
 
 RED command: `env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run
 '^TestS3b' -count=1`. Exit 1 for missing record-preparation types/method and
 metrics; functional assertions could not execute yet. Local log:
 `/tmp/gekko-s3b-red.log`.
 
-Native publication/binding behavior and bitwise instance/BVH/origin snapshots
-remain explicit implementation-review/verification gates. The test-only NaN and
-signed-zero cases cover parameter snapshots, not nonfinite scene matrices.
+Review/verification gates: native publication/bindings and bitwise instance/BVH/origin snapshots. Test NaN/signed-zero cases cover parameters, not nonfinite matrices.
 
 ### Implementation and adversarial review
 
-Sol 6.1 implemented the manager-owned record cache and publication path without
-changing the reviewed tests. Unique objects retain index-neutral instance and
-parameter templates. Separate ordered pass snapshots reuse aggregate bytes and
-relative BVHs, prune absent objects, clear obsolete tails, and release empty
-pass capacity. Exact input snapshots use float bits throughout.
+Sol 6.1 implemented cache/publication with tests unchanged. Unique objects retain index-neutral instance/parameter templates. Ordered pass snapshots reuse arrays/relative BVHs, prune absent objects, clear tails and release empty capacity. All float snapshots use bits.
 
-`UpdateScene` prepares and publishes records after voxel and lookup maintenance.
-The publication helper asks `ensureBuffer` for capacity using a nonnil empty
-slice, avoiding its unchecked write and obsolete-content copy paths. It checks
-the actual queue write before advancing the uploaded revision/destination and
-counter. Destination changes report recreation even when capacity is sufficient;
-explicit invalidation discards both preparation and publication ownership.
+`UpdateScene` prepares/publishes after voxel/lookup maintenance. Publication requests `ensureBuffer` capacity with nonnil empty slice, bypassing unchecked writes/obsolete copies. Check queue write before latching revision/destination/counter. Changed destination reports recreation even with sufficient capacity. Invalidation discards preparation/publication ownership.
 
-Root and an independent Sol 6.1 reviewer compared snapshot fields with the
-existing writers, reviewed render-origin arithmetic and index patching, traced
-membership/reference cleanup, and checked allocation timing, unconditional
-frame work, and app binding refresh. Neither found an actionable blocker.
-Native behavior was then checked independently below. Queue error handling and
-nonfinite matrix/bounds/origin bit comparisons were verified by code review;
-no queue-failure injection or nonfinite native scene was used.
+Root/independent Sol 6.1 review: writer fields, origin arithmetic, index patching, reference cleanup, allocation timing, unconditional frame work and binding refresh. No blocker. Native checks below verify operation. Queue errors and nonfinite bit comparisons verified by code review; no injected failure or nonfinite native scene.
 
-Canonical renderer runtime documentation and the parent roadmap now describe
-this completed boundary, counters, reset API, borrowed views, and capacity
-limits. ECS dirty extraction and future layer selection remain S3 work.
+Canonical renderer docs/parent roadmap record boundary, counters, reset API, borrowed views and capacity limits. ECS dirty extraction/layer selection remain S3 work.
 
 ### Automated verification
 
@@ -225,10 +157,7 @@ env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu ./voxelrt/rt/cor
 git diff --check
 ```
 
-The eleven focused tests and thirty metadata mutation cases are GREEN. Engine
-sweep and race logs: `/tmp/gekko-s3b-engine.log` and
-`/tmp/gekko-s3b-race.log`. Race linking emitted the existing macOS
-`LC_DYSYMTAB` warnings and exited 0.
+Eleven focused tests and thirty mutation cases GREEN. Engine/race logs: `/tmp/gekko-s3b-engine.log`, `/tmp/gekko-s3b-race.log`. Existing macOS `LC_DYSYMTAB` warnings; exit 0.
 
 Consumer compilation passed:
 
@@ -240,15 +169,11 @@ env GOCACHE=/tmp/gekko3d-gocache go test ./...
 ```
 
 Local logs: `/tmp/gekko-s3b-actiongame-compile.log` and
-`/tmp/gekko-s3b-example-workspace.log`. The example has no tests. An initial
-`GOWORK=off` example check failed on missing module sums; the existing workspace
-provides the local WebGPU replacement and compiles successfully.
+`/tmp/gekko-s3b-example-workspace.log`. Example has no tests. Initial
+`GOWORK=off` example check failed on missing module sums; existing workspace
+provides local WebGPU replacement and compiles successfully.
 
-An additional full ActionGame test run failed six bot tests: selected-plan
-clearing, visible candidates, target prioritization, hearing falloff, direct
-danger, and utility personality weighting. The same failures reproduced with
-engine HEAD `d93f3ac`, using an archived engine and a disposable workspace that
-preserved every other module and the local WebGPU replacement:
+Full ActionGame run failed six bot tests: selected-plan clearing, visible candidates, target prioritization, hearing falloff, direct danger and utility personality weighting. Reproduced at engine HEAD `d93f3ac` with archived engine/disposable workspace, preserving other modules and local WebGPU replacement:
 
 ```sh
 # actiongame/, only the engine points to the HEAD archive
@@ -261,45 +186,32 @@ failures are outside S3b; no ActionGame code or tests were changed.
 
 ### Native GPU verification
 
-A disposable public-API harness (`/tmp/gekko-s3b-smoke.go`, not committed) used
-the real ECS bridge, saved streamed world, bounded voxel uploads, render passes,
-point shadows, transparent material, and WebGPU device. Build/run:
+Disposable public-API harness (`/tmp/gekko-s3b-smoke.go`, uncommitted): real bridge, saved streamed world, bounded uploads, render passes, point shadows, transparency and WebGPU. Build/run:
 
 ```sh
 env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS3bSmoke.app/Contents/MacOS/GekkoS3bSmoke /tmp/gekko-s3b-smoke.go
 /tmp/GekkoS3bSmoke.app/Contents/MacOS/GekkoS3bSmoke
 ```
 
-The desktop run exited 0: **857 frames over 29.352 seconds**. Eight stationary
-phases each held 88 completed frames for at least three seconds after settling;
-instance/parameter/BVH build counters, record-write count, binding revision and
-ownership remained unchanged throughout each hold. Every completed frame also
-checked fixed camera/point/ambient values, camera/light buffers, render-frame
-progress, and exact live pass-union ownership.
+Desktop exit 0: **857 frames over 29.352 seconds**. Eight stationary phases each held 88 completed frames for at least three seconds after settling. Instance/parameter/BVH builds, writes, binding revision and ownership stayed unchanged. Each frame checked camera/point/ambient values, camera/light buffers, frame progress and exact pass-union ownership.
 
 Observed transitions:
 
 - Ready fallback remained visible while full targets were resident, hidden and
-  unfinished under a paused upload budget. Restoring service completed the full
-  cohort and hid the still-resident fallback.
+  unfinished under paused upload budget. Restoring service completed full
+  cohort and hid still-resident fallback.
 - Real ECS translation/rotation retained object identity and refreshed instance
-  rows, relative BVHs and writes. Hiding transparency and removing the moved
+  rows, relative BVHs and writes. Hiding transparency and removing moved
   object pruned pass membership/templates; ownership fell from five to four to
   three. Material-offset changes after removal refreshed parameter rows.
-- Replacing `InstancesBuf` with an equal-capacity native buffer preserved CPU
+- Replacing `InstancesBuf` with equal-capacity native buffer preserved CPU
   counts (7 instances, 12 parameter templates, 17 BVHs), queued exactly one new
   record write (59 to 60), and advanced `SceneBindingRevision` from 5 to 6.
-- Explicit invalidation rebuilt the three remaining templates and three
+- Explicit invalidation rebuilt three remaining templates and three
   nonempty BVHs and republished all nine record buffers (60 to 69 writes).
-- Moving the observer away unloaded full targets, restored the proxy and
+- Moving observer away unloaded full targets, restored proxy and
   reduced retained templates to two; coarsened records then remained idle.
 
-Computer-use screenshots showed the rendered red/cyan refined geometry and
-yellow coarsened fallback. Native log: `/tmp/gekko-s3b-smoke.log`. The first
-harness run incorrectly counted ambient light as a GPU row and stopped at frame
-one; source tracing confirmed that the bridge accumulates it separately in
-`Scene.AmbientLight`. Only that disposable fixture was corrected before rerun.
+Screenshots showed red/cyan refined geometry and yellow fallback. Native log: `/tmp/gekko-s3b-smoke.log`. First harness stopped at frame one after incorrectly counting ambient light as GPU row. Bridge stores it separately in `Scene.AmbientLight`; only disposable fixture corrected before rerun.
 
-These checks establish the recorded packing/work/publication contracts and
-visible rendering continuity. They do not establish pixel parity, workload
-speedups, total process memory bounds, or a new scene-record byte ceiling.
+Established packing/work/publication contracts and visible continuity. No pixel parity, speedup, process memory bound or scene-record byte ceiling established.

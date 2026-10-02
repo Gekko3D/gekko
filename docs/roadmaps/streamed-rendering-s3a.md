@@ -6,42 +6,22 @@ Prerequisites: S1a/S1b/S1c and S2a/S2b.
 
 ## Scope and confidence
 
-Primary owner: streamed runtime observer selection. Consumers: full/proxy
-preparation, collision/destruction residency, navigation residency, render
-handoff, and ActionGame observers. Confidence: High after tracing selection,
-metadata mutation, synchronous startup demand, and temporary proxy retention.
-SME alignment required: No. This is a permanent ownership improvement within
-the current v2 selection policy. `base/skills-manifest.md` is absent; the agent
-workflow, runtime/module documentation, island plan, and owning code were read.
+Owner: streamed observer selection. Consumers: full/proxy preparation, collision/destruction, navigation, render handoff and ActionGame observers. Confidence: High after selection, metadata, startup demand and proxy retention inspection. SME alignment: No. Permanent improvement within v2 policy. Missing `base/skills-manifest.md`; workflow, runtime/module docs, island plan and owning code read.
 
-Cache observer demand and update cube differences without enumerating unchanged
-radius volumes every frame. Preserve the current Chebyshev cubes, effective
-radius defaults/clamping, imported-sector PVS/adjacency behavior, non-imported
-content exceptions, full-sector expansion, and global proxy fallback policy.
-Containing-sector-only PVS, gameplay-only observer profiles, queue priorities,
-scene gathering, and v3/layer selection remain separate work.
+Cache observer demand; update cube differences without rebuilding unchanged volumes each frame. Preserve Chebyshev cubes, radius defaults/clamping, PVS/adjacency, non-imported exceptions, full-sector expansion and global proxy fallback. Containing-sector-only PVS, gameplay-only profiles, priorities, scene gathering and v3/layer selection remain separate.
 
-Before S3a: `updateStreamedLevelObserverSystem` reconstructed six aggregate
-sets and each observer's five radius volumes. It also schedules/retries work,
-upgrades and unloads residency, and reconciles render tickets each frame.
-Selection currently uses world-space transform positions and `ChunkSize`; it
-does not map observers through a mutable layer transform.
+Before S3a: `updateStreamedLevelObserverSystem` rebuilds six aggregate sets and five radius volumes per observer. It also schedules/retries, upgrades/unloads and reconciles tickets each frame. Selection uses world-space positions and `ChunkSize`, not mutable layer transforms.
 
-Unknown: workload-dependent speedups and selection metadata memory costs. Live
-selection entries are bounded by indexed manifest metadata and active observer
-footprints, without historical observer/radius entries. Empty count/history
-maps and Stop release capacity; nonempty Go maps may retain peak capacity.
-This is not a selection byte budget, total process memory ceiling, or measured
-frame-time gain.
+Unknown: speedups and metadata memory cost. Live entries bounded by indexed metadata and active footprints; no historical observer/radius entries. Empty count/history maps and Stop release capacity; nonempty Go maps may retain peak capacity. No byte budget, process ceiling or measured frame-time gain.
 
 ## Ownership and invalidation
 
-1. Add a private selection owner to `StreamedLevelRuntimeState`. Cache each
+1. Add private selection owner to `StreamedLevelRuntimeState`. Cache each
    observer by entity identity, chunk coordinate, effective visual/keep/prefetch/
    collision/destruction radii, chunk size, and runtime/selection revision.
    Scan observer components each frame so additions, removals, transformed
    ancestors after normal hierarchy propagation, and radius changes remain
-   visible at the existing command-flush/stage boundary.
+   visible at existing command-flush/stage boundary.
 2. Maintain demand counts for overlapping observers. Removing or changing one
    observer removes only that observer's contributions. Track sector expansion
    and PVS contributions per observer; avoid conflating chunk and sector demand.
@@ -50,75 +30,63 @@ frame-time gain.
    because another observer supplies its sector visibility; filtering observers
    independently would change existing policy.
 3. Update entering/exiting rectangular shells for moves with overlapping cubes.
-   Enumerate disjoint slabs of the old/new cube difference; handle diagonal and
+   Enumerate disjoint slabs of old/new cube difference; handle diagonal and
    negative-coordinate moves without duplicates. Teleports and radius changes
-   may rebuild bounded observer volumes. Do not iterate the traveled distance.
+   may rebuild bounded observer volumes. Do not iterate traveled distance.
 4. Reuse aggregate selection when all observer keys and metadata are unchanged.
-   Cache imported-sector derivation and the all-LOD fallback set so idle
-   selection does not rescan the manifest. Rebuild derived aggregate selection
+   Cache imported-sector derivation and all-LOD fallback set so idle
+   selection does not rescan manifest. Rebuild derived aggregate selection
    only after demand or relevant metadata changes.
-5. Add a nil-safe public, main-thread method
+5. Add nil-safe public, main-thread method
    `(*StreamedLevelRuntimeState).InvalidateObserverSelection()`. Call it after
    mutating selection metadata such as imported sector/chunk membership, PVS or
    adjacency, placements, terrain occupancy/overrides, backing availability, or
-   a future layer transform that changes selection coordinates. Existing startup
-   and Stop/Restart reset the owner. Runtime-owned terrain override publication
+   future layer transform that changes selection coordinates. Existing startup
+   and Stop/Restart reset owner. Runtime-owned terrain override publication
    and removal call invalidation at their exact mutation boundaries, including
-   partial persistence followed by an error. External callers
+   partial persistence followed by error. External callers
    must invalidate after in-place metadata mutations; exported maps do not
    provide automatic change tracking. Radii, chunk size, generation, and proxy
    enablement are checked directly.
-6. Keep the cache independent from transient published demand. Synchronous
+6. Keep cache independent from transient published demand. Synchronous
    startup can add collision/destruction demand; unloading can add temporary
-   proxy pins. Restore these working memberships from cached base demand on the
+   proxy pins. Restore these working memberships from cached base demand on
    next update using tracked differences, not full per-frame map copies. Such
-   mutations must never contaminate the base cache or become permanent pins.
+   mutations must never contaminate base cache or become permanent pins.
    Published selection maps remain runtime-owned read-only views for consumers.
 7. Continue ticket refresh/reconciliation, prepare retries/admission, navigation
    residency requests, unloads, upgrades, and pending-hint pruning on idle ticks.
-   Selection reuse must not become an early return from streaming progress.
+   Selection reuse must not become early return from streaming progress.
 8. Release observer histories, demand counts, cached metadata, and public demand
    views when Stop enters completed teardown; Restart starts with fresh selection.
-   A persistence failure before teardown retains a resumable runtime and cache.
-   A later cleanup error after `Initialized` becomes false still releases the
-   selection owner. No worker may mutate selection state or require a new lock
+   Persistence failure before teardown retains resumable runtime and cache.
+   Later cleanup error after `Initialized` becomes false still releases
+   selection owner. No worker may mutate selection state or require new lock
    across preparation/IO.
 
-Expose two cumulative operational counters on existing runtime metrics:
-`ObserverSelectionBuildCount` counts observer demand evaluations after changed
-inputs, including additions/removals; `ObserverSelectionChunkVisitCount` counts
-chunk coordinates visited to build or update radius volumes. Both use `uint64`
-and reset with runtime metrics at Start.
-Counters describe actual selection work and support the idle/shell contract;
-they are not a new benchmark phase or a substitute for functional parity.
+Expose two cumulative counters: `ObserverSelectionBuildCount` counts changed-input demand evaluations, including additions/removals; `ObserverSelectionChunkVisitCount` counts radius build/update coordinates. Both `uint64`, reset at Start. Describe actual selection work/idle shells, not benchmarks or functional parity substitutes.
 
-Alternatives: returning early from the whole observer system would stop retries
-and render readiness; hashing entire manifests each frame defeats idle reuse;
-map-length or pointer-only invalidation misses in-place PVS changes. Explicit
-owner revisions plus small observer keys match the engine's mutation model.
+Early return stops retries/readiness. Per-frame manifest hashing defeats idle reuse; length/pointer checks miss in-place PVS changes. Explicit owner revisions and small observer keys match mutation model.
 
 ## TDD coverage by functionality
 
-The user explicitly requested the existing Sol 6.1 TDD workflow. Tests protect
-public demand, readiness/lifecycle behavior, and operational work contracts;
-avoid private cache layouts, exact helper order, map identities, timing limits,
-or allocation thresholds.
+User requested Sol 6.1 TDD. Protect public demand, readiness/lifecycle and operational work contracts. Avoid private layouts, helper order, map identity, timing or allocation thresholds.
 
 - Idle and within-cell movement: identical demanded memberships, no further
   radius-volume visits/evaluations after warmup, with frame progress still active.
 - Shells and teleports: compare every public demand set against independently
   enumerated expected cubes across axis/diagonal/negative movement, larger
   jumps, radius/default changes, and chunk-size changes. Small moves visit
-  boundary work rather than complete unchanged volumes; do not assert a
+  boundary work rather than complete unchanged volumes; do not assert
   particular slab decomposition or exact visit count.
 - Multiple observers: overlapping/disjoint visual, keep, collision, destruction,
   and PVS-expanded demands survive movement/removal of one observer; removal of
-  the final observer clears its demand at the existing flush boundary.
+  final observer clears its demand at existing flush boundary.
 - Imported/content policy: current PVS/adjacency, hidden-sector filtering,
   non-imported placement/terrain exceptions, full-sector expansion, backing,
   proxy fallback, and proxy enablement preserve existing selection semantics.
 - Invalidation: in-place visibility/membership/content changes with stationary
-  observers take effect after the declared invalidation boundary; lifecycle and
+  observers take effect after declared invalidation boundary; lifecycle and
   generation changes do not reuse obsolete selections.
 - Progress: idle observers still schedule after worker slots/byte credits free,
   apply readiness transitions, retire/unload content, and honor collision and
@@ -127,81 +95,56 @@ or allocation thresholds.
   handoff pins do not contaminate base demand. Startup additions clear on later
   idle updates while true observer demand remains. Under current global fallback
   policy every valid proxy pin already belongs to base fallback; verify proxy
-  memberships clear when proxies are disabled instead of inventing an idle-only
-  extra proxy membership that the current policy cannot produce.
-- Lifecycle: Stop/Restart releases selection ownership and a new session derives
+  memberships clear when proxies are disabled instead of inventing idle-only
+  extra proxy membership that current policy cannot produce.
+- Lifecycle: Stop/Restart releases selection ownership and new session derives
   its own metadata/demand. Verify resumability if exercising failed Stop.
 
 ## Expected changes and verification
 
-Files: `streamed_level_runtime.go`, a focused `streamed_level_selection.go`,
-focused S3a tests, this roadmap, parent roadmap status, and canonical
-`docs/content/streaming-and-worlds.md`. New field/API declarations may make the
-first test-only RED a compile failure; production begins only after root reviews
-test contracts. Then require functional GREEN and adversarial code review.
+Files: `streamed_level_runtime.go`, focused `streamed_level_selection.go`, S3a tests, roadmap/parent status and canonical `docs/content/streaming-and-worlds.md`. Missing field/API may cause compile RED; production follows root test review. Require functional GREEN and adversarial code review.
 
-Run focused S3a tests, existing streamed/navigation/render-residency tests, engine
-root tests, focused race checks, and affected ActionGame checks/build. Selection
-does not change shaders, uploads, or GPU layouts; automated render-readiness
-fixtures verify continued handoff. Use a native smoke only if review exposes a
-remaining visual coverage risk that those fixtures cannot resolve.
+Verify focused S3a, streamed/navigation/render-residency, engine root, races and ActionGame checks/build. No shader/upload/layout changes. Headless fixtures verify continued handoff; native smoke only for remaining visual coverage risk.
 
 ## Execution record
 
 ### Tests and design review
 
-- Root extracted this scope and reviewed the existing selection, renderer,
+- Root extracted this scope and reviewed existing selection, renderer,
   content, and lifecycle owners before production edits.
 - Sol 6.1 design review clarified global observer union before filtering,
   terrain invalidation at partial-persistence boundaries, and pre/post-teardown
   failure semantics. These findings are reflected above.
 - Sol 6.1 wrote eleven functional tests in
   `streamed_level_selection_s3a_test.go`; existing tests remained unchanged.
-- Root and an independent Sol 6.1 reviewer inspected the test contracts.
-  Review found a fixture assumption: the empty level uses 32-unit chunks, so
-  shell moves now derive from `state.ChunkSize`. A second review tightened the
+- Root and independent Sol 6.1 reviewer inspected test contracts.
+  Review found fixture assumption: empty level uses 32-unit chunks, so
+  shell moves now derive from `state.ChunkSize`. Second review tightened
   work bound: five equal radii could otherwise share one full cube and still
   pass. Radius-20 unit moves must visit fewer coordinates than one complete
   unique cube, while allowing independent shell traversal for all five radii.
-  The author repeated RED after these contract corrections.
+  Author repeated RED after these contract corrections.
 - RED command: `env GOCACHE=/tmp/gekko3d-gocache go test . -run
-  '^TestS3aSelection' -count=1`. Exit 1 from the missing public selection metric
+  '^TestS3aSelection' -count=1`. Exit 1 from missing public selection metric
   declarations; functional assertions could not execute at this phase.
   Local log: `/tmp/gekko-s3a-red.log`.
-- The first implementation run passed nine tests; two stopped before selection
-  because the imported fixture left three authored chunks without sector
-  references. The test author added valid startup references, then trimmed the
+- First implementation run passed nine tests; two stopped before selection
+  because imported fixture left three authored chunks without sector
+  references. Test author added valid startup references, then trimmed
   test's runtime references at its declared metadata mutation boundary. Root
-  checked that the raw-coordinate/global-filtering assertion still cannot be
+  checked that raw-coordinate/global-filtering assertion still cannot be
   satisfied by full-sector expansion. All eleven focused tests then passed;
   local log: `/tmp/gekko-s3a-fixture-green.log`.
 
-Automatic terrain override publication/removal invalidation is an explicit
-production-review gate. The focused tests do not independently exercise those
-mutation hooks after cache warmup.
+Production-review gate: automatic terrain override publication/removal invalidation. Focused tests do not independently exercise warmed-cache mutation hooks.
 
 ### Implementation and adversarial review
 
-Sol 6.1 implemented the approved scope with tests frozen. The selection owner
-uses global overlap counts, three per-observer sector-volume counts, cached
-visibility/full-sector/fallback derivations, and disjoint cube differences.
-Changed selection republishes aggregates; idle selection scans observers and
-tracked temporary additions without rebuilding radius volumes. Aggregate
-publication can still traverse the current demand sets after an input change;
-the shell counters do not measure all streaming work.
+Sol 6.1 implemented with tests frozen: global overlap counts, three per-observer sector-volume counts, cached visibility/full-sector/fallback and disjoint cube differences. Changed input republishes aggregates; idle scans observers/temporary additions without rebuilding volumes. Aggregate publication may traverse current demand sets; shell counters do not measure all streaming work.
 
-Root and an independent Sol 6.1 reviewer checked counts, global filtering,
-sector policy, slabs, transient restoration, ECS boundaries, worker isolation,
-and teardown. No actionable implementation finding remained. Both confirmed
-terrain override invalidation immediately after publication/removal, before
-later persistence failures. Start and completed teardown release the owner;
-pre-teardown failure retains it. Collision/destruction and navigation ownership
-remain independent of GPU readiness.
+Root and independent Sol 6.1 review: counts, global filtering, sector policy, slabs, transient restoration, ECS boundaries, worker isolation and teardown. No actionable finding. Terrain override invalidates immediately after publication/removal, before persistence failures. Start/completed teardown release owner; pre-teardown failure retains it. Collision/destruction and navigation stay independent of GPU readiness.
 
-Canonical docs and parent roadmap now describe the implemented API, read-only
-demand views, invalidation boundary, counters, and memory limits. S3 scene
-gathering and future layer selection remain separate work. Remaining S2 owner
-budgets, work queues, and decode cancellation are unchanged.
+Canonical docs/parent roadmap record API, read-only views, invalidation, counters and memory limits. Scene gathering and future layer selection remain S3 work; S2 budgets, queues and decode cancellation unchanged.
 
 ### Verification
 
@@ -224,12 +167,8 @@ env GOCACHE=/tmp/gekko3d-gocache go build ./...
 
 Local logs: `/tmp/gekko-s3a-engine-green.log`,
 `/tmp/gekko-s3a-race-green.log`, `/tmp/gekko-s3a-actiongame-green.log`, and
-`/tmp/gekko-s3a-actiongame-build.log`. Race emitted the existing macOS
-`LC_DYSYMTAB` linker warning; ActionGame build emitted a module stat-cache
+`/tmp/gekko-s3a-actiongame-build.log`. Race emitted existing macOS
+`LC_DYSYMTAB` linker warning; ActionGame build emitted module stat-cache
 permission warning. Both exited 0.
 
-No native/GPU smoke was run. This slice changes selection ownership and preserves
-the existing renderer interface; headless readiness/cohort fixtures cover
-continued handoff. No rendered pixel parity or measured speedup is claimed.
-Automatic terrain invalidation and late cleanup-error release were verified by
-code review rather than new dedicated failure-injection tests.
+No native/GPU smoke. Selection ownership changes preserve renderer interface; headless cohort/readiness fixtures cover handoff. No pixel parity or measured speedup claimed. Automatic terrain invalidation and late cleanup-error release verified by code review, not new failure-injection tests.

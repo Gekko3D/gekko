@@ -2,29 +2,29 @@
 
 Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f complete. S2 and S3 remain partial; other sections are proposals.
 
-Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). This review covers optimization proposals, excluding the measurement phase and its status records. Gekko code inspected at `1f7a281`, including current working-tree content. Rust performance targets and compression ratios are not Gekko predictions.
+Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
 ## 1. Recommendation and architectural boundary
 
-Apply compact bricks, packed GPU records, immutable payload sharing, bounded streaming, compiled asset data, and brick edit deltas. Several prerequisites already exist in Gekko. Adapt those systems rather than replacing them wholesale.
+Apply compact bricks, packed GPU records, immutable sharing, bounded streaming, compiled assets and brick deltas. Extend existing Gekko prerequisites.
 
-Preserve the [island streaming architecture](../content/island-streaming.md): separate terrain and POI layers, layer-specific resolution, height collision outside voxel replacements, camera-relative rendering, ECS lifetime, and main-thread commits. A common brick codec and scheduler do not require one global voxel lattice.
+Preserve [island streaming architecture](../content/island-streaming.md): separate terrain/POI layers, layer resolution, height collision outside voxel replacements, camera-relative rendering, ECS lifetime and main-thread commits. Shared codec/scheduler needs no global voxel lattice.
 
-Two Rust choices do not transfer directly. Gekko uses fitted, encoded normals rather than 6-bit neighbor normals. Gekko's island plan also preserves current manifests and payloads; Rust's deletion of every legacy reader is not an approved Gekko migration policy.
+Two Rust choices do not transfer: Gekko retains fitted encoded normals, not 6-bit neighbor normals; island plan retains manifests/payload compatibility. Deleting all legacy readers is not approved migration policy.
 
-Primary owners: renderer storage/upload and streamed content runtime. Consumers: physics, navigation, assets, editor, importers, ActionGame, and SpaceSim. Confidence: high for applicability and current structure; medium for runtime gains and final formats. Implementation requires the individual designs below; this document does not approve a terrain architecture change.
+Owners: renderer storage/upload and streamed runtime. Consumers: physics, navigation, assets, editor, importers, ActionGame and SpaceSim. Confidence: high for applicability/structure; medium for gains/formats. Individual designs required; no terrain architecture change approved.
 
 ## 2. Current Gekko foundations and gaps
 
 - [CPU brick storage](../../voxelrt/rt/volume/xbrickmap.go): 8³ bricks, 32³ sectors, 2³ micro masks. `Sector.PackedBricks` already uses popcount indexing. `Brick.Payload` still stores 512 bytes for every allocated brick, including uniform bricks.
-- [GPU upload](../../voxelrt/rt/gpu/manager_voxel.go): each sector reserves 64 brick records. Shader indexing uses `sector.brick_table_index + brick_idx_local`, not CPU popcount indexing. Mixed bricks use a paged `R8Uint` atlas; uniform bricks already skip the color payload.
-- [Auxiliary data](../../voxelrt/rt/volume/voxel_aux.go): 64 bytes of occupancy plus 1,024 bytes of encoded normals per brick. The normal encoding includes validity and two-sided lighting. [G-buffer traversal](../../voxelrt/rt/shaders/gbuffer.wgsl) already rejects empty voxels before loading their material.
+- [GPU upload](../../voxelrt/rt/gpu/manager_voxel.go): each sector reserves 64 brick records. Shader indexing uses `sector.brick_table_index + brick_idx_local`, not CPU popcount indexing. Mixed bricks use paged `R8Uint` atlas; uniform bricks already skip color payload.
+- [Auxiliary data](../../voxelrt/rt/volume/voxel_aux.go): 64 bytes of occupancy plus 1,024 bytes of encoded normals per brick. Normal encoding includes validity and two-sided lighting. [G-buffer traversal](../../voxelrt/rt/shaders/gbuffer.wgsl) already rejects empty voxels before loading their material.
 - [Streaming](../../streamed_level_runtime.go): worker preparation, generation checks, indexed chunk maps, proxy/full handoff, and separate collision/destruction interest already exist. [S3a selection](../../streamed_level_selection.go) caches idle demand and updates cube differences. Commit limits count chunks and elapsed time; global GPU content budgets are implemented in S1b.
 - [Caching](../../runtime_content_loader.go): S2b adds decoded-content byte budgets, scoped leases, in-flight suppression, and shared pending-result admission. [Prepared geometry](../../streamed_level_geometry_cache.go) has S2a byte accounting and pinned users. Live decoded leases and one sole oversized pending result expose pressure exceptions; GPU retention and other owner budgets remain further S2 work. These are not total process memory limits.
 - [Imported payloads](../../content/imported_world_chunk_binary.go): binary RLE already exists, with JSON metadata and SHA-256 verification. Decoding expands into voxel records, then [spawning](../../imported_world_spawn.go) builds `XBrickMap` through per-voxel writes. Terrain chunks remain JSON.
-- [Assets](../../assets/voxel_assets.go): geometry and palette assets are separate; shared geometry and copy-on-edit already exist. There is no equivalent to Rust's compiled fragment package in this path. [Geometry registration](../../asset_vox_model.go) deep-copies prepared maps. [Inline shapes](../../asset_voxel_shape.go) serialize geometry into a JSON cache key. [Entity LOD assets](../../entity_lod_runtime_assets.go) already generate simplified geometry and impostors at runtime; offline compilation can remove that work.
+- [Assets](../../assets/voxel_assets.go): geometry and palette assets are separate; shared geometry and copy-on-edit already exist. There is no equivalent to Rust's compiled fragment package in this path. [Geometry registration](../../asset_vox_model.go) deep-copies prepared maps. [Inline shapes](../../asset_voxel_shape.go) serialize geometry into JSON cache key. [Entity LOD assets](../../entity_lod_runtime_assets.go) already generate simplified geometry and impostors at runtime; offline compilation can remove that work.
 - [Physics](../../mod_vox_physics.go): collision already reads voxel geometry; asset grids are shared. `CopyChangedSectors` supplies immutable changed-sector snapshots to physics and [navigation](../../navigation_graph_runtime.go). There is no equivalent bulk JSON collision-box package to eliminate.
-- [Destruction](../../mod_destruction.go): the queue already holds sphere events, grouped per entity. [Sphere application](../../voxelrt/rt/volume/primitives.go) still calls `SetVoxel` per voxel. Connectivity already uses brick components, but scans the whole map when splitting runs.
+- [Destruction](../../mod_destruction.go): queue already holds sphere events, grouped per entity. [Sphere application](../../voxelrt/rt/volume/primitives.go) still calls `SetVoxel` per voxel. Connectivity already uses brick components, but scans whole map when splitting runs.
 - [Scene sync](../../mod_voxelrt_client_systems.go): transform/material comparisons and conditional BVH rebuilds already exist. ECS gathering still scans entities. [Shadow scheduling](../../voxelrt/rt/gpu/shadow_schedule.go) already budgets local lights, but global scene/upload revisions invalidate unrelated layers. [Directional cascades](../../voxelrt/rt/gpu/shadow_metadata.go) already follow camera slices and snap to texels.
 
 ## 3. Transfer map
@@ -63,61 +63,61 @@ Primary owners: renderer storage/upload and streamed content runtime. Consumers:
 
 ### P1. Compact immutable CPU bricks
 
-Add compact brick storage behind voxel read, iteration, raycast, and edit interfaces. Keep dense editable bricks as a separate representation. Suggested compact fields: brick coordinate, 512-bit occupancy mask, material mode, packed occupied values, and optional packed normal data. Keep sector brick masks and packed sector indexing.
+Add compact storage behind voxel read/iteration/raycast/edit APIs; keep dense editable representation. Compact fields: coordinates, 512-bit occupancy, material mode, packed values and optional packed normals. Retain sector masks/packed indexing.
 
-Uniform bricks store one material value. Mixed bricks store one byte per occupied voxel. Expand only touched bricks during edits; repack at edit publication. Decode static chunks directly into compact storage. Replace scattered direct `Payload` reads before changing the storage representation.
+Uniform: one material; mixed: one byte per occupied voxel. Expand touched bricks only; repack at publication. Decode static chunks directly. Migrate direct `Payload` readers before storage changes.
 
-Share immutable compact payloads between assets, rendering, physics, and navigation. Go pointers/slices provide sharing, but require explicit immutable ownership and copy-on-write; importing Rust `Arc` is unnecessary. Preserve `Revision`, `SectorRevisions`, dirty upload state, and existing snapshot semantics. Keep GPU offsets out of shared content data.
+Share immutable payloads across assets, rendering, physics and navigation. Go pointers/slices need explicit immutable ownership/copy-on-write; Rust `Arc` unnecessary. Preserve `Revision`, `SectorRevisions`, upload dirtiness and snapshots. No shared live GPU offsets.
 
-Benefit: lower static memory and fewer allocations/copies. Risk: rank lookup can cost more than dense access on heavily edited bricks. Keep dense storage for that workload. Occupancy-only consumers should not retain rendering normals unnecessarily.
+Benefit: less static memory/allocation/copying. Risk: rank lookup may cost more on heavily edited bricks; retain dense path. Occupancy-only consumers need not retain render normals.
 
 Owners: `volume/xbrickmap*.go`, `mod_vox_physics.go`, `navigation_graph_runtime.go`, `assets/voxel_assets.go`, imported-world preparation. Acceptance: identical authoritative voxels, material queries, raycasts, and unchanged asset instances after editing one instance.
 
 ### P2. Pack GPU brick records by sector occupancy
 
-Replace each sector's fixed 64-record block with records for occupied bricks. Use `base + popcount(mask below brick index)` in every shader lookup. The existing WGSL popcount helper provides a starting point; it is not the current GPU indexing contract.
+Replace fixed 64-record sector blocks with occupied records. Every shader uses `base + popcount(mask below brick index)`. Existing WGSL helper is starting point, not current indexing contract.
 
-Use sector-sized allocations with capacity classes or limited slack. Rebuild only the touched sector range when brick membership changes. Upload replacement records before publishing the sector base/mask together. Retire old ranges only when prior GPU submissions cannot reference them. Do not expose a new mask with an old packed table.
+Use sector allocations with capacity classes/slack. Membership changes rebuild touched range only. Upload records before publishing base/mask together. Retire old ranges after prior submissions can no longer reference them. Never pair new mask with old packed table.
 
-Decouple auxiliary buffer capacity from `requiredBricks = sector slots × 64`. Size auxiliary storage from its own live allocation requirement. This avoids reserving 1,088 auxiliary bytes for every potential brick record.
+Decouple auxiliary capacity from `requiredBricks = sector slots × 64`; size by live allocation. Avoid 1,088 auxiliary bytes per potential record.
 
-Tradeoff: popcount adds shader work and packed membership changes require relocation. Keep a dense sector table option for highly occupied or frequently edited sectors if packing loses its benefit.
+Tradeoff: shader popcount and membership relocation. Retain dense table option for highly occupied/frequently edited sectors if packing loses benefit.
 
 Owners: `gpu/manager_voxel.go`, allocation metadata, scene bindings. Update `gbuffer.wgsl`, `shadow_map.wgsl`, `transparent_overlay.wgsl`, and `particles_sim.wgsl` together. Acceptance: identical hits across empty/new/removed bricks, correct slot reuse, and records proportional to occupied bricks.
 
 ### P3. Pack mixed materials and existing normals
 
-Add a paged storage-buffer pool as an alternative to mixed-brick atlas slots. Index occupied values with `payload base + rank(occupancy, voxel index)`. Pack bytes into `u32` words and extract lanes in WGSL; do not allocate one `u32` per material byte. Respect adapter binding-size and storage-binding limits. [WGSL integer types](https://www.w3.org/TR/WGSL/#integer-types) define the portable integer representation.
+Prototype paged storage-buffer pool alongside atlas. Index with `payload base + rank(occupancy, voxel index)`. Pack bytes into `u32`, extract WGSL lanes; never one `u32` per byte. Respect adapter binding-size/storage limits. [WGSL integer types](https://www.w3.org/TR/WGSL/#integer-types) define portable representation.
 
-Pack Gekko's current 16-bit normal words by occupied voxel. Preserve octahedral values, validity, and two-sided bits exactly. Uniform material does not imply uniform normals. Keep the micro mask as a traversal skip structure. Optional lane prefix counts trade a small header cost for fewer popcounts.
+Pack current 16-bit normal words per occupied voxel. Preserve octahedral values, validity and two-sided bits exactly. Uniform material does not imply uniform normals. Retain micro mask for traversal; optional lane prefixes trade header bytes for fewer popcounts.
 
-Rust's 6-bit normal replacement would change fitted surfaces, thin walls, and lighting. Mask-derived normals remain a separate visual design experiment. Boundary invalidation must retain Gekko's current fitting halo, including extended surface fitting, rather than only six immediate neighbors.
+Rust 6-bit replacement changes fitted surfaces, thin walls and lighting. Mask-derived normals remain separate visual experiment. Retain full Gekko fitting halo, including extended surface fitting, not only six neighbors.
 
-Storage arithmetic, excluding allocator slack, sector tables, and pool page overhead: a current mixed brick uses `32 + 512 + 64 + 1024 = 1632` bytes. A packed mixed brick with `n` occupied voxels uses approximately `32 + 64 + 3*n` bytes. At `n = 64`, that is `288` bytes. These are layout estimates, not measured savings. Uniform bricks save their material payload already; their remaining normal allocation is the target.
+Excluding slack, sector tables and page overhead: current mixed brick `32 + 512 + 64 + 1024 = 1632` bytes; packed with `n` occupied voxels approximately `32 + 64 + 3*n`. At `n = 64`: `288` bytes. Layout estimates, not measured savings. Uniform GPU bricks already skip material payload; remaining normals are target.
 
-Prototype both storage paths behind one accessor. Delete the atlas only after visual parity and favorable traversal behavior on sparse and dense content. Packed buffers can lose texture locality; reject a slower default. Disk/CPU compaction can ship without replacing the atlas.
+Prototype both paths behind one accessor. Remove atlas only after sparse/dense visual parity and favorable traversal. Buffers may lose texture locality; reject slower default. CPU/disk compaction can ship independently.
 
 Owners: voxel pool allocator, upload/bind groups, traversal shaders, normal builder, app pipeline layouts. Acceptance: identical normals, AO, transparency, shadows, particles, and edited seams; no stale allocation reads.
 
 ### P4. Share immutable GPU material blocks
 
-Intern immutable material tables by canonical material content and semantics. Allocate one GPU block per distinct table rather than per `VoxelObject`. Reuse cached CPU palette definitions and compiled table IDs; remove repeated runtime serialization from identity calculation.
+Intern by canonical material content/semantics; one GPU block per distinct table, not per `VoxelObject`. Reuse CPU palettes/compiled IDs; remove repeated identity serialization.
 
-Retain the 256-entry local palette addressing contract. A large level can have many tables; do not force all materials into one `uint8` palette. Color alone is not material identity: gameplay tags, transparency, emission, and animation bindings matter.
+Retain 256-entry local addressing. Many tables allowed; never force level into one `uint8` palette. Identity includes gameplay tags, transparency, emission and animation bindings, not color alone.
 
-Keep instance-specific animated palettes and material overrides private, or copy the shared block on first mutation. Reference-count shared GPU blocks and retire them safely. Acceptance: sharing scales with distinct immutable tables; animated or recolored instances do not alter other instances.
+Keep animated palettes/overrides private or copy shared block on first mutation. Reference-count and safely retire blocks. Acceptance: sharing follows distinct tables; animation/recolor never changes other instances.
 
 Owners: material allocation in `manager_voxel.go`, bridge material sync, `AssetServer`, compiled asset tables.
 
 ### P5. Build immutable upload packets on workers
 
-Replace RLE/JSON decode into voxel structs followed by `SetVoxel` reconstruction with direct brick decode. Prepare occupancy, normal bytes, tight bounds, and upload records off the main thread. Importers and terrain generators should use bulk brick builders too.
+Replace RLE/JSON voxel structs plus `SetVoxel` reconstruction with direct brick decode. Prepare occupancy, normals, tight bounds and uploads off main thread. Importers/terrain generators use bulk builders too.
 
-Transfer prepared slices by ownership through existing worker channels. Share only immutable backing storage. Mutable live maps, renderer allocation state, and temporary decoder buffers must not leak into worker snapshots. Reuse changed-sector snapshots rather than introducing whole-scene clones.
+Transfer slice ownership through worker channels; share immutable backing only. No mutable live maps, renderer allocations or decoder temporaries in snapshots. Reuse changed-sector snapshots, not whole-scene clones.
 
-Add an explicit immutable-adoption registration path: `RegisterSharedVoxelGeometryWithCacheKey` currently calls `xbm.Copy()` even for worker-prepared geometry. Preserve its defensive-copy behavior for mutable callers; prepared immutable payloads need not pay that second geometry copy.
+Add immutable-adoption registration. `RegisterSharedVoxelGeometryWithCacheKey` currently calls `xbm.Copy()` for worker geometry. Retain defensive copies for mutable callers; immutable prepared payloads avoid second copy.
 
-Keep `XBrickMap` content, CPU snapshots, GPU allocation metadata, and dirty-work queues as separate owners. This is a targeted ownership change, not a Bevy-style parallel ECS scheduler replacement. Workers must never mutate ECS or call WebGPU.
+Keep `XBrickMap`, CPU snapshots, GPU allocations and dirty queues separately owned. Targeted ownership change, not Bevy parallel ECS replacement. Workers never mutate ECS or call WebGPU.
 
 Acceptance: runtime admission registers prepared geometry without rebuilding it voxel by voxel; no duplicate source representation remains pinned after its consumers release it.
 
@@ -125,88 +125,81 @@ Acceptance: runtime admission registers prepared geometry without rebuilding it 
 
 ### S1. Global budgets, priority queues, and renderer readiness
 
-Finish the existing island plan's upload/readiness contract before adding more detail. Use global per-frame upload bytes and changed-brick/record limits across all objects. S1b implements these content-write limits, replacing per-object limits that allowed work to grow with object count. Allocation/migration and lookup work remain outside this cap.
+Finish island readiness/uploads before more detail. Global per-frame bytes and brick/record limits span all objects; S1b implements content caps. Allocation/migration/lookup remain outside cap.
 
-Budget commits by estimated bytes and bounded work units as well as elapsed time. A timer checked between chunks cannot prevent one huge commit from stalling. Stage large chunks hidden and resume their uploads across frames.
+Budget commits by bytes, bounded units and time. Between-chunk timer cannot bound one huge commit. Stage hidden chunks; resume uploads across frames.
 
-Use the island plan's ticket/generation/revision readiness contract. Readiness includes geometry, materials, lookup topology, and every required upload. Keep parents or proxies visible until all replacement children or coverage-group members are ready. Hidden-for-upload must differ from excluded-from-upload.
+Use island ticket/generation/revision readiness: geometry, materials, lookup and all required uploads. Retain parents/proxies until complete replacement cohort/group ready. Hidden-for-upload differs from excluded-from-upload.
 
-Maintain deterministic queues for preparation, ready commits, uploads, retry, retention, and retirement. Use stable ties and aging. Reserve progress for collision and visible detail; the current proxy-first channel drain must not starve gameplay or detail indefinitely. Atlas/pool pressure causes backpressure and eviction, not an atlas-full panic.
+Deterministic prepare/commit/upload/retry/retain/retire queues with stable ties/aging. Reserve collision/detail progress; proxy-first drain must not starve gameplay/detail. Atlas/pool pressure causes backpressure/eviction, never atlas-full panic.
 
 Owners: streamed runtime, renderer bridge, `app_voxel_residency.go`, GPU upload manager. Acceptance: global limits hold for many objects; delayed/failed uploads and teleports retain valid coverage and safe collision.
 
 ### S2. Bound caches and worker throughput by bytes
 
-Add byte accounting for decoded content, prepared geometry, pending results, retained GPU data, auxiliary normals, material tables, and editable patches. Replace entry-only limits with byte ceilings. Bound `RuntimeContentLoader` too; otherwise evicting geometry leaves source voxel arrays resident.
+Budget decoded content, prepared geometry, pending results, retained GPU data, normals, materials and editable patches by bytes. Bound `RuntimeContentLoader`; geometry eviction alone leaves source arrays resident.
 
-Pin live render, collision, navigation, and fallback users. Evict unreferenced detail first. Track shared backing storage once in global physical-memory accounting, while retaining per-user residency costs for admission.
+Pin live render/collision/navigation/fallback users; evict unreferenced detail first. Count shared backing once globally; retain per-user admission costs.
 
-Use per-key in-flight load/build suppression to prevent concurrent cache misses duplicating IO and decode. Normalize path identities; compiled data should use content IDs. Separate bounded IO, decode/generation, and navigation work queues so one workload cannot consume all workers. Cancel obsolete demand and discard stale generations.
+Suppress per-key concurrent IO/decode/build. Normalize paths; compiled data uses content IDs. Separate bounded IO, decode/generation and navigation queues. Cancel obsolete demand; discard stale generations.
 
-Keep explicit empty-page metadata. Current empty-chunk skipping must still honor placement content, backing, edit overrides, and collision interest. No-IO emptiness is valid only when all relevant content is empty.
+Retain explicit empty-page metadata. Empty skipping must honor placements, backing, overrides and collision interest. No-IO emptiness requires every relevant source empty.
 
 Acceptance: total cache/pending memory stays bounded while traveling; concurrent requests reuse one result; gameplay-only chunks need no GPU admission.
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3f implement observer selection, GPU scene record reuse,
-ECS candidate inventories, hierarchy reuse, component publication revisions and
-hierarchy output publication. See the [delivery record](#completed-work) for
-commits and designs. Lasting contracts live in [streaming docs](../content/streaming-and-worlds.md),
-[renderer runtime](../renderer/runtime.md) and [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3f implement selection, GPU records, ECS inventories, hierarchy reuse and component/hierarchy publication. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
-Complete helper/input, animation, physics, gameplay and asset notifications,
-entity worklists and incremental bridge extraction remain further S3 work.
-Hierarchy and renderer still read live values. Nonempty caches can retain peak
-capacity; no general byte ceiling or frame-time gain is established.
+Helper/input, animation, physics, gameplay and asset notifications, entity worklists and incremental extraction remain S3 work. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
-Cache observer selection by spatial bucket, radii, layer transform/topology, and PVS state. Update entering/exiting shells instead of constructing all radius sets every frame. Recompute on teleports, observer additions/removals, radius changes, edits, and visibility changes. Merge multiple observers with demand counts so one observer cannot evict another's content.
+Cache by spatial bucket, radii, layer transform/topology and PVS. Update shells; recompute after teleports, observer/radius changes, edits and visibility. Count overlapping demand so one observer cannot evict another's content.
 
-Maintain a stable entity/object table. Extend current transform/material comparisons with dirty registrations, hierarchy changes, removals, and visibility notifications. Keep camera-dependent culling/LOD separate from content change tracking.
+Stable entity/object table: extend comparisons with dirty registration, hierarchy/removal/visibility notifications. Separate camera culling/LOD from content changes.
 
-Gekko's ECS has no automatic Bevy `Changed<T>` contract. Add explicit versions/events at owning mutation boundaries before relying on incremental extraction. Preserve transform propagation and command-flush order, including animated children and moving brushes. Rebuild GPU records/BVH only when relevant inputs change.
+No automatic Bevy `Changed<T>` in Gekko. Publish versions/events at mutation owners before incremental extraction. Preserve hierarchy/flush order for animation/brushes. Rebuild GPU records/BVH only for relevant changes.
 
-Acceptance: idle observers do not rebuild residency sets; idle geometry does not rebuild records; movement and ancestor changes appear at the current stage boundary.
+Acceptance: idle observers do not rebuild residency sets; idle geometry does not rebuild records; movement and ancestor changes appear at current stage boundary.
 
 ### S4. Remove synchronous persistence from unload
 
-`persistChunkOverrides` serializes whole snapshots and saves during unload. Snapshot immutable changes on the main thread; encode/compress/write on a bounded persistence worker. Publish override references only after successful atomic file replacement.
+`persistChunkOverrides` saves whole snapshots during unload. Main thread snapshots immutable edits; bounded worker encodes/compresses/writes. Publish override references only after successful atomic replacement.
 
-Keep dirty data pinned until durable publication. Failed saves retain their old references and retry; eviction must not drop unpublished edits. Preserve navigation's existing immutable generation publication. This change remains useful before compact edit deltas exist.
+Pin dirty data until durable publication. Failed saves retain old references/retry; eviction cannot lose unpublished edits. Preserve navigation's immutable generation publication. Useful before compact deltas.
 
 ## 6. Asset and level compression
 
 ### C1. Shared compact brick codec with independent zstd frames
 
-Define one lossless CPU/disk brick schema used by compiled world chunks, asset geometry, and deltas. Encode sorted occupied brick coordinates, occupancy masks, uniform/mixed values, and optional normal/material layers. GPU packets may add alignment and page metadata; persisted data must not contain live GPU offsets.
+One shared lossless CPU/disk schema for compiled chunks, assets and deltas: sorted occupied brick coordinates, occupancy, uniform/mixed values and optional normal/material layers. GPU packets may add alignment/pages; persisted bytes never contain live GPU offsets.
 
-Use independent checksummed zstd frames per page/chunk or bounded chunk group. Include compressed/decoded lengths, kind, content identity, codec version, normal bake version, and dictionary ID. Validate allocation bounds, coordinates, mask/value counts, references, and trailing/truncated data before admission.
+Independent checksummed zstd frames per page/chunk or bounded group. Include compressed/decoded lengths, kind, identity, codec/normal bake versions and dictionary ID. Validate allocation/coordinate bounds, mask/value counts, references and trailing/truncated data before admission.
 
-The zstd content checksum detects corruption; SHA-256 can stay for offline content identity/build caches. Remove runtime SHA-256 only in the new checksummed path after equivalent integrity checks exist. A TOC provides random access between independent frames; one zstd stream for an entire level does not. [Zstandard format](https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md).
+zstd content checksum detects corruption; retain SHA-256 for offline identity/build caches. Remove runtime SHA-256 only on new checksummed path after equivalent checks exist. TOC enables random access across independent frames; one whole-level stream does not. [Zstandard format](https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md).
 
-Evaluate `github.com/klauspost/compress/zstd` as a pure-Go codec candidate. Reuse decoders, bound memory/concurrency, and require checksum verification. Pin a version compatible with Gekko's Go toolchain. Optional dictionaries must ship with stable IDs; begin without them. Deterministic bytes require pinned encoder/version/options; derive content IDs from canonical uncompressed content. [Go zstd documentation](https://github.com/klauspost/compress/tree/master/zstd).
+Evaluate pure-Go `github.com/klauspost/compress/zstd`; pin Go-compatible version. Reuse decoders, bound memory/concurrency, verify checksums. Begin without dictionaries; optional dictionaries need stable IDs. Deterministic bytes need pinned encoder/version/options; content IDs derive from canonical uncompressed data. [Go zstd documentation](https://github.com/klauspost/compress/tree/master/zstd).
 
-Preserve Gekko's current manifest/payload compatibility policy. Add explicit payload versions; do not reinterpret an existing payload kind or delete v2 readers because Rust did. Authored `.gkasset`, `.gklevel`, and editor JSON remain authoring inputs. Shipping runtime data becomes compact only where a compiled path exists.
+Preserve manifest/payload compatibility. Add explicit versions; never reinterpret kinds or delete v2 readers because Rust did. `.gkasset`, `.gklevel` and editor JSON remain authoring inputs. Compact runtime shipping requires compiled path.
 
 Owners: `content/imported_world_chunk_binary.go`, terrain IO, auxiliary IO, world delta IO, importers, baker, runtime loader. Acceptance: bounded range decode reconstructs identical authoritative geometry, normals, and material semantics; malformed blobs fail before publication.
 
 ### C2. Regional metadata and packs: conditional follow-up
 
-Move regional placements, lights, and asset demand into lazy page/region catalogs if global startup metadata becomes a scaling limit. Keep only discovery/index data global. Reuse the island page forest and preserve indoor PVS, backing, replacement footprints, stable placement IDs, and navigation references.
+If global startup metadata limits scale, load regional placements/lights/assets lazily; keep discovery/index global. Reuse island page forest. Preserve PVS, backing, replacement footprints, stable placement IDs and navigation references.
 
-Region packs can reduce file opens and combine small independent frame ranges. A sorted TOC would key by layer/content ID, `(x,y,z)`, LOD, and payload kind. Use bounded open-file caches and range reads; never decompress a whole region to fetch one chunk.
+Packs reduce opens/combine frame ranges. Sorted TOC: layer/content ID, `(x,y,z)`, LOD, kind. Bound open-file cache; range-read, never decompress whole region for one chunk.
 
-The current island plan explicitly defers binary manifests, generic packs, and additional hierarchy formats until an observed bottleneck justifies them. Treat Rust F5/F1 packaging as conditional, requiring a separate architecture decision. Brick compression does not depend on region packs. Preserve JSON manifests initially; avoid an unnecessary second page index.
+Island plan defers binary manifests, generic packs and extra hierarchy formats until observed bottleneck. Rust F5/F1 packaging needs separate architecture decision. Brick compression is independent; retain JSON manifests and avoid second page index.
 
 ### C3. Compile heavy assets once; add asset LOD
 
-Add an offline runtime asset compiler. Emit compact geometry sections, bounds, part hierarchy, pivots, collision source references, palette/material tables, marker bindings, and animation/rig references. Runtime loading consumes compiled sections instead of parsing voxel JSON/VOX and building geometry at spawn.
+Offline runtime compiler emits compact geometry, bounds, hierarchy, pivots, collision references, palettes/materials, markers and animation/rig references. Runtime consumes compiled sections, avoiding voxel JSON/VOX parsing and spawn builds.
 
-Use content identity plus source lattice, resolution, LOD, normal bake version, and material mapping for deduplication. Keep placement transforms and animation state on instances. Share compiled headers/tables across placements; load them on first demand and release after the final unpinned user. Reuse `AssetServer` and streamed cache ownership instead of a parallel residency service.
+Deduplicate by content identity, source lattice/resolution, LOD, normal bake version and material mapping. Instance owns transforms/animation. Share compiled headers/tables; load on demand, release after final unpinned user. Reuse `AssetServer`/streamed caches, not parallel residency service.
 
-Compile 2× voxel LOD sections for large assets where useful. Integrate with existing `EntityLODComponent` and runtime asset bindings. Keep a resident coarse fallback while finer sections upload. Distance selection may start per instance; per-ray LOD is a later shader change.
+Compile 2× LOD for useful large assets; integrate `EntityLODComponent`/runtime bindings. Retain coarse fallback during fine uploads. Start with instance distance selection; per-ray LOD remains later shader work.
 
-Collision, navigation, and edits consume authoritative level-0/source masks. Render resampling cannot replace collision authority. Preserve independent parts on animated assets; static collapse remains subject to existing eligibility rules. Do not remove a source material channel unless its palette mapping is proven one-to-one; imported `Value` and `MaterialValue` can differ.
+Collision/navigation/edits use authoritative level-0/source masks; render resampling cannot replace collision. Keep animated parts independent; static collapse follows eligibility rules. Remove source material channel only after proven one-to-one mapping: imported `Value` and `MaterialValue` may differ.
 
 Acceptance: repeated placements share compiled geometry; spawn avoids JSON geometry keys and runtime collapse work; editing one placement copies only touched bricks; distant assets retain coverage.
 
@@ -214,111 +207,111 @@ Acceptance: repeated placements share compiled geometry; spawn avoids JSON geome
 
 ### W1. Accelerators per layer, dynamic BVH retained
 
-Keep terrain, imported POIs, edited terrain patches, and dynamic props as distinct authority layers. Gekko already has 3D chunk coordinates and a `(group,x,y,z)` terrain lookup used for adjacency. That lookup is not a scene-level world-grid DDA accelerator.
+Keep terrain, POIs, edited patches and dynamic props as separate authority layers. Existing 3D chunks and `(group,x,y,z)` terrain adjacency lookup are not world-grid DDA accelerator.
 
-Add a static page/grid accelerator per compatible layer or aligned POI group. Traverse occupied cells front-to-back with tight bounds, then enter their brick maps. Keep dynamic, rotated, animated, and off-grid objects in BVH. Never concatenate terrain/POI integer coordinates without layer origin and voxel scale.
+Static page/grid accelerator per compatible layer/aligned POI group: traverse occupied tight cells front-to-back, then bricks. Retain dynamic/rotated/animated/off-grid BVH. Never combine terrain/POI coordinates without layer origin/voxel scale.
 
-For closest hits, merge accelerator and BVH candidates by entry distance; propagate the nearest hit bound. Retain layer replacement masks and terrain/POI coverage groups. Existing CPU raycasts should use equivalent candidates, with authoritative resolution for gameplay.
+Merge accelerator/BVH entries by distance; propagate nearest-hit bound. Retain replacement masks and terrain/POI groups. CPU raycasts use equivalent candidates and authoritative gameplay resolution.
 
-Terrain collision follows the island plan: height tiles outside edited patches/POI replacements; voxel masks inside them. Existing voxel collision can gain range-limited sector lookup and bit scans. Preserve exact transformed prop collision and fail-closed readiness.
+Terrain collision: island height tiles outside edits/POI replacements; voxel masks inside. Add range-limited sector lookup/bit scans to voxel queries. Preserve transformed prop precision and fail-closed readiness.
 
-This adapts Rust W1–W3/K1–K4. It does not require revoxelizing all static content into one 10 cm world or adding a Y coordinate that Gekko already has.
+Adapt Rust W1–W3/K1–K4 without unified 10 cm voxel world or redundant Y coordinate.
 
 ### W2. LOD chains per layer and conservative coverage
 
-Use 2× voxel chains for imported static POIs and assets; terrain uses the island plan's height/surface page hierarchy. Select by projected voxel size, bounds, camera scale, and layer policy. Keep PVS filtering for interiors.
+Use 2× voxel chains for static POIs/assets; island height/surface hierarchy for terrain. Select by projected voxel size, bounds, camera scale and layer policy; retain indoor PVS.
 
-For voxel LOD, occupancy OR is conservative but can thicken thin walls and close openings. Preserve material/transparency rules and compute normals at each level. Edits remain authoritative at level 0. Approximate coarse collision, if added, needs an explicit API and must never drive player collision.
+Occupancy OR is conservative but thickens walls/closes openings. Preserve materials/transparency; rebake normals per LOD. Edits stay authoritative at level 0. Approximate coarse collision needs explicit API and must never drive player collision.
 
-Start with page/instance selection and atomic parent/child readiness. Later per-ray cone-footprint selection can choose among resident levels, with the finest resident coarser fallback. It requires consistent depth, AO, shadows, transparency, and hit-material semantics across passes.
+Start page/instance selection with atomic readiness. Later per-ray cone-footprint selection uses resident levels/finest resident coarser fallback. Preserve depth, AO, shadow, transparency and hit-material semantics across passes.
 
-Far heightfields/impostors remain optional terrain representations. They cannot cover POI interiors or replace editable/collision sources. Preserve replacement coverage until its alternative is ready.
+Far heightfields/impostors optional; cannot cover POI interiors or replace edit/collision sources. Retain replacement coverage until alternative ready.
 
 ### W3. Remove traversal truncation as a scaling failure
 
-The CPU BVH builder already splits at the median. G-buffer traversal has a 64-entry stack and a 512-node iteration cap. A balanced tree protects stack depth; it does not guarantee fewer than 512 node visits.
+CPU BVH uses median splits. G-buffer: 64-entry stack, 512-node cap. Balanced depth does not bound visits below 512.
 
-Prove stack bounds against the generated tree and make traversal complete within valid structural bounds. Remove silent geometry dropping from arbitrary iteration caps and stack guards. Audit shadow, transparent, particle, and CPU traversal too. If broader leaves are used, leaf instance order must be contiguous with the shader's leaf range contract.
+Prove generated-tree stack bounds; complete traversal within structural limits. Remove silent dropping at arbitrary caps/guards. Audit shadow/transparent/particle/CPU traversal. Broader leaves require contiguous shader leaf instance ranges.
 
 Keep existing near-first child ordering. Rust's exact 30-depth/32-stack constants do not transfer. Acceptance: dense overlapping scenes render every candidate; no correctness dependency on visit limits.
 
 ### W4. Generate surface bricks directly
 
-Replace per-voxel `SetVoxel` loops with bulk mask/value construction for baked/imported chunks and terrain surface pages. For distant natural terrain, materialize visible surface bands rather than filled columns. Height tiles remain collision authority there.
+Replace `SetVoxel` loops with bulk masks/values for baked/imported chunks and terrain pages. Distant natural terrain materializes surface bands, not full columns; height tiles retain collision authority.
 
-Integrate edited patch deltas before publication. Preserve implicit backing so first excavation reveals valid interior material and new frontier surfaces. POI caves/overhangs remain full 3D voxel content; height data is not their source.
+Apply patch deltas before publication. Retain implicit backing so excavation exposes valid interiors/frontiers. POI caves/overhangs retain full 3D voxel authority, not height data.
 
 ## 8. Destruction changes
 
 ### E1. Apply operations per brick
 
-Keep the existing event queue and extend it with deterministic sequence IDs and shape operations: sphere, box, capsule, and stamp. Resolve affected entities/chunks/bricks once. Build a brick-local shape mask and apply changed occupancy/material values in bulk.
+Extend event queue with deterministic sequence IDs and sphere/box/capsule/stamp operations. Resolve affected entities/chunks/bricks once; apply brick-local shape masks and changed occupancy/material values in bulk.
 
-Publish dirty masks, sector membership, bounds, and revisions once per changed brick/batch. Preserve last-write order, voxel-center shape semantics, copy-on-edit, backing materialization, persistence marking, and navigation edit notification. Gekko's problem is repeated synchronous voxel work; Rust's 64-write queue and radius cap are not Gekko constraints.
+Publish dirty masks, membership, bounds and revisions per changed brick/batch. Preserve last-write order, voxel-center shapes, copy-on-edit, backing materialization, persistence marking and navigation edit notification. Optimize synchronous voxel work; Rust 64-write queue/radius cap are not Gekko limits.
 
-Budget touched bricks and fitted-normal halo work. Resume large operations in deterministic brick order, never halfway through one brick. Keep unresident edits against stable content/chunk IDs and apply before the chunk becomes visible. Define whether cross-chunk edits publish progressively or atomically before changing gameplay latency.
+Budget touched bricks/fitted-normal halos. Resume deterministic brick order, never partial brick. Store unresident edits by stable content/chunk IDs; apply before visibility. Decide progressive/atomic cross-chunk publication before gameplay latency changes.
 
 Owners: destruction module, primitive/edit helpers, backing, streamed runtime, dirty tracking. Acceptance: bulk sphere results match current voxel-center inclusion and operation order; no missed edits across chunk/backing boundaries.
 
 ### E2. Persist changed bricks instead of whole geometry
 
-Store each delta against base content identity, chunk/layer or stable placement/part ID, and authoritative lattice. Encode changed-voxel mask plus final values, including explicit zero removals. Keep sparse/uniform encodings and switch to a full compact brick when a dense delta is cheaper.
+Key deltas by base content identity, chunk/layer or stable placement/part ID and authoritative lattice. Encode changed-voxel mask/final values, including explicit zero removals. Use sparse/uniform forms; switch to full compact brick when cheaper.
 
-Serialize deltas with C1 compression. Preserve backing removals, excavation/frontier state, placement transforms/deletions, and navigation override ownership. Loading combines immutable base and current deltas before deriving render/collision/LOD data. Reject a mismatched base identity rather than applying edits to unrelated regenerated geometry.
+Compress deltas with C1. Preserve backing removals, excavation/frontier state, placement transforms/deletions and navigation ownership. Combine immutable base/deltas before render/collision/LOD derivatives. Reject mismatched base identity.
 
-Track dirty deltas continuously; unloading must not scan every remaining voxel to discover changes. Save through S4 atomic publication. Acceptance: destruction survives eviction and reload; overlapping paint/carve remains last-write-wins; empty overrides do not resurrect original content.
+Track dirtiness continuously; never scan remaining voxels on unload. Save via S4 atomically. Acceptance: edits survive eviction/reload; paint/carve stays last-write-wins; empty overrides never resurrect base.
 
 ### E3. Update derivatives only where changed
 
-Feed one changed-brick set to normal halo updates, physics snapshots, navigation invalidation, and coarse proxy/LOD updates. Rebuild only coarse bricks covering changed fine bricks; stop upward propagation only when the coarse result is identical. Keep edited fine coverage until the replacement proxy is ready.
+Share one changed-brick set across normal halos, physics, navigation and coarse updates. Rebuild covering coarse bricks; stop upward propagation only if identical. Retain fine coverage until proxy ready.
 
-Reuse current revision-based physics/navigation snapshots. Preserve exact collision query behavior and streamed readiness; do not promise same-frame asynchronous physics without changing its publication contract. Keep local navigation overlays active until complete replacement graph tiles publish, including reciprocal boundary dependencies.
+Reuse revision-based physics/navigation snapshots. Preserve exact queries/readiness; same-frame async physics needs publication redesign. Keep local overlays until complete graph tiles publish, including reciprocal boundary dependencies.
 
 Acceptance: untouched geometry and navigation tiles remain shared; stale worker results cannot overwrite newer edits; craters remain visible through LOD transitions.
 
 ### E4. Bound connectivity and fragment work
 
-Gekko already performs connectivity splitting, unlike Rust's performance-only track. Preserve `CarveOnly` and backed-world restrictions. Do not run whole-map splitting after every small carve when the caller requests geometry-only editing.
+Retain existing connectivity splitting, `CarveOnly` and backed-world restrictions. Geometry-only small carves need no whole-map split.
 
-Cache brick component labels and boundary face masks by brick revision. Recompute changed bricks and affected connections. Removing a bridge can split a large component, so local checks alone cannot prove global connectivity. Complete that graph search on an immutable worker snapshot or bounded work queue; commit only if its source revision still matches.
+Cache component labels/boundary face masks by brick revision; recompute changed bricks and affected connections. Bridge removal may split large component; local checks cannot prove connectivity. Search immutable worker snapshot/bounded queue; commit only at matching source revision.
 
-Keep current largest-component retention, transforms, palette, mass, collision, and fragment entity semantics. Fragment geometry/GPU admission needs S1 budgets too. Acceptance: no stale fragment commits, lost voxels, or changed split outcomes. This optimizes existing destruction behavior; it adds no new structural-integrity gameplay.
+Preserve largest-component retention, transforms, palette, mass, collision and fragment entities. Fragment admission also uses S1 budgets. Acceptance: no stale commits, lost voxels or changed split outcomes. No new structural-integrity gameplay.
 
 ### E5. GPU removal preview: optional last step
 
-After P3/E1/E2, a compute pass may preview removal against resident GPU bricks. Clear occupancy and compact both packed materials and packed normals consistently; changing only the mask would corrupt rank indexing. Update fitting halos or invalidate normals for the CPU's final rebake.
+After P3/E1/E2, optional compute removal preview. Compact occupancy, materials and normals consistently; mask-only changes corrupt rank indexing. Update halos or invalidate normals for final CPU rebake.
 
-Tag previews with operation sequence and source revision. Reject older CPU uploads after newer previews, then replace previews with authoritative CPU bytes. Add/build operations remain CPU-owned because allocations can grow. Collision/navigation follow CPU authority; hold movement where a preview temporarily outruns safe collision publication.
+Tag preview by sequence/source revision. Reject older CPU uploads; replace with authoritative CPU bytes. Add/build remains CPU-owned for growing allocations. Collision/navigation remain CPU authority; hold movement when preview outruns safe collision publication.
 
-This needs a GPU-owned writable buffer path, render-graph ordering, and recovery on eviction/device recreation. The current GPU editing hook is not evidence of this complete feature. Defer until CPU bulk edits and upload scheduling are insufficient for the intended interaction.
+Requires writable GPU buffers, render-graph ordering and eviction/device recovery. Existing editing hook does not prove feature complete. Defer until CPU bulk edits/uploads cannot meet interaction needs.
 
 ## 9. Additional rendering proposals
 
 ### R1. Optional internal render scale
 
-Add a default-1.0 scene render scale. Derive scene targets, dispatches, camera rays, Hi-Z, lighting tiles, transparent depth, decals, water, and temporal media from one sizing/mapping contract. Upscale through the current resolve compositor; text/gizmos may remain output-resolution overlays.
+Default-1.0 render scale: one sizing/mapping contract for targets, dispatches, rays, Hi-Z, lighting, transparent depth, decals, water and temporal media. Upscale through resolve; text/gizmos may stay output-resolution.
 
-Audit particles, sprites, beams, astronomical/planet features, picking, resize, and reverse-Z. Reset incompatible histories on size changes. CPU picking remains authoritative. At scale 0.5, scene pixel count becomes one quarter; frame time does not necessarily follow. Lower resolution is an explicit quality tradeoff, not a lossless storage optimization.
+Audit particles, sprites, beams, planet/astronomical features, picking, resize and reverse-Z. Reset incompatible histories after resize; CPU picking authoritative. Scale 0.5 quarters pixels, not necessarily frame time. Explicit quality tradeoff, not lossless storage optimization.
 
 Owners: app resources/frame graph, GPU render setup, resolve and feature shaders. Acceptance: scale 1.0 preserves current output; lower scales keep every feature aligned through resize and depth reconstruction.
 
 ### R2. Narrow shadow invalidation
 
-Retain current camera-focused directional cascades and local-light cadence budgets. Record changed world-space bounds and geometry revisions. Dirty only lights/cascades whose caster volumes intersect them, including removed geometry and streamed activation.
+Retain camera-focused cascades/local-light budgets. Track changed bounds/revisions; dirty intersecting caster volumes only, including removal/streamed activation.
 
-Prevent `VoxelUploadRevision` changes from invalidating every unrelated local layer. Preserve cached cascade transforms until each corresponding map is rebuilt. After that, consider scrolling clipmap cascades with dirty texel regions. Per-pixel sun rays are an alternative requiring separate visual/cost review, not an automatic replacement.
+Prevent `VoxelUploadRevision` invalidating unrelated lights. Retain cached cascade transforms until map rebuild. Later consider scrolling clipmaps/dirty texels. Per-pixel sun rays need separate visual/cost review.
 
 Acceptance: edits update affected shadows, unrelated streaming preserves cached shadows, and delayed layers retain coherent transforms.
 
 ### R3. Conservative coarse beam prepass
 
-Consider only after static accelerators and LOD exist. An 8×8 ray block needs a conservative lower bound on the nearest geometry across its whole cone. A center-ray sample or ordinary coarse LOD hit cannot safely provide that bound.
+Consider after static accelerators/LOD. 8×8 block needs conservative nearest-geometry lower bound across whole cone. Center-ray/coarse hit is unsafe.
 
-Use expanded bounds/occupancy and subtract a conservative margin before primary traversal. Include dynamic objects and transparent surfaces where required. Keep CPU gameplay raycasts unchanged. Reject the prepass if overhead dominates or any thin object disappears.
+Use expanded bounds/occupancy minus conservative margin. Include required dynamic/transparent surfaces. CPU gameplay raycasts unchanged. Reject if overhead dominates or thin objects disappear.
 
 ## 10. Delivery order and decisions
 
-1. **Streaming safety first:** S1/S2, then S3 and S4. These fit the current island plan and cap work/memory before content density increases.
+1. **Streaming safety first:** S1/S2, then S3 and S4. These fit current island plan and cap work/memory before content density increases.
 2. **Bulk content/edit work:** P5 and E1/E3; begin with existing dense bricks. Preserve old semantics while removing per-voxel build/edit overhead.
 3. **Compact authority and persistence:** P1, C1, E2. Ship CPU/disk gains even if GPU atlas storage remains preferable.
 4. **GPU memory:** P2 and P4, then P3 behind one storage accessor. Finalize allocation retirement, normal layout, and shader parity before switching defaults.
@@ -342,11 +335,7 @@ Use expanded bounds/occupancy and subtract a conservative margin before primary 
 | S3e | `782ca99` | Aggregate component publication API | [Ownership decision](streamed-rendering-s3e.md) |
 | S3f | `53e8203` | Hierarchy output publication | [ECS contract](../engine/ecs.md#hierarchy-ownership) |
 
-S2/S3 remain partial. S1c covers current v2 handoff; v3 page selection and
-cross-layer groups remain separate. S2 budgets have live-lease and sole oversized
-pending-result pressure exceptions; temporary build memory and other owner bounds
-remain open. Complete producer notifications and incremental extraction remain
-S3 work. Next: reparent/world-transform helper publication.
+S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3. Next: reparent/world-transform helper publication.
 
 Decisions to settle before dependent implementation:
 
@@ -355,11 +344,11 @@ Decisions to settle before dependent implementation:
 - Codec dependency/version, checksums, payload versions, and compatibility with existing Gekko content contracts.
 - Asset LOD material/transparency rules and collision/source lattice references.
 - Progressive versus atomic large-edit publication and asynchronous physics readiness.
-- Any binary manifest/region pack or unified-world-grid proposal that changes the island plan.
+- Any binary manifest/region pack or unified-world-grid proposal that changes island plan.
 
 ## 11. Verification and review limits
 
-The proposal review checked source symbols, existing plans, byte-layout arithmetic
+Proposal review checked source symbols, existing plans, byte-layout arithmetic
 and document links. Earlier substantial designs retain their historical verification:
 [S1a](streamed-rendering-s1a.md#execution-record),
 [S1b](streamed-rendering-s1b.md#verification-and-execution-record),
@@ -410,12 +399,8 @@ env GOCACHE=/tmp/gekko3d-gocache go test ./... -run '^$'
 env GOCACHE=/tmp/gekko3d-gocache go build ./...
 ```
 
-Both steps preserved existing tests. macOS linker and module stat-cache warnings
-occurred with successful exit status. These notification-only changes needed no
-new windowed smoke or engine-wide sweep. Earlier unrelated editor/sample test
-baselines were not rerun; see S3c/S3d. Verification establishes publication semantics
-and compilation. Remaining producer coverage still prevents skipping live extraction.
+Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 
-Implementation slices should use the smallest existing build/check and manual scene relevant to their changed contract: fixed-view render parity, edited chunk seams, shared-instance isolation, delayed parent/child handoff, save/reload, and locomotion after edits. The user explicitly authorized functionality tests and the tests-first subagent workflow for this implementation. Other test changes still follow [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
+Verify each slice with smallest relevant build/check and manual scene: fixed-view parity, edited seams, instance isolation, delayed handoff, save/reload and edited locomotion. User authorized functionality tests/tests-first subagents for implementation. Other test changes follow [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
 
 Related Gekko plans: [island streaming](../content/island-streaming.md), [XBrickMap hot path](../renderer/xbrickmap-hotpath-optimization-plan.md), [uniform materials](../renderer/xbrickmap-uniform-material-plan.md), [quality-preserving optimization](../renderer/quality-preserving-optimization-plan.md), and [renderer change guide](../renderer/change-guide.md).
