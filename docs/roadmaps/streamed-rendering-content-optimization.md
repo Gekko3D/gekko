@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2d, S3a–S3r and S4a–S4c complete. S2/S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2e, S3a–S3r and S4a–S4c complete. S2/S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -388,14 +388,15 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2d | `7ccd9ca` | Assigned-byte accounting, active pressure and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
 | S4a | `13a9e1e` | Complete worker captures and unique durable payload paths | [Persistence decision](streamed-rendering-s4.md) |
 | S4b | `6a9f3b7` | Capture-order publication and conservative navigation progress | [Persistence decision](streamed-rendering-s4.md#s4b-imported-capture-order-publication) |
-| S4c | `feat(streaming): persist dirty unloads asynchronously` | Exclusive byte-accounted transactions, dirty pins and durable checkpoints | [Persistence decision](streamed-rendering-s4.md#s4c-bounded-asynchronous-normal-unload) |
+| S4c | `f045d01` | Exclusive byte-accounted transactions, dirty pins and durable checkpoints | [Persistence decision](streamed-rendering-s4.md#s4c-bounded-asynchronous-normal-unload) |
+| S2e | `feat(streaming): cancel obsolete preparation dispatches` | Terminal dispatch cancellation, shared leases and failed Stop recovery | [Cancellation decision](streamed-rendering-s2b.md#s2e-obsolete-preparation-cancellation) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: scope remaining S2 worker admission/cancellation and live cache owners, then
-remaining S3 notifications and extraction according to delivery order. No
-dirty-only extraction is approved. Preserve public mutation compatibility and
-conditional proposals.
+Next: scope deterministic preparation priority and bounded work admission, then
+remaining S2 queues/cache owners and S3 notifications/extraction according to
+delivery order. No dirty-only extraction is approved. Preserve public mutation
+compatibility and conditional proposals.
 
 Decisions to settle before dependent implementation:
 
@@ -776,7 +777,7 @@ check. Unrelated changes preserved; macOS warnings exited successfully.
 
 ### S4c: Bounded asynchronous persistence
 
-Commit `feat(streaming): persist dirty unloads asynchronously`. Separate Sol 6.1
+Commit `f045d01`. Separate Sol 6.1
 test/implementation agents, root reviews and independent pre/post reviews
 completed. One exclusive byte-accounted owner covers normal dirty captures and
 ordinary manifest saves. Dirty ownership survives delayed IO, upload clearing,
@@ -803,6 +804,37 @@ This verifies lifetime/save-reload behavior, not pixel parity or speed. Worker
 temporaries, navigation caches, allocator overhead and orphan payload collection
 remain separate. Existing tests and unrelated changes preserved; macOS warnings
 exited successfully.
+
+### S2e: Obsolete preparation cancellation
+
+Commit `feat(streaming): cancel obsolete preparation dispatches`. Separate Sol 6.1
+test/implementation agents and root/independent pre/post reviews completed.
+Full/proxy dispatch cancellation remains terminal through renewed demand and
+residency upgrades. Obsolete errors cannot poison the runtime; cancelled
+consumers release scopes/credits while shared work and external leases survive.
+Canonical behavior: [streaming](../content/streaming-and-worlds.md).
+
+Focused checks, full engine tests (root 14.096s), focused race (7.555s) and five
+consumer checks passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS2e' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS2[ab]|TestS3aSelection|TestStreamedRender|TestStreamedRuntime.*(Stop|SectorProxy|ImportedFullChunkUnload)|TestS4cStop)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS2[abe]|TestS3a|TestStreamedRender|TestStreamedRuntime.*(Stop|SectorProxy|ImportedFullChunkUnload)|TestS4c)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS2eSmoke.app/Contents/MacOS/gekko-s2e-smoke /tmp/gekko-s2e-smoke.go
+/bin/zsh -lc '/tmp/GekkoS2eSmoke.app/Contents/MacOS/gekko-s2e-smoke > /tmp/gekko-s2e-smoke.log 2>&1'
+```
+
+Disposable native smoke passed in 19 frames under one-byte CPU/pending budgets:
+full/proxy Ready, visible fallback after dirty unload, latest full reload Ready
+and retained hidden fallback. Visibility checks wait for the documented ECS
+handoff after renderer readiness. CPU tests hold actual workers for cancellation;
+native checks preserve fallback usability, not pixel parity or speed. Cancellation
+does not preempt an active shared decode/build. Separate IO/generation/navigation
+queues and total process memory remain open. Existing tests and unrelated changes
+preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 

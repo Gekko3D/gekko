@@ -606,6 +606,31 @@ Decoded content and pending preparation, S2b:
   pending credits. Scope, review and verification:
   [S2b](../roadmaps/streamed-rendering-s2b.md).
 
+Obsolete preparation cancellation, S2e:
+
+Full/proxy preparation has one cancellation owner per dispatch. Observer
+processing cancels obsolete demand after rebuilding temporary fallback pins;
+Stop cancels before persistence barriers. A loaded replacement cancels its
+outstanding dispatch before upgrade/unload removes that replacement.
+Cancellation is terminal for that
+dispatch even if demand returns. Its coordinate remains pending until the
+completion is consumed, then renewed demand can start a fresh job. Runtime
+generation and dispatch identity protect newer pending ownership.
+
+Workers check between preparation phases and before pending admission. They
+release cancelled consumers' scopes and payloads; shared decodes/cache builds
+finish normally for other users. Queued results recheck cancellation before
+errors or commit and release their existing credits on consumption. Cancellation
+does not publish geometry/entities, set `InitErr`, create cost retry hints or
+increment prepare errors. `PrepareCancelledCount` reports terminal cancellation.
+Synchronous gameplay preparation retains immediate readiness.
+
+Failed Stop retains loaded entities, generation and leases; subsequent observer
+processing can re-admit required preparation. This is cooperative cancellation
+at phase boundaries, not mid-decode preemption or a worker temporary-memory cap.
+Separate IO, generation and navigation queues remain open.
+[S2e decision](../roadmaps/streamed-rendering-s2b.md#s2e-obsolete-preparation-cancellation).
+
 #### Step 7: Split Render, Collision, And Destruction Residency
 
 A sector can have separate residency for:

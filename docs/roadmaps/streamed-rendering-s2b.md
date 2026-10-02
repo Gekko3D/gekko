@@ -171,3 +171,62 @@ Actiongame, editor and testing-vox `go build ./...` passed. First two emitted sa
 Final native smoke: 415 frames / 14.245 seconds, exit zero; one-byte prepared-geometry/decoded/pending budgets, two workers, one commit/frame. Verified ready visible proxy through four-second upload pause, hidden partial readiness, atomic refinement, distance coarsening and Stop cleanup. Three sole oversized admissions, one retry; metadata pressure 2086 bytes. Stop removed source asset IDs and reported zero decoded/pending ownership; no world renderer objects after two seconds. Temporary source/log: `/tmp/gekko-s2b-smoke.go`, `/tmp/gekko-s2b-native-smoke.log`; no committed tests. No pixel parity or performance gain claimed.
 
 Navigation batch leases/post-drain persistence recovery verified by production review and existing owner checks; no dedicated deterministic fixtures for those two timings. Pending lower bounds cover real decoded records/geometry; generic graph tests cover capacity/aliases. No heap/RSS ceiling, codec, physical accounting or remaining S2 owner/queue completion claimed.
+
+## S2e: Obsolete preparation cancellation
+
+Extend the existing bounded full/proxy preparation scheduler with per-dispatch
+cancellation ownership. Main-thread owners close a job's cancellation channel
+when its current full/proxy demand disappears, proxy preparation is disabled,
+a loaded replacement makes the job unnecessary, or Stop begins. Global fallback
+proxy demand remains needed even after an observer teleport. Managed full
+readiness retains fallback proxies under the existing handoff policy.
+Cancellation remains terminal even if
+the observer returns before that job finishes. Keep the coordinate pending until
+the terminal result is consumed; renewed demand then admits a fresh job. Generation
+and dispatch identity prevent stale completions from clearing newer ownership.
+Cancel already satisfied full/proxy dispatches before persistence acknowledgement
+or upgrade/unload can remove their loaded owner. Scan for lost demand after the
+loaded-chunk loop rebuilds temporary fallback proxy demand and before new
+dispatch. Temporary gameplay/proxy demand retains its existing rules.
+
+Workers receive only a read-only cancellation signal. Check before preparation,
+between IO/aux/geometry/object-snapshot phases, after a phase returns (including
+errors), and before pending-byte admission. Worker-observed cancellation retains
+only identity and duration; release decoded scopes and payload references before
+publication. Main-thread consumption rechecks cancellation before errors or
+commit, covering queued results cancelled after worker completion. Cancellation
+does not set `InitErr`, increment prepare errors, admit geometry/entities, or
+create byte-cost retry hints. Report terminal cancellations in
+`PrepareCancelledCount`; existing preparation counters describe completed work.
+
+Do not cancel a shared loader flight or prepared-cache builder: other requesters
+may need its result. An in-progress decode/build finishes normally, then the
+cancelled consumer releases its scope and skips later phases. Warm data remains
+subject to its existing cache budget. This bounds demand-owned continuation,
+not single-phase latency, physical IO or worker temporary memory. Separate IO,
+generation and navigation queues remain later S2 work.
+
+Keep cancellation identity through error/retry compaction, and exclude its
+owner from payload charge traversal. A queued result retains existing credits
+until main-thread consumption; cancellation never revokes another user's backing.
+Stop cancels preparation before persistence barriers can return an error. Stop
+and generic drains release cancellation ownership after joining workers.
+Failed Stop preserves loaded entities, generation and leases, and later observer
+processing can re-admit required preparation. Synchronous gameplay preparation
+keeps its immediate contract and has no observer-cancellable token.
+
+Owners/files: `streamed_level_runtime.go`, `streamed_level_pending.go`, and a
+private preparation cancellation file if useful. No content-loader API, codec,
+cache publication, collider or renderer readiness change. Confidence: High after
+dispatch, prepare, commit, shared-flight and Stop inspection. No SME alignment
+required within S2. Eager coordinate deletion would allow overlapping dispatches;
+canceling shared work would break other users. Retain terminal acknowledgement.
+
+Minimal coverage uses real runtime workers and held shared decodes: obsolete
+full/proxy errors cannot poison the runtime; proxy cancellation explicitly
+changes policy because global fallback survives teleports. Renewed demand gets a fresh usable
+result; cancelled consumers release pending bytes/scoped leases while independent
+users remain usable; queued results and Stop cannot revive cancelled work or
+strand future scheduling. Preserve existing tests. Verify focused streaming/cache
+checks and races, then full engine and affected consumer checks once at the batch
+boundary. Native fallback/readiness smoke supplements CPU ownership checks.

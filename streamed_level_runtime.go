@@ -173,11 +173,12 @@ type StreamedLevelRuntimeMetrics struct {
 	NavigationRebuildTerminalReason        string
 	NavigationRebuildLastDirtyCount        int
 
-	PreparedChunkCount   int
-	PrepareErrorCount    int
-	LastPrepareCoord     ChunkCoord
-	LastPrepareDuration  time.Duration
-	TotalPrepareDuration time.Duration
+	PreparedChunkCount    int
+	PrepareErrorCount     int
+	PrepareCancelledCount int
+	LastPrepareCoord      ChunkCoord
+	LastPrepareDuration   time.Duration
+	TotalPrepareDuration  time.Duration
 
 	CommittedChunkCount             int
 	ProxyChunkCommitCount           int
@@ -312,6 +313,8 @@ type StreamedLevelRuntimeState struct {
 	pendingPrepared            *streamedPendingPreparedOwner
 	pendingChunkCostHints      map[ChunkCoord]int64
 	pendingProxyCostHints      map[ChunkCoord]int64
+	chunkPrepareCancels        map[ChunkCoord]chan struct{}
+	proxyPrepareCancels        map[ChunkCoord]chan struct{}
 	Level                      *content.LevelDef
 	LevelID                    string
 	LevelPath                  string
@@ -465,6 +468,7 @@ func (lease streamedGeometryAssetLease) release(cache *streamedPreparedGeometryC
 }
 
 type streamedPreparedChunk struct {
+	prepareCancel                         <-chan struct{}
 	loadScope                             *RuntimeContentLoadScope
 	pendingCredit                         *streamedPendingPreparedCredit
 	retryCost                             int64
@@ -484,6 +488,7 @@ type streamedPreparedChunk struct {
 }
 
 type streamedChunkLoadJob struct {
+	prepareCancel             <-chan struct{}
 	Generation                uint64
 	Coord                     ChunkCoord
 	LevelPath                 string
@@ -502,6 +507,7 @@ type streamedChunkLoadJob struct {
 }
 
 type streamedSectorProxyLoadJob struct {
+	prepareCancel         <-chan struct{}
 	Generation            uint64
 	SectorCoord           ChunkCoord
 	ManifestPath          string
@@ -511,6 +517,7 @@ type streamedSectorProxyLoadJob struct {
 }
 
 type streamedPreparedSectorProxy struct {
+	prepareCancel            <-chan struct{}
 	loadScope                *RuntimeContentLoadScope
 	pendingCredit            *streamedPendingPreparedCredit
 	retryCost                int64
@@ -686,6 +693,8 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.pendingPrepared = newStreamedPendingPreparedOwner(cfg.MaxPendingPreparedBytes)
 	state.pendingChunkCostHints = make(map[ChunkCoord]int64)
 	state.pendingProxyCostHints = make(map[ChunkCoord]int64)
+	state.chunkPrepareCancels = make(map[ChunkCoord]chan struct{})
+	state.proxyPrepareCancels = make(map[ChunkCoord]chan struct{})
 	state.Level = level
 	state.LevelID = level.ID
 	state.LevelPath = cfg.LevelPath
@@ -1037,6 +1046,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 		return nil
 	}
 
+	cancelAllStreamedPreparation(state)
 	if err := joinStreamedPersistence(cmd, state); err != nil {
 		return err
 	}
@@ -1172,6 +1182,7 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 	for {
 		select {
 		case prepared := <-state.PreparedLoads:
+			acknowledgeStreamedChunkPreparation(state, prepared)
 			prepared.release()
 			continue
 		default:
@@ -1181,6 +1192,7 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 	for {
 		select {
 		case prepared := <-state.PreparedProxyLoads:
+			acknowledgeStreamedProxyPreparation(state, prepared)
 			prepared.release()
 			continue
 		default:
@@ -1223,6 +1235,7 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 }
 
 func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
+	cancelAllStreamedPreparation(state)
 	done := make(chan struct{})
 	go func() {
 		state.jobs.Wait()
@@ -1231,8 +1244,10 @@ func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 	for {
 		select {
 		case prepared := <-state.PreparedLoads:
+			acknowledgeStreamedChunkPreparation(state, prepared)
 			prepared.release()
 		case prepared := <-state.PreparedProxyLoads:
+			acknowledgeStreamedProxyPreparation(state, prepared)
 			prepared.release()
 		case <-state.navigationLoads:
 		case <-state.navigationOverlays:
@@ -1241,6 +1256,8 @@ func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 			finishStreamedImportedAnalysis(state, result)
 		case <-done:
 			drainStreamedPreparedResults(state)
+			clear(state.chunkPrepareCancels)
+			clear(state.proxyPrepareCancels)
 			return
 		}
 	}
@@ -1315,6 +1332,7 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 	}()
 
 	updateStreamedObserverSelection(cmd, state)
+	cancelSatisfiedStreamedPreparation(state)
 	_ = commitStreamedPersistence(cmd, state, true)
 	for coord, intent := range state.persistenceIntents {
 		if state.LoadedChunks[coord] != intent.Loaded {
@@ -1362,6 +1380,7 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 			unloadStreamedSectorProxy(cmd, state, sectorCoord)
 		}
 	}
+	cancelObsoleteStreamedPreparation(state)
 	activePrepares := streamedActivePrepareJobCounts(state)
 	maxPrepareJobs := streamedMaxPrepareJobs(state)
 	if !state.Config.DisableSectorProxies {
@@ -1440,22 +1459,33 @@ func startStreamedChunkPrepareJob(state *StreamedLevelRuntimeState, job streamed
 	if state == nil {
 		return
 	}
-	state.activePrepareMu.Lock()
-	state.activeChunkPrepares++
-	state.activePrepareMu.Unlock()
-	state.jobs.Add(1)
+	if state.chunkPrepareCancels == nil {
+		state.chunkPrepareCancels = make(map[ChunkCoord]chan struct{})
+	}
+	cancelStreamedPreparation(state.chunkPrepareCancels[job.Coord])
+	cancel := make(chan struct{})
+	state.chunkPrepareCancels[job.Coord] = cancel
+	job.prepareCancel = cancel
+	owner, results, jobs := state.pendingPrepared, state.PreparedLoads, &state.jobs
+	activeMu, active := &state.activePrepareMu, &state.activeChunkPrepares
+	activeMu.Lock()
+	*active++
+	activeMu.Unlock()
+	jobs.Add(1)
 	go func() {
-		defer state.jobs.Done()
+		defer jobs.Done()
 		defer func() {
-			state.activePrepareMu.Lock()
-			state.activeChunkPrepares--
-			state.activePrepareMu.Unlock()
+			activeMu.Lock()
+			*active--
+			activeMu.Unlock()
 		}()
 		result := prepareStreamedChunkLoad(job)
 		job = streamedChunkLoadJob{}
-		result = admitStreamedPreparedChunk(state.pendingPrepared, result)
-		state.PreparedLoads <- result
-
+		result = admitStreamedPreparedChunk(owner, result)
+		if streamedPreparationCancelled(result.prepareCancel) {
+			result = cancelledStreamedPreparedChunk(result)
+		}
+		results <- result
 	}()
 }
 
@@ -1463,22 +1493,33 @@ func startStreamedSectorProxyPrepareJob(state *StreamedLevelRuntimeState, job st
 	if state == nil {
 		return
 	}
-	state.activePrepareMu.Lock()
-	state.activeProxyPrepares++
-	state.activePrepareMu.Unlock()
-	state.jobs.Add(1)
+	if state.proxyPrepareCancels == nil {
+		state.proxyPrepareCancels = make(map[ChunkCoord]chan struct{})
+	}
+	cancelStreamedPreparation(state.proxyPrepareCancels[job.SectorCoord])
+	cancel := make(chan struct{})
+	state.proxyPrepareCancels[job.SectorCoord] = cancel
+	job.prepareCancel = cancel
+	owner, results, jobs := state.pendingPrepared, state.PreparedProxyLoads, &state.jobs
+	activeMu, active := &state.activePrepareMu, &state.activeProxyPrepares
+	activeMu.Lock()
+	*active++
+	activeMu.Unlock()
+	jobs.Add(1)
 	go func() {
-		defer state.jobs.Done()
+		defer jobs.Done()
 		defer func() {
-			state.activePrepareMu.Lock()
-			state.activeProxyPrepares--
-			state.activePrepareMu.Unlock()
+			activeMu.Lock()
+			*active--
+			activeMu.Unlock()
 		}()
 		result := prepareStreamedSectorProxyLoad(job)
 		job = streamedSectorProxyLoadJob{}
-		result = admitStreamedPreparedProxy(state.pendingPrepared, result)
-		state.PreparedProxyLoads <- result
-
+		result = admitStreamedPreparedProxy(owner, result)
+		if streamedPreparationCancelled(result.prepareCancel) {
+			result = cancelledStreamedPreparedProxy(result)
+		}
+		results <- result
 	}()
 }
 
@@ -1616,10 +1657,9 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		case prepared := <-state.PreparedProxyLoads:
 			func() {
 				defer prepared.release()
-				if prepared.Generation != state.Generation {
+				if !acknowledgeStreamedProxyPreparation(state, prepared) {
 					return
 				}
-				delete(state.PendingProxyLoads, prepared.SectorCoord)
 				if prepared.retryCost > 0 {
 					if state.pendingProxyCostHints == nil {
 						state.pendingProxyCostHints = make(map[ChunkCoord]int64)
@@ -1668,10 +1708,9 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		case prepared := <-state.PreparedLoads:
 			func() {
 				defer prepared.release()
-				if prepared.Generation != state.Generation {
+				if !acknowledgeStreamedChunkPreparation(state, prepared) {
 					return
 				}
-				delete(state.PendingLoads, prepared.Coord)
 				if prepared.retryCost > 0 {
 					if state.pendingChunkCostHints == nil {
 						state.pendingChunkCostHints = make(map[ChunkCoord]int64)
@@ -2157,43 +2196,43 @@ func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, st
 
 func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result streamedPreparedSectorProxy) {
 	start := time.Now()
+	result = streamedPreparedSectorProxy{prepareCancel: job.prepareCancel, Generation: job.Generation, SectorCoord: job.SectorCoord}
 	var scope *RuntimeContentLoadScope
-	if job.Loader != nil {
-		scope = job.Loader.NewScope()
-		job.Loader = scope.Loader()
-	}
-	defer func() {
-		if result.Err != nil {
-			scope.Close()
-			result = streamedPreparedSectorProxy{Generation: result.Generation, SectorCoord: result.SectorCoord, Err: result.Err, PrepareDuration: result.PrepareDuration}
-		} else {
-			result.loadScope = scope
-		}
-	}()
-	result = streamedPreparedSectorProxy{
-		Generation:  job.Generation,
-		SectorCoord: job.SectorCoord,
-		LOD:         job.LOD,
-	}
 	defer func() {
 		result.PrepareDuration = time.Since(start)
+		result.loadScope = scope
+		if streamedPreparationCancelled(result.prepareCancel) {
+			result = cancelledStreamedPreparedProxy(result)
+		} else if result.Err != nil {
+			result.release()
+			result = streamedPreparedSectorProxy{prepareCancel: result.prepareCancel, Generation: result.Generation, SectorCoord: result.SectorCoord, Err: result.Err, PrepareDuration: result.PrepareDuration}
+		}
 	}()
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
 	if job.Loader == nil {
 		result.Err = fmt.Errorf("streamed sector proxy loader is nil")
 		return result
 	}
+	scope = job.Loader.NewScope()
+	job.Loader = scope.Loader()
+	result.LOD = job.LOD
 	if strings.TrimSpace(job.LOD.ChunkPath) == "" {
 		result.Err = fmt.Errorf("streamed sector proxy lod path is empty for sector %s", job.SectorCoord.String())
 		return result
 	}
 	chunkPath := content.ResolveDocumentPath(job.LOD.ChunkPath, job.ManifestPath)
 	chunk, err := job.Loader.LoadImportedWorldChunk(chunkPath)
-	if err != nil {
+	if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 		result.Err = err
 		return result
 	}
 	result.Chunk = chunk
 	result.Aux, result.AuxHit = loadStreamedImportedWorldAux(job.Loader, job.LOD.Aux, job.ManifestPath)
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
 	result.AuxMiss = !result.AuxHit
 	result.PreparedGeometryCacheKey = streamedImportedWorldGeometryCacheKey("sector_proxy", chunkPath, streamedImportedWorldPayloadAndAuxHash(firstNonEmptyString(job.LOD.PayloadHash, chunk.PayloadHash), result.Aux), firstPositiveInt(job.LOD.PayloadSizeBytes, chunk.PayloadSizeBytes))
 	result.PreparedGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedGeometryCacheKey, func() *volume.XBrickMap {
@@ -2204,32 +2243,31 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 
 func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPreparedChunk) {
 	start := time.Now()
+	result = streamedPreparedChunk{prepareCancel: job.prepareCancel, Generation: job.Generation, Coord: job.Coord}
 	var scope *RuntimeContentLoadScope
+	defer func() {
+		result.PrepareDuration = time.Since(start)
+		result.loadScope = scope
+		if streamedPreparationCancelled(result.prepareCancel) {
+			result = cancelledStreamedPreparedChunk(result)
+		} else if result.Err != nil {
+			result.release()
+			result = streamedPreparedChunk{prepareCancel: result.prepareCancel, Generation: result.Generation, Coord: result.Coord, Err: result.Err, PrepareDuration: result.PrepareDuration}
+		}
+	}()
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
 	if job.Loader != nil {
 		scope = job.Loader.NewScope()
 		job.Loader = scope.Loader()
 	}
-	defer func() {
-		if result.Err != nil {
-			scope.Close()
-			result = streamedPreparedChunk{Generation: result.Generation, Coord: result.Coord, Err: result.Err, PrepareDuration: result.PrepareDuration}
-		} else {
-			result.loadScope = scope
-		}
-	}()
-	result = streamedPreparedChunk{
-		Generation:      job.Generation,
-		Coord:           job.Coord,
-		PlacementItems:  append([]streamedPlacementInstance(nil), job.Placements...),
-		ObjectSnapshots: make(map[string]*content.VoxelObjectSnapshotDef),
-	}
-	defer func() {
-		result.PrepareDuration = time.Since(start)
-	}()
+	result.PlacementItems = append([]streamedPlacementInstance(nil), job.Placements...)
+	result.ObjectSnapshots = make(map[string]*content.VoxelObjectSnapshotDef)
 	if job.TerrainOverride != nil {
 		chunkPath := content.ResolveDocumentPath(job.TerrainOverride.SnapshotPath, job.WorldDeltaPath)
 		chunk, err := job.Loader.LoadTerrainChunk(chunkPath)
-		if err != nil {
+		if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 			result.Err = err
 			return result
 		}
@@ -2237,16 +2275,19 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 	} else if job.TerrainEntry != nil && job.TerrainEntry.NonEmptyVoxelCount > 0 {
 		chunkPath := content.ResolveTerrainChunkPath(*job.TerrainEntry, job.TerrainManifestPath)
 		chunk, err := job.Loader.LoadTerrainChunk(chunkPath)
-		if err != nil {
+		if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 			result.Err = err
 			return result
 		}
 		result.TerrainChunk = chunk
 	}
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
 	if job.ImportedWorldOverride != nil {
 		chunkPath := content.ResolveDocumentPath(job.ImportedWorldOverride.SnapshotPath, job.WorldDeltaPath)
 		chunk, err := job.Loader.LoadImportedWorldChunk(chunkPath)
-		if err != nil {
+		if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 			result.Err = err
 			return result
 		}
@@ -2258,22 +2299,31 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 	} else if job.ImportedWorldEntry != nil && (job.ImportedWorldEntry.NonEmptyVoxelCount > 0 || job.HasImportedWorldBacking) {
 		chunkPath := content.ResolveImportedWorldChunkPath(*job.ImportedWorldEntry, job.ImportedWorldManifestPath)
 		chunk, err := job.Loader.LoadImportedWorldChunk(chunkPath)
-		if err != nil {
+		if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 			result.Err = err
 			return result
 		}
 		result.ImportedWorldChunk = chunk
 		result.ImportedWorldAux, result.ImportedWorldAuxHit = loadStreamedImportedWorldAux(job.Loader, job.ImportedWorldEntry.Aux, job.ImportedWorldManifestPath)
+		if streamedPreparationCancelled(job.prepareCancel) {
+			return result
+		}
 		result.ImportedWorldAuxMiss = !result.ImportedWorldAuxHit
 		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_full", chunkPath, streamedImportedWorldPayloadAndAuxHash(firstNonEmptyString(job.ImportedWorldEntry.PayloadHash, chunk.PayloadHash), result.ImportedWorldAux), firstPositiveInt(job.ImportedWorldEntry.PayloadSizeBytes, chunk.PayloadSizeBytes))
 		result.PreparedImportedWorldGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedImportedWorldGeometryCacheKey, func() *volume.XBrickMap {
 			return prepareImportedWorldChunkGeometry(chunk, result.ImportedWorldAux)
 		})
 	}
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
 	for key, override := range job.VoxelOverrides {
+		if streamedPreparationCancelled(job.prepareCancel) {
+			return result
+		}
 		snapshotPath := content.ResolveDocumentPath(override.SnapshotPath, job.WorldDeltaPath)
 		snapshot, err := content.LoadVoxelObjectSnapshot(snapshotPath)
-		if err != nil {
+		if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 			result.Err = err
 			return result
 		}

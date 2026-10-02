@@ -82,6 +82,7 @@ func streamedPreparedChunkCharge(p streamedPreparedChunk) int64 {
 	p.PreparedImportedWorldGeometry = nil
 	p.loadScope = nil
 	p.pendingCredit = nil
+	p.prepareCancel = nil
 	p.Err = nil
 	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry))
 }
@@ -90,6 +91,7 @@ func streamedPreparedProxyCharge(p streamedPreparedSectorProxy) int64 {
 	p.PreparedGeometry = nil
 	p.loadScope = nil
 	p.pendingCredit = nil
+	p.prepareCancel = nil
 	p.Err = nil
 	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry))
 }
@@ -98,29 +100,41 @@ func streamedPendingGeometryCharge(geometry *volume.XBrickMap) int64 {
 	return streamedGeometryStorageCharge(ledger.admit(geometry, streamedGeometryPrepared))
 }
 func admitStreamedPreparedChunk(owner *streamedPendingPreparedOwner, p streamedPreparedChunk) streamedPreparedChunk {
+	if streamedPreparationCancelled(p.prepareCancel) {
+		return cancelledStreamedPreparedChunk(p)
+	}
 	if p.Err != nil {
 		p.release()
-		return streamedPreparedChunk{Generation: p.Generation, Coord: p.Coord, Err: p.Err, PrepareDuration: p.PrepareDuration}
+		return streamedPreparedChunk{prepareCancel: p.prepareCancel, Generation: p.Generation, Coord: p.Coord, Err: p.Err, PrepareDuration: p.PrepareDuration}
 	}
 	cost := streamedPreparedChunkCharge(p)
+	if streamedPreparationCancelled(p.prepareCancel) {
+		return cancelledStreamedPreparedChunk(p)
+	}
 	credit, ok := owner.reserve(cost)
 	if !ok {
 		p.release()
-		return streamedPreparedChunk{Generation: p.Generation, Coord: p.Coord, retryCost: cost, PrepareDuration: p.PrepareDuration}
+		return streamedPreparedChunk{prepareCancel: p.prepareCancel, Generation: p.Generation, Coord: p.Coord, retryCost: cost, PrepareDuration: p.PrepareDuration}
 	}
 	p.pendingCredit = credit
 	return p
 }
 func admitStreamedPreparedProxy(owner *streamedPendingPreparedOwner, p streamedPreparedSectorProxy) streamedPreparedSectorProxy {
+	if streamedPreparationCancelled(p.prepareCancel) {
+		return cancelledStreamedPreparedProxy(p)
+	}
 	if p.Err != nil {
 		p.release()
-		return streamedPreparedSectorProxy{Generation: p.Generation, SectorCoord: p.SectorCoord, Err: p.Err, PrepareDuration: p.PrepareDuration}
+		return streamedPreparedSectorProxy{prepareCancel: p.prepareCancel, Generation: p.Generation, SectorCoord: p.SectorCoord, Err: p.Err, PrepareDuration: p.PrepareDuration}
 	}
 	cost := streamedPreparedProxyCharge(p)
+	if streamedPreparationCancelled(p.prepareCancel) {
+		return cancelledStreamedPreparedProxy(p)
+	}
 	credit, ok := owner.reserve(cost)
 	if !ok {
 		p.release()
-		return streamedPreparedSectorProxy{Generation: p.Generation, SectorCoord: p.SectorCoord, retryCost: cost, PrepareDuration: p.PrepareDuration}
+		return streamedPreparedSectorProxy{prepareCancel: p.prepareCancel, Generation: p.Generation, SectorCoord: p.SectorCoord, retryCost: cost, PrepareDuration: p.PrepareDuration}
 	}
 	p.pendingCredit = credit
 	return p
@@ -129,6 +143,8 @@ func admitStreamedPreparedProxy(owner *streamedPendingPreparedOwner, p streamedP
 // Once Stop has drained workers, a persistence failure must leave demand able
 // to reschedule in the same generation. No decoded metadata ownership changes.
 func resetStreamedDrainedScheduling(state *StreamedLevelRuntimeState) {
+	clear(state.chunkPrepareCancels)
+	clear(state.proxyPrepareCancels)
 	clear(state.PendingLoads)
 	clear(state.PendingProxyLoads)
 	clear(state.pendingChunkCostHints)
