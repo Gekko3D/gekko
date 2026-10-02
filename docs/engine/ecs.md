@@ -141,6 +141,7 @@ publish their changed transform inputs. Authored animation publishes changed
 final Local poses; physics publishes changed World poses. Accepted moving-brush
 motion publishes its changed World and existing Local poses. The shared grounded
 actor writer publishes its changed World and Local poses for motors and riders.
+The ground visual helper publishes changed direct-child Local Y offsets.
 Other transform and renderer-input producers remain incompletely migrated.
 Hierarchy and the voxel bridge continue their live reads.
 These sequences establish an ownership API, not a complete dirty contract,
@@ -346,6 +347,21 @@ Publication does not flush, change membership or invoke hierarchy. Committed
 targets pending removal/replacement remain writable until flush; pending
 additions remain invisible. Camera, motor and intent publication, and further
 transform writers, remain outside this TRS contract.
+
+### Ground Visual Publication
+
+`ApplyCharacterVisualGroundOffsetToChildren` publishes LocalTransform immediately
+when replacing a committed direct child's Local Y changes its exact float bits.
+Equal Y bits, including identical NaN payloads, publish nothing; signed-zero and
+NaN-payload changes publish. Other Local fields remain untouched and do not
+affect this comparison. Matching children need Parent and Local, but neither
+child World nor a committed parent entity is required. Grandchildren and other
+parents are excluded.
+
+The helper creates no components, invokes no hierarchy and does not flush or
+change membership. Pending additions remain invisible; pending removal or
+replacement leaves the current component writable until flush. Later hierarchy
+owns World propagation. Ground probes and smoothing retain their behavior.
 
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.

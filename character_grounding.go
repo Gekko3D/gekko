@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"math"
+	"reflect"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -171,11 +172,15 @@ func ApplyCharacterVisualGroundOffsetToChildren(cmd *Commands, parent EntityId, 
 	if cmd == nil {
 		return
 	}
-	MakeQuery2[Parent, LocalTransformComponent](cmd).Map(func(_ EntityId, childParent *Parent, local *LocalTransformComponent) bool {
+	MakeQuery2[Parent, LocalTransformComponent](cmd).Map(func(id EntityId, childParent *Parent, local *LocalTransformComponent) bool {
 		if childParent == nil || local == nil || childParent.Entity != parent {
 			return true
 		}
+		beforeY := math.Float32bits(local.Position[1])
 		local.Position[1] = offsetY
+		if math.Float32bits(local.Position[1]) != beforeY {
+			cmd.MarkComponentChanged(id, reflect.TypeOf(LocalTransformComponent{}))
+		}
 		return true
 	})
 }

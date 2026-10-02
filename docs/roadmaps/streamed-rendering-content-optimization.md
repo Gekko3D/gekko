@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g/S3h/S3i/S3j/S3k/S3l/S3m complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g/S3h/S3i/S3j/S3k/S3l/S3m/S3n complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -149,7 +149,7 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3m implement selection, GPU records, ECS inventories, hierarchy reuse and component publication in hierarchy, helpers, animation, physics World, accepted brush motion and grounded actors. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3n implement selection, GPU records, ECS inventories, hierarchy reuse and component publication in hierarchy, helpers, animation, physics World, accepted brush motion, grounded actors and ground visuals. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
 Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
@@ -374,15 +374,14 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3k | `e825681` | Physics World publication | [ECS contract](../engine/ecs.md#physics-world-publication) |
 | S3l | `21aff15` | Accepted moving brush World/Local publication | [ECS contract](../engine/ecs.md#moving-brush-motion-publication) |
 | S3m | `11af4d9` | Shared grounded actor World/Local publication | [ECS contract](../engine/ecs.md#grounded-actor-publication) |
+| S3n | `feat(grounding): publish visual child offsets` | Direct-child ground visual Local publication | [ECS contract](../engine/ecs.md#ground-visual-publication) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: scope a batch of remaining related S3 publication writers, starting with
-direct-child ground visual Local publication in
-`ApplyCharacterVisualGroundOffsetToChildren` (`character_grounding.go`). Include
-other writers only when code inspection confirms the same contract and ownership
-boundary. Live extraction remains required; incremental extraction is a separate
-architecture step.
+Next: scope committed geometry-reference normalization in the renderer/physics
+bridges and the renderer's derived Pivot publication. These use the established
+publication pattern without changing extraction or collision behavior. Live
+extraction remains required; incremental extraction is a separate architecture step.
 
 Decisions to settle before dependent implementation:
 
@@ -542,6 +541,25 @@ env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(Grounded|MovingBrush|Char
 env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3l|S3m|Grounded|MovingBrush|Character|TransformHierarchy)' -count=1
 ```
+
+### S3n: Direct-child ground visual publication
+
+Commit subject `feat(grounding): publish visual child offsets`. The helper publishes
+changed Local Y bits; the [ECS contract](../engine/ecs.md#ground-visual-publication)
+owns the details. Sol 6.1 RED/GREEN and root coverage/code reviews completed.
+Four focused test groups, existing grounding/hierarchy checks, full root tests,
+ActionGame compilation and editor build passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3n' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestUpdateCharacterGroundVisualY|TestCharacterGround|TestApplyCharacterVisualGroundOffsetToChildren|TestTransformHierarchy|TestS3f)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+```
+
+Existing tests preserved. This main-thread notification change needed no new race
+or visual/GPU check. Editor's module stat-cache warning exited successfully.
+No extraction bypass or performance claim; remaining producers stay live.
 
 Consumer commands for these steps:
 
