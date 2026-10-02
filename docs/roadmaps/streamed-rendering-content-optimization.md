@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2d, S3a–S3r and S4a complete. S2/S3/S4 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2d, S3a–S3r and S4a/S4b complete. S2/S3/S4 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -164,8 +164,9 @@ Acceptance: idle observers do not rebuild residency sets; idle geometry does not
 ### S4. Remove synchronous persistence from unload
 
 Status: S4a completes immutable manifest capture and unique durable runtime
-payload publication. Normal unload remains synchronous; bounded transactions and
-dirty publication pins are S4b. [Ownership decision](streamed-rendering-s4.md).
+payload publication. S4b orders imported capture publication and preserves
+navigation impact through successors. Normal unload remains synchronous; bounded
+transactions and dirty publication pins are S4c. [Ownership decision](streamed-rendering-s4.md).
 
 `persistChunkOverrides` saves whole snapshots during unload. Main thread snapshots immutable edits; bounded worker encodes/compresses/writes. Publish override references only after successful atomic replacement.
 
@@ -385,11 +386,12 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3r | `195575d` | Bounded owned snapshots with exact live input comparison | [Renderer contract](../renderer/runtime.md#effective-palette-fingerprints) |
 | S2c | `60b4477` | Capacity accounting, live pins and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
 | S2d | `7ccd9ca` | Assigned-byte accounting, active pressure and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
-| S4a | `fix(streaming): preserve published edit snapshots` | Complete worker captures and unique durable payload paths | [Persistence decision](streamed-rendering-s4.md) |
+| S4a | `13a9e1e` | Complete worker captures and unique durable payload paths | [Persistence decision](streamed-rendering-s4.md) |
+| S4b | `fix(streaming): fence imported edit publication` | Capture-order publication and conservative navigation progress | [Persistence decision](streamed-rendering-s4.md#s4b-imported-capture-order-publication) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: resolve S4b bounded persistence transactions, including preflighted snapshot
+Next: implement S4c bounded persistence transactions, including preflighted snapshot
 credits, dirty pins, durable acknowledgements and navigation ordering. Other live
 cache owners and incremental extraction remain separate; no dirty-only extraction
 is approved. Preserve public mutation compatibility and conditional proposals.
@@ -726,7 +728,7 @@ Existing tests and unrelated changes preserved; macOS warnings exited successful
 
 ### S4a: Immutable persistence prerequisites
 
-Commit `fix(streaming): preserve published edit snapshots`. Separate Sol 6.1
+Commit `13a9e1e`. Separate Sol 6.1
 test/implementation agents and root/independent pre/post reviews completed. Three
 groups protect complete capture independence, failed-manifest preservation/retry
 for terrain/imported/object payloads, and the actual navigation worker's isolated
@@ -747,6 +749,29 @@ retry. Formats/readers and blocking helper/Stop contracts remain. Normal unload
 IO, in-memory transaction publication and byte admission remain S4b; unreferenced
 successful payload files can accumulate. No GPU change needed a windowed check.
 Existing tests and unrelated changes preserved; macOS warnings exited successfully.
+
+### S4b: Imported capture-order safety
+
+Commit `fix(streaming): fence imported edit publication`. Separate Sol 6.1
+test/implementation agents and root/independent pre/post reviews completed.
+Delayed navigation results cannot replace newer imported saves or backing
+removals. Latest saved snapshots retain navigation progress after unload;
+successors preserve conservative uncommitted impact. Review added pending/active
+impact and cross-world retry coverage without changing existing tests. Focused
+checks, full engine tests, focused race and affected consumer builds passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS4[ab]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(StreamedRuntime(Persists|Stop|Restart)|S2aRuntime(FailedPersistence|Stop)|S2bRuntimeFailedStop|StreamedNavigation|NavigationEditBlockers|RuntimeNavigationBlocker|ConfigureStreamedNavigation)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S4[ab]|StreamedRuntime(Persists|Stop|Restart)|S2aRuntime(FailedPersistence|Stop)|S2bRuntimeFailedStop|StreamedNavigation|NavigationEditBlockers|RuntimeNavigationBlocker|ConfigureStreamedNavigation)' -count=1
+```
+
+Real-worker and disk roundtrips verify latest references, owned captures and
+navigation rebuild inputs. Normal unload IO/byte admission remain S4c; graph
+scheduling and error behavior remain. No rendering change required a windowed
+check. Unrelated changes preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 

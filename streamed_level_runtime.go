@@ -397,6 +397,7 @@ type StreamedLevelRuntimeState struct {
 	worldDeltaSavePending         *content.WorldDeltaDef
 	worldDeltaSaves               chan streamedWorldDeltaSaveResult
 	runtimeEditPersistenceMu      sync.Mutex
+	importedEditCaptures          map[voxelWorldDirtyChunkKey]*streamedImportedCaptureToken
 
 	WorldDeltaPath   string
 	WorldDataDir     string
@@ -745,6 +746,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.navigationRebuildActive = false
 	state.navigationEditAnalysisActive = false
 	state.navigationEditAnalysisPending = make(map[content.TerrainChunkCoordDef]streamedNavigationEditAnalysisItem)
+	state.importedEditCaptures = nil
 	state.navigationEditAnalysisSince = time.Time{}
 	state.navigationEditAnalysisAt = time.Time{}
 	state.navigationVoxelSnapshots = make(map[EntityId]navigationVoxelSnapshot)
@@ -1116,6 +1118,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	state.PendingProxyLoads = make(map[ChunkCoord]struct{})
 	state.navigationIgnoredRemovals = nil
 	state.navigationEditAnalysisPending = nil
+	state.importedEditCaptures = nil
 	state.navigationVoxelSnapshots = nil
 	state.worldDeltaSavePending = nil
 	state.navigationLoadActive, state.navigationRebuildActive, state.navigationEditAnalysisActive, state.worldDeltaSaveActive = false, false, false, false
@@ -1181,7 +1184,8 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 	}
 	for {
 		select {
-		case <-state.navigationEditAnalyses:
+		case result := <-state.navigationEditAnalyses:
+			finishStreamedImportedAnalysis(state, result)
 			continue
 		default:
 		}
@@ -1212,7 +1216,8 @@ func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 		case <-state.navigationLoads:
 		case <-state.navigationOverlays:
 		case <-state.navigationRebuilds:
-		case <-state.navigationEditAnalyses:
+		case result := <-state.navigationEditAnalyses:
+			finishStreamedImportedAnalysis(state, result)
 		case <-state.worldDeltaSaves:
 		case <-done:
 			drainStreamedPreparedResults(state)
@@ -2740,6 +2745,10 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 		}
 		if backing, ok := voxelBackingForEntity(cmd, eid); ok && backing.Dirty {
 			state.recordVoxelBackingRemoval(backing)
+			if backing.OwnerKind == content.VoxelBackingOwnerImportedWorld {
+				snapshot := importedWorldChunkDefFromXBrickMap(backing.OwnerID, terrainCoordFromArray(backing.ChunkCoord), backing.ChunkSize, voxelResolutionForEntity(cmd, eid), xbm)
+				queueSavedStreamedImportedAnalysis(state, snapshot, backing)
+			}
 			manifestDirty = true
 			continue
 		}
@@ -2778,6 +2787,8 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 		}
 		if backing, ok := voxelBackingForEntity(cmd, eid); ok && backing.Dirty {
 			state.recordVoxelBackingRemoval(backing)
+			snapshot := importedWorldChunkDefFromXBrickMap(ref.WorldID, terrainCoordFromArray(ref.ChunkCoord), backing.ChunkSize, voxelResolutionForEntity(cmd, eid), xbm)
+			queueSavedStreamedImportedAnalysis(state, snapshot, backing)
 			manifestDirty = true
 			continue
 		}
@@ -2842,6 +2853,7 @@ func persistImportedWorldRuntimeEditSnapshots(state *StreamedLevelRuntimeState, 
 		if snapshot == nil || strings.TrimSpace(snapshot.WorldID) == "" {
 			continue
 		}
+		invalidateStreamedImportedCapture(state, snapshot.WorldID, snapshot.Coord)
 		if _, backed := state.voxelBackingRemovalMap[voxelBackingRemovalRuntimeKey(content.VoxelBackingOwnerImportedWorld, snapshot.WorldID, snapshot.Coord)]; backed {
 			continue
 		}
@@ -2859,6 +2871,7 @@ func persistImportedWorldRuntimeEditSnapshots(state *StreamedLevelRuntimeState, 
 			SnapshotPath: content.AuthorDocumentPath(snapshotPath, state.WorldDeltaPath),
 		}
 		state.importedWorldOverrideMap[importedWorldChunkRuntimeKey(snapshot.WorldID, snapshot.Coord)] = override
+		queueSavedStreamedImportedAnalysis(state, snapshot, nil)
 		changed = true
 	}
 	if !changed {
@@ -3078,6 +3091,7 @@ func (state *StreamedLevelRuntimeState) recordVoxelBackingRemoval(backing *Voxel
 		delete(state.terrainOverrideMap, terrainChunkRuntimeKey(def.OwnerID, coord))
 		state.InvalidateObserverSelection()
 	case content.VoxelBackingOwnerImportedWorld:
+		invalidateStreamedImportedCapture(state, def.OwnerID, coord)
 		delete(state.importedWorldOverrideMap, importedWorldChunkRuntimeKey(def.OwnerID, coord))
 	}
 }

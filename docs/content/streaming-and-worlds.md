@@ -973,9 +973,25 @@ pending-save coalescing remain; synchronous saves join it before saving latest
 state. Failed manifest publication preserves the previous durable manifest and
 its payloads. In-memory override staging can still precede that failure.
 
+Imported navigation analysis shares capture-order ownership with blocking saves
+and backing removals. New captures invalidate older pending/active captures;
+stale results publish no payload references or navigation rebuild inputs. Current
+items in mixed results retain their work and merge ignored removals only for
+their coordinates. Graph-generation retries retain capture ownership. Terminal
+completion/failure and worker-barrier discards release outstanding ownership,
+preserving successors.
+Successors inherit conservative uncommitted edit impact from pending and active
+captures until current analysis commits; rejecting older captures loses no impact.
+
+Blocking imported persistence queues its latest owned snapshot for the configured
+navigation source world before unload removes the entity. Backed imports queue
+latest removal analysis without a competing full-snapshot override. Saved voxel
+and tag slices are copied. Coalesced unknown impact remains conservative so later
+bounded edits cannot suppress the required rebuild.
+
 Blocking unload helpers and Stop retain current save/reload behavior. Normal
 dirty unload still writes synchronously; bounded asynchronous transactions and
-dirty publication pins remain S4b. Old successful payloads, successful unpublished
+dirty publication pins remain S4c. Old successful payloads, successful unpublished
 attempts and post-rename sync failures can leave unreferenced files. Garbage
 collection has separate reference ownership. [Persistence decision](../roadmaps/streamed-rendering-s4.md).
 

@@ -63,6 +63,7 @@ type streamedNavigationEditAnalysisItem struct {
 	VoxelMap        *volume.XBrickMap
 	Snapshot        *content.ImportedWorldChunkDef
 	Backing         *VoxelBackingComponent
+	Capture         *streamedImportedCaptureToken
 }
 
 type streamedNavigationEditAnalysisResultItem struct {
@@ -77,6 +78,7 @@ type streamedNavigationEditAnalysisResult struct {
 	GraphGeneration        uint64
 	GraphRequestGeneration uint64
 	Items                  []streamedNavigationEditAnalysisResultItem
+	Captures               []streamedImportedCapture
 	IgnoredRemovals        map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{}
 	Err                    error
 }
@@ -1167,10 +1169,31 @@ func queueStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState, item 
 	if state.navigationEditAnalysisPending == nil {
 		state.navigationEditAnalysisPending = make(map[content.TerrainChunkCoordDef]streamedNavigationEditAnalysisItem)
 	}
+	if item.Capture == nil {
+		if state.importedEditCaptures == nil {
+			state.importedEditCaptures = make(map[voxelWorldDirtyChunkKey]*streamedImportedCaptureToken)
+		}
+		key := importedCaptureForItem(item).Key
+		if previous := state.importedEditCaptures[key]; previous != nil {
+			item.Edit = mergeStreamedImportedCaptureEdits(previous.Edit, item.Edit)
+		}
+		item.Capture = &streamedImportedCaptureToken{Edit: item.Edit}
+		state.importedEditCaptures[key] = item.Capture
+	} else {
+		capture := importedCaptureForItem(item)
+		if !currentStreamedImportedCapture(state, capture) {
+			return // A graph retry cannot supersede a newer capture.
+		}
+		if pending, found := state.navigationEditAnalysisPending[item.Coord]; found && pending.Capture != item.Capture {
+			// The coordinate queue can contain a successor from another world.
+			finishStreamedImportedCapture(state, capture)
+			return
+		}
+	}
 	if previous, found := state.navigationEditAnalysisPending[item.Coord]; found {
-		merged := previous.Edit
-		merged.include(item.Edit)
-		item.Edit = merged
+		if previous.Capture != item.Capture {
+			finishStreamedImportedCapture(state, importedCaptureForItem(previous))
+		}
 	}
 	state.navigationEditAnalysisPending[item.Coord] = item
 	now := time.Now()
@@ -1193,12 +1216,20 @@ func startStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState) {
 	}
 	sort.Slice(coords, func(i, j int) bool { return terrainChunkCoordLessForRuntime(coords[i], coords[j]) })
 	items := make([]streamedNavigationEditAnalysisItem, 0, len(coords))
+	captures := make([]streamedImportedCapture, 0, len(coords))
 	for _, coord := range coords {
-		items = append(items, state.navigationEditAnalysisPending[coord])
+		item := state.navigationEditAnalysisPending[coord]
+		if currentStreamedImportedCapture(state, importedCaptureForItem(item)) {
+			items = append(items, item)
+			captures = append(captures, importedCaptureForItem(item))
+		}
 	}
 	state.navigationEditAnalysisPending = make(map[content.TerrainChunkCoordDef]streamedNavigationEditAnalysisItem)
 	state.navigationEditAnalysisSince = time.Time{}
 	state.navigationEditAnalysisAt = time.Time{}
+	if len(items) == 0 {
+		return
+	}
 	ignored := copyNavigationIgnoredRemovals(state.navigationIgnoredRemovals)
 	runtimeGeneration, graphGeneration, graphRequestGeneration := state.Generation, state.navigationLoadedGen, state.navigationRequestedGen
 	manifest, sources, graphs, query := state.BaseNavManifest, state.NavigationSources, state.NavigationGraphs, state.navigationQuery
@@ -1214,6 +1245,7 @@ func startStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState) {
 		}
 		result := streamedNavigationEditAnalysisResult{
 			RuntimeGeneration: runtimeGeneration, GraphGeneration: graphGeneration, GraphRequestGeneration: graphRequestGeneration,
+			Captures: captures,
 		}
 		for _, item := range items {
 			snapshot := item.Snapshot
@@ -1261,11 +1293,24 @@ func commitStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState) {
 	select {
 	case result := <-state.navigationEditAnalyses:
 		if result.RuntimeGeneration != state.Generation {
+			finishStreamedImportedAnalysis(state, result)
 			return
 		}
 		state.navigationEditAnalysisActive = false
 		if result.Err != nil {
+			finishStreamedImportedAnalysis(state, result)
 			state.InitErr = result.Err
+			return
+		}
+		current := make([]streamedNavigationEditAnalysisResultItem, 0, len(result.Items))
+		for _, item := range result.Items {
+			if currentStreamedImportedCapture(state, importedCaptureForItem(item.Input)) {
+				current = append(current, item)
+			}
+		}
+		result.Items = current
+		if len(result.Items) == 0 {
+			finishStreamedImportedAnalysis(state, result)
 			return
 		}
 		if state.importedWorldOverrideMap == nil {
@@ -1288,7 +1333,17 @@ func commitStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState) {
 			}
 			return
 		}
-		state.navigationIgnoredRemovals = result.IgnoredRemovals
+		defer finishStreamedImportedAnalysis(state, result)
+		if state.navigationIgnoredRemovals == nil {
+			state.navigationIgnoredRemovals = make(map[content.TerrainChunkCoordDef]map[navigationRemovedVoxel]struct{})
+		}
+		for _, item := range result.Items {
+			if ignored, present := result.IgnoredRemovals[item.Input.Coord]; present {
+				state.navigationIgnoredRemovals[item.Input.Coord] = ignored
+			} else {
+				delete(state.navigationIgnoredRemovals, item.Input.Coord)
+			}
+		}
 		impactful := make([]streamedNavigationEditAnalysisResultItem, 0, len(result.Items))
 		lastReason := ""
 		for _, item := range result.Items {

@@ -3,8 +3,83 @@ package gekko
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/gekko3d/gekko/content"
 )
+
+// Identity belongs only to outstanding main-thread captures. Workers carry it
+// without inspecting the runtime ownership map.
+type streamedImportedCaptureToken struct {
+	// Edit is immutable provenance retained until terminal analysis commits.
+	Edit runtimeVoxelEdit
+}
+
+func mergeStreamedImportedCaptureEdits(previous, latest runtimeVoxelEdit) runtimeVoxelEdit {
+	if !previous.Valid || !latest.Valid {
+		// Invalid capture bounds mean actual unknown impact, not an empty accumulator.
+		return runtimeVoxelEdit{Added: previous.Added || latest.Added}
+	}
+	previous.include(latest)
+	return previous
+}
+
+type streamedImportedCapture struct {
+	Key   voxelWorldDirtyChunkKey
+	Token *streamedImportedCaptureToken
+}
+
+func importedCaptureForItem(item streamedNavigationEditAnalysisItem) streamedImportedCapture {
+	return streamedImportedCapture{Key: voxelWorldDirtyChunkKey{WorldID: item.WorldID, Coord: item.Coord}, Token: item.Capture}
+}
+
+func currentStreamedImportedCapture(state *StreamedLevelRuntimeState, capture streamedImportedCapture) bool {
+	return capture.Token != nil && state.importedEditCaptures[capture.Key] == capture.Token
+}
+
+func finishStreamedImportedCapture(state *StreamedLevelRuntimeState, capture streamedImportedCapture) {
+	if currentStreamedImportedCapture(state, capture) {
+		delete(state.importedEditCaptures, capture.Key)
+		if len(state.importedEditCaptures) == 0 {
+			state.importedEditCaptures = nil
+		}
+	}
+}
+
+func finishStreamedImportedAnalysis(state *StreamedLevelRuntimeState, result streamedNavigationEditAnalysisResult) {
+	for _, capture := range result.Captures {
+		finishStreamedImportedCapture(state, capture)
+	}
+}
+
+func invalidateStreamedImportedCapture(state *StreamedLevelRuntimeState, worldID string, coord content.TerrainChunkCoordDef) {
+	delete(state.importedEditCaptures, voxelWorldDirtyChunkKey{WorldID: worldID, Coord: coord})
+	if len(state.importedEditCaptures) == 0 {
+		state.importedEditCaptures = nil
+	}
+}
+
+func queueSavedStreamedImportedAnalysis(state *StreamedLevelRuntimeState, snapshot *content.ImportedWorldChunkDef, backing *VoxelBackingComponent) {
+	if state.BaseNavManifest == nil {
+		return
+	}
+	worldID := state.BaseNavManifest.SourceWorldID
+	if worldID == "" {
+		worldID = state.BaseWorldID
+	}
+	if snapshot.WorldID != worldID {
+		return
+	}
+	copy := *snapshot
+	copy.Voxels, copy.Tags = slices.Clone(snapshot.Voxels), slices.Clone(snapshot.Tags)
+	// The saved full state is an uncategorized edit. Capture coalescing must
+	// retain its unknown impact even when later captures have bounded edits.
+	queueStreamedNavigationEditAnalysis(state, streamedNavigationEditAnalysisItem{
+		WorldID: copy.WorldID, Coord: copy.Coord, ChunkSize: copy.ChunkSize,
+		VoxelResolution: copy.VoxelResolution, Snapshot: &copy, Backing: copyNavigationVoxelBacking(backing),
+	})
+}
 
 // writeStreamedLevelPayload publishes a unique, durable payload before its
 // path can enter a manifest. It never changes an earlier published payload.
