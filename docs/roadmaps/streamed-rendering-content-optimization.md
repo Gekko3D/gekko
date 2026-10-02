@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2d, and S3a–S3r complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2d, S3a–S3r and S4a complete. S2/S3/S4 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -20,7 +20,7 @@ Owners: renderer storage/upload and streamed runtime. Consumers: physics, naviga
 - [GPU upload](../../voxelrt/rt/gpu/manager_voxel.go): each sector reserves 64 brick records. Shader indexing uses `sector.brick_table_index + brick_idx_local`, not CPU popcount indexing. Mixed bricks use paged `R8Uint` atlas; uniform bricks already skip color payload.
 - [Auxiliary data](../../voxelrt/rt/volume/voxel_aux.go): 64 bytes of occupancy plus 1,024 bytes of encoded normals per brick. Normal encoding includes validity and two-sided lighting. [G-buffer traversal](../../voxelrt/rt/shaders/gbuffer.wgsl) already rejects empty voxels before loading their material.
 - [Streaming](../../streamed_level_runtime.go): worker preparation, generation checks, indexed chunk maps, proxy/full handoff, and separate collision/destruction interest already exist. [S3a selection](../../streamed_level_selection.go) caches idle demand and updates cube differences. Commit limits count chunks and elapsed time; global GPU content budgets are implemented in S1b.
-- [Caching](../../runtime_content_loader.go): S2b adds decoded-content byte budgets, scoped leases, in-flight suppression, and shared pending-result admission. [Prepared geometry](../../streamed_level_geometry_cache.go) has S2a byte accounting and pinned users. Live decoded leases and one sole oversized pending result expose pressure exceptions; GPU retention and other owner budgets remain further S2 work. These are not total process memory limits.
+- [Caching](../../runtime_content_loader.go): S2b adds decoded-content byte budgets, scoped leases, in-flight suppression, and shared pending-result admission. [Prepared geometry](../../streamed_level_geometry_cache.go) has S2a byte accounting and pinned users. S2c bounds CPU material tables; S2d bounds retained assigned GPU geometry slots. Live users/sole oversized pending results expose pressure exceptions; physical GPU capacity and other owners remain separate. These are not total process memory limits.
 - [Imported payloads](../../content/imported_world_chunk_binary.go): binary RLE already exists, with JSON metadata and SHA-256 verification. Decoding expands into voxel records, then [spawning](../../imported_world_spawn.go) builds `XBrickMap` through per-voxel writes. Terrain chunks remain JSON.
 - [Assets](../../assets/voxel_assets.go): geometry and palette assets are separate; shared geometry and copy-on-edit already exist. There is no equivalent to Rust's compiled fragment package in this path. [Geometry registration](../../asset_vox_model.go) deep-copies prepared maps. [Inline shapes](../../asset_voxel_shape.go) serialize geometry into JSON cache key. [Entity LOD assets](../../entity_lod_runtime_assets.go) already generate simplified geometry and impostors at runtime; offline compilation can remove that work.
 - [Physics](../../mod_vox_physics.go): collision already reads voxel geometry; asset grids are shared. `CopyChangedSectors` supplies immutable changed-sector snapshots to physics and [navigation](../../navigation_graph_runtime.go). There is no equivalent bulk JSON collision-box package to eliminate.
@@ -162,6 +162,10 @@ No automatic Bevy `Changed<T>` in Gekko. Publish versions/events at mutation own
 Acceptance: idle observers do not rebuild residency sets; idle geometry does not rebuild records; movement and ancestor changes appear at current stage boundary.
 
 ### S4. Remove synchronous persistence from unload
+
+Status: S4a completes immutable manifest capture and unique durable runtime
+payload publication. Normal unload remains synchronous; bounded transactions and
+dirty publication pins are S4b. [Ownership decision](streamed-rendering-s4.md).
 
 `persistChunkOverrides` saves whole snapshots during unload. Main thread snapshots immutable edits; bounded worker encodes/compresses/writes. Publish override references only after successful atomic replacement.
 
@@ -380,12 +384,13 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3q | `d748040` | Entity/type invalidations, independent cursors and explicit resync | [ECS contract](../engine/ecs.md#bounded-component-publication-journal) |
 | S3r | `195575d` | Bounded owned snapshots with exact live input comparison | [Renderer contract](../renderer/runtime.md#effective-palette-fingerprints) |
 | S2c | `60b4477` | Capacity accounting, live pins and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
-| S2d | `perf(renderer): budget retained GPU geometry slots` | Assigned-byte accounting, active pressure and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
+| S2d | `7ccd9ca` | Assigned-byte accounting, active pressure and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
+| S4a | `fix(streaming): preserve published edit snapshots` | Complete worker captures and unique durable payload paths | [Persistence decision](streamed-rendering-s4.md) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: resolve bounded persistence transactions for S4, including immutable payload
-paths, complete snapshot ownership and ordering with navigation saves. Other live
+Next: resolve S4b bounded persistence transactions, including preflighted snapshot
+credits, dirty pins, durable acknowledgements and navigation ordering. Other live
 cache owners and incremental extraction remain separate; no dirty-only extraction
 is approved. Preserve public mutation compatibility and conditional proposals.
 
@@ -717,6 +722,30 @@ This narrow observation establishes no frame-time gain. Native smoke exited 0:
 Hidden uploads refreshed charge by five aux slots, then reached Ready. Removal
 evicted one map without changing CPU geometry; activation missed and two real
 reupload frames reached Ready again. Physical buffers/pages remain outside budget.
+Existing tests and unrelated changes preserved; macOS warnings exited successfully.
+
+### S4a: Immutable persistence prerequisites
+
+Commit `fix(streaming): preserve published edit snapshots`. Separate Sol 6.1
+test/implementation agents and root/independent pre/post reviews completed. Three
+groups protect complete capture independence, failed-manifest preservation/retry
+for terrain/imported/object payloads, and the actual navigation worker's isolated
+payload attempt. Review tightened navigation coverage before freeze. Existing
+persistence/Stop/navigation checks, full engine tests, focused race and affected
+consumer builds passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS4a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(StreamedRuntime(Persists|Stop)|S2aRuntime(FailedPersistence|Stop)|S2bRuntimeFailedStop|StreamedNavigation|NavigationEditBlockers|RuntimeNavigationBlocker|ConfigureStreamedNavigation)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S4a|StreamedRuntime(Persists|Stop)|S2aRuntime(FailedPersistence|Stop)|S2bRuntimeFailedStop|StreamedNavigation|NavigationEditBlockers|RuntimeNavigationBlocker|ConfigureStreamedNavigation)' -count=1
+```
+
+Disk roundtrips preserve old durable references through failed save and successful
+retry. Formats/readers and blocking helper/Stop contracts remain. Normal unload
+IO, in-memory transaction publication and byte admission remain S4b; unreferenced
+successful payload files can accumulate. No GPU change needed a windowed check.
 Existing tests and unrelated changes preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:

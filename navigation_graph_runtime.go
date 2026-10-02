@@ -3,8 +3,8 @@ package gekko
 import (
 	"fmt"
 	"math"
-	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1222,14 +1222,15 @@ func startStreamedNavigationEditAnalysis(state *StreamedLevelRuntimeState) {
 			}
 			override := content.ImportedWorldChunkOverrideDef{}
 			if item.Backing == nil || item.Backing.OwnerKind != content.VoxelBackingOwnerImportedWorld {
-				snapshotPath := filepath.Join(worldDataDir, fmt.Sprintf("imported_%s_%d_%d_%d.gkchunk", sanitizePathSegment(item.WorldID), item.Coord.X, item.Coord.Y, item.Coord.Z))
 				persistenceMu.Lock()
-				if err := content.SaveImportedWorldChunk(snapshotPath, snapshot); err != nil {
-					persistenceMu.Unlock()
+				snapshotPath, err := writeStreamedLevelPayload(worldDataDir, fmt.Sprintf("imported_%s_%d_%d_%d.gkchunk", sanitizePathSegment(item.WorldID), item.Coord.X, item.Coord.Y, item.Coord.Z), func(path string) error {
+					return content.SaveImportedWorldChunk(path, snapshot)
+				})
+				persistenceMu.Unlock()
+				if err != nil {
 					result.Err = err
 					break
 				}
-				persistenceMu.Unlock()
 				override = content.ImportedWorldChunkOverrideDef{WorldID: item.WorldID, ChunkCoord: item.Coord, SnapshotPath: content.AuthorDocumentPath(snapshotPath, worldDeltaPath)}
 			}
 			reason := ""
@@ -2184,8 +2185,17 @@ func copyWorldDeltaForNav(source *content.WorldDeltaDef) content.WorldDeltaDef {
 		return content.WorldDeltaDef{}
 	}
 	copy := *source
-	copy.NavigationSourceOverrides = append([]content.NavigationSourceOverrideDef(nil), source.NavigationSourceOverrides...)
-	copy.NavigationGraphOverrides = append([]content.NavigationGraphOverrideDef(nil), source.NavigationGraphOverrides...)
+	copy.PlacementTransformOverrides = slices.Clone(source.PlacementTransformOverrides)
+	copy.PlacementDeletions = slices.Clone(source.PlacementDeletions)
+	copy.TerrainChunkOverrides = slices.Clone(source.TerrainChunkOverrides)
+	copy.ImportedWorldChunkOverrides = slices.Clone(source.ImportedWorldChunkOverrides)
+	copy.VoxelBackingRemovals = slices.Clone(source.VoxelBackingRemovals)
+	for i := range copy.VoxelBackingRemovals {
+		copy.VoxelBackingRemovals[i].Bricks = slices.Clone(source.VoxelBackingRemovals[i].Bricks)
+	}
+	copy.NavigationSourceOverrides = slices.Clone(source.NavigationSourceOverrides)
+	copy.NavigationGraphOverrides = slices.Clone(source.NavigationGraphOverrides)
+	copy.VoxelObjectOverrides = slices.Clone(source.VoxelObjectOverrides)
 	return copy
 }
 

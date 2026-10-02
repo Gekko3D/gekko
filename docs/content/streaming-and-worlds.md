@@ -959,6 +959,26 @@ Main top-level fields:
 
 Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`.
 
+Runtime terrain, imported-world and voxel-object edit snapshots use unique
+payload names inside `<delta file>_data`, preserving `.gkchunk`/`.gkvoxobj` and
+existing reader semantics. Navigation's imported edit analysis uses the same
+writer. It writes an owned temporary file, sets `0644`, syncs and closes, renames
+onto its owned unique reservation, then syncs and closes the directory before
+returning a reference. Imported writers keep their existing serialization mutex.
+Previously referenced payloads are never overwritten or removed by a new save.
+
+Asynchronous manifest/navigation captures own all `WorldDeltaDef` slices and
+nested backing-removal brick slices. The existing single manifest writer and
+pending-save coalescing remain; synchronous saves join it before saving latest
+state. Failed manifest publication preserves the previous durable manifest and
+its payloads. In-memory override staging can still precede that failure.
+
+Blocking unload helpers and Stop retain current save/reload behavior. Normal
+dirty unload still writes synchronously; bounded asynchronous transactions and
+dirty publication pins remain S4b. Old successful payloads, successful unpublished
+attempts and post-rename sync failures can leave unreferenced files. Garbage
+collection has separate reference ownership. [Persistence decision](../roadmaps/streamed-rendering-s4.md).
+
 `VoxelBackingRemovals` are inline removal-only deltas relative to a provider's
 `source_hash`. Each record identifies the generic owner kind/id and chunk, then
 stores 16 `uint32` words per edited 8x8x8 brick. Additive edits still require an

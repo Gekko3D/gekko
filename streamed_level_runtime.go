@@ -2748,8 +2748,10 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 			continue
 		}
 		snapshot := terrainChunkDefFromXBrickMap(ref.TerrainID, terrainCoordFromArray(ref.ChunkCoord), vmc.TerrainChunkSize, voxelResolutionForEntity(cmd, eid), xbm)
-		snapshotPath := filepath.Join(state.WorldDataDir, fmt.Sprintf("terrain_%s_%d_%d_%d.gkchunk", ref.TerrainID, ref.ChunkCoord[0], ref.ChunkCoord[1], ref.ChunkCoord[2]))
-		if err := content.SaveTerrainChunk(snapshotPath, snapshot); err != nil {
+		snapshotPath, err := writeStreamedLevelPayload(state.WorldDataDir, fmt.Sprintf("terrain_%s_%d_%d_%d.gkchunk", sanitizePathSegment(ref.TerrainID), ref.ChunkCoord[0], ref.ChunkCoord[1], ref.ChunkCoord[2]), func(path string) error {
+			return content.SaveTerrainChunk(path, snapshot)
+		})
+		if err != nil {
 			return err
 		}
 		override := content.TerrainChunkOverrideDef{
@@ -2801,8 +2803,10 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 		if !dirty && exists {
 			continue
 		}
-		snapshotPath := filepath.Join(state.WorldDataDir, fmt.Sprintf("object_%s_%s.gkvoxobj", sanitizePathSegment(placementID), sanitizePathSegment(itemID)))
-		if err := content.SaveVoxelObjectSnapshot(snapshotPath, VoxelObjectSnapshotFromXBrickMap(xbm)); err != nil {
+		snapshotPath, err := writeStreamedLevelPayload(state.WorldDataDir, fmt.Sprintf("object_%s_%s.gkvoxobj", sanitizePathSegment(placementID), sanitizePathSegment(itemID)), func(path string) error {
+			return content.SaveVoxelObjectSnapshot(path, VoxelObjectSnapshotFromXBrickMap(xbm))
+		})
+		if err != nil {
 			return err
 		}
 		override := content.VoxelObjectOverrideDef{
@@ -2841,13 +2845,14 @@ func persistImportedWorldRuntimeEditSnapshots(state *StreamedLevelRuntimeState, 
 		if _, backed := state.voxelBackingRemovalMap[voxelBackingRemovalRuntimeKey(content.VoxelBackingOwnerImportedWorld, snapshot.WorldID, snapshot.Coord)]; backed {
 			continue
 		}
-		snapshotPath := filepath.Join(state.WorldDataDir, fmt.Sprintf("imported_%s_%d_%d_%d.gkchunk", sanitizePathSegment(snapshot.WorldID), snapshot.Coord.X, snapshot.Coord.Y, snapshot.Coord.Z))
 		state.runtimeEditPersistenceMu.Lock()
-		if err := content.SaveImportedWorldChunk(snapshotPath, snapshot); err != nil {
-			state.runtimeEditPersistenceMu.Unlock()
+		snapshotPath, err := writeStreamedLevelPayload(state.WorldDataDir, fmt.Sprintf("imported_%s_%d_%d_%d.gkchunk", sanitizePathSegment(snapshot.WorldID), snapshot.Coord.X, snapshot.Coord.Y, snapshot.Coord.Z), func(path string) error {
+			return content.SaveImportedWorldChunk(path, snapshot)
+		})
+		state.runtimeEditPersistenceMu.Unlock()
+		if err != nil {
 			return err
 		}
-		state.runtimeEditPersistenceMu.Unlock()
 		override := content.ImportedWorldChunkOverrideDef{
 			WorldID:      snapshot.WorldID,
 			ChunkCoord:   snapshot.Coord,
