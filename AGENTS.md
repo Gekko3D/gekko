@@ -11,7 +11,11 @@ This workspace is a Go game-engine umbrella, not a single top-level Git repo. Th
 
 ## Agent-Driven Workflow
 
-Use a collaboration-first workflow for non-trivial work. The goal is to let an agent classify the task, choose the smallest safe verification pass, and leave behind a reviewable handoff artifact when scope or risk is not obviously small.
+For non-trivial work, identify ownership and invariants, then choose the smallest
+safe verification pass. Keep lasting contracts in canonical docs and brief
+progress/verification entries in existing roadmaps. Use the final summary for
+routine handoff. Reserve standalone design documents for substantial architectural
+decisions; do not generate a report for every implementation step.
 
 ### Human Alignment Gate
 
@@ -73,6 +77,11 @@ For any non-trivial task, the final handoff should leave the next reviewer or ag
 - the exact verification commands that were run
 - anything intentionally not verified
 - links to updated docs when behavior or workflow expectations changed
+
+Follow the [workspace documentation policy](/Users/ddevidch/code/go/gekko3d/AGENTS.md#documentation-and-progress).
+Record each lasting contract once in its owning docs. Keep roadmap entries brief:
+commit, result, verification commands and remaining limits. Omit duplicated test
+matrices, confidence boilerplate and TDD/review transcripts from persisted records.
 
 ## First Things To Know
 

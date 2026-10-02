@@ -179,6 +179,12 @@ does not flush commands, migrate rows or advance the structural stamp. This
 migrates hierarchy outputs only; live extraction remains authoritative until
 the remaining producers are covered.
 
+`ReparentPreservingWorldTransform` remains a separate input owner. Its initial
+hierarchy invocation can publish legitimate output changes before reparenting
+fails. Its boolean reports the reparent outcome; failure does not guarantee
+unchanged publication revisions. Parent/local writes in reparent and world
+transform helpers still need their own publication migration.
+
 Nil-safe `Ecs.TransformHierarchyStats()` and `Commands.TransformHierarchyStats()`
 return cumulative `TopologyBuildCount` and `CompositionCount` plus the last
 prepared `TransformCount`. Reads do not prepare membership or propagate values.

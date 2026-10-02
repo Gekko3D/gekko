@@ -149,72 +149,16 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. [S3a](streamed-rendering-s3a.md) completes current v2 observer
-demand selection: entity/chunk/effective-radius keys, overlap counts, disjoint
-cube differences, cached imported visibility/full-sector/fallback derivation,
-explicit main-thread metadata invalidation, and transient working-demand
-cleanup. Idle selection reuse preserves per-frame streaming progress. Live
-selection entries track active observer footprints and indexed metadata; empty
-maps release capacity, while nonempty Go maps may retain peak capacity. No byte
-ceiling or frame-time speedup is claimed.
+Status: partial. S3a–S3f implement observer selection, GPU scene record reuse,
+ECS candidate inventories, hierarchy reuse, component publication revisions and
+hierarchy output publication. See the [delivery record](#completed-work) for
+commits and designs. Lasting contracts live in [streaming docs](../content/streaming-and-worlds.md),
+[renderer runtime](../renderer/runtime.md) and [ECS docs](../engine/ecs.md).
 
-[S3b](streamed-rendering-s3b.md) completes manager-owned incremental scene record
-preparation and publication. Stable object templates feed separate ordered
-visible, transparent and shadow arrays; exact input snapshots track actual
-matrices/bounds, origin, encoded metadata and allocation/direct lookup state.
-Idle geometry reuses compiled rows and relative BVHs, and unchanged record
-buffers skip successful queue writes at the same published destination.
-Preparation follows voxel/lookup maintenance. Replacement destinations refresh
-bindings even with sufficient capacity; explicit invalidation forces preparation
-and publication again. Ownership follows the current pass union, with removed
-references and obsolete tails cleared and empty caches released. Nonempty cache
-maps/slices can retain peak capacity, and no byte ceiling or frame-time gain is
-claimed. Scene culling/LOD keep their current behavior.
-
-[S3c](streamed-rendering-s3c.md) completes the committed ECS structural stamp
-and voxel-state-owned candidate inventory, with implementation review and native
-continuity verification complete. Membership discovery reuses grouped
-entity-ID/row locations until the owner or stamp changes. Exact typed columns
-are reacquired per batch on every pass, and all live candidate processing,
-streamed adoption, camera/light extraction and hierarchy timing remain intact.
-Hidden, unresolved and sprite-LOD candidates are included. Obsolete references
-are cleared through capacity tails and empty aggregate storage is released;
-nonempty capacity can retain its peak. Complete component-value notifications,
-incremental value extraction and future layer/transform selection remain S3
-work; membership counters do not establish a frame-time improvement.
-
-[S3d](streamed-rendering-s3d.md) implements hierarchy-owned incremental
-propagation: committed Transform membership and row locations, live Parent
-edge detection, iterative valid/invalid topology resolution and exact parent,
-local and produced world TRS comparison. Direct writes, root authority,
-attachment calls and same-frame descendant extraction preserve current timing.
-Every invocation reacquires current columns and reads values; unchanged children
-skip composition. Empty ownership releases storage; nonempty capacity may retain
-its peak. Work counters do not establish performance gains. Complete value
-notifications, incremental bridge extraction and future layer selection keep
-S3 partial. S3d review and verification are recorded in its execution record.
-
-[S3e](streamed-rendering-s3e.md) adds aggregate component publication sequences
-owned by shared ECS storage and an immediate explicit mark for committed
-components. Outer committed mutations publish only affected types after
-index/group synchronization; copied migration values do not publish. Each type
-retains one scalar across final removal and re-admission. Direct field writers
-still require producer migration before these sequences become a complete dirty
-contract. Existing hierarchy/bridge live reads remain authoritative; this
-prerequisite removes no extraction work and establishes no performance gain.
-
-[S3f](streamed-rendering-s3f.md) migrates hierarchy-owned output publications:
-root world TRS mirrored into LocalTransform and valid child TRS composed into
-Transform. Exact destination bits before and after each write determine whether
-the existing immediate mark API publishes. Equal outputs publish nothing;
-repairing a direct child-world edit publishes when the actual destination
-changes, even if the result equals the cached output. Signed zero counts and
-identical NaN bits do not republish. Input reads remain unmarked, and invalid
-branches retain their output. Hierarchy arithmetic, timing and committed
-visibility stay unchanged. Live extraction remains authoritative. Input/helper, animation, physics,
-gameplay and other producers still require migration before publication sequences
-can replace extraction reads. This slice supplies no entity worklist, removes no
-extraction work and claims no performance gain.
+Complete helper/input, animation, physics, gameplay and asset notifications,
+entity worklists and incremental bridge extraction remain further S3 work.
+Hierarchy and renderer still read live values. Nonempty caches can retain peak
+capacity; no general byte ceiling or frame-time gain is established.
 
 Cache observer selection by spatial bucket, radii, layer transform/topology, and PVS state. Update entering/exiting shells instead of constructing all radius sets every frame. Recompute on teleports, observer additions/removals, radius changes, edits, and visibility changes. Merge multiple observers with demand counts so one observer cannot evict another's content.
 
@@ -382,39 +326,27 @@ Use expanded bounds/occupancy and subtract a conservative margin before primary 
 6. **Remaining frame work:** R2 and E4. R1 is independently opt-in; R3/E5 remain later experiments.
 7. **Packaging:** C2 only when current manifest/file organization demonstrably limits scale and its architecture decision changes.
 
-Implementation starts with [S1a: staged voxel residency and upload readiness](streamed-rendering-s1a.md).
-S1a is implemented: hidden residency, scheduling metadata and revision-qualified tickets.
-[S1b](streamed-rendering-s1b.md) is implemented: global voxel content budgets,
-deterministic ordering/aging, shared-map deduplication and atlas backpressure.
-[S1c](streamed-rendering-s1c.md) integrates those tickets with existing v2
-sector/proxy refinement and distance unloading. CPU collision/navigation stay
-independent. V3 page selection and cross-layer groups remain separate work.
-[S2a](streamed-rendering-s2a.md) is implemented for prepared geometry and
-its registered asset copies: byte accounting, pinned users, LRU eviction,
-per-key build suppression and Stop cleanup. Decoded-content/pending-result and
-other owner byte bounds are split into further S2 slices.
-[S2b](streamed-rendering-s2b.md) bounds decoded warm content and retained full/proxy
-results with scoped leases, shared byte admission and deferred retry hints.
-Live decoded leases and one sole oversized pending result expose explicit
-pressure exceptions. Temporary decode/build memory and other owner byte bounds,
-queue partitioning and mid-decode cancellation remain S2 work. These are owner
-budgets, not a total process memory ceiling. The remaining proposals keep the
-delivery order above.
-[S3a](streamed-rendering-s3a.md) is complete for current v2 observer selection.
-It preserves existing policy and main-thread stage ownership.
-[S3b](streamed-rendering-s3b.md) completes incremental GPU scene records at the
-manager boundary. [S3c](streamed-rendering-s3c.md) completes structural revisions
-and cached bridge membership, including implementation review and native checks.
-[S3d](streamed-rendering-s3d.md) completes incremental hierarchy propagation,
-including both review loops and native verification. Complete value notifications,
-incremental bridge extraction and future layer selection keep S3 partial.
-[S3e](streamed-rendering-s3e.md) supplies the storage-owned aggregate publication
-API. Complete producer notifications and incremental extraction remain future S3
-work; aggregate sequences do not supply an entity worklist.
-[S3f](streamed-rendering-s3f.md) completes hierarchy output publication, including
-both adversarial review loops, exact NaN recomposition/repair coverage and focused
-verification. Helper/input and other producer coverage remain future S3 work;
-live extraction still runs.
+### Completed work
+
+| Step | Commit | Change | Design or canonical contract |
+| --- | --- | --- | --- |
+| S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
+| S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
+| S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
+| S2a | `896e1eb` | Prepared geometry byte budgets and build suppression | [Design](streamed-rendering-s2a.md) |
+| S2b | `1504a7c` | Decoded leases and pending-result admission | [Design](streamed-rendering-s2b.md) |
+| S3a | `d93f3ac` | Incremental v2 observer selection | [Design](streamed-rendering-s3a.md) |
+| S3b | `f9911af` | Incremental GPU scene records | [Design](streamed-rendering-s3b.md) |
+| S3c | `6115a81` | Structural revisions and cached voxel membership | [Design](streamed-rendering-s3c.md) |
+| S3d | `f0e7726` | Incremental hierarchy propagation | [Design](streamed-rendering-s3d.md) |
+| S3e | `782ca99` | Aggregate component publication API | [Ownership decision](streamed-rendering-s3e.md) |
+| S3f | `53e8203` | Hierarchy output publication | [ECS contract](../engine/ecs.md#hierarchy-ownership) |
+
+S2/S3 remain partial. S1c covers current v2 handoff; v3 page selection and
+cross-layer groups remain separate. S2 budgets have live-lease and sole oversized
+pending-result pressure exceptions; temporary build memory and other owner bounds
+remain open. Complete producer notifications and incremental extraction remain
+S3 work. Next: reparent/world-transform helper publication.
 
 Decisions to settle before dependent implementation:
 
@@ -427,21 +359,62 @@ Decisions to settle before dependent implementation:
 
 ## 11. Verification and review limits
 
-The proposal review checked source symbols, existing plans, byte-layout arithmetic,
-and document links. Implementation verification is recorded per slice, starting
-with [S1a](streamed-rendering-s1a.md#execution-record),
-[S1b](streamed-rendering-s1b.md#verification-and-execution-record) and
-[S1c](streamed-rendering-s1c.md#execution-record) and
-[S2a](streamed-rendering-s2a.md#execution-record) and
-[S2b](streamed-rendering-s2b.md#execution-record) and
-[S3a](streamed-rendering-s3a.md#execution-record) and
-[S3b](streamed-rendering-s3b.md#execution-record) and
+The proposal review checked source symbols, existing plans, byte-layout arithmetic
+and document links. Earlier substantial designs retain their historical verification:
+[S1a](streamed-rendering-s1a.md#execution-record),
+[S1b](streamed-rendering-s1b.md#verification-and-execution-record),
+[S1c](streamed-rendering-s1c.md#execution-record),
+[S2a](streamed-rendering-s2a.md#execution-record),
+[S2b](streamed-rendering-s2b.md#execution-record),
+[S3a](streamed-rendering-s3a.md#execution-record),
+[S3b](streamed-rendering-s3b.md#execution-record),
 [S3c](streamed-rendering-s3c.md#execution-record) and
-[S3d](streamed-rendering-s3d.md#execution-record) and
-[S3e](streamed-rendering-s3e.md#execution-record) and
-[S3f](streamed-rendering-s3f.md#execution-record). Native smoke checks establish
-the recorded rendering/streaming contracts; they do not establish performance
-gains or rendered pixel parity.
+[S3d](streamed-rendering-s3d.md#execution-record).
+Routine implementation records belong here. Canonical docs own lasting contracts;
+separate documents retain substantial architectural rationale. Native smoke checks
+establish recorded rendering/streaming contracts, not performance gains or pixel parity.
+
+### S3e: Publication API
+
+Commit `782ca99`. Sol 6.1 TDD and both adversarial reviews completed. Focused
+checks, root tests, focused race, ActionGame compilation and editor build passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3e' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(Ecs_|EcsReflect_|Query_|S3c|S3d|TransformHierarchy|ReparentPreservingWorldTransform|VoxelRtSystem|StreamedVoxel|AuthoredAssetAnimation|NPCAnimation|MovingBrush)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(Ecs_|EcsReflect_|Query_|S3c|S3d|S3e|TransformHierarchy|ReparentPreservingWorldTransform|VoxelRtSystem|StreamedVoxel|AuthoredAssetAnimation|NPCAnimation|MovingBrush)' -count=1
+```
+
+### S3f: Hierarchy output publication
+
+Commit `53e8203`. Sol 6.1 TDD and both adversarial reviews completed, including
+unchanged NaN recomposition and direct-world repair coverage. Focused checks,
+root tests, focused race, ActionGame compilation and editor build passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3f' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(S3c|S3d|S3e|TransformHierarchy|ReparentPreservingWorldTransform|AuthoredAssetAnimation|NPCAnimation|MovingBrush)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3c|S3d|S3e|S3f|TransformHierarchy|ReparentPreservingWorldTransform|AuthoredAssetAnimation|NPCAnimation|MovingBrush)' -count=1
+```
+
+Consumer commands for both steps:
+
+```sh
+# actiongame/
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -run '^$'
+# gekko-editor/
+env GOCACHE=/tmp/gekko3d-gocache go build ./...
+```
+
+Both steps preserved existing tests. macOS linker and module stat-cache warnings
+occurred with successful exit status. These notification-only changes needed no
+new windowed smoke or engine-wide sweep. Earlier unrelated editor/sample test
+baselines were not rerun; see S3c/S3d. Verification establishes publication semantics
+and compilation. Remaining producer coverage still prevents skipping live extraction.
 
 Implementation slices should use the smallest existing build/check and manual scene relevant to their changed contract: fixed-view render parity, edited chunk seams, shared-instance isolation, delayed parent/child handoff, save/reload, and locomotion after edits. The user explicitly authorized functionality tests and the tests-first subagent workflow for this implementation. Other test changes still follow [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
 

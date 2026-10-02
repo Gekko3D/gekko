@@ -157,6 +157,12 @@ Update docs when you change:
 
 Do not leave the only correct explanation stranded in code comments or commit history.
 
+Keep lasting contracts in their owning canonical docs. Record routine progress
+and verification briefly in the existing roadmap. A final summary or roadmap
+entry supplies the handoff. Create a separate design document only for substantial
+architectural decisions that need rationale, alternatives or ownership contracts.
+Omit duplicated contracts, test matrices and TDD/review transcripts.
+
 ## 6. Handoff Checklist
 
 Before handing off a task, make sure the result tells the next agent:
