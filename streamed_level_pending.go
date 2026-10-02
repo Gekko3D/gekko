@@ -74,6 +74,7 @@ func (o *streamedPendingPreparedOwner) snapshot() streamedPendingPreparedStats {
 }
 func (p streamedPreparedChunk) release() {
 	p.registration.release()
+	p.terrainRegistration.release()
 	p.loadScope.Close()
 	p.pendingCredit.release()
 }
@@ -88,13 +89,18 @@ func (p streamedPreparedSectorProxy) release() {
 func streamedPreparedChunkCharge(p streamedPreparedChunk) int64 {
 	geometry := p.PreparedImportedWorldGeometry
 	registrationBytes := p.registration.charge()
+	terrainGeometry := p.preparedTerrainGeometry
+	terrainRegistrationBytes := p.terrainRegistration.charge()
 	p.registration = nil
+	p.terrainRegistration = nil
+	p.preparedTerrainGeometry = nil
 	p.PreparedImportedWorldGeometry = nil
 	p.loadScope = nil
 	p.pendingCredit = nil
 	p.prepareCancel = nil
 	p.Err = nil
-	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry), registrationBytes)
+	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry), registrationBytes,
+		streamedPendingGeometryCharge(terrainGeometry), terrainRegistrationBytes)
 }
 func streamedPreparedProxyCharge(p streamedPreparedSectorProxy) int64 {
 	geometry := p.PreparedGeometry

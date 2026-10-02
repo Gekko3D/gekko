@@ -1676,7 +1676,10 @@ func optionalPositiveIntPointer(value int) *int {
 }
 
 func spawnAuthoredTerrainChunkEntity(cmd *Commands, assets *AssetServer, parent EntityId, palette AssetId, terrain AuthoredTerrainSpawnDef) EntityId {
-	chunkMap := terrainChunkToXBrickMap(terrain.Chunk)
+	return spawnAuthoredTerrainChunkEntityWithPreparedAsset(cmd, assets, parent, palette, terrain, AssetId{})
+}
+
+func spawnAuthoredTerrainChunkEntityWithPreparedAsset(cmd *Commands, assets *AssetServer, parent EntityId, palette AssetId, terrain AuthoredTerrainSpawnDef, preparedAssetID AssetId) EntityId {
 	backing := NewVoxelBackingComponent(
 		content.VoxelBackingOwnerTerrain,
 		terrain.TerrainID,
@@ -1686,12 +1689,20 @@ func spawnAuthoredTerrainChunkEntity(cmd *Commands, assets *AssetServer, parent 
 		NewTerrainColumnVoxelBacking(terrain.Chunk),
 		terrain.BackingRemoval,
 	)
-	if backing != nil {
-		backing.ApplyRemovals(chunkMap)
-	}
 	overrideGeometry := AssetId{}
-	if assets != nil {
-		overrideGeometry = assets.RegisterSharedVoxelGeometry(chunkMap, "")
+	if assets != nil && terrain.BackingRemoval == nil {
+		if geometry, ok := assets.GetVoxelGeometry(preparedAssetID); ok && geometry.XBrickMap != nil {
+			overrideGeometry = preparedAssetID
+		}
+	}
+	if overrideGeometry == (AssetId{}) {
+		chunkMap := terrainChunkToXBrickMap(terrain.Chunk)
+		if backing != nil {
+			backing.ApplyRemovals(chunkMap)
+		}
+		if assets != nil {
+			overrideGeometry = assets.RegisterSharedVoxelGeometry(chunkMap, "")
+		}
 	}
 	components := []any{
 		&TransformComponent{

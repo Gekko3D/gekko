@@ -313,6 +313,7 @@ type StreamedLevelRuntimeState struct {
 	prepareScheduler          streamedPrepareScheduler
 	readyCommits              streamedReadyOwner
 	streamingWork             streamedWorkOwner
+	terrainGeometryAssets     map[EntityId]streamedGeometryAssetLease
 
 	renderManaged     bool
 	nextRenderTicket  uint64
@@ -486,6 +487,8 @@ type streamedPreparedChunk struct {
 	loadScope                             *RuntimeContentLoadScope
 	pendingCredit                         *streamedPendingPreparedCredit
 	registration                          *streamedGeometryRegistration
+	terrainRegistration                   *streamedGeometryRegistration
+	preparedTerrainGeometry               *volume.XBrickMap
 	retryCost                             int64
 	Generation                            uint64
 	Coord                                 ChunkCoord
@@ -1127,6 +1130,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 		cmd.RemoveEntity(player)
 	}
 	cmd.app.FlushCommands()
+	state.releaseAllStreamedTerrainGeometryAssets()
 	state.PreparedGeometryCache.close(assetServerFromApp(cmd.app))
 	carryStreamedWorkAfterStop(state)
 	refreshStreamedRuntimeMetricsCounts(state)
@@ -2223,6 +2227,18 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		}
 		result.ObjectSnapshots[key] = snapshot
 	}
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
+	if result.TerrainChunk != nil && result.TerrainChunk.NonEmptyVoxelCount > 0 {
+		result.preparedTerrainGeometry = terrainChunkToXBrickMap(result.TerrainChunk)
+		result.preparedTerrainGeometry.ComputeAABB()
+		result.preparedTerrainGeometry.ClearDirty()
+		if streamedPreparationCancelled(job.prepareCancel) {
+			return result
+		}
+		result.terrainRegistration = prepareStreamedGeometryRegistration(result.preparedTerrainGeometry)
+	}
 	if !job.HasImportedWorldBacking && !streamedPreparationCancelled(job.prepareCancel) {
 		result.registration = prepareStreamedGeometryRegistration(result.PreparedImportedWorldGeometry)
 	}
@@ -2353,6 +2369,7 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 
 func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedChunk) (int, error) {
 	defer prepared.registration.release()
+	defer prepared.terrainRegistration.release()
 	defer beginStreamedWorkCommit(state, prepared.Generation, prepared.prepareCancel)()
 	defer beginStreamedRenderTicketBatch(state)()
 	start := time.Now()
@@ -2388,13 +2405,28 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 
 	if prepared.TerrainChunk != nil && prepared.TerrainChunk.NonEmptyVoxelCount > 0 {
 		terrainStart := time.Now()
-		entity := spawnAuthoredTerrainChunkEntity(cmd, assets, state.LevelRoot, state.TerrainPalette, AuthoredTerrainSpawnDef{
+		terrainID := terrainIDForPreparedChunk(state, prepared.TerrainChunk)
+		backingRemoval := state.voxelBackingRemovalFor(content.VoxelBackingOwnerTerrain, terrainID, prepared.TerrainChunk.Coord)
+		preparedAssetID := AssetId{}
+		adopted := false
+		if backingRemoval == nil {
+			preparedAssetID, adopted = assets.adoptStreamedVoxelGeometry(prepared.terrainRegistration, prepared.preparedTerrainGeometry)
+			if adopted {
+				state.Metrics.PreparedGeometryAssetAdoptions++
+			}
+		} else {
+			prepared.terrainRegistration.release()
+		}
+		entity := spawnAuthoredTerrainChunkEntityWithPreparedAsset(cmd, assets, state.LevelRoot, state.TerrainPalette, AuthoredTerrainSpawnDef{
 			LevelID:        state.LevelID,
-			TerrainID:      terrainIDForPreparedChunk(state, prepared.TerrainChunk),
+			TerrainID:      terrainID,
 			TerrainGroupID: terrainGroupIDForStreamedState(state),
 			Chunk:          prepared.TerrainChunk,
-			BackingRemoval: state.voxelBackingRemovalFor(content.VoxelBackingOwnerTerrain, terrainIDForPreparedChunk(state, prepared.TerrainChunk), prepared.TerrainChunk.Coord),
-		})
+			BackingRemoval: backingRemoval,
+		}, preparedAssetID)
+		if adopted {
+			state.retainStreamedTerrainGeometryAsset(entity, assets, preparedAssetID)
+		}
 		state.Metrics.LastCommitTerrainDuration += time.Since(terrainStart)
 		stageStreamedRenderTarget(cmd, state, entity, prepared.Coord, streamedRenderTerrain)
 		recordStreamedCommitFlush(cmd, state)
@@ -2720,6 +2752,7 @@ func removeStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 		cmd.RemoveEntity(eid)
 		delete(state.navigationVoxelSnapshots, eid)
 		delete(state.navigationEditRevisions, eid)
+		state.releaseStreamedTerrainGeometryAsset(eid)
 	}
 	for _, lease := range loaded.ImportedWorldGeometryAssets {
 		lease.release(state.PreparedGeometryCache)

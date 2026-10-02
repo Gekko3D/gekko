@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3s, S4a–S4c and P5a complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3s, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -143,6 +143,32 @@ warm reuse, deferred byte ownership/cancellation and the unchanged defensive
 registration contract. Run focused race, engine/consumer checks and native
 handoff verification. Terrain/backed removals, placements, cache ledger scans
 and renderer staging remain later work; this batch does not bound all commits.
+
+#### P5b: Worker-prepared terrain registration
+
+Build terrain voxel geometry, bounds and an independent P5a registration copy
+from immutable decoded columns on workers. S2b charges source and copy until
+consumption or drain. Main commits adopt only without a current backing removal;
+any live removal uses the original build/removal/defensive registration path.
+Keep terrain backing construction, hooks, transforms, adjacency, object-scoped
+renderer geometry and synchronous chunk publication unchanged.
+
+Use a private prepared-asset spawn seam; preserve the public spawn definition.
+Do not intern terrain assets: their OverrideGeometry can be edited in place.
+A runtime owner keyed by spawned terrain entity records exact asset ID/server
+before flush/hooks. Normal unload releases owned IDs after persistence; successful
+Stop also releases partial commits that never reached LoadedChunks. Failed Stop
+retains ownership. Deleting an asset unregisters its ID, without clearing maps
+held by renderer/physics. Existing fallback asset ownership stays unchanged.
+
+Files: `streamed_level_runtime.go`, `streamed_level_pending.go`,
+`level_content_spawn.go` and the existing registration owner. Confidence is High
+after independent ownership review; no human choice remains. Use separate tests
+and implementation agents with independent PRE/POST reviews. Cover actual
+terrain adoption/geometry/backing, current-removal fallback, deferred cancellation,
+partial failure and successful/failed Stop cleanup. Run focused race, full
+engine/consumer checks and a native terrain handoff. Backing setup, renderer
+copies, placements and other large units remain outside this batch's bound.
 
 ## 5. Streaming changes
 
@@ -433,6 +459,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1e | `1c72078` | Combined CPU/GPU admission, compatibility pressure and separate retirement debt | [Admission decision](streamed-rendering-s1b.md#s1e-combined-streaming-admission) |
 | S1f | `953c577` | Bounded ready ownership, live commit ordering and aging | [Ready-queue decision](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue) |
 | P5a | `33bc039` | Independent worker registration copies with single-use adoption | [Asset ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
+| S3s | `6d35be0` | Shared current scan for automatic linked-light radii | [Renderer contract](../renderer/runtime.md#linked-emitter-source-radii) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -442,9 +469,9 @@ compatibility and conditional proposals.
 
 On 2026-10-03, the user prioritized large single-chunk stalls and recurring CPU
 scans. [P5a](#p5a-worker-owned-registration-copies) removes main-thread
-registration copying first; S3s reduces recurring emitter scans. Terrain
-construction and remaining renderer/commit work are next. Further scheduling
-cleanup remains S1.
+registration copying first; P5b moves eligible terrain construction to workers.
+S3s reduces recurring emitter scans. Repeated lookup construction and remaining
+renderer/commit work are next. Further scheduling cleanup remains S1.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
 On 2026-10-03, the user authorized its ownership decision and migration of existing
@@ -1001,7 +1028,7 @@ remain; one large commit is still not fully bounded. Unrelated changes preserved
 
 ### S3s: One-pass linked emitter aggregation
 
-Completed 2026-10-03. Automatic linked-light radii share one current object scan,
+Commit `6d35be0`, completed 2026-10-03. Automatic linked-light radii share one current object scan,
 with no scan when no eligible group exists. Direct unmarked scale/link/geometry
 edits, removal, overrides and existing light/ambient/Sun outputs passed frozen
 functionality tests and root review. Focused checks, full engine (root 14.826s)
@@ -1018,6 +1045,30 @@ The visit diagnostic confirms one pass instead of one pass per linked light.
 No measured frame-time gain or dirty-only extraction claim. Local aggregation
 changes no concurrency, GPU allocation or shader contract; no new race/native
 check was needed. Existing tests and unrelated changes preserved.
+
+### P5b: Worker terrain registration
+
+Completed 2026-10-03. Eligible terrain construction and registration copying
+moved to workers. Live removal fallback, private renderer geometry, pending byte
+ownership and exact unload/partial Stop cleanup passed separate tests/implementation
+and independent/root reviews. Focused checks, full engine (root 14.177s), focused
+race (5.010s) and five consumer builds passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestP5b' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestP5a|TestP5b|TestS1fCommit|TestS1eStreamingWork|TestS1dPrepare|TestS2a|TestS2b|TestS2e|TestStreamedRuntime|TestSpawnAuthored|TestVoxelBacking)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestP5a|TestP5b|TestS1fCommit|TestS1eStreamingWork|TestS1dPrepare|TestS2a|TestS2b|TestS2e|TestStreamedRuntime|TestVoxelBacking)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke /tmp/gekko-p5b-smoke.go
+/bin/zsh -c '/tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke > /tmp/gekko-s1e-smoke.log 2>&1'
+```
+
+Native check passed (40 frames/1.353s): two 32,768-voxel terrain chunks, two
+adoptions, allowance one, 30-frame upload pause, Ready visibility and exact owned
+asset cleanup. No measured FPS or total commit-time bound. Live-removal fallback,
+backing setup, object-scoped renderer copies, placements and other large units
+remain main-thread work. Existing tests and unrelated changes preserved.
 
 Consumer commands for these steps:
 

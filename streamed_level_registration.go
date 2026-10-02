@@ -78,3 +78,29 @@ func (registration *streamedGeometryRegistration) release() {
 	defer registration.mu.Unlock()
 	registration.source, registration.geometry = nil, nil
 }
+
+// Terrain assets remain private mutable geometry. Their exact registration is
+// owned by the spawned entity, including commits that fail before publication.
+func (state *StreamedLevelRuntimeState) retainStreamedTerrainGeometryAsset(entity EntityId, server *AssetServer, id AssetId) {
+	if entity == 0 {
+		server.DeleteVoxelGeometry(id)
+		return
+	}
+	if state.terrainGeometryAssets == nil {
+		state.terrainGeometryAssets = make(map[EntityId]streamedGeometryAssetLease)
+	}
+	state.terrainGeometryAssets[entity] = streamedGeometryAssetLease{ID: id, Server: server}
+}
+
+func (state *StreamedLevelRuntimeState) releaseStreamedTerrainGeometryAsset(entity EntityId) {
+	if lease, ok := state.terrainGeometryAssets[entity]; ok {
+		lease.Server.DeleteVoxelGeometry(lease.ID)
+		delete(state.terrainGeometryAssets, entity)
+	}
+}
+
+func (state *StreamedLevelRuntimeState) releaseAllStreamedTerrainGeometryAssets() {
+	for entity := range state.terrainGeometryAssets {
+		state.releaseStreamedTerrainGeometryAsset(entity)
+	}
+}

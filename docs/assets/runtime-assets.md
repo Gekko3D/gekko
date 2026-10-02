@@ -181,6 +181,23 @@ other AssetServer records. See
 [S2a](../roadmaps/streamed-rendering-s2a.md) for the storage-charge definition,
 defaults and remaining memory bounds.
 
+### Streamed terrain registration
+
+Terrain workers also build geometry, bounds and a separate registration copy.
+Pending admission charges both maps. Main commits adopt only without a current
+backing removal; otherwise they keep the ordinary build/removal/defensive path.
+Terrain backing and object-scoped renderer copies keep their existing behavior.
+These editable assets are not interned in the prepared-geometry cache.
+
+The runtime records each adopted terrain asset's exact ID and registering server
+before entity flush/hooks. Normal unload releases it after persistence/removal;
+successful Stop also releases partial commits absent from `LoadedChunks`. Failed
+Stop retains ownership. Deletion unregisters IDs without clearing maps held by
+renderer/physics. Eager and fallback registrations keep their existing lifetime.
+`PreparedGeometryAssetAdoptions` includes actual terrain transfers as well as
+imported full/proxy transfers. Backing setup and renderer copies remain main-thread
+work; this does not bound all work in a large chunk.
+
 ## Decoded Content Lifetime
 
 `RuntimeContentLoader` bounds warm decoded definitions across all eight content

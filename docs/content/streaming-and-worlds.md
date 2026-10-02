@@ -82,6 +82,11 @@ Streamed runtime:
 - keeps terrain chunk metadata in streamed state
 - loads chunks on demand per active chunk observer
 
+Workers prepare terrain registration geometry. Main commits retain live removal
+authority, terrain backing and synchronous hooks. See
+[terrain asset ownership](../assets/runtime-assets.md#streamed-terrain-registration)
+for adoption, pending charges and unload/Stop cleanup.
+
 ## Imported Worlds
 
 Imported worlds are chunked voxel worlds, usually baked from VOX data.
