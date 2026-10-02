@@ -169,7 +169,11 @@ func applyAuthoredAimWorldDelta(cmd *Commands, heldAssetRoot EntityId, rig conte
 		parentRotation = parentDelta.Mul(parentRotation).Normalize()
 		boneDelta := mgl32.QuatSlerp(mgl32.QuatIdent(), worldDelta, weight)
 		localDelta := parentRotation.Inverse().Mul(boneDelta).Mul(parentRotation).Normalize()
+		previousLocal := hierarchyBits(local.Position, local.Rotation, local.Scale)
 		local.Rotation = localDelta.Mul(local.Rotation).Normalize()
+		if hierarchyBits(local.Position, local.Rotation, local.Scale) != previousLocal {
+			cmd.MarkComponentChanged(bone, reflect.TypeOf(LocalTransformComponent{}))
+		}
 		worldDeltas[bone] = boneDelta.Mul(parentDelta).Normalize()
 		applied = true
 	}

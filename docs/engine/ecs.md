@@ -136,13 +136,13 @@ only and retain no component values, pointers, queries or entity tombstones.
 
 Direct public-field writes remain live but require their owner to explicitly
 mark them for publication. Hierarchy publishes its changed derived world and
-root-local TRS outputs; reparent, grip, attach and surface helpers publish their
-changed transform inputs. Other asset writers, animation, brushes and further
-producers remain incompletely migrated. Hierarchy and the voxel bridge continue
-their live reads. These sequences establish an ownership API, not a complete dirty contract,
-entity worklist or performance gain. Remaining producer migration and any bounded
-change journal need subsequent designs; consumers must not skip existing live
-reads based on these sequences yet.
+root-local TRS outputs; reparent, grip, attach, surface and authored aim helpers
+publish their changed transform inputs. Other asset writers, animation, brushes
+and further producers remain incompletely migrated. Hierarchy and the voxel
+bridge continue their live reads. These sequences establish an ownership API,
+not a complete dirty contract, entity worklist or performance gain. Remaining
+producer migration and any bounded change journal need subsequent designs;
+consumers must not skip existing live reads based on these sequences yet.
 
 ## Hierarchy Ownership
 
@@ -231,7 +231,28 @@ It does not create a missing LocalTransform, flush commands or change membership
 The final hierarchy call owns descendant outputs. A failed lookup can still
 follow legitimate initial hierarchy publications; false is not a rollback signal.
 
-Independent authored aim, animation and other producers still need migration.
+### Authored Aim Publication
+
+`ApplyAuthoredAimOffset`, `ApplyAuthoredAimRig`, `ApplyAuthoredAimRigAtPoint` and
+`ApplyAuthoredAimRigAtRay` share a rotation writer that publishes changed
+LocalTransform values per bone. It compares actual destination TRS bits before
+and after each assignment. Equal bits publish nothing; unchanged position/scale
+NaN payloads do not make a rotation write dirty. Existing quaternion normalization
+can still change local rotation with zero requested offset or zero weight.
+Signed-zero rotation changes also publish, even when orientation is unchanged.
+
+Missing LocalTransform bones are skipped. Existing Local-only bones remain
+accepted, including the existing root-rotation fallback when parent World is
+missing. The boolean reports whether a LocalTransform was processed, not whether
+its value changed. An initial hierarchy invocation can publish legitimate outputs
+before a later failure.
+
+Aim writes leave world propagation to the caller or scheduled hierarchy. A root
+used as an aim bone still has authoritative World restored into Local by the next
+hierarchy invocation. Weighting, frame resolution, position/scale, Pivot and command
+boundaries retain their existing behavior; aiming does not flush or create Local.
+
+Animation and other producers still need migration.
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.
 
