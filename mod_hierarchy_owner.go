@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"math"
+	"reflect"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -166,7 +167,11 @@ func (h *transformHierarchyOwner) update(ecs *Ecs) {
 				}
 			} else if batch.local && !batch.parent {
 				world, local := &c.worlds[n.row], &c.locals[n.row]
+				localBits := hierarchyBits(local.Position, local.Rotation, local.Scale)
 				local.Position, local.Rotation, local.Scale = world.Position, world.Rotation, world.Scale
+				if localBits != hierarchyBits(local.Position, local.Rotation, local.Scale) {
+					ecs.MarkComponentChanged(n.entity, reflect.TypeOf(LocalTransformComponent{}))
+				}
 			}
 		}
 	}
@@ -200,6 +205,9 @@ func (h *transformHierarchyOwner) update(ecs *Ecs) {
 		}
 		n.parentBits, n.localBits = parentBits, localBits
 		n.outputBits = hierarchyBits(world.Position, world.Rotation, world.Scale)
+		if outputBits != n.outputBits {
+			ecs.MarkComponentChanged(n.entity, reflect.TypeOf(TransformComponent{}))
+		}
 		n.produced = true
 		h.stats.CompositionCount++
 	}

@@ -60,12 +60,20 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
   - propagation from `LocalTransformComponent` plus `Parent` to `TransformComponent`
   - incremental topology and exact TRS comparisons owned by shared ECS storage
   - immediate propagation for direct calls as well as the scheduled stage
+  - immediate component publication for changed root-local and derived world TRS
 - Important:
   - every invocation reads current Parent and TRS values; unchanged child inputs
     and outputs reuse composition, while direct child-world edits are repaired
   - roots with local transforms mirror authoritative world TRS on every call;
     children require world, local and Parent components; missing parents and
     cycles leave the affected branch's world TRS unchanged until repaired
+  - output publication compares exact destination TRS bits before and after the
+    write; equal outputs publish nothing, while repaired direct child-world edits
+    publish when the actual destination changes; Pivot remains excluded
+  - hierarchy reads do not publish Parent, child-local or source-world inputs;
+    other producer migrations remain incomplete, so hierarchy and renderer live
+    reads remain authoritative; this removes no extraction work and claims no
+    performance gain
   - `Commands.TransformHierarchyStats()` and `Ecs.TransformHierarchyStats()`
     report topology builds, child compositions and last prepared membership
   - hierarchy composition is pure entity transform math: parent position,

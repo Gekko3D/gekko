@@ -135,11 +135,13 @@ commands and ignored missing entities publish nothing. These APIs are main-threa
 only and retain no component values, pointers, queries or entity tombstones.
 
 Direct public-field writes remain live but require their owner to explicitly
-mark them for publication. Hierarchy, animation, brushes and the voxel bridge
-continue their current live reads/writes. These sequences establish an ownership
-API, not a complete dirty contract, entity worklist or performance gain. Producer
-migration and any bounded change journal need subsequent designs; consumers must
-not skip existing live reads based on these sequences yet.
+mark them for publication. Hierarchy publishes its changed derived world and
+root-local TRS outputs; its input owners, animation, brushes and other producers
+remain incompletely migrated. Hierarchy and the voxel bridge continue their live
+reads. These sequences establish an ownership API, not a complete dirty contract,
+entity worklist or performance gain. Remaining producer migration and any bounded
+change journal need subsequent designs; consumers must not skip existing live
+reads based on these sequences yet.
 
 ## Hierarchy Ownership
 
@@ -164,6 +166,18 @@ so descendants receive the newly resolved world values. Unchanged inputs and
 outputs skip composition; direct child-world edits are repaired. Signed zeros
 are distinct and unchanged NaN bits stabilize reuse. Pivot is excluded and
 preserved. Structural rebuilding may conservatively recompose valid children.
+
+Hierarchy immediately marks a root's LocalTransform or a valid child's Transform
+only when its actual destination TRS bits differ after the output write. Compare
+the live destination before composition, so repairing a direct child-world edit
+publishes even when the result matches the cached output. Equal outputs publish
+nothing, including initial correct values, structural recomposition, equivalent
+inputs and identical NaN bits; signed zero changes count. Pivot is excluded.
+Input reads do not mark Parent, child LocalTransform or source world Transform.
+Invalid branches retain their output and publish nothing. Output publication
+does not flush commands, migrate rows or advance the structural stamp. This
+migrates hierarchy outputs only; live extraction remains authoritative until
+the remaining producers are covered.
 
 Nil-safe `Ecs.TransformHierarchyStats()` and `Commands.TransformHierarchyStats()`
 return cumulative `TopologyBuildCount` and `CompositionCount` plus the last
