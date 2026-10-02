@@ -132,6 +132,64 @@ priority definitions/default, streamed enum aliases, focused GPU tests and docs.
 Existing physical writers must use service path; test-only scheduling code
 is not acceptable.
 
+## S1d: Deterministic preparation priority
+
+Use one main-thread `container/heap` queue for eligible full/proxy dispatches.
+Existing desired/pending/loaded maps remain membership owners; workers receive
+captured jobs. Queue items contain kind, coordinate, priority and first waiting
+observer-update sequence, never decoded data or geometry. Rebuild scheduling
+views from current eligibility, retaining only current waiting identities.
+Preserve `MaxPrepareJobs` as the active-worker limit and existing pending-byte
+admission. A combined CPU-ready/GPU-uploading allowance is a separate decision.
+
+Fresh order follows the island policy: fallback proxies, collision/destruction
+full chunks, visible full detail, then prefetch. Existing keep-only demand retains
+content without initiating preparation. Visible detail is current observer-radius
+demand or imported full detail in a current/PVS-visible sector; prefetch-only
+sector expansion remains prefetch. Reuse selection's incremental overlap counts
+and cached per-observer sector derivation to classify this distinction. No new
+per-frame footprint enumeration or layer/global lattice is introduced.
+
+Promote one priority level per eight waiting observer updates, capped at fallback.
+Compare effective priority, first waiting sequence, signed lexicographic X/Y/Z,
+then kind (proxy before full on otherwise equal keys). No pointer, insertion or
+goroutine-completion ordering. Persist waiting age through a pending attempt or
+byte-cost retry. Age belongs to current unmet demand; acknowledgement of an older
+cancelled dispatch cannot erase a renewed request's fresh birth. Release age when
+demand disappears, proxy policy removes eligibility, or a matching loaded owner
+satisfies demand. Observe satisfaction before persistence/upgrade can remove that
+owner. Stop entry/restart resets scheduling age without changing failed-Stop
+world ownership. Sequence wrap starts a fresh scheduling era. Fit-capable
+waiting detail eventually wins against continually
+new fallback arrivals; blocked IO and capacity cannot promise bounded latency.
+
+Check current loaded/pending state, proxy enablement/commit need, loadable content
+and known pending-cost fit before dispatch. A byte-blocked item retains age but
+cannot block smaller eligible work. Build the job only after selection, using
+fresh override state. S2e cancellation and terminal acknowledgement remain the
+dispatch lifetime owner; returning demand cannot revive a cancelled attempt.
+
+Expose cumulative `PrepareDispatchCount` and last dispatched coordinate/kind
+as `LastPrepareDispatchCoord` and `LastPrepareDispatchKind` (`full` or `proxy`).
+These report actual admission, independent of completion timing. Existing prepared
+and commit metrics keep their meanings.
+
+Owners/files: `streamed_level_runtime.go`, a private preparation scheduler,
+`streamed_level_selection.go` for incremental current/PVS classification, and
+runtime metric publication. GPU upload scheduling, readiness, codecs, collision
+and persistence remain owned by their existing systems. Confidence: High after
+dispatch loops, selection derivation and S1b upload ordering inspection; no SME
+alignment required. Sorting separate proxy/full lists preserves proxy starvation;
+one shared queue with aging follows the approved island direction.
+
+Minimal coverage exercises actual dispatch/commit and public metrics: stable
+signed ties under shuffled insertion, shared proxy/full priority, current/PVS
+detail before prefetch, aging under sustained fresh fallbacks, renewed demand and
+byte-pressure progress. Existing selection/cancellation/pending/Stop checks remain
+unchanged. Focused checks and independent reviews precede full engine/consumer
+and race checks at the batch boundary. Native fallback/readiness verification
+supplements CPU scheduling checks; no frame-time or total-memory claim.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

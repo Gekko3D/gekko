@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2e, S3a–S3r and S4a–S4c complete. S2/S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a–S1d, S2a–S2e, S3a–S3r and S4a–S4c complete. S1/S2/S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -389,13 +389,14 @@ This workflow does not independently authorize tests, delegation or commits.
 | S4a | `13a9e1e` | Complete worker captures and unique durable payload paths | [Persistence decision](streamed-rendering-s4.md) |
 | S4b | `6a9f3b7` | Capture-order publication and conservative navigation progress | [Persistence decision](streamed-rendering-s4.md#s4b-imported-capture-order-publication) |
 | S4c | `f045d01` | Exclusive byte-accounted transactions, dirty pins and durable checkpoints | [Persistence decision](streamed-rendering-s4.md#s4c-bounded-asynchronous-normal-unload) |
-| S2e | `feat(streaming): cancel obsolete preparation dispatches` | Terminal dispatch cancellation, shared leases and failed Stop recovery | [Cancellation decision](streamed-rendering-s2b.md#s2e-obsolete-preparation-cancellation) |
+| S2e | `d425c88` | Terminal dispatch cancellation, shared leases and failed Stop recovery | [Cancellation decision](streamed-rendering-s2b.md#s2e-obsolete-preparation-cancellation) |
+| S1d | `feat(streaming): prioritize preparation deterministically` | Shared full/proxy ordering, waiting age and current/PVS classification | [Priority decision](streamed-rendering-s1b.md#s1d-deterministic-preparation-priority) |
 
-S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
+S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: scope deterministic preparation priority and bounded work admission, then
-remaining S2 queues/cache owners and S3 notifications/extraction according to
-delivery order. No dirty-only extraction is approved. Preserve public mutation
+Next: resolve combined running/CPU-ready/GPU-uploading admission, then remaining
+S1 scheduling/commit bounds, S2 queues/cache owners and S3 notifications/extraction
+in delivery order. No dirty-only extraction is approved. Preserve public mutation
 compatibility and conditional proposals.
 
 Decisions to settle before dependent implementation:
@@ -807,7 +808,7 @@ exited successfully.
 
 ### S2e: Obsolete preparation cancellation
 
-Commit `feat(streaming): cancel obsolete preparation dispatches`. Separate Sol 6.1
+Commit `d425c88`. Separate Sol 6.1
 test/implementation agents and root/independent pre/post reviews completed.
 Full/proxy dispatch cancellation remains terminal through renewed demand and
 residency upgrades. Obsolete errors cannot poison the runtime; cancelled
@@ -835,6 +836,36 @@ native checks preserve fallback usability, not pixel parity or speed. Cancellati
 does not preempt an active shared decode/build. Separate IO/generation/navigation
 queues and total process memory remain open. Existing tests and unrelated changes
 preserved; macOS warnings exited successfully.
+
+### S1d: Deterministic preparation dispatch
+
+Commit `feat(streaming): prioritize preparation deterministically`. Separate
+Sol 6.1 test/implementation agents and root/independent pre/post reviews completed.
+One shared heap orders full/proxy admission with aging, stable ties and cached
+current/PVS classification. Known byte-blocked work permits smaller work; renewed
+demand retains its own age through an older cancellation acknowledgement.
+Canonical behavior: [streaming](../content/streaming-and-worlds.md).
+
+Focused checks, full engine tests (root 13.631s), focused race (6.546s) and five
+consumer checks passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS1dPrepare' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS2b|TestS2e|TestS3aSelection|TestStreamedRuntimeStop|TestStreamedRender|TestStreamedVoxel|TestOrdinaryHiddenVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS1dPrepare|TestS2[be]|TestS3aSelection|TestStreamedRuntimeStop|TestStreamedRender|TestS4c)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS2eSmoke.app/Contents/MacOS/gekko-s2e-smoke /tmp/gekko-s2e-smoke.go
+/bin/zsh -lc '/tmp/GekkoS2eSmoke.app/Contents/MacOS/gekko-s2e-smoke > /tmp/gekko-s2e-smoke.log 2>&1'
+```
+
+Unchanged native fallback fixture passed in 19 frames/657ms: full/proxy Ready,
+visible fallback after durable unload and latest full reload Ready. Peak pending
+charge was 2,046 bytes under a one-byte budget. CPU tests establish dispatch
+ordering; native checks establish usability, not pixel parity or speed. Active
+worker semantics and GPU priority remain; combined stage admission and other S1
+queues are separate. Existing tests and unrelated changes preserved; macOS
+warnings exited successfully.
 
 Consumer commands for these steps:
 

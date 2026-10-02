@@ -606,6 +606,24 @@ Decoded content and pending preparation, S2b:
   pending credits. Scope, review and verification:
   [S2b](../roadmaps/streamed-rendering-s2b.md).
 
+Preparation dispatch priority, S1d:
+
+One main-thread heap selects full/proxy work from current desired membership.
+Fresh order is fallback proxy, collision/destruction full chunk, visible detail,
+then prefetch. Current radius and imported current/PVS sector demand identify
+visible detail; prefetch-only expansion stays prefetch. Keep-only interest retains
+existing content. Stable ties use waiting age, signed X/Y/Z and kind. Every eight
+waiting observer updates promotes one priority level, up to fallback priority.
+Age survives pending attempts and byte-cost retries; current satisfaction,
+withdrawal, Stop or restart releases it. An older cancelled completion cannot
+erase renewed demand's age. Known byte-blocked work does not block fitting work.
+
+`PrepareDispatchCount`, `LastPrepareDispatchCoord` and `LastPrepareDispatchKind`
+(`full` or `proxy`) report actual dispatch independently of completion timing.
+`MaxPrepareJobs` continues to bound active workers and S2b bounds pending payload
+bytes. CPU-ready/GPU-uploading allowance and remaining stage queues are separate.
+[S1d decision](../roadmaps/streamed-rendering-s1b.md#s1d-deterministic-preparation-priority).
+
 Obsolete preparation cancellation, S2e:
 
 Full/proxy preparation has one cancellation owner per dispatch. Observer

@@ -41,6 +41,7 @@ type streamedObserverSelection struct {
 	key            streamedObserverSelectionKey
 	seen           bool
 	volumeSectors  [3]streamedSelectionCounts
+	currentSectors map[ChunkCoord]struct{}
 	desiredSectors map[ChunkCoord]struct{}
 	keepSectors    map[ChunkCoord]struct{}
 }
@@ -55,9 +56,10 @@ type streamedObserverSelectionOwner struct {
 	generation uint64
 	revision   uint64
 	observers  map[EntityId]*streamedObserverSelection
-	// Current demand only feeds each observer's sector policy. The other four
-	// volumes also have global overlap counts for the raw chunk unions.
+	// Raw current overlap and current/PVS sectors classify preparation priority.
+	// Desired sectors may also contain prefetch-only expansion.
 	raw            [streamedSelectionVolumeCount]streamedSelectionCounts
+	currentSectors streamedSelectionCounts
 	desiredSectors streamedSelectionCounts
 	keepSectors    streamedSelectionCounts
 	sectors        map[ChunkCoord]streamedSelectionSector
@@ -96,12 +98,13 @@ func newStreamedObserverSelectionOwner(state *StreamedLevelRuntimeState) *stream
 	owner := &streamedObserverSelectionOwner{
 		generation: state.Generation, revision: state.observerSelectionRevision,
 		observers:      make(map[EntityId]*streamedObserverSelection),
+		currentSectors: make(streamedSelectionCounts),
 		desiredSectors: make(streamedSelectionCounts), keepSectors: make(streamedSelectionCounts),
 		sectors: make(map[ChunkCoord]streamedSelectionSector), fallback: make(map[ChunkCoord]struct{}),
 		disableProxies:     state.Config.DisableSectorProxies,
 		temporaryCollision: make(map[ChunkCoord]struct{}), temporaryDestruction: make(map[ChunkCoord]struct{}), temporaryProxy: make(map[ChunkCoord]struct{}),
 	}
-	for volume := streamedSelectionPrefetch; volume < streamedSelectionVolumeCount; volume++ {
+	for volume := streamedSelectionCurrent; volume < streamedSelectionVolumeCount; volume++ {
 		owner.raw[volume] = make(streamedSelectionCounts)
 	}
 	// Snapshot policy derivations once per declared metadata revision. Keep the
@@ -205,9 +208,7 @@ func (owner *streamedObserverSelectionOwner) updateVolumes(state *StreamedLevelR
 		apply := func(delta int) func(ChunkCoord) {
 			return func(coord ChunkCoord) {
 				state.Metrics.ObserverSelectionChunkVisitCount++
-				if volume != streamedSelectionCurrent {
-					owner.raw[volume].add(coord, delta)
-				}
+				owner.raw[volume].add(coord, delta)
 				if volume <= streamedSelectionKeep {
 					if sector, ok := state.ImportedChunkSector[coord]; ok {
 						observer.volumeSectors[volume].add(sector, delta)
@@ -229,6 +230,9 @@ func (owner *streamedObserverSelectionOwner) updateVolumes(state *StreamedLevelR
 }
 
 func (owner *streamedObserverSelectionOwner) addObserverSectors(observer *streamedObserverSelection, delta int) {
+	for coord := range observer.currentSectors {
+		owner.currentSectors.add(coord, delta)
+	}
 	for coord := range observer.desiredSectors {
 		owner.desiredSectors.add(coord, delta)
 	}
@@ -244,6 +248,7 @@ func (owner *streamedObserverSelectionOwner) deriveObserverSectors(observer *str
 		}
 	}
 	desired := make(map[ChunkCoord]struct{})
+	current := observer.volumeSectors[streamedSelectionCurrent].set()
 	keep := observer.volumeSectors[streamedSelectionKeep].set()
 	hasVisibility := false
 	for coord := range observer.volumeSectors[streamedSelectionCurrent] {
@@ -256,18 +261,19 @@ func (owner *streamedObserverSelectionOwner) deriveObserverSectors(observer *str
 		for coord := range observer.volumeSectors[streamedSelectionCurrent] {
 			desired[coord] = struct{}{}
 			mergeChunkCoordSet(desired, owner.sectors[coord].visible)
+			mergeChunkCoordSet(current, owner.sectors[coord].visible)
 		}
 		mergeChunkCoordSet(keep, desired)
 	} else {
 		desired = observer.volumeSectors[streamedSelectionPrefetch].set()
 	}
-	observer.desiredSectors, observer.keepSectors = desired, keep
+	observer.currentSectors, observer.desiredSectors, observer.keepSectors = current, desired, keep
 }
 
 func (owner *streamedObserverSelectionOwner) publish(state *StreamedLevelRuntimeState) {
 	// Drop capacity when a count/history map becomes empty. Nonempty Go maps
 	// can retain their peak allocation; this owner is not a byte budget.
-	for volume := streamedSelectionPrefetch; volume < streamedSelectionVolumeCount; volume++ {
+	for volume := streamedSelectionCurrent; volume < streamedSelectionVolumeCount; volume++ {
 		if len(owner.raw[volume]) == 0 {
 			owner.raw[volume] = make(streamedSelectionCounts)
 		}
@@ -277,6 +283,9 @@ func (owner *streamedObserverSelectionOwner) publish(state *StreamedLevelRuntime
 	}
 	if len(owner.desiredSectors) == 0 {
 		owner.desiredSectors = make(streamedSelectionCounts)
+	}
+	if len(owner.currentSectors) == 0 {
+		owner.currentSectors = make(streamedSelectionCounts)
 	}
 	if len(owner.keepSectors) == 0 {
 		owner.keepSectors = make(streamedSelectionCounts)

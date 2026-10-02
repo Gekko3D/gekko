@@ -94,6 +94,9 @@ type StreamedLevelRuntimeMetrics struct {
 	PersistenceLastError                   string
 	ObserverSelectionBuildCount            uint64
 	ObserverSelectionChunkVisitCount       uint64
+	PrepareDispatchCount                   uint64
+	LastPrepareDispatchCoord               ChunkCoord
+	LastPrepareDispatchKind                string
 	DecodedContentCacheEntries             int
 	DecodedContentCacheBytes               int64
 	DecodedContentCachePinnedBytes         int64
@@ -299,6 +302,7 @@ type StreamedLevelRuntimeState struct {
 
 	observerSelection         *streamedObserverSelectionOwner
 	observerSelectionRevision uint64
+	prepareScheduler          streamedPrepareScheduler
 
 	renderManaged     bool
 	nextRenderTicket  uint64
@@ -682,6 +686,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		streamingDestructionRadius = streamingCollisionRadius
 	}
 
+	state.prepareScheduler = streamedPrepareScheduler{}
 	state.Initialized = true
 	state.InitErr = nil
 	state.Generation++
@@ -1046,6 +1051,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 		return nil
 	}
 
+	state.prepareScheduler = streamedPrepareScheduler{}
 	cancelAllStreamedPreparation(state)
 	if err := joinStreamedPersistence(cmd, state); err != nil {
 		return err
@@ -1332,6 +1338,7 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 	}()
 
 	updateStreamedObserverSelection(cmd, state)
+	advanceStreamedPreparationSchedule(state)
 	cancelSatisfiedStreamedPreparation(state)
 	_ = commitStreamedPersistence(cmd, state, true)
 	for coord, intent := range state.persistenceIntents {
@@ -1381,59 +1388,7 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 		}
 	}
 	cancelObsoleteStreamedPreparation(state)
-	activePrepares := streamedActivePrepareJobCounts(state)
-	maxPrepareJobs := streamedMaxPrepareJobs(state)
-	if !state.Config.DisableSectorProxies {
-		for sectorCoord := range state.DesiredProxySectors {
-			if activePrepares >= maxPrepareJobs {
-				break
-			}
-			if _, ok := state.LoadedSectorProxies[sectorCoord]; ok {
-				reconcileStreamedSectorProxyAfterFullCommit(cmd, state, sectorCoord)
-				continue
-			}
-			if !streamedSectorProxyCommitNeeded(state, sectorCoord) {
-				continue
-			}
-			if _, ok := state.PendingProxyLoads[sectorCoord]; ok {
-				continue
-			}
-			sector, ok := state.ImportedWorldSectors[sectorCoord]
-			if !ok || len(sector.LODs) == 0 {
-				continue
-			}
-			if cost := state.pendingProxyCostHints[sectorCoord]; cost > 0 && !state.pendingPrepared.canReserve(cost) {
-				continue
-			}
-			delete(state.pendingProxyCostHints, sectorCoord)
-			state.PendingProxyLoads[sectorCoord] = struct{}{}
-			job := buildStreamedSectorProxyLoadJob(state, sectorCoord, sector.LODs[0])
-			startStreamedSectorProxyPrepareJob(state, job)
-			activePrepares++
-		}
-	}
-	for coord := range desired {
-		if activePrepares >= maxPrepareJobs {
-			break
-		}
-		if _, ok := state.LoadedChunks[coord]; ok {
-			continue
-		}
-		if _, ok := state.PendingLoads[coord]; ok {
-			continue
-		}
-		if !streamedChunkHasLoadableContent(state, coord) {
-			continue
-		}
-		if cost := state.pendingChunkCostHints[coord]; cost > 0 && !state.pendingPrepared.canReserve(cost) {
-			continue
-		}
-		delete(state.pendingChunkCostHints, coord)
-		state.PendingLoads[coord] = struct{}{}
-		job := buildStreamedChunkLoadJob(state, coord)
-		startStreamedChunkPrepareJob(state, job)
-		activePrepares++
-	}
+	scheduleStreamedPreparation(cmd, state)
 }
 
 func streamedMaxPrepareJobs(state *StreamedLevelRuntimeState) int {
@@ -1466,6 +1421,7 @@ func startStreamedChunkPrepareJob(state *StreamedLevelRuntimeState, job streamed
 	cancel := make(chan struct{})
 	state.chunkPrepareCancels[job.Coord] = cancel
 	job.prepareCancel = cancel
+	recordStreamedPreparationDispatch(state, job.Coord, "full")
 	owner, results, jobs := state.pendingPrepared, state.PreparedLoads, &state.jobs
 	activeMu, active := &state.activePrepareMu, &state.activeChunkPrepares
 	activeMu.Lock()
@@ -1500,6 +1456,7 @@ func startStreamedSectorProxyPrepareJob(state *StreamedLevelRuntimeState, job st
 	cancel := make(chan struct{})
 	state.proxyPrepareCancels[job.SectorCoord] = cancel
 	job.prepareCancel = cancel
+	recordStreamedPreparationDispatch(state, job.SectorCoord, "proxy")
 	owner, results, jobs := state.pendingPrepared, state.PreparedProxyLoads, &state.jobs
 	activeMu, active := &state.activePrepareMu, &state.activeProxyPrepares
 	activeMu.Lock()
@@ -2442,6 +2399,7 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 		LOD:           prepared.LOD,
 		GeometryAsset: streamedGeometryAssetLease{ID: preparedGeometryAsset, Server: assets},
 	}
+	delete(state.prepareScheduler.waiting, streamedPrepareIdentity{coord: prepared.SectorCoord, kind: streamedPrepareProxy})
 	reconcileStreamedSectorProxyAfterFullCommit(cmd, state, prepared.SectorCoord)
 	entityCount = 1
 	committed = true
@@ -2611,6 +2569,7 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 	}
 
 	state.LoadedChunks[prepared.Coord] = chunk
+	delete(state.prepareScheduler.waiting, streamedPrepareIdentity{coord: prepared.Coord, kind: streamedPrepareFull})
 	committed = true
 	return entityCount, nil
 }
