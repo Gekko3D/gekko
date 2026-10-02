@@ -208,6 +208,13 @@ type GpuBufferManager struct {
 	TerrainChunkLookupBuf      *wgpu.Buffer
 	PlanetTileLookupBuf        *wgpu.Buffer
 
+	// CPU lookup retention only; GPU publication still runs every frame.
+	ObjectLookupCacheBudgetBytes       int64
+	ObjectLookupCacheBytes             int64
+	ObjectLookupBuildCount             uint64
+	ObjectLookupInputVisitsLastPrepare int
+	objectLookupCache                  objectLookupCacheOwner
+
 	// G-Buffer Textures
 	GBufferDepth    *wgpu.Texture
 	GBufferNormal   *wgpu.Texture
@@ -593,6 +600,7 @@ func NewGpuBufferManager(device *wgpu.Device, profiler *core.Profiler) *GpuBuffe
 		VoxelUploadBricksPerFrame:     DefaultVoxelUploadBudget().MaxBricks,
 		RetainedVoxelMapBudgetSectors: DefaultRetainedVoxelMapBudgetSectors,
 		RetainedVoxelMapBudgetBytes:   DefaultRetainedVoxelMapBudgetBytes,
+		ObjectLookupCacheBudgetBytes:  DefaultObjectLookupCacheBudgetBytes,
 		VoxelPayloadPageSize:          pageSize,
 		VoxelPayloadPageCount:         MaxVoxelAtlasPages,
 		VoxelPayloadBricks:            pageSize / volume.BrickSize,

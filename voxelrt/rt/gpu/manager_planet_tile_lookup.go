@@ -23,9 +23,7 @@ type planetTileLookupParams struct {
 	GridMask uint32
 }
 
-func (m *GpuBufferManager) updatePlanetTileLookup(scene *core.Scene) bool {
-	entries, params := buildPlanetTileLookup(scene)
-	entryBytes := serializePlanetTileLookupBuffer(entries, params)
+func (m *GpuBufferManager) updatePlanetTileLookup(entryBytes []byte) bool {
 	return m.ensureBuffer("PlanetTileLookupBuf", &m.PlanetTileLookupBuf, entryBytes, wgpu.BufferUsageStorage, 0)
 }
 
@@ -49,6 +47,10 @@ func buildPlanetTileLookup(scene *core.Scene) ([]planetTileLookupEntry, planetTi
 		}
 	}
 
+	return packPlanetTileLookup(planetEntries)
+}
+
+func packPlanetTileLookup(planetEntries []planetTileLookupEntry) ([]planetTileLookupEntry, planetTileLookupParams) {
 	if len(planetEntries) == 0 {
 		return nil, planetTileLookupParams{}
 	}

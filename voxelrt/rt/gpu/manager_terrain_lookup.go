@@ -23,11 +23,7 @@ type terrainChunkLookupParams struct {
 	GridMask uint32
 }
 
-func (m *GpuBufferManager) updateTerrainChunkLookup(scene *core.Scene) bool {
-	terrainEntries, terrainParams := buildTerrainChunkLookup(scene)
-	planetEntries, planetParams := buildPlanetTileLookup(scene)
-	entryBytes := serializeCombinedObjectLookupBuffer(terrainEntries, terrainParams, planetEntries, planetParams)
-
+func (m *GpuBufferManager) updateTerrainChunkLookup(entryBytes []byte) bool {
 	recreated := false
 	if m.ensureBuffer("TerrainChunkLookupBuf", &m.TerrainChunkLookupBuf, entryBytes, wgpu.BufferUsageStorage, 0) {
 		recreated = true
@@ -54,6 +50,10 @@ func buildTerrainChunkLookup(scene *core.Scene) ([]terrainChunkLookupEntry, terr
 		}
 	}
 
+	return packTerrainChunkLookup(terrainEntries)
+}
+
+func packTerrainChunkLookup(terrainEntries []terrainChunkLookupEntry) ([]terrainChunkLookupEntry, terrainChunkLookupParams) {
 	if len(terrainEntries) == 0 {
 		return nil, terrainChunkLookupParams{}
 	}

@@ -474,6 +474,26 @@ Current transparency modes:
 - `VisibleObjects` drives main scene buffers and the camera-facing BVH.
 - `ShadowObjects` drives a broader shadow BVH so off-screen casters can still affect visible receivers.
 
+### Terrain and planet lookup preparation
+
+`UpdateScene` prepares both lookup buffers in one live `VisibleObjects` pass.
+Unchanged encoded scalar rows reuse CPU tables; direct metadata writes, eligibility
+changes and visible ordering remain observable without producer notifications.
+Terrain and planet eligibility are independent. Ordered duplicates, first-match
+probing, int32 coordinates/indices and the existing shader headers remain intact.
+Both buffers still receive their existing GPU writes each frame.
+
+`ObjectLookupCacheBudgetBytes` bounds retained row and encoded-byte capacities;
+the constructor defaults to 4 MiB. Nonpositive budgets disable retention, and
+oversized or lowered-budget ownership is released during preparation. Temporary
+builds and GPU buffers are outside this CPU ceiling. No Scene/object pointers are
+retained. Internal byte views are read-only and borrowed until the next preparation.
+
+`ObjectLookupCacheBytes` reports retained capacity. `ObjectLookupBuildCount`
+counts cumulative paired table builds; `ObjectLookupInputVisitsLastPrepare`
+counts visible entries, including nil/ineligible entries, in the current pass.
+This reduces CPU preparation; no frame-time gain or dirty-only extraction is claimed.
+
 ### Incremental scene records
 
 `GpuBufferManager` retains one compiled instance and parameter template per

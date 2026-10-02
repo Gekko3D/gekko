@@ -493,10 +493,11 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	if m.updateSectorGrid(scene) {
 		recreated = true
 	}
-	if m.updateTerrainChunkLookup(scene) {
+	combinedLookup, planetLookup := m.prepareObjectLookupBytes(scene)
+	if m.updateTerrainChunkLookup(combinedLookup) {
 		recreated = true
 	}
-	if m.updatePlanetTileLookup(scene) {
+	if m.updatePlanetTileLookup(planetLookup) {
 		recreated = true
 	}
 	m.Profiler.EndScope("Scene: Grid")

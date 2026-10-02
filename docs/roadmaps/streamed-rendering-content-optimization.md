@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3s, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3t, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -198,7 +198,7 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3s implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal, live-validated material fingerprint reuse and one-pass linked-emitter aggregation. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3t implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal, live-validated material fingerprint reuse, one-pass linked-emitter aggregation and bounded lookup preparation reuse. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
 Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
@@ -225,6 +225,30 @@ groups, direct scale/link/geometry changes, removal and zero work without eligib
 lights. A public last-sync object-visit counter verifies the scan bound. Run
 focused bridge checks, full engine tests and affected consumer builds. No shader
 or GPU allocation changes require a new native check.
+
+#### S3t: Reuse visible object lookup preparation
+
+`UpdateScene` currently builds terrain lookup once and planet lookup twice per
+frame. Capture eligible terrain/planet rows in one live visible-object pass,
+including current object indices. Reuse encoded tables only when exact scalar
+inputs match. Preserve dual eligibility, ordered duplicates, hash collisions,
+negative/int32 coordinates, visible reordering and nonempty empty-table headers.
+Keep current `ensureBuffer` calls and GPU writes; this is CPU preparation reuse.
+
+Retain no object/Scene/component pointers. Borrowed byte views are read-only until
+the next preparation/reset. Bound all owned key and encoded-byte capacities by
+`ObjectLookupCacheBudgetBytes` (default 4 MiB, unmeasured). Nonpositive budgets
+disable retention; oversized or lowered-budget entries release owned storage.
+Temporary preparation and existing GPU buffer ownership remain separate.
+
+Files: GPU terrain/planet lookup helpers, `manager_scene.go`, `manager.go` and a
+focused cache owner. Confidence is High after independent architecture review;
+no human choice remains. Use the full workflow for cache/lookup compatibility.
+Cover shader-visible lookup results/bytes, live metadata/visibility changes,
+duplicates/collisions, idle reuse and capacity/bypass/reset boundaries. Public
+build/visit/byte diagnostics verify work and retention. Run focused GPU checks,
+full engine/consumer checks and native mixed lookup rendering. No dirty-only
+extraction, shader layout change or GPU publication latch is approved here.
 
 ### S4. Remove synchronous persistence from unload
 
@@ -460,6 +484,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1f | `953c577` | Bounded ready ownership, live commit ordering and aging | [Ready-queue decision](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue) |
 | P5a | `33bc039` | Independent worker registration copies with single-use adoption | [Asset ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 | S3s | `6d35be0` | Shared current scan for automatic linked-light radii | [Renderer contract](../renderer/runtime.md#linked-emitter-source-radii) |
+| P5b | `9463579` | Worker terrain geometry with exact adopted asset cleanup | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
+| S3t | This commit | One-pass live lookup capture with bounded CPU table reuse | [Renderer contract](../renderer/runtime.md#terrain-and-planet-lookup-preparation) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1048,7 +1074,7 @@ check was needed. Existing tests and unrelated changes preserved.
 
 ### P5b: Worker terrain registration
 
-Completed 2026-10-03. Eligible terrain construction and registration copying
+Commit `9463579`, completed 2026-10-03. Eligible terrain construction and registration copying
 moved to workers. Live removal fallback, private renderer geometry, pending byte
 ownership and exact unload/partial Stop cleanup passed separate tests/implementation
 and independent/root reviews. Focused checks, full engine (root 14.177s), focused
@@ -1069,6 +1095,30 @@ adoptions, allowance one, 30-frame upload pause, Ready visibility and exact owne
 asset cleanup. No measured FPS or total commit-time bound. Live-removal fallback,
 backing setup, object-scoped renderer copies, placements and other large units
 remain main-thread work. Existing tests and unrelated changes preserved.
+
+### S3t: Bounded visible object lookup reuse
+
+This commit, completed 2026-10-03. One live visible-object pass replaces three
+lookup scans; exact scalar rows reuse terrain/planet tables on idle frames.
+Retained key/byte capacities have a configurable 4 MiB default ceiling. Shader
+bytes, duplicates/collisions, direct edits and existing per-frame GPU writes remain.
+Separate tests/implementation and independent PRE/POST reviews passed.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^(TestS3t|TestS3b|TestBuildTerrainChunkLookup|TestBuildPlanetTileLookup)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^(TestS3t|TestS3b|TestBuildTerrainChunkLookup|TestBuildPlanetTileLookup)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke /tmp/gekko-s3t-smoke.go
+/bin/zsh -c '/tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke > /tmp/gekko-s1e-smoke.log 2>&1'
+```
+
+Focused checks 0.543s, race 1.592s, engine root 14.618s; five consumer commands
+below passed. Native mixed planet/terrain check passed: five lookup builds over
+40 frames, 416 retained bytes, paused uploads, Ready visibility and Stop cleanup.
+This is CPU work evidence, not pixel parity or a measured FPS gain. Lookup writes,
+temporary builds, other renderer scans and large commit units remain.
 
 Consumer commands for these steps:
 
