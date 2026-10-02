@@ -305,6 +305,8 @@ The grounded player controller can activate a nearby use trigger or moving brush
 with E. Activation toggles the matching `MovingBrushComponent` state through
 `target`/`target_name` links. If `asset_path` is present, runtime spawns that
 voxel asset on the moving-brush entity and moves it between closed/open targets.
+Accepted brush motion publishes changed World and existing Local poses through
+the [ECS publication contract](../engine/ecs.md#moving-brush-motion-publication).
 Moving-brush bounds also participate in character collision and ground probes;
 characters with `GroundedCharacterMotorComponent` inherit the brush's movement
 only while their grounded contacts identify that brush as their support. The

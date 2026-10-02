@@ -138,9 +138,10 @@ Direct public-field writes remain live but require their owner to explicitly
 mark them for publication. Hierarchy publishes its changed derived world and
 root-local TRS outputs; reparent, grip, attach, surface and authored aim helpers
 publish their changed transform inputs. Authored animation publishes changed
-final Local poses; physics publishes changed World poses. Other asset writers,
-brushes and further producers remain incompletely migrated. Hierarchy and the
-voxel bridge continue their live reads.
+final Local poses; physics publishes changed World poses. Accepted moving-brush
+motion publishes its changed World and existing Local poses. Rider/motor writes,
+other asset writers and further producers remain incompletely migrated.
+Hierarchy and the voxel bridge continue their live reads.
 These sequences establish an ownership API, not a complete dirty contract,
 entity worklist or performance gain. Remaining producer migration and any bounded
 change journal need subsequent designs. Consumers must not skip existing live
@@ -298,6 +299,28 @@ invoke hierarchy. Derived hierarchy outputs retain their normal stage ownership.
 Fallback PhysicsModel additions remain queued. Publication does not flush
 commands or change membership; committed targets pending removal/replacement
 remain writable until the existing flush boundary.
+
+### Moving Brush Motion Publication
+
+`movingBrushMotionSystem` publishes changed committed World and existing Local
+TRS for the brush at its accepted motion commit. Each destination compares exact
+bits immediately before and after its own assignments. A stationary World can
+repair mismatched Local and publish Local alone; moved World can reach an
+already-equal Local and publish World alone. Equal bits, including preserved NaN
+payloads, publish nothing; signed-zero changes publish.
+
+Temporary proposals and blocked door/carrier motion do not publish TRS. Rejection
+also skips Local repair; existing control-state changes such as reopening a
+blocked closing door remain intact. Motion math, path/wait handling, collision
+bounds, World Pivot and Scale, and rider behavior are preserved. Existing numerical
+World-to-Local copies retain their semantics, including brushes with Parent;
+normal later hierarchy propagation keeps its stage ownership.
+
+The writer creates no Local, invokes no hierarchy and does not flush or change
+membership. Committed targets pending removal/replacement remain writable until
+flush; pending additions remain invisible. Rider/motor writes and publication of
+brush control state or collision bounds are outside this TRS contract and still
+need migration.
 
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.

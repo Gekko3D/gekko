@@ -1,6 +1,8 @@
 package gekko
 
 import (
+	"reflect"
+
 	"github.com/gekko3d/gekko/content"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -586,11 +588,19 @@ func movingBrushMotionSystem(cmd *Commands, time *Time) {
 		if brush.NavigationRole == content.NavigationRoleCarrier && !movingBrushRidersCanMove(cmd, eid, delta) {
 			return true
 		}
+		previousWorld := hierarchyBits(tr.Position, tr.Rotation, tr.Scale)
 		*tr, *brush = nextTransform, nextBrush
+		if hierarchyBits(tr.Position, tr.Rotation, tr.Scale) != previousWorld {
+			cmd.MarkComponentChanged(eid, reflect.TypeOf(TransformComponent{}))
+		}
 		if local, ok := localTransformForEntity(cmd, eid); ok {
+			previousLocal := hierarchyBits(local.Position, local.Rotation, local.Scale)
 			local.Position = tr.Position
 			local.Rotation = tr.Rotation
 			local.Scale = tr.Scale
+			if hierarchyBits(local.Position, local.Rotation, local.Scale) != previousLocal {
+				cmd.MarkComponentChanged(eid, reflect.TypeOf(LocalTransformComponent{}))
+			}
 		}
 		moveMovingBrushRiders(cmd, eid, previousCenter, previousHalfExtents, delta)
 		return true
