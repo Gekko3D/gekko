@@ -2,8 +2,6 @@ package gekko
 
 import (
 	"reflect"
-
-	"github.com/go-gl/mathgl/mgl32"
 )
 
 type HierarchyModule struct{}
@@ -18,72 +16,10 @@ func (HierarchyModule) Install(app *App, cmd *Commands) {
 }
 
 func TransformHierarchySystem(cmd *Commands) {
-	if cmd == nil {
+	if cmd == nil || cmd.app == nil || cmd.app.ecs == nil || cmd.app.ecs.storage == nil {
 		return
 	}
-	worlds := make(map[EntityId]*TransformComponent)
-	MakeQuery1[TransformComponent](cmd).Map(func(eid EntityId, world *TransformComponent) bool {
-		worlds[eid] = world
-		return true
-	})
-	// Root objects: have TransformComponent but NO Parent
-	MakeQuery2[LocalTransformComponent, TransformComponent](cmd).Without(Parent{}).Map(func(eid EntityId, local *LocalTransformComponent, tr *TransformComponent) bool {
-		// Roots use world transform as authoritative source
-		local.Position = tr.Position
-		local.Rotation = tr.Rotation
-		local.Scale = tr.Scale
-		return true
-	})
-	type childTransform struct {
-		local  *LocalTransformComponent
-		parent EntityId
-		world  *TransformComponent
-	}
-	children := map[EntityId]childTransform{}
-	MakeQuery3[LocalTransformComponent, Parent, TransformComponent](cmd).Map(func(eid EntityId, local *LocalTransformComponent, parent *Parent, world *TransformComponent) bool {
-		children[eid] = childTransform{local: local, parent: parent.Entity, world: world}
-		return true
-	})
-	resolved := map[EntityId]bool{}
-	resolving := map[EntityId]bool{}
-	var resolve func(EntityId) bool
-	resolve = func(eid EntityId) bool {
-		if resolved[eid] {
-			return true
-		}
-		child, ok := children[eid]
-		if !ok || resolving[eid] {
-			return false
-		}
-		resolving[eid] = true
-		if _, isChild := children[child.parent]; isChild && !resolve(child.parent) {
-			delete(resolving, eid)
-			return false
-		}
-		parentWorld := worlds[child.parent]
-		if parentWorld == nil {
-			delete(resolving, eid)
-			return false
-		}
-		scaledLocalPos := mgl32.Vec3{
-			child.local.Position.X() * parentWorld.Scale.X(),
-			child.local.Position.Y() * parentWorld.Scale.Y(),
-			child.local.Position.Z() * parentWorld.Scale.Z(),
-		}
-		child.world.Position = parentWorld.Position.Add(parentWorld.Rotation.Rotate(scaledLocalPos))
-		child.world.Rotation = parentWorld.Rotation.Mul(child.local.Rotation).Normalize()
-		child.world.Scale = mgl32.Vec3{
-			parentWorld.Scale.X() * child.local.Scale.X(),
-			parentWorld.Scale.Y() * child.local.Scale.Y(),
-			parentWorld.Scale.Z() * child.local.Scale.Z(),
-		}
-		delete(resolving, eid)
-		resolved[eid] = true
-		return true
-	}
-	for eid := range children {
-		resolve(eid)
-	}
+	cmd.app.ecs.storage.transformHierarchy.update(cmd.app.ecs)
 }
 
 // ReparentPreservingWorldTransform changes hierarchy ownership without moving

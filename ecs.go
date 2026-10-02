@@ -30,6 +30,7 @@ type row int
 type set[T comparable] = map[T]struct{}
 
 type ecsStorage struct {
+	transformHierarchy      transformHierarchyOwner
 	archetypes              map[archetypeId]*archetype
 	entityIndex             map[EntityId]archetypeId
 	structuralRevision      uint64
@@ -95,6 +96,15 @@ func (ecs *Ecs) StructuralRevision() uint64 {
 		return 0
 	}
 	return ecs.storage.structuralRevision
+}
+
+// TransformHierarchyStats reads the last prepared hierarchy state on the main
+// thread. Reading does not refresh membership or propagate transforms.
+func (ecs *Ecs) TransformHierarchyStats() TransformHierarchyStats {
+	if ecs == nil || ecs.storage == nil {
+		return TransformHierarchyStats{}
+	}
+	return ecs.storage.transformHierarchy.stats
 }
 
 func (ecs *Ecs) addEntity(components ...any) EntityId {

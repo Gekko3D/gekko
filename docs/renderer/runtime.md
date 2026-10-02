@@ -187,6 +187,15 @@ every pass, including empty inventories. Animation stays in `Update` and
 hierarchy in `PostUpdate`; their results reach extraction at the existing
 `PreRender` boundary after normal command flushes.
 
+Hierarchy now reuses storage-owned topology and skips child composition when
+exact live parent/local/output TRS bits match. Every invocation still reads
+current values, detects direct Parent edits before composition and repairs
+direct child-world TRS edits. Direct attachment calls resolve immediately;
+ancestor motion reaches descendants before the same frame's extraction. These
+hierarchy counters do not authorize skipping any bridge processing. See
+[S3d](../roadmaps/streamed-rendering-s3d.md) and
+[the hierarchy owner contract](../engine/ecs.md#hierarchy-ownership).
+
 `VoxelRtState.VoxelCandidateInventoryBuildCount` counts actual membership
 rebuilds, including first or changed empty inventories;
 `VoxelRtState.VoxelCandidateCount` reports raw Transform+VoxelModel membership.

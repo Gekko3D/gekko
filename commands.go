@@ -15,6 +15,15 @@ func (cmd *Commands) StructuralRevision() uint64 {
 	return cmd.app.ecs.StructuralRevision()
 }
 
+// TransformHierarchyStats reads hierarchy counters without preparing queued or
+// newly committed changes. Use it on the main thread, like component queries.
+func (cmd *Commands) TransformHierarchyStats() TransformHierarchyStats {
+	if cmd == nil || cmd.app == nil {
+		return TransformHierarchyStats{}
+	}
+	return cmd.app.ecs.TransformHierarchyStats()
+}
+
 func (cmd *Commands) ChangeState(newState State) *Commands {
 	cmd.app.changeState(newState)
 	return cmd

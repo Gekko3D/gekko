@@ -58,7 +58,16 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
   - `TransformHierarchySystem` in `PostUpdate`
 - Owns:
   - propagation from `LocalTransformComponent` plus `Parent` to `TransformComponent`
+  - incremental topology and exact TRS comparisons owned by shared ECS storage
+  - immediate propagation for direct calls as well as the scheduled stage
 - Important:
+  - every invocation reads current Parent and TRS values; unchanged child inputs
+    and outputs reuse composition, while direct child-world edits are repaired
+  - roots with local transforms mirror authoritative world TRS on every call;
+    children require world, local and Parent components; missing parents and
+    cycles leave the affected branch's world TRS unchanged until repaired
+  - `Commands.TransformHierarchyStats()` and `Ecs.TransformHierarchyStats()`
+    report topology builds, child compositions and last prepared membership
   - hierarchy composition is pure entity transform math: parent position,
     rotation, and scale affect children
   - voxel renderer pivots do not affect child world transforms; pivots only
