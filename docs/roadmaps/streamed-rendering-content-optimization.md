@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). This review covers optimization proposals, excluding the measurement phase and its status records. Gekko code inspected at `1f7a281`, including current working-tree content. Rust performance targets and compression ratios are not Gekko predictions.
 
@@ -194,6 +194,15 @@ its peak. Work counters do not establish performance gains. Complete value
 notifications, incremental bridge extraction and future layer selection keep
 S3 partial. S3d review and verification are recorded in its execution record.
 
+[S3e](streamed-rendering-s3e.md) adds aggregate component publication sequences
+owned by shared ECS storage and an immediate explicit mark for committed
+components. Outer committed mutations publish only affected types after
+index/group synchronization; copied migration values do not publish. Each type
+retains one scalar across final removal and re-admission. Direct field writers
+still require producer migration before these sequences become a complete dirty
+contract. Existing hierarchy/bridge live reads remain authoritative; this
+prerequisite removes no extraction work and establishes no performance gain.
+
 Cache observer selection by spatial bucket, radii, layer transform/topology, and PVS state. Update entering/exiting shells instead of constructing all radius sets every frame. Recompute on teleports, observer additions/removals, radius changes, edits, and visibility changes. Merge multiple observers with demand counts so one observer cannot evict another's content.
 
 Maintain a stable entity/object table. Extend current transform/material comparisons with dirty registrations, hierarchy changes, removals, and visibility notifications. Keep camera-dependent culling/LOD separate from content change tracking.
@@ -386,6 +395,9 @@ and cached bridge membership, including implementation review and native checks.
 [S3d](streamed-rendering-s3d.md) completes incremental hierarchy propagation,
 including both review loops and native verification. Complete value notifications,
 incremental bridge extraction and future layer selection keep S3 partial.
+[S3e](streamed-rendering-s3e.md) supplies the storage-owned aggregate publication
+API. Complete producer notifications and incremental extraction remain future S3
+work; aggregate sequences do not supply an entity worklist.
 
 Decisions to settle before dependent implementation:
 
@@ -408,7 +420,8 @@ with [S1a](streamed-rendering-s1a.md#execution-record),
 [S3a](streamed-rendering-s3a.md#execution-record) and
 [S3b](streamed-rendering-s3b.md#execution-record) and
 [S3c](streamed-rendering-s3c.md#execution-record) and
-[S3d](streamed-rendering-s3d.md#execution-record). Native smoke checks establish
+[S3d](streamed-rendering-s3d.md#execution-record) and
+[S3e](streamed-rendering-s3e.md#execution-record). Native smoke checks establish
 the recorded rendering/streaming contracts; they do not establish performance
 gains or rendered pixel parity.
 

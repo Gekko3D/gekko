@@ -6,6 +6,24 @@ type Commands struct {
 	app *App
 }
 
+// ComponentRevision reads the main-thread committed component publication
+// sequence. Enqueued mutations publish at the existing stage flush boundary.
+func (cmd *Commands) ComponentRevision(componentType reflect.Type) uint64 {
+	if cmd == nil || cmd.app == nil {
+		return 0
+	}
+	return cmd.app.ecs.ComponentRevision(componentType)
+}
+
+// MarkComponentChanged immediately publishes a currently committed component.
+// It does not flush or enqueue work, and direct writes are not detected for you.
+func (cmd *Commands) MarkComponentChanged(entityId EntityId, componentType reflect.Type) bool {
+	if cmd == nil || cmd.app == nil {
+		return false
+	}
+	return cmd.app.ecs.MarkComponentChanged(entityId, componentType)
+}
+
 // StructuralRevision reads the main-thread committed ECS invalidation stamp.
 // Enqueued commands become visible at the existing stage flush boundary.
 func (cmd *Commands) StructuralRevision() uint64 {

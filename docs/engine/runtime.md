@@ -151,7 +151,7 @@ Common examples:
 
 ## Command Buffering
 
-`Commands` does not mutate ECS storage immediately.
+Entity/component value and membership mutations through `Commands` are buffered.
 
 Buffered operations:
 
@@ -172,6 +172,25 @@ This ordering is deliberate:
 
 - adding components to a removed entity in the same stage does not revive it
 - remove-then-add of the same component type in one stage behaves predictably
+
+`Commands.ComponentRevision(reflect.Type)` reads committed aggregate component
+publication revisions owned by ECS storage. Successful mutations publish each
+affected type once after index/group synchronization during the existing flush.
+Enqueueing and empty flushes do not publish. Removals publish only types actually
+removed; migration copies do not publish unchanged types. The sequence survives
+the final component removal and is shared by copied ECS wrappers.
+
+`Commands.MarkComponentChanged(entityId, reflect.Type)` publishes immediately for
+a currently committed component and returns whether it succeeded. It never
+flushes or queues work, changes values or advances the structural stamp. Pending
+additions are not markable; pending removals remain markable until flush. Both
+APIs are main-thread only and nil-safe, accept a struct type or one pointer to a
+struct, and perform no type registration on reads or failed marks. Direct field
+writes require explicit marking to become visible through the sequence.
+
+Current producers and hierarchy/renderer live reads remain in place; publication
+revisions are not yet a complete dirty contract for skipping extraction. See
+[`ecs.md`](ecs.md#explicit-component-publication-revisions) for the full contract.
 
 ## ECS Visibility Rules
 

@@ -102,6 +102,45 @@ missing-entity commands leave it unchanged. Command mutations advance it at the
 existing flush boundary. Treat it as invalidation for membership and row
 locations, rather than a component-value version or semantic event count.
 
+## Explicit Component Publication Revisions
+
+`Ecs.ComponentRevision(reflect.Type)` and `Commands.ComponentRevision(reflect.Type)`
+read an aggregate `uint64` publication sequence per component type in shared
+`ecsStorage`. Copied wrappers observe the same owner; independent storage owners
+have independent sequences. Zero means no publication yet. Each published type
+retains one scalar after its last component disappears, so removal and later
+re-admission cannot reset its sequence. Compare sequences within the same owner.
+
+A successful outer committed insertion publishes every present type once.
+Component addition publishes only supplied types, including equal-value
+replacement; component removal publishes only types actually removed; entity
+removal publishes all formerly present types. Duplicate supplied types publish
+once per operation. Publication follows index/group synchronization at the
+existing flush boundary. Migration copies and internal recycling publish no
+change for unchanged types. Removing an absent type can still relocate rows and
+advance the structural stamp without advancing a component publication sequence.
+
+`MarkComponentChanged(entityId, reflect.Type)` immediately advances the requested
+type's sequence and returns true only for a currently committed live component.
+It does not write or compare values, move rows, enqueue commands, flush or change
+the structural stamp. Pending additions cannot be marked until committed; pending
+removals stay markable until removed at flush. Explicit publication of equal
+values is valid. Reads and failed marks do not register component IDs or allocate
+publication history.
+
+Both APIs accept a struct type or one pointer to that struct as the same type.
+Nil/zero owners, nil types, non-struct types and deeper pointers return zero/false.
+Reads/query registration, enqueueing, empty flushes, sanitized empty component
+commands and ignored missing entities publish nothing. These APIs are main-thread
+only and retain no component values, pointers, queries or entity tombstones.
+
+Direct public-field writes remain live but require their owner to explicitly
+mark them for publication. Hierarchy, animation, brushes and the voxel bridge
+continue their current live reads/writes. These sequences establish an ownership
+API, not a complete dirty contract, entity worklist or performance gain. Producer
+migration and any bounded change journal need subsequent designs; consumers must
+not skip existing live reads based on these sequences yet.
+
 ## Hierarchy Ownership
 
 The private hierarchy owner in `ecsStorage` shares membership, topology and

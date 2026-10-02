@@ -34,6 +34,7 @@ type ecsStorage struct {
 	archetypes              map[archetypeId]*archetype
 	entityIndex             map[EntityId]archetypeId
 	structuralRevision      uint64
+	componentRevisions      map[reflect.Type]uint64
 	archetypeGeneration     uint64
 	archetypeViewGeneration uint64
 	archetypeViews          []rooteecs.ArchetypeView
@@ -124,16 +125,23 @@ func (ecs *Ecs) insertEntity(entityId EntityId, components ...any) EntityId {
 	ecs.storage.entityIndex[entityId] = archId
 	ecs.syncEntityGroupIndex(entityId)
 	ecs.storage.structuralRevision++
+	ecs.publishComponentKey(arch.key)
 
 	return entityId
 }
 
 func (ecs *Ecs) removeEntity(entityId EntityId) {
-	if _, ok := ecs.storage.entityIndex[entityId]; !ok {
+	archId, ok := ecs.storage.entityIndex[entityId]
+	if !ok {
 		return
+	}
+	var removedKey archetypeKey
+	if arch := ecs.storage.archetypes[archId]; arch != nil {
+		removedKey = arch.key
 	}
 	ecs.recycleEntity(entityId)
 	ecs.storage.structuralRevision++
+	ecs.publishComponentKey(removedKey)
 }
 
 func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
@@ -161,6 +169,7 @@ func (ecs *Ecs) addComponents(entityId EntityId, components ...any) {
 	ecs.storage.entityIndex[entityId] = dstArchId
 	ecs.syncEntityGroupIndex(entityId)
 	ecs.storage.structuralRevision++
+	ecs.publishSuppliedComponents(components)
 }
 
 func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
@@ -184,10 +193,12 @@ func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
 		removeSet[ecs.getComponentId(cType)] = struct{}{}
 	}
 
-	var dstKey archetypeKey
+	var dstKey, removedKey archetypeKey
 	for _, compId := range srcArch.key {
 		if _, shouldRemove := removeSet[compId]; !shouldRemove {
 			dstKey = append(dstKey, compId)
+		} else {
+			removedKey = append(removedKey, compId)
 		}
 	}
 
@@ -201,6 +212,7 @@ func (ecs *Ecs) removeComponents(entityId EntityId, components ...any) {
 	ecs.storage.entityIndex[entityId] = dstArchId
 	ecs.syncEntityGroupIndex(entityId)
 	ecs.storage.structuralRevision++
+	ecs.publishComponentKey(removedKey)
 }
 
 func (ecs *Ecs) moveComponents(srcArch *archetype, srcRow row, dstArch *archetype, dstRow row) {
