@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"container/heap"
 	"fmt"
 	"log"
 	"os"
@@ -309,6 +310,7 @@ type StreamedLevelRuntimeState struct {
 	observerSelection         *streamedObserverSelectionOwner
 	observerSelectionRevision uint64
 	prepareScheduler          streamedPrepareScheduler
+	readyCommits              streamedReadyOwner
 	streamingWork             streamedWorkOwner
 
 	renderManaged     bool
@@ -697,6 +699,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	}
 
 	state.prepareScheduler = streamedPrepareScheduler{}
+	state.readyCommits = streamedReadyOwner{}
 	state.renderManaged = voxelRtStateFromApp(cmd.app) != nil
 	state.streamingWork.blocked = 0
 	state.Initialized = true
@@ -1198,6 +1201,7 @@ func clearVoxelWorldDirtyChunks(app *App, worldID string) {
 }
 
 func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
+	drainStreamedReadyResults(state)
 	for {
 		select {
 		case prepared := <-state.PreparedLoads:
@@ -1257,6 +1261,7 @@ func drainStreamedPreparedResults(state *StreamedLevelRuntimeState) {
 
 func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 	cancelAllStreamedPreparation(state)
+	drainStreamedReadyResults(state)
 	done := make(chan struct{})
 	go func() {
 		state.jobs.Wait()
@@ -1625,114 +1630,26 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 		recordStreamingProfilerDuration(cmd.app, state.Metrics.CommitSystemDuration)
 		maybeEmitStreamedRuntimeMetrics(state, time.Now())
 	}()
+	generation := state.Generation
+	queue := captureStreamedReadyFrontier(state)
 	for {
-		if streamedCommitFrameBudgetHit(state, start) {
+		if !state.Initialized || state.Generation != generation {
 			return
-		}
-		select {
-		case prepared := <-state.PreparedProxyLoads:
-			func() {
-				defer prepared.release()
-				defer finishStreamedWorkAttempt(state, prepared.Generation, prepared.prepareCancel)
-				if !acknowledgeStreamedProxyPreparation(state, prepared) {
-					return
-				}
-				if prepared.retryCost > 0 {
-					if state.pendingProxyCostHints == nil {
-						state.pendingProxyCostHints = make(map[ChunkCoord]int64)
-					}
-					state.pendingProxyCostHints[prepared.SectorCoord] = prepared.retryCost
-					return
-				}
-				delete(state.pendingProxyCostHints, prepared.SectorCoord)
-				recordPreparedStreamedSectorProxyAuxMetrics(state, prepared)
-				if prepared.Err != nil {
-					state.Metrics.PrepareErrorCount++
-					if state.InitErr == nil {
-						state.InitErr = prepared.Err
-					}
-					return
-				}
-				if !streamedProxySectorDesired(state, prepared.SectorCoord) {
-					return
-				}
-				if _, alreadyLoaded := state.LoadedSectorProxies[prepared.SectorCoord]; alreadyLoaded {
-					return
-				}
-				if !streamedSectorProxyCommitNeeded(state, prepared.SectorCoord) {
-					return
-				}
-				entityCount, err := commitPreparedStreamedSectorProxy(cmd, assets, state, prepared)
-				if err != nil {
-					state.Metrics.CommitErrorCount++
-					if state.InitErr == nil {
-						state.InitErr = err
-					}
-					return
-				}
-				state.Metrics.ChunksCommittedLastFrame++
-				state.Metrics.ProxyChunksCommittedLastFrame++
-				state.Metrics.EntitiesCommittedLastFrame += entityCount
-				return
-			}()
-			continue
-		default:
 		}
 		if streamedCommitFrameBudgetHit(state, start) {
 			return
 		}
-		select {
-		case prepared := <-state.PreparedLoads:
-			func() {
-				defer prepared.release()
-				defer finishStreamedWorkAttempt(state, prepared.Generation, prepared.prepareCancel)
-				if !acknowledgeStreamedChunkPreparation(state, prepared) {
-					return
-				}
-				if prepared.retryCost > 0 {
-					if state.pendingChunkCostHints == nil {
-						state.pendingChunkCostHints = make(map[ChunkCoord]int64)
-					}
-					state.pendingChunkCostHints[prepared.Coord] = prepared.retryCost
-					return
-				}
-				delete(state.pendingChunkCostHints, prepared.Coord)
-				recordPreparedStreamedChunkMetrics(state, prepared)
-				if prepared.Err != nil {
-					state.Metrics.PrepareErrorCount++
-					if state.InitErr == nil {
-						state.InitErr = prepared.Err
-					}
-					return
-				}
-				if _, stillDesired := state.DesiredChunks[prepared.Coord]; !stillDesired {
-					return
-				}
-				if _, alreadyLoaded := state.LoadedChunks[prepared.Coord]; alreadyLoaded {
-					return
-				}
-				collisionCommitCountBefore := state.Metrics.CollisionChunkCommitCount
-				entityCount, err := commitPreparedStreamedChunk(cmd, assets, state, prepared)
-				if err != nil {
-					state.Metrics.CommitErrorCount++
-					if state.InitErr == nil {
-						state.InitErr = err
-					}
-					return
-				}
-				state.Metrics.ChunksCommittedLastFrame++
-				state.Metrics.FullChunksCommittedLastFrame++
-				if state.Metrics.CollisionChunkCommitCount > collisionCommitCountBefore {
-					state.Metrics.CollisionChunksCommittedLastFrame++
-				}
-				state.Metrics.EntitiesCommittedLastFrame += entityCount
-				if sectorCoord, ok := state.ImportedChunkSector[prepared.Coord]; ok {
-					reconcileStreamedSectorProxyAfterFullCommit(cmd, state, sectorCoord)
-				}
-			}()
-			continue
-		default:
+		if queue.Len() == 0 {
 			return
+		}
+		result, present := state.readyCommits.take(heap.Pop(&queue).(streamedReadyCandidate).id)
+		if !present {
+			continue
+		}
+		if result.proxy != nil {
+			consumeStreamedPreparedProxy(cmd, assets, state, *result.proxy)
+		} else {
+			consumeStreamedPreparedChunk(cmd, assets, state, *result.chunk)
 		}
 	}
 }
@@ -1778,16 +1695,8 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 	state.Metrics.NavigationRebuildQueuedTileCount = len(state.navigationQueuedEdits)
 	state.Metrics.ActiveChunkPrepareJobCount, state.Metrics.ActiveProxyPrepareJobCount = streamedActivePrepareJobBreakdown(state)
 	state.Metrics.ActivePrepareJobCount = state.Metrics.ActiveChunkPrepareJobCount + state.Metrics.ActiveProxyPrepareJobCount
-	if state.PreparedLoads != nil {
-		state.Metrics.PreparedChunkQueueDepth = len(state.PreparedLoads)
-	} else {
-		state.Metrics.PreparedChunkQueueDepth = 0
-	}
-	if state.PreparedProxyLoads != nil {
-		state.Metrics.PreparedProxyQueueDepth = len(state.PreparedProxyLoads)
-	} else {
-		state.Metrics.PreparedProxyQueueDepth = 0
-	}
+	state.Metrics.PreparedChunkQueueDepth = len(state.PreparedLoads) + state.readyCommits.chunkCount
+	state.Metrics.PreparedProxyQueueDepth = len(state.PreparedProxyLoads) + state.readyCommits.proxyCount
 	state.Metrics.PreparedQueueDepth = state.Metrics.PreparedChunkQueueDepth + state.Metrics.PreparedProxyQueueDepth
 	cacheStats := state.PreparedGeometryCache.snapshot()
 	state.Metrics.PreparedGeometryCacheEntries = cacheStats.Entries

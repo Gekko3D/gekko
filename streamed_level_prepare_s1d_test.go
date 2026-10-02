@@ -432,11 +432,11 @@ func TestS1dPrepareKnownByteBlockedFallbackAdmitsSmallerFull(t *testing.T) {
 		t.Fatal("larger fallback did not produce a real byte-admission retry")
 	}
 	// The normal commit budget acknowledges the retry and commits one full,
-	// leaving the other actual prepared result charged in the public queue.
+	// leaving the other actual prepared result charged in the prepared queue.
 	commitPreparedStreamedChunksSystem(cmd, assets, state)
 	cmd.app.FlushCommands()
 	retainedBytes := state.Metrics.PendingPreparedBytes
-	if retainedBytes <= 0 || retainedBytes >= queuedBytes || len(state.PreparedLoads) != 1 || len(state.PendingProxyLoads) != 0 {
+	if retainedBytes <= 0 || retainedBytes >= queuedBytes || state.Metrics.PreparedChunkQueueDepth != 1 || len(state.PendingProxyLoads) != 0 {
 		t.Fatal("commit fixture did not retain genuine nonzero byte pressure")
 	}
 	before, _, metrics := s1dDispatchMetric(t, state, false)
@@ -451,7 +451,10 @@ func TestS1dPrepareKnownByteBlockedFallbackAdmitsSmallerFull(t *testing.T) {
 			t.Fatalf("fitting admission metrics = %d %v, want %d full %v", count, last, before+1, fitting)
 		}
 	}
-	s2bUntil(t, func() bool { return len(state.PreparedLoads) == 2 && streamedActivePrepareJobCounts(state) == 0 })
+	s2bUntil(t, func() bool {
+		refreshStreamedRuntimeMetricsCounts(state)
+		return state.Metrics.PreparedChunkQueueDepth == 2 && streamedActivePrepareJobCounts(state) == 0
+	})
 	refreshStreamedRuntimeMetricsCounts(state)
 	if state.Metrics.PendingPreparedBytes <= retainedBytes || state.Metrics.PendingPreparedBytes > config.MaxPendingPreparedBytes || state.Metrics.PendingPreparedAdmissionRetries != 1 {
 		t.Fatal("alternate full failed real byte admission or rebuilt the blocked fallback")

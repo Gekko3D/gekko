@@ -308,7 +308,7 @@ func TestS2bPendingCommitBudgetPreservesCreditAndRetryHintPreventsRebuilds(t *te
 	}
 	commitPreparedStreamedChunksSystem(cmd, assets, state)
 	cmd.app.FlushCommands()
-	if len(state.PreparedLoads) != 1 || state.Metrics.PendingPreparedBytes <= 0 || state.Metrics.PendingPreparedBytes >= budget || state.Loader.Stats().PinnedBytes <= metadata {
+	if state.Metrics.PreparedChunkQueueDepth != 1 || state.Metrics.PendingPreparedBytes <= 0 || state.Metrics.PendingPreparedBytes >= budget || state.Loader.Stats().PinnedBytes <= metadata {
 		t.Fatalf("count commit budget dropped remaining queued ownership: %+v", state.Metrics)
 	}
 	observer := cmd.AddEntity(&TransformComponent{}, &StreamedLevelObserverComponent{})

@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a–S1e, S2a–S2e, S3a–S3r and S4a–S4c complete. S1/S2/S3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3r and S4a–S4c complete. S1/S2/S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -399,9 +399,9 @@ Next: remaining S1 scheduling/commit bounds, then S2 queues/cache owners and S3 
 in delivery order. No dirty-only extraction is approved. Preserve public mutation
 compatibility and conditional proposals.
 
-S1f is held at the [commit queue ownership decision](streamed-rendering-s1b.md#s1f-commit-queue-ownership-decision-pending):
-choose private ready ownership with an explicitly authorized migration of channel
-depth assertions, or settle the exposed completion-channel compatibility contract.
+S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
+On 2026-10-03, the user authorized its ownership decision and migration of existing
+deferred-commit channel-depth assertions to total prepared-depth/ownership checks.
 
 Decisions to settle before dependent implementation:
 
@@ -900,6 +900,30 @@ Stop. No pixel parity, speed or total-memory claim. Synchronous gameplay/late
 adoption/repair can exceed the allowance; main-thread commit units and remaining
 stage queues still need bounds. Unrelated changes preserved; macOS warnings
 exited successfully.
+
+### S1f: Deterministic ready commits
+
+Completed 2026-10-03 after approved ready-owner alignment. Bounded capture,
+live priority/aging, deferred ownership and hook-Stop invalidation passed separate
+Sol 6.1 tests/implementation and independent/root reviews. Only the approved
+physical-depth assertions were migrated; S1e lifetime assertions remain intact.
+Focused checks, full engine (root 15.395s), race (8.586s) and five consumer builds
+passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS1fCommit' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS1fCommit|TestS1dPrepare|TestS1eStreamingWork|TestS2b|TestS2e|TestS3aSelection|TestStreamedRuntimeStop|TestStreamedRuntimeCommitBudget|TestStreamedRender|TestStreamedVoxel|TestOrdinaryHiddenVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS1fCommit|TestS1eStreamingWork|TestS1dPrepare|TestS2b|TestS2e|TestS3aSelection|TestS4c|TestStreamedRuntimeStop|TestStreamedRender|TestStreamedVoxel|TestOrdinaryHiddenVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke /tmp/gekko-s1e-smoke.go
+/bin/zsh -c '/tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke > /tmp/gekko-s1e-smoke.log 2>&1'
+```
+
+Unchanged native fixture passed in 41 frames/1.413s: allowance one, 30-frame
+upload pause, visible fallback, hidden Ready child, complete refinement and Stop.
+No pixel parity or performance claim. One large CPU commit remains unbounded.
+Unrelated changes preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 

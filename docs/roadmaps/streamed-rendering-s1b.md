@@ -268,28 +268,55 @@ byte and failed-Stop coverage where it already protects the contract. Separate
 Sol 6.1 test/implementation agents and independent pre/post reviews precede focused
 race, full engine/consumer checks and a native paused-upload/resume fixture.
 
-## S1f: Commit queue ownership decision pending
+## S1f: Deterministic ready commit queue
 
-The remaining proxy-first channel drain can starve full detail and inherits
-worker completion order. The next batch should order the ready frontier by live
+The former proxy-first channel drain could starve full detail and inherited
+worker completion order. S1f orders the ready frontier by live
 S1d priority, first queued age and signed coordinate/kind ties, while retaining
 count/time budgets, exact cancellation acknowledgements and payload leases.
+The captured frontier stops after shutdown or generation change; drained scalar
+IDs cannot consume ownership again.
 Arrivals after the captured frontier wait for the next update. This does not
 bound one large chunk's main-thread commit.
 
-Recommended architecture: transfer completed results into one main-thread owned
+Approved architecture: transfer completed results into one main-thread owned
 ready queue. Workers retain their existing buffered publication channels; queued
 results keep pending-byte and S1e admission ownership until consumed or drained.
 Stop drains both channels and the ready queue. Public prepared-depth metrics count
 both owners. Queue records never retain ECS rows; workers never mutate the queue.
 This also provides an owner for later resumable commit work.
 
-Alignment is required before implementation. Existing tests explicitly require
-uncommitted results to remain in `PreparedLoads`, including
+Ready capacity is `max(2, cap(PreparedLoads) + cap(PreparedProxyLoads))`, with a
+saturating sum. Stop capturing when retained ownership is full; alternate source
+kinds when only part of the transport frontier fits. This preserves backpressure
+for uncredited raw channel producers as well as S1e runtime attempts. Capture the
+entry channel lengths, bounded by free ready capacity. Nil channels contribute
+nothing; unbuffered channels permit at most one nonblocking rendezvous per kind
+per update. Ordering covers captured results, not uncaptured sends. Runtime
+workers keep their current publication behavior. Every receive is nonblocking;
+concurrent channel consumption cannot make capture wait. A smaller transport
+capacity preserves retained results and stops new capture until they fit again.
+
+Rebuild one scalar heap from the retained frontier each commit update. Stale,
+cancelled, obsolete, duplicate and error envelopes use a deterministic
+cleanup prefix and their existing consumption handlers; capture never
+acknowledges them. Wanted byte-cost retries retain live demand priority and age;
+their acknowledgement, cost hint and release behavior remain unchanged.
+Otherwise reuse live S1d priority. Promote one priority level
+per eight waiting commit updates, capped at fallback. Compare first queued update,
+signed X/Y/Z and kind after effective priority; proxy wins equivalent kind ties.
+Each result retains its own birth, so a replacement token cannot inherit an old
+attempt's age. All results newly captured in an update share that update's birth;
+capture order cannot precede coordinate ties. Consumption/drain releases age;
+sequence wrap starts fresh births.
+Recheck generation, token, demand and loaded ownership before actual publication.
+Preserve count/time checks before every consumed result and existing error policy.
+
+On 2026-10-03, the user approved this queue and migration of the existing
+deferred-commit channel-depth assertions to public total prepared depths, retained
+credit and actual residency checks. This includes
 `TestStreamedRuntimeCommitBudgetLeavesPreparedChunksQueued` and S2b/S1d pressure
-fixtures. A private ready queue would require replacing those physical channel
-depth assertions with total prepared-depth, retained-credit and actual residency
-assertions. The current task requires preserving existing tests.
+fixtures. Preserve their other assertions and the remaining tests.
 
 Alternative: keep payloads in the channels and reorder a fixed buffered frontier
 under a publication mutex. A condition variable can preserve queue depths and
@@ -301,9 +328,8 @@ public exposure leaves that compatibility boundary unspecified. Introducing the
 restriction without alignment would turn an implementation choice into a new
 API contract.
 
-Root confidence is Medium until the channel compatibility and permitted test
-migration are settled; the Human Alignment Gate applies. No S1f production or
-tests have changed. After alignment, use separate Sol 6.1
+Root confidence is High after ownership inspection and explicit user alignment;
+no additional SME alignment is required. Use separate Sol 6.1
 test/implementation agents and independent pre/post reviews. Minimal coverage
 should protect real full/proxy ordering, sustained-fallback fairness, cancellation
 and ownership through deferred commits/Stop, followed by focused race and the

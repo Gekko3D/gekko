@@ -98,7 +98,7 @@ by existing channel/job counts and excluded from payload byte charge.
 
 Active decode/build is outside retained-result ceiling, bounded by MaxPrepareJobs. No hard decode allocation or RSS limit claimed. Main thread safely discards obsolete demand; IO cancellation and queue partitioning remain later S2 work.
 
-Expose decoded/pending bytes, budget and pressure plus admission retry/oversized counts in StreamedLevelRuntimeMetrics. Read totals without per-frame payload rescans. Queue-depth/commit-count semantics unchanged.
+Expose decoded/pending bytes, budget and pressure plus admission retry/oversized counts in StreamedLevelRuntimeMetrics. Read totals without per-frame payload rescans. S1f prepared-depth metrics include transport and retained ready results; credits and scopes survive both owners until consumption or drain. Commit-count semantics remain unchanged.
 
 Metric prefixes: DecodedContentCache with loader Stats suffixes above;
 PendingPrepared with Bytes, MaxBytes, OverBudgetBytes, AdmissionRetries and

@@ -2070,8 +2070,8 @@ func TestStreamedRuntimeCommitBudgetLeavesPreparedChunksQueued(t *testing.T) {
 	if len(state.LoadedChunks) != 2 {
 		t.Fatalf("expected two loaded chunks after first budgeted commit, got %+v", state.LoadedChunks)
 	}
-	if len(state.PreparedLoads) != 1 {
-		t.Fatalf("expected one prepared chunk to remain queued, got %d", len(state.PreparedLoads))
+	if state.Metrics.PreparedChunkQueueDepth != 1 {
+		t.Fatalf("expected one prepared chunk to remain queued, got %d", state.Metrics.PreparedChunkQueueDepth)
 	}
 	if state.Metrics.ChunksCommittedLastFrame != 2 || !state.Metrics.CommitBudgetHitLastFrame || state.Metrics.CommitBudgetReason != "chunk_count" {
 		t.Fatalf("unexpected first-frame budget metrics: %+v", state.Metrics)
@@ -2082,8 +2082,8 @@ func TestStreamedRuntimeCommitBudgetLeavesPreparedChunksQueued(t *testing.T) {
 	if len(state.LoadedChunks) != 3 {
 		t.Fatalf("expected all chunks loaded after second commit, got %+v", state.LoadedChunks)
 	}
-	if len(state.PreparedLoads) != 0 {
-		t.Fatalf("expected prepared queue to be empty, got %d", len(state.PreparedLoads))
+	if state.Metrics.PreparedChunkQueueDepth != 0 {
+		t.Fatalf("expected prepared queue to be empty, got %d", state.Metrics.PreparedChunkQueueDepth)
 	}
 	if state.Metrics.ChunksCommittedLastFrame != 1 || state.Metrics.CommitBudgetHitLastFrame {
 		t.Fatalf("unexpected second-frame budget metrics: %+v", state.Metrics)

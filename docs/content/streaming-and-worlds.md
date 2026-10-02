@@ -655,6 +655,23 @@ asynchronous preparation; existing fallback coverage and synchronous collision
 behavior remain.
 [S1e decision](../roadmaps/streamed-rendering-s1b.md#s1e-combined-streaming-admission).
 
+Prepared commit scheduling, S1f:
+
+The main thread transfers a fixed, nonblocking transport frontier into a bounded
+ready owner. Retained results keep decoded scopes, pending bytes and streaming
+admission until actual consumption or Stop drain. Public `PreparedChunkQueueDepth`,
+`PreparedProxyQueueDepth` and `PreparedQueueDepth` include transport and retained
+results; physical channel length no longer reports total deferred work.
+
+Commit order uses live S1d priority, with one promotion per eight waiting commit
+updates, then first queued update, signed X/Y/Z and proxy/full kind. Stale,
+cancelled, obsolete, duplicate and error results use a cleanup prefix; wanted
+byte-cost retries retain demand priority. New captures share one update birth.
+Arrivals during commit wait for a later frontier. Count/time budgets and existing
+acknowledgement/error policy remain. Failed Stop retains ready ownership;
+successful Stop drains it. This does not bound one large chunk's commit.
+[Capacity and channel compatibility](../roadmaps/streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
+
 Obsolete preparation cancellation, S2e:
 
 Full/proxy preparation has one cancellation owner per dispatch. Observer
