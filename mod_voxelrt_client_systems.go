@@ -586,6 +586,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			delete(state.entityLODSelections, eid)
 		}
 	}
+	state.trimMaterialTableCache()
 	state.endStreamedVoxelSync()
 	state.RtApp.Profiler.EndScope("Sync Instances")
 

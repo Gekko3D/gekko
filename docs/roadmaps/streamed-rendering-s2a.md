@@ -148,3 +148,30 @@ Diagnostic artifacts: `/tmp/gekko-s2a-smoke.go`,
 `/tmp/gekko-s2a-engine-sweep.log`. No diagnostic assets entered repository.
 
 Next: S2b decoded-content/pending byte bounds and per-key loading. GPU retention, private/editable geometry and cross-owner memory accounting remain separate S2 work. No codec or collision representation change.
+
+## S2c: CPU material-table cache ownership decision
+
+Extend the existing `VoxelRtState.materialTableCache`, preserving fingerprint,
+table construction and active sharing. Charge each retained key/table backing
+once plus conservative entry metadata. Default retention budget: 16 MiB, an
+initial unmeasured setting. Main-thread budget configuration uses zero for the
+default and negative for disabled warm retention, matching prepared-cache policy.
+
+After complete instance sync, pin distinct keys referenced by current objects,
+including hidden streamed objects. Refresh active usage and evict inactive LRU
+entries until total charge fits. Apply changed budgets at this boundary even
+without new table builds. If pinned tables alone exceed the budget, retain them
+and expose pinned pressure. Temporary builds and retained external references are
+outside this cache-owned accounting; no process/GPU-memory ceiling is claimed.
+
+Eviction removes cache references only. Never clear or recycle material backing:
+object, renderer and caller-held slices remain valid. Rebuild pruned maps and
+release empty cache ownership. Exact ties need no deterministic admission promise.
+Public value stats report entries, bytes, pinned bytes, effective maximum, pressure,
+builds, hits and evictions; private accounting controls retention.
+
+Hard eviction of active keys can duplicate shared tables on new-object admission.
+Pinning follows S2's existing live-user policy while bounding historical phases.
+Hash semantics, mutable asset compatibility, streaming readiness, GPU allocation
+and table mutation behavior remain unchanged. Use the full cache-ownership workflow;
+canonical behavior belongs in renderer runtime docs.

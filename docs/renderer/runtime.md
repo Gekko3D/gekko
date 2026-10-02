@@ -271,6 +271,30 @@ Exact comparison remains proportional to palette data; fewer hashes establish
 no measured frame-time gain. Hash semantics and material-table construction are
 unchanged. Rationale: [S3r decision](../roadmaps/streamed-rendering-s3c.md#s3r-effective-palette-fingerprint-reuse-decision).
 
+## CPU Material-Table Cache
+
+`VoxelRtState.SetVoxelMaterialTableCacheBudgetBytes(int64)` configures retained
+CPU tables on the main thread: zero selects `DefaultVoxelMaterialTableCacheBytes`
+(16 MiB), negative disables warm retention, positive sets an accounted byte limit.
+Configuration changes the reported maximum immediately; the next complete
+instance sync trims inactive entries, including when no new table is built.
+
+Each key charges CPU material slice capacity plus conservative entry metadata
+once. Current object keys, including hidden streamed objects, remain pinned and
+refresh LRU age without counting cache hits. Inactive entries are evicted oldest
+first until the budget fits or only pinned excess remains. Eviction releases
+cache references and prunes map capacity; borrowed/object material backing remains
+valid. Hashing, table construction and sharing semantics are unchanged.
+
+`VoxelMaterialTableCacheStats()` returns a value with `Entries`, `Bytes`,
+`PinnedBytes`, `MaxBytes`, `PressureBytes`, `Builds`, `Hits` and `Evictions`.
+Reads perform no work. Pins reflect completed maintenance; pressure is pinned
+bytes above the current maximum. Builds count actual table construction, hits
+count successful builder lookups, and evictions count removed cache keys. Private
+accounting owns retention. Nil state returns zero stats. Temporary construction,
+external borrowers, assets and GPU allocations are excluded; this is not a process
+or GPU memory limit. [Ownership rationale](../roadmaps/streamed-rendering-s2a.md#s2c-cpu-material-table-cache-ownership-decision).
+
 ## Render Targets and Formats
 
 ### Opaque lighting output

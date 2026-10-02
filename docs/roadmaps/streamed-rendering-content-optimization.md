@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a–S3r complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a–S2c, and S3a–S3r complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -378,15 +378,15 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3o | `a1e315b` | Geometry-reference normalization and derived Pivot publication | [ECS contract](../engine/ecs.md#voxel-bridge-publication) |
 | S3p | `65f4ac5` | Core Camera and derived EntityLOD publication | [ECS contract](../engine/ecs.md#camera-and-entitylod-publication) |
 | S3q | `d748040` | Entity/type invalidations, independent cursors and explicit resync | [ECS contract](../engine/ecs.md#bounded-component-publication-journal) |
-| S3r | `perf(renderer): reuse effective palette fingerprints` | Bounded owned snapshots with exact live input comparison | [Renderer contract](../renderer/runtime.md#effective-palette-fingerprints) |
+| S3r | `195575d` | Bounded owned snapshots with exact live input comparison | [Renderer contract](../renderer/runtime.md#effective-palette-fingerprints) |
+| S2c | `perf(renderer): bound retained CPU material tables` | Capacity accounting, live pins and inactive LRU eviction | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
 
 S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: bound the existing historical CPU material-table cache by accounted bytes,
-pin live object keys and evict inactive LRU tables after complete sync. Use the full
-architecture workflow; preserve table backing, sharing and live input compatibility.
-Remaining GPU retention accounting and S4 persistence have separate ownership
-designs. Incremental extraction remains separate; no dirty-only extraction is approved.
+Next: account retained GPU allocations by bytes alongside the existing sector cap.
+Resolve assigned-slot ownership and active pressure before implementation. Other
+cache owners and S4 persistence need separate ownership designs. Incremental
+extraction remains separate; no dirty-only extraction is approved.
 
 Decisions to settle before dependent implementation:
 
@@ -663,6 +663,30 @@ These establish continuity/work contracts, not pixel parity or measured speedup.
 Existing tests preserved; macOS linker/module stat-cache warnings exited successfully.
 Live extraction remains; the original material-table cache and other owners remain
 outside the new snapshot budget.
+
+### S2c: Retained CPU material tables
+
+Commit `perf(renderer): bound retained CPU material tables`. Separate Sol 6.1
+test/implementation agents and root/independent pre/post reviews completed. Five
+focused groups protect configuration, shared pins/pressure, recent-use eviction,
+animated history, borrowed backing and hidden streamed users. Full engine tests,
+focused race, ActionGame/SpaceGame/voxel sample compilation and editor build passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(S2c|S3r|S3c|VoxelRtSystem|StreamedVoxel|EntityLOD|BuildMaterialTable|EffectiveVoxelPaletteAt)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -race -run '^Test(S2c|S3r|S3c|VoxelRtSystem|StreamedVoxel|EntityLOD|BuildMaterialTable|EffectiveVoxelPaletteAt)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS2cSmoke.app/Contents/MacOS/gekko-s2c-smoke /tmp/gekko-s2c-smoke.go
+/tmp/GekkoS2cSmoke.app/Contents/MacOS/gekko-s2c-smoke > /tmp/gekko-s2c-smoke.log 2>&1
+```
+
+Native smoke exited 0: 193 frames/6.633s, three 60-frame holds with no table work.
+Disabled warm retention kept two active keys/20,992 accounted bytes pinned under
+pressure; aliased edits and animation evicted four old keys. Hidden delayed
+uploads reached Ready in two resumed frames, and reveal retained object/map.
+These verify continuity and ownership, not pixel parity or a GPU/process ceiling.
+Existing tests and unrelated changes preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 

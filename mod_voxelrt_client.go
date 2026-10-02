@@ -165,6 +165,8 @@ type VoxelRtState struct {
 	materialFingerprints               map[AssetId]voxelMaterialFingerprint
 	materialFingerprintBytes           uint64
 	materialFingerprintsPruned         bool
+
+	materialTableRetention voxelMaterialTableRetention
 }
 
 type runtimeVoxelEdit struct {

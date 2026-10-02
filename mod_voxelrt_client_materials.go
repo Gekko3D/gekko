@@ -494,6 +494,8 @@ func (s *VoxelRtState) buildMaterialTable(key materialTableCacheKey, gekkoPalett
 	if s != nil {
 		s.ensureMaterialCaches()
 		if cached, ok := s.materialTableCache[key]; ok {
+			s.materialTableRetention.hits++
+			s.touchMaterialTableCache(key, cached)
 			return cached
 		}
 	}
@@ -557,6 +559,8 @@ func (s *VoxelRtState) buildMaterialTable(key materialTableCacheKey, gekkoPalett
 
 	if s != nil {
 		s.materialTableCache[key] = materialTable
+		s.materialTableRetention.builds++
+		s.touchMaterialTableCache(key, materialTable)
 	}
 	return materialTable
 }
