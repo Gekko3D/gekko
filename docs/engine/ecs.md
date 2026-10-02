@@ -138,8 +138,9 @@ Direct public-field writes remain live but require their owner to explicitly
 mark them for publication. Hierarchy publishes its changed derived world and
 root-local TRS outputs; reparent, grip, attach, surface and authored aim helpers
 publish their changed transform inputs. Authored animation publishes changed
-final Local poses. Other asset writers, brushes and further producers remain
-incompletely migrated. Hierarchy and the voxel bridge continue their live reads.
+final Local poses; physics publishes changed World poses. Other asset writers,
+brushes and further producers remain incompletely migrated. Hierarchy and the
+voxel bridge continue their live reads.
 These sequences establish an ownership API, not a complete dirty contract,
 entity worklist or performance gain. Remaining producer migration and any bounded
 change journal need subsequent designs. Consumers must not skip existing live
@@ -277,6 +278,27 @@ Sampling publishes Local only and leaves World propagation to hierarchy. It does
 not flush commands or change membership. Animation-player and NPC state changes
 are outside this Local publication contract. Other transform and renderer-input
 producers still need migration.
+
+### Physics World Publication
+
+`SynchronousPhysicsSystem` and `PhysicsPullSystem` publish changed committed
+`TransformComponent` values on the main thread. Each writer compares actual World
+TRS bits immediately before and after its position/rotation assignments. The
+comparison uses the converted render pose, including existing pivot/center offset
+handling and interpolation, rather than the raw simulation center.
+
+Equal destination bits publish nothing, including equal NaN payloads. Signed zero
+changes publish. A repeated result tick can still publish when a different
+interpolation alpha changes World; tick, velocity and sleeping state do not decide
+whether a pose changed.
+
+Existing body/model filters, rigid-body updates, collision delivery and timing
+remain intact. Scale and Pivot are preserved; physics does not write Local or
+invoke hierarchy. Derived hierarchy outputs retain their normal stage ownership.
+Fallback PhysicsModel additions remain queued. Publication does not flush
+commands or change membership; committed targets pending removal/replacement
+remain writable until the existing flush boundary.
+
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.
 

@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -123,8 +124,12 @@ func SynchronousPhysicsSystem(cmd *Commands, time *Time, physics *PhysicsWorld, 
 			// We update the Transform IMMEDIATELY to avoid the "frozen frame" bug
 			// But note that interpolation will overwrite it in PreUpdate.
 			// This is fine because PreUpdate runs AFTER all fixed steps.
+			previousWorld := hierarchyBits(e.tr.Position, e.tr.Rotation, e.tr.Scale)
 			e.tr.Rotation = res.Rot
 			e.tr.Position = physicsToRenderPositionWithAssets(assets, res.Pos, res.Rot, e.tr, &e.pm, e.vm)
+			if previousWorld != hierarchyBits(e.tr.Position, e.tr.Rotation, e.tr.Scale) {
+				cmd.MarkComponentChanged(res.Eid, reflect.TypeOf(TransformComponent{}))
+			}
 			e.rb.Velocity = res.Vel
 			e.rb.AngularVelocity = res.AngVel
 			e.rb.Sleeping = res.Sleeping
@@ -253,8 +258,12 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 					interpRot = mgl32.QuatNlerp(rb.PreviousPhysicsRot, rb.CurrentPhysicsRot, alpha)
 				}
 
+				previousWorld := hierarchyBits(tr.Position, tr.Rotation, tr.Scale)
 				tr.Position = physicsToRenderPositionWithAssets(assets, interpPos, interpRot, tr, &resolvedModel, vm)
 				tr.Rotation = interpRot
+				if previousWorld != hierarchyBits(tr.Position, tr.Rotation, tr.Scale) {
+					cmd.MarkComponentChanged(eid, reflect.TypeOf(TransformComponent{}))
+				}
 				rb.Velocity = res.Vel
 				rb.AngularVelocity = res.AngVel
 				rb.Sleeping = res.Sleeping

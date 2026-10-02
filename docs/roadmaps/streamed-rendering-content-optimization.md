@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g/S3h/S3i/S3j complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g/S3h/S3i/S3j/S3k complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -149,9 +149,9 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3j implement selection, GPU records, ECS inventories, hierarchy reuse and component/hierarchy/helper/animation publication. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3k implement selection, GPU records, ECS inventories, hierarchy reuse and component/hierarchy/helper/animation/physics World publication. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
-Physics, gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
+Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
 Cache by spatial bucket, radii, layer transform/topology and PVS. Update shells; recompute after teleports, observer/radius changes, edits and visibility. Count overlapping demand so one observer cannot evict another's content.
 
@@ -337,9 +337,10 @@ Use expanded bounds/occupancy minus conservative margin. Include required dynami
 | S3g | `e6d40e8` | Reparent/grip helper input publication | [ECS contract](../engine/ecs.md#transform-helper-publication) |
 | S3h | `8250177` | Independent attach/surface publication | [ECS contract](../engine/ecs.md#authored-attach-and-surface-publication) |
 | S3i | `bce33d8` | Authored aim rotation publication | [ECS contract](../engine/ecs.md#authored-aim-publication) |
-| S3j | This commit | Authored animation final pose publication | [ECS contract](../engine/ecs.md#authored-animation-publication) |
+| S3j | `977786e` | Authored animation final pose publication | [ECS contract](../engine/ecs.md#authored-animation-publication) |
+| S3k | This commit | Physics World publication | [ECS contract](../engine/ecs.md#physics-world-publication) |
 
-S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3. Next: physics World publication in `SynchronousPhysicsSystem` and `PhysicsPullSystem` (`mod_physics_module.go`).
+S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3. Next: moving brush World/Local publication at the accepted motion commit in `movingBrushMotionSystem` (`moving_brush.go`). Rider writers remain separate.
 
 Decisions to settle before dependent implementation:
 
@@ -440,7 +441,7 @@ env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3g|S3h|S3i|Transfo
 
 ### S3j: Authored animation final pose publication
 
-This commit: `feat(assets): publish authored animation poses`. Sol 6.1 TDD and
+Commit `977786e`. Sol 6.1 TDD and
 both adversarial reviews completed. Eight focused test groups, root tests,
 focused race, ActionGame compilation and editor build passed:
 
@@ -450,6 +451,22 @@ env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3j' -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(AuthoredAssetAnimation|NPCAnimation|S3i|TransformHierarchy)' -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3i|S3j|AuthoredAssetAnimation|NPCAnimation|TransformHierarchy)' -count=1
+```
+
+### S3k: Physics World publication
+
+This commit: `feat(physics): publish changed world poses`. Both result writers
+publish actual changed World poses; the [ECS contract](../engine/ecs.md#physics-world-publication)
+owns the details. Eight focused test groups, root tests, focused race, ActionGame
+compilation and editor build passed. Sol 6.1 TDD and both adversarial reviews
+completed.
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3k' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(Physics|SynchronousPhysics|SphereBoxCollisionResolves|CapsuleBoxCollisionResolves|RenderToPhysics|ScaledPivotWorld|TransformHierarchy)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3k|Physics|SynchronousPhysics|SphereBoxCollisionResolves|CapsuleBoxCollisionResolves|RenderToPhysics|ScaledPivotWorld|TransformHierarchy)' -count=1
 ```
 
 Consumer commands for these steps:

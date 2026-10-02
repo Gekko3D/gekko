@@ -105,6 +105,9 @@ In synchronous mode the same snapshot/result types are still used, but the produ
 
 If visual transforms look wrong while physics state is correct, start here before changing the simulation loop.
 
+Both result writers publish changed World poses through the
+[ECS publication contract](ecs.md#physics-world-publication).
+
 ## What `PhysicsPushSystem` Owns
 
 `PhysicsPushSystem`:
