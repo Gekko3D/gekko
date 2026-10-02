@@ -568,14 +568,22 @@ func groundedPlayerApplyTransform(cmd *Commands, eid EntityId, cam *CameraCompon
 		cam.Up = mgl32.Vec3{0, 1, 0}
 	}
 	if tr, ok := transformForEntity(cmd, eid); ok {
+		previousWorld := hierarchyBits(tr.Position, tr.Rotation, tr.Scale)
 		tr.Position = basePos
 		tr.Rotation = mgl32.QuatIdent()
 		tr.Scale = mgl32.Vec3{1, 1, 1}
+		if hierarchyBits(tr.Position, tr.Rotation, tr.Scale) != previousWorld {
+			cmd.MarkComponentChanged(eid, reflect.TypeOf(TransformComponent{}))
+		}
 	}
 	if local, ok := localTransformForEntity(cmd, eid); ok {
+		previousLocal := hierarchyBits(local.Position, local.Rotation, local.Scale)
 		local.Position = basePos
 		local.Rotation = mgl32.QuatIdent()
 		local.Scale = mgl32.Vec3{1, 1, 1}
+		if hierarchyBits(local.Position, local.Rotation, local.Scale) != previousLocal {
+			cmd.MarkComponentChanged(eid, reflect.TypeOf(LocalTransformComponent{}))
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g/S3h/S3i/S3j/S3k/S3l complete. S2 and S3 remain partial; other sections are proposals.
+Date: 2026-10-02. Status: staged implementation; S1a/S1b/S1c, S2a/S2b, and S3a/S3b/S3c/S3d/S3e/S3f/S3g/S3h/S3i/S3j/S3k/S3l/S3m complete. S2 and S3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -149,7 +149,7 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3l implement selection, GPU records, ECS inventories, hierarchy reuse and component publication in hierarchy, helpers, animation, physics World and accepted brush motion. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3m implement selection, GPU records, ECS inventories, hierarchy reuse and component publication in hierarchy, helpers, animation, physics World, accepted brush motion and grounded actors. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
 Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
@@ -339,9 +339,10 @@ Use expanded bounds/occupancy minus conservative margin. Include required dynami
 | S3i | `bce33d8` | Authored aim rotation publication | [ECS contract](../engine/ecs.md#authored-aim-publication) |
 | S3j | `977786e` | Authored animation final pose publication | [ECS contract](../engine/ecs.md#authored-animation-publication) |
 | S3k | `e825681` | Physics World publication | [ECS contract](../engine/ecs.md#physics-world-publication) |
-| S3l | This commit | Accepted moving brush World/Local publication | [ECS contract](../engine/ecs.md#moving-brush-motion-publication) |
+| S3l | `21aff15` | Accepted moving brush World/Local publication | [ECS contract](../engine/ecs.md#moving-brush-motion-publication) |
+| S3m | This commit | Shared grounded actor World/Local publication | [ECS contract](../engine/ecs.md#grounded-actor-publication) |
 
-S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3. Next: grounded actor World/Local publication in `groundedPlayerApplyTransform` (`mod_grounded_player.go`), shared by motors and riders.
+S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3. Next: direct-child ground visual Local publication in `ApplyCharacterVisualGroundOffsetToChildren` (`character_grounding.go`).
 
 Decisions to settle before dependent implementation:
 
@@ -472,7 +473,7 @@ env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3k|Physics|Synchro
 
 ### S3l: Accepted moving brush publication
 
-This commit: `feat(brushes): publish accepted motion poses`. Accepted motion
+Commit `21aff15`. Accepted motion
 publishes changed brush World and existing Local independently; the
 [ECS contract](../engine/ecs.md#moving-brush-motion-publication) owns the details.
 Six focused test groups, root tests, focused race, ActionGame compilation and
@@ -484,6 +485,22 @@ env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3l' -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(MovingBrush|GroundedPlayerLandsOnMovingBrush|TransformHierarchy)' -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
 env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3k|S3l|MovingBrush|GroundedPlayerLandsOnMovingBrush|TransformHierarchy)' -count=1
+```
+
+### S3m: Shared grounded actor publication
+
+This commit: `feat(grounding): publish actor poses`. The shared writer publishes
+changed actor World and existing Local independently; the
+[ECS contract](../engine/ecs.md#grounded-actor-publication) owns the details.
+Six focused test groups, root tests, focused race, ActionGame compilation and
+editor build passed. Sol 6.1 TDD and both adversarial reviews completed.
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestS3m' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(Grounded|MovingBrush|Character|S3l|TransformHierarchy)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(S3l|S3m|Grounded|MovingBrush|Character|TransformHierarchy)' -count=1
 ```
 
 Consumer commands for these steps:

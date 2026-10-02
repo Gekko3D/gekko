@@ -139,8 +139,9 @@ mark them for publication. Hierarchy publishes its changed derived world and
 root-local TRS outputs; reparent, grip, attach, surface and authored aim helpers
 publish their changed transform inputs. Authored animation publishes changed
 final Local poses; physics publishes changed World poses. Accepted moving-brush
-motion publishes its changed World and existing Local poses. Rider/motor writes,
-other asset writers and further producers remain incompletely migrated.
+motion publishes its changed World and existing Local poses. The shared grounded
+actor writer publishes its changed World and Local poses for motors and riders.
+Other transform and renderer-input producers remain incompletely migrated.
 Hierarchy and the voxel bridge continue their live reads.
 These sequences establish an ownership API, not a complete dirty contract,
 entity worklist or performance gain. Remaining producer migration and any bounded
@@ -318,9 +319,33 @@ normal later hierarchy propagation keeps its stage ownership.
 
 The writer creates no Local, invokes no hierarchy and does not flush or change
 membership. Committed targets pending removal/replacement remain writable until
-flush; pending additions remain invisible. Rider/motor writes and publication of
-brush control state or collision bounds are outside this TRS contract and still
-need migration.
+flush; pending additions remain invisible. Rider poses follow the
+[grounded actor contract](#grounded-actor-publication). Publication of brush
+control state or collision bounds remains outside this TRS contract.
+
+### Grounded Actor Publication
+
+`groundedPlayerApplyTransform` publishes changed committed World and existing
+Local TRS on the main thread for motor, traversal and rider callers. Each
+destination compares exact bits immediately before and after its own three
+assignments, independently of the other destination. The existing writes copy
+the supplied base position, reset rotation to identity and scale to ones;
+unchanged position can still require publication for rotation/scale repair.
+Equal bits, including equal NaN position payloads, publish nothing; signed-zero
+changes publish. World Pivot remains untouched.
+
+Camera updates keep their existing order and eye height, LookAt and Up behavior.
+Missing camera, World or Local does not create a component or reject the other
+writes. A supplied camera still updates when no transform target is committed.
+The supplied nonnil controller need not be a committed component of the target;
+nil commands or controller skip the whole writer. Existing numerical base position
+copies retain their semantics with Parent, and normal hierarchy propagation keeps
+its stage ownership.
+
+Publication does not flush, change membership or invoke hierarchy. Committed
+targets pending removal/replacement remain writable until flush; pending
+additions remain invisible. Camera, motor and intent publication, and further
+transform writers, remain outside this TRS contract.
 
 Live extraction remains authoritative; consumers cannot yet skip reads using
 publication revisions.

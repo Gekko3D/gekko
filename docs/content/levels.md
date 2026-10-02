@@ -311,11 +311,12 @@ Moving-brush bounds also participate in character collision and ground probes;
 characters with `GroundedCharacterMotorComponent` inherit the brush's movement
 only while their grounded contacts identify that brush as their support. The
 motor probes support before brush motion; carrying updates the character's
-transform, support contact, and player camera when present. Airborne characters,
-characters outside the support, and characters supported by another entity do
-not become riders through nearby coordinates. Players and NPCs share this motor
-ownership; `NPCComponent` alone supplies identity and spawn metadata, without
-locomotion or carrying.
+transform, support contact, and player camera when present. Pose writes follow
+the [grounded actor publication contract](../engine/ecs.md#grounded-actor-publication).
+Airborne characters, characters outside the support, and characters supported by
+another entity do not become riders through nearby coordinates. Players and NPCs
+share this motor ownership; `NPCComponent` alone supplies identity and spawn
+metadata, without locomotion or carrying.
 
 ### NPCs
 
