@@ -8,6 +8,11 @@ import (
 
 // Sphere fills a sphere in the XBrickMap
 func Sphere(xbm *XBrickMap, center mgl32.Vec3, radius float32, paletteIdx uint8) {
+	var batch voxelEditBatch
+	var cpuBatch *voxelEditBatch
+	if xbm != nil && !xbm.GPUEditMode {
+		cpuBatch = &batch
+	}
 	r2 := radius * radius
 	minBound := [3]int{
 		int(math.Floor(float64(center.X() - radius))),
@@ -27,15 +32,25 @@ func Sphere(xbm *XBrickMap, center mgl32.Vec3, radius float32, paletteIdx uint8)
 				dy := float32(y) - center.Y() + 0.5
 				dz := float32(z) - center.Z() + 0.5
 				if dx*dx+dy*dy+dz*dz <= r2 {
-					xbm.SetVoxel(x, y, z, paletteIdx)
+					if cpuBatch == nil {
+						xbm.SetVoxel(x, y, z, paletteIdx)
+					} else {
+						xbm.setVoxel(x, y, z, paletteIdx, cpuBatch)
+					}
 				}
 			}
 		}
 	}
+	batch.finish(xbm)
 }
 
 // Cube fills a cube in the XBrickMap
 func Cube(xbm *XBrickMap, minB, maxB mgl32.Vec3, paletteIdx uint8) {
+	var batch voxelEditBatch
+	var cpuBatch *voxelEditBatch
+	if xbm != nil && !xbm.GPUEditMode {
+		cpuBatch = &batch
+	}
 	minI := [3]int{
 		int(math.Floor(float64(minB.X()))),
 		int(math.Floor(float64(minB.Y()))),
@@ -50,10 +65,15 @@ func Cube(xbm *XBrickMap, minB, maxB mgl32.Vec3, paletteIdx uint8) {
 	for x := minI[0]; x <= maxI[0]; x++ {
 		for y := minI[1]; y <= maxI[1]; y++ {
 			for z := minI[2]; z <= maxI[2]; z++ {
-				xbm.SetVoxel(x, y, z, paletteIdx)
+				if cpuBatch == nil {
+					xbm.SetVoxel(x, y, z, paletteIdx)
+				} else {
+					xbm.setVoxel(x, y, z, paletteIdx, cpuBatch)
+				}
 			}
 		}
 	}
+	batch.finish(xbm)
 }
 
 // Cone fills a cone in the XBrickMap

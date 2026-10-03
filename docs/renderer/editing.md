@@ -30,6 +30,21 @@ There is no separate `rt/editor` package. Editing flows through:
 
 Editing helpers mutate CPU-side `XBrickMap` data. They do not force an immediate GPU redraw on their own.
 
+## Synchronous primitive edits
+
+`volume.Sphere` and `volume.Cube` retain their existing shape predicates and
+ordered voxel assignments. CPU invocations finalize material flags once per
+surviving touched brick and invalidate each exact normal-halo key once. Voxel
+changes, revisions, sector removal and cached bounds still update in assignment
+order; all flags and auxiliary invalidation are complete before the call returns.
+No-op assignments preserve auxiliary data and allocate no batch maps.
+
+An invocation starting in `GPUEditMode` keeps sequential `SetVoxel` calls,
+including when a callback changes that mode. Queue order, prewrite observations,
+reentry and dirty suppression retain their existing behavior. Single-voxel edits
+and transformed engine edit helpers keep their current paths. Publication remains
+synchronous; these helpers introduce no resumable or progressive visibility.
+
 ## Raycast Internals
 
 `Scene.Raycast` currently:

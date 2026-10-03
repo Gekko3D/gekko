@@ -2,6 +2,25 @@ package volume
 
 import "github.com/go-gl/mathgl/mgl32"
 
+// voxelEditBatch belongs to one synchronous CPU primitive invocation. Map edits
+// and removals remain immediate; only material scans and repeated halo work are
+// deferred or deduplicated. The maps stay nil until the first changed voxel.
+type voxelEditBatch struct {
+	bricks map[[6]int]bool
+	halos  map[[6]int]bool
+}
+
+func (b *voxelEditBatch) finish(x *XBrickMap) {
+	for key := range b.bricks {
+		sector := x.Sectors[[3]int{key[0], key[1], key[2]}]
+		if sector != nil {
+			if brick := sector.GetBrick(key[3], key[4], key[5]); brick != nil {
+				brick.RefreshMaterialFlags()
+			}
+		}
+	}
+}
+
 func sectorBrickKeyForVoxel(gx, gy, gz int) ([3]int, [6]int) {
 	sx, sy, sz := gx/SectorSize, gy/SectorSize, gz/SectorSize
 	slx, sly, slz := gx%SectorSize, gy%SectorSize, gz%SectorSize
@@ -23,6 +42,10 @@ func sectorBrickKeyForVoxel(gx, gy, gz int) ([3]int, [6]int) {
 }
 
 func (x *XBrickMap) markVoxelNormalHaloDirty(gx, gy, gz int) {
+	x.markVoxelNormalHaloDirtyBatched(gx, gy, gz, nil)
+}
+
+func (x *XBrickMap) markVoxelNormalHaloDirtyBatched(gx, gy, gz int, batch *voxelEditBatch) {
 	if x.GPUEditMode {
 		return
 	}
@@ -51,6 +74,12 @@ func (x *XBrickMap) markVoxelNormalHaloDirty(gx, gy, gz int) {
 		for by := minBrick[1]; by <= maxBrick[1]; by++ {
 			for bz := minBrick[2]; bz <= maxBrick[2]; bz++ {
 				_, bKey := sectorBrickKeyForVoxel(bx*BrickSize, by*BrickSize, bz*BrickSize)
+				if batch != nil {
+					if batch.halos[bKey] {
+						continue
+					}
+					batch.halos[bKey] = true
+				}
 				x.MarkBrickNormalDirty(bKey)
 			}
 		}
@@ -76,6 +105,10 @@ func (x *XBrickMap) MarkBrickNormalDirty(bKey [6]int) {
 }
 
 func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
+	x.setVoxel(gx, gy, gz, val, nil)
+}
+
+func (x *XBrickMap) setVoxel(gx, gy, gz int, val uint8, batch *voxelEditBatch) {
 	found, current := x.GetVoxel(gx, gy, gz)
 	if !found {
 		current = 0
@@ -120,6 +153,13 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		x.SectorRevisions = make(map[[3]int]uint64)
 	}
 	x.SectorRevisions[sKey] = x.Revision
+	if batch != nil {
+		if batch.bricks == nil {
+			batch.bricks = make(map[[6]int]bool)
+			batch.halos = make(map[[6]int]bool)
+		}
+		batch.bricks[[6]int{sx, sy, sz, bx, by, bz}] = true
+	}
 
 	if val == 0 {
 		if sector, ok := x.Sectors[sKey]; ok {
@@ -130,9 +170,11 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 				}
 
 				brick.SetVoxel(vx, vy, vz, 0)
-				brick.RefreshMaterialFlags()
+				if batch == nil {
+					brick.RefreshMaterialFlags()
+				}
 				if !x.GPUEditMode {
-					x.markVoxelNormalHaloDirty(gx, gy, gz)
+					x.markVoxelNormalHaloDirtyBatched(gx, gy, gz, batch)
 				}
 
 				// Incremental AABB: Only mark dirty if removing a boundary voxel
@@ -181,12 +223,14 @@ func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 		}
 
 		brick.SetVoxel(vx, vy, vz, val)
-		brick.RefreshMaterialFlags()
+		if batch == nil {
+			brick.RefreshMaterialFlags()
+		}
 		if !x.GPUEditMode {
 			if isNew {
 				x.DirtySectors[sKey] = true
 			}
-			x.markVoxelNormalHaloDirty(gx, gy, gz)
+			x.markVoxelNormalHaloDirtyBatched(gx, gy, gz, batch)
 		}
 
 		// Incremental AABB: Expand existing bounds or mark dirty if already dirty

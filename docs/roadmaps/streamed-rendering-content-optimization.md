@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c and P5a–P5g complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5g and E1a complete. S1/S2/S3/P5/E1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -559,6 +559,15 @@ Budget touched bricks/fitted-normal halos. Resume deterministic brick order, nev
 
 Owners: destruction module, primitive/edit helpers, backing, streamed runtime, dirty tracking. Acceptance: bulk sphere results match current voxel-center inclusion and operation order; no missed edits across chunk/backing boundaries.
 
+#### E1a: Synchronous dense Sphere/Cube bookkeeping
+
+Completed: CPU primitive invocations finalize material flags once per surviving
+touched brick and deduplicate exact normal-halo invalidation. Ordered content,
+revisions, removal, cached bounds, copy isolation and GPU callbacks retain their
+contracts. See [primitive edits](../renderer/editing.md#synchronous-primitive-edits).
+Transformed engine edits, backing materialization, event sequencing and resumable
+publication remain later work; progressive/atomic cross-chunk visibility is undecided.
+
 ### E2. Persist changed bricks instead of whole geometry
 
 Key deltas by base content identity, chunk/layer or stable placement/part ID and authoritative lattice. Encode changed-voxel mask/final values, including explicit zero removals. Use sparse/uniform forms; switch to full compact brick when cheaper.
@@ -716,7 +725,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2k | `752f92e` | Worker-prepared registered storage descriptions and cached standalone policy charge | [Cache ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 | P5e | `89eb69d` | Validated warm authored collapse reuse without repeated rasterization | [Asset contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
 | P5f | `da0b36c` | Ordered dense imported construction with one material finalization per brick | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
-| P5g | This commit | Shared dense terrain, snapshot and offline aux reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
+| P5g | `d682744` | Shared dense terrain, snapshot and offline aux reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
+| E1a | This commit | Synchronous dense Sphere/Cube material and normal-halo bookkeeping | [Edit contract](../renderer/editing.md#synchronous-primitive-edits) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1724,6 +1734,31 @@ measured uniform 32³ reconstruction at 16.31 to 6.47 ms and mixed at 6.77 to
 6.53 ms; allocations increased from 94 to 96. Per-write halo work, decoded source
 records and atomic publication remain. Next bulk-edit slice keeps synchronous
 publication and existing GPU edit callbacks. Unrelated changes remain preserved.
+
+### E1a: Synchronous dense Sphere/Cube bookkeeping
+
+This commit preserves sequential edit contracts while deferring material scans
+and deduplicating exact halo keys. Focused parity/race checks, engine tests,
+five consumer checks and native Metal uploads passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^(TestE1a|TestSetVoxel|TestCopyChangedSectors|TestP5f)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -run '^(TestE1a|TestSetVoxel|TestCopyChangedSectors|TestP5f)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestDestruction|TestVoxelBacking|TestVoxelSphere|TestP5g)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-e1a-smoke /tmp/gekko-e1a-smoke.go
+/tmp/gekko-e1a-smoke > /tmp/gekko-e1a-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-e1a-edit-bench.go
+```
+
+Native checks cover cross-sector sphere carve, cross-brick cube paint, authored
+aux invalidation, hidden readiness, copy isolation, reupload and allocation
+cleanup. No pixel parity/FPS claim. Disposable Go 1.25.4 darwin/arm64 edit samples
+measured sphere carve 2.96 to 0.69 ms, paint 1.17 to 0.61 ms and 32³ cube fill
+17.66 to 4.46 ms. Batch scratch increases allocations (sphere 10 to 30, cube
+87 to 111); no-op remains zero allocations, about 65–66 µs. Per-write addressing,
+occupancy and halo enumeration remain. Next: ordinary VOX and persistence-input
+reconstruction through the existing dense builder. Unrelated changes preserved.
 
 Consumer commands for these steps:
 
