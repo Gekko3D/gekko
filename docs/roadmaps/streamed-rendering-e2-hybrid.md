@@ -1,7 +1,7 @@
 # E2 follow-up: Per-brick replacement decision
 
-Status: deferred after synthetic codec measurements; no format or runtime
-implementation approved here.
+Status: approved on 2026-10-04. Prioritize CPU and allocation savings, accepting
+modest compressed-file growth. Deliver content compatibility before runtime adoption.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#e2-persist-changed-bricks-instead-of-whole-geometry).
 
 ## Current boundary
@@ -17,16 +17,16 @@ entire object and has no base identity; it is not a per-brick replacement mode.
 Expanding a sparse assignment mask to all 512 cells cannot reduce that channel's
 logical size. The remaining roadmap optimization needs different semantics.
 
-## Alternatives and recommendation
+## Alternatives and approved choice
 
 Keep schema 2 when measured gains are small. Whole-object full selection is a
 separate possible optimization, but reload remains unbound and capture needs
 complete current geometry. A true hybrid can avoid those costs for selected
 changed bricks while retaining the original canonical base.
 
-Recommend measuring representative paint/carve histories first. If the benefit
-justifies another reader, add schema 3 `hybrid_delta` with deterministic logical
-byte-cost selection. Preserve schema-1 and schema-2 readers and their meanings.
+The user approved schema 3 `hybrid_delta` with deterministic logical byte-cost
+selection after the synthetic measurements below. Preserve schema-1 and
+schema-2 readers and their meanings.
 Actual compressed-frame selection is an alternative, but requires encoding
 multiple candidate frames and charging their capture inputs and temporaries.
 Logical selection makes no guarantee about the smallest compressed result.
@@ -50,9 +50,10 @@ with the default codec and any affected dictionary profiles before delivery.
 
 ## Measurements: 2026-10-04
 
-Recommendation: retain schema 2. Logical-body savings do not reliably predict
-compressed savings. Codec CPU/allocation gains exist, but real save/reload
-profiles must establish their value before adding a permanent format.
+Initial recommendation: retain schema 2 pending alignment. Logical-body savings
+do not reliably predict compressed savings. The user subsequently approved the
+CPU/allocation tradeoff. Full capture/save/reload measurements remain part of
+runtime delivery; these codec timings alone do not establish end-to-end gains.
 
 A temporary Go harness compared actual schema-2 payloads with simulated hybrid
 C1 documents, including canonical selector metadata. It checked codec roundtrip
@@ -100,11 +101,11 @@ Temporary artifacts: `/tmp/gekko-e2-measure.go`, three JSON runs and
 `/tmp/gekko-e2-measure-median.json`; they are not shipped or durable test fixtures.
 Command: `env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-e2-measure.go`.
 
-## Proposed format semantics
+## Approved format semantics
 
 Use the existing C1 frame version and document kind, with schema-3 metadata and
 `hybrid_delta` mode. Bind explicit placement/item IDs, canonical base identity and
-lattice exactly as current deltas do. Schema 3 would initially support this mode
+lattice exactly as current deltas do. Schema 3 initially supports this mode
 only; schema-2 full/base-delta meaning remains unchanged.
 
 Metadata contains a unique, canonically sorted list of replacement brick
@@ -150,11 +151,9 @@ and race checks, then engine and affected consumer checks at each code boundary.
 No GPU layout change is proposed; any runtime derivative change needs its own
 visual verification scope.
 
-## Required alignment
+## Alignment and remaining limits
 
-Retain schema 2 under the measured recommendation above. Revisit schema-3 scope
-and its cost policy only when real capture/save/reload profiles justify it.
-Implementation remains conditional on that alignment and meaningful benefit.
-The repository's
-[human alignment gate](../../AGENTS.md#human-alignment-gate) requires alignment
-before a non-trivial content-contract change with an unresolved design.
+The user approved the schema-3 CPU/allocation tradeoff and logical cost policy.
+Schema-2 defaults remain fixed. Runtime measurements must include capture,
+planning, durable publication and reload before claiming full-path benefit.
+Other source adapters and GPU behavior remain outside this approval.

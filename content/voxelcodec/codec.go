@@ -24,6 +24,17 @@ type Codec struct {
 	dictionaryHash     [32]byte
 }
 
+// Limits returns the immutable normalized profile, including after Close.
+// Bounds are copied so callers cannot alter the codec's internal profile.
+func (c *Codec) Limits() Limits {
+	limits := c.limits
+	if limits.Bounds != nil {
+		bounds := *limits.Bounds
+		limits.Bounds = &bounds
+	}
+	return limits
+}
+
 func New(options Options) (*Codec, error) {
 	limits, err := normalizedLimits(options.Limits)
 	if err != nil {

@@ -15,6 +15,8 @@ import (
 
 const (
 	CurrentVoxelObjectPayloadSchemaVersion = 2
+	HybridVoxelObjectPayloadSchemaVersion  = 3
+	VoxelObjectPayloadHybridDelta          = "hybrid_delta"
 	VoxelObjectPayloadFull                 = "full"
 	VoxelObjectPayloadBaseDelta            = "base_delta"
 )
@@ -26,25 +28,28 @@ type VoxelObjectLatticeDef struct {
 	RasterizationVersion string  `json:"rasterization_version"`
 }
 
-// VoxelObjectPayloadDef is either complete geometry or final assignments against
-// an independently verified base. Schema 1 denotes legacy unbound full records.
+// VoxelObjectPayloadDef contains full geometry, base-relative assignments, or
+// schema-3 hybrid assignments with selected whole-brick replacements. Schema 1
+// denotes legacy unbound full records.
 type VoxelObjectPayloadDef struct {
-	SchemaVersion int                   `json:"schema_version"`
-	Mode          string                `json:"mode"`
-	PlacementID   string                `json:"placement_id"`
-	ItemID        string                `json:"item_id"`
-	Lattice       VoxelObjectLatticeDef `json:"lattice"`
-	BaseIdentity  string                `json:"base_identity,omitempty"`
-	Voxels        []VoxelObjectVoxelDef `json:"voxels,omitempty"`
+	SchemaVersion     int                   `json:"schema_version"`
+	Mode              string                `json:"mode"`
+	PlacementID       string                `json:"placement_id"`
+	ItemID            string                `json:"item_id"`
+	Lattice           VoxelObjectLatticeDef `json:"lattice"`
+	BaseIdentity      string                `json:"base_identity,omitempty"`
+	ReplacementBricks [][3]int32            `json:"replacement_bricks,omitempty"`
+	Voxels            []VoxelObjectVoxelDef `json:"voxels,omitempty"`
 }
 
 type voxelObjectPayloadMetadata struct {
-	SchemaVersion int                   `json:"schema_version"`
-	Mode          string                `json:"mode"`
-	PlacementID   string                `json:"placement_id"`
-	ItemID        string                `json:"item_id"`
-	Lattice       VoxelObjectLatticeDef `json:"lattice"`
-	BaseIdentity  string                `json:"base_identity,omitempty"`
+	SchemaVersion     int                   `json:"schema_version"`
+	Mode              string                `json:"mode"`
+	PlacementID       string                `json:"placement_id"`
+	ItemID            string                `json:"item_id"`
+	Lattice           VoxelObjectLatticeDef `json:"lattice"`
+	BaseIdentity      string                `json:"base_identity,omitempty"`
+	ReplacementBricks [][3]int32            `json:"replacement_bricks,omitempty"`
 }
 
 type voxelObjectBaseMetadata struct {
@@ -79,9 +84,19 @@ func voxelObjectMetadata(payload *VoxelObjectPayloadDef) (voxelObjectPayloadMeta
 	if version == 0 {
 		version = CurrentVoxelObjectPayloadSchemaVersion
 	}
-	m := voxelObjectPayloadMetadata{SchemaVersion: version, Mode: payload.Mode, PlacementID: payload.PlacementID, ItemID: payload.ItemID, Lattice: payload.Lattice, BaseIdentity: payload.BaseIdentity}
-	if m.SchemaVersion != CurrentVoxelObjectPayloadSchemaVersion || !validVoxelObjectText(m.PlacementID, 1024) || !validVoxelObjectText(m.ItemID, 1024) {
+	m := voxelObjectPayloadMetadata{SchemaVersion: version, Mode: payload.Mode, PlacementID: payload.PlacementID, ItemID: payload.ItemID, Lattice: payload.Lattice, BaseIdentity: payload.BaseIdentity, ReplacementBricks: payload.ReplacementBricks}
+	if (m.SchemaVersion != CurrentVoxelObjectPayloadSchemaVersion && m.SchemaVersion != HybridVoxelObjectPayloadSchemaVersion) || !validVoxelObjectText(m.PlacementID, 1024) || !validVoxelObjectText(m.ItemID, 1024) {
 		return m, fmt.Errorf("invalid voxel-object payload schema/owner")
+	}
+	if m.SchemaVersion == HybridVoxelObjectPayloadSchemaVersion {
+		if m.Mode != VoxelObjectPayloadHybridDelta {
+			return m, fmt.Errorf("unsupported hybrid voxel-object mode")
+		}
+		if err := validateVoxelObjectSelectors(m.ReplacementBricks); err != nil {
+			return m, err
+		}
+	} else if m.Mode == VoxelObjectPayloadHybridDelta || len(m.ReplacementBricks) > 0 {
+		return m, fmt.Errorf("replacement selectors require hybrid schema")
 	}
 	if err := validateVoxelObjectLattice(m.Lattice); err != nil {
 		return m, err
@@ -91,7 +106,7 @@ func voxelObjectMetadata(payload *VoxelObjectPayloadDef) (voxelObjectPayloadMeta
 		if m.BaseIdentity != "" {
 			return m, fmt.Errorf("full voxel-object payload has base identity")
 		}
-	case VoxelObjectPayloadBaseDelta:
+	case VoxelObjectPayloadBaseDelta, VoxelObjectPayloadHybridDelta:
 		if len(m.BaseIdentity) != 64 {
 			return m, fmt.Errorf("invalid voxel-object base identity")
 		}
@@ -183,11 +198,24 @@ func voxelObjectBricks(records []VoxelObjectVoxelDef, delta bool) ([]voxelcodec.
 }
 
 func voxelObjectPayloadDocument(payload *VoxelObjectPayloadDef) (voxelcodec.Document, error) {
+	if payload != nil && payload.SchemaVersion == HybridVoxelObjectPayloadSchemaVersion {
+		copy := *payload
+		copy.ReplacementBricks = append([][3]int32(nil), payload.ReplacementBricks...)
+		sort.Slice(copy.ReplacementBricks, func(i, j int) bool {
+			return voxelObjectSelectorLess(copy.ReplacementBricks[i], copy.ReplacementBricks[j])
+		})
+		payload = &copy
+	}
 	metadata, err := voxelObjectMetadata(payload)
 	if err != nil {
 		return voxelcodec.Document{}, err
 	}
-	bricks, err := voxelObjectBricks(payload.Voxels, metadata.Mode == VoxelObjectPayloadBaseDelta)
+	var bricks []voxelcodec.Brick
+	if metadata.Mode == VoxelObjectPayloadHybridDelta {
+		bricks, err = voxelObjectHybridBricks(payload.Voxels, metadata.ReplacementBricks)
+	} else {
+		bricks, err = voxelObjectBricks(payload.Voxels, metadata.Mode == VoxelObjectPayloadBaseDelta)
+	}
 	if err != nil {
 		return voxelcodec.Document{}, err
 	}
@@ -248,7 +276,7 @@ func VoxelObjectBaseIdentity(base *VoxelObjectSnapshotDef, lattice VoxelObjectLa
 	return codec.Identity(doc)
 }
 
-// EncodeVoxelObjectPayload writes schema 2 C1 frames without mutating input.
+// EncodeVoxelObjectPayload writes schema 2 or 3 C1 frames without mutating input.
 // Explicit codecs remain caller-owned; nil uses one reusable default profile.
 func EncodeVoxelObjectPayload(payload *VoxelObjectPayloadDef, codec *voxelcodec.Codec) ([]byte, voxelcodec.Info, error) {
 	codec, err := voxelObjectCodec(codec)
@@ -259,10 +287,13 @@ func EncodeVoxelObjectPayload(payload *VoxelObjectPayloadDef, codec *voxelcodec.
 	if err != nil {
 		return nil, voxelcodec.Info{}, err
 	}
+	if err := validateVoxelObjectSelectorProfile(payload, doc, codec.Limits()); err != nil {
+		return nil, voxelcodec.Info{}, err
+	}
 	return codec.Encode(doc)
 }
 
-func voxelObjectPayloadFromDocument(doc voxelcodec.Document) (*VoxelObjectPayloadDef, error) {
+func voxelObjectPayloadFromDocument(doc voxelcodec.Document, codec *voxelcodec.Codec) (*VoxelObjectPayloadDef, error) {
 	if doc.Kind != "voxel_object_override" || doc.NormalBakeVersion != "" {
 		return nil, fmt.Errorf("invalid voxel-object override kind/bake version")
 	}
@@ -274,18 +305,24 @@ func voxelObjectPayloadFromDocument(doc voxelcodec.Document) (*VoxelObjectPayloa
 	if err != nil || !bytes.Equal(canonical, doc.Metadata) {
 		return nil, fmt.Errorf("noncanonical voxel-object owner metadata")
 	}
-	payload := &VoxelObjectPayloadDef{SchemaVersion: metadata.SchemaVersion, Mode: metadata.Mode, PlacementID: metadata.PlacementID, ItemID: metadata.ItemID, Lattice: metadata.Lattice, BaseIdentity: metadata.BaseIdentity}
-	if payload.SchemaVersion != CurrentVoxelObjectPayloadSchemaVersion {
+	payload := &VoxelObjectPayloadDef{SchemaVersion: metadata.SchemaVersion, Mode: metadata.Mode, PlacementID: metadata.PlacementID, ItemID: metadata.ItemID, Lattice: metadata.Lattice, BaseIdentity: metadata.BaseIdentity, ReplacementBricks: append([][3]int32(nil), metadata.ReplacementBricks...)}
+	if payload.SchemaVersion != CurrentVoxelObjectPayloadSchemaVersion && payload.SchemaVersion != HybridVoxelObjectPayloadSchemaVersion {
 		return nil, fmt.Errorf("unsupported compiled voxel-object schema")
 	}
 	if _, err := voxelObjectMetadata(payload); err != nil {
 		return nil, err
 	}
+	if err := validateVoxelObjectSelectorProfile(payload, doc, codec.Limits()); err != nil {
+		return nil, err
+	}
+	selected := voxelObjectSelectorSet(payload.ReplacementBricks)
 	delta := payload.Mode == VoxelObjectPayloadBaseDelta
 	count := 0
 	maxInt := int(^uint(0) >> 1)
 	for _, brick := range doc.Bricks {
-		if brick.Aux != nil || delta && brick.Materials == nil || !delta && brick.Materials != nil {
+		_, replacement := selected[brick.Coord]
+		assignment := delta || payload.Mode == VoxelObjectPayloadHybridDelta && !replacement
+		if brick.Aux != nil || assignment && brick.Materials == nil || !assignment && brick.Materials != nil {
 			return nil, fmt.Errorf("invalid voxel-object override layers")
 		}
 		for _, word := range brick.Occupancy {
@@ -298,6 +335,8 @@ func voxelObjectPayloadFromDocument(doc voxelcodec.Document) (*VoxelObjectPayloa
 	}
 	payload.Voxels = make([]VoxelObjectVoxelDef, 0, count)
 	for _, brick := range doc.Bricks {
+		_, replacement := selected[brick.Coord]
+		assignment := delta || payload.Mode == VoxelObjectPayloadHybridDelta && !replacement
 		channel := 0
 		for linear := 0; linear < 512; linear++ {
 			if brick.Occupancy[linear/64]&(uint64(1)<<uint(linear%64)) == 0 {
@@ -310,7 +349,7 @@ func voxelObjectPayloadFromDocument(doc voxelcodec.Document) (*VoxelObjectPayloa
 				}
 			}
 			value := brick.Values[channel]
-			if delta {
+			if assignment {
 				if value != 1 {
 					return nil, fmt.Errorf("noncanonical delta assignment marker")
 				}
@@ -324,7 +363,7 @@ func voxelObjectPayloadFromDocument(doc voxelcodec.Document) (*VoxelObjectPayloa
 	return payload, nil
 }
 
-// DecodeVoxelObjectPayload dispatches compiled schema 2 or legacy schema 0/1
+// DecodeVoxelObjectPayload dispatches compiled schema 2/3 or legacy schema 0/1
 // JSON. Legacy records retain their original order and unbound acceptance.
 func DecodeVoxelObjectPayload(data []byte, codec *voxelcodec.Codec) (*VoxelObjectPayloadDef, voxelcodec.Info, error) {
 	if bytes.HasPrefix(data, []byte(importedCompiledMagic)) {
@@ -336,11 +375,31 @@ func DecodeVoxelObjectPayload(data []byte, codec *voxelcodec.Codec) (*VoxelObjec
 		if err != nil {
 			return nil, voxelcodec.Info{}, err
 		}
-		payload, err := voxelObjectPayloadFromDocument(doc)
+		payload, err := voxelObjectPayloadFromDocument(doc, codec)
 		if err != nil {
 			return nil, voxelcodec.Info{}, err
 		}
 		return payload, info, nil
+	}
+	var semantics struct {
+		Mode              json.RawMessage `json:"mode"`
+		ReplacementBricks json.RawMessage `json:"replacement_bricks"`
+	}
+	if err := json.Unmarshal(data, &semantics); err != nil {
+		return nil, voxelcodec.Info{}, err
+	}
+	// Legacy snapshots historically ignored unknown fields. Only explicit
+	// hybrid semantics select rejection; unrelated mode values remain ignored.
+	var mode string
+	_ = json.Unmarshal(semantics.Mode, &mode)
+	var selectors []json.RawMessage
+	if semantics.ReplacementBricks != nil {
+		if err := json.Unmarshal(semantics.ReplacementBricks, &selectors); err != nil {
+			return nil, voxelcodec.Info{}, err
+		}
+	}
+	if mode == VoxelObjectPayloadHybridDelta || len(selectors) > 0 {
+		return nil, voxelcodec.Info{}, fmt.Errorf("hybrid semantics require compiled schema 3")
 	}
 	var legacy VoxelObjectSnapshotDef
 	if err := json.Unmarshal(data, &legacy); err != nil {
@@ -361,7 +420,7 @@ func ResolveVoxelObjectPayload(payload *VoxelObjectPayloadDef, base *VoxelObject
 		return nil, fmt.Errorf("voxel-object payload is nil")
 	}
 	if payload.SchemaVersion == CurrentVoxelObjectSnapshotSchemaVersion {
-		if payload.Mode != VoxelObjectPayloadFull || payload.PlacementID != "" || payload.ItemID != "" || payload.BaseIdentity != "" || payload.Lattice != (VoxelObjectLatticeDef{}) {
+		if payload.Mode != VoxelObjectPayloadFull || payload.PlacementID != "" || payload.ItemID != "" || payload.BaseIdentity != "" || payload.Lattice != (VoxelObjectLatticeDef{}) || len(payload.ReplacementBricks) > 0 {
 			return nil, fmt.Errorf("legacy voxel-object payload is not unbound full")
 		}
 		return &VoxelObjectSnapshotDef{SchemaVersion: CurrentVoxelObjectSnapshotSchemaVersion, Voxels: append([]VoxelObjectVoxelDef(nil), payload.Voxels...)}, nil
@@ -377,11 +436,14 @@ func ResolveVoxelObjectPayload(payload *VoxelObjectPayloadDef, base *VoxelObject
 	if payload.PlacementID != placementID || payload.ItemID != itemID || payload.Lattice != lattice {
 		return nil, fmt.Errorf("voxel-object owner/lattice binding mismatch")
 	}
+	if err := validateVoxelObjectSelectorProfile(payload, doc, codec.Limits()); err != nil {
+		return nil, err
+	}
 	if _, _, err := codec.Identity(doc); err != nil {
 		return nil, err
 	}
 	result := &VoxelObjectSnapshotDef{SchemaVersion: CurrentVoxelObjectSnapshotSchemaVersion, Voxels: append([]VoxelObjectVoxelDef(nil), payload.Voxels...)}
-	if payload.Mode == VoxelObjectPayloadBaseDelta {
+	if payload.Mode == VoxelObjectPayloadBaseDelta || payload.Mode == VoxelObjectPayloadHybridDelta {
 		identity, _, err := VoxelObjectBaseIdentity(base, lattice, codec)
 		if err != nil {
 			return nil, err
@@ -394,7 +456,19 @@ func ResolveVoxelObjectPayload(payload *VoxelObjectPayloadDef, base *VoxelObject
 			return nil, fmt.Errorf("voxel-object merge count overflow")
 		}
 		records := make([]VoxelObjectVoxelDef, 0, len(base.Voxels)+len(payload.Voxels))
-		records = append(records, base.Voxels...)
+		if payload.Mode == VoxelObjectPayloadHybridDelta {
+			selected := voxelObjectSelectorSet(payload.ReplacementBricks)
+			for _, v := range base.Voxels {
+				bx, _ := voxelObjectBrickCoordinate(v.X)
+				by, _ := voxelObjectBrickCoordinate(v.Y)
+				bz, _ := voxelObjectBrickCoordinate(v.Z)
+				if _, replaced := selected[[3]int32{bx, by, bz}]; !replaced {
+					records = append(records, v)
+				}
+			}
+		} else {
+			records = append(records, base.Voxels...)
+		}
 		records = append(records, payload.Voxels...)
 		result.Voxels = voxelObjectCanonicalGeometry(records)
 	}

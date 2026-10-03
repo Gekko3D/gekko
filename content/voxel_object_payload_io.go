@@ -8,7 +8,7 @@ import (
 	"github.com/gekko3d/gekko/content/voxelcodec"
 )
 
-// SaveVoxelObjectPayload durably replaces a schema 2 payload. The codec is
+// SaveVoxelObjectPayload durably replaces a schema 2 or 3 payload. The codec is
 // borrowed and a successful result follows existing atomic file publication.
 func SaveVoxelObjectPayload(path string, payload *VoxelObjectPayloadDef, codec *voxelcodec.Codec) (voxelcodec.Info, error) {
 	data, info, err := EncodeVoxelObjectPayload(payload, codec)
@@ -47,7 +47,7 @@ func LoadVoxelObjectPayload(path string, codec *voxelcodec.Codec) (*VoxelObjectP
 		if err != nil {
 			return nil, voxelcodec.Info{}, err
 		}
-		payload, err := voxelObjectPayloadFromDocument(doc)
+		payload, err := voxelObjectPayloadFromDocument(doc, codec)
 		if err != nil {
 			return nil, voxelcodec.Info{}, err
 		}
