@@ -17,6 +17,8 @@ func BuildXBrickMap(writes iter.Seq[VoxelWrite]) *XBrickMap {
 	if writes == nil {
 		return x
 	}
+	// Fresh private bricks have no auxiliary data, so each halo key needs marking once.
+	batch := voxelEditBatch{halos: x.DirtyBricks}
 	for w := range writes {
 		sKey, bKey := sectorBrickKeyForVoxel(w.X, w.Y, w.Z)
 		vx, vy, vz := w.X%BrickSize, w.Y%BrickSize, w.Z%BrickSize
@@ -55,7 +57,7 @@ func BuildXBrickMap(writes iter.Seq[VoxelWrite]) *XBrickMap {
 		brick.SetVoxel(vx, vy, vz, w.Value)
 		// Record each changed write, including transient/deleted geometry, so
 		// adjacent normal uploads retain the same coverage as live edits.
-		x.markVoxelNormalHaloDirty(w.X, w.Y, w.Z)
+		x.markVoxelNormalHaloDirtyBatched(w.X, w.Y, w.Z, &batch)
 		if brick.IsEmpty() {
 			sector.RemoveBrickIfEmpty(bKey[3], bKey[4], bKey[5])
 			x.DirtySectors[sKey] = true

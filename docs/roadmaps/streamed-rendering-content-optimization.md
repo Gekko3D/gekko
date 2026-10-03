@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5j, E1a–E1b and P1a complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b and P1a complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -771,12 +771,14 @@ This workflow does not independently authorize tests, delegation or commits.
 | E1b | `2c5bc1b` | Ordered synchronous writes and built-in backing shell materialization | [Edit contract](../renderer/editing.md#ordered-edit-streams) |
 | P5i | `80c0f25` | Streamed cold authored and level-brush composite rasterization | [Composition contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
 | P5j | `14c1d08` | Batched fresh shift/resample/disconnected-component reconstruction | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
-| P1a | This commit; editor `df2f3c8` | Raw-authoritative point-value accessor and consumer migration | [Read contract](../renderer/runtime.md#voxel-point-reads) |
+| P1a | `6397967`; editor `df2f3c8` | Raw-authoritative point-value accessor and consumer migration | [Read contract](../renderer/runtime.md#voxel-point-reads) |
+| P5k | This commit | Exact deduplicated normal-halo marking in fresh constructors | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: constructor normal-halo bookkeeping, then resolve compact CPU ownership
-before dependent P1/C1 work. Remaining S1/S2/S3 owners and extraction are still
+Next: scope compact private prepared backing under existing cache ownership;
+resolve broad CPU ownership and format decisions before dependent P1/C1 work.
+Remaining S1/S2/S3 owners and extraction are still
 partial. No dirty-only extraction is approved. Preserve public mutation
 compatibility and conditional proposals.
 
@@ -1927,6 +1929,29 @@ baseline failure. Editor production builds pass. No compact memory gain or
 pixel parity/FPS claim. Existing tests, raw writes, stale metadata behavior,
 snapshot/export formats and unrelated changes are preserved. Next: deduplicate
 fresh-constructor normal-halo bookkeeping before the compact ownership gate.
+
+### P5k: Fresh-constructor normal halos
+
+This commit reuses the fresh constructor's existing dirty keys to deduplicate
+normal-halo marking. Exact dirty history, transient deletions, tombstones and
+ordered values remain. Focused parity, race, full engine, five consumer builds
+and native terrain readiness/edit/collision/save-reload/cleanup checks passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume . -run '^(TestP5k|TestP5f|TestP5g|TestP5h|TestS4c|TestImportedWorld|TestTerrain)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -run '^(TestP5k|TestP5f|TestSetVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5k-terrain-smoke /tmp/gekko-p5d-smoke.go
+/tmp/gekko-p5k-terrain-smoke > /tmp/gekko-p5k-terrain-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-p5k-construction-bench.go
+```
+
+Disposable Go 1.25.4 darwin/arm64 32³ constructor samples crossing negative
+sector boundaries measured uniform 6.90 to 4.01 ms and mixed 6.91 to 3.95 ms;
+allocations increased from 132 to 133. No extra scratch map or retained owner;
+per-write halo enumeration remains. Existing tests and unrelated changes
+preserved. No pixel parity/FPS claim. Next: private prepared-cache compaction
+without changing public dense mutation APIs.
 
 Consumer commands for these steps:
 

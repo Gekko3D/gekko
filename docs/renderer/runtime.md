@@ -57,7 +57,9 @@ the current dense payload, without live GPU offsets or shared mutable backing.
 Imported full/proxy construction streams effective material values through this
 builder. Source-zero records remain ignored, decoded records remain authoritative,
 and auxiliary normal records attach afterward through the existing copied path.
-Per-write halo bookkeeping and decoded voxel-record storage remain.
+Fresh construction uses its existing dirty keys to mark each normal-halo key
+once, retaining exact transient/deleted coverage without another scratch map.
+Per-write halo enumeration and decoded voxel-record storage remain.
 
 Terrain columns, voxel-object snapshots and offline imported aux construction use
 the same dense builder. Terrain retains column order and its supplied solid
