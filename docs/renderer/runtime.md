@@ -474,6 +474,25 @@ Current transparency modes:
 - `VisibleObjects` drives main scene buffers and the camera-facing BVH.
 - `ShadowObjects` drives a broader shadow BVH so off-screen casters can still affect visible receivers.
 
+### Normal neighbor preparation
+
+After structural dirty preparation, each voxel update snapshots original dirty
+bricks before propagating cross-object normal halos. Halo propagation runs even
+when uploads are paused. One invocation-local lazy getter builds the full live
+`Scene.Objects` neighbor context only for qualifying halo work or runtime auxiliary
+baking. Valid precomputed sidecars bypass it. Idle/material-only frames need no
+context unless dirty adjacency/planet sources require halo propagation.
+
+Full-scene hidden neighbors, last duplicate ownership, explicit adjacency over
+terrain fallback and current metadata remain the normal contract. No context or
+object references survive the update. Packed occupancy/normal bytes and upload
+completion remain unchanged.
+
+`VoxelNormalContextBuildCount` counts cumulative actual context builds;
+`VoxelNormalContextObjectVisitsLastUpdate` resets each update and counts entries
+visited by that build, including nil entries. Dirty inspection, allocation cleanup
+and upload-planning scans remain. These counters do not imply a frame-time gain.
+
 ### Terrain and planet lookup preparation
 
 `UpdateScene` prepares both lookup buffers in one live `VisibleObjects` pass.

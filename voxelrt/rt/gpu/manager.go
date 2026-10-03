@@ -215,6 +215,9 @@ type GpuBufferManager struct {
 	ObjectLookupInputVisitsLastPrepare int
 	objectLookupCache                  objectLookupCacheOwner
 
+	VoxelNormalContextBuildCount             uint64
+	VoxelNormalContextObjectVisitsLastUpdate int
+
 	// G-Buffer Textures
 	GBufferDepth    *wgpu.Texture
 	GBufferNormal   *wgpu.Texture

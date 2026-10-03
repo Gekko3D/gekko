@@ -166,8 +166,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	}
 
 	m.prepareVoxelStructureDirtyState(scene)
-	normalBakeContext := newVoxelNormalBakeContext(scene)
-	markCrossObjectNormalHaloDirty(scene, normalBakeContext)
+	normalBakeContext := m.prepareVoxelNormalBakeContext(scene)
 
 	m.serviceVoxelUploads(scene, func(work voxelUploadWork) bool {
 		return m.executeVoxelUpload(normalBakeContext, work)
@@ -527,7 +526,7 @@ func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorG
 	mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.SectorTableBuf, uint64(info.SlotIndex)*32, sData))
 }
 
-func (m *GpuBufferManager) uploadBrick(ctx voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int) {
+func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int) {
 	if brick == nil {
 		return
 	}
@@ -602,7 +601,7 @@ func (m *GpuBufferManager) uploadBrick(ctx voxelNormalBakeContext, obj *core.Vox
 			auxBytes = brick.PrecomputedAux
 		} else {
 			start := time.Now()
-			auxBytes = buildVoxelAuxBytes(ctx, obj, brick, brickOrigin)
+			auxBytes = buildVoxelAuxBytesWithContext(context, obj, brick, brickOrigin)
 			m.VoxelRuntimeNormalBakeDuration += time.Since(start)
 		}
 		mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot)*VoxelAuxRecordBytes, auxBytes))

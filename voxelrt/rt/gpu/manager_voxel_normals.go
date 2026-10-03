@@ -68,6 +68,31 @@ func newVoxelNormalBakeContext(scene *core.Scene) voxelNormalBakeContext {
 }
 
 func markCrossObjectNormalHaloDirty(scene *core.Scene, ctx voxelNormalBakeContext) {
+	markCrossObjectNormalHaloDirtyWithContext(scene, func() voxelNormalBakeContext { return ctx })
+}
+
+// The getter and its live object references belong only to this update. Dirty
+// halo work and runtime baking share one full-scene context, built on demand.
+func (m *GpuBufferManager) prepareVoxelNormalBakeContext(scene *core.Scene) func() voxelNormalBakeContext {
+	m.VoxelNormalContextObjectVisitsLastUpdate = 0
+	var ctx voxelNormalBakeContext
+	built := false
+	context := func() voxelNormalBakeContext {
+		if !built {
+			ctx = newVoxelNormalBakeContext(scene)
+			built = true
+			m.VoxelNormalContextBuildCount++
+			if scene != nil {
+				m.VoxelNormalContextObjectVisitsLastUpdate = len(scene.Objects)
+			}
+		}
+		return ctx
+	}
+	markCrossObjectNormalHaloDirtyWithContext(scene, context)
+	return context
+}
+
+func markCrossObjectNormalHaloDirtyWithContext(scene *core.Scene, context func() voxelNormalBakeContext) {
 	if scene == nil {
 		return
 	}
@@ -90,10 +115,10 @@ func markCrossObjectNormalHaloDirty(scene *core.Scene, ctx voxelNormalBakeContex
 	for _, snapshot := range snapshots {
 		obj := snapshot.obj
 		if _, _, _, ok := voxelObjectAdjacencyMetadata(obj); ok {
-			markVoxelAdjacencyNormalHaloDirty(ctx, obj, snapshot.bricks)
+			markVoxelAdjacencyNormalHaloDirty(context(), obj, snapshot.bricks)
 		}
 		if obj.IsPlanetTile && obj.PlanetTileGroupID != 0 {
-			markPlanetTileNormalHaloDirty(ctx, obj)
+			markPlanetTileNormalHaloDirty(context(), obj)
 		}
 	}
 }
@@ -230,6 +255,13 @@ func voxelObjectAdjacencyMetadata(obj *core.VoxelObject) (uint32, [3]int, int, b
 		return obj.TerrainGroupID, obj.TerrainChunkCoord, obj.TerrainChunkSize, true
 	}
 	return 0, [3]int{}, 0, false
+}
+
+func buildVoxelAuxBytesWithContext(context func() voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, brickOrigin [3]int) []byte {
+	if brick != nil && len(brick.PrecomputedAux) == VoxelAuxRecordBytes {
+		return brick.PrecomputedAux
+	}
+	return buildVoxelAuxBytes(context(), obj, brick, brickOrigin)
 }
 
 func buildVoxelAuxBytes(ctx voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, brickOrigin [3]int) []byte {

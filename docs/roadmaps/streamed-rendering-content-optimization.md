@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3t, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -184,6 +184,12 @@ Deterministic prepare/commit/upload/retry/retain/retire queues with stable ties/
 
 Owners: streamed runtime, renderer bridge, `app_voxel_residency.go`, GPU upload manager. Acceptance: global limits hold for many objects; delayed/failed uploads and teleports retain valid coverage and safe collision.
 
+Next commit-bound step: [S1g opt-in resumable placements](streamed-rendering-s1b.md#s1g-opt-in-resumable-placement-commits),
+approved 2026-10-03. Preserve default synchronous behavior; enabled managed
+runtimes admit whole placement units across frames and persist all partial edits.
+Resolve transaction lifetime, exact persistence ownership and synchronous loading
+before enabling the unit budget. One expensive placement/hook remains unbounded.
+
 ### S2. Bound caches and worker throughput by bytes
 
 Budget decoded content, prepared geometry, pending results, retained GPU data, normals, materials and editable patches by bytes. Bound `RuntimeContentLoader`; geometry eviction alone leaves source arrays resident.
@@ -198,7 +204,7 @@ Acceptance: total cache/pending memory stays bounded while traveling; concurrent
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3t implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal, live-validated material fingerprint reuse, one-pass linked-emitter aggregation and bounded lookup preparation reuse. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3u implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal, live-validated material fingerprint reuse, one-pass linked-emitter aggregation, bounded lookup reuse and lazy normal neighbor preparation. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
 Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
@@ -249,6 +255,29 @@ duplicates/collisions, idle reuse and capacity/bypass/reset boundaries. Public
 build/visit/byte diagnostics verify work and retention. Run focused GPU checks,
 full engine/consumer checks and native mixed lookup rendering. No dirty-only
 extraction, shader layout change or GPU publication latch is approved here.
+
+#### S3u: Build normal neighbor context only when needed
+
+Keep one invocation-local lazy context for normal processing. After structural
+dirty preparation, capture original dirty-brick snapshots before halo propagation.
+Build the full live `Scene.Objects` neighbor maps once only for qualifying dirty
+adjacency/planet halo work or actual runtime auxiliary baking. Propagation still
+runs with a zero upload budget. Idle, precomputed-only and material-only work
+need no context unless a dirty cross-object source requires propagation.
+
+Preserve last-duplicate ownership, explicit adjacency over terrain fallback,
+planet overlap, direct metadata writes, packed normal bytes and upload completion.
+Keep the existing pure context/normal helpers. Retain no cross-frame pointers,
+cache or dirty-only neighbor extraction. Public build/visit diagnostics describe
+actual context construction, not all renderer scans.
+
+Files: `manager_voxel.go`, `manager_voxel_normals.go`, the execution seam and
+manager diagnostics. Confidence is High after independent architecture review;
+no human choice remains. Use separate tests/implementation and independent
+PRE/POST reviews for the deferred extraction boundary. Cover idle/precomputed
+bypass, real same-frame seam bytes/halo propagation with a paused upload budget,
+original-snapshot noncascade and live neighbor metadata/duplicate changes.
+Run focused GPU checks, engine/consumer checks and native mixed lookup rendering.
 
 ### S4. Remove synchronous persistence from unload
 
@@ -485,7 +514,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5a | `33bc039` | Independent worker registration copies with single-use adoption | [Asset ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 | S3s | `6d35be0` | Shared current scan for automatic linked-light radii | [Renderer contract](../renderer/runtime.md#linked-emitter-source-radii) |
 | P5b | `9463579` | Worker terrain geometry with exact adopted asset cleanup | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
-| S3t | This commit | One-pass live lookup capture with bounded CPU table reuse | [Renderer contract](../renderer/runtime.md#terrain-and-planet-lookup-preparation) |
+| S3t | `ba02753` | One-pass live lookup capture with bounded CPU table reuse | [Renderer contract](../renderer/runtime.md#terrain-and-planet-lookup-preparation) |
+| S3u | This commit | Invocation-local normal context builds only for halo/bake work | [Normal contract](../renderer/runtime.md#normal-neighbor-preparation) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1098,7 +1128,7 @@ remain main-thread work. Existing tests and unrelated changes preserved.
 
 ### S3t: Bounded visible object lookup reuse
 
-This commit, completed 2026-10-03. One live visible-object pass replaces three
+Commit `ba02753`, completed 2026-10-03. One live visible-object pass replaces three
 lookup scans; exact scalar rows reuse terrain/planet tables on idle frames.
 Retained key/byte capacities have a configurable 4 MiB default ceiling. Shader
 bytes, duplicates/collisions, direct edits and existing per-frame GPU writes remain.
@@ -1119,6 +1149,31 @@ below passed. Native mixed planet/terrain check passed: five lookup builds over
 40 frames, 416 retained bytes, paused uploads, Ready visibility and Stop cleanup.
 This is CPU work evidence, not pixel parity or a measured FPS gain. Lookup writes,
 temporary builds, other renderer scans and large commit units remain.
+
+### S3u: Lazy normal neighbor preparation
+
+This commit, completed 2026-10-03. Normal halo propagation and runtime aux baking
+share one invocation-local lazy full-scene context. Idle/material/precomputed
+work skips neighbor map construction when no dirty cross-object source needs it.
+Original dirty snapshots, zero-budget halos, hidden neighbors and packed normal
+bytes remain intact. Separate tests/implementation and independent PRE/POST
+reviews passed. The user also approved the S1g opt-in publication contract.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^(TestS3u|TestBuildVoxelAuxBytes|TestMarkCrossObjectNormalHaloDirty|TestPrepareVoxelStructureDirtyState|TestS1b|TestS2d)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^(TestS3u|TestBuildVoxelAuxBytes|TestMarkCrossObjectNormalHaloDirty|TestPrepareVoxelStructureDirtyState|TestS1b|TestS2d)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke /tmp/gekko-s3u-smoke.go
+/bin/zsh -c '/tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke > /tmp/gekko-s1e-smoke.log 2>&1'
+```
+
+Focused checks 0.465s, race 1.475s, engine root 15.211s; five consumer commands
+below passed. Native mixed lookup/terrain check passed: 33 context builds over
+50 frames, zero idle context visits, 30-frame upload pause, Ready visibility and
+owned asset cleanup. No pixel parity/FPS claim. Dirty inspection, allocation and
+upload-planning scans remain; resumable commits and individual large units are next.
 
 Consumer commands for these steps:
 

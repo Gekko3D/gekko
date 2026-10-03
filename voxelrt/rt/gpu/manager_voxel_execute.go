@@ -3,7 +3,7 @@ package gpu
 // executeVoxelUpload receives only admitted work. Atlas reclamation across the
 // complete unit precedes allocation, so a later cleared record can supply an
 // earlier new brick. Service owns dirty/material completion and counters.
-func (m *GpuBufferManager) executeVoxelUpload(ctx voxelNormalBakeContext, work voxelUploadWork) bool {
+func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeContext, work voxelUploadWork) bool {
 	if work.kind == voxelUploadMaterial {
 		mat := m.MaterialAllocations[work.object]
 		mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(mat.MaterialOffset)*64, buildMaterialData(work.object.MaterialTable)))
@@ -32,7 +32,7 @@ func (m *GpuBufferManager) executeVoxelUpload(ctx voxelNormalBakeContext, work v
 		if brick == nil {
 			mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(info.BrickTableIndex+uint32(i))*BrickRecordSize, make([]byte, BrickRecordSize)))
 		} else {
-			m.uploadBrick(ctx, work.object, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(key, i))
+			m.uploadBrick(context, work.object, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(key, i))
 		}
 	}
 	return true
