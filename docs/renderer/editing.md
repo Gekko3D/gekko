@@ -69,6 +69,12 @@ intermediate write list or new shared owner is introduced.
 public `Brick.Payload` access retain their mutable contracts. Managed maps are
 CPU owners and do not inherit the source's GPU editing mode.
 
+`NewManagedXBrickMapWithBase(base, current)` defensively copies both inputs and
+computes final assignments relative to the original base once. Nil inputs mean
+empty geometry. It preserves current auxiliary data, bounds, revisions and
+tombstones through `XBrickMap.Copy` semantics; deriving history does not invoke
+edit mutators. Both inputs require exclusive access during construction.
+
 `GetVoxel`, `SetVoxel` and `ApplyVoxelWrites` retain dense voxel, material,
 revision, bounds and fitted-normal halo semantics. Sealed `Fork` shares private
 bricks with independent metadata. Writes detach affected bricks before mutation,
@@ -191,7 +197,9 @@ base identity. Internal qualification reads metadata without scanning geometry;
 changed effective resolution, unsupported ownership, current geometry-reference
 replacement or exposure selects full fallback. Public exposure permanently releases the
 managed entry's provenance. Foreign overrides, unbound snapshot registrations
-and generic managed registrations do not inherit authored eligibility.
+and generic managed registrations do not inherit authored eligibility. An exact
+owned streamed delta snapshot can restore its canonical base through the
+[loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading).
 
 For streamed persistence, construction provenance alone is insufficient. Enable
 also verifies the exact loader-owned authored asset/part selected by the actual

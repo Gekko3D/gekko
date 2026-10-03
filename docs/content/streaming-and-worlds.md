@@ -1186,8 +1186,24 @@ ownership. Explicit managed enable of actual placement items adopts its private
 override into the same streaming geometry lease, including full-fallback origins;
 unload and successful Stop release it independently of current authored refs.
 [Authored-owner qualification](../renderer/editing.md#authored-shape-base-provenance)
-is captured once and queried without geometry reconstruction. Managed
-edit-history restoration remains a follow-up.
+is captured once and queried without geometry reconstruction.
+
+At explicit managed Enable, the current selected schema-2 `base_delta` can
+restore original canonical tracking. Proof requires the exact existing snapshot
+lease and an unmanaged source, actual owner membership, selected authored path
+and matching effective lattice. Enable decodes the current file, resolves it
+against a fresh loader-owned canonical shape, and independently compares the
+isolated live primary geometry with that result. The current payload is
+authoritative, including a matching replacement at the same path. Current Aux,
+revisions and pivot headers survive; the old leased asset is deleted only after
+the new owner has copied current data.
+
+Any failed proof preserves successful ordinary managed Enable with an unbound
+construction base and full persistence fallback. Current v1/full payloads,
+foreign or already-managed sources and primary geometry drift cannot restore
+canonical history. Repeating Enable or correcting an initially wrong lattice
+does not requalify that owner. Proof runs once at Enable, including synchronous
+placement hooks; save and acknowledgement do not rebuild the base.
 
 ### Ordinary object override persistence
 
@@ -1227,9 +1243,11 @@ launch can retain saved A as the baseline while unsaved B remains pinned for
 recapture. Changed owner/path/lattice suppresses an incompatible runtime reference
 acknowledgement. Failures preserve existing references and retry ownership.
 
-Loaded delta geometry still uses independent dense registration and has no
-restored tracked history. Cheaper full compact selection and restoration remain
-follow-ups; no delta chain or persistent base cache is introduced.
+Loaded delta geometry uses independent dense registration until explicit Enable
+restores tracking under the loading contract above. Further edits and reverts
+remain relative to the original canonical base across eviction/reload. Cheaper
+full compact selection remains a follow-up; no delta chain or persistent base
+cache is introduced.
 
 ### Payload and manifest publication
 

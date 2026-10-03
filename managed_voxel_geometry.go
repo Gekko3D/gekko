@@ -178,15 +178,22 @@ func EnableManagedVoxelGeometry(cmd *Commands, assets *AssetServer, eid EntityId
 	}
 	source, _ := assets.getVoxelGeometry(vmc.GeometryAsset())
 	entry := assets.managedVoxelEntry(vmc.GeometryAsset())
-	var owner *volume.ManagedXBrickMap
-	if entry != nil && !entry.exposed && entry.app == nil {
-		owner = entry.owner.Fork()
-	} else {
-		owner = volume.NewManagedXBrickMap(source.XBrickMap)
+	owner, restoredBase, restoredBinding := restoreManagedVoxelPersistenceOwner(cmd, assets, eid, vmc, source.XBrickMap)
+	if owner == nil {
+		if entry != nil && !entry.exposed && entry.app == nil {
+			owner = entry.owner.Fork()
+		} else {
+			owner = volume.NewManagedXBrickMap(source.XBrickMap)
+		}
 	}
 	sourceRefs := vmc
 	vmc.OverrideGeometry = assets.registerManagedVoxelOwner(owner, source.SourcePath, cmd.app, eid)
-	assets.qualifyManagedAuthoredVoxelBase(sourceRefs, entry, vmc.OverrideGeometry)
+	if restoredBinding != nil {
+		restored := assets.managedVoxelEntry(vmc.OverrideGeometry)
+		restored.authoredBase, restored.persistenceBinding = restoredBase, restoredBinding
+	} else {
+		assets.qualifyManagedAuthoredVoxelBase(sourceRefs, entry, vmc.OverrideGeometry)
+	}
 	// Preserve authored pivot bounds; current collision bounds come from payload.
 	assets.mu.Lock()
 	override := assets.voxModels[vmc.OverrideGeometry]
@@ -194,7 +201,11 @@ func EnableManagedVoxelGeometry(cmd *Commands, assets *AssetServer, eid EntityId
 	assets.voxModels[vmc.OverrideGeometry] = override
 	assets.mu.Unlock()
 	cmd.AddComponents(eid, &vmc)
-	captureManagedVoxelPersistenceBinding(cmd, assets, eid, vmc.OverrideGeometry)
+	if restoredBinding != nil {
+		leaseManagedVoxelOverride(cmd, assets, eid, vmc.OverrideGeometry)
+	} else {
+		captureManagedVoxelPersistenceBinding(cmd, assets, eid, vmc.OverrideGeometry)
+	}
 	return nil
 }
 

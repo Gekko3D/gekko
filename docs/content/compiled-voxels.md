@@ -241,5 +241,5 @@ whole-file JSON acceptance, without applying C1 limits. Compiled schema 1 and
 schema-2 JSON are rejected. The runtime's shape-only
 [override loading contract](streaming-and-worlds.md#ordinary-object-override-loading)
 adds v2 resolution. [Runtime persistence](streaming-and-worlds.md#ordinary-object-override-persistence)
-selects sparse deltas through existing S4 publication; managed history restoration
-remains a separate step.
+selects sparse deltas through existing S4 publication. Explicit managed Enable
+can restore canonical history under the loading contract above.

@@ -175,9 +175,10 @@ proposed gate: ordinary placement items do not automatically receive
 residency owner. Ordinary authored shapes can already opt into managed CPU
 ownership without changing ticket admission or the generic marker exclusion.
 
-The remaining E2 ownership step binds managed provenance to the actual authored
+E2b3 binds managed provenance to the actual authored
 placement/item and adopts private overrides into existing streaming geometry
 leases. Verify canonical owner identity once at enable, then use metadata-only
 eligibility checks before bounded S4 capture. No new residency owner or ticket
-integration is required. Loaded full snapshots retain their unbound fallback
-until a separate restoration step establishes canonical tracking.
+integration is required. E2b5 restores canonical tracking for verified current
+base-delta snapshots; loaded full snapshots retain their unbound fallback. See
+the [loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading).

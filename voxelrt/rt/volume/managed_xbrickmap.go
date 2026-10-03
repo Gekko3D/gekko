@@ -35,6 +35,60 @@ func NewManagedXBrickMap(source *XBrickMap) *ManagedXBrickMap {
 	return &ManagedXBrickMap{current: shareManagedMap(base), base: base}
 }
 
+// NewManagedXBrickMapWithBase defensively copies independent original and
+// current geometry, preserving the current Copy metadata and auxiliary data.
+// Final primary assignments are computed once without invoking edit mutators.
+// Both sources require exclusive access during construction; nil means empty.
+func NewManagedXBrickMapWithBase(base, current *XBrickMap) *ManagedXBrickMap {
+	if base == nil {
+		base = NewXBrickMap()
+	} else {
+		base = base.Copy()
+	}
+	if current == nil {
+		current = NewXBrickMap()
+	} else {
+		current = current.Copy()
+	}
+	owner := &ManagedXBrickMap{base: base, current: current}
+	visit := func(source, other *XBrickMap, removals bool) {
+		for key, sector := range source.Sectors {
+			for i := 0; i < 64; i++ {
+				brick := sector.GetBrick(i%4, i/4%4, i/16)
+				if brick == nil {
+					continue
+				}
+				for x := 0; x < BrickSize; x++ {
+					for y := 0; y < BrickSize; y++ {
+						for z := 0; z < BrickSize; z++ {
+							value := brick.VoxelValue(x, y, z)
+							if value == 0 {
+								continue
+							}
+							coord := [3]int{key[0]*SectorSize + i%4*BrickSize + x, key[1]*SectorSize + i/4%4*BrickSize + y, key[2]*SectorSize + i/16*BrickSize + z}
+							_, counterpart := other.GetVoxel(coord[0], coord[1], coord[2])
+							if value == counterpart || removals && counterpart != 0 {
+								continue
+							}
+							if owner.changes == nil {
+								owner.changes = make(map[[3]int]uint8)
+							}
+							if removals {
+								owner.changes[coord] = 0
+							} else {
+								owner.changes[coord] = value
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	visit(current, base, false)
+	visit(base, current, true)
+	return owner
+}
+
 // shareManagedMap shares only bricks. Sector headers, pointer slices and all
 // mutable map metadata belong to the returned map, with a fresh identity.
 func shareManagedMap(source *XBrickMap) *XBrickMap {
