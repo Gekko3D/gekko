@@ -148,6 +148,24 @@ light, emitter and marker entities retain teardown ownership. Public spawn APIs
 and collapse eligibility remain unchanged. Collapsed composites do not gain a
 new per-item persistence identity or disk format.
 
+### Authored voxel collapse reuse
+
+Repeated eligible static collapses reuse the existing composite before
+rasterization, after current source/palette resolution and ordered part
+validation. Warm reuse preserves matching resolution, empty-part skipping,
+sample-error-before-zero-scale precedence and the nonempty additive-input rule.
+Sample existence uses model voxels (including zero colors) or nonzero raw payload
+in mask-selected bricks; occupancy flags/count alone are insufficient.
+
+Cache keys, cold baking, palette/part IDs and automatic fallback/forced errors
+are unchanged. Fully subtracted empty composites remain valid. Public edits to
+the cached composite remain visible on reuse; deletion permits cold rebuilding.
+`AssetServer.AuthoredVoxelCollapseStats()` reports cumulative `Builds` (cold
+rasterization attempts after source/palette/key resolution) and `Hits` (successful
+validated warm reuse). Reads are scalar and nil-server reads return zero. Source
+loading, temporary hierarchy resolution, palette/key work and live validation
+remain; these counters do not measure frame time.
+
 ## Source Paths and Provenance
 
 Several runtime asset records carry `SourcePath`.

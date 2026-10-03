@@ -69,6 +69,23 @@ type AssetServer struct {
 
 	preparedVoxelRendererCopies    map[AssetId]preparedVoxelRendererCopy
 	preparedVoxelRendererCopyStats PreparedVoxelRendererCopyStats
+	authoredVoxelCollapseStats     AuthoredVoxelCollapseStats
+}
+
+// AuthoredVoxelCollapseStats reports cold rasterization attempts and validated
+// warm composite reuses. Reading these counters performs no geometry work.
+type AuthoredVoxelCollapseStats struct {
+	Builds uint64
+	Hits   uint64
+}
+
+func (server *AssetServer) AuthoredVoxelCollapseStats() AuthoredVoxelCollapseStats {
+	if server == nil {
+		return AuthoredVoxelCollapseStats{}
+	}
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	return server.authoredVoxelCollapseStats
 }
 
 type AssetServerModule struct{}

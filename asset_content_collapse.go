@@ -158,7 +158,14 @@ func buildCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef
 		return result, err
 	}
 
-	combined := volume.NewXBrickMap()
+	cachedID, warm := assets.SharedVoxelGeometryByCacheKey(collapseKey)
+	var combined *volume.XBrickMap
+	if !warm {
+		assets.mu.Lock()
+		assets.authoredVoxelCollapseStats.Builds++
+		assets.mu.Unlock()
+		combined = volume.NewXBrickMap()
+	}
 	result.collapsedPartIDs = make(map[string]struct{}, len(resolvedParts))
 	additiveParts := 0
 	for _, part := range resolvedParts {
@@ -169,8 +176,14 @@ func buildCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef
 		if voxelGeometryIsEmpty(part.geometry) {
 			continue
 		}
-		if err := bakeResolvedPartIntoComposite(combined, part, voxelResolution); err != nil {
-			return collapsedAuthoredVoxelBuild{}, fmt.Errorf("collapse bake failed for part %s: %w", part.def.ID, err)
+		var bakeErr error
+		if warm {
+			bakeErr = validateWarmAuthoredCollapsePart(part)
+		} else {
+			bakeErr = bakeResolvedPartIntoComposite(combined, part, voxelResolution)
+		}
+		if bakeErr != nil {
+			return collapsedAuthoredVoxelBuild{}, fmt.Errorf("collapse bake failed for part %s: %w", part.def.ID, bakeErr)
 		}
 		if content.EffectiveAssetSourceOperation(part.def.Source) == content.AssetShapeOperationAdd {
 			additiveParts++
@@ -179,10 +192,16 @@ func buildCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef
 	if additiveParts == 0 {
 		return collapsedAuthoredVoxelBuild{}, fmt.Errorf("voxel collapse requires at least one non-empty additive voxel part")
 	}
-	combined.ComputeAABB()
-	combined.ClearDirty()
-
-	result.geometry = assets.RegisterSharedVoxelGeometryWithCacheKey(collapseKey, combined, collapseKey)
+	if warm {
+		assets.mu.Lock()
+		assets.authoredVoxelCollapseStats.Hits++
+		assets.mu.Unlock()
+		result.geometry = cachedID
+	} else {
+		combined.ComputeAABB()
+		combined.ClearDirty()
+		result.geometry = assets.RegisterSharedVoxelGeometryWithCacheKey(collapseKey, combined, collapseKey)
+	}
 	result.palette = paletteID
 	result.voxelResolution = voxelResolution
 	return result, nil
@@ -413,6 +432,56 @@ func bakeResolvedPartIntoComposite(dst *volume.XBrickMap, part authoredCollapseR
 		}
 	}
 	return nil
+}
+
+// Warm reuse preserves bake validation without allocating samples or rasterizing.
+// Empty parts have already been skipped, and sample absence precedes scale errors.
+func validateWarmAuthoredCollapsePart(part authoredCollapseResolvedPart) error {
+	if !collapseGeometryHasSamples(part.geometry) {
+		return fmt.Errorf("part %s has no voxel geometry", part.def.ID)
+	}
+	voxelScale := mgl32.Vec3{
+		part.voxelResolution * part.world.Scale.X(),
+		part.voxelResolution * part.world.Scale.Y(),
+		part.voxelResolution * part.world.Scale.Z(),
+	}
+	if voxelScale.X() == 0 || voxelScale.Y() == 0 || voxelScale.Z() == 0 {
+		return fmt.Errorf("part %s has zero voxel scale", part.def.ID)
+	}
+	return nil
+}
+
+func collapseGeometryHasSamples(geometry VoxelGeometryAsset) bool {
+	// Model rows are samples even when their color index is zero. Map samples
+	// follow VoxelObjectSnapshotFromXBrickMap: only mask-selected raw payloads,
+	// regardless of occupancy or solid-brick flags.
+	if len(geometry.VoxModel.Voxels) > 0 {
+		return true
+	}
+	if geometry.XBrickMap == nil {
+		return false
+	}
+	for _, sector := range geometry.XBrickMap.Sectors {
+		for i := 0; i < 64; i++ {
+			if sector.BrickMask64&(1<<i) == 0 {
+				continue
+			}
+			brick := sector.GetBrick(i%4, (i/4)%4, i/16)
+			if brick == nil {
+				continue
+			}
+			for z := 0; z < volume.BrickSize; z++ {
+				for y := 0; y < volume.BrickSize; y++ {
+					for x := 0; x < volume.BrickSize; x++ {
+						if brick.Payload[x][y][z] != 0 {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func collapseVoxelSamples(geometry VoxelGeometryAsset) []collapseVoxelSample {

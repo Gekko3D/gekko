@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c and P5a–P5d complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c and P5a–P5e complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -232,6 +232,30 @@ and scope fallback, single use, pending/asset cleanup and runtime-map readiness.
 Run focused race, engine/consumer checks and native terrain/edit/reload checks.
 One full validation read remains; pointer/revision alone cannot replace it.
 Late renderer installation, backed removals and ordinary snapshots keep fallback.
+
+#### P5e: Validated warm authored collapse reuse
+
+Completed: repeated collapsed placements reuse the existing registered asset
+before rasterization. Reuse that exact cached ID after current source,
+palette, resolution and ordered part validation. Preserve empty-part skipping,
+sample-error-before-zero-scale precedence and the nonempty additive-input rule.
+Do not add a final composite emptiness check; complete subtraction remains valid.
+
+Sample existence follows current sampling authority: nonempty model voxels
+(including zero color) or a nonzero raw payload in mask-selected map bricks.
+Occupancy flags/count alone cannot prove samples. Warm validation allocates no
+sample list and performs no transformed rasterization. Cold baking, cache key,
+palette publication, mutable cached composites, auto fallback and forced errors
+retain their current behavior and lifetime.
+
+Files: `asset_content_collapse.go`, server scalar statistics and owning asset
+docs. Confidence High after code and independent read-only audit; this extends
+existing reuse with no new cache owner or content format. Use the routine same
+test/implementation agent workflow. `AssetServer.AuthoredVoxelCollapseStats()`
+reports cold rasterization attempts (`Builds`) and validated warm reuses (`Hits`)
+without traversal. Cover repeated real spawns and current errors/empty outputs;
+run focused checks, full engine and consumer checks. Source/hierarchy resolution,
+palette/key work and live validation remain; no frame-time claim.
 
 ## 5. Streaming changes
 
@@ -663,7 +687,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3v | `0289f9f` | One-pass saved object override selection per chunk job | [Streaming contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
 | S2j | `4f2164e` | Direct inactive CPU material-table eviction candidates | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
 | P5d | `d149455` | Worker-prepared first terrain renderer copy with current validation | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
-| S2k | This commit | Worker-prepared registered storage descriptions and cached standalone policy charge | [Cache ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
+| S2k | `752f92e` | Worker-prepared registered storage descriptions and cached standalone policy charge | [Cache ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
+| P5e | This commit | Validated warm authored collapse reuse without repeated rasterization | [Asset contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1573,7 +1598,7 @@ frame-time claim. Frozen tests and unrelated changes preserved.
 
 ### S2k: Worker-prepared registered storage descriptions
 
-This commit transfers exact fresh full/proxy registration descriptions into the
+`752f92e` transfers exact fresh full/proxy registration descriptions into the
 existing physical ledger, avoiding main-thread node recapture/allocation. Lazy
 standalone charge reuse skips retention union work only for qualified independent
 copies. Pending metadata, interior aliases, attribution, pins and terminal
@@ -1593,6 +1618,28 @@ source lifetime are unchanged; no new native smoke needed. Flat identity loops,
 first/last reference walks and generic graph admission remain. Descriptor metadata
 adds pending storage; cache bookkeeping remains excluded from cache charge.
 No measured frame-time claim; macOS warnings exited successfully.
+
+### P5e: Validated warm authored collapse reuse
+
+This commit reuses existing collapsed geometry after current source/palette and
+ordered part validation. Warm hits allocate no composite or sample list and skip
+rasterization. Cold baking, current errors, empty parts/outputs, mutable cached
+geometry and cache lifetime retain their contracts. Scalar `Builds`/`Hits` expose
+actual work. See [asset ownership](../assets/runtime-assets.md#authored-voxel-collapse-reuse).
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestP5e|TestSpawnAuthoredAsset|TestResolveAuthoredCollapse|TestS1g|TestP5c)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused 2.092s, engine root 16.880s and all five consumer commands below passed.
+Final review completed; frozen tests and unrelated changes preserved. These checks
+ran before the pause; production has not changed since. No new native check was
+needed for unchanged geometry/GPU behavior. Source/hierarchy resolution,
+palette/key work and live validation remain; no measured frame-time claim.
+The user requested stopping after this commit; further implementation is deferred.
 
 Consumer commands for these steps:
 
