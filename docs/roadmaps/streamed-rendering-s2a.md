@@ -220,6 +220,35 @@ capacity would require different allocation/admission architecture. Shader layou
 normal bytes, upload readiness, collision and content formats remain unchanged.
 Use separate test/implementation agents and independent pre/post reviews.
 
+## S2j: Direct inactive CPU material-table candidates
+
+Status: implemented 2026-10-03; focused/race, engine and five consumer checks
+passed. See [delivery record](streamed-rendering-content-optimization.md#s2j-direct-inactive-cpu-material-table-candidates-1).
+
+Maintain an indexed minimum heap of inactive retained material keys ordered by
+existing `lastUsed`. Builder hits repair recency; completed pin maintenance
+removes current keys and inserts newly inactive keys using their saved age.
+Gather current keys from instances, then use one owner maintenance pass; keep
+post-eviction map pruning. Preserve
+capacity charges, budget meanings/deferred trim, active-frame recency, hidden
+streamed pins, borrower lifetime and hash/table construction. Equal ages remain
+unspecified. Sequence rebasing repairs order; removal clears references and
+empty ownership releases the heap. Saturated totals drain all inactive entries
+before recounting. Nonempty heap capacity may remain.
+
+Public `VoxelMaterialTableCacheStats.EvictionCandidateVisits` counts actual
+nonnull pressure victims cumulatively. Reads, no-pressure maintenance and
+all-pinned pressure add no visits. This removes candidate collection/sorting,
+not all maintenance scans or a total process-memory bound.
+
+Confidence is High from the established S2c/S2i pattern; no human choice remains.
+Files: material-table retention owner, focused tests and canonical renderer docs.
+Use separate tests/implementation and independent PRE/POST reviews. Cover exact
+victims among many pins, warm-hit/pin transitions, unchanged material/borrowed
+backing and observational metrics. Reuse S2c animation/deferred-budget coverage;
+run focused root/race checks and the full engine/consumer boundary. No changed
+GPU behavior requires native verification.
+
 ## S2i: Direct retained-GPU eviction candidates
 
 Status: implemented 2026-10-03; focused/race, engine and five consumer checks

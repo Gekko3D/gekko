@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"container/heap"
 	"sort"
 	"unsafe"
 
@@ -23,18 +24,55 @@ type VoxelMaterialTableCacheStats struct {
 	Builds        uint64
 	Hits          uint64
 	Evictions     uint64
+	// EvictionCandidateVisits counts cumulative nonnil pressure victims.
+	EvictionCandidateVisits uint64
 }
 
 type voxelMaterialTableEntry struct {
+	key             materialTableCacheKey
 	bytes, lastUsed uint64
 	pinned          bool
+	candidateIndex  int
+}
+
+// Entry identity survives owner-map compaction. Only inactive retained entries
+// belong to this heap; becoming inactive keeps the completed frame's saved age.
+type voxelMaterialTableCandidates []*voxelMaterialTableEntry
+
+func (h voxelMaterialTableCandidates) Len() int { return len(h) }
+func (h voxelMaterialTableCandidates) Less(i, j int) bool {
+	return h[i].lastUsed < h[j].lastUsed
+}
+func (h voxelMaterialTableCandidates) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].candidateIndex, h[j].candidateIndex = i, j
+}
+func (h *voxelMaterialTableCandidates) Push(value any) {
+	entry := value.(*voxelMaterialTableEntry)
+	entry.candidateIndex = len(*h)
+	*h = append(*h, entry)
+}
+func (h *voxelMaterialTableCandidates) Pop() any {
+	last := len(*h) - 1
+	entry := (*h)[last]
+	(*h)[last] = nil
+	entry.candidateIndex = -1
+	if last == 0 {
+		*h = nil
+	} else {
+		// A nonempty heap may keep peak capacity, but removed slots hold no refs.
+		*h = (*h)[:last]
+	}
+	return entry
 }
 
 type voxelMaterialTableRetention struct {
 	budgetBytes                  int64
-	entries                      map[materialTableCacheKey]voxelMaterialTableEntry
+	entries                      map[materialTableCacheKey]*voxelMaterialTableEntry
 	bytes, pinnedBytes, sequence uint64
 	builds, hits, evictions      uint64
+	evictionCandidateVisits      uint64
+	candidates                   voxelMaterialTableCandidates
 }
 
 // SetVoxelMaterialTableCacheBudgetBytes configures main-thread retention.
@@ -72,6 +110,7 @@ func (s *VoxelRtState) VoxelMaterialTableCacheStats() VoxelMaterialTableCacheSta
 		Entries: len(s.materialTableCache), Bytes: owner.bytes,
 		PinnedBytes: owner.pinnedBytes, MaxBytes: maxBytes, PressureBytes: pressure,
 		Builds: owner.builds, Hits: owner.hits, Evictions: owner.evictions,
+		EvictionCandidateVisits: owner.evictionCandidateVisits,
 	}
 }
 
@@ -109,8 +148,8 @@ func (s *VoxelRtState) nextMaterialTableUse() uint64 {
 		for i, key := range keys {
 			entry := owner.entries[key]
 			entry.lastUsed = uint64(i) + 1
-			owner.entries[key] = entry
 		}
+		heap.Init(&owner.candidates)
 		owner.sequence = uint64(len(keys))
 	}
 	owner.sequence++
@@ -120,15 +159,24 @@ func (s *VoxelRtState) nextMaterialTableUse() uint64 {
 func (s *VoxelRtState) touchMaterialTableCache(key materialTableCacheKey, table []core.Material) {
 	owner := &s.materialTableRetention
 	entry, present := owner.entries[key]
+	stamp := s.nextMaterialTableUse()
 	if !present {
 		if owner.entries == nil {
-			owner.entries = make(map[materialTableCacheKey]voxelMaterialTableEntry)
+			owner.entries = make(map[materialTableCacheKey]*voxelMaterialTableEntry)
 		}
-		entry.bytes = materialTableCharge(table)
+		entry = &voxelMaterialTableEntry{
+			key: key, bytes: materialTableCharge(table), lastUsed: stamp,
+			candidateIndex: -1,
+		}
+		owner.entries[key] = entry
 		owner.bytes = addMaterialTableBytes(owner.bytes, entry.bytes)
+		heap.Push(&owner.candidates, entry)
+		return
 	}
-	entry.lastUsed = s.nextMaterialTableUse()
-	owner.entries[key] = entry
+	entry.lastUsed = stamp
+	if entry.candidateIndex >= 0 {
+		heap.Fix(&owner.candidates, entry.candidateIndex)
+	}
 }
 
 // Run only after the complete instance pass and removed-object/key cleanup.
@@ -136,51 +184,43 @@ func (s *VoxelRtState) touchMaterialTableCache(key materialTableCacheKey, table 
 func (s *VoxelRtState) trimMaterialTableCache() {
 	owner := &s.materialTableRetention
 	if len(s.materialTableCache) == 0 {
-		s.materialTableCache, owner.entries = nil, nil
+		s.materialTableCache, owner.entries, owner.candidates = nil, nil, nil
 		owner.bytes, owner.pinnedBytes = 0, 0
 		return
 	}
-	stamp := s.nextMaterialTableUse()
-	for key, entry := range owner.entries {
-		entry.pinned = false
-		owner.entries[key] = entry
-	}
-	owner.pinnedBytes = 0
+	// Gather the complete distinct current-key set before owner maintenance.
+	// Hidden streamed objects participate through the same instance map.
+	activeKeys := make(map[materialTableCacheKey]struct{})
 	for _, obj := range s.instanceMap {
-		key, tracked := s.lastMaterialKeys[obj]
-		if !tracked {
-			continue
+		if key, tracked := s.lastMaterialKeys[obj]; tracked {
+			activeKeys[key] = struct{}{}
 		}
-		entry, retained := owner.entries[key]
-		if !retained || entry.pinned {
-			continue
+	}
+	stamp := s.nextMaterialTableUse()
+	owner.pinnedBytes = 0
+	for key, entry := range owner.entries {
+		_, entry.pinned = activeKeys[key]
+		if entry.pinned {
+			if entry.candidateIndex >= 0 {
+				heap.Remove(&owner.candidates, entry.candidateIndex)
+			}
+			entry.lastUsed = stamp
+			owner.pinnedBytes = addMaterialTableBytes(owner.pinnedBytes, entry.bytes)
+		} else if entry.candidateIndex < 0 {
+			heap.Push(&owner.candidates, entry)
 		}
-		entry.pinned, entry.lastUsed = true, stamp
-		owner.entries[key] = entry
-		owner.pinnedBytes = addMaterialTableBytes(owner.pinnedBytes, entry.bytes)
 	}
 	maxBytes := owner.maxBytes()
 	if owner.bytes <= maxBytes {
 		return
 	}
-	var inactive []materialTableCacheKey
-	for key, entry := range owner.entries {
-		if !entry.pinned {
-			inactive = append(inactive, key)
-		}
-	}
-	sort.Slice(inactive, func(i, j int) bool {
-		return owner.entries[inactive[i]].lastUsed < owner.entries[inactive[j]].lastUsed
-	})
 	evicted := false
 	saturated := owner.bytes == ^uint64(0)
-	for _, key := range inactive {
-		if !saturated && owner.bytes <= maxBytes {
-			break
-		}
-		entry := owner.entries[key]
-		delete(s.materialTableCache, key)
-		delete(owner.entries, key)
+	for len(owner.candidates) != 0 && (saturated || owner.bytes > maxBytes) {
+		entry := heap.Pop(&owner.candidates).(*voxelMaterialTableEntry)
+		owner.evictionCandidateVisits++
+		delete(s.materialTableCache, entry.key)
+		delete(owner.entries, entry.key)
 		if !saturated {
 			owner.bytes -= entry.bytes
 		}
@@ -201,10 +241,10 @@ func (s *VoxelRtState) trimMaterialTableCache() {
 	// Eviction releases only cache references. Objects and external borrowers
 	// keep valid backing; maps are rebuilt to release historical peak capacity.
 	var tables map[materialTableCacheKey][]core.Material
-	var entries map[materialTableCacheKey]voxelMaterialTableEntry
+	var entries map[materialTableCacheKey]*voxelMaterialTableEntry
 	if len(s.materialTableCache) != 0 {
 		tables = make(map[materialTableCacheKey][]core.Material, len(s.materialTableCache))
-		entries = make(map[materialTableCacheKey]voxelMaterialTableEntry, len(owner.entries))
+		entries = make(map[materialTableCacheKey]*voxelMaterialTableEntry, len(owner.entries))
 		for key, table := range s.materialTableCache {
 			tables[key] = table
 			entries[key] = owner.entries[key]

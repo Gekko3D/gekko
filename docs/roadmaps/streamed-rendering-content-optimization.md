@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2i, S3a–S3v, S4a–S4c and P5a–P5c complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2j, S3a–S3v, S4a–S4c and P5a–P5c complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -265,6 +265,15 @@ Completed: retain an inactive-map heap keyed by existing usage recency. Preserve
 pins, assigned-slot accounting and release; pressure selects victims directly
 without rebuilding/sorting all inactive candidates. Owner maintenance and stats
 scans remain. [Scope and verification](streamed-rendering-s2a.md#s2i-direct-retained-gpu-eviction-candidates).
+
+#### S2j: Direct inactive CPU material-table candidates
+
+Completed: index inactive CPU material keys by existing recency. Preserve S2c pins,
+capacity charges, deferred budget maintenance, borrowed backing and map pruning.
+Pressure selects victims directly, avoiding another owner scan and full inactive
+sort. Complete owner/instance pin scans remain. Use separate tests/implementation
+and independent PRE/POST reviews; public candidate visits protect the work bound.
+[Scope](streamed-rendering-s2a.md#s2j-direct-inactive-cpu-material-table-candidates).
 
 ### S3. Incremental selection and scene gathering
 
@@ -605,7 +614,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1h | `011de7d` | Structural-input voxel capacity planning | [Renderer contract](../renderer/runtime.md#voxel-capacity-planning) |
 | P5c | `1d93aab` | Worker-prepared snapshot registration with current authority | [Snapshot contract](../assets/runtime-assets.md#streamed-voxel-object-snapshot-registration) |
 | S2i | `7c0f5fa` | Direct inactive retained-GPU eviction candidates | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
-| S3v | This commit | One-pass saved object override selection per chunk job | [Streaming contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
+| S3v | `0289f9f` | One-pass saved object override selection per chunk job | [Streaming contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
+| S2j | This commit | Direct inactive CPU material-table eviction candidates | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1444,7 +1454,7 @@ and unrelated changes preserved; macOS warnings exited successfully.
 
 ### S3v: One-pass saved object override selection
 
-2026-10-03, this commit. Chunk job setup visits each world object override key
+2026-10-03, `0289f9f`. Chunk job setup visits each world object override key
 once, with no scan for an empty placement selection. Full-prefix matching,
 embedded NUL/overlapping IDs, original key/value authority, applied saved voxels
 and selected-file errors are preserved. Public last-job visits expose this bound.
@@ -1462,6 +1472,29 @@ No concurrency, GPU or lifetime change required new race/native checks. World
 key enumeration, prefix comparisons and selected snapshot I/O remain; no measured
 frame-time gain. Existing tests and unrelated changes preserved; macOS module
 stat-cache warnings exited successfully.
+
+### S2j: Direct inactive CPU material-table candidates
+
+2026-10-03, this commit. Material-cache pressure selects inactive keys directly
+by existing age. Completed maintenance gathers current keys and uses one owner
+pass; active/hidden pins, saved unpin age, capacity charges, saturated cleanup,
+map pruning and borrowed backing remain. Public visits count actual victims.
+Separate tests/implementation and independent PRE/POST reviews passed.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS2j|TestS2c|TestS3r|TestVoxelRtSystem|TestStreamedVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS2j|TestS2c|TestS3r|TestVoxelRtSystem|TestStreamedVoxel)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused 1.221s, race 2.709s, engine root 16.470s and all five consumer commands
+below passed. No GPU behavior changed; existing hidden-streamed coverage suffices
+without new native verification. Owner/instance scans, temporary current-key
+collection, hashing/building and post-eviction map pruning remain. Nonempty heap
+capacity may remain; no measured frame-time gain. Existing tests and unrelated
+changes preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 

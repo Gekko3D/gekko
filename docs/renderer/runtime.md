@@ -301,13 +301,22 @@ refresh LRU age without counting cache hits. Inactive entries are evicted oldest
 first until the budget fits or only pinned excess remains. Eviction releases
 cache references and prunes map capacity; borrowed/object material backing remains
 valid. Hashing, table construction and sharing semantics are unchanged.
+Inactive keys use an indexed minimum heap ordered by saved usage age. Warm hits
+repair its order; pin transitions remove/add eligibility without making newly
+inactive keys newer. Completed maintenance gathers current keys from instances,
+then makes one owner pass for pins/accounting. Pressure selects victims directly
+without collecting/sorting all inactive keys. Removed slots clear references;
+empty ownership releases the heap, while nonempty capacity may remain.
 
 `VoxelMaterialTableCacheStats()` returns a value with `Entries`, `Bytes`,
-`PinnedBytes`, `MaxBytes`, `PressureBytes`, `Builds`, `Hits` and `Evictions`.
+`PinnedBytes`, `MaxBytes`, `PressureBytes`, `Builds`, `Hits`, `Evictions` and
+`EvictionCandidateVisits`.
 Reads perform no work. Pins reflect completed maintenance; pressure is pinned
 bytes above the current maximum. Builds count actual table construction, hits
-count successful builder lookups, and evictions count removed cache keys. Private
-accounting owns retention. Nil state returns zero stats. Temporary construction,
+count successful builder lookups, and evictions count removed cache keys.
+Candidate visits count actual pressure victims cumulatively; reads, no-pressure
+maintenance and all-pinned pressure add none. Private accounting owns retention.
+Nil state returns zero stats. Temporary construction/active-key collection,
 external borrowers, assets and GPU allocations are excluded; this is not a process
 or GPU memory limit. [Ownership rationale](../roadmaps/streamed-rendering-s2a.md#s2c-cpu-material-table-cache-ownership-decision).
 
