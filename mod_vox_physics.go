@@ -140,7 +140,7 @@ func (v *voxelGridSnapshot) ForEachPrimitiveInRange(minX, minY, minZ, maxX, maxY
 					localY := gy - brickMinY
 					for gx := rangeMinX; gx < rangeMaxX; gx++ {
 						localX := gx - brickMinX
-						if brick.Payload[localX][localY][localZ] == 0 {
+						if brick.VoxelValue(localX, localY, localZ) == 0 {
 							continue
 						}
 						if !emitVoxelPrimitiveRange(gx, gy, gz, gx+1, gy+1, gz+1, voxelScale, fn) {
@@ -330,7 +330,7 @@ func DecomposeXBrickMap(xbm *volume.XBrickMap, vSize float32) []CollisionBox {
 					for vz := 0; vz < volume.BrickSize; vz++ {
 						for vy := 0; vy < volume.BrickSize; vy++ {
 							for vx := 0; vx < volume.BrickSize; vx++ {
-								if brick.Payload[vx][vy][vz] != 0 {
+								if brick.VoxelValue(vx, vy, vz) != 0 {
 									voxels[[3]int{boxox + vx, boxoy + vy, boxoz + vz}] = true
 								}
 							}

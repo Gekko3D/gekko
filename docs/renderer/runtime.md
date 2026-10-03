@@ -27,6 +27,19 @@ Related docs:
 - `volume.XBrickMap`: `voxelrt/rt/volume/`
   - owns sparse voxel storage, edit semantics, dirty tracking, traversal, and compression
 
+## Voxel point reads
+
+`(*volume.Brick).VoxelValue(x, y, z)` reads the authoritative dense payload cell.
+Indices must be within `[0, volume.BrickSize)`. Reads do not interpret or repair
+material flags, occupancy, atlas offsets or auxiliary normals. Public raw
+`Payload` edits remain visible, including when metadata is stale; copied bricks
+retain independent inline payloads.
+
+Engine queries, collision, GPU packing, snapshots and editor export use this
+accessor for point reads. Brick-owned mutation/scans and whole-array capture or
+comparison retain direct access. This is a migration prerequisite for compact
+storage; it changes neither representation nor immutable ownership.
+
 ## Dense voxel construction
 
 `volume.BuildXBrickMap(iter.Seq[volume.VoxelWrite])` consumes ordered writes once

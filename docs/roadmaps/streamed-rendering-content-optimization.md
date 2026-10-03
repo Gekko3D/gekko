@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5j and E1a–E1b complete. S1/S2/S3/P5/E1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5j, E1a–E1b and P1a complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -72,6 +72,11 @@ Share immutable payloads across assets, rendering, physics and navigation. Go po
 Benefit: less static memory/allocation/copying. Risk: rank lookup may cost more on heavily edited bricks; retain dense path. Occupancy-only consumers need not retain render normals.
 
 Owners: `volume/xbrickmap*.go`, `mod_vox_physics.go`, `navigation_graph_runtime.go`, `assets/voxel_assets.go`, imported-world preparation. Acceptance: identical authoritative voxels, material queries, raycasts, and unchanged asset instances after editing one instance.
+
+P1a migrates engine and editor point reads to the raw-authoritative
+`Brick.VoxelValue` accessor. Public dense payloads, writes and copy semantics
+remain. Compact representation and immutable ownership are still undecided;
+see [point reads](../renderer/runtime.md#voxel-point-reads).
 
 ### P2. Pack GPU brick records by sector occupancy
 
@@ -765,12 +770,14 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5h | `27d73de` | Dense ordinary VOX asset and persistence-input reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
 | E1b | `2c5bc1b` | Ordered synchronous writes and built-in backing shell materialization | [Edit contract](../renderer/editing.md#ordered-edit-streams) |
 | P5i | `80c0f25` | Streamed cold authored and level-brush composite rasterization | [Composition contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
-| P5j | This commit | Batched fresh shift/resample/disconnected-component reconstruction | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
+| P5j | `14c1d08` | Batched fresh shift/resample/disconnected-component reconstruction | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
+| P1a | This commit; editor `df2f3c8` | Raw-authoritative point-value accessor and consumer migration | [Read contract](../renderer/runtime.md#voxel-point-reads) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: remaining S1 scheduling/commit bounds, then S2 queues/cache owners and S3 notifications/extraction
-in delivery order. No dirty-only extraction is approved. Preserve public mutation
+Next: constructor normal-halo bookkeeping, then resolve compact CPU ownership
+before dependent P1/C1 work. Remaining S1/S2/S3 owners and extraction are still
+partial. No dirty-only extraction is approved. Preserve public mutation
 compatibility and conditional proposals.
 
 On 2026-10-03, the user prioritized large single-chunk stalls and recurring CPU
@@ -1893,6 +1900,33 @@ plus an 8³ disconnected block) measured Shift 16.84 to 4.56 ms, Resample(scale 
 (217 to 248, 103 to 132, 571 to 613). Selection, BFS and per-voxel work remain;
 no pixel parity/FPS claim. Next: migrate point-value readers before any compact
 storage decision. Unrelated changes preserved.
+
+### P1a: Raw-authoritative point reads
+
+This commit adds the read accessor and migrates engine point reads; editor export
+uses it in `df2f3c8`. New API tests reached RED before implementation. Focused
+checks, race, full engine tests, five consumer builds and native Metal
+query/reconstruction/upload/isolation/cleanup checks passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^(TestP1a|TestSetVoxel|TestP5j)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . ./voxelrt/rt/gpu
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume . -run '^(TestP1a|TestP5j|TestSetVoxel|TestVoxelGrid|TestVoxelObjectSnapshot|TestImportedWorldChunk|TestP5d)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p1a-smoke /tmp/gekko-p5j-smoke.go
+/tmp/gekko-p1a-smoke > /tmp/gekko-p1a-smoke.log 2>&1
+# gekko-editor/
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go test -overlay /tmp/gekko-p1a-editor-baseline-overlay.json ./src/modules/level_editor -run '^$'
+env GOCACHE=/tmp/gekko3d-gocache go build ./...
+```
+
+Editor tests fail to compile because `collectUIButtonLabelsForTest` and
+`containsButtonOrLabel` are missing; the unchanged HEAD overlay reproduces this
+baseline failure. Editor production builds pass. No compact memory gain or
+pixel parity/FPS claim. Existing tests, raw writes, stale metadata behavior,
+snapshot/export formats and unrelated changes are preserved. Next: deduplicate
+fresh-constructor normal-halo bookkeeping before the compact ownership gate.
 
 Consumer commands for these steps:
 

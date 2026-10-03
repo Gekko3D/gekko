@@ -558,7 +558,7 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 		for z := 0; z < 8; z++ {
 			for y := 0; y < 8; y++ {
 				for x := 0; x < 8; x++ {
-					payload[idx] = brick.Payload[x][y][z]
+					payload[idx] = brick.VoxelValue(x, y, z)
 					idx++
 				}
 			}

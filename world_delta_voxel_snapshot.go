@@ -30,7 +30,7 @@ func VoxelObjectSnapshotFromXBrickMap(xbm *volume.XBrickMap) *content.VoxelObjec
 			for vz := 0; vz < volume.BrickSize; vz++ {
 				for vy := 0; vy < volume.BrickSize; vy++ {
 					for vx := 0; vx < volume.BrickSize; vx++ {
-						val := brick.Payload[vx][vy][vz]
+						val := brick.VoxelValue(vx, vy, vz)
 						if val == 0 {
 							continue
 						}
@@ -152,7 +152,7 @@ func importedWorldChunkDefFromXBrickMap(worldID string, coord content.TerrainChu
 			for vz := 0; vz < volume.BrickSize; vz++ {
 				for vy := 0; vy < volume.BrickSize; vy++ {
 					for vx := 0; vx < volume.BrickSize; vx++ {
-						val := brick.Payload[vx][vy][vz]
+						val := brick.VoxelValue(vx, vy, vz)
 						if val == 0 {
 							continue
 						}

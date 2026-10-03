@@ -68,7 +68,7 @@ func BrickVoxelOccupied(brick *Brick, x, y, z int) bool {
 	if brick.Flags&BrickFlagSolid != 0 {
 		return true
 	}
-	return brick.Payload[x][y][z] != 0
+	return brick.VoxelValue(x, y, z) != 0
 }
 
 func DenseOccupancyLinearIndexLocal(x, y, z int) int {

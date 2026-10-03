@@ -200,7 +200,7 @@ func (x *XBrickMap) SplitDisconnectedComponents() []ComponentInfo {
 								if brick.Flags&BrickFlagSolid != 0 {
 									val = uint8(brick.AtlasOffset)
 								} else {
-									val = brick.Payload[vx][vy][vz]
+									val = brick.VoxelValue(vx, vy, vz)
 								}
 
 								gx, gy, gz := baseX+vx, baseY+vy, baseZ+vz
@@ -265,7 +265,7 @@ func (x *XBrickMap) findInternalBrickComponents(brick *Brick, gx, gy, gz int) []
 	for vz := 0; vz < 8; vz++ {
 		for vy := 0; vy < 8; vy++ {
 			for vx := 0; vx < 8; vx++ {
-				if brick.Payload[vx][vy][vz] == 0 {
+				if brick.VoxelValue(vx, vy, vz) == 0 {
 					continue
 				}
 				if (visited[vz] & (uint64(1) << (vx + vy*8))) != 0 {
@@ -298,7 +298,7 @@ func (x *XBrickMap) findInternalBrickComponents(brick *Brick, gx, gy, gz int) []
 								continue
 							}
 
-							if brick.Payload[nx][ny][nz] != 0 && (visited[nz]&(uint64(1)<<(nx+ny*8))) == 0 {
+							if brick.VoxelValue(nx, ny, nz) != 0 && (visited[nz]&(uint64(1)<<(nx+ny*8))) == 0 {
 								visited[nz] |= (uint64(1) << (nx + ny*8))
 								comp.voxels[nz] |= (uint64(1) << (nx + ny*8))
 								q = append(q, [3]int{nx, ny, nz})
@@ -345,7 +345,7 @@ func (x *XBrickMap) Shift(dx, dy, dz int) *XBrickMap {
 					for vz := 0; vz < BrickSize; vz++ {
 						for vy := 0; vy < BrickSize; vy++ {
 							for vx := 0; vx < BrickSize; vx++ {
-								val := brick.Payload[vx][vy][vz]
+								val := brick.VoxelValue(vx, vy, vz)
 								if val != 0 {
 									if !yield(VoxelWrite{X: brickOx + vx + dx, Y: brickOy + vy + dy, Z: brickOz + vz + dz, Value: val}) {
 										return
@@ -392,7 +392,7 @@ func (x *XBrickMap) GetVoxelCount() int {
 				for vz := 0; vz < BrickSize; vz++ {
 					for vy := 0; vy < BrickSize; vy++ {
 						for vx := 0; vx < BrickSize; vx++ {
-							if brick.Payload[vx][vy][vz] != 0 {
+							if brick.VoxelValue(vx, vy, vz) != 0 {
 								count++
 							}
 						}

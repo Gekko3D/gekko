@@ -100,7 +100,7 @@ func (x *XBrickMap) RayMarch(rayOrigin, rayDir mgl32.Vec3, tMin, tMax float32) (
 
 		// Inside a microcell, check voxels
 		vx, vy, vz := blx, bly, blz
-		paletteIdx := brick.Payload[vx][vy][vz]
+		paletteIdx := brick.VoxelValue(vx, vy, vz)
 		if paletteIdx != 0 {
 			// Hit!
 			vMin := mgl32.Vec3{

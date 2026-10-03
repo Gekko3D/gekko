@@ -32,6 +32,12 @@ func NewBrick() *Brick {
 	return &Brick{}
 }
 
+// VoxelValue reads the authoritative dense payload cell. Indices must be in
+// [0, BrickSize). The read does not repair metadata or invalidate auxiliary data.
+func (b *Brick) VoxelValue(bx, by, bz int) uint8 {
+	return b.Payload[bx][by][bz]
+}
+
 func (b *Brick) Copy() *Brick {
 	newB := *b
 	if len(b.PrecomputedAux) > 0 {

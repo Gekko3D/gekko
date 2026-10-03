@@ -321,7 +321,7 @@ func (x *XBrickMap) GetVoxel(gx, gy, gz int) (bool, uint8) {
 		return false, 0
 	}
 
-	val := brick.Payload[vx][vy][vz]
+	val := brick.VoxelValue(vx, vy, vz)
 	return val != 0, val
 }
 
@@ -433,7 +433,7 @@ func (x *XBrickMap) ComputeAABB() (mgl32.Vec3, mgl32.Vec3) {
 						for vx := 0; vx < ms; vx++ {
 							for vy := 0; vy < ms; vy++ {
 								for vz := 0; vz < ms; vz++ {
-									if brick.Payload[startVx+vx][startVy+vy][startVz+vz] != 0 {
+									if brick.VoxelValue(startVx+vx, startVy+vy, startVz+vz) != 0 {
 										vMin := mgl32.Vec3{
 											brickOx + float32(startVx+vx),
 											brickOy + float32(startVy+vy),

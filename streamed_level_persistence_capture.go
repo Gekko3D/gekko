@@ -294,7 +294,7 @@ func preflightStreamedPersistence(cmd *Commands, state *StreamedLevelRuntimeStat
 						for x := 0; x < volume.BrickSize; x++ {
 							for y := 0; y < volume.BrickSize; y++ {
 								for z := 0; z < volume.BrickSize; z++ {
-									if brick.Payload[x][y][z] != 0 {
+									if brick.VoxelValue(x, y, z) != 0 {
 										voxels++
 									}
 								}

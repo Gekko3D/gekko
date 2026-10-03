@@ -477,7 +477,7 @@ func collapseGeometryHasSamples(geometry VoxelGeometryAsset) bool {
 			for z := 0; z < volume.BrickSize; z++ {
 				for y := 0; y < volume.BrickSize; y++ {
 					for x := 0; x < volume.BrickSize; x++ {
-						if brick.Payload[x][y][z] != 0 {
+						if brick.VoxelValue(x, y, z) != 0 {
 							return true
 						}
 					}

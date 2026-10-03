@@ -36,7 +36,7 @@ func BuildXBrickMap(writes iter.Seq[VoxelWrite]) *XBrickMap {
 		}
 		current := uint8(0)
 		if brick != nil {
-			current = brick.Payload[vx][vy][vz]
+			current = brick.VoxelValue(vx, vy, vz)
 		}
 		if current == w.Value {
 			continue
