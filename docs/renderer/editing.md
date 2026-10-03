@@ -114,6 +114,22 @@ can expand or delete unrequested cells through existing dense mutators. Those
 rare paths reconcile counts and final history against the base in one target-brick
 pass, including dense early returns. They do not change dense mutation semantics.
 
+`VisitChangedBricks` visits final-history brick membership without allocation or
+geometry scans. It reports assignment and current nonzero voxel counts. A cleared
+brick remains present while removals differ from the original base; a fully
+reverted brick leaves the inventory. Construction with independent base/current
+geometry seeds membership once; Fork copies it and exposure disables it.
+
+`VisitChangedBrickAssignments` visits one brick's final assignments, including
+zero removals. `VisitCurrentBrickVoxels` visits one brick's nonzero primary
+geometry, including unchanged occupied cells. Both inspect at most 512 target
+cells and allocate nothing. Keys contain sector X/Y/Z followed by local brick
+X/Y/Z (0 through 3); callbacks receive local voxel X/Y/Z (0 through 7).
+Invalid, absent or unrepresentable target keys produce no callbacks. All three
+methods report sealed availability, even after a callback stops traversal;
+exposed owners report unavailable. Callbacks must not mutate or reenter the owner.
+These visitors prepare bounded hybrid capture; they do not enable runtime writing.
+
 `ExposeMutable` irreversibly detaches shared storage and returns one stable dense
 authority. Later raw writes remain visible; `TrackedChanges` returns `(nil,
 false)` permanently. This owner releases its base/history; earlier forks remain

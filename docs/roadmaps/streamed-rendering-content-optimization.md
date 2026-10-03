@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c1 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c2 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -802,7 +802,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | E2b4 | `6480c5a` | Admitted sparse deltas through async and blocking S4 publication | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
 | E2b5 | `94ae291` | Canonical tracking restoration for owned loaded deltas | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
 | E2b6 | `bedbe04` | Exact incremental merged geometry counts for sparse admission | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
-| E2c1 | This commit | Opt-in hybrid content payloads with retained legacy/schema-2 compatibility | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
+| E2c1 | `26b0da9` | Opt-in hybrid content payloads with retained legacy/schema-2 compatibility | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
+| E2c2 | This commit | Maintained changed-brick inventory and bounded primary/assignment visitors | [Managed contract](../renderer/editing.md#managed-voxel-ownership) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -823,7 +824,8 @@ conservative. Cheaper full compact selection and other source adapters remain op
 The user approved the [per-brick replacement decision](streamed-rendering-e2-hybrid.md),
 prioritizing CPU/allocation savings while accepting modest compressed-file growth.
 E2c1 adds opt-in schema-3 content compatibility; schema-2 defaults remain fixed.
-Changed-brick planning, runtime adoption and full save/reload measurements follow.
+E2c2 adds bounded changed-brick inventory and capture primitives. Runtime adoption
+and full save/reload measurements follow.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
@@ -2451,6 +2453,26 @@ env GOCACHE=/tmp/gekko3d-gocache go test ./...
 Engine sweep and the five consumer commands above passed. No GPU or full-path
 performance claim: runtime writing/restoration still uses schema 2. Existing
 tests and unrelated working-tree changes are preserved.
+
+### E2c2: Changed-brick capture primitives
+
+This commit adds maintained final-history brick counts and allocation-free
+visitors under [the managed contract](../renderer/editing.md#managed-voxel-ownership).
+Clears, reverts, independent restoration, forks and mutable exposure retain their
+existing semantics. Runtime hybrid writing follows separately.
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^TestE2c2' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and the five consumer commands above passed. No GPU behavior change
+or save-time walk of untouched geometry; runtime writing still uses schema 2.
+Existing tests and unrelated working-tree changes are preserved.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

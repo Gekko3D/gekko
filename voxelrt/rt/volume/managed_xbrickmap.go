@@ -14,6 +14,7 @@ type ManagedXBrickMap struct {
 	current                      *XBrickMap
 	base                         *XBrickMap
 	changes                      map[[3]int]uint8
+	changedBrickCounts           map[[6]int]int
 	brickVoxelCounts             map[[6]int]int
 	staleSolid                   map[[6]int]bool
 	currentBricks, currentVoxels int
@@ -91,6 +92,10 @@ func NewManagedXBrickMapWithBase(base, current *XBrickMap) *ManagedXBrickMap {
 	}
 	visit(current, base, false)
 	visit(base, current, true)
+	for coord := range owner.changes {
+		_, key := sectorBrickKeyForVoxel(coord[0], coord[1], coord[2])
+		owner.addChangedBrickAssignment(key)
+	}
 	owner.seedGeometryCounts()
 	return owner
 }
@@ -187,12 +192,24 @@ func (m *ManagedXBrickMap) reconcileManagedBrick(key [6]int, brick *Brick) {
 
 func (m *ManagedXBrickMap) trackManagedAssignment(coord [3]int, value uint8) {
 	_, original := m.base.GetVoxel(coord[0], coord[1], coord[2])
+	_, tracked := m.changes[coord]
+	_, brick := sectorBrickKeyForVoxel(coord[0], coord[1], coord[2])
 	if value == original {
-		delete(m.changes, coord)
+		if tracked {
+			delete(m.changes, coord)
+			if m.changedBrickCounts[brick] == 1 {
+				delete(m.changedBrickCounts, brick)
+			} else {
+				m.changedBrickCounts[brick]--
+			}
+		}
 		return
 	}
 	if m.changes == nil {
 		m.changes = make(map[[3]int]uint8)
+	}
+	if !tracked {
+		m.addChangedBrickAssignment(brick)
 	}
 	m.changes[coord] = value
 }
@@ -365,6 +382,7 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 		current:              shareManagedMap(m.current),
 		base:                 m.base,
 		changes:              maps.Clone(m.changes),
+		changedBrickCounts:   maps.Clone(m.changedBrickCounts),
 		publicationRevisions: maps.Clone(m.publicationRevisions),
 		brickVoxelCounts:     maps.Clone(m.brickVoxelCounts),
 		staleSolid:           maps.Clone(m.staleSolid),
@@ -422,6 +440,7 @@ func (m *ManagedXBrickMap) ExposeMutable() *XBrickMap {
 		}
 		m.base = nil
 		m.changes = nil
+		m.changedBrickCounts = nil
 		m.brickVoxelCounts, m.staleSolid = nil, nil
 		m.currentBricks, m.currentVoxels = 0, 0
 		m.publicationRevisions = nil
