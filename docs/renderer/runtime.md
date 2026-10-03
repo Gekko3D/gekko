@@ -27,6 +27,25 @@ Related docs:
 - `volume.XBrickMap`: `voxelrt/rt/volume/`
   - owns sparse voxel storage, edit semantics, dirty tracking, traversal, and compression
 
+## Dense voxel construction
+
+`volume.BuildXBrickMap(iter.Seq[volume.VoxelWrite])` consumes ordered writes once
+and returns a fresh, independently owned editable `XBrickMap`. A nil sequence is
+empty. Zero removes a voxel; duplicate and no-op writes retain `SetVoxel` content
+and revision semantics, including removed-sector revision history. Negative
+coordinates use the existing sector/brick partitioning.
+
+Construction updates occupancy and dirty coverage while consuming writes, then
+finalizes material flags once per surviving brick. Initial uploads and normal
+halos include transient and deleted writes. Bounds remain lazily computed;
+copies and changed-sector snapshots keep their existing ownership. This uses
+the current dense payload, without live GPU offsets or shared mutable backing.
+
+Imported full/proxy construction streams effective material values through this
+builder. Source-zero records remain ignored, decoded records remain authoritative,
+and auxiliary normal records attach afterward through the existing copied path.
+Per-write halo bookkeeping and decoded voxel-record storage remain.
+
 ## Engine Stage Flow
 
 The renderer participates in three engine stages:

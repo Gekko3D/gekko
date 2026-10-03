@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c and P5a–P5e complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c and P5a–P5f complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -256,6 +256,20 @@ reports cold rasterization attempts (`Builds`) and validated warm reuses (`Hits`
 without traversal. Cover repeated real spawns and current errors/empty outputs;
 run focused checks, full engine and consumer checks. Source/hierarchy resolution,
 palette/key work and live validation remain; no frame-time claim.
+
+#### P5f: Dense imported construction
+
+Completed: a fresh dense builder consumes ordered voxel writes without another
+record list and finalizes material flags once per surviving brick. Imported
+full/proxy conversion preserves effective materials, source-zero filtering,
+revisions, dirty halos, bounds, auxiliary records and independent edits. Existing
+decoded content and cache/registration owners remain. See the
+[constructor contract](../renderer/runtime.md#dense-voxel-construction).
+
+C1 remains after dense bulk work and compact ownership/format decisions. Current
+RLE decoding still allocates public voxel records; compression alone does not
+remove reconstruction or compact resident bricks. Further dense consumers can
+reuse this builder without changing loader authority or publication semantics.
 
 ## 5. Streaming changes
 
@@ -688,7 +702,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2j | `4f2164e` | Direct inactive CPU material-table eviction candidates | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
 | P5d | `d149455` | Worker-prepared first terrain renderer copy with current validation | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
 | S2k | `752f92e` | Worker-prepared registered storage descriptions and cached standalone policy charge | [Cache ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
-| P5e | This commit | Validated warm authored collapse reuse without repeated rasterization | [Asset contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
+| P5e | `89eb69d` | Validated warm authored collapse reuse without repeated rasterization | [Asset contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
+| P5f | This commit | Ordered dense imported construction with one material finalization per brick | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1640,6 +1655,36 @@ ran before the pause; production has not changed since. No new native check was
 needed for unchanged geometry/GPU behavior. Source/hierarchy resolution,
 palette/key work and live validation remain; no measured frame-time claim.
 The user requested stopping after this commit; further implementation is deferred.
+
+### P5f: Dense imported construction
+
+This commit adds the dense constructor and routes imported full/proxy conversion
+through it. Separate tests/implementation and independent PRE/POST reviews passed;
+frozen tests and unrelated changes remain intact.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume . -run '^(TestP5f|TestSetVoxel|TestCopyChangedSectors|TestImportedWorldMaterial|TestPrepareImportedWorld|TestP5a|TestP5b|TestS2a)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume . -run '^(TestP5f|TestCopyChangedSectors|TestImportedWorldMaterial|TestP5a|TestS2a|TestS2e)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5f-smoke /tmp/gekko-p5f-smoke.go
+/tmp/gekko-p5f-smoke
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-p5f-build-bench.go
+```
+
+Engine root passed in 16.192s; all five consumer commands below passed. Native
+Metal smoke passed: uniform/mixed imported maps, paused/hidden readiness, isolated
+carve/reupload and exact allocation cleanup. The disposable fixture needed native
+GPU access and corrected atlas dimensions; it checks uploads, not pixel parity.
+On Go 1.25.4 darwin/arm64, a disposable 32³ conversion sample measured uniform
+16.87 to 6.51 ms, mixed 6.94 to 6.57 ms and sparse 0.86 to 0.44 ms. These are
+preparation samples, not frame-time/FPS claims; allocations increase from 92 to
+94 per map. Decoded records, per-write halos, registration copies and atomic
+commit units remain. Broader codec/compact ownership decisions remain open.
+Next dense consumers are terrain columns, voxel snapshots and offline imported
+aux construction. Their unchanged functionality yields baseline-GREEN parity
+coverage; align that case with the required RED workflow before implementation.
 
 Consumer commands for these steps:
 
