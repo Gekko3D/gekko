@@ -45,6 +45,8 @@ func NormalizeImportedWorldChunkPayloadKind(kind string) (string, error) {
 		return ImportedWorldChunkPayloadDenseRLEBinaryV1, nil
 	case ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1:
 		return ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1, nil
+	case ImportedWorldChunkPayloadBrickZstdBinaryV1:
+		return ImportedWorldChunkPayloadBrickZstdBinaryV1, nil
 	default:
 		return "", fmt.Errorf("unsupported imported world chunk payload kind %q", kind)
 	}

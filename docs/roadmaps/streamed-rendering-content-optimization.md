@@ -777,17 +777,18 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5j | `14c1d08` | Batched fresh shift/resample/disconnected-component reconstruction | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
 | P1a | `6397967`; editor `df2f3c8` | Raw-authoritative point-value accessor and consumer migration | [Read contract](../renderer/runtime.md#voxel-point-reads) |
 | P5k | `9c4298a` | Exact deduplicated normal-halo marking in fresh constructors | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
-| P1b | This commit | Opt-in compact private prepared sources with current dense authority | [Ownership design](streamed-rendering-p1b.md) |
+| P1b | `df6896c` | Opt-in compact private prepared sources with current dense authority | [Ownership design](streamed-rendering-p1b.md) |
+| C1a | This commit | Lossless bounded zstd frames and opt-in compiled imported chunks | [Compiled contract](../content/compiled-voxels.md) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: align C1's optional compiled imported payload boundary before format work.
-Recommend a new explicit lossless brick payload kind/version, independent
-checksummed frames, a pinned pure-Go zstd dependency and retained SHA-256 identity.
-Keep current readers, manifest versions and JSON authoring inputs. Begin without
-dictionaries, region packs, deltas or public compact-map migration. The new schema
-is separate from P1b's private layout. Codec/schema/dependency approval remains
-pending; this recommendation does not authorize its implementation.
+Next: C1 embedded eligible normals and runtime dictionary profiles. On 2026-10-03,
+the user approved optional layers/dictionaries and broader compiled assets and
+region-pack follow-ups. The [C1 design](streamed-rendering-c1.md) specifies a new
+explicit payload kind, independent checksummed frames, pinned pure-Go zstd and
+retained SHA-256 identity. Keep current readers, manifest versions and JSON
+authoring inputs. C2 retains its measured-scale and separate architecture gates;
+deltas and public compact-map migration require their own ownership scope.
 Broader P1 still requires public CPU ownership and editable-representation choices.
 Remaining S1/S2/S3 owners and extraction are still
 partial. No dirty-only extraction is approved. Preserve public mutation
@@ -1992,7 +1993,42 @@ dense construction. The option stays false by default. Native checks completed
 in 13 frames with prepared/asset bytes 5,312/18,784 before cleanup. No heap/RSS,
 pixel parity or FPS claim. Editor full-test baseline remains as recorded in P1a;
 editor build passes. Existing tests and unrelated changes are preserved.
-Broader P1 and C1 remain open; next format boundary needs alignment above.
+Broader P1 remains open; C1a completes the initial format boundary.
+
+### C1a: Lossless compiled imported frames
+
+This commit adds `content/voxelcodec` and opt-in `brick_zstd_binary_v1`, with
+separate raw channels, exact optional layers, dictionary identity, strict bounded
+range decode, checksums and retained SHA-256. Legacy JSON/RLE/aux, manifests and
+public dense ownership remain. Separate tests/implementation and independent
+reviews passed; frozen and existing tests remain unchanged. Focused/race checks,
+full engine tests (16.822 s), five consumer builds and native full/proxy readiness,
+collision presence, isolated edit/reupload and Stop cleanup passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... . -run '^(TestC1a|TestImportedWorldChunk)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./content/voxelcodec ./content . -run '^(TestC1a|TestImportedWorldChunk)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-c1a-smoke /tmp/gekko-c1a-smoke.go
+/tmp/gekko-c1a-smoke > /tmp/gekko-c1a-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-c1a-limits.go
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-c1a-reader.go
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-c1a-bench.go
+```
+
+Disposable Go 1.25.4 darwin/arm64 synthetic 32³ fixtures without aux measured
+mixed compiled/RLE/JSON files 3,471/164,135/2,478,605 bytes; load/decode costs
+3.20/0.289/16.33 ms. Sparse compiled/RLE costs were 889/19,573 bytes and
+0.212/0.0736 ms. Uniform RLE remains smaller/faster: 295 versus 424 bytes,
+0.131 versus 3.12 ms. The initial adapter restores ordinary voxel records and
+global order; disk savings do not imply faster RLE decoding. A generic exact
+1,088-byte aux fixture measured 461 bytes plain versus 187 with a caller-owned
+1,125-byte raw dictionary, retaining content identity; selection/training needs
+corpus measurements and shared dictionary cost. Defaults remain legacy.
+Native checks completed in 12 frames (313 ms); no pixel/FPS or RSS claim.
+Editor full-test baseline remains as recorded in P1a; editor build passes.
+Next: eligible imported normal embedding and fixed caller dictionary profiles.
 
 Consumer commands for these steps:
 

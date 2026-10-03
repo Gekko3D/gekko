@@ -28,6 +28,7 @@ const (
 	ImportedWorldChunkPayloadSparseJSONV1             = "sparse_json_v1"
 	ImportedWorldChunkPayloadDenseRLEBinaryV1         = "dense_rle_binary_v1"
 	ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1 = "dense_rle_material_binary_v1"
+	ImportedWorldChunkPayloadBrickZstdBinaryV1        = "brick_zstd_binary_v1"
 )
 
 type ImportedWorldDef struct {

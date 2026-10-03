@@ -8,6 +8,7 @@ require (
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20250301202403-da16c1255728
 	github.com/go-gl/mathgl v1.2.0
 	github.com/google/uuid v1.6.0
+	github.com/klauspost/compress v1.18.7
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/image v0.34.0
 )

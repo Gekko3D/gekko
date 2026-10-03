@@ -105,6 +105,24 @@ Chunks:
 
 Manifest entries point to chunk files relative to the manifest path.
 
+### Compiled imported chunks
+
+Select `ImportedWorldChunkPayloadBrickZstdBinaryV1` in
+`ImportedWorldChunkSaveOptions` to write an independent checksummed frame.
+Default saving remains JSON. Existing manifests accept the explicit new kind
+without a schema change. Loading restores ordinary voxel records in global
+x-fast order, retaining raw palette and material bytes and source lattice.
+Runtime prepared geometry, collision and navigation use their existing paths;
+this adapter does not yet decode directly into resident compact bricks.
+
+`SaveImportedWorldChunkCompiledWithCodec` and
+`LoadImportedWorldChunkWithCodec` accept a caller-owned codec; nil uses the
+bounded dictionary-free default. A dictionary frame requires the matching
+explicit profile. The runtime loader retains its existing cache and lease
+ownership. Initial compiled chunks keep normal data in existing aux sidecars.
+See [compiled frames](compiled-voxels.md) for identity, limits, range reads and
+dictionary compatibility. Legacy JSON/RLE/aux acceptance remains unchanged.
+
 ### Baking from VOX
 
 The main bake code lives in:
@@ -256,8 +274,8 @@ Use a hierarchy:
 1. **Chunk**
    - Small storage/edit/destruction unit.
    - Keeps existing `.gkchunk` semantics where practical.
-   - Imported-world chunks support readable JSON payloads and compact
-     `dense_rle_binary_v1` payloads; runtime loading auto-detects both.
+   - Imported-world chunks support readable JSON, both existing dense RLE kinds
+     and opt-in lossless `brick_zstd_binary_v1`; runtime loading auto-detects them.
 
 2. **Sector/Page**
    - Larger streaming and render-residency unit.

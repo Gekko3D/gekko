@@ -80,6 +80,13 @@ func SaveImportedWorldChunkWithOptionsResult(path string, def *ImportedWorldChun
 		return ImportedWorldChunkSaveResult{}, err
 	}
 	def.PayloadKind = payloadKind
+	if payloadKind == ImportedWorldChunkPayloadBrickZstdBinaryV1 {
+		codec, err := defaultImportedCompiledCodec()
+		if err != nil {
+			return ImportedWorldChunkSaveResult{}, err
+		}
+		return SaveImportedWorldChunkCompiledWithCodec(path, def, codec)
+	}
 	if payloadKind == ImportedWorldChunkPayloadDenseRLEBinaryV1 {
 		return saveImportedWorldChunkDenseRLEBinary(path, def)
 	}
@@ -102,22 +109,7 @@ func SaveImportedWorldChunkWithOptionsResult(path string, def *ImportedWorldChun
 }
 
 func LoadImportedWorldChunk(path string) (*ImportedWorldChunkDef, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if isImportedWorldChunkDenseRLEBinary(data) {
-		return loadImportedWorldChunkDenseRLEBinary(data)
-	}
-	var def ImportedWorldChunkDef
-	if err := json.Unmarshal(data, &def); err != nil {
-		return nil, err
-	}
-	EnsureImportedWorldChunkDefaults(&def)
-	if def.SchemaVersion != CurrentImportedWorldChunkSchemaVersion {
-		return nil, fmt.Errorf("unsupported imported world chunk schema version %d", def.SchemaVersion)
-	}
-	return &def, nil
+	return LoadImportedWorldChunkWithCodec(path, nil)
 }
 
 func ResolveImportedWorldChunkPath(entry ImportedWorldChunkEntryDef, manifestPath string) string {

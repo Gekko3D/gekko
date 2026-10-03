@@ -24,6 +24,7 @@ Use the root [`README.md`](../README.md) for a quick module overview. Use [`AGEN
   - [`content/game-assets.md`](content/game-assets.md)
   - [`content/levels.md`](content/levels.md)
   - [`content/streaming-and-worlds.md`](content/streaming-and-worlds.md)
+  - [`content/compiled-voxels.md`](content/compiled-voxels.md)
   - [`content/hl1-import.md`](content/hl1-import.md)
   - [`content/asset-format.md`](content/asset-format.md)
 - Working on runtime asset plumbing:
