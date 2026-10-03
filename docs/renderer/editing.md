@@ -159,8 +159,38 @@ still require explicit asset deletion, as with existing unrefcounted geometry.
 Authority publication reuses unchanged immutable sectors and copies changed
 sectors plus fitted-normal halos after each changed batch. Metadata still scales
 with retained sectors and revision tombstones. This does not bound total memory
-or remove downstream physics copies. Compact payloads and E2 delta formats remain
-follow-ups.
+or remove downstream physics copies. Compact payloads and runtime E2 delta
+persistence remain follow-ups.
+
+### Authored shape base provenance
+
+Individual authored `voxel_shape` parts record canonical base identity at
+construction, using the existing snapshot conversion and `ModelScale` resampling.
+The rasterization version is `gekko-voxel-shape-v1`; changes to those construction
+rules require a new version. Identity includes the effective voxel resolution
+(`VoxelResolutionOrDefault`) and excludes placement transforms and renderer data.
+
+AssetServer retains identity metadata per geometry asset and lattice, without a
+second resident base map. Geometry cache keys and asset IDs remain unchanged.
+A warm cache with missing lattice metadata reconstructs the authored shape once;
+it never establishes canonical identity from the mutable cached map. Invalid
+identity inputs or codec limits leave provenance absent without changing legacy
+construction behavior.
+
+Explicit managed enable verifies its isolated construction geometry against this
+identity before capturing provenance. Later tracked writes retain that original
+base identity. Internal qualification reads metadata without scanning geometry;
+changed effective resolution, unsupported ownership, current geometry-reference
+replacement or exposure selects full fallback. Public exposure permanently releases the
+managed entry's provenance. Foreign overrides, unbound snapshot registrations
+and generic managed registrations do not inherit authored eligibility.
+
+Deleting a shared source releases its metadata while an already enabled owner
+retains its independent provenance. Deleting the override releases that owner.
+Other source kinds, level brushes and collapsed composites remain full fallback
+until their canonical construction adapters exist. Persistence still uses legacy
+full snapshots; the [v2 payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads)
+awaits loader and S4 integration.
 
 ## Raycast Internals
 

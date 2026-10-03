@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	rootassets "github.com/gekko3d/gekko/assets"
+	"github.com/gekko3d/gekko/content"
 )
 
 type AssetId = rootassets.AssetID
@@ -57,6 +58,7 @@ const (
 type AssetServer struct {
 	mu                   sync.RWMutex
 	managedVoxelGeometry map[AssetId]*managedVoxelGeometry
+	authoredVoxelBases   map[AssetId]map[content.VoxelObjectLatticeDef]string
 	meshes               map[AssetId]MeshAsset
 	materials            map[AssetId]MaterialAsset
 	textures             map[AssetId]TextureAsset
@@ -115,6 +117,7 @@ func (server *AssetServer) GetVoxelGeometry(id AssetId) (VoxelGeometryAsset, boo
 		asset.XBrickMap.ComputeAABB()
 		server.voxModels[id] = asset
 		entry.exposed = true
+		entry.authoredBase = authoredVoxelBase{}
 		entry.generation++
 	}
 	server.mu.Unlock()

@@ -390,6 +390,7 @@ func (server *AssetServer) DeleteVoxelGeometry(id AssetId) bool {
 	}
 	delete(server.voxModels, id)
 	delete(server.managedVoxelGeometry, id)
+	delete(server.authoredVoxelBases, id)
 	for key, cachedID := range server.voxModelKeys {
 		if cachedID == id {
 			delete(server.voxModelKeys, key)

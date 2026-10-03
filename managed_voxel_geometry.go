@@ -13,11 +13,12 @@ import (
 // Managed entries share AssetServer's geometry lifetime. Operations run on the
 // engine thread; callers exclusively own source and exposed raw maps.
 type managedVoxelGeometry struct {
-	owner      *volume.ManagedXBrickMap
-	exposed    bool
-	generation uint64
-	entity     EntityId
-	app        *App
+	authoredBase authoredVoxelBase
+	owner        *volume.ManagedXBrickMap
+	exposed      bool
+	generation   uint64
+	entity       EntityId
+	app          *App
 }
 
 type managedVoxelBinding struct {
@@ -179,7 +180,9 @@ func EnableManagedVoxelGeometry(cmd *Commands, assets *AssetServer, eid EntityId
 	} else {
 		owner = volume.NewManagedXBrickMap(source.XBrickMap)
 	}
+	sourceRefs := vmc
 	vmc.OverrideGeometry = assets.registerManagedVoxelOwner(owner, source.SourcePath, cmd.app, eid)
+	assets.qualifyManagedAuthoredVoxelBase(sourceRefs, entry, vmc.OverrideGeometry)
 	// Preserve authored pivot bounds; current collision bounds come from payload.
 	assets.mu.Lock()
 	override := assets.voxModels[vmc.OverrideGeometry]
@@ -321,6 +324,7 @@ func PromoteRuntimeVoxelGeometry(cmd *Commands, assets *AssetServer, state *Voxe
 		asset.XBrickMap.ComputeAABB()
 		entry.owner = nil
 		entry.exposed = true
+		entry.authoredBase = authoredVoxelBase{}
 		entry.generation++
 		assets.voxModels[id] = asset
 	}

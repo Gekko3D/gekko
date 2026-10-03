@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/gekko3d/gekko/content"
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
 func authoredVoxelShapeGeometry(assets *AssetServer, part content.AssetPartDef) (AssetId, error) {
@@ -27,10 +28,24 @@ func authoredVoxelShapeGeometry(assets *AssetServer, part content.AssetPartDef) 
 		return AssetId{}, err
 	}
 	cacheKey := string(cachePayload)
+	lattice := authoredVoxelShapeLattice(part.VoxelResolution)
 	if id, ok := assets.SharedVoxelGeometryByCacheKey(cacheKey); ok {
+		if validAuthoredVoxelShapeLattice(lattice) && assets.authoredVoxelBaseIdentity(id, lattice) == "" {
+			assets.recordAuthoredVoxelBase(id, lattice, buildAuthoredVoxelShapeMap(part))
+		}
 		return id, nil
 	}
+	xbm := buildAuthoredVoxelShapeMap(part)
+	id := assets.RegisterSharedVoxelGeometryWithCacheKey(cacheKey, xbm, cacheKey)
+	if validAuthoredVoxelShapeLattice(lattice) {
+		assets.recordAuthoredVoxelBase(id, lattice, xbm)
+	}
+	return id, nil
+}
 
+// Use the same construction path for cold registration and new lattice metadata
+// on a warm cache entry. Geometry cache identity and legacy zero handling stay.
+func buildAuthoredVoxelShapeMap(part content.AssetPartDef) *volume.XBrickMap {
 	xbm := XBrickMapFromVoxelObjectSnapshot(&content.VoxelObjectSnapshotDef{
 		SchemaVersion: content.CurrentVoxelObjectSnapshotSchemaVersion,
 		Voxels:        append([]content.VoxelObjectVoxelDef(nil), part.Source.VoxelShape.Voxels...),
@@ -40,8 +55,7 @@ func authoredVoxelShapeGeometry(assets *AssetServer, part content.AssetPartDef) 
 	}
 	xbm.ComputeAABB()
 	xbm.ClearDirty()
-
-	return assets.RegisterSharedVoxelGeometryWithCacheKey(cacheKey, xbm, cacheKey), nil
+	return xbm
 }
 
 func authoredVoxelShapePalette(assets *AssetServer, def *content.AssetDef, part content.AssetPartDef) (AssetId, error) {

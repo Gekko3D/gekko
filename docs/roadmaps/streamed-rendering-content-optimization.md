@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a and C1a–C1d complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2b1 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -793,7 +793,9 @@ This workflow does not independently authorize tests, delegation or commits.
 | P1c | `7617a2b` | Sealed volume owners, shared forks, final changes and stable dense promotion | [Managed contract](../renderer/editing.md#managed-voxel-ownership) |
 | P1d | `a76dd09` | Ordinary runtime managed authority, renderer derivatives and explicit promotion | [Runtime contract](../renderer/editing.md#ordinary-managed-runtime-geometry) |
 | P1e | `6b3ae8b` | Incremental immutable authority snapshots including auxiliary halos | [Snapshot contract](../renderer/editing.md#managed-voxel-ownership) |
-| E2a | This commit | Canonical object base identity and opt-in full/base-delta content payloads | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
+| E2a | `38101bd` | Canonical object base identity and opt-in full/base-delta content payloads | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
+
+| E2b1 | This commit | Trusted authored shape/lattice provenance and managed qualification | [Provenance contract](../renderer/editing.md#authored-shape-base-provenance) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -803,7 +805,8 @@ public mutable exposure. P1c establishes the volume boundary; P1d integrates
 ordinary entities using independent renderer derivatives and explicit promotion.
 P1e adds incremental authority publication. E2 base identity and payload ownership
 are approved for ordinary authored objects; E2a establishes their content contract.
-Trusted authored provenance and S4 integration follow.
+E2b1 adds trusted individual authored-shape provenance. Other source adapters,
+payload loading and S4 integration follow.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
@@ -2248,6 +2251,30 @@ Complete-removal and empty-delta round trips preserve their distinct meaning.
 No GPU check: content-only API does not change live runtime paths. Runtime
 provenance, S4 capture and save/load integration remain before E2 completion.
 Existing tests and unrelated changes remain.
+
+### E2b1: Trusted individual authored-shape provenance
+
+Commit: this entry's introducing commit. Shape construction records immutable
+identity/lattice metadata; managed enable independently verifies its isolated
+base. Warm metadata misses reconstruct authored input without trusting mutable
+cache geometry. Exposure, foreign resealing and unbound registrations retain
+full fallback. Source deletion preserves independent owner provenance. Contract:
+[authored shape bases](../renderer/editing.md#authored-shape-base-provenance).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestE2b1' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'TestE2b1|TestP1[de]|Test.*VoxelShape|Test.*Authored.*' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run 'TestE2b1|TestP1[de]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep passed (root 17.666 s); the five consumer commands below passed.
+No windowed check: geometry construction, renderer authority and persistence
+formats retain their existing observable behavior. Other source adapters,
+v2 payload loading and bounded S4 capture/save remain. Existing tests and
+unrelated changes remain.
 
 Consumer commands for these steps:
 
