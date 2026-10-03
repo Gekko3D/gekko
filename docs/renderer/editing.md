@@ -117,8 +117,9 @@ calls resolve queued overrides without flushing ECS commands early. Neither
 registration nor enable changes unrelated legacy geometry paths.
 
 Managed runtime geometry supports ordinary full-density entities. Terrain,
-planet, retained-renderer, LOD, streamed/imported, voxel-backing and GPU-first
-owners require their existing paths. Enable and managed writes reject these
+planet, retained-renderer, LOD, ticket-managed streamed/imported, voxel-backing
+and GPU-first owners require their existing paths. Ordinary streamed placement
+items do not automatically carry a render ticket and can use managed enable. Enable and managed writes reject these
 combinations before mutation. Registered managed sources also require eligible
 attachments. Unsupported attachments have no managed renderer or voxel collider;
 save lookup retains their actual source content. Use explicit legacy dense
@@ -153,8 +154,10 @@ Built-in sphere edits enable and track eligible inherited managed sources.
 Raw editing helpers and destruction promote before dense edits, preserving prior
 managed changes. Runtime promotion retains persistence dirtiness even when raw
 payload writes bypass map revisions. Geometry deletion releases its managed
-sidecar; entity removal releases renderer bindings. Ordinary override assets
-still require explicit asset deletion, as with existing unrefcounted geometry.
+sidecar; entity removal releases renderer bindings. Overrides enabled for actual
+stream-owned placement items use the existing streaming geometry lease and are
+released by unload or successful Stop. Other ordinary overrides still require
+explicit asset deletion, as with existing unrefcounted geometry.
 
 Authority publication reuses unchanged immutable sectors and copies changed
 sectors plus fitted-normal halos after each changed batch. Metadata still scales
@@ -184,6 +187,24 @@ changed effective resolution, unsupported ownership, current geometry-reference
 replacement or exposure selects full fallback. Public exposure permanently releases the
 managed entry's provenance. Foreign overrides, unbound snapshot registrations
 and generic managed registrations do not inherit authored eligibility.
+
+For streamed persistence, construction provenance alone is insufficient. Enable
+also verifies the exact loader-owned authored asset/part selected by the actual
+placement, including the resolved path, asset ID and lattice. The canonical
+shape must match the independently sealed construction base. Only actual chunk
+object and entity membership grants streaming ownership; copied authored refs
+alone do not. Synchronous placement hooks use a scoped current-commit context
+before chunk publication. Failed binding preserves ordinary managed editing and
+full persistence fallback.
+
+The private persistence query compares captured world/generation, owner IDs,
+resolved paths, current membership, effective lattice and sealing metadata. It
+does not reconstruct or hash geometry. Pending component changes participate
+without an early ECS flush. Later ref, placement path, generation, lattice,
+geometry-owner or exposure changes select full fallback. The existing streaming
+lease follows private override replacement independently of current entity refs;
+a new override is copied before deleting an old leased asset. Unrelated source
+assets remain outside that lease.
 
 Deleting a shared source releases its metadata while an already enabled owner
 retains its independent provenance. Deleting the override releases that owner.

@@ -1181,7 +1181,12 @@ this does not provide a hard time bound for a placement unit.
 
 Fatal partial transactions keep their existing persistence pins until successful
 Stop/cancellation cleanup. Loaded geometry currently retains dense snapshot
-ownership; managed edit-history restoration and delta writing remain follow-ups.
+ownership. Explicit managed enable of actual placement items adopts its private
+override into the same streaming geometry lease, including full-fallback origins;
+unload and successful Stop release it independently of current authored refs.
+[Authored-owner qualification](../renderer/editing.md#authored-shape-base-provenance)
+is captured once and queried without geometry reconstruction. Managed
+edit-history restoration and delta writing remain follow-ups.
 
 ### Payload and manifest publication
 

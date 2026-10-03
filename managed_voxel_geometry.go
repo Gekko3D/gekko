@@ -13,12 +13,13 @@ import (
 // Managed entries share AssetServer's geometry lifetime. Operations run on the
 // engine thread; callers exclusively own source and exposed raw maps.
 type managedVoxelGeometry struct {
-	authoredBase authoredVoxelBase
-	owner        *volume.ManagedXBrickMap
-	exposed      bool
-	generation   uint64
-	entity       EntityId
-	app          *App
+	authoredBase       authoredVoxelBase
+	persistenceBinding *managedVoxelPersistenceBinding
+	owner              *volume.ManagedXBrickMap
+	exposed            bool
+	generation         uint64
+	entity             EntityId
+	app                *App
 }
 
 type managedVoxelBinding struct {
@@ -170,6 +171,9 @@ func EnableManagedVoxelGeometry(cmd *Commands, assets *AssetServer, eid EntityId
 		return err
 	}
 	if _, _, enabled := managedVoxelEntity(cmd, assets, eid); enabled {
+		// Repeated enable may adopt lifetime ownership, but never invent or
+		// rebind construction provenance after the initial enablement.
+		leaseManagedVoxelOverride(cmd, assets, eid, vmc.GeometryAsset())
 		return nil
 	}
 	source, _ := assets.getVoxelGeometry(vmc.GeometryAsset())
@@ -190,6 +194,7 @@ func EnableManagedVoxelGeometry(cmd *Commands, assets *AssetServer, eid EntityId
 	assets.voxModels[vmc.OverrideGeometry] = override
 	assets.mu.Unlock()
 	cmd.AddComponents(eid, &vmc)
+	captureManagedVoxelPersistenceBinding(cmd, assets, eid, vmc.OverrideGeometry)
 	return nil
 }
 

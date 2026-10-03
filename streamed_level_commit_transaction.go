@@ -59,6 +59,10 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 		state.Metrics.TotalCommitDuration += duration
 	}()
 	chunk := tx.chunk
+	previousContext := state.managedVoxelCommit
+	context := &managedVoxelCommitContext{chunk: chunk, coord: prepared.Coord, generation: tx.entryGeneration}
+	state.managedVoxelCommit = context
+	defer func() { state.managedVoxelCommit = previousContext }()
 	for {
 		switch tx.phase {
 		case 0:
@@ -219,6 +223,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 					break
 				}
 			}
+			context.placement = placement
 			loader := state.Loader
 			if prepared.loadScope != nil {
 				loader = prepared.loadScope.Loader()

@@ -326,6 +326,7 @@ type StreamedLevelRuntimeState struct {
 	streamingWork             streamedWorkOwner
 	terrainGeometryAssets     map[EntityId]streamedGeometryAssetLease
 	snapshotGeometryAssets    map[EntityId]streamedGeometryAssetLease
+	managedVoxelCommit        *managedVoxelCommitContext
 
 	renderManaged     bool
 	nextRenderTicket  uint64
