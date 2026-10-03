@@ -234,5 +234,7 @@ Existing `SaveVoxelObjectSnapshot`/`LoadVoxelObjectSnapshot` and schema-1 JSON
 remain unchanged. The new decoder also accepts legacy schema-0/1 JSON as explicit
 schema-1 unbound full payloads. Legacy resolution preserves ordered records and
 whole-file JSON acceptance, without applying C1 limits. Compiled schema 1 and
-schema-2 JSON are rejected. Runtime provenance, S4 publication and reload dispatch
-follow separately; this content API does not automatically change existing saves.
+schema-2 JSON are rejected. The runtime's shape-only
+[override loading contract](streaming-and-worlds.md#ordinary-object-override-loading)
+adds v2 resolution without changing existing save dispatch. S4 delta publication
+and managed history restoration follow separately.

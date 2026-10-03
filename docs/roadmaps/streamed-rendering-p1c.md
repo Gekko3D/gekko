@@ -165,3 +165,35 @@ binding/mismatch rejection, strict decoding, borrowed codec lifetime and limits.
 Verify content and engine tests plus affected consumer builds. No native GPU
 check is needed until E2b changes runtime publication. Provenance, bounded S4
 capture, durable save and reload remain the next coherent ownership batch.
+
+
+### Next alignment: Ordinary streamed edit ownership
+
+Status: pending human alignment before managed restoration or delta writing.
+E2's approved identity/format boundary remains unchanged. Ordinary placement
+voxels receive `StreamedVoxelRenderComponent` through the existing residency
+owner. P1d deliberately rejects that marker, including queued attachments, so
+ordinary managed enable cannot supply tracked changes for live streamed objects.
+
+Recommended long-term step: let explicitly opted-in ordinary authored shapes
+retain AssetServer managed CPU authority and independent renderer derivatives
+while streaming retains admission tickets, visibility and retirement. Establish
+managed ownership before initial renderer ticket capture; later enable/source
+replacement must use the existing cancel/reissue flow. Bind eligibility to the
+actual ordinary placement and current ticket generation. Keep generic managed
+enable's unsupported-owner contract and terrain/imported/backing/LOD exclusions.
+No marker removal, admission bypass or parallel residency owner is proposed.
+
+Alternative: leave streamed objects on dense full persistence and restrict deltas
+to nonstreamed objects. That preserves the present boundary but does not deliver
+the planned live streamed-edit optimization. A dense unload-time base comparison
+would be a tactical bridge with additional geometry work and is not recommended.
+
+The ownership batch would touch `managed_voxel_geometry.go`, AssetServer managed
+bindings, streamed placement registration/render residency, the renderer bridge
+and their canonical contracts before dependent S4 work. Use separate tests and
+implementation with independent PRE/POST reviews. Verify delayed admission,
+pre/post-ready edits, source replacement, cancellation, exposure, collision and
+cleanup, then engine/consumer checks and a native WebGPU streaming smoke. This
+renderer/streaming boundary requires alignment; format loading can complete
+independently.

@@ -1150,8 +1150,40 @@ Main top-level fields:
 Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`. Opt-in
 schema-2 full/base-delta content payloads are defined by the
 [voxel-object override contract](compiled-voxels.md#ordinary-voxel-object-override-payloads).
-Existing runtime dispatch still uses legacy snapshots until authored provenance
-and S4 integration are delivered.
+Runtime loading supports schema 2 for individual authored `voxel_shape` parts;
+existing save dispatch still writes legacy snapshots until S4 integration.
+
+### Ordinary object override loading
+
+Workers decode v2 full/base-delta payloads at the existing `SnapshotPath`, bind
+explicit placement/item IDs to the selected owner, and validate the effective
+lattice and `gekko-voxel-shape-v1` rasterization version. Delta bases reconstruct
+from the owning RuntimeContentLoader's immutable authored definition, using the
+same shape conversion and `ModelScale` resampling as construction. Mutable live
+geometry caches are never canonical bases. Existing decoded-definition pinning
+and file-refresh behavior remain unchanged.
+
+V2 rejects missing/non-shape parts and authored collapse requests. Legacy v1
+keeps ordered, unbound snapshot acceptance and existing origins, including
+collapsed per-item limitations. Resolved snapshots use independent P5c worker
+registrations and existing pending byte admission, cancellation and asset leases;
+no additional resident base cache is introduced.
+
+Resumable placement commits resolve current actual-item overrides before adopting
+any override or invoking hooks, including replacement at the same path. Exact
+resolved snapshot matches permit prepared adoption; stale packets use the existing
+independent fallback. Explicit owner IDs keep embedded-NUL placement IDs separate.
+Prepared v2 or a current actual-item v2 payload also activates validation of
+current sibling references. Pure legacy placements retain direct item lookups.
+An otherwise unused override added to a legacy placement remains ignored when
+no v2 validation activates. V2 sibling validation scans current override metadata;
+this does not provide a hard time bound for a placement unit.
+
+Fatal partial transactions keep their existing persistence pins until successful
+Stop/cancellation cleanup. Loaded geometry currently retains dense snapshot
+ownership; managed edit-history restoration and delta writing remain follow-ups.
+
+### Payload and manifest publication
 
 Runtime terrain, imported-world and voxel-object edit snapshots use unique
 payload names inside `<delta file>_data`, preserving `.gkchunk`/`.gkvoxobj` and

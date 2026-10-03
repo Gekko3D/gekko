@@ -253,17 +253,18 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 			if !tx.live(state) {
 				return entityCount, placementUnit, false, nil
 			}
+			var latestSnapshots map[string]*content.VoxelObjectSnapshotDef
+			if tx.resumable {
+				latestSnapshots, err = resolveLatestStreamedVoxelObjectSnapshots(loader, state, placement, spawnResult.EntitiesByAssetID, prepared.v2Placements[placement.PlacementID])
+				if err != nil {
+					return entityCount, placementUnit, false, err
+				}
+			}
 			for itemID, entity := range spawnResult.EntitiesByAssetID {
 				key := voxelObjectRuntimeKey(placement.PlacementID, itemID)
 				snapshot := prepared.ObjectSnapshots[key]
 				if tx.resumable {
-					snapshot = nil
-					if override, exists := state.voxelOverrideMap[key]; exists {
-						snapshot, err = content.LoadVoxelObjectSnapshot(content.ResolveDocumentPath(override.SnapshotPath, state.WorldDeltaPath))
-						if err != nil {
-							return entityCount, placementUnit, false, err
-						}
-					}
+					snapshot = latestSnapshots[key]
 				}
 				if snapshot != nil {
 					snapshotStart := time.Now()

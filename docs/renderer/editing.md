@@ -188,9 +188,9 @@ and generic managed registrations do not inherit authored eligibility.
 Deleting a shared source releases its metadata while an already enabled owner
 retains its independent provenance. Deleting the override releases that owner.
 Other source kinds, level brushes and collapsed composites remain full fallback
-until their canonical construction adapters exist. Persistence still uses legacy
-full snapshots; the [v2 payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads)
-awaits loader and S4 integration.
+until their canonical construction adapters exist. Persistence still writes legacy full snapshots. Runtime
+[v2 shape loading](../content/streaming-and-worlds.md#ordinary-object-override-loading)
+uses existing dense registration; managed restoration and S4 writing follow.
 
 ## Raycast Internals
 

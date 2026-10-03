@@ -514,6 +514,7 @@ type streamedPreparedChunk struct {
 	PreparedImportedWorldGeometryCacheKey string
 	PlacementItems                        []streamedPlacementInstance
 	ObjectSnapshots                       map[string]*content.VoxelObjectSnapshotDef
+	v2Placements                          map[string]bool
 	objectSnapshotGeometry                map[string]*streamedObjectSnapshotGeometry
 	PrepareDuration                       time.Duration
 	Err                                   error
@@ -2327,11 +2328,16 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		if streamedPreparationCancelled(job.prepareCancel) {
 			return result
 		}
-		snapshotPath := content.ResolveDocumentPath(override.SnapshotPath, job.WorldDeltaPath)
-		snapshot, err := content.LoadVoxelObjectSnapshot(snapshotPath)
+		snapshot, v2, err := resolveStreamedVoxelObjectPayload(job.Loader, job.Placements, key, override, job.LevelPath, job.WorldDeltaPath)
 		if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 			result.Err = err
 			return result
+		}
+		if v2 {
+			if result.v2Placements == nil {
+				result.v2Placements = make(map[string]bool)
+			}
+			result.v2Placements[override.PlacementID] = true
 		}
 		result.ObjectSnapshots[key] = snapshot
 		geometry := XBrickMapFromVoxelObjectSnapshot(snapshot)

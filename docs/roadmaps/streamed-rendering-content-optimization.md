@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2b1 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2b2 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -794,8 +794,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P1d | `a76dd09` | Ordinary runtime managed authority, renderer derivatives and explicit promotion | [Runtime contract](../renderer/editing.md#ordinary-managed-runtime-geometry) |
 | P1e | `6b3ae8b` | Incremental immutable authority snapshots including auxiliary halos | [Snapshot contract](../renderer/editing.md#managed-voxel-ownership) |
 | E2a | `38101bd` | Canonical object base identity and opt-in full/base-delta content payloads | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
-
-| E2b1 | This commit | Trusted authored shape/lattice provenance and managed qualification | [Provenance contract](../renderer/editing.md#authored-shape-base-provenance) |
+| E2b1 | `e9dad29` | Trusted authored shape/lattice provenance and managed qualification | [Provenance contract](../renderer/editing.md#authored-shape-base-provenance) |
+| E2b2 | This commit | Bound authored-shape payload loading with current override selection | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -805,8 +805,9 @@ public mutable exposure. P1c establishes the volume boundary; P1d integrates
 ordinary entities using independent renderer derivatives and explicit promotion.
 P1e adds incremental authority publication. E2 base identity and payload ownership
 are approved for ordinary authored objects; E2a establishes their content contract.
-E2b1 adds trusted individual authored-shape provenance. Other source adapters,
-payload loading and S4 integration follow.
+E2b1 adds trusted individual authored-shape provenance; E2b2 adds v2 loading.
+Streamed edit ownership needs [alignment](streamed-rendering-p1c.md#next-alignment-ordinary-streamed-edit-ownership)
+before managed restoration and S4 writing. Other source adapters remain open.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
@@ -2275,6 +2276,34 @@ No windowed check: geometry construction, renderer authority and persistence
 formats retain their existing observable behavior. Other source adapters,
 v2 payload loading and bounded S4 capture/save remain. Existing tests and
 unrelated changes remain.
+
+### E2b2: Bound ordinary-shape payload loading
+
+Commit: this entry's introducing commit. Workers resolve v2 full/base-delta
+payloads against canonical authored shape definitions and retain existing P5c
+registration ownership. Resumable commits re-read current payloads before override
+publication; actual item lookup preserves collapsed legacy behavior, and explicit
+owner IDs separate overlapping NUL prefixes. Fatal partial ownership retains S1g
+pins until successful Stop. Contract:
+[ordinary object loading](../content/streaming-and-worlds.md#ordinary-object-override-loading).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestE2b2' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'TestE2b2|TestS1g|TestP5c|TestS3v' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run 'TestE2b2|TestS1g|TestP5c|TestS3v' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep passed (root 17.766 s); the five consumer commands below passed.
+No new windowed check: resolved geometry feeds the existing dense registration
+and upload path; no pixel/FPS claim. Other origins retain v1; v2 conditional
+sibling scans and ignored unused legacy targets retain the documented limits.
+Save dispatch and managed restoration remain unchanged. Next requires
+[streamed edit-owner alignment](streamed-rendering-p1c.md#next-alignment-ordinary-streamed-edit-ownership)
+before dependent restoration/S4 implementation. Existing tests and unrelated
+changes remain.
 
 Consumer commands for these steps:
 
