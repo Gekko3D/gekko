@@ -121,7 +121,11 @@ bounded dictionary-free default. A dictionary frame requires the matching
 explicit profile. The runtime loader retains its existing cache and lease
 ownership; configure `RuntimeContentLoaderOptions.ImportedWorldCodec` and inject
 the loader into streamed runtime. See [decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime).
-Initial compiled chunks keep normal data in existing aux sidecars.
+For embedded fitted normals, compute
+`ImportedWorldChunkCompiledGeometryIdentity`, bake against that source, and call
+`SaveImportedWorldChunkCompiledWithAux`. Existing compiled saves retain decoded
+`EmbeddedAux`; explicit nil removes it. Embedded records take priority in public
+conversion and full/proxy preparation. Chunks without them keep aux sidecar fallback.
 See [compiled frames](compiled-voxels.md) for identity, limits, range reads and
 dictionary compatibility. Legacy JSON/RLE/aux acceptance remains unchanged.
 

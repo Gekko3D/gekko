@@ -34,6 +34,11 @@ source references and versions; including it inside the checksummed/hash-verifie
 body binds it to the geometry. The codec treats metadata as opaque bytes; it does
 not normalize JSON. Imported metadata uses deterministic owner-defined JSON.
 
+`Identity(Document) (string, int64, error)` returns that hash and canonical body
+length without compression. It retains logical limits, input immutability and
+terminal Close, shares encode serialization, and returns zero results on error.
+The encoded-size limit applies only when producing a frame.
+
 ## Wire format v1
 
 Integers are little-endian. Frame header is 96 bytes:
@@ -69,6 +74,45 @@ schema, chunk coordinate, chunk size, voxel resolution, occupied count and tags.
 The imported adapter validates metadata/lattice against every brick/cell.
 `PayloadHash` is document identity; `PayloadSizeBytes` is canonical decoded body
 length for this new kind. Old kinds retain their original size/hash definitions.
+
+### Imported embedded normals
+
+An optional imported `aux` metadata extension contains `schema_version` (exactly
+1), `source_payload_hash` and `source_payload_size_bytes`. The source is the
+geometry-only C1a document: original imported metadata without this extension,
+unchanged raw primary/material channels, no brick auxiliary bytes and an empty
+bake version. `ImportedWorldChunkCompiledGeometryIdentity` computes this hash
+and body size without mutating the input. The final frame identity includes the
+extension, bake version and all normal bytes; it is never its own source hash.
+
+Embedded normal records require the current `ImportedWorldNormalBakeVersion`,
+matching auxiliary world/schema/coordinate/lattice and geometry source identity.
+Each unique aligned nonnegative record origin must fit signed int32 and identify
+an occupied source brick. Each record contains exactly 1,088 bytes; its first 64 little-endian
+occupancy bytes must equal the source occupancy. Preserve every remaining byte,
+including normal words for unoccupied cells. Partial coverage is valid, but a
+declared layer requires at least one record. Imported embedded documents require
+byte-canonical owner metadata and present raw material layers on every brick,
+making geometry identities and no-op resaves reproducible. Geometry-only C1a
+frames retain their acceptance of absent materials and noncanonical owner JSON.
+
+Decode validates these bindings before publishing `EmbeddedAux`. The field is
+excluded from authored JSON, retains the geometry source identity and owns its
+records. Auxiliary payload hash/size use the existing aux-record encoding in
+canonical coordinate order. `SaveImportedWorldChunkCompiledWithAux` accepts an
+explicit layer; nil removes it. Successful saves publish an independent canonical
+copy or clear the field, leaving the supplied auxiliary input unchanged. Existing
+compiled save APIs retain the field; stale geometry rejects retained normals
+until rebaked or explicitly removed. Matching resaves return `Wrote=false`.
+
+Public conversion trusts this field as validated shipping data and copies it
+once. Callers assigning it directly must meet the same eligibility contract.
+Full/proxy preparation prefers embedded records, skips sidecar loading, includes
+the selected normal identity in prepared keys and retains existing sidecar
+fallback when no embedded layer exists. Existing decoded graph accounting and
+leases own the records; live geometry copies remain independent. Legacy auxiliary
+readers/application, normal fitting, halos, collision and navigation retain their
+contracts. Compiler emission and neighborhood reuse are separate follow-ups.
 
 ## Bounds and ownership
 

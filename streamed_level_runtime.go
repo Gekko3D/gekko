@@ -2206,7 +2206,7 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 		return result
 	}
 	result.Chunk = chunk
-	result.Aux, result.AuxHit = loadStreamedImportedWorldAux(job.Loader, job.LOD.Aux, job.ManifestPath)
+	result.Aux, result.AuxHit = selectedStreamedImportedWorldAux(chunk, job.Loader, job.LOD.Aux, job.ManifestPath)
 	if streamedPreparationCancelled(job.prepareCancel) {
 		return result
 	}
@@ -2283,6 +2283,9 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			return result
 		}
 		result.ImportedWorldChunk = chunk
+		if chunk.EmbeddedAux != nil {
+			result.ImportedWorldAux, result.ImportedWorldAuxHit = chunk.EmbeddedAux, true
+		}
 		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_override", chunkPath, chunk.PayloadHash, chunk.PayloadSizeBytes)
 		if job.compactPreparedGeometry && !job.HasImportedWorldBacking {
 			result.geometrySource, _ = job.PreparedGeometryCache.getOrBuildSource(result.PreparedImportedWorldGeometryCacheKey, true, func() *volume.XBrickMap {
@@ -2301,7 +2304,7 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			return result
 		}
 		result.ImportedWorldChunk = chunk
-		result.ImportedWorldAux, result.ImportedWorldAuxHit = loadStreamedImportedWorldAux(job.Loader, job.ImportedWorldEntry.Aux, job.ImportedWorldManifestPath)
+		result.ImportedWorldAux, result.ImportedWorldAuxHit = selectedStreamedImportedWorldAux(chunk, job.Loader, job.ImportedWorldEntry.Aux, job.ImportedWorldManifestPath)
 		if streamedPreparationCancelled(job.prepareCancel) {
 			return result
 		}
@@ -2368,12 +2371,19 @@ func prepareImportedWorldChunkGeometry(chunk *content.ImportedWorldChunkDef, aux
 		return nil
 	}
 	xbm := ImportedWorldChunkToXBrickMap(chunk)
-	if len(aux) > 0 {
+	if chunk.EmbeddedAux == nil && len(aux) > 0 {
 		ApplyImportedWorldChunkAuxToXBrickMap(xbm, aux[0])
 	}
 	xbm.ComputeAABB()
 	xbm.ClearDirty()
 	return xbm
+}
+
+func selectedStreamedImportedWorldAux(chunk *content.ImportedWorldChunkDef, loader *RuntimeContentLoader, ref *content.ImportedWorldChunkAuxRefDef, manifestPath string) (*content.ImportedWorldChunkAuxDef, bool) {
+	if chunk != nil && chunk.EmbeddedAux != nil {
+		return chunk.EmbeddedAux, true
+	}
+	return loadStreamedImportedWorldAux(loader, ref, manifestPath)
 }
 
 func loadStreamedImportedWorldAux(loader *RuntimeContentLoader, ref *content.ImportedWorldChunkAuxRefDef, manifestPath string) (*content.ImportedWorldChunkAuxDef, bool) {

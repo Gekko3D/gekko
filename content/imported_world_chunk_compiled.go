@@ -8,7 +8,6 @@ import (
 	"math"
 	"math/bits"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 
@@ -24,13 +23,14 @@ var defaultImportedCompiledCodec = sync.OnceValues(func() (*voxelcodec.Codec, er
 // Owner metadata is hashed inside the canonical frame. Derived identity and
 // encoded/decompressed lengths are intentionally not self-referential fields.
 type importedWorldCompiledMetadata struct {
-	WorldID            string               `json:"world_id"`
-	SchemaVersion      int                  `json:"schema_version"`
-	Coord              TerrainChunkCoordDef `json:"coord"`
-	ChunkSize          int                  `json:"chunk_size"`
-	VoxelResolution    float32              `json:"voxel_resolution"`
-	NonEmptyVoxelCount int                  `json:"non_empty_voxel_count"`
-	Tags               []string             `json:"tags,omitempty"`
+	WorldID            string                       `json:"world_id"`
+	SchemaVersion      int                          `json:"schema_version"`
+	Coord              TerrainChunkCoordDef         `json:"coord"`
+	ChunkSize          int                          `json:"chunk_size"`
+	VoxelResolution    float32                      `json:"voxel_resolution"`
+	NonEmptyVoxelCount int                          `json:"non_empty_voxel_count"`
+	Tags               []string                     `json:"tags,omitempty"`
+	Aux                *importedCompiledAuxMetadata `json:"aux,omitempty"`
 }
 
 func validateImportedCompiledMetadata(m importedWorldCompiledMetadata) error {
@@ -43,20 +43,23 @@ func validateImportedCompiledMetadata(m importedWorldCompiledMetadata) error {
 // SaveImportedWorldChunkCompiledWithCodec preserves raw primary/secondary bytes
 // in independently bounded bricks. The caller owns codec and its lifetime.
 func SaveImportedWorldChunkCompiledWithCodec(path string, def *ImportedWorldChunkDef, codec *voxelcodec.Codec) (ImportedWorldChunkSaveResult, error) {
+	var aux *ImportedWorldChunkAuxDef
+	if def != nil {
+		aux = def.EmbeddedAux
+	}
+	return SaveImportedWorldChunkCompiledWithAux(path, def, aux, codec)
+}
+
+func importedCompiledGeometry(def *ImportedWorldChunkDef) (voxelcodec.Document, importedWorldCompiledMetadata, error) {
 	if def == nil {
-		return ImportedWorldChunkSaveResult{}, fmt.Errorf("compiled chunk is nil")
+		return voxelcodec.Document{}, importedWorldCompiledMetadata{}, fmt.Errorf("compiled chunk is nil")
 	}
-	if codec == nil {
-		var err error
-		codec, err = defaultImportedCompiledCodec()
-		if err != nil {
-			return ImportedWorldChunkSaveResult{}, err
-		}
-	}
+	copyDef := *def
+	def = &copyDef
 	EnsureImportedWorldChunkDefaults(def)
 	metadata := importedWorldCompiledMetadata{WorldID: def.WorldID, SchemaVersion: def.SchemaVersion, Coord: def.Coord, ChunkSize: def.ChunkSize, VoxelResolution: def.VoxelResolution, Tags: def.Tags}
 	if err := validateImportedCompiledMetadata(metadata); err != nil {
-		return ImportedWorldChunkSaveResult{}, err
+		return voxelcodec.Document{}, importedWorldCompiledMetadata{}, err
 	}
 	voxels := make([]ImportedWorldVoxelDef, 0, len(def.Voxels))
 	for _, v := range def.Voxels {
@@ -64,7 +67,7 @@ func SaveImportedWorldChunkCompiledWithCodec(path string, def *ImportedWorldChun
 			continue
 		}
 		if v.X < 0 || v.Y < 0 || v.Z < 0 || v.X >= def.ChunkSize || v.Y >= def.ChunkSize || v.Z >= def.ChunkSize {
-			return ImportedWorldChunkSaveResult{}, fmt.Errorf("occupied imported voxel outside chunk lattice")
+			return voxelcodec.Document{}, importedWorldCompiledMetadata{}, fmt.Errorf("occupied imported voxel outside chunk lattice")
 		}
 		voxels = append(voxels, v)
 	}
@@ -74,7 +77,7 @@ func SaveImportedWorldChunkCompiledWithCodec(path string, def *ImportedWorldChun
 	bricks := make(map[[3]int32]*voxelcodec.Brick)
 	for i, v := range voxels {
 		if i > 0 && v.X == voxels[i-1].X && v.Y == voxels[i-1].Y && v.Z == voxels[i-1].Z {
-			return ImportedWorldChunkSaveResult{}, fmt.Errorf("duplicate occupied imported voxel")
+			return voxelcodec.Document{}, importedWorldCompiledMetadata{}, fmt.Errorf("duplicate occupied imported voxel")
 		}
 		coord := [3]int32{int32(v.X / 8), int32(v.Y / 8), int32(v.Z / 8)}
 		b := bricks[coord]
@@ -91,25 +94,13 @@ func SaveImportedWorldChunkCompiledWithCodec(path string, def *ImportedWorldChun
 	metadata.NonEmptyVoxelCount = len(voxels)
 	meta, err := json.Marshal(metadata)
 	if err != nil {
-		return ImportedWorldChunkSaveResult{}, err
+		return voxelcodec.Document{}, importedWorldCompiledMetadata{}, err
 	}
 	doc := voxelcodec.Document{Kind: "imported_chunk", Metadata: meta, Bricks: make([]voxelcodec.Brick, 0, len(bricks))}
 	for _, b := range bricks {
 		doc.Bricks = append(doc.Bricks, *b)
 	}
-	frame, info, err := codec.Encode(doc)
-	if err != nil {
-		return ImportedWorldChunkSaveResult{}, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return ImportedWorldChunkSaveResult{}, err
-	}
-	wrote, err := writeFileIfChanged(path, frame, 0644)
-	if err != nil {
-		return ImportedWorldChunkSaveResult{}, err
-	}
-	def.PayloadKind, def.PayloadHash, def.PayloadSizeBytes, def.NonEmptyVoxelCount = ImportedWorldChunkPayloadBrickZstdBinaryV1, info.ContentID, int(info.DecodedBytes), len(voxels)
-	return ImportedWorldChunkSaveResult{Wrote: wrote, PayloadKind: def.PayloadKind, PayloadHash: def.PayloadHash, PayloadSizeBytes: def.PayloadSizeBytes}, nil
+	return doc, metadata, nil
 }
 
 func importedCompiledVoxelLess(a, b ImportedWorldVoxelDef) bool {
@@ -122,8 +113,8 @@ func importedCompiledVoxelLess(a, b ImportedWorldVoxelDef) bool {
 	return a.X < b.X
 }
 
-func importedWorldChunkFromCompiled(doc voxelcodec.Document, info voxelcodec.Info) (*ImportedWorldChunkDef, error) {
-	if doc.Kind != "imported_chunk" || doc.NormalBakeVersion != "" {
+func importedWorldChunkFromCompiled(doc voxelcodec.Document, info voxelcodec.Info, codec *voxelcodec.Codec) (*ImportedWorldChunkDef, error) {
+	if doc.Kind != "imported_chunk" {
 		return nil, fmt.Errorf("unsupported imported document kind/bake layer")
 	}
 	var metadata importedWorldCompiledMetadata
@@ -133,13 +124,14 @@ func importedWorldChunkFromCompiled(doc voxelcodec.Document, info voxelcodec.Inf
 	if err := validateImportedCompiledMetadata(metadata); err != nil {
 		return nil, err
 	}
+	aux, err := decodeImportedCompiledAux(doc, metadata, codec)
+	if err != nil {
+		return nil, err
+	}
 	// The count is cross-checked from decoded bricks before using owner metadata
 	// as an allocation size. Generic codec already validated channel cardinality.
 	count := 0
 	for _, b := range doc.Bricks {
-		if b.Aux != nil {
-			return nil, fmt.Errorf("embedded imported auxiliary layers are not supported")
-		}
 		origin := [3]int64{int64(b.Coord[0]) * 8, int64(b.Coord[1]) * 8, int64(b.Coord[2]) * 8}
 		for axis := 0; axis < 3; axis++ {
 			if origin[axis] < 0 || origin[axis] >= int64(metadata.ChunkSize) {
@@ -164,7 +156,7 @@ func importedWorldChunkFromCompiled(doc voxelcodec.Document, info voxelcodec.Inf
 	if count != metadata.NonEmptyVoxelCount {
 		return nil, fmt.Errorf("imported occupied-count mismatch")
 	}
-	chunk := &ImportedWorldChunkDef{WorldID: metadata.WorldID, SchemaVersion: metadata.SchemaVersion, Coord: metadata.Coord, ChunkSize: metadata.ChunkSize, VoxelResolution: metadata.VoxelResolution, NonEmptyVoxelCount: count, Tags: metadata.Tags, PayloadKind: ImportedWorldChunkPayloadBrickZstdBinaryV1, PayloadHash: info.ContentID, PayloadSizeBytes: int(info.DecodedBytes), Voxels: make([]ImportedWorldVoxelDef, 0, count)}
+	chunk := &ImportedWorldChunkDef{EmbeddedAux: aux, WorldID: metadata.WorldID, SchemaVersion: metadata.SchemaVersion, Coord: metadata.Coord, ChunkSize: metadata.ChunkSize, VoxelResolution: metadata.VoxelResolution, NonEmptyVoxelCount: count, Tags: metadata.Tags, PayloadKind: ImportedWorldChunkPayloadBrickZstdBinaryV1, PayloadHash: info.ContentID, PayloadSizeBytes: int(info.DecodedBytes), Voxels: make([]ImportedWorldVoxelDef, 0, count)}
 	for _, b := range doc.Bricks {
 		origin := [3]int64{int64(b.Coord[0]) * 8, int64(b.Coord[1]) * 8, int64(b.Coord[2]) * 8}
 		channel := 0
@@ -213,7 +205,7 @@ func LoadImportedWorldChunkWithCodec(path string, codec *voxelcodec.Codec) (*Imp
 		if err != nil {
 			return nil, err
 		}
-		return importedWorldChunkFromCompiled(doc, info)
+		return importedWorldChunkFromCompiled(doc, info, codec)
 	}
 	data, err := io.ReadAll(file)
 	if err != nil {

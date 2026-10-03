@@ -147,17 +147,20 @@ type ImportedWorldLODDef struct {
 }
 
 type ImportedWorldChunkDef struct {
-	WorldID            string                  `json:"world_id"`
-	SchemaVersion      int                     `json:"schema_version"`
-	Coord              TerrainChunkCoordDef    `json:"coord"`
-	ChunkSize          int                     `json:"chunk_size"`
-	VoxelResolution    float32                 `json:"voxel_resolution"`
-	PayloadKind        string                  `json:"payload_kind,omitempty"`
-	PayloadHash        string                  `json:"payload_hash,omitempty"`
-	PayloadSizeBytes   int                     `json:"payload_size_bytes,omitempty"`
-	Voxels             []ImportedWorldVoxelDef `json:"voxels,omitempty"`
-	NonEmptyVoxelCount int                     `json:"non_empty_voxel_count,omitempty"`
-	Tags               []string                `json:"tags,omitempty"`
+	// EmbeddedAux is validated compiled shipping data. Manual assignments must
+	// satisfy the compiled embedding contract; it is not authored JSON.
+	EmbeddedAux        *ImportedWorldChunkAuxDef `json:"-"`
+	WorldID            string                    `json:"world_id"`
+	SchemaVersion      int                       `json:"schema_version"`
+	Coord              TerrainChunkCoordDef      `json:"coord"`
+	ChunkSize          int                       `json:"chunk_size"`
+	VoxelResolution    float32                   `json:"voxel_resolution"`
+	PayloadKind        string                    `json:"payload_kind,omitempty"`
+	PayloadHash        string                    `json:"payload_hash,omitempty"`
+	PayloadSizeBytes   int                       `json:"payload_size_bytes,omitempty"`
+	Voxels             []ImportedWorldVoxelDef   `json:"voxels,omitempty"`
+	NonEmptyVoxelCount int                       `json:"non_empty_voxel_count,omitempty"`
+	Tags               []string                  `json:"tags,omitempty"`
 }
 
 type ImportedWorldChunkAuxDef struct {

@@ -105,6 +105,23 @@ func (c *Codec) Encode(doc Document) ([]byte, Info, error) {
 	return frame, frameInfo(frameHeaderBytes+int64(len(compressed)), int64(len(body)), dictionaryID, dictionaryHash, contentHash), nil
 }
 
+// Identity validates canonical content without compressing or applying encoded-size limits.
+func (c *Codec) Identity(doc Document) (string, int64, error) {
+	c.lifetime.RLock()
+	defer c.lifetime.RUnlock()
+	if c.closed {
+		return "", 0, ErrClosed
+	}
+	c.encodeMu.Lock()
+	defer c.encodeMu.Unlock()
+	body, err := encodeBody(doc, c.limits)
+	if err != nil {
+		return "", 0, err
+	}
+	hash := sha256.Sum256(body)
+	return hex.EncodeToString(hash[:]), int64(len(body)), nil
+}
+
 func frameInfo(encoded, decoded int64, id uint32, dictionary, content [32]byte) Info {
 	info := Info{EncodedBytes: encoded, DecodedBytes: decoded, DictionaryID: id, ContentID: hex.EncodeToString(content[:])}
 	if id != 0 {

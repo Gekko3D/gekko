@@ -779,11 +779,13 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5k | `9c4298a` | Exact deduplicated normal-halo marking in fresh constructors | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
 | P1b | `df6896c` | Opt-in compact private prepared sources with current dense authority | [Ownership design](streamed-rendering-p1b.md) |
 | C1a | `2492a3f` | Lossless bounded zstd frames and opt-in compiled imported chunks | [Compiled contract](../content/compiled-voxels.md) |
-| C1b | This commit | Fixed borrowed compiled-chunk codec profile per decoded cache owner | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
+| C1b | `5b69193` | Fixed borrowed compiled-chunk codec profile per decoded cache owner | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
+| C1c | This commit | Validated embedded fitted normals with separate geometry identity | [Compiled contract](../content/compiled-voxels.md#imported-embedded-normals) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: C1 embedded eligible normals. Runtime dictionary profiles are complete.
+Next: C1 compiler emission with embedded normals and neighborhood reuse.
+Runtime dictionary profiles and imported embedding are complete.
 On 2026-10-03,
 the user approved optional layers/dictionaries and broader compiled assets and
 region-pack follow-ups. The [C1 design](streamed-rendering-c1.md) specifies a new
@@ -2055,6 +2057,35 @@ Editor full-test baseline remains as recorded in P1a; editor build passes.
 Existing tests and unrelated changes remain. Codec working storage is outside
 decoded-residency accounting. Automatic dictionary selection/training requires
 corpus evidence; normal embedding is next.
+
+### C1c: Embedded imported fitted normals
+
+This commit adds a bounded identity-only helper and opt-in embedded normal
+records, bound to the exact C1a geometry projection. Full/proxy/override paths
+prefer validated embedded bytes; old sidecar fallback and acceptance remain.
+Root and independent reviews passed. Focused/race checks, full engine tests
+(17.036 s), five consumer builds and native exact full/proxy normal bytes,
+readiness, collision presence, isolated edit/reupload and Stop cleanup passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/voxelcodec ./content . -run '^(TestC1c|TestC1a|TestC1b|TestImportedWorldChunk|TestP5a|TestP1b)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./content/voxelcodec ./content . -run '^(TestC1c|TestC1a|TestC1b|TestImportedWorldChunk|TestP5a|TestP1b)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-c1c-smoke /tmp/gekko-c1c-smoke.go
+/tmp/gekko-c1c-smoke > /tmp/gekko-c1c-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-c1c-edges.go
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-c1c-size.go
+```
+
+Native checks completed in 12 frames (378 ms). Disposable sparse-edge checks
+confirmed nonmutating defaults and geometry-only large-coordinate compatibility
+while rejecting unrepresentable auxiliary origins without replacing the file.
+A synthetic mixed 32³ fixture with 64 fitted-normal records occupied 235,225
+bytes as RLE plus aux sidecar versus 2,092 bytes embedded; this is not corpus,
+decode-speed, pixel/FPS or RSS evidence. Defaults remain legacy. Editor full-test
+baseline remains as recorded in P1a; editor build passes. Existing tests and
+unrelated changes remain. Next: compiler emission/neighborhood reuse, then C3.
 
 Consumer commands for these steps:
 

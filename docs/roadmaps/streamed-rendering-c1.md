@@ -1,6 +1,7 @@
 # C1: Lossless compiled voxel frames
 
-Status: C1a and C1b complete. The user approved the optional C1
+Status: C1a, C1b and C1c complete. Compiler emission and neighborhood reuse are
+next. The user approved the optional C1
 layers/dictionaries and broader compiled-asset/region-pack follow-ups on 2026-10-03.
 Follow the parent roadmap's dependencies; C2 retains its measured-scale gate.
 
@@ -25,9 +26,71 @@ C1b fixes an optional borrowed codec profile on the existing loader owner; see
 Per-load profiles would require new key semantics and could alias dictionaries.
 A fixed owner fits existing scope inheritance and runtime loader injection.
 
-Normal embedding follows in a separate batch. Its source identity must avoid
-hashing a self-reference while preserving authoritative geometry and normal
-version binding; settle that boundary before implementation.
+### C1c: Embedded fitted normals
+
+Use two identities. The final frame hashes all canonical bytes, including normals
+and their bake version. Its geometry-source projection is exactly the C1a
+`imported_chunk` document: original owner metadata, raw primary/material channels,
+no auxiliary metadata/layers and an empty bake version. Store that projection's
+hash/decoded size in an optional versioned `aux` metadata extension. Recompute
+and verify it before publishing decoded imported content. A final-frame source
+hash inside its own metadata would be circular; legacy sidecar references retain
+their existing rules.
+
+Public additions:
+
+- `Codec.Identity(Document) (string, int64, error)` validates the canonical body
+  and returns SHA-256/decoded size without compression. It shares encode
+  serialization, retains logical limits and terminal Close, and returns zero
+  values on failure. Encoded-size limits do not apply to identity-only work.
+- `ImportedWorldChunkCompiledGeometryIdentity(*ImportedWorldChunkDef, *Codec)`
+  returns `(string, int, error)` for that geometry projection, without mutating
+  input. Nil codec selects the default.
+- `ImportedWorldChunkDef.EmbeddedAux *ImportedWorldChunkAuxDef` uses `json:"-"`;
+  runtime shipping data does not become authored JSON.
+- `SaveImportedWorldChunkCompiledWithAux(path, chunk, aux, codec)` returns the
+  existing save result. Nil aux explicitly writes geometry only; nil codec uses
+  the default. Existing compiled save APIs retain `chunk.EmbeddedAux` when set.
+  Successful saves publish an independently owned canonical auxiliary copy;
+  explicit removal clears the field. The supplied auxiliary input is unchanged.
+
+The metadata extension contains `schema_version` (exactly aux schema 1),
+`source_payload_hash` and `source_payload_size_bytes`. It is excluded only by the
+owner's geometry projection; generic codec metadata remains opaque. Embedded
+input requires matching world/coordinate/lattice/schema, the current fitted bake
+version, matching geometry-source identity, and unique aligned nonnegative
+records for existing occupied bricks. Each record is exactly 1,088 bytes; its
+first 64 occupancy bytes must match the corresponding source brick. Preserve all
+normal bytes, including words for unoccupied cells. Partial record coverage is
+valid; a declared embedded layer must contain at least one record. Reject invalid
+embedding without changing old aux loading/application acceptance.
+Embedded documents require the imported writer's canonical metadata bytes and
+present raw material layers on every brick. This keeps the geometry projection
+and no-op resaves reproducible. Geometry-only imported frames retain C1a's
+acceptance of absent secondary layers and noncanonical owner JSON.
+
+Decoded EmbeddedAux retains the geometry-source hash/size and owns its record
+bytes. Its auxiliary payload hash/size use the existing aux-record encoding over
+canonical coordinate order. No-op compiled resaves retain layers and Wrote=false;
+changed geometry rejects stale normals until rebaked or explicitly removed.
+
+Validated embedded normals take priority over sidecar references; otherwise keep
+the current sidecar fallback. Existing fitting, dense construction, live copies,
+halo invalidation, registration, collision and navigation remain. The decoded
+chunk graph owns embedded storage and existing graph charging/pins count it once.
+Full/proxy results use the selected normal identity, including P1b sources.
+Public conversion trusts `EmbeddedAux` as validated shipping data, applies an
+independent copy once, and ignores a competing sidecar argument. Callers assigning
+the field directly must satisfy the same eligibility contract; conversion does
+not repeat hashing with a potentially different codec profile or limits.
+
+Scope: shared identity helper, imported compiled adapter/schema, imported geometry
+conversion, full/proxy aux selection and owning docs. Compiler emission flags and
+neighborhood reuse follow separately. Separate tests/implementation and independent
+PRE/POST reviews cover identities, exact bytes, stale/malformed layers, no-op
+resaves, public conversion, full/proxy selection, ownership and existing fallback.
+Run focused/race checks, engine/consumer boundary checks and native normal-byte,
+readiness/edit/cleanup checks. No shader or fitting change; no pixel/FPS claim.
 
 This is the long-term compiled-content path. A whole-level compressed stream
 would prevent bounded range loading; replacing old kinds would break migration

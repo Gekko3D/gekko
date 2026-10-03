@@ -41,7 +41,7 @@ func ImportedWorldChunkToXBrickMap(chunk *content.ImportedWorldChunkDef) *volume
 	if chunk == nil {
 		return volume.BuildXBrickMap(nil)
 	}
-	return volume.BuildXBrickMap(func(yield func(volume.VoxelWrite) bool) {
+	xbm := volume.BuildXBrickMap(func(yield func(volume.VoxelWrite) bool) {
 		for _, voxel := range chunk.Voxels {
 			if voxel.Value == 0 {
 				continue
@@ -54,6 +54,8 @@ func ImportedWorldChunkToXBrickMap(chunk *content.ImportedWorldChunkDef) *volume
 			}
 		}
 	})
+	ApplyImportedWorldChunkAuxToXBrickMap(xbm, chunk.EmbeddedAux)
+	return xbm
 }
 
 func ApplyImportedWorldChunkAuxToXBrickMap(xbm *volume.XBrickMap, aux *content.ImportedWorldChunkAuxDef) {

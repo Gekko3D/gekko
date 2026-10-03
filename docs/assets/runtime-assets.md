@@ -360,6 +360,10 @@ legacy JSON/RLE loading ignores the profile. Keep the codec alive through
 outstanding jobs/scopes. Clear, scope Close and runtime Stop never close it.
 Codec working storage remains outside decoded-residency estimates. Inject this
 owner through the existing `StreamedLevelRuntimeConfig.Loader` field.
+Compiled `EmbeddedAux` records belong to the decoded chunk graph and share its
+charge and leases. Prepared/live geometry copies own their bytes; selecting the
+embedded layer creates no separate sidecar cache entry. See
+[compiled frames](../content/compiled-voxels.md#imported-embedded-normals).
 
 ## Important Constraints
 
