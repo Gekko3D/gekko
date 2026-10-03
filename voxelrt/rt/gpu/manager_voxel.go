@@ -288,7 +288,7 @@ func (m *GpuBufferManager) ActivateRetainedVoxelMap(xbm *volume.XBrickMap) bool 
 	stamp := m.nextRetainedVoxelMapUse()
 	m.retainedVoxelMapStats.Activations++
 	if entry := m.retainedVoxelMaps[xbm]; entry != nil {
-		entry.LastUse = stamp
+		m.touchRetainedVoxelMap(entry, stamp)
 		if _, ok := m.Allocations[xbm]; ok {
 			m.retainedVoxelMapStats.Hits++
 			return true
@@ -314,11 +314,12 @@ func (m *GpuBufferManager) RetainVoxelMap(xbm *volume.XBrickMap) bool {
 	}
 	entry := m.retainedVoxelMaps[xbm]
 	if entry == nil {
-		entry = &retainedVoxelMapEntry{}
+		entry = &retainedVoxelMapEntry{mapRef: xbm, heapIndex: -1}
 		m.retainedVoxelMaps[xbm] = entry
 	}
 	entry.SectorCount = len(xbm.Sectors)
-	entry.LastUse = stamp
+	m.touchRetainedVoxelMap(entry, stamp)
+	m.makeRetainedVoxelMapInactive(entry)
 	entry.Bytes = m.retainedVoxelMapBytes(xbm)
 	entry.AccountingDirty = false
 	return allocated
@@ -328,7 +329,7 @@ func (m *GpuBufferManager) ReleaseRetainedVoxelMap(xbm *volume.XBrickMap) {
 	if m == nil || xbm == nil || len(m.retainedVoxelMaps) == 0 {
 		return
 	}
-	delete(m.retainedVoxelMaps, xbm)
+	m.removeRetainedVoxelMapEntry(xbm)
 	m.retainedVoxelMapPruned = true
 	if len(m.retainedVoxelMaps) == 0 {
 		m.compactRetainedVoxelMaps()
@@ -414,7 +415,7 @@ func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, allo
 	if _, retained := m.retainedVoxelMaps[xbm]; retained {
 		m.retainedVoxelMapPruned = true
 	}
-	delete(m.retainedVoxelMaps, xbm)
+	m.removeRetainedVoxelMapEntry(xbm)
 }
 
 func (m *GpuBufferManager) releaseVoxelAuxSlot(brick *volume.Brick) {

@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"container/heap"
 	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -10,6 +11,56 @@ import (
 // It excludes physical buffer/atlas capacity, lookup/object/material buffers,
 // CPU geometry and temporary accounting; it is not a VRAM/process ceiling.
 const DefaultRetainedVoxelMapBudgetBytes = 128 << 20
+
+// Inactive owners only; scene membership and accounting remain main-thread work.
+type retainedVoxelMapHeap []*retainedVoxelMapEntry
+
+func (h retainedVoxelMapHeap) Len() int           { return len(h) }
+func (h retainedVoxelMapHeap) Less(i, j int) bool { return h[i].LastUse < h[j].LastUse }
+func (h retainedVoxelMapHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].heapIndex, h[j].heapIndex = i, j
+}
+func (h *retainedVoxelMapHeap) Push(value any) {
+	entry := value.(*retainedVoxelMapEntry)
+	entry.heapIndex = len(*h)
+	*h = append(*h, entry)
+}
+func (h *retainedVoxelMapHeap) Pop() any {
+	last := len(*h) - 1
+	entry := (*h)[last]
+	(*h)[last] = nil
+	*h = (*h)[:last]
+	entry.heapIndex = -1
+	return entry
+}
+
+func (m *GpuBufferManager) unlinkRetainedVoxelMapInactive(entry *retainedVoxelMapEntry) {
+	if entry.heapIndex >= 0 {
+		heap.Remove(&m.retainedVoxelMapInactive, entry.heapIndex)
+	}
+}
+
+func (m *GpuBufferManager) makeRetainedVoxelMapInactive(entry *retainedVoxelMapEntry) {
+	if !entry.Pinned && entry.mapRef != nil && entry.heapIndex < 0 {
+		heap.Push(&m.retainedVoxelMapInactive, entry)
+	}
+}
+
+func (m *GpuBufferManager) touchRetainedVoxelMap(entry *retainedVoxelMapEntry, stamp uint64) {
+	entry.LastUse = stamp
+	if entry.heapIndex >= 0 {
+		heap.Fix(&m.retainedVoxelMapInactive, entry.heapIndex)
+	}
+}
+
+func (m *GpuBufferManager) removeRetainedVoxelMapEntry(xbm *volume.XBrickMap) {
+	if entry := m.retainedVoxelMaps[xbm]; entry != nil {
+		m.unlinkRetainedVoxelMapInactive(entry)
+		entry.mapRef = nil
+	}
+	delete(m.retainedVoxelMaps, xbm)
+}
 
 func addRetainedVoxelBytes(a, b uint64) uint64 {
 	if b > ^uint64(0)-a {
@@ -84,6 +135,7 @@ func (m *GpuBufferManager) nextRetainedVoxelMapUse() uint64 {
 			m.retainedVoxelMaps[xbm].LastUse = uint64(i) + 1
 		}
 		m.retainedVoxelMapClock = uint64(len(keys))
+		heap.Init(&m.retainedVoxelMapInactive)
 	}
 	m.retainedVoxelMapClock++
 	return m.retainedVoxelMapClock
@@ -93,6 +145,10 @@ func (m *GpuBufferManager) compactRetainedVoxelMaps() {
 	m.retainedVoxelMapPruned = false
 	if len(m.retainedVoxelMaps) == 0 {
 		m.retainedVoxelMaps = nil
+		for len(m.retainedVoxelMapInactive) > 0 {
+			heap.Pop(&m.retainedVoxelMapInactive).(*retainedVoxelMapEntry).mapRef = nil
+		}
+		m.retainedVoxelMapInactive = nil
 		return
 	}
 	retained := make(map[*volume.XBrickMap]*retainedVoxelMapEntry, len(m.retainedVoxelMaps))
@@ -110,15 +166,10 @@ func (m *GpuBufferManager) evictRetainedVoxelMaps(activeMaps map[*volume.XBrickM
 		m.compactRetainedVoxelMaps()
 	}
 	if len(m.retainedVoxelMaps) == 0 {
-		m.retainedVoxelMaps = nil
+		m.compactRetainedVoxelMaps()
 		return
 	}
 	stamp := m.nextRetainedVoxelMapUse()
-	type inactiveEntry struct {
-		mapRef *volume.XBrickMap
-		entry  *retainedVoxelMapEntry
-		bytes  uint64
-	}
 	var bytes uint64
 	sectors := 0
 	for xbm, entry := range m.retainedVoxelMaps {
@@ -127,7 +178,10 @@ func (m *GpuBufferManager) evictRetainedVoxelMaps(activeMaps map[*volume.XBrickM
 		}
 		entry.Pinned = activeMaps[xbm]
 		if entry.Pinned {
+			m.unlinkRetainedVoxelMapInactive(entry)
 			entry.LastUse = stamp // Maintenance is usage, never an activation hit.
+		} else {
+			m.makeRetainedVoxelMapInactive(entry)
 		}
 		if entry.AccountingDirty {
 			entry.Bytes = m.retainedVoxelMapBytes(xbm)
@@ -143,27 +197,23 @@ func (m *GpuBufferManager) evictRetainedVoxelMaps(activeMaps map[*volume.XBrickM
 	if !overBudget() {
 		return
 	}
-	var inactive []inactiveEntry
-	for xbm, entry := range m.retainedVoxelMaps {
-		if entry != nil && !entry.Pinned && xbm != nil {
-			inactive = append(inactive, inactiveEntry{xbm, entry, entry.Bytes})
-		}
-	}
-	sort.Slice(inactive, func(i, j int) bool { return inactive[i].entry.LastUse < inactive[j].entry.LastUse })
 	evicted := false
 	saturated := bytes == ^uint64(0)
-	for _, victim := range inactive {
+	for len(m.retainedVoxelMapInactive) > 0 {
 		if !saturated && !overBudget() {
 			break
 		}
-		delete(m.retainedVoxelMaps, victim.mapRef)
-		if alloc := m.Allocations[victim.mapRef]; alloc != nil {
-			m.releaseVoxelMapAllocation(victim.mapRef, alloc)
+		victim := m.retainedVoxelMapInactive[0]
+		m.retainedVoxelMapStats.EvictionCandidateVisits++
+		xbm := victim.mapRef
+		m.removeRetainedVoxelMapEntry(xbm)
+		if alloc := m.Allocations[xbm]; alloc != nil {
+			m.releaseVoxelMapAllocation(xbm, alloc)
 		}
 		if !saturated {
-			bytes -= victim.bytes
+			bytes -= victim.Bytes
 		}
-		sectors -= victim.entry.SectorCount
+		sectors -= victim.SectorCount
 		m.retainedVoxelMapStats.Evictions++
 		evicted = true
 	}

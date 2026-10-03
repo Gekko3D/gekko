@@ -331,6 +331,16 @@ staged uploads, and refresh active LRU age without counting hits. Trim runs befo
 orphan cleanup and after uploads. Either enabled cap can evict inactive LRU maps
 through the existing slot-release path. Active excess remains pinned. Retention
 map capacity is pruned; eviction preserves CPU geometry and object materials.
+Inactive candidates use a minimum heap keyed by existing `LastUse`; becoming
+inactive preserves the saved age. Retain/activation updates repair its order,
+and release removes the entry. Pressure selection avoids collecting/sorting all
+inactive owners; normal pin/accounting maintenance still visits retained owners.
+Removed entries clear their heap slots; a nonempty heap may retain peak capacity.
+
+`RetainedVoxelMapStats.EvictionCandidateVisits` counts cumulative nonnil pressure
+candidates selected, and streaming exposes
+`GPURetainedVoxelMapEvictionCandidateVisits`. Reads, no-pressure maintenance,
+all-pinned pressure and explicit releases do not advance it.
 
 `RetainedVoxelMapStats()` adds `Bytes`, `PinnedBytes`, `MaxBytes` and
 `PressureBytes` to existing counters. Reads sum private scalar accounting without

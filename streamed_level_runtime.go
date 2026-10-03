@@ -190,6 +190,7 @@ type StreamedLevelRuntimeMetrics struct {
 	PreparedGeometryCacheEvictionCandidateVisits int
 	PreparedGeometryCacheStorageReferenceVisits  int
 	DecodedContentCacheEvictionCandidateVisits   int
+	GPURetainedVoxelMapEvictionCandidateVisits   uint64
 
 	PreparedChunkCount    int
 	PrepareErrorCount     int
@@ -1980,6 +1981,7 @@ func recordStreamingRendererPressure(cmd *Commands, state *StreamedLevelRuntimeS
 		state.Metrics.GPURetainedVoxelMapHits = retainedStats.Hits
 		state.Metrics.GPURetainedVoxelMapMisses = retainedStats.Misses
 		state.Metrics.GPURetainedVoxelMapEvictions = retainedStats.Evictions
+		state.Metrics.GPURetainedVoxelMapEvictionCandidateVisits = retainedStats.EvictionCandidateVisits
 	}
 	if rt.RtApp.Scene != nil {
 		state.Metrics.RendererSceneStructureRevision = rt.RtApp.Scene.StructureRevision

@@ -505,11 +505,14 @@ type GpuBufferManager struct {
 	retainedVoxelMapClock          uint64
 	retainedVoxelMapPruned         bool
 	retainedVoxelMapStats          RetainedVoxelMapStats
+	retainedVoxelMapInactive       retainedVoxelMapHeap
 	retiredBuffers                 []retiredBuffer
 	retiredBindGroups              []retiredBindGroup
 }
 
 type retainedVoxelMapEntry struct {
+	mapRef          *volume.XBrickMap
+	heapIndex       int
 	SectorCount     int
 	LastUse         uint64
 	Pinned          bool
@@ -530,6 +533,7 @@ type RetainedVoxelMapStats struct {
 	PinnedBytes             uint64
 	MaxBytes                uint64
 	PressureBytes           uint64
+	EvictionCandidateVisits uint64
 }
 
 type retiredBuffer struct {

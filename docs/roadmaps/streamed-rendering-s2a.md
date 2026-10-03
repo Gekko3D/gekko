@@ -220,6 +220,33 @@ capacity would require different allocation/admission architecture. Shader layou
 normal bytes, upload readiness, collision and content formats remain unchanged.
 Use separate test/implementation agents and independent pre/post reviews.
 
+## S2i: Direct retained-GPU eviction candidates
+
+Status: implemented 2026-10-03; focused/race, engine and five consumer checks
+passed. See [delivery record](streamed-rendering-content-optimization.md#s2i-direct-retained-gpu-eviction-candidates-1).
+
+Keep a private minimum heap of inactive retained maps, keyed by existing
+`LastUse`. Retain/activation hits update that key; maintenance removes active
+maps and inserts newly inactive maps using their saved recency. Hidden scene
+members stay pinned. Preserve byte/sector caps, assigned-slot charges, pressure
+exceptions and the existing allocation-release path. Equal recency has no new
+ordering guarantee. Clock rebasing rebuilds heap order; removal clears heap refs.
+
+`RetainedVoxelMapStats.EvictionCandidateVisits` counts actual nonnil pressure
+victims, with the scalar published as
+`GPURetainedVoxelMapEvictionCandidateVisits`. Reads, all-pinned pressure and
+no-pressure maintenance add no visits. One existing owner scan still refreshes
+pins/charges; stats observations also scan owners. Selection drops the second
+owner scan and full inactive sort. Saturated totals still release all inactive
+owners conservatively. This changes the index, not GPU allocation ownership.
+
+Confidence is High for the established S2d policy and S2h indexing pattern.
+Files: GPU manager/retention methods and streamed metrics publication. Separate
+tests/implementation and independent PRE/POST reviews cover exact victims amid
+many pins, recency updates, pin transitions, explicit release and read-only
+metrics. Reuse S2d assigned-slot/readiness tests; focused checks, full engine and
+consumer boundary. Native checks are needed only for changed slot behavior.
+
 ## S2f: Direct unpinned eviction order
 
 Status: implemented 2026-10-03; focused/race, full engine and five consumer checks

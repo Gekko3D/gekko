@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2h, S3a–S3u, S4a–S4c and P5a–P5c complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2i, S3a–S3u, S4a–S4c and P5a–P5c complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -258,6 +258,13 @@ Completed: byte-pressure selection skips pinned decoded entries.
 An unpinned heap preserves last-load recency when scopes close, shared pins and
 Clear/singleflight semantics. [Owner and verification](streamed-rendering-s2b.md#s2h-direct-decoded-cache-eviction-candidates).
 Decode and storage estimation remain separate potentially large work.
+
+#### S2i: Direct retained-GPU eviction candidates
+
+Completed: retain an inactive-map heap keyed by existing usage recency. Preserve S2d
+pins, assigned-slot accounting and release; pressure selects victims directly
+without rebuilding/sorting all inactive candidates. Owner maintenance and stats
+scans remain. [Scope and verification](streamed-rendering-s2a.md#s2i-direct-retained-gpu-eviction-candidates).
 
 ### S3. Incremental selection and scene gathering
 
@@ -578,7 +585,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2g | `175c1ae` | Per-kind storage reference presence propagation | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 | S2h | `b84878b` | Direct decoded-cache candidates with preserved load recency | [Loader contract](../assets/runtime-assets.md#decoded-content-lifetime) |
 | S1h | `011de7d` | Structural-input voxel capacity planning | [Renderer contract](../renderer/runtime.md#voxel-capacity-planning) |
-| P5c | This commit | Worker-prepared snapshot registration with current authority | [Snapshot contract](../assets/runtime-assets.md#streamed-voxel-object-snapshot-registration) |
+| P5c | `1d93aab` | Worker-prepared snapshot registration with current authority | [Snapshot contract](../assets/runtime-assets.md#streamed-voxel-object-snapshot-registration) |
+| S2i | This commit | Direct inactive retained-GPU eviction candidates | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1365,7 +1373,7 @@ were preserved; macOS module stat-cache warnings exited successfully.
 
 ### P5c: Worker-prepared voxel-object snapshot registration
 
-2026-10-03, this commit. Workers prepare snapshot geometry, bounds and separate
+2026-10-03, `1d93aab`. Workers prepare snapshot geometry, bounds and separate
 registration copies. Matching snapshots adopt without main-thread reconstruction,
 copying or bounds scans. Resumable commits retain authoritative rereads, exact
 ordered-content checks and changed/removed/error fallback behavior. Legacy
@@ -1391,6 +1399,29 @@ behavior, not pixel parity or an FPS gain. File reads/comparison, changed-conten
 fallbacks, source spawning and worker temporary memory remain outside this
 improvement. Existing tests and unrelated changes preserved; macOS warnings
 exited successfully.
+
+### S2i: Direct retained-GPU eviction candidates
+
+2026-10-03, this commit. Pressure selects inactive GPU owners from existing
+recency directly. Hidden/active pins, exact assigned charges, recency updates,
+saturated pressure and allocation release remain unchanged. Candidate visits
+exclude reads, no-pressure maintenance, all-pinned pressure and explicit release.
+Separate tests/implementation and independent PRE/POST reviews passed.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^(TestS2i|TestS2d|TestVoxelUpload|TestVoxelObjectReady|TestPrepareVoxelStructureDirtyState|TestS1h)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^(TestS2i|TestS2d|TestVoxelUpload|TestVoxelObjectReady|TestS1h)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused 1.009s, race 1.935s, engine root 16.462s and all five consumer commands
+below passed. Existing assigned-slot/readiness coverage verifies the unchanged
+release path; no new native check was needed. Owner maintenance/stats scans and
+charge refresh work remain. Removed heap refs clear, but nonempty heaps may
+retain peak capacity; no total VRAM ceiling or measured FPS gain. Existing tests
+and unrelated changes preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 
