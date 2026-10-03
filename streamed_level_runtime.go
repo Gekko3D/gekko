@@ -142,6 +142,7 @@ type StreamedLevelRuntimeMetrics struct {
 	PreparedQueueDepth                     int
 	PreparedChunkQueueDepth                int
 	PreparedProxyQueueDepth                int
+	VoxelOverrideSelectionKeyVisitsLastJob int
 	PreparedGeometryCacheEntries           int
 	PreparedGeometryCacheBytes             int64
 	PreparedGeometryCachePreparedBytes     int64
@@ -2064,6 +2065,7 @@ func buildEffectiveStreamedPlacementIndex(level *content.LevelDef, levelPath str
 }
 
 func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoord) streamedChunkLoadJob {
+	state.Metrics.VoxelOverrideSelectionKeyVisitsLastJob = 0
 	job := streamedChunkLoadJob{
 		Generation:              state.Generation,
 		Coord:                   coord,
@@ -2091,11 +2093,24 @@ func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoor
 		overrideCopy := override
 		job.TerrainOverride = &overrideCopy
 	}
+	if len(job.Placements) == 0 {
+		return job
+	}
+	selected := make(map[string]struct{}, len(job.Placements))
 	for _, placement := range job.Placements {
-		prefix := placement.PlacementID + "\x00"
-		for key, override := range state.voxelOverrideMap {
-			if len(key) > len(prefix) && key[:len(prefix)] == prefix {
+		selected[placement.PlacementID] = struct{}{}
+	}
+	for key, override := range state.voxelOverrideMap {
+		state.Metrics.VoxelOverrideSelectionKeyVisitsLastJob++
+		// Placement IDs can contain NUL. Match every delimiter with a nonempty
+		// suffix to preserve the original placementID+NUL prefix predicate.
+		for i := 0; i+1 < len(key); i++ {
+			if key[i] != 0 {
+				continue
+			}
+			if _, matches := selected[key[:i]]; matches {
 				job.VoxelOverrides[key] = override
+				break
 			}
 		}
 	}

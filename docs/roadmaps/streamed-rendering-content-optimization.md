@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2i, S3a–S3u, S4a–S4c and P5a–P5c complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2i, S3a–S3v, S4a–S4c and P5a–P5c complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -268,7 +268,7 @@ scans remain. [Scope and verification](streamed-rendering-s2a.md#s2i-direct-reta
 
 ### S3. Incremental selection and scene gathering
 
-Status: partial. S3a–S3u implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal, live-validated material fingerprint reuse, one-pass linked-emitter aggregation, bounded lookup reuse and lazy normal neighbor preparation. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
+Status: partial. S3a–S3v implement selection, GPU records, ECS inventories, hierarchy reuse, core component publication, a bounded publication journal, live-validated material fingerprint reuse, one-pass linked-emitter aggregation, bounded lookup reuse, lazy normal neighbor preparation and one-pass saved object selection. Commits/designs: [delivery record](#completed-work). Contracts: [streaming docs](../content/streaming-and-worlds.md), [renderer runtime](../renderer/runtime.md), [ECS docs](../engine/ecs.md).
 
 Gameplay and other renderer-input notifications, bounded entity worklists and incremental extraction remain S3 work. Preserve compatibility for untracked public-field writes. Hierarchy/renderer still read live values. Nonempty caches may retain peak capacity; no general byte ceiling or frame-time gain.
 
@@ -342,6 +342,24 @@ PRE/POST reviews for the deferred extraction boundary. Cover idle/precomputed
 bypass, real same-frame seam bytes/halo propagation with a paused upload budget,
 original-snapshot noncascade and live neighbor metadata/duplicate changes.
 Run focused GPU checks, engine/consumer checks and native mixed lookup rendering.
+
+#### S3v: Select saved object overrides once per job
+
+Completed: build an invocation-local set of selected placement IDs, then enumerate world
+voxel-object override keys once. Preserve the existing prefix predicate exactly:
+placement ID, NUL separator and at least one trailing byte. Embedded NUL IDs,
+overlapping prefixes, duplicates and original key/value authority remain valid.
+No selected placements means no override enumeration. Workers still receive a
+copied selection; snapshot loading, errors and commit authority stay unchanged.
+
+Files: `streamed_level_runtime.go` and focused tests. Confidence is High: this
+extends S3 invocation-local aggregation without a persistent index or new
+invalidation/lifetime boundary. Use the routine tests-first workflow. Cover real
+snapshot application, exclusion of unrelated broken references, selected errors,
+prefix edge cases and public `VoxelOverrideSelectionKeyVisitsLastJob`. Reset that
+metric each job build; count world keys visited, with zero for no placements.
+Run focused streaming checks and the engine/consumer boundary. No GPU changes
+require a native check. One world-key pass and selected snapshot I/O still remain.
 
 ### S4. Remove synchronous persistence from unload
 
@@ -586,7 +604,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2h | `b84878b` | Direct decoded-cache candidates with preserved load recency | [Loader contract](../assets/runtime-assets.md#decoded-content-lifetime) |
 | S1h | `011de7d` | Structural-input voxel capacity planning | [Renderer contract](../renderer/runtime.md#voxel-capacity-planning) |
 | P5c | `1d93aab` | Worker-prepared snapshot registration with current authority | [Snapshot contract](../assets/runtime-assets.md#streamed-voxel-object-snapshot-registration) |
-| S2i | This commit | Direct inactive retained-GPU eviction candidates | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
+| S2i | `7c0f5fa` | Direct inactive retained-GPU eviction candidates | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
+| S3v | This commit | One-pass saved object override selection per chunk job | [Streaming contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1402,7 +1421,7 @@ exited successfully.
 
 ### S2i: Direct retained-GPU eviction candidates
 
-2026-10-03, this commit. Pressure selects inactive GPU owners from existing
+2026-10-03, `7c0f5fa`. Pressure selects inactive GPU owners from existing
 recency directly. Hidden/active pins, exact assigned charges, recency updates,
 saturated pressure and allocation release remain unchanged. Candidate visits
 exclude reads, no-pressure maintenance, all-pinned pressure and explicit release.
@@ -1422,6 +1441,27 @@ release path; no new native check was needed. Owner maintenance/stats scans and
 charge refresh work remain. Removed heap refs clear, but nonempty heaps may
 retain peak capacity; no total VRAM ceiling or measured FPS gain. Existing tests
 and unrelated changes preserved; macOS warnings exited successfully.
+
+### S3v: One-pass saved object override selection
+
+2026-10-03, this commit. Chunk job setup visits each world object override key
+once, with no scan for an empty placement selection. Full-prefix matching,
+embedded NUL/overlapping IDs, original key/value authority, applied saved voxels
+and selected-file errors are preserved. Public last-job visits expose this bound.
+Root reviewed and froze the minimal tests before the same agent implemented.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS3v|TestP5c|TestS1g|TestS2e)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused 2.540s, engine root 16.212s and all five consumer commands below passed.
+No concurrency, GPU or lifetime change required new race/native checks. World
+key enumeration, prefix comparisons and selected snapshot I/O remain; no measured
+frame-time gain. Existing tests and unrelated changes preserved; macOS module
+stat-cache warnings exited successfully.
 
 Consumer commands for these steps:
 

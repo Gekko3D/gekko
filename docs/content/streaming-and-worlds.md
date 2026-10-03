@@ -175,6 +175,13 @@ Important public entry point:
 
 - `StartStreamedLevelRuntime(...)`
 
+Each chunk job selects voxel-object override references in one pass over world
+keys using its placement IDs. Selection preserves the original full prefix
+rule, including embedded NUL IDs and nonempty item suffixes. No placements
+means no world-key scan. `VoxelOverrideSelectionKeyVisitsLastJob` reports keys
+visited by the latest chunk job build; each build resets it, idle frames do not.
+Snapshot loading/errors and current commit authority remain unchanged.
+
 Observer selection is owned by the main thread. Each tick scans live ECS
 observers, keyed by entity, world-space chunk coordinate, effective radii, chunk
 size, runtime generation, and selection revision. Unchanged keys reuse demand.
