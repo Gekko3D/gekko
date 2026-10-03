@@ -23,6 +23,7 @@ const (
 type streamedGeometryStorageLedger struct {
 	nodes                                         map[any]*streamedGeometryStorageNode
 	bytes, preparedBytes, assetBytes, pinnedBytes int64
+	referenceVisits                               int
 }
 
 type streamedGeometryStorageNode struct {
@@ -94,6 +95,7 @@ func (l *streamedGeometryStorageLedger) adjust(node *streamedGeometryStorageNode
 	if node == nil {
 		return
 	}
+	l.referenceVisits++
 	before := node.refs
 	node.refs[kind] += delta
 	after := node.refs
@@ -110,8 +112,12 @@ func (l *streamedGeometryStorageLedger) adjust(node *streamedGeometryStorageNode
 	}
 	l.assetBytes += streamedGeometryPresenceDelta(beforeAsset, afterAsset) * node.bytes
 	l.pinnedBytes += streamedGeometryPresenceDelta(before[2], after[2]) * node.bytes
-	for _, child := range node.children {
-		l.adjust(child, kind, delta)
+	// An active parent contributes one reference per child edge and owner kind.
+	// Repeated owners change this node's count without walking its children.
+	if childDelta := streamedGeometryPresenceDelta(before[kind], after[kind]); childDelta != 0 {
+		for _, child := range node.children {
+			l.adjust(child, kind, int(childDelta))
+		}
 	}
 	if after == ([3]int{}) {
 		delete(l.nodes, node.object)

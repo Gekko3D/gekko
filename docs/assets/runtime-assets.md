@@ -173,7 +173,8 @@ unused handles; the cache's current source remains authoritative.
 S2b pending admission charges the extra copy until consumption or drain, including
 deferred/cancelled results. `PreparedGeometryAssetAdoptions` counts successful
 worker-payload registrations; ordinary registrations and warm reuse do not
-increment it. Cache ledger traversal remains main-thread work.
+increment it. Cold cache ledger capture and first/last ownership traversal remain
+main-thread work.
 
 Acquired runtime users pin that copy. Warm entries share an LRU byte/entry policy; live users may
 exceed the byte ceiling and expose pressure metrics. Oversized or disabled warm
@@ -183,7 +184,12 @@ when that oldest entry owns an asset, leaving deletion to engine-thread trim.
 `PreparedGeometryCacheEvictionCandidateVisits` counts nonnil victims examined
 under pressure, including worker deferrals; reads and no-pressure maintenance do
 not advance it. Selection avoids scanning pinned/warm owners; storage graph
-removal retains its existing charge/lifetime work.
+removal retains its existing charge/lifetime work. Reference updates propagate
+to children only when that owner kind becomes present or absent, preserving
+physical sharing, prepared-preferred attribution and independent pinned bytes.
+`PreparedGeometryCacheStorageReferenceVisits` counts nonnil reference adjustments;
+reads do not advance it. Repeated shared references avoid child walks, while
+first/last ownership and standalone charge calculation can still traverse a graph.
 
 Cleanup uses the original registering AssetServer and exact acquired asset ID,
 including uncached/empty-key registrations. Successful streamed Stop releases

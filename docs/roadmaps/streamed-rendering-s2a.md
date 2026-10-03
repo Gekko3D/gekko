@@ -251,3 +251,30 @@ real hit/final-release ordering and worker deferral; reuse existing S2a lifetime
 and concurrency tests. Use separate test/implementation agents, independent
 PRE/POST reviews, focused race checks and engine/consumer boundary verification.
 Existing readiness, collision, formats and renderer retention remain unchanged.
+
+## S2g: Storage reference presence transitions
+
+Status: implemented 2026-10-03; focused/race, full engine and five consumer checks
+passed. See the [delivery record](streamed-rendering-content-optimization.md#s2g-storage-reference-presence-transitions-1).
+
+Scope: keep the immutable physical-storage ledger, but propagate an owner's
+reference change to children only when that owner kind becomes present or absent.
+Repeated references to an already-present map/sector/brick need not walk its
+children again. Each node still counts direct owners and active incoming links,
+including duplicate edges; prepared attribution wins over asset attribution.
+Independent prepared, asset and pinned presence remains exact across aliases.
+This follows S2a's physical accounting rather than replacing it with per-root sums.
+
+Files: `streamed_level_geometry_storage.go`, cache/runtime diagnostic publication
+and focused functionality coverage. Expose cumulative
+`PreparedGeometryCacheStorageReferenceVisits` (stats `StorageReferenceVisits`):
+one visit per nonnil ledger reference adjustment. Snapshot/metrics reads do not
+advance it. First admission/pin and last removal/unpin may still walk a large
+graph. Standalone charge calculation and cold graph capture remain separate work.
+
+Confidence is High after reviewing canonical shared-storage accounting and
+prepared/registered/pinned callers. No new eviction, collision, format or mutable
+geometry policy. Freeze minimal real owner coverage for repeated shared roots,
+shared interior nodes/duplicate edges, exact attribution and last-owner cleanup;
+reuse existing S2a alias, byte-pressure and live-lease coverage. Use the full
+separate-agent workflow, focused race and engine/consumer boundary checks.

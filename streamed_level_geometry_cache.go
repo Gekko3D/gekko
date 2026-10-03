@@ -67,6 +67,7 @@ type streamedPreparedGeometryCacheStats struct {
 	BuildWaits              int
 	OversizedBypasses       int
 	EvictionCandidateVisits int
+	StorageReferenceVisits  int
 }
 
 func streamedPreparedGeometryCacheMaxEntries(configured int) int {
@@ -312,6 +313,7 @@ func (c *streamedPreparedGeometryCache) snapshot() streamedPreparedGeometryCache
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	stats := c.stats
+	stats.StorageReferenceVisits = c.storage.referenceVisits
 	stats.Bytes = c.storage.bytes
 	stats.PreparedBytes = c.storage.preparedBytes
 	stats.AssetBytes = c.storage.assetBytes
