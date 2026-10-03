@@ -699,7 +699,7 @@ func waterStaticVoxelInventoryHash(cmd *Commands, assets *AssetServer, body *Wat
 		h.writeVec3(vmcCopy.CustomPivot)
 		h.writeTags(tags)
 		if assets != nil {
-			_, geometry, ok := ResolveVoxelGeometry(assets, &vmcCopy)
+			_, geometry, ok := resolveVoxelGeometry(assets, &vmcCopy)
 			h.writeUint32(boolToWaterHashBit(ok && geometry != nil && geometry.XBrickMap != nil))
 			if ok && geometry != nil && geometry.XBrickMap != nil {
 				h.writeVec3(geometry.LocalMin)
@@ -870,7 +870,7 @@ func resolveStaticVoxelOccupancyGeometry(assets *AssetServer, tr *TransformCompo
 	}
 	vmcCopy := *vmc
 	vmcCopy.NormalizeGeometryRefs()
-	_, geometry, ok := ResolveVoxelGeometry(assets, &vmcCopy)
+	_, geometry, ok := resolveVoxelGeometry(assets, &vmcCopy)
 	if !ok || geometry == nil || geometry.XBrickMap == nil {
 		return nil, TransformComponent{}, false
 	}

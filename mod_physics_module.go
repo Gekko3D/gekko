@@ -224,7 +224,7 @@ func PhysicsPullSystem(cmd *Commands, time *Time, proxy *PhysicsProxy, physics *
 				return true
 			}
 			if res, ok := resMap[eid]; ok {
-				resolvedModel, ok := resolvePhysicsModelForStep(assets, tr, pm, vm)
+				resolvedModel, ok := resolvePhysicsModelForEntity(cmd, assets, eid, tr, pm, vm)
 				if !ok && isValidPrimitiveCollider(col) {
 					resolvedModel = PhysicsModel{}
 					ok = true
@@ -357,7 +357,7 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 		if rb.BodyMode == BodyModePresentationOnly {
 			return true
 		}
-		resolvedModel, ok := resolvePhysicsModelForStep(assets, tr, pm, vm)
+		resolvedModel, ok := resolvePhysicsModelForEntity(cmd, assets, eid, tr, pm, vm)
 		if !ok && isValidPrimitiveCollider(col) {
 			resolvedModel = PhysicsModel{}
 			ok = true
@@ -448,6 +448,21 @@ func collectPhysicsSnapshot(cmd *Commands, time *Time, physics *PhysicsWorld, as
 	return snapshot, entities
 }
 
+func resolvePhysicsModelForEntity(cmd *Commands, assets *AssetServer, eid EntityId, tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) (PhysicsModel, bool) {
+	if err := managedVoxelRuntimeQualification(cmd, assets, eid); err != nil {
+		// Explicit non-voxel collision remains available; reject voxel-derived grids
+		// and avoid recreating a rejected source through the fallback bootstrap.
+		if pm != nil {
+			_, voxelOwned := pm.Grid.(*voxelGridSnapshot)
+			if !voxelOwned && (pm.Grid != nil || len(pm.Boxes) > 0) {
+				return *pm, true
+			}
+		}
+		return PhysicsModel{}, false
+	}
+	return resolvePhysicsModelForStep(assets, tr, pm, vm)
+}
+
 func resolvePhysicsModelForStep(assets *AssetServer, tr *TransformComponent, pm *PhysicsModel, vm *VoxelModelComponent) (PhysicsModel, bool) {
 	if pm != nil {
 		return *pm, true
@@ -530,11 +545,15 @@ func buildFallbackPhysicsModelFromVoxel(assets *AssetServer, tr *TransformCompon
 		return PhysicsModel{}, false
 	}
 
-	geometryAsset, ok := assets.GetVoxelGeometry(geometryID)
+	geometryAsset, ok := assets.getVoxelGeometry(geometryID)
 	if !ok {
 		return PhysicsModel{}, false
 	}
 
+	if assets.managedVoxelEntry(geometryID) != nil && geometryAsset.XBrickMap != nil {
+		// Collider bounds follow current payload; authored header bounds remain pivot authority.
+		geometryAsset.LocalMin, geometryAsset.LocalMax = geometryAsset.XBrickMap.ComputeAABB()
+	}
 	voxelScale := EffectiveVoxelScale(vm, tr)
 	minW := vec3MulComponents(geometryAsset.LocalMin, voxelScale)
 	maxW := vec3MulComponents(geometryAsset.LocalMax, voxelScale)
@@ -593,7 +612,10 @@ func resolveVoxelPivotLocalForPhysics(assets *AssetServer, tr *TransformComponen
 		if assets != nil {
 			geometryID := vm.GeometryAsset()
 			if geometryID != (AssetId{}) {
-				if geometryAsset, ok := assets.GetVoxelGeometry(geometryID); ok {
+				if geometryAsset, ok := assets.getVoxelGeometry(geometryID); ok {
+					if assets.managedVoxelEntry(geometryID) != nil {
+						return geometryAsset.LocalMin.Add(geometryAsset.LocalMax).Mul(0.5)
+					}
 					if geometryAsset.XBrickMap != nil {
 						minB, maxB := geometryAsset.XBrickMap.ComputeAABB()
 						return minB.Add(maxB).Mul(0.5)

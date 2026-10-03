@@ -474,9 +474,30 @@ func VoxPhysicsPreCalcSystem(cmd *Commands, server *AssetServer, rtState *VoxelR
 			}
 		}
 		previousSharedGeometry := vmc.SharedGeometry
-		geometryID, geometryAsset, hasGeometry := ResolveVoxelGeometry(server, vmc)
+		geometryID, geometryAsset, hasGeometry := resolveVoxelGeometry(server, vmc)
 		if vmc.SharedGeometry != previousSharedGeometry {
 			cmd.MarkComponentChanged(eid, reflect.TypeOf(VoxelModelComponent{}))
+		}
+		managed := server.managedVoxelEntry(geometryID)
+		if managed != nil {
+			if err := managedVoxelRuntimeQualification(cmd, server, eid); err != nil {
+				if _, owned := cache.Snapshots[eid]; owned {
+					if pm != nil {
+						cmd.AddComponents(eid, PhysicsModel{})
+					}
+				}
+				delete(cache.Snapshots, eid)
+				delete(cache.BuildStamps, eid)
+				return true
+			}
+			runtimeMap = nil
+			if hasGeometry && geometryAsset != nil {
+				if managed.exposed {
+					runtimeMap = geometryAsset.XBrickMap
+				} else {
+					geometryAsset.LocalMin, geometryAsset.LocalMax = geometryAsset.XBrickMap.ComputeAABB()
+				}
+			}
 		}
 		var xbm *volume.XBrickMap
 		if runtimeMap != nil {

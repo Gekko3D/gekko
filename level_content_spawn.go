@@ -1258,7 +1258,7 @@ func buildCollapsedAuthoredLevelBrushes(assets *AssetServer, level *content.Leve
 		if err != nil {
 			return result, fmt.Errorf("brush %s: %w", brush.ID, err)
 		}
-		geometry, ok := assets.GetVoxelGeometry(model)
+		geometry, ok := assets.getVoxelGeometry(model)
 		if !ok {
 			return result, fmt.Errorf("brush %s: missing voxel geometry", brush.ID)
 		}
@@ -1697,7 +1697,7 @@ func spawnAuthoredTerrainChunkEntityWithPreparedAsset(cmd *Commands, assets *Ass
 	)
 	overrideGeometry := AssetId{}
 	if assets != nil && terrain.BackingRemoval == nil {
-		if geometry, ok := assets.GetVoxelGeometry(preparedAssetID); ok && geometry.XBrickMap != nil {
+		if geometry, ok := assets.getVoxelGeometry(preparedAssetID); ok && geometry.XBrickMap != nil {
 			overrideGeometry = preparedAssetID
 		}
 	}

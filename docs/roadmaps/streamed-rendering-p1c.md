@@ -1,6 +1,6 @@
 # P1c: Sealed managed voxel ownership
 
-Status: volume boundary complete; runtime integration awaits authority alignment.
+Status: volume boundary and ordinary managed runtime integration implemented.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md).
 
 ## Approved boundary
@@ -44,11 +44,44 @@ detect public runtime exposure. Promoting at scene attachment preserves raw
 authority but ends sealed tracking there. A separate dense renderer derivative
 retains managed authority only with explicit rules for raw derivative writes,
 pointer replacement and collision/persistence precedence. That extraction and
-compatibility decision remains open; the approved volume boundary does not
-silently make existing scene-map writes unsupported.
+compatibility decision was approved for explicitly opted-in managed entities on
+2026-10-03: managed APIs own authoritative edits, renderer maps are independent
+derivatives, and raw scene editing requires explicit promotion. Legacy entities
+retain their existing runtime-map authority.
+
+## P1d: Ordinary managed runtime integration
+
+Use the existing `AssetServer` geometry lifetime for sealed owners and independent
+authoritative snapshots. Opt-in creates an entity override; shared sources and
+sibling entities remain isolated. Do not add a second residency service. Begin
+with ordinary full-density entities. Reject streamed/imported, terrain, planet,
+retained-renderer, LOD, voxel-backing and GPU-first geometry before mutating them.
+Those paths require their existing storage, retirement and publication owners.
+
+Internal engine reads preserve sealing; public mutable asset getters and resolvers
+promote dense asset authority. Explicit runtime promotion instead binds the
+attached renderer map as dense authority. Either path permanently disables
+tracking. The bridge distinguishes these modes rather than treating every raw
+pointer as another sealed source. Direct derivative mutation before promotion is
+unsupported for opted-in entities; it cannot become collision or save authority.
+
+Managed writes retain synchronous dense semantics and patch stable independent
+renderer derivatives. An authoritative snapshot publishes after the batch,
+including applied prefixes on producer panic. Collision and persistence resolve
+sealed authority before renderer maps; their existing full-snapshot formats and
+synchronous readiness remain. Saving clears publication dirtiness without
+clearing construction-relative edit history. Built-in sphere edits use managed
+writes. Raw editing helpers and destruction promote before their existing dense
+operations, preserving prior managed edits.
+
+Geometry references and source identity qualify each attachment. Replacement,
+deletion and entity removal must release stale associations. Buffered enable/edit
+calls resolve their pending override consistently without flushing ECS commands
+early. This batch establishes authority and compatibility; incremental snapshot
+publication, compact payloads and E2 deltas follow within the same owners.
 
 Use separate tests and implementation agents and independent PRE/POST reviews.
 Verify source/fork/snapshot isolation, normal halos, solid expansion, tombstones,
 removal/reinsertion, tracked reverts, raw exposure and panic prefixes. Run focused
-and race checks, then engine and consumer boundary checks. GPU visual validation
-begins with runtime integration; this isolated API does not alter rendered scenes.
+and race checks, then engine and consumer boundary checks. Native GPU validation covers managed upload, collision, instance isolation,
+promotion and removal; pixel parity and performance remain unmeasured.

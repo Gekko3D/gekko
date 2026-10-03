@@ -370,7 +370,7 @@ func (server *AssetServer) CreateVoxelGeometryFromSource(model VoxModel, resolut
 }
 
 func (server *AssetServer) CloneVoxelGeometry(id AssetId) (AssetId, bool) {
-	asset, ok := server.GetVoxelGeometry(id)
+	asset, ok := server.getVoxelGeometry(id)
 	if !ok || asset.XBrickMap == nil {
 		return AssetId{}, false
 	}
@@ -389,6 +389,7 @@ func (server *AssetServer) DeleteVoxelGeometry(id AssetId) bool {
 		return false
 	}
 	delete(server.voxModels, id)
+	delete(server.managedVoxelGeometry, id)
 	for key, cachedID := range server.voxModelKeys {
 		if cachedID == id {
 			delete(server.voxModelKeys, key)

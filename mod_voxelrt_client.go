@@ -123,6 +123,9 @@ type VoxelRtModule struct {
 }
 
 type VoxelRtState struct {
+	managedVoxelBindings map[EntityId]managedVoxelBinding
+	managedVoxelCommands *Commands
+	managedVoxelAssets   *AssetServer
 	// VoxelCandidateInventoryBuildCount counts actual membership rebuilds,
 	// including empty inventories. VoxelCandidateCount includes hidden and
 	// unresolved Transform+VoxelModel candidates, regardless of residency.
@@ -371,6 +374,33 @@ func (s *VoxelRtState) VoxelSphereEdit(eid EntityId, worldCenter mgl32.Vec3, rad
 	if obj == nil || obj.XBrickMap == nil {
 		return
 	}
+	if s.managedVoxelCommands != nil {
+		_, entry, enabled := managedVoxelEntity(s.managedVoxelCommands, s.managedVoxelAssets, eid)
+		if entry != nil {
+			if err := managedVoxelRuntimeQualification(s.managedVoxelCommands, s.managedVoxelAssets, eid); err != nil {
+				return
+			}
+			if !enabled {
+				if err := EnableManagedVoxelGeometry(s.managedVoxelCommands, s.managedVoxelAssets, eid); err != nil {
+					return
+				}
+				_, entry, enabled = managedVoxelEntity(s.managedVoxelCommands, s.managedVoxelAssets, eid)
+			}
+			if !enabled {
+				return
+			}
+			if !entry.exposed {
+				center := obj.Transform.WorldToObject().Mul4x1(worldCenter.Vec4(1)).Vec3()
+				scale := obj.Transform.Scale
+				avg := (scale[0] + scale[1] + scale[2]) / 3
+				if avg == 0 {
+					avg = 1
+				}
+				_ = ApplyManagedVoxelWrites(s.managedVoxelCommands, s.managedVoxelAssets, eid, managedSphereWrites(center, radius/avg, val))
+				return
+			}
+		}
+	}
 	if voxelSphereEditWithTransform(obj.XBrickMap, obj.Transform, worldCenter, radius, val) {
 		s.markRuntimeEditedVoxelEntity(eid, runtimeVoxelSphereEdit(worldCenter, radius, val))
 	}
@@ -443,6 +473,14 @@ func (s *VoxelRtState) clearRuntimeEditedVoxelEdit(eid EntityId, revision uint64
 func (s *VoxelRtState) IsEntityEmpty(eid EntityId) bool {
 	if s == nil {
 		return true
+	}
+	if s.managedVoxelCommands != nil && s.managedVoxelAssets != nil {
+		if vmc, ok := voxelModelComponentForEdit(s.managedVoxelCommands, eid); ok {
+			if s.managedVoxelAssets.managedVoxelEntry(vmc.GeometryAsset()) != nil {
+				asset, present := s.managedVoxelAssets.getVoxelGeometry(vmc.GeometryAsset())
+				return !present || asset.XBrickMap == nil || asset.XBrickMap.GetVoxelCount() == 0
+			}
+		}
 	}
 	obj := s.GetVoxelObject(eid)
 	if obj == nil || obj.XBrickMap == nil {

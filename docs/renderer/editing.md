@@ -91,9 +91,59 @@ edit concurrently after fork construction completes. Source and exposed raw maps
 must also be exclusively owned while owner operations access them. Producers
 must not mutate, reenter, expose or fork the owner while consuming its edit stream.
 
-This boundary retains inline dense bricks. Asset, renderer and persistence
-integration follow separately; no existing runtime path automatically opts in.
-See [ownership rationale](../roadmaps/streamed-rendering-p1c.md).
+This boundary retains inline dense bricks. See
+[ownership rationale](../roadmaps/streamed-rendering-p1c.md).
+
+### Ordinary managed runtime geometry
+
+`AssetServer.RegisterManagedVoxelGeometry(source, sourcePath)` defensively seals
+an ordinary CPU source. `EnableManagedVoxelGeometry(cmd, assets, entity)` creates
+an independent managed override using the existing asset lifetime. Repeated
+calls resolve queued overrides without flushing ECS commands early. Neither
+registration nor enable changes unrelated legacy geometry paths.
+
+Managed runtime geometry supports ordinary full-density entities. Terrain,
+planet, retained-renderer, LOD, streamed/imported, voxel-backing and GPU-first
+owners require their existing paths. Enable and managed writes reject these
+combinations before mutation. Registered managed sources also require eligible
+attachments. Unsupported attachments have no managed renderer or voxel collider;
+save lookup retains their actual source content. Use explicit legacy dense
+registration for those owners.
+
+`ApplyManagedVoxelWrites` consumes ordered assignments once and publishes an
+authoritative snapshot after the batch, including the applied prefix on panic.
+`ManagedVoxelGeometryChanges` reports construction-relative assignments only for
+an enabled entity override. Saving clears publication dirtiness without resetting
+that history. Producers may query changes but must not mutate, expose, reenter
+or publish the target during consumption. Operations run on the engine thread.
+
+The bridge uses an independent dense renderer derivative. Accepted writes patch
+that derivative without replacing its pointer; source replacement and missed
+publication use an authority-derived copy. Ordinary synchronization repairs an
+unauthorized derivative pointer replacement. Direct derivative edits before
+promotion are unsupported and never become collision or persistence authority.
+Collision, navigation and save lookup use managed authority; authored pivot
+bounds stay fixed while current collision bounds follow edited geometry.
+
+Public `GetVoxelGeometry`, `GetVoxelModel`, `ResolveVoxelGeometry` and
+`ResolveVoxelGeometryMap` permanently expose dense asset authority. Internal
+engine reads preserve sealing. `PromoteRuntimeVoxelGeometry` instead adopts the
+exact current renderer map when sealed. If an asset getter exposed authority
+first, runtime promotion preserves that getter's exact pointer. Inherited sources
+fork an entity override before runtime promotion, preserving siblings. Both paths
+permanently disable tracking and retain existing full-snapshot persistence.
+Unnotified raw writes retain existing collision-cache refresh limits; callers
+must use normal revision-producing edits for an existing cached collider.
+
+Built-in sphere edits enable and track eligible inherited managed sources.
+Raw editing helpers and destruction promote before dense edits, preserving prior
+managed changes. Runtime promotion retains persistence dirtiness even when raw
+payload writes bypass map revisions. Geometry deletion releases its managed
+sidecar; entity removal releases renderer bindings. Ordinary override assets
+still require explicit asset deletion, as with existing unrefcounted geometry.
+
+Authority publication currently copies the full map after each changed batch.
+Incremental snapshots, compact payloads and E2 delta formats remain follow-ups.
 
 ## Raycast Internals
 

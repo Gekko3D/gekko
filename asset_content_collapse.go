@@ -251,7 +251,7 @@ func resolveAuthoredCollapseParts(assets *AssetServer, def *content.AssetDef, do
 		if !ok {
 			continue
 		}
-		geometry, ok := assets.GetVoxelGeometry(vmc.GeometryAsset())
+		geometry, ok := assets.getVoxelGeometry(vmc.GeometryAsset())
 		if !ok {
 			return nil, fmt.Errorf("missing geometry for part %s", part.ID)
 		}

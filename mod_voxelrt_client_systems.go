@@ -339,6 +339,11 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	if state == nil || state.RtApp == nil {
 		return
 	}
+	state.managedVoxelCommands = cmd
+	state.managedVoxelAssets = server
+	if state.managedVoxelBindings == nil {
+		state.managedVoxelBindings = make(map[EntityId]managedVoxelBinding)
+	}
 	state.beginMaterialFingerprintSync(server)
 	state.ensureMaterialCaches()
 	streamedMarkers := state.beginStreamedVoxelSync(cmd)
@@ -387,9 +392,13 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			cmd.MarkComponentChanged(entityId, reflect.TypeOf(VoxelModelComponent{}))
 		}
 
-		geometryID, geometryAsset, ok := ResolveVoxelGeometry(server, vox)
+		geometryID, geometryAsset, ok := resolveVoxelGeometry(server, vox)
 		if !ok || geometryAsset == nil || geometryAsset.XBrickMap == nil {
 			state.failStreamedVoxelAdoption(entityId, marker, "streamed voxel geometry is missing")
+			return true
+		}
+		if err := managedVoxelRuntimeQualification(cmd, server, entityId); err != nil {
+			state.failStreamedVoxelAdoption(entityId, marker, err.Error())
 			return true
 		}
 		if streamed && vox.VoxelPalette != (AssetId{}) {
@@ -451,46 +460,89 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			frameVoxelPalettes[vox.VoxelPalette] = gekkoPalette
 		}
 
-		objectScopedGeometry := voxelModelNeedsObjectScopedGeometry(vox)
-		sourceGeometryMap := displayGeometryAsset.XBrickMap
-		obj, exists := state.instanceMap[entityId]
-		if !exists {
-			runtimeGeometryMap := server.voxelRuntimeGeometryMap(displayGeometryID, sourceGeometryMap, objectScopedGeometry)
-			if !objectScopedGeometry {
-				modelTemplate, hasTemplate := state.loadedModels[displayGeometryID]
-				if !hasTemplate {
-					modelTemplate = core.NewVoxelObject()
-					modelTemplate.XBrickMap = sourceGeometryMap
-					state.loadedModels[displayGeometryID] = modelTemplate
+		var obj *core.VoxelObject
+		if entry := server.managedVoxelEntry(displayGeometryID); entry != nil {
+			source := displayGeometryAsset.XBrickMap
+			binding, bound := state.managedVoxelBindings[entityId]
+			obj = state.instanceMap[entityId]
+			if obj == nil {
+				obj = core.NewVoxelObject()
+				obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
+				state.RtApp.Scene.AddObject(obj)
+				state.instanceMap[entityId] = obj
+				state.objectToEntity[obj] = entityId
+				state.lastMaterialKeys[obj] = materialKey
+			}
+			changed := !bound || binding.id != displayGeometryID || binding.entry != entry || binding.exposed != entry.exposed
+			if changed {
+				if !bound || binding.id != displayGeometryID || binding.entry != entry {
+					state.clearRuntimeEditedVoxelEntity(entityId)
 				}
-				runtimeGeometryMap = modelTemplate.XBrickMap
+				if entry.exposed {
+					obj.XBrickMap = source
+				} else {
+					obj.XBrickMap = source.Copy()
+				}
+				state.RtApp.Scene.StructureRevision++
+			} else if entry.exposed {
+				// Raw payload writes can bypass revisions. Dense authority stays attached.
+				obj.XBrickMap = source
+			} else if binding.generation != entry.generation || obj.XBrickMap != binding.derivative {
+				// Writes before an attachment/resource was available publish a full fallback.
+				obj.XBrickMap = source.Copy()
+				state.RtApp.Scene.StructureRevision++
+			}
+			state.managedVoxelBindings[entityId] = managedVoxelBinding{derivative: obj.XBrickMap, id: displayGeometryID, entry: entry, generation: entry.generation, exposed: entry.exposed}
+			state.instanceGeometrySources[entityId] = source
+			state.instanceObjectScopedGeometry[entityId] = !entry.exposed
+		} else {
+			if _, managed := state.managedVoxelBindings[entityId]; managed {
+				delete(state.managedVoxelBindings, entityId)
+				state.clearRuntimeEditedVoxelEntity(entityId)
+				delete(state.instanceGeometrySources, entityId)
+			}
+			objectScopedGeometry := voxelModelNeedsObjectScopedGeometry(vox)
+			sourceGeometryMap := displayGeometryAsset.XBrickMap
+			var exists bool
+			obj, exists = state.instanceMap[entityId]
+			if !exists {
+				runtimeGeometryMap := server.voxelRuntimeGeometryMap(displayGeometryID, sourceGeometryMap, objectScopedGeometry)
+				if !objectScopedGeometry {
+					modelTemplate, hasTemplate := state.loadedModels[displayGeometryID]
+					if !hasTemplate {
+						modelTemplate = core.NewVoxelObject()
+						modelTemplate.XBrickMap = sourceGeometryMap
+						state.loadedModels[displayGeometryID] = modelTemplate
+					}
+					runtimeGeometryMap = modelTemplate.XBrickMap
+				}
+
+				obj = core.NewVoxelObject()
+				obj.XBrickMap = runtimeGeometryMap
+				obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
+				state.RtApp.Scene.AddObject(obj)
+				if vox.RetainRendererGeometry {
+					state.RtApp.ActivateRetainedVoxelMap(sourceGeometryMap)
+				}
+				state.instanceMap[entityId] = obj
+				state.objectToEntity[obj] = entityId
+				state.lastMaterialKeys[obj] = materialKey
+				state.instanceGeometrySources[entityId] = sourceGeometryMap
+				state.instanceObjectScopedGeometry[entityId] = objectScopedGeometry
 			}
 
-			obj = core.NewVoxelObject()
-			obj.XBrickMap = runtimeGeometryMap
-			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
-			state.RtApp.Scene.AddObject(obj)
-			if vox.RetainRendererGeometry {
-				state.RtApp.ActivateRetainedVoxelMap(sourceGeometryMap)
+			previousSource := state.instanceGeometrySources[entityId]
+			previousObjectScoped := state.instanceObjectScopedGeometry[entityId]
+			geometryChanged := previousSource != sourceGeometryMap ||
+				previousObjectScoped != objectScopedGeometry ||
+				(!objectScopedGeometry && sourceGeometryMap != obj.XBrickMap)
+			if geometryChanged {
+				obj.XBrickMap = server.voxelRuntimeGeometryMap(displayGeometryID, sourceGeometryMap, objectScopedGeometry)
+				obj.XBrickMap.StructureDirty = true
+				state.instanceGeometrySources[entityId] = sourceGeometryMap
+				state.instanceObjectScopedGeometry[entityId] = objectScopedGeometry
+				state.RtApp.Scene.StructureRevision++ // Force hash grid rebuild
 			}
-			state.instanceMap[entityId] = obj
-			state.objectToEntity[obj] = entityId
-			state.lastMaterialKeys[obj] = materialKey
-			state.instanceGeometrySources[entityId] = sourceGeometryMap
-			state.instanceObjectScopedGeometry[entityId] = objectScopedGeometry
-		}
-
-		previousSource := state.instanceGeometrySources[entityId]
-		previousObjectScoped := state.instanceObjectScopedGeometry[entityId]
-		geometryChanged := previousSource != sourceGeometryMap ||
-			previousObjectScoped != objectScopedGeometry ||
-			(!objectScopedGeometry && sourceGeometryMap != obj.XBrickMap)
-		if geometryChanged {
-			obj.XBrickMap = server.voxelRuntimeGeometryMap(displayGeometryID, sourceGeometryMap, objectScopedGeometry)
-			obj.XBrickMap.StructureDirty = true
-			state.instanceGeometrySources[entityId] = sourceGeometryMap
-			state.instanceObjectScopedGeometry[entityId] = objectScopedGeometry
-			state.RtApp.Scene.StructureRevision++ // Force hash grid rebuild
 		}
 		scale := entityLODScaleVector(EffectiveVoxelScale(vox, transform), scaleAdjustX, scaleAdjustY, scaleAdjustZ)
 
@@ -574,6 +626,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if !currentObjectEntities[eid] {
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
+			delete(state.managedVoxelBindings, eid)
 			delete(state.instanceGeometrySources, eid)
 			delete(state.instanceObjectScopedGeometry, eid)
 			state.clearRuntimeEditedVoxelEntity(eid)

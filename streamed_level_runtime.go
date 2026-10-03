@@ -2639,7 +2639,7 @@ func retainStreamedRendererGeometryForEntity(cmd *Commands, eid EntityId) bool {
 	if assets == nil {
 		return false
 	}
-	geometry, ok := ResolveVoxelGeometryMap(assets, &vmc)
+	geometry, ok := resolveVoxelGeometryMap(assets, &vmc)
 	if !ok || geometry == nil {
 		return false
 	}
@@ -2944,6 +2944,19 @@ func currentVoxelMapForEntity(cmd *Commands, eid EntityId) (*volume.XBrickMap, b
 		return nil, true, false
 	}
 	persistenceDirty := VoxelEntityPersistenceDirty(cmd, eid)
+	if assets := assetServerFromApp(cmd.app); assets != nil {
+		if vmc, ok := voxelModelComponentForEdit(cmd, eid); ok && assets.managedVoxelEntry(vmc.GeometryAsset()) != nil {
+			asset, present := assets.getVoxelGeometry(vmc.GeometryAsset())
+			if present && asset.XBrickMap != nil {
+				entry := assets.managedVoxelEntry(vmc.GeometryAsset())
+				runtimeDirty := false
+				if state := voxelRtStateFromApp(cmd.app); entry.exposed && state != nil {
+					runtimeDirty = state.runtimeEditedVoxelEntity(eid)
+				}
+				return asset.XBrickMap, persistenceDirty || runtimeDirty || isVoxelMapDirty(asset.XBrickMap), true
+			}
+		}
+	}
 	if state := voxelRtStateFromApp(cmd.app); state != nil && state.runtimeEditedVoxelEntity(eid) {
 		if obj := state.GetVoxelObject(eid); obj != nil && obj.XBrickMap != nil {
 			return obj.XBrickMap, true, true
@@ -2967,7 +2980,7 @@ func currentVoxelMapForEntity(cmd *Commands, eid EntityId) (*volume.XBrickMap, b
 		}
 		return nil, false, true
 	}
-	_, asset, ok := ResolveVoxelGeometry(assets, &vmc)
+	_, asset, ok := resolveVoxelGeometry(assets, &vmc)
 	if !ok || asset == nil || asset.XBrickMap == nil {
 		if state := voxelRtStateFromApp(cmd.app); state != nil {
 			if obj := state.GetVoxelObject(eid); obj != nil && obj.XBrickMap != nil {
@@ -2988,7 +3001,7 @@ func clearEntityVoxelDirty(cmd *Commands, eid EntityId) {
 	vmc, ok := voxelModelComponentForEntity(cmd, eid)
 	if ok {
 		if assets := assetServerFromApp(cmd.app); assets != nil {
-			if _, asset, resolved := ResolveVoxelGeometry(assets, &vmc); resolved && asset != nil && asset.XBrickMap != nil {
+			if _, asset, resolved := resolveVoxelGeometry(assets, &vmc); resolved && asset != nil && asset.XBrickMap != nil {
 				asset.XBrickMap.ClearDirty()
 			}
 		}

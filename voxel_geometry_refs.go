@@ -22,8 +22,32 @@ func ResolveVoxelGeometry(assets *AssetServer, vmc *VoxelModelComponent) (AssetI
 	return assetID, &asset, true
 }
 
+func resolveVoxelGeometry(assets *AssetServer, vmc *VoxelModelComponent) (AssetId, *VoxelGeometryAsset, bool) {
+	if assets == nil || vmc == nil {
+		return AssetId{}, nil, false
+	}
+	vmc.NormalizeGeometryRefs()
+	assetID := vmc.GeometryAsset()
+	if assetID == (AssetId{}) {
+		return AssetId{}, nil, false
+	}
+	asset, ok := assets.getVoxelGeometry(assetID)
+	if !ok {
+		return AssetId{}, nil, false
+	}
+	return assetID, &asset, true
+}
+
 func ResolveVoxelGeometryMap(assets *AssetServer, vmc *VoxelModelComponent) (*volume.XBrickMap, bool) {
 	_, asset, ok := ResolveVoxelGeometry(assets, vmc)
+	if !ok || asset == nil || asset.XBrickMap == nil {
+		return nil, false
+	}
+	return asset.XBrickMap, true
+}
+
+func resolveVoxelGeometryMap(assets *AssetServer, vmc *VoxelModelComponent) (*volume.XBrickMap, bool) {
+	_, asset, ok := resolveVoxelGeometry(assets, vmc)
 	if !ok || asset == nil || asset.XBrickMap == nil {
 		return nil, false
 	}
@@ -34,7 +58,9 @@ func voxelModelComponentForEdit(cmd *Commands, eid EntityId) (VoxelModelComponen
 	if cmd == nil {
 		return VoxelModelComponent{}, false
 	}
-	for _, comp := range cmd.GetAllComponents(eid) {
+	components := voxelEditComponents(cmd, eid)
+	for i := len(components) - 1; i >= 0; i-- {
+		comp := components[i]
 		switch typed := comp.(type) {
 		case *VoxelModelComponent:
 			vmc := *typed
@@ -53,11 +79,17 @@ func EnsureEditableVoxelGeometry(cmd *Commands, assets *AssetServer, eid EntityI
 	if !ok {
 		return VoxelModelComponent{}, AssetId{}, nil, fmt.Errorf("entity %d has no VoxelModelComponent", eid)
 	}
-	assetID, asset, ok := ResolveVoxelGeometry(assets, &vmc)
+	assetID, asset, ok := resolveVoxelGeometry(assets, &vmc)
 	if !ok || asset == nil || asset.XBrickMap == nil {
 		return VoxelModelComponent{}, AssetId{}, nil, fmt.Errorf("entity %d has no voxel geometry", eid)
 	}
-	if vmc.OverrideGeometry == (AssetId{}) {
+	_, managed, enabled := managedVoxelEntity(cmd, assets, eid)
+	if managed != nil {
+		if err := managedVoxelRuntimeQualification(cmd, assets, eid); err != nil {
+			return VoxelModelComponent{}, AssetId{}, nil, err
+		}
+	}
+	if vmc.OverrideGeometry == (AssetId{}) || managed != nil && !enabled {
 		clonedID, cloned := assets.CloneVoxelGeometry(assetID)
 		if !cloned {
 			return VoxelModelComponent{}, AssetId{}, nil, fmt.Errorf("failed to clone voxel geometry for entity %d", eid)
@@ -65,12 +97,12 @@ func EnsureEditableVoxelGeometry(cmd *Commands, assets *AssetServer, eid EntityI
 		vmc.OverrideGeometry = clonedID
 		cmd.AddComponents(eid, &vmc)
 		assetID = clonedID
-		clonedAsset, exists := assets.GetVoxelGeometry(assetID)
-		if !exists || clonedAsset.XBrickMap == nil {
-			return VoxelModelComponent{}, AssetId{}, nil, fmt.Errorf("cloned voxel geometry missing for entity %d", eid)
-		}
-		asset = &clonedAsset
 	}
+	exposed, exists := assets.GetVoxelGeometry(assetID)
+	if !exists || exposed.XBrickMap == nil {
+		return vmc, assetID, nil, fmt.Errorf("entity %d editable geometry missing", eid)
+	}
+	asset = &exposed
 	return vmc, assetID, asset.XBrickMap, nil
 }
 

@@ -334,7 +334,7 @@ func (c *streamedPreparedGeometryCache) acquirePreparedAsset(assets *AssetServer
 		entry.asset = assets.RegisterSharedVoxelGeometry(entry.geometry, "")
 	}
 	entry.assetServer = assets
-	registered, _ := assets.GetVoxelGeometry(entry.asset)
+	registered, _ := assets.getVoxelGeometry(entry.asset)
 	entry.assetStorage = c.storage.installDescriptor(descriptor, registered.XBrickMap)
 	qualifiedDescriptor := entry.assetStorage != nil
 	if qualifiedDescriptor {
@@ -592,7 +592,7 @@ func (c *streamedPreparedGeometryCache) acquirePreparedSourceAsset(assets *Asset
 		break
 	}
 	entry.assetServer = assets
-	registered, _ := assets.GetVoxelGeometry(entry.asset)
+	registered, _ := assets.getVoxelGeometry(entry.asset)
 	entry.assetStorage = c.storage.installDescriptor(descriptor, registered.XBrickMap)
 	if entry.assetStorage != nil {
 		c.storage.adjust(entry.assetStorage, streamedGeometryAsset, 1)

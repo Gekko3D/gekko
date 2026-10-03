@@ -195,7 +195,7 @@ func streamedRenderSourceValid(cmd *Commands, entity EntityId) bool {
 	if !exists || assets == nil {
 		return false
 	}
-	geometry, ok := ResolveVoxelGeometryMap(assets, &model)
+	geometry, ok := resolveVoxelGeometryMap(assets, &model)
 	if !ok || geometry == nil {
 		return false
 	}

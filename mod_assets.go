@@ -55,17 +55,18 @@ const (
 )
 
 type AssetServer struct {
-	mu             sync.RWMutex
-	meshes         map[AssetId]MeshAsset
-	materials      map[AssetId]MaterialAsset
-	textures       map[AssetId]TextureAsset
-	textureKeys    map[string]AssetId
-	samplers       map[AssetId]SamplerAsset
-	voxModels      map[AssetId]VoxelGeometryAsset
-	voxModelKeys   map[string]AssetId
-	voxPalettes    map[AssetId]VoxelPaletteAsset
-	voxPaletteKeys map[string]AssetId
-	voxFiles       map[AssetId]*VoxFile
+	mu                   sync.RWMutex
+	managedVoxelGeometry map[AssetId]*managedVoxelGeometry
+	meshes               map[AssetId]MeshAsset
+	materials            map[AssetId]MaterialAsset
+	textures             map[AssetId]TextureAsset
+	textureKeys          map[string]AssetId
+	samplers             map[AssetId]SamplerAsset
+	voxModels            map[AssetId]VoxelGeometryAsset
+	voxModelKeys         map[string]AssetId
+	voxPalettes          map[AssetId]VoxelPaletteAsset
+	voxPaletteKeys       map[string]AssetId
+	voxFiles             map[AssetId]*VoxFile
 
 	preparedVoxelRendererCopies    map[AssetId]preparedVoxelRendererCopy
 	preparedVoxelRendererCopyStats PreparedVoxelRendererCopyStats
@@ -107,6 +108,21 @@ func (AssetServerModule) Install(app *App, cmd *Commands) {
 }
 
 func (server *AssetServer) GetVoxelGeometry(id AssetId) (VoxelGeometryAsset, bool) {
+	server.mu.Lock()
+	if entry := server.managedVoxelGeometry[id]; entry != nil && !entry.exposed {
+		asset := server.voxModels[id]
+		asset.XBrickMap = entry.owner.ExposeMutable()
+		asset.XBrickMap.ComputeAABB()
+		server.voxModels[id] = asset
+		entry.exposed = true
+		entry.generation++
+	}
+	server.mu.Unlock()
+	return server.getVoxelGeometry(id)
+}
+
+// Internal reads preserve managed sealing and never expose mutable authority.
+func (server *AssetServer) getVoxelGeometry(id AssetId) (VoxelGeometryAsset, bool) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	m, ok := server.voxModels[id]

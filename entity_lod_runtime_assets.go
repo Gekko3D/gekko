@@ -131,7 +131,7 @@ func (server *AssetServer) entityLODSimplifiedGeometry(geometryID, paletteID Ass
 	if id == (AssetId{}) {
 		return AssetId{}, nil, false
 	}
-	asset, ok := server.GetVoxelGeometry(id)
+	asset, ok := server.getVoxelGeometry(id)
 	if !ok || asset.XBrickMap == nil {
 		return AssetId{}, nil, false
 	}
