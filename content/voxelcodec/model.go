@@ -49,8 +49,13 @@ type Info struct {
 	DictionaryHash             string
 }
 
+// DefaultLimits returns the independent default profile used by new codecs.
+func DefaultLimits() Limits {
+	return Limits{MaxEncodedBytes: 32 << 20, MaxDecodedBytes: 32 << 20, MaxBricks: 16384, MaxVoxels: 1048576, MaxMetadataBytes: 1 << 20, MaxAuxBytes: 1 << 20, MaxDictionaryBytes: 64 << 10, MaxKindBytes: 64, MaxBakeVersionBytes: 128}
+}
+
 func normalizedLimits(l Limits) (Limits, error) {
-	defaults := Limits{MaxEncodedBytes: 32 << 20, MaxDecodedBytes: 32 << 20, MaxBricks: 16384, MaxVoxels: 1048576, MaxMetadataBytes: 1 << 20, MaxAuxBytes: 1 << 20, MaxDictionaryBytes: 64 << 10, MaxKindBytes: 64, MaxBakeVersionBytes: 128}
+	defaults := DefaultLimits()
 	maxInt := int64(int(^uint(0) >> 1))
 	for _, p := range []struct {
 		v *int64

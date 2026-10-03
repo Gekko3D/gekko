@@ -93,6 +93,11 @@ ordered edit finalization, including an applied panic prefix.
 base, sorted by z, y and x. It includes explicit zero removals and omits reverted
 cells. Sealed forks inherit the original base and changes. Ordered producers can
 read current voxels; applied writes remain tracked if the producer panics.
+`TrackedChangeCount` reads the assignment count without allocation;
+`VisitTrackedChanges` visits assignments without sorting or allocating a slice.
+The visitor can stop by returning false; the method reports tracking availability,
+including true for an empty sealed history. Visitor callbacks must not mutate or
+reenter the owner. Both methods report unavailable after exposure.
 
 `ExposeMutable` irreversibly detaches shared storage and returns one stable dense
 authority. Later raw writes remain visible; `TrackedChanges` returns `(nil,
@@ -209,9 +214,9 @@ assets remain outside that lease.
 Deleting a shared source releases its metadata while an already enabled owner
 retains its independent provenance. Deleting the override releases that owner.
 Other source kinds, level brushes and collapsed composites remain full fallback
-until their canonical construction adapters exist. Persistence still writes legacy full snapshots. Runtime
-[v2 shape loading](../content/streaming-and-worlds.md#ordinary-object-override-loading)
-uses existing dense registration; managed restoration and S4 writing follow.
+until their canonical construction adapters exist. [Streamed object persistence](../content/streaming-and-worlds.md#ordinary-object-override-persistence)
+uses sparse deltas for eligible bound owners and legacy full fallback otherwise.
+Loaded history restoration remains separate from dense v2 registration.
 
 ## Raycast Internals
 

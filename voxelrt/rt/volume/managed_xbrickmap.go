@@ -247,6 +247,29 @@ func (m *ManagedXBrickMap) ExposeMutable() *XBrickMap {
 	return m.current
 }
 
+// TrackedChangeCount reports final assignment count without allocation.
+func (m *ManagedXBrickMap) TrackedChangeCount() (int, bool) {
+	if m.base == nil {
+		return 0, false
+	}
+	return len(m.changes), true
+}
+
+// VisitTrackedChanges visits unordered final assignments without allocation.
+// A false callback stops traversal; the result still reports availability.
+// The single owner must not mutate, expose, or reenter during this callback.
+func (m *ManagedXBrickMap) VisitTrackedChanges(visit func(VoxelWrite) bool) bool {
+	if m.base == nil {
+		return false
+	}
+	for key, value := range m.changes {
+		if !visit(VoxelWrite{X: key[0], Y: key[1], Z: key[2], Value: value}) {
+			break
+		}
+	}
+	return true
+}
+
 // TrackedChanges returns independently owned final assignments relative to the
 // original base, ordered by z, y, then x. Zero is an explicit removal. Reverts
 // are omitted. An exposed owner returns (nil, false) permanently.

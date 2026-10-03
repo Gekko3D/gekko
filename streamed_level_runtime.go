@@ -2840,7 +2840,7 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 	}
 
 	for objectKey, eid := range loaded.ObjectEntities {
-		placementID, itemID := splitVoxelObjectRuntimeKey(objectKey)
+		placementID, itemID := managedVoxelPersistenceObjectIDs(cmd, state, objectKey, eid)
 		xbm, dirty, exists := currentVoxelMapForEntity(cmd, eid)
 		if intent := state.persistenceIntents[coord]; intent != nil && intent.Loaded == loaded {
 			if _, remembered := intent.Entities[eid]; remembered {
@@ -2850,7 +2850,16 @@ func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coor
 		if !dirty && exists {
 			continue
 		}
+		payload, entry, count, delta := managedVoxelPersistenceCandidate(cmd, assetServerFromApp(cmd.app), state, eid, placementID, itemID)
+		var ownedPayload *content.VoxelObjectPayloadDef
+		if delta {
+			ownedPayload = captureManagedVoxelPersistencePayload(payload, entry, count)
+		}
 		snapshotPath, err := writeStreamedLevelPayload(state.WorldDataDir, fmt.Sprintf("object_%s_%s.gkvoxobj", sanitizePathSegment(placementID), sanitizePathSegment(itemID)), func(path string) error {
+			if ownedPayload != nil {
+				_, err := content.SaveVoxelObjectPayload(path, ownedPayload, nil)
+				return err
+			}
 			return content.SaveVoxelObjectSnapshot(path, VoxelObjectSnapshotFromXBrickMap(xbm))
 		})
 		if err != nil {

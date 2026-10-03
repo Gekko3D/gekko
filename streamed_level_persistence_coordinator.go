@@ -136,6 +136,21 @@ func requestStreamedChunkPersistence(cmd *Commands, state *StreamedLevelRuntimeS
 			if input.Removal != nil && !input.Navigation {
 				continue
 			}
+			if input.ObjectPayload != nil {
+				name := streamedPersistencePayloadName(input)
+				mu.Lock()
+				path, err := writeStreamedLevelPayload(dir, name, func(path string) error {
+					_, err := content.SaveVoxelObjectPayload(path, input.ObjectPayload, nil)
+					return err
+				})
+				mu.Unlock()
+				if err != nil {
+					result.Err = err
+					break
+				}
+				result.Paths[i] = content.AuthorDocumentPath(path, deltaPath)
+				continue
+			}
 			xbm := persistenceInputMap(input)
 			var imported *content.ImportedWorldChunkDef
 			if input.Kind == "imported" || input.Navigation {
@@ -399,6 +414,9 @@ func acknowledgeStreamedPersistence(state *StreamedLevelRuntimeState, tx *stream
 				}
 			}
 		default:
+			if e.Managed != nil && !managedVoxelPersistenceBaselineApplies(state.persistenceCmd, state, e) {
+				continue
+			}
 			find := func(delta *content.WorldDeltaDef) content.VoxelObjectOverrideDef {
 				for _, v := range delta.VoxelObjectOverrides {
 					if v.PlacementID == owner && v.ItemID == input.Item {
@@ -428,6 +446,7 @@ func acknowledgeStreamedPersistence(state *StreamedLevelRuntimeState, tx *stream
 
 // Publication progresses even when an unrelated runtime error prevents selection.
 func commitStreamedPersistence(cmd *Commands, state *StreamedLevelRuntimeState, allowRemoval bool) error {
+	state.persistenceCmd = cmd
 	tx := state.persistenceTransaction
 	if tx == nil {
 		return nil
@@ -453,6 +472,9 @@ func commitStreamedPersistence(cmd *Commands, state *StreamedLevelRuntimeState, 
 				safe = safe && persistenceValueBytes(reflect.ValueOf(e.Input), &actual) && persistenceAdd(&actual, int64(len(e.Capture.Key.WorldID)), 1)
 				if e.Capture.Token != nil {
 					safe = safe && persistenceAdd(&actual, 1, int64(unsafe.Sizeof(streamedImportedCaptureToken{})))
+				}
+				if e.Managed != nil {
+					safe = safe && persistenceAdd(&actual, 1, int64(unsafe.Sizeof(managedVoxelPersistenceToken{})))
 				}
 			}
 			if !safe {

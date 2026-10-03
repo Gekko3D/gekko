@@ -148,7 +148,8 @@ decode each permit one active operation; Close is terminal and idempotent. No
 global frame/dictionary cache. Returned bytes/documents remain independent of
 later operations and Close. Callers keep input slices stable during calls.
 
-Default limits: 32 MiB encoded and decoded bytes, 16,384 bricks, 1,048,576 occupied
+`voxelcodec.DefaultLimits()` returns an independent value with the unchanged
+default profile. Default limits: 32 MiB encoded and decoded bytes, 16,384 bricks, 1,048,576 occupied
 voxels, 1 MiB metadata/aux per layer, 64 KiB dictionary, 64-byte kind and 128-byte
 bake version. Positive explicit limits may change these ceilings; negative or
 unrepresentable limits fail. Optional inclusive brick bounds validate coordinates.
@@ -223,6 +224,9 @@ files. Explicit codecs are borrowed and their limits/lifetime remain authoritati
 nil selects a reusable default. Adapter temporaries scale with actual input
 records, not coordinate extent; profile validation follows conversion. This is
 not a pre-admission bound on those temporaries.
+`ValidateVoxelObjectPayloadMetadata` validates only schema, mode, owner, lattice
+and base identity without allocating on success or inspecting voxel records.
+Callers must separately validate assignments and codec capacity.
 
 `ResolveVoxelObjectPayload(payload, base, lattice, placementID, itemID, codec)`
 validates owner/lattice bindings and independently hashes the supplied base before
@@ -236,5 +240,6 @@ schema-1 unbound full payloads. Legacy resolution preserves ordered records and
 whole-file JSON acceptance, without applying C1 limits. Compiled schema 1 and
 schema-2 JSON are rejected. The runtime's shape-only
 [override loading contract](streaming-and-worlds.md#ordinary-object-override-loading)
-adds v2 resolution without changing existing save dispatch. S4 delta publication
-and managed history restoration follow separately.
+adds v2 resolution. [Runtime persistence](streaming-and-worlds.md#ordinary-object-override-persistence)
+selects sparse deltas through existing S4 publication; managed history restoration
+remains a separate step.

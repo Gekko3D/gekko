@@ -19,6 +19,7 @@ type streamedPersistenceBrick struct {
 	Payload [volume.BrickSize][volume.BrickSize][volume.BrickSize]uint8
 }
 type streamedPersistenceInput struct {
+	ObjectPayload     *content.VoxelObjectPayloadDef
 	Navigation        bool
 	Kind, Owner, Item string
 	Coord             content.TerrainChunkCoordDef
@@ -29,6 +30,7 @@ type streamedPersistenceInput struct {
 	Removal           *content.VoxelBackingRemovalDef
 }
 type streamedPersistenceEntity struct {
+	Managed  *managedVoxelPersistenceToken
 	Entity   EntityId
 	Map      *volume.XBrickMap
 	Exists   bool
@@ -231,7 +233,7 @@ func collectStreamedPersistenceIntent(cmd *Commands, state *StreamedLevelRuntime
 		}
 	}
 	for key, eid := range loaded.ObjectEntities {
-		owner, item := splitVoxelObjectRuntimeKey(key)
+		owner, item := managedVoxelPersistenceObjectIDs(cmd, state, key, eid)
 		remember(eid, streamedPersistenceClass{Kind: "object", Owner: owner, Item: item}, true)
 	}
 
@@ -248,67 +250,79 @@ func preflightStreamedPersistence(cmd *Commands, state *StreamedLevelRuntimeStat
 		return 0, fmt.Errorf("unsafe persistence capture size")
 	}
 	for eid, class := range intent.Entities {
-		xbm, _, _ := currentVoxelMapForEntity(cmd, eid)
-		// Bound codec allocation counts as well as retained brick capture counts.
-		var codecBytes int64
-		if !persistenceAdd(&codecBytes, int64(persistenceMapBrickCount(xbm)), volume.BrickSize*volume.BrickSize*volume.BrickSize*int64(unsafe.Sizeof(content.ImportedWorldVoxelDef{}))) {
-			return 0, fmt.Errorf("unsafe persistence codec size")
+		var payload content.VoxelObjectPayloadDef
+		var count int
+		var delta bool
+		if class.Kind == "object" {
+			payload, _, count, delta = managedVoxelPersistenceCandidate(cmd, assetServerFromApp(cmd.app), state, eid, class.Owner, class.Item)
 		}
-		if class.Kind == "terrain" {
-			model, _ := voxelModelComponentForEntity(cmd, eid)
-			size := model.TerrainChunkSize
-			if size <= 0 {
-				size = state.Level.ChunkSize
+		if delta {
+			if !managedVoxelPersistencePayloadBytes(payload, count, &n) {
+				return 0, fmt.Errorf("unsafe persistence delta size")
 			}
-			var columns int64
-			if size < 0 || !persistenceAdd(&columns, int64(size), int64(size)) || !persistenceAdd(&codecBytes, columns, int64(unsafe.Sizeof(content.TerrainChunkColumnDef{}))) {
-				return 0, fmt.Errorf("unsafe persistence terrain size")
+		} else {
+			xbm, _, _ := currentVoxelMapForEntity(cmd, eid)
+			// Bound codec allocation counts as well as retained brick capture counts.
+			var codecBytes int64
+			if !persistenceAdd(&codecBytes, int64(persistenceMapBrickCount(xbm)), volume.BrickSize*volume.BrickSize*volume.BrickSize*int64(unsafe.Sizeof(content.ImportedWorldVoxelDef{}))) {
+				return 0, fmt.Errorf("unsafe persistence codec size")
 			}
-		}
+			if class.Kind == "terrain" {
+				model, _ := voxelModelComponentForEntity(cmd, eid)
+				size := model.TerrainChunkSize
+				if size <= 0 {
+					size = state.Level.ChunkSize
+				}
+				var columns int64
+				if size < 0 || !persistenceAdd(&columns, int64(size), int64(size)) || !persistenceAdd(&codecBytes, columns, int64(unsafe.Sizeof(content.TerrainChunkColumnDef{}))) {
+					return 0, fmt.Errorf("unsafe persistence terrain size")
+				}
+			}
 
-		if !persistenceAdd(&n, int64(persistenceMapBrickCount(xbm)), int64(unsafe.Sizeof(streamedPersistenceBrick{}))) {
-			return 0, fmt.Errorf("unsafe persistence brick size")
-		}
-		if backing, ok := voxelBackingForEntity(cmd, eid); ok && (backing.Dirty || class.Backing) {
-			if !persistenceAdd(&n, int64(len(backing.Removals)), int64(unsafe.Sizeof(content.VoxelBackingRemovalBrickDef{}))) {
-				return 0, fmt.Errorf("unsafe persistence removal size")
+			if !persistenceAdd(&n, int64(persistenceMapBrickCount(xbm)), int64(unsafe.Sizeof(streamedPersistenceBrick{}))) {
+				return 0, fmt.Errorf("unsafe persistence brick size")
 			}
-		}
+			if backing, ok := voxelBackingForEntity(cmd, eid); ok && (backing.Dirty || class.Backing) {
+				if !persistenceAdd(&n, int64(len(backing.Removals)), int64(unsafe.Sizeof(content.VoxelBackingRemovalBrickDef{}))) {
+					return 0, fmt.Errorf("unsafe persistence removal size")
+				}
+			}
 
-		worldID := class.Owner
-		if backing, ok := voxelBackingForEntity(cmd, eid); ok && (backing.Dirty || class.Backing) && backing.OwnerKind == content.VoxelBackingOwnerImportedWorld {
-			worldID = backing.OwnerID
-		}
-		if (class.Kind == "imported" || class.Backing) && streamedPersistenceNeedsNavigation(state, worldID) {
-			voxels := int64(0)
-			if xbm != nil {
-				for _, sector := range xbm.Sectors {
-					for i := 0; i < 64; i++ {
-						if sector.BrickMask64&(uint64(1)<<i) == 0 {
-							continue
-						}
-						brick := sector.GetBrick(i%4, i/4%4, i/16)
-						if brick == nil {
-							continue
-						}
-						for x := 0; x < volume.BrickSize; x++ {
-							for y := 0; y < volume.BrickSize; y++ {
-								for z := 0; z < volume.BrickSize; z++ {
-									if brick.VoxelValue(x, y, z) != 0 {
-										voxels++
+			worldID := class.Owner
+			if backing, ok := voxelBackingForEntity(cmd, eid); ok && (backing.Dirty || class.Backing) && backing.OwnerKind == content.VoxelBackingOwnerImportedWorld {
+				worldID = backing.OwnerID
+			}
+			if (class.Kind == "imported" || class.Backing) && streamedPersistenceNeedsNavigation(state, worldID) {
+				voxels := int64(0)
+				if xbm != nil {
+					for _, sector := range xbm.Sectors {
+						for i := 0; i < 64; i++ {
+							if sector.BrickMask64&(uint64(1)<<i) == 0 {
+								continue
+							}
+							brick := sector.GetBrick(i%4, i/4%4, i/16)
+							if brick == nil {
+								continue
+							}
+							for x := 0; x < volume.BrickSize; x++ {
+								for y := 0; y < volume.BrickSize; y++ {
+									for z := 0; z < volume.BrickSize; z++ {
+										if brick.VoxelValue(x, y, z) != 0 {
+											voxels++
+										}
 									}
 								}
 							}
 						}
 					}
 				}
+				if !persistenceAdd(&n, voxels, int64(unsafe.Sizeof(content.ImportedWorldVoxelDef{}))) || !persistenceAdd(&n, 1, int64(unsafe.Sizeof(content.ImportedWorldChunkDef{}))) || !persistenceAdd(&n, int64(len(worldID)), 1) {
+					return 0, fmt.Errorf("unsafe persistence navigation result size")
+				}
 			}
-			if !persistenceAdd(&n, voxels, int64(unsafe.Sizeof(content.ImportedWorldVoxelDef{}))) || !persistenceAdd(&n, 1, int64(unsafe.Sizeof(content.ImportedWorldChunkDef{}))) || !persistenceAdd(&n, int64(len(worldID)), 1) {
-				return 0, fmt.Errorf("unsafe persistence navigation result size")
+			if !persistenceAdd(&n, 1, int64(unsafe.Sizeof((*content.ImportedWorldChunkDef)(nil)))) {
+				return 0, fmt.Errorf("unsafe persistence navigation result table")
 			}
-		}
-		if !persistenceAdd(&n, 1, int64(unsafe.Sizeof((*content.ImportedWorldChunkDef)(nil)))) {
-			return 0, fmt.Errorf("unsafe persistence navigation result table")
 		}
 		// Immutable names are retained, and unique result paths reserve a finite bound.
 		// CreateTemp's random suffix fits 32 bytes; relative authoring may add delta directory components.
@@ -341,6 +355,16 @@ func captureStreamedPersistence(cmd *Commands, state *StreamedLevelRuntimeState,
 	capture := func(eid EntityId, kind, owner, item string, coord content.TerrainChunkCoordDef) {
 		if _, dirty := intent.Entities[eid]; !dirty {
 			return
+		}
+		if kind == "object" {
+			assets := assetServerFromApp(cmd.app)
+			if payload, entry, count, delta := managedVoxelPersistenceCandidate(cmd, assets, state, eid, owner, item); delta {
+				model, _ := voxelModelComponentForEdit(cmd, eid)
+				asset, present := assets.getVoxelGeometry(model.GeometryAsset())
+				input := streamedPersistenceInput{Kind: kind, Owner: owner, Item: item, Coord: coord, ObjectPayload: captureManagedVoxelPersistencePayload(payload, entry, count)}
+				entities = append(entities, streamedPersistenceEntity{Entity: eid, Map: asset.XBrickMap, Exists: present, Geometry: model.GeometryAsset(), Input: input, Managed: &managedVoxelPersistenceToken{entry: entry, generation: entry.generation, binding: entry.persistenceBinding}})
+				return
+			}
 		}
 		xbm, _, exists := currentVoxelMapForEntity(cmd, eid)
 		model, _ := voxelModelComponentForEntity(cmd, eid)
@@ -414,7 +438,14 @@ func streamedPersistenceEntitiesCurrent(cmd *Commands, state *StreamedLevelRunti
 	for _, e := range tx.Entities {
 		xbm, _, exists := currentVoxelMapForEntity(cmd, e.Entity)
 		model, _ := voxelModelComponentForEntity(cmd, e.Entity)
-		if exists != e.Exists || xbm != e.Map || model.GeometryAsset() != e.Geometry || !persistenceBricksMatch(xbm, e.Input.Bricks) {
+		if exists != e.Exists || xbm != e.Map || model.GeometryAsset() != e.Geometry {
+			return false
+		}
+		if e.Managed != nil {
+			if !managedVoxelPersistenceFresh(cmd, state, e) {
+				return false
+			}
+		} else if !persistenceBricksMatch(xbm, e.Input.Bricks) {
 			return false
 		}
 

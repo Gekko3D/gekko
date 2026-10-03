@@ -1151,7 +1151,8 @@ Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`. Opt-in
 schema-2 full/base-delta content payloads are defined by the
 [voxel-object override contract](compiled-voxels.md#ordinary-voxel-object-override-payloads).
 Runtime loading supports schema 2 for individual authored `voxel_shape` parts;
-existing save dispatch still writes legacy snapshots until S4 integration.
+eligible managed owners save sparse schema-2 deltas through S4; other origins
+retain legacy full snapshots.
 
 ### Ordinary object override loading
 
@@ -1186,7 +1187,49 @@ override into the same streaming geometry lease, including full-fallback origins
 unload and successful Stop release it independently of current authored refs.
 [Authored-owner qualification](../renderer/editing.md#authored-shape-base-provenance)
 is captured once and queried without geometry reconstruction. Managed
-edit-history restoration and delta writing remain follow-ups.
+edit-history restoration remains a follow-up.
+
+### Ordinary object override persistence
+
+Explicitly enabled, sealed authored shapes with a verified
+[authored owner](../renderer/editing.md#authored-shape-base-provenance) save
+construction-relative final assignments as schema-2 `base_delta` payloads.
+Captures include explicit owner IDs, canonical base identity and lattice; zero
+assignments remove cells and reverted cells are omitted. An empty delta preserves
+the base, while complete removal never resurrects it. Placement and item IDs are
+kept explicit through asynchronous intent, capture and manifest publication,
+including embedded NULs.
+
+Preflight reads the tracked count and visits only changed assignments to check
+portable coordinates. Admission charges owned assignment storage and binding
+strings before capture. Delta capture and workers do not scan remaining geometry,
+copy base bricks or reconstruct a dense map. Existing soft byte admission,
+sole oversized transactions, dirty pins, cancellation and durable publication
+remain authoritative. Blocking unload/Stop uses the same payload selection.
+
+V1 full fallback covers exposed, unbound, resealed or unsupported origins and
+assignments outside signed int32 or valid payload metadata. Sparse selection
+conservatively requires assignment count no greater than the default codec's
+brick and voxel limits. Enable also records canonical base brick/voxel counts
+and decoded size during its existing validation. Admission conservatively bounds
+the merged geometry with base counts plus changed count and at most 592 decoded
+bytes of growth per assignment. This covers new bricks and uniform-to-mixed
+paint without an unload-time base scan. Unknown proof or exceeded bounds uses
+legacy full capture, including near-limit removals or larger histories that
+could fit C1 with a tighter calculation. Codec adapter temporaries remain outside the
+retained S4 byte charge. Terrain, imported worlds, backing removals, placement
+changes and navigation retain their existing representations.
+
+Exact capture freshness checks managed authority, generation, provenance and
+owner/lattice metadata before clearing pins or removing entities. Durable
+baseline applicability is separate: same-owner edits or exposure after manifest
+launch can retain saved A as the baseline while unsaved B remains pinned for
+recapture. Changed owner/path/lattice suppresses an incompatible runtime reference
+acknowledgement. Failures preserve existing references and retry ownership.
+
+Loaded delta geometry still uses independent dense registration and has no
+restored tracked history. Cheaper full compact selection and restoration remain
+follow-ups; no delta chain or persistent base cache is introduced.
 
 ### Payload and manifest publication
 

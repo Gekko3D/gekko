@@ -2,7 +2,6 @@ package content
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -96,14 +95,23 @@ func voxelObjectMetadata(payload *VoxelObjectPayloadDef) (voxelObjectPayloadMeta
 		if len(m.BaseIdentity) != 64 {
 			return m, fmt.Errorf("invalid voxel-object base identity")
 		}
-		decoded, err := hex.DecodeString(m.BaseIdentity)
-		if err != nil || hex.EncodeToString(decoded) != m.BaseIdentity {
-			return m, fmt.Errorf("noncanonical voxel-object base identity")
+		for i := 0; i < len(m.BaseIdentity); i++ {
+			char := m.BaseIdentity[i]
+			if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f') {
+				return m, fmt.Errorf("noncanonical voxel-object base identity")
+			}
 		}
 	default:
 		return m, fmt.Errorf("unsupported voxel-object payload mode %q", m.Mode)
 	}
 	return m, nil
+}
+
+// ValidateVoxelObjectPayloadMetadata validates schema and scalar owner/lattice
+// bindings without inspecting records or allocating for valid metadata.
+func ValidateVoxelObjectPayloadMetadata(payload *VoxelObjectPayloadDef) error {
+	_, err := voxelObjectMetadata(payload)
+	return err
 }
 
 func voxelObjectVoxelLess(a, b VoxelObjectVoxelDef) bool {

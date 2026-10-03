@@ -9,11 +9,13 @@ import (
 // A value-only binding captures the authored owner at enablement. It neither
 // retains base geometry nor turns mutable runtime references into provenance.
 type managedVoxelPersistenceBinding struct {
-	state              *StreamedLevelRuntimeState
-	generation         uint64
-	levelID, levelPath string
-	ref                AuthoredLevelItemRefComponent
-	assetPath          string
+	state                  *StreamedLevelRuntimeState
+	generation             uint64
+	levelID, levelPath     string
+	ref                    AuthoredLevelItemRefComponent
+	assetPath              string
+	baseBricks, baseVoxels int
+	baseDecodedBytes       int64
 }
 
 // This context only bridges unpublished synchronous placement hooks. Each
@@ -177,11 +179,13 @@ func captureManagedVoxelPersistenceBinding(cmd *Commands, assets *AssetServer, e
 		if lattice != entry.authoredBase.lattice {
 			return
 		}
-		identity, _, err := content.VoxelObjectBaseIdentity(VoxelObjectSnapshotFromXBrickMap(buildAuthoredVoxelShapeMap(part)), lattice, nil)
+		canonical := buildAuthoredVoxelShapeMap(part)
+		snapshot := VoxelObjectSnapshotFromXBrickMap(canonical)
+		identity, decodedBytes, err := content.VoxelObjectBaseIdentity(snapshot, lattice, nil)
 		if err != nil || identity != entry.authoredBase.identity {
 			return
 		}
-		entry.persistenceBinding = &managedVoxelPersistenceBinding{state: state, generation: state.Generation, levelID: state.LevelID, levelPath: filepath.Clean(state.LevelPath), ref: ref, assetPath: actualPath}
+		entry.persistenceBinding = &managedVoxelPersistenceBinding{state: state, generation: state.Generation, levelID: state.LevelID, levelPath: filepath.Clean(state.LevelPath), ref: ref, assetPath: actualPath, baseBricks: persistenceMapBrickCount(canonical), baseVoxels: len(snapshot.Voxels), baseDecodedBytes: decodedBytes}
 		return
 	}
 }

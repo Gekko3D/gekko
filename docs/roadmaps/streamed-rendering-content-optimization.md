@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2b3 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2b4 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -510,7 +510,9 @@ payloads; S4b orders imported captures and preserves navigation impact. S4c adds
 bounded asynchronous normal unload, dirty pins and durable acknowledgements.
 [Ownership decision](streamed-rendering-s4.md).
 
-`persistChunkOverrides` saves whole snapshots during unload. Main thread snapshots immutable edits; bounded worker encodes/compresses/writes. Publish override references only after successful atomic replacement.
+`persistChunkOverrides` shares object delta/full selection with asynchronous
+unload. Main thread captures immutable edits; bounded worker
+encodes/compresses/writes. Publish override references only after successful atomic replacement.
 
 Pin dirty data until durable publication. Failed saves retain old references/retry; eviction cannot lose unpublished edits. Preserve navigation's immutable generation publication. Useful before compact deltas.
 
@@ -796,7 +798,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | E2a | `38101bd` | Canonical object base identity and opt-in full/base-delta content payloads | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
 | E2b1 | `e9dad29` | Trusted authored shape/lattice provenance and managed qualification | [Provenance contract](../renderer/editing.md#authored-shape-base-provenance) |
 | E2b2 | `5c45a04` | Bound authored-shape payload loading with current override selection | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
-| E2b3 | This commit | Actual authored-owner binding and managed streaming override leases | [Ownership contract](../renderer/editing.md#authored-shape-base-provenance) |
+| E2b3 | `00d0f62` | Actual authored-owner binding and managed streaming override leases | [Ownership contract](../renderer/editing.md#authored-shape-base-provenance) |
+| E2b4 | This commit | Admitted sparse deltas through async and blocking S4 publication | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -810,7 +813,9 @@ E2b1 adds trusted individual authored-shape provenance; E2b2 adds v2 loading.
 The [streamed ownership review](streamed-rendering-p1c.md#next-alignment-ordinary-streamed-edit-ownership)
 confirmed ordinary placement items already support managed enable without ticket
 changes. E2b3 binds actual authored owners and reuses streaming geometry leases.
-Bounded S4 writing is next. Other source adapters remain open.
+E2b4 adds admitted sparse S4 writing with conservative payload and merged
+geometry bounds. Loaded tracking restoration and cheaper full compact selection
+remain; other source adapters remain open.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
@@ -2333,6 +2338,33 @@ this batch changes CPU metadata and asset leases; renderer derivatives, ticket
 publication and formats retain their existing paths. No pixel/FPS claim. Bounded
 S4 capture/save and managed restoration remain. Existing tests and unrelated
 changes remain.
+
+### E2b4: Admitted sparse object delta publication
+
+Commit: this entry's introducing commit. Eligible managed shapes capture only
+final assignments and bindings; S4 workers and blocking saves publish schema-2
+deltas. Allocation-free count, visitor and metadata checks preserve byte
+admission. Cached canonical counts conservatively bound merged reload geometry;
+unsupported coordinates, profiles or provenance use v1 full fallback. Durable
+baseline applicability remains separate from capture freshness. Contract:
+[object persistence](../content/streaming-and-worlds.md#ordinary-object-override-persistence).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . ./content ./voxelrt/rt/volume -run '^TestE2b4' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . ./content ./voxelrt/rt/volume -run 'TestE2b[1234]|TestP1[de]|TestP5c|TestS1g|TestS4' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./content ./voxelrt/rt/volume -run 'TestE2b[1234]|TestP1[de]|TestP5c|TestS1g|TestS4' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and the five consumer commands below passed. Sparse retained-byte
+checks stayed within 64 KiB for one changed cell over 1 or 128 base sectors.
+A base at the codec brick limit plus one addition saves a reloadable v1 fallback.
+No new windowed check: payload resolution uses the established dense registration
+path; no pixel/FPS claim. Codec temporaries remain outside retained S4 admission.
+Conservative near-limit fallback, loaded history restoration and cheaper full
+compact selection remain. Existing tests and unrelated changes remain.
 
 Consumer commands for these steps:
 
