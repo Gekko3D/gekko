@@ -835,6 +835,12 @@ Implementation note, 2026-06-08:
   activates only from the authored surface or after that band's removal history
   was seeded at the surface. The renderer, collision, raycast, and navigation
   paths continue to consume `XBrickMap` rather than the backing.
+- Built-in plane-tree and terrain-column shell materialization uses synchronous
+  [ordered edit streams](../renderer/editing.md#ordered-edit-streams). Material
+  hints, shell-offset order, removal history and surface-support activation
+  retain their existing timing. Arbitrary public backing providers retain
+  sequential writes, so classifier callbacks observe finalized material state
+  and can reenter editing. No cross-frame publication is introduced.
 
 #### Step 8: Add HL1/BSP Visibility Provider
 

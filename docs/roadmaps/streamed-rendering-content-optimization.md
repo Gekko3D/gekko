@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5h and E1a complete. S1/S2/S3/P5/E1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5h and E1a–E1b complete. S1/S2/S3/P5/E1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -577,6 +577,16 @@ World-space sphere edits already delegate to this primitive after transform
 conversion. Backing materialization, event sequencing and resumable
 publication remain later work; progressive/atomic cross-chunk visibility is undecided.
 
+#### E1b: Ordered synchronous writes and backing shells
+
+Completed: an ordered stream API applies edits to existing exclusively owned CPU
+maps, finalizing touched material flags even for a producer panic's applied
+prefix. Built-in backing shell materialization and removal restoration use it
+without another voxel list. Generic provider callbacks and GPU invocations stay
+sequential; hints, removals, support history and publication retain their contracts.
+See [ordered edits](../renderer/editing.md#ordered-edit-streams). Event sequencing,
+unresident operations and cross-frame publication remain later work.
+
 ### E2. Persist changed bricks instead of whole geometry
 
 Key deltas by base content identity, chunk/layer or stable placement/part ID and authoritative lattice. Encode changed-voxel mask/final values, including explicit zero removals. Use sparse/uniform forms; switch to full compact brick when cheaper.
@@ -736,7 +746,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5f | `da0b36c` | Ordered dense imported construction with one material finalization per brick | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
 | P5g | `d682744` | Shared dense terrain, snapshot and offline aux reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
 | E1a | `3c61953` | Synchronous dense Sphere/Cube material and normal-halo bookkeeping | [Edit contract](../renderer/editing.md#synchronous-primitive-edits) |
-| P5h | This commit | Dense ordinary VOX asset and persistence-input reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
+| P5h | `27d73de` | Dense ordinary VOX asset and persistence-input reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
+| E1b | This commit | Ordered synchronous writes and built-in backing shell materialization | [Edit contract](../renderer/editing.md#ordered-edit-streams) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1791,6 +1802,32 @@ Disposable Go 1.25.4 darwin/arm64 public asset-creation samples measured uniform
 source model records remain. No ownership/concurrency/format change or pixel
 parity/FPS claim. Next: synchronous ordered edits for known built-in backing
 materialization, preserving arbitrary provider callbacks. Unrelated changes preserved.
+
+### E1b: Ordered synchronous writes and backing shells
+
+This commit adds the ordered existing-map stream and uses it for built-in backing
+shells. New API tests reached RED before implementation; frozen prefix/panic/GPU
+and provider compatibility checks passed afterward. Focused race, full engine,
+five consumer and native backing/carve/reload checks passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume . -run '^(TestE1b|TestE1a|TestSetVoxel|TestVoxelBacking|TestDestruction|TestVoxelSphere|TestS4c)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume . -run '^(TestE1b|TestE1a|TestSetVoxel|TestVoxelBacking|TestDestruction|TestVoxelSphere|TestS4c)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-e1b-terrain-smoke /tmp/gekko-e1b-terrain-smoke.go
+/tmp/gekko-e1b-terrain-smoke > /tmp/gekko-e1b-terrain-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-e1b-backing-bench.go
+```
+
+Native checks passed built-in shell materialization, GPU readiness, collision,
+sibling isolation, durable removal reload and worker-owned cleanup (13 frames).
+Removal-aware reload keeps its existing registration fallback and asset lifetime.
+No pixel parity/FPS claim. Disposable Go 1.25.4 darwin/arm64 backing samples
+measured materialization 4.25 to 1.80 ms and removal restoration 1.36 to 0.99 ms;
+batch scratch increased allocations from 77 to 100 and 70 to 93 respectively.
+Existing selection arrays, per-write classification/addressing and synchronous
+publication remain. Next: cold composite rasterization using the stream.
+Unrelated changes preserved.
 
 Consumer commands for these steps:
 

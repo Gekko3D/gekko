@@ -46,6 +46,22 @@ sphere edits use this path after their existing transform conversion. Single-vox
 edits keep their current path. Publication remains
 synchronous; these helpers introduce no resumable or progressive visibility.
 
+## Ordered edit streams
+
+`XBrickMap.ApplyVoxelWrites(iter.Seq[volume.VoxelWrite])` consumes ordered
+assignments once on an existing map; a nil sequence is a no-op. CPU callers own
+the map exclusively during the call. Each write updates payload, revisions,
+membership and cached bounds before control returns to the producer. Material
+flags finalize before return, including the applied prefix if the producer
+panics; that panic propagates unchanged. Normal halos retain exact coverage.
+
+The CPU producer may read current voxels through `GetVoxel` to choose later
+writes. It must not inspect deferred material flags or `AtlasOffset`, mutate or
+reenter the target, publish it, or change its edit mode. An invocation beginning
+in `GPUEditMode` uses ordinary sequential `SetVoxel` throughout, preserving
+callback observations and reentry even if a callback changes that mode. No
+intermediate write list or new shared owner is introduced.
+
 ## Raycast Internals
 
 `Scene.Raycast` currently:

@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"fmt"
+	"iter"
 	"math"
 	"sort"
 
@@ -150,11 +151,16 @@ func (component *VoxelBackingComponent) ApplyRemovals(xbm *volume.XBrickMap) {
 			materials[i] = component.Materials[brick]
 		}
 	}
-	for i, local := range removed {
-		for _, offset := range voxelBackingCarveShellOffsets {
-			component.materializeVoxel(xbm, [3]int{local[0] + offset[0], local[1] + offset[1], local[2] + offset[2]}, materials[i], surfaceSupports)
+	component.applyMaterializationWrites(xbm, func(yield func(volume.VoxelWrite) bool) {
+		for i, local := range removed {
+			for _, offset := range voxelBackingCarveShellOffsets {
+				write, ok := component.materializationWrite(xbm, [3]int{local[0] + offset[0], local[1] + offset[1], local[2] + offset[2]}, materials[i], surfaceSupports)
+				if ok && !yield(write) {
+					return
+				}
+			}
 		}
-	}
+	})
 }
 
 func (component *VoxelBackingComponent) MaterializeSphere(xbm *volume.XBrickMap, center mgl32.Vec3, radius float32) bool {
@@ -201,16 +207,21 @@ func (component *VoxelBackingComponent) materializeSphere(xbm *volume.XBrickMap,
 	surfaceSupports := component.activeSurfaceSupports(center, radius, continued)
 	changed := false
 	// One virtual layer records shell-only neighbor chunks for reload.
-	for _, local := range carveVoxels {
-		material := voxelBackingMaterialHint(xbm, local)
-		if material == 0 {
-			material = eventMaterial
+	component.applyMaterializationWrites(xbm, func(yield func(volume.VoxelWrite) bool) {
+		for _, local := range carveVoxels {
+			material := voxelBackingMaterialHint(xbm, local)
+			if material == 0 {
+				material = eventMaterial
+			}
+			for _, offset := range voxelBackingCarveShellOffsets {
+				write, ok := component.materializationWrite(xbm, [3]int{local[0] + offset[0], local[1] + offset[1], local[2] + offset[2]}, material, surfaceSupports)
+				if ok && !yield(write) {
+					return
+				}
+			}
+			changed = component.markRemoved(local, material) || changed
 		}
-		for _, offset := range voxelBackingCarveShellOffsets {
-			component.materializeVoxel(xbm, [3]int{local[0] + offset[0], local[1] + offset[1], local[2] + offset[2]}, material, surfaceSupports)
-		}
-		changed = component.markRemoved(local, material) || changed
-	}
+	})
 	component.Dirty = component.Dirty || changed
 	return changed
 }
@@ -226,17 +237,36 @@ var voxelBackingCarveShellOffsets = [...][3]int{
 }
 
 func (component *VoxelBackingComponent) materializeVoxel(xbm *volume.XBrickMap, local [3]int, material uint8, surfaceSupports map[int]struct{}) {
+	if write, ok := component.materializationWrite(xbm, local, material, surfaceSupports); ok {
+		xbm.SetVoxel(write.X, write.Y, write.Z, write.Value)
+	}
+}
+
+// Only built-in immutable classifiers use batched materialization writes.
+// Arbitrary providers can inspect or reenter the map from classification calls,
+// so their writes retain complete sequential SetVoxel finalization.
+func (component *VoxelBackingComponent) applyMaterializationWrites(xbm *volume.XBrickMap, writes iter.Seq[volume.VoxelWrite]) {
+	switch component.Provider.(type) {
+	case *planeTreeVoxelBacking, *terrainColumnVoxelBacking:
+		xbm.ApplyVoxelWrites(writes)
+	default:
+		for write := range writes {
+			xbm.SetVoxel(write.X, write.Y, write.Z, write.Value)
+		}
+	}
+}
+
+func (component *VoxelBackingComponent) materializationWrite(xbm *volume.XBrickMap, local [3]int, material uint8, surfaceSupports map[int]struct{}) (volume.VoxelWrite, bool) {
 	if component == nil || component.Provider == nil || xbm == nil {
-		return
+		return volume.VoxelWrite{}, false
 	}
 	for axis := 0; axis < 3; axis++ {
 		if local[axis] < component.BoundsMin[axis] || local[axis] >= component.BoundsMax[axis] {
-			return
+			return volume.VoxelWrite{}, false
 		}
 	}
 	if component.removed(local) {
-		xbm.SetVoxel(local[0], local[1], local[2], 0)
-		return
+		return volume.VoxelWrite{X: local[0], Y: local[1], Z: local[2]}, true
 	}
 	chunkOrigin := [3]int{
 		component.ChunkCoord[0] * component.ChunkSize,
@@ -255,9 +285,10 @@ func (component *VoxelBackingComponent) materializeVoxel(xbm *volume.XBrickMap, 
 			value = material
 		}
 		if found, _ := xbm.GetVoxel(local[0], local[1], local[2]); !found {
-			xbm.SetVoxel(local[0], local[1], local[2], value)
+			return volume.VoxelWrite{X: local[0], Y: local[1], Z: local[2], Value: value}, true
 		}
 	}
+	return volume.VoxelWrite{}, false
 }
 
 func (component *VoxelBackingComponent) activeSurfaceSupports(center mgl32.Vec3, radius float32, continued [][3]int) map[int]struct{} {

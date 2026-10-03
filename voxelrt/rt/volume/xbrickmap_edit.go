@@ -1,8 +1,12 @@
 package volume
 
-import "github.com/go-gl/mathgl/mgl32"
+import (
+	"iter"
 
-// voxelEditBatch belongs to one synchronous CPU primitive invocation. Map edits
+	"github.com/go-gl/mathgl/mgl32"
+)
+
+// voxelEditBatch belongs to one synchronous CPU edit invocation. Map edits
 // and removals remain immediate; only material scans and repeated halo work are
 // deferred or deduplicated. The maps stay nil until the first changed voxel.
 type voxelEditBatch struct {
@@ -106,6 +110,30 @@ func (x *XBrickMap) MarkBrickNormalDirty(bKey [6]int) {
 
 func (x *XBrickMap) SetVoxel(gx, gy, gz int, val uint8) {
 	x.setVoxel(gx, gy, gz, val, nil)
+}
+
+// ApplyVoxelWrites consumes ordered writes synchronously once; nil is a no-op.
+// CPU callers must exclusively own the map throughout the call. The producer
+// may read applied payloads through GetVoxel, but must not inspect deferred
+// material flags/AtlasOffset, mutate or reenter the map, publish it, or change
+// its edit mode. Material flags finalize before return, including for an applied
+// prefix when the producer panics; the panic propagates unchanged.
+// An invocation starting in GPUEditMode retains sequential SetVoxel semantics.
+func (x *XBrickMap) ApplyVoxelWrites(writes iter.Seq[VoxelWrite]) {
+	if writes == nil {
+		return
+	}
+	if x.GPUEditMode {
+		for w := range writes {
+			x.SetVoxel(w.X, w.Y, w.Z, w.Value)
+		}
+		return
+	}
+	var batch voxelEditBatch
+	defer batch.finish(x)
+	for w := range writes {
+		x.setVoxel(w.X, w.Y, w.Z, w.Value, &batch)
+	}
 }
 
 func (x *XBrickMap) setVoxel(gx, gy, gz int, val uint8, batch *voxelEditBatch) {
