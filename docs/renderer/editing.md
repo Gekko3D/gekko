@@ -75,6 +75,20 @@ bricks with independent metadata. Writes detach affected bricks before mutation,
 including halo neighbors. `Snapshot` returns an independent ordinary map with
 the existing `XBrickMap.Copy` identity, upload-state and metadata behavior.
 
+`CopyChangedSectors(previous, sinceRevision)` returns a clean immutable snapshot
+with fresh identity. The previous geometry must be an unchanged snapshot of this
+owner at that revision, or an inherited snapshot before fork divergence. Divergent
+sibling snapshots are invalid inputs. Only previous immutable sectors may be
+shared; no snapshot aliases mutable owner storage. Callers must keep shared
+sectors and bricks immutable, using `Snapshot` when an independent mutable copy
+is needed. Bounds/dirty metadata may be resolved without changing shared geometry.
+
+Changed sectors include the full fitted-normal halo, even when only auxiliary
+data changes and public `SectorRevisions` stays unchanged. Private publication
+history follows forks independently and is dropped on exposure. Exposed owners
+always copy fully because raw writes can bypass revisions. Publish only after
+ordered edit finalization, including an applied panic prefix.
+
 `TrackedChanges` returns owned final assignments relative to the construction
 base, sorted by z, y and x. It includes explicit zero removals and omits reverted
 cells. Sealed forks inherit the original base and changes. Ordered producers can
@@ -142,8 +156,11 @@ payload writes bypass map revisions. Geometry deletion releases its managed
 sidecar; entity removal releases renderer bindings. Ordinary override assets
 still require explicit asset deletion, as with existing unrefcounted geometry.
 
-Authority publication currently copies the full map after each changed batch.
-Incremental snapshots, compact payloads and E2 delta formats remain follow-ups.
+Authority publication reuses unchanged immutable sectors and copies changed
+sectors plus fitted-normal halos after each changed batch. Metadata still scales
+with retained sectors and revision tombstones. This does not bound total memory
+or remove downstream physics copies. Compact payloads and E2 delta formats remain
+follow-ups.
 
 ## Raycast Internals
 

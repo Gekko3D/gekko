@@ -1,6 +1,6 @@
 # P1c: Sealed managed voxel ownership
 
-Status: volume boundary and ordinary managed runtime integration implemented.
+Status: volume boundary, ordinary runtime integration and incremental authority publication implemented.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md).
 
 ## Approved boundary
@@ -85,3 +85,58 @@ Verify source/fork/snapshot isolation, normal halos, solid expansion, tombstones
 removal/reinsertion, tracked reverts, raw exposure and panic prefixes. Run focused
 and race checks, then engine and consumer boundary checks. Native GPU validation covers managed upload, collision, instance isolation,
 promotion and removal; pixel parity and performance remain unmeasured.
+
+
+## P1e: Incremental authority publication
+
+Publish clean immutable derivatives through
+`ManagedXBrickMap.CopyChangedSectors(previous, sinceRevision)`. The previous map
+must be an unchanged snapshot of this owner at that revision, or a matching
+pre-divergence inherited snapshot. Divergent sibling history is not a valid input. Share only previous immutable sectors, never mutable
+owner storage. Keep `Snapshot` independently mutable. Exposed owners always
+copy fully because raw writes can bypass revisions.
+
+Track private sector publication revisions for real assignments and fitted-normal
+halo invalidation, including auxiliary-only changes across sector boundaries.
+Keep public voxel and sector revisions unchanged. Fork clones this metadata;
+promotion drops it. Preserve deletion tombstones, current bounds, auxiliary data,
+material flags and applied-prefix finalization. Runtime authority replaces only
+changed sectors in its prior snapshot; renderer replay and authored pivots remain.
+
+This extends existing immutable derivative ownership rather than introducing a
+cache or changing persistence formats. Payload copying follows changed sectors
+and their halos; metadata still follows retained sectors/revision tombstones.
+Latest snapshot size and downstream collision copies are not reduced by contract.
+Verify exact geometry/auxiliary parity, isolation and sector reuse, then focused
+race, engine/consumer checks and native runtime parity. Measure copy work without
+claiming end-to-end frame or memory gains.
+
+
+## E2 follow-up alignment
+
+Status: proposed; requires human alignment before dependent implementation.
+Start with ordinary authored placement/item objects using the existing S4 object
+capture, byte admission and durable publication owner. Imported chunks, terrain
+and voxel backing remain on their existing full/removal paths.
+
+Recommended identity: deterministic canonical base geometry and authoritative
+lattice/rasterization metadata, captured during base construction. Exclude
+renderer auxiliary data and placement transforms. Paths and runtime `AssetId`
+are insufficient identities. Compatible authored-base forks retain provenance;
+resealed modified runtime bases and unbound full snapshots use full fallback,
+without implicit delta chains or a new persistent base registry.
+
+Recommended format boundary: a versioned voxel-object payload at the existing
+`SnapshotPath`, with explicit full/base-delta selection. Preserve legacy v1 full
+readers in the new loader. Bind deltas to stable placement/item ownership and
+base identity; encode final assignments including explicit zero removals. Reject
+mismatched bases before publishing geometry. Capture owned changes/identity on
+the engine thread; workers encode through the existing S4 lifecycle. Publish
+payload/reference only after successful durable replacement. Raw exposure keeps
+full-snapshot fallback.
+
+Alternative: begin with imported-world deltas and their backing/streaming owners,
+or introduce a manifest-wide payload selector for every override kind. Both
+expand ownership and compatibility scope. The recommended ordinary-object step
+is smaller and reuses current S4 ownership; it still requires approval of this
+base lifecycle and payload boundary before schema or runtime changes.

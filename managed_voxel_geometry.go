@@ -223,7 +223,7 @@ func ApplyManagedVoxelWrites(cmd *Commands, assets *AssetServer, eid EntityId, w
 		assets.mu.Lock()
 		asset := assets.voxModels[id]
 		if !entry.exposed {
-			asset.XBrickMap = entry.owner.Snapshot()
+			asset.XBrickMap = entry.owner.CopyChangedSectors(asset.XBrickMap, asset.XBrickMap.Revision)
 		}
 		asset.XBrickMap.ComputeAABB()
 		assets.voxModels[id] = asset

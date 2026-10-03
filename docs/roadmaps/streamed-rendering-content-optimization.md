@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1d and C1a–C1d complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e and C1a–C1d complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -86,6 +86,7 @@ P1c introduces an opt-in sealed volume owner with shared forks, tracked final
 assignments and irreversible dense promotion. Existing runtime paths remain
 dense. P1d integrates ordinary opt-in entities through independent renderer
 derivatives, explicit raw promotion and authoritative collision/save lookup.
+P1e reuses immutable authority sectors, including auxiliary halo invalidation.
 See [managed ownership](streamed-rendering-p1c.md) and
 [runtime contract](../renderer/editing.md#ordinary-managed-runtime-geometry).
 
@@ -790,7 +791,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C1c | `1a67174` | Validated embedded fitted normals with separate geometry identity | [Compiled contract](../content/compiled-voxels.md#imported-embedded-normals) |
 | C1d | `134fba0` | Optional compiler embedding, neighborhood reuse and borrowed-profile HL1 export | [Compiler contract](../content/compiled-voxels.md#imported-compiler-emission) |
 | P1c | `7617a2b` | Sealed volume owners, shared forks, final changes and stable dense promotion | [Managed contract](../renderer/editing.md#managed-voxel-ownership) |
-| P1d | This commit | Ordinary runtime managed authority, renderer derivatives and explicit promotion | [Runtime contract](../renderer/editing.md#ordinary-managed-runtime-geometry) |
+| P1d | `a76dd09` | Ordinary runtime managed authority, renderer derivatives and explicit promotion | [Runtime contract](../renderer/editing.md#ordinary-managed-runtime-geometry) |
+| P1e | This commit | Incremental immutable authority snapshots including auxiliary halos | [Snapshot contract](../renderer/editing.md#managed-voxel-ownership) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -798,7 +800,8 @@ Imported C1 frames, runtime profiles, embedding and compiler emission/reuse are
 complete. The user approved opt-in managed ownership with dense promotion on
 public mutable exposure. P1c establishes the volume boundary; P1d integrates
 ordinary entities using independent renderer derivatives and explicit promotion.
-Incremental authority publication follows before E2 format implementation.
+P1e adds incremental authority publication. E2 base identity and payload ownership
+remain an alignment gate before format implementation.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
@@ -2188,6 +2191,38 @@ sibling isolation, authoritative collision, exact promotion, raw revision-produc
 edits and cleanup. No pixel parity, FPS or heap/RSS claim. Full authority copies
 remain per changed batch; incremental publication follows. E2 base identity,
 encoding and durable publication decisions remain before format implementation.
+
+### P1e: Incremental managed authority snapshots
+
+Commit: this entry's introducing commit. Managed publication copies changed
+sectors and fitted-normal halos, sharing only previous immutable snapshot sectors.
+Private halo revisions preserve public revision semantics; forks isolate history,
+exposure forces full copies, and ordinary `Snapshot` stays independent. Runtime
+publication preserves prior geometry, collision snapshots, authored pivots and
+stable renderer derivatives. See the [canonical contract](../renderer/editing.md#managed-voxel-ownership).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^TestP1[ce]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -run '^TestP1[ce]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestP1[de]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^TestP1[de]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'TestP1[de]|TestVoxelRt|TestVoxPhysics|Test.*Destruction|Test.*VoxelGeometry|TestS4|Test.*Persistence|Test.*Physics.*' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-p1e-cost.go
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p1d-smoke /tmp/gekko-p1d-smoke.go
+/tmp/gekko-p1d-smoke
+```
+
+Engine sweep passed (root 17.165 s); the five consumer commands below passed.
+Native WebGPU edit/upload, collision, sibling isolation, promotion and cleanup
+passed. A disposable 64-sector/one-edited-brick copy measured full/incremental
+60,496/15,304 B and 13.559/4.404 µs per operation. Construction, editing, latest
+snapshot footprint, downstream physics copies and end-to-end runtime gains are
+excluded. Metadata still scans sectors/tombstones. No pixel/FPS or total-memory
+claim. Existing tests and unrelated changes remain. Next E2 requires the proposed
+[authored-base alignment](streamed-rendering-p1c.md#e2-follow-up-alignment).
 
 Consumer commands for these steps:
 

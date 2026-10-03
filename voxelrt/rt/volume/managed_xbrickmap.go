@@ -14,6 +14,9 @@ type ManagedXBrickMap struct {
 	current *XBrickMap
 	base    *XBrickMap
 	changes map[[3]int]uint8
+	// Publication revisions also include auxiliary-only fitted-normal halos.
+	// Public SectorRevisions continue to describe dense voxel writes only.
+	publicationRevisions map[[3]int]uint64
 	// Only these brick pointers are exclusively owned. Fork clears this set
 	// because every current brick becomes shared, including previous edits.
 	exclusive map[*Brick]struct{}
@@ -100,6 +103,7 @@ func (m *ManagedXBrickMap) setVoxel(w VoxelWrite, batch *voxelEditBatch) {
 		old = sector.GetBrick(bKey[3], bKey[4], bKey[5])
 	}
 	m.current.setVoxel(w.X, w.Y, w.Z, w.Value, batch)
+	m.markPublicationHalo(w)
 	var brick *Brick
 	if sector := m.current.Sectors[sKey]; sector != nil {
 		brick = sector.GetBrick(bKey[3], bKey[4], bKey[5])
@@ -119,6 +123,21 @@ func (m *ManagedXBrickMap) setVoxel(w VoxelWrite, batch *voxelEditBatch) {
 			m.changes = make(map[[3]int]uint8)
 		}
 		m.changes[key] = w.Value
+	}
+}
+
+func (m *ManagedXBrickMap) markPublicationHalo(w VoxelWrite) {
+	if m.publicationRevisions == nil {
+		m.publicationRevisions = make(map[[3]int]uint64)
+	}
+	minKey, _ := sectorBrickKeyForVoxel(w.X-VoxelNormalExtendedSurfaceFitRadius, w.Y-VoxelNormalExtendedSurfaceFitRadius, w.Z-VoxelNormalExtendedSurfaceFitRadius)
+	maxKey, _ := sectorBrickKeyForVoxel(w.X+VoxelNormalExtendedSurfaceFitRadius, w.Y+VoxelNormalExtendedSurfaceFitRadius, w.Z+VoxelNormalExtendedSurfaceFitRadius)
+	for x := minKey[0]; x <= maxKey[0]; x++ {
+		for y := minKey[1]; y <= maxKey[1]; y++ {
+			for z := minKey[2]; z <= maxKey[2]; z++ {
+				m.publicationRevisions[[3]int{x, y, z}] = m.current.Revision
+			}
+		}
 	}
 }
 
@@ -165,9 +184,10 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 		return NewManagedXBrickMap(m.current)
 	}
 	child := &ManagedXBrickMap{
-		current: shareManagedMap(m.current),
-		base:    m.base,
-		changes: maps.Clone(m.changes),
+		current:              shareManagedMap(m.current),
+		base:                 m.base,
+		changes:              maps.Clone(m.changes),
+		publicationRevisions: maps.Clone(m.publicationRevisions),
 	}
 	m.exclusive = nil
 	return child
@@ -177,6 +197,36 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 // including fresh identity, preserved CPU data and reset GPU editing state.
 func (m *ManagedXBrickMap) Snapshot() *XBrickMap {
 	return m.current.Copy()
+}
+
+// CopyChangedSectors publishes a clean immutable snapshot with fresh identity.
+// Previous must be an unchanged snapshot of this owner at sinceRevision, or a
+// matching inherited snapshot from before fork divergence. Divergent sibling
+// snapshots are invalid inputs. Only previous immutable sectors are shared;
+// none are shared with current/base storage. Snapshot stays independently mutable.
+// Publishing during an ordered producer is unsupported. Exposed owners always
+// copy fully because supported raw writes can bypass revision notifications.
+func (m *ManagedXBrickMap) CopyChangedSectors(previous *XBrickMap, sinceRevision uint64) *XBrickMap {
+	if previous == nil || m.base == nil {
+		result := m.current.Copy()
+		result.ClearDirty()
+		return result
+	}
+	result := NewXBrickMap()
+	for key, sector := range m.current.Sectors {
+		prior := previous.Sectors[key]
+		if prior != nil && m.publicationRevisions[key] <= sinceRevision {
+			result.Sectors[key] = prior
+		} else {
+			result.Sectors[key] = sector.Copy()
+		}
+	}
+	result.CachedMin, result.CachedMax = m.current.CachedMin, m.current.CachedMax
+	result.AABBDirty = m.current.AABBDirty
+	result.Revision = m.current.Revision
+	result.SectorRevisions = maps.Clone(m.current.SectorRevisions)
+	result.ClearDirty()
+	return result
 }
 
 // ExposeMutable irreversibly promotes this owner to raw dense authority. All
@@ -191,6 +241,7 @@ func (m *ManagedXBrickMap) ExposeMutable() *XBrickMap {
 		}
 		m.base = nil
 		m.changes = nil
+		m.publicationRevisions = nil
 		m.exclusive = nil
 	}
 	return m.current
