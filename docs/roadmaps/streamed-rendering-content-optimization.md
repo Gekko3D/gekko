@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2j, S3a–S3v, S4a–S4c and P5a–P5c complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2j, S3a–S3v, S4a–S4c and P5a–P5d complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -196,6 +196,42 @@ actual adoption/isolation, current and same-path changed/removed authority, pend
 ownership and exact asset lifetime through partial/failed Stop; focused race,
 engine/consumer checks and native readiness/edit/reload verification. Snapshot
 reading/comparison and placement spawning remain atomic main-thread work.
+
+#### P5d: Worker-prepared first terrain renderer copy
+
+For jobs captured with managed rendering, prepare a third independent terrain
+map from finished registration geometry using exact `XBrickMap.Copy()` semantics.
+Keep its fresh structure dirtiness. Atomic registration take transfers asset,
+candidate and worker-calculated charge into a private asset-owned single-use
+sidecar bound to exact asset ID/source. Other registration paths stay unchanged.
+
+First bridge admission detaches the sidecar and validates the current registered
+source pointer plus every value copied by `Copy()`: cached bounds by float bits,
+`AABBDirty`, root/sector revisions with explicit membership, sector keys/coordinates/masks,
+ordered bricks, payload/occupancy/flags/atlas fields and auxiliary bytes. Ignore
+only fields `Copy()` resets. Reject malformed pointers and nonnil zero-length
+auxiliary slices; live defensive copying preserves those existing semantics.
+Raw pre-sync edits or changed scope discard the visited candidate and retain
+current copying/sharing. Entity source replacement uses its current asset;
+unused original candidates stay with their exact asset until admission/deletion.
+Post-admission source behavior stays unchanged.
+
+Pending credits charge all three maps. After adoption, the asset owns unused
+candidates until first bridge admission or deletion; detach/deletion clears
+references and scalar charge. Failed persistence keeps live asset ownership.
+`AssetServer.PreparedVoxelRendererCopyStats()` exposes retained `Entries`, `Bytes`
+and cumulative successful `Adoptions`; reads do no geometry traversal. These bytes
+exclude live source/runtime geometry and temporary validation. No new byte ceiling.
+
+Files: streamed job/registration owner, `asset_vox_model.go`, `mod_assets.go`,
+bridge geometry admission and owning docs. Confidence is High after independent
+design inspection; exact validation preserves public mutable access. Use separate
+tests/implementation and independent PRE/POST reviews. Cover real adoption,
+runtime/source/sibling isolation, raw pre-sync payload/auxiliary edits, replacement
+and scope fallback, single use, pending/asset cleanup and runtime-map readiness.
+Run focused race, engine/consumer checks and native terrain/edit/reload checks.
+One full validation read remains; pointer/revision alone cannot replace it.
+Late renderer installation, backed removals and ordinary snapshots keep fallback.
 
 ## 5. Streaming changes
 
@@ -615,7 +651,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5c | `1d93aab` | Worker-prepared snapshot registration with current authority | [Snapshot contract](../assets/runtime-assets.md#streamed-voxel-object-snapshot-registration) |
 | S2i | `7c0f5fa` | Direct inactive retained-GPU eviction candidates | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
 | S3v | `0289f9f` | One-pass saved object override selection per chunk job | [Streaming contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
-| S2j | This commit | Direct inactive CPU material-table eviction candidates | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
+| S2j | `4f2164e` | Direct inactive CPU material-table eviction candidates | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
+| P5d | This commit | Worker-prepared first terrain renderer copy with current validation | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -628,7 +665,8 @@ scans. [P5a](#p5a-worker-owned-registration-copies) removes main-thread
 registration copying first; P5b moves eligible terrain construction to workers.
 S3s reduces recurring emitter scans. S3t/S3u reduce lookup and normal-context rebuilding;
 S1g spreads placement work across frames. S1h skips clean resident sector planning;
-P5c moves snapshot reconstruction/registration preparation to workers. Remaining
+P5c moves snapshot reconstruction/registration preparation to workers; P5d moves
+eligible first terrain renderer allocations/copying to workers. Remaining
 cache maintenance and individual atomic units are next.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
@@ -1475,7 +1513,7 @@ stat-cache warnings exited successfully.
 
 ### S2j: Direct inactive CPU material-table candidates
 
-2026-10-03, this commit. Material-cache pressure selects inactive keys directly
+2026-10-03, `4f2164e`. Material-cache pressure selects inactive keys directly
 by existing age. Completed maintenance gathers current keys and uses one owner
 pass; active/hidden pins, saved unpin age, capacity charges, saturated cleanup,
 map pruning and borrowed backing remain. Public visits count actual victims.
@@ -1495,6 +1533,32 @@ without new native verification. Owner/instance scans, temporary current-key
 collection, hashing/building and post-eviction map pruning remain. Nonempty heap
 capacity may remain; no measured frame-time gain. Existing tests and unrelated
 changes preserved; macOS warnings exited successfully.
+
+### P5d: Worker-prepared first terrain renderer copy
+
+This commit transfers eligible managed terrain renderer copies through an exact
+asset-owned single-use candidate. Current content/scope validation preserves raw
+public edits, object isolation and ordinary fallbacks. Pending admission charges
+the third map; asset statistics retain unused candidate charge until admission
+or deletion. See the [canonical contract](../assets/runtime-assets.md#streamed-terrain-registration).
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestP5d|TestP5c|TestP5b|TestP5a|TestS1g|TestS2e|TestStreamedVoxel|TestVoxelRtSystemUsesObjectScoped|TestVoxelRtSystemSharesTerrain)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestP5d|TestP5c|TestP5b|TestP5a|TestS1g|TestS2e|TestStreamedVoxel|TestVoxelRtSystemUsesObjectScoped|TestVoxelRtSystemSharesTerrain)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5d-smoke /tmp/gekko-p5d-smoke.go
+/tmp/gekko-p5d-smoke > /tmp/gekko-p5d-smoke.log 2>&1
+```
+
+Focused 2.975s, race 4.181s, engine root 16.634s and all five consumer commands
+below passed. Native smoke passed with two adjacent 32,768-voxel terrain maps:
+worker adoption, runtime-map readiness, collision, isolated surface edit, durable
+terrain snapshot reload and exact owned cleanup (16 frames). Surface editing uses
+the existing heightfield snapshot contract. One full main-thread validation read,
+backing setup, extra candidate residency and other atomic work remain; no measured
+frame-time claim. Frozen tests and unrelated changes preserved.
 
 Consumer commands for these steps:
 

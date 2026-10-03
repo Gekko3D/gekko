@@ -455,7 +455,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		sourceGeometryMap := displayGeometryAsset.XBrickMap
 		obj, exists := state.instanceMap[entityId]
 		if !exists {
-			runtimeGeometryMap := voxelRuntimeGeometryMap(sourceGeometryMap, objectScopedGeometry)
+			runtimeGeometryMap := server.voxelRuntimeGeometryMap(displayGeometryID, sourceGeometryMap, objectScopedGeometry)
 			if !objectScopedGeometry {
 				modelTemplate, hasTemplate := state.loadedModels[displayGeometryID]
 				if !hasTemplate {
@@ -486,7 +486,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			previousObjectScoped != objectScopedGeometry ||
 			(!objectScopedGeometry && sourceGeometryMap != obj.XBrickMap)
 		if geometryChanged {
-			obj.XBrickMap = voxelRuntimeGeometryMap(sourceGeometryMap, objectScopedGeometry)
+			obj.XBrickMap = server.voxelRuntimeGeometryMap(displayGeometryID, sourceGeometryMap, objectScopedGeometry)
 			obj.XBrickMap.StructureDirty = true
 			state.instanceGeometrySources[entityId] = sourceGeometryMap
 			state.instanceObjectScopedGeometry[entityId] = objectScopedGeometry

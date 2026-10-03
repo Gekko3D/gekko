@@ -43,6 +43,12 @@ The renderer participates in three engine stages:
 
 That split matters because bridge sync and GPU uploads happen before render-pass execution.
 
+Managed streamed terrain can supply an independent worker-prepared first renderer
+map. Bridge admission validates current source content before using it, preserving
+object isolation, current public mutations and runtime-map readiness identity.
+See [terrain registration ownership](../assets/runtime-assets.md#streamed-terrain-registration)
+for candidate lifetime and fallback rules.
+
 ## `App.Update()`
 
 `Update()` is the per-frame CPU preparation step. It currently:

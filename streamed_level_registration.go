@@ -80,15 +80,18 @@ func (state *StreamedLevelRuntimeState) releaseAllStreamedSnapshotGeometryAssets
 }
 
 // Each result owns a distinct registration copy. Envelope aliases share this
-// single-use handle, never the mutable copy itself. Shared source maps remain
-// immutable cache inputs and are never transferred to the renderer.
+// single-use handle, never the mutable copy itself. Managed terrain handles
+// also own an independent first-admission renderer copy and its calculated charge.
+// Shared source maps remain immutable inputs and never transfer to the renderer.
 type streamedGeometryRegistration struct {
-	mu         sync.Mutex
-	source     *volume.XBrickMap
-	geometry   *volume.XBrickMap
-	min, max   mgl32.Vec3
-	voxelCount int
-	bytes      int64
+	mu            sync.Mutex
+	source        *volume.XBrickMap
+	geometry      *volume.XBrickMap
+	rendererCopy  *volume.XBrickMap
+	rendererBytes int64
+	min, max      mgl32.Vec3
+	voxelCount    int
+	bytes         int64
 }
 
 func prepareStreamedGeometryRegistration(source *volume.XBrickMap) *streamedGeometryRegistration {
@@ -102,6 +105,21 @@ func prepareStreamedGeometryRegistration(source *volume.XBrickMap) *streamedGeom
 		source: source, geometry: geometry, min: min, max: max,
 		voxelCount: geometry.GetVoxelCount(), bytes: streamedPendingGeometryCharge(geometry),
 	}
+}
+
+// Called only by eligible terrain workers after registration geometry is final.
+// Copy retains fresh structural work and independent runtime storage.
+func (registration *streamedGeometryRegistration) prepareRendererCopy() {
+	if registration == nil {
+		return
+	}
+	registration.mu.Lock()
+	defer registration.mu.Unlock()
+	if registration.geometry == nil || registration.rendererCopy != nil {
+		return
+	}
+	registration.rendererCopy = registration.geometry.Copy()
+	registration.rendererBytes = streamedPendingGeometryCharge(registration.rendererCopy)
 }
 
 func (registration *streamedGeometryRegistration) countFor(source *volume.XBrickMap) (int, bool) {
@@ -122,24 +140,26 @@ func (registration *streamedGeometryRegistration) charge() int64 {
 	if registration.geometry == nil {
 		return 0
 	}
-	return registration.bytes
+	return runtimeContentChargeSum(registration.bytes, registration.rendererBytes)
 }
 
-func (registration *streamedGeometryRegistration) take(source *volume.XBrickMap) (VoxelGeometryAsset, bool) {
+func (registration *streamedGeometryRegistration) take(source *volume.XBrickMap) (VoxelGeometryAsset, *volume.XBrickMap, int64, bool) {
 	if registration == nil {
-		return VoxelGeometryAsset{}, false
+		return VoxelGeometryAsset{}, nil, 0, false
 	}
 	registration.mu.Lock()
 	defer registration.mu.Unlock()
 	if registration.geometry == nil || registration.source != source {
-		return VoxelGeometryAsset{}, false
+		return VoxelGeometryAsset{}, nil, 0, false
 	}
 	asset := VoxelGeometryAsset{
 		XBrickMap: registration.geometry, LocalMin: registration.min, LocalMax: registration.max,
 		BrickSize: [3]uint32{8, 8, 8}, RuntimeOwned: true,
 	}
-	registration.source, registration.geometry = nil, nil
-	return asset, true
+	rendererCopy, rendererBytes := registration.rendererCopy, registration.rendererBytes
+	registration.source, registration.geometry, registration.rendererCopy = nil, nil, nil
+	registration.bytes, registration.rendererBytes = 0, 0
+	return asset, rendererCopy, rendererBytes, true
 }
 
 func (registration *streamedGeometryRegistration) release() {
@@ -148,7 +168,8 @@ func (registration *streamedGeometryRegistration) release() {
 	}
 	registration.mu.Lock()
 	defer registration.mu.Unlock()
-	registration.source, registration.geometry = nil, nil
+	registration.source, registration.geometry, registration.rendererCopy = nil, nil, nil
+	registration.bytes, registration.rendererBytes = 0, 0
 }
 
 // Terrain assets remain private mutable geometry. Their exact registration is

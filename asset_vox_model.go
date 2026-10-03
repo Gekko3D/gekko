@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 
@@ -143,7 +144,7 @@ func (server *AssetServer) adoptStreamedVoxelGeometry(registration *streamedGeom
 	if server == nil {
 		return AssetId{}, false
 	}
-	asset, taken := registration.take(source)
+	asset, rendererCopy, rendererBytes, taken := registration.take(source)
 	if !taken {
 		return AssetId{}, false
 	}
@@ -151,8 +152,127 @@ func (server *AssetServer) adoptStreamedVoxelGeometry(registration *streamedGeom
 	id := makeAssetId()
 	server.mu.Lock()
 	server.voxModels[id] = asset
+	if rendererCopy != nil {
+		if server.preparedVoxelRendererCopies == nil {
+			server.preparedVoxelRendererCopies = make(map[AssetId]preparedVoxelRendererCopy)
+		}
+		server.preparedVoxelRendererCopies[id] = preparedVoxelRendererCopy{
+			source: asset.XBrickMap, geometry: rendererCopy, bytes: rendererBytes,
+		}
+		server.preparedVoxelRendererCopyStats.Entries++
+		server.preparedVoxelRendererCopyStats.Bytes += rendererBytes
+	}
 	server.mu.Unlock()
 	return id, true
+}
+
+// PreparedVoxelRendererCopyStats reports asset-owned first-admission candidates.
+// Bytes exclude the registered source and renderer-owned maps; Adoptions counts
+// successful runtime transfers. This is not a total memory bound.
+type PreparedVoxelRendererCopyStats struct {
+	Entries   int
+	Bytes     int64
+	Adoptions uint64
+}
+
+type preparedVoxelRendererCopy struct {
+	source, geometry *volume.XBrickMap
+	bytes            int64
+}
+
+// PreparedVoxelRendererCopyStats observes scalar accounting without geometry work.
+func (server *AssetServer) PreparedVoxelRendererCopyStats() PreparedVoxelRendererCopyStats {
+	if server == nil {
+		return PreparedVoxelRendererCopyStats{}
+	}
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	return server.preparedVoxelRendererCopyStats
+}
+
+// Caller holds server.mu. Removal releases only sidecar references.
+func (server *AssetServer) removePreparedVoxelRendererCopyLocked(id AssetId) (preparedVoxelRendererCopy, bool) {
+	candidate, ok := server.preparedVoxelRendererCopies[id]
+	if ok {
+		delete(server.preparedVoxelRendererCopies, id)
+		server.preparedVoxelRendererCopyStats.Entries--
+		server.preparedVoxelRendererCopyStats.Bytes -= candidate.bytes
+		if len(server.preparedVoxelRendererCopies) == 0 {
+			server.preparedVoxelRendererCopies = nil
+		}
+	}
+	return candidate, ok
+}
+
+// Detach once on actual admission, including shared-scope or stale-source visits.
+// Validate exact registered/source identity under the server lock; content is
+// inspected later on the engine thread, outside that lock.
+func (server *AssetServer) takePreparedVoxelRendererCopy(id AssetId, source *volume.XBrickMap) *volume.XBrickMap {
+	if server == nil {
+		return nil
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	candidate, ok := server.removePreparedVoxelRendererCopyLocked(id)
+	asset, registered := server.voxModels[id]
+	if !ok || !registered || source == nil || asset.XBrickMap != source || candidate.source != source {
+		return nil
+	}
+	return candidate.geometry
+}
+
+// Main-thread first admission preserves defensive copying for mutable public
+// sources. Even shared admission consumes and discards its visited candidate.
+func (server *AssetServer) voxelRuntimeGeometryMap(id AssetId, source *volume.XBrickMap, objectScoped bool) *volume.XBrickMap {
+	candidate := server.takePreparedVoxelRendererCopy(id, source)
+	if objectScoped && candidate != nil && preparedVoxelRendererCopyMatches(source, candidate) {
+		server.mu.Lock()
+		server.preparedVoxelRendererCopyStats.Adoptions++
+		server.mu.Unlock()
+		return candidate
+	}
+	return voxelRuntimeGeometryMap(source, objectScoped)
+}
+
+// Compare every value preserved by XBrickMap.Copy, including direct edits that
+// bypass revisions. Fields Copy resets (identity, GPU ownership and dirtiness)
+// deliberately do not participate. Malformed pointers are never transferable.
+func preparedVoxelRendererCopyMatches(source, candidate *volume.XBrickMap) bool {
+	if source == nil || candidate == nil || source.AABBDirty != candidate.AABBDirty ||
+		source.Revision != candidate.Revision || len(source.SectorRevisions) != len(candidate.SectorRevisions) ||
+		len(source.Sectors) != len(candidate.Sectors) {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if math.Float32bits(source.CachedMin[i]) != math.Float32bits(candidate.CachedMin[i]) ||
+			math.Float32bits(source.CachedMax[i]) != math.Float32bits(candidate.CachedMax[i]) {
+			return false
+		}
+	}
+	for key, revision := range source.SectorRevisions {
+		if copied, present := candidate.SectorRevisions[key]; !present || copied != revision {
+			return false
+		}
+	}
+	for key, sector := range source.Sectors {
+		copied, present := candidate.Sectors[key]
+		if !present || sector == nil || copied == nil || sector.Coords != copied.Coords ||
+			sector.BrickMask64 != copied.BrickMask64 || len(sector.PackedBricks) != len(copied.PackedBricks) {
+			return false
+		}
+		for i, brick := range sector.PackedBricks {
+			copyBrick := copied.PackedBricks[i]
+			if brick == nil || copyBrick == nil || brick.Payload != copyBrick.Payload ||
+				brick.OccupancyMask64 != copyBrick.OccupancyMask64 || brick.Flags != copyBrick.Flags ||
+				brick.AtlasOffset != copyBrick.AtlasOffset ||
+				(brick.PrecomputedAux != nil && len(brick.PrecomputedAux) == 0) ||
+				(copyBrick.PrecomputedAux != nil && len(copyBrick.PrecomputedAux) == 0) ||
+				!bytes.Equal(brick.PrecomputedAux, copyBrick.PrecomputedAux) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (server *AssetServer) SharedVoxelGeometryByCacheKey(cacheKey string) (AssetId, bool) {
@@ -240,6 +360,7 @@ func (server *AssetServer) DeleteVoxelGeometry(id AssetId) bool {
 	server.ensureVoxelStorage()
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	server.removePreparedVoxelRendererCopyLocked(id)
 	if _, ok := server.voxModels[id]; !ok {
 		return false
 	}

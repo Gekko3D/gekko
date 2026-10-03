@@ -202,11 +202,28 @@ defaults and remaining memory bounds.
 
 ### Streamed terrain registration
 
-Terrain workers also build geometry, bounds and a separate registration copy.
-Pending admission charges both maps. Main commits adopt only without a current
-backing removal; otherwise they keep the ordinary build/removal/defensive path.
-Terrain backing and object-scoped renderer copies keep their existing behavior.
-These editable assets are not interned in the prepared-geometry cache.
+Terrain workers build geometry, bounds and a separate registration copy. Jobs
+captured with managed rendering also prepare an independent first renderer copy,
+retaining its fresh structural dirtiness. Pending admission charges all owned
+maps. Main commits adopt only without a current backing removal; otherwise they
+keep the ordinary build/removal/defensive path. Terrain backing keeps its existing
+behavior. These editable assets are not interned in the prepared-geometry cache.
+
+The asset server owns the renderer candidate under the exact adopted ID/source
+until first bridge admission or deletion. Admission detaches it once and compares
+all current values preserved by `XBrickMap.Copy()`, including raw payload edits,
+cached bounds by float bits, explicit revision membership and auxiliary bytes.
+Only fields reset by `Copy()` are ignored. Malformed pointers and nonnil empty
+auxiliary slices retain ordinary copy semantics. Changed content or sharing scope
+uses current copying/sharing; component source replacement leaves the unused
+candidate with its original asset. Later source edits retain existing behavior.
+CPU-only jobs, late renderer installation and other registration paths use
+ordinary renderer copying.
+
+`AssetServer.PreparedVoxelRendererCopyStats()` reports retained candidate
+`Entries`/`Bytes` and cumulative successful `Adoptions` without traversal. Bytes
+exclude live source/runtime geometry and temporary validation. There is no new
+byte ceiling; unused candidates remain charged until admission/deletion.
 
 The runtime records each adopted terrain asset's exact ID and registering server
 before entity flush/hooks. Normal unload releases it after persistence/removal;
@@ -214,8 +231,8 @@ successful Stop also releases partial commits absent from `LoadedChunks`. Failed
 Stop retains ownership. Deletion unregisters IDs without clearing maps held by
 renderer/physics. Eager and fallback registrations keep their existing lifetime.
 `PreparedGeometryAssetAdoptions` includes actual terrain transfers as well as
-imported full/proxy transfers. Backing setup and renderer copies remain main-thread
-work; this does not bound all work in a large chunk.
+imported full/proxy transfers. Backing setup and a full candidate validation read
+remain main-thread work; this does not bound all work in a large chunk.
 
 ### Streamed voxel-object snapshot registration
 

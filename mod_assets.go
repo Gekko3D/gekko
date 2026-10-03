@@ -66,6 +66,9 @@ type AssetServer struct {
 	voxPalettes    map[AssetId]VoxelPaletteAsset
 	voxPaletteKeys map[string]AssetId
 	voxFiles       map[AssetId]*VoxFile
+
+	preparedVoxelRendererCopies    map[AssetId]preparedVoxelRendererCopy
+	preparedVoxelRendererCopyStats PreparedVoxelRendererCopyStats
 }
 
 type AssetServerModule struct{}

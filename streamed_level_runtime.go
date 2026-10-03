@@ -517,6 +517,7 @@ type streamedPreparedChunk struct {
 }
 
 type streamedChunkLoadJob struct {
+	renderManaged             bool
 	prepareCancel             <-chan struct{}
 	Generation                uint64
 	Coord                     ChunkCoord
@@ -2067,6 +2068,7 @@ func buildEffectiveStreamedPlacementIndex(level *content.LevelDef, levelPath str
 func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoord) streamedChunkLoadJob {
 	state.Metrics.VoxelOverrideSelectionKeyVisitsLastJob = 0
 	job := streamedChunkLoadJob{
+		renderManaged:           state.renderManaged,
 		Generation:              state.Generation,
 		Coord:                   coord,
 		LevelPath:               state.LevelPath,
@@ -2316,6 +2318,9 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			return result
 		}
 		result.terrainRegistration = prepareStreamedGeometryRegistration(result.preparedTerrainGeometry)
+		if job.renderManaged {
+			result.terrainRegistration.prepareRendererCopy()
+		}
 	}
 	if !job.HasImportedWorldBacking && !streamedPreparationCancelled(job.prepareCancel) {
 		result.registration = prepareStreamedGeometryRegistration(result.PreparedImportedWorldGeometry)
