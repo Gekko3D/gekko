@@ -71,6 +71,7 @@ type StreamedLevelRuntimeConfig struct {
 	MaxPendingPreparedBytes         int64
 	MaxPendingPersistenceBytes      int64
 	MaxChunkCommitsPerFrame         int
+	MaxPlacementCommitUnitsPerFrame int
 	MaxStreamingCommitMillis        int
 	MetricsLogInterval              time.Duration
 	DisableSectorProxies            bool
@@ -85,6 +86,8 @@ type StreamedLevelRuntimeConfig struct {
 }
 
 type StreamedLevelRuntimeMetrics struct {
+	ActiveChunkCommitCount                 int
+	PlacementCommitUnitsLastFrame          int
 	PendingPersistenceCount                int
 	PendingPersistenceBytes                int64
 	PendingPersistenceMaxBytes             int64
@@ -1080,6 +1083,16 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	if err := saveStreamedWorldDeltaNow(state); err != nil {
 		return err
 	}
+	if len(state.readyCommits.activeChunks) > 0 {
+		for coord := range state.readyCommits.activeChunks {
+			if err := persistChunkOverrides(cmd, state, coord, streamedLoadedOrActiveChunk(state, coord)); err != nil {
+				return err
+			}
+		}
+		if err := saveStreamedWorldDeltaNow(state); err != nil {
+			return err
+		}
+	}
 	waitForStreamedJobsAndDrain(state)
 	resetStreamedDrainedScheduling(state)
 	for coord, loaded := range state.LoadedChunks {
@@ -1108,6 +1121,12 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	for coord := range state.LoadedChunks {
 		for eid := range state.LoadedChunks[coord].OwnedEntities {
 			removed[eid] = struct{}{}
+		}
+		removeStreamedChunk(cmd, state, coord)
+	}
+	for coord := range state.readyCommits.activeChunks {
+		for entity := range streamedLoadedOrActiveChunk(state, coord).OwnedEntities {
+			removed[entity] = struct{}{}
 		}
 		removeStreamedChunk(cmd, state, coord)
 	}
@@ -1181,6 +1200,8 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	state.LoadedSectorProxies = make(map[ChunkCoord]*streamedLoadedSectorProxy)
 	state.PendingLoads = make(map[ChunkCoord]struct{})
 	state.PendingProxyLoads = make(map[ChunkCoord]struct{})
+	clear(state.chunkPrepareCancels)
+	clear(state.proxyPrepareCancels)
 	state.navigationIgnoredRemovals = nil
 	state.navigationEditAnalysisPending = nil
 	state.importedEditCaptures = nil
@@ -1190,6 +1211,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	state.persistenceBytes = 0
 	refreshStreamedPersistenceMetrics(state)
 	state.navigationLoadActive, state.navigationRebuildActive, state.navigationEditAnalysisActive, state.worldDeltaSaveActive = false, false, false, false
+	refreshStreamedRuntimeMetricsCounts(state)
 	return stopErr
 }
 
@@ -1291,7 +1313,7 @@ func waitForStreamedJobsAndDrain(state *StreamedLevelRuntimeState) {
 			finishStreamedImportedAnalysis(state, result)
 		case <-done:
 			drainStreamedPreparedResults(state)
-			clear(state.chunkPrepareCancels)
+			clearStreamedDrainedChunkPreparation(state)
 			clear(state.proxyPrepareCancels)
 			return
 		}
@@ -1369,9 +1391,16 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 	updateStreamedObserverSelection(cmd, state)
 	advanceStreamedPreparationSchedule(state)
 	cancelSatisfiedStreamedPreparation(state)
+	for _, id := range state.readyCommits.activeChunks {
+		result := state.readyCommits.results[id]
+		if !streamedActiveCommitCurrent(state, result.chunk) {
+			result.active.cancelling = true
+			cancelStreamedActiveChunkPreparation(state, result.chunk)
+		}
+	}
 	_ = commitStreamedPersistence(cmd, state, true)
 	for coord, intent := range state.persistenceIntents {
-		if state.LoadedChunks[coord] != intent.Loaded {
+		if streamedLoadedOrActiveChunk(state, coord) != intent.Loaded {
 			delete(state.persistenceIntents, coord)
 		}
 	}
@@ -1399,6 +1428,11 @@ func updateStreamedLevelObserverSystem(cmd *Commands, state *StreamedLevelRuntim
 			setStreamedSectorProxyHidden(cmd, state, sectorCoord, false)
 		}
 		requestStreamedChunkPersistence(cmd, state, coord)
+	}
+	for coord := range state.readyCommits.activeChunks {
+		if active := activeStreamedChunkCommit(state, coord); active != nil && active.cancelling {
+			requestStreamedChunkPersistence(cmd, state, coord)
+		}
 	}
 	refreshStreamedPersistenceMetrics(state)
 	startStreamedWorldDeltaSave(state)
@@ -1608,6 +1642,9 @@ func StreamedLevelCollisionReadyInBounds(cmd *Commands, state *StreamedLevelRunt
 }
 
 func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState) {
+	if state != nil {
+		state.Metrics.PlacementCommitUnitsLastFrame = 0
+	}
 	// Cache maintenance also runs on frames with no queued commits or an
 	// initialization error. Workers never delete AssetServer registrations.
 	if state != nil && state.Initialized {
@@ -1639,6 +1676,10 @@ func commitPreparedStreamedChunksSystem(cmd *Commands, assets *AssetServer, stat
 	}()
 	generation := state.Generation
 	queue := captureStreamedReadyFrontier(state)
+	if state.renderManaged && state.Config.MaxPlacementCommitUnitsPerFrame > 0 || len(state.readyCommits.activeChunks) > 0 {
+		serviceStreamedPlacementCommitFrontier(cmd, assets, state, queue, start, generation)
+		return
+	}
 	for {
 		if !state.Initialized || state.Generation != generation {
 			return
@@ -1705,6 +1746,7 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 	state.Metrics.PreparedChunkQueueDepth = len(state.PreparedLoads) + state.readyCommits.chunkCount
 	state.Metrics.PreparedProxyQueueDepth = len(state.PreparedProxyLoads) + state.readyCommits.proxyCount
 	state.Metrics.PreparedQueueDepth = state.Metrics.PreparedChunkQueueDepth + state.Metrics.PreparedProxyQueueDepth
+	state.Metrics.ActiveChunkCommitCount = len(state.readyCommits.activeChunks)
 	cacheStats := state.PreparedGeometryCache.snapshot()
 	state.Metrics.PreparedGeometryCacheEntries = cacheStats.Entries
 	state.Metrics.PreparedGeometryCacheVoxels = cacheStats.Voxels
@@ -2072,6 +2114,9 @@ func ensureStreamedChunkLoadedForPosition(cmd *Commands, assets *AssetServer, st
 	if _, ok := state.LoadedChunks[coord]; ok {
 		return nil
 	}
+	if active := activeStreamedChunkCommit(state, coord); active != nil {
+		return finishStreamedActiveChunkSynchronously(cmd, assets, state, active)
+	}
 	prepared := prepareStreamedChunkLoad(buildStreamedChunkLoadJob(state, coord))
 	defer prepared.release()
 	recordPreparedStreamedChunkMetrics(state, prepared)
@@ -2372,198 +2417,27 @@ func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *Stre
 	defer prepared.terrainRegistration.release()
 	defer beginStreamedWorkCommit(state, prepared.Generation, prepared.prepareCancel)()
 	defer beginStreamedRenderTicketBatch(state)()
+	tx := newStreamedChunkCommitTransaction(false)
 	start := time.Now()
 	resetLastStreamedCommitBreakdown(state)
-	loader := state.Loader
-	if prepared.loadScope != nil {
-		loader = prepared.loadScope.Loader()
-	}
-	entityCount := 0
-	committed := false
-	importedWorldCollisionCommitted := false
+	entities := 0
 	defer func() {
+		if !tx.live(state) {
+			return
+		}
 		duration := time.Since(start)
 		state.Metrics.LastCommitCoord = prepared.Coord
 		state.Metrics.LastCommitDuration = duration
-		state.Metrics.LastCommitEntityCount = entityCount
+		state.Metrics.LastCommitEntityCount = entities
 		state.Metrics.TotalCommitDuration += duration
-		if committed {
-			state.Metrics.CommittedChunkCount++
-			state.Metrics.FullChunkCommitCount++
-			if importedWorldCollisionCommitted {
-				state.Metrics.CollisionChunkCommitCount++
-			}
-		}
 	}()
-	chunk := &streamedLoadedChunk{
-		TerrainEntities:       make(map[EntityId]struct{}),
-		ImportedWorldEntities: make(map[EntityId]struct{}),
-		PlacementRoots:        make(map[string]EntityId),
-		OwnedEntities:         make(map[EntityId]struct{}),
-		ObjectEntities:        make(map[string]EntityId),
-	}
-
-	if prepared.TerrainChunk != nil && prepared.TerrainChunk.NonEmptyVoxelCount > 0 {
-		terrainStart := time.Now()
-		terrainID := terrainIDForPreparedChunk(state, prepared.TerrainChunk)
-		backingRemoval := state.voxelBackingRemovalFor(content.VoxelBackingOwnerTerrain, terrainID, prepared.TerrainChunk.Coord)
-		preparedAssetID := AssetId{}
-		adopted := false
-		if backingRemoval == nil {
-			preparedAssetID, adopted = assets.adoptStreamedVoxelGeometry(prepared.terrainRegistration, prepared.preparedTerrainGeometry)
-			if adopted {
-				state.Metrics.PreparedGeometryAssetAdoptions++
-			}
-		} else {
-			prepared.terrainRegistration.release()
-		}
-		entity := spawnAuthoredTerrainChunkEntityWithPreparedAsset(cmd, assets, state.LevelRoot, state.TerrainPalette, AuthoredTerrainSpawnDef{
-			LevelID:        state.LevelID,
-			TerrainID:      terrainID,
-			TerrainGroupID: terrainGroupIDForStreamedState(state),
-			Chunk:          prepared.TerrainChunk,
-			BackingRemoval: backingRemoval,
-		}, preparedAssetID)
-		if adopted {
-			state.retainStreamedTerrainGeometryAsset(entity, assets, preparedAssetID)
-		}
-		state.Metrics.LastCommitTerrainDuration += time.Since(terrainStart)
-		stageStreamedRenderTarget(cmd, state, entity, prepared.Coord, streamedRenderTerrain)
-		recordStreamedCommitFlush(cmd, state)
-		entityCount++
-		clearEntityVoxelDirty(cmd, entity)
-		chunk.TerrainEntities[entity] = struct{}{}
-		chunk.OwnedEntities[entity] = struct{}{}
-		for _, hook := range state.Config.TerrainHooks {
-			invalidateStreamedRenderTicketFloor(state)
-			hook(cmd, PostSpawnTerrainContext{
-				ChunkCoord: prepared.Coord,
-				LevelID:    state.LevelID,
-				TerrainID:  terrainIDForPreparedChunk(state, prepared.TerrainChunk),
-				RootEntity: entity,
-			})
-			invalidateStreamedRenderTicketFloor(state)
+	for {
+		count, _, done, err := advanceStreamedChunkCommit(cmd, assets, state, prepared, tx)
+		entities += count
+		if err != nil || done || !tx.live(state) {
+			return entities, err
 		}
 	}
-
-	if prepared.ImportedWorldChunk != nil && (prepared.ImportedWorldChunk.NonEmptyVoxelCount > 0 || state.BaseWorldBacking != nil) {
-		worldStart := time.Now()
-		collisionEnabled := state.streamedImportedWorldChunkCollisionEnabled(prepared.Coord)
-		destructionEnabled := state.streamedImportedWorldChunkDestructionEnabled(prepared.Coord)
-		backingRemoval := state.voxelBackingRemovalFor(content.VoxelBackingOwnerImportedWorld, importedWorldIDForPreparedChunk(state, prepared.ImportedWorldChunk), prepared.ImportedWorldChunk.Coord)
-		var backingProvider VoxelBackingProvider
-		if destructionEnabled || backingRemoval != nil {
-			backingProvider = state.BaseWorldBacking
-		}
-		privateGeometry := destructionEnabled || backingProvider != nil
-		spawnTiming := AuthoredImportedWorldSpawnTiming{}
-		geometryAssetStart := time.Now()
-		preparedGeometryAsset := AssetId{}
-		if state.BaseWorldBacking != nil {
-			// Backing may have changed since the worker captured its job. Keep the
-			// existing registration/spawn path whenever live backing is present.
-			prepared.registration.release()
-		}
-		if backingProvider == nil {
-			if state.BaseWorldBacking == nil {
-				var adopted bool
-				preparedGeometryAsset, _, adopted = state.PreparedGeometryCache.acquirePreparedAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry, prepared.registration)
-				if adopted {
-					state.Metrics.PreparedGeometryAssetAdoptions++
-				}
-			} else {
-				preparedGeometryAsset, _ = state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry)
-			}
-		}
-		geometryAssetDuration := time.Since(geometryAssetStart)
-		entity := spawnAuthoredImportedWorldChunkEntity(cmd, state.LevelRoot, state.BaseWorldPalette, AuthoredImportedWorldSpawnDef{
-			LevelID:                state.LevelID,
-			WorldID:                importedWorldIDForPreparedChunk(state, prepared.ImportedWorldChunk),
-			ShadowGroupID:          importedWorldGroupIDForStreamedState(state),
-			Chunk:                  prepared.ImportedWorldChunk,
-			CollisionEnabled:       collisionEnabled,
-			DestructionEnabled:     destructionEnabled,
-			ShareTerrainGeometry:   !privateGeometry,
-			RetainRendererGeometry: !privateGeometry,
-			PreparedGeometry:       prepared.PreparedImportedWorldGeometry,
-			PreparedGeometryAsset:  preparedGeometryAsset,
-			BackingProvider:        backingProvider,
-			BackingSourceHash:      state.BaseWorldBackingSourceHash,
-			BackingRemoval:         backingRemoval,
-			Timing:                 &spawnTiming,
-		})
-		recordImportedWorldSpawnTiming(state, spawnTiming)
-		state.Metrics.LastCommitWorldRegisterDuration += geometryAssetDuration
-		state.Metrics.LastCommitWorldDuration += time.Since(worldStart)
-		stageStreamedRenderTarget(cmd, state, entity, prepared.Coord, streamedRenderImported)
-		recordStreamedCommitFlush(cmd, state)
-		entityCount++
-		importedWorldCollisionCommitted = collisionEnabled
-		clearEntityVoxelDirty(cmd, entity)
-		chunk.ImportedWorldEntities[entity] = struct{}{}
-		if preparedGeometryAsset != (AssetId{}) {
-			chunk.ImportedWorldGeometryAssets = append(chunk.ImportedWorldGeometryAssets, streamedGeometryAssetLease{ID: preparedGeometryAsset, Server: assets})
-		}
-		chunk.OwnedEntities[entity] = struct{}{}
-	}
-	if prepared.ImportedWorldChunk != nil && prepared.ImportedWorldChunk.NonEmptyVoxelCount == 0 && len(prepared.ImportedWorldChunk.Voxels) == 0 && state.BaseWorldBacking == nil && prepared.Generation == state.Generation {
-		chunk.importedEmptyGeneration = prepared.Generation
-	}
-
-	for _, placement := range prepared.PlacementItems {
-		placementStart := time.Now()
-		spawnResult, err := spawnAuthoredLevelPlacement(cmd, assets, loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
-			PlacementID: placement.PlacementID,
-			VolumeID:    placement.VolumeID,
-			AssetPath:   placement.AssetPath,
-			Transform:   placement.Transform,
-			Tags:        append([]string(nil), placement.Tags...),
-		})
-		if err != nil {
-			state.Metrics.LastCommitPlacementDuration += time.Since(placementStart)
-			return entityCount, err
-		}
-		state.Metrics.LastCommitPlacementDuration += time.Since(placementStart)
-		recordStreamedCommitFlush(cmd, state)
-		entityCount += 1 + len(spawnResult.EntitiesByAssetID)
-		chunk.PlacementRoots[placement.PlacementID] = spawnResult.RootEntity
-		chunk.OwnedEntities[spawnResult.RootEntity] = struct{}{}
-		for _, eid := range spawnResult.EntitiesByAssetID {
-			chunk.OwnedEntities[eid] = struct{}{}
-			key := voxelObjectRuntimeKey(placement.PlacementID, authoredItemIDForEntity(cmd, eid))
-			if snapshot, ok := prepared.ObjectSnapshots[key]; ok {
-				snapshotStart := time.Now()
-				if err := applyVoxelObjectSnapshotToEntity(cmd, eid, snapshot); err != nil {
-					state.Metrics.LastCommitPlacementDuration += time.Since(snapshotStart)
-					return entityCount, err
-				}
-				state.Metrics.LastCommitPlacementDuration += time.Since(snapshotStart)
-				recordStreamedCommitFlush(cmd, state)
-			}
-			if entityHasVoxelModel(cmd, eid) {
-				chunk.ObjectEntities[key] = eid
-				state.ObjectChunk[key] = prepared.Coord
-				clearEntityVoxelDirty(cmd, eid)
-			}
-		}
-		clearEntityVoxelDirty(cmd, spawnResult.RootEntity)
-		for _, hook := range state.Config.PlacementHooks {
-			invalidateStreamedRenderTicketFloor(state)
-			hook(cmd, PostSpawnPlacementContext{
-				ChunkCoord:  prepared.Coord,
-				LevelID:     state.LevelID,
-				Placement:   AuthoredPlacementSpawnDef{PlacementID: placement.PlacementID, VolumeID: placement.VolumeID, AssetPath: placement.AssetPath, Transform: placement.Transform, Tags: append([]string(nil), placement.Tags...)},
-				RootEntity:  spawnResult.RootEntity,
-				SpawnResult: spawnResult,
-			})
-			invalidateStreamedRenderTicketFloor(state)
-		}
-	}
-
-	state.LoadedChunks[prepared.Coord] = chunk
-	delete(state.prepareScheduler.waiting, streamedPrepareIdentity{coord: prepared.Coord, kind: streamedPrepareFull})
-	committed = true
-	return entityCount, nil
 }
 
 func reconcileStreamedSectorProxyAfterFullCommit(cmd *Commands, state *StreamedLevelRuntimeState, sectorCoord ChunkCoord) {
@@ -2727,9 +2601,13 @@ func streamedLoadedChunkNeedsResidencyUpgrade(cmd *Commands, state *StreamedLeve
 }
 
 func unloadStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord) error {
-	loaded := state.LoadedChunks[coord]
+	loaded := streamedLoadedOrActiveChunk(state, coord)
 	if loaded == nil {
 		return nil
+	}
+	if active := activeStreamedChunkCommit(state, coord); active != nil && state.LoadedChunks[coord] == nil {
+		active.cancelling = true
+		cancelStreamedActiveChunkPreparation(state, state.readyCommits.results[active.readyID].chunk)
 	}
 	if err := persistChunkOverrides(cmd, state, coord, loaded); err != nil {
 		return err
@@ -2739,7 +2617,7 @@ func unloadStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 }
 
 func removeStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord) {
-	loaded := state.LoadedChunks[coord]
+	loaded := streamedLoadedOrActiveChunk(state, coord)
 	if loaded == nil {
 		return
 	}
@@ -2761,6 +2639,9 @@ func removeStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 		delete(state.ObjectChunk, objectKey)
 	}
 	delete(state.LoadedChunks, coord)
+	if active := activeStreamedChunkCommit(state, coord); active != nil {
+		finishStreamedActiveChunkCommit(state, active)
+	}
 }
 
 func persistChunkOverrides(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord, loaded *streamedLoadedChunk) error {

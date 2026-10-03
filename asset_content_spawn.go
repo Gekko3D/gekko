@@ -105,6 +105,11 @@ func SpawnPreparedAuthoredAsset(cmd *Commands, assets *AssetServer, prepared *Pr
 }
 
 func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *content.AssetDef, prepared *PreparedAuthoredAsset, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions) (AuthoredAssetSpawnResult, error) {
+	return spawnAuthoredAssetWithOwnership(cmd, assets, def, prepared, rootTransform, opts, nil)
+}
+
+// Ownership is reported before any internal flush, including partial failures.
+func spawnAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *content.AssetDef, prepared *PreparedAuthoredAsset, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions, created func(EntityId, string, bool, bool)) (AuthoredAssetSpawnResult, error) {
 	result := AuthoredAssetSpawnResult{
 		EntitiesByAssetID:  make(map[string]EntityId),
 		ItemKindsByAssetID: make(map[string]AuthoredItemKind),
@@ -131,7 +136,7 @@ func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 	} else {
 		animations = prepared.animations
 	}
-	if collapsed, err := trySpawnCollapsedAuthoredAsset(cmd, assets, def, rootTransform, opts, &result); collapsed || err != nil {
+	if collapsed, err := trySpawnCollapsedAuthoredAssetWithOwnership(cmd, assets, def, rootTransform, opts, &result, created); collapsed || err != nil {
 		return result, err
 	}
 	shadowSettings := effectiveAuthoredVoxelShadowSettings(def, opts)
@@ -146,15 +151,24 @@ func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		&AuthoredAssetRootComponent{AssetID: def.ID},
 	)
 	result.Entities = append(result.Entities, result.RootEntity)
+	if created != nil {
+		created(result.RootEntity, "", true, false)
+	}
 
 	for _, part := range def.Parts {
 		var (
-			eid EntityId
-			err error
+			eid   EntityId
+			err   error
+			model AssetId
 		)
 		if prepared == nil {
-			eid, err = spawnAuthoredPart(cmd, assets, def, part, opts.DocumentPath, shadowSettings)
+			var palette AssetId
+			model, palette, err = modelAndPaletteFromSource(assets, def, part, opts.DocumentPath)
+			if err == nil {
+				eid, err = spawnAuthoredPartWithAssets(cmd, def, part, shadowSettings, model, palette)
+			}
 		} else if preparedPart, ok := prepared.parts[part.ID]; ok {
+			model = preparedPart.model
 			eid, err = spawnAuthoredPartWithAssets(cmd, def, part, shadowSettings, preparedPart.model, preparedPart.palette)
 		} else {
 			err = fmt.Errorf("prepared asset missing part %s", part.ID)
@@ -164,6 +178,9 @@ func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		}
 		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[part.ID] = eid
+		if created != nil {
+			created(eid, part.ID, false, assets != nil && model != (AssetId{}) && part.Source.Kind != content.AssetSourceKindGroup)
+		}
 		result.ItemKindsByAssetID[part.ID] = AuthoredItemKindPart
 		result.PartIDs[part.ID] = struct{}{}
 	}
@@ -174,6 +191,9 @@ func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		}
 		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[light.ID] = eid
+		if created != nil {
+			created(eid, light.ID, false, false)
+		}
 		result.ItemKindsByAssetID[light.ID] = AuthoredItemKindLight
 	}
 	for _, emitter := range def.Emitters {
@@ -183,6 +203,9 @@ func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		}
 		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[emitter.ID] = eid
+		if created != nil {
+			created(eid, emitter.ID, false, false)
+		}
 		result.ItemKindsByAssetID[emitter.ID] = AuthoredItemKindEmitter
 	}
 	for _, marker := range def.Markers {
@@ -192,6 +215,9 @@ func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 		}
 		result.Entities = append(result.Entities, eid)
 		result.EntitiesByAssetID[marker.ID] = eid
+		if created != nil {
+			created(eid, marker.ID, false, false)
+		}
 		result.ItemKindsByAssetID[marker.ID] = AuthoredItemKindMarker
 	}
 	cmd.app.FlushCommands()

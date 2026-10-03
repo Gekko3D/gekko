@@ -141,6 +141,13 @@ When `SpawnAuthoredAssetWithOptions(...)` resolves a part source:
 
 The spawned ECS entity then references those runtime assets through `VoxelModelComponent`.
 
+Streamed placement commits use a private creation callback to record every
+entity before internal flushes or later spawn failures, including collapsed
+composites. Only voxel-backed items receive per-item snapshot ownership; group,
+light, emitter and marker entities retain teardown ownership. Public spawn APIs
+and collapse eligibility remain unchanged. Collapsed composites do not gain a
+new per-item persistence identity or disk format.
+
 ## Source Paths and Provenance
 
 Several runtime asset records carry `SourcePath`.

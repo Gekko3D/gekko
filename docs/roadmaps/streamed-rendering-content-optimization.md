@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1f, S2a–S2e, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1g, S2a–S2e, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -184,11 +184,11 @@ Deterministic prepare/commit/upload/retry/retain/retire queues with stable ties/
 
 Owners: streamed runtime, renderer bridge, `app_voxel_residency.go`, GPU upload manager. Acceptance: global limits hold for many objects; delayed/failed uploads and teleports retain valid coverage and safe collision.
 
-Next commit-bound step: [S1g opt-in resumable placements](streamed-rendering-s1b.md#s1g-opt-in-resumable-placement-commits),
+Completed commit-bound step: [S1g opt-in resumable placements](streamed-rendering-s1b.md#s1g-opt-in-resumable-placement-commits),
 approved 2026-10-03. Preserve default synchronous behavior; enabled managed
 runtimes admit whole placement units across frames and persist all partial edits.
-Resolve transaction lifetime, exact persistence ownership and synchronous loading
-before enabling the unit budget. One expensive placement/hook remains unbounded.
+The bounded ready owner retains partial lifetime, exact persistence ownership
+and synchronous loading. One expensive placement/hook remains unbounded.
 
 ### S2. Bound caches and worker throughput by bytes
 
@@ -515,7 +515,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3s | `6d35be0` | Shared current scan for automatic linked-light radii | [Renderer contract](../renderer/runtime.md#linked-emitter-source-radii) |
 | P5b | `9463579` | Worker terrain geometry with exact adopted asset cleanup | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
 | S3t | `ba02753` | One-pass live lookup capture with bounded CPU table reuse | [Renderer contract](../renderer/runtime.md#terrain-and-planet-lookup-preparation) |
-| S3u | This commit | Invocation-local normal context builds only for halo/bake work | [Normal contract](../renderer/runtime.md#normal-neighbor-preparation) |
+| S3u | `de44f7c` | Invocation-local normal context builds only for halo/bake work | [Normal contract](../renderer/runtime.md#normal-neighbor-preparation) |
+| S1g | This commit | Opt-in placement units with durable partial ownership | [Commit contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -526,8 +527,8 @@ compatibility and conditional proposals.
 On 2026-10-03, the user prioritized large single-chunk stalls and recurring CPU
 scans. [P5a](#p5a-worker-owned-registration-copies) removes main-thread
 registration copying first; P5b moves eligible terrain construction to workers.
-S3s reduces recurring emitter scans. Repeated lookup construction and remaining
-renderer/commit work are next. Further scheduling cleanup remains S1.
+S3s reduces recurring emitter scans. S3t/S3u reduce lookup and normal-context rebuilding; S1g spreads placement work
+across frames. Remaining cache maintenance and individual atomic units are next.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
 On 2026-10-03, the user authorized its ownership decision and migration of existing
@@ -1152,7 +1153,7 @@ temporary builds, other renderer scans and large commit units remain.
 
 ### S3u: Lazy normal neighbor preparation
 
-This commit, completed 2026-10-03. Normal halo propagation and runtime aux baking
+Commit `de44f7c`, completed 2026-10-03. Normal halo propagation and runtime aux baking
 share one invocation-local lazy full-scene context. Idle/material/precomputed
 work skips neighbor map construction when no dirty cross-object source needs it.
 Original dirty snapshots, zero-budget halos, hidden neighbors and packed normal
@@ -1174,6 +1175,35 @@ below passed. Native mixed lookup/terrain check passed: 33 context builds over
 50 frames, zero idle context visits, 30-frame upload pause, Ready visibility and
 owned asset cleanup. No pixel parity/FPS claim. Dirty inspection, allocation and
 upload-planning scans remain; resumable commits and individual large units are next.
+
+### S1g: Opt-in resumable placement commits
+
+Completed 2026-10-03 in this commit. Managed runtimes may admit a configured
+number of whole placement units per frame. Defaults and CPU-only commits stay
+synchronous. The bounded ready owner retains partial entities, payloads, leases
+and CPU admission until completion or durable cleanup. Current edits, exact
+same-coordinate completion, hook Stop/restart and failed persistence preserve
+ownership. Cleanup does not consume or wait for the chunk advance allowance.
+Separate tests/implementation and independent PRE/POST reviews passed.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS1g|TestS1fCommit|TestS1eStreamingWork|TestS2e|TestS4c)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS1g|TestS1f|TestS1e|TestS2b|TestS2e|TestS4c|TestStreamedLevelRuntime)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke /tmp/gekko-s1g-smoke.go
+/bin/zsh -c '/tmp/GekkoS1eSmoke.app/Contents/MacOS/gekko-s1e-smoke > /tmp/gekko-s1e-smoke.log 2>&1'
+```
+
+Focused checks 4.175s, race 6.635s and engine root 15.308s passed, along with
+five consumer commands below. Native check passed (49 frames/1.682s):
+48 collapsed placements capped at two units, two
+32,768-voxel terrain adoptions, allowance two, 30-frame upload pause, Ready
+visibility and exact Stop cleanup. No elapsed-time/FPS or pixel-parity claim.
+Terrain/imported phases, individual assets, snapshots and hooks remain atomic.
+Opt-in placements publish visuals/collision unit by unit; completed imported
+cohorts retain the proxy handoff gate. Existing tests and unrelated changes preserved.
 
 Consumer commands for these steps:
 

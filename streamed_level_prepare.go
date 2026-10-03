@@ -124,6 +124,9 @@ func streamedPreparationDispatchEligible(state *StreamedLevelRuntimeState, ident
 	}
 	var cost int64
 	if identity.kind == streamedPrepareFull {
+		if activeStreamedChunkCommit(state, identity.coord) != nil {
+			return false
+		}
 		if _, pending := state.PendingLoads[identity.coord]; pending {
 			return false
 		}

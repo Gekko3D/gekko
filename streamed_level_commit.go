@@ -9,6 +9,7 @@ type streamedReadyResult struct {
 	birth    uint64
 	chunk    *streamedPreparedChunk
 	proxy    *streamedPreparedSectorProxy
+	active   *streamedChunkCommitTransaction
 }
 
 type streamedReadyOwner struct {
@@ -16,6 +17,7 @@ type streamedReadyOwner struct {
 	nextKind               streamedPrepareKind
 	chunkCount, proxyCount int
 	results                map[uint64]streamedReadyResult
+	activeChunks           map[ChunkCoord]uint64
 }
 
 // Heap records contain only scalar scheduling metadata, never payloads or ECS
@@ -75,6 +77,9 @@ func (owner *streamedReadyOwner) take(id uint64) (streamedReadyResult, bool) {
 		return streamedReadyResult{}, false
 	}
 	delete(owner.results, id)
+	if result.active != nil && owner.activeChunks[result.identity.coord] == id {
+		delete(owner.activeChunks, result.identity.coord)
+	}
 	if result.identity.kind == streamedPrepareProxy {
 		owner.proxyCount--
 	} else {
@@ -88,6 +93,11 @@ func (owner *streamedReadyOwner) take(id uint64) (streamedReadyResult, bool) {
 
 func streamedReadyPriority(state *StreamedLevelRuntimeState, result streamedReadyResult) int {
 	coord := result.identity.coord
+	if result.active != nil {
+		if result.active.cancelling || result.active.fatal != nil {
+			return -1
+		}
+	}
 	if result.proxy != nil {
 		p := result.proxy
 		if p.Generation != state.Generation || state.proxyPrepareCancels[coord] != p.prepareCancel ||
@@ -182,6 +192,9 @@ func captureStreamedReadyFrontier(state *StreamedLevelRuntimeState) streamedRead
 func drainStreamedReadyResults(state *StreamedLevelRuntimeState) {
 	owner := &state.readyCommits
 	for id := range owner.results {
+		if owner.results[id].active != nil {
+			continue // Stop persists/removes partial owners before releasing them.
+		}
 		result, present := owner.take(id)
 		if !present {
 			continue

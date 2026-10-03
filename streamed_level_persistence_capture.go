@@ -386,7 +386,7 @@ func captureStreamedPersistence(cmd *Commands, state *StreamedLevelRuntimeState,
 	return entities
 }
 func streamedPersistenceEntitiesCurrent(cmd *Commands, state *StreamedLevelRuntimeState, tx *streamedPersistenceTransaction) bool {
-	if tx.Generation != state.Generation || state.LoadedChunks[tx.Coord] != tx.Loaded {
+	if tx.Generation != state.Generation || streamedLoadedOrActiveChunk(state, tx.Coord) != tx.Loaded {
 		return false
 	}
 

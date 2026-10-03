@@ -161,9 +161,8 @@ func admitStreamedPreparedProxy(owner *streamedPendingPreparedOwner, p streamedP
 // Once Stop has drained workers, a persistence failure must leave demand able
 // to reschedule in the same generation. No decoded metadata ownership changes.
 func resetStreamedDrainedScheduling(state *StreamedLevelRuntimeState) {
-	clear(state.chunkPrepareCancels)
+	clearStreamedDrainedChunkPreparation(state)
 	clear(state.proxyPrepareCancels)
-	clear(state.PendingLoads)
 	clear(state.PendingProxyLoads)
 	clear(state.pendingChunkCostHints)
 	clear(state.pendingProxyCostHints)
@@ -173,6 +172,26 @@ func resetStreamedDrainedScheduling(state *StreamedLevelRuntimeState) {
 	state.navigationEditAnalysisActive = false
 	state.worldDeltaSaveActive = false
 }
+
+// Active ready results were deliberately not drained: preserve only their exact
+// current preparation ownership if a later Stop persistence barrier fails.
+func clearStreamedDrainedChunkPreparation(state *StreamedLevelRuntimeState) {
+	owned := func(coord ChunkCoord, cancel <-chan struct{}) bool {
+		result := state.readyCommits.results[state.readyCommits.activeChunks[coord]]
+		return result.active != nil && result.chunk.Generation == state.Generation && result.chunk.prepareCancel == cancel
+	}
+	for coord := range state.PendingLoads {
+		if !owned(coord, state.chunkPrepareCancels[coord]) {
+			delete(state.PendingLoads, coord)
+		}
+	}
+	for coord, cancel := range state.chunkPrepareCancels {
+		if !owned(coord, cancel) {
+			delete(state.chunkPrepareCancels, coord)
+		}
+	}
+}
+
 func pruneStreamedPendingCostHints(state *StreamedLevelRuntimeState) {
 	for coord := range state.pendingChunkCostHints {
 		if _, ok := state.DesiredChunks[coord]; !ok {

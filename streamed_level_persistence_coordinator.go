@@ -65,6 +65,12 @@ func admitStreamedPersistenceBytes(state *StreamedLevelRuntimeState, n int64) {
 	refreshStreamedPersistenceMetrics(state)
 }
 func persistenceNormalDemand(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord) bool {
+	if state.LoadedChunks[coord] == nil {
+		if active := activeStreamedChunkCommit(state, coord); active != nil {
+			// Partial imported targets never established whole-cohort coverage.
+			return active.cancelling
+		}
+	}
 	if streamedLoadedChunkNeedsResidencyUpgrade(cmd, state, coord) {
 		return true
 	}
@@ -74,7 +80,7 @@ func persistenceNormalDemand(cmd *Commands, state *StreamedLevelRuntimeState, co
 	return !streamedChunkNeedsRenderProxyBeforeUnload(cmd, state, coord)
 }
 func requestStreamedChunkPersistence(cmd *Commands, state *StreamedLevelRuntimeState, coord ChunkCoord) {
-	loaded := state.LoadedChunks[coord]
+	loaded := streamedLoadedOrActiveChunk(state, coord)
 	if loaded == nil {
 		return
 	}
@@ -86,7 +92,9 @@ func requestStreamedChunkPersistence(cmd *Commands, state *StreamedLevelRuntimeS
 			refreshStreamedPersistenceMetrics(state)
 			return
 		}
-		removeStreamedChunk(cmd, state, coord)
+		if persistenceNormalDemand(cmd, state, coord) {
+			removeStreamedChunk(cmd, state, coord)
+		}
 		return
 	}
 	if state.persistenceTransaction != nil || state.worldDeltaSaveActive {
@@ -104,7 +112,9 @@ func requestStreamedChunkPersistence(cmd *Commands, state *StreamedLevelRuntimeS
 	entities := captureStreamedPersistence(cmd, state, intent)
 	if len(entities) == 0 {
 		delete(state.persistenceIntents, coord)
-		removeStreamedChunk(cmd, state, coord)
+		if persistenceNormalDemand(cmd, state, coord) {
+			removeStreamedChunk(cmd, state, coord)
+		}
 		refreshStreamedPersistenceMetrics(state)
 		return
 	}

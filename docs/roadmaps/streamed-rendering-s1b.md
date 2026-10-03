@@ -338,7 +338,7 @@ usual engine/consumer boundary checks.
 ## S1g: Opt-in resumable placement commits
 
 Status: approved by the user on 2026-10-03 after independent architecture review;
-implementation pending. The user approved opt-in gradual placement visibility
+implementation complete. The user approved opt-in gradual placement visibility
 and collision, durable partial edits and unchanged default behavior. This resolves
 the Human Alignment Gate for the cross-frame publication contract. P5a/P5b reduce
 geometry registration work; a loop over many placements can still stall one frame.
@@ -351,10 +351,22 @@ Approved contract:
   hooks remain atomic; the frame limit is checked between units across chunks.
   Terrain/imported work remains atomic. This cannot bound one expensive asset,
   snapshot or user hook by elapsed time.
+- In the opt-in mode, `MaxChunkCommitsPerFrame` also limits distinct chunks
+  advanced/started that frame. Cleanup and byte-cost retries do not spend that
+  allowance; cleanup remains eligible after it is spent. Check time between every
+  atomic unit. Service a shared fixed frontier of ready envelopes and active cursors in rounds, at most
+  one placement per candidate per round with live S1d priority/aging. Serve its
+  terrain/imported prefix first, checking time between those atomic phases too.
+  Reset waiting age after service. Exhausted placement capacity skips placement
+  units while eligible proxies, cleanup and placement-free completions can proceed.
 - A private main-thread transaction owns generation, cursor, prepared envelope,
   loader scope, S2b pending charge and S1e admission until completion or cleanup.
   Track every partial entity/asset before flush or hooks. `LoadedChunks` and its
   completion metrics publish only when the whole chunk finishes.
+  Keep active payloads inside the bounded ready owner, with an exact coordinate
+  index for lookup; no second unbounded prepared list. Pending preparation tokens
+  remain owned until terminal completion or cleanup. Temporary target grouping
+  must not finish the S1e CPU item at each pause.
 - In the opt-in mode, ordinary placement visuals/colliders become observable as
   each placement finishes; hooks run once at that boundary. Existing managed
   terrain/imported readiness and proxy coverage remain in force.
@@ -362,14 +374,22 @@ Approved contract:
   edits before removal. S4c qualifies the active transaction as an exact owner
   without inserting it into `LoadedChunks`. Persistence failure pins those
   owners for retry; completion transfers ownership once to the loaded chunk.
-- Spawn/snapshot/hook failures keep the existing fatal `InitErr` policy and
+  Cancelled active-only owners may retire after durability without waiting for
+  an imported proxy: their imported targets have never established whole-cohort
+  coverage. Completed loaded owners retain the existing proxy-before-removal
+  gate. This avoids waiting for a proxy whose admission needs the active owner's
+  slot. Unfinished renderer retirement still retains its admission debt.
+- Spawn/snapshot errors and hook-signalled failures keep the fatal `InitErr` policy and
   retain the failed transaction for persistence and teardown. Capture partial
   spawn IDs as they are created, including error paths. Never blindly retry a
   failed placement or rerun completed hooks.
+  Existing hook panic behavior is unchanged; no recovery policy is introduced.
 - Before each remaining unit, resolve its stable placement identity against
   current transform/deletion and snapshot authority. Skip deleted/moved-away
   placements and apply current snapshots. Keep completed cursors/hooks intact;
   stale captured items cannot respawn a deleted placement or overwrite a live edit.
+  Each evaluated placement identity consumes a unit even when skipped, so deleted
+  inputs cannot bypass the scan bound.
 - Synchronous same-coordinate loading completes the active transaction rather
   than creating duplicate entities; it may exceed the frame budget as today.
 
@@ -379,11 +399,11 @@ per frame. Hiding only placement rendering does not isolate gameplay queries or
 collision, so it cannot preserve atomic gameplay publication.
 
 Owners/files: `streamed_level_runtime.go`, ready/pending/admission owners and S4c
-persistence, plus streaming contracts. Before implementation, freeze focused
-coverage for partial lifetime/cancellation, hook counts, paused/failed persistence,
-same-coordinate synchronous completion and default-mode compatibility. Use the
-full workflow, race and native handoff checks. Individual large-unit bounds remain
-later work; this does not authorize a hard elapsed-time guarantee.
+persistence, plus streaming contracts. Focused coverage protects partial lifetime,
+cancellation, hook counts, failed persistence, synchronous completion and defaults.
+The full workflow, race, engine/consumer and native handoff checks passed; see the
+[parent delivery record](streamed-rendering-content-optimization.md#s1g-opt-in-resumable-placement-commits).
+Individual large-unit bounds remain later work; no hard elapsed-time guarantee.
 
 ## Verification and execution record
 

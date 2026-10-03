@@ -48,6 +48,10 @@ type voxelShadowSettings struct {
 }
 
 func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions, result *AuthoredAssetSpawnResult) (bool, error) {
+	return trySpawnCollapsedAuthoredAssetWithOwnership(cmd, assets, def, rootTransform, opts, result, nil)
+}
+
+func trySpawnCollapsedAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions, result *AuthoredAssetSpawnResult, created func(EntityId, string, bool, bool)) (bool, error) {
 	enabled := def != nil && def.Runtime != nil && def.Runtime.CollapseVoxelParts
 	switch opts.CollapseVoxelParts {
 	case VoxelPartCollapseDisable:
@@ -84,6 +88,9 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 		},
 	)
 	result.Entities = append(result.Entities, result.RootEntity)
+	if created != nil {
+		created(result.RootEntity, "", true, false)
+	}
 	composite := cmd.AddEntity(
 		&TransformComponent{
 			Rotation: mgl32.QuatIdent(),
@@ -106,6 +113,9 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 		},
 	)
 	result.Entities = append(result.Entities, composite)
+	if created != nil {
+		created(composite, "", false, true)
+	}
 	cmd.app.FlushCommands()
 	TransformHierarchySystem(cmd)
 

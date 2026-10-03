@@ -1108,6 +1108,10 @@ func spawnAuthoredTerrain(cmd *Commands, assets *AssetServer, loader *RuntimeCon
 }
 
 func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef) (AuthoredAssetSpawnResult, error) {
+	return spawnAuthoredLevelPlacementWithOwnership(cmd, assets, loader, parent, levelID, levelPath, placement, nil)
+}
+
+func spawnAuthoredLevelPlacementWithOwnership(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, created func(EntityId, string, bool, bool)) (AuthoredAssetSpawnResult, error) {
 	if loader == nil {
 		loader = NewRuntimeContentLoader()
 	}
@@ -1116,37 +1120,39 @@ func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *Run
 	if err != nil {
 		return AuthoredAssetSpawnResult{}, fmt.Errorf("load asset %s: %w", placement.AssetPath, err)
 	}
-	spawnResult, err := SpawnAuthoredAssetWithOptions(cmd, assets, assetDef, levelTransformToComponent(placement.Transform), AuthoredAssetSpawnOptions{
+	record := func(entity EntityId, itemID string, root, voxel bool) {
+		if root {
+			cmd.AddComponents(entity, &Parent{Entity: parent}, &AuthoredLevelPlacementRefComponent{
+				LevelID: levelID, PlacementID: placement.PlacementID, AssetPath: filepath.Clean(placement.AssetPath), VolumeID: placement.VolumeID, Tags: append([]string(nil), placement.Tags...),
+			})
+		} else if itemID != "" {
+			cmd.AddComponents(entity, &AuthoredLevelItemRefComponent{
+				LevelID: levelID, PlacementID: placement.PlacementID, ItemID: itemID, AssetID: assetDef.ID, AssetPath: filepath.Clean(placement.AssetPath), VolumeID: placement.VolumeID, Tags: append([]string(nil), placement.Tags...),
+			})
+		}
+		if created != nil {
+			created(entity, itemID, root, voxel)
+		}
+	}
+	var ownership func(EntityId, string, bool, bool)
+	if created != nil {
+		ownership = record
+	}
+	spawnResult, err := spawnAuthoredAssetWithOwnership(cmd, assets, assetDef, nil, levelTransformToComponent(placement.Transform), AuthoredAssetSpawnOptions{
 		DocumentPath:                   resolvedAssetPath,
 		OverrideCastShadows:            placement.OverrideCastShadows,
 		OverrideShadowMaxDistance:      placement.OverrideShadowMaxDistance,
 		OverrideShadowCasterGroupID:    placement.OverrideShadowCasterGroupID,
 		OverrideShadowCasterGroupLimit: placement.OverrideShadowCasterGroupLimit,
-	})
+	}, ownership)
 	if err != nil {
 		return AuthoredAssetSpawnResult{}, fmt.Errorf("spawn asset %s for placement %s: %w", placement.AssetPath, placement.PlacementID, err)
 	}
-	cmd.AddComponents(
-		spawnResult.RootEntity,
-		&Parent{Entity: parent},
-		&AuthoredLevelPlacementRefComponent{
-			LevelID:     levelID,
-			PlacementID: placement.PlacementID,
-			AssetPath:   filepath.Clean(placement.AssetPath),
-			VolumeID:    placement.VolumeID,
-			Tags:        append([]string(nil), placement.Tags...),
-		},
-	)
-	for itemID, eid := range spawnResult.EntitiesByAssetID {
-		cmd.AddComponents(eid, &AuthoredLevelItemRefComponent{
-			LevelID:     levelID,
-			PlacementID: placement.PlacementID,
-			ItemID:      itemID,
-			AssetID:     spawnResult.AssetID,
-			AssetPath:   filepath.Clean(placement.AssetPath),
-			VolumeID:    placement.VolumeID,
-			Tags:        append([]string(nil), placement.Tags...),
-		})
+	if created == nil {
+		record(spawnResult.RootEntity, "", true, false)
+		for item, entity := range spawnResult.EntitiesByAssetID {
+			record(entity, item, false, false)
+		}
 	}
 	return spawnResult, nil
 }

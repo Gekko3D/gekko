@@ -682,8 +682,42 @@ cancelled, obsolete, duplicate and error results use a cleanup prefix; wanted
 byte-cost retries retain demand priority. New captures share one update birth.
 Arrivals during commit wait for a later frontier. Count/time budgets and existing
 acknowledgement/error policy remain. Failed Stop retains ready ownership;
-successful Stop drains it. This does not bound one large chunk's commit.
+successful Stop drains it. The opt-in S1g budget below bounds placement admission
+inside a chunk; individual large units remain atomic.
 [Capacity and channel compatibility](../roadmaps/streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
+
+Resumable placement commits, S1g:
+
+Positive `MaxPlacementCommitUnitsPerFrame` enables a shared placement budget in
+managed runtimes. Nonpositive values and CPU-only runtimes stay synchronous.
+One placement, snapshots and hooks form one atomic unit; deleted or moved-away
+identities also consume a unit. Candidates share rounds with at most one
+placement each. Terrain/imported prefixes run once, with time checks between
+atomic phases. `MaxChunkCommitsPerFrame` also limits distinct full/proxy candidates
+advanced that frame. Cleanup and byte-cost retries do not spend this chunk
+allowance; cleanup also runs after it is spent, subject to the time limit. Eligible
+proxies and cleanup can proceed after the placement cap. One expensive asset,
+snapshot or hook can still exceed the time budget.
+
+Partial placements publish their visuals/colliders and run hooks once. The
+bounded ready owner retains the exact envelope, decoded scope, pending charge
+and CPU admission until completion or cleanup, even if terrain/imported targets
+are already Ready. `LoadedChunks` and chunk counters publish only whole chunks.
+`ActiveChunkCommitCount` and `PlacementCommitUnitsLastFrame` expose progress;
+entity frame counts report actual admitted entities. Commit timing/breakdowns
+aggregate serviced work in the transaction, excluding waiting between frames.
+
+Cancellation and Stop save partial terrain/imported/placement edits before
+removal; failed saves pin ownership for retry. Cancelled active-only imported
+targets have not established whole-cohort coverage, so durable cleanup does not
+wait for proxy admission. Completed loaded owners retain their proxy gate;
+unfinished GPU retirement retains its admission debt. Fatal spawn/snapshot or
+hook-signalled errors retain partial ownership without retrying units. Existing
+hook panic behavior remains. Stop/restart during a hook cuts off publication.
+Remaining units use current deletion, transform and snapshot authority; completed
+units retain live edits. Synchronous same-coordinate loading finishes the active
+transaction without duplicate spawns and may exceed the frame budget.
+[S1g ownership decision](../roadmaps/streamed-rendering-s1b.md#s1g-opt-in-resumable-placement-commits).
 
 Obsolete preparation cancellation, S2e:
 
