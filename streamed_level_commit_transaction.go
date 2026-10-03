@@ -136,6 +136,10 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 				spawnTiming := AuthoredImportedWorldSpawnTiming{}
 				geometryAssetStart := time.Now()
 				preparedGeometryAsset := AssetId{}
+				preparedGeometry := prepared.PreparedImportedWorldGeometry
+				if prepared.geometrySource != nil && state.BaseWorldBacking != nil {
+					preparedGeometry = state.PreparedGeometryCache.densePreparedSource(prepared.PreparedImportedWorldGeometryCacheKey, prepared.geometrySource)
+				}
 				if state.BaseWorldBacking != nil {
 					// Backing may have changed since the worker captured its job. Keep the
 					// existing registration/spawn path whenever live backing is present.
@@ -144,12 +148,16 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 				if backingProvider == nil {
 					if state.BaseWorldBacking == nil {
 						var adopted bool
-						preparedGeometryAsset, _, adopted = state.PreparedGeometryCache.acquirePreparedAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry, prepared.registration)
+						if prepared.geometrySource != nil {
+							preparedGeometryAsset, _, adopted = state.PreparedGeometryCache.acquirePreparedSourceAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.geometrySource, prepared.registration)
+						} else {
+							preparedGeometryAsset, _, adopted = state.PreparedGeometryCache.acquirePreparedAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, preparedGeometry, prepared.registration)
+						}
 						if adopted {
 							state.Metrics.PreparedGeometryAssetAdoptions++
 						}
 					} else {
-						preparedGeometryAsset, _ = state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, prepared.PreparedImportedWorldGeometry)
+						preparedGeometryAsset, _ = state.PreparedGeometryCache.acquireAsset(assets, prepared.PreparedImportedWorldGeometryCacheKey, preparedGeometry)
 					}
 				}
 				geometryAssetDuration := time.Since(geometryAssetStart)
@@ -162,7 +170,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 					DestructionEnabled:     destructionEnabled,
 					ShareTerrainGeometry:   !privateGeometry,
 					RetainRendererGeometry: !privateGeometry,
-					PreparedGeometry:       prepared.PreparedImportedWorldGeometry,
+					PreparedGeometry:       preparedGeometry,
 					PreparedGeometryAsset:  preparedGeometryAsset,
 					BackingProvider:        backingProvider,
 					BackingSourceHash:      state.BaseWorldBackingSourceHash,

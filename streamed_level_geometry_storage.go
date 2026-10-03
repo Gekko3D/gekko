@@ -96,6 +96,32 @@ func (l *streamedGeometryStorageLedger) admit(geometry *volume.XBrickMap, kind i
 	return node
 }
 
+func (l *streamedGeometryStorageLedger) admitSource(source *streamedGeometrySource, kind int) *streamedGeometryStorageNode {
+	if source == nil {
+		return nil
+	}
+	if source.dense != nil && !source.qualified {
+		return l.admit(source.dense, kind)
+	}
+	if l.nodes == nil {
+		l.nodes = make(map[any]*streamedGeometryStorageNode)
+	}
+	node := l.nodes[source]
+	if node == nil {
+		node = &streamedGeometryStorageNode{object: source}
+		l.nodes[source] = node
+		l.captureVisits++
+		if source.dense != nil {
+			node.bytes = int64(unsafe.Sizeof(*source))
+			node.children = []*streamedGeometryStorageNode{l.mapNode(source.dense)}
+		} else {
+			node.bytes = source.charge()
+		}
+	}
+	l.adjust(node, kind, 1)
+	return node
+}
+
 func (l *streamedGeometryStorageLedger) mapNode(geometry *volume.XBrickMap) *streamedGeometryStorageNode {
 	if node := l.nodes[geometry]; node != nil {
 		return node

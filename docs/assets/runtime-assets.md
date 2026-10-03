@@ -238,6 +238,41 @@ other AssetServer records. See
 [S2a](../roadmaps/streamed-rendering-s2a.md) for the storage-charge definition,
 defaults and remaining memory bounds.
 
+### Compact private prepared sources
+
+Opt-in `StreamedLevelRuntimeConfig.CompactPreparedGeometry` qualifies fresh
+immutable imported full/proxy worker sources for compact retention in this same
+cache. The default dense path, public `Brick.Payload`, mutable asset access and
+live renderer/physics/navigation maps retain their contracts. Captured backing
+keeps dense preparation; a backing change before commit uses current dense
+fallback and the existing removal path.
+
+Each entry owns either dense or compact prepared authority. Compact storage
+preserves raw cell values, masks, material metadata, revisions/tombstones, bounds
+and auxiliary bytes; use dense fallback when it has the lower policy charge.
+Workers create independent dense registration copies. Normal adoption and warm
+asset reuse avoid reconstructing a redundant dense prepared source on commit.
+
+Generic dense exposure permanently promotes that entry to retained dense
+authority. Later raw writes have no stale compact shadow. Pending older compact
+captures stay independently retained and charged, but cannot adopt a candidate
+over a promoted or rebuilt current source. Existing registered assets keep their
+ID and copy isolation during promotion. Source-qualified adoption also rejects
+candidates captured after dense exposure; current defensive copying preserves
+later raw edits. Exposure metadata survives eviction and re-admission. Generic
+asset-only acquisition keeps the winning source compact and copies its current
+contents. Without a retained entry, compact captures remain independent sealed
+snapshots; an uncached dense exposure does not repopulate the cache.
+
+Compact storage, dense registration copies and pending captures use the existing
+physical ledger, pins, admission and terminal cleanup. Build/promotion waits run
+outside the cache mutex; same-key callers retain singleflight and generic dense
+pointer identity. These are policy charges, excluding the documented temporary
+build/allocator limits, not a process-memory ceiling. This private layout is not
+a persisted codec or a new residency service. Reconstruction adds worker CPU
+work; enable the option when retained-memory savings justify that cost. See the
+[ownership design](../roadmaps/streamed-rendering-p1b.md).
+
 ### Streamed terrain registration
 
 Terrain workers build geometry, bounds and a separate registration copy. Jobs

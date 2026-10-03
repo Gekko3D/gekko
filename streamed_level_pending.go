@@ -89,6 +89,8 @@ func (p streamedPreparedSectorProxy) release() {
 // has its own deliberately bounded traversal, excluding borrowed GPU managers.
 func streamedPreparedChunkCharge(p streamedPreparedChunk) int64 {
 	geometry := p.PreparedImportedWorldGeometry
+	sourceBytes := p.geometrySource.charge()
+	p.geometrySource = nil
 	registrationBytes := p.registration.charge()
 	terrainGeometry := p.preparedTerrainGeometry
 	terrainRegistrationBytes := p.terrainRegistration.charge()
@@ -105,11 +107,13 @@ func streamedPreparedChunkCharge(p streamedPreparedChunk) int64 {
 	p.pendingCredit = nil
 	p.prepareCancel = nil
 	p.Err = nil
-	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry), registrationBytes,
+	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry), sourceBytes, registrationBytes,
 		streamedPendingGeometryCharge(terrainGeometry), terrainRegistrationBytes, snapshotGeometryBytes)
 }
 func streamedPreparedProxyCharge(p streamedPreparedSectorProxy) int64 {
 	geometry := p.PreparedGeometry
+	sourceBytes := p.geometrySource.charge()
+	p.geometrySource = nil
 	registrationBytes := p.registration.charge()
 	p.registration = nil
 	p.PreparedGeometry = nil
@@ -117,7 +121,7 @@ func streamedPreparedProxyCharge(p streamedPreparedSectorProxy) int64 {
 	p.pendingCredit = nil
 	p.prepareCancel = nil
 	p.Err = nil
-	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry), registrationBytes)
+	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry), sourceBytes, registrationBytes)
 }
 func streamedPendingGeometryCharge(geometry *volume.XBrickMap) int64 {
 	ledger := streamedGeometryStorageLedger{}

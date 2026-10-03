@@ -558,6 +558,10 @@ Prepared geometry cache update, S2a:
 - Imported full chunks and sector proxies reuse immutable worker-prepared maps.
   Registration creates a separate AssetServer copy. This describes the current
   path; the earlier disabled-staging note records a historical investigation.
+- `CompactPreparedGeometry` opts into compact private imported prepared sources,
+  trading worker reconstruction work for retained memory. False preserves dense
+  preparation. Public assets and live maps remain dense; see
+  [compact source ownership](../assets/runtime-assets.md#compact-private-prepared-sources).
 - `MaxPreparedGeometryCacheBytes` bounds the estimated CPU geometry storage
   owned by this cache. Zero selects 128 MiB; negative disables warm retention.
   `MaxPreparedGeometryCacheEntries` remains a secondary ceiling: zero selects

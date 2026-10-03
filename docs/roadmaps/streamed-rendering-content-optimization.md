@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b and P1a complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b and P1a–P1b complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -75,8 +75,12 @@ Owners: `volume/xbrickmap*.go`, `mod_vox_physics.go`, `navigation_graph_runtime.
 
 P1a migrates engine and editor point reads to the raw-authoritative
 `Brick.VoxelValue` accessor. Public dense payloads, writes and copy semantics
-remain. Compact representation and immutable ownership are still undecided;
+remain. Broad public compact representation and immutable ownership remain undecided;
 see [point reads](../renderer/runtime.md#voxel-point-reads).
+
+P1b adds opt-in compact retention for private imported full/proxy prepared sources
+in the existing cache. Public assets and live maps remain dense. See
+[private ownership](streamed-rendering-p1b.md); this is independent of C1's schema.
 
 ### P2. Pack GPU brick records by sector occupancy
 
@@ -772,12 +776,19 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5i | `80c0f25` | Streamed cold authored and level-brush composite rasterization | [Composition contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
 | P5j | `14c1d08` | Batched fresh shift/resample/disconnected-component reconstruction | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
 | P1a | `6397967`; editor `df2f3c8` | Raw-authoritative point-value accessor and consumer migration | [Read contract](../renderer/runtime.md#voxel-point-reads) |
-| P5k | This commit | Exact deduplicated normal-halo marking in fresh constructors | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
+| P5k | `9c4298a` | Exact deduplicated normal-halo marking in fresh constructors | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
+| P1b | This commit | Opt-in compact private prepared sources with current dense authority | [Ownership design](streamed-rendering-p1b.md) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: scope compact private prepared backing under existing cache ownership;
-resolve broad CPU ownership and format decisions before dependent P1/C1 work.
+Next: align C1's optional compiled imported payload boundary before format work.
+Recommend a new explicit lossless brick payload kind/version, independent
+checksummed frames, a pinned pure-Go zstd dependency and retained SHA-256 identity.
+Keep current readers, manifest versions and JSON authoring inputs. Begin without
+dictionaries, region packs, deltas or public compact-map migration. The new schema
+is separate from P1b's private layout. Codec/schema/dependency approval remains
+pending; this recommendation does not authorize its implementation.
+Broader P1 still requires public CPU ownership and editable-representation choices.
 Remaining S1/S2/S3 owners and extraction are still
 partial. No dirty-only extraction is approved. Preserve public mutation
 compatibility and conditional proposals.
@@ -1932,7 +1943,7 @@ fresh-constructor normal-halo bookkeeping before the compact ownership gate.
 
 ### P5k: Fresh-constructor normal halos
 
-This commit reuses the fresh constructor's existing dirty keys to deduplicate
+Commit `9c4298a` reuses the fresh constructor's existing dirty keys to deduplicate
 normal-halo marking. Exact dirty history, transient deletions, tombstones and
 ordered values remain. Focused parity, race, full engine, five consumer builds
 and native terrain readiness/edit/collision/save-reload/cleanup checks passed:
@@ -1952,6 +1963,36 @@ allocations increased from 132 to 133. No extra scratch map or retained owner;
 per-write halo enumeration remains. Existing tests and unrelated changes
 preserved. No pixel parity/FPS claim. Next: private prepared-cache compaction
 without changing public dense mutation APIs.
+
+### P1b: Compact private prepared sources
+
+This commit adds supported opt-in `CompactPreparedGeometry` for imported full/proxy
+sources in the existing prepared cache. Dense defaults, public mutation, asset
+identity, registration isolation, pins and terminal ownership remain. Separate
+tests/implementation and independent reviews completed. Focused and race checks,
+full engine tests (17.665 s), five consumer builds and native full/proxy readiness,
+collision presence, isolated carve/reupload and Stop cleanup passed:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestP1b|TestP5a|TestS2a|TestS2f|TestS2g|TestS2k|TestS2b)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestP1b|TestS2a.*(Concurrent|Singleflight|Panic|Close))' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p1b-smoke /tmp/gekko-p1b-smoke.go
+/tmp/gekko-p1b-smoke > /tmp/gekko-p1b-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go test -overlay /tmp/gekko-p1b-bench-overlay.json -run '^$' -bench '^BenchmarkP1bWorkerSource' -benchtime=200ms -count=1 -benchmem
+```
+
+Disposable Go 1.25.4 darwin/arm64 32³ sources without auxiliary data measured
+uniform retained policy bytes 36,056 to 8,944 and sparse 30,536 to 7,584 (about
+75% lower). Fully mixed storage falls back to dense (36,080 bytes including its
+24-byte handle). Uniform conversion plus registration cost increased: cold
+16.97 to 98.05 µs, warm 11.35 to 44.71 µs; these samples exclude IO, decode and
+dense construction. The option stays false by default. Native checks completed
+in 13 frames with prepared/asset bytes 5,312/18,784 before cleanup. No heap/RSS,
+pixel parity or FPS claim. Editor full-test baseline remains as recorded in P1a;
+editor build passes. Existing tests and unrelated changes are preserved.
+Broader P1 and C1 remain open; next format boundary needs alignment above.
 
 Consumer commands for these steps:
 

@@ -157,6 +157,21 @@ func (server *AssetServer) adoptStreamedVoxelGeometryWithStorage(registration *s
 	if !taken {
 		return AssetId{}, nil, false
 	}
+	return server.installAdoptedStreamedVoxelGeometry(asset, rendererCopy, rendererBytes, descriptor)
+}
+
+func (server *AssetServer) adoptStreamedVoxelSourceWithStorage(registration *streamedGeometryRegistration, source *streamedGeometrySource) (AssetId, *streamedGeometryStorageDescriptor, bool) {
+	if server == nil {
+		return AssetId{}, nil, false
+	}
+	asset, rendererCopy, rendererBytes, descriptor, taken := registration.takeSource(source)
+	if !taken {
+		return AssetId{}, nil, false
+	}
+	return server.installAdoptedStreamedVoxelGeometry(asset, rendererCopy, rendererBytes, descriptor)
+}
+
+func (server *AssetServer) installAdoptedStreamedVoxelGeometry(asset VoxelGeometryAsset, rendererCopy *volume.XBrickMap, rendererBytes int64, descriptor *streamedGeometryStorageDescriptor) (AssetId, *streamedGeometryStorageDescriptor, bool) {
 	server.ensureVoxelStorage()
 	id := makeAssetId()
 	server.mu.Lock()

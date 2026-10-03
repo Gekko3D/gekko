@@ -86,6 +86,7 @@ func (state *StreamedLevelRuntimeState) releaseAllStreamedSnapshotGeometryAssets
 type streamedGeometryRegistration struct {
 	mu                sync.Mutex
 	source            *volume.XBrickMap
+	sourceHandle      *streamedGeometrySource
 	geometry          *volume.XBrickMap
 	rendererCopy      *volume.XBrickMap
 	rendererBytes     int64
@@ -103,6 +104,28 @@ func prepareStreamedGeometryRegistration(source *volume.XBrickMap) *streamedGeom
 // installation. Terrain and snapshots retain only their ordinary geometry charge.
 func prepareCachedStreamedGeometryRegistration(source *volume.XBrickMap) *streamedGeometryRegistration {
 	return prepareStreamedGeometryRegistrationPayload(source, true)
+}
+
+func prepareStreamedSourceRegistration(source *streamedGeometrySource) *streamedGeometryRegistration {
+	if source == nil {
+		return nil
+	}
+	geometry := source.registrationCopy()
+	min, max := geometry.ComputeAABB()
+	geometry.ClearDirty()
+	registration := &streamedGeometryRegistration{sourceHandle: source, geometry: geometry, min: min, max: max, voxelCount: geometry.GetVoxelCount()}
+	registration.storageDescriptor = captureStreamedGeometryStorageDescriptor(geometry)
+	registration.bytes = registration.storageDescriptor.geometryBytes
+	return registration
+}
+
+func (registration *streamedGeometryRegistration) countForSource(source *streamedGeometrySource) (int, bool) {
+	if registration == nil {
+		return 0, false
+	}
+	registration.mu.Lock()
+	defer registration.mu.Unlock()
+	return registration.voxelCount, source != nil && registration.geometry != nil && registration.sourceHandle == source && !source.exposed.Load()
 }
 
 func prepareStreamedGeometryRegistrationPayload(source *volume.XBrickMap, retainDescriptor bool) *streamedGeometryRegistration {
@@ -166,12 +189,23 @@ func (registration *streamedGeometryRegistration) charge() int64 {
 }
 
 func (registration *streamedGeometryRegistration) take(source *volume.XBrickMap) (VoxelGeometryAsset, *volume.XBrickMap, int64, *streamedGeometryStorageDescriptor, bool) {
+	return registration.takeIdentity(source, nil)
+}
+
+func (registration *streamedGeometryRegistration) takeSource(source *streamedGeometrySource) (VoxelGeometryAsset, *volume.XBrickMap, int64, *streamedGeometryStorageDescriptor, bool) {
+	return registration.takeIdentity(nil, source)
+}
+
+func (registration *streamedGeometryRegistration) takeIdentity(source *volume.XBrickMap, handle *streamedGeometrySource) (VoxelGeometryAsset, *volume.XBrickMap, int64, *streamedGeometryStorageDescriptor, bool) {
 	if registration == nil {
 		return VoxelGeometryAsset{}, nil, 0, nil, false
 	}
 	registration.mu.Lock()
 	defer registration.mu.Unlock()
-	if registration.geometry == nil || registration.source != source {
+	if registration.geometry == nil || registration.source != source || registration.sourceHandle != handle {
+		return VoxelGeometryAsset{}, nil, 0, nil, false
+	}
+	if handle != nil && handle.exposed.Load() {
 		return VoxelGeometryAsset{}, nil, 0, nil, false
 	}
 	asset := VoxelGeometryAsset{
@@ -180,6 +214,7 @@ func (registration *streamedGeometryRegistration) take(source *volume.XBrickMap)
 	}
 	rendererCopy, rendererBytes, descriptor := registration.rendererCopy, registration.rendererBytes, registration.storageDescriptor
 	registration.source, registration.geometry, registration.rendererCopy = nil, nil, nil
+	registration.sourceHandle = nil
 	registration.bytes, registration.rendererBytes = 0, 0
 	registration.storageDescriptor = nil
 	return asset, rendererCopy, rendererBytes, descriptor, true
@@ -192,6 +227,7 @@ func (registration *streamedGeometryRegistration) release() {
 	registration.mu.Lock()
 	defer registration.mu.Unlock()
 	registration.source, registration.geometry, registration.rendererCopy = nil, nil, nil
+	registration.sourceHandle = nil
 	registration.bytes, registration.rendererBytes = 0, 0
 	registration.storageDescriptor = nil
 }
