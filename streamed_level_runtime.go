@@ -53,6 +53,9 @@ const (
 )
 
 type StreamedLevelRuntimeConfig struct {
+	// EnableHybridVoxelObjectDeltas selects schema-3 brick replacements when they
+	// reduce owned records and strictly reduce logical document bytes.
+	EnableHybridVoxelObjectDeltas   bool
 	LevelPath                       string
 	NavigationManifestPath          string
 	DeltaMode                       StreamedLevelDeltaMode

@@ -127,8 +127,10 @@ cells and allocate nothing. Keys contain sector X/Y/Z followed by local brick
 X/Y/Z (0 through 3); callbacks receive local voxel X/Y/Z (0 through 7).
 Invalid, absent or unrepresentable target keys produce no callbacks. All three
 methods report sealed availability, even after a callback stops traversal;
-exposed owners report unavailable. Callbacks must not mutate or reenter the owner.
-These visitors prepare bounded hybrid capture; they do not enable runtime writing.
+exposed owners report unavailable. Inventory callbacks may call the two target
+read visitors. They must not mutate, expose, Fork or recursively visit inventory;
+target callbacks must not reenter the owner. These visitors support bounded
+[hybrid capture](../content/streaming-and-worlds.md#ordinary-object-override-persistence).
 
 `ExposeMutable` irreversibly detaches shared storage and returns one stable dense
 authority. Later raw writes remain visible; `TrackedChanges` returns `(nil,

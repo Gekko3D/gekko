@@ -22,16 +22,16 @@ type managedVoxelPersistenceToken struct {
 // Admission conservatively treats each assignment as a distinct codec brick.
 // This guarantees the default profile fits without materializing or encoding
 // records; larger candidates use the unchanged full snapshot path.
-func managedVoxelPersistenceCandidate(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, eid EntityId, owner, item string) (content.VoxelObjectPayloadDef, *managedVoxelGeometry, int, bool) {
+func managedVoxelPersistenceCandidate(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, eid EntityId, owner, item string) (content.VoxelObjectPayloadDef, *managedVoxelGeometry, managedVoxelPayloadPlan, bool) {
 	identity, lattice, qualified := managedVoxelPersistenceBase(cmd, assets, state, eid, owner, item)
 	if !qualified {
-		return content.VoxelObjectPayloadDef{}, nil, 0, false
+		return content.VoxelObjectPayloadDef{}, nil, managedVoxelPayloadPlan{}, false
 	}
 	_, entry, _ := managedVoxelEntity(cmd, assets, eid)
 	count, tracked := entry.owner.TrackedChangeCount()
 	limits := voxelcodec.DefaultLimits()
 	if !tracked || count < 0 || count > limits.MaxBricks || count > limits.MaxVoxels {
-		return content.VoxelObjectPayloadDef{}, nil, 0, false
+		return content.VoxelObjectPayloadDef{}, nil, managedVoxelPayloadPlan{}, false
 	}
 	// The original base must have a valid profile proof. Its decoded geometry
 	// growth remains conservatively bounded when the loader merges this delta.
@@ -39,28 +39,61 @@ func managedVoxelPersistenceCandidate(cmd *Commands, assets *AssetServer, state 
 	// channel; 80 bytes of header plus 512 values bounds either operation.
 	base := entry.persistenceBinding
 	if base == nil || base.baseBricks < 0 || base.baseBricks > limits.MaxBricks || base.baseVoxels < 0 || base.baseVoxels > limits.MaxVoxels || base.baseDecodedBytes <= 0 || base.baseDecodedBytes > limits.MaxDecodedBytes || int64(count) > (limits.MaxDecodedBytes-base.baseDecodedBytes)/(80+512) {
-		return content.VoxelObjectPayloadDef{}, nil, 0, false
+		return content.VoxelObjectPayloadDef{}, nil, managedVoxelPayloadPlan{}, false
 	}
 	bricks, voxels, counted := entry.owner.CurrentGeometryCounts()
 	if !counted || bricks < 0 || bricks > limits.MaxBricks || voxels < 0 || voxels > limits.MaxVoxels {
-		return content.VoxelObjectPayloadDef{}, nil, 0, false
+		return content.VoxelObjectPayloadDef{}, nil, managedVoxelPayloadPlan{}, false
 	}
 	payload := content.VoxelObjectPayloadDef{SchemaVersion: content.CurrentVoxelObjectPayloadSchemaVersion, Mode: content.VoxelObjectPayloadBaseDelta, PlacementID: owner, ItemID: item, Lattice: lattice, BaseIdentity: identity}
 	if content.ValidateVoxelObjectPayloadMetadata(&payload) != nil {
-		return content.VoxelObjectPayloadDef{}, nil, 0, false
+		return content.VoxelObjectPayloadDef{}, nil, managedVoxelPayloadPlan{}, false
 	}
 	portable := true
 	entry.owner.VisitTrackedChanges(func(w volume.VoxelWrite) bool {
 		portable = w.X >= math.MinInt32 && w.X <= math.MaxInt32 && w.Y >= math.MinInt32 && w.Y <= math.MaxInt32 && w.Z >= math.MinInt32 && w.Z <= math.MaxInt32
 		return portable
 	})
-	return payload, entry, count, portable
+	plan := managedVoxelPayloadPlan{records: count}
+	if portable && state.Config.EnableHybridVoxelObjectDeltas {
+		payload, plan = planManagedVoxelHybrid(payload, entry, count)
+	}
+	return payload, entry, plan, portable
 }
 
-func captureManagedVoxelPersistencePayload(payload content.VoxelObjectPayloadDef, entry *managedVoxelGeometry, count int) *content.VoxelObjectPayloadDef {
-	payload.Voxels = make([]content.VoxelObjectVoxelDef, count)
+func captureManagedVoxelPersistencePayload(payload content.VoxelObjectPayloadDef, entry *managedVoxelGeometry, plan managedVoxelPayloadPlan) *content.VoxelObjectPayloadDef {
+	payload.Voxels = make([]content.VoxelObjectVoxelDef, plan.records)
 	i := 0
+	if plan.selectors > 0 {
+		payload.ReplacementBricks = make([][3]int32, 0, plan.selectors)
+		entry.owner.VisitChangedBricks(func(key [6]int, count, current int) bool {
+			if _, selected := managedVoxelBrickReplacement(entry.owner, key, count, current); selected {
+				payload.ReplacementBricks = append(payload.ReplacementBricks, managedVoxelSelector(key))
+				origin := [3]int{key[0]*volume.SectorSize + key[3]*volume.BrickSize, key[1]*volume.SectorSize + key[4]*volume.BrickSize, key[2]*volume.SectorSize + key[5]*volume.BrickSize}
+				entry.owner.VisitCurrentBrickVoxels(key, func(local [3]int, value uint8) bool {
+					payload.Voxels[i] = content.VoxelObjectVoxelDef{X: origin[0] + local[0], Y: origin[1] + local[1], Z: origin[2] + local[2], Value: value}
+					i++
+					return true
+				})
+			}
+			return true
+		})
+		slices.SortFunc(payload.ReplacementBricks, managedVoxelSelectorCompare)
+	}
 	entry.owner.VisitTrackedChanges(func(w volume.VoxelWrite) bool {
+		if len(payload.ReplacementBricks) > 0 {
+			brick := func(v int) int32 {
+				q := v / volume.BrickSize
+				if v%volume.BrickSize < 0 {
+					q--
+				}
+				return int32(q)
+			}
+			key := [3]int32{brick(w.X), brick(w.Y), brick(w.Z)}
+			if _, selected := slices.BinarySearchFunc(payload.ReplacementBricks, key, managedVoxelSelectorCompare); selected {
+				return true
+			}
+		}
 		payload.Voxels[i] = content.VoxelObjectVoxelDef{X: w.X, Y: w.Y, Z: w.Z, Value: w.Value}
 		i++
 		return true
@@ -79,8 +112,8 @@ func captureManagedVoxelPersistencePayload(payload content.VoxelObjectPayloadDef
 	return &payload
 }
 
-func managedVoxelPersistencePayloadBytes(payload content.VoxelObjectPayloadDef, count int, n *int64) bool {
-	return persistenceAdd(n, 1, int64(unsafe.Sizeof(managedVoxelPersistenceToken{}))) && persistenceAdd(n, 1, int64(unsafe.Sizeof(content.VoxelObjectPayloadDef{}))) && persistenceAdd(n, int64(count), int64(unsafe.Sizeof(content.VoxelObjectVoxelDef{}))) && persistenceAdd(n, int64(len(payload.BaseIdentity)+len(payload.Lattice.RasterizationVersion)+len(payload.PlacementID)+len(payload.ItemID)), 1)
+func managedVoxelPersistencePayloadBytes(payload content.VoxelObjectPayloadDef, plan managedVoxelPayloadPlan, n *int64) bool {
+	return persistenceAdd(n, 1, int64(unsafe.Sizeof(managedVoxelPersistenceToken{}))) && persistenceAdd(n, 1, int64(unsafe.Sizeof(content.VoxelObjectPayloadDef{}))) && persistenceAdd(n, int64(plan.records), int64(unsafe.Sizeof(content.VoxelObjectVoxelDef{}))) && persistenceAdd(n, int64(plan.selectors), int64(unsafe.Sizeof([3]int32{}))) && persistenceAdd(n, int64(len(payload.BaseIdentity)+len(payload.Lattice.RasterizationVersion)+len(payload.PlacementID)+len(payload.ItemID)), 1)
 }
 
 // Explicit owner IDs are used only when they exactly reconstruct the actual

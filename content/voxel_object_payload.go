@@ -129,6 +129,20 @@ func ValidateVoxelObjectPayloadMetadata(payload *VoxelObjectPayloadDef) error {
 	return err
 }
 
+// VoxelObjectPayloadMetadataSize validates canonical typed metadata and returns
+// its JSON byte length without inspecting voxel records or modifying the input.
+func VoxelObjectPayloadMetadataSize(payload *VoxelObjectPayloadDef) (int, error) {
+	metadata, err := voxelObjectMetadata(payload)
+	if err != nil {
+		return 0, err
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
 func voxelObjectVoxelLess(a, b VoxelObjectVoxelDef) bool {
 	if a.Z != b.Z {
 		return a.Z < b.Z

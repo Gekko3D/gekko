@@ -6,11 +6,13 @@ Parent: [optimization roadmap](streamed-rendering-content-optimization.md#e2-per
 
 ## Current boundary
 
-E2b6 completes the implemented ordinary authored-shape path: verified canonical
+E2b6 establishes the ordinary authored-shape path: verified canonical
 bases, bounded sparse S4 publication, reload restoration and exact merged
 brick/voxel counts. Assignment-count and decoded-size admission remain
 conservative. Terrain, imported worlds and other source adapters retain their
-existing representations.
+existing representations. E2c1 adds opt-in schema-3 content compatibility;
+E2c2 adds bounded changed-brick capture primitives. E2c3 adds opt-in runtime
+selection, S4 capture and original-base reload/restoration.
 
 Schema 2 already selects uniform/mixed C1 channels. Its `full` mode replaces an
 entire object and has no base identity; it is not a per-brick replacement mode.
@@ -30,8 +32,10 @@ schema-2 readers and their meanings.
 Actual compressed-frame selection is an alternative, but requires encoding
 multiple candidate frames and charging their capture inputs and temporaries.
 Logical selection makes no guarantee about the smallest compressed result.
-Compare total logical document-body bytes, including canonical selector metadata
-and any fixed schema/mode overhead. Require strict savings; ties keep assignments.
+First require fewer replacement voxel records than tracked assignments. This
+prevents expanding owned capture merely because a uniform full channel is compact.
+Then compare total logical document-body bytes, including canonical selector
+metadata and fixed schema/mode overhead. Require strict savings; ties keep assignments.
 Keep schema 2 when no selected replacement offsets the added metadata cost.
 
 Current C1 per-brick body costs, excluding document metadata and frame overhead:
@@ -101,6 +105,38 @@ Temporary artifacts: `/tmp/gekko-e2-measure.go`, three JSON runs and
 `/tmp/gekko-e2-measure-median.json`; they are not shipped or durable test fixtures.
 Command: `env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-e2-measure.go`.
 
+## Runtime measurements (E2c3)
+
+Three sequential runs used Go 1.25.4 on darwin/arm64, `GOMAXPROCS=1`, warmed
+100 ms benchmarks and the default dictionary-free codec. Medians include actual
+S4 preflight/planning/capture, durable payload and manifest writes, current
+canonical-base verification, runtime resolution and dense conversion. Restored
+geometry matched the edited source before timing. Frame and retained sizes were
+identical across runs.
+
+| Synthetic history (32 bricks) | Schema-2 / hybrid frame bytes | Combined time | Allocated bytes | Retained capture bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Carve/repaint | 961 / 1,010 | 29.96 / 27.56 ms | 13,329,310 / 7,532,054 | 525,566 / 14,014 |
+| Whole clear | 441 / 415 | 30.52 / 26.61 ms | 13,109,866 / 7,141,424 | 525,630 / 1,726 |
+
+Carve/repaint captured 384 records instead of 16,382: 43.5% fewer allocated bytes
+and 8.0% lower combined time, with 5.1% larger compressed files. Clear selected
+32 empty replacements and no voxel records. Small durable-write timings were
+noisy. Mixed paint retained schema 2 with unchanged capture allocation. Sparse
+paint across 1,024 bricks also retained schema 2; planning increased median
+preflight/capture time from 110 to 164 µs without extra allocation. Selection is
+opt-in and does not promise a benefit for every history.
+
+These synthetic authored shapes do not establish production frequency. Timing
+excludes intent classification, admission waiting, scheduler/frame/GPU work and
+fresh application startup. Restoration ownership is covered by functionality
+checks; its Enable call is not timed. No FPS claim is made.
+
+Temporary evidence: `/tmp/gekko-e2c3-measure.go`, three
+`/tmp/gekko-e2c3-final-{1,2,3}.json` runs and their median JSON. The temporary
+root-package test was removed after measurement. With that test installed, run:
+`env GOCACHE=/tmp/gekko3d-gocache GEKKO_E2C3_MEASURE_OUT=/tmp/gekko-e2c3-final-N.json go test . -run '^TestE2c3Measurements$' -count=1 -test.benchtime=100ms -v`.
+
 ## Approved format semantics
 
 Use the existing C1 frame version and document kind, with schema-3 metadata and
@@ -153,7 +189,11 @@ visual verification scope.
 
 ## Alignment and remaining limits
 
-The user approved the schema-3 CPU/allocation tradeoff and logical cost policy.
-Schema-2 defaults remain fixed. Runtime measurements must include capture,
-planning, durable publication and reload before claiming full-path benefit.
+The user approved the schema-3 CPU/allocation tradeoff. Selection also safeguards
+owned capture size by requiring fewer replacement records, before strict logical
+cost comparison.
+Runtime writer adoption is opt-in through `EnableHybridVoxelObjectDeltas`;
+zero configuration retains schema 2. Readers accept both formats.
+Runtime measurements below include capture, planning, durable publication and
+reload. They establish synthetic path benefits, not production frame-time gains.
 Other source adapters and GPU behavior remain outside this approval.

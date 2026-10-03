@@ -46,7 +46,7 @@ func restoreManagedVoxelPersistenceOwner(cmd *Commands, assets *AssetServer, eid
 		return fail()
 	}
 	payload, _, err := content.LoadVoxelObjectPayload(content.ResolveDocumentPath(override.SnapshotPath, state.WorldDeltaPath), nil)
-	if err != nil || payload.SchemaVersion != content.CurrentVoxelObjectPayloadSchemaVersion || payload.Mode != content.VoxelObjectPayloadBaseDelta {
+	if err != nil || !(payload.SchemaVersion == content.CurrentVoxelObjectPayloadSchemaVersion && payload.Mode == content.VoxelObjectPayloadBaseDelta || payload.SchemaVersion == content.HybridVoxelObjectPayloadSchemaVersion && payload.Mode == content.VoxelObjectPayloadHybridDelta) {
 		return fail()
 	}
 	def, err := state.Loader.LoadAsset(path)

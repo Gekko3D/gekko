@@ -47,7 +47,7 @@ func resolveStreamedVoxelObjectPayload(loader *RuntimeContentLoader, placements 
 		}
 		lattice := authoredVoxelShapeLattice(part.VoxelResolution)
 		var base *content.VoxelObjectSnapshotDef
-		if payload.Mode == content.VoxelObjectPayloadBaseDelta {
+		if payload.Mode == content.VoxelObjectPayloadBaseDelta || payload.Mode == content.VoxelObjectPayloadHybridDelta {
 			base = VoxelObjectSnapshotFromXBrickMap(buildAuthoredVoxelShapeMap(part))
 		}
 		snapshot, err := content.ResolveVoxelObjectPayload(payload, base, lattice, override.PlacementID, override.ItemID, nil)

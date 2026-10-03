@@ -1148,15 +1148,15 @@ Main top-level fields:
 - voxel backing removals
 
 Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`. Opt-in
-schema-2 full/base-delta content payloads are defined by the
+schema-2 full/base-delta and schema-3 hybrid payloads are defined by the
 [voxel-object override contract](compiled-voxels.md#ordinary-voxel-object-override-payloads).
-Runtime loading supports schema 2 for individual authored `voxel_shape` parts;
-eligible managed owners save sparse schema-2 deltas through S4; other origins
-retain legacy full snapshots.
+Runtime loading supports schemas 2 and 3 for individual authored `voxel_shape`
+parts. Eligible managed owners save schema-2 deltas by default; hybrid writing
+is explicit opt-in. Other origins retain legacy full snapshots.
 
 ### Ordinary object override loading
 
-Workers decode v2 full/base-delta payloads at the existing `SnapshotPath`, bind
+Workers decode v2 full/base-delta and v3 hybrid payloads at the existing `SnapshotPath`, bind
 explicit placement/item IDs to the selected owner, and validate the effective
 lattice and `gekko-voxel-shape-v1` rasterization version. Delta bases reconstruct
 from the owning RuntimeContentLoader's immutable authored definition, using the
@@ -1164,7 +1164,7 @@ same shape conversion and `ModelScale` resampling as construction. Mutable live
 geometry caches are never canonical bases. Existing decoded-definition pinning
 and file-refresh behavior remain unchanged.
 
-V2 rejects missing/non-shape parts and authored collapse requests. Legacy v1
+Bound payloads reject missing/non-shape parts and authored collapse requests. Legacy v1
 keeps ordered, unbound snapshot acceptance and existing origins, including
 collapsed per-item limitations. Resolved snapshots use independent P5c worker
 registrations and existing pending byte admission, cancellation and asset leases;
@@ -1174,10 +1174,10 @@ Resumable placement commits resolve current actual-item overrides before adoptin
 any override or invoking hooks, including replacement at the same path. Exact
 resolved snapshot matches permit prepared adoption; stale packets use the existing
 independent fallback. Explicit owner IDs keep embedded-NUL placement IDs separate.
-Prepared v2 or a current actual-item v2 payload also activates validation of
+Prepared v2/v3 or a current actual-item bound payload also activates validation of
 current sibling references. Pure legacy placements retain direct item lookups.
 An otherwise unused override added to a legacy placement remains ignored when
-no v2 validation activates. V2 sibling validation scans current override metadata;
+no bound validation activates. Bound sibling validation scans current override metadata;
 this does not provide a hard time bound for a placement unit.
 
 Fatal partial transactions keep their existing persistence pins until successful
@@ -1188,8 +1188,9 @@ unload and successful Stop release it independently of current authored refs.
 [Authored-owner qualification](../renderer/editing.md#authored-shape-base-provenance)
 is captured once and queried without geometry reconstruction.
 
-At explicit managed Enable, the current selected schema-2 `base_delta` can
-restore original canonical tracking. Proof requires the exact existing snapshot
+At explicit managed Enable, the current selected schema-2 `base_delta` or
+schema-3 `hybrid_delta` can restore original canonical tracking, regardless of
+the hybrid writer flag. Proof requires the exact existing snapshot
 lease and an unmanaged source, actual owner membership, selected authored path
 and matching effective lattice. Enable decodes the current file, resolves it
 against a fresh loader-owned canonical shape, and independently compares the
@@ -1209,17 +1210,34 @@ placement hooks; save and acknowledgement do not rebuild the base.
 
 Explicitly enabled, sealed authored shapes with a verified
 [authored owner](../renderer/editing.md#authored-shape-base-provenance) save
-construction-relative final assignments as schema-2 `base_delta` payloads.
+construction-relative final assignments as schema-2 `base_delta` payloads by default.
 Captures include explicit owner IDs, canonical base identity and lattice; zero
 assignments remove cells and reverted cells are omitted. An empty delta preserves
 the base, while complete removal never resurrects it. Placement and item IDs are
 kept explicit through asynchronous intent, capture and manifest publication,
 including embedded NULs.
 
+`StreamedLevelRuntimeConfig.EnableHybridVoxelObjectDeltas` enables schema-3
+selection for these eligible owners. Zero configuration retains schema 2. Each
+replacement must use fewer voxel records than its assignments, then save logical
+C1 bytes including canonical selector metadata. Total document savings must be
+strict; ties or insufficient metadata savings retain assignments/schema 2.
+This policy bounds capture memory growth; it does not promise smaller compressed
+files or faster processing for every history.
+
+Planning reads maintained changed-brick counts and only potentially profitable
+target payloads. Count/lower-bound filters avoid target scans when replacement
+cannot qualify; zero-selection plans avoid metadata temporaries. Selected full
+geometry and explicit empty clears remain relative to the original authored base,
+with no delta chain. Typed content metadata sizing owns JSON escaping and scalar
+costs; integer selector lengths are counted without allocating a selector list.
+
 Preflight reads the tracked count and visits only changed assignments to check
-portable coordinates. Admission charges owned assignment storage and binding
-strings before capture. Delta capture and workers do not scan remaining geometry,
-copy base bricks or reconstruct a dense map. Existing soft byte admission,
+portable coordinates. Admission charges chosen voxel records, replacement selector
+backing arrays and binding strings before capture. Capture reruns deterministic selection after
+admission, visits selected changed bricks and filters unselected assignments
+without scanning each unselected target. Delta capture and workers do not scan
+untouched geometry, copy base bricks or reconstruct a dense map. Existing soft byte admission,
 sole oversized transactions, dirty pins, cancellation and durable publication
 remain authoritative. Blocking unload/Stop uses the same payload selection.
 

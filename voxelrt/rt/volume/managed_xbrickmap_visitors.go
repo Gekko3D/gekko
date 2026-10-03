@@ -8,10 +8,11 @@ func (m *ManagedXBrickMap) addChangedBrickAssignment(key [6]int) {
 }
 
 // VisitChangedBricks visits unordered changed-brick inventory without allocation
-// or reading geometry. Zero-current bricks retain their final removal history.
-// Keys contain sector X/Y/Z followed by local brick X/Y/Z (0 through 3).
+// or reading geometry. Keys contain sector XYZ followed by local brick XYZ (0..3).
+// Zero-current bricks retain their final removal history.
 // False stops traversal; the result still reports sealed availability. Callbacks
-// must not mutate, expose, or reenter the single owner.
+// may call the two target read visitors, but must not mutate, expose, Fork,
+// or recursively visit inventory; target callbacks must not reenter the owner.
 func (m *ManagedXBrickMap) VisitChangedBricks(visit func(key [6]int, assignmentCount, currentVoxelCount int) bool) bool {
 	if m.base == nil {
 		return false

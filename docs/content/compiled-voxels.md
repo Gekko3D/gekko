@@ -240,6 +240,9 @@ and base identity, plus canonical schema-3 selectors, without inspecting voxel
 records.
 Valid schema-2 metadata remains allocation-free.
 Callers must separately validate assignments and codec capacity.
+`VoxelObjectPayloadMetadataSize` validates canonical typed metadata and returns its
+JSON byte length without inspecting voxel records or mutating inputs. It uses
+bounded JSON temporaries; it is not an allocation-free profile admission API.
 `Codec.Limits()` returns normalized immutable profile values with an independent
 bounds copy, including after close; encoding and decoding still reject closed codecs.
 
@@ -259,10 +262,10 @@ nonempty replacement selectors.
 `CurrentVoxelObjectPayloadSchemaVersion` remains 2 and
 `HybridVoxelObjectPayloadSchemaVersion` explicitly opts into 3.
 
-Schema-3 content APIs are available; runtime writing, loading and managed history
-restoration remain schema 2 until their separate adoption batch. The runtime's
-shape-only
+Runtime writing selects schema 3 only when `EnableHybridVoxelObjectDeltas` is
+true and its capture/cost policy qualifies. Schema-2 defaults remain fixed.
+Loading and managed restoration accept both versions. The runtime's shape-only
 [override loading contract](streaming-and-worlds.md#ordinary-object-override-loading)
-adds v2 resolution. [Runtime persistence](streaming-and-worlds.md#ordinary-object-override-persistence)
+adds bound schema-2/3 resolution. [Runtime persistence](streaming-and-worlds.md#ordinary-object-override-persistence)
 selects sparse deltas through existing S4 publication. Explicit managed Enable
 can restore canonical history under the loading contract above.

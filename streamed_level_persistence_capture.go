@@ -251,7 +251,7 @@ func preflightStreamedPersistence(cmd *Commands, state *StreamedLevelRuntimeStat
 	}
 	for eid, class := range intent.Entities {
 		var payload content.VoxelObjectPayloadDef
-		var count int
+		var count managedVoxelPayloadPlan
 		var delta bool
 		if class.Kind == "object" {
 			payload, _, count, delta = managedVoxelPersistenceCandidate(cmd, assetServerFromApp(cmd.app), state, eid, class.Owner, class.Item)
