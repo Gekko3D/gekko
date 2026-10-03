@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5g and E1a complete. S1/S2/S3/P5/E1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5h and E1a complete. S1/S2/S3/P5/E1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -278,6 +278,14 @@ construction stream through P5f's builder. Ordered content, zero filtering,
 revisions, bounds, source isolation, dirty-state publication and normal sidecars
 retain their contracts. No additional source list or cache owner is introduced.
 [Canonical contract](../renderer/runtime.md#dense-voxel-construction).
+
+#### P5h: Ordinary assets and persistence reconstruction
+
+Completed: ordinary VOX assets and worker persistence inputs stream through the
+existing dense builder. VOX zero records remain ordered deletions; persistence
+skips zero payloads and retains captured bounds. Content, revisions, source
+isolation, declared dimensions and durability retain their contracts. No new
+source list or ownership boundary. [Constructor contract](../renderer/runtime.md#dense-voxel-construction).
 
 ## 5. Streaming changes
 
@@ -565,7 +573,8 @@ Completed: CPU primitive invocations finalize material flags once per surviving
 touched brick and deduplicate exact normal-halo invalidation. Ordered content,
 revisions, removal, cached bounds, copy isolation and GPU callbacks retain their
 contracts. See [primitive edits](../renderer/editing.md#synchronous-primitive-edits).
-Transformed engine edits, backing materialization, event sequencing and resumable
+World-space sphere edits already delegate to this primitive after transform
+conversion. Backing materialization, event sequencing and resumable
 publication remain later work; progressive/atomic cross-chunk visibility is undecided.
 
 ### E2. Persist changed bricks instead of whole geometry
@@ -726,7 +735,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5e | `89eb69d` | Validated warm authored collapse reuse without repeated rasterization | [Asset contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
 | P5f | `da0b36c` | Ordered dense imported construction with one material finalization per brick | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
 | P5g | `d682744` | Shared dense terrain, snapshot and offline aux reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
-| E1a | This commit | Synchronous dense Sphere/Cube material and normal-halo bookkeeping | [Edit contract](../renderer/editing.md#synchronous-primitive-edits) |
+| E1a | `3c61953` | Synchronous dense Sphere/Cube material and normal-halo bookkeeping | [Edit contract](../renderer/editing.md#synchronous-primitive-edits) |
+| P5h | This commit | Dense ordinary VOX asset and persistence-input reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1759,6 +1769,28 @@ measured sphere carve 2.96 to 0.69 ms, paint 1.17 to 0.61 ms and 32³ cube fill
 87 to 111); no-op remains zero allocations, about 65–66 µs. Per-write addressing,
 occupancy and halo enumeration remain. Next: ordinary VOX and persistence-input
 reconstruction through the existing dense builder. Unrelated changes preserved.
+
+### P5h: Ordinary assets and persistence reconstruction
+
+This commit reuses the existing builder for ordinary VOX assets and immutable
+persistence inputs, preserving their distinct zero and bounds contracts.
+Focused parity/durable-content tests, full engine tests and five consumer checks
+passed. Native terrain checks passed readiness, collision, isolated edits,
+durable unload/reload and owned cleanup (14 frames):
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestP5h|TestP5f|TestP5g|TestCreateFrameModel|TestCreateCapsuleYModel|TestScaleVoxModel|TestS4c)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5h-terrain-smoke /tmp/gekko-p5d-smoke.go
+/tmp/gekko-p5h-terrain-smoke > /tmp/gekko-p5h-terrain-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-p5h-build-bench.go
+```
+
+Disposable Go 1.25.4 darwin/arm64 public asset-creation samples measured uniform
+32³ at 18.78 to 8.78 ms and mixed at 9.23 to 8.88 ms. Cache-key JSON work and
+source model records remain. No ownership/concurrency/format change or pixel
+parity/FPS claim. Next: synchronous ordered edits for known built-in backing
+materialization, preserving arbitrary provider callbacks. Unrelated changes preserved.
 
 Consumer commands for these steps:
 

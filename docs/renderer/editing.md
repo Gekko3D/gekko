@@ -41,8 +41,9 @@ No-op assignments preserve auxiliary data and allocate no batch maps.
 
 An invocation starting in `GPUEditMode` keeps sequential `SetVoxel` calls,
 including when a callback changes that mode. Queue order, prewrite observations,
-reentry and dirty suppression retain their existing behavior. Single-voxel edits
-and transformed engine edit helpers keep their current paths. Publication remains
+reentry and dirty suppression retain their existing behavior. Engine world-space
+sphere edits use this path after their existing transform conversion. Single-voxel
+edits keep their current path. Publication remains
 synchronous; these helpers introduce no resumable or progressive visibility.
 
 ## Raycast Internals

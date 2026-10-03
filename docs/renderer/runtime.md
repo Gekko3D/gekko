@@ -52,6 +52,12 @@ value. Snapshot and aux converters keep source-zero filtering and their existing
 clean dirty-state publication; nil input retains each converter's prior behavior.
 The builder changes reconstruction work, not persisted content or normal encoding.
 
+Ordinary VOX asset construction also streams ordered writes, including zero
+material deletions, then computes tight bounds and clears dirtiness. Declared
+model dimensions still override asset-local bounds. Persistence workers stream
+nonzero captured brick payloads in their original order and restore captured
+cached bounds exactly; capture ownership and durable publication are unchanged.
+
 ## Engine Stage Flow
 
 The renderer participates in three engine stages:

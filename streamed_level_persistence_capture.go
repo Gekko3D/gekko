@@ -142,18 +142,21 @@ func persistenceBricksMatch(xbm *volume.XBrickMap, bricks []streamedPersistenceB
 	return true
 }
 func persistenceInputMap(input streamedPersistenceInput) *volume.XBrickMap {
-	xbm := volume.NewXBrickMap()
-	for _, b := range input.Bricks {
-		for x := 0; x < volume.BrickSize; x++ {
-			for y := 0; y < volume.BrickSize; y++ {
-				for z := 0; z < volume.BrickSize; z++ {
-					if value := b.Payload[x][y][z]; value != 0 {
-						xbm.SetVoxel(b.Coord[0]+x, b.Coord[1]+y, b.Coord[2]+z, value)
+	xbm := volume.BuildXBrickMap(func(yield func(volume.VoxelWrite) bool) {
+		for _, b := range input.Bricks {
+			for x := 0; x < volume.BrickSize; x++ {
+				for y := 0; y < volume.BrickSize; y++ {
+					for z := 0; z < volume.BrickSize; z++ {
+						if value := b.Payload[x][y][z]; value != 0 {
+							if !yield(volume.VoxelWrite{X: b.Coord[0] + x, Y: b.Coord[1] + y, Z: b.Coord[2] + z, Value: value}) {
+								return
+							}
+						}
 					}
 				}
 			}
 		}
-	}
+	})
 	// Terrain serialization uses the AABB observed at capture, including its cache.
 	xbm.CachedMin, xbm.CachedMax, xbm.AABBDirty = input.Min, input.Max, false
 	return xbm

@@ -28,10 +28,13 @@ func (server *AssetServer) CreateVoxelBasedTexture(voxModel *VoxModel, palette *
 }
 
 func xBrickMapFromVoxModel(model VoxModel) *volume.XBrickMap {
-	xbm := volume.NewXBrickMap()
-	for _, v := range model.Voxels {
-		xbm.SetVoxel(int(v.X), int(v.Y), int(v.Z), v.ColorIndex)
-	}
+	xbm := volume.BuildXBrickMap(func(yield func(volume.VoxelWrite) bool) {
+		for _, v := range model.Voxels {
+			if !yield(volume.VoxelWrite{X: int(v.X), Y: int(v.Y), Z: int(v.Z), Value: v.ColorIndex}) {
+				return
+			}
+		}
+	})
 	xbm.ComputeAABB()
 	xbm.ClearDirty()
 	return xbm
