@@ -157,75 +157,79 @@ func (x *XBrickMap) SplitDisconnectedComponents() []ComponentInfo {
 		cMin := mgl32.Vec3{float32(math.MaxFloat32), float32(math.MaxFloat32), float32(math.MaxFloat32)}
 		cMax := mgl32.Vec3{float32(-math.MaxFloat32), float32(-math.MaxFloat32), float32(-math.MaxFloat32)}
 
-		for len(q) > 0 {
-			curr := q[0]
-			q = q[1:]
+		newMap.ApplyVoxelWrites(func(yield func(VoxelWrite) bool) {
+			for len(q) > 0 {
+				curr := q[0]
+				q = q[1:]
 
-			// Add all voxels from this sub-brick component to the new map
-			bx, by, bz := curr.parentBrick[0], curr.parentBrick[1], curr.parentBrick[2]
-			sx, sy, sz := bx/4, by/4, bz/4
-			lbx, lby, lbz := bx%4, by%4, bz%4
-			if lbx < 0 {
-				lbx += 4
-				sx--
-			}
-			if lby < 0 {
-				lby += 4
-				sy--
-			}
-			if lbz < 0 {
-				lbz += 4
-				sz--
-			}
-
-			// Find original brick to get values
-			sector := x.Sectors[[3]int{sx, sy, sz}]
-			brick := sector.GetBrick(lbx, lby, lbz)
-
-			baseX, baseY, baseZ := curr.parentBrick[0]*8, curr.parentBrick[1]*8, curr.parentBrick[2]*8
-
-			for vz := 0; vz < 8; vz++ {
-				if curr.voxels[vz] == 0 {
-					continue
+				// Add all voxels from this sub-brick component to the new map
+				bx, by, bz := curr.parentBrick[0], curr.parentBrick[1], curr.parentBrick[2]
+				sx, sy, sz := bx/4, by/4, bz/4
+				lbx, lby, lbz := bx%4, by%4, bz%4
+				if lbx < 0 {
+					lbx += 4
+					sx--
 				}
-				for vy := 0; vy < 8; vy++ {
-					row := (curr.voxels[vz] >> (vy * 8)) & 0xFF
-					if row == 0 {
+				if lby < 0 {
+					lby += 4
+					sy--
+				}
+				if lbz < 0 {
+					lbz += 4
+					sz--
+				}
+
+				// Find original brick to get values
+				sector := x.Sectors[[3]int{sx, sy, sz}]
+				brick := sector.GetBrick(lbx, lby, lbz)
+
+				baseX, baseY, baseZ := curr.parentBrick[0]*8, curr.parentBrick[1]*8, curr.parentBrick[2]*8
+
+				for vz := 0; vz < 8; vz++ {
+					if curr.voxels[vz] == 0 {
 						continue
 					}
-					for vx := 0; vx < 8; vx++ {
-						if (row & (1 << vx)) != 0 {
-							val := uint8(0)
-							if brick.Flags&BrickFlagSolid != 0 {
-								val = uint8(brick.AtlasOffset)
-							} else {
-								val = brick.Payload[vx][vy][vz]
+					for vy := 0; vy < 8; vy++ {
+						row := (curr.voxels[vz] >> (vy * 8)) & 0xFF
+						if row == 0 {
+							continue
+						}
+						for vx := 0; vx < 8; vx++ {
+							if (row & (1 << vx)) != 0 {
+								val := uint8(0)
+								if brick.Flags&BrickFlagSolid != 0 {
+									val = uint8(brick.AtlasOffset)
+								} else {
+									val = brick.Payload[vx][vy][vz]
+								}
+
+								gx, gy, gz := baseX+vx, baseY+vy, baseZ+vz
+								if !yield(VoxelWrite{X: gx, Y: gy, Z: gz, Value: val}) {
+									return
+								}
+								compVoxCount++
+
+								cMin[0] = float32(math.Min(float64(cMin[0]), float64(gx)))
+								cMin[1] = float32(math.Min(float64(cMin[1]), float64(gy)))
+								cMin[2] = float32(math.Min(float64(cMin[2]), float64(gz)))
+								cMax[0] = float32(math.Max(float64(cMax[0]), float64(gx+1)))
+								cMax[1] = float32(math.Max(float64(cMax[1]), float64(gy+1)))
+								cMax[2] = float32(math.Max(float64(cMax[2]), float64(gz+1)))
 							}
-
-							gx, gy, gz := baseX+vx, baseY+vy, baseZ+vz
-							newMap.SetVoxel(gx, gy, gz, val)
-							compVoxCount++
-
-							cMin[0] = float32(math.Min(float64(cMin[0]), float64(gx)))
-							cMin[1] = float32(math.Min(float64(cMin[1]), float64(gy)))
-							cMin[2] = float32(math.Min(float64(cMin[2]), float64(gz)))
-							cMax[0] = float32(math.Max(float64(cMax[0]), float64(gx+1)))
-							cMax[1] = float32(math.Max(float64(cMax[1]), float64(gy+1)))
-							cMax[2] = float32(math.Max(float64(cMax[2]), float64(gz+1)))
 						}
 					}
 				}
-			}
 
-			// Neighbors in graph
-			for _, neighbor := range adj[curr] {
-				if !visited[neighbor] {
-					visited[neighbor] = true
-					q = append(q, neighbor)
+				// Neighbors in graph
+				for _, neighbor := range adj[curr] {
+					if !visited[neighbor] {
+						visited[neighbor] = true
+						q = append(q, neighbor)
+					}
 				}
 			}
-		}
 
+		})
 		newMap.CachedMin = cMin
 		newMap.CachedMax = cMax
 		newMap.AABBDirty = false
@@ -314,40 +318,46 @@ func (x *XBrickMap) findInternalBrickComponents(brick *Brick, gx, gy, gz int) []
 // Shift returns a new XBrickMap with all voxels shifted by (dx, dy, dz).
 func (x *XBrickMap) Shift(dx, dy, dz int) *XBrickMap {
 	newMap := NewXBrickMap()
-	for sKey, sector := range x.Sectors {
-		ox, oy, oz := sKey[0]*SectorSize, sKey[1]*SectorSize, sKey[2]*SectorSize
-		for i := 0; i < 64; i++ {
-			if (sector.BrickMask64 & (1 << i)) != 0 {
-				bx, by, bz := i%4, (i/4)%4, i/16
-				brick := sector.GetBrick(bx, by, bz)
-				if brick == nil || brick.IsEmpty() {
-					continue
-				}
-				brickOx, brickOy, brickOz := ox+bx*BrickSize, oy+by*BrickSize, oz+bz*BrickSize
-				if brick.Flags&BrickFlagSolid != 0 {
-					val := uint8(brick.AtlasOffset)
+	newMap.ApplyVoxelWrites(func(yield func(VoxelWrite) bool) {
+		for sKey, sector := range x.Sectors {
+			ox, oy, oz := sKey[0]*SectorSize, sKey[1]*SectorSize, sKey[2]*SectorSize
+			for i := 0; i < 64; i++ {
+				if (sector.BrickMask64 & (1 << i)) != 0 {
+					bx, by, bz := i%4, (i/4)%4, i/16
+					brick := sector.GetBrick(bx, by, bz)
+					if brick == nil || brick.IsEmpty() {
+						continue
+					}
+					brickOx, brickOy, brickOz := ox+bx*BrickSize, oy+by*BrickSize, oz+bz*BrickSize
+					if brick.Flags&BrickFlagSolid != 0 {
+						val := uint8(brick.AtlasOffset)
+						for vz := 0; vz < BrickSize; vz++ {
+							for vy := 0; vy < BrickSize; vy++ {
+								for vx := 0; vx < BrickSize; vx++ {
+									if !yield(VoxelWrite{X: brickOx + vx + dx, Y: brickOy + vy + dy, Z: brickOz + vz + dz, Value: val}) {
+										return
+									}
+								}
+							}
+						}
+						continue
+					}
 					for vz := 0; vz < BrickSize; vz++ {
 						for vy := 0; vy < BrickSize; vy++ {
 							for vx := 0; vx < BrickSize; vx++ {
-								newMap.SetVoxel(brickOx+vx+dx, brickOy+vy+dy, brickOz+vz+dz, val)
-							}
-						}
-					}
-					continue
-				}
-				for vz := 0; vz < BrickSize; vz++ {
-					for vy := 0; vy < BrickSize; vy++ {
-						for vx := 0; vx < BrickSize; vx++ {
-							val := brick.Payload[vx][vy][vz]
-							if val != 0 {
-								newMap.SetVoxel(brickOx+vx+dx, brickOy+vy+dy, brickOz+vz+dz, val)
+								val := brick.Payload[vx][vy][vz]
+								if val != 0 {
+									if !yield(VoxelWrite{X: brickOx + vx + dx, Y: brickOy + vy + dy, Z: brickOz + vz + dz, Value: val}) {
+										return
+									}
+								}
 							}
 						}
 					}
 				}
 			}
 		}
-	}
+	})
 	return newMap
 }
 

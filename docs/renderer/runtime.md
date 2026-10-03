@@ -58,6 +58,13 @@ model dimensions still override asset-local bounds. Persistence workers stream
 nonzero captured brick payloads in their original order and restore captured
 cached bounds exactly; capture ownership and durable publication are unchanged.
 
+Shift/Center, resampling and disconnected-component reconstruction apply ordered
+edit streams to their original fresh destination maps. Source voxel/auxiliary
+data stays independent; material flags finalize before output bounds/publication.
+Traversal, sampling, component selection and captured bounds retain their rules.
+Resampling still returns the original source when its iteration limit rejects
+the request. These paths introduce no shared mutable payload or extra write list.
+
 ## Engine Stage Flow
 
 The renderer participates in three engine stages:

@@ -217,24 +217,28 @@ func (x *XBrickMap) Resample(scale float32) *XBrickMap {
 
 	invScale := 1.0 / scale
 
-	for gx := minX; gx <= maxX; gx++ {
-		for gy := minY; gy <= maxY; gy++ {
-			for gz := minZ; gz <= maxZ; gz++ {
-				// Nearest neighbor sampling with center alignment
-				// We project the center of the new voxel (gx+0.5) back to old space
-				oldX := int(math.Floor((float64(gx) + 0.5) * float64(invScale)))
-				oldY := int(math.Floor((float64(gy) + 0.5) * float64(invScale)))
-				oldZ := int(math.Floor((float64(gz) + 0.5) * float64(invScale)))
+	newMap.ApplyVoxelWrites(func(yield func(VoxelWrite) bool) {
+		for gx := minX; gx <= maxX; gx++ {
+			for gy := minY; gy <= maxY; gy++ {
+				for gz := minZ; gz <= maxZ; gz++ {
+					// Nearest neighbor sampling with center alignment
+					// We project the center of the new voxel (gx+0.5) back to old space
+					oldX := int(math.Floor((float64(gx) + 0.5) * float64(invScale)))
+					oldY := int(math.Floor((float64(gy) + 0.5) * float64(invScale)))
+					oldZ := int(math.Floor((float64(gz) + 0.5) * float64(invScale)))
 
-				found, val := x.GetVoxel(oldX, oldY, oldZ)
-				if found {
-					newMap.SetVoxel(gx, gy, gz, val)
-					voxelCount++
+					found, val := x.GetVoxel(oldX, oldY, oldZ)
+					if found {
+						if !yield(VoxelWrite{X: gx, Y: gy, Z: gz, Value: val}) {
+							return
+						}
+						voxelCount++
+					}
 				}
 			}
 		}
-	}
 
+	})
 	newMap.ComputeAABB()
 	fmt.Printf("Resample Done: Generated %d voxels. New AABB: %v - %v\n", voxelCount, newMap.CachedMin, newMap.CachedMax)
 	return newMap

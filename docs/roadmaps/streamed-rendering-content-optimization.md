@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5i and E1a–E1b complete. S1/S2/S3/P5/E1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5j and E1a–E1b complete. S1/S2/S3/P5/E1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -294,6 +294,14 @@ rasterization writes through E1b. Transforms, voxel-center predicates, sample
 order, add/subtract/material semantics, validation and warm reuse are preserved.
 See [composition contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse).
 Source sampling, transformed tests and cache-key work remain.
+
+#### P5j: Fresh derivative reconstruction
+
+Completed: Shift/Center, Resample and disconnected-component outputs batch writes
+into their original fresh maps. Source data, traversal, nearest-center sampling,
+connectivity outcomes, captured bounds, early rejection and dirty-state contracts
+are preserved. [Construction contract](../renderer/runtime.md#dense-voxel-construction).
+Selection/BFS and per-voxel addressing remain; no connectivity redesign.
 
 ## 5. Streaming changes
 
@@ -756,7 +764,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | E1a | `3c61953` | Synchronous dense Sphere/Cube material and normal-halo bookkeeping | [Edit contract](../renderer/editing.md#synchronous-primitive-edits) |
 | P5h | `27d73de` | Dense ordinary VOX asset and persistence-input reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
 | E1b | `2c5bc1b` | Ordered synchronous writes and built-in backing shell materialization | [Edit contract](../renderer/editing.md#ordered-edit-streams) |
-| P5i | This commit | Streamed cold authored and level-brush composite rasterization | [Composition contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
+| P5i | `80c0f25` | Streamed cold authored and level-brush composite rasterization | [Composition contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
+| P5j | This commit | Batched fresh shift/resample/disconnected-component reconstruction | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1860,6 +1869,30 @@ transform tests and cache-key work remain. No new visual path or ownership chang
 pixel parity/FPS not verified and no additional windowed check. Next: fresh
 shift/resample/disconnected-component reconstruction with unchanged selection.
 Unrelated changes preserved.
+
+### P5j: Fresh derivative reconstruction
+
+This commit batches only destination writes in Shift/Center, Resample and split
+outputs. Focused reconstruction/destruction checks, race, full engine and five
+consumer checks passed. Native Metal checks passed uniform/mixed component
+partition, negative shift, resampling, hidden readiness, isolated carve/reupload
+and allocation cleanup:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume . -run '^(TestP5j|TestSplit|TestXBrickMap_Resample|TestDestruction)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume . -run '^(TestP5j|TestSplit|TestXBrickMap_Resample|TestDestruction)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5j-smoke /tmp/gekko-p5j-smoke.go
+/tmp/gekko-p5j-smoke > /tmp/gekko-p5j-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-p5j-reconstruction-bench.go
+```
+
+Disposable Go 1.25.4 darwin/arm64 uniform reconstruction samples (32³ main block
+plus an 8³ disconnected block) measured Shift 16.84 to 4.56 ms, Resample(scale 1)
+17.11 to 5.42 ms and split 17.22 to 4.86 ms. Batch scratch increases allocations
+(217 to 248, 103 to 132, 571 to 613). Selection, BFS and per-voxel work remain;
+no pixel parity/FPS claim. Next: migrate point-value readers before any compact
+storage decision. Unrelated changes preserved.
 
 Consumer commands for these steps:
 
