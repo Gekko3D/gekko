@@ -246,16 +246,19 @@ func importedWorldAuxSampler(chunk *content.ImportedWorldChunkDef, chunkMaps map
 }
 
 func importedWorldChunkToXBrickMap(chunk *content.ImportedWorldChunkDef) *volume.XBrickMap {
-	xbm := volume.NewXBrickMap()
 	if chunk == nil {
-		return xbm
+		return volume.BuildXBrickMap(nil)
 	}
-	for _, voxel := range chunk.Voxels {
-		if voxel.Value == 0 {
-			continue
+	xbm := volume.BuildXBrickMap(func(yield func(volume.VoxelWrite) bool) {
+		for _, voxel := range chunk.Voxels {
+			if voxel.Value == 0 {
+				continue
+			}
+			if !yield(volume.VoxelWrite{X: voxel.X, Y: voxel.Y, Z: voxel.Z, Value: content.ImportedWorldVoxelMaterialValue(voxel)}) {
+				return
+			}
 		}
-		xbm.SetVoxel(voxel.X, voxel.Y, voxel.Z, content.ImportedWorldVoxelMaterialValue(voxel))
-	}
+	})
 	xbm.ClearDirty()
 	return xbm
 }

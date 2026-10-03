@@ -58,17 +58,19 @@ func VoxelObjectSnapshotFromXBrickMap(xbm *volume.XBrickMap) *content.VoxelObjec
 }
 
 func XBrickMapFromVoxelObjectSnapshot(def *content.VoxelObjectSnapshotDef) *volume.XBrickMap {
-	xbm := volume.NewXBrickMap()
-	if def == nil {
-		xbm.ClearDirty()
-		return xbm
-	}
-	for _, voxel := range def.Voxels {
-		if voxel.Value == 0 {
-			continue
+	xbm := volume.BuildXBrickMap(func(yield func(volume.VoxelWrite) bool) {
+		if def == nil {
+			return
 		}
-		xbm.SetVoxel(voxel.X, voxel.Y, voxel.Z, voxel.Value)
-	}
+		for _, voxel := range def.Voxels {
+			if voxel.Value == 0 {
+				continue
+			}
+			if !yield(volume.VoxelWrite{X: voxel.X, Y: voxel.Y, Z: voxel.Z, Value: voxel.Value}) {
+				return
+			}
+		}
+	})
 	xbm.ClearDirty()
 	return xbm
 }

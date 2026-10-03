@@ -46,6 +46,12 @@ builder. Source-zero records remain ignored, decoded records remain authoritativ
 and auxiliary normal records attach afterward through the existing copied path.
 Per-write halo bookkeeping and decoded voxel-record storage remain.
 
+Terrain columns, voxel-object snapshots and offline imported aux construction use
+the same dense builder. Terrain retains column order and its supplied solid
+value. Snapshot and aux converters keep source-zero filtering and their existing
+clean dirty-state publication; nil input retains each converter's prior behavior.
+The builder changes reconstruction work, not persisted content or normal encoding.
+
 ## Engine Stage Flow
 
 The renderer participates in three engine stages:

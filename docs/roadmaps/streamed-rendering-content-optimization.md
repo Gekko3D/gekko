@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c and P5a–P5f complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c and P5a–P5g complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -270,6 +270,14 @@ C1 remains after dense bulk work and compact ownership/format decisions. Current
 RLE decoding still allocates public voxel records; compression alone does not
 remove reconstruction or compact resident bricks. Further dense consumers can
 reuse this builder without changing loader authority or publication semantics.
+
+#### P5g: Shared dense reconstruction consumers
+
+Completed: terrain columns, voxel-object snapshots and offline imported aux
+construction stream through P5f's builder. Ordered content, zero filtering,
+revisions, bounds, source isolation, dirty-state publication and normal sidecars
+retain their contracts. No additional source list or cache owner is introduced.
+[Canonical contract](../renderer/runtime.md#dense-voxel-construction).
 
 ## 5. Streaming changes
 
@@ -632,6 +640,10 @@ criteria above remain unchanged.
   It writes minimal functionality tests and stops at a relevant RED result with
   production unchanged. Root reviews coverage and assumptions, then resumes the
   same agent to implement against the reviewed, frozen tests until GREEN.
+- For this plan's 2026-10-03 continuation, the user approved baseline-GREEN
+  parity coverage for pure optimizations of unchanged contracts. Review and
+  freeze coverage before implementation, then verify functionality and work or
+  performance evidence. RED remains required for new APIs or changed contracts.
 - Root reviews the final diff for missed behavior, ownership violations and
   compatibility. Iterate on concrete findings; do not require a second agent for
   routine application of an established pattern.
@@ -703,7 +715,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5d | `d149455` | Worker-prepared first terrain renderer copy with current validation | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
 | S2k | `752f92e` | Worker-prepared registered storage descriptions and cached standalone policy charge | [Cache ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 | P5e | `89eb69d` | Validated warm authored collapse reuse without repeated rasterization | [Asset contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
-| P5f | This commit | Ordered dense imported construction with one material finalization per brick | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
+| P5f | `da0b36c` | Ordered dense imported construction with one material finalization per brick | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
+| P5g | This commit | Shared dense terrain, snapshot and offline aux reconstruction | [Constructor contract](../renderer/runtime.md#dense-voxel-construction) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1682,9 +1695,35 @@ On Go 1.25.4 darwin/arm64, a disposable 32³ conversion sample measured uniform
 preparation samples, not frame-time/FPS claims; allocations increase from 92 to
 94 per map. Decoded records, per-write halos, registration copies and atomic
 commit units remain. Broader codec/compact ownership decisions remain open.
-Next dense consumers are terrain columns, voxel snapshots and offline imported
-aux construction. Their unchanged functionality yields baseline-GREEN parity
-coverage; align that case with the required RED workflow before implementation.
+The user subsequently approved baseline-GREEN parity coverage for the next pure
+optimization batches; the implementation workflow above records that exception.
+
+### P5g: Shared dense reconstruction consumers
+
+This commit applies the reviewed builder to terrain, snapshot and offline aux
+construction. Reviewed baseline-GREEN parity tests remain frozen; source content,
+revisions, clean-state publication and existing normals retain their contracts.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . ./content/derived -run '^(TestP5g|TestBuildImportedWorldChunkAux|TestEnsureImportedWorldAux|TestP5b|TestP5c|TestP5d|TestP5f|TestS4a|TestS4b)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5g-snapshot-smoke /tmp/gekko-p5c-smoke.go
+/tmp/gekko-p5g-snapshot-smoke > /tmp/gekko-p5g-snapshot-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5g-terrain-smoke /tmp/gekko-p5d-smoke.go
+/tmp/gekko-p5g-terrain-smoke > /tmp/gekko-p5g-terrain-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-p5g-build-bench.go
+```
+
+Engine root passed in 16.230s; all five consumer commands below passed. Native
+snapshot and terrain fixtures passed adoption/readiness, collision, isolated
+edits, durable reload and exact cleanup (22 and 14 frames). No pixel parity/FPS
+claim or concurrency change. Disposable Go 1.25.4 darwin/arm64 snapshot samples
+measured uniform 32³ reconstruction at 16.31 to 6.47 ms and mixed at 6.77 to
+6.53 ms; allocations increased from 94 to 96. Per-write halo work, decoded source
+records and atomic publication remain. Next bulk-edit slice keeps synchronous
+publication and existing GPU edit callbacks. Unrelated changes remain preserved.
 
 Consumer commands for these steps:
 
