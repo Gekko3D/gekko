@@ -92,54 +92,9 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		}
 	}
 
-	requiredSectors := m.SectorAlloc.Tail
-	requiredBricks := m.BrickAlloc.Tail * 64
-
-	// 1. Pre-scan: Count how many NEW allocations we need in this frame
-	// Only scan if any object has structural changes or is new.
-	needsScan := false
-	for _, obj := range scene.Objects {
-		if obj == nil || obj.XBrickMap == nil {
-			continue
-		}
-		_, exists := m.Allocations[obj.XBrickMap]
-		if !exists || obj.XBrickMap.StructureDirty {
-			needsScan = true
-			break
-		}
-	}
-
-	if needsScan {
-		newSectors := 0
-		seenMaps := make(map[*volume.XBrickMap]bool)
-		seenSectors := make(map[*volume.Sector]bool)
-		for _, obj := range scene.Objects {
-			if obj == nil {
-				continue
-			}
-			xbm := obj.XBrickMap
-			if xbm == nil || seenMaps[xbm] {
-				continue
-			}
-			seenMaps[xbm] = true
-			alloc := m.Allocations[xbm]
-			for sKey, sector := range xbm.Sectors {
-				if alloc == nil || alloc.Sectors[sKey] != sector {
-					if _, hasInfo := m.SectorToInfo[sector]; !hasInfo && !seenSectors[sector] {
-						seenSectors[sector] = true
-						newSectors++
-					}
-				}
-			}
-		}
-
-		// Update Tails if we have brand new allocations coming
-		requiredSectors = m.SectorAlloc.Tail + uint32(newSectors)
-		requiredBricks = m.BrickAlloc.Tail*64 + uint32(newSectors)*64
-	}
+	requiredSectors, requiredBricks := m.voxelAllocationRequirements(scene)
 
 	// Ensure all global buffers exist (even if empty) to avoid bind group panics.
-	// We use the calculated requirements if needsScan was true, otherwise current tail.
 	// Headroom: Reduced frequency of full-buffer reallocations by using larger buffers initially and geometric growth.
 	if m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, nil, wgpu.BufferUsageStorage, int(requiredSectors+512)*32) {
 		recreated = true
@@ -175,6 +130,46 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	m.evictRetainedVoxelMaps(activeMaps)
 
 	return recreated
+}
+
+// Plan capacity from structural inputs without assigning slots or changing maps.
+// Clean allocated maps retain their current capacity and need no sector walk.
+func (m *GpuBufferManager) voxelAllocationRequirements(scene *core.Scene) (requiredSectors, requiredBricks uint32) {
+	if m == nil {
+		return 0, 0
+	}
+	m.VoxelCapacityPlanningSectorVisitsLastUpdate = 0
+	requiredSectors, requiredBricks = m.SectorAlloc.Tail, m.BrickAlloc.Tail*64
+	if scene == nil {
+		return requiredSectors, requiredBricks
+	}
+	var newSectors uint32
+	seenMaps := make(map[*volume.XBrickMap]bool)
+	seenSectors := make(map[*volume.Sector]bool)
+	for _, obj := range scene.Objects {
+		if obj == nil || obj.XBrickMap == nil {
+			continue
+		}
+		xbm := obj.XBrickMap
+		alloc, exists := m.Allocations[xbm]
+		if exists && !xbm.StructureDirty {
+			continue
+		}
+		if seenMaps[xbm] {
+			continue
+		}
+		seenMaps[xbm] = true
+		for sKey, sector := range xbm.Sectors {
+			m.VoxelCapacityPlanningSectorVisitsLastUpdate++
+			if alloc == nil || alloc.Sectors[sKey] != sector {
+				if _, hasInfo := m.SectorToInfo[sector]; !hasInfo && !seenSectors[sector] {
+					seenSectors[sector] = true
+					newSectors++
+				}
+			}
+		}
+	}
+	return requiredSectors + newSectors, requiredBricks + newSectors*64
 }
 
 func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {

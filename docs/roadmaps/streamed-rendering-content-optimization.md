@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1g, S2a–S2h, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2h, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -189,6 +189,14 @@ approved 2026-10-03. Preserve default synchronous behavior; enabled managed
 runtimes admit whole placement units across frames and persist all partial edits.
 The bounded ready owner retains partial lifetime, exact persistence ownership
 and synchronous loading. One expensive placement/hook remains unbounded.
+
+#### S1h: Capacity planning for structural inputs
+
+Completed renderer batch: count new sector capacity only for new/structurally dirty
+maps. Preserve allocator-tail sizing, pointer deduplication and hidden uploads;
+clean resident geometry contributes no sector walk during another map's arrival.
+[Scope and verification](streamed-rendering-s1b.md#s1h-capacity-planning-for-structural-inputs).
+The arriving map's own structural work remains potentially large.
 
 ### S2. Bound caches and worker throughput by bytes
 
@@ -541,7 +549,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1g | `cd8f2b9` | Opt-in placement units with durable partial ownership | [Commit contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
 | S2f | `b973c62` | Direct unpinned prepared-cache eviction order | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 | S2g | `175c1ae` | Per-kind storage reference presence propagation | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
-| S2h | This commit | Direct decoded-cache candidates with preserved load recency | [Loader contract](../assets/runtime-assets.md#decoded-content-lifetime) |
+| S2h | `b84878b` | Direct decoded-cache candidates with preserved load recency | [Loader contract](../assets/runtime-assets.md#decoded-content-lifetime) |
+| S1h | This commit | Structural-input voxel capacity planning | [Renderer contract](../renderer/runtime.md#voxel-capacity-planning) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1278,7 +1287,7 @@ changes preserved; macOS warnings exited successfully.
 
 ### S2h: Direct decoded-cache eviction candidates
 
-Completed 2026-10-03 in this commit. Byte-pressure trim indexes only unpinned
+Commit `b84878b`, completed 2026-10-03. Byte-pressure trim indexes only unpinned
 entries; last load/hit recency survives final scope release and rejected-value
 release. Shared pins, Clear epochs, singleflight, pointer validity and byte policy
 remain. Selection avoids scanning pinned owners; heap maintenance is logarithmic
@@ -1298,6 +1307,31 @@ below passed. No source/readiness/collision change needed a new native check.
 Decode, graph estimation, explicit Clear and rare recency rebasing remain outside
 the pressure-selection bound. No FPS/process-memory ceiling. Existing tests and
 unrelated changes preserved; macOS warnings exited successfully.
+
+### S1h: Capacity planning for structural inputs
+
+2026-10-03, this commit. Capacity planning skips clean allocated maps' sectors,
+including during another map's arrival. Exact record requirements, pointer
+sharing, hidden uploads and buffer headroom remain. The diagnostic counts only
+sector entries actually examined. Root review also removed idle dedup writes
+for clean maps; frozen functionality tests and existing tests remain unchanged.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^(TestS1h|TestPrepareVoxelStructureDirtyState|TestVoxelUpload|TestVoxelObjectReady|TestS2d|TestS3u)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1h-smoke /tmp/gekko-s1h-smoke.go
+/tmp/gekko-s1h-smoke > /tmp/gekko-s1h-smoke.log 2>&1
+```
+
+Focused 0.955s, engine root 16.542s and all five consumer commands below passed.
+Native Metal smoke passed in 278ms: 512 resident sectors; a three-sector arrival
+visited three entries; replacement visited only its 32-sector map; a 600-sector
+arrival grew capacity; hidden readiness, idle zero visits and removal held.
+The disposable fixture checks native buffers/writes, not visual parity or FPS.
+Other scene scans and a large new/dirty map's own work remain. Unrelated changes
+were preserved; macOS module stat-cache warnings exited successfully.
 
 Consumer commands for these steps:
 

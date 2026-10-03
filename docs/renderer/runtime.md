@@ -474,6 +474,18 @@ Current transparency modes:
 - `VisibleObjects` drives main scene buffers and the camera-facing BVH.
 - `ShadowObjects` drives a broader shadow BVH so off-screen casters can still affect visible receivers.
 
+### Voxel capacity planning
+
+Before structural preparation, capacity planning walks sectors only for unique
+new maps or maps with `StructureDirty`. Clean allocated maps use existing
+allocator tails. Hidden upload candidates remain eligible. Required sector and
+brick records retain pointer deduplication, the fixed 64-record sector stride and
+existing buffer headroom; planning reserves no slots and changes no maps.
+
+`VoxelCapacityPlanningSectorVisitsLastUpdate` resets each update and counts
+sector entries inspected by this planning step. Other scene scans and the work
+within one new or dirty map remain.
+
 ### Normal neighbor preparation
 
 After structural dirty preparation, each voxel update snapshots original dirty

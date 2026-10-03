@@ -405,6 +405,29 @@ The full workflow, race, engine/consumer and native handoff checks passed; see t
 [parent delivery record](streamed-rendering-content-optimization.md#s1g-opt-in-resumable-placement-commits).
 Individual large-unit bounds remain later work; no hard elapsed-time guarantee.
 
+## S1h: Capacity planning for structural inputs
+
+Completed 2026-10-03. GPU buffer capacity planning enumerates sectors only for new maps or maps
+with `StructureDirty`, matching structural preparation's existing eligibility.
+A small arrival no longer causes every clean resident map's sector graph to be
+visited. Exact map/sector-pointer deduplication, allocator tails, required record
+arithmetic and buffer headroom remain. Hidden upload candidates stay eligible.
+This changes planning work within the existing manager, not allocation ownership.
+
+Files: `voxelrt/rt/gpu/manager_voxel.go`, manager diagnostics and focused GPU tests.
+The pure `voxelAllocationRequirements(scene)` seam returns required
+sector/brick records from current allocator tails plus eligible missing sectors.
+`VoxelCapacityPlanningSectorVisitsLastUpdate` counts sector entries visited by
+that planning invocation; clean allocated maps contribute zero. Preparation,
+normal halos, content limits and readiness remain in their current order.
+
+Confidence is High after independent code/architecture audit. No human choice,
+shader, format, collision or gameplay publication change. Frozen coverage protects
+many clean allocated maps with one arrival, same-count pointer replacement,
+shared map/sector pointers, nil inputs and hidden candidates. Focused GPU checks,
+full engine/consumer checks and a native GPU buffer/readiness smoke passed. One large
+new/dirty map's structural work and other scene scans remain unbounded.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

@@ -217,6 +217,8 @@ type GpuBufferManager struct {
 
 	VoxelNormalContextBuildCount             uint64
 	VoxelNormalContextObjectVisitsLastUpdate int
+	// Sector entries examined by the latest voxel capacity planning invocation.
+	VoxelCapacityPlanningSectorVisitsLastUpdate int
 
 	// G-Buffer Textures
 	GBufferDepth    *wgpu.Texture
