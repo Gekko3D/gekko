@@ -30,17 +30,19 @@ type streamedPreparedGeometryCache struct {
 }
 
 type streamedPreparedGeometryCacheEntry struct {
-	key             string
-	geometry        *volume.XBrickMap
-	preparedStorage *streamedGeometryStorageNode
-	assetStorage    *streamedGeometryStorageNode
-	asset           AssetId
-	assetServer     *AssetServer
-	refCount        int
-	voxelCount      int
-	unpinnedPrev    *streamedPreparedGeometryCacheEntry
-	unpinnedNext    *streamedPreparedGeometryCacheEntry
-	noWarm          bool
+	key                        string
+	geometry                   *volume.XBrickMap
+	preparedStorage            *streamedGeometryStorageNode
+	assetStorage               *streamedGeometryStorageNode
+	asset                      AssetId
+	assetServer                *AssetServer
+	refCount                   int
+	voxelCount                 int
+	unpinnedPrev               *streamedPreparedGeometryCacheEntry
+	unpinnedNext               *streamedPreparedGeometryCacheEntry
+	noWarm                     bool
+	preparedStandaloneBytes    int64
+	preparedStandaloneCaptured bool
 }
 
 type streamedPreparedGeometryBuild struct {
@@ -68,6 +70,7 @@ type streamedPreparedGeometryCacheStats struct {
 	OversizedBypasses       int
 	EvictionCandidateVisits int
 	StorageReferenceVisits  int
+	StorageCaptureVisits    int
 }
 
 func streamedPreparedGeometryCacheMaxEntries(configured int) int {
@@ -158,7 +161,7 @@ func (c *streamedPreparedGeometryCache) getOrBuild(key string, build func() *vol
 			c.stats.Hits++
 		} else {
 			entry := c.admitLocked(key, pending.geometry)
-			if streamedGeometryStorageCharge(entry.preparedStorage) > c.maxBytes {
+			if entry.preparedStandaloneCharge() > c.maxBytes {
 				c.stats.OversizedBypasses++
 				c.removeLocked(entry, false)
 			} else {
@@ -197,6 +200,16 @@ func (c *streamedPreparedGeometryCache) admitLocked(key string, geometry *volume
 	c.stats.Entries++
 	c.stats.Voxels += entry.voxelCount
 	return entry
+}
+
+// Used under c.mu only when standalone warm-retention policy needs this value.
+// Generic acquire-only paths keep their existing union traversal.
+func (entry *streamedPreparedGeometryCacheEntry) preparedStandaloneCharge() int64 {
+	if !entry.preparedStandaloneCaptured {
+		entry.preparedStandaloneBytes = streamedGeometryStorageCharge(entry.preparedStorage)
+		entry.preparedStandaloneCaptured = true
+	}
+	return entry.preparedStandaloneBytes
 }
 
 // acquireAsset, releaseAssetID, trim and close are engine-thread operations.
@@ -247,18 +260,35 @@ func (c *streamedPreparedGeometryCache) acquirePreparedAsset(assets *AssetServer
 		return entry.asset, true, false
 	}
 	var adopted bool
-	entry.asset, adopted = assets.adoptStreamedVoxelGeometry(registration, entry.geometry)
+	var descriptor *streamedGeometryStorageDescriptor
+	entry.asset, descriptor, adopted = assets.adoptStreamedVoxelGeometryWithStorage(registration, entry.geometry)
 	if !adopted {
 		entry.asset = assets.RegisterSharedVoxelGeometry(entry.geometry, "")
 	}
 	entry.assetServer = assets
 	registered, _ := assets.GetVoxelGeometry(entry.asset)
-	entry.assetStorage = c.storage.admit(registered.XBrickMap, streamedGeometryAsset)
+	entry.assetStorage = c.storage.installDescriptor(descriptor, registered.XBrickMap)
+	qualifiedDescriptor := entry.assetStorage != nil
+	if qualifiedDescriptor {
+		c.storage.adjust(entry.assetStorage, streamedGeometryAsset, 1)
+	} else {
+		entry.assetStorage = c.storage.admit(registered.XBrickMap, streamedGeometryAsset)
+	}
 	c.storage.adjust(entry.assetStorage, streamedGeometryPinned, 1)
 	c.assets[entry.asset] = entry
 	c.stats.AssetRegisters++
-	if c.enabled && streamedGeometryStorageCharge(entry.preparedStorage, entry.assetStorage) > c.maxBytes {
-		entry.noWarm = true
+	if c.enabled {
+		var standaloneBytes int64
+		if qualifiedDescriptor {
+			// Copy owns distinct map/sector/brick objects, so this exact path can
+			// add the two standalone charges. Generic/shared graphs need union.
+			standaloneBytes = runtimeContentChargeSum(entry.preparedStandaloneCharge(), descriptor.geometryBytes)
+		} else {
+			standaloneBytes = streamedGeometryStorageCharge(entry.preparedStorage, entry.assetStorage)
+		}
+		if standaloneBytes > c.maxBytes {
+			entry.noWarm = true
+		}
 	}
 	c.evictLocked(true)
 	return entry.asset, false, adopted
@@ -314,6 +344,7 @@ func (c *streamedPreparedGeometryCache) snapshot() streamedPreparedGeometryCache
 	defer c.mu.Unlock()
 	stats := c.stats
 	stats.StorageReferenceVisits = c.storage.referenceVisits
+	stats.StorageCaptureVisits = c.storage.captureVisits
 	stats.Bytes = c.storage.bytes
 	stats.PreparedBytes = c.storage.preparedBytes
 	stats.AssetBytes = c.storage.assetBytes

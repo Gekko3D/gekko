@@ -567,6 +567,10 @@ Prepared geometry cache update, S2a:
   and bricks count once across cache keys. Registered copies count separately.
   Charges are captured at admission. Go map bucket slack, allocator overhead,
   cache bookkeeping and later renderer dirty-map churn are excluded.
+  Eligible full/proxy workers carry finished registration storage descriptions
+  into the cache; pending admission charges their retained metadata separately.
+  `PreparedGeometryCacheStorageCaptureVisits` reports cache node description work.
+  See [prepared geometry ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime).
 - Live full/proxy users pin their assets, including hidden fallbacks and CPU
   collision users. Their bytes may exceed the ceiling; metrics expose total,
   prepared, asset-copy, pinned, maximum and over-budget bytes. Eviction cannot

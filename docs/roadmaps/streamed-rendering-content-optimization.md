@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2j, S3a–S3v, S4a–S4c and P5a–P5d complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c and P5a–P5d complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -310,6 +310,16 @@ Pressure selects victims directly, avoiding another owner scan and full inactive
 sort. Complete owner/instance pin scans remain. Use separate tests/implementation
 and independent PRE/POST reviews; public candidate visits protect the work bound.
 [Scope](streamed-rendering-s2a.md#s2j-direct-inactive-cpu-material-table-candidates).
+
+#### S2k: Worker-prepared registered storage descriptions
+
+Completed: retain eligible full/proxy worker descriptions of fresh registration copies and
+transfer them into the existing physical cache ledger. Charge pending metadata,
+preserve actual-object sharing/pins and use cached standalone charges only for
+qualified distinct copies. Generic admissions keep existing traversal. This removes
+main-thread node recapture/allocation and repeated retention union calculation;
+identity installation and first/last ownership walks remain.
+[Ownership decision](streamed-rendering-s2a.md#s2k-worker-prepared-registered-storage-descriptions).
 
 ### S3. Incremental selection and scene gathering
 
@@ -652,7 +662,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2i | `7c0f5fa` | Direct inactive retained-GPU eviction candidates | [Renderer contract](../renderer/runtime.md#retained-gpu-geometry-budget) |
 | S3v | `0289f9f` | One-pass saved object override selection per chunk job | [Streaming contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
 | S2j | `4f2164e` | Direct inactive CPU material-table eviction candidates | [Renderer contract](../renderer/runtime.md#cpu-material-table-cache) |
-| P5d | This commit | Worker-prepared first terrain renderer copy with current validation | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
+| P5d | `d149455` | Worker-prepared first terrain renderer copy with current validation | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
+| S2k | This commit | Worker-prepared registered storage descriptions and cached standalone policy charge | [Cache ownership](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1536,7 +1547,7 @@ changes preserved; macOS warnings exited successfully.
 
 ### P5d: Worker-prepared first terrain renderer copy
 
-This commit transfers eligible managed terrain renderer copies through an exact
+`d149455` transfers eligible managed terrain renderer copies through an exact
 asset-owned single-use candidate. Current content/scope validation preserves raw
 public edits, object isolation and ordinary fallbacks. Pending admission charges
 the third map; asset statistics retain unused candidate charge until admission
@@ -1559,6 +1570,29 @@ terrain snapshot reload and exact owned cleanup (16 frames). Surface editing use
 the existing heightfield snapshot contract. One full main-thread validation read,
 backing setup, extra candidate residency and other atomic work remain; no measured
 frame-time claim. Frozen tests and unrelated changes preserved.
+
+### S2k: Worker-prepared registered storage descriptions
+
+This commit transfers exact fresh full/proxy registration descriptions into the
+existing physical ledger, avoiding main-thread node recapture/allocation. Lazy
+standalone charge reuse skips retention union work only for qualified independent
+copies. Pending metadata, interior aliases, attribution, pins and terminal
+cleanup retain their owners. [Canonical contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime).
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS2k|TestS2a|TestS2f|TestS2g|TestS2b|TestS2e|TestP5a|TestP5b|TestP5c|TestP5d|TestS1g)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS2k|TestS2a|TestS2f|TestS2g|TestS2b|TestS2e|TestP5a|TestP5b|TestP5c|TestP5d|TestS1g)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused 4.236s, race 5.877s, engine root 16.491s and all five consumer commands
+below passed. Frozen tests and unrelated changes preserved. GPU admission and
+source lifetime are unchanged; no new native smoke needed. Flat identity loops,
+first/last reference walks and generic graph admission remain. Descriptor metadata
+adds pending storage; cache bookkeeping remains excluded from cache charge.
+No measured frame-time claim; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 

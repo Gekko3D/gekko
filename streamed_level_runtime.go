@@ -190,6 +190,7 @@ type StreamedLevelRuntimeMetrics struct {
 
 	PreparedGeometryCacheEvictionCandidateVisits int
 	PreparedGeometryCacheStorageReferenceVisits  int
+	PreparedGeometryCacheStorageCaptureVisits    int
 	DecodedContentCacheEvictionCandidateVisits   int
 	GPURetainedVoxelMapEvictionCandidateVisits   uint64
 
@@ -1773,6 +1774,7 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 	state.Metrics.PreparedGeometryCacheEvictions = cacheStats.Evictions
 	state.Metrics.PreparedGeometryCacheEvictionCandidateVisits = cacheStats.EvictionCandidateVisits
 	state.Metrics.PreparedGeometryCacheStorageReferenceVisits = cacheStats.StorageReferenceVisits
+	state.Metrics.PreparedGeometryCacheStorageCaptureVisits = cacheStats.StorageCaptureVisits
 	state.Metrics.PreparedGeometryAssetRegisters = cacheStats.AssetRegisters
 	state.Metrics.PreparedGeometryAssetReuses = cacheStats.AssetReuses
 	state.Metrics.LoadedChunkCount = len(state.LoadedChunks)
@@ -2207,7 +2209,7 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 		return prepareImportedWorldChunkGeometry(chunk, result.Aux)
 	})
 	if !streamedPreparationCancelled(job.prepareCancel) {
-		result.registration = prepareStreamedGeometryRegistration(result.PreparedGeometry)
+		result.registration = prepareCachedStreamedGeometryRegistration(result.PreparedGeometry)
 	}
 	return result
 }
@@ -2323,7 +2325,7 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		}
 	}
 	if !job.HasImportedWorldBacking && !streamedPreparationCancelled(job.prepareCancel) {
-		result.registration = prepareStreamedGeometryRegistration(result.PreparedImportedWorldGeometry)
+		result.registration = prepareCachedStreamedGeometryRegistration(result.PreparedImportedWorldGeometry)
 	}
 	return result
 }

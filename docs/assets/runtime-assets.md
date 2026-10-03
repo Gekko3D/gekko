@@ -173,8 +173,21 @@ unused handles; the cache's current source remains authoritative.
 S2b pending admission charges the extra copy until consumption or drain, including
 deferred/cancelled results. `PreparedGeometryAssetAdoptions` counts successful
 worker-payload registrations; ordinary registrations and warm reuse do not
-increment it. Cold cache ledger capture and first/last ownership traversal remain
-main-thread work.
+increment it. Eligible full/proxy workers retain the finished registration copy's
+storage description: actual object identities, child edges and standalone charge.
+Pending admission also charges retained descriptor metadata. Single-use adoption
+passes the description directly into the existing cache ledger before exposing
+the asset ID; cancellation, unused handles and warm reuse release it.
+
+The cache checks every object identity before installing a fresh description.
+Other admissions keep ordinary capture. Later shared aliases find those same
+physical nodes and retain existing attribution/pin rules. Prepared standalone
+charges are cached on first policy use; only qualified distinct registration
+copies can use their sum for retention policy. Generic shared graphs retain union
+calculation. `PreparedGeometryCacheStorageCaptureVisits` counts new descriptions
+created by the cache ledger, including worker source admission. Prebuilt
+installation and reads do not advance it. Flat identity installation and
+first/last ownership traversal remain main-thread work.
 
 Acquired runtime users pin that copy. Warm entries share an LRU byte/entry policy; live users may
 exceed the byte ceiling and expose pressure metrics. Oversized or disabled warm

@@ -24,6 +24,7 @@ type streamedGeometryStorageLedger struct {
 	nodes                                         map[any]*streamedGeometryStorageNode
 	bytes, preparedBytes, assetBytes, pinnedBytes int64
 	referenceVisits                               int
+	captureVisits                                 int
 }
 
 type streamedGeometryStorageNode struct {
@@ -31,6 +32,56 @@ type streamedGeometryStorageNode struct {
 	bytes    int64
 	refs     [3]int
 	children []*streamedGeometryStorageNode
+}
+
+// Sealed while the independent registration map is private to its worker.
+// Nodes describe actual storage identities with zero references; the temporary
+// builder identity map is discarded before the descriptor is published.
+type streamedGeometryStorageDescriptor struct {
+	root          *streamedGeometryStorageNode
+	nodes         []*streamedGeometryStorageNode
+	geometryBytes int64
+	metadataBytes int64
+}
+
+func captureStreamedGeometryStorageDescriptor(geometry *volume.XBrickMap) *streamedGeometryStorageDescriptor {
+	if geometry == nil {
+		return nil
+	}
+	builder := streamedGeometryStorageLedger{nodes: make(map[any]*streamedGeometryStorageNode)}
+	descriptor := &streamedGeometryStorageDescriptor{root: builder.mapNode(geometry)}
+	descriptor.nodes = make([]*streamedGeometryStorageNode, 0, len(builder.nodes))
+	for _, node := range builder.nodes {
+		descriptor.nodes = append(descriptor.nodes, node)
+		descriptor.geometryBytes = runtimeContentChargeSum(descriptor.geometryBytes, node.bytes)
+		descriptor.metadataBytes = runtimeContentChargeSum(descriptor.metadataBytes,
+			int64(unsafe.Sizeof(*node)),
+			runtimeContentChargeProduct(int64(cap(node.children)), int64(unsafe.Sizeof(node))))
+	}
+	descriptor.metadataBytes = runtimeContentChargeSum(descriptor.metadataBytes,
+		int64(unsafe.Sizeof(*descriptor)),
+		runtimeContentChargeProduct(int64(cap(descriptor.nodes)), int64(unsafe.Sizeof(descriptor.root))))
+	return descriptor
+}
+
+// Caller holds the cache mutex. Validate the entire descriptor before inserting
+// any identity, so conflicts fall back to the existing union-admission path.
+func (l *streamedGeometryStorageLedger) installDescriptor(descriptor *streamedGeometryStorageDescriptor, geometry *volume.XBrickMap) *streamedGeometryStorageNode {
+	if descriptor == nil || descriptor.root == nil || descriptor.root.object != geometry {
+		return nil
+	}
+	for _, node := range descriptor.nodes {
+		if node == nil || node.refs != ([3]int{}) || l.nodes[node.object] != nil {
+			return nil
+		}
+	}
+	if l.nodes == nil {
+		l.nodes = make(map[any]*streamedGeometryStorageNode)
+	}
+	for _, node := range descriptor.nodes {
+		l.nodes[node.object] = node
+	}
+	return descriptor.root
 }
 
 func (l *streamedGeometryStorageLedger) admit(geometry *volume.XBrickMap, kind int) *streamedGeometryStorageNode {
@@ -56,6 +107,7 @@ func (l *streamedGeometryStorageLedger) mapNode(geometry *volume.XBrickMap) *str
 		int64(len(geometry.DirtyBricks))*int64(unsafe.Sizeof([6]int{})+unsafe.Sizeof(false))
 	node := &streamedGeometryStorageNode{object: geometry, bytes: charge}
 	l.nodes[geometry] = node
+	l.captureVisits++
 	for _, sector := range geometry.Sectors {
 		if sector != nil {
 			node.children = append(node.children, l.sectorNode(sector))
@@ -73,6 +125,7 @@ func (l *streamedGeometryStorageLedger) sectorNode(sector *volume.Sector) *strea
 		bytes:  int64(unsafe.Sizeof(*sector)) + int64(cap(sector.PackedBricks))*int64(unsafe.Sizeof((*volume.Brick)(nil))),
 	}
 	l.nodes[sector] = node
+	l.captureVisits++
 	for _, brick := range sector.PackedBricks {
 		if brick != nil {
 			node.children = append(node.children, l.brickNode(brick))
@@ -88,6 +141,7 @@ func (l *streamedGeometryStorageLedger) brickNode(brick *volume.Brick) *streamed
 	// Brick embeds its dense CPU payload even when GPU flags mark it uniform.
 	node := &streamedGeometryStorageNode{object: brick, bytes: int64(unsafe.Sizeof(*brick)) + int64(cap(brick.PrecomputedAux))}
 	l.nodes[brick] = node
+	l.captureVisits++
 	return node
 }
 

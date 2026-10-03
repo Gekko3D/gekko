@@ -141,12 +141,18 @@ func (server *AssetServer) RegisterSharedVoxelGeometry(xbm *volume.XBrickMap, so
 // Engine-thread adoption consumes only a worker-owned independent copy.
 // Public registration methods keep their defensive-copy contract.
 func (server *AssetServer) adoptStreamedVoxelGeometry(registration *streamedGeometryRegistration, source *volume.XBrickMap) (AssetId, bool) {
+	id, _, adopted := server.adoptStreamedVoxelGeometryWithStorage(registration, source)
+	return id, adopted
+}
+
+// Return private storage directly to the cache before the new asset ID escapes.
+func (server *AssetServer) adoptStreamedVoxelGeometryWithStorage(registration *streamedGeometryRegistration, source *volume.XBrickMap) (AssetId, *streamedGeometryStorageDescriptor, bool) {
 	if server == nil {
-		return AssetId{}, false
+		return AssetId{}, nil, false
 	}
-	asset, rendererCopy, rendererBytes, taken := registration.take(source)
+	asset, rendererCopy, rendererBytes, descriptor, taken := registration.take(source)
 	if !taken {
-		return AssetId{}, false
+		return AssetId{}, nil, false
 	}
 	server.ensureVoxelStorage()
 	id := makeAssetId()
@@ -163,7 +169,7 @@ func (server *AssetServer) adoptStreamedVoxelGeometry(registration *streamedGeom
 		server.preparedVoxelRendererCopyStats.Bytes += rendererBytes
 	}
 	server.mu.Unlock()
-	return id, true
+	return id, descriptor, true
 }
 
 // PreparedVoxelRendererCopyStats reports asset-owned first-admission candidates.

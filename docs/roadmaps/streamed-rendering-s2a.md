@@ -334,3 +334,35 @@ geometry policy. Freeze minimal real owner coverage for repeated shared roots,
 shared interior nodes/duplicate edges, exact attribution and last-owner cleanup;
 reuse existing S2a alias, byte-pressure and live-lease coverage. Use the full
 separate-agent workflow, focused race and engine/consumer boundary checks.
+
+## S2k: Worker-prepared registered storage descriptions
+
+Status: implemented 2026-10-03; focused/race, full engine and five consumer checks
+passed. See the [delivery record](streamed-rendering-content-optimization.md#s2k-worker-prepared-registered-storage-descriptions-1).
+
+Eligible imported-full/proxy workers retain the exact storage description of
+their finished independent registration copy. A private descriptor carries its
+root, unique actual-object nodes, child edges and standalone charge. Pending
+admission additionally charges descriptor/node/list/child capacities, excluding
+geometry already charged and the discarded temporary builder map.
+
+The registration mutex owns the descriptor through single-use take or release.
+Engine-thread adoption returns it directly to the cache before the public asset
+ID escapes. Under the cache mutex, verify the actual registered root and every
+object identity before installing any node. Conflict/ineligible paths keep
+ordinary admission. All descriptor nodes start without references; existing
+asset/pin presence propagation and cleanup establish ownership.
+
+Cache each prepared entry's standalone charge on its first policy use. Generic
+acquire-only paths must not add a standalone traversal before their union check.
+Only a successful fresh-copy descriptor installation permits adding prepared and
+asset standalone charges for retention policy; generic/shared graphs keep exact union calculation.
+Later aliases use the existing physical identity table and attribution rules.
+Terrain/snapshot registrations do not retain descriptors.
+
+`PreparedGeometryCacheStorageCaptureVisits` counts new node descriptions created
+by the cache ledger. Prebuilt installation and reads do not advance it. Flat
+identity installation and first/last reference traversal remain main-thread work.
+This is an established-owner optimization with high confidence after independent
+inspection. Use separate test/implementation agents and independent PRE/POST
+reviews, focused race and engine/consumer verification; GPU behavior is unchanged.
