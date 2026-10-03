@@ -7,10 +7,17 @@ import (
 	"strings"
 
 	"github.com/gekko3d/gekko/content"
+	"github.com/gekko3d/gekko/content/voxelcodec"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
 func EnsureImportedWorldAuxSidecarsForManifest(manifestPath string) error {
+	return EnsureImportedWorldAuxSidecarsForManifestWithCodec(manifestPath, nil)
+}
+
+// EnsureImportedWorldAuxSidecarsForManifestWithCodec borrows the fixed compiled
+// profile. Validated embedded normals satisfy the requirement without sidecars.
+func EnsureImportedWorldAuxSidecarsForManifestWithCodec(manifestPath string, codec *voxelcodec.Codec) error {
 	manifestPath = strings.TrimSpace(manifestPath)
 	if manifestPath == "" {
 		return fmt.Errorf("imported-world manifest path is empty")
@@ -23,12 +30,13 @@ func EnsureImportedWorldAuxSidecarsForManifest(manifestPath string) error {
 		return nil
 	}
 
+	observedEmbedded, changed := false, false
 	chunksByCoord := make(map[content.TerrainChunkCoordDef]*content.ImportedWorldChunkDef, len(manifest.Entries))
 	for _, entry := range manifest.Entries {
 		if entry.NonEmptyVoxelCount == 0 {
 			continue
 		}
-		chunk, err := content.LoadImportedWorldChunk(content.ResolveImportedWorldChunkPath(entry, manifestPath))
+		chunk, err := content.LoadImportedWorldChunkWithCodec(content.ResolveImportedWorldChunkPath(entry, manifestPath), codec)
 		if err != nil {
 			return err
 		}
@@ -39,6 +47,10 @@ func EnsureImportedWorldAuxSidecarsForManifest(manifestPath string) error {
 		entry := &manifest.Entries[i]
 		chunk := chunksByCoord[entry.Coord]
 		if chunk == nil || chunk.NonEmptyVoxelCount == 0 {
+			continue
+		}
+		if chunk.EmbeddedAux != nil {
+			observedEmbedded = true
 			continue
 		}
 		sourceHash := firstNonEmptyString(entry.PayloadHash, chunk.PayloadHash)
@@ -55,6 +67,7 @@ func EnsureImportedWorldAuxSidecarsForManifest(manifestPath string) error {
 			return err
 		}
 		entry.Aux = content.ImportedWorldChunkAuxRef(auxPath, aux)
+		changed = true
 	}
 
 	for i := range manifest.Sectors {
@@ -67,9 +80,13 @@ func EnsureImportedWorldAuxSidecarsForManifest(manifestPath string) error {
 			if importedWorldAuxRefCurrent(manifestPath, lod.Aux, lod.PayloadHash, lod.PayloadSizeBytes) {
 				continue
 			}
-			chunk, err := content.LoadImportedWorldChunk(proxyPath)
+			chunk, err := content.LoadImportedWorldChunkWithCodec(proxyPath, codec)
 			if err != nil {
 				return err
+			}
+			if chunk.EmbeddedAux != nil {
+				observedEmbedded = true
+				continue
 			}
 			sourceHash := firstNonEmptyString(lod.PayloadHash, chunk.PayloadHash)
 			sourceSize := firstPositiveInt(lod.PayloadSizeBytes, chunk.PayloadSizeBytes)
@@ -82,7 +99,11 @@ func EnsureImportedWorldAuxSidecarsForManifest(manifestPath string) error {
 				return err
 			}
 			lod.Aux = content.ImportedWorldChunkAuxRef(auxPath, aux)
+			changed = true
 		}
+	}
+	if observedEmbedded && !changed {
+		return nil
 	}
 	return content.SaveImportedWorld(manifestPath, manifest)
 }

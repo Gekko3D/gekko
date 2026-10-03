@@ -780,12 +780,13 @@ This workflow does not independently authorize tests, delegation or commits.
 | P1b | `df6896c` | Opt-in compact private prepared sources with current dense authority | [Ownership design](streamed-rendering-p1b.md) |
 | C1a | `2492a3f` | Lossless bounded zstd frames and opt-in compiled imported chunks | [Compiled contract](../content/compiled-voxels.md) |
 | C1b | `5b69193` | Fixed borrowed compiled-chunk codec profile per decoded cache owner | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
-| C1c | This commit | Validated embedded fitted normals with separate geometry identity | [Compiled contract](../content/compiled-voxels.md#imported-embedded-normals) |
+| C1c | `1a67174` | Validated embedded fitted normals with separate geometry identity | [Compiled contract](../content/compiled-voxels.md#imported-embedded-normals) |
+| C1d | This commit | Optional compiler embedding, neighborhood reuse and borrowed-profile HL1 export | [Compiler contract](../content/compiled-voxels.md#imported-compiler-emission) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: C1 compiler emission with embedded normals and neighborhood reuse.
-Runtime dictionary profiles and imported embedding are complete.
+Imported C1 frames, runtime profiles, embedding and compiler emission/reuse are
+complete. Next delivery gate: P1/E2 public ownership and tracked-edit scope.
 On 2026-10-03,
 the user approved optional layers/dictionaries and broader compiled assets and
 region-pack follow-ups. The [C1 design](streamed-rendering-c1.md) specifies a new
@@ -2085,7 +2086,40 @@ A synthetic mixed 32³ fixture with 64 fitted-normal records occupied 235,225
 bytes as RLE plus aux sidecar versus 2,092 bytes embedded; this is not corpus,
 decode-speed, pixel/FPS or RSS evidence. Defaults remain legacy. Editor full-test
 baseline remains as recorded in P1a; editor build passes. Existing tests and
-unrelated changes remain. Next: compiler emission/neighborhood reuse, then C3.
+unrelated changes remain. Compiler emission/neighborhood reuse follows; broader
+P1/E2 ownership precedes later C3 delivery.
+
+### C1d: Compiler embedded-normal emission
+
+Common emission and HL1 export optionally write one compiled frame per full/proxy
+chunk with fitted normals. Geometry identities select actual prior reuse;
+changed/deleted/moved neighbors rebake full normals, proxies retain local fitting.
+Borrowed profiles reach saves, prior reads and generated-level checks. Equivalent
+emissions and unchanged embedded checks avoid manifest rewrites. Legacy defaults,
+sidecars, fitting and tests remain; incompatible options and unsupported schemas
+fail before embedded output. Contract: [compiler emission](../content/compiled-voxels.md#imported-compiler-emission).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./importers/common ./importers/hl1 ./content/derived ./cmd/hl1import -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./importers/common ./importers/hl1 ./content/derived ./cmd/hl1import -run '^(TestC1d|TestSaveImportedWorldEmission|TestEnsureImportedWorldAux|TestBuildImportedWorldChunkAux|TestSaveGeneratedLevel|TestBuildGeneratedLevel|TestSaveDebug|TestBuildDebug|TestApplyHL1ExportProfile)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-c1d-smoke /tmp/gekko-c1d-smoke.go
+/tmp/gekko-c1d-smoke > /tmp/gekko-c1d-smoke.log 2>&1
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-c1d-edges.go
+```
+
+Engine sweep passed (root 16.840 s); the five consumer commands below passed.
+Native emitted full/proxy checks passed in 12 frames (304 ms), covering exact
+normal bytes, readiness, collision snapshot presence, isolated carve/reupload
+and terminal cleanup. Private prepared/asset policy bytes were 22,992/30,528.
+The disposable probe covered omitted counts, synthesized sector counts, empty
+geometry, nonembedded borrowed profiles, legacy closed-profile compatibility,
+schema rejection and unchanged manifests. No pixel/FPS/RSS or corpus claim.
+Editor full-test baseline remains as recorded in P1a. Existing tests and unrelated
+changes remain. Next requires the managed-edit/public-exposure ownership choice;
+compiled assets remain approved, while C2 retains its measured-scale/design gate.
 
 Consumer commands for these steps:
 

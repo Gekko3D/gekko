@@ -1,7 +1,8 @@
 # C1: Lossless compiled voxel frames
 
-Status: C1a, C1b and C1c complete. Compiler emission and neighborhood reuse are
-next. The user approved the optional C1
+Status: C1a–C1d complete for imported chunks, runtime profiles, embedded normals
+and compiler emission/reuse. Delta and compiled-asset integration follow their
+P1/E2 and C3 ownership scopes. The user approved the optional C1
 layers/dictionaries and broader compiled-asset/region-pack follow-ups on 2026-10-03.
 Follow the parent roadmap's dependencies; C2 retains its measured-scale gate.
 
@@ -96,6 +97,56 @@ This is the long-term compiled-content path. A whole-level compressed stream
 would prevent bounded range loading; replacing old kinds would break migration
 compatibility. One independently bounded frame per chunk/section best matches
 the island page forest and avoids introducing another regional page index.
+
+### C1d: Compiler emission and normal reuse
+
+Extend `importers/common.ImportedWorldSaveOptions` with `EmbedNormals bool` and
+`ChunkCodec *voxelcodec.Codec`. Embedding requires the explicit compiled kind;
+reject incompatible options before writing content. Nil codec keeps the current
+bounded dictionary-free profile. Borrow the supplied codec through all saves,
+previous-frame reads and generated-level checks; never close it. Legacy saves
+ignore the profile and retain their defaults, channels, sidecars and statistics.
+
+For embedded emission, compute the geometry projection for every current full
+chunk before writing any of them. Load previous frames with the same profile
+and compare geometry identities, not final-frame identities, dictionary bytes
+or file-write results. A missing/unreadable previous frame requires conservative
+rebaking. Mark deleted or moved prior coordinates changed as well. Reuse previous
+validated embedded records only when that chunk's geometry and all immediate
+neighbor geometry are unchanged. Otherwise use the existing neighbor-aware
+fitter. Preserve proxy fitting's local-only sampling and reuse it by geometry
+identity. Indexed neighborhood checks bound selection work by 27 lookups per
+chunk; source fitting itself remains potentially large.
+
+Save each final frame once, publishing final hash/size/kind and clearing its
+sidecar reference. Existing sidecar files are not deleted. Fresh equivalent
+emissions retain frame bytes and file times; a normal-only neighbor change may
+change the final frame while its geometry projection remains stable. Existing
+`ChunksWritten/Skipped` and proxy equivalents count final frame writes;
+`ChunkAuxReused` and `ProxyAuxReused` count actual embedded reuse too. Sidecar
+write/skip counters remain zero for embedded output. Rebuilding equivalent
+normals after an unreadable old dictionary is safe; automatic profile selection,
+distribution and dictionary training remain separate.
+
+Add `EnsureImportedWorldAuxSidecarsForManifestWithCodec(path, codec)`; the old
+function delegates with nil. Validated embedded full/proxy records satisfy the
+normal requirement without creating sidecars. Geometry-only chunks retain
+existing sidecar backfill and fitting. Compiled entries requiring inspection
+must use the supplied decoder; preserve legacy valid-reference fast paths.
+
+Carry `EmbedNormals` and `ChunkCodec` through HL1 `ImportOptions` and debug-world
+results; carry the codec through generated-level results and aux ensure. Add
+`-embed-normals` and include the compiled kind in CLI help. Rust interoperability
+still selects JSON; reject embedding with that profile. No authored manifest,
+runtime loader, cache, normal ABI, fitting, collision or navigation change.
+
+Scope: common emission, derived aux ensure, HL1 option/result/save plumbing,
+CLI flags/help and owning docs. Separate tests/implementation and independent
+PRE/POST reviews cover emitted full/proxy geometry and normal parity, fresh no-op
+reuse, changed/deleted neighbors versus distant chunks, borrowed dictionaries,
+generated-level no-sidecar checks and incompatible-option errors. Run focused
+and race checks, engine/consumer boundary checks and native emitted full/proxy
+readiness/edit/cleanup checks. No copyrighted fixtures or pixel/FPS claim.
 
 ## Contract
 

@@ -454,8 +454,8 @@ runtime material palette identity. When absent, runtime falls back to `Value`.
 This lets imported worlds keep color-baked voxels while still rendering special
 materials such as glass with transparency.
 
-Implemented compact payload support keeps JSON available for fixtures and
-debugging while allowing imported maps to use a binary RLE chunk payload:
+Compact payload support keeps JSON available for fixtures and debugging while
+allowing imported maps to use binary chunks:
 
 - Keep `.gkchunk` extension.
 - `sparse_json_v1` is the readable fallback/debug payload.
@@ -464,6 +464,8 @@ debugging while allowing imported maps to use a binary RLE chunk payload:
 - `dense_rle_material_binary_v1` stores dense linear runs of
   `(value, material_value)` pairs when any chunk voxel has explicit runtime
   material identity.
+- `brick_zstd_binary_v1` selects independent checksummed compiled frames with
+  optional embedded fitted normals; see [compiled frames](compiled-voxels.md).
 - `payload_kind`, `payload_hash`, and `payload_size_bytes` are recorded where
   available.
 - Keep a debug dump/report path so failures remain inspectable.
@@ -945,7 +947,7 @@ Both paths use the same importer package and generate the same content shape:
 - `<map>.gklevel`
 - `worlds/<map>.gkworld`
 - `worlds/chunks/*.gkchunk`
-- `worlds/aux/*.gkaux`
+- `worlds/aux/*.gkaux` unless compiled output embeds fitted normals
 - `worlds/<map>_import_report.json`
 - generated helper `.gkasset` files for imported moving brush visuals
 - optional `hl1_assets/<map>/assets.gkassetlibrary` and
@@ -955,12 +957,19 @@ The generated `.gklevel` is the file to open or run. It references the base
 world plus imported lights, water, ladders, moving brushes, use triggers, and
 player spawn metadata.
 
-Generated level saving also ensures the referenced base-world manifest has
-derived normal/aux sidecars before the `.gklevel` is written. Fresh imports emit
-those sidecars during world save; if a generated level points at an older
-manifest without aux refs, the level-save path backfills `worlds/aux/*.gkaux`
-and updates the `.gkworld` manifest. Runtime still falls back to live normal
-baking when a sidecar is missing or stale.
+Generated level saving ensures fitted normals before writing `.gklevel`.
+Fresh imports normally emit sidecars during world save; older geometry-only
+manifests receive `worlds/aux/*.gkaux` backfill and updated references. Validated
+embedded normals satisfy this check without sidecars. Runtime retains live
+normal fitting when no valid stored normals exist.
+
+CLI `-chunk-payload brick_zstd_binary_v1 -embed-normals` selects compiled frames
+with embedded full/proxy normals. Defaults remain unchanged. The Rust interop
+profile requires JSON and rejects embedding. Package callers may set
+`ImportOptions.ChunkCodec`; debug-world and generated-level results borrow that
+profile through saving and normal checks, without closing it. The CLI does not
+select or distribute dictionaries. See [compiled emission](compiled-voxels.md#imported-compiler-emission)
+for neighborhood reuse and compatibility.
 
 ### Editor Import
 

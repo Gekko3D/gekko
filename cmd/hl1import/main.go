@@ -39,7 +39,8 @@ func main() {
 	flag.StringVar(&opts.AssetLibraryPath, "asset-library", "", "central .gkassetlibrary path; defaults to the legacy per-map catalog")
 	flag.IntVar(&opts.ChunkSize, "chunk-size", hl1.DefaultImportedWorldChunkSize, "imported-world chunk size")
 	opts.ChunkPayloadKind = hl1.DefaultChunkPayloadKind
-	flag.StringVar(&opts.ChunkPayloadKind, "chunk-payload", hl1.DefaultChunkPayloadKind, "imported-world chunk payload: sparse_json_v1, dense_rle_binary_v1, or dense_rle_material_binary_v1")
+	flag.StringVar(&opts.ChunkPayloadKind, "chunk-payload", hl1.DefaultChunkPayloadKind, "imported-world chunk payload: sparse_json_v1, dense_rle_binary_v1, dense_rle_material_binary_v1, or brick_zstd_binary_v1")
+	flag.BoolVar(&opts.EmbedNormals, "embed-normals", false, "embed fitted normals in brick_zstd_binary_v1 chunks")
 	flag.StringVar(&exportProfile, "export-profile", "", "named export profile: default or rusty_voxelrt_interop_v1")
 	flag.Int64Var(&opts.MaxSolidSampleCells, "max-solid-sample-cells", hl1.DefaultImportedMaxSampledCells, "maximum BSP solid voxel sample cells")
 	flag.IntVar(&opts.SolidBandDepth, "solid-band-depth", hl1.DefaultImportedSolidBandDepth, "solid debug mode fill depth in voxels from reachable playable empty space")
@@ -104,6 +105,9 @@ func main() {
 	}
 	if _, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind); err != nil {
 		fatalf("%v", err)
+	}
+	if opts.EmbedNormals && opts.ChunkPayloadKind != content.ImportedWorldChunkPayloadBrickZstdBinaryV1 {
+		fatalf("-embed-normals requires -chunk-payload brick_zstd_binary_v1")
 	}
 	if assetsOnly {
 		if emitDebugWorld || emitLevel {

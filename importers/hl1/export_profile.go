@@ -17,6 +17,9 @@ func ApplyHL1ExportProfile(opts ImportOptions) (ImportOptions, error) {
 	case HL1ExportProfileDefault:
 		return opts, nil
 	case HL1ExportProfileRustyVoxelRTInteropV1:
+		if opts.EmbedNormals {
+			return ImportOptions{}, fmt.Errorf("embedded normals are incompatible with Rust JSON export")
+		}
 		opts.ChunkPayloadKind = content.ImportedWorldChunkPayloadSparseJSONV1
 		opts.EmitGameAssets = true
 		return opts, nil

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gekko3d/gekko/content"
+	"github.com/gekko3d/gekko/content/voxelcodec"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
 
@@ -29,6 +30,8 @@ type DebugWorldEmissionResult struct {
 	Voxelize     VoxelizeResult
 	Mode         DebugWorldMode
 	PayloadKind  string
+	EmbedNormals bool
+	ChunkCodec   *voxelcodec.Codec
 	Diagnostics  []importcommon.Diagnostic
 }
 
@@ -51,6 +54,9 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 	}
 	if _, err := content.NormalizeImportedWorldChunkPayloadKind(opts.ChunkPayloadKind); err != nil {
 		return DebugWorldEmissionResult{}, err
+	}
+	if opts.EmbedNormals && opts.ChunkPayloadKind != content.ImportedWorldChunkPayloadBrickZstdBinaryV1 {
+		return DebugWorldEmissionResult{}, fmt.Errorf("embedded normals require brick_zstd_binary_v1")
 	}
 	summary, err := BuildImportSummary(opts)
 	if err != nil {
@@ -167,6 +173,8 @@ func BuildDebugWorld(opts ImportOptions, mode DebugWorldMode) (DebugWorldEmissio
 		Voxelize:     voxelized,
 		Mode:         mode,
 		PayloadKind:  opts.ChunkPayloadKind,
+		EmbedNormals: opts.EmbedNormals,
+		ChunkCodec:   opts.ChunkCodec,
 		Diagnostics:  animationDiagnostics,
 	}, nil
 }
@@ -196,6 +204,9 @@ func SaveDebugWorldWithStats(result DebugWorldEmissionResult) (importcommon.Impo
 	if payloadKind == "" {
 		payloadKind = DefaultChunkPayloadKind
 	}
+	if result.EmbedNormals && payloadKind != content.ImportedWorldChunkPayloadBrickZstdBinaryV1 {
+		return importcommon.ImportedWorldSaveStats{}, fmt.Errorf("embedded normals require brick_zstd_binary_v1")
+	}
 	if result.Backing != nil {
 		backingPath := result.BackingPath
 		if backingPath == "" {
@@ -207,6 +218,8 @@ func SaveDebugWorldWithStats(result DebugWorldEmissionResult) (importcommon.Impo
 	}
 	stats, err := importcommon.SaveImportedWorldEmissionWithOptionsResult(result.ManifestPath, result.Emission, importcommon.ImportedWorldSaveOptions{
 		ChunkPayloadKind: payloadKind,
+		EmbedNormals:     result.EmbedNormals,
+		ChunkCodec:       result.ChunkCodec,
 	})
 	if err != nil {
 		return stats, err

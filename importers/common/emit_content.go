@@ -8,6 +8,7 @@ import (
 
 	"github.com/gekko3d/gekko/content"
 	contentderived "github.com/gekko3d/gekko/content/derived"
+	"github.com/gekko3d/gekko/content/voxelcodec"
 )
 
 type ImportedWorldEmitOptions struct {
@@ -23,6 +24,8 @@ type ImportedWorldEmitOptions struct {
 
 type ImportedWorldSaveOptions struct {
 	ChunkPayloadKind string
+	EmbedNormals     bool
+	ChunkCodec       *voxelcodec.Codec // borrowed through emission; never closed
 }
 
 type ImportedWorldSaveStats struct {
@@ -171,6 +174,12 @@ func SaveImportedWorldEmissionWithOptionsResult(manifestPath string, emission Im
 	if err != nil {
 		return stats, err
 	}
+	if opts.EmbedNormals {
+		if payloadKind != content.ImportedWorldChunkPayloadBrickZstdBinaryV1 {
+			return stats, fmt.Errorf("embedded normals require brick_zstd_binary_v1")
+		}
+		return saveEmbeddedImportedWorldEmission(manifestPath, emission, opts)
+	}
 	emission.Manifest.ChunkPayloadKind = payloadKind
 	if payloadKind == content.ImportedWorldChunkPayloadDenseRLEBinaryV1 && importedWorldEmissionHasMaterialValues(emission) {
 		emission.Manifest.ChunkPayloadKind = content.ImportedWorldChunkPayloadDenseRLEMaterialBinaryV1
@@ -189,9 +198,7 @@ func SaveImportedWorldEmissionWithOptionsResult(manifestPath string, emission Im
 		if chunk == nil {
 			return stats, fmt.Errorf("missing chunk for coord %v", coord)
 		}
-		result, err := content.SaveImportedWorldChunkWithOptionsResult(filepath.Join(manifestDir, filepath.FromSlash(entry.ChunkPath)), chunk, content.ImportedWorldChunkSaveOptions{
-			PayloadKind: payloadKind,
-		})
+		result, err := saveImportedWorldEmissionChunk(filepath.Join(manifestDir, filepath.FromSlash(entry.ChunkPath)), chunk, payloadKind, opts.ChunkCodec)
 		if err != nil {
 			return stats, err
 		}
@@ -247,9 +254,7 @@ func SaveImportedWorldEmissionWithOptionsResult(manifestPath string, emission Im
 	}
 	proxySourceChangedByPath := map[string]bool{}
 	for path, chunk := range emission.ProxyChunks {
-		result, err := content.SaveImportedWorldChunkWithOptionsResult(filepath.Join(manifestDir, filepath.FromSlash(path)), chunk, content.ImportedWorldChunkSaveOptions{
-			PayloadKind: payloadKind,
-		})
+		result, err := saveImportedWorldEmissionChunk(filepath.Join(manifestDir, filepath.FromSlash(path)), chunk, payloadKind, opts.ChunkCodec)
 		if err != nil {
 			return stats, err
 		}

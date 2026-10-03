@@ -112,7 +112,34 @@ the selected normal identity in prepared keys and retains existing sidecar
 fallback when no embedded layer exists. Existing decoded graph accounting and
 leases own the records; live geometry copies remain independent. Legacy auxiliary
 readers/application, normal fitting, halos, collision and navigation retain their
-contracts. Compiler emission and neighborhood reuse are separate follow-ups.
+contracts.
+
+### Imported compiler emission
+
+`importers/common.ImportedWorldSaveOptions.EmbedNormals` requires the explicit
+compiled kind. `ChunkCodec` borrows the caller's profile for compiled output and
+previous-frame reads; nil selects the bounded dictionary-free default. Legacy
+kinds ignore the profile. Incompatible embedding options fail before output.
+
+Embedded emission compares geometry-source identities before overwriting prior
+frames. Full normals reuse validated prior records only when the chunk and its
+27-cell neighborhood are unchanged. Changed, deleted or moved coordinates
+invalidate neighboring full records; missing or unreadable prior frames require
+rebaking. Proxy normals retain local-only fitting and geometry-based reuse.
+Neighborhood selection uses bounded indexed lookups; fitting retains its current
+cost. Save each final frame once and publish its final manifest identity, clearing
+the sidecar reference. Existing sidecar files remain. Equivalent fresh emissions
+preserve bytes and file times. Existing geometry write/skip counters count final
+frames; auxiliary reuse counters include actual embedded reuse, while sidecar
+write/skip counters stay zero.
+
+`EnsureImportedWorldAuxSidecarsForManifestWithCodec` accepts the same borrowed
+profile. Validated embedded records satisfy the normal requirement without
+sidecars. Geometry-only compiled chunks still receive sidecar backfill bound to
+their geometry payload identity. The original ensure function uses nil; legacy
+valid-reference fast paths remain. Embedded checks without reference changes
+leave the manifest unchanged. These APIs never close the supplied codec.
+Automatic dictionary selection, distribution and training remain separate.
 
 ## Bounds and ownership
 

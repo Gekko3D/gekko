@@ -126,6 +126,11 @@ For embedded fitted normals, compute
 `SaveImportedWorldChunkCompiledWithAux`. Existing compiled saves retain decoded
 `EmbeddedAux`; explicit nil removes it. Embedded records take priority in public
 conversion and full/proxy preparation. Chunks without them keep aux sidecar fallback.
+Common imported emission supports `ImportedWorldSaveOptions.EmbedNormals` with
+the explicit compiled kind and an optional borrowed `ChunkCodec`. Full normals
+reuse unchanged neighborhoods; proxy normals reuse unchanged local geometry.
+The [compiler contract](compiled-voxels.md#imported-compiler-emission) defines
+invalidation, counters and generated-level sidecar checks.
 See [compiled frames](compiled-voxels.md) for identity, limits, range reads and
 dictionary compatibility. Legacy JSON/RLE/aux acceptance remains unchanged.
 

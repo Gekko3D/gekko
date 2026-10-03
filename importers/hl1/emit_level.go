@@ -12,6 +12,7 @@ import (
 
 	"github.com/gekko3d/gekko/content"
 	contentderived "github.com/gekko3d/gekko/content/derived"
+	"github.com/gekko3d/gekko/content/voxelcodec"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -47,6 +48,7 @@ const minEmissiveSurfaceLightVoxels = 8
 const emissiveSurfaceLightConeAngle = 150
 
 type GeneratedLevelResult struct {
+	ChunkCodec         *voxelcodec.Codec // borrowed for generated-world normal checks
 	LevelPath          string
 	Level              *content.LevelDef
 	LightFixtureAssets []GeneratedAssetResult
@@ -198,6 +200,7 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 			ChargerAssets:      chargerAssets,
 			BreakableAssets:    breakableAssets,
 			Progress:           opts.Progress,
+			ChunkCodec:         opts.ChunkCodec,
 		}, nil
 	}
 	content.EnsureLevelIDs(level)
@@ -209,6 +212,7 @@ func buildGeneratedLevel(opts ImportOptions, summary ImportSummary, manifestPath
 		ChargerAssets:     chargerAssets,
 		BreakableAssets:   breakableAssets,
 		Progress:          opts.Progress,
+		ChunkCodec:        opts.ChunkCodec,
 	}, nil
 }
 
@@ -382,7 +386,7 @@ func ensureGeneratedLevelBaseWorldAuxSidecars(result GeneratedLevelResult) error
 		}
 		return err
 	}
-	if err := contentderived.EnsureImportedWorldAuxSidecarsForManifest(manifestPath); err != nil {
+	if err := contentderived.EnsureImportedWorldAuxSidecarsForManifestWithCodec(manifestPath, result.ChunkCodec); err != nil {
 		return fmt.Errorf("precalculate base-world aux sidecars: %w", err)
 	}
 	return nil

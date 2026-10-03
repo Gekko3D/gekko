@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gekko3d/gekko/content"
+	"github.com/gekko3d/gekko/content/voxelcodec"
 	importcommon "github.com/gekko3d/gekko/importers/common"
 )
 
@@ -156,6 +157,8 @@ type ImportOptions struct {
 	MaxSolidSampleCells        int64
 	SolidBandDepth             int
 	ChunkPayloadKind           string
+	EmbedNormals               bool
+	ChunkCodec                 *voxelcodec.Codec // borrowed compiler profile
 	ExportProfile              HL1ExportProfile
 	LightMode                  HL1LightMode
 	BakeStaticLightmaps        bool
