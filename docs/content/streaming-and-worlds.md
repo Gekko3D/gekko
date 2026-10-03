@@ -119,7 +119,9 @@ this adapter does not yet decode directly into resident compact bricks.
 `LoadImportedWorldChunkWithCodec` accept a caller-owned codec; nil uses the
 bounded dictionary-free default. A dictionary frame requires the matching
 explicit profile. The runtime loader retains its existing cache and lease
-ownership. Initial compiled chunks keep normal data in existing aux sidecars.
+ownership; configure `RuntimeContentLoaderOptions.ImportedWorldCodec` and inject
+the loader into streamed runtime. See [decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime).
+Initial compiled chunks keep normal data in existing aux sidecars.
 See [compiled frames](compiled-voxels.md) for identity, limits, range reads and
 dictionary compatibility. Legacy JSON/RLE/aux acceptance remains unchanged.
 

@@ -346,9 +346,20 @@ newest. Shared leases stay protected until the last release. Loader stats
 count pressure victims; all-pinned pressure, reads, no-pressure maintenance and
 explicit Clear add no candidate visits. Decode and graph estimation remain
 potentially large work outside this selection bound.
+`Misses` counts requests that miss the warm cache, including singleflight
+waiters; `LoadWaits` counts requests joining an existing decode.
 Successful Stop clears runtime-created loader ownership and preserves supplied
 loader users. See [S2b](../roadmaps/streamed-rendering-s2b.md) for defaults,
 pending-result admission and accounting limits.
+
+`RuntimeContentLoaderOptions.ImportedWorldCodec` optionally borrows a compiled
+imported-chunk codec. The constructor fixes that profile on the shared owner;
+scopes inherit it and changing profiles requires a new loader. Existing keys,
+singleflight and byte charges remain. Nil uses the dictionary-free default;
+legacy JSON/RLE loading ignores the profile. Keep the codec alive through
+outstanding jobs/scopes. Clear, scope Close and runtime Stop never close it.
+Codec working storage remains outside decoded-residency estimates. Inject this
+owner through the existing `StreamedLevelRuntimeConfig.Loader` field.
 
 ## Important Constraints
 

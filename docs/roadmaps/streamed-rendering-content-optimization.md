@@ -778,11 +778,13 @@ This workflow does not independently authorize tests, delegation or commits.
 | P1a | `6397967`; editor `df2f3c8` | Raw-authoritative point-value accessor and consumer migration | [Read contract](../renderer/runtime.md#voxel-point-reads) |
 | P5k | `9c4298a` | Exact deduplicated normal-halo marking in fresh constructors | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
 | P1b | `df6896c` | Opt-in compact private prepared sources with current dense authority | [Ownership design](streamed-rendering-p1b.md) |
-| C1a | This commit | Lossless bounded zstd frames and opt-in compiled imported chunks | [Compiled contract](../content/compiled-voxels.md) |
+| C1a | `2492a3f` | Lossless bounded zstd frames and opt-in compiled imported chunks | [Compiled contract](../content/compiled-voxels.md) |
+| C1b | This commit | Fixed borrowed compiled-chunk codec profile per decoded cache owner | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
-Next: C1 embedded eligible normals and runtime dictionary profiles. On 2026-10-03,
+Next: C1 embedded eligible normals. Runtime dictionary profiles are complete.
+On 2026-10-03,
 the user approved optional layers/dictionaries and broader compiled assets and
 region-pack follow-ups. The [C1 design](streamed-rendering-c1.md) specifies a new
 explicit payload kind, independent checksummed frames, pinned pure-Go zstd and
@@ -2029,6 +2031,30 @@ corpus measurements and shared dictionary cost. Defaults remain legacy.
 Native checks completed in 12 frames (313 ms); no pixel/FPS or RSS claim.
 Editor full-test baseline remains as recorded in P1a; editor build passes.
 Next: eligible imported normal embedding and fixed caller dictionary profiles.
+
+### C1b: Runtime compiled dictionary profiles
+
+This commit adds optional `ImportedWorldCodec` to loader construction. One fixed
+borrowed profile follows existing cache scopes, keys, singleflight, charges and
+cleanup. Separate tests/implementation and independent reviews passed. Focused
+and race checks, full engine tests (16.742 s), five consumer builds and native
+dictionary full/proxy loading, readiness, collision presence, edit isolation and
+Stop cleanup passed. The caller codec remained usable after Stop:
+
+```sh
+# gekko/
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestC1b|TestC1a|TestRuntimeContentLoader|TestS2b)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestC1b|TestC1a|TestRuntimeContentLoader|TestS2b)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-c1b-smoke /tmp/gekko-c1b-smoke.go
+/tmp/gekko-c1b-smoke > /tmp/gekko-c1b-smoke.log 2>&1
+```
+
+Native checks completed in 12 frames (339 ms). No pixel/FPS or RSS claim.
+Editor full-test baseline remains as recorded in P1a; editor build passes.
+Existing tests and unrelated changes remain. Codec working storage is outside
+decoded-residency accounting. Automatic dictionary selection/training requires
+corpus evidence; normal embedding is next.
 
 Consumer commands for these steps:
 

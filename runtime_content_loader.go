@@ -8,13 +8,19 @@ import (
 	"sync"
 
 	"github.com/gekko3d/gekko/content"
+	"github.com/gekko3d/gekko/content/voxelcodec"
 )
 
 const defaultRuntimeContentCacheBytes int64 = 128 << 20
 
 // RuntimeContentLoaderOptions configures shared decoded warm retention.
 // Zero selects 128 MiB; a negative limit disables unscoped warm retention.
-type RuntimeContentLoaderOptions struct{ MaxCacheBytes int64 }
+type RuntimeContentLoaderOptions struct {
+	MaxCacheBytes int64
+	// ImportedWorldCodec is borrowed and fixed for this owner and all its scopes.
+	// Nil selects bounded default imported IO; the caller owns codec lifetime.
+	ImportedWorldCodec *voxelcodec.Codec
+}
 
 // RuntimeContentLoaderStats reports admission-time decoded storage estimates.
 // Bytes includes pinned entries; external borrowers and decoder temporaries are
@@ -77,14 +83,15 @@ type runtimeContentFlight struct {
 	panicValue any
 }
 type runtimeContentCache struct {
-	mu           sync.Mutex
-	entries      map[runtimeContentKey]*runtimeContentEntry
-	flights      map[runtimeContentKey]*runtimeContentFlight
-	lru          list.List
-	unpinned     runtimeContentEvictionHeap
-	loadSequence uint64
-	epoch        uint64
-	stats        RuntimeContentLoaderStats
+	importedWorldCodec *voxelcodec.Codec // immutable borrowed profile
+	mu                 sync.Mutex
+	entries            map[runtimeContentKey]*runtimeContentEntry
+	flights            map[runtimeContentKey]*runtimeContentFlight
+	lru                list.List
+	unpinned           runtimeContentEvictionHeap
+	loadSequence       uint64
+	epoch              uint64
+	stats              RuntimeContentLoaderStats
 }
 
 // RuntimeContentLoadScope leases each loaded decoded entry once until Close.
@@ -99,12 +106,16 @@ type RuntimeContentLoadScope struct {
 // NewRuntimeContentLoader creates one LRU shared by all content kinds.
 func NewRuntimeContentLoader(options ...RuntimeContentLoaderOptions) *RuntimeContentLoader {
 	max := defaultRuntimeContentCacheBytes
-	if len(options) > 0 && options[0].MaxCacheBytes != 0 {
-		max = options[0].MaxCacheBytes
+	var importedWorldCodec *voxelcodec.Codec
+	if len(options) > 0 {
+		if options[0].MaxCacheBytes != 0 {
+			max = options[0].MaxCacheBytes
+		}
+		importedWorldCodec = options[0].ImportedWorldCodec
 	}
 	return &RuntimeContentLoader{owner: &runtimeContentCache{
 		entries: make(map[runtimeContentKey]*runtimeContentEntry), flights: make(map[runtimeContentKey]*runtimeContentFlight),
-		stats: RuntimeContentLoaderStats{MaxBytes: max},
+		stats: RuntimeContentLoaderStats{MaxBytes: max}, importedWorldCodec: importedWorldCodec,
 	}}
 }
 
@@ -399,7 +410,13 @@ func (l *RuntimeContentLoader) LoadImportedWorld(path string) (*content.Imported
 	return loadRuntimeContent(l, "imported-world", path, content.LoadImportedWorld)
 }
 func (l *RuntimeContentLoader) LoadImportedWorldChunk(path string) (*content.ImportedWorldChunkDef, error) {
-	return loadRuntimeContent(l, "imported-chunk", path, content.LoadImportedWorldChunk)
+	var codec *voxelcodec.Codec
+	if l != nil {
+		codec = l.owner.importedWorldCodec
+	}
+	return loadRuntimeContent(l, "imported-chunk", path, func(path string) (*content.ImportedWorldChunkDef, error) {
+		return content.LoadImportedWorldChunkWithCodec(path, codec)
+	})
 }
 func (l *RuntimeContentLoader) LoadImportedWorldChunkAux(path string) (*content.ImportedWorldChunkAuxDef, error) {
 	return loadRuntimeContent(l, "aux", path, content.LoadImportedWorldChunkAux)

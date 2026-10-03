@@ -1,6 +1,6 @@
 # C1: Lossless compiled voxel frames
 
-Status: C1a complete. The user approved the optional C1
+Status: C1a and C1b complete. The user approved the optional C1
 layers/dictionaries and broader compiled-asset/region-pack follow-ups on 2026-10-03.
 Follow the parent roadmap's dependencies; C2 retains its measured-scale gate.
 
@@ -19,6 +19,15 @@ their existing auxiliary sidecars. Follow with embedded eligible normal layers
 and immutable runtime dictionary configuration, then compiled assets under C3.
 Range-pack wrapping reuses independent frames if C2's gate is satisfied. Neither
 P1b's private layout nor GPU allocation metadata is a disk ABI.
+
+C1b fixes an optional borrowed codec profile on the existing loader owner; see
+[decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime).
+Per-load profiles would require new key semantics and could alias dictionaries.
+A fixed owner fits existing scope inheritance and runtime loader injection.
+
+Normal embedding follows in a separate batch. Its source identity must avoid
+hashing a self-reference while preserving authoritative geometry and normal
+version binding; settle that boundary before implementation.
 
 This is the long-term compiled-content path. A whole-level compressed stream
 would prevent bounded range loading; replacing old kinds would break migration
