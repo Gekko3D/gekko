@@ -321,6 +321,7 @@ type StreamedLevelRuntimeState struct {
 	readyCommits              streamedReadyOwner
 	streamingWork             streamedWorkOwner
 	terrainGeometryAssets     map[EntityId]streamedGeometryAssetLease
+	snapshotGeometryAssets    map[EntityId]streamedGeometryAssetLease
 
 	renderManaged     bool
 	nextRenderTicket  uint64
@@ -508,6 +509,7 @@ type streamedPreparedChunk struct {
 	PreparedImportedWorldGeometryCacheKey string
 	PlacementItems                        []streamedPlacementInstance
 	ObjectSnapshots                       map[string]*content.VoxelObjectSnapshotDef
+	objectSnapshotGeometry                map[string]*streamedObjectSnapshotGeometry
 	PrepareDuration                       time.Duration
 	Err                                   error
 }
@@ -1154,6 +1156,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	}
 	cmd.app.FlushCommands()
 	state.releaseAllStreamedTerrainGeometryAssets()
+	state.releaseAllStreamedSnapshotGeometryAssets()
 	state.PreparedGeometryCache.close(assetServerFromApp(cmd.app))
 	carryStreamedWorkAfterStop(state)
 	refreshStreamedRuntimeMetricsCounts(state)
@@ -2213,6 +2216,7 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 	}
 	result.PlacementItems = append([]streamedPlacementInstance(nil), job.Placements...)
 	result.ObjectSnapshots = make(map[string]*content.VoxelObjectSnapshotDef)
+	result.objectSnapshotGeometry = make(map[string]*streamedObjectSnapshotGeometry)
 	if job.TerrainOverride != nil {
 		chunkPath := content.ResolveDocumentPath(job.TerrainOverride.SnapshotPath, job.WorldDeltaPath)
 		chunk, err := job.Loader.LoadTerrainChunk(chunkPath)
@@ -2277,6 +2281,12 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			return result
 		}
 		result.ObjectSnapshots[key] = snapshot
+		geometry := XBrickMapFromVoxelObjectSnapshot(snapshot)
+		geometry.ComputeAABB()
+		geometry.ClearDirty()
+		result.objectSnapshotGeometry[key] = &streamedObjectSnapshotGeometry{
+			snapshot: snapshot, source: geometry, registration: prepareStreamedGeometryRegistration(geometry),
+		}
 	}
 	if streamedPreparationCancelled(job.prepareCancel) {
 		return result
@@ -2421,6 +2431,7 @@ func commitPreparedStreamedSectorProxy(cmd *Commands, assets *AssetServer, state
 func commitPreparedStreamedChunk(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, prepared streamedPreparedChunk) (int, error) {
 	defer prepared.registration.release()
 	defer prepared.terrainRegistration.release()
+	defer prepared.releaseObjectSnapshotGeometry()
 	defer beginStreamedWorkCommit(state, prepared.Generation, prepared.prepareCancel)()
 	defer beginStreamedRenderTicketBatch(state)()
 	tx := newStreamedChunkCommitTransaction(false)
@@ -2637,6 +2648,7 @@ func removeStreamedChunk(cmd *Commands, state *StreamedLevelRuntimeState, coord 
 		delete(state.navigationVoxelSnapshots, eid)
 		delete(state.navigationEditRevisions, eid)
 		state.releaseStreamedTerrainGeometryAsset(eid)
+		state.releaseStreamedSnapshotGeometryAsset(eid)
 	}
 	for _, lease := range loaded.ImportedWorldGeometryAssets {
 		lease.release(state.PreparedGeometryCache)

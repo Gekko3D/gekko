@@ -259,7 +259,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 				}
 				if snapshot != nil {
 					snapshotStart := time.Now()
-					if err = applyVoxelObjectSnapshotToEntity(cmd, entity, snapshot); err != nil {
+					if err = applyStreamedVoxelObjectSnapshotToEntity(cmd, state, entity, snapshot, prepared.objectSnapshotGeometry[key]); err != nil {
 						return entityCount, placementUnit, false, err
 					}
 					state.Metrics.LastCommitPlacementDuration += time.Since(snapshotStart)

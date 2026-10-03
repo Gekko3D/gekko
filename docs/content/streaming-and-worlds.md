@@ -718,6 +718,8 @@ Remaining units use current deletion, transform and snapshot authority; complete
 units retain live edits. Synchronous same-coordinate loading finishes the active
 transaction without duplicate spawns and may exceed the frame budget.
 [S1g ownership decision](../roadmaps/streamed-rendering-s1b.md#s1g-opt-in-resumable-placement-commits).
+Workers also prepare [snapshot registration copies](../assets/runtime-assets.md#streamed-voxel-object-snapshot-registration);
+adoption preserves these authority and atomic-publication rules.
 
 Obsolete preparation cancellation, S2e:
 

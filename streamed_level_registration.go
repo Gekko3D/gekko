@@ -1,11 +1,83 @@
 package gekko
 
 import (
+	"fmt"
 	"sync"
 
+	"github.com/gekko3d/gekko/content"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/mathgl/mgl32"
 )
+
+// The worker source and captured definition are immutable. Only the independent
+// registration copy transfers to a live entity through its single-use handle.
+type streamedObjectSnapshotGeometry struct {
+	snapshot     *content.VoxelObjectSnapshotDef
+	source       *volume.XBrickMap
+	registration *streamedGeometryRegistration
+}
+
+func (p streamedPreparedChunk) releaseObjectSnapshotGeometry() {
+	for _, packet := range p.objectSnapshotGeometry {
+		packet.registration.release()
+	}
+}
+
+func streamedObjectSnapshotMatches(captured, current *content.VoxelObjectSnapshotDef) bool {
+	if captured == current {
+		return true
+	}
+	if captured == nil || current == nil || captured.SchemaVersion != current.SchemaVersion || len(captured.Voxels) != len(current.Voxels) {
+		return false
+	}
+	for i, voxel := range captured.Voxels {
+		if voxel != current.Voxels[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func applyStreamedVoxelObjectSnapshotToEntity(cmd *Commands, state *StreamedLevelRuntimeState, entity EntityId, snapshot *content.VoxelObjectSnapshotDef, packet *streamedObjectSnapshotGeometry) error {
+	if packet == nil {
+		return applyVoxelObjectSnapshotToEntity(cmd, entity, snapshot)
+	}
+	defer packet.registration.release()
+	vmc, ok := voxelModelComponentForEntity(cmd, entity)
+	if !ok {
+		return nil
+	}
+	assets := assetServerFromApp(cmd.app)
+	if assets == nil {
+		return fmt.Errorf("asset server not available")
+	}
+	if streamedObjectSnapshotMatches(packet.snapshot, snapshot) {
+		if id, adopted := assets.adoptStreamedVoxelGeometry(packet.registration, packet.source); adopted {
+			if state.snapshotGeometryAssets == nil {
+				state.snapshotGeometryAssets = make(map[EntityId]streamedGeometryAssetLease)
+			}
+			state.snapshotGeometryAssets[entity] = streamedGeometryAssetLease{ID: id, Server: assets}
+			state.Metrics.PreparedGeometryAssetAdoptions++
+			vmc.OverrideGeometry = id
+			cmd.AddComponents(entity, &vmc)
+			return nil
+		}
+	}
+	return applyVoxelObjectSnapshotToEntity(cmd, entity, snapshot)
+}
+
+func (state *StreamedLevelRuntimeState) releaseStreamedSnapshotGeometryAsset(entity EntityId) {
+	if lease, ok := state.snapshotGeometryAssets[entity]; ok {
+		lease.Server.DeleteVoxelGeometry(lease.ID)
+		delete(state.snapshotGeometryAssets, entity)
+	}
+}
+
+func (state *StreamedLevelRuntimeState) releaseAllStreamedSnapshotGeometryAssets() {
+	for entity := range state.snapshotGeometryAssets {
+		state.releaseStreamedSnapshotGeometryAsset(entity)
+	}
+}
 
 // Each result owns a distinct registration copy. Envelope aliases share this
 // single-use handle, never the mutable copy itself. Shared source maps remain

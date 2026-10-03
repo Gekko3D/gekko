@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2h, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2h, S3a–S3u, S4a–S4c and P5a–P5c complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -169,6 +169,33 @@ terrain adoption/geometry/backing, current-removal fallback, deferred cancellati
 partial failure and successful/failed Stop cleanup. Run focused race, full
 engine/consumer checks and a native terrain handoff. Backing setup, renderer
 copies, placements and other large units remain outside this batch's bound.
+
+#### P5c: Worker-prepared voxel-object snapshot registration
+
+Build voxel-object snapshot geometry, bounds and an independent P5a registration
+copy during existing worker preparation. Charge source and copy in the pending
+envelope; release unused handles on rejection, cancellation, drain and Stop.
+Adopt through a private streamed apply seam; keep public defensive registration.
+Track adopted assets by entity with exact ID/server before flush. Release after
+durable removal or successful Stop, including partial commits; failed persistence
+retains ownership. No snapshot cache or mutable cross-entity sharing.
+
+S1g resumable commits still reread the current authoritative snapshot. Adopt only
+when that decoded definition exactly matches the captured worker definition;
+changed/new content uses the current synchronous fallback, removed overrides skip
+application and read errors remain errors. This also preserves externally authored
+same-path replacements. Legacy synchronous commits keep their captured-snapshot
+semantics. Placement, snapshot, collision publication, flush and hooks remain one
+atomic unit. Removing rereads based only on path identity is deferred.
+
+Files: `streamed_level_runtime.go`, `streamed_level_commit_transaction.go`,
+`streamed_level_pending.go` and `streamed_level_registration.go`. Confidence is
+High for the established P5a/P5b ownership pattern and content-equality authority
+check. Use separate tests/implementation and independent PRE/POST reviews. Cover
+actual adoption/isolation, current and same-path changed/removed authority, pending
+ownership and exact asset lifetime through partial/failed Stop; focused race,
+engine/consumer checks and native readiness/edit/reload verification. Snapshot
+reading/comparison and placement spawning remain atomic main-thread work.
 
 ## 5. Streaming changes
 
@@ -550,7 +577,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S2f | `b973c62` | Direct unpinned prepared-cache eviction order | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 | S2g | `175c1ae` | Per-kind storage reference presence propagation | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 | S2h | `b84878b` | Direct decoded-cache candidates with preserved load recency | [Loader contract](../assets/runtime-assets.md#decoded-content-lifetime) |
-| S1h | This commit | Structural-input voxel capacity planning | [Renderer contract](../renderer/runtime.md#voxel-capacity-planning) |
+| S1h | `011de7d` | Structural-input voxel capacity planning | [Renderer contract](../renderer/runtime.md#voxel-capacity-planning) |
+| P5c | This commit | Worker-prepared snapshot registration with current authority | [Snapshot contract](../assets/runtime-assets.md#streamed-voxel-object-snapshot-registration) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -561,8 +589,10 @@ compatibility and conditional proposals.
 On 2026-10-03, the user prioritized large single-chunk stalls and recurring CPU
 scans. [P5a](#p5a-worker-owned-registration-copies) removes main-thread
 registration copying first; P5b moves eligible terrain construction to workers.
-S3s reduces recurring emitter scans. S3t/S3u reduce lookup and normal-context rebuilding; S1g spreads placement work
-across frames. Remaining cache maintenance and individual atomic units are next.
+S3s reduces recurring emitter scans. S3t/S3u reduce lookup and normal-context rebuilding;
+S1g spreads placement work across frames. S1h skips clean resident sector planning;
+P5c moves snapshot reconstruction/registration preparation to workers. Remaining
+cache maintenance and individual atomic units are next.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
 On 2026-10-03, the user authorized its ownership decision and migration of existing
@@ -1310,7 +1340,7 @@ unrelated changes preserved; macOS warnings exited successfully.
 
 ### S1h: Capacity planning for structural inputs
 
-2026-10-03, this commit. Capacity planning skips clean allocated maps' sectors,
+2026-10-03, `011de7d`. Capacity planning skips clean allocated maps' sectors,
 including during another map's arrival. Exact record requirements, pointer
 sharing, hidden uploads and buffer headroom remain. The diagnostic counts only
 sector entries actually examined. Root review also removed idle dedup writes
@@ -1332,6 +1362,35 @@ arrival grew capacity; hidden readiness, idle zero visits and removal held.
 The disposable fixture checks native buffers/writes, not visual parity or FPS.
 Other scene scans and a large new/dirty map's own work remain. Unrelated changes
 were preserved; macOS module stat-cache warnings exited successfully.
+
+### P5c: Worker-prepared voxel-object snapshot registration
+
+2026-10-03, this commit. Workers prepare snapshot geometry, bounds and separate
+registration copies. Matching snapshots adopt without main-thread reconstruction,
+copying or bounds scans. Resumable commits retain authoritative rereads, exact
+ordered-content checks and changed/removed/error fallback behavior. Legacy
+captured authority, atomic publication, hooks and collision remain. Pending
+charges and exact adopted-asset leases cover partial commits and durable cleanup.
+Separate tests/implementation and independent PRE/POST reviews passed.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestP5c|TestP5b|TestP5a|TestS1g|TestS2e)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestP5c|TestP5b|TestP5a|TestS1g|TestS2e)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5c-smoke /tmp/gekko-p5c-smoke.go
+/tmp/gekko-p5c-smoke > /tmp/gekko-p5c-smoke.log 2>&1
+```
+
+Focused 2.555s, race 4.020s, engine root 16.508s and all five consumer commands
+below passed. Native smoke passed: two 32³ snapshots, readiness, voxel collision,
+edit isolation, durable reload, hooks and exact owned-asset removal; 29 frames,
+649ms. Its macOS caller locks the main thread before setup. This verifies native
+behavior, not pixel parity or an FPS gain. File reads/comparison, changed-content
+fallbacks, source spawning and worker temporary memory remain outside this
+improvement. Existing tests and unrelated changes preserved; macOS warnings
+exited successfully.
 
 Consumer commands for these steps:
 

@@ -217,6 +217,23 @@ renderer/physics. Eager and fallback registrations keep their existing lifetime.
 imported full/proxy transfers. Backing setup and renderer copies remain main-thread
 work; this does not bound all work in a large chunk.
 
+### Streamed voxel-object snapshot registration
+
+Snapshot workers prepare geometry, bounds and an independent single-use
+registration copy per object. Pending admission charges both maps. Main commits
+can adopt the copy when the snapshot definition matches the worker capture:
+schema version and ordered voxel coordinates/values. Resumable placements still
+reread the current snapshot, preserving same-path edits, missing-file errors and
+removed overrides. Changed/new content uses ordinary reconstruction; legacy
+synchronous commits retain their captured-snapshot behavior.
+
+Each adopted asset has its own editable map and exact entity/server/ID lease,
+recorded before flush/hooks. Durable unload and successful Stop release it;
+failed persistence retains ownership, including partial commits. Unused handles
+release with their prepared envelope. Fallback/eager assets retain existing
+lifetimes. `PreparedGeometryAssetAdoptions` includes snapshot transfers. Reading,
+comparison, spawning and publication remain within the atomic placement unit.
+
 ## Decoded Content Lifetime
 
 `RuntimeContentLoader` bounds warm decoded definitions across all eight content
