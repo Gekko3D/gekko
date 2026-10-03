@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"container/heap"
 	"container/list"
 	"fmt"
 	"path/filepath"
@@ -22,6 +23,7 @@ type RuntimeContentLoaderStats struct {
 	Entries                                               int
 	Bytes, PinnedBytes, MaxBytes, OverBudgetBytes         int64
 	Hits, Misses, Evictions, LoadWaits, OversizedBypasses int
+	EvictionCandidateVisits                               int
 }
 
 // Derived loaders share one owner. The scope declares decoded-data lifetime;
@@ -32,12 +34,39 @@ type RuntimeContentLoader struct {
 }
 type runtimeContentKey struct{ kind, path string }
 type runtimeContentEntry struct {
-	key   runtimeContentKey
-	value any
-	bytes int64
-	pins  int
-	lru   *list.Element
+	key       runtimeContentKey
+	value     any
+	bytes     int64
+	pins      int
+	lru       *list.Element
+	lastLoad  uint64
+	heapIndex int
 }
+
+// Only unpinned entries participate, ordered by their most recent load/hit.
+// Heap membership and recency are protected by runtimeContentCache.mu.
+type runtimeContentEvictionHeap []*runtimeContentEntry
+
+func (h runtimeContentEvictionHeap) Len() int           { return len(h) }
+func (h runtimeContentEvictionHeap) Less(i, j int) bool { return h[i].lastLoad < h[j].lastLoad }
+func (h runtimeContentEvictionHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].heapIndex, h[j].heapIndex = i, j
+}
+func (h *runtimeContentEvictionHeap) Push(value any) {
+	e := value.(*runtimeContentEntry)
+	e.heapIndex = len(*h)
+	*h = append(*h, e)
+}
+func (h *runtimeContentEvictionHeap) Pop() any {
+	last := len(*h) - 1
+	e := (*h)[last]
+	(*h)[last] = nil
+	*h = (*h)[:last]
+	e.heapIndex = -1
+	return e
+}
+
 type runtimeContentFlight struct {
 	done       chan struct{}
 	scopes     map[*RuntimeContentLoadScope]struct{}
@@ -48,12 +77,14 @@ type runtimeContentFlight struct {
 	panicValue any
 }
 type runtimeContentCache struct {
-	mu      sync.Mutex
-	entries map[runtimeContentKey]*runtimeContentEntry
-	flights map[runtimeContentKey]*runtimeContentFlight
-	lru     list.List
-	epoch   uint64
-	stats   RuntimeContentLoaderStats
+	mu           sync.Mutex
+	entries      map[runtimeContentKey]*runtimeContentEntry
+	flights      map[runtimeContentKey]*runtimeContentFlight
+	lru          list.List
+	unpinned     runtimeContentEvictionHeap
+	loadSequence uint64
+	epoch        uint64
+	stats        RuntimeContentLoaderStats
 }
 
 // RuntimeContentLoadScope leases each loaded decoded entry once until Close.
@@ -108,10 +139,7 @@ func (s *RuntimeContentLoadScope) Close() {
 	}
 	s.closed = true
 	for e := range s.entries {
-		e.pins--
-		if e.pins == 0 {
-			c.stats.PinnedBytes -= e.bytes
-		}
+		c.unpin(e)
 	}
 	s.entries = nil
 	c.trim()
@@ -133,10 +161,7 @@ func (l *RuntimeContentLoader) releaseScopedValue(value any) {
 			continue
 		}
 		delete(s.entries, e)
-		e.pins--
-		if e.pins == 0 {
-			c.stats.PinnedBytes -= e.bytes
-		}
+		c.unpin(e)
 		c.trim()
 		return
 	}
@@ -183,24 +208,63 @@ func (c *runtimeContentCache) pin(s *RuntimeContentLoadScope, e *runtimeContentE
 	}
 	s.entries[e] = struct{}{}
 	if e.pins == 0 {
+		c.unlinkEligible(e)
 		c.stats.PinnedBytes += e.bytes
 	}
 	e.pins++
 }
+
+func (c *runtimeContentCache) unpin(e *runtimeContentEntry) {
+	e.pins--
+	if e.pins == 0 {
+		c.stats.PinnedBytes -= e.bytes
+		c.makeEligible(e)
+	}
+}
+
+func (c *runtimeContentCache) makeEligible(e *runtimeContentEntry) {
+	if e.pins == 0 && e.heapIndex < 0 {
+		heap.Push(&c.unpinned, e)
+	}
+}
+
+func (c *runtimeContentCache) unlinkEligible(e *runtimeContentEntry) {
+	if e.heapIndex >= 0 {
+		heap.Remove(&c.unpinned, e.heapIndex)
+	}
+}
+
+func (c *runtimeContentCache) touch(e *runtimeContentEntry) {
+	if c.loadSequence == ^uint64(0) {
+		// Preserve complete load order across the rare counter wrap, including
+		// pinned entries whose old position must survive their final release.
+		c.loadSequence = 0
+		for p := c.lru.Back(); p != nil; p = p.Prev() {
+			c.loadSequence++
+			p.Value.(*runtimeContentEntry).lastLoad = c.loadSequence
+		}
+		heap.Init(&c.unpinned)
+	}
+	c.loadSequence++
+	e.lastLoad = c.loadSequence
+	c.lru.MoveToFront(e.lru)
+	if e.heapIndex >= 0 {
+		heap.Fix(&c.unpinned, e.heapIndex)
+	}
+}
+
 func (c *runtimeContentCache) remove(e *runtimeContentEntry) {
+	c.unlinkEligible(e)
 	delete(c.entries, e.key)
 	c.lru.Remove(e.lru)
+	e.lru = nil
 	c.stats.Bytes -= e.bytes
 	c.stats.Evictions++
 }
 func (c *runtimeContentCache) trim() {
-	for p := c.lru.Back(); p != nil && (c.stats.MaxBytes < 0 || c.stats.Bytes > c.stats.MaxBytes); {
-		prev := p.Prev()
-		e := p.Value.(*runtimeContentEntry)
-		if e.pins == 0 {
-			c.remove(e)
-		}
-		p = prev
+	for len(c.unpinned) > 0 && (c.stats.MaxBytes < 0 || c.stats.Bytes > c.stats.MaxBytes) {
+		c.stats.EvictionCandidateVisits++
+		c.remove(c.unpinned[0])
 	}
 }
 
@@ -227,7 +291,7 @@ func loadRuntimeContent[T any](l *RuntimeContentLoader, kind, path string, decod
 	}
 	if e := c.entries[key]; e != nil {
 		c.stats.Hits++
-		c.lru.MoveToFront(e.lru)
+		c.touch(e)
 		if l.scope != nil {
 			c.pin(l.scope, e)
 		}
@@ -278,8 +342,9 @@ func loadRuntimeContent[T any](l *RuntimeContentLoader, kind, path string, decod
 				c.stats.OversizedBypasses++
 			}
 			if live || warm {
-				e := &runtimeContentEntry{key: key, value: loaded, bytes: bytes}
+				e := &runtimeContentEntry{key: key, value: loaded, bytes: bytes, heapIndex: -1}
 				e.lru = c.lru.PushFront(e)
+				c.touch(e)
 				c.entries[key] = e
 				c.stats.Bytes += bytes
 				for s := range f.scopes {
@@ -287,6 +352,7 @@ func loadRuntimeContent[T any](l *RuntimeContentLoader, kind, path string, decod
 						c.pin(s, e)
 					}
 				}
+				c.makeEligible(e)
 				c.trim()
 			}
 		}

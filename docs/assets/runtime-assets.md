@@ -231,6 +231,14 @@ when the consumer releases decoded data. Active scopes pin each shared entry
 once and may exceed the budget. Streaming metadata/backing providers hold a
 world-session scope; prepared results and navigation source batches use shorter
 scopes. Live entity geometry/heightmaps have their own storage after commit.
+
+Decoded pressure selection indexes only unpinned entries by last load/hit recency.
+Final scope release preserves that recency; it does not refresh the entry as
+newest. Shared leases stay protected until the last release. Loader stats
+`EvictionCandidateVisits` and runtime `DecodedContentCacheEvictionCandidateVisits`
+count pressure victims; all-pinned pressure, reads, no-pressure maintenance and
+explicit Clear add no candidate visits. Decode and graph estimation remain
+potentially large work outside this selection bound.
 Successful Stop clears runtime-created loader ownership and preserves supplied
 loader users. See [S2b](../roadmaps/streamed-rendering-s2b.md) for defaults,
 pending-result admission and accounting limits.

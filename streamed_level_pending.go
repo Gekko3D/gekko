@@ -214,6 +214,7 @@ func refreshStreamedContentOwnerMetrics(state *StreamedLevelRuntimeState) {
 	state.Metrics.DecodedContentCacheHits = stats.Hits
 	state.Metrics.DecodedContentCacheMisses = stats.Misses
 	state.Metrics.DecodedContentCacheEvictions = stats.Evictions
+	state.Metrics.DecodedContentCacheEvictionCandidateVisits = stats.EvictionCandidateVisits
 	state.Metrics.DecodedContentCacheLoadWaits = stats.LoadWaits
 	state.Metrics.DecodedContentCacheOversizedBypasses = stats.OversizedBypasses
 	pending := state.pendingPrepared.snapshot()

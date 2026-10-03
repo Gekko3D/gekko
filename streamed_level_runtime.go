@@ -189,6 +189,7 @@ type StreamedLevelRuntimeMetrics struct {
 
 	PreparedGeometryCacheEvictionCandidateVisits int
 	PreparedGeometryCacheStorageReferenceVisits  int
+	DecodedContentCacheEvictionCandidateVisits   int
 
 	PreparedChunkCount    int
 	PrepareErrorCount     int

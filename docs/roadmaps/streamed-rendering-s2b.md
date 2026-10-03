@@ -230,3 +230,37 @@ users remain usable; queued results and Stop cannot revive cancelled work or
 strand future scheduling. Preserve existing tests. Verify focused streaming/cache
 checks and races, then full engine and affected consumer checks once at the batch
 boundary. Native fallback/readiness smoke supplements CPU ownership checks.
+
+## S2h: Direct decoded-cache eviction candidates
+
+Status: implemented 2026-10-03; focused/race, full engine and five consumer checks
+passed. See the [delivery record](streamed-rendering-content-optimization.md#s2h-direct-decoded-cache-eviction-candidates-1).
+
+Scope: remove pinned-entry scans from decoded-cache pressure maintenance. Use an
+unpinned min-heap ordered by the existing load/hit recency, under the same owner
+mutex. Admission and unpinned hits update eligibility; first pin removes it,
+final unpin restores it with its last load recency. Closing a lease does not make
+an old entry newer. This preserves S2b's LRU contract across mixed pinned/warm data.
+A second linked list would require scanning to restore that exact older position.
+
+Keep path/kind identity, Clear epochs, singleflight publication, independent
+scope pins, returned-pointer validity and byte/oversize rules. Both Close and
+rejected-value release use the same eligibility transition. Remove/Clear release
+heap references. Sequence overflow must preserve recency; the existing complete
+LRU order may support a rare rebase. Selection never scans all owners under
+ordinary pressure; heap maintenance is logarithmic in eligible entries.
+
+Files: `runtime_content_loader.go`, decoded metric publication in
+`streamed_level_pending.go`/`streamed_level_runtime.go` and focused coverage.
+Add cumulative `RuntimeContentLoaderStats.EvictionCandidateVisits`, exposed as
+`DecodedContentCacheEvictionCandidateVisits`. Count each actual unpinned victim
+examined by pressure trim. All-pinned pressure, reads, no-pressure maintenance
+and explicit Clear do not advance this selection counter.
+
+Confidence is High after reviewing the loader's hit, publication, pin/release,
+Clear and singleflight paths. This extends the existing owner and eviction policy.
+Use separate test/implementation agents and independent PRE/POST reviews. Freeze
+minimal coverage for all-pinned pressure, last-load order after final release,
+shared leases and scalar runtime publication; reuse S2b concurrency/epoch tests.
+Run focused race and engine/consumer checks. Decode and graph estimation remain
+outside this selection bound; no source, format or renderer policy change.

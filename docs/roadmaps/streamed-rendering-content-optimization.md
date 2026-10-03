@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1g, S2a–S2g, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1g, S2a–S2h, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -216,6 +216,13 @@ Completed: physical shared-storage accounting propagates
 references only on per-kind presence changes. Repeated aliases avoid redundant
 child walks; first/last ownership and cold admission remain potentially large.
 [Owner and verification](streamed-rendering-s2a.md#s2g-storage-reference-presence-transitions).
+
+#### S2h: Direct decoded-cache eviction candidates
+
+Completed: byte-pressure selection skips pinned decoded entries.
+An unpinned heap preserves last-load recency when scopes close, shared pins and
+Clear/singleflight semantics. [Owner and verification](streamed-rendering-s2b.md#s2h-direct-decoded-cache-eviction-candidates).
+Decode and storage estimation remain separate potentially large work.
 
 ### S3. Incremental selection and scene gathering
 
@@ -533,7 +540,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S3u | `de44f7c` | Invocation-local normal context builds only for halo/bake work | [Normal contract](../renderer/runtime.md#normal-neighbor-preparation) |
 | S1g | `cd8f2b9` | Opt-in placement units with durable partial ownership | [Commit contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
 | S2f | `b973c62` | Direct unpinned prepared-cache eviction order | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
-| S2g | This commit | Per-kind storage reference presence propagation | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
+| S2g | `175c1ae` | Per-kind storage reference presence propagation | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
+| S2h | This commit | Direct decoded-cache candidates with preserved load recency | [Loader contract](../assets/runtime-assets.md#decoded-content-lifetime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1247,7 +1255,7 @@ Existing tests and unrelated changes preserved; macOS warnings exited successful
 
 ### S2g: Storage reference presence transitions
 
-Completed 2026-10-03 in this commit. The immutable physical ledger propagates
+Commit `175c1ae`, completed 2026-10-03. The immutable physical ledger propagates
 references to children only when an owner kind becomes present or absent.
 Repeated aliases and partial removal avoid redundant descendant walks. Physical
 bytes, duplicate edges, prepared-preferred asset attribution and independent
@@ -1267,6 +1275,29 @@ below passed. No source/readiness/collision change needed a new native check.
 Cold graph capture, standalone charge and first/last ownership may still traverse
 large graphs; no FPS or total frame-time bound. Existing tests and unrelated
 changes preserved; macOS warnings exited successfully.
+
+### S2h: Direct decoded-cache eviction candidates
+
+Completed 2026-10-03 in this commit. Byte-pressure trim indexes only unpinned
+entries; last load/hit recency survives final scope release and rejected-value
+release. Shared pins, Clear epochs, singleflight, pointer validity and byte policy
+remain. Selection avoids scanning pinned owners; heap maintenance is logarithmic
+in eligible entries. Candidate visits publish through read-only loader/runtime
+stats. Separate tests/implementation and independent PRE/POST reviews passed.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS2h|TestS2b|TestRuntimeContentLoader|TestS2e|TestS1g)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS2h|TestS2b|TestRuntimeContentLoader|TestS2e|TestS1g)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused checks 3.045s, race 4.605s, engine root 16.905s and five consumer commands
+below passed. No source/readiness/collision change needed a new native check.
+Decode, graph estimation, explicit Clear and rare recency rebasing remain outside
+the pressure-selection bound. No FPS/process-memory ceiling. Existing tests and
+unrelated changes preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 
