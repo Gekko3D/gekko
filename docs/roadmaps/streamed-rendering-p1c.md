@@ -114,7 +114,7 @@ claiming end-to-end frame or memory gains.
 
 ## E2 follow-up alignment
 
-Status: proposed; requires human alignment before dependent implementation.
+Status: approved by the user on 2026-10-03 for ordinary authored objects.
 Start with ordinary authored placement/item objects using the existing S4 object
 capture, byte admission and durable publication owner. Imported chunks, terrain
 and voxel backing remain on their existing full/removal paths.
@@ -138,5 +138,30 @@ full-snapshot fallback.
 Alternative: begin with imported-world deltas and their backing/streaming owners,
 or introduce a manifest-wide payload selector for every override kind. Both
 expand ownership and compatibility scope. The recommended ordinary-object step
-is smaller and reuses current S4 ownership; it still requires approval of this
-base lifecycle and payload boundary before schema or runtime changes.
+is smaller and reuses current S4 ownership. This base lifecycle and payload
+boundary are approved; runtime eligibility remains limited to ordinary objects.
+
+
+### E2a: Content payload identity and codec
+
+Deliver the content contract first, without changing runtime save/load dispatch.
+New voxel-object override payloads use schema 2 in a distinct C1 document kind,
+with explicit full/base-delta mode and placement/item/lattice bindings. Full mode
+uses ordinary nonzero primary geometry and no secondary layer. Delta mode uses
+an assigned-cell mask, primary presence marker 1 and mandatory secondary final
+values, including zero removals. Reject auxiliary layers and bake versions.
+Generic C1 fields and existing kinds retain their meaning and validation.
+
+Base identity uses a separate canonical geometry/lattice/rasterization domain,
+excluding owner IDs, paths, transforms and rendering data. Resolve must verify
+the supplied base independently before returning owned geometry. Preserve legacy
+v1 snapshot APIs; the new loader keeps schema 1 as an explicit unbound full
+origin, while compiled schema 2 requires its bindings. New payload coordinates
+are portable signed int32; canonical final assignments are unique.
+
+Use separate tests/implementation and independent reviews for this compatibility
+batch. Test identity, zero removals, empty overrides, negative seams, isolation,
+binding/mismatch rejection, strict decoding, borrowed codec lifetime and limits.
+Verify content and engine tests plus affected consumer builds. No native GPU
+check is needed until E2b changes runtime publication. Provenance, bounded S4
+capture, durable save and reload remain the next coherent ownership batch.

@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e and C1a–C1d complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a and C1a–C1d complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -792,7 +792,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C1d | `134fba0` | Optional compiler embedding, neighborhood reuse and borrowed-profile HL1 export | [Compiler contract](../content/compiled-voxels.md#imported-compiler-emission) |
 | P1c | `7617a2b` | Sealed volume owners, shared forks, final changes and stable dense promotion | [Managed contract](../renderer/editing.md#managed-voxel-ownership) |
 | P1d | `a76dd09` | Ordinary runtime managed authority, renderer derivatives and explicit promotion | [Runtime contract](../renderer/editing.md#ordinary-managed-runtime-geometry) |
-| P1e | This commit | Incremental immutable authority snapshots including auxiliary halos | [Snapshot contract](../renderer/editing.md#managed-voxel-ownership) |
+| P1e | `6b3ae8b` | Incremental immutable authority snapshots including auxiliary halos | [Snapshot contract](../renderer/editing.md#managed-voxel-ownership) |
+| E2a | This commit | Canonical object base identity and opt-in full/base-delta content payloads | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -801,7 +802,8 @@ complete. The user approved opt-in managed ownership with dense promotion on
 public mutable exposure. P1c establishes the volume boundary; P1d integrates
 ordinary entities using independent renderer derivatives and explicit promotion.
 P1e adds incremental authority publication. E2 base identity and payload ownership
-remain an alignment gate before format implementation.
+are approved for ordinary authored objects; E2a establishes their content contract.
+Trusted authored provenance and S4 integration follow.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
@@ -2221,8 +2223,31 @@ passed. A disposable 64-sector/one-edited-brick copy measured full/incremental
 60,496/15,304 B and 13.559/4.404 µs per operation. Construction, editing, latest
 snapshot footprint, downstream physics copies and end-to-end runtime gains are
 excluded. Metadata still scans sectors/tombstones. No pixel/FPS or total-memory
-claim. Existing tests and unrelated changes remain. Next E2 requires the proposed
-[authored-base alignment](streamed-rendering-p1c.md#e2-follow-up-alignment).
+claim. Existing tests and unrelated changes remain. Next E2 uses the approved
+[authored-base boundary](streamed-rendering-p1c.md#e2-follow-up-alignment).
+
+### E2a: Base-bound voxel-object payload format
+
+Commit: this entry's introducing commit. Opt-in schema-v2 full and base-delta
+payloads use canonical geometry/lattice identity and explicit zero assignments.
+Resolution rejects owner, lattice or base mismatches before returning geometry.
+Legacy schema-v1 readers and writers remain unchanged. See the
+[canonical format contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./content -run '^TestE2a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./content -run '^TestE2a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep passed (root 18.584 s); the five consumer commands below passed.
+Complete-removal and empty-delta round trips preserve their distinct meaning.
+No GPU check: content-only API does not change live runtime paths. Runtime
+provenance, S4 capture and save/load integration remain before E2 completion.
+Existing tests and unrelated changes remain.
 
 Consumer commands for these steps:
 

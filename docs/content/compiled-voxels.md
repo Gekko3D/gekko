@@ -186,3 +186,53 @@ bound decode output/window and retain checksum validation. No encoder padding.
 Default imported IO reuses one bounded dictionary-free codec. Explicit
 `SaveImportedWorldChunkCompiledWithCodec` and `LoadImportedWorldChunkWithCodec`
 allow caller-owned profiles; legacy loading does not depend on that profile.
+
+
+## Ordinary voxel-object override payloads
+
+`content.VoxelObjectPayloadDef` adds an opt-in schema-2 override in C1 kind
+`voxel_object_override`. Generic frame version 1 and existing kinds are unchanged.
+Metadata binds `Mode`, `PlacementID`, `ItemID`, `Lattice` and optional
+`BaseIdentity`. Lattice contains a finite positive float32 `VoxelResolution` and
+nonempty UTF-8 `RasterizationVersion` of at most 128 bytes. Owner IDs are nonempty
+UTF-8 strings of at most 1,024 bytes. Metadata must equal the typed canonical JSON
+encoding; unknown fields, alternative ordering and whitespace are rejected.
+
+- `full`: masks describe complete geometry, primary bytes are nonzero materials,
+  secondary layers are absent and `BaseIdentity` is empty.
+- `base_delta`: masks describe assigned cells, primary bytes are presence marker
+  1, mandatory secondary bytes are final materials including explicit zero
+  removals, and `BaseIdentity` is lowercase SHA-256 hex.
+
+Both modes reject auxiliary layers and bake versions. Empty documents are valid;
+allocated bricks still require nonempty masks. Coordinates reconstruct into
+signed int32 voxels using floor division across negative brick seams. New final
+assignments are unique; duplicate coordinates and zero full records are rejected.
+
+`VoxelObjectBaseIdentity(base, lattice, codec)` hashes the separate
+`voxel_object_base` domain: canonical actual geometry and lattice/rasterization
+metadata, with no owner IDs, paths, runtime IDs, transforms or renderer data.
+Legacy base records retain ordered last-write-wins semantics; zeros remove cells
+before hashing. Dictionary and compression choices do not change identity.
+
+`EncodeVoxelObjectPayload` and `DecodeVoxelObjectPayload` convert owned records
+without mutating inputs. Schema 0 encoding defaults to 2; compiled decoding
+requires 2 explicitly. `SaveVoxelObjectPayload` uses existing synced atomic file
+replacement. `LoadVoxelObjectPayload` uses bounded C1 `ReadFrame` for compiled
+files. Explicit codecs are borrowed and their limits/lifetime remain authoritative;
+nil selects a reusable default. Adapter temporaries scale with actual input
+records, not coordinate extent; profile validation follows conversion. This is
+not a pre-admission bound on those temporaries.
+
+`ResolveVoxelObjectPayload(payload, base, lattice, placementID, itemID, codec)`
+validates owner/lattice bindings and independently hashes the supplied base before
+applying deltas. It returns owned schema-1 full snapshot records, or nil on error.
+Incoming assignments and merged geometry obey the codec's logical limits. An
+empty delta preserves the base; removing every base cell yields empty geometry.
+
+Existing `SaveVoxelObjectSnapshot`/`LoadVoxelObjectSnapshot` and schema-1 JSON
+remain unchanged. The new decoder also accepts legacy schema-0/1 JSON as explicit
+schema-1 unbound full payloads. Legacy resolution preserves ordered records and
+whole-file JSON acceptance, without applying C1 limits. Compiled schema 1 and
+schema-2 JSON are rejected. Runtime provenance, S4 publication and reload dispatch
+follow separately; this content API does not automatically change existing saves.

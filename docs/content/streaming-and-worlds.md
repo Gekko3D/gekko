@@ -1147,7 +1147,11 @@ Main top-level fields:
 - voxel object overrides
 - voxel backing removals
 
-Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`.
+Snapshot payloads are stored separately as `VoxelObjectSnapshotDef`. Opt-in
+schema-2 full/base-delta content payloads are defined by the
+[voxel-object override contract](compiled-voxels.md#ordinary-voxel-object-override-payloads).
+Existing runtime dispatch still uses legacy snapshots until authored provenance
+and S4 integration are delivered.
 
 Runtime terrain, imported-world and voxel-object edit snapshots use unique
 payload names inside `<delta file>_data`, preserving `.gkchunk`/`.gkvoxobj` and
