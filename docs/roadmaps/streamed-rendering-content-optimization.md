@@ -801,7 +801,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | E2b3 | `00d0f62` | Actual authored-owner binding and managed streaming override leases | [Ownership contract](../renderer/editing.md#authored-shape-base-provenance) |
 | E2b4 | `6480c5a` | Admitted sparse deltas through async and blocking S4 publication | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
 | E2b5 | `94ae291` | Canonical tracking restoration for owned loaded deltas | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
-| E2b6 | This commit | Exact incremental merged geometry counts for sparse admission | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
+| E2b6 | `bedbe04` | Exact incremental merged geometry counts for sparse admission | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -819,6 +819,8 @@ E2b4 adds admitted sparse S4 writing with conservative payload and merged
 geometry bounds. E2b5 restores loaded delta tracking at explicit Enable; E2b6
 maintains exact merged brick/voxel counts. Assignment and decoded-size caps remain
 conservative. Cheaper full compact selection and other source adapters remain open.
+The [per-brick replacement proposal](streamed-rendering-e2-hybrid.md) remains
+conditional on format alignment and measured benefit; schema-2 contracts are fixed.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
