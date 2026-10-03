@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1g, S2a–S2e, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1g, S2a–S2f, S3a–S3u, S4a–S4c and P5a–P5b complete. S1/S2/S3/P5 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -201,6 +201,14 @@ Suppress per-key concurrent IO/decode/build. Normalize paths; compiled data uses
 Retain explicit empty-page metadata. Empty skipping must honor placements, backing, overrides and collision interest. No-IO emptiness requires every relevant source empty.
 
 Acceptance: total cache/pending memory stays bounded while traveling; concurrent requests reuse one result; gameplay-only chunks need no GPU admission.
+
+#### S2f: Direct unpinned eviction order
+
+Completed: the prepared cache maintains exact unpinned LRU order so
+pressure selects one victim without rescanning every live/warm entry. Preserve
+byte accounting, all acquired users and worker deferral at the true oldest asset.
+[Owner and verification](streamed-rendering-s2a.md#s2f-direct-unpinned-eviction-order).
+Storage graph admission/removal and other cache owners remain separate work.
 
 ### S3. Incremental selection and scene gathering
 
@@ -516,7 +524,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5b | `9463579` | Worker terrain geometry with exact adopted asset cleanup | [Terrain ownership](../assets/runtime-assets.md#streamed-terrain-registration) |
 | S3t | `ba02753` | One-pass live lookup capture with bounded CPU table reuse | [Renderer contract](../renderer/runtime.md#terrain-and-planet-lookup-preparation) |
 | S3u | `de44f7c` | Invocation-local normal context builds only for halo/bake work | [Normal contract](../renderer/runtime.md#normal-neighbor-preparation) |
-| S1g | This commit | Opt-in placement units with durable partial ownership | [Commit contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
+| S1g | `cd8f2b9` | Opt-in placement units with durable partial ownership | [Commit contract](../content/streaming-and-worlds.md#streamed-level-runtime) |
+| S2f | This commit | Direct unpinned prepared-cache eviction order | [Cache contract](../assets/runtime-assets.md#streamed-prepared-geometry-lifetime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -1178,7 +1187,7 @@ upload-planning scans remain; resumable commits and individual large units are n
 
 ### S1g: Opt-in resumable placement commits
 
-Completed 2026-10-03 in this commit. Managed runtimes may admit a configured
+Commit `cd8f2b9`, completed 2026-10-03. Managed runtimes may admit a configured
 number of whole placement units per frame. Defaults and CPU-only commits stay
 synchronous. The bounded ready owner retains partial entities, payloads, leases
 and CPU admission until completion or durable cleanup. Current edits, exact
@@ -1204,6 +1213,29 @@ visibility and exact Stop cleanup. No elapsed-time/FPS or pixel-parity claim.
 Terrain/imported phases, individual assets, snapshots and hooks remain atomic.
 Opt-in placements publish visuals/collision unit by unit; completed imported
 cohorts retain the proxy handoff gate. Existing tests and unrelated changes preserved.
+
+### S2f: Direct prepared-cache eviction order
+
+Completed 2026-10-03 in this commit. The prepared cache selects its true oldest
+unpinned entry directly under the existing mutex, preserving hit/final-release
+ordering, live leases, worker deferral and original-server cleanup. Candidate
+visits scale with victims or deferrals instead of all live/warm owners per victim.
+The cumulative public counter exposes selection work. Separate tests/implementation
+and independent PRE/POST reviews passed.
+
+Verification passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^(TestS2f|TestS2a|TestP5a|TestS2e|TestS1g)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS2f|TestS2a|TestP5a|TestS2e|TestS1g)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused checks 2.682s, race 3.715s, engine root 14.734s and five consumer commands
+below passed. Byte charge, source lifetime, readiness and collision policy remain
+unchanged; no new native check was needed. Storage graph admission/reference
+traversals and other cache owners remain. No FPS or hard frame-time claim.
+Existing tests and unrelated changes preserved; macOS warnings exited successfully.
 
 Consumer commands for these steps:
 

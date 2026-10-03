@@ -219,3 +219,35 @@ This additive owner policy follows S2 live-user pinning. Capping physical buffer
 capacity would require different allocation/admission architecture. Shader layouts,
 normal bytes, upload readiness, collision and content formats remain unchanged.
 Use separate test/implementation agents and independent pre/post reviews.
+
+## S2f: Direct unpinned eviction order
+
+Status: implemented 2026-10-03; focused/race, full engine and five consumer checks
+passed. See the [delivery record](streamed-rendering-content-optimization.md#s2f-direct-prepared-cache-eviction-order).
+
+Scope: replace the prepared cache's full-owner scan per eviction with a private
+ordered list of unpinned entries under its existing mutex. This is an extension
+of S2a's owner, byte charge and LRU contract; no new residency service or budget.
+Confidence is High after inspecting admission, hits, acquisition, release, worker
+builds and terminal cleanup. No human architecture choice is required.
+
+Admission, unpinned hits and final releases append/refresh the entry as newest.
+Acquisition removes it from eviction eligibility; removal and close unlink it.
+Select only the oldest unpinned entry. Workers must defer when that exact victim
+owns an asset, without skipping it to discard newer prepared data. Main-thread
+trim deletes through the original registering server. Disabled, oversized,
+empty-key and multiple-lease paths retain their existing lifetime rules.
+A clock/heap or repeated scan adds work without changing this exact policy.
+
+Files: `streamed_level_geometry_cache.go`, runtime metrics and focused coverage.
+Expose cumulative `PreparedGeometryCacheEvictionCandidateVisits` (cache stats
+`EvictionCandidateVisits`): each nonnil victim examined under pressure counts,
+including a worker-deferred victim. Reads and no-pressure maintenance do not
+advance it. Selection examines at most one candidate per eviction or deferral;
+removal still traverses the immutable storage ledger as required by S2a.
+
+Freeze minimal functionality coverage for multi-victim byte pressure, live pins,
+real hit/final-release ordering and worker deferral; reuse existing S2a lifetime
+and concurrency tests. Use separate test/implementation agents, independent
+PRE/POST reviews, focused race checks and engine/consumer boundary verification.
+Existing readiness, collision, formats and renderer retention remain unchanged.

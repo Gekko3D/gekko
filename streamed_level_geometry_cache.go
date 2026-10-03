@@ -14,18 +14,19 @@ const (
 )
 
 type streamedPreparedGeometryCache struct {
-	mu         sync.Mutex
-	enabled    bool
-	closed     bool
-	maxEntries int
-	maxBytes   int64
-	clock      uint64
-	entries    map[string]*streamedPreparedGeometryCacheEntry
-	owned      map[*streamedPreparedGeometryCacheEntry]struct{}
-	assets     map[AssetId]*streamedPreparedGeometryCacheEntry
-	builds     map[string]*streamedPreparedGeometryBuild
-	storage    streamedGeometryStorageLedger
-	stats      streamedPreparedGeometryCacheStats
+	mu             sync.Mutex
+	enabled        bool
+	closed         bool
+	maxEntries     int
+	maxBytes       int64
+	unpinnedOldest *streamedPreparedGeometryCacheEntry
+	unpinnedNewest *streamedPreparedGeometryCacheEntry
+	entries        map[string]*streamedPreparedGeometryCacheEntry
+	owned          map[*streamedPreparedGeometryCacheEntry]struct{}
+	assets         map[AssetId]*streamedPreparedGeometryCacheEntry
+	builds         map[string]*streamedPreparedGeometryBuild
+	storage        streamedGeometryStorageLedger
+	stats          streamedPreparedGeometryCacheStats
 }
 
 type streamedPreparedGeometryCacheEntry struct {
@@ -37,7 +38,8 @@ type streamedPreparedGeometryCacheEntry struct {
 	assetServer     *AssetServer
 	refCount        int
 	voxelCount      int
-	lastUse         uint64
+	unpinnedPrev    *streamedPreparedGeometryCacheEntry
+	unpinnedNext    *streamedPreparedGeometryCacheEntry
 	noWarm          bool
 }
 
@@ -49,21 +51,22 @@ type streamedPreparedGeometryBuild struct {
 }
 
 type streamedPreparedGeometryCacheStats struct {
-	Entries           int
-	Voxels            int
-	Hits              int
-	Misses            int
-	Evictions         int
-	AssetRegisters    int
-	AssetReuses       int
-	Bytes             int64
-	PreparedBytes     int64
-	AssetBytes        int64
-	PinnedBytes       int64
-	MaxBytes          int64
-	OverBudgetBytes   int64
-	BuildWaits        int
-	OversizedBypasses int
+	Entries                 int
+	Voxels                  int
+	Hits                    int
+	Misses                  int
+	Evictions               int
+	AssetRegisters          int
+	AssetReuses             int
+	Bytes                   int64
+	PreparedBytes           int64
+	AssetBytes              int64
+	PinnedBytes             int64
+	MaxBytes                int64
+	OverBudgetBytes         int64
+	BuildWaits              int
+	OversizedBypasses       int
+	EvictionCandidateVisits int
 }
 
 func streamedPreparedGeometryCacheMaxEntries(configured int) int {
@@ -112,9 +115,10 @@ func (c *streamedPreparedGeometryCache) getOrBuild(key string, build func() *vol
 		}
 		return build(), false
 	}
-	c.clock++
 	if entry := c.entries[key]; c.enabled && entry != nil {
-		entry.lastUse = c.clock
+		if entry.refCount == 0 {
+			c.refreshUnpinnedLocked(entry)
+		}
 		c.stats.Hits++
 		c.mu.Unlock()
 		return entry.geometry, true
@@ -145,9 +149,10 @@ func (c *streamedPreparedGeometryCache) getOrBuild(key string, build func() *vol
 	}()
 	c.mu.Lock()
 	if pending.geometry != nil && pending.panicValue == nil && c.enabled && !c.closed {
-		c.clock++
 		if entry := c.entries[key]; entry != nil {
-			entry.lastUse = c.clock
+			if entry.refCount == 0 {
+				c.refreshUnpinnedLocked(entry)
+			}
 			pending.geometry, pending.hit = entry.geometry, true
 			c.stats.Hits++
 		} else {
@@ -180,13 +185,14 @@ func (c *streamedPreparedGeometryCache) admitLocked(key string, geometry *volume
 	}
 	entry := &streamedPreparedGeometryCacheEntry{
 		key: key, geometry: geometry, voxelCount: voxelCount,
-		lastUse: c.clock, noWarm: !c.enabled || key == "",
+		noWarm: !c.enabled || key == "",
 	}
 	entry.preparedStorage = c.storage.admit(geometry, streamedGeometryPrepared)
 	if key != "" {
 		c.entries[key] = entry
 	}
 	c.owned[entry] = struct{}{}
+	c.refreshUnpinnedLocked(entry)
 	c.stats.Entries++
 	c.stats.Voxels += entry.voxelCount
 	return entry
@@ -217,7 +223,6 @@ func (c *streamedPreparedGeometryCache) acquirePreparedAsset(assets *AssetServer
 	if c.closed {
 		return AssetId{}, false, false
 	}
-	c.clock++
 	var entry *streamedPreparedGeometryCacheEntry
 	if key != "" {
 		entry = c.entries[key]
@@ -229,8 +234,8 @@ func (c *streamedPreparedGeometryCache) acquirePreparedAsset(assets *AssetServer
 			entry = c.admitLocked(key, geometry)
 		}
 	}
-	entry.lastUse = c.clock
 	if entry.refCount == 0 {
+		c.unlinkUnpinnedLocked(entry)
 		c.storage.adjust(entry.preparedStorage, streamedGeometryPinned, 1)
 		c.storage.adjust(entry.assetStorage, streamedGeometryPinned, 1)
 	}
@@ -287,14 +292,14 @@ func (c *streamedPreparedGeometryCache) releaseLocked(entry *streamedPreparedGeo
 	if entry == nil || entry.refCount == 0 {
 		return
 	}
-	c.clock++
-	entry.lastUse = c.clock
 	entry.refCount--
 	if entry.refCount == 0 {
 		c.storage.adjust(entry.preparedStorage, streamedGeometryPinned, -1)
 		c.storage.adjust(entry.assetStorage, streamedGeometryPinned, -1)
 		if entry.noWarm {
 			c.removeLocked(entry, true)
+		} else {
+			c.refreshUnpinnedLocked(entry)
 		}
 	}
 	c.evictLocked(true)
@@ -320,23 +325,50 @@ func (c *streamedPreparedGeometryCache) snapshot() streamedPreparedGeometryCache
 
 func (c *streamedPreparedGeometryCache) evictLocked(canDeleteAssets bool) {
 	for len(c.owned) > c.maxEntries || c.storage.bytes > c.maxBytes {
-		var victim *streamedPreparedGeometryCacheEntry
-		for entry := range c.owned {
-			if entry.refCount > 0 {
-				continue
-			}
-			if victim == nil || entry.lastUse < victim.lastUse {
-				victim = entry
-			}
+		victim := c.unpinnedOldest
+		if victim == nil {
+			return
 		}
-		if victim == nil || (!canDeleteAssets && victim.asset != (AssetId{})) {
+		c.stats.EvictionCandidateVisits++
+		if !canDeleteAssets && victim.asset != (AssetId{}) {
 			return
 		}
 		c.removeLocked(victim, true)
 	}
 }
 
+// Only unpinned entries participate in eviction order. All links are owned by
+// the cache mutex; pinned entries and removed entries have no links.
+func (c *streamedPreparedGeometryCache) unlinkUnpinnedLocked(entry *streamedPreparedGeometryCacheEntry) {
+	if entry.unpinnedPrev == nil && entry.unpinnedNext == nil && c.unpinnedOldest != entry {
+		return
+	}
+	if entry.unpinnedPrev != nil {
+		entry.unpinnedPrev.unpinnedNext = entry.unpinnedNext
+	} else {
+		c.unpinnedOldest = entry.unpinnedNext
+	}
+	if entry.unpinnedNext != nil {
+		entry.unpinnedNext.unpinnedPrev = entry.unpinnedPrev
+	} else {
+		c.unpinnedNewest = entry.unpinnedPrev
+	}
+	entry.unpinnedPrev, entry.unpinnedNext = nil, nil
+}
+
+func (c *streamedPreparedGeometryCache) refreshUnpinnedLocked(entry *streamedPreparedGeometryCacheEntry) {
+	c.unlinkUnpinnedLocked(entry)
+	entry.unpinnedPrev = c.unpinnedNewest
+	if c.unpinnedNewest != nil {
+		c.unpinnedNewest.unpinnedNext = entry
+	} else {
+		c.unpinnedOldest = entry
+	}
+	c.unpinnedNewest = entry
+}
+
 func (c *streamedPreparedGeometryCache) removeLocked(entry *streamedPreparedGeometryCacheEntry, eviction bool) {
+	c.unlinkUnpinnedLocked(entry)
 	if entry.asset != (AssetId{}) {
 		entry.assetServer.DeleteVoxelGeometry(entry.asset)
 		delete(c.assets, entry.asset)

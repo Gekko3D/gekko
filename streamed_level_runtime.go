@@ -187,6 +187,8 @@ type StreamedLevelRuntimeMetrics struct {
 	NavigationRebuildTerminalReason        string
 	NavigationRebuildLastDirtyCount        int
 
+	PreparedGeometryCacheEvictionCandidateVisits int
+
 	PreparedChunkCount    int
 	PrepareErrorCount     int
 	PrepareCancelledCount int
@@ -1761,6 +1763,7 @@ func refreshStreamedRuntimeMetricsCounts(state *StreamedLevelRuntimeState) {
 	state.Metrics.PreparedGeometryCacheHits = cacheStats.Hits
 	state.Metrics.PreparedGeometryCacheMisses = cacheStats.Misses
 	state.Metrics.PreparedGeometryCacheEvictions = cacheStats.Evictions
+	state.Metrics.PreparedGeometryCacheEvictionCandidateVisits = cacheStats.EvictionCandidateVisits
 	state.Metrics.PreparedGeometryAssetRegisters = cacheStats.AssetRegisters
 	state.Metrics.PreparedGeometryAssetReuses = cacheStats.AssetReuses
 	state.Metrics.LoadedChunkCount = len(state.LoadedChunks)

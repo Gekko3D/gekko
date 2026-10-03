@@ -177,7 +177,13 @@ increment it. Cache ledger traversal remains main-thread work.
 
 Acquired runtime users pin that copy. Warm entries share an LRU byte/entry policy; live users may
 exceed the byte ceiling and expose pressure metrics. Oversized or disabled warm
-entries delete their registered assets after the final release.
+entries delete their registered assets after the final release. Unpinned entries
+maintain exact LRU order; eviction selects the oldest directly. Workers defer
+when that oldest entry owns an asset, leaving deletion to engine-thread trim.
+`PreparedGeometryCacheEvictionCandidateVisits` counts nonnil victims examined
+under pressure, including worker deferrals; reads and no-pressure maintenance do
+not advance it. Selection avoids scanning pinned/warm owners; storage graph
+removal retains its existing charge/lifetime work.
 
 Cleanup uses the original registering AssetServer and exact acquired asset ID,
 including uncached/empty-key registrations. Successful streamed Stop releases
