@@ -166,6 +166,13 @@ validated warm reuse). Reads are scalar and nil-server reads return zero. Source
 loading, temporary hierarchy resolution, palette/key work and live validation
 remain; these counters do not measure frame time.
 
+Cold authored collapse and level-brush composition stream accepted rasterized
+writes through [ordered edits](../renderer/editing.md#ordered-edit-streams), once
+per part. Source/sample order, transformed voxel-center tests, epsilon, material
+assignment and add/subtract order are unchanged. Validation precedes writes;
+material flags finalize before the next part. Existing sample arrays remain,
+without an additional write list or a change to warm cache authority.
+
 ## Source Paths and Provenance
 
 Several runtime asset records carry `SourcePath`.

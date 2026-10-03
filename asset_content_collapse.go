@@ -396,41 +396,45 @@ func bakeResolvedPartIntoComposite(dst *volume.XBrickMap, part authoredCollapseR
 	epsilon := float32(1e-4)
 	operation := content.EffectiveAssetSourceOperation(part.def.Source)
 
-	for _, voxel := range samples {
-		localMin := mgl32.Vec3{float32(voxel.x), float32(voxel.y), float32(voxel.z)}
-		localMax := localMin.Add(mgl32.Vec3{1, 1, 1})
-		worldMin, worldMax := transformedVoxelBounds(localMin, localMax, part.world, part.voxelResolution)
+	dst.ApplyVoxelWrites(func(yield func(volume.VoxelWrite) bool) {
+		for _, voxel := range samples {
+			localMin := mgl32.Vec3{float32(voxel.x), float32(voxel.y), float32(voxel.z)}
+			localMax := localMin.Add(mgl32.Vec3{1, 1, 1})
+			worldMin, worldMax := transformedVoxelBounds(localMin, localMax, part.world, part.voxelResolution)
 
-		minGX := int(math.Floor(float64(worldMin.X()/targetResolution - epsilon)))
-		minGY := int(math.Floor(float64(worldMin.Y()/targetResolution - epsilon)))
-		minGZ := int(math.Floor(float64(worldMin.Z()/targetResolution - epsilon)))
-		maxGX := int(math.Ceil(float64(worldMax.X()/targetResolution + epsilon)))
-		maxGY := int(math.Ceil(float64(worldMax.Y()/targetResolution + epsilon)))
-		maxGZ := int(math.Ceil(float64(worldMax.Z()/targetResolution + epsilon)))
+			minGX := int(math.Floor(float64(worldMin.X()/targetResolution - epsilon)))
+			minGY := int(math.Floor(float64(worldMin.Y()/targetResolution - epsilon)))
+			minGZ := int(math.Floor(float64(worldMin.Z()/targetResolution - epsilon)))
+			maxGX := int(math.Ceil(float64(worldMax.X()/targetResolution + epsilon)))
+			maxGY := int(math.Ceil(float64(worldMax.Y()/targetResolution + epsilon)))
+			maxGZ := int(math.Ceil(float64(worldMax.Z()/targetResolution + epsilon)))
 
-		for gx := minGX; gx < maxGX; gx++ {
-			for gy := minGY; gy < maxGY; gy++ {
-				for gz := minGZ; gz < maxGZ; gz++ {
-					centerWorld := mgl32.Vec3{
-						(float32(gx) + 0.5) * targetResolution,
-						(float32(gy) + 0.5) * targetResolution,
-						(float32(gz) + 0.5) * targetResolution,
+			for gx := minGX; gx < maxGX; gx++ {
+				for gy := minGY; gy < maxGY; gy++ {
+					for gz := minGZ; gz < maxGZ; gz++ {
+						centerWorld := mgl32.Vec3{
+							(float32(gx) + 0.5) * targetResolution,
+							(float32(gy) + 0.5) * targetResolution,
+							(float32(gz) + 0.5) * targetResolution,
+						}
+						local := inverseVoxelPoint(centerWorld, part.world.Position, invRot, voxelScale, part.world.Pivot)
+						if local.X() < localMin.X()-epsilon || local.X() > localMax.X()+epsilon ||
+							local.Y() < localMin.Y()-epsilon || local.Y() > localMax.Y()+epsilon ||
+							local.Z() < localMin.Z()-epsilon || local.Z() > localMax.Z()+epsilon {
+							continue
+						}
+						value := voxel.value
+						if operation == content.AssetShapeOperationSubtract {
+							value = 0
+						}
+						if !yield(volume.VoxelWrite{X: gx, Y: gy, Z: gz, Value: value}) {
+							return
+						}
 					}
-					local := inverseVoxelPoint(centerWorld, part.world.Position, invRot, voxelScale, part.world.Pivot)
-					if local.X() < localMin.X()-epsilon || local.X() > localMax.X()+epsilon ||
-						local.Y() < localMin.Y()-epsilon || local.Y() > localMax.Y()+epsilon ||
-						local.Z() < localMin.Z()-epsilon || local.Z() > localMax.Z()+epsilon {
-						continue
-					}
-					if operation == content.AssetShapeOperationSubtract {
-						dst.SetVoxel(gx, gy, gz, 0)
-						continue
-					}
-					dst.SetVoxel(gx, gy, gz, voxel.value)
 				}
 			}
 		}
-	}
+	})
 	return nil
 }
 
