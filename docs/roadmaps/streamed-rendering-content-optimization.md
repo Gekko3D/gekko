@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b and P1a–P1b complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1c and C1a–C1d complete. S1/S2/S3/P5/E1/P1 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -81,6 +81,11 @@ see [point reads](../renderer/runtime.md#voxel-point-reads).
 P1b adds opt-in compact retention for private imported full/proxy prepared sources
 in the existing cache. Public assets and live maps remain dense. See
 [private ownership](streamed-rendering-p1b.md); this is independent of C1's schema.
+
+P1c introduces an opt-in sealed volume owner with shared forks, tracked final
+assignments and irreversible dense promotion. Existing runtime paths remain
+dense. See [managed ownership](streamed-rendering-p1c.md); integration must first
+resolve direct public scene-map exposure and authority precedence.
 
 ### P2. Pack GPU brick records by sector occupancy
 
@@ -781,12 +786,17 @@ This workflow does not independently authorize tests, delegation or commits.
 | C1a | `2492a3f` | Lossless bounded zstd frames and opt-in compiled imported chunks | [Compiled contract](../content/compiled-voxels.md) |
 | C1b | `5b69193` | Fixed borrowed compiled-chunk codec profile per decoded cache owner | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
 | C1c | `1a67174` | Validated embedded fitted normals with separate geometry identity | [Compiled contract](../content/compiled-voxels.md#imported-embedded-normals) |
-| C1d | This commit | Optional compiler embedding, neighborhood reuse and borrowed-profile HL1 export | [Compiler contract](../content/compiled-voxels.md#imported-compiler-emission) |
+| C1d | `134fba0` | Optional compiler embedding, neighborhood reuse and borrowed-profile HL1 export | [Compiler contract](../content/compiled-voxels.md#imported-compiler-emission) |
+| P1c | This commit | Sealed volume owners, shared forks, final changes and stable dense promotion | [Managed contract](../renderer/editing.md#managed-voxel-ownership) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
 Imported C1 frames, runtime profiles, embedding and compiler emission/reuse are
-complete. Next delivery gate: P1/E2 public ownership and tracked-edit scope.
+complete. The user approved opt-in managed ownership with dense promotion on
+public mutable exposure; P1c establishes its isolated volume boundary. Next
+delivery gate: runtime scene exposure and geometry authority precedence before
+P1/E2 integration. Direct exported scene maps cannot be covered by getter hooks;
+see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
 the user approved optional layers/dictionaries and broader compiled assets and
 region-pack follow-ups. The [C1 design](streamed-rendering-c1.md) specifies a new
@@ -2118,8 +2128,34 @@ The disposable probe covered omitted counts, synthesized sector counts, empty
 geometry, nonembedded borrowed profiles, legacy closed-profile compatibility,
 schema rejection and unchanged manifests. No pixel/FPS/RSS or corpus claim.
 Editor full-test baseline remains as recorded in P1a. Existing tests and unrelated
-changes remain. Next requires the managed-edit/public-exposure ownership choice;
+changes remain. P1c follows with the approved managed-edit volume boundary;
 compiled assets remain approved, while C2 retains its measured-scale/design gate.
+
+### P1c: Sealed managed volume ownership
+
+This commit adds `volume.ManagedXBrickMap` behind the approved opt-in boundary.
+Shared sealed forks detach edited and halo bricks; final changes preserve zeros
+and reverts. Public exposure retains one dense authority and disables tracking.
+Owner: volume storage/editing; runtime assets, rendering, physics, navigation and
+persistence remain unchanged. Contract: [managed ownership](../renderer/editing.md#managed-voxel-ownership).
+Separate tests/implementation and independent PRE/POST reviews passed; frozen
+and existing tests remain unchanged. Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^TestP1c' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-p1c-cost.go
+```
+
+Engine sweep passed (root 16.595 s); the five consumer commands below passed.
+A disposable 32³ mixed dense fixture measured Copy/Fork 38,304/1,664 allocated
+bytes and 4.162/0.360 µs per operation; construction, edits, retained memory and
+runtime performance are excluded. No windowed check: this isolated API changes
+no live scene path. No compact-payload, heap/RSS, pixel/FPS or runtime delta claim.
+Next requires scene exposure/authority alignment; public aliases prevent detecting
+raw runtime writes through getter hooks alone. Unrelated changes remain.
 
 Consumer commands for these steps:
 

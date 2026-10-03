@@ -62,6 +62,39 @@ in `GPUEditMode` uses ordinary sequential `SetVoxel` throughout, preserving
 callback observations and reentry even if a callback changes that mode. No
 intermediate write list or new shared owner is introduced.
 
+## Managed voxel ownership
+
+`volume.NewManagedXBrickMap(source)` explicitly seals a defensive copy behind
+`ManagedXBrickMap`; nil input creates an empty owner. Existing `XBrickMap` and
+public `Brick.Payload` access retain their mutable contracts. Managed maps are
+CPU owners and do not inherit the source's GPU editing mode.
+
+`GetVoxel`, `SetVoxel` and `ApplyVoxelWrites` retain dense voxel, material,
+revision, bounds and fitted-normal halo semantics. Sealed `Fork` shares private
+bricks with independent metadata. Writes detach affected bricks before mutation,
+including halo neighbors. `Snapshot` returns an independent ordinary map with
+the existing `XBrickMap.Copy` identity, upload-state and metadata behavior.
+
+`TrackedChanges` returns owned final assignments relative to the construction
+base, sorted by z, y and x. It includes explicit zero removals and omits reverted
+cells. Sealed forks inherit the original base and changes. Ordered producers can
+read current voxels; applied writes remain tracked if the producer panics.
+
+`ExposeMutable` irreversibly detaches shared storage and returns one stable dense
+authority. Later raw writes remain visible; `TrackedChanges` returns `(nil,
+false)` permanently. This owner releases its base/history; earlier forks remain
+isolated. Forking an exposed owner seals a fresh construction base from current
+raw data. Persistence consumers must use full snapshots after exposure.
+
+Each owner requires exclusive access during operations. Independent forks may
+edit concurrently after fork construction completes. Source and exposed raw maps
+must also be exclusively owned while owner operations access them. Producers
+must not mutate, reenter, expose or fork the owner while consuming its edit stream.
+
+This boundary retains inline dense bricks. Asset, renderer and persistence
+integration follow separately; no existing runtime path automatically opts in.
+See [ownership rationale](../roadmaps/streamed-rendering-p1c.md).
+
 ## Raycast Internals
 
 `Scene.Raycast` currently:
