@@ -1227,13 +1227,15 @@ V1 full fallback covers exposed, unbound, resealed or unsupported origins and
 assignments outside signed int32 or valid payload metadata. Sparse selection
 conservatively requires assignment count no greater than the default codec's
 brick and voxel limits. Enable also records canonical base brick/voxel counts
-and decoded size during its existing validation. Admission conservatively bounds
-the merged geometry with base counts plus changed count and at most 592 decoded
-bytes of growth per assignment. This covers new bricks and uniform-to-mixed
-paint without an unload-time base scan. Unknown proof or exceeded bounds uses
-legacy full capture, including near-limit removals or larger histories that
-could fit C1 with a tighter calculation. Codec adapter temporaries remain outside the
-retained S4 byte charge. Terrain, imported worlds, backing removals, placement
+and decoded size during its existing validation. Admission checks merged brick
+and voxel limits through exact current counts maintained by the managed owner;
+paint and removal at the brick limit no longer imply overflow. The original
+base proof and conservative bound of at most 592 decoded bytes of growth per
+assignment remain required. This covers new bricks and uniform-to-mixed paint
+without an unload-time base scan. Unknown proof or exceeded bounds uses legacy
+full capture. Larger histories or decoded-size estimates may still fall back
+even when C1 could fit them with a tighter calculation. Codec adapter temporaries
+remain outside the retained S4 byte charge. Terrain, imported worlds, backing removals, placement
 changes and navigation retain their existing representations.
 
 Exact capture freshness checks managed authority, generation, provenance and

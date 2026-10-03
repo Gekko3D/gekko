@@ -11,9 +11,12 @@ import (
 // independent forks may be edited concurrently. Dense brick payloads remain
 // unchanged, but sealed owners share them until a write requires detachment.
 type ManagedXBrickMap struct {
-	current *XBrickMap
-	base    *XBrickMap
-	changes map[[3]int]uint8
+	current                      *XBrickMap
+	base                         *XBrickMap
+	changes                      map[[3]int]uint8
+	brickVoxelCounts             map[[6]int]int
+	staleSolid                   map[[6]int]bool
+	currentBricks, currentVoxels int
 	// Publication revisions also include auxiliary-only fitted-normal halos.
 	// Public SectorRevisions continue to describe dense voxel writes only.
 	publicationRevisions map[[3]int]uint64
@@ -32,7 +35,9 @@ func NewManagedXBrickMap(source *XBrickMap) *ManagedXBrickMap {
 	} else {
 		base = source.Copy()
 	}
-	return &ManagedXBrickMap{current: shareManagedMap(base), base: base}
+	owner := &ManagedXBrickMap{current: shareManagedMap(base), base: base}
+	owner.seedGeometryCounts()
+	return owner
 }
 
 // NewManagedXBrickMapWithBase defensively copies independent original and
@@ -86,7 +91,119 @@ func NewManagedXBrickMapWithBase(base, current *XBrickMap) *ManagedXBrickMap {
 	}
 	visit(current, base, false)
 	visit(base, current, true)
+	owner.seedGeometryCounts()
 	return owner
+}
+
+// Logical counts follow dense primary bytes, independently of compression flags
+// and occupancy caches. Stale Solid flags require rare target-brick repair after
+// existing dense mutations, which can expand AtlasOffset into implicit cells.
+func managedBrickGeometry(brick *Brick) (int, bool) {
+	if brick == nil {
+		return 0, false
+	}
+	count, uniform := 0, brick.AtlasOffset > 0 && brick.AtlasOffset <= 255
+	for x := 0; x < BrickSize; x++ {
+		for y := 0; y < BrickSize; y++ {
+			for z := 0; z < BrickSize; z++ {
+				value := brick.VoxelValue(x, y, z)
+				if value != 0 {
+					count++
+				}
+				if uint32(value) != brick.AtlasOffset {
+					uniform = false
+				}
+			}
+		}
+	}
+	return count, brick.Flags&BrickFlagSolid != 0 && (count != BrickSize*BrickSize*BrickSize || !uniform)
+}
+
+func (m *ManagedXBrickMap) setBrickGeometryCount(key [6]int, count int) {
+	previous := m.brickVoxelCounts[key]
+	m.currentVoxels += count - previous
+	if previous == 0 && count > 0 {
+		m.currentBricks++
+	}
+	if previous > 0 && count == 0 {
+		m.currentBricks--
+	}
+	if count == 0 {
+		delete(m.brickVoxelCounts, key)
+		return
+	}
+	if m.brickVoxelCounts == nil {
+		m.brickVoxelCounts = make(map[[6]int]int)
+	}
+	m.brickVoxelCounts[key] = count
+}
+
+func (m *ManagedXBrickMap) setStaleSolid(key [6]int, stale bool) {
+	if !stale {
+		delete(m.staleSolid, key)
+		return
+	}
+	if m.staleSolid == nil {
+		m.staleSolid = make(map[[6]int]bool)
+	}
+	m.staleSolid[key] = true
+}
+
+func (m *ManagedXBrickMap) seedGeometryCounts() {
+	for sectorKey, sector := range m.current.Sectors {
+		for i := 0; i < 64; i++ {
+			key := [6]int{sectorKey[0], sectorKey[1], sectorKey[2], i % 4, i / 4 % 4, i / 16}
+			count, stale := managedBrickGeometry(sector.GetBrick(key[3], key[4], key[5]))
+			m.setBrickGeometryCount(key, count)
+			m.setStaleSolid(key, stale)
+		}
+	}
+}
+
+func (m *ManagedXBrickMap) reconcileManagedBrick(key [6]int, brick *Brick) {
+	count := 0
+	uniform := brick != nil && brick.AtlasOffset > 0 && brick.AtlasOffset <= 255
+	for x := 0; x < BrickSize; x++ {
+		for y := 0; y < BrickSize; y++ {
+			for z := 0; z < BrickSize; z++ {
+				coord := [3]int{key[0]*SectorSize + key[3]*BrickSize + x, key[1]*SectorSize + key[4]*BrickSize + y, key[2]*SectorSize + key[5]*BrickSize + z}
+				var value uint8
+				if brick != nil {
+					value = brick.VoxelValue(x, y, z)
+					if uint32(value) != brick.AtlasOffset {
+						uniform = false
+					}
+				}
+				if value != 0 {
+					count++
+				}
+				m.trackManagedAssignment(coord, value)
+			}
+		}
+	}
+	m.setBrickGeometryCount(key, count)
+	m.setStaleSolid(key, brick != nil && brick.Flags&BrickFlagSolid != 0 && (count != BrickSize*BrickSize*BrickSize || !uniform))
+}
+
+func (m *ManagedXBrickMap) trackManagedAssignment(coord [3]int, value uint8) {
+	_, original := m.base.GetVoxel(coord[0], coord[1], coord[2])
+	if value == original {
+		delete(m.changes, coord)
+		return
+	}
+	if m.changes == nil {
+		m.changes = make(map[[3]int]uint8)
+	}
+	m.changes[coord] = value
+}
+
+// CurrentGeometryCounts reports current nonempty bricks and primary voxels
+// without allocation. Exposed owners permanently disable this sealed metadata.
+func (m *ManagedXBrickMap) CurrentGeometryCounts() (int, int, bool) {
+	if m.base == nil {
+		return 0, 0, false
+	}
+	return m.currentBricks, m.currentVoxels, true
 }
 
 // shareManagedMap shares only bricks. Sector headers, pointer slices and all
@@ -152,6 +269,7 @@ func (m *ManagedXBrickMap) setVoxel(w VoxelWrite, batch *voxelEditBatch) {
 	// so neighboring bricks must detach before the existing mutator runs too.
 	m.detachVoxelHalo(w.X, w.Y, w.Z)
 	sKey, bKey := sectorBrickKeyForVoxel(w.X, w.Y, w.Z)
+	stale := m.staleSolid[bKey]
 	var old *Brick
 	if sector := m.current.Sectors[sKey]; sector != nil {
 		old = sector.GetBrick(bKey[3], bKey[4], bKey[5])
@@ -168,15 +286,21 @@ func (m *ManagedXBrickMap) setVoxel(w VoxelWrite, batch *voxelEditBatch) {
 	if brick != nil {
 		m.ownBrick(brick)
 	}
-	_, original := m.base.GetVoxel(w.X, w.Y, w.Z)
-	key := [3]int{w.X, w.Y, w.Z}
-	if w.Value == original {
-		delete(m.changes, key)
+	// Stale occupancy metadata can make the dense mutator remove a whole
+	// non-Solid brick. Reconcile its implicit removals only on that rare path.
+	if stale || brick == nil && m.brickVoxelCounts[bKey] > 1 {
+		m.reconcileManagedBrick(bKey, brick)
 	} else {
-		if m.changes == nil {
-			m.changes = make(map[[3]int]uint8)
+		_, actual := m.current.GetVoxel(w.X, w.Y, w.Z)
+		count := m.brickVoxelCounts[bKey]
+		if previous == 0 && actual != 0 {
+			count++
 		}
-		m.changes[key] = w.Value
+		if previous != 0 && actual == 0 {
+			count--
+		}
+		m.setBrickGeometryCount(bKey, count)
+		m.trackManagedAssignment([3]int{w.X, w.Y, w.Z}, actual)
 	}
 }
 
@@ -242,6 +366,9 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 		base:                 m.base,
 		changes:              maps.Clone(m.changes),
 		publicationRevisions: maps.Clone(m.publicationRevisions),
+		brickVoxelCounts:     maps.Clone(m.brickVoxelCounts),
+		staleSolid:           maps.Clone(m.staleSolid),
+		currentBricks:        m.currentBricks, currentVoxels: m.currentVoxels,
 	}
 	m.exclusive = nil
 	return child
@@ -295,6 +422,8 @@ func (m *ManagedXBrickMap) ExposeMutable() *XBrickMap {
 		}
 		m.base = nil
 		m.changes = nil
+		m.brickVoxelCounts, m.staleSolid = nil, nil
+		m.currentBricks, m.currentVoxels = 0, 0
 		m.publicationRevisions = nil
 		m.exclusive = nil
 	}

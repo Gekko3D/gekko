@@ -105,6 +105,15 @@ The visitor can stop by returning false; the method reports tracking availabilit
 including true for an empty sealed history. Visitor callbacks must not mutate or
 reenter the owner. Both methods report unavailable after exposure.
 
+`CurrentGeometryCounts` returns current nonempty brick and nonzero primary voxel
+counts without allocation or geometry scans. Construction initializes counts
+from copied current payload, independently of material and occupancy flags.
+Ordinary assignments update only zero/nonzero transitions; Fork clones this
+metadata and exposure disables it. Legacy inconsistent solid or occupancy flags
+can expand or delete unrequested cells through existing dense mutators. Those
+rare paths reconcile counts and final history against the base in one target-brick
+pass, including dense early returns. They do not change dense mutation semantics.
+
 `ExposeMutable` irreversibly detaches shared storage and returns one stable dense
 authority. Later raw writes remain visible; `TrackedChanges` returns `(nil,
 false)` permanently. This owner releases its base/history; earlier forks remain

@@ -33,11 +33,16 @@ func managedVoxelPersistenceCandidate(cmd *Commands, assets *AssetServer, state 
 	if !tracked || count < 0 || count > limits.MaxBricks || count > limits.MaxVoxels {
 		return content.VoxelObjectPayloadDef{}, nil, 0, false
 	}
-	// The decoded full geometry must also fit when the loader merges this
-	// delta. One final assignment can add a brick or expand a uniform primary
+	// The original base must have a valid profile proof. Its decoded geometry
+	// growth remains conservatively bounded when the loader merges this delta.
+	// One final assignment can add a brick or expand a uniform primary
 	// channel; 80 bytes of header plus 512 values bounds either operation.
 	base := entry.persistenceBinding
-	if base == nil || base.baseBricks < 0 || base.baseBricks > limits.MaxBricks || base.baseVoxels < 0 || base.baseVoxels > limits.MaxVoxels || base.baseDecodedBytes <= 0 || base.baseDecodedBytes > limits.MaxDecodedBytes || count > limits.MaxBricks-base.baseBricks || count > limits.MaxVoxels-base.baseVoxels || int64(count) > (limits.MaxDecodedBytes-base.baseDecodedBytes)/(80+512) {
+	if base == nil || base.baseBricks < 0 || base.baseBricks > limits.MaxBricks || base.baseVoxels < 0 || base.baseVoxels > limits.MaxVoxels || base.baseDecodedBytes <= 0 || base.baseDecodedBytes > limits.MaxDecodedBytes || int64(count) > (limits.MaxDecodedBytes-base.baseDecodedBytes)/(80+512) {
+		return content.VoxelObjectPayloadDef{}, nil, 0, false
+	}
+	bricks, voxels, counted := entry.owner.CurrentGeometryCounts()
+	if !counted || bricks < 0 || bricks > limits.MaxBricks || voxels < 0 || voxels > limits.MaxVoxels {
 		return content.VoxelObjectPayloadDef{}, nil, 0, false
 	}
 	payload := content.VoxelObjectPayloadDef{SchemaVersion: content.CurrentVoxelObjectPayloadSchemaVersion, Mode: content.VoxelObjectPayloadBaseDelta, PlacementID: owner, ItemID: item, Lattice: lattice, BaseIdentity: identity}

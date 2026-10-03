@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2b5 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2b6 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -800,7 +800,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | E2b2 | `5c45a04` | Bound authored-shape payload loading with current override selection | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
 | E2b3 | `00d0f62` | Actual authored-owner binding and managed streaming override leases | [Ownership contract](../renderer/editing.md#authored-shape-base-provenance) |
 | E2b4 | `6480c5a` | Admitted sparse deltas through async and blocking S4 publication | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
-| E2b5 | This commit | Canonical tracking restoration for owned loaded deltas | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
+| E2b5 | `94ae291` | Canonical tracking restoration for owned loaded deltas | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
+| E2b6 | This commit | Exact incremental merged geometry counts for sparse admission | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -815,9 +816,9 @@ The [streamed ownership review](streamed-rendering-p1c.md#next-alignment-ordinar
 confirmed ordinary placement items already support managed enable without ticket
 changes. E2b3 binds actual authored owners and reuses streaming geometry leases.
 E2b4 adds admitted sparse S4 writing with conservative payload and merged
-geometry bounds. E2b5 restores loaded delta tracking at explicit Enable. Tighter
-profile admission and cheaper full compact selection remain; other source adapters
-remain open.
+geometry bounds. E2b5 restores loaded delta tracking at explicit Enable; E2b6
+maintains exact merged brick/voxel counts. Assignment and decoded-size caps remain
+conservative. Cheaper full compact selection and other source adapters remain open.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
@@ -2390,6 +2391,31 @@ retains exact original-base assignments; synchronous hooks and full fallbacks
 retain lease cleanup. No new windowed check: renderer publication retains its
 existing dense path; no pixel/FPS claim. Conservative profile fallback and
 per-brick compact selection remain. Existing tests and unrelated changes remain.
+
+### E2b6: Exact current geometry counts for merged admission
+
+Commit: this entry's introducing commit. Managed owners maintain logical current
+brick/voxel counts, allowing paint/removal at the codec brick limit to save sparse
+deltas. Rare legacy metadata expansion/deletion reconciles counts and all final
+assignments in one target-brick pass. Contract:
+[count ownership](../renderer/editing.md#managed-voxel-ownership).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . ./voxelrt/rt/volume -run '^TestE2b6' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . ./voxelrt/rt/volume -run 'TestE2b[123456]|TestP1[cde]|TestP5c|TestS1g|TestS4' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/volume -run 'TestE2b[123456]|TestP1[cde]|TestP5c|TestS1g|TestS4' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and five consumer commands below passed. Near-limit paint/removal
+payloads resolve exact current geometry. Existing true
+brick overflow and assignment-count fallbacks remain. Counts queries allocate
+nothing; no save-time base scan is introduced. Assignment and decoded-size caps
+remain conservative; per-brick hybrid encoding requires a separate format scope.
+No new windowed check: dense mutation and renderer replay retain existing paths;
+no pixel/FPS claim. Existing tests and unrelated changes remain.
 
 Consumer commands for these steps:
 
