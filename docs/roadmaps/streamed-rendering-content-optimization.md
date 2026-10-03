@@ -819,8 +819,10 @@ E2b4 adds admitted sparse S4 writing with conservative payload and merged
 geometry bounds. E2b5 restores loaded delta tracking at explicit Enable; E2b6
 maintains exact merged brick/voxel counts. Assignment and decoded-size caps remain
 conservative. Cheaper full compact selection and other source adapters remain open.
-The [per-brick replacement proposal](streamed-rendering-e2-hybrid.md) remains
-conditional on format alignment and measured benefit; schema-2 contracts are fixed.
+The [per-brick replacement proposal](streamed-rendering-e2-hybrid.md) is deferred
+after synthetic codec measurements: CPU/allocation gains exist, but logical
+savings do not reliably reduce compressed bytes. Real save/reload profiles and
+format alignment remain prerequisites; schema-2 contracts are fixed.
 Direct exported scene maps cannot be covered by getter hooks;
 see [integration decision](streamed-rendering-p1c.md#follow-up-dependencies).
 On 2026-10-03,
