@@ -1,0 +1,85 @@
+# C3: Compiled ordinary assets
+
+Status: approved direction; C3a shape-frame compatibility complete. Full asset
+headers, compiler emission and runtime adoption follow separately.
+Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
+
+## Authority and ownership
+
+Compiled shipping artifacts are explicit runtime inputs. The offline compiler
+checks authoring sources and records compiler/rasterization identities. Runtime
+validates artifact integrity and supported versions without rereading original
+voxel JSON or VOX sources. Do not discover hidden sidecars, replace authored paths
+silently, or fall back from corrupt explicitly selected compiled content.
+Authoring `.gkasset` files and existing loading APIs retain their contracts.
+
+Use independent C1 frames for canonical part geometry. A later versioned asset
+header must retain stable asset/part IDs, hierarchy, transforms, pivots, material
+and palette semantics, skeleton/animation bindings, markers and other supported
+metadata. It must bound tables and frame references before allocation and bind
+each frame's identity. Process-local IDs and GPU allocation offsets never persist.
+This is the long-term compiled-content path, not a parallel cache or residency
+service. Existing `RuntimeContentLoader` scopes own decoded content; `AssetServer`
+and existing prepared-resource publication own registered geometry.
+
+Start with inline `voxel_shape` and transform-only groups. Preserve separate
+animated parts. The compiler must use actual post-scale geometry and existing
+rasterization semantics, including signed coordinates. Unsupported source kinds
+and unsupported static collapse fail explicitly until their own compiler adapters
+exist. VOX declared dimensions, zero-color samples and collapse eligibility cannot
+be inferred from occupied bricks alone. Asset LOD is separate work.
+
+Level-0 compiled geometry remains collision and edit authority. Runtime adoption
+must provide one canonical-base access boundary for authored and compiled inputs.
+It must cover managed binding, delta restore and override resolution, preserving
+placement/path membership proofs, original-base identities and independent public
+mutable copies. Removing inline samples without that boundary would break E2
+qualification/reload. No runtime adoption occurs before this dependency is resolved.
+
+## Delivery
+
+C3a adds a typed shape-frame owner over C1, without asset-header or runtime changes.
+It accepts canonical nonzero primary geometry and lattice, preserves the existing
+`voxel_object_base` identity projection, and returns independently owned bricks.
+It avoids expanding decoded geometry into per-voxel records. Canonical contracts
+belong in [compiled content](../content/compiled-voxels.md).
+
+Next define the exact bounded asset header/reference contract and compiler
+version, then emit eligible assets through the existing geometry construction
+path. Runtime integration follows through existing loader/registration owners,
+with the canonical-base boundary above. Verify source parity, material/pivot and
+hierarchy preservation, malformed content, scoped sharing, edit isolation and
+save/evict/reload before claiming runtime loading gains. Separate tests and
+implementation agents plus independent PRE/POST reviews apply to these boundaries.
+
+## Cold-loading evidence
+
+Three sequential local runs used Go 1.25.4 on darwin/arm64, `GOMAXPROCS=1`, warmed
+filesystem caches and 100 ms benchmarks. Cold preparation uses a fresh
+`AssetServer`; warm preparation reuses registered resources. Prepared spawning
+uses a fresh ECS app with shared prepared resources. No renderer/GPU runs.
+The local ActionGame corpus contains 433 assets with inline geometry; samples
+below are existing local assets, not shipped test fixtures.
+
+| Asset | Voxel records | JSON bytes | Load | Cold preparation | Load + preparation | Warm preparation | Prepared spawn |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `valve_models_w_357ammobox` | 2,195 | 401,482 | 2.48 ms | 1.72 ms | 4.10 ms | 0.78 ms | 0.007 ms |
+| `valve_models_stealth` | 116,880 | 14,409,906 | 81.86 ms | 60.22 ms | 137.81 ms | 7.94 ms | 0.005 ms |
+| `models_nihilanth` | 875,196 | 109,794,701 | 590.50 ms | 576.53 ms | 1,162.78 ms | 181.11 ms | 0.67 ms |
+
+The largest sample allocates 1,082,877,968 bytes during load plus preparation,
+including transient allocations; this is not retained memory or RSS. It has 126
+parts and external animation bindings. Parse and preparation both matter;
+existing prepared spawning is already cheap. A small procedural collapsed
+asteroid takes 0.41 ms for cold load/spawn and 0.11 ms for prepared spawn, whose
+existing collapse still resolves sources. It does not justify prioritizing
+procedural collapse over large inline geometry.
+
+These are baseline measurements, not compiled-content savings. They exclude
+application startup, GPU upload, scheduling and filesystem cold-cache behavior.
+Animation resolution and source validation remain part of preparation. No FPS
+or production-frequency claim is made.
+
+Temporary harness: `/tmp/gekko-c3-measure.go`; evidence:
+`/tmp/gekko-c3-expanded-{1,2,3}.json`. Run from the engine module with
+`env GOCACHE=/tmp/gekko3d-gocache GEKKO_C3_OUT=/tmp/gekko-c3-expanded-N.json go run /tmp/gekko-c3-measure.go`.

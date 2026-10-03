@@ -269,3 +269,41 @@ Loading and managed restoration accept both versions. The runtime's shape-only
 adds bound schema-2/3 resolution. [Runtime persistence](streaming-and-worlds.md#ordinary-object-override-persistence)
 selects sparse deltas through existing S4 publication. Explicit managed Enable
 can restore canonical history under the loading contract above.
+
+## Compiled ordinary asset shape frames
+
+`CompiledAssetShapeDef` is a content-owned canonical geometry section, not an
+asset header or an authored source definition. Explicit schema 1 contains a
+`VoxelObjectLatticeDef` and owned C1 `Bricks`. The document kind is
+`compiled_asset_shape`; typed metadata is byte-canonical JSON containing
+`schema_version` then `lattice`. A nonempty bake version, secondary/material
+layer or auxiliary layer is invalid, including an empty nonnil layer. Every
+occupied primary value is nonzero. The whole 8×8×8 cube at each brick coordinate
+must fit signed int32: every axis is in `[-268435456, 268435455]`.
+
+`EncodeCompiledAssetShape` preserves inputs and canonicalizes brick ordering.
+`DecodeCompiledAssetShape` returns independent canonical bricks without expanding
+per-voxel records. Empty geometry is valid. Generic C1 cardinality, checksum,
+identity, dictionary and profile limits remain authoritative. Adapter validation
+adds schema, lattice, kind, metadata and portable-coordinate requirements.
+Errors return nil data/definitions and zero `Info`.
+
+`CompiledAssetShapeBaseIdentity` hashes exactly the existing `voxel_object_base`
+projection: metadata contains only `lattice`, with the same primary bricks and
+no bake version. Its identity and decoded size equal `VoxelObjectBaseIdentity`
+for equivalent actual geometry. It validates shape semantics first, then applies
+logical codec limits to that projection; compiled-owner metadata and encoded-byte
+limits do not govern identity-only work. It returns empty identity and zero size
+on error. This preserves the existing E2 base domain.
+
+`SaveCompiledAssetShape` uses the existing synced atomic replacement helper.
+`LoadCompiledAssetShape` uses bounded C1 `ReadFrame`, with no JSON fallback.
+Explicit codecs are borrowed; nil selects the reusable default profile. Closed
+codecs fail, and callers own the supplied codec's lifetime. Inputs must already
+represent canonical actual geometry; this adapter does not interpret source
+history or apply ModelScale.
+
+These APIs establish the part-frame format only. They do not select compiled
+assets, construct runtime geometry or change authoring/editor loading. Asset
+headers, compiler emission and runtime canonical-base access follow the
+[C3 ownership design](../roadmaps/streamed-rendering-c3.md).

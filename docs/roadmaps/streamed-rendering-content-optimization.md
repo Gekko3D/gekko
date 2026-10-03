@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3 and C1a–C1d complete. S1/S2/S3/P5/E1/P1/E2 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -544,6 +544,11 @@ Island plan defers binary manifests, generic packs and extra hierarchy formats u
 
 Offline runtime compiler emits compact geometry, bounds, hierarchy, pivots, collision references, palettes/materials, markers and animation/rig references. Runtime consumes compiled sections, avoiding voxel JSON/VOX parsing and spawn builds.
 
+[The C3 ownership decision and baseline measurements](streamed-rendering-c3.md)
+start with independent inline-shape frames, then compiler/header and runtime
+adoption through existing owners. Explicit shipping artifacts own runtime input;
+authoring sources remain offline inputs and legacy loading remains available.
+
 Deduplicate by content identity, source lattice/resolution, LOD, normal bake version and material mapping. Instance owns transforms/animation. Share compiled headers/tables; load on demand, release after final unpinned user. Reuse `AssetServer`/streamed caches, not parallel residency service.
 
 Compile 2× LOD for useful large assets; integrate `EntityLODComponent`/runtime bindings. Retain coarse fallback during fine uploads. Start with instance distance selection; per-ray LOD remains later shader work.
@@ -804,7 +809,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | E2b6 | `bedbe04` | Exact incremental merged geometry counts for sparse admission | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
 | E2c1 | `26b0da9` | Opt-in hybrid content payloads with retained legacy/schema-2 compatibility | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
 | E2c2 | `2c0fdf8` | Maintained changed-brick inventory and bounded primary/assignment visitors | [Managed contract](../renderer/editing.md#managed-voxel-ownership) |
-| E2c3 | This commit | Opt-in adaptive hybrid S4 capture and original-base reload/restoration | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
+| E2c3 | `c5ef5dd` | Opt-in adaptive hybrid S4 capture and original-base reload/restoration | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
+| C3a | This commit | Canonical compiled shape frames with unchanged authored-base identity | [Shape-frame contract](../content/compiled-voxels.md#compiled-ordinary-asset-shape-frames) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2502,6 +2508,29 @@ measurements include preflight/capture, durable writes and reload; they exclude
 GPU/frame work and production frequency. No GPU behavior changed. Existing tests
 and unrelated working-tree changes are preserved. The approved ordinary-shape
 hybrid delivery is complete; other source adapters remain conditional.
+
+### C3a: Compiled ordinary shape frames
+
+This commit adds a content-owned primary-only C1 shape adapter with bounded file
+loading, atomic publication and exact existing authored-base identity projection.
+It returns owned bricks without per-voxel expansion. Authored loading and runtime
+owners remain unchanged. Contracts: [compiled content](../content/compiled-voxels.md#compiled-ordinary-asset-shape-frames).
+[Baseline measurements and C3 ownership](streamed-rendering-c3.md) prioritize
+large inline shapes; asset header/compiler and runtime integration follow.
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... -run '^TestC3a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... -run '^Test(C3a|E2|C1)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./content/... -run '^TestC3a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and the five consumer commands above passed. Three baseline runs
+measure real authored loading/preparation/spawning, not compiled savings. No GPU
+or runtime loading behavior changed; no visual or FPS claim. Existing tests and
+unrelated changes are preserved.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 
