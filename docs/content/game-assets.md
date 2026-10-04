@@ -12,7 +12,8 @@ There are two layers to keep distinct:
 Authored files are the source of truth for gameplay content. Runtime assets are the transient engine-side representation used for rendering and simulation.
 
 Explicit compiled `.gkassetc` shipping inputs can replace authoring JSON in the
-direct runtime preparation/spawn APIs. Authoring remains an offline input; see
+direct runtime preparation/spawn APIs and ordinary level placements. Authoring
+remains an offline input; see
 [compiled preparation](../assets/runtime-assets.md#compiled-ordinary-asset-preparation)
 for verification and ownership, and [compiler emission](compiled-voxels.md#ordinary-asset-compiler-emission)
 for supported sources.

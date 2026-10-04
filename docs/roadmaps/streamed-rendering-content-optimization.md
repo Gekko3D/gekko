@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3d3 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3d4a complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -815,7 +815,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3c | `928dc73` | Offline ordinary-asset compiler with immutable geometry and portable dependency closure | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
 | C3d1 | `531a1e4` | Explicit compiled ordinary headers/shapes in existing scoped decoded owner | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
 | C3d2 | `84322d4` | Verified compiled canonical bases for binding, delta restoration and overrides | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
-| C3d3 | This commit | Verified direct compiled preparation/spawning with content-identity geometry reuse | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3d3 | `e1b7a99` | Verified direct compiled preparation/spawning with content-identity geometry reuse | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3d4a | This commit | Ordinary compiled level placements with unchanged stream ownership and delta reload | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2644,6 +2645,32 @@ Engine sweep and five consumer commands above passed. Source-free geometry,
 hierarchy, pivot, full material tables, animation and managed-edit parity are
 covered. Level/streamed placement integration and runtime measurements follow;
 no GPU performance claim. Existing tests and unrelated changes are preserved.
+
+### C3d4a: Ordinary compiled level placements
+
+Ordinary placement ownership now consumes verified compiled preparation for
+direct, expanded and streamed placements. Existing callbacks, shadows, rollback
+and original-base persistence remain intact. Preparation stays in the existing
+main-thread commit; worker packets and special level consumers remain separate.
+Contract: [compiled preparation](../assets/runtime-assets.md#compiled-ordinary-asset-preparation).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestC3d4a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^TestC3d4a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(SpawnAuthoredLevel|StreamedRuntime|E2|S1|S3|S4)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-c3d4a-smoke /tmp/gekko-c3d4a-smoke.go
+/tmp/gekko-c3d4a-smoke
+```
+
+Engine sweep and five consumer commands above passed. Native upload/collision
+parity, managed edit reupload and sibling isolation passed; pixel comparison
+remains unverified. Source-free sparse/hybrid/full save, unload and reload pass.
+[Three-run direct runtime measurements](streamed-rendering-c3.md#compiled-runtime-measurements)
+show substantial large-asset cold-loading gains and a small-asset warm regression;
+no FPS claim. Existing tests and unrelated changes are preserved.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

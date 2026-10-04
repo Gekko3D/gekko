@@ -1116,7 +1116,17 @@ func spawnAuthoredLevelPlacementWithOwnership(cmd *Commands, assets *AssetServer
 		loader = NewRuntimeContentLoader()
 	}
 	resolvedAssetPath := content.ResolveDocumentPath(placement.AssetPath, levelPath)
-	assetDef, err := loader.LoadAsset(resolvedAssetPath)
+	var assetDef *content.AssetDef
+	var prepared *PreparedAuthoredAsset
+	var err error
+	if filepath.Ext(resolvedAssetPath) == ".gkassetc" {
+		prepared, err = LoadAndPrepareAuthoredAsset(resolvedAssetPath, assets, loader)
+		if err == nil {
+			assetDef = prepared.def
+		}
+	} else {
+		assetDef, err = loader.LoadAsset(resolvedAssetPath)
+	}
 	if err != nil {
 		return AuthoredAssetSpawnResult{}, fmt.Errorf("load asset %s: %w", placement.AssetPath, err)
 	}
@@ -1138,7 +1148,7 @@ func spawnAuthoredLevelPlacementWithOwnership(cmd *Commands, assets *AssetServer
 	if created != nil {
 		ownership = record
 	}
-	spawnResult, err := spawnAuthoredAssetWithOwnership(cmd, assets, assetDef, nil, levelTransformToComponent(placement.Transform), AuthoredAssetSpawnOptions{
+	spawnResult, err := spawnAuthoredAssetWithOwnership(cmd, assets, assetDef, prepared, levelTransformToComponent(placement.Transform), AuthoredAssetSpawnOptions{
 		DocumentPath:                   resolvedAssetPath,
 		OverrideCastShadows:            placement.OverrideCastShadows,
 		OverrideShadowMaxDistance:      placement.OverrideShadowMaxDistance,

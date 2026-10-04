@@ -2,7 +2,8 @@
 
 Status: approved direction; C3a shape frames, C3b headers and C3c offline
 compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
-direct runtime preparation/spawning complete. Level placement integration follows.
+direct runtime preparation/spawning and C3d4a ordinary level placements complete.
+Ordinary worker preparation remains separate; special level consumers still use JSON.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -108,3 +109,36 @@ or production-frequency claim is made.
 Temporary harness: `/tmp/gekko-c3-measure.go`; evidence:
 `/tmp/gekko-c3-expanded-{1,2,3}.json`. Run from the engine module with
 `env GOCACHE=/tmp/gekko3d-gocache GEKKO_C3_OUT=/tmp/gekko-c3-expanded-N.json go run /tmp/gekko-c3-measure.go`.
+
+## Compiled runtime measurements
+
+Three sequential runs compared current direct APIs with Go 1.25.4, darwin/arm64,
+`GOMAXPROCS=1`, warmed filesystem caches and 100 ms benchmarks. Cold preparation
+uses `LoadAndPrepareAuthoredAsset`, a fresh `AssetServer` and a fresh loader with
+decoded retention disabled; warm preparation shares its loader/server. Cold
+spawning uses `LoadAndSpawnAuthoredAsset` with a fresh ECS app/server. These
+end-to-end paths include animation resolution and verification. Medians:
+
+| Asset | Cold preparation ms, JSON / compiled | Cold spawn ms, JSON / compiled | Preparation allocated bytes, JSON / compiled |
+| --- | ---: | ---: | ---: |
+| `valve_models_w_357ammobox` | 4.39 / 2.85 | 4.11 / 2.97 | 4,071,464 / 2,017,360 |
+| `valve_models_stealth` | 142.60 / 16.09 | 142.21 / 16.15 | 136,825,232 / 1,390,861 |
+| `models_nihilanth` | 1,161.50 / 270.15 | 1,181.32 / 270.69 | 1,086,660,704 / 145,225,720 |
+
+Large-sample cold preparation improves 8.86× and 4.30×, with 98.98% and 86.64%
+fewer allocated bytes. Allocations include transient work, not retained memory
+or RSS. Warm preparation is mixed: ammo regresses from 0.74 to 1.24 ms and
+allocates 11.92% more bytes; stealth improves from 8.07 to 0.15 ms, and nihilanth
+from 189.79 to 131.48 ms. Reuse an existing prepared asset when possible; prepared
+spawning has unchanged allocation counts and no demonstrated speed benefit.
+
+Exact shipping closures, including referenced animation/rig/texture files and
+unique shape frames, shrink from 401,482 to 7,165 bytes for ammo, 14,409,906 to
+6,502 for stealth and 128,446,555 to 19,295,577 for nihilanth. The initial compiler
+source restrictions still apply. These local CPU measurements exclude startup,
+GPU upload, scheduling and filesystem cold-cache behavior; they establish no FPS
+or production-frequency benefit.
+
+Harness: `/tmp/gekko-c3-compiled-measure.go`; evidence:
+`/tmp/gekko-c3-compiled-{1,2,3}.json`. Reproduce from the engine with
+`env GOCACHE=/tmp/gekko3d-gocache GEKKO_C3_OUT=/tmp/gekko-c3-compiled-N.json go run /tmp/gekko-c3-compiled-measure.go`.

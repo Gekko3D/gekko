@@ -155,7 +155,12 @@ compiled input for an exact lowercase `.gkassetc` suffix. Other paths retain
 legacy JSON behavior, and corrupt selected compiled input never falls back.
 Compiled preparation returns the existing `PreparedAuthoredAsset`; prepared
 spawning keeps the existing hierarchy, material, animation and ECS contracts.
-Level placement integration follows separately.
+Ordinary direct and expanded level placements use the same path, including
+streamed commits and their existing ownership callbacks, shadows and rollback.
+Ordinary asset preparation still runs during the main-thread commit; workers
+currently prepare no ordinary asset packet. A later worker split must preserve
+existing CPU publication and pending-resource ownership. Moving brushes,
+chargers, breakables, pickups and NPC level consumers still require authoring JSON.
 
 Preparation verifies every referenced shape's frame identity/sizes, effective
 lattice and original base identity, and resolves animations before publishing
