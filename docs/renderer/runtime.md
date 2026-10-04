@@ -661,7 +661,8 @@ retain level-0 collision/navigation/edit authority and keep animated parts
 independent. Coarse display and fine staging must remain under existing streaming
 ownership, with readiness checked for the staged target before changing display.
 Changing the target of an unfinished single-map ticket cancels that ticket.
-The reduction/material policy and derivative format remain unresolved; see the
+Opt-in conservative coverage for single-material opaque assets is approved;
+the derivative format and runtime integration remain pending. See the
 [C3 LOD diagnostic and gates](../roadmaps/streamed-rendering-c3.md#asset-lod-diagnostic-c3h0).
 
 ### Streamed voxel residency

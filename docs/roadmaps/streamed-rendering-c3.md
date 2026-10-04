@@ -5,7 +5,10 @@ compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
 compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
 worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
-C3f4a private palette adoption and C3f4b worker palette integration and C3f4c publication accounting complete. C3h0 asset LOD diagnostics complete; reduction/material policy remains gated. Compiler source-kind adapters and production asset LOD remain separate work.
+C3f4a private palette adoption, C3f4b worker palette integration and C3f4c
+publication accounting complete. C3h0 diagnostics and C3h1 conservative geometry
+construction complete. Opt-in, single-material opaque LOD is approved; compiler
+source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -301,9 +304,10 @@ normal builds. Assertions also cover signed coordinates and asymmetric bounds.
 
 Before production LOD:
 
-- Align the visual policy: center-nearest loses coverage; conservative occupancy
-  OR can thicken surfaces and close narrow openings. Material/opacity reduction
-  and asset eligibility need explicit acceptance. Keep production defaults unchanged.
+- Visual policy approved after this diagnostic: start with opt-in, single-material
+  opaque LOD using conservative occupancy OR, accepting thicker surfaces and closed
+  narrow openings. Mixed-material/transparency reduction remains conditional;
+  production defaults stay unchanged.
 - Define versioned derivative references binding source identity/lattice, reduction
   semantics, material mapping and bounds. Existing artifacts/readers stay valid.
 - Qualify current runtime source content. Original provenance and geometry IDs
@@ -314,3 +318,14 @@ Before production LOD:
 
 [Runtime boundary](../renderer/runtime.md#compiled-asset-lod-boundary).
 No production renderer, format, cache or collision behavior changes in C3h0.
+
+
+## Conservative geometry construction (C3h1)
+
+The compiler now has a pure single-value 2× occupancy-OR builder with signed,
+zero-anchored mapping, independent canonical output and explicit source/coarse
+bounds. [Construction contract](../content/compiled-voxels.md#conservative-asset-lod-geometry-construction).
+This is a long-term prerequisite, not runtime LOD activation. Source lattice and
+level-0 authority remain unchanged; opacity qualification and versioned derivative
+frames precede compiler opt-in and runtime binding. Existing schema-1 artifacts
+and default compilation remain unchanged.

@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h1 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -826,7 +826,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3f4a | `822a63c` | Private exact-key palette publication with independent single-use mutable storage | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3f4b | `52fb649` | Worker-owned palettes and exact keys with main-thread adoption and pending accounting | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3f4c | `00717f6` | Exact constructor-owned palette accounting with less worker bookkeeping | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
-| C3h0 | This commit | Asset LOD CPU/coverage diagnostic; production reduction policy remains gated | [Measurements and gates](streamed-rendering-c3.md#asset-lod-diagnostic-c3h0) |
+| C3h0 | `b168c97` | Asset LOD CPU/coverage diagnostic; conservative single-material opaque policy subsequently approved | [Measurements and gates](streamed-rendering-c3.md#asset-lod-diagnostic-c3h0) |
+| C3h1 | This commit | Pure single-value conservative 2× geometry construction; runtime activation remains pending | [Construction contract](../content/compiled-voxels.md#conservative-asset-lod-geometry-construction) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2881,8 +2882,8 @@ Existing tests and unrelated changes are preserved.
 Added a reproducible diagnostic, without production behavior changes.
 [Measurements and remaining gates](streamed-rendering-c3.md#asset-lod-diagnostic-c3h0)
 show estimated geometry write reductions of 47–77%, alongside thin-surface loss,
-closed openings and unresolved mixed-material reduction. Production LOD waits
-for visual-policy alignment and source/readiness architecture.
+closed openings and unresolved mixed-material reduction. The subsequent approval
+covers opt-in single-material opaque assets; source/readiness architecture remains.
 
 Verification:
 
@@ -2897,6 +2898,29 @@ C3g1 RED candidate was temporarily preserved outside the test package during the
 engine sweep, then restored unchanged. No consumer behavior changed. CPU probe
 images were inspected; GPU performance, rendered quality and LOD handoff remain
 unverified. Existing tests and unrelated working-tree changes are preserved.
+
+### C3h1: Conservative asset LOD geometry
+
+Implemented the approved single-value geometry prerequisite without changing
+runtime selection, collision, formats or default compilation.
+[Contract](../content/compiled-voxels.md#conservative-asset-lod-geometry-construction).
+Versioned derivative frames, opacity qualification and upload handoff remain next.
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestC3h1' -count=1 -timeout=60s
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^TestC3h1' -count=1 -timeout=60s
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused checks, committed engine tests and the five consumer build commands
+listed in C3f4b passed. Sparse signed extrema, coverage, canonical ordering,
+arbitrary palette values, malformed/ineligible inputs and source/output isolation
+are covered. Earlier C3g1 RED tests remain preserved outside the package during
+verification and are restored afterward. No rendering behavior changed; GPU
+performance and visual quality remain unverified. Unrelated changes are preserved.
+
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

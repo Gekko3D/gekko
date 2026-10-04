@@ -308,6 +308,31 @@ assets, construct runtime geometry or change authoring/editor loading. Asset
 headers, compiler emission and runtime canonical-base access follow the
 [C3 ownership design](../roadmaps/streamed-rendering-c3.md).
 
+## Conservative asset LOD geometry construction
+
+The private compiler builder constructs a separate in-memory 2× derivative from
+canonical primary-only shape geometry. It occupies every coarse cell touched by
+source geometry: signed coordinate `p` maps to `floor(p/2)`, and coarse cell `q`
+covers source interval `[2q, 2q+2)`. Mapping stays anchored at zero; it does not
+shift by occupied bounds or rescale to match source extents. Conservative coverage
+can thicken surfaces and close narrow openings.
+
+One nonzero occupied palette value is required across the whole part. Empty,
+single-voxel, mixed-value and nonreducing geometry is ineligible. Malformed schema,
+lattice, brick coordinates, layers or occupancy/value cardinality fail explicitly
+before an ineligible result can hide another malformed brick. Construction visits
+occupied bits rather than the bounding-box volume, including signed portable
+extrema. Output bricks are sorted with values in occupancy order and own their
+mutable storage independently of input and other calls.
+
+The result retains the unchanged source lattice, sole value, source/coarse voxel
+counts and occupied bounds with inclusive minima and exclusive `int64` maxima.
+Bounds describe their respective coordinate grids. Reduction identity is
+`occupancy-or-zero-anchored-2x-v1`. This result is not an authoritative shape or
+base and has no persisted frame contract yet. Palette opacity, animation
+qualification, explicit compiler opt-in, derivative identity and runtime selection
+remain separate integration work. Level-0 geometry remains authoritative.
+
 ## Compiled ordinary asset headers
 
 `CompiledAssetHeaderDef` is an empty-brick C1 document of kind
