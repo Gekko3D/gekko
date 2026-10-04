@@ -1,8 +1,15 @@
 package gekko
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 func (server *AssetServer) CreateSphereModel(radius float32, resolution float32) AssetId {
+	return server.CreateVoxelGeometry(buildSphereModel(radius, resolution), 1.0)
+}
+
+func buildSphereModel(radius float32, resolution float32) VoxModel {
 	scaledRadius := radius * resolution
 	r := int(scaledRadius)
 	size := uint32(r*2 + 1)
@@ -25,13 +32,17 @@ func (server *AssetServer) CreateSphereModel(radius float32, resolution float32)
 		}
 	}
 
-	return server.CreateVoxelGeometry(VoxModel{
+	return VoxModel{
 		SizeX: size, SizeY: size, SizeZ: size,
 		Voxels: voxels,
-	}, 1.0)
+	}
 }
 
 func (server *AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resolution float32) AssetId {
+	return server.CreateVoxelGeometry(buildCubeModel(sizeX, sizeY, sizeZ, resolution), 1.0)
+}
+
+func buildCubeModel(sizeX, sizeY, sizeZ float32, resolution float32) VoxModel {
 	sx, sy, sz := int(sizeX*resolution), int(sizeY*resolution), int(sizeZ*resolution)
 	voxels := []Voxel{}
 
@@ -46,10 +57,10 @@ func (server *AssetServer) CreateCubeModel(sizeX, sizeY, sizeZ float32, resoluti
 		}
 	}
 
-	return server.CreateVoxelGeometry(VoxModel{
+	return VoxModel{
 		SizeX: uint32(sx), SizeY: uint32(sy), SizeZ: uint32(sz),
 		Voxels: voxels,
-	}, 1.0)
+	}
 }
 
 func (server *AssetServer) CreateFrameModel(sizeX, sizeY, sizeZ, thickness float32, resolution float32) AssetId {
@@ -90,6 +101,10 @@ func (server *AssetServer) CreateFrameModel(sizeX, sizeY, sizeZ, thickness float
 }
 
 func (server *AssetServer) CreateConeModel(radius, height float32, resolution float32) AssetId {
+	return server.CreateVoxelGeometry(buildConeModel(radius, height, resolution), 1.0)
+}
+
+func buildConeModel(radius, height float32, resolution float32) VoxModel {
 	scaledRadius := radius * resolution
 	scaledHeight := height * resolution
 	r := int(scaledRadius)
@@ -112,13 +127,17 @@ func (server *AssetServer) CreateConeModel(radius, height float32, resolution fl
 		}
 	}
 
-	return server.CreateVoxelGeometry(VoxModel{
+	return VoxModel{
 		SizeX: uint32(r*2 + 1), SizeY: uint32(r*2 + 1), SizeZ: uint32(h),
 		Voxels: voxels,
-	}, 1.0)
+	}
 }
 
 func (server *AssetServer) CreatePyramidModel(size, height float32, resolution float32) AssetId {
+	return server.CreateVoxelGeometry(buildPyramidModel(size, height, resolution), 1.0)
+}
+
+func buildPyramidModel(size, height float32, resolution float32) VoxModel {
 	scaledSize := size * resolution
 	scaledHeight := height * resolution
 	h := int(scaledHeight)
@@ -138,13 +157,17 @@ func (server *AssetServer) CreatePyramidModel(size, height float32, resolution f
 		}
 	}
 
-	return server.CreateVoxelGeometry(VoxModel{
+	return VoxModel{
 		SizeX: uint32(scaledSize), SizeY: uint32(scaledSize), SizeZ: uint32(scaledHeight),
 		Voxels: voxels,
-	}, 1.0)
+	}
 }
 
 func (server *AssetServer) CreateCylinderModel(radius, height float32, resolution float32) AssetId {
+	return server.CreateVoxelGeometry(buildCylinderModel(radius, height, resolution), 1.0)
+}
+
+func buildCylinderModel(radius, height float32, resolution float32) VoxModel {
 	scaledRadius := radius * resolution
 	scaledHeight := height * resolution
 	r := int(scaledRadius)
@@ -168,15 +191,19 @@ func (server *AssetServer) CreateCylinderModel(radius, height float32, resolutio
 		}
 	}
 
-	return server.CreateVoxelGeometry(VoxModel{
+	return VoxModel{
 		SizeX: uint32(r*2 + 1), SizeY: uint32(r*2 + 1), SizeZ: uint32(h),
 		Voxels: voxels,
-	}, 1.0)
+	}
 }
 
 // CreateCapsuleModel creates a capsule whose long axis is local Z, matching the
 // legacy procedural model convention used by authored content primitives.
 func (server *AssetServer) CreateCapsuleModel(radius, height float32, resolution float32) AssetId {
+	return server.CreateVoxelGeometry(buildCapsuleModel(radius, height, resolution), 1.0)
+}
+
+func buildCapsuleModel(radius, height float32, resolution float32) VoxModel {
 	scaledRadius := radius * resolution
 	totalHeight := height * resolution
 	r := int(scaledRadius)
@@ -208,10 +235,10 @@ func (server *AssetServer) CreateCapsuleModel(radius, height float32, resolution
 		}
 	}
 
-	return server.CreateVoxelGeometry(VoxModel{
+	return VoxModel{
 		SizeX: uint32(r*2 + 1), SizeY: uint32(r*2 + 1), SizeZ: uint32(totalSizeZ),
 		Voxels: voxels,
-	}, 1.0)
+	}
 }
 
 // CreateCapsuleYModel creates a capsule whose long axis is local Y, matching
@@ -255,10 +282,14 @@ func (server *AssetServer) CreateCapsuleYModel(radius, height float32, resolutio
 }
 
 func (server *AssetServer) CreateRampModel(sizeX, sizeY, sizeZ float32, resolution float32) AssetId {
+	return server.CreateVoxelGeometry(buildRampModel(sizeX, sizeY, sizeZ, resolution), 1.0)
+}
+
+func buildRampModel(sizeX, sizeY, sizeZ float32, resolution float32) VoxModel {
 	sx, sy, sz := int(sizeX*resolution), int(sizeY*resolution), int(sizeZ*resolution)
 	voxels := []Voxel{}
 	if sx <= 0 || sy <= 0 || sz <= 0 {
-		return server.CreateVoxelGeometry(VoxModel{}, 1.0)
+		return VoxModel{}
 	}
 
 	for x := 0; x < sx; x++ {
@@ -281,8 +312,32 @@ func (server *AssetServer) CreateRampModel(sizeX, sizeY, sizeZ float32, resoluti
 		}
 	}
 
-	return server.CreateVoxelGeometry(VoxModel{
+	return VoxModel{
 		SizeX: uint32(sx), SizeY: uint32(sy), SizeZ: uint32(sz),
 		Voxels: voxels,
-	}, 1.0)
+	}
+}
+
+// buildProceduralPrimitiveModel builds authored primitive data without registering
+// assets. Each call owns its voxel slice; parameters use the public generators'
+// existing scaling and truncation rules.
+func buildProceduralPrimitiveModel(kind string, params map[string]float32, scale float32) (VoxModel, error) {
+	switch kind {
+	case "sphere":
+		return buildSphereModel(params["radius"], scale), nil
+	case "cube":
+		return buildCubeModel(params["sx"], params["sy"], params["sz"], scale), nil
+	case "cone":
+		return buildConeModel(params["radius"], params["height"], scale), nil
+	case "pyramid":
+		return buildPyramidModel(params["size"], params["height"], scale), nil
+	case "cylinder":
+		return buildCylinderModel(params["radius"], params["height"], scale), nil
+	case "capsule":
+		return buildCapsuleModel(params["radius"], params["height"], scale), nil
+	case "ramp":
+		return buildRampModel(params["sx"], params["sy"], params["sz"], scale), nil
+	default:
+		return VoxModel{}, fmt.Errorf("unsupported procedural primitive %q", kind)
+	}
 }

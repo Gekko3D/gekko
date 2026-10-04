@@ -13,7 +13,8 @@ reads, C3h7 complete-closure source verification, C3h8 core render
 representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
 upload staging, C3h11 pure qualification guards and C3h12a owned derivative
 packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
-instance intent, C3h13b instance qualification and C3h13c runtime activation complete. Opt-in,
+instance intent, C3h13b instance qualification, C3h13c runtime activation and
+C3g1 pure primitive extraction complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -514,3 +515,13 @@ Temporary harness and bridge: `/tmp/gekko-c3h13c-gpu-probe.go`,
 `/tmp/gekko-c3h13c-gpu-probe-output`. Helpers were removed from the engine before
 boundary checks. This verifies handoff/G-buffer parity, not FPS, independent
 transparent-overlay appearance or shadow images. Parent delivery records commands.
+
+## Pure authored primitive extraction (C3g1)
+
+Seven generators now expose privately owned CPU models without asset registration.
+Public constructors preserve exact output, warm identity and declared bounds;
+[the creation contract](../assets/runtime-assets.md#voxel-models-and-palettes)
+owns those invariants. Fourteen frozen baseline models cover fractional and zero
+inputs, including capsule axis and ramp nil geometry. Focused tests, full engine
+tests and five consumer builds passed. This is an offline adapter prerequisite;
+no loading or rendering speed gain is claimed.

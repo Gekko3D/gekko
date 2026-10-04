@@ -104,6 +104,13 @@ Authored asset spawning uses these helpers when resolving:
 - `vox_scene_node`
 - `procedural_primitive`
 
+Authored sphere, cube, cone, pyramid, cylinder, Z-axis capsule and ramp
+constructors share pure private model builders with the offline preparation
+boundary. Each build owns its voxel slice and preserves declared dimensions,
+voxel order, fractional truncation, color index and empty-model conventions.
+Public constructors still register through `CreateVoxelGeometry(..., 1.0)`;
+frame and Y-axis capsule generation remain separate.
+
 ### Textures
 
 Texture creation helpers live in `asset_texture.go`:
