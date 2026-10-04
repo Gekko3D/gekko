@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g12 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -3462,6 +3462,19 @@ Large selected VOX cold loads and shipping bytes improve; every warm compiled lo
 regresses. A repeatable public-API diagnostic is retained; production is unchanged.
 Next: profile warm verification/preparation before further geometry features.
 No disk-cold, RSS, GPU or FPS claim. C3g11 full engine checks remain current.
+
+### C3g13: Direct canonical geometry construction
+
+C3g12 is `5ccd676`. Authenticated compiled geometry now fills existing owned dense
+bricks directly, retaining primary/masks/flags/bounds/revisions and later edit
+semantics. No owner, format or shader change. [Measurements and approved-scope audit](streamed-rendering-c3.md#direct-canonical-construction-c3g13)
+show 14.7× faster conversion; gate public cold/warm loads improve from
+150.439/47.775ms legacy to 17.809/12.833ms compiled. Small jet remains slower.
+
+Frozen parity coverage, independent PRE/POST/root reviews, focused/race checks,
+full engine and five affected consumer builds passed; exact commands are in the
+linked record. No new windowed/FPS claim. Resolved approved C3 delivery is complete;
+conditional model LOD/collapse and parent proposals retain their gates.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

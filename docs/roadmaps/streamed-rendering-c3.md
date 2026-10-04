@@ -18,7 +18,7 @@ C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palett
 construction, C3g4 owned source-model preparation, C3g5 model headers, C3g6 scoped
 reads, C3g7 whole model closure verification, C3g8 owned model packets/adoption and C3g9
 public consumer integration, C3g10 shipping model emission and C3g11 CLI selection
-and C3g12 source-loading measurements complete. Opt-in single-material opaque
+and C3g12 source-loading measurements, C3g13 direct canonical construction complete. Opt-in single-material opaque
 inline LOD is approved; model LOD, static collapse and mixed-material/transparency
 reduction stay conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -84,8 +84,8 @@ cache leases could delete geometry still used by direct callers; a parallel
 prepared cache adds another owner without demonstrated need.
 
 Streamed integration uses existing pending admission and placement commit gates.
-Compiler source-kind adapters, asset LOD and renderer-copy optimization remain
-separate work.
+Model LOD, static collapse and further renderer-copy optimization remain separate
+work; the delivered source adapters and inline LOD reuse this boundary.
 
 Palette preparation uses the existing full JSON identity and ordinary palette
 owner with independent source/publication storage. This avoids sharing packet
@@ -657,3 +657,59 @@ Legacy VOX parsing prints progress alongside JSONL; select lines starting with `
 for analysis. Original clean results: `/tmp/gekko-c3-models-results.jsonl`.
 The next valuable step is profiling warm verification/preparation, preserving
 whole-closure authentication and independently owned worker packets.
+
+## Direct canonical construction (C3g13)
+
+C3g12 is `5ccd676`. A warm gate CPU profile attributed 87.13% of samples to
+compiled conversion, including 63.94% in transient normal-halo marking discarded
+by the final clean step. The converter now fills fresh sectors/bricks directly
+from authenticated canonical geometry. [Runtime construction](../assets/runtime-assets.md#compiled-ordinary-asset-preparation)
+owns the lasting contract; no cache, format, public ordered-write or shader change.
+
+Parity checks against the prior ordered builder and focused/race, full engine and
+five consumer builds passed. Independent reviews passed; exact storage parity
+needed no new windowed check.
+
+Same-run converter benchmark: 256 isolated dense mixed bricks, three 1s runs,
+GOMAXPROCS=1, Apple M4 Pro, Go 1.25.4 darwin/arm64. Median conversion fell from
+18.319ms to 1.245ms (14.7×); allocated bytes from 1,327,016 to 240,848 (81.9% less).
+The retained ordered reference makes this comparison reproducible.
+
+The public diagnostic reran all four cases with three 1s runs per variant and
+passed primary/dimensions/bounds/palette parity again. Same-run median ms/op:
+
+| Selected source | Legacy cold | Compiled cold | Legacy warm | Compiled warm |
+| --- | ---: | ---: | ---: | ---: |
+| Jet | 2.535 | 5.497 | 1.721 | 2.651 |
+| Sponza | 26.913 | 4.090 | 12.821 | 2.462 |
+| Gate | 150.439 | 17.809 | 47.775 | 12.833 |
+| Cube 32³ | 6.242 | 0.559 | 1.988 | 0.254 |
+
+Gate compiled warm had 100 operations each, range 12.629–12.864ms; cold had
+56–73 operations, range 17.305–19.491ms. Same-run gate cold allocated bytes fell
+from 123,922,889 legacy to 18,542,882 compiled; warm from 108,019,085 to 13,202,292.
+Shipping sizes and logical identities remain unchanged. Large selected VOX and
+procedural loading now improve materially; small jet still costs more in CPU and
+allocations despite its smaller shipping files. Use explicit compiled inputs for
+measured beneficial workloads; no universal speedup or FPS/RSS/disk-cold claim.
+
+Commands (engine module, `env GOCACHE=/tmp/gekko3d-gocache`):
+
+- `go test . -run '^Test(C3g13|C3g8|C3g9|C3d2|C3h12|C3h13)' -count=1`, then the same command with `-race`.
+- `go test ./...` (root package 46.862s); five consumer commands in C3h9.
+- `GOMAXPROCS=1 go test . -run '^$' -bench '^BenchmarkC3g13CompiledGeometry$' -benchtime=1s -count=3`.
+- `go run docs/roadmaps/diagnostics/c3_models.go -engine . -samples jet,sponza,gate,cube32 -duration 1s`.
+
+Results: `/tmp/gekko-c3g13-converter-after.txt` and
+`/tmp/gekko-c3g13-models-after.jsonl`. These are CPU preparation measurements;
+compilation/parity remain outside timing and filesystem/codec are warm.
+
+## Approved delivery audit
+
+The resolved C3 delivery is complete: explicit shipping compiler/CLI, inline and
+ordinary source adapters, owned direct/level/streamed consumers, authoritative
+geometry and opt-in conservative inline LOD with qualified GPU readiness.
+Remaining model LOD, static collapse, mixed-material/transparency reduction and
+per-ray selection keep their separate eligibility/architecture gates. The parent
+roadmap remains partial because regional packs, public compact ownership and other
+proposals are not implied approvals. No further resolved C3 implementation remains.

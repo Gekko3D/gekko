@@ -168,24 +168,41 @@ func loadRuntimeAssetCanonicalPart(loader *RuntimeContentLoader, path, itemID st
 // The shape must have passed typed and logical-profile validation before this
 // conversion. Geometry is independently owned and already contains ModelScale.
 func compiledShapeGeometry(shape *content.CompiledAssetShapeDef) (*volume.XBrickMap, int) {
+	geometry := volume.NewXBrickMap()
 	voxels := 0
-	geometry := volume.BuildXBrickMap(func(yield func(volume.VoxelWrite) bool) {
-		for _, brick := range shape.Bricks {
-			index := 0
-			for word, mask := range brick.Occupancy {
-				for mask != 0 {
-					linear := word*64 + bits.TrailingZeros64(mask)
-					write := volume.VoxelWrite{X: int(brick.Coord[0])*8 + linear%8, Y: int(brick.Coord[1])*8 + (linear/8)%8, Z: int(brick.Coord[2])*8 + linear/64, Value: brick.Values[index]}
-					if !yield(write) {
-						return
-					}
-					index++
-					voxels++
-					mask &= mask - 1
-				}
+	for _, encoded := range shape.Bricks {
+		var sectorKey, local [3]int
+		for axis, coord := range encoded.Coord {
+			sectorKey[axis] = int(coord) / volume.SectorBricks
+			local[axis] = int(coord) % volume.SectorBricks
+			if local[axis] < 0 {
+				sectorKey[axis]--
+				local[axis] += volume.SectorBricks
 			}
 		}
-	})
+		sector := geometry.Sectors[sectorKey]
+		if sector == nil {
+			sector = volume.NewSector(sectorKey[0], sectorKey[1], sectorKey[2])
+			geometry.Sectors[sectorKey] = sector
+		}
+		brick, _ := sector.GetOrCreateBrick(local[0], local[1], local[2])
+		index := 0
+		for word, mask := range encoded.Occupancy {
+			for mask != 0 {
+				linear := word*64 + bits.TrailingZeros64(mask)
+				brick.SetVoxel(linear%8, (linear/8)%8, linear/64, encoded.Values[index])
+				index++
+				mask &= mask - 1
+			}
+		}
+		brick.RefreshMaterialFlags()
+		voxels += index
+		// Canonical bricks contain unique, nonzero assignments. Retain the
+		// ordered builder's revision provenance without transient edit halos;
+		// this fresh, private map has no normals or live neighbors to invalidate.
+		geometry.Revision += uint64(index)
+		geometry.SectorRevisions[sectorKey] = geometry.Revision
+	}
 	geometry.ComputeAABB()
 	geometry.ClearDirty()
 	return geometry, voxels

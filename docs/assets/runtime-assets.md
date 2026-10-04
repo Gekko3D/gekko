@@ -211,8 +211,13 @@ relative paths. Emitter texture paths become absolute in the prepared copy;
 existing texture decoding remains unchanged. Authoring sources are unnecessary.
 
 Canonical bricks already include `ModelScale`; dense construction does not
-resample or form voxel JSON cache keys. Existing `AssetServer` geometry storage
-shares a namespaced C1 content identity, including lattice, across compiled
+resample or form voxel JSON cache keys. After typed/profile validation, compiled
+conversion fills fresh sectors and bricks directly, preserving signed coordinates,
+packed rank, primary values, material flags, occupied bounds and ordered revision
+provenance. It owns all mutable storage and finishes clean. Construction skips
+transient edit halos because no auxiliary normals or live neighbors exist yet;
+subsequent public edits retain normal invalidation and dirty propagation.
+Existing `AssetServer` geometry storage shares a namespaced C1 content identity, including lattice, across compiled
 paths. Palettes remain independent material bindings. Verified original-base
 metadata never derives from a mutable warm geometry entry. Public mutable
 geometry access and managed edit isolation retain their existing contracts.
