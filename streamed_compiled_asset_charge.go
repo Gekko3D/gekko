@@ -1,6 +1,10 @@
 package gekko
 
-import "github.com/gekko3d/gekko/voxelrt/rt/volume"
+import (
+	"unsafe"
+
+	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+)
 
 // Owned metadata uses the decoded graph estimator. Dense sources have bounded
 // storage traversal; registration charges are captured independently of mutexes.
@@ -12,6 +16,8 @@ func streamedCompiledAssetPacketsCharge(packets map[string]*compiledAssetPacket)
 	seenPackets := make(map[*compiledAssetPacket]struct{}, len(packets))
 	seenSources := make(map[*volume.XBrickMap]struct{})
 	seenRegistrations := make(map[*streamedGeometryRegistration]struct{})
+	seenPaletteSources := make(map[*VoxelPaletteAsset]struct{})
+	seenPaletteRegistrations := make(map[*compiledPaletteRegistration]struct{})
 	var bytes int64
 	for key, packet := range packets {
 		keys[key] = nil
@@ -40,6 +46,28 @@ func streamedCompiledAssetPacketsCharge(packets map[string]*compiledAssetPacket)
 			if _, exists := seenRegistrations[shape.registration]; !exists {
 				seenRegistrations[shape.registration] = struct{}{}
 				bytes = runtimeContentChargeSum(bytes, shape.registration.charge())
+			}
+		}
+		metadata.palettes = make(map[string]*compiledAssetPacketPalette, len(packet.palettes))
+		for key, palette := range packet.palettes {
+			if palette == nil {
+				metadata.palettes[key] = nil
+				continue
+			}
+			// Reflect only the owned scalar graph, never live handle mutexes or
+			// borrowed registration pointers. Packet sources are immutable.
+			metadata.palettes[key] = &compiledAssetPacketPalette{}
+			if _, exists := seenPaletteSources[palette.source]; !exists {
+				seenPaletteSources[palette.source] = struct{}{}
+				bytes = runtimeContentChargeSum(bytes, runtimeContentGraphCharge(palette.source))
+			}
+			registration := palette.registration
+			if registration != nil {
+				if _, exists := seenPaletteRegistrations[registration]; !exists {
+					seenPaletteRegistrations[registration] = struct{}{}
+					// Map keys retain the sealed key; fixed handle metadata survives consumption.
+					bytes = runtimeContentChargeSum(bytes, int64(unsafe.Sizeof(compiledPaletteRegistration{})), registration.charge())
+				}
 			}
 		}
 		bytes = runtimeContentChargeSum(bytes, runtimeContentGraphCharge(&metadata))

@@ -1,14 +1,16 @@
 package gekko
 
 import (
+	"encoding/json"
 	"fmt"
+	"path/filepath"
+
 	"github.com/gekko3d/gekko/content"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
-	"path/filepath"
 )
 
-// A CPU packet owns its metadata and distinct geometry sources. It contains no
-// cached shape definitions or global asset IDs. Each registration owns a second,
+// A CPU packet owns metadata, distinct geometry sources and full palettes. It
+// contains no cached shape definitions or global asset IDs. Each registration owns a second,
 // independent copy suitable for a later single-use main-thread transfer.
 type compiledAssetPacket struct {
 	def          *content.AssetDef
@@ -16,6 +18,13 @@ type compiledAssetPacket struct {
 	animations   *content.ResolvedAssetAnimations
 	parts        map[string]string
 	shapes       map[string]*compiledAssetPacketShape
+	partPalettes map[string]string
+	palettes     map[string]*compiledAssetPacketPalette
+}
+
+type compiledAssetPacketPalette struct {
+	source       *VoxelPaletteAsset
+	registration *compiledPaletteRegistration
 }
 
 type compiledAssetPacketShape struct {
@@ -35,6 +44,9 @@ func (packet *compiledAssetPacket) release() {
 	for _, shape := range packet.shapes {
 		shape.registration.release()
 	}
+	for _, palette := range packet.palettes {
+		palette.registration.release()
+	}
 }
 
 func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cancelled func() bool) (*compiledAssetPacket, error) {
@@ -43,13 +55,22 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 		return nil, err
 	}
 	defer session.close()
-	packet := &compiledAssetPacket{def: session.def, documentPath: path, animations: session.animations, parts: make(map[string]string, len(session.shapes)), shapes: make(map[string]*compiledAssetPacketShape, len(session.shapes))}
+	packet := &compiledAssetPacket{
+		def: session.def, documentPath: path, animations: session.animations,
+		parts:        make(map[string]string, len(session.shapes)),
+		shapes:       make(map[string]*compiledAssetPacketShape, len(session.shapes)),
+		partPalettes: make(map[string]string, len(session.shapes)),
+		palettes:     make(map[string]*compiledAssetPacketPalette),
+	}
 	success := false
 	defer func() {
 		if !success {
 			packet.release()
 		}
 	}()
+	// This memo is local to the fixed materials and animations of this document.
+	// Preserve the complete ordered binding slice, including nil/empty distinctions.
+	paletteBindings := make(map[string]string)
 	// Preserve authored part order for deterministic cancellation boundaries.
 	for _, part := range packet.def.Parts {
 		verified, exists := session.shapes[part.ID]
@@ -60,12 +81,39 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 			return nil, err
 		}
 		packet.parts[part.ID] = verified.contentID
-		if _, exists := packet.shapes[verified.contentID]; exists {
+		if _, exists := packet.shapes[verified.contentID]; !exists {
+			source, _ := compiledShapeGeometry(verified.definition)
+			registration := prepareStreamedGeometryRegistration(source)
+			packet.shapes[verified.contentID] = &compiledAssetPacketShape{contentID: verified.contentID, lattice: verified.definition.Lattice, baseIdentity: verified.baseIdentity, source: source, registration: registration}
+		}
+		if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+			return nil, err
+		}
+		binding, err := json.Marshal(part.Source.VoxelShape.Palette)
+		if err != nil {
+			return nil, err
+		}
+		bindingKey := string(binding)
+		if key, exists := paletteBindings[bindingKey]; exists {
+			packet.partPalettes[part.ID] = key
 			continue
 		}
-		source, _ := compiledShapeGeometry(verified.definition)
-		registration := prepareStreamedGeometryRegistration(source)
-		packet.shapes[verified.contentID] = &compiledAssetPacketShape{contentID: verified.contentID, lattice: verified.definition.Lattice, baseIdentity: verified.baseIdentity, source: source, registration: registration}
+		palette, err := buildAuthoredVoxelShapePalette(packet.def, part)
+		if err != nil {
+			return nil, err
+		}
+		registration, err := prepareCompiledPaletteRegistration(&palette)
+		if err != nil {
+			return nil, err
+		}
+		key := registration.key
+		if _, exists := packet.palettes[key]; exists {
+			registration.release()
+		} else {
+			packet.palettes[key] = &compiledAssetPacketPalette{source: &palette, registration: registration}
+		}
+		paletteBindings[bindingKey] = key
+		packet.partPalettes[part.ID] = key
 	}
 	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 		return nil, err
@@ -115,15 +163,48 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 			models[contentID] = id
 		}
 	}
+	palettes := make(map[string]AssetId, len(packet.palettes))
+	if assets != nil {
+		for _, part := range packet.def.Parts {
+			key, exists := packet.partPalettes[part.ID]
+			if !exists {
+				continue
+			}
+			if _, exists := palettes[key]; exists {
+				continue
+			}
+			palette := packet.palettes[key]
+			if palette == nil || palette.registration == nil {
+				return nil, fmt.Errorf("compiled packet palette is missing")
+			}
+			id, adopted := assets.adoptCompiledAssetPalette(key, palette.source, palette.registration)
+			if !adopted {
+				// A stale key is an existing ownership conflict. Only a consumed
+				// cold handle with no key can be rebuilt from the packet source.
+				assets.mu.RLock()
+				_, keyed := assets.voxPaletteKeys[key]
+				assets.mu.RUnlock()
+				if keyed || palette.registration.charge() != 0 {
+					return nil, fmt.Errorf("compiled packet palette adoption rejected")
+				}
+				fresh, err := prepareCompiledPaletteRegistration(palette.source)
+				if err != nil {
+					return nil, err
+				}
+				id, adopted = assets.adoptCompiledAssetPalette(key, palette.source, fresh)
+				fresh.release()
+				if !adopted {
+					return nil, fmt.Errorf("compiled packet palette rebuild rejected")
+				}
+			}
+			palettes[key] = id
+		}
+	}
 	for _, part := range packet.def.Parts {
 		preparedPart := preparedAuthoredPart{}
 		if assets != nil {
 			if contentID, exists := packet.parts[part.ID]; exists {
-				palette, err := authoredVoxelShapePalette(assets, packet.def, part)
-				if err != nil {
-					return nil, err
-				}
-				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palette}
+				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palettes[packet.partPalettes[part.ID]]}
 			}
 		}
 		prepared.parts[part.ID] = preparedPart

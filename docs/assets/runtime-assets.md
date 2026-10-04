@@ -229,21 +229,25 @@ fails; publication never rereads source or frame files.
 
 Private CPU packets own metadata, resolved animations and unique dense sources
 with separate single-use registration copies. Duplicate C1 identities share one
-packet shape while part palette metadata remains independent. Complete shape and
-animation verification precedes dense construction. Child decoded scopes close
+packet shape. Ordered part bindings map to palettes deduplicated by the exact
+existing full JSON key. Workers own each immutable palette source and separate
+publication copy; main-thread publication adopts these copies without palette
+construction or key serialization. Complete shape and animation verification
+precedes geometry and palette construction. Child decoded scopes close
 after preparation; caller pins survive failures and cancellation. No decoded
 definitions or published asset IDs escape into the packet. Group-only assets
-produce packets without geometry.
+produce packets without geometry or palettes.
 
 Cancellation is cooperative before header/shape loads and animation resolution,
-between frames and whole-shape builds, and at completion; it does not interrupt
+between frames, whole-shape builds and palette preparation, and at completion; it does not interrupt
 codec, animation-resolver or dense-builder internals. Failed
 or canceled preparation releases built handles and checks the originating scope
 before returning usable output. Aliased packet release is idempotent. Metadata
 and source storage remain owned by the envelope until drain.
 
-Existing pending admission charges packet metadata, unique dense sources and
-registration storage once; repeated placements reuse one packet for a selected
+Existing pending admission charges packet metadata, unique geometry/palette
+sources and registration storage once, including retained palette keys and
+handle metadata after publication copies are consumed; repeated placements reuse one packet for a selected
 resolved path. Deferred, canceled, stale, failed and completed results release
 unused handles through existing result cleanup. A packet must match the current
 canonical selected path; an unrelated packet uses the existing selected loader.
@@ -251,7 +255,10 @@ Placement publication follows
 current generation, deletion and movement checks. Latest object overrides still
 resolve at the placement commit, and existing callbacks, rollback and Stop own
 every created entity. Palette/texture publication stays on the main thread;
-normal result release never evicts ordinary global geometry.
+normal result release never evicts ordinary global geometry or palettes. A
+consumed palette copy can be rebuilt from its immutable packet source only when
+its ordinary key is absent. Stale existing keys still fail through
+the same adoption boundary; no source or frame reread occurs.
 
 ### Authored voxel collapse reuse
 

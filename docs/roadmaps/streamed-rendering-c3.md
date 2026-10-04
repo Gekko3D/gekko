@@ -5,7 +5,7 @@ compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
 compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
 worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
-C3f4a private palette adoption complete. Compiler source-kind adapters and asset LOD remain separate work.
+C3f4a private palette adoption and C3f4b worker palette integration complete. Compiler source-kind adapters and asset LOD remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -76,7 +76,11 @@ Palette preparation uses the existing full JSON identity and ordinary palette
 owner with independent source/publication storage. This avoids sharing packet
 maps with public mutable assets or adding another cache. The
 [publication contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation)
-establishes the private owner before packet integration and publication measurement.
+owns palette transfer and pending lifetime. Within one fixed owned asset definition, invocation-local
+memoization uses exact JSON of the ordered value/material-ID binding slice.
+This avoids repeated table construction while retaining final deduplication by
+the sealed full palette key. Neither memo nor geometry identity becomes a
+persistent palette cache.
 
 ## Offline compiler boundary
 
@@ -189,3 +193,29 @@ Local harness: `/tmp/gekko-c3f3-measure_test.go`; evidence:
 `c3f3_measure_tmp_test.go`, run
 `env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestC3f3Measure$' -count=1`,
 then remove that temporary file. The harness is not part of the test suite.
+
+
+## Worker palette publication diagnostic (C3f4b)
+
+The same three-run CPU harness and exclusions above compare C3f3 with C3f4b.
+Fresh app/server/loader instances and warm filesystem caches remain unchanged.
+
+| Asset | Preparation ms | Publication/spawn ms | Combined ms | Combined allocated bytes |
+| --- | ---: | ---: | ---: | ---: |
+| ammo | 3.420 | 0.022 | 3.438 | 2,755,888 |
+| stealth | 16.656 | 0.016 | 16.670 | 1,578,256 |
+| nihilanth | 299.544 | 1.295 | 301.052 | 171,897,616 |
+
+Compared with C3f3, nihilanth publication falls from 25.008 to 1.295 ms and
+publication allocations from 21,421,704 to 2,839,576 bytes (86.74% lower).
+Combined allocations rise 14.92%; combined time rises 5.13% in these separate
+local runs. Ammo combined allocations rise 18.22%; stealth rises 0.45%.
+The improvement is reduced main-thread publication work, with additional worker
+cost. This does not demonstrate lower total CPU time or memory use. Allocation
+overhead needs a separate follow-up; no FPS, RSS or pixel-parity claim follows.
+
+Local harness: `/tmp/gekko-c3f4b-measure_test.go`; evidence:
+`/tmp/gekko-c3f4b-measure.json`. Temporarily copy the harness into the engine as
+`c3f4b_measure_tmp_test.go`, run
+`env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestC3f4bMeasure$' -count=1`,
+then remove that temporary file.
