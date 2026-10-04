@@ -7,7 +7,7 @@ compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
 worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
 C3f4a private palette adoption, C3f4b worker palette integration and C3f4c
 publication accounting complete. C3h0 diagnostics and C3h1 conservative geometry
-construction and C3h2 source-bound derivative frames complete. Opt-in,
+construction, C3h2 source-bound derivative frames and C3h3 versioned headers complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -337,7 +337,16 @@ and default compilation remain unchanged.
 Added a separate typed C1 LOD frame with original shape identity, source lattice,
 reduction semantics and structurally checked geometry/counts/bounds.
 [Frame contract](../content/compiled-voxels.md#compiled-ordinary-asset-lod-frames).
-Legacy frames and default compilation remain unchanged. Header references,
-compiler opt-in, opacity qualification and runtime source/readiness ownership
+Legacy frames and default compilation remain unchanged. Compiler opt-in,
+opacity qualification and runtime source/readiness ownership
 remain separate batches. Frame metadata alone proves neither source coverage nor
 opaque eligibility.
+
+## Versioned derivative references (C3h3)
+
+Added explicit schema-2 headers with optional source-bound LOD references while
+preserving schema-1 bytes and compiler defaults. Canonical validation bounds
+references and protects shared-path and logical identity consistency.
+[Contract](../content/compiled-voxels.md#compiled-ordinary-asset-headers).
+Compiler opt-in, actual derivative loading, current material/source qualification
+and renderer interaction/readiness ownership remain pending.

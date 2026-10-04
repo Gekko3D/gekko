@@ -363,13 +363,14 @@ metadata, unsupported kinds/versions and malformed bounds, counts or layers.
 bounded C1 `ReadFrame` without authoring fallback. Errors return nil data or
 definitions and zero `Info`. Explicit codecs remain borrowed; nil uses the existing
 default profile. Existing shape/header formats and default compilation are unchanged.
-Header references, compiler opt-in and runtime selection follow separately.
+Versioned header references are defined below. Compiler opt-in and runtime selection
+follow separately.
 
 ## Compiled ordinary asset headers
 
 `CompiledAssetHeaderDef` is an empty-brick C1 document of kind
-`compiled_asset_header`, explicit schema 1 and compiler version
-`gekko-compiled-asset-v1`. Typed metadata contains `schema_version`,
+`compiled_asset_header`. The default remains schema 1 and compiler version
+`gekko-compiled-asset-v1`, with unchanged canonical bytes. Typed metadata contains `schema_version`,
 `compiler_version`, `asset` and optional `shapes`, in that order. It has no
 normal bake version. The asset metadata retains schema 4, ordered parts,
 hierarchy/transforms/pivots, palettes/materials, skeleton/animation references,
@@ -401,6 +402,23 @@ atomic replacement, bounded frame read and zero-result failure rules. Header
 validation proves reference structure only. Compiler/runtime adoption must
 verify each referenced frame's identity and sizes, lattice and existing base
 projection before publishing geometry. A header alone cannot prove those links.
+
+Explicit schema 2 pairs with `gekko-compiled-asset-v2` and adds optional `lods`
+after `shapes`. Schema 1 rejects nonempty LOD references; empty tables are omitted
+in both versions. Authoritative shape references remain mandatory and unchanged.
+Each `CompiledAssetLODRefDef` contains `part_id`, `path`, `content_id`,
+`source_content_id`, `encoded_bytes`, `decoded_bytes`, `factor` and
+`reduction_version`. At most 4,096 references are accepted, with at most one per
+voxel part. `source_content_id` equals that part's ordinary shape ContentID;
+factor is 2 and reduction version is `occupancy-or-zero-anchored-2x-v1`.
+Paths, hashes and size limits follow shape-reference rules. LOD paths cannot
+also name authoritative shapes. Shared LOD paths require identical identities,
+source, factor, reducer and sizes. Repeated logical LOD ContentIDs across different
+paths require identical source, factor, reducer and decoded size; encoded size may
+differ between physical encodings. An owned LOD table is sorted by part ID.
+Header validation performs no derivative-file IO and proves neither source
+coverage nor opaque eligibility. Existing compiler defaults and runtime selection
+remain unchanged; derivative loading and qualification require separate integration.
 
 The header and independent shape frames avoid a new regional pack/index format.
 Explicit runtime selection and coherent dependency emission follow the

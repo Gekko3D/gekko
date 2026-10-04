@@ -17,6 +17,8 @@ import (
 const (
 	CurrentCompiledAssetHeaderSchemaVersion = 1
 	CurrentCompiledAssetCompilerVersion     = "gekko-compiled-asset-v1"
+	CompiledAssetLODHeaderSchemaVersion     = 2
+	CompiledAssetLODHeaderCompilerVersion   = "gekko-compiled-asset-v2"
 	MaxCompiledAssetParts                   = 4096
 )
 
@@ -27,6 +29,7 @@ type CompiledAssetHeaderDef struct {
 	CompilerVersion string                     `json:"compiler_version"`
 	Asset           *AssetDef                  `json:"asset"`
 	Shapes          []CompiledAssetShapeRefDef `json:"shapes,omitempty"`
+	LODs            []CompiledAssetLODRefDef   `json:"lods,omitempty"`
 }
 
 // CompiledAssetShapeRefDef binds a part to an independent compiled shape frame.
@@ -38,6 +41,19 @@ type CompiledAssetShapeRefDef struct {
 	BaseIdentity string `json:"base_identity"`
 	EncodedBytes int64  `json:"encoded_bytes"`
 	DecodedBytes int64  `json:"decoded_bytes"`
+}
+
+// CompiledAssetLODRefDef binds an optional derivative to its authoritative shape.
+// Header validation checks structure only; referenced frames remain unresolved.
+type CompiledAssetLODRefDef struct {
+	PartID           string `json:"part_id"`
+	Path             string `json:"path"`
+	ContentID        string `json:"content_id"`
+	SourceContentID  string `json:"source_content_id"`
+	EncodedBytes     int64  `json:"encoded_bytes"`
+	DecodedBytes     int64  `json:"decoded_bytes"`
+	Factor           int    `json:"factor"`
+	ReductionVersion string `json:"reduction_version"`
 }
 
 func compiledAssetExplicitID(id string) bool {
@@ -73,11 +89,23 @@ func compiledAssetPositiveFinite(value float32) bool {
 }
 
 func validateCompiledAssetHeader(header *CompiledAssetHeaderDef, limits voxelcodec.Limits) error {
-	if header == nil || header.SchemaVersion != CurrentCompiledAssetHeaderSchemaVersion || header.CompilerVersion != CurrentCompiledAssetCompilerVersion || header.Asset == nil || header.Asset.SchemaVersion != 4 {
+	if header == nil || header.Asset == nil || header.Asset.SchemaVersion != 4 {
+		return fmt.Errorf("invalid compiled asset header schema or compiler version")
+	}
+	switch header.SchemaVersion {
+	case CurrentCompiledAssetHeaderSchemaVersion:
+		if header.CompilerVersion != CurrentCompiledAssetCompilerVersion || len(header.LODs) != 0 {
+			return fmt.Errorf("invalid compiled asset header schema or compiler version")
+		}
+	case CompiledAssetLODHeaderSchemaVersion:
+		if header.CompilerVersion != CompiledAssetLODHeaderCompilerVersion {
+			return fmt.Errorf("invalid compiled asset header schema or compiler version")
+		}
+	default:
 		return fmt.Errorf("invalid compiled asset header schema or compiler version")
 	}
 	asset := header.Asset
-	if len(asset.Parts) > MaxCompiledAssetParts || len(header.Shapes) > MaxCompiledAssetParts {
+	if len(asset.Parts) > MaxCompiledAssetParts || len(header.Shapes) > MaxCompiledAssetParts || len(header.LODs) > MaxCompiledAssetParts {
 		return fmt.Errorf("compiled asset exceeds part/reference limits")
 	}
 	if !compiledAssetExplicitID(asset.ID) || asset.Runtime != nil && asset.Runtime.CollapseVoxelParts {
@@ -134,6 +162,10 @@ func validateCompiledAssetHeader(header *CompiledAssetHeaderDef, limits voxelcod
 	}
 	seen := make(map[string]struct{}, len(header.Shapes))
 	paths := make(map[string]CompiledAssetShapeRefDef, len(header.Shapes))
+	var shapeByPart map[string]CompiledAssetShapeRefDef
+	if len(header.LODs) > 0 {
+		shapeByPart = make(map[string]CompiledAssetShapeRefDef, len(header.Shapes))
+	}
 	for _, ref := range header.Shapes {
 		if _, ok := parts[ref.PartID]; !ok {
 			return fmt.Errorf("compiled shape reference does not identify a voxel part")
@@ -149,9 +181,39 @@ func validateCompiledAssetHeader(header *CompiledAssetHeaderDef, limits voxelcod
 			return fmt.Errorf("inconsistent shared compiled shape reference")
 		}
 		paths[ref.Path] = ref
+		if shapeByPart != nil {
+			shapeByPart[ref.PartID] = ref
+		}
 	}
 	if len(seen) != len(parts) {
 		return fmt.Errorf("compiled asset shape reference is missing")
+	}
+	lodParts := make(map[string]struct{}, len(header.LODs))
+	lodPaths := make(map[string]CompiledAssetLODRefDef, len(header.LODs))
+	lodIdentities := make(map[string]CompiledAssetLODRefDef, len(header.LODs))
+	for _, ref := range header.LODs {
+		shape, ok := shapeByPart[ref.PartID]
+		if !ok {
+			return fmt.Errorf("compiled LOD reference does not identify a voxel part")
+		}
+		if _, ok := lodParts[ref.PartID]; ok {
+			return fmt.Errorf("duplicate compiled LOD part reference")
+		}
+		lodParts[ref.PartID] = struct{}{}
+		if !compiledAssetReferencePath(ref.Path) || !compiledAssetHash(ref.ContentID) || !compiledAssetHash(ref.SourceContentID) || ref.SourceContentID != shape.ContentID || ref.Factor != 2 || ref.ReductionVersion != CompiledAssetLOD2xReductionVersion || ref.EncodedBytes < 96 || ref.EncodedBytes > limits.MaxEncodedBytes || ref.DecodedBytes <= 0 || ref.DecodedBytes > limits.MaxDecodedBytes {
+			return fmt.Errorf("invalid compiled LOD path, source, reduction or frame size")
+		}
+		if _, ok := paths[ref.Path]; ok {
+			return fmt.Errorf("compiled LOD path overlaps authoritative shape")
+		}
+		if previous, ok := lodPaths[ref.Path]; ok && (previous.ContentID != ref.ContentID || previous.SourceContentID != ref.SourceContentID || previous.Factor != ref.Factor || previous.ReductionVersion != ref.ReductionVersion || previous.EncodedBytes != ref.EncodedBytes || previous.DecodedBytes != ref.DecodedBytes) {
+			return fmt.Errorf("inconsistent shared compiled LOD reference")
+		}
+		if previous, ok := lodIdentities[ref.ContentID]; ok && (previous.SourceContentID != ref.SourceContentID || previous.Factor != ref.Factor || previous.ReductionVersion != ref.ReductionVersion || previous.DecodedBytes != ref.DecodedBytes) {
+			return fmt.Errorf("inconsistent compiled LOD logical identity")
+		}
+		lodPaths[ref.Path] = ref
+		lodIdentities[ref.ContentID] = ref
 	}
 	return nil
 }
@@ -163,6 +225,8 @@ func compiledAssetHeaderMetadata(header *CompiledAssetHeaderDef, limits voxelcod
 	canonical := *header
 	canonical.Shapes = append([]CompiledAssetShapeRefDef(nil), header.Shapes...)
 	sort.Slice(canonical.Shapes, func(i, j int) bool { return canonical.Shapes[i].PartID < canonical.Shapes[j].PartID })
+	canonical.LODs = append([]CompiledAssetLODRefDef(nil), header.LODs...)
+	sort.Slice(canonical.LODs, func(i, j int) bool { return canonical.LODs[i].PartID < canonical.LODs[j].PartID })
 	return json.Marshal(&canonical)
 }
 
