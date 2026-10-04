@@ -1,0 +1,47 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+
+	"github.com/gekko3d/gekko"
+)
+
+func run(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("assetcompile", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	input := flags.String("in", "", "authoring asset JSON path")
+	output := flags.String("out", "", "compiled header path ending in .gkassetc")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("assetcompile accepts flags only; unexpected positional arguments")
+	}
+	if *input == "" || *output == "" {
+		return fmt.Errorf("assetcompile requires -in and -out")
+	}
+	if filepath.Ext(*output) != ".gkassetc" {
+		return fmt.Errorf("compiled output must end in lowercase .gkassetc")
+	}
+	result, err := gekko.CompileAuthoredAsset(*input, *output, nil)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "Header written: %t; shapes: %d written, %d reused; dependencies: %d written, %d reused\n", result.HeaderWrote, result.ShapesWritten, result.ShapesReused, result.DependenciesWritten, result.DependenciesReused)
+	return err
+}
+
+func main() {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "assetcompile:", err)
+		os.Exit(1)
+	}
+}

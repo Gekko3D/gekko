@@ -352,6 +352,17 @@ unchanged.
 
 ## Ordinary asset compiler emission
 
+From the engine module, compile an explicit shipping artifact with:
+
+```sh
+go run ./cmd/assetcompile -in path/to/source.gkasset -out path/to/shipping/asset.gkassetc
+```
+
+Both flags are required; `-h` shows usage. The CLI requires the exact lowercase
+`.gkassetc` output suffix before reading source files and uses the default codec
+profile. Input extensions do not determine the authoring format; strict schema-4
+JSON validation applies. The CLI exposes no profile or dictionary-training flags.
+
 `gekko.CompileAuthoredAsset(inputPath, outputPath, codec)` produces an explicit
 compiled header and its complete inline-shape dependency closure. It supports
 `voxel_shape` and groups with independent parts; VOX/procedural adapters and
