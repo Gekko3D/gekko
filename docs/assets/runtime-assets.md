@@ -577,14 +577,16 @@ embedded layer creates no separate sidecar cache entry. See
 [compiled frames](../content/compiled-voxels.md#imported-embedded-normals).
 
 `RuntimeContentLoaderOptions.CompiledAssetCodec` separately fixes the borrowed
-profile for explicit compiled ordinary headers, shapes and LOD derivatives.
+profile for explicit compiled ordinary headers, shapes, models and LOD derivatives.
 `LoadCompiledAssetHeader`, `LoadCompiledAssetShape` and `LoadCompiledAssetLOD`
-return shared immutable definitions and frame `Info`
-by value. They use the same scoped cache, singleflight, decoded storage charge
+and `LoadCompiledAssetModelHeader` / `LoadCompiledAssetModel` return shared
+immutable definitions and frame `Info` by value. They use the same scoped cache, singleflight, decoded storage charge
 and eviction rules. Shapes retain owned canonical bricks without voxel-record
 expansion. Derivatives retain only actual coarse bricks and source metadata,
 without expanding the source count into geometry. Typed kinds have separate keys
-even at the same path. Header/derivative loading does not follow references or
+even at the same path. Warm entries remain fixed until eviction or Clear; file
+replacement does not refresh a warm entry. Model frames retain declared dimensions
+and canonical bricks. Header/model/derivative loading does not follow references or
 register geometry. Derivative reads prove frame structure only;
 [exact source validation](#compiled-lod-source-validation) and current runtime
 source/material qualification remain separate boundaries.

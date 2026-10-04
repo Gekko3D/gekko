@@ -565,3 +565,12 @@ public source-file validation remain unchanged. The
 owns closure, identity and no-authoring-IO rules. Focused/race content checks,
 full engine tests and five consumer builds passed. Decoder cache integration,
 shipping compiler emission and verified runtime adoption remain next.
+
+## Scoped model reads (C3g6)
+
+Two typed model/header leaves use the existing decoded owner, fixed borrowed codec,
+scopes and separate cache kinds. Warm entries preserve existing path/kind lifetime;
+no dependency following or new cache owner. [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime)
+owns the contract. Focused/race, full engine tests and five consumer builds passed.
+C3g5 is `5d61df0`; verified runtime selection/adoption and shipping compilation
+remain next. No loading speed gain claimed yet.
