@@ -99,7 +99,7 @@ func prepareCompiledPaletteRegistration(source *VoxelPaletteAsset) (*compiledPal
 	if key == "" {
 		return nil, fmt.Errorf("compiled palette cannot produce a valid cache key")
 	}
-	return &compiledPaletteRegistration{source: source, palette: &palette, key: key, bytes: runtimeContentGraphCharge(&palette)}, nil
+	return &compiledPaletteRegistration{source: source, palette: &palette, key: key, bytes: compiledPalettePublicationCharge(&palette)}, nil
 }
 
 func (registration *compiledPaletteRegistration) clearLocked() {

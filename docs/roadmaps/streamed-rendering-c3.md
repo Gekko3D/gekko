@@ -5,7 +5,7 @@ compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
 compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
 worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
-C3f4a private palette adoption and C3f4b worker palette integration complete. Compiler source-kind adapters and asset LOD remain separate work.
+C3f4a private palette adoption and C3f4b worker palette integration and C3f4c publication accounting complete. Compiler source-kind adapters and asset LOD remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -219,3 +219,31 @@ Local harness: `/tmp/gekko-c3f4b-measure_test.go`; evidence:
 `c3f4b_measure_tmp_test.go`, run
 `env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestC3f4bMeasure$' -count=1`,
 then remove that temporary file.
+
+
+## Publication accounting diagnostic (C3f4c)
+
+A three-preparation allocation profile of nihilanth identified constructor
+bookkeeping as avoidable worker work. The constructor now counts independent
+mutable clones directly and retains exact string alias accounting. General
+loader accounting and publication ownership remain unchanged.
+
+The same three-run stage harness gives these local medians:
+
+| Asset | Preparation ms | Publication/spawn ms | Combined ms | Combined allocated bytes |
+| --- | ---: | ---: | ---: | ---: |
+| ammo | 3.275 | 0.025 | 3.297 | 2,622,200 |
+| stealth | 16.107 | 0.026 | 16.166 | 1,577,424 |
+| nihilanth | 294.985 | 1.152 | 296.031 | 166,089,776 |
+
+Compared with C3f4b, combined allocated bytes decrease 4.85%, 0.05% and 3.38%
+respectively; nihilanth saves 5,807,840 bytes. Exact charge parity and lower
+estimator allocation counts are tested. Total allocations still exceed C3f3;
+these separate local timing samples do not prove a total CPU improvement.
+The earlier scheduler/GPU/RSS/pixel exclusions still apply.
+
+Local harness/evidence: `/tmp/gekko-c3f4c-measure_test.go` and
+`/tmp/gekko-c3f4c-measure.json`; reproduce using the temporary-file procedure
+above with `^TestC3f4cMeasure$`. The diagnostic profile harness is
+`/tmp/gekko-c3f4c-profile_test.go`, with baseline allocation evidence
+`/tmp/gekko-c3f4c-alloc.pprof`; it is not part of the test suite.

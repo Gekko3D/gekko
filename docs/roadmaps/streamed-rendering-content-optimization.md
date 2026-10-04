@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4b and C3d4a–C3d4c complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -824,7 +824,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3d4b | `9c3b99b` | Source-free compiled NPC loading with existing multipart hierarchy and animation bindings | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3d4c | `f3c2812` | Compiled single-model level consumers preserving first-part and optional pickup input contracts | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3f4a | `822a63c` | Private exact-key palette publication with independent single-use mutable storage | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
-| C3f4b | This commit | Worker-owned palettes and exact keys with main-thread adoption and pending accounting | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3f4b | `52fb649` | Worker-owned palettes and exact keys with main-thread adoption and pending accounting | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3f4c | This commit | Exact constructor-owned palette accounting with less worker bookkeeping | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2850,6 +2851,29 @@ sibling isolation (959 frames, 8.285 s); pixel comparison remains unverified.
 [CPU diagnostic](streamed-rendering-c3.md#worker-palette-publication-diagnostic-c3f4b)
 shows lower publication cost but higher combined allocations; worker overhead
 remains follow-up work. Existing tests and unrelated changes are preserved.
+
+
+### C3f4c: Palette copy accounting
+
+Constructor-specific accounting preserves the general storage estimate while
+avoiding mutable identity bookkeeping for independent publication clones.
+Contract: [compiled preparation](../assets/runtime-assets.md#compiled-ordinary-asset-preparation).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3f4c|C3f4a|C3f4b)' -count=1 -timeout=60s
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(C3f4c|C3f4a|C3f4b)' -count=1 -timeout=60s
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and five consumer commands above passed. Rich/nil/empty fields,
+cloned aliases, scalar types and string backing views retain exact charge parity;
+the representative estimator fixture uses at most half the general estimator's
+allocations. [CPU diagnostic](streamed-rendering-c3.md#publication-accounting-diagnostic-c3f4c)
+shows 5.8 MB fewer combined allocated bytes for nihilanth (3.38%). Ownership and
+rendering are unchanged; no new GPU check. Pixel comparison remains unverified.
+Existing tests and unrelated changes are preserved.
 
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.

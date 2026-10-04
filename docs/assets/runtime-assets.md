@@ -218,7 +218,11 @@ palette. Consumed or released handles clear source/copy references and permit
 only sealed-key warm reuse, never cold publication. Callers prove the immutable
 source/key. Aliased release is idempotent and never deletes adopted palettes.
 Copy charge becomes zero after transfer/release; pending envelopes must retain
-charge for sealed JSON keys and handle metadata until drain.
+charge for sealed JSON keys and handle metadata until drain. Publication-copy
+accounting specializes the constructor-owned clone: mutable descendants are
+independent, while string backing, length and concrete type determine shared
+storage. Its byte estimate matches the general decoded-storage estimator; map
+slack and allocator overhead remain excluded.
 
 These IDs retain ordinary `AssetServer` lifetime. Packet release never deletes
 adopted geometry, and imported prepared-cache eviction/leases do not own these
