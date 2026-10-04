@@ -264,6 +264,22 @@ consumed palette copy can be rebuilt from its immutable packet source only when
 its ordinary key is absent. Stale existing keys still fail through
 the same adoption boundary; no source or frame reread occurs.
 
+### Compiled LOD source validation
+
+The private `validateCompiledAssetLODSource` boundary accepts structurally valid
+C1-decoded derivative geometry and an authenticated `verifiedCompiledAssetShape`
+borrowed within its verification session. It matches ordinary shape ContentID,
+lattice, actual source count, occupied bounds and sole value. Occupied-bit coverage
+in both directions proves exact zero-anchored occupancy OR, including a source
+witness among eight fine cells for every coarse cell. Signed coordinates use
+`int64` intermediates. Sparse geometry never triggers a bounding-volume scan.
+
+Validation borrows immutable inputs, retains no geometry and builds only temporary
+brick indexes. It performs no IO, rehash, reduction rebuild or runtime publication.
+This is an unwired prerequisite: derivative loading and adoption remain pending.
+It qualifies the original decoded source only; exposed or edited warm geometry,
+current material opacity and GPU readiness require their own runtime checks.
+
 ### Authored voxel collapse reuse
 
 Repeated eligible static collapses reuse the existing composite before

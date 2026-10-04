@@ -8,7 +8,7 @@ worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
 C3f4a private palette adoption, C3f4b worker palette integration and C3f4c
 publication accounting complete. C3h0 diagnostics and C3h1 conservative geometry
 construction, C3h2 source-bound derivative frames, C3h3 versioned headers and
-C3h4 compiler opt-in complete. Opt-in,
+C3h4 compiler opt-in and C3h5 exact source validation complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -361,3 +361,11 @@ and header-last publisher. [Contract](../content/compiled-voxels.md#ordinary-ass
 Runtime derivative loading, current source/material qualification, authoritative
 interaction versus display geometry and readiness handoff remain pending. GPU
 quality and performance are not verified by this offline batch.
+
+## Exact source validation (C3h5)
+
+Added an unwired private verifier for exact occupancy-OR consistency against an
+authenticated decoded source, using occupied-bit passes and temporary brick
+indexes. [Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
+Derivative loading, current runtime source/material qualification and renderer
+interaction/readiness ownership remain separate work.

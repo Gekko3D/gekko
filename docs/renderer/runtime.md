@@ -662,7 +662,8 @@ independent. Coarse display and fine staging must remain under existing streamin
 ownership, with readiness checked for the staged target before changing display.
 Changing the target of an unfinished single-map ticket cancels that ticket.
 Opt-in conservative coverage for single-material opaque assets is approved;
-the derivative format and runtime integration remain pending. See the
+derivative frames and explicit compiler opt-in are available; runtime integration
+remains pending. See the
 [C3 LOD diagnostic and gates](../roadmaps/streamed-rendering-c3.md#asset-lod-diagnostic-c3h0).
 
 ### Streamed voxel residency
