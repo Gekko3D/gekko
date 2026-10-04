@@ -13,12 +13,43 @@ type verifiedCompiledAssetShape struct {
 	contentID    string
 }
 
-func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *RuntimeContentLoader) (*PreparedAuthoredAsset, error) {
+// The verification session owns metadata and animations, while shape definitions
+// are borrowed under its private child scope. Callers close it after building or
+// publishing independently owned geometry; no borrowed shape escapes the session.
+type compiledAssetVerification struct {
+	scope      *RuntimeContentLoadScope
+	def        *content.AssetDef
+	animations *content.ResolvedAssetAnimations
+	shapes     map[string]verifiedCompiledAssetShape
+}
+
+func (session *compiledAssetVerification) close() {
+	if session != nil {
+		session.scope.Close()
+	}
+}
+
+func checkCompiledAssetWork(loader *RuntimeContentLoader, cancelled func() bool) error {
+	if cancelled != nil && cancelled() {
+		return fmt.Errorf("compiled asset preparation cancelled")
+	}
 	if !runtimeContentOriginOpen(loader) {
-		return nil, fmt.Errorf("content origin scope is closed")
+		return fmt.Errorf("content origin scope is closed")
+	}
+	return nil
+}
+
+func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancelled func() bool) (*compiledAssetVerification, error) {
+	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+		return nil, err
 	}
 	scope := loader.NewScope()
-	defer scope.Close()
+	success := false
+	defer func() {
+		if !success {
+			scope.Close()
+		}
+	}()
 	verification := scope.Loader()
 	header, _, err := verification.LoadCompiledAssetHeader(path)
 	if err != nil {
@@ -35,6 +66,9 @@ func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *Runt
 	}
 	if validation := content.ValidateAsset(&definition, content.AssetValidationOptions{}); validation.HasErrors() {
 		return nil, fmt.Errorf("compiled asset validation failed: %s", validation.Error())
+	}
+	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+		return nil, err
 	}
 	animations, err := content.ResolveCompiledAssetAnimations(&definition, path)
 	if err != nil {
@@ -60,6 +94,9 @@ func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *Runt
 	verified := make(map[string]verifiedCompiledAssetShape, len(header.Shapes))
 	identities := make(map[*content.CompiledAssetShapeDef]string)
 	for _, ref := range header.Shapes {
+		if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+			return nil, err
+		}
 		part, exists := parts[ref.PartID]
 		if !exists || part.Source.Kind != content.AssetSourceKindVoxelShape || part.Source.VoxelShape == nil {
 			return nil, fmt.Errorf("compiled shape does not identify a voxel part")
@@ -88,16 +125,25 @@ func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *Runt
 		}
 		verified[part.ID] = verifiedCompiledAssetShape{definition: shape, baseIdentity: identity, contentID: ref.ContentID}
 	}
-	// This is the publication boundary: every geometry and animation reference
-	// proof has completed, and the origin must still permit the operation.
-	if !runtimeContentOriginOpen(loader) {
-		return nil, fmt.Errorf("content origin scope is closed")
+	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+		return nil, err
 	}
-	prepared := &PreparedAuthoredAsset{def: &definition, documentPath: path, animations: animations, parts: make(map[string]preparedAuthoredPart, len(definition.Parts))}
+	success = true
+	return &compiledAssetVerification{scope: scope, def: &definition, animations: animations, shapes: verified}, nil
+}
+
+func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *RuntimeContentLoader) (*PreparedAuthoredAsset, error) {
+	session, err := verifyCompiledAssetInput(path, loader, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer session.close()
+	definition, animations := session.def, session.animations
+	prepared := &PreparedAuthoredAsset{def: definition, documentPath: path, animations: animations, parts: make(map[string]preparedAuthoredPart, len(definition.Parts))}
 	for _, part := range definition.Parts {
 		preparedPart := preparedAuthoredPart{}
 		if assets != nil && part.Source.Kind == content.AssetSourceKindVoxelShape {
-			shape := verified[part.ID]
+			shape := session.shapes[part.ID]
 			// C1 identity includes canonical primary geometry and lattice. Physical
 			// closure location and the material palette do not change geometry sharing.
 			key := "compiled-asset-shape:" + shape.contentID
@@ -107,7 +153,7 @@ func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *Runt
 				id = assets.RegisterSharedVoxelGeometryWithCacheKey(key, geometry, key)
 			}
 			assets.recordVerifiedAuthoredVoxelBase(id, shape.definition.Lattice, shape.baseIdentity)
-			palette, err := authoredVoxelShapePalette(assets, &definition, part)
+			palette, err := authoredVoxelShapePalette(assets, definition, part)
 			if err != nil {
 				return nil, err
 			}

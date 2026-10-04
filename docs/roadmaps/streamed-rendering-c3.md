@@ -3,7 +3,7 @@
 Status: approved direction; C3a shape frames, C3b headers and C3c offline
 compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
-compiler CLI and C3f1 private shared adoption complete.
+compiler CLI, C3f1 private shared adoption and C3f2 CPU packets complete.
 Ordinary worker preparation remains separate; special level consumers still use JSON.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
@@ -58,6 +58,19 @@ with the canonical-base boundary above. Verify source parity, material/pivot and
 hierarchy preservation, malformed content, scoped sharing, edit isolation and
 save/evict/reload before claiming runtime loading gains. Separate tests and
 implementation agents plus independent PRE/POST reviews apply to these boundaries.
+
+## Ordinary worker preparation boundary
+
+Use owned CPU packets with transient decoded scopes and P5 registration copies.
+[Packet and publication contracts](../assets/runtime-assets.md#compiled-ordinary-asset-preparation)
+retain direct warm preparation and ordinary `AssetServer` lifetime. Imported
+cache leases could delete geometry still used by direct callers; a parallel
+prepared cache adds another owner without demonstrated need.
+
+Streamed integration follows separately: charge metadata, unique sources and
+registration copies in existing pending admission, then publish at the current
+placement commit after generation/deleted/moved checks. Retain latest override
+resolution and main-thread palette/texture publication.
 
 ## Offline compiler boundary
 

@@ -199,6 +199,22 @@ These IDs retain ordinary `AssetServer` lifetime. Packet release never deletes
 adopted geometry, and imported prepared-cache eviction/leases do not own these
 IDs. Worker packet preparation and streamed publication remain separate delivery.
 
+Private CPU packets own metadata, resolved animations and unique dense sources
+with separate single-use registration copies. Duplicate C1 identities share one
+packet shape while part palette metadata remains independent. Complete shape and
+animation verification precedes dense construction. Child decoded scopes close
+after preparation; caller pins survive failures and cancellation. No decoded
+definitions or published asset IDs escape into the packet. Group-only assets
+produce packets without geometry.
+
+Cancellation is cooperative before header/shape loads and animation resolution,
+between frames and whole-shape builds, and at completion; it does not interrupt
+codec, animation-resolver or dense-builder internals. Failed
+or canceled preparation releases built handles and checks the originating scope
+before returning usable output. Aliased packet release is idempotent. Metadata
+and source storage remain owned by the envelope until drain. Streamed scheduling,
+pending admission and main-thread publication are separate integration work.
+
 ### Authored voxel collapse reuse
 
 Repeated eligible static collapses reuse the existing composite before
