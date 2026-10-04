@@ -648,6 +648,22 @@ service, lookups, camera/feature updates, scene culling and bridge extraction
 continue at their existing frame boundaries. ECS dirty extraction and future
 layer selection remain separate S3 work. See [S3b](../roadmaps/streamed-rendering-s3b.md).
 
+### Compiled asset LOD boundary
+
+Compiled ordinary assets currently publish authoritative level-0 geometry only.
+Existing automatic simplified geometry uses center-nearest resampling and
+caller-authored `EntityLODComponent` distance bands. Streamed voxel entities
+bypass this selection; adding compiled frames alone does not enable their LOD.
+
+A compiled derivative's original content identity cannot certify the current
+mutable runtime map. Integrating derivatives must qualify current geometry,
+retain level-0 collision/navigation/edit authority and keep animated parts
+independent. Coarse display and fine staging must remain under existing streaming
+ownership, with readiness checked for the staged target before changing display.
+Changing the target of an unfinished single-map ticket cancels that ticket.
+The reduction/material policy and derivative format remain unresolved; see the
+[C3 LOD diagnostic and gates](../roadmaps/streamed-rendering-c3.md#asset-lod-diagnostic-c3h0).
+
 ### Streamed voxel residency
 
 Ordinary `VoxelRenderHiddenComponent` entities leave renderer residency. Adding

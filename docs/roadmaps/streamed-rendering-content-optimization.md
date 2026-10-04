@@ -825,7 +825,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3d4c | `f3c2812` | Compiled single-model level consumers preserving first-part and optional pickup input contracts | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3f4a | `822a63c` | Private exact-key palette publication with independent single-use mutable storage | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3f4b | `52fb649` | Worker-owned palettes and exact keys with main-thread adoption and pending accounting | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
-| C3f4c | This commit | Exact constructor-owned palette accounting with less worker bookkeeping | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3f4c | `00717f6` | Exact constructor-owned palette accounting with less worker bookkeeping | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3h0 | This commit | Asset LOD CPU/coverage diagnostic; production reduction policy remains gated | [Measurements and gates](streamed-rendering-c3.md#asset-lod-diagnostic-c3h0) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2875,6 +2876,27 @@ shows 5.8 MB fewer combined allocated bytes for nihilanth (3.38%). Ownership and
 rendering are unchanged; no new GPU check. Pixel comparison remains unverified.
 Existing tests and unrelated changes are preserved.
 
+### C3h0: Asset LOD diagnostic
+
+Added a reproducible diagnostic, without production behavior changes.
+[Measurements and remaining gates](streamed-rendering-c3.md#asset-lod-diagnostic-c3h0)
+show estimated geometry write reductions of 47–77%, alongside thin-surface loss,
+closed openings and unresolved mixed-material reduction. Production LOD waits
+for visual-policy alignment and source/readiness architecture.
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go run docs/roadmaps/diagnostics/c3_lod.go -out /tmp/gekko-c3-lod
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run 'Test(P5jResample|XBrickMap_Resample)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Diagnostic assertions and committed engine tests passed. The earlier uncommitted
+C3g1 RED candidate was temporarily preserved outside the test package during the
+engine sweep, then restored unchanged. No consumer behavior changed. CPU probe
+images were inspected; GPU performance, rendered quality and LOD handoff remain
+unverified. Existing tests and unrelated working-tree changes are preserved.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

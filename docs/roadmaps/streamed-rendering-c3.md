@@ -5,7 +5,7 @@ compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
 compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
 worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
-C3f4a private palette adoption and C3f4b worker palette integration and C3f4c publication accounting complete. Compiler source-kind adapters and asset LOD remain separate work.
+C3f4a private palette adoption and C3f4b worker palette integration and C3f4c publication accounting complete. C3h0 asset LOD diagnostics complete; reduction/material policy remains gated. Compiler source-kind adapters and production asset LOD remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -247,3 +247,70 @@ Local harness/evidence: `/tmp/gekko-c3f4c-measure_test.go` and
 above with `^TestC3f4cMeasure$`. The diagnostic profile harness is
 `/tmp/gekko-c3f4c-profile_test.go`, with baseline allocation evidence
 `/tmp/gekko-c3f4c-alloc.pprof`; it is not part of the test suite.
+
+
+## Asset LOD diagnostic (C3h0)
+
+The reproducible [diagnostic harness](diagnostics/c3_lod.go) compiles the same
+three local authoring inputs used above, then reconstructs canonical shapes and
+measures existing `Resample(.5)`. Geometry is deduplicated by content identity
+within each asset; part references remain independent. Three invocations per
+shape use Go 1.25.4, darwin/arm64, `GOMAXPROCS=1` and warm filesystem caches.
+Medians use sums across unique shapes. GC, decoding, source construction and
+quality scans are excluded; production resampling stdout is included.
+
+| Asset | Reduction ms | Allocated bytes | Estimated geometry writes: full / sampled bytes | Lost occupied coarse cells |
+| --- | ---: | ---: | ---: | ---: |
+| ammo | 0.143 | 19,120 | 67,840 / 35,840 | 291 / 602 |
+| stealth | 4.055 | 241,032 | 606,016 / 159,872 | 2,004 / 17,664 |
+| nihilanth | 35.104 | 3,046,888 | 11,617,216 / 2,634,880 | 46,435 / 155,793 |
+
+All 1, 1 and 59 unique shapes satisfy existing runtime eligibility: more than one
+source voxel, nonempty sampled geometry and strictly fewer sampled voxels.
+Effective geometry totals therefore equal raw sampled totals for these assets.
+Estimated fresh geometry writes decrease 47.17%, 73.62% and 77.32%. Estimates
+include sector records, all brick table rows, occupancy/normal auxiliary storage
+and mixed-brick payloads. They exclude material/lookup writes, allocator capacity,
+normal baking work and actual upload timing. This is potential write reduction,
+not measured GPU memory, frame-time or FPS improvement.
+
+Coverage prevents adopting the existing sampler as the C3 default. Raw sampling
+erases even-coordinate one-voxel planes; the existing runtime falls back to full
+geometry for these empty proxies. Within the raw reduction, odd-coordinate planes
+survive but thicken when expanded to the source grid. The tested one-voxel opening closes under both
+sampling and occupancy OR. Adjacent designated transparent/opaque material IDs
+share four coarse cells; sampling selects the opaque ID, while occupancy OR
+leaves the material choice unresolved. Real assets have 437, 0 and 106,291
+mixed-material coarse cells. Those counts do not classify real opacity.
+CPU XY projections show these probes only; they omit engine extent/pivot
+compensation, lighting and opacity rendering. No rendered quality acceptance
+or GPU handoff verification is claimed.
+
+Run from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go run docs/roadmaps/diagnostics/c3_lod.go -out /tmp/gekko-c3-lod
+```
+
+The local HL1 inputs must exist; `-inputs` accepts other comma-separated eligible
+assets. Output includes input hashes, individual samples, raw/effective geometry
+counts, sampling completeness checks, source content preservation assertions and
+CPU PNGs.
+Local evidence: `/tmp/gekko-c3-lod/evidence.json`. The harness is excluded from
+normal builds. Assertions also cover signed coordinates and asymmetric bounds.
+
+Before production LOD:
+
+- Align the visual policy: center-nearest loses coverage; conservative occupancy
+  OR can thicken surfaces and close narrow openings. Material/opacity reduction
+  and asset eligibility need explicit acceptance. Keep production defaults unchanged.
+- Define versioned derivative references binding source identity/lattice, reduction
+  semantics, material mapping and bounds. Existing artifacts/readers stay valid.
+- Qualify current runtime source content. Original provenance and geometry IDs
+  cannot validate exposed mutable storage; edits/exposure need a safe full-detail
+  fallback or qualified regeneration.
+- Implement coarse display/fine staging through existing streaming ownership and
+  readiness, then verify fixed-view rendering, transparency and delayed handoff.
+
+[Runtime boundary](../renderer/runtime.md#compiled-asset-lod-boundary).
+No production renderer, format, cache or collision behavior changes in C3h0.
