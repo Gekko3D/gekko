@@ -202,6 +202,24 @@ reuses the existing ID. Verified metadata may fill missing original provenance;
 conflicting recorded provenance fails without replacement or reading mutable
 warm geometry. Public registration keeps defensive copying.
 
+
+Private compiled palette preparation builds the existing authored tables without
+publication and seals the exact existing full JSON cache key. Registration owns
+an independent copy of all nested maps, slices and UV-scroll pointers, preserving
+concrete scalar material properties and nil/empty distinctions. Unsupported
+mutable property values and JSON encoding failures are rejected at this private
+boundary. Public `CreateVoxelPaletteAsset` keeps its existing alias and stale-key
+behavior; the private path uses the same ordinary palette namespace.
+
+A live registration validates its sealed key and exact source before cold
+transfer or warm drain. Cold publication transfers prepared storage under the
+server lock without another deep copy. Warm reuse preserves the existing mutable
+palette. Consumed or released handles clear source/copy references and permit
+only sealed-key warm reuse, never cold publication. Callers prove the immutable
+source/key. Aliased release is idempotent and never deletes adopted palettes.
+Copy charge becomes zero after transfer/release; pending envelopes must retain
+charge for sealed JSON keys and handle metadata until drain.
+
 These IDs retain ordinary `AssetServer` lifetime. Packet release never deletes
 adopted geometry, and imported prepared-cache eviction/leases do not own these
 IDs. If public deletion removes a shared ID after its packet registration was

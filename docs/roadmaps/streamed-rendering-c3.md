@@ -4,8 +4,8 @@ Status: approved direction; C3a shape frames, C3b headers and C3c offline
 compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
 compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
-worker integration, C3d4b NPC adaptation and C3d4c first-part level consumers
-complete. Compiler source-kind adapters and asset LOD remain separate work.
+worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
+C3f4a private palette adoption complete. Compiler source-kind adapters and asset LOD remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -69,7 +69,14 @@ cache leases could delete geometry still used by direct callers; a parallel
 prepared cache adds another owner without demonstrated need.
 
 Streamed integration uses existing pending admission and placement commit gates.
-Special consumer adapters and renderer-copy optimization remain separate work.
+Compiler source-kind adapters, asset LOD and renderer-copy optimization remain
+separate work.
+
+Palette preparation uses the existing full JSON identity and ordinary palette
+owner with independent source/publication storage. This avoids sharing packet
+maps with public mutable assets or adding another cache. The
+[publication contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation)
+establishes the private owner before packet integration and publication measurement.
 
 ## Offline compiler boundary
 

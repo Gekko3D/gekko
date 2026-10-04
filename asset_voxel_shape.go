@@ -62,22 +62,34 @@ func authoredVoxelShapePalette(assets *AssetServer, def *content.AssetDef, part 
 	if assets == nil {
 		return AssetId{}, nil
 	}
+	asset, err := buildAuthoredVoxelShapePalette(def, part)
+	if err != nil {
+		return AssetId{}, err
+	}
+	return assets.CreateVoxelPaletteAsset(asset), nil
+}
+
+// Build authored palette semantics without publishing global resources.
+func buildAuthoredVoxelShapePalette(def *content.AssetDef, part content.AssetPartDef) (VoxelPaletteAsset, error) {
+	if def == nil {
+		return VoxelPaletteAsset{}, fmt.Errorf("asset definition is nil")
+	}
 	if part.Source.VoxelShape == nil {
-		return AssetId{}, fmt.Errorf("voxel_shape source for part %s is missing payload", part.ID)
+		return VoxelPaletteAsset{}, fmt.Errorf("voxel_shape source for part %s is missing payload", part.ID)
 	}
 
 	asset := VoxelPaletteAsset{}
 	for _, entry := range part.Source.VoxelShape.Palette {
 		material, ok := content.FindAssetMaterialByID(def, entry.MaterialID)
 		if !ok {
-			return AssetId{}, fmt.Errorf("missing material %s for part %s", entry.MaterialID, part.ID)
+			return VoxelPaletteAsset{}, fmt.Errorf("missing material %s for part %s", entry.MaterialID, part.ID)
 		}
 		asset.VoxPalette[entry.Value] = material.BaseColor
 		asset.Materials = append(asset.Materials, authoredMaterialToVoxMaterial(int(entry.Value), material))
 		asset.SurfaceMaterials = addVoxelSurfaceMaterial(asset.SurfaceMaterials, entry.Value, "", material.Tags)
 	}
 	asset.Animations = authoredAssetVoxelPaletteAnimations(def.MaterialAnimations)
-	return assets.CreateVoxelPaletteAsset(asset), nil
+	return asset, nil
 }
 
 func authoredAssetVoxelPaletteAnimations(animations []content.AssetMaterialAnimationDef) []VoxelPaletteAnimation {
