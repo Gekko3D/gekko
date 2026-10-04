@@ -96,12 +96,16 @@ func authoredVoxelSurfaceMaterialsForModel(model VoxModel, material content.Asse
 }
 
 func createAuthoredMaterialVoxelPalette(assets *AssetServer, material content.AssetMaterialDef) AssetId {
+	return assets.CreateVoxelPaletteAsset(buildAuthoredMaterialVoxelPalette(material))
+}
+
+func buildAuthoredMaterialVoxelPalette(material content.AssetMaterialDef) VoxelPaletteAsset {
 	var palette VoxPalette
 	for i := range palette {
 		palette[i] = material.BaseColor
 	}
 	surfaceMaterials := addVoxelSurfaceMaterial(nil, 1, "", material.Tags)
-	return assets.CreateVoxelPaletteAsset(VoxelPaletteAsset{
+	return VoxelPaletteAsset{
 		VoxPalette:       palette,
 		SurfaceMaterials: surfaceMaterials,
 		IsPBR:            true,
@@ -110,5 +114,5 @@ func createAuthoredMaterialVoxelPalette(assets *AssetServer, material content.As
 		Emission:         material.Emissive,
 		IOR:              material.IOR,
 		Transparency:     material.Transparency,
-	})
+	}
 }

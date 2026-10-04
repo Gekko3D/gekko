@@ -618,30 +618,56 @@ func authoredProceduralPalette(assets *AssetServer, def *content.AssetDef, part 
 	if assets == nil {
 		return AssetId{}, nil
 	}
+	palette, err := buildAuthoredProceduralPalette(def, part)
+	if err != nil {
+		return AssetId{}, err
+	}
+	return assets.CreateVoxelPaletteAsset(palette), nil
+}
+
+// buildAuthoredProceduralPalette constructs palette data without registration.
+func buildAuthoredProceduralPalette(def *content.AssetDef, part content.AssetPartDef) (VoxelPaletteAsset, error) {
 	if part.Source.MaterialID == "" {
-		return assets.CreatePBRPalette([4]uint8{255, 255, 255, 255}, 1, 0, 0, 1.5), nil
+		var palette VoxPalette
+		for i := range palette {
+			palette[i] = [4]uint8{255, 255, 255, 255}
+		}
+		return VoxelPaletteAsset{VoxPalette: palette, IsPBR: true, Roughness: 1, IOR: 1.5}, nil
 	}
 	material, ok := content.FindAssetMaterialByID(def, part.Source.MaterialID)
 	if !ok {
-		return AssetId{}, fmt.Errorf("missing material %s for part %s", part.Source.MaterialID, part.ID)
+		return VoxelPaletteAsset{}, fmt.Errorf("missing material %s for part %s", part.Source.MaterialID, part.ID)
 	}
-	return createAuthoredMaterialVoxelPalette(assets, material), nil
+	return buildAuthoredMaterialVoxelPalette(material), nil
 }
 
 func authoredVoxFilePalette(assets *AssetServer, def *content.AssetDef, part content.AssetPartDef, palette VoxPalette, materials []VoxMaterial, model VoxModel, sourcePath string) (AssetId, error) {
 	if part.Source.MaterialID == "" {
 		return assets.CreateVoxelPaletteFromSource(palette, materials, sourcePath), nil
 	}
+	built, err := buildAuthoredVoxFilePalette(def, part, palette, materials, model, sourcePath)
+	if err != nil {
+		return AssetId{}, err
+	}
+	return assets.CreateVoxelPaletteAsset(built), nil
+}
+
+// buildAuthoredVoxFilePalette borrows materials and their property maps, matching
+// the public VOX palette contract. Surface facts use original, unscaled samples.
+func buildAuthoredVoxFilePalette(def *content.AssetDef, part content.AssetPartDef, palette VoxPalette, materials []VoxMaterial, model VoxModel, sourcePath string) (VoxelPaletteAsset, error) {
+	if part.Source.MaterialID == "" {
+		return VoxelPaletteAsset{VoxPalette: palette, Materials: materials, SourcePath: sourcePath}, nil
+	}
 	material, ok := content.FindAssetMaterialByID(def, part.Source.MaterialID)
 	if !ok {
-		return AssetId{}, fmt.Errorf("missing material %s for part %s", part.Source.MaterialID, part.ID)
+		return VoxelPaletteAsset{}, fmt.Errorf("missing material %s for part %s", part.Source.MaterialID, part.ID)
 	}
-	return assets.CreateVoxelPaletteAsset(VoxelPaletteAsset{
+	return VoxelPaletteAsset{
 		VoxPalette:       palette,
 		Materials:        materials,
 		SurfaceMaterials: authoredVoxelSurfaceMaterialsForModel(model, material),
 		SourcePath:       sourcePath,
-	}), nil
+	}, nil
 }
 
 func LocalTransformToWorld(parentWorld TransformComponent, parentIsVoxel bool, parentVoxelResolution float32, local LocalTransformComponent) TransformComponent {

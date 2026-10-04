@@ -14,7 +14,8 @@ representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
 upload staging, C3h11 pure qualification guards and C3h12a owned derivative
 packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
 instance intent, C3h13b instance qualification, C3h13c runtime activation and
-C3g1 pure primitive extraction and C3g2 canonical model frames complete. Opt-in,
+C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palette
+construction complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -535,3 +536,12 @@ keeps raw history and runtime collapse outside this compact boundary. Focused an
 race content tests, full engine tests and five consumer builds passed. This
 format prerequisite has no runtime performance claim; compiler/header/adoption
 batches remain next.
+
+## Pure source palette construction (C3g3)
+
+Authored material, procedural and VOX palette data can now be built without asset
+registration. Historical palette JSON, source/asset cache domains, borrowed VOX
+material maps, raw used-slot surface facts and nil/error precedence are preserved.
+[The runtime asset contract](../assets/runtime-assets.md#voxel-models-and-palettes)
+owns these rules. Focused/race tests, full engine tests and five consumer builds
+passed. Owned offline adapters remain next; no direct loading speed gain claimed.

@@ -111,6 +111,14 @@ voxel order, fractional truncation, color index and empty-model conventions.
 Public constructors still register through `CreateVoxelGeometry(..., 1.0)`;
 frame and Y-axis capsule generation remain separate.
 
+Authored material and procedural palettes also have pure private data builders.
+VOX palette construction preserves the original colors/materials and derives
+surface facts from original unscaled samples. Its materials slice and property
+maps remain borrowed, matching public creators; normalized surface tags own their
+storage. Offline callers must own or copy VOX inputs before publication. Public
+wrappers retain their existing registration APIs, key domains, errors and
+procedural nil-server precedence.
+
 ### Textures
 
 Texture creation helpers live in `asset_texture.go`:
