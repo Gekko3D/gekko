@@ -144,6 +144,8 @@ func voxelUploadOrder(obj *core.VoxelObject) uint64 {
 // An executor may refuse only before writing. Successful execution means writes
 // were queued, not that GPU execution has completed.
 func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(voxelUploadWork) bool) {
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	m.VoxelUploadBytes = 0
 	m.VoxelSectorsUploaded = 0
 	m.VoxelBricksUploaded = 0
@@ -307,9 +309,11 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		if w.kind != voxelUploadMaterial && !m.voxelUploadPayloadFits(w) {
 			continue
 		}
+		snapshot := m.captureVoxelUploadSnapshot(w)
 		if execute == nil || !execute(w) {
 			continue
 		}
+		m.commitVoxelUploadSnapshot(snapshot)
 		remaining.MaxBytes -= w.bytes
 		remaining.MaxSectors -= w.sectors
 		remaining.MaxBricks -= w.bricks
@@ -369,6 +373,8 @@ func (w voxelUploadWork) brickRange() (int, int) {
 // Compute exactly the releases that execution will perform before allocating.
 // Protect current target pointers throughout the sector, including moved bricks.
 func (m *GpuBufferManager) voxelUploadReleases(w voxelUploadWork) (payload, auxiliary map[*volume.Brick]bool) {
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	payload, auxiliary = make(map[*volume.Brick]bool), make(map[*volume.Brick]bool)
 	key := w.sectorCoordinate()
 	sector := w.targetMap().Sectors[key]
@@ -407,8 +413,26 @@ func (m *GpuBufferManager) voxelUploadReleases(w voxelUploadWork) (payload, auxi
 }
 
 func (m *GpuBufferManager) voxelBrickReferencedOutsideUpload(brick *volume.Brick, w voxelUploadWork) bool {
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	key := w.sectorCoordinate()
 	start, end := w.brickRange()
+	if !m.voxelOwnership.legacy && brick != nil {
+		outside := m.voxelOwnership.bricks[brick]
+		alloc := m.Allocations[w.targetMap()]
+		if !m.ownsVoxelAllocation(w.targetMap(), alloc) {
+			m.invalidateVoxelOwnership()
+		} else {
+			if pointers := alloc.Bricks[key]; pointers != nil {
+				for i := start; i < end; i++ {
+					if pointers[i] == brick {
+						outside--
+					}
+				}
+			}
+			return outside > 0
+		}
+	}
 	for xbm, alloc := range m.Allocations {
 		for coordinate, pointers := range alloc.Bricks {
 			if pointers == nil {
@@ -428,6 +452,8 @@ func (m *GpuBufferManager) voxelBrickReferencedOutsideUpload(brick *volume.Brick
 }
 
 func (m *GpuBufferManager) voxelUploadPayloadFits(w voxelUploadWork) bool {
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	key := w.sectorCoordinate()
 	alloc := m.Allocations[w.targetMap()]
 	sector := w.targetMap().Sectors[key]

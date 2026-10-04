@@ -473,6 +473,7 @@ type GpuBufferManager struct {
 	Allocations         map[*volume.XBrickMap]*ObjectGpuAllocation
 	MaterialAllocations map[*core.VoxelObject]*MaterialGpuAllocation
 	retainedVoxelMaps   map[*volume.XBrickMap]*retainedVoxelMapEntry
+	voxelOwnership      voxelAllocationOwnership
 
 	// Smooth streaming state
 	SectorsPerFrame                uint32
@@ -569,6 +570,8 @@ type retiredBindGroup struct {
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
 type ObjectGpuAllocation struct {
+	ownerToken           *voxelAllocationOwnerToken
+	ownerMap             *volume.XBrickMap
 	Sectors              map[[3]int]*volume.Sector     // Track which sector is at which coordinate
 	Bricks               map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
 	DirectLookup         directSectorLookupMetadata

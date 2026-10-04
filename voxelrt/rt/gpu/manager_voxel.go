@@ -62,6 +62,8 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 }
 
 func (m *GpuBufferManager) updateVoxelData(scene *core.Scene, backend voxelNativeBackend) bool {
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	m.voxelNative = backend
 	m.voxelGPUWorkStats = VoxelGPUWorkStats{}
 	m.voxelWorkAdvanced = false
@@ -172,6 +174,8 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 	if m == nil || scene == nil {
 		return
 	}
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	topologyChanged := false
 	if m.Allocations == nil {
 		m.Allocations = make(map[*volume.XBrickMap]*ObjectGpuAllocation)
@@ -206,6 +210,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 				},
 			}
 			m.Allocations[xbm] = alloc
+			m.trackVoxelAllocation(xbm, alloc)
 			if m.voxelAdmissionActive {
 				alloc.lookupAdmissionKnown = true
 				alloc.lookupAdmitted = m.voxelLookupMaps[xbm]
@@ -226,6 +231,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			pointers := alloc.Bricks[k]
 			delete(alloc.Sectors, k)
 			delete(alloc.Bricks, k)
+			m.removeVoxelSnapshotEdges(oldSector, pointers)
 			m.releaseUnreferencedSector(oldSector)
 			m.releaseUnreferencedBricks(pointers)
 		}
@@ -256,6 +262,9 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			}
 			alloc.Sectors[sKey] = sector
 			alloc.Bricks[sKey] = &[64]*volume.Brick{}
+			if !m.voxelOwnership.legacy {
+				m.voxelOwnership.sectors[sector]++
+			}
 			xbm.DirtySectors[sKey] = true
 			for bz := 0; bz < volume.SectorBricks; bz++ {
 				for by := 0; by < volume.SectorBricks; by++ {
@@ -397,6 +406,22 @@ func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, allo
 	if m == nil || xbm == nil || alloc == nil {
 		return
 	}
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
+	if !m.voxelOwnership.legacy {
+		if m.Allocations[xbm] != alloc || !m.ownsVoxelAllocation(xbm, alloc) {
+			m.invalidateVoxelOwnership()
+		} else {
+			// Detach all this map's edges before checking surviving owners.
+			for _, sector := range alloc.Sectors {
+				decrementVoxelReference(m.voxelOwnership.sectors, sector)
+			}
+			for _, pointers := range alloc.Bricks {
+				m.removeVoxelBrickEdges(pointers)
+			}
+			delete(m.voxelOwnership.headers, xbm)
+		}
+	}
 	// Remove this owner before checking the surviving allocation snapshots.
 	delete(m.Allocations, xbm)
 	for sKey, sector := range alloc.Sectors {
@@ -410,10 +435,18 @@ func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, allo
 }
 
 func (m *GpuBufferManager) releaseUnreferencedSector(sector *volume.Sector) {
-	for _, alloc := range m.Allocations {
-		for _, reference := range alloc.Sectors {
-			if reference == sector {
-				return
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
+	if !m.voxelOwnership.legacy {
+		if m.voxelOwnership.sectors[sector] != 0 {
+			return
+		}
+	} else {
+		for _, alloc := range m.Allocations {
+			for _, reference := range alloc.Sectors {
+				if reference == sector {
+					return
+				}
 			}
 		}
 	}
@@ -425,6 +458,11 @@ func (m *GpuBufferManager) releaseUnreferencedSector(sector *volume.Sector) {
 }
 
 func (m *GpuBufferManager) voxelBrickReferenced(brick *volume.Brick) bool {
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
+	if !m.voxelOwnership.legacy && brick != nil {
+		return m.voxelOwnership.bricks[brick] != 0
+	}
 	for _, alloc := range m.Allocations {
 		for _, pointers := range alloc.Bricks {
 			if pointers == nil {
@@ -444,6 +482,8 @@ func (m *GpuBufferManager) releaseUnreferencedBricks(pointers *[64]*volume.Brick
 	if pointers == nil {
 		return
 	}
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	for _, brick := range pointers {
 		if brick != nil && !m.voxelBrickReferenced(brick) {
 			m.releaseBrickSlot(brick)

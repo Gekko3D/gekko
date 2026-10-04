@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1k and S1l1–S1l2, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1k and S1l1–S1l3, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -422,6 +422,29 @@ from `gekko/`, plus these consumer builds from their respective modules:
 
 No native rendering behavior changed; no visual or frame-time claim.
 
+#### S1l3: Allocation snapshot ownership
+
+Completed 2026-10-04. Private allocation reference counts eliminate repeated
+resident-snapshot scans during reclamation. Shared slots, successful retargeted
+writes, refusal and injected/foreign snapshots retain their contracts.
+[Contract](../renderer/runtime.md#allocation-snapshot-ownership) and
+[focused verification](streamed-rendering-s1b.md#s1l3-allocation-snapshot-ownership).
+
+Boundary verification passed: `env GOCACHE=/tmp/gekko3d-gocache go test ./...`
+from `gekko/`, plus these consumer builds from their respective modules:
+
+| Module | Command |
+| --- | --- |
+| `gekko-editor` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l3-build/editor/ ./...` |
+| `actiongame` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l3-build/actiongame/ ./...` |
+| `spacegame_go` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l3-build/spacegame/ ./...` |
+| `spacesim` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l3-build/spacesim/ ./...` |
+| `examples/testing-vox` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l3-build/testing-vox/ ./...` |
+
+No native rendering behavior changed. Retained-input accounting and producer
+integration precede bounded structural publication; whole-map preparation,
+admission scans and global lookup remain separate work.
+
 ### S2. Bound caches and worker throughput by bytes
 
 Budget decoded content, prepared geometry, pending results, retained GPU data, normals, materials and editable patches by bytes. Bound `RuntimeContentLoader`; geometry eviction alone leaves source arrays resident.
@@ -815,7 +838,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1j | `818e4d5` | Age optional geometry/material demand without changing required ownership | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
 | S1k | `76881be` | Bound native voxel buffer creation/copying while preserving live writes | [Renderer contract](../renderer/runtime.md#voxel-buffer-creation-and-migration) |
 | S1l1 | `edea1e6` | Immutable managed coordinate frontier | [Owner contract](../renderer/editing.md#managed-topology-views) |
-| S1l2 | This entry's implementation commit | Frozen qualified sector geometry with exact snapshot compatibility | [Owner contract](../renderer/editing.md#managed-geometry-views) |
+| S1l2 | `4f52848` | Frozen qualified sector geometry with exact snapshot compatibility | [Owner contract](../renderer/editing.md#managed-geometry-views) |
+| S1l3 | This batch | Count manager-owned allocation references without repeated reclamation scans | [Renderer contract](../renderer/runtime.md#allocation-snapshot-ownership) |
 | S2a | `896e1eb` | Prepared geometry byte budgets and build suppression | [Design](streamed-rendering-s2a.md) |
 | S2b | `1504a7c` | Decoded leases and pending-result admission | [Design](streamed-rendering-s2b.md) |
 | S3a | `d93f3ac` | Incremental v2 observer selection | [Design](streamed-rendering-s3a.md) |

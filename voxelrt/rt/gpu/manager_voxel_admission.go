@@ -119,6 +119,8 @@ func (m *GpuBufferManager) voxelObjectAdmitted(obj *core.VoxelObject) bool {
 // Cleanup belongs to the same admission boundary as slot reuse. Retention's
 // physical capacities do not shrink; freeing inactive owners only supplies slots.
 func (m *GpuBufferManager) cleanupVoxelAdmissionOwners(scene *core.Scene) map[*volume.XBrickMap]bool {
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	m.ensureRetainedVoxelMaps()
 	activeMaps := make(map[*volume.XBrickMap]bool)
 	activeObjects := make(map[*core.VoxelObject]bool)

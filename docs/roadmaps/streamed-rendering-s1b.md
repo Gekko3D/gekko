@@ -709,7 +709,7 @@ producer integration must precede bounded allocation and lookup publication.
 
 ### S1l2: Sealed geometry capture
 
-Completed 2026-10-04 in this entry's implementation commit. Qualified managed
+Completed 2026-10-04 in `4f52848`. Qualified managed
 geometry now captures frozen sectors without copying the whole map. Existing
 authority snapshots use the same private records while preserving synchronous
 publication and exact legacy fallback. The lasting API and limits are in
@@ -730,6 +730,29 @@ consumer verification is recorded in the main roadmap. No native behavior
 changed; no visual or frame-time claim. Full snapshot metadata, producer
 integration, retained-generation accounting, slot ownership and GPU structural
 publication remain separate work.
+
+### S1l3: Allocation snapshot ownership
+
+Completed 2026-10-04 in this batch. Manager-owned reference counts replace
+repeated resident-snapshot reclamation scans while preserving shared slots,
+retargeted successful writes and exact legacy fallback. The lasting contract is
+in [allocation snapshot ownership](../renderer/runtime.md#allocation-snapshot-ownership).
+
+From `gekko/`, focused, GPU and ownership race checks passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^(TestS1l3|TestS1i|TestVoxelUpload|TestS2d|TestS2i)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^(TestS1l3|TestS1i|TestS1k|TestVoxelUpload|TestS2d|TestS2i|TestC3h9|TestC3h10)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^$' -bench '^BenchmarkS1l3' -benchtime=100x -count=1
+```
+
+The two-owner hot-sector removal benchmark measured 1.5/13.9/127.9 µs before
+and 0.78/0.66/0.75 µs after, beside 1/256/4,096 clean sectors (Apple M4 Pro).
+Setup and restoration are excluded; this is reclamation evidence, not a frame-time
+claim. Engine and consumer verification is recorded in the main roadmap. Native
+behavior is unchanged; whole-map structural preparation, admission scans and
+global lookup publication remain atomic.
 
 ## Verification and execution record
 

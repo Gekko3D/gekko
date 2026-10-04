@@ -162,6 +162,8 @@ func (m *GpuBufferManager) evictRetainedVoxelMaps(activeMaps map[*volume.XBrickM
 	if m == nil {
 		return
 	}
+	m.beginVoxelOwnership()
+	defer m.endVoxelOwnership()
 	if m.retainedVoxelMapPruned {
 		m.compactRetainedVoxelMaps()
 	}

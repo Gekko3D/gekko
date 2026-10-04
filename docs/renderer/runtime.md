@@ -379,6 +379,30 @@ Nil state returns zero stats. Temporary construction/active-key collection,
 external borrowers, assets and GPU allocations are excluded; this is not a process
 or GPU memory limit. [Ownership rationale](../roadmaps/streamed-rendering-s2a.md#s2c-cpu-material-table-cache-ownership-decision).
 
+## Allocation Snapshot Ownership
+
+Manager-created voxel allocations count every sector-coordinate and brick-index
+reference in their committed snapshots. Shared assignments remain live until the
+final allocated reference disappears. Upload eligibility excludes only the exact
+replacement unit and still protects moved bricks throughout the current sector.
+Successful queued writes update ownership before checking whether selection or
+revision changed; refused writes preserve the previous snapshot.
+
+The manager validates allocation headers once at each outer update, preparation,
+service or cleanup boundary. Reclamation then uses reference counts without
+scanning resident sector/brick snapshots. Injected, foreign or replaced allocation
+headers permanently restore legacy scan behavior for that manager and discard
+private bookkeeping. Arbitrary writes inside derived GPU allocation snapshots are
+not tracked producers; supported raw `XBrickMap` edits retain their existing dirty
+processing contract.
+
+Counts describe allocated edges, including pending and retained snapshots, rather
+than desired CPU geometry or admission reservations. Existing remove-before-add
+ordering, payload-mode eligibility and conservative auxiliary lifetime remain
+unchanged. Whole-map structural preparation, admission planning and global lookup
+publication remain separate atomic work. Bookkeeping storage is outside retained
+GPU slot budgets; no whole-frame or process-memory ceiling is implied.
+
 ## Retained GPU Geometry Budget
 
 `GpuBufferManager.RetainedVoxelMapBudgetBytes` caps retained assigned geometry
