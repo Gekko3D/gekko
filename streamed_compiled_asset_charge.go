@@ -19,6 +19,21 @@ func streamedCompiledAssetPacketsCharge(packets map[string]*compiledAssetPacket)
 	seenPaletteSources := make(map[*VoxelPaletteAsset]struct{})
 	seenPaletteRegistrations := make(map[*compiledPaletteRegistration]struct{})
 	var bytes int64
+	addSource := func(source *volume.XBrickMap) {
+		if _, exists := seenSources[source]; !exists {
+			seenSources[source] = struct{}{}
+			bytes = runtimeContentChargeSum(bytes, streamedPendingGeometryCharge(source))
+		}
+	}
+	addRegistration := func(registration *streamedGeometryRegistration) {
+		if registration == nil {
+			return
+		}
+		if _, exists := seenRegistrations[registration]; !exists {
+			seenRegistrations[registration] = struct{}{}
+			bytes = runtimeContentChargeSum(bytes, int64(unsafe.Sizeof(streamedGeometryRegistration{})), registration.charge())
+		}
+	}
 	for key, packet := range packets {
 		keys[key] = nil
 		if packet == nil {
@@ -29,7 +44,9 @@ func streamedCompiledAssetPacketsCharge(packets map[string]*compiledAssetPacket)
 		}
 		seenPackets[packet] = struct{}{}
 		metadata := *packet
-		metadata.shapes = make(map[string]*compiledAssetPacketShape, len(packet.shapes))
+		if packet.shapes != nil {
+			metadata.shapes = make(map[string]*compiledAssetPacketShape, len(packet.shapes))
+		}
 		for contentID, shape := range packet.shapes {
 			if shape == nil {
 				metadata.shapes[contentID] = nil
@@ -39,16 +56,12 @@ func streamedCompiledAssetPacketsCharge(packets map[string]*compiledAssetPacket)
 			copy.source = nil
 			copy.registration = nil
 			metadata.shapes[contentID] = &copy
-			if _, exists := seenSources[shape.source]; !exists {
-				seenSources[shape.source] = struct{}{}
-				bytes = runtimeContentChargeSum(bytes, streamedPendingGeometryCharge(shape.source))
-			}
-			if _, exists := seenRegistrations[shape.registration]; !exists {
-				seenRegistrations[shape.registration] = struct{}{}
-				bytes = runtimeContentChargeSum(bytes, shape.registration.charge())
-			}
+			addSource(shape.source)
+			addRegistration(shape.registration)
 		}
-		metadata.palettes = make(map[string]*compiledAssetPacketPalette, len(packet.palettes))
+		if packet.palettes != nil {
+			metadata.palettes = make(map[string]*compiledAssetPacketPalette, len(packet.palettes))
+		}
 		for key, palette := range packet.palettes {
 			if palette == nil {
 				metadata.palettes[key] = nil
@@ -67,6 +80,41 @@ func streamedCompiledAssetPacketsCharge(packets map[string]*compiledAssetPacket)
 					seenPaletteRegistrations[registration] = struct{}{}
 					// Map keys retain the sealed key; fixed handle metadata survives consumption.
 					bytes = runtimeContentChargeSum(bytes, int64(unsafe.Sizeof(compiledPaletteRegistration{})), registration.charge())
+				}
+			}
+		}
+		if packet.lods != nil {
+			metadata.lods = make(map[string]*compiledAssetPacketLOD, len(packet.lods))
+		}
+		// Preserve scalar graph aliases while excluding volume storage and live
+		// handle mutexes from reflection. Constructor-owned copies are disjoint.
+		lodCopies := make(map[*compiledAssetPacketLOD]*compiledAssetPacketLOD)
+		proofCopies := make(map[*compiledAssetLODProof]*compiledAssetLODProof)
+		for key, lod := range packet.lods {
+			if lod == nil {
+				metadata.lods[key] = nil
+				continue
+			}
+			if copy, exists := lodCopies[lod]; exists {
+				metadata.lods[key] = copy
+				continue
+			}
+			copy := *lod
+			copy.source, copy.registration = nil, nil
+			lodCopies[lod] = &copy
+			metadata.lods[key] = &copy
+			addSource(lod.source)
+			addRegistration(lod.registration)
+			if lod.proof != nil {
+				if proof, exists := proofCopies[lod.proof]; exists {
+					copy.proof = proof
+				} else {
+					proof := *lod.proof
+					proof.full, proof.coarse = nil, nil
+					copy.proof = &proof
+					proofCopies[lod.proof] = &proof
+					addSource(lod.proof.full)
+					addSource(lod.proof.coarse)
 				}
 			}
 		}

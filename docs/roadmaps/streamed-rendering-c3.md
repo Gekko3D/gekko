@@ -11,7 +11,8 @@ construction, C3h2 source-bound derivative frames, C3h3 versioned headers and
 C3h4 compiler opt-in, C3h5 exact source validation and C3h6 scoped derivative
 reads, C3h7 complete-closure source verification, C3h8 core render
 representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
-upload staging and C3h11 pure qualification guards complete. Opt-in,
+upload staging, C3h11 pure qualification guards and C3h12a owned derivative
+packets/accounting complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -433,3 +434,13 @@ Warm equal-input scans allocate zero: median 0.372 µs/32 bricks, 7.109 µs/492,
 These are CPU guard costs, not GPU/frame timing. Owned proof publication and
 runtime activation follow; boundary commands and diagnostic limits are in the
 parent delivery entry.
+
+
+## Owned derivative packets (C3h12a)
+
+Workers now retain verified coarse geometry, independent immutable full/coarse
+baselines and single-use coarse registration copies. Per-part membership stays
+separate from full-source sharing. Pending charges include unique proof storage
+and retained geometry-handle metadata. [Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
+AssetServer adoption and runtime activation follow. Focused/race, engine and
+consumer boundary commands are recorded in the parent delivery entry.

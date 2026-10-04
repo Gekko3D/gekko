@@ -20,6 +20,8 @@ type compiledAssetPacket struct {
 	shapes       map[string]*compiledAssetPacketShape
 	partPalettes map[string]string
 	palettes     map[string]*compiledAssetPacketPalette
+	partLODs     map[string]string
+	lods         map[string]*compiledAssetPacketLOD
 }
 
 type compiledAssetPacketPalette struct {
@@ -47,6 +49,11 @@ func (packet *compiledAssetPacket) release() {
 	for _, palette := range packet.palettes {
 		palette.registration.release()
 	}
+	for _, lod := range packet.lods {
+		if lod != nil {
+			lod.registration.release()
+		}
+	}
 }
 
 func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cancelled func() bool) (*compiledAssetPacket, error) {
@@ -61,6 +68,14 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 		shapes:       make(map[string]*compiledAssetPacketShape, len(session.shapes)),
 		partPalettes: make(map[string]string, len(session.shapes)),
 		palettes:     make(map[string]*compiledAssetPacketPalette),
+	}
+	// Baselines are created only for authenticated derivatives, before the
+	// verification scope closes or any mutable packet storage is published.
+	var fullBaselines map[string]*volume.XBrickMap
+	if len(session.lods) != 0 {
+		packet.partLODs = make(map[string]string, len(session.lods))
+		packet.lods = make(map[string]*compiledAssetPacketLOD, len(session.lods))
+		fullBaselines = make(map[string]*volume.XBrickMap)
 	}
 	success := false
 	defer func() {
@@ -88,6 +103,20 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 		}
 		if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 			return nil, err
+		}
+		if derivative, exists := session.lods[part.ID]; exists {
+			packet.partLODs[part.ID] = derivative.contentID
+			if _, exists := packet.lods[derivative.contentID]; !exists {
+				baseline := fullBaselines[verified.contentID]
+				if baseline == nil {
+					baseline = packet.shapes[verified.contentID].source.Copy()
+					fullBaselines[verified.contentID] = baseline
+				}
+				packet.lods[derivative.contentID] = prepareVerifiedCompiledAssetPacketLOD(derivative, baseline)
+			}
+			if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+				return nil, err
+			}
 		}
 		binding, err := json.Marshal(part.Source.VoxelShape.Palette)
 		if err != nil {

@@ -286,8 +286,23 @@ Validation borrows immutable inputs, retains no geometry and builds only tempora
 brick indexes. It performs no IO, rehash, reduction rebuild or runtime publication.
 Common compiled preparation invokes this proof before any runtime publication.
 Derivative frames remain borrowed within the existing independent child scope;
-no cached definition escapes into prepared assets or CPU packets. Derivative
-geometry adoption and display selection remain pending.
+no cached definition escapes into prepared assets or CPU packets. For declared verified derivatives, worker packets retain exact coarse geometry
+and separate private immutable full/coarse proof baselines. Full baselines share
+only by authenticated source identity within a packet; derivative sources,
+registrations and proofs share by derivative identity. Mutable source and
+registration maps never alias proof storage or decoded frames. Construction
+occurs before the verification scope closes; it never regenerates reduction.
+Part-to-derivative membership remains per part even when full geometry is shared.
+Legacy and nonLOD packets allocate no derivative tables or baselines.
+
+Packet release drains coarse registration copies idempotently while immutable
+proof/source storage remains owned until envelope drain. Pending admission counts
+unique full/coarse sources and proof maps, registration storage and retained fixed
+geometry-handle metadata once; scalar proof metadata excludes volume pointers
+from reflection. Consuming a handle removes its publication storage charge,
+not retained source/proof or fixed handle metadata. Ordinary AssetServer proof
+adoption must install an independent private copy; no packet baseline ownership
+moves implicitly. Derivative asset adoption and display selection remain pending.
 It qualifies the original decoded source only; exposed or edited warm geometry,
 current material opacity and GPU readiness require their own runtime checks.
 

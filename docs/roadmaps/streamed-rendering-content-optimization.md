@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -837,7 +837,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3h8 | `1a5a2bd` | Separate core render representation while preserving level-0 CPU authority | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
 | C3h9 | `bd085b7` | Migrate render consumers while preserving CPU authority and source upload queues | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
 | C3h10 | cac42e4 | Stage full detail behind coarse display through existing GPU ownership | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
-| C3h11 | This commit | Compare live primary geometry and current opaque material against verified proof | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
+| C3h11 | 9146484 | Compare live primary geometry and current opaque material against verified proof | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
+| C3h12a | This commit | Retain owned derivative packets and exact pending proof/handle accounting | [Asset contract](../assets/runtime-assets.md#compiled-lod-source-validation) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -3189,6 +3190,28 @@ allocations. This excludes decoding, preparation, coarse scans, placement sync
 and GPU/frame timing. No GPU behavior changes; activation/manual transition
 verification remains pending. Earlier C3g1 RED candidate is preserved outside
 the package during checks and restored afterward; unrelated changes remain.
+
+
+### C3h12a: Owned derivative packets
+
+Added worker-owned verified derivative sources, immutable proof baselines and
+separate publication copies without changing full CPU authority or renderer
+selection. Pending admission counts unique retained proof storage and fixed full/
+coarse geometry-handle metadata through consumption/release.
+[Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3h12a|C3f2|C3f4b|C3f4c|C3h7)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(C3h12a|C3f2|C3f4b|C3h7)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused/race, committed engine tests and five consumer commands in C3h9 passed.
+No GPU behavior changes; AssetServer adoption, activation and manual transition
+verification remain next. Earlier C3g1 RED candidate is preserved outside the
+package during checks and restored afterward; unrelated changes remain.
 
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
