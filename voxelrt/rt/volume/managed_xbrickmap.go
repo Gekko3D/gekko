@@ -21,6 +21,8 @@ type ManagedXBrickMap struct {
 	// Publication revisions also include auxiliary-only fitted-normal halos.
 	// Public SectorRevisions continue to describe dense voxel writes only.
 	publicationRevisions map[[3]int]uint64
+	// Immutable coordinate-only membership, shared by captures and sealed forks.
+	topology *managedTopologyNode
 	// Only these brick pointers are exclusively owned. Fork clears this set
 	// because every current brick becomes shared, including previous edits.
 	exclusive map[*Brick]struct{}
@@ -38,6 +40,7 @@ func NewManagedXBrickMap(source *XBrickMap) *ManagedXBrickMap {
 	}
 	owner := &ManagedXBrickMap{current: shareManagedMap(base), base: base}
 	owner.seedGeometryCounts()
+	owner.seedTopology()
 	return owner
 }
 
@@ -97,6 +100,7 @@ func NewManagedXBrickMapWithBase(base, current *XBrickMap) *ManagedXBrickMap {
 		owner.addChangedBrickAssignment(key)
 	}
 	owner.seedGeometryCounts()
+	owner.seedTopology()
 	return owner
 }
 
@@ -287,11 +291,13 @@ func (m *ManagedXBrickMap) setVoxel(w VoxelWrite, batch *voxelEditBatch) {
 	m.detachVoxelHalo(w.X, w.Y, w.Z)
 	sKey, bKey := sectorBrickKeyForVoxel(w.X, w.Y, w.Z)
 	stale := m.staleSolid[bKey]
+	_, sectorWasPresent := m.current.Sectors[sKey]
 	var old *Brick
 	if sector := m.current.Sectors[sKey]; sector != nil {
 		old = sector.GetBrick(bKey[3], bKey[4], bKey[5])
 	}
 	m.current.setVoxel(w.X, w.Y, w.Z, w.Value, batch)
+	m.reconcileTopology(sKey, sectorWasPresent)
 	m.markPublicationHalo(w)
 	var brick *Brick
 	if sector := m.current.Sectors[sKey]; sector != nil {
@@ -384,6 +390,7 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 		changes:              maps.Clone(m.changes),
 		changedBrickCounts:   maps.Clone(m.changedBrickCounts),
 		publicationRevisions: maps.Clone(m.publicationRevisions),
+		topology:             m.topology,
 		brickVoxelCounts:     maps.Clone(m.brickVoxelCounts),
 		staleSolid:           maps.Clone(m.staleSolid),
 		currentBricks:        m.currentBricks, currentVoxels: m.currentVoxels,
@@ -444,6 +451,7 @@ func (m *ManagedXBrickMap) ExposeMutable() *XBrickMap {
 		m.brickVoxelCounts, m.staleSolid = nil, nil
 		m.currentBricks, m.currentVoxels = 0, 0
 		m.publicationRevisions = nil
+		m.topology = nil
 		m.exclusive = nil
 	}
 	return m.current

@@ -146,6 +146,32 @@ must not mutate, reenter, expose or fork the owner while consuming its edit stre
 This boundary retains inline dense bricks. See
 [ownership rationale](../roadmaps/streamed-rendering-p1c.md).
 
+### Managed topology views
+
+`ManagedXBrickMap.CaptureTopology()` returns a historical coordinate-only
+`ManagedTopologyView` and sealed availability. Nil and exposed owners return an
+empty view and false; an empty sealed owner returns an empty view and true.
+`Len()` returns its sector count. `Coord(index)` reads signed X/Y/Z lexicographic
+order; negative or out-of-range indices return a zero coordinate and false.
+Capture and length are constant time; indexed reads are logarithmic. All three
+operations allocate nothing.
+
+Both constructors eagerly index current map keys, including allocated empty
+sectors and excluding removed-sector tombstones or base-only keys. Tracked writes
+maintain only the target sector's membership before returning to the producer.
+Content edits and normal halos do not change membership. Applied panic prefixes
+remain indexed. Sealed forks share immutable index nodes and diverge independently.
+Exposure disables new captures; previously captured views remain readable after
+edits, exposure or owner collection, including from independent readers.
+
+Views retain only coordinates and immutable index nodes. They do not freeze
+payloads, masks, normals, bounds, revisions or GPU allocations. Looking up a
+historical coordinate in current geometry may find changed or absent content.
+Owner operations still require exclusive access. Construction retains its atomic
+copying/indexing cost; structural edits allocate logarithmic index paths. Retained
+views can retain historical paths. This API establishes no renderer admission,
+memory or elapsed-time ceiling.
+
 ### Ordinary managed runtime geometry
 
 `AssetServer.RegisterManagedVoxelGeometry(source, sourcePath)` defensively seals

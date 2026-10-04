@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1k, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1k and S1l1, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -376,6 +376,29 @@ generation. Focused and race checks, full engine tests and five consumer builds
 passed. Bootstrap, whole-map structure preparation and global lookup rebuilding
 remain atomic. [Contract](../renderer/runtime.md#voxel-buffer-creation-and-migration)
 and [verification](streamed-rendering-s1b.md#s1k-verification).
+
+#### S1l1: Managed topology frontier
+
+Completed 2026-10-04. Sealed managed geometry now provides historical indexed
+sector coordinates without copying keys at capture. Existing edits, forks and
+raw exposure retain their contracts. Payload-qualified capture and renderer
+integration remain prerequisites of bounded structural admission.
+[Contract](../renderer/editing.md#managed-topology-views) and
+[verification](streamed-rendering-s1b.md#s1l1-managed-topology-frontier).
+
+Boundary verification passed: `env GOCACHE=/tmp/gekko3d-gocache go test ./...`
+from `gekko/`, plus these consumer builds from their respective modules:
+
+| Module | Command |
+| --- | --- |
+| `gekko-editor` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l1-build/editor/ ./...` |
+| `actiongame` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l1-build/actiongame/ ./...` |
+| `spacegame_go` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l1-build/spacegame/ ./...` |
+| `spacesim` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l1-build/spacesim/ ./...` |
+| `examples/testing-vox` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l1-build/testing-vox/ ./...` |
+
+No GPU behavior changed; no native visual check or frame-time claim. The known
+`examples/testing` compile failure remains outside this batch.
 
 ### S2. Bound caches and worker throughput by bytes
 
@@ -769,6 +792,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1i | `3557e78` | Optional physical GPU growth admission, pinned pressure and hard-limit safety | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
 | S1j | `818e4d5` | Age optional geometry/material demand without changing required ownership | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
 | S1k | `76881be` | Bound native voxel buffer creation/copying while preserving live writes | [Renderer contract](../renderer/runtime.md#voxel-buffer-creation-and-migration) |
+| S1l1 | This entry's implementation commit | Immutable managed coordinate frontier | [Owner contract](../renderer/editing.md#managed-topology-views) |
 | S2a | `896e1eb` | Prepared geometry byte budgets and build suppression | [Design](streamed-rendering-s2a.md) |
 | S2b | `1504a7c` | Decoded leases and pending-result admission | [Design](streamed-rendering-s2b.md) |
 | S3a | `d93f3ac` | Incremental v2 observer selection | [Design](streamed-rendering-s3a.md) |
@@ -929,11 +953,12 @@ native creation per update, subject to physical admission and hard device limits
 starts with native buffer migration; structural capture and global lookup bounds
 remain follow-ups.
 
-After S1k's release check, the next recommended ownership scope is
+After S1k's release check, the user approved
 [bounded structural admission](streamed-rendering-s1b.md#next-alignment-owned-structural-admission).
 An indexed topology owner must precede resumable structural scans; public raw
-maps cannot use revision-only invalidation safely. The proposed opt-in boundary
-and publication behavior require alignment before implementation.
+maps cannot use revision-only invalidation safely. S1l1 supplies coordinate-only
+ownership first. Frozen payload qualification, producer integration and exact
+retained-generation admission/retirement rules must precede GPU integration.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
 On 2026-10-03, the user authorized its ownership decision and migration of existing

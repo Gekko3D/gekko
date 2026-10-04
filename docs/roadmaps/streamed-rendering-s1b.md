@@ -642,7 +642,7 @@ parity claim.
 
 ## Next alignment: Owned structural admission
 
-Proposed after S1k (`76881be`); not yet approved. Large arriving or structurally
+Approved by the user on 2026-10-04 after S1k (`76881be`). Large arriving or structurally
 dirty maps still require whole-map admission and allocation preparation before
 the bounded native work begins. Global lookup publication depends on the
 resulting allocated topology, so owned structural enumeration is the next
@@ -685,6 +685,27 @@ changed targets, edits during staging, refusal/cleanup and raw compatibility.
 Use independent ownership reviews, focused and race checks, then engine tests
 and affected consumer builds at each batch boundary. A user release check must
 confirm retained visible/fallback coverage and coherent final publication.
+
+### S1l1: Managed topology frontier
+
+Completed 2026-10-04 in this entry's implementation commit. The first ownership
+prerequisite adds an immutable coordinate index to sealed managed geometry.
+Historical views support resumable enumeration without an initial key-list copy.
+The lasting API and limits are in
+[managed topology views](../renderer/editing.md#managed-topology-views).
+
+From `gekko/`, focused, volume and ownership race checks passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^TestS1l' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -run '^(TestS1l|TestP1cIndependentForkConcurrentEdits)' -count=1
+```
+
+Engine and consumer verification is recorded in the main roadmap. No visual
+check is needed for this coordinate-only owner API. Construction and existing
+authority/renderer copying remain atomic. Payload-qualified ownership and
+producer integration must precede bounded allocation and lookup publication.
 
 ## Verification and execution record
 
