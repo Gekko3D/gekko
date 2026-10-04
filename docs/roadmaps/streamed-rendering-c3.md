@@ -1,7 +1,8 @@
 # C3: Compiled ordinary assets
 
 Status: approved direction; C3a shape frames, C3b headers and C3c offline
-compiler complete. Runtime adoption follows separately.
+compiler and C3d1 decoded-cache integration complete. Runtime preparation and
+canonical-base adoption follow separately.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership

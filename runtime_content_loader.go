@@ -20,6 +20,9 @@ type RuntimeContentLoaderOptions struct {
 	// ImportedWorldCodec is borrowed and fixed for this owner and all its scopes.
 	// Nil selects bounded default imported IO; the caller owns codec lifetime.
 	ImportedWorldCodec *voxelcodec.Codec
+	// CompiledAssetCodec is borrowed and fixed for this owner and all its scopes.
+	// Nil selects the bounded default compiled-asset profile.
+	CompiledAssetCodec *voxelcodec.Codec
 }
 
 // RuntimeContentLoaderStats reports admission-time decoded storage estimates.
@@ -84,6 +87,7 @@ type runtimeContentFlight struct {
 }
 type runtimeContentCache struct {
 	importedWorldCodec *voxelcodec.Codec // immutable borrowed profile
+	compiledAssetCodec *voxelcodec.Codec // immutable borrowed profile
 	mu                 sync.Mutex
 	entries            map[runtimeContentKey]*runtimeContentEntry
 	flights            map[runtimeContentKey]*runtimeContentFlight
@@ -106,16 +110,17 @@ type RuntimeContentLoadScope struct {
 // NewRuntimeContentLoader creates one LRU shared by all content kinds.
 func NewRuntimeContentLoader(options ...RuntimeContentLoaderOptions) *RuntimeContentLoader {
 	max := defaultRuntimeContentCacheBytes
-	var importedWorldCodec *voxelcodec.Codec
+	var importedWorldCodec, compiledAssetCodec *voxelcodec.Codec
 	if len(options) > 0 {
 		if options[0].MaxCacheBytes != 0 {
 			max = options[0].MaxCacheBytes
 		}
 		importedWorldCodec = options[0].ImportedWorldCodec
+		compiledAssetCodec = options[0].CompiledAssetCodec
 	}
 	return &RuntimeContentLoader{owner: &runtimeContentCache{
 		entries: make(map[runtimeContentKey]*runtimeContentEntry), flights: make(map[runtimeContentKey]*runtimeContentFlight),
-		stats: RuntimeContentLoaderStats{MaxBytes: max}, importedWorldCodec: importedWorldCodec,
+		stats: RuntimeContentLoaderStats{MaxBytes: max}, importedWorldCodec: importedWorldCodec, compiledAssetCodec: compiledAssetCodec,
 	}}
 }
 
@@ -168,7 +173,11 @@ func (l *RuntimeContentLoader) releaseScopedValue(value any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for e := range s.entries {
-		if e.value != value {
+		definition := e.value
+		if wrapped, ok := definition.(interface{ runtimeContentDefinition() any }); ok {
+			definition = wrapped.runtimeContentDefinition()
+		}
+		if e.value != value && definition != value {
 			continue
 		}
 		delete(s.entries, e)

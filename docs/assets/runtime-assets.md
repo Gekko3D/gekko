@@ -365,6 +365,20 @@ charge and leases. Prepared/live geometry copies own their bytes; selecting the
 embedded layer creates no separate sidecar cache entry. See
 [compiled frames](../content/compiled-voxels.md#imported-embedded-normals).
 
+`RuntimeContentLoaderOptions.CompiledAssetCodec` separately fixes the borrowed
+profile for explicit compiled ordinary headers and shapes. `LoadCompiledAssetHeader`
+and `LoadCompiledAssetShape` return shared immutable definitions and frame `Info`
+by value. They use the same scoped cache, singleflight, decoded storage charge
+and eviction rules. Shapes retain owned canonical bricks without voxel-record
+expansion. Header loading does not follow references or register geometry.
+Rejected definitions release their scope lease through the existing ownership
+boundary; other scopes remain protected. Nil loaders use direct bounded default
+IO. Failure returns nil data and zero `Info`, without a retained cache entry.
+Clear and scope Close never close the codec. Accepted warm hits may survive codec
+closure; a fresh compiled decode requires an open codec. Existing `LoadAsset`
+remains strict authoring JSON and ignores this profile. Runtime adoption must
+verify header/frame links before geometry publication.
+
 ## Important Constraints
 
 - `AssetID` values are process-local identities, not stable authored references.

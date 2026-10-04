@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3c complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3d1 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -812,7 +812,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | E2c3 | `c5ef5dd` | Opt-in adaptive hybrid S4 capture and original-base reload/restoration | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
 | C3a | `19e255a` | Canonical compiled shape frames with unchanged authored-base identity | [Shape-frame contract](../content/compiled-voxels.md#compiled-ordinary-asset-shape-frames) |
 | C3b | `da5d14d` | Bounded compiled asset headers preserving metadata and explicit shape references | [Header contract](../content/compiled-voxels.md#compiled-ordinary-asset-headers) |
-| C3c | This commit | Offline ordinary-asset compiler with immutable geometry and portable dependency closure | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
+| C3c | `928dc73` | Offline ordinary-asset compiler with immutable geometry and portable dependency closure | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
+| C3d1 | This commit | Explicit compiled ordinary headers/shapes in existing scoped decoded owner | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2578,6 +2579,28 @@ nihilanth samples compile, reload all frame/base identities, resolve copied
 animations and rebuild without writes. Nihilanth preserves 126 parts with 59
 shape frames. No runtime loading or GPU performance claim; runtime adoption
 follows. Existing tests and unrelated working-tree changes are preserved.
+
+### C3d1: Scoped decoded compiled assets
+
+This commit adds explicit compiled header/shape loading with a fixed borrowed
+codec profile in the existing decoded owner. Bricks and frame information share
+its charge and leases; rejected definitions release only their own scope pin.
+JSON loading remains unchanged. Geometry publication and canonical-base/runtime
+adoption follow. Contract: [decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestC3d1' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^TestC3d1' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C1b|S2h)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... -run '^Test(C3|E2|C1)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and five consumer commands above passed. No spawning, renderer or
+GPU behavior changed. Existing tests and unrelated working-tree changes are
+preserved; runtime loading gains remain unmeasured.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 
