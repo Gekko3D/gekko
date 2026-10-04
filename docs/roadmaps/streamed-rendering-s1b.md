@@ -554,6 +554,33 @@ env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/spacesim/ ./..
 env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/testing-vox/ ./...
 ```
 
+## Next alignment: Frame-bounded voxel publication
+
+Whole-map structure preparation, global lookup rebuilding and native buffer
+migration remain atomic. Spreading them across updates introduces current and
+staging generations, with coherent publication and existing coverage retained.
+This is a permanent ownership change; S1i/S1j do not authorize it implicitly.
+
+Resolve these behavior choices before implementation:
+
+1. Prefer continuing visible edits and material animation through bounded replay
+   or mirrored writes into staging. The simpler alternative delays GPU content
+   updates until migration completes. Growing pools are shared, so that pause
+   affects existing owners beyond the arriving map. CPU authority, dirty work,
+   readiness and fallback pins must survive either choice.
+2. Native buffer/texture creation is indivisible. Prefer one reported oversized
+   allocation as the only creation operation in that update so loading progresses;
+   the strict alternative defers it until the configured budget is raised.
+   Resumable copy/lookup work cannot establish a driver elapsed-time bound.
+
+After alignment, specify bounded capture/replay storage, finite completion under
+continuous edits, generation cancellation, structural/lookup coherence and safe
+retirement. Expected owners: GPU admission, native growth, structure preparation,
+lookup/scene records and app resource recreation. Focused tests must cover actual
+budgeted continuation, edits, cancellation and old-generation readiness; a user
+release check must confirm publication and resource lifetime. No dependent code
+or new tests have been started.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

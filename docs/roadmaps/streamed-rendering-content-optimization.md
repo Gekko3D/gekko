@@ -758,7 +758,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
 | S1i | `3557e78` | Optional physical GPU growth admission, pinned pressure and hard-limit safety | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
-| S1j | This commit | Age optional geometry/material demand without changing required ownership | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
+| S1j | `818e4d5` | Age optional geometry/material demand without changing required ownership | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
 | S2a | `896e1eb` | Prepared geometry byte budgets and build suppression | [Design](streamed-rendering-s2a.md) |
 | S2b | `1504a7c` | Decoded leases and pending-result admission | [Design](streamed-rendering-s2b.md) |
 | S3a | `d93f3ac` | Incremental v2 observer selection | [Design](streamed-rendering-s3a.md) |
@@ -911,6 +911,11 @@ S1g spreads placement work across frames. S1h skips clean resident sector planni
 P5c moves snapshot reconstruction/registration preparation to workers; P5d moves
 eligible first terrain renderer allocations/copying to workers. Remaining
 cache maintenance and individual atomic units are next.
+
+S1i/S1j add physical admission and optional fairness. Remaining structural,
+migration and lookup bounds need the
+[publication alignment decision](streamed-rendering-s1b.md#next-alignment-frame-bounded-voxel-publication)
+before dependent implementation; no resumable GPU generation is approved yet.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
 On 2026-10-03, the user authorized its ownership decision and migration of existing
