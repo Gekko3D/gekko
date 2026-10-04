@@ -267,6 +267,20 @@ after preparation; caller pins survive failures and cancellation. No decoded
 definitions or published asset IDs escape into the packet. Group-only assets
 produce packets without geometry or palettes.
 
+Model packets use the same envelope and registrations after complete mixed-closure
+verification. Model CIDs include declared dimensions; global keys use
+`compiled-asset-model:` rather than the inline namespace. Cold adoption sets
+`VoxModel.SizeX/Y/Z` without raw sample rows and uses zero minimum/declared maximum
+when any dimension is nonzero. All-zero dimensions keep occupied bounds. Full
+primary geometry remains collision/edit authority. Warm geometry, palette and
+bounds edits survive reuse. Model base provenance uses its exact model raster
+version and does not qualify inline E2 edits. Model LOD remains unsupported.
+Static baked palettes own material maps and surface tag slices, with an empty
+runtime SourcePath; original authoring paths are provenance only. Existing palette
+keys and single-use publication copies retain their ownership rules. Pending
+charges include model dimensions and retain each source/handle once. Public
+consumer selection of model headers is a separate integration step.
+
 Cancellation is cooperative before header/shape loads and animation resolution,
 between frames, whole-shape builds and palette preparation, and at completion; it does not interrupt
 codec, animation-resolver or dense-builder internals. Failed

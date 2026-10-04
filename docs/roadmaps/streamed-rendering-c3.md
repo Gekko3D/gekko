@@ -16,7 +16,8 @@ packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
 instance intent, C3h13b instance qualification, C3h13c runtime activation and
 C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palette
 construction, C3g4 owned source-model preparation, C3g5 model headers, C3g6 scoped
-reads and C3g7 whole model closure verification complete. Opt-in,
+reads, C3g7 whole model closure verification and C3g8 owned model packets/adoption
+complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -584,3 +585,14 @@ child scope leases. Existing `.gkassetc`, JSON and selected-inline E2 contracts
 remain unchanged. [The header contract](../content/compiled-voxels.md#compiled-ordinary-model-asset-headers)
 owns selection and verification. Focused/race, full engine and five consumer builds
 passed. C3g6 is `33163a1`; owned packets/adoption and shipping emission remain next.
+
+## Owned model packets and adoption (C3g8)
+
+Models now use existing owned CPU packets, palette handles, pending charges and
+ordinary AssetServer lifetime. Declared dimensions/bounds survive cold transfer;
+warm mutable owners and inline/LOD behavior stay preserved. New model raster
+provenance does not qualify E2. [Runtime ownership](../assets/runtime-assets.md#compiled-ordinary-asset-preparation)
+records the contract. Redundant public hierarchy validation is skipped only for
+already validated model headers, removing authoring source stats. Focused/race,
+full engine and five consumer builds passed. C3g7 is `55d2303`; public consumers
+and shipping emission remain next. No loading speed claim yet.

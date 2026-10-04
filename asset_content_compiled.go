@@ -104,8 +104,13 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 		return nil, fmt.Errorf("compiled asset animation resolution failed: %w", err)
 	}
 	content.NormalizeAssetDef(&definition)
-	if err := ValidateAssetHierarchy(&definition); err != nil {
-		return nil, err
+	// The typed model header already proved hierarchy without authoring IO.
+	// Public hierarchy validation also checks source files, so retain it only
+	// for the legacy route whose source kinds do not carry VOX references.
+	if modelHeader == nil {
+		if err := ValidateAssetHierarchy(&definition); err != nil {
+			return nil, err
+		}
 	}
 	for i := range definition.Emitters {
 		emitter := &definition.Emitters[i].Emitter

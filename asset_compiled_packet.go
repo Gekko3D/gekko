@@ -33,6 +33,8 @@ type compiledAssetPacketShape struct {
 	contentID    string
 	lattice      content.VoxelObjectLatticeDef
 	baseIdentity string
+	model        bool
+	dimensions   [3]uint32
 	source       *volume.XBrickMap
 	registration *streamedGeometryRegistration
 }
@@ -70,9 +72,9 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 func prepareCompiledAssetPacketFromVerification(path string, session *compiledAssetVerification, loader *RuntimeContentLoader, cancelled func() bool, parts []content.AssetPartDef) (*compiledAssetPacket, error) {
 	packet := &compiledAssetPacket{
 		def: session.def, documentPath: path, animations: session.animations,
-		parts:        make(map[string]string, len(session.shapes)),
-		shapes:       make(map[string]*compiledAssetPacketShape, len(session.shapes)),
-		partPalettes: make(map[string]string, len(session.shapes)),
+		parts:        make(map[string]string, len(session.shapes)+len(session.models)),
+		shapes:       make(map[string]*compiledAssetPacketShape, len(session.shapes)+len(session.models)),
+		partPalettes: make(map[string]string, len(session.shapes)+len(session.models)),
 		palettes:     make(map[string]*compiledAssetPacketPalette),
 	}
 	// Baselines are created only for authenticated derivatives, before the
@@ -94,6 +96,12 @@ func prepareCompiledAssetPacketFromVerification(path string, session *compiledAs
 	paletteBindings := make(map[string]string)
 	// Preserve authored part order for deterministic cancellation boundaries.
 	for _, part := range parts {
+		if model, exists := session.models[part.ID]; exists {
+			if err := prepareCompiledAssetPacketModel(packet, part.ID, model, paletteBindings, loader, cancelled); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		verified, exists := session.shapes[part.ID]
 		if !exists {
 			continue
@@ -181,11 +189,11 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 			if shape == nil {
 				return nil, fmt.Errorf("compiled packet shape is missing")
 			}
-			id, adopted := assets.adoptCompiledAssetGeometry(shape.contentID, shape.lattice, shape.baseIdentity, shape.source, shape.registration)
+			id, adopted := adoptCompiledAssetPacketGeometry(assets, shape, shape.source, shape.registration)
 			if !adopted {
 				// A warm conflict must never be bypassed by defensive registration.
 				// Rebuild only a consumed cold handle after public key deletion.
-				if _, warm := assets.SharedVoxelGeometryByCacheKey("compiled-asset-shape:" + shape.contentID); warm || shape.registration.charge() != 0 {
+				if _, warm := assets.SharedVoxelGeometryByCacheKey(compiledAssetPacketGeometryKey(shape)); warm || shape.registration.charge() != 0 {
 					return nil, fmt.Errorf("compiled packet geometry adoption rejected")
 				}
 				source := shape.source
@@ -193,7 +201,7 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 					source = proof.full.Copy()
 				}
 				fresh := prepareStreamedGeometryRegistration(source)
-				id, adopted = assets.adoptCompiledAssetGeometry(shape.contentID, shape.lattice, shape.baseIdentity, source, fresh)
+				id, adopted = adoptCompiledAssetPacketGeometry(assets, shape, source, fresh)
 				fresh.release()
 				if !adopted {
 					return nil, fmt.Errorf("compiled packet geometry rebuild rejected")
