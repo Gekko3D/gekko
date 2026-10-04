@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g10 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g11 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -3442,6 +3442,17 @@ the same command with `-race`, full engine `go test ./...` and five consumer com
 in C3h9 passed. Frozen legacy hashes, mixed source-free roundtrip, no-op counts/
 mtimes, physical profile isolation, preflight collisions and source aliases are
 covered. No runtime FPS claim.
+
+### C3g11: Explicit model compiler CLI
+
+This commit adds the lowercase model output selector and unique model counts to
+existing compiler flags. Old inline stdout remains exact; LOD applies inline-only.
+C3g10 is `5fdf3e1`; representative CPU/loading measurements remain next.
+
+Verification: `env GOCACHE=/tmp/gekko3d-gocache go test ./cmd/assetcompile -count=1`
+and full engine `go test ./...` passed. Procedural/mixed output, no-op mtimes/bytes,
+legacy stdout, help and strict pre-input selection are covered. No consumer API/
+runtime change; consumer builds and GPU checks need no repetition after C3g10.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

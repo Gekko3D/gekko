@@ -538,7 +538,7 @@ go run ./cmd/assetcompile -in path/to/source.gkasset -out path/to/shipping/asset
 ```
 
 Both flags are required; `-h` shows usage. The CLI requires the exact lowercase
-`.gkassetc` output suffix before reading source files and uses the default codec
+`.gkassetc` or `.gkmodelassetc` output suffix before reading source files and uses the default codec
 profile. Input extensions do not determine the authoring format; strict schema-4
 JSON validation applies. The CLI exposes no profile or dictionary-training flags.
 
@@ -622,4 +622,14 @@ collisions fail before new files are published. No-op recompilation preserves
 modification times; profile changes create separate physical filenames. The new
 `CompiledAssetModelCompileResult` embeds the unchanged detailed inline result and
 adds unique `ModelsWritten`/`ModelsReused` counts. Public failures return zero results;
-explicit codecs remain caller-owned. The CLI's model selector is separate work.
+explicit codecs remain caller-owned.
+
+The same CLI selects the model compiler explicitly:
+
+```sh
+go run ./cmd/assetcompile -in path/to/source.gkasset -out path/to/shipping/asset.gkmodelassetc
+```
+
+Model output adds a `Models` written/reused summary; existing inline output remains
+unchanged. `-lod2` applies only to eligible inline parts in either header format.
+No new profile/dictionary flags or authoring-format fallbacks are introduced.

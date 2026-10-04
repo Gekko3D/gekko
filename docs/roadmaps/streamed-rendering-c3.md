@@ -17,7 +17,8 @@ instance intent, C3h13b instance qualification, C3h13c runtime activation and
 C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palette
 construction, C3g4 owned source-model preparation, C3g5 model headers, C3g6 scoped
 reads, C3g7 whole model closure verification, C3g8 owned model packets/adoption and C3g9
-public consumer integration and C3g10 shipping model emission complete. Opt-in,
+public consumer integration, C3g10 shipping model emission and C3g11 CLI selection
+complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -617,3 +618,12 @@ files are alias-protected provenance, not shipping dependencies.
 owns these rules. Focused/race, full engine and five consumer builds passed, including
 legacy byte goldens, source-free roundtrip, profile isolation and failure durability.
 C3g9 is `6f0dbe3`; CLI selection and loading measurements remain next.
+
+## Model compiler CLI (C3g11)
+
+The existing CLI now selects `.gkmodelassetc` explicitly and adds model file counts.
+Old `.gkassetc` stdout/API and flags remain preserved; `-lod2` stays inline-only.
+[CLI usage](../content/compiled-voxels.md#compiled-model-asset-emission) owns the
+contract. `env GOCACHE=/tmp/gekko3d-gocache go test ./cmd/assetcompile -count=1`
+and full engine `go test ./...` passed. No consumer API/runtime change or new GPU
+check. C3g10 is `5fdf3e1`; representative source-loading measurements remain next.
