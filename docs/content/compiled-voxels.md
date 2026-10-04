@@ -333,7 +333,7 @@ adapters must bake surface/material tables from original inputs before primary
 canonicalization. Compiled-model collapse remains unsupported: any future offline
 collapse must consume original ordered sources before canonicalization. Existing
 shape/header schemas, bytes and APIs are unchanged. Header references, compiler
-emission and runtime adoption are separate dependent batches.
+emission and runtime adoption retain separate validation and ownership boundaries.
 
 ### Offline source-model preparation
 
@@ -360,10 +360,9 @@ preparation rejects cycles and out-of-range shape references before inspecting;
 plain model selection still ignores unused scene graphs. Missing edges and DAG
 sharing keep inspector semantics.
 
-This CPU preparation boundary does not enable these sources in shipping compiler
-headers or runtime loading. Header/palette serialization, closure publication and
-verified runtime adoption remain separate batches; collapse and new edit-base
-qualification remain excluded.
+The model compiler consumes this CPU preparation boundary before typed header/
+palette serialization and complete closure publication. Runtime consumers adopt
+verified owned packets; collapse and new edit-base qualification remain excluded.
 
 ## Conservative asset LOD geometry construction
 
@@ -468,8 +467,8 @@ cancellation or a closed origin releases only their child leases. Original model
 source files are never reopened. The E2 canonical boundary still accepts only
 inline parts and proves only the selected shape, including within mixed headers.
 Public runtime consumers use verified owned packets and preserve source pivots,
-declared dimensions and complete static palettes. Compiler emission remains a
-separate integration step; legacy readers reject this explicit new envelope.
+declared dimensions and complete static palettes. The separate model compiler
+emits this closure; legacy readers reject this explicit new envelope.
 
 ## Compiled ordinary asset headers
 
@@ -598,3 +597,29 @@ complete old or new header without a durable acknowledgment.
 shape/dependency written/reused counts. Failures return a zero result. Codec
 ownership remains with the caller. This compiler does not select runtime inputs
 or alter existing authoring loading APIs.
+
+## Compiled model asset emission
+
+`gekko.CompileAuthoredModelAsset(inputPath, outputPath, codec)` accepts inline
+shapes/groups, seven authored primitives, selected `vox_model` and `vox_scene_node`
+parts. Its separate `.gkmodelassetc` output is required before reading inputs;
+strict schema-4 JSON and persisted IDs validate before normalization. Original
+source kinds/paths remain provenance. VOX files are read only offline and included
+in output-alias protection, not copied into shipping dependencies. Runtime loads
+without those originals. Existing inline compiler APIs, structs and bytes remain
+unchanged and continue rejecting model sources.
+
+Model files use `models/<encoded-byte-sha256>.gkmodel`; logical model identity binds
+post-scale primary geometry, declared dimensions and lattice. Baked static palette
+tables deduplicate by their own complete payload identity, independently of model
+sharing. No raw samples, palette source paths or model derivatives persist.
+`CompileAuthoredModelAssetWithOptions` reuses `EnableLOD2` for eligible inline parts
+only. Static collapse remains unsupported; ambiguous top-vote VOX downscales fail.
+
+Both formats share dependency rewriting, exact-byte immutable preflight, synced
+no-clobber file publication and header-last atomic replacement. Existing model
+collisions fail before new files are published. No-op recompilation preserves
+modification times; profile changes create separate physical filenames. The new
+`CompiledAssetModelCompileResult` embeds the unchanged detailed inline result and
+adds unique `ModelsWritten`/`ModelsReused` counts. Public failures return zero results;
+explicit codecs remain caller-owned. The CLI's model selector is separate work.

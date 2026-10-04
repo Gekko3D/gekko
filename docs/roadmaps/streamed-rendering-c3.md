@@ -17,7 +17,7 @@ instance intent, C3h13b instance qualification, C3h13c runtime activation and
 C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palette
 construction, C3g4 owned source-model preparation, C3g5 model headers, C3g6 scoped
 reads, C3g7 whole model closure verification, C3g8 owned model packets/adoption and C3g9
-public consumer integration complete. Opt-in,
+public consumer integration and C3g10 shipping model emission complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -606,3 +606,14 @@ custom pivots/LOD intent remain unchanged. [Runtime consumers](../assets/runtime
 own the contract. Focused/race, full engine and five consumer builds passed,
 including packet-only commits after file removal and Stop cleanup. C3g8 is
 `2a6fe77`; shipping compilation and measured source-loading gains remain next.
+
+## Shipping model emission (C3g10)
+
+A separate model compiler emits mixed typed closures through shared preflight and
+header-last publication. Old public compiler APIs/results and physical bytes stay
+fixed. Owned source adapters bake palettes and dimensions offline; original VOX
+files are alias-protected provenance, not shipping dependencies.
+[Compiler emission](../content/compiled-voxels.md#compiled-model-asset-emission)
+owns these rules. Focused/race, full engine and five consumer builds passed, including
+legacy byte goldens, source-free roundtrip, profile isolation and failure durability.
+C3g9 is `6f0dbe3`; CLI selection and loading measurements remain next.

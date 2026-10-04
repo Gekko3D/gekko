@@ -44,6 +44,7 @@ const (
 	compiledAssetDependencyFile compiledAssetFileKind = iota
 	compiledAssetShapeFile
 	compiledAssetLODFile
+	compiledAssetModelFile
 )
 
 type compiledAssetFile struct {
@@ -74,7 +75,14 @@ func CompileAuthoredAssetWithOptions(inputPath, outputPath string, codec *voxelc
 }
 
 func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec, options CompiledAssetCompileOptions) (CompiledAssetCompileDetailedResult, error) {
-	var result CompiledAssetCompileDetailedResult
+	result, err := compileAuthoredAssetClosure(inputPath, outputPath, codec, options, false)
+	return result.CompiledAssetCompileDetailedResult, err
+}
+
+// One pipeline owns dependency rewriting, preflight and durable publication for
+// both explicit shipping formats. Legacy wrappers retain their result and bytes.
+func compileAuthoredAssetClosure(inputPath, outputPath string, codec *voxelcodec.Codec, options CompiledAssetCompileOptions, includeModels bool) (CompiledAssetModelCompileResult, error) {
+	var result CompiledAssetModelCompileResult
 	raw, err := os.ReadFile(inputPath)
 	if err != nil {
 		return result, err
@@ -91,7 +99,7 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec,
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return result, fmt.Errorf("authoring JSON has trailing data: %v", err)
 	}
-	if err := validateCompiledSource(&asset); err != nil {
+	if err := validateCompiledSourceKinds(&asset, includeModels); err != nil {
 		return result, err
 	}
 	content.NormalizeAssetDef(&asset)
@@ -110,6 +118,8 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec,
 			folder = "shapes"
 		} else if kind == compiledAssetLODFile {
 			folder = "lods"
+		} else if kind == compiledAssetModelFile {
+			folder = "models"
 		}
 		relative := folder + "/" + hex.EncodeToString(hash[:]) + suffix
 		files[relative] = compiledAssetFile{relative, data, kind}
@@ -120,8 +130,22 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec,
 		header.SchemaVersion = content.CompiledAssetLODHeaderSchemaVersion
 		header.CompilerVersion = content.CompiledAssetLODHeaderCompilerVersion
 	}
+	var modelHeader *content.CompiledAssetModelHeaderDef
+	var modelPalettes map[string]struct{}
+	if includeModels {
+		modelHeader = &content.CompiledAssetModelHeaderDef{SchemaVersion: content.CurrentCompiledAssetModelHeaderSchemaVersion, CompilerVersion: content.CurrentCompiledAssetModelHeaderCompilerVersion, Asset: &asset}
+		modelPalettes = make(map[string]struct{})
+	}
 	for i := range asset.Parts {
 		part := &asset.Parts[i]
+		if includeModels && part.Source.Kind != content.AssetSourceKindVoxelShape && part.Source.Kind != content.AssetSourceKindGroup {
+			dependencies, err := compileAssetModelPartIntoHeader(&asset, *part, inputPath, codec, modelHeader, modelPalettes, add)
+			if err != nil {
+				return result, err
+			}
+			sources = append(sources, dependencies...)
+			continue
+		}
 		if part.Source.Kind != content.AssetSourceKindVoxelShape {
 			continue
 		}
@@ -194,7 +218,14 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec,
 		}
 		emitter.TexturePath = add(data, ".texture", compiledAssetDependencyFile)
 	}
-	headerData, info, err := content.EncodeCompiledAssetHeader(header, codec)
+	var headerData []byte
+	var info voxelcodec.Info
+	if includeModels {
+		modelHeader.Shapes, modelHeader.LODs = header.Shapes, header.LODs
+		headerData, info, err = content.EncodeCompiledAssetModelHeader(modelHeader, codec)
+	} else {
+		headerData, info, err = content.EncodeCompiledAssetHeader(header, codec)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -239,6 +270,12 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec,
 			} else {
 				result.LODsReused++
 			}
+		case compiledAssetModelFile:
+			if wrote {
+				result.ModelsWritten++
+			} else {
+				result.ModelsReused++
+			}
 		case compiledAssetDependencyFile:
 			if wrote {
 				result.DependenciesWritten++
@@ -257,7 +294,12 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec,
 			return result, err
 		}
 	} else {
-		if _, err := content.SaveCompiledAssetHeader(outputPath, header, codec); err != nil {
+		if includeModels {
+			_, err = content.SaveCompiledAssetModelHeader(outputPath, modelHeader, codec)
+		} else {
+			_, err = content.SaveCompiledAssetHeader(outputPath, header, codec)
+		}
+		if err != nil {
 			return result, err
 		}
 		result.HeaderWrote = true
@@ -267,6 +309,10 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec,
 }
 
 func validateCompiledSource(asset *content.AssetDef) error {
+	return validateCompiledSourceKinds(asset, false)
+}
+
+func validateCompiledSourceKinds(asset *content.AssetDef, includeModels bool) error {
 	valid := func(id string) bool { return strings.TrimSpace(id) != "" && utf8.ValidString(id) }
 	if asset.SchemaVersion != 4 || !valid(asset.ID) || asset.Runtime != nil && asset.Runtime.CollapseVoxelParts {
 		return fmt.Errorf("unsupported authoring schema, missing ID or static collapse")
@@ -288,6 +334,10 @@ func validateCompiledSource(asset *content.AssetDef) error {
 		case content.AssetSourceKindGroup:
 			if p.Source.VoxelShape != nil {
 				return fmt.Errorf("group carries inline geometry")
+			}
+		case content.AssetSourceKindProceduralPrimitive, content.AssetSourceKindVoxModel, content.AssetSourceKindVoxSceneNode:
+			if !includeModels {
+				return fmt.Errorf("unsupported compiled source %q", p.Source.Kind)
 			}
 		default:
 			return fmt.Errorf("unsupported compiled source %q", p.Source.Kind)
