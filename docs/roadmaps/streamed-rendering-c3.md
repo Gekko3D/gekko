@@ -12,7 +12,8 @@ C3h4 compiler opt-in, C3h5 exact source validation and C3h6 scoped derivative
 reads, C3h7 complete-closure source verification, C3h8 core render
 representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
 upload staging, C3h11 pure qualification guards and C3h12a owned derivative
-packets/accounting and C3h12b ordinary derivative adoption complete. Opt-in,
+packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
+instance intent complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -455,3 +456,14 @@ without revoking the surviving asset. Prepared membership remains per declared
 part/input despite shared full geometry. [Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
 Per-instance intent propagation and renderer activation follow; commands and
 remaining limits are recorded in the parent delivery entry.
+
+
+## Explicit instance intent (C3h13a)
+
+Prepared parts and all four selected first-part level consumers now attach private
+declared full/coarse intent to actual voxel entities. Shared geometry never grants
+opt-in; overrides retain original IDs. Ownership callback/flush order, full CPU
+components and the first-part tuple contract stay intact.
+[Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
+Qualified renderer activation follows; boundary commands and remaining limits
+are in the parent delivery entry.

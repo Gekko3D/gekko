@@ -173,6 +173,11 @@ func spawnAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *co
 		} else if preparedPart, ok := prepared.parts[part.ID]; ok {
 			model = preparedPart.model
 			eid, err = spawnAuthoredPartWithAssets(cmd, def, part, shadowSettings, preparedPart.model, preparedPart.palette)
+			if err == nil {
+				if intent := compiledAssetLODIntent(preparedPart); intent != nil {
+					cmd.AddComponents(eid, intent)
+				}
+			}
 		} else {
 			err = fmt.Errorf("prepared asset missing part %s", part.ID)
 		}

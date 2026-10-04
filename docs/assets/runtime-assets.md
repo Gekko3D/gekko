@@ -325,7 +325,21 @@ its selected first part. Nil-server verification and nonLOD warm preparation
 keep their existing paths. Prepared parts retain explicit derivative membership
 only for declared eligible parts; geometry availability shared by content identity
 never grants opt-in to another part or input. Returned model IDs remain full.
-Per-instance propagation and display selection remain pending.
+Prepared part spawning attaches a private ephemeral ECS intent with the declared
+full/coarse asset pair before ownership callbacks and command flushes. Asset
+roots, groups, nondeclared parts and collapsed output receive no individual-part
+intent. Full model/palette/pivot/resolution and hierarchy remain unchanged.
+Overrides retain the original declared pair; they do not establish new opt-in or
+own proof storage. Ordinary entity/stream cleanup owns only the entity, not its
+shared assets. The render owner must qualify the current effective model against
+this construction-relative intent.
+
+The first-part loader retains selected membership through a private extended
+result; its existing tuple wrapper still returns full model/palette/resolution.
+Moving-brush, charger, breakable and pickup spawns attach only selected declared
+intent. Pickup tolerance still applies only to a missing selected input, never a
+missing dependency of a present compiled header. Display activation remains
+pending; intent alone neither selects geometry nor certifies readiness.
 It qualifies the original decoded source only; exposed or edited warm geometry,
 current material opacity and GPU readiness require their own runtime checks.
 

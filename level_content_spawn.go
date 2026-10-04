@@ -497,18 +497,21 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(brush.AssetPath, levelPath)
-		model, palette, voxelResolution, err := loadAuthoredLevelVoxelModel(assets, loader, assetPath)
+		preparedPart, voxelResolution, err := loadAuthoredLevelVoxelPart(assets, loader, assetPath)
 		if err != nil {
 			return 0, err
 		}
-		if model != (AssetId{}) {
+		if preparedPart.model != (AssetId{}) {
 			comps = append(comps, &VoxelModelComponent{
-				SharedGeometry:         model,
-				VoxelPalette:           palette,
+				SharedGeometry:         preparedPart.model,
+				VoxelPalette:           preparedPart.palette,
 				VoxelResolution:        voxelResolution,
 				PivotMode:              PivotModeCorner,
 				ShadowSeamWorldEpsilon: voxelResolution,
 			})
+		}
+		if intent := compiledAssetLODIntent(preparedPart); intent != nil {
+			comps = append(comps, intent)
 		}
 	}
 	return cmd.AddEntity(comps...), nil
@@ -790,18 +793,21 @@ func spawnAuthoredLevelCharger(cmd *Commands, assets *AssetServer, loader *Runti
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(charger.AssetPath, levelPath)
-		model, palette, voxelResolution, err := loadAuthoredLevelVoxelModel(assets, loader, assetPath)
+		preparedPart, voxelResolution, err := loadAuthoredLevelVoxelPart(assets, loader, assetPath)
 		if err != nil {
 			return 0, err
 		}
-		if model != (AssetId{}) {
+		if preparedPart.model != (AssetId{}) {
 			comps = append(comps, &VoxelModelComponent{
-				SharedGeometry:         model,
-				VoxelPalette:           palette,
+				SharedGeometry:         preparedPart.model,
+				VoxelPalette:           preparedPart.palette,
 				VoxelResolution:        voxelResolution,
 				PivotMode:              PivotModeCorner,
 				ShadowSeamWorldEpsilon: voxelResolution,
 			})
+		}
+		if intent := compiledAssetLODIntent(preparedPart); intent != nil {
+			comps = append(comps, intent)
 		}
 	}
 	return cmd.AddEntity(comps...), nil
@@ -903,18 +909,21 @@ func spawnAuthoredLevelBreakable(cmd *Commands, assets *AssetServer, loader *Run
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(breakable.AssetPath, levelPath)
-		model, palette, voxelResolution, err := loadAuthoredLevelVoxelModel(assets, loader, assetPath)
+		preparedPart, voxelResolution, err := loadAuthoredLevelVoxelPart(assets, loader, assetPath)
 		if err != nil {
 			return 0, err
 		}
-		if model != (AssetId{}) {
+		if preparedPart.model != (AssetId{}) {
 			comps = append(comps, &VoxelModelComponent{
-				SharedGeometry:         model,
-				VoxelPalette:           palette,
+				SharedGeometry:         preparedPart.model,
+				VoxelPalette:           preparedPart.palette,
 				VoxelResolution:        voxelResolution,
 				PivotMode:              PivotModeCorner,
 				ShadowSeamWorldEpsilon: voxelResolution,
 			})
+		}
+		if intent := compiledAssetLODIntent(preparedPart); intent != nil {
+			comps = append(comps, intent)
 		}
 	}
 	return cmd.AddEntity(comps...), nil
@@ -953,22 +962,25 @@ func spawnAuthoredLevelPickup(cmd *Commands, assets *AssetServer, loader *Runtim
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(pickup.AssetPath, levelPath)
-		model, palette, voxelResolution, err := loadAuthoredLevelVoxelModel(assets, loader, assetPath)
+		preparedPart, voxelResolution, err := loadAuthoredLevelVoxelPart(assets, loader, assetPath)
 		if err != nil {
 			var inputError *authoredAssetInputLoadError
 			if !errors.As(err, &inputError) || !os.IsNotExist(inputError.err) {
 				return 0, err
 			}
 		} else {
-			if model != (AssetId{}) {
+			if preparedPart.model != (AssetId{}) {
 				comps = append(comps, &VoxelModelComponent{
-					SharedGeometry:         model,
-					VoxelPalette:           palette,
+					SharedGeometry:         preparedPart.model,
+					VoxelPalette:           preparedPart.palette,
 					VoxelResolution:        voxelResolution,
 					PivotMode:              PivotModeCorner,
 					ShadowSeamWorldEpsilon: voxelResolution,
 				})
 			}
+		}
+		if intent := compiledAssetLODIntent(preparedPart); intent != nil {
+			comps = append(comps, intent)
 		}
 	}
 	return cmd.AddEntity(comps...), nil
