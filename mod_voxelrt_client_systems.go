@@ -347,6 +347,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	state.beginMaterialFingerprintSync(server)
 	state.ensureMaterialCaches()
 	streamedMarkers := state.beginStreamedVoxelSync(cmd)
+	var compiledQualification compiledAssetLODQualification
 	state.runtimeSprites = state.runtimeSprites[:0]
 	// Sync instances
 	state.RtApp.Profiler.BeginScope("Sync Instances")
@@ -376,6 +377,8 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			return true
 		}
 		currentVoxelEntities[entityId] = true
+		compiledIntent, hasCompiledIntent := cmd.GetComponent(entityId, reflect.TypeOf(compiledAssetLODComponent{})).(*compiledAssetLODComponent)
+		compiledOwned := hasCompiledIntent || state.compiledLODDisplays[entityId] != nil
 		if lod, ok := entityLODComponentForEntity(cmd, entityId); !streamed && ok && lod.SelectionValid {
 			state.entityLODSelections[entityId] = EntityLODSelection{
 				Distance:       lod.ActiveDistance,
@@ -415,6 +418,9 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if selection, ok := state.entityLODSelections[entityId]; ok {
 			switch selection.Representation {
 			case EntityLODRepresentationSimplifiedVoxel:
+				if compiledOwned {
+					break // Fine CPU geometry remains authoritative.
+				}
 				simplifiedID, simplifiedAsset, simplifiedOK := server.entityLODSimplifiedGeometry(geometryID, vox.VoxelPalette, geometryAsset)
 				if simplifiedOK && simplifiedAsset != nil && simplifiedAsset.XBrickMap != nil {
 					displayGeometryID = simplifiedID
@@ -588,7 +594,6 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		if streamed {
 			obj.VoxelUploadPriority = uint8(marker.Priority)
 			obj.VoxelUploadOrder = marker.Ticket
-			state.adoptStreamedVoxel(entityId, marker, obj)
 		}
 		obj.CastsShadows = !vox.DisableShadows
 		obj.ShadowMaxDistance = vox.ShadowMaxDistance
@@ -618,12 +623,33 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		obj.PlanetTileX = vox.PlanetTileX
 		obj.PlanetTileY = vox.PlanetTileY
 
+		var candidate qualifiedCompiledAssetLOD
+		qualified := false
+		if hasCompiledIntent {
+			candidate, qualified = compiledQualification.candidate(server, *compiledIntent, vox, obj)
+		}
+		wantCoarse := false
+		if compiledOwned {
+			if lod, ok := cmd.GetComponent(entityId, reflect.TypeOf(EntityLODComponent{})).(*EntityLODComponent); ok && lod.SelectionValid {
+				wantCoarse = lod.ActiveRepresentation == EntityLODRepresentationSimplifiedVoxel
+			}
+		}
+		localWait := state.syncCompiledAssetLOD(entityId, obj, candidate, qualified, wantCoarse)
+		obj.RenderEnabled = !hidden && !localWait
+		if !hasCompiledIntent && !localWait {
+			delete(state.compiledLODDisplays, entityId)
+		}
+		if streamed {
+			state.adoptStreamedVoxelTarget(entityId, marker, obj, compiledOwned)
+		}
+
 		return true
 	})
 
 	state.pruneMaterialFingerprints(frameMaterialKeys)
 	for eid, obj := range state.instanceMap {
 		if !currentObjectEntities[eid] {
+			state.clearCompiledAssetLOD(eid)
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
 			delete(state.managedVoxelBindings, eid)
@@ -1587,6 +1613,7 @@ func voxelRtUpdateSystem(state *VoxelRtState, prof *Profiler, time *Time, cmd *C
 
 	state.RtApp.Profiler.BeginScope("RT Update")
 	state.RtApp.Update()
+	state.refreshCompiledAssetLODStatuses()
 	state.refreshStreamedVoxelStatuses()
 	state.RtApp.Profiler.EndScope("RT Update")
 }

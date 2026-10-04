@@ -653,10 +653,15 @@ layer selection remain separate S3 work. See [S3b](../roadmaps/streamed-renderin
 
 ### Compiled asset LOD boundary
 
-Compiled ordinary assets currently publish authoritative level-0 geometry only.
-Existing automatic simplified geometry uses center-nearest resampling and
-caller-authored `EntityLODComponent` distance bands. Streamed voxel entities
-bypass this selection; adding compiled frames alone does not enable their LOD.
+Explicit compiled LOD declarations publish authoritative level-0 geometry and a
+separate verified coarse asset. Only declared part instances carry private intent.
+Eligible instances use the coarse render representation while preserving fine CPU
+authority. Existing `EntityLODComponent` simplified-voxel bands request coarse
+hold. Without a valid band, instances request fine detail after coarse startup. No new distance
+thresholds are inferred. Opt-in streamed instances use these voxel bands, while
+legacy streamed entities continue bypassing automatic proxy/impostor selection.
+Noncompiled simplified geometry retains center-nearest resampling and its existing
+CPU/display behavior; ordinary sprite branches remain unchanged.
 
 A compiled derivative's original content identity cannot certify the current
 mutable runtime map. Integrating derivatives must qualify current geometry,
@@ -665,8 +670,8 @@ independent. Coarse display and fine staging must remain under existing streamin
 ownership, with readiness checked for the staged target before changing display.
 Changing the target of an unfinished single-map ticket cancels that ticket.
 Opt-in conservative coverage for single-material opaque assets is approved;
-derivative frames and explicit compiler opt-in are available; runtime integration
-remains pending. See the
+derivative frames, explicit compiler opt-in and qualified runtime integration are
+available. See the
 [C3 LOD diagnostic and gates](../roadmaps/streamed-rendering-c3.md#asset-lod-diagnostic-c3h0).
 
 ### Authoritative geometry and render representations
@@ -743,7 +748,7 @@ Cancelling staging makes full GPU geometry inactive under existing retention and
 orphan cleanup, while resident object material ownership remains unchanged.
 
 This permanent separation introduces no helper scene objects or parallel
-residency service. Runtime LOD activation remains pending. Private verified proof
+residency service. Private verified proof
 publication follows [ordinary asset ownership](../assets/runtime-assets.md#compiled-lod-source-validation).
 
 The bridge's private qualification guards compare actual full and coarse primary
@@ -774,7 +779,33 @@ actual-map/baseline pointer pair. It also constructs immutable proof namespace k
 once per sync. Asset membership, current materials, animation targets and instance
 tags remain fresh on every call. Primary maps and private proofs must stay stable
 within that sync; discard the entire context before the next frame to detect raw
-writes that bypass revisions. Renderer activation remains pending.
+writes that bypass revisions.
+
+The bridge qualifies after applying current material, transform and lattice tags.
+A cold eligible instance selects coarse geometry and waits locally for its queued
+upload; it stays resident without adding a hidden ECS component. Parent visibility
+and local readiness both control `RenderEnabled`. Fine demand stages authoritative
+geometry only after coarse readiness. Post-Update observation captures target
+pointer, mutable ID, revision and request generation; the next sync requalifies
+eligibility and current allocation/material readiness before promotion, preceding
+the next GPU update. Observation never changes display inside the update phase.
+Coarse demand cancels fine staging. A previously published matching coarse target
+may reuse its readiness stamp only after a fresh allocation/material check.
+
+Eligibility loss clears coarse selection and pending staging. A cold full fallback
+waits until its queued upload is ready; continuously active initialized full detail
+keeps ordinary dirty-upload behavior. Coarse selection resets that initialization
+latch, since inactive fine storage may be evicted. Object/fine-target replacement
+resets captures and preserves an existing cold fallback wait. Rejected coarse
+selection cannot restart a completed full fallback indefinitely. Raw writes still
+require ordinary caller-owned dirty propagation for GPU updates; qualification
+never repairs raw storage or dirty flags.
+
+Controllers retain renderer target metadata, not verified proofs, asset leases or
+ECS pointers. Entity removal, ordinary hidden residency removal and successful
+sprite selection release owned representations/staging. Removing intent clears
+selection immediately but retains a cold full wait until readiness, then retires
+the controller. Animated parts and sibling instance staging remain independent.
 
 ### Streamed voxel residency
 
@@ -805,7 +836,11 @@ through these tickets. It reveals an imported sector only when every required
 full target is ready, and waits for a ready proxy before distance unloading.
 Visibility publishes once after each observer/commit stage, before the later
 renderer bridge. CPU collision/destruction residency and navigation remain
-independent of GPU readiness. V3 page selection and cross-layer coverage groups
+independent of GPU readiness. Compiled opt-in tickets capture the selected render
+map and use selected-target readiness; legacy tickets keep authoritative full-target
+readiness. The role is fixed at adoption. Changing an unfinished target cancels its
+ticket, while terminal coarse readiness remains latched during later fine staging.
+V3 page selection and cross-layer coverage groups
 remain separate work. See
 [S1a scope and verification](../roadmaps/streamed-rendering-s1a.md) and
 [S1c integration](../roadmaps/streamed-rendering-s1c.md), plus the

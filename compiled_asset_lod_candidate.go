@@ -74,7 +74,7 @@ func (q *compiledAssetLODQualification) candidate(server *AssetServer, intent co
 	coarse := server.voxModels[intent.coarseID].XBrickMap
 	palette, hasPalette := server.voxPalettes[vox.VoxelPalette]
 	server.mu.RUnlock()
-	if !valid || binding.coarseID != intent.coarseID || !hasPalette ||
+	if !valid || binding.coarseID != intent.coarseID || !hasPalette || object.XBrickMap == coarse ||
 		VoxelResolutionOrDefault(vox) != binding.proof.lattice.VoxelResolution {
 		return qualifiedCompiledAssetLOD{}, false
 	}

@@ -338,8 +338,9 @@ The first-part loader retains selected membership through a private extended
 result; its existing tuple wrapper still returns full model/palette/resolution.
 Moving-brush, charger, breakable and pickup spawns attach only selected declared
 intent. Pickup tolerance still applies only to a missing selected input, never a
-missing dependency of a present compiled header. Display activation remains
-pending; intent alone neither selects geometry nor certifies readiness.
+missing dependency of a present compiled header. The renderer consumes intent
+through [current qualification and staged handoff](../renderer/runtime.md#authoritative-geometry-and-render-representations);
+intent alone certifies neither current geometry nor GPU readiness.
 It qualifies the original decoded source only; exposed or edited warm geometry,
 current material opacity and GPU readiness require their own runtime checks.
 

@@ -13,9 +13,9 @@ reads, C3h7 complete-closure source verification, C3h8 core render
 representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
 upload staging, C3h11 pure qualification guards and C3h12a owned derivative
 packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
-instance intent and C3h13b instance qualification complete. Opt-in,
+instance intent, C3h13b instance qualification and C3h13c runtime activation complete. Opt-in,
 single-material opaque LOD is approved; compiler
-source-kind adapters and production LOD integration remain separate work.
+source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -487,3 +487,30 @@ qualification sharing; it measures neither scene sync, GPU upload nor FPS.
 Harness: `/tmp/gekko-c3h13b-measurement_test.go`; final evidence:
 `/tmp/gekko-c3h13b-measurement-final.log`.
 Boundary commands and remaining limits are recorded in the parent delivery entry.
+
+
+## Qualified renderer activation (C3h13c)
+
+Declared ordinary instances now select coarse display without replacing fine CPU
+geometry. Existing voxel bands request coarse hold; fine demand stages uploads and
+promotes only after exact prior readiness is revalidated on the next sync. Current
+eligibility loss uses the approved cold full wait. Opt-in streamed tickets qualify
+the selected target; legacy full tickets and terminal latching remain intact.
+[Contract](../renderer/runtime.md#authoritative-geometry-and-render-representations).
+
+Native hidden GLFW/WebGPU readback passed signed geometry with a narrow opening:
+coarse-only startup left fine unallocated and dirty queues untouched; paused fine
+staging preserved exact coarse depth/normal bytes. One sector/64 bricks per frame
+completed fine uploads in four frames (3,168 bytes each), followed by next-sync
+promotion. Promoted depth/normal bytes exactly matched an independent cold full
+render. Tracked edits retained initialized full visibility; alpha loss during
+coarse display waited for cold full readiness. Root inspected coarse/fine depth
+and fine normals: approved thickening/closed opening, then restored fine opening.
+The terminal coarse ticket remained latched.
+
+Temporary harness and bridge: `/tmp/gekko-c3h13c-gpu-probe.go`,
+`/tmp/gekko-c3h13c-probe-bridge.go`; log:
+`/tmp/gekko-c3h13c-gpu-probe-native.log`; readbacks:
+`/tmp/gekko-c3h13c-gpu-probe-output`. Helpers were removed from the engine before
+boundary checks. This verifies handoff/G-buffer parity, not FPS, independent
+transparent-overlay appearance or shadow images. Parent delivery records commands.

@@ -47,9 +47,10 @@ type StreamedVoxelRenderStatus struct {
 }
 
 type streamedVoxelTicket struct {
-	status    StreamedVoxelRenderStatus
-	object    *core.VoxelObject
-	mapTarget *volume.XBrickMap
+	status       StreamedVoxelRenderStatus
+	object       *core.VoxelObject
+	mapTarget    *volume.XBrickMap
+	renderTarget bool
 }
 
 func (record *streamedVoxelTicket) finish(state StreamedVoxelRenderState) {
@@ -81,9 +82,14 @@ func (s *VoxelRtState) ForgetStreamedVoxel(ticket uint64) {
 
 func (s *VoxelRtState) streamedVoxelTargetCurrent(record *streamedVoxelTicket) bool {
 	obj := s.instanceMap[record.status.Entity]
-	return obj != nil && obj == record.object && obj.XBrickMap != nil &&
-		obj.XBrickMap == record.mapTarget && obj.XBrickMap.ID == record.status.MapID &&
-		obj.XBrickMap.Revision == record.status.TargetRevision
+	if obj == nil || obj != record.object {
+		return false
+	}
+	target := obj.XBrickMap
+	if record.renderTarget {
+		target = obj.RenderVoxelMap()
+	}
+	return target != nil && target == record.mapTarget && target.ID == record.status.MapID && target.Revision == record.status.TargetRevision
 }
 
 // Snapshot values rather than retaining pointers into movable ECS storage.
@@ -132,10 +138,23 @@ func (s *VoxelRtState) failStreamedVoxelAdoption(entity EntityId, marker Streame
 }
 
 func (s *VoxelRtState) adoptStreamedVoxel(entity EntityId, marker StreamedVoxelRenderComponent, obj *core.VoxelObject) {
+	s.adoptStreamedVoxelTarget(entity, marker, obj, false)
+}
+
+func (s *VoxelRtState) adoptStreamedVoxelTarget(entity EntityId, marker StreamedVoxelRenderComponent, obj *core.VoxelObject, renderTarget bool) {
 	if record := s.pendingStreamedVoxel(entity, marker); record != nil {
-		record.object, record.mapTarget = obj, obj.XBrickMap
-		record.status.MapID, record.status.TargetRevision = obj.XBrickMap.ID, obj.XBrickMap.Revision
-		record.status.PendingSectors, record.status.PendingBricks = len(obj.XBrickMap.DirtySectors), len(obj.XBrickMap.DirtyBricks)
+		target := obj.XBrickMap
+		if renderTarget {
+			target = obj.RenderVoxelMap()
+		}
+		if target == nil {
+			record.finish(StreamedVoxelRenderFailed)
+			record.status.Failure = "streamed voxel display target is unavailable"
+			return
+		}
+		record.object, record.mapTarget, record.renderTarget = obj, target, renderTarget
+		record.status.MapID, record.status.TargetRevision = target.ID, target.Revision
+		record.status.PendingSectors, record.status.PendingBricks = len(target.DirtySectors), len(target.DirtyBricks)
 		record.status.State = StreamedVoxelRenderUploading
 	}
 }
@@ -168,7 +187,13 @@ func (s *VoxelRtState) refreshStreamedVoxelStatuses() {
 			record.finish(StreamedVoxelRenderCancelled)
 			continue
 		}
-		ready, sectors, bricks := s.RtApp.BufferManager.VoxelObjectReady(record.object, record.mapTarget, record.status.TargetRevision)
+		var ready bool
+		var sectors, bricks int
+		if record.renderTarget {
+			ready, sectors, bricks = s.RtApp.BufferManager.RenderVoxelObjectReady(record.object, record.mapTarget, record.status.TargetRevision)
+		} else {
+			ready, sectors, bricks = s.RtApp.BufferManager.VoxelObjectReady(record.object, record.mapTarget, record.status.TargetRevision)
+		}
 		record.status.PendingSectors, record.status.PendingBricks = sectors, bricks
 		if ready {
 			record.finish(StreamedVoxelRenderReady)
