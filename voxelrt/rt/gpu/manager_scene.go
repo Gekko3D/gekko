@@ -124,12 +124,18 @@ func buildDirectSectorLookupData(scene *core.Scene, sectorToInfo map[*volume.Sec
 		processedMaps[xbm] = true
 
 		alloc := allocations[xbm]
-		if alloc == nil {
+		if alloc == nil || (alloc.lookupAdmissionKnown && !alloc.lookupAdmitted) {
 			continue
 		}
 		alloc.DirectLookup = defaultDirectSectorLookupMetadata()
 
-		meta, table, ok := buildDirectSectorLookupForMap(xbm, sectorToInfo)
+		// Production allocation snapshots remain valid while CPU topology is
+		// deferred. Nil snapshots retain old standalone helper fixture behavior.
+		lookupMap := xbm
+		if alloc.Sectors != nil {
+			lookupMap = &volume.XBrickMap{Sectors: alloc.Sectors}
+		}
+		meta, table, ok := buildDirectSectorLookupForMap(lookupMap, sectorToInfo)
 		if !ok {
 			continue
 		}
@@ -200,7 +206,11 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	}
 	binary.LittleEndian.PutUint32(dst[16:20], ^uint32(0))
 	binary.LittleEndian.PutUint32(dst[20:24], math.Float32bits(obj.LODThreshold))
-	binary.LittleEndian.PutUint32(dst[24:28], uint32(len(obj.RenderVoxelMap().Sectors)))
+	sectorCount := len(obj.RenderVoxelMap().Sectors)
+	if alloc.Sectors != nil {
+		sectorCount = len(alloc.Sectors)
+	}
+	binary.LittleEndian.PutUint32(dst[24:28], uint32(sectorCount))
 	binary.LittleEndian.PutUint32(dst[28:32], uint32(obj.AmbientOcclusionMode))
 	binary.LittleEndian.PutUint32(dst[32:36], obj.ShadowGroupID)
 	binary.LittleEndian.PutUint32(dst[36:40], math.Float32bits(obj.ShadowSeamWorldEpsilon))
@@ -820,7 +830,9 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	totalSectors := 0
 	for _, target := range voxelServiceTargets(scene) {
 		if xbm := target.mapRef; xbm != nil {
-			totalSectors += len(xbm.Sectors)
+			if alloc := m.Allocations[xbm]; alloc != nil && (!alloc.lookupAdmissionKnown || alloc.lookupAdmitted) {
+				totalSectors += len(alloc.Sectors)
+			}
 		}
 	}
 
@@ -842,18 +854,53 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 				alloc.DirectLookup = defaultDirectSectorLookupMetadata()
 			}
 		}
-		if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, make([]byte, 64), wgpu.BufferUsageStorage, 0) {
+		if m.publishVoxelLookupBuffer("SectorGridBuf", &m.SectorGridBuf, make([]byte, 64), wgpu.BufferUsageStorage) {
 			recreated = true
 		}
-		if m.ensureBuffer("DirectSectorLookupBuf", &m.DirectSectorLookupBuf, make([]byte, 4), wgpu.BufferUsageStorage, 0) {
+		if m.publishVoxelLookupBuffer("DirectSectorLookupBuf", &m.DirectSectorLookupBuf, make([]byte, 4), wgpu.BufferUsageStorage) {
 			recreated = true
 		}
-		if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, make([]byte, 16), wgpu.BufferUsageUniform, 0) {
+		if m.publishVoxelLookupBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, make([]byte, 16), wgpu.BufferUsageUniform) {
 			recreated = true
 		}
 		return recreated
 	}
 
+	gridData, gridSize := m.buildSectorGridData(scene)
+
+	directData := buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, 0)
+
+	recreated := false
+	if m.publishVoxelLookupBuffer("SectorGridBuf", &m.SectorGridBuf, gridData, wgpu.BufferUsageStorage) {
+		recreated = true
+	}
+	if m.publishVoxelLookupBuffer("DirectSectorLookupBuf", &m.DirectSectorLookupBuf, directData, wgpu.BufferUsageStorage) {
+		recreated = true
+	}
+
+	paramsData := make([]byte, 16)
+	binary.LittleEndian.PutUint32(paramsData[0:4], uint32(gridSize))
+	binary.LittleEndian.PutUint32(paramsData[4:8], uint32(gridSize-1)) // gridSize is always power-of-two, so shaders can wrap with grid_mask.
+
+	if m.publishVoxelLookupBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, paramsData, wgpu.BufferUsageUniform) {
+		recreated = true
+	}
+	return recreated
+}
+
+// buildSectorGridData packs allocated snapshots, never unadmitted CPU maps.
+func (m *GpuBufferManager) buildSectorGridData(scene *core.Scene) ([]byte, uint32) {
+	totalSectors := 0
+	processed := make(map[*volume.XBrickMap]bool)
+	for _, target := range voxelServiceTargets(scene) {
+		if processed[target.mapRef] {
+			continue
+		}
+		processed[target.mapRef] = true
+		if alloc := m.Allocations[target.mapRef]; alloc != nil && (!alloc.lookupAdmissionKnown || alloc.lookupAdmitted) {
+			totalSectors += len(alloc.Sectors)
+		}
+	}
 	// Hash grid size: next power of 2, 8x occupancy for minimal collisions
 	gridSize := 1
 	for gridSize < totalSectors*8 {
@@ -896,7 +943,11 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		processedMaps[xbm] = true
 		baseIdx := xbm.ID
 
-		for sKey, sector := range xbm.Sectors {
+		alloc := m.Allocations[xbm]
+		if alloc == nil || (alloc.lookupAdmissionKnown && !alloc.lookupAdmitted) {
+			continue
+		}
+		for sKey, sector := range alloc.Sectors {
 			sx, sy, sz := int32(sKey[0]), int32(sKey[1]), int32(sKey[2])
 			info, ok := m.SectorToInfo[sector]
 			if !ok {
@@ -927,22 +978,26 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 		}
 	}
 
-	directData := buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, 0)
+	return m.gridDataPool, uint32(gridSize)
+}
 
-	recreated := false
-	if m.ensureBuffer("SectorGridBuf", &m.SectorGridBuf, m.gridDataPool, wgpu.BufferUsageStorage, 0) {
-		recreated = true
+// Capacity is owned by the admission transaction. Publication never allocates.
+func (m *GpuBufferManager) publishVoxelLookupBuffer(name string, destination **wgpu.Buffer, data []byte, usage wgpu.BufferUsage) bool {
+	if !m.voxelAdmissionActive {
+		return m.ensureBuffer(name, destination, data, usage, 0)
 	}
-	if m.ensureBuffer("DirectSectorLookupBuf", &m.DirectSectorLookupBuf, directData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
+	current := *destination
+	if current == nil || uint64(len(data)) > current.GetSize() {
+		panic(fmt.Sprintf("voxel lookup %s exceeds admitted capacity", name))
 	}
-
-	paramsData := make([]byte, 16)
-	binary.LittleEndian.PutUint32(paramsData[0:4], uint32(gridSize))
-	binary.LittleEndian.PutUint32(paramsData[4:8], uint32(gridSize-1)) // gridSize is always power-of-two, so shaders can wrap with grid_mask.
-
-	if m.ensureBuffer("SectorGridParamsBuf", &m.SectorGridParamsBuf, paramsData, wgpu.BufferUsageUniform, 0) {
-		recreated = true
+	limits := m.Device.GetLimits().Limits
+	limit := min(limits.MaxBufferSize, limits.MaxStorageBufferBindingSize)
+	if usage&wgpu.BufferUsageUniform != 0 {
+		limit = min(limits.MaxBufferSize, limits.MaxUniformBufferBindingSize)
 	}
-	return recreated
+	if current.GetSize() > limit {
+		panic(fmt.Sprintf("voxel lookup %s exceeds device limit", name))
+	}
+	mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(current, 0, data))
+	return false
 }

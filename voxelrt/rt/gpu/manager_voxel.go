@@ -64,70 +64,25 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	m.VoxelPayloadUploadsSkipped = 0
 	m.VoxelPayloadBytesAvoided = 0
 	m.VoxelRuntimeNormalBakeDuration = 0
-	// Cleanup orphan allocations
-	activeMaps := make(map[*volume.XBrickMap]bool)
-	activeObjects := make(map[*core.VoxelObject]bool)
-	for _, obj := range scene.Objects {
-		if obj != nil {
-			activeObjects[obj] = true
-		}
-	}
-	for _, target := range voxelServiceTargets(scene) {
-		activeMaps[target.mapRef] = true
-	}
-	m.evictRetainedVoxelMaps(activeMaps)
-	for xbm, alloc := range m.Allocations {
-		if !activeMaps[xbm] {
-			if _, retain := m.retainedVoxelMaps[xbm]; retain {
-				continue
-			}
-			m.releaseVoxelMapAllocation(xbm, alloc)
-		}
-	}
-	for obj, alloc := range m.MaterialAllocations {
-		if !activeObjects[obj] {
-			if alloc != nil && alloc.MaterialCapacity > 0 {
-				m.MaterialAlloc.FreeSlot(alloc.MaterialOffset / 256)
-			}
-			delete(m.MaterialAllocations, obj)
-		}
-	}
-
-	requiredSectors, requiredBricks := m.voxelAllocationRequirements(scene)
-
-	// Ensure all global buffers exist (even if empty) to avoid bind group panics.
-	// Headroom: Reduced frequency of full-buffer reallocations by using larger buffers initially and geometric growth.
-	if m.ensureBuffer("SectorTableBuf", &m.SectorTableBuf, nil, wgpu.BufferUsageStorage, int(requiredSectors+512)*32) {
-		recreated = true
-	}
-	if m.ensureBuffer("BrickTableBuf", &m.BrickTableBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*BrickRecordSize) {
-		recreated = true
-	}
-	if m.ensureBuffer("DenseOccupancyBuf", &m.DenseOccupancyBuf, nil, wgpu.BufferUsageStorage, int(requiredBricks+2048)*VoxelAuxRecordBytes) {
-		recreated = true
-	}
-	if m.ensureVoxelPayloadPages() {
-		recreated = true
-	}
-	requiredMaterialBlocks := m.MaterialAlloc.Tail
-	if activeCount := uint32(len(activeObjects)); activeCount > requiredMaterialBlocks {
-		requiredMaterialBlocks = activeCount
-	}
-	if m.ensureBuffer("MaterialBuf", &m.MaterialBuf, nil, wgpu.BufferUsageStorage, int(maxMaterialSlots(requiredMaterialBlocks, 1)*materialBlockCapacity*64)) {
-		recreated = true
-		m.MaterialBufferGeneration++
-	}
+	resources := m.currentVoxelGPUResources()
+	recreated = m.prepareVoxelGPUAdmission(scene, &resources, func(next voxelGPUResources) error {
+		return m.growVoxelGPUResources(&resources, next)
+	})
+	// Tree64 belongs to the optional legacy representation, outside voxel budget.
 	if m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 64) {
 		recreated = true
 	}
 
-	m.prepareVoxelStructureDirtyState(scene)
 	normalBakeContext := m.prepareVoxelNormalBakeContext(scene)
 
 	m.serviceVoxelUploads(scene, func(work voxelUploadWork) bool {
 		return m.executeVoxelUpload(normalBakeContext, work)
 	})
 	// Upload completion can assign new sectors, aux records and payload slots.
+	activeMaps := make(map[*volume.XBrickMap]bool)
+	for _, target := range voxelServiceTargets(scene) {
+		activeMaps[target.mapRef] = true
+	}
 	m.evictRetainedVoxelMaps(activeMaps)
 
 	return recreated
@@ -188,7 +143,11 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 		m.BrickToAuxSlot = make(map[*volume.Brick]uint32)
 	}
 	seenMaps := make(map[*volume.XBrickMap]bool)
+	var changedMaps []*volume.XBrickMap
 	for _, target := range voxelServiceTargets(scene) {
+		if !m.voxelMapAdmitted(target.mapRef) {
+			continue
+		}
 		if seenMaps[target.mapRef] {
 			continue
 		}
@@ -204,6 +163,10 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 				},
 			}
 			m.Allocations[xbm] = alloc
+			if m.voxelAdmissionActive {
+				alloc.lookupAdmissionKnown = true
+				alloc.lookupAdmitted = m.voxelLookupMaps[xbm]
+			}
 		}
 		if !xbm.StructureDirty && exists {
 			continue
@@ -217,22 +180,19 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 				continue
 			}
 			topologyChanged = true
-			if info, ok := m.SectorToInfo[oldSector]; ok {
-				if bPtrs, has := alloc.Bricks[k]; has {
-					for i := 0; i < 64; i++ {
-						if brick := bPtrs[i]; brick != nil {
-							m.releaseBrickSlot(brick)
-							m.releaseVoxelAuxSlot(brick)
-						}
-					}
-					delete(alloc.Bricks, k)
-				}
-				m.SectorAlloc.FreeSlot(info.SlotIndex)
-				m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
-				delete(m.SectorToInfo, oldSector)
-			}
+			pointers := alloc.Bricks[k]
 			delete(alloc.Sectors, k)
+			delete(alloc.Bricks, k)
+			m.releaseUnreferencedSector(oldSector)
+			m.releaseUnreferencedBricks(pointers)
 		}
+
+		changedMaps = append(changedMaps, xbm)
+	}
+	// Every safe removal precedes every addition, matching capacity reuse even
+	// when scene insertion order differs from deterministic admission priority.
+	for _, xbm := range changedMaps {
+		alloc := m.Allocations[xbm]
 
 		// 2. Identify new sectors and mark their bricks dirty before cross-object
 		// normal halo propagation runs.
@@ -263,6 +223,8 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			}
 		}
 		xbm.StructureDirty = false
+		alloc.directCells = directSectorLookupCells(alloc.Sectors)
+		alloc.directCellsValid = true
 	}
 	if topologyChanged {
 		m.sectorTopologyRevision++
@@ -392,28 +354,59 @@ func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, allo
 	if m == nil || xbm == nil || alloc == nil {
 		return
 	}
-	// Free slots based on what was actually allocated to the GPU, not the
-	// current CPU state, which may already have been cleared or replaced.
-	for sKey, sector := range alloc.Sectors {
-		if info, ok := m.SectorToInfo[sector]; ok {
-			m.SectorAlloc.FreeSlot(info.SlotIndex)
-			m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
-			delete(m.SectorToInfo, sector)
-		}
-		if bPtrs, has := alloc.Bricks[sKey]; has {
-			for i := 0; i < 64; i++ {
-				if brick := bPtrs[i]; brick != nil {
-					m.releaseBrickSlot(brick)
-					m.releaseVoxelAuxSlot(brick)
-				}
-			}
-		}
-	}
+	// Remove this owner before checking the surviving allocation snapshots.
 	delete(m.Allocations, xbm)
+	for sKey, sector := range alloc.Sectors {
+		m.releaseUnreferencedSector(sector)
+		m.releaseUnreferencedBricks(alloc.Bricks[sKey])
+	}
 	if _, retained := m.retainedVoxelMaps[xbm]; retained {
 		m.retainedVoxelMapPruned = true
 	}
 	m.removeRetainedVoxelMapEntry(xbm)
+}
+
+func (m *GpuBufferManager) releaseUnreferencedSector(sector *volume.Sector) {
+	for _, alloc := range m.Allocations {
+		for _, reference := range alloc.Sectors {
+			if reference == sector {
+				return
+			}
+		}
+	}
+	if info, ok := m.SectorToInfo[sector]; ok {
+		m.SectorAlloc.FreeSlot(info.SlotIndex)
+		m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
+		delete(m.SectorToInfo, sector)
+	}
+}
+
+func (m *GpuBufferManager) voxelBrickReferenced(brick *volume.Brick) bool {
+	for _, alloc := range m.Allocations {
+		for _, pointers := range alloc.Bricks {
+			if pointers == nil {
+				continue
+			}
+			for _, reference := range pointers {
+				if reference == brick {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (m *GpuBufferManager) releaseUnreferencedBricks(pointers *[64]*volume.Brick) {
+	if pointers == nil {
+		return
+	}
+	for _, brick := range pointers {
+		if brick != nil && !m.voxelBrickReferenced(brick) {
+			m.releaseBrickSlot(brick)
+			m.releaseVoxelAuxSlot(brick)
+		}
+	}
 }
 
 func (m *GpuBufferManager) releaseVoxelAuxSlot(brick *volume.Brick) {
@@ -529,9 +522,7 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 	var payloadOffset uint32
 	var payloadPage uint32
 	auxWordBase := VoxelAuxInvalidWordBase
-	if !mode.usesPayload {
-		m.releaseBrickSlot(brick)
-	} else {
+	if mode.usesPayload {
 		payloadSlot, exists := m.BrickToSlot[brick]
 		if !exists {
 			var ok bool
@@ -604,7 +595,7 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 		}
 		mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot)*VoxelAuxRecordBytes, auxBytes))
 	} else {
-		m.releaseVoxelAuxSlot(brick)
+		// Complete-unit reclamation owns releases, including alias guards.
 	}
 
 	record := buildGpuBrickRecord(brick, mode, payloadOffset, payloadPage, auxWordBase)

@@ -428,6 +428,95 @@ shared map/sector pointers, nil inputs and hidden candidates. Focused GPU checks
 full engine/consumer checks and a native GPU buffer/readiness smoke passed. One large
 new/dirty map's structural work and other scene scans remain unbounded.
 
+## S1i: Physical voxel-resource growth admission
+
+The user approved a configurable soft allocation budget with pinned pressure on
+2026-10-04. This is a permanent extension of the existing GPU manager, separate
+from upload-write limits and assigned-slot retention. Zero disables the soft cap
+to preserve ordinary loading; hard device limits remain mandatory.
+
+Count current sector, brick, auxiliary, material and sector-lookup buffers,
+their unreleased replacements, and the fixed payload atlas. Replacement admission
+counts the peak while both buffers exist. Other renderer resources and driver
+overhead remain outside this budget. The fixed atlas can already occupy 4 GiB;
+no generic island-sized default or total VRAM guarantee is introduced.
+
+New hidden streamed targets explicitly allow optional admission. Pending full
+detail is also optional. Ordinary objects, including temporarily hidden compiled
+startup objects, preserve required admission. Existing map and material owners
+remain pinned; any required shared instance makes geometry required. New optional
+material users still require their own admission. Required growth may exceed the
+soft budget and exposes pressure. Optional targets may reuse existing capacity
+under pressure, but cannot grow it beyond the budget. Fit-capable smaller work
+continues past a blocked target, with deterministic priority and stable ties.
+
+Plan checked capacities before assigning slots or publishing lookup/material
+metadata. Respect storage, uniform and buffer limits; reduce headroom/geometric
+growth when the required content fits. Resource replacement publishes only after
+all allocation and migration preparation succeeds. Refusal preserves dirty work,
+CPU authority and existing readiness. Hard-blocked structural edits suspend all
+uploads for that map; lookup retains its allocated sector snapshot. Never publish
+a deferred map through another map's shared sector pointer.
+
+Slot reuse and inactive eviction use existing owners. Release a shared sector or
+brick only after its final allocation reference disappears. Buffer capacities
+and allocator high-water marks do not shrink; a lower cap therefore reports
+pressure while allowing reuse. Retired bytes remain charged until actual release.
+
+Files: GPU admission/accounting, allocation/retirement, voxel structure/service,
+sector lookup, core object policy and bridge assignment. Use separate test and
+implementation agents with independent PRE/POST reviews. Minimal coverage protects
+budget boundaries, fixed/retired pressure, required/shared users, deferred
+readiness, fitting retries, hard limits, allocation refusal and alias lifetime.
+Run focused GPU/bridge checks and race checks, then engine tests and affected
+consumer builds. Native fallback, buffer replacement and retirement require a
+user-run release check before completing the batch.
+
+Completed 2026-10-04. Existing tests remain unchanged. Admission covers geometry,
+per-object materials and lookup, including retained reactivation and shared-slot
+lifetime. Engine tests, focused race checks and five consumer builds passed.
+The user reported the release visual check passed after receiving the expected
+phase sequence. Allocation/migration and lookup work remain outside per-frame caps.
+
+Commands passed from `gekko/`:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . ./voxelrt/rt/gpu -run '^(TestS1i|TestS1h|TestVoxelUpload|TestS2d|TestS2i|TestC3h9|TestC3h10)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/gpu -run '^(TestS1i|TestS1h|TestVoxelUpload|TestS2d|TestS2i|TestC3h9|TestC3h10)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Consumer builds passed from each module under `/Users/ddevidch/code/go/gekko3d`:
+
+```sh
+# gekko-editor/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1i-build/editor/ ./...
+# actiongame/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1i-build/actiongame/ ./...
+# spacegame_go/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1i-build/spacegame/ ./...
+# spacesim/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1i-build/spacesim/ ./...
+# examples/testing-vox/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1i-build/testing-vox/ ./...
+```
+
+The release diagnostic build also passed. Run it from `gekko/`:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go build -trimpath -ldflags='-s -w' -o /tmp/gekko-s1i-admission docs/roadmaps/diagnostics/s1i_admission.go
+/tmp/gekko-s1i-admission
+```
+
+Follow the window title and advance with SPACE only after checking each state.
+The coarse plate must stay solid during deferral and fine upload, with no blue
+alias on the right. Resize during both states. After promotion, the full plate
+shows a rectangular opening. The required red cube appears despite pressure;
+its optional green replacement reuses capacity. Wait for console `PASS`, zero
+retired bytes and no allocation errors, then confirm visual continuity. ESC exits.
+This check uses no screenshots or video. Native allocation, migration, shader
+execution and release are not established by the automated tests.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

@@ -392,7 +392,8 @@ Each exact retained `XBrickMap` charges once: 256 bytes of entry metadata, actua
 slots. Slot identities are deduplicated within that map. Charge uses allocated
 snapshots rather than current CPU contents or flags; uniform bricks without a
 payload slot pay no payload charge. Empty/unallocated entries still pay metadata.
-Distinct maps sharing nested sector/brick pointers gain no new ownership guarantee.
+Shared sector/brick assignments remain live until their final allocated reference
+disappears; retention charge still deduplicates only within each map.
 
 Complete updates pin every selected render map and valid pending full upload in
 `Scene.Objects`, including hidden uploads, and refresh active LRU age without
@@ -426,6 +427,53 @@ This budget excludes physical buffer/atlas capacity, free/headroom slots, retire
 resources, lookup/object/material buffers, CPU geometry/allocation snapshots and
 temporary accounting. Eviction does not shrink GPU buffers or atlas pages; no
 VRAM/process ceiling is claimed. [Ownership rationale](../roadmaps/streamed-rendering-s2a.md#s2d-retained-gpu-map-byte-ownership-decision).
+
+## Physical Voxel GPU Admission
+
+`SetVoxelGPUAdmissionBudget(VoxelGPUAdmissionBudget{MaxBytes: ...})` controls
+optional growth of voxel resources. Zero disables the soft cap and preserves
+ordinary loading. The default is zero: the four fixed R8Uint payload pages alone
+can occupy 4 GiB at the supported 1,024³ page size.
+
+The GPU manager counts current sector, brick, auxiliary, material, hash-grid,
+direct-lookup and sector-grid parameter buffers, their unreleased replacements,
+and created payload atlas pages. A replacement needs room for old and new buffers
+at once. Retired bytes leave the charge only after native release. Other renderer
+resources, render targets and driver overhead are excluded; this is not a total
+VRAM ceiling. Slot release and retention eviction do not shrink physical buffers.
+
+Core objects default to required admission. `VoxelGPUAdmissionOptional` permits
+new selected geometry and material owners to defer; the ECS bridge assigns it
+only to explicitly hidden streamed objects. A compiled startup readiness wait
+does not make an ordinary object optional. Valid pending full detail is always
+optional, preserving its ready coarse display. Any required shared instance
+makes geometry required, while a new optional instance still needs its own
+material admission. Existing map and material owners remain pinned and required
+growth can exceed the soft cap. Fresh required geometry preflights its first
+required material owner together. Zero-growth work can reuse slots under pressure;
+smaller fitting arrivals continue past a blocked target. Admission preserves the
+existing retention eviction policy; a blocked optional target can wait for slots
+to become free or for the cap to increase.
+
+Device buffer, storage-binding and uniform-binding limits remain hard for every
+owner. Allocation headroom is reduced when content fits those limits. Planning
+precedes slot assignment, content writes and lookup publication. Native resource
+replacement publishes after allocation and migration preparation succeeds;
+refusal preserves existing resources, CPU geometry and unacknowledged dirty work.
+A hard-blocked structural edit freezes all content uploads for that map and
+keeps lookup on its prior allocated sector snapshot. Reactivated retained geometry
+stays pinned but cannot become ready until its lookup fits. New deferred maps
+publish no lookup entries, even when they share assigned sector pointers.
+An object without admitted materials or published lookup gets an invalid GPU
+descriptor. Cached shader lookup rejects that descriptor before using a sector
+cache, including when the valid shared map ID is zero. Record layouts stay unchanged.
+
+`VoxelGPUAdmissionStats()` reports `CurrentBufferBytes`, `RetiredBufferBytes`,
+`AtlasBytes`, `TotalBytes`, configured `MaxBytes`, `PressureBytes`, deferred map
+counts, cumulative allocation failures and the last allocation error. Reads use
+scalar state from the last voxel update without traversal or mutation. Byte sums
+saturate; nil manager returns zero stats. Configuration takes effect at the next
+voxel update. [Admission decision](../roadmaps/streamed-rendering-s1b.md#s1i-physical-voxel-resource-growth-admission).
 
 ## Render Targets and Formats
 

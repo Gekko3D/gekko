@@ -480,6 +480,12 @@ type GpuBufferManager struct {
 	VoxelUploadBricksPerFrame      uint32
 	voxelUploadFrame               uint64
 	voxelUploadAges                map[voxelUploadIdentity]uint64
+	voxelGPUAdmissionBudget        VoxelGPUAdmissionBudget
+	voxelGPUAdmissionStats         VoxelGPUAdmissionStats
+	voxelAdmissionMaps             map[*volume.XBrickMap]bool
+	voxelAdmissionObjects          map[*core.VoxelObject]bool
+	voxelLookupMaps                map[*volume.XBrickMap]bool
+	voxelAdmissionActive           bool
 	lastTotalSectors               int
 	lastSceneRevision              uint64
 	sectorTopologyRevision         uint64
@@ -539,6 +545,7 @@ type RetainedVoxelMapStats struct {
 
 type retiredBuffer struct {
 	Buffer          *wgpu.Buffer
+	VoxelBytes      uint64 // Only this manager's physical voxel resources.
 	FramesLeft      int
 	Queue           *wgpu.Queue
 	SubmissionIndex wgpu.SubmissionIndex
@@ -554,9 +561,13 @@ type retiredBindGroup struct {
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
 type ObjectGpuAllocation struct {
-	Sectors      map[[3]int]*volume.Sector     // Track which sector is at which coordinate
-	Bricks       map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
-	DirectLookup directSectorLookupMetadata
+	Sectors              map[[3]int]*volume.Sector     // Track which sector is at which coordinate
+	Bricks               map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
+	DirectLookup         directSectorLookupMetadata
+	directCells          uint64
+	directCellsValid     bool
+	lookupAdmissionKnown bool
+	lookupAdmitted       bool
 }
 
 type MaterialGpuAllocation struct {

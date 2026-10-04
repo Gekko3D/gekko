@@ -283,6 +283,11 @@ const LOOKUP_MODE_HASH: i32 = 0;
 const LOOKUP_MODE_DIRECT: i32 = 1;
 
 fn find_sector_cached(sx: i32, sy: i32, sz: i32, params: ObjectParams) -> i32 {
+    // An empty direct descriptor rejects before shared map-ID cache access.
+    if (params.direct_lookup_origin_mode.w == LOOKUP_MODE_DIRECT &&
+        any(params.direct_lookup_extent_base.xyz == vec3<u32>(0u))) {
+        return -1;
+    }
     if (sx == g_cached_sector_coords.x && sy == g_cached_sector_coords.y && sz == g_cached_sector_coords.z && 
         params.sector_table_base == g_cached_sector_base && g_cached_sector_id != -1) {
         return g_cached_sector_id;

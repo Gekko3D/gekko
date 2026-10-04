@@ -58,42 +58,44 @@ type HitResult struct {
 }
 
 type VoxelObject struct {
-	RenderEnabled            bool
-	VoxelUploadPriority      uint8
-	VoxelUploadOrder         uint64
-	Transform                *Transform
-	XBrickMap                *volume.XBrickMap
-	MaterialTable            []Material
-	WorldAABB                *[2]mgl32.Vec3 // Min, Max
-	Tree64LOD                []byte
-	LODThreshold             float32
-	CastsShadows             bool
-	ShadowMaxDistance        float32
-	ShadowCasterGroupID      uint64
-	ShadowCasterGroupLimit   int
-	ShadowGroupID            uint32
-	EmitterLinkID            uint32
-	AmbientOcclusionMode     AmbientOcclusionMode
-	ShadowSeamWorldEpsilon   float32
-	AllowOcclusionCulling    bool
-	IsStatic                 bool
-	ParticipatesInGI         bool
-	VoxelAdjacencyGroupID    uint32
-	VoxelAdjacencyChunkCoord [3]int
-	VoxelAdjacencyChunkSize  int
-	IsTerrainChunk           bool
-	TerrainGroupID           uint32
-	TerrainChunkCoord        [3]int
-	TerrainChunkSize         int
-	IsPlanetTile             bool
-	PlanetTileGroupID        uint32
-	PlanetTileFace           int
-	PlanetTileLevel          int
-	PlanetTileX              int
-	PlanetTileY              int
-	worldAABBMap             *volume.XBrickMap
-	worldAABBMapRevision     uint64
-	renderRepresentation     *voxelRenderRepresentation
+	RenderEnabled       bool
+	VoxelUploadPriority uint8
+	VoxelUploadOrder    uint64
+	// Optional admission is explicit; visibility alone never changes ownership.
+	VoxelGPUAdmissionOptional bool
+	Transform                 *Transform
+	XBrickMap                 *volume.XBrickMap
+	MaterialTable             []Material
+	WorldAABB                 *[2]mgl32.Vec3 // Min, Max
+	Tree64LOD                 []byte
+	LODThreshold              float32
+	CastsShadows              bool
+	ShadowMaxDistance         float32
+	ShadowCasterGroupID       uint64
+	ShadowCasterGroupLimit    int
+	ShadowGroupID             uint32
+	EmitterLinkID             uint32
+	AmbientOcclusionMode      AmbientOcclusionMode
+	ShadowSeamWorldEpsilon    float32
+	AllowOcclusionCulling     bool
+	IsStatic                  bool
+	ParticipatesInGI          bool
+	VoxelAdjacencyGroupID     uint32
+	VoxelAdjacencyChunkCoord  [3]int
+	VoxelAdjacencyChunkSize   int
+	IsTerrainChunk            bool
+	TerrainGroupID            uint32
+	TerrainChunkCoord         [3]int
+	TerrainChunkSize          int
+	IsPlanetTile              bool
+	PlanetTileGroupID         uint32
+	PlanetTileFace            int
+	PlanetTileLevel           int
+	PlanetTileX               int
+	PlanetTileY               int
+	worldAABBMap              *volume.XBrickMap
+	worldAABBMapRevision      uint64
+	renderRepresentation      *voxelRenderRepresentation
 
 	// Monotonic request identity survives representation replacement.
 	pendingFullUploadGeneration uint64

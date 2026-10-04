@@ -49,6 +49,7 @@ type sceneInstanceKey struct {
 // Snapshot encoded inputs, including allocation presence. Float bits make
 // unchanged NaNs stable and distinguish signed zero without serializing rows.
 type sceneParamsKey struct {
+	admissionRejected                         bool
 	geometry, material                        bool
 	mapID, sectors, materialOffset            uint32
 	lod, ao, shadowGroup, shadowEpsilon       uint32
@@ -125,6 +126,9 @@ func sceneWorldBoundsKey(obj *core.VoxelObject) sceneBoundsKey {
 }
 
 func (m *GpuBufferManager) sceneObjectParamsKey(obj *core.VoxelObject) sceneParamsKey {
+	if m.voxelAdmissionActive && (m.Allocations[obj.RenderVoxelMap()] == nil || m.MaterialAllocations[obj] == nil || !m.voxelLookupMaps[obj.RenderVoxelMap()]) {
+		return sceneParamsKey{admissionRejected: true}
+	}
 	alloc := m.Allocations[obj.RenderVoxelMap()]
 	if alloc == nil {
 		// Missing geometry is the canonical zero row, regardless of metadata.
@@ -141,6 +145,9 @@ func (m *GpuBufferManager) sceneObjectParamsKey(obj *core.VoxelObject) scenePara
 		planetFace: obj.PlanetTileFace, planetLevel: obj.PlanetTileLevel,
 		planetX: obj.PlanetTileX, planetY: obj.PlanetTileY,
 		direct: alloc.DirectLookup,
+	}
+	if alloc.Sectors != nil {
+		key.sectors = uint32(len(alloc.Sectors))
 	}
 	if material := m.MaterialAllocations[obj]; material != nil {
 		key.material = true
@@ -190,6 +197,14 @@ func (m *GpuBufferManager) prepareSceneObject(obj *core.VoxelObject, origin mgl3
 		// The existing writer leaves false flags and missing offsets untouched.
 		clear(row.params[:])
 		writeObjectParamsData(row.params[:], obj, m.Allocations[obj.RenderVoxelMap()], m.MaterialAllocations[obj])
+		if paramsKey.admissionRejected {
+			// Zero extent makes every direct lookup reject before a table read,
+			// including map ID zero and denied materials sharing required maps.
+			clear(row.params[:])
+			binary.LittleEndian.PutUint32(row.params[16:20], ^uint32(0))
+			binary.LittleEndian.PutUint32(row.params[108:112], LookupModeDirect)
+			binary.LittleEndian.PutUint32(row.params[124:128], DirectSectorLookupInvalid)
+		}
 		row.paramsKey = paramsKey
 		row.paramsRevision++
 		m.SceneObjectParamRecordBuildCount++

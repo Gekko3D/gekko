@@ -33,6 +33,9 @@ func (m *GpuBufferManager) RenderVoxelObjectReady(obj *core.VoxelObject, xbm *vo
 }
 
 func (m *GpuBufferManager) voxelTargetAllocationReady(obj *core.VoxelObject, xbm *volume.XBrickMap, pendingSectors, pendingBricks int) (ready bool, sectors int, bricks int) {
+	if m.voxelAdmissionActive && !m.voxelLookupMaps[xbm] {
+		return false, pendingSectors, pendingBricks
+	}
 	alloc := m.Allocations[xbm]
 	if alloc == nil || xbm.StructureDirty ||
 		len(alloc.Sectors) != len(xbm.Sectors) || len(alloc.Bricks) != len(xbm.Sectors) ||

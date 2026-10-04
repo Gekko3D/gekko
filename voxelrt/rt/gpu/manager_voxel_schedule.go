@@ -142,11 +142,14 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		m.MaterialAllocations = make(map[*core.VoxelObject]*MaterialGpuAllocation)
 	}
 	var queue []voxelUploadWork
+	liveMaps := make(map[*volume.XBrickMap]bool)
+	liveObjects := make(map[*core.VoxelObject]bool)
 	best := make(map[*volume.XBrickMap]voxelServiceTarget)
 	objectOrder := make(map[*core.VoxelObject]int)
 	var maps []*volume.XBrickMap
 	for index, target := range voxelServiceTargets(scene) {
 		obj, xbm := target.object, target.mapRef
+		liveMaps[xbm], liveObjects[obj] = true, true
 		_, seenObject := objectOrder[obj]
 		if !seenObject {
 			objectOrder[obj] = index
@@ -167,7 +170,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			best[xbm] = target
 		}
 		// Materials are anchored to display and allocated only once per object.
-		if target.pendingGeneration != 0 || seenObject {
+		if target.pendingGeneration != 0 || seenObject || !m.voxelMapAdmitted(xbm) || !m.voxelObjectAdmitted(obj) {
 			continue
 		}
 
@@ -191,6 +194,9 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		}
 	}
 	for _, xbm := range maps {
+		if !m.voxelMapAdmitted(xbm) {
+			continue
+		}
 		target := best[xbm]
 		obj := target.object
 		for key, dirty := range xbm.DirtySectors {
@@ -219,6 +225,16 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		}
 	}
 	ages := make(map[voxelUploadIdentity]uint64, len(queue))
+	// Deferred live work retains its first service frame. Detachment still
+	// removes identities, without needing to encode or enqueue denied work.
+	for id, first := range m.voxelUploadAges {
+		if !liveMaps[id.xbm] || (id.object != nil && !liveObjects[id.object]) {
+			continue
+		}
+		if !m.voxelMapAdmitted(id.xbm) || (id.kind == voxelUploadMaterial && !m.voxelObjectAdmitted(id.object)) {
+			ages[id] = first
+		}
+	}
 	for _, w := range queue {
 		id := w.identity()
 		first, exists := m.voxelUploadAges[id]
@@ -355,7 +371,40 @@ func (m *GpuBufferManager) voxelUploadReleases(w voxelUploadWork) (payload, auxi
 			payload[current] = true
 		}
 	}
+	// Other live records still address these slots. Reclaim only references
+	// replaced by this complete upload unit, including aliases inside one map.
+	for brick := range payload {
+		if _, exists := m.BrickToSlot[brick]; !exists || m.voxelBrickReferencedOutsideUpload(brick, w) {
+			delete(payload, brick)
+		}
+	}
+	for brick := range auxiliary {
+		if _, exists := m.BrickToAuxSlot[brick]; !exists || m.voxelBrickReferencedOutsideUpload(brick, w) {
+			delete(auxiliary, brick)
+		}
+	}
 	return payload, auxiliary
+}
+
+func (m *GpuBufferManager) voxelBrickReferencedOutsideUpload(brick *volume.Brick, w voxelUploadWork) bool {
+	key := w.sectorCoordinate()
+	start, end := w.brickRange()
+	for xbm, alloc := range m.Allocations {
+		for coordinate, pointers := range alloc.Bricks {
+			if pointers == nil {
+				continue
+			}
+			for index, reference := range pointers {
+				if xbm == w.targetMap() && coordinate == key && index >= start && index < end {
+					continue
+				}
+				if reference == brick {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (m *GpuBufferManager) voxelUploadPayloadFits(w voxelUploadWork) bool {
