@@ -44,6 +44,14 @@ func validCompiledAssetLODProof(proof *compiledAssetLODProof) bool {
 }
 
 func (server *AssetServer) compiledAssetLODBindingValidLocked(fullID AssetId, binding *compiledAssetLODBinding) bool {
+	if binding == nil || binding.proof == nil {
+		return false
+	}
+	return server.compiledAssetLODBindingValidWithKeysLocked(fullID, binding,
+		"compiled-asset-shape:"+binding.proof.sourceContentID, "compiled-asset-lod:"+binding.proof.contentID)
+}
+
+func (server *AssetServer) compiledAssetLODBindingValidWithKeysLocked(fullID AssetId, binding *compiledAssetLODBinding, fullKey, coarseKey string) bool {
 	if binding == nil || binding.fullID != fullID || binding.coarseID == fullID || !validCompiledAssetLODProof(binding.proof) {
 		return false
 	}
@@ -51,8 +59,8 @@ func (server *AssetServer) compiledAssetLODBindingValidLocked(fullID AssetId, bi
 	full, fullExists := server.voxModels[fullID]
 	coarse, coarseExists := server.voxModels[binding.coarseID]
 	return fullExists && full.XBrickMap != nil && coarseExists && coarse.XBrickMap != nil &&
-		server.voxModelKeys["compiled-asset-shape:"+proof.sourceContentID] == fullID &&
-		server.voxModelKeys["compiled-asset-lod:"+proof.contentID] == binding.coarseID &&
+		server.voxModelKeys[fullKey] == fullID &&
+		server.voxModelKeys[coarseKey] == binding.coarseID &&
 		server.authoredVoxelBases[fullID][proof.lattice] != ""
 }
 

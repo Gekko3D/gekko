@@ -762,9 +762,19 @@ Current used material must have a valid nonzero palette index, alpha 255, exactl
 zero transparency and transmission, and no animation targeting that value.
 Nonfinite and nonzero optical values reject; signed zero qualifies. Unused slots
 and non-opacity properties do not affect this gate. Qualify the effective current
-material separately from shared geometry. These guards are currently unwired.
-Exact scans are linear and allocate no storage; eventual integration must share
-results only within a stable main-thread sync, never across raw mutable updates.
+material separately from shared geometry. The private instance candidate additionally
+requires declared full/coarse IDs, the current effective geometry and resolution,
+ordinary component/object lattice metadata, a transform and an existing palette.
+Ordinary GPU retention is allowed; shared-terrain ownership is excluded. It reads
+already-published maps without hydration, mutation or display activation.
+
+One main-thread sync owns a zero-value qualification context. Exact primary scans
+are linear and allocate no storage; the context shares true and false results by
+actual-map/baseline pointer pair. It also constructs immutable proof namespace keys
+once per sync. Asset membership, current materials, animation targets and instance
+tags remain fresh on every call. Primary maps and private proofs must stay stable
+within that sync; discard the entire context before the next frame to detect raw
+writes that bypass revisions. Renderer activation remains pending.
 
 ### Streamed voxel residency
 

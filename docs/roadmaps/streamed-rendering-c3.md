@@ -13,7 +13,7 @@ reads, C3h7 complete-closure source verification, C3h8 core render
 representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
 upload staging, C3h11 pure qualification guards and C3h12a owned derivative
 packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
-instance intent complete. Opt-in,
+instance intent and C3h13b instance qualification complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -467,3 +467,23 @@ components and the first-part tuple contract stay intact.
 [Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
 Qualified renderer activation follows; boundary commands and remaining limits
 are in the parent delivery entry.
+
+
+## Instance qualification (C3h13b)
+
+A private candidate checks declared IDs against actual object-owned fine geometry,
+current coarse storage, effective resolution, ordinary lattice metadata and current
+used material/animation state. One sync shares exact geometry comparisons and
+immutable namespace construction; membership and instance guards remain fresh.
+[Contract](../renderer/runtime.md#authoritative-geometry-and-render-representations).
+Renderer activation and streamed readiness integration follow.
+
+A temporary CPU benchmark measured 1,000 ordinary objects sharing synthetic
+16,384-brick fine and 2,048-brick coarse maps on Apple M4 Pro, Go 1.25.4,
+darwin/arm64. Three 200 ms warm runs of the actual candidate gave median
+0.379 ms, 752 allocated bytes and six allocations per sync. A fresh context per
+placement gave 264.499 ms, 752,000 bytes and 6,000 allocations. This isolates
+qualification sharing; it measures neither scene sync, GPU upload nor FPS.
+Harness: `/tmp/gekko-c3h13b-measurement_test.go`; final evidence:
+`/tmp/gekko-c3h13b-measurement-final.log`.
+Boundary commands and remaining limits are recorded in the parent delivery entry.
