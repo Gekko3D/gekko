@@ -26,25 +26,55 @@ type CompiledAssetCompileResult struct {
 	DependenciesWritten, DependenciesReused int
 }
 
+// CompiledAssetCompileOptions explicitly enables optional shipping derivatives.
+type CompiledAssetCompileOptions struct {
+	EnableLOD2 bool
+}
+
+// CompiledAssetCompileDetailedResult adds unique derivative file counts without
+// changing the existing result's positional source compatibility.
+type CompiledAssetCompileDetailedResult struct {
+	CompiledAssetCompileResult
+	LODsWritten, LODsReused int
+}
+
+type compiledAssetFileKind uint8
+
+const (
+	compiledAssetDependencyFile compiledAssetFileKind = iota
+	compiledAssetShapeFile
+	compiledAssetLODFile
+)
+
 type compiledAssetFile struct {
 	relative string
 	data     []byte
-	shape    bool
+	kind     compiledAssetFileKind
 }
 
 // CompileAuthoredAsset compiles inline shapes and groups into an explicit header
 // and immutable geometry/dependency files. Authoring inputs must remain stable
 // during compilation. The caller retains ownership of an explicit codec.
 func CompileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec) (CompiledAssetCompileResult, error) {
-	result, err := compileAuthoredAsset(inputPath, outputPath, codec)
+	result, err := CompileAuthoredAssetWithOptions(inputPath, outputPath, codec, CompiledAssetCompileOptions{})
 	if err != nil {
 		return CompiledAssetCompileResult{}, err
+	}
+	return result.CompiledAssetCompileResult, nil
+}
+
+// CompileAuthoredAssetWithOptions emits optional source-bound 2x LOD frames.
+// Failures return a zero result; the caller retains explicit codec ownership.
+func CompileAuthoredAssetWithOptions(inputPath, outputPath string, codec *voxelcodec.Codec, options CompiledAssetCompileOptions) (CompiledAssetCompileDetailedResult, error) {
+	result, err := compileAuthoredAsset(inputPath, outputPath, codec, options)
+	if err != nil {
+		return CompiledAssetCompileDetailedResult{}, err
 	}
 	return result, nil
 }
 
-func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec) (CompiledAssetCompileResult, error) {
-	var result CompiledAssetCompileResult
+func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec, options CompiledAssetCompileOptions) (CompiledAssetCompileDetailedResult, error) {
+	var result CompiledAssetCompileDetailedResult
 	raw, err := os.ReadFile(inputPath)
 	if err != nil {
 		return result, err
@@ -73,17 +103,23 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec)
 	}
 	sources := []string{inputPath}
 	files := map[string]compiledAssetFile{}
-	add := func(data []byte, suffix string, shape bool) string {
+	add := func(data []byte, suffix string, kind compiledAssetFileKind) string {
 		hash := sha256.Sum256(data)
 		folder := "dependencies"
-		if shape {
+		if kind == compiledAssetShapeFile {
 			folder = "shapes"
+		} else if kind == compiledAssetLODFile {
+			folder = "lods"
 		}
 		relative := folder + "/" + hex.EncodeToString(hash[:]) + suffix
-		files[relative] = compiledAssetFile{relative, data, shape}
+		files[relative] = compiledAssetFile{relative, data, kind}
 		return relative
 	}
 	header := &content.CompiledAssetHeaderDef{SchemaVersion: content.CurrentCompiledAssetHeaderSchemaVersion, CompilerVersion: content.CurrentCompiledAssetCompilerVersion, Asset: &asset}
+	if options.EnableLOD2 {
+		header.SchemaVersion = content.CompiledAssetLODHeaderSchemaVersion
+		header.CompilerVersion = content.CompiledAssetLODHeaderCompilerVersion
+	}
 	for i := range asset.Parts {
 		part := &asset.Parts[i]
 		if part.Source.Kind != content.AssetSourceKindVoxelShape {
@@ -101,8 +137,22 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec)
 		if err != nil {
 			return result, err
 		}
-		relative := add(data, ".gkshape", true)
+		relative := add(data, ".gkshape", compiledAssetShapeFile)
 		header.Shapes = append(header.Shapes, content.CompiledAssetShapeRefDef{PartID: part.ID, Path: relative, ContentID: info.ContentID, BaseIdentity: base, EncodedBytes: info.EncodedBytes, DecodedBytes: info.DecodedBytes})
+		if options.EnableLOD2 {
+			lod, err := compileAssetPartLOD(&asset, *part, shape, info.ContentID)
+			if err != nil {
+				return result, err
+			}
+			if lod != nil {
+				data, info, err := content.EncodeCompiledAssetLOD(lod, codec)
+				if err != nil {
+					return result, err
+				}
+				relative := add(data, ".gklod", compiledAssetLODFile)
+				header.LODs = append(header.LODs, content.CompiledAssetLODRefDef{PartID: part.ID, Path: relative, ContentID: info.ContentID, SourceContentID: lod.SourceContentID, EncodedBytes: info.EncodedBytes, DecodedBytes: info.DecodedBytes, Factor: lod.Factor, ReductionVersion: lod.ReductionVersion})
+			}
+		}
 		part.Source.VoxelShape.Voxels = nil
 	}
 	for i, ref := range asset.AnimationSetPaths {
@@ -123,13 +173,13 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec)
 			if err != nil {
 				return result, err
 			}
-			set.RigPath = filepath.Base(add(rigData, ".gkrig", false))
+			set.RigPath = filepath.Base(add(rigData, ".gkrig", compiledAssetDependencyFile))
 			data, err = json.MarshalIndent(set, "", "  ")
 			if err != nil {
 				return result, err
 			}
 		}
-		asset.AnimationSetPaths[i] = add(data, ".gkanim", false)
+		asset.AnimationSetPaths[i] = add(data, ".gkanim", compiledAssetDependencyFile)
 	}
 	for i := range asset.Emitters {
 		emitter := &asset.Emitters[i].Emitter
@@ -142,7 +192,7 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec)
 		if err != nil {
 			return result, err
 		}
-		emitter.TexturePath = add(data, ".texture", false)
+		emitter.TexturePath = add(data, ".texture", compiledAssetDependencyFile)
 	}
 	headerData, info, err := content.EncodeCompiledAssetHeader(header, codec)
 	if err != nil {
@@ -176,13 +226,20 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec)
 		if err != nil {
 			return result, err
 		}
-		if file.shape {
+		switch file.kind {
+		case compiledAssetShapeFile:
 			if wrote {
 				result.ShapesWritten++
 			} else {
 				result.ShapesReused++
 			}
-		} else {
+		case compiledAssetLODFile:
+			if wrote {
+				result.LODsWritten++
+			} else {
+				result.LODsReused++
+			}
+		case compiledAssetDependencyFile:
 			if wrote {
 				result.DependenciesWritten++
 			} else {

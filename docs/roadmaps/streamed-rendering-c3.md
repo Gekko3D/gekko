@@ -7,7 +7,8 @@ compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
 worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
 C3f4a private palette adoption, C3f4b worker palette integration and C3f4c
 publication accounting complete. C3h0 diagnostics and C3h1 conservative geometry
-construction, C3h2 source-bound derivative frames and C3h3 versioned headers complete. Opt-in,
+construction, C3h2 source-bound derivative frames, C3h3 versioned headers and
+C3h4 compiler opt-in complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -350,3 +351,13 @@ references and protects shared-path and logical identity consistency.
 [Contract](../content/compiled-voxels.md#compiled-ordinary-asset-headers).
 Compiler opt-in, actual derivative loading, current material/source qualification
 and renderer interaction/readiness ownership remain pending.
+
+## Compiler LOD opt-in (C3h4)
+
+Added explicit options API and CLI `-lod2`, preserving the original API/result
+layout, schema-1 default bytes and default CLI output. Eligible per-part opaque
+geometry emits source-bound derivatives through the existing immutable closure
+and header-last publisher. [Contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission).
+Runtime derivative loading, current source/material qualification, authoritative
+interaction versus display geometry and readiness handoff remain pending. GPU
+quality and performance are not verified by this offline batch.

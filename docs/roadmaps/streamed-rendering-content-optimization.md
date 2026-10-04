@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h3 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h4 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -829,7 +829,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3h0 | `b168c97` | Asset LOD CPU/coverage diagnostic; conservative single-material opaque policy subsequently approved | [Measurements and gates](streamed-rendering-c3.md#asset-lod-diagnostic-c3h0) |
 | C3h1 | `752bad4` | Pure single-value conservative 2× geometry construction; runtime activation remains pending | [Construction contract](../content/compiled-voxels.md#conservative-asset-lod-geometry-construction) |
 | C3h2 | `1976467` | Separate source-bound typed LOD frames with unchanged legacy formats and defaults | [Frame contract](../content/compiled-voxels.md#compiled-ordinary-asset-lod-frames) |
-| C3h3 | This commit | Explicit schema-2 optional source-bound LOD references; unchanged schema-1 bytes and defaults | [Header contract](../content/compiled-voxels.md#compiled-ordinary-asset-headers) |
+| C3h3 | `7117e74` | Explicit schema-2 optional source-bound LOD references; unchanged schema-1 bytes and defaults | [Header contract](../content/compiled-voxels.md#compiled-ordinary-asset-headers) |
+| C3h4 | This commit | Explicit compiler/CLI LOD opt-in with per-part opaque qualification and unchanged defaults | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2967,6 +2968,30 @@ Focused/race checks, committed engine tests and five consumer build commands
 listed in C3f4b passed. Earlier C3g1 RED tests are preserved outside the package
 for the engine sweep and restored afterward. No GPU check is required for this
 format-only batch; rendered LOD quality and performance remain unverified.
+Existing tests and unrelated changes are preserved.
+
+
+### C3h4: Explicit compiler LOD opt-in
+
+Added optional compiler emission and CLI `-lod2`, preserving default closure bytes,
+legacy result layout and default stdout. Derivatives bind actual post-scale source
+geometry and qualify material opacity/animation per part.
+[Contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission).
+Runtime source/material qualification, display/interaction authority and readiness
+handoff remain pending.
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . ./cmd/assetcompile -run '^Test(C3h4|C3h1|C3c|Assetcompile)' -count=1 -timeout=60s
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./cmd/assetcompile -run '^Test(C3h4|C3h1|C3c|Assetcompile)' -count=1 -timeout=60s
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused/race checks, committed engine tests and five consumer build commands
+listed in C3f4b passed. Earlier C3g1 RED tests remain preserved outside the package
+through verification and are restored afterward. No GPU check is required for
+this offline batch; runtime LOD quality and performance remain unverified.
 Existing tests and unrelated changes are preserved.
 
 

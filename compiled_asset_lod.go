@@ -11,7 +11,42 @@ import (
 	"github.com/gekko3d/gekko/content/voxelcodec"
 )
 
-const compiledAssetLOD2xReductionVersion = "occupancy-or-zero-anchored-2x-v1"
+const compiledAssetLOD2xReductionVersion = content.CompiledAssetLOD2xReductionVersion
+
+// Qualification uses the normalized part-local palette, independently of any
+// geometry-file sharing. Any animation targeting the occupied value opts out.
+func compileAssetPartLOD(asset *content.AssetDef, part content.AssetPartDef, shape *content.CompiledAssetShapeDef, sourceID string) (*content.CompiledAssetLODDef, error) {
+	geometry, err := buildCompiledAssetLOD2x(shape)
+	if err != nil || geometry == nil {
+		return nil, err
+	}
+	for _, animation := range asset.MaterialAnimations {
+		for _, value := range animation.PaletteIndices {
+			if value == geometry.Value {
+				return nil, nil
+			}
+		}
+	}
+	eligible := false
+	for _, entry := range part.Source.VoxelShape.Palette {
+		if entry.Value != geometry.Value {
+			continue
+		}
+		material, ok := content.FindAssetMaterialByID(asset, entry.MaterialID)
+		eligible = ok && material.BaseColor[3] == 255 && material.Transparency == 0 && !math.IsNaN(float64(material.Transparency)) && !math.IsInf(float64(material.Transparency), 0)
+		break
+	}
+	if !eligible {
+		return nil, nil
+	}
+	return &content.CompiledAssetLODDef{
+		SchemaVersion:   content.CurrentCompiledAssetLODSchemaVersion,
+		SourceContentID: sourceID, SourceLattice: geometry.SourceLattice,
+		Factor: 2, ReductionVersion: geometry.ReductionVersion, Value: geometry.Value,
+		SourceVoxelCount: geometry.SourceVoxelCount, SourceMin: geometry.SourceMin, SourceMax: geometry.SourceMax,
+		CoarseMin: geometry.CoarseMin, CoarseMax: geometry.CoarseMax, Bricks: geometry.Bricks,
+	}, nil
+}
 
 // compiledAssetLOD2xGeometry is a geometry-only compiler intermediate. Its
 // lattice records the full-resolution source; coarse bounds use coarse cells.

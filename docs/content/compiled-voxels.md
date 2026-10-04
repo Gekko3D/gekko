@@ -330,9 +330,9 @@ counts and occupied bounds with inclusive minima and exclusive `int64` maxima.
 Bounds describe their respective coordinate grids. Reduction identity is
 `occupancy-or-zero-anchored-2x-v1`. This result is not an authoritative shape or
 base. A caller must bind it to the original shape identity through the separate
-derivative frame contract below. Palette opacity, animation qualification, explicit
-compiler opt-in and runtime selection remain separate integration work. Level-0
-geometry remains authoritative.
+derivative frame contract below. Compiler qualification and opt-in are defined below. Runtime source/material
+qualification and selection remain separate integration work. Level-0 geometry
+remains authoritative.
 
 ## Compiled ordinary asset LOD frames
 
@@ -363,8 +363,8 @@ metadata, unsupported kinds/versions and malformed bounds, counts or layers.
 bounded C1 `ReadFrame` without authoring fallback. Errors return nil data or
 definitions and zero `Info`. Explicit codecs remain borrowed; nil uses the existing
 default profile. Existing shape/header formats and default compilation are unchanged.
-Versioned header references are defined below. Compiler opt-in and runtime selection
-follow separately.
+Versioned header references and compiler opt-in are defined below. Runtime selection
+remains separate integration work.
 
 ## Compiled ordinary asset headers
 
@@ -452,6 +452,31 @@ file; different codec encodings receive different physical paths. Rigs and
 opaque texture bytes are copied exactly into `dependencies`; animation sets
 retain their format with rebased rig references. Asset animation/texture paths
 are rebased into this output closure. External animation documents stay JSON.
+
+Use `-lod2` or
+`gekko.CompileAuthoredAssetWithOptions(inputPath, outputPath, codec,
+CompiledAssetCompileOptions{EnableLOD2: true})` to emit conservative 2× derivatives.
+Disabled options preserve the original API's schema-1 closure bytes. Enabled
+options select the explicit schema-2 header even when no part is eligible.
+Derivatives use the actual post-scale level-0 geometry, signed zero-anchored OR,
+and original shape C1 ContentID; level-0 geometry and base identities stay unchanged.
+
+Eligibility is per part: exactly one occupied nonzero palette value, strict voxel
+count reduction, and its normalized material with alpha 255 and finite zero
+transparency. Unused palette entries or materials do not disqualify a part.
+Any material animation targeting that local palette value disqualifies it,
+regardless of animation kind or frames. Separate geometric/skeleton animation
+parts retain eligibility. Valid ineligible parts omit LOD references; invalid
+source content still fails compilation.
+
+LOD files use `lods/<encoded-byte-sha256>.gklod`, through the same complete
+closure preflight, immutable publication and header-last owner. Parts share files
+by exact encoded bytes, while opacity eligibility remains per part. The new
+`CompiledAssetCompileDetailedResult` embeds the unchanged legacy result and adds
+unique `LODsWritten`/`LODsReused` counts; failures return a zero detailed result.
+Default CLI output is unchanged; opt-in appends a LOD count line. Current runtime
+follows authoritative shapes only. Derivative loading, current source/material
+qualification, display/readiness ownership and GPU/visual verification remain pending.
 
 All validation and encoding precede publication. Source/output aliases and
 conflicting immutable files fail explicitly. Immutable files use verified reuse

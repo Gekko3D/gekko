@@ -16,6 +16,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	input := flags.String("in", "", "authoring asset JSON path")
 	output := flags.String("out", "", "compiled header path ending in .gkassetc")
+	lod2 := flags.Bool("lod2", false, "emit optional conservative 2x LOD for eligible opaque parts")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -31,11 +32,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if filepath.Ext(*output) != ".gkassetc" {
 		return fmt.Errorf("compiled output must end in lowercase .gkassetc")
 	}
-	result, err := gekko.CompileAuthoredAsset(*input, *output, nil)
+	result, err := gekko.CompileAuthoredAssetWithOptions(*input, *output, nil, gekko.CompiledAssetCompileOptions{EnableLOD2: *lod2})
 	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "Header written: %t; shapes: %d written, %d reused; dependencies: %d written, %d reused\n", result.HeaderWrote, result.ShapesWritten, result.ShapesReused, result.DependenciesWritten, result.DependenciesReused)
+	if err == nil && *lod2 {
+		_, err = fmt.Fprintf(stdout, "LODs: %d written, %d reused\n", result.LODsWritten, result.LODsReused)
+	}
 	return err
 }
 
