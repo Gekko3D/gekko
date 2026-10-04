@@ -468,6 +468,21 @@ An object without admitted materials or published lookup gets an invalid GPU
 descriptor. Cached shader lookup rejects that descriptor before using a sector
 cache, including when the valid shared map ID is zero. Record layouts stay unchanged.
 
+Optional geometry and material demand share an aged admission order. Required
+geometry and required materials of admitted geometry remain first. Waiting
+optional demand gains one priority level every eight admission updates, stopping
+at priority zero; older demand wins equal effective priority before stable order
+and IDs. A required shared map does not give new optional materials required
+priority. Raw geometry representatives still own joint material preflight.
+
+Geometry age follows live object/map/pending-generation requests; material age
+follows selected object/map requests. Shared geometry uses the best current
+request without losing surviving users' wait. Edits to a still-live request retain age;
+completion, detachment, required reclassification and new generations clear stale
+optional demand. Backend fallback uses the same age snapshot and retains only
+final-plan refusals. Smaller fitting work can pass a blocked request. Progress
+requires recurring fitting capacity; no fixed latency is promised.
+
 `VoxelGPUAdmissionStats()` reports `CurrentBufferBytes`, `RetiredBufferBytes`,
 `AtlasBytes`, `TotalBytes`, configured `MaxBytes`, `PressureBytes`, deferred map
 counts, cumulative allocation failures and the last allocation error. Reads use

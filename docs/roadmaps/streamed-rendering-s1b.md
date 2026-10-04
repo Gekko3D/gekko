@@ -517,6 +517,43 @@ retired bytes and no allocation errors, then confirm visual continuity. ESC exit
 This check uses no screenshots or video. Native allocation, migration, shader
 execution and release are not established by the automated tests.
 
+## S1j: Deferred optional admission aging
+
+Completed 2026-10-04. Optional geometry and materials now share the established
+aged order instead of indefinitely losing to fresh higher-priority demand.
+Required ownership, joint preflight, hard/peak limits and current request identity
+remain. [Canonical contract](../renderer/runtime.md#physical-voxel-gpu-admission).
+
+Files: GPU admission, private scheduling state and four focused behavior tests.
+Existing tests remain unchanged. Root and independent reviews passed; no new
+native check was required because allocation, shader and publication paths are
+unchanged from S1i. There is no progress guarantee without fitting capacity, and
+structural/migration/lookup work remains outside per-frame caps.
+
+Commands passed from `gekko/`:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^(TestS1j|TestS1i|TestVoxelUpload)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^(TestS1j|TestS1i|TestVoxelUpload)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Consumer builds passed from each module under `/Users/ddevidch/code/go/gekko3d`:
+
+```sh
+# gekko-editor/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/editor/ ./...
+# actiongame/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/actiongame/ ./...
+# spacegame_go/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/spacegame/ ./...
+# spacesim/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/spacesim/ ./...
+# examples/testing-vox/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/testing-vox/ ./...
+```
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

@@ -383,44 +383,23 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmission(scene *core.Scene, resources
 		candidates[i].required = requiredMaps[candidates[i].target.mapRef]
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		a, b := candidates[i], candidates[j]
-		if a.required != b.required {
-			return a.required
-		}
-		if a.target.object.VoxelUploadPriority != b.target.object.VoxelUploadPriority {
-			return a.target.object.VoxelUploadPriority < b.target.object.VoxelUploadPriority
-		}
-		order := func(t voxelServiceTarget) uint64 {
-			if t.object.VoxelUploadOrder != 0 {
-				return t.object.VoxelUploadOrder
-			}
-			return uint64(t.mapRef.ID)
-		}
-		if order(a.target) != order(b.target) {
-			return order(a.target) < order(b.target)
-		}
-		if a.target.mapRef.ID != b.target.mapRef.ID {
-			return a.target.mapRef.ID < b.target.mapRef.ID
-		}
-		if (a.target.pendingGeneration == 0) != (b.target.pendingGeneration == 0) {
-			return a.target.pendingGeneration == 0
-		}
-		// Required material users precede optional users of shared geometry.
-		if a.target.object.VoxelGPUAdmissionOptional != b.target.object.VoxelGPUAdmissionOptional {
-			return !a.target.object.VoxelGPUAdmissionOptional
-		}
-		return a.index < b.index
+		return voxelAdmissionRawLess(candidates[i], candidates[j])
 	})
 	// Geometry priority and its first required material owner are independent.
 	// An optional alias cannot advance fresh required geometry past a refused
 	// first required material allocation.
 	firstRequiredMaterial := make(map[*volume.XBrickMap]*core.VoxelObject)
+	representatives := make(map[*volume.XBrickMap]voxelAdmissionCandidate)
 	for _, candidate := range candidates {
 		target := candidate.target
-		if target.pendingGeneration == 0 && (!target.object.VoxelGPUAdmissionOptional || m.MaterialAllocations[target.object] != nil) && firstRequiredMaterial[target.mapRef] == nil {
+		if _, exists := representatives[target.mapRef]; !exists {
+			representatives[target.mapRef] = candidate
+		}
+		if target.pendingGeneration == 0 && voxelAdmissionMaterialRequired(m, target.object) && firstRequiredMaterial[target.mapRef] == nil {
 			firstRequiredMaterial[target.mapRef] = target.object
 		}
 	}
+	queue, ages := m.voxelAdmissionSchedule(candidates)
 
 	initial := voxelAdmissionPlan{sectorTail: uint64(m.SectorAlloc.Tail), brickTail: uint64(m.BrickAlloc.Tail), materialTail: uint64(m.MaterialAlloc.Tail), sectorFree: uint64(len(m.SectorAlloc.Free)), brickFree: uint64(len(m.BrickAlloc.Free)), materialFree: uint64(len(m.MaterialAlloc.Free)), sectors: make(map[*volume.Sector]bool), maps: make(map[*volume.XBrickMap]bool), objects: make(map[*core.VoxelObject]bool), lookup: make(map[*volume.XBrickMap]bool), removedSectors: make(map[*volume.Sector]bool)}
 
@@ -455,46 +434,58 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmission(scene *core.Scene, resources
 		next.AtlasBytes = atlasBytes
 		clear(denied)
 		clear(hard)
-		for _, candidate := range candidates {
-			target := candidate.target
-			xbm, obj := target.mapRef, target.object
-			if !plan.maps[xbm] {
-				trial := plan.clone()
-				trial.addMap(m, xbm)
-				var jointObject *core.VoxelObject
-				if m.Allocations[xbm] == nil {
-					jointObject = firstRequiredMaterial[xbm]
-				}
-				if jointObject == nil && !candidate.required && target.pendingGeneration == 0 {
-					jointObject = obj
-				}
-				if jointObject != nil {
-					trial.addMaterial(m, jointObject)
-				}
-				desired, legal := trial.resources(m, current)
-				desired.AtlasBytes = atlasBytes
-				if !legal {
-					trial.rollback(plan)
-					denied[xbm] = true
-					hard[xbm] = true
-					continue
-				}
-				growth := voxelResourcesGrow(next, desired)
-				if (!allowGrowth && voxelResourcesGrow(current, desired)) || (!candidate.required && growth && m.voxelGPUAdmissionBudget.MaxBytes != 0 && voxelResourcePeakBytes(current, desired) > m.voxelGPUAdmissionBudget.MaxBytes) {
-					trial.rollback(plan)
-					denied[xbm] = true
-					continue
-				}
-				plan, next = trial, desired
-				delete(denied, xbm)
-				delete(hard, xbm)
+		admitMap := func(xbm *volume.XBrickMap) bool {
+			if plan.maps[xbm] {
+				return true
 			}
-			if target.pendingGeneration == 0 && !plan.objects[obj] {
+			// Preserve the raw representative's joint owner even when another
+			// live alias supplied the best aged scheduling key for this map.
+			candidate := representatives[xbm]
+			target := candidate.target
+			obj := target.object
+			trial := plan.clone()
+			trial.addMap(m, xbm)
+			var jointObject *core.VoxelObject
+			if m.Allocations[xbm] == nil {
+				jointObject = firstRequiredMaterial[xbm]
+			}
+			if jointObject == nil && !candidate.required && target.pendingGeneration == 0 {
+				jointObject = obj
+			}
+			if jointObject != nil {
+				trial.addMaterial(m, jointObject)
+			}
+			desired, legal := trial.resources(m, current)
+			desired.AtlasBytes = atlasBytes
+			if !legal {
+				trial.rollback(plan)
+				denied[xbm] = true
+				hard[xbm] = true
+				return false
+			}
+			growth := voxelResourcesGrow(next, desired)
+			if (!allowGrowth && voxelResourcesGrow(current, desired)) || (!candidate.required && growth && m.voxelGPUAdmissionBudget.MaxBytes != 0 && voxelResourcePeakBytes(current, desired) > m.voxelGPUAdmissionBudget.MaxBytes) {
+				trial.rollback(plan)
+				denied[xbm] = true
+				return false
+			}
+			plan, next = trial, desired
+			delete(denied, xbm)
+			delete(hard, xbm)
+			return true
+		}
+		for _, work := range queue {
+			target := work.candidate.target
+			xbm, obj := target.mapRef, target.object
+			if !admitMap(xbm) {
+				continue
+			}
+			if work.material && !plan.objects[obj] {
 				trial := plan.clone()
 				trial.addMaterial(m, obj)
 				desired, legal := trial.resources(m, current)
 				desired.AtlasBytes = atlasBytes
-				materialRequired := !obj.VoxelGPUAdmissionOptional || m.MaterialAllocations[obj] != nil
+				materialRequired := voxelAdmissionMaterialRequired(m, obj)
 				if !legal {
 					trial.rollback(plan)
 					denied[xbm], hard[xbm] = true, true
@@ -530,6 +521,7 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmission(scene *core.Scene, resources
 			recreated = true
 		}
 	}
+	m.finishVoxelAdmissionAges(ages, plan)
 	m.voxelAdmissionMaps, m.voxelAdmissionObjects = plan.maps, plan.objects
 	m.voxelLookupMaps = plan.lookup
 	for xbm, alloc := range m.Allocations {

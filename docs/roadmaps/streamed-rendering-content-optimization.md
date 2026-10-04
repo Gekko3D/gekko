@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1i, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1j, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -357,6 +357,16 @@ fixed atlas pages; permit slot reuse under pressure. Engine tests, focused race
 checks, five consumer builds and the user-run release visual check passed.
 Allocation/migration and lookup work still have no per-frame cap.
 [Decision and verification](streamed-rendering-s1b.md#s1i-physical-voxel-resource-growth-admission).
+
+#### S1j: Deferred optional admission aging
+
+Completed 2026-10-04: apply the established upload aging policy to optional
+physical admission. Keep required/pinned geometry and required materials first;
+age new optional geometry and per-object materials independently. Preserve
+smaller-fit bypass, current request identity, hard limits and fallback readiness.
+Focused/race, engine tests and five consumer builds passed. Native paths are
+unchanged from the user-verified S1i batch.
+[Verification](streamed-rendering-s1b.md#s1j-deferred-optional-admission-aging).
 
 ### S2. Bound caches and worker throughput by bytes
 
@@ -747,7 +757,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
-| S1i | This commit | Optional physical GPU growth admission, pinned pressure and hard-limit safety | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
+| S1i | `3557e78` | Optional physical GPU growth admission, pinned pressure and hard-limit safety | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
+| S1j | This commit | Age optional geometry/material demand without changing required ownership | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
 | S2a | `896e1eb` | Prepared geometry byte budgets and build suppression | [Design](streamed-rendering-s2a.md) |
 | S2b | `1504a7c` | Decoded leases and pending-result admission | [Design](streamed-rendering-s2b.md) |
 | S3a | `d93f3ac` | Incremental v2 observer selection | [Design](streamed-rendering-s3a.md) |

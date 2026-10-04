@@ -480,6 +480,8 @@ type GpuBufferManager struct {
 	VoxelUploadBricksPerFrame      uint32
 	voxelUploadFrame               uint64
 	voxelUploadAges                map[voxelUploadIdentity]uint64
+	voxelAdmissionFrame            uint64
+	voxelAdmissionAges             map[voxelAdmissionIdentity]uint64
 	voxelGPUAdmissionBudget        VoxelGPUAdmissionBudget
 	voxelGPUAdmissionStats         VoxelGPUAdmissionStats
 	voxelAdmissionMaps             map[*volume.XBrickMap]bool
