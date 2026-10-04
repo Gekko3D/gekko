@@ -13,14 +13,20 @@ type verifiedCompiledAssetShape struct {
 	contentID    string
 }
 
-// The verification session owns metadata and animations, while shape definitions
+type verifiedCompiledAssetLOD struct {
+	definition *content.CompiledAssetLODDef
+	contentID  string
+}
+
+// The verification session owns metadata and animations, while shape and LOD definitions
 // are borrowed under its private child scope. Callers close it after building or
-// publishing independently owned geometry; no borrowed shape escapes the session.
+// publishing independently owned geometry; no borrowed frame escapes the session.
 type compiledAssetVerification struct {
 	scope      *RuntimeContentLoadScope
 	def        *content.AssetDef
 	animations *content.ResolvedAssetAnimations
 	shapes     map[string]verifiedCompiledAssetShape
+	lods       map[string]verifiedCompiledAssetLOD
 }
 
 func (session *compiledAssetVerification) close() {
@@ -125,11 +131,63 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 		}
 		verified[part.ID] = verifiedCompiledAssetShape{definition: shape, baseIdentity: identity, contentID: ref.ContentID}
 	}
+	var lods map[string]verifiedCompiledAssetLOD
+	if len(header.LODs) > 0 {
+		lods = make(map[string]verifiedCompiledAssetLOD, len(header.LODs))
+		// Authenticated logical identities permit reusing the exact OR proof only
+		// within this immutable session. Every physical reference still loads and
+		// verifies its own identity, sizes and declared source/reduction binding.
+		type proofPair struct {
+			sourceContentID string
+			lodContentID    string
+		}
+		proofs := make(map[proofPair]struct{}, len(header.LODs))
+		for _, ref := range header.LODs {
+			if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+				return nil, err
+			}
+			lodPath, err := content.ResolveCompiledAssetReference(ref.Path, path)
+			if err != nil {
+				return nil, err
+			}
+			if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+				return nil, err
+			}
+			lod, info, err := verification.LoadCompiledAssetLOD(lodPath)
+			if err != nil {
+				return nil, err
+			}
+			if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+				return nil, err
+			}
+			if info.ContentID != ref.ContentID || info.EncodedBytes != ref.EncodedBytes || info.DecodedBytes != ref.DecodedBytes || lod.SourceContentID != ref.SourceContentID || lod.Factor != ref.Factor || lod.ReductionVersion != ref.ReductionVersion {
+				return nil, fmt.Errorf("compiled LOD reference identity, size or source/reduction mismatch")
+			}
+			source, exists := verified[ref.PartID]
+			if !exists || source.contentID != lod.SourceContentID {
+				return nil, fmt.Errorf("compiled LOD reference does not identify its verified source")
+			}
+			if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+				return nil, err
+			}
+			pair := proofPair{source.contentID, info.ContentID}
+			if _, exists := proofs[pair]; !exists {
+				if err := validateCompiledAssetLODSource(lod, source); err != nil {
+					return nil, err
+				}
+				proofs[pair] = struct{}{}
+			}
+			if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+				return nil, err
+			}
+			lods[ref.PartID] = verifiedCompiledAssetLOD{definition: lod, contentID: info.ContentID}
+		}
+	}
 	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 		return nil, err
 	}
 	success = true
-	return &compiledAssetVerification{scope: scope, def: &definition, animations: animations, shapes: verified}, nil
+	return &compiledAssetVerification{scope: scope, def: &definition, animations: animations, shapes: verified, lods: lods}, nil
 }
 
 func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *RuntimeContentLoader) (*PreparedAuthoredAsset, error) {

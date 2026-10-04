@@ -171,7 +171,15 @@ header with missing or corrupt dependencies fails.
 
 Preparation verifies every referenced shape's frame identity/sizes, effective
 lattice and original base identity, and resolves animations before publishing
-geometry. Initial compiled preparation uses default E2 logical base limits.
+geometry. Every declared LOD reference also loads and verifies its frame identity,
+sizes and source/reduction binding, followed by exact consistency against the
+authenticated source. This includes unused parts and metadata-only preparation.
+Session-local authenticated identity pairs reuse only the source coverage proof;
+every physical reference still loads and checks independently. Cancellation and
+origin-scope checks surround derivative loads and proofs, including memo hits.
+Failure releases only provisional child pins and publishes no geometry or palettes.
+Selected-header load failures alone retain the missing-input classification.
+Consumers continue to construct and publish authoritative level-0 geometry only. Initial compiled preparation uses default E2 logical base limits.
 Larger custom-profile frames remain supported by typed IO but need separate
 runtime admission work; legacy authored preparation keeps its existing limits.
 Temporary independent loader scopes protect previously accepted caller pins and
@@ -276,7 +284,10 @@ witness among eight fine cells for every coarse cell. Signed coordinates use
 
 Validation borrows immutable inputs, retains no geometry and builds only temporary
 brick indexes. It performs no IO, rehash, reduction rebuild or runtime publication.
-This is an unwired prerequisite: derivative loading and adoption remain pending.
+Common compiled preparation invokes this proof before any runtime publication.
+Derivative frames remain borrowed within the existing independent child scope;
+no cached definition escapes into prepared assets or CPU packets. Derivative
+geometry adoption and display selection remain pending.
 It qualifies the original decoded source only; exposed or edited warm geometry,
 current material opacity and GPU readiness require their own runtime checks.
 

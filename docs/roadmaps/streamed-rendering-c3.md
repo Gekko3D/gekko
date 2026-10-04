@@ -9,7 +9,7 @@ C3f4a private palette adoption, C3f4b worker palette integration and C3f4c
 publication accounting complete. C3h0 diagnostics and C3h1 conservative geometry
 construction, C3h2 source-bound derivative frames, C3h3 versioned headers and
 C3h4 compiler opt-in, C3h5 exact source validation and C3h6 scoped derivative
-reads complete. Opt-in,
+reads and C3h7 complete-closure source verification complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -378,3 +378,12 @@ with shared read-only definitions, coarse-only graph charges and independent typ
 keys. [Contract](../assets/runtime-assets.md#decoded-content-lifetime).
 Reads do not follow references or publish geometry. Preparation source checks,
 current source/material qualification and renderer handoff remain pending.
+
+## Complete derivative verification (C3h7)
+
+Common compiled preparation now verifies every declared derivative and its exact
+authenticated source before any publication, including unused parts. Physical
+aliases retain independent IO and size checks. Existing child scopes and
+cancellation boundaries protect caller pins. [Contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation).
+Consumers still publish level-0 geometry only. Current mutable source/material
+qualification and renderer interaction/readiness ownership remain pending.

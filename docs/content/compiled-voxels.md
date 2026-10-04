@@ -474,9 +474,11 @@ closure preflight, immutable publication and header-last owner. Parts share file
 by exact encoded bytes, while opacity eligibility remains per part. The new
 `CompiledAssetCompileDetailedResult` embeds the unchanged legacy result and adds
 unique `LODsWritten`/`LODsReused` counts; failures return a zero detailed result.
-Default CLI output is unchanged; opt-in appends a LOD count line. Current runtime
-follows authoritative shapes only. Derivative loading, current source/material
-qualification, display/readiness ownership and GPU/visual verification remain pending.
+Default CLI output is unchanged; opt-in appends a LOD count line. Runtime
+preparation verifies all declared derivatives against their authoritative sources
+before publication, while consumers still publish level-0 geometry only. Current
+source/material qualification, display/readiness ownership and GPU/visual
+verification remain pending.
 
 All validation and encoding precede publication. Source/output aliases and
 conflicting immutable files fail explicitly. Immutable files use verified reuse
