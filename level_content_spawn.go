@@ -1031,16 +1031,26 @@ func spawnAuthoredLevelNPC(cmd *Commands, assets *AssetServer, loader *RuntimeCo
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(npc.AssetPath, levelPath)
-		asset, err := loader.LoadAsset(assetPath)
-		if err != nil {
-			return 0, err
-		}
 		assetTransform := TransformComponent{
 			Position: mgl32.Vec3{0, 0, 0},
 			Rotation: mgl32.QuatIdent(),
 			Scale:    mgl32.Vec3{1, 1, 1},
 		}
-		spawnResult, err := SpawnAuthoredAssetWithOptions(cmd, assets, asset, assetTransform, AuthoredAssetSpawnOptions{DocumentPath: assetPath})
+		var spawnResult AuthoredAssetSpawnResult
+		var err error
+		if filepath.Ext(assetPath) == ".gkassetc" {
+			var prepared *PreparedAuthoredAsset
+			prepared, err = LoadAndPrepareAuthoredAsset(assetPath, assets, loader)
+			if err == nil {
+				spawnResult, err = SpawnPreparedAuthoredAsset(cmd, assets, prepared, assetTransform)
+			}
+		} else {
+			var asset *content.AssetDef
+			asset, err = loader.LoadAsset(assetPath)
+			if err == nil {
+				spawnResult, err = SpawnAuthoredAssetWithOptions(cmd, assets, asset, assetTransform, AuthoredAssetSpawnOptions{DocumentPath: assetPath})
+			}
+		}
 		if err != nil {
 			return 0, err
 		}

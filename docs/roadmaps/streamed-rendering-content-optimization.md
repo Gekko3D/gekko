@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f3 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f3 and C3d4b complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -820,7 +820,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3e | `eaf29c2` | Default-profile compiler CLI with explicit shipping output and unchanged publication | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
 | C3f1 | `cf0384c` | Private single-use compiled geometry adoption with atomic shared key and base provenance | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3f2 | `b64ccbb` | Owned compiled CPU packets with complete verification and transient decoded pins | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
-| C3f3 | This commit | Streamed compiled worker packets with bounded pending ownership and main-thread publication | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3f3 | `a69e427` | Streamed compiled worker packets with bounded pending ownership and main-thread publication | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3d4b | This commit | Source-free compiled NPC loading with existing multipart hierarchy and animation bindings | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2759,6 +2760,25 @@ collision, managed edit reupload and sibling isolation pass; pixel comparison
 remains unverified. [CPU-stage diagnostic](streamed-rendering-c3.md#worker-packet-cpu-diagnostic)
 shows reduced publication work, mixed combined time and increased allocations;
 no FPS claim. Existing persistence tests and unrelated changes are preserved.
+
+
+### C3d4b: Compiled NPC level adapter
+
+Direct level and streamed startup NPCs explicitly select compiled assets through
+existing preparation and multipart spawning. Parent hierarchy, materials,
+animations, health and creation-before-load-error behavior remain unchanged.
+Contract: [compiled preparation](../assets/runtime-assets.md#compiled-ordinary-asset-preparation).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3d4b|C3d3|NPCAnimation|AuthoredAssetAnimation|TransformHierarchy)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and five consumer commands above passed. Source-free JSON parity
+and caller-pin isolation pass. No new renderer behavior or GPU check; pixel
+comparison remains unverified. Existing tests and unrelated changes are preserved.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

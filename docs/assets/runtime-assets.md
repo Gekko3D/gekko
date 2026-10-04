@@ -159,8 +159,11 @@ Ordinary direct and expanded level placements use the same path, including
 streamed commits and their existing ownership callbacks, shadows and rollback.
 Streamed workers prepare compiled ordinary CPU packets per resolved asset path.
 Main-thread placement commits publish their geometry and palettes. Legacy JSON
-ordinary preparation retains its existing commit path. Moving brushes,
-chargers, breakables, pickups and NPC level consumers still require authoring JSON.
+ordinary preparation retains its existing commit path. Direct level and streamed
+startup NPCs use compiled preparation with the existing multipart asset root under
+the NPC entity. Health, animation bindings and creation-before-load-error behavior
+are unchanged. Moving brushes, chargers, breakables and pickups still require
+authoring JSON.
 
 Preparation verifies every referenced shape's frame identity/sizes, effective
 lattice and original base identity, and resolves animations before publishing
