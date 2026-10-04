@@ -1037,7 +1037,7 @@ func spawnAuthoredLevelNPC(cmd *Commands, assets *AssetServer, loader *RuntimeCo
 		}
 		var spawnResult AuthoredAssetSpawnResult
 		var err error
-		if filepath.Ext(assetPath) == ".gkassetc" {
+		if isCompiledAssetPath(assetPath) {
 			var prepared *PreparedAuthoredAsset
 			prepared, err = LoadAndPrepareAuthoredAsset(assetPath, assets, loader)
 			if err == nil {
@@ -1150,7 +1150,7 @@ func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, l
 		if err == nil {
 			assetDef = prepared.def
 		}
-	} else if filepath.Ext(resolvedAssetPath) == ".gkassetc" {
+	} else if isCompiledAssetPath(resolvedAssetPath) {
 		prepared, err = LoadAndPrepareAuthoredAsset(resolvedAssetPath, assets, loader)
 		if err == nil {
 			assetDef = prepared.def

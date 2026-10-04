@@ -2,7 +2,6 @@ package gekko
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/gekko3d/gekko/content"
 )
@@ -27,7 +26,7 @@ func loadAuthoredLevelVoxelPart(assets *AssetServer, loader *RuntimeContentLoade
 	if loader == nil {
 		loader = NewRuntimeContentLoader()
 	}
-	if filepath.Ext(path) != ".gkassetc" {
+	if !isCompiledAssetPath(path) {
 		asset, err := loader.LoadAsset(path)
 		if err != nil {
 			return preparedAuthoredPart{}, 0, &authoredAssetInputLoadError{err}
@@ -54,7 +53,9 @@ func loadAuthoredLevelVoxelPart(assets *AssetServer, loader *RuntimeContentLoade
 	if part.Source.Kind == content.AssetSourceKindGroup {
 		return preparedAuthoredPart{}, voxelResolution, nil
 	}
-	if _, declared := session.lods[part.ID]; declared {
+	_, declaredLOD := session.lods[part.ID]
+	_, declaredModel := session.models[part.ID]
+	if declaredLOD || declaredModel {
 		packet, err := prepareCompiledAssetPacketFromVerification(path, session, loader, nil, []content.AssetPartDef{part})
 		if err != nil {
 			return preparedAuthoredPart{}, 0, err

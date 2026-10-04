@@ -16,8 +16,8 @@ packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
 instance intent, C3h13b instance qualification, C3h13c runtime activation and
 C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palette
 construction, C3g4 owned source-model preparation, C3g5 model headers, C3g6 scoped
-reads, C3g7 whole model closure verification and C3g8 owned model packets/adoption
-complete. Opt-in,
+reads, C3g7 whole model closure verification, C3g8 owned model packets/adoption and C3g9
+public consumer integration complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -596,3 +596,13 @@ records the contract. Redundant public hierarchy validation is skipped only for
 already validated model headers, removing authoring source stats. Focused/race,
 full engine and five consumer builds passed. C3g7 is `55d2303`; public consumers
 and shipping emission remain next. No loading speed claim yet.
+
+## Model consumer integration (C3g9)
+
+Direct loading, level/NPC routes, first-part consumers and streamed preparation/
+commit now select model headers through the shared strict classifier. Models keep
+center pivots, full geometry, declared bounds and baked palettes; mixed inline
+custom pivots/LOD intent remain unchanged. [Runtime consumers](../assets/runtime-assets.md#compiled-ordinary-asset-preparation)
+own the contract. Focused/race, full engine and five consumer builds passed,
+including packet-only commits after file removal and Stop cleanup. C3g8 is
+`2a6fe77`; shipping compilation and measured source-loading gains remain next.

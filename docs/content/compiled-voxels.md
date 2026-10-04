@@ -467,8 +467,9 @@ and palette binding. Verification scopes borrow frames and own metadata/palettes
 cancellation or a closed origin releases only their child leases. Original model
 source files are never reopened. The E2 canonical boundary still accepts only
 inline parts and proves only the selected shape, including within mixed headers.
-Compiler emission and public runtime adoption remain separate integration work;
-legacy readers reject this explicit new envelope.
+Public runtime consumers use verified owned packets and preserve source pivots,
+declared dimensions and complete static palettes. Compiler emission remains a
+separate integration step; legacy readers reject this explicit new envelope.
 
 ## Compiled ordinary asset headers
 

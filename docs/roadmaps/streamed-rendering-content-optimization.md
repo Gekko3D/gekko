@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g8 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g9 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -3416,6 +3416,19 @@ the same command with `-race`, full engine `go test ./...` and five consumer com
 in C3h9 passed. Owned nested storage, allzero/mixedzero bounds, warm metadata edits,
 consumed rebuild, concurrency, conflicts and cancellation are covered. No GPU
 selection change or loading speed claim.
+
+### C3g9: Explicit model consumers
+
+This commit routes direct, level/NPC, first-part and streamed consumers through
+verified model packets. Model center pivots, inline custom pivots/LOD intent,
+selected-part publication and missing-input tolerance remain preserved. C3g8 is
+`2a6fe77`; shipping compiler emission and loading measurements remain next.
+
+Verification: `env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3g9|C3d3|C3d4|C3f3|C3h13a)' -count=1`,
+the same command with `-race`, full engine `go test ./...` and five consumer commands
+in C3h9 passed. Mixed/group/nil routes, whole-closure errors, source-free worker
+commit and Stop/late-release lifetime are covered. Existing renderer path is
+reused; no additional windowed check or FPS claim.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

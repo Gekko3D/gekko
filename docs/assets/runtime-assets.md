@@ -166,7 +166,8 @@ new per-item persistence identity or disk format.
 ### Compiled ordinary asset preparation
 
 `LoadAndPrepareAuthoredAsset` and `LoadAndSpawnAuthoredAsset` explicitly select
-compiled input for an exact lowercase `.gkassetc` suffix. Other paths retain
+compiled input for exact lowercase `.gkassetc` (inline header) or `.gkmodelassetc`
+(model header) suffixes. Other paths retain
 legacy JSON behavior, and corrupt selected compiled input never falls back.
 Compiled preparation returns the existing `PreparedAuthoredAsset`; prepared
 spawning keeps the existing hierarchy, material, animation and ECS contracts.
@@ -278,8 +279,13 @@ version and does not qualify inline E2 edits. Model LOD remains unsupported.
 Static baked palettes own material maps and surface tag slices, with an empty
 runtime SourcePath; original authoring paths are provenance only. Existing palette
 keys and single-use publication copies retain their ownership rules. Pending
-charges include model dimensions and retain each source/handle once. Public
-consumer selection of model headers is a separate integration step.
+charges include model dimensions and retain each source/handle once. Direct
+preparation/spawning, level placements/NPCs, first-part consumers and streamed
+worker commits select model headers explicitly. First-part consumers authenticate
+the whole closure before publishing only the selected part; group-first and nil
+AssetServer behavior remains unchanged. Model source kinds retain center pivots;
+inline parts retain custom pivots and declared inline LOD intent. Missing input
+headers keep existing pickup tolerance; missing dependencies remain errors.
 
 Cancellation is cooperative before header/shape loads and animation resolution,
 between frames, whole-shape builds and palette preparation, and at completion; it does not interrupt

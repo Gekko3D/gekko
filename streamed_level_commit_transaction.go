@@ -3,7 +3,6 @@ package gekko
 import (
 	"container/heap"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -231,7 +230,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 				loader = prepared.loadScope.Loader()
 			}
 			var packet *compiledAssetPacket
-			if len(prepared.compiledAssets) != 0 && filepath.Ext(strings.TrimSpace(placement.AssetPath)) == ".gkassetc" {
+			if len(prepared.compiledAssets) != 0 && isCompiledAssetPath(strings.TrimSpace(placement.AssetPath)) {
 				packetKey, packetErr := compiledAssetPacketKey(placement.AssetPath, state.LevelPath)
 				if packetErr != nil {
 					return entityCount, placementUnit, false, packetErr

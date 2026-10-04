@@ -2261,7 +2261,7 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 	result.PlacementItems = append([]streamedPlacementInstance(nil), job.Placements...)
 	for _, placement := range job.Placements {
 		resolved := content.ResolveDocumentPath(placement.AssetPath, job.LevelPath)
-		if filepath.Ext(resolved) != ".gkassetc" {
+		if !isCompiledAssetPath(resolved) {
 			continue
 		}
 		key, err := compiledAssetPacketKey(placement.AssetPath, job.LevelPath)

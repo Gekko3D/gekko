@@ -3,7 +3,6 @@ package gekko
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 
 	"github.com/gekko3d/gekko/content"
@@ -293,7 +292,7 @@ func spawnAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *co
 }
 
 func LoadAndSpawnAuthoredAsset(path string, cmd *Commands, assets *AssetServer, rootTransform TransformComponent) (AuthoredAssetSpawnResult, error) {
-	if filepath.Ext(path) == ".gkassetc" {
+	if isCompiledAssetPath(path) {
 		prepared, err := LoadAndPrepareAuthoredAsset(path, assets, nil)
 		if err != nil {
 			return AuthoredAssetSpawnResult{}, err
@@ -339,7 +338,7 @@ func PrepareAuthoredAsset(assets *AssetServer, def *content.AssetDef, documentPa
 }
 
 func LoadAndPrepareAuthoredAsset(path string, assets *AssetServer, loader *RuntimeContentLoader) (*PreparedAuthoredAsset, error) {
-	if filepath.Ext(path) == ".gkassetc" {
+	if isCompiledAssetPath(path) {
 		return prepareCompiledAuthoredAsset(path, assets, loader)
 	}
 	if loader == nil {
