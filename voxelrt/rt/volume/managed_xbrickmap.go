@@ -22,9 +22,10 @@ type ManagedXBrickMap struct {
 	// Public SectorRevisions continue to describe dense voxel writes only.
 	publicationRevisions map[[3]int]uint64
 	// Immutable coordinate-only membership, shared by captures and sealed forks.
-	topology          *managedTopologyNode
-	geometry          *managedIndexNode[*managedSectorRecord]
-	geometryQualified bool
+	topology              *managedTopologyNode
+	geometry              *managedIndexNode[*managedSectorRecord]
+	geometryRetainedBytes uint64
+	geometryQualified     bool
 	// Only these brick pointers are exclusively owned. Fork clears this set
 	// because every current brick becomes shared, including previous edits.
 	exclusive map[*Brick]struct{}
@@ -399,17 +400,18 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 		return NewManagedXBrickMap(m.current)
 	}
 	child := &ManagedXBrickMap{
-		current:              shareManagedMap(m.current),
-		base:                 m.base,
-		changes:              maps.Clone(m.changes),
-		changedBrickCounts:   maps.Clone(m.changedBrickCounts),
-		publicationRevisions: maps.Clone(m.publicationRevisions),
-		topology:             m.topology,
-		geometry:             m.geometry,
-		geometryQualified:    m.geometryQualified,
-		brickVoxelCounts:     maps.Clone(m.brickVoxelCounts),
-		staleSolid:           maps.Clone(m.staleSolid),
-		currentBricks:        m.currentBricks, currentVoxels: m.currentVoxels,
+		current:               shareManagedMap(m.current),
+		base:                  m.base,
+		changes:               maps.Clone(m.changes),
+		changedBrickCounts:    maps.Clone(m.changedBrickCounts),
+		publicationRevisions:  maps.Clone(m.publicationRevisions),
+		topology:              m.topology,
+		geometry:              m.geometry,
+		geometryRetainedBytes: m.geometryRetainedBytes,
+		geometryQualified:     m.geometryQualified,
+		brickVoxelCounts:      maps.Clone(m.brickVoxelCounts),
+		staleSolid:            maps.Clone(m.staleSolid),
+		currentBricks:         m.currentBricks, currentVoxels: m.currentVoxels,
 	}
 	m.exclusive = nil
 	return child
@@ -482,8 +484,7 @@ func (m *ManagedXBrickMap) ExposeMutable() *XBrickMap {
 		m.currentBricks, m.currentVoxels = 0, 0
 		m.publicationRevisions = nil
 		m.topology = nil
-		m.geometry = nil
-		m.geometryQualified = false
+		m.disableGeometryRecords()
 		m.exclusive = nil
 	}
 	return m.current

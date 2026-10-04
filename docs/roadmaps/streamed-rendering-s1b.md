@@ -733,7 +733,7 @@ publication remain separate work.
 
 ### S1l3: Allocation snapshot ownership
 
-Completed 2026-10-04 in this batch. Manager-owned reference counts replace
+Completed 2026-10-04 in `19f4ca6`. Manager-owned reference counts replace
 repeated resident-snapshot reclamation scans while preserving shared slots,
 retargeted successful writes and exact legacy fallback. The lasting contract is
 in [allocation snapshot ownership](../renderer/runtime.md#allocation-snapshot-ownership).
@@ -753,6 +753,64 @@ Setup and restoration are excluded; this is reclamation evidence, not a frame-ti
 claim. Engine and consumer verification is recorded in the main roadmap. Native
 behavior is unchanged; whole-map structural preparation, admission scans and
 global lookup publication remain atomic.
+
+### S1l4: Captured geometry charge
+
+Completed 2026-10-05 in this batch. Geometry captures now carry constant-time
+retained-byte accounting, including auxiliary backing capacity. The lasting
+domain and fallback contract are in
+[managed geometry views](../renderer/editing.md#managed-geometry-views).
+
+From `gekko/`, focused, volume and ownership race checks passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^TestS1l' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -run '^(TestS1l|TestP1c|TestP1e)' -count=1
+```
+
+The transient warmed paint allocation probe remains zero at 2 and 1,025 sectors.
+Engine and consumer verification is recorded in the main roadmap. No native
+behavior changed. Producer leases, staged-copy accounting and coherent structural
+publication remain separate work; this API establishes no total-memory ceiling.
+
+### Next alignment: Managed staged admission policy
+
+Proposed first runtime consumer: qualified ordinary managed geometry through its
+existing asset/renderer binding. Streamed terrain, retained, planet and LOD owners
+keep their existing qualification rules; private worker integration follows after
+this consumer establishes the generation contract. Raw/exposed inputs retain
+synchronous compatibility. This is a permanent ownership step.
+
+Use an opt-in budget, disabled by default, with initial helper limits of 16 sector
+entries/update, 128 MiB captured-input charge and 128 MiB copied-stage charge.
+These are unmeasured policy defaults. Enumeration, content reconciliation and
+retirement share the entry allowance. Retain one accepted finite input and at most
+one coalesced successor; preflight replacement against the transient ownership
+peak and preserve existing coverage on refusal.
+
+Bound each accepted generation's coalesced content journal to 1,024 sector
+coordinates, including normal halos. On overflow, schedule a bounded sweep of
+accepted coordinates without restarting its cursor. Continued overflow requests
+another sweep rather than growing the journal or dropping content. Current content
+and materials continue; publication waits until accepted-topology content is
+coherent. Edits that outrun service can delay readiness, while completed structural
+enumeration remains complete. Added topology belongs to the successor.
+
+Current, staging and retiring allocations need independent snapshot-edge ownership;
+partial staging stays outside lookup-visible allocations. Publish content, lookup
+metadata and the selected derivative coherently, then retire old edges incrementally.
+Global lookup rebuilding remains atomic in this first batch. CPU authority snapshots,
+collision copies and registration construction remain separate costs. Exact copy,
+journal and slot accounting must be reviewed against this policy before coding.
+
+Files/systems: managed publication and bridge bindings, private core input, GPU
+admission/structure/ownership/service/readiness and final lookup publication. Cover
+bounded continuation, equal-count replacement, coalescing/refusal, live edits and
+halos, removal, cancellation, exposure/promotion and shared retirement with separate
+test/implementation agents and independent reviews. Run focused and race checks,
+engine tests and consumer builds; user release verification must confirm current
+coverage, final publication, resize and retirement. Policy alignment is pending.
 
 ## Verification and execution record
 

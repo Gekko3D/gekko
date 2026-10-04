@@ -202,6 +202,20 @@ and copies at most the declared auxiliary bytes per brick. Owner operations
 require exclusive access; capture during an ordered producer is unsupported.
 Material finalization and applied panic prefixes complete before new captures.
 
+`RetainedBytes()` returns a frozen conservative charge in constant time without
+allocation. It includes reachable geometry-index nodes and private sector records,
+the complete dense `Brick` allocation per packed reference and auxiliary backing
+capacity. Aliases may be charged repeatedly. Empty views charge zero; allocated
+empty sectors still charge their records. Tracked producers update current charge
+through bounded sector inspection; historical charges stay unchanged.
+
+The charge excludes the view value, owner/current/base maps, coordinate-only
+topology, map metadata, allocator overhead and GPU resources. Checked accounting
+overflow or underflow permanently disables new geometry captures and restores
+legacy copying; earlier views remain valid. This is input accounting, not a heap,
+process-memory or renderer-admission ceiling. Defensive copies and later generation
+leases require their own declared accounting.
+
 Qualified `Snapshot` and `CopyChangedSectors` copy the same private records in a
 linear traversal under exclusive access. Synchronous defensive copying does not
 establish an extra capture barrier. Their identities, bounds, revision tombstones,
