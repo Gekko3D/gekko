@@ -423,6 +423,45 @@ default profile. Existing shape/header formats and default compilation are uncha
 Versioned header references and compiler opt-in are defined below. Runtime selection
 remains separate integration work.
 
+## Compiled ordinary model asset headers
+
+`CompiledAssetModelHeaderDef` is a separate C1 envelope with kind
+`compiled_asset_model_header`, schema 1 and compiler version
+`gekko-compiled-model-asset-v1`. Existing header definitions, APIs and bytes remain
+unchanged. Mixed metadata retains original model source kinds, inline shape
+references and existing inline-only LOD references. Each model part has one
+explicit frame reference binding path, model/base identities, encoded/decoded
+sizes and a baked palette identity. Source paths are offline provenance; decoding
+never opens them or follows frame/dependency references.
+
+Canonical metadata sorts copied shape/LOD/model references by part ID and palette
+tables by palette ID, preserving ordered asset metadata. Tables are limited to
+4,096 parts, model references, palettes and material rows per palette; generic
+codec metadata/decoded/encoded limits remain authoritative. Original descriptors,
+material references, hierarchy and finite positive model scale/resolution/used
+parameters validate before a copied group view reuses legacy inline closure rules.
+Public `ValidateAsset` retains source-file checks; only private compiled metadata
+validation skips those checks. Collapse and model LOD references are unsupported.
+
+Model paths cannot overlap inline shape or LOD paths. Repeated paths require
+identical physical metadata; repeated logical model identities require consistent
+base identity/decoded size but may use different encoded profiles and part palettes.
+Every baked palette is uniquely identified and used. Palette identity is SHA-256
+of `compiled_asset_model_palette-v1` plus newline plus canonical static payload
+JSON, excluding only its ID. Payload retains colors, ordered VOX material rows,
+surface facts and PBR fields. Nil/empty containers remain distinct. Material
+properties support nil, bool, UTF-8 strings and finite float32/float64 values;
+integer/nested values are excluded to preserve portable numeric round trips.
+Decoded numeric properties are float64, accepted by existing renderer accessors.
+Surface keys are nonzero, with normalized unique tags and normalized kinds.
+No registered IDs, palette source paths, animations or frame overrides persist.
+
+Encode/decode/save/load borrow codecs, return owned decoded metadata and zero
+results on failure, and preserve synced atomic save/bounded read behavior. Typed
+canonical re-marshal rejects unknown fields, fixed-array padding/truncation and
+noncanonical JSON. Compiler emission, runtime input selection and adoption remain
+separate integration work; legacy readers reject this explicit new envelope.
+
 ## Compiled ordinary asset headers
 
 `CompiledAssetHeaderDef` is an empty-brick C1 document of kind

@@ -15,7 +15,7 @@ upload staging, C3h11 pure qualification guards and C3h12a owned derivative
 packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
 instance intent, C3h13b instance qualification, C3h13c runtime activation and
 C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palette
-construction and C3g4 owned source-model preparation complete. Opt-in,
+construction, C3g4 owned source-model preparation and C3g5 model headers complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -555,3 +555,13 @@ preserve original surface channels. The
 rejects nondeterministic top-vote downscales and malformed scene graphs without
 changing legacy APIs. Focused/race, full engine and five consumer builds passed.
 Shipping headers and runtime adoption remain next; no loading speed gain claimed.
+
+## Model asset headers (C3g5)
+
+Separate typed headers bind model frames and static palette tables while retaining
+source kinds and legacy inline/LOD references. Existing header APIs/bytes and
+public source-file validation remain unchanged. The
+[model-header contract](../content/compiled-voxels.md#compiled-ordinary-model-asset-headers)
+owns closure, identity and no-authoring-IO rules. Focused/race content checks,
+full engine tests and five consumer builds passed. Decoder cache integration,
+shipping compiler emission and verified runtime adoption remain next.

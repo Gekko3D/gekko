@@ -52,6 +52,12 @@ func (r AssetValidationResult) Error() string {
 }
 
 func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationResult {
+	return validateAsset(def, opts, true)
+}
+
+// Compiled headers validate original descriptors without opening offline sources.
+// The public authoring validator retains source-file checks.
+func validateAsset(def *AssetDef, opts AssetValidationOptions, checkSourceFiles bool) AssetValidationResult {
 	result := AssetValidationResult{}
 	if def == nil {
 		result.addError("nil_asset", "asset definition is nil", "", "", "")
@@ -95,7 +101,7 @@ func ValidateAsset(def *AssetDef, opts AssetValidationOptions) AssetValidationRe
 	for _, part := range def.Parts {
 		validateUniqueID(&result, seenIDs, part.ID, part.Name, "part")
 		validateName(&result, part.ID, part.Name, "part")
-		validateSource(&result, part.ID, part.Name, "part", part.Source, materialIDs, opts)
+		validateSource(&result, part.ID, part.Name, "part", part.Source, materialIDs, opts, checkSourceFiles)
 		validatePartScale(&result, part)
 		partIDs[part.ID] = struct{}{}
 		partParentByID[part.ID] = part.ParentID
@@ -471,7 +477,7 @@ func validateAnimationKeyTime(result *AssetValidationResult, clip AssetAnimation
 	}
 }
 
-func validateSource(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef, materialIDs map[string]struct{}, opts AssetValidationOptions) {
+func validateSource(result *AssetValidationResult, itemID string, itemName string, itemKind string, source AssetSourceDef, materialIDs map[string]struct{}, opts AssetValidationOptions, checkSourceFiles bool) {
 	switch source.Kind {
 	case AssetSourceKindGroup:
 		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
@@ -486,7 +492,9 @@ func validateSource(result *AssetValidationResult, itemID string, itemName strin
 		}
 		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
 		validateShapeOperation(result, itemID, itemName, itemKind, source)
-		validateSourceFile(result, itemID, itemName, itemKind, source.Path, opts)
+		if checkSourceFiles {
+			validateSourceFile(result, itemID, itemName, itemKind, source.Path, opts)
+		}
 	case AssetSourceKindVoxSceneNode:
 		if strings.TrimSpace(source.Path) == "" {
 			result.addError("invalid_source_payload", "vox_scene_node source requires path", itemID, itemName, itemKind)
@@ -496,7 +504,9 @@ func validateSource(result *AssetValidationResult, itemID string, itemName strin
 		}
 		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
 		validateShapeOperation(result, itemID, itemName, itemKind, source)
-		validateSourceFile(result, itemID, itemName, itemKind, source.Path, opts)
+		if checkSourceFiles {
+			validateSourceFile(result, itemID, itemName, itemKind, source.Path, opts)
+		}
 	case AssetSourceKindProceduralPrimitive:
 		validateMaterialAssignment(result, itemID, itemName, itemKind, source, materialIDs)
 		validateShapeOperation(result, itemID, itemName, itemKind, source)
