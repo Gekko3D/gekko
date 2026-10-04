@@ -41,6 +41,15 @@ func (assets *AssetServer) recordAuthoredVoxelBase(id AssetId, lattice content.V
 	if err != nil {
 		return
 	}
+	assets.recordVerifiedAuthoredVoxelBase(id, lattice, identity)
+}
+
+// Store only an independently verified original identity. Mutable warm runtime
+// geometry is never read to manufacture compiled construction provenance.
+func (assets *AssetServer) recordVerifiedAuthoredVoxelBase(id AssetId, lattice content.VoxelObjectLatticeDef, identity string) {
+	if identity == "" {
+		return
+	}
 	assets.mu.Lock()
 	defer assets.mu.Unlock()
 	if _, exists := assets.voxModels[id]; !exists {

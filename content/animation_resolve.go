@@ -64,6 +64,18 @@ func BuildRigAnimationDocuments(asset *AssetDef, clips []AssetAnimationClipDef) 
 }
 
 func ResolveAssetAnimations(def *AssetDef, documentPath string) (*ResolvedAssetAnimations, error) {
+	return resolveAssetAnimations(def, documentPath, func(reference, document string) (string, error) {
+		return ResolveDocumentPath(reference, document), nil
+	})
+}
+
+// ResolveCompiledAssetAnimations resolves animation sets and their rigs strictly
+// relative to their owning compiled documents, without legacy path fallbacks.
+func ResolveCompiledAssetAnimations(def *AssetDef, documentPath string) (*ResolvedAssetAnimations, error) {
+	return resolveAssetAnimations(def, documentPath, ResolveCompiledAssetReference)
+}
+
+func resolveAssetAnimations(def *AssetDef, documentPath string, resolvePath func(string, string) (string, error)) (*ResolvedAssetAnimations, error) {
 	if def == nil {
 		return nil, fmt.Errorf("asset definition is nil")
 	}
@@ -85,12 +97,15 @@ func ResolveAssetAnimations(def *AssetDef, documentPath string) (*ResolvedAssetA
 	resolved := &ResolvedAssetAnimations{DefaultClipID: def.DefaultAnimationClipID, JointTargets: jointTargets}
 	seenClips := map[string]string{}
 	for _, ref := range def.AnimationSetPaths {
-		setPath := ResolveDocumentPath(ref, documentPath)
+		setPath, err := resolvePath(ref, documentPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve animation set %q: %w", ref, err)
+		}
 		set, err := LoadAnimationSet(setPath)
 		if err != nil {
 			return nil, fmt.Errorf("load animation set %q: %w", ref, err)
 		}
-		clips, err := resolveAnimationSetForAsset(def, set, setPath, itemIDs, jointTargets, bonesByJoint, bonesByID, partsByID)
+		clips, err := resolveAnimationSetForAsset(def, set, setPath, itemIDs, jointTargets, bonesByJoint, bonesByID, partsByID, resolvePath)
 		if err != nil {
 			return nil, fmt.Errorf("resolve animation set %q: %w", ref, err)
 		}
@@ -108,7 +123,7 @@ func ResolveAssetAnimations(def *AssetDef, documentPath string) (*ResolvedAssetA
 	return resolved, nil
 }
 
-func resolveAnimationSetForAsset(def *AssetDef, set *AnimationSetDef, setPath string, itemIDs, jointTargets map[string]string, bonesByJoint, bonesByID map[string]AssetBoneDef, partsByID map[string]AssetPartDef) ([]AssetAnimationClipDef, error) {
+func resolveAnimationSetForAsset(def *AssetDef, set *AnimationSetDef, setPath string, itemIDs, jointTargets map[string]string, bonesByJoint, bonesByID map[string]AssetBoneDef, partsByID map[string]AssetPartDef, resolvePath func(string, string) (string, error)) ([]AssetAnimationClipDef, error) {
 	if set.TargetAssetID != "" {
 		if set.TargetAssetID != def.ID {
 			return nil, fmt.Errorf("targets asset %q, not %q", set.TargetAssetID, def.ID)
@@ -121,7 +136,10 @@ func resolveAnimationSetForAsset(def *AssetDef, set *AnimationSetDef, setPath st
 		return cloneAnimationClips(set.Clips), nil
 	}
 
-	rigPath := ResolveDocumentPath(set.RigPath, setPath)
+	rigPath, err := resolvePath(set.RigPath, setPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve rig %q: %w", set.RigPath, err)
+	}
 	rig, err := LoadAnimationRig(rigPath)
 	if err != nil {
 		return nil, fmt.Errorf("load rig %q: %w", set.RigPath, err)

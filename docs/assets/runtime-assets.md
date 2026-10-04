@@ -148,6 +148,39 @@ light, emitter and marker entities retain teardown ownership. Public spawn APIs
 and collapse eligibility remain unchanged. Collapsed composites do not gain a
 new per-item persistence identity or disk format.
 
+### Compiled ordinary asset preparation
+
+`LoadAndPrepareAuthoredAsset` and `LoadAndSpawnAuthoredAsset` explicitly select
+compiled input for an exact lowercase `.gkassetc` suffix. Other paths retain
+legacy JSON behavior, and corrupt selected compiled input never falls back.
+Compiled preparation returns the existing `PreparedAuthoredAsset`; prepared
+spawning keeps the existing hierarchy, material, animation and ECS contracts.
+Level placement integration follows separately.
+
+Preparation verifies every referenced shape's frame identity/sizes, effective
+lattice and original base identity, and resolves animations before publishing
+geometry. Initial compiled preparation uses default E2 logical base limits.
+Larger custom-profile frames remain supported by typed IO but need separate
+runtime admission work; legacy authored preparation keeps its existing limits.
+Temporary independent loader scopes protect previously accepted caller pins and
+reject a closed originating scope. Accepted decoded frames can still be verified
+after their borrowed codec closes.
+
+Prepared metadata is an owned copy of the immutable cached header. Compiled
+animation-set references resolve relative to the header, and rig references
+relative to the selected set, without cwd fallback. Both require portable
+relative paths. Emitter texture paths become absolute in the prepared copy;
+existing texture decoding remains unchanged. Authoring sources are unnecessary.
+
+Canonical bricks already include `ModelScale`; dense construction does not
+resample or form voxel JSON cache keys. Existing `AssetServer` geometry storage
+shares a namespaced C1 content identity, including lattice, across compiled
+paths. Palettes remain independent material bindings. Verified original-base
+metadata never derives from a mutable warm geometry entry. Public mutable
+geometry access and managed edit isolation retain their existing contracts.
+With a nil asset server, preparation still verifies input and resolves metadata
+without constructing or registering geometry.
+
 ### Authored voxel collapse reuse
 
 Repeated eligible static collapses reuse the existing composite before
