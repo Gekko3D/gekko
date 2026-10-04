@@ -320,48 +320,11 @@ func validateCompiledSource(asset *content.AssetDef) error {
 
 func compileAssetPartShape(part content.AssetPartDef) (*content.CompiledAssetShapeDef, error) {
 	geometry := buildAuthoredVoxelShapeMap(part)
-	shape := &content.CompiledAssetShapeDef{SchemaVersion: content.CurrentCompiledAssetShapeSchemaVersion, Lattice: authoredVoxelShapeLattice(part.VoxelResolution)}
-	for sectorCoord, sector := range geometry.Sectors {
-		for bz := 0; bz < 4; bz++ {
-			for by := 0; by < 4; by++ {
-				for bx := 0; bx < 4; bx++ {
-					brick := sector.GetBrick(bx, by, bz)
-					if brick == nil {
-						continue
-					}
-					var encoded voxelcodec.Brick
-					for axis, local := range [3]int{bx, by, bz} {
-						// Check sector bounds before multiplying native coordinates.
-						if sectorCoord[axis] < -67108864 || sectorCoord[axis] > 67108863 {
-							return nil, fmt.Errorf("compiled geometry exceeds portable coordinates")
-						}
-						coord := int64(sectorCoord[axis])*4 + int64(local)
-						if coord < -268435456 || coord > 268435455 {
-							return nil, fmt.Errorf("compiled geometry exceeds portable coordinates")
-						}
-						encoded.Coord[axis] = int32(coord)
-					}
-					for z := 0; z < 8; z++ {
-						for y := 0; y < 8; y++ {
-							for x := 0; x < 8; x++ {
-								value := brick.VoxelValue(x, y, z)
-								if value == 0 {
-									continue
-								}
-								linear := x + 8*y + 64*z
-								encoded.Occupancy[linear/64] |= uint64(1) << uint(linear%64)
-								encoded.Values = append(encoded.Values, value)
-							}
-						}
-					}
-					if len(encoded.Values) > 0 {
-						shape.Bricks = append(shape.Bricks, encoded)
-					}
-				}
-			}
-		}
+	bricks, err := compileAssetPrimaryBricks(geometry)
+	if err != nil {
+		return nil, err
 	}
-	return shape, nil
+	return &content.CompiledAssetShapeDef{SchemaVersion: content.CurrentCompiledAssetShapeSchemaVersion, Lattice: authoredVoxelShapeLattice(part.VoxelResolution), Bricks: bricks}, nil
 }
 
 func compiledAssetOutputSafe(output string, sources []string) error {

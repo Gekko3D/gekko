@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g3 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g4 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -3351,6 +3351,20 @@ the same focused command with `-race`, `env GOCACHE=/tmp/gekko3d-gocache go test
 and five consumer commands in C3h9 passed. Historical palette JSON and warm keys,
 borrowed VOX maps, fresh normalized tags and error publication are covered.
 No GPU behavior changed or direct performance gain claimed.
+
+### C3g4: Owned source-model preparation
+
+This commit adds private CPU adapters for procedural, VOX model and scene-node
+sources with original palette/surface semantics and declared dimensions. Primary
+packing is shared with the unchanged inline compiler. Ambiguous top-vote VOX
+downscales fail; scene guards protect the inspector while plain model selection
+ignores unused graphs. C3g3 is `d7e3590`; shipping headers/runtime adoption remain next.
+
+Verification: `env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3g4|C3c|C3h4)' -count=1`,
+the same focused command with `-race`, `env GOCACHE=/tmp/gekko3d-gocache go test ./...`
+and five consumer commands in C3h9 passed. Actual public-source parity, deterministic
+model bytes, owned storage, raw surface channels, ties and malformed sources are
+covered. No runtime/GPU selection change or loading speed gain claimed.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

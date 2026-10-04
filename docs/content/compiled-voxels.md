@@ -335,6 +335,36 @@ collapse must consume original ordered sources before canonicalization. Existing
 shape/header schemas, bytes and APIs are unchanged. Header references, compiler
 emission and runtime adoption are separate dependent batches.
 
+### Offline source-model preparation
+
+The private compiler adapter builds owned CPU model frames and palettes for the
+seven authored primitives, `vox_model` and `vox_scene_node`. Procedural generators
+apply scale once; VOX uses the existing `ScaleVoxModel` once. Scene nodes select
+through the existing inspector/resolver without baking scene transforms into
+geometry. Lattice rasterization identity is `gekko-compiled-model-v1`, separate
+from authored inline-shape qualification.
+
+VOX inputs load privately per call. Palette colors/material maps and normalized
+surface facts remain independently owned across compiler calls; surface facts
+use original unscaled samples. Returned dependencies identify the resolved VOX
+source. Primary packing reuses the inline compiler's portable checks and value
+order; C1 encoding canonicalizes brick order. Declared dimensions remain separate
+from occupied geometry.
+
+Compiler inputs require finite positive scale, resolution and used primitive
+parameters. VOX downscale uses existing float32 coordinate multiplication,
+rounded/clamped dimensions and votes including zero. Tied highest color votes
+fail explicitly because the legacy scaler's winner is nondeterministic; lower
+count ties are accepted. Legacy scaling behavior is unchanged. Scene-node
+preparation rejects cycles and out-of-range shape references before inspecting;
+plain model selection still ignores unused scene graphs. Missing edges and DAG
+sharing keep inspector semantics.
+
+This CPU preparation boundary does not enable these sources in shipping compiler
+headers or runtime loading. Header/palette serialization, closure publication and
+verified runtime adoption remain separate batches; collapse and new edit-base
+qualification remain excluded.
+
 ## Conservative asset LOD geometry construction
 
 The private compiler builder constructs a separate in-memory 2× derivative from
