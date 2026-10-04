@@ -3,8 +3,8 @@
 Status: approved direction; C3a shape frames, C3b headers and C3c offline
 compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
-compiler CLI, C3f1 private shared adoption and C3f2 CPU packets complete.
-Ordinary worker preparation remains separate; special level consumers still use JSON.
+compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
+worker integration complete. Special level consumers still use JSON.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -67,10 +67,8 @@ retain direct warm preparation and ordinary `AssetServer` lifetime. Imported
 cache leases could delete geometry still used by direct callers; a parallel
 prepared cache adds another owner without demonstrated need.
 
-Streamed integration follows separately: charge metadata, unique sources and
-registration copies in existing pending admission, then publish at the current
-placement commit after generation/deleted/moved checks. Retain latest override
-resolution and main-thread palette/texture publication.
+Streamed integration uses existing pending admission and placement commit gates.
+Special consumer adapters and renderer-copy optimization remain separate work.
 
 ## Offline compiler boundary
 
@@ -156,3 +154,30 @@ or production-frequency benefit.
 Harness: `/tmp/gekko-c3-compiled-measure.go`; evidence:
 `/tmp/gekko-c3-compiled-{1,2,3}.json`. Reproduce from the engine with
 `env GOCACHE=/tmp/gekko3d-gocache GEKKO_C3_OUT=/tmp/gekko-c3-compiled-N.json go run /tmp/gekko-c3-compiled-measure.go`.
+
+## Worker packet CPU diagnostic
+
+Three single invocations per asset used Go 1.25.4, darwin/arm64,
+`GOMAXPROCS=1`, warm filesystem caches and fresh app/server/loader instances
+with decoded retention disabled. Direct compiled preparation/spawning is compared
+with synchronous CPU packet preparation followed by publication/spawning.
+These are local medians, not robust benchmarks. Combined medians use each run's
+preparation/publication sum; they are not sums of separate stage medians.
+
+| Asset | Direct preparation/spawn ms | CPU packet preparation ms | Publication/spawn ms | Combined ms |
+| --- | ---: | ---: | ---: | ---: |
+| ammo | 2.915 | 2.771 | 0.592 | 3.364 |
+| stealth | 16.254 | 16.824 | 0.048 | 16.873 |
+| nihilanth | 299.786 | 260.029 | 25.008 | 286.363 |
+
+Work shifts out of publication; total CPU time is mixed. Median allocated bytes
+increase from 2,069,304 to 2,331,232 for ammo (+12.66%), 1,440,560 to 1,571,184
+for stealth (+9.07%) and 147,783,808 to 149,577,064 for nihilanth (+1.21%).
+Actual scheduler, pending admission, commit transaction and GPU costs are excluded.
+No FPS, RSS or pixel-parity claim follows from this diagnostic.
+
+Local harness: `/tmp/gekko-c3f3-measure_test.go`; evidence:
+`/tmp/gekko-c3f3-measure.json`. Temporarily copy the harness into the engine as
+`c3f3_measure_tmp_test.go`, run
+`env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestC3f3Measure$' -count=1`,
+then remove that temporary file. The harness is not part of the test suite.

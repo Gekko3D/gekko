@@ -1112,6 +1112,10 @@ func spawnAuthoredLevelPlacement(cmd *Commands, assets *AssetServer, loader *Run
 }
 
 func spawnAuthoredLevelPlacementWithOwnership(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, created func(EntityId, string, bool, bool)) (AuthoredAssetSpawnResult, error) {
+	return spawnAuthoredLevelPlacementWithPacket(cmd, assets, loader, parent, levelID, levelPath, placement, nil, created)
+}
+
+func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, packet *compiledAssetPacket, created func(EntityId, string, bool, bool)) (AuthoredAssetSpawnResult, error) {
 	if loader == nil {
 		loader = NewRuntimeContentLoader()
 	}
@@ -1119,7 +1123,25 @@ func spawnAuthoredLevelPlacementWithOwnership(cmd *Commands, assets *AssetServer
 	var assetDef *content.AssetDef
 	var prepared *PreparedAuthoredAsset
 	var err error
-	if filepath.Ext(resolvedAssetPath) == ".gkassetc" {
+	if packet != nil {
+		selectedPath, pathErr := filepath.Abs(resolvedAssetPath)
+		if pathErr != nil {
+			return AuthoredAssetSpawnResult{}, pathErr
+		}
+		packetPath, pathErr := filepath.Abs(packet.documentPath)
+		if pathErr != nil {
+			return AuthoredAssetSpawnResult{}, pathErr
+		}
+		if packet.documentPath == "" || filepath.Clean(packetPath) != filepath.Clean(selectedPath) {
+			packet = nil
+		}
+	}
+	if packet != nil {
+		prepared, err = publishCompiledAssetPacket(packet, assets, loader)
+		if err == nil {
+			assetDef = prepared.def
+		}
+	} else if filepath.Ext(resolvedAssetPath) == ".gkassetc" {
 		prepared, err = LoadAndPrepareAuthoredAsset(resolvedAssetPath, assets, loader)
 		if err == nil {
 			assetDef = prepared.def

@@ -1,8 +1,10 @@
 package gekko
 
 import (
+	"fmt"
 	"github.com/gekko3d/gekko/content"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
+	"path/filepath"
 )
 
 // A CPU packet owns its metadata and distinct geometry sources. It contains no
@@ -70,4 +72,73 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 	}
 	success = true
 	return packet, nil
+}
+
+// Publish only verified packet data. No frame or authoring source is reread here;
+// ordinary global geometry keeps its existing lifetime independently of packets.
+func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer, loader *RuntimeContentLoader) (*PreparedAuthoredAsset, error) {
+	if err := checkCompiledAssetWork(loader, nil); err != nil {
+		return nil, err
+	}
+	if packet == nil || packet.def == nil {
+		return nil, fmt.Errorf("compiled asset packet is missing")
+	}
+	prepared := &PreparedAuthoredAsset{def: packet.def, documentPath: packet.documentPath, animations: packet.animations, parts: make(map[string]preparedAuthoredPart, len(packet.def.Parts))}
+	models := make(map[string]AssetId, len(packet.shapes))
+	if assets != nil {
+		for _, part := range packet.def.Parts {
+			contentID, exists := packet.parts[part.ID]
+			if !exists {
+				continue
+			}
+			if _, exists := models[contentID]; exists {
+				continue
+			}
+			shape := packet.shapes[contentID]
+			if shape == nil {
+				return nil, fmt.Errorf("compiled packet shape is missing")
+			}
+			id, adopted := assets.adoptCompiledAssetGeometry(shape.contentID, shape.lattice, shape.baseIdentity, shape.source, shape.registration)
+			if !adopted {
+				// A warm conflict must never be bypassed by defensive registration.
+				// Rebuild only a consumed cold handle after public key deletion.
+				if _, warm := assets.SharedVoxelGeometryByCacheKey("compiled-asset-shape:" + shape.contentID); warm || shape.registration.charge() != 0 {
+					return nil, fmt.Errorf("compiled packet geometry adoption rejected")
+				}
+				fresh := prepareStreamedGeometryRegistration(shape.source)
+				id, adopted = assets.adoptCompiledAssetGeometry(shape.contentID, shape.lattice, shape.baseIdentity, shape.source, fresh)
+				fresh.release()
+				if !adopted {
+					return nil, fmt.Errorf("compiled packet geometry rebuild rejected")
+				}
+			}
+			models[contentID] = id
+		}
+	}
+	for _, part := range packet.def.Parts {
+		preparedPart := preparedAuthoredPart{}
+		if assets != nil {
+			if contentID, exists := packet.parts[part.ID]; exists {
+				palette, err := authoredVoxelShapePalette(assets, packet.def, part)
+				if err != nil {
+					return nil, err
+				}
+				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palette}
+			}
+		}
+		prepared.parts[part.ID] = preparedPart
+	}
+	if err := checkCompiledAssetWork(loader, nil); err != nil {
+		return nil, err
+	}
+	return prepared, nil
+}
+
+func compiledAssetPacketKey(path, levelPath string) (string, error) {
+	resolved := content.ResolveDocumentPath(path, levelPath)
+	absolute, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(absolute), nil
 }

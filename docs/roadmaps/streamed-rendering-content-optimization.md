@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f2 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f3 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -819,7 +819,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3d4a | `54af05d` | Ordinary compiled level placements with unchanged stream ownership and delta reload | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3e | `eaf29c2` | Default-profile compiler CLI with explicit shipping output and unchanged publication | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
 | C3f1 | `cf0384c` | Private single-use compiled geometry adoption with atomic shared key and base provenance | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
-| C3f2 | This commit | Owned compiled CPU packets with complete verification and transient decoded pins | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3f2 | `b64ccbb` | Owned compiled CPU packets with complete verification and transient decoded pins | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3f3 | This commit | Streamed compiled worker packets with bounded pending ownership and main-thread publication | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2733,6 +2734,31 @@ Engine sweep and five consumer commands above passed. Source-free signed geometr
 multiple unique shapes, independent palettes, caller pins and group-only content
 pass. No worker runtime route changes or new GPU check. Existing tests and
 unrelated changes are preserved.
+
+### C3f3: Streamed compiled worker integration
+
+Workers prepare unique compiled packets; existing pending admission charges and
+drains their owned storage. Placement commits publish through ordinary shared
+ownership after current selection gates, retaining latest override proofs and
+rollback. Public deletion rebuilds from packet storage without source rereads;
+unrelated packets never change selected input. Contract: [compiled preparation](../assets/runtime-assets.md#compiled-ordinary-asset-preparation).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^TestC3f3' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^TestC3f3' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3f3|C3d4a|S2b|P5c|S3)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-c3f3-smoke /tmp/gekko-c3f3-smoke.go
+/tmp/gekko-c3f3-smoke
+```
+
+Engine sweep and five consumer commands above passed. Native streamed upload,
+collision, managed edit reupload and sibling isolation pass; pixel comparison
+remains unverified. [CPU-stage diagnostic](streamed-rendering-c3.md#worker-packet-cpu-diagnostic)
+shows reduced publication work, mixed combined time and increased allocations;
+no FPS claim. Existing persistence tests and unrelated changes are preserved.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

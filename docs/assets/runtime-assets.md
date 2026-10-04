@@ -157,9 +157,9 @@ Compiled preparation returns the existing `PreparedAuthoredAsset`; prepared
 spawning keeps the existing hierarchy, material, animation and ECS contracts.
 Ordinary direct and expanded level placements use the same path, including
 streamed commits and their existing ownership callbacks, shadows and rollback.
-Ordinary asset preparation still runs during the main-thread commit; workers
-currently prepare no ordinary asset packet. A later worker split must preserve
-existing CPU publication and pending-resource ownership. Moving brushes,
+Streamed workers prepare compiled ordinary CPU packets per resolved asset path.
+Main-thread placement commits publish their geometry and palettes. Legacy JSON
+ordinary preparation retains its existing commit path. Moving brushes,
 chargers, breakables, pickups and NPC level consumers still require authoring JSON.
 
 Preparation verifies every referenced shape's frame identity/sizes, effective
@@ -197,7 +197,10 @@ warm geometry. Public registration keeps defensive copying.
 
 These IDs retain ordinary `AssetServer` lifetime. Packet release never deletes
 adopted geometry, and imported prepared-cache eviction/leases do not own these
-IDs. Worker packet preparation and streamed publication remain separate delivery.
+IDs. If public deletion removes a shared ID after its packet registration was
+consumed, publication rebuilds an independent copy from the owned packet source
+through the same atomic adoption boundary. Conflicting warm provenance still
+fails; publication never rereads source or frame files.
 
 Private CPU packets own metadata, resolved animations and unique dense sources
 with separate single-use registration copies. Duplicate C1 identities share one
@@ -212,8 +215,18 @@ between frames and whole-shape builds, and at completion; it does not interrupt
 codec, animation-resolver or dense-builder internals. Failed
 or canceled preparation releases built handles and checks the originating scope
 before returning usable output. Aliased packet release is idempotent. Metadata
-and source storage remain owned by the envelope until drain. Streamed scheduling,
-pending admission and main-thread publication are separate integration work.
+and source storage remain owned by the envelope until drain.
+
+Existing pending admission charges packet metadata, unique dense sources and
+registration storage once; repeated placements reuse one packet for a selected
+resolved path. Deferred, canceled, stale, failed and completed results release
+unused handles through existing result cleanup. A packet must match the current
+canonical selected path; an unrelated packet uses the existing selected loader.
+Placement publication follows
+current generation, deletion and movement checks. Latest object overrides still
+resolve at the placement commit, and existing callbacks, rollback and Stop own
+every created entity. Palette/texture publication stays on the main thread;
+normal result release never evicts ordinary global geometry.
 
 ### Authored voxel collapse reuse
 

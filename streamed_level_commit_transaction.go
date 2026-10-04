@@ -3,6 +3,8 @@ package gekko
 import (
 	"container/heap"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gekko3d/gekko/content"
@@ -228,10 +230,18 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 			if prepared.loadScope != nil {
 				loader = prepared.loadScope.Loader()
 			}
+			var packet *compiledAssetPacket
+			if len(prepared.compiledAssets) != 0 && filepath.Ext(strings.TrimSpace(placement.AssetPath)) == ".gkassetc" {
+				packetKey, packetErr := compiledAssetPacketKey(placement.AssetPath, state.LevelPath)
+				if packetErr != nil {
+					return entityCount, placementUnit, false, packetErr
+				}
+				packet = prepared.compiledAssets[packetKey]
+			}
 			placementStart := time.Now()
-			spawnResult, spawnErr := spawnAuthoredLevelPlacementWithOwnership(cmd, assets, loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
+			spawnResult, spawnErr := spawnAuthoredLevelPlacementWithPacket(cmd, assets, loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
 				PlacementID: placement.PlacementID, VolumeID: placement.VolumeID, AssetPath: placement.AssetPath, Transform: placement.Transform, Tags: append([]string(nil), placement.Tags...),
-			}, func(entity EntityId, item string, root, voxel bool) {
+			}, packet, func(entity EntityId, item string, root, voxel bool) {
 				chunk.OwnedEntities[entity] = struct{}{}
 				if tx.resumable || root || item != "" {
 					entityCount++

@@ -520,6 +520,7 @@ type streamedPreparedChunk struct {
 	ObjectSnapshots                       map[string]*content.VoxelObjectSnapshotDef
 	v2Placements                          map[string]bool
 	objectSnapshotGeometry                map[string]*streamedObjectSnapshotGeometry
+	compiledAssets                        map[string]*compiledAssetPacket
 	PrepareDuration                       time.Duration
 	Err                                   error
 }
@@ -2258,6 +2259,29 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		job.Loader = scope.Loader()
 	}
 	result.PlacementItems = append([]streamedPlacementInstance(nil), job.Placements...)
+	for _, placement := range job.Placements {
+		resolved := content.ResolveDocumentPath(placement.AssetPath, job.LevelPath)
+		if filepath.Ext(resolved) != ".gkassetc" {
+			continue
+		}
+		key, err := compiledAssetPacketKey(placement.AssetPath, job.LevelPath)
+		if err != nil {
+			result.Err = err
+			return result
+		}
+		if result.compiledAssets[key] != nil {
+			continue
+		}
+		packet, err := prepareCompiledAssetPacket(key, job.Loader, func() bool { return streamedPreparationCancelled(job.prepareCancel) })
+		if err != nil {
+			result.Err = err
+			return result
+		}
+		if result.compiledAssets == nil {
+			result.compiledAssets = make(map[string]*compiledAssetPacket)
+		}
+		result.compiledAssets[key] = packet
+	}
 	result.ObjectSnapshots = make(map[string]*content.VoxelObjectSnapshotDef)
 	result.objectSnapshotGeometry = make(map[string]*streamedObjectSnapshotGeometry)
 	if job.TerrainOverride != nil {
