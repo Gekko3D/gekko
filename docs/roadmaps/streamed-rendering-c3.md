@@ -11,7 +11,7 @@ construction, C3h2 source-bound derivative frames, C3h3 versioned headers and
 C3h4 compiler opt-in, C3h5 exact source validation and C3h6 scoped derivative
 reads, C3h7 complete-closure source verification, C3h8 core render
 representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
-upload staging complete. Opt-in,
+upload staging and C3h11 pure qualification guards complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -421,3 +421,15 @@ and CPU authority stay unchanged until explicit ready promotion.
 Native lookup/readback verifies delayed uploads, pressure, restart and exact full
 promotion. Current source/material qualification and runtime activation follow;
 commands and limits remain in the parent delivery entry.
+
+
+## Current geometry/material guards (C3h11)
+
+Added unwired exact primary comparison and conservative current-material checks.
+Immutable baseline ownership is established at publication, not through repeated
+alias scans. [Contract](../renderer/runtime.md#authoritative-geometry-and-render-representations).
+Warm equal-input scans allocate zero: median 0.372 µs/32 bricks, 7.109 µs/492,
+102.239 µs/7,036 and 196.960 µs/16,384 dense bricks on Apple M4 Pro.
+These are CPU guard costs, not GPU/frame timing. Owned proof publication and
+runtime activation follow; boundary commands and diagnostic limits are in the
+parent delivery entry.

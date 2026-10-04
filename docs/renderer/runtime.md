@@ -743,8 +743,27 @@ Cancelling staging makes full GPU geometry inactive under existing retention and
 orphan cleanup, while resident object material ownership remains unchanged.
 
 This permanent separation introduces no helper scene objects or parallel
-residency service. Current source/material qualification and runtime LOD activation
-remain pending.
+residency service. Runtime LOD activation and owned proof publication remain pending.
+
+The bridge's private qualification guards compare actual full and coarse primary
+storage against separately owned, immutable baselines created from authenticated
+frames. Baseline construction/adoption must deep-copy sectors, packed-brick slices
+and bricks and retain them privately; corresponding pointer checks are defensive,
+not a general alias certificate. Original identities and revisions alone cannot
+certify public mutable maps. Comparisons inspect signed sector keys/coordinates,
+masks, packed cardinality/order, occupancy, flags and complete dense payloads.
+Nil, GPU-first, structurally malformed and wholly unoccupied maps fail closed.
+Bookkeeping, bounds caches, atlas offsets and generated auxiliary data do not
+participate; scans never repair storage or consume dirty queues. Semantic primary
+validity comes from the authenticated immutable baseline.
+
+Current used material must have a valid nonzero palette index, alpha 255, exactly
+zero transparency and transmission, and no animation targeting that value.
+Nonfinite and nonzero optical values reject; signed zero qualifies. Unused slots
+and non-opacity properties do not affect this gate. Qualify the effective current
+material separately from shared geometry. These guards are currently unwired.
+Exact scans are linear and allocate no storage; eventual integration must share
+results only within a stable main-thread sync, never across raw mutable updates.
 
 ### Streamed voxel residency
 
