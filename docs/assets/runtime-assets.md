@@ -162,8 +162,12 @@ Main-thread placement commits publish their geometry and palettes. Legacy JSON
 ordinary preparation retains its existing commit path. Direct level and streamed
 startup NPCs use compiled preparation with the existing multipart asset root under
 the NPC entity. Health, animation bindings and creation-before-load-error behavior
-are unchanged. Moving brushes, chargers, breakables and pickups still require
-authoring JSON.
+are unchanged. Moving brushes, chargers, breakables and pickups select only the
+first authored part, including a group that produces no model. Compiled inputs
+verify the complete closure before registering that part alone; unused parts
+never publish geometry or palettes. Corner pivots and gameplay components remain
+unchanged. Pickups tolerate a missing selected input, but a present compiled
+header with missing or corrupt dependencies fails.
 
 Preparation verifies every referenced shape's frame identity/sizes, effective
 lattice and original base identity, and resolves animations before publishing

@@ -4,8 +4,8 @@ Status: approved direction; C3a shape frames, C3b headers and C3c offline
 compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
 compiler CLI, C3f1 private shared adoption, C3f2 CPU packets and C3f3 streamed
-worker integration and C3d4b NPC adaptation complete. Remaining first-part level
-consumers still use JSON.
+worker integration, C3d4b NPC adaptation and C3d4c first-part level consumers
+complete. Compiler source-kind adapters and asset LOD remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership

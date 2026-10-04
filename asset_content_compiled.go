@@ -53,7 +53,7 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 	verification := scope.Loader()
 	header, _, err := verification.LoadCompiledAssetHeader(path)
 	if err != nil {
-		return nil, err
+		return nil, &authoredAssetInputLoadError{err}
 	}
 	// Prepared metadata owns every nested table. Cache definitions remain read-only.
 	metadata, err := json.Marshal(header.Asset)

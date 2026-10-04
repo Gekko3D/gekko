@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -496,11 +497,7 @@ func spawnAuthoredLevelMovingBrush(cmd *Commands, assets *AssetServer, loader *R
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(brush.AssetPath, levelPath)
-		asset, err := loader.LoadAsset(assetPath)
-		if err != nil {
-			return 0, err
-		}
-		model, palette, voxelResolution, err := VoxelModelFromAsset(assets, asset, assetPath)
+		model, palette, voxelResolution, err := loadAuthoredLevelVoxelModel(assets, loader, assetPath)
 		if err != nil {
 			return 0, err
 		}
@@ -793,11 +790,7 @@ func spawnAuthoredLevelCharger(cmd *Commands, assets *AssetServer, loader *Runti
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(charger.AssetPath, levelPath)
-		asset, err := loader.LoadAsset(assetPath)
-		if err != nil {
-			return 0, err
-		}
-		model, palette, voxelResolution, err := VoxelModelFromAsset(assets, asset, assetPath)
+		model, palette, voxelResolution, err := loadAuthoredLevelVoxelModel(assets, loader, assetPath)
 		if err != nil {
 			return 0, err
 		}
@@ -910,11 +903,7 @@ func spawnAuthoredLevelBreakable(cmd *Commands, assets *AssetServer, loader *Run
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(breakable.AssetPath, levelPath)
-		asset, err := loader.LoadAsset(assetPath)
-		if err != nil {
-			return 0, err
-		}
-		model, palette, voxelResolution, err := VoxelModelFromAsset(assets, asset, assetPath)
+		model, palette, voxelResolution, err := loadAuthoredLevelVoxelModel(assets, loader, assetPath)
 		if err != nil {
 			return 0, err
 		}
@@ -964,15 +953,13 @@ func spawnAuthoredLevelPickup(cmd *Commands, assets *AssetServer, loader *Runtim
 			loader = NewRuntimeContentLoader()
 		}
 		assetPath := content.ResolveDocumentPath(pickup.AssetPath, levelPath)
-		asset, err := loader.LoadAsset(assetPath)
-		if err != nil && !os.IsNotExist(err) {
-			return 0, err
-		}
-		if err == nil {
-			model, palette, voxelResolution, err := VoxelModelFromAsset(assets, asset, assetPath)
-			if err != nil {
+		model, palette, voxelResolution, err := loadAuthoredLevelVoxelModel(assets, loader, assetPath)
+		if err != nil {
+			var inputError *authoredAssetInputLoadError
+			if !errors.As(err, &inputError) || !os.IsNotExist(inputError.err) {
 				return 0, err
 			}
+		} else {
 			if model != (AssetId{}) {
 				comps = append(comps, &VoxelModelComponent{
 					SharedGeometry:         model,
