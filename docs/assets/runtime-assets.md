@@ -179,7 +179,9 @@ every physical reference still loads and checks independently. Cancellation and
 origin-scope checks surround derivative loads and proofs, including memo hits.
 Failure releases only provisional child pins and publishes no geometry or palettes.
 Selected-header load failures alone retain the missing-input classification.
-Consumers continue to construct and publish authoritative level-0 geometry only. Initial compiled preparation uses default E2 logical base limits.
+Consumers return authoritative level-0 geometry; explicitly declared derivatives
+can additionally populate private ordinary asset availability. Initial compiled
+preparation uses default E2 logical base limits.
 Larger custom-profile frames remain supported by typed IO but need separate
 runtime admission work; legacy authored preparation keeps its existing limits.
 Temporary independent loader scopes protect previously accepted caller pins and
@@ -300,9 +302,30 @@ proof/source storage remains owned until envelope drain. Pending admission count
 unique full/coarse sources and proof maps, registration storage and retained fixed
 geometry-handle metadata once; scalar proof metadata excludes volume pointers
 from reflection. Consuming a handle removes its publication storage charge,
-not retained source/proof or fixed handle metadata. Ordinary AssetServer proof
-adoption must install an independent private copy; no packet baseline ownership
-moves implicitly. Derivative asset adoption and display selection remain pending.
+not retained source/proof or fixed handle metadata. Ordinary AssetServer adoption installs independent private full/coarse proof
+copies with captured scalar retained-storage accounting; packet proof ownership
+never moves implicitly. Coarse geometry uses the separate `compiled-asset-lod:`
+namespace in ordinary geometry storage and receives no E2 base identity. Full
+geometry keeps its original identity and CPU interaction authority. Warm full/
+coarse edits remain untouched; repeated matching publication reuses the private
+association. Stale keys or conflicting association identity/lattice/value fail
+without replacing existing assets or proof counters. Consumed full/coarse
+registrations rebuild from the private authenticated packet baseline, never from
+potentially edited packet sources or reread files.
+
+Full deletion removes its association; coarse deletion removes every association
+referencing it. The surviving full or coarse asset keeps independent ordinary
+lifetime. Scalar proof statistics and association changes use the AssetServer
+lock; public mutable geometry is not scanned under that lock. Current-map/material
+qualification remains the render owner's responsibility.
+
+Direct and worker LOD preparation use the same owned publication boundary. The
+first-part consumer verifies the complete closure but constructs/publishes only
+its selected first part. Nil-server verification and nonLOD warm preparation
+keep their existing paths. Prepared parts retain explicit derivative membership
+only for declared eligible parts; geometry availability shared by content identity
+never grants opt-in to another part or input. Returned model IDs remain full.
+Per-instance propagation and display selection remain pending.
 It qualifies the original decoded source only; exposed or edited warm geometry,
 current material opacity and GPU readiness require their own runtime checks.
 

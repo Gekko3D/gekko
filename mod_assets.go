@@ -56,19 +56,21 @@ const (
 )
 
 type AssetServer struct {
-	mu                   sync.RWMutex
-	managedVoxelGeometry map[AssetId]*managedVoxelGeometry
-	authoredVoxelBases   map[AssetId]map[content.VoxelObjectLatticeDef]string
-	meshes               map[AssetId]MeshAsset
-	materials            map[AssetId]MaterialAsset
-	textures             map[AssetId]TextureAsset
-	textureKeys          map[string]AssetId
-	samplers             map[AssetId]SamplerAsset
-	voxModels            map[AssetId]VoxelGeometryAsset
-	voxModelKeys         map[string]AssetId
-	voxPalettes          map[AssetId]VoxelPaletteAsset
-	voxPaletteKeys       map[string]AssetId
-	voxFiles             map[AssetId]*VoxFile
+	mu                    sync.RWMutex
+	managedVoxelGeometry  map[AssetId]*managedVoxelGeometry
+	compiledAssetLODs     map[AssetId]*compiledAssetLODBinding
+	compiledAssetLODStats compiledAssetLODStats
+	authoredVoxelBases    map[AssetId]map[content.VoxelObjectLatticeDef]string
+	meshes                map[AssetId]MeshAsset
+	materials             map[AssetId]MaterialAsset
+	textures              map[AssetId]TextureAsset
+	textureKeys           map[string]AssetId
+	samplers              map[AssetId]SamplerAsset
+	voxModels             map[AssetId]VoxelGeometryAsset
+	voxModelKeys          map[string]AssetId
+	voxPalettes           map[AssetId]VoxelPaletteAsset
+	voxPaletteKeys        map[string]AssetId
+	voxFiles              map[AssetId]*VoxFile
 
 	preparedVoxelRendererCopies    map[AssetId]preparedVoxelRendererCopy
 	preparedVoxelRendererCopyStats PreparedVoxelRendererCopyStats

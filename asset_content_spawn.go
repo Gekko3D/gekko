@@ -54,6 +54,8 @@ func PreparedAuthoredAssetHasMarkerKind(prepared *PreparedAuthoredAsset, kind st
 type preparedAuthoredPart struct {
 	model   AssetId
 	palette AssetId
+	// Explicit per-part intent; shared geometry availability never grants opt-in.
+	compiledLOD AssetId
 }
 
 func PreparedAuthoredAssetPartGeometry(prepared *PreparedAuthoredAsset, partID string) (AssetId, bool) {

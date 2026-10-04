@@ -39,3 +39,14 @@ func prepareVerifiedCompiledAssetPacketLOD(verified verifiedCompiledAssetLOD, fu
 			lattice: def.SourceLattice, value: def.Value, full: fullBaseline, coarse: coarse},
 	}
 }
+
+// Only privately retained authenticated proof can supply a consumed LOD packet
+// rebuild. Mutable packet and ordinary source maps cannot establish provenance.
+func (packet *compiledAssetPacket) compiledLODProofForSource(contentID string) *compiledAssetLODProof {
+	for _, lod := range packet.lods {
+		if lod != nil && lod.proof != nil && lod.proof.sourceContentID == contentID {
+			return lod.proof
+		}
+	}
+	return nil
+}

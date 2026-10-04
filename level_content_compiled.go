@@ -46,6 +46,19 @@ func loadAuthoredLevelVoxelModel(assets *AssetServer, loader *RuntimeContentLoad
 	if part.Source.Kind == content.AssetSourceKindGroup {
 		return AssetId{}, AssetId{}, voxelResolution, nil
 	}
+	if _, declared := session.lods[part.ID]; declared {
+		packet, err := prepareCompiledAssetPacketFromVerification(path, session, loader, nil, []content.AssetPartDef{part})
+		if err != nil {
+			return AssetId{}, AssetId{}, 0, err
+		}
+		defer packet.release()
+		prepared, err := publishCompiledAssetPacket(packet, assets, loader)
+		if err != nil {
+			return AssetId{}, AssetId{}, 0, err
+		}
+		selected := prepared.parts[part.ID]
+		return selected.model, selected.palette, voxelResolution, nil
+	}
 	shape := session.shapes[part.ID]
 	key := "compiled-asset-shape:" + shape.contentID
 	id, warm := assets.SharedVoxelGeometryByCacheKey(key)

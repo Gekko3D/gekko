@@ -196,6 +196,14 @@ func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *Runt
 		return nil, err
 	}
 	defer session.close()
+	if assets != nil && len(session.lods) != 0 {
+		packet, err := prepareCompiledAssetPacketFromVerification(path, session, loader, nil, session.def.Parts)
+		if err != nil {
+			return nil, err
+		}
+		defer packet.release()
+		return publishCompiledAssetPacket(packet, assets, loader)
+	}
 	definition, animations := session.def, session.animations
 	prepared := &PreparedAuthoredAsset{def: definition, documentPath: path, animations: animations, parts: make(map[string]preparedAuthoredPart, len(definition.Parts))}
 	for _, part := range definition.Parts {

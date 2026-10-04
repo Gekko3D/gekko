@@ -62,6 +62,12 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 		return nil, err
 	}
 	defer session.close()
+	return prepareCompiledAssetPacketFromVerification(path, session, loader, cancelled, session.def.Parts)
+}
+
+// The caller owns the live verification session and closes it after construction.
+// Whole-closure verification precedes even a selected first-part packet build.
+func prepareCompiledAssetPacketFromVerification(path string, session *compiledAssetVerification, loader *RuntimeContentLoader, cancelled func() bool, parts []content.AssetPartDef) (*compiledAssetPacket, error) {
 	packet := &compiledAssetPacket{
 		def: session.def, documentPath: path, animations: session.animations,
 		parts:        make(map[string]string, len(session.shapes)),
@@ -87,7 +93,7 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 	// Preserve the complete ordered binding slice, including nil/empty distinctions.
 	paletteBindings := make(map[string]string)
 	// Preserve authored part order for deterministic cancellation boundaries.
-	for _, part := range packet.def.Parts {
+	for _, part := range parts {
 		verified, exists := session.shapes[part.ID]
 		if !exists {
 			continue
@@ -182,14 +188,27 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 				if _, warm := assets.SharedVoxelGeometryByCacheKey("compiled-asset-shape:" + shape.contentID); warm || shape.registration.charge() != 0 {
 					return nil, fmt.Errorf("compiled packet geometry adoption rejected")
 				}
-				fresh := prepareStreamedGeometryRegistration(shape.source)
-				id, adopted = assets.adoptCompiledAssetGeometry(shape.contentID, shape.lattice, shape.baseIdentity, shape.source, fresh)
+				source := shape.source
+				if proof := packet.compiledLODProofForSource(shape.contentID); proof != nil {
+					source = proof.full.Copy()
+				}
+				fresh := prepareStreamedGeometryRegistration(source)
+				id, adopted = assets.adoptCompiledAssetGeometry(shape.contentID, shape.lattice, shape.baseIdentity, source, fresh)
 				fresh.release()
 				if !adopted {
 					return nil, fmt.Errorf("compiled packet geometry rebuild rejected")
 				}
 			}
 			models[contentID] = id
+		}
+	}
+	if assets != nil {
+		for _, part := range packet.def.Parts {
+			if lodID, exists := packet.partLODs[part.ID]; exists {
+				if !assets.adoptCompiledAssetPacketLOD(models[packet.parts[part.ID]], packet.lods[lodID]) {
+					return nil, fmt.Errorf("compiled packet LOD adoption rejected")
+				}
+			}
 		}
 	}
 	palettes := make(map[string]AssetId, len(packet.palettes))
@@ -234,6 +253,11 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 		if assets != nil {
 			if contentID, exists := packet.parts[part.ID]; exists {
 				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palettes[packet.partPalettes[part.ID]]}
+				if _, declared := packet.partLODs[part.ID]; declared {
+					if binding, exists := assets.compiledAssetLODForGeometry(preparedPart.model); exists {
+						preparedPart.compiledLOD = binding.coarseID
+					}
+				}
 			}
 		}
 		prepared.parts[part.ID] = preparedPart

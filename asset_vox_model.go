@@ -388,6 +388,7 @@ func (server *AssetServer) DeleteVoxelGeometry(id AssetId) bool {
 	if _, ok := server.voxModels[id]; !ok {
 		return false
 	}
+	server.removeCompiledAssetLODBindingsLocked(id)
 	delete(server.voxModels, id)
 	delete(server.managedVoxelGeometry, id)
 	delete(server.authoredVoxelBases, id)

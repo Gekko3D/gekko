@@ -12,7 +12,7 @@ C3h4 compiler opt-in, C3h5 exact source validation and C3h6 scoped derivative
 reads, C3h7 complete-closure source verification, C3h8 core render
 representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
 upload staging, C3h11 pure qualification guards and C3h12a owned derivative
-packets/accounting complete. Opt-in,
+packets/accounting and C3h12b ordinary derivative adoption complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -444,3 +444,14 @@ separate from full-source sharing. Pending charges include unique proof storage
 and retained geometry-handle metadata. [Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
 AssetServer adoption and runtime activation follow. Focused/race, engine and
 consumer boundary commands are recorded in the parent delivery entry.
+
+
+## Ordinary derivative adoption (C3h12b)
+
+Direct, worker and selected first-part publication now share ordinary coarse
+assets and independently owned private proofs. Warm edits survive; deleted assets
+rebuild from authenticated packet baselines. Deletion drains association counters
+without revoking the surviving asset. Prepared membership remains per declared
+part/input despite shared full geometry. [Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
+Per-instance intent propagation and renderer activation follow; commands and
+remaining limits are recorded in the parent delivery entry.

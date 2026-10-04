@@ -743,7 +743,8 @@ Cancelling staging makes full GPU geometry inactive under existing retention and
 orphan cleanup, while resident object material ownership remains unchanged.
 
 This permanent separation introduces no helper scene objects or parallel
-residency service. Runtime LOD activation and owned proof publication remain pending.
+residency service. Runtime LOD activation remains pending. Private verified proof
+publication follows [ordinary asset ownership](../assets/runtime-assets.md#compiled-lod-source-validation).
 
 The bridge's private qualification guards compare actual full and coarse primary
 storage against separately owned, immutable baselines created from authenticated
