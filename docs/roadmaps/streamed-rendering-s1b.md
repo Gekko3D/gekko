@@ -557,8 +557,9 @@ env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/testing-vox/ .
 ## Next alignment: Frame-bounded voxel publication
 
 Whole-map structure preparation and global lookup rebuilding remain atomic;
-S1k bounds native buffer migration. Spreading the remaining work across updates introduces current and
-staging generations, with coherent publication and existing coverage retained.
+S1k bounds native buffer migration. Spreading the remaining work across updates
+introduces current and staging generations, with coherent publication and
+existing coverage retained.
 This is a permanent ownership change; S1i/S1j do not authorize it implicitly.
 
 Approved by the user on 2026-10-04:
@@ -638,6 +639,52 @@ The user reported `PASS` after this check. Automated checks establish scheduling
 and byte coherence; the release check establishes this fixture's native
 publication, visual continuity and retirement. No general frame-time or visual
 parity claim.
+
+## Next alignment: Owned structural admission
+
+Proposed after S1k (`76881be`); not yet approved. Large arriving or structurally
+dirty maps still require whole-map admission and allocation preparation before
+the bounded native work begins. Global lookup publication depends on the
+resulting allocated topology, so owned structural enumeration is the next
+recommended foundation.
+
+`XBrickMap.Sectors`, IDs, revisions and dirty markers remain publicly mutable.
+Supported raw writes can bypass revisions. Managed snapshots still enumerate
+all sectors, and exposed owners retain full-copy compatibility. A retained map
+iterator or revision-based restart cannot establish coherent bounded capture;
+copying all keys first leaves the initial stall unbounded.
+
+Recommended permanent boundary: add indexed topology and tracked structural
+publication to explicitly owned inputs. Build initial indexes with private
+worker preparation or managed authority, account for their retained storage,
+and consume bounded sector entries at renderer admission. Preserve synchronous
+service for legacy or exposed raw maps; bounded service must be opt-in and must
+not redefine direct mutation compatibility.
+
+An accepted structural generation keeps its finite input and allocation pins
+until coherent publication. Existing content writes and material animation
+continue. Later topology changes queue for a subsequent generation rather than
+restarting capture indefinitely. Keep current render/fallback coverage until
+the replacement's content and lookup are ready. Exact journal limits, admission
+units and slot retirement must be specified before the implementation batch.
+
+Alternative: bound manager-owned lookup rebuilding first, using an indexed
+inventory of already allocated entries. This avoids a volume API change but
+requires current/staging slot pins and coherent hash/direct metadata publication;
+whole-map structural setup would remain atomic.
+
+Owners and likely files: volume topology producers and prepared registration
+(`volume/managed_xbrickmap.go`, `streamed_level_registration.go`), bridge
+publication, GPU admission/structure (`manager_voxel*.go`, `manager.go`) and
+lookup/readiness (`manager_scene.go`, `manager_voxel_readiness.go`). Scope the
+owner prerequisite separately from dependent lookup publication where useful.
+
+Minimal verification must cover bounded continuation, no premature readiness,
+equal-count pointer replacement, shared-sector removal/reuse, cancellation and
+changed targets, edits during staging, refusal/cleanup and raw compatibility.
+Use independent ownership reviews, focused and race checks, then engine tests
+and affected consumer builds at each batch boundary. A user release check must
+confirm retained visible/fallback coverage and coherent final publication.
 
 ## Verification and execution record
 

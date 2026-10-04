@@ -768,7 +768,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
 | S1i | `3557e78` | Optional physical GPU growth admission, pinned pressure and hard-limit safety | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
 | S1j | `818e4d5` | Age optional geometry/material demand without changing required ownership | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
-| S1k | This commit | Bound native voxel buffer creation/copying while preserving live writes | [Renderer contract](../renderer/runtime.md#voxel-buffer-creation-and-migration) |
+| S1k | `76881be` | Bound native voxel buffer creation/copying while preserving live writes | [Renderer contract](../renderer/runtime.md#voxel-buffer-creation-and-migration) |
 | S2a | `896e1eb` | Prepared geometry byte budgets and build suppression | [Design](streamed-rendering-s2a.md) |
 | S2b | `1504a7c` | Decoded leases and pending-result admission | [Design](streamed-rendering-s2b.md) |
 | S3a | `d93f3ac` | Incremental v2 observer selection | [Design](streamed-rendering-s3a.md) |
@@ -928,6 +928,12 @@ native creation per update, subject to physical admission and hard device limits
 [S1k scope](streamed-rendering-s1b.md#next-alignment-frame-bounded-voxel-publication)
 starts with native buffer migration; structural capture and global lookup bounds
 remain follow-ups.
+
+After S1k's release check, the next recommended ownership scope is
+[bounded structural admission](streamed-rendering-s1b.md#next-alignment-owned-structural-admission).
+An indexed topology owner must precede resumable structural scans; public raw
+maps cannot use revision-only invalidation safely. The proposed opt-in boundary
+and publication behavior require alignment before implementation.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
 On 2026-10-03, the user authorized its ownership decision and migration of existing
